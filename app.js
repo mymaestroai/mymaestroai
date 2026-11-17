@@ -44,6 +44,7 @@
         const r = await fetch('/api/me', { credentials: 'include' });
         if (r.ok) {
           window.hubMe = await r.json();
+          try { if (window.hubSimple) { window.hubSimple.apply(window.hubMe); simpleBoot(); } } catch { /* Simple mode is optional: the page runs as before without it */ }
           // Signed in: recorded-call pieces the hub never acknowledged (a closed tab, a reload, a dead network) are sent now, one at a time (lib/ui-voice-call.js).
           if (window.hubMe && window.hubMe.user) setTimeout(() => { try { voiceRecResendPending((u, i) => fetch(u, i), { userId: window.hubMe.user.id }); } catch { /* the call page's code is not up yet */ } }, 0);
         }
@@ -64,6 +65,219 @@
       if (!window.__hvTimer) window.__hvTimer = setInterval(() => paintVersionLabel().catch(() => {}), 5 * 60 * 1000);
       if (!window.__ucTimer) window.__ucTimer = setInterval(() => paintUpdateCard().catch(() => {}), 30 * 60 * 1000);
       return window.hubMe;
+    }
+    // ── Simple mode (desktop) ──────────────────────────────────────────────────────────────────
+    // Everything here is inert unless <html> has the class mm-simple (lib/ui-simple.js: hubSimple.apply) and window.hubSimple
+    // is loaded; the CSS for it lives in the "simple-mode-css" style block of index.html. Advanced never runs any of it.
+    function simpleOn() { return !!(window.hubSimple && document.documentElement.classList.contains('mm-simple')); }
+    // Pure helpers (tested in test/ui-simple-desktop.test.js)
+    function simpleInitialOf(name) { const s = String(name == null ? '' : name).trim(); return s ? s.charAt(0).toUpperCase() : '?'; }
+    function simpleTailText(hs, text, n) {
+      const t = hs && typeof hs.reasoningTail === 'function' ? hs.reasoningTail(String(text == null ? '' : text), n || 5) : [];
+      return Array.isArray(t) ? t.join('\n') : String(t == null ? '' : t);
+    }
+    function simpleNoteState(hs, text) {   // 'none' (not hub-started) | 'hide' | { label }
+      const n = hs && typeof hs.autoNote === 'function' ? hs.autoNote(String(text == null ? '' : text)) : null;
+      if (!n) return 'none';
+      return n.label ? { label: String(n.label) } : 'hide';
+    }
+    function simpleEffortBody(hs, agent) { return hs && typeof hs.effortFor === 'function' ? { effort: hs.effortFor(agent) } : {}; }
+
+    // The reasoning box: "Thinking…" and the last lines, above the reply; one per chat, gone at the first reply text.
+    const simpleReplied = new Set();   // reply bubbles whose first text has arrived: their reasoning never shows the box again
+    function simpleThinkRoot(el) { return el ? (el.closest('.messages') || el.parentElement) : null; }
+    function simpleThinkBox(root, before, create) {
+      if (!root) return null;
+      let box = root.querySelector('.simple-think');
+      if (!box && create) {
+        box = document.createElement('div');
+        box.className = 'simple-think';
+        box.innerHTML = '<div class="st-head"><span class="st-dot"></span><span>Thinking…</span></div><div class="st-body"></div><div class="st-consult"></div>';
+        if (before && before.parentNode) before.parentNode.insertBefore(box, before); else root.appendChild(box);
+      }
+      return box;
+    }
+    function simpleThinkDrop(root) { if (root) root.querySelectorAll('.simple-think').forEach(b => b.remove()); }
+    function simpleThinkClear(chatId) { if (simpleOn()) simpleThinkDrop(document.getElementById(`messages-${chatId}`)); }
+    function simpleFirstReply(chatId, msgId) {   // the first reply text arrived: the box goes
+      if (!simpleOn()) return;
+      if (msgId) { simpleReplied.add(msgId); if (simpleReplied.size > 300) simpleReplied.delete(simpleReplied.values().next().value); }
+      simpleThinkClear(chatId);
+    }
+    function simpleThinkPaint(msgId, st) {   // called from paintReasoning
+      if (!simpleOn() || !st) return;
+      const host = document.getElementById(msgId);
+      const root = simpleThinkRoot(host);
+      if (!host || !root) return;
+      if (!st.live || simpleReplied.has(msgId)) { if (!st.live) simpleThinkDrop(root); return; }   // reasoning of a history reload is never shown
+      const box = simpleThinkBox(root, host, true);
+      box.querySelector('.st-body').textContent = simpleTailText(window.hubSimple, st.text, 5);
+    }
+    function simpleConsultNote(chatId, oc) {   // a consult: one line "Asking <Name>…" in the same box
+      if (!simpleOn() || !oc) return;
+      const root = document.getElementById(`messages-${chatId}`);
+      if (!root) return;
+      if (oc.type === 'worker_completed' || oc.type === 'worker_failed') { const b = simpleThinkBox(root, null, false); if (b) b.querySelector('.st-consult').textContent = ''; return; }
+      if (oc.type !== 'worker_started') return;
+      const line = window.hubSimple.consultLine(oc);
+      if (!line) return;
+      const last = root.lastElementChild;
+      const before = last && last.classList.contains('message') && last.classList.contains('assistant') ? last : null;
+      simpleThinkBox(root, before, true).querySelector('.st-consult').textContent = line;
+    }
+
+    // The reasoning level in the composer, in plain words
+    const SIMPLE_CHEV = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>';
+    function simpleLvlRefresh(chatId) {
+      const chat = chats[chatId]; const wrap = document.getElementById(`simple-lvl-${chatId}`);
+      if (!chat || !wrap || !simpleOn()) return;
+      const show = effortSupported(chatModelOf(chat)) && !chat.autoModel;   // the same rule the page uses for its own picker
+      wrap.classList.toggle('on', !!show);
+      const level = window.hubSimple.effortFor(chat.agent);
+      wrap.querySelector('.sl-btn').innerHTML = `${hubEsc(window.hubSimple.labelFor(level))} ${SIMPLE_CHEV}`;
+      wrap.querySelectorAll('.simple-lvl-menu button').forEach(b => b.classList.toggle('on', b.dataset.level === level));
+    }
+    function simpleComposerInit(chatId) {
+      if (!simpleOn()) return;
+      const chat = chats[chatId]; const panel = document.getElementById(`panel-${chatId}`);
+      const area = panel && panel.querySelector('.input-area');
+      if (!chat || !area || document.getElementById(`simple-lvl-${chatId}`)) return;
+      const wrap = document.createElement('span');
+      wrap.className = 'simple-lvl'; wrap.id = `simple-lvl-${chatId}`;
+      wrap.innerHTML = '<button type="button" class="sl-btn" aria-haspopup="menu" aria-expanded="false" title="How much the assistant thinks before answering"></button><div class="simple-lvl-menu" role="menu" hidden></div>';
+      const menu = wrap.querySelector('.simple-lvl-menu');
+      menu.innerHTML = window.hubSimple.EFFORTS.map(e => `<button type="button" role="menuitem" data-level="${hubEsc(e.level)}"><span class="sl-tick">✓</span><span><b>${hubEsc(e.label)}</b><small>${hubEsc(e.hint)}</small></span></button>`).join('');
+      const btn = wrap.querySelector('.sl-btn');
+      btn.addEventListener('click', (e) => { e.stopPropagation(); menu.hidden = !menu.hidden; btn.setAttribute('aria-expanded', String(!menu.hidden)); });
+      menu.addEventListener('click', (e) => {
+        const b = e.target.closest('button[data-level]'); if (!b) return;
+        e.stopPropagation();
+        window.hubSimple.setEffort(chat.agent, b.dataset.level);
+        menu.hidden = true; btn.setAttribute('aria-expanded', 'false');
+        simpleLvlRefresh(chatId);
+      });
+      const mic = document.getElementById(`mic-${chatId}`);
+      if (mic && mic.parentNode === area) area.insertBefore(wrap, mic); else area.appendChild(wrap);
+      simpleLvlRefresh(chatId);
+    }
+
+    // Empty chat: greeting and starters; hub-started prompts as a small muted label; one scan after DOM changes.
+    function simpleScan() {
+      if (!simpleOn()) return;
+      const panels = document.getElementById('chat-panels');
+      if (!panels) return;
+      panels.querySelectorAll('.message.user:not([data-sn])').forEach(el => {
+        const txt = (el.textContent || '').trim();
+        if (!txt) return;
+        const st = simpleNoteState(window.hubSimple, txt);
+        el.dataset.sn = '1';
+        if (st === 'none') return;
+        if (st === 'hide') { el.classList.add('simple-auto-hide'); return; }
+        el.classList.add('simple-auto'); el.setAttribute('data-note', st.label);
+      });
+      const cont = panels.querySelector('.chat-container.active');
+      if (!cont) return;
+      const chatId = String(cont.id || '').replace(/^panel-/, '');
+      const chat = chats[chatId]; const msgs = cont.querySelector('.messages');
+      if (!chat || !msgs) return;
+      if (!chat.simpleLoaded && !chat.simpleWaiting) { chat.simpleWaiting = true; Promise.resolve(chat.historyLoaded).catch(() => {}).then(() => { chat.simpleLoaded = true; simpleScan(); }); }
+      const empty = !!chat.simpleLoaded && !chat.isWorker && ![...msgs.children].some(n => !n.classList.contains('simple-empty') && !n.classList.contains('simple-think'));
+      let box = msgs.querySelector(':scope > .simple-empty');
+      if (!empty) { if (box) box.remove(); return; }
+      if (box) return;
+      box = document.createElement('div');
+      box.className = 'simple-empty';
+      const g = document.createElement('div'); g.className = 'simple-greet';
+      g.textContent = window.hubSimple.greeting(window.hubMe && window.hubMe.user ? window.hubMe.user.name : '');
+      const list = document.createElement('div'); list.className = 'simple-starters';
+      for (const s of (window.hubSimple.STARTERS || [])) {
+        const b = document.createElement('button'); b.type = 'button'; b.textContent = s;
+        b.addEventListener('click', () => { const inp = document.getElementById(`input-${chatId}`); if (!inp) return; inp.value = s; inp.focus(); try { autoGrowTextarea(inp); } catch { /* sizing only */ } });
+        list.appendChild(b);
+      }
+      box.append(g, list);
+      msgs.appendChild(box);
+    }
+    let simpleScanRaf = 0;
+    function simpleScanSoon() { if (simpleScanRaf) return; simpleScanRaf = requestAnimationFrame(() => { simpleScanRaf = 0; try { simpleScan(); } catch { /* cosmetic */ } }); }
+
+    // Settings
+    async function simplePrefs(body) {
+      const r = await fetch('/api/me/prefs', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return r.json().catch(() => ({}));
+    }
+    async function simpleSwitchMode(mode) {
+      try { await simplePrefs({ uiMode: mode }); location.reload(); }
+      catch (e) { hubToast(`Could not switch: ${e.message}`); }
+    }
+    function simpleCloseSettings() { const o = document.getElementById('simple-settings'); if (o) o.remove(); }
+    function openSimpleSettings() {
+      simpleCloseSettings();
+      const me = window.hubMe || {};
+      const name = (me.user && (me.user.name || me.user.login)) || '';
+      const overlay = document.createElement('div');
+      overlay.className = 'simple-scrim'; overlay.id = 'simple-settings';
+      overlay.innerHTML =
+        '<div class="simple-modal" role="dialog" aria-label="Settings">' +
+          '<div class="sm-h"><h2>Settings</h2><button type="button" class="sm-x" aria-label="Close">✕</button></div>' +
+          '<div class="sm-set"><span class="sm-lab">Appearance</span><div class="sm-seg"><button type="button" data-theme="light">Light</button><button type="button" data-theme="dark">Dark</button><button type="button" data-theme="auto">Match device</button></div></div>' +
+          '<div class="sm-set"><span class="sm-lab">Name</span><div class="sm-name"></div></div>' +
+          '<div class="sm-set"><button type="button" class="sm-plain" data-act="advanced"><div><b>Switch to Advanced</b><span>All tools, agents\' work and settings</span></div><span aria-hidden="true">›</span></button></div>' +
+          '<div class="sm-set"><button type="button" class="sm-plain sm-out" data-act="signout">Sign out</button></div>' +
+        '</div>';
+      overlay.querySelector('.sm-name').textContent = name;
+      const paintSeg = () => { const cur = me.theme === 'light' || me.theme === 'dark' ? me.theme : 'auto'; overlay.querySelectorAll('.sm-seg button').forEach(b => b.classList.toggle('on', b.dataset.theme === cur)); };
+      paintSeg();
+      overlay.addEventListener('click', async (e) => {
+        if (e.target === overlay || e.target.closest('.sm-x')) { simpleCloseSettings(); return; }
+        const t = e.target.closest('.sm-seg button');
+        if (t) {
+          const before = me.theme; me.theme = t.dataset.theme; paintSeg();
+          try { window.hubSimple && window.hubSimple.apply(me); await simplePrefs({ theme: t.dataset.theme }); }
+          catch (err) { me.theme = before; paintSeg(); try { window.hubSimple && window.hubSimple.apply(me); } catch { /* keep the page as it was */ } hubToast(`Could not save: ${err.message}`); }
+          return;
+        }
+        const a = e.target.closest('[data-act]');
+        if (!a) return;
+        if (a.dataset.act === 'advanced') simpleSwitchMode('advanced');
+        else if (a.dataset.act === 'signout') signOut();
+      });
+      overlay.addEventListener('keydown', (e) => { if (e.key === 'Escape') simpleCloseSettings(); });
+      document.body.appendChild(overlay);
+      const first = overlay.querySelector('.sm-x'); if (first) first.focus();
+    }
+
+    // Start-up in Simple, once the person is known (loadMe)
+    let simpleBooted = false;
+    function simpleBoot() {
+      if (!simpleOn() || simpleBooted) return;
+      simpleBooted = true;
+      // The avatar row at the bottom of the sidebar opens Simple's settings instead of the account menu.
+      document.addEventListener('click', (e) => {
+        if (!simpleOn() || !e.target.closest || !e.target.closest('#user-chip')) return;
+        e.stopPropagation(); e.preventDefault(); openSimpleSettings();
+      }, true);
+      const chip = document.getElementById('user-chip');
+      if (chip && !chip.querySelector('.simple-av')) {
+        const av = document.createElement('span'); av.className = 'simple-av';
+        av.textContent = simpleInitialOf(window.hubMe && window.hubMe.user ? (window.hubMe.user.name || window.hubMe.user.login) : '');
+        chip.insertBefore(av, chip.firstChild);
+      }
+      // Hub-started turns are not folded into cards in Simple: the prompt becomes a small label, the reply is a plain message.
+      const foldWas = foldAutoOn;
+      foldAutoOn = function () { return simpleOn() ? false : foldWas(); };
+      document.addEventListener('click', (e) => { if (!e.target.closest || !e.target.closest('.simple-lvl')) document.querySelectorAll('.simple-lvl-menu').forEach(m => { m.hidden = true; }); });
+      const panels = document.getElementById('chat-panels');
+      if (panels && typeof MutationObserver === 'function') new MutationObserver(simpleScanSoon).observe(panels, { childList: true, subtree: true });
+      setInterval(() => { for (const id of Object.keys(chats)) simpleLvlRefresh(id); }, 2500);
+      // Open the first agent so there is always a chat (greeting + starters) to look at.
+      let tries = 0;
+      const t = setInterval(() => {
+        if (++tries > 40 || Object.values(chats).some(c => c && !c.isWorker)) { clearInterval(t); return; }
+        const b = document.querySelector('#agent-list .agent-btn');
+        if (b) { clearInterval(t); b.click(); }
+      }, 500);
     }
     // The time zone this person's agents use follows the device they are using (lib/timezone). The page reports its
     // zone on the first tap or key after it opens or comes back into view, then at most every 10 minutes while in use,
@@ -3076,6 +3290,8 @@
           <label style="flex-basis:auto"><input type="checkbox" id="st-active-top" ${activeTopOn() ? 'checked' : ''} onchange="saveActiveTop(this.checked)"> Show active agents at the top of the agent list</label>
         </div>
         <div class="st-hint">This browser only. Agents that are working right now also appear in an Active section at the top of the list; off shows the list exactly as before.</div>
+        <div class="st-row"><button type="button" id="st-switch-simple" onclick="simpleSwitchMode('simple')">Switch to Simple</button></div>
+        <div class="st-hint">The calm view: just the conversation, with the tools and settings out of sight. You can switch back here.</div>
       </div>`;
 
       html += `<div class="st-section" id="st-emergency-section"><h4>Emergency</h4>
@@ -8426,6 +8642,7 @@
         return;
       }
       if (!chats[t.chatId] || !ev.text) return;
+      if (simpleOn()) simpleFirstReply(t.chatId, t.msgId);   // Simple: the Thinking box goes at the first reply text
       t.text = ev.text;
       paintTurn(t.chatId, t, t.text);
     }
@@ -8785,6 +9002,7 @@
       if (!activeTurnEnd(openTurns, ev.agent, ev.turnId)) setAgentLive(ev.agent, { busy: false });   // busy while another turn is open
       if (ev.agent && notifyArmed[ev.agent]) { notifyArmed[ev.agent] = null; paintNotifyBtns(ev.agent); }
       { const c = findSoloChat(ev.agent); if (c) { c.inProgress = null; setTimeout(() => compactionRefresh(c.id), 3500); } }   // context % moved (the hub records it 2.5 s after the turn)
+      { const c = findSoloChat(ev.agent); if (c && typeof simpleThinkClear === 'function') simpleThinkClear(c.id); }   // Simple: the Thinking box ends with the turn
       const endedRun = busyRun[ev.agent];   // read before it is dropped: says whether the turn was hub-started
       if (busyRun[ev.agent] && (!ev.turnId || busyRun[ev.agent].turnId === ev.turnId)) delete busyRun[ev.agent];
       { const c = findSoloChat(ev.agent); if (c) busyCardRefresh(c); }   // the busy card goes with the turn
@@ -9188,6 +9406,7 @@
       panels.appendChild(panel);
       // Fill the model picker now, so its list is complete before the first click (modelPickDown).
       setTimeout(() => fillModelPick(chatId), 0);
+      simpleComposerInit(chatId);   // Simple: the reasoning level button in the composer (inert in Advanced)
       setTimeout(() => { if (voiceStatus) voicePaint(); else voiceRefreshStatus(); }, 0);
       
       // Initialize pending images array for this chat
@@ -10191,6 +10410,7 @@
           headers: { 'Content-Type': 'application/json', ...zoneHeader() },
           signal: chat.controller.signal,
           body: JSON.stringify({
+            ...(simpleOn() ? simpleEffortBody(window.hubSimple, chat.agent) : {}),   // Simple: this chat's reasoning level
             agent: chat.agent,
             message: content,
             images: imagesToSend,
@@ -10245,6 +10465,7 @@
         notify(null);
 
         const { text: fullResponse, images: responseImages, toolActivity, partial, steps: responseSteps } = await streamResponseSolo(response, msgId, chatId, chat.agent);
+        simpleThinkClear(chatId);   // Simple: nothing of the Thinking box stays after the turn
         if (!partial) setMessageTime(document.getElementById(msgId), msgTimeLine(Date.now(), chat.sentAtMs));
         if (!partial) attachFileCards(document.getElementById(msgId));   // the turn ended: download cards
         if (!partial && chat.voiceTurn) { chat.voiceTurn = false; voiceAutoRead(chat, msgId, fullResponse); }
@@ -10268,6 +10489,7 @@
         delete chat.lastMsgId;
       } catch (err) {
         notify(err);   // a no-op once the hub took the message
+        simpleThinkClear(chatId);   // Simple: an error or a stop ends the Thinking box
         // Detect user-initiated cancel: AbortError, or any error while status is already idle
         // (cancelRequest sets idle before the fetch error propagates)
         const hubRecovered = chat.forceReattach === true;
@@ -11371,6 +11593,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
 
             const delta = parsed.choices?.[0]?.delta?.content;
             if (delta) {
+              if (simpleOn()) simpleFirstReply(chatId, msgId);   // Simple: the Thinking box goes at the first reply text
               fullResponse += delta;
               displayContent += delta;
 
@@ -17947,6 +18170,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (st.live && st.chatId) updateToolActivity(st.chatId, `Reasoning · ${words.toLocaleString()} words`, true);
       if (st.live && host.parentElement) autoScroll(host.parentElement);   // keep a growing live panel in view (unless scrolled up)
       if (rsnFullFor === msgId) paintReasoningFull();
+      simpleThinkPaint(msgId, st);   // Simple: the same reasoning as a small box above the reply
     }
 
     // ⤢: the reasoning at the size of the window (live while the turn runs). Esc, ✕ or a click outside closes it.
@@ -18663,6 +18887,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       scheduleWorkerListRefresh();
     }
     function handleWorkerEvent(chatId, oc) {
+      simpleConsultNote(chatId, oc);   // Simple: "Asking <agent>…" in the Thinking box (inert in Advanced)
       if (oc && oc.worker_id != null && /^worker_(started|text_delta|tool_start|tool_use|tool_result)$/.test(oc.type)) reopenEndedWorkerRun(oc.worker_id);
       if (oc.type === 'worker_started') {
         const workerId = String(oc.worker_id);

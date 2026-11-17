@@ -832,6 +832,157 @@
   #share-list-dialog .sl-row .sec-title { font-size: 15px; overflow-wrap: anywhere; }
   #share-list-dialog .sl-row .sec-btn { min-height: 40px; padding: 0 14px; flex: none; color: var(--error); }
 </style>
+<style id="simple-css">
+/* Simple mode (phone). Everything is under html.mm-simple; the elements below are only ever created there. */
+#simple-top, #simple-effort-btn, #simple-call-btn, #simple-effort-sheet, .simple-think, .simple-empty { display: none; }
+html.mm-simple {
+  --bg-dark: #1a1a19; --bg-card: #232322; --bg-input: #1a1a19; --accent: #8b6fd6; --accent-hover: #a48be6;
+  --text: #fff; --text-dim: #c3c2b7; --text-tertiary: #8a897f; --border: #2f2f2d; --border-strong: #3d3d3a;
+  --sp-bubble: #2a2a28; --sp-soft: #232322; --sp-shadow: none;
+  color-scheme: dark;
+}
+html.mm-simple.mm-light {
+  --bg-dark: #ffffff; --bg-card: #ffffff; --bg-input: #f6f6f3; --accent-hover: #7a5cc8;
+  --text: #1a1a19; --text-dim: #55544c; --text-tertiary: #8a897f; --border: #e4e3dd; --border-strong: #d4d3cc;
+  --sp-bubble: #f1efe9; --sp-soft: #f6f6f3; --sp-shadow: 0 2px 12px rgba(0,0,0,.08);
+  color-scheme: light;
+}
+html.mm-simple body { font: 18px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; background: var(--bg-dark); color: var(--text); }
+html.mm-simple button { font-family: inherit; }
+html.mm-simple [hidden] { display: none !important; }
+
+/* Hidden in Simple: the page's own bars and menus, tool rows, worker cards, reasoning panels, badges, chips */
+html.mm-simple .topbar, html.mm-simple #chat-meta, html.mm-simple #tabbar, html.mm-simple #tab-activity, html.mm-simple #menu,
+html.mm-simple .pacing-bar, html.mm-simple #working-chip, html.mm-simple #update-card, html.mm-simple #screen-activity,
+html.mm-simple .tsn, html.mm-simple .feed, html.mm-simple .frow, html.mm-simple .rsn, html.mm-simple .rsn-sheet, html.mm-simple .tsn-sheet,
+html.mm-simple #chat-workers-btn, html.mm-simple .wk-chip, html.mm-simple #chat-model, html.mm-simple #chat-model-pick, html.mm-simple #chat-effort-wrap,
+html.mm-simple #chat-plan, html.mm-simple #chat-ctx, html.mm-simple #menu-credit, html.mm-simple #menu-version, html.mm-simple #agents-approvals,
+html.mm-simple .active-sec, html.mm-simple .group-title, html.mm-simple .agent-job, html.mm-simple .lead-badge, html.mm-simple #owner-view,
+html.mm-simple .auto-wrap, html.mm-simple .auto-card, html.mm-simple .auto-stack, html.mm-simple .msg > .msg-time, html.mm-simple .msg .copy,
+html.mm-simple #voice-strip, html.mm-simple #voice-panel, html.mm-simple #voice-settings-btn, html.mm-simple #call-ended-bar .ceb-x,
+html.mm-simple #cp-levels, html.mm-simple .cp-dnd, html.mm-simple .cp-disp, html.mm-simple #cp-help, html.mm-simple #cp-focus-hint, html.mm-simple #cp-activity,
+html.mm-simple .simple-wait, html.mm-simple .simple-auto-hide { display: none !important; }
+
+/* Top bar: brand mark, centred pill, avatar */
+html.mm-simple #simple-top { display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px; align-items: center; gap: 8px; min-height: 64px; padding: 6px 12px; flex: none; }
+html.mm-simple .st-mark { width: 34px; height: 34px; border-radius: 50%; background: var(--accent); color: #fff; display: grid; place-items: center; font-weight: 700; font-size: 17px; justify-self: start; }
+html.mm-simple .st-pill { justify-self: center; max-width: 100%; min-height: 48px; display: flex; align-items: center; gap: 8px; padding: 0 16px; border-radius: 24px; border: 1px solid var(--border); background: var(--bg-card); box-shadow: var(--sp-shadow); color: var(--text); font-size: 17px; }
+html.mm-simple .st-pill .st-pic { font-size: 22px; line-height: 1; flex: none; }
+html.mm-simple .st-pill .st-to { color: var(--text-tertiary); flex: none; }
+html.mm-simple .st-pill .st-pname { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+html.mm-simple .st-chev { color: var(--text-tertiary); font-size: 15px; flex: none; }
+html.mm-simple .st-avatar { justify-self: end; width: 44px; height: 44px; border-radius: 50%; background: var(--sp-soft); border: 1px solid var(--border); color: var(--text-dim); font-weight: 600; font-size: 17px; display: grid; place-items: center; }
+@media (max-width: 380px) { html.mm-simple .st-pill .st-to { display: none; } }
+
+/* Agent list screen (only reached when there is no chat to open) */
+html.mm-simple .agent-row { min-height: 64px; padding: 10px 16px; font-size: 18px; }
+html.mm-simple .agent-row .agent-model { font-size: 14px; color: var(--text-tertiary); }
+
+/* Chat */
+html.mm-simple #chat-scroll { background: var(--bg-dark); }
+html.mm-simple #messages { max-width: 720px; width: 100%; margin: 0 auto; min-height: 100%; padding: 20px 16px 8px; gap: 28px; }
+html.mm-simple .msg { max-width: 100%; padding: 0; background: none; border: 0; border-radius: 0; font-size: 18px; line-height: 1.55; color: var(--text); }
+html.mm-simple .msg.user { align-self: flex-end; max-width: 86%; padding: 12px 18px; background: var(--sp-bubble); color: var(--text); border-radius: 22px 22px 6px 22px; }
+html.mm-simple .msg.assistant { align-self: flex-start; width: 100%; }
+html.mm-simple .msg.error { color: var(--error); }
+html.mm-simple .msg.assistant pre, html.mm-simple .msg.assistant code { background: var(--bg-input); border-color: var(--border); }
+html.mm-simple .msg.assistant pre code { background: none; }
+html.mm-simple .msg.simple-auto { align-self: center; max-width: 100%; padding: 0; background: none; color: var(--text-tertiary); font-size: 14px; }
+html.mm-simple .note { color: var(--text-tertiary); font-size: 14px; }
+html.mm-simple .note.simple-auto-line { margin: -10px 0; }
+html.mm-simple .chat-busy-card { align-self: center; color: var(--text-tertiary); font-size: 14px; background: none; border: 0; }
+
+/* Empty chat: greeting and big stacked starter buttons */
+html.mm-simple .simple-empty { display: flex; flex-direction: column; align-items: center; margin: auto 0; padding: 8px 0 24px; text-align: center; }
+html.mm-simple .simple-empty:not(:last-child) { display: none; }
+html.mm-simple .se-icon { font-size: 56px; line-height: 1; margin-bottom: 18px; }
+html.mm-simple .simple-empty h2 { font-size: 28px; font-weight: 600; letter-spacing: -.01em; margin-bottom: 26px; color: var(--text); }
+html.mm-simple .se-starters { display: flex; flex-direction: column; gap: 12px; width: 100%; }
+html.mm-simple .se-starter { min-height: 56px; padding: 12px 24px; border-radius: 28px; border: 1px solid var(--border); background: var(--bg-card); box-shadow: var(--sp-shadow); color: var(--text-dim); text-align: left; font-size: 18px; line-height: 1.35; }
+html.mm-simple .se-starter:active { background: var(--sp-soft); }
+
+/* Thinking box */
+html.mm-simple .simple-think { display: flex; flex-direction: column; gap: 6px; margin-bottom: 22px; }
+html.mm-simple .st-lab { display: flex; align-items: center; gap: 10px; color: var(--text-tertiary); font-size: 14px; }
+html.mm-simple .st-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); animation: simple-pulse 1.6s ease-in-out infinite; }
+@keyframes simple-pulse { 50% { opacity: .3; transform: scale(.7); } }
+html.mm-simple .st-lines { color: var(--text-tertiary); font-size: 14px; line-height: 1.55; padding-left: 18px; border-left: 2px solid var(--border); overflow-wrap: anywhere; }
+html.mm-simple .st-lines > div:first-child { -webkit-mask-image: linear-gradient(transparent, #000); mask-image: linear-gradient(transparent, #000); opacity: .7; }
+html.mm-simple .st-consult { color: var(--text-dim); font-size: 14px; padding-left: 18px; font-style: italic; }
+@media (prefers-reduced-motion: reduce) { html.mm-simple .st-dot { animation: none; } }
+
+/* Composer: text on top; + / reasoning level on the left, mic / voice call / send on the right */
+html.mm-simple #composer { position: relative; background: var(--bg-dark); border-top: 0; padding: 8px 12px calc(12px + var(--sab)); }
+html.mm-simple #composer .row { flex-wrap: wrap; align-items: center; gap: 4px 6px; border: 1px solid var(--border); background: var(--bg-card); border-radius: 28px; padding: 8px 10px 10px; box-shadow: var(--sp-shadow); max-width: 720px; margin: 0 auto; }
+html.mm-simple #composer .row::after { content: ''; flex: 1 1 0; order: 3; }
+html.mm-simple #msg-input { order: -1; flex: 0 0 100%; min-height: 48px; padding: 10px; font-size: 18px; line-height: 1.4; background: transparent; border: 0; color: var(--text); }
+html.mm-simple #msg-input:focus { border: 0; outline: none; }
+html.mm-simple #plus-btn { order: 1; width: 48px; height: 48px; font-size: 28px; color: var(--text-dim); border-radius: 50%; }
+html.mm-simple #simple-effort-btn { order: 2; display: flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 14px; border-radius: 22px; background: var(--sp-soft); color: var(--text-dim); font-size: 16px; white-space: nowrap; }
+html.mm-simple #mic-btn { order: 4; min-width: 48px; min-height: 48px; color: var(--text-dim); }
+html.mm-simple #simple-call-btn { order: 5; display: grid; place-items: center; width: 52px; height: 52px; border-radius: 50%; background: var(--accent); color: #fff; }
+html.mm-simple #composer .row:has(#mic-btn[hidden]) #simple-call-btn { display: none; }
+html.mm-simple #send-btn { order: 6; min-width: 52px; min-height: 52px; border-radius: 50%; background: var(--accent); color: #fff; font-size: 20px; }
+html.mm-simple #send-btn.stop { background: var(--error); }
+html.mm-simple #send-btn.interject { background: var(--warning); color: #000; }
+html.mm-simple #plus-sheet { background: var(--bg-card); border-color: var(--border); }
+html.mm-simple #plus-sheet .ps-item { min-height: 52px; font-size: 17px; color: var(--text); }
+html.mm-simple #simple-effort-sheet { display: block; position: absolute; left: 12px; right: 12px; bottom: calc(100% - 6px); z-index: 12; max-width: 696px; margin: 0 auto; background: var(--bg-card); border: 1px solid var(--border); border-radius: 20px; box-shadow: 0 2px 14px rgba(0,0,0,.25); padding: 8px; }
+html.mm-simple #simple-effort-sheet button { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; min-height: 56px; padding: 8px 14px; border-radius: 14px; text-align: left; color: var(--text); font-size: 17px; }
+html.mm-simple #simple-effort-sheet button[aria-checked="true"] { background: var(--sp-soft); }
+html.mm-simple #simple-effort-sheet small { display: block; color: var(--text-tertiary); font-size: 14px; line-height: 1.3; }
+html.mm-simple #simple-effort-sheet .ef-tick { color: var(--accent); font-weight: 700; }
+
+/* Agent questions (ask_user cards) */
+html.mm-simple .question { border: 1px solid var(--border); border-radius: 20px; background: var(--bg-card); padding: 16px; box-shadow: var(--sp-shadow); font-size: 18px; }
+html.mm-simple .question .qh { font-size: 14px; color: var(--text-tertiary); }
+html.mm-simple .question .qt { font-size: 18px; margin-bottom: 10px; }
+html.mm-simple .question button.opt { min-height: 52px; border-radius: 14px; border: 1px solid var(--border); background: var(--bg-card); color: var(--text); font-size: 17px; }
+html.mm-simple .question button.opt.selected { border-color: var(--accent); background: var(--sp-soft); box-shadow: inset 0 0 0 1px var(--accent); }
+html.mm-simple .question button.opt small { font-size: 14px; color: var(--text-tertiary); }
+html.mm-simple .question .qsubmit { min-height: 48px; border-radius: 24px; background: var(--accent); font-size: 17px; }
+html.mm-simple .question .qskip { min-height: 48px; border-radius: 24px; border-color: var(--border); }
+html.mm-simple .question .qcustom textarea, html.mm-simple .question .qmodel select { font-size: 17px; background: var(--bg-input); border-color: var(--border); color: var(--text); }
+html.mm-simple .question .qhint, html.mm-simple .question .done { font-size: 14px; color: var(--text-tertiary); }
+
+/* Download cards and the save sheet */
+html.mm-simple .file-card { border-radius: 16px; background: var(--bg-card); border-color: var(--border); box-shadow: var(--sp-shadow); padding: 14px; }
+html.mm-simple .file-card .fc-name { font-size: 17px; }
+html.mm-simple .file-card .fc-sub { font-size: 14px; color: var(--text-tertiary); }
+html.mm-simple .file-card .fc-download { min-height: 48px; border-radius: 24px; background: var(--accent); font-size: 17px; }
+html.mm-simple .file-card .fc-preview-link { min-height: 44px; display: inline-flex; align-items: center; }
+html.mm-simple #dl-sheet button, html.mm-simple #dl-sheet a { min-height: 48px; }
+
+/* Voice call bar */
+html.mm-simple #call-panel { background: var(--bg-card); border: 1px solid var(--border); border-radius: 20px; margin: 8px 12px; padding: 14px 16px; color: var(--text); font-size: 17px; }
+html.mm-simple #call-panel .cp-hang { min-height: 52px; border-radius: 26px; font-size: 17px; }
+html.mm-simple #call-panel .cp-retry-mic, html.mm-simple #call-ended-bar .ceb-again { min-height: 48px; }
+html.mm-simple #call-ended-bar { background: var(--bg-card); color: var(--text-dim); border-color: var(--border); }
+
+/* Sheets: agent list and settings (and the page's own dialogs, larger and rounder) */
+html.mm-simple dialog { border-radius: 24px; width: min(92vw, 420px); padding: 20px; font-size: 17px; background: var(--bg-card); color: var(--text); border-color: var(--border); }
+html.mm-simple dialog h3 { font-size: 20px; margin-bottom: 14px; }
+html.mm-simple dialog .btns button { min-height: 48px; border-radius: 24px; }
+html.mm-simple #simple-agents-sheet, html.mm-simple #simple-settings-sheet { margin: auto auto 0; margin-bottom: max(12px, var(--sab)); max-height: 80dvh; overflow-y: auto; }
+html.mm-simple .sa-row { display: flex; align-items: center; gap: 14px; width: 100%; min-height: 60px; padding: 8px 12px; border-radius: 16px; text-align: left; color: var(--text); }
+html.mm-simple .sa-row.sel { background: var(--sp-soft); }
+html.mm-simple .sa-ic { font-size: 26px; width: 34px; text-align: center; flex: none; }
+html.mm-simple .sa-txt { min-width: 0; flex: 1; }
+html.mm-simple .sa-txt b { display: block; font-weight: 600; font-size: 17px; }
+html.mm-simple .sa-txt small { display: block; color: var(--text-tertiary); font-size: 14px; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+html.mm-simple .sa-tick { color: var(--accent); font-weight: 700; flex: none; }
+html.mm-simple .ss-sec { margin-bottom: 18px; }
+html.mm-simple .ss-title { color: var(--text-tertiary); font-size: 14px; margin-bottom: 8px; }
+html.mm-simple .ss-seg { display: flex; gap: 6px; }
+html.mm-simple .ss-seg button { flex: 1; min-height: 48px; border: 1px solid var(--border); border-radius: 24px; color: var(--text-dim); font-size: 16px; padding: 0 8px; }
+html.mm-simple .ss-seg button[aria-pressed="true"] { border-color: var(--accent); color: var(--text); background: var(--sp-soft); box-shadow: inset 0 0 0 1px var(--accent); }
+html.mm-simple .ss-val { font-size: 18px; }
+html.mm-simple .ss-row { display: block; width: 100%; min-height: 56px; padding: 10px 14px; border-radius: 16px; text-align: left; color: var(--text); font-size: 17px; }
+html.mm-simple .ss-row:active { background: var(--sp-soft); }
+html.mm-simple .ss-row small { display: block; color: var(--text-tertiary); font-size: 14px; line-height: 1.3; }
+html.mm-simple .ss-close { display: block; width: 100%; min-height: 48px; margin-top: 8px; border-radius: 24px; background: var(--sp-soft); color: var(--text); font-size: 17px; }
+html.mm-simple #toast { font-size: 16px; }
+</style>
 </head>
 <body>
   <section id="screen-agents" class="screen active">
@@ -1001,6 +1152,7 @@
     <a id="menu-connectors" href="/modules" hidden>&#x1F50C; Data connectors</a>
     <a id="menu-remote" href="/modules#remote-computers" hidden>&#x1F4BB; Remote computers</a>
     <a id="menu-users" href="/users" hidden>&#x1F465; Users</a>
+    <button id="menu-simple">Switch to Simple</button>
     <button id="menu-signout">Sign out</button>
     <button id="menu-update">&#x2B07;&#xFE0F; Update hub<span id="menu-update-note"></span></button>
     <button id="menu-restart" class="danger">&#x21BB; Restart hub</button>
@@ -1027,6 +1179,7 @@
   <script src="/ui-face-player.js"></script>
   <script src="/ui-call-display.js"></script>
   <script src="/ui-file-card.js"></script>
+  <script src="/ui-simple.js"></script>
   <script src="mobile.js"></script>
 </body>
 </html>
