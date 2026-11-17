@@ -68,6 +68,17 @@
     .iconbtn { min-width: 44px; min-height: 44px; display: inline-flex; align-items: center; justify-content: center; font-size: 20px; border-radius: 8px; }
     .iconbtn:active { background: var(--border); }
     .iconbtn[hidden] { display: none !important; }   /* the display rule above would otherwise override [hidden] (the Stop button showed on idle agents) */
+    /* The Simple view switch (both modes): compact so it fits a 390 px top bar next to the other buttons. */
+    .mode-toggle { flex: none; min-height: 44px; display: inline-flex; align-items: center; gap: 5px; padding: 0 4px; font-size: 12px; font-weight: 600; color: var(--text-dim); white-space: nowrap; border-radius: 8px; }
+    .mode-toggle[hidden] { display: none !important; }
+    .mode-toggle .mt-track { position: relative; width: 30px; height: 17px; border-radius: 9px; background: var(--border-strong); flex: none; transition: background .15s; }
+    .mode-toggle .mt-knob { position: absolute; top: 2px; left: 2px; width: 13px; height: 13px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.4); transition: transform .15s; }
+    .mode-toggle[aria-checked="true"] .mt-track { background: #8b6fd6; }
+    .mode-toggle[aria-checked="true"] .mt-knob { transform: translateX(13px); }
+    #agents-head.has-mode-toggle { gap: 4px; }
+    #agents-head.has-mode-toggle h1 { flex-shrink: 1; min-width: 60px; }
+    #chat-head.has-mode-toggle { gap: 4px; }
+    #chat-head.has-mode-toggle .iconbtn { min-width: 38px; }
     .iconbtn.spinning { animation: fspin 0.9s linear infinite; opacity: 0.7; pointer-events: none; }
     .scroll { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }   /* vertical only: wide content scrolls inside its message */
 
@@ -839,12 +850,14 @@ html.mm-simple {
   --bg-dark: #1a1a19; --bg-card: #232322; --bg-input: #1a1a19; --accent: #8b6fd6; --accent-hover: #a48be6;
   --text: #fff; --text-dim: #c3c2b7; --text-tertiary: #8a897f; --border: #2f2f2d; --border-strong: #3d3d3a;
   --sp-bubble: #2a2a28; --sp-soft: #232322; --sp-shadow: none;
+  --sp-me-bg: #5b46a8; --sp-me-text: #ffffff; --sp-me-code: rgba(255,255,255,.18);
   color-scheme: dark;
 }
 html.mm-simple.mm-light {
   --bg-dark: #ffffff; --bg-card: #ffffff; --bg-input: #f6f6f3; --accent-hover: #7a5cc8;
   --text: #1a1a19; --text-dim: #55544c; --text-tertiary: #8a897f; --border: #e4e3dd; --border-strong: #d4d3cc;
   --sp-bubble: #f1efe9; --sp-soft: #f6f6f3; --sp-shadow: 0 2px 12px rgba(0,0,0,.08);
+  --sp-me-bg: #ebe6fb; --sp-me-text: #1d1640; --sp-me-code: rgba(29,22,64,.10);
   color-scheme: light;
 }
 html.mm-simple body { font: 18px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; background: var(--bg-dark); color: var(--text); }
@@ -864,15 +877,19 @@ html.mm-simple #cp-levels, html.mm-simple .cp-dnd, html.mm-simple .cp-disp, html
 html.mm-simple .simple-wait, html.mm-simple .simple-auto-hide { display: none !important; }
 
 /* Top bar: brand mark, centred pill, avatar */
-html.mm-simple #simple-top { display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px; align-items: center; gap: 8px; min-height: 64px; padding: 6px 12px; flex: none; }
-html.mm-simple .st-mark { width: 34px; height: 34px; border-radius: 50%; background: var(--accent); color: #fff; display: grid; place-items: center; font-weight: 700; font-size: 17px; justify-self: start; }
-html.mm-simple .st-pill { justify-self: center; max-width: 100%; min-height: 48px; display: flex; align-items: center; gap: 8px; padding: 0 16px; border-radius: 24px; border: 1px solid var(--border); background: var(--bg-card); box-shadow: var(--sp-shadow); color: var(--text); font-size: 17px; }
+html.mm-simple #simple-top { display: flex; align-items: center; gap: 6px; min-height: 64px; padding: 6px 12px; flex: none; }
+html.mm-simple .st-mark { width: 34px; height: 34px; border-radius: 50%; background: var(--accent); color: #fff; display: grid; place-items: center; font-weight: 700; font-size: 17px; flex: none; }
+html.mm-simple .st-pill { flex: 1 1 auto; justify-content: center; min-width: 0; max-width: 100%; min-height: 48px; display: flex; align-items: center; gap: 8px; padding: 0 16px; border-radius: 24px; border: 1px solid var(--border); background: var(--bg-card); box-shadow: var(--sp-shadow); color: var(--text); font-size: 17px; }
 html.mm-simple .st-pill .st-pic { font-size: 22px; line-height: 1; flex: none; }
 html.mm-simple .st-pill .st-to { color: var(--text-tertiary); flex: none; }
 html.mm-simple .st-pill .st-pname { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 html.mm-simple .st-chev { color: var(--text-tertiary); font-size: 15px; flex: none; }
-html.mm-simple .st-avatar { justify-self: end; width: 44px; height: 44px; border-radius: 50%; background: var(--sp-soft); border: 1px solid var(--border); color: var(--text-dim); font-weight: 600; font-size: 17px; display: grid; place-items: center; }
-@media (max-width: 380px) { html.mm-simple .st-pill .st-to { display: none; } }
+html.mm-simple .st-avatar { flex: none; width: 44px; height: 44px; border-radius: 50%; background: var(--sp-soft); border: 1px solid var(--border); color: var(--text-dim); font-weight: 600; font-size: 17px; display: grid; place-items: center; }
+html.mm-simple .simple-theme-btn { flex: none; min-height: 44px; display: inline-flex; align-items: center; gap: 6px; padding: 0 10px; border-radius: 22px; border: 1px solid var(--border); background: var(--bg-card); color: var(--text-dim); font-size: 14px; white-space: nowrap; }
+html.mm-simple .simple-theme-btn .stb-ic { font-size: 18px; line-height: 1; }
+html.mm-simple .mode-toggle { font-size: 14px; color: var(--text-dim); }
+@media (max-width: 420px) { html.mm-simple .st-pill .st-to, html.mm-simple .simple-theme-btn .stb-lab { display: none; } html.mm-simple .st-pill { padding: 0 10px; gap: 6px; } html.mm-simple .simple-theme-btn { min-width: 44px; justify-content: center; padding: 0 6px; } }
+html.mm-simple #simple-top .st-mark { margin-right: 2px; }
 
 /* Agent list screen (only reached when there is no chat to open) */
 html.mm-simple .agent-row { min-height: 64px; padding: 10px 16px; font-size: 18px; }
@@ -882,7 +899,9 @@ html.mm-simple .agent-row .agent-model { font-size: 14px; color: var(--text-tert
 html.mm-simple #chat-scroll { background: var(--bg-dark); }
 html.mm-simple #messages { max-width: 720px; width: 100%; margin: 0 auto; min-height: 100%; padding: 20px 16px 8px; gap: 28px; }
 html.mm-simple .msg { max-width: 100%; padding: 0; background: none; border: 0; border-radius: 0; font-size: 18px; line-height: 1.55; color: var(--text); }
-html.mm-simple .msg.user { align-self: flex-end; max-width: 86%; padding: 12px 18px; background: var(--sp-bubble); color: var(--text); border-radius: 22px 22px 6px 22px; }
+html.mm-simple .msg.user { align-self: flex-end; max-width: 86%; padding: 12px 18px; background: var(--sp-me-bg); color: var(--sp-me-text); border-radius: 22px 22px 6px 22px; }
+html.mm-simple .msg.user a { color: inherit; text-decoration: underline; }
+html.mm-simple .msg.user code, html.mm-simple .msg.user pre { background: var(--sp-me-code); color: inherit; border-color: transparent; }
 html.mm-simple .msg.assistant { align-self: flex-start; width: 100%; }
 html.mm-simple .msg.error { color: var(--error); }
 html.mm-simple .msg.assistant pre, html.mm-simple .msg.assistant code { background: var(--bg-input); border-color: var(--border); }
@@ -977,6 +996,13 @@ html.mm-simple .sa-txt { min-width: 0; flex: 1; }
 html.mm-simple .sa-txt b { display: block; font-weight: 600; font-size: 17px; }
 html.mm-simple .sa-txt small { display: block; color: var(--text-tertiary); font-size: 14px; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 html.mm-simple .sa-tick { color: var(--accent); font-weight: 700; flex: none; }
+html.mm-simple .sa-dot { width: 12px; height: 12px; border-radius: 50%; flex: none; background: transparent; }
+html.mm-simple .sa-dot.busy { background: var(--warning, #F5A623); animation: simple-pulse 1.2s ease-in-out infinite; }
+html.mm-simple .sa-dot.question { background: var(--blue, #3b82f6); animation: simple-pulse 1.6s ease-in-out infinite; }
+html.mm-simple .sa-head { margin: 12px 12px 2px; color: var(--text-tertiary); font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+html.mm-simple .sa-more .sa-chev { color: var(--text-tertiary); flex: none; font-size: 15px; }
+html.mm-simple .sa-more b { font-weight: 600; font-size: 17px; color: var(--text-dim); }
+@media (prefers-reduced-motion: reduce) { html.mm-simple .sa-dot { animation: none !important; } }
 html.mm-simple .ss-sec { margin-bottom: 18px; }
 html.mm-simple .ss-title { color: var(--text-tertiary); font-size: 14px; margin-bottom: 8px; }
 html.mm-simple .ss-seg { display: flex; gap: 6px; }
@@ -992,7 +1018,7 @@ html.mm-simple #toast { font-size: 16px; }
 </head>
 <body>
   <section id="screen-agents" class="screen active">
-    <div class="topbar" id="agents-head"><h1>My Maestro AI</h1><select id="owner-view" hidden aria-label="Whose agents to show"></select><a class="iconbtn" href="/?desktop=once" title="Full UI" style="text-decoration:none">&#x1F5A5;</a><button class="iconbtn" id="agents-refresh" aria-label="Refresh">&#x21BB;</button><button class="iconbtn" id="agents-menu-btn" aria-label="Menu">&#x22EE;</button></div>
+    <div class="topbar" id="agents-head"><h1>My Maestro AI</h1><select id="owner-view" hidden aria-label="Whose agents to show"></select><a class="iconbtn" href="/?desktop=once" title="Full UI" style="text-decoration:none">&#x1F5A5;</a><button type="button" class="mode-toggle" role="switch" aria-checked="false" title="Simple view on/off" hidden><span class="mt-lab">Simple</span><span class="mt-track"><span class="mt-knob"></span></span></button><button class="iconbtn" id="agents-refresh" aria-label="Refresh">&#x21BB;</button><button class="iconbtn" id="agents-menu-btn" aria-label="Menu">&#x22EE;</button></div>
     <div id="update-card" hidden></div>
     <button class="pacing-bar" title="Tap to resume full parallel"></button>
     <button id="working-chip" title="Tap to show only the agents that are working"></button>
@@ -1007,6 +1033,7 @@ html.mm-simple #toast { font-size: 16px; }
       <button class="iconbtn" id="chat-resync" aria-label="Re-sync" title="Re-sync with the hub">&#x21BB;</button>
       <button class="iconbtn notify-chip" id="chat-notify-btn" type="button" aria-haspopup="dialog" aria-label="Notifications for this agent" title="Notifications for this agent"><span class="bicon">&#x1F514;</span><span class="nlabel"> Notify</span></button>
       <button class="iconbtn stop-remote" id="chat-stop-btn" aria-label="Stop this agent" title="Stop this agent's current turn" hidden>&#x25A0;<span class="stop-label"> Stop</span></button>
+      <button type="button" class="mode-toggle" role="switch" aria-checked="false" title="Simple view on/off" hidden><span class="mt-lab">Simple</span><span class="mt-track"><span class="mt-knob"></span></span></button>
       <button class="iconbtn" id="chat-menu-btn" aria-label="Menu">&#x22EE;</button>
     </div>
     <!-- The model, effort, plan usage and context size get their own thin row, which wraps rather than cutting anything

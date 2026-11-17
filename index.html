@@ -604,6 +604,14 @@
     .header-controls { display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
     .header-btn { background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); border-radius: 6px; padding: 4px 8px; cursor: pointer; font-size: 14px; color: var(--text-secondary); transition: all 0.2s; }
     .header-btn:hover { background: rgba(255,255,255,0.15); color: var(--text-primary); }
+    /* The Simple view switch (both modes; app.js simpleTopSync adds it for real accounts only) */
+    .mode-toggle { display: inline-flex; align-items: center; gap: 8px; flex: none; min-height: 28px; padding: 3px 9px 3px 11px; border: 1px solid rgba(255,255,255,0.15); border-radius: 16px; background: rgba(255,255,255,0.08); color: var(--text-secondary); font: inherit; font-size: 13px; line-height: 1; cursor: pointer; white-space: nowrap; }
+    .mode-toggle:hover { background: rgba(255,255,255,0.15); color: var(--text-primary); }
+    .mode-toggle .mt-track { position: relative; width: 30px; height: 16px; border-radius: 8px; background: #77766d; flex: none; transition: background .15s; }
+    .mode-toggle .mt-knob { position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: #fff; transition: transform .15s; }
+    .mode-toggle[aria-checked="true"] .mt-track { background: #8b6fd6; }
+    .mode-toggle[aria-checked="true"] .mt-knob { transform: translateX(14px); }
+    .mode-toggle:focus-visible { outline: 2px solid #8b6fd6; outline-offset: 2px; }
     .header-btn.restarting { opacity: 0.5; pointer-events: none; animation: pulse 1s infinite; }
     .chat-actions .resync-btn { font-size: 1rem; line-height: 1; padding: 6px 10px; }
     .chat-actions .notify-bell-btn { font-size: 1rem; line-height: 1; padding: 6px 10px; }
@@ -2545,6 +2553,7 @@
       --chat-max-width: 720px; --chat-pad-x: 24px;
       --sm-page: #1a1a19; --sm-side: #161615; --sm-raised: #232322; --sm-border: #2f2f2d; --sm-text: #fff; --sm-sec: #c3c2b7; --sm-muted: #8a897f;
       --sm-bubble: #2a2a28; --sm-sel: rgba(139,111,214,.22); --sm-hover: rgba(255,255,255,.05); --sm-shadow: none;
+      --sm-user-bg: #5b46a8; --sm-user-text: #ffffff; --sm-user-code: rgba(255,255,255,.18);
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
     }
     html.mm-simple.mm-light {
@@ -2554,6 +2563,7 @@
       --border: #e4e3dd; --border-strong: #d4d3cb;
       --sm-page: #ffffff; --sm-side: #f6f6f3; --sm-raised: #ffffff; --sm-border: #e4e3dd; --sm-text: #1a1a19; --sm-sec: #55544c; --sm-muted: #8a897f;
       --sm-bubble: #f1f0ec; --sm-sel: rgba(139,111,214,.13); --sm-hover: rgba(0,0,0,.04); --sm-shadow: 0 2px 12px rgba(0,0,0,.08);
+      --sm-user-bg: #ebe6fb; --sm-user-text: #1d1640; --sm-user-code: rgba(29,22,64,.10);
     }
     html.mm-simple body { font-family: inherit; background: var(--sm-page); color: var(--sm-text); }
 
@@ -2610,13 +2620,18 @@
     /* Conversation: user bubbles right, agent text left without a bubble */
     html.mm-simple .chat-container { background: var(--sm-page); }
     html.mm-simple .chat-container:not(.active) { display: none; }
-    html.mm-simple .chat-actions { padding: 6px 24px 0; display: flex; justify-content: center; min-height: 0; background: none; border: 0; }
+    html.mm-simple .chat-actions { padding: 6px 24px 0; display: flex; justify-content: center; min-height: 46px; background: none; border: 0; }
     html.mm-simple .chat-actions .agent-name { display: none; }
     html.mm-simple .chat-actions [id^="cancel-"] { border: 1px solid var(--sm-border); background: var(--sm-raised); color: var(--sm-text); border-radius: 18px; padding: 6px 16px; font-size: 14px; }
     html.mm-simple .messages { padding-top: 28px; padding-bottom: 20px; }
     html.mm-simple .message { font-size: 15.5px; line-height: 1.65; }
-    html.mm-simple .message.user { background: var(--sm-bubble); color: var(--sm-text); border: 0; border-radius: 20px; border-bottom-right-radius: 8px; padding: 12px 18px; margin: 0 0 28px auto; max-width: 80%; width: fit-content; font-weight: 400; }
+    html.mm-simple .message.user { background: var(--sm-user-bg); color: var(--sm-user-text); border: 0; border-radius: 20px; border-bottom-right-radius: 8px; padding: 12px 18px; margin: 0 0 28px auto; max-width: 80%; width: fit-content; font-weight: 400; }
     html.mm-simple .message.user::before { content: none; }
+    html.mm-simple .message.user a { color: inherit; text-decoration: underline; }
+    html.mm-simple .message.user strong, html.mm-simple .message.user em { color: inherit; }
+    html.mm-simple .message.user :not(pre) > code { background: var(--sm-user-code); color: inherit; }
+    html.mm-simple .message.user pre { background: var(--sm-user-code); color: inherit; border-color: transparent; }
+    html.mm-simple .message.user.simple-auto { color: var(--sm-text); }
     html.mm-simple .message.assistant { background: none; border: 0; border-radius: 0; padding: 0; color: var(--sm-text); }
     html.mm-simple .message.assistant strong, html.mm-simple .message.assistant h1, html.mm-simple .message.assistant h2, html.mm-simple .message.assistant h3,
     html.mm-simple .message.assistant h4, html.mm-simple .message.assistant h5, html.mm-simple .message.assistant h6 { color: var(--sm-text); }
@@ -2741,6 +2756,30 @@
     html.mm-simple .simple-modal .sm-plain span { font-size: 13px; color: var(--sm-muted, #8a897f); }
     html.mm-simple .simple-modal .sm-out { color: #ff7a70; font-weight: 500; }
     html.mm-simple.mm-light .simple-modal .sm-out { color: #c8372d; }
+
+    /* Agent list: busy dot at the right end of the row, "More agents", plain-word group headings */
+    html.mm-simple #agent-list .agent-btn .agent-status.live-busy,
+    html.mm-simple #agent-list .agent-btn .agent-status.live-question { display: block !important; position: absolute; top: 50%; right: 14px; left: auto; width: 9px; height: 9px; margin: -4px 0 0; padding: 0; border-radius: 50%; font-size: 0; line-height: 0; box-shadow: none; }
+    html.mm-simple #agent-list .agent-btn .agent-status.live-busy { background: var(--warning, #F5A623); animation: pulse 1s infinite; }
+    html.mm-simple #agent-list .agent-btn .agent-status.live-question { background: var(--blue, #3d7bff); animation: pulse 1.6s infinite; }
+    html.mm-simple #agent-list .simple-more-hide { display: none !important; }
+    html.mm-simple #agent-list .simple-more { display: flex; align-items: center; gap: 12px; position: relative; width: 100%; height: 38px; margin: 4px 0 0; padding: 0 12px; border: 0; border-radius: 12px; background: none; color: var(--sm-sec); font: inherit; font-size: 14px; cursor: pointer; text-align: left; }
+    html.mm-simple #agent-list .simple-more:hover { background: var(--sm-hover); color: var(--sm-text); }
+    html.mm-simple #agent-list .simple-more .sm-chev { width: 24px; text-align: center; font-size: 17px; transition: transform .15s; }
+    html.mm-simple #agent-list .simple-more.open .sm-chev { transform: rotate(90deg); }
+    html.mm-simple #agent-list .simple-more .sm-dot { display: none; position: absolute; top: 50%; right: 14px; width: 9px; height: 9px; margin-top: -4px; border-radius: 50%; background: var(--warning, #F5A623); animation: pulse 1s infinite; }
+    html.mm-simple #agent-list .simple-more.has-busy .sm-dot { display: block; }
+    html.mm-simple #agent-list .simple-more-h { padding: 12px 12px 4px; font-size: 12px; font-weight: 500; color: var(--sm-muted); }
+
+    /* Top right of the chat area: appearance button and the Simple view switch */
+    html.mm-simple .main { position: relative; }
+    html.mm-simple #simple-top-ctl { position: absolute; top: 8px; right: 16px; z-index: 30; display: flex; align-items: center; gap: 8px; }
+    html.mm-simple .simple-theme-btn { display: inline-flex; align-items: center; gap: 6px; min-height: 30px; padding: 3px 12px; border: 1px solid var(--sm-border); border-radius: 16px; background: var(--sm-raised); color: var(--sm-sec); font: inherit; font-size: 13px; line-height: 1; cursor: pointer; white-space: nowrap; }
+    html.mm-simple .simple-theme-btn:hover { background: var(--sm-hover); color: var(--sm-text); }
+    html.mm-simple .mode-toggle { border-color: var(--sm-border); background: var(--sm-raised); color: var(--sm-text); }
+    html.mm-simple .mode-toggle:hover { background: var(--sm-hover); color: var(--sm-text); }
+    html.mm-simple .mode-toggle .mt-track { background: #8a897f; }
+    html.mm-simple .mode-toggle[aria-checked="true"] .mt-track { background: #8b6fd6; }
 
     @media (max-width: 760px) { html.mm-simple .sidebar { width: 240px !important; min-width: 240px; } }
   </style>
