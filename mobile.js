@@ -1628,6 +1628,7 @@ function busyText(name) {
 function paintStatus() {
   if (screen === 'agents') renderAgents();
   paintChatStatus();
+  if (typeof simpleAgentsDots === 'function') simpleAgentsDots();   // Simple: the open agent sheet's busy dots
 }
 
 // Agent settings changed elsewhere (the settings page, another device): refresh the list and the open chat's
@@ -12817,6 +12818,7 @@ async function loadMe() {
       hubMe = await r.json();
       if (window.hubSimple) { try { window.hubSimple.apply(hubMe); } catch { /* the page stays as it is */ } }   // Simple mode and theme classes on <html>
       if (typeof simpleMenuHide === 'function') simpleMenuHide();   // "Switch to Simple" only for a real account (not the legacy single-password login)
+      if (typeof simpleToggleSync === 'function') simpleToggleSync();   // the Simple view switch (and Simple's theme button) only for a real account
       // Signed in: recorded-call pieces the hub never acknowledged (a closed app, a reload, a dead network) are sent now, one at a time (lib/ui-voice-call.js).
       if (hubMe && hubMe.user) setTimeout(() => { try { voiceRecResendPending((u, i) => fetch(u, { credentials: 'include', ...i }), { userId: hubMe.user.id }); } catch { /* the call code is not up yet */ } }, 0);
     }
@@ -14275,7 +14277,7 @@ function simpleEmptyPaint(isEmpty) {
   box.appendChild(wrap);
 }
 
-// The top bar: brand mark, "Talking to: <icon> <agent> ⌄" (opens the agent list), the person's initial (opens settings).
+// The top bar: brand mark, "Talking to: <icon> <agent> ⌄" (opens the agent list), the Simple switch, the theme button, the person's initial (opens settings).
 function simpleTopEnsure() {
   let top = $('simple-top');
   if (top) return top;
@@ -14283,9 +14285,12 @@ function simpleTopEnsure() {
   top.id = 'simple-top';
   top.innerHTML = '<span class="st-mark" aria-hidden="true">M</span>' +
     '<button type="button" id="simple-pill" class="st-pill" aria-haspopup="dialog"><span class="st-to">Talking to:</span><span class="st-pic"></span><span class="st-pname"></span><span class="st-chev" aria-hidden="true">⌄</span></button>' +
+    '<button type="button" class="mode-toggle" role="switch" aria-checked="true" title="Simple view on/off" hidden><span class="mt-lab">Simple</span><span class="mt-track"><span class="mt-knob"></span></span></button>' +
+    '<button type="button" class="simple-theme-btn" hidden><span class="stb-ic" aria-hidden="true"></span><span class="stb-lab"></span></button>' +
     '<button type="button" id="simple-avatar" class="st-avatar" aria-label="Settings" aria-haspopup="dialog"></button>';
   document.body.insertBefore(top, document.body.firstChild);
   $('simple-pill').addEventListener('click', simpleAgentsOpen);
+  top.querySelector('.simple-theme-btn').addEventListener('click', simpleThemeTap);
   $('simple-avatar').addEventListener('click', simpleSettingsOpen);
   return top;
 }
@@ -14297,6 +14302,7 @@ function simpleTopPaint() {
   if (pic) pic.textContent = a ? (a.icon || '🤖') : '';
   if (nm) nm.textContent = a ? (a.display || a.name) : 'Choose';
   $('simple-avatar').textContent = simpleInitial(hubMe);
+  simpleToggleSync();
 }
 function simpleDialog(id) {
   let d = $(id);
@@ -14307,24 +14313,120 @@ function simpleDialog(id) {
   }
   return d;
 }
+// The agent sheet's rows: Primary first; the rest sit under "More agents" (hubSimple.agentGroups: Specialists, Helpers, Experimental).
+// Closed (the default): the open chat's agent still shows, after the Primary rows; hiddenBusy says a hidden agent is working.
+function simpleAgentSheetModel(list, cur, open, busyOf) {
+  const g = window.hubSimple.agentGroups(list, (a) => a.category || 'worker');
+  const rows = g.primary.slice();
+  const hidden = [];
+  let total = 0;
+  for (const grp of g.more) for (const a of grp.items) { total++; if (!open) { if (a.name === cur) rows.push(a); else hidden.push(a); } }
+  const isOpen = total > 0 && !!open;
+  return {
+    primary: rows,
+    groups: isOpen ? g.more : [],
+    hasMore: total > 0 && (isOpen || hidden.length > 0),
+    open: isOpen,
+    hiddenBusy: !isOpen && hidden.some((a) => !!busyOf(a.name)),
+  };
+}
+function simpleMoreGet() { try { return localStorage.getItem(window.hubSimple.MORE_KEY) === '1'; } catch { return false; } }
+function simpleMoreSet(open) { try { localStorage.setItem(window.hubSimple.MORE_KEY, open ? '1' : '0'); } catch { /* not remembered */ } }
+// The dot's class for an agent: question (waiting for the person), busy (working) or none.
+function simpleDotClass(name) {
+  const s = live[name];
+  return s && s.pendingQuestion ? 'question' : isBusy(name) ? 'busy' : '';
+}
+function simpleAgentsFill(d) {
+  const list = d.querySelector('.sa-list');
+  list.textContent = '';
+  if (!agents.length) { list.textContent = 'No agents yet.'; return; }
+  const m = simpleAgentSheetModel(agents, current, simpleMoreGet(), isBusy);
+  const row = (a) => {
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'sa-row'; if (a.name === current) b.classList.add('sel');
+    b.dataset.agent = a.name;
+    b.innerHTML = '<span class="sa-ic"></span><span class="sa-txt"><b></b><small></small></span><span class="sa-tick"></span><span class="sa-dot"></span>';
+    b.querySelector('.sa-ic').textContent = a.icon || '🤖';
+    b.querySelector('b').textContent = a.display || a.name;
+    b.querySelector('small').textContent = a.blurb || '';
+    b.querySelector('.sa-tick').textContent = a.name === current ? '✓' : '';
+    b.querySelector('.sa-dot').className = 'sa-dot ' + simpleDotClass(a.name);
+    b.addEventListener('click', () => { d.close(); if (a.name !== current || screen !== 'chat') navigate('chat', a.name); });
+    return b;
+  };
+  for (const a of m.primary) list.appendChild(row(a));
+  if (m.hasMore) {
+    const mb = document.createElement('button'); mb.type = 'button'; mb.className = 'sa-row sa-more'; mb.setAttribute('aria-expanded', String(m.open));
+    mb.innerHTML = '<span class="sa-txt"><b>More agents</b></span><span class="sa-chev" aria-hidden="true"></span><span class="sa-dot"></span>';
+    mb.querySelector('.sa-chev').textContent = m.open ? '⌃' : '⌄';
+    mb.querySelector('.sa-dot').className = 'sa-dot ' + (m.hiddenBusy ? 'busy' : '');
+    mb.addEventListener('click', () => { simpleMoreSet(!m.open); simpleAgentsFill(d); });
+    list.appendChild(mb);
+  }
+  for (const grp of m.groups) {
+    const h = document.createElement('div'); h.className = 'sa-head'; h.textContent = grp.label; list.appendChild(h);
+    for (const a of grp.items) list.appendChild(row(a));
+  }
+}
 function simpleAgentsOpen() {
   if (!simpleOn()) return;
   const d = simpleDialog('simple-agents-sheet');
   d.setAttribute('aria-label', 'Choose who to talk to');
   d.innerHTML = '<h3>Talking to</h3><div class="sa-list"></div>';
-  const list = d.querySelector('.sa-list');
-  for (const a of agents) {
-    const b = document.createElement('button'); b.type = 'button'; b.className = 'sa-row'; if (a.name === current) b.classList.add('sel');
-    b.innerHTML = '<span class="sa-ic"></span><span class="sa-txt"><b></b><small></small></span><span class="sa-tick"></span>';
-    b.querySelector('.sa-ic').textContent = a.icon || '🤖';
-    b.querySelector('b').textContent = a.display || a.name;
-    b.querySelector('small').textContent = a.blurb || '';
-    b.querySelector('.sa-tick').textContent = a.name === current ? '✓' : '';
-    b.addEventListener('click', () => { d.close(); if (a.name !== current || screen !== 'chat') navigate('chat', a.name); });
-    list.appendChild(b);
-  }
-  if (!agents.length) list.textContent = 'No agents yet.';
+  simpleAgentsFill(d);
   if (!d.open) d.showModal();
+}
+// Live status changed: repaint the open sheet's dots in place (no rebuild, so a tap in progress is not lost).
+function simpleAgentsDots() {
+  if (!simpleOn()) return;
+  const d = document.getElementById('simple-agents-sheet');
+  if (!d || !d.open) return;
+  d.querySelectorAll('.sa-row[data-agent]').forEach((b) => { const dot = b.querySelector('.sa-dot'); if (dot) dot.className = 'sa-dot ' + simpleDotClass(b.dataset.agent); });
+  const mb = d.querySelector('.sa-more .sa-dot');
+  if (mb) mb.className = 'sa-dot ' + (simpleAgentSheetModel(agents, current, simpleMoreGet(), isBusy).hiddenBusy ? 'busy' : '');
+}
+// The Simple view switch (Advanced top bars and Simple's top bar) and Simple's theme button: only for a real account.
+function simpleToggleSync() {
+  const ok = simpleAccountOk(hubMe);
+  const on = simpleOn();
+  document.querySelectorAll('.mode-toggle').forEach((t) => { t.hidden = !ok; t.setAttribute('aria-checked', String(on)); });
+  for (const id of ['agents-head', 'chat-head']) { const h = document.getElementById(id); if (h) h.classList.toggle('has-mode-toggle', ok); }
+  const tb = document.querySelector('#simple-top .simple-theme-btn');
+  if (tb) {
+    tb.hidden = !ok;
+    const t = window.hubSimple.themeLabel(hubMe && hubMe.theme);
+    tb.querySelector('.stb-ic').textContent = t.icon;
+    tb.querySelector('.stb-lab').textContent = t.label;
+    tb.title = 'Appearance: ' + t.label + '. Tap to change.';
+    tb.setAttribute('aria-label', 'Appearance: ' + t.label + '. Tap to change.');
+  }
+}
+let simpleSwitching = false;
+// One tap on the switch: save the other mode, then reload.
+async function simpleModeTap() {
+  if (simpleSwitching) return;
+  simpleSwitching = true;
+  const target = simpleOn() ? 'advanced' : 'simple';
+  let ok = false;
+  try { ok = await simplePrefsPost({ uiMode: target }); } catch { ok = false; }
+  if (ok) { simpleReload(); return; }
+  simpleSwitching = false;
+  toast('Could not switch');
+}
+// The theme button: Light, Dark, Match device in turn; applied at once, saved, put back if the save fails.
+async function simpleThemeTap() {
+  if (!simpleOn() || !hubMe) return;
+  const was = hubMe.theme;
+  hubMe.theme = window.hubSimple.nextTheme(was);
+  try { window.hubSimple.apply(hubMe); } catch { /* the page stays as it is */ }
+  simpleToggleSync();
+  let ok = false;
+  try { ok = await simplePrefsPost({ theme: hubMe.theme }); } catch { ok = false; }
+  if (ok) return;
+  hubMe.theme = was;
+  try { window.hubSimple.apply(hubMe); } catch { /* the page stays as it is */ }
+  simpleToggleSync();
+  toast('Could not save that');
 }
 function simpleSettingsOpen() {
   if (!simpleOn()) return;
@@ -14460,6 +14562,7 @@ function simpleMenuHide(ms) { ms = ms || document.getElementById('menu-simple');
   if (ms) simpleMenuHide(ms);   // a single-password install has no account to save the choice on: the item stays hidden
   if (ms) ms.addEventListener('click', async () => { if (await simplePrefsPost({ uiMode: 'simple' })) simpleReload(); else toast('Could not switch'); });
 }
+if (typeof document.addEventListener === 'function') document.addEventListener('click', (e) => { if (e.target && e.target.closest && e.target.closest('.mode-toggle')) simpleModeTap(); });
 // ── end Simple mode: phone ──
 
 init();
