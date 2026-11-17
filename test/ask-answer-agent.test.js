@@ -12,9 +12,14 @@ test('the streamed question names the asking agent', () => {
   assert.match(src, /type: 'ask_user_question',\n\s+request_id: requestId,\n\s+agent: agentName,/);
 });
 
-test('the desktop and the phone send the agent back with the answer when the question named one', () => {
-  assert.match(read('app.js'), /fetch\('\/api\/ask_response', \{[\s\S]{0,400}body: JSON\.stringify\(\{ request_id, answers, \.\.\.\(data && data\.agent \? \{ agent: data\.agent \} : \{\}\) \}\)/);
-  assert.match(read('mobile.js'), /api\('\/api\/ask_response', \{[\s\S]{0,300}body: JSON\.stringify\(\{ request_id, answers, \.\.\.\(data\.agent \? \{ agent: data\.agent \} : \{\}\) \}\),/);
+test('the desktop and the phone send the agent back with the answer, falling back to the open chat\'s agent', () => {
+  assert.match(read('app.js'), /fetch\('\/api\/ask_response', \{[\s\S]{0,600}body: JSON\.stringify\(\{ request_id, answers, \.\.\.\(\(\(data && data\.agent\) \|\| \(chatId && chats\[chatId\] && !chats\[chatId\]\.isGroup && chats\[chatId\]\.agent\)\)/);
+  assert.match(read('mobile.js'), /api\('\/api\/ask_response', \{[\s\S]{0,500}body: JSON\.stringify\(\{ request_id, answers, \.\.\.\(\(data\.agent \|\| \(typeof current === 'string' && current\)\) \? \{ agent: data\.agent \|\| current \}/);
+});
+
+test('a question that arrives as a hub event (no chat stream attached) keeps its agent on both pages', () => {
+  assert.match(read('app.js'), /showQuestionModal\(\{ request_id: ev\.request_id, questions: ev\.questions, agent: ev\.agent \}/);
+  assert.match(read('mobile.js'), /const q = \{ request_id: ev\.request_id, questions: ev\.questions, agent: ev\.agent \};/);
 });
 
 test('the route classifies /api/ask_response by the body agent (so the agent field is what lets a member answer)', () => {

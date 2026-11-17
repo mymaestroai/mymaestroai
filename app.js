@@ -9187,7 +9187,7 @@
         if (ev.request_id && Array.isArray(ev.questions)) {
           const chat = findSoloChat(ev.agent);
           const chatId = chat ? Object.keys(chats).find(k => chats[k] === chat) : null;
-          showQuestionModal({ request_id: ev.request_id, questions: ev.questions }, chatId || null).catch(() => {});
+          showQuestionModal({ request_id: ev.request_id, questions: ev.questions, agent: ev.agent }, chatId || null).catch(() => {});
         }
       });
       source.addEventListener('ask_user_done', e => { const ev = parse(e); if (ev && ev.request_id) closeQuestion(ev.request_id); });
@@ -11078,7 +11078,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
             headers: { 'Content-Type': 'application/json' },
             // The asking agent goes with the answer: the route's access check needs it to let a member answer a question
             // from an agent they own or that is shared with them (without it every member's answer was refused).
-            body: JSON.stringify({ request_id, answers, ...(data && data.agent ? { agent: data.agent } : {}) })
+            // A question rebuilt without its agent (a reconnect) falls back to the chat's agent; the hub refuses one that did not ask.
+            body: JSON.stringify({ request_id, answers, ...(((data && data.agent) || (chatId && chats[chatId] && !chats[chatId].isGroup && chats[chatId].agent)) ? { agent: String((data && data.agent) || chats[chatId].agent) } : {}) })
           }).then(r => { if (r.ok) retireQuestionNotices(request_id); })   // the hub has the answer: its line can go
             .catch(err => console.error('Failed to submit question answer:', err));
           overlay.remove();
