@@ -223,7 +223,7 @@
       });
       panels.querySelectorAll('.message.assistant').forEach(el => {   // the old "⏳ Thinking..." placeholder: the box above replaces it (CSS hides .simple-wait)
         let own = '';   // the message's own text: the play and copy buttons and the time line add glyphs to textContent
-        el.childNodes.forEach(n => { if (n.nodeType === 3 || !(n.classList && (n.classList.contains('msg-copy') || n.classList.contains('msg-speak') || n.classList.contains('msg-time')))) own += n.textContent || ''; });
+        el.childNodes.forEach(n => { if (n.nodeType === 3 || !(n.classList && (n.classList.contains('msg-copy') || n.classList.contains('msg-speak') || n.classList.contains('msg-time') || n.classList.contains('reason-stream') || n.classList.contains('tool-stream')))) own += n.textContent || ''; });   // the hidden reasoning and tool panels are not its text
         const wait = own.trim() === '⏳ Thinking...';
         if (wait !== el.classList.contains('simple-wait')) el.classList.toggle('simple-wait', wait);
       });
