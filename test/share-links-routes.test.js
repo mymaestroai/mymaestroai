@@ -24,7 +24,7 @@ class FakeRes extends Writable {
   get buffer() { return Buffer.concat(this.chunks); }
 }
 
-function rig(t, { settings = {}, limiter = null } = {}) {
+function rig(t, { settings = {}, limiter = null, storeFs = undefined, routeExtra = {} } = {}) {
   const hubHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'share-routes-')));
   t.after(() => fs.rmSync(hubHome, { recursive: true, force: true }));
   const clock = { t: 1_800_000_000_000 };
@@ -51,18 +51,18 @@ function rig(t, { settings = {}, limiter = null } = {}) {
   const conf = { ...settings };
   const dir = path.join(hubHome, 'data');
   fs.mkdirSync(dir);
-  const store = SL.createStore({ file: path.join(dir, 'share-links.json'), now: () => clock.t });
-  const routes = createShareLinkRoutes({ store, getFiles: () => files, getAgents: async () => agents, access, hubAuth, settings: () => conf, push, log: () => {}, now: () => clock.t, limiter });
+  const store = SL.createStore({ file: path.join(dir, 'share-links.json'), now: () => clock.t, ...(storeFs ? { fsImpl: storeFs } : {}) });
+  const routes = createShareLinkRoutes({ store, getFiles: () => files, getAgents: async () => agents, access, hubAuth, settings: () => conf, push, log: () => {}, now: () => clock.t, limiter, ...routeExtra });
 
   const put = (rootRel, name, content = 'hello') => { const d = path.join(hubHome, rootRel); fs.mkdirSync(d, { recursive: true }); fs.writeFileSync(path.join(d, name), content); return path.join(d, name); };
   const as = (key, extra = {}) => ({ hubIdentKind: 'user', hubUser: users[key], hubPendingTotp: false, hubToken: null, hubService: false, ip: '192.0.2.10', ...extra });
-  async function call(ident, method, pathname, body) {
+  async function call(ident, method, pathname, body, mkRes) {
     const req = new EventEmitter();
     Object.assign(req, { method, url: pathname, headers: {}, socket: { remoteAddress: ident.ip || '192.0.2.10' }, hubIdentKind: ident.hubIdentKind, hubUser: ident.hubUser, hubPendingTotp: ident.hubPendingTotp, hubToken: ident.hubToken, hubService: ident.hubService });
     if (body !== undefined) req._bodyText = typeof body === 'string' ? body : JSON.stringify(body);
-    const res = new FakeRes();
+    const res = mkRes ? mkRes() : new FakeRes();
     const handled = await routes.handle(req, res, pathname);
-    if (handled) await res.finished;
+    if (handled && !mkRes) await res.finished;
     return { handled, res, status: res.status, headers: res.headers, text: res.text, json: () => JSON.parse(res.text) };
   }
   const create = (ident, body) => call(ident, 'POST', '/api/share-links', body);
@@ -534,4 +534,86 @@ test('wiring: the gate classes, server.js hooks, the settings cleaner and the lo
   assert.ok(server.indexOf('shareLinkRoutes().handle') < server.indexOf("pathname === '/v1/chat/completions'"));
   assert.equal(access.classifyRoute(`/s/${'A'.repeat(43)}`).kind, 'session');
   assert.equal(access.classifyRoute('/api/share-links').kind, 'session');
+});
+
+// ── review follow-ups ──
+
+test('an aborted client: a destroyed response does not use up a one-time link and the descriptor is closed', async (t) => {
+  const closed = [];
+  const spyFs = { ...fs, closeSync: (fd) => { closed.push(fd); return fs.closeSync(fd); } };
+  const r = rig(t, { routeExtra: { fsImpl: spyFs } }); r.ownerFile('once.txt', 'payload');
+  const c = await r.create(r.as('owner'), { path: 'once.txt', hours: 1, oneTime: true });
+  const dead = await r.call(r.as('owner'), 'POST', c.json().path, undefined, () => { const x = new FakeRes(); x.destroy(); return x; });
+  assert.equal(dead.handled, true);
+  assert.equal(closed.length, 1, 'the descriptor was closed');
+  assert.equal(r.store.get(c.json().id).usedAt, null, 'the link is not used up');
+  assert.equal(r.store.get(c.json().id).downloads, 0);
+  assert.equal(actions(r, 'share.download').length, 0);
+  const ok = await r.call(r.as('owner'), 'POST', c.json().path);
+  assert.equal(ok.status, 200); assert.equal(ok.text, 'payload');
+});
+
+test('an aborted client: a destroyed socket on the request counts the same', async (t) => {
+  const closed = [];
+  const spyFs = { ...fs, closeSync: (fd) => { closed.push(fd); return fs.closeSync(fd); } };
+  const r = rig(t, { routeExtra: { fsImpl: spyFs } }); r.ownerFile('once.txt', 'payload');
+  const c = await r.create(r.as('owner'), { path: 'once.txt', hours: 1, oneTime: true });
+  const ident = r.as('owner');
+  const req = new EventEmitter();
+  Object.assign(req, { method: 'POST', url: c.json().path, headers: {}, socket: { remoteAddress: '192.0.2.10', destroyed: true }, hubIdentKind: 'user', hubUser: ident.hubUser, hubPendingTotp: false, hubToken: null, hubService: false });
+  const res = new FakeRes();
+  assert.equal(await r.routes.handle(req, res, c.json().path), true);
+  assert.equal(closed.length, 1);
+  assert.equal(r.store.get(c.json().id).usedAt, null);
+});
+
+test('the descriptor is closed when the client leaves before the end of a download', async (t) => {
+  const closed = [];
+  const spyFs = { ...fs, closeSync: (fd) => { closed.push(fd); return fs.closeSync(fd); } };
+  const r = rig(t, { routeExtra: { fsImpl: spyFs } }); r.ownerFile('big.bin', 'x'.repeat(2 * 1024 * 1024));
+  const c = await r.create(r.as('owner'), { path: 'big.bin', hours: 1 });
+  let res;
+  const got = await r.call(r.as('owner'), 'POST', c.json().path, undefined, () => { res = new FakeRes(); res._write = (chunk, enc, cb) => { res.destroy(); cb(); }; return res; });
+  assert.equal(got.handled, true);
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(res.destroyed, true);
+  assert.ok(closed.length <= 1);
+});
+
+test('revoke: a failed save answers 500 and the link stays live; a failed save refuses the download and keeps it live', async (t) => {
+  const flag = { fail: false };
+  const failingFs = { ...fs, writeFileSync: (...a) => { if (flag.fail) throw new Error('disk full'); return fs.writeFileSync(...a); } };
+  const r = rig(t, { storeFs: failingFs }); r.ownerFile('once.txt', 'payload');
+  const c = await r.create(r.as('owner'), { path: 'once.txt', hours: 1, oneTime: true });
+  flag.fail = true;
+  const bad = await r.call(r.as('owner'), 'POST', `/api/share-links/${c.json().id}/revoke`);
+  assert.equal(bad.status, 500);
+  assert.deepEqual(bad.json(), { error: 'Could not save. Try again.' });
+  assert.equal(actions(r, 'share.revoke').length, 0);
+  const dl = await r.call(r.as('owner'), 'POST', c.json().path);
+  assert.equal(dl.status, 404); assert.ok(dl.text.includes(GONE_TEXT));
+  assert.equal(r.store.get(c.json().id).usedAt, null);
+  flag.fail = false;
+  assert.equal((await r.call(r.as('owner'), 'POST', c.json().path)).text, 'payload', 'still live once saving works');
+});
+
+test('a throw inside open() answers the gone page and logs no token', async (t) => {
+  const logs = [];
+  const r = rig(t, { routeExtra: { log: (m) => logs.push(m), openChecked: () => { throw new Error('boom'); } } }); r.ownerFile();
+  const c = await r.create(r.as('owner'), { path: 'report.txt', hours: 1 });
+  const got = await r.call(r.as('owner'), 'GET', c.json().path);
+  assert.equal(got.status, 404); assert.ok(got.text.includes(GONE_TEXT));
+  assert.deepEqual(logs, ['[share-links] open failed: boom']);
+  assert.ok(!logs.join('\n').includes(tokenOf(c)));
+});
+
+test('a throw whose message holds the token still logs no token', async (t) => {
+  const logs = [];
+  let tok = '';
+  const r = rig(t, { routeExtra: { log: (m) => logs.push(m), openChecked: () => { throw new Error(`failed for /s/${tok}`); } } }); r.ownerFile();
+  const c = await r.create(r.as('owner'), { path: 'report.txt', hours: 1 });
+  tok = tokenOf(c);
+  const got = await r.call(r.as('owner'), 'GET', c.json().path);
+  assert.equal(got.status, 404);
+  assert.ok(logs.length === 1 && !logs[0].includes(tok));
 });

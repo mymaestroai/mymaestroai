@@ -315,3 +315,57 @@ test('limiter: a sliding window per key, and blocks that run out', () => {
   t = 1600;
   assert.equal(lim.isBlocked('b'), false);
 });
+
+test('revoke: a failed save changes nothing and answers false', (t) => {
+  const flag = { fail: false };
+  const bad = { ...fs, writeFileSync: (...a) => { if (flag.fail) throw new Error('disk full'); return fs.writeFileSync(...a); } };
+  const { store, base } = rig(t, { fsImpl: bad });
+  const { token, record } = store.create(base);
+  flag.fail = true;
+  assert.equal(store.revoke(record.id), false);
+  assert.equal(store.get(record.id).revokedAt, null);
+  assert.ok(store.findLive(token), 'still live');
+  flag.fail = false;
+  assert.equal(store.revoke(record.id), true);
+  assert.equal(store.findLive(token), null);
+});
+
+test('markDownload: a failed save undoes the use and refuses the download', (t) => {
+  const flag = { fail: false };
+  const bad = { ...fs, renameSync: (a, b) => { if (flag.fail) throw new Error('disk full'); return fs.renameSync(a, b); } };
+  const { store, base } = rig(t, { fsImpl: bad });
+  const one = store.create({ ...base, oneTime: true });
+  const many = store.create(base);
+  flag.fail = true;
+  assert.equal(store.markDownload(one.record.id), false);
+  assert.equal(store.markDownload(many.record.id), false);
+  assert.equal(store.get(one.record.id).usedAt, null);
+  assert.equal(store.get(one.record.id).downloads, 0);
+  assert.equal(store.get(many.record.id).downloads, 0);
+  assert.ok(store.findLive(one.token));
+  flag.fail = false;
+  assert.equal(store.markDownload(one.record.id), true);
+  assert.equal(store.markDownload(one.record.id), false);
+});
+
+test('a read error other than "not found" sets the file aside so a later save cannot overwrite it', (t) => {
+  const { dir, file, base, logs } = rig(t);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({ links: [] }));
+  const flaky = { ...fs, readFileSync: (f, ...a) => { if (f === file) { const e = new Error('EACCES: permission denied'); e.code = 'EACCES'; throw e; } return fs.readFileSync(f, ...a); } };
+  const s = SL.createStore({ file, fsImpl: flaky, now: () => 1_800_000_000_000, log: (m) => logs.push(m) });
+  assert.deepEqual(s.list(), []);
+  assert.ok(logs.some(l => /could not read/.test(l)));
+  const aside = fs.readdirSync(path.dirname(file)).filter(n => n.startsWith('share-links.json.unreadable-'));
+  assert.equal(aside.length, 1);
+  assert.equal(fs.readFileSync(path.join(path.dirname(file), aside[0]), 'utf8'), JSON.stringify({ links: [] }));
+  s.create(base);
+  assert.equal(fs.readdirSync(path.dirname(file)).filter(n => n.startsWith('share-links.json.unreadable-')).length, 1, 'the set-aside file is kept');
+  assert.ok(dir);
+});
+
+test('a missing file is not set aside', (t) => {
+  const { file, make } = rig(t);
+  make();
+  assert.deepEqual(fs.existsSync(path.dirname(file)) ? fs.readdirSync(path.dirname(file)).filter(n => n.includes('unreadable')) : [], []);
+});
