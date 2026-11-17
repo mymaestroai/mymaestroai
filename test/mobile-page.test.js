@@ -122,7 +122,7 @@ test('a pending ask_user question is re-shown from the hub event stream and on t
   const sdk = fs.readFileSync(path.join(root, 'lib', 'sdk-chat.js'), 'utf8');
   assert.ok(sdk.includes("hubEvents.events.setQuestion(agentName, { request_id: requestId, questions: event.questions })"), 'server remembers the question');
   assert.ok(sdk.includes("questions: event.questions });") && sdk.includes("hubEvents.events.setQuestion(agentName, null)"), 'full question on the event stream; cleared when done');
-  assert.ok(app.includes("source.addEventListener('ask_user_done'") && app.includes("showQuestionModal({ request_id: ev.request_id, questions: ev.questions }"), 'desktop shows it from the event stream');
+  assert.ok(app.includes("source.addEventListener('ask_user_done'") && app.includes("showQuestionModal({ request_id: ev.request_id, questions: ev.questions, agent: ev.agent }"), 'desktop shows it from the event stream');
   assert.ok(app.includes("if (turn.question && turn.question.request_id && !turn.ended) showQuestionModal(turn.question, chatId)"), 'desktop shows it on catch-up');
   assert.ok(app.includes("if (shownQuestions.has(request_id)) return resolve();"), 'desktop dedups');
   assert.ok(m.includes("if (chatOpenFor(ev.agent)) showQuestion(q);") && m.includes("pendingQuestionsByAgent.set(ev.agent, q);"), 'phone shows or parks it');

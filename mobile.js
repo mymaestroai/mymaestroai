@@ -11256,7 +11256,8 @@ function showQuestion(data, onAnswered) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       // The asking agent goes with the answer: the route's access check needs it to let a member answer (it was refused).
-      body: JSON.stringify({ request_id, answers, ...(data.agent ? { agent: data.agent } : {}) }),
+      // A question rebuilt without its agent (a reconnect) falls back to the open chat's agent; the hub refuses one that did not ask.
+      body: JSON.stringify({ request_id, answers, ...((data.agent || (typeof current === 'string' && current)) ? { agent: data.agent || current } : {}) }),
     }).then(r => { if (r.ok) { questionBoxes.delete(request_id); retireSoon(box); } })   // the hub has the answer: the box can go
       .catch(err => toast(`Could not send answer: ${err.message}`));
     box.innerHTML = `<div class="done">Answered: ${esc(label)}</div>`;   // kept in questionBoxes until the hub confirms or closes it
@@ -12002,7 +12003,7 @@ function connectEvents() {
     setLive(ev.agent, { busy: true, pendingQuestion: true }); paintStatus();
     // The question itself: shown now if that chat is open, else kept until it is (dedup by request id in showQuestion).
     if (ev.request_id && Array.isArray(ev.questions)) {
-      const q = { request_id: ev.request_id, questions: ev.questions };
+      const q = { request_id: ev.request_id, questions: ev.questions, agent: ev.agent };
       if (chatOpenFor(ev.agent)) showQuestion(q);
       else {
         pendingQuestionsByAgent.set(ev.agent, q);
