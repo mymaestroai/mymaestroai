@@ -2526,7 +2526,15 @@
     .visual-html iframe.visual-frame { display: block; width: 100%; height: 360px; border: 0; background: #1a1a19; }
     .visual-html.expanded iframe.visual-frame { height: 80vh; }
     .visual .visual-note { padding: 4px 10px; font-size: 0.75rem; color: var(--error); border-bottom: 1px solid var(--border); }
-  </style>
+      /* share links: Settings, Security block (#st-share-block) matches the other Settings rows, selects and buttons */
+    #st-share-block label.sec-hint { font-size: 0.8rem; color: var(--text-secondary); margin: 0; }
+    #st-share-block select { width: 100%; padding: 6px 10px; font-size: 0.8rem; background: var(--bg-input); border: 1px solid var(--border); border-radius: 4px; color: var(--text); }
+    #st-share-block select:focus { border-color: var(--accent); outline: none; }
+    #st-share-block .sec-actions { display: flex; gap: 8px; }
+    #st-share-block .sec-btn { padding: 5px 10px; font-size: 0.72rem; background: var(--bg-input); border: 1px solid var(--border); border-radius: 4px; color: var(--text); cursor: pointer; }
+    #st-share-block .sec-btn:hover { border-color: var(--accent); }
+    #st-share-block .sec-msg { font-size: 0.68rem; color: var(--text-dim); min-height: 1em; }
+</style>
 </head>
 <body>
   <button class="sidebar-toggle" id="sidebar-toggle" onclick="toggleSidebar()">&#9776;</button>
