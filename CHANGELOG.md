@@ -109,6 +109,12 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 - **On a Mac, a backup no longer fails just because Docker isn't running.** On a Mac with Docker Desktop installed but not open, the backup stopped with "The agents' boxes could not be checked … Is Docker running?", even with no agent boxes at all. Now, when Docker on the Mac isn't running, there are no running agent boxes to pause and a backup made from Settings → Backups goes ahead: it still waits for any agent that is starting, and checks Docker again when the copy is done. If Docker started during the copy, that backup is not kept and you are asked to try again. Whether Docker is stopped is worked out from the Docker the Mac is set up to use and whether anything answers there, not from the wording of an error. On Linux and Windows, and for a backup started from a terminal, Docker still has to be running when agents run in boxes. Other Docker problems still stop the backup, and now say what to do: permission denied on Docker's socket, a remote Docker host that doesn't answer, or Docker not answering in time. (`lib/backup/create.js`)
 
+## [5.10.3] - 2026-11-17
+
+What's new since 5.10.2: a security fix. Your Maestro's safety check for shell commands now reads the whole command, so a command written after a block of text, or under a disguised name, can no longer get past it. For a hub on 5.10.2, this is the only change.
+
+- **Commands after a heredoc are now checked.** Your Maestro stopped reading a shell command at its first block of text passed with `<<`, so anything written after that block, even `rm -rf`, went through without the safety rules or an approval card. It now reads the whole command, line by line, checks commands hidden inside `$( )` and in text blocks fed to a shell, sees a command's real name when it is written with quotes or braces (`r''m -rf`), counts `&>` as a file write, and judges anything it can't read at least as strictly as before. A false "writes outside its folders" card on some multi-line commands is gone too.
+
 ## [5.10.2] - 2026-11-16
 
 What's new since 5.10.1: phones always open the phone layout, in the browser and as an app on the home screen. For a hub on 5.10.1, this is the only change.
@@ -1328,7 +1334,8 @@ memory pool, max-length continuations, context footer with category breakdown,
 dream system, Tiger Team enhancements, oMLX provider support, image
 passthrough to local models, and git-sync "Discard Changes & Update".
 
-[Unreleased]: https://github.com/mymaestroai/mymaestroai/compare/v5.10.2...dev
+[Unreleased]: https://github.com/mymaestroai/mymaestroai/compare/v5.10.3...dev
+[5.10.3]: https://github.com/mymaestroai/mymaestroai/tree/v5.10.3
 [5.10.2]: https://github.com/mymaestroai/mymaestroai/tree/v5.10.2
 [5.10.1]: https://github.com/mymaestroai/mymaestroai/tree/v5.10.1
 [5.10.0]: https://github.com/mymaestroai/mymaestroai/tree/v5.10.0
