@@ -572,3 +572,10 @@ test('review r5: here-strings anywhere, . fed a here-string, ${c[0]:=}, printf -
   assert.ok(SEV(c(big)) >= SEV('admin'));
   assert.ok(Date.now() - t < 10000, `bounded (${Date.now() - t} ms)`);
 });
+
+test('review r6: read -a NAME assigns NAME', () => {
+  for (const cmd of ['read -a c <<<rm; $c -rf ~/projects', 'read -r -a c <<<rm; $c -rf ~/projects', 'read -ra c <<<rm; $c -rf ~/projects']) {
+    assert.ok(SEV(c(cmd)) >= SEV('admin'), cmd);
+  }
+  assert.strictEqual(cr('read -r -a parts <<<"a b"; echo "${parts[0]}"'), 'read');
+});
