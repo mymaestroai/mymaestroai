@@ -440,8 +440,8 @@ test('review r3 2: esac after the in-branch, a case inside a substitution', () =
   isDestroy(`case x in esac; ${RM}`);
   isDestroy(L('case x in', 'esac', RM));
   isDestroy(`case x in a) :;; esac; ${RM}`);
-  const r = tp.classifyCommand("A=$(case x in a) :;; esac) r''m -rf ~/projects", o);
-  assert.strictEqual(r.uncertain, true, 'a case inside a substitution fails closed');
+  // a case inside a substitution is read like the lexer reads it, so the program word after it is found
+  isDestroy("A=$(case x in a) :;; esac) r''m -rf ~/projects");
   assert.strictEqual(tp.classifyCommand('case x in a) :;;', o).uncertain, true, 'an open case at the top level');
   assert.strictEqual(cr('case "$1" in a) ls;; esac'), 'read');
   isDestroy(L('case $x in', '  a) rm -rf ~/projects;;', 'esac'));
@@ -527,7 +527,7 @@ test('review r3 9: a chain of wrappers is bounded; a 200 KB chain classifies in 
 });
 
 test('lead, review r3: a one-line command the lexer cannot read is also read as bash runs it (quotes removed)', () => {
-  const r = tp.classifyCommand("A=$(case x in a) :;; esac) r''m -rf ~/projects", o);
+  const r = tp.classifyCommand("echo ${x ; foo) r''m -rf ~/projects", o);
   assert.strictEqual(r.uncertain, true);
   assert.strictEqual(r.cls, 'destroy');
 });
@@ -578,4 +578,23 @@ test('review r6: read -a NAME assigns NAME', () => {
     assert.ok(SEV(c(cmd)) >= SEV('admin'), cmd);
   }
   assert.strictEqual(cr('read -r -a parts <<<"a b"; echo "${parts[0]}"'), 'read');
+});
+
+test('real-command replay (neutralised): what ran before keeps running unless something dangerous was hidden', () => {
+  const w = { name: 'haiku', category: 'worker' };
+  const d = (cmd) => tp.decide({ agent: w, tool: 'Bash', input: { command: cmd }, cwd: path.join(tp.HUB_ROOT, 'workspaces', 'haiku') }).decision;
+  // the suite runner with a case inside $( )
+  assert.strictEqual(d(`FILES=$(for f in test/*.test.js; do case "$f" in *integration.test.js|*agent-workers.test.js) ;; *) printf '%s ' "$f";; esac; done); env -i PATH=$PATH HOME=$HOME node --test $FILES 2>&1 | tail -5`), 'allow');
+  // a tool path in a variable, used as the program among other commands
+  assert.strictEqual(d('C=~/.npm-global/bin/sometool; $C --version 2>&1 | head -2; ls -la $C; B=$(find /tmp/x -type f -size +10M | head -1); echo $B'), 'allow');
+  // a helper function that reads stdin with python, then called with labels
+  assert.strictEqual(d(`cd /tmp && K=https://api.example.com/v2; cnt() { python3 -c "\nimport sys,json\nd=json.load(sys.stdin)\nprint('$1', len(d))"; }\ncurl -s -m 20 "$K/markets" | cnt markets\ncurl -s -m 20 "$K/events" | cnt events`), 'allow');
+  // a python edit by heredoc, then a test file whose name carries a machine word
+  assert.strictEqual(d(L('cd /tmp/wt && python3 - <<\'EOF\'', "p='test/hub-halt.test.js'; s=open(p).read()", "open(p,'w').write(s)", 'EOF', 'env -i PATH=$PATH HOME=$HOME node --test test/hub-halt.test.js 2>&1 | tail -3')), 'allow');
+  // correct catches stay caught: rm -f / rm -rf and kill hidden after a heredoc
+  assert.strictEqual(d(L("cat >> notes.md <<'EOF'", 'text', 'EOF', 'rm -rf __pycache__')), 'deny');
+  assert.strictEqual(d(L("cat > /tmp/p.js <<'EOF'", 'x', 'EOF', 'node /tmp/p.js & SPID=$!; sleep 1; kill $SPID')), 'deny');
+  // and a function that forwards its arguments to rm is read with them
+  isDestroy('ls(){ command rm "$@"; }; ls -rf ~/projects');
+  isDestroy('f(){ $1 -rf ~/projects; }; f rm');
 });

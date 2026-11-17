@@ -196,10 +196,9 @@ test('problems: unterminated quotes and expansions, missing words, arithmetic ac
 });
 
 test('well-formed constructs are ok', () => {
-  // A case inside $( ) is not among them any more: its pattern ) can't be told from the closing one without a full
-  // parser, so it fails closed (review r3).
-  assert.strictEqual(ok('echo $(case x in a) ls;; esac)'), false);
-  for (const good of ['echo "a $(ls) `pwd` ${x:-y} $((1+2))"', 'echo $(a $(b $(c)))', 'cat <<EOF\n$(date)\nEOF', 'ls\\\n -l']) {
+  // A case inside $( ) is read like the lexer reads it (patterns are not closers), after the real-command replay showed
+  // the suite runner `FILES=$(for f in ...; do case "$f" in ...) ;; esac; done)` failing closed.
+  for (const good of ['echo $(case x in a) ls;; esac)', 'echo "a $(ls) `pwd` ${x:-y} $((1+2))"', 'echo $(a $(b $(c)))', 'cat <<EOF\n$(date)\nEOF', 'ls\\\n -l']) {
     assert.strictEqual(ok(good), true, good);
   }
 });
@@ -569,12 +568,13 @@ test('review r3 2a: esac ends a case whatever the command position, and an open 
   assert.strictEqual(ok('case x in a|esac) ls;; esac'), true, 'esac as a later alternative is a pattern');
 });
 
-test('review r3 2b: a case inside a substitution is a problem (the skipping scanners do not know patterns)', () => {
+test('review r3 2b: a case inside a substitution: the word splitter knows its patterns as the lexer does', () => {
   for (const t of ['A=$(case x in a) :;; esac) r\'\'m -rf ~/projects', 'echo `case x in a) :;; esac`', 'cat <(case x in a) :;; esac)', 'tee >(case x in a) :;; esac)', 'echo "$(case x in a) :;; esac)"']) {
-    const r = scanCommand(t);
-    assert.strictEqual(r.ok, false, t);
-    assert.ok(r.problems.includes('case inside a substitution'), t + ' ' + JSON.stringify(r.problems));
+    assert.strictEqual(scanCommand(t).ok, true, t);
   }
+  assert.deepStrictEqual(rawWords("A=$(case x in a) :;; esac) r''m -rf x"), ["A=$(case x in a) :;; esac)", "r''m", '-rf', 'x']);
+  assert.deepStrictEqual(rawWords('X=$(case $y in (a|b) echo 1;; *) echo 2;; esac) ls'), ['X=$(case $y in (a|b) echo 1;; *) echo 2;; esac)', 'ls']);
+  assert.deepStrictEqual(rawWords('X=$(echo case x in a) ls'), ['X=$(echo case x in a)', 'ls'], 'case as an argument is no keyword');
 });
 
 test('review r3 3: assigned names, from every kind of assignment, at every level', () => {
@@ -594,7 +594,12 @@ test('review r3 3: assigned names, from every kind of assignment, at every level
 });
 
 test('review r3 3: a program named by an assigned variable is computed, except one literal assignment used as a whole word', () => {
-  for (const t of ['c=rm; false && c=ls; $c -rf x', 'a=r; ${a}m -rf x', 'a=r; b=m; $a$b -rf x', 'a=r; "${a}"m -rf x', 'c=r; c+=m; $c x', 'declare c=rm; export c=ls; $c x',
+  // a=r; ${a}m ... : one plain assignment each, so they resolve to rm (a segment) instead of counting as computed (review r6 replay)
+  for (const t of ['a=r; ${a}m -rf x', 'a=r; b=m; $a$b -rf x', 'a=r; "${a}"m -rf x']) {
+    assert.strictEqual(computedIn(t), false, t);
+    assert.ok(scanCommand(t).segments.some(x => rawWords(x).map(dequote).join(' ') === 'rm -rf x'), t);
+  }
+  for (const t of ['c=rm; false && c=ls; $c -rf x', 'c=r; c+=m; $c x', 'declare c=rm; export c=ls; $c x',
     'readonly c=rm; c=ls; $c x', 'for c in rm ls; do $c x; done', 'read c; $c x', 'printf -v c rm; $c x', 'c=$(echo rm); $c x', 'c=rm; ${c:1} x', 'c=rm; ${c,,} x', 'c=rm; ${c/x/y} x',
     'c=rm; ${c#x} x', 'c=rm; ${c%x} x', 'c=rm; ${c^} x', 'a=rm; b=a; ${!b} x', 'c=rm; c=echo | true; $c x', 'c=rm; (c=echo); $c x', 'c=rm; x=$(c=echo); $c x',
     'c=(rm); $c x', 'c[0]=rm; $c x', 'sudo $c x; c=rm; c=ls', 'c=rm; env $c x; c=ls']) {
