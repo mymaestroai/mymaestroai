@@ -53,7 +53,7 @@ async function backupOf(name, { recordings = true } = {}) {
   const settings = memSettings();
   await keys.setup(PW, { settings, logN: 15 });
   const sid = recordings ? await record(inst) : null;
-  const r = await createBackup({ ...inst, platform: 'linux', settings, places: [places.localPlace(inst.hubHome)], hub: { version: '5.8.1', channel: 'experimental' } });
+  const r = await createBackup({ ...inst, platform: 'linux', _holdBoxes: () => () => {}, settings, places: [places.localPlace(inst.hubHome)], hub: { version: '5.8.1', channel: 'experimental' } });
   return { inst, file: r.places[0].file, sid };
 }
 async function restoreAndApply(inst, file) {
@@ -89,7 +89,7 @@ test('a link inside call-recordings is not followed into the backup', async () =
   const sid = await record(inst);
   fs.writeFileSync(path.join(TMP, 'outside.txt'), 'secret');
   fs.symlinkSync(path.join(TMP, 'outside.txt'), path.join(inst.hubHome, RECORDINGS, 'biographer', sid, 'link.txt'));
-  const r = await createBackup({ ...inst, platform: 'linux', settings, places: [places.localPlace(inst.hubHome)], hub: { version: '5.8.1' } });
+  const r = await createBackup({ ...inst, platform: 'linux', _holdBoxes: () => () => {}, settings, places: [places.localPlace(inst.hubHome)], hub: { version: '5.8.1' } });
   await restore.prepare({ file: r.places[0].file, password: PW, ...inst, platform: 'linux', mode: 'existing' });
   const staged = path.join(inst.root, '.restore', 'new', 'home', RECORDINGS, 'biographer', sid);
   assert.ok(fs.existsSync(path.join(staged, 'manifest.json.enc')));

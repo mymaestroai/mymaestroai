@@ -59,8 +59,19 @@ test('on a desktop the sign-in opens the browser', () => {
   assert.match(r.stdout, /opens ChatGPT in your browser/);
 });
 
+// The command runs as a child process, so the platform can't be injected: this case runs on macOS only.
+test('on macOS a missing DISPLAY is not "no desktop": the sign-in opens the browser', { skip: process.platform !== 'darwin' }, () => {
+  const home = install();
+  const r = run(home, ['chatgpt'], {});
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.strictEqual(calls(home), 'login');
+  assert.match(r.stdout, /opens ChatGPT in your browser/);
+});
+
 test('with no desktop, over SSH, or when asked, it signs in with a code and says what to do if that is switched off', () => {
-  for (const [args, env] of [[['chatgpt'], {}], [['chatgpt'], { DISPLAY: ':0', SSH_CONNECTION: '1 2 3 4' }], [['chatgpt', '--device-auth'], { DISPLAY: ':0' }]]) {
+  // A missing DISPLAY means "no desktop" only off macOS; a Mac always has one (see the darwin case below).
+  const noDisplay = process.platform === 'darwin' ? [] : [[['chatgpt'], {}]];
+  for (const [args, env] of [...noDisplay, [['chatgpt'], { DISPLAY: ':0', SSH_CONNECTION: '1 2 3 4' }], [['chatgpt', '--device-auth'], { DISPLAY: ':0' }]]) {
     const home = install();
     const r = run(home, args, env);
     assert.strictEqual(r.status, 0, r.stderr);

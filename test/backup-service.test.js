@@ -33,9 +33,20 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 function serviceFor(inst, extra = {}) {
   const restarts = [];
   const settings = extra.settings || memSettings();
-  const svc = createBackupService({ ...inst, platform: 'linux', settings, hubInfo: HUB, restart: (why) => restarts.push(why), modulePlaces: noModulePlaces(), ...extra });
+  // _holdBoxes: never real agent boxes in a test (on macOS createBackup would otherwise try to pause them)
+  const svc = createBackupService({ ...inst, platform: 'linux', _holdBoxes: () => () => {}, settings, hubInfo: HUB, restart: (why) => restarts.push(why), modulePlaces: noModulePlaces(), ...extra });
   return { svc, settings, restarts };
 }
+
+test('the service hands the box-holding stand-in to createBackup, so a backup on a computer without /proc never touches real boxes', async () => {
+  const inst = makeInstall(TMP, 'seam');
+  const held = [];
+  const { svc } = serviceFor(inst, { platform: 'darwin', _procOk: false, _holdBoxes: (platform) => { held.push(platform); return () => {}; } });
+  await svc.setup(PW, { logN: 15 });
+  const r = await svc.backupNow({ now: true });
+  assert.strictEqual(r.done, true);
+  assert.deepStrictEqual(held, ['darwin'], 'the stand-in was used, once, for this platform');
+});
 
 test('backing up: refused before setup, waits for working agents unless now, one at a time, copied to extra folders', async () => {
   const inst = makeInstall(TMP, 'b1');

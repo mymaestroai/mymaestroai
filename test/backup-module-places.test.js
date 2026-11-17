@@ -183,7 +183,7 @@ test('keep rules: old module copies are deleted, a changed one is left, and a mo
   const mod = fakeModule();
   const names = nightly(inst, mod, 6);
   mod.store.get(names[0]).bytes = Buffer.alloc(65);   // changed since: left alone
-  const svc = createBackupService({ ...inst, platform: 'linux', settings: memSettings(), hubInfo: () => ({}), modulePlaces: mod });
+  const svc = createBackupService({ ...inst, platform: 'linux', _holdBoxes: () => () => {}, settings: memSettings(), hubInfo: () => ({}), modulePlaces: mod });
   mod.failList = true;
   const away = await svc.applyRetention({ keepNightly: 2, keepWeekly: 0, tz: NY, justMade: names[5] });
   assert.deepStrictEqual(mod.removed, [], 'nothing removed from a module that cannot list');
@@ -210,7 +210,7 @@ test('a restore downloads a module-only backup into uploads (0700 folder, 0600 f
   const mod = fakeModule();
   const names = nightly(inst, mod, 1);
   fs.rmSync(path.join(inst.hubHome, 'backups', names[0]));
-  const svc = createBackupService({ ...inst, platform: 'linux', settings: memSettings(), hubInfo: () => ({}), modulePlaces: mod });
+  const svc = createBackupService({ ...inst, platform: 'linux', _holdBoxes: () => () => {}, settings: memSettings(), hubInfo: () => ({}), modulePlaces: mod });
   const f = await svc.fileFor(names[0]);
   const up = path.join(restore.restoreDirs(inst.root).base, 'uploads');
   assert.strictEqual(path.dirname(f), up);
@@ -229,7 +229,7 @@ test('a restore downloads a module-only backup into uploads (0700 folder, 0600 f
 async function withBackup(name) {
   const inst = makeInstall(TMP, name);
   const mod = fakeModule();
-  const svc = createBackupService({ ...inst, platform: 'linux', settings: memSettings(), hubInfo: () => ({}), modulePlaces: mod, wrongMax: 100 });
+  const svc = createBackupService({ ...inst, platform: 'linux', _holdBoxes: () => () => {}, settings: memSettings(), hubInfo: () => ({}), modulePlaces: mod, wrongMax: 100 });
   await svc.setup('first long passphrase', { logN: 15 });
   const r = await svc.backupNow({ now: true });
   return { inst, mod, svc, r };
@@ -239,7 +239,7 @@ test('changePassword skips module copies and says so; a delete-mode rotation rem
   const inst = makeInstall(TMP, 'mod-pw');
   const mod = fakeModule();
   const settings = memSettings();
-  const svc = createBackupService({ ...inst, platform: 'linux', settings, hubInfo: () => ({}), modulePlaces: mod, wrongMax: 100 });
+  const svc = createBackupService({ ...inst, platform: 'linux', _holdBoxes: () => () => {}, settings, hubInfo: () => ({}), modulePlaces: mod, wrongMax: 100 });
   await svc.setup('first long passphrase', { logN: 15 });
   assert.deepStrictEqual(svc.status().places.at(-1), { kind: 'module', id: 'drive', label: 'Google Drive' });
   const r = await svc.backupNow({ now: true });
@@ -301,12 +301,12 @@ test('keep rules skip a module copy whose listed id is not the recorded one; a r
   const mod = fakeModule();
   const names = nightly(inst, mod, 6);
   mod.store.get(names[1]).id = 'someone-elses';   // same name and size, another file
-  const on = createBackupService({ ...inst, platform: 'linux', settings: memSettings(), hubInfo: () => ({}), modulePlaces: mod });
+  const on = createBackupService({ ...inst, platform: 'linux', _holdBoxes: () => () => {}, settings: memSettings(), hubInfo: () => ({}), modulePlaces: mod });
   await on.applyRetention({ keepNightly: 2, keepWeekly: 0, tz: NY, justMade: names[5] });
   assert.ok(mod.store.has(names[1]), 'not the recorded file: left alone');
   assert.ok(!mod.removedIds.includes('someone-elses'));
   // the module is switched off for the night: no module place is configured at all
-  const off = createBackupService({ ...inst, platform: 'linux', settings: memSettings(), hubInfo: () => ({}), modulePlaces: { ...mod, places: () => [] } });
+  const off = createBackupService({ ...inst, platform: 'linux', _holdBoxes: () => () => {}, settings: memSettings(), hubInfo: () => ({}), modulePlaces: { ...mod, places: () => [] } });
   const before = places.index(inst.root).map(b => b.name).sort();
   assert.ok(before.length >= 3, before.join());
   await off.applyRetention({ keepNightly: 2, keepWeekly: 0, tz: NY, justMade: names[5] });
@@ -329,11 +329,11 @@ test('a restore download refuses when space is short, passes the file id, and ch
   const realStatfs = fs.statfsSync;
   fs.statfsSync = () => ({ bavail: 1000, bsize: 1024 });
   try {
-    const svc = createBackupService({ ...inst, platform: 'linux', settings: memSettings(), hubInfo: () => ({}), modulePlaces: mod });
+    const svc = createBackupService({ ...inst, platform: 'linux', _holdBoxes: () => () => {}, settings: memSettings(), hubInfo: () => ({}), modulePlaces: mod });
     await assert.rejects(svc.fileFor(names[0]), (e) => e.code === 'ENOSPC' && /room/.test(e.message));
     assert.deepStrictEqual(mod.getCalls, [], 'nothing downloaded');
   } finally { fs.statfsSync = realStatfs; }
-  const svc = createBackupService({ ...inst, platform: 'linux', settings: memSettings(), hubInfo: () => ({}), modulePlaces: mod });
+  const svc = createBackupService({ ...inst, platform: 'linux', _holdBoxes: () => () => {}, settings: memSettings(), hubInfo: () => ({}), modulePlaces: mod });
   const f = await svc.fileFor(names[0]);
   assert.deepStrictEqual(mod.getCalls, [{ name: names[0], fileId: `fid-${names[0]}` }]);
   assert.strictEqual(fs.statSync(f).size, 64);
@@ -435,7 +435,7 @@ test('rotation does not retire while a module failed to list in the same pass, o
   const inst = makeInstall(TMP, 'mod-inv-off');
   const mod = fakeModule();
   let on = true;
-  const svc = createBackupService({ ...inst, platform: 'linux', settings: memSettings(), hubInfo: () => ({}), modulePlaces: { ...mod, places: () => (on ? mod.places() : []) }, wrongMax: 100 });
+  const svc = createBackupService({ ...inst, platform: 'linux', _holdBoxes: () => () => {}, settings: memSettings(), hubInfo: () => ({}), modulePlaces: { ...mod, places: () => (on ? mod.places() : []) }, wrongMax: 100 });
   await svc.setup('first long passphrase', { logN: 15 });
   await svc.backupNow({ now: true });
   await svc.startRotation({ password: 'first long passphrase', newPassword: 'second long passphrase', logN: 15 });

@@ -44,7 +44,7 @@ test('mymaestro restore: refused while running, a wrong password changes nothing
   fs.writeFileSync(path.join(inst.root, '.env'), `PORT=${port}\n`);
   const settings = memSettings();
   await keys.setup(PW, { settings, logN: 15 });
-  const made = await createBackup({ ...inst, platform: 'linux', settings, places: [places.localPlace(inst.hubHome)], hub: { version: '5.8.1', channel: 'experimental' } });
+  const made = await createBackup({ ...inst, platform: 'linux', _holdBoxes: () => () => {}, settings, places: [places.localPlace(inst.hubHome)], hub: { version: '5.8.1', channel: 'experimental' } });
   const file = made.places[0].file;
   // Work done after the backup
   const D = (...p) => path.join(inst.root, 'data', ...p);

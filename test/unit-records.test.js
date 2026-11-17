@@ -217,11 +217,12 @@ test('routeCap works the cap out as the gateway does before a turn; a cap rememb
 });
 
 test('unloadable: Records the prompt never loads and never mentions (a dead link, a link outside the area, a name it can\'t open) are named for the check', () => {
-  const { rec } = load();
+  const { rec, root } = load();
   rec.write('ul', 'fine.md', 'ok');
   const dir = rec.folderFor('ul');
   fs.symlinkSync(path.join(dir, '..', 'gone.md'), path.join(dir, 'dead.md'));
-  fs.symlinkSync('/etc/hostname', path.join(dir, 'outside.md'));
+  const outsideFile = path.join(root, 'outside-target.txt'); fs.writeFileSync(outsideFile, 'not a Record');   // a real file outside the Records area
+  fs.symlinkSync(outsideFile, path.join(dir, 'outside.md'));
   const long = `${'x'.repeat(130)}.md`;
   fs.writeFileSync(path.join(dir, long), 'never opened');
   fs.symlinkSync(path.join(dir, 'loop-b.md'), path.join(dir, 'loop-a.md'));
@@ -278,7 +279,8 @@ test('snapshot: every Record as it reads now, in one private file beside records
 });
 
 test('snapshot: a write that takes only part of the copy goes on until all of it is written; a full disk leaves no new file and every earlier copy; pruning keeps the newest whole copies and clears junk', { skip: process.getuid && process.getuid() === 0 }, () => {
-  const { rec, hub } = load();
+  const { rec, hub, root } = load();
+  const outsideFile = path.join(root, 'outside-target.txt'); fs.writeFileSync(outsideFile, 'not a Record');
   rec.write('gp', 'facts.md', '# Facts\n' + 'x'.repeat(5000));
   const ws = path.join(hub, 'workspaces', 'gp');
   let t = Date.parse('2026-11-05T21:00:00Z');
@@ -300,7 +302,7 @@ test('snapshot: a write that takes only part of the copy goes on until all of it
   t += 60000; const s4 = rec.snapshot('gp', { now: () => t, prune: false });
   assert.strictEqual(copies().length, 4);
   fs.writeFileSync(path.join(ws, '.records-before-condense-20261105T220000Z.json'), '{"files": [');   // cut short
-  fs.symlinkSync('/etc/hostname', path.join(ws, '.records-before-condense-20261105T220100Z.json'));
+  fs.symlinkSync(outsideFile, path.join(ws, '.records-before-condense-20261105T220100Z.json'));
   assert.strictEqual(rec.pruneSnapshots('gp'), 3, 'the oldest whole copy and the two junk entries');
   assert.deepStrictEqual(copies(), [...three.slice(1), s4.name]);
   assert.strictEqual(rec.discardSnapshot('gp', s4.name), true);
@@ -309,14 +311,15 @@ test('snapshot: a write that takes only part of the copy goes on until all of it
 });
 
 test('pruneSnapshots: a copy it cannot read is not junk (pruning stops, deleting nothing); the copy just made is kept even when the clock went back', { skip: process.getuid && process.getuid() === 0 }, () => {
-  const { rec, hub } = load();
+  const { rec, hub, root } = load();
+  const outsideFile = path.join(root, 'outside-target.txt'); fs.writeFileSync(outsideFile, 'not a Record');
   rec.write('gp', 'facts.md', '# Facts');
   const ws = path.join(hub, 'workspaces', 'gp');
   const copies = () => fs.readdirSync(ws).filter(n => n.startsWith('.records-before-condense-')).sort();
   let t = Date.parse('2026-11-05T22:00:00Z');
   const made = [];
   for (let i = 0; i < 4; i++) { made.push(rec.snapshot('gp', { now: () => t, prune: false }).name); t += 60000; }
-  fs.symlinkSync('/etc/hostname', path.join(ws, '.records-before-condense-20261105T230000Z.json'));   // junk, which would go
+  fs.symlinkSync(outsideFile, path.join(ws, '.records-before-condense-20261105T230000Z.json'));   // junk, which would go
   fs.chmodSync(path.join(ws, made[0]), 0o000);
   try {
     assert.throws(() => rec.pruneSnapshots('gp'), /EACCES/);

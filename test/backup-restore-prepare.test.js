@@ -26,7 +26,7 @@ async function backupOf(name, opts = {}) {
   const inst = makeInstall(TMP, name, opts);
   const settings = memSettings();
   const { recoveryKey } = await keys.setup(PW, { settings, logN: 15 });
-  const r = await createBackup({ ...inst, platform: 'linux', settings, places: [places.localPlace(inst.hubHome)], hub: { version: '5.8.1', channel: 'experimental' } });
+  const r = await createBackup({ ...inst, platform: 'linux', _holdBoxes: () => () => {}, settings, places: [places.localPlace(inst.hubHome)], hub: { version: '5.8.1', channel: 'experimental' } });
   return { inst, file: r.places[0].file, recoveryKey, settings };
 }
 
