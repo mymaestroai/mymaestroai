@@ -1628,6 +1628,7 @@ function busyText(name) {
 function paintStatus() {
   if (screen === 'agents') renderAgents();
   paintChatStatus();
+  if (typeof simpleAgentsDots === 'function') simpleAgentsDots();   // Simple: the open agent sheet's busy dots
 }
 
 // Agent settings changed elsewhere (the settings page, another device): refresh the list and the open chat's
@@ -2238,6 +2239,7 @@ function activeJobsRelabel() {
 document.addEventListener('visibilitychange', activeJobsSync);
 
 function renderAgents() {
+  if (typeof simpleSidePaint === 'function') simpleSidePaint();   // Simple, wide screen: the sidebar's agent list follows
   const list = $('agents-list');
   // While a finger is on the list (switch on), no redraw from any source (status events, the linger ticker): it would
   // replace the touched row before its click. The redraw happens after release (activeRelease).
@@ -6146,6 +6148,7 @@ function savedImageUrls(paths) {
 }
 
 function addUserBubble(text, images) {
+  if (typeof simpleAskText === 'function') text = simpleAskText('user', text);   // Simple: a saved answer in plain words
   const d = document.createElement('div');
   d.className = 'msg user';
   for (const src of images || []) {
@@ -6158,10 +6161,12 @@ function addUserBubble(text, images) {
   setRaw(d, text);
   addCopyButton(d);
   bubbleHost().appendChild(d);
+  if (typeof simpleUserBubbleHook === 'function') simpleUserBubbleHook(d, text);   // Simple: a hub-started prompt shows as a small muted line
   return d;
 }
 
 function addAssistantBubble(content) {
+  if (typeof simpleAskText === 'function') content = simpleAskText('assistant', content);   // Simple: a saved question in plain words
   const d = document.createElement('div');
   d.className = 'msg assistant';
   const body = document.createElement('div');
@@ -6277,6 +6282,7 @@ async function rereadHistory(agent, attempt = 0) {
   return true;   // chatHistory was replaced
 }
 function reasoningEnd(holder) {
+  if (typeof simpleThinkEnd === 'function') simpleThinkEnd(holder, false);   // Simple: the Thinking box goes with the reasoning
   const r = holder && holder.rsn;
   if (!r || !r.live) return;
   r.live = false; r.v++;
@@ -6299,6 +6305,7 @@ function paintReasoning(holder) {
   const r = holder && holder.rsn;
   const el = holder && holder.bubble && holder.bubble.el;
   if (!r || !el || !el.isConnected) return;
+  if (typeof simpleThinkPaint === 'function') simpleThinkPaint(holder);   // Simple: the Thinking box (the .rsn panel is hidden there)
   let box = el.querySelector(':scope > .rsn');
   if (!box) {
     box = document.createElement('div');
@@ -6459,10 +6466,12 @@ function copyWholeChat() {
 function renderEntry(m, time = '') {
   if (m.archived === true) { renderArchived(m, time); return; }
   if (m.role === 'user') {
+    if (typeof simpleHubEntry === 'function' && simpleHubEntry(m, time)) return;   // Simple: a hub-started prompt is a muted line (or hidden)
     if (m.origin?.kind) addNote(`⚡ ${originLabel(m.origin)} — ${timeLabel(m.ts)}`);
     const ij = interjectionView(m);   // an interjection: the person's words, then the note the live send shows
     setBubbleTime(addUserBubble(ij ? ij.text : m.content, savedImageUrls(m.images)), time);   // the pictures the line was sent with come back as bubble images
     if (ij) addNote(ij.emergency ? '🚨 emergency interjection' : '⤵ interjection').classList.add('interject');
+    if (ij && typeof simpleOn === 'function' && simpleOn()) { const ijNote = bubbleHost().lastElementChild; if (ijNote && ijNote.classList.contains('interject')) ijNote.classList.add('simple-auto-hide'); }   // Simple: a saved interjection is an ordinary user bubble, no note
   } else if (m.role === 'assistant') {
     const saved = Array.isArray(m.activity) && m.activity.length;
     const b = addAssistantBubble(saved ? undefined : m.content);
@@ -6568,11 +6577,13 @@ function renderHistory() {
     for (let i = start; i < chatHistory.length; i++) renderEntry(chatHistory[i], times[i]);
   }
   if (!chatHistory.length && chatNext == null) addNote('No messages yet');
+  if (typeof simpleEmptyPaint === 'function') simpleEmptyPaint(!chatHistory.length && chatNext == null);   // Simple: greeting and starter buttons
   paintBusyCard();   // the redraw cleared the chat, the busy card goes back at the bottom
 }
 
 // Turns the hub starts by itself fold into closed cards; the setting is per device ('off' turns it off).
 function foldAutoOn() {
+  if (typeof simpleOn === 'function' && simpleOn()) return false;   // Simple: hub-started turns are never folded into cards
   try { return localStorage.getItem('hub-fold-auto') !== 'off'; } catch { return true; }
 }
 function paintFoldMenu() {
@@ -6748,6 +6759,7 @@ async function openChat(name) {
   $('chat-model').textContent = modelText(a);
   fillModelPick(); fillEffortPick();
   paintCtx(); refreshCtx(name); paintPlan();
+  if (typeof simpleTopPaint === 'function') { simpleTopPaint(); simpleEffortPaint(); }   // Simple: the top pill and the reasoning-level button
   if (unread[name]) { delete unread[name]; saveJson('hub-mobile-unread', unread); updateDots(); }
   // Back from another tab while this chat's own reply is still painting into the page: keep it.
   const rec = streams.get(name);
@@ -6958,6 +6970,7 @@ function paintReply(holder, text, changed = null) {
   if (text !== undefined) holder.replyText = String(text || '');
   else if (holder.feed && holder.feed.local && typeof holder.full === 'string') holder.replyText = holder.full;
   if (!bubbleLive(holder)) return;
+  if (holder.replyText && typeof simpleThinkEnd === 'function') simpleThinkEnd(holder, true);   // Simple: reply text is here, the Thinking box is gone
   const body = holder.bubble.body;
   const full = holder.replyText || '';
   const blocks = replyBlocks(holder, full);
@@ -7391,6 +7404,8 @@ function paintFeedRow(feed, it, list = null) {
 // when only this page's side ended (a person's Stop, a stream cut off without its final marker, giving up waiting):
 // its workers then keep running here until the hub's record says how they ended.
 function feedEnd(holder, how = 'sure') {
+  if (typeof simpleThinkEnd === 'function') simpleThinkEnd(holder, true);   // Simple: the turn is over, no Thinking box
+  if (typeof simpleTurnOver === 'function') simpleTurnOver(holder);   // Simple: ...and no consult line either
   const feed = holder && holder.feed;
   if (holder && holder.bubble) attachFileCards(holder.bubble.el, holder.bubble.body);   // the reply is final: download cards
   if (!feed) return;
@@ -8350,6 +8365,7 @@ function setSendMode(own) {
   b.title = interject ? 'Interject into the running turn' : 'Send';
   const input = $('msg-input');
   if (input) input.placeholder = interject ? 'Interject into the running turn…' : 'Message';
+  if (typeof simpleSendLook === 'function') simpleSendLook(b, input, interject);   // Simple: the send arrow and a plain placeholder while it works
 }
 
 // Interject: the text is injected into the agent's running turn (same POST /api/chat/interject
@@ -10797,6 +10813,7 @@ async function sendMessage(fallback) {
   const controller = new AbortController();
   const rec = { controller, agent, text, images, bubble, userEl, startedAt: Date.now(), full: '', gotAny: false, feed: newFeed(true), question: null, dictated: !fallback && voiceTakeDictated(agent), readGen: voiceAutoReadGen };
   streams.set(agent, rec);
+  if (typeof simpleThinkStart === 'function') simpleThinkStart(rec);   // Simple: the Thinking box while the reply is pending
   paintChatStatus();
 
   let lost = false;
@@ -10806,7 +10823,7 @@ async function sendMessage(fallback) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...zoneHeader() },
       signal: controller.signal,
-      body: JSON.stringify({ agent, message: text, images, confirm_tools: false, ...(fallback && fallback.voice ? { voice: true } : {}), ...(fallback && fallback.voice && typeof voiceFacePackBody === 'function' ? voiceFacePackBody() : {}) }),   // facePack only while a character with reactions is on screen   // voice: the message came from a hands-free call
+      body: JSON.stringify({ agent, message: text, images, confirm_tools: false, ...(typeof simpleChatExtra === 'function' ? simpleChatExtra(agent) : {}), ...(fallback && fallback.voice ? { voice: true } : {}), ...(fallback && fallback.voice && typeof voiceFacePackBody === 'function' ? voiceFacePackBody() : {}) }),   // facePack only while a character with reactions is on screen   // voice: the message came from a hands-free call
     });
     if (linkOwner && fallback && fallback.voice) {   // a call's own message: its answer proves the link, and so does every piece of data after it
       if (r.status < 500 && typeof voiceLinkAlive === 'function') voiceLinkAlive(linkOwner, agent);
@@ -11100,6 +11117,7 @@ async function readStream(response, rec) {
   const outText = (o) => (typeof o === 'string' ? o : (o == null ? '' : JSON.stringify(o)));
 
   const handleGateway = (g) => {
+    if (typeof simpleGatewayHook === 'function') simpleGatewayHook(rec, g);   // Simple: the consult line
     switch (g.type) {
       case 'context_health': noteCtxReading(rec.agent, g); break;
       case 'voice_mood': voiceCallSseMood(rec, g.mood); break;   // the agent's mood word, already stripped from the text
@@ -11183,6 +11201,7 @@ async function readStream(response, rec) {
       if (delta) {
         rec.gotAny = true;
         rec.full += delta;
+        if (typeof simpleThinkEnd === 'function') simpleThinkEnd(rec, true);   // Simple: the first reply text ends the Thinking box
         schedulePaint();
       }
     }
@@ -11241,7 +11260,9 @@ function showQuestion(data, onAnswered) {
     api('/api/ask_response', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ request_id, answers }),
+      // The asking agent goes with the answer: the route's access check needs it to let a member answer (it was refused).
+      // A question rebuilt without its agent (a reconnect) falls back to the open chat's agent; the hub refuses one that did not ask.
+      body: JSON.stringify({ request_id, answers, ...((data.agent || (typeof current === 'string' && current)) ? { agent: data.agent || current } : {}) }),
     }).then(r => { if (r.ok) { questionBoxes.delete(request_id); retireSoon(box); } })   // the hub has the answer: the box can go
       .catch(err => toast(`Could not send answer: ${err.message}`));
     box.innerHTML = `<div class="done">Answered: ${esc(label)}</div>`;   // kept in questionBoxes until the hub confirms or closes it
@@ -11987,7 +12008,7 @@ function connectEvents() {
     setLive(ev.agent, { busy: true, pendingQuestion: true }); paintStatus();
     // The question itself: shown now if that chat is open, else kept until it is (dedup by request id in showQuestion).
     if (ev.request_id && Array.isArray(ev.questions)) {
-      const q = { request_id: ev.request_id, questions: ev.questions };
+      const q = { request_id: ev.request_id, questions: ev.questions, agent: ev.agent };
       if (chatOpenFor(ev.agent)) showQuestion(q);
       else {
         pendingQuestionsByAgent.set(ev.agent, q);
@@ -12294,6 +12315,7 @@ function onTurnActivity(ev) {
   const h = ev && turnHolder(ev);
   if (!h || !ev.item) return;
   feedUpsert(h, ev.item);
+  if (typeof simpleActivityHook === 'function') simpleActivityHook(h, ev.item);   // Simple: a followed turn's consult line
   if (reattaches.get(ev.agent) === h) paintReattach(h, reattachLine(h));
 }
 
@@ -12795,6 +12817,9 @@ async function loadMe() {
     const r = await api('/api/me');
     if (r.ok) {
       hubMe = await r.json();
+      if (window.hubSimple) { try { window.hubSimple.apply(hubMe); } catch { /* the page stays as it is */ } }   // Simple mode and theme classes on <html>
+      if (typeof simpleMenuHide === 'function') simpleMenuHide();   // "Switch to Simple" only for a real account (not the legacy single-password login)
+      if (typeof simpleToggleSync === 'function') simpleToggleSync();   // the Simple view switch (and Simple's theme button) only for a real account
       // Signed in: recorded-call pieces the hub never acknowledged (a closed app, a reload, a dead network) are sent now, one at a time (lib/ui-voice-call.js).
       if (hubMe && hubMe.user) setTimeout(() => { try { voiceRecResendPending((u, i) => fetch(u, { credentials: 'include', ...i }), { userId: hubMe.user.id }); } catch { /* the call code is not up yet */ } }, 0);
     }
@@ -14052,6 +14077,7 @@ async function init() {
   await loadAgents();
   activeJobsSync();
   const route = routeFromHash();
+  if (typeof simpleRoute === 'function') simpleRoute(route);   // Simple: open a chat at start instead of the agent list
   window.history.replaceState({ screen: route.screen, agent: route.agent }, '');
   applyRoute(route);
   updateDots();
@@ -14072,5 +14098,542 @@ async function init() {
   paintVersionLabel();
   setInterval(refreshUpdateCheck, 30 * 60 * 1000);
 }
+
+// ── Simple mode: phone ── (everything below runs only when hubSimple.apply put class mm-simple on <html>; Advanced never calls it)
+function simpleOn() { return !!(window.hubSimple && document.documentElement.classList.contains('mm-simple')); }
+// While a reply runs: the normal send arrow and a plain placeholder (the message still joins the running turn).
+function simpleSendLook(b, input, interject) {
+  if (!simpleOn() || !interject) return;
+  if (b) { b.innerHTML = '&#x27A4;'; b.setAttribute('aria-label', 'Send'); b.title = 'Send'; }
+  if (input) input.placeholder = 'Add something while it works…';
+}
+// A saved question and its answer, in plain words (hubSimple.askText).
+function simpleAskText(role, content) {
+  return simpleOn() && typeof window.hubSimple.askText === 'function' ? window.hubSimple.askText(role, content) : content;
+}
+const SIMPLE_THINK_LINES = 5;
+// What the Thinking box shows: the last lines of the reasoning (a summary's **headings** lose their asterisks) and the consult line.
+function simpleThinkModel(text, consult) {
+  const H = window.hubSimple;
+  const t = String(text || '').replace(/\*\*([^*\n]+)\*\*/g, '$1');
+  return { lines: H && H.reasoningTail ? H.reasoningTail(t, SIMPLE_THINK_LINES) : [], consult: consult || null };
+}
+// A hub-started prompt: { label } to show as a muted line, { hide: true } to show nothing, null for an ordinary message.
+function simpleAutoOf(text) {
+  const H = window.hubSimple;
+  const r = H && H.autoNote ? H.autoNote(String(text || '')) : null;
+  if (!r) return null;
+  if (r.hide || !r.label) return { hide: true, label: '' };
+  return { label: String(r.label) };
+}
+// The chat to open at start (Simple has no agent list screen): the last one if it still exists, else the lead agent, else the first.
+function simpleStartAgent(list, last) {
+  const l = Array.isArray(list) ? list : [];
+  if (last && l.some(a => a && a.name === last)) return last;
+  const a = l.find(x => x && x.lead) || l[0];
+  return a ? a.name : null;
+}
+function simpleInitial(me) {
+  const n = String((me && me.user && (me.user.name || me.user.login)) || '').trim();
+  return n ? n.charAt(0).toUpperCase() : '?';
+}
+// Reasoning level: shown and sent only for a model where it does something (the rule of #chat-effort-pick).
+function simpleEffortOk(a) { return !!a && !a.autoModel && effortSupported(a.model); }
+function simpleChatExtra(agent) {
+  if (!simpleOn()) return {};
+  const a = agentByName(agent);
+  if (!simpleEffortOk(a)) return {};
+  const level = window.hubSimple.pickedEffort ? window.hubSimple.pickedEffort(agent) : null;   // never picked: the agent's own setting applies
+  return level ? { effort: level } : {};
+}
+// A mode switch reloads the page (a plain function: the page's own reload sites are counted by a test).
+function simpleReload() { window.location.reload.call(window.location); }
+function simplePrefsPost(body) {
+  return api('/api/me/prefs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    .then(r => r.ok, () => false);
+}
+
+// The Thinking box (above the reply, inside the assistant bubble): "Thinking…", the last reasoning lines, and while a consult runs one line.
+function simpleThinkPaint(holder) {
+  if (!simpleOn() || !holder || holder.simpleThinkDone) return;
+  const el = holder.bubble && holder.bubble.el;
+  if (!el || !el.isConnected) return;
+  const r = holder.rsn;
+  const consult = simpleConsultText(holder);
+  // Reasoning shows only before the first reply text (holder.simpleReplied); a running consult keeps the box up after it, alone.
+  const reasoning = !holder.simpleReplied && !!(holder.simpleWaiting || (r && r.live));
+  const show = reasoning || !!consult;
+  let box = el.querySelector(':scope > .simple-think');
+  if (!show) { if (box) box.remove(); return; }
+  if (!box) {
+    box = document.createElement('div');
+    box.className = 'simple-think';
+    box.setAttribute('role', 'status');
+    box.innerHTML = '<div class="st-lab"><span class="st-dot"></span>Thinking…</div><div class="st-lines"></div><div class="st-consult" hidden></div>';
+    el.insertBefore(box, el.firstChild);
+  }
+  const m = simpleThinkModel(r && reasoning ? r.text : '', consult);
+  const ln = box.querySelector('.st-lines');
+  const sig = m.lines.join('\n');
+  if (ln.dataset.sig !== sig) {
+    ln.dataset.sig = sig; ln.textContent = '';
+    for (const t of m.lines) { const d = document.createElement('div'); d.textContent = t; ln.appendChild(d); }
+    ln.hidden = !m.lines.length;
+  }
+  const c = box.querySelector('.st-consult');
+  c.textContent = m.consult || ''; c.hidden = !m.consult;
+  if (current === holder.agent) scrollChat();
+}
+function simpleThinkStart(rec) {
+  if (!simpleOn() || !rec) return;
+  rec.simpleWaiting = true;
+  const w = rec.bubble && rec.bubble.body && rec.bubble.body.firstElementChild;
+  if (w) w.classList.add('simple-wait');   // the old "⏳ Thinking…" line: the box replaces it
+  simpleThinkPaint(rec);
+}
+// final: the first reply text, the turn's end (nothing comes back); otherwise the reasoning ended (a consult line may still run).
+function simpleThinkEnd(holder, final) {
+  if (!holder || !simpleOn() || holder.simpleThinkDone) return;
+  holder.simpleWaiting = false;
+  if (final) holder.simpleReplied = true;   // the first reply text: no reasoning lines again for this reply; a consult line may stay
+  const el = holder.bubble && holder.bubble.el;
+  const box = el && el.querySelector ? el.querySelector(':scope > .simple-think') : null;
+  if (box && !simpleConsultText(holder)) box.remove();
+  else if (box && final) simpleThinkPaint(holder);   // only the consult line is left
+}
+// The turn is over (or errored or stopped): everything goes, the consults too.
+function simpleTurnOver(holder) {
+  if (!holder || !simpleOn()) return;
+  holder.simpleWaiting = false; holder.simpleReplied = true; holder.simpleThinkDone = true; holder.simpleConsults = null;
+  const el = holder.bubble && holder.bubble.el;
+  const box = el && el.querySelector ? el.querySelector(':scope > .simple-think') : null;
+  if (box) box.remove();
+}
+// The active consults of a reply, by worker id: the line shown is the most recent one ("… and N more" when several run).
+function simpleConsultText(holder) {
+  const m = holder && holder.simpleConsults;
+  if (!m || !m.size) return '';
+  const lines = [...m.values()];
+  return lines.length > 1 ? lines[lines.length - 1] + ' and ' + (lines.length - 1) + ' more' : lines[0];
+}
+function simpleConsultSet(holder, line, id) {
+  if (!holder || holder.simpleThinkDone) return;
+  const key = String(id);
+  if (line) { if (!holder.simpleConsults) holder.simpleConsults = new Map(); holder.simpleConsults.delete(key); holder.simpleConsults.set(key, line); }
+  else if (holder.simpleConsults && holder.simpleConsults.delete(key)) { /* that consult is over */ }
+  else return;
+  simpleThinkPaint(holder);
+}
+function simpleGatewayHook(rec, g) {
+  if (!simpleOn() || !g) return;
+  if (g.type === 'worker_started') { const l = window.hubSimple.consultLine(g); if (l) simpleConsultSet(rec, l, g.worker_id); }
+  else if (g.type === 'worker_completed' || g.type === 'worker_failed') simpleConsultSet(rec, null, g.worker_id);
+}
+function simpleActivityHook(h, item) {
+  if (!simpleOn() || !h || !item || item.kind !== 'worker') return;
+  const done = item.status === 'completed' || item.status === 'failed';
+  const l = done ? null : window.hubSimple.consultLine({ type: 'worker_started', agent_type: item.agent, description: item.description });
+  simpleConsultSet(h, l, item.workerId != null ? item.workerId : item.id);
+}
+
+// Hub-started prompts: a small muted line instead of the prompt (nothing for a hidden one). Also clears the greeting once a message is added.
+function simpleUserBubbleHook(d, text) {
+  if (!simpleOn()) return;
+  const c = chatEl(); const e = c && c.querySelector(':scope > .simple-empty'); if (e) e.remove();
+  const n = simpleAutoOf(text);
+  if (!n) return;
+  d.classList.add('simple-auto');
+  if (n.hide) d.classList.add('simple-auto-hide');
+  d.textContent = n.label;
+}
+function simpleHubEntry(m, time) {
+  if (!simpleOn()) return false;
+  const n = simpleAutoOf(m.content);
+  if (!n) return false;
+  if (!n.hide) addNote(n.label).classList.add('simple-auto-line');
+  return true;
+}
+
+// An empty chat: the agent's icon, the greeting, and the starter buttons (they fill the input; the person sends).
+function simpleEmptyPaint(isEmpty) {
+  if (!simpleOn() || !isEmpty) return;
+  const box = chatEl();
+  for (const n of [...box.children]) if (n.classList.contains('note') && n.textContent === 'No messages yet') n.remove();
+  const a = agentByName(current);
+  const wrap = document.createElement('div');
+  wrap.className = 'simple-empty';
+  const ic = document.createElement('div'); ic.className = 'se-icon'; ic.textContent = (a && a.icon) || '🤖';
+  const h = document.createElement('h2'); h.textContent = window.hubSimple.greeting((hubMe && hubMe.user && hubMe.user.name) || '');
+  wrap.append(ic, h);
+  const list = document.createElement('div'); list.className = 'se-starters';
+  for (const t of window.hubSimple.STARTERS || []) {
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'se-starter'; b.textContent = t;
+    b.addEventListener('click', () => {
+      const input = $('msg-input'); if (!input) return;
+      input.value = t; input.dispatchEvent(new Event('input', { bubbles: true })); input.focus();
+    });
+    list.appendChild(b);
+  }
+  wrap.appendChild(list);
+  box.appendChild(wrap);
+}
+
+// The top bar: brand mark, "Talking to: <icon> <agent> ⌄" (opens the agent list), the Simple switch, the theme button, the person's initial (opens settings).
+function simpleTopEnsure() {
+  let top = $('simple-top');
+  if (top) return top;
+  top = document.createElement('div');
+  top.id = 'simple-top';
+  top.innerHTML = '<span class="st-mark" aria-hidden="true">M</span>' +
+    '<button type="button" id="simple-pill" class="st-pill" aria-haspopup="dialog"><span class="st-to">Talking to:</span><span class="st-pic"></span><span class="st-pname"></span><span class="st-chev" aria-hidden="true">⌄</span></button>' +
+    '<button type="button" class="mode-toggle" role="switch" aria-checked="true" title="Simple view on/off" hidden><span class="mt-lab">Simple</span><span class="mt-track"><span class="mt-knob"></span></span></button>' +
+    '<button type="button" class="simple-theme-btn" hidden><span class="stb-ic" aria-hidden="true"></span><span class="stb-lab"></span></button>' +
+    '<button type="button" id="simple-avatar" class="st-avatar" aria-label="Settings" aria-haspopup="dialog"></button>';
+  document.body.insertBefore(top, document.body.firstChild);
+  $('simple-pill').addEventListener('click', simpleAgentsOpen);
+  top.querySelector('.simple-theme-btn').addEventListener('click', simpleThemeTap);
+  $('simple-avatar').addEventListener('click', simpleSettingsOpen);
+  return top;
+}
+function simpleTopPaint() {
+  if (!simpleOn()) return;
+  simpleTopEnsure();
+  const a = agentByName(current);
+  const pic = document.querySelector('#simple-pill .st-pic'); const nm = document.querySelector('#simple-pill .st-pname');
+  if (pic) pic.textContent = a ? (a.icon || '🤖') : '';
+  if (nm) nm.textContent = a ? (a.display || a.name) : 'Choose';
+  $('simple-avatar').textContent = simpleInitial(hubMe);
+  simpleToggleSync();
+  simpleSidePaint();
+}
+function simpleDialog(id) {
+  let d = $(id);
+  if (!d) {
+    d = document.createElement('dialog'); d.id = id; d.setAttribute('data-no-dirty', '');
+    d.addEventListener('click', (e) => { if (e.target === d) d.close(); });
+    document.body.appendChild(d);
+  }
+  return d;
+}
+// The agent sheet's rows: Primary first; the rest sit under "More agents" (hubSimple.agentGroups: Specialists, Helpers, Experimental).
+// Closed (the default): the open chat's agent still shows, after the Primary rows; hiddenBusy says a hidden agent is working.
+function simpleAgentSheetModel(list, cur, open, busyOf) {
+  const g = window.hubSimple.agentGroups(list, (a) => a.category || 'worker');
+  const rows = g.primary.slice();
+  const hidden = [];
+  let total = 0;
+  for (const grp of g.more) for (const a of grp.items) { total++; if (!open) { if (a.name === cur) rows.push(a); else hidden.push(a); } }
+  const isOpen = total > 0 && !!open;
+  return {
+    primary: rows,
+    groups: isOpen ? g.more : [],
+    hasMore: total > 0 && (isOpen || hidden.length > 0),
+    open: isOpen,
+    hiddenBusy: !isOpen && hidden.some((a) => !!busyOf(a.name)),
+  };
+}
+let simpleMoreMem = null;   // the choice made on this page, kept even when localStorage refuses it
+function simpleMoreGet() { if (simpleMoreMem !== null) return simpleMoreMem; try { return localStorage.getItem(window.hubSimple.MORE_KEY) === '1'; } catch { return false; } }
+function simpleMoreSet(open) { simpleMoreMem = !!open; try { localStorage.setItem(window.hubSimple.MORE_KEY, open ? '1' : '0'); } catch { /* kept for this page only */ } }
+// The dot's class for an agent: question (waiting for the person), busy (working) or none.
+function simpleDotClass(name) {
+  const s = live[name];
+  return s && s.pendingQuestion ? 'question' : isBusy(name) ? 'busy' : '';
+}
+// One agent row, shared by the sheet and the wide sidebar: icon, name, (blurb and tick in the sheet), the busy/question dot.
+// opts.blurb adds the agent's blurb and the tick; opts.onPick runs on a tap (the chat opens after it).
+function simpleAgentRow(a, opts) {
+  opts = opts || {};
+  const b = document.createElement('button'); b.type = 'button'; b.className = 'sa-row'; if (a.name === current) b.classList.add('sel');
+  b.dataset.agent = a.name;
+  b.innerHTML = '<span class="sa-ic"></span><span class="sa-txt"><b></b><small></small></span><span class="sa-tick"></span><span class="sa-dot"></span>';
+  b.querySelector('.sa-ic').textContent = a.icon || '🤖';
+  b.querySelector('b').textContent = a.display || a.name;
+  b.querySelector('small').textContent = opts.blurb ? (a.blurb || '') : '';
+  b.querySelector('.sa-tick').textContent = opts.blurb && a.name === current ? '✓' : '';
+  b.querySelector('.sa-dot').className = 'sa-dot ' + simpleDotClass(a.name);
+  b.addEventListener('click', () => { if (typeof opts.onPick === 'function') opts.onPick(); if (a.name !== current || screen !== 'chat') navigate('chat', a.name); });
+  return b;
+}
+// Fill a container with the agent rows from the one model: Primary first, the "More agents" row, then the open groups.
+function simpleAgentListFill(list, opts) {
+  list.textContent = '';
+  if (!agents.length) { list.textContent = 'No agents yet.'; return; }
+  const m = simpleAgentSheetModel(agents, current, simpleMoreGet(), isBusy);
+  for (const a of m.primary) list.appendChild(simpleAgentRow(a, opts));
+  if (m.hasMore) {
+    const mb = document.createElement('button'); mb.type = 'button'; mb.className = 'sa-row sa-more'; mb.setAttribute('aria-expanded', String(m.open));
+    mb.innerHTML = '<span class="sa-txt"><b>More agents</b></span><span class="sa-chev" aria-hidden="true"></span><span class="sa-dot"></span>';
+    mb.querySelector('.sa-chev').textContent = m.open ? '⌃' : '⌄';
+    mb.querySelector('.sa-dot').className = 'sa-dot ' + (m.hiddenBusy ? 'busy' : '');
+    mb.addEventListener('click', () => { simpleMoreSet(!m.open); simpleAgentListsRepaint(); });
+    list.appendChild(mb);
+  }
+  for (const grp of m.groups) {
+    const h = document.createElement('div'); h.className = 'sa-head'; h.textContent = grp.label; list.appendChild(h);
+    for (const a of grp.items) list.appendChild(simpleAgentRow(a, opts));
+  }
+}
+// "More agents" toggled (or the list changed): repaint the open sheet and the sidebar.
+function simpleAgentListsRepaint() {
+  const d = document.getElementById('simple-agents-sheet');
+  if (d && d.open) simpleAgentsFill(d);
+  if (typeof simpleSidePaint === 'function') simpleSidePaint();
+}
+function simpleAgentsFill(d) {
+  simpleAgentListFill(d.querySelector('.sa-list'), { blurb: true, onPick: () => d.close() });
+}
+function simpleAgentsOpen() {
+  if (!simpleOn()) return;
+  const d = simpleDialog('simple-agents-sheet');
+  d.setAttribute('aria-label', 'Choose who to talk to');
+  d.innerHTML = '<h3>Talking to</h3><div class="sa-list"></div>';
+  simpleAgentsFill(d);
+  if (!d.open) d.showModal();
+}
+// Live status changed: repaint the dots in place (no rebuild, so a tap in progress is not lost): the open sheet and the sidebar.
+function simpleDotsIn(box) {
+  box.querySelectorAll('.sa-row[data-agent]').forEach((b) => { const dot = b.querySelector('.sa-dot'); if (dot) dot.className = 'sa-dot ' + simpleDotClass(b.dataset.agent); });
+  const mb = box.querySelector('.sa-more .sa-dot');
+  if (mb) mb.className = 'sa-dot ' + (simpleAgentSheetModel(agents, current, simpleMoreGet(), isBusy).hiddenBusy ? 'busy' : '');
+}
+function simpleAgentsDots() {
+  if (!simpleOn()) return;
+  const d = document.getElementById('simple-agents-sheet');
+  if (d && d.open) simpleDotsIn(d);
+  const s = document.getElementById('simple-side');
+  if (s) simpleDotsIn(s);
+}
+// The wide-screen sidebar (phone page, 700px and up; hidden by CSS below that): brand, "Chats", the agent rows, the person at the bottom.
+function simpleSideEnsure() {
+  let s = $('simple-side');
+  if (s) return s;
+  s = document.createElement('nav');
+  s.id = 'simple-side'; s.setAttribute('aria-label', 'Chats');
+  s.innerHTML = '<div class="ssd-brand">My Maestro AI</div><div class="ssd-lab">Chats</div><div class="ssd-list sa-list"></div>' +
+    '<button type="button" class="ssd-me" aria-label="Settings" aria-haspopup="dialog"><span class="st-avatar ssd-av"></span><span class="ssd-name"></span></button>';
+  document.body.insertBefore(s, document.body.firstChild);
+  s.querySelector('.ssd-me').addEventListener('click', simpleSettingsOpen);
+  return s;
+}
+// Rebuilds the rows only when what they show changes (agents, names, icons, the open chat, "More agents"); a status
+// change only repaints the dots, so a row under a finger is never replaced and the list keeps its scroll position.
+function simpleSidePaint() {
+  if (!simpleOn()) return;
+  const s = simpleSideEnsure();
+  const listEl = s.querySelector('.ssd-list');
+  const m = simpleAgentSheetModel(agents, current, simpleMoreGet(), isBusy);
+  const rowSig = (a) => [a.name, a.display || '', a.icon || ''];
+  const sig = JSON.stringify([m.primary.map(rowSig), m.groups.map((g) => [g.key, g.items.map(rowSig)]), m.hasMore, m.open, current, agents.length]);
+  if (listEl.dataset.sig !== sig) {
+    const top = listEl.scrollTop;
+    simpleAgentListFill(listEl, {});
+    listEl.dataset.sig = sig;
+    listEl.scrollTop = top;
+  } else simpleDotsIn(s);
+  s.querySelector('.ssd-av').textContent = simpleInitial(hubMe);
+  s.querySelector('.ssd-name').textContent = (hubMe && hubMe.user && (hubMe.user.name || hubMe.user.login)) || '';
+}
+// Folding or rotating to a wide screen: the narrow layout's agent sheet is not needed there.
+if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
+  const wide = window.matchMedia('(min-width: 700px)');
+  const wideChange = () => {
+    if (!wide.matches) return;
+    const d = document.getElementById('simple-agents-sheet');
+    if (d && d.open) d.close();
+  };
+  if (typeof wide.addEventListener === 'function') wide.addEventListener('change', wideChange);
+  else if (typeof wide.addListener === 'function') wide.addListener(wideChange);
+}
+// The Simple view switch (Advanced top bars and Simple's top bar) and Simple's theme button: only for a real account.
+function simpleToggleSync() {
+  const ok = simpleAccountOk(hubMe);
+  const on = simpleOn();
+  document.querySelectorAll('.mode-toggle').forEach((t) => { t.hidden = !ok; t.setAttribute('aria-checked', String(on)); });
+  for (const id of ['agents-head', 'chat-head']) { const h = document.getElementById(id); if (h) h.classList.toggle('has-mode-toggle', ok); }
+  const tb = document.querySelector('#simple-top .simple-theme-btn');
+  if (tb) {
+    tb.hidden = !ok;
+    const t = window.hubSimple.themeLabel(hubMe && hubMe.theme);
+    tb.querySelector('.stb-ic').textContent = t.icon;
+    tb.querySelector('.stb-lab').textContent = t.label;
+    tb.title = 'Appearance: ' + t.label + '. Tap to change.';
+    tb.setAttribute('aria-label', 'Appearance: ' + t.label + '. Tap to change.');
+  }
+}
+let simpleSwitching = false;
+// One tap on the switch: save the other mode, then reload.
+async function simpleModeTap() {
+  if (simpleSwitching) return;
+  simpleSwitching = true;
+  const target = simpleOn() ? 'advanced' : 'simple';
+  let ok = false;
+  try { ok = await simplePrefsPost({ uiMode: target }); } catch { ok = false; }
+  if (ok) { simpleReload(); return; }
+  simpleSwitching = false;
+  toast('Could not switch');
+}
+// The theme button: Light, Dark, Match device in turn; applied at once, saved, put back if the save fails.
+// One theme save at a time (the button and the settings sheet): a tap while one is saving is ignored, so a late
+// failure can never roll back over a newer choice.
+let simpleThemeSaving = false;
+async function simpleThemeTap() {
+  if (!simpleOn() || !hubMe || simpleThemeSaving) return;
+  simpleThemeSaving = true;
+  const was = hubMe.theme;
+  hubMe.theme = window.hubSimple.nextTheme(was);
+  try { window.hubSimple.apply(hubMe); } catch { /* the page stays as it is */ }
+  simpleToggleSync();
+  let ok = false;
+  try { ok = await simplePrefsPost({ theme: hubMe.theme }); } catch { ok = false; }
+  simpleThemeSaving = false;
+  if (ok) return;
+  hubMe.theme = was;
+  try { window.hubSimple.apply(hubMe); } catch { /* the page stays as it is */ }
+  simpleToggleSync();
+  toast('Could not save that');
+}
+function simpleSettingsOpen() {
+  if (!simpleOn()) return;
+  const d = simpleDialog('simple-settings-sheet');
+  const name = (hubMe && hubMe.user && (hubMe.user.name || hubMe.user.login)) || '';
+  d.setAttribute('aria-label', 'Settings');
+  d.innerHTML = '<h3>Settings</h3>' +
+    '<div class="ss-sec"><div class="ss-title">Appearance</div><div class="ss-seg" role="group" aria-label="Appearance">' +
+    '<button type="button" data-theme="light">Light</button><button type="button" data-theme="dark">Dark</button><button type="button" data-theme="auto">Match device</button></div></div>' +
+    '<div class="ss-sec"><div class="ss-title">Name</div><div class="ss-val"></div></div>' +
+    '<button type="button" class="ss-row" id="ss-adv"><b>Switch to Advanced</b><small>All tools, agents’ work and settings</small></button>' +
+    '<button type="button" class="ss-row" id="ss-out"><b>Sign out</b></button>' +
+    '<button type="button" class="ss-close">Close</button>';
+  d.querySelector('.ss-val').textContent = name;
+  const paint = () => { const cur = (hubMe && hubMe.theme) || 'auto'; d.querySelectorAll('.ss-seg button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.theme === cur))); };
+  paint();
+  d.querySelectorAll('.ss-seg button').forEach(b => b.addEventListener('click', async () => {
+    if (simpleThemeSaving) return;   // one theme save at a time (shared with the theme button)
+    simpleThemeSaving = true;
+    const v = b.dataset.theme;
+    let ok = false;
+    try { ok = await simplePrefsPost({ theme: v }); } catch { ok = false; }
+    simpleThemeSaving = false;
+    if (!ok) { toast('Could not save that'); return; }
+    if (hubMe) hubMe.theme = v;
+    try { window.hubSimple.apply(hubMe); } catch { /* the page stays as it is */ }
+    simpleToggleSync();
+    paint();
+  }));
+  $('ss-adv').addEventListener('click', async () => { if (await simplePrefsPost({ uiMode: 'advanced' })) simpleReload(); else toast('Could not switch'); });
+  $('ss-out').addEventListener('click', () => { signOut(); });
+  d.querySelector('.ss-close').addEventListener('click', () => d.close());
+  if (!d.open) d.showModal();
+}
+
+// The reasoning level, in the composer's second row: a button naming the level; a tap opens the four plain-word choices.
+function simpleComposerEnsure() {
+  const row = document.querySelector('#composer .row');
+  if (!row || $('simple-effort-btn')) return;
+  const eb = document.createElement('button');
+  eb.type = 'button'; eb.id = 'simple-effort-btn'; eb.setAttribute('aria-haspopup', 'true'); eb.setAttribute('aria-expanded', 'false'); eb.hidden = true;
+  eb.innerHTML = '<span class="lvl-label"></span><span class="st-chev" aria-hidden="true">⌄</span>';
+  const cb = document.createElement('button');
+  cb.type = 'button'; cb.id = 'simple-call-btn'; cb.setAttribute('aria-label', 'Voice call'); cb.title = 'Start a voice call';
+  cb.innerHTML = '<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true" focusable="false"><path d="M4 10v4M8 7v10M12 4v16M16 7v10M20 10v4"></path></svg>';
+  row.append(eb, cb);
+  const sheet = document.createElement('div');
+  sheet.id = 'simple-effort-sheet'; sheet.setAttribute('role', 'menu'); sheet.setAttribute('aria-label', 'Reasoning level'); sheet.hidden = true;
+  $('composer').appendChild(sheet);
+  onComposerTap(eb, () => simpleEffortSheet(sheet.hidden));   // acts on the touch like the other composer buttons (the keyboard stays)
+  onComposerTap(cb, () => { if (typeof voiceCall !== 'undefined' && voiceCall) voiceCallHangUp(); else voiceCallStart(); simpleCallPaint(); });
+  sheet.addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-level]'); if (!b || !current) return;
+    window.hubSimple.setEffort(current, b.dataset.level);
+    simpleEffortSheet(false); simpleEffortPaint();
+  });
+  document.addEventListener('click', (e) => { if (!sheet.hidden && !e.target.closest('#simple-effort-sheet, #simple-effort-btn')) simpleEffortSheet(false); });
+}
+function simpleEffortSheet(open) {
+  const sheet = $('simple-effort-sheet'); const eb = $('simple-effort-btn'); if (!sheet || !eb) return;
+  if (open) {
+    const label = simpleEffortLabelOf(agentByName(current));
+    const cur = (window.hubSimple.EFFORTS.find(x => x.label === label) || {}).level;   // never picked: the agent's own level is the ticked one
+    sheet.innerHTML = '';
+    for (const e of window.hubSimple.EFFORTS) {
+      const b = document.createElement('button'); b.type = 'button'; b.setAttribute('role', 'menuitemradio'); b.dataset.level = e.level;
+      b.setAttribute('aria-checked', String(e.level === cur));
+      b.innerHTML = '<span class="ef-txt"><b></b><small></small></span><span class="ef-tick"></span>';
+      b.querySelector('b').textContent = e.label; b.querySelector('small').textContent = e.hint || '';
+      b.querySelector('.ef-tick').textContent = e.level === cur ? '✓' : '';
+      sheet.appendChild(b);
+    }
+  }
+  sheet.hidden = !open; eb.setAttribute('aria-expanded', String(!!open));
+}
+function simpleEffortPaint() {
+  if (!simpleOn()) return;
+  const eb = $('simple-effort-btn'); if (!eb) return;
+  const a = agentByName(current);
+  const ok = simpleEffortOk(a);
+  eb.hidden = !ok;
+  if (!ok) { simpleEffortSheet(false); return; }
+  eb.querySelector('.lvl-label').textContent = simpleEffortLabelOf(a);
+}
+// The button's name for the level: the person's pick, else the agent's own effort in plain words (nothing is sent until they pick).
+function simpleEffortLabelOf(a) {
+  const H = window.hubSimple;
+  const lv = a && H.pickedEffort ? H.pickedEffort(a.name) : null;
+  return lv ? H.labelFor(lv) : H.labelForAgentEffort ? H.labelForAgentEffort(a && a.effort) : 'Balanced';
+}
+// #simple-call-btn shows a call that is up (class in-call), the way the page knows it: voiceCall is set.
+function simpleCallPaint() {
+  const cb = document.getElementById('simple-call-btn'); if (!cb) return;
+  const up = typeof voiceCall !== 'undefined' && !!voiceCall;
+  cb.classList.toggle('in-call', up);
+  cb.setAttribute('aria-pressed', String(up));
+  cb.setAttribute('aria-label', up ? 'Hang up' : 'Voice call'); cb.title = up ? 'End the voice call' : 'Start a voice call';
+}
+function simpleRoute(route) {
+  if (!simpleOn() || !route) return;
+  simpleTopEnsure(); simpleComposerEnsure();
+  if (route.screen === 'agents') { const a = simpleStartAgent(agents, localStorage.getItem('hub-mobile-last')); if (a) { route.screen = 'chat'; route.agent = a; } }
+  simpleTopPaint();
+}
+// Simple shows hub-started turns as short ordinary messages: the chat view is 'all' here, and nothing is written to localStorage.
+if (typeof chatViewGet === 'function') { const viewWas = chatViewGet; chatViewGet = function (storage) { return simpleOn() ? 'all' : viewWas(storage); }; }
+// A live hub-started turn: the page's "⚡ Scheduled task …" note is skipped (hidden), only Simple's muted label shows.
+if (typeof addNote === 'function') {
+  const noteWas = addNote;
+  addNote = function (text) {
+    const d = noteWas.apply(this, arguments);
+    if (simpleOn() && typeof text === 'string' && text.startsWith('\u26A1 ') && !text.startsWith('\u26A1 sent from another device')) d.classList.add('simple-auto-hide');
+    return d;
+  };
+}
+// One dictation mic and one voice-call button in every voice mode: in Simple #mic-btn always dictates (in hands-free mode the page's
+// own mic would start a call; here it reads the mode as 'tap'), and #simple-call-btn is the only call button (it hangs up during a call).
+let simpleDictating = false;
+if (typeof voicePrefsNow === 'function' && typeof voiceMicTap === 'function' && typeof voiceMicPaint === 'function') {
+  const prefsWas = voicePrefsNow; const tapWas = voiceMicTap; const paintWas = voiceMicPaint;
+  voicePrefsNow = function () { const p = prefsWas.apply(this, arguments); return simpleOn() && simpleDictating && p && p.mode !== 'tap' ? Object.assign({}, p, { mode: 'tap' }) : p; };
+  voiceMicTap = function () {
+    if (!simpleOn()) return tapWas.apply(this, arguments);
+    simpleDictating = true;
+    try { return tapWas.apply(this, arguments); } finally { simpleDictating = false; }   // the mode is read before the first await
+  };
+  voiceMicPaint = function () {
+    if (!simpleOn()) return paintWas.apply(this, arguments);
+    simpleDictating = true;
+    try { return paintWas.apply(this, arguments); } finally { simpleDictating = false; simpleCallPaint(); }
+  };
+}
+// A real account is needed to save the choice: not the legacy single-password login ({id:'legacy'}) nor accounts off (no user).
+function simpleAccountOk(me) { return !!(me && me.user && me.user.id && String(me.user.id) !== 'legacy'); }
+function simpleMenuHide(ms) { ms = ms || document.getElementById('menu-simple'); if (ms) ms.hidden = !simpleAccountOk(hubMe); }
+// Advanced: the ⋮ menu's "Switch to Simple".
+{
+  const ms = document.getElementById('menu-simple');
+  if (ms) simpleMenuHide(ms);   // a single-password install has no account to save the choice on: the item stays hidden
+  if (ms) ms.addEventListener('click', async () => { if (await simplePrefsPost({ uiMode: 'simple' })) simpleReload(); else toast('Could not switch'); });
+}
+if (typeof document.addEventListener === 'function') document.addEventListener('click', (e) => { if (e.target && e.target.closest && e.target.closest('.mode-toggle')) simpleModeTap(); });
+// ── end Simple mode: phone ──
 
 init();

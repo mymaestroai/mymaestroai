@@ -754,7 +754,20 @@ async function handleHttpRequest(req, res) {
       out.isOwner = !!(req.hubUser && !req.hubService && !req.hubPendingTotp && hubAuth.isOwner(req.hubUser));
       if (isAdmin) { const oe = access.ownerEntries(await getAgents(), hubAuth.listUsers()); out.owners = oe.owners; out.infraCount = oe.infraCount; }
       out.timeZone = u ? require('./lib/timezone').zoneForUser(u.id) : require('./lib/timezone').hubZone();   // what this person's agents use
+      // This person's look (Simple mode): the saved choice, else by role (a member starts in Simple, an admin in Advanced).
+      out.uiMode = (u && u.uiMode) || (isAdmin ? 'advanced' : 'simple');
+      out.theme = (u && u.theme) || 'auto';
       return jsonResponse(res, 200, out);
+    }
+    // This person's page mode and theme: { uiMode?: 'simple'|'advanced', theme?: 'light'|'dark'|'auto' }. A signed-in
+    // person only (the hub's own calls and API tokens have no person); bad values get a plain 400.
+    if (pathname === '/api/me/prefs' && req.method === 'POST') {
+      if (!req.hubUser || req.hubService || req.hubToken || req.hubPendingTotp) return jsonResponse(res, 401, { error: 'Sign in first' });
+      let body = {};
+      try { body = JSON.parse(await readBody(req) || '{}') || {}; } catch { return jsonResponse(res, 400, { error: 'Bad request' }); }
+      const r = hubAuth.setPrefs(req.hubUser.id, { uiMode: body.uiMode, theme: body.theme });
+      if (!r.ok) return jsonResponse(res, 400, { error: r.error });
+      return jsonResponse(res, 200, { ok: true, uiMode: r.user.uiMode || (access.isAdmin(req.hubUser) ? 'advanced' : 'simple'), theme: r.user.theme || 'auto' });
     }
     // This person's time zone (lib/timezone): the page in use reports its own ({tz, auto: true}; the zone follows the
     // device unless pinned); the Profile pins one ({tz, pinned: true}) or follows the device again ({tz, pinned: false}).
