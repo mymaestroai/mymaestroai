@@ -119,3 +119,34 @@ test('client Write/Edit outside the working folder: an allowed call answers perm
   const o = await off.sdkHook({ agentName: 'lead-a', cwd: '/opt/fake-install' })(pre('Write', { file_path: '/opt/fake-home/share/lead-a/out.txt', content: 'x' }));
   assert.deepStrictEqual(o, {});
 });
+
+// Review r1 (GPT-5.6 BLOCK, Sonnet): the policy judges the path as written, the client's write follows symlinks. A link
+// inside an allowed folder must not carry an explicitly allowed Write somewhere the policy refuses.
+test('client Write through a symlink: the real target is judged too; a link into hub data is blocked, a plain path still allowed', async () => {
+  const os = require('os');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gate-link-'));
+  try {
+    fs.mkdirSync(path.join(tp.HUB_ROOT, 'data'), { recursive: true });
+    fs.symlinkSync(path.join(tp.HUB_ROOT, 'data'), path.join(root, 'link'));
+    const worker = { name: 'w-2', category: 'worker', policy: { roots: [root] } };
+    const g = gateFor(worker);
+    const hook = g.sdkHook({ agentName: 'w-2', cwd: root });
+    const through = await hook(pre('Write', { file_path: path.join(root, 'link', 'agents.json'), content: 'x' }));
+    assert.strictEqual(through.decision, 'block', 'the real target is hub data');
+    assert.ok(!through.hookSpecificOutput, 'never an explicit allow through the link');
+    const plain = await hook(pre('Write', { file_path: path.join(root, 'notes.md'), content: 'x' }));
+    assert.strictEqual(plain.hookSpecificOutput && plain.hookSpecificOutput.permissionDecision, 'allow', 'a plain path inside the roots: explicit allow');
+    const rel = await hook(pre('Edit', { file_path: 'link/settings.json', old_string: 'a', new_string: 'b' }));
+    assert.strictEqual(rel.decision, 'block', 'a relative path through the link: blocked too');
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('policy off is a flag on the check result, not the reason text', async () => {
+  const lead = { name: 'lead-b', category: 'primary', lead: true };
+  const off = createGate({ getAgent: async () => lead, approvalsOn: () => false, log: () => {}, enabled: () => false });
+  const r = await off.check({ agentName: 'lead-b', tool: 'Write', input: { file_path: '/opt/x/y.txt' }, cwd: '/opt' });
+  assert.strictEqual(r.policyOff, true);
+  const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'policy-gate.js'), 'utf8');
+  assert.match(src, /r\.policyOff !== true/);
+  assert.doesNotMatch(src, /reason === 'policy disabled'/);
+});
