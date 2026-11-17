@@ -336,7 +336,8 @@
       for (const g of st.groups) {
         const box = list.querySelector(`:scope > .agent-group[data-category="${g.key}"]`);
         if (!box) continue;
-        setHide(box, !g.show);
+        // a box also stays when it holds an agent that shows anyway (the lead agent filed under another category)
+        setHide(box, !g.show && ![...box.querySelectorAll('.agent-btn')].some(b => !hidden.has(b.dataset.agent)));
         let h = list.querySelector(`:scope > .simple-more-h[data-for="${g.key}"]`);
         if (g.heading) {
           if (!h) { h = document.createElement('div'); h.className = 'simple-more-h'; h.dataset.for = g.key; h.textContent = g.label; }
