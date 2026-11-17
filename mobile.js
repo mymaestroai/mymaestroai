@@ -6158,6 +6158,7 @@ function addUserBubble(text, images) {
   setRaw(d, text);
   addCopyButton(d);
   bubbleHost().appendChild(d);
+  if (typeof simpleUserBubbleHook === 'function') simpleUserBubbleHook(d, text);   // Simple: a hub-started prompt shows as a small muted line
   return d;
 }
 
@@ -6277,6 +6278,7 @@ async function rereadHistory(agent, attempt = 0) {
   return true;   // chatHistory was replaced
 }
 function reasoningEnd(holder) {
+  if (typeof simpleThinkEnd === 'function') simpleThinkEnd(holder, false);   // Simple: the Thinking box goes with the reasoning
   const r = holder && holder.rsn;
   if (!r || !r.live) return;
   r.live = false; r.v++;
@@ -6299,6 +6301,7 @@ function paintReasoning(holder) {
   const r = holder && holder.rsn;
   const el = holder && holder.bubble && holder.bubble.el;
   if (!r || !el || !el.isConnected) return;
+  if (typeof simpleThinkPaint === 'function') simpleThinkPaint(holder);   // Simple: the Thinking box (the .rsn panel is hidden there)
   let box = el.querySelector(':scope > .rsn');
   if (!box) {
     box = document.createElement('div');
@@ -6459,6 +6462,7 @@ function copyWholeChat() {
 function renderEntry(m, time = '') {
   if (m.archived === true) { renderArchived(m, time); return; }
   if (m.role === 'user') {
+    if (typeof simpleHubEntry === 'function' && simpleHubEntry(m, time)) return;   // Simple: a hub-started prompt is a muted line (or hidden)
     if (m.origin?.kind) addNote(`⚡ ${originLabel(m.origin)} — ${timeLabel(m.ts)}`);
     const ij = interjectionView(m);   // an interjection: the person's words, then the note the live send shows
     setBubbleTime(addUserBubble(ij ? ij.text : m.content, savedImageUrls(m.images)), time);   // the pictures the line was sent with come back as bubble images
@@ -6568,11 +6572,13 @@ function renderHistory() {
     for (let i = start; i < chatHistory.length; i++) renderEntry(chatHistory[i], times[i]);
   }
   if (!chatHistory.length && chatNext == null) addNote('No messages yet');
+  if (typeof simpleEmptyPaint === 'function') simpleEmptyPaint(!chatHistory.length && chatNext == null);   // Simple: greeting and starter buttons
   paintBusyCard();   // the redraw cleared the chat, the busy card goes back at the bottom
 }
 
 // Turns the hub starts by itself fold into closed cards; the setting is per device ('off' turns it off).
 function foldAutoOn() {
+  if (typeof simpleOn === 'function' && simpleOn()) return false;   // Simple: hub-started turns are never folded into cards
   try { return localStorage.getItem('hub-fold-auto') !== 'off'; } catch { return true; }
 }
 function paintFoldMenu() {
@@ -6748,6 +6754,7 @@ async function openChat(name) {
   $('chat-model').textContent = modelText(a);
   fillModelPick(); fillEffortPick();
   paintCtx(); refreshCtx(name); paintPlan();
+  if (typeof simpleTopPaint === 'function') { simpleTopPaint(); simpleEffortPaint(); }   // Simple: the top pill and the reasoning-level button
   if (unread[name]) { delete unread[name]; saveJson('hub-mobile-unread', unread); updateDots(); }
   // Back from another tab while this chat's own reply is still painting into the page: keep it.
   const rec = streams.get(name);
@@ -6958,6 +6965,7 @@ function paintReply(holder, text, changed = null) {
   if (text !== undefined) holder.replyText = String(text || '');
   else if (holder.feed && holder.feed.local && typeof holder.full === 'string') holder.replyText = holder.full;
   if (!bubbleLive(holder)) return;
+  if (holder.replyText && typeof simpleThinkEnd === 'function') simpleThinkEnd(holder, true);   // Simple: reply text is here, the Thinking box is gone
   const body = holder.bubble.body;
   const full = holder.replyText || '';
   const blocks = replyBlocks(holder, full);
@@ -7391,6 +7399,7 @@ function paintFeedRow(feed, it, list = null) {
 // when only this page's side ended (a person's Stop, a stream cut off without its final marker, giving up waiting):
 // its workers then keep running here until the hub's record says how they ended.
 function feedEnd(holder, how = 'sure') {
+  if (typeof simpleThinkEnd === 'function') simpleThinkEnd(holder, true);   // Simple: the turn is over, no Thinking box
   const feed = holder && holder.feed;
   if (holder && holder.bubble) attachFileCards(holder.bubble.el, holder.bubble.body);   // the reply is final: download cards
   if (!feed) return;
@@ -10797,6 +10806,7 @@ async function sendMessage(fallback) {
   const controller = new AbortController();
   const rec = { controller, agent, text, images, bubble, userEl, startedAt: Date.now(), full: '', gotAny: false, feed: newFeed(true), question: null, dictated: !fallback && voiceTakeDictated(agent), readGen: voiceAutoReadGen };
   streams.set(agent, rec);
+  if (typeof simpleThinkStart === 'function') simpleThinkStart(rec);   // Simple: the Thinking box while the reply is pending
   paintChatStatus();
 
   let lost = false;
@@ -10806,7 +10816,7 @@ async function sendMessage(fallback) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...zoneHeader() },
       signal: controller.signal,
-      body: JSON.stringify({ agent, message: text, images, confirm_tools: false, ...(fallback && fallback.voice ? { voice: true } : {}), ...(fallback && fallback.voice && typeof voiceFacePackBody === 'function' ? voiceFacePackBody() : {}) }),   // facePack only while a character with reactions is on screen   // voice: the message came from a hands-free call
+      body: JSON.stringify({ agent, message: text, images, confirm_tools: false, ...(typeof simpleChatExtra === 'function' ? simpleChatExtra(agent) : {}), ...(fallback && fallback.voice ? { voice: true } : {}), ...(fallback && fallback.voice && typeof voiceFacePackBody === 'function' ? voiceFacePackBody() : {}) }),   // facePack only while a character with reactions is on screen   // voice: the message came from a hands-free call
     });
     if (linkOwner && fallback && fallback.voice) {   // a call's own message: its answer proves the link, and so does every piece of data after it
       if (r.status < 500 && typeof voiceLinkAlive === 'function') voiceLinkAlive(linkOwner, agent);
@@ -11100,6 +11110,7 @@ async function readStream(response, rec) {
   const outText = (o) => (typeof o === 'string' ? o : (o == null ? '' : JSON.stringify(o)));
 
   const handleGateway = (g) => {
+    if (typeof simpleGatewayHook === 'function') simpleGatewayHook(rec, g);   // Simple: the consult line
     switch (g.type) {
       case 'context_health': noteCtxReading(rec.agent, g); break;
       case 'voice_mood': voiceCallSseMood(rec, g.mood); break;   // the agent's mood word, already stripped from the text
@@ -11183,6 +11194,7 @@ async function readStream(response, rec) {
       if (delta) {
         rec.gotAny = true;
         rec.full += delta;
+        if (typeof simpleThinkEnd === 'function') simpleThinkEnd(rec, true);   // Simple: the first reply text ends the Thinking box
         schedulePaint();
       }
     }
@@ -12294,6 +12306,7 @@ function onTurnActivity(ev) {
   const h = ev && turnHolder(ev);
   if (!h || !ev.item) return;
   feedUpsert(h, ev.item);
+  if (typeof simpleActivityHook === 'function') simpleActivityHook(h, ev.item);   // Simple: a followed turn's consult line
   if (reattaches.get(ev.agent) === h) paintReattach(h, reattachLine(h));
 }
 
@@ -12795,6 +12808,7 @@ async function loadMe() {
     const r = await api('/api/me');
     if (r.ok) {
       hubMe = await r.json();
+      if (window.hubSimple) { try { window.hubSimple.apply(hubMe); } catch { /* the page stays as it is */ } }   // Simple mode and theme classes on <html>
       // Signed in: recorded-call pieces the hub never acknowledged (a closed app, a reload, a dead network) are sent now, one at a time (lib/ui-voice-call.js).
       if (hubMe && hubMe.user) setTimeout(() => { try { voiceRecResendPending((u, i) => fetch(u, { credentials: 'include', ...i }), { userId: hubMe.user.id }); } catch { /* the call code is not up yet */ } }, 0);
     }
@@ -14052,6 +14066,7 @@ async function init() {
   await loadAgents();
   activeJobsSync();
   const route = routeFromHash();
+  if (typeof simpleRoute === 'function') simpleRoute(route);   // Simple: open a chat at start instead of the agent list
   window.history.replaceState({ screen: route.screen, agent: route.agent }, '');
   applyRoute(route);
   updateDots();
@@ -14072,5 +14087,294 @@ async function init() {
   paintVersionLabel();
   setInterval(refreshUpdateCheck, 30 * 60 * 1000);
 }
+
+// ── Simple mode: phone ── (everything below runs only when hubSimple.apply put class mm-simple on <html>; Advanced never calls it)
+function simpleOn() { return !!(window.hubSimple && document.documentElement.classList.contains('mm-simple')); }
+const SIMPLE_THINK_LINES = 5;
+// What the Thinking box shows: the last lines of the reasoning (a summary's **headings** lose their asterisks) and the consult line.
+function simpleThinkModel(text, consult) {
+  const H = window.hubSimple;
+  const t = String(text || '').replace(/\*\*([^*\n]+)\*\*/g, '$1');
+  return { lines: H && H.reasoningTail ? H.reasoningTail(t, SIMPLE_THINK_LINES) : [], consult: consult || null };
+}
+// A hub-started prompt: { label } to show as a muted line, { hide: true } to show nothing, null for an ordinary message.
+function simpleAutoOf(text) {
+  const H = window.hubSimple;
+  const r = H && H.autoNote ? H.autoNote(String(text || '')) : null;
+  if (!r) return null;
+  if (r.hide || !r.label) return { hide: true, label: '' };
+  return { label: String(r.label) };
+}
+// The chat to open at start (Simple has no agent list screen): the last one if it still exists, else the lead agent, else the first.
+function simpleStartAgent(list, last) {
+  const l = Array.isArray(list) ? list : [];
+  if (last && l.some(a => a && a.name === last)) return last;
+  const a = l.find(x => x && x.lead) || l[0];
+  return a ? a.name : null;
+}
+function simpleInitial(me) {
+  const n = String((me && me.user && (me.user.name || me.user.login)) || '').trim();
+  return n ? n.charAt(0).toUpperCase() : '?';
+}
+// Reasoning level: shown and sent only for a model where it does something (the rule of #chat-effort-pick).
+function simpleEffortOk(a) { return !!a && !a.autoModel && effortSupported(a.model); }
+function simpleChatExtra(agent) {
+  if (!simpleOn()) return {};
+  const a = agentByName(agent);
+  if (!simpleEffortOk(a)) return {};
+  const level = window.hubSimple.effortFor(agent);
+  return level ? { effort: level } : {};
+}
+// A mode switch reloads the page (a plain function: the page's own reload sites are counted by a test).
+function simpleReload() { window.location.reload.call(window.location); }
+function simplePrefsPost(body) {
+  return api('/api/me/prefs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    .then(r => r.ok, () => false);
+}
+
+// The Thinking box (above the reply, inside the assistant bubble): "Thinking…", the last reasoning lines, and while a consult runs one line.
+function simpleThinkPaint(holder) {
+  if (!simpleOn() || !holder || holder.simpleThinkDone) return;
+  const el = holder.bubble && holder.bubble.el;
+  if (!el || !el.isConnected) return;
+  const r = holder.rsn;
+  const show = !!(holder.simpleWaiting || holder.simpleConsult || (r && r.live));
+  let box = el.querySelector(':scope > .simple-think');
+  if (!show) { if (box) box.remove(); return; }
+  if (!box) {
+    box = document.createElement('div');
+    box.className = 'simple-think';
+    box.setAttribute('role', 'status');
+    box.innerHTML = '<div class="st-lab"><span class="st-dot"></span>Thinking…</div><div class="st-lines"></div><div class="st-consult" hidden></div>';
+    el.insertBefore(box, el.firstChild);
+  }
+  const m = simpleThinkModel(r ? r.text : '', holder.simpleConsult);
+  const ln = box.querySelector('.st-lines');
+  const sig = m.lines.join('\n');
+  if (ln.dataset.sig !== sig) {
+    ln.dataset.sig = sig; ln.textContent = '';
+    for (const t of m.lines) { const d = document.createElement('div'); d.textContent = t; ln.appendChild(d); }
+    ln.hidden = !m.lines.length;
+  }
+  const c = box.querySelector('.st-consult');
+  c.textContent = m.consult || ''; c.hidden = !m.consult;
+  if (current === holder.agent) scrollChat();
+}
+function simpleThinkStart(rec) {
+  if (!simpleOn() || !rec) return;
+  rec.simpleWaiting = true;
+  const w = rec.bubble && rec.bubble.body && rec.bubble.body.firstElementChild;
+  if (w) w.classList.add('simple-wait');   // the old "⏳ Thinking…" line: the box replaces it
+  simpleThinkPaint(rec);
+}
+// final: the first reply text, the turn's end (nothing comes back); otherwise the reasoning ended (a consult line may still run).
+function simpleThinkEnd(holder, final) {
+  if (!holder || !simpleOn() || holder.simpleThinkDone) return;
+  holder.simpleWaiting = false;
+  if (final) { holder.simpleThinkDone = true; holder.simpleConsult = null; }
+  const el = holder.bubble && holder.bubble.el;
+  const box = el && el.querySelector ? el.querySelector(':scope > .simple-think') : null;
+  if (box && (final || !holder.simpleConsult)) box.remove();
+}
+function simpleConsultSet(holder, line, id) {
+  if (!holder) return;
+  if (line) { holder.simpleConsult = line; holder.simpleConsultId = String(id); }
+  else if (holder.simpleConsult && String(holder.simpleConsultId) === String(id)) holder.simpleConsult = null;
+  else return;
+  simpleThinkPaint(holder);
+}
+function simpleGatewayHook(rec, g) {
+  if (!simpleOn() || !g) return;
+  if (g.type === 'worker_started') { const l = window.hubSimple.consultLine(g); if (l) simpleConsultSet(rec, l, g.worker_id); }
+  else if (g.type === 'worker_completed' || g.type === 'worker_failed') simpleConsultSet(rec, null, g.worker_id);
+}
+function simpleActivityHook(h, item) {
+  if (!simpleOn() || !h || !item || item.kind !== 'worker') return;
+  const done = item.status === 'completed' || item.status === 'failed';
+  const l = done ? null : window.hubSimple.consultLine({ type: 'worker_started', agent_type: item.agent, description: item.description });
+  simpleConsultSet(h, l, item.workerId != null ? item.workerId : item.id);
+}
+
+// Hub-started prompts: a small muted line instead of the prompt (nothing for a hidden one). Also clears the greeting once a message is added.
+function simpleUserBubbleHook(d, text) {
+  if (!simpleOn()) return;
+  const c = chatEl(); const e = c && c.querySelector(':scope > .simple-empty'); if (e) e.remove();
+  const n = simpleAutoOf(text);
+  if (!n) return;
+  d.classList.add('simple-auto');
+  if (n.hide) d.classList.add('simple-auto-hide');
+  d.textContent = n.label;
+}
+function simpleHubEntry(m, time) {
+  if (!simpleOn()) return false;
+  const n = simpleAutoOf(m.content);
+  if (!n) return false;
+  if (!n.hide) addNote(n.label).classList.add('simple-auto-line');
+  return true;
+}
+
+// An empty chat: the agent's icon, the greeting, and the starter buttons (they fill the input; the person sends).
+function simpleEmptyPaint(isEmpty) {
+  if (!simpleOn() || !isEmpty) return;
+  const box = chatEl();
+  for (const n of [...box.children]) if (n.classList.contains('note') && n.textContent === 'No messages yet') n.remove();
+  const a = agentByName(current);
+  const wrap = document.createElement('div');
+  wrap.className = 'simple-empty';
+  const ic = document.createElement('div'); ic.className = 'se-icon'; ic.textContent = (a && a.icon) || '🤖';
+  const h = document.createElement('h2'); h.textContent = window.hubSimple.greeting((hubMe && hubMe.user && hubMe.user.name) || '');
+  wrap.append(ic, h);
+  const list = document.createElement('div'); list.className = 'se-starters';
+  for (const t of window.hubSimple.STARTERS || []) {
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'se-starter'; b.textContent = t;
+    b.addEventListener('click', () => {
+      const input = $('msg-input'); if (!input) return;
+      input.value = t; input.dispatchEvent(new Event('input', { bubbles: true })); input.focus();
+    });
+    list.appendChild(b);
+  }
+  wrap.appendChild(list);
+  box.appendChild(wrap);
+}
+
+// The top bar: brand mark, "Talking to: <icon> <agent> ⌄" (opens the agent list), the person's initial (opens settings).
+function simpleTopEnsure() {
+  let top = $('simple-top');
+  if (top) return top;
+  top = document.createElement('div');
+  top.id = 'simple-top';
+  top.innerHTML = '<span class="st-mark" aria-hidden="true">M</span>' +
+    '<button type="button" id="simple-pill" class="st-pill" aria-haspopup="dialog"><span class="st-to">Talking to:</span><span class="st-pic"></span><span class="st-pname"></span><span class="st-chev" aria-hidden="true">⌄</span></button>' +
+    '<button type="button" id="simple-avatar" class="st-avatar" aria-label="Settings" aria-haspopup="dialog"></button>';
+  document.body.insertBefore(top, document.body.firstChild);
+  $('simple-pill').addEventListener('click', simpleAgentsOpen);
+  $('simple-avatar').addEventListener('click', simpleSettingsOpen);
+  return top;
+}
+function simpleTopPaint() {
+  if (!simpleOn()) return;
+  simpleTopEnsure();
+  const a = agentByName(current);
+  const pic = document.querySelector('#simple-pill .st-pic'); const nm = document.querySelector('#simple-pill .st-pname');
+  if (pic) pic.textContent = a ? (a.icon || '🤖') : '';
+  if (nm) nm.textContent = a ? (a.display || a.name) : 'Choose';
+  $('simple-avatar').textContent = simpleInitial(hubMe);
+}
+function simpleDialog(id) {
+  let d = $(id);
+  if (!d) {
+    d = document.createElement('dialog'); d.id = id; d.setAttribute('data-no-dirty', '');
+    d.addEventListener('click', (e) => { if (e.target === d) d.close(); });
+    document.body.appendChild(d);
+  }
+  return d;
+}
+function simpleAgentsOpen() {
+  if (!simpleOn()) return;
+  const d = simpleDialog('simple-agents-sheet');
+  d.setAttribute('aria-label', 'Choose who to talk to');
+  d.innerHTML = '<h3>Talking to</h3><div class="sa-list"></div>';
+  const list = d.querySelector('.sa-list');
+  for (const a of agents) {
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'sa-row'; if (a.name === current) b.classList.add('sel');
+    b.innerHTML = '<span class="sa-ic"></span><span class="sa-txt"><b></b><small></small></span><span class="sa-tick"></span>';
+    b.querySelector('.sa-ic').textContent = a.icon || '🤖';
+    b.querySelector('b').textContent = a.display || a.name;
+    b.querySelector('small').textContent = a.blurb || '';
+    b.querySelector('.sa-tick').textContent = a.name === current ? '✓' : '';
+    b.addEventListener('click', () => { d.close(); if (a.name !== current || screen !== 'chat') navigate('chat', a.name); });
+    list.appendChild(b);
+  }
+  if (!agents.length) list.textContent = 'No agents yet.';
+  if (!d.open) d.showModal();
+}
+function simpleSettingsOpen() {
+  if (!simpleOn()) return;
+  const d = simpleDialog('simple-settings-sheet');
+  const name = (hubMe && hubMe.user && (hubMe.user.name || hubMe.user.login)) || '';
+  d.setAttribute('aria-label', 'Settings');
+  d.innerHTML = '<h3>Settings</h3>' +
+    '<div class="ss-sec"><div class="ss-title">Appearance</div><div class="ss-seg" role="group" aria-label="Appearance">' +
+    '<button type="button" data-theme="light">Light</button><button type="button" data-theme="dark">Dark</button><button type="button" data-theme="auto">Match device</button></div></div>' +
+    '<div class="ss-sec"><div class="ss-title">Name</div><div class="ss-val"></div></div>' +
+    '<button type="button" class="ss-row" id="ss-adv"><b>Switch to Advanced</b><small>All tools, agents’ work and settings</small></button>' +
+    '<button type="button" class="ss-row" id="ss-out"><b>Sign out</b></button>' +
+    '<button type="button" class="ss-close">Close</button>';
+  d.querySelector('.ss-val').textContent = name;
+  const paint = () => { const cur = (hubMe && hubMe.theme) || 'auto'; d.querySelectorAll('.ss-seg button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.theme === cur))); };
+  paint();
+  d.querySelectorAll('.ss-seg button').forEach(b => b.addEventListener('click', async () => {
+    const v = b.dataset.theme;
+    if (!(await simplePrefsPost({ theme: v }))) { toast('Could not save that'); return; }
+    if (hubMe) hubMe.theme = v;
+    try { window.hubSimple.apply(hubMe); } catch { /* the page stays as it is */ }
+    paint();
+  }));
+  $('ss-adv').addEventListener('click', async () => { if (await simplePrefsPost({ uiMode: 'advanced' })) simpleReload(); else toast('Could not switch'); });
+  $('ss-out').addEventListener('click', () => { signOut(); });
+  d.querySelector('.ss-close').addEventListener('click', () => d.close());
+  if (!d.open) d.showModal();
+}
+
+// The reasoning level, in the composer's second row: a button naming the level; a tap opens the four plain-word choices.
+function simpleComposerEnsure() {
+  const row = document.querySelector('#composer .row');
+  if (!row || $('simple-effort-btn')) return;
+  const eb = document.createElement('button');
+  eb.type = 'button'; eb.id = 'simple-effort-btn'; eb.setAttribute('aria-haspopup', 'true'); eb.setAttribute('aria-expanded', 'false'); eb.hidden = true;
+  eb.innerHTML = '<span class="lvl-label"></span><span class="st-chev" aria-hidden="true">⌄</span>';
+  const cb = document.createElement('button');
+  cb.type = 'button'; cb.id = 'simple-call-btn'; cb.setAttribute('aria-label', 'Voice call'); cb.title = 'Start a voice call';
+  cb.innerHTML = '<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true" focusable="false"><path d="M4 10v4M8 7v10M12 4v16M16 7v10M20 10v4"></path></svg>';
+  row.append(eb, cb);
+  const sheet = document.createElement('div');
+  sheet.id = 'simple-effort-sheet'; sheet.setAttribute('role', 'menu'); sheet.setAttribute('aria-label', 'Reasoning level'); sheet.hidden = true;
+  $('composer').appendChild(sheet);
+  eb.addEventListener('click', () => simpleEffortSheet(sheet.hidden));
+  cb.addEventListener('click', () => { if (typeof voiceCall !== 'undefined' && voiceCall) voiceCallHangUp(); else voiceCallStart(); });
+  sheet.addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-level]'); if (!b || !current) return;
+    window.hubSimple.setEffort(current, b.dataset.level);
+    simpleEffortSheet(false); simpleEffortPaint();
+  });
+  document.addEventListener('click', (e) => { if (!sheet.hidden && !e.target.closest('#simple-effort-sheet, #simple-effort-btn')) simpleEffortSheet(false); });
+}
+function simpleEffortSheet(open) {
+  const sheet = $('simple-effort-sheet'); const eb = $('simple-effort-btn'); if (!sheet || !eb) return;
+  if (open) {
+    const cur = window.hubSimple.effortFor(current);
+    sheet.innerHTML = '';
+    for (const e of window.hubSimple.EFFORTS) {
+      const b = document.createElement('button'); b.type = 'button'; b.setAttribute('role', 'menuitemradio'); b.dataset.level = e.level;
+      b.setAttribute('aria-checked', String(e.level === cur));
+      b.innerHTML = '<span class="ef-txt"><b></b><small></small></span><span class="ef-tick"></span>';
+      b.querySelector('b').textContent = e.label; b.querySelector('small').textContent = e.hint || '';
+      b.querySelector('.ef-tick').textContent = e.level === cur ? '✓' : '';
+      sheet.appendChild(b);
+    }
+  }
+  sheet.hidden = !open; eb.setAttribute('aria-expanded', String(!!open));
+}
+function simpleEffortPaint() {
+  if (!simpleOn()) return;
+  const eb = $('simple-effort-btn'); if (!eb) return;
+  const a = agentByName(current);
+  const ok = simpleEffortOk(a);
+  eb.hidden = !ok;
+  if (!ok) { simpleEffortSheet(false); return; }
+  eb.querySelector('.lvl-label').textContent = window.hubSimple.labelFor(window.hubSimple.effortFor(a.name));
+}
+function simpleRoute(route) {
+  if (!simpleOn() || !route) return;
+  simpleTopEnsure(); simpleComposerEnsure();
+  if (route.screen === 'agents') { const a = simpleStartAgent(agents, localStorage.getItem('hub-mobile-last')); if (a) { route.screen = 'chat'; route.agent = a; } }
+  simpleTopPaint();
+}
+// Advanced: the ⋮ menu's "Switch to Simple".
+{
+  const ms = document.getElementById('menu-simple');
+  if (ms) ms.addEventListener('click', async () => { if (await simplePrefsPost({ uiMode: 'simple' })) simpleReload(); else toast('Could not switch'); });
+}
+// ── end Simple mode: phone ──
 
 init();
