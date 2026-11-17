@@ -92,3 +92,30 @@ test('a box that may still hold an old sign-in copy gets its own notice, not the
   assert.match(src, /withheldCode = \(e && e\.code\) \|\| null;/);
   assert.match(src, /sandboxWithheldNotice\(hands\.withheldCode\)/);
 });
+
+// R2 regression (live 10:31, 11-17): the client accepts edits in acceptEdits only inside its working folder (the install
+// root) and asked, unanswerably, for a Write anywhere else (share/, medical/, legal/). The hub's policy decides: its 'allow'
+// for the client's own file writers is now passed on as an explicit permissionDecision 'allow'.
+test('client Write/Edit outside the working folder: an allowed call answers permissionDecision allow; a denied one is still blocked; other tools unchanged; policy off unchanged', async () => {
+  const lead = { name: 'lead-a', category: 'primary', lead: true };
+  const g = gateFor(lead);
+  const hook = g.sdkHook({ agentName: 'lead-a', cwd: '/opt/fake-install' });
+  for (const tool of ['Write', 'Edit', 'MultiEdit', 'NotebookEdit']) {
+    const r = await hook(pre(tool, { file_path: '/opt/fake-home/share/lead-a/out.txt', content: 'x', old_string: 'a', new_string: 'b', notebook_path: '/opt/fake-home/share/lead-a/n.ipynb' }));
+    assert.deepStrictEqual(r.hookSpecificOutput && r.hookSpecificOutput.permissionDecision, 'allow', `${tool}: explicit allow`);
+    assert.strictEqual(r.hookSpecificOutput.hookEventName, 'PreToolUse');
+  }
+  assert.deepStrictEqual(await hook(pre('Read', { file_path: '/opt/fake-home/share/lead-a/out.txt' })), {}, 'other tools: no explicit decision, as before');
+  assert.deepStrictEqual(await hook(pre('mcp__hub__Write', { file_path: '/opt/fake-home/share/lead-a/out.txt', content: 'x' })), {}, 'the hub\'s own Write never needed it');
+  // a worker writing into another agent's workspace: still blocked by the policy
+  const worker = { name: 'w-1', category: 'worker' };
+  const gw = gateFor(worker);
+  const other = `${tp.HUB_ROOT}/workspaces/someone-else/x.txt`;
+  const d = await gw.sdkHook({ agentName: 'w-1', cwd: tp.HUB_ROOT })(pre('Write', { file_path: other, content: 'x' }));
+  assert.strictEqual(d.decision, 'block', 'a policy deny is still a block');
+  assert.ok(!d.hookSpecificOutput, 'never an allow for a denied call');
+  // the policy switched off: nothing explicit (the client's own rules apply, as before)
+  const off = createGate({ getAgent: async () => lead, approvalsOn: () => false, log: () => {}, enabled: () => false });
+  const o = await off.sdkHook({ agentName: 'lead-a', cwd: '/opt/fake-install' })(pre('Write', { file_path: '/opt/fake-home/share/lead-a/out.txt', content: 'x' }));
+  assert.deepStrictEqual(o, {});
+});
