@@ -289,5 +289,19 @@ test('Grep: a worker may not search a folder holding files protected by name or 
     assert.deepStrictEqual(await wIn(pre('Glob', { pattern: '**/*.js' })), {}, 'worker Glob there: as before');
     const lIn = gateFor({ name: 'lead-q', category: 'primary', lead: true }).sdkHook({ agentName: 'lead-q', cwd: tp.HUB_ROOT });
     assert.deepStrictEqual(await lIn(pre('Grep', { pattern: 'PORT' })), {}, 'lead Grep there: as before');
+    // Review r2 (Sentinel BLOCK): for the lead and admin agents a protected read is an ask. While approval cards are on
+    // for it, a direct Read would show a card, so a whole-folder Grep (which can't) is refused; cards off: unchanged.
+    const lead = { name: 'lead-q', category: 'primary', lead: true };
+    const head = { name: 'head-q', category: 'primary' };
+    for (const [who, opts] of [[lead, { approvalsOn: () => true }], [head, { approvalsOn: () => false, approvalClasses: () => new Set(['admin']) }]]) {
+      const g = createGate({ getAgent: async () => who, log: () => {}, ...opts });
+      const inside = g.sdkHook({ agentName: who.name, cwd: tp.HUB_ROOT });
+      assert.strictEqual((await inside(pre('Grep', { pattern: 'PORT' }))).decision, 'block', `${who.name}, cards on: Grep of the install root refused`);
+      const outside = g.sdkHook({ agentName: who.name, cwd: '/opt/fake-install' });
+      assert.strictEqual((await outside(pre('Grep', { pattern: 'x', path: path.join(root, 'keys') }))).decision, 'block', `${who.name}, cards on: Grep over a key file refused`);
+      assert.deepStrictEqual(await inside(pre('Glob', { pattern: '**/*.js' })), {}, `${who.name}: Glob unchanged`);
+    }
+    const headOff = gateFor(head).sdkHook({ agentName: 'head-q', cwd: tp.HUB_ROOT });
+    assert.deepStrictEqual(await headOff(pre('Grep', { pattern: 'PORT' })), {}, 'admin agent, cards off: as before');
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
