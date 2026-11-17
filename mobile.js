@@ -13588,9 +13588,10 @@ async function shareLinksListFill(root, admin) {
     const b = ev.target.closest && ev.target.closest('button[data-sl-revoke]'); if (!b) return;
     shareRevokeClick(b, async (id) => {
       try {
-        await shareLinksJson(`/api/share-links/${encodeURIComponent(id)}/revoke`, {});
+        const done = await shareLinksJson(`/api/share-links/${encodeURIComponent(id)}/revoke`, {});
         const row = b.closest('.sl-row'); if (row) row.remove();
         if (!box.querySelector('.sl-row')) box.textContent = 'No shared links.';
+        if (msg) msg.textContent = (done && typeof done.warning === 'string') ? done.warning : '';   // revoked, but not saved yet
       } catch (e) { b.disabled = false; b.textContent = 'Revoke'; if (msg) msg.textContent = e.message; }
     });
   };
