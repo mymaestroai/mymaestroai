@@ -34,7 +34,7 @@ test('eight groups, and every section openSettings draws belongs to exactly one 
   assert.ok(vAt > 0 && settingsSource(app).includes('html += voiceSettingsHtml(data);'), 'Voices is drawn by openSettings');
   const src = settingsSource(app) + app.slice(vAt, app.indexOf('function voicePaintSettings(', vAt));
   const drawn = [...src.matchAll(/class="st-section" id="(st-[a-z0-9-]+-section)"/g)].map(m => m[1]);
-  assert.strictEqual(drawn.length, 24, 'all 24 sections carry an id');
+  assert.strictEqual(drawn.length, 25, 'all 25 sections carry an id');
   assert.doesNotMatch(src, /class="st-section">/, 'no section without an id');
   const grouped = groups.flatMap(g => g.sections);
   assert.strictEqual(new Set(grouped).size, grouped.length, 'no section in two groups');

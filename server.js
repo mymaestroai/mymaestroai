@@ -1423,6 +1423,8 @@ async function handleHttpRequest(req, res) {
       if (recordingsChange && (req.hubService || req.hubToken || !req.hubUser || !hubAuth.isOwner(req.hubUser) || req.hubPendingTotp)) return jsonResponse(res, 403, { error: 'only the owner can change: recordings' });
       // Which environment variables an agent's commands keep is a signed-in admin's call: never a member, and never the hub's own service calls (an agent could widen itself).
       if (body && typeof body === 'object' && 'envKeep' in body && (req.hubService || req.hubToken || !req.hubUser || !access.isAdmin(req.hubUser) || req.hubPendingTotp)) return jsonResponse(res, 403, { error: 'only an admin can change: envKeep' });
+      // The command lockbox changes what an agent's commands may touch: a signed-in admin's own browser session only (never a member, a token, the hub's own service or an agent).
+      if (!!body && typeof body === 'object' && ('lockbox' in body || 'lockboxEnv' in body) && !require('./lib/lockbox/settings').isAdminSession(req)) return jsonResponse(res, 403, { error: 'Sign in with an admin account in your browser to change the command lockbox.' });
       const recSettings = require('./lib/recordings/settings');
       const allowedBefore = recordingsChange ? recSettings.recordingsOf((await getAgents()).find(a => a.name === name)).allowed : [];
       if (!req.hubService && !access.isAdmin(req.hubUser)) {
@@ -1434,7 +1436,10 @@ async function handleHttpRequest(req, res) {
       // Voice: a cloud engine for an agent kept on this computer needs the owner (the earliest admin), not just any admin.
       const result = await updateAgentField(name, body, { isOwner: !req.hubService && !!req.hubUser && hubAuth.isOwner(req.hubUser), userId: req.hubUser ? String(req.hubUser.id) : '',
         // Changes to the call-recordings setting are audited (agent.recordings): who, which agent, keep on/off, the allowed ids, the mic.
-        audit: (action, detail) => hubAuth.audit(req.hubUser ? String(req.hubUser.id) : null, action, detail, hubAuth.clientIp(req)) });
+        audit: (action, detail) => hubAuth.audit(req.hubUser ? String(req.hubUser.id) : null, action, detail, hubAuth.clientIp(req)),
+        // A lockbox change is told to the admins in plain words (a security notice), like the admin 2-factor rule.
+        userName: req.hubUser ? String(req.hubUser.name || req.hubUser.login || req.hubUser.id || '') : '',
+        notifyAdmins: (text) => require('./lib/push').getPush().notify({ title: 'Command lockbox changed', body: text, tag: 'lockbox-change' }, { adminsOnly: true, kind: 'security' }) });
       if (!result.success && result.status) return jsonResponse(res, result.status, { error: result.error });
       // Handing a head agent to a member: it introduces itself in its (still empty) chat.
       if (result.success && body && body.owner) { const u = hubAuth.getUser(String(body.owner)); if (u && u.role === 'member') require('./lib/teams').greetIfFresh(name, u).catch(() => {}); }
@@ -1984,6 +1989,16 @@ async function handleHttpRequest(req, res) {
       }
       return jsonResponse(res, 404, { error: 'unknown sandbox route' });
     }
+    // ── Command lockbox (lib/lockbox): host state with each agent's mode, and the latest would-block lines. Admin session only. ──
+    if (pathname.startsWith('/api/lockbox/')) {
+      const handled = await require('./lib/lockbox/settings').handle(pathname, req, res, {
+        jsonResponse, getAgents, getSetting: (k) => hubSettings.getSetting(k), lockbox: require('./lib/lockbox'),
+        sandboxedOf: (a) => require('./lib/sandbox').getSandbox().isSandboxed(a),
+        handsOf: (a) => require('./lib/hub-tools').modeFor(a, (k) => hubSettings.getSetting(k)),
+      });
+      if (handled) return;
+      return jsonResponse(res, 404, { error: 'unknown lockbox route' });
+    }
     // ── Readiness (lib/readiness): what this machine is missing and what to do about it; admin-only. ──
     if (pathname === '/api/readiness' && req.method === 'GET') {
       const r = await require('./lib/readiness').getReadiness({ exposed: () => !!BIND.exposed, setupNeeded: () => isSetupNeeded() }).check();
@@ -2529,6 +2544,10 @@ async function handleHttpRequest(req, res) {
           if (patch && typeof patch === 'object' && 'requireAdmin2fa' in patch) { console.warn('[settings] ignored requireAdmin2fa in /api/settings patch (use Settings → Security)'); delete patch.requireAdmin2fa; }
           // receiverAliases makes paths public (lib/modules/receivers): set only by hand in data/settings.json.
           if (patch && typeof patch === 'object' && 'receiverAliases' in patch) { console.warn('[settings] ignored receiverAliases in /api/settings patch (edit data/settings.json directly)'); delete patch.receiverAliases; }
+          // The command lockbox hub default (off | watch | enforce): a signed-in admin's own browser session only; a change is audited and told to the admins.
+          const lockboxCheck = require('./lib/lockbox/settings').checkDefaultPatch(patch, req, (k) => hubSettings.getSetting(k));
+          if (!lockboxCheck.ok) return jsonResponse(res, lockboxCheck.status, { error: lockboxCheck.error });
+          const lockboxChange = lockboxCheck.change;
           // Hub default for every member agent: grantable classes and valid decisions only (lib/tool-policy).
           if (patch && patch.memberPolicy !== undefined) patch.memberPolicy = require('./lib/tool-policy').sanitizeGrants({ policy: patch.memberPolicy }).policy || {};
           // Per-class approval cards: known class names only (lib/policy-gate APPROVAL_CLASSES).
@@ -2554,6 +2573,10 @@ async function handleHttpRequest(req, res) {
           }
           const providersChanged = !!(patch && patch.providers);
           hubSettings.updateSettings(patch);
+          if (lockboxChange) {
+            try { hubAuth.audit(String(req.hubUser.id), 'settings.lockboxDefault', lockboxChange, hubAuth.clientIp(req)); } catch {}
+            try { Promise.resolve(require('./lib/push').getPush().notify({ title: 'Command lockbox changed', body: lockboxChange, tag: 'lockbox-change' }, { adminsOnly: true, kind: 'security' })).catch(() => {}); } catch {}
+          }
           if (patch && patch.workersAtOnce !== undefined) getPacing().setCaps(hubSettings.getSetting('workersAtOnce'));
           // A new key or URL changes which models exist — rediscover now
           // rather than waiting for the 6-hour cycle.

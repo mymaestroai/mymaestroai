@@ -83,6 +83,19 @@
   .model-filter {
     margin-bottom: 8px;
   }
+
+  /* Command lockbox: everything wraps, so it fits at 360 px with no sideways scroll */
+  .lb-block { margin-top: 14px; min-width: 0; }
+  .lb-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .lb-row select { width: auto; max-width: 100%; min-width: 0; flex: 1 1 200px; }
+  .lb-text { color: #999; display: block; margin-top: 4px; overflow-wrap: anywhere; word-break: break-word; }
+  .lb-title { margin-top: 12px; font-size: 13px; color: #aaa; }
+  .lb-log { margin-top: 4px; font-size: 12px; color: #ccc; }
+  .lb-entry { padding: 6px 0; border-top: 1px solid #2a2a40; overflow-wrap: anywhere; word-break: break-word; }
+  .lb-entry:first-child { border-top: none; }
+  .lb-when { color: #aaa; }
+  .lb-path, .lb-cmd { font-family: monospace; font-size: 11px; color: #bbb; }
+  .lb-empty { color: #888; }
 </style>
 </head>
 <body>
@@ -373,6 +386,27 @@
   </div>
   <small id="sandbox-help" style="color:#999;display:block;margin-top:4px;">In a sandbox the agent's shell and file tools run in a container that holds only this agent's folders: no hub data, no keys, no other agents. Memory, Records, consultations and the policy gate stay in the hub. Needs Docker and the sandbox image (Settings page). Without them a sandboxed agent gets no shell rather than running on the host.</small>
   <div id="sandbox-status" class="status"></div>
+  <div id="lockbox-block" class="lb-block" style="display:none;">
+    <div class="lb-row">
+      <label for="lockbox-mode" style="margin:0;">Command lockbox</label>
+      <select id="lockbox-mode" onchange="saveLockbox()">
+        <option value="inherit">Hub default</option>
+        <option value="off">Off</option>
+        <option value="watch">Watch</option>
+        <option value="enforce">Enforce</option>
+      </select>
+    </div>
+    <small id="lockbox-help" class="lb-text"></small>
+    <div id="lockbox-status" class="status"></div>
+    <div id="lockbox-env-row" style="display:none;margin-top:10px;">
+      <label for="lockbox-env" style="margin:0 0 4px;">Environment variables kept</label>
+      <input type="text" id="lockbox-env" placeholder="NAME_ONE, NAME_TWO" autocomplete="off" spellcheck="false" onchange="saveLockboxEnv()">
+      <small class="lb-text">Comma-separated names. Inside the lockbox this agent's commands see only a short list of ordinary variables (PATH, HOME, LANG and the like) plus these.</small>
+      <div id="lockbox-env-status" class="status"></div>
+    </div>
+    <div id="lockbox-log-title" class="lb-title">Recently blocked</div>
+    <div id="lockbox-log" class="lb-log"></div>
+  </div>
   <div id="effort-row" style="display:flex;align-items:center;gap:8px;margin-top:14px;">
     <label for="effort-mode" style="margin:0;">Reasoning effort</label>
     <select id="effort-mode" onchange="saveEffort()" style="width:auto;">
@@ -465,6 +499,8 @@
     ['saveCategory', 'category-status', byId('agent-category')],
     ['saveLimits', 'limits-status', byId('context-budget', 'max-context-messages', 'max-output-tokens')],
     ['saveSandbox', 'sandbox-status', byId('sandbox-mode')],
+    ['saveLockbox', 'lockbox-status', byId('lockbox-mode')],
+    ['saveLockboxEnv', 'lockbox-env-status', byId('lockbox-env')],
     ['saveEffort', 'effort-status', byId('effort-mode')],
     ['saveCallDisplay', 'call-display-status', byId('call-display')],
     ['saveVoiceDefaults', 'voice-defaults-status', byId('voice-defaults', 'vd-pause', 'vd-wait', 'vd-sens', 'vd-speed')],
@@ -484,7 +520,7 @@
   // changed again while its save runs, is saved once more when that save ends, with its newest value. A Save button
   // pressed again meanwhile is refused with a message: a queued run would read the fields only when it starts and could
   // also save edits made after the press, so those edits stay unsaved until Save is pressed again.
-  const SAVES_ON_CHANGE = new Set(['saveCategory', 'saveLead', 'saveOwner', 'saveShared', 'saveModel', 'saveAutoModel', 'saveSandbox', 'saveEffort', 'saveCallDisplay', 'saveVoiceDefaults', 'saveToolsMode', 'saveRecordings', 'saveAgentVoice']);
+  const SAVES_ON_CHANGE = new Set(['saveCategory', 'saveLead', 'saveOwner', 'saveShared', 'saveModel', 'saveAutoModel', 'saveSandbox', 'saveLockbox', 'saveLockboxEnv', 'saveEffort', 'saveCallDisplay', 'saveVoiceDefaults', 'saveToolsMode', 'saveRecordings', 'saveAgentVoice']);
   const pendingSaves = {};   // status id -> { commit, reload, fields, settled, again }
   for (const [fn, statusId, fields, how] of SAVES) {
     const orig = window[fn];
@@ -945,6 +981,94 @@
       if (result && (result.success || result.ok)) showStatus('sandbox-status', 'success', v === 'container' ? 'Sandbox on: takes effect on the next turn' : v === 'off' ? 'Sandbox off' : 'Following the hub default');
       else showStatus('sandbox-status', 'error', (result && result.error) || 'Failed');
     } catch (e) { showStatus('sandbox-status', 'error', e.message); }
+  }
+  // lockbox:begin (the pure part is run by test/lockbox-settings.test.js)
+  const LOCKBOX_RULES = { 'write-outside': 'write outside its folders', 'secret-read': 'read a secret file', 'unix-socket': 'local socket', 'io_uring': 'io_uring', 'sudo-unconfined': 'ran with sudo, outside the box', 'watch-unavailable': 'watch not possible' };
+  const LOCKBOX_EFFECT = {
+    off: 'Commands run as they do today.',
+    watch: 'Commands run as today; anything the lockbox would have blocked is listed below.',
+    enforce: 'Commands can write only in this agent\'s folders, can\'t read secret files, and can\'t use docker, systemd or other local services. Git over SSH and signed commits fail inside it.',
+  };
+  const LOCKBOX_LEAD = 'The lead needs sudo for crontab, systemctl --user and docker.';
+  function lockboxCap(s) { return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
+  /** The effective mode: the agent's own choice, else the hub default. */
+  function lockboxEffective(setting, hubDefault) { return setting === 'inherit' ? (hubDefault || 'off') : setting; }
+  /** The one line under the select. status = the agent's row from /api/lockbox/status, host = status.host. */
+  function lockboxLine(mode, coverage, host, lead) {
+    if (coverage === 'container') return 'This agent\'s commands already run in its own container.';
+    if (coverage === 'codex-client') return 'This agent uses Codex\'s own tools, which the lockbox can\'t box; switch it to the hub\'s hands.';
+    if (coverage === 'unavailable') return 'Not available on this computer: ' + String((host && host.reason) || 'unknown reason').replace(/[.\s]+$/, '') + '.';
+    const base = LOCKBOX_EFFECT[mode] || LOCKBOX_EFFECT.off;
+    return mode === 'enforce' && lead ? base + ' ' + LOCKBOX_LEAD : base;
+  }
+  function lockboxRuleWords(rule) { return Object.prototype.hasOwnProperty.call(LOCKBOX_RULES, rule) ? LOCKBOX_RULES[rule] : String(rule || ''); }
+  function lockboxEnvNames(text) { return String(text || '').split(',').map(s => s.trim()).filter(Boolean); }
+  // lockbox:end
+
+  let lockboxState = { status: null, agent: null };
+  async function loadLockbox(agent) {
+    const block = document.getElementById('lockbox-block');
+    if (!block) return;
+    lockboxState.agent = agent || null;
+    try {
+      const r = await fetch('/api/lockbox/status', { credentials: 'include' });
+      if (!r.ok) { block.style.display = 'none'; return; }   // not an admin session: no control
+      lockboxState.status = await r.json();
+    } catch { block.style.display = 'none'; return; }
+    block.style.display = '';
+    const sel = document.getElementById('lockbox-mode');
+    sel.options[0].textContent = 'Hub default (' + lockboxCap(lockboxState.status.default || 'off') + ')';
+    sel.value = (agent && agent.lockbox) || 'inherit';
+    document.getElementById('lockbox-env').value = ((agent && agent.lockboxEnv) || []).join(', ');
+    renderLockbox();
+    loadLockboxLog();
+  }
+  /** The effect line, the variables box (Watch or Enforce only) and the log title follow the select. */
+  function renderLockbox() {
+    const st = lockboxState.status; if (!st) return;
+    const setting = document.getElementById('lockbox-mode').value;
+    const mode = lockboxEffective(setting, st.default);
+    const row = (st.agents || []).find(a => a.name === agentName) || {};
+    document.getElementById('lockbox-help').textContent = lockboxLine(mode, row.coverage || 'covered', st.host, !!(lockboxState.agent && lockboxState.agent.lead === true));
+    document.getElementById('lockbox-env-row').style.display = (mode === 'watch' || mode === 'enforce') ? '' : 'none';
+    document.getElementById('lockbox-log-title').textContent = mode === 'watch' ? 'Recently blocked (watch)' : 'Recently blocked';
+  }
+  async function loadLockboxLog() {
+    const box = document.getElementById('lockbox-log');
+    box.textContent = '';
+    let entries = [];
+    try {
+      const r = await fetch('/api/lockbox/watch?agent=' + encodeURIComponent(agentName) + '&limit=10', { credentials: 'include' });
+      if (r.ok) entries = (await r.json()).entries || [];
+    } catch { /* shown as nothing yet */ }
+    if (!entries.length) { const d = document.createElement('div'); d.className = 'lb-empty'; d.textContent = 'Nothing yet.'; box.appendChild(d); return; }
+    for (const e of entries.slice(0, 10)) {
+      const item = document.createElement('div'); item.className = 'lb-entry';
+      const when = document.createElement('div'); when.className = 'lb-when';
+      const t = e && e.ts ? new Date(e.ts) : null;
+      when.textContent = (t && !isNaN(t) ? t.toLocaleString() : '') + (t && !isNaN(t) ? ' · ' : '') + lockboxRuleWords(e && e.rule);
+      item.appendChild(when);
+      if (e && e.path) { const p = document.createElement('div'); p.className = 'lb-path'; p.textContent = String(e.path); item.appendChild(p); }
+      if (e && e.cmd) { const c = document.createElement('div'); c.className = 'lb-cmd'; c.textContent = String(e.cmd).slice(0, 80); item.appendChild(c); }
+      box.appendChild(item);
+    }
+  }
+  async function saveLockbox() {
+    const v = document.getElementById('lockbox-mode').value;
+    renderLockbox();
+    try {
+      const result = await apiFetch(`/api/agents/${encodeURIComponent(agentName)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lockbox: v }) });
+      if (result && (result.success || result.ok)) showStatus('lockbox-status', 'success', v === 'inherit' ? 'Following the hub default' : 'Command lockbox: ' + v);
+      else showStatus('lockbox-status', 'error', (result && result.error) || 'Failed');
+    } catch (e) { showStatus('lockbox-status', 'error', e.message); }
+  }
+  async function saveLockboxEnv() {
+    const names = lockboxEnvNames(document.getElementById('lockbox-env').value);
+    try {
+      const result = await apiFetch(`/api/agents/${encodeURIComponent(agentName)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lockboxEnv: names }) });
+      if (result && (result.success || result.ok)) showStatus('lockbox-env-status', 'success', 'Saved: takes effect with the next command');
+      else showStatus('lockbox-env-status', 'error', (result && result.error) || 'Failed');
+    } catch (e) { showStatus('lockbox-env-status', 'error', e.message); }
   }
   async function saveEffort() {
     const v = document.getElementById('effort-mode').value;
@@ -1455,6 +1579,7 @@
       document.getElementById('auto-model').checked = !!agent?.autoModel;
       fillAutoModelHelp(agent?.model || currentModel);
       const sbSel = document.getElementById('sandbox-mode'); if (sbSel) sbSel.value = agent?.sandbox || 'inherit';
+      loadLockbox(agent);
       const toolsSel = document.getElementById('tools-mode'); if (toolsSel) toolsSel.value = agent?.tools || 'inherit';
       const effSel = document.getElementById('effort-mode'); if (effSel) effSel.value = agent?.effort || 'default';
       loadCallDisplay(agent);
