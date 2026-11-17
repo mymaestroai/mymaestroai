@@ -340,6 +340,43 @@ The provider never summarises an agent's session. At the threshold (`compaction.
 
 The hub stores every time in UTC; an agent reads them in the local time of the person it works for, with the zone named. That zone is its owner's, or for the hub's own agents (no owner) the first admin's; until a zone has been reported, `HUB_TZ`, else the computer's zone, else UTC. Every turn starts with `<local_time zone="America/New_York">Wednesday, October 28, 2026 at 3:47 PM EDT</local_time>` (the Claude and Codex clients: before the message; the gateway: before `<hub_context>`, with `<current_request sent="Oct 28 2026 15:47 EDT" zone="…">`). Written in that zone: the hub's search hits and recent conversation (`lib/agents.js`), `recall` and `recall_context` results (a `from`/`to` without a zone is read in it, and a bare `to` date means the end of that day), the gateway's history stamps, compression chunks (`chunkRows`), session-note dates and times (and the days dreaming counts), the dates in `record_list` and the Files folder index, and `schedule_task` times without a zone (each task keeps the zone it was made in). The THIS HUB brief and the Claude plan's reset times use the hub's zone. The system prompt's TIME section tells the agent all this, and that times it reads in files itself (logs, ISO strings ending in Z) are UTC.
 
+### 7.7 Self-check (`lib/selfcheck/`)
+
+Real turns on the real model clients, so a change in a client (as on Nov 10, when the Claude client refused writes outside its working folder) is caught within a minute.
+- **When:** 60 s after start (skipped if the last run started under 30 minutes ago; `HUB_SELFCHECK=off` turns start and nightly runs off), nightly at `selfCheck.nightlyAt` in the hub's zone (once per local date, up to 3 hours late; any run over 26 hours old catches up), and Run now. One run at a time; skipped while the hub is halted.
+- **Check agents:** one per class in `selfCheck.classes`:
+  - `lead` (lead record, client tools);
+  - `host` (specialist, client tools);
+  - `boxed` (sandbox container, hub hands; skipped without Docker or the image);
+  - `shared` (specialist shared with `selfcheck:member`, a made-up id, so it is member-reachable).
+
+  Each is a temporary-worker virtual agent named `selfcheck-<class>` with its own synthetic record (`createVirtual({ selfCheck: true, id, record, observe })`), never in agents.json or any list, with no parent. Its turn is ephemeral: no chat, session, transcript, event or memory.
+  - `sdk-chat` `turnAgentRecord` gives the record to the gate's getAgent, handsForTurn, leadFor, agentEffort, ownerOfAgent and the job runner only; never to lead lists, consult or turn permissions, access, wallet, approvals or push.
+  - Records override send, web, admin, destroy and money to deny, and the gate turns any "ask" into a deny for them (no card, no allowance).
+  - Tools: exactly Read, Write, Edit, Glob, Grep and Bash (`queryOptions.tools`, the disallow list, the hands server's blocked list and the gateway allow-list).
+  - The model: `selfCheck.model`; `auto` = the newest available `claude-sdk/*haiku*`, else `*sonnet*`, else the lead's model when it runs on the gateway loop. Codex and Perplexity are never used, since their own tools can't be observed.
+  - The name prefix `selfcheck-` is refused for real agents.
+- **The turn:** fixtures in `<install>/workspaces/selfcheck-<class>/` (inside the client's working folder) and `<hub home>/selfcheck/<class>/` (outside it; only lead roots cover it):
+  - made 0700 with no link on the path and O_NOFOLLOW files, with fresh nonces each run;
+  - hash-checked, and `write.txt`/`bash.txt` checked absent, just before the turn.
+
+  The scripted prompt asks, per folder: Read a file and a 4-digit PNG, Write, Edit, Glob, Grep, and one exact Bash command; then once, Read a never-existing file under `<hub home>/call-recordings/`, which the policy refuses for every role.
+- **Verdicts (`verify.js`), never from the model's word alone:** the gate's decisions (`createGate` `onDecision`, the outcome) and the real tool results (PostToolUse and PostToolUseFailure hooks for check agents; the handler results on the gateway loop), plus the files on disk.
+  - Allowed with no result is "Your Maestro's rules allowed it, but the Claude client refused it" (the Nov 10 shape).
+  - Another tool doing a Write or Edit step fails it ("done another way").
+  - Refuse passes only on an observed deny.
+  - Any allowed write outside the two folders fails the class.
+  - A step not tried gets one retry turn.
+  - A model or provider failure is "couldn't run", with no push.
+- **Results:** `data/selfcheck.json` (lastRun with per-class, per-action ok and reason, failingSince, notified, 14 runs of history, lastNightlyDate). Settings → Status → Self-check (admins; `?selfcheck=1`); a Status readiness item; `GET /api/selfcheck`, `POST /api/selfcheck/run`, `PUT /api/selfcheck/settings` (admin only, `lib/selfcheck-routes.js`).
+- **Push:** a push to admins (kind `security`, tag `selfcheck`) only for failures not told before, with which kind of agent, what, the reason and since when. Recovery is silent.
+- **A check that can't run:** "couldn't run" (a class whose turn failed, or a run with no model to test with) three runs in a row is a failure of its own:
+  - one push ("The self-check hasn't been able to run since 3:45 AM (Claude plan limit).") and a Status warning;
+  - `stuck` in `data/selfcheck.json`;
+  - it starts over once the class runs again;
+  - a halted hub and a missing Docker don't count.
+- **Settings:** `selfCheck { enabled: true, afterStart: true, nightlyAt: "03:45", classes: [lead, host, boxed, shared], model: "auto" }`.
+
 ---
 
 ## 8. Tools, hands and policy
