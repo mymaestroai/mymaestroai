@@ -116,8 +116,10 @@ test('off parity, sdkHook: {} for an allowed Bash call, with or without lockboxF
   const mk = (extra) => createGate({ getAgent: async () => AGENT_OFF, approvals: null, ...extra }).sdkHook({ agentName: 'agent-a', cwd: w.ws });
   assert.deepStrictEqual(await mk({})(hookInput), {});
   assert.deepStrictEqual(await mk({ lockboxFor: wire.lockboxFor })(hookInput), {});
-  const sandboxedHook = createGate({ getAgent: async () => AGENT_ENFORCE, approvals: null, lockboxFor: () => { throw new Error('not asked'); } }).sdkHook({ agentName: 'agent-a', cwd: w.ws, sandboxed: true });
-  assert.deepStrictEqual(await sandboxedHook(hookInput), {}, 'a client that runs in a container is not boxed again');
+  // An agent in a sandbox box (security R2): its client holds no Bash of its own, so the call is refused by the boxed
+  // allow-list before the lockbox is ever asked; its hands run in the box, never in the lockbox.
+  const boxedHook = createGate({ getAgent: async () => AGENT_ENFORCE, approvals: null, lockboxFor: () => { throw new Error('not asked'); } }).sdkHook({ agentName: 'agent-a', cwd: w.ws, boxed: true });
+  assert.strictEqual((await boxedHook(hookInput)).decision, 'block', 'a boxed agent\'s client Bash is refused, not boxed again');
   const mcpHook = createGate({ getAgent: async () => AGENT_ENFORCE, approvals: null, lockboxFor: () => { throw new Error('not asked'); } }).sdkHook({ agentName: 'agent-a', cwd: w.ws });
   assert.deepStrictEqual(await mcpHook({ ...hookInput, tool_name: 'mcp__hub__Bash' }), {}, 'the hub\'s Bash is boxed by the hub tools, not here');
 });
@@ -270,6 +272,29 @@ test('hub Bash, enforce: writes in its workspace, not outside; the hint line; no
     assert.strictEqual(free.text, 'sekrit-value\nend', 'control: unboxed it is there');
     const other = await tools.call('Bash', { command: 'ls /nonexistent-lockbox-path' });
     assert.ok(!other.text.includes('[lockbox]'), 'no hint for an ordinary failure');
+  } finally { delete process.env.LOCKBOX_WIRE_SECRET; }
+});
+
+test('hub Bash: the allow-listed environment reaches the command boxed or not; the box keeps the shared base names', { skip: NO_BOX }, async () => {
+  const w = world();
+  const wire = wireFor(w, { agents: [AGENT_ENFORCE], rolesAdmin: BOX_OK });
+  const env = { PATH: process.env.PATH, HOME: process.env.HOME, LANG: 'C.UTF-8', PORT: '9961', XDG_FAKE_DIR: '/tmp/fake-xdg' };
+  process.env.LOCKBOX_WIRE_SECRET = 'sekrit-value';
+  try {
+    const boxed = createHubTools({ cwd: w.ws, log: () => {}, env, lockboxFor: (o) => wire.lockboxFor({ ...o, agentName: 'agent-a', sandboxed: false }) });
+    const plain = createHubTools({ cwd: w.ws, log: () => {}, env });
+    const cmd = 'printenv PORT; printenv XDG_FAKE_DIR; printenv LOCKBOX_WIRE_SECRET; echo end';
+    let a, b;
+    const calls = await recordSpawns(async () => { a = (await boxed.call('Bash', { command: cmd })).text; b = (await plain.call('Bash', { command: cmd })).text; });
+    const spawned = calls.filter(c => c[2] && c[2].env);
+    assert.strictEqual(spawned.length, 2);
+    for (const c of spawned) {
+      assert.strictEqual(c[2].env.PORT, '9961', 'the given environment is the one spawned, boxed or not');
+      assert.strictEqual(c[2].env.TERM, 'dumb');
+      assert.ok(!('LOCKBOX_WIRE_SECRET' in c[2].env), 'the hub\'s own variables are not inherited');
+    }
+    assert.strictEqual(a, '9961\nend', 'boxed: a base name passes; a name only the host list keeps is dropped by the box');
+    assert.strictEqual(b, '9961\n/tmp/fake-xdg\nend');
   } finally { delete process.env.LOCKBOX_WIRE_SECRET; }
 });
 

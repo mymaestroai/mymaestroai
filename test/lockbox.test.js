@@ -104,6 +104,20 @@ test('buildProfile for a worker', () => {
   assert.strictEqual(lb.buildProfile({ agent, policy, mode: 'watch', tool: 'run_job', command: 'x'.repeat(500), ...base(w) }).label.length, 300);
 });
 
+test('buildProfile keeps the same base names as the hub\'s other spawns, and the names an admin granted with envKeep', () => {
+  const childEnv = require('../lib/child-env');
+  assert.deepStrictEqual(lb.ENV_KEEP, childEnv.BASE_KEEP, 'one base list for the box and the allow-listed environment');
+  assert.ok(lb.ENV_KEEP.includes('PORT'));
+  const w = world();
+  const agent = { name: 'agent-a', envKeep: ['GH_TOKEN', 'MY_SETTING'], lockboxEnv: ['OTHER_NAME'] };
+  lb.prepareAgentDirs('agent-a', { hubHome: w.hubHome });
+  const p = lb.buildProfile({ agent, policy: policyOf(agent, [], w), mode: 'enforce', tool: 'Bash', command: 'x', ...base(w) });
+  for (const n of ['GH_TOKEN', 'MY_SETTING', 'OTHER_NAME', 'PORT', 'PATH']) assert.ok(p.env.keep.includes(n), n);
+  // A malformed envKeep (as child-env would refuse it) adds nothing.
+  const q = lb.buildProfile({ agent: { name: 'agent-a', envKeep: 'GH_TOKEN' }, policy: policyOf(agent, [], w), mode: 'enforce', tool: 'Bash', command: 'x', ...base(w) });
+  assert.deepStrictEqual(q.env.keep, lb.ENV_KEEP);
+});
+
 test('a root that contains the lockbox folders (an agent granted the whole hub home) builds a box laid out around them', () => {
   const w = world();
   const agent = { name: 'agent-a' };
