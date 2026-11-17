@@ -71,3 +71,11 @@ test('chunkRows: slices by characters, keeps lines whole, truncates a single ove
   assert.strictEqual(cb.estimateTokens('x'.repeat(360)), 100);
   assert.strictEqual(cb.tokensToChars(100), 360);
 });
+
+test('windowForAgent asks an oMLX server for the model window (max_model_len), like NInfer', async () => {
+  const probeModels = async () => new Map([['test-model', 262144]]);
+  assert.deepStrictEqual(await cb.windowForAgent({}, 'omlx/test-model', { omlxUrl: 'http://127.0.0.1:9/v1', probeModels }), { window: 262144, source: 'omlx' });
+  assert.strictEqual((await cb.windowForAgent({}, 'omlx/test-model', { probeModels })).source, 'table');
+  assert.strictEqual((await cb.windowForAgent({}, 'omlx/other', { omlxUrl: 'http://127.0.0.1:9/v1', probeModels })).source, 'table');
+  assert.deepStrictEqual(await cb.windowForAgent({ contextWindow: 16384 }, 'omlx/test-model', { omlxUrl: 'http://127.0.0.1:9/v1', probeModels }), { window: 16384, source: 'agent' });
+});

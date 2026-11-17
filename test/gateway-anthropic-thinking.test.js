@@ -90,7 +90,9 @@ test('the turn loop: provider errors in the stream, a stall message, room to thi
   assert.match(sdk, /if \(streamState\.stalled\) throw new Error\(`No data from \$\{prov\} for \$\{Math\.round\(\(streamState\.stallMs \|\| 120000\) \/ 1000\)\} s, not even a keep-alive/);
   assert.match(sdk, /const hubMaxLowered = Number\(global\.__maxCompletionTokens\) > 0 && Number\(global\.__maxCompletionTokens\) < 32000;/);
   assert.match(sdk, /if \(\/\^anthropic\\\/claude-\(\?:fable\|opus\|sonnet\|haiku\)-5\/i\.test\(model\) && !\['low', 'medium'\]\.includes\(turnEffort\) && !\(agentConfig && agentConfig\.maxOutputTokens\) && !hubMaxLowered\) maxTokens = Math\.max\(maxTokens, 64000\);/);
-  assert.match(sdk, /if \(\/claude-\(\?:fable\|opus\|sonnet\|haiku\)-5\/i\.test\(m\)\) return 128000;/);
+  // the per-model output table moved to lib/output-cap.js (hostedOutputCap), unchanged
+  assert.match(read('lib/output-cap.js'), /if \(\/claude-\(\?:fable\|opus\|sonnet\|haiku\)-5\/i\.test\(m\)\) return 128000;/);
+  assert.match(sdk, /effectiveOutputTokens\(\{ model, maxTokens,/);
   const i = sdk.indexOf("if (lastFinishReason === 'length') {");
   const block = sdk.slice(i, i + 700);
   assert.match(block, /if \(!assistantText && allCalls\.length === 0\) \{\s*throw new Error\(`\$\{model\} used its whole output allowance/);

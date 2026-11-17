@@ -230,7 +230,7 @@ function gatewayRun({ calls, options, abortAfterFirstCall, model }) {
     buildAllTools: async () => ({ openaiTools: [], handlers: new Map([['Echo', async () => 'echoed']]) }),
     visualsTextFor: async () => '', connectorsTextFor: () => '', hubBriefTextFor: async () => '',
     peerAgents: async () => [], workerPolicy: { buildRoster: () => [], platformPolicyText: () => '' },
-    contextBudget: L('context-budget'), records: { maxBytesFor: () => 262144 },
+    contextBudget: L('context-budget'), effectiveOutputTokens: L('output-cap').effectiveOutputTokens, records: { maxBytesFor: () => 262144 },
     compaction: { compactedAt: () => null, noteUsage: () => null, settingsFor: () => ({ mode: 'off' }) },
     trimConversation: x => x, annotateForContext: x => x, capOutputTokens: () => 500, stableTrim: x => x,
     gate: { check: async () => ({ allowed: true }) },

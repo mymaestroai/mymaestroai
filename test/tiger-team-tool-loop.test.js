@@ -23,7 +23,7 @@ function harness(respond, toolHandlers = {}) {
     setInterval: () => 1, clearInterval() {}, setTimeout: cb => { cb(); return 1; },
     INCREMENTAL_SAVE_INTERVAL_MS: 3000, HEARTBEAT_INTERVAL_MS: 15000,
     makeProgressTicker: () => 1, sendSSEHeartbeat() {},
-    contextBudget: require('../lib/context-budget'), records: { maxBytesFor: () => 262144 }, compaction: { compactedAt: () => null, noteUsage: () => null, settingsFor: () => ({ mode: 'off' }) },   // elastic context + compression are no-ops here
+    contextBudget: require('../lib/context-budget'), effectiveOutputTokens: require('../lib/output-cap').effectiveOutputTokens, records: { maxBytesFor: () => 262144 }, compaction: { compactedAt: () => null, noteUsage: () => null, settingsFor: () => ({ mode: 'off' }) },   // elastic context + compression are no-ops here
     trimConversation: x => x, annotateForContext: x => x, capOutputTokens: () => 500,
     gate: { check: async () => ({ allowed: true }) }, ledger: { record() {} },   // tool policy + ledger are no-ops in this sandbox
     sendSSE: (res, event) => events.push(event), makeChunk: (content, model, gateway) => ({ content, model, gateway }),
