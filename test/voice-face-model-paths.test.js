@@ -215,10 +215,11 @@ test('the three provider calls get the checked boolean, not the request\'s own v
 const sse = (content, extra) => ({ choices: [{ delta: { content }, ...(extra || {}) }] });
 const toolCall = (id, name) => ({ choices: [{ delta: { tool_calls: [{ index: 0, id, function: { name, arguments: '{}' } }] }, finish_reason: 'tool_calls' }] });
 
-function gatewayRun({ calls, options, abortAfterFirstCall, model }) {
+function gatewayRun({ calls, options, abortAfterFirstCall, model, extra }) {
   const run = newRun();
   const requests = [];
   const systems = [];
+  const optsSeen = [];   // every gateway call's opts (max_tokens, system, tools ...), as the call saw them
   let n = 0;
   const abort = new AbortController();
   const explicit = baseExplicit(run, {
@@ -248,6 +249,7 @@ function gatewayRun({ calls, options, abortAfterFirstCall, model }) {
     chatCompletionStream: async (messages, opts) => {
       requests.push(structuredClone(messages));
       systems.push(opts.system);
+      optsSeen.push({ ...opts, tools: opts.tools ? structuredClone(opts.tools) : opts.tools });
       return { call: n++ };
     },
     parseSSEStream: async function* (response, state) {
@@ -260,12 +262,81 @@ function gatewayRun({ calls, options, abortAfterFirstCall, model }) {
       state.sawDone = true;
     },
   });
+  Object.assign(explicit, extra || {});
   const ctx = makeSandbox(explicit);
   loadHelpers(ctx);
   loadInto(ctx, GATEWAY);
   const exec = () => runChecked(() => ctx.streamViaGateway('ada', 'hello there', [], fakeRes(), { voice: true, faceMood: false, ...options, signal: abort.signal }));
-  return { exec, run, requests, systems, ctx, abort };
+  return { exec, run, requests, systems, opts: optsSeen, ctx, abort };
 }
+
+// ── gateway output ceiling ──
+const toolCallWith = (id, name, args) => ({ choices: [{ delta: { tool_calls: [{ index: 0, id, function: { name, arguments: JSON.stringify(args || {}) } }] }, finish_reason: 'tool_calls' }] });
+const ceilingAgent = (model) => async () => [{ name: 'ada', model, minimalContext: true, maxOutputTokens: 100000, contextWindow: 65536 }];
+const ceilingExpect = (o, messages) => {
+  const E = L('context-budget').estimateTokens;
+  return Math.max(32000, 65536 - (E(o.system) + E(JSON.stringify(o.tools || [])) + E(JSON.stringify(messages))) - 1024);
+};
+const echoTool = { type: 'function', function: { name: 'Echo', description: 'echo', parameters: { type: 'object', properties: {} } } };
+
+test('gateway output ceiling: a local model gets the room its window leaves, measured at each call', async () => {
+  const g = gatewayRun({
+    model: 'local/test-model',
+    calls: [[toolCall('c1', 'Echo')], chunksOf(['All done.'])],
+    extra: {
+      getAgents: ceilingAgent('local/test-model'),
+      buildAllTools: async () => ({ openaiTools: [echoTool], handlers: new Map([['Echo', async () => 'echoed '.repeat(500)]]) }),
+    },
+  });
+  await g.exec();
+  assert.equal(g.opts.length, 2);
+  for (let i = 0; i < 2; i++) {
+    assert.equal(g.opts[i].max_tokens, ceilingExpect(g.opts[i], g.requests[i]), `call ${i + 1}`);
+    assert.ok(g.opts[i].max_tokens > 32000, `call ${i + 1} is above the floor`);
+  }
+  assert.ok(g.opts[1].max_tokens < g.opts[0].max_tokens, 'the second call has less room: the messages grew');
+});
+
+test('gateway output ceiling: tools loaded mid-turn by lazy loading are counted on the next call', async () => {
+  const big = (i) => ({ type: 'function', function: { name: `Big_${i}`, description: 'x'.repeat(5000), parameters: { type: 'object', properties: {} } } });
+  const requestTools = { type: 'function', function: { name: 'request_tools', description: 'load', parameters: { type: 'object', properties: { categories: { type: 'array' } } } } };
+  const g = gatewayRun({
+    model: 'local/test-model',
+    calls: [[toolCallWith('c1', 'request_tools', { categories: ['big'] })], chunksOf(['Loaded.'])],
+    extra: {
+      getAgents: ceilingAgent('local/test-model'),
+      ALWAYS_INCLUDE: [], TOOL_CATEGORIES: { big: /^Big_/ }, global: { __lazyToolsEnabled: true },
+      // the sandbox does not slice the real filter out of sdk-chat.js; this mirrors it (categorised tools only when their category is active, the rest always)
+      filterToolsByCategories: (tools, active) => tools.filter(t => {
+        const name = t.function.name;
+        if (name === 'request_tools') return true;
+        return /^Big_/.test(name) ? active.has('big') : true;
+      }),
+      buildAllTools: async () => ({ openaiTools: [requestTools, echoTool, big(1), big(2), big(3), big(4)], handlers: new Map([['Echo', async () => 'echoed']]) }),
+    },
+  });
+  await g.exec();
+  assert.equal(g.opts.length, 2);
+  assert.ok(!g.opts[0].tools.some(t => /^Big_/.test(t.function.name)), 'call 1 has no big tools');
+  assert.ok(g.opts[1].tools.length > g.opts[0].tools.length, 'the tool set grew');
+  const grew = JSON.stringify(g.opts[1].tools).length - JSON.stringify(g.opts[0].tools).length;
+  assert.ok(grew >= 20000, `grew by ${grew} chars`);
+  for (let i = 0; i < 2; i++) assert.equal(g.opts[i].max_tokens, ceilingExpect(g.opts[i], g.requests[i]), `call ${i + 1}`);
+  assert.ok(g.opts[1].max_tokens < g.opts[0].max_tokens);
+});
+
+test('gateway output ceiling: hosted models never use the window', async () => {
+  for (const [model, want] of [['openai/gpt-x', 100000], ['acme/cloud-model', 32000]]) {
+    const g = gatewayRun({
+      model,
+      calls: [[toolCall('c1', 'Echo')], chunksOf(['Done.'])],
+      extra: { getAgents: ceilingAgent(model) },
+    });
+    await g.exec();
+    assert.equal(g.opts.length, 2, model);
+    for (const o of g.opts) assert.equal(o.max_tokens, want, model);
+  }
+});
 
 function chunksOf(parts) { return parts.map((p, i) => sse(p, i === parts.length - 1 ? { finish_reason: 'stop' } : undefined)); }
 
