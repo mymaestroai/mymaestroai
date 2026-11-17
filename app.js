@@ -8697,7 +8697,7 @@
         return;
       }
       if (!chats[t.chatId] || !ev.text) return;
-      if (simpleOn()) simpleFirstReply(t.chatId, t.msgId);   // Simple: the Thinking box goes at the first reply text
+      if (typeof simpleOn === 'function' && simpleOn()) simpleFirstReply(t.chatId, t.msgId);   // Simple: the Thinking box goes at the first reply text
       t.text = ev.text;
       paintTurn(t.chatId, t, t.text);
     }
@@ -9461,7 +9461,7 @@
       panels.appendChild(panel);
       // Fill the model picker now, so its list is complete before the first click (modelPickDown).
       setTimeout(() => fillModelPick(chatId), 0);
-      simpleComposerInit(chatId);   // Simple: the reasoning level button in the composer (inert in Advanced)
+      if (typeof simpleComposerInit === 'function') simpleComposerInit(chatId);   // Simple: the reasoning level button in the composer (inert in Advanced)
       setTimeout(() => { if (voiceStatus) voicePaint(); else voiceRefreshStatus(); }, 0);
       
       // Initialize pending images array for this chat
@@ -10465,7 +10465,7 @@
           headers: { 'Content-Type': 'application/json', ...zoneHeader() },
           signal: chat.controller.signal,
           body: JSON.stringify({
-            ...(simpleOn() ? simpleEffortBody(window.hubSimple, chat.agent, effortSupported(chatModelOf(chat)) && !chat.autoModel) : {}),   // Simple: this chat's reasoning level
+            ...(typeof simpleOn === 'function' && simpleOn() ? simpleEffortBody(window.hubSimple, chat.agent, effortSupported(chatModelOf(chat)) && !chat.autoModel) : {}),   // Simple: this chat's reasoning level
             agent: chat.agent,
             message: content,
             images: imagesToSend,
@@ -10520,7 +10520,7 @@
         notify(null);
 
         const { text: fullResponse, images: responseImages, toolActivity, partial, steps: responseSteps } = await streamResponseSolo(response, msgId, chatId, chat.agent);
-        simpleThinkClear(chatId);   // Simple: nothing of the Thinking box stays after the turn
+        if (typeof simpleThinkClear === 'function') simpleThinkClear(chatId);   // Simple: nothing of the Thinking box stays after the turn
         if (!partial) setMessageTime(document.getElementById(msgId), msgTimeLine(Date.now(), chat.sentAtMs));
         if (!partial) attachFileCards(document.getElementById(msgId));   // the turn ended: download cards
         if (!partial && chat.voiceTurn) { chat.voiceTurn = false; voiceAutoRead(chat, msgId, fullResponse); }
@@ -10544,7 +10544,7 @@
         delete chat.lastMsgId;
       } catch (err) {
         notify(err);   // a no-op once the hub took the message
-        simpleThinkClear(chatId);   // Simple: an error or a stop ends the Thinking box
+        if (typeof simpleThinkClear === 'function') simpleThinkClear(chatId);   // Simple: an error or a stop ends the Thinking box
         // Detect user-initiated cancel: AbortError, or any error while status is already idle
         // (cancelRequest sets idle before the fetch error propagates)
         const hubRecovered = chat.forceReattach === true;
@@ -11648,7 +11648,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
 
             const delta = parsed.choices?.[0]?.delta?.content;
             if (delta) {
-              if (simpleOn()) simpleFirstReply(chatId, msgId);   // Simple: the Thinking box goes at the first reply text
+              if (typeof simpleOn === 'function' && simpleOn()) simpleFirstReply(chatId, msgId);   // Simple: the Thinking box goes at the first reply text
               fullResponse += delta;
               displayContent += delta;
 
@@ -18225,7 +18225,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (st.live && st.chatId) updateToolActivity(st.chatId, `Reasoning · ${words.toLocaleString()} words`, true);
       if (st.live && host.parentElement) autoScroll(host.parentElement);   // keep a growing live panel in view (unless scrolled up)
       if (rsnFullFor === msgId) paintReasoningFull();
-      simpleThinkPaint(msgId, st);   // Simple: the same reasoning as a small box above the reply
+      if (typeof simpleThinkPaint === 'function') simpleThinkPaint(msgId, st);   // Simple: the same reasoning as a small box above the reply
     }
 
     // ⤢: the reasoning at the size of the window (live while the turn runs). Esc, ✕ or a click outside closes it.
@@ -18942,7 +18942,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       scheduleWorkerListRefresh();
     }
     function handleWorkerEvent(chatId, oc) {
-      simpleConsultNote(chatId, oc);   // Simple: "Asking <agent>…" in the Thinking box (inert in Advanced)
+      if (typeof simpleConsultNote === 'function') simpleConsultNote(chatId, oc);   // Simple: "Asking <agent>…" in the Thinking box (inert in Advanced)
       if (oc && oc.worker_id != null && /^worker_(started|text_delta|tool_start|tool_use|tool_result)$/.test(oc.type)) reopenEndedWorkerRun(oc.worker_id);
       if (oc.type === 'worker_started') {
         const workerId = String(oc.worker_id);

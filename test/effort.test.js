@@ -52,7 +52,7 @@ test('Codex client: model_reasoning_effort on both transports', () => {
 
 test('wired: Claude client query option, gateway option, Codex; agent field validated; members cannot change it', () => {
   const chat = read('lib/sdk-chat.js');
-  assert.match(chat, /const sdkEffort = effortLib\.forTurn\(`claude-sdk\/\$\{sdkModel\}`, options\.effort, await agentEffort\(agentName\)\);/);
+  assert.match(chat, /const sdkEffort = options && options\.effort \? effortLib\.forTurn\(`claude-sdk\/\$\{sdkModel\}`, options\.effort, await agentEffort\(agentName\)\) : effortLib\.forModel\(`claude-sdk\/\$\{sdkModel\}`, await agentEffort\(agentName\)\);/);
   assert.match(chat, /\.\.\.\(sdkEffort \? \{ effort: sdkEffort \} : \{\}\),/);
   assert.match(chat, /agent: agentName, effort: turnEffort \}/);
   assert.match(chat, /ephemeral: !!ephemeral, effort: codexEffort, reasoningSummary: showReasoning\(\) \? 'auto' : null \}\);/);
