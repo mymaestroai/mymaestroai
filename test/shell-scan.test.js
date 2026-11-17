@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { scanCommand, segmentWords, SHELL_WORDS } = require('../lib/shell-scan');
+const { scanCommand, segmentWords, SHELL_WORDS, commandWords, normalizeSegment, dequote, rawWords } = require('../lib/shell-scan');
 
 const segs = (t, o) => scanCommand(t, o).segments;
 const ok = (t, o) => scanCommand(t, o).ok;
@@ -225,4 +225,81 @@ test('a program computed at run time may be a shell: the bodies become commands'
   assert.ok(!segs('[ -f /tmp/a ] && cat > /tmp/b <<\'EOF\'\nrm -rf /tmp/x\nEOF').includes('rm -rf /tmp/x'));
   assert.ok(!segs('cat > "$HOME/notes" <<\'EOF\'\nrm -rf /tmp/x\nEOF').includes('rm -rf /tmp/x'));
   assert.ok(!segs('X=1 python3 - <<\'EOF\'\nrm -rf /tmp/x\nEOF').includes('rm -rf /tmp/x'));
+});
+
+// ── review r1 ────────────────────────────────────────────────────────
+
+test('review r1 A: only space and tab are blanks; CR, VT and FF belong to the word', () => {
+  // the terminator is EOF\r, so the body ends there and the next line runs
+  assert.deepStrictEqual(segs('cat <<EOF\r\nbody\nEOF\r\nrm -rf /tmp/x\n').slice(-1), ['rm -rf /tmp/x']);
+  assert.ok(!segs('cat <<EOF\r\nbody\nEOF\r\nrm -rf /tmp/x\n').includes('body'));
+  // x\r# is one word, so the # starts no comment
+  assert.ok(segs('printf x\r#; rm -rf /tmp/x\n').includes('rm -rf /tmp/x'));
+  assert.deepStrictEqual(rawWords('a\rb\vc\fd e\tf\ng'), ['a\rb\vc\fd', 'e', 'f', 'g']);
+  assert.deepStrictEqual(segmentWords('a\rb\vc\fd e\tf\ng'), ['a\rb\vc\fd', 'e', 'f', 'g']);
+  // a keyword followed by CR is not a keyword
+  assert.deepStrictEqual(segs('then\rx'), ['then\rx']);
+});
+
+test('review r1 B: an unquoted body joins backslash-newline before its substitutions are read', () => {
+  assert.ok(segs('cat <<EOF\n$\\\n(rm -rf /tmp/x)\nEOF\n').includes('rm -rf /tmp/x'));
+  assert.ok(segs('cat <<EOF\n`rm -rf /tmp/x`\nEOF\n').includes('rm -rf /tmp/x'));
+  // an escaped $ stays escaped
+  assert.ok(!segs('cat <<EOF\n\\$(rm -rf /tmp/x)\nEOF\n').includes('rm -rf /tmp/x'));
+  // a quoted body is data
+  assert.ok(!segs('cat <<\'EOF\'\n$\\\n(rm -rf /tmp/x)\nEOF\n').includes('rm -rf /tmp/x'));
+});
+
+test('review r1 C: the command word decides whether a body is code', () => {
+  const body = '\nrm -rf /tmp/x\nEOF';
+  const code = (head) => segs(head + body).includes('rm -rf /tmp/x');
+  for (const head of [
+    "A=1 . /dev/stdin <<'EOF'", "<<'EOF' . /dev/stdin", "command . /dev/stdin <<'EOF'", "builtin . /dev/stdin <<'EOF'",
+    "2>&1 . /dev/stdin <<'EOF'", "env at now <<'EOF'", "timeout 5 crontab - <<'EOF'", "<<'EOF' crontab -",
+    '0<<\'EOF\' "$BASH"', "<< 'EOF' bash", "csh <<'EOF'", "pwsh <<'EOF'", "/usr/bin/tcsh <<'EOF'", "cat <<'EOF' | {a,b}",
+  ]) assert.ok(code(head), head);
+  for (const head of [
+    "[ -f /tmp/a ] && cat > /tmp/b <<'EOF'", 'cat > "$HOME/notes" <<\'EOF\'', "X=1 python3 - <<'EOF'", "cat <<'EOF'", "cat > /tmp/f 2>&1 <<'EOF'",
+  ]) assert.ok(!code(head), head);
+  assert.ok(!segs('git commit -m "$(cat <<\'EOF\'\nrm -rf notes\nEOF\n)"').includes('rm -rf notes'));
+  const cw = commandWords('A=1 >/tmp/f env -i X=2 "command" r\'\'m -rf');
+  assert.deepStrictEqual(cw.map(w => w.word), ['env', 'command', 'rm']);
+  assert.strictEqual(cw[2].raw, "r''m");
+});
+
+test('review r1 D: ${ or a backtick in a heredoc delimiter is a problem', () => {
+  assert.ok(!ok('cat <<${x:-a b}\nbody\n${x:-a b}\nrm -rf /tmp/x'));
+  assert.ok(!ok('cat <<`echo EOF`\nbody\nEOF'));
+  assert.ok(!ok('cat <<"${x}"\nbody\n${x}\n'));
+  assert.ok(ok('cat <<$x\nbody\n$x\n'));
+});
+
+test('review r1 E: normalizeSegment removes quotes from command words and expands their braces', () => {
+  const n = normalizeSegment;
+  assert.strictEqual(n("r''m -rf /tmp/x"), 'rm -rf /tmp/x');
+  assert.strictEqual(n("'r'm -rf /tmp/x"), 'rm -rf /tmp/x');
+  assert.strictEqual(n('r\\m -rf /tmp/x'), 'rm -rf /tmp/x');
+  assert.strictEqual(n("$'rm' -rf /tmp/x"), 'rm -rf /tmp/x');
+  assert.strictEqual(n("$'\\x72m' -rf /tmp/x"), 'rm -rf /tmp/x');
+  assert.strictEqual(n("$'\\162\\u006d' -rf /tmp/x"), 'rm -rf /tmp/x');
+  assert.strictEqual(n("/bin/r''m -rf /tmp/x"), '/bin/rm -rf /tmp/x');
+  assert.strictEqual(n("command r''m -rf /tmp/x"), 'command rm -rf /tmp/x');
+  assert.strictEqual(n("su''do ls /root"), 'sudo ls /root');
+  assert.strictEqual(n("'sudo' ls /root"), 'sudo ls /root');
+  assert.strictEqual(n('"r"m "-rf" x'), 'rm -rf x');
+  assert.strictEqual(n('{rm,-rf,/tmp/x}'), 'rm -rf /tmp/x');
+  assert.strictEqual(n('r{m,} -rf /tmp/x'), 'rm r -rf /tmp/x');
+  assert.strictEqual(n('pre{a,b}post{1,2} x'), 'preapost1 preapost2 prebpost1 prebpost2 x');
+  assert.strictEqual(n('A=1 >/tmp/f r\'\'m x'), "A=1 >/tmp/f rm x");
+  // nested braces: dequoted text only; more than 64 results: dequoted text only
+  assert.strictEqual(n('r{m,{a,b}} x'), 'r{m,{a,b}} x');
+  assert.strictEqual(n("r''{m,{a,b}} x"), 'r{m,{a,b}} x');
+  assert.strictEqual(n("x''{1,2}{1,2}{1,2}{1,2}{1,2}{1,2}{1,2} y"), 'x{1,2}{1,2}{1,2}{1,2}{1,2}{1,2}{1,2} y');
+  // quoted data stays quoted; nothing to change returns the same text
+  for (const t of ["grep -n 'kill' /tmp/f", "echo 'rm -rf x'", 'echo "a b"', 'ls -la', "echo ${x:-a,b}", "cat <<'EOF'"]) assert.strictEqual(n(t), t);
+  // ANSI-C and double-quote escapes
+  assert.strictEqual(dequote("$'a\\tb\\n\\cA\\'\\\\'"), 'a\tb\n\x01\'\\');
+  assert.strictEqual(dequote('"a\\$b\\q\\"c"'), 'a$b\\q"c');
+  assert.strictEqual(dequote('a\\\nb\\ c'), 'ab c');
+  assert.strictEqual(dequote("$\"x\"'y'"), 'xy');
 });

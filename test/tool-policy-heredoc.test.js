@@ -227,3 +227,46 @@ test('the report\'s false card: a working folder outside the roots (the hub root
   assert.strictEqual(tp.legacyClassifyCommand(cmd, o2).cls, 'write_outside', 'the old reading folded cat, > and <<IDEA into mkdir');
   assert.strictEqual(tp.classifyCommand(cmd, o2).cls, 'write_inside');
 });
+
+test('review r1: carriage returns, continuations in bodies, the real command word, quoted command names', () => {
+  // the reviewer's reproductions
+  isDestroy('cat <<EOF\r\nbody\nEOF\r\nrm -rf ~/projects\n', 'CR ends the delimiter word only with the line: EOF\\r is the terminator');
+  isDestroy('printf x\r#; rm -rf ~/projects\n', 'x\\r# is one word, the # is no comment');
+  isDestroy('cat <<EOF\n$\\\n(rm -rf ~/projects)\nEOF\n', 'backslash-newline joined before the substitution is read');
+  isDestroy('0<<\'EOF\' "$BASH"\nrm -rf ~/projects\nEOF\n', 'fd-numbered heredoc into a computed shell');
+  isDestroy("A=1 . /dev/stdin <<'EOF'\nrm -rf ~/projects\nEOF", 'the dot command after an assignment');
+  isDestroy('cat <<${x:-a b}\nbody\n${x:-a b}\nrm -rf ~/projects', 'expansion in a delimiter fails closed');
+  notDestroy(L('cat <<EOF', '\\$(rm -rf ~/projects)', 'EOF'), 'an escaped $ is still data');
+
+  // the command word decides: shells and the dot command in every position
+  for (const head of [
+    "<<'EOF' . /dev/stdin", "command . /dev/stdin <<'EOF'", "builtin . /dev/stdin <<'EOF'", "2>&1 . /dev/stdin <<'EOF'",
+    "env at now <<'EOF'", "timeout 5 crontab - <<'EOF'", "<<'EOF' crontab -", "<< 'EOF' bash", "csh <<'EOF'", "pwsh <<'EOF'",
+  ]) isDestroy(L(head, RM, 'EOF'), head);
+  // data stays data
+  assert.strictEqual(c(L("[ -f /tmp/a ] && cat > /tmp/b <<'EOF'", RM, 'EOF')), 'write_inside');
+  notDestroy(L('cat > "$HOME/notes" <<\'EOF\'', RM, 'EOF'), 'a variable in a redirection target is not a computed program');
+  assert.strictEqual(cr(L("X=1 python3 - <<'EOF'", RM, 'EOF')), 'read');
+  notDestroy(L('git commit -m "$(cat <<\'EOF\'', 'rm -rf notes', 'EOF', ')"'));
+
+  // quoted command names run the real program
+  for (const cmd of [
+    "r''m -rf ~/projects", "'r'm -rf ~/projects", 'r\\m -rf ~/projects', "$'rm' -rf ~/projects", "$'\\x72m' -rf ~/projects",
+    "/bin/r''m -rf ~/projects", "command r''m -rf ~/projects", '{rm,-rf,~/projects}', 'r{m,} -rf ~/projects',
+    'rm r -rf ~/projects', 'rm notes.txt --force',
+  ]) isDestroy(cmd);
+  for (const cmd of ["su''do ls /root", "'sudo' ls /root"]) {
+    const r = tp.classifyCommand(cmd, o);
+    assert.strictEqual(r.cls, 'admin', cmd);
+    assert.strictEqual(r.sudo, true, cmd);
+  }
+  isDestroy('systemct\'\'l restart some-unit');
+  isDestroy("kil''l -9 1");
+  assert.strictEqual(c(`m''v /tmp/a ${tp.HUB_ROOT}/workspaces/other/x`), 'admin');
+  // reads and writes that must not change
+  assert.strictEqual(cr("grep -n 'kill' /tmp/f"), 'read');
+  assert.strictEqual(cr("echo 'rm -rf /tmp/x'"), 'read');
+  assert.strictEqual(cr(L("git commit -m \"$(cat <<'EOF'", 'rm -rf notes', 'EOF', ')"')), 'read');
+  assert.strictEqual(cr('"$PY" /tmp/x.py'), 'read');
+  assert.strictEqual(c('rm notes.txt'), 'write_inside');
+});
