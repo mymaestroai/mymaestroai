@@ -70,6 +70,17 @@
     // Everything here is inert unless <html> has the class mm-simple (lib/ui-simple.js: hubSimple.apply) and window.hubSimple
     // is loaded; the CSS for it lives in the "simple-mode-css" style block of index.html. Advanced never runs any of it.
     function simpleOn() { return !!(window.hubSimple && document.documentElement.classList.contains('mm-simple')); }
+    // While a reply runs: the normal Send button, a plain placeholder, and Stop instead of Cancel.
+    function simpleBusyLook(sendBtn, input, cancelBtn) {
+      if (!simpleOn()) return;
+      if (sendBtn) { sendBtn.textContent = 'Send'; sendBtn.style.background = ''; sendBtn.style.color = ''; }
+      if (input) input.placeholder = 'Add something while it works…';
+      if (cancelBtn) cancelBtn.textContent = 'Stop';
+    }
+    // A saved question and its answer, in plain words (hubSimple.askText).
+    function simpleAskText(role, content) {
+      return simpleOn() && typeof window.hubSimple.askText === 'function' ? window.hubSimple.askText(role, content) : content;
+    }
     // Pure helpers (tested in test/ui-simple-desktop.test.js)
     function simpleInitialOf(name) { const s = String(name == null ? '' : name).trim(); return s ? s.charAt(0).toUpperCase() : '?'; }
     function simpleTailText(hs, text, n) {
@@ -9799,6 +9810,7 @@
           sendBtn.style.color = 'black';
         }
         if (input) input.placeholder = 'Type to interject new info into the running agent...';
+        if (typeof simpleBusyLook === 'function') simpleBusyLook(sendBtn, input, cancelBtn);   // Simple: Send, a plain placeholder, Stop
       } else if (status === 'paused') {
         if (pauseBtn) pauseBtn.style.display = 'none';
         if (cancelBtn) cancelBtn.style.display = 'none';
@@ -17261,6 +17273,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
 
     // into: an element to draw the bubble in instead of the chat's panel (the body of an automatic-turn card).
     function appendMessage(chatId, role, content, into) {
+      if (typeof simpleAskText === 'function') content = simpleAskText(role, content);   // Simple: a saved question and answer in plain words
       const container = document.getElementById(`messages-${chatId}`);
       // When user sends a message, reset scroll tracking so auto-scroll
       // re-engages for the new response.

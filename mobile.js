@@ -6146,6 +6146,7 @@ function savedImageUrls(paths) {
 }
 
 function addUserBubble(text, images) {
+  if (typeof simpleAskText === 'function') text = simpleAskText('user', text);   // Simple: a saved answer in plain words
   const d = document.createElement('div');
   d.className = 'msg user';
   for (const src of images || []) {
@@ -6163,6 +6164,7 @@ function addUserBubble(text, images) {
 }
 
 function addAssistantBubble(content) {
+  if (typeof simpleAskText === 'function') content = simpleAskText('assistant', content);   // Simple: a saved question in plain words
   const d = document.createElement('div');
   d.className = 'msg assistant';
   const body = document.createElement('div');
@@ -8361,6 +8363,7 @@ function setSendMode(own) {
   b.title = interject ? 'Interject into the running turn' : 'Send';
   const input = $('msg-input');
   if (input) input.placeholder = interject ? 'Interject into the running turn…' : 'Message';
+  if (typeof simpleSendLook === 'function') simpleSendLook(b, input, interject);   // Simple: the send arrow and a plain placeholder while it works
 }
 
 // Interject: the text is injected into the agent's running turn (same POST /api/chat/interject
@@ -14095,6 +14098,16 @@ async function init() {
 
 // ── Simple mode: phone ── (everything below runs only when hubSimple.apply put class mm-simple on <html>; Advanced never calls it)
 function simpleOn() { return !!(window.hubSimple && document.documentElement.classList.contains('mm-simple')); }
+// While a reply runs: the normal send arrow and a plain placeholder (the message still joins the running turn).
+function simpleSendLook(b, input, interject) {
+  if (!simpleOn() || !interject) return;
+  if (b) { b.innerHTML = '&#x27A4;'; b.setAttribute('aria-label', 'Send'); b.title = 'Send'; }
+  if (input) input.placeholder = 'Add something while it works…';
+}
+// A saved question and its answer, in plain words (hubSimple.askText).
+function simpleAskText(role, content) {
+  return simpleOn() && typeof window.hubSimple.askText === 'function' ? window.hubSimple.askText(role, content) : content;
+}
 const SIMPLE_THINK_LINES = 5;
 // What the Thinking box shows: the last lines of the reasoning (a summary's **headings** lose their asterisks) and the consult line.
 function simpleThinkModel(text, consult) {
