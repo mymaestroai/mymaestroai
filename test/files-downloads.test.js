@@ -547,12 +547,143 @@ test('zip: folders nested deeper than the walk allows are refused (413), not zip
 });
 
 test('zip: a file whose opened descriptor is outside the root is skipped (Linux /proc/self/fd check)', { skip: process.platform !== 'linux' }, async (t) => {
-  const fakeFs = Object.assign(Object.create(fs), { readlinkSync: (p, ...a) => (String(p).startsWith('/proc/self/fd/') ? '/somewhere/else/secret.txt' : fs.readlinkSync(p, ...a)) });
+  const fakeFs = Object.assign(Object.create(fs), { readlinkSync: (p, ...a) => (String(p).startsWith('/proc/self/fd/') && fs.statSync(p).isFile() ? '/somewhere/else/secret.txt' : fs.readlinkSync(p, ...a)) });
   const w = await world({ fsImpl: fakeFs }); t.after(() => w.close());
   w.write('share/helper-agent/k/a.txt', 'AAA');
   const r = await w.req('owner', 'GET', '/api/files/zip?agent=helper-agent&path=k');
   assert.strictEqual(r.status, 200);
   assert.deepStrictEqual(Object.keys(readZip(r.body)), [], 'the file that was really elsewhere is not in the zip');
+});
+
+// ───────────────────────────── review round 1 (F1): bound walks, no silent holes, safe names ─────────────────────────────
+/** An fs whose lstat/open/readdir/stat/realpath of a path ending in "/sub" swaps that folder (once): it moves away and a symlink to an outside folder takes its place. */
+function swappingFs(swap) {
+  const f = Object.create(fs); const calls = { readdir: [] }; let done = false;
+  const fire = (p) => { if (!done && /[\\/]sub$/.test(String(p))) { done = true; swap(); } };
+  f.lstatSync = (p, ...a) => { const r = fs.lstatSync(p, ...a); fire(p); return r; };   // after the lstat: the check passed, then the swap
+  f.openSync = (p, ...a) => { fire(p); return fs.openSync(p, ...a); };
+  f.readdirSync = (p, ...a) => { calls.readdir.push(String(p)); fire(p); return fs.readdirSync(p, ...a); };
+  f.statSync = (p, ...a) => { fire(p); return fs.statSync(p, ...a); };
+  f.realpathSync = (p, ...a) => { fire(p); return fs.realpathSync(p, ...a); };
+  f.swapped = () => done; f.calls = calls;
+  return f;
+}
+for (const which of ['recent', 'zipPlan']) {
+  test(`${which}: a folder swapped for a symlink between the check and the read is never listed (no outside name, size or count)`, async (t) => {
+    let w; const fsx = swappingFs(() => {
+      fs.renameSync(w.root('share/helper-agent/race/sub'), w.root('share/helper-agent/race/sub-moved-away'));
+      fs.symlinkSync(w.root('elsewhere/out'), w.root('share/helper-agent/race/sub'));
+    });
+    w = await world({ fsImpl: fsx }); t.after(() => w.close());
+    w.write('share/helper-agent/race/top.txt', 'top');
+    w.write('share/helper-agent/race/sub/inner.txt', 'inner');
+    w.write('elsewhere/out/secret-outside.txt', 'S'.repeat(777));
+    const root = w.root('share/helper-agent/race');
+    let names, count, bytes;
+    if (which === 'recent') { const r = w.files.recent(root, { limit: 30 }); names = r.files.map(f => f.name); count = r.files.length; bytes = r.files.reduce((a, f) => a + f.size, 0); }
+    else { const p = w.files.zipPlan(root, '', { maxFiles: 10, maxBytes: 1e6 }); names = p.files.map(f => f.name); count = p.count; bytes = p.bytes; }
+    assert.strictEqual(fsx.swapped(), true, 'the swap happened during the walk');
+    assert.ok(!names.some(n => n.includes('secret-outside')), `no outside name: ${names}`);
+    assert.ok(count <= 1 && bytes <= 3, `no outside count or size: ${count} files, ${bytes} bytes`);
+    if (process.platform === 'linux') assert.ok(fsx.calls.readdir.every(p => p.startsWith('/proc/self/fd/') || p === fs.realpathSync(root) || p === root || !/[\\/]sub$/.test(p)),
+      `every folder read is bound to an opened descriptor, never the path "sub": ${fsx.calls.readdir}`);
+  });
+}
+
+const runningAsRoot = !!(process.getuid && process.getuid() === 0);
+test('zip: a subfolder that cannot be read refuses the zip (incomplete, 413 for check and download); recent lists the readable files', { skip: runningAsRoot && 'root can read everything' }, async (t) => {
+  const w = await world(); t.after(() => { try { fs.chmodSync(w.root('share/helper-agent/p/locked'), 0o755); } catch {} w.close(); });
+  w.write('share/helper-agent/p/ok.txt', 'fine'); w.write('share/helper-agent/p/locked/inside.txt', 'hidden');
+  fs.chmodSync(w.root('share/helper-agent/p/locked'), 0o000);
+  const plan = w.files.zipPlan(w.root('share/helper-agent'), 'p', { maxFiles: 10, maxBytes: 1e6 });
+  assert.strictEqual(plan.incomplete, true, 'the plan says it is incomplete');
+  assert.strictEqual(plan.error, "Some files in this folder can't be read (for example locked), so it can't be downloaded as one zip.");
+  const check = await w.req('u_owner', 'GET', '/api/files/zip?agent=helper-agent&path=p&check=1');
+  assert.strictEqual(check.status, 413); assert.strictEqual(check.json.error, plan.error);
+  const real = await w.req('u_owner', 'GET', '/api/files/zip?agent=helper-agent&path=p');
+  assert.strictEqual(real.status, 413); assert.strictEqual(real.body.toString().startsWith('PK'), false);
+  const rec = await w.req('u_owner', 'GET', '/api/files/recent?agent=helper-agent');
+  assert.deepStrictEqual(rec.json.files.map(f => f.name), ['ok.txt']);
+});
+
+/** Runs streamZip into a real http client: { result, body, aborted }. */
+function streamToClient(files, root, plan) {
+  return new Promise((resolve) => {
+    let got = { body: Buffer.alloc(0), aborted: false }, result;
+    const server = http.createServer(async (req, res) => {
+      result = await files.streamZip(root, plan, res, { maxBytes: plan.maxBytes });
+      setTimeout(() => { server.closeAllConnections(); server.close(); resolve({ result, ...got }); }, 80);
+    });
+    server.listen(0, '127.0.0.1', () => {
+      const rq = http.get({ host: '127.0.0.1', port: server.address().port, path: '/' }, (res) => {
+        const cs = []; res.on('data', c => { cs.push(c); got.body = Buffer.concat(cs); });
+        res.on('aborted', () => { got.aborted = true; }); res.on('error', () => {});
+      });
+      rq.on('error', () => {});
+    });
+  });
+}
+
+test('zip: a file that became unreadable after the scan (EACCES) destroys the response: no complete zip', { skip: runningAsRoot && 'root can read everything' }, async (t) => {
+  const w = await world(); t.after(() => { try { fs.chmodSync(w.root('share/helper-agent/e/b.txt'), 0o644); } catch {} w.close(); });
+  w.write('share/helper-agent/e/a.txt', 'aaa'); w.write('share/helper-agent/e/b.txt', 'bbb'); w.write('share/helper-agent/e/c.txt', 'ccc');
+  const root = w.root('share/helper-agent');
+  const plan = w.files.zipPlan(root, 'e', { maxFiles: 10, maxBytes: 1e6 });
+  assert.strictEqual(plan.tooBig, false);
+  fs.chmodSync(w.root('share/helper-agent/e/b.txt'), 0o000);
+  const r = await streamToClient(w.files, root, plan);
+  assert.strictEqual(r.result.ok, false, 'streamZip reports the failure');
+  const tail = r.body; const complete = tail.length >= 22 && tail.readUInt32LE(tail.length - 22) === 0x06054b50;
+  assert.ok(r.aborted || !complete, 'the client never got a complete zip');
+});
+
+test('zip: entry names are safe to extract anywhere (backslash, colon, control characters; duplicates numbered); the bytes are intact', async (t) => {
+  const w = await world(); t.after(() => w.close());
+  const evil = Buffer.from('@echo evil'), colon = Buffer.from('colon file'), under = Buffer.from('underscore file');
+  w.write('share/helper-agent/slip/' + 'x\\..\\..\\evil.bat', evil);
+  w.write('share/helper-agent/slip/a:b.txt', colon);
+  w.write('share/helper-agent/slip/a_b.txt', under);
+  w.write('share/helper-agent/slip/ctl\x01name\x7f.txt', 'c');
+  w.write('share/helper-agent/slip/sub/q?"<>|*.txt', 'q');
+  const r = await w.req('u_owner', 'GET', '/api/files/zip?agent=helper-agent&path=slip');
+  assert.strictEqual(r.status, 200);
+  const z = readZip(r.body);
+  const names = Object.keys(z).sort();
+  assert.deepStrictEqual(names, ['a_b (2).txt', 'a_b.txt', 'ctl_name_.txt', 'sub/q______.txt', 'x_.._.._evil.bat']);
+  for (const n of names) {
+    assert.ok(!n.includes('\\') && !n.includes(':') && !n.startsWith('/') && !/[\u0000-\u001f\u007f]/.test(n), `safe name: ${JSON.stringify(n)}`);
+    assert.ok(!n.split('/').some(s => s === '..' || s === '.' || s === ''), `no dot segment: ${n}`);
+  }
+  assert.ok(z['x_.._.._evil.bat'].equals(evil));
+  assert.ok(z['a_b.txt'].equals(colon) && z['a_b (2).txt'].equals(under), 'bytes intact, each under its own entry');
+  assert.deepStrictEqual(['', '.', '..', 'a/./b', '/x'].map(filesLib.zipEntryName), ['_', '_', '_', 'a/_/b', '_/x']);
+});
+
+test('zip: files are opened with O_NONBLOCK, the JS CRC-32 matches zlib.crc32 (and a zip is still correct without zlib.crc32), the walk cap is 20,000', async (t) => {
+  const opens = [];
+  const fsRec = Object.create(fs); fsRec.openSync = (p, flags, ...a) => { opens.push([String(p), flags]); return fs.openSync(p, flags, ...a); };
+  const w = await world({ fsImpl: fsRec }); t.after(() => w.close());
+  w.write('share/helper-agent/n/data.bin', crypto.randomBytes(5000));
+  const r = await w.req('u_owner', 'GET', '/api/files/zip?agent=helper-agent&path=n');
+  assert.strictEqual(r.status, 200);
+  const file = opens.find(([p]) => p.endsWith('data.bin'));
+  assert.ok(file, 'the file was opened');
+  assert.ok(file[1] & fs.constants.O_NONBLOCK, 'O_NONBLOCK is in the open flags of a zipped file');
+  assert.ok(file[1] & fs.constants.O_NOFOLLOW, 'O_NOFOLLOW stays');
+  assert.strictEqual(filesLib.ZIP_WALK_MAX_ENTRIES, 20000);
+  assert.strictEqual(filesLib.crc32Js(Buffer.alloc(0)), 0); assert.strictEqual(filesLib.crc32Js(Buffer.from('123456789')), 0xCBF43926);
+  if (typeof zlib.crc32 === 'function') {
+    for (let i = 0; i < 20; i++) {
+      const a = crypto.randomBytes(Math.floor(Math.random() * 3000)), b = crypto.randomBytes(Math.floor(Math.random() * 3000));
+      assert.strictEqual(filesLib.crc32Js(a), zlib.crc32(a) >>> 0);
+      assert.strictEqual(filesLib.crc32Js(b, filesLib.crc32Js(a)), zlib.crc32(Buffer.concat([a, b])) >>> 0, 'chained with the previous value');
+    }
+    const saved = zlib.crc32; let again;
+    zlib.crc32 = undefined;
+    try { again = await w.req('u_owner', 'GET', '/api/files/zip?agent=helper-agent&path=n'); } finally { zlib.crc32 = saved; }
+    assert.strictEqual(again.status, 200);
+    assert.strictEqual(Object.keys(readZip(again.body)).length, 1, 'a valid zip (CRC checked) built with the JS fallback');
+  }
 });
 
 // ───────────────────────────── access ─────────────────────────────

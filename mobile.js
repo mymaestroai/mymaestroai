@@ -13200,11 +13200,18 @@ async function uploadFileForChat(file) {
 // ── Save / Share sheet: the phone's Download ──
 // A download card's button and the Files rows open this sheet. "Save / Share" fetches the file with the app's own session
 // (never an open URL), then hands it to the phone's share sheet as a File (or, where files cannot be shared, saves the blob
-// through a temporary link). The private URL is never shared and never put in a link. Zips do not come through here.
+// through a temporary link). The private URL is never shared and never put in a link. A folder's zip comes through here too
+// (up to 100 MiB; its size is shown as "about N" because the zip is compressed): the phone never navigates to the zip URL.
 const DL_MAX_BYTES = 100 * 1024 * 1024;
 const DL_TIMEOUT_MS = 120000;
 const DL_TOO_BIG = 'This file is larger than 100 MB. Open the hub on a computer to download it.';
+const DL_ZIP_TOO_BIG = 'This folder is larger than 100 MB. Download it as a zip on a computer.';
 const DL_FAILED = "The download didn't finish. Try again.";
+// The File's type without MIME parameters ("text/plain; charset=utf-8" -> "text/plain"): iOS canShare refuses a type with parameters.
+function dlFileType(mime, blobType) {
+  const t = String(mime || blobType || '').split(';')[0].trim();
+  return t || 'application/octet-stream';
+}
 function dlStatusMessage(status) {
   if (status === 401) return 'Sign in again, then try once more.';
   if (status === 403) return "You can't open this file.";
@@ -13289,7 +13296,7 @@ function dlSaveViaLink(file, env) {
   doc.body.appendChild(a); a.click(); a.remove();
   later(() => U.revokeObjectURL(href), 60000);
 }
-const dlState = { ctl: null, file: null, tap: false, busy: false, url: '', name: '', size: 0, mime: '' };
+const dlState = { ctl: null, file: null, tap: false, busy: false, url: '', name: '', size: 0, mime: '', approx: false, blocked: '' };
 function dlSay(text, kind) {
   const el = $('dl-msg');
   if (el) { el.textContent = text || ''; el.className = 'dl-msg' + (kind ? ' ' + kind : ''); }
@@ -13297,7 +13304,7 @@ function dlSay(text, kind) {
 function dlGoPaint() {
   const b = $('dl-go');
   if (!b) return;
-  b.disabled = !!dlState.busy;
+  b.disabled = !!dlState.busy || !!dlState.blocked;
   b.textContent = dlState.tap ? 'Tap to save' : 'Save / Share';
 }
 function dlClose() {
@@ -13311,14 +13318,14 @@ function openDownloadSheet(o) {
   const sh = $('dl-sheet');
   if (!url || !sh) { toast('That file cannot be downloaded'); return; }
   if (dlState.ctl) { try { dlState.ctl.abort(); } catch { /* already over */ } }
-  Object.assign(dlState, { ctl: null, file: null, tap: false, busy: false, url, name: String(o.name || 'file'), size: Number(o.size) || 0, mime: String(o.mime || '') });
+  Object.assign(dlState, { ctl: null, file: null, tap: false, busy: false, url, name: String(o.name || 'file'), size: Number(o.size) || 0, mime: String(o.mime || ''), approx: !!o.approx, blocked: typeof o.blocked === 'string' ? o.blocked : '' });
   const preview = dlPreviewUrl(url, dlState.name);
   sh.setAttribute('role', 'dialog');
   sh.setAttribute('aria-modal', 'true');
   sh.setAttribute('aria-labelledby', 'dl-title');
   sh.setAttribute('aria-describedby', 'dl-msg');
   sh.innerHTML = `<h3 id="dl-title">${esc(dlState.name)}</h3>
-    <div class="dl-size">${dlState.size ? esc(humanSize(dlState.size)) : ''}</div>
+    <div class="dl-size">${dlState.size ? esc((dlState.approx ? 'about ' : '') + humanSize(dlState.size)) : ''}</div>
     <div class="dl-msg" id="dl-msg" role="status" aria-live="polite"></div>
     <div class="dl-btns">
       <button type="button" class="go" id="dl-go">Save / Share</button>
@@ -13330,19 +13337,21 @@ function openDownloadSheet(o) {
   $('dl-close').addEventListener('click', () => dialogRequestClose(sh, 'close'));
   if (!sh.open) sh.showModal();
   dialogGuard.open(sh, { close: dlClose });   // Back, Escape and Close all come here
+  if (dlState.blocked) { dlSay(dlState.blocked, 'err'); dlGoPaint(); }   // e.g. a folder too big for the phone: the message, no Save / Share
   $('dl-go').focus();
 }
 async function dlStart() {
-  if (dlState.busy) return;
+  if (dlState.busy || dlState.blocked) return;
   dlState.busy = true; dlGoPaint();
-  dlSay(dlProgressText(0, dlState.size));
+  const sizeHint = dlState.approx ? 0 : dlState.size;   // a compressed zip's size is only a guess: no "of N"
+  dlSay(dlProgressText(0, sizeHint));
   const ctl = new AbortController();
   dlState.ctl = ctl;
   let file;
   try {
-    const got = await dlReadFile(dlState.url, { ctl, onProgress: (done, total) => dlSay(dlProgressText(done, total || dlState.size)) });
+    const got = await dlReadFile(dlState.url, { ctl, onProgress: (done, total) => dlSay(dlProgressText(done, total || sizeHint)) });
     if (dlState.ctl !== ctl) return;   // the sheet was closed or reopened meanwhile
-    file = new File([got.blob], dlState.name, { type: dlState.mime || got.blob.type || 'application/octet-stream' });
+    file = new File([got.blob], dlState.name, { type: dlFileType(dlState.mime, got.blob.type) });
   } catch (e) {
     if (dlState.ctl !== ctl) return;
     dlState.ctl = null; dlState.busy = false; dlGoPaint();
@@ -13414,8 +13423,9 @@ function onFilesRecentClick(e) {
   if (f) openDownloadSheet({ url: f.download, name: f.name, size: f.size, mime: f.mime || '' });
 }
 // A folder as one zip. The same URL with &check=1 first: the hub refuses a too-big folder in plain words (its JSON error is
-// shown on the sheet's message line); only an ok answer starts the real download, a normal browser download of the zip
-// (never held in page memory, never through the share sheet).
+// shown on the sheet's message line). An ok answer up to 100 MiB opens the Save / Share sheet on the zip URL (the app's own
+// session fetches it; the page never navigates to the zip URL, which in the installed iPhone app opens an out-of-scope Safari
+// view that asks to sign in again); a larger folder shows DL_ZIP_TOO_BIG on the sheet's message line.
 async function filesZip(rel) {
   rel = typeof rel === 'string' ? rel : filesState.path;
   const url = filesUrl('/zip', { path: rel });
@@ -13424,10 +13434,10 @@ async function filesZip(rel) {
   let data;
   try { data = await filesApi(url + '&check=1', { credentials: 'same-origin' }); }
   catch (e) { filesMsg(e.message, 'err'); return; }
-  const a = document.createElement('a');
-  a.href = url; a.download = `${folder}.zip`; a.rel = 'noopener';
-  document.body.appendChild(a); a.click(); a.remove();
-  filesMsg(`Downloading ${folder}.zip (${data.files} file${data.files === 1 ? '' : 's'}, ${humanSize(data.bytes)})`, 'ok');
+  const bytes = Number(data && data.bytes) || 0;
+  filesMsg('');
+  if (bytes <= DL_MAX_BYTES) openDownloadSheet({ url, name: `${folder}.zip`, size: bytes, mime: 'application/zip', approx: true });
+  else openDownloadSheet({ url, name: `${folder}.zip`, size: 0, mime: 'application/zip', blocked: DL_ZIP_TOO_BIG });
 }
 function openFilesSheet(path) {
   $('menu').classList.remove('open');

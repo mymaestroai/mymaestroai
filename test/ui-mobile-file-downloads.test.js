@@ -197,7 +197,29 @@ test('navigator.share gets the file only: never a url, never a text', () => {
   assert.strictEqual(calls[0].files.length, 1);
   assert.strictEqual(calls[0].files[0], file);
   assert.doesNotMatch(grab('dlShareFiles') + grab('dlTapSave') + grab('dlStart'), /share\(\{[^}]*\b(url|text|title)\b/);
-  assert.match(grab('dlStart'), /new File\(\[got\.blob\], dlState\.name, \{ type: dlState\.mime \|\| got\.blob\.type \|\| 'application\/octet-stream' \}\)/);
+  assert.match(grab('dlStart'), /new File\(\[got\.blob\], dlState\.name, \{ type: dlFileType\(dlState\.mime, got\.blob\.type\) \}\)/);
+});
+
+test('the File\'s type has no MIME parameters (iOS canShare accepts text files); empty falls back to octet-stream', async () => {
+  const k = load([grab('dlFileType')], ['dlFileType']);
+  assert.strictEqual(k.dlFileType('text/plain; charset=utf-8', ''), 'text/plain');
+  assert.strictEqual(k.dlFileType('', 'text/csv;charset=utf-8'), 'text/csv', 'the blob type when the row gave none');
+  assert.strictEqual(k.dlFileType('application/pdf', 'x/y'), 'application/pdf');
+  assert.strictEqual(k.dlFileType('', ''), 'application/octet-stream');
+  assert.strictEqual(k.dlFileType('; charset=utf-8', ''), 'application/octet-stream');
+  // end to end through dlStart: the File handed to share has the bare type
+  const shared = [];
+  const els = { 'dl-go': { disabled: false, textContent: '' }, 'dl-msg': { textContent: '', className: '' }, 'dl-sheet': { open: true, close() {} } };
+  const kit = vm.runInNewContext(`(function(){ ${CONSTS.join('\n')}\n ${grabConst('dlState')}\n ${['humanSize', 'dlFileType', 'dlProgressText', 'dlNextStep', 'dlShareFiles', 'dlCanShareFile', 'dlSay', 'dlGoPaint', 'dlClose', 'dlOnShareError', 'dlStart'].map(grab).join('\n')}
+    dlState.url = '/api/files/download?path=a.txt'; dlState.name = 'a.txt'; dlState.mime = 'text/plain; charset=utf-8';
+    return { dlStart }; })()`, {
+    $: (id) => els[id] || null, dialogGuard: { closed() {} }, Promise, AbortController, File, Blob, setTimeout, clearTimeout, URL,
+    dlReadFile: async () => ({ blob: new Blob(['hi'], { type: 'text/plain; charset=utf-8' }), size: 2, total: 2 }),
+    navigator: { canShare: (a) => { shared.push(['can', a.files[0].type]); return true; }, share: (a) => { shared.push(['share', a.files[0].type]); return Promise.resolve(); } },
+  });
+  // dlReadFile is a global stand-in here: the kit's own copy is not loaded
+  await kit.dlStart(); await tick();
+  assert.deepStrictEqual(shared, [['can', 'text/plain'], ['share', 'text/plain']]);
 });
 
 function tapKit(shareImpl) {
@@ -304,35 +326,57 @@ test('Download as zip: header button and each folder row; the check=1 call runs 
   assert.match(grab('onFilesListClick'), /if \(act === 'download'\) \{ openDownloadSheet\(/);
   assert.doesNotMatch(grab('onFilesListClick'), /window\.open\(filesUrl\('\/download'/, 'a file row\'s download opens the sheet, not a new tab');
   const filesUrl = (route, params) => `/api/files${route}?agent=bob&${new URLSearchParams(params).toString()}`;
-  const run = async (apiImpl) => {
-    const msgs = [], anchors = [], urls = [];
-    const kit = load([grab('humanSize'), grab('filesZip')], ['filesZip'], {
+  const zipKit = (apiImpl, extra = {}) => {
+    const msgs = [], anchors = [], urls = [], sheets = [];
+    const kit = load([grabConst('DL_MAX_BYTES'), grabConst('DL_ZIP_TOO_BIG'), grab('humanSize'), grab('filesZip')], ['filesZip', 'DL_ZIP_TOO_BIG'], {
       filesState: { path: 'out', root: { label: 'Bob' } }, filesUrl,
       filesApi: async (u, o) => { urls.push([u, o]); return apiImpl(u); }, filesMsg: (t, k) => msgs.push([t, k]),
-      document: { createElement: () => { const a = {}; anchors.push(a); return a; }, body: { appendChild() {} } },
+      openDownloadSheet: (o) => sheets.push(o),
+      document: { createElement: () => { const a = { click() { this.clicked = true; }, remove() {} }; anchors.push(a); return a; }, body: { appendChild() {} } },
+      ...extra,
     });
-    await kit.filesZip('out/reports');
-    return { msgs, anchors, urls };
+    return { kit, msgs, anchors, urls, sheets };
   };
+  const run = async (apiImpl) => { const z = zipKit(apiImpl); await z.kit.filesZip('out/reports'); return z; };
   const refused = await run(async () => { throw new Error('This folder is too big to download as one zip: 3,112 files and 4.1 GB (the limit is 2,000 files and 2 GB). Download its folders one at a time.'); });
   assert.strictEqual(refused.urls[0][0], '/api/files/zip?agent=bob&path=out%2Freports&check=1');
   assert.deepStrictEqual(refused.msgs[refused.msgs.length - 1], ['This folder is too big to download as one zip: 3,112 files and 4.1 GB (the limit is 2,000 files and 2 GB). Download its folders one at a time.', 'err']);
   assert.ok(!refused.anchors.some((a) => a.href), 'no download starts on a refusal');
-  const okRun = await (async () => {
-    const msgs = [], anchors = [];
-    const kit = load([grab('humanSize'), grab('filesZip')], ['filesZip'], {
-      filesState: { path: 'out', root: { label: 'Bob' } }, filesUrl, filesApi: async () => ({ ok: true, files: 3, bytes: 4096 }), filesMsg: (t, k) => msgs.push([t, k]),
-      document: { createElement: () => { const a = { click() { this.clicked = true; }, remove() {} }; anchors.push(a); return a; }, body: { appendChild() {} } },
-    });
-    await kit.filesZip('out/reports');
-    return { msgs, anchors };
-  })();
-  assert.strictEqual(okRun.anchors.length, 1);
-  assert.strictEqual(okRun.anchors[0].href, '/api/files/zip?agent=bob&path=out%2Freports', 'the real download has no check=1');
-  assert.strictEqual(okRun.anchors[0].download, 'reports.zip');
-  assert.ok(okRun.anchors[0].clicked);
-  assert.match(okRun.msgs[okRun.msgs.length - 1][0], /^Downloading reports\.zip \(3 files, 4\.0 KB\)$/);
+  assert.strictEqual(refused.sheets.length, 0, 'no sheet on a refusal');
   assert.match(grab('filesZip'), /filesApi\(url \+ '&check=1', \{ credentials: 'same-origin' \}\)/);
+});
+
+test('phone "Download as zip": up to 100 MiB opens the Save / Share sheet on the zip URL (no check, "about N"); bigger shows the too-big line; never an anchor navigation', async () => {
+  const filesUrl = (route, params) => `/api/files${route}?agent=bob&${new URLSearchParams(params).toString()}`;
+  const ok = (bytes) => async () => ({ ok: true, files: 3, bytes });
+  const mk = (bytes) => {
+    const sheets = [], anchors = [], opened = [];
+    const kit = load([grabConst('DL_MAX_BYTES'), grabConst('DL_ZIP_TOO_BIG'), grab('humanSize'), grab('filesZip')], ['filesZip', 'DL_ZIP_TOO_BIG'], {
+      filesState: { path: 'out', root: { label: 'Bob' } }, filesUrl, filesApi: ok(bytes), filesMsg() {},
+      openDownloadSheet: (o) => sheets.push(o), window: { open: (...a) => opened.push(a) }, location: { assign: (...a) => opened.push(a) },
+      document: { createElement: () => { const a = {}; anchors.push(a); return a; }, body: { appendChild() {} } },
+    });
+    return { kit, sheets, anchors, opened };
+  };
+  const small = mk(4096); await small.kit.filesZip('out/reports');
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(small.sheets)), [{ url: '/api/files/zip?agent=bob&path=out%2Freports', name: 'reports.zip', size: 4096, mime: 'application/zip', approx: true }]);
+  assert.ok(!small.sheets[0].url.includes('check=1'));
+  const edge = mk(100 * 1024 * 1024); await edge.kit.filesZip('out/reports');
+  assert.strictEqual(edge.sheets[0].approx, true, 'exactly 100 MiB is still allowed');
+  assert.ok(!edge.sheets[0].blocked);
+  const big = mk(100 * 1024 * 1024 + 1); await big.kit.filesZip('out/reports');
+  assert.strictEqual(big.kit.DL_ZIP_TOO_BIG, 'This folder is larger than 100 MB. Download it as a zip on a computer.');
+  assert.strictEqual(big.sheets.length, 1);
+  assert.strictEqual(big.sheets[0].blocked, big.kit.DL_ZIP_TOO_BIG, 'the too-big line goes on the sheet\'s message line');
+  for (const m of [small, edge, big]) assert.deepStrictEqual([m.anchors.length, m.opened.length], [0, 0], 'no anchor, no window, no navigation to the zip URL');
+  assert.doesNotMatch(grab('filesZip'), /createElement|\.click\(\)|window\.open|location/, 'filesZip never navigates');
+  assert.doesNotMatch(js, /\.href = url; a\.download = `\$\{folder\}\.zip`/);
+  // the sheet itself: "about N" for an approximate size, the blocked line, and no Save / Share while blocked
+  const o = grab('openDownloadSheet');
+  assert.match(o, /dlState\.approx \? 'about ' : ''/);
+  assert.match(o, /if \(dlState\.blocked\) \{ dlSay\(dlState\.blocked, 'err'\); dlGoPaint\(\); \}/);
+  assert.match(grab('dlGoPaint'), /b\.disabled = !!dlState\.busy \|\| !!dlState\.blocked/);
+  assert.match(grab('dlStart'), /if \(dlState\.busy \|\| dlState\.blocked\) return;/);
 });
 
 test('a card\'s Download button opens the sheet; sw.js needs no change (its SHELL lists no other /ui-*.js file)', () => {
@@ -343,7 +387,7 @@ test('a card\'s Download button opens the sheet; sw.js needs no change (its SHEL
 });
 
 test('nothing added here carries an emoji variation selector (U+FE0F)', () => {
-  const added = ['dlStatusMessage', 'dlReadFile', 'openDownloadSheet', 'dlStart', 'dlTapSave', 'filesLoadRecent', 'filesZip', 'attachFileCards'].map(grab).join('');
+  const added = ['dlStatusMessage', 'dlReadFile', 'openDownloadSheet', 'dlStart', 'dlTapSave', 'filesLoadRecent', 'filesZip', 'attachFileCards', 'dlFileType'].map(grab).join('');
   assert.ok(!added.includes('\uFE0F'));
   const cssStart = html.indexOf('/* Recent from agents, and the zip buttons */');
   const cssEnd = html.indexOf('/* Recall sheet');
