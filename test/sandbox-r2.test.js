@@ -36,6 +36,7 @@ function rig(o = {}) {
     if (cmd === 'rm') { delete states[args[args.length - 1]]; return { stdout: '', stderr: '' }; }
     if (cmd === 'exec' && args.includes('sh') && args.some(a => String(a).includes('.credentials.json'))) {
       if (o.purgeFails) throw Object.assign(new Error('exec failed'), { stderr: 'Error response from daemon: container is not running\nsecond line' });
+      if (o.purgeStill) throw Object.assign(new Error('Command failed: docker exec'), { code: 3, stdout: 'still-present\n', stderr: '' });
       return { stdout: o.purgeFinds ? 'removed\n' : '', stderr: '' };
     }
     if (cmd === 'volume' && args[1] === 'inspect') {
@@ -47,6 +48,7 @@ function rig(o = {}) {
     if (cmd === 'run') {
       const v = args[args.indexOf('-v') + 1].split(':')[0];
       if (o.runFails === v) throw Object.assign(new Error('run failed'), { stderr: 'docker: permission denied\nmore' });
+      if (o.runStill === v) throw Object.assign(new Error('Command failed: docker run'), { code: 3, stdout: 'removed\nstill-present\n', stderr: '' });
       return { stdout: stale.has(v) ? 'removed\n' : '', stderr: '' };
     }
     return { stdout: '', stderr: '' };
@@ -87,10 +89,34 @@ test('purgeCredentials: runs the test-and-remove with docker exec as the box use
   assert.strictEqual(await none.sb.purgeCredentials(agent), false);
   const call = none.calls.find(c => c[0] === 'exec');
   assert.deepStrictEqual(call.slice(0, 4), ['exec', 'hub-agent-boxed', 'sh', '-c']);
-  assert.strictEqual(call[4], `if [ -e ${CRED} ] || [ -L ${CRED} ]; then rm -f ${CRED} && echo removed; fi`);
+  assert.strictEqual(call[4], `if [ -e ${CRED} ] || [ -L ${CRED} ]; then rm -f ${CRED} && echo removed; fi; if [ -e ${CRED} ] || [ -L ${CRED} ]; then echo still-present; exit 3; fi`);
   assert.ok(!call.includes('-u') && !call.includes('--user'), 'as the box\'s own user');
   const found = rig({ states: { 'hub-agent-boxed': 'running' }, purgeFinds: true });
   assert.strictEqual(await found.sb.purgeCredentials(agent), true);
+});
+
+test('purgeCredentials script: removes, then checks again and exits 3 (still-present) while a copy remains', async () => {
+  const r = rig({ states: { 'hub-agent-boxed': 'running' } });
+  await r.sb.purgeCredentials(agent);
+  const script = r.calls.find(c => c[0] === 'exec')[4];
+  const rm = script.indexOf('rm -f'), recheck = script.indexOf('if', script.indexOf('fi;') + 1);
+  assert.ok(rm >= 0 && recheck > rm, 'a second test comes after the rm');
+  assert.ok(script.slice(recheck).includes(`[ -e ${CRED} ] || [ -L ${CRED} ]`), 'the re-check looks for the file or a link');
+  assert.ok(/echo still-present; exit 3/.test(script.slice(recheck)), 'exit 3 with still-present');
+  // run the script for real in a throwaway dir (a file, then a copy that cannot be removed: a directory with the name stays)
+  const { spawnSync } = require('child_process');
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-purge-'));
+  const f = path.join(d, 'c.json'); const local = script.split(CRED).join(f);
+  fs.writeFileSync(f, 'x');
+  let o = spawnSync('sh', ['-c', local], { encoding: 'utf8' });
+  assert.strictEqual(o.status, 0); assert.strictEqual(o.stdout.trim(), 'removed'); assert.ok(!fs.existsSync(f));
+  fs.mkdirSync(path.join(f, 'sub'), { recursive: true });   // rm -f cannot remove a directory: the copy stays
+  o = spawnSync('sh', ['-c', local], { encoding: 'utf8' });
+  assert.strictEqual(o.status, 3, 'exit 3 while the path is still there'); assert.ok(/still-present/.test(o.stdout));
+  fs.rmSync(path.join(f, 'sub'), { recursive: true }); fs.rmdirSync(f);
+  o = spawnSync('sh', ['-c', local], { encoding: 'utf8' });
+  assert.strictEqual(o.status, 0, 'nothing there: exit 0'); assert.strictEqual(o.stdout.trim(), '');
+  fs.rmSync(d, { recursive: true, force: true });
 });
 
 test('ensure removes an old copy after a create, after a start every time, and for an already-running box once per process; a failing call never stops the turn', async () => {
@@ -108,12 +134,22 @@ test('ensure removes an old copy after a create, after a start every time, and f
   const b = rig({ states: { 'hub-agent-boxed': 'running' } });
   await b.sb.ensure(agent); await b.sb.ensure(agent);
   assert.strictEqual(purges(b.calls), 1, 'an already-running box: once');
-  // a failing purge: logged with the reason, ensure still returns the box, and the next turn tries again
+  // a failing purge: logged with the reason, ensure REJECTS (ECREDPURGE) so the turn's hands are withheld, and the next turn tries again
   const f = rig({ purgeFails: true });
-  assert.strictEqual(await f.sb.ensure(agent), 'hub-agent-boxed');
+  await assert.rejects(() => f.sb.ensure(agent), (e) => e.code === 'ECREDPURGE' && /could not be removed from hub-agent-boxed/.test(e.message));
   assert.ok(f.logs.includes('could not remove an old Claude sign-in copy from hub-agent-boxed: Error response from daemon: container is not running'), f.logs.join('|'));
-  await f.sb.ensure(agent);
-  assert.strictEqual(purges(f.calls), 2, 'tried again after a failure');
+  assert.strictEqual(purges(f.calls), 1);
+  await assert.rejects(() => f.sb.ensure(agent), { code: 'ECREDPURGE' });
+  assert.strictEqual(purges(f.calls), 2, 'tried again after a failure (the box was forgotten, even though it is running)');
+  // a copy that is still there after rm (script exit 3, stdout still-present) is the same failure
+  const s = rig({ purgeStill: true });
+  await assert.rejects(() => s.sb.ensure(agent), { code: 'ECREDPURGE' });
+  assert.ok(s.logs.includes('could not remove an old Claude sign-in copy from hub-agent-boxed: still-present'), s.logs.join('|'));
+  await assert.rejects(() => s.sb.ensure(agent), { code: 'ECREDPURGE' });
+  assert.strictEqual(purges(s.calls), 2);
+  // and once the copy can go, the next ensure succeeds
+  const ok = rig({ states: { 'hub-agent-boxed': 'running' } });
+  assert.strictEqual(await ok.sb.ensure(agent), 'hub-agent-boxed');
 });
 
 test('sweepCredentials: only the named agents\' volumes, a missing volume skipped, the throwaway container is locked down, counts and the log line', async () => {
@@ -153,6 +189,24 @@ test('sweepCredentials: a failure is reported in failed[] and the other volumes 
   const id = 'a1b2c3d4e5f60718';
   const e = rig({ volumes: [`hub-agent-${id}-home`], staleVolumes: [`hub-agent-${id}-home`] });
   assert.deepStrictEqual((await e.sb.sweepCredentials([{ name: 'alpha', box: id }])).removed, ['alpha']);
+});
+
+test('sweepCredentials: a copy still present after rm (script exit 3) is a failure in failed[], not "clean" and not removed', async () => {
+  const r = rig({ volumes: ['hub-agent-alpha-home', 'hub-agent-beta-home'], staleVolumes: ['hub-agent-beta-home'], runStill: 'hub-agent-alpha-home' });
+  const out = await r.sb.sweepCredentials(['alpha', 'beta']);
+  assert.strictEqual(out.failed.length, 1);
+  assert.strictEqual(out.failed[0].name, 'alpha');
+  assert.ok(/Command failed/.test(out.failed[0].reason), out.failed[0].reason);
+  assert.deepStrictEqual(out.removed, ['beta'], 'the failed one is not listed as removed, even though stdout said removed');
+  assert.ok(!r.logs.includes('no old Claude sign-in copies in boxes'));
+  assert.ok(r.logs.some(l => /could not check 1 box home volume\(s\): alpha \(/.test(l)), r.logs.join('|'));
+  const only = rig({ volumes: ['hub-agent-alpha-home'], runStill: 'hub-agent-alpha-home' });
+  const o2 = await only.sb.sweepCredentials(['alpha']);
+  assert.deepStrictEqual(o2.removed, []); assert.strictEqual(o2.failed.length, 1);
+  assert.ok(only.logs.some(l => /could not check 1 box home volume/.test(l)), 'a failure is logged');
+  // the script itself: re-check and exit 3, backups included
+  const run = r.calls.find(c => c[0] === 'run'); const script = run[run.indexOf('-c') + 1];
+  assert.ok(/left=1/.test(script) && /echo still-present; exit 3/.test(script), script);
 });
 
 test('removeOldWrappers: only data/sandbox/<name>.sh files of this user go; other files, folders and links stay', () => {

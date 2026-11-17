@@ -96,7 +96,7 @@ test('Codex bridge runs beforeCall before a hub tool and returns its refusal as 
 
 test('sdk-chat: hook in SDK query options, gate in the gateway pre-step, Codex bridge + approvals, ledger on every path, stop cancels approvals', () => {
   // Security R2: the client never runs in a box (no sandboxOpts.cwd any more) and the hook is told whether the agent is boxed.
-  assert.ok(sdk.includes("hooks: { PreToolUse: [{ hooks: [gate.sdkHook({ agentName, cwd: process.cwd(), boxed: !!hands.sandboxed, origin: options.origin || null"), 'SDK hook');
+  assert.ok(sdk.includes("hooks: { PreToolUse: [{ hooks: [gate.sdkHook({ agentName, cwd: hubHands ? hands.tools.cwd : process.cwd(), boxed: !!hands.sandboxed, origin: options.origin || null"), 'SDK hook');
   assert.ok(sdk.includes("timeout: Math.ceil(approvals.timeoutMs / 1000) + 120"), 'hook timeout follows the approval window');
   assert.ok(sdk.includes("getSetting('approvalTimeoutMinutes', 60)"), 'approval window configurable, default an hour');
   assert.ok(sdk.includes("const verdict = await gate.check({ agentName, tool: toolName, input: parsedArgs, cwd: (handlers && handlers.__cwd) || process.cwd(), origin: options.origin || null"), 'gateway pre-step, same working directory as the hands (review F23)');

@@ -118,6 +118,26 @@ test('handsForTurn: a sandboxed claude-sdk agent gets hub hands whatever its too
   } finally { console.warn = quiet; }
 });
 
+test('handsForTurn: when the box cannot be cleared of an old sign-in copy (ensure rejects ECREDPURGE) the hands are withheld and there is no box', async () => {
+  // 'boxed-inherit' is a sandboxed claude-sdk agent of the previous test's agents.json (the agent list is cached per process)
+  const sb = L('sandbox').getSandbox();
+  sb.available = async () => true;
+  let ensured = 0;
+  sb.ensure = async () => { ensured++; throw Object.assign(new Error('An old copy of the Claude sign-in could not be removed from hub-agent-boxed-purge (still-present); this agent\'s tools stay off until it is.'), { code: 'ECREDPURGE' }); };
+  sb.mountsFor = () => { throw new Error('mountsFor must not be reached when ensure fails'); };
+  const { handsForTurn } = L('sdk-chat');
+  const warns = []; const quiet = console.warn; console.warn = (...a) => warns.push(a.join(' '));
+  try {
+    const h = await handsForTurn('boxed-inherit');
+    assert.strictEqual(ensured, 1);
+    assert.strictEqual(h.sandboxed, true);
+    assert.strictEqual(h.withheld, true, 'hands withheld');
+    assert.strictEqual(h.box, null, 'no box is handed out');
+    assert.strictEqual(h.mode, 'hub');
+    assert.ok(warns.some(w => w.includes('boxed-inherit') && w.includes('could not be removed')), warns.join('|'));
+  } finally { console.warn = quiet; }
+});
+
 // ── policy gate: a boxed agent's client may call only the hub's tools and the allow-list ─────────────────────────
 
 function gateFor(agent) {
