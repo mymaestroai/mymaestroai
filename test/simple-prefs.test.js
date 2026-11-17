@@ -89,11 +89,11 @@ test('effort: a per-turn level replaces the agent\'s, capped by the model, ignor
 
 test('chat route: the body\'s effort reaches the Claude, Codex and gateway sites for this turn only', () => {
   const c = read('lib/sdk-chat.js');
-  assert.ok(c.includes('voice, effort: turnEffortAsked } = body;'));
+  assert.ok(c.includes('const turnEffortAsked = body.effort;'));
   assert.strictEqual((c.match(/effort: turnEffortAsked,/g) || []).length, 3, 'Codex, Claude client and gateway options');
   assert.ok(c.includes("effortLib.forTurn(`claude-sdk/${sdkModel}`, options.effort, await agentEffort(agentName))"));
   assert.ok(c.includes('effortLib.forTurn(agentModel, options.effort, await agentEffort(agentName))'));
-  assert.match(c, /const asked = effortLib\.requestedLevel\(options\.effort\); if \(asked && effortLib\.supported\(model\)\) turnEffort = asked;/);
+  assert.match(c, /if \(options && options\.effort\) \{ const asked = effortLib\.requestedLevel\(options\.effort\); if \(asked && effortLib\.supported\(model\)\) turnEffort = asked; \}/);
   // the stored agent setting is only read, never written, from the request
   assert.ok(!/updateAgent\([^)]*turnEffortAsked/.test(c));
 });

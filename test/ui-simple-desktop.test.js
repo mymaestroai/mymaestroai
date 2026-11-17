@@ -67,12 +67,12 @@ test('app.js: every Simple entry point is gated by simpleOn (mm-simple + hubSimp
 });
 
 test('app.js: hook points are in place', () => {
-  assert.match(app, /\.\.\.\(simpleOn\(\) \? simpleEffortBody\(window\.hubSimple, chat\.agent, effortSupported\(chatModelOf\(chat\)\) && !chat\.autoModel\) : \{\}\)/);   // effort in the chat POST body, Simple only, only when the level button is shown
-  assert.match(app, /if \(delta\) \{\n\s+if \(simpleOn\(\)\) simpleFirstReply\(chatId, msgId\);/);   // first reply text
+  assert.match(app, /\.\.\.\(typeof simpleOn === 'function' && simpleOn\(\) \? simpleEffortBody\(window\.hubSimple, chat\.agent, effortSupported\(chatModelOf\(chat\)\) && !chat\.autoModel\) : \{\}\)/);   // effort in the chat POST body, Simple only, only when the level button is shown
+  assert.match(app, /if \(delta\) \{\n\s+if \(typeof simpleOn === 'function' && simpleOn\(\)\) simpleFirstReply\(chatId, msgId\);/);   // first reply text
   assert.match(app, /simpleThinkPaint\(msgId, st\);/);   // paintReasoning
-  assert.match(app, /function handleWorkerEvent\(chatId, oc\) \{\n\s+simpleConsultNote\(chatId, oc\);/);   // consult line
-  assert.match(app, /await streamResponseSolo\(response, msgId, chatId, chat\.agent\);\n\s+simpleThinkClear\(chatId\);/);   // turn end
-  assert.match(app, /notify\(err\);[^\n]*\n\s+simpleThinkClear\(chatId\);/);   // error / stop
+  assert.match(app, /function handleWorkerEvent\(chatId, oc\) \{\n\s+if \(typeof simpleConsultNote === 'function'\) simpleConsultNote\(chatId, oc\);/);   // consult line
+  assert.match(app, /await streamResponseSolo\(response, msgId, chatId, chat\.agent\);\n\s+if \(typeof simpleThinkClear === 'function'\) simpleThinkClear\(chatId\);/);   // turn end
+  assert.match(app, /notify\(err\);[^\n]*\n\s+if \(typeof simpleThinkClear === 'function'\) simpleThinkClear\(chatId\);/);   // error / stop
   assert.match(app, /simpleComposerInit\(chatId\);/);   // composer button
   assert.match(app, /simpleSwitchMode\('simple'\)/);   // Advanced settings: Switch to Simple
   assert.match(app, /simplePrefs\(\{ uiMode: mode \}\)/);
