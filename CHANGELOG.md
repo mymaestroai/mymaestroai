@@ -6,6 +6,7 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
+- **Commands after a heredoc are now checked.** Your Maestro stopped reading a shell command at its first block of text passed with `<<`, so anything written after that block, even `rm -rf`, went through without the safety rules or an approval card. It now reads the whole command, line by line, checks commands hidden inside `$( )` and in text blocks fed to a shell, counts `&>` as a file write, and judges anything it can't read at least as strictly as before. A false "writes outside its folders" card on some multi-line commands is gone too.
 ## [5.10.2] - 2026-11-16
 
 What's new since 5.10.1: phones always open the phone layout, in the browser and as an app on the home screen. For a hub on 5.10.1, this is the only change.
