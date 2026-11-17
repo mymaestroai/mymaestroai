@@ -97,11 +97,15 @@ test('heredoc bodies are skipped to their terminator, whatever the terminator lo
   notDestroy(L('x=$(cat <<EOF', 'msg', 'EOF)', 'echo done'), 'bash-5.2 style terminator before the paren');
   isDestroy(L('x=$(cat <<EOF', 'msg', 'EOF)', RM), 'bash-5.2 style, then a command');
   // an empty delimiter ends at an empty line
-  notDestroy(L("cat <<''", RM, ''), "<<'' body is data");
+  // (review r2: the body must really end at an empty line; `rm\n` + end of input is an unterminated heredoc, now a problem)
+  notDestroy(L("cat <<''", RM, '', ''), "<<'' body is data");
   isDestroy(L("cat <<''", 'body', '', RM), "<<'' ends at the empty line");
-  // an unterminated heredoc swallows the rest, as bash does
-  notDestroy(L("cat <<'EOF'", RM), 'unterminated: the rest is data');
-  assert.strictEqual(c(L("cat > /tmp/x <<'EOF'", 'body', RM)), 'write_inside', 'unterminated, write only');
+  // An unterminated heredoc still swallows the rest as bash does, but since review r2 it is a problem (the safety net
+  // against any delimiter misparse): the caller fails closed, so the rest is read as commands too and rm is destroy.
+  isDestroy(L("cat <<'EOF'", RM), 'unterminated: uncertain, so the rest counts as commands');
+  assert.strictEqual(tp.classifyCommand(L("cat <<'EOF'", RM), o).uncertain, true);
+  assert.strictEqual(c(L("cat > /tmp/x <<'EOF'", 'body', RM)), 'destroy', 'unterminated, the rest read as commands');
+  assert.strictEqual(c(L("cat > /tmp/x <<'EOF'", 'body')), 'write_inside', 'unterminated, nothing dangerous in the rest');
 });
 
 test('a body is code only when a shell runs it', () => {
@@ -269,4 +273,153 @@ test('review r1: carriage returns, continuations in bodies, the real command wor
   assert.strictEqual(cr(L("git commit -m \"$(cat <<'EOF'", 'rm -rf notes', 'EOF', ')"')), 'read');
   assert.strictEqual(cr('"$PY" /tmp/x.py'), 'read');
   assert.strictEqual(c('rm notes.txt'), 'write_inside');
+});
+
+test('review r2: words with expansions and blanks, the dot command, redirections with a {fd} prefix', () => {
+  const body = L('', RM, 'EOF');
+  for (const head of ["A=$(echo x) . /dev/stdin <<'EOF'", "A[x y]=1 . /dev/stdin <<'EOF'", "{v}>/tmp/f . /dev/stdin <<'EOF'", "{v}> /tmp/f . /dev/stdin <<'EOF'",
+    "A=${x:-a b} . /dev/stdin <<'EOF'", "A=`echo x y` . /dev/stdin <<'EOF'", "A=$((1 + 2)) . /dev/stdin <<'EOF'", "cat <(a b) | . /dev/stdin <<'EOF'"]) {
+    isDestroy(head + body, head);
+  }
+  // a substitution with blanks in a redirection target is not the command word
+  assert.strictEqual(c(L('cat > $(dirname "$0")/x.md <<\'EOF\'', RM, 'EOF')), 'write_inside', 'the false positive of the old split');
+});
+
+test('review r2: heredoc delimiters bash groups across blanks, and a missing terminator, fail closed', () => {
+  isDestroy(L('cat <<$[a b]', 'body', '$[a b]', RM), '$[ ] in a delimiter');
+  isDestroy(L('cat <<@(a b)', 'body', 'EOF', RM), 'extglob in a delimiter');
+  isDestroy(L('cat <<!(a b)', 'body', 'EOF', RM), 'extglob !(');
+  isDestroy(L('cat <<EOF', 'body', RM), 'no terminator at all');
+  assert.strictEqual(tp.classifyCommand(L('cat <<@(a b)', 'body', 'EOF', RM), o).uncertain, true);
+  assert.strictEqual(c(L('cat > /tmp/x <<EOF', 'body', 'EOF')), 'write_inside', 'a terminated one stays quiet');
+});
+
+test('review r2: the wrapper walk (dequoted words, option values, positional words) reaches the shell behind them', () => {
+  const body = L('', RM, 'EOF');
+  for (const head of [
+    'env "-i" "$BASH"', "env -u X bash", 'env --unset X --chdir /d bash', 'env -S "a b" bash', 'timeout -s KILL 5 bash', 'timeout --signal KILL 5s bash',
+    'timeout 5 bash', 'xargs -I X bash', 'xargs -n 1 -P 2 bash', 'xargs --max-args 1 bash', 'sudo -u root bash', 'sudo -g g -h h -p p bash',
+    'sudo --user root --prompt p bash', 'doas -u u bash', 'nice -n 5 bash', 'ionice -c 2 -n 4 bash', 'taskset 0x3 bash', 'taskset -c 0,1 bash',
+    'chroot /new bash', 'runuser -u u -g g bash', 'stdbuf -i0 -o L bash', 'exec -a name bash', 'time -f %e bash', 'flock -w 3 /tmp/l bash',
+    'watch -n 2 bash', 'nsenter -t 1 bash', 'strace -o /tmp/o -e x bash', 'ltrace -o /tmp/o bash', 'fakeroot bash', 'busybox sh',
+  ]) isDestroy(head + " <<'EOF'" + body, head);
+  isDestroy("time -p at now <<'EOF'" + body, 'time -p goes with the keyword');
+  isDestroy("time -p r''m -rf ~/projects", 'time -p then a quoted command name');
+  isDestroy("! time -p r''m -rf ~/projects");
+  // the sudo family stays admin or worse
+  const r = tp.classifyCommand('sudo -u root r\'\'m -rf ~/projects', o);
+  assert.strictEqual(r.cls, 'destroy');
+  assert.strictEqual(r.sudo, true);
+});
+
+test('review r2: strings that bash runs as code are read as commands', () => {
+  for (const cmd of [
+    `bash -c "r''m -rf ~/projects"`, `sh -c 'r""m -rf ~/projects'`, `trap 'rm -rf ~/projects' EXIT`, `trap -- "r''m -rf ~/projects" INT`,
+    `flock /tmp/l -c 'rm -rf ~/projects'`, `flock -w 3 /tmp/l --command "r''m -rf ~/projects"`, `find ~/projects -exec 'rm' -rf {} +`,
+    `find ~/projects -execdir "r"m -rf {} \\;`, `find ~/projects -ok 'rm' -rf {} ';'`, `eval 'r''m' -rf ~/projects`, `eval "r''m" "-rf" ~/projects`,
+    L(`bash -c "cat <<'EOF'`, 'x', 'EOF', `rm -rf ~/projects"`), `script -qc "r''m -rf ~/projects" /dev/null`, `script -c "r''m -rf ~/projects" /dev/null`,
+    `script --command "r''m -rf ~/projects" /dev/null`, `env -S "r''m -rf ~/projects"`, `env --split-string="r''m -rf ~/projects"`, `watch -n 1 "r''m -rf ~/projects"`,
+    `su -c "r''m -rf ~/projects" user`, `bash -lc "r''m -rf ~/projects"`, `sudo bash -c "r''m -rf ~/projects"`, `busybox sh -c "r''m -rf ~/projects"`,
+    `bash -c 'bash -c "r\\"\\"m -rf ~/projects"'`,
+  ]) isDestroy(cmd);
+  assert.strictEqual(tp.classifyCommand(`sudo bash -c "r''m -rf ~/projects"`, o).sudo, true);
+  // data stays data
+  assert.strictEqual(cr("echo -c 'r\"\"m -rf ~/projects'"), 'read');
+  assert.strictEqual(cr("bash script.sh -c 'r\"\"m -rf ~/projects'"), 'read');
+  assert.strictEqual(cr("find ~/projects -name 'r\"\"m'"), 'read');
+  assert.strictEqual(cr("trap -p"), 'read');
+});
+
+test('review r2: brace expansion with nesting, sequences and option words', () => {
+  for (const cmd of [
+    'r{m,{a,b}} -rf x', '{{r,}m,} -rf x', '{r..r}m -rf x', '{r..r}{m..m} -rf x', 'rm -{r,f} x', 'rm {-rf,} x', 'rm --{recursive,force} x', 'rm -r{,} x',
+    'rm -{,r} ~/projects', 'r{m,m} -rf x',
+  ]) isDestroy(cmd);
+  assert.strictEqual(c('rm {a,b}.txt'), 'write_inside', 'no option among the expansions');
+  assert.strictEqual(c('echo {1..3}'), 'read');
+});
+
+test('review r2: quoted data is not read as an option; literal assignments reach later command words', () => {
+  assert.strictEqual(cr('git log --grep="reboot"'), 'read');
+  assert.strictEqual(cr("git log --grep='kill'"), 'read');
+  assert.strictEqual(cr('git log --grep="a b" --author=x'), 'read');
+  isDestroy('rm "-rf" ~/projects');
+  isDestroy("rm '--force' x");
+  isDestroy('c=rm; $c -rf ~/projects');
+  isDestroy('c=rm; ${c} -rf ~/projects');
+  isDestroy('c=rm; "$c" -rf ~/projects');
+  isDestroy('c=rm; "${c}" -rf ~/projects');
+  isDestroy("c='r'\"m\"; $c -rf ~/projects");
+  isDestroy('c=ls; c=rm; $c -rf ~/projects');
+  isDestroy('c=bash; $c -c "r\'\'m -rf ~/projects"');
+  isDestroy(L('c=rm', '$c -rf ~/projects'));
+  assert.strictEqual(cr('PY=python3; "$PY" /tmp/x.py'), 'read');
+  assert.strictEqual(cr('c=rm; c=ls; $c -la /tmp'), 'read');
+  const r = tp.classifyCommand('s=sudo; $s ls /root', o);
+  assert.strictEqual(r.cls, 'admin');
+  assert.strictEqual(r.sudo, true);
+});
+
+test('review r2: a NUL ends the text of one $\'...\' component', () => {
+  for (const nul of ['\\0', '\\00', '\\000', '\\x0', '\\x00', '\\u0000', '\\U00000000', '\\c@']) isDestroy(`$'rm${nul}ignored' -rf ~/projects`, nul);
+  isDestroy("$'r\\0x'm -rf ~/projects", 'later components are kept');
+  isDestroy("$'rm\\0ignored'$'' -rf ~/projects");
+});
+
+test('review r2: rm -- ends the options; --include=rm is no rm', () => {
+  assert.strictEqual(c('rm -- -rf'), 'write_inside', 'a file named -rf');
+  assert.strictEqual(c('rm -- -rf /tmp/a'), 'write_inside');
+  assert.strictEqual(c('rm /tmp/a -- -rf'), 'write_inside', 'after -- nothing is an option');
+  notDestroy('grep --include=rm -r pat .');
+  notDestroy('grep --include=rm -rn pat .');
+  isDestroy('rm r -rf ~/projects');
+  isDestroy('/bin/rm notes.txt --force');
+  isDestroy('\\rm notes.txt -rf');
+  isDestroy('rm -rf -- x');
+  isDestroy('r{m,} -rf x');
+});
+
+test('review r2: unlink, shred and find -delete are destroy', () => {
+  isDestroy('unlink ~/projects/notes.txt');
+  isDestroy('shred -u ~/projects/notes.txt');
+  isDestroy('shred x');
+  isDestroy('find ~/projects -name "*.md" -delete');
+  isDestroy('find . -type f -delete');
+  isDestroy('/usr/bin/unlink x');
+  assert.strictEqual(cr('find . -name x'), 'read');
+  assert.strictEqual(cr('echo deleted; ls'), 'read');
+  assert.strictEqual(cr('ls | wc -l'), 'read');
+});
+
+test('review r2: huge brace words classify in under a second each', () => {
+  for (const w of ['{'.repeat(200000), '{a,'.repeat(66667), '{'.repeat(100000) + '}'.repeat(100000), '{,'.repeat(100000)]) {
+    const t0 = Date.now();
+    const r = tp.classifyCommand(w + ' x', o);
+    assert.ok(Date.now() - t0 < 1000, `${w.slice(0, 6)}: ${Date.now() - t0} ms`);
+    assert.ok(SEV(r.cls) >= 0);
+  }
+});
+
+test('lead decision after r2: programs named by $( ), backticks or a glob are at least admin; a plain variable is not', () => {
+  for (const cmd of ['$(echo rm) -rf ~/projects', '`echo rm` -rf ~/projects', '"$(which python3)" /tmp/x.py', '/bin/r[m] -rf ~/projects', '/usr/bin/pyth?n3 /tmp/x.py']) {
+    assert.ok(SEV(c(cmd)) >= SEV('admin'), cmd);
+  }
+  isDestroy('c=rm; $c -rf ~/projects', 'a literal assignment in the same command is resolved');
+  assert.strictEqual(cr('PY=python3; "$PY" /tmp/x.py'), 'read');
+  assert.strictEqual(cr('"$PY" /tmp/x.py'), 'read', 'an unresolved variable as the program is a documented limit');
+  // ordinary commands stay reads (globs as arguments, test brackets, substitutions as arguments, case patterns)
+  for (const cmd of ['[ -f /tmp/a ] && echo yes', '[[ -n "$X" ]] && ls', 'ls /tmp/*.png | head', 'for f in /tmp/*.txt; do wc -l "$f"; done',
+    'echo "$(date)"', 'x=$(git rev-parse HEAD); echo $x', 'git log --grep="reboot" --oneline', 'node --test /tmp/r/test/*.test.js 2>&1 | tail -3',
+    L("bash <<'EOF'", 'case "$1" in', '  *.txt|b*) echo text;;', '  (x) ls;;', 'esac', 'EOF'), 'find /tmp/r -name "*.js" -exec grep -l foo {} +']) {
+    assert.strictEqual(cr(cmd), 'read', cmd);
+  }
+  // a case arm is still a command
+  isDestroy(L('case $x in', '  a) rm -rf ~/projects;;', 'esac'));
+});
+
+test('hostile nesting never throws; the checker falls back to its strictest reading', () => {
+  for (const cmd of ['$[ '.repeat(20000), '${'.repeat(20000), '"$('.repeat(20000), '$(('.repeat(20000), '`'.repeat(20001)]) {
+    const r = tp.classifyCommand(cmd + '\n' + RM, o);
+    assert.strictEqual(r.cls, 'destroy');
+  }
 });
