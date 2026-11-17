@@ -2683,10 +2683,15 @@
     @keyframes simple-pulse { 0%, 100% { opacity: .35; transform: scale(.8); } 50% { opacity: 1; transform: scale(1.1); } }
 
     /* Composer: one rounded box */
-    html.mm-simple .input-area { max-width: 720px; position: relative; align-items: center; flex-wrap: nowrap; gap: 6px;
-      background: var(--sm-raised); border: 1px solid var(--sm-border); border-radius: 26px; box-shadow: var(--sm-shadow); padding: 10px 12px 10px 14px; margin: 0 auto 14px; width: calc(100% - 48px); }
-    html.mm-simple .input-wrapper { min-width: 0; }
-    html.mm-simple .input-area textarea { min-height: 40px; max-height: 240px; border: 0; background: none; color: var(--sm-text); font: inherit; font-size: 16px; padding: 8px 6px; resize: none; box-shadow: none; }
+    html.mm-simple .input-area { max-width: 720px; position: relative; align-items: center; flex-wrap: wrap; gap: 4px 6px;
+      background: var(--sm-raised); border: 1px solid var(--sm-border); border-radius: 26px; box-shadow: var(--sm-shadow); padding: 10px 12px 8px 14px; margin: 0 auto 14px; width: calc(100% - 48px); }
+    /* Two rows: the text on its own full-width row; underneath, attach and the reasoning level on the left, mic, call and Send on the right */
+    html.mm-simple .input-area > * { order: 5; }
+    html.mm-simple .input-wrapper { min-width: 0; order: 0; flex: 1 1 100%; width: 100%; }
+    html.mm-simple .input-area > button[title^="Attach"] { order: 1; }
+    html.mm-simple .input-area > .simple-lvl { order: 2; margin-right: auto; }
+    html.mm-simple .input-area:not(:has(> .simple-lvl.on)) > button[title^="Attach"] { margin-right: auto; }   /* no reasoning level for this model: the rest still sits right */
+    html.mm-simple .input-area textarea { width: 100%; min-height: 44px; max-height: 168px; overflow-y: auto; border: 0; background: none; color: var(--sm-text); font: inherit; font-size: 16px; padding: 8px 6px; resize: none; box-shadow: none; }
     html.mm-simple .input-area textarea:focus { border: 0; box-shadow: none; }
     html.mm-simple .input-area textarea::placeholder { color: var(--sm-muted); }
     html.mm-simple .input-area button { background: none; color: var(--sm-sec); border: 0; border-radius: 50%; padding: 0; font-weight: 400; }
