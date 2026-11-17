@@ -11105,7 +11105,9 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
             method: 'POST',
             credentials: 'include',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ request_id, answers })
+            // The asking agent goes with the answer: the route's access check needs it to let a member answer a question
+            // from an agent they own or that is shared with them (without it every member's answer was refused).
+            body: JSON.stringify({ request_id, answers, ...(data && data.agent ? { agent: data.agent } : {}) })
           }).then(r => { if (r.ok) retireQuestionNotices(request_id); })   // the hub has the answer: its line can go
             .catch(err => console.error('Failed to submit question answer:', err));
           overlay.remove();
