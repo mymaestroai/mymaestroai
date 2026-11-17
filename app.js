@@ -1104,6 +1104,7 @@
             <button class="gs-btn secondary" onclick="filesNewFolder()">New folder</button>
             <button class="gs-btn secondary" id="files-zip-btn" onclick="filesZip(filesState.path)" title="Download the folder being shown as one zip file">Download as zip</button>
             <button class="gs-btn secondary" onclick="filesRefresh()">Refresh</button>
+            <button class="gs-btn secondary" id="files-shared-btn" onclick="shareLinksListOpen()" hidden>Shared links</button>
             <input type="file" id="files-upload-input" multiple style="display:none" onchange="filesUploadFiles(this.files); this.value = ''">
             <span class="gs-sub" style="margin:0" id="files-limit"></span>
           </div>
@@ -1119,6 +1120,7 @@
         drop.addEventListener('dragleave', () => { if (--depth <= 0) { depth = 0; drop.classList.remove('over'); } });
         drop.addEventListener('drop', (e) => { e.preventDefault(); depth = 0; drop.classList.remove('over'); if (e.dataTransfer && e.dataTransfer.files.length) filesUploadFiles(e.dataTransfer.files); });
       }
+      shareLinksInit();
       await filesRefresh();
     }
     // Also called when the active chat changes: a different agent means a different root, so start at its top.
@@ -1228,6 +1230,7 @@
           <td class="num">${when(e.mtime)}</td>
           <td><div class="files-acts">
             ${isDir ? `<button onclick="filesZip(filesJoin(filesState.path, filesState.entries[${i}].name))" title="Download this folder as one zip file">Download as zip</button>` : `<button onclick="filesDownload(${i})" title="Download to this computer">Download</button>`}
+            ${isDir || !shareLinksOn() ? '' : `<button onclick="shareLinkOpen(${i})">Share link</button>`}
             <button onclick="filesUseInChat(${i})" title="Put the server path of this ${isDir ? 'folder' : 'file'} into the open chat">Use in chat</button>
             <button onclick="filesRename(${i})">Rename</button>
             <button class="danger" onclick="filesDelete(${i})">Delete</button>
@@ -1292,6 +1295,168 @@
       if (!confirm(msg)) return;
       try { await filesApi(filesUrl('', { path: filesJoin(filesState.path, e.name) }), { method: 'DELETE' }); filesStatus(`Deleted "${e.name}"`, 'ok'); await filesRefresh(); }
       catch (err) { filesStatus(err.message, 'error'); }
+    }
+    // ── share links (begin): a short link to one file (server: /api/share-links*); this block is the same in app.js and mobile.js ──
+    const shareLinksState = { settings: null };
+    function shareLinkLabel(h) { h = Number(h); return h === 1 ? '1 hour' : h === 24 ? '24 hours' : h === 168 ? '7 days' : `${h} hours`; }
+    function shareLinkDefaultHours(s) { const c = (s && s.choices) || []; return c.includes(s.defaultHours) ? s.defaultHours : c[0]; }
+    function shareLinkWhen(t) { const d = new Date(t); return isNaN(d) ? String(t || '') : d.toLocaleString(); }
+    async function shareLinksJson(url, body) {
+      let r;
+      try { r = await fetch(url, body === undefined ? { credentials: 'include' } : { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); }
+      catch { throw new Error('Could not reach the hub.'); }
+      let d = {}; try { d = await r.json(); } catch { /* no body */ }
+      if (!r.ok || d.error) throw new Error(d.error || `HTTP ${r.status}`);
+      return d;
+    }
+    // Loaded once when the Files panel opens; null (action hidden) when the call fails.
+    async function shareLinksLoad() {
+      try { const d = await shareLinksJson('/api/share-links'); shareLinksState.settings = d.settings || null; return d; }
+      catch { shareLinksState.settings = null; return null; }
+    }
+    function shareLinksOn() { return !!(shareLinksState.settings && shareLinksState.settings.enabled); }
+    // identity = the panel's own folder identity ({ owner?, agent? }), as it sends it with rename and mkdir.
+    function shareLinkRequest(identity, path, hours, oneTime) { return { ...identity, path, hours: Number(hours), oneTime: !!oneTime }; }
+    function shareLinkFormHtml(name, s) {
+      const def = shareLinkDefaultHours(s);
+      const opts = ((s && s.choices) || []).map(h => `<option value="${Number(h)}"${h === def ? ' selected' : ''}>${escapeHtml(shareLinkLabel(h))}</option>`).join('');
+      return `<div class="sec-section"><div class="sec-title">${escapeHtml(name)}</div>
+        <label class="sec-hint" for="sl-hours">Link works for</label><select class="sl-hours" id="sl-hours">${opts}</select>
+        <label class="sec-hint" style="display:flex;gap:8px;align-items:center"><input type="checkbox" class="sl-once" style="width:auto"> Only one download</label>
+        <div class="sec-msg sl-msg" role="alert" style="color:var(--error,#e55)"></div></div>
+        <div class="sec-actions"><button type="button" class="sec-btn sl-cancel">Cancel</button><button type="button" class="sec-btn sl-create">Create link</button></div>`;
+    }
+    function shareLinkResultHtml(link, origin) {
+      return `<div class="sec-section"><input type="text" class="sl-url" readonly aria-label="Link" value="${escapeHtml(origin + link.path)}">
+        <div class="sec-hint">Expires ${escapeHtml(shareLinkWhen(link.expiresAt))}</div>
+        <div class="sec-hint">Opens for you when you're signed in to your Maestro.</div></div>
+        <div class="sec-actions"><button type="button" class="sec-btn sl-copy">Copy</button><button type="button" class="sec-btn sl-done">Done</button></div>`;
+    }
+    async function shareLinkCopy(text, btn, input) {
+      let ok = false;
+      try { await navigator.clipboard.writeText(text); ok = true; } catch { /* no clipboard on an http:// address */ }
+      if (!ok && input) { try { input.focus(); input.select(); ok = document.execCommand('copy'); } catch { ok = false; } }
+      if (!ok && input) { try { input.select(); } catch { /* nothing to select */ } }
+      if (btn) { const old = btn.textContent; btn.textContent = ok ? 'Copied' : 'Select and copy'; setTimeout(() => { btn.textContent = old; }, 1500); }
+      return ok;
+    }
+    // root holds the form (class sl-body); o = { identity, path, close }.
+    function shareLinkWire(root, o) {
+      const q = (s) => root.querySelector(s);
+      q('.sl-cancel').onclick = o.close;
+      q('.sl-create').onclick = async () => {
+        const btn = q('.sl-create'); btn.disabled = true; q('.sl-msg').textContent = '';
+        let d;
+        try { d = await shareLinksJson('/api/share-links', shareLinkRequest(o.identity, o.path, q('.sl-hours').value, q('.sl-once').checked)); }
+        catch (e) { q('.sl-msg').textContent = e.message; btn.disabled = false; return; }
+        q('.sl-body').innerHTML = shareLinkResultHtml(d, location.origin);
+        const url = q('.sl-url');
+        q('.sl-copy').onclick = () => shareLinkCopy(url.value, q('.sl-copy'), url);
+        q('.sl-done').onclick = o.close;
+        try { url.select(); } catch { /* ok */ }
+      };
+    }
+    function shareLinksListHtml(links, admin) {
+      if (!links || !links.length) return 'No shared links.';
+      return links.map(l => {
+        const bits = [`expires ${shareLinkWhen(l.expiresAt)}`];
+        if (l.oneTime) bits.push('one download');
+        bits.push(`${Number(l.downloads) || 0} download${Number(l.downloads) === 1 ? '' : 's'}`);
+        if (admin && !l.mine && l.creator && l.creator.name) bits.push(`by ${l.creator.name}`);
+        return `<div class="sl-row" style="display:flex;gap:8px;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border)">
+          <div style="min-width:0"><div class="sec-title" style="overflow-wrap:anywhere">${escapeHtml(l.name)}</div><div class="sec-hint">${escapeHtml(bits.join(' · '))}</div></div>
+          <button type="button" class="sec-btn" data-sl-revoke data-id="${escapeHtml(l.id)}">Revoke</button></div>`;
+      }).join('');
+    }
+    // First press arms the button for 3 s ("Revoke?"); a second press inside that time calls revoke(id).
+    function shareRevokeClick(btn, revoke) {
+      if (btn.dataset.armed === '1') { clearTimeout(btn._slTimer); btn.dataset.armed = ''; btn.disabled = true; return revoke(btn.dataset.id); }
+      btn.dataset.armed = '1'; btn.textContent = 'Revoke?';
+      btn._slTimer = setTimeout(() => { btn.dataset.armed = ''; btn.textContent = 'Revoke'; }, 3000);
+    }
+    async function shareLinksListFill(root, admin) {
+      const box = root.querySelector('.sl-list'), msg = root.querySelector('.sl-msg');
+      box.textContent = 'Loading…';
+      let d;
+      try { d = await shareLinksJson('/api/share-links'); } catch (e) { box.textContent = e.message; return; }
+      shareLinksState.settings = d.settings || shareLinksState.settings;
+      box.innerHTML = shareLinksListHtml(d.links, admin);
+      box.onclick = (ev) => {
+        const b = ev.target.closest && ev.target.closest('button[data-sl-revoke]'); if (!b) return;
+        shareRevokeClick(b, async (id) => {
+          try {
+            await shareLinksJson(`/api/share-links/${encodeURIComponent(id)}/revoke`, {});
+            const row = b.closest('.sl-row'); if (row) row.remove();
+            if (!box.querySelector('.sl-row')) box.textContent = 'No shared links.';
+          } catch (e) { b.disabled = false; b.textContent = 'Revoke'; if (msg) msg.textContent = e.message; }
+        });
+      };
+    }
+    // Settings (admins): the three values of settings.shareLinks.
+    const SHARE_DEFAULT_CHOICES = [1, 24, 168], SHARE_MAX_CHOICES = [1, 24, 72, 168];
+    function shareSettingsHtml() {
+      const opts = (list) => list.map(h => `<option value="${h}">${escapeHtml(shareLinkLabel(h))}</option>`).join('');
+      return `<h4>Share links</h4>
+        <label class="sec-hint" style="display:flex;gap:8px;align-items:center"><input type="checkbox" class="sl-set-on" style="width:auto"> Allow share links</label>
+        <label class="sec-hint">Default time</label><select class="sl-set-def"></select>
+        <label class="sec-hint">Longest allowed</label><select class="sl-set-max">${opts(SHARE_MAX_CHOICES)}</select>
+        <div class="sec-actions" style="justify-content:flex-start"><button type="button" class="sec-btn sl-set-list">Shared links</button></div>
+        <div class="sec-msg sl-set-msg" role="status"></div>`;
+    }
+    function shareSettingsDefaults(root, want) {
+      const max = Number(root.querySelector('.sl-set-max').value) || 168;
+      const list = SHARE_DEFAULT_CHOICES.filter(h => h <= max);
+      const sel = root.querySelector('.sl-set-def');
+      sel.innerHTML = list.map(h => `<option value="${h}">${escapeHtml(shareLinkLabel(h))}</option>`).join('');
+      sel.value = String(list.includes(Number(want)) ? Number(want) : list[list.length - 1]);
+    }
+    async function shareSettingsSave(root) {
+      const msg = root.querySelector('.sl-set-msg');
+      const shareLinks = { enabled: root.querySelector('.sl-set-on').checked, defaultHours: Number(root.querySelector('.sl-set-def').value), maxHours: Number(root.querySelector('.sl-set-max').value) };
+      try { await shareLinksJson('/api/settings', { shareLinks }); shareLinksState.settings = { ...(shareLinksState.settings || {}), ...shareLinks }; msg.textContent = 'Saved.'; }
+      catch (e) { msg.textContent = 'Could not save: ' + e.message; }
+    }
+    // root = the block holding shareSettingsHtml(); openList opens the list dialog.
+    async function shareSettingsMount(root, openList) {
+      if (!root) return;
+      const d = await shareLinksLoad();
+      if (!d || !d.settings) { root.hidden = true; return; }
+      const s = d.settings;
+      root.querySelector('.sl-set-on').checked = !!s.enabled;
+      const max = root.querySelector('.sl-set-max'); max.value = String(SHARE_MAX_CHOICES.includes(Number(s.maxHours)) ? Number(s.maxHours) : 168);
+      shareSettingsDefaults(root, s.defaultHours);
+      root.querySelector('.sl-set-on').onchange = () => shareSettingsSave(root);
+      root.querySelector('.sl-set-def').onchange = () => shareSettingsSave(root);
+      max.onchange = () => { shareSettingsDefaults(root, root.querySelector('.sl-set-def').value); shareSettingsSave(root); };
+      root.querySelector('.sl-set-list').onclick = openList;
+    }
+    // ── share links (end) ──
+    // Files panel hooks (share links): the load on open, the dialogs, and the Settings block. Core: the share links block above.
+    function shareLinksInit() {
+      shareLinksLoad().then(() => {
+        const b = document.getElementById('files-shared-btn'); if (b) b.hidden = !shareLinksState.settings;
+        if (document.getElementById('files-list') && filesState.entries.length) filesRenderList();
+      });
+    }
+    function shareOverlay(id, title, inner) {
+      document.getElementById(id)?.remove();
+      const ov = document.createElement('div'); ov.className = 'question-overlay'; ov.id = id;
+      ov.innerHTML = `<div class="question-modal security-modal" role="dialog" aria-modal="true" aria-label="${escapeHtml(title)}"><h3>${escapeHtml(title)}</h3>${inner}</div>`;
+      ov.__dialogClose = () => ov.remove();
+      document.body.appendChild(ov);
+      return ov;
+    }
+    function shareLinkOpen(i) {
+      const e = filesState.entries[i];
+      if (!e || e.type === 'dir' || !shareLinksOn()) return;
+      const ov = shareOverlay('share-link-overlay', 'Share link', `<div class="sl-body">${shareLinkFormHtml(e.name, shareLinksState.settings)}</div>`);
+      shareLinkWire(ov, { identity: filesOwnerBody(), path: filesJoin(filesState.path, e.name), close: () => dialogRequestClose(ov) });
+      ov.querySelector('.sl-create').focus();
+    }
+    function shareLinksListOpen() {
+      const ov = shareOverlay('share-list-overlay', 'Shared links', `<div class="sl-list sec-section">Loading…</div><div class="sec-msg sl-msg" role="alert" style="color:var(--error,#e55)"></div><div class="sec-actions"><button type="button" class="sec-btn sl-close">Close</button></div>`);
+      ov.querySelector('.sl-close').onclick = () => dialogRequestClose(ov);
+      shareLinksListFill(ov, isHubAdmin());
     }
     // One request per file, raw bytes in the body, with upload progress. Resolves { entry, path, absPath }.
     function uploadFileToHub(file, dir, { overwrite = false, onProgress, agent = filesState.agent } = {}) {
@@ -2771,8 +2936,10 @@
         <div class="st-hint" style="color:var(--text-dim)">Opening My Maestro directly to your network still needs an admin with two-factor. Members choose for themselves.</div>
         <div id="st-a2fa-confirm"></div>
         <div class="st-hint" id="st-a2fa-msg" role="status"></div>
+        <div id="st-share-block" style="display:flex;flex-direction:column;gap:6px;margin-top:10px">${shareSettingsHtml()}</div>
       </div>`;
         setTimeout(stAdmin2faPaint, 0);
+        setTimeout(() => shareSettingsMount(document.getElementById('st-share-block'), shareLinksListOpen), 0);
       }
       html += voiceSettingsHtml(data);
       setTimeout(voiceSettingsInit, 0);
