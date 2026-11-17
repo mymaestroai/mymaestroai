@@ -97,7 +97,9 @@ test('a descriptor copy (2>&1, >&2) is no file a verb writes; &>file, >|file and
   for (const cmd of [`cd ${FX} && echo x &>/etc/f`, `cd ${FX} && echo x >|/etc/f`, `cd ${FX} && cp a b 2> /etc/err.log`]) refused(cmd);
   // a package manager's install: its arguments are packages; the folder it runs in is judged (npm writes node_modules there)
   for (const cmd of ['pip install --quiet pycryptodome', 'pip3 install pysha3', 'npm install js-sha3', 'apt-get -y install jq']) {
-    assert.deepStrictEqual(r(`cd ${FX} && ${cmd}`).paths, [FX], cmd);
+    // the folder it runs in is judged (the copy reading also lists <folder>/<package>, in the same folder: review r6)
+    const res = r(`cd ${FX} && ${cmd}`);
+    assert.ok(res.paths.includes(FX) && res.cls === 'write_inside', `${cmd}: ${res.cls} ${res.paths}`);
     refused(cmd);   // from the install folder: the install folder is where it runs
   }
   assert.deepStrictEqual(r(`cd ${FX} && install -m 644 a.txt /etc/a.txt`).paths, ['/etc/a.txt'], 'coreutils install is a copy');
@@ -200,4 +202,9 @@ test('round 5: paths inside a computed target, env -u npm install -t DIR', () =>
     assert.strictEqual(c(cmd), 'admin', cmd);
   }
   inside(`cd ${FX} && pip install requests`);
+  // review r6 (Sonnet 1, 2): a manager word that is a wrapper's own argument; a path after :- in a default value
+  for (const cmd of [`cd ${FX} && flock npm install -t/etc/cron.d a`, `cd ${FX} && taskset 1 npm install -t/etc/cron.d a`,
+    `cd ${FX} && touch $(echo /tmp/a \${X:-/etc/x})`, `cd ${FX} && touch \${X:-/etc/x}`]) {
+    assert.strictEqual(c(cmd), 'admin', cmd);
+  }
 });
