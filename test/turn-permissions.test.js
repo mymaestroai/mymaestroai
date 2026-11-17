@@ -213,6 +213,18 @@ test('report_to: an allowed report is delivered and the consulter flag reaches t
   assert.strictEqual(seen.at(-1), 'peer-a');
 });
 
+test('report_to: a pending report whose job record is missing is refused and dropped, never delivered', async () => {
+  let checks = 0;
+  const r = jobRig({ mayReport: async () => { checks++; return { ok: true }; } });
+  r.runner.pending.length = 0;
+  r.runner.pending.push({ kind: 'report', jobId: 'nope', agent: 'peer-a', message: 'x', attempts: 0, notBefore: 0 });
+  await r.runner._deliver();
+  assert.strictEqual(r.state.notes.length, 0, 'notify was never called');
+  assert.deepStrictEqual(r.runner.pending, [], 'the report left the pending list');
+  assert.strictEqual(checks, 0, 'no owner to check against');
+  assert.ok(r.state.logs.some(l => /dropped/.test(l) && /the job record is missing/.test(l)));
+});
+
 // ── Labels: who started a hub turn ──────────────────────────────────────────
 function extractFn(src, header) {
   const at = src.indexOf(header); assert.ok(at >= 0, `${header} not found`);

@@ -32,7 +32,7 @@ stub('sdk-chat.js', {
   startHubTurn: async (agent, message, opts) => {
     chat.calls.push({ agent, message, opts });
     if (chat.startError) throw chat.startError;
-    return { done: chat.deferDone || Promise.resolve('turn done') };
+    return { done: (chat.doneFor && chat.doneFor[agent]) || chat.deferDone || Promise.resolve('turn done') };
   },
 });
 
@@ -43,7 +43,7 @@ test.before(() => {
   tq = require(path.join(HUB, 'lib', 'task-queue.js'));
 });
 test.after(() => { try { tq.stopTaskQueue(); } catch {} console.log = quiet.log; console.error = quiet.error; fs.rmSync(ROOT, { recursive: true, force: true }); });
-test.beforeEach(() => { chat.calls.length = 0; chat.ruleCalls.length = 0; chat.refuse.clear(); chat.startError = null; chat.deferDone = null; active.clear(); });
+test.beforeEach(() => { chat.doneFor = {}; chat.calls.length = 0; chat.ruleCalls.length = 0; chat.refuse.clear(); chat.startError = null; chat.deferDone = null; active.clear(); });
 
 const mk = (over = {}) => tq.createTask({ creator_agent: 'lead-a', target_agent: 'peer-a', trigger_type: 'delay', trigger_value: '5', action_prompt: 'do it', ...over });
 // Direct read of one row by id, independent of listTasks' ordering and limit.
@@ -238,6 +238,29 @@ test('the task completes when its turn ends, not when it is admitted', async (t)
   assert.strictEqual(byId(task.id).status, 'running');
   end('reply');
   await until(() => byId(task.id).status === 'completed');
+  tq.stopTaskQueue();
+});
+
+test('a stale snapshot from a still-running check never fires a task twice', async (t) => {
+  let endA; chat.doneFor = { 'stale-a': new Promise(r => { endA = r; }) };
+  const A = await mk({ trigger_type: 'at_time', trigger_value: '2020-01-01T00:00:00Z', target_agent: 'stale-a', action_prompt: 'task A' });
+  const B = await mk({ trigger_type: 'at_time', trigger_value: '2020-01-01T00:00:00Z', target_agent: 'stale-b', action_prompt: 'task B' });
+  // Hold the other pending rows of earlier tests out of the way: only A and B are due and pending.
+  const d = new Database(DB); d.prepare(`UPDATE tasks SET status = 'cancelled' WHERE status = 'pending' AND id NOT IN (?, ?)`).run(A.id, B.id); d.close();
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  tq.startTaskQueue();
+  t.mock.timers.tick(10000);                                   // check 1: snapshot [A, B]; stuck awaiting A's turn
+  await until(() => chat.calls.some(c => c.agent === 'stale-a'));
+  assert.strictEqual(chat.calls.filter(c => c.agent === 'stale-b').length, 0, 'check 1 is still inside A');
+  // Another task has become pending since; make B pending again in a way check 2 sees it. (B was never claimed: check 1 is stuck on A.)
+  t.mock.timers.tick(10000);                                   // check 2: snapshot [B]; fires B
+  await until(() => chat.calls.some(c => c.agent === 'stale-b'));
+  assert.strictEqual(byId(B.id).status, 'completed');
+  endA('reply');                                               // check 1 resumes with its stale B
+  await until(() => byId(A.id).status === 'completed');
+  await new Promise(r => setTimeout(r, 50));
+  assert.strictEqual(chat.calls.filter(c => c.agent === 'stale-b').length, 1, 'B started exactly once');
+  assert.strictEqual(chat.calls.filter(c => c.agent === 'stale-a').length, 1);
   tq.stopTaskQueue();
 });
 

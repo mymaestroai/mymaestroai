@@ -193,6 +193,38 @@ test('admin-2fa setRequired passes the lock through as 429', () => {
   assert.strictEqual(calls.length, 0, 'setting not changed');
 });
 
+test('turning two-factor off clears a lock: re-enrolling starts clean (right code accepted at once, 4 wrong do not lock)', () => {
+  const { auth, clock } = fresh();
+  const a = enrol(auth, clock, 'owner@example.com');
+  clock.t += 30000;
+  assert.strictEqual(wrong(auth, a.id, 5).locked, true);
+  assert.ok(auth.totpDisable(a.id).ok);
+  clock.t += 1000;
+  const b = auth.totpBegin(a.id);
+  assert.ok(auth.totpConfirm(a.id, A.totpCode(b.secret, { now: clock.t })).ok);
+  clock.t += 30000;                                           // still inside the old 60 s lock window
+  const r = auth.totpCheck(a.id, A.totpCode(b.secret, { now: clock.t }));
+  assert.strictEqual(r.locked, undefined, 'not locked');
+  assert.strictEqual(r.ok, true);
+  const w = wrong(auth, a.id, 4);
+  assert.strictEqual(w.locked, undefined, 'the old count was not carried over');
+  assert.strictEqual(w.error, 'Wrong code');
+});
+
+test('confirming a new secret clears a lock left on the account', () => {
+  const { auth, clock } = fresh();
+  const a = enrol(auth, clock, 'owner@example.com');
+  clock.t += 30000;
+  assert.strictEqual(wrong(auth, a.id, 5).locked, true);
+  clock.t += 1000;
+  const b = auth.totpBegin(a.id);                              // re-enrol without disabling first
+  assert.ok(auth.totpConfirm(a.id, A.totpCode(b.secret, { now: clock.t })).ok);
+  clock.t += 30000;
+  const r = auth.totpCheck(a.id, A.totpCode(b.secret, { now: clock.t }));
+  assert.strictEqual(r.locked, undefined);
+  assert.strictEqual(r.ok, true);
+});
+
 test('server.js: route, step-up, disable and notifier wiring (source pins; no harness drives these routes)', () => {
   const s = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
   assert.ok(s.includes("if (!r.ok && r.locked) return jsonResponse(res, 429, { ok: false, locked: true, error: r.error });"));
@@ -201,6 +233,7 @@ test('server.js: route, step-up, disable and notifier wiring (source pins; no ha
   assert.ok(s.includes('hubAuth.setTotpLockNotifier('));
   assert.ok(/notifyUsers\(\{[\s\S]*?tag: 'totp-lock',[\s\S]*?\}, ids, \{ kind: 'security' \}\)/.test(s));
   assert.ok(s.includes('[auth] two-factor locked for a minute: ${user.login}'));
+  assert.ok(s.includes("If this wasn't ${user.name || user.login}, someone knows the password: change it.`"));
   const login = fs.readFileSync(path.join(__dirname, '..', 'login.html'), 'utf8');
   assert.ok(/if \(res\.body && res\.body\.error\) return res\.body\.error;/.test(login), 'sign-in page shows the server error text');
 });

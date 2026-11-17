@@ -124,7 +124,7 @@ hubAuth.setTotpLockNotifier(({ user }) => {
   console.log(`[auth] two-factor locked for a minute: ${user.login}`);
   Promise.resolve(require('./lib/push').getPush().notifyUsers({
     title: 'Two-factor sign-in locked for a minute',
-    body: `5 wrong two-factor codes for ${user.name || user.login}. Codes are refused for a minute.`,
+    body: `5 wrong two-factor codes for ${user.name || user.login}. Codes are refused for a minute. If this wasn't ${user.name || user.login}, someone knows the password: change it.`,
     url: '/', tag: 'totp-lock',
   }, ids, { kind: 'security' })).catch(() => {});
 });
