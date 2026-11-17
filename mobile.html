@@ -890,6 +890,10 @@ html.mm-simple .msg.assistant pre code { background: none; }
 html.mm-simple .msg.simple-auto { align-self: center; max-width: 100%; padding: 0; background: none; color: var(--text-tertiary); font-size: 14px; }
 html.mm-simple .note { color: var(--text-tertiary); font-size: 14px; }
 html.mm-simple .note.simple-auto-line { margin: -10px 0; }
+/* The running-turn status line ("Agent: running ...") and the orange interjection look are Advanced only: an interjection is an ordinary user bubble */
+html.mm-simple .reattach, html.mm-simple .ij-seg .note.interject { display: none !important; }
+html.mm-simple .ij-seg { margin: 14px 0 14px auto; padding: 12px 18px; width: fit-content; max-width: 86%; border: 0; border-radius: 22px 22px 6px 22px; background: var(--sp-bubble); color: var(--text); font-size: 18px; line-height: 1.55; }
+html.mm-simple .note.interject { color: var(--text-tertiary); font-size: 13px; font-style: normal; }
 html.mm-simple .chat-busy-card { align-self: center; color: var(--text-tertiary); font-size: 14px; background: none; border: 0; }
 
 /* Empty chat: greeting and big stacked starter buttons */
@@ -926,7 +930,7 @@ html.mm-simple #simple-call-btn.in-call { background: var(--error, #e5484d); box
 html.mm-simple #mic-btn.call { display: none; }   /* during a call the red hang-up is #simple-call-btn: one call button */
 html.mm-simple #send-btn { order: 6; min-width: 52px; min-height: 52px; border-radius: 50%; background: var(--accent); color: #fff; font-size: 20px; }
 html.mm-simple #send-btn.stop { background: var(--error); }
-html.mm-simple #send-btn.interject { background: var(--warning); color: #000; }
+html.mm-simple #send-btn.interject { background: #8b6fd6; color: #fff; }
 html.mm-simple #plus-sheet { background: var(--bg-card); border-color: var(--border); }
 html.mm-simple #plus-sheet .ps-item { min-height: 52px; font-size: 17px; color: var(--text); }
 html.mm-simple #simple-effort-sheet { display: block; position: absolute; left: 12px; right: 12px; bottom: calc(100% - 6px); z-index: 12; max-width: 696px; margin: 0 auto; background: var(--bg-card); border: 1px solid var(--border); border-radius: 20px; box-shadow: 0 2px 14px rgba(0,0,0,.25); padding: 8px; }

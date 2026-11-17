@@ -340,3 +340,12 @@ test('call and effort buttons use onComposerTap; the call button has an in-call 
   const css = /<style id="simple-css">([\s\S]*?)<\/style>/.exec(html)[1];
   assert.match(css, /html\.mm-simple #simple-call-btn\.in-call \{/);
 });
+
+test('r3: Simple hides the running-turn status line and shows an interjection as an ordinary user bubble', () => {
+  const css = /<style id="simple-css">([\s\S]*?)<\/style>/.exec(html)[1];
+  assert.match(css, /html\.mm-simple \.reattach, html\.mm-simple \.ij-seg \.note\.interject \{ display: none !important; \}/);
+  assert.match(css, /html\.mm-simple \.ij-seg \{[^}]*border: 0[^}]*background: var\(--sp-bubble\)/);
+  assert.match(js, /className = 'reattach'/);   // the element the rule hides
+  assert.match(js, /if \(ij && typeof simpleOn === 'function' && simpleOn\(\)\) \{ const ijNote = bubbleHost\(\)\.lastElementChild;[^}]*simple-auto-hide/);
+  assert.match(html, /\.ij-seg \{ margin: 6px 0; padding: 6px 10px; border-left: 3px solid var\(--warning\)/);   // Advanced unchanged
+});
