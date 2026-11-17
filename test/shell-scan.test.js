@@ -688,3 +688,79 @@ test('review r3 9: a chain of wrappers is bounded and reported', () => {
   assert.ok(big.problems.includes('too many wrappers'));
   assert.ok(Date.now() - t0 < 2000, `${Date.now() - t0} ms`);
 });
+
+test('review r8 1: function calls are expanded iteratively, before the variables are resolved, from simple bodies only', () => {
+  const has = (t, text) => scanCommand(t).segments.some(x => rawWords(x).map(dequote).join(' ') === text);
+  const funcsOf = (t) => scanCommand(t).assigned.info.funcs;
+  assert.ok(has('g(){ command rm "$@"; }; f(){ g "$@"; }; f -rf ~/projects', 'command rm -rf ~/projects'), 'a call inside an expanded body');
+  assert.ok(has('h(){ command rm "$@"; }; g(){ h "$@"; }; f(){ g "$@"; }; f -rf ~/projects', 'command rm -rf ~/projects'), 'three levels');
+  const deep = scanCommand('i(){ command rm "$@"; }; h(){ i "$@"; }; g(){ h "$@"; }; f(){ g "$@"; }; f -rf ~/projects');
+  assert.ok(deep.problems.includes('functions nested too deeply'), JSON.stringify(deep.problems));
+  assert.ok(has('a=rm; ls(){ $a "$@"; }; ls -rf ~/projects', 'rm -rf ~/projects'), 'the variable in the expanded text resolves');
+  // only a simple body is read: anything else makes the function computed
+  for (const t of ['f(){ command rm "${@:2}"; }; f x -rf ~/projects', 'f(){ set -- -rf ~/projects; command rm "$@"; }; f', 'f(){ shift; command rm "$@"; }; f x -rf ~/projects',
+    'f(){ sh\'\'ift; command rm "$@"; }; f x', 'f(){ echo ${1:-x} $#; }; f', 'f(){ echo ${10}; }; f', 'f(){ echo $0; }; f', 'f(){ echo ' + '$1 '.repeat(257) + '; }; f x']) {
+    assert.strictEqual(funcsOf(t).get('f'), null, t);
+    assert.strictEqual(computedIn(t), true, t);
+  }
+  for (const t of ['f(){ echo "$1" $2 "${3}" "$@" $* ${@} "${*}"; }; f a b c', 'function f() { echo hi; }; f', 'function f { echo hi; }; f', 'f(){ echo "${#x}"; }; f']) {
+    assert.strictEqual(typeof funcsOf(t).get('f'), 'string', t);
+    assert.strictEqual(scanCommand(t).ok, true, t);
+  }
+  assert.strictEqual(typeof funcsOf('1x(){ command rm "$@"; }; 1x -rf ~/projects').get('1x'), 'string', 'a name that starts with a digit');
+  assert.ok(has('1x(){ command rm "$@"; }; 1x -rf ~/projects', 'command rm -rf ~/projects'));
+  assert.ok(has('function f() { command rm "$@"; }; f -rf ~/projects', 'command rm -rf ~/projects'), '`function f()` is one definition');
+  // a } that is an argument does not end the body; one at command position does
+  assert.ok(has('f(){ echo }; command rm "$@"; }; f -rf ~/projects', 'command rm -rf ~/projects'));
+  assert.ok(has('f(){ { echo; }; command rm "$@"; }; f -rf ~/projects', 'command rm -rf ~/projects'));
+  assert.ok(has('f(){ echo "}" \'}\' $(echo }) ${x:-}} # }\n command rm "$@"; }; f -rf ~/projects', 'command rm -rf ~/projects'));
+  assert.ok(has('f(){ case "$1" in }) echo };; esac; command rm "$@"; }; f -rf ~/projects', 'command rm -rf ~/projects'));
+  assert.strictEqual(funcsOf('f(){ cat <<EOF\n}\nEOF\n}; f').get('f'), null, 'a heredoc in the body: not reliable');
+  assert.strictEqual(funcsOf('f(){ echo hi').get('f'), null, 'no closer: computed');
+  assert.strictEqual(funcsOf('f(){ :; }; f(){ :; }; f').get('f'), null, 'defined twice');
+  assert.strictEqual(scanCommand('f(){ echo "$1"; }; f hello').ok, true);
+});
+
+test('review r8 2: [[ x =~ y ]] assigns BASH_REMATCH', () => {
+  assert.ok(scanCommand('[[ rm =~ rm ]]; $BASH_REMATCH -rf ~/projects').assigned.includes('BASH_REMATCH'));
+  assert.strictEqual(computedIn('[[ rm =~ rm ]]; $BASH_REMATCH -rf ~/projects'), true);
+  assert.strictEqual(computedIn('[[ rm = rm ]]; $BASH_REMATCH -rf ~/projects'), false, 'no =~: nothing assigned');
+});
+
+test('review r8 3: $BASH and $SHELL as the program are shells for code strings and heredoc bodies', () => {
+  for (const sh of ['$BASH', '${BASH}', '$SHELL', '${SHELL}', '"$BASH"', '"${SHELL}"']) {
+    assert.ok(segs(`${sh} -c 'rm -rf ~/projects'`).includes('rm -rf ~/projects'), sh + ' -c');
+    assert.ok(segs(`${sh} <<<'rm -rf ~/projects'`).includes('rm -rf ~/projects'), sh + ' here-string');
+    assert.ok(segs(`${sh} <<'EOF'\nrm -rf ~/projects\nEOF`).includes('rm -rf ~/projects'), sh + ' heredoc');
+  }
+  assert.ok(!segs("$BASHX -c 'rm -rf ~/projects'").includes('rm -rf ~/projects'));
+});
+
+test('review r8 4: scanClose reads case patterns as the lexer does', () => {
+  for (const t of ['A=$(case x in esac) :;; esac) $(echo rm) -rf ~/projects', 'A=$(case x in a|esac) :;; esac) $(echo rm) -rf ~/projects',
+    'A=$(case x in $(echo a)) :;; esac) $(echo rm) -rf ~/projects']) {
+    const ws = rawWords(t);
+    assert.strictEqual(ws[0], t.slice(0, t.indexOf(' $(echo rm)')), t);
+    assert.deepStrictEqual(ws.slice(1), ['$(echo rm)', '-rf', '~/projects'], t);
+    assert.strictEqual(computedIn(t), true, t);
+  }
+  // esac in command position ends the case, also before a `)`; a pattern `esac` not at the start does not
+  assert.deepStrictEqual(rawWords('A=$(case x in a) :;; esac) ls'), ['A=$(case x in a) :;; esac)', 'ls']);
+  assert.deepStrictEqual(rawWords('A=$(case x in a) :;;\nesac) ls'), ['A=$(case x in a) :;;\nesac)', 'ls']);
+  assert.deepStrictEqual(rawWords('A=$(case x in (a|${y}) :;; ${z}) :;; esac) ls'), ['A=$(case x in (a|${y}) :;; ${z}) :;; esac)', 'ls']);
+  assert.deepStrictEqual(rawWords('A=$(case x in `echo a`) :;; esac) ls'), ['A=$(case x in `echo a`) :;; esac)', 'ls']);
+});
+
+test('review r8 5: the single-literal exemption is off for eval/source/. and computed command words, and when a candidate is too large', () => {
+  const exempt = (t) => scanCommand(t).assigned.info.exemptOK;
+  assert.strictEqual(exempt('c=rm; $c -rf x'), true);
+  for (const t of ['c=ls; {eval,} "$(printf \'c=%s\' rm)"; $c -rf ~/projects', 'c=ls; ev\'\'al "c=rm"; $c x', 'c=ls; \\source f; $c x', 'c=ls; . f; $c x',
+    'c=ls; $(echo true) x; $c x', 'c=ls; `echo true` x; $c x', 'c=ls; /bin/tru? x; $c x', 'c=ls; {true,false} x; $c x']) {
+    assert.strictEqual(exempt(t), false, t);
+    assert.strictEqual(computedIn(t), true, t);
+  }
+  assert.strictEqual(exempt('c=ls; [ -f x ] && [[ -f y ]]; (( n = 1 )); $c x'), true, 'test commands are not computed');
+  const big = scanCommand('c=rm; $c -rf ~/projects ' + 'w '.repeat(35000));
+  assert.strictEqual(big.assigned.info.exemptOK, false);
+  assert.strictEqual(computedIn('c=rm; $c -rf ~/projects ' + 'w '.repeat(35000)), true);
+});

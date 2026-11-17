@@ -598,3 +598,40 @@ test('real-command replay (neutralised): what ran before keeps running unless so
   isDestroy('ls(){ command rm "$@"; }; ls -rf ~/projects');
   isDestroy('f(){ $1 -rf ~/projects; }; f rm');
 });
+
+test('review r8: nested calls, simple bodies only, BASH_REMATCH, $BASH/$SHELL, case patterns, the exemption', () => {
+  const atLeastAdmin = (cmd) => assert.ok(SEV(c(cmd)) >= SEV('admin'), `${JSON.stringify(cmd)} -> ${c(cmd)}`);
+  // 1 function calls
+  isDestroy('g(){ command rm "$@"; }; f(){ g "$@"; }; f -rf ~/projects');
+  isDestroy('h(){ command rm "$@"; }; g(){ h "$@"; }; f(){ g "$@"; }; f -rf ~/projects');
+  isDestroy('a=rm; ls(){ $a "$@"; }; ls -rf ~/projects');
+  isDestroy('f(){ echo }; command rm "$@"; }; f -rf ~/projects');
+  isDestroy('1x(){ command rm "$@"; }; 1x -rf ~/projects');
+  isDestroy('function f() { command rm "$@"; }; f -rf ~/projects');
+  atLeastAdmin('f(){ command rm "${@:2}"; }; f x -rf ~/projects');
+  atLeastAdmin('f(){ set -- -rf ~/projects; command rm "$@"; }; f');
+  atLeastAdmin('f(){ shift; command rm "$@"; }; f x -rf ~/projects');
+  assert.strictEqual(cr('function f() { echo hi; }; f'), 'read');
+  assert.strictEqual(cr('f(){ echo "$1"; }; f hello'), 'read');
+  // 2 BASH_REMATCH
+  atLeastAdmin('[[ rm =~ rm ]]; $BASH_REMATCH -rf ~/projects');
+  // 3 $BASH and $SHELL are shells
+  isDestroy("$BASH -c 'rm -rf ~/projects'");
+  isDestroy("\"$SHELL\" -c 'rm -rf ~/projects'");
+  isDestroy(L('"$SHELL" <<\'EOF\'', RM, 'EOF'));
+  isDestroy(L('${BASH} <<\'EOF\'', RM, 'EOF'));
+  // 4 case patterns in a substitution
+  atLeastAdmin('A=$(case x in esac) :;; esac) $(echo rm) -rf ~/projects');
+  atLeastAdmin('A=$(case x in a|esac) :;; esac) $(echo rm) -rf ~/projects');
+  atLeastAdmin('A=$(case x in $(echo a)) :;; esac) $(echo rm) -rf ~/projects');
+  // 5 the exemption
+  atLeastAdmin('c=ls; {eval,} "$(printf \'c=%s\' rm)"; $c -rf ~/projects');
+  atLeastAdmin('c=rm; $c -rf ~/projects ' + 'w '.repeat(35000));
+  isDestroy('c=rm; $c -rf ~/projects');
+});
+
+test('lead, review r8: a function body that runs eval, source or . is not read with substituted arguments', () => {
+  for (const cmd of ["f(){ eval 'set -- -rf ~/projects'; command rm \"$@\"; }; f", 'f(){ . /dev/stdin; command rm "$@"; }; f']) {
+    assert.ok(SEV(c(cmd)) >= SEV('admin'), cmd);
+  }
+});
