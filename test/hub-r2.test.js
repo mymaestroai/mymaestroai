@@ -12,6 +12,8 @@ const connectorsLib = require('../lib/connectors');
 const { createConnectors } = connectorsLib;
 const { createApprovals } = require('../lib/approvals');
 
+/** An allow also carries dayEnds (the owner's next midnight); the rest of the answer is compared as before. */
+const noDay = (r) => { assert.ok(Number.isFinite(r.dayEnds) && r.dayEnds > 0, 'an allow carries dayEnds'); const { dayEnds, ...rest } = r; return rest; };
 const tmp = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
 const rm = (d) => fs.rmSync(d, { recursive: true, force: true });
 
@@ -26,7 +28,7 @@ function rig(o = {}, result = { content: [{ type: 'text', text: 'ok' }] }) {
     respondError(id, code, message) { this.errors.push({ id, code, message }); }
   }
   const leads = ['owner'];
-  const cx = createConnectors({ file: path.join(dir, 'connectors.json'), keyFile: path.join(dir, '.auth-key'), McpClient: FakeClient, log: () => {}, unlockTtlMs: 0, baseEnv: { PATH: process.env.PATH }, leadNames: () => leads, ...o });
+  const cx = createConnectors({ file: path.join(dir, 'connectors.json'), keyFile: path.join(dir, '.auth-key'), McpClient: FakeClient, log: () => {}, unlockTtlMs: 0, baseEnv: { PATH: process.env.PATH }, leadNames: () => leads, zone: () => 'UTC', ...o });   // a fixed zone: the default reads the owner's account
   const up = (extra = {}) => cx.upsert({ id: 'rc', label: 'Remote computers', kind: 'mcp', command: process.execPath, args: ['x'], module: 'rc', enabled: true, approvals: true, agents: ['sam'], ...extra }, { byModule: true });
   const tick = async () => { for (let i = 0; i < 8; i++) await new Promise(r => setImmediate(r)); };
   const spec = async (agent = 'sam') => (await cx.toolSpecsFor(agent)).find(s => s.connector === 'rc');
@@ -78,7 +80,7 @@ test('R2 approve: allow, then the connector is disabled / the call id is gone ->
     const a = await runningCall(r);
     a.cl.emit('request', { id: 1, method: 'hub/approve', params: { call: a.id, title: 'One' } }); await r.tick();
     ap.open[0].resolve({ decision: 'allow', by: 'owner' }); await r.tick();
-    assert.deepStrictEqual(a.cl.responses[0].result, { decision: 'allow' }, 'nothing changed: the owner answer stands');
+    assert.deepStrictEqual(noDay(a.cl.responses[0].result), { decision: 'allow' }, 'nothing changed: the owner answer stands');
     // disabled during the wait
     clock.t += 16000;
     a.cl.emit('request', { id: 2, method: 'hub/approve', params: { call: a.id, title: 'Two' } }); await r.tick();

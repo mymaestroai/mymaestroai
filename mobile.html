@@ -101,7 +101,6 @@
     #working-chip { display: none; margin: 8px 14px 0; padding: 6px 12px; border-radius: 16px; font-size: 13px; color: var(--warning); background: rgba(245, 166, 35, 0.14); width: fit-content; max-width: calc(100% - 28px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     #working-chip.on { display: block; }
     #working-chip.filtering { background: var(--warning); color: #000; }
-    #chat-head .sub.working { color: var(--warning); }
     .reattach { font-size: 12px; color: var(--warning); margin-top: 6px; }
     /* Provider pacing: slim amber bar under the header of every screen (tap to resume full parallel) */
     .pacing-bar { display: none; width: 100%; flex-shrink: 0; padding: 4px 12px; background: #b26a00; color: #fff; font-size: 12px; font-weight: 600; text-align: left; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -124,16 +123,21 @@
     /* Chat */
     #chat-head .agent-icon { width: auto; font-size: 24px; }
     #chat-head .sub { font-size: 12px; color: var(--text-dim); font-weight: 400; }
-    /* Model picker: the phone's own list opens when the model line is tapped (a transparent select over it). */
-    #chat-title .sub-wrap { position: relative; display: flex; min-width: 0; }
-    #chat-title .sub-wrap .sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-    #chat-title .sub-wrap.pickable::after { content: '\25BE'; flex: none; margin-left: 4px; font-size: 12px; line-height: 1.4; color: var(--accent, #3d7bff); }
+    /* Under the name, while the agent works: what it is doing (amber; a question in blue). A tap shows it in full. */
     #chat-title .sub-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
-    #chat-title .sub-row > .sub-wrap:first-child { flex: 0 1 auto; min-width: 0; }
     #chat-title { overflow: hidden; }   /* nothing under the name paints over the header buttons */
-    #chat-meta { display: flex; align-items: center; gap: 14px; padding: 2px 12px 5px 60px; font-size: 12px; color: var(--text-dim);
+    #chat-title #chat-busy { min-width: 0; max-width: 100%; min-height: 0; padding: 0; border: 0; background: none; font: inherit; font-size: 12px; line-height: 1.4; text-align: left;
+      color: var(--warning); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+    #chat-title #chat-busy.question { color: var(--accent-hover); }
+    #chat-busy[hidden] { display: none; }
+    #chat-title.busy { cursor: pointer; }
+    #chat-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 14px; padding: 2px 12px 5px 60px; font-size: 12px; color: var(--text-dim);
       background: var(--bg-card); border-bottom: 1px solid var(--border); flex-shrink: 0; overflow: hidden; white-space: nowrap; }
-    #chat-meta:not(:has(> :not([hidden]))) { display: none; }   /* nothing to show (a model without effort, plan or reading) */
+    /* The model picker is the row's first item; the phone's own list opens when the model is tapped (a transparent select
+       over it). The row wraps, so the model shows whole; only a model name wider than the row itself is cut. */
+    #chat-meta > .sub-wrap:first-child { flex: 0 1 auto; max-width: 100%; }
+    #chat-meta #chat-model { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+    #chat-meta:not(:has(> :not([hidden]))) { display: none; }   /* nothing to show */
     #chat-meta .sub { font-size: 12px; color: var(--text-dim); font-weight: 400; }
     #chat-meta .sub-wrap { position: relative; display: flex; min-width: 0; }
     #chat-meta .sub-wrap.pickable::after { content: '\25BE'; flex: none; margin-left: 4px; font-size: 12px; line-height: 1.4; color: var(--accent, #3d7bff); }
@@ -527,6 +531,17 @@
   #about-sheet .about-chip { margin-left: 6px; padding: 0 7px; border: 1px solid currentColor; border-radius: 8px; }
   #about-sheet .about-chip.stable { color: var(--success); }
   #about-sheet .about-warn { color: var(--warning); display: inline-flex; align-items: center; gap: 4px; }
+  #notify-agent-sheet, #notify-prefs-sheet { width: min(94vw, 420px); max-height: 88vh; overflow-y: auto; }
+  #notify-agent-sheet h3, #notify-prefs-sheet h3 { margin-bottom: 8px; }
+  #notify-agent-sheet .sec-section, #notify-prefs-sheet .sec-section { padding: 10px 0; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 8px; }
+  #notify-agent-sheet .sec-title, #notify-prefs-sheet .sec-title { font-weight: 600; }
+  #notify-agent-sheet .sec-hint, #notify-prefs-sheet .sec-hint { font-size: 13px; color: var(--text-dim); }
+  #notify-agent-sheet select, #notify-prefs-sheet select { width: 100%; min-height: 44px; padding: 0 12px; background: var(--bg-input); color: var(--text); border: 1px solid var(--border-strong); border-radius: 8px; font-size: 16px; }
+  #notify-agent-sheet button, #notify-prefs-sheet button { min-height: 44px; padding: 0 16px; border-radius: 8px; background: var(--border); color: var(--text); }
+  #notify-agent-sheet button.on { background: var(--accent); color: #fff; }
+  #notify-agent-sheet .sec-actions, #notify-prefs-sheet .sec-actions { display: flex; gap: 8px; justify-content: flex-end; }
+  #notify-prefs-sheet .np-row { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
+  #notify-prefs-sheet .np-row button { min-height: 36px; padding: 0 12px; flex: none; }
   #security-sheet, #profile-sheet { width: min(94vw, 420px); max-height: 88vh; overflow-y: auto; }
   #security-sheet h3, #profile-sheet h3 { margin-bottom: 8px; }
   #security-sheet .sec-section, #profile-sheet .sec-section { padding: 10px 0; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 8px; }
@@ -643,7 +658,9 @@
   #call-panel .cp-focus-hint[hidden] { display: none; }
   .vs-seg { display: flex; gap: 8px; }
   .vs-opt { flex: 1; display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 12px; border-radius: 10px; background: var(--bg-card); border: 1px solid var(--border); }
-  .vs-room-out, .vs-car-out { min-height: 1.3em; font-size: 14px; color: var(--text-dim); }
+  .vs-room-out, .vs-car-out, .vs-route-out { min-height: 1.3em; font-size: 14px; color: var(--text-dim); }
+  .vs-route-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 4px 0; font-size: 15px; }
+  .vs-route-row .vs-btn { flex: none; }
   #cp-mic { font-size: 12px; color: var(--text-dim); overflow-wrap: anywhere; }
   #cp-mic:empty { display: none; }
   #cp-mic.cp-mic-lost { font-size: 15px; font-weight: 600; color: var(--danger, #e5484d); }
@@ -778,15 +795,16 @@
     <div class="topbar" id="chat-head">
       <button class="iconbtn" id="chat-back" aria-label="Back">&#x2190;</button>
       <span class="agent-icon" id="chat-icon"></span>
-      <div id="chat-title"><b id="chat-name">Chat</b><span class="sub-row"><span class="sub-wrap"><span class="sub" id="chat-model"></span><select id="chat-model-pick" aria-label="Change this agent's model" hidden></select></span></span></div>
+      <div id="chat-title"><b id="chat-name">Chat</b><span class="sub-row"><button type="button" class="sub" id="chat-busy" hidden></button></span></div>
       <button class="iconbtn" id="chat-resync" aria-label="Re-sync" title="Re-sync with the hub">&#x21BB;</button>
-      <button class="iconbtn notify-chip" id="chat-notify-btn" type="button" aria-pressed="false" aria-label="Notify me when this reply is done" title="Get a notification when this reply is done" hidden>&#x1F514;<span class="nlabel"> Notify</span></button>
+      <button class="iconbtn notify-chip" id="chat-notify-btn" type="button" aria-haspopup="dialog" aria-label="Notifications for this agent" title="Notifications for this agent"><span class="bicon">&#x1F514;</span><span class="nlabel"> Notify</span></button>
       <button class="iconbtn stop-remote" id="chat-stop-btn" aria-label="Stop this agent" title="Stop this agent's current turn" hidden>&#x25A0;<span class="stop-label"> Stop</span></button>
       <button class="iconbtn" id="chat-menu-btn" aria-label="Menu">&#x22EE;</button>
     </div>
-    <!-- Effort, plan usage and context size get their own thin row: under the name, the model (or what the agent is
-         doing right now) keeps the whole line, also while the Stop button takes room in the header. -->
-    <div id="chat-meta"><span class="sub-wrap effort-wrap" id="chat-effort-wrap" hidden><span class="sub" id="chat-effort"></span><select id="chat-effort-pick" aria-label="Reasoning effort"></select></span><span class="sub" id="chat-plan" hidden></span><span class="sub" id="chat-ctx" hidden></span><button type="button" class="wk-chip" id="chat-workers-btn" aria-haspopup="dialog" title="Workers: what is working now, and the history of past workers" hidden><span class="wb-dot" aria-hidden="true"></span><span class="wb-label">Workers</span></button></div>
+    <!-- The model, effort, plan usage and context size get their own thin row, which wraps rather than cutting anything
+         off: the model stays in view busy or idle (the bell and Stop buttons leave the name a 46 px column on a 360 px
+         phone). Under the name, only what the agent is doing right now, while it works; a tap tells it in full. -->
+    <div id="chat-meta"><span class="sub-wrap"><span class="sub" id="chat-model"></span><select id="chat-model-pick" aria-label="Change this agent's model" hidden></select></span><span class="sub-wrap effort-wrap" id="chat-effort-wrap" hidden><span class="sub" id="chat-effort"></span><select id="chat-effort-pick" aria-label="Reasoning effort"></select></span><span class="sub" id="chat-plan" hidden></span><span class="sub" id="chat-ctx" hidden></span><button type="button" class="wk-chip" id="chat-workers-btn" aria-haspopup="dialog" title="Workers: what is working now, and the history of past workers" hidden><span class="wb-dot" aria-hidden="true"></span><span class="wb-label">Workers</span></button></div>
     <button class="pacing-bar" title="Tap to resume full parallel"></button>
     <div class="scroll" id="chat-scroll"><div id="messages"></div></div>
     <div id="call-ended-bar" role="status" hidden><span class="ceb-text">The call ended when you left the app</span><button type="button" id="call-again" class="ceb-again">Call again</button><button type="button" id="call-ended-x" class="ceb-x" aria-label="Dismiss">&#x2715;</button></div>
@@ -824,6 +842,12 @@
         <label class="vp-row" for="vp-pause"><span>Pause before I&#39;m done</span></label>
         <select id="vp-pause" class="vs-btn"></select>
         <div class="vp-display-note vp-follow" id="vp-follow-endPause" hidden></div>
+        <label class="vp-row" for="vp-details"><span>Read short extra parts aloud</span></label>
+        <select id="vp-details" class="vs-btn"><option value="0">Off</option><option value="20">Up to 20 words</option><option value="40">Up to 40 words</option><option value="80">Up to 80 words</option></select>
+        <label class="vp-row" for="vp-hubcue"><span>When something comes in during a call</span></label>
+        <select id="vp-hubcue" class="vs-btn"><option value="off">Off</option><option value="chime">Chime</option><option value="cue">Short cue</option></select>
+        <label class="vp-row" for="vp-bgcue"><span>While I finish something in the background</span></label>
+        <select id="vp-bgcue" class="vs-btn"><option value="off">Off</option><option value="show">Show it</option><option value="say">Say it</option></select>
         <label class="vp-row" for="vp-wait"><span>Wait for me to go on</span></label>
         <select id="vp-wait" class="vs-btn"></select>
         <div class="vp-display-note vp-follow" id="vp-follow-continueWait" hidden></div>
@@ -851,6 +875,7 @@
         <p class="vs-hint vp-hint">While a call uses Bluetooth or a car, plays a very quiet hiss so the first word is not cut. Never on a phone or computer speaker.</p>
         <button type="button" class="vs-btn vs-car" id="vp-car">Car or Bluetooth check</button>
         <div class="vs-car-out" role="status" aria-live="polite"></div>
+        <div id="vp-route"></div>
         <div id="vp-wake-box">
           <label class="vs-check"><input type="checkbox" id="vp-wake"> <span>Wait for the wake phrase</span></label>
           <input type="text" id="vp-wake-phrase" class="vs-btn" maxlength="60" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Wake phrase" placeholder="Hey">
@@ -903,6 +928,8 @@
     <a id="menu-recordings" href="/recordings?from=mobile" hidden>&#x1F399; Recordings</a>
     <button id="menu-notify">&#x1F514; Notifications</button>
     <button id="menu-notify-test" hidden>&#x1F4E8; Send a test notification</button>
+    <button id="menu-notify-agent" class="chat-only">&#x1F514; Notifications for this agent</button>
+    <button id="menu-notify-prefs">&#x1F514; Notification settings&hellip;</button>
     <button id="menu-copy" class="chat-only">&#x29C9; Copy whole chat</button>
     <button id="menu-fold" class="chat-only">&#x21C5; Fold automatic turns: On</button>
     <button id="menu-agentwork" class="chat-only">&#x1F9F0; Show agent work</button>
@@ -921,6 +948,7 @@
     <button id="menu-security">&#x1F512; Security</button>
     <a id="menu-help" href="/help">&#x2753; Help</a>
     <a id="menu-connectors" href="/modules" hidden>&#x1F50C; Data connectors</a>
+    <a id="menu-remote" href="/modules#remote-computers" hidden>&#x1F4BB; Remote computers</a>
     <a id="menu-users" href="/users" hidden>&#x1F465; Users</a>
     <button id="menu-signout">Sign out</button>
     <button id="menu-update">&#x2B07;&#xFE0F; Update hub<span id="menu-update-note"></span></button>
@@ -934,6 +962,8 @@
   <dialog id="pacing-confirm"><p id="pacing-text"></p><div class="btns"><button id="pacing-no">Cancel</button><button id="pacing-yes" class="go accent">Resume</button></div></dialog>
   <dialog id="approval-sheet"></dialog>
   <dialog id="profile-sheet"></dialog>
+  <dialog id="notify-agent-sheet" aria-label="Notifications for this agent"></dialog>
+  <dialog id="notify-prefs-sheet" aria-label="Notifications"></dialog>
   <dialog id="security-sheet"></dialog>
   <dialog id="files-sheet" data-no-dirty></dialog>
   <dialog id="recall-sheet" data-no-dirty></dialog>

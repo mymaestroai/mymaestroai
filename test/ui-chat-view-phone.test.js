@@ -343,7 +343,7 @@ function turnEndHarness({ turnOrigins = {}, hubTurns = {}, streams = new Map(), 
   const calls = { reread: [], render: 0, bubbles: 0 };
   const hist = { cur: [{ ts: 1, role: 'user', content: 'hi' }] };   // what the re-read puts into chatHistory
   const scroll = { scrollHeight: 1000, scrollTop: 100, clientHeight: 300 };
-  const names = ['rrImpl', 'activeTurnEnd', 'openTurns', 'setLive', 'wkSettleAgent', 'notifyArmed', 'refreshCtx', 'pollStatusSoon', 'hubTurns', 'turnOrigins', 'chatViewIsHubOrigin', 'streams', 'recentOwn', 'reattaches', 'reasoningEnd', 'chatOpenFor', 'setReplyText', 'feedEnd', 'promptCardLine', 'autoFirstLine', 'setBubbleTime', 'msgTimeLine', 'scrollChat', 'finishReattach', 'reattachCheck', 'viewNow', 'forOwnerPending', 'addAssistantBubble', 'msgTimeLabel', 'markUnread', 'activity', 'ACTIVITY_MAX', 'saveJson', 'renderActivity', 'paintStatus', 'updateDots', 'renderHistory', 'setTimeout', '$', 'hist'];
+  const names = ['rrImpl', 'activeTurnEnd', 'openTurns', 'setLive', 'wkSettleAgent', 'notifyArmed', 'refreshCtx', 'pollStatusSoon', 'hubTurns', 'turnOrigins', 'chatViewIsHubOrigin', 'streams', 'recentOwn', 'reattaches', 'reasoningEnd', 'chatOpenFor', 'setReplyText', 'feedEnd', 'promptCardLine', 'autoFirstLine', 'setBubbleTime', 'msgTimeLine', 'scrollChat', 'finishReattach', 'reattachCheck', 'viewNow', 'forOwnerPending', 'addAssistantBubble', 'msgTimeLabel', 'markUnread', 'activity', 'ACTIVITY_MAX', 'saveJson', 'renderActivity', 'paintStatus', 'updateDots', 'renderHistory', 'setTimeout', '$', 'hist', 'repaintNotifyAgentSheet'];
   const impl = {
     activeTurnEnd: () => true, openTurns: {}, setLive() {}, wkSettleAgent() {}, notifyArmed: {}, refreshCtx() {}, pollStatusSoon() {}, hubTurns, turnOrigins,
     chatViewIsHubOrigin: V.chatViewIsHubOrigin, streams, recentOwn: new Map(), reattaches, reasoningEnd() {}, chatOpenFor: () => open, setReplyText() {}, feedEnd() {},
@@ -353,6 +353,7 @@ function turnEndHarness({ turnOrigins = {}, hubTurns = {}, streams = new Map(), 
     rrImpl: async (a) => { calls.reread.push(a); if (reread && changes) hist.cur = hist.cur.concat([{ ts: 2, role: 'assistant', content: 'owner reply' }]); return reread; },
     renderHistory: () => { calls.render++; scroll.scrollHeight = 1500; },
     $: (id) => (id === 'chat-scroll' ? scroll : null), hist,
+    repaintNotifyAgentSheet() {},   // onTurnEnd repaints an open notification sheet (the "Notify me" item ends with the reply)
   };
   // rereadHistory, like the real one, bumps histGen when it replaced the history and says so
   const mod = new Function(...names, `let current = 'forge', screen = 'chat', actUnseen = 0, histGen = 0, chatHistory = hist.cur;

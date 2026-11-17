@@ -50,7 +50,7 @@ test('send path: voice: true only for messages that came from a call', () => {
 });
 
 test('hub events: the call listens to turn, ask and voice events on the one EventSource', () => {
-  assert.match(app, /for \(const t of \['turn_start', 'turn_delta', 'turn_activity', 'turn_end', 'ask_user', 'ask_user_done', 'voice_held', 'voice_held_done', 'voice_call'\]\) \{\s*source\.addEventListener\(t, e => \{ const ev = parse\(e\); if \(ev\) voiceCallHubEvent\(t, ev\); \}\);/);
+  assert.match(app, /for \(const t of \['turn_start', 'turn_delta', 'turn_activity', 'turn_end', 'for_owner', 'ask_user', 'ask_user_done', 'voice_held', 'voice_held_done', 'voice_call'\]\) \{\s*source\.addEventListener\(t, e => \{ const ev = parse\(e\); if \(ev\) voiceCallHubEvent\(t, ev\); \}\);/);
 });
 
 test('settings: Talk mode, Interrupt sensitivity, Room check; the phase-1 hint is replaced', () => {
@@ -129,6 +129,7 @@ function makeEnv(opts = {}) {
     onReplyText(t, d) { fakeCall.replies.push([t, d]); }, onActivity(i) { fakeCall.activities.push(i); },
     onAsk(a) { fakeCall.asks.push(a); }, onAskDone(id) { fakeCall.askDone.push(id); },
     onHeld(i, q) { fakeCall.held.push([i, q]); }, onHeldDone(id, choice) { fakeCall.heldDone.push([id, choice]); },
+    owners: 0, bgDone: 0, onHubOwner() { fakeCall.owners++; }, backgroundDone() { fakeCall.bgDone++; },   // hub-started turns (test/ui-voice-hub-turns.test.js): the cue, the kept words released
     setMode(m) { fakeCall.modes.push(m); }, decide(id, c) { fakeCall.decisions.push([id, c]); },
   };
   const vad = { setMicLevel(v) { calls.vadCalls.push(['mic', v]); }, setInterruptSensitivity(v) { calls.vadCalls.push(['sens', v]); }, setEndPause(v) { calls.vadCalls.push(['pause', v]); } };
@@ -153,7 +154,7 @@ function makeEnv(opts = {}) {
       if (opts.sendFails) o.onSendResult(new Error('HTTP 500: Internal'));
       else if (opts.sendOk) o.onSendResult(null);
     },
-    voicePrefsNow: () => prefs, voiceEffNow: () => ({ ...require('../lib/ui-voice').VOICE_DEFAULT_PREFS, ...prefs }), voiceSpeedFor: () => prefs.voiceSpeed || 1, voiceFollowLine: () => '', voiceMarkChosen: require('../lib/ui-voice').voiceMarkChosen, voiceIsIOSNav: DEV.voiceIsIOSNav, voiceEchoHoldOk: DEV.voiceEchoHoldOk, voiceEchoChoices: DEV.voiceEchoChoices, VOICE_DEVICE_DEFAULT_KEYS: DEV.VOICE_DEVICE_DEFAULT_KEYS, voiceMarkDeviceSet: DEV.voiceMarkDeviceSet, voiceDevicePrefs: DEV.voiceDevicePrefs, VOICE_ECHO_HOLD_IOS: DEV.VOICE_ECHO_HOLD_IOS, voiceMarkDeviceChanged: DEV.voiceMarkDeviceChanged, voiceEffectivePrefs: require('../lib/ui-voice').voiceEffectivePrefs, VOICE_AGENT_DEFAULT_KEYS: require('../lib/ui-voice').VOICE_AGENT_DEFAULT_KEYS, VOICE_DEFAULT_PREFS: require('../lib/ui-voice').VOICE_DEFAULT_PREFS, voiceMicLevelNow: () => prefs.micLevel, voiceSensNow: () => prefs.interruptSensitivity,
+    voicePrefsNow: () => prefs, voiceEffNow: () => ({ ...require('../lib/ui-voice').VOICE_DEFAULT_PREFS, ...prefs }), voiceSpeedFor: () => prefs.voiceSpeed || 1, voiceFollowLine: () => '', voiceMarkChosen: require('../lib/ui-voice').voiceMarkChosen, voiceIsIOSNav: DEV.voiceIsIOSNav, voiceIsAndroidNav: DEV.voiceIsAndroidNav, voiceEchoHoldOk: DEV.voiceEchoHoldOk, voiceEchoChoices: DEV.voiceEchoChoices, VOICE_DEVICE_DEFAULT_KEYS: DEV.VOICE_DEVICE_DEFAULT_KEYS, voiceMarkDeviceSet: DEV.voiceMarkDeviceSet, voiceDevicePrefs: DEV.voiceDevicePrefs, VOICE_ECHO_HOLD_IOS: DEV.VOICE_ECHO_HOLD_IOS, voiceMarkDeviceChanged: DEV.voiceMarkDeviceChanged, voiceEffectivePrefs: require('../lib/ui-voice').voiceEffectivePrefs, VOICE_AGENT_DEFAULT_KEYS: require('../lib/ui-voice').VOICE_AGENT_DEFAULT_KEYS, VOICE_DEFAULT_PREFS: require('../lib/ui-voice').VOICE_DEFAULT_PREFS, voiceMicLevelNow: () => prefs.micLevel, voiceSensNow: () => prefs.interruptSensitivity,
     // voice fixes 1: pause before done, voice speed (the real ones are in app.js outside the wiring block)
     voiceEndPauseNow: () => prefs.endPause || 1200, voiceSpeedNow: () => prefs.voiceSpeed || 1, voiceSpeedLabel: (v) => Number(v).toFixed(2) + 'x',
     voiceCleanSpeed: (v) => Math.round(Math.max(0.75, Math.min(1.5, Number(v))) * 20) / 20,
@@ -200,7 +201,8 @@ test('start: deps contract, VAD options from prefs, bar above the box, button be
   const { api, calls, fakeCall, get } = makeEnv();
   await api.voiceCallStart('c1');
   assert.strictEqual(fakeCall.started, 1);
-  assert.deepStrictEqual({ ...calls.vadOpts }, { baseUrl: '/api/voice/web/', micLevel: 60, interruptSensitivity: 40, endPause: 1200, echoHoldMs: 600, strictTalkOver: false });   // strictTalkOver: only on an iPhone or iPad   // + the end-of-turn pause (voice fixes 1)
+  assert.strictEqual(typeof calls.vadOpts.micChoice, 'function');   // the microphone the person chose (voiceMicChoiceId)
+  assert.deepStrictEqual({ ...calls.vadOpts, micChoice: undefined }, { micChoice: undefined, baseUrl: '/api/voice/web/', micLevel: 60, interruptSensitivity: 40, endPause: 1200, echoHoldMs: 600, strictTalkOver: false, bluetoothFirst: false });   // bluetoothFirst: Android only (here DEV's rule, an empty navigator);  strictTalkOver: only on an iPhone or iPad   // + the end-of-turn pause (voice fixes 1)
   const d = calls.created[0];
   for (const k of ['agent', 'now', 'setTimer', 'clearTimer', 'prefs', 'vad', 'stt', 'isTurnRunning', 'send', 'interject', 'stop', 'speak', 'cancelSpeech', 'answerAsk', 'server', 'ui']) assert.ok(k in d, k);
   for (const k of ['start', 'heartbeat', 'mode', 'end', 'decide']) assert.strictEqual(typeof d.server[k], 'function', 'server.' + k);
@@ -360,7 +362,7 @@ test('events: replies of turns the call started feed onReplyText; other agents a
   assert.deepStrictEqual(fakeCall.replies.slice(-1), [['Partial.', true]]);
 });
 
-test('events: a hub-started turn speaks only "<label>: <first sentence>" at its end', async () => {
+test('events: a hub-started turn is never spoken (it used to say "<label>: <first sentence>"); it only releases words kept for it', async () => {
   const { api, fakeCall } = makeEnv();
   await api.voiceCallStart('c1');
   const ev = api.voiceCallHubEvent;
@@ -368,10 +370,10 @@ test('events: a hub-started turn speaks only "<label>: <first sentence>" at its 
   ev('turn_delta', { agent: 'alice', turnId: 'h1', text: 'It finished. Details follow.' });
   assert.deepStrictEqual(fakeCall.replies, [], 'nothing while it runs');
   ev('turn_end', { agent: 'alice', turnId: 'h1', ok: true, reply: 'It finished. Details follow.' });
-  assert.deepStrictEqual(fakeCall.replies, [['Nightly job: It finished.', true]]);
+  assert.deepStrictEqual(fakeCall.replies, [], 'nothing at its end either');
   ev('turn_start', { agent: 'alice', turnId: 'h2', origin: { kind: 'consultation', from: 'bob' } });
   ev('turn_end', { agent: 'alice', turnId: 'h2', ok: true, reply: 'Sure thing! More.' });
-  assert.deepStrictEqual(fakeCall.replies.slice(-1), [['bob: Sure thing!', true]]);
+  assert.deepStrictEqual(fakeCall.replies, []);
 });
 
 test('events: ask_user, ask_user_done, voice_held, voice_held_done reach the controller; the answer is posted', async () => {
@@ -492,9 +494,10 @@ test('P-i: a voice send the hub did not take rejects to the controller; a taken 
 test('P-i: sendSoloMessage tells a voice caller whether the hub took the message (accepted, interjected, refused, network error)', () => {
   const s = app.slice(app.indexOf('async function sendSoloMessage('), app.indexOf('// Group chat - free flowing'));
   assert.match(s, /const notify = \(err\) => \{ if \(notified \|\| !sendOpts \|\| !sendOpts\.onSendResult\) return;/);
-  assert.match(s, /throw new Error\(`HTTP \$\{response\.status\}: \$\{response\.statusText\}`\);\s*\}\s*notify\(null\);/, 'accepted');
+  // changed (voice hub-turns r3): only the hub's busy refusal (409) carries refused: true; any other non-2xx answer (a proxy's 502/503/504 ...) is an uncertain delivery and carries no flag
+  assert.match(s, /throw new Error\(`HTTP \$\{response\.status\}: \$\{response\.statusText\}`\);[^\n]*\s*\}\s*notify\(null\);/, 'accepted');
   assert.match(s, /\} catch \(err\) \{\s*notify\(err\);/, 'network error or a non-2xx answer');
-  assert.match(s, /notify\(new Error\('busy'\)\);/, 'refused');
+  assert.match(s, /notify\(Object\.assign\(new Error\('busy'\), \{ refused: true \}\)\);/, 'refused');
 });
 
 test('P-k: a wake lock that arrives after the hang-up is released at once and not kept', async () => {

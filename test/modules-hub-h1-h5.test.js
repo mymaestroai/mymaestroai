@@ -18,6 +18,8 @@ const { createModules } = L('modules');
 const { createConnectors } = L('connectors');
 const { createApprovals } = L('approvals');
 const { HUB_HOME } = L('hub-home');
+/** An allow also carries dayEnds (the owner's next midnight); the rest of the answer is compared as before. */
+const noDay = (r) => { assert.ok(Number.isFinite(r.dayEnds) && r.dayEnds > 0, 'an allow carries dayEnds'); const { dayEnds, ...rest } = r; return rest; };
 
 const GUARD = path.join(ISO.lib, 'modules', 'mcp-guard.js');
 const HUB_SECRET = 'cd'.repeat(32);
@@ -103,7 +105,7 @@ function rig(o = {}) {
     respond(id, result) { this.responses.push({ id, result }); }
     respondError(id, code, message) { this.errors.push({ id, code, message }); }
   }
-  const cx = createConnectors({ file: path.join(dir, 'connectors.json'), keyFile: path.join(dir, '.auth-key'), McpClient: FakeClient, log: () => {}, unlockTtlMs: 0, baseEnv: { PATH: process.env.PATH }, leadNames: () => ['owner'], ...o });
+  const cx = createConnectors({ file: path.join(dir, 'connectors.json'), keyFile: path.join(dir, '.auth-key'), McpClient: FakeClient, log: () => {}, unlockTtlMs: 0, baseEnv: { PATH: process.env.PATH }, leadNames: () => ['owner'], zone: () => 'UTC', ...o });   // a fixed zone: the default reads the owner's account
   const up = (extra = {}) => cx.upsert({ id: 'rc', label: 'Remote computers', kind: 'mcp', command: process.execPath, args: ['x'], module: 'rc', enabled: true, ...extra }, { byModule: true });
   const tick = async () => { for (let i = 0; i < 8; i++) await new Promise(r => setImmediate(r)); };
   return { cx, dir, all, up, tick, done: () => { cx.shutdown(); rm(dir); } };
@@ -289,7 +291,7 @@ test('R1 connectors: the agent on the card is the hub record of the call; unknow
     const ask = async (cl, params) => { const id = cl.responses.length + cl.errors.length + 1; cl.emit('request', { id, method: 'hub/approve', params }); await r.tick(); clock.t += 16000; return cl.errors.find(e => e.id === id) || cl.responses.find(x => x.id === id); };
     // a name the module sends is ignored: the hub's record of the caller wins
     const ok = await ask(one.client, { call: one.id, agent: 'owner', title: 'Open it' });
-    assert.deepStrictEqual(ok.result, { decision: 'allow' });
+    assert.deepStrictEqual(noDay(ok.result), { decision: 'allow' });
     assert.strictEqual(asked[0].agent, 'sam');
     // no call id, a made-up one, another connector's: refused, nothing reaches the owner
     for (const call of [undefined, 'nope', '00000000-0000-4000-8000-000000000000', two.id]) {
@@ -303,7 +305,7 @@ test('R1 connectors: the agent on the card is the hub record of the call; unknow
     // the id lives 5 seconds after its call returned
     const fresh = await callAs(r, 'sam', 'rc');
     clock.t += 4000;
-    assert.deepStrictEqual((await ask(fresh.client, { call: fresh.id, title: 'again' })).result, { decision: 'allow' });
+    assert.deepStrictEqual(noDay((await ask(fresh.client, { call: fresh.id, title: 'again' })).result), { decision: 'allow' });
     const old = await callAs(r, 'sam', 'rc');
     clock.t += 6000;
     const gone = await ask(old.client, { call: old.id, title: 'late' });
@@ -329,7 +331,7 @@ test('R1 connectors: an agent that lost access cannot ask; a running call keeps 
     const live = cl.calls[cl.calls.length - 1].args.__call;
     clock.t += 100000;   // inside the callTimeout + 60 s ceiling
     cl.emit('request', { id: 1, method: 'hub/approve', params: { call: live, title: 'during' } }); await r.tick();
-    assert.deepStrictEqual(cl.responses[0].result, { decision: 'allow' }, 'a long call keeps its id while it runs');
+    assert.deepStrictEqual(noDay(cl.responses[0].result), { decision: 'allow' }, 'a long call keeps its id while it runs');
     release(); await slow;
     clock.t += 16000;
     cl.emit('request', { id: 2, method: 'hub/approve', params: { call: live, title: 'after' } }); await r.tick();
@@ -353,7 +355,7 @@ test('R1 connectors: a lead that stopped being lead (no grant) is refused at app
     assert.strictEqual(asked.length, 0);
     leads.push('owner');
     cl.emit('request', { id: 2, method: 'hub/approve', params: { call, title: 'back' } }); await r.tick();
-    assert.deepStrictEqual(cl.responses[0].result, { decision: 'allow' });
+    assert.deepStrictEqual(noDay(cl.responses[0].result), { decision: 'allow' });
   } finally { r.done(); }
 });
 
@@ -510,7 +512,7 @@ test('H2 approvals: a module request uses its own wait, shows on the hub event s
     await r.tick();
     assert.ok(ap.resolve(ap.list()[0].id, 'allow').ok);
     await r.tick();
-    assert.deepStrictEqual(cl.responses[1].result, { decision: 'allow' });
+    assert.deepStrictEqual(noDay(cl.responses[1].result), { decision: 'allow' });
   } finally { r.done(); }
 });
 

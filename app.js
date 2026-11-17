@@ -153,7 +153,7 @@
       if (!me || me.isAdmin) return;
       document.body.classList.add('member-view');
       // Every item of the ⋯ menu is an admin control, so the whole menu goes (more-wrap), not just its rows.
-      for (const id of ['comms-btn', 'wallet-btn', 'dream-btn', 'git-sync-btn', 'restart-hub-btn', 'more-advanced', 'advanced-toggle',
+      for (const id of ['more-modules-item', 'more-remote-item', 'comms-btn', 'wallet-btn', 'dream-btn', 'git-sync-btn', 'restart-hub-btn', 'more-advanced', 'advanced-toggle',
                         'settings-btn', 'schedule-btn', 'credit-meter', 'spend-today', 'plan-warn', 'hub-halt-bar', 'halt-btn', 'more-wrap', 'update-chip']) {
         const el = document.getElementById(id);
         if (!el) continue;
@@ -187,8 +187,26 @@
       if (modulesItem) modulesItem.style.display = me.isAdmin ? '' : 'none';
       const localItem = document.getElementById('account-local-models');
       if (localItem) localItem.style.display = me.isAdmin ? '' : 'none';
+      checkRemoteComputers();
       const note = document.getElementById('account-2fa-note');
       if (note) note.style.display = (me.isAdmin && !me.user.totpEnabled && me.admin2faRequired !== false) ? '' : 'none';
+    }
+    // Remote computers links (⋯ menu, account menu, Settings): only for an admin, and only while the connector is on (its routes answer 200 only then).
+    let remoteComputersOk = null, remoteComputersChecking = false;
+    function applyRemoteComputersLinks() {
+      const show = !!(window.hubMe && window.hubMe.isAdmin && remoteComputersOk === true);
+      for (const id of ['more-remote-item', 'account-remote', 'st-remote-link']) {
+        const el = document.getElementById(id);
+        if (el) el.style.display = show ? '' : 'none';
+      }
+    }
+    function checkRemoteComputers() {
+      const me = window.hubMe;
+      if (!me || !me.isAdmin || remoteComputersOk !== null || remoteComputersChecking) { applyRemoteComputersLinks(); return; }
+      remoteComputersChecking = true;
+      fetch('/api/remote-desktop', { credentials: 'include' })
+        .then((r) => { remoteComputersOk = r.status === 200; }, () => { remoteComputersOk = false; })
+        .then(() => { remoteComputersChecking = false; applyRemoteComputersLinks(); });
     }
     function toggleAccountMenu(force) {
       const menu = document.getElementById('account-menu');
@@ -2554,6 +2572,7 @@
       const wrap = document.createElement('div');
       wrap.id = 'st-groups';
       wrap.innerHTML = `<div class="st-search"><input type="search" id="st-search" placeholder="Search settings: privacy, sandbox, push, spend…" autocomplete="off" aria-label="Search settings"><span id="st-search-none" hidden>Nothing matches.</span></div>`
+        + (window.hubMe && window.hubMe.isAdmin ? `<div id="st-quick-links" style="margin:6px 0 10px;font-size:0.85rem">Go to: <a href="/modules" id="st-connectors-link" style="color:var(--accent)">🔌 Data connectors</a><a href="/modules#remote-computers" id="st-remote-link" style="color:var(--accent);margin-left:14px;display:${remoteComputersOk === true ? '' : 'none'}">💻 Remote computers</a></div>` : '')
         + ST_GROUPS.map(g => `<details class="st-group" id="st-group-${g.id}" data-group="${g.id}"${saved[g.id] ? ' open' : ''}><summary><span class="st-group-title">${esc(g.title)}</span><span class="st-group-sum" id="st-sum-${g.id}"></span></summary><div class="st-group-body"></div></details>`).join('');
       modal.insertBefore(wrap, sections[0]);
       const body = (id) => wrap.querySelector(`#st-group-${id} .st-group-body`);
@@ -2792,11 +2811,13 @@
         </div>
         <div class="st-hint" id="st-push-hint">Notifications on this computer as well as the phone, even with this tab closed.</div>
         <div class="st-row">
-          <label>Questions</label>
+          <label>Question reminders</label>
           <select id="st-question-after" onchange="saveQuestionAfter(this.value)">${qaOpts.map(([v, l]) => `<option value="${v}"${v === qaVal ? ' selected' : ''}>${l}</option>`).join('')}</select>
         </div>
         <div class="st-hint">A notification when an agent's question (or an approval) is still unanswered after this long. Finished replies notify only when you click 🔔 Notify me next to Cancel while the reply is running.</div>
+        <div id="st-notify-mine" role="group" aria-label="Your notifications"><div class="st-hint" style="margin-left:0">Loading…</div></div>
       </div>`;
+        setTimeout(loadNotifySettings, 0);
       }
 
       html += `<div class="st-section" id="st-chat-section"><h4>Chat</h4>
@@ -4063,6 +4084,193 @@
         hubToast(r.ok ? (questionAfterMinutes === null ? 'Questions will not send notifications.' : questionAfterMinutes === 0 ? 'Questions notify right away.' : `Questions notify after ${questionAfterMinutes} min unanswered.`) : 'Could not save.');
         if (r.ok) stSum('notify', 'q', stQuestionsText(questionAfterMinutes));
       } catch (e) { alert('Could not save: ' + e.message); }
+    }
+
+    // ── notify prefs (begin) ──
+    // Per person, per agent: when a notification may reach this person. Modes on | off | away; kinds questions | requested | other | security.
+    // Resolution: the agent's own value, else the person's default, else on. security has a default only (no per-agent value).
+    // Server contract: /api/notify/prefs.
+    const NOTIFY_KINDS = [
+      ['questions', 'Questions', 'When an agent needs your answer or approval'],
+      ['requested', 'Requests you made', 'Things you asked an agent to tell you about, and replies you asked to hear about'],
+      ['other', 'Everything else', 'Reports and other notices'],
+      ['security', 'Security and access', 'Sign-in and passkey changes, wallet locks, failed backups, access changes, a halted hub'],
+    ];
+    const NOTIFY_AGENT_KINDS = NOTIFY_KINDS.filter(k => k[0] !== 'security');   // the kinds an agent can have its own setting for
+    function notifySecurityWarning(mode) {
+      return mode === 'off' ? `<div class="st-hint notify-security-warning" role="note">You won't be told about sign-in and passkey changes, wallet locks, failed backups, access changes or a halted hub.</div>` : '';
+    }
+    function notifyModeLabel(mode) { return mode === 'off' ? 'Off' : mode === 'away' ? "Only when I'm away" : 'On'; }
+    function notifyEffective(prefs, agent, kind) {
+      const own = prefs && prefs.agents && agent && prefs.agents[agent] ? prefs.agents[agent][kind] : undefined;
+      if (own === 'on' || own === 'off' || own === 'away') return own;
+      const def = prefs && prefs.default ? prefs.default[kind] : undefined;
+      return def === 'off' || def === 'away' ? def : 'on';
+    }
+    function notifyBellIcon(prefs, agent) {
+      return NOTIFY_AGENT_KINDS.every(k => notifyEffective(prefs, agent, k[0]) === 'off') ? '🔕' : '🔔';
+    }
+    // ── notify prefs (end) ──
+
+    let notifyPrefsCache = null;
+    let notifyPrefsWrites = 0;      // PUTs started so far: a GET that began before the latest one is stale and is dropped
+    let notifyPrefsPending = 0;     // PUTs started and not finished
+    let notifyPrefsChain = Promise.resolve();   // PUTs run one after the other, so their answers land in the order the changes were made
+    async function notifyPrefsFetch(method, body) {
+      const r = await fetch('/api/notify/prefs', { method, credentials: 'include', headers: body ? { 'Content-Type': 'application/json' } : undefined, body: body ? JSON.stringify(body) : undefined });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || !j.ok || !j.prefs) throw new Error(j.error || 'Could not save.');
+      return j.prefs;
+    }
+    function notifyPrefsRequest(method, body) {
+      if (method !== 'PUT') {
+        const seen = notifyPrefsWrites, busy = notifyPrefsPending > 0;
+        return notifyPrefsFetch(method, body).then((prefs) => {
+          if (busy || seen !== notifyPrefsWrites || notifyPrefsPending > 0) return notifyPrefsCache || prefs;   // a save started meanwhile: this answer may be older than it
+          notifyPrefsCache = prefs;
+          notifyBellsPaint();
+          return prefs;
+        });
+      }
+      notifyPrefsWrites++; notifyPrefsPending++;
+      const run = notifyPrefsChain.then(() => notifyPrefsFetch(method, body)).then((prefs) => {
+        notifyPrefsCache = prefs;   // the last PUT's answer is the cache
+        notifyBellsPaint();
+        return prefs;
+      }).finally(() => { notifyPrefsPending--; });
+      notifyPrefsChain = run.catch(() => {});
+      return run;
+    }
+    const notifyPrefsLoad = () => notifyPrefsRequest('GET');
+    function notifyModeOptions(sel, withDefault, defMode) {
+      const opts = withDefault ? [['', `Use my default (${notifyModeLabel(defMode)})`]] : [];
+      for (const m of ['on', 'off', 'away']) opts.push([m, notifyModeLabel(m)]);
+      return opts.map(([v, l]) => `<option value="${v}"${v === sel ? ' selected' : ''}>${esc(l)}</option>`).join('');
+    }
+    function notifyBellsPaint() {
+      for (const btn of document.querySelectorAll('.notify-bell-btn[data-agent]')) btn.textContent = notifyBellIcon(notifyPrefsCache, btn.dataset.agent);
+    }
+    // Settings -> Notifications: the person's two defaults and the agents with a setting of their own.
+    function notifySettingsPaint() {
+      const box = document.getElementById('st-notify-mine');
+      if (!box || !notifyPrefsCache) return;
+      const p = notifyPrefsCache;
+      const rows = NOTIFY_KINDS.map(([k, label, hint]) => `<div class="st-row"><label for="st-np-${k}">${label}</label>
+          <select id="st-np-${k}" data-np-kind="${k}" onchange="notifyDefaultSave('${k}', this)">${notifyModeOptions(p.default && p.default[k] || 'on', false)}</select></div>
+        <div class="st-hint">${hint}.</div>${k === 'security' ? notifySecurityWarning(p.default && p.default[k]) : ''}`).join('');
+      const names = Object.keys(p.agents || {}).filter(a => p.agents[a] && NOTIFY_AGENT_KINDS.some(([k]) => p.agents[a][k])).sort();
+      const list = names.length ? names.map(a => {
+        const ag = (typeof AGENTS !== 'undefined' && AGENTS.find(x => x.name === a)) || null;
+        const shown = (ag && (ag.display || ag.displayName)) || capName(a);
+        return `<div class="st-row"><label>${esc(shown)}</label><span class="st-hint" style="margin:0;flex:1">${NOTIFY_AGENT_KINDS.map(([k, label]) => `${label}: ${p.agents[a][k] ? notifyModeLabel(p.agents[a][k]) : 'my default'}`).join(' · ')}</span>
+          <button class="st-test-btn" onclick="notifyAgentReset(${esc(JSON.stringify(a)).replace(/'/g, '&#39;')})" aria-label="Reset ${esc(shown)} to my default">Reset</button></div>`;
+      }).join('') : '<div class="st-hint" style="margin-left:0">None. Use the 🔔 in an agent\'s chat header to give one its own setting.</div>';
+      box.innerHTML = `<h5 style="margin:10px 0 6px">Your notifications</h5>
+        <div class="st-hint" style="margin-left:0">For you, on all your devices.</div>${rows}
+        <h5 style="margin:10px 0 6px">Agents with their own setting</h5>${list}`;
+    }
+    async function loadNotifySettings() {
+      const box = document.getElementById('st-notify-mine');
+      if (!box) return;
+      try { await notifyPrefsLoad(); notifySettingsPaint(); } catch (e) { box.innerHTML = '<div class="st-hint" style="margin-left:0">Could not load your notification settings.</div>'; }
+    }
+    async function notifyDefaultSave(kind, sel) {
+      const before = (notifyPrefsCache && notifyPrefsCache.default && notifyPrefsCache.default[kind]) || 'on';
+      sel.disabled = true;   // one change at a time per select, until the save answers
+      try {
+        await notifyPrefsRequest('PUT', { default: { [kind]: sel.value } });
+        hubToast(`${(NOTIFY_KINDS.find(k => k[0] === kind) || [0, kind])[1]}: ${notifyModeLabel(sel.value)}.`);
+        notifySettingsPaint();
+      } catch (e) { sel.value = before; hubToast('Could not save: ' + e.message); }
+      finally { sel.disabled = false; }
+    }
+    async function notifyAgentReset(agent) {
+      try { await notifyPrefsRequest('PUT', { agent, prefs: null }); hubToast('Back to your default.'); notifySettingsPaint(); } catch (e) { hubToast('Could not save: ' + e.message); }
+    }
+    // Chat header bell: a small menu for this agent.
+    function notifyBellClose(refocus) {
+      const m = document.getElementById('notify-bell-menu');
+      if (!m) return;
+      const btn = document.querySelector('.notify-bell-btn[aria-expanded="true"]');
+      m.remove();
+      document.removeEventListener('mousedown', notifyBellOutside, true);
+      document.removeEventListener('keydown', notifyBellKey, true);
+      for (const b of document.querySelectorAll('.notify-bell-btn')) b.setAttribute('aria-expanded', 'false');
+      if (refocus && btn) btn.focus();
+    }
+    function notifyBellOutside(e) { const m = document.getElementById('notify-bell-menu'); if (m && !m.contains(e.target) && !e.target.closest('.notify-bell-btn')) notifyBellClose(false); }
+    function notifyBellKey(e) { if (e.key === 'Escape') { e.stopPropagation(); notifyBellClose(true); } }
+    function notifyBellMenuHtml(agent, display) {
+      const p = notifyPrefsCache;
+      return `<div class="notify-bell-title" id="notify-bell-title">Notifications for ${esc(display)}</div>` + NOTIFY_AGENT_KINDS.map(([k, label]) => {
+        const own = p && p.agents && p.agents[agent] ? p.agents[agent][k] : undefined;
+        const defMode = p && p.default && p.default[k] || 'on';
+        return `<label class="notify-bell-row">${label}<select data-nb-kind="${k}" aria-label="${label}">${notifyModeOptions(own || '', true, defMode)}</select></label>`;
+      }).join('');
+    }
+    async function notifyBellToggle(chatId) {
+      const btn = document.getElementById(`notify-bell-${chatId}`);
+      if (!btn) return;
+      const wasOpen = !!document.getElementById('notify-bell-menu');
+      const same = wasOpen && btn.getAttribute('aria-expanded') === 'true';
+      notifyBellClose(false);
+      if (same) { btn.focus(); return; }
+      const agent = btn.dataset.agent, chat = chats[chatId];
+      const display = (chat && (chat.display || capName(chat.agent))) || capName(agent);
+      const menu = document.createElement('div');
+      menu.id = 'notify-bell-menu'; menu.className = 'notify-bell-menu'; menu.setAttribute('role', 'dialog'); menu.setAttribute('aria-labelledby', 'notify-bell-title');
+      document.body.appendChild(menu);
+      const r = btn.getBoundingClientRect();
+      menu.style.top = `${Math.round(r.bottom + 6)}px`;
+      menu.style.left = `${Math.max(8, Math.min(Math.round(r.left), window.innerWidth - 300))}px`;
+      btn.setAttribute('aria-expanded', 'true');
+      menu.innerHTML = notifyBellMenuHtml(agent, display);   // the cached values now; refreshed below
+      document.addEventListener('mousedown', notifyBellOutside, true);
+      document.addEventListener('keydown', notifyBellKey, true);
+      const first = menu.querySelector('select'); if (first) first.focus();
+      menu.addEventListener('change', async (e) => {
+        const sel = e.target.closest('select[data-nb-kind]'); if (!sel) return;
+        const kind = sel.dataset.nbKind;
+        sel.disabled = true;   // until the save answers
+        try {
+          await notifyPrefsRequest('PUT', { agent, prefs: { [kind]: sel.value === '' ? null : sel.value } });
+          hubToast(`${display}: ${(NOTIFY_AGENT_KINDS.find(k => k[0] === kind) || [0, kind])[1]} ${sel.value === '' ? 'follows your default' : notifyModeLabel(sel.value)}.`);
+        } catch (err) { hubToast('Could not save: ' + err.message); }
+        finally { sel.disabled = false; }
+        if (document.getElementById('notify-bell-menu') === menu) { menu.innerHTML = notifyBellMenuHtml(agent, display); const again = menu.querySelector(`select[data-nb-kind="${kind}"]`); if (again) again.focus(); }
+      });
+      const writesAtOpen = notifyPrefsWrites;
+      try {
+        await notifyPrefsLoad();   // refreshed when the menu opens; repainted only while the person has not touched it yet
+        if (notifyPrefsWrites === writesAtOpen && document.getElementById('notify-bell-menu') === menu && document.activeElement === first) { menu.innerHTML = notifyBellMenuHtml(agent, display); const f = menu.querySelector('select'); if (f) f.focus(); }
+      } catch { /* the cached values stay */ }
+    }
+
+    // ⋯ header menu, "Notifications for this agent": opens the bell menu of the chat on screen.
+    function notifyBellOpenVisible() {
+      const id = typeof activeChat !== 'undefined' ? activeChat : null;
+      if (id && document.getElementById(`notify-bell-${id}`)) { notifyBellToggle(id); return; }
+      hubToast('Open a chat with an agent first.');
+    }
+
+    // Presence: tells the hub whether any page of this person is in front, so "Only when I'm away" can be judged.
+    const notifyPageId = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : `p${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
+    function notifyPresenceSend() {
+      try {
+        fetch('/api/notify/presence', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ page: notifyPageId, visible: document.visibilityState === 'visible' }), keepalive: true }).catch(() => {});
+      } catch { /* silent */ }
+    }
+    let notifyPresenceStarted = false;
+    function startNotifyPresence() {
+      if (notifyPresenceStarted) return;
+      notifyPresenceStarted = true;
+      notifyPresenceSend();
+      notifyPrefsLoad().catch(() => {});   // the header bells show 🔕 from the start
+      document.addEventListener('visibilitychange', notifyPresenceSend);
+      setInterval(() => { if (document.visibilityState === 'visible') notifyPresenceSend(); }, 60000);
+      window.addEventListener('pagehide', () => {
+        try { navigator.sendBeacon('/api/notify/presence', new Blob([JSON.stringify({ page: notifyPageId, visible: false })], { type: 'application/json' })); } catch { /* silent */ }
+      });
     }
 
     async function saveApprovalClasses() {
@@ -5504,6 +5712,7 @@
       setupConfigListeners();
       startHubHealthMonitor();
       startHubEventMonitor();
+      startNotifyPresence();
       refreshSpendToday();
       refreshPlanChip();
       showMobileBanner();
@@ -7121,6 +7330,7 @@
       if (!next.busy) { next.busySince = null; next.activity = null; next.pendingQuestion = false; next.consultedBy = null; }
       else if (!next.busySince) next.busySince = cur.busySince || new Date().toISOString();
       agentStatus[name] = next;
+      if (!next.busy && typeof voiceCallHubIdle === 'function') { try { voiceCallHubIdle(name); } catch { /* the call carries on */ } }   // a call waiting for a hub-started turn learns it is over
       paintAgentStatus(name);
       paintAgentsWorking();
       { const c = findSoloChat(name); if (c) busyCardRefresh(c); }   // the busy card follows the status feed
@@ -8457,7 +8667,7 @@
       source.addEventListener('ask_user_done', e => { const ev = parse(e); if (ev && ev.request_id) closeQuestion(ev.request_id); });
       source.addEventListener('ask_user_done', e => { const ev = parse(e); if (ev) setAgentLive(ev.agent, { pendingQuestion: false }); });
       // A hands-free call (voice phase 2) follows the events of its agent: replies, tool activity, questions, held items.
-      for (const t of ['turn_start', 'turn_delta', 'turn_activity', 'turn_end', 'ask_user', 'ask_user_done', 'voice_held', 'voice_held_done', 'voice_call']) {
+      for (const t of ['turn_start', 'turn_delta', 'turn_activity', 'turn_end', 'for_owner', 'ask_user', 'ask_user_done', 'voice_held', 'voice_held_done', 'voice_call']) {
         source.addEventListener(t, e => { const ev = parse(e); if (ev) voiceCallHubEvent(t, ev); });
       }
       source.addEventListener('turn_mood', e => { const ev = parse(e); if (ev) voiceCallHubEvent('turn_mood', ev); });
@@ -8670,6 +8880,7 @@
         </div>
         <div class="chat-actions">
           <button onclick="resyncClick()" class="resync-btn" id="resync-btn-${chatId}" title="Re-sync with the hub" aria-label="Re-sync with the hub">↻</button>
+          <button type="button" class="notify-bell-btn" id="notify-bell-${chatId}" data-agent="${esc(chat.agent)}" onclick="notifyBellToggle('${chatId}')" aria-label="Notifications for this agent" title="Notifications for this agent" aria-haspopup="dialog" aria-expanded="false">${notifyBellIcon(notifyPrefsCache, chat.agent)}</button>
           <button onclick="newSession('${chatId}')" title="Clear agent memory and start fresh">🔄 New Session</button>
           <button onclick="clearChat('${chatId}')">🗑️ Clear</button>
           <button onclick="saveChat('${chatId}')">💾 Save</button>
@@ -8792,6 +9003,7 @@
 
     function switchToChat(chatId) {
       try { workerHistory.openSeq++; } catch { /* not set up yet while the page script loads */ }   // a pending "Open full run" no longer takes the screen
+      notifyBellClose(false);   // the bell menu belongs to the chat it was opened for
       const empty = document.getElementById('empty-state');
       if (empty && chats[chatId]) empty.style.display = 'none';
       const opened = chats[chatId];
@@ -8954,7 +9166,14 @@
       notifyArmed[agent] = d.on ? d.turnId : null;
       paintNotifyBtns(agent);
       if (d.on && !d.devices) hubToast('No device of yours has notifications turned on yet. On the phone: the ⋮ menu, Notifications.', 9000);
-      else if (d.on) hubToast(`You will get a notification when ${who} is done.`);
+      else if (d.on) {
+        // The hub says what "Requests you made" is for this agent (d.requested); an older hub sends none: the cached settings, else a neutral line.
+        const mode = ['on', 'off', 'away'].includes(d.requested) ? d.requested : (notifyPrefsCache ? notifyEffective(notifyPrefsCache, agent, 'requested') : null);
+        if (mode === null) hubToast(`Notification requested for ${who}; it follows your notification settings.`);
+        else if (mode === 'off') hubToast(`Requests you made is Off for ${who}, so no notification will come.`);
+        else if (mode === 'away') hubToast(`You'll get a notification when ${who} is done if none of your pages is open.`);
+        else hubToast(`You will get a notification when ${who} is done.`);
+      }
       else hubToast('Notification cancelled.');
     }
 
@@ -9711,6 +9930,11 @@
           delete chat.lastMsgId;
           chat.controller = null;
           if (fallback) chat.bounced409 = true;   // a fallback send is not bounced into an interjection again: it goes back to the composer below
+          if (chat.voiceSend) {   // a call's own message is never bounced into an interjection: it is refused at once, and the controller keeps the words for the next idle (as on the phone)
+            chat.bounced409 = false;
+            notify(Object.assign(new Error('busy'), { refused: true }));
+            return;
+          }
           if (!chat.bounced409) {
             chat.bounced409 = true;
             setAgentLive(chat.agent, { busy: true });
@@ -9720,7 +9944,7 @@
             notify(null);   // delivered into the running turn instead
             return sendInterjection(chatId);
           }
-          notify(new Error('busy'));
+          notify(Object.assign(new Error('busy'), { refused: true }));   // the hub answered: it did not take the message
           chat.bounced409 = false;
           if (!input.value) input.value = content;
           chat.pendingImages = fallback ? [...imagesToSend, ...(chat.pendingImages || [])] : imagesToSend;   // a fallback send: in front of what was attached since
@@ -9729,8 +9953,13 @@
           return;
         }
         chat.bounced409 = false;
+        if (chat.voiceSend && typeof voiceLinkOwner === 'function' && typeof voiceLinkAlive === 'function') {   // a call's own message: its answer proves the link, and so does every piece of data after it
+          const owner = voiceLinkOwner();
+          if (response.status < 500) voiceLinkAlive(owner);
+          chat.onStreamData = () => voiceLinkAlive(owner);
+        } else chat.onStreamData = null;
         if (!response.ok) {
-          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);   // not the hub's busy refusal (409, handled above): a proxy's 502/503/504 or a restarting hub may still have taken the message, so delivery is uncertain and a call never resends it
         }
         notify(null);
 
@@ -10643,6 +10872,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           break;
         }
         lastDataTime = Date.now(); // reset watchdog on any data
+        { const ch = chats[chatId]; if (ch && ch.onStreamData) ch.onStreamData(); }   // a call's message: data arriving proves the link
 
         sseBuffer += decoder.decode(value, { stream: true });
         const parts = sseBuffer.split('\n');
@@ -11087,13 +11317,20 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     // ── voice helpers (begin) ──
     const VOICE_STORE_KEY = 'hub-voice';
     const VOICE_DETAILS_NOTE = ' I have put the details in the chat.';
+    // On a call the note names the kind of what was left out when it is clear (see voiceReplySentences in ui-voice-call.js).
+    const VOICE_NOTE_LIST = ' I\'ve put the full list in the chat.';
+    const VOICE_NOTE_TABLE = ' I\'ve put the table in the chat.';
+    const VOICE_NOTE_CODE = ' I\'ve put the code in the chat.';
+    const VOICE_DETAILS_READ_WORDS = [0, 20, 40, 80];   // 'Read short extra parts aloud': Off / up to 20 / 40 / 80 words (pref detailsReadWords, default 40; 0 = never read the rest)
+    const VOICE_HUB_CUES = ['off', 'chime', 'cue'];   // 'When something comes in during a call': Off / Chime / Short cue (pref hubCue, default 'cue')
+    const VOICE_BACKGROUND_CUES = ['off', 'show', 'say'];   // 'While I finish something in the background': Off / Show it / Say it (pref backgroundCue, default 'say')
     const VOICE_ABBREVIATIONS = new Set(['e.g', 'i.e', 'mr', 'mrs', 'ms', 'dr', 'st', 'prof', 'jr', 'sr', 'vs']);
     const VOICE_STOP_COMMANDS = new Set(['stop', 'cancel', 'stop stop', 'stop it', 'stop that', 'cancel that', 'never mind', 'nevermind']);
     const VOICE_END_PAUSES = [800, 1200, 2000, 4000];   // 'Pause before I'm done': short / normal / long / very long, in ms
     const VOICE_CONTINUE_WAITS = [1500, 3000, 5000, 8000];   // 'Wait for me to go on': how long a sentence that sounds unfinished waits for more, in ms
     const VOICE_ECHO_HOLDS = [0, 600, 1000, 1500];   // 'Echo guard': how long the raised barge-in thresholds stay after playback stops, in ms (0 = off)
     const VOICE_WAKE_QUIET_MS = [10000, 20000, 45000];   // 'Go back to standby after': how long a quiet call stays awake (default 20000)
-    const VOICE_DEFAULT_PREFS = { micLevel: 50, interruptSensitivity: 50, mode: 'handsfree', readAloud: true, deviceVoiceFallback: true, endPause: 1200, voiceSpeed: 1, speakActivity: false, continueWait: 3000, thinkingSound: true, thinkingVolume: 0.5, echoHold: 600, keepAlive: true, loudness: 'louder', loudnessBt: 'normal' };
+    const VOICE_DEFAULT_PREFS = { micLevel: 50, interruptSensitivity: 50, mode: 'handsfree', readAloud: true, deviceVoiceFallback: true, endPause: 1200, voiceSpeed: 1, speakActivity: false, continueWait: 3000, thinkingSound: true, thinkingVolume: 0.5, echoHold: 600, keepAlive: true, loudness: 'louder', loudnessBt: 'normal', detailsReadWords: 40, hubCue: 'cue', backgroundCue: 'say' };
     function voiceCleanSpeed(v) {
       const n = Number(v);
       return Number.isFinite(n) ? Math.round(Math.max(0.75, Math.min(1.5, n)) * 20) / 20 : 1;
@@ -11133,6 +11370,14 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       }
       return p;
     }
+    // Android (Chrome's call routing applies): the user-agent data platform, else the user agent. False on errors.
+    function voiceIsAndroidNav(nav) {
+      try {
+        if (!nav) return false;
+        if (nav.userAgentData && nav.userAgentData.platform === 'Android') return true;
+        return /Android/i.test(String(nav.userAgent));
+      } catch { return false; }
+    }
     // iPhone / iPad / iPod (iPadOS asking for the desktop site reports a Mac with a touch screen).
     function voiceIsIOSNav(nav) {
       try {
@@ -11170,12 +11415,13 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     const VOICE_SQUOTE_RE = new RegExp('[\\u2018\\u2019]', 'g');
     const VOICE_ELLIPSIS_RE = new RegExp('\\u2026', 'g');
     const VOICE_SEG = '\\/[\\w.@+~-]*[\\w@+~-]';
-    function voicePathsToWords(t) {
+    function voicePathsToWords(t, word) {
+      const W = word === undefined ? 'a file path' : String(word);   // what a path is replaced by (the call marks raw paths with a sentinel word)
       const isPath = (m) => (m.match(/\//g) || []).length >= 2 || /\.[A-Za-z0-9]{1,8}$/.test(m);
-      t = t.replace(/(^|[^\w/.~@-])[A-Za-z]:\\[^\s]*[^\s.,;:!?)\]'"]/g, '$1a file path');
+      t = t.replace(/(^|[^\w/.~@-])[A-Za-z]:\\[^\s]*[^\s.,;:!?)\]'"]/g, '$1' + W.replace(/\$/g, '$$$$'));
       t = t.replace(new RegExp('(^|[^\\w/.~@-])((?:~|\\.{1,2})(?:' + VOICE_SEG + ')+|(?:' + VOICE_SEG + '){2,}|' + VOICE_SEG + '(?=\\.[A-Za-z0-9]{1,8}\\b)(?:\\.[A-Za-z0-9]{1,8})?)', 'g'),
-        (m, lead, p) => lead + (isPath(p) || /^\/[\w@+~-]*\.\w/.test(p) ? 'a file path' : p));
-      t = t.replace(new RegExp('(^|[^\\w/.~@-])((?=[\\w.-]*[A-Za-z])[\\w.-]+(?:' + VOICE_SEG + ')+)', 'g'), (m, lead, p) => lead + (isPath(p) ? 'a file path' : p));
+        (m, lead, p) => lead + (isPath(p) || /^\/[\w@+~-]*\.\w/.test(p) ? W : p));
+      t = t.replace(new RegExp('(^|[^\\w/.~@-])((?=[\\w.-]*[A-Za-z])[\\w.-]+(?:' + VOICE_SEG + ')+)', 'g'), (m, lead, p) => lead + (isPath(p) ? W : p));
       return t;
     }
     function voiceCleanInline(s) {
@@ -11351,6 +11597,9 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (typeof raw.voiceSpeed === 'number' && Number.isFinite(raw.voiceSpeed)) p.voiceSpeed = voiceCleanSpeed(raw.voiceSpeed);
       if (VOICE_CONTINUE_WAITS.includes(raw.continueWait)) p.continueWait = raw.continueWait;
       if (voiceEchoHoldOk(raw.echoHold)) p.echoHold = raw.echoHold;
+      if (VOICE_DETAILS_READ_WORDS.includes(raw.detailsReadWords)) p.detailsReadWords = raw.detailsReadWords;
+      if (VOICE_HUB_CUES.includes(raw.hubCue)) p.hubCue = raw.hubCue;
+      if (VOICE_BACKGROUND_CUES.includes(raw.backgroundCue)) p.backgroundCue = raw.backgroundCue;
       if (typeof raw.thinkingVolume === 'number' && Number.isFinite(raw.thinkingVolume)) p.thinkingVolume = Math.round(Math.max(0, Math.min(1, raw.thinkingVolume)) * 100) / 100;
       for (const k of ['readAloud', 'deviceVoiceFallback', 'speakActivity', 'thinkingSound', 'keepAlive']) if (typeof raw[k] === 'boolean') p[k] = raw[k];
       if (typeof raw.loudness === 'string' && Object.prototype.hasOwnProperty.call(VOICE_LOUDNESS, raw.loudness)) p.loudness = raw.loudness;
@@ -11367,6 +11616,11 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           n++;
         }
         p.wake = wake;
+      }
+      // micDevice: the call microphone the person chose on this device ({ id, label }; on Android it also decides where the call is heard). The key exists only for a choice;
+      // no key = automatic (a Bluetooth or car input first when the browser lists one).
+      if (raw.micDevice && typeof raw.micDevice === 'object' && !Array.isArray(raw.micDevice) && typeof raw.micDevice.id === 'string' && raw.micDevice.id && raw.micDevice.id.length <= 512) {
+        p.micDevice = { id: raw.micDevice.id, label: typeof raw.micDevice.label === 'string' ? raw.micDevice.label.slice(0, 120) : '' };
       }
       // chosen: the agent-default keys the person set on this device (the key exists only when the raw prefs carried an array)
       if (Array.isArray(raw.chosen)) p.chosen = VOICE_AGENT_DEFAULT_KEYS.filter(k => raw.chosen.includes(k));
@@ -11816,6 +12070,13 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     const VOICE_CALL_JOIN_MS = 2000, VOICE_CALL_STILL_MS = 20000, VOICE_CALL_THINK_MS = 2000, VOICE_CALL_CONTINUE_MS = 3000, VOICE_CALL_HOLD_MS = 5000, VOICE_CALL_WAIT_HOLD_MS = 20000;
     // After 20 s with no reply speech, ONE of these is spoken (never the same one twice in a wait).
     const VOICE_THINKING_LINES = ['I\'m considering what you just said.', 'Still thinking about that.', 'Give me a moment, I\'m working through it.'];
+    // A turn the hub started (a scheduled task, a consultation, a job report) is never read aloud on a call. When one needs the person (the page tells the
+    // controller: onHubOwner) the call gives the cue of the pref hubCue ('off' | 'chime' | 'cue'; the spoken line never says what came in), at most once per
+    // 30 s. While one runs, what the person says is kept (not interjected) and sent as his own message when it is over (backgroundDone): the call says the
+    // line below at once and again every 30 s while it runs, and shows the state 'background' (the pref backgroundCue: 'off' | 'show' | 'say').
+    const VOICE_BACKGROUND_LINE = 'One moment, I\'m finishing something in the background.';
+    const VOICE_HUB_CUE_LINE = 'Something came in for you; it\'s in the chat.';
+    const VOICE_BACKGROUND_REPEAT_MS = 30000, VOICE_HUB_CUE_GAP_MS = 30000, VOICE_HUB_CUE_EXPIRE_MS = 10000;   // a cue that could not be given within 10 s is dropped
     const VOICE_CALL_FILLERS = new Set(['uh', 'um', 'umm', 'uhh', 'er', 'erm', 'ah', 'hmm', 'hm', 'mm', 'mmm', 'huh']);
     const VOICE_CALL_ORDINALS = [['first', '1st', 'one', '1'], ['second', '2nd', 'two', '2'], ['third', '3rd', 'three', '3'], ['fourth', '4th', 'four', '4'], ['fifth', '5th', 'five', '5']];
     function voiceCallNorm(text) {
@@ -11907,19 +12168,93 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       }
       return { lead: text, cut: false };
     }
-    function voiceReplySentences(markdown, done) {
+    // Sentinel words that mark a raw link / file path in the lead's raw text; they survive the spoken-text cleaning (see voiceReplySentences).
+    const VOICE_RAW_LINK = 'zqxrawlinkzq', VOICE_RAW_PATH = 'zqxrawpathzq';
+    // What the lead leaves out, judged at the end of a reply. rest: the markdown after the cut; extra: the lead's sentences beyond the cap.
+    // -> { substantial, kind: 'table' | 'code' | 'list' | '', sentences }: substantial when it holds a code block (fenced, or indented), a table, any raw link
+    // or file path (they are never read out), or is more than readWords spoken words; sentences: what is read when it is short. Blockquote markers
+    // are looked through (a fence or a table row inside a quote counts). The kind: table first, then code, then list (items outside code), else ''.
+    function voiceRestAnalysis(rest, extra, readWords, openTail, extraRaw) {
+      const lines = String(rest).split('\n').map(l => l.replace(/^[ \t]*(?:>[ \t]?)+/, ''));   // each line without its blockquote markers
+      const itemRe = /^[ \t]*(?:[-*+•◦▪‣]|\d+[.)])[ \t]+/;
+      // code lines: inside a fence (fence lines too), or indented 4+ spaces / a tab after a block start (a blank line, a heading, code, the
+      // start of the rest). An indented list-looking line is a nested item, not code, only inside a list: the nearest earlier non-blank line is
+      // an item (or a nested item / a continuation of that list).
+      const code = []; let fence = '', prevBlank = true, prevCode = false, prevHead = false, inList = false;
+      for (const l of lines) {
+        const f = /^[ \t]*(```|~~~)/.exec(l);
+        let isCode = false;
+        const blank = !l.trim();
+        if (fence) { isCode = true; if (f && f[1] === fence) fence = ''; }
+        else if (f) { isCode = true; fence = f[1]; }
+        else if (/^(?: {4}|\t)/.test(l) && !blank && (prevBlank || prevCode || prevHead) && !(inList && itemRe.test(l))) isCode = true;
+        code.push(isCode);
+        if (!blank) {
+          if (isCode) inList = false;
+          else if (itemRe.test(l)) inList = true;
+          else if (/^[ \t]{0,3}#{1,6}[ \t]/.test(l)) inList = false;
+          else if (prevBlank && !/^[ \t]{2,}|^\t/.test(l)) inList = false;   // a flush paragraph after a blank line ends the list
+          prevHead = !isCode && /^[ \t]{0,3}#{1,6}[ \t]/.test(l);
+          prevBlank = false;
+        } else prevBlank = true;
+        prevCode = isCode;
+      }
+      const hasCode = code.some(Boolean);
+      const hasTable = !!openTail || lines.some(l => /^\s*\|/.test(l) || VOICE_TABLE_RULE_RE.test(l));
+      const plain = String(rest).replace(/!?\[([^\]]*)\]\([^)\s]*(?:\s+"[^"]*")?\)/g, '$1');   // a link with a label is read by its label
+      // extraRaw: how many of the lead's extra sentences hold a RAW link / path (decided by the caller from the raw text, not from the words
+      // "a link" / "a file path", which ordinary prose also uses)
+      const raw = (plain.match(/(?:https?:\/\/|www\.)[^\s<>)\]]*[^\s<>)\].,;:!?'"]/gi) || []).length
+        + (voicePathsToWords(plain.replace(/(?:https?:\/\/|www\.)\S+/gi, ' '), VOICE_RAW_PATH).match(new RegExp(VOICE_RAW_PATH, 'g')) || []).length + (extraRaw || 0);
+      const body = lines.filter(l => l.trim());
+      const items = lines.filter((l, i) => !code[i] && itemRe.test(l)).length;
+      const kind = hasTable ? 'table' : hasCode ? 'code' : body.length && items * 2 >= body.length ? 'list' : '';
+      const spoken = voiceSpeechText(rest);
+      const sentences = extra.concat(voiceSentences(spoken).filter(Boolean));
+      const words = extra.concat(spoken).join(' ').split(/\s+/).filter(Boolean).length;
+      return { substantial: hasCode || hasTable || raw >= 1 || words > readWords, kind, sentences };
+    }
+    // voiceReplySentences(markdown, done, readWords = 40) -> { sentences, note }. While the reply streams only the spoken lead counts (at most
+    // VOICE_LEAD_MAX_SENTENCES sentences); anything left out is held. At done what the lead left out is judged: short (at most readWords spoken
+    // words, nothing unspeakable) -> its sentences follow the lead's (so the sentences already returned stay a prefix), no note; substantial -> the lead only
+    // and ONE note naming the kind (list, table, code, else the details note). readWords 0 never reads the rest.
+    function voiceReplySentences(markdown, done, readWords) {
       const note = voiceSpeechText('| a |');
+      const limit = Number.isFinite(Number(readWords)) && readWords !== null && readWords !== '' && Number(readWords) >= 0 ? Number(readWords) : 40;
       const sp = voiceSpokenLead(markdown, done);
       const finished = (!!done || sp.cut) && !sp.openTail;   // a cut lead is complete; an uncut reply may still be streaming; text before a table header's pipe is read as typed
       let lead = sp.lead;
       // While streaming, a last line that is only the start of a detail line (a lone marker, digits, an unclosed bold) is not lead text yet.
       if (!finished) lead = lead.replace(/(^|\n)[ \t]*(?:[-*+•◦▪‣`~#|_=]+|\d+[.)]?|(?:\*\*|__)[^\n]*)$/, '$1');
       let t = voiceSpeechText(lead, !finished), hasNote = sp.cut;
-      if (t === note) { t = ''; hasNote = true; } else if (t.endsWith(' ' + note)) { t = t.slice(0, -note.length).trim(); hasNote = true; }
+      let leadNote = false;   // the lead itself held something unspeakable: always a note
+      if (t === note) { t = ''; hasNote = leadNote = true; } else if (t.endsWith(' ' + note)) { t = t.slice(0, -note.length).trim(); hasNote = leadNote = true; }
       let sentences = voiceSentences(t).filter(Boolean);
       if (!finished && sentences.length && !(/[.!?]["')\]]*$/.test(t) && /\s$/.test(lead))) sentences.pop();
-      if (sentences.length > VOICE_LEAD_MAX_SENTENCES) { sentences = sentences.slice(0, VOICE_LEAD_MAX_SENTENCES); hasNote = true; }
-      return { sentences, note: hasNote ? note : '' };
+      const extra = sentences.slice(VOICE_LEAD_MAX_SENTENCES);
+      if (extra.length) { sentences = sentences.slice(0, VOICE_LEAD_MAX_SENTENCES); hasNote = true; }
+      if (!done || !limit || !hasNote || leadNote) return { sentences, note: hasNote ? note : '' };
+      // Which extra sentences hold a RAW link / path: the same cleaning and split on the lead with its raw links and paths marked by sentinel
+      // words (the words "a link" / "a file path" in ordinary prose are not raw ones).
+      let extraRaw = 0;
+      if (extra.length) {
+        let ml = lead.replace(/!?\[([^\]]*)\]\([^)\s]*(?:\s+"[^"]*")?\)/g, '$1');
+        ml = ml.replace(/(?:https?:\/\/|www\.)[^\s<>)\]]*[^\s<>)\].,;:!?'"]/gi, ' ' + VOICE_RAW_LINK + ' ');
+        ml = voicePathsToWords(ml, VOICE_RAW_PATH);
+        let mt = voiceSpeechText(ml, !finished);
+        if (mt === note) mt = ''; else if (mt.endsWith(' ' + note)) mt = mt.slice(0, -note.length).trim();
+        const ms = voiceSentences(mt).filter(Boolean);
+        if (!finished && ms.length && !(/[.!?]["')\]]*$/.test(mt) && /\s$/.test(ml))) ms.pop();
+        const marked = ms.slice(VOICE_LEAD_MAX_SENTENCES);
+        extraRaw = marked.length === extra.length ? marked.filter(s => s.includes(VOICE_RAW_LINK) || s.includes(VOICE_RAW_PATH)).length
+          : extra.filter(s => /\ba link\b|\ba file path\b/.test(s)).length;   // the split differed: judge by the words, as before
+      }
+      // The reply is complete and the lead left something out: the markdown after the cut, and the lead's sentences beyond the cap.
+      const text = String(markdown == null ? '' : markdown).replace(/\r\n?/g, '\n');
+      const rest = sp.cut ? text.slice(sp.lead.length) : '';
+      const a = voiceRestAnalysis(rest, extra, limit, sp.openTail, extraRaw);
+      if (a.substantial) return { sentences, note: a.kind === 'list' ? VOICE_NOTE_LIST.trim() : a.kind === 'table' ? VOICE_NOTE_TABLE.trim() : a.kind === 'code' ? VOICE_NOTE_CODE.trim() : note };
+      return { sentences: sentences.concat(a.sentences), note: '' };
     }
     function voiceCreateCall(deps) {
       const d = deps || {};
@@ -11929,7 +12264,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const quiet = (fn) => { try { return fn(); } catch { return undefined; } };
       let state = '', mode = 'announce', ended = false, started = false, endPromise = null;
       let personSpeaking = false, speechEndAt = null, awaitingReply = false, cutSkip = false;
-      let lastText = '', spokenCount = 0, noteSpoken = false, lastStatusAt = null;
+      let lastText = '', spokenCount = 0, noteSpoken = false, doneSeen = false, lastStatusAt = null;
       let queue = [], current = null, speaking = false, gen = 0;
       let heldList = [], announceQueue = [], pendingAnnounce = null, pendingAsk = null;
       let hbTimer = null, pumpTimer = null, sttChain = Promise.resolve();
@@ -11942,6 +12277,9 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       let lastSpokenAt = null, turnAt = null, stillSaid = false, stillTimer = null, stillUsed = [];
       let thinkTimer = null, thinkingOn = false, thinkStep = 0, thinkT0 = 0, thinkDueAt = 0, thinkSeed = 0;
       let replyEnded = false;   // the whole reply of this turn was reported once (ui.reply('end'))
+      // Hub-started turns (see VOICE_BACKGROUND_LINE): bgWords = what the person said while one runs (kept in order, sent as one message when it is over; d.backgroundBusy()
+      // says whether a hub-started turn runs and none of his own), bgTimer = the repeat of the spoken line; cuePending = the cue that waits for the speaking to be over.
+      let bgWords = [], bgTimer = null, bgRefusals = 0, cuePending = '', cueAt = null, cuePendingAt = 0;
       // Recording (deps.recorder, only for an agent that keeps recordings; without it none of this acts). recDecided: the decision for the speech now
       // under way was made (at its begin); recOn: it is being recorded. Nothing said in standby is ever recorded: the decision is made at speech begin.
       // deps.recordTranscript(seq, text) and deps.recordReplyText(text) hand the saved text to the page.
@@ -11961,15 +12299,12 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       let leadInUntil = 0, keepAliveOn = false, micLost = false;
       // Mute (setMuted, the call bar's Mute button). sinceUnmute: a piece of speech began after the last unmute (an end or misfire for one that began before is ignored).
       let muted = false, sinceUnmute = true;
-      let linkLost = false, linkWasLost = false, linkDropped = false;   // the connection to the server is lost (setLinkLost): speech is dropped, nothing is reported as an error
-      // Outage count: each loss adds one. A piece of speech remembers the count when it began (-1 if the link was already lost); it is dropped when
-      // that differs from the count when it is transcribed or sent, so nothing heard around an outage reaches the agent after the link is back.
+      let linkLost = false, linkWasLost = false, linkDropped = false;   // the connection to the server is lost (setLinkLost): nothing is reported as an error
+      // Outage count: each loss adds one. A piece of speech remembers the count when it began (-1 if the link was already lost). The link state NEVER
+      // discards a piece whose transcript arrived (the request itself is the test: speech heard during an outage is still sent to d.stt). It only decides
+      // what is said when d.stt THREW: a sendable piece whose transcription failed while the link was lost, or that an outage touched (count differs), did not
+      // get through: linkDropped (kept per outage, set at that moment) makes "Say that again." follow "Reconnected."; after the link is back it is queued at once.
       let linkGen = 0, segLinkGen = 0;
-      // linkDropped is kept per outage: set when the outage begins (a sendable utterance is being spoken or is in flight: inflight holds every
-      // utterance from its end until its transcript was sent or dropped), when a sendable one ends during it, and at its end (one started
-      // during it is still going). A stale result found later never sets it (it was counted at the start). Standby speech is never sendable.
-      const inflight = new Set();
-      const isSendable = (sb, seq) => !(standby || (sb && seq === wakeSeq));
       const prefs = () => { const p = quiet(() => d.prefs && d.prefs()); return p && typeof p === 'object' ? p : {}; };
       // 'Wait for me to go on': how long a sentence that sounds unfinished waits for the next piece.
       const continueWait = () => { const n = Number(prefs().continueWait); return Number.isFinite(n) && n >= 0 ? n : VOICE_CALL_CONTINUE_MS; };
@@ -12088,7 +12423,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const wakePhrase = () => { const w = wake(); return w && typeof w.phrase === 'string' ? w.phrase : ''; };
       let standby = false, wakeMode = false, wakeSeq = 0, quietTimer = null, chimeTimer = null, statePhrase = '';
       let capWake = null, heardShown = false;   // heardShown: a 'Heard' line is on screen (cleared when the call goes back to standby)   // { sb, seq } taken when the person starts to speak: what counts is whether the call was in standby then
-      const wakeIdle = () => !awaitingReply && !speaking && !personSpeaking && !sttPending && !queue.length && !current && !pendingAsk && !pendingAnnounce;
+      const wakeIdle = () => !awaitingReply && !bgWords.length && !speaking && !personSpeaking && !sttPending && !queue.length && !current && !pendingAsk && !pendingAnnounce;
       function clearQuiet() { if (quietTimer !== null) { quiet(() => d.clearTimer(quietTimer)); quietTimer = null; } }
       function enterStandby() {
         if (ended) return;
@@ -12097,6 +12432,13 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         if (!speaking) setState('standby');
       }
       function leaveStandby() { standby = false; clearQuiet(); settle(); }
+      // The soft chime (deps.chime, the page's own short tone): the wake phrase heard, and the cue of something that came in for the person.
+      function playChime() {
+        quiet(() => d.chime && d.chime());
+        quiet(() => vad.setPlaybackActive(true));   // the chime is playback: it must not be taken as speech
+        if (chimeTimer !== null) quiet(() => d.clearTimer(chimeTimer));
+        chimeTimer = d.setTimer(() => { chimeTimer = null; if (!ended && !speaking) quiet(() => vad.setPlaybackActive(false)); }, 700);
+      }
       function setState(name) {
         const phrase = name === 'standby' ? wakePhrase() : '';
         if (name === state && phrase === statePhrase) return;   // (the phrase of a standby can change with the setting)
@@ -12115,18 +12457,28 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       }
       function settle() {
         if (ended) return;
+        if (cuePending) tryCue();   // a cue that waited for the speaking to be over
         if (!speaking && !personSpeaking && queue.length) { clearQuiet(); runQueue(); return; }   // lines that waited while the person spoke are read now
-        setState(speaking ? 'speaking' : standby ? 'standby' : personSpeaking ? 'hearing' : awaitingReply ? 'thinking' : 'listening');
+        setState(speaking ? 'speaking' : standby ? 'standby' : personSpeaking ? 'hearing' : bgWords.length && bgMode() !== 'off' ? 'background' : awaitingReply ? 'thinking' : 'listening');
         armQuiet();
         pumpAnnounce();
         armStill();
         if (awaitingReply && !speaking && !personSpeaking && !standby) armThinking();   // a long quiet stretch inside a running turn gets the sound too
       }
       function runAfter(item) { if (item && item.after) { const f = item.after; item.after = null; quiet(f); } }
-      function enqueue(text, kind, after, onStart, again) {
+      function enqueue(text, kind, after, onStart, again, note) {   // note: the line is a note about what was left out (not one of a reply's counted sentences)
         if (ended || !text) return;
-        queue.push({ text, kind, after, onStart, again });
+        const item = { text, kind, after, onStart, again, note: !!note };
+        queue.push(item);
+        if (current && queue[0] === item) prefetchNext();   // a line is being spoken and this one is the next
         if (!speaking && !personSpeaking) runQueue();   // never start reading while the person is speaking: the line waits
+      }
+      // d.prefetch(text) (optional page function): the next line to be spoken is asked for ahead of time. Only the ONE line at queue[0], once per item.
+      function prefetchNext() {
+        const n = queue[0];
+        if (!n || n.prefetched || typeof d.prefetch !== 'function') return;
+        n.prefetched = true;
+        quiet(() => { const r = d.prefetch(n.text); if (r && typeof r.catch === 'function') r.catch(() => {}); });
       }
       async function runQueue() {
         const my = gen;
@@ -12141,7 +12493,12 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           if (current.onStart) { const f = current.onStart; current.onStart = null; quiet(f); }   // the line really starts playing
           let ok = true;
           lastSpokenAt = now();
-          try { ok = await d.speak(current.text); } catch { ok = false; }
+          // This line starts first, then the one waiting behind it is fetched ahead: starting a line may stop the previous playback (the desktop page
+          // does, and clears its fetched-ahead audio then), so a prefetch made before it would be thrown away.
+          let spoken;
+          try { spoken = d.speak(current.text); } catch { spoken = Promise.resolve(false); }
+          prefetchNext();
+          try { ok = await spoken; } catch { ok = false; }
           if (my !== gen) return;
           const item = current; current = null;
           lastSpokenAt = now();
@@ -12181,7 +12538,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         return hadReply;
       }
 
-      function completeCount() { return voiceReplySentences(lastText, false).sentences.length; }
+      const readWords = () => prefs().detailsReadWords;   // 'Read short extra parts aloud' (undefined: the default, 40)
+      function completeCount() { return voiceReplySentences(lastText, false, readWords()).sentences.length; }
       // The whole reply is over, reported ONCE (ui.reply('end')) for the display's reaction: its text is complete AND nothing is read or waiting to be
       // read (so a gap between two sentences of a growing reply is not the end) AND the person is not speaking. With no speech (voice off, a failed
       // line) that is the moment the text is complete; otherwise right after the last line ended, before the call returns to listening.
@@ -12196,14 +12554,18 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         lastText = String(full == null ? '' : full); lastDone = !!done;
         if (!done) replyRecorded = false;   // a reply is being written: its text is saved once, when complete
         if (!done && !awaitingReply && !cutSkip) { awaitingReply = true; replyEnded = false; }
-        const r = voiceReplySentences(lastText, !!done);
-        if (r.sentences.length < spokenCount) spokenCount = 0;
-        if (cutSkip) spokenCount = r.sentences.length;
-        else { for (const s of r.sentences.slice(spokenCount)) enqueue(s, 'reply'); spokenCount = r.sentences.length; }
+        if (!done) doneSeen = false;   // a reply being written: a done seen before belonged to an earlier one
+        const r = voiceReplySentences(lastText, !!done, readWords());
+        // once a done was processed for this reply, a later one (the pref may have changed: fewer sentences) never lowers what was spoken
+        if (!(doneSeen && r.sentences.length < spokenCount)) {
+          if (r.sentences.length < spokenCount) spokenCount = 0;
+          if (cutSkip) spokenCount = r.sentences.length;
+          else { for (const s of r.sentences.slice(spokenCount)) enqueue(s, 'reply'); spokenCount = r.sentences.length; }
+        }
         if (done) {
           if (recorder && !replyRecorded && lastText.trim()) { replyRecorded = true; quiet(() => d.recordReplyText(lastText)); }
-          if (!cutSkip && r.note && !noteSpoken) enqueue(r.note, 'reply');
-          noteSpoken = true; awaitingReply = false;
+          if (!cutSkip && r.note && !noteSpoken) enqueue(r.note, 'reply', null, null, false, true);
+          noteSpoken = true; awaitingReply = false; doneSeen = true;
           clearStill(); stopThinking(); quiet(() => ui.activity(''));
           if (!speaking) { maybeReplyEnd(); settle(); }
         }
@@ -12385,10 +12747,9 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         recBegin();   // no onSpeechBegin came first (a begin already decided this speech)
         if (!standby) queue = queue.filter(i => !i.again);   // already repeating themselves: a queued "Say that again." is dropped, never read
         if (!standby && (speaking || queue.length)) {   // in standby a sound does not cut the reading ("<phrase>, stop" does, once heard)
-          const noteText = voiceSpeechText('| a |');   // the details note is a reply item but not one of the counted sentences
-          const items = (current ? [current] : []).concat(queue);
-          const n = items.filter(i => i.kind === 'reply' && i.text !== noteText).length;
-          const noteCut = items.some(i => i.kind === 'reply' && i.text === noteText);   // a false start puts the note back too
+          const items = (current ? [current] : []).concat(queue);   // a note (flagged when queued) is a reply item but not one of the counted sentences
+          const n = items.filter(i => i.kind === 'reply' && !i.note).length;
+          const noteCut = items.some(i => i.kind === 'reply' && i.note);   // a false start puts the note back too
           const cutReply = cancelSpeaking(true);
           const setSkip = cutReply && awaitingReply && !cutSkip;
           if (setSkip) cutSkip = true;
@@ -12435,9 +12796,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         const cap = capWake || { sb: standby, seq: wakeSeq }; capWake = null;
         const mine = { endAt: now(), ann: speechAnn, carry: '', done: false, hold: null, waiting: false, onJoin: null, sb: cap.sb || standby, seq: cap.seq,
           linkGen: segLinkGen === linkGen && !linkLost ? linkGen : -1 };
-        const stale = () => linkLost || mine.linkGen !== linkGen;   // heard while the link was lost, or an outage began since: never sent
-        if (linkLost && isSendable(mine.sb, mine.seq)) linkDropped = true;   // a sendable utterance ended during an outage: "Say that again." follows "Reconnected."
-        inflight.add(mine);
+        const linkHit = () => linkLost || mine.linkGen !== linkGen;   // the link was lost now, or an outage began since / was going when this piece began
         speechAnn = null; segActive = false;
         const cand = curCand; curCand = null;
         if (cand && cand.hold) cand.hold.resolve(mine);   // the earlier piece hands its text to this one
@@ -12452,11 +12811,17 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
             const w0 = wake();
             if (mustMatch() && !(w0 && w0.local === true)) return;   // standby without a recognizer known to be local: not even transcribed
             const dropLong = mustMatch() && !!audio && audio.length > 30 * 16000;   // a long stretch of talk in standby is not transcribed at all
-            try { text = dropLong || stale() ? '' : await d.stt(audio); } catch { failed = true; if (!mustMatch() && !linkLost) quiet(() => ui.toast('Could not transcribe that.')); }
+            try { text = dropLong ? '' : await d.stt(audio); } catch {
+              failed = true;
+              if (!mustMatch()) {
+                if (!linkHit()) quiet(() => ui.toast('Could not transcribe that.'));   // during an outage: no error line
+                else if (linkLost) linkDropped = true;   // its words really did not get through: "Say that again." follows "Reconnected."
+                else if (!ended) enqueue('Say that again.', 'mic', undefined, undefined, true);   // the link is already back
+              }
+            }
             // The person's words for this piece, as the recognizer gave them, are saved with its audio (also a filler or text that is not sent).
-            if (recHandle && !failed && !dropLong && !stale() && String(text || '').trim()) quiet(() => d.recordTranscript(recHandle.seq, String(text).trim()));
+            if (recHandle && !failed && !dropLong && String(text || '').trim()) quiet(() => d.recordTranscript(recHandle.seq, String(text).trim()));
             if (ended) return;
-            if (stale()) return;   // heard around an outage: dropped, not sent (also when the link came back while this waited)
             const own = String(text || '').trim(), n = voiceCallNorm(own);
             const ownOk = !failed && !(n.length < 2 || n.split(' ').every(w => VOICE_CALL_FILLERS.has(w)));
             let t = ownOk ? own : '';
@@ -12471,10 +12836,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
               const m = voiceWakeMatch(t, w.phrase);
               if (!m.match) return;
               standby = false; wakeSeq++;
-              quiet(() => d.chime && d.chime());
-              quiet(() => vad.setPlaybackActive(true));   // the chime is playback: it must not be taken as speech
-              if (chimeTimer !== null) quiet(() => d.clearTimer(chimeTimer));
-              chimeTimer = d.setTimer(() => { chimeTimer = null; if (!ended && !speaking) quiet(() => vad.setPlaybackActive(false)); }, 700);
+              playChime();
               if (!m.rest) { settle(); return; }   // the next utterance is the message
               t = m.rest;
             }
@@ -12505,7 +12867,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
               let holdTimer = null, timedOut = false;
               const next = await Promise.race([mine.hold.promise, new Promise((r) => { holdTimer = d.setTimer(() => { timedOut = true; r(null); }, waited ? VOICE_CALL_WAIT_HOLD_MS : VOICE_CALL_HOLD_MS); })]);
               if (holdTimer !== null) quiet(() => d.clearTimer(holdTimer));
-              if (ended || stale()) return;
+              if (ended) return;
               if (next) { next.carry = t; if (next.ann == null) next.ann = mine.ann; return; }
               if (timedOut || !waited) break;
               // A misfire (cough, click) ended the wait early: the rest of the wait goes on.
@@ -12514,18 +12876,17 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
               await waitMore(left);
               if (ended) return;
             }
-            if (stale()) return;
             mine.done = true;
             heardShown = true; quiet(() => ui.heard(t));
             sttPending--; counted = true;   // the transcript is out of the queue: the thinking sound may arm while the turn runs
-            inflight.delete(mine);   // handed to route(): no longer at risk of being discarded by an outage (the finally below is cleanup)
             await route(t, mine.ann);
-          } finally { mine.done = true; inflight.delete(mine); if (!counted) sttPending--; settle(); }
+          } finally { mine.done = true; if (!counted) sttPending--; settle(); }
         });
         return sttChain;
       }
       async function route(t, ann) {
         if (voiceIsStopCommand(t)) {
+          if (bgWords.length || (!awaitingReply && bgBusy())) { bgDrop(); bgUnsay(); cancelSpeaking(); settle(); return; }   // waiting for the background work, or only a hub-started turn runs: the kept words are dropped, nothing more is said and the work itself is not stopped
           cancelSpeaking(); cutSkip = true; awaitingReply = false; stopThinking(); clearStill();
           quiet(() => d.stop()); enqueue('Stopped.', 'stop'); settle();
           return;
@@ -12542,38 +12903,129 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           else if (!a.tapped) { a.tapped = true; enqueue('Please tap one of the options on the screen.', 'ask'); }
           return;
         }
+        // A turn the hub started runs and none of his own: his words are kept and sent as his own message when it is over (not interjected into it).
+        if (bgWords.length || (!awaitingReply && bgBusy())) { bgKeep(t); return; }
         try {
           if (quiet(() => d.isTurnRunning())) {
             if (cutSkip) { cutSkip = false; spokenCount = completeCount(); }
+            doneSeen = false; noteSpoken = false;   // what follows an interjection is a new reply: its done is processed afresh and it says its own note once
             awaitingReply = true; replyEnded = false; replyRecorded = false; turnAt = now(); stillSaid = false; quiet(() => ui.reply('start')); setState('thinking'); armStill(); armThinking();
             await d.interject(t);
           } else {
-            awaitingReply = true; replyEnded = false; replyRecorded = false; cutSkip = false; spokenCount = 0; noteSpoken = false; lastText = ''; lastDone = false; turnAt = now(); stillSaid = false; stillUsed = [];
-            quiet(() => ui.reply('start')); setState('thinking'); armStill(); armThinking();
-            await d.send(t);
+            beginOwnTurn();
+            try { await d.send(t); }
+            catch (e) {
+              // The hub refused it as busy (a turn it started had just begun and the page had not seen it yet): his words are kept and sent
+              // when that work is over, as if he had spoken during it; never dropped.
+              if (ended) { quiet(() => d.keepWords && d.keepWords(t)); return; }   // hung up while it was being sent: never dropped, never resent; the message box keeps them
+              if (e && e.refused === true) { awaitingReply = false; clearStill(); stopThinking(); quiet(() => ui.activity('')); quiet(() => ui.reply('drop')); bgKeepRefused(t); return; }
+              throw e;
+            }
           }
-        } catch {
-          awaitingReply = false; clearStill(); stopThinking(); quiet(() => ui.activity(''));
-          if (!linkLost) { quiet(() => ui.toast('Could not send that.')); enqueue('That did not go through.', 'status'); }   // a lost connection is reported by the link watch, not as an error line
-          settle();
-        }
+        } catch { sendFailed(); }
       }
-      // The connection to the server was lost (on) or is back (!on). While lost, what is heard is dropped and no error is spoken or shown;
-      // when it is back after a real outage, "Reconnected." is spoken (kind 'mic': a barge-in does not drop it).
+      // Words the hub refused as busy: kept like words spoken during background work (the line, the state, the 30 s check), whatever the page
+      // knows about the agent yet; the check or the idle hook sends them.
+      function bgKeepRefused(t) {
+        const first = !bgWords.length;
+        if (first) bgRefusals = 1;   // this refusal counts toward BG_MAX_REFUSALS: three refusals in all
+        bgWords.push(t);
+        if (first) { if (bgMode() === 'say') enqueue(VOICE_BACKGROUND_LINE, 'status'); bgArm(); }
+        settle();
+      }
+      function beginOwnTurn() {
+        awaitingReply = true; replyEnded = false; replyRecorded = false; cutSkip = false; spokenCount = 0; noteSpoken = false; doneSeen = false; lastText = ''; lastDone = false; turnAt = now(); stillSaid = false; stillUsed = [];
+        quiet(() => ui.reply('start')); setState('thinking'); armStill(); armThinking();
+      }
+      function sendFailed() {
+        awaitingReply = false; clearStill(); stopThinking(); quiet(() => ui.activity(''));
+        if (!linkLost) { quiet(() => ui.toast('Could not send that.')); enqueue('That did not go through.', 'status'); }   // a lost connection is reported by the link watch, not as an error line
+        settle();
+      }
+      // ── hub-started turns: the person's words wait for his own turn (VOICE_BACKGROUND_LINE); the cue when one needs him ──
+      const bgMode = () => { const v = prefs().backgroundCue; return v === 'off' || v === 'show' ? v : 'say'; };   // 'While I finish something in the background' (default 'say')
+      const bgBusy = () => !!(d.backgroundBusy && quiet(() => d.backgroundBusy()));
+      function bgClearTimer() { if (bgTimer !== null) { quiet(() => d.clearTimer(bgTimer)); bgTimer = null; } }
+      function bgDrop() { bgWords = []; bgClearTimer(); }
+      // The line is repeated at most every 30 s, only while the background turn still runs.
+      // The timer runs in every mode (it re-checks that the background turn still runs, so words are never stranded by a missed turn_end); it only SAYS the line in 'say'.
+      function bgArm() {
+        bgClearTimer();
+        if (ended || !bgWords.length) return;
+        bgTimer = d.setTimer(() => {
+          bgTimer = null;
+          if (ended || !bgWords.length) return;
+          if (!bgBusy()) { backgroundDone(); return; }
+          if (bgMode() === 'say') enqueue(VOICE_BACKGROUND_LINE, 'status');
+          bgArm();
+        }, VOICE_BACKGROUND_REPEAT_MS);
+      }
+      // A background line still queued (not yet spoken) is dropped when the work is over or the words are dropped.
+      function bgUnsay() { for (let i = queue.length - 1; i >= 0; i--) if (queue[i].text === VOICE_BACKGROUND_LINE) queue.splice(i, 1); }
+      function bgKeep(t) {
+        const first = !bgWords.length;
+        bgWords.push(t);
+        if (!bgBusy()) { backgroundDone(); return; }   // it ended while the words were being heard
+        if (first) { if (bgMode() === 'say') enqueue(VOICE_BACKGROUND_LINE, 'status'); bgArm(); }
+        settle();
+      }
+      // The page: no hub-started turn runs any more (its turn_end, or the agent went idle). The kept words go out as his own message (voice: true).
+      function backgroundDone() {
+        if (ended) return Promise.resolve();
+        bgClearTimer();
+        if (!bgWords.length) { settle(); return Promise.resolve(); }
+        bgUnsay();
+        const kept = bgWords; bgWords = [];
+        return (async () => { try { beginOwnTurn(); await d.send(kept.join(' ')); bgRefusals = 0; } catch (e) { bgBack(kept, e); } })();
+      }
+      // The hub did not take the kept words. Only a confirmed refusal (err.refused === true: an HTTP answer that is not accepted, such as 409 busy) puts them back at the front of
+      // what is kept to wait for the next idle, nothing extra said; after the third refusal they go to the message box. An uncertain delivery (a network error, anything before an
+      // answer) may have reached the hub: they are never sent again, they go to the message box. Hung up meanwhile: they go to the message box.
+      const BG_MAX_REFUSALS = 3;
+      function bgBack(kept, err) {
+        awaitingReply = false; clearStill(); stopThinking(); quiet(() => ui.activity(''));
+        const words = kept.join(' ');
+        if (ended) { quiet(() => d.keepWords && d.keepWords(words)); return; }
+        if (err && err.refused === true && ++bgRefusals < BG_MAX_REFUSALS) {
+          bgWords = kept.concat(bgWords);
+          bgArm(); settle();
+          return;
+        }
+        const refused = !!(err && err.refused === true);
+        bgRefusals = 0;
+        quiet(() => d.keepWords && (refused ? d.keepWords(words) : d.keepWords(words, 'I couldn\'t confirm that went through. What you said is in the message box.')));
+        enqueue(refused ? 'That did not go through. It\'s in the message box.' : 'That may not have gone through. It\'s in the message box.', 'status');
+        settle();
+      }
+      // A hub-started turn that needs the person ended (the page: for_owner). The pref hubCue: 'off' nothing, 'chime' the soft chime, 'cue' the chime and one spoken line.
+      // At most one per 30 s; never over the person speaking or a reply being read: it waits (settle) until that is over.
+      function onHubOwner() {
+        if (ended) return;
+        const v = prefs().hubCue, mode = v === 'off' || v === 'chime' ? v : 'cue';
+        if (mode === 'off') return;
+        const t = now();
+        if (cueAt !== null && t - cueAt < VOICE_HUB_CUE_GAP_MS) return;
+        cueAt = t; cuePending = mode; cuePendingAt = t;
+        tryCue();
+      }
+      function tryCue() {
+        if (!cuePending || ended) return;
+        if (now() - cuePendingAt > VOICE_HUB_CUE_EXPIRE_MS) { cuePending = ''; return; }   // too old to be of use: dropped
+        if (personSpeaking || speaking || current || queue.length || awaitingReply || sttPending || pendingAsk) return;
+        const mode = cuePending; cuePending = '';
+        playChime();
+        if (mode === 'cue') enqueue(VOICE_HUB_CUE_LINE, 'cue');
+      }
+      // The connection to the server was lost (on) or is back (!on). While lost no error is spoken or shown; what is heard is still transcribed and a
+      // transcript that arrives is handled as usual (see linkGen above). When it is back after a real outage, "Reconnected." is spoken (kind 'mic':
+      // a barge-in does not drop it), followed by "Say that again." when a piece's transcription failed during the outage (linkDropped).
       function setLinkLost(on) {
         if (ended) return;
         if (on) {
-          if (!linkLost) {   // the outage begins: speech being said now, or in flight (not one already stale from an earlier outage), is lost
-            linkDropped = false;
-            const cap = capWake || { sb: standby, seq: wakeSeq };
-            if (personSpeaking && segLinkGen !== -1 && isSendable(cap.sb, cap.seq)) linkDropped = true;   // only speech that began while the link was up (one begun in an earlier outage was counted then)
-            for (const m of inflight) if (m.linkGen === linkGen && isSendable(m.sb, m.seq)) linkDropped = true;
-            linkGen++;
-          }
+          if (!linkLost) { linkDropped = false; linkGen++; }   // a new outage begins
           linkLost = true; linkWasLost = true; return;
         }
         if (!linkLost) return;
-        if (personSpeaking && segLinkGen === -1) { const cap = capWake || { sb: standby, seq: wakeSeq }; if (isSendable(cap.sb, cap.seq)) linkDropped = true; }   // started during the outage, still going
         linkLost = false;
         if (linkWasLost) {
           linkWasLost = false;
@@ -12674,6 +13126,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       // Everything the call holds is let go at once: timers, the thinking sound, the microphone and the speaking.
       function teardown() {
         ended = true; capWake = null;
+        const kept = bgWords.join(' '); bgDrop(); cuePending = '';   // words kept for the background work are never sent: they are put in the chat's message box below
         for (const t of [hbTimer, pumpTimer, quietTimer, chimeTimer, pendingAnnounce && pendingAnnounce.timer]) if (t) quiet(() => d.clearTimer(t));
         hbTimer = pumpTimer = quietTimer = chimeTimer = null; pendingAnnounce = null; pendingAsk = null; announceQueue = []; clearBegin(); disarmWatch(); clearStill(); stopThinking();
         for (const s of [lastSeg, curCand]) if (s) { if (s.hold) s.hold.resolve(null); if (s.onJoin) { const f = s.onJoin; s.onJoin = null; quiet(f); } }   // a held or waiting transcript is let go with the call
@@ -12681,6 +13134,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         quiet(() => vad.stop()); cancelSpeaking(); setState('ended');
         if (recorder) { recOn = false; quiet(() => recorder.stop()); }
         if (keepAliveOn) { keepAliveOn = false; quiet(() => d.keepAlive.stop()); }
+        if (kept) quiet(() => { if (typeof d.keepWords === 'function') d.keepWords(kept); });   // the page puts them in the message box (and says so): a busy agent would refuse or interject them
       }
       // Immediate hang-up, for a page that is being hidden, frozen or closed (reason: 'hidden', 'pagehide', 'freeze', ...): everything is
       // released now and the server is told in the background; nothing is waited for and nothing is read out.
@@ -12724,24 +13178,48 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         settle();
       }
       return {
-        start, hangUp, release, wakeChanged, isStandby: () => standby, setMuted, isMuted: () => muted, interrupt, setPrefs, retryMic, setLinkLost, onSpeechBegin, onSpeechStart, onMisfire, onSpeechEnd, onReplyText, onActivity, onAsk, onAskDone, onHeld, onHeldDone, decide, setMode,
+        start, hangUp, release, wakeChanged, isStandby: () => standby, setMuted, isMuted: () => muted, interrupt, setPrefs, retryMic, setLinkLost, onSpeechBegin, onSpeechStart, onMisfire, onSpeechEnd, onReplyText, onActivity, onAsk, onAskDone, onHeld, onHeldDone, decide, setMode, onHubOwner, backgroundDone,
+        get background() { return bgWords.length > 0; },
         get state() { return state; }, get callId() { return callId; }, get mode() { return mode; }, get held() { return heldList.map(h => Object.assign({}, h)); },
       };
     }
-    // The link watch of a call: is the server reachable? o = { probe: () => Promise<boolean> (true = reachable), setTimeout, clearTimeout, onLost(), onBack(),
-    // onGiveUp(), everyMs = 5000, lostEveryMs = 1000, giveUpMs = 10000, now = Date.now }. While the link is fine it probes every everyMs; a failed probe, report()
-    // (a network failure seen on one of the call's own requests) or offline() mark it LOST at once (onLost, once per outage), and it then probes every
-    // lostEveryMs. A probe that succeeds within giveUpMs -> onBack (once) and the normal rhythm; no success within giveUpMs -> onGiveUp (once), and nothing runs
-    // any more. One probe is in flight at a time; after stop() nothing fires, and a probe that resolves late is ignored.
-    // -> { start(), stop(), report(), offline(), online() (probe at once), get lost() }
+    // The link watch of a call: is the server reachable? o = { probe: (opts) => Promise<true|'down'|false|null> , setTimeout, clearTimeout, onLost(), onBack(),
+    // onGiveUp(), everyMs = 5000, lostEveryMs = 1000, giveUpMs = 10000, now = Date.now }.
+    // probe(opts) resolves true (reachable), 'down' (a HARD failure: the request failed with a network error, or a 5xx such as a proxy's 502 for a dead hub),
+    // false (it TIMED OUT with no transfer of ours in flight: slow or silent) or null/undefined (UNKNOWN: it timed out behind our own upload, so it proves
+    // nothing either way). opts is { confirm: true } for the probe that confirms a first false (the page then gives it a shorter limit), else {}.
+    // While the link is fine it probes every everyMs (the pages pass 2500). 'down' is a failed probe like false, it just arrives at once: its confirming probe (sent at
+    // once) settles a refused link within milliseconds, and a single blip (a network switch) is not an outage.
+    // ONE false does not mark the link lost: it makes the watch SUSPECT and it probes again AT ONCE (confirm probe, { confirm: true }); a SECOND consecutive
+    // false marks it LOST (onLost, once per outage). A successful probe or alive() clears the suspicion. So with no transfer of ours in flight a refused
+    // connection is found at the first probe (within everyMs, 2.5 s on the pages), and a silently dead link within everyMs + the probe limit + the confirm
+    // limit (2.5 + 4 + 2.5 = 9 s on the pages: no slower than one 4 s probe every 5 s).
+    // An unknown result changes nothing while the link was last known good recently: it never marks lost, never clears the suspicion (the failure count stays)
+    // and never counts as back; the next probe follows after lostEveryMs while suspect or lost, else everyMs. A probe that failed while a real response arrived
+    // (alive()) after it left counts as unknown. But a hung upload must not hide a real outage: lastGood = the time of start(), of every successful probe and of
+    // every alive(); an unknown result when clock() - lastGood > unknownGraceMs (default 12000) counts as a FAILED probe (false: the same two-in-a-row rule,
+    // the same confirm probe).
+    // report() (a hard network error on one of the call's own requests) and offline() mark it LOST at once. Lost, it probes every lostEveryMs. A probe that
+    // succeeds within giveUpMs of the loss -> onBack (once) and the normal rhythm; no success within giveUpMs -> onGiveUp (once), and nothing runs any more
+    // (the deadline runs from the moment of loss). alive(): a real response from the server just arrived on one of the call's own requests: not lost -> clears the
+    // suspicion and pushes the next routine probe to everyMs from now; lost (within giveUpMs) -> back at once (onBack, normal rhythm), even if the request was sent
+    // before the loss (a response arriving now proves the server answers now); after give-up or stop() -> nothing.
+    // One probe is in flight at a time; after stop() nothing fires, and a probe that resolves late is ignored.
+    // -> { start(), stop(), report(), offline(), online() (probe at once), alive(), progress() (a transfer of the call started: the grace counts from now), get lost() }
     function voiceCreateLinkWatch(o) {
       const c = o || {};
       const setT = c.setTimeout, clrT = c.clearTimeout, clock = typeof c.now === 'function' ? c.now : Date.now;
       const every = Number.isFinite(Number(c.everyMs)) ? Number(c.everyMs) : 5000;
       const lostEvery = Number.isFinite(Number(c.lostEveryMs)) ? Number(c.lostEveryMs) : 1000;
       const giveUp = Number.isFinite(Number(c.giveUpMs)) ? Number(c.giveUpMs) : 10000;
+      const grace = Number.isFinite(Number(c.unknownGraceMs)) ? Number(c.unknownGraceMs) : 12000;
+      let lastGood = 0; // the last time the server was known to answer (start, a successful probe, alive()), moved later by progress() up to one grace past lastAnswer
+      let lastAnswer = 0;   // the last real answer (start, a successful probe, alive()): progress() may never push lastGood more than one grace past it
       let running = false, lost = false, lostAt = 0, probing = false, gen = 0, timer = null, giveTimer = null;
       let outage = 0;   // each loss adds one: only a probe started after the loss can say the link is back
+      let fails = 0;    // consecutive failed probes while the link is not lost (1 = suspect; 2 = lost)
+      let confirmNext = false;   // the next probe is the confirming one after a first false: probe({ confirm: true })
+      let aliveSeq = 0; // each alive() adds one: a probe that failed although a real response arrived after it left proves nothing
       const say = (f) => { try { if (typeof f === 'function') f(); } catch { /* a listener must not break the watch */ } };
       const clear = (t) => { if (t !== null) { try { clrT(t); } catch { /* gone */ } } return null; };
       function schedule(ms) {
@@ -12750,7 +13228,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       }
       function markLost() {
         if (!running || lost) return;
-        lost = true; lostAt = clock(); outage++;
+        lost = true; lostAt = clock(); outage++; fails = 0; confirmNext = false;
         giveTimer = clear(giveTimer);
         giveTimer = setT(() => {
           giveTimer = null;
@@ -12762,34 +13240,57 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         schedule(lostEvery);
         say(c.onLost);
       }
+      function comeBack() {
+        lost = false; fails = 0; confirmNext = false; giveTimer = clear(giveTimer);
+        if (!probing) schedule(every);
+        say(c.onBack);
+      }
       function probeNow() {
         if (!running || probing) return;
         probing = true;
         timer = clear(timer);
-        const my = gen, myOutage = outage;
+        const my = gen, myOutage = outage, myAlive = aliveSeq, confirm = confirmNext;
+        confirmNext = false;
         let p;
-        try { p = Promise.resolve(c.probe()); } catch { p = Promise.resolve(false); }
-        p.then((ok) => ok === true, () => false).then((ok) => {
+        try { p = Promise.resolve(confirm ? c.probe({ confirm: true }) : c.probe({})); } catch { p = Promise.resolve(false); }
+        p.then((r) => (r === true ? true : r === 'down' ? 'down' : r === false ? false : null), () => false).then((ok) => {
           if (my !== gen || !running) return;
           probing = false;
-          if (ok) {
+          if ((ok === false || ok === 'down') && myAlive !== aliveSeq) ok = null;   // a real response came in while it was out: its failure is not trusted
+          else if (ok === null && myAlive === aliveSeq && clock() - lastGood > grace) ok = false;   // unknown for too long: a hung upload must not hide an outage
+          if (ok === 'down') ok = false;   // a hard failure (network error, 5xx) is a failed probe like a timeout; it just arrives at once, so its confirming probe
+                                           // (sent at once) settles a refused link within milliseconds, and one blip (a network switch) does not drop the call
+          if (ok === true) {
+            lastGood = lastAnswer = clock();
             if (lost) {
               if (myOutage !== outage) { schedule(0); return; }   // it left before the loss: it proves nothing, so ask again at once (the deadline stands)
               if (clock() - lostAt > giveUp) return;   // too late: the give-up timer ends the call
-              lost = false; giveTimer = clear(giveTimer);
-              schedule(every);
-              say(c.onBack);
-            } else schedule(every);
-          } else if (lost) schedule(lostEvery);
-          else markLost();
+              comeBack();
+            } else { fails = 0; schedule(every); }
+          } else if (ok === false) {
+            if (lost) schedule(lostEvery);
+            else if (++fails >= 2) markLost();
+            else { confirmNext = true; schedule(0); }   // suspect: confirm at once (a shorter limit on the pages)
+          } else schedule(lost || fails > 0 ? lostEvery : every);   // unknown: nothing changes
         });
       }
       return {
-        start() { if (running) return; running = true; lost = false; probing = false; gen++; schedule(every); },
-        stop() { running = false; gen++; probing = false; lost = false; timer = clear(timer); giveTimer = clear(giveTimer); },
+        start() { if (running) return; running = true; lost = false; fails = 0; confirmNext = false; probing = false; gen++; lastGood = lastAnswer = clock(); schedule(every); },
+        stop() { running = false; gen++; probing = false; lost = false; fails = 0; confirmNext = false; timer = clear(timer); giveTimer = clear(giveTimer); },
         report() { markLost(); },
         offline() { markLost(); },
         online() { if (running) probeNow(); },
+        alive() {
+          if (!running) return;
+          aliveSeq++; lastGood = lastAnswer = clock();
+          if (lost) { if (clock() - lostAt <= giveUp) comeBack(); return; }
+          fails = 0; confirmNext = false;
+          if (!probing) schedule(every);
+        },
+        // progress(): one of the call's own transfers just started. While the link is not lost the unknown grace counts from now, so one long upload on a
+        // slow link is not taken for an outage; a transfer that then hangs still runs out the grace from its start. Transfers that keep starting while nothing
+        // answers move it at most one grace past the last real answer, so a dead link is still found. Lost: nothing (only an answer brings it back).
+        progress() { if (running && !lost) lastGood = Math.max(lastGood, Math.min(clock(), lastAnswer + grace)); },
         get lost() { return lost; },
       };
     }
@@ -12826,13 +13327,65 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     // (OverconstrainedError, NotReadableError, TypeError, NotSupportedError, NotFoundError: some Bluetooth and car inputs cannot do those) gets ONE more
     // try with plain { audio: true }; when that fails too, the FIRST error is thrown. -> Promise of { stream, fallback }.
     // o.unprocessed (a call whose voice is recorded, mic 'unprocessed'): the first try asks for echo cancellation, noise suppression and auto gain OFF; the ladder is the same after that.
+    // o.deviceId (a string): the choice of microphone. On Android Chrome the microphone opened with processing is also the call's "communication device", and the
+    // sound output follows it. The ladder with a deviceId: (1) processing plus deviceId { exact }; (2) a refusal throws at once; (3) any other failure tries { deviceId: { exact } }
+    // alone (the browser's default processing: fallback true, deviceFallback false); (4) when that fails too (a refusal throws) the ladder above starts again WITHOUT deviceId and the
+    // result has deviceFallback: true; (5) when all of it fails the FIRST error is thrown. With a deviceId the result always has deviceFallback.
     async function voiceOpenMicStream(nav, o) {
       const md = nav.mediaDevices, on = !(o && o.unprocessed);
-      try { return { stream: await md.getUserMedia({ audio: { echoCancellation: on, noiseSuppression: on, autoGainControl: on } }), fallback: false }; } catch (first) {
-        const name = first && first.name;
-        if (name === 'NotAllowedError' || name === 'SecurityError' || name === 'AbortError') throw first;
+      const dev = o && typeof o.deviceId === 'string' && o.deviceId ? o.deviceId : '';
+      const audio = { echoCancellation: on, noiseSuppression: on, autoGainControl: on };
+      if (dev) audio.deviceId = { exact: dev };
+      const refusal = (e) => { const n = e && e.name; return n === 'NotAllowedError' || n === 'SecurityError' || n === 'AbortError'; };
+      try {
+        const r = { stream: await md.getUserMedia({ audio }), fallback: false };
+        if (dev) r.deviceFallback = false;
+        return r;
+      } catch (first) {
+        if (refusal(first)) throw first;
+        if (dev) {
+          // Step 3: the device alone uses the browser's default processing for an unprocessed call too, like the plain { audio: true } fallback.
+          try { return { stream: await md.getUserMedia({ audio: { deviceId: { exact: dev } } }), fallback: true, deviceFallback: false }; } catch (e2) { if (refusal(e2)) throw e2; }
+          try {
+            const r = await voiceOpenMicStream(nav, { unprocessed: !on });
+            r.deviceFallback = true;
+            return r;
+          } catch (e3) {
+            // A device-lookup error means the chosen device is gone: report the first error. Any other (the default microphone is busy, say) is the news.
+            const n3 = e3 && e3.name;
+            if (refusal(e3) || !(n3 === 'OverconstrainedError' || n3 === 'NotFoundError')) throw e3;
+            throw first;
+          }
+        }
         try { return { stream: await md.getUserMedia({ audio: true }), fallback: true }; } catch { throw first; }
       }
+    }
+    // Is a device label a Bluetooth / car / hands-free device? Chrome's Android labels: "Bluetooth headset", "Speakerphone", "Wired headset", "Headset earpiece", "USB audio".
+    // One rule for the library: it also covers every label voiceOutputKind (lib/ui-voice.js) calls 'bluetooth' (bluetooth, hands-free, hfp, airpods, car, car audio), so the two never disagree
+    // about a label; the words of a wired or phone-built-in device win.
+    function voiceIsBluetoothLabel(label) {
+      if (typeof label !== 'string' || !label) return false;
+      if (/wired|earpiece|speakerphone|usb/i.test(label)) return false;
+      return /bluetooth|hands-?free|hands free|\bhfp\b|airpods|\bbuds\b|\bbt\b|le audio|car ?kit|\bcar\b|car audio/i.test(label);
+    }
+    // The audio devices as the page needs them, from an enumerateDevices() list. inUseId marks the input that is open. 'default' and 'communications' are kept with pseudo: true and are
+    // never the bluetoothInput. Never throws. -> { inputs: [{ id, label, groupId, bluetooth, inUse, pseudo? }], outputs: [{ id, label, groupId, bluetooth, pseudo? }], bluetoothInput }
+    function voiceAudioRoutes(list, inUseId) {
+      const out = { inputs: [], outputs: [], bluetoothInput: null };
+      try {
+        for (const d of Array.from(list || [])) {
+          if (!d || (d.kind !== 'audioinput' && d.kind !== 'audiooutput')) continue;
+          const id = typeof d.deviceId === 'string' ? d.deviceId : '', label = typeof d.label === 'string' ? d.label : '';
+          const e = { id, label, groupId: typeof d.groupId === 'string' ? d.groupId : '', bluetooth: voiceIsBluetoothLabel(label) };
+          if (id === 'default' || id === 'communications') e.pseudo = true;
+          if (d.kind === 'audioinput') {
+            e.inUse = inUseId !== undefined && inUseId !== null && id === inUseId;
+            out.inputs.push(e);
+            if (!out.bluetoothInput && e.bluetooth && !e.pseudo && id) out.bluetoothInput = e;
+          } else out.outputs.push(e);
+        }
+      } catch { return { inputs: [], outputs: [], bluetoothInput: null }; }
+      return out;
     }
     // The recording of the 'Car or Bluetooth check'. The test chirp is played three times (opts.at, seconds after the start; default VOICE_CAR_AT) and the
     // microphone is recorded until opts.seconds (default VOICE_CAR_END) on the audio clock. WHY ONE PROCESSOR AND A REFERENCE CHANNEL: the delay is the
@@ -13052,7 +13605,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     // audio goes to Bluetooth or a car, since on the phone's own speaker the noise is only a hiss in the pauses). start() asks for it, stop() ends
     // it, refresh() applies a change of allow() at once (the switch flipped, the microphone moved to or from Bluetooth), mid-call.
     function voiceCreateKeepAlive(opts) {
-      const o = opts || {}, ctx = o.ctx;
+      const o = opts || {};
+      let ctx = o.ctx;
       const db = typeof o.levelDb === 'number' && Number.isFinite(o.levelDb) ? o.levelDb : VOICE_KEEPALIVE_DB;
       const allowed = () => { if (typeof o.allow !== 'function') return true; try { return o.allow() === true; } catch { return false; } };
       let buffer = null, src = null, gain = null, wanted = false;
@@ -13082,6 +13636,9 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         start() { wanted = true; apply(); },
         stop() { wanted = false; drop(); },
         refresh() { apply(); },
+        // moveTo(ctx): the call's sound moved to another audio context. From now on the hiss plays on it; one that was playing stops on the old context and starts on the
+        // new one at once (same level, same allow rule). The 2 s noise buffer is made again at the new context's sample rate. running stays true across the move.
+        moveTo(next) { const was = !!src; drop(); ctx = next; buffer = null; if (was) apply(); },
         get running() { return !!src; },
       };
     }
@@ -13099,7 +13656,12 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const holdMs = (v) => { const n = Number(v); return Number.isFinite(n) && n >= 0 ? n : VOICE_ECHO_HOLD_MS; };
       const st = { micLevel: o.micLevel, sens: o.interruptSensitivity, pause: pause(o.endPause), playing: false, vad: null, ctx: null, gain: null, raw: null, dest: null, gen: 0,
         hold: o.echoHoldMs === undefined ? VOICE_ECHO_HOLD_MS : holdMs(o.echoHoldMs), holdTimer: null, nav: null, handlers: {}, src: null, track: null, trackOff: null,
-        mdOff: null, devTimer: null, reopening: null, info: null, defSnap: null,
+        mdOff: null, devTimer: null, reopening: null, settling: null, info: null, defSnap: null,
+        choice: undefined,   // useMic(id): a device id, null (automatic) or undefined (never called: opts.micChoice decides)
+        btTried: false, btId: '', fellBack: false,   // Bluetooth first: tried once since the last open / device change; the listed Bluetooth input; a chosen device could not be opened
+        btAuto: '',   // the Bluetooth input an automatic Bluetooth try opened: later automatic opens use it while it is listed
+        btTries: 0,   // Bluetooth tries made since start(): at most VOICE_BT_TRIES_MAX, then no more automatic ones in this call
+        devPending: false,   // a devicechange arrived while the first route step was running: deviceChanged() runs once when it ends
         unprocessed: !!o.unprocessed,   // the call's own microphone is opened with echo cancellation, noise suppression and auto gain off (a recorded call, mic 'unprocessed': the fallback)
         recRaw: null, recSrc: null, recTrack: null, recOff: null, srcWatchers: [], openWaiters: [],   // the recording's own second microphone track (openRecordingTap) and who follows the tap
         muted: false,   // setMuted: every microphone track of the call is switched off
@@ -13124,19 +13686,40 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const call = callH;
       const rawTrack = (raw) => { try { const l = raw && (raw.getAudioTracks ? raw.getAudioTracks() : (raw.getTracks ? raw.getTracks() : [])); return (l && l[0]) || null; } catch { return null; } };
       // { label, sampleRate, channelCount, echoCancellation, fallback } from the track (each may be missing; the rate then is the context's).
-      function micInfo(raw, fallback) {
+      function micInfo(raw, fallback, viaBt) {
         const tr = rawTrack(raw);
         let s = {};
         try { s = (tr && typeof tr.getSettings === 'function' && tr.getSettings()) || {}; } catch { s = {}; }
-        return { label: tr && typeof tr.label === 'string' ? tr.label : '', sampleRate: Number.isFinite(s.sampleRate) ? s.sampleRate : (st.ctx ? st.ctx.sampleRate : undefined),
-          channelCount: s.channelCount, echoCancellation: s.echoCancellation, fallback: !!fallback };
+        const label = tr && typeof tr.label === 'string' ? tr.label : '', deviceId = typeof s.deviceId === 'string' ? s.deviceId : '';
+        return { label, sampleRate: Number.isFinite(s.sampleRate) ? s.sampleRate : (st.ctx ? st.ctx.sampleRate : undefined),
+          channelCount: s.channelCount, echoCancellation: s.echoCancellation, fallback: !!fallback,
+          deviceId, bluetooth: voiceIsBluetoothLabel(label) || viaBt === true || (!!deviceId && deviceId === st.btId) };
       }
+      // The microphone the person chose (useMic, else opts.micChoice), or null for automatic.
+      const chosenId = () => {
+        if (st.choice !== undefined) return st.choice;
+        try { const v = typeof o.micChoice === 'function' ? o.micChoice() : null; return typeof v === 'string' && v ? v : null; } catch { return null; }
+      };
+      // Bluetooth first only where Android's call routing applies: opts.bluetoothFirst === true, or the list looks like Chrome's Android list (an audio input
+      // labelled exactly "Speakerphone" or "Headset earpiece": Chrome on an Android tablet may send a desktop user agent). Never on iOS. At most 3 tries per start().
+      const btMayTry = (list) => {
+        if (st.btTries >= 3) return false;
+        if (typeof voiceIsIOSNav === 'function' && voiceIsIOSNav(st.nav)) return false;
+        if (o.bluetoothFirst === true) return true;
+        try { return Array.from(list || []).some(x => x && x.kind === 'audioinput' && (x.label === 'Speakerphone' || x.label === 'Headset earpiece')); } catch { return false; }
+      };
       // The constraint ladder: echo cancellation, noise suppression and auto gain first, exactly as ever. A refusal by the person or the browser
       // (NotAllowedError, SecurityError, AbortError) ends it; any other failure (OverconstrainedError, NotReadableError, TypeError, NotSupportedError,
       // NotFoundError: some Bluetooth and car inputs cannot do those) gets ONE more try with plain { audio: true }; when that fails too, the FIRST error is thrown.
-      async function openMic() {
-        const r = await voiceOpenMicStream(st.nav, { unprocessed: st.unprocessed });
-        return { raw: r.stream, fallback: r.fallback };
+      // dev: a device to open (the Bluetooth try); else the person's choice, if any (a choice that cannot be opened falls back to the ladder without it: deviceFallback).
+      async function openMic(dev) {
+        // Automatic after a Bluetooth try that worked: later opens (a device change, a lost microphone) stay on that Bluetooth input while it is listed, so the call
+        // does not go back to the phone's default device and then over to Bluetooth again on every device change.
+        const auto = !dev && !chosenId() ? st.btAuto : '';
+        const id = dev || chosenId() || auto;
+        const r = await voiceOpenMicStream(st.nav, id ? { unprocessed: st.unprocessed, deviceId: id } : { unprocessed: st.unprocessed });
+        if (auto && r.deviceFallback === true) st.btAuto = '';   // that Bluetooth input is gone
+        return { raw: r.stream, fallback: r.fallback, deviceFallback: auto ? false : r.deviceFallback === true };
       }
       // The recording follows the microphone: handlers registered with onSourceChange(fn) get the node to tap (recordingNode()) after every swap.
       const recordingNode = () => st.recSrc || st.src;
@@ -13240,12 +13823,16 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       // current track ended, its device is no longer listed, or the 'default' input moved to another device or name.
       function deviceChanged() {
         if (!st.ctx) return;
+        if (st.settling || st.reopening) { st.devPending = true; return; }   // the first route step or a reopen is still running: remembered, run once when it ends
+        st.btTried = false;   // the device list changed: Bluetooth first may try once more
         if (st.devTimer !== null) { try { clearT(st.devTimer); } catch { /* gone */ } }
         st.devTimer = setT(() => { st.devTimer = null; checkDevices().catch(() => {}); }, 700);
       }
       async function checkDevices() {
         const my = st.gen;
-        if (!st.ctx || st.reopening) return;
+        if (!st.ctx) return;
+        if (st.settling) { st.devPending = true; return; }
+        if (st.reopening) { st.devPending = true; return; }   // remembered: run once when that reopen ends
         let need = !!(st.track && st.track.readyState === 'ended');
         if (!need) {
           const md = st.nav.mediaDevices;
@@ -13259,55 +13846,132 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           if (id && !inputs.some(x => x.deviceId === id)) need = true;
           const def = inputs.find(x => x.deviceId === 'default');
           if (!need && def && st.defSnap && (def.groupId !== st.defSnap.groupId || def.label !== st.defSnap.label)) need = true;
+          if (!need && !st.btTried && !chosenId()) {   // a Bluetooth input appeared and the open microphone is not on it: Bluetooth first
+            const bt = voiceAudioRoutes(list, id).bluetoothInput;
+            if (bt && !onBluetooth(bt) && btMayTry(list)) { await reopen('bluetooth', false, bt.id); return; }
+          }
         }
         if (need) await reopen('devicechange');
+      }
+      // Is the open microphone track on this Bluetooth input (its device id, or a Bluetooth label)?
+      function onBluetooth(bt) {
+        const tr = st.track || rawTrack(st.raw);
+        let id, label = '';
+        try { id = tr && typeof tr.getSettings === 'function' ? tr.getSettings().deviceId : undefined; } catch { id = undefined; }
+        try { label = tr && typeof tr.label === 'string' ? tr.label : ''; } catch { label = ''; }
+        return id === bt.id || st.btAuto === bt.id || voiceIsBluetoothLabel(label);
       }
       // ONE attempt (with the constraint ladder), never two at once: a reopen in flight absorbs further triggers (and answers them with its own
       // result). Success: the new source is attached, onMicInfo and onMicChange({ ok: true, info, reason, changed }) (changed: the label differs from
       // before). Failure: onMicChange({ ok: false, reason, error }); the speech detector keeps running on the silent destination and nothing is retried.
       // silent (the recording's own reopen): the result is not reported through onMicChange (nothing is said to the person).
-      function reopen(reason, silent) {
-        if (st.reopening) return st.reopening;
-        if (!st.ctx || !st.gain || !st.nav) return Promise.resolve(false);
+      // The open: a promise of true / false. dev: a device to open (the Bluetooth try); quietFail: a failure is not reported through onMicChange (the Bluetooth try:
+      // the microphone that was open stays open).
+      async function openOnce(reason, silent, dev, quietFail) {
         const my = st.gen, prev = st.info ? st.info.label : '';
         const call = silent ? ((name, arg) => { if (name !== 'onMicChange') callH(name, arg); }) : callH;
+        const quiet = quietFail === true || reason === 'bluetooth';   // a Bluetooth try never says anything: the microphone that was open stays open
+        const fail = (error) => { if (!quiet && st.gen === my) call('onMicChange', { ok: false, reason, error }); };
+        let res;
+        if (reason === 'bluetooth') st.btTries++;   // a Bluetooth try is counted when its open really runs
+        try { res = await openMic(dev); } catch (error) { fail(error); return false; }
+        voiceTrackLive(res.raw);
+        if (st.gen !== my || !st.ctx || !st.gain) { voiceStopStream(res.raw); return false; }   // stopped meanwhile: let go of it
+        // iOS leaves the context 'interrupted' (or suspended) after a route change or a phone call: resume it, or the new source is silent.
+        // A resume can stay pending on iOS while a phone call holds the audio: it is given 3 s; a context still not running is a lost microphone
+        // (the new stream is let go, "Try the microphone again" tries later), never a recovery that hears nothing.
+        if (st.ctx.state && st.ctx.state !== 'running' && typeof st.ctx.resume === 'function') {
+          let wait = null;
+          try { await Promise.race([Promise.resolve(st.ctx.resume()), new Promise((r) => { wait = setT(r, 3000); })]); } catch { /* checked below */ }
+          finally { if (wait !== null) { try { clearT(wait); } catch { /* gone */ } } }
+          if (st.gen !== my || !st.ctx || !st.gain) { voiceStopStream(res.raw); return false; }
+          if (st.ctx.state && st.ctx.state !== 'running') { voiceStopStream(res.raw); fail(new Error('the audio is not running')); return false; }
+        }
+        try { attach(res.raw, res.fallback); } catch (error) {
+          voiceStopStream(res.raw);   // the new stream is let go; the old source (if any) was not touched
+          fail(error);
+          return false;
+        }
+        // A detector that endPiece left paused (its start failed) listens again here; one that cannot is a lost microphone, never a silent "Listening".
+        if (st.paused && st.vad) {
+          try { await st.vad.start(); } catch (error) { if (st.gen === my) call('onMicChange', { ok: false, reason, error }); return false; }   // a lost microphone: reported even for 'bluetooth'
+          if (st.gen !== my) return false;
+          st.paused = false;
+        }
+        // A Bluetooth open counts as on that device only when it was not a fallback and the track reports that device (or none).
+        let onDev = !!dev && !res.deviceFallback;
+        if (onDev) {
+          let tid;
+          try { const t = rawTrack(res.raw); tid = t && typeof t.getSettings === 'function' ? t.getSettings().deviceId : undefined; } catch { tid = undefined; }
+          if (typeof tid === 'string' && tid && tid !== dev) onDev = false;
+        }
+        const info = micInfo(res.raw, res.fallback, onDev);
+        st.info = info;
+        if (reason !== 'bluetooth') st.fellBack = res.deviceFallback;
+        else if (onDev) st.btAuto = dev;   // the Bluetooth try worked: automatic opens stay on it (see openMic)
+        snapDefault();
+        call('onMicInfo', info);
+        if (reason !== 'bluetooth') call('onMicChange', { ok: true, reason, info, changed: (info.label || '') !== (prev || '') });   // the pages learn of a Bluetooth move from onRoute
+        return true;
+      }
+      // After every open: Bluetooth first (automatic only), then onRoute. A Bluetooth input is listed and the open microphone is not on it: opened once with its deviceId
+      // ('bluetooth'; not again until the device list changes or a new open). skipBt: this open was the Bluetooth try. Never throws.
+      async function routeStep(my, silent, skipBt) {
+        try {
+          const md = st.nav && st.nav.mediaDevices;
+          let bt = null, listed = null;
+          if (md && typeof md.enumerateDevices === 'function') {
+            let list = null;
+            try { list = await md.enumerateDevices(); } catch { list = null; }
+            if (st.gen !== my || !st.ctx) return;
+            listed = list;
+            if (list) {
+              const tr = st.track || rawTrack(st.raw);
+              let id;
+              try { id = tr && typeof tr.getSettings === 'function' ? tr.getSettings().deviceId : undefined; } catch { id = undefined; }
+              bt = voiceAudioRoutes(list, id).bluetoothInput;
+              st.btId = bt ? bt.id : '';
+              if (!bt || bt.id !== st.btAuto) st.btAuto = '';   // the remembered Bluetooth input is no longer listed (or another one is): automatic is the default again
+            }
+          }
+          if (bt && !skipBt && !st.btTried && !chosenId() && !onBluetooth(bt) && btMayTry(listed)) {
+            st.btTried = true;
+            await openOnce('bluetooth', silent, bt.id, true);
+            if (st.gen !== my || !st.ctx) return;
+          }
+          const info = st.info;
+          if (info) {
+            if (!info.bluetooth && st.btId && info.deviceId === st.btId) info.bluetooth = true;
+            callH('onRoute', { label: info.label, deviceId: info.deviceId, bluetooth: !!info.bluetooth, bluetoothListed: !!st.btId, chosen: chosenId(), fellBack: !!st.fellBack });
+          }
+        } catch { /* the route report is a courtesy: the microphone is open */ }
+      }
+      // ONE attempt (with the constraint ladder), never two at once: a reopen in flight absorbs further triggers (and answers them with its own
+      // result). Success: the new source is attached, onMicInfo and onMicChange({ ok: true, info, reason, changed }) (changed: the label differs from
+      // before), then Bluetooth first and onRoute. Failure: onMicChange({ ok: false, reason, error }); the speech detector keeps running on the silent destination and nothing is retried.
+      // silent (the recording's own reopen): the result is not reported through onMicChange (nothing is said to the person). dev: open this device (reason 'bluetooth').
+      function reopen(reason, silent, dev) {
+        if (st.settling) return st.settling.then(() => reopen(reason, silent, dev));   // the first open's route step is still running: this one follows it
+        if (st.reopening) return st.reopening;
+        if (!st.ctx || !st.gain || !st.nav) return Promise.resolve(false);
+        const my = st.gen;
+        st.btTried = reason === 'bluetooth';   // a new open of any other kind lets Bluetooth first try once again
         st.reopening = (async () => {
-          let res;
-          try { res = await openMic(); } catch (error) { if (st.gen === my) call('onMicChange', { ok: false, reason, error }); return false; }
-          voiceTrackLive(res.raw);
-          if (st.gen !== my || !st.ctx || !st.gain) { voiceStopStream(res.raw); return false; }   // stopped meanwhile: let go of it
-          // iOS leaves the context 'interrupted' (or suspended) after a route change or a phone call: resume it, or the new source is silent.
-          // A resume can stay pending on iOS while a phone call holds the audio: it is given 3 s; a context still not running is a lost microphone
-          // (the new stream is let go, "Try the microphone again" tries later), never a recovery that hears nothing.
-          if (st.ctx.state && st.ctx.state !== 'running' && typeof st.ctx.resume === 'function') {
-            let wait = null;
-            try { await Promise.race([Promise.resolve(st.ctx.resume()), new Promise((r) => { wait = setT(r, 3000); })]); } catch { /* checked below */ }
-            finally { if (wait !== null) { try { clearT(wait); } catch { /* gone */ } } }
-            if (st.gen !== my || !st.ctx || !st.gain) { voiceStopStream(res.raw); return false; }
-            if (st.ctx.state && st.ctx.state !== 'running') { voiceStopStream(res.raw); call('onMicChange', { ok: false, reason, error: new Error('the audio is not running') }); return false; }
-          }
-          try { attach(res.raw, res.fallback); } catch (error) {
-            voiceStopStream(res.raw);   // the new stream is let go; the old source (if any) was not touched
-            call('onMicChange', { ok: false, reason, error });
-            return false;
-          }
-          // A detector that endPiece left paused (its start failed) listens again here; one that cannot is a lost microphone, never a silent "Listening".
-          if (st.paused && st.vad) {
-            try { await st.vad.start(); } catch (error) { call('onMicChange', { ok: false, reason, error }); return false; }
-            if (st.gen !== my) return false;
-            st.paused = false;
-          }
-          const info = micInfo(res.raw, res.fallback);
-          st.info = info;
-          snapDefault();
-          call('onMicInfo', info);
-          call('onMicChange', { ok: true, reason, info, changed: (info.label || '') !== (prev || '') });
-          return true;
-        })().finally(() => { st.reopening = null; });
+          const ok = await openOnce(reason, silent, dev, false);
+          if (ok) await routeStep(my, silent, reason === 'bluetooth');
+          return ok;
+        })().finally(() => { st.reopening = null; if (st.devPending && st.ctx && !st.settling) { st.devPending = false; deviceChanged(); } });
         return st.reopening;
+      }
+      // The first open's route step (Bluetooth first, onRoute). A reopen asked meanwhile waits for it (see reopen).
+      function settle(my) {
+        if (st.settling || !st.ctx || !st.gain) return;
+        const p = routeStep(my, false, false).finally(() => { if (st.settling === p) { st.settling = null; if (st.devPending && st.ctx) { st.devPending = false; deviceChanged(); } } });
+        st.settling = p;
       }
       async function start(h) {
         const w = win(), handlers = h || {}, my = ++st.gen;
+        st.btTries = 0; st.devPending = false;
         const stale = () => st.gen !== my;   // stop() was called while this start was still in flight: whatever it makes is let go
         st.handlers = handlers;
         // release() clears st.handlers: vad.destroy() pauses the detector, which (submitUserSpeechOnPause) may emit a last SpeechEnd; after a stop it reaches nobody.
@@ -13344,6 +14008,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
               try { attach(opened.raw, opened.fallback); } catch (e) { voiceStopStream(opened.raw); throw e; }   // never leave the new stream live
               st.gain.connect(dest);
               st.info = micInfo(opened.raw, opened.fallback);
+              st.fellBack = opened.deviceFallback; st.btTried = false;
               if (!st.mdOff && nav.mediaDevices && typeof nav.mediaDevices.addEventListener === 'function') {
                 const md = nav.mediaDevices, onChange = () => deviceChanged();
                 md.addEventListener('devicechange', onChange);
@@ -13375,6 +14040,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           });
           if (stale()) throw new Error('stopped');
           await st.vad.start();
+          settle(my);   // Bluetooth first and onRoute for this first open (not awaited: the call does not wait for the device list)
         } catch (e) { flushOpen(false); if (!stale()) await stop(); else await release(); throw e; }
       }
       // Lets go of everything this adapter holds: MicVAD, the raw microphone stream, the processed stream (the destination's
@@ -13389,7 +14055,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         const src = st.src;
         flushOpen(false); dropRecording(); st.srcWatchers = [];
         st.vad = st.raw = st.dest = st.ctx = st.gain = st.src = st.defSnap = null;
-        st.paused = false;
+        st.paused = false; st.settling = null; st.devPending = false;
         st.handlers = {};   // nothing the detector emits while it is destroyed (a last SpeechEnd from its pause) reaches the call
         if (src) { try { src.disconnect(); } catch { /* gone */ } }
         voiceStopStream(raw); voiceStopStream(dest);   // first, so the microphone is free even when the rest is slow
@@ -13417,6 +14083,24 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         setEchoHold(ms) { st.hold = holdMs(ms); if (st.hold === 0 && st.holdTimer !== null) { clearHold(); st.playing = false; apply(); } },
         // Opens the microphone again (the same path as a lost or changed one, reason 'manual'): a promise of true / false.
         reopen() { return reopen('manual'); },
+        // useMic(id): the person's choice of microphone for this call (a device id; null = automatic, Bluetooth first). It overrides opts.micChoice until the next useMic, and
+        // opens the microphone again (reason 'choose', the same single flight as every reopen; one already in flight finishes first). -> Promise of true / false.
+        useMic(id) {
+          st.choice = typeof id === 'string' && id ? id : null;
+          if (st.choice === null) st.btTried = false;
+          const run = () => reopen('choose');
+          return st.reopening ? st.reopening.then(run, run) : run();
+        },
+        // routes() -> Promise of voiceAudioRoutes(enumerateDevices(), the open microphone's device id); empty lists when the list cannot be had.
+        async routes() {
+          const md = st.nav && st.nav.mediaDevices;
+          let list = [];
+          try { if (md && typeof md.enumerateDevices === 'function') list = await md.enumerateDevices(); } catch { list = []; }
+          const tr = st.track || rawTrack(st.raw);
+          let id;
+          try { id = tr && typeof tr.getSettings === 'function' ? tr.getSettings().deviceId : undefined; } catch { id = undefined; }
+          return voiceAudioRoutes(list, id);
+        },
         // Ends the piece of speech in progress (the frame watchdog: the audio stopped reaching the detector, or one piece got too long). MicVAD.pause() ends the
         // segment and delivers it through onSpeechEnd (VADMisfire when too short) because of submitUserSpeechOnPause; start() on the same instance reconnects the
         // stream and listens again. An iOS context left 'interrupted' is resumed first (1 s at most). -> Promise of true when the detector listens again.
@@ -14173,7 +14857,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
 
     // Read aloud. One playback at a time: the hub voice sentence by sentence through one AudioContext (the next sentence is
     // fetched while this one plays), or the device voice (speechSynthesis) when the hub voice fails or is off and the device asks for it.
-    const voicePlay = { token: 0, ctx: null, source: null, btn: null };
+    const voicePlay = { token: 0, ctx: null, source: null, btn: null, busy: 0 };   // busy: playbacks in progress (voiceSpeakText): the call's outputs are never made again while one runs
     function voicePlayState(btn, on) {
       if (!btn) return;
       if (btn.dataset.idle === undefined) btn.dataset.idle = btn.textContent;
@@ -14181,6 +14865,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       btn.textContent = on ? (btn.classList.contains('msg-speak') ? '■' : 'Stop') : btn.dataset.idle;
     }
     function voiceStopPlayback() {
+      if (typeof voicePrefetchClear === 'function') voicePrefetchClear();   // audio fetched ahead for a line that will not play now
       if (typeof voiceDisplayHook === 'function') { voiceDisplayHook('audioStop'); voiceDisplayHook('clearCaption'); }   // the beak closes at once
       voicePlay.token++;
       const src = voicePlay.source;
@@ -14190,25 +14875,54 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       voicePlayState(voicePlay.btn, false);
       voicePlay.btn = null;
     }
+    // The next line of a call is fetched while the current one plays (the controller's prefetch dep): its first sentence (the rest of a line is already fetched one ahead
+    // by voicePlayHub). At most 2 entries, keyed by agent + cleaned sentence, each remembering the playback token it was started under. voiceCallSpeak takes a matching
+    // entry (and removes it) before voiceSpeakText raises the token; anything else that raises the token clears them all.
+    const voicePre = [];
+    function voicePrefetchFirst(rawText) {
+      try { return voiceSentences(voiceSpeechText(String(rawText || ''))).map((x) => voiceSpeechText(x)).filter(Boolean)[0] || ''; } catch { return ''; }
+    }
+    function voicePrefetch(agent, rawText) {
+      try {
+        if (!voiceReady()) return;
+        const first = voicePrefetchFirst(rawText), token = voicePlay.token;
+        if (!first || voicePre.some((e) => e.agent === agent && e.text === first && e.token === token)) return;
+        const p = voiceFetchTts(agent, first, undefined);
+        p.catch(() => {});   // a failed prefetch: the line is fetched normally when it is spoken
+        voicePre.push({ agent, text: first, token, p });
+        while (voicePre.length > 2) voicePre.shift();
+      } catch { /* a normal fetch happens when the line is spoken */ }
+    }
+    function voicePrefetchTake(agent, rawText) {
+      const first = voicePrefetchFirst(rawText), token = voicePlay.token;
+      const i = voicePre.findIndex((e) => e.agent === agent && e.text === first && e.token === token);
+      return i < 0 ? null : voicePre.splice(i, 1)[0].p;
+    }
+    function voicePrefetchClear() { voicePre.length = 0; }
     async function voiceFetchTts(agent, text, voice) {
       const body = { agent, text, speed: voiceSpeedFor(agent) };
       if (voice) body.voice = voice;
       const linkOwner = typeof voiceLinkOwner === 'function' ? voiceLinkOwner() : null;
-      let r;
-      try { r = await fetch('/api/voice/tts', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); } catch (e) { if (typeof voiceLinkNetFail === 'function') voiceLinkNetFail(e, linkOwner); throw e; }   // a network failure marks the link lost (text-to-speech)
-      if (!r.ok) {
-        let m = '';
-        try { m = (await r.json()).error; } catch {}
-        const e = new Error(m || `HTTP ${r.status}`); e.status = r.status;
-        e.toasted = voiceBusyToast(r.status);   // 409 voice_off / 503 voice_busy: the short toast is shown once, here
-        throw e;
-      }
-      let norm = false;
-      try { norm = !!(r.headers && typeof r.headers.get === 'function' && r.headers.get('X-Voice-Normalized') === '1'); } catch { norm = false; }
-      const buf = await r.arrayBuffer();
-      try { buf.__voiceNorm = norm; } catch { /* the flag is applied only when this audio starts playing (voicePlayHub) */ }
-      try { if (voiceCallS.rec) voiceCallS.rec.replyAudio(buf.slice(0)); } catch { /* a recorded call keeps this sentence's audio only when the agent keeps replies; never breaks the reading */ }   // a copy: decodeAudioData takes the original
-      return buf;
+      let tag = null;   // the call + recorder at request start (copied only when the audio plays: voicePlayHub)
+      try { if (voiceCallS.rec) tag = { call: voiceCallS.call || null, rec: voiceCallS.rec }; } catch { tag = null; }
+      return (typeof voiceUpTrack === 'function' ? voiceUpTrack : (f) => f())(async () => {
+        let r;
+        try { r = await fetch('/api/voice/tts', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); } catch (e) { if (typeof voiceLinkNetFail === 'function') voiceLinkNetFail(e, linkOwner); throw e; }   // a network failure marks the link lost (text-to-speech)
+        if (r.status < 500 && typeof voiceLinkAlive === 'function') voiceLinkAlive(linkOwner);   // a real answer proves the link
+        if (!r.ok) {
+          let m = '';
+          try { m = (await r.json()).error; } catch {}
+          const e = new Error(m || `HTTP ${r.status}`); e.status = r.status;
+          e.toasted = voiceBusyToast(r.status);   // 409 voice_off / 503 voice_busy: the short toast is shown once, here
+          throw e;
+        }
+        let norm = false;
+        try { norm = !!(r.headers && typeof r.headers.get === 'function' && r.headers.get('X-Voice-Normalized') === '1'); } catch { norm = false; }
+        const buf = await r.arrayBuffer();
+        try { buf.__voiceNorm = norm; } catch { /* the flag is applied only when this audio starts playing (voicePlayHub) */ }
+        try { if (tag) Object.defineProperty(buf, '__voiceRec', { value: tag, enumerable: false, writable: true, configurable: true }); } catch { /* not kept */ }
+        return buf;
+      });
     }
     // Play sentences with the hub voice; on a failure throws an Error whose .at is the sentence that could not be played.
     async function voicePlayHub(agent, sentences, voice, my) {
@@ -14216,7 +14930,9 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (!voicePlay.ctx || voicePlay.ctx.state === 'closed') voicePlay.ctx = new AC();
       const ctx = voicePlay.ctx;
       if (ctx.state === 'suspended') { try { await ctx.resume(); } catch {} }
-      let next = voiceFetchTts(agent, sentences[0], voice);
+      const pre = voicePlay.pre && voicePlay.pre.token === my ? voicePlay.pre.p : null;   // the first sentence fetched ahead (voiceCallSpeak), set by voiceSpeakText for this very playback
+      voicePlay.pre = null;
+      let next = pre ? Promise.resolve(pre).catch(() => voiceFetchTts(agent, sentences[0], voice)) : voiceFetchTts(agent, sentences[0], voice);   // a prefetched first sentence, else (or when it failed) fetched now
       next.catch(() => {});
       for (let i = 0; i < sentences.length; i++) {
         let buf, ab;
@@ -14224,6 +14940,9 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         if (voicePlay.token !== my) return;
         if (i + 1 < sentences.length) { next = voiceFetchTts(agent, sentences[i + 1], voice); next.catch(() => {}); }
         const norm = !!(buf && buf.__voiceNorm === true);   // read before decoding (decodeAudioData detaches the buffer)
+        const recTag = buf && buf.__voiceRec ? buf.__voiceRec : null;   // the call and recorder that asked for this audio
+        let recCopy = null;
+        try { if (recTag) recCopy = buf.slice(0); } catch { recCopy = null; }   // a copy: decodeAudioData takes the original
         try { ab = await ctx.decodeAudioData(buf); } catch (e) { e.at = i; throw e; }
         if (voicePlay.token !== my) return;
         // The loudness follows the audio that is about to play, never a response that merely arrived (a prefetch or a cancelled request).
@@ -14235,6 +14954,9 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           src.onended = () => { if (typeof voiceDisplayHook === 'function') voiceDisplayHook('audioEnd'); res(); };
           voicePlay.source = src;
           src.start();
+          // A recorded call that keeps replies gets this sentence's audio only now that it starts playing, and only if the call that asked is still the current call
+          // with the same recorder (best-effort; never breaks the reading).
+          try { if (recTag && recCopy && recTag.rec && voiceCallS.rec === recTag.rec && (voiceCallS.call || null) === recTag.call) recTag.rec.replyAudio(recCopy); } catch { /* not kept */ }
           if (typeof voiceDisplayHook === 'function') { voiceDisplayHook('audioStart'); voiceDisplayHook('caption', sentences[i]); }   // the sentence really playing
         });
         if (voicePlay.token !== my) return;
@@ -14269,7 +14991,16 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       // Every spoken string goes through the cleaner (voiceSpeechText): replies, call lines, the sample.
       const sentences = opts.sentences ? opts.sentences.map(s => voiceSpeechText(s)).filter(Boolean) : voiceSentences(voiceSpeechText(md));
       if (!sentences || !sentences.length) return;
+      // During a call on Android the first sentences wait (at most 2500 ms from the first sentence that waited) for the call's first route; a stop meanwhile means nothing plays.
+      const routeWait = typeof voiceRouteWait === 'function' ? voiceRouteWait() : null;
+      if (routeWait) {
+        const call0 = voiceCallS.call;   // the call that was current when the wait began
+        await routeWait;
+        if (voicePlay.token !== my || voiceCallS.call !== call0) return;   // stopped, or that call ended (or another began) meanwhile: nothing plays
+      }
       voicePlay.btn = btn || null; voicePlayState(btn, true);
+      voicePlay.pre = opts.pre ? { token: my, p: opts.pre } : null;
+      voicePlay.busy++;
       try {
         let from = 0, useDevice = false;
         if (voiceReady()) {
@@ -14283,6 +15014,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         else { hubToast('Voice is off. An admin can turn it on in Settings, Voices.'); return; }
         if (useDevice) { const rep = {}; await voicePlayDevice(sentences, from, my, agent, rep); if (opts.out) opts.out.played = rep.spoke === true && voicePlay.token === my; }
       } finally {
+        voicePlay.busy = Math.max(0, voicePlay.busy - 1);
         if (voicePlay.token === my) { voicePlayState(btn, false); voicePlay.btn = null; }
       }
     }
@@ -14326,6 +15058,9 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       h += row('Talk mode', `<select id="st-voice-mode" onchange="voiceSettingsSavePrefs()" style="padding:4px"><option value="handsfree" ${p.mode !== 'tap' ? 'selected' : ''}>Hands-free</option><option value="tap" ${p.mode === 'tap' ? 'selected' : ''}>Tap to talk</option></select>`);
       h += row('Interrupt sensitivity', `<input type="range" min="0" max="100" step="1" id="st-voice-sens" value="${voiceSensNow()}" oninput="voiceSettingSensInput(this)" onchange="voiceSettingsSavePrefs('interruptSensitivity')" style="width:180px"> <span id="st-voice-sens-val" style="min-width:2.5em;display:inline-block">${voiceSensNow()}</span>`);
       h += row('Pause before I\'m done', `${voicePauseSelectHtml('st-voice-pause', 'onchange="voiceSettingsSavePrefs(\'endPause\')"')} <span class="st-hint" style="margin:0 0 0 8px">How long a quiet moment ends your turn: short 0.8 s, normal 1.2 s, long 2 s, very long 4 s.</span>`);
+      h += row('Read short extra parts aloud', `<select id="st-voice-details" onchange="voiceSettingsSavePrefs()" style="padding:4px">${VOICE_DETAILS_READ_WORDS.map(n => `<option value="${n}"${n === (p.detailsReadWords == null ? 40 : p.detailsReadWords) ? ' selected' : ''}>${n ? 'Up to ' + n + ' words' : 'Off'}</option>`).join('')}</select> <span class="st-hint" style="margin:0 0 0 8px">When a reply has only a little more than what is read on a call, read that too. Longer lists, tables and code stay in the chat.</span>`);
+      h += row('When something comes in during a call', `<select id="st-voice-hubcue" onchange="voiceSettingsSavePrefs()" style="padding:4px">${[['off', 'Off'], ['chime', 'Chime'], ['cue', 'Short cue']].map(([v, l]) => `<option value="${v}"${v === (p.hubCue || 'cue') ? ' selected' : ''}>${l}</option>`).join('')}</select> <span class="st-hint" style="margin:0 0 0 8px">A scheduled task or another agent's request is never read out on a call. When one needs you: nothing, a soft chime, or the chime and “Something came in for you; it's in the chat.”</span>`);
+      h += row('While I finish something in the background', `<select id="st-voice-bgcue" onchange="voiceSettingsSavePrefs()" style="padding:4px">${[['off', 'Off'], ['show', 'Show it'], ['say', 'Say it']].map(([v, l]) => `<option value="${v}"${v === (p.backgroundCue || 'say') ? ' selected' : ''}>${l}</option>`).join('')}</select> <span class="st-hint" style="margin:0 0 0 8px">When you speak while the agent is busy with something of its own, your words wait for your turn. Show it: “Working in the background” on the call; Say it: the agent also says so.</span>`);
       h += row('Voice speed', `<input type="range" min="0.75" max="1.5" step="0.05" id="st-voice-speed" value="${voiceSpeedNow()}" oninput="voiceSettingSpeedInput(this)" onchange="voiceSettingsSavePrefs('voiceSpeed')" style="width:180px"> <span id="st-voice-speed-val" style="min-width:3.5em;display:inline-block">${voiceSpeedLabel(voiceSpeedNow())}</span> <span class="st-hint" style="margin:0 0 0 8px">${VOICE_SPEED_HINT}</span>`);
       h += row('Voice loudness, speaker', `${voiceLoudnessSelectHtml('st-voice-loudness', 'onchange="voiceSettingsSavePrefs()"', 'loudness')} <span class="st-hint" style="margin:0 0 0 8px">Makes the agent's voice louder during calls on the computer's speaker.</span>`);
       h += row('Voice loudness, Bluetooth / car', `${voiceLoudnessSelectHtml('st-voice-loudness-bt', 'onchange="voiceSettingsSavePrefs()"', 'loudnessBt')} <span class="st-hint" style="margin:0 0 0 8px">Used while a Bluetooth headset or a car is the call's microphone. A car has its own amplifier, so Normal is usually right.</span>`);
@@ -14335,6 +15070,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       h += row('Bluetooth', `<label style="${CHK}"><input type="checkbox" id="st-voice-keepalive" ${voiceKeepAliveNow() ? 'checked' : ''} onchange="voiceSettingsSavePrefs()"> Keep Bluetooth awake during calls</label><span class="st-hint" style="margin:0 0 0 8px;flex:1;min-width:0">${VOICE_KEEP_HINT}</span>`);
       h += row('Interrupt button', `<label style="${CHK}"><input type="checkbox" id="st-voice-interrupt" ${voiceInterruptNow() ? 'checked' : ''} onchange="voiceDispSetInterrupt(null, this.checked)"> Show an Interrupt button</label><span class="st-hint" style="margin:0 0 0 8px;flex:1;min-width:0">${VOICE_INTERRUPT_HINT}</span>`);
       h += row('Car or Bluetooth check', `<button class="st-test-btn" id="st-voice-car" type="button" onclick="voiceCarCheckRun()">Car or Bluetooth check</button> <span id="st-voice-car-out" class="st-hint" style="margin:0 0 0 8px" aria-live="polite">Plays three short sounds and listens for the echo. It sets the echo guard.</span>`);
+      h += row('Sound route', voiceRouteBlockHtml());
       h += row('Replies', `<label style="${CHK}"><input type="checkbox" id="st-voice-readaloud" ${p.readAloud ? 'checked' : ''} onchange="voiceSettingsSavePrefs()"> Read replies aloud</label>`);
       h += row('Fallback', `<label style="${CHK}"><input type="checkbox" id="st-voice-fallback" ${p.deviceVoiceFallback ? 'checked' : ''} onchange="voiceSettingsSavePrefs()"> Use this device's own offline voice when the hub voice is unavailable</label><span id="st-voice-prefs-state" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px"></span>`);
       return h + `</div>`;
@@ -14423,13 +15159,17 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const mode = voiceById('st-voice-mode'), sens = voiceById('st-voice-sens');
       const pause = voiceById('st-voice-pause'), speed = voiceById('st-voice-speed'), act = voiceById('st-voice-speakactivity');
       if (!mic || !ra || !fb || !mode || !sens || !pause || !speed || !act) return;
+      const details = voiceById('st-voice-details'), hubCue = voiceById('st-voice-hubcue'), bgCue = voiceById('st-voice-bgcue');
       const echo = voiceById('st-voice-echo'), keep = voiceById('st-voice-keepalive'), loud = voiceById('st-voice-loudness'), loudBt = voiceById('st-voice-loudness-bt');
-      const saved = dialogGuard.savePoint([mic, ra, fb, mode, sens, pause, speed, act, echo, keep, loud, loudBt].filter(Boolean));
+      const saved = dialogGuard.savePoint([mic, ra, fb, mode, sens, pause, details, hubCue, bgCue, speed, act, echo, keep, loud, loudBt].filter(Boolean));
       const echoNow = echo && voiceEchoHoldOk(Number(echo.value)) ? Number(echo.value) : voiceEchoHoldNow();
       let prefs = { ...voicePrefsNow(), micLevel: Number(mic.value), interruptSensitivity: Number(sens.value), mode: mode.value === 'tap' ? 'tap' : 'handsfree', readAloud: ra.checked, deviceVoiceFallback: fb.checked,
         endPause: Number(pause.value), voiceSpeed: voiceCleanSpeed(speed.value), speakActivity: act.checked, echoHold: echoNow, keepAlive: keep ? !!keep.checked : voiceKeepAliveNow(),
         loudness: loud && Object.prototype.hasOwnProperty.call(VOICE_LOUDNESS, loud.value) ? loud.value : voiceLoudnessFor(voicePrefsNow(), 'speaker'),
         loudnessBt: loudBt && Object.prototype.hasOwnProperty.call(VOICE_LOUDNESS, loudBt.value) ? loudBt.value : voiceLoudnessFor(voicePrefsNow(), 'bluetooth') };
+      if (details && details.value !== '' && VOICE_DETAILS_READ_WORDS.includes(Number(details.value))) prefs.detailsReadWords = Number(details.value);   // 'Read short extra parts aloud'
+      if (hubCue && ['off', 'chime', 'cue'].includes(hubCue.value)) prefs.hubCue = hubCue.value;   // 'When something comes in during a call'
+      if (bgCue && ['off', 'show', 'say'].includes(bgCue.value)) prefs.backgroundCue = bgCue.value;   // 'While I finish something in the background'
       if (VOICE_AGENT_DEFAULT_KEYS.includes(changed)) prefs = voiceMarkChosen(prefs, [changed]);   // the person set it here: an agent's default no longer applies to it
       prefs = voiceMarkDeviceChanged(prefs, voicePrefsNow());   // an iPhone default the person changed is theirs from now on
       voiceSavePrefs(localStorage, prefs);
@@ -14492,7 +15232,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
 
     // ── Hands-free call (voice phase 2): the controller (voice call block above) wired to this page ──
     // One call at a time. voiceCallS holds it; the call bar sits above the message box of the call's chat.
-    const voiceCallS = { call: null, vad: null, active: false, starting: false, chatId: null, agent: null, own: new Map(), hub: new Map(), asks: new Map(), wake: null, sendSeq: 0, expecting: false, thinking: null, leftChat: null, link: null, linkLost: false, rec: null };   // rec: the recorded call's page side (voiceCreateRecordingSession), only when the agent keeps recordings
+    const voiceCallS = { call: null, vad: null, active: false, starting: false, chatId: null, agent: null, own: new Map(), hub: new Map(), owner: new Set(), hubEnded: new Map(), asks: new Map(), wake: null, sendSeq: 0, expecting: false, thinking: null, leftChat: null, link: null, linkLost: false, rec: null };   // rec: the recorded call's page side (voiceCreateRecordingSession), only when the agent keeps recordings
     const voiceRoom = { active: false };
     // ── Call display: None / Orb / an installed character (lib/ui-call-display.js; the choice is per device, the agent only has a default) ──
     // Everything here is a no-op unless a display exists for the running call, so reading aloud and the call without a display are unchanged.
@@ -14554,7 +15294,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       voiceDisp.turnSeq.clear();
       let d = null;
       try {
-        d = CallDisplay.createCallDisplay({ window, document, storage: localStorage, fetch: (...a) => fetch(...a), output: (ctx) => voiceOutNode(ctx), agentDefault: () => voiceDispAgentDefault(agent), adopt: () => voiceDispAdopt(chatId),
+        d = CallDisplay.createCallDisplay({ window, document, storage: localStorage, fetch: (...a) => fetch(...a), output: (ctx) => voiceOutNode(ctx), agentLabel: () => { const c = chats[chatId]; const a = AGENTS.find(x => x.name === agent); const icon = (c && c.icon) || (a && a.icon) || ''; const nm = (c && c.display) || (a && a.display) || capName(String(agent || '')); return (icon ? icon + ' ' : '') + nm; }, agentDefault: () => voiceDispAgentDefault(agent), adopt: () => voiceDispAdopt(chatId),
           dock: () => { const i = voiceById(`input-${chatId}`); return i ? i.closest('.input-area') : null; },   // whenever no full view is shown (None, Back to chat, a character loading) the call screen's bar takes the message box's place in this chat; the call bar lives in its Controls drawer
           onTalk: voiceDispTalk, onHangUp: () => voiceCallHangUp(), onRetryMic: voiceCallRetryMicTap, onChange: () => voiceDispPaintPanel(chatId),
           onRecordingToggle: (wantPaused) => (voiceCallS.rec ? voiceCallS.rec.togglePause(wantPaused) : undefined),   // the Pause / Resume recording button of a recorded call
@@ -14695,13 +15435,14 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       for (const e of document.querySelectorAll('.voice-pop [data-vp="echo"]')) e.value = hold;
       for (const e of document.querySelectorAll('.voice-pop [data-vp="keep"]')) e.checked = keep;
     }
-    const VOICE_CALL_STATE_TEXT = { starting: 'Starting', listening: 'Listening', hearing: 'Hearing you', thinking: 'Thinking', speaking: 'Speaking', ended: 'Ended' };
+    const VOICE_CALL_STATE_TEXT = { starting: 'Starting', listening: 'Listening', hearing: 'Hearing you', thinking: 'Thinking', speaking: 'Speaking', background: 'Working in the background', ended: 'Ended' };
     const VOICE_LINK_LOST_TEXT = 'Connection lost', VOICE_LINK_ENDED_TEXT = 'Call ended: connection lost';
     const VOICE_HANGUP_SVG = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 14c5-4 13-4 18 0l-2.5 3-3-1.5v-2.5c-2-.8-4-.8-6 0v2.5L5.5 17z"></path></svg>';
     async function voiceCallApi(path, body, opts) {
       const linkOwner = typeof voiceLinkOwner === 'function' ? voiceLinkOwner() : null;
       let r;
       try { r = await fetch(path, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), keepalive: !!(opts && opts.keepalive) }); } catch (e) { if (typeof voiceLinkNetFail === 'function') voiceLinkNetFail(e, linkOwner); throw e; }   // a network failure (the heartbeat, interjections) marks the link lost
+      if (r.status < 500 && typeof voiceLinkAlive === 'function') voiceLinkAlive(linkOwner);   // a real answer (the heartbeat, an interjection) proves the link
       let j = {};
       try { j = await r.json(); } catch {}
       if (!r.ok) { const e = new Error(j.error || `HTTP ${r.status}`); e.status = r.status; throw e; }
@@ -14712,7 +15453,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const wav = voiceEncodeWav(audio, 16000);
       const linkOwner = typeof voiceLinkOwner === 'function' ? voiceLinkOwner() : null;
       let r;
-      try { r = await fetch(`/api/voice/stt?agent=${encodeURIComponent(agent)}`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'audio/wav' }, body: wav }); } catch (e) { if (typeof voiceLinkNetFail === 'function') voiceLinkNetFail(e, linkOwner); throw e; }   // a network failure marks the link lost
+      try { r = await voiceUpTrack(() => fetch(`/api/voice/stt?agent=${encodeURIComponent(agent)}`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'audio/wav' }, body: wav })); } catch (e) { if (typeof voiceLinkNetFail === 'function') voiceLinkNetFail(e, linkOwner); throw e; }   // a network failure marks the link lost
+      if (r.status < 500 && typeof voiceLinkAlive === 'function') voiceLinkAlive(linkOwner);   // a real answer proves the link
       let j = {};
       try { j = await r.json(); } catch {}
       if (!r.ok) { if (voiceBusyToast(r.status) && r.status === 409) voiceRefreshStatus(); throw new Error(j.error || `HTTP ${r.status}`); }
@@ -14722,8 +15464,9 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     async function voiceCallSpeak(agent, text) {
       const sentences = voiceSentences(voiceSpeechText(String(text || ''))).filter(Boolean);
       if (!sentences.length) return true;
+      const pre = typeof voicePrefetchTake === 'function' ? voicePrefetchTake(agent, text) : null;   // taken before voiceSpeakText raises the token (which clears the cache)
       const mine = voicePlay.token + 1;   // voiceSpeakText stops the previous one first: one step on the token
-      await voiceSpeakText(agent, text, null, { sentences });
+      await voiceSpeakText(agent, text, null, { sentences, pre });
       return voicePlay.token === mine;
     }
     // The recording's consent line: true only when it was played to the end (hub voice, or the device voice where that is on).
@@ -14751,11 +15494,12 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       S.expecting = true;
       const prev = input.value;
       input.value = text;
-      let accepted;
-      const result = new Promise((resolve, reject) => { accepted = (err) => { if (err && typeof voiceLinkNetFail === 'function') voiceLinkNetFail(err, linkOwner); err ? reject(err) : resolve(); }; });   // a network failure on the message marks the link lost
+      let accepted, rejected = false, answered = false;
+      // The first answer counts. A rejected send clears the expecting flag at once and its 2.5 s release says nothing: the words spoken next are not taken for the reply of a send that never went out.
+      const result = new Promise((resolve, reject) => { accepted = (err) => { if (answered) return; answered = true; if (err) { rejected = true; if (S.sendSeq === seq) S.expecting = false; if (typeof voiceLinkNetFail === 'function') voiceLinkNetFail(err, linkOwner); reject(err); } else resolve(); }; });   // a network failure on the message marks the link lost
       const release = () => {
         setTimeout(() => {
-          if (!S.call || S.sendSeq !== seq || !S.expecting) return;
+          if (rejected || !S.call || S.sendSeq !== seq || !S.expecting) return;
           S.expecting = false;
           let last = ''; for (const v of S.own.values()) last = v;
           S.own.clear();
@@ -14766,6 +15510,18 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       input.value = prev;
       Promise.resolve(run).then(() => accepted(null), (e) => accepted(e || new Error('send failed'))).then(release);
       return result;
+    }
+    // The words kept for the background work, when the call is hung up before they could go out: never sent (the agent is busy: the message would be interjected into
+    // its work), but put in the chat's message box after whatever is already typed there, and the person is told.
+    function voiceCallKeepWords(chatId, text, note) {
+      const input = document.getElementById(`input-${chatId}`);
+      const words = String(text || '').trim();
+      if (!words) return;
+      if (!input || !chats[chatId]) { hubToast('What you said: ' + words.slice(0, 200)); return; }   // the chat is gone: the words are shown so they are not lost silently
+      const prev = String(input.value || '').replace(/\s+$/, '');
+      input.value = prev ? prev + ' ' + words : words;
+      try { input.dispatchEvent(new Event('input', { bubbles: true })); } catch { /* the box is filled all the same */ }
+      hubToast(typeof note === 'string' && note ? note : 'What you said is in the message box.');
     }
     async function voiceCallInterject(chatId, text) {
       const chat = chats[chatId];
@@ -14830,6 +15586,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           if (!voicePlay.source) quiet(() => vad.setPlaybackActive(false));   // reply audio already playing keeps the flag
         },
         setVolume(v) { quiet(() => { if (snd) snd.setVolume(v); }); },
+        busy() { return on; },   // the pulse is sounding: the call's outputs are not made again now
         close() { on = false; quiet(() => { if (snd) snd.stop(); }); ctx = null; snd = null; },   // the shared output context stays: replies still use it
       };
     }
@@ -14841,6 +15598,171 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (Number.isFinite(rate) && rate > 0) t += ' · ' + (Math.round(rate / 100) / 10) + ' kHz';
       if (i.fallback) t += ' · basic mode';
       return t;
+    }
+    // ── Call sound route: the microphone choice, the route words of the call bar's microphone line, and the call's outputs made again once the microphone is open ──
+    // On Android Chrome the first microphone stream opened with processing puts the phone in call mode and picks the call device (the car, when Chrome lists it).
+    // An output keeps the type it had when it was CREATED, and this page makes its outputs inside the tap, before the microphone opens (media, not call): while
+    // the car's hands-free link is on, media does not reach the car. So once the microphone is open the reply context and the keep-alive are made again.
+    function voiceMicChoiceId() { try { const m = voicePrefsNow().micDevice; return m && typeof m.id === 'string' && m.id ? m.id : null; } catch { return null; } }
+    // The words after the microphone's name: ' · car or Bluetooth', ' · a car or Bluetooth device is connected but not used', ' · the chosen microphone is not available'.
+    function voiceRouteSuffix(r) {
+      if (!r || typeof r !== 'object') return '';
+      let t = '';
+      if (r.bluetooth) t += ' · car or Bluetooth';
+      else if (r.bluetoothListed && !r.chosen) t += ' · a car or Bluetooth device is connected but not used';
+      if (r.fellBack) t += ' · the chosen microphone is not available';
+      return t;
+    }
+    const VOICE_ROUTE_PLAIN_LINE = 'Your car or Bluetooth device is connected, but this call is using the phone. Voice settings → Sound route can switch it.';
+    // The controller hands the VAD only onMicInfo / onMicChange; onRoute and the page's own look at a changed microphone ride on the same start() through this view of the VAD.
+    function voiceCallVadFor(vad) {
+      return { ...vad, start: (h) => vad.start({ ...(h || {}),
+        onRoute: (r) => { try { voiceCallOnRoute(vad, r); } catch { /* never breaks the microphone */ } },
+        onMicChange: (ev) => { try { if (h && h.onMicChange) h.onMicChange(ev); } finally { try { voiceCallOnMicChange(vad, ev); } catch { /* the call goes on */ } } } }) };
+    }
+    function voiceCallOnRoute(vad, r) {
+      const S = voiceCallS;
+      if (!r || S.vad !== vad || !S.call) return;
+      const prevDev = S.route ? S.route.deviceId : undefined;
+      S.route = r; S.routeSeen = (S.routeSeen || 0) + 1;
+      S.micLine = voiceMicLineText({ label: S.micLabel }) + voiceRouteSuffix(r);   // the label and the route words; the sample rate part comes back with the next onMicInfo
+      const m = voiceCallBarEl('micinfo'); if (m && !S.micLost) m.textContent = S.micLine;
+      if (r.bluetoothListed && !r.bluetooth && !r.chosen && !S.routeToasted) { S.routeToasted = true; hubToast(VOICE_ROUTE_PLAIN_LINE, 5000); }
+      if (r.deviceId && r.deviceId !== prevDev) S.renewFails = 0;   // a new move gets fresh tries
+      if (S.routeSeen === 1) {
+        const call = S.call, settle = () => { voiceRouteSettle(call); if (S.call === call) voiceRouteReportFirst(); };   // the call that asked: a renewal that ends after a new call began never settles the new call's gate
+        if (!S.outputsRenewed && !S.renewPending && !S.renewing) Promise.resolve(voiceCallOutputsRenew()).then(settle, settle);
+        else settle();
+      }
+      else if (S.routeSeen > 1 && r.deviceId && r.deviceId !== prevDev) voiceCallOutputsRenew();   // the microphone moved (for example to the car): the outputs follow it
+    }
+    function voiceCallOnMicChange(vad, ev) {
+      const S = voiceCallS;
+      if (S.vad !== vad || !S.call || !S.routeSeen || !ev || ev.ok !== true || ev.changed !== true) return;   // only after the first route, like the phone
+      voiceCallOutputsRenew();
+    }
+    function voiceCallBarEl(n) { const id = voiceCallS.chatId; return id ? voiceById(`vcb-${n}-${id}`) : null; }
+    // Is a sentence (or the thinking pulse, or the device voice) sounding now?
+    function voiceCallSounding() {
+      const S = voiceCallS;
+      if (voicePlay.busy > 0 || voicePlay.source) return true;
+      try { if (S.thinking && typeof S.thinking.busy === 'function' && S.thinking.busy()) return true; } catch { /* not counted */ }
+      try { if (window.speechSynthesis && window.speechSynthesis.speaking) return true; } catch { /* not counted */ }
+      return false;
+    }
+    // The call's sound outputs made again: a new reply context (resumed, 1 s at most) becomes voicePlay.ctx, the keep-alive moves to it, and the old context is
+    // closed 300 ms later. Not on iOS (contexts must be made inside the tap there). While a sentence sounds it waits (checked every second); it never cuts one.
+    // Never throws: a failure leaves the call as it was.
+    const VOICE_ROUTE_ANDROID_LABELS = /^(Speakerphone|Headset earpiece|Bluetooth headset|Wired headset|USB audio)$/;
+    function voiceRenewApplies() {   // only where Android's call routing applies: an Android browser, or a device list that looks like Chrome's Android list
+      try {
+        if (voiceIsIOSNav(navigator)) return false;
+        if (voiceIsAndroidNav(navigator)) return true;
+        const r = voiceCallS.route;
+        return !!r && VOICE_ROUTE_ANDROID_LABELS.test(String(r.label || ''));
+      } catch { return false; }
+    }
+    // The call's first route (Android only): S.routeReady settles when the first renewal of the outputs is over (any way: done, failed, not applicable, given up) or the call ends.
+    // Never on iOS. The first sentences of a call wait for it, at most 2500 ms from the first sentence that had to wait (a slow start does not use the wait up).
+    function voiceRouteReadyMake() {
+      const S = voiceCallS;
+      S.routeDone = false; S.routeResolve = null; S.routeWaitFrom = 0;
+      let android = false;
+      try { android = !voiceIsIOSNav(navigator) && voiceIsAndroidNav(navigator); } catch { android = false; }
+      if (!android) { S.routeDone = true; S.routeReady = Promise.resolve(); return; }
+      S.routeReady = new Promise((r) => { S.routeResolve = r; });
+    }
+    function voiceRouteDone() {
+      const S = voiceCallS;
+      if (S.routeDone) return;
+      S.routeDone = true;
+      const r = S.routeResolve; S.routeResolve = null;
+      if (r) r();
+      voiceRouteReportFirst();
+    }
+    function voiceRouteSettle(call) { const S = voiceCallS; if (call && S.call === call && !S.renewPending && !S.renewing) voiceRouteDone(); }   // only for the call that is still the current one
+    function voiceRouteWait() {   // null: go on now; else a promise that ends when the route is ready or 2500 ms after the first sentence that waited, whichever is first
+      const S = voiceCallS;
+      try {
+        if (!S.call || S.routeDone || !S.routeReady) return null;
+        if (!S.routeWaitFrom) S.routeWaitFrom = Date.now();
+        const left = 2500 - (Date.now() - S.routeWaitFrom);
+        if (left <= 0) return null;
+        return new Promise((res) => { const t = setTimeout(res, left); S.routeReady.then(() => { clearTimeout(t); res(); }); });
+      } catch { return null; }
+    }
+    // The route report: names and flags only, never audio. The hub logs one line, so a car call that went wrong shows which device the browser picked.
+    // Once after the first route settles, again after a later renewal that moved the outputs; never twice within 2 s from this page. Never throws.
+    async function voiceRouteReport(trailing) {
+      try {
+        const S = voiceCallS, call = S.call;
+        if (!call || !S.route || !S.agent) return;
+        const now = Date.now();
+        if (!trailing && S.routeReportAt && now - S.routeReportAt < 2000) {   // dropped by the limit: one trailing report at the end of the window carries the latest route
+          if (!S.routeTrail) S.routeTrail = setTimeout(() => { S.routeTrail = null; voiceRouteReport(true); }, Math.max(1, 2000 - (now - S.routeReportAt)) + 5);
+          return;
+        }
+        const callId = call.callId;
+        if (!callId) return;
+        S.routeReportAt = now;
+        if (S.routeTrail) { clearTimeout(S.routeTrail); S.routeTrail = null; }
+        const agent = S.agent;
+        let inputs = [];
+        try {
+          const rt = await S.vad.routes();
+          inputs = Array.from((rt && rt.inputs) || []).filter((d) => d && !d.pseudo).map((d) => String(d.label || '')).slice(0, 8);
+        } catch { inputs = []; }
+        if (S.call !== call || !S.route) return;   // the call changed while the devices were listed
+        const r = S.route;
+        let android = false;
+        try { android = voiceIsAndroidNav(navigator); } catch { android = false; }
+        Promise.resolve(voiceCallApi('/api/voice/call', { agent, callId, action: 'route', route: { label: String(r.label || ''), bluetooth: r.bluetooth === true, bluetoothListed: r.bluetoothListed === true, chosen: !!r.chosen, fellBack: r.fellBack === true, renewed: S.outputsRenewed || 0, android, inputs } })).catch(() => {});
+      } catch { /* a report is a courtesy */ }
+    }
+    function voiceRouteReportFirst() {   // once per call, when the first route is ready (renewed, not applicable or given up) and the call has its id; a 1 s retry until then (30 s)
+      const S = voiceCallS;
+      if (!S.call || !S.routeSeen || !S.routeDone || S.routeFirstSent) return;
+      if (!S.call.callId) {
+        const call = S.call;
+        if (!S.routeFirstTimer && S.callStartedAt && Date.now() - S.callStartedAt <= 30000 && (S.routeFirstTries = (S.routeFirstTries || 0) + 1) <= 30) S.routeFirstTimer = setTimeout(() => { S.routeFirstTimer = null; if (voiceCallS.call === call) voiceRouteReportFirst(); }, 1000);
+        return;
+      }
+      S.routeFirstSent = true;
+      voiceRouteReport();
+    }
+    async function voiceCallOutputsRenew() {
+      const S = voiceCallS, call = S.call;
+      if (!call || !voiceRenewApplies() || (S.renewFails || 0) >= 5) return false;
+      const later = () => { S.renewPending = true; if (!S.renewTimer) S.renewTimer = setTimeout(() => { S.renewTimer = null; if (S.renewPending && S.call === call) { const settle = () => voiceRouteSettle(call); Promise.resolve(voiceCallOutputsRenew()).then(settle, settle); } }, 1000); return false; };
+      if (S.renewing === call) return later();   // one at a time: this trigger runs again when the renewal in progress is over
+      if (voiceCallSounding()) return later();
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) { S.renewPending = false; return false; }
+      S.renewing = call;
+      let fresh = null;
+      try {
+        fresh = new AC();
+        try { let w = null; await Promise.race([Promise.resolve(fresh.resume && fresh.resume()), new Promise((r) => { w = setTimeout(r, 1000); })]); if (w !== null) clearTimeout(w); } catch { /* it runs when it can */ }
+        if (S.call !== call) { try { fresh.close(); } catch { /* gone */ } return false; }
+        if (voiceCallSounding()) { try { fresh.close(); } catch { /* gone */ } fresh = null; S.renewing = false; return later(); }   // a sentence began while it resumed
+        if (fresh.state !== 'running') {   // it did not wake: the old context stays, tried again (at most 5 times per call)
+          try { fresh.close(); } catch { /* gone */ } fresh = null; S.renewing = false;
+          S.renewFails = (S.renewFails || 0) + 1;
+          if (S.renewFails >= 5) { S.renewPending = false; return false; }
+          return later();
+        }
+        const old = voicePlay.ctx;
+        voicePlay.ctx = fresh;   // replies (voicePlayHub), the thinking pulse (voiceOutputCtx), the wake chime and the link tone read it when they play
+        try { voiceLoudApply(); } catch { /* the chain is made at the next use */ }
+        try { if (S.keepAlive && typeof S.keepAlive.moveTo === 'function') S.keepAlive.moveTo(fresh); } catch { /* the hiss stays on the old context until it closes */ }
+        S.outputsRenewed = (S.outputsRenewed || 0) + 1; S.renewPending = false;
+        if (old && old !== fresh) setTimeout(() => { try { const p = old.close(); if (p && p.catch) p.catch(() => {}); } catch { /* closed */ } }, 300);
+        if (S.routeFirstSent) voiceRouteReport();   // a later renewal that moved the outputs (the first one is reported when the route settles)
+        return true;
+      } catch {
+        if (fresh && voicePlay.ctx !== fresh) { try { fresh.close(); } catch { /* gone */ } }
+        return false;
+      } finally { if (S.renewing === call) S.renewing = false; }   // only this call's own flag
     }
     // ── Wake phrase standby: allowed only with a ready local recognizer (the server rule is engineFor in lib/voice/routes.js) ──
     function voiceWakeAllowed(agent) {
@@ -14926,7 +15848,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     // with recording off has no start-body device, no recorder, no upload and no badge. wired: the controller was given the recorder (false: a stale agent list).
     function voiceRecMake(agent, vad, cfg, wired) {
       return voiceCreateRecordingSession({ agent, userId: window.hubMe && window.hubMe.user ? window.hubMe.user.id : '', vad, wired, unprocessed: cfg.mic === 'unprocessed', nav: navigator,
-        fetch: (...a) => fetch(...a),   // the same fetch the call's other requests use: the sign-in cookie and the Origin header go with it
+        fetch: (...a) => voiceUpTrack(() => fetch(...a)),   // counted as an upload in flight (voiceLinkProbe); the same fetch the call's other requests use: the sign-in cookie and the Origin header go with it
         speak: (line) => voiceCallSpeakLine(agent, line),   // the consent line: the agent's voice, the replies' own TTS path; true only when it really played
         playback: (on) => { try { vad.setPlaybackActive(on); } catch { /* the line is heard anyway */ } },
         badge: (state) => voiceDisplayHook('setRecording', { state }), toast: (m) => hubToast(m),
@@ -14949,9 +15871,12 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         stt: (audio) => voiceCallStt(audio, agent),
         isTurnRunning: () => voiceCallRunning(chatId, agent),
         send: (text) => voiceCallSend(chatId, text),
+        keepWords: (text, note) => voiceCallKeepWords(chatId, text, note),   // the words kept for a hub-started turn, at hang-up: into the message box, never sent
+        backgroundBusy: () => voiceCallBackgroundBusy(),   // a turn the hub started runs and none of his own: his words wait for his own turn
         interject: (text) => voiceCallInterject(chatId, text),
         stop: () => stopAgentTurn(agent),
         speak: (text) => voiceCallSpeak(agent, text),
+        prefetch: (text) => voicePrefetch(agent, text),   // the next line's first sentence is fetched while this one plays
         cancelSpeech: () => voiceStopPlayback(),
         answerAsk: (id, text) => voiceCallAnswerAsk(agent, id, text),
         speakActivity: () => !!voicePrefsNow().speakActivity,   // off by default: what the agent is doing is shown in the bar, not spoken
@@ -14986,7 +15911,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           thinkingPulse: (ev) => { voiceDisplayHook('thinkingPulse', ev); },
           reply: (kind) => { voiceDisplayHook('reply', kind, 'seq:' + voiceCallS.sendSeq); },   // the reply's boundaries: the character's reaction plays once, after the whole reply
           thinkingWanted: () => voiceDisplayHook('showsPulse') === true,   // no view shown (None, hidden): the call's thinking sound is exactly the plain one
-          mic: (info) => { const t = voiceMicLineText(info); voiceCallS.micLine = t; voiceCallS.micLabel = info && typeof info.label === 'string' ? info.label : ''; voiceOutputChanged(); const m = barEl('micinfo'); if (m && !voiceCallS.micLost) m.textContent = t; },   // which microphone is open (while it is lost the line keeps saying so)
+          mic: (info) => { const t = voiceMicLineText(info) + voiceRouteSuffix(voiceCallS.route); voiceCallS.micLine = t; voiceCallS.micLabel = info && typeof info.label === 'string' ? info.label : ''; voiceOutputChanged(); const m = barEl('micinfo'); if (m && !voiceCallS.micLost) m.textContent = t; },   // which microphone is open (while it is lost the line keeps saying so)
           micLost: (on) => {   // the call goes on; the line says the microphone is lost, the meter is empty and a tap tries it again
             voiceCallS.micLost = !!on;
             const b = barEl('retry'); if (b) b.hidden = !on;
@@ -15111,12 +16036,17 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     function voiceCallTeardown() {
       const S = voiceCallS, chatId = S.chatId, vad = S.vad, thinking = S.thinking, keepAlive = S.keepAlive, focus = S.focus;
       for (const c of Object.values(chats)) if (c) { c.voiceTurn = false; c.voiceDictated = false; }   // nothing dictated before the call is read aloud after Hang up
+      if (typeof voicePrefetchClear === 'function') voicePrefetchClear();   // audio fetched ahead for a line of the call that is over
       if (S.link) { try { S.link.stop(); } catch { /* gone */ } S.link = null; }
       S.linkLost = false;
       const rec = S.rec; S.rec = null;
       if (rec) { try { rec.stop(); } catch { /* already stopped */ } }   // a recorded call: the recorder lets go of its tap (uploads in flight finish)
+      if (S.renewTimer) { clearTimeout(S.renewTimer); S.renewTimer = null; }
+      S.renewPending = false; S.renewFails = 0; S.route = null;
+      if (typeof voiceRouteDone === 'function') voiceRouteDone();   // a sentence waiting for the first route goes on (it finds the call gone)
+      for (const k of ['routeTrail', 'routeFirstTimer']) if (S[k]) { clearTimeout(S[k]); S[k] = null; }
       S.call = null; S.vad = null; S.thinking = null; S.keepAlive = null; S.focus = null; S.active = false; S.starting = false; S.chatId = null; S.agent = null;
-      S.own.clear(); S.hub.clear(); S.asks.clear();
+      S.own.clear(); S.hub.clear(); S.owner.clear(); S.hubEnded.clear(); S.asks.clear(); S.expecting = false;
       voiceDispEnd(false);   // a call that ended some other way: the display is let go at once (hang-up has already said goodbye)
       // Whatever way the call ended, nothing is left holding the microphone or a speaker: the VAD (mic tracks, processed stream,
       // AudioContext) and the thinking sound's context are let go here too; both are safe to stop twice.
@@ -15168,22 +16098,42 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       area.parentNode.insertBefore(bar, area);
     }
     // ── Lost connection ends the call ──
-    // While a call is up the page asks /health every 5 s (4 s limit); a failed probe, a network failure on the call's own requests (heartbeat, speech-to-text,
+    // While a call is up the page asks /health every 5 s (4 s limit; 2.5 s for the confirming probe that follows a timeout at once); a hard failure (network error, 5xx) or a second timeout in a row, a network failure on the call's own requests (heartbeat, speech-to-text,
     // sending, text-to-speech) or the offline event marks the link LOST: a falling two-tone, "Connection lost" in the call bar and the display, speech heard
     // meanwhile is dropped, probes every 1 s. Back within 10 s: a rising two-tone and "Reconnected." Not back: the call ends cleanly and the chat says so.
-    function voiceLinkProbe() {
+    // The call's own uploads and read-back downloads in flight (the speech-to-text POST, the recorder's uploads, the text-to-speech downloads): on a slow link /health queues behind them on the one connection, so a probe
+    // that times out while one is going proves nothing (null), not a lost link. seq counts uploads started, to tell "one was in flight at some time during the probe".
+    const voiceUp = { n: 0, seq: 0 };
+    async function voiceUpTrack(run) {
+      voiceUp.n++; voiceUp.seq++;
+      try { const l = voiceCallS.link; if (l && typeof l.progress === 'function') l.progress(); } catch { /* an older library */ }   // the link watch's grace counts from this transfer's start
+      try { return await run(); } finally { voiceUp.n--; }
+    }
+    // The probe: true = answered (below 500); 'down' = a HARD failure (a network error, or a 5xx such as a proxy's 502 in front of a dead hub: the watch marks the
+    // link lost at once); false = it TIMED OUT with none of our own transfers in flight (slow or silent: the watch asks once more at once); null = it timed out
+    // while one of our own transfers was in flight (unknown). Limit: 4 s, or 2.5 s for the confirming probe (opts.confirm). The timer resolves FIRST and aborts after,
+    // so its own abort can never be read as a network error ('down').
+    function voiceLinkProbe(opts) {
       return new Promise((resolve) => {
         let ac = null;
         try { ac = typeof AbortController === 'function' ? new AbortController() : null; } catch { ac = null; }
-        const timer = setTimeout(() => { try { if (ac) ac.abort(); } catch { /* done */ } resolve(false); }, 4000);
+        const seq0 = voiceUp.seq;
+        const limit = opts && opts.confirm ? 2500 : 4000;
+        const timer = setTimeout(() => { resolve(voiceUp.n > 0 || voiceUp.seq !== seq0 ? null : false); try { if (ac) ac.abort(); } catch { /* done */ } }, limit);   // null: unknown (our own upload was in the way)
         let p;
-        try { p = fetch('/health', { cache: 'no-store', credentials: 'include', ...(ac ? { signal: ac.signal } : {}) }); } catch { clearTimeout(timer); resolve(false); return; }
-        Promise.resolve(p).then((r) => { clearTimeout(timer); resolve(!!r && !(r.status >= 500)); }, () => { clearTimeout(timer); resolve(false); });   // a server error from a proxy in front of a dead hub counts as unreachable
+        try { p = fetch('/health', { cache: 'no-store', credentials: 'include', priority: 'high', ...(ac ? { signal: ac.signal } : {}) }); } catch { clearTimeout(timer); resolve('down'); return; }
+        Promise.resolve(p).then((r) => { clearTimeout(timer); resolve(!!r && !(r.status >= 500) ? true : 'down'); }, () => { clearTimeout(timer); resolve('down'); });   // the rejection after the timer's abort is ignored: the promise is already resolved
       });
     }
     // A network failure (fetch threw a TypeError; not an HTTP error status) seen on one of the active call's requests.
     // The call that is up now (null if none), taken when a request starts: a failure is charged only to that call, never to a newer one.
     function voiceLinkOwner() { try { return voiceCallS.call || null; } catch { return null; } }
+    // A real answer (status below 500) to one of the call's own requests proves the link: the watch is told (only the call that made the request; an older library has no alive()).
+    function voiceLinkAlive(owner) {
+      const S = voiceCallS;
+      if (!owner || S.call !== owner || !S.link || typeof S.link.alive !== 'function') return;
+      try { S.link.alive(); } catch { /* gone */ }
+    }
     function voiceLinkNetFail(e, owner) {
       if (!e || e.name !== 'TypeError') return;
       const S = voiceCallS;
@@ -15211,10 +16161,10 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const tone = (up) => { if (typeof voiceLinkTone === 'function') voiceLinkTone(voicePlay.ctx, up); };
       const setLost = (on) => { if (typeof call.setLinkLost === 'function') call.setLinkLost(on); };
       return voiceCreateLinkWatch({
-        probe: () => voiceLinkProbe(),
+        probe: (o) => voiceLinkProbe(o), everyMs: 2500,   // every 2.5 s: a silent outage is found within 2.5 + 4 + 2.5 = 9 s (the confirming probe has a 2.5 s limit)
         setTimeout: (f, ms) => setTimeout(f, ms), clearTimeout: (t) => clearTimeout(t),
         onLost: () => { if (S.call !== call) return; setLost(true); tone(false); voiceLinkPaint(true); },
-        onBack: () => { if (S.call !== call) return; voiceLinkPaint(false); tone(true); setLost(false); },
+        onBack: () => { if (S.call !== call) return; voiceLinkPaint(false); tone(true); setLost(false); voiceCallSeedHub(); },
         onGiveUp: () => voiceCallLinkGiveUp(call),
       });
     }
@@ -15227,7 +16177,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       voiceRec.guard.cancel(); if (voiceRec.chatId) voiceMicStop(false);   // dictation ends, nothing uploaded
       voiceStopPlayback();
       const eff = voiceEffNow(chat.agent);   // this agent's voice defaults for any setting the person has not set on this device
-      const vad = voiceCreateVad({ baseUrl: '/api/voice/web/', micLevel: voiceMicLevelNow(), interruptSensitivity: eff.interruptSensitivity, endPause: eff.endPause, echoHoldMs: voiceEchoHoldNow(), strictTalkOver: voiceIsIOSNav(navigator) });
+      const vad = voiceCreateVad({ baseUrl: '/api/voice/web/', micLevel: voiceMicLevelNow(), interruptSensitivity: eff.interruptSensitivity, endPause: eff.endPause, echoHoldMs: voiceEchoHoldNow(), strictTalkOver: voiceIsIOSNav(navigator), micChoice: voiceMicChoiceId, bluetoothFirst: voiceIsAndroidNav(navigator) });
       const thinking = voiceCallThinking(vad);   // makes / resumes the reply playback context (voicePlay.ctx) inside the tap
       // Keep Bluetooth awake: a very quiet hiss on the same output context as the replies; the controller starts and stops it, and it sounds
       // only while the switch is on (a change applies at once, mid-call).
@@ -15247,10 +16197,10 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const recCfg = typeof voiceRecSettings === 'function' ? voiceRecSettings((typeof AGENTS !== 'undefined' && Array.isArray(AGENTS) ? AGENTS : []).find(x => x && x.name === chat.agent)) : { keep: false, mic: 'processed' };
       const rec = recCfg.keep ? voiceRecMake(chat.agent, vad, recCfg, true) : null;
       if (typeof voiceRecResendPending === 'function') voiceRecResendPending((u, i) => fetch(u, i), { userId: window.hubMe && window.hubMe.user ? window.hubMe.user.id : '' }).catch(() => {});   // pieces left from an earlier call or page are sent while this one starts
-      const call = voiceCreateCall(voiceCallDeps(chatId, chat.agent, vad, thinking, keepAlive, rec));
+      const call = voiceCreateCall(voiceCallDeps(chatId, chat.agent, voiceCallVadFor(vad), thinking, keepAlive, rec));
       voiceLeftNoticeHide(); S.leftChat = null;
-      S.rec = rec; S.call = call; S.focus = focus; S.vad = vad; S.thinking = thinking; S.keepAlive = keepAlive; S.micLine = ''; S.micLabel = ''; S.micLost = false; S.starting = true; S.chatId = chatId; S.agent = chat.agent;
-      window.__voiceBt = { keepAliveRunning: () => !!(S.keepAlive && S.keepAlive.running), micInfo: () => S.micLine || '', micLost: () => !!S.micLost, echoHold: () => voiceEchoHoldNow() };   // read-only hooks for the browser proof
+      S.rec = rec; S.call = call; S.focus = focus; S.vad = vad; S.thinking = thinking; S.keepAlive = keepAlive; S.micLine = ''; S.micLabel = ''; S.route = null; S.routeToasted = false; S.routeSeen = 0; S.routeFirstSent = false; S.routeReportAt = 0; S.routeTrail = null; S.routeFirstTimer = null; S.routeFirstTries = 0; S.outputsRenewed = 0; S.renewPending = false; S.renewing = false; S.renewFails = 0; S.callStartedAt = Date.now(); if (typeof voiceRouteReadyMake === 'function') voiceRouteReadyMake(); S.micLost = false; S.starting = true; S.chatId = chatId; S.agent = chat.agent;
+      window.__voiceBt = { keepAliveRunning: () => !!(S.keepAlive && S.keepAlive.running), micInfo: () => S.micLine || '', micLost: () => !!S.micLost, echoHold: () => voiceEchoHoldNow(), outputsRenewed: () => S.outputsRenewed || 0, route: () => S.route || null };   // read-only hooks for the browser proof
       voiceLoudApply();   // the reply loudness chain, at the level of the pref
       voiceCallPaintBtn(chatId, true);
       voiceCallShowBar(chatId);
@@ -15258,6 +16208,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       voiceDispBegin(chatId, chat.agent);   // synchronous, still inside the tap (the phone page unlocks its audio context here)
       S.link = typeof voiceLinkMake === 'function' ? voiceLinkMake(call) : null; S.linkLost = false; if (S.link) S.link.start();   // is the server still there? a lost connection ends the call
       voiceCallWake(true);
+      if (typeof voiceCallSeedHub === 'function') voiceCallSeedHub();   // a hub-started turn that already runs is not interjected into
       let ok = false;
       try { ok = await call.start(); } catch { ok = false; }
       if (S.call !== call) return;   // hung up while it was starting
@@ -15265,6 +16216,43 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       S.starting = false; S.active = true;
     }
     function voiceCallSseMood(chatId, mood) { const S = voiceCallS; if (S.call && S.chatId === chatId) voiceDispMood(S.sendSeq, mood); }
+    // A turn the hub started runs (a scheduled task, a consultation, a job report ...) and none of the caller's own: his words are kept for his own turn (the controller's backgroundBusy).
+    // Also false when this page streams a reply of its own (typed in this chat during the call) or an own turn of the call has not ended.
+    const VOICE_HUB_OWNER_LATE_MS = 5000;   // a for_owner this soon after the turn ended still gives the cue
+    const VOICE_OWN_END_GRACE_MS = 3000;   // busy with no known turn is not background this soon after the caller's own turn ended
+    // Whose turn runs is known from turn_start. A call that starts (or comes back after a lost link) while a hub-started turn already runs has not seen it: voiceCallSeedHub
+    // reads what the page knows (busyRun, the agent's running turn) and counts a running turn whose origin is not 'user' as a hub-started one. An agent that is busy with
+    // no turn known at all (the page opened mid-turn) counts as busy with background work until a turn_start or the idle status says otherwise.
+    function voiceCallSeedHub() {
+      const S = voiceCallS;
+      if (!S.call || !S.agent) return;
+      const run = typeof busyRun !== 'undefined' ? busyRun[S.agent] : null, st = typeof agentStatus !== 'undefined' ? agentStatus[S.agent] : null;
+      if (run && run.turnId && st && st.busy && run.origin && run.origin.kind !== 'user' && !S.hub.has(run.turnId)) S.hub.set(run.turnId, (run.origin.label || run.origin.from) || hubOriginLabel(run.origin));
+    }
+    function voiceCallBackgroundBusy() {
+      const S = voiceCallS, chat = S.chatId ? chats[S.chatId] : null;
+      if (!(S.call && S.own.size === 0 && !S.expecting && !(chat && chat.controller) && voiceCallRunning(S.chatId, S.agent))) return false;
+      if (S.hub.size > 0) return true;
+      const run = typeof busyRun !== 'undefined' ? busyRun[S.agent] : null;
+      if (!run) return !(S.ownEndedAt && Date.now() - S.ownEndedAt < VOICE_OWN_END_GRACE_MS);   // no turn known: background until identified, unless his own turn has just ended (the status feed lags its turn_end)
+      return !!(run.origin && run.origin.kind !== 'user');   // one that is not of the person's own: background
+    }
+    // The agent went idle (the status feed): no hub-started turn runs any more, whatever turn_end events were missed; the caller's kept words go out.
+    function voiceCallHubIdle(agent) {
+      const S = voiceCallS;
+      if (!S.call || S.agent !== agent || voiceCallRunning(S.chatId, S.agent)) return;
+      // The idle report comes before the hub turn's own turn_end: a turn marked for the owner gives its cue here (once; the controller keeps one per 30 s) and is forgotten, so the
+      // turn_end that follows finds nothing to do. One not marked yet may still be marked within VOICE_HUB_OWNER_LATE_MS (hubEnded).
+      let cue = false;
+      for (const id of S.hub.keys()) {
+        if (S.owner.has(id)) { S.owner.delete(id); cue = true; }
+        else { S.hubEnded.set(id, Date.now()); if (S.hubEnded.size > 32) S.hubEnded.delete(S.hubEnded.keys().next().value); }
+      }
+      S.hub.clear();
+      if (S.owner.size > 0) { S.owner.clear(); cue = true; }   // a mark for a turn the call never saw (kept while the agent was busy): the idle gives its cue
+      if (cue && typeof S.call.onHubOwner === 'function') S.call.onHubOwner();
+      if (typeof S.call.backgroundDone === 'function') S.call.backgroundDone();
+    }
     // Hub events of the call's agent -> the controller.
     function voiceCallHubEvent(type, ev) {
       const S = voiceCallS, call = S.call;
@@ -15285,12 +16273,24 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           return;
         }
         case 'turn_end': {
-          if (S.own.has(ev.turnId)) { const last = S.own.get(ev.turnId); S.own.delete(ev.turnId); S.expecting = false; call.onReplyText(ev.reply || last || '', true); }
+          if (S.own.has(ev.turnId)) { const last = S.own.get(ev.turnId); S.own.delete(ev.turnId); S.expecting = false; S.ownEndedAt = Date.now(); call.onReplyText(ev.reply || last || '', true); }
           else if (S.hub.has(ev.turnId)) {
-            const label = S.hub.get(ev.turnId); S.hub.delete(ev.turnId);
-            const first = ev.ok === false ? '' : (voiceSentences(voiceSpeechText(ev.reply || ''))[0] || '');
-            if (first) call.onReplyText(`${label}: ${first}`, true);
-          }
+            // A turn the hub started (a scheduled task, a consultation, a job report ...): its reply and its input are never read aloud and never shown as
+            // heard or spoken on the call; they land in the chat. What it may do on the call: the cue when it was marked for the owner (for_owner),
+            // and the caller's words that waited for it are sent now (call.backgroundDone).
+            S.hub.delete(ev.turnId);
+            if (S.owner.has(ev.turnId)) { S.owner.delete(ev.turnId); call.onHubOwner(); }
+            else { S.hubEnded.set(ev.turnId, Date.now()); if (S.hubEnded.size > 32) S.hubEnded.delete(S.hubEnded.keys().next().value); }   // a for_owner may follow within a few seconds
+            if (!voiceCallRunning(S.chatId, S.agent)) call.backgroundDone();   // only when the page also sees the agent idle; else the idle hook sends later (a second hub turn may follow at once)
+          } else if (S.owner.has(ev.turnId)) { S.owner.delete(ev.turnId); call.onHubOwner(); }   // a turn the call never saw, marked while busy: its end gives the cue
+          return;
+        }
+        case 'for_owner': {   // { agent, reason, turnId, origin }: the agent marked a turn's reply for the owner
+          if (!ev.turnId || (ev.origin && ev.origin.kind === 'user')) return;
+          const at = S.hubEnded.get(ev.turnId);
+          if (at !== undefined) { S.hubEnded.delete(ev.turnId); if (Date.now() - at <= VOICE_HUB_OWNER_LATE_MS) call.onHubOwner(); }   // marked just after it ended
+          else if (!S.hub.has(ev.turnId) && !voiceCallRunning(S.chatId, S.agent)) call.onHubOwner();   // a turn the call never saw, and the agent is idle: the cue now (the controller keeps its own 30 s gap)
+          else { S.owner.add(ev.turnId); if (S.owner.size > 32) S.owner.delete(S.owner.keys().next().value); }   // marked while it runs (or a turn never seen while the agent is busy): the cue comes when it ends or the agent goes idle
           return;
         }
         case 'ask_user': {
@@ -15355,6 +16355,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         <label class="vp-row"><span class="vp-label">Keep Bluetooth awake during calls</span><input type="checkbox" id="${id('keep')}" data-vp="keep"${voiceKeepAliveNow() ? ' checked' : ''}></label>
         <div class="vp-display-note">${VOICE_KEEP_HINT}</div>
         <div class="vp-row"><button type="button" class="st-test-btn" data-vp="car" id="${id('car')}">Car or Bluetooth check</button> <span class="st-hint vp-car-out" id="${id('car-out')}" aria-live="polite" style="margin:0"></span></div>
+        <div class="vp-row" style="display:block"><div class="vp-label">Sound route</div>${voiceRouteBlockHtml()}</div>
         ${voiceWakeRowsHtml(chatId)}`;
     }
     function voicePopClose() {
@@ -15538,6 +16539,115 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         for (const b of btns()) b.disabled = false;
       }
     }
+
+    // Sound route (Settings, Voices, and the chat's voice panel, below the Car or Bluetooth check): the microphones the browser offers, one of them chosen (or Automatic: car or
+    // Bluetooth first). On Android the call's sound follows the microphone. On a computer the browser may also list sound outputs: they are shown as text only.
+    const VOICE_ROUTE_NEARBY_LINE = 'No car or Bluetooth microphone is visible to the browser. If one is connected: Android Settings → Apps → Chrome → Permissions → Nearby devices → Allow, then start the call again.';
+    const VOICE_ROUTE_FOLLOWS_LINE = 'On Android the call\'s sound follows the microphone chosen here.';
+    const VOICE_ROUTE_TEST_AFTER = 'Where did you hear it? In the car: calls will be heard there too. On the phone: choose the car above, or check Nearby devices.';
+    const voiceRouteUi = { routes: null, busy: false };
+    function voiceRouteBlockHtml() {
+      return `<div class="voice-route"><button type="button" class="st-test-btn" data-route="list">Sound devices</button> <button type="button" class="st-test-btn" data-route="test">Test sound</button> <span class="st-hint voice-route-out" aria-live="polite" style="margin:0"></span>
+        <div class="voice-route-list" style="margin-top:6px"></div>
+        <div class="st-hint voice-route-note" style="margin:4px 0 0">${VOICE_ROUTE_FOLLOWS_LINE}</div></div>`;
+    }
+    function voiceRouteSay(t) { for (const o of document.querySelectorAll('.voice-route-out')) o.textContent = t; }
+    function voiceRouteMicBusy() { return !!(voiceRoom.active || voiceRec.chatId || voiceRec.busy || voiceRec.guard.pending || voiceTest.mic || voiceTest.guard.pending); }
+    // The rows: Automatic first, then one per microphone (the browser's pseudo 'default' / 'communications' entries are skipped).
+    function voiceRoutePaint() {
+      const r = voiceRouteUi.routes;
+      for (const box of document.querySelectorAll('.voice-route-list')) {
+        box.textContent = '';
+        if (!r) continue;
+        const choice = voiceMicChoiceId();
+        const add = (label, tags, id, mic) => {
+          const row = document.createElement('div'); row.className = 'st-hint voice-route-row'; row.style.margin = '2px 0';
+          row.appendChild(document.createTextNode(label + tags + ' '));
+          const b = document.createElement('button'); b.type = 'button'; b.className = 'st-test-btn'; b.dataset.route = 'use'; b.dataset.id = id || ''; b.dataset.label = mic ? mic.label || '' : ''; b.textContent = 'Use';
+          row.appendChild(b); box.appendChild(row);
+        };
+        add('Automatic (car or Bluetooth first)', choice ? '' : ' · chosen', '', null);
+        for (const m of r.inputs || []) {
+          if (!m || m.pseudo) continue;
+          add(m.label || 'Microphone', (m.inUse ? ' · in use' : '') + (m.bluetooth ? ' · Bluetooth' : '') + (choice && choice === m.id ? ' · chosen' : ''), m.id, m);
+        }
+        if (!r.bluetoothInput) { const n = document.createElement('div'); n.className = 'st-hint'; n.style.margin = '4px 0 0'; n.textContent = VOICE_ROUTE_NEARBY_LINE; box.appendChild(n); }
+        const outs = (r.outputs || []).filter((o) => o && !o.pseudo && o.label).map((o) => o.label);
+        if (outs.length) { const n = document.createElement('div'); n.className = 'st-hint'; n.style.margin = '4px 0 0'; n.textContent = 'The browser also lists these sound outputs: ' + outs.join(', ') + '.'; box.appendChild(n); }
+      }
+    }
+    async function voiceRouteList() {
+      if (voiceRouteUi.busy) return;
+      const S = voiceCallS;
+      if (!S.call && voiceRouteMicBusy()) { hubToast('The microphone is in use.'); return; }
+      voiceRouteUi.busy = true;
+      let held = false;
+      try {
+        let routes = null;
+        if (S.call && S.vad && typeof S.vad.routes === 'function') routes = await S.vad.routes();
+        else {
+          const md = navigator.mediaDevices;
+          if (!md || typeof md.enumerateDevices !== 'function') { voiceRouteSay('This browser cannot list its sound devices.'); return; }
+          let list = await md.enumerateDevices();
+          if (!list.some((d) => d && d.kind === 'audioinput' && d.label)) {   // no labels until the microphone has been allowed once: it is opened for a moment, then let go
+            voiceRoom.active = true; held = true;
+            let got = null;
+            try { got = await voiceOpenMicStream(navigator); } catch (e) { voiceRouteSay(voiceMicError(e)); return; }
+            try { for (const t of got.stream.getTracks()) t.stop(); } catch { /* ended */ }
+            list = await md.enumerateDevices();
+          }
+          routes = voiceAudioRoutes(list, null);
+        }
+        voiceRouteUi.routes = routes; voiceRoutePaint(); voiceRouteSay('');
+      } catch (e) { voiceRouteSay('Could not list the sound devices: ' + ((e && e.message) || 'unknown error')); }
+      finally { if (held) voiceRoom.active = false; voiceRouteUi.busy = false; }
+    }
+    // Use / Automatic: saved on this device (micDevice { id, label }; Automatic removes it) and, in a call, applied at once (the microphone is opened again).
+    async function voiceRouteUse(id, label) {
+      const prefs = { ...voicePrefsNow() };
+      if (id) prefs.micDevice = { id, label: String(label || '').slice(0, 120) }; else delete prefs.micDevice;
+      voiceSavePrefs(localStorage, prefs); voicePrefsCache = prefs;
+      const S = voiceCallS;
+      if (S.call && S.vad && typeof S.vad.useMic === 'function') { try { await S.vad.useMic(id || null); } catch { /* the call keeps its microphone */ } }
+      voiceRoutePaint();
+      if (S.call && S.vad && typeof S.vad.routes === 'function') { try { voiceRouteUi.routes = await S.vad.routes(); voiceRoutePaint(); } catch { /* the list stays */ } }
+    }
+    // Test sound: the microphone is opened with processing first (that is what a call does), THEN a new audio context plays two beeps (440 Hz, 660 Hz, 0.25 s each, -12 dBFS).
+    async function voiceRouteTest() {
+      if (voiceCallS.call) { voiceRouteSay('Not during a call.'); return; }
+      if (voiceRouteMicBusy()) { hubToast('The microphone is in use.'); return; }
+      const btns = [...document.querySelectorAll('.voice-route [data-route="test"]')];
+      voiceRoom.active = true; for (const b of btns) b.disabled = true;
+      let got = null, ctx = null;
+      try {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (!AC) { voiceRouteSay('This browser cannot play the test sound.'); return; }
+        try { got = await voiceOpenMicStream(navigator, { deviceId: voiceMicChoiceId() || undefined }); } catch (e) { voiceRouteSay(voiceMicError(e)); return; }
+        ctx = new AC();
+        try { await Promise.race([Promise.resolve(ctx.resume()), new Promise((r) => setTimeout(r, 1000))]); } catch { /* it plays when it can */ }
+        const t0 = ctx.currentTime + 0.05, amp = Math.pow(10, -12 / 20);
+        [440, 660].forEach((hz, i) => {
+          const o = ctx.createOscillator(), g = ctx.createGain();
+          o.frequency.value = hz; g.gain.value = amp; o.connect(g); g.connect(ctx.destination);
+          o.start(t0 + i * 0.25); o.stop(t0 + i * 0.25 + 0.25);
+        });
+        voiceRouteSay('Playing two short sounds.');
+        await new Promise((r) => setTimeout(r, 700));
+        voiceRouteSay(VOICE_ROUTE_TEST_AFTER);
+      } catch (e) { voiceRouteSay('The test sound could not play: ' + ((e && e.message) || 'unknown error')); }
+      finally {
+        if (ctx) { try { const p = ctx.close(); if (p && p.catch) p.catch(() => {}); } catch { /* closed */ } }
+        if (got && got.stream) { try { for (const t of got.stream.getTracks()) t.stop(); } catch { /* ended */ } }
+        voiceRoom.active = false; for (const b of btns) b.disabled = false;
+      }
+    }
+    document.addEventListener('click', (e) => {
+      const t = e.target && e.target.closest ? e.target.closest('[data-route]') : null;
+      if (!t || !t.closest('.voice-route')) return;
+      if (t.dataset.route === 'list') voiceRouteList();
+      else if (t.dataset.route === 'use') voiceRouteUse(t.dataset.id || '', t.dataset.label || '');
+      else if (t.dataset.route === 'test') voiceRouteTest();
+    });
 
     // Message rendering
     // Copy button on every message bubble: copies the original text/markdown, not the rendered HTML.

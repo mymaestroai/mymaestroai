@@ -32,7 +32,8 @@ const SETUP = { steps: [
   { id: 'done', type: 'finish', title: 'Done' },
 ] };
 const AGENTS = [{ name: 'owner', lead: true }, { name: 'sam' }, { name: 'ann' }, { name: 'kid', owner: 'u_member' }, { name: 'tw-1' }];
-const ADMIN = { adminBrowser: true, userId: 'u_admin', name: 'Jo' };
+const ADMIN = { adminBrowser: true, userId: 'u_admin', name: 'Jo', steppedUp: true };   // the server sets steppedUp after the account password was checked
+const ADMIN_NO_STEP = { adminBrowser: true, userId: 'u_admin', name: 'Jo' };
 
 function rig({ manifest = baseManifest(), agents = AGENTS, withLevels = true, wallet = () => false } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mods-lev-'));
@@ -629,4 +630,29 @@ test('backup restore code applies the rule (restore prepare and merge-today both
   assert.match(read('restore.js'), /holdNoAskSettings\(smods, path\.join\(root, 'modules'\)\)/);
   assert.match(read('apply.js'), /holdNoAskSettings\(smods, path\.join\(j\.env\.root, 'modules'\)\)/);
   assert.doesNotMatch(read('restore.js') + read('apply.js'), /holdNoAskSettings\([^)]*modules\.json/, 'today\'s modules.json is not read for the no-ask list');
+});
+
+test('step-up: turning asking off needs the account password (steppedUp) as well as the acknowledgement; tightening needs neither', async (t) => {
+  const r = rig(); t.after(r.cleanup);
+  await r.finish();
+  const off = { sam: perm('act', false) };
+  // acknowledged, but the server did not see the password: refused with needsStepUp, nothing written, nobody told
+  assert.throws(() => save(r, ['sam'], off, { acknowledged: true }, ADMIN_NO_STEP), (e) => e.status === 409 && e.needsAck === true && e.needsStepUp === true && /sam/.test(e.message));
+  for (const bogus of ['yes', 1, 'true', {}, null]) assert.throws(() => save(r, ['sam'], off, { acknowledged: true }, { ...ADMIN_NO_STEP, steppedUp: bogus }), (e) => e.status === 409 && e.needsStepUp === true, `steppedUp ${JSON.stringify(bogus)}`);
+  // stepped up but not acknowledged: still refused
+  assert.throws(() => save(r, ['sam'], off, {}, ADMIN), (e) => e.status === 409 && e.needsAck === true && e.needsStepUp === true);
+  // the body cannot carry steppedUp
+  assert.throws(() => save(r, ['sam'], off, { acknowledged: true, steppedUp: true }, ADMIN_NO_STEP), (e) => e.status === 400 && /Unknown field "steppedUp"/.test(e.message));
+  assert.strictEqual(r.audit().length, 0); assert.strictEqual(r.pushes.length, 0);
+  assert.deepStrictEqual(r.mods.detail('levdemo').permissions.runsWithoutAsking, []);
+  // both: allowed, and the audit record says so
+  const out = save(r, ['sam'], off, { acknowledged: true }, ADMIN);
+  assert.deepStrictEqual(out.turnedAskingOff, ['sam']);
+  assert.ok(r.audit().length > 0 && r.audit().every(l => l.steppedUp === true), 'every record of the loosening says steppedUp');
+  // tightening (asking back on) and a change that loosens nothing need neither
+  const before = r.audit().length;
+  assert.strictEqual(save(r, ['sam'], { sam: perm('act', true) }, {}, ADMIN_NO_STEP).changed, true);
+  assert.deepStrictEqual(r.mods.detail('levdemo').permissions.runsWithoutAsking, []);
+  assert.strictEqual(save(r, ['ann'], { ann: perm('act', true) }, {}, ADMIN_NO_STEP).changed, true);
+  assert.ok(r.audit().slice(before).length > 0 && r.audit().slice(before).every(l => !('steppedUp' in l)), 'a change that loosens nothing is not marked');
 });

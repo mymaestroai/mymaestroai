@@ -190,7 +190,9 @@ test('(d) #chat-notify-btn is in #chat-head right before #chat-stop-btn, and not
   assert.ok(bell > 0 && stop > bell, 'bell before Stop');
   assert.ok(!head.slice(bell, stop).includes('<button class="iconbtn" id'), 'directly before Stop (no other button between)');
   assert.ok(!html.slice(html.indexOf('id="composer"'), html.indexOf('id="file-input"')).includes('chat-notify-btn'));
-  assert.ok(/id="chat-notify-btn" type="button" aria-pressed="false" aria-label="Notify me when this reply is done"[^>]*hidden>/.test(head));
+  // changed on purpose (notifications per agent): the bell is always shown and opens the agent's notification sheet
+  assert.ok(/id="chat-notify-btn" type="button" aria-haspopup="dialog" aria-label="Notifications for this agent"[^>]*>/.test(head));
+  assert.ok(!/id="chat-notify-btn"[^>]*hidden/.test(head), 'not hidden when idle');
 });
 
 test('(d) plusSheetShow toggles hidden and aria-expanded; plusSheetOpen follows', () => {

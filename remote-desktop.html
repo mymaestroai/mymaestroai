@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Desktop — My Maestro AI</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; background: #090B0F; color: #F3F4F6; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 14px; overflow: hidden; }
+  #bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 6px 10px; background: #14171F; border-bottom: 1px solid #222632; }
+  #bar b { font-size: 15px; word-break: break-word; }
+  #bar .sp { flex: 1; }
+  #left, #state { color: #9CA3AF; font-size: 13px; }
+  button { font: inherit; font-size: 13px; min-height: 36px; padding: 5px 12px; border-radius: 4px; border: 1px solid #333846; background: transparent; color: #F3F4F6; cursor: pointer; }
+  button:hover { border-color: #3D7BFF; }
+  button.danger { color: #FF4C4C; border-color: rgba(255, 76, 76, .5); }
+  body { touch-action: manipulation; }
+  #scroller { position: absolute; top: 0; left: 0; right: 0; bottom: 0; overflow: auto; display: flex; background: #000; touch-action: none; -webkit-touch-callout: none; scrollbar-width: none; }
+  #scroller::-webkit-scrollbar { display: none; }
+  @media (pointer: fine) { #scroller { scrollbar-width: auto; } #scroller::-webkit-scrollbar { display: block; } }
+  #Desk { display: block; flex: none; margin: auto; touch-action: none; -webkit-touch-callout: none; user-select: none; -webkit-user-select: none; background: #000; }
+  #ended { display: none; padding: 30px 16px; text-align: center; font-size: 16px; color: #9CA3AF; }
+  #ended-text { margin-bottom: 16px; }
+  #ended .row { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; margin-bottom: 14px; }
+  #ended button { min-height: 44px; font-size: 14px; padding: 8px 16px; }
+  #ended button.primary { border-color: #3D7BFF; background: #3D7BFF; color: #fff; }
+  #ended-count { margin-bottom: 10px; font-size: 14px; }
+  #back { max-width: 100%; text-align: left; word-break: break-word; }
+  #kb { position: fixed; left: 0; bottom: 0; opacity: 0; width: 1px; height: 1px; border: 0; padding: 0; }
+</style>
+</head>
+<body>
+<div id="bar">
+  <button id="back" type="button" aria-label="Back to Remote computers" title="End the session and go back to Remote computers">←&nbsp;<b id="name"></b></button>
+  <span id="left"></span>
+  <span class="sp"></span>
+  <span id="state">Connecting</span>
+  <button id="reconnect" type="button" style="display:none">Reconnect</button>
+  <button id="zout" type="button" aria-label="Zoom out">−</button>
+  <button id="zin" type="button" aria-label="Zoom in">+</button>
+  <button id="fit" type="button">Fit</button>
+  <button id="keyboard" type="button">Keyboard</button>
+  <button id="cad" type="button">Ctrl+Alt+Del</button>
+  <button id="end" type="button" class="danger">End</button>
+</div>
+<div id="ended">
+  <div id="ended-text">The session has ended.</div>
+  <div class="row"><button id="ended-remote" type="button" class="primary">Back to Remote computers</button><button id="ended-chat" type="button">Back to chat</button></div>
+  <div id="ended-count"></div>
+  <button id="ended-stay" type="button">Stay here</button>
+</div>
+<div id="scroller"><canvas id="Desk" width="640" height="480"></canvas></div>
+<input id="kb" type="text" autocapitalize="off" autocomplete="off" autocorrect="off" inputmode="text" spellcheck="false">
+<script type="application/json" id="rd-boot">{}</script>
+<script>var urlargs = {};
+// MeshCentral's key handlers read a GLOBAL `desktop` (desktop.State); the page keeps it current below. A safe value until the first viewer exists.
+var desktop = { State: 0 };</script>
+<script src="scripts/common-0.0.1.js"></script><script src="scripts/agent-redir-ws-0.1.1.js"></script><script src="scripts/agent-desktop-0.0.2.js"></script>
+<script>
+var rdView = (function () {
+  // Pure view math (no DOM), so it can be tested on its own. Sizes are CSS px; desktop pixels are the canvas's own pixels.
+  var clamp = function (v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; };
+  var num = function (v, d) { return typeof v === 'number' && isFinite(v) ? v : d; };
+  // Client point -> desktop pixel (integers, clamped to 0..size-1). rect = canvas.getBoundingClientRect() (already includes zoom and scroll).
+  function toDesktop(rect, cw, ch, clientX, clientY) {
+    var rw = num(rect.width, 0) || 1, rh = num(rect.height, 0) || 1;
+    return { x: clamp(Math.floor((clientX - rect.left) * cw / rw), 0, Math.max(0, cw - 1)), y: clamp(Math.floor((clientY - rect.top) * ch / rh), 0, Math.max(0, ch - 1)) };
+  }
+  // Desktop pixel -> the pageX/pageY that agent-desktop's SendMouseMsg turns back into the same pixel (it ignores scroll and transforms).
+  // Aims at the pixel's centre so rounding can never land on the neighbour.
+  function toPage(off, clientW, clientH, cw, ch, x, y) {
+    return { pageX: off[0] + (x + 0.5) * clientW / cw, pageY: off[1] + (y + 0.5) * clientH / ch };
+  }
+  // The whole desktop inside the view ('contain').
+  function fitSize(vw, vh, dw, dh) {
+    if (!(vw > 0 && vh > 0 && dw > 0 && dh > 0)) return { w: 0, h: 0 };
+    var s = Math.min(vw / dw, vh / dh);
+    return { w: dw * s, h: dh * s };
+  }
+  // Up to 4x, or twice actual size if that is more.
+  function maxZoom(vw, vh, dw, dh) {
+    var f = fitSize(vw, vh, dw, dh);
+    return f.w > 0 ? Math.max(4, 2 * dw / f.w) : 4;
+  }
+  // The point at view position (px,py) is moved to (qx,qy) (default: stays) at the new zoom. view = { w, h, fitW, fitH, max, oldW?, oldH? };
+  // oldW/oldH = the content size the state was measured at (when the fit size itself changed); oldVW/oldVH = the view size it was measured at.
+  function zoomAbout(state, newZoom, px, py, view, qx, qy) {
+    var z = clamp(num(newZoom, state.zoom), 1, Math.max(1, view.max || 4));
+    if (qx == null) qx = px;
+    if (qy == null) qy = py;
+    function axis(scroll, p, q, vs, fit, old, ovs) {
+      var c = old > 0 ? old : fit * state.zoom, ox = Math.max(0, ((ovs > 0 ? ovs : vs) - c) / 2);
+      var f = c > 0 ? clamp((scroll + p - ox) / c, 0, 1) : 0;
+      var c2 = fit * z, ox2 = Math.max(0, (vs - c2) / 2);
+      return clamp(f * c2 - q + ox2, 0, Math.max(0, c2 - vs));
+    }
+    return { zoom: z, scrollLeft: axis(state.scrollLeft, px, qx, view.w, view.fitW, view.oldW, view.oldVW), scrollTop: axis(state.scrollTop, py, qy, view.h, view.fitH, view.oldH, view.oldVH) };
+  }
+  return { toDesktop: toDesktop, toPage: toPage, fitSize: fitSize, maxZoom: maxZoom, zoomAbout: zoomAbout };
+})();
+var rdNav = (function () {
+  // Pure: how to leave for `url`. 'history' only when the page was opened from the Modules page (same origin, /modules), there is
+  // something to go back to, and the target is Remote computers; every other case replaces this page so Back never returns to a dead desktop.
+  var REMOTE = '/modules#remote-computers';
+  function backPlan(referrer, origin, historyLength, url) {
+    referrer = String(referrer || ''); origin = String(origin || '');
+    if (url !== REMOTE || !origin || !(historyLength > 1)) return 'replace';
+    if (referrer.indexOf(origin + '/modules') !== 0) return 'replace';
+    var rest = referrer.slice(origin.length + '/modules'.length);
+    return rest === '' || rest.charAt(0) === '?' || rest.charAt(0) === '#' ? 'history' : 'replace';
+  }
+  return { REMOTE: REMOTE, backPlan: backPlan };
+})();
+</script>
+<script>
+(function () {
+  var boot = {};
+  try { boot = JSON.parse(document.getElementById('rd-boot').textContent) || {}; } catch (e) { boot = {}; }
+  var $ = function (id) { return document.getElementById(id); };
+  var live = true, desktop = null, tick = null;
+  // The viewer scripts read window.desktop (a bare global); keep it equal to the current viewer, or a harmless State 0 object when none.
+  function publish(d) { window.desktop = d || { State: 0 }; }
+  var kb = $('kb'), canvas = $('Desk'), scroller = $('scroller'), bar = $('bar');
+  $('name').textContent = boot.name || 'Computer';
+  document.title = (boot.name || 'Desktop') + ' — My Maestro AI';
+
+  // View: zoom 1 = the whole desktop visible; the canvas's CSS size is the fit size x zoom, pan = the scroller's scroll position.
+  var zoom = 1;
+  var vw = function () { return scroller.clientWidth || 0; }, vh = function () { return scroller.clientHeight || 0; };
+  var lastW = 0, lastH = 0;   // the view size the current zoom/scroll were last placed at
+  function place(z, px, py, qx, qy, oldW, oldH, oldVW, oldVH) {
+    var w = vw(), h = vh(), dw = canvas.width, dh = canvas.height, f = rdView.fitSize(w, h, dw, dh);
+    if (!(f.w > 0)) return;
+    if (z < zoom && Math.abs(z - 1) < 0.04) z = 1;   // zooming back out close to 1 snaps to exactly 1 (never on the way in: small trackpad steps must leave Fit)
+    // The content's real size now (the fit base can change between calls, e.g. when a mouse user's scrollbars come or go).
+    if (!(oldW > 0)) oldW = parseFloat(canvas.style.width) || canvas.clientWidth || 0;
+    if (!(oldH > 0)) oldH = parseFloat(canvas.style.height) || canvas.clientHeight || 0;
+    var s0 = { zoom: zoom, scrollLeft: scroller.scrollLeft || 0, scrollTop: scroller.scrollTop || 0 }, mx = rdView.maxZoom(w, h, dw, dh);
+    var r = rdView.zoomAbout(s0, z, px, py, { w: w, h: h, fitW: f.w, fitH: f.h, max: mx, oldW: oldW, oldH: oldH, oldVW: oldVW, oldVH: oldVH }, qx, qy);
+    zoom = r.zoom; lastW = w; lastH = h;
+    canvas.style.width = f.w * zoom + 'px'; canvas.style.height = f.h * zoom + 'px';
+    scroller.scrollLeft = r.scrollLeft; scroller.scrollTop = r.scrollTop;
+    // A mouse user's scrollbars can appear or go with the new size and change the view: anchor again in the view as it is now.
+    var w2 = vw(), h2 = vh();
+    if (w2 > 0 && h2 > 0 && (w2 !== w || h2 !== h)) {
+      var r2 = rdView.zoomAbout(s0, zoom, px, py, { w: w2, h: h2, fitW: f.w, fitH: f.h, max: mx, oldW: oldW, oldH: oldH, oldVW: oldVW || w, oldVH: oldVH || h }, qx, qy);
+      scroller.scrollLeft = r2.scrollLeft; scroller.scrollTop = r2.scrollTop; lastW = w2; lastH = h2;
+    }
+    if (zoom === 1) {   // at Fit the scrollbars a mouse user had go away: measure again so the whole space is used
+      var f2 = rdView.fitSize(vw(), vh(), dw, dh);
+      if (f2.w > 0 && (Math.abs(f2.w - f.w) > 0.5 || Math.abs(f2.h - f.h) > 0.5)) { canvas.style.width = f2.w + 'px'; canvas.style.height = f2.h + 'px'; lastW = vw(); lastH = vh(); }
+    }
+  }
+  // Re-fit (resize, rotation, remote screen change): the point that was under the previous view centre goes under the new view centre.
+  function refit() {
+    var w = vw(), h = vh(), ow = lastW > 0 ? lastW : w, oh = lastH > 0 ? lastH : h;
+    if (w > 0 && h > 0) place(zoom, ow / 2, oh / 2, w / 2, h / 2, parseFloat(canvas.style.width) || canvas.clientWidth, parseFloat(canvas.style.height) || canvas.clientHeight, ow, oh);
+  }
+  function zoomBy(k) { place(zoom * k, vw() / 2, vh() / 2); }
+  function layout() { scroller.style.top = bar.offsetHeight + 'px'; refit(); }
+  window.addEventListener('resize', layout); window.addEventListener('orientationchange', layout); layout();
+  // The bar wraps differently as its buttons change or the width changes: keep the scroller exactly below it.
+  if (window.ResizeObserver) new window.ResizeObserver(function () { if (scroller.style.top !== bar.offsetHeight + 'px') layout(); }).observe(bar);
+
+  function setState(text) { $('state').textContent = text; }
+  function showReconnect() { $('reconnect').style.display = live && !leaving ? '' : 'none'; }   // not while Back is ending the session
+
+  function stop(why) {
+    if (!live) return;
+    live = false;
+    clearInterval(tick);
+    try { if (desktop) desktop.Stop(); } catch (e) {}
+    desktop = null; publish(null);
+    scroller.style.display = 'none';
+    $('ended').style.display = 'block';
+    $('ended-text').textContent = why || 'The session has ended.';
+    setState('Ended'); $('left').textContent = '';
+    ['reconnect', 'zout', 'zin', 'fit', 'keyboard', 'cad', 'end'].forEach(function (id) { $(id).style.display = 'none'; });   // the Back button stays in every state
+    document.querySelector('meta[name=viewport]').setAttribute('content', 'width=device-width, initial-scale=1');
+    startReturn();
+  }
+
+  // Leaving this page. Back to Remote computers uses the browser history when the page was opened from there (so the Modules page comes back
+  // as it was), otherwise replaces this page: a dead desktop must never be what Back returns to.
+  var REMOTE_URL = '/modules#remote-computers', CHAT_URL = '/';
+  var backTimer = null;
+  function goBack(url) {
+    var plan = rdNav.backPlan(typeof document !== 'undefined' ? document.referrer : '', typeof location !== 'undefined' ? location.origin : '', typeof history !== 'undefined' ? history.length : 0, url);
+    if (plan === 'history') {
+      history.back();
+      backTimer = setTimeout(function () { location.replace(url); }, 800);   // the history step did not happen (cleared on pagehide)
+    } else location.replace(url);
+  }
+  window.addEventListener('pagehide', function () { if (backTimer) { clearTimeout(backTimer); backTimer = null; } });
+
+  // The ended panel: Back buttons, and a 5 s countdown back to Remote computers that Stay cancels.
+  var returnTimer = null, returnLeft = 0, returnStarted = false;
+  function startReturn() {
+    if (returnStarted) return;
+    returnStarted = true; returnLeft = 5;
+    var paint = function () { $('ended-count').textContent = 'Returning to Remote computers in ' + returnLeft + ' s'; };
+    paint();
+    returnTimer = setInterval(function () {
+      if (!returnTimer) return;
+      returnLeft--;
+      if (returnLeft <= 0) { clearInterval(returnTimer); returnTimer = null; goBack(REMOTE_URL); return; }
+      paint();
+    }, 1000);
+  }
+  $('ended-remote').addEventListener('click', function () { goBack(REMOTE_URL); });
+  $('ended-chat').addEventListener('click', function () { location.replace(CHAT_URL); });
+  $('ended-stay').addEventListener('click', function () {
+    if (returnTimer) { clearInterval(returnTimer); returnTimer = null; }
+    $('ended-count').style.display = 'none'; $('ended-stay').style.display = 'none';
+  });
+  // Back while the session is live: end it (3 s at most), then go. A failed or hung End says Leave first: the history step may keep this
+  // page in the back/forward cache, where pagehide sends nothing, and the computer must not stay locked for the hub's no-connection minute.
+  var leaving = false;
+  $('back').addEventListener('click', function () {
+    if (!sessionLive()) { goBack(REMOTE_URL); return; }
+    var b = $('back'); b.disabled = true; leaving = true;
+    var gone = false, ctl = null, t = null;
+    var go = function (ok) { if (gone) return; gone = true; if (t) clearTimeout(t); if (!ok) sendLeave(); leaveSent = true; goBack(REMOTE_URL); };   // a Forward from the cache reloads, never reconnects
+    try { if (typeof AbortController !== 'undefined') ctl = new AbortController(); } catch (x) { ctl = null; }
+    t = setTimeout(function () { try { if (ctl) ctl.abort(); } catch (x) {} go(false); }, 3000);
+    try { fetch(boot.endUrl, ctl ? { method: 'POST', credentials: 'include', signal: ctl.signal } : { method: 'POST', credentials: 'include' }).then(function (r) { go(!!(r && r.ok)); }, function () { go(false); }); } catch (x) { go(false); }
+  });
+
+  function countdown() {
+    var s = Math.ceil((Number(boot.until) - Date.now()) / 1000);
+    if (!(s > 0)) { stop('The session has ended.'); return; }
+    $('left').textContent = s > 60 ? Math.ceil(s / 60) + ' min left' : s + ' s left';
+  }
+  tick = setInterval(countdown, 1000); countdown();
+
+  // One random id per page load (22 base64url characters = 128 bits), the same for every Start of this page.
+  var viewerId = (function () {
+    var A = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_', out = '', i, b = null;
+    try { if (window.crypto && window.crypto.getRandomValues) b = window.crypto.getRandomValues(new Uint8Array(22)); } catch (x) { b = null; }
+    for (i = 0; i < 22; i++) out += A.charAt((b ? b[i] : Math.floor(Math.random() * 64)) & 63);
+    return out;
+  })();
+
+  function start() {
+    if (!live) return;
+    try { if (desktop) desktop.Stop(); } catch (e) {}
+    publish(null);
+    desktop = CreateAgentRedirect({ send: function () {} }, CreateAgentRemoteDesktop('Desk'), '', '', '', '/');
+    publish(desktop);
+    desktop.urlname = 'v/' + viewerId + '/meshrelay.ashx';   // this page's id is in the relay address: the hub ties "I am leaving" to this page's relays only
+    desktop.m.UseExtendedKeyFlag = true;
+    desktop.m.ImageType = 1; desktop.m.CompressionLevel = 40; desktop.m.ScalingLevel = 1024; desktop.m.FrameRateTimer = 50;
+    desktop.onStateChanged = function (o, st) {
+      if (!live) return;
+      if (st === 3) { setState('Connected'); $('reconnect').style.display = 'none'; }
+      else if (st === 0) { setState('Disconnected'); showReconnect(); }
+      else setState('Connecting');
+    };
+    desktop.m.onScreenSizeChange = function () { layout(); };
+    setState('Connecting');
+    desktop.Start(boot.nodeid);
+  }
+  $('reconnect').addEventListener('click', function () { $('reconnect').style.display = 'none'; start(); });
+
+  $('zout').addEventListener('click', function () { zoomBy(1 / 1.5); });
+  $('zin').addEventListener('click', function () { zoomBy(1.5); });
+  $('fit').addEventListener('click', function () { place(1, vw() / 2, vh() / 2); });
+  $('cad').addEventListener('click', function () { if (desktop) desktop.m.SendCtrlAltDelMsg(); });
+  $('keyboard').addEventListener('click', function () { if (document.activeElement === kb) kb.blur(); else kb.focus(); });
+  $('end').addEventListener('click', function () {
+    var b = $('end'); b.disabled = true;
+    fetch(boot.endUrl, { method: 'POST', credentials: 'include' }).then(function (r) {
+      if (r.ok) stop('The session has ended.'); else { b.disabled = false; setState('Could not end the session'); }
+    }, function () { b.disabled = false; setState('Could not end the session'); });
+  });
+
+  // Phones: no page zoom while the desktop is shown (set in the viewport meta above); the soft keyboard is a hidden input.
+  var keyEvt = function (name) {
+    return function (e) {
+      if (!live || !desktop || document.activeElement === kb) return;
+      if (e.target && e.target.closest && e.target.closest('#bar')) return;
+      desktop.m[name](e);
+      e.preventDefault();
+    };
+  };
+  document.addEventListener('keydown', keyEvt('handleKeyDown'));
+  document.addEventListener('keyup', keyEvt('handleKeyUp'));
+  document.addEventListener('keypress', keyEvt('handleKeys'));
+
+  kb.addEventListener('input', function () {
+    if (desktop && kb.value) desktop.m.SendStringUnicode(kb.value);
+    kb.value = '';
+  });
+  var special = function (down) {
+    return function (e) {
+      if (!desktop || (e.keyCode !== 8 && e.keyCode !== 13)) return;
+      desktop.m[down ? 'handleKeyDown' : 'handleKeyUp'](e); e.preventDefault();
+    };
+  };
+  kb.addEventListener('keydown', special(true));
+  kb.addEventListener('keyup', special(false));
+
+  // Mouse and touch positions are mapped by the page: the viewer script's SendMouseMsg ignores scroll and zoom, so each event is
+  // turned into a desktop pixel from the canvas's real on-screen rectangle, then into the pageX/pageY SendMouseMsg maps back to that pixel.
+  function send(name, cx, cy, button, buttons, which, wheel) {
+    if (!live || !desktop) return;
+    var rect = canvas.getBoundingClientRect ? canvas.getBoundingClientRect() : { left: 0, top: 0, width: canvas.clientWidth || canvas.width, height: canvas.clientHeight || canvas.height };
+    var d = rdView.toDesktop(rect, canvas.width, canvas.height, cx, cy);
+    var off = desktop.m.GetPositionOfControl ? desktop.m.GetPositionOfControl(canvas) : [0, 0];
+    var p = rdView.toPage(off, canvas.clientWidth || rect.width, canvas.clientHeight || rect.height, canvas.width, canvas.height, d.x, d.y);
+    desktop.m[name]({ pageX: p.pageX, pageY: p.pageY, clientX: cx, clientY: cy, button: button, buttons: buttons, which: which,
+      wheelDelta: wheel ? wheel.wheelDelta : 0, detail: wheel ? wheel.detail : 0, preventDefault: function () {}, stopPropagation: function () {}, target: canvas });
+  }
+  var sendBtn = function (name, x, y, button) { send(name, x, y, button, button === 2 ? 2 : 1, button + 1); };
+
+  // Mouse
+  ['mousedown', 'mouseup', 'mousemove'].forEach(function (n) {
+    canvas.addEventListener(n, function (e) { if (live && desktop && !e.__touch) { send(n, e.clientX, e.clientY, e.button, e.buttons, e.which); e.preventDefault(); } });
+  });
+  canvas.addEventListener('dblclick', function (e) { if (live && desktop) { send('mousedblclick', e.clientX, e.clientY, e.button, e.buttons, e.which); e.preventDefault(); } });
+  // On the scroller, so Ctrl+wheel / trackpad pinch over the black area zooms the viewer too. A plain wheel goes to the PC only over the
+  // canvas when the view cannot scroll; otherwise it pans.
+  scroller.addEventListener('wheel', function (e) {
+    if (!live || !desktop) return;
+    var box = scroller.getBoundingClientRect ? scroller.getBoundingClientRect() : { left: 0, top: 0 };
+    var k = e.deltaMode === 1 ? 16 : 1, dy = (e.deltaY || 0) * k, dx = (e.deltaX || 0) * k;
+    // A mouse notch (line mode, or a pixel step of 40 or more: 100 on most systems, 66-80 on Windows with display scaling) zooms one step of
+    // 1.15x; a trackpad's small steps (typically 1-20) zoom smoothly, never by more than one smooth step of 40.
+    var notch = e.deltaMode === 1 || Math.abs(e.deltaY || 0) >= 40;
+    if (e.ctrlKey) place(zoom * (notch ? (dy < 0 ? 1.15 : dy > 0 ? 1 / 1.15 : 1) : Math.exp(-Math.max(-40, Math.min(40, dy)) * 0.01)), e.clientX - box.left, e.clientY - box.top);
+    else if (!(inCanvas(e) && scroller.scrollWidth <= scroller.clientWidth && scroller.scrollHeight <= scroller.clientHeight)) { scroller.scrollLeft += dx; scroller.scrollTop += dy; }
+    else send('mousewheel', e.clientX, e.clientY, 0, 0, 0, { wheelDelta: typeof e.wheelDelta === 'number' ? e.wheelDelta : (dy > 0 ? -120 : dy < 0 ? 120 : 0), detail: e.detail || 0 });
+    e.preventDefault();
+  }, { passive: false });
+  canvas.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+
+  // Touch (Pointer Events). One finger: tap = left click, drag = move with the left button held, long press = right click.
+  // Two fingers: pinch zooms about the midpoint, moving the midpoint pans; a two-finger double tap toggles 1x / 2x.
+  var pts = {}, touch = null, pinch = null, pendingTap = null, lastTap = null;
+  var count = function () { return Object.keys(pts).length; };
+  var dist = function (a, b) { return Math.sqrt((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y)); };
+  function inCanvas(e) { var r = canvas.getBoundingClientRect(); return e.clientX >= r.left && e.clientX <= r.left + r.width && e.clientY >= r.top && e.clientY <= r.top + r.height; }
+  function pair() { var k = Object.keys(pts); return [pts[k[0]], pts[k[1]]]; }
+  function mid(p) { return { x: (p[0].x + p[1].x) / 2, y: (p[0].y + p[1].y) / 2 }; }
+  function cancelTouch() {
+    if (!touch) return;
+    clearTimeout(touch.timer);
+    if (touch.dragging && desktop) sendBtn('mouseup', touch.last.x, touch.last.y, 0);
+    touch = null;
+  }
+  // End every touch at once (a lost pointer, the page hidden, the window blurred): release a held button, forget all fingers.
+  function endAll() { cancelTouch(); pts = {}; pinch = null; pendingTap = null; gesturing = false; }
+  function lostFocus() {
+    endAll();
+    try { if (desktop && desktop.m.handleReleaseKeys) desktop.m.handleReleaseKeys(); } catch (x) {}
+  }
+  // Leaving and coming back. Closing the page (or the tab/app being discarded) says Leave, so the computer is not locked for the rest of
+  // the 30 minutes (the hub ends the session 10 s after the last connection closes); the hub also ends a session that has had no connection for a minute. An app switch (visibilitychange) never ends it.
+  function sessionLive() { return live && Number(boot.until) > Date.now(); }
+  var leaveSent = false;
+  function sendLeave() {
+    // "Leave", not End: a reload or a second viewer of the same session must not cut it; the hub ends it after a short grace if nobody returns.
+    var leaveUrl = boot.leaveUrl || String(boot.endUrl || '').replace(/\/end$/, '/leave');
+    leaveUrl += '?viewer=' + viewerId;
+    leaveSent = true;
+    var sent = false;
+    try { if (typeof navigator !== 'undefined' && navigator.sendBeacon) sent = !!navigator.sendBeacon(leaveUrl); } catch (x) { sent = false; }
+    if (!sent) { try { fetch(leaveUrl, { method: 'POST', credentials: 'include', keepalive: true }).then(function () {}, function () {}); } catch (x) {} }
+  }
+  window.addEventListener('pagehide', function (e) {
+    if ((e && e.persisted === true) || !sessionLive()) return;   // back/forward cache: the page may return, the hub's grace covers it
+    sendLeave();
+  });
+  // Back on the page (or restored from the cache) with the connection gone: connect again while the hub still keeps the session.
+  // At most 2 automatic restarts in 10 s (a session that has ended fails at once): after that the Reconnect button is the way.
+  var autoStarts = [];
+  function comeBack() {
+    if (!sessionLive() || (desktop && desktop.State !== 0)) return;
+    var t = Date.now();
+    autoStarts = autoStarts.filter(function (x) { return t - x < 10000; });
+    if (autoStarts.length >= 2) return;
+    autoStarts.push(t);
+    $('reconnect').style.display = 'none';
+    start();
+  }
+  document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'hidden') lostFocus(); else if (document.visibilityState === 'visible') comeBack(); });
+  // Restored from the cache after it had said Leave (or after the session ended): load the page again, the hub then serves the live
+  // page (within its grace) or the ended page, never a frozen one.
+  window.addEventListener('pageshow', function (e) {
+    if (!(e && e.persisted === true)) return;
+    if (leaveSent || !sessionLive()) { location.reload(); return; }
+    comeBack();
+  });
+  window.addEventListener('blur', lostFocus);
+  var gesturing = false, gz = 1;   // Safari's own pinch events; while one runs the pointer pinch must not zoom a second time
+  scroller.addEventListener('gesturestart', function (e) { e.preventDefault(); gesturing = true; gz = zoom; cancelTouch(); });
+  scroller.addEventListener('gesturechange', function (e) {
+    e.preventDefault();
+    if (!live || !desktop || !(e.scale > 0)) return;
+    var box = scroller.getBoundingClientRect();
+    place(gz * e.scale, (e.clientX || 0) - box.left, (e.clientY || 0) - box.top);
+  });
+  scroller.addEventListener('gestureend', function (e) { e.preventDefault(); gesturing = false; });
+  scroller.addEventListener('pointerdown', function (e) {
+    if (e.pointerType === 'mouse' || !live || !desktop) return;
+    if (e.isPrimary === true) endAll();   // a new first finger: anything earlier is a ghost (its up/cancel never arrived)
+    if (pts[e.pointerId]) return;
+    var n = count();
+    // Every finger is registered. Only a lone finger inside the canvas may operate the mouse; any second finger makes it a view gesture.
+    pts[e.pointerId] = { x: e.clientX, y: e.clientY, ignored: n > 0 || !inCanvas(e) };
+    try { scroller.setPointerCapture(e.pointerId); } catch (x) {}
+    e.preventDefault();
+    if (n >= 1) {
+      cancelTouch();
+      pendingTap = null;
+      if (n === 1) {
+        var p = pair(), m = mid(p);
+        pinch = { t: Date.now(), d: dist(p[0], p[1]), z: zoom, mx: m.x, my: m.y, a: { x: p[0].x, y: p[0].y }, b: { x: p[1].x, y: p[1].y }, tapOk: true };
+      }
+      return;
+    }
+    if (pts[e.pointerId].ignored) return;
+    touch = { id: e.pointerId, x: e.clientX, y: e.clientY, moved: false, dragging: false, right: false, last: { x: e.clientX, y: e.clientY } };
+    touch.timer = setTimeout(function () {
+      if (!touch || touch.moved) return;
+      touch.right = true;
+      sendBtn('mousedown', touch.last.x, touch.last.y, 2); sendBtn('mouseup', touch.last.x, touch.last.y, 2);
+    }, 600);
+  });
+  scroller.addEventListener('pointermove', function (e) {
+    var q = pts[e.pointerId];
+    if (!q || !desktop) return;
+    var before = pinch && mid(pair()), d0 = pinch && dist.apply(null, pair());
+    q.x = e.clientX; q.y = e.clientY;
+    if (pinch && count() === 2) {
+      var p = pair(), m = mid(p), d = dist(p[0], p[1]), box = scroller.getBoundingClientRect();
+      if (dist(p[0], pinch.a) > 12 || dist(p[1], pinch.b) > 12) pinch.tapOk = false;
+      if (pinch.d > 0 && !gesturing) place(pinch.z * d / pinch.d, before.x - box.left, before.y - box.top, m.x - box.left, m.y - box.top);
+      e.preventDefault(); return;
+    }
+    if (!touch || e.pointerId !== touch.id) return;
+    touch.last = { x: e.clientX, y: e.clientY };
+    if (!touch.moved && Math.abs(e.clientX - touch.x) + Math.abs(e.clientY - touch.y) < 8) return;
+    if (touch.right) return;
+    touch.moved = true; clearTimeout(touch.timer);
+    if (!touch.dragging) { touch.dragging = true; sendBtn('mousemove', touch.x, touch.y, 0); sendBtn('mousedown', touch.x, touch.y, 0); }
+    sendBtn('mousemove', e.clientX, e.clientY, 0);
+    e.preventDefault();
+  });
+  function pointerEnd(e) {
+    if (!pts[e.pointerId]) return;
+    delete pts[e.pointerId];
+    e.preventDefault();
+    if (pinch) {
+      var g = pinch; pinch = null;
+      if (g.tapOk && e.type === 'pointerup' && Date.now() - g.t < 250) pendingTap = { t: Date.now(), x: g.mx, y: g.my };
+    } else if (touch && e.pointerId === touch.id) {
+      clearTimeout(touch.timer);
+      var t = touch; touch = null;
+      if (!desktop || !live || t.right) return;
+      if (t.dragging) sendBtn('mouseup', e.type === 'pointerup' ? e.clientX : t.last.x, e.type === 'pointerup' ? e.clientY : t.last.y, 0);
+      else if (e.type === 'pointerup') { sendBtn('mousemove', e.clientX, e.clientY, 0); sendBtn('mousedown', e.clientX, e.clientY, 0); sendBtn('mouseup', e.clientX, e.clientY, 0); }
+    }
+    if (count() === 0 && pendingTap) {
+      var tap = pendingTap; pendingTap = null;
+      if (lastTap && tap.t - lastTap.t <= 300 && dist(tap, lastTap) < 40) {
+        var box = scroller.getBoundingClientRect();
+        place(zoom < 1.5 ? 2 : 1, tap.x - box.left, tap.y - box.top); lastTap = null;
+      } else lastTap = tap;
+    }
+  }
+  scroller.addEventListener('pointerup', pointerEnd);
+  scroller.addEventListener('pointercancel', pointerEnd);
+  scroller.addEventListener('lostpointercapture', function (e) { if (e.target && e.target !== scroller) return; pointerEnd(e); });   // only the scroller's own capture, not one bubbling from the canvas
+
+  start();
+})();
+</script>
+</body>
+</html>

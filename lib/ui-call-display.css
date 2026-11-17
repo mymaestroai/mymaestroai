@@ -12,6 +12,10 @@
 /* overflow stays visible: the character's edge glow runs past the host (the stage clips it). The host's bottom edge rises above the caption band while a character is shown with a caption (--ucd-caption-reserve is set by ui-call-display.js: measured caption height + 12px offset + 8px gap) */
 .ucd-host { position: absolute; inset: 0 0 var(--ucd-caption-reserve, 0px) 0; z-index: 0; overflow: visible; display: flex; align-items: center; justify-content: center; }
 .ucd-host > canvas, .ucd-host > video, .ucd-host > div { max-width: 100%; max-height: 100%; }
+.ucd-head { position: absolute; z-index: 1; top: 10px; left: 12px; display: flex; align-items: center; gap: 6px; max-width: calc(100% - 24px - 9.5em); }
+.ucd-head .ucd-status { position: static; flex: 0 0 auto; min-width: 0; max-width: 11em; box-sizing: border-box; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }   /* the status keeps its full width (the name shrinks first); a very long status (a wake phrase) is cut at 11em, never pushing the name out */
+.ucd-who { flex: 0 1 auto; min-width: 4.5em; max-width: 22em; box-sizing: border-box; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 13px; font-weight: 600; padding: 4px 10px; border-radius: 999px; background: rgba(0, 0, 0, .35); color: #fff; }
+.ucd-who[hidden] { display: none; }
 .ucd-status { position: absolute; z-index: 1; top: 10px; left: 12px; font-size: 14px; font-weight: 600; padding: 4px 10px; border-radius: 999px; background: rgba(0, 0, 0, .35); color: #fff; }
 .ucd-note { position: absolute; z-index: 1; top: 44px; left: 12px; right: 12px; font-size: 12px; color: #fff; opacity: .85; text-shadow: 0 1px 2px rgba(0, 0, 0, .6); }
 .ucd-note[hidden], .ucd-caption[hidden], .ucd-caption:empty { display: none; }
@@ -38,18 +42,21 @@
 .ucd-drawer .voice-callbar, .ucd-drawer .voice-pop, .ucd-drawer #call-panel, .ucd-drawer #voice-panel { position: static; display: block; width: auto; max-width: none; max-height: none; overflow: visible; box-shadow: none; margin: 0; }
 .ucd-drawer .voice-pop[hidden], .ucd-drawer #voice-panel[hidden], .ucd-drawer #call-panel[hidden] { display: block; }
 .ucd-bar { flex: 0 0 auto; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; justify-content: space-between; padding: 10px 12px; background: var(--bg-card, #181d24); border-top: 1px solid var(--border, #2a313b); }
-.ucd-main { display: flex; gap: 10px; flex: 1 1 320px; }
-.ucd-side { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+/* Mute + Hang up fill their own full-width row at every width (the slot wraps to a row above them); the side buttons wrap to a row below */
+.ucd-main { display: flex; flex-wrap: wrap; gap: 10px; flex: 1 1 100%; }
+.ucd-side { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; width: 100%; }
 .ucd-bar button { font: inherit; cursor: pointer; border: 1px solid var(--border, #2a313b); border-radius: 14px; color: var(--text, #e8ecf1); background: var(--bg-input, #222831); }
-.ucd-bar .ucd-talk, .ucd-bar .ucd-hang { flex: 1; min-height: 64px; font-size: 20px; font-weight: 700; padding: 0 22px; }
-.ucd-bar .ucd-talk { background: var(--accent, #3d7bff); border-color: transparent; color: #fff; }
-/* the slot button keeps its place so Hang up never moves; off = invisible and inert (ui-call-display.js sets data-ucd-off and data-ucd-mode) */
-.ucd-bar .ucd-talk[data-ucd-off] { visibility: hidden; pointer-events: none; }
+.ucd-bar .ucd-talk, .ucd-bar .ucd-hang { min-height: 64px; font-size: 20px; font-weight: 700; padding: 0 22px; }
+/* the slot is its own full-width row above Mute / Hang up when shown (the bar is bottom-anchored, so it grows upward) */
+.ucd-bar .ucd-talk { flex: 1 1 100%; background: var(--accent, #3d7bff); border-color: transparent; color: #fff; }
+/* off = takes no space at all, so Mute and Hang up never move (ui-call-display.js sets data-ucd-off and data-ucd-mode) */
+.ucd-bar .ucd-talk[data-ucd-off] { display: none; }
 .ucd-bar .ucd-talk[data-ucd-mode="mic"] { font-size: 16px; }
 .ucd-bar .ucd-disp { display: inline-flex; align-items: center; gap: 6px; min-height: 48px; padding: 0 10px; border: 1px solid var(--border, #2a313b); border-radius: 14px; background: var(--bg-input, #222831); font-size: 15px; }
 .ucd-bar .ucd-display { font: inherit; min-height: 36px; max-width: 12em; color: var(--text, #e8ecf1); background: var(--bg-input, #222831); border: 1px solid var(--border, #2a313b); border-radius: 8px; }
+.ucd-bar .ucd-mute, .ucd-bar .ucd-hang { flex: 1 1 0; min-width: 0; }   /* equal halves of the row (Hang up alone fills it when Mute is hidden) */
 .ucd-bar .ucd-hang { background: var(--error, #e5484d); border-color: transparent; color: #fff; }
-.ucd-bar .ucd-mute { flex: 0 0 auto; min-width: 100px; min-height: 64px; font-size: 18px; font-weight: 700; padding: 0 12px; }   /* min-width: "Mute" and "Unmute" take the same room, so Hang up never moves */
+.ucd-bar .ucd-mute { min-height: 64px; font-size: 20px; font-weight: 700; padding: 0 22px; }   /* text and padding the same as Hang up's */
 .ucd-bar .ucd-mute[hidden] { display: none; }
 .ucd-bar .ucd-mute[aria-pressed="true"] { background: #9b1c1c; border-color: #ffb4b4; color: #fff; box-shadow: inset 0 0 0 2px rgba(255, 255, 255, .35); }   /* muted: a pressed red, darker than Hang up */
 @media (max-width: 400px) { .ucd-bar .ucd-talk, .ucd-bar .ucd-hang, .ucd-bar .ucd-mute { padding: 0 12px; font-size: 18px; } }   /* Interrupt slot, Mute and Hang up fit on a 360 px phone */
@@ -81,7 +88,7 @@
 body:has(> .ucd-overlay) .voice-sheet.open { z-index: 10005; }
 .vp-display-note { font-size: 12px; color: var(--text-dim, #98a2b3); margin: 2px 0 0; }
 .vp-display-note:empty { display: none; }
-@media (max-width: 560px) { .ucd-main { flex-basis: 100%; } .ucd-side { width: 100%; justify-content: space-between; } }
+@media (max-width: 560px) { .ucd-side { width: 100%; justify-content: space-between; } }   /* narrow: the side buttons spread across their row */
 /* docked (the chat layout of a call: a display of None, Back to chat, a character still loading; lib/ui-call-display.js dockOn): the same root sits in the chat where the page's bottom bar was, for the length of
    the call: a slim status line (and the recording badge), the Controls drawer opening upward, the bar. The page's bar is hidden meanwhile. */
 [data-ucd-replaced] { display: none !important; }
@@ -89,6 +96,8 @@ body:has(> .ucd-overlay) .voice-sheet.open { z-index: 10005; }
   padding: 0; }   /* in the page's flow: the page's own layout (the phone's tab bar) keeps the safe area, as for the bar it replaces */
 .ucd-docked .ucd-stage { flex: 0 0 auto; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; overflow: visible; min-height: 0; padding: 6px 12px; background: transparent; }
 .ucd-docked .ucd-status { position: static; }
+.ucd-docked .ucd-head { position: static; max-width: 60%; }
+.ucd-docked .ucd-who { color: var(--text, #e8ecf1); background: var(--bg-input, rgba(255, 255, 255, .08)); }
 .ucd-docked .ucd-stage > .ucd-rec { position: static; margin-left: auto; }
 .ucd-docked .ucd-host, .ucd-docked .ucd-note, .ucd-docked .ucd-caption, .ucd-docked .ucd-bar .ucd-back, .ucd-docked .ucd-bar .ucd-caps { display: none !important; }
 /* the character download's line (ui-call-display.js): small, under the status pill and note, inside the stage so it never reaches the call bar's Hang up */

@@ -154,8 +154,8 @@ test('prefs: both pages carry the same cleaner and default (the synced lib block
     assert.ok(/VOICE_DEFAULT_PREFS = \{[^}]*loudness: 'louder', loudnessBt: 'normal'[^}]*\}/.test(src), name + ' default');   // changed: both defaults
     assert.ok(src.includes("if (typeof raw.loudness === 'string' && Object.prototype.hasOwnProperty.call(VOICE_LOUDNESS, raw.loudness)) p.loudness = raw.loudness;"), name + ' cleaner');
     const fn = between(src, 'function voiceCleanPrefs(raw) {', '// The wake phrase of an agent');
-    const run = new Function('VOICE_DEFAULT_PREFS', 'VOICE_LOUDNESS', 'VOICE_END_PAUSES', 'VOICE_CONTINUE_WAITS', 'VOICE_ECHO_HOLDS', 'VOICE_WAKE_QUIET_MS', 'voiceCleanSpeed', 'voiceCleanWakePhrase', 'voiceEchoHoldOk', 'VOICE_ECHO_HOLD_IOS', 'VOICE_DEVICE_DEFAULT_KEYS',
-      fn + '; return voiceCleanPrefs;')({ micLevel: 50, loudness: 'louder', loudnessBt: 'normal' }, V.VOICE_LOUDNESS, V.VOICE_END_PAUSES, V.VOICE_CONTINUE_WAITS, V.VOICE_ECHO_HOLDS, V.VOICE_WAKE_QUIET_MS, V.voiceCleanSpeed, V.voiceCleanWakePhrase, V.voiceEchoHoldOk, V.VOICE_ECHO_HOLD_IOS, V.VOICE_DEVICE_DEFAULT_KEYS);
+    const run = new Function('VOICE_DEFAULT_PREFS', 'VOICE_LOUDNESS', 'VOICE_END_PAUSES', 'VOICE_CONTINUE_WAITS', 'VOICE_ECHO_HOLDS', 'VOICE_WAKE_QUIET_MS', 'voiceCleanSpeed', 'voiceCleanWakePhrase', 'voiceEchoHoldOk', 'VOICE_ECHO_HOLD_IOS', 'VOICE_DEVICE_DEFAULT_KEYS', 'VOICE_DETAILS_READ_WORDS', 'VOICE_HUB_CUES', 'VOICE_BACKGROUND_CUES',
+      fn + '; return voiceCleanPrefs;')({ micLevel: 50, loudness: 'louder', loudnessBt: 'normal' }, V.VOICE_LOUDNESS, V.VOICE_END_PAUSES, V.VOICE_CONTINUE_WAITS, V.VOICE_ECHO_HOLDS, V.VOICE_WAKE_QUIET_MS, V.voiceCleanSpeed, V.voiceCleanWakePhrase, V.voiceEchoHoldOk, V.VOICE_ECHO_HOLD_IOS, V.VOICE_DEVICE_DEFAULT_KEYS, V.VOICE_DETAILS_READ_WORDS, V.VOICE_HUB_CUES, V.VOICE_BACKGROUND_CUES);
     assert.strictEqual(run({ loudness: 'loudest' }).loudness, 'loudest', name);
     assert.strictEqual(run({ loudness: 'x' }).loudness, 'louder', name);
     assert.strictEqual(run({}).loudness, 'louder', name);
@@ -361,8 +361,8 @@ test('prefs: loudnessBt defaults to normal, is kept and cleaned (lib, both pages
   assert.strictEqual(V.voiceCleanPrefs({ loudness: 'loudest', loudnessBt: 'louder' }).loudness, 'loudest', 'independent');
   for (const [name, src] of [['app.js', app], ['mobile.js', mob]]) {
     const fn = between(src, 'function voiceCleanPrefs(raw) {', '// The wake phrase of an agent');
-    const run = new Function('VOICE_DEFAULT_PREFS', 'VOICE_LOUDNESS', 'VOICE_END_PAUSES', 'VOICE_CONTINUE_WAITS', 'VOICE_ECHO_HOLDS', 'VOICE_WAKE_QUIET_MS', 'voiceCleanSpeed', 'voiceCleanWakePhrase', 'voiceEchoHoldOk', 'VOICE_ECHO_HOLD_IOS', 'VOICE_DEVICE_DEFAULT_KEYS',
-      fn + '; return voiceCleanPrefs;')({ loudness: 'louder', loudnessBt: 'normal' }, V.VOICE_LOUDNESS, V.VOICE_END_PAUSES, V.VOICE_CONTINUE_WAITS, V.VOICE_ECHO_HOLDS, V.VOICE_WAKE_QUIET_MS, V.voiceCleanSpeed, V.voiceCleanWakePhrase, V.voiceEchoHoldOk, V.VOICE_ECHO_HOLD_IOS, V.VOICE_DEVICE_DEFAULT_KEYS);
+    const run = new Function('VOICE_DEFAULT_PREFS', 'VOICE_LOUDNESS', 'VOICE_END_PAUSES', 'VOICE_CONTINUE_WAITS', 'VOICE_ECHO_HOLDS', 'VOICE_WAKE_QUIET_MS', 'voiceCleanSpeed', 'voiceCleanWakePhrase', 'voiceEchoHoldOk', 'VOICE_ECHO_HOLD_IOS', 'VOICE_DEVICE_DEFAULT_KEYS', 'VOICE_DETAILS_READ_WORDS', 'VOICE_HUB_CUES', 'VOICE_BACKGROUND_CUES',
+      fn + '; return voiceCleanPrefs;')({ loudness: 'louder', loudnessBt: 'normal' }, V.VOICE_LOUDNESS, V.VOICE_END_PAUSES, V.VOICE_CONTINUE_WAITS, V.VOICE_ECHO_HOLDS, V.VOICE_WAKE_QUIET_MS, V.voiceCleanSpeed, V.voiceCleanWakePhrase, V.voiceEchoHoldOk, V.VOICE_ECHO_HOLD_IOS, V.VOICE_DEVICE_DEFAULT_KEYS, V.VOICE_DETAILS_READ_WORDS, V.VOICE_HUB_CUES, V.VOICE_BACKGROUND_CUES);
     assert.strictEqual(run({ loudnessBt: 'loudest' }).loudnessBt, 'loudest', name);
     assert.strictEqual(run({ loudnessBt: 'x' }).loudnessBt, 'normal', name);
     assert.strictEqual(run({}).loudnessBt, 'normal', name);
@@ -381,10 +381,10 @@ test('desktop: a mid-call switch - ui.mic with a Bluetooth label drops the chain
   const ctx = fakeCtx();
   const S = { call: {}, micLabel: '', micLine: '', vad: null };
   const prefs = { loudness: 'louder', loudnessBt: 'normal' };
-  const micFn = between(app, '          mic: (info) => { const t = voiceMicLineText(info);', '   // which microphone is open').trim().replace(/,\s*$/, '');
-  const env = new Function('voiceCallS', 'voicePrefsNow', 'VOICE_LOUDNESS', 'voiceCreateLoudness', 'voiceOutputKind', 'voiceLoudnessFor', 'voiceDisp', 'voicePlay', 'window', 'voiceMicLineText', 'barEl',
+  const micFn = between(app, '          mic: (info) => { const t = voiceMicLineText(info) + voiceRouteSuffix(voiceCallS.route);', '   // which microphone is open').trim().replace(/,\s*$/, '');
+  const env = new Function('voiceCallS', 'voicePrefsNow', 'VOICE_LOUDNESS', 'voiceCreateLoudness', 'voiceOutputKind', 'voiceLoudnessFor', 'voiceDisp', 'voicePlay', 'window', 'voiceMicLineText', 'barEl', 'voiceRouteSuffix',
     desk() + '; return { voiceOutNode, voiceLoudApply, voiceLoudnessNow, voiceOutputNow, voiceOutputOnDeviceChange, ui: { ' + micFn + ' } };')(
-    S, () => prefs, V.VOICE_LOUDNESS, V.voiceCreateLoudness, V.voiceOutputKind, V.voiceLoudnessFor, { cur: null }, { ctx }, {}, (i) => (i && i.label) || '', () => null);
+    S, () => prefs, V.VOICE_LOUDNESS, V.voiceCreateLoudness, V.voiceOutputKind, V.voiceLoudnessFor, { cur: null }, { ctx }, {}, (i) => (i && i.label) || '', () => null, () => '');
   env.voiceOutNode(ctx);
   const chain = ctx.__voiceLoudness;
   assert.strictEqual(chain.gainDb, 9, 'unknown mic: the speaker level');

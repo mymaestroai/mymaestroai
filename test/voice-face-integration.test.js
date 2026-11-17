@@ -364,7 +364,8 @@ test('both pages carry the same wiring: same hooks, same events, same send field
   each(/floor\.wrap\(h\)/, 'Talk floor wraps the VAD handlers'); each(/voiceDispEnd\(true\)/, 'goodbye on hang-up'); each(/voiceDispEnd\(false\)/, 'immediate release');
   each(/function voiceFacePackBody\(\)/, 'facePack body helper'); each(/voiceCallSseMood/, 'stream mood'); each(/turn_mood/, 'hub mood event');
   each(/CallDisplay\.fetchFaces/, 'installed packs (and the downloadable ones) from the server'); each(/hub-voice-display|CallDisplay\.saveDisplayPrefs/, 'device choice saved through the shared module');
-  assert.ok(/'turn_start', 'turn_delta', 'turn_activity', 'turn_end', 'ask_user', 'ask_user_done', 'voice_held', 'voice_held_done', 'voice_call'\]\) \{/.test(app), 'the existing subscription list is unchanged; turn_mood has its own line');
+  // 'for_owner' joined the list with the hub-started-turns change (a call cues a hub turn marked for the owner); turn_mood still has its own line
+  assert.ok(/'turn_start', 'turn_delta', 'turn_activity', 'turn_end', 'for_owner', 'ask_user', 'ask_user_done', 'voice_held', 'voice_held_done', 'voice_call'\]\) \{/.test(app), 'the existing subscription list is unchanged apart from for_owner; turn_mood has its own line');
   assert.ok(/on\('turn_mood', voiceCallTurnMood\)/.test(mob) && /source\.addEventListener\('turn_mood'/.test(app));
   assert.ok(/case 'voice_mood':/.test(mob) && /oc2\.type === 'voice_mood'/.test(app));
   const BEGIN = '// ── voice call (begin) ──', END = '// ── voice call (end) ──';

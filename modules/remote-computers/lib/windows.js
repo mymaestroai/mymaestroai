@@ -1,10 +1,16 @@
 'use strict';
-// PowerShell for Windows computers, as pure functions. Every script travels as ONE line, sent with runcommands type 2: the agent starts
-// powershell.exe -noprofile -nologo -command - and writes "<cmds>\r\nexit\r\n" to its stdin (agents/meshcore.js:1974-2038, the type 2 branch at :2005-2018),
-// so the line is
-//   iex ([Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('<base64 of the UTF-16LE script>')))
-// There is no cmd.exe in the way (cmd takes about 8191 characters per line) and no multi-line quirks. Caller text never goes into a script as text:
-// it is either base64 that the script decodes (type, run) or an integer / a fixed word from a list that this file checks first (everything else).
+// PowerShell for Windows computers, as pure functions. Every action is ONE line of plain, readable PowerShell (statements joined with "; "), sent with
+// runcommands type 2: the agent starts powershell.exe -noprofile -nologo -command - and writes "<cmds>\r\nexit\r\n" to its stdin
+// (agents/meshcore.js:1974-2038, the type 2 branch at :2005-2018). There is no cmd.exe in the way (cmd takes about 8191 characters per line), no script file
+// of ours is written to the computer (Add-Type still compiles the C# helper through temporary files, as PowerShell always does), and the line has no line break.
+// Why plain: Microsoft Defender's AMSI blocks "iex over Base64-decoded text" (an old obfuscation pattern) intermittently, with
+// ScriptContainedMaliciousContent. So there is no iex, no Invoke-Expression, no FromBase64String and no -EncodedCommand here. Caller text becomes a quoted
+// literal built from plain pieces (psLiteral): it is never decoded and never evaluated. The one exception is run's own command, which the caller wants
+// executed: it is a literal too, handed to [scriptblock]::Create and dot-sourced (runLine). Everything else is an integer or a fixed word that this file
+// checks first.
+// Screenshots are NOT here: a PowerShell screenshot script (System.Drawing CopyFromScreen, then Base64 text out) looks like PowerShell Empire's
+// Get-Screenshot and Defender flags it as HackTool:PowerShell/EmpireGetScreenshot.C. The picture comes through MeshCentral's remote-desktop channel
+// instead (lib/kvmshot.js), with no PowerShell at all.
 
 const MAX_LINE = 60000;
 const MAX_TYPE_CHARS = 2000;
@@ -14,11 +20,50 @@ class WindowsError extends Error {
   constructor(message, code) { super(message); this.name = 'WindowsError'; this.code = code || 'EBADARG'; }
 }
 
-function encodePs(script) {
+// A PowerShell expression whose value is exactly `text`. Printable ASCII only: the single-quoted string ('' for a quote). Anything else: a FLAT list,
+// (-join @('run','run',[char]0x2018,...)), one piece per ASCII run or per other UTF-16 code unit. A long '+' chain would nest as deep as it is long and
+// can overflow PowerShell's recursive parser; a list is one level. Curly quotes, $, backtick, # and line breaks all travel as [char]. Empty text is ''.
+function psLiteral(text) {
+  const s = String(text);
+  if (!s) return "''";
+  const quote = (r) => "'" + r.replace(/'/g, "''") + "'";
+  if (/^[\x20-\x7e]+$/.test(s)) return quote(s);
+  const parts = [];
+  let run = '';
+  const flush = () => { if (run) { parts.push(quote(run)); run = ''; } };
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c >= 0x20 && c <= 0x7e) run += s[i];
+    else { flush(); parts.push('[char]0x' + c.toString(16).toUpperCase().padStart(4, '0')); }
+  }
+  flush();
+  return '(-join @(' + parts.join(',') + '))';
+}
+
+// The line to send: the script already joined into one line. Nothing is changed.
+function plainLine(script) {
   if (typeof script !== 'string' || !script) throw new WindowsError('A script is needed.');
-  const line = `iex ([Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('${Buffer.from(script, 'utf16le').toString('base64')}')))`;
-  if (line.length > MAX_LINE) throw new WindowsError('That is too long to send in one command.', 'ETOOLONG');
-  return line;
+  if (/[\r\n]/.test(script)) throw new WindowsError('A script line must not contain a line break.', 'EBADARG');
+  if (script.length > MAX_LINE) throw new WindowsError('That is too long to send in one command.', 'ETOOLONG');
+  return script;
+}
+
+// The line for the run tool: the caller's command is a literal that becomes a script block and is dot-sourced (the scope iex used to give).
+function runLine(command) {
+  const line = `$ProgressPreference = 'SilentlyContinue'; [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; . ([scriptblock]::Create(${psLiteral(command)}))`;
+  if (line.length > MAX_LINE) throw new WindowsError(`That command is too long to send (${MAX_LINE} characters on the line; characters outside plain English count about 12 each). Split it up.`, 'ETOOLONG');
+  return plainLine(line);
+}
+
+// True when Defender (AMSI) blocked what was sent. strict (for run, whose output is the caller's own and may quote the message, for example while
+// reading Defender's logs): only PowerShell's own error record for the block counts.
+const AV_RECORD = /(?:^|\n)[ \t]*\+[ \t]*FullyQualifiedErrorId[ \t]*:[ \t]*ScriptContainedMaliciousContent\b/;
+const STRICT_CREATE = /(?:^|\n)Exception calling "Create" with "1" argument\(s\): "This script contains malicious content and has been blocked by your antivirus software/;
+function blockedByAntivirus(output, { strict = false } = {}) {
+  const s = String(output == null ? '' : output).replace(/\u001b\[[0-9;?]*[ -\/]*[@-~]/g, '');   // colour codes around the error record
+  if (AV_RECORD.test(s)) return true;
+  if (strict) return STRICT_CREATE.test(s);
+  return s.includes('ScriptContainedMaliciousContent') || /contains malicious content and has been blocked by your antivirus software/i.test(s);
 }
 
 const int = (v, name, min, max) => {
@@ -27,10 +72,6 @@ const int = (v, name, min, max) => {
 };
 
 // The C# helper compiled on the computer. Only what the scripts below use.
-const DPI_CS = `
-using System; using System.Runtime.InteropServices;
-public class MMDpi { [DllImport("user32.dll")] public static extern bool SetProcessDPIAware(); }
-`;
 const INPUT_CS = `
 using System; using System.Runtime.InteropServices; using System.Threading;
 public class MMIn {
@@ -48,60 +89,36 @@ public class MMIn {
   public static void Pause(int ms) { Thread.Sleep(ms); }
 }
 `;
-const here = (cs) => `Add-Type -TypeDefinition @'\n${cs.trim()}\n'@`;
+const here = (cs) => `Add-Type -TypeDefinition ${psLiteral(cs.replace(/\s+/g, ' ').trim())}`;
 
 const SCREEN_CHANGED = 'The screen changed since that screenshot; take a new one.';
 // The live primary screen must be the size it was when the screenshot was taken (the click position was worked out from that size).
-const screenCheck = (sw, sh) => `Add-Type -AssemblyName System.Windows.Forms
-$mmb = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-if ($mmb.Width -ne ${sw} -or $mmb.Height -ne ${sh}) { throw "${SCREEN_CHANGED}" }
-if ($mmx -lt 0 -or $mmy -lt 0 -or $mmx -ge $mmb.Width -or $mmy -ge $mmb.Height) { throw "That place is outside the screen." }`;
+const screenCheck = (sw, sh) => [
+  'Add-Type -AssemblyName System.Windows.Forms',
+  '$mmb = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds',
+  `if ($mmb.Width -ne ${sw} -or $mmb.Height -ne ${sh}) { throw "${SCREEN_CHANGED}" }`,
+  'if ($mmx -lt 0 -or $mmy -lt 0 -or $mmx -ge $mmb.Width -or $mmy -ge $mmb.Height) { throw "That place is outside the screen." }',
+].join('; ');
 
 const head = ['$ErrorActionPreference = \'Stop\'', '$ProgressPreference = \'SilentlyContinue\''];
 const tail = ['Write-Output \'' + OK_LINE + '\''];
-const script = (...parts) => [...head, ...parts, ...tail].join('\n');
+const script = (...parts) => [...head, ...parts, ...tail].join('; ');
 
-function screenshotScript({ maxWidth = 1600, quality = 70 } = {}) {
-  const mw = int(maxWidth, 'maxWidth', 320, 1920), q = int(quality, 'quality', 10, 100);
-  return [
-    ...head,
-    'Add-Type -AssemblyName System.Windows.Forms, System.Drawing',
-    here(DPI_CS),
-    '[void][MMDpi]::SetProcessDPIAware()',
-    '$b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds',
-    '$full = New-Object System.Drawing.Bitmap($b.Width, $b.Height)',
-    '$g = [System.Drawing.Graphics]::FromImage($full)',
-    '$g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)',
-    '$g.Dispose()',
-    `$nw = $b.Width; $nh = $b.Height; if ($nw -gt ${mw}) { $nh = [int][Math]::Round($b.Height * ${mw} / $b.Width); $nw = ${mw} }`,
-    '$pic = New-Object System.Drawing.Bitmap($nw, $nh)',
-    '$g2 = [System.Drawing.Graphics]::FromImage($pic)',
-    '$g2.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic',
-    '$g2.DrawImage($full, 0, 0, $nw, $nh)',
-    '$g2.Dispose()',
-    '$codec = [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object { $_.MimeType -eq \'image/jpeg\' } | Select-Object -First 1',
-    '$ep = New-Object System.Drawing.Imaging.EncoderParameters(1)',
-    `$ep.Param[0] = New-Object System.Drawing.Imaging.EncoderParameter([System.Drawing.Imaging.Encoder]::Quality, [long]${q})`,
-    '$ms = New-Object System.IO.MemoryStream',
-    '$pic.Save($ms, $codec, $ep)',
-    'Write-Output ("MMSHOT $nw $nh $($b.Width) $($b.Height) " + [Convert]::ToBase64String($ms.ToArray()) + " MMEND")',
-  ].join('\n');
+// One read-only question to Defender, run as the system account after a block: the name of the newest detection of the last 2 minutes (for example
+// "HackTool:PowerShell/..."). An older detection is not this block (another antivirus may have blocked it), so it is never named.
+const THREAT_PREFIX = 'MMTHREAT ';
+const THREAT_NAME = /^[A-Za-z0-9:\/._!#()-]{1,120}$/;
+function threatNameLine() {
+  return "$ErrorActionPreference = 'Stop'; $mmsince = (Get-Date).AddMinutes(-2); $d = Get-MpThreatDetection | Where-Object { $_.InitialDetectionTime -gt $mmsince -and ((($_.Resources -join ' ') -match 'amsi:') -or ($_.ProcessName -match 'powershell')) } | Sort-Object InitialDetectionTime -Descending | Select-Object -First 1; if ($d) { Write-Output ('MMTHREAT ' + (Get-MpThreat -ThreatID $d.ThreatID).ThreatName) }";
 }
-
-function parseScreenshot(output) {
-  const s = String(output == null ? '' : output);
-  const bad = () => new WindowsError(`The computer did not return a picture: ${s.replace(/[\u0000-\u001f\u007f]+/g, ' ').trim().slice(0, 300)}`, 'EBADSHOT');
-  const m = /(?:^|\n)(?:PS [^\n>]*> ?)?MMSHOT (\d{1,5}) (\d{1,5}) (\d{1,5}) (\d{1,5}) /.exec(s);   // PowerShell may print its prompt in front of the first line
-  if (!m) throw bad();
-  // The picture is the rest of the line. A terminal may have broken that line or added colour codes, so when the end mark MMEND is there
-  // the text up to it is used, with line breaks and escape codes removed.
-  const rest = s.slice(m.index + m[0].length);
-  const end = rest.indexOf(' MMEND');
-  const body = (end >= 0 ? rest.slice(0, end) : rest.split('\n')[0]).replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, '').replace(/\s+/g, '');
-  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(body)) throw bad();
-  const jpeg = Buffer.from(body, 'base64');
-  if (jpeg.length < 4 || jpeg[0] !== 0xff || jpeg[1] !== 0xd8) throw new WindowsError('The computer returned something that is not a picture.', 'EBADSHOT');
-  return { width: Number(m[1]), height: Number(m[2]), screenWidth: Number(m[3]), screenHeight: Number(m[4]), jpeg };
+// The name after "MMTHREAT " when it looks like a detection name, else null. The shell's echo of the sent line is removed first (it holds "MMTHREAT " too).
+function parseThreatName(output) {
+  let s = String(output == null ? '' : output).replace(/\u001b\[[0-9;?]*[ -\/]*[@-~]/g, '');
+  s = s.split(threatNameLine()).join('');
+  const m = /(?:^|\n)(?:PS [^\n>]*> ?)?MMTHREAT ([^\r\n]*)/.exec(s);
+  if (!m) return null;
+  const name = m[1].trim();
+  return THREAT_NAME.test(name) ? name : null;
 }
 
 const BUTTONS = { left: [0x0002, 0x0004], right: [0x0008, 0x0010], middle: [0x0020, 0x0040] };
@@ -123,16 +140,10 @@ function clickScript({ x, y, screenWidth, screenHeight, button = 'left', double 
 function typeScript({ text } = {}) {
   if (typeof text !== 'string' || !text) throw new WindowsError('There is no text to type.');
   if (text.length > MAX_TYPE_CHARS) throw new WindowsError(`Type at most ${MAX_TYPE_CHARS} characters at a time.`);
-  const b64 = Buffer.from(text.replace(/\r\n?/g, '\n'), 'utf16le').toString('base64');
   return script(
     here(INPUT_CS),
-    `$mmt = [System.Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('${b64}'))`,
-    'foreach ($c in $mmt.ToCharArray()) {',
-    '  if ($c -eq [char]10) { [MMIn]::Key(13, 0); [MMIn]::Key(13, 2) }',
-    '  elseif ($c -eq [char]9) { [MMIn]::Key(9, 0); [MMIn]::Key(9, 2) }',
-    '  else { [MMIn]::Uni([uint16]$c, $false); [MMIn]::Uni([uint16]$c, $true) }',
-    '  [MMIn]::Pause(4)',
-    '}',
+    `$mmt = ${psLiteral(text.replace(/\r\n?/g, '\n'))}`,
+    'foreach ($c in $mmt.ToCharArray()) { if ($c -eq [char]10) { [MMIn]::Key(13, 0); [MMIn]::Key(13, 2) } elseif ($c -eq [char]9) { [MMIn]::Key(9, 0); [MMIn]::Key(9, 2) } else { [MMIn]::Uni([uint16]$c, $false); [MMIn]::Uni([uint16]$c, $true) }; [MMIn]::Pause(4) }',
   );
 }
 
@@ -191,4 +202,4 @@ function scrollScript({ x, y, screenWidth, screenHeight, amount } = {}) {
 // (PowerShell reading stdin may put its "PS C:\...> " prompt in front of it).
 const sawOk = (output) => /(?:^|\n)(?:PS [^\n>]*> ?)?MMOK\r?(?:\n|$)/.test(String(output == null ? '' : output));
 
-module.exports = { encodePs, screenshotScript, parseScreenshot, clickScript, typeScript, keyScript, scrollScript, parseKeys, sawOk, WindowsError, SCREEN_CHANGED, MAX_LINE, MAX_TYPE_CHARS, OK_LINE, KEYS };
+module.exports = { psLiteral, plainLine, runLine, blockedByAntivirus, threatNameLine, parseThreatName, clickScript, typeScript, keyScript, scrollScript, parseKeys, sawOk, WindowsError, SCREEN_CHANGED, MAX_LINE, MAX_TYPE_CHARS, OK_LINE, KEYS };

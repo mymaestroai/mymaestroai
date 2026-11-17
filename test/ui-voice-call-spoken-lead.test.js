@@ -5,7 +5,10 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 Object.assign(globalThis, require('../lib/ui-voice'));   // the call file uses these helpers as globals, like the pages
 const C = require('../lib/ui-voice-call');
-const { voiceCreateCall, voiceReplySentences, voiceSpokenLead, VOICE_LEAD_MAX_SENTENCES } = C;
+const { voiceCreateCall, voiceSpokenLead, VOICE_LEAD_MAX_SENTENCES } = C;
+// Changed: this file is about the cut mechanics (the lead, the cap, the one note), so it runs with 'read short extra parts aloud' off
+// (readWords 0 = the lead only); what the call reads of a short rest is tested in test/ui-voice-details.test.js.
+const voiceReplySentences = (md, done) => C.voiceReplySentences(md, done, 0);
 
 const NOTE = 'I have put the details in the chat.';
 const tick = async (n = 6) => { for (let i = 0; i < n; i++) await Promise.resolve(); };
@@ -97,7 +100,7 @@ test('(h) the controller reads only the lead sentence and then the details note'
   const h = { t: 0, timers: [], nextId: 1, spoken: [], pend: [], sent: [], running: false, states: [] };
   const deps = {
     agent: 'a1', now: () => h.t, setTimer: (fn, ms) => { const id = h.nextId++; h.timers.push({ id, at: h.t + ms, fn }); return id; }, clearTimer: (id) => { h.timers = h.timers.filter(x => x.id !== id); },
-    prefs: () => ({ micLevel: 50, interruptSensitivity: 50, continueWait: 0 }),
+    prefs: () => ({ micLevel: 50, interruptSensitivity: 50, continueWait: 0, detailsReadWords: 0 }),
     vad: { start: async (hd) => { h.hd = hd; }, stop() {}, setPlaybackActive() {} }, stt: async (a) => a.text, isTurnRunning: () => h.running,
     send: async (t) => { h.sent.push(t); h.running = true; }, interject: async () => {}, stop() {},
     speak: (text) => new Promise((resolve) => { h.spoken.push(text); h.pend.push(resolve); }), cancelSpeech() { const r = h.pend.shift(); if (r) r(false); },
@@ -153,7 +156,7 @@ test('a false start during the last sentence re-reads only that sentence, and th
   const h = { t: 0, timers: [], nextId: 1, spoken: [], pend: [], sent: [], running: false };
   const deps = {
     agent: 'a1', now: () => h.t, setTimer: (fn, ms) => { const id = h.nextId++; h.timers.push({ id, at: h.t + ms, fn }); return id; }, clearTimer: (id) => { h.timers = h.timers.filter(x => x.id !== id); },
-    prefs: () => ({ micLevel: 50, interruptSensitivity: 50, continueWait: 0 }),
+    prefs: () => ({ micLevel: 50, interruptSensitivity: 50, continueWait: 0, detailsReadWords: 0 }),
     vad: { start: async (hd) => { h.hd = hd; }, stop() {}, setPlaybackActive() {} }, stt: async (a) => a.text, isTurnRunning: () => h.running,
     send: async (t) => { h.sent.push(t); h.running = true; }, interject: async () => {}, stop() {},
     speak: (text) => new Promise((resolve) => { h.spoken.push(text); h.pend.push(resolve); }), cancelSpeech() { const r = h.pend.shift(); if (r) r(false); },

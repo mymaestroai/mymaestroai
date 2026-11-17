@@ -87,6 +87,19 @@
   .perm { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; padding: 2px 0 6px 26px; }
   .perm select { width: auto; min-width: 110px; }
   .perm label.chk { margin: 0; font-size: 13px; }
+  .desk-box { border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
+  .desk-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 4px 0; border-bottom: 1px solid var(--border); }
+  .desk-name { font-weight: 600; word-break: break-word; }
+  .desk-box[hidden] { display: none; }
+  .appr-row { display: flex; flex-direction: column; gap: 6px; padding: 6px 0; border-bottom: 1px solid var(--border); min-width: 0; }
+  .appr-row .desk-row { border-bottom: 0; padding: 0; }
+  .appr-row select { width: auto; max-width: 100%; }
+  .appr-agents { display: flex; gap: 6px 14px; flex-wrap: wrap; }
+  .appr-agents label.chk { margin: 0; font-size: 13px; word-break: break-word; }
+  .appr-warn:empty { display: none; }
+  .su-fields { margin: 8px 0; }
+  .su-lbl { display: block; margin: 4px 0; font-size: 13px; }
+  .su-lbl input { display: block; margin-top: 2px; max-width: 260px; }
   .ready-box { display: flex; flex-direction: column; gap: 10px; }
   .card .meta { color: var(--text-tertiary); font-size: 12px; line-height: 1.4; }
   .card .check { font-size: 12px; color: var(--success); }
@@ -155,7 +168,7 @@ function md(text) {
 async function api(method, url, body) {
   const r = await fetch(url, { method, credentials: 'include', headers: body ? { 'Content-Type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });
   let j = {}; try { j = await r.json(); } catch {}
-  if (!r.ok) { const e = new Error(j.error || `HTTP ${r.status}`); e.data = j; throw e; }
+  if (!r.ok) { const e = new Error(j.error || `HTTP ${r.status}`); e.data = j; e.status = r.status; throw e; }
   return j;
 }
 
@@ -218,6 +231,152 @@ function render() {
       <div><ol class="steps">${steps}<li class="${selected === null ? 'cur' : ''}" onclick="selectStep(null)"><span class="mark">⚙</span>${m.finishedAt ? 'Status and limits' : 'Overview'}</li></ol></div>
       <div id="step-area">${selected ? stepHtml(m.steps.find(s => s.id === selected)) : overviewHtml()}</div>
     </div>`;
+  if (!selected) loadDesktopBox();
+  if (!selected) loadApprovals();
+}
+
+// ── Agent approvals (remote-computers only, admins only): how often agents must ask before controlling each computer ──
+let apprGen = 0, apprPending = {};
+const APPR_WARNING = 'An agent can be misled by a web page or an email. With asking reduced, it could then use this computer without you knowing in time.';
+const APPR_HELP = "Every session: you approve each agent's first Act or Drive in a session. Once a day: one approval lasts until midnight. Agents you tick are never asked on that computer. Everything is still logged, and the computer still shows a notice when an agent takes control.";
+function apprRow(c, pol, agents) {
+  const mode = pol && pol.mode === 'day' ? 'day' : 'session';
+  const trusted = new Set(pol && Array.isArray(pol.trusted) ? pol.trusted : []);
+  const acting = agents.filter(a => a && (a.level === 'act' || a.level === 'drive'));
+  const boxes = acting.length
+    ? acting.map(a => `<label class="chk"><input type="checkbox" class="appr-trust" data-agent="${esc(a.name)}" ${trusted.has(a.name) ? 'checked' : ''}><span>${esc(a.name)}</span></label>`).join('')
+    : '<span class="dim">No agent here can act or drive.</span>';
+  return `<div class="appr-row" data-computer="${esc(c.id)}">
+    <div class="desk-row"><span class="desk-name">${esc(c.name)}</span><span class="pill ${c.online ? 'ready' : ''}">${c.online ? 'Online' : 'Offline'}</span></div>
+    <div class="appr-controls"><select class="appr-mode" aria-label="${esc(`How often agents must ask on ${c.name}`)}"><option value="session" ${mode === 'session' ? 'selected' : ''}>Every session</option><option value="day" ${mode === 'day' ? 'selected' : ''}>Once a day</option></select></div>
+    <div class="dim">Don't ask these agents on this computer:</div>
+    <div class="appr-agents">${boxes}</div>
+    <div class="appr-warn"></div>
+    <div class="actions"><button class="primary" data-computer="${esc(c.id)}" onclick="apprSave(this)">Save</button></div>
+  </div>`;
+}
+async function loadApprovals() {
+  const m = current;
+  const box = document.getElementById('appr-box');
+  if (!m || m.id !== 'remote-computers' || !m.enabled || !box) return;
+  const gen = ++apprGen;
+  const fresh = () => gen === apprGen && current === m && selected === null;
+  const paint = (html, show) => { if (!fresh()) return; const el = document.getElementById('appr-list'); if (el) el.innerHTML = html; box.hidden = !show; };
+  const refresh = '<div class="actions"><a class="open-link" href="#" onclick="loadApprovals(); return false">Refresh</a></div>';
+  try {
+    const r = await api('GET', '/api/modules/remote-computers/approval-policy');
+    if (!fresh()) return;
+    apprPending = {};
+    const computers = r.computers || [], agents = r.agents || [], policy = r.policy || {};
+    const err = r.computersError ? `<p class="dim">${esc(r.computersError)}</p>` : '';
+    paint(`<p class="dim">${esc(APPR_HELP)}</p>` + err + (computers.length ? computers.map(c => apprRow(c, policy[c.id], agents)).join('') : '<p class="dim">No computers are connected yet.</p>') + refresh, true);
+  } catch (e) {
+    if (!fresh()) return;
+    if (e.status === 403) { paint('', false); return; }   // not an admin: the section stays hidden
+    paint(`<p class="dim">Could not load the approval settings.</p>${refresh}`, true);
+  }
+}
+function apprRowOf(btn) { return btn && btn.closest ? btn.closest('.appr-row') : null; }
+function apprRead(row) {
+  const sel = row.querySelector('select.appr-mode');
+  const trusted = Array.from(row.querySelectorAll('input.appr-trust')).filter(c => c.checked).map(c => c.getAttribute('data-agent'));
+  return { computer: row.getAttribute('data-computer'), mode: sel && sel.value === 'day' ? 'day' : 'session', trusted };
+}
+// The warning box of one computer: the warning, the step-up fields (code field when totp is true; "if you use one" when unknown), the two buttons.
+function apprWarnHtml(computer, totp) {
+  return `<div class="msg warn show">${esc(APPR_WARNING)}${stepUpFieldsHtml('appr', totp)}<div class="actions"><button class="danger" data-computer="${esc(computer)}" onclick="apprAck(this)">Save anyway</button><button data-computer="${esc(computer)}" onclick="apprCancel(this)">Cancel</button></div></div>`;
+}
+async function apprPost(btn, body) {
+  const row = apprRowOf(btn);
+  await busy(btn, async () => {
+    try {
+      await api('POST', '/api/modules/remote-computers/approval-policy', body);
+      delete apprPending[body.computer];
+      setMsg('ok', 'Saved. Agents on this computer start new sessions under the new setting.');
+      loadApprovals();
+    } catch (e) {
+      if (e.data && e.data.stepUp && body.acknowledged) {
+        setMsg('err', e.message);   // wrong password or code: the box stays open (password already cleared) to try again
+        return;
+      }
+      if (e.data && e.data.needsAck && !body.acknowledged && row) {
+        apprPending[body.computer] = body;
+        const w = row.querySelector('.appr-warn');
+        if (w) w.innerHTML = apprWarnHtml(body.computer, typeof e.data.totp === 'boolean' ? e.data.totp : null);
+        return;
+      }
+      setMsg('err', e.message);
+    }
+  });
+}
+async function apprSave(btn) {
+  const row = apprRowOf(btn); if (!row) return;
+  await apprPost(btn, apprRead(row));
+}
+async function apprAck(btn) {
+  const row = apprRowOf(btn); if (!row) return;
+  const computer = row.getAttribute('data-computer');
+  if (!apprPending[computer] || apprConfirming[computer]) return;   // nothing waits, or a confirm is already in flight
+  const pass = row.querySelector('input.appr-pass'), code = row.querySelector('input.appr-code');
+  if (pass && !String(pass.value || '')) { setMsg('err', 'Enter your account password.'); return; }
+  // What is on screen now, not what was there when the warning appeared: the person may have changed the row meanwhile.
+  // The password is read from its field now, the field is emptied, and it is not kept anywhere else.
+  const body = Object.assign(apprRead(row), { acknowledged: true });
+  if (pass) { body.password = String(pass.value || ''); pass.value = ''; }
+  if (code) body.code = String(code.value || '');
+  apprConfirming[computer] = true;
+  try { await apprPost(btn, body); } finally { delete apprConfirming[computer]; }
+}
+const apprConfirming = {};   // computer id -> a confirm request is in flight
+function apprCancel(btn) {
+  const row = apprRowOf(btn); if (!row) return;
+  delete apprPending[row.getAttribute('data-computer')];
+  const w = row.querySelector('.appr-warn'); if (w) w.innerHTML = '';
+}
+
+// ── Computers box (remote-computers only): open a computer's desktop in this tab ──
+let deskComputers = [], deskGen = 0;
+function deskTime(ms) { const d = new Date(ms); return isNaN(d) ? '' : d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false }); }
+function deskRow(c, allowed) {
+  const b = c.busy;
+  const btn = `<button class="primary" data-nodeid="${esc(c.nodeid)}" onclick="deskOpen(this)">Open desktop</button>`;
+  let act = '';
+  if (!allowed) act = '';
+  else if (b && b.mine) act = btn;
+  else if (b) act = `<span class="dim">In use by ${esc(b.who && b.who.name || b.who)} until ${esc(deskTime(b.until))}</span>`;
+  else if (c.online) act = btn;
+  return `<div class="desk-row"><span class="desk-name">${esc(c.name)}</span><span class="pill ${c.online ? 'ready' : ''}">${c.online ? 'Online' : 'Offline'}</span><span class="spacer"></span>${act}</div>`;
+}
+async function loadDesktopBox() {
+  const m = current;
+  if (!m || m.id !== 'remote-computers' || !m.enabled) return;
+  const gen = ++deskGen;
+  // An older response (or one for another module or step) must change nothing: same guard for the data and for the paint.
+  const fresh = () => gen === deskGen && current === m && selected === null;
+  const paint = (html) => { if (fresh()) { const el = document.getElementById('desk-list'); if (el) el.innerHTML = html; } };
+  try {
+    const r = await api('GET', '/api/remote-desktop');
+    if (!fresh()) return;
+    deskComputers = r.computers || [];
+    const ownerOnly = m.settings && m.settings.desktop_who === 'owner';
+    const note = r.allowed ? '' : `<p class="dim">${ownerOnly ? "Only the owner can open a computer's desktop." : "You can't open a computer's desktop here."}</p>`;
+    paint(note + (deskComputers.length ? deskComputers.map(c => deskRow(c, r.allowed)).join('') : '<p class="dim">No computers are connected yet.</p>') + '<div class="actions"><a class="open-link" href="#" onclick="loadDesktopBox(); loadApprovals(); return false">Refresh</a></div>');
+  } catch (e) {
+    if (!fresh()) return;
+    paint(`<p class="dim">Could not load the computers.</p><div class="actions"><a class="open-link" href="#" onclick="loadDesktopBox(); loadApprovals(); return false">Refresh</a></div>`);
+    setMsg('err', e.message);
+  }
+}
+async function deskOpen(btn) {
+  const nodeid = btn && btn.getAttribute && btn.getAttribute('data-nodeid');
+  if (!nodeid) return;
+  await busy(btn, async () => {
+    try {
+      const r = await api('POST', '/api/remote-desktop/open', { nodeid });
+      if (typeof r.url !== 'string' || !r.url) throw new Error('The hub did not give a desktop address.');
+      location.assign(r.url);
+    } catch (e) { setMsg('err', e.message); loadDesktopBox(); }
+  });
 }
 function selectStep(id) { selected = id; render(); }
 function closePanel() { stopSignin(); permPending = null; document.getElementById('panel').classList.remove('open'); current = null; history.replaceState(null, '', '#'); }
@@ -242,7 +401,8 @@ function levelsConfig(m) {
 function protectedSettingKeys(m) {
   const lv = levelsConfig(m);
   if (!lv) return [];
-  return [lv.setting, lv.sessionApproval && lv.sessionApproval.setting].filter(Boolean);
+  const sa = lv.sessionApproval;
+  return [lv.setting, sa && sa.setting, sa && typeof sa.policy === 'string' ? sa.policy : null].filter(Boolean);   // the approval policy has its own route
 }
 const visibleSettings = (m) => (m.manifest.settings || []).filter(st => !protectedSettingKeys(m).includes(st.key));
 function readSettings(keys) {
@@ -351,34 +511,91 @@ function readPermissions() {
   }
   return out;
 }
-const permsNeedWarning = (permissions) => Object.values(permissions).some(p => p.askEachSession === false);
+// Warn only when the save really asks less than what is saved now: an agent that is not asked and (a) was asked before,
+// (b) could not use the module before, or (c) gets a higher level than before. The server still decides (409 needsAck).
+function permsNeedWarning(permissions) {
+  const lv = levelsConfig(current);
+  const lookup = permissionLookup(current);
+  const was = new Set([...(current.agents || []), ...(leadsLocked(current) ? (current.leads || []) : [])]);
+  return Object.entries(permissions).some(([name, p]) => {
+    if (!p || p.askEachSession !== false) return false;
+    const old = lookup(name);
+    return old.askEachSession === true || !was.has(name) || lv.choices.indexOf(p.level) > lv.choices.indexOf(old.level);
+  });
+}
+// Asking less needs the account password (and the two-factor code, when the account has one), as the backup settings do.
+// totp: true / false when known, null when not. The password is read from its field at click time and goes only into that one request.
+function stepUpFieldsHtml(cls, totp) {
+  const code = totp === false ? ''
+    : `<label class="su-lbl">${totp === true ? '' : 'two-factor code, if you use one'}<input type="text" class="${cls}-code su-code" inputmode="numeric" autocomplete="one-time-code" placeholder="123 456"></label>`;
+  return `<div class="su-fields"><label class="su-lbl">Your account password${totp === true ? ' and two-factor code' : ''}<input type="password" class="${cls}-pass su-pass" autocomplete="current-password" placeholder="account password"></label>${code}</div>`;
+}
+let meTotp = null, meTotpTried = false;   // whether the signed-in account has two-factor (GET /api/me, read once); null = not known
+function loadMeTotp() {
+  if (meTotpTried) return;
+  meTotpTried = true;
+  api('GET', '/api/me').then((r) => {
+    if (r && r.user && typeof r.user.totpEnabled === 'boolean') {
+      meTotp = r.user.totpEnabled;
+      // The box is already open with nothing typed: show it again with the right fields.
+      const box = document.getElementById('perm-warning'), pass = box && box.querySelector ? box.querySelector('input.perm-pass') : null;
+      if (permPending && box && pass && !pass.value) showPermWarning(permPending);
+    }
+  }).catch(() => { /* unknown: the code field says "if you use one" */ });
+}
 let permPending = null;   // the save that waits for the person to accept the warning
 function showPermWarning(run) {
   permPending = run;
+  loadMeTotp();
   const box = document.getElementById('perm-warning');
-  if (box) box.innerHTML = `<div class="msg warn show">${esc(PERM_WARNING)}<div class="actions"><button class="danger" onclick="permWarnConfirm()">Save with asking off</button><button onclick="permWarnCancel()">Cancel</button></div></div>`;
+  if (box) box.innerHTML = `<div class="msg warn show">${esc(PERM_WARNING)}${stepUpFieldsHtml('perm', meTotp)}<div class="actions"><button class="danger" onclick="permWarnConfirm()">Save with asking off</button><button onclick="permWarnCancel()">Cancel</button></div></div>`;
 }
 function clearPermWarning() { permPending = null; const box = document.getElementById('perm-warning'); if (box) box.innerHTML = ''; }
 function permWarnCancel() { clearPermWarning(); }   // nothing is sent; the ticked and unticked boxes stay as they are
-async function permWarnConfirm() { const run = permPending; clearPermWarning(); if (run) await run(); }
-// Posts the levels (acknowledged only when the warning was accepted). Returns true when the hub saved them.
-async function postPermissions(agents, permissions, acknowledged, btn) {
+// Reads what was typed now, empties the password field, and runs the waiting save with it. The box stays open until the hub accepts or refuses for another reason.
+let permConfirming = false;   // a confirm request is in flight: a second click does nothing
+async function permWarnConfirm() {
+  const run = permPending; if (!run || permConfirming) return;
+  const box = document.getElementById('perm-warning');
+  const pass = box && box.querySelector ? box.querySelector('input.perm-pass') : null;
+  const code = box && box.querySelector ? box.querySelector('input.perm-code') : null;
+  if (pass && !String(pass.value || '')) { setMsg('err', 'Enter your account password.'); return; }
+  const stepUp = { password: pass ? String(pass.value || '') : '' };
+  if (code) stepUp.code = String(code.value || '');
+  if (pass) pass.value = '';
+  permConfirming = true;
+  try { await run(stepUp); } finally { permConfirming = false; }
+}
+// Posts the levels (acknowledged and the step-up only when the warning was accepted). Returns true when the hub saved them.
+// rerun(stepUp): the save to repeat with the warning accepted, so a 409 needsAck from the hub opens the warning instead of leaving the person stuck.
+async function postPermissions(agents, permissions, acknowledged, btn, stepUp, rerun) {
   let ok = false;
   await busy(btn, async () => {
     try {
       const body = { agents, permissions };
-      if (acknowledged && permsNeedWarning(permissions)) body.acknowledged = true;
+      if (acknowledged) {
+        body.acknowledged = true;
+        if (stepUp) { body.password = stepUp.password; if (stepUp.code !== undefined) body.code = stepUp.code; }
+      }
       current = (await api('POST', `/api/modules/${current.id}/agent-permissions`, body)).module;
       ok = true;
-    } catch (e) { setMsg(e.data && e.data.needsAck ? 'warn' : 'err', e.message); }
+      clearPermWarning();
+    } catch (e) {
+      if (e.data && e.data.stepUp) { setMsg('err', e.message); return; }   // wrong password or code: the box stays open to try again
+      if (e.data && e.data.needsStepUp && typeof e.data.totp === 'boolean') meTotp = e.data.totp;
+      if (e.data && e.data.needsAck && !acknowledged && typeof rerun === 'function') { showPermWarning(rerun); return; }
+      clearPermWarning();
+      setMsg(e.data && e.data.needsAck ? 'warn' : 'err', e.message);
+    }
   });
   return ok;
 }
-async function savePermissions(btn, acknowledged) {
+async function savePermissions(btn, acknowledged, stepUp) {
   const permissions = readPermissions();
-  if (!acknowledged && permsNeedWarning(permissions)) { showPermWarning(() => savePermissions(btn, true)); return; }
+  const rerun = (su) => savePermissions(btn, true, su);
+  if (!acknowledged && permsNeedWarning(permissions)) { showPermWarning(rerun); return; }
   const agents = current.agents.filter(n => !leadsLocked(current) || !(current.leads || []).includes(n));
-  if (!(await postPermissions(agents, permissions, acknowledged, btn))) return;
+  if (!(await postPermissions(agents, permissions, acknowledged, btn, stepUp, rerun))) return;
   render(); loadList();
   setMsg('ok', 'Saved. The new levels apply to the next call.');
 }
@@ -406,6 +623,7 @@ function overviewHtml() {
       <button onclick="showAudit(this)">Activity log</button>${ask}
       <button class="danger" onclick="removeModule(this)">Remove</button>
     </div>
+    ${m.id === 'remote-computers' && m.enabled ? '<div class="desk-box" id="desk-box"><h3 style="font-size:14px">Computers</h3><div id="desk-list" class="dim">Loading…</div></div><div class="desk-box" id="appr-box" hidden><h3 style="font-size:14px">Agent approvals</h3><div id="appr-list" class="dim">Loading…</div></div>' : ''}
     <h3 style="font-size:14px;margin-top:8px">Limits and settings</h3>
     ${visibleSettings(m).map(st => settingField(st, m.settings[st.key])).join('')}
     <div class="actions"><button class="primary" onclick="saveAll(this)">Save settings</button></div>
@@ -419,6 +637,8 @@ const SIGNIN_HIDDEN_LIMIT_MS = 10 * 60 * 1000;
 let signin = null;           // { moduleId, stepId, pollTimer, tick, expiresAt } while a sign-in is waiting
 let hiddenSince = null;      // when the page was last hidden (null while it is visible)
 document.addEventListener('visibilitychange', () => { hiddenSince = document.hidden ? Date.now() : null; });
+// Back from the desktop page restores this page from the cache: the computers' busy/online state and the approvals are old, load them again.
+window.addEventListener('pageshow', (e) => { if (e && e.persisted === true) { loadDesktopBox(); loadApprovals(); } });
 
 function signinIdleHtml(note) {
   return `${note ? `<p class="dim">${esc(note)}</p>` : ''}<div class="actions"><button class="primary" onclick="signinStart(this)">${note ? 'Start again' : `Sign in with ${esc(current.name)}`}</button></div>`;
@@ -557,14 +777,15 @@ function onPermChange(el) {
   if (cl.contains('grant') || cl.contains('perm-level') || cl.contains('perm-ask')) clearPermWarning();
 }
 document.addEventListener('change', (e) => { if (e.target && e.target.classList) onPermChange(e.target); });
-async function saveGrant(stepId, btn, acknowledged) {
+async function saveGrant(stepId, btn, acknowledged, stepUp) {
   const agents = [...document.querySelectorAll('input.grant:checked')].map(i => i.value);
   const sel = document.getElementById('notice-agent');
   const agent = sel ? sel.value : null;
   if (levelsConfig(current)) {
     const permissions = readPermissions();
-    if (!acknowledged && permsNeedWarning(permissions)) { showPermWarning(() => saveGrant(stepId, btn, true)); return; }
-    if (!(await postPermissions(agents, permissions, acknowledged, btn))) return;
+    const rerun = (su) => saveGrant(stepId, btn, true, su);
+    if (!acknowledged && permsNeedWarning(permissions)) { showPermWarning(rerun); return; }
+    if (!(await postPermissions(agents, permissions, acknowledged, btn, stepUp, rerun))) return;
   }
   const ok = await doStep(stepId, { agents }, btn);
   if (!ok || !agent) return;
