@@ -32,7 +32,8 @@ test('desktop: Update now is the Update dialog\'s own update, then its restart; 
 });
 
 test('desktop: Settings → Status → Updates has the switch and Check now', () => {
-  assert.match(app, /sections: \['st-ready-section', 'st-sec-section', 'st-memory-section', 'st-updates-section'\]/);
+  // the Self-check section sits between Memory and Updates (Settings → Status → Self-check)
+  assert.match(app, /sections: \['st-ready-section', 'st-sec-section', 'st-memory-section', 'st-selfcheck-section', 'st-updates-section'\]/);
   assert.match(app, /id="st-updates-section"/);
   assert.match(app, /onchange="saveUpdateCheck\(this\.checked\)"/);
   assert.match(app, /fetch\('\/api\/update-check\/settings'/);
