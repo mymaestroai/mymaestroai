@@ -733,6 +733,22 @@
 
   // ── Root grant (GET/POST/DELETE /api/root-grants, lib/root-grants): the operator hands this agent root for a while.
   //    The lead always has it; a member's agent never; a sandboxed agent has no sudo in its box.
+  // An agent in a box on a Claude model always uses the hub's tools (the client never runs in the box): the choice is
+  // shown fixed. The page learns whether the agent is boxed from /api/root-grants (the same answer the root panel uses).
+  async function fixToolsWhileBoxed(agent) {
+    const sel = document.getElementById('tools-mode'); if (!sel) return;
+    sel.disabled = false;
+    const note = document.getElementById('tools-boxed-note'); if (note) note.remove();
+    if (!/^claude-sdk\//.test(agent?.model || currentModel || '')) return;
+    let d = null;
+    try { d = await apiFetch(`/api/root-grants?agent=${encodeURIComponent(agentName)}`); } catch { return; }
+    if (!d || d.error || !d.sandboxed) return;
+    sel.value = 'hub'; sel.disabled = true;
+    const n = document.createElement('small'); n.id = 'tools-boxed-note'; n.style.cssText = 'color:#e67e22;margin-left:8px;';
+    n.textContent = 'Hub tools (always while this agent is in a box)';
+    sel.insertAdjacentElement('afterend', n);
+  }
+
   async function loadRootGrant() {
     const status = document.getElementById('root-grant-status'), sel = document.getElementById('root-grant-minutes');
     const grantBtn = document.getElementById('root-grant-btn'), revokeBtn = document.getElementById('root-revoke-btn');
@@ -1447,6 +1463,7 @@
       loadRecordings(agent);
       if (!voiceList.length) loadVoiceList();
       const toolsRow = document.getElementById('tools-row'); if (toolsRow) { const clientModel = /^(claude-sdk|codex-cli)\//.test(agent?.model || currentModel || ''); toolsRow.style.display = clientModel ? 'flex' : 'none'; const th = document.getElementById('tools-help'); if (th) th.style.display = clientModel ? 'block' : 'none'; }
+      fixToolsWhileBoxed(agent);
       const allowedPanel = document.getElementById('auto-model-allowed');
       if (agent?.autoModel) {
         allowedPanel.style.display = 'block';
