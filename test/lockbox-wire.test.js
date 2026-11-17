@@ -221,6 +221,22 @@ test('sdkHook: a clientCommand that throws blocks in enforce and lets the call t
   assert.deepStrictEqual(await hookFor('watch')(hookInput), {});
 });
 
+test('sdkHook notes the call\'s Claude session, and the box grants that session\'s tool-results only', async () => {
+  const w = world();
+  const lb = require('../lib/lockbox');
+  lb._resetSessions();
+  const sid = 'c0ffee00-1234-4abc-8def-00000000beef';
+  const hook = createGate({ getAgent: async () => AGENT_OFF, approvals: null, lockbox: lb, log: () => {}, lockboxFor: () => ({ mode: 'off' }) }).sdkHook({ agentName: 'agent-a', cwd: w.ws });
+  await hook({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: path.join(w.ws, 'x') }, session_id: sid });
+  assert.deepStrictEqual(lb.sessionsFor('agent-a'), [sid]);
+  const wire = wireFor(w, { agents: [AGENT_ENFORCE], probe: okProbe });
+  const d = wire.lockboxFor({ agentName: AGENT_ENFORCE.name, tool: 'Bash', command: 'ls', cwd: w.ws });
+  if (AGENT_ENFORCE.name === 'agent-a' && d.profile && d.profile.readHoles.length) {
+    assert.ok(d.profile.readAllow.every(p => p.includes(sid) && p.endsWith('tool-results')), JSON.stringify(d.profile.readAllow));
+  }
+  lb._resetSessions();
+});
+
 // ── hub Bash, enforce ────────────────────────────────────────────────
 
 test('hub Bash, refuse: the Error text comes back and nothing runs', async () => {

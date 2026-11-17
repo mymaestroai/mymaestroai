@@ -130,15 +130,29 @@ test('a root whose real path lands inside a hole is not granted (a shared parent
   assert.ok(p.skipped.includes(root));
 });
 
-test('readAllow: Claude tool-results folders for boxed agents with read holes, none for the lead', () => {
+test('readAllow: only the agent\'s own Claude sessions\' tool-results, none without a session, none for the lead', () => {
   const w = world();
   const home = tmpRoot();
   const worker = { name: 'agent-a' };
-  const p = lb.buildProfile({ agent: worker, policy: policyOf(worker, [], w), mode: 'enforce', tool: 'Bash', command: 'x', home, ...base(w) });
-  assert.deepStrictEqual(p.readAllow, [path.join(home, '.claude', 'projects', '*', 'tool-results'), path.join(home, '.claude', 'projects', '*', '*', 'tool-results')]);
+  const s1 = '0f8c2a1e-1111-4abc-9def-000000000001';
+  const p = lb.buildProfile({ agent: worker, policy: policyOf(worker, [], w), mode: 'enforce', tool: 'Bash', command: 'x', home, sessions: [s1, '../x', 'bad id'], ...base(w) });
+  assert.deepStrictEqual(p.readAllow, [path.join(home, '.claude', 'projects', '*', s1, 'tool-results')], 'exactly its own session, bad ids dropped, no wildcard over sessions');
+  const none = lb.buildProfile({ agent: worker, policy: policyOf(worker, [], w), mode: 'enforce', tool: 'Bash', command: 'x', home, ...base(w) });
+  assert.deepStrictEqual(none.readAllow, []);
   const lead = { name: 'lead-a', lead: true, category: 'primary' };
-  const q = lb.buildProfile({ agent: lead, policy: toolPolicy.policyFor(lead), mode: 'enforce', tool: 'Bash', command: 'x', home, ...base(w) });
+  const q = lb.buildProfile({ agent: lead, policy: toolPolicy.policyFor(lead), mode: 'enforce', tool: 'Bash', command: 'x', home, sessions: [s1], ...base(w) });
   assert.deepStrictEqual(q.readAllow, []);
+});
+
+test('noteSession keeps an agent\'s three newest valid sessions for a day', () => {
+  lb._resetSessions();
+  const ids = ['a1b2c3d4-0000-0000-0000-000000000001', 'a1b2c3d4-0000-0000-0000-000000000002', 'a1b2c3d4-0000-0000-0000-000000000003', 'a1b2c3d4-0000-0000-0000-000000000004'];
+  ids.forEach((id, i) => lb.noteSession('agent-a', id, { now: 1000 + i }));
+  lb.noteSession('agent-a', '../../etc', { now: 2000 });
+  assert.deepStrictEqual(lb.sessionsFor('agent-a', { now: 3000 }), [ids[3], ids[2], ids[1]]);
+  assert.deepStrictEqual(lb.sessionsFor('agent-b', { now: 3000 }), []);
+  assert.deepStrictEqual(lb.sessionsFor('agent-a', { now: 1000 + 25 * 3600 * 1000 }), []);
+  lb._resetSessions();
 });
 
 test('buildProfile for the lead: hubHome and /tmp, no holes, no env', () => {

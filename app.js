@@ -2920,7 +2920,7 @@
         const lbd = ['off', 'watch', 'enforce'].includes(data && data.lockboxDefault) ? data.lockboxDefault : 'off';
         html += `<div class="st-section" id="st-lb-section"><h4>Command lockbox</h4>
         <div class="st-hint">Applies to every agent set to Hub default. Off runs commands as they do today. Watch lists what the lockbox would have blocked; Enforce blocks it. Each agent can be set on its own settings page.</div>
-        <div class="st-row"><label style="flex-basis:150px">Hub default</label>${selSb('st-lb-default', [['off', 'Off'], ['watch', 'Watch'], ['enforce', 'Enforce']], lbd)}<button class="st-test-btn" onclick="saveLockboxDefault()" style="margin-left:8px">Save</button><span id="st-lb-state" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px"></span></div>
+        <div class="st-row" style="flex-wrap:wrap;row-gap:6px"><label style="flex-basis:150px">Hub default</label>${selSb('st-lb-default', [['off', 'Off'], ['watch', 'Watch'], ['enforce', 'Enforce']], lbd)}<button class="st-test-btn" onclick="saveLockboxDefault()" style="margin-left:8px">Save</button><span id="st-lb-state" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px"></span></div>
         <div class="st-row"><label style="flex-basis:150px">This computer</label><span id="st-lb-host" style="flex:1;min-width:0;overflow-wrap:anywhere;font-size:0.78rem;color:var(--text-dim)">Checking…</span></div>
       </div>`;
         setTimeout(loadLockboxHost, 0);
