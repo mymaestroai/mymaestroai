@@ -304,6 +304,25 @@ function stripHubOnlyChatFields(body, req) {
   return body;
 }
 
+// Share links: the store and the routes are made once, on first use (the store loads data/share-links.json and prunes daily).
+let _shareLinkRoutes = null;
+function shareLinkRoutes() {
+  if (!_shareLinkRoutes) {
+    const SL = require('./lib/share-links');
+    const store = SL.createStore({ file: path.join(__dirname, 'data', 'share-links.json'), log: (m) => console.warn(m) });
+    store.startPruneTimer();
+    _shareLinkRoutes = require('./lib/share-links-routes').createShareLinkRoutes({
+      store, access, hubAuth, log: (m) => console.warn(m),
+      getFiles: () => require('./lib/files').getFiles({ getUser: (id) => hubAuth.getUser(id), isAdminUser: (u) => access.isAdmin(u),
+        maxUploadBytes: () => Math.max(1, Number(hubSettings.getSetting('filesMaxUploadMb')) || 512) * 1048576 }),
+      getAgents: () => getAgents(),
+      settings: () => hubSettings.getSetting('shareLinks'),
+      push: () => require('./lib/push').getPush(),
+    });
+  }
+  return _shareLinkRoutes;
+}
+
 // A request can never take the process down: whatever throws before or outside the route try-block below (cookie
 // or URL decoding, identity, the bridge) answers 400 and the hub carries on (review F07).
 const server = http.createServer((req, res) => {
@@ -497,6 +516,10 @@ async function handleHttpRequest(req, res) {
   }
 
   try {
+    // ── Share links (lib/share-links, lib/share-links-routes): /api/share-links*, /s/<token>. A person on a browser session only. ──
+    if (pathname.startsWith('/api/share-links') || pathname.startsWith('/s/')) {
+      if (await shareLinkRoutes().handle(req, res, pathname)) return;
+    }
     // ── OpenAI-Compatible Routes ────────────────────────────────────
     if (pathname === '/v1/chat/completions' && req.method === 'POST') {
       return openaiCompat.handleChatCompletion(req, res);
@@ -2503,6 +2526,8 @@ async function handleHttpRequest(req, res) {
           if (patch && patch.openrouter !== undefined) patch.openrouter = require('./lib/openrouter').cleanOpenRouterSettings(patch.openrouter);
           if (patch && patch.planFallback !== undefined) patch.planFallback = require('./lib/plan-usage').cleanPolicy(patch.planFallback, hubSettings.getSetting('planFallback'));
           // The reasoning panel (lib/sdk-chat showReasoning): on unless turned off.
+          // Share links: enabled, defaultHours, maxHours (hard maximum 168), merged onto the stored value (lib/share-links cleanSettings).
+          if (patch && patch.shareLinks !== undefined) patch.shareLinks = require('./lib/share-links').cleanSettings(patch.shareLinks, hubSettings.getSetting('shareLinks'));
           if (patch && patch.showReasoning !== undefined) patch.showReasoning = patch.showReasoning !== false;
           if (patch && patch.walletLockedNotice !== undefined) patch.walletLockedNotice = patch.walletLockedNotice !== false;
           // Workers allowed at once per AI service: integers 1..32 only (lib/provider-pacing); applied to the running hub below.
@@ -3480,6 +3505,7 @@ async function handleHttpRequest(req, res) {
       };
       const headers = { 'Content-Type': mimeTypes[ext] || 'application/octet-stream' };
       if (ext === '.html') headers['Cache-Control'] = 'no-store, no-cache, must-revalidate';
+      if (pathname === '/login' || pathname === '/invite') headers['Referrer-Policy'] = 'no-referrer';   // a share link's token rides in ?next=: it never goes to another site
       res.writeHead(200, headers);
       fs.createReadStream(filePath).pipe(res);
       return;
