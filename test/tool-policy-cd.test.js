@@ -154,7 +154,7 @@ test('relocating options and package-manager destinations are judged', () => {
 // assigns, quoted pieces of a target, rm, and a package manager behind a wrapper option.
 test('round 2: ~-, ~user, ~+/.., risky braces, -rt, --target-d=, x[B=1], $[ ], ${v:B=1}, [[ ]], \'\'$HOME, rm $HOME, env -i npm', () => {
   for (const cmd of [`cd ${FX} && echo hi > ~-/x`, `cd ${FX} && echo x > ~root/.bashrc`, `cd ${FX} && echo x > ~+/../y`,
-    `cd ${FX} && cp a {/etc/cron.d,/x}/job`, `cd ${FX} && touch {/etc/cron.d/x,y}`, `cd ${FX} && cp a {.,x}./y`, `cd ${FX} && echo x > {a,../b}`,
+    `cd ${FX} && cp a {/etc/cron.d,/x}/job`, `cd ${FX} && touch {/etc/cron.d/x,y}`, `cd ${FX} && cp a {x,.}./y`, `cd ${FX} && echo x > {a,../b}`,
     `cd ${FX} && cp -rt /etc/cron.d job`, `cd ${FX} && mv -vt /home/u/Documents report.txt`, `cd ${FX} && cp --target-d=/etc/cron.d job`, `cd ${FX} && ln -sft /etc x`,
     `B=${FX}; x[B=1]=y; echo hi > $B/f`, `B=${FX}; : $[B=1]; echo hi > $B/f`, `B=${FX}; echo \${v:B=1}; echo hi > $B/f`, `B=${FX}; [[ 1 -eq B=1 ]]; echo hi > $B/f`,
     'env -i npm install']) refused(cmd);
@@ -178,4 +178,15 @@ test('round 3: uv pip --target, brace results judged one by one, cp -t DIR, .\\.
   for (const cmd of [`cd ${FX} && touch src/{index.js,app.js}`, `cd ${FX} && touch {README.md,LICENSE}`, `cd ${FX} && cp config{,.bak}`,
     `cd ${FX} && mkdir -p proj/{src/lib,test}`, `cd ${FX} && uv pip install x`, `B=${FX}; [ "$a" = b ] && cat > $B/f`, `B=${FX}; x=\${y:-z}; cat > $B/f`]) inside(cmd);
   refused(`B=${FX}; a[0]=1; cat > $B/f`);
+});
+
+// Review r4 (Sentinel 1; Sonnet 1-3, 7): wait -p assigns; a target past the brace bound keeps its absolute folder; a
+// manager behind a flag-taking wrapper; an empty brace word can't hide the destination; "."./x is one word.
+test('round 4: wait -p, absolute targets past the brace bound, xvfb-run -a npm --prefix, cp a DEST {,}, interior quotes', () => {
+  refused(`B=${FX}; true & wait -p B; echo hi >> $B/home/u/.bashrc`);
+  assert.strictEqual(c(`cd ${FX} && touch /etc/cron.d/{1..100}`), 'admin', 'past the bound, still judged where it is');
+  for (const cmd of [`cd ${FX} && xvfb-run -a npm install --prefix /etc/cron.d pkg`, `cd ${FX} && firejail --quiet pip install --target /etc/cron.d x`,
+    `cd ${FX} && cp a /etc/cron.d/x {,}`, `cd ${FX} && touch "."./x`]) refused(cmd);
+  inside(`cd ${FX} && cp a b`);
+  inside(`cd ${FX} && npm install`);
 });
