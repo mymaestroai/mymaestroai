@@ -208,12 +208,36 @@ test('a push that reached no device does not count as told; a missing push is tr
   h.notifyResult = { error: 'no push service' };
   await h.sc.run({ trigger: 'manual' });
   assert.deepStrictEqual(h.sc.stored().notified, []);
-  h.notifyResult = { sent: 0, failed: 0 };     // nobody to tell is not a failure to tell
+  // no device at all: not told either; each run with the same failure tries once more
+  h.notifyResult = { sent: 0, failed: 0 };
+  await h.sc.run({ trigger: 'manual' });
+  assert.deepStrictEqual(h.sc.stored().notified, []);
+  assert.strictEqual(h.pushes.length, 3);
+  await h.sc.run({ trigger: 'manual' });
+  assert.strictEqual(h.pushes.length, 4, 'one try per run, never more');
+  // a device gets it: told, and the next run is quiet
+  h.notifyResult = { sent: 1, failed: 0 };
   await h.sc.run({ trigger: 'manual' });
   assert.deepStrictEqual(h.sc.stored().notified, ['lead/edit@install']);
-  assert.strictEqual(h.pushes.length, 3);
+  assert.strictEqual(h.pushes.length, 5);
   await h.sc.run({ trigger: 'manual' });
+  assert.strictEqual(h.pushes.length, 5);
+});
+
+test('a "couldn\'t run" notice that reached no device is tried again on the next run until one gets it', async () => {
+  const h = harness({ settings: { classes: ['host'] }, turnError: 'Claude plan limit' });
+  h.notifyResult = { sent: 0, failed: 0 };
+  for (let i = 0; i < 3; i++) { await h.sc.run({ trigger: 'nightly' }); h.clock.t += 3600000; }
+  assert.strictEqual(h.pushes.length, 1, 'the third in a row tries');
+  assert.strictEqual(h.sc.stored().stuck.host.told, false);
+  await h.sc.run({ trigger: 'nightly' }); h.clock.t += 3600000;
+  assert.strictEqual(h.pushes.length, 2, 'not told yet: the next run tries again, once');
+  h.notifyResult = { sent: 1, failed: 0 };
+  await h.sc.run({ trigger: 'nightly' }); h.clock.t += 3600000;
   assert.strictEqual(h.pushes.length, 3);
+  assert.strictEqual(h.sc.stored().stuck.host.told, true);
+  await h.sc.run({ trigger: 'nightly' }); h.clock.t += 3600000;
+  assert.strictEqual(h.pushes.length, 3, 'told: quiet from then on');
 });
 
 test('a model error is "couldn\'t run" with no push, and the class\'s earlier failures are kept as they were', async () => {
