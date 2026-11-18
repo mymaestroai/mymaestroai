@@ -219,7 +219,9 @@ const commands = {
     if (r.installed) out(`Codex reinstalled in ${setup.codexPrefix()}.`);
     if (!r.needed) { if (!quiet) out(r.bin ? `Codex: ${r.bin}` : 'Codex: not used by this install.'); return; }
     if (r.bin) { if (!quiet) out(`Codex: ${r.bin}`); return; }
-    out(`Codex is not installed, and this install uses it (an agent on ChatGPT, or a ChatGPT sign-in). Fix: ${r.fix}`);
+    // only a ChatGPT sign-in folder (the Codex desktop app or an editor extension make one): a hint, not a fault
+    if (!r.inUse) { if (!quiet) out(`Codex (the ChatGPT client) is not installed. To let your agents use your ChatGPT plan: ${r.fix}`); return; }
+    out(`Codex is not installed, and this install uses it (an agent on ChatGPT). Fix: ${r.fix}`);
     process.exitCode = 1;
   },
   async update() {
@@ -242,7 +244,7 @@ const commands = {
     // Codex (the ChatGPT client), when this install uses it: found, or the one command that brings it back.
     try {
       const cx = require(path.join(DIR, 'lib', 'codex-cli', 'setup')).checkCodex({ env: process.env, dataDir: path.join(DIR, 'data'), binDirs: binDirsForCodex(), nodeDirs: nodeDirsForCodex() });
-      if (cx.needed) out(cx.bin ? `\nCodex (ChatGPT): ${cx.bin}` : `\nCodex (ChatGPT): not installed, and this install uses it. Fix: ${cx.fix}`);
+      if (cx.needed) out(cx.bin ? `\nCodex (ChatGPT): ${cx.bin}` : cx.inUse ? `\nCodex (ChatGPT): not installed, and an agent uses it. Fix: ${cx.fix}` : `\nCodex (ChatGPT): not installed (only needed for agents on your ChatGPT plan: ${cx.fix}).`);
     } catch { /* no module */ }
     // The Claude sign-in: proven with one tiny request through the same client the agents use (lib/welcome).
     let installed = false; try { installed = require(path.join(DIR, 'lib', 'claude-auth')).hasSdkCredentials(); } catch { /* no module */ }
