@@ -114,6 +114,14 @@ test('tasks saved as the old "owner" (review r1): never inferred to be the owner
   assert.equal(JSON.parse(fs.readFileSync(q.inst.file, 'utf8')).tasks.find(t => t.id === 'st-c').createdBy, '@owner', 'saved');
   assert.throws(() => q.inst.action('st-c', st.OWNER, 'adopt'), /not waiting to be confirmed/);
   assert.throws(() => q.inst.action('st-c', 'maestro', 'cancel'), /only the owner can/, 'adopted: now the owner\'s');
+  // review r2 (Sentinel): changed by anyone but the owner, an unconfirmed task is no longer adoptable; the owner's own edit keeps it so
+  saved(dir, [oldTask('st-e', 'owner'), oldTask('st-f', 'owner')]);
+  const w = mk({ dataDir: dir, names: () => [] });
+  await w.inst.update('st-e', 'maestro', { prompt: 'rewritten by a lead' });
+  assert.equal(w.inst.list(st.OWNER).find(t => t.id === 'st-e').unconfirmedOwner, undefined);
+  assert.throws(() => w.inst.action('st-e', st.OWNER, 'adopt'), /not waiting to be confirmed/);
+  await w.inst.update('st-f', st.OWNER, { prompt: 'edited by the owner' });
+  assert.equal(w.inst.action('st-f', st.OWNER, 'adopt').createdBy, '@owner');
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
