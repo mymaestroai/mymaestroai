@@ -13044,6 +13044,21 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const a = Array.from(list || []).filter(Boolean);
       return a.length < 2 ? (a[0] || '') : a.slice(0, -1).join(', ') + ' or ' + a[a.length - 1];
     }
+    // The spoken question for an item held while the person is on the call. It says only WHO it is from and WHAT KIND it is, never
+    // the item's label: a consultation's label is the start of the request text, a task's is its title, and neither may be read
+    // aloud on a call (only replies to what the person said are). The label stays on screen in the held list.
+    const VOICE_ANNOUNCE_KINDS = { consultation: 'has a request', consult_reply: 'Replies from other agents came in', schedule: 'A scheduled task is due',
+      job_notice: 'A background job finished', job_report: 'A job report came in', task: 'A task came in', alert: 'An alert came in' };
+    function voiceAnnounceLine(item) {
+      const it = item || {};
+      // an agent's name is letters and digits; the hub's own senders (tiger-team-ui, roundtable workers, w_ ids) are "Another agent"
+      const from = typeof it.from === 'string' && /^[A-Za-z][A-Za-z0-9]{0,31}$/.test(it.from) && !['hub', 'schedule', 'owner', 'roundtable'].includes(it.from) ? it.from : '';
+      const name = from ? from.charAt(0).toUpperCase() + from.slice(1) : '';
+      let what;
+      if (it.kind === 'consultation') what = (name || 'Another agent') + ' ' + VOICE_ANNOUNCE_KINDS.consultation;
+      else what = Object.prototype.hasOwnProperty.call(VOICE_ANNOUNCE_KINDS, it.kind) ? VOICE_ANNOUNCE_KINDS[it.kind] : 'Something came in';
+      return what + '. Now, or after we\'re done?';
+    }
     function voiceDecisionWord(text) {
       const t = voiceCallNorm(text);
       if (!t || t.split(' ').length > 6) return null;
@@ -13685,7 +13700,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           if (pendingAnnounce !== me) return;
           me.timer = d.setTimer(() => { if (pendingAnnounce === me) decide(me.id, 'later'); }, VOICE_CALL_ANSWER_MS);
         };
-        enqueue(String(item.label || 'Something came in').replace(/[.!?\s]+$/, '') + '. Now, or after we\'re done?', 'announce', start, () => { me.heard = true; });
+        enqueue(voiceAnnounceLine(item), 'announce', start, () => { me.heard = true; });
       }
       function setMode(m) {
         if (m !== 'announce' && m !== 'dnd') return;
