@@ -22,7 +22,8 @@ const tg = require('../lib/team-guidance');
 const mm = require('../lib/member-models');
 
 test('a member-owned agent gets the light team text; an agent switched off still gets none', () => {
-  assert.strictEqual(tg.textFor({ agent: { model: 'claude-sdk/claude-sonnet-5-5' }, isLead: false, level: 'full', member: true }), tg.LIGHT_TEXT);
+  assert.strictEqual(tg.textFor({ agent: { model: 'claude-sdk/claude-sonnet-5-5' }, isLead: false, level: 'full', member: true }), tg.LIGHT_TEXT + tg.MEMBER_LINE);
+  assert.match(tg.MEMBER_LINE, /only the models your spawn_workers description lists/);
   assert.strictEqual(tg.textFor({ agent: { model: 'claude-sdk/claude-sonnet-5-5' }, isLead: false, level: 'full' }), tg.CORE_TEXT);
   assert.strictEqual(tg.textFor({ agent: { teamGuidance: 'off' }, member: true, level: 'full' }), '');
   assert.strictEqual(tg.textFor({ agent: {}, member: true, level: 'off' }), '');
@@ -44,16 +45,17 @@ test('member-models: one list for a member\'s own model choice and their tempora
   assert.match(server, /const mm = require\('\.\/lib\/member-models'\);[\s\S]{0,120}if \(!mm\.memberMayUse\(body\.model\)\)/);
 });
 
-function sandbox({ agents, memberModels, admins = ['admin1'], virtual = {} }) {
+function sandbox({ agents, memberModels, admins = ['admin1'], virtual = {}, selfCheck = [] }) {
+  const tw = require('../lib/temporal-workers');
   const ctx = {
     require: (p) => {
-      if (p === './agents') return { getAgentsSync: () => agents };
+      if (p === './agents') return { getAgentsSync: () => { if (agents instanceof Error) throw agents; return agents; } };
       if (p === './member-models') return { workerModels: (own) => mm.workerModels(own, () => memberModels) };
       throw new Error('unexpected require ' + p);
     },
     resolveVirtualAgent: (n) => virtual[n] || null,
     adminIdSet: () => new Set(admins),
-    temporalWorkers: require('../lib/temporal-workers'),
+    temporalWorkers: { ...tw, isSelfCheck: (n) => selfCheck.includes(n) },
     _twCatalog: { text: 'ALL MODELS', available: ['claude-sdk/claude-opus-5-5', 'claude-sdk/claude-haiku-5-5', 'openai/gpt-6'], sdkInfo: [] },
     workerCatalogText: () => 'ALL MODELS',
   };
@@ -92,7 +94,7 @@ test('spawn_workers refuses a member\'s worker on another model before anything 
   const at = (s) => body.indexOf(s);
   assert.ok(at('const memberAllowed = memberWorkerModels(callerName);') > at('temporalWorkers.normalizeJobs('), 'judged on the final models (an omitted model is the caller\'s own)');
   assert.ok(at('const memberAllowed = memberWorkerModels(callerName);') < at('temporalWorkers.runWorkers('), 'before any worker starts');
-  assert.match(body, /return `\[spawn_workers\] Nothing was started: a member's agent may start workers only on \$\{memberAllowed\.join\(', '\)\} \(an admin chooses these\)\. Not allowed: \$\{refused\.join\(', '\)\}\.`;/);
+  assert.match(body, /\? `\[spawn_workers\] Nothing was started: a member's agent may start workers only on \$\{memberAllowed\.join\(', '\)\} \(an admin chooses these\)\. Not allowed: \$\{refused\.join\(', '\)\}\.`\n/);
 });
 
 test('the member caps reach a member\'s temporary workers: the worker\'s turn names its parent as consulted_by', () => {
@@ -107,4 +109,20 @@ test('the member caps reach a member\'s temporary workers: the worker\'s turn na
   const users = { sam1: { role: 'member' }, admin1: { role: 'admin' } };
   assert.strictEqual(ctx.f([undefined, undefined, undefined, 'sams_helper', null], AGENTS, (id) => users[id]), true, 'a member\'s worker');
   assert.strictEqual(ctx.f([undefined, undefined, undefined, 'boss', null], AGENTS, (id) => users[id]), false, 'an admin\'s worker');
+});
+
+// Review r1 (GPT-6 BLOCK; Sonnet follow-ups): the check fails closed; an empty list has its own text; a member's catalogue
+// never says that any other id is accepted.
+test('r1: a record that cannot be found or read allows nothing; only a hub-internal check agent is unlimited', () => {
+  assert.deepStrictEqual([...sandbox({ agents: AGENTS, memberModels: ['openai/gpt-6'] }).mwm('nobody')], [], 'no record');
+  assert.deepStrictEqual([...sandbox({ agents: new Error('EIO'), memberModels: ['openai/gpt-6'] }).mwm('sams_helper')], [], 'the list could not be read');
+  assert.deepStrictEqual([...sandbox({ agents: AGENTS, memberModels: [], virtual: { 'tw-x': { parent: 'gone' } } }).mwm('tw-x')], [], 'a worker whose parent is gone');
+  assert.strictEqual(sandbox({ agents: AGENTS, memberModels: [], virtual: { 'chk-1': {} }, selfCheck: ['chk-1'] }).mwm('chk-1'), null, 'a self-check agent');
+  const none = sandbox({ agents: new Error('EIO'), memberModels: [] }).cat('sams_helper');
+  assert.match(none, /No model is open to your temporary workers right now/);
+  const member = sandbox({ agents: AGENTS, memberModels: ['openai/gpt-6'] }).cat('sams_helper');
+  assert.match(member, /No other model is accepted\./);
+  assert.ok(!/any exact id/.test(member));
+  const body = grab('async function runSpawnWorkers(');
+  assert.match(body, /: `\[spawn_workers\] Nothing was started: no model is open to this agent's temporary workers right now\. Do the work yourself\.`;/);
 });
