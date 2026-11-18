@@ -114,6 +114,10 @@ function binDirsForCodex() {
   try { const b = JSON.parse(fs.readFileSync(path.join(DIR, 'data', 'install.json'), 'utf8')).bin; if (b) dirs.unshift(path.dirname(b)); } catch { /* not installed by the installer */ }
   return [...new Set(dirs)];
 }
+// The installer's own Node.js folder (data/install.json): a codex link into it was left by an npm -g there.
+function nodeDirsForCodex() {
+  try { const d = JSON.parse(fs.readFileSync(path.join(DIR, 'data', 'install.json'), 'utf8')).nodeDir; return d ? [d] : []; } catch { return []; }
+}
 function setupLink() {
   if (auth().hasUsers()) return null;
   const code = require(path.join(DIR, 'lib', 'welcome')).createWelcome({ dataDir: path.join(DIR, 'data') }).ensureSetupToken();
@@ -187,7 +191,7 @@ const commands = {
       out('Installing Codex, the OpenAI program that connects to your ChatGPT subscription…');
       bin = setup.installCodex({ env: process.env }).bin;
       if (!bin) fail('Codex did not install. Check the internet connection and run this again.');
-      setup.repairLinks({ env: process.env, binDirs: binDirsForCodex() });
+      setup.repairLinks({ env: process.env, binDirs: binDirsForCodex(), nodeDirs: nodeDirsForCodex() });
     }
     const before = await codex.loginStatus({ bin, env });
     if (before.loggedIn && before.mode === 'chatgpt') {
@@ -210,7 +214,7 @@ const commands = {
     const setup = require(path.join(DIR, 'lib', 'codex-cli', 'setup'));
     const quiet = flag('--quiet');
     if (flag('--repair') && !quiet) out('Checking Codex…');
-    const r = setup.checkCodex({ env: process.env, dataDir: path.join(DIR, 'data'), binDirs: binDirsForCodex(), repair: flag('--repair') });
+    const r = setup.checkCodex({ env: process.env, dataDir: path.join(DIR, 'data'), binDirs: binDirsForCodex(), nodeDirs: nodeDirsForCodex(), repair: flag('--repair') });
     for (const l of r.relinked) out(`Codex link ${l} now points at ${path.join(setup.codexPrefix(), 'bin', 'codex')}.`);
     if (r.installed) out(`Codex reinstalled in ${setup.codexPrefix()}.`);
     if (!r.needed) { if (!quiet) out(r.bin ? `Codex: ${r.bin}` : 'Codex: not used by this install.'); return; }
@@ -237,7 +241,7 @@ const commands = {
     process.exitCode = r.status || 0;
     // Codex (the ChatGPT client), when this install uses it: found, or the one command that brings it back.
     try {
-      const cx = require(path.join(DIR, 'lib', 'codex-cli', 'setup')).checkCodex({ env: process.env, dataDir: path.join(DIR, 'data') });
+      const cx = require(path.join(DIR, 'lib', 'codex-cli', 'setup')).checkCodex({ env: process.env, dataDir: path.join(DIR, 'data'), binDirs: binDirsForCodex(), nodeDirs: nodeDirsForCodex() });
       if (cx.needed) out(cx.bin ? `\nCodex (ChatGPT): ${cx.bin}` : `\nCodex (ChatGPT): not installed, and this install uses it. Fix: ${cx.fix}`);
     } catch { /* no module */ }
     // The Claude sign-in: proven with one tiny request through the same client the agents use (lib/welcome).
