@@ -131,6 +131,40 @@ test('a reply that ends with the sentence before the tool is spoken once, at the
   assert.deepStrictEqual(h.spoken, ['Let me check that for you.']);
 });
 
+test('review r1: only the agent\'s own tool starting releases a sentence; an interjection, a worker or a finished tool does not ("3." may become "3.5")', async () => {
+  const h = await asked();
+  h.call.onReplyText('Sure. The value is 3.', false);
+  await tick();
+  assert.deepStrictEqual(h.spoken, ['Sure.']);
+  h.call.onActivity({ kind: 'interjection', message: 'and in Celsius?' });
+  h.call.onActivity({ kind: 'worker', workerId: 'w1', status: 'started', description: 'look it up' });
+  h.call.onActivity({ kind: 'worker_tool', workerId: 'w1', tool: 'Read', status: 'running' });
+  h.call.onActivity({ kind: 'tool', tool: 'Bash', status: 'done', output: 'ok' });
+  await h.finish();
+  assert.deepStrictEqual(h.spoken, ['Sure.'], 'held: the model may still be writing it');
+  h.call.onReplyText('Sure. The value is 3.5', false);
+  h.call.onReplyText('Sure. The value is 3.5 degrees. ', false);
+  await tick();
+  assert.deepStrictEqual(h.spoken, ['Sure.', 'The value is 3.5 degrees.'], 'the right number, said once; nothing read again');
+});
+
+test('review r1: text glued straight onto a released sentence never reads the reply again from the start', async () => {
+  const h = await asked();
+  h.call.onReplyText('Sure. Let me check.', false);
+  await tick();
+  h.call.onActivity(TOOL);
+  await h.finish();
+  assert.deepStrictEqual(h.spoken, ['Sure.', 'Let me check.']);
+  h.call.onReplyText('Sure. Let me check.It', false);   // a route that joined the next text without a break (the hub adds one; a guard anyway)
+  h.call.onReplyText('Sure. Let me check.It is sunny.', false);
+  await h.finish();
+  assert.deepStrictEqual(h.spoken, ['Sure.', 'Let me check.'], 'no "Sure." again');
+  h.call.onReplyText('Sure. Let me check.It is sunny. Bring a hat. ', false);
+  await h.finish();
+  assert.deepStrictEqual(h.spoken.slice(0, 2), ['Sure.', 'Let me check.']);
+  assert.ok(!h.spoken.slice(2).includes('Sure.'), 'never from the start: ' + JSON.stringify(h.spoken));
+});
+
 test('a new turn forgets the released text of the last one', async () => {
   const h = await asked();
   h.call.onReplyText('Let me check that for you.', false);
@@ -150,6 +184,6 @@ test('both pages carry the same controller code', () => {
   const path = require('path');
   for (const page of ['app.js', 'mobile.js']) {
     const src = fs.readFileSync(path.join(__dirname, '..', page), 'utf8');
-    assert.ok(src.includes('function speakBeforeTool()') && src.includes('speakBeforeTool();') && src.includes('toolBreakText = null;'), page);
+    assert.ok(src.includes('function speakBeforeTool(item)') && src.includes('speakBeforeTool(item);') && src.includes('toolBreakText = null;'), page);
   }
 });

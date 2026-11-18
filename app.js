@@ -13566,8 +13566,10 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         if (!done && !awaitingReply && !cutSkip) { awaitingReply = true; replyEnded = false; }
         if (!done) doneSeen = false;   // a reply being written: a done seen before belonged to an earlier one
         const r = voiceReplySentences(lastText, !!done, readWords(), readFull);
-        // once a done was processed for this reply, a later one (the pref may have changed: fewer sentences) never lowers what was spoken
-        if (!(doneSeen && r.sentences.length < spokenCount)) {
+        // once a done was processed for this reply, a later one (the pref may have changed: fewer sentences) never lowers what was spoken;
+        // nor does text that goes on from a sentence released at a tool (it cannot be taken back: a reply is never read again from the start)
+        const goesOn = toolBreakText !== null && lastText.startsWith(toolBreakText);
+        if (!((doneSeen || goesOn) && r.sentences.length < spokenCount)) {
           if (r.sentences.length < spokenCount) spokenCount = 0;
           if (cutSkip) spokenCount = r.sentences.length;
           else { for (const s of r.sentences.slice(spokenCount)) enqueue(s, 'reply'); spokenCount = r.sentences.length; }
@@ -13575,7 +13577,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         if (done) {
           if (recorder && !replyRecorded && lastText.trim()) { replyRecorded = true; quiet(() => d.recordReplyText(lastText)); }
           if (!cutSkip && r.note && !noteSpoken) enqueue(readOffer ? r.note : voicePlainNote(r.note), 'reply', null, null, false, true);
-          noteSpoken = true; awaitingReply = false; doneSeen = true;
+          noteSpoken = true; awaitingReply = false; doneSeen = true; toolBreakText = null;
           clearStill(); stopThinking(); quiet(() => ui.activity(''));
           if (!speaking) { maybeReplyEnd(); settle(); }
         }
@@ -13593,10 +13595,13 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       }
       // The page learned the flag belongs to an older reply (a typed turn started): clear it. Never touches the queue or what is being spoken.
       function resetReadFull() { readFull = false; }
-      // A tool of the running reply started: the text written before it is complete for now. Its last sentence is held back while streaming
-      // until more text follows it, and on the gateway that text only comes after the tool, so a finished last sentence ("Let me check that
-      // for you.") is spoken now. An unfinished one ("Let me check") or a lone list marker ("1.") stays held.
-      function speakBeforeTool() {
+      // The agent's own tool started (a running 'tool' item): the model stopped writing to use it, and the text after it starts a new paragraph
+      // (paragraphAfterTool), so the text before it is complete for now. Its last sentence is held back while streaming until more text follows
+      // it, and on the gateway that text only comes after the tool, so a finished last sentence ("Let me check that for you.") is spoken now.
+      // An unfinished one ("Let me check") or a lone list marker ("1.") stays held. Other activity (an interjection, a worker's progress, a tool
+      // finishing) is no such boundary: the model may still be writing that sentence ("3." -> "3.5").
+      function speakBeforeTool(item) {
+        if (!item || item.kind !== 'tool' || item.status !== 'running') return;
         if (!awaitingReply || cutSkip || lastDone || !lastText || /\s$/.test(lastText)) return;
         const lastLine = lastText.slice(lastText.lastIndexOf('\n') + 1);
         if (!/[.!?]["')\]*_]*$/.test(lastText) || /^[ \t]*(?:[-*+•◦▪‣`~#|_=]+|\d+[.)]?)$/.test(lastLine)) return;
@@ -13607,7 +13612,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       function onActivity(item) {
         if (ended) return;
         if (!awaitingReply && !quiet(() => d.isTurnRunning())) return;
-        speakBeforeTool();
+        speakBeforeTool(item);
         quiet(() => ui.activity(voiceStatusLine(item)));
         if (state !== 'thinking' || speaking || personSpeaking || pendingAsk || pendingAnnounce) return;
         if (!quiet(() => d.speakActivity && d.speakActivity())) return;
