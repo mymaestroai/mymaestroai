@@ -644,6 +644,20 @@ async function handleHttpRequest(req, res) {
       require('./lib/welcome').getWelcome().markFinished(b.how === 'skip' ? 'skip' : 'done');
       return jsonResponse(res, 200, { ok: true });
     }
+    // The starter team (lib/welcome-team): admin only. lib/access classifies these as admin because they are not in PUBLIC_EXACT.
+    if (pathname === '/api/welcome/team' && req.method === 'GET') {
+      const out = await require('./lib/welcome-team').plan({ lead: new URL(req.url, 'http://x').searchParams.get('lead') || '' });
+      return jsonResponse(res, out.status, out.body);
+    }
+    if (pathname === '/api/welcome/team' && req.method === 'POST') {
+      const b = (await authJson()) || {};
+      const out = await require('./lib/welcome-team').create(b);
+      return jsonResponse(res, out.status, out.body);
+    }
+    if (pathname === '/api/welcome/team/skip' && req.method === 'POST') {
+      const out = await require('./lib/welcome-team').skip();
+      return jsonResponse(res, out.status, out.body);
+    }
     if (pathname === '/api/welcome/api-key' && req.method === 'POST') {
       const b = (await authJson()) || {};
       return jsonResponse(res, 200, await require('./lib/welcome').getWelcome().connectApiKey(b.provider, b.apiKey));
