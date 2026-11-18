@@ -139,6 +139,27 @@ test('names and upload ids are checked; uploads are checked, size-limited and le
   assert.deepStrictEqual(fs.readdirSync(dir), [`${up.uploadId}.age`], 'refused uploads leave no file');
 });
 
+test('a piece refused before its file has opened leaves no file: the removal waits for the late open (the flaky "leave nothing behind")', async () => {
+  const inst = makeInstall(TMP, 'u2');
+  const { svc } = serviceFor(inst);
+  await svc.setup(PW, { logN: 15 });
+  const file = svc.filePath((await svc.backupNow({ now: true })).backup.name);
+  const dir = path.join(inst.root, '.restore', 'uploads');
+  // The upload's file opens late (a busy disk): the piece is refused at its first chunk, before the open finishes.
+  const open = fs.open;
+  fs.open = function (p, ...rest) {
+    if (String(p).startsWith(dir)) { setTimeout(() => open.call(fs, p, ...rest), 150); return; }   // the open itself happens late
+    return open.call(this, p, ...rest);
+  };
+  try {
+    await assert.rejects(svc.acceptUpload(fs.createReadStream(file), { limit: 1000 }), (e) => e.code === 'ENOSPC');
+    await assert.rejects(svc.acceptUpload(fs.createReadStream(file, { highWaterMark: 64 }), { limit: 100 }), (e) => e.code === 'ENOSPC');
+  } finally { fs.open = open; }
+  assert.deepStrictEqual(fs.existsSync(dir) ? fs.readdirSync(dir) : [], [], 'nothing right after the refusal');
+  await sleep(400);   // past any late open
+  assert.deepStrictEqual(fs.existsSync(dir) ? fs.readdirSync(dir) : [], [], 'and nothing appears later');
+});
+
 test('a restore onto a fresh install: from an upload, an admin sign-in from the backup, then confirmed; cancelled before, not after', async () => {
   // The backed-up install has a real admin password and two-factor sign-in
   const inst = makeInstall(TMP, 'old');
