@@ -32,9 +32,10 @@ function mk({ entries, agents, auditFile, onAfter, failOn } = {}) {
     agents: () => roster,
     // stand-ins for agents.agentStamp and updateAgentField(..., { expectStamp }): the stamp is the box id, checked at the write
     stampOf: (n) => { const a = roster.find((x) => x.name === n); return a ? `box:${a.box}` : null; },
-    setAgentGuidance: async (n, v, stamp) => {
+    setAgentGuidance: async (n, v, stamp, check) => {
       const a = roster.find((x) => x.name === n);
       if (!a || `box:${a.box}` !== stamp) return { success: false, error: 'The agent changed (removed and made again?), so nothing changed.' };
+      const refusal = check(a); if (refusal) return { success: false, error: refusal };
       if (failOn === n) return { success: false, error: 'disk full' };
       guidance.push([n, v]); a.teamGuidance = v; return { success: true };
     },
@@ -280,5 +281,24 @@ test('agents.agentStamp and updateAgentField expectStamp (source): box id first,
   assert.match(src, /if \(ctx\.expectStamp !== undefined && stampOf\(agent\) !== ctx\.expectStamp\) return \{ success: false/);
   const sw = fs.readFileSync(path.join(ROOT, 'lib', 'behaviour-switch.js'), 'utf8');
   assert.match(sw, /stampOf = \(name\) => require\('\.\/agents'\)\.agentStamp\(name\)/);
-  assert.match(sw, /updateAgentField\(name, \{ teamGuidance: value \}, \{ expectStamp: stamp \}\)/);
+  assert.match(sw, /updateAgentField\(name, \{ teamGuidance: value \}, \{ expectStamp: stamp, check \}\)/);
+  assert.match(src, /if \(typeof ctx\.check === 'function'\) \{\n    let refusal;\n    try \{ refusal = ctx\.check\(agent\); \} catch \{ refusal = "Couldn't check the agent, so nothing changed\."; \}/);
+});
+
+test('review r7 (GPT-6): an agent handed to a member while the change turns on is refused at the write; the change itself stays on and is announced', async (t) => {
+  const h = mk(); t.after(h.cleanup);
+  const realDecide = bc.decide;
+  const sw = createBehaviourSwitch({
+    changes: { list: () => bc.list({ stateFile: h.stateFile }), decide: async (id, dec, o) => { const r = await realDecide(id, dec, { ...o, stateFile: h.stateFile }); h.roster[1].owner = 'u-member'; return r; } },
+    agents: () => h.roster,
+    stampOf: (n) => { const a = h.roster.find((x) => x.name === n); return a ? `box:${a.box}` : null; },
+    setAgentGuidance: async (n, v, stamp, check) => { const a = h.roster.find((x) => x.name === n); const refusal = check(a); if (refusal) return { success: false, error: refusal }; h.guidance.push([n, v]); return { success: true }; },
+    isMemberOwned: (a) => !!(a && a.owner && a.owner !== 'u-admin'), isVirtual: () => false, afterChange: async () => {},
+    push: { notify: (payload, opts) => h.pushed.push({ payload, opts }) },
+    auditFile: path.join(h.d, 'log5.jsonl'),
+  });
+  await assert.rejects(sw.on({ id: 'team-guidance', agents: ['coach'], by: 'maestro', confirm: yes }), /Couldn't change coach: coach belongs to a member; only the owner can change its settings\. Done before that: turned on "[^"]+"\./);
+  assert.deepEqual(h.guidance, []);
+  assert.equal(h.state()['team-guidance'].state, 'on');
+  assert.match(h.pushed[0].payload.body, /^maestro turned on "[^"]+"; the rest failed\./);
 });
