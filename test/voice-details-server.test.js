@@ -342,7 +342,8 @@ test('the tool is wired in both builders and the policy, identity from the turn 
   assert.match(SRC, /try \{ interruptReminder = voicePersonPrefs\.getVoicePersonPrefs\(\)\.interruptReminder\(voicePersonKey\) !== false; \} catch \{ interruptReminder = true; \}/);
   assert.match(SRC, /const readFull = \(\) => \{[\s\S]{0,200}type: 'voice_read_full', turnId: turnId \|\| null/);
   assert.match(SRC, /onTag: readFull \}\);\s*\n\s*const rf = createReadTagFilter\(\{ enabled: enabled === true, onTag: readFull \}\);/);
-  assert.equal((SRC.match(/createVoiceMood\(\{[^\n]*turnId: \(turnRegistry\.get\(agentName\) \|\| \{\}\)\.turnId \|\| null \}\)/g) || []).length, 3, 'gateway, Claude client, Codex');
+  // looked up on voice turns only (other turns, e.g. a tiger-team call, never touch the registry for it)
+  assert.equal((SRC.match(/createVoiceMood\(\{[^\n]*turnId: options\.voice === true \? \(\(turnRegistry\.get\(agentName\) \|\| \{\}\)\.turnId \|\| null\) : null \}\)/g) || []).length, 3, 'gateway, Claude client, Codex');
   assert.match(SRC, /extras\('voice_interrupt_reminder', !!\(voiceTurn && voiceTurn\.moodStrip === true\)\)/);
   assert.match(fs.readFileSync(path.join(__dirname, '..', 'lib', 'tool-policy.js'), 'utf8'), /HUB_WRITE_INSIDE = new Set\([^)]*'for_owner', 'voice_interrupt_reminder'/);
   // the handler never reads the tool input for identity
