@@ -6,6 +6,7 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
+- **Stopping a boxed agent's job stops it, even right as it starts.** A background job of an agent that works in its own box could miss a stop that arrived while the job was still starting inside the box, and then run to the end. Now the stop always reaches it, or the job never begins.
 - **A stuck system service can't freeze your Maestro.** Checking on background jobs used to wait for this computer's service manager (systemd), so if it hung, chats and calls could freeze for several seconds at a time. Those checks now run alongside everything else. While the service manager isn't answering, a job says so in its status instead of looking simply "running".
 - **On a call, "Let me check that" is said before the agent goes off to check.** With models other than Claude, a sentence your agent said just before using a tool (looking something up, running a command) was only spoken once the tool had finished, together with the answer. Now it is spoken as soon as the tool starts.
 - **A call no longer reads out what other agents sent.** When something waits for you during a call (another agent's request, a scheduled task, a finished job), your agent now asks only who and what kind it is, for example "Sam has a request. Now, or after we're done?", and never reads its text aloud; the text stays in the list on screen.
