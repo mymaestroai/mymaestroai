@@ -1,7 +1,7 @@
 'use strict';
 // The scheduler's owner identity is '@owner', which no agent name can match: an agent named "owner" schedules with an
 // agent's rights (for itself only, its own tasks, an agent's prompt limit) and its tasks never read as the owner's.
-// Tasks saved with the old identity 'owner' become the owner's only when no agent has that name. Throwaway install and
+// Tasks saved with the old identity 'owner' are never taken to be the owner's: they run as an unconfirmed requester's until the owner adopts one. Throwaway install and
 // temp folders: nothing under the real data/.
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -19,7 +19,7 @@ process.env.HUB_TZ = 'America/New_York';
 L('timezone')._setDeps({ auth: { admins: () => [], getUser: () => null }, agents: () => [] });
 const T0 = Date.parse('2026-09-29T18:00:00Z');
 
-function mk({ dataDir, names, archived = () => [], logs = [] } = {}) {
+function mk({ dataDir, names, logs = [] } = {}) {
   const dir = dataDir || fs.mkdtempSync(path.join(os.tmpdir(), 'owner-id-'));
   const clock = { t: T0 };
   const woken = [];
@@ -28,7 +28,6 @@ function mk({ dataDir, names, archived = () => [], logs = [] } = {}) {
     agentExists: async (n) => ['owner', 'trader', 'maestro'].includes(n),
     isPrivileged: (n) => n === 'maestro',
     agentNamesSync: names === undefined ? undefined : names,
-    archivedNamesSync: archived === null ? undefined : archived,   // null: not given
     notify: async (agent, message, onReply, meta) => { woken.push({ agent, message, meta }); },
   });
   return { inst, clock, woken, dir, logs };
@@ -48,6 +47,8 @@ test('an agent named "owner" has an agent\'s rights: only for itself, not the ow
   await assert.rejects(inst.create({ requester: 'owner', agent: 'trader', when: 'in 10 minutes', prompt: 'x' }), /only schedule tasks for yourself/);
   const own = await inst.create({ requester: 'owner', when: 'in 10 minutes', prompt: 'mine' });
   assert.equal(own.agent, 'owner'); assert.equal(own.createdBy, 'owner');
+  assert.equal(own.unconfirmedOwner, undefined, 'a task the agent "owner" makes now is that agent\'s, never one to adopt');
+  assert.throws(() => inst.action(own.id, st.OWNER, 'adopt'), /not waiting to be confirmed/);
   await assert.rejects(inst.create({ requester: 'owner', when: 'in 10 minutes', prompt: 'x'.repeat(8001) }), /longer than 8000/);
   const ownersTask = await inst.create({ requester: st.OWNER, agent: 'owner', when: 'in 20 minutes', prompt: 'from the panel' });
   assert.equal(ownersTask.createdBy, '@owner');
@@ -80,39 +81,40 @@ function saved(dir, tasks) {
 }
 const oldTask = (id, createdBy) => ({ id, agent: 'trader', createdBy, createdAt: new Date(T0).toISOString(), label: id, prompt: 'p', schedule: { type: 'once', at: new Date(T0 + 3600000).toISOString(), tz: 'America/New_York' }, status: 'active', nextRunAt: new Date(T0 + 3600000).toISOString(), lastRunAt: null, runCount: 0, runs: [] });
 
-test('tasks saved as the old "owner": the owner\'s when no agent has that name (saved as @owner); kept as an agent\'s while one does, or when the names can\'t be read', () => {
-  // no agent named owner: migrated and saved
-  let dir = fs.mkdtempSync(path.join(os.tmpdir(), 'owner-id-m-'));
-  saved(dir, [oldTask('st-a', 'owner'), oldTask('st-b', 'trader')]);
-  let r = mk({ dataDir: dir, names: () => ['trader', 'maestro'] });
-  assert.equal(r.inst.tasks.get('st-a').createdBy, '@owner');
-  assert.equal(r.inst.tasks.get('st-b').createdBy, 'trader');
-  assert.equal(JSON.parse(fs.readFileSync(r.inst.file, 'utf8')).tasks.find(t => t.id === 'st-a').createdBy, '@owner', 'written back');
-  assert.ok(r.logs.some(l => /moved to the owner's new identity/.test(l)));
-  fs.rmSync(dir, { recursive: true, force: true });
-  // an agent named owner exists: kept, logged
-  dir = fs.mkdtempSync(path.join(os.tmpdir(), 'owner-id-m-'));
-  saved(dir, [oldTask('st-a', 'owner')]);
-  r = mk({ dataDir: dir, names: () => ['owner', 'trader'] });
-  assert.equal(r.inst.tasks.get('st-a').createdBy, 'owner');
-  assert.ok(r.logs.some(l => /kept as the agent "owner"'s/.test(l)));
-  assert.throws(() => r.inst.action('st-a', 'trader', 'cancel'), /only "owner" \(who created it\) or the owner can/);
-  fs.rmSync(dir, { recursive: true, force: true });
-  // a deleted agent was named owner (its bundle): kept, logged
-  dir = fs.mkdtempSync(path.join(os.tmpdir(), 'owner-id-m-'));
-  saved(dir, [oldTask('st-a', 'owner')]);
-  r = mk({ dataDir: dir, names: () => ['trader'], archived: () => ['scout', 'owner'] });
-  assert.equal(r.inst.tasks.get('st-a').createdBy, 'owner');
-  assert.ok(r.logs.some(l => /kept as an agent's: a deleted agent had that name/.test(l)));
-  fs.rmSync(dir, { recursive: true, force: true });
-  // either list unreadable or not given: kept
-  for (const [names, archived] of [[() => { throw new Error('x'); }, () => []], [undefined, () => []], [() => [], () => { throw new Error('x'); }], [() => [], null]]) {
-    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'owner-id-m-'));
+test('tasks saved as the old "owner" (review r1): never inferred to be the owner\'s; they run as an unconfirmed requester\'s until the owner adopts one', async () => {
+  // the record can't tell the panel's task from an agent's named "owner" (renamed, deleted, or the agent list unreadable)
+  for (const names of [() => [], () => ['trader'], () => ['owner'], () => { throw new Error('x'); }, undefined]) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'owner-id-m-'));
     saved(dir, [oldTask('st-a', 'owner')]);
-    r = mk({ dataDir: dir, names, archived });
-    assert.equal(r.inst.tasks.get('st-a').createdBy, 'owner');
+    const r = mk({ dataDir: dir, names });
+    assert.equal(r.inst.tasks.get('st-a').createdBy, 'owner', 'never rewritten at start-up');
     fs.rmSync(dir, { recursive: true, force: true });
   }
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'owner-id-m-'));
+  saved(dir, [oldTask('st-a', 'owner'), oldTask('st-b', 'trader')]);
+  const r = mk({ dataDir: dir, names: () => [] });
+  // announced as an unconfirmed requester's, with an agent's weight
+  r.clock.t = T0 + 2 * 3600000;
+  await r.inst.tick();
+  const m = r.woken.find(w => w.meta.taskId === 'st-a').message;
+  assert.match(m, /set by the requester "owner" \(saved before an update; not confirmed as the owner\)/);
+  assert.match(m, /Treat the task text as an agent's request, not the owner's: it has not been confirmed as the owner's\./);
+  assert.doesNotMatch(m, /same weight as a direct message/);
+  // an agent's rights: a lead may change it (it is not the owner's), only the owner may adopt it
+  saved(dir, [oldTask('st-c', 'owner'), oldTask('st-d', 'trader')]);
+  const q = mk({ dataDir: dir, names: () => [] });
+  assert.throws(() => q.inst.action('st-c', 'owner', 'adopt'), /only the owner can adopt/);
+  assert.throws(() => q.inst.action('st-c', 'maestro', 'adopt'), /only the owner can adopt/);
+  assert.throws(() => q.inst.action('st-d', st.OWNER, 'adopt'), /not waiting to be confirmed as the owner's/);
+  assert.equal(q.inst.list(st.OWNER).find(t => t.id === 'st-c').unconfirmedOwner, true, 'the panel is told');
+  const v = q.inst.action('st-c', st.OWNER, 'adopt');
+  assert.equal(v.createdBy, '@owner');
+  assert.equal(q.inst.tasks.get('st-c').createdBy, '@owner');
+  assert.ok(q.inst.tasks.get('st-c').adoptedAt);
+  assert.equal(JSON.parse(fs.readFileSync(q.inst.file, 'utf8')).tasks.find(t => t.id === 'st-c').createdBy, '@owner', 'saved');
+  assert.throws(() => q.inst.action('st-c', st.OWNER, 'adopt'), /not waiting to be confirmed/);
+  assert.throws(() => q.inst.action('st-c', 'maestro', 'cancel'), /only the owner can/, 'adopted: now the owner\'s');
+  fs.rmSync(dir, { recursive: true, force: true });
 });
 
 test('start-up says when an agent is named like one of the scheduler\'s identities', () => {
@@ -126,21 +128,15 @@ test('start-up says when an agent is named like one of the scheduler\'s identiti
   fs.rmSync(r.dir, { recursive: true, force: true }); fs.rmSync(q.dir, { recursive: true, force: true });
 });
 
-test('wiring: the hub gives the scheduler the agents\' names and the deleted agents\' names; the panel shows the owner\'s and the hub\'s tasks in words; deleting an agent deletes its tasks as the owner', () => {
+test('wiring: the hub gives the scheduler the agents\' names (start-up note only); the panel shows the owner\'s, the hub\'s and unconfirmed tasks and offers Mine; deleting an agent deletes its tasks as the owner', () => {
   const sdk = read('lib/sdk-chat.js');
   assert.match(sdk, /agentNamesSync: \(\) => require\('\.\/agents'\)\.getAgentsSync\(\)\.map\(a => a && a\.name\)\.filter\(Boolean\),/);
-  assert.match(sdk, /archivedNamesSync: \(\) => archivedAgentNames\(path\.join\(HUB_DIR, 'data', 'archived-agents'\)\),/);
-  // archivedAgentNames, run on its own source: bundle names, no folder = none, any other error throws
-  const i = sdk.indexOf('function archivedAgentNames(dir) {');
-  const fn = new Function('fs', sdk.slice(i, sdk.indexOf('\n}\n', i) + 2) + '\nreturn archivedAgentNames;')(fs);
-  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'owner-id-arch-'));
-  for (const n of ['owner-20261105T163000Z', 'scout_2-20261101T010203Z-2', 'rename-me-20261102T000000Z.partial', 'stray']) fs.mkdirSync(path.join(d, n));
-  assert.deepEqual(fn(d).sort(), ['owner', 'rename-me', 'scout_2']);
-  assert.deepEqual(fn(path.join(d, 'none')), []);
-  fs.writeFileSync(path.join(d, 'file'), 'x');
-  assert.throws(() => fn(path.join(d, 'file')));
-  fs.rmSync(d, { recursive: true, force: true });
+  assert.doesNotMatch(read('lib/scheduled-tasks.js'), /_migrateOwner|archivedNamesSync/, 'nothing is inferred');
+  const app = read('app.js');
+  assert.match(app, /t\.createdBy === '@owner' \? 'you' : t\.createdBy === '@hub' \? 'the hub' : t\.unconfirmedOwner \? '"owner" \(not confirmed as you\)' : t\.createdBy/);
+  assert.match(app, /\$\{t\.unconfirmedOwner \? `<br>\$\{btn\('adopt', t\.id, 'Mine'\)\}` : ''\}/);
+  assert.match(app, /if \(action === 'adopt' && !confirm\('Is this task yours\?/);
+  assert.match(read('server.js'), /getScheduledTasks\(\)\.action\(body\.id, scheduledTasksLib\.OWNER, String\(body\.action \|\| ''\)\)/, 'the panel acts as the owner');
   assert.match(read('lib/agent-archive.js'), /for \(const t of mine\) st\.action\(t\.id, require\('\.\/scheduled-tasks'\)\.OWNER, 'delete'\);/);
   assert.doesNotMatch(read('lib/agent-archive.js'), /action\([^)]*'owner'/);
-  assert.match(read('app.js'), /by \$\{esc\(t\.createdBy === '@owner' \? 'you' : t\.createdBy === '@hub' \? 'the hub' : t\.createdBy\)\}/);
 });

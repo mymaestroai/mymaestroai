@@ -2452,7 +2452,7 @@
       const btn = (a, id, label) => `<button class="gs-btn secondary" onclick="schedAct('${a}', '${esc(id)}')">${label}</button>`;
       const rows = tasks.length ? tasks.map(t => `<tr style="border-top:1px solid var(--border,#333)">
           <td><b>${esc(t.label)}</b><br><code style="font-size:11px">${esc(t.id)}</code></td>
-          <td>${esc(t.agent)}<br><small>by ${esc(t.createdBy === '@owner' ? 'you' : t.createdBy === '@hub' ? 'the hub' : t.createdBy)}</small></td>
+          <td>${esc(t.agent)}<br><small>by ${esc(t.createdBy === '@owner' ? 'you' : t.createdBy === '@hub' ? 'the hub' : t.unconfirmedOwner ? '"owner" (not confirmed as you)' : t.createdBy)}</small>${t.unconfirmedOwner ? `<br>${btn('adopt', t.id, 'Mine')}` : ''}</td>
           <td><small>${esc(t.schedule)}</small>${t.nextRunLocal ? `<br><small>next: <b>${esc(t.nextRunLocal)}</b></small>` : ''}</td>
           <td>${pill(t.status, t.queued ? ' · due now' : '')}${t.lastRun ? `<br><small title="${esc(t.lastRun.replyPreview || t.lastRun.note || '')}">last: ${esc(when(t.lastRun.firedAt || t.lastRun.dueAt))} ${esc(t.lastRun.status)}${t.lastRun.late ? ' (late)' : ''}</small>` : ''}</td>
           <td style="white-space:nowrap">
@@ -2540,6 +2540,7 @@
         if (action === 'delete' && !confirm('Delete this task and its run history?')) return;
         if (action === 'cancel' && !confirm('Cancel this task? It will not run again.')) return;
         if (action === 'run_now' && !confirm('Wake the agent with this task now?')) return;
+        if (action === 'adopt' && !confirm('Is this task yours? It was saved before an update as "owner", which an agent could also be named. Once you confirm, the agent it wakes treats it as your request.')) return;
         const t = await schedApi('/action', { id, action });
         return openSchedulePanel(t.deleted ? `Deleted ${t.id}.` : `${t.id} "${t.label}": ${action.replace('_', ' ')} → ${t.status}${t.queued ? ' (delivering)' : ''}.`);
       } catch (e) { openSchedulePanel('Error: ' + e.message); }
