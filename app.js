@@ -5883,6 +5883,16 @@
       });
     }
 
+    // Team guidance level (full | light | off): how agents are told to run a team
+    const teamGuidanceSelect = document.getElementById('team-guidance-select');
+    if (teamGuidanceSelect) {
+      fetch('/api/team_guidance', { credentials: 'include' }).then(r => r.json()).then(d => { if (d && d.level) teamGuidanceSelect.value = d.level; }).catch(() => {});
+      teamGuidanceSelect.addEventListener('change', () => {
+        fetch('/api/team_guidance', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ level: teamGuidanceSelect.value }) })
+          .then(r => r.json()).then(d => { if (d && d.level) teamGuidanceSelect.value = d.level; }).catch(() => {});
+      });
+    }
+
     const lazyToolsToggle = document.getElementById('lazy-tools-toggle');
     const lazyToolsLabel = document.getElementById('lazy-tools-label');
     function updateLazyToolsLabel() {
