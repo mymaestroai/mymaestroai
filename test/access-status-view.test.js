@@ -97,3 +97,13 @@ test('statusForViewer: input not mutated; no user -> {}', () => {
   assert.deepStrictEqual(X.statusForViewer(null, feed(), opts), {});
   assert.deepStrictEqual(X.statusForViewer(sam, feed()), {}, 'no agents known -> nothing');
 });
+
+test('isAdminSession: only a signed-in admin browser session, never a token, the hub service, a member or a pending second factor', () => {
+  assert.strictEqual(X.isAdminSession({ hubIdentKind: 'user', hubUser: { role: 'admin' } }), true);
+  assert.strictEqual(X.isAdminSession({ hubService: true, hubUser: null }), false);
+  assert.strictEqual(X.isAdminSession({ hubIdentKind: 'user', hubUser: { role: 'admin' }, hubToken: 't' }), false);
+  assert.strictEqual(X.isAdminSession({ hubIdentKind: 'user', hubUser: { role: 'admin' }, hubPendingTotp: true }), false);
+  assert.strictEqual(X.isAdminSession({ hubIdentKind: 'user', hubUser: { role: 'member' } }), false);
+  assert.strictEqual(X.isAdminSession(null), false);
+});
+
