@@ -71,7 +71,7 @@ README.md CHANGELOG.md LICENSE NOTICE docs/
 | `context-refresh/<agent>.json` | what a resumed Claude session has already been told (section 7.4) | no |
 | `compaction.json` | per-agent context-compression state | no |
 | `discovered-models.json` | the model list from the last provider discovery | no |
-| `scheduled-tasks.json` | tasks created with `schedule_task` | no |
+| `scheduled-tasks.json` | tasks created with `schedule_task`, the scheduler panel (`createdBy: '@owner'`) and the hub (`'@hub'`); names no agent can have, so an agent named "owner" or "hub" schedules with an agent's rights. Tasks saved as the old `'owner'` become `'@owner'` at start-up only while no agent has that name | no |
 | `consult-queue.json`, `pending-interjections.json` | queued consults and stashed interjections | no |
 | `jobs/` | background jobs (`run_job`): command, log, status | may hold output |
 | `push/` | web push: `vapid.json` keys and `subscriptions.json` (phones) | yes |

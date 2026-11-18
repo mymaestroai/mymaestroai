@@ -1,4 +1,5 @@
 'use strict';
+// The owner's scheduler identity is '@owner' (an agent may be named "owner"; it then has an agent's rights): see test/owner-identity.test.js.
 // Behavioural tests for lib/scheduled-tasks.js: when-parsing, cron, guardrails, persistence, firing. Fixed clock, temp dirs, no timers fire.
 const test = require('node:test');
 const assert = require('node:assert');
@@ -139,7 +140,7 @@ test('create: persistence to a temp file (atomic, reloadable), corrupt file tole
   const st2 = new ScheduledTasks({ dataDir: dir, tz: NY, now: () => NOW, log: () => {} });
   assert.deepStrictEqual(st2.list('alice').map(x => [x.id, x.nextRunAt]), [[v.id, v.nextRunAt]]);
   fs.writeFileSync(file, '{not json');
-  assert.deepStrictEqual(new ScheduledTasks({ dataDir: dir, log: () => {} }).list('owner'), []);
+  assert.deepStrictEqual(new ScheduledTasks({ dataDir: dir, log: () => {} }).list('@owner'), []);
 });
 
 test('create: who may schedule for whom, prompt/label rules, 25-live limit', async () => {
@@ -147,8 +148,8 @@ test('create: who may schedule for whom, prompt/label rules, 25-live limit', asy
   await assert.rejects(mkTask(st, 'alice', 'in 1 day', { agent: 'bob' }), /only schedule tasks for yourself \("alice"\).*the lead agent \(maestro\)/);
   assert.strictEqual((await mkTask(st, 'maestro', 'in 1 day', { agent: 'bob' })).agent, 'bob');
   await assert.rejects(mkTask(st, 'maestro', 'in 1 day', { agent: 'ghost' }), /no agent named "ghost"/);
-  await assert.rejects(mkTask(st, 'owner'), /agent is required/);
-  assert.strictEqual((await mkTask(st, 'owner', 'in 1 day', { agent: 'bob' })).createdBy, 'owner');
+  await assert.rejects(mkTask(st, '@owner'), /agent is required/);
+  assert.strictEqual((await mkTask(st, '@owner', 'in 1 day', { agent: 'bob' })).createdBy, '@owner');
   await assert.rejects(st.create({ when: 'in 1 day', prompt: 'x' }), /requester is required/);
   await assert.rejects(st.create({ requester: 'alice', when: 'in 1 day', prompt: '   ' }), /prompt is empty/);
   await assert.rejects(st.create({ requester: 'alice', when: 'in 1 day', prompt: 'x'.repeat(8001) }), /longer than 8000/);
@@ -168,7 +169,7 @@ test('create: who may schedule for whom, prompt/label rules, 25-live limit', asy
 test('cancel / delete / visibility / list include_done through the tool wrappers', async () => {
   const { st } = mk();
   const a = await mkTask(st, 'alice', 'in 1 day'), a2 = await mkTask(st, 'alice', 'in 2 days');
-  const o = await mkTask(st, 'owner', 'in 3 days', { agent: 'alice' });
+  const o = await mkTask(st, '@owner', 'in 3 days', { agent: 'alice' });
   assert.throws(() => st.action(a.id, 'bob', 'cancel'), /no scheduled task with id/);
   assert.deepStrictEqual(st.list('bob'), []);
   assert.throws(() => st.action(o.id, 'alice', 'cancel'), /only the owner can cancel task/);
@@ -182,8 +183,8 @@ test('cancel / delete / visibility / list include_done through the tool wrappers
   assert.deepStrictEqual(await ids({ include_done: 'TRUE' }), [a2.id, o.id, a.id]);
   assert.strictEqual(st.list('alice').length, 3);                                  // direct API defaults includeDone=true
   assert.strictEqual(st.list('maestro').length, 3);
-  assert.deepStrictEqual(st.action(o.id, 'owner', 'delete'), { id: o.id, deleted: true });
-  assert.strictEqual(st.list('owner').length, 2);
+  assert.deepStrictEqual(st.action(o.id, '@owner', 'delete'), { id: o.id, deleted: true });
+  assert.strictEqual(st.list('@owner').length, 2);
   const cancel = TOOL_SPECS.find(s => s.name === 'cancel_scheduled_task');
   assert.strictEqual(JSON.parse(await runTool(st, cancel, 'alice', { id: a2.id })).status, 'cancelled');
   assert.match(await runTool(st, cancel, 'alice', { id: 'st-nope' }), /^\[cancel_scheduled_task error\] no scheduled task with id "st-nope"/);
@@ -206,7 +207,7 @@ test('firing a one-off: nothing before due, message labelled as scheduler, statu
   calls[0].onReply('z'.repeat(700)); assert.strictEqual(st.list('alice')[0].lastRun.replyPreview.length, 601);
   assert.strictEqual(JSON.parse(fs.readFileSync(file, 'utf8')).tasks[0].runs[0].status, 'replied');
   assert.strictEqual(st.recentRuns(5)[0].taskId, v.id);
-  const m = await mkTask(st, 'maestro', 'in 1 day', { agent: 'bob' }), w = await mkTask(st, 'owner', 'in 1 day', { agent: 'bob' });
+  const m = await mkTask(st, 'maestro', 'in 1 day', { agent: 'bob' }), w = await mkTask(st, '@owner', 'in 1 day', { agent: 'bob' });
   clock.t += 2 * DAY; await st.tick();
   assert.match(calls.find(c => c.meta.taskId === m.id).msg, /Treat the task text as a request from agent "maestro"/);
   assert.match(calls.find(c => c.meta.taskId === w.id).msg, /set by the owner \(from the scheduler panel\)/);
@@ -283,7 +284,7 @@ test('pausing a task that is already queued stops delivery; resuming a one-off f
 
 test('update / pause / resume / run_now / unknown action / prune', async () => {
   const { st, clock, calls } = mk();
-  const v = await mkTask(st, 'alice', 'in 1 day', { label: 'L' }), o = await mkTask(st, 'owner', 'in 1 day', { agent: 'alice' });
+  const v = await mkTask(st, 'alice', 'in 1 day', { label: 'L' }), o = await mkTask(st, '@owner', 'in 1 day', { agent: 'alice' });
   const u = await st.update(v.id, 'alice', { when: 'in 3 days', prompt: ' new ', label: '  new   label ' });
   assert.deepStrictEqual([u.nextRunAt, u.prompt, u.label], [new Date(NOW + 3 * DAY).toISOString(), 'new', 'new label']);
   await assert.rejects(st.update(v.id, 'alice', { prompt: ' ' }), /prompt is empty/);
@@ -308,7 +309,7 @@ test('update / pause / resume / run_now / unknown action / prune', async () => {
   assert.strictEqual(st.prune(), 0);                      // freshly cancelled: too new
   clock.t += 31 * DAY;
   assert.strictEqual(st.prune(), 2);                      // the cancelled task and the owner's fired (done) one; live tasks are never pruned
-  assert.deepStrictEqual(st.list('owner').map(x => x.id), [rec.id]);
+  assert.deepStrictEqual(st.list('@owner').map(x => x.id), [rec.id]);
   assert.strictEqual(st.prune(), 0);
 });
 
