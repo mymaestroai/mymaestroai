@@ -663,6 +663,16 @@ async function handleHttpRequest(req, res) {
       const out = await require('./lib/welcome-team').skip();
       return jsonResponse(res, out.status, out.body);
     }
+    // The "Set up your team" card for existing installs (lib/team-card): admin only (lib/access: not in PUBLIC_EXACT).
+    if (pathname === '/api/team/card' && req.method === 'GET') {
+      const out = await require('./lib/team-card').cardState({ again: new URL(req.url, 'http://x').searchParams.get('again') === '1' });
+      return jsonResponse(res, out.status, out.body);
+    }
+    if (pathname === '/api/team/card/answer' && req.method === 'POST') {
+      const b = (await authJson()) || {};
+      const out = await require('./lib/team-card').answerCard({ answer: b.answer });
+      return jsonResponse(res, out.status, out.body);
+    }
     if (pathname === '/api/welcome/api-key' && req.method === 'POST') {
       const b = (await authJson()) || {};
       return jsonResponse(res, 200, await require('./lib/welcome').getWelcome().connectApiKey(b.provider, b.apiKey));
