@@ -192,22 +192,63 @@ test('the starter templates are never part of automatic workspace seeding', () =
   } finally { fs.rmSync(tmpWs, { recursive: true, force: true }); }
 });
 
-// Review (own): a ledger that is there but unreadable stops every create (an empty-looking ledger could bring back a
-// starter the owner deleted); a ledger that can't be saved after a create reports the agent as created, with a warning.
-test('an unreadable ledger creates nothing; an unsavable ledger still reports the created agent', async (t) => {
-  fs.writeFileSync(LEDGER, '{ not json');
-  const r = await st.createTeam({ available: AVAILABLE, lead: 'claude-sdk/default', deps: { ledgerFile: LEDGER, templatesDir: TEMPLATES } });
-  assert.strictEqual(r.created.length, 0);
-  assert.ok(r.skipped.every(e => e.reason === 'failed' && /can't be read/.test(e.error)), JSON.stringify(r.skipped));
+// Review r1 (GPT-6 and Sonnet BLOCKs): the ledger must never let a deleted starter come back.
+test('r1: an unreadable or malformed ledger creates nothing, and Skip leaves it byte for byte', async () => {
+  for (const text of ['{ not json', '{"roles":[]}', '{}', '{"roles":{"scout":{}}}', '[]']) {
+    fs.writeFileSync(LEDGER, text);
+    const r = await st.createTeam({ available: AVAILABLE, lead: 'claude-sdk/default', deps: { ledgerFile: LEDGER, templatesDir: TEMPLATES } });
+    assert.strictEqual(r.created.length, 0, text);
+    assert.ok(r.skipped.every(e => e.reason === 'failed' && /can't be read/.test(e.error)), text);
+    assert.throws(() => st.markSkipped({ ledgerFile: LEDGER }), /can't be read/, text);
+    assert.strictEqual(fs.readFileSync(LEDGER, 'utf8'), text, text);
+  }
+});
+test('r1: a ledger that cannot be saved means no agent at all', async (t) => {
   if (process.getuid && process.getuid() === 0) { t.skip('root writes into a read-only folder'); return; }
   const ro = path.join(INST, 'data', 'readonly-ledger');
   fs.mkdirSync(ro, { recursive: true });
-  fs.chmodSync(ro, 0o555);   // the ledger reads as missing and can't be written
+  fs.chmodSync(ro, 0o555);
+  const made = [];
   try {
     const deps = { ledgerFile: path.join(ro, 'team.json'), templatesDir: TEMPLATES,
-      getAgents: async () => [], createAgent: async (name) => ({ success: true, name }) };
-    const r2 = await st.createTeam({ available: AVAILABLE, lead: 'claude-sdk/default', deps });
-    assert.strictEqual(r2.created.length, 4);
-    assert.ok(r2.created.every(e => /could not be saved/.test(e.warning)));
+      getAgents: async () => [], createAgent: async (name) => { made.push(name); return { success: true, name }; } };
+    const r = await st.createTeam({ available: AVAILABLE, lead: 'claude-sdk/default', deps });
+    assert.strictEqual(r.created.length, 0);
+    assert.deepStrictEqual(made, [], 'nothing made without a saved reservation');
+    assert.ok(r.skipped.every(e => /could not be saved/.test(e.error)));
   } finally { fs.chmodSync(ro, 0o755); }
+});
+test('r1: a create whose final ledger save fails, then a delete: the starter never comes back', async (t) => {
+  if (process.getuid && process.getuid() === 0) { t.skip('root writes into a read-only folder'); return; }
+  const dir = path.join(INST, 'data', 'ledger-dir');
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, 'team.json');
+  let exists = [];
+  const deps = { ledgerFile: file, templatesDir: TEMPLATES, getAgents: async () => exists.map(name => ({ name })),
+    createAgent: async (name) => { exists.push(name); fs.chmodSync(dir, 0o555); return { success: true, name }; } };
+  try {
+    const r = await st.createTeam({ available: AVAILABLE, lead: 'claude-sdk/default', only: ['scout'], deps });
+    assert.strictEqual(r.created.length, 1);
+    assert.match(r.created[0].warning, /reserved/);
+  } finally { fs.chmodSync(dir, 0o755); }
+  assert.strictEqual(st.readLedger(file).roles.scout.status, 'reserved');
+  exists = [];   // the owner deletes it
+  const r2 = await st.createTeam({ available: AVAILABLE, lead: 'claude-sdk/default', only: ['scout'], deps: { ...deps, createAgent: async () => { throw new Error('must not be called'); } } });
+  assert.strictEqual(r2.created.length, 0);
+  assert.strictEqual(r2.skipped.find(e => e.role === 'scout').reason, 'interrupted');
+});
+test('r1: a create that made nothing takes its reservation back, so a later run can make it', async () => {
+  const calls = [];
+  const deps = { ledgerFile: LEDGER, templatesDir: TEMPLATES, getAgents: async () => [],
+    createAgent: async (name) => { calls.push(name); return calls.length === 1 ? { success: false, error: 'disk busy' } : { success: true, name }; } };
+  const r = await st.createTeam({ available: AVAILABLE, lead: 'claude-sdk/default', only: ['scout'], deps });
+  assert.strictEqual(r.skipped.find(e => e.role === 'scout').reason, 'failed');
+  assert.ok(!st.readLedger(LEDGER).roles.scout, 'reservation taken back');
+  const r2 = await st.createTeam({ available: AVAILABLE, lead: 'claude-sdk/default', only: ['scout'], deps });
+  assert.strictEqual(r2.created.length, 1);
+  assert.strictEqual(st.readLedger(LEDGER).roles.scout.status, 'created');
+});
+test('r1: a look-alike display (full-width letters) counts as taken, as createAgent judges it', () => {
+  const plan = st.planTeam({ agents: [{ name: 'mine', display: 'Ｓcout' }], available: AVAILABLE, lead: 'claude-sdk/default', ledger: { roles: {} } });
+  assert.strictEqual(plan.find(e => e.role === 'scout').reason, 'name taken');
 });
