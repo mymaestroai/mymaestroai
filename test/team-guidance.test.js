@@ -195,9 +195,10 @@ test('sdk-chat appends the team guidance at the gateway, SDK and Codex sites (so
   // this pins that each site appends teamGuidanceTextFor(agentName), and that the helper skips temporary workers.
   const src = read('lib/sdk-chat.js');
   assert.match(src, /async function teamGuidanceTextFor\(agentName\) \{[\s\S]*?temporalWorkers\.isVirtual\(agentName\)\) return '';[\s\S]*?require\('\.\/team-guidance'\)\.textFor\(\{ agent: rec, isLead: isLeadAgent\(agentName, agents\), member \}\)[\s\S]*?catch \{ return ''; \}/);
-  assert.match(src, /systemPrompt \+= workerPolicy\.platformPolicyText\(gwRoster\) \+ \(await teamGuidanceTextFor\(agentName\)\);/, 'gateway');
-  assert.match(src, /const workerPolicyText = ephemeral \? '' : workerPolicy\.policyText\(workerMode, workerRoster\) \+ \(await teamGuidanceTextFor\(agentName\)\);/, 'SDK: also when policyText is empty (sdkWorkers allow)');
-  assert.match(src, /const workerPolicyText = ephemeral \? '' : workerPolicy\.platformPolicyText\(workerRoster\) \+ \(await teamGuidanceTextFor\(agentName\)\);/, 'Codex');
+  // each site appends the team guidance, then the independent "need a worker?" line (askLeadTextFor, its own gate)
+  assert.match(src, /systemPrompt \+= workerPolicy\.platformPolicyText\(gwRoster\) \+ \(await teamGuidanceTextFor\(agentName\)\) \+ \(await askLeadTextFor\(agentName\)\);/, 'gateway');
+  assert.match(src, /const workerPolicyText = ephemeral \? '' : workerPolicy\.policyText\(workerMode, workerRoster\) \+ \(await teamGuidanceTextFor\(agentName\)\) \+ \(await askLeadTextFor\(agentName\)\);/, 'SDK: also when policyText is empty (sdkWorkers allow)');
+  assert.match(src, /const workerPolicyText = ephemeral \? '' : workerPolicy\.platformPolicyText\(workerRoster\) \+ \(await teamGuidanceTextFor\(agentName\)\) \+ \(await askLeadTextFor\(agentName\)\);/, 'Codex');
   assert.strictEqual((src.match(/await teamGuidanceTextFor\(agentName\)/g) || []).length, 3);
   assert.strictEqual(wp.policyText('allow', []), '', 'sdkWorkers allow: the delegation text is empty, so the guidance is all that is added');
 });

@@ -672,7 +672,19 @@ async function handleHttpRequest(req, res) {
     if (pathname === '/api/behaviour-changes' && req.method === 'GET') {
       const bc = require('./lib/behaviour-changes');
       const changes = bc.list();
-      return jsonResponse(res, 200, { ok: true, changes, ...(changes.some((c) => c.unreadable) ? { unreadable: true } : {}) });
+      let cadence = 'weekly'; try { cadence = require('./lib/settings').getSetting('workerProposals', 'weekly') === 'off' ? 'off' : 'weekly'; } catch { /* default */ }
+      return jsonResponse(res, 200, { ok: true, changes, workerProposals: cadence, ...(changes.some((c) => c.unreadable) ? { unreadable: true } : {}) });
+    }
+    // How often the lead looks at how the install is used (worker-proposals): saves the setting, then makes the weekly task match.
+    if (pathname === '/api/behaviour-changes/worker-proposals/cadence' && req.method === 'POST') {
+      const b = (await authJson()) || {};
+      if (b.cadence !== 'weekly' && b.cadence !== 'off') return jsonResponse(res, 400, { ok: false, error: 'cadence must be "weekly" or "off"' });
+      try {
+        require('./lib/settings').updateSettings({ workerProposals: b.cadence });
+        const r = await require('./lib/behaviour-review').syncProposalsTask();
+        console.log(`[behaviour] worker proposals set to ${b.cadence} by ${(req.hubUser && req.hubUser.id) || 'unknown'} (${r.action})`);
+        return jsonResponse(res, 200, { ok: true, cadence: b.cadence });
+      } catch (e) { return jsonResponse(res, 409, { ok: false, error: e && e.message ? e.message : String(e) }); }
     }
     {
       const m = pathname.match(/^\/api\/behaviour-changes\/([a-z][a-z0-9-]{1,40})$/);
@@ -684,6 +696,9 @@ async function handleHttpRequest(req, res) {
         try {
           await bc.decide(m[1], b.decision, { user: req.hubUser && req.hubUser.id });
           console.log(`[behaviour] ${m[1]} turned ${b.decision} by ${(req.hubUser && req.hubUser.id) || 'unknown'}`);
+          if (m[1] === 'worker-proposals') {
+            try { await require('./lib/behaviour-review').syncProposalsTask(); } catch (e) { console.warn('[behaviour] could not update the weekly team review:', e.message); }
+          }
           return jsonResponse(res, 200, { ok: true, change: bc.list().find((c) => c.id === m[1]) });
         } catch (e) { return jsonResponse(res, 409, { ok: false, error: e && e.message ? e.message : String(e) }); }
       }
@@ -3753,6 +3768,17 @@ server.listen(PORT, HOST, () => {
   // Scheduled tasks: queue anything that came due while the hub was down (fires once, marked late), start polling.
   try { const st = getScheduledTasks().start(); st.prune(30); console.log(`[sched-tasks] started (${st.list(scheduledTasksLib.OWNER).filter(t => t.status === 'active').length} active, ${st.pending.length} due now)`); }
   catch (e) { console.error('[sched-tasks] failed to start:', e.message); }
+  // Behaviour changes waiting for the owner: the lead is asked to review them (one task, never twice for an entry), and the weekly
+  // team review follows the worker-proposals decision. After the scheduler exists; the hub creates these, the owner decides on /changes.
+  (async () => {
+    try {
+      const review = require('./lib/behaviour-review');
+      const r = await review.scheduleReview({ scheduler: getScheduledTasks() });
+      if (r.taskId) console.log(`[behaviour] review scheduled for ${r.lead} (${r.taskId}): ${r.ids.join(', ')}`);
+      const p = await review.syncProposalsTask({ scheduler: getScheduledTasks() });
+      if (p.action === 'created') console.log(`[behaviour] weekly team review scheduled for ${p.lead} (${p.taskId})`);
+    } catch (e) { console.warn('[behaviour] could not schedule the review:', e.message); }
+  })();
   // A deleted agent whose things were not all moved into its bundle (a stop part-way, Docker not answering) is finished
   // now (lib/agent-archive); after the scheduler, so the tasks that would wake it can leave the list too.
   require('./lib/agents').finishArchivingAgents().catch((e) => console.error('[agents] unfinished removals:', e.message));

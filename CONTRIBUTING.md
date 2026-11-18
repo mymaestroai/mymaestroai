@@ -18,6 +18,7 @@ Thanks for helping. My Maestro AI is source-available under the PolyForm Noncomm
 - Add a line to `CHANGELOG.md` under **[Unreleased]** that says what changed in plain words.
 - Keep personal data and secrets out of code, tests, fixtures and commit messages: no real names, email addresses, keys, tokens, wallet addresses or host names. Fixtures use `owner` / `owner@example.com`.
 - Features should work for any agent, any provider and any install, and be optional (off by default) when they change behaviour.
+- A change to how agents behave (their instructions, their tools, who they can reach, what they create or spend) never turns itself on for installs that already exist. Add an entry to `templates/behaviour-changes.json` (what it changes, benefits, costs, what a lead should check, and what on and off mean) and gate the behaviour on `require('./lib/behaviour-changes').isOn('<id>')`. New installs get it on; existing ones get it switched off and waiting, their lead agent explains it, and the owner decides on the `/changes` page.
 
 The automatic tests check the code; the changelog line, the personal-data rule and the points above are checked in review.
 
