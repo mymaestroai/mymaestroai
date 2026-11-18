@@ -58,11 +58,7 @@ test('wired: Claude client query option, gateway option, Codex; agent field vali
   assert.match(chat, /ephemeral: !!ephemeral, effort: codexEffort, reasoningSummary: showReasoning\(\) \? 'auto' : null, serviceTier: codexServiceTier \}\);/);
   const agents = read('lib/agents.js');
   assert.match(agents, /effort: require\('\.\/effort'\)\.normalize\(a\.effort\)/);
-<<<<<<< HEAD
-  assert.match(agents, /'tools', 'effort'(, 'tier')?(, 'voice')?(, 'callDisplay')?(, 'voiceDefaults')?\];/);   // the voice build and the call display add fields after effort
-=======
-  assert.match(agents, /'tools', 'effort'(, 'teamGuidance', 'teamRole')?(, 'voice')?(, 'callDisplay')?(, 'voiceDefaults')?\];/);   // the voice build and the call display add fields after effort
->>>>>>> 970cabe (Team guidance: every agent that delegates is taught to run a team)
+  assert.match(agents, /'tools', 'effort'(, 'tier')?(, 'teamGuidance', 'teamRole')?(, 'voice')?(, 'callDisplay')?(, 'voiceDefaults')?\];/);   // tier (speed and price), the team-guidance fields, the voice build and the call display add fields after effort
   assert.match(agents, /effort must be default, low, medium, high, xhigh, max or ultra/);
   const server = read('server.js');
   assert.match(server, /const MEMBER_EDITABLE = new Set\(\['blurb', 'maxContextMessages', 'maxOutputTokens', 'contextBudget', 'compaction', 'minimalContext'\]\);/, 'effort is not member-editable');
