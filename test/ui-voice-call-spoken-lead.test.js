@@ -10,7 +10,7 @@ const { voiceCreateCall, voiceSpokenLead, VOICE_LEAD_MAX_SENTENCES } = C;
 // (readWords 0 = the lead only); what the call reads of a short rest is tested in test/ui-voice-details.test.js.
 const voiceReplySentences = (md, done) => C.voiceReplySentences(md, done, 0);
 
-const NOTE = 'I have put the details in the chat.';
+const NOTE = 'The details are in the chat; just say if you\'d like to hear them.';   // the call's note offers to read them (owner, 2026-11-18)
 const tick = async (n = 6) => { for (let i = 0; i < n; i++) await Promise.resolve(); };
 
 const TABLE = 'You have three meetings tomorrow. The first is at nine.\n\n| Time | Meeting | Room |\n|---|---|---|\n| 09:00 | Standup | B2 |\n| 13:30 | Review PR-4821 | A1 |\n\nTicket id ZX-99881 is linked.';

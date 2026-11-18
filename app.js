@@ -9605,6 +9605,7 @@
         source.addEventListener(t, e => { const ev = parse(e); if (ev) voiceCallHubEvent(t, ev); });
       }
       source.addEventListener('turn_mood', e => { const ev = parse(e); if (ev) voiceCallHubEvent('turn_mood', ev); });
+      source.addEventListener('turn_read_full', e => { const ev = parse(e); if (ev) voiceCallHubEvent('turn_read_full', ev); });
       source.addEventListener('compaction_start', e => { const ev = parse(e); if (ev) onCompactionStart(ev); });
       source.addEventListener('compaction_progress', e => { const ev = parse(e); if (ev) onCompactionProgress(ev); });
       source.addEventListener('compaction_end', e => { const ev = parse(e); if (ev) onCompactionEnd(ev); });
@@ -11856,6 +11857,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
                 askFromStream(oc2, chatId);
                 continue;
               }
+              if (oc2.type === 'voice_read_full') { if (typeof voiceCallSseReadFull === 'function') voiceCallSseReadFull(chatId, oc2.turnId); continue; }   // the person asked to hear the details: this reply is read in full
               if (oc2.type === 'voice_mood') { if (typeof voiceCallSseMood === 'function') voiceCallSseMood(chatId, oc2.mood); continue; }   // the agent's mood word, already stripped from the text
               // Session ID tracking
               if (oc2.type === 'session_id') {
@@ -12265,9 +12267,12 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     const VOICE_STORE_KEY = 'hub-voice';
     const VOICE_DETAILS_NOTE = ' I have put the details in the chat.';
     // On a call the note names the kind of what was left out when it is clear (see voiceReplySentences in ui-voice-call.js).
-    const VOICE_NOTE_LIST = ' I\'ve put the full list in the chat.';
-    const VOICE_NOTE_TABLE = ' I\'ve put the table in the chat.';
-    const VOICE_NOTE_CODE = ' I\'ve put the code in the chat.';
+    // The call offers to read what it left out (the agent reads it in full when asked); a reply read aloud without a call keeps the plain note above.
+    // Keep the offer as the "; just say if you'd like ..." ending: voicePlainNote (ui-voice-call.js) removes exactly that on a call the hub cannot verify.
+    const VOICE_NOTE_DETAILS_CALL = ' The details are in the chat; just say if you\'d like to hear them.';
+    const VOICE_NOTE_LIST = ' I\'ve put the full list in the chat; just say if you\'d like to hear it.';
+    const VOICE_NOTE_TABLE = ' I\'ve put the table in the chat; just say if you\'d like to hear it.';
+    const VOICE_NOTE_CODE = ' I\'ve put the code in the chat; just say if you\'d like me to walk you through it.';
     const VOICE_DETAILS_READ_WORDS = [0, 20, 40, 80];   // 'Read short extra parts aloud': Off / up to 20 / 40 / 80 words (pref detailsReadWords, default 40; 0 = never read the rest)
     const VOICE_HUB_CUES = ['off', 'chime', 'cue'];   // 'When something comes in during a call': Off / Chime / Short cue (pref hubCue, default 'cue')
     const VOICE_BACKGROUND_CUES = ['off', 'show', 'say'];   // 'While I finish something in the background': Off / Show it / Say it (pref backgroundCue, default 'say')
@@ -13170,8 +13175,31 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     // VOICE_LEAD_MAX_SENTENCES sentences); anything left out is held. At done what the lead left out is judged: short (at most readWords spoken
     // words, nothing unspeakable) -> its sentences follow the lead's (so the sentences already returned stay a prefix), no note; substantial -> the lead only
     // and ONE note naming the kind (list, table, code, else the details note). readWords 0 never reads the rest.
-    function voiceReplySentences(markdown, done, readWords) {
+    // A 4th argument full === true reads the WHOLE reply (the person asked to hear the details): every complete sentence of the whole text, no cap and no note
+    // (a table or code block is dropped silently); while streaming only complete sentences count, as above.
+    function voiceFullSentences(markdown, done, note) {
+      let text = String(markdown == null ? '' : markdown).replace(/\r\n?/g, '\n');
+      const lines = text.split('\n');
+      const kept = [];
+      let inTable = false;   // after a table's header: its rows (lines with a pipe) up to the next line without one
+      for (let i = 0; i < lines.length; i++) {
+        if (inTable) { if (lines[i].includes('|')) continue; inTable = false; }
+        // a table header (a line with a pipe above a delimiter row) and a line still being typed that may become one are not text
+        if (lines[i].includes('|') && ((i + 1 < lines.length && VOICE_TABLE_RULE_RE.test(lines[i + 1])) || (!done && i >= lines.length - 2))) { if (!done) break; i++; inTable = true; continue; }
+        if (VOICE_TABLE_RULE_RE.test(lines[i])) continue;
+        kept.push(lines[i]);
+      }
+      text = kept.join('\n') + (kept.length < lines.length ? '\n' : '');   // lines held back: what came before them is complete
+      if (!done) text = text.replace(/(^|\n)[ \t]*(?:[-*+•◦▪‣`~#|_=]+|\d+[.)]?|(?:\*\*|__)[^\n]*)$/, '$1');   // a lone marker of a line being typed
+      let t = voiceSpeechText(text, !done);
+      if (t === note) t = ''; else if (t.endsWith(' ' + note)) t = t.slice(0, -note.length).trim();
+      const sentences = voiceSentences(t).filter(Boolean);
+      if (!done && sentences.length && !(/[.!?]["')\]]*$/.test(t) && /\s$/.test(text))) sentences.pop();
+      return { sentences, note: '' };
+    }
+    function voiceReplySentences(markdown, done, readWords, full) {
       const note = voiceSpeechText('| a |');
+      if (full === true) return voiceFullSentences(markdown, done, note);
       const limit = Number.isFinite(Number(readWords)) && readWords !== null && readWords !== '' && Number(readWords) >= 0 ? Number(readWords) : 40;
       const sp = voiceSpokenLead(markdown, done);
       const finished = (!!done || sp.cut) && !sp.openTail;   // a cut lead is complete; an uncut reply may still be streaming; text before a table header's pipe is read as typed
@@ -13185,7 +13213,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (!finished && sentences.length && !(/[.!?]["')\]]*$/.test(t) && /\s$/.test(lead))) sentences.pop();
       const extra = sentences.slice(VOICE_LEAD_MAX_SENTENCES);
       if (extra.length) { sentences = sentences.slice(0, VOICE_LEAD_MAX_SENTENCES); hasNote = true; }
-      if (!done || !limit || !hasNote || leadNote) return { sentences, note: hasNote ? note : '' };
+      if (!done || !limit || !hasNote || leadNote) return { sentences, note: hasNote ? VOICE_NOTE_DETAILS_CALL.trim() : '' };
       // Which extra sentences hold a RAW link / path: the same cleaning and split on the lead with its raw links and paths marked by sentinel
       // words (the words "a link" / "a file path" in ordinary prose are not raw ones).
       let extraRaw = 0;
@@ -13205,8 +13233,44 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const text = String(markdown == null ? '' : markdown).replace(/\r\n?/g, '\n');
       const rest = sp.cut ? text.slice(sp.lead.length) : '';
       const a = voiceRestAnalysis(rest, extra, limit, sp.openTail, extraRaw);
-      if (a.substantial) return { sentences, note: a.kind === 'list' ? VOICE_NOTE_LIST.trim() : a.kind === 'table' ? VOICE_NOTE_TABLE.trim() : a.kind === 'code' ? VOICE_NOTE_CODE.trim() : note };
+      if (a.substantial) return { sentences, note: a.kind === 'list' ? VOICE_NOTE_LIST.trim() : a.kind === 'table' ? VOICE_NOTE_TABLE.trim() : a.kind === 'code' ? VOICE_NOTE_CODE.trim() : VOICE_NOTE_DETAILS_CALL.trim() };
       return { sentences: sentences.concat(a.sentences), note: '' };
+    }
+    // A call whose turns the hub cannot verify (its start answer says readDetails: false: an API caller with a service token)
+    // gets no read-in-full instructions, so its notes say only where the details are: "...in the chat." without the offer.
+    function voicePlainNote(note) {
+      return String(note == null ? '' : note).replace(/; just say if you'd like [^.]*\.$/, '.');
+    }
+    // The "read in full" flag belongs to ONE reply. Both pages keep gate = { set, turn, own, past } (set: a flag is on; turn: the hub turn id it was
+    // set for, null when the chunk carried none; own: the latest own turn id from turn_start; past: earlier own turn ids) and ask this for every related event:
+    //   { kind: 'chunk', turnId }  the chat stream's voice_read_full (this page's own spoken send)  -> set for its turn, unless that turn is an EARLIER own turn
+    //   { kind: 'event', turnId }  the hub's turn_read_full for the call's agent                     -> set only when turnId is the latest own turn
+    //   { kind: 'start', turnId }  an own turn_start, typed or spoken                                 -> remember it; a flag for ANOTHER turn is cleared
+    // (a flag for the same turn stays: the chat-stream chunk may come before the hub's turn_start; a chunk for a turn not seen yet is that case,
+    // a chunk for a turn already superseded (past: the last VOICE_READ_FULL_PAST own turns before the latest) is a late one and is ignored).
+    // Signals may repeat (one per [details] tag: an answer to an interjection in the same turn gives its own). Returns
+    // { state, action: 'set' | 'reset' | 'ignore' }. Pure: the caller stores state and calls call.onReadFull() on 'set' and call.resetReadFull() on 'reset'.
+    const VOICE_READ_FULL_PAST = 32;
+    function voiceReadFullGate(state, ev) {
+      const s = state && typeof state === 'object' ? state : {};
+      const cur = { set: s.set === true, turn: s.turn === undefined ? null : s.turn, own: s.own === undefined ? null : s.own, past: Array.isArray(s.past) ? s.past : [] };
+      const id = ev && ev.turnId ? String(ev.turnId) : null;
+      switch (ev && ev.kind) {
+        case 'chunk':
+          if (id && cur.past.includes(id)) return { state: cur, action: 'ignore' };   // a late chunk of an earlier turn
+          return { state: { set: true, turn: id, own: cur.own, past: cur.past }, action: 'set' };
+        case 'event':
+          if (id && id === cur.own) return { state: { set: true, turn: id, own: cur.own, past: cur.past }, action: 'set' };
+          return { state: cur, action: 'ignore' };
+        case 'start': {
+          if (!id || id === cur.own) return { state: cur, action: 'ignore' };
+          // the turn before becomes past; the new one is never in past (a replayed turn_start is current again)
+          const past = (cur.own ? cur.past.filter(t => t !== cur.own).concat(cur.own) : cur.past).filter(t => t !== id).slice(-VOICE_READ_FULL_PAST);
+          if (cur.set && cur.turn !== id) return { state: { set: false, turn: null, own: id, past }, action: 'reset' };
+          return { state: { set: cur.set, turn: cur.turn, own: id, past }, action: 'ignore' };
+        }
+        default: return { state: cur, action: 'ignore' };
+      }
     }
     function voiceCreateCall(deps) {
       const d = deps || {};
@@ -13217,6 +13281,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       let state = '', mode = 'announce', ended = false, started = false, endPromise = null;
       let personSpeaking = false, speechEndAt = null, awaitingReply = false, cutSkip = false;
       let lastText = '', spokenCount = 0, noteSpoken = false, doneSeen = false, lastStatusAt = null;
+      let readFull = false;   // the person asked to hear the details: this reply is read in full (onReadFull); reset where a new reply begins
+      let readOffer = true;   // the hub can read details on request for this call (start answer readDetails: false when it cannot): else the notes do not offer it
       let queue = [], current = null, speaking = false, gen = 0;
       let heldList = [], announceQueue = [], pendingAnnounce = null, pendingAsk = null;
       let hbTimer = null, pumpTimer = null, sttChain = Promise.resolve();
@@ -13507,7 +13573,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         if (!done) replyRecorded = false;   // a reply is being written: its text is saved once, when complete
         if (!done && !awaitingReply && !cutSkip) { awaitingReply = true; replyEnded = false; }
         if (!done) doneSeen = false;   // a reply being written: a done seen before belonged to an earlier one
-        const r = voiceReplySentences(lastText, !!done, readWords());
+        const r = voiceReplySentences(lastText, !!done, readWords(), readFull);
         // once a done was processed for this reply, a later one (the pref may have changed: fewer sentences) never lowers what was spoken
         if (!(doneSeen && r.sentences.length < spokenCount)) {
           if (r.sentences.length < spokenCount) spokenCount = 0;
@@ -13516,12 +13582,25 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         }
         if (done) {
           if (recorder && !replyRecorded && lastText.trim()) { replyRecorded = true; quiet(() => d.recordReplyText(lastText)); }
-          if (!cutSkip && r.note && !noteSpoken) enqueue(r.note, 'reply', null, null, false, true);
+          if (!cutSkip && r.note && !noteSpoken) enqueue(readOffer ? r.note : voicePlainNote(r.note), 'reply', null, null, false, true);
           noteSpoken = true; awaitingReply = false; doneSeen = true;
           clearStill(); stopThinking(); quiet(() => ui.activity(''));
           if (!speaking) { maybeReplyEnd(); settle(); }
         }
       }
+      // The hub says this reply must be READ IN FULL (the person asked to hear details): from now on every complete sentence of the whole reply is read, no note.
+      // It may come before the reply's first text (the flag survives until the next turn / interjection begins), mid-reply, or after the reply is done
+      // (a note still waiting is dropped and the rest is read; a note already playing is left to finish).
+      function onReadFull() {
+        if (ended || readFull) return;
+        readFull = true;
+        if (cutSkip) return;
+        const hadNote = queue.some(i => i.kind === 'reply' && i.note);
+        if (hadNote) queue = queue.filter(i => !(i.kind === 'reply' && i.note));
+        if (lastText && ((doneSeen && lastDone) || !lastDone)) onReplyText(lastText, lastDone);
+      }
+      // The page learned the flag belongs to an older reply (a typed turn started): clear it. Never touches the queue or what is being spoken.
+      function resetReadFull() { readFull = false; }
       // A tool activity of the running turn: shown silently (ui.activity); spoken only when the page's speakActivity() says so.
       function onActivity(item) {
         if (ended) return;
@@ -13860,7 +13939,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         try {
           if (quiet(() => d.isTurnRunning())) {
             if (cutSkip) { cutSkip = false; spokenCount = completeCount(); }
-            doneSeen = false; noteSpoken = false;   // what follows an interjection is a new reply: its done is processed afresh and it says its own note once
+            doneSeen = false; noteSpoken = false; readFull = false;   // what follows an interjection is a new reply: its done is processed afresh and it says its own note once
             awaitingReply = true; replyEnded = false; replyRecorded = false; turnAt = now(); stillSaid = false; quiet(() => ui.reply('start')); setState('thinking'); armStill(); armThinking();
             await d.interject(t);
           } else {
@@ -13886,7 +13965,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         settle();
       }
       function beginOwnTurn() {
-        awaitingReply = true; replyEnded = false; replyRecorded = false; cutSkip = false; spokenCount = 0; noteSpoken = false; doneSeen = false; lastText = ''; lastDone = false; turnAt = now(); stillSaid = false; stillUsed = [];
+        awaitingReply = true; replyEnded = false; replyRecorded = false; cutSkip = false; spokenCount = 0; noteSpoken = false; readFull = false; doneSeen = false; lastText = ''; lastDone = false; turnAt = now(); stillSaid = false; stillUsed = [];
         quiet(() => ui.reply('start')); setState('thinking'); armStill(); armThinking();
       }
       function sendFailed() {
@@ -14062,7 +14141,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           })).catch((e) => { vadErr = e || new Error('no microphone'); });
         } catch (e) { vadErr = e || new Error('no microphone'); vadStarting = Promise.resolve(); }
         // The call's id comes with the answer; a hang-up while the server is still starting ends that call once the id is known.
-        startP = (async () => server.start(mode))().then((r) => { if (r && r.callId) callId = r.callId; return r; });
+        startP = (async () => server.start(mode))().then((r) => { if (r && r.callId) callId = r.callId; if (r && r.readDetails === false) readOffer = false; return r; });
         let startRes;
         try { startRes = await startP; } catch (e) { await vadStarting; quiet(() => vad.stop()); return fail('Could not start the call: ' + (e && e.message || e)); }
         await vadStarting;
@@ -14130,7 +14209,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         settle();
       }
       return {
-        start, hangUp, release, wakeChanged, isStandby: () => standby, setMuted, isMuted: () => muted, interrupt, setPrefs, retryMic, setLinkLost, onSpeechBegin, onSpeechStart, onMisfire, onSpeechEnd, onReplyText, onActivity, onAsk, onAskDone, onHeld, onHeldDone, decide, setMode, onHubOwner, backgroundDone,
+        start, hangUp, release, wakeChanged, isStandby: () => standby, setMuted, isMuted: () => muted, interrupt, setPrefs, retryMic, setLinkLost, onSpeechBegin, onSpeechStart, onMisfire, onSpeechEnd, onReplyText, onReadFull, resetReadFull, onActivity, onAsk, onAskDone, onHeld, onHeldDone, decide, setMode, onHubOwner, backgroundDone,
         get background() { return bgWords.length > 0; },
         get state() { return state; }, get callId() { return callId; }, get mode() { return mode; }, get held() { return heldList.map(h => Object.assign({}, h)); },
       };
@@ -16857,7 +16936,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
             const id = r.call && r.call.callId;
             const g = rec || (r.recording ? voiceRecMake(agent, vad, { mic: 'processed' }, false) : null);   // the hub recorded it though this page did not expect that (an old agent list): "Not recording"
             if (g) { if (!rec) voiceCallS.rec = g; try { await g.started(r.recording, id); } catch { /* the call carries on without a recording */ } }   // the consent line is spoken before the call listens
-            return { callId: id, held: (r.call && r.call.held) || [] };
+            return { callId: id, held: (r.call && r.call.held) || [], ...(r.readDetails === false ? { readDetails: false } : {}) };   // readDetails false: the hub cannot read details on request for this caller
           },
           heartbeat: (callId) => voiceCallApi('/api/voice/call', { agent, action: 'heartbeat', callId }).then(
             r => ({ callId: r.call && r.call.callId, held: (r.call && r.call.held) || [] }),
@@ -17011,7 +17090,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (typeof voiceRouteDone === 'function') voiceRouteDone();   // a sentence waiting for the first route goes on (it finds the call gone)
       for (const k of ['routeTrail', 'routeFirstTimer']) if (S[k]) { clearTimeout(S[k]); S[k] = null; }
       S.call = null; S.vad = null; S.thinking = null; S.keepAlive = null; S.focus = null; S.active = false; S.starting = false; S.chatId = null; S.agent = null;
-      S.own.clear(); S.hub.clear(); S.owner.clear(); S.hubEnded.clear(); S.asks.clear(); S.expecting = false;
+      S.own.clear(); S.hub.clear(); S.owner.clear(); S.hubEnded.clear(); S.asks.clear(); S.expecting = false; S.readFull = null;
       voiceDispEnd(false);   // a call that ended some other way: the display is let go at once (hang-up has already said goodbye)
       // Whatever way the call ended, nothing is left holding the microphone or a speaker: the VAD (mic tracks, processed stream,
       // AudioContext) and the thinking sound's context are let go here too; both are safe to stop twice.
@@ -17181,6 +17260,14 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       S.starting = false; S.active = true;
     }
     function voiceCallSseMood(chatId, mood) { const S = voiceCallS; if (S.call && S.chatId === chatId) voiceDispMood(S.sendSeq, mood); }
+    // The chat stream's voice_read_full for this page's own spoken send (turnId: the hub turn it belongs to, may be null). The flag belongs to that one reply (voiceReadFullGate).
+    function voiceCallSseReadFull(chatId, turnId) {
+      const S = voiceCallS;
+      if (!(S.call && S.chatId === chatId && typeof S.call.onReadFull === 'function')) return;
+      const g = typeof voiceReadFullGate === 'function' ? voiceReadFullGate(S.readFull, { kind: 'chunk', turnId }) : { state: S.readFull, action: 'set' };
+      S.readFull = g.state;
+      if (g.action === 'set') S.call.onReadFull();   // a late chunk of an earlier turn is ignored
+    }
     // A turn the hub started runs (a scheduled task, a consultation, a job report ...) and none of the caller's own: his words are kept for his own turn (the controller's backgroundBusy).
     // Also false when this page streams a reply of its own (typed in this chat during the call) or an own turn of the call has not ended.
     const VOICE_HUB_OWNER_LATE_MS = 5000;   // a for_owner this soon after the turn ended still gives the cue
@@ -17225,7 +17312,12 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       switch (type) {
         case 'turn_start': {
           if (!ev.turnId) return;
-          if (ev.origin && ev.origin.kind === 'user') { S.own.set(ev.turnId, ''); voiceDisp.turnSeq.set(ev.turnId, S.sendSeq); if (voiceDisp.turnSeq.size > 64) voiceDisp.turnSeq.delete(voiceDisp.turnSeq.keys().next().value); }
+          if (ev.origin && ev.origin.kind === 'user') {
+            S.own.set(ev.turnId, ''); voiceDisp.turnSeq.set(ev.turnId, S.sendSeq); if (voiceDisp.turnSeq.size > 64) voiceDisp.turnSeq.delete(voiceDisp.turnSeq.keys().next().value);
+            // A new own turn (typed or spoken): a "read in full" flag left for an older reply must not uncap this one.
+            const g = typeof voiceReadFullGate === 'function' ? voiceReadFullGate(S.readFull, { kind: 'start', turnId: ev.turnId }) : null;
+            if (g) { S.readFull = g.state; if (g.action === 'reset' && typeof call.resetReadFull === 'function') call.resetReadFull(); }
+          }
           else S.hub.set(ev.turnId, (ev.origin && (ev.origin.label || ev.origin.from)) || hubOriginLabel(ev.origin));
           return;
         }
@@ -17269,6 +17361,11 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         }
         case 'ask_user_done': S.asks.delete(ev.request_id); call.onAskDone(ev.request_id); return;
         case 'turn_mood': if (S.own.has(ev.turnId)) voiceDispMood(voiceDisp.turnSeq.has(ev.turnId) ? voiceDisp.turnSeq.get(ev.turnId) : S.sendSeq, ev.mood); return;   // the agent's mood word for this turn (the same one the chat stream carries)
+        case 'turn_read_full': {   // this reply must be read in full (the same signal the chat stream carries as voice_read_full): only for the latest own turn
+          const g = typeof voiceReadFullGate === 'function' ? voiceReadFullGate(S.readFull, { kind: 'event', turnId: ev.turnId }) : null;
+          if (g && g.action === 'set' && S.own.has(ev.turnId) && typeof call.onReadFull === 'function') { S.readFull = g.state; call.onReadFull(); }
+          return;
+        }
         // Events of another call (an earlier one this call replaced, or one on another device) carry another callId: ignored.
         case 'voice_held': if (ev.callId === call.callId && ev.item) call.onHeld(ev.item, !!ev.quiet); return;
         case 'voice_held_done': if (ev.callId === call.callId) call.onHeldDone(ev.id, ev.choice); return;

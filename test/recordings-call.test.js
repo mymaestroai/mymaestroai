@@ -190,7 +190,7 @@ test('keep off: the answer has no recording key and no session is created', asyn
     const r = await t.start();
     assert.strictEqual(r.statusCode, 200);
     const a = r.json();
-    assert.deepStrictEqual(Object.keys(a).sort(), ['call', 'ok']);
+    assert.deepStrictEqual(Object.keys(a).sort(), ['call', 'ok', 'readDetails']);   // readDetails: the hub can read details on request for this caller (voice details, 2026-11-18)
     assert.ok(!('recording' in a));
     assert.deepStrictEqual(Object.keys(a.call).sort(), ['callId', 'held', 'mode', 'person', 'since']);
     assert.deepStrictEqual(await t.store.listAgents(), [], 'no session, no folder content');
