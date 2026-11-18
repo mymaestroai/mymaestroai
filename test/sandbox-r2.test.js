@@ -17,23 +17,37 @@ const read = (...p) => fs.readFileSync(path.join(ROOT, ...p), 'utf8');
 const CRED = '/home/agent/.claude/.credentials.json';
 const agent = { name: 'boxed', model: 'claude-sdk/claude-haiku-5-5', owner: 'member1' };
 
+// What a Docker stand-in must answer since boxes carry labels (whose box it is): the image's id, and a box's labels.
+const IMG_ID = `sha256:${'cd'.repeat(32)}`;
+const isImageId = (args) => args[0] === 'image' && args[1] === 'inspect' && args[2] === '--format' && args[3] === '{{.Id}}';
+const isLabelsAsk = (args) => args[0] === 'inspect' && args[1] === '--type' && args[2] === 'container' && args[3] === '--format' && args[4] === '{{.Id}} {{json .Config.Labels}}';
+const labelsIn = (args) => { const l = {}; args.forEach((x, i) => { if (args[i - 1] === '--label') { const j = String(x).indexOf('='); l[String(x).slice(0, j)] = String(x).slice(j + 1); } }); return l; };
+const noBox = (name) => Object.assign(new Error(`Command failed: docker inspect ${name}`), { stderr: `Error response from daemon: No such container: ${name}` });
+
 function rig(o = {}) {
   const calls = [], logs = [];
   const states = o.states || {};
   const volumes = new Set(o.volumes || []);
   const stale = new Set(o.staleVolumes || []);   // volumes that hold an old copy
+  const made = {};                               // boxes this stand-in saw created -> the labels of that create
   const docker = async (args) => {
     calls.push(args);
     const cmd = args[0];
+    if (isImageId(args)) return { stdout: IMG_ID + '\n', stderr: '' };
+    if (isLabelsAsk(args)) {
+      const n = args[5]; if (!states[n]) throw noBox(n);
+      // a box the test seeded was made before, with today's settings: it carries what a box made now carries
+      return { stdout: n + ' ' + JSON.stringify(made[n] || (await sb.labelsFor(agent)).labels) + '\n', stderr: '' };
+    }
     if (cmd === 'inspect') {
       const st = states[args[args.length - 1]]; if (!st) throw new Error('No such container');
       if (args.includes('{{.HostConfig.Init}}')) return { stdout: 'true\n', stderr: '' };
       if (String(args[2]).includes('.Mounts')) return { stdout: (o.binds ? o.binds() : []).map(b => `${b}\n`).join(''), stderr: '' };
       return { stdout: st + '\n', stderr: '' };
     }
-    if (cmd === 'create') { states[args[args.indexOf('--name') + 1]] = 'created'; return { stdout: 'id\n', stderr: '' }; }
+    if (cmd === 'create') { const n = args[args.indexOf('--name') + 1]; states[n] = 'created'; made[n] = labelsIn(args); return { stdout: 'id\n', stderr: '' }; }
     if (cmd === 'start') { states[args[args.length - 1]] = 'running'; return { stdout: '', stderr: '' }; }
-    if (cmd === 'rm') { delete states[args[args.length - 1]]; return { stdout: '', stderr: '' }; }
+    if (cmd === 'rm') { delete states[args[args.length - 1]]; delete made[args[args.length - 1]]; return { stdout: '', stderr: '' }; }
     if (cmd === 'exec' && args.includes('sh') && args.some(a => String(a).includes('.credentials.json'))) {
       if (o.purgeFails) throw Object.assign(new Error('exec failed'), { stderr: 'Error response from daemon: container is not running\nsecond line' });
       if (o.purgeStill) throw Object.assign(new Error('Command failed: docker exec'), { code: 3, stdout: 'still-present\n', stderr: '' });
@@ -55,7 +69,7 @@ function rig(o = {}) {
   };
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-r2-'));
   const sb = createSandbox({
-    docker, uid: 1234, gid: 5678, image: 'agent-hub-sandbox:test', log: (m) => logs.push(m),
+    docker, dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-r2-data-')), uid: 1234, gid: 5678, image: 'agent-hub-sandbox:test', log: (m) => logs.push(m),
     isMemberOwned: (a) => !!(a && a.owner && a.owner !== 'admin1'),
     workspaceFor: (a) => path.join(dir, 'workspaces', a.name), rootsFor: () => [],
   });
