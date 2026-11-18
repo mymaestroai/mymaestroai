@@ -9,7 +9,18 @@
     ]
   },
   "maestro/AGENT-PLAYBOOK.md": {
-    "current": "9e57b4b6955d00db2d8161078978d7849164a38bb79413aea1ba0d9b86f9fb56",
-    "previous": []
+    "current": "73be1a4f3ff86f46f3ef5cc0ba94e7345bc15d6d17d2ed713c740835e31f58ef",
+    "previous": [
+      "9e57b4b6955d00db2d8161078978d7849164a38bb79413aea1ba0d9b86f9fb56"
+    ]
+  },
+  "maestro/SOUL.md": {
+    "current": "4854ce9875c531789120ad83d2436adad030204c8f7ab7dff13bfe6fc81f18ae",
+    "previous": [
+      "61db0ac1cb208ed1972be1c22673be69655e06f9c66adaf7c0745b1db601bd60",
+      "3df8f2958fefb247e05918c3b91c49f056b805e11a349247fd551a2eeeae7568",
+      "7c9133f8f8073c37f55b76f4dcf78ec598da38288e22c32fe5b6168ca65e1e7a",
+      "c1152e327a6569ece8dce75970325cb99fc21ab34e130a9192401f35fe3d1229"
+    ]
   }
 }

@@ -1787,6 +1787,21 @@ async function handleHttpRequest(req, res) {
       return jsonResponse(res, 200, { mode: wp.getMode() });
     }
 
+    // Team guidance level: 'full' (default) | 'light' | 'off'  — see lib/team-guidance.js (admin only, like /api/sdk_workers)
+    if (pathname === '/api/team_guidance' && req.method === 'GET') {
+      const tg = require('./lib/team-guidance');
+      return jsonResponse(res, 200, { level: tg.getLevel(), levels: tg.LEVELS, default: tg.DEFAULT_LEVEL });
+    }
+    if (pathname === '/api/team_guidance' && req.method === 'POST') {
+      const tg = require('./lib/team-guidance');
+      const body = JSON.parse(await readBody(req));
+      const requested = String(body.level || '').trim().toLowerCase();
+      if (!tg.LEVELS.includes(requested)) return jsonResponse(res, 400, { error: `level must be one of: ${tg.LEVELS.join(', ')}` });
+      hubSettings.updateSettings({ teamGuidance: requested });
+      console.log(`[settings] teamGuidance = ${requested}`);
+      return jsonResponse(res, 200, { level: tg.getLevel() });
+    }
+
     // Detached jobs started by agents with run_job (owner view: every job)
     if (pathname === '/api/jobs' && req.method === 'GET') {
       const runner = getJobRunner();
@@ -3640,6 +3655,11 @@ server.listen(PORT, HOST, () => {
   try {
     if (require('./lib/agents').ensureMaestroLead().changed) console.log('[agents] marked maestro as the lead agent (no agent was marked)');
   } catch (e) { console.warn('[agents] could not mark the lead agent:', e.message); }
+  // Team guidance (lib/team-guidance): agents that existed before this update keep their old prompt (switched off once); lead agents get it.
+  try {
+    const tg = require('./lib/agents').migrateTeamGuidance();
+    if (tg.changed > 0) console.log(`[agents] team guidance switched off for ${tg.changed} agents that existed before this update (lead agents keep it)`);
+  } catch (e) { console.warn('[agents] could not migrate team guidance:', e.message); }
   console.log(`\n  My Maestro AI v${require('./package.json').version} (multi-provider)`);
   console.log(`  Server:   http://${URL_HOST}:${PORT}  (${BIND.exposed ? 'NETWORK-EXPOSED' : 'localhost only'})`);
   if (BIND.warning) console.warn(`  WARNING:  ${BIND.warning}`);
