@@ -85,12 +85,17 @@ test('wiring: the SDK path spawns the client through the watch, arms it on end_t
 
 test('hub Bash kills the whole process group on timeout, so nothing outlives the call', async () => {
   const { runShell } = require('../lib/hub-tools');
-  const r = await runShell('sleep 7396 & sleep 7397', { timeoutMs: 400 });
+  const { spawn, execFileSync } = require('child_process');
+  // runShell starts the shell detached, so its pid is the call's process group: look only at that group, never at
+  // other processes that happen to run the same text (another copy of this file, for one)
+  let group = null;
+  const spawnImpl = (...a) => { const c = spawn(...a); group = c.pid; return c; };
+  const r = await runShell('sleep 7396 & sleep 7397', { timeoutMs: 400, spawnImpl });
   assert.strictEqual(r.timedOut, true);
-  await sleep(300);
-  const { execFileSync } = require('child_process');
-  const left = execFileSync('ps', ['-eo', 'args=']).toString().split('\n').filter(l => /^sleep 739[67]$/.test(l.trim()));
-  assert.deepStrictEqual(left, [], 'no sleeper survived the timeout');
+  assert.ok(group > 0);
+  const members = () => execFileSync('ps', ['-eo', 'pid=,pgid=,stat=,args=']).toString().split('\n')
+    .map(l => l.trim().split(/\s+/)).filter(f => Number(f[1]) === group && !/^Z/.test(f[2] || '')).map(f => f.slice(3).join(' '));
+  assert.ok(await until(async () => members().length === 0), `no process of the call survived the timeout: ${JSON.stringify(members())}`);
   const ok = await runShell('echo hi; echo err 1>&2; exit 2', { timeoutMs: 5000 });
   assert.deepStrictEqual([ok.stdout.trim(), ok.stderr.trim(), ok.code, ok.timedOut], ['hi', 'err', 2, false]);
 });
