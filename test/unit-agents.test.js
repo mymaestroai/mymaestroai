@@ -239,9 +239,9 @@ test('shared pool scoping (sharedPoolFor): infra and admin-owned agents see the 
 const ruleFor = (root) => [
   'To give the person you work for a file to download:',
   "- Save it in this folder (or a subfolder) first. Files in your workspace, /tmp or anywhere else can't be downloaded.",
-  `- Then name it by its full path, alone in backticks, for example \`${root}/Reports/Q3 summary.pdf\`. The chat turns each such path into a download card.`,
+  `- Then name it by its full path, alone in backticks, for example \`${root}/Reports/Q3-summary.pdf\`. The chat turns each such path into a download card.`,
   '- One file per path. Never a bare file name, a relative path, a folder on its own, or a shortened name.',
-  '- Several files: one full path per line (a full path in a table cell works too).',
+  '- Several files: one full path per line, each in backticks (in a table, the path in backticks in its cell).',
 ].join('\n');
 
 test('file mentions: an admin-side agent\'s Files folder section carries the rule with its own folder in the example', async () => {
@@ -251,8 +251,18 @@ test('file mentions: an admin-side agent\'s Files folder section carries the rul
   assert.ok(out.includes(`## Files folder\n${root}\n`));
   assert.ok(out.includes(ruleFor(root)), 'the rule, with this agent\'s folder');
   assert.strictEqual(a.ag.fileMentionRule(root + '/'), ruleFor(root), 'a trailing slash is not doubled');
-  // the example path is one the chat cards: absolute, inside the folder, in a code span
-  assert.match(out, new RegExp('`' + root.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '/Reports/Q3 summary\\.pdf`'));
+  // review r1 (GPT-6, Sonnet): the example is one the chat really cards. Run it through the page's own finder
+  // (lib/ui-file-card candidatesFrom) as a code span, the form the rule asks for.
+  const example = (out.match(/for example `([^`]+)`/) || [])[1];
+  assert.strictEqual(example, `${root}/Reports/Q3-summary.pdf`);
+  const card = require(path.join(__dirname, '..', 'lib', 'ui-file-card.js'));
+  const codeEl = { textContent: example, closest: () => null };
+  const page = { querySelectorAll: (sel) => (sel === 'code' ? [codeEl] : []) };
+  const found = card.candidatesFrom(page);
+  assert.strictEqual(found.length, 1, 'the example gets a download card');
+  assert.deepStrictEqual(found[0].item, { abs: example });
+  // a bare name, the form agents wrote, gets none
+  assert.strictEqual(card.candidatesFrom({ querySelectorAll: (sel) => (sel === 'code' ? [{ textContent: 'Q3-summary.pdf', closest: () => null }] : []) }).length, 0);
 });
 
 test('file mentions: a member\'s agent gets the rule with the member\'s own folder; a boxed agent the same host path (the box binds it there)', async () => {
@@ -273,8 +283,11 @@ test('file mentions: a member\'s agent gets the rule with the member\'s own fold
 
 test('file mentions: the rule reaches every route through loadAgentContext (gateway, Claude client, Codex)', () => {
   const sdk = fs.readFileSync(path.join(__dirname, '..', 'lib', 'sdk-chat.js'), 'utf8');
-  const calls = sdk.match(/await loadAgentContext\(agentName, 'hub'/g) || [];
-  assert.ok(calls.length >= 3, `gateway, SDK and Codex build their prompt with it (${calls.length})`);
+  // review r1 (Sonnet): each route by name, not a count
+  const body = (sig) => { const i = sdk.indexOf(sig); assert.ok(i >= 0, sig); const j = sdk.indexOf('\nasync function ', i + 1); return sdk.slice(i, j < 0 ? undefined : j); };
+  for (const route of ['async function streamViaGateway(', 'async function streamViaSdk(', 'async function streamViaCodex(']) {
+    assert.match(body(route), /await loadAgentContext\(agentName, 'hub'/, `${route} builds its prompt with loadAgentContext`);
+  }
   assert.doesNotMatch(sdk, /loadAgentContext\([^)]*(lightweight|minimalContext): true/, 'no route asks for the short context that skips the Files folder');
 });
 
