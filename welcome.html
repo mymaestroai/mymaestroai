@@ -76,6 +76,8 @@
   .team .trow .pay { color: var(--text-dim); } .team .trow .pay.per-use { color: var(--warning); font-weight: 600; }
   .team .trow .why { font-size: 12px; color: var(--text-dim); margin-top: 2px; } .team .trow .note { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
   .team .trow .err { color: var(--error); }
+  .team a { color: var(--accent); }
+  .team [hidden] { display: none !important; }   /* label.check is display:flex, which would beat the hidden attribute */
   .resume-box { margin: 16px 0 6px; padding: 14px 16px; border-radius: 10px; border: 1px solid rgba(61,123,255,.45); background: rgba(61,123,255,.08); }
   .resume-box p { margin: 6px 0 12px; font-size: 14px; color: var(--text-dim); }
   .foot { margin-top: 18px; font-size: 12px; color: var(--text-dim); text-align: center; }
