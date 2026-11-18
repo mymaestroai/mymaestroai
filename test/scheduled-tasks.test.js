@@ -370,3 +370,15 @@ test('byNote is kept only for the hub, one line, and short', async () => {
   assert.ok(inst.tasks.get(b.id).byNote.length <= 120 && !inst.tasks.get(b.id).byNote.includes('\n'));
   assert.strictEqual(mk({ dataDir: inst.dataDir }).inst.tasks.get(b.id).byNote, inst.tasks.get(b.id).byNote, 'saved with the task');
 });
+
+// Seven behaviour changes' full text passed 8,000 characters: the hub's own tasks may hold 24,000; agents and the owner
+// keep the 8,000 limit.
+test('hub requester: a prompt up to 24,000 characters; an agent or the owner still at most 8,000', async () => {
+  const { inst } = mk();
+  const long = 'x'.repeat(20000);
+  const v = await inst.create({ requester: st.HUB, agent: 'trader', when: 'in 10 minutes', prompt: long, label: 'Review' });
+  assert.ok(v.id);
+  await assert.rejects(inst.create({ requester: st.HUB, agent: 'trader', when: 'in 10 minutes', prompt: 'x'.repeat(24001) }), /longer than 24000 characters/);
+  await assert.rejects(inst.create({ requester: 'trader', agent: 'trader', when: 'in 10 minutes', prompt: 'x'.repeat(8001) }), /longer than 8000 characters/);
+  await assert.rejects(inst.create({ requester: 'owner', agent: 'trader', when: 'in 10 minutes', prompt: 'x'.repeat(8001) }), /longer than 8000 characters/);
+});
