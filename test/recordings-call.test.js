@@ -69,9 +69,16 @@ function setup({ agentExtra = {}, ready = true, storeOverride = null } = {}) {
   const start = (extra = {}, user = patientA) => call(fakeReq('POST', '/api/voice/call', { user, headers: { 'content-type': 'application/json' }, body: { action: 'start', agent: 'biographer', ...extra } }));
   const act = (action, callId, user = patientA) => call(fakeReq('POST', '/api/voice/call', { user, headers: { 'content-type': 'application/json' }, body: { action, agent: 'biographer', callId } }));
   const stt = (query = 'agent=biographer') => call(fakeReq('POST', `/api/voice/stt?${query}`, { user: patientA, headers: { 'content-type': 'audio/wav' }, body: wavBytes() }));
-  return { dir, clock, store, calls, events, agents, settings, cloudCalls, localCalls, call, start, act, stt, cleanup: () => { recIndex.setStoreForTests(null); } };
+  // the store's finishes (run by the hub's finish hook when a call ends) are kept, so a test waits for them instead of
+  // sleeping a fixed time (a busy disk is slower)
+  const finishing = [];
+  if (!storeOverride) {   // an override may be a store that must never be touched
+    const storeFinish = store.finish;
+    store.finish = (...a) => { const p = storeFinish.apply(store, a); finishing.push(p); return p; };
+  }
+  const settled = () => Promise.all(finishing.splice(0));   // a failed finish fails the test with its own reason
+  return { dir, clock, store, calls, events, agents, settings, cloudCalls, localCalls, call, start, act, stt, settled, cleanup: () => { recIndex.setStoreForTests(null); } };
 }
-const settle = () => new Promise(r => setTimeout(r, 25));
 const sessions = async (store) => (await store.listAgents()).length ? store.listSessions('biographer') : [];
 
 test('keep on with a cloud recognizer: 409 recording_needs_local_stt and no call is started', async () => {
@@ -139,7 +146,7 @@ test('ending the call finishes its session; so does expiry; a reload start finis
   assert.strictEqual((await t.store.readManifest('biographer', a.recording.sessionId)).endedAt, null);
   const ended = await t.act('end', a.call.callId);
   assert.strictEqual(ended.statusCode, 200);
-  await settle();
+  await t.settled();
   const m1 = await t.store.readManifest('biographer', a.recording.sessionId);
   assert.strictEqual(m1.endedAt, new Date(t.clock.t).toISOString());
   assert.strictEqual(t.calls.recordingOf('biographer'), null);
@@ -156,7 +163,7 @@ test('ending the call finishes its session; so does expiry; a reload start finis
   a = (await t.start()).json();
   t.clock.t += 61 * 1000;
   assert.deepStrictEqual(t.calls.sweep(), ['biographer']);
-  await settle();
+  await t.settled();
   assert.notStrictEqual((await t.store.readManifest('biographer', a.recording.sessionId)).endedAt, null, 'expiry finished the session');
 
   // a reload: the same person starts again
@@ -164,7 +171,7 @@ test('ending the call finishes its session; so does expiry; a reload start finis
   const first = (await t.start()).json();
   t.clock.t += 5000;
   const second = (await t.start()).json();
-  await settle();
+  await t.settled();
   assert.notStrictEqual(first.call.callId, second.call.callId);
   assert.notStrictEqual(first.recording.sessionId, second.recording.sessionId);
   const m = await t.store.readManifest('biographer', first.recording.sessionId);
@@ -215,7 +222,7 @@ test('a start with a bad mode is still refused first, and an unrecorded call fin
   assert.strictEqual(r.statusCode, 400);
   const a = (await t.start()).json();
   assert.strictEqual((await t.act('end', a.call.callId)).statusCode, 200);
-  await settle();
+  await new Promise(r => setTimeout(r, 25));   // nothing to wait for: only room for a stray use of the store to show
   t.cleanup();
 });
 
@@ -263,6 +270,7 @@ test('stt: a recorded call in progress keeps the engine local even after the set
   r = await t.stt();
   assert.strictEqual(r.json().engine, 'openai');
   assert.deepStrictEqual(t.cloudCalls, [['biographer', 'openai']]);
+  await t.settled();
   t.cleanup();
 });
 

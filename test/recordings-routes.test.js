@@ -66,7 +66,15 @@ function fx(extra = {}) {
     audit: (uid, action, detail) => audits.push([uid, action, detail]),
     ...extra,
   };
-  calls.onFinish((info) => (info.recording && info.recording.sessionId ? store.finish(info.agent, info.recording.sessionId, { endedAt: info.endedAt }) : undefined));
+  // the hook's work is kept, so a test waits for the session to be finished instead of sleeping a fixed time (a busy disk is slower)
+  const finishing = [];
+  calls.onFinish((info) => {
+    if (!(info.recording && info.recording.sessionId)) return undefined;
+    const p = store.finish(info.agent, info.recording.sessionId, { endedAt: info.endedAt });
+    finishing.push(p);
+    return p;
+  });
+  const finished = () => Promise.all(finishing.splice(0));   // a failed finish fails the test with its own reason
   const call = async (req) => {
     const res = fakeRes(); const u = new URL(req.url, 'http://x');
     await routes.handle(u.pathname, req, res, deps);
@@ -82,7 +90,7 @@ function fx(extra = {}) {
     return { callId: c.callId, sessionId };
   };
   routes.resetForTests();
-  return { dir, clock, store, calls, audits, deps, call, startCall, agents };
+  return { dir, clock, store, calls, audits, deps, call, startCall, agents, finished };
 }
 // A finished session with three segments and a transcript, made straight in the store.
 async function filledSession(store, agent = 'biographer') {
@@ -310,6 +318,7 @@ test('delete: anything but exactly "DELETE" is refused, and a session whose call
   assert.deepStrictEqual(t.audits.filter(a => a[1] === 'recordings.delete'), []);
   // after hang-up the session can go
   t.calls.end('biographer', patientA.id, live.callId);
+  await t.finished();
   r = await t.call(jsonReqAs(sam, `/api/recordings/biographer/${live.sessionId}/delete`, { confirm: 'DELETE' }));
   assert.strictEqual(r.statusCode, 200);
 });
@@ -437,7 +446,7 @@ test('a transcript, reply text or the last audio piece may arrive within 60 minu
   let r = await t.call(wavReq(seg('biographer', callId), wav(tone(1000))));
   assert.deepStrictEqual(r.json(), { seq: 1 });
   t.calls.end('biographer', patientA.id, callId);
-  await new Promise(res => setTimeout(res, 20));   // the finish hook runs the store's finish
+  await t.finished();   // the finish hook runs the store's finish
   assert.notStrictEqual((await t.store.readManifest('biographer', sessionId)).endedAt, null, 'the session was finished when the call ended');
   t.clock.t += 59 * 60 * 1000;
   r = await t.call(jsonReq('/api/recordings/transcript', { agent: 'biographer', callId, seq: 1, text: 'Late words.' }));
@@ -471,7 +480,7 @@ test('a new call replaces the old one: the old call id keeps its last pieces for
   const first = await t.startCall();
   const second = await t.startCall();
   assert.notStrictEqual(first.callId, second.callId);
-  await new Promise(res => setTimeout(res, 20));
+  await t.finished();
   assert.notStrictEqual((await t.store.readManifest('biographer', first.sessionId)).endedAt, null, 'the earlier session was finished by the replacement');
   assert.strictEqual((await t.store.readManifest('biographer', second.sessionId)).endedAt, null);
   // a piece the page had not sent yet, under the old call id, while the new call is live: it goes to the old session
