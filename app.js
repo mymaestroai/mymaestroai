@@ -17812,7 +17812,13 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         if (!H || !el || !el.isConnected || !el.classList.contains('assistant')) return;
         const scan = el.cloneNode(true);   // the reply's own text: not the tool panel or the reasoning panel
         scan.querySelectorAll('.tool-stream, .reason-stream, .inline-thinking, .msg-copy, .msg-speak').forEach((n) => n.remove());
-        const cands = H.candidatesFrom(scan);
+        let agent = null;   // the replying agent (a bare file name is looked up in its folder); none in a group chat
+        try {
+          const box = el.closest('[id^="messages-"]');
+          const chat = box && typeof chats !== 'undefined' ? chats[box.id.slice('messages-'.length)] : null;
+          agent = chat && !chat.isGroup && chat.agent ? String(chat.agent) : null;
+        } catch { agent = null; }
+        const cands = H.candidatesFrom(scan, { agent });
         if (!cands.length) return;
         const results = await H.resolveBatch((u, o) => fetch(u, o), cands);
         if (!el.isConnected) return;
