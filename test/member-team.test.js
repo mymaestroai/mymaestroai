@@ -50,6 +50,8 @@ function sandbox({ agents, memberModels, admins = ['admin1'], virtual = {}, self
   const ctx = {
     require: (p) => {
       if (p === './agents') return { getAgentsSync: () => { if (agents instanceof Error) throw agents; return agents; } };
+      // The behaviour-change gate (lib/behaviour-changes) is open here: these tests check the limit itself; the gate has its own tests (behaviour-changes.test.js).
+      if (p === './behaviour-changes') return { isOn: (id) => id === 'member-worker-models' };
       if (p === './member-models') return { workerModels: (own) => mm.workerModels(own, () => memberModels) };
       throw new Error('unexpected require ' + p);
     },

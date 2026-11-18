@@ -3263,7 +3263,7 @@
       const wrap = document.createElement('div');
       wrap.id = 'st-groups';
       wrap.innerHTML = `<div class="st-search"><input type="search" id="st-search" placeholder="Search settings: privacy, sandbox, push, spend…" autocomplete="off" aria-label="Search settings"><span id="st-search-none" hidden>Nothing matches.</span></div>`
-        + (window.hubMe && window.hubMe.isAdmin ? `<div id="st-quick-links" style="margin:6px 0 10px;font-size:0.85rem">Go to: <a href="/modules" id="st-connectors-link" style="color:var(--accent)">🔌 Data connectors</a><a href="/modules#remote-computers" id="st-remote-link" style="color:var(--accent);margin-left:14px;display:${remoteComputersOk === true ? '' : 'none'}">💻 Remote computers</a></div>` : '')
+        + (window.hubMe && window.hubMe.isAdmin ? `<div id="st-quick-links" style="margin:6px 0 10px;font-size:0.85rem">Go to: <a href="/modules" id="st-connectors-link" style="color:var(--accent)">🔌 Data connectors</a><a href="/modules#remote-computers" id="st-remote-link" style="color:var(--accent);margin-left:14px;display:${remoteComputersOk === true ? '' : 'none'}">💻 Remote computers</a><a href="/changes" id="st-changes-link" style="color:var(--accent);margin-left:14px">Behaviour changes</a></div>` : '')
         + ST_GROUPS.map(g => `<details class="st-group" id="st-group-${g.id}" data-group="${g.id}"${saved[g.id] ? ' open' : ''}><summary><span class="st-group-title">${esc(g.title)}</span><span class="st-group-sum" id="st-sum-${g.id}"></span></summary><div class="st-group-body"></div></details>`).join('');
       modal.insertBefore(wrap, sections[0]);
       const body = (id) => wrap.querySelector(`#st-group-${id} .st-group-body`);
@@ -3298,6 +3298,12 @@
       stSum('notify', 'push', '');
       for (const k of ['search', 'cx']) stSum('tools', k, '');
       for (const k of ['spend', 'caps']) stSum('money', k, '');
+      // Behaviour changes waiting for the owner (lib/behaviour-changes): the link says how many.
+      const chLink = document.getElementById('st-changes-link');
+      if (chLink) fetch('/api/behaviour-changes').then((r) => r.ok ? r.json() : null).then((j) => {
+        const n = j && Array.isArray(j.changes) ? j.changes.filter((c) => c && c.state === 'pending').length : 0;
+        if (n > 0) chLink.textContent = `Changes waiting for your decision (${n})`;
+      }).catch(() => {});
     }
 
     // Search: show the sections whose words match (a group's title matching shows all of it), open their groups,
