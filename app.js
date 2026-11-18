@@ -12985,7 +12985,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     // While a reply plays, a stricter talk-over (iPhone, iPad: the speaker's echo is loud) caps the sensitivity at this value.
     const VOICE_STRICT_TALKOVER_SENS = 20;
     const VOICE_CALL_HEARTBEAT_MS = 15000, VOICE_CALL_STATUS_GAP_MS = 10000, VOICE_CALL_PAUSE_MS = 1500, VOICE_CALL_ANSWER_MS = 20000;
-    const VOICE_CALL_JOIN_MS = 2000, VOICE_CALL_STILL_MS = 20000, VOICE_CALL_THINK_MS = 2000, VOICE_CALL_CONTINUE_MS = 3000, VOICE_CALL_HOLD_MS = 5000, VOICE_CALL_WAIT_HOLD_MS = 20000;
+    const VOICE_CALL_JOIN_MS = 2000, VOICE_CALL_STILL_MS = 20000, VOICE_CALL_THINK_MS = 1000, VOICE_CALL_CONTINUE_MS = 3000, VOICE_CALL_HOLD_MS = 5000, VOICE_CALL_WAIT_HOLD_MS = 20000;
     // After 20 s with no reply speech, ONE of these is spoken (never the same one twice in a wait).
     const VOICE_THINKING_LINES = ['I\'m considering what you just said.', 'Still thinking about that.', 'Give me a moment, I\'m working through it.'];
     // A turn the hub started (a scheduled task, a consultation, a job report) is never read aloud on a call. When one needs the person (the page tells the
@@ -13191,7 +13191,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       // earlier segment a new one may join, segActive that a segment has begun and has not ended.
       let lastSeg = null, curCand = null, segActive = false;
       // The one spoken line after a long wait: when something was last spoken, when the running turn began, whether a line was
-      // said since, which lines this wait has used. The thinking sound: its 2 s timer and whether it is playing.
+      // said since, which lines this wait has used. The thinking sound: its 1 s timer and whether it is playing.
       let lastSpokenAt = null, turnAt = null, stillSaid = false, stillTimer = null, stillUsed = [];
       let thinkTimer = null, thinkingOn = false, thinkStep = 0, thinkT0 = 0, thinkDueAt = 0, thinkSeed = 0;
       let replyEnded = false;   // the whole reply of this turn was reported once (ui.reply('end'))
@@ -13229,8 +13229,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
 
       // The thinking clock: ONE scheduler for what is heard and what is shown. When the person's turn was sent (and nothing is being
       // transcribed or asked) it starts: a small silent pulse at once (strength 0.35, visual only), the first full pulse VOICE_CALL_THINK_MS
-      // later (2 s, the first audible one), then a quiet random pop cluster (lib/ui-voice-thinking.js: voiceThinkingCluster, seeded) about
-      // every 1.5 s of pops + a 4-6 s gap (the gap is measured from the END of the cluster). Every pulse is one event (the contract is in
+      // later (1 s, the first audible one), then a quiet random pop cluster (lib/ui-voice-thinking.js: voiceThinkingCluster, seeded) about
+      // every 1.5 s of pops + a 1-2 s gap (the gap is measured from the END of the cluster). Every pulse is one event (the contract is in
       // lib/ui-voice-thinking.js: at, kind, durationMs, pops [{ tMs, strength, freqHz, decayMs }], and the old swell fields attackMs, decayMs,
       // strength) handed to ui.thinkingPulse(event) (the call display's orb), and when the sound is on (thinkingSound not false; do-not-disturb never mutes it, with any display) to
       // thinking.pulse(event) as well; `at` is the performance.now() time (d.perfNow, else d.now) the audio is scheduled to start (+20 ms);
@@ -13244,7 +13244,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const perfNow = () => { const f = d.perfNow || d.now; return Number(f()); };
       // thinkVisual: a display really takes the pulses right now (ui.thinkingPulse exists and ui.thinkingWanted(), when the page has it, says
       // a view is shown). With NO display (None, hidden, ended) the clock is exactly the plain thinking sound of before: nothing is armed
-      // when the sound is off, do-not-disturb does not mute it, switching it off ends the wait and switching it on starts a fresh 2 s one,
+      // when the sound is off, do-not-disturb does not mute it, switching it off ends the wait and switching it on starts a fresh 1 s one,
       // and the sound's own pulse() is called without an event.
       const thinkVisual = () => typeof (d.ui && d.ui.thinkingPulse) === 'function' && !(typeof d.ui.thinkingWanted === 'function' && !quiet(() => d.ui.thinkingWanted()));
       const thinkAudible = () => !!d.thinking && prefs().thinkingSound !== false;   // the same in every display (None, Orb, Character): do-not-disturb does not mute the sound
@@ -13260,7 +13260,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         thinkStep = 0;
         muteThinking();
       }
-      // Pulse 0 (the small silent one) happens at t0, pulse 1 at t0 + 2000, and every next one at the previous one's time + its
+      // Pulse 0 (the small silent one) happens at t0, pulse 1 at t0 + 1000, and every next one at the previous one's time + its
       // cluster length + its own gap (all on the controller's clock, so the audio mapping of event.at never makes it drift).
       const thinkPlan = (k) => {
         if (typeof voiceThinkingCluster !== 'function') return null;
@@ -14405,19 +14405,28 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     // The thinking sound: quiet random pop clusters made with Web Audio only (no files). The plan (how many pops, when, how high, the gaps) is
     // DATA from lib/ui-voice-thinking.js (voiceThinkingCluster, seeded); this function only plays an event's pops: each pop is a sine with a
     // few-ms attack and a 30-60 ms decay (a little glide), through a low-pass below 2 kHz, the whole cluster fades in and out. Peak = volume x
-    // 0.1125 (volume 0.5, the default, is -25 dBFS). start(), stop() (a 0.1 s fade), setVolume(0..1). pulse(event) schedules ONE cluster at
+    // 0.3170 (voiceThinkingPeak(volume) from lib/ui-voice-thinking.js when present; volume 0.5, the default, is -16 dBFS). start(), stop() (a 0.1 s fade), setVolume(0..1). pulse(event) schedules ONE cluster at
     // ctx.currentTime + 0.02 and moves event.at to the moment that cluster is HEARD (the audio output clock mapped to performance.now():
     // getOutputTimestamp when valid, else now + the scheduling lead + the output or base latency); it returns the same event, or false when
     // the context is not running (nothing was claimed, event.at is untouched). An event without pops (or no event) plays a cluster of a fresh
     // random seed. start() plays one now and another every 6.5 s (the old adapters without a clock of their own).
-    // opts: { ctx, volume, variant, seed (a fixed seed for the clusters it makes itself), setInterval, clearInterval, perfNow } (the last four for tests).
+    // opts: { ctx, volume, variant, seed (a fixed seed for the clusters it makes itself), out (an AudioNode, or (ctx) => AudioNode, that the master gain connects to
+    // instead of ctx.destination, e.g. the speech's loudness chain; ctx.destination when absent, it throws or it gives nothing usable), setInterval, clearInterval, perfNow } (the last four for tests).
     function voiceCreateThinkingSound(opts) {
       const o = opts || {}, ctx = o.ctx;
       const perf = o.perfNow || (() => (typeof performance !== 'undefined' && performance && typeof performance.now === 'function' ? performance.now() : NaN));
       const setIv = o.setInterval || ((f, ms) => setInterval(f, ms)), clearIv = o.clearInterval || ((id) => clearInterval(id));
       const clamp = (v) => { const n = Number(v); return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : 0.5; };
       let vol = clamp(o.volume === undefined ? 0.5 : o.volume), master = null, timer = null, running = false, active = [], own = 0;
-      const peak = () => vol * 2 * Math.pow(10, -25 / 20);   // volume 0.5 = -25 dBFS
+      const peak = () => (typeof voiceThinkingPeak === 'function' ? voiceThinkingPeak(vol) : vol * 2 * Math.pow(10, -16 / 20));   // volume 0.5 = -16 dBFS
+      // the master gain, connected to opts.out (a node, or (ctx) => node) when that is usable, else to ctx.destination
+      const makeMaster = () => {
+        const m = ctx.createGain(); m.gain.value = peak();
+        let dest = null;
+        try { const t = typeof o.out === 'function' ? o.out(ctx) : o.out; if (t && typeof t.connect === 'function') dest = t; } catch { /* the speakers */ }
+        m.connect(dest || ctx.destination);
+        return m;
+      };
       // performance.now() time at which the sample scheduled for context time t0 comes out of the speakers; null when it cannot be told.
       function heardAt(ct, t0) {
         const now = Number(perf());
@@ -14479,7 +14488,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           if (running || !ctx) return;
           running = true;
           try { if (ctx.state === 'suspended' && ctx.resume) { const r = ctx.resume(); if (r && r.catch) r.catch(() => {}); } } catch { /* the page resumes it */ }
-          master = ctx.createGain(); master.gain.value = peak(); master.connect(ctx.destination);
+          master = makeMaster();
           pulse();
           timer = setIv(pulse, 6500);
         },
@@ -14496,7 +14505,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           if (!running) {
             running = true;
             try { if (ctx.state === 'suspended' && ctx.resume) { const r = ctx.resume(); if (r && r.catch) r.catch(() => {}); } } catch { /* the page resumes it */ }
-            master = ctx.createGain(); master.gain.value = peak(); master.connect(ctx.destination);
+            master = makeMaster();
           }
           pulse(wants ? ev : undefined);
           return wants ? ev : undefined;
@@ -16475,7 +16484,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           quiet(() => {
             getCtx();
             if (ctx.state === 'suspended' && ctx.resume) ctx.resume();
-            if (!snd) snd = voiceCreateThinkingSound({ ctx, volume: voiceThinkingVolNow() });
+            if (!snd) snd = voiceCreateThinkingSound({ ctx, volume: voiceThinkingVolNow(), out: (c) => voiceOutNode(c) });
             snd.setVolume(voiceThinkingVolNow());
             snd.start();
             on = true;
@@ -16489,7 +16498,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           quiet(() => {
             getCtx();
             if (ctx.state === 'suspended' && ctx.resume) ctx.resume();
-            if (!snd) snd = voiceCreateThinkingSound({ ctx, volume: voiceThinkingVolNow() });
+            if (!snd) snd = voiceCreateThinkingSound({ ctx, volume: voiceThinkingVolNow(), out: (c) => voiceOutNode(c) });
             snd.setVolume(voiceThinkingVolNow());
             r = snd.pulse(ev);
             if (r === false) return;

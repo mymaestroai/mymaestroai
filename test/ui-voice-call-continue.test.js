@@ -211,11 +211,11 @@ test('barge-in stays on speech start: it cuts the reading at once, a waiting tex
 
 // ---- (9) the thinking sound ----
 
-test('thinking sound: starts 2 s after the turn was sent when no reply speech began, stops the instant the reply speaks', async () => {
+test('thinking sound: starts 1 s after the turn was sent when no reply speech began, stops the instant the reply speaks', async () => {
   const h = await started({}, {}); h.deps.thinking = thinking(h); h.call = voiceCreateCall(h.deps);
   assert.strictEqual(await h.call.start(), true);
   await h.say('Please check the system status.');
-  await h.advance(1900); assert.deepStrictEqual(h.think, [], 'nothing before 2 s');
+  await h.advance(900); assert.deepStrictEqual(h.think, [], 'nothing before 1 s');
   await h.advance(200); assert.deepStrictEqual(h.think, ['start']);
   assert.strictEqual(h.playing[h.playing.length - 1], true, 'the VAD treats the pulse as playback (no barge-in from it)');
   h.call.onReplyText('All good. ', false);
@@ -227,11 +227,11 @@ test('thinking sound: starts 2 s after the turn was sent when no reply speech be
   assert.deepStrictEqual(h.think, ['start', 'stop'], 'nothing plays when the turn ends');
 });
 
-test('thinking sound: a quick reply (within 2 s) has no sound at all', async () => {
+test('thinking sound: a quick reply (within 1 s) has no sound at all', async () => {
   const h = await started(); h.deps.thinking = thinking(h); h.call = voiceCreateCall(h.deps);
   await h.call.start();
   await h.say('Please check the system status.');
-  await h.advance(1000);
+  await h.advance(500);
   h.call.onReplyText('All good. ', true);
   await h.advance(20000);
   assert.deepStrictEqual(h.think, []);
@@ -322,7 +322,7 @@ function fakeCtx() {
   return c;
 }
 
-test('thinking sound: a quiet random pop cluster: 4-7 soft sine pops, a few-ms attack and 30-60 ms decay through a low-pass under 2 kHz, peak -25 dBFS at the default volume', () => {
+test('thinking sound: a quiet random pop cluster: 4-7 soft sine pops, a few-ms attack and 30-60 ms decay through a low-pass under 2 kHz, peak -16 dBFS at the default volume', () => {
   const ctx = fakeCtx(), ivs = [];
   const s = voiceCreateThinkingSound({ ctx, volume: 0.5, setInterval: (f, ms) => { ivs.push({ f, ms }); return 7; }, clearInterval: (id) => { ivs.push({ cleared: id }); } });
   s.start();
@@ -330,7 +330,7 @@ test('thinking sound: a quiet random pop cluster: 4-7 soft sine pops, a few-ms a
   assert.ok(oscs.length >= 4 && oscs.length <= 7, 'pops: ' + oscs.length);
   assert.ok(oscs.every(o => o.type === 'sine' && o.frequency.value > 100 && o.frequency.value < 2000));
   const master = ctx.nodes.find(n => n.kind === 'gain' && n.connected.includes(ctx.destination));
-  assert.ok(Math.abs(20 * Math.log10(master.gain.value) - (-25)) < 0.1, 'master = -25 dBFS at volume 0.5: ' + master.gain.value);
+  assert.ok(Math.abs(20 * Math.log10(master.gain.value) - (-16)) < 0.1, 'master = -16 dBFS at volume 0.5: ' + master.gain.value);
   assert.ok(Math.abs(master.gain.value - voiceThinkingPeak(0.5)) < 1e-9, 'the renderer literal matches the planner peak');
   const env = ctx.nodes.filter(n => n.kind === 'gain' && n.connected.includes(master))[0];
   const er = env.gain.calls.filter(c => c[0] === 'ramp');
@@ -613,24 +613,24 @@ async function clockHarness(prefs, extra, plan) {
 }
 const ats = (h) => h.pulses.map(e => e.at - h.OFFSET);
 const SHORT = { seed: 11, gapMinMs: 1000, gapSpreadMs: 0 };   // short gaps: several clusters before the 20 s spoken line
-// The clock of a wait with seed 11: the small silent pulse at 0, the first cluster at 2000, every next one at the previous one + its length + its own gap.
+// The clock of a wait with seed 11: the small silent pulse at 0, the first cluster at 1000, every next one at the previous one + its length + its own gap.
 function waitOffsets(n, plan) {
-  const o = [0, 2000];
+  const o = [0, 1000];
   for (let i = 0; o.length < n; i++) { const p = voiceThinkingCluster(Object.assign({ seed: 11, index: i }, plan, { index: i })); o.push(o[o.length - 1] + p.durationMs + p.gapAfterMs); }
   return o.slice(0, n);
 }
 
-test('thinking clock: a small silent pulse at once, the first cluster at 2 s, then clusters with a 4-6 s quiet gap; sound and picture get the same events', async () => {
+test('thinking clock: a small silent pulse at once, the first cluster at 1 s, then clusters with a 1-2 s quiet gap; sound and picture get the same events', async () => {
   const h = await clockHarness();
   await h.say('Please check the system status.');
-  assert.strictEqual(h.pulses.length, 1, 'the first 2 s are not blank');
+  assert.strictEqual(h.pulses.length, 1, 'the first 1 s is not blank');
   assert.deepStrictEqual(h.pulses[0], { at: h.OFFSET + h.t + 20, kind: 'tick', pops: [], attackMs: 250, decayMs: 1000, strength: 0.35 });
   assert.deepStrictEqual(h.snd, [], 'the small pulse is silent');
   const t0 = h.t;
-  await h.advance(1990); assert.strictEqual(h.pulses.length, 1);
+  await h.advance(990); assert.strictEqual(h.pulses.length, 1);
   await h.advance(20);
   assert.strictEqual(h.pulses.length, 2);
-  assert.strictEqual(h.pulses[1].at, h.OFFSET + t0 + 2000 + 20, 'at = the scheduled audio start in the performance clock (+20 ms)');
+  assert.strictEqual(h.pulses[1].at, h.OFFSET + t0 + 1000 + 20, 'at = the scheduled audio start in the performance clock (+20 ms)');
   assert.strictEqual(h.pulses[1].kind, 'cluster'); assert.strictEqual(h.pulses[1].variant, 'A', 'the default build is A');
   assert.deepStrictEqual(h.pulses[1], voiceThinkingEvent(voiceThinkingCluster({ seed: 11, index: 0 }), h.pulses[1].at), 'the event is the seeded plan');
   assert.ok(h.pulses[1].pops.length >= 5 && h.pulses[1].pops.length <= 7);
@@ -640,7 +640,7 @@ test('thinking clock: a small silent pulse at once, the first cluster at 2 s, th
   const want = waitOffsets(h.pulses.length);
   assert.ok(h.pulses.length >= 4, 'pulses ' + h.pulses.length);
   assert.deepStrictEqual(ats(h).map(a => a - 20 - t0), want, 'one clock: each cluster starts at the last one + its length + its gap, no drift');
-  for (let i = 2; i < h.pulses.length; i++) { const gap = ats(h)[i] - ats(h)[i - 1] - h.pulses[i - 1].durationMs; assert.ok(gap >= 4000 && gap <= 6000, 'quiet gap 4-6 s: ' + gap); }
+  for (let i = 2; i < h.pulses.length; i++) { const gap = ats(h)[i] - ats(h)[i - 1] - h.pulses[i - 1].durationMs; assert.ok(gap >= 1000 && gap <= 2000, 'quiet gap 1-2 s: ' + gap); }
   assert.deepStrictEqual(h.snd, h.pulses.slice(1), 'every audible cluster is a shown cluster');
   assert.deepStrictEqual(h.think.filter(x => x === 'start'), [], 'a sound with pulse() is not started with its own interval');
 });
@@ -735,16 +735,16 @@ test('thinking clock: the spoken still-thinking line uses the speaking state, th
   assert.strictEqual(h.pulses.length, n + 1);
   assert.strictEqual(h.pulses[n].strength, 0.35, 'a fresh wait: a small pulse first');
   const t0 = h.t;
-  await h.advance(2100);
+  await h.advance(1100);
   assert.strictEqual(h.pulses[n + 1].strength, 1);
-  assert.strictEqual(h.pulses[n + 1].at - h.OFFSET, t0 + 2020);
+  assert.strictEqual(h.pulses[n + 1].at - h.OFFSET, t0 + 1020);
 });
 
 test('thinking clock: runs with only a picture (no sound adapter); an older ui without thinkingPulse starts no clock', async () => {
   const h = await started({}, {});
   h.pulses = []; h.deps.ui = Object.assign({}, h.deps.ui, { thinkingPulse: (e) => h.pulses.push(e) }); h.deps.thinking = undefined; h.deps.thinkingPlan = { seed: 11 };
   h.call = voiceCreateCall(h.deps); await h.call.start();
-  await h.say('Please check the system status.'); await h.advance(5000);
+  await h.say('Please check the system status.'); await h.advance(3000);
   assert.strictEqual(h.pulses.length, 2, 'the small pulse and the first cluster');
   assert.ok(!h.playing.includes(true));
   const g = await started({}, {});   // neither a sound nor thinkingPulse
@@ -758,7 +758,7 @@ test('thinking clock: without lib/ui-voice-thinking.js the old single swell ever
   try {
     const h = await clockHarness(); await h.say('Please check the system status.');
     const t0 = h.t; await h.advance(10000);
-    assert.deepStrictEqual(ats(h).map(a => a - 20 - t0), [0, 2000, 4500, 7000, 9500]);
+    assert.deepStrictEqual(ats(h).map(a => a - 20 - t0), [0, 1000, 3500, 6000, 8500]);
     assert.deepStrictEqual(h.pulses[1], { at: h.pulses[1].at, kind: 'cluster', pops: [], attackMs: 250, decayMs: 1000, strength: 1 });
   } finally { globalThis.voiceThinkingCluster = keep; }
 });
@@ -861,31 +861,31 @@ test('thinking pulse: the controller delivers the SAME event to the sound (mappe
   const t0 = h.t;
   assert.deepStrictEqual(log.map(l => l.who), ['visual'], 'the small first pulse is silent: the controller clock');
   assert.strictEqual(log[0].at, OFFSET + t0 + 20);
-  await h.advance(2010);
+  await h.advance(1010);
   assert.deepStrictEqual(log.map(l => l.who), ['visual', 'audio', 'visual']);
   const [, a, v] = log;
   assert.strictEqual(a.ev, v.ev, 'one event object');
   assert.strictEqual(a.ret, a.ev);
   assert.strictEqual(a.at, v.at, 'the picture sees the time the audio mapped');
-  assert.ok(Math.abs(v.at - (OFFSET + t0 + 2000 + 20 + 140)) < 1e-6, 'the heard time = scheduled + 20 ms lead + 140 ms output latency: ' + (v.at - OFFSET - t0));
+  assert.ok(Math.abs(v.at - (OFFSET + t0 + 1000 + 20 + 140)) < 1e-6, 'the heard time = scheduled + 20 ms lead + 140 ms output latency: ' + (v.at - OFFSET - t0));
   assert.strictEqual(a.t, v.t, 'sound and picture in the same instant of the clock');
   assert.strictEqual(oscStarts(ctx).length, a.ev.pops.length, 'scheduled exactly once');
   const W = waitOffsets(3);
-  await h.advance(W[2] - 2010 + 10);
+  await h.advance(W[2] - 1010 + 10);
   assert.strictEqual(oscStarts(ctx).length, a.ev.pops.length + log[log.length - 2].ev.pops.length); assert.strictEqual(log.length, 5);
   assert.strictEqual(h.playing[h.playing.length - 1], true);
 });
 
 test('thinking pulse: a sound that mutates nothing keeps the controller clock; one that returns a different event with a sane at is adopted into the same event; a wild one is ignored', async () => {
-  const cases = [['same', () => undefined, 2020], ['returned', (ev) => ({ ...ev, at: ev.at + 150 }), 2170], ['wild-late', (ev) => ({ at: ev.at + 99999 }), 2020], ['stale', (ev) => ({ at: 1 }), 2020],
-    ['nan', (ev) => { ev.at = NaN; }, 2020], ['mutated', (ev) => { ev.at += 90; }, 2110]];
+  const cases = [['same', () => undefined, 1020], ['returned', (ev) => ({ ...ev, at: ev.at + 150 }), 1170], ['wild-late', (ev) => ({ at: ev.at + 99999 }), 1020], ['stale', (ev) => ({ at: 1 }), 1020],
+    ['nan', (ev) => { ev.at = NaN; }, 1020], ['mutated', (ev) => { ev.at += 90; }, 1110]];
   for (const [name, fn, want] of cases) {
     const h = await clockHarness();
     const seen = [];
     h.deps.thinking.pulse = (ev) => { seen.push(ev); return fn(ev); };
     h.call = voiceCreateCall(h.deps); await h.call.start();
     await h.say('Please check the system status.');
-    const t0 = h.t; await h.advance(2010);
+    const t0 = h.t; await h.advance(1010);
     assert.strictEqual(seen.length, 1, name); assert.strictEqual(h.pulses.length, 2, name);
     assert.strictEqual(seen[0], h.pulses[1], name + ': same object');
     assert.strictEqual(h.pulses[1].at - h.OFFSET - t0, want, name);
@@ -898,10 +898,10 @@ test('thinking pulse: a sound that did not play (false) is not audible: no playb
   h.deps.thinking.pulse = (ev) => { seen.push(ev); return ok ? ev : false; };
   h.call = voiceCreateCall(h.deps); await h.call.start();
   await h.say('Please check the system status.');
-  const t0 = h.t; await h.advance(2010);
-  assert.strictEqual(h.pulses.length, 2); assert.strictEqual(h.pulses[1].at - h.OFFSET - t0, 2020, 'controller clock');
+  const t0 = h.t; await h.advance(1010);
+  assert.strictEqual(h.pulses.length, 2); assert.strictEqual(h.pulses[1].at - h.OFFSET - t0, 1020, 'controller clock');
   assert.strictEqual(h.playing[h.playing.length - 1], false, 'the VAD was not told the pulse is playback');
-  ok = true; await h.advance(waitOffsets(3)[2] - 2010 + 10);
+  ok = true; await h.advance(waitOffsets(3)[2] - 1010 + 10);
   assert.strictEqual(h.pulses.length, 3); assert.strictEqual(seen[1], h.pulses[2]); assert.strictEqual(h.playing[h.playing.length - 1], true);
 });
 
