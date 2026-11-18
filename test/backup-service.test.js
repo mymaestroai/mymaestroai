@@ -160,6 +160,26 @@ test('a piece refused before its file has opened leaves no file: the removal wai
   assert.deepStrictEqual(fs.existsSync(dir) ? fs.readdirSync(dir) : [], [], 'and nothing appears later');
 });
 
+test('an upload whose sender goes away without an end or an error is refused, not left waiting, and leaves no file', async () => {
+  const inst = makeInstall(TMP, 'u3');
+  const { svc } = serviceFor(inst);
+  await svc.setup(PW, { logN: 15 });
+  const dir = path.join(inst.root, '.restore', 'uploads');
+  // settles within 2 s, or fails as "still waiting" (a real timer: it keeps the test alive while it waits)
+  const within = (p) => { let t; return Promise.race([p, new Promise((_r, reject) => { t = setTimeout(() => reject(new Error('still waiting')), 2000); })]).finally(() => clearTimeout(t)); };
+  // one piece arrives, then the source closes with neither 'end' nor 'error'
+  const cut = new Readable({ read() {} });
+  cut.push(Buffer.alloc(64, 1));
+  setTimeout(() => cut.destroy(), 50);
+  await assert.rejects(within(svc.acceptUpload(cut, { expected: 128 })), (e) => e.code === 'EABORTED');
+  // a later piece of an upload whose sender is gone before it was read
+  const first = await svc.acceptUpload(Readable.from([Buffer.alloc(32, 2)]), { expected: 32, done: false });
+  const gone = new Readable({ read() {} }); gone.destroy();
+  await assert.rejects(within(svc.acceptUpload(gone, { uploadId: first.uploadId, offset: 32, done: false })), (e) => e.code === 'EABORTED');
+  await sleep(50);
+  assert.deepStrictEqual(fs.existsSync(dir) ? fs.readdirSync(dir) : [], [], 'a cut-off upload is removed, like any refused one');
+});
+
 test('a restore onto a fresh install: from an upload, an admin sign-in from the backup, then confirmed; cancelled before, not after', async () => {
   // The backed-up install has a real admin password and two-factor sign-in
   const inst = makeInstall(TMP, 'old');
