@@ -2084,6 +2084,15 @@ async function handleHttpRequest(req, res) {
         const job = await runner.run({ owner: 'maestro', name: 'build sandbox image', command: cmd, cwd: __dirname, timeoutMinutes: 30 });
         return jsonResponse(res, 200, { ok: true, job: job && job.id ? job.id : null });
       }
+      // "Move now" on Settings -> Status (admins only, like every /api/sandbox route): one try of a home move that failed
+      const mh = pathname.match(/^\/api\/sandbox\/agents\/([^/]+)\/move-home$/);
+      if (mh && req.method === 'POST') {
+        let nm; try { nm = decodeURIComponent(mh[1]); } catch { nm = mh[1]; }
+        const a = (await getAgents()).find(x => x.name === nm);
+        if (!a) return jsonResponse(res, 404, { error: 'unknown agent' });
+        const r = await sb.moveHomeNow(a, { busy: () => temporalWorkersLib.listVirtual().some(v => v && v.parent === a.name) });
+        return jsonResponse(res, r.ok ? 200 : 409, r);
+      }
       const m = pathname.match(/^\/api\/sandbox\/agents\/([^/]+)\/(reset|stop)$/);
       if (m && req.method === 'POST') {
         const a = (await getAgents()).find(x => x.name === m[1]);
