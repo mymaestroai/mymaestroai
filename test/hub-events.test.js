@@ -111,7 +111,8 @@ test('wiring: chat handler taps hub-initiated turns and every hub caller tags it
   assert.match(chat, /consulted_by, origin, turn_link(, owner_turn)?(, voice)? \} = body;/);
   assert.match(chat, /hubEvents\.events\.tapTurn\(res, \{ agent, origin: turnOrigin, message, turnId, startedAt \}\)/);
   assert.match(chat, /tap\.finish\(!turnError && !stopped, turnError \? turnError\.message : stopped \? 'stopped' : null\)/);
-  assert.match(chat, /origin: \{ kind: opts\.temporal \? 'task' : 'consultation', from: coordinatorName \|\| null \}/);
+  // member origin (test/member-origin.test.js): what a member's turn starts carries member
+  assert.match(chat, /origin: \{ kind: opts\.temporal \? 'task' : 'consultation', from: coordinatorName \|\| null, \.\.\.\(consultMember \? \{ member: true \} : \{\}\) \}/);
   assert.match(chat, /function wakeAgent\(agentName, message, onReply, meta = null\)/);
   assert.match(chat, /handleChatStream\(\{ agent: agentName, message, origin(, [a-z_]+: [^}]+)? \}, sink\)/);
   const jobs = read('lib/jobs.js');

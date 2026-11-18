@@ -232,6 +232,7 @@ test('gate member-worker-models: no limit only while off, pending or not recorde
     },
     resolveVirtualAgent: () => null, adminIdSet: () => new Set(['admin1']),
     temporalWorkers: { isSelfCheck: () => false },
+    isMemberTurn: () => false,   // member origin (test/member-origin.test.js): no member's turn here
   };
   vm.createContext(ctx);
   vm.runInContext(grab('function memberWorkerModels(') + '\nthis.f = memberWorkerModels;', ctx);

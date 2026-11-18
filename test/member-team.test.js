@@ -60,6 +60,7 @@ function sandbox({ agents, memberModels, admins = ['admin1'], virtual = {}, self
     temporalWorkers: { ...tw, isSelfCheck: (n) => selfCheck.includes(n) },
     _twCatalog: { text: 'ALL MODELS', available: ['claude-sdk/claude-opus-5-5', 'claude-sdk/claude-haiku-5-5', 'openai/gpt-6'], sdkInfo: [] },
     workerCatalogText: () => 'ALL MODELS',
+    isMemberTurn: () => false,   // member origin (test/member-origin.test.js): these agents run no member's turn here
   };
   vm.createContext(ctx);
   vm.runInContext(grab('function memberWorkerModels(') + '\n' + grab('function workerCatalogTextFor(') + '\nthis.mwm = memberWorkerModels; this.cat = workerCatalogTextFor;', ctx);
@@ -104,7 +105,8 @@ test('the member caps reach a member\'s temporary workers: the worker\'s turn na
   assert.match(grab('function consultViaHubNow('), /consulted_by: coordinatorName \|\| undefined/);
   assert.match(grab('async function runSpawnWorkers('), /return consultViaHub\(v\.id, [^,]+, v\.id, sseRes, callerName, \{/);
   // ... and the turn's member origin (never Ultra, Standard speed) is judged on those names
-  assert.match(SDK, /const memberOrigin = originFromMemberAgent\(\[turnOrigin && turnOrigin\.from, turnOrigin && turnOrigin\.by, turnOrigin && turnOrigin\.agent, consulted_by,/);
+  // member origin (test/member-origin.test.js): origin.member, set by the hub on what a member's turn started, also counts
+  assert.match(SDK, /const memberOrigin = !!\(turnOrigin && turnOrigin\.member === true\) \|\| originFromMemberAgent\(\[turnOrigin && turnOrigin\.from, turnOrigin && turnOrigin\.by, turnOrigin && turnOrigin\.agent, consulted_by,/);
   assert.match(SDK, /const turnTier = \(memberTurn \|\| memberOrigin\) \? 'standard' : await agentTier\(agent\);/);
   const ctx = {}; vm.createContext(ctx);
   vm.runInContext(grab('function originFromMemberAgent(') + '\nthis.f = originFromMemberAgent;', ctx);
