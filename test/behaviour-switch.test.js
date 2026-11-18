@@ -13,7 +13,7 @@ const { createBehaviourSwitch, runTool, OWNER_ONLY, CHANGED, NOT_CONFIRMED, TURN
 
 const ROOT = path.join(__dirname, '..');
 
-function mk({ entries, agents, auditFile, onAfter } = {}) {
+function mk({ entries, agents, auditFile, onAfter, failOn } = {}) {
   const d = fs.mkdtempSync(path.join(os.tmpdir(), 'bsw-'));
   const stateFile = path.join(d, 'state.json');
   const ids = bc.manifest().map((e) => e.id);
@@ -30,7 +30,14 @@ function mk({ entries, agents, auditFile, onAfter } = {}) {
   const sw = createBehaviourSwitch({
     changes: { list: () => bc.list({ stateFile }), decide: (id, dec, o) => bc.decide(id, dec, { ...o, stateFile }) },
     agents: () => roster,
-    setAgentGuidance: async (n, v) => { guidance.push([n, v]); const a = roster.find((x) => x.name === n); if (a) a.teamGuidance = v; return { success: true }; },
+    // stand-ins for agents.agentStamp and updateAgentField(..., { expectStamp }): the stamp is the box id, checked at the write
+    stampOf: (n) => { const a = roster.find((x) => x.name === n); return a ? `box:${a.box}` : null; },
+    setAgentGuidance: async (n, v, stamp) => {
+      const a = roster.find((x) => x.name === n);
+      if (!a || `box:${a.box}` !== stamp) return { success: false, error: 'The agent changed (removed and made again?), so nothing changed.' };
+      if (failOn === n) return { success: false, error: 'disk full' };
+      guidance.push([n, v]); a.teamGuidance = v; return { success: true };
+    },
     isMemberOwned: (a) => !!(a && a.owner && a.owner !== 'u-admin'),
     isVirtual: (n) => n.startsWith('tmp_'),
     afterChange: async (id) => { after.push(id); if (onAfter) await onAfter(id); },
@@ -105,6 +112,7 @@ test('on: asked once, recorded as switched by the lead, logged requested then do
   assert.equal(h.pushed[0].opts.adminsOnly, true);
   assert.equal(h.pushed[0].payload.url, '/changes#work-check-ins');
   assert.match(h.pushed[0].payload.body, /^maestro turned on ".+" at your request\. Undo it at \/changes\.$/);
+  assert.equal(h.pushed[0].opts.kind, 'security', 'announced like connector_access, not a kind that is easy to mute');
   assert.deepEqual(h.after, ['work-check-ins']);
 });
 
@@ -131,14 +139,23 @@ test('team-guidance for named agents: the change turns on and each agent is swit
   await assert.rejects(h.sw.on({ id: 'team-guidance', agents: ['ghost'], by: 'maestro', confirm: yes }), /No agent named "ghost"/);
   await assert.rejects(h.sw.on({ id: 'work-check-ins', agents: ['coach'], by: 'maestro', confirm: yes }), /only for team-guidance/);
   assert.deepEqual(h.guidance, []); assert.deepEqual(h.log(), []);
-  const r = await h.sw.on({ id: 'team-guidance', agents: ['coach'], by: 'maestro', confirm: yes });
+  const qs = [];
+  const r = await h.sw.on({ id: 'team-guidance', agents: ['coach'], by: 'maestro', confirm: async (q) => { qs.push(q); return true; } });
   assert.equal(r.state, 'on'); assert.deepEqual(r.agents, ['coach']);
   assert.deepEqual(h.guidance, [['coach', 'on']]);
   assert.equal(h.state()['team-guidance'].state, 'on');
-  assert.match(h.pushed[0].payload.body, /for coach at your request/);
+  // review r6 (GPT-6): the question says the change itself turns on too
+  assert.match(qs[0], /for coach\. This also turns the change itself on: the lead and new agents get it too\. Turn it on\?$/);
+  assert.match(h.pushed[0].payload.body, /^maestro turned on "[^"]+" and switched it on for coach at your request\. Undo it at \/changes\.$/);
+  // with the change already on, naming an agent asks only about that agent
+  const qs2 = [];
+  h.roster.push({ name: 'helper', category: 'worker', box: 4 });
+  await h.sw.on({ id: 'team-guidance', agents: ['helper'], by: 'maestro', confirm: async (q) => { qs2.push(q); return true; } });
+  assert.doesNotMatch(qs2[0], /also turns the change itself on/);
+  assert.match(h.pushed[1].payload.body, /^maestro switched "[^"]+" on for helper at your request/);
   // off for an agent leaves the change itself on
   await h.sw.off({ id: 'team-guidance', agents: ['coach'], by: 'maestro', confirm: yes });
-  assert.deepEqual(h.guidance, [['coach', 'on'], ['coach', 'off']]);
+  assert.deepEqual(h.guidance, [['coach', 'on'], ['helper', 'on'], ['coach', 'off']]);
   assert.equal(h.state()['team-guidance'].state, 'on');
 });
 
@@ -207,4 +224,61 @@ test("the /changes page says the lead can switch a change at the owner's word, m
   assert.doesNotMatch(page, /Nothing else can switch them on/);
   assert.match(page, /if \(c\.leadMay !== true\) el\.appendChild\(para\('Who can switch it', 'Only you, on this page\.'\)\);/);
   assert.match(page, /c\.by === 'lead' && c\.agent \? ' \(by ' \+ c\.agent \+ ' at your request\)'/);
+});
+
+test('review r6 (GPT-6): an agent replaced between the answer and the write is refused at the write itself', async (t) => {
+  const h = mk(); t.after(h.cleanup);
+  // the stamp read after the answer matches, then the agent is re-made just before its write
+  let calls = 0;
+  const sw = createBehaviourSwitch({
+    changes: { list: () => bc.list({ stateFile: h.stateFile }), decide: (id, dec, o) => bc.decide(id, dec, { ...o, stateFile: h.stateFile }) },
+    agents: () => h.roster,
+    stampOf: (n) => { const a = h.roster.find((x) => x.name === n); return a ? `box:${a.box}` : null; },
+    setAgentGuidance: async (n, v, stamp) => { calls++; return stamp === 'box:99' ? { success: true } : { success: false, error: 'The agent changed (removed and made again?), so nothing changed.' }; },
+    isMemberOwned: () => false, isVirtual: () => false, afterChange: async () => {},
+    push: { notify: (payload, opts) => h.pushed.push({ payload, opts }) },
+    auditFile: path.join(h.d, 'log3.jsonl'),
+  });
+  await assert.rejects(sw.on({ id: 'team-guidance', agents: ['coach'], by: 'maestro', confirm: yes }), /The agent changed/);
+  assert.equal(calls, 1);
+});
+
+test('review r6 (GPT-6): the change switched off while the owner answered is not turned on by an agent-only answer', async (t) => {
+  const h = mk({ entries: { 'team-guidance': { state: 'on', by: 'owner', at: '2026-01-01T00:00:00.000Z' } } }); t.after(h.cleanup);
+  await assert.rejects(h.sw.on({ id: 'team-guidance', agents: ['coach'], by: 'maestro', confirm: async () => { await bc.decide('team-guidance', 'off', { stateFile: h.stateFile }); return true; } }), (e) => e.message === CHANGED);
+  assert.equal(h.state()['team-guidance'].state, 'off');
+  assert.deepEqual(h.guidance, []);
+});
+
+test('review r6 (GPT-6): a failure part-way is logged with what was done, announced, and reported', async (t) => {
+  const h = mk({ failOn: 'coach' }); t.after(h.cleanup);
+  h.roster.push({ name: 'helper', category: 'worker', box: 4 });
+  await assert.rejects(h.sw.on({ id: 'team-guidance', agents: ['helper', 'coach'], by: 'maestro', confirm: yes }),
+    /Couldn't change coach: disk full\. Done before that: turned on "[^"]+" and switched it on for helper\. The owner can undo it at \/changes\.$/);
+  assert.equal(h.state()['team-guidance'].state, 'on');
+  const last = h.log().pop();
+  assert.equal(last.state, 'failed'); assert.equal(last.entryDone, true); assert.deepEqual(last.agentsDone, ['helper']);
+  assert.equal(h.pushed.length, 1);
+  assert.match(h.pushed[0].payload.body, /^maestro turned on "[^"]+" and switched it on for helper; the rest failed\. Undo it at \/changes\.$/);
+  assert.deepEqual(h.after, ['team-guidance']);
+  // nothing done: logged as failed, nothing announced
+  const h2 = mk({ failOn: 'coach', entries: { 'team-guidance': { state: 'on', by: 'owner', at: '2026-01-01T00:00:00.000Z' } } }); t.after(h2.cleanup);
+  await assert.rejects(h2.sw.on({ id: 'team-guidance', agents: ['coach'], by: 'maestro', confirm: yes }), /Couldn't change coach: disk full$/);
+  assert.equal(h2.pushed.length, 0);
+  assert.equal(h2.log().pop().state, 'failed');
+});
+
+test('review r6 (Sentinel): member-worker-models stays page-only even if the manifest file said leadMay true', async (t) => {
+  const h = mk(); t.after(h.cleanup);
+  const sw = createBehaviourSwitch({ changes: { list: () => [{ id: 'member-worker-models', title: 'Limit', state: 'pending', leadMay: true }], decide: async () => { throw new Error('must not run'); } }, agents: () => [], push: { notify() {} }, auditFile: path.join(h.d, 'l4.jsonl') });
+  await assert.rejects(sw.on({ id: 'member-worker-models', by: 'maestro', confirm: yes }), /Only the owner can switch "Limit"/);
+});
+
+test('agents.agentStamp and updateAgentField expectStamp (source): box id first, else a digest of the record; checked at the write', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'lib', 'agents.js'), 'utf8');
+  assert.match(src, /function stampOf\(rec\) \{\n  if \(!rec\) return null;\n  if \(rec\.box\) return `box:\$\{rec\.box\}`;/);
+  assert.match(src, /if \(ctx\.expectStamp !== undefined && stampOf\(agent\) !== ctx\.expectStamp\) return \{ success: false/);
+  const sw = fs.readFileSync(path.join(ROOT, 'lib', 'behaviour-switch.js'), 'utf8');
+  assert.match(sw, /stampOf = \(name\) => require\('\.\/agents'\)\.agentStamp\(name\)/);
+  assert.match(sw, /updateAgentField\(name, \{ teamGuidance: value \}, \{ expectStamp: stamp \}\)/);
 });
