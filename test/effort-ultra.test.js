@@ -200,5 +200,5 @@ test('the Codex turn caps Ultra for member-agent origins too (consults, queued t
   const chat = read('lib/sdk-chat.js');
   assert.match(chat, /if \(codexEffort === 'ultra' && \(options\.memberTurn \|\| options\.simpleTurn \|\| options\.memberOrigin\)\) codexEffort = 'max';/);
   // member origin (test/member-origin.test.js): origin.member, set by the hub on what a member's turn started, also counts
-  assert.match(chat, /const memberOrigin = !!\(turnOrigin && turnOrigin\.member === true\) \|\| originFromMemberAgent\(\[turnOrigin && turnOrigin\.from, turnOrigin && turnOrigin\.by, turnOrigin && turnOrigin\.agent, consulted_by, turnOrigin && turnOrigin\.kind !== 'user' \? agent : null\], /, 'a hub-started turn counts the agent it runs (job notices)');
+  assert.match(chat, /const memberOrigin = !!\(turnOrigin && turnOrigin\.member === true\) \|\| mailboxMember \|\| originFromMemberAgent\(\[turnOrigin && turnOrigin\.from, turnOrigin && turnOrigin\.by, turnOrigin && turnOrigin\.agent, consulted_by, turnOrigin && turnOrigin\.kind !== 'user' \? agent : null\], /, 'a hub-started turn counts the agent it runs (job notices)');
 });
