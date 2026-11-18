@@ -112,3 +112,35 @@ test('a plan that never comes by Start: a message, and the button once it arrive
   await p.answer('/api/welcome/team/plan', 200, p.planBody);
   assert.strictEqual(p.$('team-create-now').hidden, false, 'the late plan offers the button');
 });
+
+// Review r2 (GPT-6 BLOCK; Sonnet follow-ups).
+test('r2: after a changed plan, pressing Start again never creates: only the button does', async () => {
+  const p = page();
+  p.ctx.loadTeam(); await p.answer('/api/welcome/team/plan', 200, p.planBody);
+  const start = p.ctx.setUpTeam(); await p.settle();
+  await p.answer('/api/welcome/team', 409, { ok: false, changed: true, plan: [{ ...PLAN[0], model: 'openai/gpt-x', perUse: true }, PLAN[1]] });
+  await start;
+  await p.ctx.setUpTeam(); await p.settle();   // the first chat failed and Start is pressed again
+  assert.strictEqual(p.calls.filter(c => c.url === '/api/welcome/team').length, 1, 'no second create from Start');
+});
+test('r2: a plan answer that lands after the team was created does not replace the created rows', async () => {
+  const p = page();
+  p.ctx.loadTeam(); await p.answer('/api/welcome/team/plan', 200, p.planBody);
+  const start = p.ctx.setUpTeam(); await p.settle();
+  p.ctx.loadTeam();   // the model select changed while the create ran
+  await p.answer('/api/welcome/team', 200, { ok: true, created: PLAN, skipped: [] });
+  await start;
+  const shown = p.$('team-rows').children.length;
+  await p.answer('/api/welcome/team/plan', 200, p.planBody);
+  assert.strictEqual(p.$('team-rows').children.length, shown);
+  assert.strictEqual(p.$('team-create-now').hidden, true);
+});
+test('r2: a create where every role failed leaves the button for another try', async () => {
+  const p = page();
+  p.ctx.loadTeam(); await p.answer('/api/welcome/team/plan', 200, p.planBody);
+  const start = p.ctx.setUpTeam(); await p.settle();
+  await p.answer('/api/welcome/team', 200, { ok: true, created: [], skipped: PLAN.map(e => ({ ...e, action: 'skip', reason: 'failed', error: 'disk busy' })) });
+  await start;
+  assert.match(p.$('team-result').textContent, /could not be created: disk busy/);
+  assert.strictEqual(p.$('team-create-now').hidden, false);
+});
