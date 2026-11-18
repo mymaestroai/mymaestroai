@@ -144,3 +144,17 @@ test('the pages send the thinking sound through the speech chain: voiceOutNode i
   assert.strictEqual(ac.length, 2, 'app.js: two sounds are made');
   for (const c of ac) assert.ok(/out:\s*\(c\)\s*=>\s*voiceOutNode\(c\)/.test(c), 'app.js: ' + c);
 });
+
+test('stop then start: each run makes one master on out (asked once per run), the stopped one is not reconnected (review r1)', () => {
+  const ctx = fakeCtx(), sink = { kind: 'sink', connect() {} }, seen = [];
+  const s = voiceCreateThinkingSound({ ctx, volume: 0.5, out: (c) => { seen.push(c); return sink; }, setTimeout: (f) => f(), ...noop });
+  s.start();
+  const first = masterOf(ctx);
+  s.stop();
+  s.start();
+  const masters = ctx.nodes.filter(n => n.kind === 'gain' && n.connected.includes(sink));
+  assert.strictEqual(seen.length, 2, 'out asked once per run');
+  assert.strictEqual(masters.length, 2, 'a new master for the second run');
+  for (const m of masters) assert.deepStrictEqual(m.connected, [sink], 'each master connected once, to out only');
+  assert.notStrictEqual(masters[1], first);
+});
