@@ -90,7 +90,7 @@ test('members never send Ultra: the server passes admin, the turn marks memberTu
   const chat = read('lib/sdk-chat.js');
   assert.match(chat, /const trustedAdmin = !!\(ctx && typeof ctx === 'object' && ctx\.admin === true\);/);
   assert.match(chat, /memberTurn: !!\(trustedUserId && !trustedAdmin\),/);
-  assert.match(chat, /if \(codexEffort === 'ultra' && \(options\.memberTurn \|\| options\.simpleTurn\)\) codexEffort = 'max';/);
+  assert.match(chat, /if \(codexEffort === 'ultra' && \(options\.memberTurn \|\| options\.simpleTurn \|\| options\.memberOrigin\)\) codexEffort = 'max';/);
   assert.match(chat, /let codexEffort = options/);
 });
 
@@ -149,7 +149,7 @@ test('review r1: Simple turns never run Ultra (both pages mark every Simple turn
   assert.match(mob, /if \(!simpleEffortOk\(a\)\) return \{ simple: true \};/);
   assert.match(mob, /return level \? \{ simple: true, effort: level \} : \{ simple: true \};/);
   assert.match(chat, /simpleTurn: body\.simple === true,/);
-  assert.match(chat, /if \(codexEffort === 'ultra' && \(options\.memberTurn \|\| options\.simpleTurn\)\) codexEffort = 'max';/);
+  assert.match(chat, /if \(codexEffort === 'ultra' && \(options\.memberTurn \|\| options\.simpleTurn \|\| options\.memberOrigin\)\) codexEffort = 'max';/);
 });
 
 test('review r1: both chat routes pass the admin flag', () => {
@@ -167,4 +167,25 @@ test('review r1: only an error about Ultra or the effort level falls back (not u
   assert.strictEqual(f('You have hit your usage limit. Try again later.'), false);
   assert.strictEqual(f('sandbox: operation not allowed'), false);
   assert.strictEqual(f('feature unsupported on this platform'), false);
+});
+
+test('a hub turn set off by a member\'s agent (consult, queued task, schedule, report) never runs Ultra', () => {
+  const { originFromMemberAgent: f } = require('../lib/sdk-chat.js');
+  const agents = [{ name: 'hubagent' }, { name: 'ownerbot', owner: 'u_owner' }, { name: 'sambot', owner: 'u_sam' }, { name: 'ghostbot', owner: 'u_gone' }];
+  const users = { u_owner: { id: 'u_owner', role: 'admin' }, u_sam: { id: 'u_sam', role: 'member' } };
+  const getUser = (id) => users[id] || null;
+  assert.strictEqual(f(['sambot'], agents, getUser), true, 'a member-owned agent');
+  assert.strictEqual(f([undefined, 'sambot', null], agents, getUser), true, 'found among the origin names');
+  assert.strictEqual(f(['ghostbot'], agents, getUser), true, 'owner no longer exists: counts as a member');
+  assert.strictEqual(f(['ownerbot'], agents, getUser), false, 'an admin-owned agent');
+  assert.strictEqual(f(['hubagent', 'hub', 'TASKS.md'], agents, getUser), false, 'the hub\'s own agents and sources');
+  assert.strictEqual(f([], agents, getUser), false);
+  assert.strictEqual(f(['sambot'], null, getUser), false, 'no agent list: nothing known');
+  assert.strictEqual(f(['sambot'], agents, () => { throw new Error('x'); }), true, 'a failed lookup is treated as a member');
+});
+
+test('the Codex turn caps Ultra for member-agent origins too (consults, queued tasks, schedules, reports)', () => {
+  const chat = read('lib/sdk-chat.js');
+  assert.match(chat, /if \(codexEffort === 'ultra' && \(options\.memberTurn \|\| options\.simpleTurn \|\| options\.memberOrigin\)\) codexEffort = 'max';/);
+  assert.match(chat, /memberOrigin: originFromMemberAgent\(\[turnOrigin && turnOrigin\.from, turnOrigin && turnOrigin\.by, turnOrigin && turnOrigin\.agent, consulted_by\], /);
 });
