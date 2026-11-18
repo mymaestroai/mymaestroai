@@ -155,3 +155,17 @@ test('brief: the starter team line names each starter with its model, the guidan
   const real = (await createHubMap(deps(withAgents)).briefFor('maestro')).split('\n').find(l => l.startsWith('- Starter team'));
   assert.ok(real && real.includes('Challenger not set up') && real.includes('Team guidance: full;'), real);
 });
+
+test('brief: one line while behaviour changes wait for the owner, left out when none wait or on any error', async () => {
+  const titles = () => ["Team advice in agents' instructions", 'A starter team'];
+  const line = async (extra) => (await createHubMap(deps(extra)).briefFor('maestro')).split('\n').find(l => l.startsWith('- Changes to how agents behave'));
+  assert.strictEqual(await line({ pendingChanges: titles }),
+    "- Changes to how agents behave, waiting for the owner's decision (off until then; the owner decides at /changes): Team advice in agents' instructions; A starter team. Bring one up when it is relevant; you cannot switch them.");
+  const text = await createHubMap(deps({ pendingChanges: titles })).briefFor('maestro');
+  assert.ok(text.indexOf('- Accounts:') < text.indexOf('- Changes to how agents behave') && text.indexOf('- Changes to how agents behave') < text.indexOf('- Providers with keys'));
+  assert.strictEqual(await createHubMap(deps({ pendingChanges: titles })).briefFor('worker'), '', 'only the lead agent gets it');
+  assert.strictEqual(await line({ pendingChanges: () => [] }), undefined, 'none waiting');
+  assert.strictEqual(await line({ pendingChanges: () => { throw new Error('boom'); } }), undefined, 'a read error omits the line');
+  // the real reader, in the throwaway install: no state file yet (a new install) = nothing waits
+  assert.strictEqual((await createHubMap(deps()).briefFor('maestro')).includes('Changes to how agents behave'), false);
+});

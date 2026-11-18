@@ -328,3 +328,45 @@ test('retarget: a run waiting to be delivered counts (and is saved) even when it
   assert.strictEqual(inst.retarget('trader', 'scout'), 1);
   assert.strictEqual(inst.pending[0].agent, 'scout');
 });
+
+// ── the hub as a creator (lib/behaviour-review) ──
+test('hub requester: may schedule for any agent, is named as the hub (with its byNote), and is not the owner speaking', async () => {
+  assert.strictEqual(st.HUB, 'hub');
+  const { inst, clock, woken } = mk();
+  const v = await inst.create({ requester: st.HUB, agent: 'trader', when: 'in 10 minutes', prompt: 'Review the changes.', label: 'Review', byNote: 'a change to how agents behave is waiting for review' });
+  assert.strictEqual(v.createdBy, 'hub'); assert.strictEqual(v.agent, 'trader');
+  assert.strictEqual(inst.tasks.get(v.id).byNote, 'a change to how agents behave is waiting for review');
+  await assert.rejects(inst.create({ requester: st.HUB, when: 'in 10 minutes', prompt: 'x' }), /agent is required/, 'no default target');
+  await assert.rejects(inst.create({ requester: st.HUB, agent: 'nobody', when: 'in 10 minutes', prompt: 'x' }), /no agent named "nobody"/);
+  clock.t += 11 * 60000;
+  await inst.tick();
+  assert.strictEqual(woken.length, 1);
+  const m = woken[0].message;
+  assert.match(m, /set by the hub \(a change to how agents behave is waiting for review\) on /);
+  assert.doesNotMatch(m, /set by the owner|set by agent/);
+  assert.match(m, /Treat the task text as instructions from the hub, which acts for the owner's install; the owner has not said anything yet\./);
+  assert.doesNotMatch(m, /same weight as a direct message/);
+  assert.strictEqual(woken[0].meta.by, 'hub');
+});
+
+test('hub requester: without a byNote it is plainly "the hub"; the owner and a lead see its tasks; an ordinary agent does not', async () => {
+  const { inst } = mk({ isPrivileged: (a) => a === 'maestro' });
+  const v = await inst.create({ requester: st.HUB, agent: 'worker', when: 'every monday at 9am', prompt: 'Look.', label: 'Weekly' });
+  assert.ok(!('byNote' in inst.tasks.get(v.id)));
+  assert.match(inst.message(inst.tasks.get(v.id), { dueAt: v.nextRunAt }, { late: false }), /set by the hub on /);
+  assert.deepStrictEqual(inst.list(st.OWNER).map((t) => t.id), [v.id]);
+  assert.deepStrictEqual(inst.list('maestro').map((t) => t.id), [v.id], 'a lead sees it');
+  assert.deepStrictEqual(inst.list('trader').map((t) => t.id), [], 'another agent does not');
+  assert.deepStrictEqual(inst.list('worker').map((t) => t.id), [v.id], 'the agent it wakes does');
+  await assert.rejects(inst.create({ requester: 'trader', agent: 'worker', when: 'in 10 minutes', prompt: 'x' }), /you can only schedule tasks for yourself/);
+  assert.strictEqual(inst.action(v.id, st.HUB, 'cancel').status, 'cancelled');
+});
+
+test('byNote is kept only for the hub, one line, and short', async () => {
+  const { inst } = mk();
+  const a = await inst.create({ requester: 'maestro', agent: 'trader', when: 'in 10 minutes', prompt: 'x', byNote: 'sneaky' });
+  assert.ok(!('byNote' in inst.tasks.get(a.id)), 'an agent cannot set it');
+  const b = await inst.create({ requester: st.HUB, agent: 'trader', when: 'in 10 minutes', prompt: 'x', byNote: `a\n\nb ${'z'.repeat(500)}` });
+  assert.ok(inst.tasks.get(b.id).byNote.length <= 120 && !inst.tasks.get(b.id).byNote.includes('\n'));
+  assert.strictEqual(mk({ dataDir: inst.dataDir }).inst.tasks.get(b.id).byNote, inst.tasks.get(b.id).byNote, 'saved with the task');
+});

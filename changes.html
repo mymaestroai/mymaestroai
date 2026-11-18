@@ -41,6 +41,7 @@
   .actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
   button { font: inherit; font-size: 13px; padding: 7px 12px; border-radius: var(--radius); border: 1px solid var(--border-strong); background: transparent; color: var(--text); cursor: pointer; }
   button:hover { border-color: var(--accent); }
+  select { font: inherit; font-size: 13px; padding: 6px 8px; border-radius: var(--radius); border: 1px solid var(--border-strong); background: var(--bg-input); color: var(--text); }
   button:disabled { opacity: .5; cursor: wait; }
   button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
   button.primary:hover { background: var(--accent-hover); }
@@ -61,6 +62,7 @@
 (function () {
   'use strict';
   const $ = (id) => document.getElementById(id);
+  let cadence = 'weekly';
   const fmt = (iso) => { const d = new Date(iso); return isNaN(d) ? String(iso || '') : d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }); };
   function stateText(c) {
     if (c.state === 'pending') return 'Waiting for your decision';
@@ -114,7 +116,28 @@
     }
     el.appendChild(actions);
     el.appendChild(err);
+    if (c.id === 'worker-proposals' && c.state === 'on') el.appendChild(cadenceRow(err));
     return el;
+  }
+  // How often the lead looks at how the install is used: saved at once (the weekly task follows).
+  function cadenceRow(err) {
+    const row = document.createElement('div'); row.className = 'actions';
+    const label = document.createElement('label'); label.setAttribute('for', 'cadence'); label.className = 'dim'; label.textContent = 'How often the lead looks:';
+    const sel = document.createElement('select'); sel.id = 'cadence';
+    for (const [v, t] of [['weekly', 'Weekly'], ['off', 'Off']]) { const o = document.createElement('option'); o.value = v; o.textContent = t; sel.appendChild(o); }
+    sel.value = cadence;
+    sel.addEventListener('change', async () => {
+      err.textContent = ''; sel.disabled = true;
+      try {
+        const r = await fetch('/api/behaviour-changes/worker-proposals/cadence', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cadence: sel.value }) });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || !j.ok) throw new Error(j.error || ('Could not save (' + r.status + ')'));
+        cadence = j.cadence;
+      } catch (e) { err.textContent = (e && e.message) || 'Could not save.'; sel.value = cadence; }
+      sel.disabled = false;
+    });
+    row.appendChild(label); row.appendChild(sel);
+    return row;
   }
   function fill(box, sec, list) {
     box.textContent = '';
@@ -128,6 +151,7 @@
       const j = await r.json().catch(() => ({}));
       if (!r.ok || !j.ok) throw new Error(j.error || ('Could not load (' + r.status + ')'));
       const all = Array.isArray(j.changes) ? j.changes : [];
+      cadence = j.workerProposals === 'off' ? 'off' : 'weekly';
       msg.textContent = j.unreadable ? 'The saved decisions could not be read, so none can be changed here until that file is fixed.' : (all.length ? '' : 'There are no changes to decide.');
       fill($('pending'), $('pending-sec'), all.filter((c) => c.state === 'pending'));
       fill($('decided'), $('decided-sec'), all.filter((c) => c.state !== 'pending'));
