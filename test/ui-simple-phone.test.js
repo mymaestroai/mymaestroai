@@ -185,13 +185,13 @@ test('simpleChatExtra: effort only in Simple, only for a model where it does som
   ctx.agents = [{ name: 'agent-a', model: 'claude-sdk/x' }, { name: 'agent-b', model: 'local/y' }, { name: 'agent-c', model: 'claude-sdk/x', autoModel: true }];
   global.window = ctx.window;   // lib/ui-simple.js reads the page's localStorage through window, as in the browser
   try {
-    assert.deepStrictEqual({ ...h.simpleChatExtra('agent-a') }, {});   // never picked: the agent's own setting applies, nothing is sent
+    assert.deepStrictEqual({ ...h.simpleChatExtra('agent-a') }, { simple: true });   // never picked: the agent's own setting applies, nothing is sent
     assert.strictEqual(hubSimple.setEffort('agent-a', 'high', ctx.window.localStorage), true);
-    assert.deepStrictEqual({ ...h.simpleChatExtra('agent-a') }, { effort: 'high' });
+    assert.deepStrictEqual({ ...h.simpleChatExtra('agent-a') }, { simple: true, effort: 'high' });
   } finally { delete global.window; }
-  assert.deepStrictEqual({ ...h.simpleChatExtra('agent-b') }, {});   // effort does nothing for this model
-  assert.deepStrictEqual({ ...h.simpleChatExtra('agent-c') }, {});   // Auto model
-  assert.deepStrictEqual({ ...h.simpleChatExtra('nobody') }, {});
+  assert.deepStrictEqual({ ...h.simpleChatExtra('agent-b') }, { simple: true });   // effort does nothing for this model
+  assert.deepStrictEqual({ ...h.simpleChatExtra('agent-c') }, { simple: true });   // Auto model
+  assert.deepStrictEqual({ ...h.simpleChatExtra('nobody') }, { simple: true });
   classes.delete('mm-simple');   // Advanced: nothing added to the body
   assert.deepStrictEqual({ ...h.simpleChatExtra('agent-a') }, {});
   assert.strictEqual(h.simpleOn(), false);
@@ -312,10 +312,10 @@ test('effort: label is the pick, else the agent\'s own effort; nothing sent unti
   try {
     assert.strictEqual(h.simpleEffortLabelOf(ctx.agents[0]), 'Thorough');
     assert.strictEqual(h.simpleEffortLabelOf(ctx.agents[1]), 'Balanced');
-    assert.deepStrictEqual({ ...h.simpleChatExtra('agent-a') }, {});
+    assert.deepStrictEqual({ ...h.simpleChatExtra('agent-a') }, { simple: true });
     hubSimple.setEffort('agent-a', 'low', ctx.window.localStorage);
     assert.strictEqual(h.simpleEffortLabelOf(ctx.agents[0]), 'Quick');
-    assert.deepStrictEqual({ ...h.simpleChatExtra('agent-a') }, { effort: 'low' });
+    assert.deepStrictEqual({ ...h.simpleChatExtra('agent-a') }, { simple: true, effort: 'low' });
   } finally { delete global.window; }
 });
 test('Switch to Simple is hidden without a real account', () => {

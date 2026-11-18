@@ -1570,7 +1570,7 @@ async function handleHttpRequest(req, res) {
       // The owner's own message: a signed-in admin's browser session (never an API token, the hub itself or legacy credentials).
       if (body && typeof body === 'object') body.owner_turn = req.hubIdentKind === 'user' && !req.hubPendingTotp && !req.hubToken && !req.hubService && access.isAdmin(req.hubUser);
       // Same trusted identity as the stream route (never from the body), so the voice call match works here too.
-      return handleChat(body, res, { userId: (req.hubUser && req.hubUser.id) || null, service: !!req.hubService, accounts: hubAuth.hasUsers() });
+      return handleChat(body, res, { userId: (req.hubUser && req.hubUser.id) || null, service: !!req.hubService, accounts: hubAuth.hasUsers(), admin: access.isAdmin(req.hubUser) });
     }
 
     // Stop button: a browser disconnect no longer ends a turn, so stopping is explicit.

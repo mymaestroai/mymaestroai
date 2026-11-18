@@ -104,10 +104,11 @@
     }
     // The chat POST's effort: only when the level button is shown (show !== false) AND the person picked a level for this agent;
     // never picked: nothing is sent and the agent's own setting applies.
+    // Every Simple turn says so (simple: true): the hub never runs Codex Ultra for a Simple turn.
     function simpleEffortBody(hs, agent, show) {
-      if (show === false || !hs) return {};
+      if (show === false || !hs) return { simple: true };
       const lv = typeof hs.pickedEffort === 'function' ? hs.pickedEffort(agent) : null;
-      return lv ? { effort: lv } : {};
+      return lv ? { simple: true, effort: lv } : { simple: true };
     }
     // The button's label: the picked level, else the agent's own effort in plain words.
     function simpleEffortLabel(hs, agent, agentEffort) {

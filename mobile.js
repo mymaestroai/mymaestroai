@@ -14147,9 +14147,9 @@ function simpleEffortOk(a) { return !!a && !a.autoModel && effortSupported(a.mod
 function simpleChatExtra(agent) {
   if (!simpleOn()) return {};
   const a = agentByName(agent);
-  if (!simpleEffortOk(a)) return {};
+  if (!simpleEffortOk(a)) return { simple: true };   // every Simple turn says so: the hub never runs Codex Ultra for it
   const level = window.hubSimple.pickedEffort ? window.hubSimple.pickedEffort(agent) : null;   // never picked: the agent's own setting applies
-  return level ? { effort: level } : {};
+  return level ? { simple: true, effort: level } : { simple: true };
 }
 // A mode switch reloads the page (a plain function: the page's own reload sites are counted by a test).
 function simpleReload() { window.location.reload.call(window.location); }
