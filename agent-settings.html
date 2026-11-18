@@ -1113,6 +1113,8 @@
       help.textContent = opts.includes('economy')
         ? 'Fast answers sooner for about twice the price; Economy costs half but an answer can take minutes. If the provider cannot offer the chosen speed, the answer runs on Standard and says so. Admins only; members\' turns always run on Standard. The cost record follows the tier the provider reports.'
         : 'Fast answers sooner and uses 2 to 2.5 times as much of the ChatGPT plan. If it is not available, the answer runs on Standard and says so. Admins only; members\' turns always run on Standard.';
+      // Gemini turned away every Economy request in real tests (503 "high demand"): say so for Gemini agents.
+      if (opts.includes('economy') && /^google\//.test(String(agent?.model || ''))) help.textContent += ' Gemini may often run Economy requests at Standard when it is busy.';
     }
   }
   // ── Default call display: None / Orb / an installed character (GET /api/faces); PATCH { callDisplay } ──

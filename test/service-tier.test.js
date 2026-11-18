@@ -138,6 +138,21 @@ test('members cannot change the tier: not in MEMBER_EDITABLE; the list API and t
   assert.match(page, /SAVES_ON_CHANGE = new Set\([^)]*'saveTier'/);
   assert.match(page, /opts\.length > 1/, 'hidden when only Standard is offered');
   assert.match(page, /opts\.includes\(agent\?\.tier\) \? agent\.tier : 'standard'/, 'an unsupported saved tier shows as Standard');
+  // the help line under the picker, per provider (loadTier run in a sandbox with a stand-in document)
+  const start = page.indexOf('function loadTier(agent) {');
+  let depth = 0, end = page.indexOf('{', start);
+  for (let i = end; i < page.length; i++) { if (page[i] === '{') depth++; else if (page[i] === '}' && --depth === 0) { end = i + 1; break; } }
+  const helpFor = (agent) => {
+    const els = { 'tier-mode': { textContent: '', value: '', appendChild() {} }, 'tier-row': { style: {} }, 'tier-help': { style: {}, textContent: '' } };
+    const ctx = { document: { getElementById: (id) => els[id], createElement: () => ({}) } };
+    require('vm').runInNewContext(page.slice(start, end) + '\nloadTier(agent);', { ...ctx, agent });
+    return els['tier-help'].textContent;
+  };
+  const three = ['standard', 'fast', 'economy'];
+  assert.match(helpFor({ model: GEMINI, tierOptions: three }), /Gemini may often run Economy requests at Standard when it is busy\.$/);
+  assert.ok(!/Gemini/.test(helpFor({ model: OPENAI, tierOptions: three })), 'not for OpenAI');
+  assert.ok(!/Gemini/.test(helpFor({ model: ROUTER, tierOptions: three })), 'not for OpenRouter');
+  assert.match(helpFor({ model: CODEX, tierOptions: ['standard', 'fast'] }), /ChatGPT plan/);
   for (const f of ['lib/ui-simple.js', 'simple.html']) { try { assert.ok(!/tier-mode|saveTier|service_tier/.test(read(f)), f + ' has no tier'); } catch (e) { if (e.code !== 'ENOENT') throw e; } }
 });
 
