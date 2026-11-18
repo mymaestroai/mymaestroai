@@ -229,7 +229,7 @@ test('resetReadFull clears the flag and touches nothing else', async () => {
 
 test('gate: the chat-stream chunk before the hub turn_start of the same turn keeps the flag', () => {
   let r = voiceReadFullGate(null, { kind: 'chunk', turnId: 'T2' });
-  assert.strictEqual(r.action, 'set'); assert.deepStrictEqual(r.state, { set: true, turn: 'T2', own: null });
+  assert.strictEqual(r.action, 'set'); assert.deepStrictEqual(r.state, { set: true, turn: 'T2', own: null, past: [] });
   r = voiceReadFullGate(r.state, { kind: 'start', turnId: 'T2' });
   assert.strictEqual(r.action, 'ignore'); assert.strictEqual(r.state.set, true); assert.strictEqual(r.state.turn, 'T2'); assert.strictEqual(r.state.own, 'T2');
   r = voiceReadFullGate(r.state, { kind: 'event', turnId: 'T2' });
@@ -241,13 +241,35 @@ test('gate: a typed turn after a details turn resets the flag', () => {
   s = voiceReadFullGate(s, { kind: 'event', turnId: 'T1' }).state;
   assert.strictEqual(s.set, true);
   const r = voiceReadFullGate(s, { kind: 'start', turnId: 'T2' });   // typed: no beginOwnTurn on the controller
-  assert.strictEqual(r.action, 'reset'); assert.deepStrictEqual(r.state, { set: false, turn: null, own: 'T2' });
+  assert.strictEqual(r.action, 'reset'); assert.deepStrictEqual(r.state, { set: false, turn: null, own: 'T2', past: ['T1'] });
   assert.strictEqual(voiceReadFullGate(r.state, { kind: 'start', turnId: 'T3' }).action, 'ignore', 'nothing to clear');
+});
+
+test('gate: a late chat-stream chunk of an earlier turn never re-enables full reading (review r2)', () => {
+  let s = voiceReadFullGate(null, { kind: 'start', turnId: 'A' }).state;
+  s = voiceReadFullGate(s, { kind: 'chunk', turnId: 'A' }).state;        // A: a details reading
+  let r = voiceReadFullGate(s, { kind: 'start', turnId: 'B' });           // B typed: reset
+  assert.strictEqual(r.action, 'reset');
+  r = voiceReadFullGate(r.state, { kind: 'chunk', turnId: 'A' });         // A's chunk arrives late
+  assert.strictEqual(r.action, 'ignore'); assert.strictEqual(r.state.set, false);
+  // a chunk for a turn not seen yet (it comes before its own turn_start) is still taken
+  assert.strictEqual(voiceReadFullGate(r.state, { kind: 'chunk', turnId: 'C' }).action, 'set');
+  // the same turn's turn_start again changes nothing; at most 32 earlier turns are kept
+  assert.strictEqual(voiceReadFullGate(r.state, { kind: 'start', turnId: 'B' }).action, 'ignore');
+  let t = r.state; for (let i = 0; i < 40; i++) t = voiceReadFullGate(t, { kind: 'start', turnId: 'X' + i }).state;
+  assert.strictEqual(t.past.length, 32);
+});
+
+test('gate: signals repeat: a second details reading in the same turn (an answer to an interjection) sets again', () => {
+  let s = voiceReadFullGate(null, { kind: 'start', turnId: 'T1' }).state;
+  s = voiceReadFullGate(s, { kind: 'event', turnId: 'T1' }).state;
+  assert.strictEqual(voiceReadFullGate(s, { kind: 'event', turnId: 'T1' }).action, 'set');
+  assert.strictEqual(voiceReadFullGate(s, { kind: 'chunk', turnId: 'T1' }).action, 'set');
 });
 
 test('gate: a flag remembered with a null turn id is cleared by the next own turn', () => {
   let s = voiceReadFullGate(null, { kind: 'chunk', turnId: null }).state;
-  assert.deepStrictEqual(s, { set: true, turn: null, own: null });
+  assert.deepStrictEqual(s, { set: true, turn: null, own: null, past: [] });
   assert.strictEqual(voiceReadFullGate(s, { kind: 'start', turnId: 'T1' }).action, 'reset');
 });
 
