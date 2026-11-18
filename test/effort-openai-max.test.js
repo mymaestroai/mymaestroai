@@ -54,8 +54,31 @@ test('Codex: before the catalog is read, the family rule; after, the levels the 
   assert.strictEqual(e.forModel('codex-cli/gpt-5.5-codex', 'max'), 'xhigh');
   assert.strictEqual(e.forModel('codex-cli/gpt-old', 'max'), 'high');
   assert.strictEqual(e.forModel('codex-cli/gpt-old', 'low'), 'medium', 'below the lowest: up to it');
-  assert.strictEqual(e.forModel('codex-cli/gpt-weird', 'max'), 'xhigh', 'no hub level listed: the family rule');
+  assert.strictEqual(e.forModel('codex-cli/gpt-weird', 'max'), null, 'listed, but with no hub level: nothing is sent');
   assert.strictEqual(e.forModel('codex-cli/no-levels', 'max'), 'xhigh', 'no list: the family rule');
+});
+
+test('a new catalog replaces the old one: removed models and levels are gone; levels are read case-blind', () => {
+  const e = fresh();
+  e.setCodexLevels([{ id: 'gpt-6-astra', levels: ['low', 'max'] }, { id: 'gpt-old', levels: ['medium'] }]);
+  assert.strictEqual(e.forModel('codex-cli/gpt-old', 'max'), 'medium');
+  e.setCodexLevels([{ id: 'gpt-6-astra', levels: ['LOW', 'High'] }]);
+  assert.strictEqual(e.forModel('codex-cli/gpt-6-astra', 'max'), 'high', 'max no longer listed: the new list rules');
+  assert.strictEqual(e.forModel('codex-cli/gpt-old', 'max'), 'xhigh', 'gone from the catalog: the family rule');
+  e.setCodexLevels([{ id: 'gpt-6-astra' }]);
+  assert.strictEqual(e.forModel('codex-cli/gpt-6-astra', 'max'), 'max', 'no level data: the family rule');
+  e.setCodexLevels(null);
+  assert.strictEqual(e.forModel('codex-cli/gpt-6-astra', 'max'), 'max', 'not a list: nothing changes');
+});
+
+test('family rules have version boundaries: gpt-60 or gpt-5.60 are not GPT-6 / GPT-5.6, gpt-5.5-proto is not gpt-5.5-pro', () => {
+  const e = fresh();
+  assert.strictEqual(e.forModel('openai/gpt-6', 'max'), 'max');
+  assert.strictEqual(e.forModel('openai/gpt-6.2-sol', 'max'), 'max');
+  assert.strictEqual(e.forModel('openai/gpt-60-test', 'max'), 'xhigh');
+  assert.strictEqual(e.forModel('openai/gpt-5.60', 'max'), 'xhigh');
+  assert.strictEqual(e.forModel('openai/gpt-5.5-pro-2026-10-01', 'low'), 'medium');
+  assert.strictEqual(e.forModel('openai/gpt-5.5-proto', 'low'), 'low');
 });
 
 test('ultra, none and minimal are never sent: no hub level maps to them', () => {
