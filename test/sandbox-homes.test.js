@@ -10,6 +10,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { friendly } = require('../lib/timezone');
 const { createSandbox, homeVolumeFor } = require('../lib/sandbox');
 const { createHomes } = require('../lib/sandbox-homes');
 
@@ -289,7 +290,8 @@ test('3. adoption of an idle running box made before the change (recheck): stop,
   assert.deepStrictEqual(rec.failed, {});
   const item = r.sb.readinessItems().find(i => i.id === 'sandbox-home-kept-' + OLDER);
   assert.ok(item, 'Status item for the kept older home');
-  assert.ok(item.title.includes(iso(r.t + 7 * DAY).slice(0, 10)), item.title);
+  assert.ok(item.title.includes(friendly(r.t + 7 * DAY, 'UTC', r.t)), item.title);   // a time for a person, in the hub's zone (UTC in tests)
+  assert.ok(!/\d{4}-\d\d-\d\dT/.test(item.title + item.detail), 'no raw timestamps');
   assert.ok(r.volumes.has(OLDER) && r.volumes.get(OLDER).files === 'ALPHA-FILES', 'the older volume is still there');
   assert.deepStrictEqual(volumeRms(r.calls), []);
 });
@@ -314,7 +316,7 @@ test('4. adoption of a STOPPED box made before the change (plain ensure): same c
 // 5: a copy that fails, a manifest that differs, a copy that times out
 for (const [n, label, setup, expectSeq, why] of [
   ['5a', 'the copy fails', (r) => { r.copyFail = Object.assign(new Error('docker failed'), { stderr: 'no space left on device', code: 1 }); },
-    ['space', 'copy', 'killrm', 'size', 'empty'], /copy failed/],
+    ['space', 'copy', 'killrm', 'size', 'empty'], /^the disk ran out of space during the copy$/],
   ['5b', 'the manifests differ', (r, lab) => { r.differ = lab; },
     ['space', 'copy', 'manifest', 'manifest', 'size', 'empty'], /not the same/],
   ['5c', 'the copy times out', (r) => { r.copyTimeout = true; },
@@ -354,7 +356,8 @@ for (const [n, label, setup, expectSeq, why] of [
     const item = r.sb.readinessItems().find(i => i.id === 'sandbox-home-move-alpha');
     assert.ok(item, 'Status item');
     assert.ok(item.detail.includes('failed 1 time'), item.detail);
-    assert.ok(item.detail.includes(iso(r.t + HOUR)), 'names the next try: ' + item.detail);
+    assert.ok(item.detail.includes(friendly(r.t + HOUR, 'UTC', r.t)), 'names the next try: ' + item.detail);
+    assert.ok(!/\d{4}-\d\d-\d\dT/.test(item.detail), 'no raw timestamps: ' + item.detail);
     assert.ok(!r.sb.readinessItems().some(i => i.id.startsWith('sandbox-home-kept-')));
     assert.deepStrictEqual(volumeRms(r.calls), []);
   });
@@ -934,5 +937,75 @@ test('38. after a Move now that found the box busy, Status shows no box waiting 
   await r.sb.moveHomeNow(alpha);
   assert.ok(!r.sb.readinessItems().some(i => i.id === 'sandbox-held-alpha'), 'no held item');
   assert.ok(r.sb.readinessItems().some(i => i.id === 'sandbox-home-move-alpha' && i.action), 'the stopped item with Move now stays');
+});
+
+// Texts: times in the person's zone, failure reasons in plain words, accurate refusals; the held entry kept when it has
+// another reason than the move.
+const RAW_TIME = /\d{4}-\d\d-\d\dT\d\d:\d\d/;
+
+test('39. Status times are written in the hub zone for a person ("Nov 18, 10:35 AM EST"), never as raw timestamps', async () => {
+  const r = await rig().ident();
+  const NY = 'America/New_York';
+  const sb = r.mk({ timeZone: () => NY });
+  r.vol(OLDER, null, 'ALPHA-FILES');
+  r.writeMoves({
+    failed: { alpha: { why: 'x', kind: 'copy', same: 1, count: 1, at: iso(r.t), nextAt: iso(r.t + HOUR), from: OLDER, to: 'y' } },
+    retired: [{ agent: 'alpha', volume: 'kept-a', to: 'y', at: iso(r.t) }],
+  });
+  const items = sb.readinessItems().filter(i => /^sandbox-/.test(i.id));
+  assert.ok(items.length >= 2);
+  for (const i of items) assert.ok(!RAW_TIME.test(i.title + ' ' + i.detail), `${i.id}: ${i.title} ${i.detail}`);
+  const moveItem = items.find(i => i.id === 'sandbox-home-move-alpha');
+  assert.ok(moveItem.detail.includes(friendly(r.t, NY, r.t)) && moveItem.detail.includes(friendly(r.t + HOUR, NY, r.t)), moveItem.detail);
+  assert.match(friendly(r.t, NY, r.t), /^[A-Z][a-z]{2} \d{1,2}, \d{1,2}:\d\d [AP]M E[SD]T$/);
+  const kept = items.find(i => i.id === 'sandbox-home-kept-kept-a');
+  assert.ok(kept.title.includes(friendly(r.t + 7 * DAY, NY, r.t)), kept.title);
+});
+
+for (const [n, stderr, want] of [
+  ['40a', 'tar: cache/locked.bin: Cannot open: Permission denied\ntar: Exiting with failure status due to previous errors', "a file in the home folder can't be read: cache/locked.bin"],
+  ['40b', 'tar: ./notes.txt: file changed as we read it', 'a file in the home folder changed during the copy: notes.txt'],
+  ['40c', 'tar: x: Cannot write: No space left on device', 'the disk ran out of space during the copy'],
+  ['40d', 'Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?', "Docker didn't answer"],
+  ['40e', 'something odd happened', 'the copy failed; Docker said: something odd happened'],
+  ['40f', 'tar: ./a.log: file changed as we read it\ntar: big.bin: Cannot write: No space left on device', 'the disk ran out of space during the copy'],
+  ['40g', 'docker: permission denied while trying to connect to the Docker daemon socket at unix:///var/run/docker.sock', "your Maestro isn't allowed to use Docker"],
+  ['40h', 'tar: ./.docker/config.json: Cannot open: Permission denied\ntar: Exiting with failure status due to previous errors', "a file in the home folder can't be read: .docker/config.json"],
+  ['40i', 'tar: ./docker.sock: socket ignored\ntar: big.bin: Cannot write: No space left on device', 'the disk ran out of space during the copy'],
+]) {
+  test(`${n}. a failed copy is explained in plain words first: ${want}`, async () => {
+    const r = await rig().ident();
+    r.vol(OLDER, null, 'ALPHA-FILES');
+    r.copyFail = Object.assign(new Error('docker failed'), { stderr, code: 2 });
+    await r.old('running');
+    await recheck(r.sb);
+    assert.strictEqual(r.moves().failed.alpha.why, want);
+    assert.ok(r.sb.readinessItems().find(i => i.id === 'sandbox-home-move-alpha').detail.includes(`: ${want}`));
+  });
+}
+
+test('41. a busy Move now leaves a held entry that has another reason (a folder the agent may no longer use)', async () => {
+  const r = await stoppedRig();
+  r.boxes.get(NAME).binds.push('/srv/folder-no-longer-given');   // a grant taken back while the box ran
+  r.top = BUSY_TOP;
+  const res = await r.sb.moveHomeNow(alpha);
+  assert.match(res.error, /something is running in alpha's box/);
+  const h = r.sb.readinessItems().find(i => i.id === 'sandbox-held-alpha');
+  assert.ok(h, 'the box is still shown as waiting to be rebuilt');
+  assert.ok(h.detail.includes('/srv/folder-no-longer-given'), h.detail);
+  assert.ok(!RAW_TIME.test(h.detail), 'its time is written for a person: ' + h.detail);
+});
+
+test('42. Move now refusals say what actually stopped it', async () => {
+  let r = await stoppedRig();
+  r.top = BUSY_TOP;
+  assert.strictEqual((await r.sb.moveHomeNow(alpha)).error, "Nothing was tried: something is running in alpha's box. Press Move now again when it's idle.");
+  r = await stoppedRig();
+  r.fail((a) => a[0] === 'inspect' && a.includes('--type') && String(a[a.indexOf('--format') + 1]).includes('Labels'), new Error('Cannot connect to the Docker daemon'));
+  assert.strictEqual((await r.sb.moveHomeNow(alpha)).error, "Nothing was tried: Docker didn't answer. Try again in a moment.");
+  assert.strictEqual(r.moves().failed.alpha.stopped, true, 'the stop stays');
+  r = await stoppedRig();
+  r.boxes.get(NAME).labels = { ...r.boxes.get(NAME).labels, 'agent-hub.install': 'c'.repeat(32) };
+  assert.match((await r.sb.moveHomeNow(alpha)).error, /isn't this Maestro's/);
 });
 

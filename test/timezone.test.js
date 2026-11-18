@@ -470,3 +470,14 @@ test('the Profile shows who you are and holds the time zone; Security no longer 
   const access = L('access');
   assert.deepStrictEqual(access.classifyRoute('/api/me/timezone', 'POST'), { kind: 'session' }, 'any signed-in person, for themselves');
 });
+
+test('friendly: a time for a person to read, in their zone, with the year only when it is not this one', () => {
+  const tz = L('timezone');
+  const now = Date.parse('2026-11-18T16:00:00Z');
+  assert.strictEqual(tz.friendly('2026-11-18T15:35:38.972Z', 'America/New_York', now), 'Nov 18, 10:35 AM EST');
+  assert.strictEqual(tz.friendly(Date.parse('2026-07-04T18:05:00Z'), 'America/Los_Angeles', now), 'Jul 4, 11:05 AM PDT');
+  assert.strictEqual(tz.friendly('2025-03-02T15:05:00Z', 'America/New_York', now), 'Mar 2, 2025, 10:05 AM EST');
+  assert.strictEqual(tz.friendly('not a time', 'UTC', now), '');
+  assert.ok(!/[\u202f\u00a0]/.test(tz.friendly(now, 'Europe/Berlin', now)), 'plain spaces only');
+});
+
