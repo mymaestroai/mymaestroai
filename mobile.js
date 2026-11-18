@@ -6631,7 +6631,8 @@ async function attachFileCards(el, body) {
     if (!H || !body || !el.isConnected) return;
     const scan = body.cloneNode(true);   // the reply's own text: not the tool panel, the reasoning panel or the notes
     scan.querySelectorAll('.feed, .tsn, .rsn, .reattach, .copy, .note').forEach((n) => n.remove());
-    const cands = H.candidatesFrom(scan);
+    const agent = (typeof current === 'string' && current) || null;   // the agent whose chat is open: a bare file name is looked up in its folder
+    const cands = H.candidatesFrom(scan, { agent });
     if (!cands.length) return;
     const results = await H.resolveBatch((u, o) => fetch(u, o), cands);
     if (!el.isConnected) return;
