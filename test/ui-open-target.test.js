@@ -32,14 +32,15 @@ test('the open-target helpers are byte-identical in lib/ui-open-target.js and ap
 });
 
 test('parseOpenTarget: the main page only, this origin only', () => {
-  assert.deepStrictEqual(parseOpenTarget({ type: 'open-target', url: '/?agent=forge' }, ORIGIN), { agent: 'forge', backups: false, update: false, security: false, memory: false, connectors: false, wallet: false });
-  assert.deepStrictEqual(parseOpenTarget({ type: 'open-target', url: '/index.html?backups=1' }, ORIGIN), { agent: '', backups: true, update: false, security: false, memory: false, connectors: false, wallet: false });
-  assert.deepStrictEqual(parseOpenTarget({ type: 'open-target', url: '/?update=1' }, ORIGIN), { agent: '', backups: false, update: true, security: false, memory: false, connectors: false, wallet: false });
-  assert.deepStrictEqual(parseOpenTarget({ type: 'open-target', url: '/?memory=1' }, ORIGIN), { agent: '', backups: false, update: false, security: false, memory: true, connectors: false, wallet: false });
-  assert.deepStrictEqual(parseOpenTarget({ type: 'open-target', url: '/?connectors=1' }, ORIGIN), { agent: '', backups: false, update: false, security: false, memory: false, connectors: true, wallet: false });
-  assert.deepStrictEqual(parseOpenTarget({ type: 'open-target', url: '/?wallet=unlock' }, ORIGIN), { agent: '', backups: false, update: false, security: false, memory: false, connectors: false, wallet: true });
+  assert.deepStrictEqual(parseOpenTarget({ type: 'open-target', url: '/?agent=forge' }, ORIGIN), { agent: 'forge', backups: false, update: false, security: false, memory: false, selfcheck: false, connectors: false, wallet: false });
+  assert.deepStrictEqual(parseOpenTarget({ type: 'open-target', url: '/index.html?backups=1' }, ORIGIN), { agent: '', backups: true, update: false, security: false, memory: false, selfcheck: false, connectors: false, wallet: false });
+  assert.deepStrictEqual(parseOpenTarget({ type: 'open-target', url: '/?update=1' }, ORIGIN), { agent: '', backups: false, update: true, security: false, memory: false, selfcheck: false, connectors: false, wallet: false });
+  assert.deepStrictEqual(parseOpenTarget({ type: 'open-target', url: '/?memory=1' }, ORIGIN), { agent: '', backups: false, update: false, security: false, memory: true, selfcheck: false, connectors: false, wallet: false });
+  assert.deepStrictEqual(parseOpenTarget({ type: 'open-target', url: '/?selfcheck=1' }, ORIGIN), { agent: '', backups: false, update: false, security: false, memory: false, selfcheck: true, connectors: false, wallet: false });
+  assert.deepStrictEqual(parseOpenTarget({ type: 'open-target', url: '/?connectors=1' }, ORIGIN), { agent: '', backups: false, update: false, security: false, memory: false, selfcheck: false, connectors: true, wallet: false });
+  assert.deepStrictEqual(parseOpenTarget({ type: 'open-target', url: '/?wallet=unlock' }, ORIGIN), { agent: '', backups: false, update: false, security: false, memory: false, selfcheck: false, connectors: false, wallet: true });
   assert.strictEqual(parseOpenTarget({ type: 'open-target', url: '/?wallet=1' }, ORIGIN).wallet, false, 'only ?wallet=unlock');
-  assert.deepStrictEqual(parseOpenTarget({ type: 'open-target', url: `${ORIGIN}/?agent=my%20agent&security=1` }, ORIGIN), { agent: 'my agent', backups: false, update: false, security: true, memory: false, connectors: false, wallet: false });
+  assert.deepStrictEqual(parseOpenTarget({ type: 'open-target', url: `${ORIGIN}/?agent=my%20agent&security=1` }, ORIGIN), { agent: 'my agent', backups: false, update: false, security: true, memory: false, selfcheck: false, connectors: false, wallet: false });
   for (const url of ['/users', '/mobile#chat=forge', 'https://example.com/?agent=forge', '//example.com/?agent=forge', '/\\example.com/?agent=x']) {
     assert.strictEqual(parseOpenTarget({ type: 'open-target', url }, ORIGIN), null, url);
   }
@@ -147,7 +148,7 @@ test('app.js listens before its start-up awaits anything, keeps taps in sessionS
   const agents = startup.indexOf('await Promise.all([loadAgents()]);');
   const drain = startup.indexOf('openTargets.ready(own);');
   assert.ok(agents > 0 && drain > agents, 'the page address and the waiting taps run after the agent list is in');
-  assert.match(startup, /for \(const k of \['update', 'backups', 'security', 'memory', 'connectors', 'wallet'\]\) u\.searchParams\.delete\(k\);/, 'one-shot actions leave the address');
+  assert.match(startup, /for \(const k of \['update', 'backups', 'security', 'memory', 'selfcheck', 'connectors', 'wallet'\]\) u\.searchParams\.delete\(k\);/, 'one-shot actions leave the address');
   assert.ok(!/location\.href = u\.pathname/.test(app), 'a message can never send the hub tab to another page');
   const run = app.slice(app.indexOf('async function runPageTarget(t) {'), app.indexOf('async function showOwnerViewOf(name) {'));
   assert.match(run, /if \(t\.backups\) openSettingsAt\('st-backups-section'\);/);

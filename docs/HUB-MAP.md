@@ -340,6 +340,43 @@ The provider never summarises an agent's session. At the threshold (`compaction.
 
 The hub stores every time in UTC; an agent reads them in the local time of the person it works for, with the zone named. That zone is its owner's, or for the hub's own agents (no owner) the first admin's; until a zone has been reported, `HUB_TZ`, else the computer's zone, else UTC. Every turn starts with `<local_time zone="America/New_York">Wednesday, October 28, 2026 at 3:47 PM EDT</local_time>` (the Claude and Codex clients: before the message; the gateway: before `<hub_context>`, with `<current_request sent="Oct 28 2026 15:47 EDT" zone="…">`). Written in that zone: the hub's search hits and recent conversation (`lib/agents.js`), `recall` and `recall_context` results (a `from`/`to` without a zone is read in it, and a bare `to` date means the end of that day), the gateway's history stamps, compression chunks (`chunkRows`), session-note dates and times (and the days dreaming counts), the dates in `record_list` and the Files folder index, and `schedule_task` times without a zone (each task keeps the zone it was made in). The THIS HUB brief and the Claude plan's reset times use the hub's zone. The system prompt's TIME section tells the agent all this, and that times it reads in files itself (logs, ISO strings ending in Z) are UTC.
 
+### 7.7 Self-check (`lib/selfcheck/`)
+
+Real turns on the real model clients, so a change in a client (as on Nov 10, when the Claude client refused writes outside its working folder) is caught within a minute.
+- **When:** 60 s after start (skipped if the last run started under 30 minutes ago; `HUB_SELFCHECK=off` turns start and nightly runs off), nightly at `selfCheck.nightlyAt` in the hub's zone (once per local date, up to 3 hours late; any run over 26 hours old catches up), and Run now. One run at a time; skipped while the hub is halted.
+- **Check agents:** one per class in `selfCheck.classes`:
+  - `lead` (lead record, client tools);
+  - `host` (specialist, client tools);
+  - `boxed` (sandbox container, hub hands; skipped without Docker or the image);
+  - `shared` (specialist shared with `selfcheck:member`, a made-up id, so it is member-reachable).
+
+  Each is a temporary-worker virtual agent named `selfcheck-<class>` with its own synthetic record (`createVirtual({ selfCheck: true, id, record, observe })`), never in agents.json or any list, with no parent. Its turn is ephemeral: no chat, session, transcript, event or memory.
+  - `sdk-chat` `turnAgentRecord` gives the record to the gate's getAgent, handsForTurn, leadFor, agentEffort, ownerOfAgent and the job runner only; never to lead lists, consult or turn permissions, access, wallet, approvals or push.
+  - Records override send, web, admin, destroy and money to deny, and the gate turns any "ask" into a deny for them (no card, no allowance).
+  - Tools: exactly Read, Write, Edit, Glob, Grep and Bash (`queryOptions.tools`, the disallow list, the hands server's blocked list and the gateway allow-list).
+  - The model: `selfCheck.model`; `auto` = the newest available `claude-sdk/*haiku*`, else `*sonnet*`, else the lead's model when it runs on the gateway loop. Codex and Perplexity are never used, since their own tools can't be observed.
+  - The name prefix `selfcheck-` is refused for real agents.
+- **The turn:** fixtures in `<install>/workspaces/selfcheck-<class>/` (inside the client's working folder) and `<hub home>/selfcheck/<class>/` (outside it; only lead roots cover it):
+  - made 0700 with no link on the path and O_NOFOLLOW files, with fresh nonces each run;
+  - hash-checked, and `write.txt`/`bash.txt` checked absent, just before the turn.
+
+  The scripted prompt asks, per folder: Read a file and a 4-digit PNG, Write, Edit, Glob, Grep, and one exact Bash command; then once, Read a never-existing file under `<hub home>/call-recordings/`, which the policy refuses for every role.
+- **Verdicts (`verify.js`), never from the model's word alone:** the gate's decisions (`createGate` `onDecision`, the outcome) and the real tool results (PostToolUse and PostToolUseFailure hooks for check agents; the handler results on the gateway loop), plus the files on disk.
+  - Allowed with no result is "Your Maestro's rules allowed it, but the Claude client refused it" (the Nov 10 shape).
+  - Another tool doing a Write or Edit step fails it ("done another way").
+  - Refuse passes only on an observed deny.
+  - Any allowed write outside the two folders fails the class.
+  - A step not tried gets one retry turn.
+  - A model or provider failure is "couldn't run", with no push.
+- **Results:** `data/selfcheck.json` (lastRun with per-class, per-action ok and reason, failingSince, notified, 14 runs of history, lastNightlyDate). Settings → Status → Self-check (admins; `?selfcheck=1`); a Status readiness item; `GET /api/selfcheck`, `POST /api/selfcheck/run`, `PUT /api/selfcheck/settings` (admin only, `lib/selfcheck-routes.js`).
+- **Push:** a push to admins (kind `security`, tag `selfcheck`) only for failures not told before, with which kind of agent, what, the reason and since when. Recovery is silent.
+- **A check that can't run:** "couldn't run" (a class whose turn failed, or a run with no model to test with) three runs in a row is a failure of its own:
+  - one push ("The self-check hasn't been able to run since 3:45 AM (Claude plan limit).") and a Status warning;
+  - `stuck` in `data/selfcheck.json`;
+  - it starts over once the class runs again;
+  - a halted hub and a missing Docker don't count.
+- **Settings:** `selfCheck { enabled: true, afterStart: true, nightlyAt: "03:45", classes: [lead, host, boxed, shared], model: "auto" }`.
+
 ---
 
 ## 8. Tools, hands and policy
@@ -396,7 +433,7 @@ One Docker container per agent (`hub-agent-<name>`, image `agent-hub-sandbox:lat
 ### 8.5 Command lockbox (`lib/lockbox/`)
 
 An OS-level box around each shell command an agent runs on the host, Linux only, behind the text checker of 8.3. Modes: per agent `lockbox` (`inherit` | `off` | `watch` | `enforce`), hub default `lockboxDefault` (`off` by default); unset everywhere is off, which runs today's code unchanged. Only a signed-in admin's browser session may change them (agent settings page; Settings → Agents → Command lockbox); every change is audited and sent to admins as a security notice. `GET /api/lockbox/status` (host state, each agent's mode and coverage) and `GET /api/lockbox/watch?agent=&limit=` (latest lines of `data/lockbox/watch.jsonl`) are admin-only.
-- **Where:** `lib/lockbox/wire.js` gives one decision to the hub's `Bash` (`lib/hub-tools.js`), `run_job` (`lib/jobs.js`, host jobs; the unconfined wrapper still writes out.log, pid and exit) and a Claude client's own `Bash` (`lib/policy-gate.js` sdkHook returns `updatedInput` with the command wrapped; its final folder is carried back so `cd` still persists). A temporary worker takes its parent's mode and folder and its own worker rules. Not covered: agents in a container (8.4), Codex agents on their own client tools, macOS ("not available").
+- **Where:** `lib/lockbox/wire.js` gives one decision to the hub's `Bash` (`lib/hub-tools.js`), `run_job` (`lib/jobs.js`, host jobs; the unconfined wrapper still writes out.log, pid and exit) and a Claude client's own `Bash` (`lib/policy-gate.js` sdkHook returns `updatedInput` with the command wrapped; its final folder is carried back so `cd` still persists). A temporary worker takes its parent's mode and folder and its own worker rules; a self-check agent (7.7) has no parent and takes its own record's mode and rules and its own folder. Not covered: agents in a container (8.4), Codex agents on their own client tools, macOS ("not available").
 - **The box** (`lib/lockbox/lockbox-run.py`, `/usr/bin/python3 -I -S`, profile as base64 JSON built by `lib/lockbox/index.js`): Landlock (ABI 6 or later) lets the command write only in the agent's policy roots and its own folder `<hub home>/lockbox/<agent>/` (0700, links refused), never in `adminWriteRoots()`, other agents' workspaces or other agents' lockbox folders (a root that contains them, such as an agent granted the whole hub home, is laid out around them); a root bent by a link the agent could have made (the root itself, or a folder on the way inside its own roots) is not granted and is logged as `root-is-link`, and the helper grants a root only when the folder it opened reads back as that path. File contents in `SENSITIVE_READ`, the install's `.env` files, everything in `data/` but `data/jobs/` (including entries made later) and other agents' lockbox folders can't be read (every role but the lead, unless its `admin` rule is `allow`); folders stay listable. The agent's own Claude sessions' tool-output folders (`~/.claude/projects/*/<session>/tool-results`, `readAllow`; the PreToolUse hook notes each call's session, newest three for a day) stay readable, read-only, so a client can read back its own long outputs; other agents' outputs stay closed. No signals or ptrace outside the box; SIGPIPE and SIGXFSZ are back to their defaults inside it. seccomp refuses `socket(AF_UNIX)` (docker, the systemd user bus, tmux, ssh-agent, gpg-agent), io_uring and foreign architectures; no_new_privs (setuid programs gain nothing); descriptors above 2 closed; the environment (already the allow-listed one from `lib/child-env.js`, section 8.3) is cut to child-env's `BASE_KEEP` plus `TMPDIR` and `npm_config_cache` in the agent's own folder, and the names in the agent's `envKeep` and `lockboxEnv` (a `lockboxEnv` name only keeps what that environment already holds: a name outside the allow-list needs `envKeep`). Any failure to build the box refuses the command (exit 126), never runs it unboxed. A hub `Bash` refused by the box adds a `[lockbox]` line.
 - **Unknown names:** a name with no agent record follows the hub default (enforce refuses, watch runs it plainly). If an agent's hands can't be prepared for a turn, its shell and file tools are dropped for that turn whatever the mode (8.3, environments), so nothing runs outside the box.
 - **The lead:** writes in the hub home, `/tmp` and its granted folders, no read holes, today's environment; a command the checker reads as running sudo runs outside the box and is logged (`sudo-unconfined`). crontab, `systemctl --user` and docker need sudo there.

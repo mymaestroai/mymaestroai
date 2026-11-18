@@ -2023,6 +2023,19 @@ async function handleHttpRequest(req, res) {
       const r = await securityCheck().latest({ maxAgeMs: 60 * 60 * 1000 });
       return jsonResponse(res, 200, { ok: true, ...r });
     }
+    // ── Self-check (lib/selfcheck, lib/selfcheck-routes): admin-only (the route class above, checked again in the handler).
+    // GET the last result, POST /run starts one in the background, PUT /settings saves the selfCheck settings. ──
+    if (pathname === '/api/selfcheck' || pathname.startsWith('/api/selfcheck/')) {
+      const scBody = req.method === 'PUT' ? await authJson() : {};
+      const r = await require('./lib/selfcheck-routes').handle({
+        method: req.method, pathname, admin: !!req.hubService || (access.isAdmin(req.hubUser) && !req.hubPendingTotp), body: scBody,
+        selfCheck: () => require('./lib/selfcheck').getSelfCheck(),
+        validateSettings: (o) => require('./lib/selfcheck').validateSettings(o),
+        saveSettings: (v) => hubSettings.updateSettings({ selfCheck: v }),
+        log: (m) => console.warn(m),
+      });
+      if (r) return jsonResponse(res, r.status, r.body);
+    }
     // ── Memory health (lib/memory-health): admin-only. GET answers with the last result while it is under 26 hours old
     // (else checks now); run checks now. Nightly from the schedule at start.
     if (pathname === '/api/memory-health' && req.method === 'GET') {
@@ -3657,6 +3670,10 @@ server.listen(PORT, HOST, () => {
   // the nightly check off (Check now still works).
   try { if (process.env.HUB_MEMORY_HEALTH !== 'off') require('./lib/memory-health').getMemoryHealth().schedule(); }
   catch (e) { console.warn(`[memory-health] ${e.message}`); }
+  // Self-check: real turns on hidden check agents 60 s after start and each night (Settings → Status → Self-check);
+  // HUB_SELFCHECK=off turns both off (Run now still works). Never delays startup.
+  try { if (process.env.HUB_SELFCHECK !== 'off') { const sc = require('./lib/selfcheck').getSelfCheck(); sc.onStarted(); sc.schedule(); } }
+  catch (e) { console.warn(`[selfcheck] ${e.message}`); }
   // Data connector health: a nightly check of every switched-on module that declares one (lib/modules/health).
   try { require('./lib/modules/health').getModulesHealth().start(); }
   catch (e) { console.warn(`[modules-health] ${e.message}`); }

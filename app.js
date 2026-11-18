@@ -3114,7 +3114,7 @@
       return out;
     }
     const ST_GROUPS = [
-      { id: 'status', title: '🩺 Status', sections: ['st-ready-section', 'st-sec-section', 'st-memory-section', 'st-updates-section'] },
+      { id: 'status', title: '🩺 Status', sections: ['st-ready-section', 'st-sec-section', 'st-memory-section', 'st-selfcheck-section', 'st-updates-section'] },
       { id: 'security', title: '🔐 Security', sections: ['st-security-section'] },
       { id: 'backups', title: '💾 Backups', sections: ['st-backups-section'] },
       { id: 'models', title: '🧠 AI models', sections: ['st-prov-section', 'st-or-section', 'st-plan-section', 'st-local-models-section', 'st-classifier-section'] },
@@ -3380,6 +3380,23 @@
         <div class="st-row"><label style="flex-basis:150px"></label><button class="st-test-btn" onclick="loadMemoryHealth(true)">Check now</button><span id="st-mh-state" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px"></span></div>
       </div>`;
       setTimeout(loadMemoryHealth, 0);
+      // Self-check (lib/selfcheck): a hidden test agent of each kind really reads, writes and runs a command; admins only.
+      if (isHubAdmin()) {
+        const tick = (id, label, hint = '') => `<div class="st-row"><label style="flex-basis:150px">${label}</label><input type="checkbox" id="${id}"${hint}></div>`;
+        html += `<div class="st-section" id="st-selfcheck-section"><h4>Self-check</h4>
+        <div class="st-hint">After every start and each night, your Maestro has a hidden test agent of each kind read, write, edit, search and run a command, inside and outside its install folder, and checks that one thing it must never do is refused. You hear about it only when something fails.</div>
+        <div id="st-sc-list" class="st-hint" style="margin-left:0">Checking…</div>
+        <div id="st-sc-msg" class="st-hint mh-msg" role="status" style="margin-left:0"></div>
+        <div class="st-row"><label style="flex-basis:150px"></label><button class="st-test-btn" id="st-sc-run" onclick="loadSelfCheck(true)">Run now</button><span id="st-sc-state" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px"></span></div>
+        ${tick('st-sc-enabled', 'Run checks')}${tick('st-sc-after', 'After every start')}
+        <div class="st-row"><label style="flex-basis:150px">Each night at</label><input type="time" id="st-sc-at"></div>
+        <div class="st-row sc-kinds"><label style="flex-basis:150px">Kinds of agent</label>${SC_CLASSES.map(k => `<label class="sc-kind"><input type="checkbox" id="st-sc-c-${k}"> ${esc(SC_CLASS_LABEL[k])}</label>`).join('')}</div>
+        <div class="st-row"><label style="flex-basis:150px">Model</label><input type="text" id="st-sc-model" placeholder="auto" autocomplete="off" spellcheck="false"></div>
+        <div class="st-hint" style="margin-left:0">auto picks the cheapest Claude model.</div>
+        <div class="st-row"><label style="flex-basis:150px"></label><button class="st-test-btn" onclick="saveSelfCheckSettings()">Save</button><span id="st-sc-save-state" role="status" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px"></span></div>
+      </div>`;
+        setTimeout(() => { scSettings = null; loadSelfCheck(); }, 0);   // the form is new: fill it from the hub
+      }
       // Updates (lib/update-check): the daily look at GitHub behind the "Update available" card.
       html += `<div class="st-section" id="st-updates-section"><h4>Updates</h4>
         <div class="st-hint">Once a day the hub checks GitHub for a new version on its channel and tells admins: a card here with Update now or Later, a card on the phone, and a notification. It never installs anything by itself.</div>
@@ -3992,6 +4009,148 @@
       };
       if (!mhFollow && !mhTicking) mhFollow = setTimeout(tick, 5000);   // one loop at a time; a tick under way schedules the next
     }
+    // Self-check (lib/selfcheck): a hidden test agent of each kind reads, writes and runs a command, and the hub checks
+    // what really happened. The page shows the last run, one row per kind, and Run now; settings save by PUT with only
+    // the keys that changed. test/ui-selfcheck.test.js lifts this block out and runs it against a stand-in page.
+    // ── self-check page (begin) ──
+    const SC_CLASSES = ['lead', 'host', 'boxed', 'shared'];
+    const SC_CLASS_LABEL = { lead: 'lead agents', host: 'ordinary agents on this computer', boxed: 'agents in a box', shared: 'agents shared with a member' };
+    const SC_CHIP = { pass: ['works', 'ok'], fail: ['problem', 'bad'], skipped: ['not checked', 'idle'], error: ["couldn't run", 'idle'] };
+    const SC_ACTION = { read: 'read files', image: 'read pictures', write: 'write files', edit: 'edit files', glob: 'list files', grep: 'search files', bash: 'run commands', refuse: 'keep call recordings private' };
+    const SC_FOLDER = { install: 'in the install folder', home: 'outside the install folder' };
+    const SC_TRIGGER = { start: 'after a start', nightly: 'nightly', manual: 'run by hand' };
+    const SC_POLL_MS = 3000, SC_POLL_MAX_MS = 6 * 60 * 1000;
+    let scLoad = 0, scSettings = null, scPollUntil = 0;
+    function scWhen(iso) { const d = new Date(iso); return isNaN(d) ? String(iso || '') : d.toLocaleString(); }
+    // "<action words> <folder words>: <reason> (since <time>)" for one failed action key such as "write@home".
+    function scFailText(key, a, since) {
+      const [act, folder] = String(key).split('@');
+      const words = `${SC_ACTION[act] || act}${folder ? ` ${SC_FOLDER[folder] || folder}` : ''}`;
+      return `${words}: ${(a && a.reason) || 'it failed'}${since ? ` (since ${scWhen(since)})` : ''}`;
+    }
+    function scRender(v) {
+      const el = document.getElementById('st-sc-list'); if (!el) return;
+      v = v || {};
+      const run = v.lastRun, classes = (run && run.classes) || {}, since = v.failingSince || {};
+      const keys = SC_CLASSES.filter(k => classes[k]).concat(Object.keys(classes).filter(k => !SC_CLASSES.includes(k)));
+      let html = run
+        ? `<div class="sc-last">Last checked ${esc(scWhen(run.finishedAt || run.startedAt))} (${esc(SC_TRIGGER[run.trigger] || run.trigger || 'earlier')})${run.model ? ` with ${esc(run.model)}` : ''}</div>${run.note ? `<div class="sc-note">${esc(run.note)}</div>` : ''}`
+        : '<div class="sc-last">Not checked yet.</div>';
+      for (const k of keys) {
+        const c = classes[k] || {}, chip = SC_CHIP[c.status] || [c.status || 'not checked', 'idle'];
+        const fails = c.status === 'fail' ? Object.entries(c.actions || {}).filter(([, a]) => a && a.ok === false) : [];
+        html += `<div class="sc-row"><div class="sc-head"><b>${esc(SC_CLASS_LABEL[k] || k)}</b> <span class="sc-chip sc-${esc(chip[1])}">${esc(chip[0])}</span></div>`
+          + (c.note ? `<div class="sc-note">${esc(c.note)}</div>` : '')
+          + fails.map(([ak, a]) => `<div class="sc-fail">${esc(scFailText(ak, a, since[`${k}/${ak}`]))}</div>`).join('')
+          + '</div>';
+      }
+      // A check that hasn't been able to run 3 times in a row is a problem of its own (the hub sent a notice too).
+      for (const [k, x] of Object.entries(v.stuck || {})) {
+        if (!x || !(x.count >= 3)) continue;
+        html += `<div class="sc-fail">${esc(k === 'run' ? 'The self-check' : `The check of ${SC_CLASS_LABEL[k] || k}`)} hasn't been able to run since ${esc(scWhen(x.since))}${x.reason ? ` (${esc(x.reason)})` : ''}.</div>`;
+      }
+      const hist = Array.isArray(v.history) ? v.history : [];
+      if (hist.length) html += `<details class="sc-hist"><summary>Earlier checks</summary>${hist.map(h => `<div class="sc-h">${esc(scWhen(h.at))} · ${esc(SC_TRIGGER[h.trigger] || h.trigger || '')}: ${esc(h.summary || '')}</div>`).join('')}</details>`;
+      // A person may have "Earlier checks" open: keep it open when the page is redrawn (a poll does that every 3 s).
+      const wasOpen = !!(el.querySelector && el.querySelector('details.sc-hist') && el.querySelector('details.sc-hist').open);
+      el.innerHTML = html;
+      if (wasOpen) { const dt = el.querySelector && el.querySelector('details.sc-hist'); if (dt) dt.setAttribute('open', ''); }
+      const st = Object.values(classes).map(c => c && c.status);
+      const stuckBad = Object.values(v.stuck || {}).some(x => x && x.count >= 3);
+      const problem = st.includes('fail') || stuckBad || Object.keys(since).length > 0;
+      const worked = st.includes('pass') || st.includes('fail');
+      stSum('status', 'selfcheck', !run && !problem ? 'Self-check: not checked yet' : problem ? 'Self-check: problem found' : !worked ? "Self-check: couldn't run" : 'Self-check: all fine', problem);
+    }
+    function scMsg(text, bad = true) {
+      const m = document.getElementById('st-sc-msg'); if (!m) return;
+      m.textContent = text || '';
+      m.classList.toggle('mh-msg-bad', !!text && bad);
+    }
+    function scRunning(on) {
+      const btn = document.getElementById('st-sc-run'), state = document.getElementById('st-sc-state');
+      if (btn) btn.disabled = !!on;
+      if (state) state.textContent = on ? 'Running…' : '';
+    }
+    function scFillSettings(s) {
+      if (!s) return;
+      scSettings = s;
+      const $ = (id) => document.getElementById(id);
+      if ($('st-sc-enabled')) $('st-sc-enabled').checked = s.enabled !== false;
+      if ($('st-sc-after')) $('st-sc-after').checked = s.afterStart !== false;
+      if ($('st-sc-at')) $('st-sc-at').value = s.nightlyAt || '';
+      if ($('st-sc-model')) $('st-sc-model').value = s.model && s.model !== 'auto' ? s.model : '';
+      for (const k of SC_CLASSES) if ($(`st-sc-c-${k}`)) $(`st-sc-c-${k}`).checked = (s.classes || SC_CLASSES).includes(k);
+    }
+    // Last result, or a new run (POST) that is then followed every 3 s while the hub says it runs, for up to 6 minutes.
+    async function loadSelfCheck(runNow = false, poll = false) {
+      if (!document.getElementById('st-sc-list')) return;
+      const mine = ++scLoad;
+      const json = async (r) => { try { return await r.json(); } catch { return {}; } };
+      try {
+        if (runNow) {
+          scMsg('');
+          scRunning(true);
+          const r = await fetch('/api/selfcheck/run', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+          if (!r.ok) {
+            const b = await json(r);
+            if (r.status === 409 && b.error === 'running') scMsg('A check is already running.');
+            else if (r.status === 409 && b.error === 'disabled') { scMsg('The self-check is turned off.'); scRunning(false); return; }
+            else { scMsg(`Couldn't start the self-check: ${b.error || `HTTP ${r.status}`}`); scRunning(false); return; }
+          }
+          scPollUntil = Date.now() + SC_POLL_MAX_MS;
+        }
+        const r = await fetch('/api/selfcheck', { credentials: 'include' });
+        const v = await json(r);
+        if (mine !== scLoad) return;   // a newer load answered first
+        if (!r.ok) throw new Error(v.error || `HTTP ${r.status}`);
+        scRender(v);
+        scFillSettingsOnce(v.settings);
+        scRunning(!!v.running);
+        // A page opened (or left alone) while a run is going follows it, for as long as a Run now would.
+        // (Not for our own poll: that one has to run out, so the 6-minute limit still holds.)
+        if (!runNow && !poll && v.running && scPollUntil <= Date.now()) scPollUntil = Date.now() + SC_POLL_MAX_MS;
+        if (v.running && Date.now() < scPollUntil) setTimeout(() => { if (mine === scLoad) loadSelfCheck(false, true); }, SC_POLL_MS);
+        else if (v.running) scMsg("Still running after 6 minutes; check back later.", false);
+        else { const m = document.getElementById('st-sc-msg'); if (m && m.textContent === 'A check is already running.') scMsg(''); }   // it finished: the note is old
+      } catch (e) {
+        if (mine !== scLoad) return;
+        scRunning(false);
+        scMsg(`Couldn't load the self-check: ${e.message}`);
+        stSum('status', 'selfcheck', "Self-check: couldn't load");
+      }
+    }
+    // The form follows the hub on the first load, and after a save; a poll never overwrites what someone is typing.
+    function scFillSettingsOnce(s) { if (!scSettings) scFillSettings(s); }
+    // Only the keys that differ from what the hub has go to PUT; at least one kind of agent must stay ticked.
+    function scSettingsChanges() {
+      const $ = (id) => document.getElementById(id), cur = scSettings || {};
+      const out = {};
+      const classes = SC_CLASSES.filter(k => $(`st-sc-c-${k}`) && $(`st-sc-c-${k}`).checked);
+      if ($('st-sc-enabled') && $('st-sc-enabled').checked !== (cur.enabled !== false)) out.enabled = $('st-sc-enabled').checked;
+      if ($('st-sc-after') && $('st-sc-after').checked !== (cur.afterStart !== false)) out.afterStart = $('st-sc-after').checked;
+      if ($('st-sc-at') && $('st-sc-at').value && $('st-sc-at').value !== cur.nightlyAt) out.nightlyAt = $('st-sc-at').value;
+      const was = Array.isArray(cur.classes) ? cur.classes : SC_CLASSES;
+      if (classes.join() !== SC_CLASSES.filter(k => was.includes(k)).join()) out.classes = classes;
+      const model = $('st-sc-model') ? $('st-sc-model').value.trim() || 'auto' : (cur.model || 'auto');
+      if (model !== (cur.model || 'auto')) out.model = model;
+      return { changes: out, classes };
+    }
+    async function saveSelfCheckSettings() {
+      const state = document.getElementById('st-sc-save-state');
+      const say = (t) => { if (state) state.textContent = t; };
+      const { changes, classes } = scSettingsChanges();
+      if (!classes.length) { say('Keep at least one kind of agent ticked.'); return; }
+      if (!Object.keys(changes).length) { say('Nothing to save.'); return; }
+      say('Saving…');
+      try {
+        const r = await fetch('/api/selfcheck/settings', { method: 'PUT', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(changes) });
+        const b = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(b.error || `HTTP ${r.status}`);
+        scFillSettings(b.settings);
+        say('Saved.');
+      } catch (e) { say(`Not saved: ${e.message}`); }
+    }
+    // ── self-check page (end) ──
     function securityActionHtml(a) {
       if (!a) return '';
       if (a.href) return ` <a href="${esc(a.href)}" class="st-test-btn" style="text-decoration:none">${esc(a.label)}</a>`;
@@ -6290,7 +6449,7 @@
       try { u = new URL(data.url, origin); } catch { return null; }
       if (u.origin !== origin || !OPEN_TARGET_MAIN.test(u.pathname)) return null;
       const q = u.searchParams;
-      return { agent: q.get('agent') || '', backups: q.get('backups') === '1', update: q.get('update') === '1', security: q.get('security') === '1', memory: q.get('memory') === '1', connectors: q.get('connectors') === '1', wallet: q.get('wallet') === 'unlock' };
+      return { agent: q.get('agent') || '', backups: q.get('backups') === '1', update: q.get('update') === '1', security: q.get('security') === '1', memory: q.get('memory') === '1', selfcheck: q.get('selfcheck') === '1', connectors: q.get('connectors') === '1', wallet: q.get('wallet') === 'unlock' };
     }
     function createTargetStore(storage, now = () => Date.now(), ttlMs = 10 * 60 * 1000) {
       return {
@@ -6367,6 +6526,7 @@
       if (t.security) openSecurityDialog();
       if (t.backups) openSettingsAt('st-backups-section');
       if (t.memory) openSettingsAt('st-memory-section');
+      if (t.selfcheck) openSettingsAt('st-selfcheck-section');
       if (t.connectors) openSettingsAt('st-modules-section');
       if (t.wallet) openWalletPanel();
       if (t.update) paintUpdateCard().then(() => showUpdateCard()).catch(() => {});
@@ -6402,12 +6562,12 @@
       await Promise.all([loadAgents()]);
       // The page's own address: "/?agent=<name>" opens that agent's chat (the Welcome page hands over to Maestro's setup
       // interview this way, and a notification tapped with no hub tab open lands here), ?backups=1 the backups settings
-      // (a backup warning), ?memory=1 the memory check, ?update=1 the update card, ?security=1 the security dialog, ?wallet=unlock the Wallet panel. Then any notification tapped
+      // (a backup warning), ?memory=1 the memory check, ?selfcheck=1 the self-check, ?update=1 the update card, ?security=1 the security dialog, ?wallet=unlock the Wallet panel. Then any notification tapped
       // while the page was loading.
       const own = parseOpenTarget({ type: 'open-target', url: location.href }, location.origin);
-      if (own && (own.update || own.backups || own.security || own.memory || own.connectors || own.wallet)) {   // one-shot actions: a reload must not repeat them
+      if (own && (own.update || own.backups || own.security || own.memory || own.selfcheck || own.connectors || own.wallet)) {   // one-shot actions: a reload must not repeat them
         const u = new URL(location.href);
-        for (const k of ['update', 'backups', 'security', 'memory', 'connectors', 'wallet']) u.searchParams.delete(k);
+        for (const k of ['update', 'backups', 'security', 'memory', 'selfcheck', 'connectors', 'wallet']) u.searchParams.delete(k);
         history.replaceState(history.state, '', u.pathname + u.search + u.hash);
       }
       // After a Reload: open the chats that were open, in their tab order, each with the text that was in its message
