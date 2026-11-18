@@ -293,7 +293,9 @@ test('first-run seeding writes the marker, so a fresh install is never migrated'
 test('the pages carry the controls: the more-menu select, and the two agent-settings rows', () => {
   const idx = read('index.html'), app = read('app.js'), as = read('agent-settings.html');
   assert.match(idx, /id="sdk-workers-select"[\s\S]*?<\/div>\s*<div class="more-row">\s*<label class="toggle-switch"[^>]*title="How agents are told to run a team:[\s\S]*?id="team-guidance-select"[\s\S]*?value="full">Full<[\s\S]*?value="light">Light<[\s\S]*?value="off">Off</);
-  assert.match(app, /fetch\('\/api\/team_guidance', \{ method: 'POST'[^}]*\}[^)]*body: JSON\.stringify\(\{ level: teamGuidanceSelect\.value \}\)/);
+  // Review r1: the save moved into bindTeamGuidanceSelect (one save at a time, the stored value put back on failure); its behaviour is tested below.
+  assert.match(app, /doFetch\('\/api\/team_guidance', \{ method: 'POST'[^}]*\}[^)]*body: JSON\.stringify\(\{ level: want \}\)/);
+  assert.match(app, /if \(teamGuidanceSelect\) bindTeamGuidanceSelect\(teamGuidanceSelect, /);
   assert.match(as, /<select id="team-guidance-mode" onchange="saveTeamGuidance\(\)"[\s\S]*?value="inherit">Use the hub setting<[\s\S]*?value="on">On<[\s\S]*?value="off">Off</);
   assert.match(as, /<select id="team-role" onchange="saveTeamRole\(\)"[\s\S]*?value="">None<[\s\S]*?value="worker">Worker<[\s\S]*?value="challenger">Challenger</);
   assert.match(as, /id="team-guidance-status"/);
@@ -302,4 +304,63 @@ test('the pages carry the controls: the more-menu select, and the two agent-sett
   assert.match(as, /agent\?\.teamGuidance \|\| 'inherit'/);
   assert.match(as, /agent\?\.teamRole \|\| ''/);
   assert.ok(as.indexOf('id="effort-row"') < as.indexOf('id="team-guidance-row"'), 'after the effort row');
+});
+
+// Review r1 (Sonnet): teamRole 'worker' must list the agent like a worker; the light text names the spawn_workers fallback.
+test('teamRole worker lists an agent outside category worker; the light text has the spawn_workers fallback', () => {
+  const r = wp.buildRoster([
+    { name: 'maestro', model: 'claude-sdk/x', category: 'primary' },
+    { name: 'helper-b', model: 'claude-sdk/claude-haiku-5', category: 'specialist', teamRole: 'worker' },
+  ], { selfName: 'maestro' });
+  assert.deepStrictEqual(r.map(w => [w.name, w.teamRole]), [['helper-b', 'worker']]);
+  assert.match(tg.LIGHT_TEXT, /spawn_workers/);
+  assert.match(tg.FULL_TEXT, /list_agents/);
+});
+
+// Review r1 (GPT-6 BLOCK): the More-menu select must end on the stored value: a failed save puts it back, a first load that
+// answers after a change is ignored, and two quick changes are saved one after the other. Runs the page's own handler
+// (app.js between the team-guidance-select markers) with a stand-in select and fetch.
+function pageHandler() {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
+  const a = src.indexOf('// team-guidance-select:begin'), b = src.indexOf('// team-guidance-select:end');
+  assert.ok(a > 0 && b > a, 'markers in app.js');
+  const ctx = {};
+  vm.runInNewContext(src.slice(a, b) + '\nthis.bind = bindTeamGuidanceSelect;', ctx);
+  return ctx.bind;
+}
+function standIns(stored) {
+  const select = { value: 'full', title: '', listeners: [], addEventListener(t, f) { this.listeners.push(f); }, choose(v) { this.value = v; this.listeners.forEach(f => f()); } };
+  const calls = [];
+  const fetch = (url, opts = {}) => new Promise((resolve) => calls.push({ opts, resolve }));
+  const answer = (i, status, body) => calls[i].resolve({ ok: status < 400, status, json: async () => body });
+  return { select, calls, fetch, answer, stored };
+}
+const tick = () => new Promise(r => setImmediate(r));
+test('menu select: a failed save puts back the stored value and says why', async () => {
+  const s = standIns(); pageHandler()(s.select, s.fetch);
+  s.answer(0, 200, { level: 'full' }); await tick();
+  s.select.choose('off'); await tick();
+  assert.strictEqual(JSON.parse(s.calls[1].opts.body).level, 'off');
+  s.answer(1, 500, { error: 'disk full' }); await tick();
+  s.answer(2, 200, { level: 'full' }); await tick(); await tick();
+  assert.strictEqual(s.select.value, 'full');
+  assert.match(s.select.title, /Not saved: disk full/);
+});
+test('menu select: a first load that answers after a saved change does not undo it', async () => {
+  const s = standIns(); pageHandler()(s.select, s.fetch);
+  s.select.choose('off'); await tick();
+  s.answer(1, 200, { level: 'off' }); await tick(); await tick();
+  s.answer(0, 200, { level: 'full' }); await tick();
+  assert.strictEqual(s.select.value, 'off');
+});
+test('menu select: two quick changes are saved in order and the select ends on the last stored one', async () => {
+  const s = standIns(); pageHandler()(s.select, s.fetch);
+  s.answer(0, 200, { level: 'full' }); await tick();
+  s.select.choose('off'); s.select.choose('light'); await tick();
+  assert.strictEqual(s.calls.length, 2, 'the second save waits for the first');
+  s.answer(1, 200, { level: 'off' }); await tick(); await tick();
+  assert.strictEqual(s.select.value, 'light', 'a newer choice is still on screen while it is being saved');
+  assert.strictEqual(JSON.parse(s.calls[2].opts.body).level, 'light');
+  s.answer(2, 200, { level: 'light' }); await tick(); await tick();
+  assert.strictEqual(s.select.value, 'light');
 });
