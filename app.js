@@ -2452,7 +2452,7 @@
       const btn = (a, id, label) => `<button class="gs-btn secondary" onclick="schedAct('${a}', '${esc(id)}')">${label}</button>`;
       const rows = tasks.length ? tasks.map(t => `<tr style="border-top:1px solid var(--border,#333)">
           <td><b>${esc(t.label)}</b><br><code style="font-size:11px">${esc(t.id)}</code></td>
-          <td>${esc(t.agent)}<br><small>by ${esc(t.createdBy)}</small></td>
+          <td>${esc(t.agent)}<br><small>by ${esc(t.createdBy === '@owner' ? 'you' : t.createdBy === '@hub' ? 'the hub' : t.createdBy)}</small></td>
           <td><small>${esc(t.schedule)}</small>${t.nextRunLocal ? `<br><small>next: <b>${esc(t.nextRunLocal)}</b></small>` : ''}</td>
           <td>${pill(t.status, t.queued ? ' · due now' : '')}${t.lastRun ? `<br><small title="${esc(t.lastRun.replyPreview || t.lastRun.note || '')}">last: ${esc(when(t.lastRun.firedAt || t.lastRun.dueAt))} ${esc(t.lastRun.status)}${t.lastRun.late ? ' (late)' : ''}</small>` : ''}</td>
           <td style="white-space:nowrap">

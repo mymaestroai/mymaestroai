@@ -103,7 +103,7 @@ test('agents schedule only for themselves; maestro and the owner for anyone', as
   const b = await inst.create({ requester: 'maestro', agent: 'trader', when: 'in 2 hours', prompt: 'follow up' });
   assert.strictEqual(b.createdBy, 'maestro');
   const c = await inst.create({ requester: st.OWNER, agent: 'worker', when: 'in 2 hours', prompt: 'y' });
-  assert.strictEqual(c.createdBy, 'owner');
+  assert.strictEqual(c.createdBy, '@owner');
   await assert.rejects(inst.create({ requester: 'maestro', agent: 'nobody', when: 'in 1 hour', prompt: 'x' }), /no agent named/);
   await assert.rejects(inst.create({ requester: st.OWNER, when: 'in 1 hour', prompt: 'x' }), /agent is required/);
 });
@@ -380,7 +380,7 @@ test('hub requester: a prompt up to 24,000 characters; an agent or the owner sti
   assert.ok(v.id);
   await assert.rejects(inst.create({ requester: st.HUB, agent: 'trader', when: 'in 10 minutes', prompt: 'x'.repeat(24001) }), /longer than 24000 characters/);
   await assert.rejects(inst.create({ requester: 'trader', agent: 'trader', when: 'in 10 minutes', prompt: 'x'.repeat(8001) }), /longer than 8000 characters/);
-  await assert.rejects(inst.create({ requester: 'owner', agent: 'trader', when: 'in 10 minutes', prompt: 'x'.repeat(8001) }), /longer than 8000 characters/);
+  await assert.rejects(inst.create({ requester: '@owner', agent: 'trader', when: 'in 10 minutes', prompt: 'x'.repeat(8001) }), /longer than 8000 characters/);
 });
 
 // Review r4 (GPT-6 BLOCK, Sonnet F7): an agent named "hub" is an ordinary agent to the scheduler; the hub's identity is
