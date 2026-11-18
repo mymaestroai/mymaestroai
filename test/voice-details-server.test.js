@@ -196,9 +196,13 @@ function everySplit(text, expectOut, expectTags) {
 test('anyplace filter: [details] mid-reply is removed with the whitespace after it; onTag per tag', () => {
   everySplit('[details] Remember, you can interrupt me any time.', 'Remember, you can interrupt me any time.', 1);
   everySplit('Sure.\n\n[details] Remember, you can interrupt me.', 'Sure.\n\nRemember, you can interrupt me.', 1);
-  everySplit('Sure. [DETAILS]\n\n  First, one. [Details]Second.', 'Sure. First, one. Second.', 2);
+  // one separator takes the tag's place (review r2): the paragraph break it held, else a space between two words
+  everySplit('Sure. [DETAILS]\n\n  First, one. [Details]Second.', 'Sure. \n\nFirst, one. Second.', 2);
   everySplit('Done [details]', 'Done ', 1);
-  everySplit('x[details]y', 'xy', 1);
+  everySplit('x[details]y', 'x y', 1);
+  everySplit('Done.[details] Next', 'Done. Next', 1);
+  everySplit('first.\n\n[details]\nSecond', 'first.\n\nSecond', 1);
+  everySplit('one.[details]\nTwo', 'one.\nTwo', 1);
   everySplit('[details]', '', 1);
 });
 
@@ -270,13 +274,17 @@ function voiceMoodCtx() {
 }
 const gwOf = (sent, type) => sent.map(c => JSON.parse(JSON.stringify(c.gateway || {}))).filter(g => g.type === type);   // JSON: the objects come from the vm realm
 
-test('createVoiceMood: the read-full chunk carries the turn id and is sent at most once, from either filter', () => {
+test('createVoiceMood: the read-full chunk carries the turn id, once per tag (at most 8 per turn), from either filter', () => {
   const { make, sent } = voiceMoodCtx();
   const a = make({ enabled: true, turnId: 'ada-1' });
   assert.equal(a.push('[details] First. '), 'First. ');
   assert.equal(a.push('Then [details] again. '), 'Then again. ');
   assert.equal(a.flush(), '');
-  assert.deepEqual(gwOf(sent, 'voice_read_full'), [{ type: 'voice_read_full', turnId: 'ada-1' }]);
+  assert.deepEqual(gwOf(sent, 'voice_read_full'), [{ type: 'voice_read_full', turnId: 'ada-1' }, { type: 'voice_read_full', turnId: 'ada-1' }], 'a second reading (an answer to an interjection) gives its own signal');
+  sent.length = 0;
+  const many = make({ enabled: true, turnId: 'm' });
+  for (let i = 0; i < 12; i++) many.push(`x [details] y${i}. `);
+  assert.equal(gwOf(sent, 'voice_read_full').length, 8, 'capped');
   sent.length = 0;
   const b = make({ enabled: true, turnId: 't-2' });   // not at the start: the interjection's answer
   assert.equal(b.push('Okay, '), 'Okay, ');
@@ -292,7 +300,7 @@ test('createVoiceMood: split tag, links kept, flush releases a held partial, abo
   const { make, sent } = voiceMoodCtx();
   const a = make({ enabled: true, turnId: 'T' });
   let out = ''; for (const ch of 'Hi. [Det' + 'ails]\n\nBody [details](u) end [det') out += a.push(ch);
-  assert.equal(out, 'Hi. Body [details](u) end ');
+  assert.equal(out, 'Hi. \n\nBody [details](u) end ', 'the paragraph break the tag held stays');
   assert.equal(a.flush(), '[det', 'held partial released when the model call ends');
   assert.equal(gwOf(sent, 'voice_read_full').length, 1);
   sent.length = 0;
@@ -358,11 +366,13 @@ function setup(origin = { kind: 'user' }) {
 }
 const got = (c) => frames(c.out).filter(x => x.type === 'turn_read_full');
 
-test('hub-events: voice_read_full becomes one turn_read_full per turn, user origin only', () => {
+test('hub-events: each voice_read_full becomes a turn_read_full (at most 8 per turn), user origin only', () => {
   const { c, res } = setup();
   res.write(sse(readFull)); res.write(sse(readFull));
   const f = got(c);
-  assert.equal(f.length, 1);
+  assert.equal(f.length, 2, 'a second reading in the same turn (an answer to an interjection) is signalled too');
+  for (let i = 0; i < 10; i++) res.write(sse(readFull));
+  assert.equal(got(c).length, 8, 'capped per turn');
   assert.equal(f[0].agent, 'ada'); assert.equal(f[0].turnId, 't-1');
   assert.deepEqual(Object.keys(f[0]).filter(k => !['id', 'type', 'ts', 'at', 'bootId', 'seq'].includes(k)).sort(), ['agent', 'turnId']);
   for (const kind of ['consultation', 'schedule', 'task', 'job_notice', 'alert']) {

@@ -13235,26 +13235,33 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (a.substantial) return { sentences, note: a.kind === 'list' ? VOICE_NOTE_LIST.trim() : a.kind === 'table' ? VOICE_NOTE_TABLE.trim() : a.kind === 'code' ? VOICE_NOTE_CODE.trim() : VOICE_NOTE_DETAILS_CALL.trim() };
       return { sentences: sentences.concat(a.sentences), note: '' };
     }
-    // The "read in full" flag belongs to ONE reply. Both pages keep gate = { set, turn, own } (set: a flag is on; turn: the hub turn id it was
-    // set for, null when the chunk carried none; own: the latest own turn id from turn_start) and ask this for every related event:
-    //   { kind: 'chunk', turnId }  the chat stream's voice_read_full (this page's own spoken send)  -> set, remember its turnId
+    // The "read in full" flag belongs to ONE reply. Both pages keep gate = { set, turn, own, past } (set: a flag is on; turn: the hub turn id it was
+    // set for, null when the chunk carried none; own: the latest own turn id from turn_start; past: earlier own turn ids) and ask this for every related event:
+    //   { kind: 'chunk', turnId }  the chat stream's voice_read_full (this page's own spoken send)  -> set for its turn, unless that turn is an EARLIER own turn
     //   { kind: 'event', turnId }  the hub's turn_read_full for the call's agent                     -> set only when turnId is the latest own turn
     //   { kind: 'start', turnId }  an own turn_start, typed or spoken                                 -> remember it; a flag for ANOTHER turn is cleared
-    // (a flag for the same turn stays: the chat-stream chunk may come before the hub's turn_start). Returns { state, action: 'set' | 'reset' | 'ignore' }.
-    // Pure: the caller stores state and calls call.onReadFull() on 'set' and call.resetReadFull() on 'reset'.
+    // (a flag for the same turn stays: the chat-stream chunk may come before the hub's turn_start; a chunk for a turn not seen yet is that case,
+    // a chunk for a turn already superseded (past: the last VOICE_READ_FULL_PAST own turns before the latest) is a late one and is ignored).
+    // Signals may repeat (one per [details] tag: an answer to an interjection in the same turn gives its own). Returns
+    // { state, action: 'set' | 'reset' | 'ignore' }. Pure: the caller stores state and calls call.onReadFull() on 'set' and call.resetReadFull() on 'reset'.
+    const VOICE_READ_FULL_PAST = 32;
     function voiceReadFullGate(state, ev) {
       const s = state && typeof state === 'object' ? state : {};
-      const cur = { set: s.set === true, turn: s.turn === undefined ? null : s.turn, own: s.own === undefined ? null : s.own };
+      const cur = { set: s.set === true, turn: s.turn === undefined ? null : s.turn, own: s.own === undefined ? null : s.own, past: Array.isArray(s.past) ? s.past : [] };
       const id = ev && ev.turnId ? String(ev.turnId) : null;
       switch (ev && ev.kind) {
-        case 'chunk': return { state: { set: true, turn: id, own: cur.own }, action: 'set' };
+        case 'chunk':
+          if (id && cur.past.includes(id)) return { state: cur, action: 'ignore' };   // a late chunk of an earlier turn
+          return { state: { set: true, turn: id, own: cur.own, past: cur.past }, action: 'set' };
         case 'event':
-          if (id && id === cur.own) return { state: { set: true, turn: id, own: cur.own }, action: 'set' };
+          if (id && id === cur.own) return { state: { set: true, turn: id, own: cur.own, past: cur.past }, action: 'set' };
           return { state: cur, action: 'ignore' };
-        case 'start':
-          if (!id) return { state: cur, action: 'ignore' };
-          if (cur.set && cur.turn !== id) return { state: { set: false, turn: null, own: id }, action: 'reset' };
-          return { state: { set: cur.set, turn: cur.turn, own: id }, action: 'ignore' };
+        case 'start': {
+          if (!id || id === cur.own) return { state: cur, action: 'ignore' };
+          const past = cur.own ? cur.past.filter(t => t !== cur.own).concat(cur.own).slice(-VOICE_READ_FULL_PAST) : cur.past;
+          if (cur.set && cur.turn !== id) return { state: { set: false, turn: null, own: id, past }, action: 'reset' };
+          return { state: { set: cur.set, turn: cur.turn, own: id, past }, action: 'ignore' };
+        }
         default: return { state: cur, action: 'ignore' };
       }
     }
@@ -17249,8 +17256,9 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     function voiceCallSseReadFull(chatId, turnId) {
       const S = voiceCallS;
       if (!(S.call && S.chatId === chatId && typeof S.call.onReadFull === 'function')) return;
-      if (typeof voiceReadFullGate === 'function') S.readFull = voiceReadFullGate(S.readFull, { kind: 'chunk', turnId }).state;
-      S.call.onReadFull();
+      const g = typeof voiceReadFullGate === 'function' ? voiceReadFullGate(S.readFull, { kind: 'chunk', turnId }) : { state: S.readFull, action: 'set' };
+      S.readFull = g.state;
+      if (g.action === 'set') S.call.onReadFull();   // a late chunk of an earlier turn is ignored
     }
     // A turn the hub started runs (a scheduled task, a consultation, a job report ...) and none of the caller's own: his words are kept for his own turn (the controller's backgroundBusy).
     // Also false when this page streams a reply of its own (typed in this chat during the call) or an own turn of the call has not ended.
