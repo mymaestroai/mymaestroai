@@ -204,8 +204,10 @@ describe('run_job: hub restarts', () => {
   it('a job whose process vanished without an exit code is reported as LOST, never forgotten', async () => {
     const a = rig();
     const j = await a.runner.run({ owner: 'trader', name: 'victim', command: 'sleep 60' });
-    assert.ok(await until(() => fs.existsSync(path.join(a.dataDir, 'jobs', j.id, 'pid'))));
-    const pid = parseInt(fs.readFileSync(path.join(a.dataDir, 'jobs', j.id, 'pid'), 'utf8'), 10);
+    // the wrapper's `echo $$ > pid` creates the file a moment before it writes the number: wait for the number
+    const pidNow = () => { try { return parseInt(fs.readFileSync(path.join(a.dataDir, 'jobs', j.id, 'pid'), 'utf8'), 10) || null; } catch { return null; } };
+    assert.ok(await until(() => pidNow() !== null));
+    const pid = pidNow();
     process.kill(-pid, 'SIGKILL'); // what a hub restart does to a setsid job (same cgroup)
     assert.ok(await until(() => { try { process.kill(pid, 0); return false; } catch { return true; } }));
     const b = rig({ dataDir: a.dataDir }); b.runner.start();
@@ -350,7 +352,7 @@ describe('run_job for a sandboxed owner runs inside the container (review F05)',
     const j = await withFakeDocker(() => r.runner.run({ owner: 'trader', name: 'boxed', command: 'echo inside; pwd' }));
     assert.equal(j.box, 'hub-agent-trader');
     const wrapper = fs.readFileSync(path.join(r.dataDir, 'jobs', j.id, 'wrapper.sh'), 'utf8');
-    assert.match(wrapper, /docker exec -i -w '[^']+' "\$C" bash -c "echo \\\$\\\$ > \$P; exec bash -s" < "\$D\/job\.sh"/);
+    assert.match(wrapper, /docker exec -i -w '[^']+' "\$C" bash -c "echo \\\$\\\$ > \$P \|\| \{ echo hub: [^;]+ >&2; exit 143; \}; if \[ -e \$M \]; then rm -f \$M \$P; exit 143; fi; exec bash -s" < "\$D\/job\.sh"/);
     assert.match(wrapper, /trap term TERM/);
     assert.ok(await until(() => r.runner.status(j.id, 'trader').status === 'finished'), 'finished');
     const st = r.runner.status(j.id, 'trader', { tailLines: 5 });
@@ -377,6 +379,170 @@ describe('run_job for a sandboxed owner runs inside the container (review F05)',
     assert.equal(c.status, 'cancelling');
     assert.ok(await until(() => r.runner.status(j.id, 'trader').status === 'cancelled', 8000), 'cancelled');
     fs.rmSync(`/tmp/hub-job-${j.id}.pid`, { force: true });
+    fs.rmSync(`/tmp/hub-job-${j.id}.cancel`, { force: true });
+  });
+});
+
+describe('run_job for a sandboxed owner: a cancel before the process inside the box has started still stops it', () => {
+  // A stand-in `docker` closer to the real one: the job's `exec -i` starts its command only after a delay (the daemon
+  // creating the exec), in its own session, so killing the client (the wrapper's process group) does not stop it, as
+  // with real Docker. The cancel's own `exec` (no -i) runs at once.
+  const fakeBin = fs.mkdtempSync(path.join(os.tmpdir(), 'fake-docker-late-'));
+  const delayFile = path.join(fakeBin, 'delay');               // the job's exec starts this late (seconds)
+  const cancelDelayFile = path.join(fakeBin, 'cancel-delay');  // the cancel's own exec takes this long (seconds)
+  const runningFile = path.join(fakeBin, 'running');           // what `docker inspect -f {{.State.Running}}` says
+  // runningFile holds "<exit code> <what inspect prints>", e.g. "0 true", "0 false", "1 Error response from daemon: No such container: x"
+  const setRunning = (s) => fs.writeFileSync(runningFile, s);
+  fs.writeFileSync(cancelDelayFile, '0'); setRunning('0 true');
+  fs.writeFileSync(path.join(fakeBin, 'docker'), [
+    '#!/bin/bash',
+    `[ "$1" = inspect ] && { read -r c t < '${runningFile}'; echo "$t"; exit "$c"; }`,
+    '[ "$1" = exec ] || { echo "fake docker: $*" >&2; exit 1; }',
+    'shift; dir=; inter=; while [ $# -gt 0 ]; do case "$1" in -i) inter=1; shift;; -w) dir=$2; shift 2;; *) break;; esac; done',
+    'shift',   // the container name
+    `[ -z "$inter" ] && { sleep "$(cat ${cancelDelayFile})"; cd "\${dir:-.}" && exec "$@"; }`,
+    'in=$(mktemp); cat > "$in"',
+    // (a box that is stopped or gone by the time the exec would start runs nothing)
+    `setsid bash -c 'f=$1; d=$2; shift 2; sleep "$(cat ${delayFile})"; read -r c t < ${runningFile}; [ "$t" = true ] || exit 125; cd "$d" && exec "$@" < "$f"' _ "$in" "\${dir:-.}" "$@" &`,
+    'w=$!; wait $w; rc=$?; rm -f "$in"; exit $rc',
+  ].join('\n') + '\n', { mode: 0o755 });
+  const withFakeDocker = async (fn) => { const old = process.env.PATH; process.env.PATH = `${fakeBin}:${old}`; try { return await fn(); } finally { process.env.PATH = old; } };
+  const groupAlive = (pid) => { try { process.kill(-pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
+  after(() => fs.rmSync(fakeBin, { recursive: true, force: true }));
+
+  function boxedRig() {
+    const t = rig({ boxFor: async (owner) => (owner === 'trader' ? { name: 'hub-agent-trader', mounts: [t.dataDir] } : null) });
+    t.runner.start();
+    return t;
+  }
+  const leftovers = (id) => { for (const f of [`/tmp/hub-job-${id}.pid`, `/tmp/hub-job-${id}.cancel`]) fs.rmSync(f, { force: true }); };
+
+  // A job whose script leaves a mark that it ran, cancelled once its host wrapper is up but before the shell inside the
+  // box has started (`delay` s late). `prepare(id)` runs just before the cancel; `during(id)` runs while it waits.
+  // Returns whether the script ran (or, with `stillRunning`, whether it is still running).
+  async function lateCancel({ delay, cancelDelay = 0, prepare, during, stillRunning = false }) {
+    fs.writeFileSync(delayFile, String(delay)); fs.writeFileSync(cancelDelayFile, String(cancelDelay));
+    const t = boxedRig();
+    const ran = path.join(t.dataDir, 'ran');
+    let j;
+    try {
+      j = await withFakeDocker(() => t.runner.run({ owner: 'trader', name: 'late', command: `echo $$ > '${ran}'; sleep 30` }));
+      assert.ok(await until(() => { try { return /^\d+/.test(fs.readFileSync(path.join(t.dataDir, 'jobs', j.id, 'pid'), 'utf8')); } catch { return false; } }, 4000), 'the host wrapper is up');
+      if (prepare) prepare(j.id);
+      await withFakeDocker(async () => {
+        t.runner.cancel(j.id, 'trader');
+        if (during) await during(j.id, t);
+        assert.ok(await until(() => t.runner.status(j.id, 'trader').status === 'cancelled', 12000), 'cancelled');
+      });
+      await sleep(delay * 1000 + 1500);   // past the inner shell's late start
+      if (!fs.existsSync(ran)) return false;
+      const pid = parseInt(fs.readFileSync(ran, 'utf8'), 10);
+      return stillRunning ? groupAlive(pid) || (() => { try { process.kill(pid, 0); return true; } catch { return false; } })() : true;
+    } finally {
+      try { const p = parseInt(fs.readFileSync(`/tmp/hub-job-${j && j.id}.pid`, 'utf8'), 10); if (p > 1 && groupAlive(p)) process.kill(-p, 'SIGKILL'); } catch {}
+      if (j) leftovers(j.id);
+      fs.writeFileSync(cancelDelayFile, '0');
+      await removeWhenJobsGone(t.dataDir, t.runner);
+    }
+  }
+
+  it('cancelled before the inner shell starts: the script never runs', async () => {
+    assert.equal(await lateCancel({ delay: 1 }), false, 'the script never ran inside the box');
+  });
+
+  it('a slow docker for the cancel itself: the polls do not cut it off, and the script never runs', async () => {
+    // each poll (100 ms) used to SIGTERM the wrapper's group again, killing the cancel's own docker exec mid-way
+    assert.equal(await lateCancel({ delay: 2, cancelDelay: 0.5 }), false, 'the script never ran inside the box');
+  });
+
+  it('the cancel cannot leave its mark for a while (a full /tmp): the job stays cancelling, and once there is room it is stopped', async () => {
+    // Only the mark is refused here: the inner shell (starting as room comes back) can still write its pid, so it may
+    // start, and the cancel's next try finds that pid and stops it. Either way nothing is left running.
+    const markOf = (id) => `/tmp/hub-job-${id}.cancel`;
+    let t0;
+    const running = await lateCancel({
+      delay: 7, stillRunning: true,
+      prepare: (id) => { fs.symlinkSync(path.join(os.tmpdir(), `no-such-dir-${id}`, 'x'), markOf(id)); t0 = Date.now(); },   // touch fails
+      during: async (id, t) => {
+        await sleep(6000);   // well past the 5 tries of round 1
+        assert.equal(t.runner.status(id, 'trader').status, 'cancelling', 'no proof yet: still cancelling, never "cancelled"');
+        assert.ok(Date.now() - t0 >= 5900);
+        fs.rmSync(markOf(id), { force: true });   // room again
+      },
+    });
+    assert.equal(running, false, 'nothing is left running inside the box');
+  });
+
+  it('the cancel cannot leave its mark and the box is stopped or gone: Docker\'s word ends the cancel', async () => {
+    const markOf = (id) => `/tmp/hub-job-${id}.cancel`;
+    // what `docker inspect --type container -f {{.State.Running}}` gives for a stopped box, and (in real Docker's words) a removed one
+    for (const answer of ['0 false', '1 Error response from daemon: No such container: hub-agent-trader']) {
+      setRunning(answer);
+      try {
+        const t0 = Date.now();
+        const ran = await lateCancel({ delay: 2, prepare: (id) => fs.symlinkSync(path.join(os.tmpdir(), `no-such-dir-${id}`, 'x'), markOf(id)) });
+        assert.ok(Date.now() - t0 < 9000, `it did not keep trying (${answer})`);
+        assert.equal(ran, false, 'nothing ran in a box that is not running');
+      } finally { setRunning('0 true'); }
+    }
+  });
+
+  it('Docker cannot be reached (a missing socket says "no such file"): no proof, so the cancel keeps trying until Docker answers', async () => {
+    const markOf = (id) => `/tmp/hub-job-${id}.cancel`;
+    try {
+      const ran = await lateCancel({
+        delay: 2,
+        prepare: (id) => {
+          fs.symlinkSync(path.join(os.tmpdir(), `no-such-dir-${id}`, 'x'), markOf(id));   // the mark can't be left either
+          setRunning('1 failed to connect to the docker API at unix:///run/user/1000/docker.sock: dial unix /run/user/1000/docker.sock: connect: no such file or directory');
+        },
+        during: async (id, t) => {
+          await sleep(4000);
+          assert.equal(t.runner.status(id, 'trader').status, 'cancelling', 'an unreachable Docker is no proof the box is gone');
+          setRunning('0 false');   // Docker answers: the box is stopped
+        },
+      });
+      assert.equal(ran, false);
+    } finally { setRunning('0 true'); }
+  });
+
+  it('the shell inside the box cannot record its pid: it runs nothing', async () => {
+    fs.writeFileSync(delayFile, '1');
+    const t = boxedRig();
+    const ran = path.join(t.dataDir, 'ran');
+    let j;
+    try {
+      j = await withFakeDocker(() => t.runner.run({ owner: 'trader', name: 'nopid', command: `echo yes > '${ran}'` }));
+      fs.mkdirSync(`/tmp/hub-job-${j.id}.pid`);   // the pid can't be written there
+      assert.ok(await until(() => !['running', 'cancelling'].includes(t.runner.status(j.id, 'trader').status), 8000), 'the job ended');
+      assert.equal(t.runner.status(j.id, 'trader').exitCode, 143);
+      assert.equal(fs.existsSync(ran), false, 'the script never ran: a job that could not be cancelled is never started');
+      assert.match(t.runner.status(j.id, 'trader', { tailLines: 5 }).outputTail, /could not record its process id in \/tmp inside the box, so it was not started/);
+    } finally {
+      if (j) fs.rmSync(`/tmp/hub-job-${j.id}.pid`, { recursive: true, force: true });
+      if (j) leftovers(j.id);
+      await removeWhenJobsGone(t.dataDir, t.runner);
+    }
+  });
+
+  it('cancelled once the inner shell has started: the process inside is stopped', async () => {
+    fs.writeFileSync(delayFile, '0');
+    const t = boxedRig();
+    let j;
+    try {
+      j = await withFakeDocker(() => t.runner.run({ owner: 'trader', name: 'started', command: 'sleep 30' }));
+      const pidFile = `/tmp/hub-job-${j.id}.pid`;
+      assert.ok(await until(() => fs.existsSync(pidFile) && fs.readFileSync(pidFile, 'utf8').trim() !== '', 4000), 'the inner shell recorded its pid');
+      const inner = parseInt(fs.readFileSync(pidFile, 'utf8'), 10);
+      await withFakeDocker(async () => {
+        t.runner.cancel(j.id, 'trader');
+        assert.ok(await until(() => t.runner.status(j.id, 'trader').status === 'cancelled', 8000), 'cancelled');
+      });
+      assert.ok(await until(() => !groupAlive(inner), 3000), 'the process inside the box is gone');
+    } finally {
+      if (j) leftovers(j.id);
+      await removeWhenJobsGone(t.dataDir, t.runner);
+    }
   });
 });
 
