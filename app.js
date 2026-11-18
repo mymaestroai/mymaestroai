@@ -5913,14 +5913,32 @@
     }
 
     // Team guidance level (full | light | off): how agents are told to run a team
-    const teamGuidanceSelect = document.getElementById('team-guidance-select');
-    if (teamGuidanceSelect) {
-      fetch('/api/team_guidance', { credentials: 'include' }).then(r => r.json()).then(d => { if (d && d.level) teamGuidanceSelect.value = d.level; }).catch(() => {});
-      teamGuidanceSelect.addEventListener('change', () => {
-        fetch('/api/team_guidance', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ level: teamGuidanceSelect.value }) })
-          .then(r => r.json()).then(d => { if (d && d.level) teamGuidanceSelect.value = d.level; }).catch(() => {});
+    // team-guidance-select:begin
+    // One save at a time, and the select always ends on the value the hub has stored: a failed save puts back the
+    // stored value (read again after the failure) and says why in the select's tooltip; the first load is ignored once
+    // a change was made, since it may have been read before that change was saved.
+    function bindTeamGuidanceSelect(select, doFetch) {
+      let confirmed = select.value, changed = false, pending = 0, chain = Promise.resolve();
+      const level = (r) => r.json().catch(() => ({})).then(d => { if (!r.ok || !d || !d.level) throw new Error((d && d.error) || `HTTP ${r.status}`); return d.level; });
+      const settle = () => { if (pending === 0) select.value = confirmed; };
+      doFetch('/api/team_guidance', { credentials: 'include' }).then(level)
+        .then(l => { if (!changed) { confirmed = l; select.value = l; } }).catch(() => {});
+      select.addEventListener('change', () => {
+        changed = true; pending++;
+        const want = select.value;
+        chain = chain.then(() => doFetch('/api/team_guidance', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ level: want }) })
+          .then(level)
+          .then(l => { confirmed = l; select.title = ''; })
+          .catch(e => {
+            select.title = `Not saved: ${e.message}`;
+            return doFetch('/api/team_guidance', { credentials: 'include' }).then(level).then(l => { confirmed = l; }).catch(() => {});
+          })
+          .then(() => { pending--; settle(); }));
       });
     }
+    // team-guidance-select:end
+    const teamGuidanceSelect = document.getElementById('team-guidance-select');
+    if (teamGuidanceSelect) bindTeamGuidanceSelect(teamGuidanceSelect, (...a) => fetch(...a));
 
     const lazyToolsToggle = document.getElementById('lazy-tools-toggle');
     const lazyToolsLabel = document.getElementById('lazy-tools-label');
