@@ -9,6 +9,7 @@
  *   mymaestro open                   open it in the browser, or print the address
  *   mymaestro setup-link             the first-run Welcome link (until the first account exists)
  *   mymaestro connect chatgpt        use your ChatGPT subscription: installs Codex and signs it in (--device-auth: sign in with a code)
+ *   mymaestro codex-check [--repair] is Codex where this install needs it? --repair reinstalls it (the installer runs this)
  *   mymaestro update [--channel stable|experimental]   newest version of the channel, then restart (the Update button)
  *   mymaestro doctor                 security and setup checks (scripts/security-check.js)
  *   mymaestro backup [--to <dir>]    an encrypted backup of everything that makes this install yours (--setup: choose the backup password)
@@ -107,6 +108,12 @@ function version() {
   return { v, commit, branch, channel };
 }
 function auth() { return require(path.join(DIR, 'lib', 'auth')).createAuth({ log: () => {}, dataDir: path.join(DIR, 'data') }); }
+// Folders where a `codex` link may sit: the one the installer put the mymaestro command in, and ~/.local/bin.
+function binDirsForCodex() {
+  const dirs = [path.join(os.homedir(), '.local', 'bin')];
+  try { const b = JSON.parse(fs.readFileSync(path.join(DIR, 'data', 'install.json'), 'utf8')).bin; if (b) dirs.unshift(path.dirname(b)); } catch { /* not installed by the installer */ }
+  return [...new Set(dirs)];
+}
 function setupLink() {
   if (auth().hasUsers()) return null;
   const code = require(path.join(DIR, 'lib', 'welcome')).createWelcome({ dataDir: path.join(DIR, 'data') }).ensureSetupToken();
@@ -167,20 +174,20 @@ const commands = {
     if (flag('--plain')) { if (link) out(link); return; }   // for the installer: just the link, or nothing once an account exists
     out(link ? `Open this link to finish setting up ${PRODUCT}:\n\n  ${link}\n\nIt works until the first account is created.` : `Setup is done: an account exists. Sign in at ${URL_BASE}/login`);
   },
-  // Installs Codex with this install's own Node, where the hub looks for it (lib/codex-cli resolveBinary), then runs
-  // Codex's own sign-in in this terminal. The hub never sees the sign-in.
+  // Installs Codex into ~/.npm-global with this install's own npm (lib/codex-cli/setup: outside the Node.js folder the
+  // installer replaces), where the hub looks for it, then runs Codex's own sign-in in this terminal. The hub never sees
+  // the sign-in.
   async connect() {
     if (argv[1] !== 'chatgpt') fail('Usage: mymaestro connect chatgpt [--device-auth]');
     const codex = require(path.join(DIR, 'lib', 'codex-cli'));
+    const setup = require(path.join(DIR, 'lib', 'codex-cli', 'setup'));
     const env = codex.withNode(process.env);
     let bin = codex.resolveBinary(env);
     if (!bin) {
       out('Installing Codex, the OpenAI program that connects to your ChatGPT subscription…');
-      const dir = path.dirname(process.execPath);
-      const npm = fs.existsSync(path.join(dir, 'npm')) ? path.join(dir, 'npm') : 'npm';
-      const r = spawnSync(npm, ['install', '-g', '--prefix', path.join(os.homedir(), '.npm-global'), '@openai/codex', '--ignore-scripts', '--no-audit', '--no-fund', '--loglevel=error'], { stdio: 'inherit', env });
-      bin = r.status === 0 ? codex.resolveBinary(env) : null;
+      bin = setup.installCodex({ env: process.env }).bin;
       if (!bin) fail('Codex did not install. Check the internet connection and run this again.');
+      setup.repairLinks({ env: process.env, binDirs: binDirsForCodex() });
     }
     const before = await codex.loginStatus({ bin, env });
     if (before.loggedIn && before.mode === 'chatgpt') {
@@ -195,6 +202,21 @@ const commands = {
       if (!(after.loggedIn && after.mode === 'chatgpt')) fail('\nThe sign-in did not finish. Run this again when you are ready.');
     }
     out(`\nDone. Back in ${PRODUCT}, press Check on the setup page, or in Settings under AI models.`);
+  },
+  // After the installer replaced its Node.js (or any time): is Codex where this install needs it? --repair repoints a
+  // dangling codex link and reinstalls Codex into ~/.npm-global. Exit 1 when it is needed and still missing. --quiet
+  // (the installer): say something only when a link was repointed, Codex was reinstalled, or it is still missing.
+  'codex-check'() {
+    const setup = require(path.join(DIR, 'lib', 'codex-cli', 'setup'));
+    const quiet = flag('--quiet');
+    if (flag('--repair') && !quiet) out('Checking Codex…');
+    const r = setup.checkCodex({ env: process.env, dataDir: path.join(DIR, 'data'), binDirs: binDirsForCodex(), repair: flag('--repair') });
+    for (const l of r.relinked) out(`Codex link ${l} now points at ${path.join(setup.codexPrefix(), 'bin', 'codex')}.`);
+    if (r.installed) out(`Codex reinstalled in ${setup.codexPrefix()}.`);
+    if (!r.needed) { if (!quiet) out(r.bin ? `Codex: ${r.bin}` : 'Codex: not used by this install.'); return; }
+    if (r.bin) { if (!quiet) out(`Codex: ${r.bin}`); return; }
+    out(`Codex is not installed, and this install uses it (an agent on ChatGPT, or a ChatGPT sign-in). Fix: ${r.fix}`);
+    process.exitCode = 1;
   },
   async update() {
     const gs = require(path.join(DIR, 'lib', 'git-sync'));
@@ -213,6 +235,11 @@ const commands = {
     out(`Answering: ${(await up()) ? 'yes' : 'no'} (${URL_BASE})\n`);
     const r = spawnSync(process.execPath, [path.join(DIR, 'scripts', 'security-check.js')], { cwd: DIR, stdio: 'inherit' });
     process.exitCode = r.status || 0;
+    // Codex (the ChatGPT client), when this install uses it: found, or the one command that brings it back.
+    try {
+      const cx = require(path.join(DIR, 'lib', 'codex-cli', 'setup')).checkCodex({ env: process.env, dataDir: path.join(DIR, 'data') });
+      if (cx.needed) out(cx.bin ? `\nCodex (ChatGPT): ${cx.bin}` : `\nCodex (ChatGPT): not installed, and this install uses it. Fix: ${cx.fix}`);
+    } catch { /* no module */ }
     // The Claude sign-in: proven with one tiny request through the same client the agents use (lib/welcome).
     let installed = false; try { installed = require(path.join(DIR, 'lib', 'claude-auth')).hasSdkCredentials(); } catch { /* no module */ }
     if (!installed) { out('\nClaude sign-in: not set up on this computer (only needed for Claude subscription models).'); return; }
@@ -443,7 +470,7 @@ const commands = {
     out(`To delete everything, back up first (mymaestro backup), then run:  rm -rf "${DIR}"`);
   },
   version() { const { v, commit, channel } = version(); out(`${PRODUCT} ${v} (${commit}, ${channel} channel)`); },
-  help() { out(fs.readFileSync(__filename, 'utf8').split('\n').slice(3, 24).map(l => l.replace(/^ \* ?/, '')).join('\n')); },
+  help() { out(fs.readFileSync(__filename, 'utf8').split('\n').slice(3, 25).map(l => l.replace(/^ \* ?/, '')).join('\n')); },
 };
 
 (async () => {

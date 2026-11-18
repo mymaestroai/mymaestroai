@@ -112,6 +112,19 @@ test('agents on ChatGPT with Codex signed out: critical, with the command that f
   assert.strictEqual(byId(await createReadiness({ ...base, agents: async () => [{ name: 'a', model: 'claude-sdk/x' }], hasCodexSignIn: () => false }).check(), 'chatgpt-signin'), undefined);
 });
 
+test('agents on ChatGPT with Codex itself missing (a Node.js update took it): critical, says Codex is not installed, one fix command', async () => {
+  const base = { hasUsers: () => true, setupNeeded: () => false, hasSdkCredentials: () => true, sandboxStatus: async () => ({ docker: true, imageReady: true }), fetchStatus: async () => ({ renderer: true, pdftotext: true }), searchChain: () => ['perplexity'], supervisor: () => 'systemd', exposed: () => false };
+  const agents = async () => [{ name: 'maestro', model: 'codex-cli/gpt-x' }, { name: 'b', model: 'codex-cli/gpt-y' }];
+  let asked = 0;
+  const out = await createReadiness({ ...base, agents, hasCodexBinary: () => false, hasCodexSignIn: async () => { asked++; return false; } }).check();
+  const item = byId(out, 'chatgpt-signin');
+  assert.strictEqual(item.level, 'critical');
+  assert.match(item.title, /2 agent\(s\) use ChatGPT through Codex but Codex is not installed/);
+  assert.match(JSON.stringify(item), /mymaestro connect chatgpt/);
+  assert.strictEqual(asked, 0, 'the sign-in is not asked of a program that is not there');
+  assert.strictEqual(byId(await createReadiness({ ...base, agents: async () => [{ name: 'a', model: 'claude-sdk/x' }], hasCodexBinary: () => false }).check(), 'chatgpt-signin'), undefined, 'no ChatGPT agents: quiet');
+});
+
 test('the memory check\'s line joins the checklist with its link to Settings → Status → Memory', async () => {
   const r = await createReadiness({
     platform: 'linux', hasUsers: () => true, listUsers: () => [{ role: 'admin', totpEnabled: true, login: 'a' }], setupNeeded: () => false, hasSdkCredentials: () => true,

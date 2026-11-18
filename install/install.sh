@@ -139,9 +139,39 @@ install_node() {
   [ "$got" = "$expected" ] || die "The Node.js download did not match its published checksum (got $got). Nothing was installed."
   mkdir -p "$STATE_DIR" && chmod 700 "$STATE_DIR"
   tar -xzf "$tmp/node.tar.gz" -C "$tmp" || die "Could not unpack Node.js."
+  keep_codex
   rm -rf "$NODE_DIR.new" && mv "$tmp/$name" "$NODE_DIR.new" && rm -rf "$NODE_DIR" && mv "$NODE_DIR.new" "$NODE_DIR"
   rm -rf "$tmp"
   info "Node.js $("$NODE" --version) installed in $NODE_DIR (checksum verified)."
+}
+
+# Codex (the ChatGPT client) installed with this Node's own npm (npm i -g) lives inside the folder about to be replaced.
+# Move it, with its platform packages, to ~/.npm-global (where mymaestro connect chatgpt installs it and the hub looks)
+# and link its program there, so it survives the update. ~/.codex (its sign-in) is never touched.
+keep_codex() {
+  local old="$NODE_DIR/lib/node_modules/@openai" pre="$HOME/.npm-global" p name rel
+  [ -d "$old/codex" ] || return 0
+  mkdir -p "$pre/lib/node_modules/@openai" "$pre/bin" || { warn "Could not make $pre; Codex may need: mymaestro connect chatgpt"; return 0; }
+  for p in "$old"/codex "$old"/codex-*; do
+    [ -d "$p" ] || continue
+    name="$(basename "$p")"
+    [ -e "$pre/lib/node_modules/@openai/$name" ] && continue
+    mv "$p" "$pre/lib/node_modules/@openai/$name" || warn "Could not move $name out of the Node.js folder."
+  done
+  if [ ! -e "$pre/bin/codex" ] && [ ! -L "$pre/bin/codex" ]; then
+    rel="$("$NODE" -e 'const b=require(process.argv[1]).bin;process.stdout.write(String(typeof b==="string"?b:(b&&b.codex)||""))' "$pre/lib/node_modules/@openai/codex/package.json" 2>/dev/null || true)"
+    [ -n "$rel" ] || rel="bin/codex.js"
+    ln -s "../lib/node_modules/@openai/codex/$rel" "$pre/bin/codex" || true
+  fi
+  info "Codex moved out of the Node.js folder to $pre, so the update keeps it."
+}
+
+# Is Codex where this install needs it (an agent on ChatGPT, or a ChatGPT sign-in)? Repoints a codex link left pointing
+# into the old Node.js folder, and reinstalls Codex into ~/.npm-global when it is missing (scripts/hub-cli.js codex-check).
+check_codex() {
+  [ "$DRY" = 1 ] && return 0
+  grep -q "codex-check" "$DIR/scripts/hub-cli.js" 2>/dev/null || return 0
+  "$NODE" "$DIR/scripts/hub-cli.js" codex-check --repair --quiet || warn "Codex (the ChatGPT client) is not ready. In a terminal: mymaestro connect chatgpt"
 }
 
 find_repo_access() {
@@ -395,9 +425,11 @@ main() {
   install_packages
   configure
   install_command
+  check_codex
   start_hub
   add_shortcut
   finish
 }
 
-main "$@"
+# MM_INSTALLER_FUNCTIONS_ONLY=1: define the functions and stop (the tests run single steps with stand-ins).
+[ "${MM_INSTALLER_FUNCTIONS_ONLY:-}" = 1 ] || main "$@"
