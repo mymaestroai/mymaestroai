@@ -3632,6 +3632,29 @@ function voiceReplySentences(markdown, done, readWords, full) {
   if (a.substantial) return { sentences, note: a.kind === 'list' ? VOICE_NOTE_LIST.trim() : a.kind === 'table' ? VOICE_NOTE_TABLE.trim() : a.kind === 'code' ? VOICE_NOTE_CODE.trim() : VOICE_NOTE_DETAILS_CALL.trim() };
   return { sentences: sentences.concat(a.sentences), note: '' };
 }
+// The "read in full" flag belongs to ONE reply. Both pages keep gate = { set, turn, own } (set: a flag is on; turn: the hub turn id it was
+// set for, null when the chunk carried none; own: the latest own turn id from turn_start) and ask this for every related event:
+//   { kind: 'chunk', turnId }  the chat stream's voice_read_full (this page's own spoken send)  -> set, remember its turnId
+//   { kind: 'event', turnId }  the hub's turn_read_full for the call's agent                     -> set only when turnId is the latest own turn
+//   { kind: 'start', turnId }  an own turn_start, typed or spoken                                 -> remember it; a flag for ANOTHER turn is cleared
+// (a flag for the same turn stays: the chat-stream chunk may come before the hub's turn_start). Returns { state, action: 'set' | 'reset' | 'ignore' }.
+// Pure: the caller stores state and calls call.onReadFull() on 'set' and call.resetReadFull() on 'reset'.
+function voiceReadFullGate(state, ev) {
+  const s = state && typeof state === 'object' ? state : {};
+  const cur = { set: s.set === true, turn: s.turn === undefined ? null : s.turn, own: s.own === undefined ? null : s.own };
+  const id = ev && ev.turnId ? String(ev.turnId) : null;
+  switch (ev && ev.kind) {
+    case 'chunk': return { state: { set: true, turn: id, own: cur.own }, action: 'set' };
+    case 'event':
+      if (id && id === cur.own) return { state: { set: true, turn: id, own: cur.own }, action: 'set' };
+      return { state: cur, action: 'ignore' };
+    case 'start':
+      if (!id) return { state: cur, action: 'ignore' };
+      if (cur.set && cur.turn !== id) return { state: { set: false, turn: null, own: id }, action: 'reset' };
+      return { state: { set: cur.set, turn: cur.turn, own: id }, action: 'ignore' };
+    default: return { state: cur, action: 'ignore' };
+  }
+}
 function voiceCreateCall(deps) {
   const d = deps || {};
   const ui = Object.assign({ state() {}, heard() {}, held() {}, toast() {}, summary() {}, level() {}, activity() {}, reply() {}, mic() {}, micLost() {} }, d.ui);   // ui.mic(info): the open microphone; ui.micLost(bool): it was lost / is back; ui.thinkingPulse(event) is optional; ui.reply(kind): 'start' | 'end' | 'drop' | 'resume' (a reply's boundaries, for the display's reaction)
@@ -3958,6 +3981,8 @@ function voiceCreateCall(deps) {
     if (hadNote) queue = queue.filter(i => !(i.kind === 'reply' && i.note));
     if (lastText && ((doneSeen && lastDone) || !lastDone)) onReplyText(lastText, lastDone);
   }
+  // The page learned the flag belongs to an older reply (a typed turn started): clear it. Never touches the queue or what is being spoken.
+  function resetReadFull() { readFull = false; }
   // A tool activity of the running turn: shown silently (ui.activity); spoken only when the page's speakActivity() says so.
   function onActivity(item) {
     if (ended) return;
@@ -4566,7 +4591,7 @@ function voiceCreateCall(deps) {
     settle();
   }
   return {
-    start, hangUp, release, wakeChanged, isStandby: () => standby, setMuted, isMuted: () => muted, interrupt, setPrefs, retryMic, setLinkLost, onSpeechBegin, onSpeechStart, onMisfire, onSpeechEnd, onReplyText, onReadFull, onActivity, onAsk, onAskDone, onHeld, onHeldDone, decide, setMode, onHubOwner, backgroundDone,
+    start, hangUp, release, wakeChanged, isStandby: () => standby, setMuted, isMuted: () => muted, interrupt, setPrefs, retryMic, setLinkLost, onSpeechBegin, onSpeechStart, onMisfire, onSpeechEnd, onReplyText, onReadFull, resetReadFull, onActivity, onAsk, onAskDone, onHeld, onHeldDone, decide, setMode, onHubOwner, backgroundDone,
     get background() { return bgWords.length > 0; },
     get state() { return state; }, get callId() { return callId; }, get mode() { return mode; }, get held() { return heldList.map(h => Object.assign({}, h)); },
   };
@@ -9135,7 +9160,13 @@ function voiceDispEnd(goodbye) {
 }
 function voiceDispMood(seq, mood) { voiceDisplayHook('mood', 'seq:' + seq, mood); }   // once per turn, whichever of the chat stream and the hub event comes first
 function voiceCallSseMood(rec, mood) { const vc = voiceCall; if (vc && rec && rec.agent === vc.agent) voiceDispMood(vc.sendSeq, mood); }
-function voiceCallSseReadFull(rec) { const vc = voiceCall; if (vc && rec && rec.agent === vc.agent && vc.call && typeof vc.call.onReadFull === 'function') vc.call.onReadFull(); }
+// The chat stream's voice_read_full for this phone's own spoken send (g.turnId: the hub turn it belongs to, may be null). The flag belongs to that one reply (voiceReadFullGate).
+function voiceCallSseReadFull(rec, turnId) {
+  const vc = voiceCall;
+  if (!(vc && rec && rec.agent === vc.agent && vc.call && typeof vc.call.onReadFull === 'function')) return;
+  if (typeof voiceReadFullGate === 'function') vc.readFull = voiceReadFullGate(vc.readFull, { kind: 'chunk', turnId }).state;
+  vc.call.onReadFull();
+}
 async function voiceDispPaintPanel() {
   const sels = [$('vp-display'), $('cp-display')].filter(Boolean);   // the voice sheet's select and the call panel's
   if (!sels.length || typeof CallDisplay === 'undefined') return;
@@ -9964,7 +9995,12 @@ function voiceCallWire() {   // the panel's own buttons
 // Hub events for the call (the same /api/events stream as the chat; see connectEvents).
 function voiceCallTurnStart(ev) {
   const vc = voiceCall; if (!vc || !ev || ev.agent !== vc.agent || !ev.turnId) return;
-  if (ev.origin && ev.origin.kind === 'user') { vc.callTurns.add(ev.turnId); vc.lastText = ''; if (typeof voiceDisp !== 'undefined') { voiceDisp.turnSeq.set(ev.turnId, vc.sendSeq); if (voiceDisp.turnSeq.size > 64) voiceDisp.turnSeq.delete(voiceDisp.turnSeq.keys().next().value); } }
+  if (ev.origin && ev.origin.kind === 'user') {
+    vc.callTurns.add(ev.turnId); vc.lastText = ''; if (typeof voiceDisp !== 'undefined') { voiceDisp.turnSeq.set(ev.turnId, vc.sendSeq); if (voiceDisp.turnSeq.size > 64) voiceDisp.turnSeq.delete(voiceDisp.turnSeq.keys().next().value); }
+    // A new own turn (typed or spoken): a "read in full" flag left for an older reply must not uncap this one.
+    const gate = typeof voiceReadFullGate === 'function' ? voiceReadFullGate(vc.readFull, { kind: 'start', turnId: ev.turnId }) : null;
+    if (gate) { vc.readFull = gate.state; if (gate.action === 'reset' && vc.call && typeof vc.call.resetReadFull === 'function') vc.call.resetReadFull(); }
+  }
   else vc.hubTurns.set(ev.turnId, String((ev.origin && (ev.origin.label || ev.origin.from)) || originLabel(ev.origin) || 'A task'));
 }
 function voiceCallTurnDelta(ev) {
@@ -10041,8 +10077,11 @@ function voiceCallTurnMood(ev) {   // turn_mood { agent, turnId, mood }: only th
   const vc = voiceCall; if (!vc || !ev || ev.agent !== vc.agent || !vc.callTurns.has(ev.turnId)) return;
   voiceDispMood(voiceDisp.turnSeq.has(ev.turnId) ? voiceDisp.turnSeq.get(ev.turnId) : vc.sendSeq, ev.mood);
 }
-function voiceCallTurnReadFull(ev) {   // turn_read_full { agent, turnId }: only the call's own turns
+function voiceCallTurnReadFull(ev) {   // turn_read_full { agent, turnId }: only the call's own turns, and only the latest one
   const vc = voiceCall; if (!vc || !ev || ev.agent !== vc.agent || !vc.callTurns.has(ev.turnId)) return;
+  const gate = typeof voiceReadFullGate === 'function' ? voiceReadFullGate(vc.readFull, { kind: 'event', turnId: ev.turnId }) : null;
+  if (!gate || gate.action !== 'set') return;
+  vc.readFull = gate.state;
   if (vc.call && typeof vc.call.onReadFull === 'function') vc.call.onReadFull();
 }
 function voiceCallAsk(ev) {
@@ -11183,7 +11222,7 @@ async function readStream(response, rec) {
     if (typeof simpleGatewayHook === 'function') simpleGatewayHook(rec, g);   // Simple: the consult line
     switch (g.type) {
       case 'context_health': noteCtxReading(rec.agent, g); break;
-      case 'voice_read_full': if (typeof voiceCallSseReadFull === 'function') voiceCallSseReadFull(rec); break;   // the person asked to hear the details: this reply is read in full
+      case 'voice_read_full': if (typeof voiceCallSseReadFull === 'function') voiceCallSseReadFull(rec, g.turnId); break;   // the person asked to hear the details: this reply is read in full
       case 'voice_mood': voiceCallSseMood(rec, g.mood); break;   // the agent's mood word, already stripped from the text
       case 'ask_user_question':
         rec.question = g;

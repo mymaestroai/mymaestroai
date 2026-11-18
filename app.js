@@ -11857,7 +11857,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
                 askFromStream(oc2, chatId);
                 continue;
               }
-              if (oc2.type === 'voice_read_full') { if (typeof voiceCallSseReadFull === 'function') voiceCallSseReadFull(chatId); continue; }   // the person asked to hear the details: this reply is read in full
+              if (oc2.type === 'voice_read_full') { if (typeof voiceCallSseReadFull === 'function') voiceCallSseReadFull(chatId, oc2.turnId); continue; }   // the person asked to hear the details: this reply is read in full
               if (oc2.type === 'voice_mood') { if (typeof voiceCallSseMood === 'function') voiceCallSseMood(chatId, oc2.mood); continue; }   // the agent's mood word, already stripped from the text
               // Session ID tracking
               if (oc2.type === 'session_id') {
@@ -13235,6 +13235,29 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (a.substantial) return { sentences, note: a.kind === 'list' ? VOICE_NOTE_LIST.trim() : a.kind === 'table' ? VOICE_NOTE_TABLE.trim() : a.kind === 'code' ? VOICE_NOTE_CODE.trim() : VOICE_NOTE_DETAILS_CALL.trim() };
       return { sentences: sentences.concat(a.sentences), note: '' };
     }
+    // The "read in full" flag belongs to ONE reply. Both pages keep gate = { set, turn, own } (set: a flag is on; turn: the hub turn id it was
+    // set for, null when the chunk carried none; own: the latest own turn id from turn_start) and ask this for every related event:
+    //   { kind: 'chunk', turnId }  the chat stream's voice_read_full (this page's own spoken send)  -> set, remember its turnId
+    //   { kind: 'event', turnId }  the hub's turn_read_full for the call's agent                     -> set only when turnId is the latest own turn
+    //   { kind: 'start', turnId }  an own turn_start, typed or spoken                                 -> remember it; a flag for ANOTHER turn is cleared
+    // (a flag for the same turn stays: the chat-stream chunk may come before the hub's turn_start). Returns { state, action: 'set' | 'reset' | 'ignore' }.
+    // Pure: the caller stores state and calls call.onReadFull() on 'set' and call.resetReadFull() on 'reset'.
+    function voiceReadFullGate(state, ev) {
+      const s = state && typeof state === 'object' ? state : {};
+      const cur = { set: s.set === true, turn: s.turn === undefined ? null : s.turn, own: s.own === undefined ? null : s.own };
+      const id = ev && ev.turnId ? String(ev.turnId) : null;
+      switch (ev && ev.kind) {
+        case 'chunk': return { state: { set: true, turn: id, own: cur.own }, action: 'set' };
+        case 'event':
+          if (id && id === cur.own) return { state: { set: true, turn: id, own: cur.own }, action: 'set' };
+          return { state: cur, action: 'ignore' };
+        case 'start':
+          if (!id) return { state: cur, action: 'ignore' };
+          if (cur.set && cur.turn !== id) return { state: { set: false, turn: null, own: id }, action: 'reset' };
+          return { state: { set: cur.set, turn: cur.turn, own: id }, action: 'ignore' };
+        default: return { state: cur, action: 'ignore' };
+      }
+    }
     function voiceCreateCall(deps) {
       const d = deps || {};
       const ui = Object.assign({ state() {}, heard() {}, held() {}, toast() {}, summary() {}, level() {}, activity() {}, reply() {}, mic() {}, micLost() {} }, d.ui);   // ui.mic(info): the open microphone; ui.micLost(bool): it was lost / is back; ui.thinkingPulse(event) is optional; ui.reply(kind): 'start' | 'end' | 'drop' | 'resume' (a reply's boundaries, for the display's reaction)
@@ -13561,6 +13584,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         if (hadNote) queue = queue.filter(i => !(i.kind === 'reply' && i.note));
         if (lastText && ((doneSeen && lastDone) || !lastDone)) onReplyText(lastText, lastDone);
       }
+      // The page learned the flag belongs to an older reply (a typed turn started): clear it. Never touches the queue or what is being spoken.
+      function resetReadFull() { readFull = false; }
       // A tool activity of the running turn: shown silently (ui.activity); spoken only when the page's speakActivity() says so.
       function onActivity(item) {
         if (ended) return;
@@ -14169,7 +14194,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         settle();
       }
       return {
-        start, hangUp, release, wakeChanged, isStandby: () => standby, setMuted, isMuted: () => muted, interrupt, setPrefs, retryMic, setLinkLost, onSpeechBegin, onSpeechStart, onMisfire, onSpeechEnd, onReplyText, onReadFull, onActivity, onAsk, onAskDone, onHeld, onHeldDone, decide, setMode, onHubOwner, backgroundDone,
+        start, hangUp, release, wakeChanged, isStandby: () => standby, setMuted, isMuted: () => muted, interrupt, setPrefs, retryMic, setLinkLost, onSpeechBegin, onSpeechStart, onMisfire, onSpeechEnd, onReplyText, onReadFull, resetReadFull, onActivity, onAsk, onAskDone, onHeld, onHeldDone, decide, setMode, onHubOwner, backgroundDone,
         get background() { return bgWords.length > 0; },
         get state() { return state; }, get callId() { return callId; }, get mode() { return mode; }, get held() { return heldList.map(h => Object.assign({}, h)); },
       };
@@ -17050,7 +17075,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (typeof voiceRouteDone === 'function') voiceRouteDone();   // a sentence waiting for the first route goes on (it finds the call gone)
       for (const k of ['routeTrail', 'routeFirstTimer']) if (S[k]) { clearTimeout(S[k]); S[k] = null; }
       S.call = null; S.vad = null; S.thinking = null; S.keepAlive = null; S.focus = null; S.active = false; S.starting = false; S.chatId = null; S.agent = null;
-      S.own.clear(); S.hub.clear(); S.owner.clear(); S.hubEnded.clear(); S.asks.clear(); S.expecting = false;
+      S.own.clear(); S.hub.clear(); S.owner.clear(); S.hubEnded.clear(); S.asks.clear(); S.expecting = false; S.readFull = null;
       voiceDispEnd(false);   // a call that ended some other way: the display is let go at once (hang-up has already said goodbye)
       // Whatever way the call ended, nothing is left holding the microphone or a speaker: the VAD (mic tracks, processed stream,
       // AudioContext) and the thinking sound's context are let go here too; both are safe to stop twice.
@@ -17220,7 +17245,13 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       S.starting = false; S.active = true;
     }
     function voiceCallSseMood(chatId, mood) { const S = voiceCallS; if (S.call && S.chatId === chatId) voiceDispMood(S.sendSeq, mood); }
-    function voiceCallSseReadFull(chatId) { const S = voiceCallS; if (S.call && S.chatId === chatId && typeof S.call.onReadFull === 'function') S.call.onReadFull(); }
+    // The chat stream's voice_read_full for this page's own spoken send (turnId: the hub turn it belongs to, may be null). The flag belongs to that one reply (voiceReadFullGate).
+    function voiceCallSseReadFull(chatId, turnId) {
+      const S = voiceCallS;
+      if (!(S.call && S.chatId === chatId && typeof S.call.onReadFull === 'function')) return;
+      if (typeof voiceReadFullGate === 'function') S.readFull = voiceReadFullGate(S.readFull, { kind: 'chunk', turnId }).state;
+      S.call.onReadFull();
+    }
     // A turn the hub started runs (a scheduled task, a consultation, a job report ...) and none of the caller's own: his words are kept for his own turn (the controller's backgroundBusy).
     // Also false when this page streams a reply of its own (typed in this chat during the call) or an own turn of the call has not ended.
     const VOICE_HUB_OWNER_LATE_MS = 5000;   // a for_owner this soon after the turn ended still gives the cue
@@ -17265,7 +17296,12 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       switch (type) {
         case 'turn_start': {
           if (!ev.turnId) return;
-          if (ev.origin && ev.origin.kind === 'user') { S.own.set(ev.turnId, ''); voiceDisp.turnSeq.set(ev.turnId, S.sendSeq); if (voiceDisp.turnSeq.size > 64) voiceDisp.turnSeq.delete(voiceDisp.turnSeq.keys().next().value); }
+          if (ev.origin && ev.origin.kind === 'user') {
+            S.own.set(ev.turnId, ''); voiceDisp.turnSeq.set(ev.turnId, S.sendSeq); if (voiceDisp.turnSeq.size > 64) voiceDisp.turnSeq.delete(voiceDisp.turnSeq.keys().next().value);
+            // A new own turn (typed or spoken): a "read in full" flag left for an older reply must not uncap this one.
+            const g = typeof voiceReadFullGate === 'function' ? voiceReadFullGate(S.readFull, { kind: 'start', turnId: ev.turnId }) : null;
+            if (g) { S.readFull = g.state; if (g.action === 'reset' && typeof call.resetReadFull === 'function') call.resetReadFull(); }
+          }
           else S.hub.set(ev.turnId, (ev.origin && (ev.origin.label || ev.origin.from)) || hubOriginLabel(ev.origin));
           return;
         }
@@ -17309,7 +17345,11 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         }
         case 'ask_user_done': S.asks.delete(ev.request_id); call.onAskDone(ev.request_id); return;
         case 'turn_mood': if (S.own.has(ev.turnId)) voiceDispMood(voiceDisp.turnSeq.has(ev.turnId) ? voiceDisp.turnSeq.get(ev.turnId) : S.sendSeq, ev.mood); return;   // the agent's mood word for this turn (the same one the chat stream carries)
-        case 'turn_read_full': if (S.own.has(ev.turnId) && typeof call.onReadFull === 'function') call.onReadFull(); return;   // this reply must be read in full (the same signal the chat stream carries as voice_read_full)
+        case 'turn_read_full': {   // this reply must be read in full (the same signal the chat stream carries as voice_read_full): only for the latest own turn
+          const g = typeof voiceReadFullGate === 'function' ? voiceReadFullGate(S.readFull, { kind: 'event', turnId: ev.turnId }) : null;
+          if (g && g.action === 'set' && S.own.has(ev.turnId) && typeof call.onReadFull === 'function') { S.readFull = g.state; call.onReadFull(); }
+          return;
+        }
         // Events of another call (an earlier one this call replaced, or one on another device) carry another callId: ignored.
         case 'voice_held': if (ev.callId === call.callId && ev.item) call.onHeld(ev.item, !!ev.quiet); return;
         case 'voice_held_done': if (ev.callId === call.callId) call.onHeldDone(ev.id, ev.choice); return;

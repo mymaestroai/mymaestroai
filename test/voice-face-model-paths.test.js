@@ -14,7 +14,7 @@ const vm = require('node:vm');
 const { makeIsolatedInstall } = require('./helpers/isolated-install');
 const ISO = makeIsolatedInstall('voice-face-iso-');
 const L = (p) => require(path.join(ISO.lib, p));
-const { createMoodFilter, FACE_MOOD_NOTE, MOODS } = L('voice/mood');
+const { createMoodFilter, createReadTagFilter, FACE_MOOD_NOTE, MOODS } = L('voice/mood');
 
 const SRC = fs.readFileSync(path.join(__dirname, '../lib/sdk-chat.js'), 'utf8');
 
@@ -54,7 +54,7 @@ function stub() {
 }
 // The names of the face-view code itself must always resolve to the real thing, never to a stub: a name used outside its
 // scope (a ReferenceError in production) would otherwise be hidden by the stub.
-const VOICE_NAMES = ['voiceMood', 'emitText', 'emitReplyText', 'emitCodexText', 'flushMood', 'moodRound', 'createVoiceMood', 'voiceNoteFor', 'faceMoodFor', 'createMoodFilter', 'FACE_MOOD_NOTE'];
+const VOICE_NAMES = ['voiceMood', 'emitText', 'emitReplyText', 'emitCodexText', 'flushMood', 'moodRound', 'createVoiceMood', 'voiceNoteFor', 'faceMoodFor', 'createMoodFilter', 'createReadTagFilter', 'FACE_MOOD_NOTE'];
 const stubbed = new Set();
 function makeSandbox(explicit) {
   const store = Object.assign(Object.create(null), explicit);
@@ -119,6 +119,7 @@ function fakeRes() {
 }
 function loadHelpers(ctx, { calls, packs } = {}) {
   ctx.createMoodFilter = createMoodFilter;
+  ctx.createReadTagFilter = createReadTagFilter;
   ctx.FACE_MOOD_NOTE = FACE_MOOD_NOTE;
   ctx.voiceCall = calls || { onCall: () => true };
   ctx.facePacks = packs || { getPack: () => ({ manifest: { clips: [{ name: 'a', state: 'reaction' }] } }) };

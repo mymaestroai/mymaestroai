@@ -7,7 +7,7 @@ const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
 Object.assign(globalThis, require('../lib/ui-voice'));
-const { voiceCreateCall, voiceReplySentences } = require('../lib/ui-voice-call');
+const { voiceCreateCall, voiceReplySentences, voiceReadFullGate } = require('../lib/ui-voice-call');
 
 const tick = async (n = 6) => { for (let i = 0; i < n; i++) await Promise.resolve(); };
 function harness() {
@@ -200,12 +200,113 @@ test('onReadFull on a cut reply does not bring the reading back', async () => {
   assert.deepStrictEqual(h.spoken, ['Here are the steps.']);
 });
 
+test('resetReadFull clears the flag and touches nothing else', async () => {
+  const h = await started();
+  await h.say('details please');
+  h.call.onReadFull();
+  h.call.resetReadFull();
+  h.call.onReplyText(LONG, true);
+  await h.drain();
+  assert.ok(h.spoken.includes(NOTE), 'capped again after the reset: ' + JSON.stringify(h.spoken));
+  assert.strictEqual(h.spoken.length, 4);
+  // a reading in progress is not cut, queued items stay, and a reset with no flag is harmless
+  const g = await started();
+  await g.say('read it all');
+  g.call.onReadFull();
+  g.call.onReplyText(LONG, false);
+  await tick();
+  assert.deepStrictEqual(g.spoken, ['Here are the steps.']);
+  g.call.resetReadFull();
+  await tick();
+  assert.deepStrictEqual(g.log, [], 'no cancelSpeech');
+  assert.strictEqual(g.pend.length, 1, 'the sentence being spoken plays on');
+  const k = await started();
+  assert.doesNotThrow(() => { k.call.resetReadFull(); k.call.resetReadFull(); });
+  assert.strictEqual(typeof k.call.resetReadFull, 'function');
+});
+
+// ---- the one rule set both pages use: voiceReadFullGate ----
+
+test('gate: the chat-stream chunk before the hub turn_start of the same turn keeps the flag', () => {
+  let r = voiceReadFullGate(null, { kind: 'chunk', turnId: 'T2' });
+  assert.strictEqual(r.action, 'set'); assert.deepStrictEqual(r.state, { set: true, turn: 'T2', own: null });
+  r = voiceReadFullGate(r.state, { kind: 'start', turnId: 'T2' });
+  assert.strictEqual(r.action, 'ignore'); assert.strictEqual(r.state.set, true); assert.strictEqual(r.state.turn, 'T2'); assert.strictEqual(r.state.own, 'T2');
+  r = voiceReadFullGate(r.state, { kind: 'event', turnId: 'T2' });
+  assert.strictEqual(r.action, 'set');
+});
+
+test('gate: a typed turn after a details turn resets the flag', () => {
+  let s = voiceReadFullGate(null, { kind: 'start', turnId: 'T1' }).state;
+  s = voiceReadFullGate(s, { kind: 'event', turnId: 'T1' }).state;
+  assert.strictEqual(s.set, true);
+  const r = voiceReadFullGate(s, { kind: 'start', turnId: 'T2' });   // typed: no beginOwnTurn on the controller
+  assert.strictEqual(r.action, 'reset'); assert.deepStrictEqual(r.state, { set: false, turn: null, own: 'T2' });
+  assert.strictEqual(voiceReadFullGate(r.state, { kind: 'start', turnId: 'T3' }).action, 'ignore', 'nothing to clear');
+});
+
+test('gate: a flag remembered with a null turn id is cleared by the next own turn', () => {
+  let s = voiceReadFullGate(null, { kind: 'chunk', turnId: null }).state;
+  assert.deepStrictEqual(s, { set: true, turn: null, own: null });
+  assert.strictEqual(voiceReadFullGate(s, { kind: 'start', turnId: 'T1' }).action, 'reset');
+});
+
+test('gate: a late turn_read_full for an older turn, or for no own turn, is ignored', () => {
+  let s = voiceReadFullGate(null, { kind: 'start', turnId: 'T1' }).state;
+  s = voiceReadFullGate(s, { kind: 'start', turnId: 'T2' }).state;
+  for (const id of ['T1', 'T9', '', null, undefined]) {
+    const r = voiceReadFullGate(s, { kind: 'event', turnId: id });
+    assert.strictEqual(r.action, 'ignore', String(id)); assert.strictEqual(r.state.set, false);
+  }
+  assert.strictEqual(voiceReadFullGate(null, { kind: 'event', turnId: 'T1' }).action, 'ignore', 'no own turn seen yet');
+  assert.strictEqual(voiceReadFullGate(s, { kind: 'event', turnId: 'T2' }).action, 'set');
+});
+
+test('gate: odd input never throws and the state is never mutated', () => {
+  for (const [st, ev] of [[undefined, undefined], [null, null], ['x', {}], [{}, { kind: 'nope' }], [{ set: 1 }, { kind: 'start' }]]) {
+    const r = voiceReadFullGate(st, ev);
+    assert.strictEqual(r.action, 'ignore'); assert.strictEqual(r.state.set, false);
+  }
+  const s = Object.freeze({ set: true, turn: 'A', own: 'A' });
+  voiceReadFullGate(s, { kind: 'start', turnId: 'B' });
+  assert.deepStrictEqual(s, { set: true, turn: 'A', own: 'A' });
+});
+
+test('gate + controller: after a typed turn begins the flag is gone, so what is beyond the cap is held back again', async () => {
+  const BASE = 'One is here. Two is here. Three is here.\n\n- Four is here.\n';
+  const run = async (typedTurnStarts) => {
+    const h = await started();
+    await h.say('details please');
+    let gate = voiceReadFullGate(null, { kind: 'start', turnId: 'T1' }).state;
+    const apply = (ev) => { const r = voiceReadFullGate(gate, ev); gate = r.state; if (r.action === 'set') h.call.onReadFull(); else if (r.action === 'reset') h.call.resetReadFull(); };
+    apply({ kind: 'event', turnId: 'T1' });
+    h.call.onReplyText(BASE, false);
+    await h.drain();
+    assert.ok(h.spoken.includes('Four is here.'), 'flagged: read beyond the cap ' + JSON.stringify(h.spoken));
+    if (typedTurnStarts) apply({ kind: 'start', turnId: 'T2' });   // the person typed: a new own turn; the controller never saw beginOwnTurn
+    h.call.onReplyText(BASE + '- Five is here.\n- Six is here.\n', false);
+    await h.drain();
+    apply({ kind: 'event', turnId: 'T1' });   // a late event for the older turn changes nothing
+    return { spoken: h.spoken, gate };
+  };
+  const kept = await run(false);
+  assert.ok(kept.spoken.includes('Five is here.'), 'control: the flag still reads on');
+  const reset = await run(true);
+  assert.ok(!reset.spoken.includes('Five is here.') && !reset.spoken.includes('Six is here.'), 'the reset reply is capped: ' + JSON.stringify(reset.spoken));
+  assert.strictEqual(reset.gate.set, false);
+});
+
 // ---- the pages ----
 
-test('the pages wire voice_read_full and turn_read_full next to the mood ones', () => {
+test('the pages wire voice_read_full and turn_read_full through the same gate', () => {
   const app = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
   const mob = fs.readFileSync(path.join(__dirname, '..', 'mobile.js'), 'utf8');
-  assert.ok(/oc2\.type === 'voice_read_full'/.test(app) && /addEventListener\('turn_read_full'/.test(app) && /case 'turn_read_full': if \(S\.own\.has\(ev\.turnId\)/.test(app));
-  assert.ok(/case 'voice_read_full':/.test(mob) && /on\('turn_read_full'/.test(mob) && /ev\.agent !== vc\.agent \|\| !vc\.callTurns\.has\(ev\.turnId\)/.test(mob.slice(mob.indexOf('function voiceCallTurnReadFull'))));
-  assert.ok(/onReadFull/.test(app) && /onReadFull/.test(mob));
+  assert.ok(/voiceCallSseReadFull\(chatId, oc2\.turnId\)/.test(app) && /addEventListener\('turn_read_full'/.test(app) && /case 'turn_read_full': \{/.test(app));
+  assert.ok(/voiceCallSseReadFull\(rec, g\.turnId\)/.test(mob) && /on\('turn_read_full'/.test(mob) && /ev\.agent !== vc\.agent \|\| !vc\.callTurns\.has\(ev\.turnId\)/.test(mob.slice(mob.indexOf('function voiceCallTurnReadFull'))));
+  for (const [name, src] of [['app', app], ['mobile', mob]]) {
+    assert.ok(/onReadFull/.test(src), name);
+    for (const kind of ['chunk', 'event', 'start']) assert.ok(new RegExp("voiceReadFullGate\\([^\\n]*kind: '" + kind + "'").test(src), name + ' ' + kind);
+    assert.ok(/typeof (?:call|vc\.call)\.resetReadFull === 'function'/.test(src), name + ' guards resetReadFull');
+    assert.ok(/function voiceReadFullGate\(/.test(src) && /function resetReadFull\(\) \{ readFull = false; \}/.test(src), name);
+  }
 });
