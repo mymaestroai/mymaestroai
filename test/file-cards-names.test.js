@@ -47,15 +47,40 @@ test('candidatesFrom: with opts.agent a code span holding just a file name is { 
   assert.notStrictEqual(H.keyOf({ name: 'a.txt', agent: 'sam' }), H.keyOf({ name: 'a.txt', agent: 'sam2' }));
 });
 
-test('candidatesFrom: links first, then code spans in order (paths and names together), de-duplicated, capped at 12', () => {
+test('candidatesFrom: links first, then full paths, then bare names (each in order), de-duplicated, capped at 12', () => {
   const out = H.candidatesFrom(msg([a('/api/files/download?agent=sam&path=out.pdf')], [code('b file.txt'), code('/srv/x/c d.txt'), code('b file.txt')]), { agent: 'sam' });
-  assert.deepStrictEqual(out.map((c) => c.item), [{ path: 'out.pdf', agent: 'sam' }, { name: 'b file.txt', agent: 'sam' }, { abs: '/srv/x/c d.txt' }]);
+  assert.deepStrictEqual(out.map((c) => c.item), [{ path: 'out.pdf', agent: 'sam' }, { abs: '/srv/x/c d.txt' }, { name: 'b file.txt', agent: 'sam' }]);
   const many = Array.from({ length: 20 }, (_, i) => code(i % 2 ? `/srv/x/f ${i}.txt` : `n ${i}.txt`));
   const capped = H.candidatesFrom(msg([a('/srv/l1.txt')], many), { agent: 'sam' });
   assert.strictEqual(capped.length, 12);
   assert.deepStrictEqual(capped[0].item, { abs: '/srv/l1.txt' });
-  assert.deepStrictEqual(capped[1].item, { name: 'n 0.txt', agent: 'sam' });
-  assert.deepStrictEqual(capped[2].item, { abs: '/srv/x/f 1.txt' });
+  assert.deepStrictEqual(capped.slice(1, 11).map((c) => c.item.abs), [1, 3, 5, 7, 9, 11, 13, 15, 17, 19].map((i) => `/srv/x/f ${i}.txt`), 'every full path before any name');
+  assert.deepStrictEqual(capped[11].item, { name: 'n 0.txt', agent: 'sam' });
+});
+
+test('review r1: code-like spans (`console.log`, `res.json`) never crowd a real path out of the 12 slots', () => {
+  const noise = ['console.log', 'res.json', 'path.join', 'fs.readFile', 'app.use', 'el.style', 'x.map', 'arr.push', 'obj.keys', 'str.trim', 'req.body', 'node.js', 'more.css'].map((t) => code(t));
+  const out = H.candidatesFrom(msg([], noise.concat([code('/srv/share/sam/Bench Cut Files/out.pdf')])), { agent: 'sam' });
+  assert.strictEqual(out.length, 12);
+  assert.deepStrictEqual(out[0].item, { abs: '/srv/share/sam/Bench Cut Files/out.pdf' }, 'the real path is kept, first');
+});
+
+test('review r1: a bare name is never answered from the page cache (the file it means can change); full paths still are', async () => {
+  const answers = [[{ ok: true, name: 'part 1.tap', path: 'old/part 1.tap', size: 1, download: '/api/files/download?agent=sam&path=old%2Fpart%201.tap' }], [{ ok: false, error: 'not found' }]];
+  let calls = 0;
+  const fetchFn = async (u, o) => { const items = JSON.parse(o.body).items; calls++; const a1 = answers.shift() || items.map(() => ({ ok: false })); return { ok: true, json: async () => ({ ok: true, items: a1 }) }; };
+  const nameItem = { name: 'part 1.tap', agent: 'sam' };
+  const first = await H.resolveBatch(fetchFn, [nameItem]);
+  assert.strictEqual(first[0].ok, true);
+  const second = await H.resolveBatch(fetchFn, [nameItem]);   // a second file of that name appeared: the server now says no
+  assert.strictEqual(calls, 2, 'asked again');
+  assert.strictEqual(second[0].ok, false, 'no stale card for a name that is no longer unique');
+  // a full path is still cached for the page's life
+  const absAns = { ok: true, name: 'a.txt', path: 'a.txt', size: 1, download: '/api/files/download?agent=sam&path=a.txt' };
+  let absCalls = 0;
+  const f2 = async () => { absCalls++; return { ok: true, json: async () => ({ ok: true, items: [absAns] }) }; };
+  await H.resolveBatch(f2, [{ abs: '/srv/review-r1-unique/a.txt' }]); await H.resolveBatch(f2, [{ abs: '/srv/review-r1-unique/a.txt' }]);
+  assert.strictEqual(absCalls, 1);
 });
 
 // ── findByName ──
