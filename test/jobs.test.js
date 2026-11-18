@@ -509,6 +509,60 @@ describe('run_job: a job whose wrapper starts late (a busy computer) is neither 
     } finally { await removeWhenJobsGone(can.dataDir, can.runner); }
   });
 
+  // A stand-in systemctl first on PATH: it waits <dir>/delay seconds, then exits with the code in <dir>/answer.
+  function standInSystemctl() {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-jobs-systemctl-'));
+    fs.writeFileSync(path.join(dir, 'systemctl'), `#!/bin/sh\nsleep "$(cat '${dir}/delay')"\nexit "$(cat '${dir}/answer')"\n`, { mode: 0o755 });
+    const set = (delay, answer) => { fs.writeFileSync(path.join(dir, 'delay'), String(delay)); fs.writeFileSync(path.join(dir, 'answer'), String(answer)); };
+    const oldPath = process.env.PATH;
+    process.env.PATH = `${dir}:${oldPath}`;
+    return { set, restore: () => { process.env.PATH = oldPath; fs.rmSync(dir, { recursive: true, force: true }); } };
+  }
+
+  it('a systemctl that hangs never freezes the hub: the checks and stops run beside it', async () => {
+    const sc = standInSystemctl(); sc.set(1.5, 1);   // every call takes 1.5 s, then can't answer
+    const t = seeded({ id: 'aaaa0008', mode: 'systemd', unit: 'hub-job-test-never-hang', status: 'cancelling' });   // default checks
+    let last = Date.now(), worst = 0;
+    const beat = setInterval(() => { const n = Date.now(); worst = Math.max(worst, n - last); last = n; }, 20);
+    try {
+      t.runner.start();
+      await sleep(2500);   // several polls, each wanting is-active, and stop for the cancel
+      assert.ok(worst < 400, `the hub kept working (the longest pause was ${worst} ms)`);
+      assert.equal(t.runner.status('aaaa0008', 'trader').status, 'cancelling', 'still no proof either way');
+    } finally { clearInterval(beat); await removeWhenJobsGone(t.dataDir, t.runner); await sleep(1600); sc.restore(); }
+  });
+
+  it('while systemd cannot answer, the job carries a plain note in job_status and the jobs list; it clears when systemd answers', async () => {
+    const sc = standInSystemctl(); sc.set(0, 1);   // no user bus: systemctl exits 1 at once
+    const t = seeded({ id: 'aaaa0009', mode: 'systemd', unit: 'hub-job-test-never-note' });
+    t.runner.start();
+    try {
+      assert.ok(await until(() => !!t.runner.status('aaaa0009', 'trader').statusNote, 3000), 'the note appears');
+      assert.match(t.runner.status('aaaa0009', 'trader').statusNote, /^Status unknown: .*isn't answering/);
+      assert.equal(t.runner.list('trader').find(j => j.id === 'aaaa0009').statusNote, t.runner.status('aaaa0009', 'trader').statusNote);
+      assert.equal(t.runner.status('aaaa0009', 'trader').status, 'running');
+      t.runner._save();
+      assert.ok(!fs.readFileSync(path.join(t.dataDir, 'jobs', 'index.json'), 'utf8').includes('Status unknown'), 'a live observation: never saved');
+      sc.set(0, 0);   // systemd answers again: the scope is active
+      assert.ok(await until(() => !t.runner.status('aaaa0009', 'trader').statusNote, 3000), 'the note goes once systemd answers');
+      assert.equal(t.runner.list('trader').find(j => j.id === 'aaaa0009').statusNote, undefined);
+      assert.equal(t.runner.status('aaaa0009', 'trader').status, 'running');
+    } finally { await removeWhenJobsGone(t.dataDir, t.runner); sc.restore(); }
+  });
+
+  it('the note also goes when the job writes its pid while systemd still cannot answer (the pid decides from then on)', async () => {
+    const sc = standInSystemctl(); sc.set(0, 1);
+    const t = seeded({ id: 'aaaa000a', mode: 'systemd', unit: 'hub-job-test-never-pid' });
+    const wrapper = require('node:child_process').spawn('sleep', ['30'], { detached: true, stdio: 'ignore' });   // its own process group
+    t.runner.start();
+    try {
+      assert.ok(await until(() => !!t.runner.status('aaaa000a', 'trader').statusNote, 3000), 'the note appears');
+      fs.writeFileSync(path.join(t.dataDir, 'jobs', 'aaaa000a', 'pid'), String(wrapper.pid));   // the late wrapper starts
+      assert.ok(await until(() => !t.runner.status('aaaa000a', 'trader').statusNote, 3000), 'the note goes: systemd is no longer needed');
+      assert.equal(t.runner.status('aaaa000a', 'trader').status, 'running');
+    } finally { try { process.kill(-wrapper.pid, 'SIGKILL'); } catch {} await removeWhenJobsGone(t.dataDir, t.runner); sc.restore(); }
+  });
+
   // The default check against real systemd, where this process can make user scopes (not in a bare test environment).
   const { spawn, spawnSync } = require('node:child_process');
   const userScopes = (() => { try { return spawnSync('systemd-run', ['--user', '--scope', '--quiet', '--collect', 'true'], { stdio: 'ignore', timeout: 5000 }).status === 0; } catch { return false; } })();
@@ -519,11 +573,11 @@ describe('run_job: a job whose wrapper starts late (a busy computer) is neither 
     const t = seeded({ id: 'aaaa0004', mode: 'systemd', unit });   // started just now: well inside the start grace
     const job = t.runner.jobs.get('aaaa0004');
     try {
-      assert.ok(await until(() => t.runner.unitActive(`${unit}.scope`) === true, 3000), 'the scope is up');
+      assert.ok(await until(async () => (await t.runner.unitActive(`${unit}.scope`)) === true, 3000), 'the scope is up');
       Object.assign(job, { _childExited: true, _childCode: 0 });   // as after systemd-run has handed over to the scope
-      assert.equal(t.runner._alive(job), true, 'alive: no pid file, but its scope is active');
+      assert.equal(await t.runner._alive(job), true, 'alive: no pid file, but its scope is active');
       await ended;
-      assert.ok(await until(() => t.runner._alive(job) === false, 3000), 'dead once systemd confirms the scope is gone (not by the grace)');
+      assert.ok(await until(async () => (await t.runner._alive(job)) === false, 3000), 'dead once systemd confirms the scope is gone (not by the grace)');
     } finally { await ended; await removeWhenJobsGone(t.dataDir, t.runner); }
   });
 });
