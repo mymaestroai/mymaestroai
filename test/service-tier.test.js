@@ -414,7 +414,8 @@ test('parseSSEStream: a flex response is not cut at the Standard idle allowance'
 test('member cap: Standard for a member turn or a member agent origin, computed once for both paths', () => {
   const chat = read('lib/sdk-chat.js');
   assert.match(chat, /const memberTurn = !!\(trustedUserId && !trustedAdmin\);/);
-  assert.match(chat, /const memberOrigin = originFromMemberAgent\(\[turnOrigin && turnOrigin\.from, turnOrigin && turnOrigin\.by, turnOrigin && turnOrigin\.agent, consulted_by, turnOrigin && turnOrigin\.kind !== 'user' \? agent : null\], /);
+  // member origin (test/member-origin.test.js): what a member's turn starts carries member
+  assert.match(chat, /const memberOrigin = !!\(turnOrigin && turnOrigin\.member === true\) \|\| mailboxMember \|\| originFromMemberAgent\(\[turnOrigin && turnOrigin\.from, turnOrigin && turnOrigin\.by, turnOrigin && turnOrigin\.agent, consulted_by, turnOrigin && turnOrigin\.kind !== 'user' \? agent : null\], /);
   assert.match(chat, /const turnTier = \(memberTurn \|\| memberOrigin\) \? 'standard' : await agentTier\(agent\);/);
   const iCap = chat.indexOf("const turnTier = (memberTurn || memberOrigin)");
   assert.ok(iCap > 0 && iCap < chat.indexOf('if (codexCli.isCodexCliModel(agentModel)) {\n    // The gateway cannot call a subscription model'), 'computed before the routing branches');

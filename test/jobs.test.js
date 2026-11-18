@@ -295,7 +295,8 @@ describe('run_job: hub wiring', () => {
     assert.match(src, /if \(onReply\) onReply\(chunks\.join\(''\)\)/, 'the woken agent\'s reply is captured for the hand-back');
     assert.match(src, /consulted_by: coordinatorName \|\| undefined/, 'consultations carry the master');
     assert.equal((src.match(/consultedBy: consulted_by \|\| null/g) || []).length, 3, 'threaded to all three stream paths (gateway, Claude SDK, Codex CLI)');
-    assert.equal((src.match(/jobs\.runTool\(getJobRunner\(\), spec, agentName, args, \{ consultedBy \}\)/g) || []).length, 2, 'both tool paths pass it');
+    // member origin (test/member-origin.test.js): what a member's turn starts carries member
+    assert.equal((src.match(/jobs\.runTool\(getJobRunner\(\), spec, agentName, args, \{ consultedBy, member: isMemberTurn\(agentName\) \}\)/g) || []).length, 2, 'both tool paths pass it');
     assert.match(server, /getJobRunner\(\)\.start\(\)/);
     assert.match(server, /pathname === '\/api\/jobs' && req\.method === 'GET'/);
     assert.match(server, /pathname === '\/api\/jobs\/cancel' && req\.method === 'POST'/);
