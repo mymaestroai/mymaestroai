@@ -8,7 +8,7 @@ const os = require('os');
 const path = require('path');
 const vm = require('vm');
 const { createVoicePersonPrefs, handleInterruptReminderTool, NOT_ON_CALL, MAX_PEOPLE } = require('../lib/voice-person-prefs');
-const { createMoodFilter, READ_TAG, FACE_MOOD_NOTE } = require('../lib/voice/mood');
+const { createMoodFilter, createReadTagFilter, READ_TAG, FACE_MOOD_NOTE } = require('../lib/voice/mood');
 const { createHubEvents } = require('../lib/hub-events');
 
 const tmpFile = () => path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'vpp-')), 'voice-person-prefs.json');
@@ -157,6 +157,156 @@ test('voiceTurnCtx takes the person from the hub options only', () => {
   assert.equal(voiceTurnCtx({ moodStrip: 'true' }, {}).moodStrip, false);
 });
 
+test('voiceTurnCtx: a call turn keeps originKind user; a turn with no origin is not one and the tool refuses it', () => {
+  const { voiceTurnCtx } = sdkNotes();
+  const s = createVoicePersonPrefs({ file: tmpFile() });
+  const call = voiceTurnCtx({ moodStrip: true, voicePersonKey: 'sam', origin: { kind: 'user' } }, {});
+  assert.equal(call.originKind, 'user');
+  assert.match(handleInterruptReminderTool({ on: false, turn: call }, s), /^Done: I will no longer remind them/, 'a real call turn works');
+  for (const options of [{ moodStrip: true, voicePersonKey: 'sam' }, { moodStrip: true, voicePersonKey: 'sam', origin: null }, { moodStrip: true, voicePersonKey: 'sam', origin: {} }, undefined]) {
+    const c = voiceTurnCtx(options, {});
+    assert.equal(c.originKind, '', 'no origin: not user');
+    assert.equal(handleInterruptReminderTool({ on: true, turn: { ...c, moodStrip: true, personKey: 'sam' } }, s), NOT_ON_CALL);
+  }
+  assert.equal(voiceTurnCtx({ origin: { kind: 'schedule' } }, {}).originKind, 'schedule');
+  // handleChatStreamReserved hands the turn's origin (always set: the owner at a browser is { kind: 'user' }) to all three routes
+  assert.equal((SRC.match(/\n      origin: turnOrigin,\n      voice: !!voice,\n/g) || []).length, 3, 'Codex, Claude client, gateway');
+  assert.match(SRC, /: consulted_by \? \{ kind: 'consultation', from: consulted_by \} : \{ kind: 'user' \};/);
+});
+
+// ── the [details] tag anywhere in a reply ──
+function runAny(chunks, opts = {}) {
+  const tags = [];
+  const f = createReadTagFilter({ enabled: true, onTag: (t) => tags.push(t), ...opts });
+  let out = '';
+  for (const c of chunks) out += f.push(c);
+  out += f.finish();
+  return { out, tags };
+}
+// Every split into two chunks, and every split into three chunks, gives the same output and the same number of tags.
+function everySplit(text, expectOut, expectTags) {
+  const n = text.length;
+  const check = (chunks, label) => { const r = runAny(chunks); assert.equal(r.out, expectOut, label + ' ' + JSON.stringify(chunks)); assert.equal(r.tags.length, expectTags, label + ' tags ' + JSON.stringify(chunks)); };
+  check([text], 'whole');
+  for (let i = 0; i <= n; i++) check([text.slice(0, i), text.slice(i)], 'two');
+  for (let i = 0; i <= n; i++) for (let j = i; j <= n; j++) check([text.slice(0, i), text.slice(i, j), text.slice(j)], 'three');
+  const ch = runAny([...text]); assert.equal(ch.out, expectOut, 'char by char'); assert.equal(ch.tags.length, expectTags);
+}
+
+test('anyplace filter: [details] mid-reply is removed with the whitespace after it; onTag per tag', () => {
+  everySplit('[details] Remember, you can interrupt me any time.', 'Remember, you can interrupt me any time.', 1);
+  everySplit('Sure.\n\n[details] Remember, you can interrupt me.', 'Sure.\n\nRemember, you can interrupt me.', 1);
+  everySplit('Sure. [DETAILS]\n\n  First, one. [Details]Second.', 'Sure. First, one. Second.', 2);
+  everySplit('Done [details]', 'Done ', 1);
+  everySplit('x[details]y', 'xy', 1);
+  everySplit('[details]', '', 1);
+});
+
+test('anyplace filter: links and other bracket text are kept exactly, at every split', () => {
+  for (const t of ['See [details](http://x.test) now', 'See [Details][ref] now', '[details]: http://x.test', 'a [details]( b', 'a [details][', 'a [details]:',
+    '[detailsX] x', '[detail] x', '[details x] y', '[ details] z', '[detail', 'tail [', 'tail [detai', '[[details]]x', 'wiki [[details]] page', '[details', 'arr[0] and [1]', '[summary] text']) {
+    everySplit(t, t, 0);   // the tag inside double brackets is ordinary text too
+  }
+  // the decision is the one character after "]", also when it arrives alone in the next chunk
+  assert.deepEqual(runAny(['a [details]', '(http://x.test)']), { out: 'a [details](http://x.test)', tags: [] });
+  assert.deepEqual(runAny(['a [details]', ' next']), { out: 'a next', tags: ['details'] });
+  // a link and a real tag in one reply
+  everySplit('[details](u) then [details] go', '[details](u) then go', 1);
+});
+
+test('anyplace filter: holds at most 9 characters; finish() releases a held partial; nothing is lost', () => {
+  const f = createReadTagFilter({ enabled: true, onTag: () => {} });
+  assert.equal(f.push('abc [det'), 'abc ');
+  assert.equal(f.finish(), '[det', 'flush releases the partial');
+  assert.equal(f.finish(), '', 'nothing twice');
+  assert.equal(f.push('[details'), '');
+  assert.equal(f.push('x'), '[detailsx', 'the next chunk shows it is not the tag');
+  const g = createReadTagFilter({ enabled: true, onTag: () => {} });
+  for (const t of ['[', '[d', '[detail', '[details', 'x [', 'x [DETAIL']) {
+    const out = g.push(t); const held = g.finish();
+    assert.ok(t.length - out.length <= 9, t);
+    assert.equal(out + held, t, 'every character comes out: ' + t);
+  }
+  // a full tag held for its next character is released as the tag at finish(): removed, onTag once, and the filter keeps working
+  const tags = []; const h = createReadTagFilter({ enabled: true, onTag: (t) => tags.push(t) });
+  assert.equal(h.push('hi [details]'), 'hi ');
+  assert.equal(h.finish(), ''); assert.deepEqual(tags, ['details']);
+  assert.equal(h.push('  more'), 'more', 'the whitespace after a removed tag is still eaten');
+  assert.equal(h.push(' [details] again'), ' again'); assert.equal(tags.length, 2);
+});
+
+test('anyplace filter: disabled passes through byte for byte; a throwing onTag does not break the text; odd input', () => {
+  const d = createReadTagFilter({ enabled: false, onTag: () => assert.fail('no') });
+  assert.equal(d.push('[details] hi'), '[details] hi'); assert.equal(d.finish(), '');
+  assert.equal(createReadTagFilter().push('[details] hi'), '[details] hi');
+  assert.equal(runAny(['a [details] b'], { onTag: () => { throw new Error('x'); } }).out, 'a b');
+  assert.equal(createReadTagFilter({ enabled: true }).push('a [details] b'), 'a b', 'no onTag is fine');
+  const f = createReadTagFilter({ enabled: true, onTag: () => {} });
+  assert.equal(f.push(null), ''); assert.equal(f.push(undefined), ''); assert.equal(f.push(5), '5'); assert.equal(f.push(''), '');
+});
+
+test('anyplace filter: after the leading filter it covers the answer to an interjection (same turn)', () => {
+  // the leading filter has already passed (the turn began with ordinary text); the tag arrives later in the same turn
+  const tags = [];
+  const lead = createMoodFilter({ enabled: true, onTag: (t) => tags.push('lead:' + t) });
+  const any = createReadTagFilter({ enabled: true, onTag: (t) => tags.push('any:' + t) });
+  let out = '';
+  for (const c of ['Working on it. ', '[detai', 'ls] Remember, you can interrupt me any time. ', 'Step one.']) out += any.push(lead.push(c));
+  out += any.push(lead.finish()) + any.finish();
+  assert.equal(out, 'Working on it. Remember, you can interrupt me any time. Step one.');
+  assert.deepEqual(tags, ['any:details']);
+});
+
+// ── createVoiceMood (vm-extracted): one chunk with the turn id, nothing lost ──
+function voiceMoodCtx() {
+  const i = SRC.indexOf('function createVoiceMood('); assert.ok(i >= 0);
+  let d = 0; let j = SRC.indexOf(') {', i) + 2;
+  for (; j < SRC.length; j++) { if (SRC[j] === '{') d++; else if (SRC[j] === '}') { d--; if (!d) break; } }
+  const sent = [];
+  const ctx = { createMoodFilter, createReadTagFilter, sendSSE: (res, c) => sent.push(c), makeChunk: (t, model, gw) => ({ text: t, model, gateway: gw }) };
+  vm.createContext(ctx);
+  vm.runInContext(SRC.slice(i, j + 1) + '\nthis.createVoiceMood = createVoiceMood;', ctx);
+  return { make: (o) => ctx.createVoiceMood({ res: {}, model: 'm', ...o }), sent };
+}
+const gwOf = (sent, type) => sent.map(c => JSON.parse(JSON.stringify(c.gateway || {}))).filter(g => g.type === type);   // JSON: the objects come from the vm realm
+
+test('createVoiceMood: the read-full chunk carries the turn id and is sent at most once, from either filter', () => {
+  const { make, sent } = voiceMoodCtx();
+  const a = make({ enabled: true, turnId: 'ada-1' });
+  assert.equal(a.push('[details] First. '), 'First. ');
+  assert.equal(a.push('Then [details] again. '), 'Then again. ');
+  assert.equal(a.flush(), '');
+  assert.deepEqual(gwOf(sent, 'voice_read_full'), [{ type: 'voice_read_full', turnId: 'ada-1' }]);
+  sent.length = 0;
+  const b = make({ enabled: true, turnId: 't-2' });   // not at the start: the interjection's answer
+  assert.equal(b.push('Okay, '), 'Okay, ');
+  assert.equal(b.push('[details] Remember, you can interrupt me. Here.'), 'Remember, you can interrupt me. Here.');
+  assert.deepEqual(gwOf(sent, 'voice_read_full'), [{ type: 'voice_read_full', turnId: 't-2' }]);
+  sent.length = 0;
+  const c = make({ enabled: true });   // no turn id known (ephemeral / tiger): null
+  c.push('x [details] y');
+  assert.deepEqual(gwOf(sent, 'voice_read_full'), [{ type: 'voice_read_full', turnId: null }]);
+});
+
+test('createVoiceMood: split tag, links kept, flush releases a held partial, abort sends nothing, mood still works', () => {
+  const { make, sent } = voiceMoodCtx();
+  const a = make({ enabled: true, turnId: 'T' });
+  let out = ''; for (const ch of 'Hi. [Det' + 'ails]\n\nBody [details](u) end [det') out += a.push(ch);
+  assert.equal(out, 'Hi. Body [details](u) end ');
+  assert.equal(a.flush(), '[det', 'held partial released when the model call ends');
+  assert.equal(gwOf(sent, 'voice_read_full').length, 1);
+  sent.length = 0;
+  const ab = new AbortController(); ab.abort();
+  const b = make({ enabled: true, signal: ab.signal, turnId: 'T' });
+  assert.equal(b.push('a [details] b'), 'a b'); assert.equal(sent.length, 0, 'aborted: no signal, text still filtered');
+  const m = make({ enabled: true, turnId: 'T' });
+  assert.equal(m.push('[proud] Well done [details] x'), 'Well done x');
+  assert.equal(gwOf(sent, 'voice_mood').length, 1); assert.equal(gwOf(sent, 'voice_read_full').length, 1);
+  const off = make({ enabled: false, turnId: 'T' });
+  assert.equal(off.push('[details] a'), '[details] a'); assert.equal(off.flush(), '');
+  const idle = make({ enabled: true }); assert.equal(idle.flush(), '', 'nothing received: nothing held');
+});
+
 // ── the tool handler ──
 test('voice_interrupt_reminder handler: refusals change nothing; success saves', () => {
   const s = createVoicePersonPrefs({ file: tmpFile() });
@@ -182,7 +332,10 @@ test('the tool is wired in both builders and the policy, identity from the turn 
   assert.match(SRC, /const voicePersonKey = moodStrip \?[^\n]*trustedUserId[^\n]*: 'owner'\) : ''/);
   assert.equal((SRC.match(/\n      voicePersonKey,\n      interruptReminder,\n/g) || []).length, 3, 'gateway, Claude client, Codex');
   assert.match(SRC, /try \{ interruptReminder = voicePersonPrefs\.getVoicePersonPrefs\(\)\.interruptReminder\(voicePersonKey\) !== false; \} catch \{ interruptReminder = true; \}/);
-  assert.match(SRC, /onTag: \(\) => \{[\s\S]{0,160}type: 'voice_read_full'/);
+  assert.match(SRC, /const readFull = \(\) => \{[\s\S]{0,200}type: 'voice_read_full', turnId: turnId \|\| null/);
+  assert.match(SRC, /onTag: readFull \}\);\s*\n\s*const rf = createReadTagFilter\(\{ enabled: enabled === true, onTag: readFull \}\);/);
+  assert.equal((SRC.match(/createVoiceMood\(\{[^\n]*turnId: \(turnRegistry\.get\(agentName\) \|\| \{\}\)\.turnId \|\| null \}\)/g) || []).length, 3, 'gateway, Claude client, Codex');
+  assert.match(SRC, /extras\('voice_interrupt_reminder', !!\(voiceTurn && voiceTurn\.moodStrip === true\)\)/);
   assert.match(fs.readFileSync(path.join(__dirname, '..', 'lib', 'tool-policy.js'), 'utf8'), /HUB_WRITE_INSIDE = new Set\([^)]*'for_owner', 'voice_interrupt_reminder'/);
   // the handler never reads the tool input for identity
   assert.match(SRC, /handleInterruptReminderTool\(\{ on: args && args\.on, turn: voiceTurn \}/);
