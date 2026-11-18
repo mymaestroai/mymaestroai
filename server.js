@@ -1130,7 +1130,7 @@ async function handleHttpRequest(req, res) {
       // Call recordings: a signed-in admin sees the whole setting; everybody else (members, the hub's own service calls that agents' tools use) gets it without the allowed list. canDownload: is this caller on the list.
       const recView = { admin: access.isAdmin(req.hubUser) && !req.hubPendingTotp, userId: req.hubUser && !req.hubPendingTotp ? String(req.hubUser.id) : '' };
       const recordingsFor = require('./lib/recordings/settings').recordingsForViewer;
-      return jsonResponse(res, 200, { agents: agents.map(a => ({ ...stripVoice(a), ...(recView.admin ? {} : { envKeep: undefined }), recordings: recordingsFor(a, recView), keptOnBox: kept(a, hubSettings.getSetting), effortUltra: require('./lib/effort').ultraFor(a.model), ...(status[a.name] || idle) })) });
+      return jsonResponse(res, 200, { agents: agents.map(a => ({ ...stripVoice(a), ...(recView.admin ? {} : { envKeep: undefined }), recordings: recordingsFor(a, recView), keptOnBox: kept(a, hubSettings.getSetting), effortUltra: require('./lib/effort').ultraFor(a.model), tierOptions: require('./lib/tier').tiersFor(a.model), tierLabels: require('./lib/tier').labelsFor(a.model), ...(status[a.name] || idle) })) });
     }
 
     if (pathname === '/api/agents/status' && req.method === 'GET') {

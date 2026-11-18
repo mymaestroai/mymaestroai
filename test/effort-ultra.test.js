@@ -100,7 +100,8 @@ test('members never send Ultra: the server passes admin, the turn marks memberTu
   assert.match(server, /return handleChatStream\(body, res, \{ userId: [^\n]*accounts: hubAuth\.hasUsers\(\), admin: access\.isAdmin\(req\.hubUser\) \}\);/);
   const chat = read('lib/sdk-chat.js');
   assert.match(chat, /const trustedAdmin = !!\(ctx && typeof ctx === 'object' && ctx\.admin === true\);/);
-  assert.match(chat, /memberTurn: !!\(trustedUserId && !trustedAdmin\),/);
+  assert.match(chat, /const memberTurn = !!\(trustedUserId && !trustedAdmin\);/);
+  assert.match(chat, /\n      memberTurn,\n/, 'the Codex turn gets it');
   assert.match(chat, /if \(codexEffort === 'ultra' && \(options\.memberTurn \|\| options\.simpleTurn \|\| options\.memberOrigin\)\) codexEffort = 'max';/);
   assert.match(chat, /let codexEffort = options/);
 });
@@ -198,5 +199,5 @@ test('a hub turn set off by a member\'s agent (consult, queued task, schedule, r
 test('the Codex turn caps Ultra for member-agent origins too (consults, queued tasks, schedules, reports)', () => {
   const chat = read('lib/sdk-chat.js');
   assert.match(chat, /if \(codexEffort === 'ultra' && \(options\.memberTurn \|\| options\.simpleTurn \|\| options\.memberOrigin\)\) codexEffort = 'max';/);
-  assert.match(chat, /memberOrigin: originFromMemberAgent\(\[turnOrigin && turnOrigin\.from, turnOrigin && turnOrigin\.by, turnOrigin && turnOrigin\.agent, consulted_by, turnOrigin && turnOrigin\.kind !== 'user' \? agent : null\], /, 'a hub-started turn counts the agent it runs (job notices)');
+  assert.match(chat, /const memberOrigin = originFromMemberAgent\(\[turnOrigin && turnOrigin\.from, turnOrigin && turnOrigin\.by, turnOrigin && turnOrigin\.agent, consulted_by, turnOrigin && turnOrigin\.kind !== 'user' \? agent : null\], /, 'a hub-started turn counts the agent it runs (job notices)');
 });
