@@ -12239,6 +12239,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     const VOICE_DETAILS_NOTE = ' I have put the details in the chat.';
     // On a call the note names the kind of what was left out when it is clear (see voiceReplySentences in ui-voice-call.js).
     // The call offers to read what it left out (the agent reads it in full when asked); a reply read aloud without a call keeps the plain note above.
+    // Keep the offer as the "; just say if you'd like ..." ending: voicePlainNote (ui-voice-call.js) removes exactly that on a call the hub cannot verify.
     const VOICE_NOTE_DETAILS_CALL = ' The details are in the chat; just say if you\'d like to hear them.';
     const VOICE_NOTE_LIST = ' I\'ve put the full list in the chat; just say if you\'d like to hear it.';
     const VOICE_NOTE_TABLE = ' I\'ve put the table in the chat; just say if you\'d like to hear it.';
@@ -13206,6 +13207,11 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (a.substantial) return { sentences, note: a.kind === 'list' ? VOICE_NOTE_LIST.trim() : a.kind === 'table' ? VOICE_NOTE_TABLE.trim() : a.kind === 'code' ? VOICE_NOTE_CODE.trim() : VOICE_NOTE_DETAILS_CALL.trim() };
       return { sentences: sentences.concat(a.sentences), note: '' };
     }
+    // A call whose turns the hub cannot verify (its start answer says readDetails: false: an API caller with a service token)
+    // gets no read-in-full instructions, so its notes say only where the details are: "...in the chat." without the offer.
+    function voicePlainNote(note) {
+      return String(note == null ? '' : note).replace(/; just say if you'd like [^.]*\.$/, '.');
+    }
     // The "read in full" flag belongs to ONE reply. Both pages keep gate = { set, turn, own, past } (set: a flag is on; turn: the hub turn id it was
     // set for, null when the chunk carried none; own: the latest own turn id from turn_start; past: earlier own turn ids) and ask this for every related event:
     //   { kind: 'chunk', turnId }  the chat stream's voice_read_full (this page's own spoken send)  -> set for its turn, unless that turn is an EARLIER own turn
@@ -13247,6 +13253,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       let personSpeaking = false, speechEndAt = null, awaitingReply = false, cutSkip = false;
       let lastText = '', spokenCount = 0, noteSpoken = false, doneSeen = false, lastStatusAt = null;
       let readFull = false;   // the person asked to hear the details: this reply is read in full (onReadFull); reset where a new reply begins
+      let readOffer = true;   // the hub can read details on request for this call (start answer readDetails: false when it cannot): else the notes do not offer it
       let queue = [], current = null, speaking = false, gen = 0;
       let heldList = [], announceQueue = [], pendingAnnounce = null, pendingAsk = null;
       let hbTimer = null, pumpTimer = null, sttChain = Promise.resolve();
@@ -13546,7 +13553,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         }
         if (done) {
           if (recorder && !replyRecorded && lastText.trim()) { replyRecorded = true; quiet(() => d.recordReplyText(lastText)); }
-          if (!cutSkip && r.note && !noteSpoken) enqueue(r.note, 'reply', null, null, false, true);
+          if (!cutSkip && r.note && !noteSpoken) enqueue(readOffer ? r.note : voicePlainNote(r.note), 'reply', null, null, false, true);
           noteSpoken = true; awaitingReply = false; doneSeen = true;
           clearStill(); stopThinking(); quiet(() => ui.activity(''));
           if (!speaking) { maybeReplyEnd(); settle(); }
@@ -14105,7 +14112,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           })).catch((e) => { vadErr = e || new Error('no microphone'); });
         } catch (e) { vadErr = e || new Error('no microphone'); vadStarting = Promise.resolve(); }
         // The call's id comes with the answer; a hang-up while the server is still starting ends that call once the id is known.
-        startP = (async () => server.start(mode))().then((r) => { if (r && r.callId) callId = r.callId; return r; });
+        startP = (async () => server.start(mode))().then((r) => { if (r && r.callId) callId = r.callId; if (r && r.readDetails === false) readOffer = false; return r; });
         let startRes;
         try { startRes = await startP; } catch (e) { await vadStarting; quiet(() => vad.stop()); return fail('Could not start the call: ' + (e && e.message || e)); }
         await vadStarting;
@@ -16900,7 +16907,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
             const id = r.call && r.call.callId;
             const g = rec || (r.recording ? voiceRecMake(agent, vad, { mic: 'processed' }, false) : null);   // the hub recorded it though this page did not expect that (an old agent list): "Not recording"
             if (g) { if (!rec) voiceCallS.rec = g; try { await g.started(r.recording, id); } catch { /* the call carries on without a recording */ } }   // the consent line is spoken before the call listens
-            return { callId: id, held: (r.call && r.call.held) || [] };
+            return { callId: id, held: (r.call && r.call.held) || [], ...(r.readDetails === false ? { readDetails: false } : {}) };   // readDetails false: the hub cannot read details on request for this caller
           },
           heartbeat: (callId) => voiceCallApi('/api/voice/call', { agent, action: 'heartbeat', callId }).then(
             r => ({ callId: r.call && r.call.callId, held: (r.call && r.call.held) || [] }),

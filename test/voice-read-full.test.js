@@ -7,7 +7,7 @@ const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
 Object.assign(globalThis, require('../lib/ui-voice'));
-const { voiceCreateCall, voiceReplySentences, voiceReadFullGate } = require('../lib/ui-voice-call');
+const { voiceCreateCall, voiceReplySentences, voiceReadFullGate, voicePlainNote } = require('../lib/ui-voice-call');
 
 const tick = async (n = 6) => { for (let i = 0; i < n; i++) await Promise.resolve(); };
 function harness() {
@@ -337,4 +337,41 @@ test('the pages wire voice_read_full and turn_read_full through the same gate', 
     assert.ok(/typeof (?:call|vc\.call)\.resetReadFull === 'function'/.test(src), name + ' guards resetReadFull');
     assert.ok(/function voiceReadFullGate\(/.test(src) && /function resetReadFull\(\) \{ readFull = false; \}/.test(src), name);
   }
+});
+
+// ---- a call the hub cannot verify does not offer to read the details (Maestro, 2026-11-18) ----
+
+test('voicePlainNote: the call notes without the offer', () => {
+  assert.strictEqual(voicePlainNote(VOICE_NOTE_DETAILS_CALL.trim()), 'The details are in the chat.');
+  assert.strictEqual(voicePlainNote(VOICE_NOTE_LIST.trim()), 'I\'ve put the full list in the chat.');
+  assert.strictEqual(voicePlainNote(VOICE_NOTE_TABLE.trim()), 'I\'ve put the table in the chat.');
+  assert.strictEqual(voicePlainNote(VOICE_NOTE_CODE.trim()), 'I\'ve put the code in the chat.');
+  assert.strictEqual(voicePlainNote(''), '');
+});
+
+async function noteAfterLongReply(startAnswer) {
+  const h = harness();
+  h.deps.server.start = async () => startAnswer;
+  h.call = voiceCreateCall(h.deps);
+  assert.strictEqual(await h.call.start(), true);
+  await h.say('what is the plan');
+  h.call.onReplyText('One is here. Two is here. Three is here. Four is here. Five is here.', true);
+  await h.drain();
+  return h.spoken[h.spoken.length - 1];
+}
+
+test('the call offers to read the details unless its start answer says readDetails: false', async () => {
+  assert.strictEqual(await noteAfterLongReply({ callId: 'c1', held: [], readDetails: true }), NOTE);
+  assert.strictEqual(await noteAfterLongReply({ callId: 'c1', held: [] }), NOTE, 'an answer without the field: as before');
+  assert.strictEqual(await noteAfterLongReply({ callId: 'c1', held: [], readDetails: false }), 'The details are in the chat.');
+});
+
+test('the start route says readDetails: false only for a service caller; both pages pass it to the controller', () => {
+  const routes = fs.readFileSync(path.join(__dirname, '..', 'lib', 'voice', 'routes.js'), 'utf8');
+  assert.match(routes, /jsonResponse\(res, 200, \{ ok: true, call: r, readDetails: !req\.hubService \}\)/);
+  assert.strictEqual((routes.match(/call: r, readDetails: true, recording:/g) || []).length, 2, 'a recorded call (never a service caller) can read');
+  const app = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
+  const mob = fs.readFileSync(path.join(__dirname, '..', 'mobile.js'), 'utf8');
+  assert.match(app, /return \{ callId: id, held: \(r\.call && r\.call\.held\) \|\| \[\], \.\.\.\(r\.readDetails === false \? \{ readDetails: false \} : \{\}\) \};/);
+  assert.match(mob, /return \{ callId: id, held: \(j\.call && Array\.isArray\(j\.call\.held\)\) \? j\.call\.held : \[\], \.\.\.\(j\.readDetails === false \? \{ readDetails: false \} : \{\}\) \};/);
 });
