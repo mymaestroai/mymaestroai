@@ -128,7 +128,7 @@ test('fallback wiring: both branches retry the round once at Max with the notice
   assert.match(chat, /\(r\.status === 'failed' \|\| rs\.turnError\) && codexUltraFallback\(\{ effort: codexEffort, sawOutput: rs\.sawOutput, error: rs\.turnError \|\| r\.error, already: ultraFellBack \}\)/);
   assert.match(chat, /\(result\.code !== 0 \|\| rs\.turnError\) && codexUltraFallback\(\{ effort: codexEffort, sawOutput: rs\.sawOutput, error: rs\.turnError \|\| result\.stderrTail, already: ultraFellBack \}\)/);
   assert.strictEqual((chat.match(/ultraFellBack = startUltraFallback\(/g) || []).length, 2);
-  assert.strictEqual((chat.match(/round--;\n\s+continue;/g) || []).length, 1, 'app-server: the same round runs again');
+  assert.strictEqual((chat.match(/round--;\n\s+continue;/g) || []).length, 2, 'app-server: the same round runs again (Ultra refused, and Fast refused: lib/tier)');
   assert.match(chat, /session\.close\(\); session = null;\n\s+round--;/, 'app-server: the retry runs on codex exec');
   // exec: retried in place at Max, BEFORE the resume check (a refusal must not throw away the stored thread)
   const fb = chat.indexOf('result = await runOnce();   // runOnce builds its arguments now, so it asks for Max');

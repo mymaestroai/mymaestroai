@@ -223,6 +223,7 @@ test('sendTiered: a 400 naming the tier falls back; an ordinary error is thrown;
     assert.strictEqual(f.calls.length, 1);
   } finally { f.restore(); }
   // refused on the Standard retry too: the error is thrown, never a third request
+  gw.tierRefused.clear();
   f = fakeFetch([{ status: 403, text: 'priority not allowed for this tier' }, { status: 403, text: 'priority not allowed for this tier' }]);
   try {
     await assert.rejects(gw.sendTiered({ url: 'http://x.invalid/c', headers: {}, body: { service_tier: 'priority' }, wireFor: (b) => b, tierInfo: info, model: GEMINI, retryOpts: { noRetries: true }, agent: 'sample' }), /Provider 403/);
@@ -234,6 +235,54 @@ test('sendTiered: a 400 naming the tier falls back; an ordinary error is thrown;
     assert.strictEqual(r.fallback, null); assert.strictEqual(f.calls.length, 1);
   } finally { f.restore(); }
 }));
+
+test('sendTiered: a model that refused a tier outright is asked on Standard directly next time; a capacity refusal is not remembered', logQuiet(async () => {
+  const gw = L('gateway-client');
+  gw.tierRefused.clear();
+  const info = { requested: 'fast', value: 'priority', flex: false };
+  const send = () => gw.sendTiered({ url: 'http://x.invalid/c', headers: {}, body: { service_tier: 'priority' }, wireFor: (b) => b, tierInfo: info, model: ROUTER, retryOpts: {}, agent: 'sample' });
+  let f = fakeFetch([{ status: 400, text: "service_tier 'priority' is not supported for this model" }, { status: 200 }]);
+  try { assert.strictEqual((await send()).fallback, 'fast'); assert.strictEqual(f.calls.length, 2); } finally { f.restore(); }
+  f = fakeFetch([{ status: 200 }]);
+  try {
+    const r = await send();
+    assert.strictEqual(r.fallback, 'fast', 'still reported, so the reply says it ran on Standard and the ledger books Standard');
+    assert.strictEqual(f.calls.length, 1, 'no refused request first');
+    assert.ok(!('service_tier' in f.calls[0]));
+  } finally { f.restore(); }
+  // an expired entry is forgotten
+  for (const k of gw.tierRefused.keys()) gw.tierRefused.set(k, Date.now() - 1);
+  f = fakeFetch([{ status: 200 }]);
+  try { assert.strictEqual((await send()).fallback, null); assert.strictEqual(f.calls[0].service_tier, 'priority'); } finally { f.restore(); }
+  // capacity (429) is passing: the next request asks for flex again
+  gw.tierRefused.clear();
+  const flex = { requested: 'economy', value: 'flex', flex: true };
+  const sendFlex = () => gw.sendTiered({ url: 'http://x.invalid/c', headers: {}, body: { service_tier: 'flex' }, wireFor: (b) => b, tierInfo: flex, model: OPENAI, retryOpts: {}, agent: 'sample' });
+  f = fakeFetch([{ status: 429, text: 'Resource unavailable for flex processing' }, { status: 200 }]);
+  try { assert.strictEqual((await sendFlex()).fallback, 'economy'); } finally { f.restore(); }
+  assert.strictEqual(gw.tierRefused.size, 0);
+  f = fakeFetch([{ status: 200 }]);
+  try { assert.strictEqual((await sendFlex()).fallback, null); assert.strictEqual(f.calls[0].service_tier, 'flex'); } finally { f.restore(); }
+}));
+
+test('tierFallback: a bare "priority" or "flex" in an unrelated error does not fall back', () => {
+  const f = tier.tierFallback;
+  assert.strictEqual(f({ tier: 'fast', status: 400, message: "Invalid schema for function 'task': properties.priority must have a type" }), false);
+  assert.strictEqual(f({ tier: 'economy', status: 404, message: 'The model flexcoder-2 does not exist' }), false);
+  assert.strictEqual(f({ tier: 'fast', status: 400, message: 'Unsupported parameter: service_tier' }), true);
+});
+
+test('codexTierFallback: Codex Fast refused before output falls back once; other errors and no Fast do not', () => {
+  const f = tier.codexTierFallback;
+  assert.strictEqual(f({ sent: 'fast', sawOutput: false, message: "unknown variant `fast` for service_tier", already: false }), true);
+  assert.strictEqual(f({ sent: 'fast', message: 'Fast mode is not available on your plan' }), true);
+  assert.strictEqual(f({ sent: 'fast', message: 'priority processing is not available' }), true);
+  assert.strictEqual(f({ sent: null, message: 'service_tier unsupported' }), false, 'nothing was sent');
+  assert.strictEqual(f({ sent: 'fast', sawOutput: true, message: 'service_tier unsupported' }), false);
+  assert.strictEqual(f({ sent: 'fast', already: true, message: 'service_tier unsupported' }), false);
+  assert.strictEqual(f({ sent: 'fast', message: "You've hit your usage limit" }), false);
+  assert.strictEqual(f({ sent: 'fast', message: 'stream disconnected before completion' }), false);
+});
 
 test('flex gets the 16-minute allowance, only flex; the other timings are untouched', () => {
   const gw = L('gateway-client');
@@ -284,7 +333,7 @@ test('member cap: Standard for a member turn or a member agent origin, computed 
   assert.match(chat, /await streamViaCodex\(agent, finalMessage, imagePaths, res, \{[^]*?memberTurn,[^]*?memberOrigin,\n      tier: turnTier,/, 'the Codex path gets it');
   assert.match(chat, /await streamViaGateway\(agent, finalMessage, imagePaths, res, \{[^]*?effort: turnEffortAsked,\n      tier: turnTier,/, 'the gateway path gets it');
   assert.match(chat, /effort: turnEffort, tier: tierNow \}/, 'the tool loop passes it to chatCompletionStream');
-  assert.match(chat, /const codexServiceTier = \(options\.memberTurn \|\| options\.memberOrigin\) \? null :/, 'Codex defends in depth');
+  assert.match(chat, /let codexServiceTier = \(options\.memberTurn \|\| options\.memberOrigin\) \? null :/, 'Codex defends in depth');
   assert.match(chat, /let tierNow = options\.tier \? tierLib\.normalize\(options\.tier\) : 'standard'/, 'a call with no tier (tiger-team and other internal calls) is Standard');
   assert.ok(!/simpleTurn[^\n]*tier|tier[^\n]*simpleTurn/.test(chat), 'Simple turns keep the agent tier (only members are capped)');
 });
@@ -311,6 +360,13 @@ test('Codex: buildArgs adds -c service_tier="fast" only for fast; threadParams a
   assert.ok(!as.threadParams({ ...base }).config || !('service_tier' in as.threadParams({ ...base }).config));
   const chat = read('lib/sdk-chat.js');
   assert.strictEqual((chat.match(/serviceTier: codexServiceTier/g) || []).length, 2, 'the app-server thread and the exec fallback');
+  // Codex refused Fast: one retry without it on both transports, before the resume retry; the reply says so
+  assert.strictEqual((chat.match(/tierFellBack = startTierFallback\(/g) || []).length, 2);
+  assert.match(chat, /const startTierFallback = \(why\) => \{\n\s+codexServiceTier = null;[\s\S]{0,200}emitCodexText\(tierLib\.fallbackNotice\('fast'\)/);
+  const exec = chat.indexOf('result = await runOnce();   // runOnce builds its arguments now, so it asks without Fast');
+  const resume = chat.indexOf('A stored thread that no longer resumes (deleted, other machine): start fresh once.', chat.indexOf('let result = await runOnce();'));
+  assert.ok(exec > 0 && resume > exec, 'the Fast retry comes before the resume retry');
+  assert.match(chat, /ok: true, tier: codexServiceTier \? 'fast' : null \}\); \} catch \{\}/, 'the ledger row records Fast');
 });
 
 // ── the ledger ──
