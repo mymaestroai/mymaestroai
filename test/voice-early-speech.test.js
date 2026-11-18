@@ -158,11 +158,22 @@ test('review r1: text glued straight onto a released sentence never reads the re
   h.call.onReplyText('Sure. Let me check.It', false);   // a route that joined the next text without a break (the hub adds one; a guard anyway)
   h.call.onReplyText('Sure. Let me check.It is sunny.', false);
   await h.finish();
-  assert.deepStrictEqual(h.spoken, ['Sure.', 'Let me check.'], 'no "Sure." again');
+  assert.deepStrictEqual(h.spoken, ['Sure.', 'Let me check.'], 'no "Sure." again; "It is sunny." waits for what follows it');
   h.call.onReplyText('Sure. Let me check.It is sunny. Bring a hat. ', false);
   await h.finish();
-  assert.deepStrictEqual(h.spoken.slice(0, 2), ['Sure.', 'Let me check.']);
-  assert.ok(!h.spoken.slice(2).includes('Sure.'), 'never from the start: ' + JSON.stringify(h.spoken));
+  h.call.onReplyText('Sure. Let me check.It is sunny. Bring a hat. ', true);
+  await h.finish(); await h.finish();
+  assert.deepStrictEqual(h.spoken, ['Sure.', 'Let me check.', 'It is sunny.', 'Bring a hat.'], 'every sentence once, none lost, never from the start');
+});
+
+test('review r2: a second tool start right after the first releases nothing more', async () => {
+  const h = await asked();
+  h.call.onReplyText('Let me check that for you.', false);
+  h.call.onActivity(TOOL);
+  h.call.onActivity(Object.assign({}, TOOL, { summary: 'weather today' }));   // tool_start, then tool_use with its input: both 'running'
+  h.call.onActivity({ kind: 'tool', tool: 'Read', status: 'running' });   // a second tool
+  await h.finish(); await h.finish();
+  assert.deepStrictEqual(h.spoken, ['Let me check that for you.']);
 });
 
 test('a new turn forgets the released text of the last one', async () => {

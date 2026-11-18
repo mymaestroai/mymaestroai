@@ -3970,7 +3970,15 @@ function voiceCreateCall(deps) {
   }
 
   const readWords = () => prefs().detailsReadWords;   // 'Read short extra parts aloud' (undefined: the default, 40)
-  function completeCount() { return voiceReplySentences(lastText, false, readWords()).sentences.length; }
+  // The reply text as it is spoken: after a sentence released at a tool (speakBeforeTool) a break is kept there, also when the text that
+  // follows was joined straight onto it, so the released sentence stays complete and the next one starts fresh. Speech only: lastText
+  // (saved and shown) is never changed.
+  function withToolBreak(t) {
+    if (toolBreakText === null || !t.startsWith(toolBreakText)) return t;
+    const rest = t.slice(toolBreakText.length);
+    return /^\s/.test(rest) ? t : toolBreakText + '\n' + rest;
+  }
+  function completeCount() { return voiceReplySentences(withToolBreak(lastText), false, readWords()).sentences.length; }
   // The whole reply is over, reported ONCE (ui.reply('end')) for the display's reaction: its text is complete AND nothing is read or waiting to be
   // read (so a gap between two sentences of a growing reply is not the end) AND the person is not speaking. With no speech (voice off, a failed
   // line) that is the moment the text is complete; otherwise right after the last line ended, before the call returns to listening.
@@ -3982,17 +3990,13 @@ function voiceCreateCall(deps) {
   // Reply text so far (markdown) and whether the turn is over: speaks the complete sentences that are new.
   function onReplyText(full, done) {
     if (ended) return;
-    full = String(full == null ? '' : full);
-    // The same text again after a tool started (a late or repeated update): it keeps the break that released its last sentence, so that
-    // sentence is not taken back (fewer sentences than spoken would read the reply again from the start).
-    if (!done && toolBreakText !== null && full === toolBreakText) full += '\n';
-    lastText = full; lastDone = !!done;
+    lastText = String(full == null ? '' : full); lastDone = !!done;
     if (!done) replyRecorded = false;   // a reply is being written: its text is saved once, when complete
     if (!done && !awaitingReply && !cutSkip) { awaitingReply = true; replyEnded = false; }
     if (!done) doneSeen = false;   // a reply being written: a done seen before belonged to an earlier one
-    const r = voiceReplySentences(lastText, !!done, readWords(), readFull);
+    const r = voiceReplySentences(withToolBreak(lastText), !!done, readWords(), readFull);
     // once a done was processed for this reply, a later one (the pref may have changed: fewer sentences) never lowers what was spoken;
-    // nor does text that goes on from a sentence released at a tool (it cannot be taken back: a reply is never read again from the start)
+    // nor does text that goes on from a sentence released at a tool (a guard: it cannot be taken back, and a reply is never read again from the start)
     const goesOn = toolBreakText !== null && lastText.startsWith(toolBreakText);
     if (!((doneSeen || goesOn) && r.sentences.length < spokenCount)) {
       if (r.sentences.length < spokenCount) spokenCount = 0;
@@ -4027,11 +4031,11 @@ function voiceCreateCall(deps) {
   // finishing) is no such boundary: the model may still be writing that sentence ("3." -> "3.5").
   function speakBeforeTool(item) {
     if (!item || item.kind !== 'tool' || item.status !== 'running') return;
-    if (!awaitingReply || cutSkip || lastDone || !lastText || /\s$/.test(lastText)) return;
+    if (!awaitingReply || cutSkip || lastDone || !lastText || /\s$/.test(lastText) || lastText === toolBreakText) return;
     const lastLine = lastText.slice(lastText.lastIndexOf('\n') + 1);
     if (!/[.!?]["')\]*_]*$/.test(lastText) || /^[ \t]*(?:[-*+•◦▪‣`~#|_=]+|\d+[.)]?)$/.test(lastLine)) return;
     toolBreakText = lastText;
-    onReplyText(lastText + '\n', false);
+    onReplyText(lastText, false);
   }
   // A tool activity of the running turn: shown silently (ui.activity); spoken only when the page's speakActivity() says so.
   function onActivity(item) {
