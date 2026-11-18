@@ -158,6 +158,33 @@ test('bash: the exact scripted command, a result, and the file with B', () => {
   assert.strictEqual(verify({ events: noBash }).actions['bash@home'].tried, false);
 });
 
+test('bash: a command that failed says how, in a box (MCP JSON or plain text) and on this computer', () => {
+  const home = FOLDERS.home;
+  const noBash = goodEvents().filter(e => !(e.tool === 'Bash' && e.input.command === SCRIPTED.home));
+  const files = goodFiles(); delete files[`${home}/bash.txt`];
+  const boxOut = '[stderr]\nOCI runtime exec failed: exec failed: unable to start container process: chdir to cwd failed: no such file or directory\n[exit code 127]';
+  // the hub's hands through MCP: the observer keeps the result as JSON
+  const mcp = JSON.stringify({ content: [{ type: 'text', text: boxOut }] });
+  let v = verify({ files, events: [...noBash, ...call('Bash', { command: SCRIPTED.home }, mcp)] });
+  assert.deepStrictEqual(failed(v), ['bash@home']);
+  assert.strictEqual(v.actions['bash@home'].reason, "The command failed in the agent's box (exit 127): OCI runtime exec failed: exec failed: unable to start container process: chdir to cwd failed: no such file or directory");
+  // the same text as a plain string (the gateway loop)
+  v = verify({ files, events: [...noBash, ...call('Bash', { command: SCRIPTED.home }, boxOut)] });
+  assert.match(v.actions['bash@home'].reason, /^The command failed in the agent's box \(exit 127\): OCI runtime exec failed/);
+  // on this computer: "Error (exit N): …"
+  v = verify({ files, events: [...noBash, ...call('Bash', { command: SCRIPTED.home }, `Error (exit 1): bash: ${home}/bash.txt: Permission denied`)] });
+  assert.strictEqual(v.actions['bash@home'].reason, `The command failed (exit 1): bash: ${home}/bash.txt: Permission denied`);
+  // a long first line is cut
+  v = verify({ files, events: [...noBash, ...call('Bash', { command: SCRIPTED.home }, `[stderr]\n${'x'.repeat(400)}\n[exit code 2]`)] });
+  assert.ok(v.actions['bash@home'].reason.length < 220);
+  // a command that ran fine but left no file keeps the plain reason
+  v = verify({ files, events: [...noBash, ...call('Bash', { command: SCRIPTED.home }, '(no output)')] });
+  assert.strictEqual(v.actions['bash@home'].reason, 'The tool ran, but the file was not changed as asked.');
+  // and a failed command never turns a pass into a failure: the file is what counts
+  v = verify({ events: [...noBash, ...call('Bash', { command: SCRIPTED.home }, boxOut)] });
+  assert.strictEqual(v.actions['bash@home'].ok, true);
+});
+
 test('refuse: a deny passes, an allow fails, a missing call fails as not tried', () => {
   const base = goodEvents().filter(e => !(e.input.file_path === REFUSE));
   assert.strictEqual(verify().actions.refuse.ok, true);
