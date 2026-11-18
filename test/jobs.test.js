@@ -12,17 +12,26 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 async function until(fn, ms = 8000, step = 50) { const t = Date.now(); while (Date.now() - t < ms) { if (await fn()) return true; await sleep(step); } return false; }
 // Remove a test's data folder only once every job it started has exited. A timeout or a cancel marks the job at once,
 // while its wrapper's TERM trap is still writing the exit code into the job's folder: removing it then can fail
-// (ENOTEMPTY) on a busy computer. Each wrapper leads its own process group (setsid) and writes its pid to <job>/pid.
+// (ENOTEMPTY) on a busy computer. Each wrapper leads its own process group (setsid) and writes its pid to <job>/pid;
+// a job the runners still count as started but without a pid yet (a late start) is waited for too. Never throws (it runs in
+// finally blocks and must not hide the test's own failure): after 15 s, groups still alive are ended, and the folder goes.
 async function removeWhenJobsGone(dataDir, ...runners) {
   for (const x of runners) x.stop();
   const jobs = path.join(dataDir, 'jobs');
-  const pids = [];
-  for (const id of (fs.existsSync(jobs) ? fs.readdirSync(jobs) : [])) {
-    try { const pid = parseInt(fs.readFileSync(path.join(jobs, id, 'pid'), 'utf8'), 10); if (pid > 1) pids.push(pid); } catch { /* no pid file: never started here */ }
-  }
+  // jobs these runners spawned whose child (the wrapper, in setsid mode) has not exited yet, whatever their status
+  const spawning = (id) => runners.some(x => { const j = x.jobs.get(id); return !!j && j._childExited === false && !j._spawnFailed; });
+  const ids = () => (fs.existsSync(jobs) ? fs.readdirSync(jobs) : []);
+  const pidOf = (id) => { try { return parseInt(fs.readFileSync(path.join(jobs, id, 'pid'), 'utf8'), 10) || null; } catch { return null; } };
   const groupAlive = (pid) => { try { process.kill(-pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
-  assert.ok(await until(() => !pids.some(groupAlive), 15000), 'every job of the test has exited');
-  fs.rmSync(dataDir, { recursive: true, force: true });
+  const waiting = () => ids().some((id) => { const pid = pidOf(id); return pid ? groupAlive(pid) : spawning(id) && !fs.existsSync(path.join(jobs, id, 'exit')); });
+  let done = await until(() => !waiting(), 15000);
+  if (!done) {   // a test left a job running: end its group, then wait for it again
+    for (const id of ids()) { const pid = pidOf(id); if (pid && groupAlive(pid)) { try { process.kill(-pid, 'SIGKILL'); } catch {} } }
+    done = await until(() => !waiting(), 3000);
+  }
+  if (!done) { console.error(`jobs test cleanup: a job under ${dataDir} would not end; the folder is kept`); return false; }
+  try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch (e) { console.error(`jobs test cleanup: ${e.message}`); }
+  return done;
 }
 
 function rig(extra = {}) {
@@ -368,5 +377,153 @@ describe('run_job for a sandboxed owner runs inside the container (review F05)',
     assert.equal(c.status, 'cancelling');
     assert.ok(await until(() => r.runner.status(j.id, 'trader').status === 'cancelled', 8000), 'cancelled');
     fs.rmSync(`/tmp/hub-job-${j.id}.pid`, { force: true });
+  });
+});
+
+describe('run_job: a job whose wrapper starts late (a busy computer) is neither lost nor left running by a cancel', () => {
+  // A bash that starts 0.6 s late: the wrapper writes its pid several polls (100 ms) after run() returned.
+  const slowBin = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-jobs-slowbash-'));
+  const realBash = ['/usr/bin/bash', '/bin/bash'].find(p => fs.existsSync(p));
+  fs.writeFileSync(path.join(slowBin, 'bash'), `#!${realBash}\nsleep 0.6\nexec ${realBash} "$@"\n`, { mode: 0o755 });
+  const slowEnv = () => ({ ...process.env, PATH: `${slowBin}:${process.env.PATH}` });
+  const groupAlive = (pid) => { try { process.kill(-pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
+  after(() => fs.rmSync(slowBin, { recursive: true, force: true }));
+
+  it('an ordinary job is not reported lost before its pid appears, and finishes', async () => {
+    const t = rig({ envFor: slowEnv }); t.runner.start();
+    try {
+      const j = await t.runner.run({ owner: 'trader', name: 'late', command: 'sleep 0.3; echo done' });
+      const seen = new Set();
+      assert.ok(await until(() => { const s = t.runner.status(j.id, 'trader').status; seen.add(s); return s !== 'running'; }, 8000));
+      assert.equal(t.runner.status(j.id, 'trader').status, 'finished', `statuses seen: ${[...seen].join(', ')}`);
+      assert.equal(t.runner.status(j.id, 'trader').exitCode, 0);
+    } finally { await removeWhenJobsGone(t.dataDir, t.runner); }
+  });
+
+  it('a job cancelled before its pid appears is stopped once it starts, and only then reported cancelled', async () => {
+    const t = rig({ envFor: slowEnv }); t.runner.start();
+    try {
+      const j = await t.runner.run({ owner: 'trader', name: 'late-cancel', command: 'sleep 30' });
+      assert.equal(t.runner.cancel(j.id, 'trader').status, 'cancelling');
+      assert.ok(await until(() => t.runner.status(j.id, 'trader').status === 'cancelled', 8000), 'cancelled');
+      const pidFile = path.join(t.dataDir, 'jobs', j.id, 'pid');
+      assert.ok(await until(() => fs.existsSync(pidFile), 3000), 'the late wrapper did start');
+      await sleep(300);   // room for a stop that came only after "cancelled"
+      assert.equal(groupAlive(parseInt(fs.readFileSync(pidFile, 'utf8'), 10)), false, 'its process is stopped, not left running');
+    } finally { await removeWhenJobsGone(t.dataDir, t.runner); }
+  });
+
+  it('a wrapper that dies before writing its pid is reported lost at once, not after the start grace', async () => {
+    const deadBin = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-jobs-deadbash-'));
+    fs.writeFileSync(path.join(deadBin, 'bash'), `#!${realBash}\nexit 1\n`, { mode: 0o755 });
+    const t = rig({ envFor: () => ({ ...process.env, PATH: `${deadBin}:${process.env.PATH}` }) }); t.runner.start();
+    try {
+      const j = await t.runner.run({ owner: 'trader', name: 'stillborn', command: 'echo never' });
+      assert.ok(await until(() => t.runner.status(j.id, 'trader').status === 'lost', 3000), 'lost within a few polls');
+    } finally { await removeWhenJobsGone(t.dataDir, t.runner); fs.rmSync(deadBin, { recursive: true, force: true }); }
+  });
+
+  // A job in the registry that never wrote a pid (its spawn never happened), seeded as the hub would have left it.
+  function seeded(job, extra = {}) {
+    const base = Date.now(); const clock = { offset: 0 };
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-jobs-'));
+    fs.mkdirSync(path.join(dataDir, 'jobs', job.id), { recursive: true });
+    const rec = { name: 'never', owner: 'trader', reportTo: null, command: 'true', cwd: dataDir, timeoutMinutes: 60, status: 'running', startedAt: new Date(base).toISOString(), endedAt: null, exitCode: null, mode: 'setsid', ...job };
+    fs.writeFileSync(path.join(dataDir, 'jobs', 'index.json'), JSON.stringify({ jobs: [rec], pending: [] }));
+    const t = rig({ dataDir, now: () => Date.now() + clock.offset, ...extra });
+    fs.rmSync(t.dataDir, { recursive: true, force: true });   // rig's own folder, unused here
+    return { ...t, dataDir, clock };
+  }
+
+  it('a job that never started is reported lost (or cancelled) only after the start grace', async () => {
+    const t = seeded({ id: 'aaaa0001' }); t.runner.start();
+    const c = seeded({ id: 'aaaa0002', status: 'cancelling' }); c.runner.start();
+    try {
+      await sleep(400);
+      assert.equal(t.runner.status('aaaa0001', 'trader').status, 'running', 'within the grace: not lost yet');
+      assert.equal(c.runner.status('aaaa0002', 'trader').status, 'cancelling');
+      t.clock.offset = 31000; c.clock.offset = 31000;
+      assert.ok(await until(() => t.runner.status('aaaa0001', 'trader').status === 'lost', 3000), 'lost after the grace');
+      assert.ok(await until(() => c.runner.status('aaaa0002', 'trader').status === 'cancelled', 3000), 'cancelled after the grace');
+    } finally { await removeWhenJobsGone(t.dataDir, t.runner); await removeWhenJobsGone(c.dataDir, c.runner); }
+  });
+
+  it('systemd mode: while the job has no pid file, its unit being active keeps it alive, at start-up and on every poll', async () => {
+    let active = true;
+    const unit = `hub-job-test-never-${require('node:crypto').randomBytes(4).toString('hex')}`;   // no such unit exists
+    const asked = [];
+    const t = seeded({ id: 'aaaa0003', mode: 'systemd', unit, timeoutMinutes: 600, startedAt: new Date(Date.now() - 3600000).toISOString() }, { unitActive: (u) => { asked.push(u); return active; } });
+    t.runner.start();
+    try {
+      assert.equal(t.runner.status('aaaa0003', 'trader').status, 'running', 'start-up: the unit is active');
+      await sleep(400);
+      assert.equal(t.runner.status('aaaa0003', 'trader').status, 'running', 'polls: the unit is active');
+      assert.ok(asked.length >= 2 && asked.every(u => u === `${unit}.scope`), 'asked about the scope systemd-run made, not a .service');
+      active = false;
+      assert.ok(await until(() => t.runner.status('aaaa0003', 'trader').status === 'lost', 3000), 'lost once the unit is gone (past the grace)');
+    } finally { await removeWhenJobsGone(t.dataDir, t.runner); }
+  });
+
+  it('systemd mode: after systemd-run has exited, only a confirmed missing scope ends a job without a pid; a check that cannot answer waits', async () => {
+    let answer = null;   // the user bus is unreachable, or systemctl timed out
+    const unit = `hub-job-test-never-${require('node:crypto').randomBytes(4).toString('hex')}`;
+    const t = seeded({ id: 'aaaa0005', mode: 'systemd', unit }, { unitActive: () => answer });
+    Object.assign(t.runner.jobs.get('aaaa0005'), { _childExited: true, _childCode: 0 });   // systemd-run handed over (setsid forked the wrapper away)
+    t.runner.start();
+    try {
+      await sleep(400);
+      assert.equal(t.runner.status('aaaa0005', 'trader').status, 'running', 'an unanswered check is not proof the job is gone');
+      t.clock.offset = 31000;   // past the start grace, still no answer
+      await sleep(400);
+      assert.equal(t.runner.status('aaaa0005', 'trader').status, 'running', 'not even after the start grace');
+      answer = true;   // the bus is back and the scope is there: the late wrapper is running
+      await sleep(300);
+      assert.equal(t.runner.status('aaaa0005', 'trader').status, 'running');
+      answer = false;   // systemctl: no such scope
+      assert.ok(await until(() => t.runner.status('aaaa0005', 'trader').status === 'lost', 3000), 'lost once systemd confirms the scope is gone');
+    } finally { await removeWhenJobsGone(t.dataDir, t.runner); }
+  });
+
+  it('systemd mode: a launch that failed (systemd-run exited above 0, no pid) ends at once, even when systemctl cannot answer', async () => {
+    const run = seeded({ id: 'aaaa0006', mode: 'systemd', unit: 'hub-job-test-never-run' }, { unitActive: () => null });
+    Object.assign(run.runner.jobs.get('aaaa0006'), { _childExited: true, _childCode: 1 });   // "Failed to connect to bus"
+    run.runner.start();
+    try {
+      assert.ok(await until(() => run.runner.status('aaaa0006', 'trader').status === 'lost', 3000), 'lost, not left running until its time limit');
+    } finally { await removeWhenJobsGone(run.dataDir, run.runner); }
+  });
+
+  it('systemd mode: a launcher ended by a signal is no proof (setsid may have forked already): the scope decides', async () => {
+    let answer = true;
+    const can = seeded({ id: 'aaaa0007', mode: 'systemd', unit: 'hub-job-test-never-can', status: 'cancelling' }, { unitActive: () => answer });
+    Object.assign(can.runner.jobs.get('aaaa0007'), { _childExited: true, _childCode: null });   // killed by a signal
+    can.runner.start();
+    try {
+      await sleep(400);
+      assert.equal(can.runner.status('aaaa0007', 'trader').status, 'cancelling', 'its scope is active: the wrapper may be in it');
+      answer = null;
+      await sleep(400);
+      assert.equal(can.runner.status('aaaa0007', 'trader').status, 'cancelling', 'no answer: still no proof');
+      answer = false;
+      assert.ok(await until(() => can.runner.status('aaaa0007', 'trader').status === 'cancelled', 3000), 'cancelled once systemd confirms the scope is gone');
+    } finally { await removeWhenJobsGone(can.dataDir, can.runner); }
+  });
+
+  // The default check against real systemd, where this process can make user scopes (not in a bare test environment).
+  const { spawn, spawnSync } = require('node:child_process');
+  const userScopes = (() => { try { return spawnSync('systemd-run', ['--user', '--scope', '--quiet', '--collect', 'true'], { stdio: 'ignore', timeout: 5000 }).status === 0; } catch { return false; } })();
+  it('systemd mode, real systemd: a job stored with its bare unit name is alive while its scope runs', { skip: !userScopes && 'no systemd user scopes here' }, async () => {
+    const unit = `hub-job-test-${require('node:crypto').randomBytes(4).toString('hex')}`;
+    const child = spawn('systemd-run', ['--user', '--scope', '--quiet', '--collect', `--unit=${unit}`, 'sleep', '3'], { stdio: 'ignore' });
+    const ended = new Promise((r) => child.on('exit', r));
+    const t = seeded({ id: 'aaaa0004', mode: 'systemd', unit });   // started just now: well inside the start grace
+    const job = t.runner.jobs.get('aaaa0004');
+    try {
+      assert.ok(await until(() => t.runner.unitActive(`${unit}.scope`) === true, 3000), 'the scope is up');
+      Object.assign(job, { _childExited: true, _childCode: 0 });   // as after systemd-run has handed over to the scope
+      assert.equal(t.runner._alive(job), true, 'alive: no pid file, but its scope is active');
+      await ended;
+      assert.ok(await until(() => t.runner._alive(job) === false, 3000), 'dead once systemd confirms the scope is gone (not by the grace)');
+    } finally { await ended; await removeWhenJobsGone(t.dataDir, t.runner); }
   });
 });
