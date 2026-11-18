@@ -7,7 +7,7 @@ const { billingOf } = require('../lib/billing');
 const SAME = 'Same vendor as the lead: a second opinion, not an outside view. Connect another provider to give it one.';
 const PER_USE = 'Billed per use through an API key.';
 const LOCAL_NOTE = 'Runs on the same local model as the lead: a second opinion from the same model, not an outside view.';
-const NO_CHEAPER = 'No cheaper model is known on the ways this install pays, so it uses the closest one there is.';
+const NO_CHEAPER = 'No model of the usual tier is known on the ways this install pays, so it uses the closest one there is.';
 const NO_FAST = 'No fast model found; it uses a mid-tier one.';
 
 const CASES = [
@@ -161,11 +161,12 @@ test('pickTeam: a name that is not a known tier gives the lead model and the no-
   assert.strictEqual(team.scout.note, NO_CHEAPER);
 });
 
-test('pickTeam: the newest model of a tier wins, and -latest beats a number', () => {
+// Review r1 (Sonnet): a -latest alias no longer beats every numbered version (an old alias could win over a newer model).
+test('pickTeam: the newest model of a tier wins', () => {
   const a = mt.pickTeam({ available: ['claude-sdk/claude-sonnet-4-5', 'claude-sdk/claude-sonnet-5-5'], lead: 'claude-sdk/default' });
   assert.strictEqual(a.builder.model, 'claude-sdk/claude-sonnet-5-5');
-  const b = mt.pickTeam({ available: ['claude-sdk/claude-sonnet-5-5', 'claude-sdk/claude-sonnet-latest'], lead: 'claude-sdk/default' });
-  assert.strictEqual(b.builder.model, 'claude-sdk/claude-sonnet-latest');
+  const b = mt.pickTeam({ available: ['claude-sdk/claude-sonnet-5-5', 'claude-sdk/claude-3-5-sonnet-latest'], lead: 'claude-sdk/default' });
+  assert.strictEqual(b.builder.model, 'claude-sdk/claude-sonnet-5-5');
 });
 
 test('pickTeam: the lead vendor is preferred within a rank', () => {
@@ -229,7 +230,9 @@ test('usable: noise prefixes and non-chat model kinds are refused', () => {
   assert.strictEqual(u('openai/gpt-6-audio'), false);
   assert.strictEqual(u('openai/gpt-realtime-2'), false);
   assert.strictEqual(u('openai/whisper-2'), false);
-  assert.strictEqual(u('ollama/llama-5-instruct'), false);
+  assert.strictEqual(u('ollama/llama-5-instruct'), true, 'review r1: a local instruct model is a chat model');
+  assert.strictEqual(u('openai/gpt-3.5-turbo-instruct'), false, 'OpenAI instruct ids are completion models');
+  assert.strictEqual(u('openrouter/auto'), false, 'no fixed model');
   assert.strictEqual(u('claude-sdk/default'), true);
   assert.strictEqual(u('codex-cli/gpt-6'), true);
 });
@@ -261,10 +264,9 @@ test('tierOf: names by vendor', () => {
   assert.strictEqual(t('openrouter/deepseek/deepseek-v4-small'), 'fast');
 });
 
-test('score: newer is higher and -latest beats a numbered version', () => {
+test('score: newer is higher', () => {
   assert.ok(mt.score('codex-cli/gpt-6') > mt.score('codex-cli/gpt-5.5'));
   assert.ok(mt.score('claude-sdk/claude-opus-5-5') > mt.score('claude-sdk/claude-opus-5'));
-  assert.ok(mt.score('claude-sdk/claude-sonnet-latest') > mt.score('claude-sdk/claude-sonnet-9-9'));
 });
 
 // A per-use lead with only an unknown-tier subscription model: the workers take the subscription model, never the
@@ -275,4 +277,45 @@ test('a lead on an API key with only claude-sdk/default on a subscription: worke
     assert.strictEqual(t[r].model, 'claude-sdk/default', r);
     assert.strictEqual(t[r].perUse, false, r);
   }
+});
+
+// Review r1 (GPT-6 and Sonnet BLOCKs and follow-ups).
+const WORKERS = ['scout', 'builder', 'researcher'];
+test('r1: a top-tier lead with a fast model reachable: the builders take the fast model, never the lead', () => {
+  const t = mt.pickTeam({ available: ['claude-sdk/claude-opus-5-5', 'claude-sdk/claude-haiku-5-5'], lead: 'claude-sdk/claude-opus-5-5' });
+  for (const r of WORKERS) assert.strictEqual(t[r].model, 'claude-sdk/claude-haiku-5-5', r);
+});
+test('r1: only top-tier models: no worker is created, and the note says why', () => {
+  const t = mt.pickTeam({ available: ['claude-sdk/claude-opus-5-5'], lead: 'claude-sdk/claude-opus-5-5' });
+  for (const r of WORKERS) { assert.strictEqual(t[r].model, null, r); assert.match(t[r].note, /not created/); }
+  assert.strictEqual(t.challenger.model, 'claude-sdk/claude-opus-5-5');
+});
+test('r1: an API-key lead with a local instruct model: the workers run locally, not per use', () => {
+  const t = mt.pickTeam({ available: ['anthropic/claude-haiku-5-5', 'anthropic/claude-opus-5-5', 'lmstudio/qwen-3-7b-instruct'], lead: 'anthropic/claude-sonnet-5-5' });
+  for (const r of WORKERS) { assert.strictEqual(t[r].model, 'lmstudio/qwen-3-7b-instruct', r); assert.strictEqual(t[r].perUse, false, r); }
+});
+test('r1: a text-only lead model is never picked', () => {
+  const t = mt.pickTeam({ available: ['claude-sdk/claude-opus-5-5'], lead: 'codex/gpt-6' });
+  for (const r of ['challenger', ...WORKERS]) assert.notStrictEqual(t[r].model, 'codex/gpt-6', r);
+  const e = mt.pickTeam({ available: [], lead: 'codex/gpt-6' });
+  for (const r of ['challenger', ...WORKERS]) assert.strictEqual(e[r].model, null, r);
+});
+test('r1: a same-vendor challenger prefers the subscription over a per-use key', () => {
+  const t = mt.pickTeam({ available: ['claude-sdk/claude-opus-5-5', 'anthropic/claude-opus-5-5'], lead: 'anthropic/claude-sonnet-5-5' });
+  assert.strictEqual(t.challenger.model, 'claude-sdk/claude-opus-5-5');
+});
+test('r1: another vendor on a subscription beats a stronger per-use model for the challenger', () => {
+  const t = mt.pickTeam({ available: ['claude-sdk/claude-sonnet-5-5', 'codex-cli/gpt-6', 'openai/gpt-6-pro'], lead: 'claude-sdk/claude-sonnet-5-5' });
+  assert.strictEqual(t.challenger.model, 'codex-cli/gpt-6');
+  assert.strictEqual(t.challenger.note, null);
+});
+test('r1: an unknown-tier model outranks a known small one for the challenger; a dated -pro is top', () => {
+  const t = mt.pickTeam({ available: ['openrouter/mistralai/mistral-large', 'openrouter/mistralai/mistral-small', 'claude-sdk/claude-sonnet-5-5'], lead: 'claude-sdk/claude-sonnet-5-5' });
+  assert.strictEqual(t.challenger.model, 'openrouter/mistralai/mistral-large');
+  assert.strictEqual(mt.tierOf('openai/gpt-5.2-pro-2025-12-11'), 'top');
+});
+test('r1: a local lead keeps every worker on its own model (no engine swap)', () => {
+  const t = mt.pickTeam({ available: ['ollama/qwen-4-70b', 'ollama/llama-5-8b', 'claude-sdk/claude-haiku-5-5'], lead: 'ollama/llama-5-8b' });
+  for (const r of WORKERS) assert.strictEqual(t[r].model, 'ollama/llama-5-8b', r);
+  assert.strictEqual(t.challenger.model, 'claude-sdk/claude-haiku-5-5');
 });
