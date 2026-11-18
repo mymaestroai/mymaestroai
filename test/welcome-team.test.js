@@ -188,7 +188,9 @@ test('help.html: the "Your team" section sits under Agents after "Create an agen
   const at = (s) => help.indexOf(s);
   assert.ok(at('<h3>Create an agent</h3>') < at('<h3>Your team</h3>') && at('<h3>Your team</h3>') < at('<h3>Change an agent</h3>') && at('<h3>Change an agent</h3>') < at('id="models"'));
   const sec = help.slice(at('<h3>Your team</h3>'), at('<h3>Change an agent</h3>'));
+  // Part 5: the Set up your team card sentence is part of the first paragraph, so the count stays 4.
   assert.strictEqual((sec.match(/<p>/g) || []).length, 4);
+  assert.ok(sec.includes('shows a one-time Set up your team card; to see it again, open your Maestro with ?team=setup at the end of its address.'));
   for (const s of ['starter team', 'Challenger', 'Scout', 'Builder', 'Researcher', 'asks the Challenger to check important work', 'A starter you delete is not set up again', 'Full, Light or Off in the More menu (Team guidance)']) assert.ok(sec.includes(s), s);
   assert.doesNotMatch(welcome + help, /\uFE0F/u);
 });
@@ -220,7 +222,8 @@ test('mymaestro team prints the four roles from the data folder and writes nothi
   const r2 = runTeam();
   assert.strictEqual(r2.status, 0, r2.stderr);
   for (const n of ['Challenger', 'Scout', 'Builder', 'Researcher']) assert.match(r2.stdout, new RegExp(`${n}: not set up`));
-  assert.match(r2.stdout, /To add them, ask your lead agent\./);
+  // Part 5: a finished setup with roles missing points at the Set up your team card (/?team=setup), not at the lead agent.
+  assert.match(r2.stdout, /To add them, open http:\/\/localhost:18999\/\?team=setup on this computer and choose Set up your team\./);
   assert.deepStrictEqual(snapshot(data), before2);
   assert.ok(!fs.existsSync(LEDGER), 'no ledger was made');
 });
