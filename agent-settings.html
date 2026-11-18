@@ -1581,7 +1581,15 @@
       const sbSel = document.getElementById('sandbox-mode'); if (sbSel) sbSel.value = agent?.sandbox || 'inherit';
       loadLockbox(agent);
       const toolsSel = document.getElementById('tools-mode'); if (toolsSel) toolsSel.value = agent?.tools || 'inherit';
-      const effSel = document.getElementById('effort-mode'); if (effSel) effSel.value = agent?.effort || 'default';
+      const effSel = document.getElementById('effort-mode');
+      if (effSel) {
+        // Ultra: only for a ChatGPT-plan (Codex) model whose catalog offers it; a stored Ultra the model no longer offers shows as Max.
+        let ultraOpt = effSel.querySelector('option[value="ultra"]');
+        if (agent?.effortUltra === true && !ultraOpt) { ultraOpt = document.createElement('option'); ultraOpt.value = 'ultra'; ultraOpt.textContent = 'Ultra (uses several helpers; uses much more of the ChatGPT plan)'; effSel.appendChild(ultraOpt); }
+        else if (agent?.effortUltra !== true && ultraOpt) ultraOpt.remove();
+        const want = agent?.effort || 'default';
+        effSel.value = want === 'ultra' && agent?.effortUltra !== true ? 'max' : want;
+      }
       loadCallDisplay(agent);
       loadVoiceDefaults(agent);
       loadVoiceRecord(agent);

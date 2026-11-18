@@ -7477,15 +7477,23 @@
     }
     function agentEffortOf(name) { const a = (AGENTS || []).find(x => x.name === name); return (a && a.effort) || 'default'; }
     function chatModelOf(chat) { if (chat.model) return chat.model; const a = (AGENTS || []).find(x => x.name === chat.agent); return (a && a.model) || ''; }
+    // Ultra (Codex: max reasoning plus helpers; uses much more of the ChatGPT plan) is offered only when the server says this agent's model takes it.
+    const EFFORT_ULTRA = ['ultra', 'Ultra (uses several helpers; uses much more of the ChatGPT plan)'];
+    function effortUltraOf(chat) { const a = (AGENTS || []).find(x => x.name === chat.agent); return !!(a && a.effortUltra === true); }
+    function effortLevelShown(chat) { const l = chat.effort || agentEffortOf(chat.agent); return l === 'ultra' && !effortUltraOf(chat) ? 'max' : l; }   // the server sends Max when the model has no Ultra
+    function effortOptionsHtml(chat) {
+      const level = effortLevelShown(chat);
+      return (effortUltraOf(chat) ? [...EFFORT_LEVELS, EFFORT_ULTRA] : EFFORT_LEVELS).map(([v, l]) => `<option value="${v}"${v === level ? ' selected' : ''}>${l}</option>`).join('');
+    }
     function effortPickHtml(chat, chatId) {
-      const level = chat.effort || agentEffortOf(chat.agent);
       const show = effortSupported(chatModelOf(chat)) && !chat.autoModel;
-      const opts = EFFORT_LEVELS.map(([v, l]) => `<option value="${v}"${v === level ? ' selected' : ''}>${l}</option>`).join('');
+      const opts = effortOptionsHtml(chat);
       return `<select class="model-pick effort-pick" id="effort-pick-${chatId}" aria-label="Reasoning effort" title="${isHubAdmin() ? 'How hard this agent thinks before answering. Higher = slower and uses more of the plan or API budget. Applies from the next turn.' : 'Reasoning effort, set by an admin.'}"${isHubAdmin() ? '' : ' disabled'}${show ? '' : ' hidden'} onchange="changeChatEffort('${chatId}', this.value)">${opts}</select>`;
     }
     function refreshEffortPick(chat) {
       const sel = document.getElementById(`effort-pick-${chat.id}`); if (!sel) return;
-      sel.value = chat.effort || agentEffortOf(chat.agent);
+      sel.innerHTML = effortOptionsHtml(chat);
+      sel.value = effortLevelShown(chat);
       sel.hidden = !effortSupported(chatModelOf(chat)) || !!chat.autoModel;
     }
     async function changeChatEffort(chatId, level) {

@@ -1,7 +1,7 @@
 'use strict';
 // OpenAI and Codex: the hub's "Max" (Advanced) / "Deepest" (Simple) reaches the model's own `max` where the model has
 // it; gpt-5.5 and gpt-5.5-pro stop at xhigh; gpt-5.5-pro takes nothing below medium (Low and Quick go up to medium);
-// Codex models follow the levels their own catalog lists. "ultra" is never sent.
+// Codex models follow the levels their own catalog lists. "ultra" is sent only where that catalog lists it.
 const { test } = require('node:test');
 const assert = require('node:assert');
 
@@ -81,15 +81,15 @@ test('family rules have version boundaries: gpt-60 or gpt-5.60 are not GPT-6 / G
   assert.strictEqual(e.forModel('openai/gpt-5.5-proto', 'low'), 'low');
 });
 
-test('ultra, none and minimal are never sent: no hub level maps to them', () => {
+test('none and minimal are never sent; ultra only where the catalog lists it (see effort-ultra.test.js)', () => {
   const e = fresh();
   e.setCodexLevels([{ id: 'gpt-6-astra', levels: ['none', 'minimal', 'low', 'max', 'ultra'] }]);
   for (const l of ['low', 'medium', 'high', 'xhigh', 'max', 'ultra', 'none', 'minimal']) {
     const v = e.forModel('codex-cli/gpt-6-astra', l);
-    assert.ok(v === null || ['low', 'medium', 'high', 'xhigh', 'max'].includes(v), l + ' -> ' + v);
-    assert.notStrictEqual(v, 'ultra');
+    assert.ok(v === null || ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(v), l + ' -> ' + v);
   }
-  assert.strictEqual(e.forModel('codex-cli/gpt-6-astra', 'ultra'), null, 'not a hub level: nothing');
+  assert.strictEqual(e.forModel('codex-cli/gpt-6-astra', 'ultra'), 'ultra', 'listed by the catalog: sent');
+  assert.strictEqual(e.forModel('codex-cli/gpt-6-astra', 'none'), null, 'not a hub level: nothing');
 });
 
 test('Claude and Gemini are unchanged', () => {

@@ -1130,7 +1130,7 @@ async function handleHttpRequest(req, res) {
       // Call recordings: a signed-in admin sees the whole setting; everybody else (members, the hub's own service calls that agents' tools use) gets it without the allowed list. canDownload: is this caller on the list.
       const recView = { admin: access.isAdmin(req.hubUser) && !req.hubPendingTotp, userId: req.hubUser && !req.hubPendingTotp ? String(req.hubUser.id) : '' };
       const recordingsFor = require('./lib/recordings/settings').recordingsForViewer;
-      return jsonResponse(res, 200, { agents: agents.map(a => ({ ...stripVoice(a), ...(recView.admin ? {} : { envKeep: undefined }), recordings: recordingsFor(a, recView), keptOnBox: kept(a, hubSettings.getSetting), ...(status[a.name] || idle) })) });
+      return jsonResponse(res, 200, { agents: agents.map(a => ({ ...stripVoice(a), ...(recView.admin ? {} : { envKeep: undefined }), recordings: recordingsFor(a, recView), keptOnBox: kept(a, hubSettings.getSetting), effortUltra: require('./lib/effort').ultraFor(a.model), ...(status[a.name] || idle) })) });
     }
 
     if (pathname === '/api/agents/status' && req.method === 'GET') {
@@ -1562,7 +1562,7 @@ async function handleHttpRequest(req, res) {
       // The owner's own message (same test as /api/chat below): lets connector_access be offered in this turn.
       if (body && typeof body === 'object') body.owner_turn = req.hubIdentKind === 'user' && !req.hubPendingTotp && !req.hubToken && !req.hubService && access.isAdmin(req.hubUser);
       // Identity comes only from the authenticated session (req.hubUser), never from the body.
-      return handleChatStream(body, res, { userId: (req.hubUser && req.hubUser.id) || null, service: !!req.hubService, accounts: hubAuth.hasUsers() });
+      return handleChatStream(body, res, { userId: (req.hubUser && req.hubUser.id) || null, service: !!req.hubService, accounts: hubAuth.hasUsers(), admin: access.isAdmin(req.hubUser) });
     }
 
     if (pathname === '/api/chat' && req.method === 'POST') {
