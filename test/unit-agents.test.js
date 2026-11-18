@@ -234,6 +234,50 @@ test('shared pool scoping (sharedPoolFor): infra and admin-owned agents see the 
   assert.ok(!g.includes('admin-topic') && !g.includes('member-topic'), 'unknown owner id is treated as its own (empty) pool');
 });
 
+// File mentions: every agent is told how to name a file so the chat shows a download card (lib/ui-file-card: a full path in
+// backticks), with its own real Files folder in the example.
+const ruleFor = (root) => [
+  'To give the person you work for a file to download:',
+  "- Save it in this folder (or a subfolder) first. Files in your workspace, /tmp or anywhere else can't be downloaded.",
+  `- Then name it by its full path, alone in backticks, for example \`${root}/Reports/Q3 summary.pdf\`. The chat turns each such path into a download card.`,
+  '- One file per path. Never a bare file name, a relative path, a folder on its own, or a shortened name.',
+  '- Several files: one full path per line (a full path in a table cell works too).',
+].join('\n');
+
+test('file mentions: an admin-side agent\'s Files folder section carries the rule with its own folder in the example', async () => {
+  const a = load({ agents: [{ name: 'fm1', model: 'claude-sdk/claude-opus-5' }] });
+  const root = path.join(a.root, 'share', 'fm1');
+  const out = await a.ag.loadAgentContext('fm1', 'hub');
+  assert.ok(out.includes(`## Files folder\n${root}\n`));
+  assert.ok(out.includes(ruleFor(root)), 'the rule, with this agent\'s folder');
+  assert.strictEqual(a.ag.fileMentionRule(root + '/'), ruleFor(root), 'a trailing slash is not doubled');
+  // the example path is one the chat cards: absolute, inside the folder, in a code span
+  assert.match(out, new RegExp('`' + root.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '/Reports/Q3 summary\\.pdf`'));
+});
+
+test('file mentions: a member\'s agent gets the rule with the member\'s own folder; a boxed agent the same host path (the box binds it there)', async () => {
+  const a = load({ agents: [{ name: 'kidfm' }, { name: 'boxfm', sandbox: 'container' }] });
+  const member = a.auth().createUser({ login: 'mfm@x.com', role: 'member' }).user;
+  await a.ag.updateAgentField('kidfm', { owner: member.id });
+  const memberRoot = path.join(a.root, 'users', member.id, 'files');
+  const k = await a.ag.loadAgentContext('kidfm', 'hub');
+  assert.ok(k.includes(ruleFor(memberRoot)), 'member folder in the rule');
+  assert.ok(!k.includes(path.join(a.root, 'share', 'kidfm')), 'never a folder the member can\'t download from');
+  const b = await a.ag.loadAgentContext('boxfm', 'hub');
+  assert.ok(b.includes(ruleFor(path.join(a.root, 'share', 'boxfm'))), 'a boxed agent: the host path');
+  // the box mounts every folder it gets at the same path, its own Files folder included, so the host path is also the path inside
+  const sb = fs.readFileSync(path.join(__dirname, '..', 'lib', 'sandbox.js'), 'utf8');
+  assert.match(sb, /for \(const m of mountsFor\(agent\)\) args\.push\('-v', `\$\{m\}:\$\{m\}`\);/);
+  assert.match(sb, /const files = path\.join\(HUB_HOME, 'share', String\(agent\.name\)\);\n\s+if \(fs\.existsSync\(files\)\) set\.add\(files\);/);
+});
+
+test('file mentions: the rule reaches every route through loadAgentContext (gateway, Claude client, Codex)', () => {
+  const sdk = fs.readFileSync(path.join(__dirname, '..', 'lib', 'sdk-chat.js'), 'utf8');
+  const calls = sdk.match(/await loadAgentContext\(agentName, 'hub'/g) || [];
+  assert.ok(calls.length >= 3, `gateway, SDK and Codex build their prompt with it (${calls.length})`);
+  assert.doesNotMatch(sdk, /loadAgentContext\([^)]*(lightweight|minimalContext): true/, 'no route asks for the short context that skips the Files folder');
+});
+
 test('updateAgentField: allowed fields only, normalisation of owner / sharedWith / blurb / policy / lead / contextBudget', async () => {
   const a = load({ agents: [{ name: 'u1', owner: 'u_1', blurb: 'old' }] });
   const get = () => a.readJson()[0];
