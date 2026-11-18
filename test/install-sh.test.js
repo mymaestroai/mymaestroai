@@ -213,6 +213,28 @@ test('a run that stops partway keeps every original; the next run moves the rest
   } finally { try { fs.chmodSync(plat, 0o644); } catch { /* gone */ } w.done(); }
 });
 
+// Review r3 (GPT-5.6 BLOCK): a run that stopped after the last package was moved and removed but before bin/codex was
+// linked leaves nothing in the old Node.js folder; the next run still links the saved package, with no download.
+test('a run that stopped just before linking: the next run links ~/.npm-global/bin/codex to the saved package', () => {
+  const w = nodeUpdateWorld({ withCodex: false, codexOutside: true });
+  const pre = path.join(w.home, '.npm-global');
+  const pkg = path.join(pre, 'lib', 'node_modules', '@openai', 'codex');
+  try {
+    fs.writeFileSync(path.join(pkg, 'package.json'), JSON.stringify({ name: '@openai/codex', bin: { codex: 'bin/codex.js' } }));
+    fs.mkdirSync(path.join(pkg, 'bin'));
+    fs.writeFileSync(path.join(pkg, 'bin', 'codex.js'), '#!/bin/sh\necho codex-saved\n', { mode: 0o755 });
+    const r = w.run();
+    assert.strictEqual(r.status, 0, r.stderr + r.stdout);
+    assert.strictEqual(fs.readlinkSync(path.join(pre, 'bin', 'codex')), '../lib/node_modules/@openai/codex/bin/codex.js');
+    assert.strictEqual(execFileSync(path.join(pre, 'bin', 'codex'), { encoding: 'utf8' }).trim(), 'codex-saved');
+    // a second run leaves the link as it is; a user's own file at that name is never replaced
+    fs.unlinkSync(path.join(pre, 'bin', 'codex'));
+    fs.writeFileSync(path.join(pre, 'bin', 'codex'), 'mine');
+    assert.strictEqual(w.run().status, 0);
+    assert.strictEqual(fs.readFileSync(path.join(pre, 'bin', 'codex'), 'utf8'), 'mine');
+  } finally { w.done(); }
+});
+
 // Review r1 (GPT-5.6 follow-up): the installer's own check step runs the install's codex-check with --repair --quiet,
 // says nothing when the command is not there yet (an older version), and never stops the install.
 test('check_codex runs codex-check --repair --quiet with the install\'s Node.js and goes on whatever it says', () => {
