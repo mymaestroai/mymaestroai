@@ -3351,12 +3351,13 @@ function voiceCeilingCurve(n) {
   }
   return curve;
 }
-// One chain per AudioContext: gain -> compressor -> trim -> ceiling curve -> analyser -> destination. Returns null when the context cannot build it.
+// One chain per AudioContext: gain -> compressor -> trim -> ceiling curve -> analyser -> destination; the thinking sound enters
+// through its own gain (thinkInput) in front of `gain`, held at the level it gets with a normalised voice (never above it). Returns null when the context cannot build it.
 function voiceCreateLoudness(ctx) {
   if (!ctx) return null;
   try { if (ctx.__voiceLoudness) return ctx.__voiceLoudness; } catch {}
   if (typeof ctx.createGain !== 'function' || typeof ctx.createDynamicsCompressor !== 'function') return null;
-  let gain, comp, trim, shaper = null, an = null, db = voiceLoudnessDb('louder'), buf = null;
+  let gain, comp, trim, shaper = null, an = null, db = voiceLoudnessDb('louder'), buf = null, think = null;
   try {
     gain = ctx.createGain();
     comp = ctx.createDynamicsCompressor();
@@ -3373,12 +3374,16 @@ function voiceCreateLoudness(ctx) {
     let last = trim;
     if (shaper) { last.connect(shaper); last = shaper; }
     if (an) { last.connect(an); an.connect(ctx.destination); } else last.connect(ctx.destination);
+    try { think = ctx.createGain(); think.connect(gain); } catch { think = null; }   // the thinking sound's input
   } catch { return null; }
   let levelName = 'louder', normalized = false;
-  const apply = () => { db = voiceLoudnessDb(levelName, normalized); try { gain.gain.value = Math.pow(10, db / 20); } catch {} };
+  // The thinking sound is set for a voice sent already normalised (X-Voice-Normalized): until a reply says so, the chain boosts as for
+  // an unknown voice, and its input is trimmed back to the normalised boost (a trim, never a boost).
+  const apply = () => { db = voiceLoudnessDb(levelName, normalized); try { gain.gain.value = Math.pow(10, db / 20); } catch {} try { if (think) think.gain.value = Math.pow(10, Math.min(0, voiceLoudnessDb(levelName, true) - db) / 20); } catch {} };
   apply();
   const chain = {
     input: gain,
+    thinkInput: think || gain,
     setLevel(name) { levelName = name; apply(); },
     setNormalized(flag) { normalized = !!flag; apply(); },
     get normalized() { return normalized; },
@@ -9034,6 +9039,8 @@ function voiceNoteNormalized(flag) {
   for (const ctx of voiceLoudCtxs()) { const c = ctx.__voiceLoudness; if (c && typeof c.setNormalized === 'function') { try { c.setNormalized(voiceNormFlag); } catch { /* gone */ } } }
 }
 function voiceOutNode(ctx) { const c = voiceLoudChain(ctx); return c ? c.input : ctx.destination; }
+// The thinking sound's way into the chain: its own input, held at the level it has with a normalised voice (voiceCreateLoudness).
+function voiceThinkNode(ctx) { const c = voiceLoudChain(ctx); return c ? (c.thinkInput || c.input) : ctx.destination; }
 function voiceLoudCtxs() { const a = voiceDisp.shared && voiceDisp.shared.ctx, b = voiceCall && voiceCall.thinkCtx; return [a, b && b !== a ? b : null].filter(Boolean); }
 function voiceLoudSync() {   // the chains follow the pref during a call and sit at 0 dB outside one
   const lv = voiceCall ? voiceLoudnessNow() : 'normal';
@@ -9588,7 +9595,7 @@ function voiceThinkingDeps(vc) {
       try {
         if (!vc.thinkCtx) { const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return; vc.thinkCtx = new AC(); }
         try { if (vc.thinkCtx.state === 'suspended') Promise.resolve(vc.thinkCtx.resume()).catch(() => {}); } catch { /* resumes later */ }
-        if (!vc.thinkSnd) vc.thinkSnd = voiceCreateThinkingSound({ ctx: vc.thinkCtx, volume: voiceThinkingVolume(), out: (c) => voiceOutNode(c) });
+        if (!vc.thinkSnd) vc.thinkSnd = voiceCreateThinkingSound({ ctx: vc.thinkCtx, volume: voiceThinkingVolume(), out: (c) => voiceThinkNode(c) });
         vc.thinkSnd.setVolume(voiceThinkingVolume());
         vc.thinkSnd.start();
         vc.thinkOn = true;
@@ -9602,7 +9609,7 @@ function voiceThinkingDeps(vc) {
       try {
         if (!vc.thinkCtx) { const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return; vc.thinkCtx = new AC(); }
         try { if (vc.thinkCtx.state === 'suspended') Promise.resolve(vc.thinkCtx.resume()).catch(() => {}); } catch { /* resumes later */ }
-        if (!vc.thinkSnd) vc.thinkSnd = voiceCreateThinkingSound({ ctx: vc.thinkCtx, volume: voiceThinkingVolume(), out: (c) => voiceOutNode(c) });
+        if (!vc.thinkSnd) vc.thinkSnd = voiceCreateThinkingSound({ ctx: vc.thinkCtx, volume: voiceThinkingVolume(), out: (c) => voiceThinkNode(c) });
         vc.thinkSnd.setVolume(voiceThinkingVolume());
         r = vc.thinkSnd.pulse(ev);
         if (r === false) return r;

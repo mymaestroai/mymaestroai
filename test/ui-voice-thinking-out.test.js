@@ -125,7 +125,7 @@ test('a wait: the first audible cluster 1000 ms after it starts, then one every 
   }
 });
 
-test('the pages send the thinking sound through the speech chain: voiceOutNode in both calls of voiceThinkingDeps (mobile.js) and voiceCallThinking (app.js)', () => {
+test('the pages send the thinking sound through the speech chain: voiceThinkNode in both calls of voiceThinkingDeps (mobile.js) and voiceCallThinking (app.js)', () => {
   const root = path.join(__dirname, '..');
   const body = (file, name) => {
     const src = fs.readFileSync(path.join(root, file), 'utf8'), i = src.indexOf('function ' + name + '(');
@@ -136,13 +136,13 @@ test('the pages send the thinking sound through the speech chain: voiceOutNode i
   const m = body('mobile.js', 'voiceThinkingDeps');
   const mc = m.match(/voiceCreateThinkingSound\(\{[^}]*\}\)/g) || [];
   assert.strictEqual(mc.length, 2, 'mobile.js: two sounds are made');
-  for (const c of mc) assert.ok(/out:\s*\(c\)\s*=>\s*voiceOutNode\(c\)/.test(c), 'mobile.js: ' + c);
+  for (const c of mc) assert.ok(/out:\s*\(c\)\s*=>\s*voiceThinkNode\(c\)/.test(c), 'mobile.js: ' + c);
   const srcA = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
   const i = srcA.indexOf('function voiceCallThinking('); assert.ok(i >= 0);
   const a = srcA.slice(i, i + 3500);
   const ac = a.match(/voiceCreateThinkingSound\(\{[^}]*\}\)/g) || [];
   assert.strictEqual(ac.length, 2, 'app.js: two sounds are made');
-  for (const c of ac) assert.ok(/out:\s*\(c\)\s*=>\s*voiceOutNode\(c\)/.test(c), 'app.js: ' + c);
+  for (const c of ac) assert.ok(/out:\s*\(c\)\s*=>\s*voiceThinkNode\(c\)/.test(c), 'app.js: ' + c);
 });
 
 test('stop then start: each run makes one master on out (asked once per run), the stopped one is not reconnected (review r1)', () => {
