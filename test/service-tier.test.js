@@ -288,6 +288,9 @@ test('tierFallback: a bare "priority" or "flex" in an unrelated error does not f
   assert.strictEqual(c({ sent: 'fast', message: 'property priority is allowed only for object schemas' }), false);
   assert.strictEqual(c({ sent: 'fast', message: 'Upgrade to Pro for fast mode and more usage' }), false, 'an upsell line that names fast mode');
   assert.strictEqual(c({ sent: 'fast', message: 'service_tier "fast" is not supported for this model' }), true);
+  // a refusal word must be a whole word ("unsupportedOperation" is a name, not a refusal)
+  assert.strictEqual(f({ tier: 'fast', status: 400, message: 'priority unsupportedOperation in tool schema' }), false);
+  assert.strictEqual(c({ sent: 'fast', message: 'priority unavailableField' }), false);
   // refusal before or after every tier word, with an adverb, contractions, across a line break
   for (const msg of ['This project does not support the requested tier', 'Priority processing is not currently available for this model',
     "Flex isn't available right now", "This key doesn't support priority", 'not enabled for this account:\nflex']) {
