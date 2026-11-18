@@ -640,7 +640,8 @@ function chatStandIn(a, { busy = new Set(), tasks = [], compaction = null } = {}
   const forgot = [];
   const st = { list: tasks,
     tasksOf: (n) => st.list.filter(t => t.agent === n).map(t => JSON.parse(JSON.stringify(t))),
-    action: (id, who, act) => { assert.deepStrictEqual([who, act], ['owner', 'delete']); st.list = st.list.filter(t => t.id !== id); },
+    // the owner's scheduler identity is '@owner' (test/owner-identity.test.js): deleting an agent deletes its tasks as the owner
+    action: (id, who, act) => { assert.deepStrictEqual([who, act], ['@owner', 'delete']); st.list = st.list.filter(t => t.id !== id); },
     retarget: (from, to) => { let n = 0; for (const t of st.list) if (t.agent === from) { t.agent = to; n++; } return n; } };
   const m = new Module(path.join(a.hub, 'lib', 'sdk-chat.js'));
   m.filename = m.id; m.loaded = true;
