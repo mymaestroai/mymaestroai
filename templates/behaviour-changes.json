@@ -1,8 +1,9 @@
 {
-  "_about": "Changes that alter how agents behave. A new install starts with each one on. An install that already has agents gets each new entry switched off and waiting for its owner's decision: its lead agent reviews the change for that install and explains it, and the owner turns it on or leaves it off on the /changes page. Add an entry here for any future change to agent behaviour; never switch one on for existing installs by itself.",
+  "_about": "Changes that alter how agents behave. A new install starts with each one on. An install that already has agents gets each new entry switched off and waiting for its owner's decision: its lead agent reviews the change for that install and explains it, and the owner turns it on or leaves it off on the /changes page, or asks the lead in their own message to do it (behaviour_change, only for entries with leadMay true). leadMay is false for anything about security or spending limits: only the owner switches those, on the page. Add an entry here for any future change to agent behaviour; never switch one on for existing installs by itself.",
   "changes": [
     {
       "id": "team-guidance",
+      "leadMay": true,
       "title": "Team advice in agents' instructions",
       "changes": "Adds a short \"running a team\" section to agents' instructions: when to do a job themselves and when to hand it to a worker, which kind of model suits which job, how to write a brief, and how to get a second opinion and a critical check from a different model. Lead agents get the full version, other agents a core version, small local models and members' agents a short one. Turning it on gives it to the lead and to agents created from then on; agents that already exist get it only when it is switched on for them one by one (agent settings, Team guidance).",
       "benefits": "Agents that hand out work do it more often and better: cheaper models for routine work, the strongest model kept for planning and hard reviews, important work checked by a second model before it is relied on.",
@@ -13,6 +14,7 @@
     },
     {
       "id": "starter-team",
+      "leadMay": true,
       "title": "A starter team: a Challenger and three workers",
       "changes": "Offers to create four agents: a Challenger that reviews important work adversarially, Scout for lookups and summaries, Builder for coding and multi-step work, Researcher for research and writing. They use cheaper models on the plans this install already pays for; the Challenger uses another company's model where one is connected. Turning it on shows a Set up your team card; nothing is created until the owner presses Create there. An agent name that is already taken is skipped.",
       "benefits": "The lead has ready workers to hand routine work to and a second model to check important work, without setting them up by hand.",
@@ -23,6 +25,7 @@
     },
     {
       "id": "member-worker-models",
+      "leadMay": false,
       "title": "A spending limit: members' temporary helpers use only the models members may choose",
       "changes": "This is a spending limit on family members' agents, not a change to your own agents. A member's agent can start temporary helpers for parts of a job. With this on, those helpers may run only on that agent's own model and the models the admin lets members choose for their own agents (the members' model list); any other model is refused. (The member limits on reasoning and speed apply to their helpers either way.) With it off, a member's temporary helpers may use any model this install reaches, as before.",
       "benefits": "Members can't spend the owner's money on models the admin didn't allow them, for example a top model billed per use.",
@@ -33,6 +36,7 @@
     },
     {
       "id": "worker-proposals",
+      "leadMay": true,
       "title": "The lead suggests new workers from how the install is used",
       "changes": "Once a week the lead looks at a summary of how agents were used in the past seven days (requests per agent and model, errors, temporary workers it keeps starting) and, when a pattern would be better served by a permanent worker or specialist, proposes one to the owner in plain words: its name, job, model and what it would save or improve. At most one short proposal at a time; it builds one only on the owner's yes. For members' agents it uses counts only, never their conversations.",
       "benefits": "Repeated work moves to the right agent and model over time instead of the lead redoing it, or a top model spending itself on routine jobs.",
@@ -43,6 +47,7 @@
     },
     {
       "id": "ask-lead-for-workers",
+      "leadMay": true,
       "title": "Primary agents ask the lead for workers they need",
       "changes": "Adds one line to primary agents' instructions: when they need a worker or a specialist they don't have, they ask the lead (by name) with the job, a proposed name and the model tier they think it needs; the lead decides with the owner. A member's main agent asks through its existing request to an admin instead, and a member's other agents ask that member's main agent; they never reach the admin's agents.",
       "benefits": "Gaps in the team surface to the lead and the owner instead of an agent struggling on its own.",
@@ -53,6 +58,7 @@
     },
     {
       "id": "work-check-ins",
+      "leadMay": true,
       "title": "Primary agents keep long work on track with check-ins",
       "changes": "When a primary agent starts or hands off work that will outlast its reply (a project another agent leads, a background job, a batch of workers, anything expected to take more than about 15 minutes), it schedules its own check-in: every 30 minutes by default, sooner for short jobs, less often for overnight work, and only one per piece of work. Each check-in reads the status cheaply, unblocks or answers what is waiting, tells you only about a decision you must make, a blocker or the finished work, and cancels itself when the work is done. Work that shows no progress across two check-ins is reported to you in plain words. The lead gets the full instructions, other primary agents a short version.",
       "benefits": "Long work doesn't quietly stall: someone looks at it on a schedule, unblocks it, and you hear about it when it matters, not all the time.",
@@ -63,6 +69,7 @@
     },
     {
       "id": "work-suggestions",
+      "leadMay": true,
       "title": "Primary agents suggest better ways of working",
       "changes": "When a primary agent sees a better way to get your kind of work done, it says so in one or two lines and asks: a specialist for a subject that keeps coming back, a dedicated lead agent for a long project so your main agent stays free, a batch of low-cost helpers for work that can run in parallel, a cheaper model or speed for routine jobs, a scheduled task instead of a manual repeat, a Record for facts it keeps asking for again, or anything else that would make things easier for you. At most one suggestion per topic and only when it is relevant; after a no it remembers and does not suggest it again; nothing is created without your yes, and new agents are built by the lead (a member's agent asks through its request to an admin).",
       "benefits": "Your agents get better at your work over time and point out savings you might not know about, without you having to know what is possible.",

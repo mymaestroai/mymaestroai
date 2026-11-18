@@ -47,7 +47,9 @@ test('scheduleReview: one task for the lead with the right prompt, and every pen
   assert.ok(p.length < 24000);
   assert.match(p, /brought 2 changes to how agents behave/);
   assert.match(p, /switched OFF on this install until its owner decides/);
-  assert.match(p, /You cannot switch any of them on yourself and must not claim you did/);
+  // item 11: the owner may ask the lead to switch a change; the review turn itself switches nothing
+  assert.match(p, /Switch nothing in this turn: you switch a change only when the owner asks you to in their own message, with the behaviour_change tool/);
+  assert.match(p, /Never claim you switched one when you did not/);
   assert.match(p, /Call for_owner once for this reply/);
   assert.match(p, /\[Decide\]\(\/changes#<id>\)/);
   assert.match(p, /\(id: team-guidance\)/); assert.match(p, /\(id: worker-proposals\)/);
@@ -126,7 +128,7 @@ test('the real lead lookup: the first admin-side lead; a member\'s flagged agent
 });
 
 // Seven entries' full text passed 8,000 characters: the hub's own tasks may hold 24,000 (scheduled-tasks HUB_MAX_PROMPT).
-test('reviewPrompt: under 24000 characters with huge facts, entry text is never cut; the instructions say the lead cannot switch them', () => {
+test('reviewPrompt: under 24000 characters with huge facts, entry text is never cut; the instructions say the lead switches nothing in this turn', () => {
   const entries = bc.manifest(MANIFEST);   // all five
   const agentLines = Array.from({ length: 400 }, (_, i) => `- agent_${i}: worker, model provider/some-long-model-name-${i}, owned by a member: no`);
   const facts = { agentLines, head: ['People: 1 admin(s), 3 member(s).', `Models members may choose for their agents: ${'m'.repeat(300)}.`], count: 400, usage: 'u'.repeat(3000) };
@@ -134,7 +136,7 @@ test('reviewPrompt: under 24000 characters with huge facts, entry text is never 
   assert.ok(p.length <= 24000, String(p.length));
   for (const e of entries) for (const k of ['title', 'changes', 'benefits', 'costs', 'check', 'on', 'off']) assert.ok(p.includes(e[k]), `${e.id}.${k}`);
   assert.match(p, /and \d+ more/);
-  assert.match(p, /You cannot switch any of them on yourself/);
+  assert.match(p, /Switch nothing in this turn/);
   for (const e of entries) assert.ok(p.includes(`(id: ${e.id})`));
   assert.match(p, /\[Decide\]\(\/changes#<id>\)/);
   // a plain string of facts is cut to fit too
