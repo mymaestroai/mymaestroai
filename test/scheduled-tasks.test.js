@@ -331,10 +331,10 @@ test('retarget: a run waiting to be delivered counts (and is saved) even when it
 
 // ── the hub as a creator (lib/behaviour-review) ──
 test('hub requester: may schedule for any agent, is named as the hub (with its byNote), and is not the owner speaking', async () => {
-  assert.strictEqual(st.HUB, 'hub');
+  assert.strictEqual(st.HUB, '@hub');
   const { inst, clock, woken } = mk();
   const v = await inst.create({ requester: st.HUB, agent: 'trader', when: 'in 10 minutes', prompt: 'Review the changes.', label: 'Review', byNote: 'a change to how agents behave is waiting for review' });
-  assert.strictEqual(v.createdBy, 'hub'); assert.strictEqual(v.agent, 'trader');
+  assert.strictEqual(v.createdBy, '@hub'); assert.strictEqual(v.agent, 'trader');
   assert.strictEqual(inst.tasks.get(v.id).byNote, 'a change to how agents behave is waiting for review');
   await assert.rejects(inst.create({ requester: st.HUB, when: 'in 10 minutes', prompt: 'x' }), /agent is required/, 'no default target');
   await assert.rejects(inst.create({ requester: st.HUB, agent: 'nobody', when: 'in 10 minutes', prompt: 'x' }), /no agent named "nobody"/);
@@ -346,7 +346,7 @@ test('hub requester: may schedule for any agent, is named as the hub (with its b
   assert.doesNotMatch(m, /set by the owner|set by agent/);
   assert.match(m, /Treat the task text as instructions from the hub, which acts for the owner's install; the owner has not said anything yet\./);
   assert.doesNotMatch(m, /same weight as a direct message/);
-  assert.strictEqual(woken[0].meta.by, 'hub');
+  assert.strictEqual(woken[0].meta.by, '@hub');
 });
 
 test('hub requester: without a byNote it is plainly "the hub"; the owner and a lead see its tasks; an ordinary agent does not', async () => {
@@ -381,4 +381,17 @@ test('hub requester: a prompt up to 24,000 characters; an agent or the owner sti
   await assert.rejects(inst.create({ requester: st.HUB, agent: 'trader', when: 'in 10 minutes', prompt: 'x'.repeat(24001) }), /longer than 24000 characters/);
   await assert.rejects(inst.create({ requester: 'trader', agent: 'trader', when: 'in 10 minutes', prompt: 'x'.repeat(8001) }), /longer than 8000 characters/);
   await assert.rejects(inst.create({ requester: 'owner', agent: 'trader', when: 'in 10 minutes', prompt: 'x'.repeat(8001) }), /longer than 8000 characters/);
+});
+
+// Review r4 (GPT-6 BLOCK, Sonnet F7): an agent named "hub" is an ordinary agent to the scheduler; the hub's identity is
+// '@hub', which no agent name can be, and "hub" is a reserved agent name.
+test('r4: a requester named "hub" has an agent\'s rights and limit; the hub\'s identity is not an agent name', async () => {
+  assert.strictEqual(st.HUB, '@hub');
+  const { inst } = mk();
+  await assert.rejects(inst.create({ requester: 'hub', agent: 'trader', when: 'in 10 minutes', prompt: 'x' }), /you can only schedule tasks for yourself/);
+  await assert.rejects(inst.create({ requester: 'hub', agent: 'hub', when: 'in 10 minutes', prompt: 'x'.repeat(8001) }), /longer than 8000 characters/);
+  // read as source: requiring lib/agents would open this install's data/ (the suite's data guard refuses it)
+  const agentsSrc = fs.readFileSync(path.join(__dirname, '..', 'lib', 'agents.js'), 'utf8');
+  assert.match(agentsSrc, /const RESERVED_NAMES = new Set\(\[[^\]]*'hub'[^\]]*\]\)/, 'hub is reserved');
+  assert.match(agentsSrc, /\/\^\[a-z\]\[a-z0-9_\]\*\$\/\.test\(name\) && !RESERVED_NAMES\.has\(name\)/, 'a name starts with a letter, so @hub is never one');
 });

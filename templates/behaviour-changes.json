@@ -56,7 +56,7 @@
       "title": "Primary agents keep long work on track with check-ins",
       "changes": "When a primary agent starts or hands off work that will outlast its reply (a project another agent leads, a background job, a batch of workers, anything expected to take more than about 15 minutes), it schedules its own check-in: every 30 minutes by default, sooner for short jobs, less often for overnight work, and only one per piece of work. Each check-in reads the status cheaply, unblocks or answers what is waiting, tells you only about a decision you must make, a blocker or the finished work, and cancels itself when the work is done. Work that shows no progress across two check-ins is reported to you in plain words. The lead gets the full instructions, other primary agents a short version.",
       "benefits": "Long work doesn't quietly stall: someone looks at it on a schedule, unblocks it, and you hear about it when it matters, not all the time.",
-      "costs": "A short turn of the agent's model at each check-in while work is running (with the default, two an hour per piece of work).",
+      "costs": "A short turn of the agent's model at each check-in while work is running (with the default, two an hour per piece of work), and about 150 words more in the lead's instructions (about 70 for other primary agents). Members' main agents get it too, on the models you allow them.",
       "check": "Whether agents here start long work (projects led by other agents, background jobs, batches of workers), whether they already schedule their own follow-ups, and whether the owner wants fewer or more updates.",
       "on": "Primary agents schedule and run check-ins on their long work.",
       "off": "Agents follow up only when they decide to on their own."
@@ -66,7 +66,7 @@
       "title": "Primary agents suggest better ways of working",
       "changes": "When a primary agent sees a better way to get your kind of work done, it says so in one or two lines and asks: a specialist for a subject that keeps coming back, a dedicated lead agent for a long project so your main agent stays free, a batch of low-cost helpers for work that can run in parallel, a cheaper model or speed for routine jobs, a scheduled task instead of a manual repeat, a Record for facts it keeps asking for again, or anything else that would make things easier for you. At most one suggestion per topic and only when it is relevant; after a no it remembers and does not suggest it again; nothing is created without your yes, and new agents are built by the lead (a member's agent asks through its request to an admin).",
       "benefits": "Your agents get better at your work over time and point out savings you might not know about, without you having to know what is possible.",
-      "costs": "Now and then a one- or two-line suggestion to answer; a yes may add an agent or a scheduled task.",
+      "costs": "About 170 words more in each primary agent's instructions; now and then a one- or two-line suggestion to answer (at most one per conversation); a yes may add an agent or a scheduled task. Members' main agents get it too; theirs ask an admin through their request.",
       "check": "How the owner uses the primary agents today, whether there are repeated jobs or long projects that a specialist, a project lead or cheaper models would serve better, and whether the owner welcomes suggestions.",
       "on": "Primary agents make short suggestions when they are relevant.",
       "off": "No suggestions about better ways of working."
