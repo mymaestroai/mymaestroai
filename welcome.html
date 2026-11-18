@@ -750,8 +750,13 @@
     if (!teamToCreate().length) return renderTeam();
     if (!$('team-create').checked) {
       const r = await api('POST', '/api/welcome/team/skip');
-      if (r.status === 200) teamDone = true;
-      $('team-result').textContent = r.status === 200 ? '' : 'Could not record that you skipped the team: it will be offered again.';
+      if (r.status === 200) {
+        teamDone = true;   // recorded: the controls go, since they could no longer do anything here
+        $('team-opt').hidden = true; $('team-skip-row').hidden = true; $('team-create-now').hidden = true;
+        $('team-result').textContent = 'Skipped. The team is not set up.';
+        return;
+      }
+      $('team-result').textContent = 'Could not record that you skipped the team: it will be offered again.';
       return renderTeam();
     }
     return createTeamNow();

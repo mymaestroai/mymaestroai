@@ -144,3 +144,15 @@ test('r2: a create where every role failed leaves the button for another try', a
   assert.match(p.$('team-result').textContent, /could not be created: disk busy/);
   assert.strictEqual(p.$('team-create-now').hidden, false);
 });
+
+// Review r3 (GPT-6 follow-up): after a recorded skip the tick box and the skip link go away.
+test('r3: a recorded skip hides the controls and says so', async () => {
+  const p = page({ skippedAt: '2026-01-01T00:00:00Z' });
+  p.ctx.loadTeam(); await p.answer('/api/welcome/team/plan', 200, p.planBody);
+  const start = p.ctx.setUpTeam(); await p.settle();
+  await p.answer('/api/welcome/team/skip', 200, { ok: true });
+  await start;
+  assert.strictEqual(p.$('team-opt').hidden, true);
+  assert.strictEqual(p.$('team-skip-row').hidden, true);
+  assert.match(p.$('team-result').textContent, /Skipped/);
+});
