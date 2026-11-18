@@ -5,6 +5,17 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('fs'), path = require('path');
 const read = (f) => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
+// The two pure Ultra helpers, taken from lib/sdk-chat.js and run on their own: requiring the whole module would touch the
+// hub's data folder, which the suite's data guard forbids.
+function sdkPure() {
+  const src = read('lib/sdk-chat.js');
+  const grab = (start) => { const i = src.indexOf(start); assert.ok(i >= 0, start); let d = 0; let j = src.indexOf(') {', i) + 2; for (; j < src.length; j++) { if (src[j] === '{') d++; else if (src[j] === '}') { d--; if (!d) break; } } return src.slice(i, j + 1); };
+  const re = src.slice(src.indexOf('const CODEX_ULTRA_REFUSED_RE'), src.indexOf('\n', src.indexOf('const CODEX_ULTRA_REFUSED_RE')));
+  const ctx = {};
+  require('vm').createContext(ctx);
+  require('vm').runInContext(re + '\n' + grab('function originFromMemberAgent(') + '\n' + grab('function codexUltraFallback(') + '\nthis.codexUltraFallback = codexUltraFallback; this.originFromMemberAgent = originFromMemberAgent;', ctx);
+  return ctx;
+}
 
 function fresh() { delete require.cache[require.resolve('../lib/effort.js')]; return require('../lib/effort.js'); }
 const CATALOG = [
@@ -95,7 +106,7 @@ test('members never send Ultra: the server passes admin, the turn marks memberTu
 });
 
 test('fallback decision: only Ultra, before any output, once, on a refusal-looking error', () => {
-  const { codexUltraFallback: f } = require('../lib/sdk-chat.js');
+  const f = sdkPure().codexUltraFallback;
   const base = { effort: 'ultra', sawOutput: false, already: false };
   for (const error of ['unsupported value: ultra', 'Invalid value for reasoning_effort', 'model does not support this reasoning effort', 'Ultra is not available for your plan']) {
     assert.strictEqual(f({ ...base, error }), true, error);
@@ -159,7 +170,7 @@ test('review r1: both chat routes pass the admin flag', () => {
 });
 
 test('review r1: only an error about Ultra or the effort level falls back (not usage limits or sandbox refusals)', () => {
-  const { codexUltraFallback } = require('../lib/sdk-chat.js');
+  const { codexUltraFallback } = sdkPure();
   const f = (error) => codexUltraFallback({ effort: 'ultra', sawOutput: false, error, already: false });
   assert.strictEqual(f('unsupported reasoning effort: ultra'), true);
   assert.strictEqual(f('model_reasoning_effort "ultra" is not available for this account'), true);
@@ -170,7 +181,7 @@ test('review r1: only an error about Ultra or the effort level falls back (not u
 });
 
 test('a hub turn set off by a member\'s agent (consult, queued task, schedule, report) never runs Ultra', () => {
-  const { originFromMemberAgent: f } = require('../lib/sdk-chat.js');
+  const f = sdkPure().originFromMemberAgent;
   const agents = [{ name: 'hubagent' }, { name: 'ownerbot', owner: 'u_owner' }, { name: 'sambot', owner: 'u_sam' }, { name: 'ghostbot', owner: 'u_gone' }];
   const users = { u_owner: { id: 'u_owner', role: 'admin' }, u_sam: { id: 'u_sam', role: 'member' } };
   const getUser = (id) => users[id] || null;
