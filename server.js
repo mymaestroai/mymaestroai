@@ -654,6 +654,11 @@ async function handleHttpRequest(req, res) {
       const out = await require('./lib/welcome-team').create(b);
       return jsonResponse(res, out.status, out.body);
     }
+    if (pathname === '/api/welcome/team/plan' && req.method === 'POST') {
+      const b = (await authJson()) || {};
+      const out = await require('./lib/welcome-team').plan({ lead: typeof b.lead === 'string' ? b.lead : '', models: b.models });
+      return jsonResponse(res, out.status, out.body);
+    }
     if (pathname === '/api/welcome/team/skip' && req.method === 'POST') {
       const out = await require('./lib/welcome-team').skip();
       return jsonResponse(res, out.status, out.body);

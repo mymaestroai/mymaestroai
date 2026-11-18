@@ -508,7 +508,7 @@ const commands = {
     if (ledger.skippedAt) out(`  (You chose to skip the team on ${ledger.skippedAt}.)`);
     if (!missing) return;   // nothing the hub could still set up
     out('');
-    out(unfinished ? `To create the missing ones, open ${URL_BASE}/welcome on this computer.` : 'To add them, ask your lead agent or use the Team card in the app.');
+    out(unfinished ? `To create the missing ones, open ${URL_BASE}/welcome on this computer.` : 'To add them, ask your lead agent.');
   },
   version() { const { v, commit, channel } = version(); out(`${PRODUCT} ${v} (${commit}, ${channel} channel)`); },
   // The help is the comment block at the top of this file: lines 4 to 26 (one more than before `team` was listed).

@@ -22,7 +22,7 @@ const access = L('access');
 const AVAILABLE = ['claude-sdk/claude-opus-5-5', 'claude-sdk/claude-sonnet-5-5', 'claude-sdk/claude-haiku-5-5'];
 const LEAD = 'claude-sdk/claude-opus-5-5';
 const ROLE_NAMES = ['challenger', 'scout', 'builder', 'researcher'];
-const deps = (over = {}) => ({ getAgents: (f) => agentsLib.getAgents(f), getAvailableModels: async () => AVAILABLE, team: st, ...over });
+const deps = (over = {}) => ({ getAgents: (f) => agentsLib.getAgents(f), getAvailableModels: async () => AVAILABLE, providerSummary: () => ({ claude: true, chatgpt: true }), team: st, ...over });
 const onDisk = () => JSON.parse(fs.readFileSync(AGENTS_FILE, 'utf8'));
 const seed = (agents) => fs.writeFileSync(AGENTS_FILE, JSON.stringify(agents, null, 2));
 const maestro = { name: 'maestro', model: LEAD, display: 'Maestro', category: 'primary', lead: true };
@@ -157,12 +157,13 @@ test('welcome.html: the team box has its heading, rows, tick box and skip link b
   for (const job of ['Checks important work and finds what is wrong', 'Lookups, searches and summaries', 'Coding and multi-step work', 'Research and writing']) assert.ok(boxCode.includes(job), job);
   for (const s of ['billed per use', "'local'", "'subscription'", 'it is kept as it is', 'Already set up', 'An earlier setup of this agent stopped halfway: add it yourself if you want it', 'Nothing to set up here.']) assert.ok(boxCode.includes(s), s);
   assert.match(welcome, /\.team \.trow \.pay\.per-use \{ color: var\(--warning\)/, 'billed per use in the warning colour');
-  assert.match(boxCode, /'\/api\/welcome\/team\?lead=' \+ encodeURIComponent\(\$\('m-model'\)\.value/);
+  // Review r1: the plan now comes from POST /api/welcome/team/plan with the offered models (the same list the create
+  // sends); its behaviour (waiting at Start, a saved skip, a changed plan, a late plan) is tested in
+  // test/welcome-team-page.test.js, which runs this code.
+  assert.match(boxCode, /api\('POST', '\/api\/welcome\/team\/plan', body\)/);
   assert.match(boxCode, /\$\('m-model'\)\.addEventListener\('change', \(\) => \{ loadTeam\(\); \}\)/, 'refetched when the model changes');
   assert.match(welcome, /show\('s-meet', 3\);\n\s+loadTeam\(\)/);
-  assert.match(boxCode, /\$\('team-skip'\)\.addEventListener\('click', \(\) => \{ \$\('team-create'\)\.checked = false; \}\)/);
-  assert.match(boxCode, /if \(!teamPlan\) \{ box\.hidden = true; return; \}/, 'a failing GET hides the box');
-  assert.match(boxCode, /\$\('team-opt'\)\.hidden = !any/, 'no role to create: the tick box is hidden');
+  assert.match(boxCode, /\$\('team-opt'\)\.hidden = !any \|\| teamStarted/, 'no role to create: the tick box is hidden');
 });
 
 test('welcome.html: the box is built from text nodes only; the Change link is encoded; skip is called when unticked', () => {
@@ -172,12 +173,13 @@ test('welcome.html: the box is built from text nodes only; the Change link is en
   assert.match(boxCode, /a\.href = '\/agent-settings\.html\?agent=' \+ encodeURIComponent\(e\.name\)/);
   assert.match(boxCode, /if \(!\$\('team-create'\)\.checked\) \{\n\s+const r = await api\('POST', '\/api\/welcome\/team\/skip'\)/);
   assert.match(boxCode, /api\('POST', '\/api\/welcome\/team', body\)/);
-  assert.match(boxCode, /const body = \{ lead: model \};\n\s+const ids = offeredModelIds\(\); if \(ids\) body\.models = ids;/, 'the offered models are sent only when kept');
+  // Review r1: the create sends what was shown (expect) and the offered models.
+  assert.match(boxCode, /const body = \{ expect: teamToCreate\(\)\.map\(e => \(\{ role: e\.role, model: e\.model \}\)\) \};\n\s+const ids = offeredModelIds\(\); if \(ids\) body\.models = ids;/);
   assert.match(boxCode, /for \(const g of offered\.values\(\)\) for \(const m of g\.models\)/);
   // the start button: after the lead's model is set, before the interview; a failure never stops it
   const hello = welcome.slice(welcome.indexOf("$('hello').addEventListener('click'"));
-  assert.ok(hello.indexOf("/model`, { model }") < hello.indexOf('await setUpTeam(model)') && hello.indexOf('await setUpTeam(model)') < hello.indexOf("'/api/chat'"));
-  assert.match(hello, /try \{ await setUpTeam\(model\); \} catch \{/);
+  assert.ok(hello.indexOf("/model`, { model }") < hello.indexOf('await setUpTeam()') && hello.indexOf('await setUpTeam()') < hello.indexOf("'/api/chat'"));
+  assert.match(hello, /try \{ await setUpTeam\(\); \} catch \{/);
   assert.match(boxCode, /out\.textContent = 'The team could not be created just now/);
 });
 
@@ -218,7 +220,7 @@ test('mymaestro team prints the four roles from the data folder and writes nothi
   const r2 = runTeam();
   assert.strictEqual(r2.status, 0, r2.stderr);
   for (const n of ['Challenger', 'Scout', 'Builder', 'Researcher']) assert.match(r2.stdout, new RegExp(`${n}: not set up`));
-  assert.match(r2.stdout, /To add them, ask your lead agent or use the Team card in the app\./);
+  assert.match(r2.stdout, /To add them, ask your lead agent\./);
   assert.deepStrictEqual(snapshot(data), before2);
   assert.ok(!fs.existsSync(LEDGER), 'no ledger was made');
 });
@@ -246,4 +248,31 @@ test('POST uses the lead agent\'s own model, whatever the body says; GET ignores
   await wt.create({ lead: 'openai/gpt-6' }, deps({ team: spy }), quiet);
   await wt.plan({ lead: '<b>not a model</b>' }, deps({ team: spy }));
   assert.deepStrictEqual(seen, [LEAD, LEAD]);
+});
+
+// Review r1 (GPT-6 BLOCK 1, Sentinel follow-up): the create carries what the page showed; a plan that differs now creates
+// nothing (409 with the new plan); page-reported models count only for providers this hub has connected.
+test('r1: a create whose shown plan no longer matches creates nothing and returns the new plan', async () => {
+  const shown = (await wt.plan({}, deps())).body.plan.filter(e => e.action === 'create').map(e => ({ role: e.role, model: e.model }));
+  const stale = shown.map(x => (x.role === 'scout' ? { ...x, model: 'claude-sdk/claude-haiku-4-5' } : x));
+  const r = await wt.create({ expect: stale }, deps(), quiet);
+  assert.strictEqual(r.status, 409);
+  assert.strictEqual(r.body.changed, true);
+  assert.deepStrictEqual(r.body.plan.map(e => e.role), ROLE_NAMES);
+  assert.ok(!onDisk().some(a => ROLE_NAMES.includes(a.name)), 'nothing created');
+  assert.ok(!fs.existsSync(LEDGER) || Object.keys(st.readLedger(LEDGER).roles).length === 0);
+  const ok = await wt.create({ expect: shown }, deps(), quiet);
+  assert.strictEqual(ok.status, 200);
+  assert.strictEqual(ok.body.created.length, 4);
+});
+test('r1: page-reported models count only for providers the hub has connected; the plan route takes them too', async () => {
+  const d = deps({ getAvailableModels: async () => [], providerSummary: () => ({ claude: true, chatgpt: false, openai: false, local: false }) });
+  const got = await wt.availableModels(['claude-sdk/claude-haiku-5-5', 'openai/gpt-6', 'codex-cli/gpt-6', 'lmstudio/qwen-3'], d);
+  assert.deepStrictEqual(got, ['claude-sdk/claude-haiku-5-5']);
+  assert.deepStrictEqual(wt.connectedPrefixes({ chatgpt: true, openrouter: true, local: true }), ['codex-cli', 'openrouter', 'local', 'lmstudio', 'ollama', 'omlx', 'ninfer']);
+  const p = await wt.plan({ models: ['claude-sdk/claude-haiku-5-5', 'openai/gpt-6'] }, d);
+  assert.ok(p.body.plan.every(e => !String(e.model || '').startsWith('openai/')));
+  const src = fs.readFileSync(path.join(REAL, 'server.js'), 'utf8');
+  assert.match(src, /pathname === '\/api\/welcome\/team\/plan' && req\.method === 'POST'/);
+  assert.deepStrictEqual(access.classifyRoute('/api/welcome/team/plan', 'POST'), { kind: 'admin' });
 });
