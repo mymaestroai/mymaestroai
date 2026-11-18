@@ -386,9 +386,11 @@ test('6. back-off: ours right after a failure; the copy is tried again after nex
   let f = r.moves().failed.alpha;
   assert.strictEqual(f.count, 2);
   assert.strictEqual(f.nextAt, iso(r.t + HOUR));
-  // and a third time: a day
+  // and a third time, for another reason (three in a row for the same reason would stop the tries): a day
+  r.copyFail = null; r.copyTimeout = true;
   r.t += HOUR + 1;
   await recheck(r.sb);
+  r.copyTimeout = false;
   f = r.moves().failed.alpha;
   assert.strictEqual(f.count, 3);
   assert.strictEqual(f.nextAt, iso(r.t + 24 * HOUR));
@@ -774,5 +776,163 @@ test('26. not enough free disk space for a second copy: no copy at all, the box 
   const f = r.moves().failed.alpha;
   assert.match(f.why, /enough free disk space/);
   assert.match(f.why, /4096 MB/);
+});
+
+// Follow-ups: the free-space check counts sparse files at full length; three failures in a row for the same reason stop
+// the automatic tries; an admin's "Move now" tries once.
+const BUSY_TOP = 'PID ARGS\n1 /sbin/docker-init -- sleep infinity\n7 sleep infinity\n42 node server.js\n';
+const spaceRun = (calls) => calls.find(a => runKind(a) === 'space');
+
+test('27. the free-space check uses the apparent size (tar writes a sparse file at its full length)', async () => {
+  const r = await rig().ident();
+  r.vol(OLDER, null, 'ALPHA-FILES');
+  await r.old('running');
+  await recheck(r.sb);
+  const sp = spaceRun(r.calls);
+  assert.ok(sp, 'a space check ran');
+  assert.match(String(sp[sp.indexOf('-c') + 1]), /du -sk --apparent-size \/from/);
+});
+
+test('28. three failures in a row for the same reason: no more automatic tries; Status offers Move now (admins)', async () => {
+  const r = await rig().ident();
+  r.vol(OLDER, null, 'ALPHA-FILES');
+  r.copyFail = Object.assign(new Error('docker failed'), { stderr: 'tar: x: Cannot open: Permission denied', code: 2 });
+  await r.old('running');
+  await recheck(r.sb);
+  for (let i = 0; i < 2; i++) { r.t += 25 * HOUR; await recheck(r.sb); }
+  const f = r.moves().failed.alpha;
+  assert.strictEqual(f.count, 3); assert.strictEqual(f.same, 3); assert.strictEqual(f.kind, 'copy'); assert.strictEqual(f.stopped, true);
+  const item = r.sb.readinessItems().find(i => i.id === 'sandbox-home-move-alpha');
+  assert.match(item.title, /isn't being moved any more/);
+  assert.match(item.detail, /3 times in a row for the same reason/);
+  assert.deepStrictEqual(item.action, { label: 'Move now', api: '/api/sandbox/agents/alpha/move-home', method: 'POST' });
+  // days later: no try at all, and the box on the older home stays as it is
+  r.t += 30 * DAY;
+  const m = r.mark();
+  assert.strictEqual(await recheck(r.sb), NAME);
+  assert.deepStrictEqual(seq(r.since(m)), [], 'no stop, copy, rm or create');
+});
+
+test('29. a different reason starts the count again: copy, copy, timeout does not stop; timeout three times does', async () => {
+  const r = await rig().ident();
+  r.vol(OLDER, null, 'ALPHA-FILES');
+  r.copyFail = new Error('docker failed');
+  await r.old('running');
+  await recheck(r.sb);
+  r.t += 2 * HOUR; await recheck(r.sb);
+  r.copyFail = null; r.copyTimeout = true;
+  r.t += 2 * HOUR; await recheck(r.sb);
+  let f = r.moves().failed.alpha;
+  assert.strictEqual(f.kind, 'timeout'); assert.strictEqual(f.same, 1); assert.ok(!f.stopped);
+  assert.ok(!r.sb.readinessItems().find(i => i.id === 'sandbox-home-move-alpha').action, 'no Move now while it still tries');
+  for (let i = 0; i < 2; i++) { r.t += 25 * HOUR; await recheck(r.sb); }
+  f = r.moves().failed.alpha;
+  assert.strictEqual(f.same, 3); assert.strictEqual(f.stopped, true);
+});
+
+async function stoppedRig() {
+  const r = await rig().ident();
+  r.vol(OLDER, null, 'ALPHA-FILES');
+  r.copyFail = new Error('docker failed');
+  await r.old('running');
+  await recheck(r.sb);
+  for (let i = 0; i < 2; i++) { r.t += 25 * HOUR; await recheck(r.sb); }
+  assert.strictEqual(r.moves().failed.alpha.stopped, true);
+  return r;
+}
+
+test('30. Move now on an idle box: one try, it works, the box is on the labelled home and the failure is gone', async () => {
+  const r = await stoppedRig();
+  r.copyFail = null;
+  const res = await r.sb.moveHomeNow(alpha);
+  assert.deepStrictEqual(res, { ok: true, moved: true });
+  assert.strictEqual(homeOfCreate(boxCreates(r).pop()), r.labFor(alpha));
+  assert.deepStrictEqual(r.moves().failed, {});
+  assert.ok(!r.sb.readinessItems().some(i => i.id === 'sandbox-home-move-alpha'));
+});
+
+test('31. Move now while work runs in the box: nothing tried, the stop stays; a try that fails the same way stops again', async () => {
+  const r = await stoppedRig();
+  const before = r.moves().failed.alpha;
+  r.top = BUSY_TOP;
+  const m = r.mark();
+  const res = await r.sb.moveHomeNow(alpha);
+  assert.strictEqual(res.ok, false); assert.match(res.error, /^Nothing was tried/);
+  assert.deepStrictEqual(seq(r.since(m)), [], 'nothing stopped, copied, removed or created');
+  assert.deepStrictEqual(r.moves().failed.alpha, before, 'the record is as it was');
+  const busyCb = await r.sb.moveHomeNow(alpha, { busy: () => true });
+  assert.match(busyCb.error, /^Nothing was tried/);
+  r.top = IDLE_TOP;
+  const again = await r.sb.moveHomeNow(alpha);   // copyFail is still set: the same reason
+  assert.strictEqual(again.ok, false); assert.match(again.error, /^The move failed again/);
+  const f = r.moves().failed.alpha;
+  assert.strictEqual(f.same, 4); assert.strictEqual(f.stopped, true);
+});
+
+test('32. Move now with no failed move waiting: refused, nothing done', async () => {
+  const r = await rig().ident();
+  const m = r.mark();
+  const res = await r.sb.moveHomeNow(alpha);
+  assert.strictEqual(res.ok, false); assert.match(res.error, /No move of alpha's home folder is waiting/);
+  assert.deepStrictEqual(r.since(m), []);
+});
+
+test('33. the Move now route is for admins only', () => {
+  const { classifyRoute } = require('../lib/access');
+  assert.deepStrictEqual(classifyRoute('/api/sandbox/agents/alpha/move-home', 'POST'), { kind: 'admin' });
+});
+
+test('34. Move now for an agent that does not work in a box: refused, the record untouched, no Docker call', async () => {
+  const r = await stoppedRig();
+  const before = r.moves().failed.alpha;
+  const host = r.mk({ getSetting: (k) => (k === 'sandboxDefaults' ? { member: 'off', admin: 'off' } : undefined) });
+  const m = r.mark();
+  const res = await host.moveHomeNow(alpha);
+  assert.strictEqual(res.ok, false); assert.match(res.error, /doesn't work in a box/);
+  assert.deepStrictEqual(r.since(m), []);
+  assert.deepStrictEqual(r.moves().failed.alpha, before);
+});
+
+test('35. two Move now presses at once: the second is refused; with the box busy the stop stays exactly as it was', async () => {
+  const r = await stoppedRig();
+  const before = r.moves().failed.alpha;
+  r.top = BUSY_TOP;
+  const p1 = r.sb.moveHomeNow(alpha), p2 = r.sb.moveHomeNow(alpha);
+  const [a, b] = await Promise.all([p1, p2]);
+  assert.match(a.error, /^Nothing was tried/);
+  assert.strictEqual(b.ok, false); assert.match(b.error, /already under way/);
+  assert.deepStrictEqual(r.moves().failed.alpha, before, 'stopped, as before');
+  const third = await r.sb.moveHomeNow(alpha);   // the lock is released afterwards
+  assert.match(third.error, /^Nothing was tried/);
+});
+
+test('36. Move now when the agent has no box: refused, no box made, the record untouched', async () => {
+  const r = await stoppedRig();
+  const before = r.moves().failed.alpha;
+  r.boxes.clear();
+  const m = r.mark();
+  const res = await r.sb.moveHomeNow(alpha);
+  assert.strictEqual(res.ok, false); assert.match(res.error, /has no box right now/);
+  assert.deepStrictEqual(seq(r.since(m)), [], 'no create or start');
+  assert.deepStrictEqual(r.moves().failed.alpha, before);
+});
+
+test('37. Move now when the older home is gone: the failure ends, its Status item goes, nothing else is done', async () => {
+  const r = await stoppedRig();
+  r.volumes.delete(OLDER);
+  const m = r.mark();
+  const res = await r.sb.moveHomeNow(alpha);
+  assert.strictEqual(res.ok, true); assert.strictEqual(res.moved, false); assert.match(res.note, /no longer there/);
+  assert.deepStrictEqual(seq(r.since(m)), []);
+  assert.deepStrictEqual(r.moves().failed, {});
+  assert.ok(!r.sb.readinessItems().some(i => i.id === 'sandbox-home-move-alpha'));
+});
+
+test('38. after a Move now that found the box busy, Status shows no box waiting to be rebuilt', async () => {
+  const r = await stoppedRig();
+  r.top = BUSY_TOP;
+  await r.sb.moveHomeNow(alpha);
+  assert.ok(!r.sb.readinessItems().some(i => i.id === 'sandbox-held-alpha'), 'no held item');
+  assert.ok(r.sb.readinessItems().some(i => i.id === 'sandbox-home-move-alpha' && i.action), 'the stopped item with Move now stays');
 });
 
