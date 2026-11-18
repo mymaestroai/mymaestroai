@@ -4,7 +4,7 @@
     {
       "id": "team-guidance",
       "title": "Team advice in agents' instructions",
-      "changes": "Adds a short \"running a team\" section to agents' instructions: when to do a job themselves and when to hand it to a worker, which kind of model suits which job, how to write a brief, and how to get a second opinion and an adversarial check from a different model. Lead agents get the full version, other agents a core version, small local models and members' agents a short one. Turning it on gives it to the lead and to agents created from then on; agents that already exist get it only when it is switched on for them one by one (agent settings, Team guidance).",
+      "changes": "Adds a short \"running a team\" section to agents' instructions: when to do a job themselves and when to hand it to a worker, which kind of model suits which job, how to write a brief, and how to get a second opinion and a critical check from a different model. Lead agents get the full version, other agents a core version, small local models and members' agents a short one. Turning it on gives it to the lead and to agents created from then on; agents that already exist get it only when it is switched on for them one by one (agent settings, Team guidance).",
       "benefits": "Agents that hand out work do it more often and better: cheaper models for routine work, the strongest model kept for planning and hard reviews, important work checked by a second model before it is relied on.",
       "costs": "About 450 words more in each lead turn's instructions (about 120 for the short version), and some extra worker or reviewer runs where an agent decides a job needs them.",
       "check": "Which agents here already hand out work (consult_agent, spawn_workers) and how; whether their own instructions already cover delegation; which agents would benefit most (usually the primary agents that do long or many-part jobs).",
@@ -23,13 +23,13 @@
     },
     {
       "id": "member-worker-models",
-      "title": "Members' temporary workers use only the models members may choose",
-      "changes": "A family member's agent can start temporary workers (spawn_workers). With this on, those workers may run only on that agent's own model and the models the admin lets members choose for their own agents (the members' model list); any other model is refused. (The member limits on reasoning and speed apply to their workers either way.) With it off, a member's temporary workers may use any model this install reaches, as before.",
+      "title": "A spending limit: members' temporary helpers use only the models members may choose",
+      "changes": "This is a spending limit on family members' agents, not a change to your own agents. A member's agent can start temporary helpers for parts of a job. With this on, those helpers may run only on that agent's own model and the models the admin lets members choose for their own agents (the members' model list); any other model is refused. (The member limits on reasoning and speed apply to their helpers either way.) With it off, a member's temporary helpers may use any model this install reaches, as before.",
       "benefits": "Members can't spend the owner's money on models the admin didn't allow them, for example a top model billed per use.",
       "costs": "A member's agent that relied on a model outside the list for its workers gets a refusal naming the allowed models; the admin may need to add a model to the members' list.",
-      "check": "Whether this install has members, which models their agents use, what the members' model list holds, and whether members' agents start temporary workers today.",
-      "on": "Members' temporary workers are limited to the agent's own model and the members' model list.",
-      "off": "Members' temporary workers may use any reachable model."
+      "check": "Whether this install has members, which models their agents use, what the members' model list holds, and whether members' agents start temporary helpers today. It limits spending; it does not change how the owner's own agents work.",
+      "on": "Members' temporary helpers are limited to the agent's own model and the members' model list.",
+      "off": "Members' temporary helpers may use any model this install reaches."
     },
     {
       "id": "worker-proposals",

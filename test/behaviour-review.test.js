@@ -52,7 +52,9 @@ test('scheduleReview: one task for the lead with the right prompt, and every pen
   assert.match(p, /\[Decide\]\(\/changes#<id>\)/);
   assert.match(p, /\(id: team-guidance\)/); assert.match(p, /\(id: worker-proposals\)/);
   assert.doesNotMatch(p, /\(id: starter-team\)/); assert.doesNotMatch(p, /\(id: ask-lead-for-workers\)/);
-  assert.match(p, /If team_usage shows a clear case for a new worker now/, 'worker-proposals is among them');
+  // Review r1 (GPT-6 B4): a review never invites a proposal while worker-proposals waits; it says to skip decided ones.
+  assert.doesNotMatch(p, /If team_usage shows a clear case for a new worker now/);
+  assert.match(p, /If your hub brief this turn no longer lists a change as waiting, the owner has already decided it: skip that one\./);
   for (const e of bc.manifest(MANIFEST).filter((x) => r.ids.includes(x.id))) {
     for (const k of ['title', 'changes', 'benefits', 'costs', 'check', 'on', 'off']) assert.ok(p.includes(e[k]), `${e.id}.${k} is in the prompt in full`);
   }
@@ -219,7 +221,7 @@ test('server wiring: the review runs after the scheduler starts; the decision an
   assert.ok(a > 0 && b > a, 'after the scheduler');
   assert.match(server, /\[behaviour\] review scheduled for \$\{r\.lead\} \(\$\{r\.taskId\}\): \$\{r\.ids\.join\(', '\)\}/);
   assert.match(server, /if \(m\[1\] === 'worker-proposals'\) \{\n\s+try \{ await require\('\.\/lib\/behaviour-review'\)\.syncProposalsTask\(\)/);
-  assert.match(server, /pathname === '\/api\/behaviour-changes\/worker-proposals\/cadence' && req\.method === 'POST'[\s\S]{0,400}updateSettings\(\{ workerProposals: b\.cadence \}\)[\s\S]{0,200}syncProposalsTask\(\)/);
+  assert.match(server, /pathname === '\/api\/behaviour-changes\/worker-proposals\/cadence' && req\.method === 'POST'[\s\S]{0,700}updateSettings\(\{ workerProposals: b\.cadence \}\)[\s\S]{0,200}syncProposalsTask\(\)/);
   const page = fs.readFileSync(path.join(REAL, 'changes.html'), 'utf8');
   assert.match(page, /How often the lead looks:/);
   assert.match(page, /\/api\/behaviour-changes\/worker-proposals\/cadence/);
