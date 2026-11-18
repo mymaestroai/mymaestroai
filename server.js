@@ -644,6 +644,74 @@ async function handleHttpRequest(req, res) {
       require('./lib/welcome').getWelcome().markFinished(b.how === 'skip' ? 'skip' : 'done');
       return jsonResponse(res, 200, { ok: true });
     }
+    // The starter team (lib/welcome-team): admin only. lib/access classifies these as admin because they are not in PUBLIC_EXACT.
+    if (pathname === '/api/welcome/team' && req.method === 'GET') {
+      const out = await require('./lib/welcome-team').plan({ lead: new URL(req.url, 'http://x').searchParams.get('lead') || '' });
+      return jsonResponse(res, out.status, out.body);
+    }
+    if (pathname === '/api/welcome/team' && req.method === 'POST') {
+      const b = (await authJson()) || {};
+      const out = await require('./lib/welcome-team').create(b);
+      return jsonResponse(res, out.status, out.body);
+    }
+    if (pathname === '/api/welcome/team/plan' && req.method === 'POST') {
+      const b = (await authJson()) || {};
+      const out = await require('./lib/welcome-team').plan({ lead: typeof b.lead === 'string' ? b.lead : '', models: b.models });
+      return jsonResponse(res, out.status, out.body);
+    }
+    if (pathname === '/api/welcome/team/skip' && req.method === 'POST') {
+      const out = await require('./lib/welcome-team').skip();
+      return jsonResponse(res, out.status, out.body);
+    }
+    // The "Set up your team" card for existing installs (lib/team-card): admin only (lib/access: not in PUBLIC_EXACT).
+    if (pathname === '/api/team/card' && req.method === 'GET') {
+      const out = await require('./lib/team-card').cardState({ again: new URL(req.url, 'http://x').searchParams.get('again') === '1' });
+      return jsonResponse(res, out.status, out.body);
+    }
+    // Behaviour changes waiting for the owner (lib/behaviour-changes): admin only (lib/access: not in PUBLIC_EXACT, not a session route).
+    if (pathname === '/api/behaviour-changes' && req.method === 'GET') {
+      const bc = require('./lib/behaviour-changes');
+      const changes = bc.list();
+      let cadence = 'weekly'; try { cadence = require('./lib/settings').getSetting('workerProposals', 'weekly') === 'off' ? 'off' : 'weekly'; } catch { /* default */ }
+      return jsonResponse(res, 200, { ok: true, changes, workerProposals: cadence, ...(changes.some((c) => c.unreadable) ? { unreadable: true } : {}) });
+    }
+    // How often the lead looks at how the install is used (worker-proposals): saves the setting, then makes the weekly task match.
+    if (pathname === '/api/behaviour-changes/worker-proposals/cadence' && req.method === 'POST') {
+      // Only the owner decides: a signed-in admin's own browser session (never the hub's service identity, a token or an agent).
+      if (!require('./lib/access').isAdminSession(req)) return jsonResponse(res, 403, { ok: false, error: 'Sign in with an admin account in your browser to decide this.' });
+      const b = (await authJson()) || {};
+      if (b.cadence !== 'weekly' && b.cadence !== 'off') return jsonResponse(res, 400, { ok: false, error: 'cadence must be "weekly" or "off"' });
+      try {
+        require('./lib/settings').updateSettings({ workerProposals: b.cadence });
+        const r = await require('./lib/behaviour-review').syncProposalsTask();
+        console.log(`[behaviour] worker proposals set to ${b.cadence} by ${(req.hubUser && req.hubUser.id) || 'unknown'} (${r.action})`);
+        return jsonResponse(res, 200, { ok: true, cadence: b.cadence });
+      } catch (e) { return jsonResponse(res, 409, { ok: false, error: e && e.message ? e.message : String(e) }); }
+    }
+    {
+      const m = pathname.match(/^\/api\/behaviour-changes\/([a-z][a-z0-9-]{1,40})$/);
+      if (m && req.method === 'POST') {
+        // Only the owner decides: a signed-in admin's own browser session (never the hub's service identity, a token or an agent).
+        if (!require('./lib/access').isAdminSession(req)) return jsonResponse(res, 403, { ok: false, error: 'Sign in with an admin account in your browser to decide this.' });
+        const b = (await authJson()) || {};
+        if (b.decision !== 'on' && b.decision !== 'off') return jsonResponse(res, 400, { ok: false, error: 'decision must be "on" or "off"' });
+        const bc = require('./lib/behaviour-changes');
+        if (!bc.manifest().some((e) => e.id === m[1])) return jsonResponse(res, 404, { ok: false, error: 'no such change' });
+        try {
+          await bc.decide(m[1], b.decision, { user: req.hubUser && req.hubUser.id });
+          console.log(`[behaviour] ${m[1]} turned ${b.decision} by ${(req.hubUser && req.hubUser.id) || 'unknown'}`);
+          if (m[1] === 'worker-proposals') {
+            try { await require('./lib/behaviour-review').syncProposalsTask(); } catch (e) { console.warn('[behaviour] could not update the weekly team review:', e.message); }
+          }
+          return jsonResponse(res, 200, { ok: true, change: bc.list().find((c) => c.id === m[1]) });
+        } catch (e) { return jsonResponse(res, 409, { ok: false, error: e && e.message ? e.message : String(e) }); }
+      }
+    }
+    if (pathname === '/api/team/card/answer' && req.method === 'POST') {
+      const b = (await authJson()) || {};
+      const out = await require('./lib/team-card').answerCard({ answer: b.answer });
+      return jsonResponse(res, out.status, out.body);
+    }
     if (pathname === '/api/welcome/api-key' && req.method === 'POST') {
       const b = (await authJson()) || {};
       return jsonResponse(res, 200, await require('./lib/welcome').getWelcome().connectApiKey(b.provider, b.apiKey));
@@ -955,7 +1023,8 @@ async function handleHttpRequest(req, res) {
         const own = files.resolveOwner(who, ownerReq);
         return own ? { own } : { code: 403, error: 'no such owner' };
       };
-      // POST /api/files/resolve { items }: Files-folder paths an agent wrote (abs) or download links ({agent|owner, path}) -> file facts + download URLs.
+      // POST /api/files/resolve { items }: Files-folder paths an agent wrote (abs, spaces allowed), download links ({agent|owner, path}) or a bare
+      // file name an agent mentioned ({name, agent}: searched only in that agent's own folder, answered only when exactly one file has it) -> file facts + download URLs.
       // Anything outside the folders this person may read answers { ok:false, error:'not found' }, same as a missing file.
       if (pathname === '/api/files/resolve' && req.method === 'POST') {
         const items = jsonBody && jsonBody.items;
@@ -975,6 +1044,7 @@ async function handleHttpRequest(req, res) {
           return roots;
         };
         const out = [];
+        const nameIdx = new Map();   // folder -> files.nameIndex(), for { name, agent } items
         for (const it of items) {
           if (!it || typeof it !== 'object' || Array.isArray(it)) { out.push(nf); continue; }
           let r = null;
@@ -988,6 +1058,16 @@ async function handleHttpRequest(req, res) {
             } else if (typeof it.path === 'string') {
               const s = await scopeFor(it.agent ? String(it.agent) : null, it.owner, agents);
               if (s.own) r = files.fileInfo(s.own.root, it.path, { agent: s.own.agent || null, owner: s.own.ownerId });
+            } else if (typeof it.name === 'string' && typeof it.agent === 'string') {
+              // A bare file name: only in that agent's own folder (scopeFor refuses an agent this person may not open), and only when
+              // exactly one file there has the name.
+              const s = await scopeFor(it.agent, null, agents);
+              if (s.own) {
+                const rootKey = String(s.own.root);
+                if (!nameIdx.has(rootKey)) nameIdx.set(rootKey, files.nameIndex(s.own.root));   // one walk per folder per request
+                const rel = files.findByName(s.own.root, it.name, { index: nameIdx.get(rootKey) });
+                r = rel ? files.fileInfo(s.own.root, rel, { agent: s.own.agent || null, owner: s.own.ownerId }) : null;
+              }
             }
           } catch { r = null; }
           out.push(r || nf);
@@ -1130,7 +1210,7 @@ async function handleHttpRequest(req, res) {
       // Call recordings: a signed-in admin sees the whole setting; everybody else (members, the hub's own service calls that agents' tools use) gets it without the allowed list. canDownload: is this caller on the list.
       const recView = { admin: access.isAdmin(req.hubUser) && !req.hubPendingTotp, userId: req.hubUser && !req.hubPendingTotp ? String(req.hubUser.id) : '' };
       const recordingsFor = require('./lib/recordings/settings').recordingsForViewer;
-      return jsonResponse(res, 200, { agents: agents.map(a => ({ ...stripVoice(a), ...(recView.admin ? {} : { envKeep: undefined }), recordings: recordingsFor(a, recView), keptOnBox: kept(a, hubSettings.getSetting), ...(status[a.name] || idle) })) });
+      return jsonResponse(res, 200, { agents: agents.map(a => ({ ...stripVoice(a), ...(recView.admin ? {} : { envKeep: undefined }), recordings: recordingsFor(a, recView), keptOnBox: kept(a, hubSettings.getSetting), effortUltra: require('./lib/effort').ultraFor(a.model), tierOptions: require('./lib/tier').tiersFor(a.model), tierLabels: require('./lib/tier').labelsFor(a.model), ...(status[a.name] || idle) })) });
     }
 
     if (pathname === '/api/agents/status' && req.method === 'GET') {
@@ -1396,9 +1476,11 @@ async function handleHttpRequest(req, res) {
       // The model decides which code path and which hands an agent gets (a Codex model is a host shell on this box),
       // so a member may only pick from the admin's list, settings.memberModels (review F22/F35).
       if (!req.hubService && !access.isAdmin(req.hubUser)) {
-        const allowed = require('./lib/settings').getSetting('memberModels');
-        if (!Array.isArray(allowed) || !allowed.includes(String(body.model || ''))) {
-          return jsonResponse(res, 403, { error: 'admin_only', detail: 'only an admin can change this agent\'s model' + (Array.isArray(allowed) && allowed.length ? ` (members may choose: ${allowed.join(', ')})` : '') });
+        // lib/member-models: the same rule decides which models a member's temporary workers (spawn_workers) may use.
+        const mm = require('./lib/member-models');
+        const allowed = mm.list();
+        if (!mm.memberMayUse(body.model)) {
+          return jsonResponse(res, 403, { error: 'admin_only', detail: 'only an admin can change this agent\'s model' + (allowed.length ? ` (members may choose: ${allowed.join(', ')})` : '') });
         }
       }
       const result = await setAgentModel(name, body.model);
@@ -1557,7 +1639,7 @@ async function handleHttpRequest(req, res) {
       // The owner's own message (same test as /api/chat below): lets connector_access be offered in this turn.
       if (body && typeof body === 'object') body.owner_turn = req.hubIdentKind === 'user' && !req.hubPendingTotp && !req.hubToken && !req.hubService && access.isAdmin(req.hubUser);
       // Identity comes only from the authenticated session (req.hubUser), never from the body.
-      return handleChatStream(body, res, { userId: (req.hubUser && req.hubUser.id) || null, service: !!req.hubService, accounts: hubAuth.hasUsers() });
+      return handleChatStream(body, res, { userId: (req.hubUser && req.hubUser.id) || null, service: !!req.hubService, accounts: hubAuth.hasUsers(), admin: access.isAdmin(req.hubUser) });
     }
 
     if (pathname === '/api/chat' && req.method === 'POST') {
@@ -1565,7 +1647,7 @@ async function handleHttpRequest(req, res) {
       // The owner's own message: a signed-in admin's browser session (never an API token, the hub itself or legacy credentials).
       if (body && typeof body === 'object') body.owner_turn = req.hubIdentKind === 'user' && !req.hubPendingTotp && !req.hubToken && !req.hubService && access.isAdmin(req.hubUser);
       // Same trusted identity as the stream route (never from the body), so the voice call match works here too.
-      return handleChat(body, res, { userId: (req.hubUser && req.hubUser.id) || null, service: !!req.hubService, accounts: hubAuth.hasUsers() });
+      return handleChat(body, res, { userId: (req.hubUser && req.hubUser.id) || null, service: !!req.hubService, accounts: hubAuth.hasUsers(), admin: access.isAdmin(req.hubUser) });
     }
 
     // Stop button: a browser disconnect no longer ends a turn, so stopping is explicit.
@@ -1782,6 +1864,21 @@ async function handleHttpRequest(req, res) {
       return jsonResponse(res, 200, { mode: wp.getMode() });
     }
 
+    // Team guidance level: 'full' (default) | 'light' | 'off'  — see lib/team-guidance.js (admin only, like /api/sdk_workers)
+    if (pathname === '/api/team_guidance' && req.method === 'GET') {
+      const tg = require('./lib/team-guidance');
+      return jsonResponse(res, 200, { level: tg.getLevel(), levels: tg.LEVELS, default: tg.DEFAULT_LEVEL });
+    }
+    if (pathname === '/api/team_guidance' && req.method === 'POST') {
+      const tg = require('./lib/team-guidance');
+      const body = JSON.parse(await readBody(req));
+      const requested = String(body.level || '').trim().toLowerCase();
+      if (!tg.LEVELS.includes(requested)) return jsonResponse(res, 400, { error: `level must be one of: ${tg.LEVELS.join(', ')}` });
+      hubSettings.updateSettings({ teamGuidance: requested });
+      console.log(`[settings] teamGuidance = ${requested}`);
+      return jsonResponse(res, 200, { level: tg.getLevel() });
+    }
+
     // Detached jobs started by agents with run_job (owner view: every job)
     if (pathname === '/api/jobs' && req.method === 'GET') {
       const runner = getJobRunner();
@@ -1987,6 +2084,15 @@ async function handleHttpRequest(req, res) {
         const job = await runner.run({ owner: 'maestro', name: 'build sandbox image', command: cmd, cwd: __dirname, timeoutMinutes: 30 });
         return jsonResponse(res, 200, { ok: true, job: job && job.id ? job.id : null });
       }
+      // "Move now" on Settings -> Status (admins only, like every /api/sandbox route): one try of a home move that failed
+      const mh = pathname.match(/^\/api\/sandbox\/agents\/([^/]+)\/move-home$/);
+      if (mh && req.method === 'POST') {
+        let nm; try { nm = decodeURIComponent(mh[1]); } catch { nm = mh[1]; }
+        const a = (await getAgents()).find(x => x.name === nm);
+        if (!a) return jsonResponse(res, 404, { error: 'unknown agent' });
+        const r = await sb.moveHomeNow(a, { busy: () => temporalWorkersLib.listVirtual().some(v => v && v.parent === a.name) });
+        return jsonResponse(res, r.ok ? 200 : 409, r);
+      }
       const m = pathname.match(/^\/api\/sandbox\/agents\/([^/]+)\/(reset|stop)$/);
       if (m && req.method === 'POST') {
         const a = (await getAgents()).find(x => x.name === m[1]);
@@ -2007,6 +2113,19 @@ async function handleHttpRequest(req, res) {
     if (pathname === '/api/security-check' && req.method === 'GET') {
       const r = await securityCheck().latest({ maxAgeMs: 60 * 60 * 1000 });
       return jsonResponse(res, 200, { ok: true, ...r });
+    }
+    // ── Self-check (lib/selfcheck, lib/selfcheck-routes): admin-only (the route class above, checked again in the handler).
+    // GET the last result, POST /run starts one in the background, PUT /settings saves the selfCheck settings. ──
+    if (pathname === '/api/selfcheck' || pathname.startsWith('/api/selfcheck/')) {
+      const scBody = req.method === 'PUT' ? await authJson() : {};
+      const r = await require('./lib/selfcheck-routes').handle({
+        method: req.method, pathname, admin: !!req.hubService || (access.isAdmin(req.hubUser) && !req.hubPendingTotp), body: scBody,
+        selfCheck: () => require('./lib/selfcheck').getSelfCheck(),
+        validateSettings: (o) => require('./lib/selfcheck').validateSettings(o),
+        saveSettings: (v) => hubSettings.updateSettings({ selfCheck: v }),
+        log: (m) => console.warn(m),
+      });
+      if (r) return jsonResponse(res, r.status, r.body);
     }
     // ── Memory health (lib/memory-health): admin-only. GET answers with the last result while it is under 26 hours old
     // (else checks now); run checks now. Nightly from the schedule at start.
@@ -3473,6 +3592,8 @@ async function handleHttpRequest(req, res) {
       filePath = path.join(__dirname, 'login.html');
     } else if (pathname === '/users') {
       filePath = path.join(__dirname, 'users.html');
+    } else if (pathname === '/changes') {
+      filePath = path.join(__dirname, 'changes.html');   // admin page (lib/access ADMIN_PAGES)
     } else if (pathname === '/recordings') {
       filePath = path.join(__dirname, 'recordings.html');   // any signed-in user may load the page; the data routes refuse anyone not on an agent's list
     } else if (/^\/oauth\/callback\/[a-z][a-z0-9-]{1,31}$/.test(pathname)) {
@@ -3604,6 +3725,16 @@ server.listen(PORT, HOST, () => {
   try {
     if (require('./lib/agents').ensureMaestroLead().changed) console.log('[agents] marked maestro as the lead agent (no agent was marked)');
   } catch (e) { console.warn('[agents] could not mark the lead agent:', e.message); }
+  // Team guidance (lib/team-guidance): agents that existed before this update keep their old prompt (switched off once); lead agents get it.
+  try {
+    const tg = require('./lib/agents').migrateTeamGuidance();
+    if (tg.changed > 0) console.log(`[agents] team guidance switched off for ${tg.changed} agents that existed before this update (lead agents keep it)`);
+  } catch (e) { console.warn('[agents] could not migrate team guidance:', e.message); }
+  // Behaviour changes (lib/behaviour-changes): on an install that already has agents each one waits, off, for the owner's decision.
+  try {
+    const bm = require('./lib/behaviour-changes').migrate({ agentsFile: path.join(__dirname, 'data', 'agents.json') });
+    if (bm.added && bm.added.length) console.log(`[behaviour] ${bm.added.length} change(s) waiting for the owner's decision: ${bm.added.join(', ')}`);
+  } catch (e) { console.warn('[behaviour] could not check the behaviour changes:', e.message); }
   console.log(`\n  My Maestro AI v${require('./package.json').version} (multi-provider)`);
   console.log(`  Server:   http://${URL_HOST}:${PORT}  (${BIND.exposed ? 'NETWORK-EXPOSED' : 'localhost only'})`);
   if (BIND.warning) console.warn(`  WARNING:  ${BIND.warning}`);
@@ -3634,6 +3765,10 @@ server.listen(PORT, HOST, () => {
   // the nightly check off (Check now still works).
   try { if (process.env.HUB_MEMORY_HEALTH !== 'off') require('./lib/memory-health').getMemoryHealth().schedule(); }
   catch (e) { console.warn(`[memory-health] ${e.message}`); }
+  // Self-check: real turns on hidden check agents 60 s after start and each night (Settings → Status → Self-check);
+  // HUB_SELFCHECK=off turns both off (Run now still works). Never delays startup.
+  try { if (process.env.HUB_SELFCHECK !== 'off') { const sc = require('./lib/selfcheck').getSelfCheck(); sc.onStarted(); sc.schedule(); } }
+  catch (e) { console.warn(`[selfcheck] ${e.message}`); }
   // Data connector health: a nightly check of every switched-on module that declares one (lib/modules/health).
   try { require('./lib/modules/health').getModulesHealth().start(); }
   catch (e) { console.warn(`[modules-health] ${e.message}`); }
@@ -3658,6 +3793,17 @@ server.listen(PORT, HOST, () => {
   // Scheduled tasks: queue anything that came due while the hub was down (fires once, marked late), start polling.
   try { const st = getScheduledTasks().start(); st.prune(30); console.log(`[sched-tasks] started (${st.list(scheduledTasksLib.OWNER).filter(t => t.status === 'active').length} active, ${st.pending.length} due now)`); }
   catch (e) { console.error('[sched-tasks] failed to start:', e.message); }
+  // Behaviour changes waiting for the owner: the lead is asked to review them (one task, never twice for an entry), and the weekly
+  // team review follows the worker-proposals decision. After the scheduler exists; the hub creates these, the owner decides on /changes.
+  (async () => {
+    try {
+      const review = require('./lib/behaviour-review');
+      const r = await review.scheduleReview({ scheduler: getScheduledTasks() });
+      if (r.taskId) console.log(`[behaviour] review scheduled for ${r.lead} (${r.taskId}): ${r.ids.join(', ')}`);
+      const p = await review.syncProposalsTask({ scheduler: getScheduledTasks() });
+      if (p.action === 'created') console.log(`[behaviour] weekly team review scheduled for ${p.lead} (${p.taskId})`);
+    } catch (e) { console.warn('[behaviour] could not schedule the review:', e.message); }
+  })();
   // A deleted agent whose things were not all moved into its bundle (a stop part-way, Docker not answering) is finished
   // now (lib/agent-archive); after the scheduler, so the tasks that would wake it can leave the list too.
   require('./lib/agents').finishArchivingAgents().catch((e) => console.error('[agents] unfinished removals:', e.message));

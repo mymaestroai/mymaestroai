@@ -267,7 +267,7 @@ test('without /proc: the launch gate first, running boxes written down then paus
   assert.strictEqual(quick.timedOut, true, 'never held past its limit');
   // names a settings map keyed by agent name would drop are refused
   const agentsSrc = fs.readFileSync(path.join(__dirname, '..', 'lib', 'agents.js'), 'utf8');
-  assert.match(agentsSrc, /const RESERVED_NAMES = new Set\(\['constructor', 'prototype', '__proto__'\]\);/);
+  assert.match(agentsSrc, /const RESERVED_NAMES = new Set\(\['constructor', 'prototype', '__proto__', 'hub', 'owner'\]\);/);
   assert.strictEqual((agentsSrc.match(/RESERVED_NAMES\.has\(/g) || []).length, 6, 'create, clone and rename check it');
   // the settings patch can't reach a prototype at any depth
   const { cleanPatch } = L('settings');
@@ -553,4 +553,29 @@ test('probeSocket: a missing socket is dead, a listening one is listening (a thr
   await new Promise((r) => server.listen(sockPath, r));
   try { assert.strictEqual(await probeSocket(sockPath, 1500), 'listening'); }
   finally { await new Promise((r) => server.close(r)); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a file whose read fails partway: the copy is refused and its half-written copy is closed, never left open', async () => {
+  const { snapshot } = L('backup/collect');
+  const inst = makeInstall('readerr');
+  const target = path.join(inst.root, 'workspaces', 'doc', 'notes.md');
+  w(target, 'x'.repeat(4096));
+  const snapDir = path.join(TMP, 'readerr-snap');
+  const realOpen = fs.promises.open, realWrite = fs.createWriteStream;
+  const writers = [];
+  // the opened file gives one piece, then a read error (a failing disk)
+  fs.promises.open = async function (p, ...rest) {
+    const fh = await realOpen.call(this, p, ...rest);
+    if (String(p) === target) fh.createReadStream = () => { let sent = false; return new Readable({ read() { if (!sent) { sent = true; this.push(Buffer.alloc(1024, 120)); } else this.destroy(Object.assign(new Error('read failed'), { code: 'EIO' })); } }); };
+    return fh;
+  };
+  fs.createWriteStream = function (p, ...rest) { const s = realWrite.call(this, p, ...rest); if (String(p).startsWith(snapDir)) writers.push({ p: String(p), s }); return s; };
+  try {
+    await assert.rejects(snapshot({ root: inst.root, hubHome: inst.hubHome, home: inst.home, platform: 'linux' }, snapDir, { procOk: false }), /read failed/);
+  } finally { fs.promises.open = realOpen; fs.createWriteStream = realWrite; }
+  await new Promise((r) => setTimeout(r, 50));
+  const half = writers.find(x => x.p.endsWith(path.join('doc', 'notes.md')));
+  assert.ok(half, 'the failing file was being copied');
+  assert.strictEqual(half.s.closed, true, 'its half-written copy is closed');
+  assert.deepStrictEqual(writers.filter(x => !x.s.closed).map(x => x.p), [], 'no copy is left open');
 });

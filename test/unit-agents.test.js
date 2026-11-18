@@ -193,6 +193,7 @@ test('loadAgentContext: sections in order with the runtime model, Files folder a
   assert.deepStrictEqual([...idx].sort((x, y) => x - y), idx, 'order: identity, model, soul, user, files, model info, channel');
   assert.ok(!out.includes('# Tools & Environment'), 'empty TOOLS.md is skipped');
   assert.ok(out.includes(`## Files folder\n${path.join(a.root, 'share', 'ctx')}\n`));
+  assert.ok(out.includes(`name it by its full path, alone in backticks, for example \`${path.join(a.root, 'share', 'ctx')}/Reports/Q3-summary.pdf\``), 'the Files folder guidance asks for the full path in a code span');
   assert.match(out, /You are running as \*\*claude-sdk\/claude-opus-5\*\* \(opus-5\)\./);
   assert.ok(!(await a.ag.loadAgentContext('ctx')).includes('## Communication Channel'));
   assert.ok(!(await a.ag.loadAgentContext('ctx', 'nope')).includes('## Communication Channel'));
@@ -232,6 +233,63 @@ test('shared pool scoping (sharedPoolFor): infra and admin-owned agents see the 
   assert.ok(k.includes(`## Files folder\n${path.join(a.root, 'users', member.id, 'files')}\n`), 'member files root');
   const g = await ctx('ghosted');
   assert.ok(!g.includes('admin-topic') && !g.includes('member-topic'), 'unknown owner id is treated as its own (empty) pool');
+});
+
+// File mentions: every agent is told how to name a file so the chat shows a download card (lib/ui-file-card: a full path in
+// backticks), with its own real Files folder in the example.
+const ruleFor = (root) => [
+  'To give the person you work for a file to download:',
+  "- Save it in this folder (or a subfolder) first. Files in your workspace, /tmp or anywhere else can't be downloaded.",
+  `- Then name it by its full path, alone in backticks, for example \`${root}/Reports/Q3-summary.pdf\`. The chat turns each such path into a download card.`,
+  '- One file per path. Never a bare file name, a relative path, a folder on its own, or a shortened name.',
+  '- Several files: one full path per line, each in backticks (in a table, the path in backticks in its cell).',
+].join('\n');
+
+test('file mentions: an admin-side agent\'s Files folder section carries the rule with its own folder in the example', async () => {
+  const a = load({ agents: [{ name: 'fm1', model: 'claude-sdk/claude-opus-5' }] });
+  const root = path.join(a.root, 'share', 'fm1');
+  const out = await a.ag.loadAgentContext('fm1', 'hub');
+  assert.ok(out.includes(`## Files folder\n${root}\n`));
+  assert.ok(out.includes(ruleFor(root)), 'the rule, with this agent\'s folder');
+  assert.strictEqual(a.ag.fileMentionRule(root + '/'), ruleFor(root), 'a trailing slash is not doubled');
+  // review r1 (GPT-6, Sonnet): the example is one the chat really cards. Run it through the page's own finder
+  // (lib/ui-file-card candidatesFrom) as a code span, the form the rule asks for.
+  const example = (out.match(/for example `([^`]+)`/) || [])[1];
+  assert.strictEqual(example, `${root}/Reports/Q3-summary.pdf`);
+  const card = require(path.join(__dirname, '..', 'lib', 'ui-file-card.js'));
+  const codeEl = { textContent: example, closest: () => null };
+  const page = { querySelectorAll: (sel) => (sel === 'code' ? [codeEl] : []) };
+  const found = card.candidatesFrom(page);
+  assert.strictEqual(found.length, 1, 'the example gets a download card');
+  assert.deepStrictEqual(found[0].item, { abs: example });
+  // a bare name, the form agents wrote, gets none
+  assert.strictEqual(card.candidatesFrom({ querySelectorAll: (sel) => (sel === 'code' ? [{ textContent: 'Q3-summary.pdf', closest: () => null }] : []) }).length, 0);
+});
+
+test('file mentions: a member\'s agent gets the rule with the member\'s own folder; a boxed agent the same host path (the box binds it there)', async () => {
+  const a = load({ agents: [{ name: 'kidfm' }, { name: 'boxfm', sandbox: 'container' }] });
+  const member = a.auth().createUser({ login: 'mfm@x.com', role: 'member' }).user;
+  await a.ag.updateAgentField('kidfm', { owner: member.id });
+  const memberRoot = path.join(a.root, 'users', member.id, 'files');
+  const k = await a.ag.loadAgentContext('kidfm', 'hub');
+  assert.ok(k.includes(ruleFor(memberRoot)), 'member folder in the rule');
+  assert.ok(!k.includes(path.join(a.root, 'share', 'kidfm')), 'never a folder the member can\'t download from');
+  const b = await a.ag.loadAgentContext('boxfm', 'hub');
+  assert.ok(b.includes(ruleFor(path.join(a.root, 'share', 'boxfm'))), 'a boxed agent: the host path');
+  // the box mounts every folder it gets at the same path, its own Files folder included, so the host path is also the path inside
+  const sb = fs.readFileSync(path.join(__dirname, '..', 'lib', 'sandbox.js'), 'utf8');
+  assert.match(sb, /for \(const m of mountsFor\(agent\)\) args\.push\('-v', `\$\{m\}:\$\{m\}`\);/);
+  assert.match(sb, /const files = path\.join\(HUB_HOME, 'share', String\(agent\.name\)\);\n\s+if \(fs\.existsSync\(files\)\) set\.add\(files\);/);
+});
+
+test('file mentions: the rule reaches every route through loadAgentContext (gateway, Claude client, Codex)', () => {
+  const sdk = fs.readFileSync(path.join(__dirname, '..', 'lib', 'sdk-chat.js'), 'utf8');
+  // review r1 (Sonnet): each route by name, not a count
+  const body = (sig) => { const i = sdk.indexOf(sig); assert.ok(i >= 0, sig); const j = sdk.indexOf('\nasync function ', i + 1); return sdk.slice(i, j < 0 ? undefined : j); };
+  for (const route of ['async function streamViaGateway(', 'async function streamViaSdk(', 'async function streamViaCodex(']) {
+    assert.match(body(route), /await loadAgentContext\(agentName, 'hub'/, `${route} builds its prompt with loadAgentContext`);
+  }
+  assert.doesNotMatch(sdk, /loadAgentContext\([^)]*(lightweight|minimalContext): true/, 'no route asks for the short context that skips the Files folder');
 });
 
 test('updateAgentField: allowed fields only, normalisation of owner / sharedWith / blurb / policy / lead / contextBudget', async () => {
@@ -640,7 +698,8 @@ function chatStandIn(a, { busy = new Set(), tasks = [], compaction = null } = {}
   const forgot = [];
   const st = { list: tasks,
     tasksOf: (n) => st.list.filter(t => t.agent === n).map(t => JSON.parse(JSON.stringify(t))),
-    action: (id, who, act) => { assert.deepStrictEqual([who, act], ['owner', 'delete']); st.list = st.list.filter(t => t.id !== id); },
+    // the owner's scheduler identity is '@owner' (test/owner-identity.test.js): deleting an agent deletes its tasks as the owner
+    action: (id, who, act) => { assert.deepStrictEqual([who, act], ['@owner', 'delete']); st.list = st.list.filter(t => t.id !== id); },
     retarget: (from, to) => { let n = 0; for (const t of st.list) if (t.agent === from) { t.agent = to; n++; } return n; } };
   const m = new Module(path.join(a.hub, 'lib', 'sdk-chat.js'));
   m.filename = m.id; m.loaded = true;

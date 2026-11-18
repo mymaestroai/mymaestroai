@@ -96,7 +96,11 @@ test('a sign-in that did not finish fails plainly; an API-key sign-in is replace
 test('the help text lists it, and the install goes where the hub looks for Codex', () => {
   const src = fs.readFileSync(CLI, 'utf8');
   assert.match(src, /mymaestro connect chatgpt {8}use your ChatGPT subscription/);
-  assert.match(src, /'install', '-g', '--prefix', path\.join\(os\.homedir\(\), '\.npm-global'\), '@openai\/codex', '--ignore-scripts'/);
+  // the install moved to lib/codex-cli/setup.js (one place for connect, the installer's check and readiness): same prefix
+  assert.match(src, /setup\.installCodex\(\{ env: process\.env \}\)/);
+  const setupSrc = fs.readFileSync(path.join(__dirname, '..', 'lib', 'codex-cli', 'setup.js'), 'utf8');
+  assert.match(setupSrc, /'install', '-g', '--prefix', codexPrefix\(env\), '@openai\/codex', '--ignore-scripts'/);
+  assert.match(setupSrc, /function codexPrefix\(env = process\.env\) \{ return path\.join\(homeOf\(env\), '\.npm-global'\); \}/);
   assert.match(spawnSync(process.execPath, [CLI, 'help'], { encoding: 'utf8' }).stdout, /mymaestro connect chatgpt/);
   assert.match(fs.readFileSync(path.join(__dirname, '..', 'lib', 'codex-cli', 'index.js'), 'utf8'), /path\.join\(home, '\.npm-global', 'bin', 'codex'\)/);
 });

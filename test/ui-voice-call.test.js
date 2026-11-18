@@ -160,10 +160,10 @@ test('voiceReplySentences and voiceJoinOr', () => {
   assert.deepStrictEqual(voiceReplySentences('Pi is 3.', false).sentences, [], 'a number being typed is not a sentence');
   const code = voiceReplySentences('Here is code.\n```js\nlet a\n', false);
   assert.deepStrictEqual(code.sentences, ['Here is code.'], 'the open code block is not read, the note waits for the end');
-  assert.strictEqual(code.note, 'I have put the details in the chat.');
+  assert.strictEqual(code.note, 'The details are in the chat; just say if you\'d like to hear them.');   // changed: the call's notes offer to read the details (owner, 2026-11-18)
   const done = voiceReplySentences('Here is code.\n```js\nlet a\n```\nAll set.', true);
   assert.deepStrictEqual(done.sentences, ['Here is code.']);   // on a call only the spoken lead (before the first code/table/list/heading line) is read; the note says the rest is in the chat
-  assert.strictEqual(done.note, 'I\'ve put the code in the chat.');   // changed: at the end of the reply the note names a code block (read-short-extras rule)
+  assert.strictEqual(done.note, 'I\'ve put the code in the chat; just say if you\'d like me to walk you through it.');   // changed: at the end of the reply the note names a code block (read-short-extras rule)
   assert.deepStrictEqual(voiceReplySentences('', true), { sentences: [], note: '' });
   assert.strictEqual(voiceJoinOr(['A']), 'A');
   assert.strictEqual(voiceJoinOr(['A', 'B']), 'A or B');
@@ -293,7 +293,7 @@ test('barge-in: speech start while speaking cuts the audio before transcription'
   assert.deepStrictEqual(h.interjected, ['no make it shorter'], 'a spoken correction becomes an interjection');
   h.call.onReplyText('Sentence one. Sentence two. Sentence three. Sentence four. Sentence five.', true);
   await h.finish();
-  assert.deepStrictEqual(h.spoken, ['Sentence one.', 'I have put the details in the chat.'], 'only the 3-sentence lead is ever read (sentences 4 and 5 are cut by the cap), so after the cut only the note follows');
+  assert.deepStrictEqual(h.spoken, ['Sentence one.', 'The details are in the chat; just say if you\'d like to hear them.'], 'only the 3-sentence lead is ever read (sentences 4 and 5 are cut by the cap), so after the cut only the note follows');
 });
 
 test('barge-in: the VAD is told when playback starts and stops', async () => {
@@ -317,7 +317,7 @@ test('reply reading: sentences as they arrive, code and tables skipped, note onc
   h.call.onReplyText('Here is the plan. Step one is easy. Step two:\n```js\nrun();\n```\n| a | b |\n|--|--|\n| 1 | 2 |\nDone.', true);
   await h.finish();
   // only the lead before the first code fence is read now: the text after the code and the table ('Done.') stays in the chat
-  assert.deepStrictEqual(h.spoken.slice(2), ['Step two:', 'I\'ve put the table in the chat.']);   // changed: the rest holds a code block and a table; the note names the kind (table wins over code)
+  assert.deepStrictEqual(h.spoken.slice(2), ['Step two:', 'I\'ve put the table in the chat; just say if you\'d like to hear it.']);   // changed: the rest holds a code block and a table; the note names the kind (table wins over code)
   await h.finish(); await h.finish();
   assert.strictEqual(h.last(), 'listening');
   assert.strictEqual(h.spoken.filter(s => /put the/.test(s)).length, 1);
@@ -429,7 +429,7 @@ test('announcements: spoken at the next pause, 1.5 s after the person stopped', 
   h.vadHandlers.onSpeechEnd({ text: '' }); await tick();
   await h.advance(1400); assert.deepStrictEqual(h.spoken, []);
   await h.advance(100);
-  assert.deepStrictEqual(h.spoken, ['Maria asks for the report. Now, or after we\'re done?']);
+  assert.deepStrictEqual(h.spoken, ['Maria has a request. Now, or after we\'re done?']);
   assert.strictEqual(h.last(), 'speaking');
 });
 
@@ -441,7 +441,7 @@ test('announcements: spoken at once when the person has been quiet; not while a 
   h.call.onReplyText('Done.', true);
   assert.deepStrictEqual(h.spoken, ['Done.']);
   await h.finish();
-  assert.deepStrictEqual(h.spoken, ['Done.', 'Nightly job finished. Now, or after we\'re done?']);
+  assert.deepStrictEqual(h.spoken, ['Done.', 'A background job finished. Now, or after we\'re done?']);
 });
 
 test('announcements: a spoken answer decides now, later, skip', async () => {
@@ -458,15 +458,15 @@ test('announcements: a spoken answer decides now, later, skip', async () => {
 
 test('announcements: no answer within 20 s means later; the next one follows', async () => {
   const h = await started();
-  h.call.onHeld({ id: 'a', kind: 'task', label: 'First' }, false);
+  h.call.onHeld({ id: 'a', kind: 'schedule', label: 'First' }, false);   // different kinds tell the two lines apart
   h.call.onHeld({ id: 'b', kind: 'task', label: 'Second' }, false);
-  assert.deepStrictEqual(h.spoken, ['First. Now, or after we\'re done?']);
+  assert.deepStrictEqual(h.spoken, ['A scheduled task is due. Now, or after we\'re done?']);
   await h.finish();
   await h.advance(19900); assert.deepStrictEqual(h.decisions, []);
   await h.advance(200);
   assert.deepStrictEqual(h.decisions, [['a', 'later']]);
   await h.advance(1600);
-  assert.deepStrictEqual(h.spoken[1], 'Second. Now, or after we\'re done?');
+  assert.deepStrictEqual(h.spoken[1], 'A task came in. Now, or after we\'re done?');
   assert.ok(h.call.held.find(x => x.id === 'a').later, 'a later item is kept, not asked again');
 });
 
@@ -498,7 +498,7 @@ test('announcements: dnd holds quietly (ui.held only); switching back announces'
   assert.strictEqual(h.call.held.length, 2);
   assert.ok(h.helds.length >= 2);
   h.call.setMode('announce');
-  assert.deepStrictEqual(h.spoken, ['Report ready. Now, or after we\'re done?']);
+  assert.deepStrictEqual(h.spoken, ['A job report came in. Now, or after we\'re done?']);
   const q = await started();
   q.call.onHeld({ id: 'z', kind: 'task', label: 'Quiet one' }, true);
   await q.advance(5000);
@@ -740,7 +740,7 @@ test('P-c: a transcript only answers the announcement that was pending when its 
   h.vadHandlers.onSpeechStart(); h.vadHandlers.onSpeechEnd({ text: 'yes' }); await tick();
   assert.deepStrictEqual(h.decisions, [['j1', 'now']]);
   // a second item: nothing is pending when the person begins; the announcement waits for the end of the transcription
-  h.call.onHeld({ id: 'j2', kind: 'job', label: 'Job two' }, true);
+  h.call.onHeld({ id: 'j2', kind: 'alert', label: 'Job two' }, true);
   h.call.setMode('dnd'); h.call.setMode('announce');
   const before = h.spoken.length;
   let resolveStt; h.deps.stt = () => new Promise((r) => { resolveStt = r; });
@@ -755,7 +755,7 @@ test('P-c: a transcript only answers the announcement that was pending when its 
   h.call.onReplyText('Fine.', true);
   await h.finish();
   await h.advance(3000);
-  assert.ok(h.spoken.some(x => /Job two/.test(x)), 'the announcement comes after the transcription and the reply');
+  assert.ok(h.spoken.includes('An alert came in. Now, or after we\'re done?'), 'the announcement comes after the transcription and the reply');
 });
 
 test('P-d: a false start does not stop the call: the reply cut by it is read on, and nothing starts while the person speaks', async () => {
@@ -785,17 +785,17 @@ test('P-d: lines that waited while the person spoke are read when the speech end
 
 test('P-e: held items come from the start answer and from every heartbeat answer, merged by id', async () => {
   const h = harness();
-  h.startHeld = [{ id: 'j1', kind: 'job', label: 'Job one', state: 'held' }, { id: 'j2', kind: 'job', label: 'Job two', state: 'later' }];
+  h.startHeld = [{ id: 'j1', kind: 'task', label: 'Job one', state: 'held' }, { id: 'j2', kind: 'job', label: 'Job two', state: 'later' }];
   assert.strictEqual(await h.call.start(), true);
   assert.deepStrictEqual(h.call.held.map(x => [x.id, x.later]), [['j1', false], ['j2', true]]);
-  assert.deepStrictEqual(h.spoken, ['Job one. Now, or after we\'re done?'], 'a deferred item is not announced');
+  assert.deepStrictEqual(h.spoken, ['A task came in. Now, or after we\'re done?'], 'a deferred item is not announced');
   await h.finish();
-  h.hbHeld = [{ id: 'j1', kind: 'job', label: 'Job one', state: 'held' }, { id: 'j2', kind: 'job', label: 'Job two', state: 'held' }, { id: 'j3', kind: 'job', label: 'Job three', state: 'held' }];
+  h.hbHeld = [{ id: 'j1', kind: 'task', label: 'Job one', state: 'held' }, { id: 'j2', kind: 'job', label: 'Job two', state: 'held' }, { id: 'j3', kind: 'alert', label: 'Job three', state: 'held' }];
   h.call.decide('j1', 'later');
   await h.advance(15000);
   assert.deepStrictEqual(h.call.held.map(x => [x.id, x.later]), [['j1', true], ['j2', true], ['j3', false]], 'known items keep their state');
   await h.advance(2000);
-  assert.deepStrictEqual(h.spoken, ['Job one. Now, or after we\'re done?', 'Job three. Now, or after we\'re done?'], 'only the new item is announced');
+  assert.deepStrictEqual(h.spoken, ['A task came in. Now, or after we\'re done?', 'An alert came in. Now, or after we\'re done?'], 'only the new item is announced');
   await h.finish();
   h.hbHeld = [{ id: 'j2', kind: 'job', label: 'Job two', state: 'done' }];
   await h.advance(15000);
@@ -819,16 +819,16 @@ test('an item the person said now to is not brought back by a heartbeat while it
 
 test('an item decided elsewhere while it is being asked ends that question, and the next item is still announced', async () => {
   const h = harness();
-  h.startHeld = [{ id: 'a', kind: 'consultation', label: 'Item A', state: 'held' }];
+  h.startHeld = [{ id: 'a', kind: 'consultation', from: 'sam', label: 'Item A', state: 'held' }];
   assert.strictEqual(await h.call.start(), true);
-  assert.deepStrictEqual(h.spoken, ['Item A. Now, or after we\'re done?']);
+  assert.deepStrictEqual(h.spoken, ['Sam has a request. Now, or after we\'re done?']);
   await h.finish();
   // an admin (or another device) said now to A; this page missed the event
-  h.hbHeld = [{ id: 'a', kind: 'consultation', label: 'Item A', state: 'allowed' }, { id: 'b', kind: 'consultation', label: 'Item B', state: 'held' }];
+  h.hbHeld = [{ id: 'a', kind: 'consultation', from: 'sam', label: 'Item A', state: 'allowed' }, { id: 'b', kind: 'consultation', from: 'kim', label: 'Item B', state: 'held' }];
   await h.advance(15000);
   await h.advance(25000);
   await h.finish();
-  assert.ok(h.spoken.includes('Item B. Now, or after we\'re done?'), 'B is announced: the question about A did not block it');
+  assert.ok(h.spoken.includes('Kim has a request. Now, or after we\'re done?'), 'B is announced: the question about A did not block it');
 });
 
 test('an answer that began before an announcement is not taken as its answer (candidate speech onset)', async () => {
@@ -837,7 +837,7 @@ test('an answer that began before an announcement is not taken as its answer (ca
   h.vadHandlers.onSpeechBegin();   // first speech-like frame: the person starts to say something
   h.call.onHeld({ id: 'x', kind: 'schedule', label: 'Daily review' }, false);
   await h.advance(3000);
-  assert.ok(!h.spoken.some(s => s.startsWith('Daily review')), 'nothing is announced over a person who started to speak');
+  assert.deepStrictEqual(h.spoken, [], 'nothing is announced over a person who started to speak');
   h.vadHandlers.onSpeechStart();
   h.vadHandlers.onSpeechEnd({ text: 'yes' });
   await tick();
@@ -850,9 +850,9 @@ test('a first speech frame followed by nothing (audio interrupted) does not leav
   h.vadHandlers.onSpeechBegin();
   h.call.onHeld({ id: 'y', kind: 'schedule', label: 'Weekly check' }, false);
   await h.advance(2000);
-  assert.ok(!h.spoken.some(s => s.startsWith('Weekly check')), 'held back while the person may be speaking');
+  assert.deepStrictEqual(h.spoken, [], 'held back while the person may be speaking');
   await h.advance(4000);
-  assert.ok(h.spoken.some(s => s.startsWith('Weekly check')), 'announced once the stuck start is let go');
+  assert.deepStrictEqual(h.spoken, ['A scheduled task is due. Now, or after we\'re done?'], 'announced once the stuck start is let go');
 });
 
 test('the 4 s watchdog still lets a false start go after something else showed "hearing" (settle in between)', async () => {
@@ -860,11 +860,11 @@ test('the 4 s watchdog still lets a false start go after something else showed "
   assert.strictEqual(await h.call.start(), true);
   h.vadHandlers.onSpeechBegin();
   h.call.onHeld({ id: 'a', kind: 'schedule', label: 'Alpha' }, false);
-  h.call.onHeld({ id: 'b', kind: 'schedule', label: 'Bravo' }, false);
+  h.call.onHeld({ id: 'b', kind: 'alert', label: 'Bravo' }, false);
   h.call.decide('b', 'later');   // runs settle(): with personSpeaking the state shows "hearing"
   assert.strictEqual(h.call.state, 'hearing');
   await h.advance(4500);
-  assert.ok(h.spoken.some(s => s.startsWith('Alpha')), 'released: the waiting announcement is read');
+  assert.deepStrictEqual(h.spoken, ['A scheduled task is due. Now, or after we\'re done?'], 'released: the waiting announcement is read');
   await h.finish();
   assert.notStrictEqual(h.call.state, 'hearing');
 });

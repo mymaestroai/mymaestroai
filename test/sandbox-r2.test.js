@@ -17,33 +17,69 @@ const read = (...p) => fs.readFileSync(path.join(ROOT, ...p), 'utf8');
 const CRED = '/home/agent/.claude/.credentials.json';
 const agent = { name: 'boxed', model: 'claude-sdk/claude-haiku-5-5', owner: 'member1' };
 
+// What a Docker stand-in must answer since boxes carry labels (whose box it is): the image's id, and a box's labels.
+const IMG_ID = `sha256:${'cd'.repeat(32)}`;
+const isImageId = (args) => args[0] === 'image' && args[1] === 'inspect' && args[2] === '--format' && args[3] === '{{.Id}}';
+const isLabelsAsk = (args) => args[0] === 'inspect' && args[1] === '--type' && args[2] === 'container' && args[3] === '--format' && args[4] === '{{.Id}} {{json .Config.Labels}}';
+const labelsIn = (args) => { const l = {}; args.forEach((x, i) => { if (args[i - 1] === '--label') { const j = String(x).indexOf('='); l[String(x).slice(0, j)] = String(x).slice(j + 1); } }); return l; };
+const noBox = (name) => Object.assign(new Error(`Command failed: docker inspect ${name}`), { stderr: `Error response from daemon: No such container: ${name}` });
+// What a Docker stand-in must answer since homes are labelled volumes: whose a volume is (volume inspect), making one
+// (volume create keeps the labels of a volume that exists, like Docker), the home a box mounts, and the throwaway
+// containers that move a home. `vols`: volume -> labels object or null (made without labels).
+const crypto = require('crypto');
+const { homeVolumeFor } = require('../lib/sandbox');
+const noVolume = (v) => Object.assign(new Error(`Command failed: docker volume inspect ${v}`), { stderr: `Error response from daemon: get ${v}: no such volume` });
+// the name of this install's labelled home for an agent: <older name>-<12 hex of the install id and data folder>
+const labelledHomeOf = async (sb, agent) => { const l = (await sb.labelsFor(agent)).labels; return `${homeVolumeFor(agent)}-${crypto.createHash('sha256').update(`${l['agent-hub.install']}\n${l['agent-hub.home']}`).digest('hex').slice(0, 12)}`; };
+// the labels of a home volume this install made for the agent
+const oursOf = async (sb, agent) => { const l = (await sb.labelsFor(agent)).labels; return { 'agent-hub': 'home', 'agent-hub.agent': agent.name, 'agent-hub.install': l['agent-hub.install'], 'agent-hub.home': l['agent-hub.home'] }; };
+// labelled: async (box id or name) => the labelled home of the agent a seeded box belongs to (a box made before the test, with today's settings)
+function volumeStandIn(labelled, vols = {}) {
+  const v = new Map(Object.entries(vols));
+  const homeOf = new Map();   // box name -> the volume its create mounted as /home/agent
+  const answer = async (args) => {
+    if (args[0] === 'create') { const n = args[args.indexOf('--name') + 1]; const h = args.find((x, i) => args[i - 1] === '-v' && String(x).endsWith(':/home/agent')); if (h) homeOf.set(n, h.slice(0, -':/home/agent'.length)); return undefined; }
+    if (args[0] === 'volume' && args[1] === 'inspect' && args[2] === '--format' && args[3] === '{{json .Labels}}') { if (!v.has(args[4])) throw noVolume(args[4]); return { stdout: JSON.stringify(v.get(args[4])) + '\n', stderr: '' }; }
+    if (args[0] === 'volume' && args[1] === 'create') { const n = args[args.length - 1]; if (!v.has(n)) v.set(n, labelsIn(args)); return { stdout: n + '\n', stderr: '' }; }
+    if (args[0] === 'inspect' && args.some(x => String(x).includes('{{range .Mounts}}{{if eq .Type "volume"}}'))) { const n = args[args.length - 1]; return { stdout: `/home/agent=${homeOf.get(n) || await labelled(n)}\n`, stderr: '' }; }
+    if (args[0] === 'run' && args.includes('--rm') && String(args[args.indexOf('--name') + 1]).startsWith('hub-home-move-')) return { stdout: args.some(x => String(x).startsWith('set -o pipefail; cd "$0"')) ? 'h\n1\n' : '', stderr: '' };
+    return undefined;
+  };
+  return { vols: v, homeOf, answer };
+}
+
 function rig(o = {}) {
   const calls = [], logs = [];
   const states = o.states || {};
   const volumes = new Set(o.volumes || []);
   const stale = new Set(o.staleVolumes || []);   // volumes that hold an old copy
+  const made = {};                               // boxes this stand-in saw created -> the labels of that create
+  // o.volumes are the older homes (made without labels); a labelled home exists only when a test puts one in vs.vols
+  const vs = volumeStandIn(() => labelledHomeOf(sb, agent), Object.fromEntries([...volumes].map(v => [v, null])));
   const docker = async (args) => {
     calls.push(args);
     const cmd = args[0];
+    if (cmd === 'volume' && args[1] === 'inspect' && o.inspectFails === args[args.length - 1]) throw Object.assign(new Error('daemon unavailable'), { stderr: 'daemon unavailable' });
+    const vAnswer = await vs.answer(args); if (vAnswer) return vAnswer;
+    if (isImageId(args)) return { stdout: IMG_ID + '\n', stderr: '' };
+    if (isLabelsAsk(args)) {
+      const n = args[5]; if (!states[n]) throw noBox(n);
+      // a box the test seeded was made before, with today's settings: it carries what a box made now carries
+      return { stdout: n + ' ' + JSON.stringify(made[n] || (await sb.labelsFor(agent)).labels) + '\n', stderr: '' };
+    }
     if (cmd === 'inspect') {
       const st = states[args[args.length - 1]]; if (!st) throw new Error('No such container');
       if (args.includes('{{.HostConfig.Init}}')) return { stdout: 'true\n', stderr: '' };
       if (String(args[2]).includes('.Mounts')) return { stdout: (o.binds ? o.binds() : []).map(b => `${b}\n`).join(''), stderr: '' };
       return { stdout: st + '\n', stderr: '' };
     }
-    if (cmd === 'create') { states[args[args.indexOf('--name') + 1]] = 'created'; return { stdout: 'id\n', stderr: '' }; }
+    if (cmd === 'create') { const n = args[args.indexOf('--name') + 1]; states[n] = 'created'; made[n] = labelsIn(args); return { stdout: 'id\n', stderr: '' }; }
     if (cmd === 'start') { states[args[args.length - 1]] = 'running'; return { stdout: '', stderr: '' }; }
-    if (cmd === 'rm') { delete states[args[args.length - 1]]; return { stdout: '', stderr: '' }; }
+    if (cmd === 'rm') { delete states[args[args.length - 1]]; delete made[args[args.length - 1]]; return { stdout: '', stderr: '' }; }
     if (cmd === 'exec' && args.includes('sh') && args.some(a => String(a).includes('.credentials.json'))) {
       if (o.purgeFails) throw Object.assign(new Error('exec failed'), { stderr: 'Error response from daemon: container is not running\nsecond line' });
       if (o.purgeStill) throw Object.assign(new Error('Command failed: docker exec'), { code: 3, stdout: 'still-present\n', stderr: '' });
       return { stdout: o.purgeFinds ? 'removed\n' : '', stderr: '' };
-    }
-    if (cmd === 'volume' && args[1] === 'inspect') {
-      const v = args[args.length - 1];
-      if (!volumes.has(v)) throw Object.assign(new Error(`Error response from daemon: get ${v}: no such volume`), { stderr: `Error: No such volume: ${v}` });
-      if (o.inspectFails === v) throw Object.assign(new Error('daemon unavailable'), { stderr: 'daemon unavailable' });
-      return { stdout: v + '\n', stderr: '' };
     }
     if (cmd === 'run') {
       const v = args[args.indexOf('-v') + 1].split(':')[0];
@@ -54,12 +90,13 @@ function rig(o = {}) {
     return { stdout: '', stderr: '' };
   };
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-r2-'));
-  const sb = createSandbox({
-    docker, uid: 1234, gid: 5678, image: 'agent-hub-sandbox:test', log: (m) => logs.push(m),
+  let sb;
+  sb = createSandbox({
+    docker, dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-r2-data-')), uid: 1234, gid: 5678, image: 'agent-hub-sandbox:test', log: (m) => logs.push(m),
     isMemberOwned: (a) => !!(a && a.owner && a.owner !== 'admin1'),
     workspaceFor: (a) => path.join(dir, 'workspaces', a.name), rootsFor: () => [],
   });
-  return { sb, calls, logs, states, dir };
+  return { sb, calls, logs, states, dir, vs };
 }
 const joined = (calls) => calls.map(c => c.join(' '));
 
@@ -158,7 +195,9 @@ test('sweepCredentials: only the named agents\' volumes, a missing volume skippe
   const out = await r.sb.sweepCredentials(names);
   assert.deepStrictEqual(out, { checked: 2, removed: ['gamma'], failed: [] });
   const text = joined(r.calls);
-  assert.deepStrictEqual(r.calls.filter(c => c[0] === 'volume').map(c => c[c.length - 1]), ['hub-agent-alpha-home', 'hub-agent-beta-home', 'hub-agent-gamma-home'], 'inspected only the named agents\' volumes');
+  // each named agent's labelled home (this install's) and then the older one without labels
+  const lab = (n) => labelledHomeOf(r.sb, { name: n });
+  assert.deepStrictEqual(r.calls.filter(c => c[0] === 'volume').map(c => c[c.length - 1]), [await lab('alpha'), 'hub-agent-alpha-home', await lab('beta'), 'hub-agent-beta-home', await lab('gamma'), 'hub-agent-gamma-home'], 'inspected only the named agents\' volumes');
   assert.ok(!text.some(t => t.includes('other-install')), 'never another install\'s volume');
   const runs = r.calls.filter(c => c[0] === 'run');
   assert.strictEqual(runs.length, 2, 'none for the missing volume');
@@ -175,6 +214,20 @@ test('sweepCredentials: only the named agents\' volumes, a missing volume skippe
   // no agents: nothing is run at all
   const empty = rig(); assert.deepStrictEqual(await empty.sb.sweepCredentials([]), { checked: 0, removed: [], failed: [] });
   assert.strictEqual(empty.calls.length, 0);
+});
+
+test('sweepCredentials: an agent\'s labelled home is swept when it is this install\'s and left alone when another copy\'s', async () => {
+  const r = rig();
+  const lab = (n) => labelledHomeOf(r.sb, { name: n });
+  r.vs.vols.set(await lab('alpha'), await oursOf(r.sb, { name: 'alpha' }));
+  r.vs.vols.set(await lab('beta'), { 'agent-hub': 'home', 'agent-hub.install': 'another-copy', 'agent-hub.home': 'x' });
+  const out = await r.sb.sweepCredentials(['alpha', 'beta']);
+  assert.deepStrictEqual(out, { checked: 1, removed: [], failed: [] });
+  const runs = r.calls.filter(c => c[0] === 'run');
+  assert.strictEqual(runs.length, 1);
+  assert.ok(runs[0].includes(`${await lab('alpha')}:/box-home`), 'this install\'s labelled home is the one swept');
+  const betaLab = await lab('beta');
+  assert.ok(!runs.some(c => c.join(' ').includes(betaLab)), 'another copy\'s home is never mounted');
 });
 
 test('sweepCredentials: a failure is reported in failed[] and the other volumes are still swept; an agent with a box id is found by its own volume', async () => {

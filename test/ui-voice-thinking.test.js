@@ -31,17 +31,17 @@ test('A (the default) and B: 4-7 soft pops, uneven 120-350 ms spacing, decay 30-
     assert.ok(c.durationMs >= 1500 && c.durationMs <= 2700, 'about 1.5 s: ' + c.durationMs);
     assert.ok(c.fadeInMs > 100 && c.fadeOutMs > 100 && c.fadeInMs + c.fadeOutMs <= c.durationMs, 'the cluster fades in and out');
     assert.ok(c.pops[n - 1].tMs + c.pops[n - 1].decayMs <= c.durationMs);
-    assert.ok(c.gapAfterMs >= 4000 && c.gapAfterMs <= 6000, 'gap ' + c.gapAfterMs);
+    assert.ok(c.gapAfterMs >= 1000 && c.gapAfterMs <= 2000, 'gap ' + c.gapAfterMs);
   }
   assert.ok(spaces.size > 100, 'the spacing is uneven, not a grid');
 });
 
-test('C: ONE sparse pop each time, gaps still 4-6 s', () => {
+test('C: ONE sparse pop each time, gaps still 1-2 s', () => {
   for (let seed = 0; seed < 100; seed++) {
     const c = voiceThinkingCluster({ seed, variant: 'C' });
     assert.strictEqual(c.pops.length, 1); assert.strictEqual(c.pops[0].tMs, 0); assert.strictEqual(c.pops[0].strength, 1);
     assert.ok(c.pops[0].decayMs >= 30 && c.pops[0].decayMs <= 60);
-    assert.ok(c.gapAfterMs >= 4000 && c.gapAfterMs <= 6000);
+    assert.ok(c.gapAfterMs >= 1000 && c.gapAfterMs <= 2000);
     assert.ok(c.durationMs < 300);
   }
 });
@@ -52,18 +52,18 @@ test('the gap is tunable (gapMinMs, gapSpreadMs) and varied by default', () => {
   assert.ok(gaps.size > 40, 'varied');
   assert.strictEqual(voiceThinkingCluster({ seed: 1, gapMinMs: 2500, gapSpreadMs: 0 }).gapAfterMs, 2500);
   const g = voiceThinkingCluster({ seed: 1, gapMinMs: 1000, gapSpreadMs: 500 }).gapAfterMs; assert.ok(g >= 1000 && g <= 1500);
-  assert.strictEqual(L.VOICE_THINKING_GAP_MIN_MS, 4000); assert.strictEqual(L.VOICE_THINKING_GAP_SPREAD_MS, 2000);
+  assert.strictEqual(L.VOICE_THINKING_GAP_MIN_MS, 1000); assert.strictEqual(L.VOICE_THINKING_GAP_SPREAD_MS, 1000);
   assert.deepStrictEqual(voiceThinkingCluster({ seed: 9, gapMinMs: -5, gapSpreadMs: 'x' }), voiceThinkingCluster({ seed: 9 }), 'rubbish falls back to the defaults');
 });
 
-test('peak: volume 0.5 (the default) is -25 dBFS, the top volume does not clip, 0 is silent, the volume is clamped', () => {
-  assert.ok(Math.abs(20 * Math.log10(voiceThinkingPeak(0.5)) + 25) < 1e-9);
-  assert.ok(Math.abs(voiceThinkingPeak(0.5) - Math.pow(10, -25 / 20)) < 1e-12);
-  assert.ok(Math.abs(20 * Math.log10(voiceThinkingPeak(1)) + 18.98) < 0.01, 'top volume = -25 dBFS + 6.02 dB');
+test('peak: volume 0.5 (the default) is -16 dBFS, the top volume does not clip, 0 is silent, the volume is clamped', () => {
+  assert.ok(Math.abs(20 * Math.log10(voiceThinkingPeak(0.5)) + 16) < 1e-9);
+  assert.ok(Math.abs(voiceThinkingPeak(0.5) - Math.pow(10, -16 / 20)) < 1e-12);
+  assert.ok(Math.abs(20 * Math.log10(voiceThinkingPeak(1)) + 9.98) < 0.01, 'top volume = -16 dBFS + 6.02 dB');
   assert.ok(voiceThinkingPeak(1) > 0 && voiceThinkingPeak(1) < 1, 'top volume stays below full scale (no clipping)');
   assert.strictEqual(voiceThinkingPeak(0), 0);
   assert.strictEqual(voiceThinkingPeak(9), voiceThinkingPeak(1)); assert.strictEqual(voiceThinkingPeak(-1), 0);
-  assert.ok(Math.abs(20 * Math.log10(voiceThinkingPeak(undefined)) + 25) < 1e-9, 'unknown volume = default');
+  assert.ok(Math.abs(20 * Math.log10(voiceThinkingPeak(undefined)) + 16) < 1e-9, 'unknown volume = default');
 });
 
 test('the event: at, kind, pops as offsets from at, the old swell fields, a copy of the pops', () => {
@@ -78,14 +78,14 @@ test('the event: at, kind, pops as offsets from at, the old swell fields, a copy
   assert.strictEqual(ev.at + ev.pops[0].tMs, 12345 + 140 + plan.pops[0].tMs);
 });
 
-test('the schedule of a wait: first sound at 2 s, then previous + length + gap; the same as one clock would make; count / untilMs', () => {
+test('the schedule of a wait: first sound at 1 s (VOICE_CALL_THINK_MS of the call), then previous + length + gap; the same as one clock would make; count / untilMs', () => {
   const s = voiceThinkingSchedule({ seed: 5, count: 4, startAt: 1000 });
-  assert.strictEqual(s.length, 4); assert.strictEqual(s[0].at, 3000);
+  assert.strictEqual(s.length, 4); assert.strictEqual(s[0].at, 2000);
   for (let i = 1; i < 4; i++) assert.strictEqual(s[i].at, s[i - 1].at + s[i - 1].durationMs + s[i - 1].gapAfterMs);
   for (let i = 0; i < 4; i++) assert.deepStrictEqual(s[i].pops, voiceThinkingCluster({ seed: 5, index: i }).pops, 'cluster i of the controller');
   assert.deepStrictEqual(voiceThinkingSchedule({ seed: 5, count: 4, startAt: 1000 }), s, 'deterministic');
   const u = voiceThinkingSchedule({ seed: 5, untilMs: 30000 });
-  assert.ok(u.length >= 3 && u.every(e => e.at <= 30000)); assert.ok(u.length < 8);
+  assert.ok(u.length >= 3 && u.every(e => e.at <= 30000)); assert.ok(u.length < 14);   // a cluster every 2.5-3.5 s: about 8-11 in 30 s
   assert.strictEqual(voiceThinkingSchedule({ seed: 5, count: 1, firstAtMs: 500 })[0].at, 500);
   assert.deepStrictEqual(voiceThinkingSchedule({ seed: 5, count: 0 }), []);
 });

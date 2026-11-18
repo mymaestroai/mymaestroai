@@ -254,6 +254,54 @@ test('resolve: more than 12 items is a 400, exactly 12 is fine, a body without a
   assert.strictEqual((await w.resolve('u_owner', [])).json.items.length, 0);
 });
 
+test('resolve: an abs path whose folders and file name hold spaces resolves', async (t) => {
+  const w = await world(); t.after(() => w.close());
+  const abs = w.write('share/helper-agent/Bench Cut Files/ply 12 part.tap', 'tap');
+  const it = (await w.resolve('u_owner', [{ abs }])).json.items[0];
+  assert.deepStrictEqual([it.ok, it.name, it.agent, it.path], [true, 'ply 12 part.tap', 'helper-agent', 'Bench Cut Files/ply 12 part.tap']);
+  assert.strictEqual((await w.req('u_owner', 'GET', it.download)).body.toString(), 'tap');
+});
+
+test('resolve: a bare name {name, agent} resolves when exactly one file in that agent\'s folder has it; ambiguous, missing and invalid names are "not found"', async (t) => {
+  const w = await world(); t.after(() => w.close());
+  w.write('share/helper-agent/Bench Cut Files/part 1.tap', 'one');
+  w.write('share/helper-agent/dup/same.txt', '1'); w.write('share/helper-agent/dup2/same.txt', '2');
+  const r = (await w.resolve('u_owner', [
+    { name: 'part 1.tap', agent: 'helper-agent' },
+    { name: 'same.txt', agent: 'helper-agent' },                 // two files: ambiguous
+    { name: 'nothing.txt', agent: 'helper-agent' },
+    { name: '../other-agent/x.txt', agent: 'helper-agent' },
+    { name: 'a/part 1.tap', agent: 'helper-agent' },
+    { name: 'part 1.tap', agent: 'no-such-agent' },
+    { name: 'part 1.tap' },                                       // no agent: nothing to search
+    { name: 'part 1.tap', agent: 5 },
+  ])).json.items;
+  assert.deepStrictEqual([r[0].ok, r[0].name, r[0].agent, r[0].owner, r[0].path], [true, 'part 1.tap', 'helper-agent', null, 'Bench Cut Files/part 1.tap']);
+  assert.strictEqual(r[0].download, '/api/files/download?agent=helper-agent&path=Bench%20Cut%20Files%2Fpart%201.tap');
+  assert.strictEqual((await w.req('u_owner', 'GET', r[0].download)).body.toString(), 'one');
+  for (const [i, x] of r.slice(1).entries()) assert.deepStrictEqual(x, NOT_FOUND, `item ${i + 1}`);
+});
+
+test('resolve: a bare name is searched only in the named agent\'s own folder; a member who may not open the agent gets "not found"', async (t) => {
+  const w = await world(); t.after(() => w.close());
+  w.write('share/other-agent/only-there.txt', 'o');
+  w.write('share/loose-name.txt', 'l');                           // the general share: never searched for a bare name
+  w.write('users/u_mo/files/mo-private.txt', 'm');
+  w.write('share/shared-agent/in-shared.txt', 's');
+  w.write('users/u_sam/files/in-sam.txt', 'sam');
+  // the name exists only in ANOTHER agent's folder
+  assert.deepStrictEqual((await w.resolve('u_owner', [{ name: 'only-there.txt', agent: 'helper-agent' }, { name: 'loose-name.txt', agent: 'helper-agent' }, { name: 'mo-private.txt', agent: 'helper-agent' }])).json.items, [NOT_FOUND, NOT_FOUND, NOT_FOUND]);
+  assert.strictEqual((await w.resolve('u_owner', [{ name: 'only-there.txt', agent: 'other-agent' }])).json.items[0].ok, true, 'control: the right agent');
+  // a member
+  assert.deepStrictEqual((await w.resolve('u_sam', [{ name: 'only-there.txt', agent: 'other-agent' }])).json.items, [NOT_FOUND], 'an agent the member may not open');
+  const sh = (await w.resolve('u_sam', [{ name: 'in-shared.txt', agent: 'shared-agent' }])).json.items[0];
+  assert.deepStrictEqual([sh.ok, sh.agent, sh.path], [true, 'shared-agent', 'in-shared.txt']);
+  const own = (await w.resolve('u_sam', [{ name: 'in-sam.txt', agent: 'sam-agent' }])).json.items[0];
+  assert.deepStrictEqual([own.ok, own.agent, own.path], [true, 'sam-agent', 'in-sam.txt'], 'a member-owned agent resolves to the member folder');
+  assert.deepStrictEqual((await w.resolve('u_mo', [{ name: 'in-sam.txt', agent: 'sam-agent' }])).json.items, [NOT_FOUND], 'another member cannot reach it');
+  assert.deepStrictEqual((await w.resolve('u_sam', [{ name: 'mo-private.txt', agent: 'sam-agent' }])).json.items, [NOT_FOUND]);
+});
+
 // ───────────────────────────── GET /api/files/recent + the upload ledger ─────────────────────────────
 test('recent: newest first, with folder/size/kind/download, limit 1..30 (default 10), dot-files and symlinks skipped', async (t) => {
   const w = await world(); t.after(() => w.close());

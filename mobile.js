@@ -1163,6 +1163,7 @@ async function fillModelPick() {
 }
 // Reasoning effort next to the model (lib/effort): admins pick it for any agent, members see what their admin set.
 const EFFORT_LABEL = { default: 'Default effort', low: 'Low effort', medium: 'Medium effort', high: 'High effort', xhigh: 'Extra high effort', max: 'Max effort' };
+const EFFORT_ULTRA_OPTION = 'Ultra (uses several helpers; uses much more of the ChatGPT plan)';
 function effortSupported(model) {
   const m = String(model || ''); const p = m.split('/')[0]; const n = m.slice(m.indexOf('/') + 1).toLowerCase();
   if (p === 'claude-sdk' || p === 'codex-cli' || p === 'anthropic') return true;
@@ -1197,10 +1198,14 @@ function fillEffortPick() {
   if (!wrap || !sel) return;
   const a = agentByName(current);
   if (!a || !effortSupported(a.model) || a.autoModel) { wrap.hidden = true; return; }
-  const level = a.effort || 'default';
-  if (!sel.options.length) sel.innerHTML = Object.entries(EFFORT_LABEL).map(([v, l]) => `<option value="${v}">${esc(l)}</option>`).join('');
+  // Ultra (Codex: max reasoning plus helpers) is offered only when the server says this agent's model takes it (a.effortUltra);
+  // a stored Ultra the model no longer has shows as Max, which is what the server sends then.
+  const ultraOk = a.effortUltra === true;
+  const level = a.effort === 'ultra' && !ultraOk ? 'max' : (a.effort || 'default');
+  const wantOptions = ultraOk ? 7 : 6;
+  if (sel.options.length !== wantOptions) sel.innerHTML = Object.entries(EFFORT_LABEL).map(([v, l]) => `<option value="${v}">${esc(l)}</option>`).join('') + (ultraOk ? `<option value="ultra">${esc(EFFORT_ULTRA_OPTION)}</option>` : '');
   sel.value = level; sel.dataset.agent = a.name; sel.disabled = !isAdmin();
-  txt.textContent = EFFORT_LABEL[level] || level;
+  txt.textContent = level === 'ultra' ? 'Ultra effort' : (EFFORT_LABEL[level] || level);
   wrap.classList.toggle('pickable', isAdmin());
   wrap.hidden = false;
 }
@@ -1212,7 +1217,7 @@ async function changeEffortFromPick() {
     const d = await r.json().catch(() => ({}));
     if (!r.ok || d.success === false) { sel.value = a.effort || 'default'; toast(`Could not change the effort: ${d.error || r.status}`); return; }
     a.effort = level; fillEffortPick();
-    toast(`${a.display || name}: ${EFFORT_LABEL[level]}${isBusy(name) || streams.has(name) ? ' from the next reply' : ''}`);
+    toast(`${a.display || name}: ${EFFORT_LABEL[level] || 'Ultra effort'}${isBusy(name) || streams.has(name) ? ' from the next reply' : ''}`);
   } catch (e) { sel.value = a.effort || 'default'; toast(`Could not change the effort: ${e.message}`); }
 }
 
@@ -2659,9 +2664,12 @@ function autoGroupHistory(history, from = 0, { stackMin = AUTO_STACK_MIN } = {})
 const VOICE_STORE_KEY = 'hub-voice';
 const VOICE_DETAILS_NOTE = ' I have put the details in the chat.';
 // On a call the note names the kind of what was left out when it is clear (see voiceReplySentences in ui-voice-call.js).
-const VOICE_NOTE_LIST = ' I\'ve put the full list in the chat.';
-const VOICE_NOTE_TABLE = ' I\'ve put the table in the chat.';
-const VOICE_NOTE_CODE = ' I\'ve put the code in the chat.';
+// The call offers to read what it left out (the agent reads it in full when asked); a reply read aloud without a call keeps the plain note above.
+// Keep the offer as the "; just say if you'd like ..." ending: voicePlainNote (ui-voice-call.js) removes exactly that on a call the hub cannot verify.
+const VOICE_NOTE_DETAILS_CALL = ' The details are in the chat; just say if you\'d like to hear them.';
+const VOICE_NOTE_LIST = ' I\'ve put the full list in the chat; just say if you\'d like to hear it.';
+const VOICE_NOTE_TABLE = ' I\'ve put the table in the chat; just say if you\'d like to hear it.';
+const VOICE_NOTE_CODE = ' I\'ve put the code in the chat; just say if you\'d like me to walk you through it.';
 const VOICE_DETAILS_READ_WORDS = [0, 20, 40, 80];   // 'Read short extra parts aloud': Off / up to 20 / 40 / 80 words (pref detailsReadWords, default 40; 0 = never read the rest)
 const VOICE_HUB_CUES = ['off', 'chime', 'cue'];   // 'When something comes in during a call': Off / Chime / Short cue (pref hubCue, default 'cue')
 const VOICE_BACKGROUND_CUES = ['off', 'show', 'say'];   // 'While I finish something in the background': Off / Show it / Say it (pref backgroundCue, default 'say')
@@ -3346,12 +3354,13 @@ function voiceCeilingCurve(n) {
   }
   return curve;
 }
-// One chain per AudioContext: gain -> compressor -> trim -> ceiling curve -> analyser -> destination. Returns null when the context cannot build it.
+// One chain per AudioContext: gain -> compressor -> trim -> ceiling curve -> analyser -> destination; the thinking sound enters
+// through its own gain (thinkInput) in front of `gain`, held at the level it gets with a normalised voice (never above it). Returns null when the context cannot build it.
 function voiceCreateLoudness(ctx) {
   if (!ctx) return null;
   try { if (ctx.__voiceLoudness) return ctx.__voiceLoudness; } catch {}
   if (typeof ctx.createGain !== 'function' || typeof ctx.createDynamicsCompressor !== 'function') return null;
-  let gain, comp, trim, shaper = null, an = null, db = voiceLoudnessDb('louder'), buf = null;
+  let gain, comp, trim, shaper = null, an = null, db = voiceLoudnessDb('louder'), buf = null, think = null;
   try {
     gain = ctx.createGain();
     comp = ctx.createDynamicsCompressor();
@@ -3368,12 +3377,16 @@ function voiceCreateLoudness(ctx) {
     let last = trim;
     if (shaper) { last.connect(shaper); last = shaper; }
     if (an) { last.connect(an); an.connect(ctx.destination); } else last.connect(ctx.destination);
+    try { think = ctx.createGain(); think.connect(gain); } catch { think = null; }   // the thinking sound's input
   } catch { return null; }
   let levelName = 'louder', normalized = false;
-  const apply = () => { db = voiceLoudnessDb(levelName, normalized); try { gain.gain.value = Math.pow(10, db / 20); } catch {} };
+  // The thinking sound is set for a voice sent already normalised (X-Voice-Normalized): until a reply says so, the chain boosts as for
+  // an unknown voice, and its input is trimmed back to the normalised boost (a trim, never a boost).
+  const apply = () => { db = voiceLoudnessDb(levelName, normalized); try { gain.gain.value = Math.pow(10, db / 20); } catch {} try { if (think) think.gain.value = Math.pow(10, Math.min(0, voiceLoudnessDb(levelName, true) - db) / 20); } catch {} };
   apply();
   const chain = {
     input: gain,
+    thinkInput: think || gain,
     setLevel(name) { levelName = name; apply(); },
     setNormalized(flag) { normalized = !!flag; apply(); },
     get normalized() { return normalized; },
@@ -3408,7 +3421,7 @@ const VOICE_EMPTY_LINE = 'I didn\'t catch that.';   // the recognizer answered w
 // While a reply plays, a stricter talk-over (iPhone, iPad: the speaker's echo is loud) caps the sensitivity at this value.
 const VOICE_STRICT_TALKOVER_SENS = 20;
 const VOICE_CALL_HEARTBEAT_MS = 15000, VOICE_CALL_STATUS_GAP_MS = 10000, VOICE_CALL_PAUSE_MS = 1500, VOICE_CALL_ANSWER_MS = 20000;
-const VOICE_CALL_JOIN_MS = 2000, VOICE_CALL_STILL_MS = 20000, VOICE_CALL_THINK_MS = 2000, VOICE_CALL_CONTINUE_MS = 3000, VOICE_CALL_HOLD_MS = 5000, VOICE_CALL_WAIT_HOLD_MS = 20000;
+const VOICE_CALL_JOIN_MS = 2000, VOICE_CALL_STILL_MS = 20000, VOICE_CALL_THINK_MS = 1000, VOICE_CALL_CONTINUE_MS = 3000, VOICE_CALL_HOLD_MS = 5000, VOICE_CALL_WAIT_HOLD_MS = 20000;
 // After 20 s with no reply speech, ONE of these is spoken (never the same one twice in a wait).
 const VOICE_THINKING_LINES = ['I\'m considering what you just said.', 'Still thinking about that.', 'Give me a moment, I\'m working through it.'];
 // A turn the hub started (a scheduled task, a consultation, a job report) is never read aloud on a call. When one needs the person (the page tells the
@@ -3426,6 +3439,21 @@ function voiceCallNorm(text) {
 function voiceJoinOr(list) {
   const a = Array.from(list || []).filter(Boolean);
   return a.length < 2 ? (a[0] || '') : a.slice(0, -1).join(', ') + ' or ' + a[a.length - 1];
+}
+// The spoken question for an item held while the person is on the call. It says only WHO it is from and WHAT KIND it is, never
+// the item's label: a consultation's label is the start of the request text, a task's is its title, and neither may be read
+// aloud on a call (only replies to what the person said are). The label stays on screen in the held list.
+const VOICE_ANNOUNCE_KINDS = { consultation: 'has a request', consult_reply: 'Replies from other agents came in', schedule: 'A scheduled task is due',
+  job_notice: 'A background job finished', job_report: 'A job report came in', task: 'A task came in', alert: 'An alert came in' };
+function voiceAnnounceLine(item) {
+  const it = item || {};
+  // an agent's name is letters and digits; the hub's own senders (tiger-team-ui, roundtable workers, w_ ids) are "Another agent"
+  const from = typeof it.from === 'string' && /^[A-Za-z][A-Za-z0-9]{0,31}$/.test(it.from) && !['hub', 'schedule', 'owner', 'roundtable'].includes(it.from) ? it.from : '';
+  const name = from ? from.charAt(0).toUpperCase() + from.slice(1) : '';
+  let what;
+  if (it.kind === 'consultation') what = (name || 'Another agent') + ' ' + VOICE_ANNOUNCE_KINDS.consultation;
+  else what = Object.prototype.hasOwnProperty.call(VOICE_ANNOUNCE_KINDS, it.kind) ? VOICE_ANNOUNCE_KINDS[it.kind] : 'Something came in';
+  return what + '. Now, or after we\'re done?';
 }
 function voiceDecisionWord(text) {
   const t = voiceCallNorm(text);
@@ -3559,8 +3587,31 @@ function voiceRestAnalysis(rest, extra, readWords, openTail, extraRaw) {
 // VOICE_LEAD_MAX_SENTENCES sentences); anything left out is held. At done what the lead left out is judged: short (at most readWords spoken
 // words, nothing unspeakable) -> its sentences follow the lead's (so the sentences already returned stay a prefix), no note; substantial -> the lead only
 // and ONE note naming the kind (list, table, code, else the details note). readWords 0 never reads the rest.
-function voiceReplySentences(markdown, done, readWords) {
+// A 4th argument full === true reads the WHOLE reply (the person asked to hear the details): every complete sentence of the whole text, no cap and no note
+// (a table or code block is dropped silently); while streaming only complete sentences count, as above.
+function voiceFullSentences(markdown, done, note) {
+  let text = String(markdown == null ? '' : markdown).replace(/\r\n?/g, '\n');
+  const lines = text.split('\n');
+  const kept = [];
+  let inTable = false;   // after a table's header: its rows (lines with a pipe) up to the next line without one
+  for (let i = 0; i < lines.length; i++) {
+    if (inTable) { if (lines[i].includes('|')) continue; inTable = false; }
+    // a table header (a line with a pipe above a delimiter row) and a line still being typed that may become one are not text
+    if (lines[i].includes('|') && ((i + 1 < lines.length && VOICE_TABLE_RULE_RE.test(lines[i + 1])) || (!done && i >= lines.length - 2))) { if (!done) break; i++; inTable = true; continue; }
+    if (VOICE_TABLE_RULE_RE.test(lines[i])) continue;
+    kept.push(lines[i]);
+  }
+  text = kept.join('\n') + (kept.length < lines.length ? '\n' : '');   // lines held back: what came before them is complete
+  if (!done) text = text.replace(/(^|\n)[ \t]*(?:[-*+•◦▪‣`~#|_=]+|\d+[.)]?|(?:\*\*|__)[^\n]*)$/, '$1');   // a lone marker of a line being typed
+  let t = voiceSpeechText(text, !done);
+  if (t === note) t = ''; else if (t.endsWith(' ' + note)) t = t.slice(0, -note.length).trim();
+  const sentences = voiceSentences(t).filter(Boolean);
+  if (!done && sentences.length && !(/[.!?]["')\]]*$/.test(t) && /\s$/.test(text))) sentences.pop();
+  return { sentences, note: '' };
+}
+function voiceReplySentences(markdown, done, readWords, full) {
   const note = voiceSpeechText('| a |');
+  if (full === true) return voiceFullSentences(markdown, done, note);
   const limit = Number.isFinite(Number(readWords)) && readWords !== null && readWords !== '' && Number(readWords) >= 0 ? Number(readWords) : 40;
   const sp = voiceSpokenLead(markdown, done);
   const finished = (!!done || sp.cut) && !sp.openTail;   // a cut lead is complete; an uncut reply may still be streaming; text before a table header's pipe is read as typed
@@ -3574,7 +3625,7 @@ function voiceReplySentences(markdown, done, readWords) {
   if (!finished && sentences.length && !(/[.!?]["')\]]*$/.test(t) && /\s$/.test(lead))) sentences.pop();
   const extra = sentences.slice(VOICE_LEAD_MAX_SENTENCES);
   if (extra.length) { sentences = sentences.slice(0, VOICE_LEAD_MAX_SENTENCES); hasNote = true; }
-  if (!done || !limit || !hasNote || leadNote) return { sentences, note: hasNote ? note : '' };
+  if (!done || !limit || !hasNote || leadNote) return { sentences, note: hasNote ? VOICE_NOTE_DETAILS_CALL.trim() : '' };
   // Which extra sentences hold a RAW link / path: the same cleaning and split on the lead with its raw links and paths marked by sentinel
   // words (the words "a link" / "a file path" in ordinary prose are not raw ones).
   let extraRaw = 0;
@@ -3594,8 +3645,44 @@ function voiceReplySentences(markdown, done, readWords) {
   const text = String(markdown == null ? '' : markdown).replace(/\r\n?/g, '\n');
   const rest = sp.cut ? text.slice(sp.lead.length) : '';
   const a = voiceRestAnalysis(rest, extra, limit, sp.openTail, extraRaw);
-  if (a.substantial) return { sentences, note: a.kind === 'list' ? VOICE_NOTE_LIST.trim() : a.kind === 'table' ? VOICE_NOTE_TABLE.trim() : a.kind === 'code' ? VOICE_NOTE_CODE.trim() : note };
+  if (a.substantial) return { sentences, note: a.kind === 'list' ? VOICE_NOTE_LIST.trim() : a.kind === 'table' ? VOICE_NOTE_TABLE.trim() : a.kind === 'code' ? VOICE_NOTE_CODE.trim() : VOICE_NOTE_DETAILS_CALL.trim() };
   return { sentences: sentences.concat(a.sentences), note: '' };
+}
+// A call whose turns the hub cannot verify (its start answer says readDetails: false: an API caller with a service token)
+// gets no read-in-full instructions, so its notes say only where the details are: "...in the chat." without the offer.
+function voicePlainNote(note) {
+  return String(note == null ? '' : note).replace(/; just say if you'd like [^.]*\.$/, '.');
+}
+// The "read in full" flag belongs to ONE reply. Both pages keep gate = { set, turn, own, past } (set: a flag is on; turn: the hub turn id it was
+// set for, null when the chunk carried none; own: the latest own turn id from turn_start; past: earlier own turn ids) and ask this for every related event:
+//   { kind: 'chunk', turnId }  the chat stream's voice_read_full (this page's own spoken send)  -> set for its turn, unless that turn is an EARLIER own turn
+//   { kind: 'event', turnId }  the hub's turn_read_full for the call's agent                     -> set only when turnId is the latest own turn
+//   { kind: 'start', turnId }  an own turn_start, typed or spoken                                 -> remember it; a flag for ANOTHER turn is cleared
+// (a flag for the same turn stays: the chat-stream chunk may come before the hub's turn_start; a chunk for a turn not seen yet is that case,
+// a chunk for a turn already superseded (past: the last VOICE_READ_FULL_PAST own turns before the latest) is a late one and is ignored).
+// Signals may repeat (one per [details] tag: an answer to an interjection in the same turn gives its own). Returns
+// { state, action: 'set' | 'reset' | 'ignore' }. Pure: the caller stores state and calls call.onReadFull() on 'set' and call.resetReadFull() on 'reset'.
+const VOICE_READ_FULL_PAST = 32;
+function voiceReadFullGate(state, ev) {
+  const s = state && typeof state === 'object' ? state : {};
+  const cur = { set: s.set === true, turn: s.turn === undefined ? null : s.turn, own: s.own === undefined ? null : s.own, past: Array.isArray(s.past) ? s.past : [] };
+  const id = ev && ev.turnId ? String(ev.turnId) : null;
+  switch (ev && ev.kind) {
+    case 'chunk':
+      if (id && cur.past.includes(id)) return { state: cur, action: 'ignore' };   // a late chunk of an earlier turn
+      return { state: { set: true, turn: id, own: cur.own, past: cur.past }, action: 'set' };
+    case 'event':
+      if (id && id === cur.own) return { state: { set: true, turn: id, own: cur.own, past: cur.past }, action: 'set' };
+      return { state: cur, action: 'ignore' };
+    case 'start': {
+      if (!id || id === cur.own) return { state: cur, action: 'ignore' };
+      // the turn before becomes past; the new one is never in past (a replayed turn_start is current again)
+      const past = (cur.own ? cur.past.filter(t => t !== cur.own).concat(cur.own) : cur.past).filter(t => t !== id).slice(-VOICE_READ_FULL_PAST);
+      if (cur.set && cur.turn !== id) return { state: { set: false, turn: null, own: id, past }, action: 'reset' };
+      return { state: { set: cur.set, turn: cur.turn, own: id, past }, action: 'ignore' };
+    }
+    default: return { state: cur, action: 'ignore' };
+  }
 }
 function voiceCreateCall(deps) {
   const d = deps || {};
@@ -3606,6 +3693,9 @@ function voiceCreateCall(deps) {
   let state = '', mode = 'announce', ended = false, started = false, endPromise = null;
   let personSpeaking = false, speechEndAt = null, awaitingReply = false, cutSkip = false;
   let lastText = '', spokenCount = 0, noteSpoken = false, doneSeen = false, lastStatusAt = null;
+  let toolBreakText = null, toolBreakAt = [];   // the reply text whose last sentence was last released when a tool started (speakBeforeTool), and the length at each release
+  let readFull = false;   // the person asked to hear the details: this reply is read in full (onReadFull); reset where a new reply begins
+  let readOffer = true;   // the hub can read details on request for this call (start answer readDetails: false when it cannot): else the notes do not offer it
   let queue = [], current = null, speaking = false, gen = 0;
   let heldList = [], announceQueue = [], pendingAnnounce = null, pendingAsk = null;
   let hbTimer = null, pumpTimer = null, sttChain = Promise.resolve();
@@ -3614,7 +3704,7 @@ function voiceCreateCall(deps) {
   // earlier segment a new one may join, segActive that a segment has begun and has not ended.
   let lastSeg = null, curCand = null, segActive = false;
   // The one spoken line after a long wait: when something was last spoken, when the running turn began, whether a line was
-  // said since, which lines this wait has used. The thinking sound: its 2 s timer and whether it is playing.
+  // said since, which lines this wait has used. The thinking sound: its 1 s timer and whether it is playing.
   let lastSpokenAt = null, turnAt = null, stillSaid = false, stillTimer = null, stillUsed = [];
   let thinkTimer = null, thinkingOn = false, thinkStep = 0, thinkT0 = 0, thinkDueAt = 0, thinkSeed = 0;
   let replyEnded = false;   // the whole reply of this turn was reported once (ui.reply('end'))
@@ -3652,8 +3742,8 @@ function voiceCreateCall(deps) {
 
   // The thinking clock: ONE scheduler for what is heard and what is shown. When the person's turn was sent (and nothing is being
   // transcribed or asked) it starts: a small silent pulse at once (strength 0.35, visual only), the first full pulse VOICE_CALL_THINK_MS
-  // later (2 s, the first audible one), then a quiet random pop cluster (lib/ui-voice-thinking.js: voiceThinkingCluster, seeded) about
-  // every 1.5 s of pops + a 4-6 s gap (the gap is measured from the END of the cluster). Every pulse is one event (the contract is in
+  // later (1 s, the first audible one), then a quiet random pop cluster (lib/ui-voice-thinking.js: voiceThinkingCluster, seeded) about
+  // every 1.5 s of pops + a 1-2 s gap (the gap is measured from the END of the cluster). Every pulse is one event (the contract is in
   // lib/ui-voice-thinking.js: at, kind, durationMs, pops [{ tMs, strength, freqHz, decayMs }], and the old swell fields attackMs, decayMs,
   // strength) handed to ui.thinkingPulse(event) (the call display's orb), and when the sound is on (thinkingSound not false; do-not-disturb never mutes it, with any display) to
   // thinking.pulse(event) as well; `at` is the performance.now() time (d.perfNow, else d.now) the audio is scheduled to start (+20 ms);
@@ -3667,7 +3757,7 @@ function voiceCreateCall(deps) {
   const perfNow = () => { const f = d.perfNow || d.now; return Number(f()); };
   // thinkVisual: a display really takes the pulses right now (ui.thinkingPulse exists and ui.thinkingWanted(), when the page has it, says
   // a view is shown). With NO display (None, hidden, ended) the clock is exactly the plain thinking sound of before: nothing is armed
-  // when the sound is off, do-not-disturb does not mute it, switching it off ends the wait and switching it on starts a fresh 2 s one,
+  // when the sound is off, do-not-disturb does not mute it, switching it off ends the wait and switching it on starts a fresh 1 s one,
   // and the sound's own pulse() is called without an event.
   const thinkVisual = () => typeof (d.ui && d.ui.thinkingPulse) === 'function' && !(typeof d.ui.thinkingWanted === 'function' && !quiet(() => d.ui.thinkingWanted()));
   const thinkAudible = () => !!d.thinking && prefs().thinkingSound !== false;   // the same in every display (None, Orb, Character): do-not-disturb does not mute the sound
@@ -3683,7 +3773,7 @@ function voiceCreateCall(deps) {
     thinkStep = 0;
     muteThinking();
   }
-  // Pulse 0 (the small silent one) happens at t0, pulse 1 at t0 + 2000, and every next one at the previous one's time + its
+  // Pulse 0 (the small silent one) happens at t0, pulse 1 at t0 + 1000, and every next one at the previous one's time + its
   // cluster length + its own gap (all on the controller's clock, so the audio mapping of event.at never makes it drift).
   const thinkPlan = (k) => {
     if (typeof voiceThinkingCluster !== 'function') return null;
@@ -3880,7 +3970,16 @@ function voiceCreateCall(deps) {
   }
 
   const readWords = () => prefs().detailsReadWords;   // 'Read short extra parts aloud' (undefined: the default, 40)
-  function completeCount() { return voiceReplySentences(lastText, false, readWords()).sentences.length; }
+  // The reply text as it is spoken: after a sentence released at a tool (speakBeforeTool) a break is kept there, also when the text that
+  // follows was joined straight onto it, so the released sentence stays complete and the next one starts fresh. Speech only: lastText
+  // (saved and shown) is never changed.
+  function withToolBreak(t) {
+    if (toolBreakText === null || !t.startsWith(toolBreakText)) return t;
+    let out = '', from = 0;
+    for (const at of toolBreakAt) { out += t.slice(from, at) + (/^\s/.test(t.slice(at)) ? '' : '\n'); from = at; }   // every release in this reply, in order
+    return out + t.slice(from);
+  }
+  function completeCount() { return voiceReplySentences(withToolBreak(lastText), false, readWords()).sentences.length; }
   // The whole reply is over, reported ONCE (ui.reply('end')) for the display's reaction: its text is complete AND nothing is read or waiting to be
   // read (so a gap between two sentences of a growing reply is not the end) AND the person is not speaking. With no speech (voice off, a failed
   // line) that is the moment the text is complete; otherwise right after the last line ended, before the call returns to listening.
@@ -3896,25 +3995,55 @@ function voiceCreateCall(deps) {
     if (!done) replyRecorded = false;   // a reply is being written: its text is saved once, when complete
     if (!done && !awaitingReply && !cutSkip) { awaitingReply = true; replyEnded = false; }
     if (!done) doneSeen = false;   // a reply being written: a done seen before belonged to an earlier one
-    const r = voiceReplySentences(lastText, !!done, readWords());
-    // once a done was processed for this reply, a later one (the pref may have changed: fewer sentences) never lowers what was spoken
-    if (!(doneSeen && r.sentences.length < spokenCount)) {
+    const r = voiceReplySentences(withToolBreak(lastText), !!done, readWords(), readFull);
+    // once a done was processed for this reply, a later one (the pref may have changed: fewer sentences) never lowers what was spoken;
+    // nor does text that goes on from a sentence released at a tool (a guard: it cannot be taken back, and a reply is never read again from the start)
+    const goesOn = toolBreakText !== null && lastText.startsWith(toolBreakText);
+    if (!((doneSeen || goesOn) && r.sentences.length < spokenCount)) {
       if (r.sentences.length < spokenCount) spokenCount = 0;
       if (cutSkip) spokenCount = r.sentences.length;
       else { for (const s of r.sentences.slice(spokenCount)) enqueue(s, 'reply'); spokenCount = r.sentences.length; }
     }
     if (done) {
       if (recorder && !replyRecorded && lastText.trim()) { replyRecorded = true; quiet(() => d.recordReplyText(lastText)); }
-      if (!cutSkip && r.note && !noteSpoken) enqueue(r.note, 'reply', null, null, false, true);
-      noteSpoken = true; awaitingReply = false; doneSeen = true;
+      if (!cutSkip && r.note && !noteSpoken) enqueue(readOffer ? r.note : voicePlainNote(r.note), 'reply', null, null, false, true);
+      noteSpoken = true; awaitingReply = false; doneSeen = true; toolBreakText = null;
       clearStill(); stopThinking(); quiet(() => ui.activity(''));
       if (!speaking) { maybeReplyEnd(); settle(); }
     }
+  }
+  // The hub says this reply must be READ IN FULL (the person asked to hear details): from now on every complete sentence of the whole reply is read, no note.
+  // It may come before the reply's first text (the flag survives until the next turn / interjection begins), mid-reply, or after the reply is done
+  // (a note still waiting is dropped and the rest is read; a note already playing is left to finish).
+  function onReadFull() {
+    if (ended || readFull) return;
+    readFull = true;
+    if (cutSkip) return;
+    const hadNote = queue.some(i => i.kind === 'reply' && i.note);
+    if (hadNote) queue = queue.filter(i => !(i.kind === 'reply' && i.note));
+    if (lastText && ((doneSeen && lastDone) || !lastDone)) onReplyText(lastText, lastDone);
+  }
+  // The page learned the flag belongs to an older reply (a typed turn started): clear it. Never touches the queue or what is being spoken.
+  function resetReadFull() { readFull = false; }
+  // The agent's own tool started (a running 'tool' item): the model stopped writing to use it, and the text after it starts a new paragraph
+  // (paragraphAfterTool), so the text before it is complete for now. Its last sentence is held back while streaming until more text follows
+  // it, and on the gateway that text only comes after the tool, so a finished last sentence ("Let me check that for you.") is spoken now.
+  // An unfinished one ("Let me check") or a lone list marker ("1.") stays held. Other activity (an interjection, a worker's progress, a tool
+  // finishing) is no such boundary: the model may still be writing that sentence ("3." -> "3.5").
+  function speakBeforeTool(item) {
+    if (!item || item.kind !== 'tool' || item.status !== 'running') return;
+    if (!awaitingReply || cutSkip || lastDone || !lastText || /\s$/.test(lastText) || lastText === toolBreakText) return;
+    const lastLine = lastText.slice(lastText.lastIndexOf('\n') + 1);
+    if (!/[.!?]["')\]*_]*$/.test(lastText) || /^[ \t]*(?:[-*+•◦▪‣`~#|_=]+|\d+[.)]?)$/.test(lastLine)) return;
+    if (toolBreakText === null || !lastText.startsWith(toolBreakText)) toolBreakAt = [];   // a reply that does not go on from the last release starts afresh
+    toolBreakText = lastText; toolBreakAt.push(lastText.length);
+    onReplyText(lastText, false);
   }
   // A tool activity of the running turn: shown silently (ui.activity); spoken only when the page's speakActivity() says so.
   function onActivity(item) {
     if (ended) return;
     if (!awaitingReply && !quiet(() => d.isTurnRunning())) return;
+    speakBeforeTool(item);
     quiet(() => ui.activity(voiceStatusLine(item)));
     if (state !== 'thinking' || speaking || personSpeaking || pendingAsk || pendingAnnounce) return;
     if (!quiet(() => d.speakActivity && d.speakActivity())) return;
@@ -3994,7 +4123,7 @@ function voiceCreateCall(deps) {
       if (pendingAnnounce !== me) return;
       me.timer = d.setTimer(() => { if (pendingAnnounce === me) decide(me.id, 'later'); }, VOICE_CALL_ANSWER_MS);
     };
-    enqueue(String(item.label || 'Something came in').replace(/[.!?\s]+$/, '') + '. Now, or after we\'re done?', 'announce', start, () => { me.heard = true; });
+    enqueue(voiceAnnounceLine(item), 'announce', start, () => { me.heard = true; });
   }
   function setMode(m) {
     if (m !== 'announce' && m !== 'dnd') return;
@@ -4249,7 +4378,7 @@ function voiceCreateCall(deps) {
     try {
       if (quiet(() => d.isTurnRunning())) {
         if (cutSkip) { cutSkip = false; spokenCount = completeCount(); }
-        doneSeen = false; noteSpoken = false;   // what follows an interjection is a new reply: its done is processed afresh and it says its own note once
+        doneSeen = false; noteSpoken = false; readFull = false;   // what follows an interjection is a new reply: its done is processed afresh and it says its own note once
         awaitingReply = true; replyEnded = false; replyRecorded = false; turnAt = now(); stillSaid = false; quiet(() => ui.reply('start')); setState('thinking'); armStill(); armThinking();
         await d.interject(t);
       } else {
@@ -4275,7 +4404,7 @@ function voiceCreateCall(deps) {
     settle();
   }
   function beginOwnTurn() {
-    awaitingReply = true; replyEnded = false; replyRecorded = false; cutSkip = false; spokenCount = 0; noteSpoken = false; doneSeen = false; lastText = ''; lastDone = false; turnAt = now(); stillSaid = false; stillUsed = [];
+    awaitingReply = true; replyEnded = false; replyRecorded = false; cutSkip = false; spokenCount = 0; noteSpoken = false; readFull = false; doneSeen = false; lastText = ''; toolBreakText = null; lastDone = false; turnAt = now(); stillSaid = false; stillUsed = [];
     quiet(() => ui.reply('start')); setState('thinking'); armStill(); armThinking();
   }
   function sendFailed() {
@@ -4451,7 +4580,7 @@ function voiceCreateCall(deps) {
       })).catch((e) => { vadErr = e || new Error('no microphone'); });
     } catch (e) { vadErr = e || new Error('no microphone'); vadStarting = Promise.resolve(); }
     // The call's id comes with the answer; a hang-up while the server is still starting ends that call once the id is known.
-    startP = (async () => server.start(mode))().then((r) => { if (r && r.callId) callId = r.callId; return r; });
+    startP = (async () => server.start(mode))().then((r) => { if (r && r.callId) callId = r.callId; if (r && r.readDetails === false) readOffer = false; return r; });
     let startRes;
     try { startRes = await startP; } catch (e) { await vadStarting; quiet(() => vad.stop()); return fail('Could not start the call: ' + (e && e.message || e)); }
     await vadStarting;
@@ -4519,7 +4648,7 @@ function voiceCreateCall(deps) {
     settle();
   }
   return {
-    start, hangUp, release, wakeChanged, isStandby: () => standby, setMuted, isMuted: () => muted, interrupt, setPrefs, retryMic, setLinkLost, onSpeechBegin, onSpeechStart, onMisfire, onSpeechEnd, onReplyText, onActivity, onAsk, onAskDone, onHeld, onHeldDone, decide, setMode, onHubOwner, backgroundDone,
+    start, hangUp, release, wakeChanged, isStandby: () => standby, setMuted, isMuted: () => muted, interrupt, setPrefs, retryMic, setLinkLost, onSpeechBegin, onSpeechStart, onMisfire, onSpeechEnd, onReplyText, onReadFull, resetReadFull, onActivity, onAsk, onAskDone, onHeld, onHeldDone, decide, setMode, onHubOwner, backgroundDone,
     get background() { return bgWords.length > 0; },
     get state() { return state; }, get callId() { return callId; }, get mode() { return mode; }, get held() { return heldList.map(h => Object.assign({}, h)); },
   };
@@ -4828,19 +4957,28 @@ function voiceCarRecord(opts) {
 // The thinking sound: quiet random pop clusters made with Web Audio only (no files). The plan (how many pops, when, how high, the gaps) is
 // DATA from lib/ui-voice-thinking.js (voiceThinkingCluster, seeded); this function only plays an event's pops: each pop is a sine with a
 // few-ms attack and a 30-60 ms decay (a little glide), through a low-pass below 2 kHz, the whole cluster fades in and out. Peak = volume x
-// 0.1125 (volume 0.5, the default, is -25 dBFS). start(), stop() (a 0.1 s fade), setVolume(0..1). pulse(event) schedules ONE cluster at
+// 0.3170 (voiceThinkingPeak(volume) from lib/ui-voice-thinking.js when present; volume 0.5, the default, is -16 dBFS). start(), stop() (a 0.1 s fade), setVolume(0..1). pulse(event) schedules ONE cluster at
 // ctx.currentTime + 0.02 and moves event.at to the moment that cluster is HEARD (the audio output clock mapped to performance.now():
 // getOutputTimestamp when valid, else now + the scheduling lead + the output or base latency); it returns the same event, or false when
 // the context is not running (nothing was claimed, event.at is untouched). An event without pops (or no event) plays a cluster of a fresh
 // random seed. start() plays one now and another every 6.5 s (the old adapters without a clock of their own).
-// opts: { ctx, volume, variant, seed (a fixed seed for the clusters it makes itself), setInterval, clearInterval, perfNow } (the last four for tests).
+// opts: { ctx, volume, variant, seed (a fixed seed for the clusters it makes itself), out (an AudioNode, or (ctx) => AudioNode, that the master gain connects to
+// instead of ctx.destination, e.g. the speech's loudness chain; ctx.destination when absent, it throws or it gives nothing usable), setInterval, clearInterval, perfNow } (the last four for tests).
 function voiceCreateThinkingSound(opts) {
   const o = opts || {}, ctx = o.ctx;
   const perf = o.perfNow || (() => (typeof performance !== 'undefined' && performance && typeof performance.now === 'function' ? performance.now() : NaN));
   const setIv = o.setInterval || ((f, ms) => setInterval(f, ms)), clearIv = o.clearInterval || ((id) => clearInterval(id));
   const clamp = (v) => { const n = Number(v); return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : 0.5; };
   let vol = clamp(o.volume === undefined ? 0.5 : o.volume), master = null, timer = null, running = false, active = [], own = 0;
-  const peak = () => vol * 2 * Math.pow(10, -25 / 20);   // volume 0.5 = -25 dBFS
+  const peak = () => (typeof voiceThinkingPeak === 'function' ? voiceThinkingPeak(vol) : vol * 2 * Math.pow(10, -16 / 20));   // volume 0.5 = -16 dBFS
+  // the master gain, connected to opts.out (a node, or (ctx) => node) when that is usable, else to ctx.destination
+  const makeMaster = () => {
+    const m = ctx.createGain(); m.gain.value = peak();
+    let dest = null;
+    try { const t = typeof o.out === 'function' ? o.out(ctx) : o.out; if (t && typeof t.connect === 'function') dest = t; } catch { /* the speakers */ }
+    m.connect(dest || ctx.destination);
+    return m;
+  };
   // performance.now() time at which the sample scheduled for context time t0 comes out of the speakers; null when it cannot be told.
   function heardAt(ct, t0) {
     const now = Number(perf());
@@ -4902,7 +5040,7 @@ function voiceCreateThinkingSound(opts) {
       if (running || !ctx) return;
       running = true;
       try { if (ctx.state === 'suspended' && ctx.resume) { const r = ctx.resume(); if (r && r.catch) r.catch(() => {}); } } catch { /* the page resumes it */ }
-      master = ctx.createGain(); master.gain.value = peak(); master.connect(ctx.destination);
+      master = makeMaster();
       pulse();
       timer = setIv(pulse, 6500);
     },
@@ -4919,7 +5057,7 @@ function voiceCreateThinkingSound(opts) {
       if (!running) {
         running = true;
         try { if (ctx.state === 'suspended' && ctx.resume) { const r = ctx.resume(); if (r && r.catch) r.catch(() => {}); } } catch { /* the page resumes it */ }
-        master = ctx.createGain(); master.gain.value = peak(); master.connect(ctx.destination);
+        master = makeMaster();
       }
       pulse(wants ? ev : undefined);
       return wants ? ev : undefined;
@@ -6493,7 +6631,8 @@ async function attachFileCards(el, body) {
     if (!H || !body || !el.isConnected) return;
     const scan = body.cloneNode(true);   // the reply's own text: not the tool panel, the reasoning panel or the notes
     scan.querySelectorAll('.feed, .tsn, .rsn, .reattach, .copy, .note').forEach((n) => n.remove());
-    const cands = H.candidatesFrom(scan);
+    const agent = (typeof current === 'string' && current) || null;   // the agent whose chat is open: a bare file name is looked up in its folder
+    const cands = H.candidatesFrom(scan, { agent });
     if (!cands.length) return;
     const results = await H.resolveBatch((u, o) => fetch(u, o), cands);
     if (!el.isConnected) return;
@@ -9020,6 +9159,8 @@ function voiceNoteNormalized(flag) {
   for (const ctx of voiceLoudCtxs()) { const c = ctx.__voiceLoudness; if (c && typeof c.setNormalized === 'function') { try { c.setNormalized(voiceNormFlag); } catch { /* gone */ } } }
 }
 function voiceOutNode(ctx) { const c = voiceLoudChain(ctx); return c ? c.input : ctx.destination; }
+// The thinking sound's way into the chain: its own input, held at the level it has with a normalised voice (voiceCreateLoudness).
+function voiceThinkNode(ctx) { const c = voiceLoudChain(ctx); return c ? (c.thinkInput || c.input) : ctx.destination; }
 function voiceLoudCtxs() { const a = voiceDisp.shared && voiceDisp.shared.ctx, b = voiceCall && voiceCall.thinkCtx; return [a, b && b !== a ? b : null].filter(Boolean); }
 function voiceLoudSync() {   // the chains follow the pref during a call and sit at 0 dB outside one
   const lv = voiceCall ? voiceLoudnessNow() : 'normal';
@@ -9077,6 +9218,14 @@ function voiceDispEnd(goodbye) {
 }
 function voiceDispMood(seq, mood) { voiceDisplayHook('mood', 'seq:' + seq, mood); }   // once per turn, whichever of the chat stream and the hub event comes first
 function voiceCallSseMood(rec, mood) { const vc = voiceCall; if (vc && rec && rec.agent === vc.agent) voiceDispMood(vc.sendSeq, mood); }
+// The chat stream's voice_read_full for this phone's own spoken send (g.turnId: the hub turn it belongs to, may be null). The flag belongs to that one reply (voiceReadFullGate).
+function voiceCallSseReadFull(rec, turnId) {
+  const vc = voiceCall;
+  if (!(vc && rec && rec.agent === vc.agent && vc.call && typeof vc.call.onReadFull === 'function')) return;
+  const g = typeof voiceReadFullGate === 'function' ? voiceReadFullGate(vc.readFull, { kind: 'chunk', turnId }) : { state: vc.readFull, action: 'set' };
+  vc.readFull = g.state;
+  if (g.action === 'set') vc.call.onReadFull();   // a late chunk of an earlier turn is ignored
+}
 async function voiceDispPaintPanel() {
   const sels = [$('vp-display'), $('cp-display')].filter(Boolean);   // the voice sheet's select and the call panel's
   if (!sels.length || typeof CallDisplay === 'undefined') return;
@@ -9253,7 +9402,7 @@ function voiceCallServer(agent, getVc) {
       const id = j.call && j.call.callId;
       const g = rec || (j.recording && vc0 && typeof voiceRecMake === 'function' ? (vc0.rec = voiceRecMake(vc0, { mic: 'processed' }, false)) : null);   // the hub recorded it though this page did not expect that (an old agent list): "Not recording"
       if (g) { try { await g.started(j.recording, id); } catch { /* the call carries on without a recording */ } }   // the consent line is spoken before the call listens
-      return { callId: id, held: (j.call && Array.isArray(j.call.held)) ? j.call.held : [] };   // the controller keeps the id and passes it back
+      return { callId: id, held: (j.call && Array.isArray(j.call.held)) ? j.call.held : [], ...(j.readDetails === false ? { readDetails: false } : {}) };   // the controller keeps the id and passes it back; readDetails false: no offer to read details
     },
     async heartbeat(callId) {
       let r;
@@ -9574,7 +9723,7 @@ function voiceThinkingDeps(vc) {
       try {
         if (!vc.thinkCtx) { const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return; vc.thinkCtx = new AC(); }
         try { if (vc.thinkCtx.state === 'suspended') Promise.resolve(vc.thinkCtx.resume()).catch(() => {}); } catch { /* resumes later */ }
-        if (!vc.thinkSnd) vc.thinkSnd = voiceCreateThinkingSound({ ctx: vc.thinkCtx, volume: voiceThinkingVolume() });
+        if (!vc.thinkSnd) vc.thinkSnd = voiceCreateThinkingSound({ ctx: vc.thinkCtx, volume: voiceThinkingVolume(), out: (c) => voiceThinkNode(c) });
         vc.thinkSnd.setVolume(voiceThinkingVolume());
         vc.thinkSnd.start();
         vc.thinkOn = true;
@@ -9588,7 +9737,7 @@ function voiceThinkingDeps(vc) {
       try {
         if (!vc.thinkCtx) { const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return; vc.thinkCtx = new AC(); }
         try { if (vc.thinkCtx.state === 'suspended') Promise.resolve(vc.thinkCtx.resume()).catch(() => {}); } catch { /* resumes later */ }
-        if (!vc.thinkSnd) vc.thinkSnd = voiceCreateThinkingSound({ ctx: vc.thinkCtx, volume: voiceThinkingVolume() });
+        if (!vc.thinkSnd) vc.thinkSnd = voiceCreateThinkingSound({ ctx: vc.thinkCtx, volume: voiceThinkingVolume(), out: (c) => voiceThinkNode(c) });
         vc.thinkSnd.setVolume(voiceThinkingVolume());
         r = vc.thinkSnd.pulse(ev);
         if (r === false) return r;
@@ -9905,7 +10054,12 @@ function voiceCallWire() {   // the panel's own buttons
 // Hub events for the call (the same /api/events stream as the chat; see connectEvents).
 function voiceCallTurnStart(ev) {
   const vc = voiceCall; if (!vc || !ev || ev.agent !== vc.agent || !ev.turnId) return;
-  if (ev.origin && ev.origin.kind === 'user') { vc.callTurns.add(ev.turnId); vc.lastText = ''; if (typeof voiceDisp !== 'undefined') { voiceDisp.turnSeq.set(ev.turnId, vc.sendSeq); if (voiceDisp.turnSeq.size > 64) voiceDisp.turnSeq.delete(voiceDisp.turnSeq.keys().next().value); } }
+  if (ev.origin && ev.origin.kind === 'user') {
+    vc.callTurns.add(ev.turnId); vc.lastText = ''; if (typeof voiceDisp !== 'undefined') { voiceDisp.turnSeq.set(ev.turnId, vc.sendSeq); if (voiceDisp.turnSeq.size > 64) voiceDisp.turnSeq.delete(voiceDisp.turnSeq.keys().next().value); }
+    // A new own turn (typed or spoken): a "read in full" flag left for an older reply must not uncap this one.
+    const gate = typeof voiceReadFullGate === 'function' ? voiceReadFullGate(vc.readFull, { kind: 'start', turnId: ev.turnId }) : null;
+    if (gate) { vc.readFull = gate.state; if (gate.action === 'reset' && vc.call && typeof vc.call.resetReadFull === 'function') vc.call.resetReadFull(); }
+  }
   else vc.hubTurns.set(ev.turnId, String((ev.origin && (ev.origin.label || ev.origin.from)) || originLabel(ev.origin) || 'A task'));
 }
 function voiceCallTurnDelta(ev) {
@@ -9981,6 +10135,13 @@ function voiceCallHubIdle(agent) {
 function voiceCallTurnMood(ev) {   // turn_mood { agent, turnId, mood }: only the call's own turns
   const vc = voiceCall; if (!vc || !ev || ev.agent !== vc.agent || !vc.callTurns.has(ev.turnId)) return;
   voiceDispMood(voiceDisp.turnSeq.has(ev.turnId) ? voiceDisp.turnSeq.get(ev.turnId) : vc.sendSeq, ev.mood);
+}
+function voiceCallTurnReadFull(ev) {   // turn_read_full { agent, turnId }: only the call's own turns, and only the latest one
+  const vc = voiceCall; if (!vc || !ev || ev.agent !== vc.agent || !vc.callTurns.has(ev.turnId)) return;
+  const gate = typeof voiceReadFullGate === 'function' ? voiceReadFullGate(vc.readFull, { kind: 'event', turnId: ev.turnId }) : null;
+  if (!gate || gate.action !== 'set') return;
+  vc.readFull = gate.state;
+  if (vc.call && typeof vc.call.onReadFull === 'function') vc.call.onReadFull();
 }
 function voiceCallAsk(ev) {
   const vc = voiceCall; if (!vc || !ev || ev.agent !== vc.agent || !ev.request_id) return;
@@ -11120,6 +11281,7 @@ async function readStream(response, rec) {
     if (typeof simpleGatewayHook === 'function') simpleGatewayHook(rec, g);   // Simple: the consult line
     switch (g.type) {
       case 'context_health': noteCtxReading(rec.agent, g); break;
+      case 'voice_read_full': if (typeof voiceCallSseReadFull === 'function') voiceCallSseReadFull(rec, g.turnId); break;   // the person asked to hear the details: this reply is read in full
       case 'voice_mood': voiceCallSseMood(rec, g.mood); break;   // the agent's mood word, already stripped from the text
       case 'ask_user_question':
         rec.question = g;
@@ -12025,6 +12187,7 @@ function connectEvents() {
   on('turn_end', voiceCallTurnEnd);
   on('for_owner', voiceCallForOwner);
   on('turn_mood', voiceCallTurnMood);
+  on('turn_read_full', (ev) => { if (typeof voiceCallTurnReadFull === 'function') voiceCallTurnReadFull(ev); });
   on('ask_user', voiceCallAsk);
   on('ask_user_done', voiceCallAskDone);
   on('voice_held', voiceCallHeld);
@@ -14142,9 +14305,9 @@ function simpleEffortOk(a) { return !!a && !a.autoModel && effortSupported(a.mod
 function simpleChatExtra(agent) {
   if (!simpleOn()) return {};
   const a = agentByName(agent);
-  if (!simpleEffortOk(a)) return {};
+  if (!simpleEffortOk(a)) return { simple: true };   // every Simple turn says so: the hub never runs Codex Ultra for it
   const level = window.hubSimple.pickedEffort ? window.hubSimple.pickedEffort(agent) : null;   // never picked: the agent's own setting applies
-  return level ? { effort: level } : {};
+  return level ? { simple: true, effort: level } : { simple: true };
 }
 // A mode switch reloads the page (a plain function: the page's own reload sites are counted by a test).
 function simpleReload() { window.location.reload.call(window.location); }

@@ -14,7 +14,7 @@ const vm = require('node:vm');
 const { makeIsolatedInstall } = require('./helpers/isolated-install');
 const ISO = makeIsolatedInstall('voice-face-iso-');
 const L = (p) => require(path.join(ISO.lib, p));
-const { createMoodFilter, FACE_MOOD_NOTE, MOODS } = L('voice/mood');
+const { createMoodFilter, createReadTagFilter, FACE_MOOD_NOTE, MOODS } = L('voice/mood');
 
 const SRC = fs.readFileSync(path.join(__dirname, '../lib/sdk-chat.js'), 'utf8');
 
@@ -27,7 +27,9 @@ function sliceFn(startMarker) {
 }
 const MAKE_CHUNK = sliceFn('function makeChunk(');
 const PARAGRAPH = sliceFn('function paragraphAfterTool(');
-const VOICE_NOTE_SRC = SRC.slice(SRC.indexOf('const VOICE_NOTE ='), SRC.indexOf('\n', SRC.indexOf('const VOICE_NOTE =')) + 1);
+// the voice note and the live-call voice note (VOICE_CALL_NOTE, used when moodStrip is true)
+const constLine = (name) => SRC.slice(SRC.indexOf(`const ${name} =`), SRC.indexOf('\n', SRC.indexOf(`const ${name} =`)) + 1);
+const VOICE_NOTE_SRC = constLine('VOICE_NOTE') + constLine('VOICE_CALL_NOTE');
 const FACE_HELPERS = (() => {   // faceMoodFor, voiceNoteFor, createVoiceMood
   const a = SRC.indexOf('function faceMoodFor(');
   const c = SRC.indexOf('function createVoiceMood(');
@@ -52,7 +54,7 @@ function stub() {
 }
 // The names of the face-view code itself must always resolve to the real thing, never to a stub: a name used outside its
 // scope (a ReferenceError in production) would otherwise be hidden by the stub.
-const VOICE_NAMES = ['voiceMood', 'emitText', 'emitReplyText', 'emitCodexText', 'flushMood', 'moodRound', 'createVoiceMood', 'voiceNoteFor', 'faceMoodFor', 'createMoodFilter', 'FACE_MOOD_NOTE'];
+const VOICE_NAMES = ['voiceMood', 'emitText', 'emitReplyText', 'emitCodexText', 'flushMood', 'moodRound', 'createVoiceMood', 'voiceNoteFor', 'faceMoodFor', 'createMoodFilter', 'createReadTagFilter', 'FACE_MOOD_NOTE'];
 const stubbed = new Set();
 function makeSandbox(explicit) {
   const store = Object.assign(Object.create(null), explicit);
@@ -117,6 +119,7 @@ function fakeRes() {
 }
 function loadHelpers(ctx, { calls, packs } = {}) {
   ctx.createMoodFilter = createMoodFilter;
+  ctx.createReadTagFilter = createReadTagFilter;
   ctx.FACE_MOOD_NOTE = FACE_MOOD_NOTE;
   ctx.voiceCall = calls || { onCall: () => true };
   ctx.facePacks = packs || { getPack: () => ({ manifest: { clips: [{ name: 'a', state: 'reaction' }] } }) };
@@ -1043,7 +1046,7 @@ test('the three provider calls also get the checked moodStrip boolean; the mood 
   }
   assert.ok(!/moodStrip:\s*(body|req)/.test(h), 'never copied from the request');
   assert.match(SRC, /function voiceNoteFor\(options, ephemeral\) \{[^}]*options\.faceMood === true/, 'the prompt note still depends on faceMood only');
-  assert.ok(!/voiceNoteFor[^\n]*moodStrip/.test(SRC), 'moodStrip never reaches the prompt');
+  assert.ok(!/voiceNoteFor[^\n]*moodStrip/.test(SRC), 'moodStrip never reaches the mood prompt (it picks the live-call note and the read-in-full note: test/voice-details-server.test.js)');
 });
 
 const STRIP_OPTS = { faceMood: false, moodStrip: true };

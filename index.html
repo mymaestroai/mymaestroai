@@ -545,6 +545,19 @@
     .mh-confirm { margin-top: 6px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; color: var(--text); }
     .mh-confirm input { width: 12em; }
     .mh-msg { color: var(--text); font-weight: 600; } .mh-msg:empty { display: none; } .mh-msg-bad { color: #d4588b; }
+    .sc-row { padding: 6px 0; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
+    .sc-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; color: var(--text); }
+    .sc-chip { font-size: 0.75rem; padding: 1px 8px; border-radius: 10px; border: 1px solid var(--border); white-space: nowrap; }
+    .sc-ok { color: #199e70; border-color: #199e70; } .sc-bad { color: #d4588b; border-color: #d4588b; } .sc-idle { color: var(--text-dim); }
+    .sc-note, .sc-fail, .sc-h { margin: 2px 0 0 4px; overflow-wrap: anywhere; } .sc-fail { color: #d4588b; }
+    .sc-last { color: var(--text); margin-bottom: 4px; overflow-wrap: anywhere; }
+    .sc-hist { margin-top: 6px; } .sc-hist > summary { cursor: pointer; color: var(--text-dim); }
+    .sc-kinds { flex-wrap: wrap; } .sc-kind { display: inline-flex; align-items: center; gap: 4px; margin-right: 12px; }
+    /* the kinds are plain labels, not the row's right-aligned 100 px label; on a phone a row wraps and its field shrinks */
+    .sc-kinds .sc-kind { flex: 0 0 auto; text-align: left; color: var(--text); white-space: nowrap; }
+    #st-selfcheck-section .st-row { flex-wrap: wrap; }
+    #st-selfcheck-section .st-row input[type="text"] { flex: 1 1 160px; min-width: 0; max-width: 100%; }
+    #st-selfcheck-section .st-row input[type="time"] { min-width: 0; max-width: 100%; }
     .wm-row { display: grid; grid-template-columns: 16px minmax(0,1fr) auto auto auto; align-items: center; gap: 10px; padding: 9px 12px; cursor: pointer; border-bottom: 1px solid rgba(255,255,255,0.06); font-size: 0.85rem; }
     .wm-row:hover, .wm-row:focus { background: rgba(255,255,255,0.05); outline: none; }
     .wm-mark { width: 10px; height: 10px; display: inline-flex; align-items: center; justify-content: center; font-size: 0.8rem; color: #199e70; }
@@ -665,6 +678,7 @@
     .more-menu .more-row .toggle-label { font-family: inherit; font-size: 0.8rem; color: var(--text); }
     .more-menu .more-row .max-tokens-control { justify-content: space-between; gap: 10px; font-size: 0.8rem; }
     .more-menu .more-row .max-tokens-control select { font-size: 0.75rem; padding: 3px 6px; background: var(--bg-input); color: var(--text); }
+    .more-menu .more-row #team-guidance-select { font-size: 0.75rem; opacity: 1; background: var(--bg-input) !important; color: var(--text) !important; border-color: var(--border) !important; padding: 3px 6px !important; }
     .more-menu .more-row #sdk-workers-select { font-size: 0.75rem; opacity: 1; background: var(--bg-input) !important; color: var(--text) !important; border-color: var(--border) !important; padding: 3px 6px !important; }
     .header-controls .header-btn.reload-btn { display: none; }   /* only in the installed app, which has no browser reload button; the selector also beats the narrow-screen .main-header-top .header-btn rule */
     html.app-installed .header-controls .header-btn.reload-btn { display: inline-flex; align-items: center; justify-content: center; }
@@ -3024,6 +3038,16 @@
                 <div class="more-hint">How agents delegate. Fallback: hub agents first, SDK sub-workers only if needed. Off: no SDK sub-workers.</div>
               </div>
               <div class="more-row">
+                <label class="toggle-switch" style="gap:6px" title="How agents are told to run a team: delegate, match models to jobs, get second opinions. Light is for small local models; Off removes it. An agent's own setting can still switch it off.">
+                  <span class="toggle-label">Team guidance</span>
+                  <select id="team-guidance-select" style="background:transparent;color:inherit;border:1px solid currentColor;border-radius:6px;padding:1px 4px;font:inherit;opacity:.85">
+                    <option value="full">Full</option>
+                    <option value="light">Light</option>
+                    <option value="off">Off</option>
+                  </select>
+                </label>
+              </div>
+              <div class="more-row">
                 <label class="toggle-switch" title="Caveman Mode: Ultra-terse responses. Minimum words necessary. No filler, no pleasantries.">
                   <input type="checkbox" id="caveman-toggle">
                   <span class="toggle-slider"></span>
@@ -3090,6 +3114,7 @@
   <script src="/ui-face-player.js"></script>
   <script src="/ui-call-display.js"></script>
   <script src="/ui-file-card.js"></script>
+  <script src="/ui-team-card.js"></script>
   <script src="/ui-simple.js"></script>
   <script src="app.js"></script>
   <script src="comms-panel.js"></script>

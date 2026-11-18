@@ -386,6 +386,34 @@
   </div>
   <small id="effort-help" style="color:#999;display:block;margin-top:4px;">How hard the model thinks before answering. Higher is slower and uses more of the subscription or API budget. The hub translates the level for each provider (Claude takes all of them; OpenAI tops out at extra high; Gemini at high; OpenRouter models that take a reasoning level, marked 🧠 in the OpenRouter list, at high); local models ignore it. Also adjustable from the chat header by admins; members cannot change it.</small>
   <div id="effort-status" class="status"></div>
+  <div id="tier-row" style="display:none;align-items:center;gap:8px;margin-top:14px;flex-wrap:wrap;">
+    <label for="tier-mode" style="margin:0;">Speed and price</label>
+    <select id="tier-mode" onchange="saveTier()" style="width:auto;max-width:100%;">
+      <option value="standard">Standard</option>
+    </select>
+  </div>
+  <small id="tier-help" style="color:#999;display:none;margin-top:4px;">Fast answers sooner for about twice the price; Economy costs half but an answer can take minutes. If the provider cannot offer the chosen speed, the answer runs on Standard and says so. Admins only; members' turns always run on Standard. The cost record follows the tier the provider reports.</small>
+  <div id="tier-status" class="status"></div>
+  <div id="team-guidance-row" style="display:flex;align-items:center;gap:8px;margin-top:14px;">
+    <label for="team-guidance-mode" style="margin:0;">Team guidance</label>
+    <select id="team-guidance-mode" onchange="saveTeamGuidance()" style="width:auto;">
+      <option value="inherit">Use the hub setting</option>
+      <option value="on">On</option>
+      <option value="off">Off</option>
+    </select>
+  </div>
+  <small id="team-guidance-help" style="color:#999;display:block;margin-top:4px;">The hub's advice on delegating, matching models to jobs and getting second opinions, added to this agent's instructions.</small>
+  <div id="team-guidance-status" class="status"></div>
+  <div id="team-role-row" style="display:flex;align-items:center;gap:8px;margin-top:14px;">
+    <label for="team-role" style="margin:0;">Role in the team</label>
+    <select id="team-role" onchange="saveTeamRole()" style="width:auto;">
+      <option value="">None</option>
+      <option value="worker">Worker</option>
+      <option value="challenger">Challenger</option>
+    </select>
+  </div>
+  <small id="team-role-help" style="color:#999;display:block;margin-top:4px;">A worker or challenger is listed to the other agents as a platform worker they can hand jobs to; a challenger is marked as the one to ask for adversarial reviews.</small>
+  <div id="team-role-status" class="status"></div>
   <div id="call-display-row" style="display:flex;align-items:center;gap:8px;margin-top:14px;flex-wrap:wrap;">
     <label for="call-display" style="margin:0;">Default call display</label>
     <select id="call-display" onchange="saveCallDisplay()" style="width:auto;">
@@ -466,6 +494,9 @@
     ['saveLimits', 'limits-status', byId('context-budget', 'max-context-messages', 'max-output-tokens')],
     ['saveSandbox', 'sandbox-status', byId('sandbox-mode')],
     ['saveEffort', 'effort-status', byId('effort-mode')],
+    ['saveTier', 'tier-status', byId('tier-mode')],
+    ['saveTeamGuidance', 'team-guidance-status', byId('team-guidance-mode')],
+    ['saveTeamRole', 'team-role-status', byId('team-role')],
     ['saveCallDisplay', 'call-display-status', byId('call-display')],
     ['saveVoiceDefaults', 'voice-defaults-status', byId('voice-defaults', 'vd-pause', 'vd-wait', 'vd-sens', 'vd-speed')],
     ['saveAgentVoice', 'voice-status', byId('voice-select', 'voice-stt', 'voice-tts', 'voice-cloud-select', 'voice-cloud-id')],
@@ -484,7 +515,7 @@
   // changed again while its save runs, is saved once more when that save ends, with its newest value. A Save button
   // pressed again meanwhile is refused with a message: a queued run would read the fields only when it starts and could
   // also save edits made after the press, so those edits stay unsaved until Save is pressed again.
-  const SAVES_ON_CHANGE = new Set(['saveCategory', 'saveLead', 'saveOwner', 'saveShared', 'saveModel', 'saveAutoModel', 'saveSandbox', 'saveEffort', 'saveCallDisplay', 'saveVoiceDefaults', 'saveToolsMode', 'saveRecordings', 'saveAgentVoice']);
+  const SAVES_ON_CHANGE = new Set(['saveCategory', 'saveLead', 'saveOwner', 'saveShared', 'saveModel', 'saveAutoModel', 'saveSandbox', 'saveEffort', 'saveTeamGuidance', 'saveTeamRole', 'saveTier', 'saveCallDisplay', 'saveVoiceDefaults', 'saveToolsMode', 'saveRecordings', 'saveAgentVoice']);
   const pendingSaves = {};   // status id -> { commit, reload, fields, settled, again }
   for (const [fn, statusId, fields, how] of SAVES) {
     const orig = window[fn];
@@ -953,6 +984,52 @@
       if (result && (result.success || result.ok)) showStatus('effort-status', 'success', v === 'default' ? 'Using the model\'s default effort from the next turn' : `Effort ${v}: takes effect on the next turn`);
       else showStatus('effort-status', 'error', (result && result.error) || 'Failed');
     } catch (e) { showStatus('effort-status', 'error', e.message); }
+  }
+  async function saveTier() {
+    const v = document.getElementById('tier-mode').value;
+    try {
+      const result = await apiFetch(`/api/agents/${encodeURIComponent(agentName)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tier: v }) });
+      if (result && (result.success || result.ok)) showStatus('tier-status', 'success', v === 'standard' ? 'Standard speed and price from the next turn' : `${v === 'fast' ? 'Fast' : 'Economy'}: takes effect on the next turn`);
+      else showStatus('tier-status', 'error', (result && result.error) || 'Failed');
+    } catch (e) { showStatus('tier-status', 'error', e.message); }
+  }
+  // Offers only the tiers the agent's model supports (GET /api/agents tierOptions / tierLabels); hidden when only Standard is offered.
+  // A saved tier the model no longer supports shows as Standard (nothing is changed until the person picks).
+  function loadTier(agent) {
+    const sel = document.getElementById('tier-mode'); if (!sel) return;
+    const opts = Array.isArray(agent?.tierOptions) && agent.tierOptions.length ? agent.tierOptions : ['standard'];
+    const labels = agent?.tierLabels || {};
+    sel.textContent = '';
+    for (const o of opts) { const el = document.createElement('option'); el.value = o; el.textContent = labels[o] || o; sel.appendChild(el); }
+    sel.value = opts.includes(agent?.tier) ? agent.tier : 'standard';
+    const show = opts.length > 1;
+    const row = document.getElementById('tier-row'); if (row) row.style.display = show ? 'flex' : 'none';
+    const help = document.getElementById('tier-help');
+    if (help) {
+      help.style.display = show ? 'block' : 'none';
+      // A ChatGPT-plan model (Codex) offers Fast only and has no price: say what it costs there instead.
+      help.textContent = opts.includes('economy')
+        ? 'Fast answers sooner for about twice the price; Economy costs half but an answer can take minutes. If the provider cannot offer the chosen speed, the answer runs on Standard and says so. Admins only; members\' turns always run on Standard. The cost record follows the tier the provider reports.'
+        : 'Fast answers sooner and uses 2 to 2.5 times as much of the ChatGPT plan. If it is not available, the answer runs on Standard and says so. Admins only; members\' turns always run on Standard.';
+      // Gemini turned away every Economy request in real tests (503 "high demand"): say so for Gemini agents.
+      if (opts.includes('economy') && /^google\//.test(String(agent?.model || ''))) help.textContent += ' Gemini may often run Economy requests at Standard when it is busy.';
+    }
+  }
+  async function saveTeamGuidance() {
+    const v = document.getElementById('team-guidance-mode').value;
+    try {
+      const result = await apiFetch(`/api/agents/${encodeURIComponent(agentName)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ teamGuidance: v }) });
+      if (result && (result.success || result.ok)) showStatus('team-guidance-status', 'success', 'Saved: takes effect on the next turn');
+      else showStatus('team-guidance-status', 'error', (result && result.error) || 'Failed');
+    } catch (e) { showStatus('team-guidance-status', 'error', e.message); }
+  }
+  async function saveTeamRole() {
+    const v = document.getElementById('team-role').value;
+    try {
+      const result = await apiFetch(`/api/agents/${encodeURIComponent(agentName)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ teamRole: v || null }) });
+      if (result && (result.success || result.ok)) showStatus('team-role-status', 'success', 'Saved: takes effect on the next turn');
+      else showStatus('team-role-status', 'error', (result && result.error) || 'Failed');
+    } catch (e) { showStatus('team-role-status', 'error', e.message); }
   }
   // ── Default call display: None / Orb / an installed character (GET /api/faces); PATCH { callDisplay } ──
   const CALL_DISPLAY_FIXED = [{ value: 'none', label: 'None' }, { value: 'orb', label: 'Orb' }];
@@ -1456,7 +1533,18 @@
       fillAutoModelHelp(agent?.model || currentModel);
       const sbSel = document.getElementById('sandbox-mode'); if (sbSel) sbSel.value = agent?.sandbox || 'inherit';
       const toolsSel = document.getElementById('tools-mode'); if (toolsSel) toolsSel.value = agent?.tools || 'inherit';
-      const effSel = document.getElementById('effort-mode'); if (effSel) effSel.value = agent?.effort || 'default';
+      const effSel = document.getElementById('effort-mode');
+      if (effSel) {
+        // Ultra: only for a ChatGPT-plan (Codex) model whose catalog offers it; a stored Ultra the model no longer offers shows as Max.
+        let ultraOpt = effSel.querySelector('option[value="ultra"]');
+        if (agent?.effortUltra === true && !ultraOpt) { ultraOpt = document.createElement('option'); ultraOpt.value = 'ultra'; ultraOpt.textContent = 'Ultra (uses several helpers; uses much more of the ChatGPT plan)'; effSel.appendChild(ultraOpt); }
+        else if (agent?.effortUltra !== true && ultraOpt) ultraOpt.remove();
+        const want = agent?.effort || 'default';
+        effSel.value = want === 'ultra' && agent?.effortUltra !== true ? 'max' : want;
+      }
+      loadTier(agent);
+      const tgSel = document.getElementById('team-guidance-mode'); if (tgSel) tgSel.value = agent?.teamGuidance || 'inherit';
+      const trSel = document.getElementById('team-role'); if (trSel) trSel.value = agent?.teamRole || '';
       loadCallDisplay(agent);
       loadVoiceDefaults(agent);
       loadVoiceRecord(agent);

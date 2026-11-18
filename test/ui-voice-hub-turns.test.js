@@ -450,9 +450,9 @@ test('the call display shows the "background" state with its own words', () => {
 
 test('agents on a call: held items, announcements and decisions are not changed (a held announcement is not a hub turn reply)', async () => {
   const h = await started();
-  h.call.onHeld({ id: 'job:1', label: 'Nightly job finished' }, false);
+  h.call.onHeld({ id: 'job:1', kind: 'job_notice', label: 'Nightly job finished' }, false);
   await h.advance(2000);
-  assert.deepStrictEqual(h.spoken, ['Nightly job finished. Now, or after we\'re done?']);
+  assert.deepStrictEqual(h.spoken, ['A background job finished. Now, or after we\'re done?']);
   assert.strictEqual(h.chimes, 0);
 });
 

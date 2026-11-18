@@ -21,7 +21,7 @@ test('levels map to what each provider accepts (checked against the live APIs)',
   assert.strictEqual(effort.forModel('claude-sdk/claude-fable-5-1', 'max'), 'max');
   assert.strictEqual(effort.forModel('anthropic/claude-sonnet-5-5', 'xhigh'), 'xhigh');
   assert.strictEqual(effort.forModel('openai/gpt-5.5', 'max'), 'xhigh', 'OpenAI tops out at xhigh');
-  assert.strictEqual(effort.forModel('codex-cli/gpt-6-astra', 'max'), 'xhigh');
+  assert.strictEqual(effort.forModel('codex-cli/gpt-6-astra', 'max'), 'max', 'GPT-6 takes max');
   assert.strictEqual(effort.forModel('google/gemini-flash-latest', 'xhigh'), 'high', 'Gemini tops out at high');
   assert.strictEqual(effort.forModel('openai/gpt-4.1', 'high'), null, 'non-reasoning OpenAI models reject the field');
   assert.strictEqual(effort.forModel('ninfer/qwen3.8-27b', 'high'), null, 'local servers get nothing');
@@ -54,12 +54,12 @@ test('wired: Claude client query option, gateway option, Codex; agent field vali
   const chat = read('lib/sdk-chat.js');
   assert.match(chat, /const sdkEffort = options && options\.effort \? effortLib\.forTurn\(`claude-sdk\/\$\{sdkModel\}`, options\.effort, await agentEffort\(agentName\)\) : effortLib\.forModel\(`claude-sdk\/\$\{sdkModel\}`, await agentEffort\(agentName\)\);/);
   assert.match(chat, /\.\.\.\(sdkEffort \? \{ effort: sdkEffort \} : \{\}\),/);
-  assert.match(chat, /agent: agentName, effort: turnEffort \}/);
-  assert.match(chat, /ephemeral: !!ephemeral, effort: codexEffort, reasoningSummary: showReasoning\(\) \? 'auto' : null \}\);/);
+  assert.match(chat, /agent: agentName, effort: turnEffort, tier: tierNow \}/);
+  assert.match(chat, /ephemeral: !!ephemeral, effort: codexEffort, reasoningSummary: showReasoning\(\) \? 'auto' : null, serviceTier: codexServiceTier \}\);/);
   const agents = read('lib/agents.js');
   assert.match(agents, /effort: require\('\.\/effort'\)\.normalize\(a\.effort\)/);
-  assert.match(agents, /'tools', 'effort'(, 'voice')?(, 'callDisplay')?(, 'voiceDefaults')?\];/);   // the voice build and the call display add fields after effort
-  assert.match(agents, /effort must be default, low, medium, high, xhigh or max/);
+  assert.match(agents, /'tools', 'effort'(, 'tier')?(, 'teamGuidance', 'teamRole')?(, 'voice')?(, 'callDisplay')?(, 'voiceDefaults')?\];/);   // tier (speed and price), the team-guidance fields, the voice build and the call display add fields after effort
+  assert.match(agents, /effort must be default, low, medium, high, xhigh, max or ultra/);
   const server = read('server.js');
   assert.match(server, /const MEMBER_EDITABLE = new Set\(\['blurb', 'maxContextMessages', 'maxOutputTokens', 'contextBudget', 'compaction', 'minimalContext'\]\);/, 'effort is not member-editable');
   assert.match(server, /autoModel: !!a\.autoModel, effort: a\.effort \|\| 'default', changed:/);

@@ -141,17 +141,17 @@ test('simpleEffortBody: sent only for a level the person picked, and only when t
   const hs = { pickedEffort: (a) => store[a] || null };
   store['agent-a'] = 'max';
   const j = (x) => JSON.parse(JSON.stringify(x));
-  assert.deepStrictEqual(j(sandbox.simpleEffortBody(hs, 'agent-a', true)), { effort: 'max' });
-  assert.deepStrictEqual(j(sandbox.simpleEffortBody(hs, 'agent-b', true)), {});   // never picked: the agent's own setting applies
-  assert.deepStrictEqual(j(sandbox.simpleEffortBody(hs, 'agent-a', false)), {});   // no button (model without effort, or Auto model): nothing
-  assert.deepStrictEqual(j(sandbox.simpleEffortBody(null, 'agent-a', true)), {});
+  assert.deepStrictEqual(j(sandbox.simpleEffortBody(hs, 'agent-a', true)), { simple: true, effort: 'max' });
+  assert.deepStrictEqual(j(sandbox.simpleEffortBody(hs, 'agent-b', true)), { simple: true });   // never picked: the agent's own setting applies
+  assert.deepStrictEqual(j(sandbox.simpleEffortBody(hs, 'agent-a', false)), { simple: true });   // no button (model without effort, or Auto model): nothing
+  assert.deepStrictEqual(j(sandbox.simpleEffortBody(null, 'agent-a', true)), { simple: true });
   // with the real helper and a real storage
   const mem = new Map();
   const storage = { getItem: (k) => (mem.has(k) ? mem.get(k) : null), setItem: (k, v) => mem.set(k, v) };
   const real = { pickedEffort: (a) => hubSimple.pickedEffort(a, storage) };
-  assert.deepStrictEqual(j(sandbox.simpleEffortBody(real, 'agent-a', true)), {});
+  assert.deepStrictEqual(j(sandbox.simpleEffortBody(real, 'agent-a', true)), { simple: true });
   hubSimple.setEffort('agent-a', 'high', storage);
-  assert.deepStrictEqual(j(sandbox.simpleEffortBody(real, 'agent-a', true)), { effort: 'high' });
+  assert.deepStrictEqual(j(sandbox.simpleEffortBody(real, 'agent-a', true)), { simple: true, effort: 'high' });
 });
 
 test('simpleEffortLabel: the pick, else the agent\'s own effort in plain words', () => {

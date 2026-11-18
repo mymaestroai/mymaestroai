@@ -139,9 +139,64 @@ install_node() {
   [ "$got" = "$expected" ] || die "The Node.js download did not match its published checksum (got $got). Nothing was installed."
   mkdir -p "$STATE_DIR" && chmod 700 "$STATE_DIR"
   tar -xzf "$tmp/node.tar.gz" -C "$tmp" || die "Could not unpack Node.js."
+  keep_codex || die "Codex (the ChatGPT client) could not be moved out of the Node.js folder (is the disk full, or a file in it unreadable?), so Node.js was not updated and nothing was removed. Fix that and run the installer again."
   rm -rf "$NODE_DIR.new" && mv "$tmp/$name" "$NODE_DIR.new" && rm -rf "$NODE_DIR" && mv "$NODE_DIR.new" "$NODE_DIR"
   rm -rf "$tmp"
   info "Node.js $("$NODE" --version) installed in $NODE_DIR (checksum verified)."
+}
+
+# Codex (the ChatGPT client) installed with this Node's own npm (npm i -g) lives inside the folder about to be replaced.
+# Move it, with its platform packages, to ~/.npm-global (where mymaestro connect chatgpt installs it and the hub looks)
+# and link its program there, so it survives the update. ~/.codex (its sign-in) is never touched. Each package is copied
+# into a fresh temporary folder, put in place by one rename (rename(2): it replaces at most an empty folder and fails on
+# a non-empty one; any existing name is skipped before), and only then removed from the old folder: a failure at any step
+# leaves the original where it was, returns 1, and install_node stops before the old folder is removed. It runs whenever
+# any codex package is still inside (also after a run that stopped partway), and clears temporary folders an earlier
+# stopped run left (never the only copy: originals go last). A name already in ~/.npm-global is kept as it is. The
+# bin/codex link is made whenever the package is in ~/.npm-global without one (also when a run stopped just before it).
+keep_codex() {
+  local old="$NODE_DIR/lib/node_modules/@openai" pre="$HOME/.npm-global" scope p name rel dest part any=0
+  scope="$pre/lib/node_modules/@openai"
+  for p in "$old"/codex "$old"/codex-*; do [ -d "$p" ] && any=1; done
+  if [ "$any" = 0 ]; then link_codex "$pre"; return 0; fi
+  mkdir -p "$scope" "$pre/bin" || return 1
+  for part in "$scope"/.mm-moving-*; do [ -e "$part" ] && rm -rf "$part"; done
+  for p in "$old"/codex "$old"/codex-*; do
+    [ -d "$p" ] || continue
+    name="$(basename "$p")"
+    dest="$scope/$name"
+    if [ -e "$dest" ] || [ -L "$dest" ]; then continue; fi
+    part="$(mktemp -d "$scope/.mm-moving-XXXXXX")" || return 1
+    if ! cp -pPR "$p" "$part/pkg" || ! "$NODE" -e 'require("fs").renameSync(process.argv[1], process.argv[2])' "$part/pkg" "$dest" 2>/dev/null; then
+      rm -rf "$part"; return 1
+    fi
+    rmdir "$part" 2>/dev/null || true
+    rm -rf "$p"
+  done
+  link_codex "$pre"
+  info "Codex moved out of the Node.js folder to $pre, so the update keeps it."
+}
+
+# <prefix>/bin/codex -> the codex package's program, as npm links it, when the package is there and nothing has that name.
+link_codex() {
+  local pre="$1" rel
+  [ -f "$pre/lib/node_modules/@openai/codex/package.json" ] || return 0
+  if [ -e "$pre/bin/codex" ] || [ -L "$pre/bin/codex" ]; then return 0; fi
+  mkdir -p "$pre/bin" || return 0
+  rel="$("$NODE" -e 'const b=require(process.argv[1]).bin;process.stdout.write(String(typeof b==="string"?b:(b&&b.codex)||""))' "$pre/lib/node_modules/@openai/codex/package.json" 2>/dev/null || true)"
+  [ -n "$rel" ] || rel="bin/codex.js"
+  case "$rel" in /*|*..*) return 0 ;; esac
+  [ -f "$pre/lib/node_modules/@openai/codex/$rel" ] || return 0
+  ln -s "../lib/node_modules/@openai/codex/$rel" "$pre/bin/codex" || true
+}
+
+# Is Codex where this install needs it (an agent on ChatGPT, or a ChatGPT sign-in)? Repoints a codex link left pointing
+# into the old Node.js folder, and reinstalls Codex into ~/.npm-global when it is missing (scripts/hub-cli.js codex-check).
+check_codex() {
+  [ "$DRY" = 1 ] && return 0
+  grep -q "codex-check" "$DIR/scripts/hub-cli.js" 2>/dev/null || return 0
+  # it says itself what is missing and the one command that fixes it; the install goes on either way
+  "$NODE" "$DIR/scripts/hub-cli.js" codex-check --repair --quiet || true
 }
 
 find_repo_access() {
@@ -395,9 +450,11 @@ main() {
   install_packages
   configure
   install_command
+  check_codex
   start_hub
   add_shortcut
   finish
 }
 
-main "$@"
+# MM_INSTALLER_FUNCTIONS_ONLY=1: define the functions and stop (the tests run single steps with stand-ins).
+[ "${MM_INSTALLER_FUNCTIONS_ONLY:-}" = 1 ] || main "$@"

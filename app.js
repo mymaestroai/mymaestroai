@@ -104,10 +104,11 @@
     }
     // The chat POST's effort: only when the level button is shown (show !== false) AND the person picked a level for this agent;
     // never picked: nothing is sent and the agent's own setting applies.
+    // Every Simple turn says so (simple: true): the hub never runs Codex Ultra for a Simple turn.
     function simpleEffortBody(hs, agent, show) {
-      if (show === false || !hs) return {};
+      if (show === false || !hs) return { simple: true };
       const lv = typeof hs.pickedEffort === 'function' ? hs.pickedEffort(agent) : null;
-      return lv ? { effort: lv } : {};
+      return lv ? { simple: true, effort: lv } : { simple: true };
     }
     // The button's label: the picked level, else the agent's own effort in plain words.
     function simpleEffortLabel(hs, agent, agentEffort) {
@@ -2451,7 +2452,7 @@
       const btn = (a, id, label) => `<button class="gs-btn secondary" onclick="schedAct('${a}', '${esc(id)}')">${label}</button>`;
       const rows = tasks.length ? tasks.map(t => `<tr style="border-top:1px solid var(--border,#333)">
           <td><b>${esc(t.label)}</b><br><code style="font-size:11px">${esc(t.id)}</code></td>
-          <td>${esc(t.agent)}<br><small>by ${esc(t.createdBy)}</small></td>
+          <td>${esc(t.agent)}<br><small>by ${esc(t.createdBy === '@owner' ? 'you' : t.createdBy === '@hub' ? 'the hub' : t.unconfirmedOwner ? '"owner" (not confirmed as you)' : t.createdBy)}</small>${t.unconfirmedOwner ? `<br>${btn('adopt', t.id, 'Mine')}` : ''}</td>
           <td><small>${esc(t.schedule)}</small>${t.nextRunLocal ? `<br><small>next: <b>${esc(t.nextRunLocal)}</b></small>` : ''}</td>
           <td>${pill(t.status, t.queued ? ' · due now' : '')}${t.lastRun ? `<br><small title="${esc(t.lastRun.replyPreview || t.lastRun.note || '')}">last: ${esc(when(t.lastRun.firedAt || t.lastRun.dueAt))} ${esc(t.lastRun.status)}${t.lastRun.late ? ' (late)' : ''}</small>` : ''}</td>
           <td style="white-space:nowrap">
@@ -2539,6 +2540,7 @@
         if (action === 'delete' && !confirm('Delete this task and its run history?')) return;
         if (action === 'cancel' && !confirm('Cancel this task? It will not run again.')) return;
         if (action === 'run_now' && !confirm('Wake the agent with this task now?')) return;
+        if (action === 'adopt' && !confirm('Is this task yours? It was saved before an update as "owner", which an agent could also be named. Once you confirm, the agent it wakes treats it as your request.')) return;
         const t = await schedApi('/action', { id, action });
         return openSchedulePanel(t.deleted ? `Deleted ${t.id}.` : `${t.id} "${t.label}": ${action.replace('_', ' ')} → ${t.status}${t.queued ? ' (delivering)' : ''}.`);
       } catch (e) { openSchedulePanel('Error: ' + e.message); }
@@ -3113,7 +3115,7 @@
       return out;
     }
     const ST_GROUPS = [
-      { id: 'status', title: '🩺 Status', sections: ['st-ready-section', 'st-sec-section', 'st-memory-section', 'st-updates-section'] },
+      { id: 'status', title: '🩺 Status', sections: ['st-ready-section', 'st-sec-section', 'st-memory-section', 'st-selfcheck-section', 'st-updates-section'] },
       { id: 'security', title: '🔐 Security', sections: ['st-security-section'] },
       { id: 'backups', title: '💾 Backups', sections: ['st-backups-section'] },
       { id: 'models', title: '🧠 AI models', sections: ['st-prov-section', 'st-or-section', 'st-plan-section', 'st-local-models-section', 'st-classifier-section'] },
@@ -3262,7 +3264,7 @@
       const wrap = document.createElement('div');
       wrap.id = 'st-groups';
       wrap.innerHTML = `<div class="st-search"><input type="search" id="st-search" placeholder="Search settings: privacy, sandbox, push, spend…" autocomplete="off" aria-label="Search settings"><span id="st-search-none" hidden>Nothing matches.</span></div>`
-        + (window.hubMe && window.hubMe.isAdmin ? `<div id="st-quick-links" style="margin:6px 0 10px;font-size:0.85rem">Go to: <a href="/modules" id="st-connectors-link" style="color:var(--accent)">🔌 Data connectors</a><a href="/modules#remote-computers" id="st-remote-link" style="color:var(--accent);margin-left:14px;display:${remoteComputersOk === true ? '' : 'none'}">💻 Remote computers</a></div>` : '')
+        + (window.hubMe && window.hubMe.isAdmin ? `<div id="st-quick-links" style="margin:6px 0 10px;font-size:0.85rem">Go to: <a href="/modules" id="st-connectors-link" style="color:var(--accent)">🔌 Data connectors</a><a href="/modules#remote-computers" id="st-remote-link" style="color:var(--accent);margin-left:14px;display:${remoteComputersOk === true ? '' : 'none'}">💻 Remote computers</a><a href="/changes" id="st-changes-link" style="color:var(--accent);margin-left:14px">Changes to how agents behave</a></div>` : '')
         + ST_GROUPS.map(g => `<details class="st-group" id="st-group-${g.id}" data-group="${g.id}"${saved[g.id] ? ' open' : ''}><summary><span class="st-group-title">${esc(g.title)}</span><span class="st-group-sum" id="st-sum-${g.id}"></span></summary><div class="st-group-body"></div></details>`).join('');
       modal.insertBefore(wrap, sections[0]);
       const body = (id) => wrap.querySelector(`#st-group-${id} .st-group-body`);
@@ -3297,6 +3299,12 @@
       stSum('notify', 'push', '');
       for (const k of ['search', 'cx']) stSum('tools', k, '');
       for (const k of ['spend', 'caps']) stSum('money', k, '');
+      // Behaviour changes waiting for the owner (lib/behaviour-changes): the link says how many.
+      const chLink = document.getElementById('st-changes-link');
+      if (chLink) fetch('/api/behaviour-changes').then((r) => r.ok ? r.json() : null).then((j) => {
+        const n = j && Array.isArray(j.changes) ? j.changes.filter((c) => c && c.state === 'pending').length : 0;
+        if (n > 0) chLink.textContent = `Changes waiting for your decision (${n})`;
+      }).catch(() => {});
     }
 
     // Search: show the sections whose words match (a group's title matching shows all of it), open their groups,
@@ -3379,6 +3387,23 @@
         <div class="st-row"><label style="flex-basis:150px"></label><button class="st-test-btn" onclick="loadMemoryHealth(true)">Check now</button><span id="st-mh-state" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px"></span></div>
       </div>`;
       setTimeout(loadMemoryHealth, 0);
+      // Self-check (lib/selfcheck): a hidden test agent of each kind really reads, writes and runs a command; admins only.
+      if (isHubAdmin()) {
+        const tick = (id, label, hint = '') => `<div class="st-row"><label style="flex-basis:150px">${label}</label><input type="checkbox" id="${id}"${hint}></div>`;
+        html += `<div class="st-section" id="st-selfcheck-section"><h4>Self-check</h4>
+        <div class="st-hint">After every start and each night, your Maestro has a hidden test agent of each kind read, write, edit, search and run a command, inside and outside its install folder, and checks that one thing it must never do is refused. You hear about it only when something fails.</div>
+        <div id="st-sc-list" class="st-hint" style="margin-left:0">Checking…</div>
+        <div id="st-sc-msg" class="st-hint mh-msg" role="status" style="margin-left:0"></div>
+        <div class="st-row"><label style="flex-basis:150px"></label><button class="st-test-btn" id="st-sc-run" onclick="loadSelfCheck(true)">Run now</button><span id="st-sc-state" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px"></span></div>
+        ${tick('st-sc-enabled', 'Run checks')}${tick('st-sc-after', 'After every start')}
+        <div class="st-row"><label style="flex-basis:150px">Each night at</label><input type="time" id="st-sc-at"></div>
+        <div class="st-row sc-kinds"><label style="flex-basis:150px">Kinds of agent</label>${SC_CLASSES.map(k => `<label class="sc-kind"><input type="checkbox" id="st-sc-c-${k}"> ${esc(SC_CLASS_LABEL[k])}</label>`).join('')}</div>
+        <div class="st-row"><label style="flex-basis:150px">Model</label><input type="text" id="st-sc-model" placeholder="auto" autocomplete="off" spellcheck="false"></div>
+        <div class="st-hint" style="margin-left:0">auto picks the cheapest Claude model.</div>
+        <div class="st-row"><label style="flex-basis:150px"></label><button class="st-test-btn" onclick="saveSelfCheckSettings()">Save</button><span id="st-sc-save-state" role="status" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px"></span></div>
+      </div>`;
+        setTimeout(() => { scSettings = null; loadSelfCheck(); }, 0);   // the form is new: fill it from the hub
+      }
       // Updates (lib/update-check): the daily look at GitHub behind the "Update available" card.
       html += `<div class="st-section" id="st-updates-section"><h4>Updates</h4>
         <div class="st-hint">Once a day the hub checks GitHub for a new version on its channel and tells admins: a card here with Update now or Later, a card on the phone, and a notification. It never installs anything by itself.</div>
@@ -3962,6 +3987,148 @@
       };
       if (!mhFollow && !mhTicking) mhFollow = setTimeout(tick, 5000);   // one loop at a time; a tick under way schedules the next
     }
+    // Self-check (lib/selfcheck): a hidden test agent of each kind reads, writes and runs a command, and the hub checks
+    // what really happened. The page shows the last run, one row per kind, and Run now; settings save by PUT with only
+    // the keys that changed. test/ui-selfcheck.test.js lifts this block out and runs it against a stand-in page.
+    // ── self-check page (begin) ──
+    const SC_CLASSES = ['lead', 'host', 'boxed', 'shared'];
+    const SC_CLASS_LABEL = { lead: 'lead agents', host: 'ordinary agents on this computer', boxed: 'agents in a box', shared: 'agents shared with a member' };
+    const SC_CHIP = { pass: ['works', 'ok'], fail: ['problem', 'bad'], skipped: ['not checked', 'idle'], error: ["couldn't run", 'idle'] };
+    const SC_ACTION = { read: 'read files', image: 'read pictures', write: 'write files', edit: 'edit files', glob: 'list files', grep: 'search files', bash: 'run commands', refuse: 'keep call recordings private' };
+    const SC_FOLDER = { install: 'in the install folder', home: 'outside the install folder' };
+    const SC_TRIGGER = { start: 'after a start', nightly: 'nightly', manual: 'run by hand' };
+    const SC_POLL_MS = 3000, SC_POLL_MAX_MS = 6 * 60 * 1000;
+    let scLoad = 0, scSettings = null, scPollUntil = 0;
+    function scWhen(iso) { const d = new Date(iso); return isNaN(d) ? String(iso || '') : d.toLocaleString(); }
+    // "<action words> <folder words>: <reason> (since <time>)" for one failed action key such as "write@home".
+    function scFailText(key, a, since) {
+      const [act, folder] = String(key).split('@');
+      const words = `${SC_ACTION[act] || act}${folder ? ` ${SC_FOLDER[folder] || folder}` : ''}`;
+      return `${words}: ${(a && a.reason) || 'it failed'}${since ? ` (since ${scWhen(since)})` : ''}`;
+    }
+    function scRender(v) {
+      const el = document.getElementById('st-sc-list'); if (!el) return;
+      v = v || {};
+      const run = v.lastRun, classes = (run && run.classes) || {}, since = v.failingSince || {};
+      const keys = SC_CLASSES.filter(k => classes[k]).concat(Object.keys(classes).filter(k => !SC_CLASSES.includes(k)));
+      let html = run
+        ? `<div class="sc-last">Last checked ${esc(scWhen(run.finishedAt || run.startedAt))} (${esc(SC_TRIGGER[run.trigger] || run.trigger || 'earlier')})${run.model ? ` with ${esc(run.model)}` : ''}</div>${run.note ? `<div class="sc-note">${esc(run.note)}</div>` : ''}`
+        : '<div class="sc-last">Not checked yet.</div>';
+      for (const k of keys) {
+        const c = classes[k] || {}, chip = SC_CHIP[c.status] || [c.status || 'not checked', 'idle'];
+        const fails = c.status === 'fail' ? Object.entries(c.actions || {}).filter(([, a]) => a && a.ok === false) : [];
+        html += `<div class="sc-row"><div class="sc-head"><b>${esc(SC_CLASS_LABEL[k] || k)}</b> <span class="sc-chip sc-${esc(chip[1])}">${esc(chip[0])}</span></div>`
+          + (c.note ? `<div class="sc-note">${esc(c.note)}</div>` : '')
+          + fails.map(([ak, a]) => `<div class="sc-fail">${esc(scFailText(ak, a, since[`${k}/${ak}`]))}</div>`).join('')
+          + '</div>';
+      }
+      // A check that hasn't been able to run 3 times in a row is a problem of its own (the hub sent a notice too).
+      for (const [k, x] of Object.entries(v.stuck || {})) {
+        if (!x || !(x.count >= 3)) continue;
+        html += `<div class="sc-fail">${esc(k === 'run' ? 'The self-check' : `The check of ${SC_CLASS_LABEL[k] || k}`)} hasn't been able to run since ${esc(scWhen(x.since))}${x.reason ? ` (${esc(x.reason)})` : ''}.</div>`;
+      }
+      const hist = Array.isArray(v.history) ? v.history : [];
+      if (hist.length) html += `<details class="sc-hist"><summary>Earlier checks</summary>${hist.map(h => `<div class="sc-h">${esc(scWhen(h.at))} · ${esc(SC_TRIGGER[h.trigger] || h.trigger || '')}: ${esc(h.summary || '')}</div>`).join('')}</details>`;
+      // A person may have "Earlier checks" open: keep it open when the page is redrawn (a poll does that every 3 s).
+      const wasOpen = !!(el.querySelector && el.querySelector('details.sc-hist') && el.querySelector('details.sc-hist').open);
+      el.innerHTML = html;
+      if (wasOpen) { const dt = el.querySelector && el.querySelector('details.sc-hist'); if (dt) dt.setAttribute('open', ''); }
+      const st = Object.values(classes).map(c => c && c.status);
+      const stuckBad = Object.values(v.stuck || {}).some(x => x && x.count >= 3);
+      const problem = st.includes('fail') || stuckBad || Object.keys(since).length > 0;
+      const worked = st.includes('pass') || st.includes('fail');
+      stSum('status', 'selfcheck', !run && !problem ? 'Self-check: not checked yet' : problem ? 'Self-check: problem found' : !worked ? "Self-check: couldn't run" : 'Self-check: all fine', problem);
+    }
+    function scMsg(text, bad = true) {
+      const m = document.getElementById('st-sc-msg'); if (!m) return;
+      m.textContent = text || '';
+      m.classList.toggle('mh-msg-bad', !!text && bad);
+    }
+    function scRunning(on) {
+      const btn = document.getElementById('st-sc-run'), state = document.getElementById('st-sc-state');
+      if (btn) btn.disabled = !!on;
+      if (state) state.textContent = on ? 'Running…' : '';
+    }
+    function scFillSettings(s) {
+      if (!s) return;
+      scSettings = s;
+      const $ = (id) => document.getElementById(id);
+      if ($('st-sc-enabled')) $('st-sc-enabled').checked = s.enabled !== false;
+      if ($('st-sc-after')) $('st-sc-after').checked = s.afterStart !== false;
+      if ($('st-sc-at')) $('st-sc-at').value = s.nightlyAt || '';
+      if ($('st-sc-model')) $('st-sc-model').value = s.model && s.model !== 'auto' ? s.model : '';
+      for (const k of SC_CLASSES) if ($(`st-sc-c-${k}`)) $(`st-sc-c-${k}`).checked = (s.classes || SC_CLASSES).includes(k);
+    }
+    // Last result, or a new run (POST) that is then followed every 3 s while the hub says it runs, for up to 6 minutes.
+    async function loadSelfCheck(runNow = false, poll = false) {
+      if (!document.getElementById('st-sc-list')) return;
+      const mine = ++scLoad;
+      const json = async (r) => { try { return await r.json(); } catch { return {}; } };
+      try {
+        if (runNow) {
+          scMsg('');
+          scRunning(true);
+          const r = await fetch('/api/selfcheck/run', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+          if (!r.ok) {
+            const b = await json(r);
+            if (r.status === 409 && b.error === 'running') scMsg('A check is already running.');
+            else if (r.status === 409 && b.error === 'disabled') { scMsg('The self-check is turned off.'); scRunning(false); return; }
+            else { scMsg(`Couldn't start the self-check: ${b.error || `HTTP ${r.status}`}`); scRunning(false); return; }
+          }
+          scPollUntil = Date.now() + SC_POLL_MAX_MS;
+        }
+        const r = await fetch('/api/selfcheck', { credentials: 'include' });
+        const v = await json(r);
+        if (mine !== scLoad) return;   // a newer load answered first
+        if (!r.ok) throw new Error(v.error || `HTTP ${r.status}`);
+        scRender(v);
+        scFillSettingsOnce(v.settings);
+        scRunning(!!v.running);
+        // A page opened (or left alone) while a run is going follows it, for as long as a Run now would.
+        // (Not for our own poll: that one has to run out, so the 6-minute limit still holds.)
+        if (!runNow && !poll && v.running && scPollUntil <= Date.now()) scPollUntil = Date.now() + SC_POLL_MAX_MS;
+        if (v.running && Date.now() < scPollUntil) setTimeout(() => { if (mine === scLoad) loadSelfCheck(false, true); }, SC_POLL_MS);
+        else if (v.running) scMsg("Still running after 6 minutes; check back later.", false);
+        else { const m = document.getElementById('st-sc-msg'); if (m && m.textContent === 'A check is already running.') scMsg(''); }   // it finished: the note is old
+      } catch (e) {
+        if (mine !== scLoad) return;
+        scRunning(false);
+        scMsg(`Couldn't load the self-check: ${e.message}`);
+        stSum('status', 'selfcheck', "Self-check: couldn't load");
+      }
+    }
+    // The form follows the hub on the first load, and after a save; a poll never overwrites what someone is typing.
+    function scFillSettingsOnce(s) { if (!scSettings) scFillSettings(s); }
+    // Only the keys that differ from what the hub has go to PUT; at least one kind of agent must stay ticked.
+    function scSettingsChanges() {
+      const $ = (id) => document.getElementById(id), cur = scSettings || {};
+      const out = {};
+      const classes = SC_CLASSES.filter(k => $(`st-sc-c-${k}`) && $(`st-sc-c-${k}`).checked);
+      if ($('st-sc-enabled') && $('st-sc-enabled').checked !== (cur.enabled !== false)) out.enabled = $('st-sc-enabled').checked;
+      if ($('st-sc-after') && $('st-sc-after').checked !== (cur.afterStart !== false)) out.afterStart = $('st-sc-after').checked;
+      if ($('st-sc-at') && $('st-sc-at').value && $('st-sc-at').value !== cur.nightlyAt) out.nightlyAt = $('st-sc-at').value;
+      const was = Array.isArray(cur.classes) ? cur.classes : SC_CLASSES;
+      if (classes.join() !== SC_CLASSES.filter(k => was.includes(k)).join()) out.classes = classes;
+      const model = $('st-sc-model') ? $('st-sc-model').value.trim() || 'auto' : (cur.model || 'auto');
+      if (model !== (cur.model || 'auto')) out.model = model;
+      return { changes: out, classes };
+    }
+    async function saveSelfCheckSettings() {
+      const state = document.getElementById('st-sc-save-state');
+      const say = (t) => { if (state) state.textContent = t; };
+      const { changes, classes } = scSettingsChanges();
+      if (!classes.length) { say('Keep at least one kind of agent ticked.'); return; }
+      if (!Object.keys(changes).length) { say('Nothing to save.'); return; }
+      say('Saving…');
+      try {
+        const r = await fetch('/api/selfcheck/settings', { method: 'PUT', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(changes) });
+        const b = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(b.error || `HTTP ${r.status}`);
+        scFillSettings(b.settings);
+        say('Saved.');
+      } catch (e) { say(`Not saved: ${e.message}`); }
+    }
+    // ── self-check page (end) ──
     function securityActionHtml(a) {
       if (!a) return '';
       if (a.href) return ` <a href="${esc(a.href)}" class="st-test-btn" style="text-decoration:none">${esc(a.label)}</a>`;
@@ -5723,6 +5890,34 @@
       });
     }
 
+    // Team guidance level (full | light | off): how agents are told to run a team
+    // team-guidance-select:begin
+    // One save at a time, and the select always ends on the value the hub has stored: a failed save puts back the
+    // stored value (read again after the failure) and says why in the select's tooltip; the first load is ignored once
+    // a change was made, since it may have been read before that change was saved.
+    function bindTeamGuidanceSelect(select, doFetch) {
+      let confirmed = select.value, changed = false, pending = 0, chain = Promise.resolve();
+      const level = (r) => r.json().catch(() => ({})).then(d => { if (!r.ok || !d || !d.level) throw new Error((d && d.error) || `HTTP ${r.status}`); return d.level; });
+      const settle = () => { if (pending === 0) select.value = confirmed; };
+      doFetch('/api/team_guidance', { credentials: 'include' }).then(level)
+        .then(l => { if (!changed) { confirmed = l; select.value = l; } }).catch(() => {});
+      select.addEventListener('change', () => {
+        changed = true; pending++;
+        const want = select.value;
+        chain = chain.then(() => doFetch('/api/team_guidance', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ level: want }) })
+          .then(level)
+          .then(l => { confirmed = l; select.title = ''; })
+          .catch(e => {
+            select.title = `Not saved: ${e.message}`;
+            return doFetch('/api/team_guidance', { credentials: 'include' }).then(level).then(l => { confirmed = l; }).catch(() => {});
+          })
+          .then(() => { pending--; settle(); }));
+      });
+    }
+    // team-guidance-select:end
+    const teamGuidanceSelect = document.getElementById('team-guidance-select');
+    if (teamGuidanceSelect) bindTeamGuidanceSelect(teamGuidanceSelect, (...a) => fetch(...a));
+
     const lazyToolsToggle = document.getElementById('lazy-tools-toggle');
     const lazyToolsLabel = document.getElementById('lazy-tools-label');
     function updateLazyToolsLabel() {
@@ -6260,7 +6455,7 @@
       try { u = new URL(data.url, origin); } catch { return null; }
       if (u.origin !== origin || !OPEN_TARGET_MAIN.test(u.pathname)) return null;
       const q = u.searchParams;
-      return { agent: q.get('agent') || '', backups: q.get('backups') === '1', update: q.get('update') === '1', security: q.get('security') === '1', memory: q.get('memory') === '1', connectors: q.get('connectors') === '1', wallet: q.get('wallet') === 'unlock' };
+      return { agent: q.get('agent') || '', backups: q.get('backups') === '1', update: q.get('update') === '1', security: q.get('security') === '1', memory: q.get('memory') === '1', selfcheck: q.get('selfcheck') === '1', connectors: q.get('connectors') === '1', wallet: q.get('wallet') === 'unlock' };
     }
     function createTargetStore(storage, now = () => Date.now(), ttlMs = 10 * 60 * 1000) {
       return {
@@ -6337,6 +6532,7 @@
       if (t.security) openSecurityDialog();
       if (t.backups) openSettingsAt('st-backups-section');
       if (t.memory) openSettingsAt('st-memory-section');
+      if (t.selfcheck) openSettingsAt('st-selfcheck-section');
       if (t.connectors) openSettingsAt('st-modules-section');
       if (t.wallet) openWalletPanel();
       if (t.update) paintUpdateCard().then(() => showUpdateCard()).catch(() => {});
@@ -6372,12 +6568,12 @@
       await Promise.all([loadAgents()]);
       // The page's own address: "/?agent=<name>" opens that agent's chat (the Welcome page hands over to Maestro's setup
       // interview this way, and a notification tapped with no hub tab open lands here), ?backups=1 the backups settings
-      // (a backup warning), ?memory=1 the memory check, ?update=1 the update card, ?security=1 the security dialog, ?wallet=unlock the Wallet panel. Then any notification tapped
+      // (a backup warning), ?memory=1 the memory check, ?selfcheck=1 the self-check, ?update=1 the update card, ?security=1 the security dialog, ?wallet=unlock the Wallet panel. Then any notification tapped
       // while the page was loading.
       const own = parseOpenTarget({ type: 'open-target', url: location.href }, location.origin);
-      if (own && (own.update || own.backups || own.security || own.memory || own.connectors || own.wallet)) {   // one-shot actions: a reload must not repeat them
+      if (own && (own.update || own.backups || own.security || own.memory || own.selfcheck || own.connectors || own.wallet)) {   // one-shot actions: a reload must not repeat them
         const u = new URL(location.href);
-        for (const k of ['update', 'backups', 'security', 'memory', 'connectors', 'wallet']) u.searchParams.delete(k);
+        for (const k of ['update', 'backups', 'security', 'memory', 'selfcheck', 'connectors', 'wallet']) u.searchParams.delete(k);
         history.replaceState(history.state, '', u.pathname + u.search + u.hash);
       }
       // After a Reload: open the chats that were open, in their tab order, each with the text that was in its message
@@ -7448,15 +7644,23 @@
     }
     function agentEffortOf(name) { const a = (AGENTS || []).find(x => x.name === name); return (a && a.effort) || 'default'; }
     function chatModelOf(chat) { if (chat.model) return chat.model; const a = (AGENTS || []).find(x => x.name === chat.agent); return (a && a.model) || ''; }
+    // Ultra (Codex: max reasoning plus helpers; uses much more of the ChatGPT plan) is offered only when the server says this agent's model takes it.
+    const EFFORT_ULTRA = ['ultra', 'Ultra (uses several helpers; uses much more of the ChatGPT plan)'];
+    function effortUltraOf(chat) { const a = (AGENTS || []).find(x => x.name === chat.agent); return !!(a && a.effortUltra === true); }
+    function effortLevelShown(chat) { const l = chat.effort || agentEffortOf(chat.agent); return l === 'ultra' && !effortUltraOf(chat) ? 'max' : l; }   // the server sends Max when the model has no Ultra
+    function effortOptionsHtml(chat) {
+      const level = effortLevelShown(chat);
+      return (effortUltraOf(chat) ? [...EFFORT_LEVELS, EFFORT_ULTRA] : EFFORT_LEVELS).map(([v, l]) => `<option value="${v}"${v === level ? ' selected' : ''}>${l}</option>`).join('');
+    }
     function effortPickHtml(chat, chatId) {
-      const level = chat.effort || agentEffortOf(chat.agent);
       const show = effortSupported(chatModelOf(chat)) && !chat.autoModel;
-      const opts = EFFORT_LEVELS.map(([v, l]) => `<option value="${v}"${v === level ? ' selected' : ''}>${l}</option>`).join('');
+      const opts = effortOptionsHtml(chat);
       return `<select class="model-pick effort-pick" id="effort-pick-${chatId}" aria-label="Reasoning effort" title="${isHubAdmin() ? 'How hard this agent thinks before answering. Higher = slower and uses more of the plan or API budget. Applies from the next turn.' : 'Reasoning effort, set by an admin.'}"${isHubAdmin() ? '' : ' disabled'}${show ? '' : ' hidden'} onchange="changeChatEffort('${chatId}', this.value)">${opts}</select>`;
     }
     function refreshEffortPick(chat) {
       const sel = document.getElementById(`effort-pick-${chat.id}`); if (!sel) return;
-      sel.value = chat.effort || agentEffortOf(chat.agent);
+      sel.innerHTML = effortOptionsHtml(chat);
+      sel.value = effortLevelShown(chat);
       sel.hidden = !effortSupported(chatModelOf(chat)) || !!chat.autoModel;
     }
     async function changeChatEffort(chatId, level) {
@@ -9373,6 +9577,7 @@
         source.addEventListener(t, e => { const ev = parse(e); if (ev) voiceCallHubEvent(t, ev); });
       }
       source.addEventListener('turn_mood', e => { const ev = parse(e); if (ev) voiceCallHubEvent('turn_mood', ev); });
+      source.addEventListener('turn_read_full', e => { const ev = parse(e); if (ev) voiceCallHubEvent('turn_read_full', ev); });
       source.addEventListener('compaction_start', e => { const ev = parse(e); if (ev) onCompactionStart(ev); });
       source.addEventListener('compaction_progress', e => { const ev = parse(e); if (ev) onCompactionProgress(ev); });
       source.addEventListener('compaction_end', e => { const ev = parse(e); if (ev) onCompactionEnd(ev); });
@@ -11624,6 +11829,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
                 askFromStream(oc2, chatId);
                 continue;
               }
+              if (oc2.type === 'voice_read_full') { if (typeof voiceCallSseReadFull === 'function') voiceCallSseReadFull(chatId, oc2.turnId); continue; }   // the person asked to hear the details: this reply is read in full
               if (oc2.type === 'voice_mood') { if (typeof voiceCallSseMood === 'function') voiceCallSseMood(chatId, oc2.mood); continue; }   // the agent's mood word, already stripped from the text
               // Session ID tracking
               if (oc2.type === 'session_id') {
@@ -12033,9 +12239,12 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     const VOICE_STORE_KEY = 'hub-voice';
     const VOICE_DETAILS_NOTE = ' I have put the details in the chat.';
     // On a call the note names the kind of what was left out when it is clear (see voiceReplySentences in ui-voice-call.js).
-    const VOICE_NOTE_LIST = ' I\'ve put the full list in the chat.';
-    const VOICE_NOTE_TABLE = ' I\'ve put the table in the chat.';
-    const VOICE_NOTE_CODE = ' I\'ve put the code in the chat.';
+    // The call offers to read what it left out (the agent reads it in full when asked); a reply read aloud without a call keeps the plain note above.
+    // Keep the offer as the "; just say if you'd like ..." ending: voicePlainNote (ui-voice-call.js) removes exactly that on a call the hub cannot verify.
+    const VOICE_NOTE_DETAILS_CALL = ' The details are in the chat; just say if you\'d like to hear them.';
+    const VOICE_NOTE_LIST = ' I\'ve put the full list in the chat; just say if you\'d like to hear it.';
+    const VOICE_NOTE_TABLE = ' I\'ve put the table in the chat; just say if you\'d like to hear it.';
+    const VOICE_NOTE_CODE = ' I\'ve put the code in the chat; just say if you\'d like me to walk you through it.';
     const VOICE_DETAILS_READ_WORDS = [0, 20, 40, 80];   // 'Read short extra parts aloud': Off / up to 20 / 40 / 80 words (pref detailsReadWords, default 40; 0 = never read the rest)
     const VOICE_HUB_CUES = ['off', 'chime', 'cue'];   // 'When something comes in during a call': Off / Chime / Short cue (pref hubCue, default 'cue')
     const VOICE_BACKGROUND_CUES = ['off', 'show', 'say'];   // 'While I finish something in the background': Off / Show it / Say it (pref backgroundCue, default 'say')
@@ -12720,12 +12929,13 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       }
       return curve;
     }
-    // One chain per AudioContext: gain -> compressor -> trim -> ceiling curve -> analyser -> destination. Returns null when the context cannot build it.
+    // One chain per AudioContext: gain -> compressor -> trim -> ceiling curve -> analyser -> destination; the thinking sound enters
+    // through its own gain (thinkInput) in front of `gain`, held at the level it gets with a normalised voice (never above it). Returns null when the context cannot build it.
     function voiceCreateLoudness(ctx) {
       if (!ctx) return null;
       try { if (ctx.__voiceLoudness) return ctx.__voiceLoudness; } catch {}
       if (typeof ctx.createGain !== 'function' || typeof ctx.createDynamicsCompressor !== 'function') return null;
-      let gain, comp, trim, shaper = null, an = null, db = voiceLoudnessDb('louder'), buf = null;
+      let gain, comp, trim, shaper = null, an = null, db = voiceLoudnessDb('louder'), buf = null, think = null;
       try {
         gain = ctx.createGain();
         comp = ctx.createDynamicsCompressor();
@@ -12742,12 +12952,16 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         let last = trim;
         if (shaper) { last.connect(shaper); last = shaper; }
         if (an) { last.connect(an); an.connect(ctx.destination); } else last.connect(ctx.destination);
+        try { think = ctx.createGain(); think.connect(gain); } catch { think = null; }   // the thinking sound's input
       } catch { return null; }
       let levelName = 'louder', normalized = false;
-      const apply = () => { db = voiceLoudnessDb(levelName, normalized); try { gain.gain.value = Math.pow(10, db / 20); } catch {} };
+      // The thinking sound is set for a voice sent already normalised (X-Voice-Normalized): until a reply says so, the chain boosts as for
+      // an unknown voice, and its input is trimmed back to the normalised boost (a trim, never a boost).
+      const apply = () => { db = voiceLoudnessDb(levelName, normalized); try { gain.gain.value = Math.pow(10, db / 20); } catch {} try { if (think) think.gain.value = Math.pow(10, Math.min(0, voiceLoudnessDb(levelName, true) - db) / 20); } catch {} };
       apply();
       const chain = {
         input: gain,
+        thinkInput: think || gain,
         setLevel(name) { levelName = name; apply(); },
         setNormalized(flag) { normalized = !!flag; apply(); },
         get normalized() { return normalized; },
@@ -12782,7 +12996,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     // While a reply plays, a stricter talk-over (iPhone, iPad: the speaker's echo is loud) caps the sensitivity at this value.
     const VOICE_STRICT_TALKOVER_SENS = 20;
     const VOICE_CALL_HEARTBEAT_MS = 15000, VOICE_CALL_STATUS_GAP_MS = 10000, VOICE_CALL_PAUSE_MS = 1500, VOICE_CALL_ANSWER_MS = 20000;
-    const VOICE_CALL_JOIN_MS = 2000, VOICE_CALL_STILL_MS = 20000, VOICE_CALL_THINK_MS = 2000, VOICE_CALL_CONTINUE_MS = 3000, VOICE_CALL_HOLD_MS = 5000, VOICE_CALL_WAIT_HOLD_MS = 20000;
+    const VOICE_CALL_JOIN_MS = 2000, VOICE_CALL_STILL_MS = 20000, VOICE_CALL_THINK_MS = 1000, VOICE_CALL_CONTINUE_MS = 3000, VOICE_CALL_HOLD_MS = 5000, VOICE_CALL_WAIT_HOLD_MS = 20000;
     // After 20 s with no reply speech, ONE of these is spoken (never the same one twice in a wait).
     const VOICE_THINKING_LINES = ['I\'m considering what you just said.', 'Still thinking about that.', 'Give me a moment, I\'m working through it.'];
     // A turn the hub started (a scheduled task, a consultation, a job report) is never read aloud on a call. When one needs the person (the page tells the
@@ -12800,6 +13014,21 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     function voiceJoinOr(list) {
       const a = Array.from(list || []).filter(Boolean);
       return a.length < 2 ? (a[0] || '') : a.slice(0, -1).join(', ') + ' or ' + a[a.length - 1];
+    }
+    // The spoken question for an item held while the person is on the call. It says only WHO it is from and WHAT KIND it is, never
+    // the item's label: a consultation's label is the start of the request text, a task's is its title, and neither may be read
+    // aloud on a call (only replies to what the person said are). The label stays on screen in the held list.
+    const VOICE_ANNOUNCE_KINDS = { consultation: 'has a request', consult_reply: 'Replies from other agents came in', schedule: 'A scheduled task is due',
+      job_notice: 'A background job finished', job_report: 'A job report came in', task: 'A task came in', alert: 'An alert came in' };
+    function voiceAnnounceLine(item) {
+      const it = item || {};
+      // an agent's name is letters and digits; the hub's own senders (tiger-team-ui, roundtable workers, w_ ids) are "Another agent"
+      const from = typeof it.from === 'string' && /^[A-Za-z][A-Za-z0-9]{0,31}$/.test(it.from) && !['hub', 'schedule', 'owner', 'roundtable'].includes(it.from) ? it.from : '';
+      const name = from ? from.charAt(0).toUpperCase() + from.slice(1) : '';
+      let what;
+      if (it.kind === 'consultation') what = (name || 'Another agent') + ' ' + VOICE_ANNOUNCE_KINDS.consultation;
+      else what = Object.prototype.hasOwnProperty.call(VOICE_ANNOUNCE_KINDS, it.kind) ? VOICE_ANNOUNCE_KINDS[it.kind] : 'Something came in';
+      return what + '. Now, or after we\'re done?';
     }
     function voiceDecisionWord(text) {
       const t = voiceCallNorm(text);
@@ -12933,8 +13162,31 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     // VOICE_LEAD_MAX_SENTENCES sentences); anything left out is held. At done what the lead left out is judged: short (at most readWords spoken
     // words, nothing unspeakable) -> its sentences follow the lead's (so the sentences already returned stay a prefix), no note; substantial -> the lead only
     // and ONE note naming the kind (list, table, code, else the details note). readWords 0 never reads the rest.
-    function voiceReplySentences(markdown, done, readWords) {
+    // A 4th argument full === true reads the WHOLE reply (the person asked to hear the details): every complete sentence of the whole text, no cap and no note
+    // (a table or code block is dropped silently); while streaming only complete sentences count, as above.
+    function voiceFullSentences(markdown, done, note) {
+      let text = String(markdown == null ? '' : markdown).replace(/\r\n?/g, '\n');
+      const lines = text.split('\n');
+      const kept = [];
+      let inTable = false;   // after a table's header: its rows (lines with a pipe) up to the next line without one
+      for (let i = 0; i < lines.length; i++) {
+        if (inTable) { if (lines[i].includes('|')) continue; inTable = false; }
+        // a table header (a line with a pipe above a delimiter row) and a line still being typed that may become one are not text
+        if (lines[i].includes('|') && ((i + 1 < lines.length && VOICE_TABLE_RULE_RE.test(lines[i + 1])) || (!done && i >= lines.length - 2))) { if (!done) break; i++; inTable = true; continue; }
+        if (VOICE_TABLE_RULE_RE.test(lines[i])) continue;
+        kept.push(lines[i]);
+      }
+      text = kept.join('\n') + (kept.length < lines.length ? '\n' : '');   // lines held back: what came before them is complete
+      if (!done) text = text.replace(/(^|\n)[ \t]*(?:[-*+•◦▪‣`~#|_=]+|\d+[.)]?|(?:\*\*|__)[^\n]*)$/, '$1');   // a lone marker of a line being typed
+      let t = voiceSpeechText(text, !done);
+      if (t === note) t = ''; else if (t.endsWith(' ' + note)) t = t.slice(0, -note.length).trim();
+      const sentences = voiceSentences(t).filter(Boolean);
+      if (!done && sentences.length && !(/[.!?]["')\]]*$/.test(t) && /\s$/.test(text))) sentences.pop();
+      return { sentences, note: '' };
+    }
+    function voiceReplySentences(markdown, done, readWords, full) {
       const note = voiceSpeechText('| a |');
+      if (full === true) return voiceFullSentences(markdown, done, note);
       const limit = Number.isFinite(Number(readWords)) && readWords !== null && readWords !== '' && Number(readWords) >= 0 ? Number(readWords) : 40;
       const sp = voiceSpokenLead(markdown, done);
       const finished = (!!done || sp.cut) && !sp.openTail;   // a cut lead is complete; an uncut reply may still be streaming; text before a table header's pipe is read as typed
@@ -12948,7 +13200,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (!finished && sentences.length && !(/[.!?]["')\]]*$/.test(t) && /\s$/.test(lead))) sentences.pop();
       const extra = sentences.slice(VOICE_LEAD_MAX_SENTENCES);
       if (extra.length) { sentences = sentences.slice(0, VOICE_LEAD_MAX_SENTENCES); hasNote = true; }
-      if (!done || !limit || !hasNote || leadNote) return { sentences, note: hasNote ? note : '' };
+      if (!done || !limit || !hasNote || leadNote) return { sentences, note: hasNote ? VOICE_NOTE_DETAILS_CALL.trim() : '' };
       // Which extra sentences hold a RAW link / path: the same cleaning and split on the lead with its raw links and paths marked by sentinel
       // words (the words "a link" / "a file path" in ordinary prose are not raw ones).
       let extraRaw = 0;
@@ -12968,8 +13220,44 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const text = String(markdown == null ? '' : markdown).replace(/\r\n?/g, '\n');
       const rest = sp.cut ? text.slice(sp.lead.length) : '';
       const a = voiceRestAnalysis(rest, extra, limit, sp.openTail, extraRaw);
-      if (a.substantial) return { sentences, note: a.kind === 'list' ? VOICE_NOTE_LIST.trim() : a.kind === 'table' ? VOICE_NOTE_TABLE.trim() : a.kind === 'code' ? VOICE_NOTE_CODE.trim() : note };
+      if (a.substantial) return { sentences, note: a.kind === 'list' ? VOICE_NOTE_LIST.trim() : a.kind === 'table' ? VOICE_NOTE_TABLE.trim() : a.kind === 'code' ? VOICE_NOTE_CODE.trim() : VOICE_NOTE_DETAILS_CALL.trim() };
       return { sentences: sentences.concat(a.sentences), note: '' };
+    }
+    // A call whose turns the hub cannot verify (its start answer says readDetails: false: an API caller with a service token)
+    // gets no read-in-full instructions, so its notes say only where the details are: "...in the chat." without the offer.
+    function voicePlainNote(note) {
+      return String(note == null ? '' : note).replace(/; just say if you'd like [^.]*\.$/, '.');
+    }
+    // The "read in full" flag belongs to ONE reply. Both pages keep gate = { set, turn, own, past } (set: a flag is on; turn: the hub turn id it was
+    // set for, null when the chunk carried none; own: the latest own turn id from turn_start; past: earlier own turn ids) and ask this for every related event:
+    //   { kind: 'chunk', turnId }  the chat stream's voice_read_full (this page's own spoken send)  -> set for its turn, unless that turn is an EARLIER own turn
+    //   { kind: 'event', turnId }  the hub's turn_read_full for the call's agent                     -> set only when turnId is the latest own turn
+    //   { kind: 'start', turnId }  an own turn_start, typed or spoken                                 -> remember it; a flag for ANOTHER turn is cleared
+    // (a flag for the same turn stays: the chat-stream chunk may come before the hub's turn_start; a chunk for a turn not seen yet is that case,
+    // a chunk for a turn already superseded (past: the last VOICE_READ_FULL_PAST own turns before the latest) is a late one and is ignored).
+    // Signals may repeat (one per [details] tag: an answer to an interjection in the same turn gives its own). Returns
+    // { state, action: 'set' | 'reset' | 'ignore' }. Pure: the caller stores state and calls call.onReadFull() on 'set' and call.resetReadFull() on 'reset'.
+    const VOICE_READ_FULL_PAST = 32;
+    function voiceReadFullGate(state, ev) {
+      const s = state && typeof state === 'object' ? state : {};
+      const cur = { set: s.set === true, turn: s.turn === undefined ? null : s.turn, own: s.own === undefined ? null : s.own, past: Array.isArray(s.past) ? s.past : [] };
+      const id = ev && ev.turnId ? String(ev.turnId) : null;
+      switch (ev && ev.kind) {
+        case 'chunk':
+          if (id && cur.past.includes(id)) return { state: cur, action: 'ignore' };   // a late chunk of an earlier turn
+          return { state: { set: true, turn: id, own: cur.own, past: cur.past }, action: 'set' };
+        case 'event':
+          if (id && id === cur.own) return { state: { set: true, turn: id, own: cur.own, past: cur.past }, action: 'set' };
+          return { state: cur, action: 'ignore' };
+        case 'start': {
+          if (!id || id === cur.own) return { state: cur, action: 'ignore' };
+          // the turn before becomes past; the new one is never in past (a replayed turn_start is current again)
+          const past = (cur.own ? cur.past.filter(t => t !== cur.own).concat(cur.own) : cur.past).filter(t => t !== id).slice(-VOICE_READ_FULL_PAST);
+          if (cur.set && cur.turn !== id) return { state: { set: false, turn: null, own: id, past }, action: 'reset' };
+          return { state: { set: cur.set, turn: cur.turn, own: id, past }, action: 'ignore' };
+        }
+        default: return { state: cur, action: 'ignore' };
+      }
     }
     function voiceCreateCall(deps) {
       const d = deps || {};
@@ -12980,6 +13268,9 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       let state = '', mode = 'announce', ended = false, started = false, endPromise = null;
       let personSpeaking = false, speechEndAt = null, awaitingReply = false, cutSkip = false;
       let lastText = '', spokenCount = 0, noteSpoken = false, doneSeen = false, lastStatusAt = null;
+      let toolBreakText = null, toolBreakAt = [];   // the reply text whose last sentence was last released when a tool started (speakBeforeTool), and the length at each release
+      let readFull = false;   // the person asked to hear the details: this reply is read in full (onReadFull); reset where a new reply begins
+      let readOffer = true;   // the hub can read details on request for this call (start answer readDetails: false when it cannot): else the notes do not offer it
       let queue = [], current = null, speaking = false, gen = 0;
       let heldList = [], announceQueue = [], pendingAnnounce = null, pendingAsk = null;
       let hbTimer = null, pumpTimer = null, sttChain = Promise.resolve();
@@ -12988,7 +13279,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       // earlier segment a new one may join, segActive that a segment has begun and has not ended.
       let lastSeg = null, curCand = null, segActive = false;
       // The one spoken line after a long wait: when something was last spoken, when the running turn began, whether a line was
-      // said since, which lines this wait has used. The thinking sound: its 2 s timer and whether it is playing.
+      // said since, which lines this wait has used. The thinking sound: its 1 s timer and whether it is playing.
       let lastSpokenAt = null, turnAt = null, stillSaid = false, stillTimer = null, stillUsed = [];
       let thinkTimer = null, thinkingOn = false, thinkStep = 0, thinkT0 = 0, thinkDueAt = 0, thinkSeed = 0;
       let replyEnded = false;   // the whole reply of this turn was reported once (ui.reply('end'))
@@ -13026,8 +13317,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
 
       // The thinking clock: ONE scheduler for what is heard and what is shown. When the person's turn was sent (and nothing is being
       // transcribed or asked) it starts: a small silent pulse at once (strength 0.35, visual only), the first full pulse VOICE_CALL_THINK_MS
-      // later (2 s, the first audible one), then a quiet random pop cluster (lib/ui-voice-thinking.js: voiceThinkingCluster, seeded) about
-      // every 1.5 s of pops + a 4-6 s gap (the gap is measured from the END of the cluster). Every pulse is one event (the contract is in
+      // later (1 s, the first audible one), then a quiet random pop cluster (lib/ui-voice-thinking.js: voiceThinkingCluster, seeded) about
+      // every 1.5 s of pops + a 1-2 s gap (the gap is measured from the END of the cluster). Every pulse is one event (the contract is in
       // lib/ui-voice-thinking.js: at, kind, durationMs, pops [{ tMs, strength, freqHz, decayMs }], and the old swell fields attackMs, decayMs,
       // strength) handed to ui.thinkingPulse(event) (the call display's orb), and when the sound is on (thinkingSound not false; do-not-disturb never mutes it, with any display) to
       // thinking.pulse(event) as well; `at` is the performance.now() time (d.perfNow, else d.now) the audio is scheduled to start (+20 ms);
@@ -13041,7 +13332,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const perfNow = () => { const f = d.perfNow || d.now; return Number(f()); };
       // thinkVisual: a display really takes the pulses right now (ui.thinkingPulse exists and ui.thinkingWanted(), when the page has it, says
       // a view is shown). With NO display (None, hidden, ended) the clock is exactly the plain thinking sound of before: nothing is armed
-      // when the sound is off, do-not-disturb does not mute it, switching it off ends the wait and switching it on starts a fresh 2 s one,
+      // when the sound is off, do-not-disturb does not mute it, switching it off ends the wait and switching it on starts a fresh 1 s one,
       // and the sound's own pulse() is called without an event.
       const thinkVisual = () => typeof (d.ui && d.ui.thinkingPulse) === 'function' && !(typeof d.ui.thinkingWanted === 'function' && !quiet(() => d.ui.thinkingWanted()));
       const thinkAudible = () => !!d.thinking && prefs().thinkingSound !== false;   // the same in every display (None, Orb, Character): do-not-disturb does not mute the sound
@@ -13057,7 +13348,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         thinkStep = 0;
         muteThinking();
       }
-      // Pulse 0 (the small silent one) happens at t0, pulse 1 at t0 + 2000, and every next one at the previous one's time + its
+      // Pulse 0 (the small silent one) happens at t0, pulse 1 at t0 + 1000, and every next one at the previous one's time + its
       // cluster length + its own gap (all on the controller's clock, so the audio mapping of event.at never makes it drift).
       const thinkPlan = (k) => {
         if (typeof voiceThinkingCluster !== 'function') return null;
@@ -13254,7 +13545,16 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       }
 
       const readWords = () => prefs().detailsReadWords;   // 'Read short extra parts aloud' (undefined: the default, 40)
-      function completeCount() { return voiceReplySentences(lastText, false, readWords()).sentences.length; }
+      // The reply text as it is spoken: after a sentence released at a tool (speakBeforeTool) a break is kept there, also when the text that
+      // follows was joined straight onto it, so the released sentence stays complete and the next one starts fresh. Speech only: lastText
+      // (saved and shown) is never changed.
+      function withToolBreak(t) {
+        if (toolBreakText === null || !t.startsWith(toolBreakText)) return t;
+        let out = '', from = 0;
+        for (const at of toolBreakAt) { out += t.slice(from, at) + (/^\s/.test(t.slice(at)) ? '' : '\n'); from = at; }   // every release in this reply, in order
+        return out + t.slice(from);
+      }
+      function completeCount() { return voiceReplySentences(withToolBreak(lastText), false, readWords()).sentences.length; }
       // The whole reply is over, reported ONCE (ui.reply('end')) for the display's reaction: its text is complete AND nothing is read or waiting to be
       // read (so a gap between two sentences of a growing reply is not the end) AND the person is not speaking. With no speech (voice off, a failed
       // line) that is the moment the text is complete; otherwise right after the last line ended, before the call returns to listening.
@@ -13270,25 +13570,55 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         if (!done) replyRecorded = false;   // a reply is being written: its text is saved once, when complete
         if (!done && !awaitingReply && !cutSkip) { awaitingReply = true; replyEnded = false; }
         if (!done) doneSeen = false;   // a reply being written: a done seen before belonged to an earlier one
-        const r = voiceReplySentences(lastText, !!done, readWords());
-        // once a done was processed for this reply, a later one (the pref may have changed: fewer sentences) never lowers what was spoken
-        if (!(doneSeen && r.sentences.length < spokenCount)) {
+        const r = voiceReplySentences(withToolBreak(lastText), !!done, readWords(), readFull);
+        // once a done was processed for this reply, a later one (the pref may have changed: fewer sentences) never lowers what was spoken;
+        // nor does text that goes on from a sentence released at a tool (a guard: it cannot be taken back, and a reply is never read again from the start)
+        const goesOn = toolBreakText !== null && lastText.startsWith(toolBreakText);
+        if (!((doneSeen || goesOn) && r.sentences.length < spokenCount)) {
           if (r.sentences.length < spokenCount) spokenCount = 0;
           if (cutSkip) spokenCount = r.sentences.length;
           else { for (const s of r.sentences.slice(spokenCount)) enqueue(s, 'reply'); spokenCount = r.sentences.length; }
         }
         if (done) {
           if (recorder && !replyRecorded && lastText.trim()) { replyRecorded = true; quiet(() => d.recordReplyText(lastText)); }
-          if (!cutSkip && r.note && !noteSpoken) enqueue(r.note, 'reply', null, null, false, true);
-          noteSpoken = true; awaitingReply = false; doneSeen = true;
+          if (!cutSkip && r.note && !noteSpoken) enqueue(readOffer ? r.note : voicePlainNote(r.note), 'reply', null, null, false, true);
+          noteSpoken = true; awaitingReply = false; doneSeen = true; toolBreakText = null;
           clearStill(); stopThinking(); quiet(() => ui.activity(''));
           if (!speaking) { maybeReplyEnd(); settle(); }
         }
+      }
+      // The hub says this reply must be READ IN FULL (the person asked to hear details): from now on every complete sentence of the whole reply is read, no note.
+      // It may come before the reply's first text (the flag survives until the next turn / interjection begins), mid-reply, or after the reply is done
+      // (a note still waiting is dropped and the rest is read; a note already playing is left to finish).
+      function onReadFull() {
+        if (ended || readFull) return;
+        readFull = true;
+        if (cutSkip) return;
+        const hadNote = queue.some(i => i.kind === 'reply' && i.note);
+        if (hadNote) queue = queue.filter(i => !(i.kind === 'reply' && i.note));
+        if (lastText && ((doneSeen && lastDone) || !lastDone)) onReplyText(lastText, lastDone);
+      }
+      // The page learned the flag belongs to an older reply (a typed turn started): clear it. Never touches the queue or what is being spoken.
+      function resetReadFull() { readFull = false; }
+      // The agent's own tool started (a running 'tool' item): the model stopped writing to use it, and the text after it starts a new paragraph
+      // (paragraphAfterTool), so the text before it is complete for now. Its last sentence is held back while streaming until more text follows
+      // it, and on the gateway that text only comes after the tool, so a finished last sentence ("Let me check that for you.") is spoken now.
+      // An unfinished one ("Let me check") or a lone list marker ("1.") stays held. Other activity (an interjection, a worker's progress, a tool
+      // finishing) is no such boundary: the model may still be writing that sentence ("3." -> "3.5").
+      function speakBeforeTool(item) {
+        if (!item || item.kind !== 'tool' || item.status !== 'running') return;
+        if (!awaitingReply || cutSkip || lastDone || !lastText || /\s$/.test(lastText) || lastText === toolBreakText) return;
+        const lastLine = lastText.slice(lastText.lastIndexOf('\n') + 1);
+        if (!/[.!?]["')\]*_]*$/.test(lastText) || /^[ \t]*(?:[-*+•◦▪‣`~#|_=]+|\d+[.)]?)$/.test(lastLine)) return;
+        if (toolBreakText === null || !lastText.startsWith(toolBreakText)) toolBreakAt = [];   // a reply that does not go on from the last release starts afresh
+        toolBreakText = lastText; toolBreakAt.push(lastText.length);
+        onReplyText(lastText, false);
       }
       // A tool activity of the running turn: shown silently (ui.activity); spoken only when the page's speakActivity() says so.
       function onActivity(item) {
         if (ended) return;
         if (!awaitingReply && !quiet(() => d.isTurnRunning())) return;
+        speakBeforeTool(item);
         quiet(() => ui.activity(voiceStatusLine(item)));
         if (state !== 'thinking' || speaking || personSpeaking || pendingAsk || pendingAnnounce) return;
         if (!quiet(() => d.speakActivity && d.speakActivity())) return;
@@ -13368,7 +13698,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           if (pendingAnnounce !== me) return;
           me.timer = d.setTimer(() => { if (pendingAnnounce === me) decide(me.id, 'later'); }, VOICE_CALL_ANSWER_MS);
         };
-        enqueue(String(item.label || 'Something came in').replace(/[.!?\s]+$/, '') + '. Now, or after we\'re done?', 'announce', start, () => { me.heard = true; });
+        enqueue(voiceAnnounceLine(item), 'announce', start, () => { me.heard = true; });
       }
       function setMode(m) {
         if (m !== 'announce' && m !== 'dnd') return;
@@ -13623,7 +13953,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         try {
           if (quiet(() => d.isTurnRunning())) {
             if (cutSkip) { cutSkip = false; spokenCount = completeCount(); }
-            doneSeen = false; noteSpoken = false;   // what follows an interjection is a new reply: its done is processed afresh and it says its own note once
+            doneSeen = false; noteSpoken = false; readFull = false;   // what follows an interjection is a new reply: its done is processed afresh and it says its own note once
             awaitingReply = true; replyEnded = false; replyRecorded = false; turnAt = now(); stillSaid = false; quiet(() => ui.reply('start')); setState('thinking'); armStill(); armThinking();
             await d.interject(t);
           } else {
@@ -13649,7 +13979,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         settle();
       }
       function beginOwnTurn() {
-        awaitingReply = true; replyEnded = false; replyRecorded = false; cutSkip = false; spokenCount = 0; noteSpoken = false; doneSeen = false; lastText = ''; lastDone = false; turnAt = now(); stillSaid = false; stillUsed = [];
+        awaitingReply = true; replyEnded = false; replyRecorded = false; cutSkip = false; spokenCount = 0; noteSpoken = false; readFull = false; doneSeen = false; lastText = ''; toolBreakText = null; lastDone = false; turnAt = now(); stillSaid = false; stillUsed = [];
         quiet(() => ui.reply('start')); setState('thinking'); armStill(); armThinking();
       }
       function sendFailed() {
@@ -13825,7 +14155,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           })).catch((e) => { vadErr = e || new Error('no microphone'); });
         } catch (e) { vadErr = e || new Error('no microphone'); vadStarting = Promise.resolve(); }
         // The call's id comes with the answer; a hang-up while the server is still starting ends that call once the id is known.
-        startP = (async () => server.start(mode))().then((r) => { if (r && r.callId) callId = r.callId; return r; });
+        startP = (async () => server.start(mode))().then((r) => { if (r && r.callId) callId = r.callId; if (r && r.readDetails === false) readOffer = false; return r; });
         let startRes;
         try { startRes = await startP; } catch (e) { await vadStarting; quiet(() => vad.stop()); return fail('Could not start the call: ' + (e && e.message || e)); }
         await vadStarting;
@@ -13893,7 +14223,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         settle();
       }
       return {
-        start, hangUp, release, wakeChanged, isStandby: () => standby, setMuted, isMuted: () => muted, interrupt, setPrefs, retryMic, setLinkLost, onSpeechBegin, onSpeechStart, onMisfire, onSpeechEnd, onReplyText, onActivity, onAsk, onAskDone, onHeld, onHeldDone, decide, setMode, onHubOwner, backgroundDone,
+        start, hangUp, release, wakeChanged, isStandby: () => standby, setMuted, isMuted: () => muted, interrupt, setPrefs, retryMic, setLinkLost, onSpeechBegin, onSpeechStart, onMisfire, onSpeechEnd, onReplyText, onReadFull, resetReadFull, onActivity, onAsk, onAskDone, onHeld, onHeldDone, decide, setMode, onHubOwner, backgroundDone,
         get background() { return bgWords.length > 0; },
         get state() { return state; }, get callId() { return callId; }, get mode() { return mode; }, get held() { return heldList.map(h => Object.assign({}, h)); },
       };
@@ -14202,19 +14532,28 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     // The thinking sound: quiet random pop clusters made with Web Audio only (no files). The plan (how many pops, when, how high, the gaps) is
     // DATA from lib/ui-voice-thinking.js (voiceThinkingCluster, seeded); this function only plays an event's pops: each pop is a sine with a
     // few-ms attack and a 30-60 ms decay (a little glide), through a low-pass below 2 kHz, the whole cluster fades in and out. Peak = volume x
-    // 0.1125 (volume 0.5, the default, is -25 dBFS). start(), stop() (a 0.1 s fade), setVolume(0..1). pulse(event) schedules ONE cluster at
+    // 0.3170 (voiceThinkingPeak(volume) from lib/ui-voice-thinking.js when present; volume 0.5, the default, is -16 dBFS). start(), stop() (a 0.1 s fade), setVolume(0..1). pulse(event) schedules ONE cluster at
     // ctx.currentTime + 0.02 and moves event.at to the moment that cluster is HEARD (the audio output clock mapped to performance.now():
     // getOutputTimestamp when valid, else now + the scheduling lead + the output or base latency); it returns the same event, or false when
     // the context is not running (nothing was claimed, event.at is untouched). An event without pops (or no event) plays a cluster of a fresh
     // random seed. start() plays one now and another every 6.5 s (the old adapters without a clock of their own).
-    // opts: { ctx, volume, variant, seed (a fixed seed for the clusters it makes itself), setInterval, clearInterval, perfNow } (the last four for tests).
+    // opts: { ctx, volume, variant, seed (a fixed seed for the clusters it makes itself), out (an AudioNode, or (ctx) => AudioNode, that the master gain connects to
+    // instead of ctx.destination, e.g. the speech's loudness chain; ctx.destination when absent, it throws or it gives nothing usable), setInterval, clearInterval, perfNow } (the last four for tests).
     function voiceCreateThinkingSound(opts) {
       const o = opts || {}, ctx = o.ctx;
       const perf = o.perfNow || (() => (typeof performance !== 'undefined' && performance && typeof performance.now === 'function' ? performance.now() : NaN));
       const setIv = o.setInterval || ((f, ms) => setInterval(f, ms)), clearIv = o.clearInterval || ((id) => clearInterval(id));
       const clamp = (v) => { const n = Number(v); return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : 0.5; };
       let vol = clamp(o.volume === undefined ? 0.5 : o.volume), master = null, timer = null, running = false, active = [], own = 0;
-      const peak = () => vol * 2 * Math.pow(10, -25 / 20);   // volume 0.5 = -25 dBFS
+      const peak = () => (typeof voiceThinkingPeak === 'function' ? voiceThinkingPeak(vol) : vol * 2 * Math.pow(10, -16 / 20));   // volume 0.5 = -16 dBFS
+      // the master gain, connected to opts.out (a node, or (ctx) => node) when that is usable, else to ctx.destination
+      const makeMaster = () => {
+        const m = ctx.createGain(); m.gain.value = peak();
+        let dest = null;
+        try { const t = typeof o.out === 'function' ? o.out(ctx) : o.out; if (t && typeof t.connect === 'function') dest = t; } catch { /* the speakers */ }
+        m.connect(dest || ctx.destination);
+        return m;
+      };
       // performance.now() time at which the sample scheduled for context time t0 comes out of the speakers; null when it cannot be told.
       function heardAt(ct, t0) {
         const now = Number(perf());
@@ -14276,7 +14615,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           if (running || !ctx) return;
           running = true;
           try { if (ctx.state === 'suspended' && ctx.resume) { const r = ctx.resume(); if (r && r.catch) r.catch(() => {}); } } catch { /* the page resumes it */ }
-          master = ctx.createGain(); master.gain.value = peak(); master.connect(ctx.destination);
+          master = makeMaster();
           pulse();
           timer = setIv(pulse, 6500);
         },
@@ -14293,7 +14632,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           if (!running) {
             running = true;
             try { if (ctx.state === 'suspended' && ctx.resume) { const r = ctx.resume(); if (r && r.catch) r.catch(() => {}); } } catch { /* the page resumes it */ }
-            master = ctx.createGain(); master.gain.value = peak(); master.connect(ctx.destination);
+            master = makeMaster();
           }
           pulse(wants ? ev : undefined);
           return wants ? ev : undefined;
@@ -15987,6 +16326,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     let voiceNormFlag = false;
     function voiceNoteNormalized(flag) { voiceNormFlag = !!flag; try { const c = voicePlay.ctx && voicePlay.ctx.__voiceLoudness; if (c && typeof c.setNormalized === 'function') c.setNormalized(voiceNormFlag); } catch { /* applied at the next chain use */ } }
     function voiceOutNode(ctx) { const c = voiceLoudChain(ctx); return c ? c.input : ctx.destination; }
+    // The thinking sound's way into the chain: its own input, held at the level it has with a normalised voice (voiceCreateLoudness).
+    function voiceThinkNode(ctx) { const c = voiceLoudChain(ctx); return c ? (c.thinkInput || c.input) : ctx.destination; }
     function voiceLoudApply() { voiceLoudChain(voicePlay.ctx); }   // at call start and when the pref changes: a running call follows at once
     try { window.__voiceOut = () => { const c = voicePlay.ctx && voicePlay.ctx.__voiceLoudness; return { level: voiceLoudnessNow(), ...voiceOutputNow(), gainDb: c ? c.gainDb : null, normalized: c ? !!c.normalized : voiceNormFlag, meter: c ? c.meter() : null }; }; } catch { /* a test hook only */ }
     function voiceDisplayRoute(ctx, src) { const d = voiceDisp.cur; if (d) { try { d.routeBufferSource(ctx, src); return; } catch { /* plain playback below */ } } src.connect(voiceOutNode(ctx)); }
@@ -16272,7 +16613,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           quiet(() => {
             getCtx();
             if (ctx.state === 'suspended' && ctx.resume) ctx.resume();
-            if (!snd) snd = voiceCreateThinkingSound({ ctx, volume: voiceThinkingVolNow() });
+            if (!snd) snd = voiceCreateThinkingSound({ ctx, volume: voiceThinkingVolNow(), out: (c) => voiceThinkNode(c) });
             snd.setVolume(voiceThinkingVolNow());
             snd.start();
             on = true;
@@ -16286,7 +16627,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           quiet(() => {
             getCtx();
             if (ctx.state === 'suspended' && ctx.resume) ctx.resume();
-            if (!snd) snd = voiceCreateThinkingSound({ ctx, volume: voiceThinkingVolNow() });
+            if (!snd) snd = voiceCreateThinkingSound({ ctx, volume: voiceThinkingVolNow(), out: (c) => voiceThinkNode(c) });
             snd.setVolume(voiceThinkingVolNow());
             r = snd.pulse(ev);
             if (r === false) return;
@@ -16609,7 +16950,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
             const id = r.call && r.call.callId;
             const g = rec || (r.recording ? voiceRecMake(agent, vad, { mic: 'processed' }, false) : null);   // the hub recorded it though this page did not expect that (an old agent list): "Not recording"
             if (g) { if (!rec) voiceCallS.rec = g; try { await g.started(r.recording, id); } catch { /* the call carries on without a recording */ } }   // the consent line is spoken before the call listens
-            return { callId: id, held: (r.call && r.call.held) || [] };
+            return { callId: id, held: (r.call && r.call.held) || [], ...(r.readDetails === false ? { readDetails: false } : {}) };   // readDetails false: the hub cannot read details on request for this caller
           },
           heartbeat: (callId) => voiceCallApi('/api/voice/call', { agent, action: 'heartbeat', callId }).then(
             r => ({ callId: r.call && r.call.callId, held: (r.call && r.call.held) || [] }),
@@ -16763,7 +17104,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (typeof voiceRouteDone === 'function') voiceRouteDone();   // a sentence waiting for the first route goes on (it finds the call gone)
       for (const k of ['routeTrail', 'routeFirstTimer']) if (S[k]) { clearTimeout(S[k]); S[k] = null; }
       S.call = null; S.vad = null; S.thinking = null; S.keepAlive = null; S.focus = null; S.active = false; S.starting = false; S.chatId = null; S.agent = null;
-      S.own.clear(); S.hub.clear(); S.owner.clear(); S.hubEnded.clear(); S.asks.clear(); S.expecting = false;
+      S.own.clear(); S.hub.clear(); S.owner.clear(); S.hubEnded.clear(); S.asks.clear(); S.expecting = false; S.readFull = null;
       voiceDispEnd(false);   // a call that ended some other way: the display is let go at once (hang-up has already said goodbye)
       // Whatever way the call ended, nothing is left holding the microphone or a speaker: the VAD (mic tracks, processed stream,
       // AudioContext) and the thinking sound's context are let go here too; both are safe to stop twice.
@@ -16933,6 +17274,14 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       S.starting = false; S.active = true;
     }
     function voiceCallSseMood(chatId, mood) { const S = voiceCallS; if (S.call && S.chatId === chatId) voiceDispMood(S.sendSeq, mood); }
+    // The chat stream's voice_read_full for this page's own spoken send (turnId: the hub turn it belongs to, may be null). The flag belongs to that one reply (voiceReadFullGate).
+    function voiceCallSseReadFull(chatId, turnId) {
+      const S = voiceCallS;
+      if (!(S.call && S.chatId === chatId && typeof S.call.onReadFull === 'function')) return;
+      const g = typeof voiceReadFullGate === 'function' ? voiceReadFullGate(S.readFull, { kind: 'chunk', turnId }) : { state: S.readFull, action: 'set' };
+      S.readFull = g.state;
+      if (g.action === 'set') S.call.onReadFull();   // a late chunk of an earlier turn is ignored
+    }
     // A turn the hub started runs (a scheduled task, a consultation, a job report ...) and none of the caller's own: his words are kept for his own turn (the controller's backgroundBusy).
     // Also false when this page streams a reply of its own (typed in this chat during the call) or an own turn of the call has not ended.
     const VOICE_HUB_OWNER_LATE_MS = 5000;   // a for_owner this soon after the turn ended still gives the cue
@@ -16977,7 +17326,12 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       switch (type) {
         case 'turn_start': {
           if (!ev.turnId) return;
-          if (ev.origin && ev.origin.kind === 'user') { S.own.set(ev.turnId, ''); voiceDisp.turnSeq.set(ev.turnId, S.sendSeq); if (voiceDisp.turnSeq.size > 64) voiceDisp.turnSeq.delete(voiceDisp.turnSeq.keys().next().value); }
+          if (ev.origin && ev.origin.kind === 'user') {
+            S.own.set(ev.turnId, ''); voiceDisp.turnSeq.set(ev.turnId, S.sendSeq); if (voiceDisp.turnSeq.size > 64) voiceDisp.turnSeq.delete(voiceDisp.turnSeq.keys().next().value);
+            // A new own turn (typed or spoken): a "read in full" flag left for an older reply must not uncap this one.
+            const g = typeof voiceReadFullGate === 'function' ? voiceReadFullGate(S.readFull, { kind: 'start', turnId: ev.turnId }) : null;
+            if (g) { S.readFull = g.state; if (g.action === 'reset' && typeof call.resetReadFull === 'function') call.resetReadFull(); }
+          }
           else S.hub.set(ev.turnId, (ev.origin && (ev.origin.label || ev.origin.from)) || hubOriginLabel(ev.origin));
           return;
         }
@@ -17021,6 +17375,11 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         }
         case 'ask_user_done': S.asks.delete(ev.request_id); call.onAskDone(ev.request_id); return;
         case 'turn_mood': if (S.own.has(ev.turnId)) voiceDispMood(voiceDisp.turnSeq.has(ev.turnId) ? voiceDisp.turnSeq.get(ev.turnId) : S.sendSeq, ev.mood); return;   // the agent's mood word for this turn (the same one the chat stream carries)
+        case 'turn_read_full': {   // this reply must be read in full (the same signal the chat stream carries as voice_read_full): only for the latest own turn
+          const g = typeof voiceReadFullGate === 'function' ? voiceReadFullGate(S.readFull, { kind: 'event', turnId: ev.turnId }) : null;
+          if (g && g.action === 'set' && S.own.has(ev.turnId) && typeof call.onReadFull === 'function') { S.readFull = g.state; call.onReadFull(); }
+          return;
+        }
         // Events of another call (an earlier one this call replaced, or one on another device) carry another callId: ignored.
         case 'voice_held': if (ev.callId === call.callId && ev.item) call.onHeld(ev.item, !!ev.quiet); return;
         case 'voice_held_done': if (ev.callId === call.callId) call.onHeldDone(ev.id, ev.choice); return;
@@ -17424,7 +17783,13 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         if (!H || !el || !el.isConnected || !el.classList.contains('assistant')) return;
         const scan = el.cloneNode(true);   // the reply's own text: not the tool panel or the reasoning panel
         scan.querySelectorAll('.tool-stream, .reason-stream, .inline-thinking, .msg-copy, .msg-speak').forEach((n) => n.remove());
-        const cands = H.candidatesFrom(scan);
+        let agent = null;   // the replying agent (a bare file name is looked up in its folder); none in a group chat
+        try {
+          const box = el.closest('[id^="messages-"]');
+          const chat = box && typeof chats !== 'undefined' ? chats[box.id.slice('messages-'.length)] : null;
+          agent = chat && !chat.isGroup && chat.agent ? String(chat.agent) : null;
+        } catch { agent = null; }
+        const cands = H.candidatesFrom(scan, { agent });
         if (!cands.length) return;
         const results = await H.resolveBatch((u, o) => fetch(u, o), cands);
         if (!el.isConnected) return;

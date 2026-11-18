@@ -128,7 +128,8 @@ test('contextSection: every record in full, cap by bytes (agent field, settings,
   global.__recCap = 0;
   assert.strictEqual(rec.maxBytesFor('x'), rec.DEFAULT_MAX);
   const withIdx = rec.contextSection('x', { filesIndex: '/tmp/files\n- plan.pdf (10 bytes, 2026-10-01)' });
-  assert.match(withIdx, /### Files folder index \(maintained by the hub\)\n\/tmp\/files\n- plan\.pdf/);
+  // the heading tells the agent the paths are relative and how to offer one for download (file mentions)
+  assert.match(withIdx, /### Files folder index \(maintained by the hub\)\nPaths below are relative to the folder on the first line; to offer one for download, write its full path in backticks\.\n\/tmp\/files\n- plan\.pdf/);
 });
 
 test('filesIndex: recursive, newest first, hidden skipped, capped with a count', () => {
