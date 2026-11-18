@@ -1106,7 +1106,14 @@
     sel.value = opts.includes(agent?.tier) ? agent.tier : 'standard';
     const show = opts.length > 1;
     const row = document.getElementById('tier-row'); if (row) row.style.display = show ? 'flex' : 'none';
-    const help = document.getElementById('tier-help'); if (help) help.style.display = show ? 'block' : 'none';
+    const help = document.getElementById('tier-help');
+    if (help) {
+      help.style.display = show ? 'block' : 'none';
+      // A ChatGPT-plan model (Codex) offers Fast only and has no price: say what it costs there instead.
+      help.textContent = opts.includes('economy')
+        ? 'Fast answers sooner for about twice the price; Economy costs half but an answer can take minutes. If the provider cannot offer the chosen speed, the answer runs on Standard and says so. Admins only; members\' turns always run on Standard. The cost record follows the tier the provider reports.'
+        : 'Fast answers sooner and uses 2 to 2.5 times as much of the ChatGPT plan. If it is not available, the answer runs on Standard and says so. Admins only; members\' turns always run on Standard.';
+    }
   }
   // ── Default call display: None / Orb / an installed character (GET /api/faces); PATCH { callDisplay } ──
   const CALL_DISPLAY_FIXED = [{ value: 'none', label: 'None' }, { value: 'orb', label: 'Orb' }];
