@@ -53,7 +53,7 @@
 <body>
 <div class="top"><a href="/">&larr; Back</a><h1>Changes waiting for your decision</h1></div>
 <main>
-  <p class="intro">Some changes alter how your agents behave. On an install that already has agents they start switched off. Turn each one on, or leave it off, when you are ready. Nothing else can switch them on.</p>
+  <p class="intro">Some changes alter how your agents behave. On an install that already has agents they start switched off. Turn each one on, or leave it off, when you are ready: here, or by telling your lead agent in chat (it asks you to confirm). Changes about security or spending limits can only be switched here.</p>
   <div id="msg" class="dim"></div>
   <section id="pending-sec" hidden><h2>Waiting for your decision</h2><div id="pending" style="display:flex;flex-direction:column;gap:12px;margin-top:10px"></div></section>
   <section id="decided-sec" hidden><h2>Decided</h2><div id="decided" style="display:flex;flex-direction:column;gap:12px;margin-top:10px"></div></section>
@@ -66,8 +66,9 @@
   const fmt = (iso) => { const d = new Date(iso); return isNaN(d) ? String(iso || '') : d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }); };
   function stateText(c) {
     if (c.state === 'pending') return 'Waiting for your decision';
-    if (c.state === 'on') return c.by === 'new-install' ? 'On (new install)' : 'On since ' + fmt(c.at);
-    return 'Left off on ' + fmt(c.at);
+    const lead = c.by === 'lead' && c.agent ? ' (by ' + c.agent + ' at your request)' : '';
+    if (c.state === 'on') return c.by === 'new-install' ? 'On (new install)' : 'On since ' + fmt(c.at) + lead;
+    return (c.by === 'lead' ? 'Turned off on ' : 'Left off on ') + fmt(c.at) + lead;
   }
   function para(label, text) {
     const p = document.createElement('p');
@@ -99,6 +100,7 @@
     el.appendChild(para('Costs', c.costs));
     el.appendChild(para('When on', c.on));
     el.appendChild(para('When off', c.off));
+    if (c.leadMay !== true) el.appendChild(para('Who can switch it', 'Only you, on this page.'));
     const actions = document.createElement('div'); actions.className = 'actions';
     const err = document.createElement('div'); err.className = 'err'; err.setAttribute('role', 'alert');
     const btns = [];
