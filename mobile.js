@@ -3693,7 +3693,7 @@ function voiceCreateCall(deps) {
   let state = '', mode = 'announce', ended = false, started = false, endPromise = null;
   let personSpeaking = false, speechEndAt = null, awaitingReply = false, cutSkip = false;
   let lastText = '', spokenCount = 0, noteSpoken = false, doneSeen = false, lastStatusAt = null;
-  let toolBreakText = null;   // the reply text whose last sentence was released when a tool started (speakBeforeTool)
+  let toolBreakText = null, toolBreakAt = [];   // the reply text whose last sentence was last released when a tool started (speakBeforeTool), and the length at each release
   let readFull = false;   // the person asked to hear the details: this reply is read in full (onReadFull); reset where a new reply begins
   let readOffer = true;   // the hub can read details on request for this call (start answer readDetails: false when it cannot): else the notes do not offer it
   let queue = [], current = null, speaking = false, gen = 0;
@@ -3975,8 +3975,9 @@ function voiceCreateCall(deps) {
   // (saved and shown) is never changed.
   function withToolBreak(t) {
     if (toolBreakText === null || !t.startsWith(toolBreakText)) return t;
-    const rest = t.slice(toolBreakText.length);
-    return /^\s/.test(rest) ? t : toolBreakText + '\n' + rest;
+    let out = '', from = 0;
+    for (const at of toolBreakAt) { out += t.slice(from, at) + (/^\s/.test(t.slice(at)) ? '' : '\n'); from = at; }   // every release in this reply, in order
+    return out + t.slice(from);
   }
   function completeCount() { return voiceReplySentences(withToolBreak(lastText), false, readWords()).sentences.length; }
   // The whole reply is over, reported ONCE (ui.reply('end')) for the display's reaction: its text is complete AND nothing is read or waiting to be
@@ -4034,7 +4035,8 @@ function voiceCreateCall(deps) {
     if (!awaitingReply || cutSkip || lastDone || !lastText || /\s$/.test(lastText) || lastText === toolBreakText) return;
     const lastLine = lastText.slice(lastText.lastIndexOf('\n') + 1);
     if (!/[.!?]["')\]*_]*$/.test(lastText) || /^[ \t]*(?:[-*+•◦▪‣`~#|_=]+|\d+[.)]?)$/.test(lastLine)) return;
-    toolBreakText = lastText;
+    if (toolBreakText === null || !lastText.startsWith(toolBreakText)) toolBreakAt = [];   // a reply that does not go on from the last release starts afresh
+    toolBreakText = lastText; toolBreakAt.push(lastText.length);
     onReplyText(lastText, false);
   }
   // A tool activity of the running turn: shown silently (ui.activity); spoken only when the page's speakActivity() says so.

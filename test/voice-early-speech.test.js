@@ -166,6 +166,17 @@ test('review r1: text glued straight onto a released sentence never reads the re
   assert.deepStrictEqual(h.spoken, ['Sure.', 'Let me check.', 'It is sunny.', 'Bring a hat.'], 'every sentence once, none lost, never from the start');
 });
 
+test('review r3: two releases with glued text between them: every break is kept, every sentence spoken once', async () => {
+  const h = await asked();
+  h.call.onReplyText('Sure. Let me check.', false);
+  h.call.onActivity(TOOL);
+  h.call.onReplyText('Sure. Let me check.It is sunny.', false);
+  h.call.onActivity({ kind: 'tool', tool: 'Read', status: 'running' });
+  h.call.onReplyText('Sure. Let me check.It is sunny.Bring a hat. ', true);
+  for (let i = 0; i < 5; i++) await h.finish();
+  assert.deepStrictEqual(h.spoken, ['Sure.', 'Let me check.', 'It is sunny.', 'Bring a hat.']);
+});
+
 test('review r2: a second tool start right after the first releases nothing more', async () => {
   const h = await asked();
   h.call.onReplyText('Let me check that for you.', false);
