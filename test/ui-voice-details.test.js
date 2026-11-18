@@ -197,9 +197,9 @@ test('voiceSpeechText is unchanged: tables and code still add the details note',
 test('the page copies carry the same code, the notes and the settings controls', () => {
   const lib = read('lib/ui-voice-call.js'), app = read('app.js'), mob = read('mobile.js');
   for (const [name, src] of [['app.js', app], ['mobile.js', mob]]) {
-    for (const s of ['function voiceRestAnalysis(rest, extra, readWords, openTail, extraRaw) {', 'function voiceReplySentences(markdown, done, readWords) {',
+    for (const s of ['function voiceRestAnalysis(rest, extra, readWords, openTail, extraRaw) {', 'function voiceReplySentences(markdown, done, readWords, full) {',
       'const VOICE_NOTE_LIST = ', 'const VOICE_NOTE_TABLE = ', 'const VOICE_NOTE_CODE = ', 'const VOICE_DETAILS_READ_WORDS = [0, 20, 40, 80];', 'detailsReadWords: 40, hubCue: \'cue\', backgroundCue: \'say\' };',
-      'Read short extra parts aloud', 'voiceReplySentences(lastText, !!done, readWords())', 'enqueue(r.note, \'reply\', null, null, false, true)', '!i.note)',
+      'Read short extra parts aloud', 'voiceReplySentences(lastText, !!done, readWords(), readFull)', 'enqueue(r.note, \'reply\', null, null, false, true)', '!i.note)',
       'Longer lists, tables and code stay in the chat.']) assert.ok(src.includes(s), name + ': ' + s);
     assert.ok(!src.includes('Longer parts, lists, tables and code stay in the chat.'), name + ': the old help text (lists stay in the chat) is gone');
     assert.ok(!src.includes('voiceIsNoteText'), name + ': notes are recognised by a flag, not by their text');
