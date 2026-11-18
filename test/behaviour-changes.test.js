@@ -345,13 +345,13 @@ test('r1: stateOf tells on, off, pending, missing and unreadable apart; isOn onl
 });
 test('r1: the three decision routes take a signed-in admin browser session only (never the hub service, a token or an agent)', () => {
   const server = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
-  const guard = "if (!require('./lib/lockbox/settings').isAdminSession(req)) return jsonResponse(res, 403";
+  const guard = "if (!require('./lib/access').isAdminSession(req)) return jsonResponse(res, 403";
   const cad = server.indexOf("pathname === '/api/behaviour-changes/worker-proposals/cadence' && req.method === 'POST'");
   const dec = server.indexOf("const m = pathname.match(/^\\/api\\/behaviour-changes\\/([a-z][a-z0-9-]{1,40})$/);");
   assert.ok(cad > 0 && dec > 0);
   assert.ok(server.indexOf(guard, cad) > cad && server.indexOf(guard, cad) < server.indexOf('authJson()', cad), 'cadence: guarded before the body is read');
   assert.ok(server.indexOf(guard, dec) > dec && server.indexOf(guard, dec) < server.indexOf('authJson()', dec), 'decision: guarded before the body is read');
-  const ls = require(path.join(__dirname, '..', 'lib', 'lockbox', 'settings.js'));
+  const ls = require(path.join(__dirname, '..', 'lib', 'access.js'));
   assert.strictEqual(ls.isAdminSession({ hubIdentKind: 'user', hubUser: { role: 'admin' } }), true);
   assert.strictEqual(ls.isAdminSession({ hubService: true, hubUser: null }), false);
   assert.strictEqual(ls.isAdminSession({ hubIdentKind: 'user', hubUser: { role: 'admin' }, hubToken: {} }), false);

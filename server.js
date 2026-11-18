@@ -678,7 +678,7 @@ async function handleHttpRequest(req, res) {
     // How often the lead looks at how the install is used (worker-proposals): saves the setting, then makes the weekly task match.
     if (pathname === '/api/behaviour-changes/worker-proposals/cadence' && req.method === 'POST') {
       // Only the owner decides: a signed-in admin's own browser session (never the hub's service identity, a token or an agent).
-      if (!require('./lib/lockbox/settings').isAdminSession(req)) return jsonResponse(res, 403, { ok: false, error: 'Sign in with an admin account in your browser to decide this.' });
+      if (!require('./lib/access').isAdminSession(req)) return jsonResponse(res, 403, { ok: false, error: 'Sign in with an admin account in your browser to decide this.' });
       const b = (await authJson()) || {};
       if (b.cadence !== 'weekly' && b.cadence !== 'off') return jsonResponse(res, 400, { ok: false, error: 'cadence must be "weekly" or "off"' });
       try {
@@ -692,7 +692,7 @@ async function handleHttpRequest(req, res) {
       const m = pathname.match(/^\/api\/behaviour-changes\/([a-z][a-z0-9-]{1,40})$/);
       if (m && req.method === 'POST') {
         // Only the owner decides: a signed-in admin's own browser session (never the hub's service identity, a token or an agent).
-        if (!require('./lib/lockbox/settings').isAdminSession(req)) return jsonResponse(res, 403, { ok: false, error: 'Sign in with an admin account in your browser to decide this.' });
+        if (!require('./lib/access').isAdminSession(req)) return jsonResponse(res, 403, { ok: false, error: 'Sign in with an admin account in your browser to decide this.' });
         const b = (await authJson()) || {};
         if (b.decision !== 'on' && b.decision !== 'off') return jsonResponse(res, 400, { ok: false, error: 'decision must be "on" or "off"' });
         const bc = require('./lib/behaviour-changes');

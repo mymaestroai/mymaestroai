@@ -339,3 +339,11 @@ test('settings page: the section, the select, the one line, the host state and t
   const a = app.indexOf('async function loadLockboxHost()'), b = app.indexOf('async function saveMemberPolicy()');
   assert.doesNotMatch(app.slice(a, b), /innerHTML/);
 });
+
+test('isAdminSession is lib/access\'s own check, re-exported (the owner-only routes and the lockbox use the same one)', () => {
+  const access = require(path.join(INST, 'lib', 'access.js'));
+  assert.strictEqual(ls.isAdminSession, access.isAdminSession);
+  assert.strictEqual(ls.isAdminSession({ hubIdentKind: 'user', hubUser: { role: 'admin' } }), true);
+  assert.strictEqual(ls.isAdminSession({ hubIdentKind: 'user', hubUser: { role: 'admin' }, hubToken: 't' }), false);
+});
+
