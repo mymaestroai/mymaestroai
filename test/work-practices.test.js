@@ -31,7 +31,7 @@ test('check-ins: the lead gets the full instructions, other primary agents the c
     assert.match(t, /every 30 minutes by default/);
     assert.match(t, /two check-ins/);
   }
-  assert.match(full, /Keep one active check-in per piece of work\./);
+  assert.match(full, /Keep one active check-in per piece of work:/);
   assert.match(full, /cancel_scheduled_task/);
   assert.match(full, /call for_owner then/);
   assert.ok(core.length < full.length);
@@ -42,7 +42,7 @@ test('suggestions: one per topic, a no is remembered, nothing without a yes; bui
   const other = wp.textFor({ agent: primary, leadName: 'maestro', suggestions: true });
   const member = wp.textFor({ agent: primary, member: true, leadName: 'maestro', suggestions: true });
   for (const t of [lead, other, member]) {
-    assert.match(t, /At most one suggestion per topic/);
+    assert.match(t, /At most one suggestion per conversation and per topic/);
     assert.match(t, /note it in your memory and do not suggest it again/);
     assert.match(t, /Nothing is created without their yes/);
     for (const idea of ['a specialist', 'a dedicated lead agent', 'low-cost temporary workers', 'a cheaper model or speed', 'a scheduled task', 'a Record']) assert.ok(t.includes(idea), idea);

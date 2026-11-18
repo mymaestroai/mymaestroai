@@ -267,7 +267,7 @@ test('without /proc: the launch gate first, running boxes written down then paus
   assert.strictEqual(quick.timedOut, true, 'never held past its limit');
   // names a settings map keyed by agent name would drop are refused
   const agentsSrc = fs.readFileSync(path.join(__dirname, '..', 'lib', 'agents.js'), 'utf8');
-  assert.match(agentsSrc, /const RESERVED_NAMES = new Set\(\['constructor', 'prototype', '__proto__'\]\);/);
+  assert.match(agentsSrc, /const RESERVED_NAMES = new Set\(\['constructor', 'prototype', '__proto__', 'hub'\]\);/);
   assert.strictEqual((agentsSrc.match(/RESERVED_NAMES\.has\(/g) || []).length, 6, 'create, clone and rename check it');
   // the settings patch can't reach a prototype at any depth
   const { cleanPatch } = L('settings');

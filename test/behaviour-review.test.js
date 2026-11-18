@@ -1,6 +1,6 @@
 'use strict';
 // The lead reviews behaviour changes that wait for the owner, and looks at how the install is used once a week (lib/behaviour-review.js),
-// through scheduled tasks the hub creates (lib/scheduled-tasks 'hub'). A throwaway install and temp folders: nothing under the real data/
+// through scheduled tasks the hub creates (lib/scheduled-tasks '@hub'). A throwaway install and temp folders: nothing under the real data/
 // is read or written; the lead and the scheduler are injected.
 const { test, after } = require('node:test');
 const assert = require('node:assert');
@@ -27,7 +27,7 @@ function mk(entries, { leads = () => ['maestro'], setting = 'weekly' } = {}) {
   if (entries !== null) fs.writeFileSync(stateFile, typeof entries === 'string' ? entries : JSON.stringify({ entries }));
   const inst = new sched.ScheduledTasks({ dataDir: path.join(d, 'sched'), tz: 'America/New_York', log: () => {}, notify: async () => {} });
   const deps = { stateFile, manifestFile: MANIFEST, scheduler: inst, leads, agents: [{ name: 'maestro', category: 'primary', model: 'anthropic/x', lead: true }, { name: 'kim_helper', category: 'primary', model: 'openai/y', owner: 'u-member' }], adminIds: ['u-admin'], users: [{ role: 'admin' }, { role: 'member' }], memberModels: ['openai/y'], providers: { anthropic: true, openai: false }, usage: 'sam: 3 requests', getSetting: (k, d2) => (k === 'workerProposals' ? setting : d2) };
-  return { d, stateFile, inst, deps, state: () => JSON.parse(fs.readFileSync(stateFile, 'utf8')).entries, live: () => inst.list('hub', { includeDone: false }) };
+  return { d, stateFile, inst, deps, state: () => JSON.parse(fs.readFileSync(stateFile, 'utf8')).entries, live: () => inst.list('@hub', { includeDone: false }) };
 }
 
 test('scheduleReview: one task for the lead with the right prompt, and every pending entry is marked (other fields kept)', async () => {
@@ -40,7 +40,7 @@ test('scheduleReview: one task for the lead with the right prompt, and every pen
   const task = tasks[0];
   assert.strictEqual(task.id, r.taskId);
   assert.strictEqual(task.agent, 'maestro');
-  assert.strictEqual(task.createdBy, 'hub');
+  assert.strictEqual(task.createdBy, '@hub');
   assert.strictEqual(task.label, 'Changes to how agents behave: review');
   assert.ok(Date.parse(task.nextRunAt) - Date.now() < 3 * 60000 && Date.parse(task.nextRunAt) > Date.now(), 'in about 2 minutes');
   const p = task.prompt;
@@ -94,7 +94,7 @@ test('scheduleReview: a second call (a restart before the turn ran) adds no task
 
 test('scheduleReview: a task made before a crash (entries not yet marked) is reused, not doubled', async () => {
   const t = mk({ 'team-guidance': ent('pending') });
-  const made = await t.inst.create({ requester: 'hub', agent: 'maestro', when: 'in 2 minutes', label: review.REVIEW_LABEL, prompt: review.reviewPrompt({ entries: bc.manifest(MANIFEST).filter((e) => e.id === 'team-guidance'), facts: '' }) });
+  const made = await t.inst.create({ requester: '@hub', agent: 'maestro', when: 'in 2 minutes', label: review.REVIEW_LABEL, prompt: review.reviewPrompt({ entries: bc.manifest(MANIFEST).filter((e) => e.id === 'team-guidance'), facts: '' }) });
   const r = await review.scheduleReview(t.deps);
   assert.strictEqual(r.taskId, made.id);
   assert.strictEqual(t.live().length, 1);
@@ -152,7 +152,7 @@ test('syncProposalsTask: one weekly task while on and weekly; cancelled when tur
   let tasks = t.live();
   assert.strictEqual(tasks.length, 1);
   assert.strictEqual(tasks[0].label, 'Weekly team review');
-  assert.strictEqual(tasks[0].agent, 'maestro'); assert.strictEqual(tasks[0].createdBy, 'hub');
+  assert.strictEqual(tasks[0].agent, 'maestro'); assert.strictEqual(tasks[0].createdBy, '@hub');
   assert.strictEqual(tasks[0].schedule.includes('every monday at 9am'), true);
   assert.strictEqual(tasks[0].type, 'recurring');
   assert.match(tasks[0].prompt, /call team_usage/); assert.match(tasks[0].prompt, /never uses recall on a member's agent/); assert.match(tasks[0].prompt, /end the turn without for_owner/);
