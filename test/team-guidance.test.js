@@ -194,7 +194,7 @@ test('sdk-chat appends the team guidance at the gateway, SDK and Codex sites (so
   // The three builders sit in the middle of full turns (sign-ins, sessions, a model call), so they cannot be called in isolation;
   // this pins that each site appends teamGuidanceTextFor(agentName), and that the helper skips temporary workers.
   const src = read('lib/sdk-chat.js');
-  assert.match(src, /async function teamGuidanceTextFor\(agentName\) \{[\s\S]*?temporalWorkers\.isVirtual\(agentName\)\) return '';[\s\S]*?require\('\.\/team-guidance'\)\.textFor\(\{ agent: rec, isLead: isLeadAgent\(agentName, agents\) \}\)[\s\S]*?catch \{ return ''; \}/);
+  assert.match(src, /async function teamGuidanceTextFor\(agentName\) \{[\s\S]*?temporalWorkers\.isVirtual\(agentName\)\) return '';[\s\S]*?require\('\.\/team-guidance'\)\.textFor\(\{ agent: rec, isLead: isLeadAgent\(agentName, agents\), member \}\)[\s\S]*?catch \{ return ''; \}/);
   assert.match(src, /systemPrompt \+= workerPolicy\.platformPolicyText\(gwRoster\) \+ \(await teamGuidanceTextFor\(agentName\)\);/, 'gateway');
   assert.match(src, /const workerPolicyText = ephemeral \? '' : workerPolicy\.policyText\(workerMode, workerRoster\) \+ \(await teamGuidanceTextFor\(agentName\)\);/, 'SDK: also when policyText is empty (sdkWorkers allow)');
   assert.match(src, /const workerPolicyText = ephemeral \? '' : workerPolicy\.platformPolicyText\(workerRoster\) \+ \(await teamGuidanceTextFor\(agentName\)\);/, 'Codex');
