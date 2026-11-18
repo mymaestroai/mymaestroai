@@ -668,6 +668,26 @@ async function handleHttpRequest(req, res) {
       const out = await require('./lib/team-card').cardState({ again: new URL(req.url, 'http://x').searchParams.get('again') === '1' });
       return jsonResponse(res, out.status, out.body);
     }
+    // Behaviour changes waiting for the owner (lib/behaviour-changes): admin only (lib/access: not in PUBLIC_EXACT, not a session route).
+    if (pathname === '/api/behaviour-changes' && req.method === 'GET') {
+      const bc = require('./lib/behaviour-changes');
+      const changes = bc.list();
+      return jsonResponse(res, 200, { ok: true, changes, ...(changes.some((c) => c.unreadable) ? { unreadable: true } : {}) });
+    }
+    {
+      const m = pathname.match(/^\/api\/behaviour-changes\/([a-z][a-z0-9-]{1,40})$/);
+      if (m && req.method === 'POST') {
+        const b = (await authJson()) || {};
+        if (b.decision !== 'on' && b.decision !== 'off') return jsonResponse(res, 400, { ok: false, error: 'decision must be "on" or "off"' });
+        const bc = require('./lib/behaviour-changes');
+        if (!bc.manifest().some((e) => e.id === m[1])) return jsonResponse(res, 404, { ok: false, error: 'no such change' });
+        try {
+          await bc.decide(m[1], b.decision, { user: req.hubUser && req.hubUser.id });
+          console.log(`[behaviour] ${m[1]} turned ${b.decision} by ${(req.hubUser && req.hubUser.id) || 'unknown'}`);
+          return jsonResponse(res, 200, { ok: true, change: bc.list().find((c) => c.id === m[1]) });
+        } catch (e) { return jsonResponse(res, 409, { ok: false, error: e && e.message ? e.message : String(e) }); }
+      }
+    }
     if (pathname === '/api/team/card/answer' && req.method === 'POST') {
       const b = (await authJson()) || {};
       const out = await require('./lib/team-card').answerCard({ answer: b.answer });
@@ -3555,6 +3575,8 @@ async function handleHttpRequest(req, res) {
       filePath = path.join(__dirname, 'login.html');
     } else if (pathname === '/users') {
       filePath = path.join(__dirname, 'users.html');
+    } else if (pathname === '/changes') {
+      filePath = path.join(__dirname, 'changes.html');   // admin page (lib/access ADMIN_PAGES)
     } else if (pathname === '/recordings') {
       filePath = path.join(__dirname, 'recordings.html');   // any signed-in user may load the page; the data routes refuse anyone not on an agent's list
     } else if (/^\/oauth\/callback\/[a-z][a-z0-9-]{1,31}$/.test(pathname)) {
@@ -3691,6 +3713,11 @@ server.listen(PORT, HOST, () => {
     const tg = require('./lib/agents').migrateTeamGuidance();
     if (tg.changed > 0) console.log(`[agents] team guidance switched off for ${tg.changed} agents that existed before this update (lead agents keep it)`);
   } catch (e) { console.warn('[agents] could not migrate team guidance:', e.message); }
+  // Behaviour changes (lib/behaviour-changes): on an install that already has agents each one waits, off, for the owner's decision.
+  try {
+    const bm = require('./lib/behaviour-changes').migrate({ agentsFile: path.join(__dirname, 'data', 'agents.json') });
+    if (bm.added && bm.added.length) console.log(`[behaviour] ${bm.added.length} change(s) waiting for the owner's decision: ${bm.added.join(', ')}`);
+  } catch (e) { console.warn('[behaviour] could not check the behaviour changes:', e.message); }
   console.log(`\n  My Maestro AI v${require('./package.json').version} (multi-provider)`);
   console.log(`  Server:   http://${URL_HOST}:${PORT}  (${BIND.exposed ? 'NETWORK-EXPOSED' : 'localhost only'})`);
   if (BIND.warning) console.warn(`  WARNING:  ${BIND.warning}`);

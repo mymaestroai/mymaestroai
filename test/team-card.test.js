@@ -26,7 +26,12 @@ const writeLedger = (doc) => fs.writeFileSync(LEDGER, typeof doc === 'string' ? 
 const readLedgerFile = () => JSON.parse(fs.readFileSync(LEDGER, 'utf8'));
 const created = (name) => ({ name, model: 'claude-sdk/claude-haiku-5-5', status: 'created', createdAt: '2026-01-01T00:00:00.000Z' });
 
-beforeEach(() => { try { fs.unlinkSync(LEDGER); } catch {} });
+// The starter-team behaviour change is on in this throwaway install (the card is gated on it, lib/behaviour-changes); the gate has its own tests.
+const STATE = path.join(INST, 'data', 'behaviour-reviews.json');
+beforeEach(() => {
+  try { fs.unlinkSync(LEDGER); } catch {}
+  fs.writeFileSync(STATE, JSON.stringify({ entries: { 'starter-team': { state: 'on', by: 'owner', at: '2026-01-01T00:00:00.000Z' } } }));
+});
 after(() => { try { fs.rmSync(path.dirname(INST), { recursive: true, force: true }); } catch {} });
 
 test('cardState: a plain existing install is shown the card with a plan to create', async () => {

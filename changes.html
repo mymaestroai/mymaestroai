@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Changes waiting for your decision</title>
+<style>
+  :root {
+    --bg-dark: #090B0F;
+    --bg-card: #14171F;
+    --bg-input: #040507;
+    --border: #222632;
+    --border-strong: #333846;
+    --text: #F3F4F6;
+    --text-dim: #9CA3AF;
+    --text-tertiary: #6B7280;
+    --accent: #3D7BFF;
+    --accent-hover: #5A93FF;
+    --error: #FF4C4C;
+    --warning: #F5A623;
+    --success: #00D395;
+    --radius: 4px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg-dark); color: var(--text); font-size: 14px; line-height: 1.45; }
+  .top { display: flex; align-items: center; gap: 14px; padding: 12px 18px; border-bottom: 1px solid var(--border); background: var(--bg-card); }
+  .top a { color: var(--text-dim); text-decoration: none; font-size: 13px; }
+  .top a:hover { color: var(--text); }
+  .top h1 { font-size: 16px; font-weight: 600; }
+  main { max-width: 760px; margin: 0 auto; padding: 18px; display: flex; flex-direction: column; gap: 16px; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 1px; color: var(--text-dim); }
+  .intro, .dim { color: var(--text-dim); }
+  .entry { background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; overflow-wrap: anywhere; }
+  .entry.flash { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .entry h3 { font-size: 15px; font-weight: 600; }
+  .entry p { margin: 0; }
+  .entry p b { color: var(--text-dim); font-weight: 600; }
+  .state { font-size: 13px; color: var(--warning); }
+  .state.on { color: var(--success); }
+  .state.off { color: var(--text-dim); }
+  .actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  button { font: inherit; font-size: 13px; padding: 7px 12px; border-radius: var(--radius); border: 1px solid var(--border-strong); background: transparent; color: var(--text); cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button:disabled { opacity: .5; cursor: wait; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.primary:hover { background: var(--accent-hover); }
+  a.link { color: var(--accent); font-size: 13px; }
+  .err { color: var(--error); font-size: 13px; min-height: 0; }
+  .err:empty { display: none; }
+</style>
+</head>
+<body>
+<div class="top"><a href="/">&larr; Back</a><h1>Changes waiting for your decision</h1></div>
+<main>
+  <p class="intro">Some changes alter how your agents behave. On an install that already has agents they start switched off. Turn each one on, or leave it off, when you are ready. Nothing else can switch them on.</p>
+  <div id="msg" class="dim"></div>
+  <section id="pending-sec" hidden><h2>Waiting for your decision</h2><div id="pending" style="display:flex;flex-direction:column;gap:12px;margin-top:10px"></div></section>
+  <section id="decided-sec" hidden><h2>Decided</h2><div id="decided" style="display:flex;flex-direction:column;gap:12px;margin-top:10px"></div></section>
+</main>
+<script>
+(function () {
+  'use strict';
+  const $ = (id) => document.getElementById(id);
+  const fmt = (iso) => { const d = new Date(iso); return isNaN(d) ? String(iso || '') : d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }); };
+  function stateText(c) {
+    if (c.state === 'pending') return 'Waiting for your decision';
+    if (c.state === 'on') return c.by === 'new-install' ? 'On (new install)' : 'On since ' + fmt(c.at);
+    return 'Left off on ' + fmt(c.at);
+  }
+  function para(label, text) {
+    const p = document.createElement('p');
+    const b = document.createElement('b'); b.textContent = label + ': ';
+    p.appendChild(b); p.appendChild(document.createTextNode(String(text || '')));
+    return p;
+  }
+  async function decide(c, decision, btns, errEl) {
+    errEl.textContent = '';
+    btns.forEach((b) => { b.disabled = true; });
+    try {
+      const r = await fetch('/api/behaviour-changes/' + encodeURIComponent(c.id), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ decision }) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || !j.ok) throw new Error(j.error || ('Could not save (' + r.status + ')'));
+      await load();
+    } catch (e) {
+      errEl.textContent = (e && e.message) || 'Could not save.';
+      btns.forEach((b) => { b.disabled = false; });
+    }
+  }
+  function entry(c) {
+    const el = document.createElement('div');
+    el.className = 'entry';
+    el.id = c.id;
+    const h = document.createElement('h3'); h.textContent = c.title || c.id; el.appendChild(h);
+    const st = document.createElement('p'); st.className = 'state ' + (c.state === 'on' ? 'on' : c.state === 'off' ? 'off' : ''); st.textContent = stateText(c); el.appendChild(st);
+    el.appendChild(para('What it changes', c.changes));
+    el.appendChild(para('Benefits', c.benefits));
+    el.appendChild(para('Costs', c.costs));
+    el.appendChild(para('When on', c.on));
+    el.appendChild(para('When off', c.off));
+    const actions = document.createElement('div'); actions.className = 'actions';
+    const err = document.createElement('div'); err.className = 'err'; err.setAttribute('role', 'alert');
+    const btns = [];
+    const add = (label, decision, primary) => {
+      const b = document.createElement('button'); b.type = 'button'; b.textContent = label;
+      if (primary) b.className = 'primary';
+      b.addEventListener('click', () => decide(c, decision, btns, err));
+      btns.push(b); actions.appendChild(b);
+    };
+    if (c.state === 'pending') { add('Turn on', 'on', true); add('Leave off', 'off', false); }
+    else if (c.state === 'on') add('Turn off', 'off', false);
+    else add('Turn on', 'on', true);
+    if (c.id === 'starter-team' && c.state === 'on') {
+      const a = document.createElement('a'); a.className = 'link'; a.href = '/?team=setup'; a.textContent = 'Set up your team now'; actions.appendChild(a);
+    }
+    el.appendChild(actions);
+    el.appendChild(err);
+    return el;
+  }
+  function fill(box, sec, list) {
+    box.textContent = '';
+    for (const c of list) box.appendChild(entry(c));
+    sec.hidden = !list.length;
+  }
+  async function load() {
+    const msg = $('msg');
+    try {
+      const r = await fetch('/api/behaviour-changes');
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || !j.ok) throw new Error(j.error || ('Could not load (' + r.status + ')'));
+      const all = Array.isArray(j.changes) ? j.changes : [];
+      msg.textContent = j.unreadable ? 'The saved decisions could not be read, so none can be changed here until that file is fixed.' : (all.length ? '' : 'There are no changes to decide.');
+      fill($('pending'), $('pending-sec'), all.filter((c) => c.state === 'pending'));
+      fill($('decided'), $('decided-sec'), all.filter((c) => c.state !== 'pending'));
+      const id = decodeURIComponent((location.hash || '').slice(1));
+      const target = id && document.getElementById(id);
+      if (target && target.classList.contains('entry') && !load.shown) {
+        load.shown = true;
+        target.scrollIntoView({ block: 'start' });
+        target.classList.add('flash');
+        setTimeout(() => target.classList.remove('flash'), 2500);
+      }
+    } catch (e) { msg.textContent = (e && e.message) || 'Could not load.'; }
+  }
+  load();
+})();
+</script>
+</body>
+</html>
