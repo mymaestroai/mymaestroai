@@ -138,11 +138,10 @@ test('findByName: a file below maxDepth, or a walk cut by maxEntries, is null (a
 });
 
 // ── guidance ──
-test('lib/agents.js: the Files folder guidance asks for the full path in a code span', () => {
+test('lib/agents.js: the Files folder guidance is the standing full-path rule (no bare-name advice)', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'agents.js'), 'utf8');
-  assert.ok(src.includes('give its full path in a code span'));
-  assert.ok(src.includes('a bare file name works only when no other file in this folder has the same name'));
-  assert.ok(src.includes('Keep deliverables for the owner here. When you tell them'), 'the existing text comes first');
+  assert.ok(src.includes('name it by its full path, alone in backticks'));
+  assert.ok(!src.includes('a bare file name works only when'), 'bare names are a silent fallback, never advice');
 });
 
 test('review: a version or a number in a code span is not a file name (the extension needs a letter)', () => {
