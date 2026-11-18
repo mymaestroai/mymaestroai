@@ -124,3 +124,10 @@ test('team_usage is registered on the SDK and the gateway/Codex tool lists, with
   assert.match(set, /const HUB_READ = new Set\([^;]*'team_usage'/);
   assert.doesNotMatch(set, /HUB_(WRITE_INSIDE|DELEGATE) = new Set\([^;]*'team_usage'/);
 });
+
+// Review r1 (Sonnet F2): team_usage appears in a tool list only for an admin-side lead and only while worker-proposals is on.
+test('r1: team_usage is offered only to an admin-side lead while worker-proposals is on, on both tool paths', () => {
+  const sdk = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'lib', 'sdk-chat.js'), 'utf8');
+  assert.strictEqual((sdk.match(/\.\.\.\(teamUsageOffered\(agentName\) \? \[/g) || []).length, 2, 'gateway/Codex list and SDK tools');
+  assert.match(sdk, /function teamUsageOffered\(agentName\) \{\n\s+try \{\n\s+if \(!require\('\.\/behaviour-changes'\)\.isOn\('worker-proposals'\)\) return false;/);
+});

@@ -15,6 +15,8 @@ const ISO = makeIsolatedInstall('behaviour-changes-', { copy: ['templates/behavi
 const INST = ISO.inst;
 const L = (p) => require(path.join(INST, 'lib', p));
 const bc = L('behaviour-changes');
+// An install that already has agents also has accounts (review r1: no account yet means a new install).
+const WITH_USERS = () => true;
 const access = L('access');
 const read = (f) => fs.readFileSync(path.join(REAL, f), 'utf8');
 const SDK = read('lib/sdk-chat.js');
@@ -94,13 +96,13 @@ test('seedNew: every manifest entry on by new-install, and an existing file is n
 test('migrate: an install that already has agents gets every entry pending by update', () => {
   const { stateFile, manifestFile, agentsFile } = setup();
   put(agentsFile, []);
-  const r = bc.migrate({ agentsFile, stateFile, manifestFile });
+  const r = bc.migrate({ agentsFile, stateFile, manifestFile, hasUsers: WITH_USERS });
   assert.deepStrictEqual(r.added, ['alpha', 'beta-two']);
   const st = bc.readState(stateFile).entries;
   for (const id of ['alpha', 'beta-two']) { assert.strictEqual(st[id].state, 'pending'); assert.strictEqual(st[id].by, 'update'); }
   assert.strictEqual(bc.isOn('alpha', { stateFile: path.join(path.dirname(stateFile), 'other.json') }), false);
   assert.strictEqual(fs.statSync(stateFile).mode & 0o777, 0o600);
-  assert.deepStrictEqual(bc.migrate({ agentsFile, stateFile, manifestFile }).added, [], 'a second run adds nothing');
+  assert.deepStrictEqual(bc.migrate({ agentsFile, stateFile, manifestFile, hasUsers: WITH_USERS }).added, [], 'a second run adds nothing');
 });
 
 test('migrate: a fresh install (no agents.json) changes nothing; a new manifest id is pending; an unreadable file is left alone', () => {
@@ -110,21 +112,21 @@ test('migrate: a fresh install (no agents.json) changes nothing; a new manifest 
   const b = setup();
   put(b.agentsFile, []);
   put(b.stateFile, { entries: { alpha: ent('on', 'new-install') } });
-  assert.deepStrictEqual(bc.migrate({ agentsFile: b.agentsFile, stateFile: b.stateFile, manifestFile: b.manifestFile }).added, ['beta-two']);
+  assert.deepStrictEqual(bc.migrate({ agentsFile: b.agentsFile, stateFile: b.stateFile, manifestFile: b.manifestFile, hasUsers: WITH_USERS }).added, ['beta-two']);
   const st = bc.readState(b.stateFile).entries;
   assert.strictEqual(st.alpha.state, 'on', 'an existing decision is untouched');
   assert.strictEqual(st['beta-two'].state, 'pending');
   const c = setup();
   put(c.agentsFile, []);
   put(c.stateFile, '{broken');
-  assert.deepStrictEqual(bc.migrate({ agentsFile: c.agentsFile, stateFile: c.stateFile, manifestFile: c.manifestFile }), { unreadable: true });
+  assert.deepStrictEqual(bc.migrate({ agentsFile: c.agentsFile, stateFile: c.stateFile, manifestFile: c.manifestFile, hasUsers: WITH_USERS }), { unreadable: true });
   assert.strictEqual(fs.readFileSync(c.stateFile, 'utf8'), '{broken');
 });
 
 test('decide: on and off are recorded by the owner (0600); unknown id, bad decision and an unreadable file are refused', async () => {
   const { stateFile, manifestFile, agentsFile } = setup();
   put(agentsFile, []);
-  bc.migrate({ agentsFile, stateFile, manifestFile });
+  bc.migrate({ agentsFile, stateFile, manifestFile, hasUsers: WITH_USERS });
   const r = await bc.decide('alpha', 'on', { user: 'u1', stateFile, manifestFile });
   assert.strictEqual(r.state, 'on');
   let e = bc.readState(stateFile).entries.alpha;
@@ -218,12 +220,13 @@ test('gate starter-team: cardState stops at "not turned on" before the ledger, t
   assert.match(read('lib/team-card.js'), /async function cardState\([^\n]*\n[^\n]*\n[^\n]*\n[^\n]*isOn\('starter-team'\)[\s\S]{0,200}return \{ status: 200, body: \{ ok: true, show: false, plan: \[\], reason: 'not turned on' \} \};\n  const ledger = /);
 });
 
-test('gate member-worker-models: memberWorkerModels is null (no limit) while the entry is off, checked first', () => {
-  assert.match(grab('function memberWorkerModels('), /^function memberWorkerModels\(agentName\) \{\n[^\n]*\n\s+try \{ if \(!require\('\.\/behaviour-changes'\)\.isOn\('member-worker-models'\)\) return null; \} catch \{ return null; \}/);
-  let on = false;
+test('gate member-worker-models: no limit only while off, pending or not recorded; on or an unreadable file keeps the limit', () => {
+  // Review r1 (GPT-6 B3): a limit the owner turned on never fails open when the state file can't be read.
+  assert.match(grab('function memberWorkerModels('), /lim = require\('\.\/behaviour-changes'\)\.stateOf\('member-worker-models'\);[\s\S]*?if \(lim === 'off' \|\| lim === 'pending' \|\| lim === 'missing'\) return null;/);
+  let state = 'off';
   const ctx = {
     require: (p) => {
-      if (p === './behaviour-changes') return { isOn: (id) => on && id === 'member-worker-models' };
+      if (p === './behaviour-changes') return { stateOf: (id) => (id === 'member-worker-models' ? state : 'missing') };
       if (p === './agents') return { getAgentsSync: () => [{ name: 'sams_helper', model: 'a/x', owner: 'sam1' }] };
       if (p === './member-models') return { workerModels: (own) => [own] };
       throw new Error('unexpected ' + p);
@@ -233,11 +236,12 @@ test('gate member-worker-models: memberWorkerModels is null (no limit) while the
   };
   vm.createContext(ctx);
   vm.runInContext(grab('function memberWorkerModels(') + '\nthis.f = memberWorkerModels;', ctx);
-  assert.strictEqual(ctx.f('sams_helper'), null, 'off: no limit');
-  assert.strictEqual(ctx.f('nobody'), null, 'off: no limit, whatever the record');
-  on = true;
+  for (const s of ['off', 'pending', 'missing']) { state = s; assert.strictEqual(ctx.f('sams_helper'), null, s + ': no limit, as before'); }
+  state = 'on';
   assert.deepStrictEqual([...ctx.f('sams_helper')], ['a/x']);
   assert.deepStrictEqual([...ctx.f('nobody')], [], 'on: fails closed as before');
+  state = 'unreadable';
+  assert.deepStrictEqual([...ctx.f('sams_helper')], ['a/x'], 'unreadable: the limit stays');
 });
 
 // ── routes, page, Settings ──
@@ -304,6 +308,49 @@ test('changes.html: pending first, then decided; each entry has the change id an
 
 test('Settings: the admin quick links carry the Changes link, counted when something is waiting', () => {
   const app = read('app.js');
-  assert.match(app, /id="st-quick-links"[^\n]*<a href="\/changes" id="st-changes-link"[^\n]*>Behaviour changes<\/a>/);
+  assert.match(app, /id="st-quick-links"[^\n]*<a href="\/changes" id="st-changes-link"[^\n]*>Changes to how agents behave<\/a>/);
   assert.match(app, /fetch\('\/api\/behaviour-changes'\)[\s\S]{0,300}c\.state === 'pending'[\s\S]{0,200}Changes waiting for your decision \(\$\{n\}\)/);
+});
+
+// Review r1 (Sonnet F1; GPT-6 B3; GPT-6 B1 / Sentinel F1).
+test('r1: no state file and no account yet (a bundle install ships agents.json): every entry on, as a new install', () => {
+  const d = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'bc-bundle-'));
+  try {
+    const agentsFile = path.join(d, 'agents.json'), stateFile = path.join(d, 'behaviour-reviews.json');
+    fs.writeFileSync(agentsFile, '[{"name":"maestro","lead":true}]');
+    const r = bc.migrate({ agentsFile, stateFile, manifestFile: bc.MANIFEST_FILE, hasUsers: () => false });
+    assert.strictEqual(r.seeded, true);
+    assert.ok(bc.list({ stateFile }).every(e => e.state === 'on'));
+    const e = path.join(d, 'existing.json');
+    assert.deepStrictEqual(bc.migrate({ agentsFile, stateFile: e, manifestFile: bc.MANIFEST_FILE, hasUsers: () => true }).added.length, bc.manifest().length, 'with accounts: all pending');
+  } finally { fs.rmSync(d, { recursive: true, force: true }); }
+});
+test('r1: stateOf tells on, off, pending, missing and unreadable apart; isOn only for on', () => {
+  const d = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'bc-state-'));
+  try {
+    const f = path.join(d, 's.json');
+    assert.strictEqual(bc.stateOf('team-guidance', { stateFile: f }), 'missing');
+    const u = path.join(d, 'u.json');   // its own file: reads are cached for 2 seconds per file
+    fs.writeFileSync(u, '{ broken');
+    assert.strictEqual(bc.stateOf('team-guidance', { stateFile: u }), 'unreadable');
+    const g = path.join(d, 't.json');
+    fs.writeFileSync(g, JSON.stringify({ entries: { 'team-guidance': { state: 'pending' }, 'starter-team': { state: 'off' }, 'worker-proposals': { state: 'on' } } }));
+    assert.deepStrictEqual(['team-guidance', 'starter-team', 'worker-proposals', 'ask-lead-for-workers'].map(id => bc.stateOf(id, { stateFile: g })), ['pending', 'off', 'on', 'missing']);
+    assert.strictEqual(bc.isOn('worker-proposals', { stateFile: g }), true);
+    assert.strictEqual(bc.isOn('team-guidance', { stateFile: g }), false);
+  } finally { fs.rmSync(d, { recursive: true, force: true }); }
+});
+test('r1: the three decision routes take a signed-in admin browser session only (never the hub service, a token or an agent)', () => {
+  const server = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  const guard = "if (!require('./lib/lockbox/settings').isAdminSession(req)) return jsonResponse(res, 403";
+  const cad = server.indexOf("pathname === '/api/behaviour-changes/worker-proposals/cadence' && req.method === 'POST'");
+  const dec = server.indexOf("const m = pathname.match(/^\\/api\\/behaviour-changes\\/([a-z][a-z0-9-]{1,40})$/);");
+  assert.ok(cad > 0 && dec > 0);
+  assert.ok(server.indexOf(guard, cad) > cad && server.indexOf(guard, cad) < server.indexOf('authJson()', cad), 'cadence: guarded before the body is read');
+  assert.ok(server.indexOf(guard, dec) > dec && server.indexOf(guard, dec) < server.indexOf('authJson()', dec), 'decision: guarded before the body is read');
+  const ls = require(path.join(__dirname, '..', 'lib', 'lockbox', 'settings.js'));
+  assert.strictEqual(ls.isAdminSession({ hubIdentKind: 'user', hubUser: { role: 'admin' } }), true);
+  assert.strictEqual(ls.isAdminSession({ hubService: true, hubUser: null }), false);
+  assert.strictEqual(ls.isAdminSession({ hubIdentKind: 'user', hubUser: { role: 'admin' }, hubToken: {} }), false);
+  assert.strictEqual(ls.isAdminSession({ hubIdentKind: 'user', hubUser: { role: 'admin' }, hubPendingTotp: true }), false);
 });
