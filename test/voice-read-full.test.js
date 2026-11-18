@@ -258,6 +258,12 @@ test('gate: a late chat-stream chunk of an earlier turn never re-enables full re
   assert.strictEqual(voiceReadFullGate(r.state, { kind: 'start', turnId: 'B' }).action, 'ignore');
   let t = r.state; for (let i = 0; i < 40; i++) t = voiceReadFullGate(t, { kind: 'start', turnId: 'X' + i }).state;
   assert.strictEqual(t.past.length, 32);
+  // a replayed turn_start for an earlier turn makes it current again: its own chunk is then taken
+  let u = voiceReadFullGate(null, { kind: 'start', turnId: 'A' }).state;
+  u = voiceReadFullGate(u, { kind: 'start', turnId: 'B' }).state;
+  u = voiceReadFullGate(u, { kind: 'start', turnId: 'A' }).state;
+  assert.deepStrictEqual(u.past, ['B']);
+  assert.strictEqual(voiceReadFullGate(u, { kind: 'chunk', turnId: 'A' }).action, 'set');
 });
 
 test('gate: signals repeat: a second details reading in the same turn (an answer to an interjection) sets again', () => {

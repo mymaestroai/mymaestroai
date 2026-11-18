@@ -3655,7 +3655,8 @@ function voiceReadFullGate(state, ev) {
       return { state: cur, action: 'ignore' };
     case 'start': {
       if (!id || id === cur.own) return { state: cur, action: 'ignore' };
-      const past = cur.own ? cur.past.filter(t => t !== cur.own).concat(cur.own).slice(-VOICE_READ_FULL_PAST) : cur.past;
+      // the turn before becomes past; the new one is never in past (a replayed turn_start is current again)
+      const past = (cur.own ? cur.past.filter(t => t !== cur.own).concat(cur.own) : cur.past).filter(t => t !== id).slice(-VOICE_READ_FULL_PAST);
       if (cur.set && cur.turn !== id) return { state: { set: false, turn: null, own: id, past }, action: 'reset' };
       return { state: { set: cur.set, turn: cur.turn, own: id, past }, action: 'ignore' };
     }

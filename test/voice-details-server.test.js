@@ -203,6 +203,9 @@ test('anyplace filter: [details] mid-reply is removed with the whitespace after 
   everySplit('Done.[details] Next', 'Done. Next', 1);
   everySplit('first.\n\n[details]\nSecond', 'first.\n\nSecond', 1);
   everySplit('one.[details]\nTwo', 'one.\nTwo', 1);
+  everySplit('a\n[details]\n\nB', 'a\n\nB', 1);                 // a paragraph break after a line break stays one
+  everySplit('x\n\n[details]\n\nY', 'x\n\nY', 1);               // a tag on its own paragraph: one paragraph break, not three line breaks
+  everySplit('a [details] [details] b', 'a b', 2);              // two tags in a row: one space, never two
   everySplit('[details]', '', 1);
 });
 
