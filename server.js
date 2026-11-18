@@ -1425,9 +1425,11 @@ async function handleHttpRequest(req, res) {
       // The model decides which code path and which hands an agent gets (a Codex model is a host shell on this box),
       // so a member may only pick from the admin's list, settings.memberModels (review F22/F35).
       if (!req.hubService && !access.isAdmin(req.hubUser)) {
-        const allowed = require('./lib/settings').getSetting('memberModels');
-        if (!Array.isArray(allowed) || !allowed.includes(String(body.model || ''))) {
-          return jsonResponse(res, 403, { error: 'admin_only', detail: 'only an admin can change this agent\'s model' + (Array.isArray(allowed) && allowed.length ? ` (members may choose: ${allowed.join(', ')})` : '') });
+        // lib/member-models: the same rule decides which models a member's temporary workers (spawn_workers) may use.
+        const mm = require('./lib/member-models');
+        const allowed = mm.list();
+        if (!mm.memberMayUse(body.model)) {
+          return jsonResponse(res, 403, { error: 'admin_only', detail: 'only an admin can change this agent\'s model' + (allowed.length ? ` (members may choose: ${allowed.join(', ')})` : '') });
         }
       }
       const result = await setAgentModel(name, body.model);
