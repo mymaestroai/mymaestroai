@@ -264,6 +264,7 @@
       <div id="team-rows"></div>
       <label class="check" id="team-opt"><input type="checkbox" id="team-create" checked><span>Create this team when I start</span></label>
       <div class="hint" id="team-skip-row"><button class="link" type="button" id="team-skip">Skip the team</button></div>
+      <button class="secondary" type="button" id="team-create-now" hidden>Create the team</button>
       <div class="hint" id="team-result"></div>
     </div>
     <button class="primary" id="hello">Start the setup interview</button>
@@ -656,7 +657,7 @@
     const want = chosenModel || lead.model;
     if (want && ![...sel.options].some(o => o.value === want)) addModelOnTop(want);
     show('s-meet', 3);
-    loadTeam().catch(() => { teamPlan = null; renderTeam(); });
+    loadTeam();
   }
   // <team-box>
   // The starter team: shown from GET /api/welcome/team, created (or skipped) when the interview starts. Everything the
@@ -690,39 +691,80 @@
   }
   function renderTeam() {
     const box = $('team-box');
-    if (!teamPlan) { box.hidden = true; return; }
+    if (!teamPlan) {
+      // No plan: no box before Start; after Start the box stays for its message (the plan may still come).
+      box.hidden = !teamStarted;
+      if (teamStarted) { $('team-rows').replaceChildren(); $('team-opt').hidden = true; $('team-skip-row').hidden = true; $('team-create-now').hidden = true; }
+      return;
+    }
     box.hidden = false;
     const rows = $('team-rows'); rows.replaceChildren();
     const any = teamPlan.some(e => e.action === 'create');
     for (const e of teamPlan) rows.appendChild(teamRow(e));
-    $('team-opt').hidden = !any; $('team-skip-row').hidden = !any;
+    // Before Start: the tick box decides. After Start (the team not made yet): a button makes it.
+    $('team-opt').hidden = !any || teamStarted; $('team-skip-row').hidden = !any || teamStarted;
+    $('team-create-now').hidden = !any || !teamStarted || teamDone;
     if (!any) { rows.replaceChildren(tEl('div', 'hint', 'Nothing to set up here.')); }
-    $('team-result').textContent = '';
   }
-  async function loadTeam() {
+  // The plan comes from POST /api/welcome/team/plan with the models the AI step just reported: the same list the create
+  // sends, so the team shown is the team made. A skip saved earlier (setup reopened) shows the box unticked until the
+  // person ticks it again.
+  let teamLoading = null;   // the plan request in flight, awaited by Start
+  let teamTouched = false;  // the person ticked or unticked the box themselves
+  let teamDone = false;     // created or skipped: Start never sends it again
+  let teamStarted = false;  // the interview was started: from then on only the "Create the team" button creates it
+  function loadTeam() {
     const seq = ++teamLoadSeq;
-    const res = await api('GET', '/api/welcome/team?lead=' + encodeURIComponent($('m-model').value || ''));
-    if (seq !== teamLoadSeq) return;   // a newer choice of model is already on its way
-    teamPlan = res.status === 200 && res.body && Array.isArray(res.body.plan) ? res.body.plan : null;
-    renderTeam();
+    const body = { lead: $('m-model').value || '' };
+    const ids = offeredModelIds(); if (ids) body.models = ids;
+    const p = api('POST', '/api/welcome/team/plan', body).then((res) => {
+      if (seq !== teamLoadSeq) return;   // a newer choice of model is already on its way
+      teamPlan = res.status === 200 && res.body && Array.isArray(res.body.plan) ? res.body.plan : null;
+      if (teamPlan && res.body.skippedAt && !teamTouched) $('team-create').checked = false;
+      renderTeam();
+    });
+    teamLoading = p.catch(() => { if (seq === teamLoadSeq) { teamPlan = null; renderTeam(); } });
+    return teamLoading;
   }
   $('m-model').addEventListener('change', () => { loadTeam(); });
-  $('team-skip').addEventListener('click', () => { $('team-create').checked = false; });
+  $('team-create').addEventListener('change', () => { teamTouched = true; });
+  $('team-skip').addEventListener('click', () => { teamTouched = true; $('team-create').checked = false; });
+  $('team-create-now').addEventListener('click', async () => {
+    $('team-create-now').disabled = true;
+    try { await createTeamNow(); } catch { $('team-result').textContent = 'The team could not be set up just now.'; }
+    $('team-create-now').disabled = false;
+  });
   function offeredModelIds() { const ids = []; for (const g of offered.values()) for (const m of g.models) if (!ids.includes(m)) ids.push(m); return ids.length ? ids : null; }
-  // After the lead's model is set: create the team (box ticked) or record the skip. A failure shows a short message in the
-  // box and never stops the interview.
-  async function setUpTeam(model) {
-    if (!teamPlan || !teamPlan.some(e => e.action === 'create')) return;   // no box, or nothing to set up: nothing to create or skip
-    const out = $('team-result');
+  const teamToCreate = () => (teamPlan || []).filter(e => e.action === 'create');
+  // Start pressed: wait for the plan (at most 15 seconds), then create the team (box ticked) or record the skip. Nothing
+  // here can stop the interview: a plan that never came, or a create that failed or found the team changed, leaves the
+  // "Create the team" button in the box for later.
+  async function setUpTeam() {
+    teamStarted = true;
+    if (teamDone) return;
+    if (teamLoading) await Promise.race([teamLoading, new Promise(r => setTimeout(r, 15000))]);
+    if (!teamPlan) { $('team-result').textContent = 'The team could not be shown just now. When it appears here, press Create the team.'; return renderTeam(); }
+    if (!teamToCreate().length) return renderTeam();
     if (!$('team-create').checked) {
       const r = await api('POST', '/api/welcome/team/skip');
-      out.textContent = r.status === 200 ? '' : 'Could not record that you skipped the team: it will be offered again.';
-      return;
+      if (r.status === 200) teamDone = true;
+      $('team-result').textContent = r.status === 200 ? '' : 'Could not record that you skipped the team: it will be offered again.';
+      return renderTeam();
     }
-    const body = { lead: model };
+    return createTeamNow();
+  }
+  async function createTeamNow() {
+    const out = $('team-result');
+    const body = { expect: teamToCreate().map(e => ({ role: e.role, model: e.model })) };
     const ids = offeredModelIds(); if (ids) body.models = ids;
     const r = await api('POST', '/api/welcome/team', body);
-    if (r.status !== 200 || !r.body || !Array.isArray(r.body.created)) { out.textContent = 'The team could not be created just now. You can ask your lead agent to set it up.'; return; }
+    if (r.status === 409 && r.body && r.body.changed && Array.isArray(r.body.plan)) {
+      teamPlan = r.body.plan; renderTeam();
+      out.textContent = 'The team changed since it was shown (a model or an agent). Check it above, then press Create the team.';
+      return;
+    }
+    if (r.status !== 200 || !r.body || !Array.isArray(r.body.created)) { out.textContent = 'The team could not be created just now. Press Create the team to try again.'; return renderTeam(); }
+    teamDone = true;
     const rows = $('team-rows'); rows.replaceChildren();
     for (const e of r.body.created) {
       // Created: its model and how it is paid stay in view ("billed per use" plainly), with the link to change it.
@@ -733,7 +775,8 @@
       rows.appendChild(teamRow(e, extra));
     }
     for (const e of (r.body.skipped || [])) rows.appendChild(teamRow(e, e.reason === 'failed' ? tEl('div', 'why err', skipReason(e)) : null));   // a skipped one shows its reason or error
-    $('team-opt').hidden = true; $('team-skip-row').hidden = true;
+    $('team-opt').hidden = true; $('team-skip-row').hidden = true; $('team-create-now').hidden = true;
+    out.textContent = '';
   }
   // </team-box>
   $('hello').addEventListener('click', async () => {
@@ -745,7 +788,7 @@
       if (r.status !== 200 || !(r.body && r.body.success)) { $('hello').disabled = false; return say('meet-msg', errText(r, 'Could not set the model.')); }
       lead.model = model;
     }
-    try { await setUpTeam(model); } catch { $('team-result').textContent = 'The team could not be set up just now.'; }
+    try { await setUpTeam(); } catch { $('team-result').textContent = 'The team could not be set up just now.'; }
     busy('meet-msg', `${lead.display || lead.name} is thinking… the first answer can take up to a minute.`);
     const res = await api('POST', '/api/chat', { agent: lead.name, message: '[First-time setup] Hello! I just installed My Maestro AI and connected my first AI. Please start the setup interview.' });
     $('hello').disabled = false;
