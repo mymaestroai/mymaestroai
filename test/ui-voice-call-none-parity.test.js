@@ -14,7 +14,8 @@ let BASE = null;
 try {
   const src = execFileSync('git', ['-C', path.join(__dirname, '..'), 'show', 'cd112d2:lib/ui-voice-call.js'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'base-call-'));
-  fs.writeFileSync(path.join(dir, 'ui-voice-call.js'), src);
+  // the first audible sound is now 1 s into a wait (it was 2 s): the base gets that one constant, so the rest is still compared as it was
+  fs.writeFileSync(path.join(dir, 'ui-voice-call.js'), src.replace('VOICE_CALL_THINK_MS = 2000', 'VOICE_CALL_THINK_MS = 1000'));
   BASE = require(path.join(dir, 'ui-voice-call.js'));
 } catch { BASE = null; }
 
@@ -88,16 +89,16 @@ for (const [name, script] of Object.entries(SCRIPTS)) {
     assert.deepStrictEqual(vadLog(none), vadLog(before), 'the same VAD playback notices at the same moments');
     const was = clusterTimes(before), now = clusterTimes(none);
     assert.strictEqual(now.length > 0, was.length > 0, 'sound or silence, as before');
-    if (was.length) assert.strictEqual(now[0], was[0], 'the first sound is at the same moment (2 s into the wait)');
-    if (now.length > 1 && name.startsWith('plain wait')) assert.ok(now[1] - now[0] >= 5500 && now[1] - now[0] <= 8200, 'the next cluster: its length + a 4-6 s gap: ' + (now[1] - now[0]));
+    if (was.length) assert.strictEqual(now[0], was[0], 'the first sound is at the same moment (1 s into the wait)');
+    if (now.length > 1 && name.startsWith('plain wait')) assert.ok(now[1] - now[0] >= 2500 && now[1] - now[0] <= 4700, 'the next cluster: its length + a 1-2 s gap: ' + (now[1] - now[0]));
   });
 }
 
-test('display None: the new rhythm is quiet: a plain 9 s wait has the first cluster at 2 s and no second one before 7.5 s', { skip: BASE ? false : 'base commit not available' }, async () => {
+test('display None: the new rhythm: a plain 9 s wait has the first cluster at 1 s and the next one a cluster length + 1-2 s later (not before 3.5 s)', { skip: BASE ? false : 'base commit not available' }, async () => {
   const before = clusterTimes(await drive(BASE, SCRIPTS['plain wait: first pulse at 2 s, then every 2.5 s']));
   const none = clusterTimes(await drive(CUR, SCRIPTS['plain wait: first pulse at 2 s, then every 2.5 s'], { display: true }));
-  assert.deepStrictEqual(before.slice(0, 3), [2000, 4500, 7000], 'before: every 2.5 s');
-  assert.strictEqual(none[0], 2000); assert.ok(none.length === 1 || none[1] >= 7500, 'now: ' + none.join());
+  assert.deepStrictEqual(before.slice(0, 3), [1000, 3500, 6000], 'before (with the 1 s start): every 2.5 s');
+  assert.strictEqual(none[0], 1000); assert.ok(none.length === 1 || none[1] >= 3500, 'now: ' + none.join());
 });
 
 test('display None: the sound never receives an event object and no picture event is sent', async () => {
