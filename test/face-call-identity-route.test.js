@@ -1,6 +1,6 @@
 'use strict';
 // POST /api/chat/stream and POST /api/chat must hand the chat handler the identity of the authenticated caller
-// (req.hubUser, req.hubService, hubAuth.hasUsers()), never anything the request body claims.
+// (req.hubUser, req.hubService, hubAuth.hasUsers(), and whether the account is an admin), never anything the request body claims.
 // The real route blocks are extracted from server.js and run in a vm.
 const { describe, it } = require('node:test');
 const assert = require('node:assert');
@@ -41,28 +41,28 @@ for (const [label, route, url, ret] of [['/api/chat/stream', streamRoute, '/api/
       const h = build(route);
       assert.strictEqual(await h.route(url, req({ id: 'u1', role: 'member' }, { agent: 'a', message: 'hi' }), {}), ret);
       await h.route(url, req({ id: 'u2', role: 'admin' }, { agent: 'a', message: 'hi' }), {});
-      assert.deepEqual(h.calls.map(c => c.ctx), [{ userId: 'u1', service: false, accounts: true }, { userId: 'u2', service: false, accounts: true }]);
+      assert.deepEqual(h.calls.map(c => c.ctx), [{ userId: 'u1', service: false, accounts: true, admin: false }, { userId: 'u2', service: false, accounts: true, admin: true }]);
     });
 
     it('a service-token caller is its own identity (never folded into "no account"), even with accounts', async () => {
       const h = build(route);
       await h.route(url, req(null, { agent: 'a', message: 'hi' }, { hubService: true }), {});
-      assert.deepEqual(h.calls[0].ctx, { userId: null, service: true, accounts: true });
+      assert.deepEqual(h.calls[0].ctx, { userId: null, service: true, accounts: true, admin: false });
     });
 
     it('no account and no accounts on the install: userId null, accounts false (from the server, not the body)', async () => {
       const h = build(route, { accounts: false });
       await h.route(url, req(null, { agent: 'a', message: 'hi' }), {});
-      assert.deepEqual(h.calls[0].ctx, { userId: null, service: false, accounts: false });
+      assert.deepEqual(h.calls[0].ctx, { userId: null, service: false, accounts: false, admin: false });
     });
 
     it('ignores identity forged in the request body', async () => {
       const h = build(route);
-      const forged = { agent: 'a', message: 'hi', userId: 'u2', user_id: 'u2', service: true, accounts: false, ctx: { userId: 'u2', service: true, accounts: false }, hubUser: { id: 'u2' } };
+      const forged = { agent: 'a', message: 'hi', userId: 'u2', user_id: 'u2', service: true, accounts: false, admin: true, ctx: { userId: 'u2', service: true, accounts: false }, hubUser: { id: 'u2' } };
       await h.route(url, req({ id: 'u1', role: 'member' }, forged), {});
       await h.route(url, req(null, forged), {});
-      assert.deepEqual(h.calls[0].ctx, { userId: 'u1', service: false, accounts: true });
-      assert.deepEqual(h.calls[1].ctx, { userId: null, service: false, accounts: true });
+      assert.deepEqual(h.calls[0].ctx, { userId: 'u1', service: false, accounts: true, admin: false });
+      assert.deepEqual(h.calls[1].ctx, { userId: null, service: false, accounts: true, admin: false });
     });
   });
 }
