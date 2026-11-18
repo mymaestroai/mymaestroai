@@ -282,7 +282,8 @@ test('logOriginOf keeps by and label; wakeAgent passes them; schedule sources se
   assert.deepStrictEqual(logOriginOf({ kind: 'schedule', from: 'Nightly' }), { kind: 'schedule', from: 'Nightly' }, 'old origins unchanged');
   const wake = extractFn(sdk, 'function wakeAgent(agentName, message, onReply, meta = null)');
   assert.match(wake, /\.\.\.\(meta\?\.by \? \{ by: meta\.by \} : \{\}\), \.\.\.\(meta\?\.label \? \{ label: meta\.label \} : \{\}\)/);
-  assert.match(read('lib/scheduled-tasks.js'), /\{ kind: 'schedule', from: t\.label, taskId: t\.id, by: t\.createdBy \}/);
+  // member origin (test/member-origin.test.js): scheduled and queued tasks made in a member's turn also carry member
+  assert.match(read('lib/scheduled-tasks.js'), /\{ kind: 'schedule', from: t\.label, taskId: t\.id, by: t\.createdBy, \.\.\.\(t\.member === true \? \{ member: true \} : \{\}\) \}/);
   assert.match(read('lib/scheduler.js'), /origin: \{ kind: 'schedule', from: taskId, by: 'TASKS\.md' \}/);
-  assert.match(read('lib/task-queue.js'), /origin: \{ kind: 'task', from: task\.creator_agent, label: `queued task from \$\{task\.creator_agent\}`, taskId: String\(task\.id\) \}/);
+  assert.match(read('lib/task-queue.js'), /origin: \{ kind: 'task', from: task\.creator_agent, label: `queued task from \$\{task\.creator_agent\}`, taskId: String\(task\.id\), \.\.\.\(Number\(task\.member\) === 1 \? \{ member: true \} : \{\}\) \}/);
 });
