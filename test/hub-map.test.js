@@ -137,3 +137,21 @@ test('brief: a Node.js security release the hub misses becomes a SECURITY line f
   const clean = createHubMap(deps({ nodeSecurity: () => ({ ...ns, behind: false }) })).init({ port: 8888, host: '127.0.0.1', exposed: () => false, setupNeeded: () => false });
   assert.doesNotMatch(await clean.briefFor('maestro'), /SECURITY/);
 });
+
+test('brief: the starter team line names each starter with its model, the guidance level, and is left out when reading fails', async () => {
+  const ROLES = [{ role: 'challenger', display: 'Challenger' }, { role: 'scout', display: 'Scout' }, { role: 'builder', display: 'Builder' }, { role: 'researcher', display: 'Researcher' }];
+  const info = (over = {}) => () => ({ ledger: { roles: { challenger: { name: 'challenger', status: 'created' }, scout: { name: 'scout', status: 'created' }, builder: { name: 'builder', status: 'created' } } }, level: 'light', roles: ROLES, ...over });
+  const withAgents = { agents: async () => [{ name: 'maestro', category: 'primary' }, { name: 'challenger', model: 'codex-cli/gpt-x', category: 'worker' }, { name: 'scout', model: 'claude-sdk/claude-haiku-5-5', category: 'worker' }] };
+  const line = async (extra) => (await createHubMap(deps({ ...withAgents, ...extra })).briefFor('maestro')).split('\n').find(l => l.startsWith('- Starter team'));
+  const l = await line({ teamInfo: info() });
+  assert.strictEqual(l, "- Starter team: Challenger (challenger) on codex-cli/gpt-x, Scout (scout) on claude-sdk/claude-haiku-5-5, Builder removed, Researcher not set up. Team guidance: light; per-agent switch on each agent's settings page.");
+  const text = await createHubMap(deps({ ...withAgents, teamInfo: info() })).briefFor('maestro');
+  assert.ok(text.indexOf('- Accounts:') < text.indexOf('- Starter team') && text.indexOf('- Starter team') < text.indexOf('- Providers with keys'), 'right after the Agents line');
+  assert.strictEqual(await createHubMap(deps({ ...withAgents, teamInfo: info() })).briefFor('worker'), '', 'only the lead agent gets it');
+  assert.strictEqual(await line({ teamInfo: () => { throw new Error('boom'); } }), undefined, 'a read error omits the line');
+  assert.strictEqual(await line({ teamInfo: info({ ledger: { roles: {}, unreadable: true } }) }), undefined, 'an unreadable ledger omits the line');
+  assert.strictEqual(await line({ teamInfo: info({ level: undefined }) }), undefined, 'no guidance level omits the line');
+  // the real readers, in the throwaway install: no ledger yet = nothing set up; the level is the default
+  const real = (await createHubMap(deps(withAgents)).briefFor('maestro')).split('\n').find(l => l.startsWith('- Starter team'));
+  assert.ok(real && real.includes('Challenger not set up') && real.includes('Team guidance: full;'), real);
+});

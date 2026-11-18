@@ -42,6 +42,12 @@ test('classifyRoute: session routes, admin routes and pages, everything else und
   // setup pages only redirect there; the Welcome actions are admin routes.
   for (const p of ['/welcome', '/api/welcome/state', '/setup', '/setup-admin']) assert.deepStrictEqual(X.classifyRoute(p), { kind: 'public' }, p);
   for (const p of ['/api/welcome/api-key', '/api/welcome/claude-check', '/api/welcome/local']) assert.deepStrictEqual(X.classifyRoute(p, 'POST'), { kind: 'admin' }, p);
+  // The starter team routes are admin routes (the gate in server.js refuses a member with 403 and a signed-out request with 401).
+  for (const [p, m] of [['/api/welcome/team', 'GET'], ['/api/welcome/team', 'POST'], ['/api/welcome/team/skip', 'POST']]) {
+    assert.deepStrictEqual(X.classifyRoute(p, m), { kind: 'admin' }, `${m} ${p}`);
+  }
+  assert.strictEqual(X.isAdmin(ann), false, 'a member is not an admin');
+  assert.strictEqual(X.isAdmin(null), false, 'signed out is not an admin');
   assert.deepStrictEqual(X.classifyRoute('/comms-panel.css'), { kind: 'session', page: true }, 'unknown static asset: any signed-in user');
   for (const p of ['/api/agents/create', '/api/agents/clone', '/api/agents/rename', '/api/agents/reload']) {
     assert.deepStrictEqual(X.classifyRoute(p), { kind: 'admin' }, `${p} is a fixed admin action, not agent "create"`);

@@ -21,6 +21,7 @@
  *   mymaestro face install <folder|owl> [--id <slug>]   add a character pack (the voice call face) from a folder, or download one (owl)
  *   mymaestro face list              the installed character packs
  *   mymaestro face remove <id> [--yes]   move a pack to <hub home>/faces-removed (never deleted; restore with face install)
+ *   mymaestro team                   the starter team (Challenger, Scout, Builder, Researcher): which are set up; read-only
  *   mymaestro uninstall              remove the service, this command and the private Node; keeps the folder and data
  *   mymaestro version
  */
@@ -475,8 +476,40 @@ const commands = {
     out(`\nYour data and the program are still in ${DIR}.`);
     out(`To delete everything, back up first (mymaestro backup), then run:  rm -rf "${DIR}"`);
   },
+  // Read-only: creation happens only in the running hub, which owns the ledger (data/team.json).
+  team() {
+    const data = path.join(DIR, 'data');
+    const st = require(path.join(DIR, 'lib', 'starter-team'));
+    const ledger = st.readLedger(path.join(data, 'team.json'));
+    let agents = [];
+    try { const a = JSON.parse(fs.readFileSync(path.join(data, 'agents.json'), 'utf8')); if (Array.isArray(a)) agents = a; } catch { /* no agents list yet */ }
+    let unfinished = false;
+    try { const p = JSON.parse(fs.readFileSync(path.join(data, 'welcome.json'), 'utf8')) || {}; unfinished = !!p.startedAt && !p.finishedAt; } catch { /* no setup record */ }
+    out('Your starter team:');
+    if (ledger.unreadable) {
+      out('  The team ledger (data/team.json) could not be read, so nothing is created while it is unreadable. Fix or restore that file first.');
+      return;
+    }
+    for (const r of st.ROLES) {
+      const had = ledger.roles[r.role];
+      const find = (name) => agents.find(a => a && a.name === name);
+      let line;
+      if (had) {
+        const a = find(had.name);
+        if (a) line = `created (agent ${a.name}, model ${a.model || 'not set'})`;
+        else if (had.status === 'reserved') line = 'stopped halfway (interrupted)';
+        else line = 'set up earlier, since removed or renamed';
+      } else if (find(r.name) || agents.some(a => a && String(a.display || '').toLowerCase() === r.display.toLowerCase())) line = 'name taken by your own agent';
+      else line = 'not set up';
+      out(`  ${r.display}: ${line}`);
+    }
+    if (ledger.skippedAt) out(`  (You chose to skip the team on ${ledger.skippedAt}.)`);
+    out('');
+    out(unfinished ? `To create the missing ones, open ${URL_BASE}/welcome on this computer.` : 'To add them, ask your lead agent or use the Team card in the app.');
+  },
   version() { const { v, commit, channel } = version(); out(`${PRODUCT} ${v} (${commit}, ${channel} channel)`); },
-  help() { out(fs.readFileSync(__filename, 'utf8').split('\n').slice(3, 25).map(l => l.replace(/^ \* ?/, '')).join('\n')); },
+  // The help is the comment block at the top of this file: lines 4 to 26 (one more than before `team` was listed).
+  help() { out(fs.readFileSync(__filename, 'utf8').split('\n').slice(3, 26).map(l => l.replace(/^ \* ?/, '')).join('\n')); },
 };
 
 (async () => {
