@@ -13,10 +13,12 @@ const { voiceCreateCall, voiceReplySentences } = C;
 
 const read = (f) => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
 const tick = async (n = 6) => { for (let i = 0; i < n; i++) await Promise.resolve(); };
-const NOTE = 'I have put the details in the chat.';
-const NOTE_LIST = 'I\'ve put the full list in the chat.';
-const NOTE_TABLE = 'I\'ve put the table in the chat.';
-const NOTE_CODE = 'I\'ve put the code in the chat.';
+// The call's notes offer to read what was left out (owner, 2026-11-18); a reply read aloud without a call keeps SPEECH_NOTE.
+const NOTE = 'The details are in the chat; just say if you\'d like to hear them.';
+const SPEECH_NOTE = 'I have put the details in the chat.';
+const NOTE_LIST = 'I\'ve put the full list in the chat; just say if you\'d like to hear it.';
+const NOTE_TABLE = 'I\'ve put the table in the chat; just say if you\'d like to hear it.';
+const NOTE_CODE = 'I\'ve put the code in the chat; just say if you\'d like me to walk you through it.';
 
 const FOUR = 'One is here. Two is here. Three is here. Four is here.';
 const TWO_ITEMS = 'Here are the two checks.\n\n- Check the disk\n- Check the logs';
@@ -97,7 +99,8 @@ test('long plain text (8 sentences, 90 words): the first 3, then the generic not
   assert.strictEqual(r.sentences.length, 3);
   assert.strictEqual(r.sentences[0], 'The first part of the report covers the northern region sales.');
   assert.strictEqual(r.note, NOTE);
-  assert.strictEqual(' ' + NOTE, V.VOICE_DETAILS_NOTE);
+  assert.strictEqual(' ' + NOTE, V.VOICE_NOTE_DETAILS_CALL);
+  assert.strictEqual(' ' + SPEECH_NOTE, V.VOICE_DETAILS_NOTE, 'read aloud without a call: the plain note, unchanged');
   const spoken = await speakReply(LONG);
   assert.deepStrictEqual(spoken, r.sentences.concat(NOTE));
 });
@@ -190,8 +193,8 @@ test('the agent-level voice defaults are not extended', () => {
 });
 
 test('voiceSpeechText is unchanged: tables and code still add the details note', () => {
-  assert.strictEqual(voiceSpeechText('| a |'), NOTE);
-  assert.strictEqual(voiceSpeechText('Hi.\n```js\nx\n```'), 'Hi. ' + NOTE);
+  assert.strictEqual(voiceSpeechText('| a |'), SPEECH_NOTE);
+  assert.strictEqual(voiceSpeechText('Hi.\n```js\nx\n```'), 'Hi. ' + SPEECH_NOTE);
 });
 
 test('the page copies carry the same code, the notes and the settings controls', () => {

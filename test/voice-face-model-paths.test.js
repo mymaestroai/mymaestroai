@@ -27,7 +27,9 @@ function sliceFn(startMarker) {
 }
 const MAKE_CHUNK = sliceFn('function makeChunk(');
 const PARAGRAPH = sliceFn('function paragraphAfterTool(');
-const VOICE_NOTE_SRC = SRC.slice(SRC.indexOf('const VOICE_NOTE ='), SRC.indexOf('\n', SRC.indexOf('const VOICE_NOTE =')) + 1);
+// the voice note and the live-call voice note (VOICE_CALL_NOTE, used when moodStrip is true)
+const constLine = (name) => SRC.slice(SRC.indexOf(`const ${name} =`), SRC.indexOf('\n', SRC.indexOf(`const ${name} =`)) + 1);
+const VOICE_NOTE_SRC = constLine('VOICE_NOTE') + constLine('VOICE_CALL_NOTE');
 const FACE_HELPERS = (() => {   // faceMoodFor, voiceNoteFor, createVoiceMood
   const a = SRC.indexOf('function faceMoodFor(');
   const c = SRC.indexOf('function createVoiceMood(');
@@ -1043,7 +1045,7 @@ test('the three provider calls also get the checked moodStrip boolean; the mood 
   }
   assert.ok(!/moodStrip:\s*(body|req)/.test(h), 'never copied from the request');
   assert.match(SRC, /function voiceNoteFor\(options, ephemeral\) \{[^}]*options\.faceMood === true/, 'the prompt note still depends on faceMood only');
-  assert.ok(!/voiceNoteFor[^\n]*moodStrip/.test(SRC), 'moodStrip never reaches the prompt');
+  assert.ok(!/voiceNoteFor[^\n]*moodStrip/.test(SRC), 'moodStrip never reaches the mood prompt (it picks the live-call note and the read-in-full note: test/voice-details-server.test.js)');
 });
 
 const STRIP_OPTS = { faceMood: false, moodStrip: true };

@@ -112,9 +112,9 @@ function sdkNotes() {
   const grab = (start) => { const i = SRC.indexOf(start); assert.ok(i >= 0, start); let d = 0; let j = SRC.indexOf(') {', i) + 2; for (; j < SRC.length; j++) { if (SRC[j] === '{') d++; else if (SRC[j] === '}') { d--; if (!d) break; } } return SRC.slice(i, j + 1); };
   const ctx = { FACE_MOOD_NOTE };
   vm.createContext(ctx);
-  vm.runInContext([line('const VOICE_NOTE ='), line('const VOICE_READ_NOTE ='), line('const VOICE_READ_REMIND ='), line('const VOICE_READ_NO_REMIND ='), line('const VOICE_READ_TOOL ='),
+  vm.runInContext([line('const VOICE_NOTE ='), line('const VOICE_CALL_NOTE ='), line('const VOICE_READ_NOTE ='), line('const VOICE_READ_REMIND ='), line('const VOICE_READ_NO_REMIND ='), line('const VOICE_READ_TOOL ='),
     grab('function voiceReadNote('), grab('function voiceNoteFor('), grab('function voiceTurnCtx('),
-    'this.voiceReadNote = voiceReadNote; this.voiceNoteFor = voiceNoteFor; this.voiceTurnCtx = voiceTurnCtx; this.VOICE_NOTE = VOICE_NOTE;'].join('\n'), ctx);
+    'this.voiceReadNote = voiceReadNote; this.voiceNoteFor = voiceNoteFor; this.voiceTurnCtx = voiceTurnCtx; this.VOICE_NOTE = VOICE_NOTE; this.VOICE_CALL_NOTE = VOICE_CALL_NOTE;'].join('\n'), ctx);
   return ctx;
 }
 
@@ -132,12 +132,17 @@ test('voiceReadNote wording: tag, spoken style, reminder on or off, the tool', (
 });
 
 test('voiceNoteFor adds the read note only when moodStrip is true', () => {
-  const { voiceNoteFor, VOICE_NOTE } = sdkNotes();
-  assert.equal(voiceNoteFor({ voice: true }, false), VOICE_NOTE);
+  const { voiceNoteFor, VOICE_NOTE, VOICE_CALL_NOTE } = sdkNotes();
+  assert.equal(voiceNoteFor({ voice: true }, false), VOICE_NOTE, 'a voice turn without a live call keeps the old note');
   assert.equal(voiceNoteFor({ voice: true, moodStrip: false }, false), VOICE_NOTE);
   assert.equal(voiceNoteFor({ voice: true, faceMood: true }, false), VOICE_NOTE + '\n\n' + FACE_MOOD_NOTE);
   const on = voiceNoteFor({ voice: true, moodStrip: true, interruptReminder: true }, false);
-  assert.ok(on.startsWith(VOICE_NOTE) && /\[details\]/.test(on) && /Start with the sentence/.test(on));
+  assert.ok(on.startsWith(VOICE_CALL_NOTE) && /\[details\]/.test(on) && /Start with the sentence/.test(on));
+  // on a live call real detail goes in the chat below the spoken answer, and the agent does not announce it itself
+  assert.match(VOICE_CALL_NOTE, /give the spoken answer first in one to three sentences, then put the details below it/);
+  assert.match(VOICE_CALL_NOTE, /tells the person the details are in the chat and that they can ask to hear them, so do not say that yourself/);
+  assert.doesNotMatch(VOICE_CALL_NOTE, /offer to put it in the chat after the call/);
+  assert.match(VOICE_NOTE, /offer to put it in the chat after the call; do not write it during the call/, 'unchanged off a call');
   assert.doesNotMatch(voiceNoteFor({ voice: true, moodStrip: true, interruptReminder: false }, false), /Start with the sentence/);
   assert.match(voiceNoteFor({ voice: true, moodStrip: true }, false), /Start with the sentence/, 'default on');
   assert.match(voiceNoteFor({ voice: true, moodStrip: true, faceMood: true }, false), /Optionally, begin your reply[\s\S]*\[details\]/);
