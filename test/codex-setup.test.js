@@ -127,6 +127,37 @@ test('the check: a missing Codex is reinstalled (a release at least a day old) o
   } finally { w.done(); }
 });
 
+// Review r3 (GPT-5.6 BLOCK): an installer run that stopped after the move but before linking bin/codex left the
+// package in ~/.npm-global with nothing to start it; the check restores the link from the package, offline.
+test('the check with repair links ~/.npm-global/bin/codex to a package already there, offline; it never replaces anything at that name', (t) => {
+  const w = world();
+  try {
+    if (!clean(w.env)) { t.skip('a codex outside the temporary home is found on this computer'); return; }
+    fs.writeFileSync(path.join(w.data, 'agents.json'), JSON.stringify([{ name: 'a', model: 'codex-cli/gpt-x' }]));
+    const pkg = path.join(w.home, '.npm-global', 'lib', 'node_modules', '@openai', 'codex');
+    fs.mkdirSync(path.join(pkg, 'bin'), { recursive: true });
+    fs.writeFileSync(path.join(pkg, 'package.json'), JSON.stringify({ name: '@openai/codex', bin: { codex: 'bin/codex.js' } }));
+    fs.writeFileSync(path.join(pkg, 'bin', 'codex.js'), '#!/bin/sh\necho codex-saved\n', { mode: 0o755 });
+    const link = path.join(w.home, '.npm-global', 'bin', 'codex');
+    let n = 0;
+    const install = () => { n++; return { ok: false }; };
+    const plain = setup.checkCodex({ env: w.env, dataDir: w.data, binDirs: [w.bin], install });
+    assert.strictEqual(plain.bin, null, 'no repair: nothing made');
+    assert.throws(() => fs.lstatSync(link));
+    const r = setup.checkCodex({ env: w.env, dataDir: w.data, binDirs: [w.bin], repair: true, install });
+    assert.strictEqual(fs.readlinkSync(link), path.join('..', 'lib', 'node_modules', '@openai', 'codex', 'bin', 'codex.js'), 'linked as npm links it');
+    assert.deepStrictEqual([!!r.bin, r.installed, r.fix, n], [true, false, null, 0], 'found without a download');
+    assert.strictEqual(setup.ensurePrefixLink(w.env), false, 'a name already there is left alone');
+    // a bin entry that leaves the package, or names a missing file: no link
+    fs.unlinkSync(link);
+    fs.writeFileSync(path.join(pkg, 'package.json'), JSON.stringify({ bin: { codex: '../../../../../elsewhere' } }));
+    assert.strictEqual(setup.ensurePrefixLink(w.env), false);
+    fs.writeFileSync(path.join(pkg, 'package.json'), JSON.stringify({ bin: { codex: 'bin/missing.js' } }));
+    assert.strictEqual(setup.ensurePrefixLink(w.env), false);
+    assert.throws(() => fs.lstatSync(link));
+  } finally { w.done(); }
+});
+
 test('installCodex runs npm with --prefix ~/.npm-global, -g and --ignore-scripts, then finds the program there', () => {
   const w = world();
   try {

@@ -139,7 +139,7 @@ install_node() {
   [ "$got" = "$expected" ] || die "The Node.js download did not match its published checksum (got $got). Nothing was installed."
   mkdir -p "$STATE_DIR" && chmod 700 "$STATE_DIR"
   tar -xzf "$tmp/node.tar.gz" -C "$tmp" || die "Could not unpack Node.js."
-  keep_codex || die "Codex (the ChatGPT client) could not be moved out of the Node.js folder (is the disk full?), so Node.js was not updated and nothing was removed. Free some space and run the installer again."
+  keep_codex || die "Codex (the ChatGPT client) could not be moved out of the Node.js folder (is the disk full, or a file in it unreadable?), so Node.js was not updated and nothing was removed. Fix that and run the installer again."
   rm -rf "$NODE_DIR.new" && mv "$tmp/$name" "$NODE_DIR.new" && rm -rf "$NODE_DIR" && mv "$NODE_DIR.new" "$NODE_DIR"
   rm -rf "$tmp"
   info "Node.js $("$NODE" --version) installed in $NODE_DIR (checksum verified)."
@@ -148,16 +148,17 @@ install_node() {
 # Codex (the ChatGPT client) installed with this Node's own npm (npm i -g) lives inside the folder about to be replaced.
 # Move it, with its platform packages, to ~/.npm-global (where mymaestro connect chatgpt installs it and the hub looks)
 # and link its program there, so it survives the update. ~/.codex (its sign-in) is never touched. Each package is copied
-# into a fresh temporary folder, put in place by one rename (which never lands inside an existing folder), and only then
-# removed from the old folder: a failure at any step leaves the original where it was, returns 1, and install_node stops
-# before the old folder is removed. It runs whenever any codex package is still inside (also after a run that stopped
-# partway), and clears temporary folders an earlier stopped run left (never the only copy: originals go last). A name
-# already in ~/.npm-global is kept as it is.
+# into a fresh temporary folder, put in place by one rename (rename(2): it replaces at most an empty folder and fails on
+# a non-empty one; any existing name is skipped before), and only then removed from the old folder: a failure at any step
+# leaves the original where it was, returns 1, and install_node stops before the old folder is removed. It runs whenever
+# any codex package is still inside (also after a run that stopped partway), and clears temporary folders an earlier
+# stopped run left (never the only copy: originals go last). A name already in ~/.npm-global is kept as it is. The
+# bin/codex link is made whenever the package is in ~/.npm-global without one (also when a run stopped just before it).
 keep_codex() {
   local old="$NODE_DIR/lib/node_modules/@openai" pre="$HOME/.npm-global" scope p name rel dest part any=0
   scope="$pre/lib/node_modules/@openai"
   for p in "$old"/codex "$old"/codex-*; do [ -d "$p" ] && any=1; done
-  [ "$any" = 1 ] || return 0
+  if [ "$any" = 0 ]; then link_codex "$pre"; return 0; fi
   mkdir -p "$scope" "$pre/bin" || return 1
   for part in "$scope"/.mm-moving-*; do [ -e "$part" ] && rm -rf "$part"; done
   for p in "$old"/codex "$old"/codex-*; do
@@ -172,12 +173,21 @@ keep_codex() {
     rmdir "$part" 2>/dev/null || true
     rm -rf "$p"
   done
-  if [ ! -e "$pre/bin/codex" ] && [ ! -L "$pre/bin/codex" ]; then
-    rel="$("$NODE" -e 'const b=require(process.argv[1]).bin;process.stdout.write(String(typeof b==="string"?b:(b&&b.codex)||""))' "$pre/lib/node_modules/@openai/codex/package.json" 2>/dev/null || true)"
-    [ -n "$rel" ] || rel="bin/codex.js"
-    ln -s "../lib/node_modules/@openai/codex/$rel" "$pre/bin/codex" || true
-  fi
+  link_codex "$pre"
   info "Codex moved out of the Node.js folder to $pre, so the update keeps it."
+}
+
+# <prefix>/bin/codex -> the codex package's program, as npm links it, when the package is there and nothing has that name.
+link_codex() {
+  local pre="$1" rel
+  [ -f "$pre/lib/node_modules/@openai/codex/package.json" ] || return 0
+  if [ -e "$pre/bin/codex" ] || [ -L "$pre/bin/codex" ]; then return 0; fi
+  mkdir -p "$pre/bin" || return 0
+  rel="$("$NODE" -e 'const b=require(process.argv[1]).bin;process.stdout.write(String(typeof b==="string"?b:(b&&b.codex)||""))' "$pre/lib/node_modules/@openai/codex/package.json" 2>/dev/null || true)"
+  [ -n "$rel" ] || rel="bin/codex.js"
+  case "$rel" in /*|*..*) return 0 ;; esac
+  [ -f "$pre/lib/node_modules/@openai/codex/$rel" ] || return 0
+  ln -s "../lib/node_modules/@openai/codex/$rel" "$pre/bin/codex" || true
 }
 
 # Is Codex where this install needs it (an agent on ChatGPT, or a ChatGPT sign-in)? Repoints a codex link left pointing
