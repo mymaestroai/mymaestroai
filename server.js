@@ -1023,7 +1023,8 @@ async function handleHttpRequest(req, res) {
         const own = files.resolveOwner(who, ownerReq);
         return own ? { own } : { code: 403, error: 'no such owner' };
       };
-      // POST /api/files/resolve { items }: Files-folder paths an agent wrote (abs) or download links ({agent|owner, path}) -> file facts + download URLs.
+      // POST /api/files/resolve { items }: Files-folder paths an agent wrote (abs, spaces allowed), download links ({agent|owner, path}) or a bare
+      // file name an agent mentioned ({name, agent}: searched only in that agent's own folder, answered only when exactly one file has it) -> file facts + download URLs.
       // Anything outside the folders this person may read answers { ok:false, error:'not found' }, same as a missing file.
       if (pathname === '/api/files/resolve' && req.method === 'POST') {
         const items = jsonBody && jsonBody.items;
@@ -1043,6 +1044,7 @@ async function handleHttpRequest(req, res) {
           return roots;
         };
         const out = [];
+        const nameIdx = new Map();   // folder -> files.nameIndex(), for { name, agent } items
         for (const it of items) {
           if (!it || typeof it !== 'object' || Array.isArray(it)) { out.push(nf); continue; }
           let r = null;
@@ -1056,6 +1058,16 @@ async function handleHttpRequest(req, res) {
             } else if (typeof it.path === 'string') {
               const s = await scopeFor(it.agent ? String(it.agent) : null, it.owner, agents);
               if (s.own) r = files.fileInfo(s.own.root, it.path, { agent: s.own.agent || null, owner: s.own.ownerId });
+            } else if (typeof it.name === 'string' && typeof it.agent === 'string') {
+              // A bare file name: only in that agent's own folder (scopeFor refuses an agent this person may not open), and only when
+              // exactly one file there has the name.
+              const s = await scopeFor(it.agent, null, agents);
+              if (s.own) {
+                const rootKey = String(s.own.root);
+                if (!nameIdx.has(rootKey)) nameIdx.set(rootKey, files.nameIndex(s.own.root));   // one walk per folder per request
+                const rel = files.findByName(s.own.root, it.name, { index: nameIdx.get(rootKey) });
+                r = rel ? files.fileInfo(s.own.root, rel, { agent: s.own.agent || null, owner: s.own.ownerId }) : null;
+              }
             }
           } catch { r = null; }
           out.push(r || nf);
