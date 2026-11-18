@@ -691,6 +691,7 @@
   }
   function renderTeam() {
     const box = $('team-box');
+    if (teamDone) return;   // the created (or skipped) result stays on screen; a late plan answer never replaces it
     if (!teamPlan) {
       // No plan: no box before Start; after Start the box stays for its message (the plan may still come).
       box.hidden = !teamStarted;
@@ -740,8 +741,10 @@
   // here can stop the interview: a plan that never came, or a create that failed or found the team changed, leaves the
   // "Create the team" button in the box for later.
   async function setUpTeam() {
+    // Once only: a second press of Start (after a failed first chat) never creates or skips again; from then on only the
+    // "Create the team" button does, so a changed plan is never accepted without a look.
+    if (teamStarted || teamDone) return;
     teamStarted = true;
-    if (teamDone) return;
     if (teamLoading) await Promise.race([teamLoading, new Promise(r => setTimeout(r, 15000))]);
     if (!teamPlan) { $('team-result').textContent = 'The team could not be shown just now. When it appears here, press Create the team.'; return renderTeam(); }
     if (!teamToCreate().length) return renderTeam();
@@ -760,10 +763,15 @@
     const r = await api('POST', '/api/welcome/team', body);
     if (r.status === 409 && r.body && r.body.changed && Array.isArray(r.body.plan)) {
       teamPlan = r.body.plan; renderTeam();
-      out.textContent = 'The team changed since it was shown (a model or an agent). Check it above, then press Create the team.';
+      out.textContent = teamToCreate().length ? 'The team changed since it was shown (a model or an agent). Check it above, then press Create the team.' : 'The team changed since it was shown: nothing is left to set up.';
       return;
     }
     if (r.status !== 200 || !r.body || !Array.isArray(r.body.created)) { out.textContent = 'The team could not be created just now. Press Create the team to try again.'; return renderTeam(); }
+    const failed = (r.body.skipped || []).filter(e => e.reason === 'failed');
+    if (!r.body.created.length && failed.length) {   // nothing made, only failures: the button stays for another try
+      out.textContent = `The team could not be created: ${failed[0].error || 'an error'}. Press Create the team to try again.`;
+      return renderTeam();
+    }
     teamDone = true;
     const rows = $('team-rows'); rows.replaceChildren();
     for (const e of r.body.created) {
@@ -788,7 +796,7 @@
       if (r.status !== 200 || !(r.body && r.body.success)) { $('hello').disabled = false; return say('meet-msg', errText(r, 'Could not set the model.')); }
       lead.model = model;
     }
-    try { await setUpTeam(); } catch { $('team-result').textContent = 'The team could not be set up just now.'; }
+    try { await setUpTeam(); } catch { $('team-result').textContent = 'The team could not be set up just now.'; try { renderTeam(); } catch { /* the interview goes on */ } }
     busy('meet-msg', `${lead.display || lead.name} is thinking… the first answer can take up to a minute.`);
     const res = await api('POST', '/api/chat', { agent: lead.name, message: '[First-time setup] Hello! I just installed My Maestro AI and connected my first AI. Please start the setup interview.' });
     $('hello').disabled = false;
