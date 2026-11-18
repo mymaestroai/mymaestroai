@@ -193,7 +193,7 @@ test('loadAgentContext: sections in order with the runtime model, Files folder a
   assert.deepStrictEqual([...idx].sort((x, y) => x - y), idx, 'order: identity, model, soul, user, files, model info, channel');
   assert.ok(!out.includes('# Tools & Environment'), 'empty TOOLS.md is skipped');
   assert.ok(out.includes(`## Files folder\n${path.join(a.root, 'share', 'ctx')}\n`));
-  assert.ok(out.includes(`give its full path in a code span (for example \`${path.join(a.root, 'share', 'ctx')}/report.pdf\`)`), 'the Files folder guidance asks for the full path in a code span');
+  assert.ok(out.includes(`name it by its full path, alone in backticks, for example \`${path.join(a.root, 'share', 'ctx')}/Reports/Q3-summary.pdf\``), 'the Files folder guidance asks for the full path in a code span');
   assert.match(out, /You are running as \*\*claude-sdk\/claude-opus-5\*\* \(opus-5\)\./);
   assert.ok(!(await a.ag.loadAgentContext('ctx')).includes('## Communication Channel'));
   assert.ok(!(await a.ag.loadAgentContext('ctx', 'nope')).includes('## Communication Channel'));
