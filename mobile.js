@@ -1163,6 +1163,7 @@ async function fillModelPick() {
 }
 // Reasoning effort next to the model (lib/effort): admins pick it for any agent, members see what their admin set.
 const EFFORT_LABEL = { default: 'Default effort', low: 'Low effort', medium: 'Medium effort', high: 'High effort', xhigh: 'Extra high effort', max: 'Max effort' };
+const EFFORT_ULTRA_OPTION = 'Ultra (uses several helpers; uses much more of the ChatGPT plan)';
 function effortSupported(model) {
   const m = String(model || ''); const p = m.split('/')[0]; const n = m.slice(m.indexOf('/') + 1).toLowerCase();
   if (p === 'claude-sdk' || p === 'codex-cli' || p === 'anthropic') return true;
@@ -1197,10 +1198,14 @@ function fillEffortPick() {
   if (!wrap || !sel) return;
   const a = agentByName(current);
   if (!a || !effortSupported(a.model) || a.autoModel) { wrap.hidden = true; return; }
-  const level = a.effort || 'default';
-  if (!sel.options.length) sel.innerHTML = Object.entries(EFFORT_LABEL).map(([v, l]) => `<option value="${v}">${esc(l)}</option>`).join('');
+  // Ultra (Codex: max reasoning plus helpers) is offered only when the server says this agent's model takes it (a.effortUltra);
+  // a stored Ultra the model no longer has shows as Max, which is what the server sends then.
+  const ultraOk = a.effortUltra === true;
+  const level = a.effort === 'ultra' && !ultraOk ? 'max' : (a.effort || 'default');
+  const wantOptions = ultraOk ? 7 : 6;
+  if (sel.options.length !== wantOptions) sel.innerHTML = Object.entries(EFFORT_LABEL).map(([v, l]) => `<option value="${v}">${esc(l)}</option>`).join('') + (ultraOk ? `<option value="ultra">${esc(EFFORT_ULTRA_OPTION)}</option>` : '');
   sel.value = level; sel.dataset.agent = a.name; sel.disabled = !isAdmin();
-  txt.textContent = EFFORT_LABEL[level] || level;
+  txt.textContent = level === 'ultra' ? 'Ultra effort' : (EFFORT_LABEL[level] || level);
   wrap.classList.toggle('pickable', isAdmin());
   wrap.hidden = false;
 }
@@ -1212,7 +1217,7 @@ async function changeEffortFromPick() {
     const d = await r.json().catch(() => ({}));
     if (!r.ok || d.success === false) { sel.value = a.effort || 'default'; toast(`Could not change the effort: ${d.error || r.status}`); return; }
     a.effort = level; fillEffortPick();
-    toast(`${a.display || name}: ${EFFORT_LABEL[level]}${isBusy(name) || streams.has(name) ? ' from the next reply' : ''}`);
+    toast(`${a.display || name}: ${EFFORT_LABEL[level] || 'Ultra effort'}${isBusy(name) || streams.has(name) ? ' from the next reply' : ''}`);
   } catch (e) { sel.value = a.effort || 'default'; toast(`Could not change the effort: ${e.message}`); }
 }
 
