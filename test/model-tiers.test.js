@@ -319,3 +319,11 @@ test('r1: a local lead keeps every worker on its own model (no engine swap)', ()
   for (const r of WORKERS) assert.strictEqual(t[r].model, 'ollama/llama-5-8b', r);
   assert.strictEqual(t.challenger.model, 'claude-sdk/claude-haiku-5-5');
 });
+
+// Proof review (Maestro): a top-tier-only subscription plus a local model: every worker gets the local model (it fits any
+// worker tier), so "no model below the top tier" never shows next to a local worker.
+test('a top-tier-only subscription plus a local model: all three workers on the local model, none left empty', () => {
+  const t = mt.pickTeam({ available: ['claude-sdk/claude-opus-5-5', 'lmstudio/qwen-3-7b-instruct'], lead: 'claude-sdk/claude-opus-5-5' });
+  for (const r of ['scout', 'builder', 'researcher']) { assert.strictEqual(t[r].model, 'lmstudio/qwen-3-7b-instruct', r); assert.strictEqual(t[r].note, null, r); }
+  assert.ok(!t.notes.some(n => /below the top tier/.test(n)));
+});
