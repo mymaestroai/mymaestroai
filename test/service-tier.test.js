@@ -270,6 +270,45 @@ test('sendTiered: a model that refused a tier outright is asked on Standard dire
   assert.strictEqual(gw.tierRefused.size, 0);
 }));
 
+// Gemini's answer to a real Economy call (2026-11-17): flex shed with 503 while Standard answered on the same model.
+const GEMINI_FLEX_503 = '[{\n  "error": {\n    "code": 503,\n    "message": "This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.",\n    "status": "UNAVAILABLE"\n  }\n}\n]';
+
+test('tierFallback: a 503 that sheds flex falls back on Economy only; a 503 on Fast or Standard stays a server error', () => {
+  const f = tier.tierFallback;
+  assert.strictEqual(f({ tier: 'economy', status: 503, message: 'Provider 503: ' + GEMINI_FLEX_503 }), true);
+  assert.strictEqual(f({ tier: 'economy', status: 503, message: 'Provider 503: The server is overloaded' }), true);
+  assert.strictEqual(f({ tier: 'fast', status: 503, message: 'Provider 503: ' + GEMINI_FLEX_503 }), false, 'Fast: the ordinary retries and error');
+  assert.strictEqual(f({ tier: 'standard', status: 503, message: 'Provider 503: ' + GEMINI_FLEX_503 }), false);
+  assert.strictEqual(f({ tier: 'economy', status: 503, message: 'Provider 503: upstream connect error' }), false, 'a 503 that does not say unavailable / high demand / overloaded');
+  assert.strictEqual(f({ tier: 'economy', status: 503, message: GEMINI_FLEX_503, sawOutput: true }), false);
+});
+
+test('sendTiered: Gemini shedding flex with 503 goes straight to Standard once, with the notice, not remembered; Fast 503 is not a tier refusal', logQuiet(async () => {
+  const gw = L('gateway-client');
+  gw.tierRefused.clear();
+  const flex = { requested: 'economy', value: 'flex', flex: true };
+  let f = fakeFetch([{ status: 503, text: GEMINI_FLEX_503 }, { status: 200 }]);
+  try {
+    const r = await gw.sendTiered({ url: 'http://x.invalid/c', headers: {}, body: { service_tier: 'flex' }, wireFor: (b) => b, tierInfo: flex, model: GEMINI, retryOpts: {}, agent: 'sample' });
+    assert.strictEqual(r.fallback, 'economy');
+    assert.strictEqual(f.calls.length, 2, 'no server-error retries of the flex request, then one Standard request');
+    assert.strictEqual(f.calls[0].service_tier, 'flex');
+    assert.ok(!('service_tier' in f.calls[1]));
+  } finally { f.restore(); }
+  assert.strictEqual(gw.tierRefused.size, 0, 'capacity is not remembered');
+  f = fakeFetch([{ status: 200 }]);
+  try {
+    const r = await gw.sendTiered({ url: 'http://x.invalid/c', headers: {}, body: { service_tier: 'flex' }, wireFor: (b) => b, tierInfo: flex, model: GEMINI, retryOpts: {}, agent: 'sample' });
+    assert.strictEqual(r.fallback, null); assert.strictEqual(f.calls[0].service_tier, 'flex', 'the next turn asks flex again');
+  } finally { f.restore(); }
+  const fast = { requested: 'fast', value: 'priority', flex: false };
+  f = fakeFetch([{ status: 503, text: GEMINI_FLEX_503 }]);
+  try {
+    await assert.rejects(gw.sendTiered({ url: 'http://x.invalid/c', headers: {}, body: { service_tier: 'priority' }, wireFor: (b) => b, tierInfo: fast, model: GEMINI, retryOpts: { noRetries: true }, agent: 'sample' }), /Provider 503/);
+    assert.strictEqual(f.calls.length, 1, 'a 503 on Fast is the ordinary error, no Standard retry');
+  } finally { f.restore(); }
+}));
+
 test('tierFallback: a bare "priority" or "flex" in an unrelated error does not fall back', () => {
   const f = tier.tierFallback;
   assert.strictEqual(f({ tier: 'fast', status: 400, message: "Invalid schema for function 'task': properties.priority must have a type" }), false);
@@ -325,7 +364,8 @@ test('flex gets the 16-minute allowance, only flex; the other timings are untouc
   assert.match(src, /extra\.flex \? httpAgent\.longWaitOption\(FLEX_WAIT_MS\) : httpAgent\.dispatcherOption\(\)/, 'the wait for the first byte, flex only');
   assert.match(src, /flex: tierInfo\.flex/, 'only flex requests ask for it');
   assert.match(src, /const STREAM_STALL_MS = \(\(\) => \{[^}]*120_000/, 'Standard and Fast idle allowance unchanged');
-  assert.match(src, /\(opts\.tierSent && await isTierCapacity429\(response\)\)/, 'a tier capacity 429 skips the rate-limit retries');
+  assert.match(src, /\(opts\.tierSent && await isTierCapacity\(response, opts\.flex\)\)/, 'a tier capacity 429 skips the rate-limit retries');
+  assert.match(src, /!\(opts\.flex && response\.status === 503 && await isTierCapacity\(response, true\)\)/, 'a shed flex 503 skips the server-error retries');
   // parseSSEStream is the only idle watchdog on the gateway tool loop and it honours the response's allowance
   assert.match(src, /Number\.isFinite\(response\.__hubStallMs\) \? response\.__hubStallMs : STREAM_STALL_MS/);
   const ha = read('lib/http-agent.js');
