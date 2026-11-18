@@ -120,8 +120,12 @@ test('one failing createAgent: that role is failed with the error and has no led
   const b = r.skipped.find(e => e.role === 'builder');
   assert.strictEqual(b.reason, 'failed');
   assert.strictEqual(b.error, 'disk is full');
-  assert.strictEqual(r.skipped.find(e => e.role === 'scout').error, 'boom');
-  assert.deepStrictEqual(Object.keys(st.readLedger(LEDGER).roles), ['challenger', 'researcher']);
+  // Review r2: a throw with no agent afterwards is an unknown outcome: its reservation stays (never made again).
+  assert.match(r.skipped.find(e => e.role === 'scout').error, /^boom; the outcome is unknown/);
+  const roles = st.readLedger(LEDGER).roles;
+  assert.deepStrictEqual(Object.keys(roles).sort(), ['challenger', 'researcher', 'scout']);
+  assert.strictEqual(roles.scout.status, 'reserved');
+  assert.ok(!roles.builder, 'a reported failure takes its reservation back');
 });
 
 test('only limits which roles are created', async () => {
@@ -157,7 +161,7 @@ test('a missing template file fails that role without creating a partial agent',
 
 test('markSkipped records skippedAt and keeps the roles', async () => {
   await st.createTeam({ available: AVAILABLE, lead: LEAD, only: ['scout'], deps: DEPS() });
-  st.markSkipped({ ledgerFile: LEDGER, now: () => new Date('2026-01-02T03:04:05Z') });
+  await st.markSkipped({ ledgerFile: LEDGER, now: () => new Date('2026-01-02T03:04:05Z') });
   const l = st.readLedger(LEDGER);
   assert.strictEqual(l.skippedAt, '2026-01-02T03:04:05.000Z');
   assert.ok(l.roles.scout);
@@ -199,7 +203,7 @@ test('r1: an unreadable or malformed ledger creates nothing, and Skip leaves it 
     const r = await st.createTeam({ available: AVAILABLE, lead: 'claude-sdk/default', deps: { ledgerFile: LEDGER, templatesDir: TEMPLATES } });
     assert.strictEqual(r.created.length, 0, text);
     assert.ok(r.skipped.every(e => e.reason === 'failed' && /can't be read/.test(e.error)), text);
-    assert.throws(() => st.markSkipped({ ledgerFile: LEDGER }), /can't be read/, text);
+    await assert.rejects(st.markSkipped({ ledgerFile: LEDGER }), /can't be read/, text);
     assert.strictEqual(fs.readFileSync(LEDGER, 'utf8'), text, text);
   }
 });
@@ -251,4 +255,27 @@ test('r1: a create that made nothing takes its reservation back, so a later run 
 test('r1: a look-alike display (full-width letters) counts as taken, as createAgent judges it', () => {
   const plan = st.planTeam({ agents: [{ name: 'mine', display: 'Ｓcout' }], available: AVAILABLE, lead: 'claude-sdk/default', ledger: { roles: {} } });
   assert.strictEqual(plan.find(e => e.role === 'scout').reason, 'name taken');
+});
+
+// Review r2 (GPT-6 BLOCK): a create that throws with an unknown outcome keeps its reservation.
+test('r2: createAgent throws and the agent list cannot be read: the reservation stays, the role is never made again', async () => {
+  let reads = 0;
+  const deps = { ledgerFile: LEDGER, templatesDir: TEMPLATES,
+    getAgents: async () => { reads++; if (reads > 1) throw new Error('list unreadable'); return []; },
+    createAgent: async () => { throw new Error('crashed midway'); } };
+  const r = await st.createTeam({ available: AVAILABLE, lead: 'claude-sdk/default', only: ['scout'], deps });
+  assert.match(r.skipped.find(e => e.role === 'scout').error, /outcome is unknown/);
+  assert.strictEqual(st.readLedger(LEDGER).roles.scout.status, 'reserved');
+  const r2 = await st.createTeam({ available: AVAILABLE, lead: 'claude-sdk/default', only: ['scout'],
+    deps: { ...deps, getAgents: async () => [], createAgent: async () => { throw new Error('must not be called'); } } });
+  assert.strictEqual(r2.skipped.find(e => e.role === 'scout').reason, 'interrupted');
+});
+test('r2: createAgent throws but the agent is there: it counts as created', async () => {
+  let made = false;
+  const deps = { ledgerFile: LEDGER, templatesDir: TEMPLATES,
+    getAgents: async () => (made ? [{ name: 'scout' }] : []),
+    createAgent: async () => { made = true; throw new Error('reply lost'); } };
+  const r = await st.createTeam({ available: AVAILABLE, lead: 'claude-sdk/default', only: ['scout'], deps });
+  assert.strictEqual(r.created.length, 1);
+  assert.strictEqual(st.readLedger(LEDGER).roles.scout.status, 'created');
 });
