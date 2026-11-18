@@ -153,3 +153,17 @@ test('setAgentModel clears teamModelBy only when the model really changes', asyn
   assert.ok(!('teamModelBy' in scout()), 'a manual change removes it');
   assert.strictEqual(scout().teamRole, 'worker', 'nothing else is touched');
 });
+
+// Review r1 (Sonnet follow-up): the cheap reasons end the check before any model list is asked for (a page load on an
+// install that answered the card never lists the providers' models).
+test('r1: answered, set up, unreadable and unfinished Welcome never ask for the model list', async () => {
+  const noList = { getAvailableModels: async () => { throw new Error('must not be asked'); }, getAgents: async () => { throw new Error('must not be asked'); } };
+  writeLedger({ roles: {}, cardAnsweredAt: '2026-01-01T00:00:00.000Z' });
+  assert.strictEqual((await card.cardState({}, mk(noList))).body.reason, 'answered');
+  writeLedger({ roles: { scout: { name: 'scout', status: 'created' } } });
+  assert.strictEqual((await card.cardState({}, mk(noList))).body.reason, 'set up');
+  writeLedger('{ not json');
+  assert.strictEqual((await card.cardState({}, mk(noList))).body.reason, 'unreadable');
+  writeLedger({ roles: {} });
+  assert.strictEqual((await card.cardState({}, mk({ ...noList, welcomeUnfinished: () => true }))).body.reason, 'welcome');
+});
