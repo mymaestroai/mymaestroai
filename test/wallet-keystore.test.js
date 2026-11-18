@@ -39,6 +39,14 @@ describe('wallet keystore', () => {
     assert.strictEqual(again.isUnlocked(), false); assert.throws(() => again.unlock('wrong wrong wrong'), /Wrong passphrase/);
     again.unlock(PASS); await again.withPrivateKey('bot', (pk, addr) => assert.strictEqual(addr, w.address));
   });
+  it('the tamper helper changes every possible first byte and nothing else', () => {
+    for (let b = 0; b < 256; b++) {
+      const hex = b.toString(16).padStart(2, '0') + 'aa55';
+      const t = flipFirstByte(hex);
+      assert.notStrictEqual(t.slice(0, 2), hex.slice(0, 2), 'byte ' + hex.slice(0, 2));
+      assert.strictEqual(t.length, hex.length); assert.strictEqual(t.slice(2), 'aa55'); assert.match(t, /^[0-9a-f]+$/);
+    }
+  });
   it('a tampered record fails authentication instead of yielding a wrong key', async () => {
     const ks = mk(); ks.init(PASS); ks.createWallet('bot');
     const doc = JSON.parse(fs.readFileSync(ks.file)); const before = doc.wallets[0].enc.ct;
@@ -47,7 +55,12 @@ describe('wallet keystore', () => {
     await assert.rejects(() => ks.withPrivateKey('bot', () => 1));
   });
   it('the tamper changes the data even when the ciphertext already starts with ff (the old "replace with ff" did not, 1 run in 256)', async () => {
-    const ks = mk(); ks.init(PASS);
+    const d = fs.mkdtempSync(path.join(os.tmpdir(), 'ks-'));
+    const ks = new Keystore({   // quick: no backup copy per wallet, a random key without a seed phrase, a stand-in address
+      file: path.join(d, 'data', 'wallet-keystore.json'), kdf: FAST, backupDir: null,
+      generateKey: () => '0x' + require('crypto').randomBytes(32).toString('hex'), addressOf: (pk) => '0x' + pk.slice(2, 42),
+    });
+    ks.init(PASS);
     let name = null;
     for (let i = 0; i < 5000 && !name; i++) {   // a real record whose ciphertext starts with ff: about 256 wallets on average
       const n = 'w' + i; ks.createWallet(n);
