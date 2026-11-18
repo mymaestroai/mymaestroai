@@ -38,7 +38,7 @@
       "benefits": "Repeated work moves to the right agent and model over time instead of the lead redoing it, or a top model spending itself on routine jobs.",
       "costs": "One short lead turn a week; occasionally a proposal to read.",
       "check": "How busy this install is, whether the owner wants suggestions, and which agents do repeated work on expensive models.",
-      "on": "A weekly look and at most one proposal at a time (Settings: Worker proposals, weekly or off).",
+      "on": "A weekly look and at most one proposal at a time (how often: weekly or off, set on this page).",
       "off": "No weekly look and no proposals."
     },
     {
