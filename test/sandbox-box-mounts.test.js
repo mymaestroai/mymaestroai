@@ -14,6 +14,13 @@ const IDLE_TOP = 'PID ARGS\n1 /sbin/docker-init -- sleep infinity\n7 sleep infin
 const BUSY_TOP = 'PID ARGS\n1 /sbin/docker-init -- sleep infinity\n7 sleep infinity\n42 node server.js\n';
 const alpha = { name: 'alpha', model: 'claude-sdk/claude-haiku-5-5', owner: 'owner1' };
 
+// What a Docker stand-in must answer since boxes carry labels (whose box it is): the image's id, and a box's labels.
+const IMG_ID = `sha256:${'cd'.repeat(32)}`;
+const isImageId = (args) => args[0] === 'image' && args[1] === 'inspect' && args[2] === '--format' && args[3] === '{{.Id}}';
+const isLabelsAsk = (args) => args[0] === 'inspect' && args[1] === '--type' && args[2] === 'container' && args[3] === '--format' && args[4] === '{{.Id}} {{json .Config.Labels}}';
+const labelsIn = (args) => { const l = {}; args.forEach((x, i) => { if (args[i - 1] === '--label') { const j = String(x).indexOf('='); l[String(x).slice(0, j)] = String(x).slice(j + 1); } }); return l; };
+const noBox = (name) => Object.assign(new Error(`Command failed: docker inspect ${name}`), { stderr: `Error response from daemon: No such container: ${name}` });
+
 // o.top: string | () => string | Error; o.mountsError: inspect of .Mounts throws
 function rig(o = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bm-'));
@@ -22,9 +29,16 @@ function rig(o = {}) {
   const ws = (a) => path.join(dir, 'workspaces', a.name);
   const calls = [], logs = [];
   const r = { dir, root1, root2, other, calls, logs, top: IDLE_TOP, mountsError: false, state: 'running', binds: [], execGate: null, statusGate: null, execStarted: 0 };
+  let made = null;   // the labels of the last create the stand-in saw (the one box it holds)
   const docker = async (args) => {
     calls.push(args);
     const cmd = args[0];
+    if (isImageId(args)) return { stdout: IMG_ID + '\n', stderr: '' };
+    if (isLabelsAsk(args)) {
+      if (!r.state) throw noBox(args[5]);
+      // a box that was there before the test (r.state is set at the start) was made with today's settings
+      return { stdout: args[5] + ' ' + JSON.stringify(made || (await r.sb.labelsFor(alpha)).labels) + '\n', stderr: '' };
+    }
     if (cmd === 'inspect') {
       const fmt = String(args[2]);
       if (fmt.includes('.Mounts')) { if (r.mountsError) throw new Error('context deadline exceeded'); return { stdout: r.binds.slice().sort().map(b => `${b}\n`).join(''), stderr: '' }; }
@@ -34,14 +48,14 @@ function rig(o = {}) {
       return { stdout: r.state + '\n', stderr: '' };
     }
     if (cmd === 'top') { const t = typeof r.top === 'function' ? r.top() : r.top; if (t instanceof Error) throw t; return { stdout: t, stderr: '' }; }
-    if (cmd === 'create') { r.state = 'created'; r.binds = args.map((x, i) => args[i - 1] === '-v' && String(x).startsWith('/') ? String(x).split(':')[0] : null).filter(Boolean); return { stdout: 'id\n', stderr: '' }; }
+    if (cmd === 'create') { made = labelsIn(args); r.state = 'created'; r.binds = args.map((x, i) => args[i - 1] === '-v' && String(x).startsWith('/') ? String(x).split(':')[0] : null).filter(Boolean); return { stdout: 'id\n', stderr: '' }; }
     if (cmd === 'start') { r.state = 'running'; return { stdout: '', stderr: '' }; }
-    if (cmd === 'rm') { r.state = null; return { stdout: '', stderr: '' }; }
+    if (cmd === 'rm') { r.state = null; made = null; return { stdout: '', stderr: '' }; }
     if (cmd === 'exec' && args.includes('bash')) { r.execStarted++; if (r.execGate) await r.execGate; return { stdout: 'ok\n', stderr: '' }; }
     return { stdout: '', stderr: '' };
   };
   const sb = createSandbox({
-    docker, uid: 1000, gid: 1000, image: 'sandbox-image:test', log: (...a) => logs.push(a.join(' ')), now: () => 1700000000000,
+    docker, dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'bm-data-')), uid: 1000, gid: 1000, image: 'sandbox-image:test', log: (...a) => logs.push(a.join(' ')), now: () => 1700000000000,
     getSetting: () => undefined, isMemberOwned: () => true,   // members get no share/common
     rootsFor: () => [root1, root2], workspaceFor: ws,
     pauseRecord: path.join(dir, 'no-pause.json'),
