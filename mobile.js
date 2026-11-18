@@ -2664,9 +2664,11 @@ function autoGroupHistory(history, from = 0, { stackMin = AUTO_STACK_MIN } = {})
 const VOICE_STORE_KEY = 'hub-voice';
 const VOICE_DETAILS_NOTE = ' I have put the details in the chat.';
 // On a call the note names the kind of what was left out when it is clear (see voiceReplySentences in ui-voice-call.js).
-const VOICE_NOTE_LIST = ' I\'ve put the full list in the chat.';
-const VOICE_NOTE_TABLE = ' I\'ve put the table in the chat.';
-const VOICE_NOTE_CODE = ' I\'ve put the code in the chat.';
+// The call offers to read what it left out (the agent reads it in full when asked); a reply read aloud without a call keeps the plain note above.
+const VOICE_NOTE_DETAILS_CALL = ' The details are in the chat; just say if you\'d like to hear them.';
+const VOICE_NOTE_LIST = ' I\'ve put the full list in the chat; just say if you\'d like to hear it.';
+const VOICE_NOTE_TABLE = ' I\'ve put the table in the chat; just say if you\'d like to hear it.';
+const VOICE_NOTE_CODE = ' I\'ve put the code in the chat; just say if you\'d like me to walk you through it.';
 const VOICE_DETAILS_READ_WORDS = [0, 20, 40, 80];   // 'Read short extra parts aloud': Off / up to 20 / 40 / 80 words (pref detailsReadWords, default 40; 0 = never read the rest)
 const VOICE_HUB_CUES = ['off', 'chime', 'cue'];   // 'When something comes in during a call': Off / Chime / Short cue (pref hubCue, default 'cue')
 const VOICE_BACKGROUND_CUES = ['off', 'show', 'say'];   // 'While I finish something in the background': Off / Show it / Say it (pref backgroundCue, default 'say')
@@ -3607,7 +3609,7 @@ function voiceReplySentences(markdown, done, readWords, full) {
   if (!finished && sentences.length && !(/[.!?]["')\]]*$/.test(t) && /\s$/.test(lead))) sentences.pop();
   const extra = sentences.slice(VOICE_LEAD_MAX_SENTENCES);
   if (extra.length) { sentences = sentences.slice(0, VOICE_LEAD_MAX_SENTENCES); hasNote = true; }
-  if (!done || !limit || !hasNote || leadNote) return { sentences, note: hasNote ? note : '' };
+  if (!done || !limit || !hasNote || leadNote) return { sentences, note: hasNote ? VOICE_NOTE_DETAILS_CALL.trim() : '' };
   // Which extra sentences hold a RAW link / path: the same cleaning and split on the lead with its raw links and paths marked by sentinel
   // words (the words "a link" / "a file path" in ordinary prose are not raw ones).
   let extraRaw = 0;
@@ -3627,7 +3629,7 @@ function voiceReplySentences(markdown, done, readWords, full) {
   const text = String(markdown == null ? '' : markdown).replace(/\r\n?/g, '\n');
   const rest = sp.cut ? text.slice(sp.lead.length) : '';
   const a = voiceRestAnalysis(rest, extra, limit, sp.openTail, extraRaw);
-  if (a.substantial) return { sentences, note: a.kind === 'list' ? VOICE_NOTE_LIST.trim() : a.kind === 'table' ? VOICE_NOTE_TABLE.trim() : a.kind === 'code' ? VOICE_NOTE_CODE.trim() : note };
+  if (a.substantial) return { sentences, note: a.kind === 'list' ? VOICE_NOTE_LIST.trim() : a.kind === 'table' ? VOICE_NOTE_TABLE.trim() : a.kind === 'code' ? VOICE_NOTE_CODE.trim() : VOICE_NOTE_DETAILS_CALL.trim() };
   return { sentences: sentences.concat(a.sentences), note: '' };
 }
 function voiceCreateCall(deps) {

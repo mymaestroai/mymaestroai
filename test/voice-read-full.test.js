@@ -35,7 +35,7 @@ async function started() { const h = harness(); assert.strictEqual(await h.call.
 const LONG = 'Here are the steps. First, open the file. Second, change the name. Third, save it.\n\n'
   + '- Fourth, run the tests.\n- Fifth, read the output.\n- Sixth, fix what failed.\n- Seventh, commit the work.\n'
   + '\nThat is all of it.';
-const NOTE = voiceSpeechText('| a |');   // the generic details note: the long lead holds more than 3 sentences
+const NOTE = globalThis.VOICE_NOTE_DETAILS_CALL.trim();   // the call's generic details note: the long lead holds more than 3 sentences
 
 // ---- voiceReplySentences ----
 
@@ -89,7 +89,7 @@ test('without the 4th argument (or anything but true) the behaviour is unchanged
       assert.deepStrictEqual(voiceReplySentences(md, done, 40, 'yes'), base);
     }
   }
-  assert.deepStrictEqual(voiceReplySentences('One. Two. Three. Four.', true, 0), { sentences: ['One.', 'Two.', 'Three.'], note: voiceSpeechText('| a |') });
+  assert.deepStrictEqual(voiceReplySentences('One. Two. Three. Four.', true, 0), { sentences: ['One.', 'Two.', 'Three.'], note: NOTE });
 });
 
 // ---- the controller ----
