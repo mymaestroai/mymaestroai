@@ -106,7 +106,7 @@ test('the member caps reach a member\'s temporary workers: the worker\'s turn na
   assert.match(grab('async function runSpawnWorkers('), /return consultViaHub\(v\.id, [^,]+, v\.id, sseRes, callerName, \{/);
   // ... and the turn's member origin (never Ultra, Standard speed) is judged on those names
   // member origin (test/member-origin.test.js): origin.member, set by the hub on what a member's turn started, also counts
-  assert.match(SDK, /const memberOrigin = !!\(turnOrigin && turnOrigin\.member === true\) \|\| originFromMemberAgent\(\[turnOrigin && turnOrigin\.from, turnOrigin && turnOrigin\.by, turnOrigin && turnOrigin\.agent, consulted_by,/);
+  assert.match(SDK, /const memberOrigin = !!\(turnOrigin && turnOrigin\.member === true\) \|\| mailboxMember \|\| originFromMemberAgent\(\[turnOrigin && turnOrigin\.from, turnOrigin && turnOrigin\.by, turnOrigin && turnOrigin\.agent, consulted_by,/);
   assert.match(SDK, /const turnTier = \(memberTurn \|\| memberOrigin\) \? 'standard' : await agentTier\(agent\);/);
   const ctx = {}; vm.createContext(ctx);
   vm.runInContext(grab('function originFromMemberAgent(') + '\nthis.f = originFromMemberAgent;', ctx);

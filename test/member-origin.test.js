@@ -155,7 +155,7 @@ test('spawn_workers: an admin\'s agent in a member\'s turn gets the members\' ru
 // ── the chat handler and the paths in lib/sdk-chat ──
 test('sdk-chat: a member\'s turn (typed by a member, or with origin.member, or set off by a member\'s agent) is recorded while it runs', () => {
   assert.match(SDK, /const memberTurnAgents = new Map\(\);\nfunction isMemberTurn\(agentName\) \{ return !!agentName && \(memberTurnAgents\.get\(agentName\) \|\| 0\) > 0; \}/);
-  assert.match(SDK, /const memberOrigin = !!\(turnOrigin && turnOrigin\.member === true\) \|\| originFromMemberAgent\(/);
+  assert.match(SDK, /const memberOrigin = !!\(turnOrigin && turnOrigin\.member === true\) \|\| mailboxMember \|\| originFromMemberAgent\(/);
   assert.match(SDK, /if \(memberTurn \|\| memberOrigin\) \{ memberTurnAgents\.set\(agent, \(memberTurnAgents\.get\(agent\) \|\| 0\) \+ 1\); memberMarked = true; \}/);
   assert.match(SDK, /if \(ownerTurn\) ownerTurnAgents\.delete\(agent\);\n    if \(memberMarked\) \{ const n = \(memberTurnAgents\.get\(agent\) \|\| 1\) - 1; if \(n > 0\) memberTurnAgents\.set\(agent, n\); else memberTurnAgents\.delete\(agent\); \}/);
   // the mark as a counter: two overlapping member turns, one ends, the other is still marked
@@ -193,4 +193,22 @@ test('sdk-chat: the effort and speed caps come from the same memberOrigin (Codex
   assert.match(SDK, /const turnTier = \(memberTurn \|\| memberOrigin\) \? 'standard' : await agentTier\(agent\);/);
   assert.match(SDK, /if \(codexEffort === 'ultra' && \(options\.memberTurn \|\| options\.simpleTurn \|\| options\.memberOrigin\)\) codexEffort = 'max';/);
   assert.match(SDK, /let codexServiceTier = \(options\.memberTurn \|\| options\.memberOrigin\) \? null :/);
+});
+
+test('review r1 (GPT-6): the early hold for a voice call in consultViaHub carries the member origin', () => {
+  const body = grab('async function consultViaHub(');
+  assert.match(body, /holdConsultForCall\(agentName, prompt, coordinatorName, \{ depth: opts\.consultationDepth !== undefined \? opts\.consultationDepth : 1, turnId: parentTurn \? parentTurn\.turnId : null, member: opts\.member !== undefined \? opts\.member === true : isMemberTurn\(coordinatorName\) \}\)/);
+  // every call of holdConsultForCall passes member
+  const calls = SDK.match(/await holdConsultForCall\([^\n]*/g) || [];
+  assert.equal(calls.length, 2);
+  for (const c of calls) assert.match(c, /member: /);
+});
+
+test('review r1 (GPT-6): a member\'s reply read at the start of any turn (not only the delivery turn) makes that turn a member\'s, before caps and tools are decided', () => {
+  assert.match(SDK, /let mailboxMember = false;[^\n]*\n  if \(!ephemeral && !consultation_depth && !tiger_team\) \{\n    const replies = consultQueue\.getConsultQueue\(\)\.takeMailbox\(agent\);\n    mailboxMember = replies\.some\(r => r && r\.member === true\);/);
+  assert.match(SDK, /const memberOrigin = !!\(turnOrigin && turnOrigin\.member === true\) \|\| mailboxMember \|\| originFromMemberAgent\(/);
+  const at = (t) => SDK.indexOf(t);
+  assert.ok(at('mailboxMember = replies.some(') < at('const memberOrigin = '), 'the mailbox is read before the turn is classified');
+  assert.ok(at('const memberOrigin = ') < at('await streamViaCodex(agent, finalMessage'), 'and before the turn runs with its caps and tools');
+  // the reply keeps the flag (lib/consult-queue _deliver), checked in the queue test above
 });

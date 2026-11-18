@@ -415,7 +415,7 @@ test('member cap: Standard for a member turn or a member agent origin, computed 
   const chat = read('lib/sdk-chat.js');
   assert.match(chat, /const memberTurn = !!\(trustedUserId && !trustedAdmin\);/);
   // member origin (test/member-origin.test.js): what a member's turn starts carries member
-  assert.match(chat, /const memberOrigin = !!\(turnOrigin && turnOrigin\.member === true\) \|\| originFromMemberAgent\(\[turnOrigin && turnOrigin\.from, turnOrigin && turnOrigin\.by, turnOrigin && turnOrigin\.agent, consulted_by, turnOrigin && turnOrigin\.kind !== 'user' \? agent : null\], /);
+  assert.match(chat, /const memberOrigin = !!\(turnOrigin && turnOrigin\.member === true\) \|\| mailboxMember \|\| originFromMemberAgent\(\[turnOrigin && turnOrigin\.from, turnOrigin && turnOrigin\.by, turnOrigin && turnOrigin\.agent, consulted_by, turnOrigin && turnOrigin\.kind !== 'user' \? agent : null\], /);
   assert.match(chat, /const turnTier = \(memberTurn \|\| memberOrigin\) \? 'standard' : await agentTier\(agent\);/);
   const iCap = chat.indexOf("const turnTier = (memberTurn || memberOrigin)");
   assert.ok(iCap > 0 && iCap < chat.indexOf('if (codexCli.isCodexCliModel(agentModel)) {\n    // The gateway cannot call a subscription model'), 'computed before the routing branches');
