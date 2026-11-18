@@ -280,6 +280,8 @@ test('tierFallback: a 503 that sheds flex falls back on Economy only; a 503 on F
   assert.strictEqual(f({ tier: 'fast', status: 503, message: 'Provider 503: ' + GEMINI_FLEX_503 }), false, 'Fast: the ordinary retries and error');
   assert.strictEqual(f({ tier: 'standard', status: 503, message: 'Provider 503: ' + GEMINI_FLEX_503 }), false);
   assert.strictEqual(f({ tier: 'economy', status: 503, message: 'Provider 503: upstream connect error' }), false, 'a 503 that does not say unavailable / high demand / overloaded');
+  assert.strictEqual(f({ tier: 'economy', status: 503, message: 'Provider 503: <html><title>503 Service Unavailable</title></html>' }), false, 'a plain outage page keeps the ordinary retries');
+  assert.strictEqual(f({ tier: 'economy', status: 503, message: 'Provider 503: {"error":{"code":503,"status":"UNAVAILABLE","message":"try later"}}' }), true, 'the JSON status alone');
   assert.strictEqual(f({ tier: 'economy', status: 503, message: GEMINI_FLEX_503, sawOutput: true }), false);
 });
 
