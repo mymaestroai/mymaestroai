@@ -263,6 +263,11 @@ test('sendTiered: a model that refused a tier outright is asked on Standard dire
   assert.strictEqual(gw.tierRefused.size, 0);
   f = fakeFetch([{ status: 200 }]);
   try { assert.strictEqual((await sendFlex()).fallback, null); assert.strictEqual(f.calls[0].service_tier, 'flex'); } finally { f.restore(); }
+  // the Standard retry failed too: the tier was not the problem, nothing is remembered
+  gw.tierRefused.clear();
+  f = fakeFetch([{ status: 400, text: 'service_tier is not supported with this input' }, { status: 400, text: 'service_tier is not supported with this input' }]);
+  try { await assert.rejects(send(), /Provider 400/); } finally { f.restore(); }
+  assert.strictEqual(gw.tierRefused.size, 0);
 }));
 
 test('tierFallback: a bare "priority" or "flex" in an unrelated error does not fall back', () => {
@@ -270,6 +275,19 @@ test('tierFallback: a bare "priority" or "flex" in an unrelated error does not f
   assert.strictEqual(f({ tier: 'fast', status: 400, message: "Invalid schema for function 'task': properties.priority must have a type" }), false);
   assert.strictEqual(f({ tier: 'economy', status: 404, message: 'The model flexcoder-2 does not exist' }), false);
   assert.strictEqual(f({ tier: 'fast', status: 400, message: 'Unsupported parameter: service_tier' }), true);
+  // schema and model errors that only mention the words, positively or with another negative
+  assert.strictEqual(f({ tier: 'fast', status: 400, message: "Invalid schema for function 'task': 'priority' is not valid under any of the given schemas" }), false);
+  assert.strictEqual(f({ tier: 'fast', status: 404, message: 'The model gpt-5-priority does not exist' }), false);
+  assert.strictEqual(f({ tier: 'fast', status: 400, message: 'property priority is allowed only for object schemas' }), false);
+  assert.strictEqual(f({ tier: 'economy', status: 400, message: 'flex: extra fields permitted only in strict mode' }), false);
+  assert.strictEqual(f({ tier: 'fast', status: 400, message: 'tier must be a string, not a number' }), false);
+  // real refusals in other words
+  assert.strictEqual(f({ tier: 'economy', status: 400, message: 'Flex processing is unavailable for this model' }), true);
+  assert.strictEqual(f({ tier: 'fast', status: 403, message: 'This project does not support priority' }), true);
+  const c = tier.codexTierFallback;
+  assert.strictEqual(c({ sent: 'fast', message: 'property priority is allowed only for object schemas' }), false);
+  assert.strictEqual(c({ sent: 'fast', message: 'Upgrade to Pro for fast mode and more usage' }), false, 'an upsell line that names fast mode');
+  assert.strictEqual(c({ sent: 'fast', message: 'service_tier "fast" is not supported for this model' }), true);
 });
 
 test('codexTierFallback: Codex Fast refused before output falls back once; other errors and no Fast do not', () => {
