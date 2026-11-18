@@ -187,5 +187,5 @@ test('a hub turn set off by a member\'s agent (consult, queued task, schedule, r
 test('the Codex turn caps Ultra for member-agent origins too (consults, queued tasks, schedules, reports)', () => {
   const chat = read('lib/sdk-chat.js');
   assert.match(chat, /if \(codexEffort === 'ultra' && \(options\.memberTurn \|\| options\.simpleTurn \|\| options\.memberOrigin\)\) codexEffort = 'max';/);
-  assert.match(chat, /memberOrigin: originFromMemberAgent\(\[turnOrigin && turnOrigin\.from, turnOrigin && turnOrigin\.by, turnOrigin && turnOrigin\.agent, consulted_by\], /);
+  assert.match(chat, /memberOrigin: originFromMemberAgent\(\[turnOrigin && turnOrigin\.from, turnOrigin && turnOrigin\.by, turnOrigin && turnOrigin\.agent, consulted_by, turnOrigin && turnOrigin\.kind !== 'user' \? agent : null\], /, 'a hub-started turn counts the agent it runs (job notices)');
 });
