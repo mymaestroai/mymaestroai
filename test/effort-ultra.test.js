@@ -90,14 +90,14 @@ test('members never send Ultra: the server passes admin, the turn marks memberTu
   const chat = read('lib/sdk-chat.js');
   assert.match(chat, /const trustedAdmin = !!\(ctx && typeof ctx === 'object' && ctx\.admin === true\);/);
   assert.match(chat, /memberTurn: !!\(trustedUserId && !trustedAdmin\),/);
-  assert.match(chat, /if \(codexEffort === 'ultra' && options\.memberTurn\) codexEffort = 'max';/);
+  assert.match(chat, /if \(codexEffort === 'ultra' && \(options\.memberTurn \|\| options\.simpleTurn\)\) codexEffort = 'max';/);
   assert.match(chat, /let codexEffort = options/);
 });
 
 test('fallback decision: only Ultra, before any output, once, on a refusal-looking error', () => {
   const { codexUltraFallback: f } = require('../lib/sdk-chat.js');
   const base = { effort: 'ultra', sawOutput: false, already: false };
-  for (const error of ['unsupported value: ultra', 'Invalid value for reasoning_effort', 'model does not support this reasoning effort', 'Ultra is not available for your plan', 'not allowed', 'unsupported', 'invalid value']) {
+  for (const error of ['unsupported value: ultra', 'Invalid value for reasoning_effort', 'model does not support this reasoning effort', 'Ultra is not available for your plan']) {
     assert.strictEqual(f({ ...base, error }), true, error);
   }
   assert.strictEqual(f({ ...base, error: 'connection reset by peer' }), false, 'an unrelated failure is not an Ultra refusal');
@@ -140,4 +140,31 @@ test('pickers: the Ultra option only with effortUltra; the agents list carries i
   const simple = require('../lib/ui-simple.js');
   assert.strictEqual(simple.labelForAgentEffort('ultra'), 'Deepest');
   assert.ok(!simple.EFFORTS.some((x) => x.level === 'ultra'), 'Simple offers no Ultra');
+});
+
+test('review r1: Simple turns never run Ultra (both pages mark every Simple turn; the server maps ultra to max for them)', () => {
+  const app = read('app.js'); const mob = read('mobile.js'); const chat = read('lib/sdk-chat.js');
+  assert.match(app, /if \(show === false \|\| !hs\) return \{ simple: true \};/);
+  assert.match(app, /return lv \? \{ simple: true, effort: lv \} : \{ simple: true \};/);
+  assert.match(mob, /if \(!simpleEffortOk\(a\)\) return \{ simple: true \};/);
+  assert.match(mob, /return level \? \{ simple: true, effort: level \} : \{ simple: true \};/);
+  assert.match(chat, /simpleTurn: body\.simple === true,/);
+  assert.match(chat, /if \(codexEffort === 'ultra' && \(options\.memberTurn \|\| options\.simpleTurn\)\) codexEffort = 'max';/);
+});
+
+test('review r1: both chat routes pass the admin flag', () => {
+  const server = read('server.js');
+  assert.match(server, /return handleChatStream\(body, res, \{ [^}]*admin: access\.isAdmin\(req\.hubUser\) \}\);/);
+  assert.match(server, /return handleChat\(body, res, \{ [^}]*admin: access\.isAdmin\(req\.hubUser\) \}\);/);
+});
+
+test('review r1: only an error about Ultra or the effort level falls back (not usage limits or sandbox refusals)', () => {
+  const { codexUltraFallback } = require('../lib/sdk-chat.js');
+  const f = (error) => codexUltraFallback({ effort: 'ultra', sawOutput: false, error, already: false });
+  assert.strictEqual(f('unsupported reasoning effort: ultra'), true);
+  assert.strictEqual(f('model_reasoning_effort "ultra" is not available for this account'), true);
+  assert.strictEqual(f('Invalid value for reasoning_effort'), true);
+  assert.strictEqual(f('You have hit your usage limit. Try again later.'), false);
+  assert.strictEqual(f('sandbox: operation not allowed'), false);
+  assert.strictEqual(f('feature unsupported on this platform'), false);
 });
