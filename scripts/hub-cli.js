@@ -490,6 +490,7 @@ const commands = {
       out('  The team ledger (data/team.json) could not be read, so nothing is created while it is unreadable. Fix or restore that file first.');
       return;
     }
+    let missing = 0;
     for (const r of st.ROLES) {
       const had = ledger.roles[r.role];
       const find = (name) => agents.find(a => a && a.name === name);
@@ -501,9 +502,11 @@ const commands = {
         else line = 'set up earlier, since removed or renamed';
       } else if (find(r.name) || agents.some(a => a && String(a.display || '').toLowerCase() === r.display.toLowerCase())) line = 'name taken by your own agent';
       else line = 'not set up';
+      if (line === 'not set up') missing++;
       out(`  ${r.display}: ${line}`);
     }
     if (ledger.skippedAt) out(`  (You chose to skip the team on ${ledger.skippedAt}.)`);
+    if (!missing) return;   // nothing the hub could still set up
     out('');
     out(unfinished ? `To create the missing ones, open ${URL_BASE}/welcome on this computer.` : 'To add them, ask your lead agent or use the Team card in the app.');
   },

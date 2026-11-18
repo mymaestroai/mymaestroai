@@ -208,7 +208,8 @@ test('mymaestro team prints the four roles from the data folder and writes nothi
   assert.match(r.stdout, /Scout: set up earlier, since removed or renamed/);
   assert.match(r.stdout, /Builder: name taken by your own agent/);
   assert.match(r.stdout, /Researcher: stopped halfway \(interrupted\)/);
-  assert.match(r.stdout, /To create the missing ones, open http:\/\/localhost:18999\/welcome on this computer\./);
+  // None of the four can still be set up by the hub (created, removed, taken, interrupted): no hint line (proof review).
+  assert.doesNotMatch(r.stdout, /To create the missing ones|To add them/);
   assert.deepStrictEqual(snapshot(data), before, 'nothing in data/ was written, created or removed');
   // a finished setup, no ledger: "not set up" for all and the other closing line
   fs.unlinkSync(LEDGER); seed([maestro]);
