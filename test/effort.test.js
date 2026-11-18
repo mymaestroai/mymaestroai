@@ -21,7 +21,7 @@ test('levels map to what each provider accepts (checked against the live APIs)',
   assert.strictEqual(effort.forModel('claude-sdk/claude-fable-5-1', 'max'), 'max');
   assert.strictEqual(effort.forModel('anthropic/claude-sonnet-5-5', 'xhigh'), 'xhigh');
   assert.strictEqual(effort.forModel('openai/gpt-5.5', 'max'), 'xhigh', 'OpenAI tops out at xhigh');
-  assert.strictEqual(effort.forModel('codex-cli/gpt-6-astra', 'max'), 'xhigh');
+  assert.strictEqual(effort.forModel('codex-cli/gpt-6-astra', 'max'), 'max', 'GPT-6 takes max');
   assert.strictEqual(effort.forModel('google/gemini-flash-latest', 'xhigh'), 'high', 'Gemini tops out at high');
   assert.strictEqual(effort.forModel('openai/gpt-4.1', 'high'), null, 'non-reasoning OpenAI models reject the field');
   assert.strictEqual(effort.forModel('ninfer/qwen3.8-27b', 'high'), null, 'local servers get nothing');

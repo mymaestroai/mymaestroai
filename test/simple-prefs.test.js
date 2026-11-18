@@ -79,7 +79,8 @@ test('effort: a per-turn level replaces the agent\'s, capped by the model, ignor
   assert.strictEqual(e.forTurn('claude-sdk/claude-opus-5-5', 'xhigh', 'medium'), 'medium', 'not one of the four: ignored');
   assert.strictEqual(e.forTurn('claude-sdk/claude-opus-5-5', 'turbo', 'medium'), 'medium');
   assert.strictEqual(e.forTurn('claude-sdk/claude-opus-5-5', { a: 1 }, 'medium'), 'medium');
-  assert.strictEqual(e.forTurn('codex-cli/gpt-6-astra', 'max', 'low'), 'xhigh', 'never above what the model takes');
+  assert.strictEqual(e.forTurn('openai/gpt-5.5', 'max', 'low'), 'xhigh', 'never above what the model takes');
+  assert.strictEqual(e.forTurn('codex-cli/gpt-6-astra', 'max', 'low'), 'max', 'Deepest reaches max where the model has it');
   assert.strictEqual(e.forTurn('google/gemini-flash-latest', 'max', 'low'), 'high');
   assert.strictEqual(e.forTurn('ninfer/qwen3.8-27b', 'max', 'low'), null, 'a model with no levels: nothing, the request is ignored');
   assert.strictEqual(e.forTurn('openai/gpt-4.1', 'high', 'default'), null);
