@@ -10,6 +10,20 @@ const { JobRunner, policyText, TOOL_SPECS, jsonSchema, zodShape, runTool, tailFi
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 async function until(fn, ms = 8000, step = 50) { const t = Date.now(); while (Date.now() - t < ms) { if (await fn()) return true; await sleep(step); } return false; }
+// Remove a test's data folder only once every job it started has exited. A timeout or a cancel marks the job at once,
+// while its wrapper's TERM trap is still writing the exit code into the job's folder: removing it then can fail
+// (ENOTEMPTY) on a busy computer. Each wrapper leads its own process group (setsid) and writes its pid to <job>/pid.
+async function removeWhenJobsGone(dataDir, ...runners) {
+  for (const x of runners) x.stop();
+  const jobs = path.join(dataDir, 'jobs');
+  const pids = [];
+  for (const id of (fs.existsSync(jobs) ? fs.readdirSync(jobs) : [])) {
+    try { const pid = parseInt(fs.readFileSync(path.join(jobs, id, 'pid'), 'utf8'), 10); if (pid > 1) pids.push(pid); } catch { /* no pid file: never started here */ }
+  }
+  const groupAlive = (pid) => { try { process.kill(-pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
+  assert.ok(await until(() => !pids.some(groupAlive), 15000), 'every job of the test has exited');
+  fs.rmSync(dataDir, { recursive: true, force: true });
+}
 
 function rig(extra = {}) {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-jobs-'));
@@ -32,7 +46,7 @@ function rig(extra = {}) {
 describe('run_job: a job outlives the caller and the owner is woken with the result', () => {
   let r;
   before(() => { r = rig(); r.runner.start(); });
-  after(() => { r.runner.stop(); fs.rmSync(r.dataDir, { recursive: true, force: true }); });
+  after(() => removeWhenJobsGone(r.dataDir, r.runner));
 
   it('runs to completion, records exit 0, and delivers a notice with the output tail', async () => {
     const j = await r.runner.run({ owner: 'trader', name: 'hello', command: 'echo one; echo two; echo three' });
@@ -139,7 +153,7 @@ describe('run_job: a job outlives the caller and the owner is woken with the res
       offset = 61000;
       assert.ok(await until(() => t.runner.status(j.id, 'trader').status === 'timed_out', 5000));
       assert.match(t.state.notes[0].message, /TIMED OUT.*\n.*1-minute limit/);
-    } finally { t.runner.stop(); fs.rmSync(t.dataDir, { recursive: true, force: true }); }
+    } finally { await removeWhenJobsGone(t.dataDir, t.runner); }
   });
 
   it('validates input so bad calls fail loudly before anything runs', async () => {
@@ -175,7 +189,7 @@ describe('run_job: hub restarts', () => {
       assert.ok(await until(() => b.state.notes.length === 1));
       assert.match(b.state.notes[0].message, /"survivor".*finished \(exit 0\)/); assert.match(b.state.notes[0].message, /survived/);
       assert.equal(b.runner.status(j.id, 'trader').status, 'finished');
-    } finally { b.runner.stop(); fs.rmSync(a.dataDir, { recursive: true, force: true }); }
+    } finally { await removeWhenJobsGone(a.dataDir, a.runner, b.runner); }
   });
 
   it('a job whose process vanished without an exit code is reported as LOST, never forgotten', async () => {
@@ -189,7 +203,7 @@ describe('run_job: hub restarts', () => {
     try {
       assert.ok(await until(() => b.state.notes.length === 1));
       assert.match(b.state.notes[0].message, /"victim".*was LOST/); assert.match(b.state.notes[0].message, /disappeared without an exit code/);
-    } finally { b.runner.stop(); fs.rmSync(a.dataDir, { recursive: true, force: true }); }
+    } finally { await removeWhenJobsGone(a.dataDir, a.runner, b.runner); }
   });
 
   it('an undelivered notice survives a restart', async () => {
@@ -200,7 +214,7 @@ describe('run_job: hub restarts', () => {
     assert.equal(a.state.notes.length, 0);
     const b = rig({ dataDir: a.dataDir }); b.runner.start();
     try { assert.ok(await until(() => b.state.notes.length === 1)); assert.match(b.state.notes[0].message, /"held"/); }
-    finally { b.runner.stop(); fs.rmSync(a.dataDir, { recursive: true, force: true }); }
+    finally { await removeWhenJobsGone(a.dataDir, a.runner, b.runner); }
   });
 
   it('a wake-up turn cut by a restart still reaches the master with a notice', async () => {
@@ -216,7 +230,7 @@ describe('run_job: hub restarts', () => {
       assert.ok(b.runner.status(j.id, 'trader').reportedAt);
       const c = rig({ dataDir: a.dataDir }); c.runner.start(); await sleep(300); c.runner.stop();
       assert.equal(c.state.notes.length, 0, 'not repeated on the next restart');
-    } finally { b.runner.stop(); fs.rmSync(a.dataDir, { recursive: true, force: true }); }
+    } finally { await removeWhenJobsGone(a.dataDir, a.runner, b.runner); }
   });
 
   it('prune drops old finished jobs and their directories', async () => {
@@ -229,7 +243,7 @@ describe('run_job: hub restarts', () => {
       offset = 15 * 86400000;
       assert.equal(a.runner.prune(14), 1);
       assert.ok(!fs.existsSync(path.join(a.dataDir, 'jobs', j.id)));
-    } finally { a.runner.stop(); fs.rmSync(a.dataDir, { recursive: true, force: true }); }
+    } finally { await removeWhenJobsGone(a.dataDir, a.runner); }
   });
 });
 
@@ -259,7 +273,7 @@ describe('run_job: tool surface and prompt', () => {
       assert.equal(st.outputTail, 'hi');
       assert.match(await runTool(a.runner, TOOL_SPECS[1], 'maestro', { id: out.id }), /^\[job_status error\] no job with id/);
       assert.equal(JSON.parse(await runTool(a.runner, TOOL_SPECS[3], 'trader', {})).length, 2, 'own job plus the one reporting to it');
-    } finally { a.runner.stop(); fs.rmSync(a.dataDir, { recursive: true, force: true }); }
+    } finally { await removeWhenJobsGone(a.dataDir, a.runner); }
   });
 
   it('the prompt text tells every agent that its shell dies with the turn', () => {
@@ -321,7 +335,7 @@ describe('run_job for a sandboxed owner runs inside the container (review F05)',
     r = rig({ boxFor: async (owner) => owner === 'trader' ? { ...box, mounts: [r.dataDir] } : null });
     r.runner.start();
   });
-  after(() => { r.runner.stop(); fs.rmSync(r.dataDir, { recursive: true, force: true }); fs.rmSync(fakeBin, { recursive: true, force: true }); });
+  after(async () => { await removeWhenJobsGone(r.dataDir, r.runner); fs.rmSync(fakeBin, { recursive: true, force: true }); });
 
   it('runs the script inside the box, records the box on the job, and finishes with the output', async () => {
     const j = await withFakeDocker(() => r.runner.run({ owner: 'trader', name: 'boxed', command: 'echo inside; pwd' }));
