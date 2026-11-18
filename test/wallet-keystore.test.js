@@ -6,6 +6,8 @@ const { Keystore } = require('../lib/wallet/keystore');
 const FAST = { N: 1 << 10, r: 8, p: 1 };                       // cheap KDF so tests are quick
 const mk = () => { const d = fs.mkdtempSync(path.join(os.tmpdir(), 'ks-')); return new Keystore({ file: path.join(d, 'data', 'wallet-keystore.json'), kdf: FAST, backupDir: path.join(d, 'backups') }); };
 const PASS = 'correct horse battery';
+// Tampers a hex ciphertext by flipping the lowest bit of its first byte: always a change, whatever the byte was.
+const flipFirstByte = (hex) => (parseInt(hex.slice(0, 2), 16) ^ 0x01).toString(16).padStart(2, '0') + hex.slice(2);
 
 describe('wallet keystore', () => {
   it('refuses weak passphrases and double init', () => {
@@ -39,8 +41,26 @@ describe('wallet keystore', () => {
   });
   it('a tampered record fails authentication instead of yielding a wrong key', async () => {
     const ks = mk(); ks.init(PASS); ks.createWallet('bot');
-    const doc = JSON.parse(fs.readFileSync(ks.file)); doc.wallets[0].enc.ct = doc.wallets[0].enc.ct.replace(/^../, 'ff'); fs.writeFileSync(ks.file, JSON.stringify(doc));
+    const doc = JSON.parse(fs.readFileSync(ks.file)); const before = doc.wallets[0].enc.ct;
+    doc.wallets[0].enc.ct = flipFirstByte(before); fs.writeFileSync(ks.file, JSON.stringify(doc));
+    assert.notStrictEqual(doc.wallets[0].enc.ct, before, 'the tamper really changed the ciphertext');
     await assert.rejects(() => ks.withPrivateKey('bot', () => 1));
+  });
+  it('the tamper changes the data even when the ciphertext already starts with ff (the old "replace with ff" did not, 1 run in 256)', async () => {
+    const ks = mk(); ks.init(PASS);
+    let name = null;
+    for (let i = 0; i < 5000 && !name; i++) {   // a real record whose ciphertext starts with ff: about 256 wallets on average
+      const n = 'w' + i; ks.createWallet(n);
+      const rec = JSON.parse(fs.readFileSync(ks.file)).wallets.find(w => w.name === n);
+      if (rec.enc.ct.startsWith('ff')) name = n;
+    }
+    assert.ok(name, 'found a record whose ciphertext starts with ff');
+    const doc = JSON.parse(fs.readFileSync(ks.file)); const rec = doc.wallets.find(w => w.name === name); const ct = rec.enc.ct;
+    assert.strictEqual(ct.replace(/^../, 'ff'), ct, 'the old tamper leaves this record unchanged');
+    await ks.withPrivateKey(name, (pk) => assert.match(pk, /^0x[0-9a-f]{64}$/));   // so the old test's expected rejection never came
+    rec.enc.ct = flipFirstByte(ct); fs.writeFileSync(ks.file, JSON.stringify(doc));
+    assert.ok(rec.enc.ct.startsWith('fe') && rec.enc.ct.slice(2) === ct.slice(2), 'the new tamper flips one bit of the first byte only');
+    await assert.rejects(() => ks.withPrivateKey(name, () => 1));
   });
   it('a generated wallet comes from a fresh 12-word seed phrase that reveal() returns with the key', () => {
     const ks = mk(); ks.init(PASS); const w = ks.createWallet('gen');
