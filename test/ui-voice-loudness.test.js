@@ -73,7 +73,7 @@ test('voiceCreateLoudness builds gain -> compressor -> trim -> ceiling -> analys
   const ctx = fakeCtx({ shaper: true });
   const c = V.voiceCreateLoudness(ctx);
   assert.ok(c && c.input);
-  assert.deepStrictEqual(names(ctx), ['gain>comp', 'comp>gain', 'gain>shaper', 'shaper>analyser', 'analyser>dest']);
+  assert.deepStrictEqual(names(ctx), ['gain>comp', 'comp>gain', 'gain>shaper', 'shaper>analyser', 'analyser>dest', 'gain>gain']);   // the last: the thinking sound's input into the chain input
   const gains = ctx.nodes.filter((n) => n.kind === 'gain');
   const comp = ctx.nodes.find((n) => n.kind === 'comp'), an = ctx.nodes.find((n) => n.kind === 'analyser'), sh = ctx.nodes.find((n) => n.kind === 'shaper');
   assert.strictEqual(c.input, gains[0]);
@@ -87,7 +87,7 @@ test('voiceCreateLoudness builds gain -> compressor -> trim -> ceiling -> analys
 test('voiceCreateLoudness without WaveShaper still limits: gain -> compressor -> trim -> analyser', () => {
   const ctx = fakeCtx();
   assert.ok(V.voiceCreateLoudness(ctx));
-  assert.deepStrictEqual(names(ctx), ['gain>comp', 'comp>gain', 'gain>analyser', 'analyser>dest']);
+  assert.deepStrictEqual(names(ctx), ['gain>comp', 'comp>gain', 'gain>analyser', 'analyser>dest', 'gain>gain']);
 });
 test('voiceCeilingCurve: straight below 0.7, never at or past -1 dBFS, odd, monotonic', () => {
   const c = V.voiceCeilingCurve(4097), n = c.length;
@@ -113,7 +113,7 @@ test('voiceCreateLoudness: the gain value of each level, default louder, setLeve
 });
 test('voiceCreateLoudness: one chain per context (cached), a second context gets its own', () => {
   const ctx = fakeCtx(); const a = V.voiceCreateLoudness(ctx), b = V.voiceCreateLoudness(ctx);
-  assert.strictEqual(a, b); assert.strictEqual(ctx.nodes.filter((n) => n.kind === 'gain').length, 2);   // changed: input gain + makeup trim, made once
+  assert.strictEqual(a, b); assert.strictEqual(ctx.nodes.filter((n) => n.kind === 'gain').length, 3);   // input gain + makeup trim + the thinking sound's input, made once
   assert.strictEqual(ctx.__voiceLoudness, a);
   const other = fakeCtx(); assert.notStrictEqual(V.voiceCreateLoudness(other), a);
 });
@@ -127,7 +127,7 @@ test('voiceCreateLoudness: null without the nodes, never throws', () => {
   const noAn = V.voiceCreateLoudness(fakeCtx({ noAnalyser: true })); assert.ok(noAn); assert.strictEqual(noAn.meter(), null);   // no analyser: still a chain, no meter
   const badAn = fakeCtx(); badAn.createAnalyser = () => { throw new Error('x'); };
   const c = V.voiceCreateLoudness(badAn); assert.ok(c); assert.strictEqual(c.meter(), null);
-  assert.deepStrictEqual(names(badAn), ['gain>comp', 'comp>gain', 'gain>dest']);   // changed: the trim sits after the compressor
+  assert.deepStrictEqual(names(badAn), ['gain>comp', 'comp>gain', 'gain>dest', 'gain>gain']);   // changed: the trim sits after the compressor
 });
 test('voiceCreateLoudness.meter reads rms and peak in dBFS from the analyser, -120 when silent', () => {
   const ctx = fakeCtx(); const c = V.voiceCreateLoudness(ctx);
@@ -583,4 +583,33 @@ test('phone: voiceTtsBlob tags the blob with X-Voice-Normalized and leaves the l
   }
   assert.ok(!blobSrc.includes('voiceNoteNormalized'), 'the fetch never touches the chain');
   assert.ok(mob.includes('normalized: c ? !!c.normalized : voiceNormFlag'), '__voiceOut reports normalized');
+});
+
+// ── the thinking sound's input ──
+test('the thinking sound enters the chain through thinkInput, held at the level a normalised voice gets: trimmed before the first reply, never boosted', () => {
+  const ctx = fakeCtx(), c = V.voiceCreateLoudness(ctx);
+  const db = (g) => Math.round(20 * Math.log10(g) * 100) / 100;
+  assert.ok(c.thinkInput && c.thinkInput !== c.input, 'its own input');
+  assert.ok(ctx.conns.some(([a, b]) => a === c.thinkInput && b === c.input), 'thinkInput -> the chain input');
+  // a new chain: louder, the voice not known as normalised yet (a call's first turn): +9 dB for the voice, the thinking sound at +4
+  assert.strictEqual(c.gainDb, 9);
+  assert.strictEqual(db(c.thinkInput.gain.value), -5, 'louder, first turn: -5 dB in front of +9');
+  c.setNormalized(true);
+  assert.strictEqual(c.gainDb, 4); assert.strictEqual(db(c.thinkInput.gain.value), 0, 'louder, normalised: no trim');
+  c.setLevel('loudest'); assert.strictEqual(db(c.thinkInput.gain.value), 0);
+  c.setNormalized(false); assert.strictEqual(db(c.thinkInput.gain.value), -6, 'loudest, first turn: 8 - 14');
+  c.setLevel('normal'); assert.strictEqual(db(c.thinkInput.gain.value), 0, 'normal (iPhone, Bluetooth): nothing to trim');
+  // what the thinking sound gets in total: always the normalised boost of the level
+  for (const lv of ['normal', 'louder', 'loudest']) for (const n of [false, true]) {
+    c.setLevel(lv); c.setNormalized(n);
+    assert.strictEqual(Math.round((c.gainDb + db(c.thinkInput.gain.value)) * 100) / 100, V.voiceLoudnessDb(lv, true), `${lv} normalised=${n}`);
+  }
+});
+
+test('the pages hand the thinking sound the chain\'s thinkInput (voiceThinkNode), the voice keeps the chain input (voiceOutNode)', () => {
+  for (const f of ['mobile.js', 'app.js']) {
+    const src = fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
+    assert.match(src, /function voiceThinkNode\(ctx\) \{ const c = voiceLoudChain\(ctx\); return c \? \(c\.thinkInput \|\| c\.input\) : ctx\.destination; \}/, f);
+    assert.match(src, /function voiceOutNode\(ctx\) \{ const c = voiceLoudChain\(ctx\); return c \? c\.input : ctx\.destination; \}/, f);
+  }
 });
