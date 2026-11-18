@@ -139,7 +139,7 @@ install_node() {
   [ "$got" = "$expected" ] || die "The Node.js download did not match its published checksum (got $got). Nothing was installed."
   mkdir -p "$STATE_DIR" && chmod 700 "$STATE_DIR"
   tar -xzf "$tmp/node.tar.gz" -C "$tmp" || die "Could not unpack Node.js."
-  keep_codex
+  keep_codex || die "Codex (the ChatGPT client) could not be moved out of the Node.js folder (is the disk full?), so Node.js was not updated and nothing was removed. Free some space and run the installer again."
   rm -rf "$NODE_DIR.new" && mv "$tmp/$name" "$NODE_DIR.new" && rm -rf "$NODE_DIR" && mv "$NODE_DIR.new" "$NODE_DIR"
   rm -rf "$tmp"
   info "Node.js $("$NODE" --version) installed in $NODE_DIR (checksum verified)."
@@ -147,16 +147,21 @@ install_node() {
 
 # Codex (the ChatGPT client) installed with this Node's own npm (npm i -g) lives inside the folder about to be replaced.
 # Move it, with its platform packages, to ~/.npm-global (where mymaestro connect chatgpt installs it and the hub looks)
-# and link its program there, so it survives the update. ~/.codex (its sign-in) is never touched.
+# and link its program there, so it survives the update. ~/.codex (its sign-in) is never touched. Each package goes to a
+# temporary name first (a move across file systems copies): a failure removes only that half-made copy and returns 1,
+# and install_node then stops before the old folder is removed. A name already in ~/.npm-global is kept as it is.
 keep_codex() {
-  local old="$NODE_DIR/lib/node_modules/@openai" pre="$HOME/.npm-global" p name rel
+  local old="$NODE_DIR/lib/node_modules/@openai" pre="$HOME/.npm-global" p name rel dest part
   [ -d "$old/codex" ] || return 0
-  mkdir -p "$pre/lib/node_modules/@openai" "$pre/bin" || { warn "Could not make $pre; Codex may need: mymaestro connect chatgpt"; return 0; }
+  mkdir -p "$pre/lib/node_modules/@openai" "$pre/bin" || return 1
   for p in "$old"/codex "$old"/codex-*; do
     [ -d "$p" ] || continue
     name="$(basename "$p")"
-    [ -e "$pre/lib/node_modules/@openai/$name" ] && continue
-    mv "$p" "$pre/lib/node_modules/@openai/$name" || warn "Could not move $name out of the Node.js folder."
+    dest="$pre/lib/node_modules/@openai/$name"
+    if [ -e "$dest" ] || [ -L "$dest" ]; then continue; fi
+    part="$pre/lib/node_modules/@openai/.mm-moving-$name.$$"
+    if ! mv "$p" "$part"; then rm -rf "$part"; return 1; fi
+    mv "$part" "$dest" || return 1
   done
   if [ ! -e "$pre/bin/codex" ] && [ ! -L "$pre/bin/codex" ]; then
     rel="$("$NODE" -e 'const b=require(process.argv[1]).bin;process.stdout.write(String(typeof b==="string"?b:(b&&b.codex)||""))' "$pre/lib/node_modules/@openai/codex/package.json" 2>/dev/null || true)"
@@ -171,7 +176,8 @@ keep_codex() {
 check_codex() {
   [ "$DRY" = 1 ] && return 0
   grep -q "codex-check" "$DIR/scripts/hub-cli.js" 2>/dev/null || return 0
-  "$NODE" "$DIR/scripts/hub-cli.js" codex-check --repair --quiet || warn "Codex (the ChatGPT client) is not ready. In a terminal: mymaestro connect chatgpt"
+  # it says itself what is missing and the one command that fixes it; the install goes on either way
+  "$NODE" "$DIR/scripts/hub-cli.js" codex-check --repair --quiet || true
 }
 
 find_repo_access() {

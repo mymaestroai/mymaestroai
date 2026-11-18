@@ -30,33 +30,45 @@ function placeCodex(home) {
   return f;
 }
 
-test('the prefix is ~/.npm-global; Codex is needed for a codex-cli agent, a codex link (even broken) or a ChatGPT sign-in folder', () => {
+test('the prefix is ~/.npm-global; Codex is used for a codex-cli agent, a codex link into the installer\'s Node.js, or a ChatGPT sign-in folder (reported only)', () => {
   const w = world();
   try {
     assert.strictEqual(setup.codexPrefix(w.env), path.join(w.home, '.npm-global'));
-    assert.strictEqual(setup.codexNeeded({ env: w.env, dataDir: w.data, binDirs: [w.bin] }), false);
+    const use = (extra = {}) => setup.codexUse({ env: w.env, dataDir: w.data, binDirs: [w.bin], ...extra });
+    assert.deepStrictEqual([use().needed, use().autoInstall], [false, false]);
     fs.writeFileSync(path.join(w.data, 'agents.json'), JSON.stringify([{ name: 'a', model: 'codex-cli/gpt-x' }]));
-    assert.strictEqual(setup.codexNeeded({ env: w.env, dataDir: w.data }), true, 'an agent on ChatGPT');
+    assert.deepStrictEqual([use().needed, use().autoInstall, use().agent], [true, true, true], 'an agent on ChatGPT');
     fs.writeFileSync(path.join(w.data, 'agents.json'), JSON.stringify([{ name: 'a', model: 'claude-sdk/x' }]));
-    assert.strictEqual(setup.codexNeeded({ env: w.env, dataDir: w.data }), false);
-    fs.symlinkSync(path.join(w.root, 'gone', 'codex'), path.join(w.bin, 'codex'));
-    assert.strictEqual(setup.codexNeeded({ env: w.env, dataDir: w.data, binDirs: [w.bin] }), true, 'a codex link left behind');
+    fs.symlinkSync(path.join(w.root, 'elsewhere', 'codex'), path.join(w.bin, 'codex'));
+    assert.strictEqual(use().link, false, 'a broken link to somewhere else is the user\'s own');
+    fs.unlinkSync(path.join(w.bin, 'codex'));
+    fs.symlinkSync(path.join(w.home, '.mymaestroai', 'node', 'bin', 'codex'), path.join(w.bin, 'codex'));
+    assert.deepStrictEqual([use().link, use().autoInstall], [true, true], 'a link left by an npm -g in the installer\'s Node.js');
+    fs.unlinkSync(path.join(w.bin, 'codex'));
+    fs.symlinkSync(path.join(w.root, 'state', 'node', 'bin', 'codex'), path.join(w.bin, 'codex'));
+    assert.strictEqual(use({ nodeDirs: [path.join(w.root, 'state', 'node')] }).link, true, 'the Node.js folder from install.json');
     fs.unlinkSync(path.join(w.bin, 'codex'));
     fs.mkdirSync(path.join(w.home, '.codex'));
-    assert.strictEqual(setup.codexNeeded({ env: w.env, dataDir: w.data }), true, 'a ChatGPT sign-in folder');
+    assert.deepStrictEqual([use().needed, use().autoInstall, use().signIn], [true, false, true], 'a sign-in folder alone: reported, not installed for');
   } finally { w.done(); }
 });
 
-test('a link left pointing into a replaced Node.js is repointed at ~/.npm-global/bin/codex; a working link or a file is left alone', () => {
+test('only a link left pointing into the installer\'s Node.js is repointed; the user\'s own links, working links, files and a file at any temporary name stay', () => {
   const w = world();
   try {
-    const gone = path.join(w.root, 'state', 'node', 'bin', 'codex');
-    fs.symlinkSync(gone, path.join(w.bin, 'codex'));
+    const nodeBin = path.join(w.home, '.mymaestroai', 'node', 'bin', 'codex');
+    fs.symlinkSync(nodeBin, path.join(w.bin, 'codex'));
     assert.deepStrictEqual(setup.repairLinks({ env: w.env, binDirs: [w.bin] }), [], 'nothing to point at yet');
     const target = placeCodex(w.home);
+    fs.writeFileSync(path.join(w.bin, 'codex.mm-new'), 'a file of the user\'s');
     assert.deepStrictEqual(setup.repairLinks({ env: w.env, binDirs: [w.bin] }), [path.join(w.bin, 'codex')]);
     assert.strictEqual(fs.readlinkSync(path.join(w.bin, 'codex')), target);
-    // a working link and a real file stay as they are
+    assert.strictEqual(fs.readFileSync(path.join(w.bin, 'codex.mm-new'), 'utf8'), 'a file of the user\'s', 'never removed');
+    assert.deepStrictEqual(fs.readdirSync(w.bin).sort(), ['codex', 'codex.mm-new'], 'no temporary name left behind');
+    // a broken link of the user's own (an unmounted drive), a working link and a real file: untouched
+    const own = path.join(w.root, 'own');
+    fs.mkdirSync(own);
+    fs.symlinkSync('/Volumes/tools/bin/codex', path.join(own, 'codex'));
     const other = path.join(w.root, 'other');
     fs.mkdirSync(other);
     fs.writeFileSync(path.join(other, 'real'), 'x', { mode: 0o755 });
@@ -66,40 +78,52 @@ test('a link left pointing into a replaced Node.js is repointed at ~/.npm-global
     const file = path.join(w.root, 'filebin');
     fs.mkdirSync(file);
     fs.writeFileSync(path.join(file, 'codex'), 'mine');
-    assert.deepStrictEqual(setup.repairLinks({ env: w.env, binDirs: [ok, file] }), []);
+    assert.deepStrictEqual(setup.repairLinks({ env: w.env, binDirs: [own, ok, file] }), []);
+    assert.strictEqual(fs.readlinkSync(path.join(own, 'codex')), '/Volumes/tools/bin/codex');
     assert.strictEqual(fs.readlinkSync(path.join(ok, 'codex')), path.join(other, 'real'));
     assert.strictEqual(fs.readFileSync(path.join(file, 'codex'), 'utf8'), 'mine');
   } finally { w.done(); }
 });
 
-test('the check: needed and missing reinstalls with repair (then repoints the link), reports the fix without; not needed: no install', (t) => {
+test('the check: a missing Codex is reinstalled (a release at least a day old) only for an agent or a link left behind; a sign-in folder alone is reported; ~/.codex untouched', (t) => {
   const w = world();
   try {
     if (!clean(w.env)) { t.skip('a codex outside the temporary home is found on this computer'); return; }
     fs.writeFileSync(path.join(w.data, 'agents.json'), JSON.stringify([{ name: 'a', model: 'codex-cli/gpt-x' }]));
-    fs.symlinkSync(path.join(w.root, 'state', 'node', 'bin', 'codex'), path.join(w.bin, 'codex'));
+    fs.symlinkSync(path.join(w.home, '.mymaestroai', 'node', 'bin', 'codex'), path.join(w.bin, 'codex'));
     fs.mkdirSync(path.join(w.home, '.codex'));
     fs.writeFileSync(path.join(w.home, '.codex', 'auth.json'), 'sign-in stand-in');
     const before = fs.statSync(path.join(w.home, '.codex', 'auth.json')).mtimeMs;
-    let calls = 0;
-    const install = ({ env }) => { calls++; const f = placeCodex(env.HOME); return { ok: true, bin: f }; };
-    const plain = setup.checkCodex({ env: w.env, dataDir: w.data, binDirs: [w.bin], install });
-    assert.deepStrictEqual([plain.needed, plain.bin, plain.installed, plain.fix, calls], [true, null, false, 'mymaestro connect chatgpt', 0], 'no repair: the one command');
-    const r = setup.checkCodex({ env: w.env, dataDir: w.data, binDirs: [w.bin], repair: true, install });
-    assert.strictEqual(calls, 1);
-    assert.strictEqual(r.installed, true);
-    assert.ok(r.bin);
-    assert.strictEqual(r.fix, null);
+    const calls = [];
+    const install = (o) => { calls.push(o); const f = placeCodex(o.env.HOME); return { ok: true, bin: f }; };
+    const now = Date.parse('2026-11-17T12:00:00Z');
+    const plain = setup.checkCodex({ env: w.env, dataDir: w.data, binDirs: [w.bin], install, now });
+    assert.deepStrictEqual([plain.needed, plain.bin, plain.installed, plain.fix, calls.length], [true, null, false, 'mymaestro connect chatgpt', 0], 'no repair: the one command');
+    const r = setup.checkCodex({ env: w.env, dataDir: w.data, binDirs: [w.bin], repair: true, install, now });
+    assert.strictEqual(calls.length, 1);
+    assert.strictEqual(calls[0].before.toISOString(), '2026-11-16T12:00:00.000Z', 'a release at least a day old');
+    assert.deepStrictEqual([r.installed, !!r.bin, r.fix], [true, true, null]);
     assert.deepStrictEqual(r.relinked, [path.join(w.bin, 'codex')]);
     assert.strictEqual(fs.readFileSync(path.join(w.home, '.codex', 'auth.json'), 'utf8'), 'sign-in stand-in', '~/.codex untouched');
     assert.strictEqual(fs.statSync(path.join(w.home, '.codex', 'auth.json')).mtimeMs, before);
-    // not needed: nothing installed, nothing to fix
+    // a sign-in folder alone (the desktop app, an editor extension): reported, nothing installed
     const w2 = world();
     try {
+      fs.mkdirSync(path.join(w2.home, '.codex'));
       let n = 0;
       const r2 = setup.checkCodex({ env: w2.env, dataDir: w2.data, binDirs: [w2.bin], repair: true, install: () => { n++; return { ok: false }; } });
-      assert.deepStrictEqual([r2.needed, r2.fix, n], [false, null, 0]);
+      assert.deepStrictEqual([r2.needed, r2.fix, n], [true, 'mymaestro connect chatgpt', 0]);
     } finally { w2.done(); }
+    // npm's own link left dangling in ~/.npm-global/bin is cleared first (it would make npm fail with EEXIST)
+    const w3 = world();
+    try {
+      fs.writeFileSync(path.join(w3.data, 'agents.json'), JSON.stringify([{ name: 'a', model: 'codex-cli/gpt-x' }]));
+      fs.mkdirSync(path.join(w3.home, '.npm-global', 'bin'), { recursive: true });
+      fs.symlinkSync('../lib/node_modules/@openai/codex/bin/codex.js', path.join(w3.home, '.npm-global', 'bin', 'codex'));
+      let sawLink = null;
+      setup.checkCodex({ env: w3.env, dataDir: w3.data, repair: true, install: () => { try { fs.lstatSync(path.join(w3.home, '.npm-global', 'bin', 'codex')); sawLink = true; } catch { sawLink = false; } return { ok: false }; } });
+      assert.strictEqual(sawLink, false);
+    } finally { w3.done(); }
   } finally { w.done(); }
 });
 
@@ -110,11 +134,11 @@ test('installCodex runs npm with --prefix ~/.npm-global, -g and --ignore-scripts
     const log = path.join(w.root, 'npm.log');
     // a stand-in npm: records its arguments and puts a codex program under --prefix
     fs.writeFileSync(npm, `#!/bin/sh\necho "$@" > "${log}"\nwhile [ $# -gt 0 ]; do if [ "$1" = --prefix ]; then p="$2"; fi; shift; done\nmkdir -p "$p/bin" && printf '#!/bin/sh\\necho codex\\n' > "$p/bin/codex" && chmod 755 "$p/bin/codex"\n`, { mode: 0o755 });
-    const r = setup.installCodex({ env: w.env, npm, stdio: 'ignore' });
+    const r = setup.installCodex({ env: w.env, npm, stdio: 'ignore', before: new Date('2026-11-16T12:00:00Z') });
     assert.strictEqual(r.ok, true);
     assert.strictEqual(r.bin, path.join(w.home, '.npm-global', 'bin', 'codex'));
     const args = fs.readFileSync(log, 'utf8').trim().split(' ');
-    for (const a of ['install', '-g', '--prefix', path.join(w.home, '.npm-global'), '@openai/codex', '--ignore-scripts']) assert.ok(args.includes(a), a);
+    for (const a of ['install', '-g', '--prefix', path.join(w.home, '.npm-global'), '@openai/codex', '--ignore-scripts', '--before=2026-11-16T12:00:00.000Z']) assert.ok(args.includes(a), a);
     const failing = path.join(w.root, 'npm-fail');
     fs.writeFileSync(failing, '#!/bin/sh\nexit 1\n', { mode: 0o755 });
     const w2 = world();
@@ -132,7 +156,7 @@ test('the hint, connect chatgpt and the installer all go through one place and n
   assert.match(cli, /'codex-check'\(\) \{/);
   assert.match(cli, /codex-check \[--repair\]/, 'listed in the help');
   const sh = read('install/install.sh');
-  assert.match(sh, /\n  keep_codex\n  rm -rf "\$NODE_DIR\.new"/, 'Codex is moved before the old Node.js folder goes');
+  assert.match(sh, /\n  keep_codex \|\| die "Codex \(the ChatGPT client\) could not be moved[^\n]*\n  rm -rf "\$NODE_DIR\.new"/, 'Codex is moved before the old Node.js folder goes, and a failure stops the swap');
   assert.match(sh, /install_command\n  check_codex\n  start_hub/);
   assert.match(sh, /codex-check --repair --quiet/);
   assert.doesNotMatch(sh, /\.codex\//, 'the installer never names a path inside ~/.codex');

@@ -143,7 +143,7 @@ test('updating the bundled Node.js keeps a Codex installed with its npm: moved t
     // the user's own link pointed into the old Node.js folder: the installer's check (codex-check) repoints it
     const setup = require('../lib/codex-cli/setup');
     const link = path.join(w.home, '.local', 'bin', 'codex');
-    assert.deepStrictEqual(setup.repairLinks({ env: { HOME: w.home }, binDirs: [path.dirname(link)] }), [link]);
+    assert.deepStrictEqual(setup.repairLinks({ env: { HOME: w.home }, binDirs: [path.dirname(link)], nodeDirs: [w.nodeDir] }), [link]);
     assert.strictEqual(execFileSync(link, { encoding: 'utf8' }).trim(), 'codex-from-old-node');
   } finally { w.done(); }
 });
@@ -163,4 +163,45 @@ test('the Node.js update with no Codex inside changes nothing outside; a Codex a
     assert.strictEqual(JSON.parse(fs.readFileSync(path.join(w2.home, '.npm-global', 'lib', 'node_modules', '@openai', 'codex', 'package.json'), 'utf8')).version, 'outside', 'the copy outside wins');
     assert.ok(fs.existsSync(path.join(w2.home, '.npm-global', 'lib', 'node_modules', '@openai', 'codex-linux-x64')), 'a platform package not yet outside is moved');
   } finally { w2.done(); }
+});
+
+// Review r1 (GPT-5.6 BLOCK): a move that fails (a full disk, a folder that can't be written) must not let the old
+// Node.js folder, with Codex still in it, be removed.
+test('a failed move of Codex stops the Node.js update: the old folder and Codex in it stay, no half-made copy is left', (t) => {
+  if (process.getuid && process.getuid() === 0) { t.skip('root can write a read-only folder'); return; }
+  const w = nodeUpdateWorld();
+  const scope = path.join(w.home, '.npm-global', 'lib', 'node_modules', '@openai');
+  try {
+    fs.mkdirSync(scope, { recursive: true });
+    fs.chmodSync(scope, 0o555);   // the move into it fails
+    const r = w.run();
+    assert.notStrictEqual(r.status, 0);
+    assert.match(r.stderr + r.stdout, /could not be moved out of the Node\.js folder[^\n]*so Node\.js was not updated and nothing was removed/);
+    assert.strictEqual(execFileSync(path.join(w.nodeDir, 'bin', 'node'), ['--version'], { encoding: 'utf8' }).trim(), 'v1.0.0', 'the old Node.js stays');
+    assert.ok(fs.existsSync(path.join(w.nodeDir, 'lib', 'node_modules', '@openai', 'codex', 'package.json')), 'Codex stays in it');
+    fs.chmodSync(scope, 0o755);
+    assert.deepStrictEqual(fs.readdirSync(scope), [], 'nothing half-made outside');
+  } finally { try { fs.chmodSync(scope, 0o755); } catch { /* gone */ } w.done(); }
+});
+
+// Review r1 (GPT-5.6 follow-up): the installer's own check step runs the install's codex-check with --repair --quiet,
+// says nothing when the command is not there yet (an older version), and never stops the install.
+test('check_codex runs codex-check --repair --quiet with the install\'s Node.js and goes on whatever it says', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'install-check-'));
+  try {
+    const dir = path.join(root, 'app');
+    fs.mkdirSync(path.join(dir, 'scripts'), { recursive: true });
+    const log = path.join(root, 'args');
+    // a stand-in hub-cli.js: records how it was called and fails, as a missing Codex would
+    fs.writeFileSync(path.join(dir, 'scripts', 'hub-cli.js'), `// codex-check stand-in\nrequire('fs').writeFileSync(${JSON.stringify(log)}, process.argv.slice(2).join(' '));\nconsole.log('Codex is not installed. Fix: mymaestro connect chatgpt');\nprocess.exit(1);\n`);
+    const run = () => spawnSync('bash', ['-c', `MM_INSTALLER_FUNCTIONS_ONLY=1 . "${SH}"; DIR="${dir}"; NODE="${process.execPath}"; DRY=0; check_codex; echo "after:$?"`], { env: { PATH: '/usr/bin:/bin', HOME: root }, encoding: 'utf8', timeout: 30000 });
+    const r = run();
+    assert.match(r.stdout, /after:0/, 'the install goes on');
+    assert.strictEqual(fs.readFileSync(log, 'utf8'), 'codex-check --repair --quiet');
+    assert.strictEqual((r.stdout.match(/mymaestro connect chatgpt/g) || []).length, 1, 'one message, from the check itself');
+    fs.writeFileSync(path.join(dir, 'scripts', 'hub-cli.js'), '// an older version without the command\nprocess.exit(3);\n');
+    fs.writeFileSync(log, 'not run');
+    assert.match(run().stdout, /after:0/);
+    assert.strictEqual(fs.readFileSync(log, 'utf8'), 'not run', 'an older hub-cli.js is not asked');
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
