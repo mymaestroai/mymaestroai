@@ -314,7 +314,8 @@ test('teamRole worker lists an agent outside category worker; the light text has
   ], { selfName: 'maestro' });
   assert.deepStrictEqual(r.map(w => [w.name, w.teamRole]), [['helper-b', 'worker']]);
   assert.match(tg.LIGHT_TEXT, /spawn_workers/);
-  assert.match(tg.FULL_TEXT, /list_agents/);
+  assert.match(tg.FULL_TEXT, /among the agents you may consult/);
+  assert.match(tg.LIGHT_TEXT, /among the agents you may consult/);
 });
 
 // Review r1 (GPT-6 BLOCK): the More-menu select must end on the stored value: a failed save puts it back, a first load that
