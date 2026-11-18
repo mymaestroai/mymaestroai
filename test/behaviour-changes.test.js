@@ -15,8 +15,6 @@ const ISO = makeIsolatedInstall('behaviour-changes-', { copy: ['templates/behavi
 const INST = ISO.inst;
 const L = (p) => require(path.join(INST, 'lib', p));
 const bc = L('behaviour-changes');
-// An install that already has agents also has accounts (review r1: no account yet means a new install).
-const WITH_USERS = () => true;
 const access = L('access');
 const read = (f) => fs.readFileSync(path.join(REAL, f), 'utf8');
 const SDK = read('lib/sdk-chat.js');
@@ -96,13 +94,13 @@ test('seedNew: every manifest entry on by new-install, and an existing file is n
 test('migrate: an install that already has agents gets every entry pending by update', () => {
   const { stateFile, manifestFile, agentsFile } = setup();
   put(agentsFile, []);
-  const r = bc.migrate({ agentsFile, stateFile, manifestFile, hasUsers: WITH_USERS });
+  const r = bc.migrate({ agentsFile, stateFile, manifestFile });
   assert.deepStrictEqual(r.added, ['alpha', 'beta-two']);
   const st = bc.readState(stateFile).entries;
   for (const id of ['alpha', 'beta-two']) { assert.strictEqual(st[id].state, 'pending'); assert.strictEqual(st[id].by, 'update'); }
   assert.strictEqual(bc.isOn('alpha', { stateFile: path.join(path.dirname(stateFile), 'other.json') }), false);
   assert.strictEqual(fs.statSync(stateFile).mode & 0o777, 0o600);
-  assert.deepStrictEqual(bc.migrate({ agentsFile, stateFile, manifestFile, hasUsers: WITH_USERS }).added, [], 'a second run adds nothing');
+  assert.deepStrictEqual(bc.migrate({ agentsFile, stateFile, manifestFile }).added, [], 'a second run adds nothing');
 });
 
 test('migrate: a fresh install (no agents.json) changes nothing; a new manifest id is pending; an unreadable file is left alone', () => {
@@ -112,21 +110,21 @@ test('migrate: a fresh install (no agents.json) changes nothing; a new manifest 
   const b = setup();
   put(b.agentsFile, []);
   put(b.stateFile, { entries: { alpha: ent('on', 'new-install') } });
-  assert.deepStrictEqual(bc.migrate({ agentsFile: b.agentsFile, stateFile: b.stateFile, manifestFile: b.manifestFile, hasUsers: WITH_USERS }).added, ['beta-two']);
+  assert.deepStrictEqual(bc.migrate({ agentsFile: b.agentsFile, stateFile: b.stateFile, manifestFile: b.manifestFile }).added, ['beta-two']);
   const st = bc.readState(b.stateFile).entries;
   assert.strictEqual(st.alpha.state, 'on', 'an existing decision is untouched');
   assert.strictEqual(st['beta-two'].state, 'pending');
   const c = setup();
   put(c.agentsFile, []);
   put(c.stateFile, '{broken');
-  assert.deepStrictEqual(bc.migrate({ agentsFile: c.agentsFile, stateFile: c.stateFile, manifestFile: c.manifestFile, hasUsers: WITH_USERS }), { unreadable: true });
+  assert.deepStrictEqual(bc.migrate({ agentsFile: c.agentsFile, stateFile: c.stateFile, manifestFile: c.manifestFile }), { unreadable: true });
   assert.strictEqual(fs.readFileSync(c.stateFile, 'utf8'), '{broken');
 });
 
 test('decide: on and off are recorded by the owner (0600); unknown id, bad decision and an unreadable file are refused', async () => {
   const { stateFile, manifestFile, agentsFile } = setup();
   put(agentsFile, []);
-  bc.migrate({ agentsFile, stateFile, manifestFile, hasUsers: WITH_USERS });
+  bc.migrate({ agentsFile, stateFile, manifestFile });
   const r = await bc.decide('alpha', 'on', { user: 'u1', stateFile, manifestFile });
   assert.strictEqual(r.state, 'on');
   let e = bc.readState(stateFile).entries.alpha;
@@ -313,17 +311,20 @@ test('Settings: the admin quick links carry the Changes link, counted when somet
 });
 
 // Review r1 (Sonnet F1; GPT-6 B3; GPT-6 B1 / Sentinel F1).
-test('r1: no state file and no account yet (a bundle install ships agents.json): every entry on, as a new install', () => {
-  const d = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'bc-bundle-'));
+// Review r2 (GPT-6 BLOCK): accounts say nothing about a new install (a single-password install has none). The release
+// bundle ships no agents list, so a bundle install seeds one and is recorded as new; an install with an agents list and
+// no state file is an existing one.
+test('r2: an install with an agents list and no state file is existing, accounts or not; the bundle ships no agents list', () => {
+  const d = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'bc-legacy-'));
   try {
     const agentsFile = path.join(d, 'agents.json'), stateFile = path.join(d, 'behaviour-reviews.json');
     fs.writeFileSync(agentsFile, '[{"name":"maestro","lead":true}]');
-    const r = bc.migrate({ agentsFile, stateFile, manifestFile: bc.MANIFEST_FILE, hasUsers: () => false });
-    assert.strictEqual(r.seeded, true);
-    assert.ok(bc.list({ stateFile }).every(e => e.state === 'on'));
-    const e = path.join(d, 'existing.json');
-    assert.deepStrictEqual(bc.migrate({ agentsFile, stateFile: e, manifestFile: bc.MANIFEST_FILE, hasUsers: () => true }).added.length, bc.manifest().length, 'with accounts: all pending');
+    const r = bc.migrate({ agentsFile, stateFile, manifestFile: bc.MANIFEST_FILE });
+    assert.strictEqual(r.added.length, bc.manifest().length);
+    assert.ok(bc.list({ stateFile }).every(e => e.state === 'pending'));
   } finally { fs.rmSync(d, { recursive: true, force: true }); }
+  const bundle = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'clean-bundle.sh'), 'utf8').replace(/^#.*$/gm, '');
+  assert.ok(!/agents\.json/.test(bundle), 'the bundle writes no agents list');
 });
 test('r1: stateOf tells on, off, pending, missing and unreadable apart; isOn only for on', () => {
   const d = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'bc-state-'));
