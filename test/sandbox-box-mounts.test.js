@@ -20,6 +20,30 @@ const isImageId = (args) => args[0] === 'image' && args[1] === 'inspect' && args
 const isLabelsAsk = (args) => args[0] === 'inspect' && args[1] === '--type' && args[2] === 'container' && args[3] === '--format' && args[4] === '{{.Id}} {{json .Config.Labels}}';
 const labelsIn = (args) => { const l = {}; args.forEach((x, i) => { if (args[i - 1] === '--label') { const j = String(x).indexOf('='); l[String(x).slice(0, j)] = String(x).slice(j + 1); } }); return l; };
 const noBox = (name) => Object.assign(new Error(`Command failed: docker inspect ${name}`), { stderr: `Error response from daemon: No such container: ${name}` });
+// What a Docker stand-in must answer since homes are labelled volumes: whose a volume is (volume inspect), making one
+// (volume create keeps the labels of a volume that exists, like Docker), the home a box mounts, and the throwaway
+// containers that move a home. `vols`: volume -> labels object or null (made without labels).
+const crypto = require('crypto');
+const { homeVolumeFor } = require('../lib/sandbox');
+const noVolume = (v) => Object.assign(new Error(`Command failed: docker volume inspect ${v}`), { stderr: `Error response from daemon: get ${v}: no such volume` });
+// the name of this install's labelled home for an agent: <older name>-<12 hex of the install id and data folder>
+const labelledHomeOf = async (sb, agent) => { const l = (await sb.labelsFor(agent)).labels; return `${homeVolumeFor(agent)}-${crypto.createHash('sha256').update(`${l['agent-hub.install']}\n${l['agent-hub.home']}`).digest('hex').slice(0, 12)}`; };
+// the labels of a home volume this install made for the agent
+const oursOf = async (sb, agent) => { const l = (await sb.labelsFor(agent)).labels; return { 'agent-hub': 'home', 'agent-hub.agent': agent.name, 'agent-hub.install': l['agent-hub.install'], 'agent-hub.home': l['agent-hub.home'] }; };
+// labelled: async (box id or name) => the labelled home of the agent a seeded box belongs to (a box made before the test, with today's settings)
+function volumeStandIn(labelled, vols = {}) {
+  const v = new Map(Object.entries(vols));
+  const homeOf = new Map();   // box name -> the volume its create mounted as /home/agent
+  const answer = async (args) => {
+    if (args[0] === 'create') { const n = args[args.indexOf('--name') + 1]; const h = args.find((x, i) => args[i - 1] === '-v' && String(x).endsWith(':/home/agent')); if (h) homeOf.set(n, h.slice(0, -':/home/agent'.length)); return undefined; }
+    if (args[0] === 'volume' && args[1] === 'inspect' && args[2] === '--format' && args[3] === '{{json .Labels}}') { if (!v.has(args[4])) throw noVolume(args[4]); return { stdout: JSON.stringify(v.get(args[4])) + '\n', stderr: '' }; }
+    if (args[0] === 'volume' && args[1] === 'create') { const n = args[args.length - 1]; if (!v.has(n)) v.set(n, labelsIn(args)); return { stdout: n + '\n', stderr: '' }; }
+    if (args[0] === 'inspect' && args.some(x => String(x).includes('{{range .Mounts}}{{if eq .Type "volume"}}'))) { const n = args[args.length - 1]; return { stdout: `/home/agent=${homeOf.get(n) || await labelled(n)}\n`, stderr: '' }; }
+    if (args[0] === 'run' && args.includes('--rm') && String(args[args.indexOf('--name') + 1]).startsWith('hub-home-move-')) return { stdout: args.some(x => String(x).startsWith('set -o pipefail; cd "$0"')) ? 'h\n1\n' : '', stderr: '' };
+    return undefined;
+  };
+  return { vols: v, homeOf, answer };
+}
 
 // o.top: string | () => string | Error; o.mountsError: inspect of .Mounts throws
 function rig(o = {}) {
@@ -30,9 +54,11 @@ function rig(o = {}) {
   const calls = [], logs = [];
   const r = { dir, root1, root2, other, calls, logs, top: IDLE_TOP, mountsError: false, state: 'running', binds: [], execGate: null, statusGate: null, execStarted: 0 };
   let made = null;   // the labels of the last create the stand-in saw (the one box it holds)
+  const vs = volumeStandIn(() => labelledHomeOf(r.sb, alpha));   // the home volumes (a box there before the test mounts the labelled one)
   const docker = async (args) => {
     calls.push(args);
     const cmd = args[0];
+    const vAnswer = await vs.answer(args); if (vAnswer) return vAnswer;
     if (isImageId(args)) return { stdout: IMG_ID + '\n', stderr: '' };
     if (isLabelsAsk(args)) {
       if (!r.state) throw noBox(args[5]);

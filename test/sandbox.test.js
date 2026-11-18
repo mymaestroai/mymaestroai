@@ -15,15 +15,41 @@ const isLabelsAsk = (args) => args[0] === 'inspect' && args[1] === '--type' && a
 const labelsIn = (args) => { const l = {}; args.forEach((x, i) => { if (args[i - 1] === '--label') { const j = String(x).indexOf('='); l[String(x).slice(0, j)] = String(x).slice(j + 1); } }); return l; };
 const noBox = (name) => Object.assign(new Error(`Command failed: docker inspect ${name}`), { stderr: `Error response from daemon: No such container: ${name}` });
 const dataDirOf = () => fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-data-'));
+// What a Docker stand-in must answer since homes are labelled volumes: whose a volume is (volume inspect), making one
+// (volume create keeps the labels of a volume that exists, like Docker), the home a box mounts, and the throwaway
+// containers that move a home. `vols`: volume -> labels object or null (made without labels).
+const crypto = require('crypto');
+const { homeVolumeFor } = require('../lib/sandbox');
+const noVolume = (v) => Object.assign(new Error(`Command failed: docker volume inspect ${v}`), { stderr: `Error response from daemon: get ${v}: no such volume` });
+// the name of this install's labelled home for an agent: <older name>-<12 hex of the install id and data folder>
+const labelledHomeOf = async (sb, agent) => { const l = (await sb.labelsFor(agent)).labels; return `${homeVolumeFor(agent)}-${crypto.createHash('sha256').update(`${l['agent-hub.install']}\n${l['agent-hub.home']}`).digest('hex').slice(0, 12)}`; };
+// the labels of a home volume this install made for the agent
+const oursOf = async (sb, agent) => { const l = (await sb.labelsFor(agent)).labels; return { 'agent-hub': 'home', 'agent-hub.agent': agent.name, 'agent-hub.install': l['agent-hub.install'], 'agent-hub.home': l['agent-hub.home'] }; };
+// labelled: async (box id or name) => the labelled home of the agent a seeded box belongs to (a box made before the test, with today's settings)
+function volumeStandIn(labelled, vols = {}) {
+  const v = new Map(Object.entries(vols));
+  const homeOf = new Map();   // box name -> the volume its create mounted as /home/agent
+  const answer = async (args) => {
+    if (args[0] === 'create') { const n = args[args.indexOf('--name') + 1]; const h = args.find((x, i) => args[i - 1] === '-v' && String(x).endsWith(':/home/agent')); if (h) homeOf.set(n, h.slice(0, -':/home/agent'.length)); return undefined; }
+    if (args[0] === 'volume' && args[1] === 'inspect' && args[2] === '--format' && args[3] === '{{json .Labels}}') { if (!v.has(args[4])) throw noVolume(args[4]); return { stdout: JSON.stringify(v.get(args[4])) + '\n', stderr: '' }; }
+    if (args[0] === 'volume' && args[1] === 'create') { const n = args[args.length - 1]; if (!v.has(n)) v.set(n, labelsIn(args)); return { stdout: n + '\n', stderr: '' }; }
+    if (args[0] === 'inspect' && args.some(x => String(x).includes('{{range .Mounts}}{{if eq .Type "volume"}}'))) { const n = args[args.length - 1]; return { stdout: `/home/agent=${homeOf.get(n) || await labelled(n)}\n`, stderr: '' }; }
+    if (args[0] === 'run' && args.includes('--rm') && String(args[args.indexOf('--name') + 1]).startsWith('hub-home-move-')) return { stdout: args.some(x => String(x).startsWith('set -o pipefail; cd "$0"')) ? 'h\n1\n' : '', stderr: '' };
+    return undefined;
+  };
+  return { vols: v, homeOf, answer };
+}
 
 function rig(o = {}) {
   const calls = [];
   let rmTried = false;                    // set once a plain rm was refused (o.rmFails)
   const states = o.states || {};          // container name -> status string ('running'|'exited'|null)
   const made = {};                        // boxes this stand-in saw created -> the labels of that create
+  const vs = volumeStandIn(() => labelledHomeOf(sb, member), o.volumes);   // the home volumes (a seeded box mounts the labelled one)
   const docker = async (args) => {
     calls.push(args);
     const cmd = args[0];
+    const vAnswer = await vs.answer(args); if (vAnswer) return vAnswer;
     if (cmd === 'image' && o.noImage) throw new Error('No such image');
     if (isImageId(args)) return { stdout: IMG_ID + '\n', stderr: '' };
     if (cmd === 'version' && o.noDocker) throw new Error('docker: not found');
@@ -71,7 +97,7 @@ function rig(o = {}) {
     workspaceFor: ws,
   });
   fs.mkdirSync(path.join(dir, 'users', 'member1'), { recursive: true });
-  return { sb, calls, dir, ws, states };
+  return { sb, calls, dir, ws, states, vs };
 }
 const member = { name: 'boxed', model: 'claude-sdk/claude-haiku-5-5', owner: 'member1' };
 const adminAgent = { name: 'worker', model: 'claude-sdk/claude-sonnet-5-5', owner: 'admin1' };
@@ -103,7 +129,7 @@ test('ensure: creates a hardened container (no caps, read-only root, user, pid l
   await sb.ensure(member);
   const create = calls.find(a => a[0] === 'create');
   const s = create.join(' ');
-  for (const flag of ['--cap-drop ALL', '--read-only', '--user 1000:1000', '--pids-limit', '--security-opt no-new-privileges', '--network bridge', '--init', `-v ${ws(member)}:${ws(member)}`, 'hub-agent-boxed-home:/home/agent', '--workdir ' + ws(member)]) assert.ok(s.includes(flag), flag);
+  for (const flag of ['--cap-drop ALL', '--read-only', '--user 1000:1000', '--pids-limit', '--security-opt no-new-privileges', '--network bridge', '--init', `-v ${ws(member)}:${ws(member)}`, `${await labelledHomeOf(sb, member)}:/home/agent`, '--workdir ' + ws(member)]) assert.ok(s.includes(flag), flag);
   assert.ok(!s.includes('agent-hub-5.1.0/data'), 'hub data never mounted');
   calls.length = 0;
   await sb.ensure(member);
@@ -137,9 +163,10 @@ test('ensure: a stopped box with the right folders but made without an init proc
     const args = r.calls[create];
     assert.ok(args.includes('--init'));
     const vols = (a) => a.map((x, i) => (a[i - 1] === '-v' ? x : null)).filter(Boolean);
-    assert.deepStrictEqual(vols(args), ['hub-agent-boxed-home:/home/agent', ...r.sb.mountsFor(member).map(m => `${m}:${m}`)], 'same -v mounts and home volume as a fresh box');
+    const home = `${await labelledHomeOf(r.sb, member)}:/home/agent`;   // the labelled home (the older hub-agent-boxed-home is not mounted any more)
+    assert.deepStrictEqual(vols(args), [home, ...r.sb.mountsFor(member).map(m => `${m}:${m}`)], 'same -v mounts and home volume as a fresh box');
     assert.strictEqual(vols(args).length, vols(freshCreate).length);
-    assert.ok(vols(args).includes('hub-agent-boxed-home:/home/agent'));
+    assert.ok(vols(args).includes(home));
     assert.ok(logs.includes(`${name} was made without an init process; making it again`), String(init));
   }
 });
@@ -230,8 +257,10 @@ test('ensure: a removal asked while an ensure is in flight waits for it, and a c
   const order = []; const states = { [name]: 'exited' };
   let releaseStart; const startGate = new Promise(res => { releaseStart = res; });
   let starts = 0, sb;
+  const vs = volumeStandIn(() => labelledHomeOf(sb, agent));
   const docker = async (args) => {
     const last = args[args.length - 1];
+    const vAnswer = await vs.answer(args); if (vAnswer) return vAnswer;
     if (isImageId(args)) return { stdout: IMG_ID + '\n', stderr: '' };
     if (args[0] === 'image') return { stdout: '', stderr: '' };
     if (isLabelsAsk(args)) { if (!states[name]) throw noBox(name); return { stdout: name + ' ' + JSON.stringify((await sb.labelsFor(agent)).labels), stderr: '' }; }
@@ -449,17 +478,20 @@ test('retire: a deleted agent\'s box and home volume go; its home folder is kept
     const calls = [];
     const have = { box: o.box !== false, vol: o.vol !== false };
     const fail = (msg, code) => Object.assign(new Error(msg), { stderr: msg, ...(code ? { code } : {}) });
-    let sb;
+    let sb, seeded = false;
+    const vs = volumeStandIn(() => labelledHomeOf(sb, gone));
     const docker = async (args) => {
       calls.push(args);
       const [a0, a1] = args;
+      // the agent's home is the labelled volume this install made (there, or already gone)
+      if (!seeded) { seeded = true; if (have.vol) vs.vols.set(await labelledHomeOf(sb, gone), await oursOf(sb, gone)); }
+      const vAnswer = await vs.answer(args); if (vAnswer) return vAnswer;
       if (isImageId(args)) return { stdout: IMG_ID + '\n', stderr: '' };
       if (isLabelsAsk(args)) { if (!have.box) throw noBox(args[5]); return { stdout: args[5] + ' ' + JSON.stringify((await sb.labelsFor(gone)).labels), stderr: '' }; }
       if (a0 === 'version') { if (o.version) throw o.version; return { stdout: '27.3\n', stderr: '' }; }
       if (a0 === 'container' && a1 === 'inspect') { if (o.inspectError) throw fail(o.inspectError); if (!have.box) throw fail('Error: No such container: hub-agent-gone'); return { stdout: `${IMG}\n`, stderr: '' }; }
       if (a0 === 'rm') { have.box = false; return { stdout: '', stderr: '' }; }
-      if (a0 === 'volume' && a1 === 'inspect') { if (!have.vol) throw fail('Error response from daemon: get hub-agent-gone-home: no such volume'); return { stdout: 'v\n', stderr: '' }; }
-      if (a0 === 'volume' && a1 === 'rm') { have.vol = false; return { stdout: '', stderr: '' }; }
+      if (a0 === 'volume' && a1 === 'rm') { have.vol = false; vs.vols.delete(args[2]); return { stdout: '', stderr: '' }; }
       if (a0 === 'run') {
         const host = args.find(x => x.endsWith(':/bundle')).slice(0, -':/bundle'.length);
         fs.writeFileSync(path.join(host, path.basename(args[args.indexOf('-cf') + 1])), 'TAR');
@@ -479,11 +511,12 @@ test('retire: a deleted agent\'s box and home volume go; its home folder is kept
   assert.deepStrictEqual(await r1.sb.retire(gone, into, { boxed: true }), { result: 'removed; home kept as box-home.tar' });
   assert.ok(r1.calls.some(c => c.join(' ') === 'rm -f hub-agent-gone'));
   const tar = r1.calls.find(c => c[0] === 'run');
-  for (const want of ['--network none', '--read-only', '--cap-drop ALL', '--user 1000:1000', '-v hub-agent-gone-home:/box-home:ro', `-v ${into}:/bundle`, `--entrypoint tar ${IMG} `,
+  for (const want of ['--network none', '--read-only', '--cap-drop ALL', '--user 1000:1000', `-v ${await labelledHomeOf(r1.sb, gone)}:/box-home:ro`, `-v ${into}:/bundle`, `--entrypoint tar ${IMG} `,
     '--exclude ./.claude/.credentials.json', '--exclude ./.codex/auth.json']) assert.ok(tar.join(' ').includes(want), want);
   assert.ok(!tar.includes('--ignore-failed-read'), 'a file the copy can\'t read fails it');
   assert.deepStrictEqual(fs.readdirSync(into), ['box-home.tar'], 'kept under its own name, no temporary file left');
-  assert.ok(r1.calls.some(c => c.join(' ') === 'volume rm hub-agent-gone-home'));
+  const labelled = await labelledHomeOf(r1.sb, gone);   // the home is the labelled volume (the older hub-agent-gone-home was never mounted by this box)
+  assert.ok(r1.calls.some(c => c.join(' ') === `volume rm ${labelled}`));
   assert.deepStrictEqual(await r1.sb.retire(gone, into, { boxed: true }), { result: 'none' }, 'again: nothing left to do');
   // A home already kept is never replaced.
   const r2 = rigged({ box: false });
@@ -504,7 +537,7 @@ test('retire: a deleted agent\'s box and home volume go; its home folder is kept
   const r3 = rigged({ tarFails: 1 });
   await assert.rejects(r3.sb.retire(gone, into3, {}), /Permission denied/);
   assert.deepStrictEqual([r3.have.box, r3.have.vol], [false, true]);
-  assert.deepStrictEqual(fs.readdirSync(into3), ['.box-image']);
+  assert.deepStrictEqual(fs.readdirSync(into3), ['.box-home-volume', '.box-image']);   // the home the box used is noted too, for the next try (its box is gone)
   assert.deepStrictEqual(await r3.sb.retire(gone, into3, {}), { result: 'removed; home kept as box-home.tar' });
   assert.ok(r3.calls.filter(c => c[0] === 'run').every(c => c.includes(IMG)));
   assert.strictEqual(r3.have.vol, false);
@@ -520,9 +553,11 @@ test('a stopped box made for other folders is made again instead of started (a r
   const boxes = {};   // name -> { status, binds }
   const calls = [];
   const madeLabels = {};   // name -> the labels of the create the stand-in saw
+  const vs = volumeStandIn(() => labelledHomeOf(sb, agent));
   const docker = async (args) => {
     calls.push(args.join(' '));
     const name = args[args.length - 1];
+    const vAnswer = await vs.answer(args); if (vAnswer) return vAnswer;
     if (isImageId(args)) return { stdout: IMG_ID + '\n', stderr: '' };
     if (args[0] === 'image') return { stdout: '', stderr: '' };
     if (isLabelsAsk(args)) { if (!boxes[name]) throw noBox(name); return { stdout: name + ' ' + JSON.stringify(madeLabels[name] || (await sb.labelsFor(agent)).labels), stderr: '' }; }   // a box seeded by the test was made before, with today's settings
@@ -571,13 +606,16 @@ test('retire: when the box\'s own image was pruned after it was noted, the home 
   const into = path.join(dir, 'bundle'); fs.mkdirSync(into);
   fs.writeFileSync(path.join(into, '.box-image'), IMG);   // noted by an earlier try that removed the box
   const runs = [];
-  let vol = true;
+  let vol = true, sb, seeded = false;
+  const vs = volumeStandIn(() => labelledHomeOf(sb, { name: 'gone' }));
   const docker = async (args) => {
+    if (!seeded) { seeded = true; vs.vols.set(await labelledHomeOf(sb, { name: 'gone' }), await oursOf(sb, { name: 'gone' })); }   // the agent's home: this install's labelled volume
+    const vAnswer = await vs.answer(args); if (vAnswer) return vAnswer;
+    if (isImageId(args)) return { stdout: IMG_ID + '\n', stderr: '' };
     if (args[0] === 'version') return { stdout: '27\n', stderr: '' };
     if (isLabelsAsk(args)) throw noBox(args[5]);
     if (args[0] === 'container') throw Object.assign(new Error('No such container'), { stderr: 'Error: No such container: hub-agent-gone' });
-    if (args[0] === 'volume' && args[1] === 'inspect') { if (!vol) throw Object.assign(new Error('no such volume'), { stderr: 'no such volume' }); return { stdout: 'v\n', stderr: '' }; }
-    if (args[0] === 'volume' && args[1] === 'rm') { vol = false; return { stdout: '', stderr: '' }; }
+    if (args[0] === 'volume' && args[1] === 'rm') { vol = false; vs.vols.delete(args[2]); return { stdout: '', stderr: '' }; }
     if (args[0] === 'run') {
       const from = args[args.indexOf('--entrypoint') + 2];
       runs.push(from);
@@ -588,7 +626,7 @@ test('retire: when the box\'s own image was pruned after it was noted, the home 
     }
     return { stdout: '', stderr: '' };
   };
-  const sb = createSandbox({ docker, dataDir: dataDirOf(), wrapperDir: path.join(dir, 'w'), uid: 1000, gid: 1000, image: 'agent-hub-sandbox:test', log: () => {} });
+  sb = createSandbox({ docker, dataDir: dataDirOf(), wrapperDir: path.join(dir, 'w'), uid: 1000, gid: 1000, image: 'agent-hub-sandbox:test', log: () => {} });
   assert.deepStrictEqual(await sb.retire({ name: 'gone' }, into, {}), { result: 'removed; home kept as box-home.tar' });
   assert.deepStrictEqual(runs, [IMG, 'agent-hub-sandbox:test']);
   assert.deepStrictEqual(fs.readdirSync(into), ['box-home.tar']);
@@ -601,8 +639,10 @@ test('a box being removed is waited for: an agent renamed away and straight back
   const order = [];
   let exists = true, releaseRm;
   const rmGate = new Promise(r => { releaseRm = r; });
+  const vs = volumeStandIn(() => labelledHomeOf(sb, alpha));
   const docker = async (args) => {
     const name = args[args.length - 1];
+    const vAnswer = await vs.answer(args); if (vAnswer) return vAnswer;
     if (isImageId(args)) return { stdout: IMG_ID + '\n', stderr: '' };
     if (args[0] === 'image') return { stdout: '', stderr: '' };
     if (isLabelsAsk(args)) { if (!exists) throw noBox(name); return { stdout: name + ' ' + JSON.stringify((await sb.labelsFor(alpha)).labels), stderr: '' }; }
@@ -632,8 +672,12 @@ test('retire: a box of the same agent under an earlier name still holding the ho
   const into = path.join(dir, 'bundle'); fs.mkdirSync(into);
   const calls = [];
   let volInUse = true, failRm = 1;
+  const vs = volumeStandIn(() => labelledHomeOf(sb, gone));   // the earlier-name box was made before, with today's settings: on the labelled home
+  let seeded = false;
   const docker = async (args) => {
     calls.push(args.join(' '));
+    if (!seeded) { seeded = true; vs.vols.set(await labelledHomeOf(sb, gone), await oursOf(sb, gone)); }   // the agent's home: this install's labelled volume
+    const vAnswer = await vs.answer(args); if (vAnswer) return vAnswer;
     if (isImageId(args)) return { stdout: IMG_ID + '\n', stderr: '' };
     if (isLabelsAsk(args)) {   // only the earlier-name box exists (until it is removed): made before, with today's settings
       if (args[5] !== 'hub-agent-oldname-f1f1f1f1f1f1' || !volInUse) throw noBox(args[5]);
@@ -641,7 +685,6 @@ test('retire: a box of the same agent under an earlier name still holding the ho
     }
     if (args[0] === 'version') return { stdout: '27\n', stderr: '' };
     if (args[0] === 'container') throw Object.assign(new Error('No such container'), { stderr: 'Error: No such container' });
-    if (args[0] === 'volume' && args[1] === 'inspect') return { stdout: 'v\n', stderr: '' };
     if (args[0] === 'ps') return { stdout: volInUse ? 'hub-agent-oldname-f1f1f1f1f1f1\n' : '', stderr: '' };
     if (args[0] === 'rm') { volInUse = false; return { stdout: '', stderr: '' }; }
     if (args[0] === 'volume' && args[1] === 'rm') { if (failRm-- > 0) throw Object.assign(new Error('daemon busy'), { stderr: 'Error response from daemon: try again' }); return { stdout: '', stderr: '' }; }
