@@ -102,7 +102,7 @@ test('the check: a missing Codex is reinstalled (a release at least a day old) o
     const r = setup.checkCodex({ env: w.env, dataDir: w.data, binDirs: [w.bin], repair: true, install, now });
     assert.strictEqual(calls.length, 1);
     assert.strictEqual(calls[0].before.toISOString(), '2026-11-16T12:00:00.000Z', 'a release at least a day old');
-    assert.deepStrictEqual([r.installed, !!r.bin, r.fix], [true, true, null]);
+    assert.deepStrictEqual([r.installed, !!r.bin, r.fix, r.inUse], [true, true, null, true]);
     assert.deepStrictEqual(r.relinked, [path.join(w.bin, 'codex')]);
     assert.strictEqual(fs.readFileSync(path.join(w.home, '.codex', 'auth.json'), 'utf8'), 'sign-in stand-in', '~/.codex untouched');
     assert.strictEqual(fs.statSync(path.join(w.home, '.codex', 'auth.json')).mtimeMs, before);
@@ -112,7 +112,7 @@ test('the check: a missing Codex is reinstalled (a release at least a day old) o
       fs.mkdirSync(path.join(w2.home, '.codex'));
       let n = 0;
       const r2 = setup.checkCodex({ env: w2.env, dataDir: w2.data, binDirs: [w2.bin], repair: true, install: () => { n++; return { ok: false }; } });
-      assert.deepStrictEqual([r2.needed, r2.fix, n], [true, 'mymaestro connect chatgpt', 0]);
+      assert.deepStrictEqual([r2.needed, r2.inUse, r2.fix, n], [true, false, 'mymaestro connect chatgpt', 0], 'a hint, not a fault');
     } finally { w2.done(); }
     // npm's own link left dangling in ~/.npm-global/bin is cleared first (it would make npm fail with EEXIST)
     const w3 = world();

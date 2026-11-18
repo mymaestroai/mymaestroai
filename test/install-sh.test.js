@@ -184,6 +184,35 @@ test('a failed move of Codex stops the Node.js update: the old folder and Codex 
   } finally { try { fs.chmodSync(scope, 0o755); } catch { /* gone */ } w.done(); }
 });
 
+// Review r2 (GPT-5.6 BLOCKs, Sonnet): a run that stops after the first package (a copy that fails partway) keeps every
+// original; the next run finishes the move, clears what an earlier run left in its temporary folders, and only then
+// lets the old Node.js folder go.
+test('a run that stops partway keeps every original; the next run moves the rest and clears leftover temporary folders', (t) => {
+  if (process.getuid && process.getuid() === 0) { t.skip('root reads an unreadable file'); return; }
+  const w = nodeUpdateWorld();
+  const plat = path.join(w.nodeDir, 'lib', 'node_modules', '@openai', 'codex-linux-x64', 'vendor', 'codex');
+  const scope = path.join(w.home, '.npm-global', 'lib', 'node_modules', '@openai');
+  try {
+    fs.chmodSync(plat, 0o000);   // the copy of the platform package fails
+    const r1 = w.run();
+    assert.notStrictEqual(r1.status, 0);
+    assert.match(r1.stderr + r1.stdout, /so Node\.js was not updated and nothing was removed/);
+    assert.ok(fs.existsSync(path.join(scope, 'codex', 'package.json')), 'the first package is in place outside');
+    assert.ok(fs.existsSync(path.join(w.nodeDir, 'lib', 'node_modules', '@openai', 'codex-linux-x64', 'vendor')), 'the second is still in the old folder');
+    assert.deepStrictEqual(fs.readdirSync(scope).sort(), ['codex'], 'no temporary folder left');
+    assert.strictEqual(execFileSync(path.join(w.nodeDir, 'bin', 'node'), ['--version'], { encoding: 'utf8' }).trim(), 'v1.0.0');
+    // a leftover temporary folder from some earlier stopped run, then a run with the file readable again
+    fs.mkdirSync(path.join(scope, '.mm-moving-abc123', 'pkg'), { recursive: true });
+    fs.chmodSync(plat, 0o644);
+    const r2 = w.run();
+    assert.strictEqual(r2.status, 0, r2.stderr + r2.stdout);
+    assert.ok(fs.existsSync(path.join(scope, 'codex-linux-x64', 'vendor', 'codex')), 'the rest moved');
+    assert.deepStrictEqual(fs.readdirSync(scope).sort(), ['codex', 'codex-linux-x64'], 'the leftover cleared, nothing nested');
+    assert.strictEqual(execFileSync(path.join(w.nodeDir, 'bin', 'node'), ['--version'], { encoding: 'utf8' }).trim(), 'v99.0.0');
+    assert.strictEqual(execFileSync(path.join(w.home, '.npm-global', 'bin', 'codex'), { encoding: 'utf8' }).trim(), 'codex-from-old-node');
+  } finally { try { fs.chmodSync(plat, 0o644); } catch { /* gone */ } w.done(); }
+});
+
 // Review r1 (GPT-5.6 follow-up): the installer's own check step runs the install's codex-check with --repair --quiet,
 // says nothing when the command is not there yet (an older version), and never stops the install.
 test('check_codex runs codex-check --repair --quiet with the install\'s Node.js and goes on whatever it says', () => {

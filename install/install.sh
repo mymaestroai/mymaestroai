@@ -147,21 +147,30 @@ install_node() {
 
 # Codex (the ChatGPT client) installed with this Node's own npm (npm i -g) lives inside the folder about to be replaced.
 # Move it, with its platform packages, to ~/.npm-global (where mymaestro connect chatgpt installs it and the hub looks)
-# and link its program there, so it survives the update. ~/.codex (its sign-in) is never touched. Each package goes to a
-# temporary name first (a move across file systems copies): a failure removes only that half-made copy and returns 1,
-# and install_node then stops before the old folder is removed. A name already in ~/.npm-global is kept as it is.
+# and link its program there, so it survives the update. ~/.codex (its sign-in) is never touched. Each package is copied
+# into a fresh temporary folder, put in place by one rename (which never lands inside an existing folder), and only then
+# removed from the old folder: a failure at any step leaves the original where it was, returns 1, and install_node stops
+# before the old folder is removed. It runs whenever any codex package is still inside (also after a run that stopped
+# partway), and clears temporary folders an earlier stopped run left (never the only copy: originals go last). A name
+# already in ~/.npm-global is kept as it is.
 keep_codex() {
-  local old="$NODE_DIR/lib/node_modules/@openai" pre="$HOME/.npm-global" p name rel dest part
-  [ -d "$old/codex" ] || return 0
-  mkdir -p "$pre/lib/node_modules/@openai" "$pre/bin" || return 1
+  local old="$NODE_DIR/lib/node_modules/@openai" pre="$HOME/.npm-global" scope p name rel dest part any=0
+  scope="$pre/lib/node_modules/@openai"
+  for p in "$old"/codex "$old"/codex-*; do [ -d "$p" ] && any=1; done
+  [ "$any" = 1 ] || return 0
+  mkdir -p "$scope" "$pre/bin" || return 1
+  for part in "$scope"/.mm-moving-*; do [ -e "$part" ] && rm -rf "$part"; done
   for p in "$old"/codex "$old"/codex-*; do
     [ -d "$p" ] || continue
     name="$(basename "$p")"
-    dest="$pre/lib/node_modules/@openai/$name"
+    dest="$scope/$name"
     if [ -e "$dest" ] || [ -L "$dest" ]; then continue; fi
-    part="$pre/lib/node_modules/@openai/.mm-moving-$name.$$"
-    if ! mv "$p" "$part"; then rm -rf "$part"; return 1; fi
-    mv "$part" "$dest" || return 1
+    part="$(mktemp -d "$scope/.mm-moving-XXXXXX")" || return 1
+    if ! cp -pPR "$p" "$part/pkg" || ! "$NODE" -e 'require("fs").renameSync(process.argv[1], process.argv[2])' "$part/pkg" "$dest" 2>/dev/null; then
+      rm -rf "$part"; return 1
+    fi
+    rmdir "$part" 2>/dev/null || true
+    rm -rf "$p"
   done
   if [ ! -e "$pre/bin/codex" ] && [ ! -L "$pre/bin/codex" ]; then
     rel="$("$NODE" -e 'const b=require(process.argv[1]).bin;process.stdout.write(String(typeof b==="string"?b:(b&&b.codex)||""))' "$pre/lib/node_modules/@openai/codex/package.json" 2>/dev/null || true)"
