@@ -54,11 +54,11 @@ test('wired: Claude client query option, gateway option, Codex; agent field vali
   const chat = read('lib/sdk-chat.js');
   assert.match(chat, /const sdkEffort = options && options\.effort \? effortLib\.forTurn\(`claude-sdk\/\$\{sdkModel\}`, options\.effort, await agentEffort\(agentName\)\) : effortLib\.forModel\(`claude-sdk\/\$\{sdkModel\}`, await agentEffort\(agentName\)\);/);
   assert.match(chat, /\.\.\.\(sdkEffort \? \{ effort: sdkEffort \} : \{\}\),/);
-  assert.match(chat, /agent: agentName, effort: turnEffort \}/);
-  assert.match(chat, /ephemeral: !!ephemeral, effort: codexEffort, reasoningSummary: showReasoning\(\) \? 'auto' : null \}\);/);
+  assert.match(chat, /agent: agentName, effort: turnEffort, tier: tierNow \}/);
+  assert.match(chat, /ephemeral: !!ephemeral, effort: codexEffort, reasoningSummary: showReasoning\(\) \? 'auto' : null, serviceTier: codexServiceTier \}\);/);
   const agents = read('lib/agents.js');
   assert.match(agents, /effort: require\('\.\/effort'\)\.normalize\(a\.effort\)/);
-  assert.match(agents, /'tools', 'effort'(, 'voice')?(, 'callDisplay')?(, 'voiceDefaults')?\];/);   // the voice build and the call display add fields after effort
+  assert.match(agents, /'tools', 'effort'(, 'tier')?(, 'voice')?(, 'callDisplay')?(, 'voiceDefaults')?\];/);   // the voice build and the call display add fields after effort
   assert.match(agents, /effort must be default, low, medium, high, xhigh, max or ultra/);
   const server = read('server.js');
   assert.match(server, /const MEMBER_EDITABLE = new Set\(\['blurb', 'maxContextMessages', 'maxOutputTokens', 'contextBudget', 'compaction', 'minimalContext'\]\);/, 'effort is not member-editable');

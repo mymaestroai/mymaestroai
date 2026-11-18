@@ -34,6 +34,7 @@ function harness(respond, toolHandlers = {}) {
     providerPacing: require('../lib/provider-pacing'),   // the gateway catch emits a typed turn_error for the pacing layer
     errorHelp: require('../lib/error-help'),   // ...and the error in plain words for the reply text
     modelHealth: { record() {} },   // model health marks are a no-op in this sandbox
+    tierLib: require('../lib/tier'),   // speed/price tier: pure
     chatCompletionStream: async (messages, opts) => {
       requests.push(structuredClone(messages));
       assert.equal(opts.noRetries, true);
