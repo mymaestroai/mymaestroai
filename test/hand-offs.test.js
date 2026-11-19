@@ -699,3 +699,47 @@ test('r3: a continuation lookup that fails keeps the hand-off waiting instead of
   assert.strictEqual(env.h.get(v.id).state, 'waiting');
   assert.strictEqual(env.h.get(v.id).report, null);
 });
+
+test('r3: a cancel that can\'t be saved changes nothing and says so; nothing is stopped', async () => {
+  const env = setup();
+  const v = await mk(env);
+  await env.h.tick();
+  env.active.add('lead');
+  const save = env.h._save.bind(env.h);
+  env.h._save = () => false;
+  assert.throws(() => env.h.cancel({ caller: 'sam', id: v.id }), /Couldn't save the cancel/);
+  assert.strictEqual(env.h.get(v.id).state, 'running');
+  assert.deepStrictEqual(env.stopped, []);
+  assert.deepStrictEqual(env.cancelled, []);
+  env.h._save = save;
+  env.h.cancel({ caller: 'sam', id: v.id });
+  assert.deepStrictEqual(env.stopped, ['lead']);
+});
+
+test('r3: mayContinue answers before a continuation\'s turn starts: over, unknown or another agent\'s -> false; a stale one fails -> false', async () => {
+  const stamps = { sam: 'box:s1', lead: 'box:l1' };
+  let allowed = true;
+  const env = setup({ stampOf: (n) => stamps[n] || null, mayTarget: async () => allowed });
+  const v = await mk(env);
+  await env.h.tick();
+  env.continuations.add(v.id);
+  env.turns[0].finish('step 1'); await flush();
+  assert.strictEqual(await env.h.mayContinue(v.id, 'lead'), true);
+  assert.strictEqual(await env.h.mayContinue(v.id, 'other'), false);
+  assert.strictEqual(await env.h.mayContinue('ho-00000000', 'lead'), false);
+  allowed = false;
+  assert.strictEqual(await env.h.mayContinue(v.id, 'lead'), false);
+  assert.strictEqual(env.h.get(v.id).state, 'failed');
+  assert.ok(env.cancelled.includes(v.id), 'its continuations cancelled');
+  assert.strictEqual(await env.h.mayContinue(v.id, 'lead'), false, 'over');
+});
+
+test('r3: the job folder is made inside the Files folder and brief.md is never written over an existing file', async () => {
+  const env = setup();
+  const v = await mk(env);
+  assert.ok(fs.realpathSync(v.folder).startsWith(fs.realpathSync(path.join(env.files, 'lead')) + path.sep));
+  assert.ok(fs.readFileSync(path.join(v.folder, 'brief.md'), 'utf8').startsWith('# Big Job'));
+  const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'hand-offs.js'), 'utf8');
+  assert.match(src, /fs\.writeFileSync\(`\/proc\/self\/fd\/\$\{cfd\}\/brief\.md`, briefText, \{ flag: 'wx' \}\);/);
+  assert.match(src, /if \(O_DIRECTORY === undefined \|\| !fs\.existsSync\('\/proc\/self\/fd'\)\) return null;/, 'no status read without /proc');
+});

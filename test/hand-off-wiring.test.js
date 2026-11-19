@@ -209,3 +209,8 @@ test('review r2: a held task (after a restore, waiting on the owner) still count
   assert.match(SDK, /hasContinuation: \(id\) => \{ const c = handOffContinuations\(id, \{ strict: true \}\);/);
   assert.match(SDK, /catch \(e\) \{ if \(strict\) throw e; return \[\]; \}/);
 });
+
+test('review r3: a continuation is authorised before its turn starts; skill tools stay out of a hand-off turn', () => {
+  assert.match(SDK, /\(handOff \? getHandOffRunner\(\)\.mayContinue\(handOff, agentName\)\.catch\(\(\) => false\) : Promise\.resolve\(true\)\)\.then\(\(ok\) => \{\n\s+if \(!ok\) \{[^\n]*resolve\(\); \} if \(onReply\) onReply\(''\); return; \}\n\s+handleChatStream\(/);
+  assert.match(SDK, /if \(!handOffOfTurn\(agentName\)\) try \{\n\s+let exclude = null; try \{ exclude = connectorsLib\.getConnectors\(\)\.wrappedSkillIds\(\); \} catch \{\}\n\s+const skillResult = await getSkillTools/);
+});
