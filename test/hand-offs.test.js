@@ -660,3 +660,32 @@ test('r1 B7: a waiting hand-off whose continuation vanished ends after two looks
   assert.strictEqual(env3.h.get(v3.id).state, 'failed');
   assert.match(env3.h.get(v3.id).error, /no longer exists/);
 });
+
+test('r2: a named pipe as STATUS.md is not opened in a way that blocks (no regular file: no status); the read goes through the open folder', async () => {
+  const env = setup();
+  const v = await mk(env);
+  require('child_process').execFileSync('mkfifo', [path.join(v.folder, 'STATUS.md')]);
+  const t = Date.now();
+  assert.strictEqual(env.h.list('sam', { withStatus: true })[0].status, null);
+  assert.ok(Date.now() - t < 2000, 'returned at once');
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'lib', 'hand-offs.js'), 'utf8'), /fd = fs\.openSync\(file, O_RDONLY \| O_NOFOLLOW \| O_NONBLOCK\);/);
+});
+
+test('r2: the reconcile looks again after its await: a hand-off cancelled meanwhile stays cancelled', async () => {
+  let release;
+  const env = setup({ pollMs: 1000 });
+  const v = await mk(env);
+  await env.h.tick();
+  env.continuations.add(v.id);
+  env.turns[0].finish('x'); await flush();
+  env.continuations.delete(v.id);
+  await env.h.tick(); env.t += 2000;
+  env.h.agentExists = () => new Promise((r) => { release = r; });
+  const ticking = env.h.tick();
+  await flush(); await flush();
+  env.h.cancel({ caller: 'sam', id: v.id });
+  release(true);
+  await ticking;
+  assert.strictEqual(env.h.get(v.id).state, 'cancelled');
+  assert.strictEqual(env.h.get(v.id).report, null);
+});

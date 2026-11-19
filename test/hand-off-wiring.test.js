@@ -202,3 +202,7 @@ test('review r1: the runner checks identities, access and earlier deliveries; a 
   assert.equal((SDK.match(/\.enqueue\(\{ from: coordinatorName/g) || []).length, 2, 'the 409 path and holdConsultForCall');
   assert.equal((SDK.match(/q\.enqueue\(\{ from: coordinatorName/g) || []).length, 1, 'holdConsultForCall');
 });
+
+test('review r2: a held task (after a restore, waiting on the owner) still counts as the hand-off\'s continuation', () => {
+  assert.match(SDK, /t\.handOff === id && \(t\.status === 'active' \|\| t\.status === 'paused' \|\| t\.status === 'held' \|\| t\.queued\)/);
+});
