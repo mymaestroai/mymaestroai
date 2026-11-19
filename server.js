@@ -2179,17 +2179,20 @@ async function handleHttpRequest(req, res) {
       if (r) return jsonResponse(res, r.status, r.body);
     }
     // ── Component watch (lib/component-watch): admin-only (the route class above). GET the items and the Codex setting,
-    // POST /check looks now, POST /codex/update updates the Codex client now (409 when refused or failed). ──
+    // POST /check looks now (a look only: updates run on the schedule or with the button), POST /codex/update starts the
+    // Codex client update and answers 202 at once (409 when it is refused at once); the outcome is the item's lastUpdate. ──
     if (pathname === '/api/components' && req.method === 'GET') {
       return jsonResponse(res, 200, { items: componentWatch().items(), setting: { codex: (hubSettings.getSetting('componentUpdates', {}) || {}).codex || 'auto' } });
     }
     if (pathname === '/api/components/check' && req.method === 'POST') {
-      try { await componentWatch().check({ reason: 'manual' }); } catch (e) { return jsonResponse(res, 500, { error: e.message }); }
+      try { await componentWatch().check({ reason: 'manual', allowUpdate: false }); } catch (e) { return jsonResponse(res, 500, { error: e.message }); }
       return jsonResponse(res, 200, { items: componentWatch().items() });
     }
     if (pathname === '/api/components/codex/update' && req.method === 'POST') {
-      let r; try { r = await componentWatch().updateCodexNow(); } catch (e) { r = { ok: false, error: e.message }; }
-      return jsonResponse(res, r && r.ok ? 200 : 409, r && r.ok ? r : { ...(r || {}), error: (r && r.error) || 'the update did not run' });
+      const can = componentWatch().canUpdateCodexNow();
+      if (!can || !can.ok) return jsonResponse(res, 409, { ok: false, error: (can && can.error) || 'the update did not run' });
+      componentWatch().updateCodexNow().catch((e) => console.warn(`[component-watch] Codex update failed: ${e && e.message}`));   // not awaited: it takes minutes
+      return jsonResponse(res, 202, { started: true });
     }
     // ── Memory health (lib/memory-health): admin-only. GET answers with the last result while it is under 26 hours old
     // (else checks now); run checks now. Nightly from the schedule at start.

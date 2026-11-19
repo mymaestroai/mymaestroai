@@ -4349,7 +4349,7 @@
       const day = (t) => { const d = new Date(t); return isNaN(d) ? '' : d.toLocaleDateString(); };
       list.innerHTML = items.length ? items.map((it) => {
         const lu = it.lastUpdate;
-        const upd = lu ? (lu.ok ? `<div>Updated from ${escapeHtml(lu.from)} to ${escapeHtml(lu.to)} on ${escapeHtml(day(lu.at))}</div>` : `<div>Update to ${escapeHtml(lu.to)} failed${lu.rolledBack ? `; ${escapeHtml(lu.from)} was put back` : ''}</div>`) : '';
+        const upd = lu ? (lu.ok ? `<div>Updated from ${escapeHtml(lu.from)} to ${escapeHtml(lu.to)} on ${escapeHtml(day(lu.at))}</div>` : lu.to ? `<div>Update to ${escapeHtml(lu.to)} failed${lu.rolledBack ? `; ${escapeHtml(lu.from)} was put back` : ''}</div>` : `<div>Not updated: ${escapeHtml(lu.error || 'the update did not run')}</div>`) : '';
         return `<div class="st-cw-row" style="margin-bottom:8px"><strong>${escapeHtml(it.name)}</strong>: installed ${escapeHtml(it.installed || 'not installed')}, newest ${escapeHtml(it.latest || 'unknown')}${it.behind ? ' (newer is out)' : ''}${it.how ? `<div>${escapeHtml(it.how)}</div>` : ''}${it.waiting ? `<div>${escapeHtml(it.waiting)}</div>` : ''}${upd}</div>`;
       }).join('') : 'Nothing to show yet.';
       if (!codexBox) return;
@@ -4388,18 +4388,43 @@
         await loadComponents();
       } catch (e) { alert('Could not save: ' + e.message); if (st) st.textContent = ''; }
     }
+    // The update takes minutes: POST answers 202 at once (409 with the reason when it is refused), then GET /api/components
+    // is polled every 3 s (at most 15 minutes) until the Codex item's lastUpdate is newer than the one seen when pressed.
     async function updateCodexNow(btn) {
-      const st = document.getElementById('st-cw-state');
-      if (btn) { btn.disabled = true; btn.textContent = 'Updating…'; }
+      const say = (t) => { const el = document.getElementById('st-cw-state'); if (el) el.textContent = t; };
+      const codexOf = (d) => (Array.isArray(d && d.items) ? d.items.find((it) => it && it.id === 'codex') : null);
+      if (btn) btn.disabled = true;
+      let baseline = 0;
+      try {
+        const g = await fetch('/api/components', { credentials: 'include' });
+        const lu0 = g.ok ? (codexOf(await g.json()) || {}).lastUpdate : null;
+        baseline = lu0 && Number(lu0.at) ? Number(lu0.at) : 0;
+      } catch (e) { baseline = 0; }
       let text = '';
       try {
         const r = await fetch('/api/components/codex/update', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: '{}' });
         const j = await r.json().catch(() => ({}));
-        text = r.ok ? `Codex updated${j.to ? ' to ' + j.to : ''}.` : `Codex was not updated: ${j.error || 'HTTP ' + r.status}${j.rolledBack ? `; ${j.from} was put back` : ''}`;
+        if (r.status === 202) {
+          say('Updating Codex…');
+          if (btn) btn.textContent = 'Updating…';
+          const until = Date.now() + 15 * 60 * 1000;
+          let lu = null;
+          while (Date.now() < until) {
+            await new Promise((ok) => setTimeout(ok, 3000));
+            try {
+              const g = await fetch('/api/components', { credentials: 'include' });
+              if (!g.ok) continue;
+              const data = await g.json();
+              const l = (codexOf(data) || {}).lastUpdate;
+              if (l && Number(l.at) > baseline) { lu = l; paintComponents(data); break; }
+            } catch (e) { /* the hub may be busy: try again */ }
+          }
+          if (!lu) text = 'Codex update is still running. Check again in a few minutes.';
+          else text = lu.ok ? `Codex updated${lu.to ? ' to ' + lu.to : ''}.` : `Codex was not updated: ${lu.error || 'unknown error'}`;
+        } else text = r.ok ? `Codex updated${j.to ? ' to ' + j.to : ''}.` : (j.error || `Codex was not updated: HTTP ${r.status}`);
       } catch (e) { text = 'Could not update: ' + e.message; }
       await loadComponents();
-      const st2 = document.getElementById('st-cw-state');
-      if (st2) st2.textContent = text;
+      say(text);
     }
 
     async function checkUpdatesNow(btn) {

@@ -17,7 +17,7 @@ const SWAP_URL = 'https://api.github.com/repos/mostlygeek/llama-swap/releases/la
 const CPP_URL = 'https://api.github.com/repos/ggml-org/llama.cpp/releases/latest';
 
 function make(over = {}) {
-  const calls = { fetched: [], updates: [], timers: [], discovers: 0 };
+  const calls = { fetched: [], updates: [], timers: [], discovers: 0, recovers: 0 };
   const docs = over.docs || {
     [CODEX_URL]: npmDoc({ '0.156.1': ago(500), '0.166.0': ago(30), '0.170.0': ago(3), '0.171.0-beta.1': ago(1) }),
     [CLAUDE_URL]: npmDoc({ '1.0.0': ago(500) }),
@@ -30,6 +30,8 @@ function make(over = {}) {
     setting: () => over.setting || { codex: 'auto' },
     codexInstalled: () => (over.installed === undefined ? '0.156.1' : over.installed),
     codexInUse: () => !!over.inUse,
+    codexManaged: () => (over.managed === undefined ? true : over.managed),
+    recoverCodex: async () => { calls.recovers++; return over.recoverResult || { recovered: false, error: null }; },
     updateCodex: async (o) => {
       calls.updates.push(o);
       if (over.afterUpdate) models = over.afterUpdate;
@@ -288,4 +290,110 @@ test('lead: an asynchronous Claude client lookup reaches the item; llama.cpp is 
   assert.match(c.how, /brings Claude client 0\.3\.330/);
   assert.equal(items.some((i) => i.id === 'llama.cpp'), false, 'a llama-server from PATH is not the hub build');
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('F2: only a release that was installed and then failed is not tried again; a copy or network failure is retried', async () => {
+  const installedFail = make({ updateResult: { ok: false, from: '0.156.1', to: '0.166.0', rolledBack: true, error: 'x' } });
+  await installedFail.w.check();
+  await installedFail.w.check();
+  assert.equal(installedFail.calls.updates.length, 1, 'the release that failed its check is left alone');
+
+  const copyFail = make({ updateResult: { ok: false, from: '0.156.1', to: null, rolledBack: false, error: "Couldn't keep a copy of the current Codex, so nothing changed." } });
+  await copyFail.w.check();
+  await copyFail.w.check();
+  assert.equal(copyFail.calls.updates.length, 2, 'a copy failure is not the release\'s fault: tried again');
+
+  const same = make({ updateResult: { ok: false, from: '0.156.1', to: '0.156.1', rolledBack: false, error: 'npm failed' } });
+  await same.w.check();
+  await same.w.check();
+  assert.equal(same.calls.updates.length, 2, 'no different version was installed: tried again');
+});
+
+test('F5: the default fetch stops at 30 MB (content-length or text) and returns null', async () => {
+  const { defaultFetchJson } = require('../lib/component-watch');
+  const mk = (len, text) => async () => ({ ok: true, headers: { get: (h) => (h === 'content-length' && len != null ? String(len) : null) }, text: async () => text });
+  assert.deepEqual(await defaultFetchJson('u', mk(10, '{"a":1}')), { a: 1 });
+  assert.equal(await defaultFetchJson('u', mk(31 * 1024 * 1024, '{"a":1}')), null, 'a large content-length is refused before reading');
+  let read = false;
+  const spy = async () => ({ ok: true, headers: { get: () => String(31 * 1024 * 1024) }, text: async () => { read = true; return '{}'; } });
+  await defaultFetchJson('u', spy);
+  assert.equal(read, false);
+  assert.equal(await defaultFetchJson('u', mk(null, ' '.repeat(30 * 1024 * 1024 + 1))), null, 'a body over the cap is refused');
+  assert.equal(await defaultFetchJson('u', mk(null, 'not json')), null);
+  assert.equal(await defaultFetchJson('u', async () => ({ ok: false })), null);
+  assert.equal(await defaultFetchJson('u', async () => { throw new Error('offline'); }), null);
+});
+
+test('F7: a Codex that is not the hub\'s own is listed as notify, never updated by itself or by the button', async () => {
+  const { w, calls } = make({ managed: false });
+  const items = await w.check();
+  const c = byId(items, 'codex');
+  assert.equal(c.action, 'notify');
+  assert.equal(c.how, 'This Codex is not the one your Maestro installed; update it the way it was installed.');
+  assert.equal(c.behind, true);
+  assert.equal(calls.updates.length, 0);
+  const can = w.canUpdateCodexNow();
+  assert.deepEqual(can, { ok: false, error: 'This Codex is not the one your Maestro installed; update it the way it was installed.' });
+  const r = await w.updateCodexNow();
+  assert.equal(r.ok, false);
+  assert.equal(r.error, can.error);
+  assert.equal(calls.updates.length, 0);
+});
+
+test('F6: canUpdateCodexNow answers at once from the stored data', async () => {
+  const { w } = make({ setting: { codex: 'notify' } });
+  assert.match(w.canUpdateCodexNow().error, /no newer Codex release/, 'nothing stored yet');
+  await w.check({ allowUpdate: false });
+  assert.deepEqual(w.canUpdateCodexNow(), { ok: true });
+  assert.equal(make({ setting: { codex: 'off' } }).w.canUpdateCodexNow().ok, false);
+  assert.match(make({ installed: null }).w.canUpdateCodexNow().error, /not installed/);
+  const busy = make({ setting: { codex: 'notify' }, inUse: true });
+  await busy.w.check({ allowUpdate: false });
+  assert.match(busy.w.canUpdateCodexNow().error, /in use/);
+  const p = w.updateCodexNow();
+  assert.match(w.canUpdateCodexNow().error, /already running/);
+  await p;
+});
+
+test('F6: a refusal after the start is written to lastUpdate so the page sees it', async () => {
+  const { w } = make({ setting: { codex: 'notify' }, inUse: true });
+  const r = await w.updateCodexNow();
+  assert.match(r.error, /in use/);
+  const lu = byId(w.items(), 'codex').lastUpdate;
+  assert.equal(lu.ok, false);
+  assert.match(lu.error, /in use/);
+  assert.equal(lu.at, NOW);
+});
+
+test('F9: the retry counter resets at the daily check', async () => {
+  const { w, calls } = make({ inUse: true });
+  await w.check();
+  for (let i = 0; i < 8; i++) { const t = calls.timers[calls.timers.length - 1]; await t.fn(); await new Promise(r => setImmediate(r)); }
+  assert.equal(calls.timers.length, 6);
+  await w.check({ reason: 'daily' });
+  assert.equal(calls.timers.length, 7, 'hourly retries start again after the daily check');
+});
+
+test('F10: a component entry that is not a plain object is dropped when the state is loaded', async () => {
+  const stateFile = tmpState();
+  fs.writeFileSync(stateFile, JSON.stringify({ components: { codex: 5, claude: [1], 'llama-swap': null, 'llama.cpp': { installed: 'b1', latest: 'b2' } } }));
+  const { w } = make({ stateFile, setting: { codex: 'notify' } });
+  const items = w.items();
+  assert.deepEqual(items.map(i => i.id), ['llama.cpp']);
+  const { w: w2 } = make({ stateFile, setting: { codex: 'notify' } });
+  await w2.check({ allowUpdate: false });   // no crash on the dropped entries
+});
+
+test('B2: start runs one recovery before the first check timer and logs a recovery', async () => {
+  const logs = [];
+  const { w, calls, deps } = make({ setting: { codex: 'notify' }, recoverResult: { recovered: true, error: null } });
+  deps.log = (m) => logs.push(m);
+  const w2 = createComponentWatch(deps);
+  w2.start();
+  await new Promise(r => setImmediate(r));
+  assert.equal(calls.recovers, 1);
+  assert.equal(calls.timers.length, 1);
+  assert.equal(calls.timers[0].ms, 10 * 60 * 1000);
+  assert.ok(logs.some(m => /put back|recovered/i.test(m)));
+  w2.stop(); w.stop();
 });

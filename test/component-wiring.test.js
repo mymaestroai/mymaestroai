@@ -35,10 +35,47 @@ test('server.js: one watch with the hub deps, started after listen next to the u
 
 test('server.js routes: GET items + setting, POST check, POST codex/update 200 or 409; admin by the route class', () => {
   assert.match(server, /pathname === '\/api\/components' && req\.method === 'GET'[\s\S]{0,200}items: componentWatch\(\)\.items\(\), setting: \{ codex:/);
-  assert.match(server, /pathname === '\/api\/components\/check' && req\.method === 'POST'[\s\S]{0,200}check\(\{ reason: 'manual' \}\)/);
-  assert.match(server, /pathname === '\/api\/components\/codex\/update' && req\.method === 'POST'[\s\S]{0,300}updateCodexNow\(\)[\s\S]{0,300}r && r\.ok \? 200 : 409/);
+  assert.match(server, /pathname === '\/api\/components\/check' && req\.method === 'POST'[\s\S]{0,200}check\(\{ reason: 'manual', allowUpdate: false \}\)/);
+  assert.match(server, /pathname === '\/api\/components\/codex\/update' && req\.method === 'POST'[\s\S]{0,300}canUpdateCodexNow\(\)[\s\S]{0,300}409[\s\S]{0,300}updateCodexNow\(\)[\s\S]{0,300}202, \{ started: true \}/);
   const access = require('../lib/access');
   for (const p of ['/api/components', '/api/components/check', '/api/components/codex/update']) assert.equal(access.classifyRoute(p, 'GET').kind, 'admin');
+});
+
+test('server.js: the update route does not await the update, the check route is a look only', () => {
+  const at = server.indexOf("pathname === '/api/components/codex/update'");
+  const route = server.slice(at, server.indexOf('// ── Memory health', at));
+  assert.match(route, /componentWatch\(\)\.updateCodexNow\(\)\.catch\(/);
+  assert.doesNotMatch(route, /await componentWatch\(\)\.updateCodexNow/);
+  assert.match(route, /jsonResponse\(res, 202, \{ started: true \}\)/);
+  const chk = server.slice(server.indexOf("pathname === '/api/components/check'"), at);
+  assert.match(chk, /allowUpdate: false/);
+});
+
+test('app.js updateCodexNow: 202 shows Updating Codex, polls every 3 s for 15 minutes, then reports lastUpdate; 409 shows the error', () => {
+  const body = app.slice(app.indexOf('async function updateCodexNow('), app.indexOf('async function checkUpdatesNow('));
+  assert.match(body, /r\.status === 202/);
+  assert.match(body, /Updating Codex…/);
+  assert.match(body, /15 \* 60 \* 1000/);
+  assert.match(body, /setTimeout\(ok, 3000\)/);
+  assert.match(body, /fetch\('\/api\/components', \{ credentials: 'include' \}\)/);
+  assert.match(body, /Number\(l\.at\) > baseline/);
+  assert.match(body, /Codex updated\$\{lu\.to/);
+  assert.match(body, /Codex was not updated: \$\{lu\.error/);
+  assert.match(body, /j\.error/);
+  assert.ok(!body.includes(String.fromCharCode(0xFE0F)), 'no U+FE0F');
+});
+
+test('sdk-chat: a Codex turn waits for the update lock right before the binary is resolved', () => {
+  assert.match(sdk, /const codexUpdateLock = require\('\.\/codex-cli\/update-lock'\);/);
+  const at = sdk.indexOf('async function streamViaCodex(');
+  assert.ok(at > 0);
+  const bin = sdk.indexOf('const bin = codexCli.resolveBinary();', at);
+  assert.ok(bin > at);
+  const line = "if (typeof codexUpdateLock !== 'undefined' && codexUpdateLock && codexUpdateLock.active()) await codexUpdateLock.waitIdle(15 * 60 * 1000);";
+  const lineAt = sdk.indexOf(line, at);
+  assert.ok(lineAt > at && lineAt < bin);
+  const between = sdk.slice(lineAt, bin);
+  assert.equal(between.split('\n').length, 2, 'the guarded line is the line right before the bin line');
 });
 
 test('server.js /api/settings: componentUpdates is cleaned to one of auto, notify, off', () => {
