@@ -205,6 +205,28 @@
     .block-note.task { margin-top: 0; margin-bottom: 6px; font-style: italic; }
     .block-note.waiting { color: #f59e0b; }
     .block-note.failed { color: #ef4444; font-weight: 600; }
+    .approval-card { border: 1px solid var(--warning); border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; background: var(--bg-input); }
+    .approval-card.answered { opacity: 0.65; border-color: var(--border-strong); }
+    .approval-title { font-weight: 600; font-size: 14px; }
+    .approval-summary { font-size: 13px; color: var(--text-dim); margin-top: 4px; word-break: break-word; }
+    .approval-detail { font-size: 12px; color: var(--text-dim); white-space: pre-wrap; word-break: break-word; max-height: 120px; overflow-y: auto; margin-top: 4px; }
+    .approval-meta { display: flex; justify-content: space-between; gap: 8px; margin-top: 6px; font-size: 12px; color: var(--text-tertiary); }
+    .approval-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 8px; }
+    .approval-actions button { border: 1px solid var(--border-strong); border-radius: 6px; padding: 6px 14px; background: transparent; color: var(--text); cursor: pointer; font-size: 13px; }
+    .approval-actions .allow { background: var(--success); color: #090B0F; border-color: var(--success); }
+    .approval-actions .deny { background: var(--error); color: #fff; border-color: var(--error); }
+    .approval-actions button:disabled { opacity: 0.5; cursor: default; }
+    .file-cards { display: flex; flex-direction: column; gap: 8px; margin: 8px 0 4px; }
+    .file-card { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; max-width: 420px; display: flex; flex-direction: column; gap: 8px; background: var(--bg-input); }
+    .file-card .fc-head { display: flex; align-items: center; gap: 10px; min-width: 0; }
+    .file-card .fc-icon { font-size: 24px; line-height: 1; flex: 0 0 auto; }
+    .file-card .fc-meta { min-width: 0; flex: 1 1 auto; }
+    .file-card .fc-name { font-size: 14px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .file-card .fc-sub { font-size: 12px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .file-card .fc-preview { max-width: 100%; max-height: 160px; object-fit: contain; border-radius: 6px; align-self: flex-start; }
+    .file-card .fc-preview-link { color: var(--accent); font-size: 13px; text-decoration: none; align-self: flex-start; }
+    .file-card .fc-download { display: block; text-align: center; background: var(--accent); border-radius: 6px; padding: 8px 14px; color: #fff; font-size: 13px; font-weight: 600; text-decoration: none; }
+    .file-card .fc-download:hover { background: var(--accent-hover); }
     .agent-block-header {
       display: flex;
       align-items: center;
@@ -454,6 +476,7 @@
   <script src="/vendor/marked.umd.js"></script>
   <script src="/vendor/purify.min.js"></script>
   <script src="/ui-dialog.js"></script>
+  <script src="/ui-file-card.js"></script>
   <script>
     window.dialogGuard = typeof createDialogGuard === 'function' ? createDialogGuard({ trackSaves: false }) : null;
     // Every agent- or server-supplied string that goes into markup passes through this.
@@ -1177,6 +1200,7 @@
       // The dot shows the agent's latest dispatch: working while any of its cards is still open.
       const stillWorking = [...callBlocks.values()].some(b => b.slug === block.slug && !b.done);
       if (!stillWorking) setDot(block.slug, failed ? 'failed' : 'done');
+      attachFileCards(block);   // download cards for files the reply names (also after a replay draws a finished card)
     }
 
     function markUnfinishedTools() {
@@ -1201,6 +1225,7 @@
           if (status) { status.className = 'tool-call-status done'; status.textContent = 'Done'; }
         });
         setDot(currentBlock.slug, 'done');
+        attachFileCards(currentBlock);   // the coordinator's card (its final report included)
         currentBlock = null;
       }
     }
@@ -1424,6 +1449,132 @@
     }
 
     // ── Event Handler ──
+    // ── Approvals ──
+    // A member whose tool needs the owner's OK emits approval_request (and approval_resolved when it is answered, by
+    // anyone, or times out). The card is drawn in the member's card (newest first) with Allow / Deny and a countdown.
+    // POST /api/approvals/<id> { decision: 'allow' | 'deny' }; a 404 means someone else (or the timeout) answered first.
+    const APPROVAL_CLASS_LABELS = { write_outside: 'write outside its folders', send: 'send off this machine', admin: 'change hub data / another agent', destroy: 'destructive action', money: 'move money' };
+    const approvalCards = new Map();       // id -> { data, card } while the buttons are on
+    const resolvedApprovals = new Set();   // ids already decided: a replay must not offer buttons for them
+    let approvalTimer = null;
+
+    function approvalWants(ev) {
+      const a = agents[ev.agent];
+      const who = (a && a.display) || ev.agent || 'An agent';
+      if (ev.cls === 'module') return `${who} needs your OK${ev.detail && ev.detail.module ? ` (${ev.detail.module})` : ''}`;
+      const label = APPROVAL_CLASS_LABELS[ev.cls] || String(ev.cls || 'do something that needs approval');
+      return `${who} wants to ${ev.cls === 'destroy' ? 'take a ' : ''}${label}`;
+    }
+    function approvalCountdown(expiresAt) {
+      const ms = expiresAt ? Date.parse(expiresAt) - Date.now() : NaN;
+      if (!(ms > 0)) return Number.isNaN(ms) ? '' : 'expired: not done';
+      const s = Math.ceil(ms / 1000);
+      return `expires in ${s >= 60 ? `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s` : `${s}s`}`;
+    }
+    function approvalDecisionText(gw) {
+      if (gw.by === 'timeout') return 'Timed out: not done';
+      const word = gw.decision === 'allow' ? 'Approved' : 'Denied';
+      return gw.by && gw.by !== 'owner' ? `${word} (${gw.by})` : word;
+    }
+    /** The buttons go and the card says how it was decided. */
+    function settleApproval(id, text) {
+      const rec = approvalCards.get(id);
+      if (!rec) return;
+      approvalCards.delete(id);
+      rec.card.classList.add('answered');
+      rec.card.querySelectorAll('button').forEach(b => b.remove());
+      const note = rec.card.querySelector('.approval-note');
+      if (note) note.textContent = text;
+      const cd = rec.card.querySelector('.approval-countdown');
+      if (cd) cd.textContent = '';
+      if (!approvalCards.size && approvalTimer) { clearInterval(approvalTimer); approvalTimer = null; }
+    }
+    function paintApprovalCountdowns() {
+      for (const [id, rec] of [...approvalCards]) {
+        const text = approvalCountdown(rec.data.expiresAt);
+        if (text === 'expired: not done') { settleApproval(id, 'Timed out: not done'); continue; }
+        const el = rec.card.querySelector('.approval-countdown');
+        if (el) el.textContent = text;
+      }
+    }
+    async function answerApproval(id, decision) {
+      const rec = approvalCards.get(id);
+      if (!rec) return;
+      const buttons = [...rec.card.querySelectorAll('button')];
+      buttons.forEach(b => { b.disabled = true; });
+      const note = rec.card.querySelector('.approval-note');
+      if (note) note.textContent = 'Sending…';
+      try {
+        const r = await fetch(`/api/approvals/${encodeURIComponent(id)}`, {
+          method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ decision }),
+        });
+        if (r.status === 404) { resolvedApprovals.add(id); settleApproval(id, 'Already answered'); return; }
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        resolvedApprovals.add(id);
+        settleApproval(id, decision === 'allow' ? 'Approved' : 'Denied');
+      } catch (e) {
+        if (note) note.textContent = `Could not send: ${e.message}`;
+        buttons.forEach(b => { b.disabled = false; });
+      }
+    }
+    /** approval_request / approval_resolved from a member's stream (block = its card) or the coordinator's (none). */
+    function handleApprovalEvent(gw, block) {
+      if (!gw || !gw.id) return;
+      if (gw.type === 'approval_resolved') {
+        resolvedApprovals.add(gw.id);
+        settleApproval(gw.id, approvalDecisionText(gw));
+        return;
+      }
+      if (resolvedApprovals.has(gw.id) || approvalCards.has(gw.id)) return;
+      const expired = gw.expiresAt && Date.parse(gw.expiresAt) <= Date.now();
+      const card = document.createElement('div');
+      card.className = 'approval-card';
+      card.dataset.id = String(gw.id);
+      const d = gw.detail && typeof gw.detail === 'object' ? gw.detail : null;
+      const detail = d ? Object.entries(d).filter(([, v]) => v !== null && v !== undefined && v !== '').map(([k, v]) => `${k}: ${typeof v === 'object' ? JSON.stringify(v) : String(v)}`).join('\n') : '';
+      card.innerHTML = `
+        <div class="approval-title">🔐 ${esc(approvalWants(gw))}</div>
+        <div class="approval-summary">${esc(gw.summary || '(no summary)')}</div>
+        ${detail ? `<pre class="approval-detail">${esc(detail.slice(0, 600))}</pre>` : ''}
+        <div class="approval-meta"><span class="approval-countdown">${esc(approvalCountdown(gw.expiresAt))}</span><span class="approval-note"></span></div>
+        <div class="approval-actions"><button type="button" class="deny">Deny</button><button type="button" class="allow">Allow</button></div>`;
+      if (block && block.element) {
+        const body = block.element.querySelector('.agent-block-body');
+        body.insertBefore(card, body.firstChild);   // newest first
+      } else {
+        document.getElementById('timeline').appendChild(card);
+      }
+      approvalCards.set(gw.id, { data: gw, card });
+      if (expired) { settleApproval(gw.id, 'Timed out: not done'); return; }
+      card.querySelector('.allow').onclick = () => answerApproval(gw.id, 'allow');
+      card.querySelector('.deny').onclick = () => answerApproval(gw.id, 'deny');
+      if (!approvalTimer) approvalTimer = setInterval(paintApprovalCountdowns, 1000);
+      scrollBottom();
+    }
+
+    // ── Download cards ──
+    // Files a reply names (lib/ui-file-card.js, window.hubFileCard) get a card each in a .file-cards box after the text.
+    // No candidates, no request; nothing here may throw into the page.
+    async function attachFileCards(block) {
+      try {
+        const H = window.hubFileCard;
+        if (!H || !block || !block.textEl || !block.textEl.isConnected) return;
+        const cands = H.candidatesFrom(block.textEl, { agent: block.slug ? String(block.slug) : null });
+        if (!cands || !cands.length) return;
+        const results = await H.resolveBatch((u, o) => fetch(u, o), cands);
+        if (!block.textEl.isConnected) return;
+        const html = results.map(r => (r && r.ok ? H.cardHtml(r, { esc }) : '')).join('');
+        const old = block.textEl.nextElementSibling;
+        if (old && old.classList.contains('file-cards')) old.remove();
+        if (!html) return;
+        const box = document.createElement('div');
+        box.className = 'file-cards';
+        box.innerHTML = html;
+        block.textEl.after(box);
+      } catch (e) { /* the cards are a convenience: the reply itself is already shown */ }
+    }
+
     function handleEvent(evt) {
       if (!evt || typeof evt !== 'object') return;
       // Numbered events (a hub with live replay): draw each once, even when a reconnect's replay overlaps.
@@ -1435,6 +1586,8 @@
       // The coordinator's events, and every event from an older hub, take the single-card path below.
       const member = evt.tt_call && (evt.tt_role === 'participant' || evt.tt_role === 'challenger')
         ? callBlock(evt.tt_call, evt.tt_agent, evt.tt_role === 'challenger' ? 'Challenger' : 'Participant') : null;
+
+      if (gw && (gw.type === 'approval_request' || gw.type === 'approval_resolved')) { handleApprovalEvent(gw, member); return; }
 
       if (gw && member) {
         switch (gw.type) {
