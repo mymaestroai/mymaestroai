@@ -689,3 +689,13 @@ test('r2: the reconcile looks again after its await: a hand-off cancelled meanwh
   assert.strictEqual(env.h.get(v.id).state, 'cancelled');
   assert.strictEqual(env.h.get(v.id).report, null);
 });
+
+test('r3: a continuation lookup that fails keeps the hand-off waiting instead of ending it', async () => {
+  const env = setup({ hasContinuation: () => { throw new Error('scheduler down'); } });
+  const v = await mk(env);
+  await env.h.tick();
+  env.turns[0].finish('step 1');
+  await flush();
+  assert.strictEqual(env.h.get(v.id).state, 'waiting');
+  assert.strictEqual(env.h.get(v.id).report, null);
+});

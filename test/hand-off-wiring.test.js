@@ -205,4 +205,7 @@ test('review r1: the runner checks identities, access and earlier deliveries; a 
 
 test('review r2: a held task (after a restore, waiting on the owner) still counts as the hand-off\'s continuation', () => {
   assert.match(SDK, /t\.handOff === id && \(t\.status === 'active' \|\| t\.status === 'paused' \|\| t\.status === 'held' \|\| t\.queued\)/);
+  // review r3: a failed lookup keeps the hand-off waiting (strict), never reads as nothing left
+  assert.match(SDK, /hasContinuation: \(id\) => \{ const c = handOffContinuations\(id, \{ strict: true \}\);/);
+  assert.match(SDK, /catch \(e\) \{ if \(strict\) throw e; return \[\]; \}/);
 });
