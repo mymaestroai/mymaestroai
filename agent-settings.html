@@ -379,6 +379,7 @@
     <input type="checkbox" id="model-pinned" onchange="saveModelPinned()" style="width:auto;">
     <label for="model-pinned" style="margin:0;cursor:pointer;">Keep this model (no suggestions)</label>
   </div>
+  <div id="model-pinned-status" class="status"></div>
   <div id="health-status" class="health-status"></div>
   <div style="display:flex;align-items:center;gap:8px;margin-top:10px;">
     <input type="checkbox" id="auto-model" onchange="saveAutoModel()" style="width:auto;">
@@ -552,6 +553,7 @@
     ['saveAllowedModels', 'allowed-models-status', byId('auto-model-checkboxes')],
     ['saveDisplayName', 'display-status', byId('display-name')],
     ['saveModel', 'model-status', byId('model-select')],
+    ['saveModelPinned', 'model-pinned-status', byId('model-pinned')],
     ['saveCurrentFile', 'file-status', () => [document.getElementById(`editor-${currentFile}`)]],
     ['saveRecord', 'records-status', byId('records-content')],
     ['saveCompaction', 'compaction-status', byId('compaction-mode', 'compaction-at', 'compaction-window')],
@@ -561,7 +563,7 @@
   // changed again while its save runs, is saved once more when that save ends, with its newest value. A Save button
   // pressed again meanwhile is refused with a message: a queued run would read the fields only when it starts and could
   // also save edits made after the press, so those edits stay unsaved until Save is pressed again.
-  const SAVES_ON_CHANGE = new Set(['saveCategory', 'saveLead', 'saveOwner', 'saveShared', 'saveModel', 'saveAutoModel', 'saveSandbox', 'saveLockbox', 'saveLockboxEnv', 'saveEffort', 'saveTeamGuidance', 'saveTeamRole', 'saveTier', 'saveCallDisplay', 'saveVoiceDefaults', 'saveToolsMode', 'saveRecordings', 'saveAgentVoice']);
+  const SAVES_ON_CHANGE = new Set(['saveCategory', 'saveLead', 'saveOwner', 'saveShared', 'saveModel', 'saveAutoModel', 'saveSandbox', 'saveLockbox', 'saveLockboxEnv', 'saveEffort', 'saveTeamGuidance', 'saveTeamRole', 'saveTier', 'saveCallDisplay', 'saveVoiceDefaults', 'saveToolsMode', 'saveRecordings', 'saveAgentVoice', 'saveModelPinned']);
   const pendingSaves = {};   // status id -> { commit, reload, fields, settled, again }
   for (const [fn, statusId, fields, how] of SAVES) {
     const orig = window[fn];
@@ -1836,14 +1838,19 @@
   // ── Model suggestions (GET /api/agents/:name/model-offer): every text from the server goes in with textContent ──
   let currentOffer = null;
   let pageIsAdmin = false;
-  function hideOffer() { currentOffer = null; const box = document.getElementById('model-offer'); if (box) box.style.display = 'none'; }
+  // Every hide and every load starts a new generation: an answer that arrives after a newer one began (a pin saved, a
+  // suggestion declined, a model picked) is dropped, so a late answer never brings the box back (review r1, GPT-6).
+  let offerGen = 0;
+  function hideOffer() { offerGen++; currentOffer = null; const box = document.getElementById('model-offer'); if (box) box.style.display = 'none'; }
   async function loadModelOffer() {
     hideOffer();
+    const gen = offerGen;
     const pin = document.getElementById('model-pinned');
     if (pin && pin.checked) return;
     try {
       const d = await apiFetch(`/api/agents/${encodeURIComponent(agentName)}/model-offer`);
       const o = d && d.offer;
+      if (gen !== offerGen || (pin && pin.checked)) return;   // overtaken, or pinned meanwhile
       if (!o || !o.to) return;
       currentOffer = o;
       document.getElementById('model-offer-title').textContent = (o.kind === 'stronger' ? 'A stronger model for second opinions: ' : 'A newer model is available: ') + o.to;
@@ -1891,17 +1898,18 @@
     const on = !!pin.checked;
     try {
       const result = await apiFetch(`/api/agents/${encodeURIComponent(agentName)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ modelPinned: on }) });
+      // Its own status line: the page runs one save per status line at a time (SAVES), so the pin never waits on a model save.
       if (result && (result.success || result.ok)) {
-        showStatus('model-status', 'success', on ? 'This model is kept: no suggestions.' : 'Suggestions are on again.');
-        if (on) hideOffer(); else await loadModelOffer();
-      } else { pin.checked = !on; showStatus('model-status', 'error', (result && result.error) || 'Failed'); }   // not saved: the box shows what is stored
-    } catch (e) { pin.checked = !on; showStatus('model-status', 'error', e.message); }
+        showStatus('model-pinned-status', 'success', on ? 'This model is kept: no suggestions.' : 'Suggestions are on again.');
+        if (on) hideOffer(); else loadModelOffer();
+      } else showStatus('model-pinned-status', 'error', (result && result.error) || 'Failed');
+    } catch (e) { showStatus('model-pinned-status', 'error', e.message); }
   }
   async function initModelOffer(agent) {
-    try { const me = await apiFetch('/api/me'); pageIsAdmin = !!(me && me.isAdmin); } catch { pageIsAdmin = false; }
     const row = document.getElementById('model-pinned-row');
     const pin = document.getElementById('model-pinned');
-    if (pin) pin.checked = agent?.modelPinned === true;
+    if (pin) { pin.checked = agent?.modelPinned === true; if (typeof pageGuard !== 'undefined' && pageGuard.markLoaded) pageGuard.markLoaded(pin); }   // the stored value: not an edit
+    try { const me = await apiFetch('/api/me'); pageIsAdmin = !!(me && me.isAdmin); } catch { pageIsAdmin = false; }
     if (row) row.style.display = pageIsAdmin ? 'flex' : 'none';
     await loadModelOffer();
   }

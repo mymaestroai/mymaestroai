@@ -13,7 +13,7 @@ function make(o = {}) {
   const d = fs.mkdtempSync(path.join(os.tmpdir(), 'mos-'));
   const pushed = []; const set = []; const pub = []; const declined = [];
   const state = { offer: { ...OFFER }, stamp: 'box:1', busy: false, ...o.state };
-  const roster = o.roster || [{ name: 'helper-b', display: 'Helper B', owner: 'u-admin' }, { name: 'sam', owner: 'u-member' }];
+  const roster = o.roster || [{ name: 'helper-b', display: 'Helper B', owner: 'u-admin', model: OFFER.from }, { name: 'sam', owner: 'u-member', model: OFFER.from }];
   const auditFile = o.auditFile || path.join(d, 'log.jsonl');
   const sw = createModelOfferSwitch({
     offers: { list: async () => (state.offer ? [state.offer] : []), offerFor: async (n) => (state.offer && n === state.offer.name ? state.offer : null), decline: (n, m) => { declined.push([n, m]); return o.declineErr ? { ok: false, error: o.declineErr } : { ok: true }; }, forget() {} },
@@ -107,12 +107,16 @@ test('switch: a failed audit refuses; a failed change is logged; a failed notice
 
 test('not_now and runTool texts', async (t) => {
   const m = make(); t.after(m.cleanup);
-  assert.equal(await runTool(m.sw, { action: 'not_now', agent: 'helper-b' }, 'lead-a'), 'Put aside: helper-b will not be offered claude-sdk/claude-opus-6 again.');
+  assert.equal(await runTool(m.sw, { action: 'not_now', agent: 'helper-b' }, 'lead-a', null, allowed), 'Put aside: helper-b will not be offered claude-sdk/claude-opus-6 again.');
   assert.deepEqual(m.declined, [['helper-b', OFFER.to]]);
   assert.equal(m.lines()[0].state, 'declined');
-  assert.match(await runTool(m.sw, { action: 'not_now', agent: 'sam' }), /belongs to a member/);
+  assert.match(await runTool(m.sw, { action: 'not_now', agent: 'sam' }, 'lead-a', null, allowed), /belongs to a member/);
   const e = make({ declineErr: 'nope' }); t.after(e.cleanup);
-  assert.equal(await runTool(e.sw, { action: 'not_now', agent: 'helper-b' }), 'nope');
+  assert.equal(await runTool(e.sw, { action: 'not_now', agent: 'helper-b' }, 'lead-a', null, allowed), 'nope');
+  // review r1 (Sonnet): not_now too needs the owner's turn to be on
+  const f = make(); t.after(f.cleanup);
+  assert.match(await runTool(f.sw, { action: 'not_now', agent: 'helper-b' }, 'lead-a', null, () => false), /turn ended/);
+  assert.deepEqual(f.declined, []);
   assert.equal(await runTool(m.sw, { action: 'switch', agent: 'helper-b' }, 'lead-a', yes, allowed), 'Done. helper-b now uses claude-sdk/claude-opus-6. The owner can undo it on its settings page.');
   assert.equal(TOOL.name, 'model_offer');
 });
@@ -139,4 +143,34 @@ test('review: the lead cannot switch its own model during its own turn; nothing 
   assert.equal(asked, 0);
   assert.deepEqual(m.set, []);
   assert.deepEqual(m.lines(), []);
+});
+
+test('review r1 (GPT-6): ownership that changes, or a turn that ends, during the second offer lookup stops the switch', async (t) => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'mos-')); t.after(() => fs.rmSync(d, { recursive: true, force: true }));
+  const run = async (during) => {
+    let calls = 0; const set = [];
+    const roster = [{ name: 'helper-b', owner: 'u-admin', model: OFFER.from }];
+    const flags = { allowed: true };
+    const sw = createModelOfferSwitch({
+      offers: { list: async () => [OFFER], offerFor: async () => { calls++; if (calls === 2) during(roster, flags); return OFFER; }, decline: () => ({ ok: true }), forget() {} },
+      agents: () => roster,
+      stampOf: () => 'box:1',
+      isMemberOwned: (a) => a.owner !== 'u-admin',
+      isVirtual: () => false,
+      setModel: async (n, m) => { set.push([n, m]); return { success: true }; },
+      published: () => {}, push: { notify() {} },
+      auditFile: path.join(d, `log-${Math.random()}.jsonl`), now: () => 0,
+    });
+    const out = await runTool(sw, { action: 'switch', agent: 'helper-b' }, 'lead-a', yes, () => flags.allowed);
+    return { out, set };
+  };
+  const a = await run((roster) => { roster[0] = { ...roster[0], owner: 'u-member' }; });
+  assert.match(a.out, /belongs to a member/);
+  assert.deepEqual(a.set, []);
+  const b = await run((_r, flags) => { flags.allowed = false; });
+  assert.match(b.out, /turn ended/);
+  assert.deepEqual(b.set, []);
+  const c = await run((roster) => { roster[0] = { ...roster[0], model: 'claude-sdk/claude-sonnet-5-5' }; });
+  assert.match(c.out, /no model suggestion right now/, 'the model changed meanwhile');
+  assert.deepEqual(c.set, []);
 });

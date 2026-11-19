@@ -51,3 +51,32 @@ test('settings toggle, setting patch and routes exist', () => {
   assert.match(server, /model-offer\\\/decline\$\/\.test\(pathname\) && req\.method === 'POST'/);
   assert.match(server, /That suggestion is no longer current\./);
 });
+
+test('review r1 (GPT-6): a suggestion answer that arrives after the pin was saved never shows the box again', async () => {
+  const vm = require('vm');
+  const block = page.slice(page.indexOf('  let currentOffer = null;'), page.indexOf('  async function switchToOffer('));
+  const els = {};
+  const el = (id) => (els[id] = els[id] || { id, style: { display: 'none' }, textContent: '', checked: false });
+  let release;
+  const ctx = {
+    agentName: 'helper-b',
+    document: { getElementById: el },
+    apiFetch: () => new Promise((ok) => { release = () => ok({ offer: { from: 'claude-sdk/claude-opus-5-5', to: 'claude-sdk/claude-opus-6', kind: 'newer', why: 'w', route: 'Subscription', cost: '' } }); }),
+  };
+  vm.createContext(ctx);
+  vm.runInContext(block + '\nglobalThis.api = { loadModelOffer, hideOffer };', ctx);
+  const p = ctx.api.loadModelOffer();          // the answer is still on its way
+  el('model-pinned').checked = true;          // the pin is saved meanwhile
+  ctx.api.hideOffer();
+  release(); await p;
+  assert.equal(el('model-offer').style.display, 'none');
+  // and without a pin, an overtaken answer is dropped too: only the newest load draws
+  el('model-pinned').checked = false;
+  const first = ctx.api.loadModelOffer(); const r1 = release;
+  const second = ctx.api.loadModelOffer(); const r2 = release;
+  r2(); await second;
+  assert.equal(el('model-offer').style.display, 'block');
+  ctx.api.hideOffer();
+  r1(); await first;
+  assert.equal(el('model-offer').style.display, 'none', 'the older answer does not bring it back');
+});

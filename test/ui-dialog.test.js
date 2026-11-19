@@ -686,7 +686,7 @@ test('review 2: agent settings: a wrapped save never writes its status after it 
   const HELPERS = ['showStatus', 'recordsStatus', 'compactionStatus'];
   const statusCall = /\b(?:showStatus|recordsStatus|compactionStatus)\(/;
   const saves = [...as.matchAll(/\['(save[A-Za-z]+)', '[\w-]+-status',/g)].map(m => m[1]);
-  assert.strictEqual(saves.length, 27);   // the 25th is saveTier (speed and price); the 20th is saveCallDisplay, the 21st saveVoiceDefaults, the 22nd saveRecordings (call recordings), the 23rd and 24th saveLockbox and saveLockboxEnv; team guidance added saveTeamGuidance and saveTeamRole (27)
+  assert.strictEqual(saves.length, 28);   // the 25th is saveTier (speed and price); the 20th is saveCallDisplay, the 21st saveVoiceDefaults, the 22nd saveRecordings (call recordings), the 23rd and 24th saveLockbox and saveLockboxEnv; team guidance added saveTeamGuidance and saveTeamRole (27); model suggestions added saveModelPinned (28)
   for (const fn of saves) {
     let body = fnBody(fn);
     const own = fn === 'savePolicy' ? ['patchPolicy'] : [];   // savePolicy reports through patchPolicy

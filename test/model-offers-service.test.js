@@ -56,3 +56,16 @@ test('offerFor, decline and forget', async () => {
   assert.equal(svc.forget('helper-b').ok, true);
   assert.ok(await svc.offerFor('helper-b'));
 });
+
+test('review r1: an unreadable declines file gives no offers; agent names of another shape never come out', async () => {
+  const { createModelOffers } = require('../lib/model-offers-service');
+  const base = {
+    agents: async () => [{ name: 'helper-b', model: 'claude-sdk/claude-opus-5-5' }, { name: 'bad name', model: 'claude-sdk/claude-opus-5-5' }],
+    available: async () => ['claude-sdk/claude-opus-6'],
+    isLead: () => false, enabled: () => true, isSensitive: () => false, isVirtual: () => false, teamOfferNames: async () => new Set(),
+  };
+  const ok = createModelOffers({ ...base, store: { read: () => ({ declined: {} }) } });
+  assert.deepEqual((await ok.list()).map((o) => o.name), ['helper-b']);
+  const broken = createModelOffers({ ...base, store: { read: () => ({ declined: {}, unreadable: true }) } });
+  assert.deepEqual(await broken.list(), []);
+});

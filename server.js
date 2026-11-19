@@ -1489,20 +1489,20 @@ async function handleHttpRequest(req, res) {
     }
 
     // /api/agents/:name/model-offer: the newer (or stronger) model on offer for this agent, or null (lib/model-offers-service)
+    // Admins only, like the settings page itself (the access gate classifies both model-offer routes as admin routes).
     if (/^\/api\/agents\/([^/]+)\/model-offer$/.test(pathname) && req.method === 'GET') {
-      const name = decodeURIComponent(pathname.split('/')[3]);
-      const isAdm = !!req.hubService || access.isAdmin(req.hubUser);
-      if (!isAdm && !access.canAccessAgent(req.hubUser, name, { agents: await getAgents() })) return jsonResponse(res, 403, { error: 'no_access_to_agent' });
+      if (!req.hubService && !access.isAdmin(req.hubUser)) return jsonResponse(res, 403, { error: 'admin_only' });
+      let name; try { name = decodeURIComponent(pathname.split('/')[3]); } catch { return jsonResponse(res, 400, { error: 'bad agent name' }); }
       const o = await require('./lib/model-offers-service').getModelOffers().offerFor(name);
-      if (!o || (!isAdm && !require('./lib/member-models').memberMayUse(o.to))) return jsonResponse(res, 200, { offer: null });
+      if (!o) return jsonResponse(res, 200, { offer: null });
       return jsonResponse(res, 200, { offer: { from: o.from, to: o.to, kind: o.kind, why: o.why, route: o.route, cost: o.cost } });
     }
 
     // /api/agents/:name/model-offer/decline: "Not now" (admin only); the model must be the current offer
     if (/^\/api\/agents\/([^/]+)\/model-offer\/decline$/.test(pathname) && req.method === 'POST') {
       if (!req.hubService && !access.isAdmin(req.hubUser)) return jsonResponse(res, 403, { error: 'admin_only' });
-      const name = decodeURIComponent(pathname.split('/')[3]);
-      const body = JSON.parse(await readBody(req));
+      let name; try { name = decodeURIComponent(pathname.split('/')[3]); } catch { return jsonResponse(res, 400, { error: 'bad agent name' }); }
+      let body; try { body = JSON.parse(await readBody(req)); } catch { return jsonResponse(res, 400, { error: 'invalid JSON' }); }
       const svc = require('./lib/model-offers-service').getModelOffers();
       const o = await svc.offerFor(name);
       if (!o || !body || o.to !== body.model) return jsonResponse(res, 409, { error: 'That suggestion is no longer current.' });
