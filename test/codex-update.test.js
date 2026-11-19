@@ -404,7 +404,7 @@ test('r5: a recovery that failed stops the update (the kept copy may be the only
   let installed = false;
   const r = await updateCodex({ env: h.env, recover: async () => ({ recovered: false, error: 'disk gone' }), install: () => { installed = true; return { ok: true }; }, selfCheck: async () => true });
   assert.equal(r.ok, false);
-  assert.match(r.error, /could not be undone \(disk gone\), so nothing changed/);
+  assert.match(r.error, /could not be finished \(disk gone\), so nothing changed/);
   assert.equal(installed, false);
   assert.equal(JSON.parse(fs.readFileSync(path.join(keep, 'package.json'), 'utf8')).version, '0.150.0', 'the kept copy is untouched');
 });
@@ -419,4 +419,33 @@ test('r5: when the marker cannot be removed after a good update, the kept copy g
   assert.equal(fs.existsSync(keepOf(h.dir)), false, 'nothing to put back');
   assert.equal((await recoverCodex({ env: h.env })).recovered, false);
   assert.equal(installedCodexVersion({ env: h.env }), '0.166.0', 'the good update stays');
+});
+
+test('r6: the kept copy is moved aside in one step, never half deleted; if even that fails it stays whole', async () => {
+  // the removal of the moved-aside copy fails part way: the kept copy name is already gone, so nothing half-deleted is restored
+  const h = mkHome();
+  const marker = markerOf(h.dir);
+  const fsImpl = Object.assign(Object.create(fs), {
+    unlinkSync(p) { if (p === marker) throw new Error('EPERM'); return fs.unlinkSync(p); },
+    rmSync(p, o) { if (/codex\.failed-/.test(String(p))) throw new Error('EBUSY'); return fs.rmSync(p, o); },
+  });
+  const r = await updateCodex({ env: h.env, fsImpl, install: () => { setVersion(h.dir, '0.166.0'); return { ok: true }; }, selfCheck: async () => true });
+  assert.equal(r.ok, true);
+  assert.equal(fs.existsSync(keepOf(h.dir)), false);
+  assert.equal((await recoverCodex({ env: h.env })).recovered, false, 'the marker alone restores nothing');
+  assert.equal(installedCodexVersion({ env: h.env }), '0.166.0');
+  assert.deepEqual(fs.readdirSync(path.dirname(h.dir)).filter((n) => /^codex\.failed-/.test(n)), [], 'the leftover aside copy is cleared by the recovery');
+
+  // marker and rename both fail (a folder that became read-only): the kept copy is left whole, never a partial one
+  const ro = mkHome();
+  const marker2 = markerOf(ro.dir);
+  let renames = 0;
+  const fsRo = Object.assign(Object.create(fs), {
+    unlinkSync(p) { if (p === marker2) throw new Error('EROFS'); return fs.unlinkSync(p); },
+    renameSync(a, b) { if (String(a).endsWith('.codex-previous') && /codex\.failed-/.test(String(b))) { renames++; throw new Error('EROFS'); } return fs.renameSync(a, b); },
+  });
+  const r2 = await updateCodex({ env: ro.env, fsImpl: fsRo, install: () => { setVersion(ro.dir, '0.166.0'); return { ok: true }; }, selfCheck: async () => true });
+  assert.equal(r2.ok, true);
+  assert.equal(renames, 1);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(keepOf(ro.dir), 'package.json'), 'utf8')).version, '0.156.1', 'the kept copy is whole');
 });
