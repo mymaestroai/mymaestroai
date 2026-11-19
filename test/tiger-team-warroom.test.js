@@ -395,7 +395,7 @@ test('review r1: Escape closes the More menu and returns the focus; Enter confir
 test('review r1: a member running two tools keeps showing the one still running when the first returns', () => {
   const page = require('node:fs').readFileSync(require('node:path').join(__dirname, '../tiger-team.html'), 'utf8');
   const body = page.slice(page.indexOf('function completeTool(callId, result) {'), page.indexOf('function completeTool(callId, result) {') + 900);
-  assert.match(body, /const other = \[\.\.\.toolMap\.values\(\)\]\.find\(t => t !== entry && t\.slug === entry\.slug && t\.line && !\/\\bdone\\b\/\.test\(t\.line\.className \|\| ''\)\);/);
+  assert.match(body, /const other = \[\.\.\.toolMap\.values\(\)\]\.find\(t => t !== entry && t\.slug === entry\.slug && t\.line && \/\\brunning\\b\/\.test\(t\.line\.className \|\| ''\)\);/);
   assert.match(body, /setMemberStep\(entry\.slug, other \? toolStepText\(other\.name\) : 'thinking…'\);/);
 });
 
