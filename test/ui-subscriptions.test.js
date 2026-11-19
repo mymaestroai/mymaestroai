@@ -232,3 +232,14 @@ test('no U+FE0F in the changed files', () => {
     for (const k of ['subsSheet', 'saveSubsOn', 'subsPlanWarning', 'paintSubsBox']) { const i = s.indexOf(`function ${k}(`); if (i > 0) assert.ok(!s.slice(i, i + 1800).includes(vs), `${f}: ${k}`); }
   }
 });
+
+test('Settings: the Claude bars are drawn once: in Subscriptions, and in the Claude plan box only while Subscription usage is off', () => {
+  const app = require('fs').readFileSync(require('path').join(__dirname, '..', 'app.js'), 'utf8');
+  const a = app.indexOf('async function loadPlanBox(');
+  const body = app.slice(a, app.indexOf('async function renderPlanAgents(', a));
+  assert.match(body, /if \(subsEnabled\(\) && document\.getElementById\('st-subs-section'\)\) usageEl\.innerHTML = [^\n]*'The usage of each window is shown under Subscriptions, above\.'/);
+  assert.match(body, /\n\s*else usageEl\.innerHTML = rows\.length \? rows\.map\(/);
+  assert.match(body, /planLast = d; paintPlanChip\(\); paintPlanBadges\(\); paintSubsBox\(\);/, 'Read usage now in the Claude plan box repaints the Subscriptions bars');
+  const save = app.slice(app.indexOf('async function saveSubsOn('), app.indexOf('async function loadPlanBox('));
+  assert.match(save, /if \(document\.getElementById\('st-plan-section'\)\) loadPlanBox\(\);/, 'the switch redraws the Claude plan box');
+});

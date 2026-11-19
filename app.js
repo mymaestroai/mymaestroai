@@ -5632,6 +5632,7 @@
         subsOnFlag = !!on;
         if (st) st.textContent = '';
         paintSubsBox(); paintPlanBadges();
+        if (document.getElementById('st-plan-section')) loadPlanBox();   // the Claude plan box draws its bars only while this is off
         if (on) loadSubsBox();
       } catch (e) {
         if (box) box.checked = !on;
@@ -5649,7 +5650,7 @@
         d = await r.json();
         if (!r.ok) throw new Error(d.error || r.status);
       } catch (e) { usageEl.textContent = `Could not read the plan: ${e.message}`; if (state) state.textContent = ''; return; }
-      planLast = d; paintPlanChip(); paintPlanBadges();
+      planLast = d; paintPlanChip(); paintPlanBadges(); paintSubsBox();
       const worst = (d.weekly || []).reduce((a, w) => (Number(w.utilization) || 0) > (a ? Number(a.utilization) || 0 : -1) ? w : a, null);
       stSum('models', 'plan', worst ? `${worst.family ? worst.label : 'Claude plan'} ${Math.round(Number(worst.utilization) || 0)}% this week` : '');
       if (state) state.textContent = d.fetchedAt ? `read ${new Date(d.fetchedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : (d.error ? `last read failed: ${String(d.error).slice(25, 140)}` : '');
@@ -5660,7 +5661,10 @@
       if (five && five.utilization != null) rows.push({ label: '5-hour window', utilization: five.utilization, resetsAt: five.resets_at, extraUsage: !!five.extraUsage && !five.rejected });
       for (const w of (d.weekly || [])) rows.push({ label: w.family ? `${w.label} (weekly)` : 'All models (weekly)', utilization: w.utilization, resetsAt: w.resetsAt, rejected: w.rejected, extraUsage: !!w.extraUsage && !w.rejected, weekly: true });
       const extraRow = rows.find(w => w.extraUsage && w.weekly);   // the hint speaks of the weekly plan
-      usageEl.innerHTML = rows.length ? rows.map(w => {
+      // The usage bars live in one place: Settings → Subscriptions, above. Only with Subscription usage turned off are
+      // they drawn here, as before that section existed.
+      if (subsEnabled() && document.getElementById('st-subs-section')) usageEl.innerHTML = d.error && !rows.length ? `No reading yet: ${esc(String(d.error).slice(25, 200))}` : 'The usage of each window is shown under Subscriptions, above.';
+      else usageEl.innerHTML = rows.length ? rows.map(w => {
         const pct = Math.round(Number(w.utilization) || 0);
         const color = w.extraUsage ? '#c9a227' : w.rejected || pct >= 100 ? '#d4588b' : (w.weekly && pct >= last) ? '#d95926' : (w.weekly && pct >= first) ? '#c9a227' : '#3987e5';
         return `<div style="display:flex;align-items:center;gap:10px;margin:3px 0"><span style="flex-basis:150px;flex-shrink:0">${esc(w.label)}</span><span style="width:140px;height:6px;background:var(--border);border-radius:3px;overflow:hidden;flex-shrink:0"><span style="display:block;height:100%;width:${Math.min(pct, 100)}%;background:${color}"></span></span><b style="color:${color};min-width:44px">${esc(planPctText(w))}</b><span style="color:var(--text-dim)">${w.rejected ? 'refused until ' : 'resets '}${esc(planWhen(w.resetsAt))}</span></div>`;
