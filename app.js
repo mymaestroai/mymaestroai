@@ -4226,7 +4226,8 @@
     const HL_TRIGGER = { start: 'after a start', nightly: 'nightly', manual: 'run by hand' };
     const HL_POLL_MS = 2000, HL_POLL_MAX_MS = 3 * 60 * 1000;
     const HL_NUMBERS = [['diskWarnPct', 'Disk: warn under (% free)'], ['diskWarnGB', 'Disk: warn under (GB free)'], ['diskCritPct', 'Disk: critical under (% free)'], ['diskCritGB', 'Disk: critical under (GB free)'],
-      ['fullInDays', 'Warn when full in under (days)'], ['backupWarnHours', 'Backups: warn after (hours)'], ['backupCritHours', 'Backups: critical after (hours)'], ['warnNights', 'Warning nights before a notice']];
+      ['fullInDays', 'Warn when full in under (days)'], ['backupWarnHours', 'Backups: warn after (hours)'], ['backupCritHours', 'Backups: critical after (hours)'], ['warnNights', 'Warning nights before a notice'],
+      ['clearMarginPct', 'Clears only this far above (% points)'], ['clearMarginGB', 'Clears only this far above (GB)']];
     let hlLoad = 0, hlSettings = null, hlPollUntil = 0;
     function hlWhen(iso) { const d = new Date(iso); return isNaN(d) ? String(iso || '') : d.toLocaleString(); }
     function hlMsg(text, bad = true) {

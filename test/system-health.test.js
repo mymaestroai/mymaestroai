@@ -63,7 +63,11 @@ const DISK = 'health-disk-data+workspaces';
 // ── settings ──
 test('validateSettings: defaults, unknown keys, ranges, orderings, notify values', () => {
   assert.deepStrictEqual(validateSettings({}).value, { ...DEFAULTS });
-  assert.deepStrictEqual(Object.keys(DEFAULTS).length, 14);
+  assert.deepStrictEqual(Object.keys(DEFAULTS).length, 16);
+  assert.strictEqual(DEFAULTS.clearMarginPct, 2); assert.strictEqual(DEFAULTS.clearMarginGB, 2);
+  assert.strictEqual(validateSettings({ clearMarginPct: 51 }).ok, false);
+  assert.strictEqual(validateSettings({ clearMarginGB: -1 }).ok, false);
+  assert.strictEqual(validateSettings({ clearMarginPct: 0, clearMarginGB: 0 }).ok, true);
   assert.strictEqual(validateSettings({ bogus: 1 }).ok, false);
   assert.strictEqual(validateSettings({ checkAt: '25:00' }).ok, false);
   assert.strictEqual(validateSettings({ checkAt: '3:15' }).ok, false);
@@ -99,8 +103,8 @@ test('settings(): missing keys are defaults; a bad value falls back for that key
 
 // ── disk ──
 test('disk: thresholds at the edges (percent and GB, critical and warn)', async () => {
-  const h = make();
-  const lv = async (pct, bytes) => { setFree(h, pct, bytes); return item(await manual(h), DISK).level; };
+  // each edge on a fresh install: a problem already known holds its level within the clearing margin (tested below)
+  const lv = async (pct, bytes) => { const h = make(); setFree(h, pct, bytes); return item(await manual(h), DISK).level; };
   assert.strictEqual(await lv(50, 100 * GB), 'ok');
   assert.strictEqual(await lv(5, 100 * GB), 'warn', 'exactly the critical percent is not critical');
   assert.strictEqual(await lv(4.99, 100 * GB), 'critical');
@@ -120,8 +124,9 @@ test('disk: title, folders in the detail, a fix; thresholds come from settings',
   assert.strictEqual(it.title, 'Disk almost full: 3.1 GB free (2%)');
   assert.match(it.detail, /Folders on it: data, workspaces/);
   assert.match(it.fix, /data, workspaces/);
-  h.cfg.settings = { diskCritPct: 1, diskCritGB: 1, diskWarnPct: 3, diskWarnGB: 4 };
-  assert.strictEqual(item(await manual(h), DISK).level, 'warn');
+  const h2 = make(); setFree(h2, 2, 3.1 * GB);
+  h2.cfg.settings = { diskCritPct: 1, diskCritGB: 1, diskWarnPct: 3, diskWarnGB: 4 };
+  assert.strictEqual(item(await manual(h2), DISK).level, 'warn');
 });
 
 test('disk: a problem on a full run lists the 5 largest folders; a partial run, or no problem, does not look', async () => {
@@ -230,7 +235,7 @@ test('inodes: a notified problem whose numbers do not come back is unknown, not 
   assert.strictEqual(h.notices.length, 1, 'no "Health: fixed"');
   assert.ok(!h.notices.some(n => n.payload.title === 'Health: fixed'));
   assert.ok(raw(h).notices[IN], 'the notice stays');
-  h.cfg.fs = { ...h.cfg.fs, inodesFreePct: 90 };
+  h.cfg.fs = { ...h.cfg.fs, inodesFreePct: 90 }; h.clock.now += 6 * HOUR;
   await manual(h);
   assert.strictEqual(h.notices.filter(n => n.payload.title === 'Health: fixed').length, 1, 'fixed only once it is measured fine');
 });
@@ -300,7 +305,7 @@ test('logs: a notified big log that cannot be read is unknown, not fixed; one th
   assert.strictEqual(item(v, 'health-logs').level, 'unknown');
   assert.strictEqual(h.notices.length, 1, 'no "Health: fixed"');
   assert.ok(raw(h).notices['health-logs']);
-  h.cfg.logSizes = [{ path: '/logs/a.log', bytes: null, missing: true }];
+  h.cfg.logSizes = [{ path: '/logs/a.log', bytes: null, missing: true }]; h.clock.now += 6 * HOUR;
   v = await manual(h);
   assert.strictEqual(item(v, 'health-logs').level, 'ok');
   assert.strictEqual(h.notices.length, 2);
@@ -659,12 +664,114 @@ test('critical: `since` is kept while it stays a problem (also across a restart 
   assert.strictEqual(item(h.sh.view(), DISK).since, since);
 });
 
+// ── hysteresis: a reading hovering at a threshold neither flips the level nor flaps the notices ──
+// The harness disk is 200 GB: critical under 10 GB (5%), warning under 30 GB (15%), clearing margin max(2% = 4 GB, 2 GB) = 4 GB.
+const free = (h, gb) => setFree(h, gb / 200 * 100, gb * GB);
+test('hysteresis: a disk hovering at the critical threshold stays critical, is told once, and needs the margin to step down', async () => {
+  const h = make();
+  const lv = async (gb) => { free(h, gb); return item(await manual(h), DISK).level; };
+  assert.strictEqual(await lv(9.8), 'critical');
+  assert.strictEqual(await lv(10.2), 'critical', 'just above the threshold: held');
+  assert.strictEqual(await lv(9.9), 'critical');
+  assert.strictEqual(await lv(13.9), 'critical', 'still inside the 4 GB margin');
+  assert.strictEqual(await lv(14.1), 'warn', 'past the margin: down to warning (still under 30 GB)');
+  assert.strictEqual(await lv(32), 'warn', 'a warning likewise needs the margin above 30 GB');
+  assert.strictEqual(await lv(34.1), 'ok');
+  assert.strictEqual(h.notices.length, 1, 'one critical notice, no "fixed" (within 6 hours), nothing for hovering');
+  assert.match(h.notices[0].payload.title, /^Health: Disk almost full/);
+});
+
+test('hysteresis: a fresh install crossing the threshold with no known problem uses the plain thresholds', async () => {
+  const h = make();
+  free(h, 10.2);
+  assert.strictEqual(item(await manual(h), DISK).level, 'warn');
+  assert.strictEqual(h.notices.length, 0);
+});
+
+test('hysteresis: margin settings: 0 turns it off; the GB margin wins when larger', async () => {
+  const h = make();
+  h.cfg.settings = { clearMarginPct: 0, clearMarginGB: 0 };
+  free(h, 9.8); await manual(h);
+  free(h, 10.2);
+  assert.strictEqual(item(await manual(h), DISK).level, 'warn', 'no margin: steps down at once');
+  const g = make();
+  g.cfg.settings = { clearMarginPct: 0, clearMarginGB: 10 };
+  free(g, 9.8); await manual(g);
+  free(g, 19.9);
+  assert.strictEqual(item(await manual(g), DISK).level, 'critical', '10 GB margin');
+  free(g, 20.1);
+  assert.strictEqual(item(await manual(g), DISK).level, 'warn');
+});
+
+test('hysteresis: file slots hover the same way, by percentage points', async () => {
+  const h = make();
+  const IN = 'health-inodes-data+workspaces';
+  const lv = async (pct) => { h.cfg.fs = { ...h.cfg.fs, inodesFreePct: pct }; return item(await manual(h), IN).level; };
+  assert.strictEqual(await lv(2.9), 'critical');
+  assert.strictEqual(await lv(3.5), 'critical', 'inside the 2-point margin');
+  assert.strictEqual(await lv(5.1), 'warn');
+  assert.strictEqual(await lv(11.9), 'warn');
+  assert.strictEqual(await lv(12.1), 'ok');
+  assert.strictEqual(h.notices.length, 1);
+});
+
+test('quiet 6 hours: no "fixed" within 6 hours of the notice; a return meanwhile is not told again; "fixed" after 6 hours', async () => {
+  const h = make();
+  free(h, 9.8); await manual(h);
+  assert.strictEqual(h.notices.length, 1);
+  h.clock.now += HOUR; free(h, 100);
+  assert.strictEqual(item(await manual(h), DISK).level, 'ok');
+  assert.strictEqual(h.notices.length, 1, 'cleared after an hour: no "fixed" yet');
+  assert.ok(raw(h).notices[DISK], 'the problem stays open');
+  h.clock.now += HOUR; free(h, 9.8);
+  assert.strictEqual(item(await manual(h), DISK).level, 'critical');
+  assert.strictEqual(h.notices.length, 1, 'back again within 6 hours: the same problem, not told again');
+  h.clock.now += 5 * HOUR; free(h, 100);
+  await manual(h);
+  assert.strictEqual(h.notices.length, 2);
+  assert.strictEqual(h.notices[1].payload.title, 'Health: fixed');
+  assert.deepStrictEqual(raw(h).notices, {});
+});
+
+test('quiet 6 hours: a problem that cleared inside the window and comes back a day later is told again (review r5)', async () => {
+  const h = make();
+  free(h, 9.8); await manual(h);
+  assert.strictEqual(h.notices.length, 1);
+  h.clock.now += HOUR; free(h, 100); await manual(h);          // cleared inside the 6 hours: "fixed" held back
+  assert.strictEqual(h.notices.length, 1);
+  h.clock.now += DAY; free(h, 9.8);                             // back a day later, with no run in between
+  assert.strictEqual(item(await manual(h), DISK).level, 'critical');
+  assert.strictEqual(h.notices.length, 2, 'a new problem: told again');
+  assert.match(h.notices[1].payload.title, /^Health: Disk almost full/);
+});
+
+test('quiet 6 hours: a problem that cleared no longer holds the clearing margin (review r5)', async () => {
+  const h = make();
+  free(h, 9.8); await manual(h);
+  h.clock.now += HOUR; free(h, 100); await manual(h);          // cleared, "fixed" held back
+  h.clock.now += HOUR; free(h, 12);                             // above 10 GB, inside the old 4 GB margin
+  assert.strictEqual(item(await manual(h), DISK).level, 'warn', 'judged on the plain thresholds, not held at critical');
+  assert.strictEqual(h.notices.length, 1, 'no new notice: a warning is not worse than what was told');
+});
+
+test('quiet 6 hours: getting worse always notifies at once (a notified warning that turns critical)', async () => {
+  const h = make();
+  h.cfg.settings = { notify: 'warnings', warnNights: 1 };
+  free(h, 25); await nightly(h);
+  assert.strictEqual(h.notices.length, 1);
+  assert.match(h.notices[0].payload.title, /Disk getting full/);
+  h.clock.now += 10 * MIN; free(h, 9);
+  await manual(h);
+  assert.strictEqual(h.notices.length, 2, 'worse: told at once, inside the 6 hours');
+  assert.match(h.notices[1].payload.title, /Disk almost full/);
+});
+
 test('fixed: one "Health: fixed" naming the old problem after it is notified and goes away; then the entry is gone', async () => {
   const h = make();
   setFree(h, 2, 3 * GB);
   await manual(h);
   const oldTitle = item(h.sh.view(), DISK).title;
-  setFree(h, 50, 100 * GB);
+  setFree(h, 50, 100 * GB); h.clock.now += 6 * HOUR;
   await manual(h);
   assert.strictEqual(h.notices.length, 2);
   assert.strictEqual(h.notices[1].payload.title, 'Health: fixed');
@@ -686,7 +793,8 @@ test('fixed: also when the item disappears in a run that measured its check; not
   await manual(h, false);
   assert.strictEqual(h.notices.length, 1);
   assert.ok(raw(h).notices['health-local-models']);
-  // a full run did: models no longer installed, the item disappears
+  // a full run did (6 hours on): models no longer installed, the item disappears
+  h.clock.now += 6 * HOUR;
   await manual(h, true);
   assert.strictEqual(h.notices.length, 2);
   assert.strictEqual(h.notices[1].payload.title, 'Health: fixed');
@@ -740,7 +848,7 @@ test('a notify that rejects is logged and retried at the next run; notifiedLevel
 test('a "fixed" notice that fails to send is retried at the next run', async () => {
   const h = make();
   setFree(h, 2, 3 * GB); await manual(h);
-  setFree(h, 50, 100 * GB); h.cfg.notifyFails = 1;
+  setFree(h, 50, 100 * GB); h.cfg.notifyFails = 1; h.clock.now += 6 * HOUR;
   await manual(h);
   assert.strictEqual(h.notices.length, 1);
   assert.ok(raw(h).notices[DISK], 'kept for the retry');
