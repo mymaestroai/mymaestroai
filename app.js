@@ -3407,7 +3407,7 @@
       // Software your Maestro relies on (lib/component-watch): the Codex and Claude clients, what is installed and what is out; admins only.
       if (isHubAdmin()) {
         html += `<div class="st-section" id="st-components-section"><h4>Software your Maestro relies on</h4>
-        <div class="st-hint" style="margin-left:0">Newer clients can unlock newer models. The hub looks now and then and shows here what is installed and what is out.</div>
+        <div class="st-hint" style="margin-left:0">Newer clients can unlock newer models. Your Maestro looks now and then and shows here what is installed and what is out.</div>
         <div id="st-cw-list" class="st-hint" style="margin-left:0">Checking…</div>
         <div id="st-cw-codex"></div>
         <div class="st-row"><label style="flex-basis:150px"></label><button class="st-test-btn" id="st-cw-check" onclick="checkComponentsNow(this)">Check now</button><span id="st-cw-state" role="status" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px"></span></div>
@@ -4339,6 +4339,16 @@
         paintUpdateCard().catch(() => {});
       } catch (e) { if (state) state.textContent = 'Not saved: ' + e.message; }
     }
+    // The last update's outcome under a component row: the date of a good one; for a failed one the server's own reason, as
+    // one plain sentence (first line, at most 300 characters), so the person knows what went wrong. -> HTML ('' for none)
+    function componentUpdateLine(lu, day) {
+      if (!lu || typeof lu !== 'object') return '';
+      if (lu.ok) return `<div>Updated from ${escapeHtml(lu.from)} to ${escapeHtml(lu.to)} on ${escapeHtml(day(lu.at))}</div>`;
+      let why = typeof lu.error === 'string' ? lu.error.split('\n')[0].trim().slice(0, 300) : '';
+      if (why && !/[.!?]$/.test(why)) why += '.';
+      if (why) return `<div>Last update${day(lu.at) ? ` (${escapeHtml(day(lu.at))})` : ''}: ${escapeHtml(why)}</div>`;
+      return lu.to ? `<div>Update to ${escapeHtml(lu.to)} failed${lu.rolledBack ? `; ${escapeHtml(lu.from)} was put back` : ''}.</div>` : '<div>Not updated: the update did not run.</div>';
+    }
     // Software your Maestro relies on (Settings → Status, lib/component-watch): rows from GET /api/components. Every server
     // text goes through escapeHtml.
     function paintComponents(data) {
@@ -4348,8 +4358,7 @@
       const items = Array.isArray(data && data.items) ? data.items : [];
       const day = (t) => { const d = new Date(t); return isNaN(d) ? '' : d.toLocaleDateString(); };
       list.innerHTML = items.length ? items.map((it) => {
-        const lu = it.lastUpdate;
-        const upd = lu ? (lu.ok ? `<div>Updated from ${escapeHtml(lu.from)} to ${escapeHtml(lu.to)} on ${escapeHtml(day(lu.at))}</div>` : lu.to ? `<div>Update to ${escapeHtml(lu.to)} failed${lu.rolledBack ? `; ${escapeHtml(lu.from)} was put back` : ''}</div>` : `<div>Not updated: ${escapeHtml(lu.error || 'the update did not run')}</div>`) : '';
+        const upd = componentUpdateLine(it.lastUpdate, day);
         return `<div class="st-cw-row" style="margin-bottom:8px"><strong>${escapeHtml(it.name)}</strong>: installed ${escapeHtml(it.installed || 'not installed')}, newest ${escapeHtml(it.latest || 'unknown')}${it.behind ? ' (newer is out)' : ''}${it.how ? `<div>${escapeHtml(it.how)}</div>` : ''}${it.waiting ? `<div>${escapeHtml(it.waiting)}</div>` : ''}${upd}</div>`;
       }).join('') : 'Nothing to show yet.';
       if (!codexBox) return;

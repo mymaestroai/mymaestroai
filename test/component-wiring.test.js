@@ -114,7 +114,8 @@ test('app.js: the section is in the Status group before st-updates-section, admi
 });
 
 test('app.js: server text goes through escapeHtml; the buttons post to the right routes', () => {
-  const a = app.indexOf('function paintComponents(data)');
+  const a = app.indexOf('function componentUpdateLine(lu, day)');
+  assert.ok(a > 0 && a < app.indexOf('function paintComponents(data)'));
   const b = app.indexOf('async function checkUpdatesNow(');
   const src = app.slice(a, b);
   for (const f of ['it.name', 'it.installed', 'it.latest', 'it.how', 'it.waiting', 'lu.from', 'lu.to']) assert.ok(src.includes(`escapeHtml(${f}`), `${f} escaped`);
@@ -134,4 +135,50 @@ test('lead: with Codex updates Off, Settings → Status still shows the Codex se
   const body = app.slice(app.indexOf('function paintComponents('), app.indexOf('async function loadComponents('));
   assert.match(body, /if \(!codex && cur !== 'off'\) \{ codexBox\.innerHTML = ''; return; \}/);
   assert.match(body, /codex && codex\.behind && cur !== 'off'/);
+});
+
+// The update line under a component row, run for real (its source from app.js in a vm, with the page's escaping).
+function updateLine() {
+  const vm = require('vm');
+  const start = app.indexOf('function componentUpdateLine(lu, day)');
+  const src = app.slice(start, app.indexOf('// Software your Maestro relies on (Settings', start));
+  const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const ctx = { escapeHtml: esc };
+  vm.runInNewContext(`${src}; this.fn = componentUpdateLine;`, ctx);
+  return ctx.fn;
+}
+const DAY = (t) => (t ? 'D' + t : '');
+
+test('Settings → Status: a failed update shows the reason the server gave, as one plain sentence', () => {
+  const f = updateLine();
+  const rolled = { at: 5, ok: false, from: '0.1.0', to: '0.170.0', rolledBack: true, error: 'The new Codex 0.170.0 failed its check, so 0.1.0 was put back.' };
+  assert.equal(f(rolled, DAY), '<div>Last update (D5): The new Codex 0.170.0 failed its check, so 0.1.0 was put back.</div>');
+  const stuck = { at: 6, ok: false, from: '0.1.0', to: '0.170.0', rolledBack: false, error: 'The new Codex 0.170.0 works, but the update could not be finished (the folder /x could not be changed), so the next start of your Maestro puts 0.1.0 back.' };
+  assert.match(f(stuck, DAY), /could not be finished \(the folder \/x could not be changed\)/);
+  const refused = { at: 7, ok: false, from: '0.1.0', to: null, error: "Couldn't keep a copy of the current Codex, so nothing changed." };
+  assert.equal(f(refused, DAY), "<div>Last update (D7): Couldn't keep a copy of the current Codex, so nothing changed.</div>");
+});
+
+test('Settings → Status: the reason is escaped, cut to its first line and 300 characters, and ends as a sentence', () => {
+  const f = updateLine();
+  assert.equal(f({ at: 1, ok: false, to: '9', error: 'npm said <b>no</b>\nstack line 2' }, DAY), '<div>Last update (D1): npm said &lt;b&gt;no&lt;/b&gt;.</div>');
+  const long = f({ at: 1, ok: false, to: '9', error: 'x'.repeat(500) }, DAY);
+  assert.equal(long, `<div>Last update (D1): ${'x'.repeat(300)}.</div>`);
+  assert.equal(f({ ok: false, to: '9', error: 'Failed!' }, DAY), '<div>Last update: Failed!</div>');
+});
+
+test('Settings → Status: without a reason the old lines stay; a good update shows its date; nothing for none', () => {
+  const f = updateLine();
+  assert.equal(f({ at: 2, ok: true, from: '0.1.0', to: '0.170.0' }, DAY), '<div>Updated from 0.1.0 to 0.170.0 on D2</div>');
+  assert.equal(f({ at: 2, ok: false, from: '0.1.0', to: '0.170.0', rolledBack: true, error: null }, DAY), '<div>Update to 0.170.0 failed; 0.1.0 was put back.</div>');
+  assert.equal(f({ at: 2, ok: false, from: '0.1.0', to: null, error: '  ' }, DAY), '<div>Not updated: the update did not run.</div>');
+  assert.equal(f(null, DAY), '');
+  assert.equal(f(undefined, DAY), '');
+});
+
+test('Settings → Status: the hint speaks of your Maestro, not the hub', () => {
+  const at = app.indexOf('id="st-components-section"');
+  const hint = app.slice(at, app.indexOf('id="st-cw-list"', at));
+  assert.match(hint, /Your Maestro looks now and then/);
+  assert.doesNotMatch(hint, /\bhub\b/i);
 });
