@@ -1433,6 +1433,7 @@
       getAgentColorClass(coordinator); participants.forEach(p => getAgentColorClass(p));
       buildRoster();
       document.getElementById('timeline').innerHTML = '';
+      resetApprovals();
       callBlocks.clear(); currentBlock = null; lastSeq = 0; clockSet = false;
       document.getElementById('btn-save').disabled = false;
       isRunning = true;   // until the history says how it ended (a final event, or tt_state at the end of the replay)
@@ -1454,7 +1455,7 @@
     // anyone, or times out). The card is drawn in the member's card (newest first) with Allow / Deny and a countdown.
     // POST /api/approvals/<id> { decision: 'allow' | 'deny' }; a 404 means someone else (or the timeout) answered first.
     const APPROVAL_CLASS_LABELS = { write_outside: 'write outside its folders', send: 'send off this machine', admin: 'change hub data / another agent', destroy: 'destructive action', money: 'move money' };
-    const approvalCards = new Map();       // id -> { data, card } while the buttons are on
+    const approvalCards = new Map();       // id -> { data, card, settled } for every card on the page (settled = buttons gone)
     const resolvedApprovals = new Set();   // ids already decided: a replay must not offer buttons for them
     let approvalTimer = null;
 
@@ -1477,20 +1478,31 @@
       return gw.by && gw.by !== 'owner' ? `${word} (${gw.by})` : word;
     }
     /** The buttons go and the card says how it was decided. */
+    // A settled card stays in approvalCards (flagged), so a recorded approval_resolved that arrives later in a replay
+    // still reaches it: the recorded decision overrides an inferred expiry.
     function settleApproval(id, text) {
       const rec = approvalCards.get(id);
       if (!rec) return;
-      approvalCards.delete(id);
+      rec.settled = true;
       rec.card.classList.add('answered');
       rec.card.querySelectorAll('button').forEach(b => b.remove());
       const note = rec.card.querySelector('.approval-note');
       if (note) note.textContent = text;
       const cd = rec.card.querySelector('.approval-countdown');
       if (cd) cd.textContent = '';
-      if (!approvalCards.size && approvalTimer) { clearInterval(approvalTimer); approvalTimer = null; }
+      stopApprovalTimerIfIdle();
+    }
+    function stopApprovalTimerIfIdle() {
+      if (approvalTimer && ![...approvalCards.values()].some(r => !r.settled)) { clearInterval(approvalTimer); approvalTimer = null; }
+    }
+    /** The timeline is being redrawn: forget every card (their DOM is gone) so a replayed request draws again. */
+    function resetApprovals() {
+      approvalCards.clear(); resolvedApprovals.clear();
+      if (approvalTimer) { clearInterval(approvalTimer); approvalTimer = null; }
     }
     function paintApprovalCountdowns() {
       for (const [id, rec] of [...approvalCards]) {
+        if (rec.settled) continue;
         const text = approvalCountdown(rec.data.expiresAt);
         if (text === 'expired: not done') { settleApproval(id, 'Timed out: not done'); continue; }
         const el = rec.card.querySelector('.approval-countdown');
@@ -1499,7 +1511,7 @@
     }
     async function answerApproval(id, decision) {
       const rec = approvalCards.get(id);
-      if (!rec) return;
+      if (!rec || rec.settled) return;
       const buttons = [...rec.card.querySelectorAll('button')];
       buttons.forEach(b => { b.disabled = true; });
       const note = rec.card.querySelector('.approval-note');
@@ -2120,6 +2132,7 @@
         // render plainTranscript safely as escaped/markdown text instead of
         // assuming HTML is present.
         const timeline = document.getElementById('timeline');
+        resetApprovals();   // the DOM is about to be replaced: no card of the old draw is still there
         if (data.transcript && data.transcript.trim()) {
           const rawTranscript = data.transcript;
           if (purifyReady()) {
