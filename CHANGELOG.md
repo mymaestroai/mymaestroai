@@ -6,6 +6,14 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
+- **Tiger Team rounds are counted and kept.** The team page shows "Round 2 of 5" for the coordinator's rounds instead of counting every member's turn, and once the maximum is reached the coordinator is told to finish. "Until Complete" has no limit, and Resume and Continue keep the same limit.
+- **The Tiger Team message box follows the team.** While a team works you interject; after it finishes you continue it; after a stop or a failure you resume it with a note, and the note stays in the box until the resume really starts.
+- **Tiger Team cards show the time and how long each member took.** Each card's header gives the clock time, and a finished card says how long the member worked. A member that fails no longer shows chat advice that makes no sense inside a team.
+- **Approvals inside a Tiger Team.** A member that needs your approval shows Approve and Deny on the team page instead of waiting until it times out, and a team opened later shows what was decided.
+- **Tiger Teams wait for agents on a call.** A member whose person is on a voice call counts as busy and is waited for, like a member busy elsewhere, instead of being put to work during the call.
+- **Tiger Teams on the phone.** Admins find Tiger Teams in the phone app's menu: a list of teams, and a war room with a chip showing each member's current step, Stop always at hand and the message box at the bottom.
+- **Safer Tiger Team pages.** Text a member writes can no longer take over the page's own controls, and pictures in it load only from your Maestro, never from another site.
+- **Tiger Teams are lighter on your Maestro.** A member's streaming text costs one disk write per piece instead of two and other updates are grouped, with nothing lost after a crash. Members also use their own speed setting (Fast or Economy), and files they name get download cards.
 - **Home folder sizes read naturally.** Settings → Status gives a home folder's size and the free disk space as "5 GB" or "1.5 GB" rather than "5120 MB".
 - **Simple mode uses the whole window again.** Its messages and message box were held to a 720-pixel column in the middle; they now fill the window like the main view, on the desktop and on wide phone or tablet screens, with the box lined up under the messages; a reply's time now sits under its text on the left. The greeting and its suggestions stay centred. (`index.html`, `mobile.html`)
 - **Clearer notices about agents' boxes and home folders.** Settings → Status now shows their times in your local time ("Nov 18, 10:35 AM EST"), says in plain words why a home folder couldn't be moved (for example "a file in the home folder can't be read: cache/locked.bin"), and Move now says exactly why it didn't try.
