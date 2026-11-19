@@ -35,14 +35,15 @@ test('cardModel: title, topic, label, ago (from startedAt, else createdAt) and o
   for (const s of ['queued', 'running', 'waiting']) assert.equal(H.cardModel({ target: 'a', state: s }, { now: NOW }).open, true, s);
 });
 
-test('visible: open ones and those ended within 24 h, at most 5, newest first', () => {
+test('visible: open ones and those ended within 24 h, at most 5, open first then newest first', () => {
   const v = [
     { id: 'old', state: 'done', createdAt: iso(40 * HOUR), endedAt: iso(30 * HOUR) },
     { id: 'recent', state: 'failed', createdAt: iso(5 * HOUR), endedAt: iso(4 * HOUR) },
     { id: 'open-old', state: 'waiting', createdAt: iso(60 * HOUR) },
     { id: 'new', state: 'running', createdAt: iso(1 * MIN) },
   ];
-  assert.deepEqual(H.visible(v, { now: NOW }).map((x) => x.id), ['new', 'recent', 'open-old']);
+  // open ones first (review r1), each group newest first
+  assert.deepEqual(H.visible(v, { now: NOW }).map((x) => x.id), ['new', 'open-old', 'recent']);
   const many = Array.from({ length: 8 }, (_, i) => ({ id: 'h' + i, state: 'running', createdAt: iso(i * MIN) }));
   const shown = H.visible(many, { now: NOW });
   assert.equal(shown.length, 5);
@@ -168,4 +169,14 @@ test('statusHref: the target\'s STATUS.md through the download route (inline); n
   assert.equal(H.statusHref({ target: 'scout', folder: '/srv/share/scout/other' }), null);
   assert.equal(H.statusHref({ target: '', folder: '/x/hand-offs/a' }), null);
   assert.equal(H.statusHref({ target: 'scout', folder: '/x/hand-offs/a/b' }), null);
+});
+
+test('review r1: open hand-offs come first, so five finished cards never hide a running one', () => {
+  const H = require('../lib/ui-hand-off-card.js');
+  const now = Date.parse('2026-11-19T12:00:00Z');
+  const done = [1, 2, 3, 4, 5].map((i) => ({ id: 'd' + i, state: 'done', createdAt: now - i * 60000, endedAt: now - 1000 }));
+  const running = { id: 'r1', state: 'running', createdAt: now - 3600000 };
+  const shown = H.visible([...done, running], { now });
+  assert.equal(shown.length, 5);
+  assert.equal(shown[0].id, 'r1');
 });

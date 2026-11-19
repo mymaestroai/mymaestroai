@@ -60,6 +60,6 @@ test('both are manifest entries (eight in all) and the prompt builders add the t
   for (const c of m.changes) for (const k of ['title', 'changes', 'benefits', 'costs', 'check', 'on', 'off']) assert.ok(typeof c[k] === 'string' && c[k].length > 5, `${c.id}.${k}`);
   const sdk = fs.readFileSync(path.join(ROOT, 'lib', 'sdk-chat.js'), 'utf8');
   assert.strictEqual((sdk.match(/\(await askLeadTextFor\(agentName\)\) \+ \(await workPracticesTextFor\(agentName\)\)/g) || []).length, 3, 'gateway, SDK and Codex');
-  assert.match(sdk, /const checkIns = bc\.isOn\('work-check-ins'\), suggestions = bc\.isOn\('work-suggestions'\), handOffs = bc\.isOn\('hand-off-guidance'\);\n\s+if \(!checkIns && !suggestions && !handOffs\) return '';/);
+  assert.match(sdk, /const checkIns = bc\.isOn\('work-check-ins'\), suggestions = bc\.isOn\('work-suggestions'\), handOffs = bc\.isOn\('hand-off-guidance'\) && !handOffOfTurn\(agentName\);\n\s+if \(!checkIns && !suggestions && !handOffs\) return '';/);
   assert.match(sdk, /async function workPracticesTextFor\(agentName\) \{[\s\S]*?if \(temporalWorkers\.isVirtual\(agentName\)\) return '';/);
 });

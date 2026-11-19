@@ -495,3 +495,168 @@ test('start() runs a timer that ticks; stop() clears it', async () => {
   assert.strictEqual(env.h.get(v.id).state, 'running');
   assert.strictEqual(env.h._timer, null);
 });
+
+// ── review r1 ────────────────────────────────────────────────────────────────────────────────────────────────────
+test('r1 B1: STATUS.md that is a link is never followed; a hand-offs folder that is a link refuses the hand-off; the read is bounded', async () => {
+  const env = setup();
+  const v = await mk(env);
+  const secret = path.join(tmp(), 'secret.txt'); fs.writeFileSync(secret, 'TOP SECRET');
+  fs.symlinkSync(secret, path.join(v.folder, 'STATUS.md'));
+  assert.strictEqual(env.h.list('sam', { withStatus: true })[0].status, null, 'a link is not read');
+  fs.unlinkSync(path.join(v.folder, 'STATUS.md'));
+  fs.writeFileSync(path.join(v.folder, 'STATUS.md'), 'x'.repeat(50000));
+  assert.ok(env.h.list('sam', { withStatus: true })[0].status.length <= 2001, 'bounded');
+  // a hand-offs folder that is a link to elsewhere: refused, nothing written there
+  const env2 = setup();
+  const elsewhere = tmp();
+  fs.mkdirSync(path.join(env2.files, 'lead'), { recursive: true });
+  fs.symlinkSync(elsewhere, path.join(env2.files, 'lead', 'hand-offs'));
+  await assert.rejects(mk(env2), /not a plain folder/);
+  assert.deepStrictEqual(fs.readdirSync(elsewhere), []);
+  // the job folder replaced by a link after creation: STATUS.md not read through it
+  const env3 = setup();
+  const v3 = await mk(env3);
+  fs.rmSync(v3.folder, { recursive: true, force: true });
+  const out = tmp(); fs.writeFileSync(path.join(out, 'STATUS.md'), 'outside');
+  fs.symlinkSync(out, v3.folder);
+  assert.strictEqual(env3.h.list('sam', { withStatus: true })[0].status, null);
+});
+
+test('r1 B2: identities and access are checked before every start and report; a stale hand-off fails, a replaced caller gets no report', async () => {
+  const stamps = { sam: 'box:s1', lead: 'box:l1' };
+  let allowed = true;
+  const env = setup({ stampOf: (n) => stamps[n] || null, mayTarget: async () => allowed });
+  env.active.add('lead');
+  const v = await mk(env);
+  allowed = false;               // access revoked while it waited in the queue
+  env.active.delete('lead');
+  await env.h.tick();
+  assert.strictEqual(env.turns.length, 0, 'never started');
+  assert.strictEqual(env.h.get(v.id).state, 'failed');
+  assert.match(env.h.get(v.id).error, /may no longer hand work/);
+  await env.h.tick();
+  assert.strictEqual(env.delivered.length, 1);
+  assert.match(env.delivered[0].message, /^\[Hand-off failed\]/);
+  // the target re-made under the same name while queued
+  allowed = true;
+  const env2 = setup({ stampOf: (n) => stamps[n] || null, mayTarget: async () => true });
+  env2.active.add('lead');
+  const v2 = await mk(env2);
+  stamps.lead = 'box:l2'; env2.active.delete('lead');
+  await env2.h.tick();
+  assert.strictEqual(env2.turns.length, 0);
+  assert.match(env2.h.get(v2.id).error, /not the agent it was handed to/);
+  // the caller re-made before the report: dropped, not given to the new agent
+  stamps.lead = 'box:l1';
+  const env3 = setup({ stampOf: (n) => stamps[n] || null, mayTarget: async () => true });
+  const v3 = await mk(env3);
+  await env3.h.tick();
+  stamps.sam = 'box:s2';
+  env3.turns[0].finish('done!');
+  await flush(); await env3.h.tick();
+  assert.strictEqual(env3.delivered.length, 0);
+  assert.strictEqual(env3.h.get(v3.id).report.state, 'dropped');
+  // create needs readable records
+  const env4 = setup({ stampOf: () => null });
+  await assert.rejects(mk(env4), /records/);
+});
+
+test('r1 B4: cancelled while the hub admits the turn: the admitted turn is stopped; a continuation of a closed or another agent\'s hand-off is refused', async () => {
+  let admit;
+  const env = setup({ startTurn: (agent, message) => new Promise((res) => { admit = () => res({ done: new Promise(() => {}) }); }) });
+  const v = await mk(env);
+  const ticking = env.h.tick();
+  await flush(); await flush();
+  env.h.cancel({ caller: 'sam', id: v.id });
+  admit();
+  await ticking;
+  assert.deepStrictEqual(env.stopped, ['lead'], 'the admitted turn stopped');
+  assert.strictEqual(env.h.turnStarted(v.id, 'lead'), false, 'closed: refused');
+  const env2 = setup();
+  const w = await mk(env2);
+  await env2.h.tick();
+  env2.continuations.add(w.id);
+  env2.turns[0].finish('step 1');
+  await flush();
+  assert.strictEqual(env2.h.get(w.id).state, 'waiting');
+  assert.strictEqual(env2.h.turnStarted(w.id, 'someone-else'), false, 'not the target');
+  assert.strictEqual(env2.h.get(w.id).state, 'waiting');
+  env2.h.turnEnded(w.id, 'not mine', 'someone-else');
+  assert.strictEqual(env2.h.get(w.id).turns, 1, 'another agent\'s turn does not count');
+  assert.strictEqual(env2.h.turnStarted(w.id, 'lead'), true);
+  assert.strictEqual(env2.h.get(w.id).state, 'running');
+});
+
+test('r1 B5: an unreadable state file stops all work and is never overwritten; a save that fails starts nothing', async () => {
+  const dataDir = tmp();
+  fs.writeFileSync(path.join(dataDir, 'hand-offs.json'), '{not json');
+  const env = setup({ dataDir });
+  await assert.rejects(mk(env), /can't be read/);
+  env.h.start(); env.h.stop();
+  assert.strictEqual(fs.readFileSync(path.join(dataDir, 'hand-offs.json'), 'utf8'), '{not json', 'untouched');
+  // the state file can't be written: create refuses, nothing starts
+  const env2 = setup();
+  fs.mkdirSync(path.join(env2.dataDir, 'hand-offs.json'));   // a folder where the file should be: every write fails
+  await assert.rejects(mk(env2), /Couldn't save the hand-off/);
+  await env2.h.tick();
+  assert.strictEqual(env2.turns.length, 0);
+});
+
+test('r1 B6: a report is delivered once: \'delivering\' is saved first; after a restart, one the caller already has is only marked', async () => {
+  const delivered = new Set();
+  const env = setup({ alreadyDelivered: (caller, id) => delivered.has(id), deliver: async (agent, message, meta) => { delivered.add(meta.handOffId); throw new Error('crash after delivery'); } });
+  const v = await mk(env);
+  await env.h.tick();
+  env.turns[0].finish('the report');
+  await flush(); await env.h.tick();
+  assert.strictEqual(delivered.size, 1);
+  assert.strictEqual(env.h.get(v.id).report.state, 'pending');
+  // a new instance (restart): the conversation already holds it, so it is marked, not sent again
+  let sends = 0;
+  const env2 = setup({ dataDir: env.dataDir, files: env.files, alreadyDelivered: (c, id) => delivered.has(id), deliver: async () => { sends++; } });
+  env2.h.start(); env2.h.stop();
+  await env2.h.tick();
+  assert.strictEqual(sends, 0);
+  assert.strictEqual(env2.h.get(v.id).report.state, 'delivered');
+  // a 'delivering' state left by a crash goes back to pending at start
+  const state = JSON.parse(fs.readFileSync(path.join(env.dataDir, 'hand-offs.json'), 'utf8'));
+  state.items[0].report.state = 'delivering';
+  fs.writeFileSync(path.join(env.dataDir, 'hand-offs.json'), JSON.stringify(state));
+  const env3 = setup({ dataDir: env.dataDir, alreadyDelivered: () => false });
+  env3.h.start(); env3.h.stop();
+  await env3.h.tick();
+  assert.strictEqual(env3.delivered.length, 1);
+});
+
+test('r1 B7: a waiting hand-off whose continuation vanished ends after two looks a poll apart, with the last report; a deleted target fails it', async () => {
+  const env = setup();
+  env.opts.pollMs = 1000;
+  const env2 = setup({ pollMs: 1000 });
+  for (const e of [env, env2]) {
+    const v = await mk(e);
+    await e.h.tick();
+    e.continuations.add(v.id);
+    e.turns[0].finish('step 1 done, continuing later');
+    await flush();
+    assert.strictEqual(e.h.get(v.id).state, 'waiting');
+    e.continuations.delete(v.id);   // the owner cancelled the scheduled task
+    e.v = v;
+  }
+  await env2.h.tick();
+  assert.strictEqual(env2.h.get(env2.v.id).state, 'waiting', 'first look: not yet');
+  env2.t += 2000;
+  await env2.h.tick();
+  assert.strictEqual(env2.h.get(env2.v.id).state, 'done');
+  await env2.h.tick();
+  assert.match(env2.delivered[0].message, /step 1 done, continuing later/);
+  // a deleted target
+  const env3 = setup({ pollMs: 1000 });
+  const v3 = await mk(env3);
+  await env3.h.tick();
+  env3.continuations.add(v3.id);
+  env3.turns[0].finish('x'); await flush();
+  env3.continuations.delete(v3.id); env3.missing.add('lead');
+  await env3.h.tick(); env3.t += 2000; await env3.h.tick();
+  assert.strictEqual(env3.h.get(v3.id).state, 'failed');
+  assert.match(env3.h.get(v3.id).error, /no longer exists/);
+});

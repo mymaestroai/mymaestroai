@@ -81,8 +81,10 @@ test('the target\'s turns: consult depth (a consultation\'s tool exclusions) wit
   // a continuation's wake-up (its schedule_task or job notice) is the hand-off's turn too
   assert.match(SDK, /const handOff = typeof meta\?\.handOff === 'string' && \/\^ho-\[0-9a-f\]\{8\}\$\/\.test\(meta\.handOff\) \? meta\.handOff : null;/);
   assert.match(SDK, /handleChatStream\(\{ agent: agentName, message, origin, exclude_tools: meta\?\.exclude_tools, \.\.\.\(handOff \? \{ consultation_depth: 1 \} : \{\}\) \}, sink\)/);
-  assert.match(SDK, /if \(handOff && admitted\) handOffHook\('ended', handOff, chunks\.join\(''\)\);/);
-  assert.match(SDK, /admitted = true; if \(handOff\) handOffHook\('started', handOff\);/);
+  assert.match(SDK, /if \(handOff && admitted\) handOffHook\('ended', handOff, chunks\.join\(''\), agentName\);/);
+  assert.match(SDK, /admitted = true; if \(handOff\) handOffHook\('started', handOff, null, agentName\);/);
+  // review r1: a continuation of a hand-off that is over, or not this agent's, is stopped
+  assert.match(SDK, /if \(r\.turnStarted\(id, agent\) === false\) \{ [^\n]*stopAgentTurn\(agent\); \}/);
   // the handler records the turn's hand-off while it runs, and only for a well-formed id
   assert.match(SDK, /if \(turnOrigin && typeof turnOrigin\.handOff === 'string' && \/\^ho-\[0-9a-f\]\{8\}\$\/\.test\(turnOrigin\.handOff\)\) \{ handOffTurnAgents\.set\(agent, turnOrigin\.handOff\); handOffMarked = turnOrigin\.handOff; \}/);
   assert.match(SDK, /if \(handOffMarked && handOffTurnAgents\.get\(agent\) === handOffMarked\) handOffTurnAgents\.delete\(agent\);/);
@@ -185,4 +187,18 @@ test('labels: the target\'s chat shows "Hand-off from <caller>"; the caller\'s s
     assert.match(src, /else if \(o\.kind === 'hand_off'\) label = o\.label \|\| `Hand-off from \$\{from \|\| 'another agent'\}`;/, page);
     assert.match(src, /case 'hand_off': return `hand-off from \$\{origin\.from \|\| 'another agent'\}`;/, page);
   }
+});
+
+test('review r1: the runner checks identities, access and earlier deliveries; a hand-off turn never queues a consultation; the rule text is not given inside a hand-off turn', () => {
+  const factory = SDK.slice(SDK.indexOf('function getHandOffRunner() {'), SDK.indexOf("voiceCall.registerProducer('hand_off'"));
+  assert.match(factory, /stampOf: \(name\) => require\('\.\/agents'\)\.agentStamp\(name\),/);
+  assert.match(factory, /mayTarget: \(caller, target\) => consultAllowed\(caller, target\),/);
+  assert.match(factory, /alreadyDelivered: \(caller, id\) => \{\n\s+for \(const l of tailLines\(path\.join\(CONV_DIR, `\$\{caller\}\.jsonl`\), 400\)\) \{\n\s+try \{ const e = JSON\.parse\(l\.text\); if \(e && e\.origin && e\.origin\.handOffReport === id\) return true; \} catch \{\}/);
+  assert.match(SDK, /for \(const k of \['kind', 'from', 'by', 'label', 'jobName', 'taskId', 'handOff', 'handOffReport'\]\)/, 'the conversation log keeps the ids');
+  assert.match(SDK, /if \(handOffOfTurn\(coordinatorName\)\) return resolve\(HAND_OFF_NO_QUEUE\(agentName, 'busy'\)\);/);
+  assert.match(SDK, /if \(handOffOfTurn\(coordinatorName\)\) return HAND_OFF_NO_QUEUE\(agentName, 'on a voice call'\);/);
+  assert.match(SDK, /handOffs = bc\.isOn\('hand-off-guidance'\) && !handOffOfTurn\(agentName\);/);
+  // the only places a consultation is queued are those two gated ones
+  assert.equal((SDK.match(/\.enqueue\(\{ from: coordinatorName/g) || []).length, 2, 'the 409 path and holdConsultForCall');
+  assert.equal((SDK.match(/q\.enqueue\(\{ from: coordinatorName/g) || []).length, 1, 'holdConsultForCall');
 });
