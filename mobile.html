@@ -899,7 +899,7 @@ html.mm-simple .agent-row .agent-model { font-size: 14px; color: var(--text-tert
 
 /* Chat */
 html.mm-simple #chat-scroll { background: var(--bg-dark); }
-html.mm-simple #messages { max-width: 720px; width: 100%; margin: 0 auto; min-height: 100%; padding: 20px 16px 8px; gap: 28px; }
+html.mm-simple #messages { width: 100%; margin: 0 auto; min-height: 100%; padding: 20px 16px 8px; gap: 28px; }
 html.mm-simple .msg { max-width: 100%; padding: 0; background: none; border: 0; border-radius: 0; font-size: 18px; line-height: 1.55; color: var(--text); }
 html.mm-simple .msg.user { align-self: flex-end; max-width: 86%; padding: 12px 18px; background: var(--sp-me-bg); color: var(--sp-me-text); border-radius: 22px 22px 6px 22px; }
 html.mm-simple .msg.user a { color: inherit; text-decoration: underline; }
@@ -942,7 +942,7 @@ html.mm-simple .st-consult { color: var(--text-dim); font-size: 14px; padding-le
 
 /* Composer: text on top; + / reasoning level on the left, mic / voice call / send on the right */
 html.mm-simple #composer { position: relative; background: var(--bg-dark); border-top: 0; padding: 8px 12px calc(12px + var(--sab)); }
-html.mm-simple #composer .row { flex-wrap: wrap; align-items: center; gap: 4px 6px; border: 1px solid var(--border); background: var(--bg-card); border-radius: 28px; padding: 8px 10px 10px; box-shadow: var(--sp-shadow); max-width: 720px; margin: 0 auto; }
+html.mm-simple #composer .row { flex-wrap: wrap; align-items: center; gap: 4px 6px; border: 1px solid var(--border); background: var(--bg-card); border-radius: 28px; padding: 8px 10px 10px; box-shadow: var(--sp-shadow); margin: 0 auto; }
 html.mm-simple #composer .row::after { content: ''; flex: 1 1 0; order: 3; }
 html.mm-simple #msg-input { order: -1; flex: 0 0 100%; min-height: 48px; padding: 10px; font-size: 18px; line-height: 1.4; background: transparent; border: 0; color: var(--text); }
 html.mm-simple #msg-input:focus { border: 0; outline: none; }
@@ -1043,8 +1043,6 @@ html.mm-simple #simple-side { display: none; }
   html.mm-simple .ssd-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 16px; }
   html.mm-simple #simple-top { justify-content: flex-end; }
   html.mm-simple #simple-top .st-pill, html.mm-simple #simple-top .st-mark, html.mm-simple #simple-top .st-avatar { display: none; }
-  html.mm-simple #messages { max-width: 760px; }
-  html.mm-simple #composer .row { max-width: 760px; }
   html.mm-simple #simple-effort-sheet { max-width: 736px; }
   html.mm-simple #approval-sheet { left: 268px; }
   html.mm-simple #toast { left: calc(50% + 130px); }
