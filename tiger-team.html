@@ -548,17 +548,50 @@
       // Fail closed: without the sanitizer, agent output is shown as escaped text, never parsed as HTML.
       if (!purifyReady()) return esc(text).replace(/\n/g, '<br>');
       const html = typeof marked !== 'undefined' ? marked.parse(text) : esc(text).replace(/\n/g, '<br>');
+      if (!purifyHooked) { purifyHooked = true; DOMPurify.addHook('afterSanitizeAttributes', purifyFixNode); }
       return DOMPurify.sanitize(html, {
         ALLOWED_TAGS: ['b','i','em','strong','code','pre','br','p','ul','ol','li','h1','h2','h3','h4','h5','h6','a','blockquote','hr','span','div','table','thead','tbody','tr','th','td','img','details','summary','del','s','sub','sup'],
-        ALLOWED_ATTR: ['href','target','rel','src','alt','class','id'],
+        ALLOWED_ATTR: ['href','target','rel','src','alt','class'],
         ALLOW_DATA_ATTR: false,
-        FORBID_ATTR: ['onerror','onload','onclick','onmouseover','onfocus','onblur','style']
+        SANITIZE_DOM: true,
+        FORBID_ATTR: ['onerror','onload','onclick','onmouseover','onfocus','onblur','style','id','name']
       });
     }
+    // Member text must not load remote images (tracking) or carry page ids (DOM clobbering).
+    let purifyHooked = false;
+    function purifyFixNode(node) {
+      if (!node || !node.tagName) return;
+      const tag = node.tagName.toLowerCase();
+      if (tag === 'img') {
+        const src = node.getAttribute('src') || '';
+        if (!(src.charAt(0) === '/' && src.charAt(1) !== '/' && src.charAt(1) !== '\\')) node.removeAttribute('src');
+      } else if (tag === 'a') {
+        const href = node.getAttribute('href') || '';
+        node.setAttribute('rel', 'noopener noreferrer');
+        if (/^[a-z][a-z0-9+.-]*:|^\/\//i.test(href)) node.setAttribute('target', '_blank');
+        else node.removeAttribute('target');
+      }
+    }
 
-    function elapsed() {
-      const s = Math.max(0, Math.floor(((eventNow || Date.now()) - startTime) / 1000));
+    /** Seconds as the war room writes them: "42s", "3m 12s". */
+    function fmtDuration(totalSeconds) {
+      const s = Math.max(0, Math.floor(totalSeconds));
       return s >= 60 ? `${Math.floor(s/60)}m ${s%60}s` : `${s}s`;
+    }
+    /** The local clock time of a moment, 24 hours: "22:14". */
+    function clockTime(ms) {
+      const d = new Date(ms);
+      return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+    }
+    /** The stamp on a card or note: when it happened and how far into the run: "22:14 · 3m 12s". */
+    function stampText(nowMs, startMs) {
+      return clockTime(nowMs) + ' · ' + fmtDuration((nowMs - startMs) / 1000);
+    }
+    function elapsed() {
+      return fmtDuration(((eventNow || Date.now()) - startTime) / 1000);
+    }
+    function stamp() {
+      return stampText(eventNow || Date.now(), startTime);
     }
 
     let userScrolledUp = false;
@@ -651,6 +684,7 @@
     function buildRoster() {
       const coordEl = document.getElementById('coordinator-roster');
       const partEl = document.getElementById('participants-roster');
+      if (inputMode === 'running') buildTargetOptions();   // the member list changed: so does the target list
       const challEl = document.getElementById('challenger-roster');
       const challSection = document.getElementById('challenger-section');
 
@@ -741,13 +775,52 @@
     function setRunning(running) {
       isRunning = running;
       document.getElementById('btn-stop').disabled = !running;
-      if (running) {
-        document.getElementById('btn-send').onclick = injectMessage;
-        document.getElementById('user-input').disabled = false;
-        document.getElementById('btn-send').disabled = false;
-        document.getElementById('user-input').placeholder = 'Interject: tell the team something now...';
-        document.querySelector('.input-label').textContent = '💬 Interject:';
-        document.getElementById('interject-target').style.display = '';
+      if (running) setInputMode('running');
+    }
+
+    /** The target choices while the team runs: the team, the coordinator, and each member by name. */
+    function buildTargetOptions() {
+      const sel = document.getElementById('interject-target');
+      if (!sel) return;
+      const keep = sel.value;
+      const opts = [['team', 'Team: coordinator + everyone working now'], ['coordinator', 'Coordinator only']];
+      for (const slug of participants) opts.push([slug, ((agents[slug] && agents[slug].display) || slug) + ' only']);
+      sel.innerHTML = opts.map(([v, t]) => `<option value="${esc(v)}">${esc(t)}</option>`).join('');
+      if (opts.some(([v]) => v === keep)) sel.value = keep;
+    }
+
+    // ── Input bar: one control, three states (running / complete / ended) ──
+    let inputMode = 'running';
+    function setInputMode(m) {
+      inputMode = m;
+      const input = document.getElementById('user-input');
+      const btn = document.getElementById('btn-send');
+      const label = document.querySelector('.input-label');
+      const sel = document.getElementById('interject-target');
+      if (m === 'running') {
+        buildTargetOptions();
+        sel.style.display = '';
+        label.textContent = '💬 Interject:';
+        input.placeholder = 'Interject: tell the team something now...';
+        btn.textContent = 'Interject';
+        btn.onclick = injectMessage;
+        input.disabled = false; btn.disabled = false;
+      } else if (m === 'complete') {
+        sel.style.display = 'none';
+        label.textContent = '🔄 Continue:';
+        input.placeholder = 'Ask a follow-up or give a new directive…';
+        btn.textContent = 'Continue';
+        btn.onclick = continueSession;
+        input.value = '';
+        input.disabled = false; btn.disabled = false;
+      } else {   // 'ended': stopped, failed or interrupted; a note resumes it from where it stopped
+        sel.style.display = 'none';
+        label.textContent = '🔄 Continue:';
+        input.placeholder = 'A note for the team; it resumes from where it stopped…';
+        btn.textContent = 'Resume with this note';
+        btn.onclick = resumeWithNote;
+        const can = !!(tigerTeamId && backendRecoveryAvailable);
+        input.disabled = !can; btn.disabled = !can;
       }
     }
 
@@ -758,6 +831,7 @@
       try {
         const r = await fetch('/api/tiger-team/stop', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ session_id: sessionId || undefined, tiger_team_id: tigerTeamId || undefined }) });
         if (r.ok) addSystemMsg('■ Stopping the team…');
+        else if (r.status === 409) addSystemMsg((await r.json().catch(() => ({}))).error || 'This team has already ended.');
         else addSystemMsg('Stop failed: ' + ((await r.json().catch(() => ({}))).error || `HTTP ${r.status}`));
       } catch (e) { console.error('Stop failed:', e); addSystemMsg('Stop failed: ' + e.message); }
     }
@@ -781,7 +855,7 @@
           <span class="block-icon">👤</span>
           <span class="block-agent">You</span>
           <span class="block-role">Interjection</span>
-          <span class="block-time">${elapsed()}</span>
+          <span class="block-time">${stamp()}</span>
         </div>
         <div class="agent-block-body"><div class="text-content">${md(msg)}</div><div class="interject-status" style="font-size:11px;color:var(--text-dim);margin-top:4px">sending…</div></div>`;
       tl.appendChild(block);
@@ -814,7 +888,7 @@
         <div class="agent-block-header">
           <span class="block-icon">⚠️</span>
           <span class="block-agent" style="color:#f59e0b">Additional Rounds Requested</span>
-          <span class="block-time">${elapsed()}</span>
+          <span class="block-time">${stamp()}</span>
         </div>
         <div class="agent-block-body">
           <div class="text-content">
@@ -886,15 +960,34 @@
 
     // ── Continue (after completion) ──
     function showContinueUI() {
+      setInputMode('complete');
+    }
+
+    // ── Resume with a note (after a stop, failure or interruption) ──
+    // POST /api/tiger-team/resume takes an optional message: the server queues it for the coordinator (durably,
+    // like an interjection) before the team resumes. An empty note just resumes.
+    async function resumeWithNote() {
+      if (continuationInFlight) return;
       const input = document.getElementById('user-input');
-      const btn = document.getElementById('btn-send');
-      const label = document.querySelector('.input-label');
-      input.disabled = false;
-      input.placeholder = 'Ask a follow-up question or give a new directive to reconvene the team...';
+      const note = input.value.trim();
       input.value = '';
-      btn.disabled = false;
-      btn.onclick = continueSession;
-      label.textContent = '🔄 Continue:';
+      if (note) {
+        sentInterjections.push(note);   // drawn just below; its echo from the team's stream is skipped
+        closeBlock();
+        const block = document.createElement('div');
+        block.className = 'agent-block user-inject';
+        block.innerHTML = `
+          <div class="agent-block-header">
+            <span class="block-icon">👤</span>
+            <span class="block-agent">You</span>
+            <span class="block-role">Note</span>
+            <span class="block-time">${stamp()}</span>
+          </div>
+          <div class="agent-block-body"><div class="text-content">${md(note)}</div></div>`;
+        document.getElementById('timeline').appendChild(block);
+        scrollBottom();
+      }
+      await resumeInterruptedTeam(note);
     }
 
     async function continueSession() {
@@ -918,7 +1011,7 @@
           <span class="block-icon">👤</span>
           <span class="block-agent">You</span>
           <span class="block-role">Continuation</span>
-          <span class="block-time">${elapsed()}</span>
+          <span class="block-time">${stamp()}</span>
         </div>
         <div class="agent-block-body"><div class="text-content">${md(msg)}</div></div>`;
       tl.appendChild(block);
@@ -976,7 +1069,7 @@
           <span class="block-icon">${esc(a.icon || '🤖')}</span>
           <span class="block-agent">${esc(a.display || slug)}</span>
           <span class="block-role">${esc(role)}</span>
-          <span class="block-time">${elapsed()}</span>
+          <span class="block-time">${stamp()}</span>
         </div>
         <div class="agent-block-body">
           <div class="text-content"></div>
@@ -994,6 +1087,7 @@
         role,
         rawText: '',
         toolCount: 0,
+        startedAt: eventNow || Date.now(),
       };
     }
 
@@ -1032,6 +1126,9 @@
     function finishCallBlock(block, failed) {
       if (!block || block.done) return;
       block.done = true;
+      // "· took 42s": from the card's start to the event that finished it.
+      const timeEl = block.element.querySelector('.block-time');
+      if (timeEl && block.startedAt) timeEl.textContent += ' · took ' + fmtDuration(((eventNow || Date.now()) - block.startedAt) / 1000);
       block.textEl.innerHTML = md(block.rawText);
       block.element.querySelectorAll('.tool-call-line.running').forEach(line => {
         const spinner = line.querySelector('.tool-call-spinner');
@@ -1167,7 +1264,7 @@
       const tl = document.getElementById('timeline');
       const m = document.createElement('div');
       m.className = 'system-msg';
-      m.textContent = `⚙ ${text} (${elapsed()})`;
+      m.textContent = `⚙ ${text} (${stamp()})`;
       tl.appendChild(m);
       scrollBottom();
     }
@@ -1186,6 +1283,7 @@
           const t = await response.text();
           setStatus('error', 'Error');
           setRunning(false);
+          setInputMode('ended');
           addSystemMsg(`API Error ${response.status}: ${t}`);
           return;
         }
@@ -1377,7 +1475,7 @@
               if (gw.challenger_display) teamInfo += '  ·  ⚔️ Challenger: ' + gw.challenger_display;
               addSystemMsg(teamInfo);
               const displayMax = (gw.max_rounds >= 50 || maxRounds === 0) ? '∞' : (gw.max_rounds || maxRounds);
-              document.getElementById('round-counter').textContent = 'Turn 0/' + displayMax;
+              document.getElementById('round-counter').textContent = 'Round 0 of ' + displayMax;
             }
             break;
 
@@ -1422,9 +1520,9 @@
 
           case 'tt_dispatch':
             // Update turn counter for Led mode
-            if (gw.turn && gw.max_rounds) {
+            if (mode !== 'roundtable' && (gw.round || gw.turn) && gw.max_rounds) {
               const dMax = gw.max_rounds >= 50 ? '∞' : gw.max_rounds;
-              document.getElementById('round-counter').textContent = 'Turn ' + gw.turn + '/' + dMax;
+              document.getElementById('round-counter').textContent = 'Round ' + (gw.round || gw.turn) + ' of ' + dMax;
             }
             // If coordinator block is empty (no text and no tool calls), remove it entirely
             if (currentBlock && currentBlock.slug === coordinator && !currentBlock.rawText.trim() && !currentBlock.toolCount) {
@@ -1482,8 +1580,8 @@
               <div class="agent-block-header">
                 <span class="block-icon">👤</span>
                 <span class="block-agent">You</span>
-                <span class="block-role">${gw.kind === 'continuation' ? 'Continuation' : 'Interjection'}${gw.target && gw.target !== 'team' ? ' → ' + esc(gw.target) : ''}</span>
-                <span class="block-time">${elapsed()}</span>
+                <span class="block-role">${gw.kind === 'continuation' ? 'Continuation' : gw.kind === 'resume_note' ? 'Note' : 'Interjection'}${gw.target && gw.target !== 'team' ? ' → ' + esc((agents[gw.target] && agents[gw.target].display) || gw.target) : ''}</span>
+                <span class="block-time">${stamp()}</span>
               </div>
               <div class="agent-block-body"><div class="text-content">${md(gw.message || '')}</div><div class="interject-status" style="font-size:11px;color:var(--text-dim);margin-top:4px"></div></div>`;
             const who = (gw.delivered || []).map(d => `${d.agent} (${d.how === 'live' ? 'now' : 'at its next step'})`).join(', ');
@@ -1561,6 +1659,7 @@
             closeBlock();
             setStatus('error', 'Error');
             setRunning(false);
+            setInputMode('ended');   // a failed run is resumed (with an optional note), never "continued" as if it had finished
             stopAutoSave();
             addSystemMsg('Error: ' + gw.message);
             document.title = '❌ Tiger Team - Error';
@@ -1593,9 +1692,8 @@
             const errorBanner = document.getElementById('tt-error-banner');
             errorBanner.textContent = stopped ? 'Stopped. Everything so far is saved; Resume carries on from here.' : (gw.message || gw.reason || 'Connection interrupted');
             errorBanner.style.display = 'block';
-            document.getElementById('user-input').disabled = true;
-            document.getElementById('btn-send').disabled = true;
             setRunning(false);
+            setInputMode('ended');
             stopAutoSave();
             addDivider(stopped ? 'Session Stopped' : (gw.reason || 'Session Interrupted'), '');
             if (stopped) addSystemMsg('■ Stopped. Prior progress was checkpointed - use Resume to continue.');
@@ -1879,10 +1977,8 @@
         document.getElementById('btn-save').disabled = false;
 
         if (['interrupted', 'stopped', 'blocked', 'running', 'retrying', 'stopping', 'in_progress'].includes(status)) {
-          // Offer Resume for anything that did not reach a clean completion.
-          input.disabled = true;
-          btn.disabled = true;
-          if (label) label.textContent = '⏸ Not running:';
+          // Offer Resume for anything that did not reach a clean completion: the same mode a live run ends in.
+          setInputMode('ended');
           resumeBtn.style.display = backendRecoveryAvailable ? 'inline-flex' : 'none';
           if (data.error) {
             const banner = document.getElementById('tt-error-banner');
@@ -1892,11 +1988,7 @@
         } else {
           // Completed (or legacy in_progress with no durable status) - normal continue flow.
           resumeBtn.style.display = 'none';
-          input.disabled = false;
-          input.placeholder = 'Ask a follow-up question or give a new directive to reconvene the team...';
-          btn.disabled = false;
-          btn.onclick = continueSession;
-          if (label) label.textContent = '🔄 Continue:';
+          setInputMode('complete');
         }
         
         addSystemMsg(`📂 Loaded saved session: "${data.title}"${data.durable ? ' (recovered from checkpoint)' : ''}`);
@@ -1908,7 +2000,8 @@
     // already be running (e.g. two tabs open on the same investigation).
     // No automatic retry on failure - resume outcome is ambiguous if the
     // request fails mid-flight, so the user must explicitly click again.
-    async function resumeInterruptedTeam() {
+    async function resumeInterruptedTeam(note) {
+      note = typeof note === 'string' ? note.trim() : '';   // the button's click passes an event, not a note
       if (!tigerTeamId || continuationInFlight) return;
       const resumeBtn = document.getElementById('btn-resume');
       resumeBtn.disabled = true;
@@ -1958,7 +2051,7 @@
         const resp = await fetch('/api/tiger-team/resume', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ session_id: tigerTeamId }),
+          body: JSON.stringify({ session_id: tigerTeamId, ...(note ? { message: note } : {}) }),
         });
         if (!resp.ok) {
           const errData = await resp.json().catch(() => ({}));
@@ -1967,6 +2060,7 @@
           resumeBtn.disabled = false;
           resumeBtn.textContent = '▶ Resume Interrupted';
           continuationInFlight = false;
+          setInputMode('ended'); input.value = note;   // the note is kept for another try
           return;
         }
 
@@ -1997,10 +2091,10 @@
     let objectiveText = objective;
 
     // ── Auto-save system ──
-    async function autoSave() {
+    async function autoSave(force) {
       if (!saveKey && !sessionId && !tigerTeamId) return;
       const now = Date.now();
-      if (now - lastAutoSave < 10000) return; // Debounce: no more than every 10s
+      if (force !== true && now - lastAutoSave < 10000) return; // Debounce: no more than every 10s (the final save is forced)
       lastAutoSave = now;
       const timeline = document.getElementById('timeline');
       const transcript = timeline ? timeline.innerHTML : '';
@@ -2028,7 +2122,7 @@
 
     function stopAutoSave() {
       if (autoSaveInterval) { clearInterval(autoSaveInterval); autoSaveInterval = null; }
-      autoSave(); // Final save on stop
+      autoSave(true); // Final save on stop: forced, so the last events are never lost to the 10 s debounce
     }
 
     // Save on page unload (navigation away, close tab)

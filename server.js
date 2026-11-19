@@ -3069,6 +3069,8 @@ async function handleHttpRequest(req, res) {
       if (!session && !ttId) return jsonResponse(res, 404, { error: 'Session not found' });
       const state = ttId && getTigerTeamState(ttId);
       if (!state) return jsonResponse(res, 409, { error: 'Team is still starting.  Retry after it is ready.' });
+      // A team that has ended (completed, stopped, failed, interrupted) has nobody to hear it: Continue or Resume it instead.
+      if (state.completedAt) return jsonResponse(res, 409, { error: 'This team is not running.' });
       // Interject: the coordinator gets it durably (journaled; picked up before its next model
       // call, survives resume). With target "team" (default) every participant working RIGHT NOW
       // also gets it live, at its next tool boundary, so nobody keeps working on stale
@@ -3080,7 +3082,14 @@ async function handleHttpRequest(req, res) {
       if (target !== 'team' && target !== 'coordinator' && !live.length) return jsonResponse(res, 409, { error: `"${target}" is not working right now; send it to the team or the coordinator instead.` });
       const delivered = [];
       if (target === 'team' || target === 'coordinator') { ttRecovery.queueDirective(ttStore, ttId, state, message); delivered.push({ agent: state.coordinator, how: 'queued' }); }
-      for (const agent of live) { const r = ttInterject({ agent, message: `[Interjection from the war room, addressed to the whole team]: ${message}` }); if (r.success) delivered.push({ agent, how: 'live' }); }
+      // The label names who it is for: the whole team, or the one member it was sent to.
+      let addressee = 'the whole team';
+      if (target !== 'team') {
+        let display = target;
+        try { const found = (await getAgents()).find(a => a.name === target); if (found && found.display) display = found.display; } catch {}
+        addressee = display;
+      }
+      for (const agent of live) { const r = ttInterject({ agent, message: `[Interjection from the war room, addressed to ${addressee}]: ${message}` }); if (r.success) delivered.push({ agent, how: 'live' }); }
       try { ttStore.append(ttId, state, { type: 'tt_interjection', message, target, delivered, at: new Date().toISOString() }); } catch {}
       console.log(`[tiger-team] interjection for ${ttId} (${target}): ${delivered.map(d => `${d.agent}:${d.how}`).join(', ') || 'nobody'}`);
       // Every page on this team sees the interjection (and a page that replays later draws it too).
@@ -3117,10 +3126,12 @@ async function handleHttpRequest(req, res) {
       if (session) session.stopped = true;
       // Target ONLY this team, not every running TT - stopTigerTeam(null) previously killed every concurrent
       // investigation. The run then ends itself and tells every attached page (tt_interrupted, status stopped).
+      let stopped = true;
       if (ttId) {
         for (const s of Object.values(global.__tigerTeamSessions)) if (s.tigerTeamId === ttId) s.stopped = true;
-        stopTigerTeam(ttId);
+        stopped = stopTigerTeam(ttId);
       } else session.abortController?.abort();
+      if (!stopped) return jsonResponse(res, 409, { error: 'This team has already ended.' });
       return jsonResponse(res, 200, { ok: true });
     }
 
@@ -3428,11 +3439,17 @@ async function handleHttpRequest(req, res) {
         res.write('data: ' + JSON.stringify({ gateway: { type: 'tt_session', session_id: sessionId } }) + '\n\n');
         stream.attach(res);
         if (resume && !state.legacyRecovery) {
+          // An optional note rides along: queued for the coordinator like an interjection (durable, picked up before its next model call).
+          if (typeof message === 'string' && message.trim()) {
+            ttRecovery.queueDirective(ttStore, id, state, message.trim());
+            stream.write('data: ' + JSON.stringify({ gateway: { type: 'tt_user_message', message: message.trim(), target: 'coordinator', kind: 'resume_note', delivered: [{ agent: state.coordinator, how: 'queued' }] } }) + '\n\n');
+          }
           await resumeTigerTeam(id, stream, session);
         } else {
           if (resume) {
             stream.write('data: ' + JSON.stringify({ gateway: { type: 'tt_notice', message: 'Legacy save: recovering from transcript only.  In-flight tool outcomes are unknown and must be verified before repeating actions.' } }) + '\n\n');
-            message = 'Resume the interrupted investigation using the saved findings.  Do not repeat completed work.  This is a legacy transcript without a tool journal: verify uncertain actions using read-only checks before repeating anything that changes state.';
+            const note = typeof message === 'string' && message.trim() ? `\n\nA note from the owner: ${message.trim()}` : '';
+            message = 'Resume the interrupted investigation using the saved findings.  Do not repeat completed work.  This is a legacy transcript without a tool journal: verify uncertain actions using read-only checks before repeating anything that changes state.' + note;
           }
           await continueTigerTeam(id, message, stream);
         }
