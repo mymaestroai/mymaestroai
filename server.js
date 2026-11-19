@@ -1339,6 +1339,16 @@ async function handleHttpRequest(req, res) {
       return jsonResponse(res, 200, { ok: true, ...pu.snapshot(), agents: agentsOnPlan });
     }
 
+    // The ChatGPT plan's usage as Codex reports it (lib/codex-usage; admins). POST .../refresh asks Codex now (no turn,
+    // at most once a minute): 409 with the reason when it was refused or failed.
+    if ((pathname === '/api/codex-usage' && req.method === 'GET') || (pathname === '/api/codex-usage/refresh' && req.method === 'POST')) {
+      if (!access.isAdmin(req.hubUser || { role: 'admin' })) return jsonResponse(res, 403, { error: 'admin_only' });
+      const cu = require('./lib/codex-usage').getCodexUsage();
+      if (req.method === 'GET') return jsonResponse(res, 200, cu.snapshot());
+      const r = await cu.readNow();
+      return jsonResponse(res, r && r.ok ? 200 : 409, { ...(r || { ok: false, error: 'Unknown error' }), snapshot: (r && r.snapshot) || cu.snapshot() });
+    }
+
     if (pathname === '/api/models' && req.method === 'GET') {
       const models = await getAvailableModels();
       console.log(`[api/models] Returning ${models.length} models:`, models.slice(0, 5));
@@ -2755,6 +2765,8 @@ async function handleHttpRequest(req, res) {
           if (patch && patch.shareLinks !== undefined) patch.shareLinks = require('./lib/share-links').cleanSettings(patch.shareLinks, hubSettings.getSetting('shareLinks'));
           if (patch && patch.showReasoning !== undefined) patch.showReasoning = patch.showReasoning !== false;
           if (patch && patch.modelOffers !== undefined) patch.modelOffers = patch.modelOffers !== false;
+          // Subscription usage (lib/codex-usage, Settings → Subscriptions): on unless turned off.
+          if (patch && patch.subscriptionUsage !== undefined) patch.subscriptionUsage = patch.subscriptionUsage !== false;
           if (patch && patch.componentUpdates !== undefined) patch.componentUpdates = { codex: ['auto', 'notify', 'off'].includes(patch.componentUpdates && patch.componentUpdates.codex) ? patch.componentUpdates.codex : 'auto' };
           if (patch && patch.walletLockedNotice !== undefined) patch.walletLockedNotice = patch.walletLockedNotice !== false;
           // Workers allowed at once per AI service: integers 1..32 only (lib/provider-pacing); applied to the running hub below.

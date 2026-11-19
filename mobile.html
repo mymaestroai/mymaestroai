@@ -272,6 +272,24 @@
     .mh-red { background: #d4588b; } .mh-amber { background: #c9a227; } .mh-green { background: #199e70; }
     .mh-item { margin: 4px 0 0 18px; color: var(--text-dim); line-height: 1.4; }
     .mh-t { font-weight: 600; } .mh-t-red { color: #d4588b; } .mh-t-amber { color: #c9a227; }
+    /* Subscriptions sheet (mobile.js openSubsSheet): one bar per usage window; label above the bar, % and reset under it. */
+    .subs-sheet .subs-body { max-width: 100%; overflow-x: hidden; }
+    .subs-switch { display: flex; align-items: center; gap: 10px; padding: 8px 0; font-size: 15px; }
+    .subs-hint { color: var(--text-dim); font-size: 13px; line-height: 1.4; margin-bottom: 8px; }
+    .subs-block { margin: 12px 0; }
+    .subs-head { font-weight: 600; font-size: 15px; margin-bottom: 6px; }
+    .subs-bar { display: grid; grid-template-columns: minmax(0, 1fr); margin: 10px 0; max-width: 100%; }
+    .subs-label { grid-row: 1; overflow-wrap: anywhere; }
+    .subs-track { grid-row: 2; width: 100%; height: 8px; background: var(--border); border-radius: 4px; overflow: hidden; margin: 4px 0; }
+    .subs-fill { height: 100%; }
+    .subs-meta { grid-row: 3; color: var(--text-dim); font-size: 13px; overflow-wrap: anywhere; }
+    .subs-note { color: var(--text-dim); font-size: 13px; margin: 4px 0; overflow-wrap: anywhere; }
+    .subs-err, .subs-reached { color: #d4588b; }
+    .subs-reached { font-weight: 600; }
+    .subs-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+    .subs-actions button, .subs-foot button { min-height: 40px; padding: 0 14px; border-radius: 8px; border: 1px solid var(--border-strong); color: var(--text); background: transparent; font-size: 14px; }
+    .subs-foot { padding: 8px 14px calc(10px + var(--sab)); border-top: 1px solid var(--border); }
+    .subs-foot button { width: 100%; }
     .mh-foot { margin-top: 14px; color: var(--text-dim); font-size: 13px; }
     /* Wallet sheet (mobile.js openWalletSheet): reuses the Memory sheet's frame */
     .wl-status { margin: 8px 0; font-size: 16px; font-weight: 600; }
@@ -1228,6 +1246,7 @@ html.mm-simple #simple-side { display: none; }
     <button id="menu-workers">&#x1F477; Worker history</button>
     <button id="menu-wallet" hidden>&#x1F45B; Wallet</button>
     <button id="menu-memory" hidden><span>&#x1F9E0; Memory</span><span class="menu-count" id="menu-memory-count"></span></button>
+    <button id="menu-subs" hidden>&#x1F4CA; Subscriptions</button>
     <button id="menu-compact" class="chat-only">&#x2699; Compress now</button>
     <button id="menu-clear" class="danger chat-only">Clear chat / new session</button>
     <div id="menu-2fa-note" hidden>Two-factor is required for admins: set it up under Security</div>
