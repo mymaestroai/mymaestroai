@@ -472,15 +472,21 @@ test('item 2: an explicit null reached type with a window below 100% clears; a n
   assert.strictEqual(u.snapshot().limits[0].reached, true, 'spend control still on');
   u.noteSnapshot({ limitId: 'codex', primary: { usedPercent: 1, windowDurationMins: 10080, resetsAt: RESET_S + 7 * 86400 }, rateLimitReachedType: null, spendControlReached: false });
   const l = u.snapshot().limits[0];
-  assert.deepStrictEqual([l.reached, l.reachedType, l.spendControlReached, l.reachedUntil], [false, null, null, null]);
+  // spend control keeps the explicit false it was given (review r2: the two flags clear independently)
+  assert.deepStrictEqual([l.reached, l.reachedType, l.spendControlReached, l.reachedUntil], [false, null, false, null]);
   assert.ok(!u.briefLine().includes('limit reached'));
   assert.ok(published.length >= 1);
 });
 
-test('item 2: reachedUntil without a window at 100% is the shortest reset; none is null; it is saved and restored', () => {
+test('item 2 (r2): no live window at 100% means no known end (null); a 100% window gives its reset; saved and restored', () => {
   const a = make();
   const r5 = new Date(T0 + 3600000).toISOString();
-  a.u.noteSnapshot({ limitId: 'codex', rateLimitReachedType: 'x', primary: { usedPercent: 60, windowDurationMins: 10080, resetsAt: RESET_S }, secondary: { usedPercent: 90, windowDurationMins: 300, resetsAt: at(r5) } }, { source: 'read' });
+  // reached, but no window is at 100%: the end is not known (it was the shortest reset before review r2)
+  a.u.noteSnapshot({ limitId: 'codex', rateLimitReachedType: 'x', primary: { usedPercent: 60, windowDurationMins: 10080, resetsAt: RESET_S }, secondary: { usedPercent: 90, windowDurationMins: 300, resetsAt: Math.floor((T0 + 3600000) / 1000) } });
+  assert.strictEqual(a.u.snapshot().limits[0].reachedUntil, null);
+  assert.strictEqual(a.u.snapshot().limits[0].reached, true);
+  // the 5-hour window at 100%: its reset
+  a.u.noteSnapshot({ limitId: 'codex', rateLimitReachedType: 'x', secondary: { usedPercent: 100, windowDurationMins: 300, resetsAt: Math.floor((T0 + 3600000) / 1000) } });
   assert.strictEqual(a.u.snapshot().limits[0].reachedUntil, r5);
   a.u.flush();
   const again = createCodexUsage({ getSetting: () => undefined, now: () => T0, stateFile: a.stateFile, log: () => {}, whenText: String });
@@ -496,6 +502,64 @@ test('item 2: reachedUntil without a window at 100% is the shortest reset; none 
   none.u.noteSnapshot({ limitId: 'codex', spendControlReached: true, primary: { usedPercent: 10 } });
   assert.strictEqual(none.u.snapshot().limits[0].reachedUntil, null);
   assert.ok(none.u.briefLine().includes('limit reached until it resets'));
+});
+
+test('r2: both windows at 100%: reached until the LATER reset; past the short one it stays reached, also after a sparse reached report', () => {
+  const { u, clock } = make();
+  const s5 = Math.floor((T0 + 3600000) / 1000);           // 5-hour window resets in an hour
+  const s7 = Math.floor((T0 + 86400000) / 1000);          // weekly window resets tomorrow
+  u.noteSnapshot({ limitId: 'codex', rateLimitReachedType: 'rate_limit_reached', primary: { usedPercent: 100, windowDurationMins: 10080, resetsAt: s7 }, secondary: { usedPercent: 100, windowDurationMins: 300, resetsAt: s5 } });
+  assert.strictEqual(u.snapshot().limits[0].reachedUntil, new Date(s7 * 1000).toISOString());
+  clock.t = T0 + 3600000 + 1000;                          // the 5-hour window has reset
+  assert.strictEqual(u.snapshot().limits[0].reached, true);
+  u.noteSnapshot({ limitId: 'codex', rateLimitReachedType: 'rate_limit_reached' });   // sparse, no windows
+  const l = u.snapshot().limits[0];
+  assert.strictEqual(l.reached, true);
+  assert.strictEqual(l.reachedUntil, new Date(s7 * 1000).toISOString(), 'the expired 5-hour window does not set the end');
+});
+
+test('r2: a sparse reached report with only a stale stored window is reached with no known end (never lapsed at once)', () => {
+  const { u, clock } = make();
+  u.noteSnapshot({ limitId: 'codex', primary: { usedPercent: 100, windowDurationMins: 300, resetsAt: Math.floor((T0 + 60000) / 1000) } });
+  clock.t = T0 + 120000;                                  // that window has reset; nothing newer stored
+  u.noteSnapshot({ limitId: 'codex', rateLimitReachedType: 'rate_limit_reached' });
+  const l = u.snapshot().limits[0];
+  assert.strictEqual(l.reached, true);
+  assert.strictEqual(l.reachedUntil, null);
+});
+
+test('r2: spend control is its own flag: an explicit null reached type does not clear it; only an explicit false does', () => {
+  const { u } = make();
+  u.noteSnapshot({ limitId: 'codex', spendControlReached: true, primary: { usedPercent: 31, windowDurationMins: 10080, resetsAt: RESET_S } });
+  assert.strictEqual(u.snapshot().limits[0].reached, true);
+  u.noteSnapshot({ limitId: 'codex', primary: { usedPercent: 31 }, rateLimitReachedType: null });   // spendControlReached omitted
+  assert.strictEqual(u.snapshot().limits[0].reached, true, 'spend control kept');
+  assert.strictEqual(u.snapshot().limits[0].spendControlReached, true);
+  u.noteSnapshot({ limitId: 'codex', primary: { usedPercent: 31 }, spendControlReached: false });
+  assert.strictEqual(u.snapshot().limits[0].reached, false);
+});
+
+test('r2: once a reached state ends, the next one is announced again (even with no known end)', () => {
+  const { u, notified } = make();
+  const reachedNotices = () => notified.filter(n => n.title === 'ChatGPT plan limit reached').length;
+  u.noteSnapshot({ limitId: 'codex', spendControlReached: true, primary: { usedPercent: 10, windowDurationMins: 10080, resetsAt: RESET_S } });
+  assert.strictEqual(reachedNotices(), 1);
+  u.noteSnapshot({ limitId: 'codex', spendControlReached: true });
+  assert.strictEqual(reachedNotices(), 1, 'said once while it lasts');
+  u.noteSnapshot({ limitId: 'codex', spendControlReached: false });
+  u.noteSnapshot({ limitId: 'codex', spendControlReached: true });
+  assert.strictEqual(reachedNotices(), 2);
+});
+
+test('r2: a read whose snapshot is empty keeps the figures; noteRead(null) reports, never throws', () => {
+  const { u } = make();
+  assert.strictEqual(u.noteRead(proRead()), true);
+  assert.strictEqual(u.noteRead({ rateLimits: {} }), false);
+  assert.strictEqual(u.snapshot().limits[0].windows[0].usedPercent, 14);
+  assert.strictEqual(u.snapshot().error, 'Codex answered without usage figures.');
+  const fresh = make();
+  assert.strictEqual(fresh.u.noteRead(null), false);
+  assert.strictEqual(fresh.u.snapshot().error, 'Codex answered without usage figures.');
 });
 
 test('item 5: a read without any valid limit changes nothing and reports an error', async () => {
