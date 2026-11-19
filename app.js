@@ -3115,7 +3115,7 @@
       return out;
     }
     const ST_GROUPS = [
-      { id: 'status', title: '🩺 Status', sections: ['st-ready-section', 'st-sec-section', 'st-memory-section', 'st-selfcheck-section', 'st-updates-section'] },
+      { id: 'status', title: '🩺 Status', sections: ['st-ready-section', 'st-sec-section', 'st-memory-section', 'st-selfcheck-section', 'st-components-section', 'st-updates-section'] },
       { id: 'security', title: '🔐 Security', sections: ['st-security-section'] },
       { id: 'backups', title: '💾 Backups', sections: ['st-backups-section'] },
       { id: 'models', title: '🧠 AI models', sections: ['st-prov-section', 'st-or-section', 'st-plan-section', 'st-local-models-section', 'st-classifier-section'] },
@@ -3403,6 +3403,16 @@
         <div class="st-row"><label style="flex-basis:150px"></label><button class="st-test-btn" onclick="saveSelfCheckSettings()">Save</button><span id="st-sc-save-state" role="status" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px"></span></div>
       </div>`;
         setTimeout(() => { scSettings = null; loadSelfCheck(); }, 0);   // the form is new: fill it from the hub
+      }
+      // Software your Maestro relies on (lib/component-watch): the Codex and Claude clients, what is installed and what is out; admins only.
+      if (isHubAdmin()) {
+        html += `<div class="st-section" id="st-components-section"><h4>Software your Maestro relies on</h4>
+        <div class="st-hint" style="margin-left:0">Newer clients can unlock newer models. The hub looks now and then and shows here what is installed and what is out.</div>
+        <div id="st-cw-list" class="st-hint" style="margin-left:0">Checking…</div>
+        <div id="st-cw-codex"></div>
+        <div class="st-row"><label style="flex-basis:150px"></label><button class="st-test-btn" id="st-cw-check" onclick="checkComponentsNow(this)">Check now</button><span id="st-cw-state" role="status" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px"></span></div>
+      </div>`;
+        setTimeout(loadComponents, 0);
       }
       // Updates (lib/update-check): the daily look at GitHub behind the "Update available" card.
       html += `<div class="st-section" id="st-updates-section"><h4>Updates</h4>
@@ -4329,6 +4339,69 @@
         paintUpdateCard().catch(() => {});
       } catch (e) { if (state) state.textContent = 'Not saved: ' + e.message; }
     }
+    // Software your Maestro relies on (Settings → Status, lib/component-watch): rows from GET /api/components. Every server
+    // text goes through escapeHtml.
+    function paintComponents(data) {
+      const list = document.getElementById('st-cw-list');
+      const codexBox = document.getElementById('st-cw-codex');
+      if (!list) return;
+      const items = Array.isArray(data && data.items) ? data.items : [];
+      const day = (t) => { const d = new Date(t); return isNaN(d) ? '' : d.toLocaleDateString(); };
+      list.innerHTML = items.length ? items.map((it) => {
+        const lu = it.lastUpdate;
+        const upd = lu ? (lu.ok ? `<div>Updated from ${escapeHtml(lu.from)} to ${escapeHtml(lu.to)} on ${escapeHtml(day(lu.at))}</div>` : `<div>Update to ${escapeHtml(lu.to)} failed${lu.rolledBack ? `; ${escapeHtml(lu.from)} was put back` : ''}</div>`) : '';
+        return `<div class="st-cw-row" style="margin-bottom:8px"><strong>${escapeHtml(it.name)}</strong>: installed ${escapeHtml(it.installed || 'not installed')}, newest ${escapeHtml(it.latest || 'unknown')}${it.behind ? ' (newer is out)' : ''}${it.how ? `<div>${escapeHtml(it.how)}</div>` : ''}${it.waiting ? `<div>${escapeHtml(it.waiting)}</div>` : ''}${upd}</div>`;
+      }).join('') : 'Nothing to show yet.';
+      if (!codexBox) return;
+      const codex = items.find((it) => it && it.id === 'codex');
+      const cur = (data.setting && data.setting.codex) || 'auto';
+      // With Codex updates Off the watch leaves Codex out of the list: the select stays, so they can be switched on again.
+      if (!codex && cur !== 'off') { codexBox.innerHTML = ''; return; }
+      const opt = (v, t) => `<option value="${v}"${cur === v ? ' selected' : ''}>${t}</option>`;
+      codexBox.innerHTML = `<div class="st-row"><label style="flex-basis:150px">Codex updates</label><select id="st-cw-codex-sel" onchange="saveCodexUpdates(this.value)">${opt('auto', 'Automatic')}${opt('notify', 'Tell me')}${opt('off', 'Off')}</select></div>`
+        + (codex && codex.behind && cur !== 'off' ? `<div class="st-row"><label style="flex-basis:150px"></label><button class="st-test-btn" id="st-cw-codex-update" onclick="updateCodexNow(this)">Update Codex now</button></div>` : '');
+    }
+    async function loadComponents() {
+      const list = document.getElementById('st-cw-list');
+      try {
+        const r = await fetch('/api/components', { credentials: 'include' });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        paintComponents(await r.json());
+      } catch (e) { if (list) list.textContent = 'Could not load: ' + e.message; }
+    }
+    async function checkComponentsNow(btn) {
+      const st = document.getElementById('st-cw-state');
+      if (btn) { btn.disabled = true; btn.textContent = 'Checking…'; }
+      try {
+        const r = await fetch('/api/components/check', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        await loadComponents();
+        if (st) st.textContent = '';
+      } catch (e) { if (st) st.textContent = 'Could not check: ' + e.message; }
+      if (btn) { btn.disabled = false; btn.textContent = 'Check now'; }
+    }
+    async function saveCodexUpdates(value) {
+      const st = document.getElementById('st-cw-state');
+      try {
+        const r = await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ componentUpdates: { codex: value } }) });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        await loadComponents();
+      } catch (e) { alert('Could not save: ' + e.message); if (st) st.textContent = ''; }
+    }
+    async function updateCodexNow(btn) {
+      const st = document.getElementById('st-cw-state');
+      if (btn) { btn.disabled = true; btn.textContent = 'Updating…'; }
+      let text = '';
+      try {
+        const r = await fetch('/api/components/codex/update', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+        const j = await r.json().catch(() => ({}));
+        text = r.ok ? `Codex updated${j.to ? ' to ' + j.to : ''}.` : `Codex was not updated: ${j.error || 'HTTP ' + r.status}${j.rolledBack ? `; ${j.from} was put back` : ''}`;
+      } catch (e) { text = 'Could not update: ' + e.message; }
+      await loadComponents();
+      const st2 = document.getElementById('st-cw-state');
+      if (st2) st2.textContent = text;
+    }
+
     async function checkUpdatesNow(btn) {
       if (btn) { btn.disabled = true; btn.textContent = 'Checking…'; }
       try {
