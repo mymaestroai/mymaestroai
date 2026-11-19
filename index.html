@@ -2403,6 +2403,9 @@
     .handoff-cards .ho-topic { margin-top: 4px; overflow-wrap: anywhere; white-space: normal; }
     .handoff-cards .ho-time { margin-top: 2px; font-size: 12px; color: var(--text-dim); }
     .handoff-cards .ho-status { color: var(--accent); }
+    .handoff-cards .ho-card.ho-ended { display: flex; align-items: center; gap: 8px; padding: 4px 10px; font-size: 13px; }
+    .handoff-cards .ho-ended .ho-line { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-dim); }
+    .handoff-cards .ho-ended .ho-pill, .handoff-cards .ho-ended .ho-status { flex: none; }
     /* Download cards under an agent's reply (lib/ui-file-card.js) */
     .file-cards { display: flex; flex-direction: column; gap: 8px; margin: 4px 0 8px; }
     .file-card { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; max-width: 420px; box-sizing: border-box; display: flex; flex-direction: column; gap: 8px; background: var(--bg-input); }

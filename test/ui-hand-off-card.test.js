@@ -177,6 +177,40 @@ test('review r1: open hand-offs come first, so five finished cards never hide a 
   const done = [1, 2, 3, 4, 5].map((i) => ({ id: 'd' + i, state: 'done', createdAt: now - i * 60000, endedAt: now - 1000 }));
   const running = { id: 'r1', state: 'running', createdAt: now - 3600000 };
   const shown = H.visible([...done, running], { now });
-  assert.equal(shown.length, 5);
+  // proof round: ended ones are capped at three single lines, so this shows the running one and the three newest finished
+  assert.equal(shown.length, 4);
   assert.equal(shown[0].id, 'r1');
+  assert.deepEqual(shown.slice(1).map((x) => x.id), ['d1', 'd2', 'd3']);
+});
+
+test('proof round: an ended hand-off is one line (target · topic, state, Status); at most three ended ones show', () => {
+  const H = require('../lib/ui-hand-off-card.js');
+  const now = Date.parse('2026-11-19T12:00:00Z');
+  const doc = fakeDoc();
+  const make = doc.createElement;
+  doc.createElement = (tag) => Object.assign(make(tag), { attrs: {}, setAttribute(k, v) { this.attrs[k] = String(v); } });
+  const box = doc.createElement('div');
+  H.render(box, [
+    { target: 'builder', topic: 'word-count', state: 'interrupted', createdAt: now - 600000, endedAt: now - 60000, folder: '/s/builder/hand-offs/sam-word-count' },
+    { target: 'builder', topic: 'long-run', state: 'running', createdAt: now - 120000, folder: '/s/builder/hand-offs/sam-long-run' },
+  ], { now });
+  const cards = find(box, 'ho-card');
+  assert.equal(cards.length, 2);
+  // the open one first, as a full card
+  assert.equal(cards[0].className, 'ho-card');
+  assert.equal(textOf(find(cards[0], 'ho-topic')[0]), 'long-run');
+  // the ended one: a single row with no title, topic or time lines
+  const row = cards[1];
+  assert.equal(row.className, 'ho-card ho-ended');
+  assert.deepEqual(row.children.map((c) => c.className), ['ho-line', 'ho-pill ho-interrupted', 'ho-status']);
+  assert.equal(textOf(row.children[0]), 'builder · word-count');
+  assert.equal(textOf(row.children[1]), 'Interrupted by a restart');
+  assert.match(row.children[2].attrs.href, /path=hand-offs%2Fsam-word-count%2FSTATUS\.md/);
+  assert.equal(find(row, 'ho-title').length + find(row, 'ho-topic').length + find(row, 'ho-time').length, 0);
+  // five ended, none open: three show, newest first
+  const ended = [1, 2, 3, 4, 5].map((i) => ({ id: 'e' + i, target: 'builder', state: 'done', createdAt: now - i * 60000, endedAt: now - 1000 }));
+  assert.deepEqual(H.visible(ended, { now }).map((x) => x.id), ['e1', 'e2', 'e3']);
+  // five open ones still all show
+  const open = [1, 2, 3, 4, 5, 6].map((i) => ({ id: 'o' + i, state: 'queued', createdAt: now - i * 60000 }));
+  assert.equal(H.visible([...open, ...ended], { now }).length, 5);
 });
