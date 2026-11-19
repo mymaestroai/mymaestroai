@@ -59,6 +59,7 @@
       paintSetupNotice();
       paintNoAccountsNotice();
       paintReadinessBanner().catch(() => {});
+      paintHealthBanner().catch(() => {});
       paintSecurityBanner().catch(() => {});
       paintRecoveryBanner().catch(() => {});
       paintUpdateCard().catch(() => {});
@@ -3117,7 +3118,7 @@
       return out;
     }
     const ST_GROUPS = [
-      { id: 'status', title: '🩺 Status', sections: ['st-ready-section', 'st-sec-section', 'st-memory-section', 'st-selfcheck-section', 'st-components-section', 'st-updates-section'] },
+      { id: 'status', title: '🩺 Status', sections: ['st-ready-section', 'st-health-section', 'st-sec-section', 'st-memory-section', 'st-selfcheck-section', 'st-components-section', 'st-updates-section'] },
       { id: 'security', title: '🔐 Security', sections: ['st-security-section'] },
       { id: 'backups', title: '💾 Backups', sections: ['st-backups-section'] },
       { id: 'models', title: '🧠 AI models', sections: ['st-prov-section', 'st-or-section', 'st-plan-section', 'st-local-models-section', 'st-classifier-section'] },
@@ -3374,6 +3375,22 @@
         <div id="st-ready-list" class="st-hint" style="margin-left:0">Checking…</div>
         <div class="st-row"><label style="flex-basis:150px"></label><button class="st-test-btn" onclick="loadReadiness()">Check again</button><span id="st-ready-state" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px"></span></div>
       </div>`;
+      // Health (lib/system-health): the nightly look at this computer itself; admins only.
+      if (isHubAdmin()) {
+        const hlTick = (id, label) => `<div class="st-row"><label style="flex-basis:150px">${label}</label><input type="checkbox" id="${id}"></div>`;
+        html += `<div class="st-section" id="st-health-section"><h4>Health</h4>
+        <div class="st-hint">Every night, and after a start, your Maestro looks at this computer: free disk space, memory, backups, databases, sign-ins and more. It tells you when something needs you.</div>
+        <div id="st-hl-list" class="st-hint" style="margin-left:0">Checking…</div>
+        <div id="st-hl-msg" class="st-hint mh-msg" role="status" style="margin-left:0"></div>
+        <div class="st-row"><label style="flex-basis:150px"></label><button class="st-test-btn" id="st-hl-run" onclick="loadHealth(true)">Check now</button><span id="st-hl-state" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px"></span></div>
+        ${hlTick('st-hl-enabled', 'Run checks')}
+        <div class="st-row"><label style="flex-basis:150px">Each night at</label><input type="time" id="st-hl-at"></div>
+        <div class="st-row"><label style="flex-basis:150px">Notices</label><select id="st-hl-notify"><option value="critical">Critical problems only</option><option value="warnings">Warnings too</option><option value="off">Off</option></select></div>
+        ${HL_NUMBERS.map(([k, label]) => `<div class="st-row"><label style="flex-basis:150px">${esc(label)}</label><input type="number" id="st-hl-n-${k}" min="0" step="1"></div>`).join('')}
+        <div class="st-row"><label style="flex-basis:150px"></label><button class="st-test-btn" onclick="saveHealthSettings()">Save</button><span id="st-hl-save-state" role="status" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px"></span></div>
+      </div>`;
+        setTimeout(() => { hlSettings = null; loadHealth(); }, 0);   // the form is new: fill it from the hub
+      }
       // Security check (lib/security-check): the hub reviews its own security configuration, nightly and on demand.
       html += `<div class="st-section" id="st-sec-section"><h4>Security check</h4>
         <div class="st-hint">The hub reviews how it is set up: accounts and two-factor, how it can be reached, secrets and file permissions, agent policies and sandboxes, tokens and root, this machine's open doors. It runs every night and on demand. The same check runs from a terminal with no hub and no agent: <code>node scripts/security-check.js</code>.</div>
@@ -3872,19 +3889,37 @@
       if (!me || !me.isAdmin || !me.user) { if (bar) bar.remove(); return; }
       let d = null;
       try { d = await (await fetch('/api/readiness', { credentials: 'include' })).json(); } catch { return; }
-      const crit = (d && d.items || []).filter(i => i.level === 'critical' && i.id !== 'accounts' && i.id !== 'provider');   // those two have their own banners
+      const crit = (d && d.items || []).filter(i => i.level === 'critical' && i.id !== 'accounts' && i.id !== 'provider' && !String(i.id || '').startsWith('health-'));   // those two have their own banners; the health banner shows the health- items
       if (!crit.length) { if (bar) bar.remove(); layoutBanners(); return; }
       if (!bar) { bar = document.createElement('div'); bar.id = 'hub-readiness-notice'; bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9996;background:#7a3b12;color:#fff;padding:6px 14px;font-weight:600;box-sizing:border-box'; document.body.prepend(bar); }
       bar.innerHTML = `Setup needs attention: ${crit.map(i => esc(i.title)).join('; ')}. <a href="#" onclick="openSettingsAt('st-ready-section'); return false" style="color:#fff;text-decoration:underline">Open the setup checklist</a>.`;
       layoutBanners();
     }
+    // Banner for admins while the nightly health check has a critical problem (a full disk...). The sign-in items are
+    // left out: the setup checklist's own banner covers them. An error or a non-200 answer leaves the bar as it is.
+    function healthBannerItems(view) {
+      return ((view && view.items) || []).filter(i => i && i.level === 'critical' && !String(i.id || '').startsWith('health-signin-'));
+    }
+    async function paintHealthBanner() {
+      const me = window.hubMe;
+      let bar = document.getElementById('hub-health-notice');
+      if (!me || !me.isAdmin || !me.user) { if (bar) { bar.remove(); layoutBanners(); } return; }
+      let d = null;
+      try { const r = await fetch('/api/system-health', { credentials: 'include' }); if (!r.ok) return; d = await r.json(); } catch { return; }
+      bar = document.getElementById('hub-health-notice');
+      const crit = healthBannerItems(d);
+      if (!crit.length) { if (bar) bar.remove(); layoutBanners(); return; }
+      if (!bar) { bar = document.createElement('div'); bar.id = 'hub-health-notice'; bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9995;background:#7a1212;color:#fff;padding:6px 14px;font-weight:700;box-sizing:border-box'; document.body.prepend(bar); }
+      bar.innerHTML = `Health: ${crit.map(i => esc(i.title)).join('; ')}. <a href="#" onclick="openSettingsAt('st-health-section'); return false" style="color:#fff;text-decoration:underline">Open Settings → Status</a>`;
+      layoutBanners();
+    }
     // The notices fixed at the top stack in this order, whichever painted first: the phone-layout bar
-    // (showMobileBanner), no AI provider yet, the setup checklist, security. Each one sits below the ones above it, so
+    // (showMobileBanner), no AI provider yet, the setup checklist, health, security. Each one sits below the ones above it, so
     // none covers another (or its X), and the page moves down by their height (--banner-h), so they never cover the
     // header and its Settings button.
     function layoutBanners() {
       let top = 0;
-      for (const id of ['hub-phone-layout-notice', 'hub-no-accounts-notice', 'hub-recovery-notice', 'hub-setup-notice', 'hub-readiness-notice', 'hub-security-notice']) {
+      for (const id of ['hub-phone-layout-notice', 'hub-no-accounts-notice', 'hub-recovery-notice', 'hub-setup-notice', 'hub-readiness-notice', 'hub-health-notice', 'hub-security-notice']) {
         const n = document.getElementById(id);
         if (!n) continue;
         n.style.top = `${top}px`;
@@ -4183,6 +4218,123 @@
       } catch (e) { say(`Not saved: ${e.message}`); }
     }
     // ── self-check page (end) ──
+    // System health (lib/system-health): the nightly look at the computer itself (disk, memory, backups, databases...).
+    // The page shows the last run and one row per item, Check now, and a small settings form that saves by PUT with only
+    // the keys that changed. test/ui-system-health.test.js lifts this block out and runs it against a stand-in page.
+    // ── health page (begin) ──
+    const HL_LEVEL = { critical: ['Critical', '#d64545'], warn: ['Warning', '#d9a21b'], ok: ['OK', '#3fa65b'], unknown: ["Couldn't check", '#8a8f98'], info: ['Info', '#8a8f98'] };
+    const HL_TRIGGER = { start: 'after a start', nightly: 'nightly', manual: 'run by hand' };
+    const HL_POLL_MS = 2000, HL_POLL_MAX_MS = 3 * 60 * 1000;
+    const HL_NUMBERS = [['diskWarnPct', 'Disk: warn under (% free)'], ['diskWarnGB', 'Disk: warn under (GB free)'], ['diskCritPct', 'Disk: critical under (% free)'], ['diskCritGB', 'Disk: critical under (GB free)'],
+      ['fullInDays', 'Warn when full in under (days)'], ['backupWarnHours', 'Backups: warn after (hours)'], ['backupCritHours', 'Backups: critical after (hours)'], ['warnNights', 'Warning nights before a notice']];
+    let hlLoad = 0, hlSettings = null, hlPollUntil = 0;
+    function hlWhen(iso) { const d = new Date(iso); return isNaN(d) ? String(iso || '') : d.toLocaleString(); }
+    function hlMsg(text, bad = true) {
+      const m = document.getElementById('st-hl-msg'); if (!m) return;
+      m.textContent = text || '';
+      m.classList.toggle('mh-msg-bad', !!text && bad);
+    }
+    function hlRunning(on) {
+      const btn = document.getElementById('st-hl-run'), state = document.getElementById('st-hl-state');
+      if (btn) btn.disabled = !!on;
+      if (state) state.textContent = on ? 'Checking…' : '';
+    }
+    function hlRender(v) {
+      const el = document.getElementById('st-hl-list'); if (!el) return;
+      v = v || {};
+      const run = v.lastRun, items = Array.isArray(v.items) ? v.items : [];
+      let html = run
+        ? `<div class="sc-last">Last checked ${esc(hlWhen(run.finishedAt || run.startedAt))} (${esc(HL_TRIGGER[run.trigger] || run.trigger || 'earlier')})</div>`
+        : '<div class="sc-last">Not checked yet.</div>';
+      for (const i of items) {
+        const lv = HL_LEVEL[i.level] || [i.level || '?', '#8a8f98'];
+        const problem = i.level === 'critical' || i.level === 'warn';
+        html += `<div class="sc-row"><div class="sc-head"><span class="hl-mark" style="color:${lv[1]}" aria-label="${esc(lv[0])}">●</span> <b>${esc(i.title)}</b> <span style="color:${lv[1]}">${esc(lv[0])}</span></div>`
+          + (i.detail ? `<div class="sc-note">${esc(i.detail)}</div>` : '')
+          + (i.fix ? `<div class="sc-note">${esc(i.fix)}</div>` : '')
+          + (problem && i.since ? `<div class="sc-note">since ${esc(hlWhen(i.since))}</div>` : '')
+          + '</div>';
+      }
+      if (run && !items.length) html += '<div class="sc-note">Nothing to report.</div>';
+      el.innerHTML = html;
+      stSum('status', 'health', !run ? 'Health: not checked yet' : v.critical ? 'Health: problem found' : v.warnings ? 'Health: warnings' : 'Health: all fine', !!v.critical);
+    }
+    function hlFillSettings(s) {
+      if (!s) return;
+      hlSettings = s;
+      const $ = (id) => document.getElementById(id);
+      if ($('st-hl-enabled')) $('st-hl-enabled').checked = s.enabled !== false;
+      if ($('st-hl-at')) $('st-hl-at').value = s.checkAt || '';
+      if ($('st-hl-notify')) $('st-hl-notify').value = s.notify || 'critical';
+      for (const [k] of HL_NUMBERS) if ($(`st-hl-n-${k}`)) $(`st-hl-n-${k}`).value = s[k] === undefined || s[k] === null ? '' : String(s[k]);
+    }
+    function hlFillSettingsOnce(s) { if (!hlSettings) hlFillSettings(s); }
+    // Last result, or a new run (POST) that is then followed every 2 s while the hub says it runs, for up to 3 minutes.
+    async function loadHealth(runNow = false, poll = false) {
+      if (!document.getElementById('st-hl-list')) return;
+      if (window.hubMe && window.hubMe.isAdmin !== true) return;
+      const mine = ++hlLoad;
+      const json = async (r) => { try { return await r.json(); } catch { return {}; } };
+      try {
+        if (runNow) {
+          hlMsg('');
+          hlRunning(true);
+          const r = await fetch('/api/system-health/run', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+          if (!r.ok) {
+            const b = await json(r);
+            if (r.status === 409 && b.error === 'running') hlMsg('A check is already running.');
+            else if (r.status === 409 && b.error === 'disabled') { hlMsg('The health check is turned off.'); hlRunning(false); return; }
+            else { hlMsg(`Couldn't start the health check: ${b.error || `HTTP ${r.status}`}`); hlRunning(false); return; }
+          }
+          hlPollUntil = Date.now() + HL_POLL_MAX_MS;
+        }
+        const r = await fetch('/api/system-health', { credentials: 'include' });
+        const v = await json(r);
+        if (mine !== hlLoad) return;   // a newer load answered first
+        if (!r.ok) throw new Error(v.error || `HTTP ${r.status}`);
+        hlRender(v);
+        hlFillSettingsOnce(v.settings);
+        hlRunning(!!v.running);
+        if (!runNow && !poll && v.running && hlPollUntil <= Date.now()) hlPollUntil = Date.now() + HL_POLL_MAX_MS;
+        if (v.running && Date.now() < hlPollUntil) setTimeout(() => { if (mine === hlLoad) loadHealth(false, true); }, HL_POLL_MS);
+        else if (v.running) hlMsg('Still checking after 3 minutes; look again later.', false);
+        else { const m = document.getElementById('st-hl-msg'); if (m && m.textContent === 'A check is already running.') hlMsg(''); }
+      } catch (e) {
+        if (mine !== hlLoad) return;
+        hlRunning(false);
+        hlMsg(`Couldn't load the health check: ${e.message}`);
+        stSum('status', 'health', "Health: couldn't load");
+      }
+    }
+    // Only the keys that differ from what the hub has go to PUT; the hub's own error text is shown on a 400.
+    function hlSettingsChanges() {
+      const $ = (id) => document.getElementById(id), cur = hlSettings || {};
+      const out = {};
+      if ($('st-hl-enabled') && $('st-hl-enabled').checked !== (cur.enabled !== false)) out.enabled = $('st-hl-enabled').checked;
+      if ($('st-hl-at') && $('st-hl-at').value && $('st-hl-at').value !== cur.checkAt) out.checkAt = $('st-hl-at').value;
+      if ($('st-hl-notify') && $('st-hl-notify').value && $('st-hl-notify').value !== (cur.notify || 'critical')) out.notify = $('st-hl-notify').value;
+      for (const [k] of HL_NUMBERS) {
+        const f = $(`st-hl-n-${k}`); if (!f) continue;
+        const t = String(f.value).trim();
+        if (t !== '' && t !== String(cur[k])) out[k] = Number(t);
+      }
+      return out;
+    }
+    async function saveHealthSettings() {
+      const state = document.getElementById('st-hl-save-state');
+      const say = (t) => { if (state) state.textContent = t; };
+      const changes = hlSettingsChanges();
+      if (!Object.keys(changes).length) { say('Nothing to save.'); return; }
+      say('Saving…');
+      try {
+        const r = await fetch('/api/system-health/settings', { method: 'PUT', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(changes) });
+        const b = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(b.error || `HTTP ${r.status}`);
+        hlFillSettings(b.settings);
+        say('Saved.');
+      } catch (e) { say(`Not saved: ${e.message}`); }
+    }
+    // ── health page (end) ──
     function securityActionHtml(a) {
       if (!a) return '';
       if (a.href) return ` <a href="${esc(a.href)}" class="st-test-btn" style="text-decoration:none">${esc(a.label)}</a>`;
@@ -5117,11 +5269,11 @@
       ['questions', 'Questions', 'When an agent needs your answer or approval'],
       ['requested', 'Requests you made', 'Things you asked an agent to tell you about, and replies you asked to hear about'],
       ['other', 'Everything else', 'Reports and other notices'],
-      ['security', 'Security and access', 'Sign-in and passkey changes, wallet locks, failed backups, access changes, a halted hub'],
+      ['security', 'Security and access', 'Sign-in and passkey changes, wallet locks, failed backups, access changes, a halted hub, health problems (a full disk)'],
     ];
     const NOTIFY_AGENT_KINDS = NOTIFY_KINDS.filter(k => k[0] !== 'security');   // the kinds an agent can have its own setting for
     function notifySecurityWarning(mode) {
-      return mode === 'off' ? `<div class="st-hint notify-security-warning" role="note">You won't be told about sign-in and passkey changes, wallet locks, failed backups, access changes or a halted hub.</div>` : '';
+      return mode === 'off' ? `<div class="st-hint notify-security-warning" role="note">You won't be told about sign-in and passkey changes, wallet locks, failed backups, access changes, a halted hub or health problems such as a full disk.</div>` : '';
     }
     function notifyModeLabel(mode) { return mode === 'off' ? 'Off' : mode === 'away' ? "Only when I'm away" : 'On'; }
     function notifyEffective(prefs, agent, kind) {
@@ -6621,7 +6773,7 @@
       try { u = new URL(data.url, origin); } catch { return null; }
       if (u.origin !== origin || !OPEN_TARGET_MAIN.test(u.pathname)) return null;
       const q = u.searchParams;
-      return { agent: q.get('agent') || '', backups: q.get('backups') === '1', update: q.get('update') === '1', security: q.get('security') === '1', memory: q.get('memory') === '1', selfcheck: q.get('selfcheck') === '1', connectors: q.get('connectors') === '1', wallet: q.get('wallet') === 'unlock' };
+      return { agent: q.get('agent') || '', backups: q.get('backups') === '1', update: q.get('update') === '1', security: q.get('security') === '1', memory: q.get('memory') === '1', selfcheck: q.get('selfcheck') === '1', health: q.get('health') === '1', connectors: q.get('connectors') === '1', wallet: q.get('wallet') === 'unlock' };
     }
     function createTargetStore(storage, now = () => Date.now(), ttlMs = 10 * 60 * 1000) {
       return {
@@ -6699,6 +6851,7 @@
       if (t.backups) openSettingsAt('st-backups-section');
       if (t.memory) openSettingsAt('st-memory-section');
       if (t.selfcheck) openSettingsAt('st-selfcheck-section');
+      if (t.health) openSettingsAt('st-health-section');
       if (t.connectors) openSettingsAt('st-modules-section');
       if (t.wallet) openWalletPanel();
       if (t.update) paintUpdateCard().then(() => showUpdateCard()).catch(() => {});
@@ -6734,12 +6887,12 @@
       await Promise.all([loadAgents()]);
       // The page's own address: "/?agent=<name>" opens that agent's chat (the Welcome page hands over to Maestro's setup
       // interview this way, and a notification tapped with no hub tab open lands here), ?backups=1 the backups settings
-      // (a backup warning), ?memory=1 the memory check, ?selfcheck=1 the self-check, ?update=1 the update card, ?security=1 the security dialog, ?wallet=unlock the Wallet panel. Then any notification tapped
+      // (a backup warning), ?memory=1 the memory check, ?selfcheck=1 the self-check, ?health=1 the health check, ?update=1 the update card, ?security=1 the security dialog, ?wallet=unlock the Wallet panel. Then any notification tapped
       // while the page was loading.
       const own = parseOpenTarget({ type: 'open-target', url: location.href }, location.origin);
-      if (own && (own.update || own.backups || own.security || own.memory || own.selfcheck || own.connectors || own.wallet)) {   // one-shot actions: a reload must not repeat them
+      if (own && (own.update || own.backups || own.security || own.memory || own.selfcheck || own.health || own.connectors || own.wallet)) {   // one-shot actions: a reload must not repeat them
         const u = new URL(location.href);
-        for (const k of ['update', 'backups', 'security', 'memory', 'selfcheck', 'connectors', 'wallet']) u.searchParams.delete(k);
+        for (const k of ['update', 'backups', 'security', 'memory', 'selfcheck', 'health', 'connectors', 'wallet']) u.searchParams.delete(k);
         history.replaceState(history.state, '', u.pathname + u.search + u.hash);
       }
       // After a Reload: open the chats that were open, in their tab order, each with the text that was in its message

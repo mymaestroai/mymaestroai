@@ -1777,11 +1777,11 @@ const NOTIFY_KINDS = [
   { kind: 'questions', label: 'Questions', hint: 'When an agent needs your answer or approval' },
   { kind: 'requested', label: 'Requests you made', hint: 'Things you asked an agent to tell you about, and replies you asked to hear about' },
   { kind: 'other', label: 'Everything else', hint: 'Reports and other notices' },
-  { kind: 'security', label: 'Security and access', hint: 'Sign-in and passkey changes, wallet locks, failed backups, access changes, a halted hub' },
+  { kind: 'security', label: 'Security and access', hint: 'Sign-in and passkey changes, wallet locks, failed backups, access changes, a halted hub, health problems (a full disk)' },
 ];
 // The kinds an agent can have its own setting for (security is a default only).
 const NOTIFY_AGENT_KINDS = NOTIFY_KINDS.filter(k => k.kind !== 'security');
-const NOTIFY_SECURITY_WARNING = "You won't be told about sign-in and passkey changes, wallet locks, failed backups, access changes or a halted hub.";
+const NOTIFY_SECURITY_WARNING = "You won't be told about sign-in and passkey changes, wallet locks, failed backups, access changes, a halted hub or health problems such as a full disk.";
 function notifyModeLabel(mode) {
   if (mode === 'off') return 'Off';
   if (mode === 'away') return "Only when I'm away";
@@ -12980,6 +12980,34 @@ function wire() {
   }, 5000);
 }
 
+// ── system health notice (begin) ──
+// Admins only: a red bar at the top of the agent list while the nightly health check has a critical problem. The
+// sign-in items are left out (the setup checklist has its own notice). The phone has no Status page, so the link opens
+// the computer page at Settings → Status. An error or a non-200 answer leaves the bar as it is.
+function healthNoticeItems(view) {
+  return ((view && view.items) || []).filter(i => i && i.level === 'critical' && !String(i.id || '').startsWith('health-signin-'));
+}
+let healthNoticeSeq = 0;
+async function paintHealthNotice() {
+  const bar = $('health-notice');
+  if (!bar) return;
+  const seq = ++healthNoticeSeq;
+  if (!hubMe || hubMe.isAdmin !== true || !hubMe.user) { bar.hidden = true; bar.textContent = ''; return; }
+  let view = null;
+  try {
+    const r = await api('/api/system-health');
+    if (!r.ok) return;
+    view = await r.json();
+  } catch { return; }
+  if (seq !== healthNoticeSeq) return;   // a newer paint is on its way
+  const crit = healthNoticeItems(view);
+  if (!crit.length) { bar.hidden = true; bar.textContent = ''; return; }
+  bar.innerHTML = `Health: ${crit.map(i => esc(i.title)).join('; ')}. <a href="/?health=1">Open Settings → Status</a>`;
+  bar.hidden = false;
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) paintHealthNotice().catch(() => {}); });
+// ── system health notice (end) ──
+
 // ── Multi-user: owner switcher, account menu, Profile and Security sheets ──────
 
 async function loadMe() {
@@ -14244,6 +14272,7 @@ async function init() {
   applyMultiUser();
   refreshPlanUsage();
   if (hubMe) { presenceStart(); loadNotifyPrefs(); }   // signed in: tell the hub this page is open; the bell shows 🔕 for an agent set to Off
+  paintHealthNotice().catch(() => {});
   if (new URLSearchParams(location.search).get('security') === '1') openSecuritySheet();
   await loadAgents();
   activeJobsSync();

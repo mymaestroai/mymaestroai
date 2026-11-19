@@ -2165,6 +2165,19 @@ async function handleHttpRequest(req, res) {
       const r = await securityCheck().latest({ maxAgeMs: 60 * 60 * 1000 });
       return jsonResponse(res, 200, { ok: true, ...r });
     }
+    // ── Health check (lib/system-health): admin-only (the route class above, checked again in the handler). GET the last
+    // result, POST /run checks now in the background, PUT /settings saves the systemHealth settings. ──
+    if (pathname === '/api/system-health' || pathname.startsWith('/api/system-health/')) {
+      const hlBody = req.method === 'PUT' ? await authJson() : {};
+      const r = await require('./lib/system-health/routes').handle({
+        method: req.method, pathname, admin: !!req.hubService || (access.isAdmin(req.hubUser) && !req.hubPendingTotp), body: hlBody,
+        health: () => require('./lib/system-health/wire').getSystemHealth(),
+        validateSettings: (o) => require('./lib/system-health').validateSettings(o),
+        saveSettings: (v) => hubSettings.updateSettings({ systemHealth: v }),
+        log: (m) => console.warn(m),
+      });
+      if (r) return jsonResponse(res, r.status, r.body);
+    }
     // ── Self-check (lib/selfcheck, lib/selfcheck-routes): admin-only (the route class above, checked again in the handler).
     // GET the last result, POST /run starts one in the background, PUT /settings saves the selfCheck settings. ──
     if (pathname === '/api/selfcheck' || pathname.startsWith('/api/selfcheck/')) {
@@ -3871,6 +3884,20 @@ server.listen(PORT, HOST, () => {
   // the nightly check off (Check now still works).
   try { if (process.env.HUB_MEMORY_HEALTH !== 'off') require('./lib/memory-health').getMemoryHealth().schedule(); }
   catch (e) { console.warn(`[memory-health] ${e.message}`); }
+  // Health check (lib/system-health): the computer itself (disk, memory, databases, backups, sign-ins...) a minute after
+  // each start and each night; it only reports. The backup facts come from this server's backup service and scheduler.
+  try {
+    require('./lib/system-health/wire').init({
+      backupState: () => {
+        const st = backupService().status();
+        if (!st.key || !st.key.configured || st.needsPassword || (st.recovery && !st.recovery.resumedAt)) return null;   // not set up or paused: the backup page's own item says so
+        const sched = require('./lib/backup/schedule').current();
+        const lastOk = Math.max(Date.parse(st.last && st.last.created) || 0, Date.parse(sched && sched.info(st).lastOkAt) || 0);
+        return { enabled: !!(st.schedule && st.schedule.enabled), lastOkAt: lastOk ? new Date(lastOk).toISOString() : null, setUpAt: st.key.createdAt || null };
+      },
+      backupFolders: () => (backupService().status().folders || []).map(f => (typeof f === 'string' ? f : f && f.dir)).filter(Boolean),
+    }).start();
+  } catch (e) { console.warn(`[health] ${e.message}`); }
   // Self-check: real turns on hidden check agents 60 s after start and each night (Settings → Status → Self-check);
   // HUB_SELFCHECK=off turns both off (Run now still works). Never delays startup.
   try { if (process.env.HUB_SELFCHECK !== 'off') { const sc = require('./lib/selfcheck').getSelfCheck(); sc.onStarted(); sc.schedule(); } }
