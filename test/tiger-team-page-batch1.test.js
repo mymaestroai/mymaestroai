@@ -61,7 +61,7 @@ test('the clock time is 24-hour local HH:MM; durations read 42s / 3m 12s', () =>
   assert.equal(timeCtx.clockTime(at), '22:14');
   assert.equal(timeCtx.clockTime(new Date(2026, 10, 18, 7, 5).getTime()), '07:05');
   assert.equal(timeCtx.fmtDuration(42), '42s'); assert.equal(timeCtx.fmtDuration(192), '3m 12s'); assert.equal(timeCtx.fmtDuration(-5), '0s');
-  assert.equal(timeCtx.stampText(at, at - 192000), '22:14 · 3m 12s');
+  assert.equal(timeCtx.stampText(at, at - 192000), '22:14', 'the card header is the clock time only (no unclear time-into-run figure)');
 });
 
 test('every card kind carries the stamp; a finished member card appends "· took …"', () => {

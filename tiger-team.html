@@ -620,9 +620,9 @@
       const d = new Date(ms);
       return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
     }
-    /** The stamp on a card or note: when it happened and how far into the run: "22:14 · 3m 12s". */
-    function stampText(nowMs, startMs) {
-      return clockTime(nowMs) + ' · ' + fmtDuration((nowMs - startMs) / 1000);
+    /** The stamp on a card or note: the clock time it happened, "22:14" (a finished member card adds " · took 42s"). */
+    function stampText(nowMs) {
+      return clockTime(nowMs);
     }
     function elapsed() {
       return fmtDuration(((eventNow || Date.now()) - startTime) / 1000);
