@@ -285,6 +285,13 @@ test('review r2: a note whose team finished or restarted elsewhere is put back i
   const fn = page.slice(page.indexOf('async function resumeInterruptedTeam(note)'), page.indexOf("continuationInFlight = true;\n      resumeBtn.textContent = '⏳ Resuming...'"));
   assert.match(fn, /if \(note\) \{ draftBox\.disabled = true; draftBtn\.disabled = true; \}/, 'the box is locked while the status is checked');
   assert.match(fn, /await loadSaved\(tigerTeamId\);\n\s*keepDraft\('This team finished in another window, so your note was not sent\./);
-  assert.match(fn, /await loadTeam\(tigerTeamId\)\) \{\n\s*keepDraft\('The team is already running again, so your note was not sent\./);
-  assert.equal((fn.match(/unlockDraft\(\);/g) || []).length, 3, '404, running elsewhere, status failure');
+  // review r3: with a note waiting, a team running again is NOT followed (following redraws the page and only returns when the
+  // team ends): the note stays in the box, unlocked, with a line saying so; and a put-back never overwrites text typed since.
+  const running = fn.slice(fn.indexOf("if (note && statusData.has_stream) {"), fn.indexOf("if (statusData.has_stream && await loadTeam(tigerTeamId)) return;"));
+  assert.ok(running.length > 0, 'the note branch comes before following the team');
+  assert.match(running, /unlockDraft\(\); draftBox\.value = note;/);
+  assert.match(running, /so your note was not sent\. It is still in the box/);
+  assert.ok(!/loadTeam/.test(running), 'no following while a note waits');
+  assert.match(fn, /const keepDraft = \(why\) => \{ if \(!note\) return; if \(!draftBox\.value\.trim\(\)\) draftBox\.value = note;/);
+  assert.equal((fn.match(/unlockDraft\(\);/g) || []).length, 4, '404, a note waiting while the team runs, running elsewhere, status failure');
 });

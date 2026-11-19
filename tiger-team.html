@@ -2032,7 +2032,7 @@
       const wasLocked = draftBox.disabled;
       if (note) { draftBox.disabled = true; draftBtn.disabled = true; }
       const unlockDraft = () => { if (note) { draftBox.disabled = wasLocked; draftBtn.disabled = wasLocked; } };
-      const keepDraft = (why) => { if (!note) return; draftBox.value = note; addSystemMsg(why); };
+      const keepDraft = (why) => { if (!note) return; if (!draftBox.value.trim()) draftBox.value = note; addSystemMsg(why); };   // never over text typed since
 
       try {
         const statusResp = await fetch(`/api/tiger-team/status?id=${encodeURIComponent(tigerTeamId)}`);
@@ -2053,11 +2053,16 @@
         }
         if (statusResp.ok && ['running', 'retrying', 'stopping'].includes(statusData.status)) {
           // Still working (a closed page no longer stops a team): follow it instead of starting a second run.
-          resumeBtn.style.display = 'none';
-          if (statusData.has_stream && await loadTeam(tigerTeamId)) {
-            keepDraft('The team is already running again, so your note was not sent. It is back in the box: send it as an interjection.');
+          // With a note waiting, the page does not start following (that would redraw it and could later clear the box):
+          // the note stays in the box and the person reloads to follow the team.
+          if (note && statusData.has_stream) {
+            unlockDraft(); draftBox.value = note;
+            resumeBtn.disabled = false; resumeBtn.textContent = '▶ Resume Interrupted';
+            addSystemMsg('The team is already running again (from another window), so your note was not sent. It is still in the box: reload this page to follow the team, then send it as an interjection.');
             return;
           }
+          resumeBtn.style.display = 'none';
+          if (statusData.has_stream && await loadTeam(tigerTeamId)) return;
           addSystemMsg('⚠ This Tiger Team is already running elsewhere - not launching a duplicate. Check other open tabs.');
           resumeBtn.style.display = 'inline-flex';
           resumeBtn.disabled = false;
