@@ -69,13 +69,18 @@ for (const [name, src] of [['app.js', app], ['mobile.js', mjs]]) {
     assert.ok(h.includes('aria-valuenow="0"'));
   });
 
-  test(`${name}: a reached limit shows a red line, with the longest window's reset or "it resets"`, () => {
+  test(`${name}: a reached limit shows a red line with its own reachedUntil, or "it resets"`, () => {
     const s = proSnap();
     s.limits[0].reached = true;
+    s.limits[0].reachedUntil = iso(30);
     s.limits[0].windows.push({ minutes: 300, label: '5-hour', usedPercent: 100, resetsAt: iso(30), weekly: false, short: true });
     let h = html(null, s);
-    assert.ok(h.includes(`class="subs-note subs-reached">ChatGPT plan limit reached until ${C.subsWhen(iso(3000))}<`), 'the weekly (longest) reset');
+    assert.ok(h.includes(`class="subs-note subs-reached">ChatGPT plan limit reached until ${C.subsWhen(iso(30))}<`), 'the 5-hour window ran out: its reset, not the weekly one');
+    assert.ok(!h.includes(`reached until ${C.subsWhen(iso(3000))}`));
     assert.ok(h.includes('background:#d4588b'));
+    s.limits[0].reachedUntil = null;
+    h = html(null, s);
+    assert.ok(h.includes('ChatGPT plan limit reached until it resets<'), 'null: never the longest window');
     s.limits[0].windows = [];
     h = html(null, s);
     assert.ok(h.includes('ChatGPT plan limit reached until it resets<'));
@@ -163,10 +168,18 @@ for (const [name, src] of [['app.js', app], ['mobile.js', mjs]]) {
     s.limits[0].windows = [{ minutes: 300, label: '5-hour', usedPercent: 40, short: true, weekly: false, resetsAt: iso(30) }];
     assert.strictEqual(C.codexBadge(s, lv, NOW).text, 'ChatGPT 5-hour 40%');
     // reached
-    s = proSnap(); s.limits[0].reached = true;
+    s = proSnap(); s.limits[0].reached = true; s.limits[0].reachedUntil = iso(30);
+    s.limits[0].windows.push({ minutes: 300, label: '5-hour', usedPercent: 100, short: true, weekly: false, resetsAt: iso(30) });
     b = C.codexBadge(s, lv, NOW);
     assert.deepStrictEqual([b.text, b.cls], ['ChatGPT limit reached', 'refused']);
-    assert.ok(b.title.includes('until '));
+    assert.ok(b.title.includes(`until ${C.subsWhen(iso(30))}`) && !b.title.includes(C.subsWhen(iso(3000))), 'the 5-hour reset');
+    s.limits[0].reachedUntil = null;
+    assert.ok(C.codexBadge(s, lv, NOW).title.includes('until it resets'));
+    // an expired reading alone never looks current
+    s = proSnap(); s.limits[0].windows[0].expired = true; s.limits[0].windows[0].usedPercent = 95;
+    assert.strictEqual(C.codexBadge(s, lv, NOW), null);
+    s.limits.push({ id: 'y', label: 'Y', windows: [{ minutes: 300, label: '5-hour', usedPercent: 20, short: true, weekly: false, resetsAt: iso(30), expired: false }] });
+    assert.strictEqual(C.codexBadge(s, lv, NOW).text, 'ChatGPT 5-hour 20%', 'a live window is chosen over the expired one');
     // last seen in the title
     s = proSnap(); s.readAt = iso(-40);
     assert.ok(C.codexBadge(s, lv, NOW).title.includes('; last seen '));

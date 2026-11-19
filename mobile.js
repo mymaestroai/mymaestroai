@@ -1308,9 +1308,7 @@ function subsReachedLines(snap) {
   const lines = [];
   for (const l of ((snap && snap.limits) || [])) {
     if (!l.reached) continue;
-    const wins = (Array.isArray(l.windows) ? l.windows : []).slice().sort((a, b) => (Number(b.minutes) || 0) - (Number(a.minutes) || 0));
-    const when = wins.length ? subsWhen(wins[0].resetsAt) : '';
-    const t = `ChatGPT plan limit reached until ${when || 'it resets'}`;
+    const t = `ChatGPT plan limit reached until ${subsWhen(l.reachedUntil) || 'it resets'}`;
     if (!lines.includes(t)) lines.push(t);
   }
   return lines;
@@ -1356,18 +1354,17 @@ function codexBadge(snap, levels, now) {
     if (l.reached && !reachedLimit) reachedLimit = l;
     for (const w of (l.windows || [])) all.push(w);
   }
-  if (!all.length && !reachedLimit) return null;
+  if (!reachedLimit && !all.some(w => !w.expired)) return null;
   const pctOf = (w) => Math.round(Number(w.usedPercent) || 0);
   const live = all.filter(w => !w.expired);
   const weekly = live.filter(w => w.weekly);
   const best = (a) => a.reduce((x, y) => (pctOf(y) > pctOf(x) ? y : x));
   let main = weekly.length ? best(weekly) : null;
-  if (!main && all.length) main = all.reduce((x, y) => ((Number(y.minutes) || 0) > (Number(x.minutes) || 0) ? y : x));
+  if (!main && live.length) main = live.reduce((x, y) => ((Number(y.minutes) || 0) > (Number(x.minutes) || 0) ? y : x));
   const age = t0 - Date.parse(snap.readAt);
   const seen = age > 30 * 60000 ? `; last seen ${subsWhen(snap.readAt)}` : '';
   if (reachedLimit) {
-    const ws = (reachedLimit.windows || []).slice().sort((a, b) => (Number(b.minutes) || 0) - (Number(a.minutes) || 0));
-    const when = ws.length ? subsWhen(ws[0].resetsAt) : '';
+    const when = subsWhen(reachedLimit.reachedUntil);
     return { text: 'ChatGPT limit reached', cls: 'refused', title: `ChatGPT plan limit reached until ${when || 'it resets'}${seen}` };
   }
   const pct = pctOf(main);

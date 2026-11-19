@@ -23,7 +23,7 @@ function make(o = {}) {
     getSetting: (k) => settings[k],
     now: () => clock.t,
     stateFile,
-    publish: (type, data) => published.push({ type, data }),
+    publish: (type, data, opts) => published.push({ type, data, opts }),
     notify: (p) => notified.push(p),
     listAgents: () => o.agents || [{ name: 'cx', model: 'codex-cli/gpt-x' }, { name: 'cl', model: 'claude-sdk/claude-opus-5-5' }],
     readLimits: o.readLimits,
@@ -407,4 +407,143 @@ test('the module names no Codex request other than initialize and account/rateLi
   const requests = (src.match(/\.request\(\s*['"`][^'"`]+['"`]/g) || []).map(s => s.replace(/^\.request\(\s*['"`]|['"`]$/g, ''));
   assert.deepStrictEqual(requests, ['account/rateLimits/read']);
   assert.ok(/\.initialize\(/.test(src));
+});
+
+// ── review round 1 ──
+const at = (iso) => Math.floor(Date.parse(iso) / 1000);
+const win5 = (pct, resetIso, extra = {}) => ({ limitId: 'codex', planType: 'pro', primary: { usedPercent: pct, windowDurationMins: 300, resetsAt: at(resetIso) }, ...extra });
+
+test('item 1: a warning marker lives until the real reset, so a reset at :10 is not announced twice', () => {
+  const a = make();
+  const reset = '2026-11-23T16:10:00Z';
+  const w = (pct, r = reset) => ({ limitId: 'codex', primary: { usedPercent: pct, windowDurationMins: 10080, resetsAt: at(r) } });
+  a.clock.t = Date.parse(reset) - 20 * 60000;
+  a.u.noteSnapshot(w(80));
+  assert.strictEqual(a.notified.length, 1);
+  a.u.flush();                                                    // a save prunes expired markers
+  const marker = JSON.parse(fs.readFileSync(a.stateFile, 'utf8')).warned;
+  assert.deepStrictEqual(Object.values(marker), ['2026-11-23T17:10:00.000Z']);
+  a.u.noteSnapshot(w(85));
+  assert.strictEqual(a.notified.length, 1, 'same window, still above the level');
+  a.u.noteSnapshot(w(86, '2026-11-23T16:13:00Z'));
+  a.u.flush();
+  a.u.noteSnapshot(w(87, '2026-11-23T16:12:00Z'));
+  assert.strictEqual(a.notified.length, 1, 'a few minutes of reset jitter is the same window');
+  const none = make();
+  none.u.noteSnapshot({ limitId: 'codex', spendControlReached: true, primary: { usedPercent: 10, windowDurationMins: 10080 } });
+  assert.strictEqual(Date.parse(Object.values(none.u.flush() || JSON.parse(fs.readFileSync(none.stateFile, 'utf8')).warned)[0]), T0 + 7 * 86400000);
+});
+
+test('item 2: reached belongs to the window that ran out', () => {
+  const { u, clock, published, notified } = make();
+  const reset5 = new Date(T0 + 30 * 60000).toISOString();
+  u.noteSnapshot({ limitId: 'codex', primary: { usedPercent: 100, windowDurationMins: 300, resetsAt: at(reset5) }, secondary: { usedPercent: 42, windowDurationMins: 10080, resetsAt: RESET_S }, rateLimitReachedType: 'rate_limit_reached' });
+  let l = u.snapshot().limits[0];
+  assert.strictEqual(l.reached, true);
+  assert.strictEqual(l.reachedUntil, reset5, 'the 5-hour reset, not the weekly one');
+  const r = notified.filter(n => n.title === 'ChatGPT plan limit reached');
+  assert.strictEqual(r.length, 1);
+  assert.strictEqual(r[0].body, `Codex agents can't run on the ChatGPT plan until <${reset5}>.`);
+  assert.strictEqual(published.find(p => p.type === 'plan_warning' && p.data.reached).data.resetsAt, reset5);
+  assert.ok(u.briefLine().includes(`ChatGPT plan limit reached until <${reset5}>`));
+  // past reachedUntil, no explicit clear: not reached anywhere
+  clock.t += 31 * 60000;
+  l = u.snapshot().limits[0];
+  assert.strictEqual(l.reached, false);
+  assert.strictEqual(l.reachedUntil, null);
+  assert.strictEqual(l.reachedType, null);
+  assert.ok(!u.briefLine().includes('limit reached'));
+  // reached again in the next window: a second announcement (new key)
+  const reset5b = new Date(clock.t + 4 * 3600000).toISOString();
+  u.noteSnapshot({ limitId: 'codex', primary: { usedPercent: 100, windowDurationMins: 300, resetsAt: at(reset5b) }, rateLimitReachedType: 'rate_limit_reached' });
+  assert.strictEqual(notified.filter(n => n.title === 'ChatGPT plan limit reached').length, 2);
+  assert.strictEqual(u.snapshot().limits[0].reachedUntil, reset5b);
+});
+
+test('item 2: an explicit null reached type with a window below 100% clears; a notification without the key does not', () => {
+  const { u, published } = make();
+  u.noteSnapshot(weekly(100, { rateLimitReachedType: 'rate_limit_reached' }));
+  assert.strictEqual(u.snapshot().limits[0].reached, true);
+  u.noteSnapshot({ limitId: 'codex', primary: { usedPercent: 3 } });
+  assert.strictEqual(u.snapshot().limits[0].reached, true, 'key absent: sparse, kept');
+  u.noteSnapshot({ limitId: 'codex', primary: { usedPercent: 100 }, rateLimitReachedType: null });
+  assert.strictEqual(u.snapshot().limits[0].reached, true, 'no window below 100%');
+  u.noteSnapshot({ limitId: 'codex', primary: { usedPercent: 1 }, rateLimitReachedType: null, spendControlReached: true });
+  assert.strictEqual(u.snapshot().limits[0].reached, true, 'spend control still on');
+  u.noteSnapshot({ limitId: 'codex', primary: { usedPercent: 1, windowDurationMins: 10080, resetsAt: RESET_S + 7 * 86400 }, rateLimitReachedType: null, spendControlReached: false });
+  const l = u.snapshot().limits[0];
+  assert.deepStrictEqual([l.reached, l.reachedType, l.spendControlReached, l.reachedUntil], [false, null, null, null]);
+  assert.ok(!u.briefLine().includes('limit reached'));
+  assert.ok(published.length >= 1);
+});
+
+test('item 2: reachedUntil without a window at 100% is the shortest reset; none is null; it is saved and restored', () => {
+  const a = make();
+  const r5 = new Date(T0 + 3600000).toISOString();
+  a.u.noteSnapshot({ limitId: 'codex', rateLimitReachedType: 'x', primary: { usedPercent: 60, windowDurationMins: 10080, resetsAt: RESET_S }, secondary: { usedPercent: 90, windowDurationMins: 300, resetsAt: at(r5) } }, { source: 'read' });
+  assert.strictEqual(a.u.snapshot().limits[0].reachedUntil, r5);
+  a.u.flush();
+  const again = createCodexUsage({ getSetting: () => undefined, now: () => T0, stateFile: a.stateFile, log: () => {}, whenText: String });
+  assert.strictEqual(again.snapshot().limits[0].reachedUntil, r5);
+  const later = createCodexUsage({ getSetting: () => undefined, now: () => T0 + 2 * 3600000, stateFile: a.stateFile, log: () => {}, whenText: String });
+  assert.strictEqual(later.snapshot().limits[0].reached, false);
+  const raw = JSON.parse(fs.readFileSync(a.stateFile, 'utf8'));
+  raw.limits.codex.reachedUntil = 'garbage';
+  fs.writeFileSync(a.stateFile, JSON.stringify(raw));
+  const bad = createCodexUsage({ getSetting: () => undefined, now: () => T0, stateFile: a.stateFile, log: () => {}, whenText: String });
+  assert.strictEqual(bad.snapshot().limits[0].reachedUntil, null);
+  const none = make();
+  none.u.noteSnapshot({ limitId: 'codex', spendControlReached: true, primary: { usedPercent: 10 } });
+  assert.strictEqual(none.u.snapshot().limits[0].reachedUntil, null);
+  assert.ok(none.u.briefLine().includes('limit reached until it resets'));
+});
+
+test('item 5: a read without any valid limit changes nothing and reports an error', async () => {
+  for (const bad of [{}, { rateLimitsByLimitId: {}, rateLimits: { limitId: '???' } }, { rateLimitsByLimitId: { 'a b': { limitId: 'a b' } }, rateLimits: null }]) {
+    let first = true;
+    const { u, clock } = make({ readLimits: async () => { if (first) { first = false; return proRead(); } return bad; } });
+    await u.readNow();
+    const before = u.snapshot();
+    clock.t += 61000;
+    const r = await u.readNow();
+    assert.strictEqual(r.ok, false);
+    assert.strictEqual(r.error, 'Codex answered without usage figures.');
+    assert.deepStrictEqual(u.snapshot().limits, before.limits);
+    assert.strictEqual(u.snapshot().readAt, before.readAt);
+    assert.strictEqual(u.snapshot().resetCredits, 3);
+  }
+  const { u } = make();
+  u.noteRead(proRead());
+  assert.strictEqual(u.noteRead({}), false);
+  assert.strictEqual(u.snapshot().limits.length, 1);
+  assert.strictEqual(u.snapshot().error, 'Codex answered without usage figures.');
+  // an empty map falls back to rateLimits
+  assert.strictEqual(u.noteRead({ rateLimitsByLimitId: {}, rateLimits: proRead().rateLimits }), true);
+  assert.strictEqual(u.snapshot().error, null);
+});
+
+test('item 6: codex_usage and the ChatGPT plan_warning events are published with keep: false (never replayed)', () => {
+  const { u, published } = make();
+  u.noteSnapshot(weekly(10));
+  const p = published.find(x => x.type === 'codex_usage');
+  assert.deepStrictEqual(p.opts, { keep: false });
+  u.noteSnapshot(weekly(80));
+  u.noteSnapshot({ ...weekly(100), rateLimitReachedType: 'rate_limit_reached' });
+  const warns = published.filter(x => x.type === 'plan_warning');
+  assert.ok(warns.length >= 2, 'a level warning and a reached warning');
+  for (const w of warns) assert.deepStrictEqual(w.opts, { keep: false });
+});
+
+test('item 7: a failed read answers ok: false again within 60 s', async () => {
+  let calls = 0;
+  const { u, clock } = make({ readLimits: async () => { calls++; throw new Error('ENOENT codex'); } });
+  const a = await u.readNow();
+  assert.strictEqual(a.ok, false);
+  clock.t += 10000;
+  const b = await u.readNow();
+  assert.strictEqual(b.ok, false);
+  assert.strictEqual(b.cached, true);
+  assert.strictEqual(b.error, "Codex isn't installed.");
+  assert.strictEqual(b.snapshot.error, "Codex isn't installed.");
+  assert.strictEqual(calls, 1);
 });
