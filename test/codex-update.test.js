@@ -445,7 +445,8 @@ test('r6: the kept copy is moved aside in one step, never half deleted; if even 
     renameSync(a, b) { if (String(a).endsWith('.codex-previous') && /codex\.failed-/.test(String(b))) { renames++; throw new Error('EROFS'); } return fs.renameSync(a, b); },
   });
   const r2 = await updateCodex({ env: ro.env, fsImpl: fsRo, install: () => { setVersion(ro.dir, '0.166.0'); return { ok: true }; }, selfCheck: async () => true });
-  assert.equal(r2.ok, true);
+  assert.equal(r2.ok, false, 'not reported as done: the next start would put the old version back (review r7)');
+  assert.match(r2.error, /The new Codex 0\.166\.0 works, but the update could not be finished .* puts 0\.156\.1 back\./);
   assert.equal(renames, 1);
   assert.equal(JSON.parse(fs.readFileSync(path.join(keepOf(ro.dir), 'package.json'), 'utf8')).version, '0.156.1', 'the kept copy is whole');
 });
