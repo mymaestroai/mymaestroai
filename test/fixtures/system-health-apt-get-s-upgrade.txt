@@ -1,0 +1,660 @@
+NOTE: This is only a simulation!
+      apt-get needs root privileges for real execution.
+      Keep also in mind that locking is deactivated,
+      so don't depend on the relevance to the real current situation!
+Reading package lists...
+Building dependency tree...
+Reading state information...
+Calculating upgrade...
+The following package was automatically installed and is no longer required:
+  nvidia-kernel-source-595-open
+Use 'apt autoremove' to remove it.
+The following upgrades have been deferred due to phasing:
+  alsa-ucm-conf gir1.2-javascriptcoregtk-4.1 gir1.2-javascriptcoregtk-6.0
+  gir1.2-nma4-1.0 gir1.2-webkit-6.0 gir1.2-webkit2-4.1 libegl-mesa0 libgbm-dev
+  libgbm1 libgl1-mesa-dev libgl1-mesa-dri libglx-mesa0 libipa-hbac0t64
+  libjavascriptcoregtk-4.1-0 libjavascriptcoregtk-6.0-1 libnma-common
+  libnma-gtk4-0 libnma0 libnss-sss libpam-sss libsss-certmap0 libsss-idmap0
+  libsss-nss-idmap0 libwebkit2gtk-4.1-0 libwebkitgtk-6.0-4 mesa-libgallium
+  mesa-va-drivers mesa-vdpau-drivers mesa-vulkan-drivers python3-sss sssd
+  sssd-ad sssd-ad-common sssd-common sssd-ipa sssd-krb5 sssd-krb5-common
+  sssd-ldap sssd-proxy
+The following packages will be upgraded:
+  cloud-init containerd cuda-toolkit-13-config-common
+  cuda-toolkit-config-common distro-info libfprint-2-2 libfprint-2-tod1
+  libsqlite3-0 libsqlite3-dev libxnvctrl0 python3-distro-info
+  ros-jazzy-action-msgs ros-jazzy-action-tutorials-cpp
+  ros-jazzy-action-tutorials-interfaces ros-jazzy-action-tutorials-py
+  ros-jazzy-actionlib-msgs ros-jazzy-ament-cmake ros-jazzy-ament-cmake-auto
+  ros-jazzy-ament-cmake-copyright ros-jazzy-ament-cmake-core
+  ros-jazzy-ament-cmake-cppcheck ros-jazzy-ament-cmake-cpplint
+  ros-jazzy-ament-cmake-export-definitions
+  ros-jazzy-ament-cmake-export-dependencies
+  ros-jazzy-ament-cmake-export-include-directories
+  ros-jazzy-ament-cmake-export-interfaces
+  ros-jazzy-ament-cmake-export-libraries
+  ros-jazzy-ament-cmake-export-link-flags ros-jazzy-ament-cmake-export-targets
+  ros-jazzy-ament-cmake-flake8 ros-jazzy-ament-cmake-gen-version-h
+  ros-jazzy-ament-cmake-gmock ros-jazzy-ament-cmake-gtest
+  ros-jazzy-ament-cmake-include-directories ros-jazzy-ament-cmake-libraries
+  ros-jazzy-ament-cmake-lint-cmake ros-jazzy-ament-cmake-pep257
+  ros-jazzy-ament-cmake-pytest ros-jazzy-ament-cmake-python
+  ros-jazzy-ament-cmake-ros ros-jazzy-ament-cmake-target-dependencies
+  ros-jazzy-ament-cmake-test ros-jazzy-ament-cmake-uncrustify
+  ros-jazzy-ament-cmake-version ros-jazzy-ament-cmake-xmllint
+  ros-jazzy-ament-index-cpp ros-jazzy-ament-lint-auto
+  ros-jazzy-ament-lint-common ros-jazzy-angles ros-jazzy-builtin-interfaces
+  ros-jazzy-class-loader ros-jazzy-common-interfaces ros-jazzy-composition
+  ros-jazzy-composition-interfaces ros-jazzy-cv-bridge
+  ros-jazzy-demo-nodes-cpp ros-jazzy-demo-nodes-cpp-native
+  ros-jazzy-demo-nodes-py ros-jazzy-depthimage-to-laserscan ros-jazzy-desktop
+  ros-jazzy-diagnostic-msgs ros-jazzy-dummy-map-server
+  ros-jazzy-dummy-robot-bringup ros-jazzy-dummy-sensors
+  ros-jazzy-example-interfaces ros-jazzy-examples-rclcpp-minimal-action-client
+  ros-jazzy-examples-rclcpp-minimal-action-server
+  ros-jazzy-examples-rclcpp-minimal-client
+  ros-jazzy-examples-rclcpp-minimal-composition
+  ros-jazzy-examples-rclcpp-minimal-publisher
+  ros-jazzy-examples-rclcpp-minimal-service
+  ros-jazzy-examples-rclcpp-minimal-subscriber
+  ros-jazzy-examples-rclcpp-minimal-timer
+  ros-jazzy-examples-rclcpp-multithreaded-executor
+  ros-jazzy-examples-rclpy-executors
+  ros-jazzy-examples-rclpy-minimal-action-client
+  ros-jazzy-examples-rclpy-minimal-action-server
+  ros-jazzy-examples-rclpy-minimal-client
+  ros-jazzy-examples-rclpy-minimal-publisher
+  ros-jazzy-examples-rclpy-minimal-service
+  ros-jazzy-examples-rclpy-minimal-subscriber ros-jazzy-geometry-msgs
+  ros-jazzy-geometry2 ros-jazzy-gz-cmake-vendor ros-jazzy-gz-math-vendor
+  ros-jazzy-gz-utils-vendor ros-jazzy-image-geometry ros-jazzy-image-tools
+  ros-jazzy-image-transport ros-jazzy-interactive-markers
+  ros-jazzy-intra-process-demo ros-jazzy-joy ros-jazzy-kdl-parser
+  ros-jazzy-laser-geometry ros-jazzy-launch ros-jazzy-launch-ros
+  ros-jazzy-launch-testing ros-jazzy-launch-testing-ament-cmake
+  ros-jazzy-launch-testing-ros ros-jazzy-launch-xml ros-jazzy-launch-yaml
+  ros-jazzy-libstatistics-collector ros-jazzy-lifecycle
+  ros-jazzy-lifecycle-msgs ros-jazzy-logging-demo ros-jazzy-map-msgs
+  ros-jazzy-message-filters ros-jazzy-nav-msgs ros-jazzy-pcl-conversions
+  ros-jazzy-pcl-msgs ros-jazzy-pcl-ros ros-jazzy-pendulum-control
+  ros-jazzy-pendulum-msgs ros-jazzy-pluginlib ros-jazzy-point-cloud-transport
+  ros-jazzy-qt-gui-cpp ros-jazzy-quality-of-service-demo-cpp
+  ros-jazzy-quality-of-service-demo-py ros-jazzy-rcl ros-jazzy-rcl-action
+  ros-jazzy-rcl-interfaces ros-jazzy-rcl-lifecycle
+  ros-jazzy-rcl-logging-interface ros-jazzy-rcl-logging-spdlog
+  ros-jazzy-rcl-yaml-param-parser ros-jazzy-rclcpp ros-jazzy-rclcpp-action
+  ros-jazzy-rclcpp-components ros-jazzy-rclcpp-lifecycle ros-jazzy-rclpy
+  ros-jazzy-rcpputils ros-jazzy-rcutils ros-jazzy-resource-retriever
+  ros-jazzy-rmw ros-jazzy-rmw-dds-common ros-jazzy-rmw-fastrtps-cpp
+  ros-jazzy-rmw-fastrtps-shared-cpp ros-jazzy-rmw-implementation
+  ros-jazzy-rmw-implementation-cmake ros-jazzy-robot-state-publisher
+  ros-jazzy-ros-base ros-jazzy-ros-core ros-jazzy-ros2action ros-jazzy-ros2bag
+  ros-jazzy-ros2cli ros-jazzy-ros2cli-common-extensions
+  ros-jazzy-ros2component ros-jazzy-ros2doctor ros-jazzy-ros2interface
+  ros-jazzy-ros2launch ros-jazzy-ros2lifecycle ros-jazzy-ros2multicast
+  ros-jazzy-ros2node ros-jazzy-ros2param ros-jazzy-ros2pkg
+  ros-jazzy-ros2plugin ros-jazzy-ros2run ros-jazzy-ros2service
+  ros-jazzy-ros2topic ros-jazzy-rosbag2 ros-jazzy-rosbag2-compression
+  ros-jazzy-rosbag2-compression-zstd ros-jazzy-rosbag2-cpp
+  ros-jazzy-rosbag2-interfaces ros-jazzy-rosbag2-py ros-jazzy-rosbag2-storage
+  ros-jazzy-rosbag2-storage-default-plugins ros-jazzy-rosbag2-storage-mcap
+  ros-jazzy-rosbag2-storage-sqlite3 ros-jazzy-rosbag2-transport
+  ros-jazzy-rosgraph-msgs ros-jazzy-rosidl-adapter ros-jazzy-rosidl-cli
+  ros-jazzy-rosidl-cmake ros-jazzy-rosidl-core-generators
+  ros-jazzy-rosidl-core-runtime ros-jazzy-rosidl-default-generators
+  ros-jazzy-rosidl-default-runtime ros-jazzy-rosidl-dynamic-typesupport
+  ros-jazzy-rosidl-dynamic-typesupport-fastrtps ros-jazzy-rosidl-generator-c
+  ros-jazzy-rosidl-generator-cpp ros-jazzy-rosidl-generator-py
+  ros-jazzy-rosidl-generator-rs ros-jazzy-rosidl-generator-type-description
+  ros-jazzy-rosidl-parser ros-jazzy-rosidl-pycommon ros-jazzy-rosidl-runtime-c
+  ros-jazzy-rosidl-runtime-cpp ros-jazzy-rosidl-runtime-py
+  ros-jazzy-rosidl-typesupport-c ros-jazzy-rosidl-typesupport-cpp
+  ros-jazzy-rosidl-typesupport-fastrtps-c
+  ros-jazzy-rosidl-typesupport-fastrtps-cpp
+  ros-jazzy-rosidl-typesupport-interface
+  ros-jazzy-rosidl-typesupport-introspection-c
+  ros-jazzy-rosidl-typesupport-introspection-cpp ros-jazzy-rqt-action
+  ros-jazzy-rqt-bag ros-jazzy-rqt-bag-plugins ros-jazzy-rqt-common-plugins
+  ros-jazzy-rqt-console ros-jazzy-rqt-graph ros-jazzy-rqt-gui
+  ros-jazzy-rqt-gui-cpp ros-jazzy-rqt-gui-py ros-jazzy-rqt-image-view
+  ros-jazzy-rqt-msg ros-jazzy-rqt-plot ros-jazzy-rqt-publisher
+  ros-jazzy-rqt-py-common ros-jazzy-rqt-py-console ros-jazzy-rqt-reconfigure
+  ros-jazzy-rqt-service-caller ros-jazzy-rqt-shell ros-jazzy-rqt-srv
+  ros-jazzy-rqt-topic ros-jazzy-rviz-common ros-jazzy-rviz-default-plugins
+  ros-jazzy-rviz-rendering ros-jazzy-rviz2 ros-jazzy-sensor-msgs
+  ros-jazzy-sensor-msgs-py ros-jazzy-service-msgs ros-jazzy-shape-msgs
+  ros-jazzy-sros2 ros-jazzy-sros2-cmake ros-jazzy-statistics-msgs
+  ros-jazzy-std-msgs ros-jazzy-std-srvs ros-jazzy-stereo-msgs
+  ros-jazzy-teleop-twist-joy ros-jazzy-teleop-twist-keyboard ros-jazzy-tf2
+  ros-jazzy-tf2-bullet ros-jazzy-tf2-eigen ros-jazzy-tf2-eigen-kdl
+  ros-jazzy-tf2-geometry-msgs ros-jazzy-tf2-kdl ros-jazzy-tf2-msgs
+  ros-jazzy-tf2-py ros-jazzy-tf2-ros ros-jazzy-tf2-ros-py
+  ros-jazzy-tf2-sensor-msgs ros-jazzy-tf2-tools ros-jazzy-tlsf
+  ros-jazzy-tlsf-cpp ros-jazzy-topic-monitor ros-jazzy-tracetools
+  ros-jazzy-trajectory-msgs ros-jazzy-turtlesim
+  ros-jazzy-type-description-interfaces ros-jazzy-unique-identifier-msgs
+  ros-jazzy-urdf ros-jazzy-urdf-parser-plugin ros-jazzy-visualization-msgs
+  snapd sqlite3 tailscale ubuntu-pro-client ubuntu-pro-client-l10n
+261 upgraded, 0 newly installed, 0 to remove and 39 not upgraded.
+Inst distro-info [1.7build1] (1.7ubuntu0.1 Ubuntu:24.04/noble-updates [amd64])
+Inst libsqlite3-dev [3.45.1-1ubuntu2.8] (3.45.1-1ubuntu2.9 Ubuntu:24.04/noble-updates [amd64]) []
+Inst sqlite3 [3.45.1-1ubuntu2.8] (3.45.1-1ubuntu2.9 Ubuntu:24.04/noble-updates [amd64]) []
+Inst libsqlite3-0 [3.45.1-1ubuntu2.8] (3.45.1-1ubuntu2.9 Ubuntu:24.04/noble-updates [amd64])
+Inst ubuntu-pro-client-l10n [37.2ubuntu~24.04.1] (38ubuntu0~24.04 Ubuntu:24.04/noble-updates [amd64]) []
+Inst ubuntu-pro-client [37.2ubuntu~24.04.1] (38ubuntu0~24.04 Ubuntu:24.04/noble-updates [amd64])
+Inst python3-distro-info [1.7build1] (1.7ubuntu0.1 Ubuntu:24.04/noble-updates [all])
+Inst containerd [2.2.1-0ubuntu1~24.04.3] (2.2.1-0ubuntu1~24.04.4 Ubuntu:24.04/noble-updates [amd64])
+Inst cuda-toolkit-13-config-common [13.4.92-1] (13.5.37-1 NVIDIA CUDA:developer.download.nvidia.com [all])
+Inst cuda-toolkit-config-common [13.4.92-1] (13.5.37-1 NVIDIA CUDA:developer.download.nvidia.com [all])
+Inst libfprint-2-tod1 [1:1.94.7+tod1-0ubuntu5~24.04.8] (1:1.94.7+tod1-0ubuntu5~24.04.9 Ubuntu:24.04/noble-updates [amd64])
+Inst libfprint-2-2 [1:1.94.7+tod1-0ubuntu5~24.04.8] (1:1.94.7+tod1-0ubuntu5~24.04.9 Ubuntu:24.04/noble-updates [amd64])
+Inst libxnvctrl0 [615.71.09-2ubuntu1] (620.70.06-1ubuntu1 NVIDIA CUDA:developer.download.nvidia.com [amd64])
+Inst ros-jazzy-ament-cmake-core [2.5.6-2noble.20260224.191131] (2.5.7-1noble.20261024.193249 ROS noble:noble [amd64])
+Inst ros-jazzy-ament-cmake-export-definitions [2.5.6-2noble.20260224.232207] (2.5.7-1noble.20261025.200000 ROS noble:noble [amd64])
+Inst ros-jazzy-ament-cmake-libraries [2.5.6-2noble.20260225.042312] (2.5.7-1noble.20261025.200118 ROS noble:noble [amd64])
+Inst ros-jazzy-ament-cmake-export-dependencies [2.5.6-2noble.20260225.043730] (2.5.7-1noble.20261025.201752 ROS noble:noble [amd64])
+Inst ros-jazzy-ament-cmake-export-include-directories [2.5.6-2noble.20260224.232223] (2.5.7-1noble.20261025.195958 ROS noble:noble [amd64])
+Inst ros-jazzy-ament-cmake-export-libraries [2.5.6-2noble.20260224.232254] (2.5.7-1noble.20261025.200044 ROS noble:noble [amd64])
+Inst ros-jazzy-ament-cmake-export-interfaces [2.5.6-2noble.20260225.042039] (2.5.7-1noble.20261025.201729 ROS noble:noble [amd64])
+Inst ros-jazzy-ament-cmake-export-link-flags [2.5.6-2noble.20260225.042107] (2.5.7-1noble.20261025.200049 ROS noble:noble [amd64])
+Inst ros-jazzy-ament-cmake-export-targets [2.5.6-2noble.20260225.042100] (2.5.7-1noble.20261025.201824 ROS noble:noble [amd64])
+Inst ros-jazzy-ament-cmake-gen-version-h [2.5.6-2noble.20260225.042237] (2.5.7-1noble.20261025.200052 ROS noble:noble [amd64])
+Inst ros-jazzy-ament-cmake-python [2.5.6-2noble.20260225.042312] (2.5.7-1noble.20261025.200156 ROS noble:noble [amd64])
+Inst ros-jazzy-ament-cmake-include-directories [2.5.6-2noble.20260225.042241] (2.5.7-1noble.20261025.200108 ROS noble:noble [amd64])
+Inst ros-jazzy-ament-cmake-target-dependencies [2.5.6-2noble.20260225.043936] (2.5.7-1noble.20261025.201826 ROS noble:noble [amd64])
+Inst ros-jazzy-ament-cmake-test [2.5.6-2noble.20260225.143205] (2.5.7-1noble.20261025.201953 ROS noble:noble [amd64])
+Inst ros-jazzy-ament-cmake-version [2.5.6-2noble.20260225.042330] (2.5.7-1noble.20261025.200158 ROS noble:noble [amd64])
+Inst ros-jazzy-ament-cmake [2.5.6-2noble.20260225.222913] (2.5.7-1noble.20261025.225914 ROS noble:noble [amd64])
+Inst ros-jazzy-ament-cmake-cppcheck [0.17.5-1noble.20260410.113607] (0.17.5-1noble.20261025.230313 ROS noble:noble [amd64])
+Inst ros-jazzy-ament-cmake-cpplint [0.17.5-1noble.20260410.105800] (0.17.5-1noble.20261025.230429 ROS noble:noble [amd64])
+Inst ros-jazzy-ament-cmake-flake8 [0.17.5-1noble.20260410.113910] (0.17.5-1noble.20261025.225921 ROS noble:noble [amd64])
+Inst ros-jazzy-ament-cmake-pep257 [0.17.5-1noble.20260410.113929] (0.17.5-1noble.20261025.225946 ROS noble:noble [amd64])
+Inst ros-jazzy-ament-cmake-uncrustify [0.17.5-1noble.20260410.113615] (0.17.5-1noble.20261031.121002 ROS noble:noble [amd64])
+Inst ros-jazzy-rcutils [6.7.6-1noble.20260911.045439] (6.7.7-1noble.20261031.121858 ROS noble:noble [amd64])
+Inst ros-jazzy-rosidl-typesupport-interface [4.6.9-1noble.20260612.045126] (4.6.10-1noble.20261104.080519 ROS noble:noble [amd64])
+Inst ros-jazzy-rosidl-runtime-c [4.6.9-1noble.20260911.045549] (4.6.10-1noble.20261104.081319 ROS noble:noble [amd64])
+Inst ros-jazzy-rosidl-dynamic-typesupport [0.1.2-3noble.20260911.050021] (0.1.2-3noble.20261104.091531 ROS noble:noble [amd64])
+Inst ros-jazzy-rmw [7.3.4-1noble.20260911.050254] (7.3.4-1noble.20261104.092047 ROS noble:noble [amd64])
+Inst ros-jazzy-rosidl-cli [4.6.9-1noble.20260612.045120] (4.6.10-1noble.20261103.144109 ROS noble:noble [amd64])
+Inst ros-jazzy-rosidl-adapter [4.6.9-1noble.20260612.045507] (4.6.10-1noble.20261103.144927 ROS noble:noble [amd64])
+Inst ros-jazzy-rosidl-parser [4.6.9-1noble.20260612.045810] (4.6.10-1noble.20261103.145923 ROS noble:noble [amd64])
+Inst ros-jazzy-rosidl-pycommon [4.6.9-1noble.20260612.045929] (4.6.10-1noble.20261103.161734 ROS noble:noble [amd64])
+Inst ros-jazzy-rosidl-cmake [4.6.9-1noble.20260612.050210] (4.6.10-1noble.20261103.204039 ROS noble:noble [amd64])
+Inst ros-jazzy-rosidl-generator-type-description [4.6.9-1noble.20260911.045349] (4.6.10-1noble.20261103.162049 ROS noble:noble [amd64])
+Inst ros-jazzy-rosidl-generator-c [4.6.9-1noble.20260911.045714] (4.6.10-1noble.20261104.081142 ROS noble:noble [amd64])
+Inst ros-jazzy-rcpputils [2.11.4-1noble.20260911.045839] (2.11.4-1noble.20261031.122131 ROS noble:noble [amd64])
+Inst ros-jazzy-rosidl-typesupport-c [3.2.3-1noble.20260911.050252] (3.2.3-1noble.20261104.091547 ROS noble:noble [amd64])
+Inst ros-jazzy-rosidl-generator-py [0.22.2-1noble.20260911.050634] (0.22.2-1noble.20261104.170349 ROS noble:noble [amd64])
+Inst ros-jazzy-rosidl-runtime-cpp [4.6.9-1noble.20260911.045824] (4.6.10-1noble.20261104.091418 ROS noble:noble [amd64])
+Inst ros-jazzy-rosidl-typesupport-cpp [3.2.3-1noble.20260911.050655] (3.2.3-1noble.20261104.170227 ROS noble:noble [amd64])
+Inst ros-jazzy-ament-cmake-gtest [2.5.6-2noble.20260225.145055] (2.5.7-1noble.20261025.230436 ROS noble:noble [amd64])
+Inst ros-jazzy-ament-cmake-gmock [2.5.6-2noble.20260225.215706] (2.5.7-1noble.20261025.230715 ROS noble:noble [amd64])
+Inst ros-jazzy-ament-cmake-pytest [2.5.6-2noble.20260225.145739] (2.5.7-1noble.20261025.230611 ROS noble:noble [amd64])
+Inst ros-jazzy-ament-cmake-ros [0.12.2-1noble.20260911.044924] (0.12.2-1noble.20261031.121514 ROS noble:noble [amd64])
+Inst ros-jazzy-rosidl-generator-cpp [4.6.9-1noble.20260911.050038] (4.6.10-1noble.20261104.091921 ROS noble:noble [amd64])
+Inst ros-jazzy-rosidl-typesupport-fastrtps-cpp [3.6.4-1noble.20260911.050552] (3.6.4-1noble.20261104.170319 ROS noble:noble [amd64])
+Inst ros-jazzy-rosidl-typesupport-fastrtps-c [3.6.4-1noble.20260911.050839] (3.6.4-1noble.20261104.170915 ROS noble:noble [amd64])
+Inst ros-jazzy-rosidl-typesupport-introspection-c [4.6.9-1noble.20260911.045954] (4.6.10-1noble.20261104.091111 ROS noble:noble [amd64])
+Inst ros-jazzy-rosidl-typesupport-introspection-cpp [4.6.9-1noble.20260911.050322] (4.6.10-1noble.20261104.092402 ROS noble:noble [amd64])
+Inst ros-jazzy-rosidl-core-runtime [0.2.1-1noble.20260911.051106] (0.2.1-1noble.20261104.171211 ROS noble:noble [amd64])
+Inst ros-jazzy-builtin-interfaces [2.0.4-1noble.20260911.051559] (2.0.4-1noble.20261104.171803 ROS noble:noble [amd64])
+Inst ros-jazzy-service-msgs [2.0.4-1noble.20260911.051911] (2.0.4-1noble.20261104.172346 ROS noble:noble [amd64])
+Inst ros-jazzy-unique-identifier-msgs [2.5.1-1noble.20260911.051544] (2.5.1-1noble.20261104.171806 ROS noble:noble [amd64])
+Inst ros-jazzy-action-msgs [2.0.4-1noble.20260911.052334] (2.0.4-1noble.20261105.051812 ROS noble:noble [amd64])
+Inst ros-jazzy-rosidl-default-runtime [1.6.1-1noble.20260911.052508] (1.6.1-1noble.20261105.052217 ROS noble:noble [amd64])
+Inst ros-jazzy-action-tutorials-interfaces [0.33.11-1noble.20260911.054108] (0.33.11-1noble.20261105.052829 ROS noble:noble [amd64])
+Inst ros-jazzy-ament-index-cpp [1.8.4-1noble.20260519.011052] (1.8.4-1noble.20261025.230122 ROS noble:noble [amd64])
+Inst ros-jazzy-rcl-interfaces [2.0.4-1noble.20260911.093433] (2.0.4-1noble.20261105.053447 ROS noble:noble [amd64])
+Inst ros-jazzy-rcl-logging-interface [3.1.1-1noble.20260911.045823] (3.1.1-1noble.20261031.122133 ROS noble:noble [amd64])
+Inst ros-jazzy-rcl-logging-spdlog [3.1.1-1noble.20260911.050258] (3.1.1-1noble.20261031.122410 ROS noble:noble [amd64])
+Inst ros-jazzy-rcl-yaml-param-parser [9.2.11-1noble.20260911.050612] (9.2.11-1noble.20261104.170930 ROS noble:noble [amd64])
+Inst ros-jazzy-rmw-implementation-cmake [7.3.4-1noble.20260911.035024] (7.3.4-1noble.20261031.121243 ROS noble:noble [amd64])
+Inst ros-jazzy-rmw-dds-common [3.1.1-1noble.20260911.094648] (3.1.1-1noble.20261105.053553 ROS noble:noble [amd64])
+Inst ros-jazzy-tracetools [8.2.6-1noble.20260911.045452] (8.2.6-1noble.20261031.121956 ROS noble:noble [amd64])
+Inst ros-jazzy-rmw-fastrtps-shared-cpp [8.4.4-1noble.20260911.095823] (8.4.5-1noble.20261105.063410 ROS noble:noble [amd64])
+Inst ros-jazzy-rosidl-dynamic-typesupport-fastrtps [0.1.0-3noble.20260911.050333] (0.1.0-3noble.20261104.091828 ROS noble:noble [amd64])
+Inst ros-jazzy-rmw-fastrtps-cpp [8.4.4-1noble.20260911.100940] (8.4.5-1noble.20261105.065411 ROS noble:noble [amd64])
+Inst ros-jazzy-rmw-implementation [2.15.6-1noble.20260911.103206] (2.15.7-1noble.20261105.083506 ROS noble:noble [amd64])
+Inst ros-jazzy-type-description-interfaces [2.0.4-1noble.20260911.052935] (2.0.4-1noble.20261105.051836 ROS noble:noble [amd64])
+Inst ros-jazzy-rcl [9.2.11-1noble.20260911.104031] (9.2.11-1noble.20261105.083913 ROS noble:noble [amd64])
+Inst ros-jazzy-statistics-msgs [2.0.4-1noble.20260911.094428] (2.0.4-1noble.20261105.053737 ROS noble:noble [amd64])
+Inst ros-jazzy-libstatistics-collector [1.7.4-1noble.20260911.104623] (1.7.4-1noble.20261105.084333 ROS noble:noble [amd64])
+Inst ros-jazzy-rosgraph-msgs [2.0.4-1noble.20260911.094503] (2.0.4-1noble.20261105.054006 ROS noble:noble [amd64])
+Inst ros-jazzy-rclcpp [28.1.22-1noble.20260911.105434] (28.1.23-1noble.20261105.084818 ROS noble:noble [amd64])
+Inst ros-jazzy-rcl-action [9.2.11-1noble.20260912.161932] (9.2.11-1noble.20261105.084244 ROS noble:noble [amd64])
+Inst ros-jazzy-rclcpp-action [28.1.22-1noble.20260912.162328] (28.1.23-1noble.20261105.102757 ROS noble:noble [amd64])
+Inst ros-jazzy-class-loader [2.7.1-1noble.20260911.050218] (2.7.1-1noble.20261031.122417 ROS noble:noble [amd64])
+Inst ros-jazzy-composition-interfaces [2.0.4-1noble.20260911.094556] (2.0.4-1noble.20261105.054016 ROS noble:noble [amd64])
+Inst ros-jazzy-rclcpp-components [28.1.22-1noble.20260911.115213] (28.1.23-1noble.20261105.091748 ROS noble:noble [amd64])
+Inst ros-jazzy-action-tutorials-cpp [0.33.11-1noble.20260912.162738] (0.33.11-1noble.20261105.103212 ROS noble:noble [amd64])
+Inst ros-jazzy-lifecycle-msgs [2.0.4-1noble.20260911.054418] (2.0.4-1noble.20261105.053320 ROS noble:noble [amd64])
+Inst ros-jazzy-rcl-lifecycle [9.2.11-1noble.20260912.161943] (9.2.11-1noble.20261105.084252 ROS noble:noble [amd64])
+Inst ros-jazzy-rclpy [7.1.12-1noble.20260912.162354] (7.1.13-1noble.20261105.084753 ROS noble:noble [amd64])
+Inst ros-jazzy-action-tutorials-py [0.33.11-1noble.20260912.163944] (0.33.11-1noble.20261105.085619 ROS noble:noble [amd64])
+Inst ros-jazzy-std-msgs [5.3.8-1noble.20260911.094424] (5.3.8-1noble.20261105.053803 ROS noble:noble [amd64])
+Inst ros-jazzy-actionlib-msgs [5.3.8-1noble.20260911.095510] (5.3.8-1noble.20261105.054427 ROS noble:noble [amd64])
+Inst ros-jazzy-ament-cmake-auto [2.5.6-2noble.20260225.232257] (2.5.7-1noble.20261031.120940 ROS noble:noble [amd64])
+Inst ros-jazzy-ament-cmake-copyright [0.17.5-1noble.20260410.113746] (0.17.5-1noble.20261025.230424 ROS noble:noble [amd64])
+Inst ros-jazzy-ament-cmake-lint-cmake [0.17.5-1noble.20260410.113602] (0.17.5-1noble.20261025.225930 ROS noble:noble [amd64])
+Inst ros-jazzy-ament-cmake-xmllint [0.17.5-1noble.20260410.113914] (0.17.5-1noble.20261025.225643 ROS noble:noble [amd64])
+Inst ros-jazzy-ament-lint-auto [0.17.5-1noble.20260410.080333] (0.17.5-1noble.20261025.225944 ROS noble:noble [amd64])
+Inst ros-jazzy-ament-lint-common [0.17.5-1noble.20260410.114154] (0.17.5-1noble.20261031.121345 ROS noble:noble [amd64])
+Inst ros-jazzy-angles [1.16.1-1noble.20260225.231445] (1.16.1-1noble.20261025.230138 ROS noble:noble [amd64])
+Inst ros-jazzy-geometry-msgs [5.3.8-1noble.20260911.102920] (5.3.8-1noble.20261105.055127 ROS noble:noble [amd64])
+Inst ros-jazzy-diagnostic-msgs [5.3.8-1noble.20260911.111839] (5.3.8-1noble.20261105.060146 ROS noble:noble [amd64])
+Inst ros-jazzy-nav-msgs [5.3.8-1noble.20260911.110342] (5.3.8-1noble.20261105.060954 ROS noble:noble [amd64])
+Inst ros-jazzy-sensor-msgs [5.3.8-1noble.20260911.140426] (5.3.8-1noble.20261105.060814 ROS noble:noble [amd64])
+Inst ros-jazzy-shape-msgs [5.3.8-1noble.20260911.113155] (5.3.8-1noble.20261105.060831 ROS noble:noble [amd64])
+Inst ros-jazzy-std-srvs [5.3.8-1noble.20260911.100759] (5.3.8-1noble.20261105.053807 ROS noble:noble [amd64])
+Inst ros-jazzy-stereo-msgs [5.3.8-1noble.20260911.142100] (5.3.8-1noble.20261105.061719 ROS noble:noble [amd64])
+Inst ros-jazzy-trajectory-msgs [5.3.8-1noble.20260911.111503] (5.3.8-1noble.20261105.060952 ROS noble:noble [amd64])
+Inst ros-jazzy-visualization-msgs [5.3.8-1noble.20260911.141359] (5.3.8-1noble.20261105.062110 ROS noble:noble [amd64])
+Inst ros-jazzy-common-interfaces [5.3.8-1noble.20260911.142449] (5.3.8-1noble.20261105.063420 ROS noble:noble [amd64])
+Inst ros-jazzy-example-interfaces [0.12.1-1noble.20260911.054159] (0.12.1-1noble.20261105.053151 ROS noble:noble [amd64])
+Inst ros-jazzy-launch [3.4.12-1noble.20260920.232232] (3.4.13-1noble.20261025.200209 ROS noble:noble [amd64])
+Inst ros-jazzy-launch-ros [0.26.13-1noble.20260920.233704] (0.26.13-1noble.20261105.085658 ROS noble:noble [amd64])
+Inst ros-jazzy-composition [0.33.11-1noble.20260920.235723] (0.33.11-1noble.20261105.092656 ROS noble:noble [amd64])
+Inst ros-jazzy-cv-bridge [4.1.0-1noble.20260911.143610] (4.1.0-1noble.20261105.092050 ROS noble:noble [amd64])
+Inst ros-jazzy-launch-xml [3.4.12-1noble.20260920.233548] (3.4.13-1noble.20261025.201942 ROS noble:noble [amd64])
+Inst ros-jazzy-demo-nodes-cpp [0.33.11-1noble.20260920.235420] (0.33.11-1noble.20261105.092654 ROS noble:noble [amd64])
+Inst ros-jazzy-demo-nodes-cpp-native [0.33.11-1noble.20260911.121526] (0.33.11-1noble.20261105.093346 ROS noble:noble [amd64])
+Inst ros-jazzy-demo-nodes-py [0.33.11-1noble.20260912.164047] (0.33.11-1noble.20261105.085713 ROS noble:noble [amd64])
+Inst ros-jazzy-image-geometry [4.1.0-1noble.20260911.143731] (4.1.0-1noble.20261105.070217 ROS noble:noble [amd64])
+Inst ros-jazzy-depthimage-to-laserscan [2.5.1-3noble.20260911.144622] (2.5.1-3noble.20261105.094045 ROS noble:noble [amd64])
+Inst ros-jazzy-dummy-map-server [0.33.11-1noble.20260911.134138] (0.33.11-1noble.20261105.092251 ROS noble:noble [amd64])
+Inst ros-jazzy-dummy-sensors [0.33.11-1noble.20260911.144053] (0.33.11-1noble.20261105.092021 ROS noble:noble [amd64])
+Inst ros-jazzy-pluginlib [5.4.6-1noble.20260911.050818] (5.4.6-1noble.20261031.122708 ROS noble:noble [amd64])
+Inst ros-jazzy-urdf-parser-plugin [2.10.1-2noble.20260911.045403] (2.10.1-2noble.20261031.122018 ROS noble:noble [amd64])
+Inst ros-jazzy-urdf [2.10.1-2noble.20260911.051219] (2.10.1-2noble.20261031.123217 ROS noble:noble [amd64])
+Inst ros-jazzy-kdl-parser [2.11.0-3noble.20260911.051526] (2.11.0-3noble.20261031.123449 ROS noble:noble [amd64])
+Inst ros-jazzy-message-filters [4.11.17-1noble.20260912.163757] (4.11.18-1noble.20261105.090818 ROS noble:noble [amd64])
+Inst ros-jazzy-tf2 [0.36.23-1noble.20260915.172312] (0.36.23-1noble.20261105.065623 ROS noble:noble [amd64])
+Inst ros-jazzy-tf2-msgs [0.36.23-1noble.20260915.172312] (0.36.23-1noble.20261105.060904 ROS noble:noble [amd64])
+Inst ros-jazzy-tf2-ros [0.36.23-1noble.20260915.173839] (0.36.23-1noble.20261105.103321 ROS noble:noble [amd64])
+Inst ros-jazzy-robot-state-publisher [3.3.4-1noble.20260915.184559] (3.3.4-1noble.20261105.103958 ROS noble:noble [amd64])
+Inst ros-jazzy-dummy-robot-bringup [0.33.11-1noble.20260920.234459] (0.33.11-1noble.20261105.114431 ROS noble:noble [amd64])
+Inst ros-jazzy-examples-rclcpp-minimal-action-client [0.19.7-1noble.20260912.162813] (0.19.7-1noble.20261105.103254 ROS noble:noble [amd64])
+Inst ros-jazzy-examples-rclcpp-minimal-action-server [0.19.7-1noble.20260912.162848] (0.19.7-1noble.20261105.103320 ROS noble:noble [amd64])
+Inst ros-jazzy-examples-rclcpp-minimal-client [0.19.7-1noble.20260911.115056] (0.19.7-1noble.20261105.090139 ROS noble:noble [amd64])
+Inst ros-jazzy-examples-rclcpp-minimal-composition [0.19.7-1noble.20260911.121836] (0.19.7-1noble.20261105.093416 ROS noble:noble [amd64])
+Inst ros-jazzy-examples-rclcpp-minimal-publisher [0.19.7-1noble.20260911.114433] (0.19.7-1noble.20261105.090726 ROS noble:noble [amd64])
+Inst ros-jazzy-examples-rclcpp-minimal-service [0.19.7-1noble.20260911.115129] (0.19.7-1noble.20261105.090206 ROS noble:noble [amd64])
+Inst ros-jazzy-examples-rclcpp-minimal-subscriber [0.19.7-1noble.20260911.140610] (0.19.7-1noble.20261105.093417 ROS noble:noble [amd64])
+Inst ros-jazzy-examples-rclcpp-minimal-timer [0.19.7-1noble.20260911.134322] (0.19.7-1noble.20261105.102704 ROS noble:noble [amd64])
+Inst ros-jazzy-examples-rclcpp-multithreaded-executor [0.19.7-1noble.20260911.114643] (0.19.7-1noble.20261105.090728 ROS noble:noble [amd64])
+Inst ros-jazzy-examples-rclpy-executors [0.19.7-1noble.20260912.164106] (0.19.7-1noble.20261105.091122 ROS noble:noble [amd64])
+Inst ros-jazzy-examples-rclpy-minimal-action-client [0.19.7-1noble.20260912.164116] (0.19.7-1noble.20261105.101610 ROS noble:noble [amd64])
+Inst ros-jazzy-examples-rclpy-minimal-action-server [0.19.7-1noble.20260912.164217] (0.19.7-1noble.20261105.085732 ROS noble:noble [amd64])
+Inst ros-jazzy-examples-rclpy-minimal-client [0.19.7-1noble.20260912.164234] (0.19.7-1noble.20261105.085742 ROS noble:noble [amd64])
+Inst ros-jazzy-examples-rclpy-minimal-publisher [0.19.7-1noble.20260912.164241] (0.19.7-1noble.20261105.091149 ROS noble:noble [amd64])
+Inst ros-jazzy-examples-rclpy-minimal-service [0.19.7-1noble.20260912.164244] (0.19.7-1noble.20261105.090227 ROS noble:noble [amd64])
+Inst ros-jazzy-examples-rclpy-minimal-subscriber [0.19.7-1noble.20260912.164245] (0.19.7-1noble.20261105.091150 ROS noble:noble [amd64])
+Inst ros-jazzy-image-tools [0.33.11-1noble.20260911.142625] (0.33.11-1noble.20261105.093415 ROS noble:noble [amd64])
+Inst ros-jazzy-intra-process-demo [0.33.11-1noble.20260911.142929] (0.33.11-1noble.20261105.090756 ROS noble:noble [amd64])
+Inst ros-jazzy-joy [3.3.0-3noble.20260911.143506] (3.3.0-3noble.20261105.094108 ROS noble:noble [amd64])
+Inst ros-jazzy-rclcpp-lifecycle [28.1.22-1noble.20260912.162427] (28.1.23-1noble.20261105.085939 ROS noble:noble [amd64])
+Inst ros-jazzy-lifecycle [0.33.11-1noble.20260912.163336] (0.33.11-1noble.20261105.090304 ROS noble:noble [amd64])
+Inst ros-jazzy-logging-demo [0.33.11-1noble.20260911.121251] (0.33.11-1noble.20261105.092348 ROS noble:noble [amd64])
+Inst ros-jazzy-pcl-msgs [1.0.0-9noble.20260911.142030] (1.0.0-9noble.20261105.061709 ROS noble:noble [amd64])
+Inst ros-jazzy-pcl-conversions [2.6.5-1noble.20260912.165932] (2.6.5-1noble.20261105.091206 ROS noble:noble [amd64])
+Inst ros-jazzy-pendulum-msgs [0.33.11-1noble.20260911.093343] (0.33.11-1noble.20261105.053359 ROS noble:noble [amd64])
+Inst ros-jazzy-tlsf [0.9.1-2noble.20260603.150632] (0.9.1-2noble.20261031.120940 ROS noble:noble [amd64])
+Inst ros-jazzy-tlsf-cpp [0.17.1-3noble.20260911.135112] (0.17.1-3noble.20261105.091056 ROS noble:noble [amd64])
+Inst ros-jazzy-pendulum-control [0.33.11-1noble.20260911.135922] (0.33.11-1noble.20261105.091401 ROS noble:noble [amd64])
+Inst ros-jazzy-quality-of-service-demo-cpp [0.33.11-1noble.20260920.235748] (0.33.11-1noble.20261105.092650 ROS noble:noble [amd64])
+Inst ros-jazzy-quality-of-service-demo-py [0.33.11-1noble.20260912.164442] (0.33.11-1noble.20261105.091310 ROS noble:noble [amd64])
+Inst ros-jazzy-tf2-bullet [0.36.23-1noble.20260915.174543] (0.36.23-1noble.20261105.105004 ROS noble:noble [amd64])
+Inst ros-jazzy-tf2-eigen [0.36.23-1noble.20260915.174549] (0.36.23-1noble.20261105.104956 ROS noble:noble [amd64])
+Inst ros-jazzy-tf2-eigen-kdl [0.36.23-1noble.20260915.174022] (0.36.23-1noble.20261105.083803 ROS noble:noble [amd64])
+Inst ros-jazzy-tf2-py [0.36.23-1noble.20260915.173947] (0.36.23-1noble.20261105.091749 ROS noble:noble [amd64])
+Inst ros-jazzy-tf2-ros-py [0.36.23-1noble.20260915.174232] (0.36.23-1noble.20261105.092016 ROS noble:noble [amd64])
+Inst ros-jazzy-tf2-geometry-msgs [0.36.23-1noble.20260915.174516] (0.36.23-1noble.20261105.105021 ROS noble:noble [amd64])
+Inst ros-jazzy-tf2-kdl [0.36.23-1noble.20260915.174520] (0.36.23-1noble.20261105.105217 ROS noble:noble [amd64])
+Inst ros-jazzy-sensor-msgs-py [5.3.8-1noble.20260911.143022] (5.3.8-1noble.20261105.063444 ROS noble:noble [amd64])
+Inst ros-jazzy-tf2-sensor-msgs [0.36.23-1noble.20260915.174517] (0.36.23-1noble.20261105.104423 ROS noble:noble [amd64])
+Inst ros-jazzy-tf2-tools [0.36.23-1noble.20260915.174418] (0.36.23-1noble.20261105.092155 ROS noble:noble [amd64])
+Inst ros-jazzy-geometry2 [0.36.23-1noble.20260915.174914] (0.36.23-1noble.20261105.112046 ROS noble:noble [amd64])
+Inst ros-jazzy-launch-yaml [3.4.12-1noble.20260920.233506] (3.4.13-1noble.20261025.202007 ROS noble:noble [amd64])
+Inst ros-jazzy-launch-testing [3.4.12-1noble.20260920.233733] (3.4.13-1noble.20261025.202303 ROS noble:noble [amd64])
+Inst ros-jazzy-launch-testing-ament-cmake [3.4.12-1noble.20260920.233931] (3.4.13-1noble.20261031.121005 ROS noble:noble [amd64])
+Inst ros-jazzy-launch-testing-ros [0.26.13-1noble.20260920.234129] (0.26.13-1noble.20261105.101710 ROS noble:noble [amd64])
+Inst ros-jazzy-ros2cli [0.32.13-1noble.20261006.033947] (0.32.14-1noble.20261105.101733 ROS noble:noble [amd64])
+Inst ros-jazzy-rosidl-runtime-py [0.13.2-1noble.20260612.050026] (0.13.3-1noble.20261103.162053 ROS noble:noble [amd64])
+Inst ros-jazzy-ros2action [0.32.13-1noble.20261006.034352] (0.32.14-1noble.20261105.102221 ROS noble:noble [amd64])
+Inst ros-jazzy-ros2node [0.32.13-1noble.20261006.034356] (0.32.14-1noble.20261105.102417 ROS noble:noble [amd64])
+Inst ros-jazzy-ros2topic [0.32.13-1noble.20261006.034328] (0.32.14-1noble.20261105.102241 ROS noble:noble [amd64])
+Inst ros-jazzy-ros2service [0.32.13-1noble.20261006.034417] (0.32.14-1noble.20261105.102404 ROS noble:noble [amd64])
+Inst ros-jazzy-ros2param [0.32.13-1noble.20261006.034648] (0.32.14-1noble.20261105.102627 ROS noble:noble [amd64])
+Inst ros-jazzy-ros2pkg [0.32.13-1noble.20261006.034536] (0.32.14-1noble.20261105.125438 ROS noble:noble [amd64])
+Inst ros-jazzy-ros2component [0.32.13-1noble.20261006.034853] (0.32.14-1noble.20261105.125612 ROS noble:noble [amd64])
+Inst ros-jazzy-ros2doctor [0.32.13-1noble.20261006.034301] (0.32.14-1noble.20261105.101947 ROS noble:noble [amd64])
+Inst ros-jazzy-ros2interface [0.32.13-1noble.20261006.034155] (0.32.14-1noble.20261105.102042 ROS noble:noble [amd64])
+Inst ros-jazzy-ros2launch [0.26.13-1noble.20261006.034901] (0.26.13-1noble.20261105.125738 ROS noble:noble [amd64])
+Inst ros-jazzy-ros2lifecycle [0.32.13-1noble.20261006.034655] (0.32.14-1noble.20261105.102617 ROS noble:noble [amd64])
+Inst ros-jazzy-ros2multicast [0.32.13-1noble.20261006.034258] (0.32.14-1noble.20261105.125423 ROS noble:noble [amd64])
+Inst ros-jazzy-ros2plugin [5.4.6-1noble.20261006.034857] (5.4.6-1noble.20261105.125802 ROS noble:noble [amd64])
+Inst ros-jazzy-ros2run [0.32.13-1noble.20261006.034826] (0.32.14-1noble.20261105.125759 ROS noble:noble [amd64])
+Inst ros-jazzy-sros2 [0.13.6-1noble.20261006.034504] (0.13.6-1noble.20261105.102428 ROS noble:noble [amd64])
+Inst ros-jazzy-ros2cli-common-extensions [0.3.1-1noble.20261006.035201] (0.3.1-1noble.20261105.150105 ROS noble:noble [amd64])
+Inst ros-jazzy-rosidl-generator-rs [0.5.0-1noble.20260911.050557] (0.5.0-1noble.20261104.092037 ROS noble:noble [amd64])
+Inst ros-jazzy-rosidl-core-generators [0.2.1-1noble.20260911.051143] (0.2.1-1noble.20261104.171153 ROS noble:noble [amd64])
+Inst ros-jazzy-rosidl-default-generators [1.6.1-1noble.20260911.052510] (1.6.1-1noble.20261105.052201 ROS noble:noble [amd64])
+Inst ros-jazzy-sros2-cmake [0.13.6-1noble.20261006.034556] (0.13.6-1noble.20261105.125454 ROS noble:noble [amd64])
+Inst ros-jazzy-ros-core [0.11.0-1noble.20261006.035319] (0.11.0-1noble.20261105.150350 ROS noble:noble [amd64])
+Inst ros-jazzy-rosbag2-storage [0.26.11-1noble.20260911.134637] (0.26.11-1noble.20261105.103038 ROS noble:noble [amd64])
+Inst ros-jazzy-rosbag2-cpp [0.26.11-1noble.20260911.144538] (0.26.11-1noble.20261105.103444 ROS noble:noble [amd64])
+Inst ros-jazzy-rosbag2-compression [0.26.11-1noble.20260911.145111] (0.26.11-1noble.20261105.125924 ROS noble:noble [amd64])
+Inst ros-jazzy-rosbag2-interfaces [0.26.11-1noble.20260911.094055] (0.26.11-1noble.20261105.053651 ROS noble:noble [amd64])
+Inst ros-jazzy-rosbag2-transport [0.26.11-1noble.20260911.150336] (0.26.11-1noble.20261105.140846 ROS noble:noble [amd64])
+Inst ros-jazzy-rosbag2-py [0.26.11-1noble.20260912.163450] (0.26.11-1noble.20261105.145218 ROS noble:noble [amd64])
+Inst ros-jazzy-rosbag2-storage-mcap [0.26.11-1noble.20260911.143733] (0.26.11-1noble.20261105.125916 ROS noble:noble [amd64])
+Inst ros-jazzy-rosbag2-storage-sqlite3 [0.26.11-1noble.20260911.143749] (0.26.11-1noble.20261105.125937 ROS noble:noble [amd64])
+Inst ros-jazzy-rosbag2-storage-default-plugins [0.26.11-1noble.20260911.144711] (0.26.11-1noble.20261105.162013 ROS noble:noble [amd64])
+Inst ros-jazzy-ros2bag [0.26.11-1noble.20261006.034406] (0.26.11-1noble.20261105.163929 ROS noble:noble [amd64])
+Inst ros-jazzy-rosbag2-compression-zstd [0.26.11-1noble.20260911.145430] (0.26.11-1noble.20261105.162045 ROS noble:noble [amd64])
+Inst ros-jazzy-rosbag2 [0.26.11-1noble.20261006.034645] (0.26.11-1noble.20261105.164454 ROS noble:noble [amd64])
+Inst ros-jazzy-ros-base [0.11.0-1noble.20261006.035407] (0.11.0-1noble.20261105.164630 ROS noble:noble [amd64])
+Inst ros-jazzy-rqt-gui [1.6.4-1noble.20260912.164610] (1.6.4-1noble.20261105.101724 ROS noble:noble [amd64])
+Inst ros-jazzy-rqt-gui-py [1.6.4-1noble.20260912.180625] (1.6.4-1noble.20261105.125541 ROS noble:noble [amd64])
+Inst ros-jazzy-rqt-py-common [1.6.4-1noble.20260912.164629] (1.6.4-1noble.20261105.101733 ROS noble:noble [amd64])
+Inst ros-jazzy-rqt-console [2.2.2-1noble.20260912.181218] (2.2.2-1noble.20261105.140530 ROS noble:noble [amd64])
+Inst ros-jazzy-rqt-msg [1.5.3-1noble.20260912.181325] (1.5.3-1noble.20261105.145319 ROS noble:noble [amd64])
+Inst ros-jazzy-rqt-action [2.2.1-1noble.20260912.181535] (2.2.1-1noble.20261105.151031 ROS noble:noble [amd64])
+Inst ros-jazzy-rqt-bag [1.5.6-1noble.20260912.181132] (1.5.6-1noble.20261105.145912 ROS noble:noble [amd64])
+Inst ros-jazzy-rqt-plot [1.4.5-1noble.20260912.181255] (1.4.5-1noble.20261105.141055 ROS noble:noble [amd64])
+Inst ros-jazzy-rqt-bag-plugins [1.5.6-1noble.20261006.035110] (1.5.6-1noble.20261105.164632 ROS noble:noble [amd64])
+Inst ros-jazzy-rqt-graph [1.5.6-1noble.20260912.181613] (1.5.6-1noble.20261105.151049 ROS noble:noble [amd64])
+Inst ros-jazzy-image-transport [5.1.8-1noble.20260912.165731] (5.1.8-1noble.20261105.094051 ROS noble:noble [amd64])
+Inst ros-jazzy-qt-gui-cpp [2.7.6-1noble.20260911.051453] (2.7.6-1noble.20261031.123115 ROS noble:noble [amd64])
+Inst ros-jazzy-rqt-gui-cpp [1.6.4-1noble.20260911.124247] (1.6.4-1noble.20261105.103039 ROS noble:noble [amd64])
+Inst ros-jazzy-rqt-image-view [1.3.0-2noble.20260912.180617] (1.3.0-2noble.20261105.103701 ROS noble:noble [amd64])
+Inst ros-jazzy-rqt-publisher [1.7.3-1noble.20260912.181252] (1.7.3-1noble.20261105.145422 ROS noble:noble [amd64])
+Inst ros-jazzy-rqt-py-console [1.2.3-1noble.20260912.181259] (1.2.3-1noble.20261105.145451 ROS noble:noble [amd64])
+Inst ros-jazzy-rqt-reconfigure [1.6.4-1noble.20260912.181331] (1.6.4-1noble.20261105.145406 ROS noble:noble [amd64])
+Inst ros-jazzy-rqt-service-caller [1.2.2-1noble.20260912.181616] (1.2.2-1noble.20261105.152429 ROS noble:noble [amd64])
+Inst ros-jazzy-rqt-shell [1.2.3-1noble.20260912.181619] (1.2.3-1noble.20261105.152407 ROS noble:noble [amd64])
+Inst ros-jazzy-rqt-srv [1.2.3-1noble.20260912.181544] (1.2.3-1noble.20261105.151046 ROS noble:noble [amd64])
+Inst ros-jazzy-rqt-topic [1.7.5-1noble.20261006.034535] (1.7.5-1noble.20261105.145229 ROS noble:noble [amd64])
+Inst ros-jazzy-rqt-common-plugins [1.2.0-4noble.20261006.035211] (1.2.0-4noble.20261105.164757 ROS noble:noble [amd64])
+Inst ros-jazzy-gz-cmake-vendor [0.0.12-1noble.20260618.173318] (0.0.12-1noble.20261025.230435 ROS noble:noble [amd64])
+Inst ros-jazzy-gz-utils-vendor [0.0.5-1noble.20260618.173807] (0.0.5-1noble.20261025.230754 ROS noble:noble [amd64])
+Inst ros-jazzy-gz-math-vendor [0.0.11-1noble.20260905.031649] (0.0.11-1noble.20261025.231053 ROS noble:noble [amd64])
+Inst ros-jazzy-interactive-markers [2.5.5-1noble.20260915.183018] (2.5.5-1noble.20261105.105736 ROS noble:noble [amd64])
+Inst ros-jazzy-laser-geometry [2.7.2-1noble.20260915.190032] (2.7.2-1noble.20261105.092219 ROS noble:noble [amd64])
+Inst ros-jazzy-map-msgs [2.4.1-2noble.20260911.141843] (2.4.1-2noble.20261105.061819 ROS noble:noble [amd64])
+Inst ros-jazzy-point-cloud-transport [4.0.9-1noble.20260912.165820] (4.0.10-1noble.20261105.094227 ROS noble:noble [amd64])
+Inst ros-jazzy-resource-retriever [3.4.4-1noble.20260911.045441] (3.4.4-1noble.20261031.121912 ROS noble:noble [amd64])
+Inst ros-jazzy-rviz-rendering [14.1.24-1noble.20260911.050059] (14.1.24-1noble.20261031.122134 ROS noble:noble [amd64])
+Inst ros-jazzy-rviz-common [14.1.24-1noble.20260915.181303] (14.1.24-1noble.20261105.104010 ROS noble:noble [amd64])
+Inst ros-jazzy-rviz-default-plugins [14.1.24-1noble.20260915.195741] (14.1.24-1noble.20261105.110836 ROS noble:noble [amd64])
+Inst ros-jazzy-rviz2 [14.1.24-1noble.20260915.204213] (14.1.24-1noble.20261105.153247 ROS noble:noble [amd64])
+Inst ros-jazzy-teleop-twist-joy [2.6.5-1noble.20260911.144135] (2.6.5-1noble.20261105.115428 ROS noble:noble [amd64])
+Inst ros-jazzy-teleop-twist-keyboard [2.4.1-1noble.20260912.164910] (2.4.1-1noble.20261105.090256 ROS noble:noble [amd64])
+Inst ros-jazzy-topic-monitor [0.33.11-1noble.20260920.234817] (0.33.11-1noble.20261105.091249 ROS noble:noble [amd64])
+Inst ros-jazzy-turtlesim [1.8.4-1noble.20260912.162948] (1.8.4-1noble.20261105.103213 ROS noble:noble [amd64])
+Inst ros-jazzy-desktop [0.11.0-1noble.20261006.040109] (0.11.0-1noble.20261105.164848 ROS noble:noble [amd64])
+Inst ros-jazzy-pcl-ros [2.6.5-1noble.20260916.065720] (2.6.5-1noble.20261105.110956 ROS noble:noble [amd64])
+Inst snapd [2.77.1+ubuntu24.04] (2.78+ubuntu24.04 Ubuntu:24.04/noble-updates [amd64])
+Inst cloud-init [26.1-0ubuntu1~24.04.1] (26.2-0ubuntu1~24.04.2 Ubuntu:24.04/noble-updates [all])
+Inst tailscale [1.104.5] (1.104.7 Tailscale:pkgs.tailscale.com [amd64])
+Conf distro-info (1.7ubuntu0.1 Ubuntu:24.04/noble-updates [amd64])
+Conf libsqlite3-dev (3.45.1-1ubuntu2.9 Ubuntu:24.04/noble-updates [amd64])
+Conf sqlite3 (3.45.1-1ubuntu2.9 Ubuntu:24.04/noble-updates [amd64])
+Conf libsqlite3-0 (3.45.1-1ubuntu2.9 Ubuntu:24.04/noble-updates [amd64])
+Conf ubuntu-pro-client-l10n (38ubuntu0~24.04 Ubuntu:24.04/noble-updates [amd64])
+Conf ubuntu-pro-client (38ubuntu0~24.04 Ubuntu:24.04/noble-updates [amd64])
+Conf python3-distro-info (1.7ubuntu0.1 Ubuntu:24.04/noble-updates [all])
+Conf containerd (2.2.1-0ubuntu1~24.04.4 Ubuntu:24.04/noble-updates [amd64])
+Conf cuda-toolkit-13-config-common (13.5.37-1 NVIDIA CUDA:developer.download.nvidia.com [all])
+Conf cuda-toolkit-config-common (13.5.37-1 NVIDIA CUDA:developer.download.nvidia.com [all])
+Conf libfprint-2-tod1 (1:1.94.7+tod1-0ubuntu5~24.04.9 Ubuntu:24.04/noble-updates [amd64])
+Conf libfprint-2-2 (1:1.94.7+tod1-0ubuntu5~24.04.9 Ubuntu:24.04/noble-updates [amd64])
+Conf libxnvctrl0 (620.70.06-1ubuntu1 NVIDIA CUDA:developer.download.nvidia.com [amd64])
+Conf ros-jazzy-ament-cmake-core (2.5.7-1noble.20261024.193249 ROS noble:noble [amd64])
+Conf ros-jazzy-ament-cmake-export-definitions (2.5.7-1noble.20261025.200000 ROS noble:noble [amd64])
+Conf ros-jazzy-ament-cmake-libraries (2.5.7-1noble.20261025.200118 ROS noble:noble [amd64])
+Conf ros-jazzy-ament-cmake-export-dependencies (2.5.7-1noble.20261025.201752 ROS noble:noble [amd64])
+Conf ros-jazzy-ament-cmake-export-include-directories (2.5.7-1noble.20261025.195958 ROS noble:noble [amd64])
+Conf ros-jazzy-ament-cmake-export-libraries (2.5.7-1noble.20261025.200044 ROS noble:noble [amd64])
+Conf ros-jazzy-ament-cmake-export-interfaces (2.5.7-1noble.20261025.201729 ROS noble:noble [amd64])
+Conf ros-jazzy-ament-cmake-export-link-flags (2.5.7-1noble.20261025.200049 ROS noble:noble [amd64])
+Conf ros-jazzy-ament-cmake-export-targets (2.5.7-1noble.20261025.201824 ROS noble:noble [amd64])
+Conf ros-jazzy-ament-cmake-gen-version-h (2.5.7-1noble.20261025.200052 ROS noble:noble [amd64])
+Conf ros-jazzy-ament-cmake-python (2.5.7-1noble.20261025.200156 ROS noble:noble [amd64])
+Conf ros-jazzy-ament-cmake-include-directories (2.5.7-1noble.20261025.200108 ROS noble:noble [amd64])
+Conf ros-jazzy-ament-cmake-target-dependencies (2.5.7-1noble.20261025.201826 ROS noble:noble [amd64])
+Conf ros-jazzy-ament-cmake-test (2.5.7-1noble.20261025.201953 ROS noble:noble [amd64])
+Conf ros-jazzy-ament-cmake-version (2.5.7-1noble.20261025.200158 ROS noble:noble [amd64])
+Conf ros-jazzy-ament-cmake (2.5.7-1noble.20261025.225914 ROS noble:noble [amd64])
+Conf ros-jazzy-ament-cmake-cppcheck (0.17.5-1noble.20261025.230313 ROS noble:noble [amd64])
+Conf ros-jazzy-ament-cmake-cpplint (0.17.5-1noble.20261025.230429 ROS noble:noble [amd64])
+Conf ros-jazzy-ament-cmake-flake8 (0.17.5-1noble.20261025.225921 ROS noble:noble [amd64])
+Conf ros-jazzy-ament-cmake-pep257 (0.17.5-1noble.20261025.225946 ROS noble:noble [amd64])
+Conf ros-jazzy-ament-cmake-uncrustify (0.17.5-1noble.20261031.121002 ROS noble:noble [amd64])
+Conf ros-jazzy-rcutils (6.7.7-1noble.20261031.121858 ROS noble:noble [amd64])
+Conf ros-jazzy-rosidl-typesupport-interface (4.6.10-1noble.20261104.080519 ROS noble:noble [amd64])
+Conf ros-jazzy-rosidl-runtime-c (4.6.10-1noble.20261104.081319 ROS noble:noble [amd64])
+Conf ros-jazzy-rosidl-dynamic-typesupport (0.1.2-3noble.20261104.091531 ROS noble:noble [amd64])
+Conf ros-jazzy-rmw (7.3.4-1noble.20261104.092047 ROS noble:noble [amd64])
+Conf ros-jazzy-rosidl-cli (4.6.10-1noble.20261103.144109 ROS noble:noble [amd64])
+Conf ros-jazzy-rosidl-adapter (4.6.10-1noble.20261103.144927 ROS noble:noble [amd64])
+Conf ros-jazzy-rosidl-parser (4.6.10-1noble.20261103.145923 ROS noble:noble [amd64])
+Conf ros-jazzy-rosidl-pycommon (4.6.10-1noble.20261103.161734 ROS noble:noble [amd64])
+Conf ros-jazzy-rosidl-cmake (4.6.10-1noble.20261103.204039 ROS noble:noble [amd64])
+Conf ros-jazzy-rosidl-generator-type-description (4.6.10-1noble.20261103.162049 ROS noble:noble [amd64])
+Conf ros-jazzy-rosidl-generator-c (4.6.10-1noble.20261104.081142 ROS noble:noble [amd64])
+Conf ros-jazzy-rcpputils (2.11.4-1noble.20261031.122131 ROS noble:noble [amd64])
+Conf ros-jazzy-rosidl-typesupport-c (3.2.3-1noble.20261104.091547 ROS noble:noble [amd64])
+Conf ros-jazzy-rosidl-generator-py (0.22.2-1noble.20261104.170349 ROS noble:noble [amd64])
+Conf ros-jazzy-rosidl-runtime-cpp (4.6.10-1noble.20261104.091418 ROS noble:noble [amd64])
+Conf ros-jazzy-rosidl-typesupport-cpp (3.2.3-1noble.20261104.170227 ROS noble:noble [amd64])
+Conf ros-jazzy-ament-cmake-gtest (2.5.7-1noble.20261025.230436 ROS noble:noble [amd64])
+Conf ros-jazzy-ament-cmake-gmock (2.5.7-1noble.20261025.230715 ROS noble:noble [amd64])
+Conf ros-jazzy-ament-cmake-pytest (2.5.7-1noble.20261025.230611 ROS noble:noble [amd64])
+Conf ros-jazzy-ament-cmake-ros (0.12.2-1noble.20261031.121514 ROS noble:noble [amd64])
+Conf ros-jazzy-rosidl-generator-cpp (4.6.10-1noble.20261104.091921 ROS noble:noble [amd64])
+Conf ros-jazzy-rosidl-typesupport-fastrtps-cpp (3.6.4-1noble.20261104.170319 ROS noble:noble [amd64])
+Conf ros-jazzy-rosidl-typesupport-fastrtps-c (3.6.4-1noble.20261104.170915 ROS noble:noble [amd64])
+Conf ros-jazzy-rosidl-typesupport-introspection-c (4.6.10-1noble.20261104.091111 ROS noble:noble [amd64])
+Conf ros-jazzy-rosidl-typesupport-introspection-cpp (4.6.10-1noble.20261104.092402 ROS noble:noble [amd64])
+Conf ros-jazzy-rosidl-core-runtime (0.2.1-1noble.20261104.171211 ROS noble:noble [amd64])
+Conf ros-jazzy-builtin-interfaces (2.0.4-1noble.20261104.171803 ROS noble:noble [amd64])
+Conf ros-jazzy-service-msgs (2.0.4-1noble.20261104.172346 ROS noble:noble [amd64])
+Conf ros-jazzy-unique-identifier-msgs (2.5.1-1noble.20261104.171806 ROS noble:noble [amd64])
+Conf ros-jazzy-action-msgs (2.0.4-1noble.20261105.051812 ROS noble:noble [amd64])
+Conf ros-jazzy-rosidl-default-runtime (1.6.1-1noble.20261105.052217 ROS noble:noble [amd64])
+Conf ros-jazzy-action-tutorials-interfaces (0.33.11-1noble.20261105.052829 ROS noble:noble [amd64])
+Conf ros-jazzy-ament-index-cpp (1.8.4-1noble.20261025.230122 ROS noble:noble [amd64])
+Conf ros-jazzy-rcl-interfaces (2.0.4-1noble.20261105.053447 ROS noble:noble [amd64])
+Conf ros-jazzy-rcl-logging-interface (3.1.1-1noble.20261031.122133 ROS noble:noble [amd64])
+Conf ros-jazzy-rcl-logging-spdlog (3.1.1-1noble.20261031.122410 ROS noble:noble [amd64])
+Conf ros-jazzy-rcl-yaml-param-parser (9.2.11-1noble.20261104.170930 ROS noble:noble [amd64])
+Conf ros-jazzy-rmw-implementation-cmake (7.3.4-1noble.20261031.121243 ROS noble:noble [amd64])
+Conf ros-jazzy-rmw-dds-common (3.1.1-1noble.20261105.053553 ROS noble:noble [amd64])
+Conf ros-jazzy-tracetools (8.2.6-1noble.20261031.121956 ROS noble:noble [amd64])
+Conf ros-jazzy-rmw-fastrtps-shared-cpp (8.4.5-1noble.20261105.063410 ROS noble:noble [amd64])
+Conf ros-jazzy-rosidl-dynamic-typesupport-fastrtps (0.1.0-3noble.20261104.091828 ROS noble:noble [amd64])
+Conf ros-jazzy-rmw-fastrtps-cpp (8.4.5-1noble.20261105.065411 ROS noble:noble [amd64])
+Conf ros-jazzy-rmw-implementation (2.15.7-1noble.20261105.083506 ROS noble:noble [amd64])
+Conf ros-jazzy-type-description-interfaces (2.0.4-1noble.20261105.051836 ROS noble:noble [amd64])
+Conf ros-jazzy-rcl (9.2.11-1noble.20261105.083913 ROS noble:noble [amd64])
+Conf ros-jazzy-statistics-msgs (2.0.4-1noble.20261105.053737 ROS noble:noble [amd64])
+Conf ros-jazzy-libstatistics-collector (1.7.4-1noble.20261105.084333 ROS noble:noble [amd64])
+Conf ros-jazzy-rosgraph-msgs (2.0.4-1noble.20261105.054006 ROS noble:noble [amd64])
+Conf ros-jazzy-rclcpp (28.1.23-1noble.20261105.084818 ROS noble:noble [amd64])
+Conf ros-jazzy-rcl-action (9.2.11-1noble.20261105.084244 ROS noble:noble [amd64])
+Conf ros-jazzy-rclcpp-action (28.1.23-1noble.20261105.102757 ROS noble:noble [amd64])
+Conf ros-jazzy-class-loader (2.7.1-1noble.20261031.122417 ROS noble:noble [amd64])
+Conf ros-jazzy-composition-interfaces (2.0.4-1noble.20261105.054016 ROS noble:noble [amd64])
+Conf ros-jazzy-rclcpp-components (28.1.23-1noble.20261105.091748 ROS noble:noble [amd64])
+Conf ros-jazzy-action-tutorials-cpp (0.33.11-1noble.20261105.103212 ROS noble:noble [amd64])
+Conf ros-jazzy-lifecycle-msgs (2.0.4-1noble.20261105.053320 ROS noble:noble [amd64])
+Conf ros-jazzy-rcl-lifecycle (9.2.11-1noble.20261105.084252 ROS noble:noble [amd64])
+Conf ros-jazzy-rclpy (7.1.13-1noble.20261105.084753 ROS noble:noble [amd64])
+Conf ros-jazzy-action-tutorials-py (0.33.11-1noble.20261105.085619 ROS noble:noble [amd64])
+Conf ros-jazzy-std-msgs (5.3.8-1noble.20261105.053803 ROS noble:noble [amd64])
+Conf ros-jazzy-actionlib-msgs (5.3.8-1noble.20261105.054427 ROS noble:noble [amd64])
+Conf ros-jazzy-ament-cmake-auto (2.5.7-1noble.20261031.120940 ROS noble:noble [amd64])
+Conf ros-jazzy-ament-cmake-copyright (0.17.5-1noble.20261025.230424 ROS noble:noble [amd64])
+Conf ros-jazzy-ament-cmake-lint-cmake (0.17.5-1noble.20261025.225930 ROS noble:noble [amd64])
+Conf ros-jazzy-ament-cmake-xmllint (0.17.5-1noble.20261025.225643 ROS noble:noble [amd64])
+Conf ros-jazzy-ament-lint-auto (0.17.5-1noble.20261025.225944 ROS noble:noble [amd64])
+Conf ros-jazzy-ament-lint-common (0.17.5-1noble.20261031.121345 ROS noble:noble [amd64])
+Conf ros-jazzy-angles (1.16.1-1noble.20261025.230138 ROS noble:noble [amd64])
+Conf ros-jazzy-geometry-msgs (5.3.8-1noble.20261105.055127 ROS noble:noble [amd64])
+Conf ros-jazzy-diagnostic-msgs (5.3.8-1noble.20261105.060146 ROS noble:noble [amd64])
+Conf ros-jazzy-nav-msgs (5.3.8-1noble.20261105.060954 ROS noble:noble [amd64])
+Conf ros-jazzy-sensor-msgs (5.3.8-1noble.20261105.060814 ROS noble:noble [amd64])
+Conf ros-jazzy-shape-msgs (5.3.8-1noble.20261105.060831 ROS noble:noble [amd64])
+Conf ros-jazzy-std-srvs (5.3.8-1noble.20261105.053807 ROS noble:noble [amd64])
+Conf ros-jazzy-stereo-msgs (5.3.8-1noble.20261105.061719 ROS noble:noble [amd64])
+Conf ros-jazzy-trajectory-msgs (5.3.8-1noble.20261105.060952 ROS noble:noble [amd64])
+Conf ros-jazzy-visualization-msgs (5.3.8-1noble.20261105.062110 ROS noble:noble [amd64])
+Conf ros-jazzy-common-interfaces (5.3.8-1noble.20261105.063420 ROS noble:noble [amd64])
+Conf ros-jazzy-example-interfaces (0.12.1-1noble.20261105.053151 ROS noble:noble [amd64])
+Conf ros-jazzy-launch (3.4.13-1noble.20261025.200209 ROS noble:noble [amd64])
+Conf ros-jazzy-launch-ros (0.26.13-1noble.20261105.085658 ROS noble:noble [amd64])
+Conf ros-jazzy-composition (0.33.11-1noble.20261105.092656 ROS noble:noble [amd64])
+Conf ros-jazzy-cv-bridge (4.1.0-1noble.20261105.092050 ROS noble:noble [amd64])
+Conf ros-jazzy-launch-xml (3.4.13-1noble.20261025.201942 ROS noble:noble [amd64])
+Conf ros-jazzy-demo-nodes-cpp (0.33.11-1noble.20261105.092654 ROS noble:noble [amd64])
+Conf ros-jazzy-demo-nodes-cpp-native (0.33.11-1noble.20261105.093346 ROS noble:noble [amd64])
+Conf ros-jazzy-demo-nodes-py (0.33.11-1noble.20261105.085713 ROS noble:noble [amd64])
+Conf ros-jazzy-image-geometry (4.1.0-1noble.20261105.070217 ROS noble:noble [amd64])
+Conf ros-jazzy-depthimage-to-laserscan (2.5.1-3noble.20261105.094045 ROS noble:noble [amd64])
+Conf ros-jazzy-dummy-map-server (0.33.11-1noble.20261105.092251 ROS noble:noble [amd64])
+Conf ros-jazzy-dummy-sensors (0.33.11-1noble.20261105.092021 ROS noble:noble [amd64])
+Conf ros-jazzy-pluginlib (5.4.6-1noble.20261031.122708 ROS noble:noble [amd64])
+Conf ros-jazzy-urdf-parser-plugin (2.10.1-2noble.20261031.122018 ROS noble:noble [amd64])
+Conf ros-jazzy-urdf (2.10.1-2noble.20261031.123217 ROS noble:noble [amd64])
+Conf ros-jazzy-kdl-parser (2.11.0-3noble.20261031.123449 ROS noble:noble [amd64])
+Conf ros-jazzy-message-filters (4.11.18-1noble.20261105.090818 ROS noble:noble [amd64])
+Conf ros-jazzy-tf2 (0.36.23-1noble.20261105.065623 ROS noble:noble [amd64])
+Conf ros-jazzy-tf2-msgs (0.36.23-1noble.20261105.060904 ROS noble:noble [amd64])
+Conf ros-jazzy-tf2-ros (0.36.23-1noble.20261105.103321 ROS noble:noble [amd64])
+Conf ros-jazzy-robot-state-publisher (3.3.4-1noble.20261105.103958 ROS noble:noble [amd64])
+Conf ros-jazzy-dummy-robot-bringup (0.33.11-1noble.20261105.114431 ROS noble:noble [amd64])
+Conf ros-jazzy-examples-rclcpp-minimal-action-client (0.19.7-1noble.20261105.103254 ROS noble:noble [amd64])
+Conf ros-jazzy-examples-rclcpp-minimal-action-server (0.19.7-1noble.20261105.103320 ROS noble:noble [amd64])
+Conf ros-jazzy-examples-rclcpp-minimal-client (0.19.7-1noble.20261105.090139 ROS noble:noble [amd64])
+Conf ros-jazzy-examples-rclcpp-minimal-composition (0.19.7-1noble.20261105.093416 ROS noble:noble [amd64])
+Conf ros-jazzy-examples-rclcpp-minimal-publisher (0.19.7-1noble.20261105.090726 ROS noble:noble [amd64])
+Conf ros-jazzy-examples-rclcpp-minimal-service (0.19.7-1noble.20261105.090206 ROS noble:noble [amd64])
+Conf ros-jazzy-examples-rclcpp-minimal-subscriber (0.19.7-1noble.20261105.093417 ROS noble:noble [amd64])
+Conf ros-jazzy-examples-rclcpp-minimal-timer (0.19.7-1noble.20261105.102704 ROS noble:noble [amd64])
+Conf ros-jazzy-examples-rclcpp-multithreaded-executor (0.19.7-1noble.20261105.090728 ROS noble:noble [amd64])
+Conf ros-jazzy-examples-rclpy-executors (0.19.7-1noble.20261105.091122 ROS noble:noble [amd64])
+Conf ros-jazzy-examples-rclpy-minimal-action-client (0.19.7-1noble.20261105.101610 ROS noble:noble [amd64])
+Conf ros-jazzy-examples-rclpy-minimal-action-server (0.19.7-1noble.20261105.085732 ROS noble:noble [amd64])
+Conf ros-jazzy-examples-rclpy-minimal-client (0.19.7-1noble.20261105.085742 ROS noble:noble [amd64])
+Conf ros-jazzy-examples-rclpy-minimal-publisher (0.19.7-1noble.20261105.091149 ROS noble:noble [amd64])
+Conf ros-jazzy-examples-rclpy-minimal-service (0.19.7-1noble.20261105.090227 ROS noble:noble [amd64])
+Conf ros-jazzy-examples-rclpy-minimal-subscriber (0.19.7-1noble.20261105.091150 ROS noble:noble [amd64])
+Conf ros-jazzy-image-tools (0.33.11-1noble.20261105.093415 ROS noble:noble [amd64])
+Conf ros-jazzy-intra-process-demo (0.33.11-1noble.20261105.090756 ROS noble:noble [amd64])
+Conf ros-jazzy-joy (3.3.0-3noble.20261105.094108 ROS noble:noble [amd64])
+Conf ros-jazzy-rclcpp-lifecycle (28.1.23-1noble.20261105.085939 ROS noble:noble [amd64])
+Conf ros-jazzy-lifecycle (0.33.11-1noble.20261105.090304 ROS noble:noble [amd64])
+Conf ros-jazzy-logging-demo (0.33.11-1noble.20261105.092348 ROS noble:noble [amd64])
+Conf ros-jazzy-pcl-msgs (1.0.0-9noble.20261105.061709 ROS noble:noble [amd64])
+Conf ros-jazzy-pcl-conversions (2.6.5-1noble.20261105.091206 ROS noble:noble [amd64])
+Conf ros-jazzy-pendulum-msgs (0.33.11-1noble.20261105.053359 ROS noble:noble [amd64])
+Conf ros-jazzy-tlsf (0.9.1-2noble.20261031.120940 ROS noble:noble [amd64])
+Conf ros-jazzy-tlsf-cpp (0.17.1-3noble.20261105.091056 ROS noble:noble [amd64])
+Conf ros-jazzy-pendulum-control (0.33.11-1noble.20261105.091401 ROS noble:noble [amd64])
+Conf ros-jazzy-quality-of-service-demo-cpp (0.33.11-1noble.20261105.092650 ROS noble:noble [amd64])
+Conf ros-jazzy-quality-of-service-demo-py (0.33.11-1noble.20261105.091310 ROS noble:noble [amd64])
+Conf ros-jazzy-tf2-bullet (0.36.23-1noble.20261105.105004 ROS noble:noble [amd64])
+Conf ros-jazzy-tf2-eigen (0.36.23-1noble.20261105.104956 ROS noble:noble [amd64])
+Conf ros-jazzy-tf2-eigen-kdl (0.36.23-1noble.20261105.083803 ROS noble:noble [amd64])
+Conf ros-jazzy-tf2-py (0.36.23-1noble.20261105.091749 ROS noble:noble [amd64])
+Conf ros-jazzy-tf2-ros-py (0.36.23-1noble.20261105.092016 ROS noble:noble [amd64])
+Conf ros-jazzy-tf2-geometry-msgs (0.36.23-1noble.20261105.105021 ROS noble:noble [amd64])
+Conf ros-jazzy-tf2-kdl (0.36.23-1noble.20261105.105217 ROS noble:noble [amd64])
+Conf ros-jazzy-sensor-msgs-py (5.3.8-1noble.20261105.063444 ROS noble:noble [amd64])
+Conf ros-jazzy-tf2-sensor-msgs (0.36.23-1noble.20261105.104423 ROS noble:noble [amd64])
+Conf ros-jazzy-tf2-tools (0.36.23-1noble.20261105.092155 ROS noble:noble [amd64])
+Conf ros-jazzy-geometry2 (0.36.23-1noble.20261105.112046 ROS noble:noble [amd64])
+Conf ros-jazzy-launch-yaml (3.4.13-1noble.20261025.202007 ROS noble:noble [amd64])
+Conf ros-jazzy-launch-testing (3.4.13-1noble.20261025.202303 ROS noble:noble [amd64])
+Conf ros-jazzy-launch-testing-ament-cmake (3.4.13-1noble.20261031.121005 ROS noble:noble [amd64])
+Conf ros-jazzy-launch-testing-ros (0.26.13-1noble.20261105.101710 ROS noble:noble [amd64])
+Conf ros-jazzy-ros2cli (0.32.14-1noble.20261105.101733 ROS noble:noble [amd64])
+Conf ros-jazzy-rosidl-runtime-py (0.13.3-1noble.20261103.162053 ROS noble:noble [amd64])
+Conf ros-jazzy-ros2action (0.32.14-1noble.20261105.102221 ROS noble:noble [amd64])
+Conf ros-jazzy-ros2node (0.32.14-1noble.20261105.102417 ROS noble:noble [amd64])
+Conf ros-jazzy-ros2topic (0.32.14-1noble.20261105.102241 ROS noble:noble [amd64])
+Conf ros-jazzy-ros2service (0.32.14-1noble.20261105.102404 ROS noble:noble [amd64])
+Conf ros-jazzy-ros2param (0.32.14-1noble.20261105.102627 ROS noble:noble [amd64])
+Conf ros-jazzy-ros2pkg (0.32.14-1noble.20261105.125438 ROS noble:noble [amd64])
+Conf ros-jazzy-ros2component (0.32.14-1noble.20261105.125612 ROS noble:noble [amd64])
+Conf ros-jazzy-ros2doctor (0.32.14-1noble.20261105.101947 ROS noble:noble [amd64])
+Conf ros-jazzy-ros2interface (0.32.14-1noble.20261105.102042 ROS noble:noble [amd64])
+Conf ros-jazzy-ros2launch (0.26.13-1noble.20261105.125738 ROS noble:noble [amd64])
+Conf ros-jazzy-ros2lifecycle (0.32.14-1noble.20261105.102617 ROS noble:noble [amd64])
+Conf ros-jazzy-ros2multicast (0.32.14-1noble.20261105.125423 ROS noble:noble [amd64])
+Conf ros-jazzy-ros2plugin (5.4.6-1noble.20261105.125802 ROS noble:noble [amd64])
+Conf ros-jazzy-ros2run (0.32.14-1noble.20261105.125759 ROS noble:noble [amd64])
+Conf ros-jazzy-sros2 (0.13.6-1noble.20261105.102428 ROS noble:noble [amd64])
+Conf ros-jazzy-ros2cli-common-extensions (0.3.1-1noble.20261105.150105 ROS noble:noble [amd64])
+Conf ros-jazzy-rosidl-generator-rs (0.5.0-1noble.20261104.092037 ROS noble:noble [amd64])
+Conf ros-jazzy-rosidl-core-generators (0.2.1-1noble.20261104.171153 ROS noble:noble [amd64])
+Conf ros-jazzy-rosidl-default-generators (1.6.1-1noble.20261105.052201 ROS noble:noble [amd64])
+Conf ros-jazzy-sros2-cmake (0.13.6-1noble.20261105.125454 ROS noble:noble [amd64])
+Conf ros-jazzy-ros-core (0.11.0-1noble.20261105.150350 ROS noble:noble [amd64])
+Conf ros-jazzy-rosbag2-storage (0.26.11-1noble.20261105.103038 ROS noble:noble [amd64])
+Conf ros-jazzy-rosbag2-cpp (0.26.11-1noble.20261105.103444 ROS noble:noble [amd64])
+Conf ros-jazzy-rosbag2-compression (0.26.11-1noble.20261105.125924 ROS noble:noble [amd64])
+Conf ros-jazzy-rosbag2-interfaces (0.26.11-1noble.20261105.053651 ROS noble:noble [amd64])
+Conf ros-jazzy-rosbag2-transport (0.26.11-1noble.20261105.140846 ROS noble:noble [amd64])
+Conf ros-jazzy-rosbag2-py (0.26.11-1noble.20261105.145218 ROS noble:noble [amd64])
+Conf ros-jazzy-rosbag2-storage-mcap (0.26.11-1noble.20261105.125916 ROS noble:noble [amd64])
+Conf ros-jazzy-rosbag2-storage-sqlite3 (0.26.11-1noble.20261105.125937 ROS noble:noble [amd64])
+Conf ros-jazzy-rosbag2-storage-default-plugins (0.26.11-1noble.20261105.162013 ROS noble:noble [amd64])
+Conf ros-jazzy-ros2bag (0.26.11-1noble.20261105.163929 ROS noble:noble [amd64])
+Conf ros-jazzy-rosbag2-compression-zstd (0.26.11-1noble.20261105.162045 ROS noble:noble [amd64])
+Conf ros-jazzy-rosbag2 (0.26.11-1noble.20261105.164454 ROS noble:noble [amd64])
+Conf ros-jazzy-ros-base (0.11.0-1noble.20261105.164630 ROS noble:noble [amd64])
+Conf ros-jazzy-rqt-gui (1.6.4-1noble.20261105.101724 ROS noble:noble [amd64])
+Conf ros-jazzy-rqt-gui-py (1.6.4-1noble.20261105.125541 ROS noble:noble [amd64])
+Conf ros-jazzy-rqt-py-common (1.6.4-1noble.20261105.101733 ROS noble:noble [amd64])
+Conf ros-jazzy-rqt-console (2.2.2-1noble.20261105.140530 ROS noble:noble [amd64])
+Conf ros-jazzy-rqt-msg (1.5.3-1noble.20261105.145319 ROS noble:noble [amd64])
+Conf ros-jazzy-rqt-action (2.2.1-1noble.20261105.151031 ROS noble:noble [amd64])
+Conf ros-jazzy-rqt-bag (1.5.6-1noble.20261105.145912 ROS noble:noble [amd64])
+Conf ros-jazzy-rqt-plot (1.4.5-1noble.20261105.141055 ROS noble:noble [amd64])
+Conf ros-jazzy-rqt-bag-plugins (1.5.6-1noble.20261105.164632 ROS noble:noble [amd64])
+Conf ros-jazzy-rqt-graph (1.5.6-1noble.20261105.151049 ROS noble:noble [amd64])
+Conf ros-jazzy-image-transport (5.1.8-1noble.20261105.094051 ROS noble:noble [amd64])
+Conf ros-jazzy-qt-gui-cpp (2.7.6-1noble.20261031.123115 ROS noble:noble [amd64])
+Conf ros-jazzy-rqt-gui-cpp (1.6.4-1noble.20261105.103039 ROS noble:noble [amd64])
+Conf ros-jazzy-rqt-image-view (1.3.0-2noble.20261105.103701 ROS noble:noble [amd64])
+Conf ros-jazzy-rqt-publisher (1.7.3-1noble.20261105.145422 ROS noble:noble [amd64])
+Conf ros-jazzy-rqt-py-console (1.2.3-1noble.20261105.145451 ROS noble:noble [amd64])
+Conf ros-jazzy-rqt-reconfigure (1.6.4-1noble.20261105.145406 ROS noble:noble [amd64])
+Conf ros-jazzy-rqt-service-caller (1.2.2-1noble.20261105.152429 ROS noble:noble [amd64])
+Conf ros-jazzy-rqt-shell (1.2.3-1noble.20261105.152407 ROS noble:noble [amd64])
+Conf ros-jazzy-rqt-srv (1.2.3-1noble.20261105.151046 ROS noble:noble [amd64])
+Conf ros-jazzy-rqt-topic (1.7.5-1noble.20261105.145229 ROS noble:noble [amd64])
+Conf ros-jazzy-rqt-common-plugins (1.2.0-4noble.20261105.164757 ROS noble:noble [amd64])
+Conf ros-jazzy-gz-cmake-vendor (0.0.12-1noble.20261025.230435 ROS noble:noble [amd64])
+Conf ros-jazzy-gz-utils-vendor (0.0.5-1noble.20261025.230754 ROS noble:noble [amd64])
+Conf ros-jazzy-gz-math-vendor (0.0.11-1noble.20261025.231053 ROS noble:noble [amd64])
+Conf ros-jazzy-interactive-markers (2.5.5-1noble.20261105.105736 ROS noble:noble [amd64])
+Conf ros-jazzy-laser-geometry (2.7.2-1noble.20261105.092219 ROS noble:noble [amd64])
+Conf ros-jazzy-map-msgs (2.4.1-2noble.20261105.061819 ROS noble:noble [amd64])
+Conf ros-jazzy-point-cloud-transport (4.0.10-1noble.20261105.094227 ROS noble:noble [amd64])
+Conf ros-jazzy-resource-retriever (3.4.4-1noble.20261031.121912 ROS noble:noble [amd64])
+Conf ros-jazzy-rviz-rendering (14.1.24-1noble.20261031.122134 ROS noble:noble [amd64])
+Conf ros-jazzy-rviz-common (14.1.24-1noble.20261105.104010 ROS noble:noble [amd64])
+Conf ros-jazzy-rviz-default-plugins (14.1.24-1noble.20261105.110836 ROS noble:noble [amd64])
+Conf ros-jazzy-rviz2 (14.1.24-1noble.20261105.153247 ROS noble:noble [amd64])
+Conf ros-jazzy-teleop-twist-joy (2.6.5-1noble.20261105.115428 ROS noble:noble [amd64])
+Conf ros-jazzy-teleop-twist-keyboard (2.4.1-1noble.20261105.090256 ROS noble:noble [amd64])
+Conf ros-jazzy-topic-monitor (0.33.11-1noble.20261105.091249 ROS noble:noble [amd64])
+Conf ros-jazzy-turtlesim (1.8.4-1noble.20261105.103213 ROS noble:noble [amd64])
+Conf ros-jazzy-desktop (0.11.0-1noble.20261105.164848 ROS noble:noble [amd64])
+Conf ros-jazzy-pcl-ros (2.6.5-1noble.20261105.110956 ROS noble:noble [amd64])
+Conf snapd (2.78+ubuntu24.04 Ubuntu:24.04/noble-updates [amd64])
+Conf cloud-init (26.2-0ubuntu1~24.04.2 Ubuntu:24.04/noble-updates [all])
+Conf tailscale (1.104.7 Tailscale:pkgs.tailscale.com [amd64])

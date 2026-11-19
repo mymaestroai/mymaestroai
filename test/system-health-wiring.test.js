@@ -34,6 +34,12 @@ test('brief: a critical problem is a HEALTH line to raise at the start of the ne
   assert.match(l[1], /^- Health warning: This computer's clock isn't synced\. A wrong clock breaks schedules\. Turn on automatic time\. Mention it/);
 });
 
+test('brief: the Node.js item gives no health line (the SECURITY line already covers Node.js)', async () => {
+  const l = healthLines(await brief(() => [{ id: 'health-node', level: 'warn', title: 'Node.js v22.1.0 is missing security fixes', detail: '', fix: '', since: null }, WARN]));
+  assert.equal(l.length, 1);
+  assert.doesNotMatch(l[0], /Node\.js/);
+});
+
 test('brief: the health lines sit right after the SECURITY line, before the Software line', async () => {
   const t = await brief(() => [CRIT]);
   const ls = t.split('\n');
