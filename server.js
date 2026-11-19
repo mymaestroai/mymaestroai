@@ -202,6 +202,19 @@ const PORT = parseInt(process.env.PORT || '8888', 10);
 // Security check (lib/security-check): the hub reviews its own security configuration (Settings → Security check,
 // GET /api/security-check, nightly). Wired with how this process actually listens.
 function securityCheck() { return require('./lib/security-check').getSecurityCheck({ exposed: () => !!BIND.exposed, port: PORT, host: HOST }); }
+// Component watch (lib/component-watch): the software the hub relies on (the Codex client, the Claude client), what is
+// installed and what is out; one instance, made with the hub's deps (is Codex in use; which Claude client a pending
+// My Maestro update would bring) and started once after the server listens (GET /api/components, Settings → Status).
+let _componentWatch = null;
+function componentWatch() {
+  if (!_componentWatch) {
+    _componentWatch = require('./lib/component-watch').createComponentWatch({
+      codexInUse: () => require('./lib/sdk-chat').codexInUse(),
+      claudeOffered: () => require('./lib/claude-offered').claudeOffered({ root: __dirname, updateStatus: () => require('./lib/update-check').getUpdateCheck().status(null) }),
+    });
+  }
+  return _componentWatch;
+}
 /** The step-up: this signed-in account's password (and two-factor code when the account has it) from a request body.
  *  Returns null when right, else the message to show. Used by the backup routes and the module permission routes. */
 function accountStepUp(user, b, ip) {
@@ -235,6 +248,7 @@ const MAX_BODY_SIZE = 50 * 1024 * 1024; // 50MB to accommodate large screenshot 
 const localModels = () => require('./lib/local-models').getLocalModels();
 // The lead agent's per-turn brief about this hub (lib/hub-map): needs the port and the exposure decision.
 require('./lib/hub-map').getHubMap().init({ port: PORT, host: HOST, exposed: () => !!BIND.exposed, setupNeeded: () => isSetupNeeded() });
+require('./lib/hub-map').getHubMap().init({ components: () => componentWatch().items() });   // the brief reads this server's component watch
 
 // Model health cache (populated by /api/models/health and /api/models/test)
 const _modelHealthCache = {};
@@ -1488,6 +1502,28 @@ async function handleHttpRequest(req, res) {
       return jsonResponse(res, result.success ? 200 : 400, result);
     }
 
+    // /api/agents/:name/model-offer: the newer (or stronger) model on offer for this agent, or null (lib/model-offers-service)
+    // Admins only, like the settings page itself (the access gate classifies both model-offer routes as admin routes).
+    if (/^\/api\/agents\/([^/]+)\/model-offer$/.test(pathname) && req.method === 'GET') {
+      if (!req.hubService && !access.isAdmin(req.hubUser)) return jsonResponse(res, 403, { error: 'admin_only' });
+      let name; try { name = decodeURIComponent(pathname.split('/')[3]); } catch { return jsonResponse(res, 400, { error: 'bad agent name' }); }
+      const o = await require('./lib/model-offers-service').getModelOffers().offerFor(name);
+      if (!o) return jsonResponse(res, 200, { offer: null });
+      return jsonResponse(res, 200, { offer: { from: o.from, to: o.to, kind: o.kind, why: o.why, route: o.route, cost: o.cost } });
+    }
+
+    // /api/agents/:name/model-offer/decline: "Not now" (admin only); the model must be the current offer
+    if (/^\/api\/agents\/([^/]+)\/model-offer\/decline$/.test(pathname) && req.method === 'POST') {
+      if (!req.hubService && !access.isAdmin(req.hubUser)) return jsonResponse(res, 403, { error: 'admin_only' });
+      let name; try { name = decodeURIComponent(pathname.split('/')[3]); } catch { return jsonResponse(res, 400, { error: 'bad agent name' }); }
+      let body; try { body = JSON.parse(await readBody(req)); } catch { return jsonResponse(res, 400, { error: 'invalid JSON' }); }
+      const svc = require('./lib/model-offers-service').getModelOffers();
+      const o = await svc.offerFor(name);
+      if (!o || !body || o.to !== body.model) return jsonResponse(res, 409, { error: 'That suggestion is no longer current.' });
+      const r = svc.decline(name, o.to);
+      return r && r.ok ? jsonResponse(res, 200, { ok: true }) : jsonResponse(res, 500, { error: (r && r.error) || 'Could not save.' });
+    }
+
     // /api/agents/:name/display
     if (/^\/api\/agents\/([^/]+)\/display$/.test(pathname) && req.method === 'POST') {
       const name = pathname.split('/')[3];
@@ -2142,6 +2178,22 @@ async function handleHttpRequest(req, res) {
       });
       if (r) return jsonResponse(res, r.status, r.body);
     }
+    // ── Component watch (lib/component-watch): admin-only (the route class above). GET the items and the Codex setting,
+    // POST /check looks now (a look only: updates run on the schedule or with the button), POST /codex/update starts the
+    // Codex client update and answers 202 at once (409 when it is refused at once); the outcome is the item's lastUpdate. ──
+    if (pathname === '/api/components' && req.method === 'GET') {
+      return jsonResponse(res, 200, { items: componentWatch().items(), setting: { codex: (hubSettings.getSetting('componentUpdates', {}) || {}).codex || 'auto' } });
+    }
+    if (pathname === '/api/components/check' && req.method === 'POST') {
+      try { await componentWatch().check({ reason: 'manual', allowUpdate: false }); } catch (e) { return jsonResponse(res, 500, { error: e.message }); }
+      return jsonResponse(res, 200, { items: componentWatch().items() });
+    }
+    if (pathname === '/api/components/codex/update' && req.method === 'POST') {
+      const can = componentWatch().canUpdateCodexNow();
+      if (!can || !can.ok) return jsonResponse(res, 409, { ok: false, error: (can && can.error) || 'the update did not run' });
+      componentWatch().updateCodexNow().catch((e) => console.warn(`[component-watch] Codex update failed: ${e && e.message}`));   // not awaited: it takes minutes
+      return jsonResponse(res, 202, { started: true });
+    }
     // ── Memory health (lib/memory-health): admin-only. GET answers with the last result while it is under 26 hours old
     // (else checks now); run checks now. Nightly from the schedule at start.
     if (pathname === '/api/memory-health' && req.method === 'GET') {
@@ -2702,6 +2754,8 @@ async function handleHttpRequest(req, res) {
           // Share links: enabled, defaultHours, maxHours (hard maximum 168), merged onto the stored value (lib/share-links cleanSettings).
           if (patch && patch.shareLinks !== undefined) patch.shareLinks = require('./lib/share-links').cleanSettings(patch.shareLinks, hubSettings.getSetting('shareLinks'));
           if (patch && patch.showReasoning !== undefined) patch.showReasoning = patch.showReasoning !== false;
+          if (patch && patch.modelOffers !== undefined) patch.modelOffers = patch.modelOffers !== false;
+          if (patch && patch.componentUpdates !== undefined) patch.componentUpdates = { codex: ['auto', 'notify', 'off'].includes(patch.componentUpdates && patch.componentUpdates.codex) ? patch.componentUpdates.codex : 'auto' };
           if (patch && patch.walletLockedNotice !== undefined) patch.walletLockedNotice = patch.walletLockedNotice !== false;
           // Workers allowed at once per AI service: integers 1..32 only (lib/provider-pacing); applied to the running hub below.
           if (patch && patch.workersAtOnce !== undefined) patch.workersAtOnce = require('./lib/provider-pacing').cleanWorkersAtOnce(patch.workersAtOnce);
@@ -3837,6 +3891,9 @@ server.listen(PORT, HOST, () => {
   // Update check: a look at GitHub soon after start and then daily; admins get the "Update available" card and one
   // push per new version (lib/update-check.js; Settings → Updates turns it off, HUB_UPDATE_CHECK_HOURS=0 too).
   try { require('./lib/update-check').getUpdateCheck().start(); } catch (e) { console.warn(`[update-check] ${e.message}`); }
+
+  // Component watch: a look at the software the hub relies on soon after start and then on its own schedule (lib/component-watch).
+  try { componentWatch().start(); } catch (e) { console.warn(`[component-watch] ${e.message}`); }
 
   // Detached jobs: reconcile jobs that ended while the hub was down, announce them, start polling.
   try { const jr = getJobRunner().start(); console.log(`[jobs] runner started (${jr.mode()}; ${jr.list(null).filter(j => j.status === 'running').length} running)`); }

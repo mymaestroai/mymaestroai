@@ -311,7 +311,7 @@ test('the section is drawn after Memory in the Status group, for admins only, wi
     'class="st-test-btn" id="st-sc-run"', 'Run checks', 'After every start', 'type="time" id="st-sc-at"', 'Kinds of agent', 'placeholder="auto"', 'auto picks the cheapest Claude model.',
     'onclick="saveSelfCheckSettings()">Save', 'You hear about it only when something fails.']) assert.ok(sec.includes(s), s);
   assert.match(src, /ST_GROUPS|stSum/, 'settings source loaded');
-  assert.ok(/id: 'status'[^\n]*'st-memory-section', 'st-selfcheck-section', 'st-updates-section'/.test(app), 'in the Status group');
+  assert.ok(/id: 'status'[^\n]*'st-memory-section', 'st-selfcheck-section', 'st-components-section', 'st-updates-section'/.test(app), 'in the Status group');
 });
 
 test('narrow screens: the rows wrap and long reasons break', () => {
