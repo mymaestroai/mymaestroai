@@ -1255,6 +1255,136 @@ function noteCtxReading(name, g) {
 // Claude plan usage in the chat header for agents on the Claude subscription (admins; GET /api/plan-usage on load,
 // every 10 minutes and on plan events): the weekly window that governs the open agent's model.
 let planUsageLast = null;
+let codexUsageLast = null;   // GET /api/codex-usage (the ChatGPT plan), admins only
+let subsOnFlag = true;       // the setting subscriptionUsage (on unless false)
+// ── subscriptions helpers (begin) ──
+// Pure: the usage bars of Settings -> Subscriptions and the chat-header ChatGPT badge. Same text in app.js and mobile.js.
+function subsWhen(iso) {
+  const t = Date.parse(iso || '');
+  return Number.isFinite(t) ? new Date(Math.round(t / 60000) * 60000).toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : '';
+}
+function subsLevels(l) {
+  const a = (Array.isArray(l) ? l : []).map(Number).filter(n => Number.isFinite(n));
+  return a.length ? a : [75, 90];
+}
+function subsColor(pct, reached, levels) {
+  const lv = subsLevels(levels);
+  const first = lv[0], last = lv[lv.length - 1];
+  return reached || pct >= 100 ? '#d4588b' : pct >= last ? '#d95926' : pct >= first ? '#c9a227' : '#3987e5';
+}
+function subsBarHtml(label, pct, metaText, color, expired) {
+  const p = Math.max(0, Math.min(100, Math.round(Number(pct) || 0)));
+  const shown = expired ? 0 : p;
+  return `<div class="subs-bar"><span class="subs-label">${escapeHtml(label)}</span><span class="subs-meta">${escapeHtml(metaText)}</span>` +
+    `<div class="subs-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${shown}" aria-label="${escapeHtml(label)}">` +
+    `<div class="subs-fill" style="width:${shown}%;background:${color}"></div></div></div>`;
+}
+function subsClaudeRows(snap) {
+  const out = [];
+  const w = (snap && snap.windows) || {};
+  const models = (snap && snap.models) || {};
+  const add = (label, x) => { if (x && x.utilization != null) out.push({ label, pct: Math.round(Number(x.utilization) || 0), resetsAt: x.resets_at, rejected: !!x.rejected }); };
+  add('5-hour', w.five_hour);
+  add('Weekly, all models', w.seven_day);
+  if (!models.opus) add('Weekly, Opus', w.seven_day_opus);
+  if (!models.sonnet) add('Weekly, Sonnet', w.seven_day_sonnet);
+  for (const k of Object.keys(models)) add(`Weekly, ${models[k].display_name || k}`, models[k]);
+  return out;
+}
+function subsCodexRows(snap) {
+  const out = [];
+  const limits = (snap && Array.isArray(snap.limits)) ? snap.limits : [];
+  for (const l of limits) {
+    const lname = l.label || l.name || l.id || 'Codex';
+    const wins = (Array.isArray(l.windows) ? l.windows : []).slice().sort((a, b) => (Number(a.minutes) || 0) - (Number(b.minutes) || 0));
+    for (const x of wins) {
+      const wl = String(x.label || 'usage');
+      out.push({ label: limits.length > 1 ? `${lname}, ${wl}` : wl.charAt(0).toUpperCase() + wl.slice(1), pct: Math.round(Number(x.usedPercent) || 0), resetsAt: x.resetsAt, expired: !!x.expired, reached: !!l.reached });
+    }
+  }
+  return out;
+}
+function subsReachedLines(snap) {
+  const lines = [];
+  for (const l of ((snap && snap.limits) || [])) {
+    if (!l.reached) continue;
+    const t = `ChatGPT plan limit reached until ${subsWhen(l.reachedUntil) || 'it resets'}`;
+    if (!lines.includes(t)) lines.push(t);
+  }
+  return lines;
+}
+function subsWindowsHtml(claudeSnap, codexSnap, opts) {
+  const o = opts || {};
+  if (o.on === false) return '';
+  const now = Number.isFinite(Number(o.now)) ? Number(o.now) : Date.now();
+  let html = '';
+  if (claudeSnap) {
+    const lv = subsLevels(o.levels || (claudeSnap.warn && claudeSnap.warn.at));
+    const rows = subsClaudeRows(claudeSnap);
+    html += `<div class="subs-block"><div class="subs-head">Claude${claudeSnap.subscription ? ` (${escapeHtml(claudeSnap.subscription)})` : ''}</div>`;
+    html += rows.length ? rows.map(r => subsBarHtml(r.label, r.pct, `${r.pct}% used · ${r.rejected ? 'refused until' : 'resets'} ${subsWhen(r.resetsAt) || 'the reset'}`, subsColor(r.pct, r.rejected, lv))).join('') : '<div class="subs-note">No reading yet.</div>';
+    if (claudeSnap.fetchedAt) html += `<div class="subs-note">Read ${escapeHtml(subsWhen(claudeSnap.fetchedAt))}</div>`;
+    if (claudeSnap.error) html += `<div class="subs-note subs-err">${escapeHtml(String(claudeSnap.error).slice(0, 200))}</div>`;
+    html += '</div>';
+  }
+  const hasReading = !!(codexSnap && (codexSnap.readAt || (codexSnap.limits || []).length));
+  if (codexSnap && (o.codexAgents || hasReading)) {
+    const lv = subsLevels(o.levels || (codexSnap.warn && codexSnap.warn.at));
+    const rows = subsCodexRows(codexSnap);
+    html += `<div class="subs-block"><div class="subs-head">ChatGPT${codexSnap.planType ? ` (${escapeHtml(codexSnap.planType)})` : ''}</div>`;
+    for (const t of subsReachedLines(codexSnap)) html += `<div class="subs-note subs-reached">${escapeHtml(t)}</div>`;
+    html += rows.map(r => subsBarHtml(r.label, r.pct, r.expired ? `Reset at ${subsWhen(r.resetsAt) || 'the reset'}; no reading since` : `${r.pct}% used · resets ${subsWhen(r.resetsAt) || 'the reset'}`, subsColor(r.pct, r.reached, lv), r.expired)).join('');
+    const t = Date.parse(codexSnap.readAt || '');
+    if (!codexSnap.readAt || !Number.isFinite(t)) html += '<div class="subs-note">No reading yet. Codex reports it during its turns, or press Read now.</div>';
+    else html += `<div class="subs-note">${now - t < 30 * 60000 ? 'Read' : 'Last seen'} ${escapeHtml(subsWhen(codexSnap.readAt))}</div>`;
+    const rc = Number(codexSnap.resetCredits);
+    if (rc > 0) html += `<div class="subs-note">${rc} reset credit${rc === 1 ? '' : 's'} available</div>`;
+    if (codexSnap.error) html += `<div class="subs-note subs-err">${escapeHtml(String(codexSnap.error).slice(0, 200))}</div>`;
+    html += '</div>';
+  }
+  return html;
+}
+function codexBadge(snap, levels, now) {
+  if (!snap || !snap.readAt) return null;
+  const lv = subsLevels(levels || (snap.warn && snap.warn.at));
+  const t0 = Number.isFinite(Number(now)) ? Number(now) : Date.now();
+  const all = [];
+  let reachedLimit = null;
+  for (const l of (snap.limits || [])) {
+    if (l.reached && !reachedLimit) reachedLimit = l;
+    for (const w of (l.windows || [])) all.push(w);
+  }
+  if (!reachedLimit && !all.some(w => !w.expired)) return null;
+  const pctOf = (w) => Math.round(Number(w.usedPercent) || 0);
+  const live = all.filter(w => !w.expired);
+  const weekly = live.filter(w => w.weekly);
+  const best = (a) => a.reduce((x, y) => (pctOf(y) > pctOf(x) ? y : x));
+  let main = weekly.length ? best(weekly) : null;
+  if (!main && live.length) main = live.reduce((x, y) => ((Number(y.minutes) || 0) > (Number(x.minutes) || 0) ? y : x));
+  const age = t0 - Date.parse(snap.readAt);
+  const seen = age > 30 * 60000 ? `; last seen ${subsWhen(snap.readAt)}` : '';
+  if (reachedLimit) {
+    const when = subsWhen(reachedLimit.reachedUntil);
+    return { text: 'ChatGPT limit reached', cls: 'refused', title: `ChatGPT plan limit reached until ${when || 'it resets'}${seen}` };
+  }
+  const pct = pctOf(main);
+  let text = main.weekly ? `ChatGPT ${pct}%` : `ChatGPT ${main.label || 'usage'} ${pct}%`;
+  const shorts = live.filter(w => w.short && w !== main && pctOf(w) > 50);
+  if (shorts.length) { const s = best(shorts); text += ` · ${String(s.label || '5-hour').replace(/-hour$/, 'h')} ${pctOf(s)}%`; }
+  const passed = lv.filter(l => pct >= l);
+  const cls = pct >= 100 ? 'refused' : passed.length && passed.length === lv.length ? 'hot' : passed.length ? 'warn' : '';
+  const when = subsWhen(main.resetsAt) || 'the reset';
+  const title = (main.weekly ? `ChatGPT plan: ${pct}% of this week's allowance, resets ${when}` : `ChatGPT plan: ${pct}% of the ${main.label || 'usage'} allowance, resets ${when}`) + seen;
+  return { text, cls, title };
+}
+// ── subscriptions helpers (end) ──
+const subsEnabled = () => subsOnFlag !== false && !(codexUsageLast && codexUsageLast.enabled === false);
+async function refreshCodexUsage() {
+  try {
+    const r = await api('/api/codex-usage');
+    if (r.ok) { codexUsageLast = await r.json(); if (codexUsageLast && typeof codexUsageLast.enabled === 'boolean') subsOnFlag = codexUsageLast.enabled; }
+  } catch { /* the hub is restarting: the next round asks again */ }
+}
 async function refreshPlanUsage() {
   if (!isAdmin()) return;
   clearTimeout(refreshPlanUsage.timer);
@@ -1264,6 +1394,7 @@ async function refreshPlanUsage() {
     if (r.status === 403) return;
     if (r.ok) planUsageLast = await r.json(); else next = 30000;
   } catch { next = 30000; }
+  await refreshCodexUsage();
   // No reading yet (the hub just started): ask again every 15 s for up to 2 minutes.
   if (!planUsageLast || !planUsageLast.fetchedAt) { refreshPlanUsage.tries = (refreshPlanUsage.tries || 0) + 1; if (refreshPlanUsage.tries <= 8) next = Math.min(next, 15000); }
   else refreshPlanUsage.tries = 0;
@@ -1296,6 +1427,15 @@ function planFamilyOf(model) {
 function paintPlan() {
   const el = $('chat-plan'); if (!el) return;
   const d = planUsageLast; const a = agentByName(current); const model = String((a && a.model) || '');
+  if (/^codex-cli\//.test(model)) {   // a ChatGPT-plan agent: the ChatGPT reading (when the setting is on and one exists)
+    const b = subsEnabled() ? codexBadge(codexUsageLast, null, Date.now()) : null;
+    if (!b) { el.hidden = true; el.textContent = ''; return; }
+    el.textContent = b.text;
+    el.className = 'sub' + (b.cls ? ' ' + b.cls : '');
+    el.title = b.title;
+    el.hidden = false;
+    return;
+  }
   const fam = planFamilyOf(model);
   const wins = d && /^claude-sdk\//.test(model) ? (d.weekly || []).filter(w => w.utilization != null && (w.family == null || (fam && w.family === fam))) : [];
   if (!wins.length) { el.hidden = true; el.textContent = ''; return; }
@@ -1303,6 +1443,8 @@ function paintPlan() {
   const levels = (d.warn && Array.isArray(d.warn.at)) ? d.warn.at : [];
   const { pct, extra, cls } = planState(w, levels);
   el.textContent = `${w.family ? w.label : 'Plan'} ${planPctText(w, levels)}`;
+  const five = d.windows && d.windows.five_hour;
+  if (subsEnabled() && five && five.utilization != null && Number(five.utilization) > 50) el.textContent += ` · 5h ${Math.round(Number(five.utilization))}%`;
   el.className = 'sub' + (cls ? ' ' + cls : '');
   el.title = extra
     ? `${w.family ? w.label : 'All models'}: the weekly Claude plan is used up until ${Number.isFinite(Date.parse(w.resetsAt || '')) ? new Date(w.resetsAt).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : 'the reset'}; extra usage is paying`
@@ -12212,6 +12354,13 @@ function connectEvents() {
   on('plan_limit', () => refreshPlanUsage());
   on('plan_extra_usage', () => refreshPlanUsage());
   on('plan_warning', () => refreshPlanUsage());
+  // The ChatGPT plan (lib/codex-usage): its warnings lead to the Subscriptions sheet; new readings repaint the header and the sheet.
+  on('plan_warning', (ev) => {
+    if (!ev || ev.provider !== 'chatgpt' || !isAdmin()) return;
+    const when = subsWhen(ev.resetsAt);
+    toast(ev.reached ? `ChatGPT plan limit reached until ${when || 'it resets'}` : `ChatGPT plan: ${Math.round(Number(ev.utilization) || 0)}% of this week's allowance (resets ${when || 'the reset'})`, 8000, openSubsSheet);
+  });
+  on('codex_usage', (ev) => { if (!ev || !isAdmin()) return; codexUsageLast = ev; paintPlan(); paintSubsSheet(); });
   // (Re)connected: whatever happened to the open chat's turn meanwhile comes from the hub's turn view.
   source.onopen = () => { esLastEventAt = Date.now(); reattachCheckAll(); catchUpOpenAgent(); };
   // A dead session closes the stream with no status code: probe an API call, which redirects to /login on 401.
@@ -12848,6 +12997,7 @@ function wire() {
   $('menu-workers').addEventListener('click', () => openWorkerSheet('history'));
   $('menu-wallet')?.addEventListener('click', openWalletSheet);   // ?.: a phone page cached from before has no menu entry
   $('menu-memory')?.addEventListener('click', openMemorySheet);   // a phone page cached from before this line has no menu entry
+  $('menu-subs')?.addEventListener('click', openSubsSheet);       // likewise
   $('chat-workers-btn').addEventListener('click', () => openWorkerSheet('list'));
   $('menu-compact').addEventListener('click', compressNow);
   $('files-upload-input').addEventListener('change', (e) => { filesUpload(e.target.files); e.target.value = ''; });
@@ -13016,7 +13166,9 @@ async function loadMe() {
     if (r.ok) {
       hubMe = await r.json();
       if (window.hubSimple) { try { window.hubSimple.apply(hubMe); } catch { /* the page stays as it is */ } }   // Simple mode and theme classes on <html>
-      { const ti = $('menu-tiger'); if (ti) ti.hidden = !(hubMe && hubMe.isAdmin === true); }   // the menu's Tiger Teams link: admins only (the page and its API are admin-only)
+      { const ti = $('menu-tiger'); if (ti) ti.hidden = !(hubMe && hubMe.isAdmin === true); }
+      // (the Tiger Teams link above: admins only, the page and its API are admin-only; likewise the Subscriptions entry)
+      { const su = $('menu-subs'); if (su) su.hidden = !(hubMe && hubMe.isAdmin === true); }
       if (typeof simpleMenuHide === 'function') simpleMenuHide();   // "Switch to Simple" only for a real account (not the legacy single-password login)
       if (typeof simpleToggleSync === 'function') simpleToggleSync();   // the Simple view switch (and Simple's theme button) only for a real account
       // Signed in: recorded-call pieces the hub never acknowledged (a closed app, a reload, a dead network) are sent now, one at a time (lib/ui-voice-call.js).
@@ -13192,6 +13344,82 @@ function paintMemorySheet() {
   if (!flagged.length) body.appendChild(wkEl('div', 'mh-item', d.checkedAt ? 'Every agent is fine.' : 'Not checked yet.'));
   body.appendChild(wkEl('div', 'mh-foot', 'The details are under Settings → Status → Memory on a computer.'));
   body.scrollTop = scroll;
+}
+
+// Subscriptions (menu): the same switch and usage bars as Settings -> Subscriptions on a computer. Admins only.
+function subsSheet() {
+  let sh = $('subs-sheet');
+  if (sh) return sh;
+  sh = document.createElement('div');
+  sh.id = 'subs-sheet';
+  sh.className = 'rsn-sheet mh-sheet subs-sheet';
+  sh.setAttribute('role', 'dialog');
+  sh.setAttribute('aria-modal', 'true');
+  sh.setAttribute('aria-label', 'Subscriptions');
+  sh.dataset.noDirty = '';
+  sh.innerHTML = '<div class="rsn-sheet-head"><span class="rsn-sheet-title">Subscriptions</span><span class="rsn-sheet-count"></span>' +
+    '<button type="button" class="rsn-sheet-close" aria-label="Close">&#x2715;</button></div><div class="mh-body subs-body" tabindex="-1"></div>' +
+    '<div class="subs-foot"><button type="button" class="subs-close">Close</button></div>';
+  const close = () => { sh.classList.remove('open'); dialogGuard.closed(sh); };
+  sh.querySelector('.rsn-sheet-close').addEventListener('click', close);
+  sh.querySelector('.subs-close').addEventListener('click', close);
+  sh.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); } });
+  sh.addEventListener('change', (e) => { if (e.target && e.target.id === 'subs-on') saveSubsOn(e.target.checked); });
+  sh.addEventListener('click', (e) => { const b = e.target.closest && e.target.closest('[data-subs-read]'); if (b) subsReadNow(b.dataset.subsRead); });
+  sh.closeSheet = close;
+  document.body.appendChild(sh);
+  return sh;
+}
+function openSubsSheet() {
+  $('menu').classList.remove('open');
+  const sh = subsSheet();
+  if (!sh.classList.contains('open')) { sh.classList.add('open'); dialogGuard.open(sh, { close: sh.closeSheet }); }
+  paintSubsSheet();
+  (async () => {
+    if (!planUsageLast) { try { const r = await api('/api/plan-usage'); if (r.ok) planUsageLast = await r.json(); } catch { /* shown as no reading */ } }
+    await refreshCodexUsage();
+    paintSubsSheet();
+    const t = codexUsageLast && codexUsageLast.readAt ? Date.parse(codexUsageLast.readAt) : NaN;
+    if (subsOnFlag && (!Number.isFinite(t) || Date.now() - t > 30 * 60000)) subsReadNow('codex');   // the hub allows one read a minute
+  })();
+}
+function paintSubsSheet(msg) {
+  const sh = $('subs-sheet');
+  if (!sh || !sh.classList.contains('open')) return;
+  const body = sh.querySelector('.subs-body');
+  const keep = body.querySelector('.subs-msg');
+  const text = msg !== undefined ? msg : (keep ? keep.textContent : '');
+  const codexAgents = (typeof agents !== 'undefined' && Array.isArray(agents) ? agents : []).some(a => a && /^codex-cli\//.test(String(a.model || '')));
+  const scroll = body.scrollTop;
+  body.innerHTML = `<label class="subs-switch"><input type="checkbox" id="subs-on" ${subsOnFlag ? 'checked' : ''}> <span>Subscription usage</span></label>` +
+    `<div class="subs-hint">${escapeHtml("Shows how much of each subscription's allowance is used, in Settings, the chat header and your lead's notes. Free: no turns are spent to read it.")}</div>` +
+    (subsOnFlag ? subsWindowsHtml(planUsageLast, codexUsageLast, { now: Date.now(), codexAgents }) +
+      '<div class="subs-actions"><button type="button" data-subs-read="claude">Read now (Claude)</button><button type="button" data-subs-read="codex">Read now (ChatGPT)</button></div>' : '') +
+    `<div class="subs-msg subs-err">${escapeHtml(text)}</div>`;
+  body.scrollTop = scroll;
+}
+async function subsReadNow(which) {
+  paintSubsSheet('Reading...');
+  let err = '';
+  try {
+    const r = await api(`/api/${which === 'claude' ? 'plan-usage' : 'codex-usage'}/refresh`, { method: 'POST' });
+    const d = await r.json().catch(() => ({}));
+    if (which === 'claude') { if (r.ok) planUsageLast = d; else err = d.error || r.status; }
+    else { if (d && d.snapshot) codexUsageLast = d.snapshot; if (!r.ok || d.ok === false) err = d.error || r.status; }
+  } catch (e) { err = e.message; }
+  paintPlan();
+  paintSubsSheet(err ? String(err).slice(0, 200) : '');
+}
+async function saveSubsOn(on) {
+  try {
+    const r = await api('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ subscriptionUsage: !!on }) });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || r.status);
+    subsOnFlag = !!on;
+    paintPlan();
+    paintSubsSheet('');
+    if (on) refreshCodexUsage().then(() => { paintPlan(); paintSubsSheet(); });
+  } catch (e) { paintSubsSheet(`Could not save: ${e.message}`); }
 }
 
 // Monthly API credit (set on the desktop, Settings → Spend): this period's spend through the hub against it.

@@ -3121,7 +3121,7 @@
       { id: 'status', title: '🩺 Status', sections: ['st-ready-section', 'st-health-section', 'st-sec-section', 'st-memory-section', 'st-selfcheck-section', 'st-components-section', 'st-updates-section'] },
       { id: 'security', title: '🔐 Security', sections: ['st-security-section'] },
       { id: 'backups', title: '💾 Backups', sections: ['st-backups-section'] },
-      { id: 'models', title: '🧠 AI models', sections: ['st-prov-section', 'st-or-section', 'st-plan-section', 'st-local-models-section', 'st-classifier-section'] },
+      { id: 'models', title: '🧠 AI models', sections: ['st-prov-section', 'st-or-section', 'st-subs-section', 'st-plan-section', 'st-local-models-section', 'st-classifier-section'] },
       { id: 'agents', title: '🤖 Agents', sections: ['st-defaults-section', 'st-workers-section', 'st-sb-section', 'st-lb-section', 'st-mp-section', 'st-approvals-section', 'st-chat-section'] },
       { id: 'notify', title: '🔔 Notifications', sections: ['st-notify-section'] },
       { id: 'tools', title: '🧰 Tools and data', sections: ['st-ws-section', 'st-voice-section', 'st-cx-section', 'st-modules-section'] },
@@ -3626,6 +3626,15 @@
         </div>
         <div class="st-hint" style="margin-left:158px">An agent other than the lead runs root commands only while you have granted it root on its settings page (Tool policy → Root). Active grants are listed here with a revoke button; they expire on their own.</div>
       </div>`;
+      // Subscriptions: how much of the Claude and ChatGPT plans' allowances is used (read for free, no turns spent).
+      subsOnFlag = data.subscriptionUsage !== false;
+      html += `<div class="st-section" id="st-subs-section"><h4>Subscriptions</h4>
+        <div class="st-row"><label style="flex-basis:150px">Subscription usage</label><label class="toggle-switch"><input type="checkbox" id="st-subs-on" ${subsOnFlag ? 'checked' : ''} onchange="saveSubsOn(this.checked)"><span class="toggle-slider"></span></label><span id="st-subs-state" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px"></span></div>
+        <div class="st-hint">Shows how much of each subscription's allowance is used, in Settings, the chat header and your lead's notes. Free: no turns are spent to read it.</div>
+        <div id="st-subs-body"></div>
+      </div>`;
+      loadSubsBox.asked = false;   // one automatic read each time the section opens
+      setTimeout(loadSubsBox, 0);
       // Claude plan (lib/plan-usage): the subscription's usage windows, warning levels, and every Claude agent's model.
       html += `<div class="st-section" id="st-plan-section"><h4>Claude plan</h4>
         <div class="st-hint">The hub reads your Claude subscription's usage every 10 minutes. When a weekly allowance passes a warning level you get a notice in the sidebar, a toast, a push to your phone and one line in each affected agent's next reply; then you choose each agent's model, here or in its chat header.</div>
@@ -5461,6 +5470,150 @@
     // allowance is past the first warning level; the Settings box shows the windows, the levels, the optional automatic
     // switch, and a model picker for every agent on the Claude client. ──
     let planLast = null;
+    let codexLast = null;       // GET /api/codex-usage (the ChatGPT plan), admins only
+    let subsOnFlag = true;      // the setting subscriptionUsage (on unless false)
+    // ── subscriptions helpers (begin) ──
+    // Pure: the usage bars of Settings -> Subscriptions and the chat-header ChatGPT badge. Same text in app.js and mobile.js.
+    function subsWhen(iso) {
+      const t = Date.parse(iso || '');
+      return Number.isFinite(t) ? new Date(Math.round(t / 60000) * 60000).toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : '';
+    }
+    function subsLevels(l) {
+      const a = (Array.isArray(l) ? l : []).map(Number).filter(n => Number.isFinite(n));
+      return a.length ? a : [75, 90];
+    }
+    function subsColor(pct, reached, levels) {
+      const lv = subsLevels(levels);
+      const first = lv[0], last = lv[lv.length - 1];
+      return reached || pct >= 100 ? '#d4588b' : pct >= last ? '#d95926' : pct >= first ? '#c9a227' : '#3987e5';
+    }
+    function subsBarHtml(label, pct, metaText, color, expired) {
+      const p = Math.max(0, Math.min(100, Math.round(Number(pct) || 0)));
+      const shown = expired ? 0 : p;
+      return `<div class="subs-bar"><span class="subs-label">${escapeHtml(label)}</span><span class="subs-meta">${escapeHtml(metaText)}</span>` +
+        `<div class="subs-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${shown}" aria-label="${escapeHtml(label)}">` +
+        `<div class="subs-fill" style="width:${shown}%;background:${color}"></div></div></div>`;
+    }
+    function subsClaudeRows(snap) {
+      const out = [];
+      const w = (snap && snap.windows) || {};
+      const models = (snap && snap.models) || {};
+      const add = (label, x) => { if (x && x.utilization != null) out.push({ label, pct: Math.round(Number(x.utilization) || 0), resetsAt: x.resets_at, rejected: !!x.rejected }); };
+      add('5-hour', w.five_hour);
+      add('Weekly, all models', w.seven_day);
+      if (!models.opus) add('Weekly, Opus', w.seven_day_opus);
+      if (!models.sonnet) add('Weekly, Sonnet', w.seven_day_sonnet);
+      for (const k of Object.keys(models)) add(`Weekly, ${models[k].display_name || k}`, models[k]);
+      return out;
+    }
+    function subsCodexRows(snap) {
+      const out = [];
+      const limits = (snap && Array.isArray(snap.limits)) ? snap.limits : [];
+      for (const l of limits) {
+        const lname = l.label || l.name || l.id || 'Codex';
+        const wins = (Array.isArray(l.windows) ? l.windows : []).slice().sort((a, b) => (Number(a.minutes) || 0) - (Number(b.minutes) || 0));
+        for (const x of wins) {
+          const wl = String(x.label || 'usage');
+          out.push({ label: limits.length > 1 ? `${lname}, ${wl}` : wl.charAt(0).toUpperCase() + wl.slice(1), pct: Math.round(Number(x.usedPercent) || 0), resetsAt: x.resetsAt, expired: !!x.expired, reached: !!l.reached });
+        }
+      }
+      return out;
+    }
+    function subsReachedLines(snap) {
+      const lines = [];
+      for (const l of ((snap && snap.limits) || [])) {
+        if (!l.reached) continue;
+        const t = `ChatGPT plan limit reached until ${subsWhen(l.reachedUntil) || 'it resets'}`;
+        if (!lines.includes(t)) lines.push(t);
+      }
+      return lines;
+    }
+    function subsWindowsHtml(claudeSnap, codexSnap, opts) {
+      const o = opts || {};
+      if (o.on === false) return '';
+      const now = Number.isFinite(Number(o.now)) ? Number(o.now) : Date.now();
+      let html = '';
+      if (claudeSnap) {
+        const lv = subsLevels(o.levels || (claudeSnap.warn && claudeSnap.warn.at));
+        const rows = subsClaudeRows(claudeSnap);
+        html += `<div class="subs-block"><div class="subs-head">Claude${claudeSnap.subscription ? ` (${escapeHtml(claudeSnap.subscription)})` : ''}</div>`;
+        html += rows.length ? rows.map(r => subsBarHtml(r.label, r.pct, `${r.pct}% used · ${r.rejected ? 'refused until' : 'resets'} ${subsWhen(r.resetsAt) || 'the reset'}`, subsColor(r.pct, r.rejected, lv))).join('') : '<div class="subs-note">No reading yet.</div>';
+        if (claudeSnap.fetchedAt) html += `<div class="subs-note">Read ${escapeHtml(subsWhen(claudeSnap.fetchedAt))}</div>`;
+        if (claudeSnap.error) html += `<div class="subs-note subs-err">${escapeHtml(String(claudeSnap.error).slice(0, 200))}</div>`;
+        html += '</div>';
+      }
+      const hasReading = !!(codexSnap && (codexSnap.readAt || (codexSnap.limits || []).length));
+      if (codexSnap && (o.codexAgents || hasReading)) {
+        const lv = subsLevels(o.levels || (codexSnap.warn && codexSnap.warn.at));
+        const rows = subsCodexRows(codexSnap);
+        html += `<div class="subs-block"><div class="subs-head">ChatGPT${codexSnap.planType ? ` (${escapeHtml(codexSnap.planType)})` : ''}</div>`;
+        for (const t of subsReachedLines(codexSnap)) html += `<div class="subs-note subs-reached">${escapeHtml(t)}</div>`;
+        html += rows.map(r => subsBarHtml(r.label, r.pct, r.expired ? `Reset at ${subsWhen(r.resetsAt) || 'the reset'}; no reading since` : `${r.pct}% used · resets ${subsWhen(r.resetsAt) || 'the reset'}`, subsColor(r.pct, r.reached, lv), r.expired)).join('');
+        const t = Date.parse(codexSnap.readAt || '');
+        if (!codexSnap.readAt || !Number.isFinite(t)) html += '<div class="subs-note">No reading yet. Codex reports it during its turns, or press Read now.</div>';
+        else html += `<div class="subs-note">${now - t < 30 * 60000 ? 'Read' : 'Last seen'} ${escapeHtml(subsWhen(codexSnap.readAt))}</div>`;
+        const rc = Number(codexSnap.resetCredits);
+        if (rc > 0) html += `<div class="subs-note">${rc} reset credit${rc === 1 ? '' : 's'} available</div>`;
+        if (codexSnap.error) html += `<div class="subs-note subs-err">${escapeHtml(String(codexSnap.error).slice(0, 200))}</div>`;
+        html += '</div>';
+      }
+      return html;
+    }
+    function codexBadge(snap, levels, now) {
+      if (!snap || !snap.readAt) return null;
+      const lv = subsLevels(levels || (snap.warn && snap.warn.at));
+      const t0 = Number.isFinite(Number(now)) ? Number(now) : Date.now();
+      const all = [];
+      let reachedLimit = null;
+      for (const l of (snap.limits || [])) {
+        if (l.reached && !reachedLimit) reachedLimit = l;
+        for (const w of (l.windows || [])) all.push(w);
+      }
+      if (!reachedLimit && !all.some(w => !w.expired)) return null;
+      const pctOf = (w) => Math.round(Number(w.usedPercent) || 0);
+      const live = all.filter(w => !w.expired);
+      const weekly = live.filter(w => w.weekly);
+      const best = (a) => a.reduce((x, y) => (pctOf(y) > pctOf(x) ? y : x));
+      let main = weekly.length ? best(weekly) : null;
+      if (!main && live.length) main = live.reduce((x, y) => ((Number(y.minutes) || 0) > (Number(x.minutes) || 0) ? y : x));
+      const age = t0 - Date.parse(snap.readAt);
+      const seen = age > 30 * 60000 ? `; last seen ${subsWhen(snap.readAt)}` : '';
+      if (reachedLimit) {
+        const when = subsWhen(reachedLimit.reachedUntil);
+        return { text: 'ChatGPT limit reached', cls: 'refused', title: `ChatGPT plan limit reached until ${when || 'it resets'}${seen}` };
+      }
+      const pct = pctOf(main);
+      let text = main.weekly ? `ChatGPT ${pct}%` : `ChatGPT ${main.label || 'usage'} ${pct}%`;
+      const shorts = live.filter(w => w.short && w !== main && pctOf(w) > 50);
+      if (shorts.length) { const s = best(shorts); text += ` · ${String(s.label || '5-hour').replace(/-hour$/, 'h')} ${pctOf(s)}%`; }
+      const passed = lv.filter(l => pct >= l);
+      const cls = pct >= 100 ? 'refused' : passed.length && passed.length === lv.length ? 'hot' : passed.length ? 'warn' : '';
+      const when = subsWhen(main.resetsAt) || 'the reset';
+      const title = (main.weekly ? `ChatGPT plan: ${pct}% of this week's allowance, resets ${when}` : `ChatGPT plan: ${pct}% of the ${main.label || 'usage'} allowance, resets ${when}`) + seen;
+      return { text, cls, title };
+    }
+    // ── subscriptions helpers (end) ──
+    const subsEnabled = () => subsOnFlag !== false && !(codexLast && codexLast.enabled === false);
+    const subsIsCodex = (model) => String(model || '').startsWith('codex-cli/');
+    function openSubsSettings() { return openSettingsAt('st-subs-section'); }
+    /** The ChatGPT weekly window past the first warning level that most needs attention, or null. */
+    function codexTopWarning() {
+      if (!codexLast || !subsEnabled()) return null;
+      const lv = subsLevels(codexLast.warn && codexLast.warn.at);
+      let top = null;
+      for (const w of (codexLast.weekly || [])) {
+        const pct = Math.round(Number(w.usedPercent) || 0);
+        if ((w.reached || pct >= lv[0]) && (!top || pct > top.pct)) top = { pct, label: w.label, resetsAt: w.resetsAt, reached: !!w.reached };
+      }
+      return top;
+    }
+    /** A plan_warning for the ChatGPT plan: a brief notice that leads to Settings -> Subscriptions. */
+    function subsPlanWarning(ev) {
+      if (!ev || ev.provider !== 'chatgpt' || (window.hubMe && !window.hubMe.isAdmin)) return;
+      const when = subsWhen(ev.resetsAt) || 'the reset';
+      const text = ev.reached ? `ChatGPT plan limit reached until ${subsWhen(ev.resetsAt) || 'it resets'}` : `ChatGPT plan: ${Math.round(Number(ev.utilization) || 0)}% of this week's allowance (resets ${when})`;
+      hubToast(text, 8000, () => openSubsSettings());
+    }
     const planWhen = (iso) => { const t = Date.parse(iso || ''); return Number.isFinite(t) ? new Date(Math.round(t / 60000) * 60000).toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : 'the reset'; };
     /** The window most in need of attention: { label, utilization, resetsAt, level } or null when none passed a level. */
     function planTopWarning(d) {
@@ -5488,13 +5641,30 @@
       // (up to 2 minutes) instead of waiting 10 minutes with nothing to show.
       if (!planLast || !planLast.fetchedAt) { refreshPlanChip.tries = (refreshPlanChip.tries || 0) + 1; if (refreshPlanChip.tries <= 8) next = Math.min(next, 15000); }
       else refreshPlanChip.tries = 0;
+      await refreshCodexUsage();
       paintPlanChip(); paintPlanBadges();
       refreshPlanChip.timer = setTimeout(refreshPlanChip, next);
+    }
+    async function refreshCodexUsage() {
+      try {
+        const r = await fetch('/api/codex-usage', { credentials: 'include' });
+        if (r.ok) { codexLast = await r.json(); if (codexLast && codexLast.enabled === false) subsOnFlag = false; else if (codexLast && codexLast.enabled === true) subsOnFlag = true; }
+      } catch { /* the hub is restarting: the next round asks again */ }
     }
     function paintPlanChip() {
       const el = document.getElementById('plan-warn');
       if (!el) return;
       const top = planTopWarning(planLast);
+      const ctop = codexTopWarning();
+      el.onclick = () => openPlanSettings();
+      if (ctop && !(top && Number(top.utilization) >= ctop.pct)) {
+        el.classList.add('on');
+        el.textContent = `⚠ ChatGPT ${ctop.pct}%`;
+        el.classList.toggle('hot', ctop.reached || ctop.pct >= 100);
+        el.title = ctop.reached ? `Your ChatGPT plan limit is reached until ${subsWhen(ctop.resetsAt) || 'it resets'}. Click for the subscriptions.` : `Your ChatGPT plan has used ${ctop.pct}% of this week's allowance (resets ${subsWhen(ctop.resetsAt) || 'the reset'}). Click for the subscriptions.`;
+        el.onclick = () => openSubsSettings();
+        return;
+      }
       el.classList.toggle('on', !!top);
       if (!top) { el.textContent = ''; return; }
       if (top.extraUsage && !top.rejected) {
@@ -5543,10 +5713,24 @@
       for (const [id, chat] of Object.entries(chats)) {
         const el = document.getElementById(`plan-badge-${id}`);
         if (!el) continue;
+        el.onclick = () => openPlanSettings();
+        if (chat && !chat.isGroup && chat.agent && subsIsCodex(chatModelOf(chat))) {
+          const b = subsEnabled() ? codexBadge(codexLast, null, Date.now()) : null;
+          if (!b) { el.hidden = true; el.textContent = ''; continue; }
+          el.textContent = b.text;
+          el.className = 'plan-badge' + (b.cls ? ' ' + b.cls : '');
+          el.title = `${b.title}. Click for the subscriptions (Settings → Subscriptions).`;
+          el.onclick = () => openSubsSettings();
+          el.hidden = false;
+          continue;
+        }
         const w = chat && !chat.isGroup && chat.agent ? planWindowFor(chatModelOf(chat)) : null;
         if (!w) { el.hidden = true; el.textContent = ''; continue; }
         const { pct, extra, cls } = planState(w, levels);
         el.textContent = `${w.family ? w.label : 'Plan'} ${planPctText(w, levels)} this week`;
+        const fiveW = planLast.windows && planLast.windows.five_hour;
+        const five5 = subsEnabled() && fiveW && fiveW.utilization != null && Number(fiveW.utilization) > 50 ? Math.round(Number(fiveW.utilization)) : null;
+        if (five5 != null) el.textContent += ` · 5h ${five5}%`;
         el.className = 'plan-badge' + (cls ? ' ' + cls : '');
         const all = (planLast.weekly || []).find(x => x.family == null);
         const five = planLast.windows && planLast.windows.five_hour;
@@ -5559,6 +5743,56 @@
     async function openPlanSettings() {
       await openSettingsAt('st-plan-section');
     }
+    // Settings -> Subscriptions: the switch, then (when on) a Claude block and a ChatGPT block of usage bars.
+    function paintSubsBox() {
+      const body = document.getElementById('st-subs-body');
+      if (!body) return;
+      const box = document.getElementById('st-subs-on');
+      if (box && box.checked !== subsOnFlag) box.checked = subsOnFlag;
+      if (!subsOnFlag) { body.innerHTML = ''; return; }
+      const codexAgents = (typeof AGENTS !== 'undefined' && Array.isArray(AGENTS) ? AGENTS : []).some(a => subsIsCodex(a && a.model));
+      body.innerHTML = subsWindowsHtml(planLast, codexLast, { now: Date.now(), codexAgents })
+        + `<div class="st-row"><button class="st-test-btn" onclick="subsReadNow('claude')">Read now (Claude)</button><button class="st-test-btn" style="margin-left:8px" onclick="subsReadNow('codex')">Read now (ChatGPT)</button><span id="st-subs-read-state" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px"></span></div>`;
+    }
+    async function subsReadNow(which) {
+      const st = document.getElementById('st-subs-read-state');
+      if (st) st.textContent = 'Reading…';
+      let err = '';
+      try {
+        const r = await fetch(`/api/${which === 'claude' ? 'plan-usage' : 'codex-usage'}/refresh`, { method: 'POST', credentials: 'include' });
+        const d = await r.json().catch(() => ({}));
+        if (which === 'claude') { if (r.ok) planLast = d; else err = d.error || r.status; }
+        else { if (d && d.snapshot) codexLast = d.snapshot; if (!r.ok || d.ok === false) err = d.error || r.status; }
+      } catch (e) { err = e.message; }
+      paintPlanChip(); paintPlanBadges(); paintSubsBox();
+      const st2 = document.getElementById('st-subs-read-state');
+      if (st2) st2.textContent = err ? String(err).slice(0, 200) : '';
+    }
+    async function loadSubsBox() {
+      if (!document.getElementById('st-subs-body')) return;
+      if (!planLast) { try { const r = await fetch('/api/plan-usage', { credentials: 'include' }); if (r.ok) planLast = await r.json(); } catch { /* shown as no reading */ } }
+      await refreshCodexUsage();
+      paintSubsBox();
+      const t = codexLast && codexLast.readAt ? Date.parse(codexLast.readAt) : NaN;
+      if (subsOnFlag && (!Number.isFinite(t) || Date.now() - t > 30 * 60000) && !loadSubsBox.asked) { loadSubsBox.asked = true; subsReadNow('codex'); }
+    }
+    async function saveSubsOn(on) {
+      const st = document.getElementById('st-subs-state');
+      const box = document.getElementById('st-subs-on');
+      try {
+        const r = await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ subscriptionUsage: !!on }) });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(d.error || r.status);
+        subsOnFlag = !!on;
+        if (st) st.textContent = '';
+        paintSubsBox(); paintPlanBadges();
+        if (document.getElementById('st-plan-section')) loadPlanBox();   // the Claude plan box draws its bars only while this is off
+        if (on) loadSubsBox();
+      } catch (e) {
+        if (box) box.checked = !on;
+        if (st) st.textContent = `Could not save: ${e.message}`;
+      }
+    }
     async function loadPlanBox(readNow = false) {
       const usageEl = document.getElementById('st-plan-usage');
       if (!usageEl) return;
@@ -5570,7 +5804,7 @@
         d = await r.json();
         if (!r.ok) throw new Error(d.error || r.status);
       } catch (e) { usageEl.textContent = `Could not read the plan: ${e.message}`; if (state) state.textContent = ''; return; }
-      planLast = d; paintPlanChip(); paintPlanBadges();
+      planLast = d; paintPlanChip(); paintPlanBadges(); paintSubsBox();
       const worst = (d.weekly || []).reduce((a, w) => (Number(w.utilization) || 0) > (a ? Number(a.utilization) || 0 : -1) ? w : a, null);
       stSum('models', 'plan', worst ? `${worst.family ? worst.label : 'Claude plan'} ${Math.round(Number(worst.utilization) || 0)}% this week` : '');
       if (state) state.textContent = d.fetchedAt ? `read ${new Date(d.fetchedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : (d.error ? `last read failed: ${String(d.error).slice(25, 140)}` : '');
@@ -5581,7 +5815,10 @@
       if (five && five.utilization != null) rows.push({ label: '5-hour window', utilization: five.utilization, resetsAt: five.resets_at, extraUsage: !!five.extraUsage && !five.rejected });
       for (const w of (d.weekly || [])) rows.push({ label: w.family ? `${w.label} (weekly)` : 'All models (weekly)', utilization: w.utilization, resetsAt: w.resetsAt, rejected: w.rejected, extraUsage: !!w.extraUsage && !w.rejected, weekly: true });
       const extraRow = rows.find(w => w.extraUsage && w.weekly);   // the hint speaks of the weekly plan
-      usageEl.innerHTML = rows.length ? rows.map(w => {
+      // The usage bars live in one place: Settings → Subscriptions, above. Only with Subscription usage turned off are
+      // they drawn here, as before that section existed.
+      if (subsEnabled() && document.getElementById('st-subs-section')) usageEl.innerHTML = d.error && !rows.length ? `No reading yet: ${esc(String(d.error).slice(25, 200))}` : 'The usage of each window is shown under Subscriptions, above.';
+      else usageEl.innerHTML = rows.length ? rows.map(w => {
         const pct = Math.round(Number(w.utilization) || 0);
         const color = w.extraUsage ? '#c9a227' : w.rejected || pct >= 100 ? '#d4588b' : (w.weekly && pct >= last) ? '#d95926' : (w.weekly && pct >= first) ? '#c9a227' : '#3987e5';
         return `<div style="display:flex;align-items:center;gap:10px;margin:3px 0"><span style="flex-basis:150px;flex-shrink:0">${esc(w.label)}</span><span style="width:140px;height:6px;background:var(--border);border-radius:3px;overflow:hidden;flex-shrink:0"><span style="display:block;height:100%;width:${Math.min(pct, 100)}%;background:${color}"></span></span><b style="color:${color};min-width:44px">${esc(planPctText(w))}</b><span style="color:var(--text-dim)">${w.rejected ? 'refused until ' : 'resets '}${esc(planWhen(w.resetsAt))}</span></div>`;
@@ -9915,7 +10152,9 @@
       // badge next to each Claude agent's model, the sidebar chip, and the Settings box.
       source.addEventListener('plan_limit', e => { const ev = parse(e); if (!ev) return; refreshPlanChip(); if (document.getElementById('st-plan-section')) loadPlanBox(); });
       source.addEventListener('plan_extra_usage', e => { const ev = parse(e); if (!ev) return; refreshPlanChip(); if (document.getElementById('st-plan-section')) loadPlanBox(); });
-      source.addEventListener('plan_warning', e => { const ev = parse(e); if (!ev) return; refreshPlanChip(); if (document.getElementById('st-plan-section')) loadPlanBox(); });
+      source.addEventListener('plan_warning', e => { const ev = parse(e); if (!ev) return; refreshPlanChip(); subsPlanWarning(ev); if (document.getElementById('st-plan-section')) loadPlanBox(); });
+      // The ChatGPT plan's usage (lib/codex-usage): the payload is the snapshot; the badges, the chip and the Subscriptions box repaint.
+      source.addEventListener('codex_usage', e => { const ev = parse(e); if (!ev || (window.hubMe && !window.hubMe.isAdmin)) return; codexLast = ev; paintPlanChip(); paintPlanBadges(); paintSubsBox(); });
       // Data connectors: a connector or group changed (saved, locked, unlocked, expired); repaint the Settings box.
       source.addEventListener('connectors_changed', e => { const ev = parse(e); if (ev) onConnectorsChanged(ev); });
       // (Re)connected: what happened to followed turns meanwhile comes from the hub's turn view.
@@ -9979,10 +10218,12 @@
       hubToast(busy ? `Re-synced with the hub, following ${chat.display || chat.agent}'s turn` : 'Re-synced with the hub');
     }
 
-    function hubToast(text, ms = 3000) {
+    function hubToast(text, ms = 3000, onTap = null) {
       let t = document.getElementById('hub-toast');
       if (!t) { t = document.createElement('div'); t.id = 'hub-toast'; document.body.appendChild(t); }
       t.textContent = text;
+      t.onclick = onTap ? () => { t.classList.remove('on'); onTap(); } : null;   // a notice that leads somewhere
+      t.style.cursor = onTap ? 'pointer' : '';
       t.classList.add('on');
       clearTimeout(hubToast.timer);
       hubToast.timer = setTimeout(() => t.classList.remove('on'), ms);

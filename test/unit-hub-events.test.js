@@ -82,9 +82,10 @@ test('replay on reconnect honours the member filter; a fresh client gets hello o
   const member = fakeRes();
   hub.subscribe({ headers: { 'last-event-id': '1' } }, member, memberOpts(['ann_doc']));
   const f = frames(member);
-  assert.deepStrictEqual(f.map(x => x.event), ['hub_halted', 'turn_end', 'hello', 'status_snapshot'], 'missed events first (agent-less ones are replayed to everyone), then hello');
-  assert.deepStrictEqual({ ...f[2].data, boot: undefined }, { lastId: 4, replayed: true, boot: undefined }); assert.ok(typeof f[2].data.boot === 'string' && f[2].data.boot, 'hello carries the boot id');
-  assert.strictEqual(member.chunks[0].split('\n')[0], 'id: 3', 'frames carry the event id');
+  // the live rule: hub-wide (agent-less) events go to admins only, on reconnect too
+  assert.deepStrictEqual(f.map(x => x.event), ['turn_end', 'hello', 'status_snapshot'], 'missed events the member may see first, then hello');
+  assert.deepStrictEqual({ ...f[1].data, boot: undefined }, { lastId: 4, replayed: true, boot: undefined }); assert.ok(typeof f[1].data.boot === 'string' && f[1].data.boot, 'hello carries the boot id');
+  assert.strictEqual(member.chunks[0].split('\n')[0], 'id: 4', 'frames carry the event id');
   const freshRes = fakeRes();
   hub.subscribe({ headers: {} }, freshRes, adminOpts);
   assert.deepStrictEqual(frames(freshRes).map(x => x.event), ['hello', 'status_snapshot']);
@@ -229,4 +230,23 @@ test('status_snapshot: statusView maps the snapshot; without it the visibleAgent
 test('the module exports a shared instance that is a working hub', () => {
   assert.strictEqual(typeof shared.publish, 'function');
   assert.strictEqual(shared.clientCount(), 0);
+});
+
+test('replay follows the live rule: a member reconnecting gets no hub-wide event; an admin and the hub itself get them all', () => {
+  const { hub } = make();
+  hub.publish('turn_start', { agent: 'maestro', turnId: 'x' });                      // id 1 (the reconnect resumes after it)
+  hub.publish('plan_warning', { provider: 'chatgpt', utilization: 80, level: 75 });   // id 2, hub-wide (no agent)
+  hub.publish('approval_request', { id: 'ap_1', tool: 'Bash' });                     // id 3, hub-wide
+  hub.publish('turn_start', { agent: 'ann_doc', turnId: 'a' });                      // id 4, the member's agent
+  hub.publish('turn_start', { agent: 'maestro', turnId: 'b' });                      // id 5, someone else's agent
+  const replayed = (res) => frames(res).map(x => x.event).filter(e => e !== 'hello' && e !== 'status_snapshot');
+  const member = fakeRes();
+  hub.subscribe({ headers: { 'last-event-id': '1' } }, member, memberOpts(['ann_doc']));
+  assert.deepStrictEqual(replayed(member), ['turn_start'], 'only the member\'s own agent event; no plan warning, no approval');
+  const admin = fakeRes();
+  hub.subscribe({ headers: { 'last-event-id': '1' } }, admin, adminOpts);
+  assert.deepStrictEqual(replayed(admin), ['plan_warning', 'approval_request', 'turn_start', 'turn_start']);
+  const self = fakeRes();
+  hub.subscribe({ headers: { 'last-event-id': '1' } }, self, null);
+  assert.deepStrictEqual(replayed(self), ['plan_warning', 'approval_request', 'turn_start', 'turn_start']);
 });
