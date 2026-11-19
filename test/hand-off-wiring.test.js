@@ -22,7 +22,7 @@ function fakeRunner() {
   return {
     calls,
     create: async (o) => { calls.push(['create', o]); return { id: 'ho-0000abcd', target: o.target, topic: o.topic, state: 'queued', folder: '/files/scout/hand-offs/lead-site' }; },
-    list: (caller, o) => { calls.push(['list', caller, o]); return [{ id: 'ho-0000abcd', target: 'scout', topic: 'site', state: 'running', folder: '/f', turns: 2, queuedNotes: 1, status: 'Step 3 of 5\nnext: tests' }, { id: 'ho-0000abce', target: 'scout', topic: 'other', state: 'done', folder: '/g', turns: 1, queuedNotes: 0, status: null }]; },
+    listWithStatus: async (caller, o) => { calls.push(['listWithStatus', caller, o]); return [{ id: 'ho-0000abcd', target: 'scout', topic: 'site', state: 'running', folder: '/f', turns: 2, queuedNotes: 1, status: 'Step 3 of 5\nnext: tests' }, { id: 'ho-0000abce', target: 'scout', topic: 'other', state: 'done', folder: '/g', turns: 1, queuedNotes: 0, status: null }]; },
     note: (o) => { calls.push(['note', o]); return { id: o.id, target: 'scout', state: 'running', queuedNotes: 0 }; },
     cancel: (o) => { calls.push(['cancel', o]); return { id: o.id, target: 'scout', topic: 'site', folder: '/f', state: 'cancelled' }; },
   };
@@ -50,14 +50,14 @@ test('hand_off_list, hand_off_note, hand_off_cancel: plain text from the runner,
   const r = fakeRunner();
   const d = { runner: r, mayTarget: async () => true };
   const list = await tools.runTool('hand_off_list', { include_done: 'true' }, 'lead', d);
-  assert.deepEqual(r.calls[0], ['list', 'lead', { includeDone: true, withStatus: true }]);
+  assert.deepEqual(r.calls[0], ['listWithStatus', 'lead', { includeDone: true }]);
   assert.match(list, /ho-0000abcd to scout: "site", running, 2 steps so far, 1 note waiting\./);
   assert.match(list, /STATUS\.md:\n {4}Step 3 of 5\n {4}next: tests/);
   assert.match(list, /ho-0000abce to scout: "other", done, 1 step so far\.\n {2}Folder: \/g\n {2}STATUS\.md: not written yet\./);
   assert.match(await tools.runTool('hand_off_note', { id: ' ho-0000abcd ', text: 'use blue' }, 'lead', d), /Note delivered to scout/);
   assert.deepEqual(r.calls[1], ['note', { caller: 'lead', id: 'ho-0000abcd', text: 'use blue' }]);
   assert.match(await tools.runTool('hand_off_cancel', { id: 'ho-0000abcd' }, 'lead', d), /^Cancelled ho-0000abcd \("site"\): scout's running step was stopped/);
-  assert.match(await tools.runTool('hand_off_list', {}, 'lead', { ...d, runner: { ...r, list: () => [] } }), /^No hand-offs\.$/);
+  assert.match(await tools.runTool('hand_off_list', {}, 'lead', { ...d, runner: { ...r, listWithStatus: async () => [] } }), /^No hand-offs\.$/);
   assert.equal(tools.jsonSchema(tools.TOOL_SPECS[0]).required.join(','), 'agent,topic,brief');
   assert.deepEqual(tools.jsonSchema(tools.TOOL_SPECS[1]).required, []);
 });
@@ -211,8 +211,40 @@ test('review r2: a held task (after a restore, waiting on the owner) still count
 });
 
 test('review r3: a continuation is authorised before its turn starts; skill tools stay out of a hand-off turn', () => {
-  assert.match(SDK, /\(handOff \? Promise\.resolve\(\)\.then\(\(\) => getHandOffRunner\(\)\.mayContinue\(handOff, agentName\)\)\.catch\(\(\) => false\) : Promise\.resolve\(true\)\)\.then\(\(ok\) => \{\n\s+if \(!ok\) \{[^\n]*resolve\(\); \} if \(onReply\) onReply\(''\); return; \}\n\s+handleChatStream\(/);
+  assert.match(SDK, /\(handOff \? Promise\.resolve\(\)\.then\(\(\) => getHandOffRunner\(\)\.mayContinue\(handOff, agentName\)\)\.catch\(\(\) => false\) : Promise\.resolve\(true\)\)\.then\(\(ok\) => \{\n\s+if \(!ok\) \{[^\n]*resolve\(\); \} reply\(''\); return; \}\n\s+handleChatStream\(/);
   assert.match(SDK, /if \(!handOffOfTurn\(agentName\)\) try \{\n\s+let exclude = null; try \{ exclude = connectorsLib\.getConnectors\(\)\.wrappedSkillIds\(\); \} catch \{\}\n\s+const skillResult = await getSkillTools/);
   // review r4: a throw in that step rejects the wake-up, never leaves it hanging
   assert.match(SDK, /\}\)\.catch\(\(e\) => \{ if \(!settled\) \{ settled = true; reject\(e\); \} \}\);   \/\/ review r4/);
+});
+
+test('wakeAgent: the reply callback runs once, even when it throws (the real function, run in a VM)', async () => {
+  const vm = require('vm');
+  const a = SDK.indexOf('function wakeAgent(');
+  assert.ok(a > 0);
+  const m = SDK.slice(a).match(/\n\}\n/);
+  const src = SDK.slice(a, a + m.index + 2);
+  const run = async ({ fail }) => {
+    const errors = [];
+    const ctx = {
+      console: { log() {}, error: (...x) => errors.push(x.join(' ')) },
+      Promise,
+      getHandOffRunner: () => ({ mayContinue: async () => true }),
+      handOffHook: () => {},
+      // a turn that is admitted, streams one chunk and ends
+      handleChatStream: async (body, sink) => { sink.writeHead(200); sink.write('data: ' + JSON.stringify({ choices: [{ delta: { content: 'done' } }] }) + '\n\n'); sink.end(); },
+    };
+    vm.createContext(ctx);
+    vm.runInContext(src + '\nthis.wakeAgent = wakeAgent;', ctx);
+    const calls = [];
+    const onReply = (t) => { calls.push(t); if (fail) throw new Error('reply handler broke'); };
+    await ctx.wakeAgent('scout', 'hello', onReply, null);
+    for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r));
+    return { calls, errors };
+  };
+  const ok = await run({ fail: false });
+  assert.deepEqual(ok.calls, ['done']);
+  const bad = await run({ fail: true });
+  assert.deepEqual(bad.calls, ['done'], 'a throwing reply handler is not called a second time');
+  assert.ok(bad.errors.some((e) => /reply handler for scout failed: reply handler broke/.test(e)));
+  assert.equal((src.match(/onReply\(/g) || []).length, 1, 'onReply is called only inside the guard');
 });

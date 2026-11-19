@@ -318,7 +318,8 @@ describe('run_job: hub wiring', () => {
     // hand-offs: a wake-up that is part of a hand-off runs at consult depth (test/hand-off-wiring.test.js)
     assert.match(src, /handleChatStream\(\{ agent: agentName, message, origin, exclude_tools: meta\?\.exclude_tools, \.\.\.\(handOff \? \{ consultation_depth: 1 \} : \{\}\) \}, sink\)/);
     assert.match(src, /notify: wakeAgent,\s*isAgentActive,/);
-    assert.match(src, /if \(onReply\) onReply\(chunks\.join\(''\)\)/, 'the woken agent\'s reply is captured for the hand-back');
+    // hand-offs: the reply callback goes through wakeAgent's once-only guard (test/hand-off-wiring.test.js runs it)
+    assert.match(src, /reply\(chunks\.join\(''\)\)/, 'the woken agent\'s reply is captured for the hand-back');
     assert.match(src, /consulted_by: coordinatorName \|\| undefined/, 'consultations carry the master');
     assert.equal((src.match(/consultedBy: consulted_by \|\| null/g) || []).length, 3, 'threaded to all three stream paths (gateway, Claude SDK, Codex CLI)');
     // member origin (test/member-origin.test.js): what a member's turn starts carries member

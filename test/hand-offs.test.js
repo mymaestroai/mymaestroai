@@ -741,7 +741,7 @@ test('r3: the job folder is made inside the Files folder and brief.md is never w
   assert.ok(fs.readFileSync(path.join(v.folder, 'brief.md'), 'utf8').startsWith('# Big Job'));
   const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'hand-offs.js'), 'utf8');
   assert.match(src, /fs\.writeFileSync\(`\/proc\/self\/fd\/\$\{cfd\}\/brief\.md`, briefText, \{ flag: 'wx' \}\);/);
-  assert.match(src, /if \(O_DIRECTORY === undefined \|\| !fs\.existsSync\('\/proc\/self\/fd'\)\) return null;/, 'no status read without /proc');
+  assert.match(src, /if \(!this\.procFd \|\| O_DIRECTORY === undefined\) return null;/, 'no status read through /proc without procFd');
 });
 
 test('r4: a note that can\'t be saved is not acknowledged; the framing names brief.md only when the hub wrote it', async () => {
@@ -755,16 +755,117 @@ test('r4: a note that can\'t be saved is not acknowledged; the framing names bri
   assert.doesNotMatch(framingMessage({ caller: 'sam', topic: 't', id: 'ho-1', brief: 'b', folder: '/f', notes: [], briefFile: false }), /brief\.md/);
 });
 
-test('r5: without /proc/self/fd the hub does nothing under the target\'s folder (it only names the folder), and the target is told to make it', () => {
-  const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'hand-offs.js'), 'utf8');
-  const a = src.indexOf('    if (!viaFd) {');
-  const b = src.indexOf('    } else {', a);
-  assert.ok(a > 0 && b > a);
-  const branch = src.slice(a, b);
-  assert.doesNotMatch(branch, /fs\.\w+\(/, 'no file operation in that branch');
-  assert.match(branch, /folder = path\.join\(parent, `\$\{caller\}-\$\{slug\}-\$\{id\.slice\(3\)\}`\);/);
-  const before = src.slice(src.indexOf('fs.mkdirSync(base, { recursive: true });'), a);
-  assert.doesNotMatch(before.replace('fs.mkdirSync(base, { recursive: true });', '').replace('fs.realpathSync(base)', '').replace("fs.existsSync('/proc/self/fd')", ''), /fs\.\w+\(/, 'only the Files folder itself before the branch');
+test('framingMessage: "make that folder first" only when the hub did not write brief.md (briefFile false)', () => {
   assert.match(framingMessage({ caller: 'sam', topic: 't', id: 'ho-1', brief: 'b', folder: '/f', notes: [], briefFile: false }), /make that folder first/);
   assert.doesNotMatch(framingMessage({ caller: 'sam', topic: 't', id: 'ho-1', brief: 'b', folder: '/f', notes: [], briefFile: true }), /make that folder first/);
 });
+
+test('r5: without /proc/self/fd (the folder helper): the job folder, brief.md and STATUS.md are made and read through the helper', async () => {
+  const env = setup({ procFd: false });
+  assert.strictEqual(env.h.procFd, false);
+  const v = await mk(env);
+  const folder = path.join(fs.realpathSync(env.files), 'lead', 'hand-offs', 'sam-big-job');
+  assert.strictEqual(v.folder, folder);
+  const md = fs.readFileSync(path.join(folder, 'brief.md'), 'utf8');
+  assert.match(md, /^# Big Job\n/);
+  assert.ok(md.includes('Do the thing'));
+  const r = env.h.get(v.id);
+  assert.strictEqual(r.briefFile, true);
+  assert.strictEqual(r.folder, folder);
+  const fm = framingMessage(r);
+  assert.match(fm, /brief\.md/);
+  assert.doesNotMatch(fm, /make that folder first/);
+  // STATUS.md: its text; a link instead of the file: null
+  assert.strictEqual((await env.h.listWithStatus('sam'))[0].status, null, 'not written yet');
+  fs.writeFileSync(path.join(folder, 'STATUS.md'), 'Step 2 of 4\nnext: tests');
+  assert.strictEqual((await env.h.listWithStatus('sam'))[0].status, 'Step 2 of 4\nnext: tests');
+  const secret = path.join(tmp(), 'secret.txt');
+  fs.writeFileSync(secret, 'SECRET');
+  fs.unlinkSync(path.join(folder, 'STATUS.md'));
+  fs.symlinkSync(secret, path.join(folder, 'STATUS.md'));
+  assert.strictEqual((await env.h.listWithStatus('sam'))[0].status, null);
+  // hand-offs replaced by a link: the hand-off is refused
+  const outside = tmp();
+  const parent = path.join(fs.realpathSync(env.files), 'lead', 'hand-offs');
+  fs.renameSync(parent, parent + '.old');
+  fs.symlinkSync(outside, parent);
+  await assert.rejects(mk(env, { topic: 'Other' }), /not a plain folder/);
+  assert.deepStrictEqual(fs.readdirSync(outside), []);
+});
+
+test('listWithStatus with /proc (procFd true) equals list(withStatus: true)', async () => {
+  const env = setup({ procFd: true });
+  env.active.add('lead');
+  const a = await mk(env);
+  await mk(env, { topic: 'Second' });
+  fs.writeFileSync(path.join(a.folder, 'STATUS.md'), 'half way');
+  const viaList = env.h.list('sam', { withStatus: true });
+  const viaNew = await env.h.listWithStatus('sam');
+  assert.deepStrictEqual(viaNew, viaList);
+  assert.ok(viaNew.some((v) => v.status === 'half way'));
+  assert.deepStrictEqual(await env.h.listWithStatus('sam', { includeDone: true }), env.h.list('sam', { includeDone: true, withStatus: true }));
+});
+
+test('listWithStatus without /proc: one helper run per Files folder; a failed or thrown helper gives status null, never a throw', async () => {
+  const env = setup({ procFd: true });
+  env.active.add('lead');
+  const a = await mk(env);
+  const b = await mk(env, { topic: 'Second' });
+  const nameA = path.basename(a.folder), nameB = path.basename(b.folder);
+  const reqs = [];
+  let mode = 'ok';
+  env.h.procFd = false;
+  env.h.folderHelper = {
+    plainName: () => true,
+    run: async (req) => {
+      reqs.push(req);
+      if (mode === 'throw') throw new Error('helper died');
+      if (mode === 'fail') return { ok: false };
+      return { ok: true, status: { [nameA]: 'status A', [nameB]: null } };
+    },
+  };
+  const rows = await env.h.listWithStatus('sam');
+  assert.strictEqual(reqs.length, 1, 'one helper run for both hand-offs of the same target');
+  assert.strictEqual(reqs[0].op, 'status');
+  assert.strictEqual(reqs[0].base, fs.realpathSync(path.join(env.files, 'lead')));
+  assert.deepStrictEqual([...reqs[0].names].sort(), [nameA, nameB].sort());
+  assert.ok(reqs[0].maxBytes > 0);
+  assert.strictEqual(rows.find((v) => v.id === a.id).status, 'status A');
+  assert.strictEqual(rows.find((v) => v.id === b.id).status, null);
+  mode = 'fail';
+  let out = await env.h.listWithStatus('sam');
+  assert.strictEqual(out.length, 2);
+  assert.ok(out.every((v) => v.status === null));
+  mode = 'throw';
+  out = await env.h.listWithStatus('sam');
+  assert.strictEqual(out.length, 2);
+  assert.ok(out.every((v) => v.status === null));
+});
+
+test('note() once only: a running note is saved as delivered before interject; a failed interject puts it back', async () => {
+  const env = setup();
+  const v = await mk(env);
+  await env.h.tick();
+  assert.strictEqual(env.h.get(v.id).state, 'running');
+  // every save after the first one fails: the note must already be on disk as delivered
+  const orig = env.h._save.bind(env.h);
+  let saves = 0;
+  env.h._save = () => (++saves === 1 ? orig() : false);
+  const out = env.h.note({ caller: 'sam', id: v.id, text: 'use blue' });
+  assert.strictEqual(env.interjected.length, 1, 'interject called once');
+  assert.strictEqual(saves, 1, 'no second save needed');
+  assert.strictEqual(out.queuedNotes, 0);
+  const saved = JSON.parse(fs.readFileSync(path.join(env.dataDir, 'hand-offs.json'), 'utf8'));
+  const rec = saved.items.find((r) => r.id === v.id);
+  const n = rec.notes.find((x) => x.text === 'use blue');
+  assert.strictEqual(n.delivered, true, 'on disk as delivered');
+  // interject fails: not delivered, in memory and in the view
+  env.h._save = orig;
+  env.interjectResult = false;
+  const out2 = env.h.note({ caller: 'sam', id: v.id, text: 'second' });
+  assert.strictEqual(env.h.get(v.id).notes[1].delivered, false);
+  assert.strictEqual(out2.queuedNotes, 1);
+  const saved2 = JSON.parse(fs.readFileSync(path.join(env.dataDir, 'hand-offs.json'), 'utf8'));
+  assert.strictEqual(saved2.items.find((r) => r.id === v.id).notes[1].delivered, false, 'and saved as not delivered');
+});
+
