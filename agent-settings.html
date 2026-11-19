@@ -448,6 +448,13 @@
   </div>
   <small id="team-role-help" style="color:#999;display:block;margin-top:4px;">A worker or challenger is listed to the other agents as a platform worker they can hand jobs to; a challenger is marked as the one to ask for adversarial reviews.</small>
   <div id="team-role-status" class="status"></div>
+  <div id="build-partner-row" style="display:flex;align-items:center;gap:8px;margin-top:14px;">
+    <label for="build-partner" style="margin:0;">Build partner</label>
+    <input id="build-partner" list="build-partner-list" placeholder="none" onchange="saveBuildPartner()" style="width:auto;min-width:10em;" autocomplete="off">
+    <datalist id="build-partner-list"></datalist>
+  </div>
+  <small id="build-partner-help" style="color:#999;display:block;margin-top:4px;">The agent that takes this one's long work (development, production, long research) with hand_off, so this one stays free to talk with you. Leave it empty for none.</small>
+  <div id="build-partner-status" class="status"></div>
   <div id="call-display-row" style="display:flex;align-items:center;gap:8px;margin-top:14px;flex-wrap:wrap;">
     <label for="call-display" style="margin:0;">Default call display</label>
     <select id="call-display" onchange="saveCallDisplay()" style="width:auto;">
@@ -533,6 +540,7 @@
     ['saveTier', 'tier-status', byId('tier-mode')],
     ['saveTeamGuidance', 'team-guidance-status', byId('team-guidance-mode')],
     ['saveTeamRole', 'team-role-status', byId('team-role')],
+    ['saveBuildPartner', 'build-partner-status', byId('build-partner')],
     ['saveCallDisplay', 'call-display-status', byId('call-display')],
     ['saveVoiceDefaults', 'voice-defaults-status', byId('voice-defaults', 'vd-pause', 'vd-wait', 'vd-sens', 'vd-speed')],
     ['saveAgentVoice', 'voice-status', byId('voice-select', 'voice-stt', 'voice-tts', 'voice-cloud-select', 'voice-cloud-id')],
@@ -551,7 +559,7 @@
   // changed again while its save runs, is saved once more when that save ends, with its newest value. A Save button
   // pressed again meanwhile is refused with a message: a queued run would read the fields only when it starts and could
   // also save edits made after the press, so those edits stay unsaved until Save is pressed again.
-  const SAVES_ON_CHANGE = new Set(['saveCategory', 'saveLead', 'saveOwner', 'saveShared', 'saveModel', 'saveAutoModel', 'saveSandbox', 'saveLockbox', 'saveLockboxEnv', 'saveEffort', 'saveTeamGuidance', 'saveTeamRole', 'saveTier', 'saveCallDisplay', 'saveVoiceDefaults', 'saveToolsMode', 'saveRecordings', 'saveAgentVoice']);
+  const SAVES_ON_CHANGE = new Set(['saveCategory', 'saveLead', 'saveOwner', 'saveShared', 'saveModel', 'saveAutoModel', 'saveSandbox', 'saveLockbox', 'saveLockboxEnv', 'saveEffort', 'saveTeamGuidance', 'saveTeamRole', 'saveBuildPartner', 'saveTier', 'saveCallDisplay', 'saveVoiceDefaults', 'saveToolsMode', 'saveRecordings', 'saveAgentVoice']);
   const pendingSaves = {};   // status id -> { commit, reload, fields, settled, again }
   for (const [fn, statusId, fields, how] of SAVES) {
     const orig = window[fn];
@@ -1155,6 +1163,25 @@
       else showStatus('team-role-status', 'error', (result && result.error) || 'Failed');
     } catch (e) { showStatus('team-role-status', 'error', e.message); }
   }
+  async function saveBuildPartner() {
+    const v = String(document.getElementById('build-partner').value || '').trim().toLowerCase();
+    try {
+      const result = await apiFetch(`/api/agents/${encodeURIComponent(agentName)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ buildPartner: v || null }) });
+      if (result && (result.success || result.ok)) showStatus('build-partner-status', 'success', v ? 'Saved: takes effect on the next turn' : 'Removed');
+      else showStatus('build-partner-status', 'error', (result && result.error) || 'Failed');
+    } catch (e) { showStatus('build-partner-status', 'error', e.message); }
+  }
+  // The other agents, offered as build partners (text only: option values, never markup).
+  async function loadBuildPartners(agent) {
+    const box = document.getElementById('build-partner'); if (box) box.value = agent?.buildPartner || '';
+    const list = document.getElementById('build-partner-list'); if (!list) return;
+    try {
+      const all = await apiFetch('/api/agents');
+      const names = (Array.isArray(all) ? all : (all && all.agents) || []).map(a => a && a.name).filter(n => n && n !== agentName).sort();
+      while (list.firstChild) list.removeChild(list.firstChild);
+      for (const n of names) { const o = document.createElement('option'); o.value = n; list.appendChild(o); }
+    } catch { /* no list: the box still takes a name */ }
+  }
   // ── Default call display: None / Orb / an installed character (GET /api/faces); PATCH { callDisplay } ──
   const CALL_DISPLAY_FIXED = [{ value: 'none', label: 'None' }, { value: 'orb', label: 'Orb' }];
   // The options for the dropdown: the fixed two, the installed characters, and (when the saved value names a character
@@ -1670,6 +1697,7 @@
       loadTier(agent);
       const tgSel = document.getElementById('team-guidance-mode'); if (tgSel) tgSel.value = agent?.teamGuidance || 'inherit';
       const trSel = document.getElementById('team-role'); if (trSel) trSel.value = agent?.teamRole || '';
+      loadBuildPartners(agent);
       loadCallDisplay(agent);
       loadVoiceDefaults(agent);
       loadVoiceRecord(agent);

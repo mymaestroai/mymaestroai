@@ -68,7 +68,7 @@ test('the template SOUL, the setup interview and the hub brief all point to the 
   const tool = src.slice(src.indexOf("sdk.tool('create_agent'"), src.indexOf("sdk.tool('list_agents'"));
   for (const p of ['display:', 'icon:', 'blurb:', 'soul_md:', 'identity_md:', 'user_md:', 'tools_md:', 'records: z.array(z.object({', 'for_user:', 'AGENT-PLAYBOOK.md'])
     assert.ok(tool.includes(p), `create_agent: ${p}`);
-  assert.match(tool, /await createAgent\(name, model, personality, null, category, member \? member\.id : null, \{ display, icon, blurb, files, records \}\)/);
+  assert.match(tool, /await createAgent\(name, model, personality, null, category, member \? member\.id : null, \{ display, icon, blurb, files, records, buildPartner: build_partner \}\)/);
   assert.match(tool, /\['SOUL\.md', soul_md\], \['IDENTITY\.md', identity_md\], \['USER\.md', user_md\], \['TOOLS\.md', tools_md\]/);
 });
 
@@ -117,7 +117,7 @@ test('create_agent on the Codex path: the bridge lists every field, nested Recor
   try {
     const listed = bridge.listTools(bridge._sessions.get(reg.token)).find(t => t.name === 'create_agent');
     const props = listed.inputSchema.properties;
-    assert.deepStrictEqual(Object.keys(props).sort(), ['blurb', 'category', 'display', 'for_user', 'icon', 'identity_md', 'model', 'name', 'personality', 'records', 'soul_md', 'tools_md', 'user_md']);
+    assert.deepStrictEqual(Object.keys(props).sort(), ['blurb', 'build_partner', 'category', 'display', 'for_user', 'icon', 'identity_md', 'model', 'name', 'personality', 'records', 'soul_md', 'tools_md', 'user_md']);
     assert.deepStrictEqual(listed.inputSchema.required, ['name']);
     assert.strictEqual(props.records.type, 'array');
     assert.deepStrictEqual(Object.keys(props.records.items.properties).sort(), ['content', 'name']);

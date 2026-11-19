@@ -1497,6 +1497,8 @@
       const c = window.__activeChatId ? chats[window.__activeChatId] : null;
       return c && !c.isGroup && c.agent ? String(c.agent) : '';
     }
+    // Hand-off cards above the message box (lib/ui-hand-off-card.js): follows the open one-agent chat.
+    if (window.HandOffCard) HandOffCard.track({ getAgent: filesActiveAgent, getContainer: () => document.getElementById('handoff-cards-' + window.__activeChatId) });
     function filesOwnerParam() {
       const me = window.hubMe;
       if (!me || !me.isAdmin) return '';
@@ -3510,6 +3512,14 @@
         html += `<div class="st-section" id="st-workers-section"><h4>Workers at once</h4>
         <div id="st-wao-rows" class="st-hint" style="margin-left:0">Loading…</div>
         <div class="st-hint">How many workers and consults may run at once on this service. If the service pushes back, My Maestro drops to one at a time and climbs back up.</div>
+        <div class="st-row">
+          <label>Notice long waits on workers</label>
+          <input type="number" id="st-hw-minutes" min="0" max="240" step="1" value="${data.handOffWaitMinutes !== undefined && data.handOffWaitMinutes !== null && Number.isFinite(Number(data.handOffWaitMinutes)) ? Number(data.handOffWaitMinutes) : 10}" style="max-width:90px"> <span style="font-size:0.8rem;color:var(--text-dim)">minutes (0 turns it off)</span>
+        </div>
+        <div class="st-row">
+          <label class="gs-sub"><input type="checkbox" id="st-hw-notice" ${data.buildPartnerNotice !== false ? 'checked' : ''}> Tell the lead when an agent has no build partner</label>
+        </div>
+        <div class="st-hint">An agent that waits a long time on its workers can't talk with you meanwhile. After two such waits in a week, the lead can offer you a build partner. Nothing is created without your yes.</div>
       </div>`;
         waoStored = (data.workersAtOnce && typeof data.workersAtOnce === 'object') ? { ...data.workersAtOnce } : {};
         setTimeout(loadWorkersAtOnce, 0);
@@ -5586,6 +5596,10 @@
       if (maxContext > 0) patch.maxContextMessages = maxContext;
       const wao = workersAtOnceFromPage();
       if (wao !== undefined) patch.workersAtOnce = wao;
+      const hwMin = document.getElementById('st-hw-minutes');
+      if (hwMin) patch.handOffWaitMinutes = parseInt(hwMin.value, 10);
+      const hwNotice = document.getElementById('st-hw-notice');
+      if (hwNotice) patch.buildPartnerNotice = !!hwNotice.checked;
 
       try {
         const r = await fetch('/api/settings', {
@@ -8676,6 +8690,8 @@
           case 'consultation': return `Answering a consultation from ${cap(o.from) || 'another agent'}`;
           case 'schedule': { const l = o.label || o.from; return l ? `Working on a scheduled task: ${l}` : 'Working on a scheduled task'; }
           case 'job_notice': return o.jobName ? `Reading a job result: ${o.jobName}` : 'Reading a job result';
+          case 'hand_off': return o.label || 'Working on a hand-off';
+          case 'hand_off_report': return 'Reading a hand-off report';
           case 'job_report': return o.jobName ? `Reading a job report: ${o.jobName}` : 'Reading a job report';
           case 'consult_reply': return 'Reading consultation replies';
           case 'alert': return 'Handling a monitor alert';
@@ -8736,6 +8752,8 @@
         else if (o.kind === 'job_report') label = `Job report${o.jobName ? ': ' + o.jobName : ''}`;
         else if (o.kind === 'task') label = o.label === 'context compression' ? 'Resumed after compression' : `Hub task${o.label ? ': ' + o.label : ''}`;
         else if (o.kind === 'consult_reply') label = 'Consultation replies delivered';
+        else if (o.kind === 'hand_off') label = o.label || `Hand-off from ${from || 'another agent'}`;
+        else if (o.kind === 'hand_off_report') label = o.label || 'Hand-off finished';
         else if (o.kind === 'alert') label = 'Monitor alert';
         else label = 'Hub turn';
         return { kind, from, label };
@@ -8961,10 +8979,12 @@
         case 'consultation': return `consulted by ${origin.from || 'another agent'}`;
         case 'job_notice': return `your job finished${origin.jobName ? `: ${origin.jobName}` : ''}`;
         case 'job_report': return `job report from ${origin.from || 'a worker'}${origin.jobName ? ` (${origin.jobName})` : ''}`;
-        case 'schedule': return origin.by ? `scheduled task set by ${origin.by === 'owner' ? 'you' : origin.by}${origin.from ? `: ${origin.from}` : ''}` : `scheduled task${origin.from ? `: ${origin.from}` : ''}`;
+        case 'schedule': return origin.by ? `scheduled task set by ${origin.by === '@owner' ? 'you' : origin.by}${origin.from ? `: ${origin.from}` : ''}` : `scheduled task${origin.from ? `: ${origin.from}` : ''}`;
         case 'task': return origin.from && origin.from !== 'hub' ? `queued task from ${origin.from}` : origin.label ? `hub: ${origin.label}` : 'hub turn';
         case 'alert': return `alert from ${origin.from || 'a monitor'}`;
         case 'consult_reply': return 'queued consultation reply delivered';
+        case 'hand_off': return `hand-off from ${origin.from || 'another agent'}`;
+        case 'hand_off_report': return `hand-off finished: ${origin.from || 'another agent'}`;
         case 'comms': return 'message from a messaging channel';
         default: return 'hub turn';
       }
@@ -9829,6 +9849,7 @@
         </div>
         <div class="compaction-line" id="compaction-line-${chatId}" style="display:none" title="Context compression: the agent writes its own working brief (see the agent's settings page)"></div>
         <div class="messages" id="messages-${chatId}"></div>
+        <div class="handoff-cards" id="handoff-cards-${chatId}" hidden></div>
         <div class="input-area">
           <div class="input-wrapper">
             <div class="image-preview-area" id="image-preview-${chatId}"></div>
@@ -17807,6 +17828,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     // (links to /api/files/download, absolute paths) get a card each in a .file-cards box right after the message.
     // Never on a streaming chunk; no candidates means no request; nothing here may throw into the chat code.
     async function attachFileCards(el) {
+      if (window.HandOffCard) HandOffCard.refreshSoon();   // a reply just ended: look again for hand-offs (calls close together make one request)
       try {
         const H = window.hubFileCard;
         if (!H || !el || !el.isConnected || !el.classList.contains('assistant')) return;

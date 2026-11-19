@@ -244,7 +244,10 @@ const pageFns = {
 };
 for (const [name, label] of Object.entries(pageFns)) {
   test(`labels (${name}): schedule, task, alert, job notice, and the old shapes`, () => {
-    assert.strictEqual(label({ kind: 'schedule', by: 'owner', from: 'Morning check' }), 'scheduled task set by you: Morning check');
+    // the owner's scheduler identity is '@owner' (lib/scheduled-tasks); a plain 'owner' is an agent of that name
+    assert.strictEqual(label({ kind: 'schedule', by: '@owner', from: 'Morning check' }), 'scheduled task set by you: Morning check');
+    assert.strictEqual(label({ kind: 'schedule', by: 'owner', from: 'Morning check' }), 'scheduled task set by owner: Morning check');
+    assert.strictEqual(label({ kind: 'hand_off', from: 'lead' }), 'hand-off from lead');
     assert.strictEqual(label({ kind: 'schedule', by: 'peer-a', from: 'Nightly' }), 'scheduled task set by peer-a: Nightly');
     assert.strictEqual(label({ kind: 'schedule', by: 'TASKS.md', from: 'cleanup' }), 'scheduled task set by TASKS.md: cleanup');
     assert.strictEqual(label({ kind: 'schedule', by: 'peer-a' }), 'scheduled task set by peer-a');
@@ -283,7 +286,7 @@ test('logOriginOf keeps by and label; wakeAgent passes them; schedule sources se
   const wake = extractFn(sdk, 'function wakeAgent(agentName, message, onReply, meta = null)');
   assert.match(wake, /\.\.\.\(meta\?\.by \? \{ by: meta\.by \} : \{\}\), \.\.\.\(meta\?\.label \? \{ label: meta\.label \} : \{\}\)/);
   // member origin (test/member-origin.test.js): scheduled and queued tasks made in a member's turn also carry member
-  assert.match(read('lib/scheduled-tasks.js'), /\{ kind: 'schedule', from: t\.label, taskId: t\.id, by: t\.createdBy, \.\.\.\(t\.member === true \? \{ member: true \} : \{\}\) \}/);
+  assert.match(read('lib/scheduled-tasks.js'), /\{ kind: 'schedule', from: t\.label, taskId: t\.id, by: t\.createdBy, \.\.\.\(t\.member === true \? \{ member: true \} : \{\}\), \.\.\.\(t\.handOff \? \{ handOff: t\.handOff \} : \{\}\) \}/);
   assert.match(read('lib/scheduler.js'), /origin: \{ kind: 'schedule', from: taskId, by: 'TASKS\.md' \}/);
   assert.match(read('lib/task-queue.js'), /origin: \{ kind: 'task', from: task\.creator_agent, label: `queued task from \$\{task\.creator_agent\}`, taskId: String\(task\.id\), \.\.\.\(Number\(task\.member\) === 1 \? \{ member: true \} : \{\}\) \}/);
 });

@@ -58,6 +58,22 @@ test('usageSummary: per agent requests, failures, models and tool calls; tempora
   assert.match(tu.usageSummary({ hours: 24 }, deps(f)), /last 1 day /);
 });
 
+test('usageSummary: a section for long waits on workers when an agent has two and no build partner', () => {
+  const f = makeDb([{ agent: 'ana_admin', model: 'anthropic/big' }]);
+  const lwFile = path.join(tempDir(), 'long-waits.jsonl');
+  const now = Date.now();
+  const row = (agent, ago, minutes) => JSON.stringify({ at: new Date(now - ago).toISOString(), agent, tool: 'spawn_workers', minutes });
+  fs.writeFileSync(lwFile, [row('ana_admin', 3600000, 12), row('ana_admin', 2 * 86400000, 31), row('maestro', 3600000, 20), row('maestro', 7200000, 20), row('kim_helper', 3600000, 12), row('kim_helper', 7200000, 12)].join('\n') + '\n');
+  const isLead = (n) => n === 'maestro';
+  const out = tu.usageSummary({ hours: 168 }, deps(f, { longWaitsFile: lwFile, isLead, zone: 'UTC' }));
+  assert.match(out, /\nLong waits on workers \(this week, no build partner\):\n- ana_admin: 2 times, longest 31 min \(\d{4}-\d\d-\d\d(, \d{4}-\d\d-\d\d)?\)/);
+  assert.match(out, /- kim_helper: 2 times, longest 12 min/, "a member's agent: counts only");
+  assert.doesNotMatch(out, /- maestro: \d+ times/, 'a lead is not listed');
+  assert.ok(out.length <= 3000);
+  const none = tu.usageSummary({ hours: 168 }, deps(f, { longWaitsFile: path.join(tempDir(), 'none.jsonl'), isLead }));
+  assert.doesNotMatch(none, /Long waits/);
+});
+
 test('usageSummary: no database or no rows is said plainly, never thrown', () => {
   assert.match(tu.usageSummary({}, deps(path.join(tempDir(), 'nope.db'))), /no requests recorded/);
   assert.match(tu.usageSummary({}, deps(makeDb([]))), /no requests recorded/);

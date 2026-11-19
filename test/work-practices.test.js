@@ -53,13 +53,13 @@ test('suggestions: one per topic, a no is remembered, nothing without a yes; bui
   assert.doesNotMatch(member, /maestro/, 'a member\'s agent is never pointed at the admin\'s agents');
 });
 
-test('both are manifest entries (seven in all) and the prompt builders add the text only while they are on', () => {
+test('both are manifest entries (eight in all) and the prompt builders add the text only while they are on', () => {
   const m = JSON.parse(fs.readFileSync(path.join(ROOT, 'templates', 'behaviour-changes.json'), 'utf8'));
   const ids = m.changes.map((c) => c.id);
-  assert.deepStrictEqual(ids, ['team-guidance', 'starter-team', 'member-worker-models', 'worker-proposals', 'ask-lead-for-workers', 'work-check-ins', 'work-suggestions']);
+  assert.deepStrictEqual(ids, ['team-guidance', 'starter-team', 'member-worker-models', 'worker-proposals', 'ask-lead-for-workers', 'work-check-ins', 'work-suggestions', 'hand-off-guidance']);   // hand-offs (lib/hand-offs): the rule to hand long work to a build partner
   for (const c of m.changes) for (const k of ['title', 'changes', 'benefits', 'costs', 'check', 'on', 'off']) assert.ok(typeof c[k] === 'string' && c[k].length > 5, `${c.id}.${k}`);
   const sdk = fs.readFileSync(path.join(ROOT, 'lib', 'sdk-chat.js'), 'utf8');
   assert.strictEqual((sdk.match(/\(await askLeadTextFor\(agentName\)\) \+ \(await workPracticesTextFor\(agentName\)\)/g) || []).length, 3, 'gateway, SDK and Codex');
-  assert.match(sdk, /const checkIns = bc\.isOn\('work-check-ins'\), suggestions = bc\.isOn\('work-suggestions'\);\n\s+if \(!checkIns && !suggestions\) return '';/);
+  assert.match(sdk, /const checkIns = bc\.isOn\('work-check-ins'\), suggestions = bc\.isOn\('work-suggestions'\), handOffs = bc\.isOn\('hand-off-guidance'\) && !handOffOfTurn\(agentName\);\n\s+if \(!checkIns && !suggestions && !handOffs\) return '';/);
   assert.match(sdk, /async function workPracticesTextFor\(agentName\) \{[\s\S]*?if \(temporalWorkers\.isVirtual\(agentName\)\) return '';/);
 });

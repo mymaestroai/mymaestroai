@@ -2416,6 +2416,15 @@ async function handleHttpRequest(req, res) {
       return jsonResponse(res, result.success ? 200 : (result.status || 400), result);
     }
 
+    // Hand-offs (lib/hand-offs): the jobs this agent handed to others, for the cards above its chat. The access check is the
+    // route's (agent in the query, classified in lib/access like the chat history): an admin any agent, a member their own.
+    if (pathname === '/api/hand-offs' && req.method === 'GET') {
+      const name = agentFromQuery(req);
+      if (!name || !(await getAgents()).some(a => a.name === name)) return jsonResponse(res, 404, { error: 'unknown agent' });
+      const handOffs = require('./lib/sdk-chat').getHandOffRunner().list(name, { includeDone: false, withStatus: false });
+      return jsonResponse(res, 200, { ok: true, handOffs });   // no folderLink: the Files panel has no link that opens a folder
+    }
+
     // ── Session/History Routes ──────────────────────────────────────
     if (/^\/api\/history\/([^/]+)$/.test(pathname) && req.method === 'GET') {
       const name = pathname.split('/')[3];
@@ -2696,6 +2705,9 @@ async function handleHttpRequest(req, res) {
           if (patch && patch.walletLockedNotice !== undefined) patch.walletLockedNotice = patch.walletLockedNotice !== false;
           // Workers allowed at once per AI service: integers 1..32 only (lib/provider-pacing); applied to the running hub below.
           if (patch && patch.workersAtOnce !== undefined) patch.workersAtOnce = require('./lib/provider-pacing').cleanWorkersAtOnce(patch.workersAtOnce);
+          // Long waits on workers (lib/long-waits): minutes 0..240 (0 = off, junk = the default 10); the lead notice is on unless false.
+          if (patch && patch.handOffWaitMinutes !== undefined) patch.handOffWaitMinutes = require('./lib/long-waits').cleanMinutes(patch.handOffWaitMinutes);
+          if (patch && patch.buildPartnerNotice !== undefined) patch.buildPartnerNotice = patch.buildPartnerNotice !== false;
           // Voice: known keys only, merged onto the stored value (lib/voice/manifest cleanVoiceSettings). "enabled" changes
           // only through /api/voice/enable and /disable, which also install the engines and stop or resume the worker.
           if (patch && patch.voice !== undefined) {
@@ -3833,6 +3845,8 @@ server.listen(PORT, HOST, () => {
   // Scheduled tasks: queue anything that came due while the hub was down (fires once, marked late), start polling.
   try { const st = getScheduledTasks().start(); st.prune(30); console.log(`[sched-tasks] started (${st.list(scheduledTasksLib.OWNER).filter(t => t.status === 'active').length} active, ${st.pending.length} due now)`); }
   catch (e) { console.error('[sched-tasks] failed to start:', e.message); }
+  // Hand-offs (lib/hand-offs): a hand-off whose turn died with the restart is reported to its caller as interrupted.
+  try { require('./lib/sdk-chat').getHandOffRunner().start(); } catch (e) { console.error('[hand-offs] could not start:', e.message); }
   // Behaviour changes waiting for the owner: the lead is asked to review them (one task, never twice for an entry), and the weekly
   // team review follows the worker-proposals decision. After the scheduler exists; the hub creates these, the owner decides on /changes.
   (async () => {

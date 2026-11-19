@@ -735,6 +735,23 @@
   #files-sheet .fs-recent .fr-info { font-size: 12px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #files-sheet .fs-recent .fr-all { background: none; border: 0; padding: 8px 0; margin: 0; min-height: 44px; font: inherit; font-size: 13px; color: var(--accent); cursor: pointer; }
   #files-sheet .fs-recent .fr-dl { min-height: 44px; padding: 0 14px; border-radius: 8px; background: var(--accent); color: #fff; font-size: 14px; }
+  /* Hand-off cards above the message box (lib/ui-hand-off-card.js): full width, text wraps */
+  .handoff-cards { display: flex; flex-direction: column; gap: 6px; padding: 0 2px 6px; max-width: 100%; box-sizing: border-box; }
+  .handoff-cards[hidden] { display: none; }
+  .handoff-cards .ho-card { background: var(--bg-input); border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; min-width: 0; font-size: 14px; color: var(--text); }
+  .handoff-cards .ho-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; justify-content: space-between; }
+  .handoff-cards .ho-title { font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
+  .handoff-cards .ho-pill { flex: none; border-radius: 999px; padding: 2px 9px; font-size: 12px; border: 1px solid var(--border); color: var(--text-dim); }
+  .handoff-cards .ho-pill.ho-running { color: var(--accent); border-color: var(--accent); }
+  .handoff-cards .ho-pill.ho-queued, .handoff-cards .ho-pill.ho-waiting { color: var(--warning); border-color: var(--warning); }
+  .handoff-cards .ho-pill.ho-done { color: var(--success, #3fb950); border-color: var(--success, #3fb950); }
+  .handoff-cards .ho-pill.ho-failed, .handoff-cards .ho-pill.ho-interrupted { color: var(--danger, #f85149); border-color: var(--danger, #f85149); }
+  .handoff-cards .ho-topic { margin-top: 4px; color: var(--text); overflow-wrap: anywhere; white-space: normal; }
+  .handoff-cards .ho-time { margin-top: 2px; font-size: 12px; color: var(--text-dim); }
+  .handoff-cards .ho-status { color: var(--accent); }
+  .handoff-cards .ho-card.ho-ended { display: flex; align-items: center; gap: 8px; padding: 4px 10px; font-size: 13px; }
+  .handoff-cards .ho-ended .ho-line { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-dim); }
+  .handoff-cards .ho-ended .ho-pill, .handoff-cards .ho-ended .ho-status { flex: none; }
   /* Download cards under an agent's reply (lib/ui-file-card.js, phone form) */
   .file-cards { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; max-width: 100%; }
   .file-card { background: var(--bg-input); border: 1px solid var(--border); border-radius: 10px; padding: 10px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
@@ -1094,6 +1111,7 @@ html.mm-simple #simple-side { display: none; }
       <p id="cp-help">Hands-free works with the app open and the screen on, also through a car's Bluetooth hands-free or a Bluetooth speaker. Locked-screen use and car apps (CarPlay, Android Auto) are not supported.</p>
     </div>
     <div id="composer">
+      <div id="handoff-cards" class="handoff-cards" hidden></div>
       <div id="previews"></div>
       <div id="voice-strip" hidden><button type="button" id="voice-mode-chip" class="voice-chip" aria-label="Talk mode: tap to switch">Tap to talk</button></div>
       <div id="voice-panel" role="dialog" aria-label="Voice settings" hidden>
@@ -1247,6 +1265,7 @@ html.mm-simple #simple-side { display: none; }
   <script src="/ui-face-player.js"></script>
   <script src="/ui-call-display.js"></script>
   <script src="/ui-file-card.js"></script>
+  <script src="/ui-hand-off-card.js"></script>
   <script src="/ui-team-card.js"></script>
   <script src="/ui-simple.js"></script>
   <script src="mobile.js"></script>

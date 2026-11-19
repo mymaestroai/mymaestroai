@@ -1053,10 +1053,12 @@ function originLabel(origin) {
     case 'consultation': return `consulted by ${origin.from || 'another agent'}`;
     case 'job_notice': return `your job finished${origin.jobName ? `: ${origin.jobName}` : ''}`;
     case 'job_report': return `job report from ${origin.from || 'a worker'}${origin.jobName ? ` (${origin.jobName})` : ''}`;
-    case 'schedule': return origin.by ? `scheduled task set by ${origin.by === 'owner' ? 'you' : origin.by}${origin.from ? `: ${origin.from}` : ''}` : `scheduled task${origin.from ? `: ${origin.from}` : ''}`;
+    case 'schedule': return origin.by ? `scheduled task set by ${origin.by === '@owner' ? 'you' : origin.by}${origin.from ? `: ${origin.from}` : ''}` : `scheduled task${origin.from ? `: ${origin.from}` : ''}`;
     case 'task': return origin.from && origin.from !== 'hub' ? `queued task from ${origin.from}` : origin.label ? `hub: ${origin.label}` : 'hub turn';
     case 'alert': return `alert from ${origin.from || 'a monitor'}`;
     case 'consult_reply': return 'queued consultation reply delivered';
+    case 'hand_off': return `hand-off from ${origin.from || 'another agent'}`;
+    case 'hand_off_report': return `hand-off finished: ${origin.from || 'another agent'}`;
     case 'comms': return 'message from a messaging channel';
     default: return 'hub turn';
   }
@@ -2494,6 +2496,8 @@ function chatViewBusyText(origin, activity) {
       case 'consultation': return `Answering a consultation from ${cap(o.from) || 'another agent'}`;
       case 'schedule': { const l = o.label || o.from; return l ? `Working on a scheduled task: ${l}` : 'Working on a scheduled task'; }
       case 'job_notice': return o.jobName ? `Reading a job result: ${o.jobName}` : 'Reading a job result';
+      case 'hand_off': return o.label || 'Working on a hand-off';
+      case 'hand_off_report': return 'Reading a hand-off report';
       case 'job_report': return o.jobName ? `Reading a job report: ${o.jobName}` : 'Reading a job report';
       case 'consult_reply': return 'Reading consultation replies';
       case 'alert': return 'Handling a monitor alert';
@@ -2554,6 +2558,8 @@ function autoInfoOf(entry) {
     else if (o.kind === 'job_report') label = `Job report${o.jobName ? ': ' + o.jobName : ''}`;
     else if (o.kind === 'task') label = o.label === 'context compression' ? 'Resumed after compression' : `Hub task${o.label ? ': ' + o.label : ''}`;
     else if (o.kind === 'consult_reply') label = 'Consultation replies delivered';
+    else if (o.kind === 'hand_off') label = o.label || `Hand-off from ${from || 'another agent'}`;
+    else if (o.kind === 'hand_off_report') label = o.label || 'Hand-off finished';
     else if (o.kind === 'alert') label = 'Monitor alert';
     else label = 'Hub turn';
     return { kind, from, label };
@@ -6624,6 +6630,7 @@ function renderEntry(m, time = '') {
 // (links to /api/files/download, absolute paths) get a card each in a .file-cards box right after the reply body.
 // Never on a streaming chunk; no candidates means no request; nothing here may throw into the chat code.
 async function attachFileCards(el, body) {
+  if (window.HandOffCard) HandOffCard.refreshSoon();   // a reply just ended: look again for hand-offs (calls close together make one request)
   try {
     const H = window.hubFileCard;
     if (!el || !el.classList || !el.classList.contains('assistant')) return;
@@ -14799,5 +14806,8 @@ function simpleMenuHide(ms) { ms = ms || document.getElementById('menu-simple');
 }
 if (typeof document.addEventListener === 'function') document.addEventListener('click', (e) => { if (e.target && e.target.closest && e.target.closest('.mode-toggle')) simpleModeTap(); });
 // ── end Simple mode: phone ──
+
+// Hand-off cards above the message box (lib/ui-hand-off-card.js): follow the open chat; none while another screen is shown.
+if (window.HandOffCard) HandOffCard.track({ getAgent: () => (screen === 'chat' ? current : null), getContainer: () => $('handoff-cards') });
 
 init();
