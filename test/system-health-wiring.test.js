@@ -94,6 +94,9 @@ test('wire.js paths: the folders it measures, and SQLite files in data/ one leve
   const dbs = W.databases().map((f) => path.relative(ISO.data, f));
   for (const f of ['a.db', 'b.sqlite', path.join('sub', 'c.db')]) assert.ok(dbs.includes(f), f);
   for (const f of ['a.db-wal', 'a.db-shm', 'notes.txt', path.join('sub', 'deeper', 'd.db')]) assert.ok(!dbs.includes(f), f);
+  const named = W.paths().databases;
+  assert.deepEqual(named.map((e) => e.name).sort(), ['a.db', 'b.sqlite', path.join('sub', 'c.db')].sort(), 'named by their path inside data/');
+  for (const e of named) assert.equal(e.file, path.join(ISO.data, e.name));
   W.init({ backupFolders: () => ['/backups/one', '/backups/two'] });
   assert.deepEqual(W.paths().disk.filter((d) => /^backup folder/.test(d.label)).map((d) => d.label), ['backup folder 1', 'backup folder 2']);
 });

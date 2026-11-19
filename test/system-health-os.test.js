@@ -268,6 +268,26 @@ test('escalation: warn on day 1, critical after 8 days with the wait in the titl
   assert.strictEqual(h.notices.length, 1, 'once');
 });
 
+test('macOS: security 2 is a warning "2 recommended updates are waiting" and never escalates; apt still does', async () => {
+  const h = make({ platform: 'darwin' });
+  h.cfg.os = { ...h.cfg.os, kind: 'softwareupdate', security: 2 };
+  let v = await nightly(h);
+  assert.strictEqual(item(v, OS).level, 'warn');
+  assert.strictEqual(item(v, OS).title, '2 recommended updates are waiting');
+  h.clock.now = T0 + 8 * DAY;
+  v = await nightly(h);
+  h.clock.now = T0 + 12 * DAY;
+  v = await nightly(h);
+  assert.strictEqual(item(v, OS).level, 'warn', 'no escalation on macOS');
+  assert.doesNotMatch(item(v, OS).title, /\(waiting/);
+  assert.strictEqual(item(v, OS).title, '2 recommended updates are waiting');
+  assert.strictEqual(h.notices.length, 0);
+  const a = make();
+  a.cfg.os = { ...a.cfg.os, kind: 'apt', security: 2 };
+  await nightly(a); a.clock.now = T0 + 8 * DAY;
+  assert.strictEqual(item(await nightly(a), OS).level, 'critical');
+});
+
 test('escalation: a fixed problem starts over (the wait counts from the new warning)', async () => {
   const h = make();
   h.cfg.os = { ...h.cfg.os, security: 3 };

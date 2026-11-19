@@ -88,6 +88,16 @@ test('rows: level mark and words, title, detail, fix, "since" only for problems;
   assert.deepStrictEqual(t.sums.at(-1), { g: 'status', k: 'health', text: 'Health: problem found', crit: true });
 });
 
+test('summary: unknown with no critical or warning says "some checks couldn\'t run"; a problem or an all-ok run keeps its own words', () => {
+  const t = build({});
+  t.S.hlRender(view([item('health-disk-main', 'ok'), item('health-clock', 'unknown')]));
+  assert.deepStrictEqual(t.sums.at(-1), { g: 'status', k: 'health', text: "Health: some checks couldn't run", crit: false });
+  t.S.hlRender(view([item('health-disk-main', 'ok'), item('health-clock', 'unknown'), item('health-memory', 'warn')]));
+  assert.strictEqual(t.sums.at(-1).text, 'Health: warnings');
+  t.S.hlRender(view([item('health-disk-main', 'ok'), item('health-clock', 'info')]));
+  assert.strictEqual(t.sums.at(-1).text, 'Health: all fine');
+});
+
 test('texts from the hub are escaped', () => {
   const t = build({});
   t.S.hlRender(view([item('health-memory', 'warn', { title: '<img src=x onerror=1>', detail: '<b>x</b>' })]));

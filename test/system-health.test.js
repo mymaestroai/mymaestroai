@@ -212,14 +212,124 @@ test('inodes: its own item per filesystem; edges; null means no item', async () 
   assert.strictEqual((await lv(3)).level, 'warn');
   assert.strictEqual((await lv(2.9)).level, 'critical');
   assert.match((await lv(2.9)).title, /file slots/);
+  const g = make();   // no earlier problem: null means no item
+  g.cfg.fs = { ...g.cfg.fs, inodesFreePct: null, inodesFree: null, inodesTotal: null };
+  assert.strictEqual(item(await manual(g), 'health-inodes-data+workspaces'), undefined);
+});
+
+test('inodes: a notified problem whose numbers do not come back is unknown, not "fixed"', async () => {
+  const h = make();
+  const IN = 'health-inodes-data+workspaces';
+  h.cfg.fs = { ...h.cfg.fs, inodesFreePct: 1 };
+  let v = await manual(h);
+  assert.strictEqual(item(v, IN).level, 'critical');
+  assert.strictEqual(h.notices.length, 1);
   h.cfg.fs = { ...h.cfg.fs, inodesFreePct: null, inodesFree: null, inodesTotal: null };
-  assert.strictEqual(item(await manual(h), 'health-inodes-data+workspaces'), undefined);
+  v = await manual(h);
+  assert.strictEqual(item(v, IN).level, 'unknown');
+  assert.strictEqual(h.notices.length, 1, 'no "Health: fixed"');
+  assert.ok(!h.notices.some(n => n.payload.title === 'Health: fixed'));
+  assert.ok(raw(h).notices[IN], 'the notice stays');
+  h.cfg.fs = { ...h.cfg.fs, inodesFreePct: 90 };
+  await manual(h);
+  assert.strictEqual(h.notices.filter(n => n.payload.title === 'Health: fixed').length, 1, 'fixed only once it is measured fine');
+});
+
+test('clock: a notified problem then "synced null" is unknown, not fixed; with no notice it is info', async () => {
+  const h = make();
+  h.cfg.settings = { notify: 'warnings', warnNights: 1 }; h.cfg.backup = null;
+  h.cfg.clock = { synced: false, how: 'x' };
+  await nightly(h);
+  assert.strictEqual(h.notices.length, 1);
+  h.cfg.clock = { synced: null, how: 'x' };
+  h.clock.now += DAY;
+  const v = await nightly(h);
+  assert.strictEqual(item(v, 'health-clock').level, 'unknown');
+  assert.strictEqual(h.notices.length, 1, 'no "Health: fixed"');
+  assert.ok(raw(h).notices['health-clock']);
+  const g = make(); g.cfg.clock = { synced: null, how: 'x' };
+  assert.strictEqual(item(await manual(g), 'health-clock').level, 'info');
+});
+
+test('logs: a notified big log that cannot be read is unknown, not fixed; one that is missing is fixed', async () => {
+  const h = make();
+  h.cfg.logSizes = [{ path: '/logs/a.log', bytes: 1.5 * GB }];
+  assert.strictEqual(item(await manual(h), 'health-logs').level, 'warn');
+  h.cfg.settings = { notify: 'warnings', warnNights: 1 };
+  await nightly(h);
+  assert.strictEqual(h.notices.length, 1, 'the warning was notified');
+  h.cfg.logSizes = [{ path: '/logs/a.log', bytes: null, error: 'EACCES' }];
+  let v = await manual(h);
+  assert.strictEqual(item(v, 'health-logs').level, 'unknown');
+  assert.strictEqual(h.notices.length, 1, 'no "Health: fixed"');
+  assert.ok(raw(h).notices['health-logs']);
+  h.cfg.logSizes = [{ path: '/logs/a.log', bytes: null, missing: true }];
+  v = await manual(h);
+  assert.strictEqual(item(v, 'health-logs').level, 'ok');
+  assert.strictEqual(h.notices.length, 2);
+  assert.strictEqual(h.notices[1].payload.title, 'Health: fixed');
+  await manual(h);
+  assert.strictEqual(h.notices.length, 2, 'one fixed notice only');
+});
+
+// ── databases named { file, name } ──
+test('databases: { file, name } entries are told apart by name; a plain path still uses its basename; no flapping', async () => {
+  const h = make();
+  h.cfg.paths = { ...h.cfg.paths, databases: [{ file: '/data/a/cache.db', name: 'a/cache.db' }, { file: '/data/b/cache.db', name: 'b/cache.db' }] };
+  h.probes.dbCheck = async (f) => (f === '/data/a/cache.db' ? { ok: false, result: 'row 3 is bad', bytes: 10 } : { ok: true, result: 'ok', bytes: 10 });
+  let v = await manual(h);
+  assert.strictEqual(item(v, 'health-db-a/cache.db').level, 'critical');
+  assert.strictEqual(item(v, 'health-db-b/cache.db').level, 'ok');
+  assert.strictEqual(v.items.filter(i => i.check === 'db').length, 2);
+  assert.strictEqual(h.notices.length, 1);
+  v = await manual(h);
+  assert.strictEqual(h.notices.length, 1, 'no second notice and no "fixed"');
+  assert.strictEqual(item(v, 'health-db-a/cache.db').level, 'critical');
+  const p = make();
+  p.cfg.paths = { ...p.cfg.paths, databases: ['/data/x/plain.db'] };
+  assert.ok(item(await manual(p), 'health-db-plain.db'));
+});
+
+// ── start() arms the scheduler and sampler even when disabled ──
+test('start() with enabled false still arms the nightly run: enabling later runs it at checkAt', async (t) => {
+  t.mock.timers.enable({ apis: ['setInterval', 'setTimeout'] });
+  const h = make(); h.cfg.settings = { enabled: false, afterStart: false, checkAt: '03:15' };
+  fs.writeFileSync(h.stateFile, JSON.stringify({ lastFullRun: { startedAt: new Date(T0 - 5 * HOUR).toISOString(), finishedAt: null, trigger: 'start', full: true } }));
+  h.sh.start();
+  h.cfg.settings = { enabled: true, afterStart: false, checkAt: '03:15' };
+  h.clock.now = Date.parse('2026-11-18T08:16:00Z');   // 03:16 New York
+  t.mock.timers.tick(5 * MIN);
+  for (let i = 0; i < 8; i++) await new Promise(r => setImmediate(r));
+  assert.strictEqual(raw(h).lastRun.trigger, 'nightly');
+  assert.strictEqual(h.calls.disk, 1);
+  h.sh.stop();
+});
+
+test('start() with enabled false: the sampler ticks but does not call probes.memory; once enabled it does', async (t) => {
+  t.mock.timers.enable({ apis: ['setInterval', 'setTimeout'] });
+  const h = make(); h.cfg.settings = { enabled: false };
+  let mem = 0;
+  h.probes.memory = async () => { mem++; return h.cfg.memory; };
+  h.sh.start();
+  t.mock.timers.tick(10 * MIN); await new Promise(r => setImmediate(r));
+  assert.strictEqual(mem, 0);
+  h.cfg.settings = { enabled: true };
+  t.mock.timers.tick(5 * MIN); await new Promise(r => setImmediate(r));
+  assert.strictEqual(mem, 1);
+  h.sh.stop();
 });
 
 // ── memory ──
+test('memory: swap 80% used with 60% of memory available is not heavy; with 20% available it is; 5% available alone is', async () => {
+  const lv = async (mem) => { const h = make(); h.cfg.memory = { totalBytes: 100, availableBytes: 50, swapTotalBytes: null, swapUsedBytes: null, ...mem }; for (let i = 0; i < 6; i++) { await h.sh.sampleMemory(); h.clock.now += MIN; } return item(await manual(h), 'health-memory').level; };
+  assert.strictEqual(await lv({ availableBytes: 60, swapTotalBytes: 10, swapUsedBytes: 8 }), 'ok');
+  assert.strictEqual(await lv({ availableBytes: 20, swapTotalBytes: 10, swapUsedBytes: 8 }), 'warn');
+  assert.strictEqual(await lv({ availableBytes: 5 }), 'warn');
+});
+
 test('memory: sustained = 5 samples in 30 minutes, all heavy; never critical', async () => {
   const h = make();
-  const heavySwap = { totalBytes: 16 * GB, availableBytes: 8 * GB, swapTotalBytes: 10 * GB, swapUsedBytes: 5 * GB };
+  const heavySwap = { totalBytes: 16 * GB, availableBytes: 2 * GB, swapTotalBytes: 10 * GB, swapUsedBytes: 5 * GB };
   h.cfg.memory = heavySwap;
   for (let i = 0; i < 4; i++) { await h.sh.sampleMemory(); h.clock.now += 5 * MIN; }
   assert.strictEqual(item(await manual(h), 'health-memory').level, 'ok', 'only 4 samples');
@@ -238,7 +348,8 @@ test('memory: heavy means swap >= 50% (swap total > 0) or available < 10% of tot
   const lv = async (mem) => { const h = make(); h.cfg.memory = { totalBytes: 100, availableBytes: 50, swapTotalBytes: null, swapUsedBytes: null, ...mem }; for (let i = 0; i < 5; i++) { await h.sh.sampleMemory(); h.clock.now += MIN; } return item(await manual(h), 'health-memory').level; };
   assert.strictEqual(await lv({ availableBytes: 9 }), 'warn');
   assert.strictEqual(await lv({ availableBytes: 10 }), 'ok', 'exactly 10% is not heavy');
-  assert.strictEqual(await lv({ swapTotalBytes: 10, swapUsedBytes: 5 }), 'warn');
+  assert.strictEqual(await lv({ availableBytes: 20, swapTotalBytes: 10, swapUsedBytes: 5 }), 'warn');
+  assert.strictEqual(await lv({ swapTotalBytes: 10, swapUsedBytes: 5 }), 'ok', 'swap half used on a roomy machine is not heavy');
   assert.strictEqual(await lv({ swapTotalBytes: 10, swapUsedBytes: 4 }), 'ok');
   assert.strictEqual(await lv({ swapTotalBytes: 0, swapUsedBytes: 0 }), 'ok', 'no swap at all is not heavy');
 });
@@ -404,7 +515,9 @@ test('clock: not synced warns; null is info with its words; synced ok', async ()
   h.cfg.clock = { synced: false, how: 'x' };
   assert.strictEqual(item(await manual(h), 'health-clock').level, 'warn');
   h.cfg.clock = { synced: null, how: 'x' };
-  const it = item(await manual(h), 'health-clock');
+  assert.strictEqual(item(await manual(h), 'health-clock').level, 'unknown', 'after a warning it is not read as fine');
+  const g = make(); g.cfg.clock = { synced: null, how: 'x' };
+  const it = item(await manual(g), 'health-clock');
   assert.strictEqual(it.level, 'info'); assert.strictEqual(it.title, "This computer doesn't report clock sync");
   h.cfg.clock = { synced: true, how: 'x' };
   assert.strictEqual(item(await manual(h), 'health-clock').level, 'ok');

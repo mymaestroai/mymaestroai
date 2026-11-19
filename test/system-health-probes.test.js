@@ -302,7 +302,15 @@ test('fileSizes gives bytes, null when missing', async () => {
   const f = path.join(tmp, 'sized.txt');
   fs.writeFileSync(f, 'hello');
   const r = await createProbes({}).fileSizes([f, path.join(tmp, 'missing.txt')]);
-  assert.deepStrictEqual(r, [{ path: f, bytes: 5 }, { path: path.join(tmp, 'missing.txt'), bytes: null }]);
+  assert.deepStrictEqual(r, [{ path: f, bytes: 5 }, { path: path.join(tmp, 'missing.txt'), bytes: null, missing: true }]);
+});
+
+test('fileSizes: a missing file is { missing: true, bytes: null }; an unreadable one is { bytes: null, error } and not missing', async () => {
+  const gone = await createProbes({}).fileSizes([path.join(tmp, 'really-missing.log')]);
+  assert.deepStrictEqual(gone, [{ path: path.join(tmp, 'really-missing.log'), bytes: null, missing: true }]);
+  const denied = await createProbes({ stat: async () => { const e = new Error('permission denied'); e.code = 'EACCES'; throw e; } }).fileSizes(['/logs/x.log']);
+  assert.deepStrictEqual(denied, [{ path: '/logs/x.log', bytes: null, error: 'EACCES' }]);
+  assert.strictEqual('missing' in denied[0], false);
 });
 
 // ---------- dbCheck ----------
@@ -322,9 +330,20 @@ test('dbCheck on random bytes is not ok true', async () => {
   const file = path.join(tmp, 'junk.db');
   fs.writeFileSync(file, require('crypto').randomBytes(8192));
   const r = await createProbes({}).dbCheck(file, { timeoutMs: 30000 });
-  assert.notStrictEqual(r.ok, true);
-  assert.ok(r.ok === false || r.ok === null);
+  assert.strictEqual(r.ok, false);
   assert.strictEqual(r.bytes, 8192);
+});
+
+test('dbCheck on a file with the SQLite header and random bytes after it is ok false', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sh-dbhdr-'));
+  const file = path.join(dir, 'hdr.db');
+  fs.writeFileSync(file, Buffer.concat([Buffer.from('SQLite format 3\0', 'latin1'), require('crypto').randomBytes(8192)]));
+  const r = await createProbes({}).dbCheck(file, { timeoutMs: 30000 });
+  assert.strictEqual(r.ok, false);
+  const j = fs.mkdtempSync(path.join(os.tmpdir(), 'sh-dbjunk-'));
+  const f2 = path.join(j, 'junk.db');
+  fs.writeFileSync(f2, require('crypto').randomBytes(8192));
+  assert.strictEqual((await createProbes({}).dbCheck(f2, { timeoutMs: 30000 })).ok, false);
 });
 
 test('dbCheck on a missing file is ok null with bytes null', async () => {

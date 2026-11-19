@@ -4257,7 +4257,8 @@
       }
       if (run && !items.length) html += '<div class="sc-note">Nothing to report.</div>';
       el.innerHTML = html;
-      stSum('status', 'health', !run ? 'Health: not checked yet' : v.critical ? 'Health: problem found' : v.warnings ? 'Health: warnings' : 'Health: all fine', !!v.critical);
+      const unknown = items.filter(i => i.level === 'unknown').length;   // a check that couldn't run is never "all fine"
+      stSum('status', 'health', !run ? 'Health: not checked yet' : v.critical ? 'Health: problem found' : v.warnings ? 'Health: warnings' : unknown ? "Health: some checks couldn't run" : 'Health: all fine', !!v.critical);
     }
     function hlFillSettings(s) {
       if (!s) return;
