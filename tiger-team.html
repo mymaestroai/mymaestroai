@@ -842,13 +842,14 @@
     // A note the page could not send (the team was running again in another window) is kept in this tab's storage for that
     // team, so the reload the page asks for does not lose it: it comes back into the empty box once, then is forgotten.
     function unsentNoteKey() { return tigerTeamId ? 'tt-unsent-note:' + tigerTeamId : ''; }
-    function keepUnsentNote(note) { try { const k = unsentNoteKey(); if (k && note) sessionStorage.setItem(k, note); } catch (e) {} }
+    function keepUnsentNote(note) { try { const k = unsentNoteKey(); if (k && note) { sessionStorage.setItem(k, note); return true; } } catch (e) {} return false; }
+    function clearUnsentNote() { try { const k = unsentNoteKey(); if (k) sessionStorage.removeItem(k); } catch (e) {} }
     function restoreUnsentNote() {
       try {
         const k = unsentNoteKey(); if (!k) return;
         const note = sessionStorage.getItem(k); if (!note) return;
         const input = document.getElementById('user-input');
-        if (input && !input.value.trim()) { input.value = note; sessionStorage.removeItem(k); }
+        if (input && !input.value.trim()) input.value = note;   // kept until something is sent (a replay may clear the box again)
       } catch (e) {}
     }
 
@@ -870,7 +871,7 @@
       const input = document.getElementById('user-input');
       const msg = input.value.trim();
       if (!msg || (!sessionId && !tigerTeamId)) return;
-      input.value = '';
+      input.value = ''; clearUnsentNote();
       sentInterjections.push(msg);   // drawn here now; its echo from the team's stream is skipped
 
       closeBlock();
@@ -1026,7 +1027,7 @@
       const msg = input.value.trim();
       if (!msg || !tigerTeamId) return;
       continuationInFlight = true;
-      input.value = '';
+      input.value = ''; clearUnsentNote();
       input.disabled = true;
       document.getElementById('btn-send').disabled = true;
       sentInterjections.push(msg);   // drawn just below; its echo from the team's stream is skipped
@@ -2070,9 +2071,11 @@
           // With a note waiting, the page does not start following (that would redraw it and could later clear the box):
           // the note stays in the box and the person reloads to follow the team.
           if (note && statusData.has_stream) {
-            unlockDraft(); draftBox.value = note; keepUnsentNote(note);
+            unlockDraft(); draftBox.value = note; const kept = keepUnsentNote(note);
             resumeBtn.disabled = false; resumeBtn.textContent = '▶ Resume Interrupted';
-            addSystemMsg('The team is already running again (from another window), so your note was not sent. It is still in the box, and it will be back in the box after you reload this page to follow the team; then send it as an interjection.');
+            addSystemMsg(kept
+              ? 'The team is already running again (from another window), so your note was not sent. It is still in the box, and it will be back in the box after you reload this page to follow the team; then send it as an interjection.'
+              : 'The team is already running again (from another window), so your note was not sent. It is still in the box: copy it before you reload this page to follow the team (this browser could not keep it), then send it as an interjection.');
             return;
           }
           resumeBtn.style.display = 'none';
@@ -2120,7 +2123,7 @@
         }
 
         // The hub accepted the resume (and queued the note): only now is the note sent, drawn and cleared.
-        if (note) { drawNoteCard(note); input.value = ''; }
+        if (note) { drawNoteCard(note); input.value = ''; clearUnsentNote(); }
         isRunning = true;
         resumeBtn.style.display = 'none';
         document.getElementById('btn-stop').disabled = false;

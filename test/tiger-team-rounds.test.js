@@ -305,23 +305,36 @@ test('review r4: an unsent note survives the reload the page asks for (this tab 
     document: { getElementById: id => (id === 'user-input' ? input : null) } };
   vm.createContext(ctx);
   vm.runInContext(code, ctx);
-  ctx.keepUnsentNote('Do not send the report yet');
+  assert.equal(ctx.keepUnsentNote('Do not send the report yet'), true, 'says it was kept');
   assert.equal(store.get('tt-unsent-note:tt-1'), 'Do not send the report yet');
   input.value = 'something typed since';
   ctx.restoreUnsentNote();
   assert.equal(input.value, 'something typed since', 'never over text typed since');
   assert.ok(store.has('tt-unsent-note:tt-1'), 'kept for later');
-  input.value = '';
-  ctx.restoreUnsentNote();   // after the reload: the box is empty
+  // review r5: after the reload the replay sets up the bar several times (tt_started, then tt_complete clears the box):
+  // the note is put back every time, and kept until something is sent.
+  input.value = ''; ctx.restoreUnsentNote();   // tt_started
   assert.equal(input.value, 'Do not send the report yet');
-  assert.ok(!store.has('tt-unsent-note:tt-1'), 'forgotten once it is back');
+  input.value = ''; ctx.restoreUnsentNote();   // tt_complete: setInputMode('complete') cleared the box, then restores
+  assert.equal(input.value, 'Do not send the report yet', 'a replayed completion does not lose it');
+  assert.ok(store.has('tt-unsent-note:tt-1'), 'kept until sent');
+  ctx.clearUnsentNote();   // sent as an interjection / continue / resume
   input.value = ''; ctx.restoreUnsentNote();
-  assert.equal(input.value, '', 'only once');
+  assert.equal(input.value, '', 'forgotten once sent');
   ctx.tigerTeamId = 'tt-2'; ctx.keepUnsentNote('other'); input.value = '';
   ctx.tigerTeamId = 'tt-1'; ctx.restoreUnsentNote();
   assert.equal(input.value, '', 'another team\'s note stays with that team');
+  // a browser that cannot keep it: the page says to copy the note first
+  const broken = { tigerTeamId: 'tt-3', sessionStorage: { setItem() { throw new Error('quota'); }, getItem: () => null, removeItem() {} }, document: ctx.document };
+  vm.createContext(broken); vm.runInContext(code, broken);
+  assert.equal(broken.keepUnsentNote('x'), false);
+  assert.match(page, /: 'The team is already running again \(from another window\), so your note was not sent\. It is still in the box: copy it before you reload/);
+  // forgotten only when something is really sent
+  assert.match(page, /input\.value = ''; clearUnsentNote\(\);\n      sentInterjections\.push\(msg\);/);
+  assert.match(page, /continuationInFlight = true;\n      input\.value = ''; clearUnsentNote\(\);/);
+  assert.match(page, /if \(note\) \{ drawNoteCard\(note\); input\.value = ''; clearUnsentNote\(\); \}/);
   // wiring: kept where the page asks for the reload; restored whenever the input bar is set up
-  assert.match(page, /unlockDraft\(\); draftBox\.value = note; keepUnsentNote\(note\);/);
+  assert.match(page, /unlockDraft\(\); draftBox\.value = note; const kept = keepUnsentNote\(note\);/);
   const setMode = page.slice(page.indexOf('function setInputMode(m)'), page.indexOf('function unsentNoteKey()'));
   assert.match(setMode, /restoreUnsentNote\(\);\n    \}/);
 });
