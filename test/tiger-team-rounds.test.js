@@ -292,7 +292,7 @@ test('review r2: a note whose team finished or restarted elsewhere is put back i
   assert.match(running, /unlockDraft\(\); draftBox\.value = note;/);
   assert.match(running, /so your note was not sent\. It is still in the box/);
   assert.ok(!/loadTeam/.test(running), 'no following while a note waits');
-  assert.match(fn, /const keepDraft = \(why\) => \{ if \(!note\) return; if \(!draftBox\.value\.trim\(\)\) draftBox\.value = note;/);
+  assert.match(fn, /const keepDraft = \(why\) => \{ if \(!note\) return; if \(!draftBox\.value\.trim\(\)\) \{ draftBox\.value = note;/);
   assert.equal((fn.match(/unlockDraft\(\);/g) || []).length, 4, '404, a note waiting while the team runs, running elsewhere, status failure');
 });
 
@@ -334,7 +334,7 @@ test('review r4: an unsent note survives the reload the page asks for (this tab 
   assert.match(page, /continuationInFlight = true;\n      input\.value = ''; clearUnsentNote\(\);/);
   assert.match(page, /if \(note\) \{ drawNoteCard\(note\); input\.value = ''; clearUnsentNote\(\); \}/);
   // wiring: kept where the page asks for the reload; restored whenever the input bar is set up
-  assert.match(page, /unlockDraft\(\); draftBox\.value = note; const kept = keepUnsentNote\(note\);/);
+  assert.match(page, /unlockDraft\(\); draftBox\.value = note; if \(typeof growInput === 'function'\) growInput\(\); const kept = keepUnsentNote\(note\);/);
   const setMode = page.slice(page.indexOf('function setInputMode(m)'), page.indexOf('function unsentNoteKey()'));
   assert.match(setMode, /restoreUnsentNote\(\);\n    \}/);
 });

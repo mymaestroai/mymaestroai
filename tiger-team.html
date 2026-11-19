@@ -1083,7 +1083,7 @@
         const k = unsentNoteKey(); if (!k) return;
         const note = sessionStorage.getItem(k); if (!note) return;
         const input = document.getElementById('user-input');
-        if (input && !input.value.trim()) input.value = note;   // kept until something is sent (a replay may clear the box again)
+        if (input && !input.value.trim()) { input.value = note; if (typeof growInput === 'function') growInput(); }   // kept until something is sent (a replay may clear the box again)
       } catch (e) {}
     }
 
@@ -1479,7 +1479,11 @@
     function completeTool(callId, result) {
       const entry = toolMap.get(callId);
       if (!entry) return;
-      if (entry.slug && (memberStates.get(entry.slug) || {}).state === 'working') setMemberStep(entry.slug, 'thinking…');   // the tool is back; the member decides what next
+      if (entry.slug && (memberStates.get(entry.slug) || {}).state === 'working') {
+        // the tool is back: another tool of the same member still running is its step; else it decides what next
+        const other = [...toolMap.values()].find(t => t !== entry && t.slug === entry.slug && t.line && !/\bdone\b/.test(t.line.className || ''));
+        setMemberStep(entry.slug, other ? toolStepText(other.name) : 'thinking…');
+      }
       const line = entry.line;
       if (line) {
         line.className = 'tool-call-line done';
@@ -2264,9 +2268,16 @@
       }
     }
 
-    // Enter key sends (Shift+Enter makes a new line)
+    // Enter key sends (Shift+Enter makes a new line); Enter that confirms an input-method candidate (Japanese, Chinese,
+    // Korean keyboards) is not a send.
     document.getElementById('user-input').addEventListener('keydown', (e) => {
+      if (e.isComposing || e.keyCode === 229) return;
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); document.getElementById('btn-send').click(); }
+    });
+    // Escape closes the More menu and gives the focus back to its button.
+    document.addEventListener('keydown', (e) => {
+      const menu = document.getElementById('tt-more');
+      if (e.key === 'Escape' && menu && menu.classList.contains('open')) { setMoreMenu(false); const b = document.getElementById('btn-more'); if (b && b.focus) b.focus(); }
     });
     // A sent note empties the box without an input event: shrink it back afterwards.
     document.getElementById('btn-send').addEventListener('click', () => setTimeout(() => { growInput(); syncInputPad(); }, 0));
@@ -2513,7 +2524,7 @@
       const wasLocked = draftBox.disabled;
       if (note) { draftBox.disabled = true; draftBtn.disabled = true; }
       const unlockDraft = () => { if (note) { draftBox.disabled = wasLocked; draftBtn.disabled = wasLocked; } };
-      const keepDraft = (why) => { if (!note) return; if (!draftBox.value.trim()) draftBox.value = note; addSystemMsg(why); };   // never over text typed since
+      const keepDraft = (why) => { if (!note) return; if (!draftBox.value.trim()) { draftBox.value = note; if (typeof growInput === 'function') growInput(); } addSystemMsg(why); };   // never over text typed since
 
       try {
         const statusResp = await fetch(`/api/tiger-team/status?id=${encodeURIComponent(tigerTeamId)}`);
@@ -2537,7 +2548,7 @@
           // With a note waiting, the page does not start following (that would redraw it and could later clear the box):
           // the note stays in the box and the person reloads to follow the team.
           if (note && statusData.has_stream) {
-            unlockDraft(); draftBox.value = note; const kept = keepUnsentNote(note);
+            unlockDraft(); draftBox.value = note; if (typeof growInput === 'function') growInput(); const kept = keepUnsentNote(note);
             resumeBtn.disabled = false; resumeBtn.textContent = '▶ Resume Interrupted';
             addSystemMsg(kept
               ? 'The team is already running again (from another window), so your note was not sent. It is still in the box, and it will be back in the box after you reload this page to follow the team; then send it as an interjection.'
@@ -2584,7 +2595,7 @@
           resumeBtn.disabled = false;
           resumeBtn.textContent = '▶ Resume Interrupted';
           continuationInFlight = false;
-          setInputMode('ended'); input.value = note;   // the note is kept for another try
+          setInputMode('ended'); input.value = note; if (typeof growInput === 'function') growInput();   // the note is kept for another try
           return;
         }
 

@@ -385,3 +385,23 @@ test('showTeamsHome: fetches GET /api/tiger-team/list, draws the answer (or an e
   assert.match(html, /\.teams-view \.input-bar, \.teams-view \.roster-panel, \.teams-view \.member-strip \{ display: none !important; \}/);
   assert.match(html, /\.teams-view \.tt-controls > :not\(\.status-badge\) \{ display: none !important; \}/);
 });
+
+test('review r1: Escape closes the More menu and returns the focus; Enter confirming an input-method candidate never sends', () => {
+  const page = require('node:fs').readFileSync(require('node:path').join(__dirname, '../tiger-team.html'), 'utf8');
+  assert.match(page, /if \(e\.isComposing \|\| e\.keyCode === 229\) return;\n\s*if \(e\.key === 'Enter' && !e\.shiftKey\)/);
+  assert.match(page, /if \(e\.key === 'Escape' && menu && menu\.classList\.contains\('open'\)\) \{ setMoreMenu\(false\);[^\n]*b\.focus\(\)/);
+});
+
+test('review r1: a member running two tools keeps showing the one still running when the first returns', () => {
+  const page = require('node:fs').readFileSync(require('node:path').join(__dirname, '../tiger-team.html'), 'utf8');
+  const body = page.slice(page.indexOf('function completeTool(callId, result) {'), page.indexOf('function completeTool(callId, result) {') + 900);
+  assert.match(body, /const other = \[\.\.\.toolMap\.values\(\)\]\.find\(t => t !== entry && t\.slug === entry\.slug && t\.line && !\/\\bdone\\b\/\.test\(t\.line\.className \|\| ''\)\);/);
+  assert.match(body, /setMemberStep\(entry\.slug, other \? toolStepText\(other\.name\) : 'thinking…'\);/);
+});
+
+test('review r1: the phone menu link is set after Simple mode is applied (the order the Simple tests pin)', () => {
+  const mob = require('node:fs').readFileSync(require('node:path').join(__dirname, '../mobile.js'), 'utf8');
+  const apply = mob.indexOf("window.hubSimple.apply(hubMe)");
+  const link = mob.indexOf("$('menu-tiger')");
+  assert.ok(apply > 0 && link > apply, 'menu-tiger comes after the Simple apply');
+});

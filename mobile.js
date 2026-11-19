@@ -12980,8 +12980,8 @@ async function loadMe() {
     const r = await api('/api/me');
     if (r.ok) {
       hubMe = await r.json();
-      { const ti = $('menu-tiger'); if (ti) ti.hidden = !(hubMe && hubMe.isAdmin === true); }   // the menu's Tiger Teams link: admins only (the page and its API are admin-only)
       if (window.hubSimple) { try { window.hubSimple.apply(hubMe); } catch { /* the page stays as it is */ } }   // Simple mode and theme classes on <html>
+      { const ti = $('menu-tiger'); if (ti) ti.hidden = !(hubMe && hubMe.isAdmin === true); }   // the menu's Tiger Teams link: admins only (the page and its API are admin-only)
       if (typeof simpleMenuHide === 'function') simpleMenuHide();   // "Switch to Simple" only for a real account (not the legacy single-password login)
       if (typeof simpleToggleSync === 'function') simpleToggleSync();   // the Simple view switch (and Simple's theme button) only for a real account
       // Signed in: recorded-call pieces the hub never acknowledged (a closed app, a reload, a dead network) are sent now, one at a time (lib/ui-voice-call.js).
