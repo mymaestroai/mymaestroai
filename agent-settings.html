@@ -369,6 +369,16 @@
     <button class="btn btn-test" id="test-btn" onclick="testModel()" title="Test if this model responds">⚡ Test</button>
   </div>
   <div id="model-status" class="status"></div>
+  <div id="model-offer" style="display:none;margin-top:8px;padding:10px;border:1px solid #444;border-radius:6px;">
+    <div id="model-offer-title" style="font-weight:600;"></div>
+    <div id="model-offer-why" style="color:#999;font-size:0.85rem;margin:4px 0 8px;"></div>
+    <button class="btn" id="model-offer-switch" onclick="switchToOffer()">Switch</button>
+    <button class="btn" id="model-offer-decline" onclick="declineOffer()">Not now</button>
+  </div>
+  <div id="model-pinned-row" style="display:none;align-items:center;gap:8px;margin-top:10px;">
+    <input type="checkbox" id="model-pinned" onchange="saveModelPinned()" style="width:auto;">
+    <label for="model-pinned" style="margin:0;cursor:pointer;">Keep this model (no suggestions)</label>
+  </div>
   <div id="health-status" class="health-status"></div>
   <div style="display:flex;align-items:center;gap:8px;margin-top:10px;">
     <input type="checkbox" id="auto-model" onchange="saveAutoModel()" style="width:auto;">
@@ -1688,6 +1698,7 @@
       renderModelSelect(allModels, currentModel);
       watchModelRebuild(modelsData);
       loadOwnership(agent);
+      initModelOffer(agent);
     } catch (e) {
       showStatus('model-status', 'error', e.message);
     }
@@ -1822,6 +1833,79 @@
     renderModelSelect(filtered, currentModel);
   }
 
+  // ── Model suggestions (GET /api/agents/:name/model-offer): every text from the server goes in with textContent ──
+  let currentOffer = null;
+  let pageIsAdmin = false;
+  function hideOffer() { currentOffer = null; const box = document.getElementById('model-offer'); if (box) box.style.display = 'none'; }
+  async function loadModelOffer() {
+    hideOffer();
+    const pin = document.getElementById('model-pinned');
+    if (pin && pin.checked) return;
+    try {
+      const d = await apiFetch(`/api/agents/${encodeURIComponent(agentName)}/model-offer`);
+      const o = d && d.offer;
+      if (!o || !o.to) return;
+      currentOffer = o;
+      document.getElementById('model-offer-title').textContent = (o.kind === 'stronger' ? 'A stronger model for second opinions: ' : 'A newer model is available: ') + o.to;
+      document.getElementById('model-offer-why').textContent = `${o.why || ''}${o.route ? `; ${o.route}` : ''}${o.cost ? `, ${o.cost}` : ''}`;
+      document.getElementById('model-offer-decline').style.display = pageIsAdmin ? '' : 'none';
+      document.getElementById('model-offer').style.display = 'block';
+    } catch { /* no suggestion shown */ }
+  }
+  async function switchToOffer() {
+    const o = currentOffer;
+    if (!o) return;
+    try {
+      const result = await apiFetch(`/api/agents/${encodeURIComponent(agentName)}/model`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: o.to }),
+      });
+      if (result.success) {
+        showStatus('model-status', 'success', `Model set to ${o.to}`);
+        if (window.opener) { try { window.opener.loadAgents?.(); } catch {} }
+        const select = document.getElementById('model-select');
+        renderModelSelect(allModels, o.to);
+        if (select) select.value = o.to;
+        await loadModelOffer();
+      } else {
+        showStatus('model-status', 'error', result.error || 'Failed');
+      }
+    } catch (e) { showStatus('model-status', 'error', e.message); }
+  }
+  async function declineOffer() {
+    const o = currentOffer;
+    if (!o) return;
+    try {
+      const result = await apiFetch(`/api/agents/${encodeURIComponent(agentName)}/model-offer/decline`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: o.to }),
+      });
+      if (result && result.ok) hideOffer();
+      else showStatus('model-status', 'error', (result && result.error) || 'Failed');
+    } catch (e) { showStatus('model-status', 'error', e.message); }
+  }
+  async function saveModelPinned() {
+    const pin = document.getElementById('model-pinned');
+    const on = !!pin.checked;
+    try {
+      const result = await apiFetch(`/api/agents/${encodeURIComponent(agentName)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ modelPinned: on }) });
+      if (result && (result.success || result.ok)) {
+        showStatus('model-status', 'success', on ? 'This model is kept: no suggestions.' : 'Suggestions are on again.');
+        if (on) hideOffer(); else await loadModelOffer();
+      } else { pin.checked = !on; showStatus('model-status', 'error', (result && result.error) || 'Failed'); }   // not saved: the box shows what is stored
+    } catch (e) { pin.checked = !on; showStatus('model-status', 'error', e.message); }
+  }
+  async function initModelOffer(agent) {
+    try { const me = await apiFetch('/api/me'); pageIsAdmin = !!(me && me.isAdmin); } catch { pageIsAdmin = false; }
+    const row = document.getElementById('model-pinned-row');
+    const pin = document.getElementById('model-pinned');
+    if (pin) pin.checked = agent?.modelPinned === true;
+    if (row) row.style.display = pageIsAdmin ? 'flex' : 'none';
+    await loadModelOffer();
+  }
+
   async function saveModel() {
     const model = document.getElementById('model-select').value;
     if (!model) return;
@@ -1837,6 +1921,7 @@
       });
       if (result.success) {
         showStatus('model-status', 'success', `Model set to ${model}`);
+        if (typeof loadModelOffer === 'function') loadModelOffer();   // a model picked by hand may answer the suggestion
         // Notify parent window to refresh agent list
         if (window.opener) {
           try { window.opener.loadAgents?.(); } catch {}

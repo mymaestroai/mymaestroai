@@ -3504,6 +3504,11 @@
           <span id="st-reasoning-state" style="font-size:0.8rem;color:var(--text-dim)">${data.showReasoning !== false ? 'Shown above each reply.' : 'Not shown.'}</span>
         </div>
         <div class="st-hint">Models that reason before they answer (Claude, Codex, DeepSeek, Grok, Qwen…) show it in a panel above the reply: open or close it, drag its bottom edge to any height, ⤢ for the full window. Starts with the next reply.</div>
+        ${isHubAdmin() ? `<div class="st-row">
+          <label>Model suggestions</label>
+          <label class="toggle-switch"><input type="checkbox" id="st-model-offers" ${data.modelOffers !== false ? 'checked' : ''} onchange="saveModelOffersToggle(this.checked)"><span class="toggle-slider"></span></label>
+          <span id="st-model-offers-state" style="font-size:0.8rem;color:var(--text-dim)">${data.modelOffers !== false ? 'Your Maestro suggests newer models for your agents.' : 'No model suggestions.'}</span>
+        </div>` : ''}
       </div>`;
 
       if (isHubAdmin()) {
@@ -4869,6 +4874,16 @@
         const r = await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ showReasoning: !!on }) });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         if (state) state.textContent = on ? 'Shown above each reply.' : 'Not shown.';
+      } catch (e) { alert('Could not save: ' + e.message); }
+    }
+
+    // Model suggestions on/off (settings.modelOffers, on unless turned off): saved at once.
+    async function saveModelOffersToggle(on) {
+      const state = document.getElementById('st-model-offers-state');
+      try {
+        const r = await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ modelOffers: !!on }) });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        if (state) state.textContent = on ? 'Your Maestro suggests newer models for your agents.' : 'No model suggestions.';
       } catch (e) { alert('Could not save: ' + e.message); }
     }
 

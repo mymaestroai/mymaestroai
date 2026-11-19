@@ -1488,6 +1488,28 @@ async function handleHttpRequest(req, res) {
       return jsonResponse(res, result.success ? 200 : 400, result);
     }
 
+    // /api/agents/:name/model-offer: the newer (or stronger) model on offer for this agent, or null (lib/model-offers-service)
+    if (/^\/api\/agents\/([^/]+)\/model-offer$/.test(pathname) && req.method === 'GET') {
+      const name = decodeURIComponent(pathname.split('/')[3]);
+      const isAdm = !!req.hubService || access.isAdmin(req.hubUser);
+      if (!isAdm && !access.canAccessAgent(req.hubUser, name, { agents: await getAgents() })) return jsonResponse(res, 403, { error: 'no_access_to_agent' });
+      const o = await require('./lib/model-offers-service').getModelOffers().offerFor(name);
+      if (!o || (!isAdm && !require('./lib/member-models').memberMayUse(o.to))) return jsonResponse(res, 200, { offer: null });
+      return jsonResponse(res, 200, { offer: { from: o.from, to: o.to, kind: o.kind, why: o.why, route: o.route, cost: o.cost } });
+    }
+
+    // /api/agents/:name/model-offer/decline: "Not now" (admin only); the model must be the current offer
+    if (/^\/api\/agents\/([^/]+)\/model-offer\/decline$/.test(pathname) && req.method === 'POST') {
+      if (!req.hubService && !access.isAdmin(req.hubUser)) return jsonResponse(res, 403, { error: 'admin_only' });
+      const name = decodeURIComponent(pathname.split('/')[3]);
+      const body = JSON.parse(await readBody(req));
+      const svc = require('./lib/model-offers-service').getModelOffers();
+      const o = await svc.offerFor(name);
+      if (!o || !body || o.to !== body.model) return jsonResponse(res, 409, { error: 'That suggestion is no longer current.' });
+      const r = svc.decline(name, o.to);
+      return r && r.ok ? jsonResponse(res, 200, { ok: true }) : jsonResponse(res, 500, { error: (r && r.error) || 'Could not save.' });
+    }
+
     // /api/agents/:name/display
     if (/^\/api\/agents\/([^/]+)\/display$/.test(pathname) && req.method === 'POST') {
       const name = pathname.split('/')[3];
@@ -2693,6 +2715,7 @@ async function handleHttpRequest(req, res) {
           // Share links: enabled, defaultHours, maxHours (hard maximum 168), merged onto the stored value (lib/share-links cleanSettings).
           if (patch && patch.shareLinks !== undefined) patch.shareLinks = require('./lib/share-links').cleanSettings(patch.shareLinks, hubSettings.getSetting('shareLinks'));
           if (patch && patch.showReasoning !== undefined) patch.showReasoning = patch.showReasoning !== false;
+          if (patch && patch.modelOffers !== undefined) patch.modelOffers = patch.modelOffers !== false;
           if (patch && patch.walletLockedNotice !== undefined) patch.walletLockedNotice = patch.walletLockedNotice !== false;
           // Workers allowed at once per AI service: integers 1..32 only (lib/provider-pacing); applied to the running hub below.
           if (patch && patch.workersAtOnce !== undefined) patch.workersAtOnce = require('./lib/provider-pacing').cleanWorkersAtOnce(patch.workersAtOnce);
