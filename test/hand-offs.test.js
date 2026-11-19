@@ -754,3 +754,17 @@ test('r4: a note that can\'t be saved is not acknowledged; the framing names bri
   assert.match(framingMessage({ caller: 'sam', topic: 't', id: 'ho-1', brief: 'b', folder: '/f', notes: [], briefFile: true }), /The brief is saved at \/f\/brief\.md\./);
   assert.doesNotMatch(framingMessage({ caller: 'sam', topic: 't', id: 'ho-1', brief: 'b', folder: '/f', notes: [], briefFile: false }), /brief\.md/);
 });
+
+test('r5: without /proc/self/fd the hub does nothing under the target\'s folder (it only names the folder), and the target is told to make it', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'hand-offs.js'), 'utf8');
+  const a = src.indexOf('    if (!viaFd) {');
+  const b = src.indexOf('    } else {', a);
+  assert.ok(a > 0 && b > a);
+  const branch = src.slice(a, b);
+  assert.doesNotMatch(branch, /fs\.\w+\(/, 'no file operation in that branch');
+  assert.match(branch, /folder = path\.join\(parent, `\$\{caller\}-\$\{slug\}-\$\{id\.slice\(3\)\}`\);/);
+  const before = src.slice(src.indexOf('fs.mkdirSync(base, { recursive: true });'), a);
+  assert.doesNotMatch(before.replace('fs.mkdirSync(base, { recursive: true });', '').replace('fs.realpathSync(base)', '').replace("fs.existsSync('/proc/self/fd')", ''), /fs\.\w+\(/, 'only the Files folder itself before the branch');
+  assert.match(framingMessage({ caller: 'sam', topic: 't', id: 'ho-1', brief: 'b', folder: '/f', notes: [], briefFile: false }), /make that folder first/);
+  assert.doesNotMatch(framingMessage({ caller: 'sam', topic: 't', id: 'ho-1', brief: 'b', folder: '/f', notes: [], briefFile: true }), /make that folder first/);
+});
