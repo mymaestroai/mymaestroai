@@ -71,11 +71,29 @@ test('sdk-chat: a Codex turn waits for the update lock right before the binary i
   assert.ok(at > 0);
   const bin = sdk.indexOf('const bin = codexCli.resolveBinary();', at);
   assert.ok(bin > at);
-  const line = "if (typeof codexUpdateLock !== 'undefined' && codexUpdateLock && codexUpdateLock.active()) await codexUpdateLock.waitIdle(15 * 60 * 1000);";
-  const lineAt = sdk.indexOf(line, at);
-  assert.ok(lineAt > at && lineAt < bin);
-  const between = sdk.slice(lineAt, bin);
-  assert.equal(between.split('\n').length, 2, 'the guarded line is the line right before the bin line');
+  const gate = sdk.indexOf("if (typeof codexUpdateLock !== 'undefined' && codexUpdateLock && codexUpdateLock.active()) {", at);
+  assert.ok(gate > at && gate < bin, 'the wait comes before the binary is resolved');
+  // review r4: after the headers and the Stop listener, so the page sees the turn and Stop ends the wait
+  const head = sdk.indexOf("res.writeHead(200", at), abortAt = sdk.indexOf("signal.addEventListener('abort'", at);
+  assert.ok(head > at && head < gate && abortAt > at && abortAt < gate);
+  const block = sdk.slice(gate, bin);
+  assert.match(block, /setInterval\([^]*heartbeat/, 'a heartbeat while it waits');
+  assert.match(block, /await codexUpdateLock\.waitIdle\(20 \* 60 \* 1000, signal\)/);
+  assert.match(block, /if \(!idle \|\| \(signal && signal\.aborted\)\) \{[^]*sendSSEDone\(res\);[^]*return;/, 'a turn that waited in vain, or was stopped, ends instead of starting Codex');
+});
+
+test('r4: waitIdle ends at once when the turn is stopped', async () => {
+  const lock = require('../lib/codex-cli/update-lock');
+  assert.equal(lock.begin(), true);
+  try {
+    const ac = new AbortController();
+    const p = lock.waitIdle(60000, ac.signal);
+    ac.abort();
+    assert.equal(await p, false);
+    const ac2 = new AbortController(); ac2.abort();
+    assert.equal(await lock.waitIdle(60000, ac2.signal), false, 'already stopped');
+  } finally { lock.end(); }
+  assert.equal(await lock.waitIdle(10), true);
 });
 
 test('server.js /api/settings: componentUpdates is cleaned to one of auto, notify, off', () => {

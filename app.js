@@ -4399,7 +4399,8 @@
         const g = await fetch('/api/components', { credentials: 'include' });
         const lu0 = g.ok ? (codexOf(await g.json()) || {}).lastUpdate : null;
         baseline = lu0 && Number(lu0.at) ? Number(lu0.at) : 0;
-      } catch (e) { baseline = 0; }
+        if (!g.ok) baseline = Date.now();   // unknown: only an outcome from after the press counts
+      } catch (e) { baseline = Date.now(); }
       let text = '';
       try {
         const r = await fetch('/api/components/codex/update', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: '{}' });

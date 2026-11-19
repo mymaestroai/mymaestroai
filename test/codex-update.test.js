@@ -220,53 +220,86 @@ function withKept(h, version = '0.156.1') {
   return keep;
 }
 
-test('B2: package missing + kept copy -> recovered', async () => {
-  const h = mkHome();
-  const keep = withKept(h);
-  fs.rmSync(h.dir, { recursive: true, force: true });
-  const r = await recoverCodex({ env: h.env, check: async () => { throw new Error('must not run: nothing to check'); } });
-  assert.deepEqual(r, { recovered: true, error: null });
-  assert.equal(installedCodexVersion({ env: h.env }), '0.156.1');
-  assert.equal(fs.existsSync(keep), false);
+// The marker of an update in progress is the only sign of an interrupted update (review r4).
+const markerOf = (dir) => path.join(path.dirname(dir), '.codex-update-in-progress');
+const markInProgress = (h) => fs.writeFileSync(markerOf(h.dir), '{"from":"0.156.1"}\n');
+
+test('r4: with the in-progress marker, an interrupted update puts the kept copy back (missing, half-written or unchecked package)', async () => {
+  const missing = mkHome();
+  withKept(missing);
+  markInProgress(missing);
+  fs.rmSync(missing.dir, { recursive: true, force: true });
+  assert.deepEqual(await recoverCodex({ env: missing.env }), { recovered: true, error: null });
+  assert.equal(installedCodexVersion({ env: missing.env }), '0.156.1');
+  assert.equal(fs.existsSync(markerOf(missing.dir)), false, 'the marker is removed');
+
+  const half = mkHome();
+  withKept(half);
+  markInProgress(half);
+  fs.writeFileSync(path.join(half.dir, 'package.json'), JSON.stringify({ name: '@openai/codex' }));
+  fs.writeFileSync(path.join(half.dir, 'half-written'), 'x');
+  assert.equal((await recoverCodex({ env: half.env })).recovered, true);
+  assert.equal(installedCodexVersion({ env: half.env }), '0.156.1');
+  assert.equal(fs.existsSync(path.join(half.dir, 'half-written')), false);
+
+  // a new release that installed (and even runs) but was never confirmed: still put back (GPT-5.6, r4)
+  const unchecked = mkHome();
+  withKept(unchecked, '0.150.0');
+  markInProgress(unchecked);
+  setVersion(unchecked.dir, '0.170.0');
+  assert.equal((await recoverCodex({ env: unchecked.env })).recovered, true);
+  assert.equal(installedCodexVersion({ env: unchecked.env }), '0.150.0');
+  assert.deepEqual(fs.readdirSync(path.dirname(unchecked.dir)).filter((n) => /^codex\.failed-/.test(n)), [], 'the package moved aside is removed');
 });
 
-test('B2: a package whose package.json has no version -> recovered', async () => {
-  const h = mkHome();
-  withKept(h);
-  fs.writeFileSync(path.join(h.dir, 'package.json'), JSON.stringify({ name: '@openai/codex' }));
-  fs.writeFileSync(path.join(h.dir, 'half-written'), 'x');
-  const r = await recoverCodex({ env: h.env, check: async () => true });
-  assert.equal(r.recovered, true);
-  assert.equal(installedCodexVersion({ env: h.env }), '0.156.1');
-  assert.equal(fs.existsSync(path.join(h.dir, 'half-written')), false);
-});
-
-test('B2: a package that fails the check -> recovered; a working package -> nothing touched', async () => {
-  const bad = mkHome();
-  withKept(bad, '0.150.0');
-  const r1 = await recoverCodex({ env: bad.env, check: async () => false });
-  assert.equal(r1.recovered, true);
-  assert.equal(installedCodexVersion({ env: bad.env }), '0.150.0');
-
+test('r4: without the marker nothing is touched: a working package, an uninstall, a slow start', async () => {
   const good = mkHome();
-  const keep = withKept(good, '0.150.0');
-  let checked = 0;
-  const r2 = await recoverCodex({ env: good.env, check: async () => { checked++; return true; } });
-  assert.deepEqual(r2, { recovered: false, error: null });
-  assert.equal(checked, 1);
+  const keep = withKept(good, '0.150.0');   // the copy a successful update leaves behind
+  assert.deepEqual(await recoverCodex({ env: good.env }), { recovered: false, error: null });
   assert.equal(installedCodexVersion({ env: good.env }), '0.156.1');
-  assert.equal(fs.existsSync(keep), true, 'the kept copy is left as it is');
   assert.equal(fs.readFileSync(path.join(keep, 'bin', 'codex.js'), 'utf8'), '// kept');
 
-  const none = mkHome();   // no kept copy: nothing to recover from, and the check is not even run
-  const r3 = await recoverCodex({ env: none.env, check: async () => { throw new Error('no'); } });
-  assert.equal(r3.recovered, false);
-  assert.equal(installedCodexVersion({ env: none.env }), '0.156.1');
+  const uninstalled = mkHome();
+  withKept(uninstalled, '0.150.0');
+  fs.rmSync(uninstalled.dir, { recursive: true, force: true });   // the owner removed Codex
+  assert.equal((await recoverCodex({ env: uninstalled.env })).recovered, false);
+  assert.equal(installedCodexVersion({ env: uninstalled.env }), null, 'it stays uninstalled');
+
+  const noKeep = mkHome();   // a marker without a kept copy: the copy never finished, nothing changed; the marker goes
+  markInProgress(noKeep);
+  assert.equal((await recoverCodex({ env: noKeep.env })).recovered, false);
+  assert.equal(fs.existsSync(markerOf(noKeep.dir)), false);
+  assert.equal(installedCodexVersion({ env: noKeep.env }), '0.156.1');
+});
+
+test('r4: an update leaves no marker behind, on success and on a rollback; a failed put-back keeps the marker for the next start', async () => {
+  const ok = mkHome();
+  assert.equal((await updateCodex({ env: ok.env, install: () => { setVersion(ok.dir, '0.166.0'); return { ok: true }; }, selfCheck: async () => true })).ok, true);
+  assert.equal(fs.existsSync(markerOf(ok.dir)), false);
+
+  const back = mkHome();
+  let seenMarker = false;
+  const r = await updateCodex({ env: back.env, install: () => { seenMarker = fs.existsSync(markerOf(back.dir)); setVersion(back.dir, '0.166.0'); return { ok: true }; }, selfCheck: async () => installedCodexVersion({ env: back.env }) === '0.156.1' });
+  assert.equal(seenMarker, true, 'the marker is there while npm runs');
+  assert.equal(r.rolledBack, true);
+  assert.equal(installedCodexVersion({ env: back.env }), '0.156.1');
+  assert.equal(fs.existsSync(markerOf(back.dir)), false);
+
+  const stuck = mkHome();
+  let calls = 0;
+  const fsImpl = Object.assign(Object.create(fs), { renameSync(a, b) { calls++; if (String(a).endsWith('.codex-previous')) throw new Error('disk gone'); return fs.renameSync(a, b); } });
+  const r2 = await updateCodex({ env: stuck.env, fsImpl, install: () => { setVersion(stuck.dir, '0.166.0'); return { ok: true }; }, selfCheck: async () => false });
+  assert.equal(r2.ok, false);
+  assert.match(r2.error, /putting 0\.156\.1 back failed/);
+  assert.ok(installedCodexVersion({ env: stuck.env }), 'the package moved aside came back: never no package at all');
+  assert.equal(fs.existsSync(markerOf(stuck.dir)), true, 'the marker stays, so the next start tries again');
+  assert.ok(calls >= 2);
 });
 
 test('B2: recoverCodex never throws', async () => {
   const h = mkHome();
   withKept(h);
+  markInProgress(h);
   fs.rmSync(h.dir, { recursive: true, force: true });
   const fsImpl = Object.assign(Object.create(fs), { renameSync() { throw new Error('disk gone'); } });
   const r = await recoverCodex({ env: h.env, fsImpl });
@@ -278,10 +311,11 @@ test('B2: recoverCodex never throws', async () => {
 test('B2: an update that starts after an interrupted one recovers first and keeps the good copy', async () => {
   const h = mkHome();
   const keep = withKept(h, '0.150.0');   // the good copy
+  markInProgress(h);
   fs.writeFileSync(path.join(h.dir, 'package.json'), JSON.stringify({ name: '@openai/codex' }));   // the broken, interrupted package
   fs.writeFileSync(path.join(h.dir, 'broken-marker'), 'x');
   const r = await updateCodex({
-    env: h.env, recoverCheck: async () => true,
+    env: h.env,
     install: () => { setVersion(h.dir, '0.166.0'); return { ok: true }; }, selfCheck: async () => true,
   });
   assert.equal(r.ok, true);

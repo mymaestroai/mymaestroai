@@ -397,3 +397,39 @@ test('B2: start runs one recovery before the first check timer and logs a recove
   assert.ok(logs.some(m => /put back|recovered/i.test(m)));
   w2.stop(); w.stop();
 });
+
+test('r4: an update only starts from a check that reached the registry; a check during an update leaves Codex alone; start recovery holds the lock', async () => {
+  const os = require('os');
+  const { createComponentWatch } = require('../lib/component-watch');
+  const lock = require('../lib/codex-cli/update-lock');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cw4-'));
+  const now = Date.parse('2026-11-19T12:00:00Z');
+  const doc = { time: { '0.156.1': '2026-10-01T00:00:00Z', '0.170.0': '2026-11-10T00:00:00Z' } };
+  let online = true; let updates = 0;
+  const w = createComponentWatch({
+    stateFile: path.join(dir, 'cw.json'), now: () => now, fetchJson: async () => (online ? doc : null),
+    setting: () => ({ codex: 'auto' }), codexInstalled: () => '0.156.1', codexManaged: () => true, codexInUse: () => false,
+    updateCodex: async () => { updates++; return { ok: false, from: '0.156.1', to: null, error: 'npm failed' }; },
+    discover: async () => null, codexModels: () => [], claudeInstalled: () => null, localStatus: async () => null,
+    recoverCodex: async () => { assert.equal(lock.active(), true, 'recovery runs under the update lock'); return { recovered: false }; },
+    setTimer: () => null, clearTimer: () => {},
+  });
+  online = false;
+  await w.check({ reason: 'retry' });
+  assert.equal(updates, 0, 'offline: the stored release is not installed from stale data');
+  online = true;
+  await w.check({ reason: 'daily' });
+  assert.equal(updates, 1);
+  // while an update holds the lock, a check does not touch the Codex entry
+  assert.equal(lock.begin(), true);
+  try {
+    const before = JSON.stringify(w.items().find((i) => i.id === 'codex'));
+    await w.check({ reason: 'manual', allowUpdate: false });
+    assert.equal(JSON.stringify(w.items().find((i) => i.id === 'codex')), before);
+  } finally { lock.end(); }
+  w.start();
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(lock.active(), false, 'and releases it');
+  w.stop();
+  fs.rmSync(dir, { recursive: true, force: true });
+});
