@@ -743,3 +743,14 @@ test('r3: the job folder is made inside the Files folder and brief.md is never w
   assert.match(src, /fs\.writeFileSync\(`\/proc\/self\/fd\/\$\{cfd\}\/brief\.md`, briefText, \{ flag: 'wx' \}\);/);
   assert.match(src, /if \(O_DIRECTORY === undefined \|\| !fs\.existsSync\('\/proc\/self\/fd'\)\) return null;/, 'no status read without /proc');
 });
+
+test('r4: a note that can\'t be saved is not acknowledged; the framing names brief.md only when the hub wrote it', async () => {
+  const env = setup();
+  const v = await mk(env);
+  env.h._save = () => false;
+  assert.throws(() => env.h.note({ caller: 'sam', id: v.id, text: 'use blue' }), /Couldn't save the note/);
+  assert.strictEqual(env.h.get(v.id).notes.length, 0);
+  // the framing mentions brief.md only when the hub wrote it
+  assert.match(framingMessage({ caller: 'sam', topic: 't', id: 'ho-1', brief: 'b', folder: '/f', notes: [], briefFile: true }), /The brief is saved at \/f\/brief\.md\./);
+  assert.doesNotMatch(framingMessage({ caller: 'sam', topic: 't', id: 'ho-1', brief: 'b', folder: '/f', notes: [], briefFile: false }), /brief\.md/);
+});
