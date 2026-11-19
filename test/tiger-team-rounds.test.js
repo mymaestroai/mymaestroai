@@ -338,3 +338,22 @@ test('review r4: an unsent note survives the reload the page asks for (this tab 
   const setMode = page.slice(page.indexOf('function setInputMode(m)'), page.indexOf('function unsentNoteKey()'));
   assert.match(setMode, /restoreUnsentNote\(\);\n    \}/);
 });
+
+test('review r6: the team finishing never empties the box (an edited draft is kept; the saved note returns only into an empty box)', () => {
+  const page = fs.readFileSync(path.join(__dirname, '../tiger-team.html'), 'utf8');
+  const setMode = page.slice(page.indexOf('function setInputMode(m)'), page.indexOf('function unsentNoteKey()'));
+  const complete = setMode.slice(setMode.indexOf("} else if (m === 'complete') {"), setMode.indexOf("} else {   // 'ended'"));
+  assert.ok(complete.length > 0);
+  assert.ok(!/input\.value\s*=/.test(complete), 'the complete state leaves the box as it is');
+  // the scenario: note A restored after a reload, edited to B, then the team completes -> B stays
+  const code = page.slice(page.indexOf('    function unsentNoteKey()'), page.indexOf('    // ── Stop ──'));
+  const store = new Map([['tt-unsent-note:tt-1', 'note A']]);
+  const input = { value: '' };
+  const ctx = { tigerTeamId: 'tt-1', sessionStorage: { setItem: (k, v) => store.set(k, v), getItem: k => (store.has(k) ? store.get(k) : null), removeItem: k => store.delete(k) },
+    document: { getElementById: () => input } };
+  vm.createContext(ctx); vm.runInContext(code, ctx);
+  ctx.restoreUnsentNote(); assert.equal(input.value, 'note A');
+  input.value = 'note B (edited)';
+  ctx.restoreUnsentNote();   // what setInputMode('complete') does now: no clearing, then restore into an empty box only
+  assert.equal(input.value, 'note B (edited)');
+});

@@ -825,8 +825,7 @@
         input.placeholder = 'Ask a follow-up or give a new directive…';
         btn.textContent = 'Continue';
         btn.onclick = continueSession;
-        input.value = '';
-        input.disabled = false; btn.disabled = false;
+        input.disabled = false; btn.disabled = false;   // what is in the box stays (a draft is never thrown away by the team finishing)
       } else {   // 'ended': stopped, failed or interrupted; a note resumes it from where it stopped
         sel.style.display = 'none';
         label.textContent = '🔄 Continue:';
