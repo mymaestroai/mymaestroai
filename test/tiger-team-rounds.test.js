@@ -295,3 +295,33 @@ test('review r2: a note whose team finished or restarted elsewhere is put back i
   assert.match(fn, /const keepDraft = \(why\) => \{ if \(!note\) return; if \(!draftBox\.value\.trim\(\)\) draftBox\.value = note;/);
   assert.equal((fn.match(/unlockDraft\(\);/g) || []).length, 4, '404, a note waiting while the team runs, running elsewhere, status failure');
 });
+
+test('review r4: an unsent note survives the reload the page asks for (this tab only, once, never over typed text)', () => {
+  const page = fs.readFileSync(path.join(__dirname, '../tiger-team.html'), 'utf8');
+  const code = page.slice(page.indexOf('    function unsentNoteKey()'), page.indexOf('    // ── Stop ──'));
+  const store = new Map();
+  const input = { value: '' };
+  const ctx = { tigerTeamId: 'tt-1', sessionStorage: { setItem: (k, v) => store.set(k, String(v)), getItem: k => (store.has(k) ? store.get(k) : null), removeItem: k => store.delete(k) },
+    document: { getElementById: id => (id === 'user-input' ? input : null) } };
+  vm.createContext(ctx);
+  vm.runInContext(code, ctx);
+  ctx.keepUnsentNote('Do not send the report yet');
+  assert.equal(store.get('tt-unsent-note:tt-1'), 'Do not send the report yet');
+  input.value = 'something typed since';
+  ctx.restoreUnsentNote();
+  assert.equal(input.value, 'something typed since', 'never over text typed since');
+  assert.ok(store.has('tt-unsent-note:tt-1'), 'kept for later');
+  input.value = '';
+  ctx.restoreUnsentNote();   // after the reload: the box is empty
+  assert.equal(input.value, 'Do not send the report yet');
+  assert.ok(!store.has('tt-unsent-note:tt-1'), 'forgotten once it is back');
+  input.value = ''; ctx.restoreUnsentNote();
+  assert.equal(input.value, '', 'only once');
+  ctx.tigerTeamId = 'tt-2'; ctx.keepUnsentNote('other'); input.value = '';
+  ctx.tigerTeamId = 'tt-1'; ctx.restoreUnsentNote();
+  assert.equal(input.value, '', 'another team\'s note stays with that team');
+  // wiring: kept where the page asks for the reload; restored whenever the input bar is set up
+  assert.match(page, /unlockDraft\(\); draftBox\.value = note; keepUnsentNote\(note\);/);
+  const setMode = page.slice(page.indexOf('function setInputMode(m)'), page.indexOf('function unsentNoteKey()'));
+  assert.match(setMode, /restoreUnsentNote\(\);\n    \}/);
+});
