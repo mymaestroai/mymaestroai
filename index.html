@@ -2654,7 +2654,7 @@
     html.mm-simple .message pre { background: var(--sm-side); border: 1px solid var(--sm-border); color: var(--sm-text); }
     html.mm-simple .message .agent-label { display: none; }
     html.mm-simple .message > .msg-time { color: var(--sm-muted); }
-    html.mm-simple .message.assistant > .msg-time { left: 0; right: auto; }   /* no bubble: the time sits under the reply's text, not across the full-width column */
+    html.mm-simple .message.assistant > .msg-time { left: 64px; right: auto; }   /* no bubble: the time sits under the reply's text, after the Copy (left 0) and Play (left 30px) buttons, not across the full-width column */
     /* Play and copy: never on the text. A reply: a small muted pair just below it, on hover (always on touch screens). A user bubble: beside it, on hover. */
     html.mm-simple .message > .msg-copy, html.mm-simple .message > .msg-speak {
       top: 100%; right: auto; left: 0; margin-top: 2px; border: 0; background: none; color: var(--sm-muted);

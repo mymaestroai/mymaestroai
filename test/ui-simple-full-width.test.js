@@ -17,7 +17,10 @@ test('desktop Simple mode: no fixed width for the chat column; the composer shar
   assert.match(composer, /max-width: var\(--chat-max-width\)/);
   assert.match(composer, /width: calc\(100% - 2 \* var\(--chat-pad-x\)\)/, 'same edges as the messages\' text');
   assert.match(css, /html\.mm-simple \.simple-empty \{[^}]*max-width: 720px/, 'the greeting stays narrow');
-  assert.match(css, /html\.mm-simple \.message\.assistant > \.msg-time \{ left: 0; right: auto; \}/, 'a reply\'s time sits under its text, on the left');
+  assert.match(css, /html\.mm-simple \.message\.assistant > \.msg-time \{ left: 64px; right: auto; \}/, 'a reply\'s time sits under its text, on the left, after the Copy and Play buttons');
+  const speak = css.match(/html\.mm-simple \.message > \.msg-speak \{ left: (\d+)px; \}/);
+  assert.ok(speak, 'the Play button keeps its fixed place below a reply');
+  assert.ok(64 >= Number(speak[1]) + 30, 'the time starts after the Play button (about 26px wide), so the two never overlap');
 });
 
 test('phone Simple mode: the messages and the composer are not capped at a fixed width', () => {
