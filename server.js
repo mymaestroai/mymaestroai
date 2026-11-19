@@ -3536,7 +3536,7 @@ async function handleHttpRequest(req, res) {
           );
         } else {
           result = await runTigerTeam(
-            { objective, coordinator, participants: effectiveParticipants, max_rounds: max_rounds || 5, context: context || '', challenger: challenger || '', challengerDirective: challengerDirective || '', directives: directives || {}, session },
+            { objective, coordinator, participants: effectiveParticipants, max_rounds, context: context || '', challenger: challenger || '', challengerDirective: challengerDirective || '', directives: directives || {}, session },
             stream,
             'tiger-team-ui'
           );

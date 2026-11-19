@@ -548,7 +548,7 @@
       // Fail closed: without the sanitizer, agent output is shown as escaped text, never parsed as HTML.
       if (!purifyReady()) return esc(text).replace(/\n/g, '<br>');
       const html = typeof marked !== 'undefined' ? marked.parse(text) : esc(text).replace(/\n/g, '<br>');
-      if (!purifyHooked) { purifyHooked = true; DOMPurify.addHook('afterSanitizeAttributes', purifyFixNode); }
+      ensurePurifyHook();
       return DOMPurify.sanitize(html, {
         ALLOWED_TAGS: ['b','i','em','strong','code','pre','br','p','ul','ol','li','h1','h2','h3','h4','h5','h6','a','blockquote','hr','span','div','table','thead','tbody','tr','th','td','img','details','summary','del','s','sub','sup'],
         ALLOWED_ATTR: ['href','target','rel','src','alt','class'],
@@ -559,12 +559,26 @@
     }
     // Member text must not load remote images (tracking) or carry page ids (DOM clobbering).
     let purifyHooked = false;
+    /** Registers the node hook once; called before EVERY DOMPurify.sanitize (live text and saved transcripts alike). */
+    function ensurePurifyHook() {
+      if (purifyHooked || !purifyReady() || typeof DOMPurify.addHook !== 'function') return;
+      purifyHooked = true;
+      DOMPurify.addHook('afterSanitizeAttributes', purifyFixNode);
+    }
+    /** An img src survives only as a plain same-origin path: no whitespace or control characters anywhere (browsers
+     *  strip a tab/newline/CR inside "/&#9;/evil.example" and load //evil.example), starts with "/" but not "//" or "/\". */
+    function sameOriginImgSrc(src, origin) {
+      if (typeof src !== 'string' || !src) return false;
+      if (/[\s\x00-\x1f\x7f]/.test(src)) return false;
+      if (!(src.charAt(0) === '/' && src.charAt(1) !== '/' && src.charAt(1) !== '\\')) return false;
+      try { return new URL(src, origin).origin === origin; } catch { return false; }
+    }
     function purifyFixNode(node) {
       if (!node || !node.tagName) return;
       const tag = node.tagName.toLowerCase();
       if (tag === 'img') {
         const src = node.getAttribute('src') || '';
-        if (!(src.charAt(0) === '/' && src.charAt(1) !== '/' && src.charAt(1) !== '\\')) node.removeAttribute('src');
+        if (!sameOriginImgSrc(src, location.origin)) node.removeAttribute('src');
       } else if (tag === 'a') {
         const href = node.getAttribute('href') || '';
         node.setAttribute('rel', 'noopener noreferrer');
@@ -970,13 +984,17 @@
       if (continuationInFlight) return;
       const input = document.getElementById('user-input');
       const note = input.value.trim();
-      input.value = '';
-      if (note) {
-        sentInterjections.push(note);   // drawn just below; its echo from the team's stream is skipped
-        closeBlock();
-        const block = document.createElement('div');
-        block.className = 'agent-block user-inject';
-        block.innerHTML = `
+      // The note stays in the input until the resume POST answers OK: resumeInterruptedTeam draws the card and clears it then.
+      await resumeInterruptedTeam(note);
+    }
+
+    /** The "Note" card of a Resume, drawn only once the hub accepted the resume (never for a note that was not sent). */
+    function drawNoteCard(note) {
+      sentInterjections.push(note);   // drawn just below; its echo from the team's stream is skipped
+      closeBlock();
+      const block = document.createElement('div');
+      block.className = 'agent-block user-inject';
+      block.innerHTML = `
           <div class="agent-block-header">
             <span class="block-icon">👤</span>
             <span class="block-agent">You</span>
@@ -984,10 +1002,8 @@
             <span class="block-time">${stamp()}</span>
           </div>
           <div class="agent-block-body"><div class="text-content">${md(note)}</div></div>`;
-        document.getElementById('timeline').appendChild(block);
-        scrollBottom();
-      }
-      await resumeInterruptedTeam(note);
+      document.getElementById('timeline').appendChild(block);
+      scrollBottom();
     }
 
     async function continueSession() {
@@ -1475,7 +1491,7 @@
               if (gw.challenger_display) teamInfo += '  ·  ⚔️ Challenger: ' + gw.challenger_display;
               addSystemMsg(teamInfo);
               const displayMax = (gw.max_rounds >= 50 || maxRounds === 0) ? '∞' : (gw.max_rounds || maxRounds);
-              document.getElementById('round-counter').textContent = 'Round 0 of ' + displayMax;
+              document.getElementById('round-counter').textContent = (gw.max_rounds === 0 || maxRounds === 0) ? 'Round 0' : 'Round 0 of ' + displayMax;
             }
             break;
 
@@ -1523,6 +1539,8 @@
             if (mode !== 'roundtable' && (gw.round || gw.turn) && gw.max_rounds) {
               const dMax = gw.max_rounds >= 50 ? '∞' : gw.max_rounds;
               document.getElementById('round-counter').textContent = 'Round ' + (gw.round || gw.turn) + ' of ' + dMax;
+            } else if (mode !== 'roundtable' && (gw.round || gw.turn) && gw.max_rounds === 0) {
+              document.getElementById('round-counter').textContent = 'Round ' + (gw.round || gw.turn);   // no limit: no "of M"
             }
             // If coordinator block is empty (no text and no tool calls), remove it entirely
             if (currentBlock && currentBlock.slug === coordinator && !currentBlock.rawText.trim() && !currentBlock.toolCount) {
@@ -1940,10 +1958,11 @@
           if (purifyReady()) {
             // No inline handlers survive a save: the "▶ output" toggles work through the delegated
             // listener (data-call-id, else the sibling result block); approval buttons are history.
+            ensurePurifyHook();   // the same img/link rules as live text
             timeline.innerHTML = DOMPurify.sanitize(rawTranscript, {
-              ADD_ATTR: ['target','rel','class','id','data-call-id'],
+              ADD_ATTR: ['target','rel','class','data-call-id'],
               FORBID_TAGS: ['script','iframe','object','embed','form','input','textarea','select','style'],
-              FORBID_ATTR: ['style','onerror','onload','onclick','onmouseover','onfocus','onblur','onmouseenter','onanimationend']
+              FORBID_ATTR: ['id','name','style','onerror','onload','onclick','onmouseover','onfocus','onblur','onmouseenter','onanimationend']
             });
           } else {
             timeline.textContent = rawTranscript;   // fail closed: no sanitizer, no HTML
@@ -2064,6 +2083,8 @@
           return;
         }
 
+        // The hub accepted the resume (and queued the note): only now is the note sent, drawn and cleared.
+        if (note) { drawNoteCard(note); input.value = ''; }
         isRunning = true;
         resumeBtn.style.display = 'none';
         document.getElementById('btn-stop').disabled = false;

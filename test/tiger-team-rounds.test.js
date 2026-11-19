@@ -178,6 +178,75 @@ test('a team member that fails shows the first line and the Details, but no "Wha
   assert.doesNotMatch(shown, /Send again/);
 });
 
+// ── Review round 1: Until Complete, Resume admission, the challenger's bonus round ──
+const consultCall = (id) => ({ id, type: 'function', function: { name: 'consult_agent', arguments: JSON.stringify({ agent: 'sam', prompt: 'p' }) } });
+
+test('max rounds: 0 (Until Complete) is carried through, 20 stays 20, missing or invalid becomes 5', () => {
+  const { normalizeMaxRounds } = require('../lib/tiger-team-max-rounds');
+  assert.equal(normalizeMaxRounds(0, 5, 20), 0);
+  assert.equal(normalizeMaxRounds('0', 5, 20), 0);
+  assert.equal(normalizeMaxRounds(20, 5, 20), 20);
+  assert.equal(normalizeMaxRounds(3, 5, 20), 3);
+  assert.equal(normalizeMaxRounds(99, 5, 20), 20);
+  for (const bad of [undefined, null, '', 'abc', -1, NaN]) assert.equal(normalizeMaxRounds(bad, 5, 20), 5, String(bad));
+  assert.match(source, /maxRounds = args\.resumeId \? args\.maxRounds : normalizeMaxRounds\(args\.max_rounds, 5, 20\)/);
+  assert.doesNotMatch(source, /Math\.min\(args\.max_rounds \|\| 5, 15\)/);
+  assert.match(source, /There is no fixed number of rounds: you decide when the work is done; finish as soon as the objective is met/);
+  const server = fs.readFileSync(path.join(__dirname, '../server.js'), 'utf8');
+  assert.doesNotMatch(server, /max_rounds: max_rounds \|\| 5/);
+});
+
+test('maxRounds 0 never refuses a round, however many have run', async () => {
+  let consults = 0;
+  const h = harness(n => n <= 3 ? { events: [tools([`c${n}`, 'consult_agent'])] } : { events: [text('Final')] },
+    { consult_agent: async () => { consults++; return 'done'; } }, { maxRounds: 0, round: 40, curRound: 40 });
+  await h.run();
+  assert.equal(consults, 3);
+  assert.equal(h.ctx.activeTigerTeams.get('tt').round, 43);
+});
+
+test('Resume repair: an unanswered NEW consult call past the limit is refused, not dispatched', async () => {
+  let consults = 0;
+  const h = harness(() => ({ events: [text('Final')] }), { consult_agent: async () => { consults++; return 'done'; } }, { maxRounds: 1, round: 1, curRound: 1 });
+  h.call.messages = [{ role: 'user', content: 'go' }, { role: 'assistant', content: '', tool_calls: [consultCall('n1')] }];
+  assert.equal(await h.run(), 'Final');
+  assert.equal(consults, 0, 'not dispatched');
+  assert.equal(h.requests[0].find(m => m.role === 'tool' && m.tool_call_id === 'n1').content, REFUSAL(1));
+  assert.equal(h.call.tools.n1.status, 'completed', 'recorded like a completed result');
+  assert.equal(h.call.tools.n1.result, REFUSAL(1));
+  assert.equal(h.ctx.activeTigerTeams.get('tt').round, 1);
+});
+
+test('Resume repair: an already-admitted call is dispatched and the round is unchanged', async () => {
+  let consults = 0;
+  const h = harness(() => ({ events: [text('Final')] }), { consult_agent: async () => { consults++; return 'done'; } }, { maxRounds: 1, round: 1, curRound: 1, roundCallIds: ['a1'] });
+  h.call.messages = [{ role: 'user', content: 'go' }, { role: 'assistant', content: '', tool_calls: [consultCall('a1')] }];
+  await h.run();
+  assert.equal(consults, 1);
+  assert.equal(h.ctx.activeTigerTeams.get('tt').round, 1);
+});
+
+test('Resume repair: a new call within the limit is admitted once and counts the round', async () => {
+  let consults = 0;
+  const h = harness(() => ({ events: [text('Final')] }), { consult_agent: async () => { consults++; return 'done'; } }, { maxRounds: 3, round: 1, curRound: 1 });
+  h.call.messages = [{ role: 'user', content: 'go' }, { role: 'assistant', content: '', tool_calls: [consultCall('n1'), consultCall('n2')] }];
+  await h.run();
+  assert.equal(consults, 2);
+  const team = h.ctx.activeTigerTeams.get('tt');
+  assert.equal(team.round, 2, 'two calls of one message are one round');
+  assert.deepEqual(Array.from(team.roundCallIds), ['n1', 'n2']);
+});
+
+test('the challenger bonus round: at the limit one more round is admitted, the next is refused', async () => {
+  let consults = 0;
+  const h = harness(n => n <= 2 ? { events: [tools([`c${n}`, 'consult_agent'])] } : { events: [text('Final')] },
+    { consult_agent: async () => { consults++; return 'done'; } }, { maxRounds: 1, round: 1, curRound: 1, bonusRounds: 1 });
+  await h.run();
+  assert.equal(consults, 1, 'the bonus round ran');
+  assert.equal(h.requests[2].filter(m => m.role === 'tool').pop().content, REFUSAL(2), 'the one after it is refused');
+  assert.match(source, /t\.bonusRounds = \(t\.bonusRounds \|\| 0\) \+ 1/);
+});
+
 test('a normal chat error keeps the "What to do" advice; the member format drops only that line', () => {
   const eh = require('../lib/error-help');
   const info = eh.explain(Object.assign(new Error('Provider 400: bad request'), { status: 400 }), { model: 'openai/gpt-5' });

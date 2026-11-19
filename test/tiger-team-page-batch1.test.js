@@ -32,7 +32,7 @@ function el(tagName, attrs) {
   const a = { ...attrs };
   return { tagName, getAttribute: k => (k in a ? a[k] : null), setAttribute: (k, v) => { a[k] = String(v); }, removeAttribute: k => { delete a[k]; }, attrs: a };
 }
-const hook = (() => { const ctx = {}; vm.createContext(ctx); vm.runInContext(cut('function purifyFixNode', '    function fmtDuration').replace(/\n\s*$/, ''), ctx); return ctx.purifyFixNode; })();
+const hook = (() => { const ctx = { location: { origin: 'https://hub.test' }, URL }; vm.createContext(ctx); vm.runInContext(cut('function sameOriginImgSrc', '    function fmtDuration').replace(/\n\s*$/, ''), ctx); return ctx.purifyFixNode; })();
 
 test('images keep src only for a same-origin path; every other src is dropped', () => {
   for (const src of ['https://evil.example/t.gif', 'http://evil.example/t.gif', 'data:image/png;base64,AAAA', '//evil.example/t.gif', '/\\evil.example/t.gif', 'javascript:alert(1)', 'files/x.png', '']) {

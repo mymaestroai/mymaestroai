@@ -79,6 +79,7 @@ function harness(run = async () => 'A confirmed result.  '.repeat(20)) {
     streamViaGateway: run,
     isAgentActive: name => ctx.pendingChatRequests.has(name),
     // The team folder is not created on disk here; member failures are explained as in production.
+    normalizeMaxRounds: require('../lib/tiger-team-max-rounds').normalizeMaxRounds,
     ttLive: { ...require('../lib/tiger-team-live'), ensureTeamFolder: id => '/hub/share/common/tiger-teams/' + id },
     errorHelp: require('../lib/error-help'),
     pacing: { failureText: (e, target) => `[FAILED] "${target}": ${e.message}` },
