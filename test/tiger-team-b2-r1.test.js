@@ -195,3 +195,20 @@ test('loadTeam and loadSaved call resetApprovals where they clear the timeline',
   assert.match(html, /getElementById\('timeline'\)\.innerHTML = '';\s*resetApprovals\(\);/);
   assert.match(html, /const timeline = document\.getElementById\('timeline'\);\s*resetApprovals\(\);/);
 });
+
+test('two stores on the same folder (server.js and sdk-chat.js each make one) share the buffer: disk stays in seq order, a replay misses nothing', () => {
+  const dir = tmp(); const id = 'team-two';
+  const a = new recovery.CheckpointStore(dir);   // like server.js (the TeamStream's store): buffers display frames
+  const b = new recovery.CheckpointStore(dir);   // like lib/sdk-chat.js: appends model_chunk before showing the text
+  const state = { eventSeq: 0 };
+  for (let i = 0; i < 5; i++) {
+    a.buffer(id, state, { type: 'stream', raw: 'data: {"n":' + i + '}\n\n' });
+    b.append(id, state, { type: 'model_chunk', callKey: 'c1', turn: 1, chunk: chunk('t' + i) });
+  }
+  a.buffer(id, state, { type: 'stream', raw: 'data: {"n":"last"}\n\n' });
+  a.flush(id);
+  const seqs = diskSeqs(dir, id);
+  assert.deepEqual(seqs, Array.from({ length: 11 }, (_, i) => i + 1), 'every record on disk, in seq order');
+  assert.equal([...b.events(id)].length, 11, 'the other store replays every record');
+  assert.equal([...a.events(id)].length, 11);
+});
