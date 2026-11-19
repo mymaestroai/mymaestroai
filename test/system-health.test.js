@@ -235,6 +235,30 @@ test('inodes: a notified problem whose numbers do not come back is unknown, not 
   assert.strictEqual(h.notices.filter(n => n.payload.title === 'Health: fixed').length, 1, 'fixed only once it is measured fine');
 });
 
+test('inodes: a notified problem stays when the disk reports neither its size nor its file slots (review r2)', async () => {
+  const h = make();
+  const IN = 'health-inodes-data+workspaces';
+  h.cfg.fs = { ...h.cfg.fs, inodesFreePct: 1 };
+  await manual(h);
+  assert.strictEqual(h.notices.length, 1);
+  h.cfg.fs = { ...h.cfg.fs, totalBytes: 0, availBytes: 0, availPct: null, inodesFreePct: null, inodesFree: null, inodesTotal: null };
+  const v = await manual(h);
+  assert.strictEqual(item(v, IN).level, 'unknown');
+  assert.strictEqual(item(v, DISK).level, 'unknown');
+  assert.ok(!h.notices.some(n => n.payload.title === 'Health: fixed'), 'no "Health: fixed"');
+  assert.ok(raw(h).notices[IN], 'the notice stays');
+});
+
+test('logs: a log it can\'t read is "couldn\'t check" from the first look, never "normal size" (review r2)', async () => {
+  const h = make();
+  h.cfg.logSizes = [{ path: '/logs/a.log', bytes: null, error: 'EACCES' }];
+  const it = item(await manual(h), 'health-logs');
+  assert.strictEqual(it.level, 'unknown');
+  assert.match(it.detail, /a\.log couldn't be read/);
+  h.cfg.logSizes = [{ path: '/logs/a.log', bytes: null, missing: true }];
+  assert.strictEqual(item(await manual(h), 'health-logs').level, 'ok', 'a log that is not there is fine');
+});
+
 test('clock: a notified problem then "synced null" is unknown, not fixed; with no notice it is info', async () => {
   const h = make();
   h.cfg.settings = { notify: 'warnings', warnNights: 1 }; h.cfg.backup = null;
