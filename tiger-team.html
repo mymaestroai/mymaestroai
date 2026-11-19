@@ -562,7 +562,7 @@
       <option value="team">Team: coordinator + everyone working now</option>
       <option value="coordinator">Coordinator only</option>
     </select>
-    <textarea id="user-input" rows="1" placeholder="Interject: tell the team something now..." disabled></textarea>
+    <textarea id="user-input" rows="1" placeholder="Tell the team something now…" disabled></textarea>
     <button class="send-btn" id="btn-send" onclick="injectMessage()" disabled>Interject</button>
   </div>
 
@@ -908,23 +908,31 @@
       return String(name || 'tool') + (s ? ' ' + s : '');
     }
     /** What a member's chip or roster line says: the step while it works, "done 22:51", "failed", the wait. */
-    function memberStepLabel(m) {
+    function memberStepLabel(m, slug) {
       if (!m) return '';
+      if (coordWaiting(m, slug)) return 'waiting for the team';
       if (m.state === 'done') return 'done ' + clockTime(m.at);
       if (m.state === 'failed') return 'failed';
       return m.step || (m.state === 'working' ? 'working…' : '');
     }
+    /** The coordinator's card closes when it hands work out; while a member still works or waits, it is waiting, not done. */
+    function coordWaiting(m, slug) {
+      if (!m || m.state !== 'done' || !slug || slug !== coordinator) return false;
+      for (const [s, v] of memberStates) if (s !== coordinator && (v.state === 'working' || v.state === 'waiting')) return true;
+      return false;
+    }
     function renderMember(slug) {
       const m = memberStates.get(slug);
       if (!m) return;
-      const label = memberStepLabel(m);
+      const label = memberStepLabel(m, slug);
+      const shown = coordWaiting(m, slug) ? 'waiting' : m.state;
       for (const id of ['step-', 'chipstep-']) {
         const el = document.getElementById(id + slug);
         if (el && el.textContent !== label) el.textContent = label;   // textContent: whatever a tool put in the summary stays text
       }
       for (const id of ['dot-', 'chipdot-']) {
         const el = document.getElementById(id + slug);
-        if (el) el.className = (id === 'dot-' ? 'activity-dot ' : 'chip-dot ') + m.state;
+        if (el) el.className = (id === 'dot-' ? 'activity-dot ' : 'chip-dot ') + shown;
       }
     }
     function setMemberState(slug, state, step) {
@@ -933,6 +941,7 @@
       if (prev && prev.state === state && prev.step === (step || '') && state !== 'done') return;
       memberStates.set(slug, { state, step: step || '', at: eventNow || Date.now() });
       renderMember(slug);
+      if (slug !== coordinator && coordinator) renderMember(coordinator);   // the coordinator's "waiting for the team" follows its members
     }
     /** The member's current step while it is working (a tool running, text arriving). */
     function setMemberStep(slug, step) { setMemberState(slug, 'working', step); }
@@ -1050,7 +1059,7 @@
         buildTargetOptions();
         sel.style.display = '';
         label.textContent = '💬 Interject:';
-        input.placeholder = 'Interject: tell the team something now...';
+        input.placeholder = 'Tell the team something now…';
         btn.textContent = 'Interject';
         btn.onclick = injectMessage;
         input.disabled = false; btn.disabled = false;

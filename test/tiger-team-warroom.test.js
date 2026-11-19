@@ -405,3 +405,22 @@ test('review r1: the phone menu link is set after Simple mode is applied (the or
   const link = mob.indexOf("$('menu-tiger')");
   assert.ok(apply > 0 && link > apply, 'menu-tiger comes after the Simple apply');
 });
+
+test('proof w1: the coordinator reads "waiting for the team" while a member works, and "done" once they have finished', () => {
+  seq = 0;
+  const { ctx, el } = pageCtx();
+  ctx.handleEvent(bare({ type: 'tt_coordinator_start' }, '22:30'));
+  ctx.handleEvent({ tt_seq: ++seq, tt_at: at('22:31'), choices: [{ delta: { content: 'Splitting the work.' } }] });
+  ctx.handleEvent(bare({ type: 'tt_dispatch', agent: 'atlas', role: 'participant', call_key: 'c1' }, '22:32'));
+  ctx.handleEvent(bare({ type: 'tt_dispatch', agent: 'bea', role: 'participant', call_key: 'c2' }, '22:32'));
+  assert.equal(ctx.snap().boss.state, 'done', 'its own card closed when it handed out the work');
+  assert.equal(el('chipstep-boss').textContent, 'waiting for the team');
+  assert.equal(el('chipdot-boss').className, 'chip-dot waiting');
+  assert.equal(el('step-boss').textContent, 'waiting for the team', 'the side roster says the same');
+  ctx.handleEvent(bare({ type: 'tt_dispatch_complete', agent: 'atlas', call_key: 'c1' }, '22:34'));
+  assert.equal(el('chipstep-boss').textContent, 'waiting for the team', 'one member still works');
+  ctx.handleEvent(bare({ type: 'tt_dispatch_failed', agent: 'bea', agent_display: 'Bea', call_key: 'c2', error: 'boom' }, '22:35'));
+  assert.match(el('chipstep-boss').textContent, /^done \d\d:\d\d$/, 'nobody works any more');
+  assert.equal(el('chipdot-boss').className, 'chip-dot done');
+  assert.equal(el('chipstep-atlas').textContent, 'done 22:34', 'a member is never "waiting for the team"');
+});
