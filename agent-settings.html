@@ -563,7 +563,7 @@
   // changed again while its save runs, is saved once more when that save ends, with its newest value. A Save button
   // pressed again meanwhile is refused with a message: a queued run would read the fields only when it starts and could
   // also save edits made after the press, so those edits stay unsaved until Save is pressed again.
-  const SAVES_ON_CHANGE = new Set(['saveCategory', 'saveLead', 'saveOwner', 'saveShared', 'saveModel', 'saveAutoModel', 'saveSandbox', 'saveLockbox', 'saveLockboxEnv', 'saveEffort', 'saveTeamGuidance', 'saveTeamRole', 'saveTier', 'saveCallDisplay', 'saveVoiceDefaults', 'saveToolsMode', 'saveRecordings', 'saveAgentVoice', 'saveModelPinned']);
+  const SAVES_ON_CHANGE = new Set(['saveCategory', 'saveLead', 'saveOwner', 'saveShared', 'saveModel', 'saveModelPinned', 'saveAutoModel', 'saveSandbox', 'saveLockbox', 'saveLockboxEnv', 'saveEffort', 'saveTeamGuidance', 'saveTeamRole', 'saveTier', 'saveCallDisplay', 'saveVoiceDefaults', 'saveToolsMode', 'saveRecordings', 'saveAgentVoice']);
   const pendingSaves = {};   // status id -> { commit, reload, fields, settled, again }
   for (const [fn, statusId, fields, how] of SAVES) {
     const orig = window[fn];

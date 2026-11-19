@@ -174,3 +174,22 @@ test('review r1 (GPT-6): ownership that changes, or a turn that ends, during the
   assert.match(c.out, /no model suggestion right now/, 'the model changed meanwhile');
   assert.deepEqual(c.set, []);
 });
+
+test('review r2 (GPT-6): a model changed in another window while the owner answered needs a fresh question', async (t) => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'mos-')); t.after(() => fs.rmSync(d, { recursive: true, force: true }));
+  const roster = [{ name: 'helper-b', owner: 'u-admin', model: 'claude-sdk/claude-opus-5-5' }];
+  let calls = 0; const set = [];
+  const sw = createModelOfferSwitch({
+    offers: { list: async () => [], offerFor: async () => {
+      calls++;
+      if (calls === 1) return { ...OFFER, from: 'claude-sdk/claude-opus-5-5', to: 'claude-sdk/claude-opus-6' };
+      roster[0] = { ...roster[0], model: 'claude-sdk/claude-opus-5-6' };   // switched elsewhere meanwhile; the newest offer is the same
+      return { ...OFFER, from: 'claude-sdk/claude-opus-5-6', to: 'claude-sdk/claude-opus-6' };
+    }, decline: () => ({ ok: true }), forget() {} },
+    agents: () => roster, stampOf: () => 'box:1', isMemberOwned: () => false, isVirtual: () => false,
+    setModel: async (n, m) => { set.push([n, m]); return { success: true }; }, published: () => {}, push: { notify() {} },
+    auditFile: path.join(d, 'log.jsonl'), now: () => 0,
+  });
+  assert.match(await runTool(sw, { action: 'switch', agent: 'helper-b' }, 'lead-a', yes, allowed), /changed while the owner was answering/);
+  assert.deepEqual(set, []);
+});
