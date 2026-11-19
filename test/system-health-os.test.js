@@ -232,6 +232,10 @@ test('os-updates: the detail says how old the update lists are, only when known'
   const h = make();
   h.cfg.os = { ...h.cfg.os, security: 1, listsRefreshedAt: T0 - 3 * DAY - HOUR };
   assert.strictEqual(item(await manual(h), OS).detail, 'Update lists last refreshed 3 days ago.');
+  h.cfg.os = { ...h.cfg.os, listsRefreshedAt: T0 - 2 * HOUR };
+  assert.strictEqual(item(await manual(h), OS).detail, 'Update lists last refreshed today.', 'not "0 days ago"');
+  h.cfg.os = { ...h.cfg.os, listsRefreshedAt: T0 - DAY - HOUR };
+  assert.strictEqual(item(await manual(h), OS).detail, 'Update lists last refreshed 1 day ago.');
   h.cfg.os = { ...h.cfg.os, listsRefreshedAt: null };
   assert.strictEqual(item(await manual(h), OS).detail, '');
 });

@@ -249,6 +249,19 @@ test('inodes: a notified problem stays when the disk reports neither its size no
   assert.ok(raw(h).notices[IN], 'the notice stays');
 });
 
+test('wording (proof): sizes from 1 TB read in TB; a notice with no detail has no empty first line', async () => {
+  const h = make();
+  setFree(h, 2, 1.5 * 1024 * GB);
+  h.cfg.settings = { diskCritGB: 100000, diskWarnGB: 100000 };
+  assert.strictEqual(item(await manual(h), DISK).title, 'Disk almost full: 1.5 TB free (2%)');
+  const h2 = make();
+  h2.cfg.signIns = [{ id: 'claude', name: 'Claude', agents: 1, signedIn: false }];
+  await manual(h2);
+  const n = h2.notices.find(x => /not signed in/.test(x.payload.title));
+  assert.ok(n);
+  assert.strictEqual(n.payload.body, 'Open Settings and sign in to Claude again.');
+});
+
 test('logs: a log it can\'t read is "couldn\'t check" from the first look, never "normal size" (review r2)', async () => {
   const h = make();
   h.cfg.logSizes = [{ path: '/logs/a.log', bytes: null, error: 'EACCES' }];
