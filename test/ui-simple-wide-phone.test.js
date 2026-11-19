@@ -34,8 +34,8 @@ test('CSS: the wide block shows the sidebar, offsets the chat by 260px, hides th
   assert.match(w, /width: calc\(260px \+ var\(--sal\)\)/);
   assert.match(w, /html\.mm-simple body \{ padding-left: calc\(260px \+ var\(--sal\)\); \}/);
   assert.match(w, /html\.mm-simple #simple-top \.st-pill, html\.mm-simple #simple-top \.st-mark, html\.mm-simple #simple-top \.st-avatar \{ display: none; \}/);
-  assert.match(w, /html\.mm-simple #messages \{ max-width: 760px; \}/);
-  assert.match(w, /html\.mm-simple #composer \.row \{ max-width: 760px; \}/);
+  assert.doesNotMatch(w, /html\.mm-simple #messages \{[^}]*max-width/, 'the messages fill the chat column (full width, as on the desktop)');
+  assert.doesNotMatch(w, /html\.mm-simple #composer \.row \{[^}]*max-width/, 'so does the composer');
   // every rule inside the block is scoped under html.mm-simple
   const inner = w.slice(w.indexOf('{') + 1, w.lastIndexOf('}'));
   for (const sel of inner.split('}').map((r) => r.split('{')[0].trim()).filter(Boolean)) {

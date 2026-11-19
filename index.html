@@ -2564,7 +2564,7 @@
       --accent: #8b6fd6; --accent-hover: #9d84e0; --purple: #8b6fd6;
       --text: #ffffff; --text-primary: #ffffff; --text-dim: #c3c2b7; --text-secondary: #c3c2b7; --text-tertiary: #8a897f;
       --border: #2f2f2d; --border-strong: #3a3a37;
-      --chat-max-width: 720px; --chat-pad-x: 24px;
+      --chat-pad-x: 24px;   /* the chat column stays full width (--chat-max-width from :root), as in the main view */
       --sm-page: #1a1a19; --sm-side: #161615; --sm-raised: #232322; --sm-border: #2f2f2d; --sm-text: #fff; --sm-sec: #c3c2b7; --sm-muted: #8a897f;
       --sm-bubble: #2a2a28; --sm-sel: rgba(139,111,214,.22); --sm-hover: rgba(255,255,255,.05); --sm-shadow: none;
       --sm-user-bg: #5b46a8; --sm-user-text: #ffffff; --sm-user-code: rgba(255,255,255,.18);
@@ -2654,6 +2654,7 @@
     html.mm-simple .message pre { background: var(--sm-side); border: 1px solid var(--sm-border); color: var(--sm-text); }
     html.mm-simple .message .agent-label { display: none; }
     html.mm-simple .message > .msg-time { color: var(--sm-muted); }
+    html.mm-simple .message.assistant > .msg-time { left: 64px; right: auto; }   /* no bubble: the time sits under the reply's text, after the Copy (left 0) and Play (left 30px) buttons, not across the full-width column */
     /* Play and copy: never on the text. A reply: a small muted pair just below it, on hover (always on touch screens). A user bubble: beside it, on hover. */
     html.mm-simple .message > .msg-copy, html.mm-simple .message > .msg-speak {
       top: 100%; right: auto; left: 0; margin-top: 2px; border: 0; background: none; color: var(--sm-muted);
@@ -2699,8 +2700,8 @@
     @keyframes simple-pulse { 0%, 100% { opacity: .35; transform: scale(.8); } 50% { opacity: 1; transform: scale(1.1); } }
 
     /* Composer: one rounded box */
-    html.mm-simple .input-area { max-width: 720px; position: relative; align-items: center; flex-wrap: wrap; gap: 4px 6px;
-      background: var(--sm-raised); border: 1px solid var(--sm-border); border-radius: 26px; box-shadow: var(--sm-shadow); padding: 10px 12px 8px 14px; margin: 0 auto 14px; width: calc(100% - 48px); }
+    html.mm-simple .input-area { max-width: var(--chat-max-width); position: relative; align-items: center; flex-wrap: wrap; gap: 4px 6px;
+      background: var(--sm-raised); border: 1px solid var(--sm-border); border-radius: 26px; box-shadow: var(--sm-shadow); padding: 10px 12px 8px 14px; margin: 0 auto 14px; width: calc(100% - 2 * var(--chat-pad-x)); }   /* the messages' column: same edges as their text */
     /* Two rows: the text on its own full-width row; underneath, attach and the reasoning level on the left, mic, call and Send on the right */
     html.mm-simple .input-area > * { order: 5; }
     html.mm-simple .input-wrapper { min-width: 0; order: 0; flex: 1 1 100%; width: 100%; }
