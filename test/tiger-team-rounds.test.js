@@ -258,3 +258,33 @@ test('a normal chat error keeps the "What to do" advice; the member format drops
   assert.match(member, /\n\nDetails: /);
   assert.match(source, /const explained = ttMember \? errorHelp\.formatMember\(turnErrorInfo\) : errorHelp\.format\(turnErrorInfo\);/);
 });
+
+test('review r2: the challenger bonus round is granted once per challenge (a Resume of the step adds none); Continue clears it', () => {
+  // the grant: guarded by the challenge it belongs to, saved with the team
+  const grant = source.match(/\{ const t = activeTigerTeams\.get\(tigerTeamId\); if \(t && t\.bonusFor !== challengerWorkerId\) \{ t\.bonusRounds = \(t\.bonusRounds \|\| 0\) \+ 1; t\.bonusFor = challengerWorkerId; checkpointTeam\(tigerTeamId\); \} \}/);
+  assert.ok(grant, 'the bonus grant is keyed to the challenge');
+  const run = (t, challengerWorkerId) => { const activeTigerTeams = new Map([['tt', t]]); const tigerTeamId = 'tt'; const checkpointTeam = () => {}; eval(grant[0]); return t; };
+  const t = { bonusRounds: 0 };
+  run(t, 'tt-challenger'); run(t, 'tt-challenger'); run(t, 'tt-challenger');   // the first time, then two Resumes replaying the step
+  assert.equal(t.bonusRounds, 1);
+  run(t, 'tt2-challenger');
+  assert.equal(t.bonusRounds, 2, 'a different challenge earns its own round');
+  assert.match(source, /ttState\.round = 0; ttState\.curRound = 0; ttState\.bonusRounds = 0; ttState\.bonusFor = null;/);
+});
+
+test('review r2: Max Rounds 0 survives agent-started and staged launches (?? instead of ||)', () => {
+  const app = fs.readFileSync(path.join(__dirname, '../app.js'), 'utf8');
+  const page = fs.readFileSync(path.join(__dirname, '../tiger-team.html'), 'utf8');
+  assert.equal((app.match(/max_rounds \?\? 5\)\.toString\(\)/g) || []).length, 4);
+  assert.ok(!/max_rounds \|\| 5\)\.toString\(\)/.test(app));
+  assert.match(page, /maxRounds = data\.max_rounds \?\? maxRounds;/);
+});
+
+test('review r2: a note whose team finished or restarted elsewhere is put back in the box, never cleared unsent', () => {
+  const page = fs.readFileSync(path.join(__dirname, '../tiger-team.html'), 'utf8');
+  const fn = page.slice(page.indexOf('async function resumeInterruptedTeam(note)'), page.indexOf("continuationInFlight = true;\n      resumeBtn.textContent = '⏳ Resuming...'"));
+  assert.match(fn, /if \(note\) \{ draftBox\.disabled = true; draftBtn\.disabled = true; \}/, 'the box is locked while the status is checked');
+  assert.match(fn, /await loadSaved\(tigerTeamId\);\n\s*keepDraft\('This team finished in another window, so your note was not sent\./);
+  assert.match(fn, /await loadTeam\(tigerTeamId\)\) \{\n\s*keepDraft\('The team is already running again, so your note was not sent\./);
+  assert.equal((fn.match(/unlockDraft\(\);/g) || []).length, 3, '404, running elsewhere, status failure');
+});

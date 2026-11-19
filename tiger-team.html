@@ -484,7 +484,7 @@
         coordinator = data.coordinator || coordinator;
         participants = data.participants || participants;
         objective = data.objective || objective;
-        maxRounds = data.max_rounds || maxRounds;
+        maxRounds = data.max_rounds ?? maxRounds;
         context = data.context || context;
         mode = data.mode || mode;
         challenger = data.challenger || challenger;
@@ -2026,6 +2026,13 @@
       resumeBtn.disabled = true;
       resumeBtn.textContent = '⏳ Checking status...';
       document.getElementById('tt-error-banner').style.display = 'none';
+      // While the status is checked the box is locked, so the note being sent is exactly what is in it. A team that turned out
+      // to be finished or running elsewhere redraws the page; the unsent note is then put back with a line saying so.
+      const draftBox = document.getElementById('user-input'), draftBtn = document.getElementById('btn-send');
+      const wasLocked = draftBox.disabled;
+      if (note) { draftBox.disabled = true; draftBtn.disabled = true; }
+      const unlockDraft = () => { if (note) { draftBox.disabled = wasLocked; draftBtn.disabled = wasLocked; } };
+      const keepDraft = (why) => { if (!note) return; draftBox.value = note; addSystemMsg(why); };
 
       try {
         const statusResp = await fetch(`/api/tiger-team/status?id=${encodeURIComponent(tigerTeamId)}`);
@@ -2033,26 +2040,36 @@
           resumeBtn.disabled = false;
           resumeBtn.textContent = '▶ Resume Interrupted';
           addSystemMsg('No saved recovery state was found for this investigation.  Try loading its latest saved session.');
+          unlockDraft();
           return;
         }
         if (!statusResp.ok) throw new Error('Status check HTTP ' + statusResp.status);
         const statusData = await statusResp.json();
         if (statusData.id) tigerTeamId = statusData.id;
-        if (statusData.status === 'completed') { if (!(await loadTeam(tigerTeamId))) await loadSaved(tigerTeamId); return; }
+        if (statusData.status === 'completed') {
+          if (!(await loadTeam(tigerTeamId))) await loadSaved(tigerTeamId);
+          keepDraft('This team finished in another window, so your note was not sent. It is back in the box: send it to continue the team.');
+          return;
+        }
         if (statusResp.ok && ['running', 'retrying', 'stopping'].includes(statusData.status)) {
           // Still working (a closed page no longer stops a team): follow it instead of starting a second run.
           resumeBtn.style.display = 'none';
-          if (statusData.has_stream && await loadTeam(tigerTeamId)) return;
+          if (statusData.has_stream && await loadTeam(tigerTeamId)) {
+            keepDraft('The team is already running again, so your note was not sent. It is back in the box: send it as an interjection.');
+            return;
+          }
           addSystemMsg('⚠ This Tiger Team is already running elsewhere - not launching a duplicate. Check other open tabs.');
           resumeBtn.style.display = 'inline-flex';
           resumeBtn.disabled = false;
           resumeBtn.textContent = '▶ Resume Interrupted';
+          unlockDraft();
           return;
         }
       } catch (e) {
         addSystemMsg('Status check failed: ' + e.message + ' - resume aborted (no automatic retry).');
         resumeBtn.disabled = false;
         resumeBtn.textContent = '▶ Resume Interrupted';
+        unlockDraft();
         return;
       }
 

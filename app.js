@@ -11654,7 +11654,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
                   coordinator: oc.coordinator,
                   participants: (oc.participants || []).join(','),
                   objective: oc.objective,
-                  maxRounds: (oc.max_rounds || 5).toString(),
+                  maxRounds: (oc.max_rounds ?? 5).toString(),
                   ...(oc.context ? { context: oc.context } : {}),
                   ...(oc.challenger ? { challenger: oc.challenger } : {})
                 });
@@ -11907,7 +11907,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
                   coordinator: oc2.coordinator,
                   participants: (oc2.participants || []).join(','),
                   objective: oc2.objective,
-                  maxRounds: (oc2.max_rounds || 5).toString(),
+                  maxRounds: (oc2.max_rounds ?? 5).toString(),
                   ...(oc2.context ? { context: oc2.context } : {}),
                   ...(oc2.challenger ? { challenger: oc2.challenger } : {})
                 });
@@ -12172,7 +12172,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
                   coordinator: oc3.coordinator,
                   participants: (oc3.participants || []).join(','),
                   objective: oc3.objective,
-                  maxRounds: (oc3.max_rounds || 5).toString(),
+                  maxRounds: (oc3.max_rounds ?? 5).toString(),
                   ...(oc3.context ? { context: oc3.context } : {})
                 });
                 window.open(`/tiger-team?${params.toString()}`, '_blank');
@@ -22126,7 +22126,7 @@ Report what you found, did, or discovered.`;
                     coordinator: gw.coordinator,
                     participants: (gw.participants || []).join(','),
                     objective: gw.objective,
-                    maxRounds: (gw.max_rounds || 5).toString(),
+                    maxRounds: (gw.max_rounds ?? 5).toString(),
                     ...(gw.context ? { context: gw.context } : {}),
                     ...(gw.challenger ? { challenger: gw.challenger } : {})
                   });
