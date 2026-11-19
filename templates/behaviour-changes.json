@@ -77,6 +77,17 @@
       "check": "How the owner uses the primary agents today, whether there are repeated jobs or long projects that a specialist, a project lead or cheaper models would serve better, and whether the owner welcomes suggestions.",
       "on": "Primary agents make short suggestions when they are relevant.",
       "off": "No suggestions about better ways of working."
+    },
+    {
+      "id": "hand-off-guidance",
+      "leadMay": true,
+      "title": "Primary agents hand long work to a build partner and stay free to talk",
+      "changes": "A primary agent no longer waits on long work inside its own turn. Anything longer than a few minutes (development, production, long research) goes to its build partner or another teammate with hand_off, and the agent is free to talk with you at once. The other agent keeps a status file next to the brief, and its report comes back to your agent when it is done. When the lead creates a primary agent for long development or creative work, it also creates that agent's build partner.",
+      "benefits": "You can talk to your main agents while long work is running, ask how it is going and change course, instead of waiting until the work ends.",
+      "costs": "About 150 words more in each primary agent's instructions (a few more for the lead). A build partner is one more agent, on a model the lead chooses from what you already have (subscription before pay-per-use). Each hand-off costs the other agent's turns, as the same work would cost on workers.",
+      "check": "Which primary agents here run long work (development, production, long research) and wait on workers or consultations inside their own turns, whether they already have a build partner or a teammate that can take it, and which model a partner would use.",
+      "on": "Primary agents get the rule and hand long work off; the lead creates a build partner with each new primary agent for long development or creative work.",
+      "off": "Primary agents may still wait on long work inside their own turns, as before; hand_off stays available when they choose it."
     }
   ]
 }

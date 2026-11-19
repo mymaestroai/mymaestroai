@@ -54,6 +54,7 @@ They choose the model. Your part is a fair comparison, so the choice is theirs:
 - **Category:** primary for an agent people talk to (the usual choice); worker for a helper other agents hand jobs to (it is then listed to them as a platform worker); specialist for one that mostly answers other agents.
 - **Records:** one Record (two at most) for what it must always have in front of it, such as `garden.md` for the beds, plants and frost dates. Start it with the facts they gave and "(ask)" for the rest.
 - **Who it works with:** the other agents (list_agents) it should hand things to, and what for. For an agent that belongs to someone else (`for_user`), only that person's own agents.
+- **A build partner, for long work:** when your instructions carry the rule to hand long work off ("LONG WORK: HAND IT OFF") and its job includes long development or creative production (code, games, sites, video, long research), it also gets a build partner (see Build partners below). Say so in the plan.
 
 ## Step 6 — Check the plan
 
@@ -162,6 +163,15 @@ A new agent has no email or phone of its own, so the last line is always true at
 
 1. **Test.** consult_agent the new agent: "Introduce yourself in two sentences and say what you'd like to know first." Check that the voice is right and that it knows what its Record holds. If something is off, fix the file and test again. An agent that belongs to someone else can't be consulted (it's theirs). A head agent (primary) is asked to write them a hello in its own chat instead, which you can't see (the person you're talking with can open that chat), and a specialist gets no test at all, so read your files over once more before you hand it over.
 2. **Hand it over** in one short message: its name and what it does, where to find it (the agent list, or the other person's list when it's theirs; click it to talk to it), one good first thing to ask it, and that you can change its personality or what it knows any time they ask.
+
+## Build partners
+
+A primary agent that waits on long work inside its own turn can't talk with its person meanwhile. When your instructions carry the rule to hand long work off and the new agent's work includes long development or creative production, create a build partner with it:
+
+1. **The partner first.** Category worker; a capable model (never a small or local one), chosen from what this install already has, subscription before pay-per-use; the same folders as the agent it works for (for someone else's sign-in, the same `for_user`). Its SOUL.md says: it takes jobs from <agent> with hand_off, works in its own turns (scheduling its own continuations), keeps STATUS.md next to the brief current, and ends with a short report that goes back to <agent> by itself.
+2. **Then the agent,** with `build_partner` set to the partner's name. Write this rule into its SOUL.md, in its own words for its work:
+   "Stay free to talk: never wait on long work inside your own turn. Anything longer than a few minutes goes to <partner> with hand_off: write a complete brief (the goal, the decisions, the files, what done means, what not to touch), and your turn ends. <partner> keeps STATUS.md current: read it (hand_off_list) when you're asked how it's going. Its report comes back to you as a new turn: review it, then tell <person> what matters. Quick look-ups and checks of a minute or two you still do yourself."
+3. **Tell the person** in one line that the partner exists, what it does, and that they can change its model on its settings page.
 
 ## Changing an agent later
 

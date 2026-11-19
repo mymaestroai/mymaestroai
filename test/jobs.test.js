@@ -315,13 +315,14 @@ describe('run_job: hub wiring', () => {
     assert.match(src, /if \(!temporalWorkers\.isVirtual\(agentName\)\) systemPrompt \+= jobs\.policyText\(\)( \+ scheduledTasks\.policyText\(\))?;\n\s*systemPrompt \+= timeZoneLib\.policyText\(\);/);
   });
   it('the wake-up is a real saved turn for the notified agent, and the runner starts with the server', () => {
-    assert.match(src, /handleChatStream\(\{ agent: agentName, message, origin(, [a-z_]+: [^}]+)? \}, sink\)/);
+    // hand-offs: a wake-up that is part of a hand-off runs at consult depth (test/hand-off-wiring.test.js)
+    assert.match(src, /handleChatStream\(\{ agent: agentName, message, origin, exclude_tools: meta\?\.exclude_tools, \.\.\.\(handOff \? \{ consultation_depth: 1 \} : \{\}\) \}, sink\)/);
     assert.match(src, /notify: wakeAgent,\s*isAgentActive,/);
     assert.match(src, /if \(onReply\) onReply\(chunks\.join\(''\)\)/, 'the woken agent\'s reply is captured for the hand-back');
     assert.match(src, /consulted_by: coordinatorName \|\| undefined/, 'consultations carry the master');
     assert.equal((src.match(/consultedBy: consulted_by \|\| null/g) || []).length, 3, 'threaded to all three stream paths (gateway, Claude SDK, Codex CLI)');
     // member origin (test/member-origin.test.js): what a member's turn starts carries member
-    assert.equal((src.match(/jobs\.runTool\(getJobRunner\(\), spec, agentName, args, \{ consultedBy, member: isMemberTurn\(agentName\) \}\)/g) || []).length, 2, 'both tool paths pass it');
+    assert.equal((src.match(/jobs\.runTool\(getJobRunner\(\), spec, agentName, args, \{ consultedBy, member: isMemberTurn\(agentName\), handOff: handOffOfTurn\(agentName\) \}\)/g) || []).length, 2, 'both tool paths pass it');
     assert.match(server, /getJobRunner\(\)\.start\(\)/);
     assert.match(server, /pathname === '\/api\/jobs' && req\.method === 'GET'/);
     assert.match(server, /pathname === '\/api\/jobs\/cancel' && req\.method === 'POST'/);
