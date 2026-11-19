@@ -433,3 +433,32 @@ test('r4: an update only starts from a check that reached the registry; a check 
   w.stop();
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test('r5: Update Codex now needs a check that reached the registry, and waits for the start recovery', async () => {
+  const os = require('os');
+  const { createComponentWatch } = require('../lib/component-watch');
+  const lock = require('../lib/codex-cli/update-lock');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cw5-'));
+  const now = Date.parse('2026-11-19T12:00:00Z');
+  const doc = { time: { '0.156.1': '2026-10-01T00:00:00Z', '0.170.0': '2026-11-10T00:00:00Z' } };
+  let online = true; let updates = 0;
+  const w = createComponentWatch({
+    stateFile: path.join(dir, 'cw.json'), now: () => now, fetchJson: async () => (online ? doc : null),
+    setting: () => ({ codex: 'notify' }), codexInstalled: () => '0.156.1', codexManaged: () => true, codexInUse: () => false,
+    updateCodex: async () => { updates++; return { ok: true, from: '0.156.1', to: '0.170.0' }; },
+    discover: async () => null, codexModels: () => [], claudeInstalled: () => null, localStatus: async () => null,
+    setTimer: () => null, clearTimer: () => {},
+  });
+  await w.check({ reason: 'manual', allowUpdate: false });   // yesterday: online, a newer release is known
+  online = false;
+  const r = await w.updateCodexNow();
+  assert.equal(r.ok, false);
+  assert.match(r.error, /Couldn't reach the npm registry/);
+  assert.equal(updates, 0);
+  online = true;
+  assert.equal(lock.begin(), true);
+  try { assert.match((await w.updateCodexNow()).error, /already running/); } finally { lock.end(); }
+  assert.equal((await w.updateCodexNow()).ok, true);
+  assert.equal(updates, 1);
+  fs.rmSync(dir, { recursive: true, force: true });
+});

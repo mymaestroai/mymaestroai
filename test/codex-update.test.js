@@ -396,3 +396,27 @@ test('F3: an npm that stops on SIGTERM resolves without waiting for the grace pe
   assert.ok(Date.now() - t0 < 3000);
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test('r5: a recovery that failed stops the update (the kept copy may be the only good one)', async () => {
+  const h = mkHome();
+  const keep = withKept(h, '0.150.0');
+  markInProgress(h);
+  let installed = false;
+  const r = await updateCodex({ env: h.env, recover: async () => ({ recovered: false, error: 'disk gone' }), install: () => { installed = true; return { ok: true }; }, selfCheck: async () => true });
+  assert.equal(r.ok, false);
+  assert.match(r.error, /could not be undone \(disk gone\), so nothing changed/);
+  assert.equal(installed, false);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(keep, 'package.json'), 'utf8')).version, '0.150.0', 'the kept copy is untouched');
+});
+
+test('r5: when the marker cannot be removed after a good update, the kept copy goes, so no later start undoes it', async () => {
+  const h = mkHome();
+  const marker = markerOf(h.dir);
+  const fsImpl = Object.assign(Object.create(fs), { unlinkSync(p) { if (p === marker) throw new Error('EPERM'); return fs.unlinkSync(p); } });
+  const r = await updateCodex({ env: h.env, fsImpl, install: () => { setVersion(h.dir, '0.166.0'); return { ok: true }; }, selfCheck: async () => true });
+  assert.equal(r.ok, true);
+  assert.equal(fs.existsSync(marker), true);
+  assert.equal(fs.existsSync(keepOf(h.dir)), false, 'nothing to put back');
+  assert.equal((await recoverCodex({ env: h.env })).recovered, false);
+  assert.equal(installedCodexVersion({ env: h.env }), '0.166.0', 'the good update stays');
+});
