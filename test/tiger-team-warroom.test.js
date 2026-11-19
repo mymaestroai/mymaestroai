@@ -424,3 +424,35 @@ test('proof w1: the coordinator reads "waiting for the team" while a member work
   assert.equal(el('chipdot-boss').className, 'chip-dot done');
   assert.equal(el('chipstep-atlas').textContent, 'done 22:34', 'a member is never "waiting for the team"');
 });
+
+test('final review: a coordinator that hands out work without writing first also waits for the team', () => {
+  seq = 0;
+  const { ctx, el } = pageCtx();
+  ctx.handleEvent(bare({ type: 'tt_coordinator_start' }, '22:30'));
+  ctx.handleEvent(bare({ type: 'tt_dispatch', agent: 'atlas', role: 'participant', call_key: 'c1' }, '22:32'));
+  assert.equal(ctx.snap().boss.state, 'done', 'its empty card went away and its turn ended');
+  assert.equal(el('chipstep-boss').textContent, 'waiting for the team');
+  ctx.handleEvent(bare({ type: 'tt_dispatch_complete', agent: 'atlas', call_key: 'c1' }, '22:34'));
+  assert.match(el('chipstep-boss').textContent, /^done \d\d:\d\d$/);
+});
+
+test('final review: a run that ends in an error ends the open member cards, so nobody is left working or waiting', () => {
+  seq = 0;
+  const { ctx, el } = pageCtx();
+  ctx.handleEvent(bare({ type: 'tt_coordinator_start' }, '22:30'));
+  ctx.handleEvent(bare({ type: 'tt_dispatch', agent: 'atlas', role: 'participant', call_key: 'c1' }, '22:32'));
+  ctx.handleEvent(member('atlas', 'c1', { type: 'tool_start', tool: 'Read', tool_call_id: 't1', input: '' }, '22:33'));
+  assert.equal(el('chipstep-boss').textContent, 'waiting for the team');
+  ctx.run('setInputMode = () => {};');   // the fake DOM has no input bar; the bar's modes have their own tests
+  ctx.handleEvent(bare({ type: 'tt_error', message: 'the model refused' }, '22:35'));
+  assert.equal(ctx.snap().atlas.state, 'failed');
+  assert.match(el('chipstep-boss').textContent, /^done \d\d:\d\d$/);
+});
+
+test('final review: in a roundtable the coordinator is never "waiting for the team" (the members take turns)', () => {
+  seq = 0;
+  const { ctx, el } = pageCtx();
+  ctx.run("mode = 'roundtable'; memberStates.set('boss', { state: 'done', step: '', at: Date.now() }); memberStates.set('atlas', { state: 'working', step: 'writing…', at: Date.now() }); renderMember('boss');");
+  assert.match(el('chipstep-boss').textContent, /^done \d\d:\d\d$/);
+  assert.equal(el('chipdot-boss').className, 'chip-dot done');
+});

@@ -917,7 +917,7 @@
     }
     /** The coordinator's card closes when it hands work out; while a member still works or waits, it is waiting, not done. */
     function coordWaiting(m, slug) {
-      if (!m || m.state !== 'done' || !slug || slug !== coordinator) return false;
+      if (!m || m.state !== 'done' || !slug || slug !== coordinator || mode === 'roundtable') return false;   // a roundtable takes turns
       for (const [s, v] of memberStates) if (s !== coordinator && (v.state === 'working' || v.state === 'waiting')) return true;
       return false;
     }
@@ -1956,6 +1956,7 @@
             }
             // If coordinator block is empty (no text and no tool calls), remove it entirely
             if (currentBlock && currentBlock.slug === coordinator && !currentBlock.rawText.trim() && !currentBlock.toolCount) {
+              setDot(currentBlock.slug, 'done');   // its turn ended in the hand-out: from here it waits for the team
               currentBlock.element.remove();
               currentBlock = null;
             } else {
@@ -2085,6 +2086,9 @@
             break;
 
           case 'tt_error':
+            // The run ended: a member card still open ends with it (else its chip, and the coordinator's
+            // "waiting for the team", would stay as if it still worked).
+            for (const b of callBlocks.values()) if (!b.done) { addBlockNote(b, '■ Ended', 'failed'); finishCallBlock(b, true); }
             markUnfinishedTools();
             closeBlock();
             setStatus('error', 'Error');
