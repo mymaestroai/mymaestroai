@@ -187,3 +187,23 @@ test('plainName', () => {
   assert.equal(plainName('sam-x'), true);
   for (const n of ['', '.', '..', 'a/b', 'a\u0000b']) assert.equal(plainName(n), false, JSON.stringify(n));
 });
+
+test('review r8: a hard link as STATUS.md (to a file outside the tree) is refused; the answer is cut to maxChars; odd names are plain keys', async () => {
+  const base = tmp();
+  const outside = tmp();
+  const job = path.join(base, 'hand-offs', 'job');
+  fs.mkdirSync(job, { recursive: true });
+  const secret = path.join(outside, 'secret.txt');
+  fs.writeFileSync(secret, 'SECRET');
+  fs.linkSync(secret, path.join(job, 'STATUS.md'));
+  let a = await status(base, ['job']);
+  assert.equal(a.ok, true);
+  assert.equal(a.status.job, null, 'a file with a second link is not read');
+  // the plain file again: read, and cut to maxChars however long it is
+  fs.unlinkSync(path.join(job, 'STATUS.md'));
+  fs.writeFileSync(path.join(job, 'STATUS.md'), '\u0001'.repeat(5000));
+  a = await run({ op: 'status', base, names: ['job', '__proto__'], maxBytes: 8000, maxChars: 100 });
+  assert.equal(a.status.job.length, 100);
+  assert.equal(a.status.__proto__, null);
+  assert.ok(Object.prototype.hasOwnProperty.call(a.status, '__proto__'));
+});

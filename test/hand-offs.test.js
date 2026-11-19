@@ -869,3 +869,38 @@ test('note() once only: a running note is saved as delivered before interject; a
   assert.strictEqual(saved2.items.find((r) => r.id === v.id).notes[1].delivered, false, 'and saved as not delivered');
 });
 
+
+test('review r8: a hard-linked STATUS.md is not read on either route', async () => {
+  for (const procFd of [true, false]) {
+    const env = setup({ procFd });
+    const v = await mk(env);
+    const secret = path.join(tmp(), 'secret.txt');
+    fs.writeFileSync(secret, 'SECRET');
+    fs.linkSync(secret, path.join(v.folder, 'STATUS.md'));
+    assert.strictEqual((await env.h.listWithStatus('sam'))[0].status, null, `procFd ${procFd}: a second link is refused`);
+    if (procFd) assert.strictEqual(env.h.list('sam', { withStatus: true })[0].status, null);
+    fs.unlinkSync(path.join(v.folder, 'STATUS.md'));
+    fs.writeFileSync(path.join(v.folder, 'STATUS.md'), 'fine');
+    assert.strictEqual((await env.h.listWithStatus('sam'))[0].status, 'fine', `procFd ${procFd}: a plain file is read`);
+  }
+});
+
+test('review r8: hand-offs being created count toward the cap (the folder helper is awaited)', async () => {
+  const env = setup({ procFd: false });
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  let n = 0;
+  env.h.folderHelper = { plainName: () => true, run: async (req) => { await gate; n++; return { ok: true, name: `${req.caller}-${req.slug}-${n}` }; } };
+  const runs = Array.from({ length: MAX_OPEN_PER_CALLER + 2 }, (_, i) => mk(env, { topic: 'Job ' + i }).then(() => 'ok', (e) => e.message));
+  await flush();
+  release();
+  const out = await Promise.all(runs);
+  assert.strictEqual(out.filter((x) => x === 'ok').length, MAX_OPEN_PER_CALLER);
+  assert.strictEqual(out.filter((x) => /hand-offs open/.test(x)).length, 2);
+  assert.strictEqual(env.h.creating.size, 0, 'nothing left counted as being created');
+  // a failed creation frees its place
+  const env2 = setup({ procFd: false });
+  env2.h.folderHelper = { plainName: () => true, run: async () => ({ ok: false, code: 'error' }) };
+  await assert.rejects(mk(env2), /Couldn't make the hand-off folder/);
+  assert.strictEqual(env2.h.creating.size, 0);
+});
