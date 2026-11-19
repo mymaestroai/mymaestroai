@@ -611,3 +611,50 @@ test('item 7: a failed read answers ok: false again within 60 s', async () => {
   assert.strictEqual(b.snapshot.error, "Codex isn't installed.");
   assert.strictEqual(calls, 1);
 });
+
+test('r3: spend control has no end time: a window resetting does not end it; only an explicit false does', () => {
+  const { u, clock } = make();
+  const s1 = Math.floor((T0 + 3600000) / 1000);
+  u.noteSnapshot({ limitId: 'codex', spendControlReached: true, rateLimitReachedType: 'rate_limit_reached', primary: { usedPercent: 100, windowDurationMins: 300, resetsAt: s1 } });
+  assert.strictEqual(u.snapshot().limits[0].reached, true);
+  assert.strictEqual(u.snapshot().limits[0].reachedUntil, null, 'spend control: no known end');
+  clock.t = T0 + 2 * 3600000;                             // the window has reset
+  assert.strictEqual(u.snapshot().limits[0].reached, true, 'spend control still holds');
+  u.noteSnapshot({ limitId: 'codex', primary: { usedPercent: 2, windowDurationMins: 300, resetsAt: s1 + 18000 } });   // omits both flags
+  assert.strictEqual(u.snapshot().limits[0].reached, true);
+  assert.strictEqual(u.snapshot().limits[0].spendControlReached, true);
+  assert.strictEqual(u.snapshot().limits[0].reachedType, null, 'the rate-limit stop lapsed with its window');
+  u.noteSnapshot({ limitId: 'codex', spendControlReached: false });
+  assert.strictEqual(u.snapshot().limits[0].reached, false);
+});
+
+test('r3: a read entry that is not usable keeps that limit\'s stored figures', () => {
+  const { u } = make();
+  u.noteRead({ rateLimitsByLimitId: { codex: weekly(30), codex_other: { limitId: 'codex_other', primary: { usedPercent: 55, windowDurationMins: 10080, resetsAt: RESET_S } } } });
+  assert.strictEqual(u.noteRead({ rateLimitsByLimitId: { codex: weekly(31), codex_other: {} } }), true);
+  const other = u.snapshot().limits.find(l => l.id === 'codex_other');
+  assert.ok(other, 'not deleted');
+  assert.strictEqual(other.windows[0].usedPercent, 55);
+  // a limit the read does not name at all is still removed
+  u.noteRead({ rateLimitsByLimitId: { codex: weekly(32) } });
+  assert.deepStrictEqual(u.snapshot().limits.map(l => l.id), ['codex']);
+});
+
+test('r3: a re-assertion keeps a known end it cannot recompute from the stored windows', () => {
+  const { u } = make();
+  const s1 = Math.floor((T0 + 3600000) / 1000);
+  u.noteSnapshot({ limitId: 'codex', rateLimitReachedType: 'rate_limit_reached', secondary: { usedPercent: 100, windowDurationMins: 300, resetsAt: s1 } });
+  const end = new Date(s1 * 1000).toISOString();
+  assert.strictEqual(u.snapshot().limits[0].reachedUntil, end);
+  u.noteSnapshot({ limitId: 'codex', rateLimitReachedType: 'rate_limit_reached', secondary: { usedPercent: 99 } });
+  assert.strictEqual(u.snapshot().limits[0].reachedUntil, end);
+});
+
+test('r3: noteRead(null) tells the page (save and publish)', () => {
+  const { u, published, clock } = make();
+  clock.t += 10000;
+  assert.strictEqual(u.noteRead(null), false);
+  clock.t += 10000;
+  u.flush();
+  assert.ok(published.some(p => p.type === 'codex_usage' && p.data.error === 'Codex answered without usage figures.'));
+});
