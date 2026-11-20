@@ -15409,7 +15409,7 @@ function simpleSettingsOpen() {
     '<button type="button" class="ss-row" id="ss-out"><b>Sign out</b></button>' +
     '<button type="button" class="ss-close">Close</button>';
   d.querySelector('.ss-val').textContent = name;
-  { const ls = document.createElement('div'); ls.className = 'ss-sec'; const lt = document.createElement('div'); lt.className = 'ss-title'; lt.appendChild(document.createTextNode('Interface style')); const lh = document.createElement('div'); ls.appendChild(lt); ls.appendChild(lh); d.insertBefore(ls, d.querySelector('.ss-sec')); lookPickerPaint(lh); }   // Look is the first section, right after the h3
+  { const ls = document.createElement('div'); ls.className = 'ss-sec'; const lt = document.createElement('div'); lt.className = 'ss-title'; lt.appendChild(document.createTextNode('Interface style')); const lh = document.createElement('div'); ls.appendChild(lt); ls.appendChild(lh); d.insertBefore(ls, d.querySelector('.ss-sec')); lookPickerPaint(lh); }   // Interface style is the first section, right after the h3
   const paint = () => { const cur = (hubMe && hubMe.theme) || 'auto'; d.querySelectorAll('.ss-seg button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.theme === cur))); };
   paint();
   d.querySelectorAll('.ss-seg button').forEach(b => b.addEventListener('click', async () => {
