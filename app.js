@@ -11113,10 +11113,10 @@
     // A thinking block a partial reply left open (a model writing <think>… in its reply) is closed wherever the page adds a
     // notice after it ("Connection lost…", "[Stopped]", "⚠ …"), so the collapsed thinking box does not swallow the notice
     // (review r1, r2). The partial itself stays raw: the hub's catch-up compares its length.
-    const THINK_TAGS = [['<think>', '</think>'], ['<thinking>', '</thinking>'], ['<reasoning>', '</reasoning>'], ['[think]', '[/think]'], ['[thinking]', '[/thinking]']];
     function closeOpenThinking(text) {
+      const tags = [['<think>', '</think>'], ['<thinking>', '</thinking>'], ['<reasoning>', '</reasoning>'], ['[think]', '[/think]'], ['[thinking]', '[/thinking]']];
       let t = String(text || '');
-      for (const [open, close] of THINK_TAGS) {
+      for (const [open, close] of tags) {
         const low = t.toLowerCase();
         if (low.lastIndexOf(open) > low.lastIndexOf(close)) t += close;
       }
@@ -12880,9 +12880,9 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       // The stall check ended the read: a group chat has no re-attach, so say the reply may be cut off
       // rather than pass it on as complete.
       if (stallTriggered) {
-        const note = '\n\n⚠ The connection went quiet for 90 seconds, so this reply may be cut off.';
-        fullResponse += note;
-        displayContent += note;
+        const note = '⚠ The connection went quiet for 90 seconds, so this reply may be cut off.';
+        fullResponse = withNotice(fullResponse, note);       // an open thinking block is closed first (review r3)
+        displayContent = withNotice(displayContent, note);
         updateGroupMessage(msgId, displayContent, agentName, colorIndex);
       }
 
@@ -12900,8 +12900,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     
     function handleStreamError(err, msgId, fullResponse, chat) {
       if (err.name === 'AbortError') {
-        updateMessage(msgId, fullResponse + '\n\n*[Cancelled]*');
-        chat.messages.push({ role: 'assistant', content: fullResponse + ' [Cancelled]' });
+        updateMessage(msgId, withNotice(fullResponse, '*[Cancelled]*'));
+        chat.messages.push({ role: 'assistant', content: withNotice(fullResponse, '[Cancelled]', ' ') });
       } else {
         updateMessage(msgId, `*Error: ${err.message}*`);
         setStatus(chat.id, 'error');

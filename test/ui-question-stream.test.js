@@ -61,7 +61,7 @@ function page() {
     has: (t, k) => typeof k === 'string' && (k in t || !(k in globalThis)),
     get: (t, k) => (k in t ? t[k] : () => undefined),
   });
-  const helpers = ['askFromStream'].filter((n) => APP.includes(`function ${n}(`));
+  const helpers = ['askFromStream', 'closeOpenThinking', 'withNotice'].filter((n) => APP.includes(`function ${n}(`));   // the real notice join (a stub would drop the note)
   // Declared inside the block, so the readers find them before the stubs (an \`env.x = …\` here would hit the stub proxy).
   const body = `with (env) {\n${helpers.map((n) => `const ${n} = (${extract(APP, n)});`).join('\n')}\n` +
     `return { solo: (${extract(APP, 'streamResponseSolo')}), group: (${extract(APP, 'streamResponseGroup')}) }; }`;

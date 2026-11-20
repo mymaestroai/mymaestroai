@@ -142,4 +142,19 @@ test('every notice joined to a partial reply goes through withNotice (no other j
   assert.doesNotMatch(app, /\$\{partialText\}\\n\\n/);
   assert.ok((app.match(/withNotice\(/g) || []).length >= 10, 'the helper and its call sites');
   assert.match(app, /content: closeOpenThinking\(existing\) \+ tag, partial: true/);
+  // group chats (review r3): the stall warning and the cancel mark
+  assert.match(app, /fullResponse = withNotice\(fullResponse, note\);[^\n]*\n\s*displayContent = withNotice\(displayContent, note\);/);
+  assert.match(app, /updateMessage\(msgId, withNotice\(fullResponse, '\*\[Cancelled\]\*'\)\);/);
+  assert.match(app, /content: withNotice\(fullResponse, '\[Cancelled\]', ' '\)/);
+  assert.doesNotMatch(app, /fullResponse \+ '\\n\\n\*\[Cancelled\]\*'/);
+  assert.doesNotMatch(app, /fullResponse \+= note;/);
+});
+
+test('group chat: the stall warning stays visible after an open thinking block (review r3)', () => {
+  const C = load({});
+  vm.runInContext(`${sliceFn(app, 'parseThinking')}; this.parseThinking = parseThinking;`, C);
+  const note = '\u26a0 The connection went quiet for 90 seconds, so this reply may be cut off.';
+  const r = C.parseThinking(C.withNotice('Part one.\n<think>checking', note));
+  assert.ok(r.response.includes(note) && !r.thinking.includes(note));
+  assert.strictEqual(C.withNotice('', note), note, 'nothing streamed: the warning alone');
 });
