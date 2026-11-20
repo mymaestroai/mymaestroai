@@ -658,3 +658,82 @@ test('r3: noteRead(null) tells the page (save and publish)', () => {
   u.flush();
   assert.ok(published.some(p => p.type === 'codex_usage' && p.data.error === 'Codex answered without usage figures.'));
 });
+
+// Reading at start (follow-up): one no-token read about 30 s after the hub starts, only when useful.
+test('start: one read about 30 s after start when on, with a Codex agent, signed in to ChatGPT', async () => {
+  const timers = [];
+  let reads = 0;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cu-'));
+  const logs = [];
+  const v = createCodexUsage({
+    getSetting: () => undefined, now: () => T0, stateFile: path.join(dir, 's.json'), log: (l) => logs.push(l), whenText: String,
+    listAgents: () => [{ name: 'cx', model: 'codex-cli/gpt-x' }],
+    readLimits: async () => { reads++; return proRead(); },
+    signedIn: async () => ({ installed: true, loggedIn: true, mode: 'chatgpt' }),
+    setTimer: (fn, ms) => { timers.push({ fn, ms }); return timers.length; },
+  });
+  assert.strictEqual(v.start(), true);
+  assert.strictEqual(v.start(), false, 'once');
+  assert.strictEqual(timers.length, 1);
+  assert.strictEqual(timers[0].ms, 30000);
+  assert.strictEqual(reads, 0, 'nothing before the delay');
+  timers[0].fn();
+  await new Promise(r => setTimeout(r, 20));
+  assert.strictEqual(reads, 1);
+  assert.strictEqual(v.snapshot().limits[0].windows[0].usedPercent, 14);
+  assert.ok(logs.some(l => l === '[codex-usage] reading at start: done'), logs.join(' | '));
+});
+
+test('readAtStart skips without reading: off, no Codex agent, not signed in, an API-key sign-in, a failing status check', async () => {
+  const cases = [
+    [{ settings: { subscriptionUsage: false } }, 'off'],
+    [{ agents: [{ name: 'cl', model: 'claude-sdk/claude-opus-5-5' }] }, 'no Codex agents'],
+    [{ signedIn: async () => ({ installed: true, loggedIn: false, mode: null }) }, 'Codex is not signed in to ChatGPT'],
+    [{ signedIn: async () => ({ installed: true, loggedIn: true, mode: 'apikey' }) }, 'Codex is not signed in to ChatGPT'],
+    [{ signedIn: async () => { throw new Error('boom'); } }, 'Codex is not signed in to ChatGPT'],
+  ];
+  for (const [o, why] of cases) {
+    let reads = 0;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cu-'));
+    const settings = o.settings || {};
+    const v = createCodexUsage({
+      getSetting: (k) => settings[k], now: () => T0, stateFile: path.join(dir, 's.json'), log: () => {}, whenText: String,
+      listAgents: () => o.agents || [{ name: 'cx', model: 'codex-cli/gpt-x' }],
+      readLimits: async () => { reads++; return proRead(); },
+      signedIn: o.signedIn || (async () => ({ installed: true, loggedIn: true, mode: 'chatgpt' })),
+    });
+    const r = await v.readAtStart();
+    assert.strictEqual(r.skipped, why);
+    assert.strictEqual(reads, 0, why);
+  }
+});
+
+test('readAtStart: no sign-in check and no read while Codex is updating; an update that begins during the check is refused by readNow; it counts toward the once-a-minute limit', async () => {
+  let reads = 0;
+  let checks = 0;
+  let updating = true;
+  let startUpdateDuringCheck = false;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cu-'));
+  const v = createCodexUsage({
+    getSetting: () => undefined, now: () => T0, stateFile: path.join(dir, 's.json'), log: () => {}, whenText: String,
+    listAgents: () => [{ name: 'cx', model: 'codex-cli/gpt-x' }],
+    readLimits: async () => { reads++; return proRead(); },
+    signedIn: async () => { checks++; if (startUpdateDuringCheck) updating = true; return { installed: true, loggedIn: true, mode: 'chatgpt' }; },
+    updateActive: () => updating,
+  });
+  const a = await v.readAtStart();
+  assert.strictEqual(a.skipped, 'Codex is updating');
+  assert.strictEqual(checks, 0, 'not even codex login status during an update');
+  assert.strictEqual(reads, 0);
+  updating = false; startUpdateDuringCheck = true;
+  const b = await v.readAtStart();
+  assert.strictEqual(checks, 1);
+  assert.strictEqual(b.ok, false);
+  assert.match(b.error, /Codex is updating/);
+  assert.strictEqual(reads, 0);
+  updating = false; startUpdateDuringCheck = false;
+  assert.strictEqual((await v.readAtStart()).ok, true);
+  const c = await v.readNow();
+  assert.strictEqual(c.cached, true, 'a page asking right after gets the same reading');
+  assert.strictEqual(reads, 1);
+});

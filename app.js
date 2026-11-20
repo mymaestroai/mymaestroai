@@ -5658,8 +5658,41 @@
       const title = (main.weekly ? `ChatGPT plan: ${pct}% of this week's allowance, resets ${when}` : `ChatGPT plan: ${pct}% of the ${main.label || 'usage'} allowance, resets ${when}`) + seen;
       return { text, cls, title };
     }
+    /** The ChatGPT badge before any usable reading: "reading…" while one is awaited, "no reading" with the reason after a
+     *  failed one (never "reading…" for ever). */
+    function codexPendingBadge(snap) {
+      if (snap && snap.error && !snap.reading) return { text: 'ChatGPT: no reading', cls: '', title: `No reading of the ChatGPT plan yet: ${String(snap.error).slice(0, 200)}` };
+      return { text: 'ChatGPT: reading\u2026', cls: '', title: "Reading the ChatGPT plan's usage (no turn is spent)" };
+    }
+    /** Whether a page showing a Codex chat should ask for a reading: the snapshot loaded and on, none running, the last
+     *  reading missing or over 30 minutes old; at most once a minute per page (askedAt). The hub limits reads too. */
+    function codexShouldRead(snap, now, askedAt) {
+      if (!snap || snap.enabled === false || snap.reading) return false;
+      if (Number(askedAt) && now - Number(askedAt) < 60000) return false;
+      const t = Date.parse(snap.readAt || '');
+      return !Number.isFinite(t) || now - t > 30 * 60000;
+    }
+    /** The snapshot after a page's read request: the answer's snapshot, carrying the hub's reason when it refused or failed
+     *  without storing one (a Codex update, the hub unreachable), so the badge says "no reading" and why instead of
+     *  "reading..." (review r1). */
+    function codexAfterAsk(prev, answer) {
+      const snap = answer && typeof answer === 'object' && answer.snapshot && typeof answer.snapshot === 'object' ? answer.snapshot : prev;
+      if (!snap) return prev;
+      if (answer && answer.ok === false && answer.error && !snap.error) return Object.assign({}, snap, { error: String(answer.error).slice(0, 200), reading: false });
+      return snap;
+    }
     // ── subscriptions helpers (end) ──
     const subsEnabled = () => subsOnFlag !== false && !(codexLast && codexLast.enabled === false);
+    // One read of the ChatGPT plan asked for by this page (POST /api/codex-usage/refresh: no turn; the hub allows one a
+    // minute and none during a Codex update); the answer repaints the badges and the Subscriptions box.
+    let codexAskAt = 0;
+    function codexAskRead() {
+      codexAskAt = Date.now();
+      fetch('/api/codex-usage/refresh', { method: 'POST', credentials: 'include' })
+        .then(r => r.json().catch(() => ({ ok: false, error: `HTTP ${r.status}` })))
+        .catch(() => ({ ok: false, error: "Couldn't reach your Maestro to read it." }))   // the next paint asks again after a minute
+        .then(d => { const next = codexAfterAsk(codexLast, d); if (next && next !== codexLast) { codexLast = next; paintPlanBadges(); paintSubsBox(); } });
+    }
     const subsIsCodex = (model) => String(model || '').startsWith('codex-cli/');
     function openSubsSettings() { return openSettingsAt('st-subs-section'); }
     /** The ChatGPT weekly window past the first warning level that most needs attention, or null. */
@@ -5781,7 +5814,13 @@
         if (!el) continue;
         el.onclick = () => openPlanSettings();
         if (chat && !chat.isGroup && chat.agent && subsIsCodex(chatModelOf(chat))) {
-          const b = subsEnabled() ? codexBadge(codexLast, null, Date.now()) : null;
+          let b = subsEnabled() ? codexBadge(codexLast, null, Date.now()) : null;
+          // An admin with a Codex chat open: a missing or old reading is asked for (no turn spent), and until one
+          // exists the badge says so instead of showing nothing.
+          if (subsEnabled() && !(window.hubMe && !window.hubMe.isAdmin)) {
+            if (codexShouldRead(codexLast, Date.now(), codexAskAt)) codexAskRead();
+            if (!b) b = codexPendingBadge(codexLast);
+          }
           if (!b) { el.hidden = true; el.textContent = ''; continue; }
           el.textContent = b.text;
           el.className = 'plan-badge' + (b.cls ? ' ' + b.cls : '');
