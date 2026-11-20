@@ -55,7 +55,8 @@ test('reason codes and provider keys map to readable labels', () => {
 });
 
 test('desktop: amber banner under the halt banner, countdown tick, Resume button, Settings mirror', () => {
-  assert.ok(app.includes("'hub-pacing-banner'") && app.includes('#b26a00'));
+  assert.ok(app.includes("'hub-pacing-banner'") && app.includes('var(--banner-pending-bg)'));  // looks-vars: --banner-pending-bg is #b26a00 in index.html :root (same value, spelled as a variable)
+  assert.match(require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'index.html'), 'utf8'), /--banner-pending-bg:\s*#b26a00;/);
   assert.ok(app.includes("document.getElementById('hub-halt-banner')"), 'positions itself relative to the halt banner');
   assert.ok(app.includes('Resume full speed'));
   assert.ok(app.includes('one at a time (') && app.includes('parallel again in '));

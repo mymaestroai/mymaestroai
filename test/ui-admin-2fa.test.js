@@ -48,7 +48,8 @@ test('unchecking opens the confirm panel instead of posting', () => {
   assert.ok(ask.includes("Allow admins to remove their own two-factor? An admin who removes it signs in with a password alone, so anyone who learns that password could sign in as that admin."));
   assert.match(ask, /type="password" id="st-a2fa-pw" autocomplete="current-password"/);
   assert.match(ask, /me\.user\.totpEnabled \? '<div class="st-row"><label[^']*<input type="text" id="st-a2fa-code" inputmode="numeric" autocomplete="one-time-code" placeholder="123456 or a recovery code">/);
-  assert.match(ask, /background:#b71c1c[^>]*onclick="stAdmin2faOff\(\)">Turn it off</);
+  // looks-vars: the red is var(--halt-banner-bg), defined in index.html :root as #b71c1c (same value, spelled as a variable)
+  assert.match(ask, /background:var\(--halt-banner-bg\)[^>]*onclick="stAdmin2faOff\(\)">Turn it off</);
   assert.match(ask, /stAdmin2faCancel\(\)">Cancel</);
 });
 

@@ -77,9 +77,10 @@ test('rows: level mark and words, title, detail, fix, "since" only for problems;
   ]));
   const h = t.els['st-hl-list'].innerHTML;
   assert.match(h, /Last checked .+ \(nightly\)/);
-  assert.match(h, /#d64545[^>]*aria-label="Critical"/);
-  assert.match(h, /#d9a21b[^>]*aria-label="Warning"/);
-  assert.match(h, /#3fa65b[^>]*aria-label="OK"/);
+  // looks-vars: the level colours are variables now (--health-critical #d64545, --health-warn #d9a21b, --health-ok #3fa65b, defined in index.html :root)
+  assert.match(h, /var\(--health-critical\)[^>]*aria-label="Critical"/);
+  assert.match(h, /var\(--health-warn\)[^>]*aria-label="Warning"/);
+  assert.match(h, /var\(--health-ok\)[^>]*aria-label="OK"/);
   assert.match(h, /Couldn't check/);
   assert.match(h, /Title health-disk-main<\/b>/);
   assert.match(h, /Detail health-disk-main/);
@@ -222,8 +223,9 @@ test('desktop banner: red fixed bar with the titles and a link that opens Settin
   const bar = r.els['hub-health-notice'];
   assert.ok(bar, 'bar drawn');
   assert.match(bar.style.cssText, /position:fixed/);
-  assert.match(bar.style.cssText, /background:#7a1212/);
-  assert.match(bar.style.cssText, /color:#fff/);
+  // looks-vars: --banner-critical-bg is #7a1212 and --on-color-text is #ffffff in index.html :root (same values)
+  assert.match(bar.style.cssText, /background:var\(--banner-critical-bg\)/);
+  assert.match(bar.style.cssText, /color:var\(--on-color-text\)/);
   assert.match(bar.style.cssText, /font-weight:(700|bold)/);
   assert.match(bar.innerHTML, /^Health: Disk almost full; No backup &lt;3 days&gt;\. <a /);
   assert.match(bar.innerHTML, /openSettingsAt\('st-health-section'\)/);
@@ -283,7 +285,9 @@ test('phone banner: the bar is at the top of the main screen, and its filter is 
   const html = fs.readFileSync(path.join(__dirname, '..', 'mobile.html'), 'utf8');
   const at = html.indexOf('<section id="screen-agents"');
   assert.ok(at > 0 && html.slice(at, at + 200).includes('id="health-notice"'), 'first thing in the agents screen');
-  assert.match(html, /#health-notice\s*\{[^}]*background: #7a1212/);
+  // looks-vars: the banner colour moved into :root as --health-notice-bg (same value)
+  assert.match(html, /#health-notice\s*\{[^}]*background: var\(--health-notice-bg\)/);
+  assert.match(html, /--health-notice-bg:\s*#7a1212;/);
   assert.match(html, /#health-notice\s*\{[^}]*overflow-wrap: anywhere/, 'text wraps within 390 px');
   const r = phoneRig({ me: ADMIN });
   const v = view([item('a', 'critical'), item('b', 'warn'), item('health-signin-claude', 'critical'), item('c', 'unknown')]);

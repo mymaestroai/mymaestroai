@@ -839,6 +839,7 @@ async function handleHttpRequest(req, res) {
       // This person's look (Simple mode): the saved choice, else by role (a member starts in Simple, an admin in Advanced).
       out.uiMode = (u && u.uiMode) || (isAdmin ? 'advanced' : 'simple');
       out.theme = (u && u.theme) || 'auto';
+      { const rec = req.hubUser ? hubAuth.getUser(req.hubUser.id) : null; if (rec && rec.look) out.look = rec.look; }   // this person's default look (the pages call HubLooks.rememberDefault); absent for accounts made before looks existed
       return jsonResponse(res, 200, out);
     }
     // This person's page mode and theme: { uiMode?: 'simple'|'advanced', theme?: 'light'|'dark'|'auto' }. A signed-in
@@ -2768,6 +2769,8 @@ async function handleHttpRequest(req, res) {
           if (patch && patch.memberPolicy !== undefined) patch.memberPolicy = require('./lib/tool-policy').sanitizeGrants({ policy: patch.memberPolicy }).policy || {};
           // Per-class approval cards: known class names only (lib/policy-gate APPROVAL_CLASSES).
           if (patch && patch.approvalClasses !== undefined) { const ok = require('./lib/policy-gate').APPROVAL_CLASSES; patch.approvalClasses = Array.isArray(patch.approvalClasses) ? [...new Set(patch.approvalClasses.map(String).filter(c => ok.includes(c)))] : []; }
+          // The look a new member starts with: one of the registry's ids (lib/ui-looks); anything else is refused.
+          if (patch && typeof patch === 'object' && patch.lookDefaultForNewMembers !== undefined && !require('./lib/ui-looks').byId(patch.lookDefaultForNewMembers)) return jsonResponse(res, 400, { error: 'lookDefaultForNewMembers must be one of: ' + require('./lib/ui-looks').LOOKS.map(l => l.id).join(', ') });
           // Claude plan: warning levels, and the optional automatic switch (merged onto the stored policy, so its map survives).
           if (patch && patch.planWarn !== undefined) patch.planWarn = require('./lib/plan-usage').cleanWarn(patch.planWarn);
           if (patch && patch.notify !== undefined) patch.notify = require('./lib/push').cleanNotifySettings(patch.notify);

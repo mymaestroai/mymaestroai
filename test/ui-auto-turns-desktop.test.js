@@ -164,9 +164,13 @@ test('setting: key hub-fold-auto, default on, Chat section in Settings', () => {
 });
 
 test('CSS: kind colours, compact header, hidden body, muted from line', () => {
-  assert.match(html, /\.auto-card-consult \{[^}]*#8b6fd6/);
-  assert.match(html, /\.auto-card-schedule \{[^}]*#c9a227/);
-  assert.match(html, /\.auto-card-notice \{[^}]*#8a8a85/);
+  // looks-vars: the three kind colours are now variables defined in :root with the same values (#8b6fd6, #c9a227, #8a8a85)
+  assert.match(html, /\.auto-card-consult \{[^}]*var\(--brand-violet\)/);
+  assert.match(html, /--brand-violet:\s*#8b6fd6;/);
+  assert.match(html, /\.auto-card-schedule \{[^}]*var\(--status-warn\)/);
+  assert.match(html, /--status-warn:\s*#c9a227;/);
+  assert.match(html, /\.auto-card-notice \{[^}]*var\(--auto-notice-text\)/);
+  assert.match(html, /--auto-notice-text:\s*#8a8a85;/);
   assert.match(html, /\.auto-card-head, \.auto-stack-head \{[^}]*border-left: 3px solid var\(--auto-color\)/);
   assert.match(html, /\.auto-card-body\[hidden\]/);
   assert.match(html, /\.auto-from \{/);

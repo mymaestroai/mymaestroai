@@ -46,6 +46,7 @@
           window.hubMe = await r.json();
           try { if (window.hubSimple) { window.hubSimple.apply(window.hubMe); simpleBoot(); } } catch { /* Simple mode is optional: the page runs as before without it */ }
           try { if (typeof simpleTopSync === 'function') simpleTopSync(); } catch { /* the view switch is optional */ }
+          try { if (window.HubLooks && window.hubMe) window.HubLooks.rememberDefault(window.hubMe.look, window.HubLooks.storageOf(window)); } catch { /* looks are optional: the page keeps the look it has */ }   // every load: no default clears the last person's
           // Signed in: recorded-call pieces the hub never acknowledged (a closed tab, a reload, a dead network) are sent now, one at a time (lib/ui-voice-call.js).
           if (window.hubMe && window.hubMe.user) setTimeout(() => { try { voiceRecResendPending((u, i) => fetch(u, i), { userId: window.hubMe.user.id }); } catch { /* the call page's code is not up yet */ } }, 0);
         }
@@ -552,8 +553,8 @@
       if (bar) return;
       bar = document.createElement('div');
       bar.id = 'hub-no-accounts-notice';
-      bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9997;background:#7a3b12;color:#fff;padding:6px 14px;font-weight:600;box-sizing:border-box';
-      bar.innerHTML = 'This hub has no login yet: anyone who can reach it has full control, and multi-user features (members, sharing, the account menu, member sandboxes) stay off until an admin account exists. <a href="/welcome" style="color:#fff;text-decoration:underline">Create the admin account</a> (you will need the setup link: run mymaestro setup-link).';
+      bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9997;background:var(--banner-setup-bg);color:var(--on-color-text);padding:6px 14px;font-weight:600;box-sizing:border-box';
+      bar.innerHTML = 'This hub has no login yet: anyone who can reach it has full control, and multi-user features (members, sharing, the account menu, member sandboxes) stay off until an admin account exists. <a href="/welcome" style="color:var(--on-color-text);text-decoration:underline">Create the admin account</a> (you will need the setup link: run mymaestro setup-link).';
       document.body.prepend(bar);
       layoutBanners();
     }
@@ -569,8 +570,8 @@
       if (bar) return;
       bar = document.createElement('div');
       bar.id = 'hub-setup-notice';
-      bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9998;background:#1f4e79;color:#fff;padding:6px 14px;font-weight:600;box-sizing:border-box';
-      bar.innerHTML = 'No AI provider is configured yet, so agents cannot answer. <a href="/welcome" style="color:#fff;text-decoration:underline">Open the Welcome page</a> to connect a Claude or ChatGPT subscription, an API key or a local model.';
+      bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9998;background:var(--banner-info-bg);color:var(--on-color-text);padding:6px 14px;font-weight:600;box-sizing:border-box';
+      bar.innerHTML = 'No AI provider is configured yet, so agents cannot answer. <a href="/welcome" style="color:var(--on-color-text);text-decoration:underline">Open the Welcome page</a> to connect a Claude or ChatGPT subscription, an API key or a local model.';
       document.body.prepend(bar);
       layoutBanners();
     }
@@ -812,7 +813,7 @@
       const el = document.getElementById(id);
       if (!el) return;
       el.textContent = text || '';
-      el.style.color = ok ? 'var(--green, #4caf50)' : 'var(--accent)';
+      el.style.color = ok ? 'var(--green, var(--ok-text))' : 'var(--accent)';
     }
     async function beginTwoFactor() {
       try {
@@ -1425,9 +1426,9 @@
       let rec = state ? state.recovery : undefined;
       if (rec === undefined) { try { rec = (await bkApi('/api/backups/recovery', undefined, 'GET')).recovery; } catch { return; } }
       if (!rec || rec.resumedAt) { if (bar) { bar.remove(); layoutBanners(); } return; }
-      if (!bar) { bar = document.createElement('div'); bar.id = 'hub-recovery-notice'; bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9997;background:#6b4a0e;color:#fff;padding:6px 14px;font-weight:600;box-sizing:border-box'; document.body.prepend(bar); }
+      if (!bar) { bar = document.createElement('div'); bar.id = 'hub-recovery-notice'; bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9997;background:var(--banner-backup-bg);color:var(--on-color-text);padding:6px 14px;font-weight:600;box-sizing:border-box'; document.body.prepend(bar); }
       const held = (rec.held || []).length;
-      bar.innerHTML = `Restored from the backup of ${esc(bkWhen(rec.restoredFrom))}. Agents are paused until you press Resume${held ? `; ${held} item${held === 1 ? '' : 's'} wait${held === 1 ? 's' : ''} for Run or Skip` : ''}. <a href="#" onclick="openSettingsAt('st-backups-section'); return false" style="color:#fff;text-decoration:underline">Open Backups</a> <button onclick="bkResume(this)" style="margin-left:8px;padding:2px 10px;border-radius:4px;border:1px solid #fff;background:transparent;color:#fff;cursor:pointer">Resume</button>`;
+      bar.innerHTML = `Restored from the backup of ${esc(bkWhen(rec.restoredFrom))}. Agents are paused until you press Resume${held ? `; ${held} item${held === 1 ? '' : 's'} wait${held === 1 ? 's' : ''} for Run or Skip` : ''}. <a href="#" onclick="openSettingsAt('st-backups-section'); return false" style="color:var(--on-color-text);text-decoration:underline">Open Backups</a> <button onclick="bkResume(this)" style="margin-left:8px;padding:2px 10px;border-radius:4px;border:1px solid var(--on-color-text);background:transparent;color:var(--on-color-text);cursor:pointer">Resume</button>`;
       layoutBanners();
     }
 
@@ -1831,7 +1832,7 @@
       return `<div class="sec-section" data-no-dirty><div class="sec-title">${escapeHtml(name)}</div>
         <label class="sec-hint" for="sl-hours">Link works for</label><select class="sl-hours" id="sl-hours">${opts}</select>
         <label class="sec-hint" style="display:flex;gap:8px;align-items:center"><input type="checkbox" class="sl-once" style="width:auto"> Only one download</label>
-        <div class="sec-msg sl-msg" role="alert" style="color:var(--error,#e55)"></div></div>
+        <div class="sec-msg sl-msg" role="alert" style="color:var(--error)"></div></div>
         <div class="sec-actions"><button type="button" class="sec-btn sl-cancel">Cancel</button><button type="button" class="sec-btn sl-create">Create link</button></div>`;
     }
     function shareLinkResultHtml(link, origin) {
@@ -1974,7 +1975,7 @@
       ov.querySelector('.sl-create').focus();
     }
     function shareLinksListOpen() {
-      const ov = shareOverlay('share-list-overlay', 'Shared links', `<div class="sl-list sec-section">Loading…</div><div class="sec-msg sl-msg" role="alert" style="color:var(--error,#e55)"></div><div class="sec-actions"><button type="button" class="sec-btn sl-close">Close</button></div>`);
+      const ov = shareOverlay('share-list-overlay', 'Shared links', `<div class="sl-list sec-section">Loading…</div><div class="sec-msg sl-msg" role="alert" style="color:var(--error)"></div><div class="sec-actions"><button type="button" class="sec-btn sl-close">Close</button></div>`);
       ov.querySelector('.sl-close').onclick = () => dialogRequestClose(ov);
       shareLinksListFill(ov, isHubAdmin());
     }
@@ -2020,7 +2021,7 @@
             try { await uploadFileToHub(file, dir, { overwrite: true, onProgress: (f) => { pct.textContent = `${Math.round(f * 100)}%`; bar.style.width = `${f * 100}%`; } }); pct.textContent = 'done'; done++; setTimeout(() => row.remove(), 1500); continue; }
             catch (e2) { e = e2; }
           }
-          pct.textContent = 'failed'; pct.style.color = 'var(--error, #FF4C4C)'; failed++;
+          pct.textContent = 'failed'; pct.style.color = 'var(--error)'; failed++;
           filesStatus(`${file.name}: ${e.message}`, 'error');
           setTimeout(() => row.remove(), 6000);
         }
@@ -2367,15 +2368,15 @@
       const shown = data.jobs.filter(j => schedKeep('job', j, v.scope, now));
       const when = (iso) => iso ? new Date(iso).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
       const badge = (j) => {
-        const c = { running: '#2e7d32', cancelling: '#ef6c00', finished: '#1565c0', failed: '#c62828', cancelled: '#616161', timed_out: '#c62828', lost: '#c62828' }[j.status] || '#616161';
+        const c = { running: 'var(--job-status-run)', cancelling: 'var(--job-status-warn)', finished: 'var(--job-status-done)', failed: 'var(--job-status-bad)', cancelled: 'var(--job-status-idle)', timed_out: 'var(--job-status-bad)', lost: 'var(--job-status-bad)' }[j.status] || 'var(--job-status-idle)';
         const extra = j.status === 'running' ? ` · ${j.runningFor}` : (j.exitCode !== null && j.exitCode !== undefined ? ` · exit ${j.exitCode}` : '');
-        return `<span style="display:inline-block;padding:1px 7px;border-radius:10px;font-size:11px;color:#fff;background:${c}">${j.status.replace('_', ' ')}${esc(extra)}</span>`;
+        return `<span style="display:inline-block;padding:1px 7px;border-radius:10px;font-size:11px;color:var(--on-color-text);background:${c}">${j.status.replace('_', ' ')}${esc(extra)}</span>`;
       };
       const handoff = (j) => !j.reportTo ? (j.notifiedAt ? '<span title="owner woken with the result">woken ✓</span>' : '')
         : (j.reportedAt ? `<span title="owner woken, its report forwarded to ${esc(j.reportTo)}">reported to ${esc(j.reportTo)} ✓</span>`
           : j.notifiedAt ? `<span title="owner woken; waiting for its reply to forward">owner woken, report to ${esc(j.reportTo)} pending…</span>`
             : `<span>reports to ${esc(j.reportTo)}</span>`);
-      const rows = shown.length ? shown.map(j => `<tr style="border-top:1px solid var(--border,#333)">
+      const rows = shown.length ? shown.map(j => `<tr style="border-top:1px solid var(--border)">
           <td><b>${esc(j.name)}</b><br><code style="font-size:11px">${esc(j.id)}</code></td>
           <td>${esc(j.owner)}${j.reportTo ? ` <span title="master agent">→ ${esc(j.reportTo)}</span>` : ''}</td>
           <td>${badge(j)}<br><small>${handoff(j)}</small></td>
@@ -2498,10 +2499,10 @@
       const mdShown = data.tasksMd.filter(t => schedKeep('md', t, v.scope, now));
       const mdRunsShown = data.tasksMdRuns.filter(r => schedKeep('mdrun', r, v.scope, now));
       const when = (iso) => iso ? new Date(iso).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
-      const col = { active: '#2e7d32', paused: '#ef6c00', done: '#1565c0', cancelled: '#616161', missed: '#c62828', failed: '#c62828' };
-      const pill = (s, extra) => `<span style="display:inline-block;padding:1px 7px;border-radius:10px;font-size:11px;color:#fff;background:${col[s] || '#616161'}">${esc(s)}${extra ? esc(extra) : ''}</span>`;
+      const col = { active: 'var(--job-status-run)', paused: 'var(--job-status-warn)', done: 'var(--job-status-done)', cancelled: 'var(--job-status-idle)', missed: 'var(--job-status-bad)', failed: 'var(--job-status-bad)' };
+      const pill = (s, extra) => `<span style="display:inline-block;padding:1px 7px;border-radius:10px;font-size:11px;color:var(--on-color-text);background:${col[s] || 'var(--job-status-idle)'}">${esc(s)}${extra ? esc(extra) : ''}</span>`;
       const btn = (a, id, label) => `<button class="gs-btn secondary" onclick="schedAct('${a}', '${esc(id)}')">${label}</button>`;
-      const rows = tasks.length ? tasks.map(t => `<tr style="border-top:1px solid var(--border,#333)">
+      const rows = tasks.length ? tasks.map(t => `<tr style="border-top:1px solid var(--border)">
           <td><b>${esc(t.label)}</b><br><code style="font-size:11px">${esc(t.id)}</code></td>
           <td>${esc(t.agent)}<br><small>by ${esc(t.createdBy === '@owner' ? 'you' : t.createdBy === '@hub' ? 'the hub' : t.unconfirmedOwner ? '"owner" (not confirmed as you)' : t.createdBy)}</small>${t.unconfirmedOwner ? `<br>${btn('adopt', t.id, 'Mine')}` : ''}</td>
           <td><small>${esc(t.schedule)}</small>${t.nextRunLocal ? `<br><small>next: <b>${esc(t.nextRunLocal)}</b></small>` : ''}</td>
@@ -2512,15 +2513,15 @@
             ${t.status === 'active' || t.status === 'paused' ? btn('cancel', t.id, 'Cancel') : btn('delete', t.id, 'Delete')}</td>
         </tr>`).join('') : `<tr><td colspan="5"><i>${!data.tasks.length ? 'No scheduled tasks yet. Add one with ＋ New task, or agents create them with schedule_task.'
           : v.scope === 'active' ? 'No active scheduled tasks.' : `No scheduled tasks ${schedScopeWords(v.scope)}.`}</i></td></tr>`;
-      const runs = runsShown.length ? runsShown.map(r => `<tr style="border-top:1px solid var(--border,#333)"><td><small>${esc(when(r.firedAt || r.dueAt))}</small></td><td>${esc(r.agent)}</td><td>${esc(r.label)}</td>
+      const runs = runsShown.length ? runsShown.map(r => `<tr style="border-top:1px solid var(--border)"><td><small>${esc(when(r.firedAt || r.dueAt))}</small></td><td>${esc(r.agent)}</td><td>${esc(r.label)}</td>
           <td>${pill(r.status === 'replied' || r.status === 'delivered' ? 'done' : r.status === 'no_reply' ? 'paused' : 'failed', '')} <small>${esc(r.status)}${r.late ? ` · ${esc(r.lateNote || 'late')}` : ''}</small></td>
           <td><small>${esc((r.replyPreview || r.note || '').slice(0, 220))}</small></td></tr>`).join('')
         : `<tr><td colspan="5"><i>${data.runs.length && v.scope !== 'all' ? `No runs ${schedScopeWords(v.scope)}.` : 'No runs yet.'}</i></td></tr>`;
-      const md = mdShown.length ? mdShown.map(t => `<tr style="border-top:1px solid var(--border,#333)"><td><b>${esc(t.id)}</b></td><td>${esc(t.agent)}</td>
+      const md = mdShown.length ? mdShown.map(t => `<tr style="border-top:1px solid var(--border)"><td><b>${esc(t.id)}</b></td><td>${esc(t.agent)}</td>
           <td><small>${esc(t.trigger)}${t.expression ? ` <code>${esc(t.expression)}</code>` : ''}${t.nextRunLocal ? `<br>next: <b>${esc(t.nextRunLocal)}</b>` : ''}</small></td>
           <td>${pill(t.enabled ? 'active' : 'paused', '')}</td><td><small>${esc(t.action)}</small></td></tr>`).join('')
         : `<tr><td colspan="5"><i>${data.tasksMd.length ? 'No enabled TASKS.md tasks.' : 'No TASKS.md tasks.'}</i></td></tr>`;
-      const mdRuns = mdRunsShown.length ? mdRunsShown.slice(0, 12).map(r => `<tr style="border-top:1px solid var(--border,#333)"><td><small>${esc(when(r.timestamp))}</small></td><td>${esc(r.agent)}</td><td>${esc(r.taskId)}</td>
+      const mdRuns = mdRunsShown.length ? mdRunsShown.slice(0, 12).map(r => `<tr style="border-top:1px solid var(--border)"><td><small>${esc(when(r.timestamp))}</small></td><td>${esc(r.agent)}</td><td>${esc(r.taskId)}</td>
           <td><small>${esc(r.status)}${r.error ? ': ' + esc(r.error) : ''}</small></td></tr>`).join('') : '<tr><td colspan="4"><i>No runs today or yesterday.</i></td></tr>';
       const th = (cols) => `<thead><tr>${cols.map(c => `<th style="text-align:left">${c}</th>`).join('')}</tr></thead>`;
       let html = '';
@@ -2573,7 +2574,7 @@
         const el = document.getElementById('sched-preview'); const w = document.getElementById('sched-when')?.value.trim();
         if (!el) return; if (!w) { el.textContent = ''; return; }
         try { const p = await schedApi('/preview', { when: w }); el.textContent = `${p.type === 'once' ? 'Once' : 'Recurring'} · next run ${p.nextRunLocal}`; el.style.color = ''; }
-        catch (e) { el.textContent = e.message; el.style.color = '#c62828'; }
+        catch (e) { el.textContent = e.message; el.style.color = 'var(--job-status-bad)'; }
       }, 350);
     }
     async function schedSave() {
@@ -2582,7 +2583,7 @@
       try {
         if (schedEditId) { const t = await schedApi('/update', { id: schedEditId, ...body }); schedEditId = null; return openSchedulePanel(`Saved ${t.id}: next run ${t.nextRunLocal || '—'}.`); }
         const t = await schedApi('', body); return openSchedulePanel(`Scheduled "${t.label}" for ${t.agent}: next run ${t.nextRunLocal}.`);
-      } catch (e) { const el = document.getElementById('sched-preview'); if (el) { el.textContent = e.message; el.style.color = '#c62828'; } }
+      } catch (e) { const el = document.getElementById('sched-preview'); if (el) { el.textContent = e.message; el.style.color = 'var(--job-status-bad)'; } }
     }
     async function schedAct(action, id) {
       try {
@@ -2602,7 +2603,7 @@
     async function openWalletPanel(flash, extra = {}, opts = {}) {
       const gen = ++walletPanelGen;
       const panelGone = () => { const ov = document.getElementById('gs-overlay'); return !(ov && ov.isConnected && ov.querySelector('#pk-box')); };
-      const dock = { dock: true, title: '👛 Trading wallets' }; const head = ''; const field = 'width:100%;padding:8px;border-radius:6px;border:1px solid #555;background:transparent;color:inherit;font:inherit;margin:6px 0';
+      const dock = { dock: true, title: '👛 Trading wallets' }; const head = ''; const field = 'width:100%;padding:8px;border-radius:6px;border:1px solid var(--field-border);background:transparent;color:inherit;font:inherit;margin:6px 0';
       let s, err = null; try { s = await walletApi('status'); } catch (e) { err = e; }
       if (gen !== walletPanelGen) return;   // a newer load or a run started meanwhile
       if (opts.refresh && panelGone()) return;
@@ -2621,7 +2622,7 @@
       }
       const srcLabel = { generated: 'generated', 'imported-key': 'imported key', 'imported-seed': 'imported from seed' };
       const tierTag = w => w.tier === 'open'
-        ? `<strong style="color:var(--danger,#e55)" title="Transactions from this wallet are NOT checked against the address book. Only theft primitives are blocked.">OPEN: no signing firewall</strong> · cap $${esc(String(w.fundingCapUsd))}${w.tierVerified === 'ok' ? '' : ' · <em>tier signature ' + esc(String(w.tierVerified)) + '</em>'}`
+        ? `<strong style="color:var(--danger, var(--danger-text-fallback))" title="Transactions from this wallet are NOT checked against the address book. Only theft primitives are blocked.">OPEN: no signing firewall</strong> · cap $${esc(String(w.fundingCapUsd))}${w.tierVerified === 'ok' ? '' : ' · <em>tier signature ' + esc(String(w.tierVerified)) + '</em>'}`
         : 'guarded (signing firewall)';
       const rows = s.wallets.map(w => `<div class="gs-commit"><strong>${esc(w.name)}</strong> — <code>${esc(w.address)}</code> <a href="https://basescan.org/address/${esc(w.address)}" target="_blank" rel="noopener">view</a>
           <span class="gs-sub" style="margin:0 6px">${esc(srcLabel[w.source] || w.source || '')}${w.hasSeed ? ' · has seed phrase' : ''} · ${tierTag(w)}${w.paused ? ' · <strong>PAUSED</strong>' : ''}</span>
@@ -3183,8 +3184,101 @@
       }
       return out;
     }
+    // Appearance (lib/ui-looks, window.HubLooks): one card per look, chosen for this device; admins also pick the look new members start with.
+    // Everything is built from text nodes and style properties (the registry's colours), never from markup.
+    function lookPreviewBox(look) {
+      const p = look.preview;
+      const box = document.createElement('div');
+      box.setAttribute('aria-hidden', 'true');
+      box.style.width = '72px'; box.style.height = '52px'; box.style.flex = '0 0 72px';
+      box.style.borderRadius = '8px'; box.style.padding = '6px'; box.style.boxSizing = 'border-box';
+      box.style.background = p.bg; box.style.border = '1px solid ' + p.ink + '33';
+      const panel = document.createElement('div');
+      panel.style.background = p.panel; panel.style.borderRadius = '5px'; panel.style.height = '100%';
+      panel.style.display = 'flex'; panel.style.alignItems = 'center'; panel.style.justifyContent = 'space-between'; panel.style.padding = '0 6px';
+      const aa = document.createElement('span');
+      aa.appendChild(document.createTextNode('Aa'));
+      aa.style.color = p.ink; aa.style.fontSize = '18px'; aa.style.fontWeight = '600';
+      aa.style.fontFamily = p.font === 'serif' ? "Georgia, 'Times New Roman', serif" : "-apple-system, 'Segoe UI', Roboto, sans-serif";
+      const dot = document.createElement('span');
+      dot.style.width = '10px'; dot.style.height = '10px'; dot.style.borderRadius = '50%'; dot.style.background = p.accent;
+      panel.appendChild(aa); panel.appendChild(dot); box.appendChild(panel);
+      return box;
+    }
+    function lookPickerBuild(host) {
+      const L = window.HubLooks;
+      if (!host || !L) return;
+      while (host.firstChild) host.removeChild(host.firstChild);
+      const cur = L.applied(document);   // the look in force, also when this device can't store a choice
+      const list = document.createElement('div');
+      list.setAttribute('role', 'group'); list.setAttribute('aria-label', 'Look for this device');
+      list.style.display = 'grid'; list.style.gap = '8px';
+      for (const look of L.LOOKS) {
+        const on = look.id === cur;
+        const card = document.createElement('button');
+        card.type = 'button'; card.dataset.look = look.id; card.setAttribute('aria-pressed', String(on));
+        card.style.display = 'flex'; card.style.gap = '12px'; card.style.alignItems = 'center'; card.style.textAlign = 'left';
+        card.style.padding = '8px'; card.style.borderRadius = '10px'; card.style.cursor = 'pointer'; card.style.font = 'inherit';
+        card.style.color = 'var(--text)'; card.style.background = 'transparent';
+        card.style.border = on ? '2px solid var(--accent)' : '1px solid var(--border)';
+        const text = document.createElement('span');
+        text.style.display = 'block';
+        const name = document.createElement('strong');
+        name.appendChild(document.createTextNode(look.label + (on ? ' (in use)' : '')));
+        const blurb = document.createElement('span');
+        blurb.appendChild(document.createTextNode(look.blurb));
+        blurb.style.display = 'block'; blurb.style.fontSize = '0.8rem'; blurb.style.color = 'var(--text-dim)';
+        text.appendChild(name); text.appendChild(blurb);
+        card.appendChild(lookPreviewBox(look)); card.appendChild(text);
+        card.addEventListener('click', () => {
+          if (!L.choose(look.id, L.storageOf(window))) return;
+          L.apply(document, look.id);   // no reload: the stylesheet swaps in place
+          lookPickerBuild(host);
+          const again = [...host.querySelectorAll('button[data-look]')].find(x => x.dataset.look === look.id);
+          if (again) again.focus();   // keyboard focus stays on the card just chosen
+        });
+        list.appendChild(card);
+      }
+      const note = document.createElement('div');
+      note.className = 'st-hint';
+      note.style.margin = '8px 0 4px';   // clear of the last card
+      note.appendChild(document.createTextNode('Applies to this device. Simple mode works with every look.'));
+      host.appendChild(list); host.appendChild(note);
+    }
+    // The Appearance section: the picker, and for admins "Look for new members" (setting lookDefaultForNewMembers, saved on change).
+    function lookSectionPaint(data) {
+      const host = document.getElementById('st-looks-body');
+      if (!host || !window.HubLooks) return;
+      while (host.firstChild) host.removeChild(host.firstChild);   // painting twice never doubles the picker or the select's id
+      const picker = document.createElement('div');
+      host.appendChild(picker);
+      lookPickerBuild(picker);
+      if (!isHubAdmin()) return;
+      const row = document.createElement('div');
+      row.className = 'st-row';
+      const lab = document.createElement('label');
+      lab.style.flexBasis = '150px'; lab.htmlFor = 'st-look-new';
+      lab.appendChild(document.createTextNode('Look for new members'));
+      const sel = document.createElement('select');
+      sel.id = 'st-look-new';
+      for (const look of window.HubLooks.LOOKS) { const o = document.createElement('option'); o.value = look.id; o.appendChild(document.createTextNode(look.label)); sel.appendChild(o); }
+      sel.value = window.HubLooks.byId(data && data.lookDefaultForNewMembers) ? data.lookDefaultForNewMembers : 'engineering';
+      const state = document.createElement('span');
+      state.setAttribute('role', 'status'); state.style.fontSize = '0.8rem'; state.style.color = 'var(--text-dim)';
+      sel.addEventListener('change', async () => {
+        state.textContent = 'Saving...';
+        try {
+          const r = await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ lookDefaultForNewMembers: sel.value }) });
+          const d = await r.json().catch(() => ({}));
+          state.textContent = r.ok ? 'Saved. People who join from now on start with this look.' : 'Not saved: ' + (d.error || ('HTTP ' + r.status));
+        } catch (e) { state.textContent = 'Not saved: ' + (e.message || 'failed'); }
+      });
+      row.appendChild(lab); row.appendChild(sel); row.appendChild(state);
+      host.appendChild(row);
+    }
     const ST_GROUPS = [
       { id: 'status', title: '🩺 Status', sections: ['st-ready-section', 'st-health-section', 'st-sec-section', 'st-memory-section', 'st-selfcheck-section', 'st-components-section', 'st-updates-section'] },
+      { id: 'looks', title: '🎨 Appearance', sections: ['st-looks-section'] },
       { id: 'security', title: '🔐 Security', sections: ['st-security-section'] },
       { id: 'backups', title: '💾 Backups', sections: ['st-backups-section'] },
       { id: 'models', title: '🧠 AI models', sections: ['st-prov-section', 'st-or-section', 'st-subs-section', 'st-plan-section', 'st-local-models-section', 'st-classifier-section'] },
@@ -3246,7 +3340,7 @@
       const el = document.getElementById('st-a2fa-msg');
       if (!el) return;
       el.textContent = text || '';
-      el.style.color = ok ? 'var(--green, #4caf50)' : 'var(--accent)';
+      el.style.color = ok ? 'var(--green, var(--ok-text))' : 'var(--accent)';
     }
     async function stAdmin2faPaint() {
       try {
@@ -3278,7 +3372,7 @@
         <div class="st-row"><label style="flex-basis:150px">Your password</label><input type="password" id="st-a2fa-pw" autocomplete="current-password"></div>
         ${me && me.user && me.user.totpEnabled ? '<div class="st-row"><label style="flex-basis:150px">Code</label><input type="text" id="st-a2fa-code" inputmode="numeric" autocomplete="one-time-code" placeholder="123456 or a recovery code"></div>' : ''}
         <div class="st-row"><label style="flex-basis:150px"></label>
-          <button class="st-test-btn" style="color:#fff;background:#b71c1c" onclick="stAdmin2faOff()">Turn it off</button>
+          <button class="st-test-btn" style="color:var(--on-color-text);background:var(--halt-banner-bg)" onclick="stAdmin2faOff()">Turn it off</button>
           <button class="st-test-btn" onclick="stAdmin2faCancel()">Cancel</button></div>`;
       document.getElementById('st-a2fa-pw').focus();
     }
@@ -3435,6 +3529,9 @@
 
       let html = `<h3>⚙️ Settings</h3><p class="st-sub">Open a group, or search for a setting. Provider keys and agent defaults are kept with Save at the bottom; every other box saves on its own.</p>`;
 
+      // Appearance: the look of this device (lib/ui-looks); admins also choose the look new members start with.
+      html += `<div class="st-section" id="st-looks-section"><h4>Appearance</h4><div id="st-looks-body"></div></div>`;
+      setTimeout(() => lookSectionPaint(data), 0);
       // Setup checklist (lib/readiness): what this machine is missing and what to do about it, in its own words.
       html += `<div class="st-section" id="st-ready-section"><h4>Setup checklist</h4>
         <div class="st-hint">The hub checks its own machine: accounts and two-factor, a way to run models, Docker and the sandbox image for member agents, PDF and web reading, how it is restarted. Each line says what is missing and the exact step to fix it on this computer.</div>
@@ -3661,7 +3758,7 @@
       html += `<div class="st-section" id="st-emergency-section"><h4>Emergency</h4>
         <div class="st-row">
           <label>Kill switch</label>
-          <button class="st-test-btn" style="color:#fff;background:#b71c1c" onclick="haltHub()">⛔ Halt all agents</button>
+          <button class="st-test-btn" style="color:var(--on-color-text);background:var(--halt-banner-bg)" onclick="haltHub()">⛔ Halt all agents</button>
         </div>
         <div class="st-hint">Stops every running turn and job and blocks new ones until you press Resume.</div>
         <div class="st-row">
@@ -3931,7 +4028,7 @@
     }
     function readinessFixHtml(fix) {
       // `code` in the fix text becomes a copyable command
-      return esc(String(fix || '')).replace(/`([^`]+)`/g, '<code style="user-select:all;background:rgba(255,255,255,0.06);padding:1px 5px;border-radius:3px">$1</code>');
+      return esc(String(fix || '')).replace(/`([^`]+)`/g, '<code style="user-select:all;background:var(--separator-tint);padding:1px 5px;border-radius:3px">$1</code>');
     }
     async function loadReadiness() {
       const el = document.getElementById('st-ready-list'); if (!el) return;
@@ -3966,8 +4063,8 @@
       try { d = await (await fetch('/api/readiness', { credentials: 'include' })).json(); } catch { return; }
       const crit = (d && d.items || []).filter(i => i.level === 'critical' && i.id !== 'accounts' && i.id !== 'provider' && !String(i.id || '').startsWith('health-'));   // those two have their own banners; the health banner shows the health- items
       if (!crit.length) { if (bar) bar.remove(); layoutBanners(); return; }
-      if (!bar) { bar = document.createElement('div'); bar.id = 'hub-readiness-notice'; bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9996;background:#7a3b12;color:#fff;padding:6px 14px;font-weight:600;box-sizing:border-box'; document.body.prepend(bar); }
-      bar.innerHTML = `Setup needs attention: ${crit.map(i => esc(i.title)).join('; ')}. <a href="#" onclick="openSettingsAt('st-ready-section'); return false" style="color:#fff;text-decoration:underline">Open the setup checklist</a>.`;
+      if (!bar) { bar = document.createElement('div'); bar.id = 'hub-readiness-notice'; bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9996;background:var(--banner-setup-bg);color:var(--on-color-text);padding:6px 14px;font-weight:600;box-sizing:border-box'; document.body.prepend(bar); }
+      bar.innerHTML = `Setup needs attention: ${crit.map(i => esc(i.title)).join('; ')}. <a href="#" onclick="openSettingsAt('st-ready-section'); return false" style="color:var(--on-color-text);text-decoration:underline">Open the setup checklist</a>.`;
       layoutBanners();
     }
     // Banner for admins while the nightly health check has a critical problem (a full disk...). The sign-in items are
@@ -3984,8 +4081,8 @@
       bar = document.getElementById('hub-health-notice');
       const crit = healthBannerItems(d);
       if (!crit.length) { if (bar) bar.remove(); layoutBanners(); return; }
-      if (!bar) { bar = document.createElement('div'); bar.id = 'hub-health-notice'; bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9995;background:#7a1212;color:#fff;padding:6px 14px;font-weight:700;box-sizing:border-box'; document.body.prepend(bar); }
-      bar.innerHTML = `Health: ${crit.map(i => esc(i.title)).join('; ')}. <a href="#" onclick="openSettingsAt('st-health-section'); return false" style="color:#fff;text-decoration:underline">Open Settings → Status</a>`;
+      if (!bar) { bar = document.createElement('div'); bar.id = 'hub-health-notice'; bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9995;background:var(--banner-critical-bg);color:var(--on-color-text);padding:6px 14px;font-weight:700;box-sizing:border-box'; document.body.prepend(bar); }
+      bar.innerHTML = `Health: ${crit.map(i => esc(i.title)).join('; ')}. <a href="#" onclick="openSettingsAt('st-health-section'); return false" style="color:var(--on-color-text);text-decoration:underline">Open Settings → Status</a>`;
       layoutBanners();
     }
     // The notices fixed at the top stack in this order, whichever painted first: the phone-layout bar
@@ -4297,7 +4394,7 @@
     // The page shows the last run and one row per item, Check now, and a small settings form that saves by PUT with only
     // the keys that changed. test/ui-system-health.test.js lifts this block out and runs it against a stand-in page.
     // ── health page (begin) ──
-    const HL_LEVEL = { critical: ['Critical', '#d64545'], warn: ['Warning', '#d9a21b'], ok: ['OK', '#3fa65b'], unknown: ["Couldn't check", '#8a8f98'], info: ['Info', '#8a8f98'] };
+    const HL_LEVEL = { critical: ['Critical', 'var(--health-critical)'], warn: ['Warning', 'var(--health-warn)'], ok: ['OK', 'var(--health-ok)'], unknown: ["Couldn't check", 'var(--health-unknown)'], info: ['Info', 'var(--health-unknown)'] };
     const HL_TRIGGER = { start: 'after a start', nightly: 'nightly', manual: 'run by hand' };
     const HL_POLL_MS = 2000, HL_POLL_MAX_MS = 3 * 60 * 1000;
     const HL_NUMBERS = [['diskWarnPct', 'Disk: warn under (% free)'], ['diskWarnGB', 'Disk: warn under (GB free)'], ['diskCritPct', 'Disk: critical under (% free)'], ['diskCritGB', 'Disk: critical under (GB free)'],
@@ -4323,7 +4420,7 @@
         ? `<div class="sc-last">Last checked ${esc(hlWhen(run.finishedAt || run.startedAt))} (${esc(HL_TRIGGER[run.trigger] || run.trigger || 'earlier')})</div>`
         : '<div class="sc-last">Not checked yet.</div>';
       for (const i of items) {
-        const lv = HL_LEVEL[i.level] || [i.level || '?', '#8a8f98'];
+        const lv = HL_LEVEL[i.level] || [i.level || '?', 'var(--health-unknown)'];
         const problem = i.level === 'critical' || i.level === 'warn';
         html += `<div class="sc-row"><div class="sc-head"><span class="hl-mark" style="color:${lv[1]}" aria-label="${esc(lv[0])}">●</span> <b>${esc(i.title)}</b> <span style="color:${lv[1]}">${esc(lv[0])}</span></div>`
           + (i.detail ? `<div class="sc-note">${esc(i.detail)}</div>` : '')
@@ -4469,12 +4566,12 @@
       const level = crit.length ? 'critical' : 'warn';
       bar.dataset.level = level;
       bar.dataset.key = level === 'warn' ? key : '';
-      bar.style.cssText = `position:fixed;top:0;left:0;right:0;z-index:9995;background:${level === 'critical' ? '#7a1212' : '#8a6a00'};color:#fff;padding:6px 44px 6px 14px;font-weight:600;box-sizing:border-box`;
-      const link = `<a href="#" onclick="openSettingsAt('st-sec-section'); return false" style="color:#fff;text-decoration:underline">Open the security check</a>`;
+      bar.style.cssText = `position:fixed;top:0;left:0;right:0;z-index:9995;background:${level === 'critical' ? 'var(--banner-critical-bg)' : 'var(--banner-warn-bg)'};color:var(--on-color-text);padding:6px 44px 6px 14px;font-weight:600;box-sizing:border-box`;
+      const link = `<a href="#" onclick="openSettingsAt('st-sec-section'); return false" style="color:var(--on-color-text);text-decoration:underline">Open the security check</a>`;
       bar.innerHTML = level === 'critical'
         ? `Security needs attention: ${crit.map(i => esc(i.title)).join('; ')}. ${link}.`
         : `Security: ${warn.length} warning${warn.length === 1 ? '' : 's'} to review. ${link}.`
-          + `<button type="button" class="sec-dismiss" aria-label="Dismiss security warnings" title="Hide until the warnings change" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:0;color:#fff;font-size:20px;line-height:1;cursor:pointer;padding:2px 6px">&times;</button>`;
+          + `<button type="button" class="sec-dismiss" aria-label="Dismiss security warnings" title="Hide until the warnings change" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:0;color:var(--on-color-text);font-size:20px;line-height:1;cursor:pointer;padding:2px 6px">&times;</button>`;
       const x = bar.querySelector('.sec-dismiss');
       if (x) x.addEventListener('click', () => dismissSecurityBanner());
       layoutBanners();
@@ -5925,7 +6022,7 @@
       if (subsEnabled() && document.getElementById('st-subs-section')) usageEl.innerHTML = d.error && !rows.length ? `No reading yet: ${esc(String(d.error).slice(25, 200))}` : 'The usage of each window is shown under Subscriptions, above.';
       else usageEl.innerHTML = rows.length ? rows.map(w => {
         const pct = Math.round(Number(w.utilization) || 0);
-        const color = w.extraUsage ? '#c9a227' : w.rejected || pct >= 100 ? '#d4588b' : (w.weekly && pct >= last) ? '#d95926' : (w.weekly && pct >= first) ? '#c9a227' : '#3987e5';
+        const color = w.extraUsage ? 'var(--status-warn)' : w.rejected || pct >= 100 ? 'var(--status-hot)' : (w.weekly && pct >= last) ? 'var(--status-high)' : (w.weekly && pct >= first) ? 'var(--status-warn)' : 'var(--status-info)';
         return `<div style="display:flex;align-items:center;gap:10px;margin:3px 0"><span style="flex-basis:150px;flex-shrink:0">${esc(w.label)}</span><span style="width:140px;height:6px;background:var(--border);border-radius:3px;overflow:hidden;flex-shrink:0"><span style="display:block;height:100%;width:${Math.min(pct, 100)}%;background:${color}"></span></span><b style="color:${color};min-width:44px">${esc(planPctText(w))}</b><span style="color:var(--text-dim)">${w.rejected ? 'refused until ' : 'resets '}${esc(planWhen(w.resetsAt))}</span></div>`;
       }).join('') : (d.error ? `No reading yet: ${esc(String(d.error).slice(25, 200))}` : 'No reading yet (the first one comes a few seconds after the hub starts).');
       if (extraRow) usageEl.innerHTML += `<div class="st-hint" style="margin-left:0">${esc(`The weekly plan is used up until ${planWhen(extraRow.resetsAt)}; extra usage is paying for Claude replies until then.`)}</div>`;
@@ -5958,7 +6055,7 @@
       el.innerHTML = `<div class="st-hint" style="margin-left:0;margin-bottom:4px">Your agents on the Claude client, by model. Changing one here is the same as its chat header picker: the next turn runs on the new model.</div>` +
         [...groups.entries()].sort((a, b) => order.indexOf(a[0]) - order.indexOf(b[0])).map(([fam, list]) => {
           const note = hot.has(fam) ? 'past a warning level' : hot.has('*') ? 'the all-models allowance is past a warning level' : '';
-          return `<details ${note ? 'open' : ''} style="margin:4px 0"><summary style="cursor:pointer;font-size:0.85rem"><b>${esc(famLabel[fam] || 'Other')}</b> · ${list.length} agent${list.length === 1 ? '' : 's'}${note ? ` · <span style="color:#c9a227">${note}</span>` : ''}</summary>` +
+          return `<details ${note ? 'open' : ''} style="margin:4px 0"><summary style="cursor:pointer;font-size:0.85rem"><b>${esc(famLabel[fam] || 'Other')}</b> · ${list.length} agent${list.length === 1 ? '' : 's'}${note ? ` · <span style="color:var(--status-warn)">${note}</span>` : ''}</summary>` +
             list.sort((x, y) => String(x.display || x.name).localeCompare(String(y.display || y.name))).map(a => `<div class="st-row" style="margin:2px 0 2px 12px"><label style="flex-basis:150px">${esc(a.icon || '🤖')} ${esc(a.display || a.name)}</label><select data-agent="${esc(a.name)}" data-model="${esc(a.model)}" onchange="planAgentModel(this)" style="padding:3px;max-width:340px">${options(a.model)}</select></div>`).join('') + '</details>';
         }).join('');
     }
@@ -6892,7 +6989,7 @@
           </div>
           <div style="display:flex;gap:8px;justify-content:flex-end;">
             <button onclick="dialogRequestClose(this)" style="padding:6px 14px;background:var(--bg-input);border:1px solid var(--border);border-radius:5px;color:var(--text);cursor:pointer;">Cancel</button>
-            <button id="create-confirm-btn" onclick="confirmCreateAgent()" style="padding:6px 14px;background:var(--accent);border:1px solid var(--accent);border-radius:5px;color:#fff;cursor:pointer;">Create</button>
+            <button id="create-confirm-btn" onclick="confirmCreateAgent()" style="padding:6px 14px;background:var(--accent);border:1px solid var(--accent);border-radius:5px;color:var(--on-color-text);cursor:pointer;">Create</button>
           </div>
         </div>
       `;
@@ -7006,7 +7103,7 @@
           <div id="clone-error" style="color:var(--accent);font-size:0.8rem;display:none;margin-bottom:8px;"></div>
           <div style="display:flex;gap:8px;justify-content:flex-end;">
             <button onclick="dialogRequestClose(this)" style="padding:6px 14px;background:var(--bg-input);border:1px solid var(--border);border-radius:5px;color:var(--text);cursor:pointer;">Cancel</button>
-            <button id="clone-confirm-btn" onclick="confirmCloneAgent()" style="padding:6px 14px;background:var(--accent);border:1px solid var(--accent);border-radius:5px;color:#fff;cursor:pointer;">Clone</button>
+            <button id="clone-confirm-btn" onclick="confirmCloneAgent()" style="padding:6px 14px;background:var(--accent);border:1px solid var(--accent);border-radius:5px;color:var(--on-color-text);cursor:pointer;">Clone</button>
           </div>
         </div>
       `;
@@ -7289,8 +7386,8 @@
       try { if (closeStore && closeStore.getItem(closeKey) === 'off') return; } catch (e) { /* storage blocked: show it */ }
       const bar = document.createElement('div');
       bar.id = 'hub-phone-layout-notice';   // first in the notice stack (layoutBanners): the notices and the page move down below it
-      bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;display:flex;align-items:center;justify-content:space-between;padding:6px 12px;background:#14171F;border-bottom:1px solid #222632;color:#F3F4F6;font-size:13px;box-sizing:border-box';
-      bar.innerHTML = '<span><span style="color:#C3C2B7">This is the computer layout.</span> <a id="hub-phone-layout-open" href="/mobile" style="color:#5A93FF;text-decoration:none">Open the phone layout</a></span><button aria-label="Dismiss" style="background:none;border:0;color:#9CA3AF;font-size:16px;padding:4px 8px">\u2715</button>';
+      bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;display:flex;align-items:center;justify-content:space-between;padding:6px 12px;background:var(--notice-bar-bg);border-bottom:1px solid var(--notice-bar-border);color:var(--notice-bar-text);font-size:13px;box-sizing:border-box';
+      bar.innerHTML = '<span><span style="color:var(--auto-head-text)">This is the computer layout.</span> <a id="hub-phone-layout-open" href="/mobile" style="color:var(--notice-bar-link);text-decoration:none">Open the phone layout</a></span><button aria-label="Dismiss" style="background:none;border:0;color:var(--notice-bar-close);font-size:16px;padding:4px 8px">\u2715</button>';
       // Choosing the phone layout again also undoes "Use the full site"; the link still navigates by itself.
       bar.querySelector('#hub-phone-layout-open').addEventListener('click', () => { try { localStorage.removeItem('hub-keep-desktop'); } catch (e) { /* storage blocked */ } });
       bar.querySelector('button').addEventListener('click', () => { try { closeStore.setItem(closeKey, 'off'); } catch (e) { /* storage blocked: close it for now */ } bar.remove(); layoutBanners(); });
@@ -7390,24 +7487,24 @@
 
       const overlay = document.createElement('div');
       overlay.id = 'restart-notify-overlay';
-      overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:10000;display:flex;align-items:center;justify-content:center;';
+      overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:var(--overlay-bg-dim);z-index:10000;display:flex;align-items:center;justify-content:center;';
 
       const popup = document.createElement('div');
-      popup.style.cssText = 'background:var(--bg-secondary, #1e1e1e);border:1px solid var(--border-color, #444);border-radius:12px;padding:24px;max-width:420px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,0.4);';
+      popup.style.cssText = 'background:var(--bg-secondary, var(--dialog-bg));border:1px solid var(--border-color, var(--dialog-border));border-radius:12px;padding:24px;max-width:420px;width:90%;box-shadow:0 8px 32px var(--shadow-color-menu);';
 
       const icon = document.createElement('div');
       icon.style.cssText = 'font-size:28px;margin-bottom:12px;';
       icon.textContent = allOk ? '✅' : '⚠️';
 
       const title = document.createElement('h3');
-      title.style.cssText = 'margin:0 0 16px 0;color:var(--text-primary, #fff);font-size:16px;';
+      title.style.cssText = 'margin:0 0 16px 0;color:var(--text-primary, var(--on-color-text));font-size:16px;';
       title.textContent = allOk ? 'Restarted successfully' : 'Restarted — issues detected';
 
       const checkList = document.createElement('div');
       checkList.style.cssText = 'margin-bottom:20px;';
       for (const c of checks) {
         const row = document.createElement('div');
-        row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 0;color:var(--text-primary, #ddd);font-size:14px;';
+        row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 0;color:var(--text-primary, var(--dialog-text));font-size:14px;';
         const statusIcon = c.ok ? '✅' : '❌';
         const detail = c.detail ? ` — ${c.detail}` : '';
         row.textContent = `${statusIcon} ${c.name}${detail}`;
@@ -7418,7 +7515,7 @@
       buttons.style.cssText = 'display:flex;justify-content:flex-end;';
       const okBtn = document.createElement('button');
       okBtn.textContent = 'OK';
-      okBtn.style.cssText = 'padding:8px 24px;border-radius:6px;border:none;background:#4CAF50;color:#fff;cursor:pointer;font-size:13px;font-weight:600;';
+      okBtn.style.cssText = 'padding:8px 24px;border-radius:6px;border:none;background:var(--ok-text);color:var(--on-color-text);cursor:pointer;font-size:13px;font-weight:600;';
       okBtn.onclick = () => overlay.remove();
       buttons.appendChild(okBtn);
 
@@ -7441,25 +7538,25 @@
       const overlay = document.createElement('div');
       overlay.id = 'resume-popup-overlay';
       overlay.dataset.dialogPersistent = '1';   // Resume or not is a choice: Esc and the backdrop leave it open
-      overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:10000;display:flex;align-items:center;justify-content:center;';
+      overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:var(--overlay-bg-dim);z-index:10000;display:flex;align-items:center;justify-content:center;';
 
       const popup = document.createElement('div');
-      popup.style.cssText = 'background:var(--bg-secondary, #1e1e1e);border:1px solid var(--border-color, #444);border-radius:12px;padding:24px;max-width:500px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,0.4);';
+      popup.style.cssText = 'background:var(--bg-secondary, var(--dialog-bg));border:1px solid var(--border-color, var(--dialog-border));border-radius:12px;padding:24px;max-width:500px;width:90%;box-shadow:0 8px 32px var(--shadow-color-menu);';
 
       const icon = document.createElement('div');
       icon.style.cssText = 'font-size:28px;margin-bottom:12px;';
       icon.textContent = '🔄';
 
       const title = document.createElement('h3');
-      title.style.cssText = 'margin:0 0 8px 0;color:var(--text-primary, #fff);font-size:16px;';
+      title.style.cssText = 'margin:0 0 8px 0;color:var(--text-primary, var(--on-color-text));font-size:16px;';
       title.textContent = 'Restarted — resume?';
 
       const reason = document.createElement('div');
-      reason.style.cssText = 'color:var(--text-secondary, #aaa);font-size:12px;margin-bottom:12px;';
+      reason.style.cssText = 'color:var(--text-secondary, var(--text-muted-alt));font-size:12px;margin-bottom:12px;';
       reason.textContent = `Restart reason: ${pending.reason || 'N/A'}`;
 
       const message = document.createElement('div');
-      message.style.cssText = 'color:var(--text-primary, #ddd);font-size:14px;margin-bottom:20px;line-height:1.5;background:var(--bg-tertiary, #2a2a2a);padding:12px;border-radius:8px;';
+      message.style.cssText = 'color:var(--text-primary, var(--dialog-text));font-size:14px;margin-bottom:20px;line-height:1.5;background:var(--bg-tertiary, var(--dialog-row-border));padding:12px;border-radius:8px;';
       message.textContent = pending.resume_message;
 
       const buttons = document.createElement('div');
@@ -7467,7 +7564,7 @@
 
       const noBtn = document.createElement('button');
       noBtn.textContent = 'Dismiss';
-      noBtn.style.cssText = 'padding:8px 20px;border-radius:6px;border:1px solid var(--border-color, #555);background:transparent;color:var(--text-primary, #ccc);cursor:pointer;font-size:13px;';
+      noBtn.style.cssText = 'padding:8px 20px;border-radius:6px;border:1px solid var(--border-color, var(--field-border));background:transparent;color:var(--text-primary, var(--step-text));cursor:pointer;font-size:13px;';
       noBtn.onclick = async () => {
         overlay.remove();
         await fetch('/api/restart/pending', { method: 'DELETE', credentials: 'include' });
@@ -7475,7 +7572,7 @@
 
       const yesBtn = document.createElement('button');
       yesBtn.textContent = '▶ Resume';
-      yesBtn.style.cssText = 'padding:8px 20px;border-radius:6px;border:none;background:#4CAF50;color:#fff;cursor:pointer;font-size:13px;font-weight:600;';
+      yesBtn.style.cssText = 'padding:8px 20px;border-radius:6px;border:none;background:var(--ok-text);color:var(--on-color-text);cursor:pointer;font-size:13px;font-weight:600;';
       yesBtn.onclick = async () => {
         overlay.remove();
         await fetch('/api/restart/pending', { method: 'DELETE', credentials: 'include' });
@@ -7727,12 +7824,12 @@
           const og = document.createElement('optgroup');
           og.className = 'cyber-group';
           og.label = `\u26A0 ${CYBER_TAG} - direct OpenAI key, NOT via LLM Gateway`;
-          og.style.color = '#ffb347';
+          og.style.color = 'var(--model-offline-text)';
           for (const m of CYBER_MODELS) {
             const o = document.createElement('option');
             o.value = m;
             o.textContent = `[${CYBER_TAG}] ${m.replace(/^cyber\//, '')}`;
-            o.style.color = '#ffb347';
+            o.style.color = 'var(--model-offline-text)';
             og.appendChild(o);
           }
           sel.appendChild(og);
@@ -7829,7 +7926,7 @@
         return `<div onclick="toggleGroupAgent('${hubEsc(a.name)}', '${hubEsc(a.model || '')}', event)"
                      class="tt-pick${selected ? ' tt-picked' : ''}"
                      style="display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px; padding:10px 6px; border-radius:8px; cursor:pointer; 
-                            background:${selected ? 'var(--purple)' : 'var(--bg-card)'}; color:${selected ? 'white' : 'var(--text)'}; 
+                            background:${selected ? 'var(--purple)' : 'var(--bg-card)'}; color:${selected ? 'var(--on-color-text)' : 'var(--text)'}; 
                             border:1px solid ${selected ? 'var(--purple)' : 'var(--border)'}; transition:all 0.15s ease;">
           <span style="font-size:22px;">${icon}</span>
           <span style="font-size:12px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:100%; text-align:center;">${display}</span>
@@ -9009,8 +9106,8 @@
       if (!bar) {
         bar = document.createElement('div');
         bar.id = 'hub-halt-banner';
-        bar.style.cssText = 'position:fixed;top:0;left:0;right:0;box-sizing:border-box;z-index:10000;background:#b71c1c;color:#fff;padding:8px 14px;display:flex;align-items:center;gap:12px;font-weight:600';
-        bar.innerHTML = '<span id="hub-halt-text"></span><button id="hub-halt-resume" style="margin-left:auto;padding:4px 12px;border:1px solid #fff;background:transparent;color:#fff;border-radius:4px;cursor:pointer">Resume</button>';
+        bar.style.cssText = 'position:fixed;top:0;left:0;right:0;box-sizing:border-box;z-index:10000;background:var(--halt-banner-bg);color:var(--on-color-text);padding:8px 14px;display:flex;align-items:center;gap:12px;font-weight:600';
+        bar.innerHTML = '<span id="hub-halt-text"></span><button id="hub-halt-resume" style="margin-left:auto;padding:4px 12px;border:1px solid var(--on-color-text);background:transparent;color:var(--on-color-text);border-radius:4px;cursor:pointer">Resume</button>';
         document.body.insertBefore(bar, document.body.firstChild);
         bar.querySelector('#hub-halt-resume').onclick = resumeHub;
         if (!isHubAdmin()) bar.querySelector('#hub-halt-resume').style.display = 'none';
@@ -9098,7 +9195,7 @@
         bar = document.createElement('div');
         bar.id = 'hub-pacing-banner';
         // Fixed, not sticky: the body is a flex row, so a sticky block inserted into it rendered as a tall column on the left.
-        bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;background:#b26a00;color:#fff;padding:6px 14px;display:flex;flex-direction:column;gap:4px;font-weight:600;box-sizing:border-box';
+        bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;background:var(--banner-pending-bg);color:var(--on-color-text);padding:6px 14px;display:flex;flex-direction:column;gap:4px;font-weight:600;box-sizing:border-box';
       }
       // Directly under the red halt banner when there is one, else at the very top.
       const halt = document.getElementById('hub-halt-banner');
@@ -9122,7 +9219,7 @@
           text.style.cssText = 'white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
           const btn = document.createElement('button');
           btn.title = 'Owner override: restore full parallel now';
-          btn.style.cssText = 'margin-left:auto;padding:4px 12px;border:1px solid #fff;background:transparent;color:#fff;border-radius:4px;cursor:pointer;white-space:nowrap';
+          btn.style.cssText = 'margin-left:auto;padding:4px 12px;border:1px solid var(--on-color-text);background:transparent;color:var(--on-color-text);border-radius:4px;cursor:pointer;white-space:nowrap';
           if (!isHubAdmin()) btn.style.display = 'none';
           row.append(text, btn);
           bar.appendChild(row);
@@ -9144,7 +9241,7 @@
       if (!pacing.size) { box.textContent = 'All providers at full parallel.'; return; }
       for (const [provider, e] of pacing) {
         const row = document.createElement('div');
-        row.style.cssText = 'display:flex;align-items:center;gap:8px;color:#f5a623';
+        row.style.cssText = 'display:flex;align-items:center;gap:8px;color:var(--warning)';
         const text = document.createElement('span');
         text.textContent = pacingLine(e).replace(/^⚠ Pacing: /, '');
         const btn = document.createElement('button');
@@ -10480,7 +10577,7 @@
             <textarea id="input-${chatId}" placeholder="Type your message... (Ctrl+V to paste images)" onkeydown="handleKeyDown(event, '${chatId}')" onpaste="handlePaste(event, '${chatId}')" oninput="autoGrowTextarea(this)"></textarea>
           </div>
           <input type="file" id="file-input-${chatId}" multiple style="display:none" onchange="handleFileSelect(event, '${chatId}')">
-          <button onclick="document.getElementById('file-input-${chatId}').click()" title="Attach a file: images are sent with the message, other files are uploaded to your files and their path is added to the message" style="background:var(--bg-input); border:1px solid var(--border); padding:8px 10px; font-size:1rem; cursor:pointer;">📎</button>
+          <button class="attach-btn" onclick="document.getElementById('file-input-${chatId}').click()" title="Attach a file: images are sent with the message, other files are uploaded to your files and their path is added to the message" style="background:var(--bg-input); border:1px solid var(--border); padding:8px 10px; font-size:1rem; cursor:pointer;">📎</button>
           <button type="button" onclick="voiceMicToggle('${chatId}')" id="mic-${chatId}" class="mic-btn" style="display:none" aria-pressed="false" aria-label="Dictate" title="Talk (tap to start, tap to stop)">${VOICE_MIC_SVG}</button><span class="mic-meter" id="mic-meter-${chatId}" style="display:none" aria-hidden="true"><i></i></span><span class="voice-extra" style="display:none"><button type="button" class="voice-mode-chip" id="vmode-${chatId}" onclick="voiceModeToggle()" title="Talk mode: tap to switch" style="display:none">${voiceModeLabel()}</button><button type="button" class="voice-set-btn" id="vset-${chatId}" onclick="voicePopToggle('${chatId}')" aria-label="Voice settings" aria-expanded="false" title="Voice settings">${VOICE_LEVELS_SVG}</button><div class="voice-pop" id="voice-pop-${chatId}" role="dialog" aria-label="Voice settings" hidden></div></span>
           <button onclick="toggleNotifyDone('${chatId}')" id="notify-${chatId}" class="notify-done-btn" style="display:none" aria-pressed="false" title="Get a notification on your phone when this reply is done">🔔 Notify me</button>
           <button onclick="sendSoloMessage('${chatId}')" id="send-${chatId}">Send</button>
@@ -10535,7 +10632,7 @@
           <button onclick="clearChat('${chatId}')">🗑️ Clear</button>
           <button onclick="saveChat('${chatId}')">💾 Save</button>
           <button onclick="cancelGroupRequest('${chatId}')" id="cancel-${chatId}" style="display:none;">⏹️ Stop</button>
-          <button onclick="resetChat('${chatId}')" style="background:var(--warning); color:black;">🔄 Reset</button>
+          <button onclick="resetChat('${chatId}')" style="background:var(--warning); color:var(--on-light-text);">🔄 Reset</button>
 
           <span class="group-name">🐯 Tiger Team</span>
         </div>
@@ -10851,7 +10948,7 @@
           sendBtn.disabled = false;
           sendBtn.textContent = '⚡ Interject';
           sendBtn.style.background = 'var(--warning)';
-          sendBtn.style.color = 'black';
+          sendBtn.style.color = 'var(--on-light-text)';
         }
         if (input) input.placeholder = 'Type to interject new info into the running agent...';
         if (typeof simpleBusyLook === 'function') simpleBusyLook(sendBtn, input, cancelBtn);   // Simple: Send, a plain placeholder, Stop
@@ -12305,7 +12402,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
                   if (container) {
                     const cib = container.querySelector('.context-info-box');
                     if (cib && !cib.dataset.modelAppended) {
-                      cib.innerHTML += ` · <strong style="color:#7eb8f7">${esc(modelShort)}</strong>`;
+                      cib.innerHTML += ` · <strong style="color:var(--model-accent-text)">${esc(modelShort)}</strong>`;
                       cib.dataset.modelAppended = '1';
                     }
                   }
@@ -12347,13 +12444,13 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
                 if (container) {
                   const banner = document.createElement('div');
                   banner.className = 'tiger-team-launch-banner';
-                  banner.innerHTML = `<div style="background: linear-gradient(135deg, #1a1a2e, #16213e); border: 1px solid #0f3460; border-radius: 8px; padding: 12px 16px; margin: 8px 0; display: flex; align-items: center; gap: 12px; cursor: pointer;" onclick="window.open('${url}', '_blank')">
+                  banner.innerHTML = `<div style="background: linear-gradient(135deg, var(--orch-banner-bg-1), var(--orch-banner-bg-2)); border: 1px solid var(--orch-banner-border); border-radius: 8px; padding: 12px 16px; margin: 8px 0; display: flex; align-items: center; gap: 12px; cursor: pointer;" onclick="window.open('${url}', '_blank')">
                     <span style="font-size: 24px;">🐯</span>
                     <div style="flex:1">
-                      <div style="color: #e94560; font-weight: 600; font-size: 13px;">Tiger Team Launched</div>
-                      <div style="color: #aaa; font-size: 12px; margin-top: 2px;">${oc.coordinator} coordinating ${(oc.participants||[]).join(', ')}</div>
+                      <div style="color: var(--orch-banner-title); font-weight: 600; font-size: 13px;">Tiger Team Launched</div>
+                      <div style="color: var(--text-muted-alt); font-size: 12px; margin-top: 2px;">${oc.coordinator} coordinating ${(oc.participants||[]).join(', ')}</div>
                     </div>
-                    <span style="color: #0f3460; font-size: 20px;">→</span>
+                    <span style="color: var(--orch-banner-border); font-size: 20px;">→</span>
                   </div>`;
                   container.appendChild(banner);
                   autoScroll(container);
@@ -12598,13 +12695,13 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
                 if (container) {
                   console.log('[TIGER-TEAM-BANNER] Creating banner, url:', url);
                   const banner = document.createElement('div');
-                  banner.innerHTML = `<div style="background: linear-gradient(135deg, #1a1a2e, #16213e); border: 1px solid #0f3460; border-radius: 8px; padding: 12px 16px; margin: 8px 0; display: flex; align-items: center; gap: 12px; cursor: pointer;" onclick="window.open('${url}', '_blank')">
+                  banner.innerHTML = `<div style="background: linear-gradient(135deg, var(--orch-banner-bg-1), var(--orch-banner-bg-2)); border: 1px solid var(--orch-banner-border); border-radius: 8px; padding: 12px 16px; margin: 8px 0; display: flex; align-items: center; gap: 12px; cursor: pointer;" onclick="window.open('${url}', '_blank')">
                     <span style="font-size: 24px;">🐯</span>
                     <div style="flex:1">
-                      <div style="color: #e94560; font-weight: 600; font-size: 13px;">Tiger Team Launched</div>
-                      <div style="color: #aaa; font-size: 12px; margin-top: 2px;">${oc2.coordinator} coordinating ${(oc2.participants||[]).join(', ')}</div>
+                      <div style="color: var(--orch-banner-title); font-weight: 600; font-size: 13px;">Tiger Team Launched</div>
+                      <div style="color: var(--text-muted-alt); font-size: 12px; margin-top: 2px;">${oc2.coordinator} coordinating ${(oc2.participants||[]).join(', ')}</div>
                     </div>
-                    <span style="color: #0f3460; font-size: 20px;">→</span>
+                    <span style="color: var(--orch-banner-border); font-size: 20px;">→</span>
                   </div>`;
                   container.appendChild(banner);
                   autoScroll(container);
@@ -12623,7 +12720,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
                 if (container) {
                   const cib = container.querySelector('.context-info-box');
                   if (cib && !cib.dataset.modelAppended) {
-                    cib.innerHTML += ` · <strong style="color:#7eb8f7">${esc(modelShort)}</strong>`;
+                    cib.innerHTML += ` · <strong style="color:var(--model-accent-text)">${esc(modelShort)}</strong>`;
                     cib.dataset.modelAppended = '1';
                   }
                 }
@@ -18547,7 +18644,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       // Append auto-model if already known
       const pending = window.__pendingAutoModel && window.__pendingAutoModel[chatId];
       if (pending) {
-        html += ` · <strong style="color:#7eb8f7">${esc(pending)}</strong>`;
+        html += ` · <strong style="color:var(--model-accent-text)">${esc(pending)}</strong>`;
         div.dataset.modelAppended = '1';
         delete window.__pendingAutoModel[chatId];
       }
@@ -18573,7 +18670,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const limit = (data.context_limit || 200000).toLocaleString();
       const toolCalls = data.tool_calls || 0;
       const categories = data.categories || [];
-      const color = pct >= 90 ? '#f85149' : pct >= 75 ? '#d29922' : 'var(--text-secondary)';
+      const color = pct >= 90 ? 'var(--usage-critical)' : pct >= 75 ? 'var(--usage-warn)' : 'var(--text-secondary)';
 
       // Remove old top bars
       document.querySelectorAll('[id^="context-health-"]').forEach(el => el.remove());
@@ -18588,7 +18685,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (!footer) {
         footer = document.createElement('div');
         footer.id = 'context-footer';
-        footer.style.cssText = 'position:sticky;bottom:0;padding:6px 14px;font-size:11px;color:var(--text-secondary);background:var(--bg-primary,#0d1117);border-top:1px solid var(--border);display:flex;align-items:center;gap:10px;z-index:5;flex-wrap:wrap;';
+        footer.style.cssText = 'position:sticky;bottom:0;padding:6px 14px;font-size:11px;color:var(--text-secondary);background:var(--bg-primary, var(--context-bar-bg));border-top:1px solid var(--border);display:flex;align-items:center;gap:10px;z-index:5;flex-wrap:wrap;';
       }
 
       // Build category breakdown if available
@@ -18614,7 +18711,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const container = document.getElementById(`messages-${chatId}`);
       if (!container) return;
       const div = document.createElement('div');
-      div.style.cssText = 'background:#d2992222;border:1px solid #d29922;border-radius:8px;padding:12px 16px;margin:12px 0;color:#d29922;font-size:13px;';
+      div.style.cssText = 'background:var(--usage-warn-tint);border:1px solid var(--usage-warn);border-radius:8px;padding:12px 16px;margin:12px 0;color:var(--usage-warn);font-size:13px;';
       div.innerHTML = `<strong>⚠️ Agent process stopped, session intact</strong><br><span style="color:var(--text-secondary);font-size:12px">${esc(String(data.error || '').slice(0, 200))} · at ${data.usage_percent || 0}% of context. Send your next message to continue; the agent resumes where it left off.</span>`;
       container.appendChild(div);
       autoScroll(container);
@@ -18626,7 +18723,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const container = document.getElementById(`messages-${chatId}`);
       if (!container) return;
       const div = document.createElement('div');
-      div.style.cssText = 'background:#f8514922;border:1px solid #f85149;border-radius:8px;padding:12px 16px;margin:12px 0;color:#f85149;font-size:13px;';
+      div.style.cssText = 'background:var(--usage-critical-tint);border:1px solid var(--usage-critical);border-radius:8px;padding:12px 16px;margin:12px 0;color:var(--usage-critical);font-size:13px;';
       div.innerHTML = `<strong>🛑 Session ended — context window full</strong><br><span style="color:var(--text-secondary);font-size:12px">Used ${pct}% over ${turns} turns. Start a new conversation to continue. Memory and session notes are preserved.</span>`;
       container.appendChild(div);
       autoScroll(container);
@@ -18634,8 +18731,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       // Update the footer to show exhausted state
       const footer = document.getElementById('context-footer');
       if (footer) {
-        footer.style.background = '#f8514922';
-        footer.style.color = '#f85149';
+        footer.style.background = 'var(--usage-critical-tint)';
+        footer.style.color = 'var(--usage-critical)';
         footer.innerHTML = '<span style="font-weight:600">CONTEXT EXHAUSTED</span>';
       }
     }
@@ -19047,8 +19144,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         const statusIcon = tc.status === 'running'
           ? '<div class="tool-call-spinner"></div>'
           : tc.status === 'error'
-            ? `<span class="tool-call-icon" style="color:#f87171"${toolResultDenied(tc.result) ? ' title="Denied by policy"' : ''}>✗</span>`
-            : '<span class="tool-call-icon" style="color:#4ade80">✓</span>';
+            ? `<span class="tool-call-icon" style="color:var(--tool-error-text)"${toolResultDenied(tc.result) ? ' title="Denied by policy"' : ''}>✗</span>`
+            : '<span class="tool-call-icon" style="color:var(--tool-done-text)">✓</span>';
 
         const inputHtml = tc.input ? `<span class="tool-call-input">— ${esc(tc.input)}</span>` : '';
         
@@ -19872,7 +19969,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           html += `<div class="${cls}">${formatContent(step.text.replace(/^\s*\n/, ''))}</div>`;   // the paragraph break after a tool call is the layout's job
         }
         // The person's interjections, where they came in the reply (the same marker as the bubble sendInterjection draws).
-        for (const ij of step.ijs || []) html += `<div class="step-interjection" style="margin:6px 0;padding:6px 10px;border-left:3px solid ${ij.emergency ? '#d32f2f' : '#f9a825'};background:rgba(128,128,128,0.12);border-radius:4px">${esc(interjectionBubbleText(ij))}${imageGalleryHtml(ij.images, 'max-height:200px;')}</div>`;
+        for (const ij of step.ijs || []) html += `<div class="step-interjection" style="margin:6px 0;padding:6px 10px;border-left:3px solid ${ij.emergency ? 'var(--interject-emergency)' : 'var(--interject-normal)'};background:var(--interject-bg);border-radius:4px">${esc(interjectionBubbleText(ij))}${imageGalleryHtml(ij.images, 'max-height:200px;')}</div>`;
       }
 
       // Append images (escaped; click handled by the delegated listener)
@@ -22244,7 +22341,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         // so neither matches.
         .replace(/(^|\n)_(?=[^\s_])([^\n]*?[^\s_])_(?=\n|$)/g, '$1<em>$2</em>');
       // Bare URLs: strict charset, cut before any quote or angle bracket (the text is already escaped).
-      formatted = autolinkEscaped(formatted, ' style="color: #6ea8fe; text-decoration: underline;"')
+      formatted = autolinkEscaped(formatted, ' style="color: var(--link); text-decoration: underline;"')
         .replace(/\n/g, '<br>');
 
       for (let i = 0; i < visualTokens.length; i++) {
@@ -22264,7 +22361,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         const u = safeLinkUrl(url);
         const eText = escapeHtml(text);
         const linkTag = u
-          ? `<a href="${escapeHtml(u)}" target="_blank" rel="noopener noreferrer" style="color: #6ea8fe; text-decoration: underline;">${eText}</a>`
+          ? `<a href="${escapeHtml(u)}" target="_blank" rel="noopener noreferrer" style="color: var(--link); text-decoration: underline;">${eText}</a>`
           : `<code>[blocked link: ${eText}]</code>`;
         formatted = formatted.replace(mk('L', i), () => linkTag);
       }
@@ -22820,13 +22917,13 @@ Report what you found, did, or discovered.`;
                   const container = document.getElementById(`messages-${chatId}`);
                   if (container) {
                     const banner = document.createElement('div');
-                    banner.innerHTML = `<div style="background: linear-gradient(135deg, #1a1a2e, #16213e); border: 1px solid #0f3460; border-radius: 8px; padding: 12px 16px; margin: 8px 0; display: flex; align-items: center; gap: 12px; cursor: pointer;" onclick="window.open('${url}', '_blank')">
+                    banner.innerHTML = `<div style="background: linear-gradient(135deg, var(--orch-banner-bg-1), var(--orch-banner-bg-2)); border: 1px solid var(--orch-banner-border); border-radius: 8px; padding: 12px 16px; margin: 8px 0; display: flex; align-items: center; gap: 12px; cursor: pointer;" onclick="window.open('${url}', '_blank')">
                       <span style="font-size: 24px;">🐯</span>
                       <div style="flex:1">
-                        <div style="color: #e94560; font-weight: 600; font-size: 13px;">Tiger Team Launched</div>
-                        <div style="color: #aaa; font-size: 12px; margin-top: 2px;">${gw.coordinator} coordinating ${(gw.participants||[]).join(', ')}</div>
+                        <div style="color: var(--orch-banner-title); font-weight: 600; font-size: 13px;">Tiger Team Launched</div>
+                        <div style="color: var(--text-muted-alt); font-size: 12px; margin-top: 2px;">${gw.coordinator} coordinating ${(gw.participants||[]).join(', ')}</div>
                       </div>
-                      <span style="color: #0f3460; font-size: 20px;">→</span>
+                      <span style="color: var(--orch-banner-border); font-size: 20px;">→</span>
                     </div>`;
                     container.appendChild(banner);
                     autoScroll(container);
@@ -22968,9 +23065,9 @@ Report what you found, did, or discovered.`;
       document.getElementById('mode-roundtable').className = mode === 'roundtable' ? 'mode-btn active' : 'mode-btn';
       document.getElementById('mode-led').className = mode === 'led' ? 'mode-btn active' : 'mode-btn';
       document.getElementById('mode-roundtable').style.background = mode === 'roundtable' ? 'var(--purple)' : 'var(--bg-card)';
-      document.getElementById('mode-roundtable').style.color = mode === 'roundtable' ? 'white' : 'var(--text)';
+      document.getElementById('mode-roundtable').style.color = mode === 'roundtable' ? 'var(--on-color-text)' : 'var(--text)';
       document.getElementById('mode-led').style.background = mode === 'led' ? 'var(--purple)' : 'var(--bg-card)';
-      document.getElementById('mode-led').style.color = mode === 'led' ? 'white' : 'var(--text)';
+      document.getElementById('mode-led').style.color = mode === 'led' ? 'var(--on-color-text)' : 'var(--text)';
       document.getElementById('led-leader-section').style.display = mode === 'led' ? 'block' : 'none';
       // In Led mode, hide discussion type / rounds (leader drives autonomously)
       document.getElementById('discussion-type').closest('label').style.display = mode === 'led' ? 'none' : '';

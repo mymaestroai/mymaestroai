@@ -434,6 +434,8 @@ test('mic icon is an inline SVG, not the U+1F399 emoji; Dictate label; recording
   assert.match(b, /const VOICE_MIC_SVG = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor"[^']*aria-hidden="true"/);
   assert.ok(!b.includes('\u{1F399}') && !/&#127897;/.test(app.slice(app.indexOf('id="mic-${chatId}"'), app.indexOf('id="mic-${chatId}"') + 400)));
   assert.match(b, /b\.setAttribute\('aria-label', state === 'rec' \? 'Stop dictation' : 'Dictate'\)/);
-  assert.match(html, /\.input-area \.mic-btn\.rec \{[^}]*#ef4444/);
+    // looks-vars: the value is unchanged; index.html/app.js now spell it as a variable (defined in index.html :root)
+  assert.match(html, /\.input-area \.mic-btn\.rec \{[^}]*var\(--mic-rec\)/);
+  assert.match(html, /--mic-rec:\s*#ef4444;/);
   assert.match(html, /\.input-area \.mic-btn svg \{/);
 });
