@@ -338,14 +338,14 @@ test('a hub-started turn this page never followed does not draw its reply into t
 });
 
 // P3: onTurnEnd with the real source and stubs
-function turnEndHarness({ turnOrigins = {}, hubTurns = {}, streams = new Map(), reattaches = new Map(), open = true, reread = true, view = 'main', changes = true } = {}) {
+function turnEndHarness({ turnOrigins = {}, hubTurns = {}, streams = new Map(), reattaches = new Map(), open = true, reread = true, view = 'main', changes = true, setLive = null, lastTurn = false } = {}) {
   const src = cut('function onTurnEnd(ev) {', 'function plain(');
   const calls = { reread: [], render: 0, bubbles: 0 };
   const hist = { cur: [{ ts: 1, role: 'user', content: 'hi' }] };   // what the re-read puts into chatHistory
   const scroll = { scrollHeight: 1000, scrollTop: 100, clientHeight: 300 };
   const names = ['rrImpl', 'activeTurnEnd', 'openTurns', 'setLive', 'wkSettleAgent', 'notifyArmed', 'refreshCtx', 'pollStatusSoon', 'hubTurns', 'turnOrigins', 'chatViewIsHubOrigin', 'streams', 'recentOwn', 'reattaches', 'reasoningEnd', 'chatOpenFor', 'setReplyText', 'feedEnd', 'promptCardLine', 'autoFirstLine', 'setBubbleTime', 'msgTimeLine', 'scrollChat', 'finishReattach', 'reattachCheck', 'viewNow', 'forOwnerPending', 'addAssistantBubble', 'msgTimeLabel', 'markUnread', 'activity', 'ACTIVITY_MAX', 'saveJson', 'renderActivity', 'paintStatus', 'updateDots', 'renderHistory', 'setTimeout', '$', 'hist', 'repaintNotifyAgentSheet', 'turnSteps', 'chatViewStepsEndTurn', 'repaintAgentStatus'];
   const impl = {
-    activeTurnEnd: () => true, openTurns: {}, setLive() {}, wkSettleAgent() {}, notifyArmed: {}, refreshCtx() {}, pollStatusSoon() {}, hubTurns, turnOrigins,
+    activeTurnEnd: () => !lastTurn, openTurns: {}, setLive: setLive || (() => {}), wkSettleAgent() {}, notifyArmed: {}, refreshCtx() {}, pollStatusSoon() {}, hubTurns, turnOrigins,
     chatViewIsHubOrigin: V.chatViewIsHubOrigin, streams, recentOwn: new Map(), reattaches, reasoningEnd() {}, chatOpenFor: () => open, setReplyText() {}, feedEnd() {},
     promptCardLine() {}, autoFirstLine() {}, setBubbleTime() {}, msgTimeLine() {}, scrollChat() {}, finishReattach() {}, reattachCheck() {}, viewNow: () => view,
     forOwnerPending: {}, addAssistantBubble: () => { calls.bubbles++; return { el: {} }; }, msgTimeLabel() {}, markUnread() {}, activity: [], ACTIVITY_MAX: 50, saveJson() {},
@@ -378,6 +378,13 @@ test('turn_end of a hub-started turn this page did not follow, main chat open, n
   h2.mod.onTurnEnd(endEv({ origin: undefined }));
   await flush();
   assert.deepStrictEqual(h2.calls.reread, ['forge']);
+  // review r3: the real setLive drops the origin when the agent goes idle; onTurnEnd reads it first, so it still counts
+  const origins = { forge: { turnId: 'T1', hub: true, origin: { kind: 'hand_off', from: 'cnc' } } };
+  const h3 = turnEndHarness({ turnOrigins: origins, lastTurn: true, setLive: (name, patch) => { if (patch && patch.busy === false) delete origins[name]; } });
+  h3.mod.onTurnEnd(endEv({ origin: undefined }));
+  await flush();
+  assert.deepStrictEqual(h3.calls.reread, ['forge'], 'still hub-started: not drawn as a reply in the main chat');
+  assert.strictEqual(h3.calls.bubbles, 0);
 });
 
 test('turn_end re-read: the same entries come back -> renderHistory is not called', async () => {

@@ -12965,6 +12965,7 @@ function onForOwner(ev) {
 }
 
 function onTurnEnd(ev) {
+  const to = turnOrigins[ev.agent];
   if (!activeTurnEnd(openTurns, ev.agent, ev.turnId)) setLive(ev.agent, { busy: false });   // busy while another turn is open
   if (ev.agent) wkSettleAgent(ev.agent, ev.turnId || null);
   if (ev.agent && notifyArmed[ev.agent]) { notifyArmed[ev.agent] = null; if (ev.agent === current) paintNotifyBtn(); }
@@ -12974,8 +12975,7 @@ function onTurnEnd(ev) {
   const reply = ev.reply || (ev.ok ? '(no reply)' : `⚠ turn failed: ${ev.error || 'unknown error'}`);
   const t = hubTurns[ev.turnId];
   delete hubTurns[ev.turnId];
-  const to = turnOrigins[ev.agent];
-  if (to && (!ev.turnId || !to.turnId || to.turnId === ev.turnId)) delete turnOrigins[ev.agent];   // the busy card goes with paintStatus below
+  if (to && (!ev.turnId || !to.turnId || to.turnId === ev.turnId) && turnOrigins[ev.agent] === to) delete turnOrigins[ev.agent];   // `to` was read first: setLive drops the origin when the agent goes idle   // the busy card goes with paintStatus below
   if (ev.agent) repaintNotifyAgentSheet(ev.agent);   // an open agent sheet drops its "Notify me" item when the reply ends
   const ownTurn = ev.origin?.kind === 'user';
   // Hub-started: by the turn_start this page saw (read before it was cleared above) or by the end event's origin.
