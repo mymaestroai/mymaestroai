@@ -1356,17 +1356,18 @@ html.mm-simple #simple-side { display: none; }
   <div id="menu">
     <div id="menu-credit" hidden></div>
     <div id="menu-2fa-note" hidden>Two-factor is required for admins: set it up under Security</div>
-    <button id="menu-look" aria-expanded="false" aria-controls="menu-look-pick"><span>&#x1F3A8; Look</span><span id="menu-look-name" class="menu-version"></span></button>
+    <button id="menu-look" aria-expanded="false" aria-controls="menu-look-pick"><span>&#x1F3A8; Look</span><span id="menu-look-name" class="menu-version" aria-hidden="true"></span></button>
     <div id="menu-look-pick" hidden></div>
     <button id="menu-simple">Switch to Simple</button>
     <button id="menu-notify">&#x1F514; Notifications</button>
     <button id="menu-files">&#x1F4C1; Files</button>
     <button id="menu-reload">&#x21BB; Reload app</button>
     <button id="menu-profile">&#x1F464; Profile</button>
-    <button id="menu-adv-toggle" aria-expanded="false" aria-controls="menu-adv"><span>Advanced</span><span class="menu-adv-end"><span class="menu-adv-dot" hidden></span><span class="menu-adv-chev">&#x25B8;</span></span></button>
-    <div id="menu-adv" hidden>
-    <div class="menu-group" data-group="chat">
-      <div class="menu-group-title">This chat</div>
+    <!-- The Advanced row starts hidden and its items shown: mobile.js reveals the row and folds them, so a page with an older cached mobile.js still shows every item. -->
+    <button id="menu-adv-toggle" aria-expanded="true" aria-controls="menu-adv" hidden><span>Advanced</span><span class="menu-adv-end" aria-hidden="true"><span class="menu-adv-dot" hidden></span><span class="menu-adv-chev">&#x25BE;</span></span></button>
+    <div id="menu-adv">
+    <div class="menu-group" data-group="chat" role="group" aria-labelledby="menu-gt-chat">
+      <div class="menu-group-title" id="menu-gt-chat">This chat</div>
       <button id="menu-agentwork" class="chat-only">&#x1F9F0; Show agent work</button>
       <button id="menu-recall" class="chat-only">&#x1F50E; Recall</button>
       <button id="menu-copy" class="chat-only">&#x29C9; Copy whole chat</button>
@@ -1375,8 +1376,8 @@ html.mm-simple #simple-side { display: none; }
       <button id="menu-compact" class="chat-only">&#x2699; Compress now</button>
       <button id="menu-clear" class="danger chat-only">Clear chat / new session</button>
     </div>
-    <div class="menu-group" data-group="tools">
-      <div class="menu-group-title">Tools</div>
+    <div class="menu-group" data-group="tools" role="group" aria-labelledby="menu-gt-tools">
+      <div class="menu-group-title" id="menu-gt-tools">Tools</div>
       <a id="menu-activity" href="#activity"><span>&#x26A1; Activity</span><span class="menu-count" id="act-unread"></span></a>
       <button id="menu-workers">&#x1F477; Worker history</button>
       <button id="menu-memory" hidden><span>&#x1F9E0; Memory</span><span class="menu-count" id="menu-memory-count"></span></button>
@@ -1386,28 +1387,28 @@ html.mm-simple #simple-side { display: none; }
       <button id="menu-voice">&#x1F399; Voice</button>
       <button id="menu-wallet" hidden>&#x1F45B; Wallet</button>
     </div>
-    <div class="menu-group" data-group="notify">
-      <div class="menu-group-title">Notifications and view</div>
+    <div class="menu-group" data-group="notify" role="group" aria-labelledby="menu-gt-notify">
+      <div class="menu-group-title" id="menu-gt-notify">Notifications and view</div>
       <button id="menu-notify-prefs">&#x1F514; Notification settings&hellip;</button>
       <button id="menu-notify-test" hidden>&#x1F4E8; Send a test notification</button>
       <button id="menu-active-top">⬆ Active agents at the top: On</button>
     </div>
-    <div class="menu-group" data-group="account">
-      <div class="menu-group-title">Account and help</div>
+    <div class="menu-group" data-group="account" role="group" aria-labelledby="menu-gt-account">
+      <div class="menu-group-title" id="menu-gt-account">Account and help</div>
       <button id="menu-security">&#x1F512; Security</button>
       <a id="menu-help" href="/help">&#x2753; Help</a>
       <button id="menu-about"><span>&#x2139;&#xFE0F; About My Maestro AI</span><span id="menu-version" class="menu-version"></span></button>
     </div>
-    <div class="menu-group" data-group="admin">
-      <div class="menu-group-title">Admin</div>
+    <div class="menu-group" data-group="admin" role="group" aria-labelledby="menu-gt-admin">
+      <div class="menu-group-title" id="menu-gt-admin">Admin</div>
       <a id="menu-users" href="/users" hidden>&#x1F465; Users</a>
       <a id="menu-connectors" href="/modules" hidden>&#x1F50C; Data connectors</a>
       <a id="menu-remote" href="/modules#remote-computers" hidden>&#x1F4BB; Remote computers</a>
       <button id="menu-update">&#x2B07;&#xFE0F; Update hub<span id="menu-update-note"></span></button>
       <button id="menu-restart" class="danger">&#x21BB; Restart hub</button>
     </div>
-    <div class="menu-group" data-group="views">
-      <div class="menu-group-title">Other views</div>
+    <div class="menu-group" data-group="views" role="group" aria-labelledby="menu-gt-views">
+      <div class="menu-group-title" id="menu-gt-views">Other views</div>
       <a href="/?desktop=once">Open full UI</a>
       <a id="use-full-site" href="/?desktop=1">Use the full site</a>
     </div>

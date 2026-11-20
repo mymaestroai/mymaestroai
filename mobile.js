@@ -13362,6 +13362,8 @@ function menuAdvDotSync() {
   const note = document.getElementById('menu-update-note');
   const wants = on('act-unread') || on('menu-memory-count') || !!(note && (note.textContent || '').trim());
   dot.hidden = !(adv.hidden && wants);
+  const tg = document.getElementById('menu-adv-toggle');   // the dot is visual: the row says it in words too
+  if (tg) { if (dot.hidden) tg.removeAttribute('aria-label'); else tg.setAttribute('aria-label', 'Advanced, something inside needs attention'); }
 }
 function menuAdvApply(open) {
   const adv = document.getElementById('menu-adv'), tg = document.getElementById('menu-adv-toggle');
@@ -13400,6 +13402,7 @@ if (typeof document !== 'undefined' && document.getElementById) {
     pick.addEventListener('click', (e) => e.stopPropagation());   // choosing a look repaints the picker in place: the menu stays open
   }
   if (tg) {
+    tg.hidden = false;   // the page shows every item until this script runs (an older cached script never folds them)
     menuAdvApply(menuAdvRead(store));
     tg.addEventListener('click', (e) => {
       e.stopPropagation();

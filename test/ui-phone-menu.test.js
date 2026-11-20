@@ -46,7 +46,8 @@ test('Advanced holds every other item, in its group and order', () => {
     for (const k of GROUPS[g]) { const p = pos(k); assert.ok(p > prev && p < ge, k + ' in ' + g + ' in order'); prev = p; }
     prevGroup = gs;
   }
-  for (const t of ['This chat', 'Tools', 'Notifications and view', 'Account and help', 'Admin', 'Other views']) assert.ok(menu.includes('<div class="menu-group-title">' + t + '</div>'), t);
+  for (const t of ['This chat', 'Tools', 'Notifications and view', 'Account and help', 'Admin', 'Other views']) assert.match(menu, new RegExp('<div class="menu-group-title" id="menu-gt-[a-z]+">' + t + '</div>'), t);
+  for (const g of ['chat', 'tools', 'notify', 'account', 'admin', 'views']) assert.ok(menu.includes(`data-group="${g}" role="group" aria-labelledby="menu-gt-${g}"`), g);   // named groups for screen readers (review r1)
 });
 
 test('all 36 inventory items appear exactly once, plus the new ones', () => {
@@ -57,8 +58,16 @@ test('all 36 inventory items appear exactly once, plus the new ones', () => {
   for (const id of ['menu-look', 'menu-look-pick', 'menu-look-name', 'menu-adv-toggle', 'menu-adv']) assert.strictEqual(menu.split('id="' + id + '"').length - 1, 1, id);
   assert.match(menu, /<button id="menu-look" aria-expanded="false" aria-controls="menu-look-pick">/);
   assert.match(menu, /<div id="menu-look-pick" hidden><\/div>/);
-  assert.match(menu, /<button id="menu-adv-toggle" aria-expanded="false" aria-controls="menu-adv">/);
-  assert.match(menu, /<div id="menu-adv" hidden>/);
+  // review r1: progressive: the HTML shows every Advanced item and hides the row, so an older cached mobile.js (which
+  // never folds them) still reaches everything; mobile.js reveals the row and applies the saved fold state.
+  assert.match(menu, /<button id="menu-adv-toggle" aria-expanded="true" aria-controls="menu-adv" hidden>/);
+  assert.match(menu, /<div id="menu-adv">/);
+  assert.doesNotMatch(menu, /<div id="menu-adv" hidden>/);
+  const blk = js.slice(js.indexOf('// \u2500\u2500 phone menu (begin)'), js.indexOf('// \u2500\u2500 phone menu (end)'));
+  assert.ok(blk.length > 100, 'phone menu block found');
+  assert.match(blk, /tg\.hidden = false;[^\n]*\n\s*menuAdvApply\(menuAdvRead\(store\)\);/);
+  assert.match(blk, /setAttribute\('aria-label', 'Advanced, something inside needs attention'\)/);
+  assert.match(menu, /class="menu-adv-end" aria-hidden="true"/);
   assert.ok(menu.includes('class="menu-adv-dot" hidden'));
 });
 
