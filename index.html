@@ -640,7 +640,8 @@
     }
     .agent-btn .agent-busy-line {
       font-size: 0.65rem; color: var(--warning);
-      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      overflow: hidden; text-overflow: ellipsis;
+      display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2;   /* two lines: what it does, then what it waits on */
     }
     .agent-btn .agent-busy-line.question { color: var(--blue); }
     #agents-working {
@@ -1144,7 +1145,7 @@
     .auto-card-body[hidden], .auto-stack-body[hidden] { display: none; }
     .auto-from { margin: 4px 0 4px; font-size: 0.75rem; color: var(--auto-time-text); }
     .chat-view-hidden { display: none !important; }
-    .chat-busy-card { margin: 8px 0; padding: 4px 10px; font-size: 0.75rem; color: var(--auto-time-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .chat-busy-card { margin: 8px 0; padding: 4px 10px; font-size: 0.75rem; color: var(--auto-time-text); overflow-wrap: anywhere; }   /* wraps: the whole line (what it waits on) stays readable */
     .chat-earlier-btn { display: block; margin: 6px auto 10px; padding: 4px 14px; font-size: 0.78rem; color: var(--auto-time-text); background: transparent; border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer; }
     .chat-earlier-btn:disabled { opacity: 0.6; cursor: default; }
     .message.msg-archived > .msg-time { font-size: 0.7rem; color: var(--auto-time-text); }

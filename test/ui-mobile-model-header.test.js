@@ -41,13 +41,16 @@ function world(o = {}) {
     isBusy(n) { return ctx.streams.has(n) || !!(ctx.live[n] && (ctx.live[n].busy || ctx.live[n].pendingQuestion)); },
     ownTurnFor(n) { return ctx.streams.has(n); },
     busyText(n) { const s = ctx.live[n] || {}; return s.pendingQuestion ? '❓ waiting for your answer · 2m' : `⏳ ${s.activity || 'working'} · 2m`; },
-    busyCardInfo: o.busyCardInfo || ((n) => (ctx.live[n] && ctx.live[n].busy && !ctx.streams.has(n) ? { text: 'Working on a scheduled task: Nightly check', since: now - 125000 } : null)),
+    turnOrigins: {}, openTurns: {}, turnStep: {}, chatViewWaiting: require('../lib/ui-chat-view').chatViewWaiting, chatViewStep: require('../lib/ui-chat-view').chatViewStep, chatViewBusyText: require('../lib/ui-chat-view').chatViewBusyText, turnOriginFetch() {},
+    elapsed: (since) => (since ? '2m' : ''),
     chatViewElapsed(since, t) { return `${Math.floor((t - since) / 60000)} min`; },
     toast(text, ms) { toasts.push({ text, ms }); },
     setSendMode() {}, paintBusyCard() {}, paintNotifyBtn() {},
     Date: { now: () => now, parse: Date.parse },
   };
   vm.createContext(ctx);
+  vm.runInContext(cut('function currentTurnOrigin(agent) {', '// A page opened mid-turn got no turn_start'), ctx);
+  vm.runInContext(cut('function chatBusyDetail(name) {', '// The running tool call of a fetched'), ctx);
   vm.runInContext(cut('function chatStatusFull(name) {', '// ── "Notify me when done"'), ctx);
   return ctx;
 }
@@ -58,7 +61,7 @@ test('busy on a turn this device did not start: the model stays in its place, th
   w.paintChatStatus();
   assert.strictEqual(w.els['chat-model'].textContent, 'claude-opus-5-5', 'the model, never the status');
   assert.strictEqual(w.els['chat-busy'].hidden, false);
-  assert.strictEqual(w.els['chat-busy'].textContent, '⏳ scheduled task: Nightly check · 2m');
+  assert.strictEqual(w.els['chat-busy'].textContent, '⏳ Working on a scheduled task: Nightly check · 2m');
   assert.ok(w.els['chat-title'].classList.contains('busy'));
   assert.strictEqual(w.els['chat-stop-btn'].hidden, false, 'Stop shows as before');
   assert.match(w.els['chat-busy'].getAttribute('aria-label'), /^Sam the long-named agent: Working on a scheduled task: Nightly check · 2 min$/);
@@ -103,9 +106,9 @@ test('a tap on the name or the status: who, what and how long, in full; nothing 
   assert.strictEqual(idle.toasts.length, 0);
   const own = world({ own: true, live: { sam: busyNow } }); own.showChatStatus();
   assert.strictEqual(own.toasts.length, 0);
-  // Without a busy card (another view): the status feed's own words.
-  const other = world({ live: { sam: busyNow }, busyCardInfo: () => null });
-  assert.strictEqual(other.chatStatusFull('sam'), 'Sam the long-named agent: scheduled task: Nightly check · 2 min');
+  // In every view the same words (no longer only where the busy card shows).
+  const other = world({ live: { sam: { ...busyNow, activity: 'hand-off' } } });
+  assert.strictEqual(other.chatStatusFull('sam'), 'Sam the long-named agent: Working on a hand-off · 2 min');
   assert.match(js, /\$\('chat-title'\)\?\.addEventListener\('click', showChatStatus\);/);
 });
 

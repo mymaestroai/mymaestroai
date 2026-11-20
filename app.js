@@ -3248,8 +3248,15 @@
     // The Appearance section: the picker, and for admins "Look for new members" (setting lookDefaultForNewMembers, saved on change).
     function lookSectionPaint(data) {
       const host = document.getElementById('st-looks-body');
-      if (!host || !window.HubLooks) return;
+      if (!host) return;
       while (host.firstChild) host.removeChild(host.firstChild);   // painting twice never doubles the picker or the select's id
+      if (!window.HubLooks) {   // a page newer than the running server: /ui-looks.js was not served, so there is nothing to pick yet
+        const msg = document.createElement('div');
+        msg.className = 'st-hint'; msg.id = 'st-looks-restart';
+        msg.appendChild(document.createTextNode('Restart your Maestro to load the looks.'));
+        host.appendChild(msg);
+        return;
+      }
       const picker = document.createElement('div');
       host.appendChild(picker);
       lookPickerBuild(picker);
@@ -8713,6 +8720,60 @@
     // ── The busy card: ONE line at the bottom of the main view while the agent works on a hub-started turn ──
     const busyRun = {};   // agent -> { turnId, origin, since, own }: the agent's running turn as turn_start announced it
     let busyCardTimer = null;
+    // agent -> the tool item it is running now (from turn_activity, every agent). Says what a turn does between replies.
+    const turnStep = {};
+    const turnStepLast = {};   // agent -> { at, timer }: repaint throttle (at most once per 500 ms, trailing call)
+    function turnStepRepaintNow(agent) {
+      try { paintAgentStatus(agent); } catch {}
+      try { const c = findSoloChat(agent); if (c) busyCardRefresh(c); } catch {}
+    }
+    function turnStepRepaint(agent) {
+      if (!agent) return;
+      const t = turnStepLast[agent] || (turnStepLast[agent] = { at: 0, timer: null });
+      if (t.timer) return;   // a trailing repaint is already queued
+      const wait = 500 - (Date.now() - t.at);
+      if (wait <= 0) { t.at = Date.now(); turnStepRepaintNow(agent); return; }
+      t.timer = setTimeout(() => { t.timer = null; t.at = Date.now(); turnStepRepaintNow(agent); }, wait);
+    }
+    function turnStepSet(agent, item) {
+      if (!agent) return;
+      if (item) turnStep[agent] = item; else if (agent in turnStep) delete turnStep[agent]; else return;
+      turnStepRepaint(agent);
+    }
+    // turn_activity { agent, item }: a running tool item is the step; its 'done' item (same callId) clears it.
+    function turnStepOnActivity(ev) {
+      const item = ev && ev.item;
+      if (!ev || !ev.agent || !item || item.kind !== 'tool') return;
+      if (item.status === 'running') turnStepSet(ev.agent, item);
+      else if (item.status === 'done') {
+        const cur = turnStep[ev.agent];
+        if (cur && (!item.callId || !cur.callId || item.callId === cur.callId)) turnStepSet(ev.agent, null);
+      }
+    }
+    // The last running tool item of a fetched turn.activity that no later 'done' item with the same callId closes.
+    function turnStepFromActivity(list) {
+      if (!Array.isArray(list)) return null;
+      let found = null;
+      for (let i = list.length - 1; i >= 0 && !found; i--) {
+        const it = list[i];
+        if (!it || it.kind !== 'tool' || it.status !== 'running') continue;
+        const closed = list.slice(i + 1).some(d => d && d.kind === 'tool' && d.status === 'done' && (!d.callId || !it.callId || d.callId === it.callId));
+        if (!closed) found = it;
+      }
+      return found;
+    }
+    // What the agent is doing NOW: words (the turn), detail (what it waits on, else its current step), question.
+    function agentDoingNow(name) {
+      const st = agentStatus[name] || {};
+      const question = !!st.pendingQuestion;
+      const run = st.busy ? busyRun[name] : null;
+      let words;
+      if (question) words = 'Waiting for your answer';
+      else if (!run && localBusy.has(name)) words = 'Replying to your message';
+      else words = chatViewBusyText(run ? run.origin : null, st.activity, agentDisplayName);
+      const detail = question ? '' : (chatViewWaiting(name, agentStatus, Date.now(), agentDisplayName) || chatViewStep(turnStep[name]));
+      return { words, detail, question };
+    }
     function busyCardState(chat) {
       if (!chat || chat.isGroup || chat.isWorker || chat.isHistory || !chat.agent) return null;
       if (chatViewGet(localStorage) !== 'main') return null;
@@ -8720,21 +8781,83 @@
       let run = busyRun[chat.agent];
       const stNow = agentStatus[chat.agent];
       if (run && !(stNow && stNow.busy)) { delete busyRun[chat.agent]; run = null; }   // a turn_end was missed: the card must not stay
-      if (run) return run.own ? null : { text: chatViewBusyText(run.origin, null), since: run.since };
+      if (run) { if (run.own) return null; const d = agentDoingNow(chat.agent); return { text: chatViewBusyText(run.origin, null, agentDisplayName), detail: d.detail, since: run.since }; }
       const st = agentStatus[chat.agent];   // the page opened mid-turn: the status feed's words
       if (!st || !st.busy || st.pendingQuestion || localBusy.has(chat.agent)) return null;
       if (st.activity === 'replying to you') return null;
-      return { text: chatViewBusyText(null, st.activity), since: Date.parse(st.busySince) || Date.now() };
+      busyOriginFetch(chat.agent);   // who called is not in the feed: ask the hub once
+      return { text: chatViewBusyText(null, st.activity, agentDisplayName), detail: agentDoingNow(chat.agent).detail, since: Date.parse(st.busySince) || Date.now() };
+    }
+    // The page opened mid-turn: no turn_start was seen, so busyRun is empty. Ask the hub once per turn who started it.
+    const busyOriginMemo = new Set();     // `${agent}|${busySince}` already asked
+    const busyOriginFlight = new Set();   // agents with a request in flight
+    function busyOriginFetch(agent) {
+      const st = agentStatus[agent];
+      if (!agent || !st || !st.busy || busyRun[agent]) return;
+      const key = `${agent}|${st.busySince}`;
+      if (busyOriginMemo.has(key) || busyOriginFlight.has(agent)) return;
+      busyOriginMemo.add(key); busyOriginFlight.add(agent);
+      (async () => {
+        try {
+          const r = await fetch(`/api/agents/${encodeURIComponent(agent)}/turn`, { credentials: 'include', signal: AbortSignal.timeout(8000) });
+          const d = r && r.ok ? await r.json() : null;
+          const t = d && d.active && d.turn;
+          const now = agentStatus[agent];
+          if (t && now && now.busy) { const stp = turnStepFromActivity(t.activity); if (stp && !turnStep[agent]) turnStepSet(agent, stp); }
+          if (!t || !t.origin || typeof t.origin !== 'object' || !now || !now.busy || busyRun[agent]) return;
+          busyRun[agent] = { turnId: t.turnId, origin: t.origin, since: Date.parse(t.startedAt) || Date.now(), own: !chatViewIsHubOrigin(t.origin) };
+          const solo = findSoloChat(agent);
+          if (solo) busyCardRefresh(solo);
+        } catch { /* the status words still show */ } finally { busyOriginFlight.delete(agent); }
+      })();
+    }
+    // The status line under the tabs follows the hub's feed while this window is not streaming the turn itself.
+    function headerBusyPaint(chat) {
+      if (!chat || chat.isGroup || chat.isWorker || chat.isHistory || !chat.agent) return false;
+      if (chat.controller || chat.reattach || chat.status === 'thinking' || chat.status === 'paused') return false;
+      const id = chat.chatId || chat.id;
+      const dot = document.getElementById(`status-dot-${id}`);
+      const textEl = document.getElementById(`status-text-${id}`);
+      const tab = document.querySelector(`#tab-${id} .status`);
+      const st = agentStatus[chat.agent];
+      const working = !!(st && (st.busy || st.pendingQuestion));
+      if (!working) {
+        if (textEl && textEl.dataset && textEl.dataset.hubBusy === '1') {
+          if (dot) dot.className = `status-dot ${chat.status || 'idle'}`;
+          if (!chat.status || chat.status === 'idle') textEl.textContent = 'Idle';
+          if (tab) tab.className = `status ${chat.status || 'idle'}`;
+          delete textEl.dataset.hubBusy;
+        }
+        return false;
+      }
+      let since;
+      if (st.pendingQuestion) {
+        since = Date.parse(st.busySince) || Date.now();
+      } else {
+        let run = busyRun[chat.agent];
+        if (run && !st.busy) { delete busyRun[chat.agent]; run = null; }
+        if (!run) busyOriginFetch(chat.agent);
+        since = (run && run.since) || Date.parse(st.busySince) || Date.now();
+      }
+      const { words, detail } = agentDoingNow(chat.agent);
+      if (!textEl) return false;
+      if (dot) dot.className = 'status-dot thinking';
+      textEl.textContent = `${words} · ${chatViewElapsed(since, Date.now())}${detail ? ' · ' + detail : ''}`;
+      textEl.dataset.hubBusy = '1';
+      if (tab) tab.className = 'status thinking';
+      return true;
     }
     // Show, update or remove the chat's busy card; it is always the last element of the messages list.
     function busyCardRefresh(chat) {
       if (!chat) return false;
+      let header = false;
+      try { header = headerBusyPaint(chat); } catch {}
       const panel = document.getElementById(`messages-${chat.id}`);
-      if (!panel) return false;
+      if (!panel) return header;
       let el = panel.querySelector(':scope > .chat-busy-card');
       const st = busyCardState(chat);
-      if (!st) { if (el) el.remove(); return false; }
-      const text = `⏳ ${st.text} · ${chatViewElapsed(st.since, Date.now())}`;
+      if (!st) { if (el) el.remove(); return header; }
+      const text = `⏳ ${st.text} · ${chatViewElapsed(st.since, Date.now())}${st.detail ? ' · ' + st.detail : ''}`;
       const fresh = !el;
       if (!el) { el = document.createElement('div'); el.className = 'chat-busy-card'; el.setAttribute('role', 'status'); }
       if (el.textContent !== text) el.textContent = text;
@@ -8990,10 +9113,17 @@
       if (!next.busy) { next.busySince = null; next.activity = null; next.pendingQuestion = false; next.consultedBy = null; }
       else if (!next.busySince) next.busySince = cur.busySince || new Date().toISOString();
       agentStatus[name] = next;
+      if (!next.busy) delete turnStep[name];   // idle: no step survives into the next turn
       if (!next.busy && typeof voiceCallHubIdle === 'function') { try { voiceCallHubIdle(name); } catch { /* the call carries on */ } }   // a call waiting for a hub-started turn learns it is over
       paintAgentStatus(name);
       paintAgentsWorking();
       { const c = findSoloChat(name); if (c) busyCardRefresh(c); }   // the busy card follows the status feed
+      // A helper (worker with a parent) or a consulted agent changed: the agent waiting on it says so now.
+      for (const who of new Set([cur.worker && cur.parent, next.worker && next.parent, cur.consultedBy, next.consultedBy])) {
+        if (!who || who === name) continue;
+        try { paintAgentStatus(who); } catch {}
+        try { const c = findSoloChat(who); if (c) busyCardRefresh(c); } catch {}
+      }
     }
 
     // keepMissing (the /api/agents list, which has no worker fields): a key the entry lacks is left as it is. A full feed
@@ -9262,6 +9392,12 @@
       } catch (e) { alert(`Could not resume full speed: ${e.message}`); }
     }
 
+    let agentRowTicker = null;
+    function agentRowTick() {
+      const names = busyAgentNames();
+      for (const n of names) { try { paintAgentStatus(n); } catch {} }
+      if (!names.length && agentRowTicker) { clearInterval(agentRowTicker); agentRowTicker = null; }
+    }
     function paintAgentStatus(name) {
       const dot = document.getElementById(`agent-status-${name}`);
       const btn = document.getElementById(`agent-btn-${name}`);
@@ -9300,6 +9436,16 @@
         if (!line) { line = document.createElement('span'); line.className = 'agent-busy-line'; btn.querySelector('.agent-info')?.appendChild(line); }
         line.classList.toggle('question', question);
         line.textContent = question ? `❓ waiting for your answer${elapsedShort ? ` · ${elapsedShort}` : ''}` : `⏳ ${activity}${elapsedShort ? ` · ${elapsedShort}` : ''}`;
+        // A named agent (not a temporary worker) says what it does NOW: the turn, how long, what it waits on or its step.
+        if (!question && !(s && s.worker)) {
+          if (s && s.busy && !busyRun[name] && !mine) busyOriginFetch(name);   // once per turn: who started it (a page opened mid-turn)
+          const d = agentDoingNow(name);
+          const det = d.detail ? ` · ${d.detail}` : '';
+          line.textContent = `⏳ ${d.words}${elapsedShort ? ` · ${elapsedShort}` : ''}${det}`;
+          line.title = `${d.words}${elapsed ? ` · ${elapsed}` : ''}${det}`;
+          dot.title = line.title;
+        } else line.removeAttribute('title');
+        if (!agentRowTicker) agentRowTicker = setInterval(agentRowTick, 15000);   // elapsed and detail keep moving
       } else if (line) {
         line.remove();
       }
@@ -9399,16 +9545,28 @@
       const k = origin && typeof origin === 'object' ? origin.kind : '';
       return !!k && typeof k === 'string' && k !== 'user' && k !== 'comms';
     }
-    function chatViewBusyText(origin, activity) {
+    function chatViewBusyText(origin, activity, nameOf) {
       const o = origin && typeof origin === 'object' ? origin : null;
       const cap = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
+      const who = (n) => {   // the agent's display name when the page knows it, else the name with a capital
+        if (!n) return n;
+        try { const d = typeof nameOf === 'function' ? nameOf(String(n)) : ''; if (d && typeof d === 'string') return d; } catch (e) { /* the plain name */ }
+        return cap(String(n));
+      };
       if (o && o.kind) {
         switch (o.kind) {
-          case 'consultation': return `Answering a consultation from ${cap(o.from) || 'another agent'}`;
+          case 'user': case 'comms': return 'Replying to your message';
+          case 'consultation': return `Answering a consultation from ${who(o.from) || 'another agent'}`;
           case 'schedule': { const l = o.label || o.from; return l ? `Working on a scheduled task: ${l}` : 'Working on a scheduled task'; }
           case 'job_notice': return o.jobName ? `Reading a job result: ${o.jobName}` : 'Reading a job result';
-          case 'hand_off': return o.label || 'Working on a hand-off';
-          case 'hand_off_report': return 'Reading a hand-off report';
+          case 'hand_off': {
+            // The target's turn is labelled "Hand-off from <caller>: <topic>"; the caller's report turn "Hand-off <state>: <topic>".
+            const l = typeof o.label === 'string' ? o.label : '';
+            if (/^Hand-off from /.test(l) || (!l && o.from)) return o.from ? `Working on a hand-off from ${who(o.from)}` : 'Working on a hand-off';
+            if (/^Hand-off \S+:/.test(l)) return o.from ? `Reading a hand-off report from ${who(o.from)}` : 'Reading a hand-off report';
+            return 'Working on a hand-off';
+          }
+          case 'hand_off_report': return o.from ? `Reading a hand-off report from ${who(o.from)}` : 'Reading a hand-off report';
           case 'job_report': return o.jobName ? `Reading a job report: ${o.jobName}` : 'Reading a job report';
           case 'consult_reply': return 'Reading consultation replies';
           case 'alert': return 'Handling a monitor alert';
@@ -9418,13 +9576,60 @@
       }
       const a = typeof activity === 'string' ? activity.trim() : '';
       let m = /^consulted by (.+)$/i.exec(a);
-      if (m) return `Answering a consultation from ${cap(m[1])}`;
+      if (m) return `Answering a consultation from ${who(m[1])}`;
       m = /^scheduled task(?::\s*(.+))?$/i.exec(a);
       if (m) return m[1] ? `Working on a scheduled task: ${m[1]}` : 'Working on a scheduled task';
       if (/^job finished/i.test(a)) return 'Reading a job result';
       if (/^job report/i.test(a)) return 'Reading a job report';
+      if (/^hand-off finished/i.test(a)) return 'Reading a hand-off report';
+      if (/^hand-off$/i.test(a)) return 'Working on a hand-off';
+      if (/^replying to you$/i.test(a)) return 'Replying to your message';
       if (/^alert$/i.test(a)) return 'Handling a monitor alert';
       return 'Working on a hub task';
+    }
+    // What a working agent waits on: its own helpers (temporary workers whose parent is it) and agents it consulted, from the
+    // status feed { <name>: { busy, busySince, worker, parent, label, consultedBy } }. '' when it waits on nobody.
+    function chatViewWaiting(agent, statuses, nowMs, nameOf) {
+      const all = statuses && typeof statuses === 'object' ? statuses : {};
+      const cap = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
+      const who = (n) => { try { const d = typeof nameOf === 'function' ? nameOf(String(n)) : ''; if (d && typeof d === 'string') return d; } catch (e) { /* plain */ } return cap(String(n)); };
+      const since = (s) => Date.parse(s && s.busySince) || 0;
+      const age = (s) => (since(s) ? chatViewElapsed(since(s), nowMs) : '');
+      const helpers = [], asked = [];
+      for (const [name, s] of Object.entries(all)) {
+        if (!s || !s.busy || name === agent) continue;
+        if (s.worker && s.parent === agent) helpers.push(s);
+        else if (!s.worker && s.consultedBy === agent) asked.push(Object.assign({ name }, s));
+      }
+      helpers.sort((a, b) => since(a) - since(b)); asked.sort((a, b) => since(a) - since(b));
+      const parts = [];
+      if (helpers.length === 1) { const h = helpers[0], t = age(h); parts.push(`waiting on 1 helper (${h.label || 'unnamed'}${t ? ', ' + t : ''})`); }
+      else if (helpers.length > 1) {
+        const names = helpers.slice(0, 2).map(h => h.label || 'unnamed').join(', ') + (helpers.length > 2 ? ', ...' : '');
+        const t = age(helpers[0]);
+        parts.push(`waiting on ${helpers.length} helpers (${names}${t ? '; the first for ' + t : ''})`);
+      }
+      if (asked.length === 1) { const t = age(asked[0]); parts.push(`waiting on ${who(asked[0].name)}${t ? ' (' + t + ')' : ''}`); }
+      else if (asked.length > 1) parts.push(`waiting on ${asked.length} agents (${asked.slice(0, 2).map(a => who(a.name)).join(', ')}${asked.length > 2 ? ', ...' : ''})`);
+      return parts.join(', ');
+    }
+    // A running tool step in plain words, from a turn_activity item { kind: 'tool', tool, summary, status }. '' for anything else.
+    function chatViewStep(item) {
+      if (!item || item.kind !== 'tool' || item.status !== 'running') return '';
+      const raw = String(item.tool || '');
+      const name = raw.replace(/^mcp__[^_]+(?:_[^_]+)*?__/, '');
+      const words = {
+        spawn_workers: 'starting helpers', consult_agent: 'asking another agent', run_job: 'starting a background job',
+        hand_off: 'handing off work', ask_user: 'waiting for your answer', Bash: 'running a command', Read: 'reading a file',
+        Write: 'writing a file', Edit: 'editing a file', Grep: 'searching files', Glob: 'searching files',
+        WebSearch: 'searching the web', WebFetch: 'reading a web page', schedule_task: 'scheduling a task',
+      }[name] || `using ${name || 'a tool'}`;
+      const sum = typeof item.summary === 'string' ? item.summary.replace(/\s+/g, ' ').trim() : '';
+      return sum && !/^(spawn_workers|ask_user)$/.test(name) ? `${words}: ${sum.length > 60 ? sum.slice(0, 59) + '...' : sum}` : words;
+    }
+    // The full line: what the turn is, then what it waits on or (when it waits on nobody) its current step.
+    function chatViewNow(words, waiting, step) {
+      return [words, waiting || step].filter(Boolean).join(' \u00b7 ');
     }
     function chatViewElapsed(sinceMs, nowMs) {
       const s = Math.max(0, Math.floor(((Number(nowMs) || 0) - (Number(sinceMs) || 0)) / 1000));
@@ -9721,6 +9926,7 @@
     async function onHubTurnStart(ev) {
       if (ev && ev.agent) activeTurnStart(openTurns, ev.agent, ev.turnId);
       if (ev && ev.agent) busyRun[ev.agent] = { turnId: ev.turnId, origin: ev.origin, since: Date.parse(ev.startedAt) || Date.now(), own: !chatViewIsHubOrigin(ev.origin) };
+      if (ev && ev.agent) delete turnStep[ev.agent];   // a new turn: no step yet
       if (ev.turnId && hubTurns[ev.turnId]) return;   // replayed after a reconnect (?since=): the turn is already followed
       setAgentLive(ev.agent, { busy: true, busySince: ev.startedAt || null, activity: ev.activity || hubOriginLabel(ev.origin) });
       let chat = findSoloChat(ev.agent);
@@ -10180,6 +10386,7 @@
       const endedRun = busyRun[ev.agent];   // read before it is dropped: says whether the turn was hub-started
       if (busyRun[ev.agent] && (!ev.turnId || busyRun[ev.agent].turnId === ev.turnId)) delete busyRun[ev.agent];
       { const c = findSoloChat(ev.agent); if (c) busyCardRefresh(c); }   // the busy card goes with the turn
+      if (ev.agent && turnStep[ev.agent]) { delete turnStep[ev.agent]; try { paintAgentStatus(ev.agent); } catch {} try { const c = findSoloChat(ev.agent); if (c) busyCardRefresh(c); } catch {} }   // the ended turn's step goes with it
       if (ev.agent) scheduleWorkerStatusPoll();   // re-read the status once: a reply can run without a turn of its own
       const t = hubTurns[ev.turnId]; delete hubTurns[ev.turnId];
       if (!t) {
@@ -10314,7 +10521,7 @@
       source.addEventListener('provider_recovered', e => { const ev = parse(e); if (ev && ev.provider) clearPacing(ev.provider); });
       source.addEventListener('turn_start', e => { const ev = parse(e); if (ev) onHubTurnStart(ev).catch(err => console.error('[hub-events]', err)); });
       source.addEventListener('turn_delta', e => { const ev = parse(e); if (ev) onHubTurnDelta(ev); });
-      source.addEventListener('turn_activity', e => { const ev = parse(e); if (ev) { onHubTurnActivity(ev); if (ev.item && ev.item.kind === 'worker') scheduleWorkerStatusPoll(); } });
+      source.addEventListener('turn_activity', e => { const ev = parse(e); if (ev) { try { turnStepOnActivity(ev); } catch {} onHubTurnActivity(ev); if (ev.item && ev.item.kind === 'worker') scheduleWorkerStatusPoll(); } });
       source.addEventListener('turn_reasoning', e => { const ev = parse(e); if (ev) onHubTurnReasoning(ev); });
       source.addEventListener('turn_progress', e => { const ev = parse(e); if (ev) onHubTurnProgress(ev); });
       source.addEventListener('turn_worker_delta', e => { const ev = parse(e); if (ev) onHubTurnWorkerDelta(ev); });
@@ -10696,6 +10903,7 @@
       document.getElementById(`panel-${chatId}`)?.classList.add('active');
       if (wasUnread) { const m = document.getElementById(`messages-${chatId}`); if (m) m.scrollTop = m.scrollHeight; }
       if (opened && !opened.isGroup && !opened.isWorker && !opened.isHistory && opened.agent && opened.viewLoaded !== undefined) soloViewReload(opened);   // the view changed while it was behind
+      if (opened && !opened.isGroup && !opened.isWorker && !opened.isHistory && opened.agent) { try { busyCardRefresh(opened); } catch {} }   // the status line and card follow the hub's feed on arrival
       activeChat = chatId;
       window.__activeChatId = chatId;
       if (document.getElementById('files-panel')) filesRefresh(); // the Files panel follows the active chat's agent
@@ -10931,6 +11139,7 @@
       if (statusDot) statusDot.className = `status-dot ${status}`;
       if (statusTextEl) {
         statusTextEl.textContent = statusText || (status === 'thinking' ? 'Processing...' : status === 'paused' ? 'Paused' : status === 'error' ? 'Error' : 'Idle');
+        if (status === 'thinking') delete statusTextEl.dataset.hubBusy;   // this window's own stream owns the line now
       }
 
       const pauseBtn = document.getElementById(`pause-${chatId}`);
@@ -10983,6 +11192,8 @@
           input.placeholder = 'Type your message... (Ctrl+V to paste images)';
         }
       }
+      // An own stream ended while another turn of the agent still runs: the line shows that turn.
+      if (status !== 'thinking' && status !== 'paused') { try { headerBusyPaint(chats[chatId]); } catch {} }
     }
     
     // 'thinking' = this browser is streaming a reply from the agent; '' = done.  The sidebar dot
