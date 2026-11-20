@@ -331,7 +331,9 @@ test('review r1: look stylesheets are served for their exact names only', () => 
 });
 
 test('full width: no look narrows the chat, the message box or the strip above it (as in Engineering)', () => {
-  const chatSel = /(^|[\s>+~,])(\.messages|#messages|\.input-area|\.composer|#composer|\.handoff-cards|\.ho-strip|\.chat-busy-card|#msg-input|\.chat-panel|\.chat-area|\.main)\b/;
+  // The part a rule styles is its last compound selector (a descendant such as `.input-area textarea` is not the column).
+  const PARTS = /(\.messages|#messages|\.input-area|\.composer|#composer|\.handoff-cards|\.ho-strip|\.chat-busy-card|\.chat-panel|\.chat-area|\.main)(?![\w-])[^\s>+~]*$/;
+  const chatSel = { test: (sel) => sel.split(',').some(one => PARTS.test(one.trim())) };
   for (const look of L.LOOKS.filter(l => l.css)) {
     const css = read(look.css.replace(/^\//, '')).replace(/\/\*[\s\S]*?\*\//g, '');
     const cmw = [...css.matchAll(/--chat-max-width\s*:\s*([^;]+);/g)].map(m => m[1].trim());
@@ -339,8 +341,10 @@ test('full width: no look narrows the chat, the message box or the strip above i
     for (const m of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
       const sel = m[1].trim(), body = m[2];
       if (!chatSel.test(sel)) continue;
-      assert.doesNotMatch(body, /(^|;|\s)max-width\s*:/, `${look.id}: ${sel} sets a max-width`);
-      assert.doesNotMatch(body, /margin(-inline)?\s*:\s*[^;]*\bauto\b/, `${look.id}: ${sel} centres itself with auto margins`);
+      for (const d of body.matchAll(/(?:^|;)\s*(max-width|width|max-inline-size|inline-size)\s*:\s*([^;]+)/g)) {
+        assert.ok(/^(none|100%|auto)$/.test(d[2].trim()), `${look.id}: ${sel} sets ${d[1]}: ${d[2].trim()}`);
+      }
+      assert.doesNotMatch(body, /margin(-inline|-left|-right|-inline-start|-inline-end)?\s*:\s*[^;]*\bauto\b/, `${look.id}: ${sel} centres itself with auto margins`);
     }
   }
 });
@@ -349,7 +353,9 @@ test('full width: a collapsed sidebar keeps no border in any look (Engineering\'
   for (const look of L.LOOKS.filter(l => l.css)) {
     const css = read(look.css.replace(/^\//, '')).replace(/\/\*[\s\S]*?\*\//g, '');
     for (const m of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
-      if (/\.sidebar(?![\w-])(?!:not\(\.collapsed\))/.test(m[1]) && /border-right\s*:/.test(m[2])) assert.fail(`${look.id}: ${m[1].trim()} draws a border even when collapsed`);
+      for (const one of m[1].split(',')) {   // a rule styling the sidebar itself (not a descendant, not its collapsed state)
+        if (/\.sidebar(?![\w-])(?!:not\(\.collapsed\)|\.collapsed)[^\s>+~]*$/.test(one.trim()) && /border-right\s*:\s*(?!none)/.test(m[2])) assert.fail(`${look.id}: ${one.trim()} draws a border even when collapsed`);
+      }
     }
   }
 });

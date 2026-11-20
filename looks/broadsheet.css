@@ -472,7 +472,7 @@ html[data-look="broadsheet"]:not(.mm-simple) h3 { font-family: var(--font-headin
 html[data-look="broadsheet"]:not(.mm-simple) .main-header { border-bottom: 2px solid var(--text); }
 html[data-look="broadsheet"]:not(.mm-simple) .sidebar:not(.collapsed) { border-right: 1px solid var(--border-strong); }   /* collapsed: no border, the chat takes the whole width */
 
-/* ---- desktop reading column: replies sit on a centred folio, no bubble ---- */
+/* ---- desktop: replies as plain writing on the page, no bubble, the full width of the chat ---- */
 html[data-look="broadsheet"]:not(.mm-simple) .messages {
   background: var(--bg-input);
   border-left: 1px solid var(--border);
@@ -500,7 +500,7 @@ html[data-look="broadsheet"]:not(.mm-simple) .tool-stream {
 }
 html[data-look="broadsheet"]:not(.mm-simple) .tool-stream .ts-head { border-radius: 2px; font-family: var(--font-mono-sf); }
 
-/* ---- phone: reading column, compact top controls, the message box always in view ---- */
+/* ---- phone: plain-writing replies, compact top controls, the message box always in view ---- */
 html[data-look="broadsheet"]:not(.mm-simple) .topbar {
   min-height: 44px; padding: 2px 6px 2px 10px; gap: 6px; border-bottom: 2px solid var(--text);
 }
