@@ -140,7 +140,7 @@ test('the loader applies the stored look at load in a browser, and a blocked sto
 });
 
 test('every page loads /ui-looks.js in its <head> before its first <style>', () => {
-  const pages = ['index', 'mobile', 'agent-settings', 'changes', 'help', 'users', 'recordings', 'tiger-team', 'local-models', 'modules', 'welcome', 'login'];
+  const pages = ['index', 'mobile', 'agent-settings', 'changes', 'help', 'users', 'recordings', 'tiger-team', 'local-models', 'modules', 'welcome', 'login', 'remote-desktop'];
   for (const p of pages) {
     const html = read(`${p}.html`);
     const tag = '<script src="/ui-looks.js"></script>';

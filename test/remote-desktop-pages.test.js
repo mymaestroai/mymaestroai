@@ -422,7 +422,8 @@ test('remote-desktop.html: #back is the first item of #bar, holds #name, has its
 test('remote-desktop.html: the ended panel has the reason, two Back buttons and the countdown with Stay; 44 px buttons; accent on the primary', () => {
   for (const s of ['id="ended-text"', 'id="ended-remote"', '>Back to Remote computers<', 'id="ended-chat"', '>Back to chat<', 'id="ended-count"', 'id="ended-stay"', '>Stay here<']) assert.ok(viewer.includes(s), s);
   assert.match(viewer, /#ended button \{ min-height: 44px/);
-  assert.match(viewer, /#ended button\.primary \{ border-color: #3D7BFF; background: #3D7BFF/);
+  assert.match(viewer, /#ended button\.primary \{ border-color: var\(--rd-accent\); background: var\(--rd-accent\)/);
+  assert.match(viewer, /--rd-accent: #3D7BFF/);
   assert.match(viewer, /var REMOTE_URL = '\/modules#remote-computers', CHAT_URL = '\/';/);
 });
 

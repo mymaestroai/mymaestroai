@@ -4,26 +4,36 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Desktop — My Maestro AI</title>
+<script src="/ui-looks.js"></script>
 <style>
+:root {
+  --rd-bg: #090B0F; --rd-text: #F3F4F6; --rd-bar: #14171F; --rd-line: #222632; --rd-dim: #9CA3AF; --rd-edge: #333846;
+  --rd-accent: #3D7BFF; --rd-error: #FF4C4C; --rd-error-edge: rgba(255, 76, 76, .5); --rd-on-fill: #fff;
+}
+/* Broadsheet House and Quiet Page: page chrome follows the style; the remote screen (#scroller, #Desk, black) stays as it is */
+html[data-look]:not([data-look="engineering"]) {
+  --rd-bg: var(--bg-dark); --rd-text: var(--text); --rd-bar: var(--bg-card); --rd-line: var(--border); --rd-dim: var(--text-dim); --rd-edge: var(--border-strong);
+  --rd-accent: var(--accent); --rd-error: var(--error); --rd-error-edge: color-mix(in srgb, var(--error) 50%, transparent); --rd-on-fill: var(--on-color-text);
+}
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  html, body { height: 100%; background: #090B0F; color: #F3F4F6; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 14px; overflow: hidden; }
-  #bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 6px 10px; background: #14171F; border-bottom: 1px solid #222632; }
+  html, body { height: 100%; background: var(--rd-bg); color: var(--rd-text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 14px; overflow: hidden; }
+  #bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 6px 10px; background: var(--rd-bar); border-bottom: 1px solid var(--rd-line); }
   #bar b { font-size: 15px; word-break: break-word; }
   #bar .sp { flex: 1; }
-  #left, #state { color: #9CA3AF; font-size: 13px; }
-  button { font: inherit; font-size: 13px; min-height: 36px; padding: 5px 12px; border-radius: 4px; border: 1px solid #333846; background: transparent; color: #F3F4F6; cursor: pointer; }
-  button:hover { border-color: #3D7BFF; }
-  button.danger { color: #FF4C4C; border-color: rgba(255, 76, 76, .5); }
+  #left, #state { color: var(--rd-dim); font-size: 13px; }
+  button { font: inherit; font-size: 13px; min-height: 36px; padding: 5px 12px; border-radius: 4px; border: 1px solid var(--rd-edge); background: transparent; color: var(--rd-text); cursor: pointer; }
+  button:hover { border-color: var(--rd-accent); }
+  button.danger { color: var(--rd-error); border-color: var(--rd-error-edge); }
   body { touch-action: manipulation; }
   #scroller { position: absolute; top: 0; left: 0; right: 0; bottom: 0; overflow: auto; display: flex; background: #000; touch-action: none; -webkit-touch-callout: none; scrollbar-width: none; }
   #scroller::-webkit-scrollbar { display: none; }
   @media (pointer: fine) { #scroller { scrollbar-width: auto; } #scroller::-webkit-scrollbar { display: block; } }
   #Desk { display: block; flex: none; margin: auto; touch-action: none; -webkit-touch-callout: none; user-select: none; -webkit-user-select: none; background: #000; }
-  #ended { display: none; padding: 30px 16px; text-align: center; font-size: 16px; color: #9CA3AF; }
+  #ended { display: none; padding: 30px 16px; text-align: center; font-size: 16px; color: var(--rd-dim); }
   #ended-text { margin-bottom: 16px; }
   #ended .row { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; margin-bottom: 14px; }
   #ended button { min-height: 44px; font-size: 14px; padding: 8px 16px; }
-  #ended button.primary { border-color: #3D7BFF; background: #3D7BFF; color: #fff; }
+  #ended button.primary { border-color: var(--rd-accent); background: var(--rd-accent); color: var(--rd-on-fill); }
   #ended-count { margin-bottom: 10px; font-size: 14px; }
   #back { max-width: 100%; text-align: left; word-break: break-word; }
   #kb { position: fixed; left: 0; bottom: 0; opacity: 0; width: 1px; height: 1px; border: 0; padding: 0; }

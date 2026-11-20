@@ -90,6 +90,7 @@ html[data-look="quiet"]:not(.mm-simple) {
   --bg-card: #FFFDF6;
   --bg-input: #F6F1E6;
   --radius: 8px;
+  --field-border: #857B6E;   /* form fields' edge: at least 3.69:1 on the page, card and input colours (WCAG 1.4.11) */
   --chat-max-width: none;   /* full width, as in Engineering: the chat and the message box fill the screen */
   --chat-pad-x: clamp(16px, 3vw, 40px);
   --sidebar-bg: var(--bg-card);
@@ -526,3 +527,22 @@ html[data-look="quiet"]:not(.mm-simple) #msg-input {
 }
 html[data-look="quiet"]:not(.mm-simple) #msg-input:focus { border-color: var(--accent); }
 html[data-look="quiet"]:not(.mm-simple) #send-btn { min-width: 56px; min-height: 40px; border-radius: 12px; font-weight: 600; }
+
+/* ---- form fields on every page: an edge people can see (3:1 against what is behind them) ---- */
+html[data-look="quiet"]:not(.mm-simple) #owner-view,
+html[data-look="quiet"]:not(.mm-simple) input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]):not([type=hidden]):not([type=file]):not([type=submit]):not([type=button]):not([type=reset]):not([type=image]),
+html[data-look="quiet"]:not(.mm-simple) select,
+html[data-look="quiet"]:not(.mm-simple) textarea {
+  border-color: var(--field-border) !important;   /* over inline and id-level field rules on every page (#owner-view: styled by id in index.html) */
+}
+html[data-look="quiet"]:not(.mm-simple) #owner-view:focus,
+html[data-look="quiet"]:not(.mm-simple) input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]):not([type=hidden]):not([type=file]):not([type=submit]):not([type=button]):not([type=reset]):not([type=image]):focus,
+html[data-look="quiet"]:not(.mm-simple) select:focus,
+html[data-look="quiet"]:not(.mm-simple) textarea:focus {
+  border-color: var(--accent) !important;   /* a focused field still shows the accent */
+}
+
+/* ---- the phone's toast and the Security and Profile sheets' buttons ---- */
+html[data-look="quiet"]:not(.mm-simple) #toast { background: var(--text); color: var(--bg-dark); }   /* ink on paper: it stands out on every screen */
+html[data-look="quiet"]:not(.mm-simple) #security-sheet .sec-actions button:not(.go),
+html[data-look="quiet"]:not(.mm-simple) #profile-sheet .sec-actions button:not(.go) { background: var(--bg-card); border: 1px solid var(--border-strong); }   /* .go keeps its accent fill */

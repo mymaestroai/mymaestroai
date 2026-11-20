@@ -6,56 +6,82 @@
 <title>Agent Settings</title>
 <script src="/ui-looks.js"></script>
 <style>
+  :root {
+    --as-page: #1a1a2e; --as-field: #0f0f23; --as-tab: #222;
+    --as-text: #e0e0e0; --as-white: #fff; --as-on-color: #fff;
+    --as-dim-ddd: #ddd; --as-dim-ccc: #ccc; --as-dim-bbb: #bbb; --as-dim-aaa: #aaa;
+    --as-dim-999: #999; --as-dim-888: #888; --as-dim-777: #777; --as-dim-666: #666;
+    --as-border-1: #333; --as-border-2: #444; --as-line-1: #2a2a40; --as-line-2: #2a2a3a;
+    --as-accent: #4a9eff; --as-accent-hover: #3a8eef;
+    --as-error: #e74c3c; --as-error-strong: #c0392b; --as-error-tint: #3a1a1a;
+    --as-success: #4caf50; --as-success-tint: #1a3a1a;
+    --as-warning: #f5a623; --as-warning-2: #e67e22;
+    --as-btn: #2d2d44; --as-btn-hover: #3d3d54; --as-row-active: #1f1f33;
+    --as-overlay-3: rgba(255,255,255,0.03); --as-overlay-6: rgba(255,255,255,0.06); --as-overlay-8: rgba(255,255,255,0.08);
+  }
+  html[data-look]:not([data-look="engineering"]) {
+    --as-page: var(--bg-dark); --as-field: var(--bg-input); --as-tab: var(--bg-card);
+    --as-text: var(--text); --as-white: var(--text); --as-on-color: var(--on-color-text);
+    --as-dim-ddd: var(--text-dim); --as-dim-ccc: var(--text-dim); --as-dim-bbb: var(--text-dim); --as-dim-aaa: var(--text-dim);
+    --as-dim-999: var(--text-dim); --as-dim-888: var(--text-dim); --as-dim-777: var(--text-dim); --as-dim-666: var(--text-tertiary);
+    --as-border-1: var(--border-strong); --as-border-2: var(--border); --as-line-1: var(--border); --as-line-2: var(--border);
+    --as-accent: var(--accent); --as-accent-hover: var(--accent-hover);
+    --as-error: var(--error); --as-error-strong: var(--error-strong); --as-error-tint: color-mix(in srgb, var(--error) 12%, var(--bg-card));
+    --as-success: var(--success); --as-success-tint: color-mix(in srgb, var(--success) 12%, var(--bg-card));
+    --as-warning: var(--warning); --as-warning-2: var(--warning);
+    --as-btn: var(--bg-card); --as-btn-hover: color-mix(in srgb, var(--text) 8%, var(--bg-card)); --as-row-active: var(--accent-tint-10);
+    --as-overlay-3: color-mix(in srgb, var(--text) 3%, transparent); --as-overlay-6: color-mix(in srgb, var(--text) 6%, transparent); --as-overlay-8: color-mix(in srgb, var(--text) 8%, transparent);
+  }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    background: #1a1a2e; color: #e0e0e0; padding: 16px;
+    background: var(--as-page); color: var(--as-text); padding: 16px;
   }
-  h2 { margin-bottom: 12px; color: #fff; font-size: 18px; }
-  h3 { margin: 16px 0 8px; color: #aaa; font-size: 13px; text-transform: uppercase; letter-spacing: 1px; }
+  h2 { margin-bottom: 12px; color: var(--as-white); font-size: 18px; }
+  h3 { margin: 16px 0 8px; color: var(--as-dim-aaa); font-size: 13px; text-transform: uppercase; letter-spacing: 1px; }
 
   .section { margin-bottom: 16px; }
 
-  label { display: block; font-size: 13px; color: #aaa; margin-bottom: 4px; }
+  label { display: block; font-size: 13px; color: var(--as-dim-aaa); margin-bottom: 4px; }
 
   select, input[type="text"] {
-    width: 100%; padding: 8px 10px; border: 1px solid #333; border-radius: 6px;
-    background: #0f0f23; color: #e0e0e0; font-size: 14px; outline: none;
+    width: 100%; padding: 8px 10px; border: 1px solid var(--as-border-1); border-radius: 6px;
+    background: var(--as-field); color: var(--as-text); font-size: 14px; outline: none;
   }
-  select:focus, input:focus { border-color: #4a9eff; }
+  select:focus, input:focus { border-color: var(--as-accent); }
 
   select option.model-broken {
-    color: #666;
+    color: var(--as-dim-666);
   }
   select option.model-working {
-    color: #e0e0e0;
+    color: var(--as-text);
   }
   .health-status {
-    font-size: 11px; color: #888; margin-top: 4px;
+    font-size: 11px; color: var(--as-dim-888); margin-top: 4px;
   }
-  .health-status.loading { color: #4a9eff; }
-  .health-status.done { color: #4caf50; }
+  .health-status.loading { color: var(--as-accent); }
+  .health-status.done { color: var(--as-success); }
 
   textarea {
-    width: 100%; min-height: 200px; padding: 10px; border: 1px solid #333;
-    border-radius: 6px; background: #0f0f23; color: #e0e0e0; font-family: monospace;
+    width: 100%; min-height: 200px; padding: 10px; border: 1px solid var(--as-border-1);
+    border-radius: 6px; background: var(--as-field); color: var(--as-text); font-family: monospace;
     font-size: 13px; resize: vertical; outline: none; line-height: 1.5;
   }
-  textarea:focus { border-color: #4a9eff; }
+  textarea:focus { border-color: var(--as-accent); }
 
   /* Shared folders picker (Tool policy section) */
-  .folder-picker { display: flex; flex-wrap: wrap; gap: 8px 24px; margin-bottom: 12px; padding: 10px; border: 1px solid #333; border-radius: 6px; background: #0f0f23; }
+  .folder-picker { display: flex; flex-wrap: wrap; gap: 8px 24px; margin-bottom: 12px; padding: 10px; border: 1px solid var(--as-border-1); border-radius: 6px; background: var(--as-field); }
   .folder-group { min-width: 180px; }
-  .folder-group-title { color: #888; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; margin-bottom: 4px; }
-  .folder-item { display: block; font-size: 13px; color: #ddd; margin: 2px 0; cursor: pointer; white-space: nowrap; }
+  .folder-group-title { color: var(--as-dim-888); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; margin-bottom: 4px; }
+  .folder-item { display: block; font-size: 13px; color: var(--as-dim-ddd); margin: 2px 0; cursor: pointer; white-space: nowrap; }
   .folder-item input { margin-right: 6px; vertical-align: middle; }
 
   .tabs { display: flex; gap: 2px; margin-bottom: 12px; }
   .tab {
-    padding: 6px 14px; background: #222; border: none; color: #888;
+    padding: 6px 14px; background: var(--as-tab); border: none; color: var(--as-dim-888);
     cursor: pointer; border-radius: 6px 6px 0 0; font-size: 13px;
   }
-  .tab.active { background: #0f0f23; color: #fff; }
+  .tab.active { background: var(--as-field); color: var(--as-white); }
   .tab-panel { display: none; }
   .tab-panel.active { display: block; }
 
@@ -63,23 +89,23 @@
     padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer;
     font-size: 13px; font-weight: 500;
   }
-  .btn-primary { background: #4a9eff; color: #fff; }
-  .btn-primary:hover { background: #3a8eef; }
-  .btn-danger { background: #e74c3c; color: #fff; }
-  .btn-danger:hover { background: #c0392b; }
-  .btn-test { background: #2d2d44; color: #e0e0e0; border: 1px solid #444; white-space: nowrap; }
-  .btn-test:hover { background: #3d3d54; border-color: #4a9eff; }
+  .btn-primary { background: var(--as-accent); color: var(--as-on-color); }
+  .btn-primary:hover { background: var(--as-accent-hover); }
+  .btn-danger { background: var(--as-error); color: var(--as-on-color); }
+  .btn-danger:hover { background: var(--as-error-strong); }
+  .btn-test { background: var(--as-btn); color: var(--as-text); border: 1px solid var(--as-border-2); white-space: nowrap; }
+  .btn-test:hover { background: var(--as-btn-hover); border-color: var(--as-accent); }
   .btn-test.testing { opacity: 0.6; cursor: wait; }
-  .btn-test.pass { background: #1a3a1a; color: #4caf50; border-color: #4caf50; }
-  .btn-test.fail { background: #3a1a1a; color: #e74c3c; border-color: #e74c3c; }
+  .btn-test.pass { background: var(--as-success-tint); color: var(--as-success); border-color: var(--as-success); }
+  .btn-test.fail { background: var(--as-error-tint); color: var(--as-error); border-color: var(--as-error); }
   .btn-row { display: flex; gap: 8px; margin-top: 12px; }
 
   .status {
     font-size: 12px; padding: 4px 8px; border-radius: 4px;
     margin-top: 8px; display: none;
   }
-  .status.success { display: block; background: #1a3a1a; color: #4caf50; }
-  .status.error { display: block; background: #3a1a1a; color: #e74c3c; }
+  .status.success { display: block; background: var(--as-success-tint); color: var(--as-success); }
+  .status.error { display: block; background: var(--as-error-tint); color: var(--as-error); }
 
   .model-filter {
     margin-bottom: 8px;
@@ -89,14 +115,14 @@
   .lb-block { margin-top: 14px; min-width: 0; }
   .lb-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .lb-row select { width: auto; max-width: 100%; min-width: 0; flex: 1 1 200px; }
-  .lb-text { color: #999; display: block; margin-top: 4px; overflow-wrap: anywhere; word-break: break-word; }
-  .lb-title { margin-top: 12px; font-size: 13px; color: #aaa; }
-  .lb-log { margin-top: 4px; font-size: 12px; color: #ccc; }
-  .lb-entry { padding: 6px 0; border-top: 1px solid #2a2a40; overflow-wrap: anywhere; word-break: break-word; }
+  .lb-text { color: var(--as-dim-999); display: block; margin-top: 4px; overflow-wrap: anywhere; word-break: break-word; }
+  .lb-title { margin-top: 12px; font-size: 13px; color: var(--as-dim-aaa); }
+  .lb-log { margin-top: 4px; font-size: 12px; color: var(--as-dim-ccc); }
+  .lb-entry { padding: 6px 0; border-top: 1px solid var(--as-line-1); overflow-wrap: anywhere; word-break: break-word; }
   .lb-entry:first-child { border-top: none; }
-  .lb-when { color: #aaa; }
-  .lb-path, .lb-cmd { font-family: monospace; font-size: 11px; color: #bbb; }
-  .lb-empty { color: #888; }
+  .lb-when { color: var(--as-dim-aaa); }
+  .lb-path, .lb-cmd { font-family: monospace; font-size: 11px; color: var(--as-dim-bbb); }
+  .lb-empty { color: var(--as-dim-888); }
 </style>
 </head>
 <body>
@@ -109,7 +135,7 @@
     <input type="text" id="agent-slug" placeholder="e.g. fraud-worker" style="font-family:monospace;">
     <button class="btn btn-primary" onclick="renameSlug()" style="white-space:nowrap;">Rename</button>
   </div>
-  <small style="color:#777;">Lowercase, hyphens OK.  Renames workspace folder, conversation file, and config key.  Requires page reload.</small>
+  <small style="color:var(--as-dim-777);">Lowercase, hyphens OK.  Renames workspace folder, conversation file, and config key.  Requires page reload.</small>
   <div id="slug-status" class="status"></div>
 </div>
 
@@ -149,30 +175,30 @@
 
 <div class="section" id="owner-section">
   <label>Owner &amp; sharing</label>
-  <small style="color:#999;display:block;margin-bottom:8px;">Admins see every agent. <b>Infrastructure</b> agents (no owner) and agents owned by an admin are admin-only. An agent owned by a member is seen by that member and every admin; sharing lets other members use it too.</small>
+  <small style="color:var(--as-dim-999);display:block;margin-bottom:8px;">Admins see every agent. <b>Infrastructure</b> agents (no owner) and agents owned by an admin are admin-only. An agent owned by a member is seen by that member and every admin; sharing lets other members use it too.</small>
   <div style="display:flex;gap:8px;align-items:center;">
-    <span style="font-size:13px;color:#aaa;white-space:nowrap;">Owner</span>
+    <span style="font-size:13px;color:var(--as-dim-aaa);white-space:nowrap;">Owner</span>
     <select id="agent-owner" onchange="saveOwner()" style="flex:1;"><option value="">Infrastructure (no owner)</option></select>
   </div>
   <div id="owner-status" class="status"></div>
   <div style="margin-top:10px;">
-    <span style="font-size:13px;color:#aaa;">Shared with</span>
-    <div id="agent-shared" style="display:flex;flex-direction:column;gap:6px;margin-top:6px;"><small style="color:#777;">Loading users…</small></div>
+    <span style="font-size:13px;color:var(--as-dim-aaa);">Shared with</span>
+    <div id="agent-shared" style="display:flex;flex-direction:column;gap:6px;margin-top:6px;"><small style="color:var(--as-dim-777);">Loading users…</small></div>
   </div>
   <div id="shared-status" class="status"></div>
 </div>
 
 <div class="section" id="policy-section">
   <label>Tool policy</label>
-  <small style="color:#999;display:block;margin-bottom:8px;">Every tool call is classed by what it does and decided per agent: <b>allow</b> runs it, <b>ask</b> pauses it on an approval card (desktop, mobile and push) until you answer, <b>deny</b> refuses it with a note the agent can act on. Defaults come from the role (<span id="policy-role">…</span>); set an override here to change one class for this agent.</small>
+  <small style="color:var(--as-dim-999);display:block;margin-bottom:8px;">Every tool call is classed by what it does and decided per agent: <b>allow</b> runs it, <b>ask</b> pauses it on an approval card (desktop, mobile and push) until you answer, <b>deny</b> refuses it with a note the agent can act on. Defaults come from the role (<span id="policy-role">…</span>); set an override here to change one class for this agent.</small>
   <table id="policy-table" style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:10px;">
-    <thead><tr style="color:#888;text-align:left;"><th style="padding:4px 6px;font-weight:500;">Action class</th><th style="padding:4px 6px;font-weight:500;">Effective</th><th style="padding:4px 6px;font-weight:500;">Role default</th><th style="padding:4px 6px;font-weight:500;">Override</th></tr></thead>
+    <thead><tr style="color:var(--as-dim-888);text-align:left;"><th style="padding:4px 6px;font-weight:500;">Action class</th><th style="padding:4px 6px;font-weight:500;">Effective</th><th style="padding:4px 6px;font-weight:500;">Role default</th><th style="padding:4px 6px;font-weight:500;">Override</th></tr></thead>
     <tbody id="policy-rows"></tbody>
   </table>
   <label>Root (sudo)</label>
-  <small style="color:#999;display:block;margin-bottom:6px;">Commands run as root are reserved for the lead agent. You can hand this agent root for a limited time; every root command it runs is logged, and a card is shown if "root commands" is ticked under Settings → Approval cards.</small>
+  <small style="color:var(--as-dim-999);display:block;margin-bottom:6px;">Commands run as root are reserved for the lead agent. You can hand this agent root for a limited time; every root command it runs is logged, and a card is shown if "root commands" is ticked under Settings → Approval cards.</small>
   <div id="root-grant-box" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
-    <span id="root-grant-status" style="font-size:13px;color:#aaa;">Loading…</span>
+    <span id="root-grant-status" style="font-size:13px;color:var(--as-dim-aaa);">Loading…</span>
     <select id="root-grant-minutes" style="padding:4px 6px;font-size:13px;display:none;">
       <option value="15">15 minutes</option><option value="60" selected>1 hour</option><option value="240">4 hours</option><option value="1440">24 hours</option>
     </select>
@@ -181,11 +207,11 @@
   </div>
   <div id="root-grant-msg" class="status"></div>
   <label>Shared folders</label>
-  <small style="color:#999;display:block;margin-bottom:6px;">A sandboxed agent sees exactly these folders (plus its own workspace and Files folder); changing them rebuilds its container on its next turn.</small>
-  <div id="policy-folders" class="folder-picker"><span style="color:#777;">Loading…</span></div>
+  <small style="color:var(--as-dim-999);display:block;margin-bottom:6px;">A sandboxed agent sees exactly these folders (plus its own workspace and Files folder); changing them rebuilds its container on its next turn.</small>
+  <div id="policy-folders" class="folder-picker"><span style="color:var(--as-dim-777);">Loading…</span></div>
   <label>Other folders (one path per line, <code>~</code> allowed)</label>
   <textarea id="policy-roots" rows="3" style="min-height:64px;" placeholder="~/projects/site&#10;/srv/data/reports"></textarea>
-  <small id="policy-roots-hint" style="color:#777;display:block;margin-top:4px;"></small>
+  <small id="policy-roots-hint" style="color:var(--as-dim-777);display:block;margin-top:4px;"></small>
   <div class="btn-row" style="margin-top:8px;">
     <button class="btn btn-primary" onclick="savePolicy()">Save policy</button>
     <button class="btn btn-test" onclick="resetPolicy()" title="Remove every override and extra folder for this agent">Reset to role defaults</button>
@@ -195,8 +221,8 @@
 
 <div class="section" id="records-section">
   <label>Records</label>
-  <small style="color:#999;display:block;margin-bottom:8px;">Records are loaded in full into this agent's context on every turn: they are its source of truth (standing facts, lists, rules), unlike memory notes which are searched. Keep them small: the total cap is <span id="records-cap">…</span>.</small>
-  <div id="records-total" style="font-size:12px;color:#888;margin-bottom:6px;"></div>
+  <small style="color:var(--as-dim-999);display:block;margin-bottom:8px;">Records are loaded in full into this agent's context on every turn: they are its source of truth (standing facts, lists, rules), unlike memory notes which are searched. Keep them small: the total cap is <span id="records-cap">…</span>.</small>
+  <div id="records-total" style="font-size:12px;color:var(--as-dim-888);margin-bottom:6px;"></div>
   <div id="records-list" style="margin-bottom:8px;font-size:13px;"></div>
   <div class="btn-row" style="margin-bottom:8px;">
     <button class="btn btn-test" onclick="newRecord()">+ New record</button>
@@ -216,7 +242,7 @@
 
 <div class="section" id="voice-section">
   <label>Voice</label>
-  <small style="color:#999;display:block;margin-bottom:8px;">Free local engines are the default and nothing leaves this computer. A cloud engine is optional: it costs money per use and falls back to the free local engine if it fails.</small>
+  <small style="color:var(--as-dim-999);display:block;margin-bottom:8px;">Free local engines are the default and nothing leaves this computer. A cloud engine is optional: it costs money per use and falls back to the free local engine if it fails.</small>
   <div id="voice-kept-warning" class="status error" style="display:none;margin-bottom:8px;"></div>
   <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
     <label for="voice-stt" style="margin:0;">Speech recognition</label>
@@ -231,13 +257,13 @@
     <select id="voice-cloud-select" onchange="saveAgentVoice()" style="width:auto;"></select>
     <input type="text" id="voice-cloud-id" placeholder="ElevenLabs voice ID" maxlength="40" onchange="saveAgentVoice()" style="width:220px;display:none;">
   </div>
-  <small id="voice-cloud-hint" style="color:#999;display:none;margin-bottom:6px;">Find the voice ID in your ElevenLabs account under Voices (the ID is shown on the voice's page).</small>
+  <small id="voice-cloud-hint" style="color:var(--as-dim-999);display:none;margin-bottom:6px;">Find the voice ID in your ElevenLabs account under Voices (the ID is shown on the voice's page).</small>
   <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
     <label for="voice-select" style="margin:0;">Local voice (also used if the cloud voice fails)</label>
     <select id="voice-select" onchange="saveAgentVoice()" style="width:auto;"><option value="">Hub default</option></select>
     <button class="btn btn-test" id="voice-sample-btn" type="button" onclick="playAgentVoiceSample()">Play sample</button>
   </div>
-  <small id="voice-keys-line" style="color:#999;display:block;margin-top:6px;"></small>
+  <small id="voice-keys-line" style="color:var(--as-dim-999);display:block;margin-top:6px;"></small>
   <div id="voice-status" class="status"></div>
   <div id="voice-defaults-row" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:12px;">
     <label for="voice-defaults" style="margin:0;">Voice defaults</label>
@@ -265,22 +291,22 @@
       <input type="range" id="vd-speed" min="0.75" max="1.5" step="0.05" oninput="document.getElementById('vd-speed-val').textContent = Number(this.value).toFixed(2) + 'x'" onchange="saveVoiceDefaults()" style="width:180px;"> <span id="vd-speed-val">1.00x</span>
     </div>
   </div>
-  <small style="color:#999;display:block;margin-top:4px;">Devices follow these unless the person changed that setting on that device.</small>
+  <small style="color:var(--as-dim-999);display:block;margin-top:4px;">Devices follow these unless the person changed that setting on that device.</small>
   <div id="voice-defaults-status" class="status"></div>
 </div>
 
 <div class="section" id="recordings-section">
   <label>Call recordings</label>
-  <div id="rec-owner-note" style="display:none;color:#999;font-size:13px;">Only the owner of this Maestro can change call recordings.</div>
+  <div id="rec-owner-note" style="display:none;color:var(--as-dim-999);font-size:13px;">Only the owner of this Maestro can change call recordings.</div>
   <div id="rec-controls" style="display:none;">
   <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
     <label for="rec-keep" style="margin:0;display:flex;align-items:center;gap:8px;cursor:pointer;"><input type="checkbox" id="rec-keep" onchange="saveRecordings()" style="width:20px;height:20px;"> Keep call recordings</label>
   </div>
-  <small style="color:#999;display:block;margin:4px 0 8px;">Each call with this agent is recorded losslessly on this computer, encrypted. The agent can say a short line when a call starts (see Announce recording), and the call screen shows Recording.</small>
-  <div id="rec-cloud-warning" style="display:none;margin-bottom:8px;font-size:12px;padding:4px 8px;border-radius:4px;background:#3a1a1a;color:#e74c3c;">Recorded calls only start with speech recognition on this computer. Change the agent's speech recognition above.</div>
+  <small style="color:var(--as-dim-999);display:block;margin:4px 0 8px;">Each call with this agent is recorded losslessly on this computer, encrypted. The agent can say a short line when a call starts (see Announce recording), and the call screen shows Recording.</small>
+  <div id="rec-cloud-warning" style="display:none;margin-bottom:8px;font-size:12px;padding:4px 8px;border-radius:4px;background:var(--as-error-tint);color:var(--as-error);">Recorded calls only start with speech recognition on this computer. Change the agent's speech recognition above.</div>
   <label style="margin-top:8px;">Who can download</label>
-  <div id="rec-allowed" onchange="saveRecordings()" style="display:flex;flex-direction:column;gap:6px;padding:10px;border:1px solid #333;border-radius:6px;background:#0f0f23;"><span style="color:#888;font-size:13px;">Loading…</span></div>
-  <small style="color:#999;display:block;margin:4px 0 8px;">Only the people ticked here can play, download or delete these recordings. Agents never can.</small>
+  <div id="rec-allowed" onchange="saveRecordings()" style="display:flex;flex-direction:column;gap:6px;padding:10px;border:1px solid var(--as-border-1);border-radius:6px;background:var(--as-field);"><span style="color:var(--as-dim-888);font-size:13px;">Loading…</span></div>
+  <small style="color:var(--as-dim-999);display:block;margin:4px 0 8px;">Only the people ticked here can play, download or delete these recordings. Agents never can.</small>
   <label for="rec-consent">Consent line</label>
   <input type="text" id="rec-consent" maxlength="300" placeholder="This conversation is being recorded." onchange="saveRecordings()">
   <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px;">
@@ -291,7 +317,7 @@
       <option value="never">Never</option>
     </select>
   </div>
-  <small style="color:#999;display:block;margin:4px 0 8px;">The line is spoken when a recorded call starts. The Recording badge shows on every call.</small>
+  <small style="color:var(--as-dim-999);display:block;margin:4px 0 8px;">The line is spoken when a recorded call starts. The Recording badge shows on every call.</small>
   <div style="margin-top:10px;"><label for="rec-replies" style="margin:0;display:flex;align-items:center;gap:8px;cursor:pointer;"><input type="checkbox" id="rec-replies" onchange="saveRecordings()" style="width:20px;height:20px;"> Also keep the agent's voice</label></div>
   <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px;">
     <label for="rec-mic" style="margin:0;">Microphone for recordings</label>
@@ -300,14 +326,14 @@
       <option value="unprocessed">Unprocessed (best for a future voice model; use a headset or a quiet room)</option>
     </select>
   </div>
-  <small id="rec-storage" style="color:#999;display:none;margin-top:8px;"></small>
+  <small id="rec-storage" style="color:var(--as-dim-999);display:none;margin-top:8px;"></small>
   <div id="recordings-status" class="status"></div>
   </div>
 </div>
 
 <div class="section" id="compaction-section">
   <label>Context compression</label>
-  <small style="color:#999;display:block;margin-bottom:8px;">When the context window fills up past the threshold, the agent writes its own carry-forward (the record <code>working-brief.md</code>); the provider never summarises on its behalf.<br>Dry run = the brief only, the session goes on. On = the brief, then a fresh session seeded from Records + recent turns + recall.</small>
+  <small style="color:var(--as-dim-999);display:block;margin-bottom:8px;">When the context window fills up past the threshold, the agent writes its own carry-forward (the record <code>working-brief.md</code>); the provider never summarises on its behalf.<br>Dry run = the brief only, the session goes on. On = the brief, then a fresh session seeded from Records + recent turns + recall.</small>
   <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:8px;">
     <div style="flex:1;min-width:220px;">
       <label for="compaction-mode" style="font-size:12px;">Mode</label>
@@ -317,7 +343,7 @@
         <option value="on">On (brief, then fresh session)</option>
         <option value="assisted">Assisted (small / local models: the hub feeds the transcript in slices sized to the window; the agent extracts into its Records from each slice, then writes the brief on a fixed template; then a fresh start)</option>
       </select>
-      <div id="compaction-local-hint" style="display:none;font-size:12px;color:#f5a623;margin-top:4px;">Local model: assisted mode at 60% is the default.</div>
+      <div id="compaction-local-hint" style="display:none;font-size:12px;color:var(--as-warning);margin-top:4px;">Local model: assisted mode at 60% is the default.</div>
     </div>
     <div style="flex:1;min-width:220px;">
       <label for="compaction-at" style="font-size:12px;">Threshold</label>
@@ -336,12 +362,12 @@
     <div style="flex:1;min-width:220px;">
       <label for="compaction-window" style="font-size:12px;">Context window (tokens)</label>
       <input type="number" id="compaction-window" min="2048" step="1000" placeholder="detect" style="width:100%;box-sizing:border-box;">
-      <div style="font-size:11px;color:#777;margin-top:4px;">Leave blank to detect (LM Studio reports the loaded model's window; cloud models use a table)</div>
+      <div style="font-size:11px;color:var(--as-dim-777);margin-top:4px;">Leave blank to detect (LM Studio reports the loaded model's window; cloud models use a table)</div>
     </div>
   </div>
-  <div id="compaction-now" style="font-size:13px;color:#ccc;margin-bottom:4px;">Context now: …</div>
-  <div id="compaction-last" style="font-size:13px;color:#ccc;margin-bottom:4px;">Last compression: …</div>
-  <div id="compaction-running" style="display:none;font-size:13px;color:#f5a623;margin-bottom:4px;">⚙ Compression running… the agent is writing its working brief.</div>
+  <div id="compaction-now" style="font-size:13px;color:var(--as-dim-ccc);margin-bottom:4px;">Context now: …</div>
+  <div id="compaction-last" style="font-size:13px;color:var(--as-dim-ccc);margin-bottom:4px;">Last compression: …</div>
+  <div id="compaction-running" style="display:none;font-size:13px;color:var(--as-warning);margin-bottom:4px;">⚙ Compression running… the agent is writing its working brief.</div>
   <div class="btn-row" style="margin-top:8px;">
     <button class="btn btn-primary" onclick="saveCompaction()">Save</button>
     <button class="btn btn-test" id="compaction-run-btn" onclick="compressNow()">⚙ Compress now</button>
@@ -370,9 +396,9 @@
     <button class="btn btn-test" id="test-btn" onclick="testModel()" title="Test if this model responds">⚡ Test</button>
   </div>
   <div id="model-status" class="status"></div>
-  <div id="model-offer" style="display:none;margin-top:8px;padding:10px;border:1px solid #444;border-radius:6px;">
+  <div id="model-offer" style="display:none;margin-top:8px;padding:10px;border:1px solid var(--as-border-2);border-radius:6px;">
     <div id="model-offer-title" style="font-weight:600;"></div>
-    <div id="model-offer-why" style="color:#999;font-size:0.85rem;margin:4px 0 8px;"></div>
+    <div id="model-offer-why" style="color:var(--as-dim-999);font-size:0.85rem;margin:4px 0 8px;"></div>
     <button class="btn" id="model-offer-switch" onclick="switchToOffer()">Switch</button>
     <button class="btn" id="model-offer-decline" onclick="declineOffer()">Not now</button>
   </div>
@@ -386,7 +412,7 @@
     <input type="checkbox" id="auto-model" onchange="saveAutoModel()" style="width:auto;">
     <label for="auto-model" style="margin:0;cursor:pointer;">Autoselect model per prompt</label>
   </div>
-  <small id="auto-model-help" style="color:#999;display:block;margin-top:4px;">When on, a classifier sorts each message into one of six kinds of work and the turn runs on the model the hub's routing table names for that kind. The model above is the fallback; the minimum model and allowed list below still apply. The classifier and the table are set on the Settings page.</small>
+  <small id="auto-model-help" style="color:var(--as-dim-999);display:block;margin-top:4px;">When on, a classifier sorts each message into one of six kinds of work and the turn runs on the model the hub's routing table names for that kind. The model above is the fallback; the minimum model and allowed list below still apply. The classifier and the table are set on the Settings page.</small>
   <div id="auto-model-status" class="status"></div>
   <div style="display:flex;align-items:center;gap:8px;margin-top:14px;">
     <label for="sandbox-mode" style="margin:0;">Sandbox</label>
@@ -396,7 +422,7 @@
       <option value="off">Off: runs on the host</option>
     </select>
   </div>
-  <small id="sandbox-help" style="color:#999;display:block;margin-top:4px;">In a sandbox the agent's shell and file tools run in a container that holds only this agent's folders: no hub data, no keys, no other agents. Memory, Records, consultations and the policy gate stay in the hub. Needs Docker and the sandbox image (Settings page). Without them a sandboxed agent gets no shell rather than running on the host.</small>
+  <small id="sandbox-help" style="color:var(--as-dim-999);display:block;margin-top:4px;">In a sandbox the agent's shell and file tools run in a container that holds only this agent's folders: no hub data, no keys, no other agents. Memory, Records, consultations and the policy gate stay in the hub. Needs Docker and the sandbox image (Settings page). Without them a sandboxed agent gets no shell rather than running on the host.</small>
   <div id="sandbox-status" class="status"></div>
   <div id="lockbox-block" class="lb-block" style="display:none;">
     <div class="lb-row">
@@ -430,7 +456,7 @@
       <option value="max">Max: the deepest (select models)</option>
     </select>
   </div>
-  <small id="effort-help" style="color:#999;display:block;margin-top:4px;">How hard the model thinks before answering. Higher is slower and uses more of the subscription or API budget. The hub translates the level for each provider (Claude takes all of them; OpenAI tops out at extra high; Gemini at high; OpenRouter models that take a reasoning level, marked 🧠 in the OpenRouter list, at high); local models ignore it. Also adjustable from the chat header by admins; members cannot change it.</small>
+  <small id="effort-help" style="color:var(--as-dim-999);display:block;margin-top:4px;">How hard the model thinks before answering. Higher is slower and uses more of the subscription or API budget. The hub translates the level for each provider (Claude takes all of them; OpenAI tops out at extra high; Gemini at high; OpenRouter models that take a reasoning level, marked 🧠 in the OpenRouter list, at high); local models ignore it. Also adjustable from the chat header by admins; members cannot change it.</small>
   <div id="effort-status" class="status"></div>
   <div id="tier-row" style="display:none;align-items:center;gap:8px;margin-top:14px;flex-wrap:wrap;">
     <label for="tier-mode" style="margin:0;">Speed and price</label>
@@ -438,7 +464,7 @@
       <option value="standard">Standard</option>
     </select>
   </div>
-  <small id="tier-help" style="color:#999;display:none;margin-top:4px;">Fast answers sooner for about twice the price; Economy costs half but an answer can take minutes. If the provider cannot offer the chosen speed, the answer runs on Standard and says so. Admins only; members' turns always run on Standard. The cost record follows the tier the provider reports.</small>
+  <small id="tier-help" style="color:var(--as-dim-999);display:none;margin-top:4px;">Fast answers sooner for about twice the price; Economy costs half but an answer can take minutes. If the provider cannot offer the chosen speed, the answer runs on Standard and says so. Admins only; members' turns always run on Standard. The cost record follows the tier the provider reports.</small>
   <div id="tier-status" class="status"></div>
   <div id="team-guidance-row" style="display:flex;align-items:center;gap:8px;margin-top:14px;">
     <label for="team-guidance-mode" style="margin:0;">Team guidance</label>
@@ -448,7 +474,7 @@
       <option value="off">Off</option>
     </select>
   </div>
-  <small id="team-guidance-help" style="color:#999;display:block;margin-top:4px;">The hub's advice on delegating, matching models to jobs and getting second opinions, added to this agent's instructions.</small>
+  <small id="team-guidance-help" style="color:var(--as-dim-999);display:block;margin-top:4px;">The hub's advice on delegating, matching models to jobs and getting second opinions, added to this agent's instructions.</small>
   <div id="team-guidance-status" class="status"></div>
   <div id="team-role-row" style="display:flex;align-items:center;gap:8px;margin-top:14px;">
     <label for="team-role" style="margin:0;">Role in the team</label>
@@ -458,14 +484,14 @@
       <option value="challenger">Challenger</option>
     </select>
   </div>
-  <small id="team-role-help" style="color:#999;display:block;margin-top:4px;">A worker or challenger is listed to the other agents as a platform worker they can hand jobs to; a challenger is marked as the one to ask for adversarial reviews.</small>
+  <small id="team-role-help" style="color:var(--as-dim-999);display:block;margin-top:4px;">A worker or challenger is listed to the other agents as a platform worker they can hand jobs to; a challenger is marked as the one to ask for adversarial reviews.</small>
   <div id="team-role-status" class="status"></div>
   <div id="build-partner-row" style="display:flex;align-items:center;gap:8px;margin-top:14px;">
     <label for="build-partner" style="margin:0;">Build partner</label>
     <input id="build-partner" list="build-partner-list" placeholder="none" onchange="saveBuildPartner()" style="width:auto;min-width:10em;" autocomplete="off">
     <datalist id="build-partner-list"></datalist>
   </div>
-  <small id="build-partner-help" style="color:#999;display:block;margin-top:4px;">The agent that takes this one's long work (development, production, long research) with hand_off, so this one stays free to talk with you. Leave it empty for none.</small>
+  <small id="build-partner-help" style="color:var(--as-dim-999);display:block;margin-top:4px;">The agent that takes this one's long work (development, production, long research) with hand_off, so this one stays free to talk with you. Leave it empty for none.</small>
   <div id="build-partner-status" class="status"></div>
   <div id="call-display-row" style="display:flex;align-items:center;gap:8px;margin-top:14px;flex-wrap:wrap;">
     <label for="call-display" style="margin:0;">Default call display</label>
@@ -474,7 +500,7 @@
       <option value="orb">Orb</option>
     </select>
   </div>
-  <small id="call-display-help" style="color:#999;display:block;margin-top:4px;">What a voice call with this agent shows on the screen: nothing, the built-in glowing orb, or an installed character. This is only the starting point: each person's own choice on their device, made in the chat's voice panel, always wins.</small>
+  <small id="call-display-help" style="color:var(--as-dim-999);display:block;margin-top:4px;">What a voice call with this agent shows on the screen: nothing, the built-in glowing orb, or an installed character. This is only the starting point: each person's own choice on their device, made in the chat's voice panel, always wins.</small>
   <div id="call-display-status" class="status"></div>
   <div id="tools-row" style="display:flex;align-items:center;gap:8px;margin-top:14px;">
     <label for="tools-mode" style="margin:0;">Tools</label>
@@ -484,15 +510,15 @@
       <option value="client">Client tools: the Claude Code / Codex client's own built-ins</option>
     </select>
   </div>
-  <small id="tools-help" style="color:#999;display:block;margin-top:4px;">Only for agents on a Claude Code or Codex client model; gateway and local models always use the hub's tools. With hub tools the client's own shell and file tools are switched off and the hub's versions take their place: same names and parameters, every call through the policy gate, PDFs and images readable, and in a sandbox the hands work inside the container while the client stays on the host, so no sign-in ever enters the box. Switching changes nothing about the agent's session, memory or Records.</small>
+  <small id="tools-help" style="color:var(--as-dim-999);display:block;margin-top:4px;">Only for agents on a Claude Code or Codex client model; gateway and local models always use the hub's tools. With hub tools the client's own shell and file tools are switched off and the hub's versions take their place: same names and parameters, every call through the policy gate, PDFs and images readable, and in a sandbox the hands work inside the container while the client stays on the host, so no sign-in ever enters the box. Switching changes nothing about the agent's session, memory or Records.</small>
   <div id="tools-status" class="status"></div>
   <div id="sandbox-status" class="status"></div>
-  <div id="auto-model-allowed" style="display:none;margin-top:10px;padding:10px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:6px;">
-    <small style="color:#aaa;display:block;margin-bottom:8px;">Allowed models for auto-selection:</small>
+  <div id="auto-model-allowed" style="display:none;margin-top:10px;padding:10px;background:var(--as-overlay-3);border:1px solid var(--as-overlay-8);border-radius:6px;">
+    <small style="color:var(--as-dim-aaa);display:block;margin-bottom:8px;">Allowed models for auto-selection:</small>
     <div id="auto-model-checkboxes" style="display:flex;flex-direction:column;gap:6px;"></div>
     <div style="margin-top:8px;display:flex;gap:8px;">
       <button class="btn btn-primary" onclick="saveAllowedModels()" style="font-size:12px;">Save</button>
-      <button class="btn" onclick="selectAllModels()" style="font-size:12px;background:rgba(255,255,255,0.06);">All</button>
+      <button class="btn" onclick="selectAllModels()" style="font-size:12px;background:var(--as-overlay-6);">All</button>
     </div>
     <div id="allowed-models-status" class="status"></div>
   </div>
@@ -502,15 +528,15 @@
   <label>Context & Output Limits</label>
   <div style="display:flex;gap:12px;align-items:center;">
     <div style="flex:1;">
-      <small style="color:#999;">Max Context Messages</small>
+      <small style="color:var(--as-dim-999);">Max Context Messages</small>
       <input type="number" id="max-context-messages" placeholder="Global default" min="1" max="200" style="width:100%;">
     </div>
     <div style="flex:1;">
-      <small style="color:#999;">Max Output Tokens</small>
+      <small style="color:var(--as-dim-999);">Max Output Tokens</small>
       <input type="number" id="max-output-tokens" placeholder="Global default" min="100" max="128000" style="width:100%;">
     </div>
     <div style="flex:1;">
-      <small style="color:#999;" title="Claude SDK agents only. Tokens the agent may use before its session compacts at 80%. Blank = the model's full window (200K, or 1M for [1m] models). Minimum 125K. Applies from the next message.">Context Budget (tokens)</small>
+      <small style="color:var(--as-dim-999);" title="Claude SDK agents only. Tokens the agent may use before its session compacts at 80%. Blank = the model's full window (200K, or 1M for [1m] models). Minimum 125K. Applies from the next message.">Context Budget (tokens)</small>
       <input type="number" id="context-budget" placeholder="Model's full window" min="125000" max="1000000" step="1000" style="width:100%;">
     </div>
     <button class="btn btn-primary" onclick="saveLimits()" style="white-space:nowrap;align-self:flex-end;">Save</button>
@@ -676,8 +702,8 @@
     const box = document.getElementById('agent-shared');
     try {
       const r = await fetch('/api/users', { credentials: 'include' });
-      if (r.status === 401 || r.status === 403) { box.innerHTML = '<small style="color:#777;">Admin only.</small>'; sel.disabled = true; return; }
-      if (r.status === 404) { box.innerHTML = '<small style="color:#777;">This hub has no user accounts (older server).</small>'; sel.disabled = true; return; }
+      if (r.status === 401 || r.status === 403) { box.innerHTML = '<small style="color:var(--as-dim-777);">Admin only.</small>'; sel.disabled = true; return; }
+      if (r.status === 404) { box.innerHTML = '<small style="color:var(--as-dim-777);">This hub has no user accounts (older server).</small>'; sel.disabled = true; return; }
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       hubUsers = (await r.json()).users || [];
     } catch (e) {
@@ -697,12 +723,12 @@
   function renderShared() {
     const box = document.getElementById('agent-shared');
     const members = hubUsers.filter(u => u.role === 'member');
-    if (!members.length) { box.innerHTML = '<small style="color:#777;">No member accounts yet. Invite members from the Users page.</small>'; return; }
+    if (!members.length) { box.innerHTML = '<small style="color:var(--as-dim-777);">No member accounts yet. Invite members from the Users page.</small>'; return; }
     box.innerHTML = members.map(u => {
       const owner = agentOwner === u.id;
-      return `<label style="display:flex;align-items:center;gap:8px;margin:0;cursor:pointer;color:#e0e0e0;font-size:13px;">
+      return `<label style="display:flex;align-items:center;gap:8px;margin:0;cursor:pointer;color:var(--as-text);font-size:13px;">
         <input type="checkbox" class="shared-user" value="${escapeHtml(u.id)}" ${agentShared.includes(u.id) ? 'checked' : ''} ${owner ? 'disabled' : ''} onchange="saveShared()" style="width:16px;height:16px;">
-        <span>${escapeHtml(u.name)} <span style="color:#777;">${escapeHtml(u.login || '')}${u.disabled ? ', disabled' : ''}${owner ? ', the owner' : ''}</span></span>
+        <span>${escapeHtml(u.name)} <span style="color:var(--as-dim-777);">${escapeHtml(u.login || '')}${u.disabled ? ', disabled' : ''}${owner ? ', the owner' : ''}</span></span>
       </label>`;
     }).join('');
   }
@@ -777,13 +803,13 @@
     member: { web: 'deny', read_outside: 'deny', write_outside: 'deny', send: 'deny', admin: 'deny', destroy: 'deny', money: 'deny' },
   };
   const ROLE_LABELS = { member: 'member-owned: nothing beyond its own folders unless an admin grants it (Settings, Users page, or here)', worker: 'worker: nothing leaves the box, nothing outside its own folders', head: 'team head: asks before sending or writing outside, never destroys', lead: 'lead: asks for everything decided, including destructive actions', wallet: 'wallet agent: the wallet firewall governs money, otherwise a worker' };
-  const DECISION_COLORS = { allow: '#4caf50', ask: '#f5a623', deny: '#e74c3c', firewall: '#4a9eff' };
+  const DECISION_COLORS = { allow: 'var(--as-success)', ask: 'var(--as-warning)', deny: 'var(--as-error)', firewall: 'var(--as-accent)' };
 
   async function loadPolicy() {
     const rows = document.getElementById('policy-rows');
     try {
       const r = await fetch(`/api/policy/${encodeURIComponent(agentName)}`, { credentials: 'include' });
-      if (r.status === 404) { rows.innerHTML = '<tr><td colspan="4" style="padding:6px;color:#777;">This hub has no tool policy (older server).</td></tr>'; return; }
+      if (r.status === 404) { rows.innerHTML = '<tr><td colspan="4" style="padding:6px;color:var(--as-dim-777);">This hub has no tool policy (older server).</td></tr>'; return; }
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const p = await r.json();
       const role = p.role || 'worker';
@@ -794,9 +820,9 @@
       for (const [cls, label] of POLICY_CLASSES) {
         const effective = (p.rules && p.rules[cls]) || defaults[cls];
         const tr = document.createElement('tr');
-        tr.style.borderTop = '1px solid #2a2a40';
+        tr.style.borderTop = '1px solid var(--as-line-1)';
         const overridable = role === 'member' ? MEMBER_GRANTABLE.includes(cls) : POLICY_OVERRIDABLE.includes(cls);
-        const srcNote = p.source && p.source[cls] && p.source[cls] !== 'role' ? `<br><small style="color:#777;">from ${escapeHtml(SOURCE_LABELS[p.source[cls]] || p.source[cls])}</small>` : '';
+        const srcNote = p.source && p.source[cls] && p.source[cls] !== 'role' ? `<br><small style="color:var(--as-dim-777);">from ${escapeHtml(SOURCE_LABELS[p.source[cls]] || p.source[cls])}</small>` : '';
         const overrideCell = overridable
           ? `<select data-policy-class="${cls}" style="padding:4px 6px;font-size:13px;">
               <option value="">role default (${escapeHtml(defaults[cls])})</option>
@@ -804,10 +830,10 @@
               <option value="ask"${overrides[cls] === 'ask' ? ' selected' : ''}>ask</option>
               <option value="deny"${overrides[cls] === 'deny' ? ' selected' : ''}>deny</option>
             </select>`
-          : `<span style="color:#666;">${role === 'member' ? 'never for member agents' : 'not overridable'}</span>`;
-        tr.innerHTML = `<td style="padding:6px;"><b style="font-weight:500;">${escapeHtml(cls)}</b><br><small style="color:#777;">${escapeHtml(label)}</small></td>` +
-          `<td style="padding:6px;color:${DECISION_COLORS[effective] || '#ccc'};font-weight:600;">${escapeHtml(effective)}${srcNote}</td>` +
-          `<td style="padding:6px;color:#999;">${escapeHtml(defaults[cls])}</td>` +
+          : `<span style="color:var(--as-dim-666);">${role === 'member' ? 'never for member agents' : 'not overridable'}</span>`;
+        tr.innerHTML = `<td style="padding:6px;"><b style="font-weight:500;">${escapeHtml(cls)}</b><br><small style="color:var(--as-dim-777);">${escapeHtml(label)}</small></td>` +
+          `<td style="padding:6px;color:${DECISION_COLORS[effective] || 'var(--as-dim-ccc)'};font-weight:600;">${escapeHtml(effective)}${srcNote}</td>` +
+          `<td style="padding:6px;color:var(--as-dim-999);">${escapeHtml(defaults[cls])}</td>` +
           `<td style="padding:6px;">${overrideCell}</td>`;
         rows.appendChild(tr);
       }
@@ -815,7 +841,7 @@
       loadRootGrant();
       document.getElementById('policy-roots-hint').textContent = `Writable without asking: ${(p.roots || []).join(', ') || '(none)'}`;
     } catch (e) {
-      rows.innerHTML = `<tr><td colspan="4" style="padding:6px;color:#e74c3c;">Could not load policy: ${escapeHtml(e.message)}</td></tr>`;
+      rows.innerHTML = `<tr><td colspan="4" style="padding:6px;color:var(--as-error);">Could not load policy: ${escapeHtml(e.message)}</td></tr>`;
     }
   }
 
@@ -832,7 +858,7 @@
     try { d = await apiFetch(`/api/root-grants?agent=${encodeURIComponent(agentName)}`); } catch { return; }
     if (!d || d.error || !d.sandboxed) return;
     sel.value = 'hub'; sel.disabled = true;
-    const n = document.createElement('small'); n.id = 'tools-boxed-note'; n.style.cssText = 'color:#e67e22;margin-left:8px;';
+    const n = document.createElement('small'); n.id = 'tools-boxed-note'; n.style.cssText = 'color:var(--as-warning-2);margin-left:8px;';
     n.textContent = 'Hub tools (always while this agent is in a box)';
     sel.insertAdjacentElement('afterend', n);
   }
@@ -850,7 +876,7 @@
     if (d.sandboxed) { status.textContent = 'This agent\'s shell runs inside a container, where there is no sudo. Switch its sandbox off above if it must run on the host.'; return; }
     if (d.grant) {
       const until = new Date(d.grant.until);
-      status.innerHTML = `<b style="color:#e67e22;">Root granted</b> until ${escapeHtml(until.toLocaleString())}${d.grant.by ? ` by ${escapeHtml(d.grant.by)}` : ''}${d.grant.note ? ` — ${escapeHtml(d.grant.note)}` : ''}.`;
+      status.innerHTML = `<b style="color:var(--as-warning-2);">Root granted</b> until ${escapeHtml(until.toLocaleString())}${d.grant.by ? ` by ${escapeHtml(d.grant.by)}` : ''}${d.grant.note ? ` — ${escapeHtml(d.grant.note)}` : ''}.`;
       revokeBtn.style.display = '';
     } else {
       status.textContent = 'No root grant: this agent\'s sudo commands are refused.';
@@ -891,7 +917,7 @@
     try { d = await apiFetch(`/api/folders?agent=${encodeURIComponent(agentName)}`); } catch {}
     if (!d || !Array.isArray(d.folders)) {
       folderList = [];
-      box.innerHTML = `<span style="color:#e74c3c;">Could not load the folder list${d && d.error ? `: ${escapeHtml(d.error)}` : ''}.</span>`;
+      box.innerHTML = `<span style="color:var(--as-error);">Could not load the folder list${d && d.error ? `: ${escapeHtml(d.error)}` : ''}.</span>`;
       ta.value = (extraRoots || []).join('\n');
       return;
     }
@@ -907,7 +933,7 @@
       return `<div class="folder-group"><div class="folder-group-title">${escapeHtml(title)}</div>` +
         items.map(f => `<label class="folder-item" title="${escapeHtml(f.path)}"><input type="checkbox" data-folder="${escapeHtml(f.path)}"${checked.has(f.path) ? ' checked' : ''}> ${escapeHtml(f.label)}</label>`).join('') +
         '</div>';
-    }).join('') || '<span style="color:#777;">No shared folders on this hub yet.</span>';
+    }).join('') || '<span style="color:var(--as-dim-777);">No shared folders on this hub yet.</span>';
   }
   function pickedFolders() {
     return Array.from(document.querySelectorAll('#policy-folders input[data-folder]')).filter(i => i.checked).map(i => i.dataset.folder);
@@ -1307,7 +1333,7 @@
       box.replaceChildren();
       for (const u of users) {
         const lab = document.createElement('label'), cb = document.createElement('input'), t = document.createElement('span');
-        lab.style.cssText = 'display:flex;align-items:center;gap:8px;margin:0;cursor:pointer;color:#ddd;font-size:13px;';
+        lab.style.cssText = 'display:flex;align-items:center;gap:8px;margin:0;cursor:pointer;color:var(--as-dim-ddd);font-size:13px;';
         cb.type = 'checkbox'; cb.value = u.id; cb.checked = recStored.allowed.includes(u.id); cb.style.cssText = 'width:20px;height:20px;';
         t.textContent = `${u.name || u.login} (${u.login})`;
         lab.append(cb, t); box.appendChild(lab);
@@ -1568,8 +1594,8 @@
         const div = document.createElement('div');
         div.style.cssText = 'display:flex;align-items:center;gap:8px;';
         div.innerHTML = `<input type="checkbox" data-model="${m}" ${checked ? 'checked' : ''} style="width:auto;">
-          <span style="font-size:13px;color:#ccc;">${m}</span>
-          <span style="font-size:11px;color:#777;margin-left:auto;">${cats}</span>`;
+          <span style="font-size:13px;color:var(--as-dim-ccc);">${m}</span>
+          <span style="font-size:11px;color:var(--as-dim-777);margin-left:auto;">${cats}</span>`;
         container.appendChild(div);
       });
     } catch (e) {
@@ -1833,7 +1859,7 @@
           } else {
             opt.textContent = `⛔ ${billingDisplay(m)} — unavailable`;
             opt.className = 'model-broken';
-            opt.style.color = '#666';
+            opt.style.color = 'var(--as-dim-666)';
           }
         } else {
           opt.textContent = notListed.has(m) ? `${billingDisplay(m)} (current; not in the hub's list)` : billingDisplay(m);
@@ -2134,8 +2160,8 @@
     const list = document.getElementById('records-list');
     let data;
     try { data = await apiFetch(recordsBase()); }
-    catch (e) { list.innerHTML = `<span style="color:#e74c3c;">Could not load records: ${escapeHtml(e.message)}</span>`; return; }
-    if (!data || !data.ok) { list.innerHTML = `<span style="color:#e74c3c;">Could not load records: ${escapeHtml((data && data.error) || 'unknown error')}</span>`; return; }
+    catch (e) { list.innerHTML = `<span style="color:var(--as-error);">Could not load records: ${escapeHtml(e.message)}</span>`; return; }
+    if (!data || !data.ok) { list.innerHTML = `<span style="color:var(--as-error);">Could not load records: ${escapeHtml((data && data.error) || 'unknown error')}</span>`; return; }
     recordsState.records = Array.isArray(data.records) ? data.records : [];
     recordsState.maxBytes = Number(data.maxBytes) || 0;
     recordsState.folder = data.folder || '';
@@ -2147,21 +2173,21 @@
     const total = recordsState.records.reduce((s, r) => s + (Number(r.bytes) || 0), 0);
     const over = recordsState.maxBytes && total > recordsState.maxBytes;
     const totalEl = document.getElementById('records-total');
-    totalEl.style.color = over ? '#e74c3c' : '#888';
+    totalEl.style.color = over ? 'var(--as-error)' : 'var(--as-dim-888)';
     totalEl.innerHTML = `${recordsState.records.length} record${recordsState.records.length === 1 ? '' : 's'}, ${humanBytes(total)} of ${recordsState.maxBytes ? humanBytes(recordsState.maxBytes) : '∞'}`
       + (over ? ' <b>— over the cap: the agent will not get all of this on each turn. Trim or remove records.</b>' : '')
-      + (recordsState.folder ? ` · <code style="color:#777;">${escapeHtml(recordsState.folder)}</code>` : '');
-    if (!recordsState.records.length) { list.innerHTML = '<span style="color:#777;">No records yet. A record is a small file the agent always has in front of it.</span>'; return; }
+      + (recordsState.folder ? ` · <code style="color:var(--as-dim-777);">${escapeHtml(recordsState.folder)}</code>` : '');
+    if (!recordsState.records.length) { list.innerHTML = '<span style="color:var(--as-dim-777);">No records yet. A record is a small file the agent always has in front of it.</span>'; return; }
     list.innerHTML = '<table style="width:100%;border-collapse:collapse;">'
-      + '<thead><tr style="color:#888;text-align:left;"><th style="padding:4px 6px;font-weight:500;">Name</th><th style="padding:4px 6px;font-weight:500;text-align:right;">Size</th><th style="padding:4px 6px;font-weight:500;">Updated</th></tr></thead><tbody>'
+      + '<thead><tr style="color:var(--as-dim-888);text-align:left;"><th style="padding:4px 6px;font-weight:500;">Name</th><th style="padding:4px 6px;font-weight:500;text-align:right;">Size</th><th style="padding:4px 6px;font-weight:500;">Updated</th></tr></thead><tbody>'
       + recordsState.records.map((r, i) => {
         const when = r.mtime ? new Date(r.mtime) : null;
-        const link = r.symlink ? `<div style="font-size:11px;color:#777;">link → ${escapeHtml(r.target || '?')}</div>` : '';
-        const active = recordsState.current === r.name ? 'background:#1f1f33;' : '';
-        return `<tr style="border-top:1px solid #2a2a3a;${active}">`
-          + `<td style="padding:6px;"><a href="#" onclick="openRecord(${i}); return false;" style="color:#4a9eff;text-decoration:none;">${escapeHtml(r.name)}</a>${link}</td>`
-          + `<td style="padding:6px;text-align:right;white-space:nowrap;color:#aaa;">${humanBytes(r.bytes)}</td>`
-          + `<td style="padding:6px;white-space:nowrap;color:#aaa;">${when && !isNaN(when) ? escapeHtml(when.toLocaleString()) : ''}</td></tr>`;
+        const link = r.symlink ? `<div style="font-size:11px;color:var(--as-dim-777);">link → ${escapeHtml(r.target || '?')}</div>` : '';
+        const active = recordsState.current === r.name ? 'background:var(--as-row-active);' : '';
+        return `<tr style="border-top:1px solid var(--as-line-2);${active}">`
+          + `<td style="padding:6px;"><a href="#" onclick="openRecord(${i}); return false;" style="color:var(--as-accent);text-decoration:none;">${escapeHtml(r.name)}</a>${link}</td>`
+          + `<td style="padding:6px;text-align:right;white-space:nowrap;color:var(--as-dim-aaa);">${humanBytes(r.bytes)}</td>`
+          + `<td style="padding:6px;white-space:nowrap;color:var(--as-dim-aaa);">${when && !isNaN(when) ? escapeHtml(when.toLocaleString()) : ''}</td></tr>`;
       }).join('')
       + '</tbody></table>';
   }
