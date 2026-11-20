@@ -42,7 +42,7 @@ test('desktop Settings → Appearance without the look registry says to restart,
   const win = {};
   new Function('document', 'window', 'isHubAdmin', 'lookPickerBuild', `${src}\nlookSectionPaint({});`)(doc, win, () => true, () => { throw new Error('no picker without a registry'); });
   assert.strictEqual(host.children.length, 1);
-  assert.strictEqual(host.textContent, 'Restart your Maestro to load the looks.');
+  assert.strictEqual(host.textContent, 'Restart your Maestro to load the interface styles.');
   assert.strictEqual(host.children[0].className, 'st-hint');
 });
 
@@ -52,7 +52,7 @@ test('phone Look (Profile and Simple sheets) without the look registry says to r
   const host = mk('div'); host.appendChild(mk('span'));
   new Function('document', 'window', 'host', `${src}\nlookPickerPaint(host);`)(doc, {}, host);
   assert.strictEqual(host.children.length, 1);
-  assert.strictEqual(host.textContent, 'Restart your Maestro to load the looks.');
+  assert.strictEqual(host.textContent, 'Restart your Maestro to load the interface styles.');
   assert.match(host.children[0].className, /\bsec-hint\b/);
 });
 

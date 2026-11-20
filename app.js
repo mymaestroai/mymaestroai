@@ -3211,7 +3211,7 @@
       while (host.firstChild) host.removeChild(host.firstChild);
       const cur = L.applied(document);   // the look in force, also when this device can't store a choice
       const list = document.createElement('div');
-      list.setAttribute('role', 'group'); list.setAttribute('aria-label', 'Look for this device');
+      list.setAttribute('role', 'group'); list.setAttribute('aria-label', 'Interface style for this device');
       list.style.display = 'grid'; list.style.gap = '8px';
       for (const look of L.LOOKS) {
         const on = look.id === cur;
@@ -3242,10 +3242,10 @@
       const note = document.createElement('div');
       note.className = 'st-hint';
       note.style.margin = '8px 0 4px';   // clear of the last card
-      note.appendChild(document.createTextNode('Applies to this device. Simple mode works with every look.'));
+      note.appendChild(document.createTextNode('Applies to this device. Simple mode works with every interface style.'));
       host.appendChild(list); host.appendChild(note);
     }
-    // The Appearance section: the picker, and for admins "Look for new members" (setting lookDefaultForNewMembers, saved on change).
+    // The Appearance section: the picker, and for admins "Interface style for new members" (setting lookDefaultForNewMembers, saved on change).
     function lookSectionPaint(data) {
       const host = document.getElementById('st-looks-body');
       if (!host) return;
@@ -3253,7 +3253,7 @@
       if (!window.HubLooks) {   // a page newer than the running server: /ui-looks.js was not served, so there is nothing to pick yet
         const msg = document.createElement('div');
         msg.className = 'st-hint'; msg.id = 'st-looks-restart';
-        msg.appendChild(document.createTextNode('Restart your Maestro to load the looks.'));
+        msg.appendChild(document.createTextNode('Restart your Maestro to load the interface styles.'));
         host.appendChild(msg);
         return;
       }
@@ -3264,8 +3264,8 @@
       const row = document.createElement('div');
       row.className = 'st-row';
       const lab = document.createElement('label');
-      lab.style.flexBasis = '150px'; lab.htmlFor = 'st-look-new';
-      lab.appendChild(document.createTextNode('Look for new members'));
+      lab.style.flexBasis = '220px'; lab.htmlFor = 'st-look-new';   // 'Interface style for new members' on one line
+      lab.appendChild(document.createTextNode('Interface style for new members'));
       const sel = document.createElement('select');
       sel.id = 'st-look-new';
       for (const look of window.HubLooks.LOOKS) { const o = document.createElement('option'); o.value = look.id; o.appendChild(document.createTextNode(look.label)); sel.appendChild(o); }
@@ -3277,7 +3277,7 @@
         try {
           const r = await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ lookDefaultForNewMembers: sel.value }) });
           const d = await r.json().catch(() => ({}));
-          state.textContent = r.ok ? 'Saved. People who join from now on start with this look.' : 'Not saved: ' + (d.error || ('HTTP ' + r.status));
+          state.textContent = r.ok ? 'Saved. People who join from now on start with this interface style.' : 'Not saved: ' + (d.error || ('HTTP ' + r.status));
         } catch (e) { state.textContent = 'Not saved: ' + (e.message || 'failed'); }
       });
       row.appendChild(lab); row.appendChild(sel); row.appendChild(state);

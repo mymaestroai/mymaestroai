@@ -218,7 +218,7 @@ test('pickers: app.js and mobile.js choose through HubLooks, build previews from
     assert.match(src, /L\.choose\(look\.id, L\.storageOf\(window\)\)/, name);   // review r1: guarded storage
     assert.match(src, /L\.apply\(document, look\.id\)/, name);
     assert.match(src, /createTextNode\('Aa'\)/, name);
-    assert.match(src, /Applies to this device\. Simple mode works with every look\./, name);
+    assert.match(src, /Applies to this device\. Simple mode works with every interface style\./, name);
     assert.match(src, /HubLooks\.rememberDefault\(/, name);
   }
   for (const [src, names] of [[app, ['lookPreviewBox', 'lookPickerBuild', 'lookSectionPaint']], [mob, ['lookSwatch', 'lookPickerPaint']]]) {
@@ -231,7 +231,7 @@ test('pickers: app.js and mobile.js choose through HubLooks, build previews from
     }
   }
   assert.match(app, /id="st-looks-section"><h4>Appearance<\/h4>/);
-  assert.match(app, /Look for new members/);
+  assert.match(app, /'Interface style for new members'/);
   assert.match(app, /if \(!isHubAdmin\(\)\) return;\s*const row/);
   assert.match(mob, /id="prof-looks"/);
   assert.match(mob, /lookPickerPaint\(lh\)/);
@@ -375,4 +375,30 @@ test('full width: a collapsed sidebar keeps no border in any look (Engineering\'
   assert.deepStrictEqual(bad('x .sidebar.collapsed { border-right: none; } x .sidebar.narrow { border-right: none; }'), []);
   assert.deepStrictEqual(bad('x .sidebar:not(.collapsed) { border-right: 1px solid red; } x .sidebar .item { border-right: 1px solid red; }'), []);
   assert.deepStrictEqual(bad('x .sidebar { border: 1px solid red; }'), ['x .sidebar']);
+});
+
+test('people read "Interface style", never "Look": every label and sentence of the pickers, Appearance, Profile, the Simple sheet and the phone menu', () => {
+  const app = read('app.js'), mob = read('mobile.js'), html = read('mobile.html');
+  const fn = (src, name) => { const a = src.indexOf(`function ${name}(`); assert.ok(a >= 0, name); const b = src.indexOf('\nfunction ', a + 10), c = src.indexOf('\n    function ', a + 10); const ends = [b, c].filter(x => x > a); return src.slice(a, ends.length ? Math.min(...ends) : a + 4000); };
+  const regions = [
+    ['app.js lookPickerBuild', fn(app, 'lookPickerBuild')], ['app.js lookSectionPaint', fn(app, 'lookSectionPaint')],
+    ['mobile.js lookPickerPaint', fn(mob, 'lookPickerPaint')], ['mobile.js openProfileSheet', fn(mob, 'openProfileSheet')],
+    ['mobile.js menuLookName', fn(mob, 'menuLookName')],
+    ['mobile.js Simple sheet', mob.slice(mob.indexOf("lt.className = 'ss-title'") - 200, mob.indexOf("lt.className = 'ss-title'") + 400)],
+    ['mobile.html menu', html.slice(html.indexOf('id="menu-look"') - 20, html.indexOf('id="menu-look-pick"') + 40)],
+  ];
+  // What a person reads: quoted text with a space, a one-word label, or markup text between tags (not ids, classes or selectors).
+  const words = (src) => [
+    ...[...src.matchAll(/(['"`])((?:(?!\1)[^\\\n])*)\1/g)].map(m => m[2]).filter(t => /\s/.test(t) || /^[A-Z][a-z]+$/.test(t)),
+    ...[...src.matchAll(/>([^<>{}]+)</g)].map(m => m[1].trim()).filter(Boolean),
+  ];
+  for (const [where, src] of regions) {
+    assert.ok(src.length > 40, where);
+    const bad = words(src).filter(t => /\b[Ll]ooks?\b/.test(t) && !/data-look|menu-look|looks-restart|st-look/.test(t));
+    assert.deepStrictEqual(bad, [], `${where} shows the old word`);
+  }
+  for (const l of L.LOOKS) assert.doesNotMatch(`${l.label} ${l.blurb}`, /\blooks?\b/i, `${l.id}: its name and description in the picker`);
+  assert.match(html, /&#x1F3A8; Interface style<\/span>/);
+  assert.match(mob, /lt\.appendChild\(document\.createTextNode\('Interface style'\)\)/);
+  assert.match(mob, /<div class="sec-title">Interface style<\/div>/);
 });
