@@ -1082,9 +1082,11 @@
     document.getElementById('lockbox-log-title').style.display = 'none';
     document.getElementById('lockbox-log').textContent = '';
   }
-  /** loadModels failed before it loaded the lockbox row: load the agent on its own, so the row still shows or says why. */
-  async function loadLockboxAlone() {
+  /** The row at page start, independent of the model list: its own agent lookup (a good answer with this agent's record),
+   *  then the status check; when the record can't be had, the row says so instead of guessing the agent's setting. */
+  async function loadLockboxRow() {
     const seq = ++lockboxSeq;
+    lockboxShowWhy('Checking the command lockbox…');   // seen until the answers come (only admins reach this page)
     let agent = null;
     try {
       const r = await fetch('/api/agents', { credentials: 'include' });
@@ -1101,6 +1103,7 @@
     const seq = ++lockboxSeq;
     lockboxState.agent = agent || null;
     lockboxState.status = null;
+    document.getElementById('lockbox-mode').disabled = true;   // nothing to change until this check answers
     let code = 0, error = '', status = null;
     try {
       const r = await fetch('/api/lockbox/status', { credentials: 'include' });
@@ -1721,7 +1724,6 @@
 
   // ── Load Models ─────────────────────────────────────────────────────
   async function loadModels() {
-    let lockboxStarted = false;
     try {
       const [agentsData, modelsData] = await Promise.all([
         apiFetch('/api/agents'),
@@ -1754,7 +1756,6 @@
       document.getElementById('auto-model').checked = !!agent?.autoModel;
       fillAutoModelHelp(agent?.model || currentModel);
       const sbSel = document.getElementById('sandbox-mode'); if (sbSel) sbSel.value = agent?.sandbox || 'inherit';
-      lockboxStarted = true; loadLockbox(agent);
       const toolsSel = document.getElementById('tools-mode'); if (toolsSel) toolsSel.value = agent?.tools || 'inherit';
       const effSel = document.getElementById('effort-mode');
       if (effSel) {
@@ -1790,8 +1791,6 @@
       initModelOffer(agent);
     } catch (e) {
       showStatus('model-status', 'error', e.message);
-      // The lockbox row doesn't depend on the model list: load it on its own when the failure came first.
-      if (!lockboxStarted && typeof loadLockboxAlone === 'function') loadLockboxAlone();
     }
   }
 
@@ -2447,6 +2446,7 @@
     await loadModels();
     loadModelHealth(); // runs in background, re-renders when done
   })();
+  loadLockboxRow();   // on its own: a slow or failing model list never holds the lockbox row back
   loadFiles();
   loadPolicy();
   loadRecords();
