@@ -46,7 +46,7 @@
           window.hubMe = await r.json();
           try { if (window.hubSimple) { window.hubSimple.apply(window.hubMe); simpleBoot(); } } catch { /* Simple mode is optional: the page runs as before without it */ }
           try { if (typeof simpleTopSync === 'function') simpleTopSync(); } catch { /* the view switch is optional */ }
-          try { if (window.HubLooks && window.hubMe && window.hubMe.look) window.HubLooks.rememberDefault(window.hubMe.look, window.localStorage); } catch { /* looks are optional: the page keeps the look it has */ }
+          try { if (window.HubLooks && window.hubMe) window.HubLooks.rememberDefault(window.hubMe.look, window.HubLooks.storageOf(window)); } catch { /* looks are optional: the page keeps the look it has */ }   // every load: no default clears the last person's
           // Signed in: recorded-call pieces the hub never acknowledged (a closed tab, a reload, a dead network) are sent now, one at a time (lib/ui-voice-call.js).
           if (window.hubMe && window.hubMe.user) setTimeout(() => { try { voiceRecResendPending((u, i) => fetch(u, i), { userId: window.hubMe.user.id }); } catch { /* the call page's code is not up yet */ } }, 0);
         }
@@ -3209,7 +3209,7 @@
       const L = window.HubLooks;
       if (!host || !L) return;
       while (host.firstChild) host.removeChild(host.firstChild);
-      const cur = L.current(window.localStorage);
+      const cur = L.applied(document);   // the look in force, also when this device can't store a choice
       const list = document.createElement('div');
       list.setAttribute('role', 'group'); list.setAttribute('aria-label', 'Look for this device');
       list.style.display = 'grid'; list.style.gap = '8px';
@@ -3231,9 +3231,11 @@
         text.appendChild(name); text.appendChild(blurb);
         card.appendChild(lookPreviewBox(look)); card.appendChild(text);
         card.addEventListener('click', () => {
-          if (!L.choose(look.id, window.localStorage)) return;
+          if (!L.choose(look.id, L.storageOf(window))) return;
           L.apply(document, look.id);   // no reload: the stylesheet swaps in place
           lookPickerBuild(host);
+          const again = [...host.querySelectorAll('button[data-look]')].find(x => x.dataset.look === look.id);
+          if (again) again.focus();   // keyboard focus stays on the card just chosen
         });
         list.appendChild(card);
       }
@@ -3247,6 +3249,7 @@
     function lookSectionPaint(data) {
       const host = document.getElementById('st-looks-body');
       if (!host || !window.HubLooks) return;
+      while (host.firstChild) host.removeChild(host.firstChild);   // painting twice never doubles the picker or the select's id
       const picker = document.createElement('div');
       host.appendChild(picker);
       lookPickerBuild(picker);

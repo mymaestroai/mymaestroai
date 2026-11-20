@@ -16,6 +16,7 @@ function fakeStorage(init = {}, { blocked = false } = {}) {
   return {
     getItem(k) { if (blocked) throw new Error('blocked'); return m.has(k) ? m.get(k) : null; },
     setItem(k, v) { if (blocked) throw new Error('blocked'); m.set(k, String(v)); },
+    removeItem(k) { if (blocked) throw new Error('blocked'); m.delete(k); },
     _m: m,
   };
 }
@@ -109,8 +110,10 @@ test('rememberDefault: caches the person default; shows it only when this device
   assert.strictEqual(L.rememberDefault('quiet', s, d), 'quiet');
   assert.strictEqual(s._m.get('mmLookDefault'), 'quiet');
   assert.strictEqual(d.documentElement.dataset.look, 'broadsheet', "this device's own choice stays");
-  assert.strictEqual(L.rememberDefault('nope', s, d), null);
-  assert.strictEqual(s._m.get('mmLookDefault'), 'quiet');
+  // Review r1: an account without a (valid) default clears the cached one; this device's own choice still stays.
+  assert.strictEqual(L.rememberDefault('nope', s, d), 'engineering');
+  assert.strictEqual(s._m.has('mmLookDefault'), false);
+  assert.strictEqual(d.documentElement.dataset.look, 'broadsheet');
   assert.doesNotThrow(() => L.rememberDefault('quiet', fakeStorage({}, { blocked: true }), fakeDoc()));
 });
 
@@ -212,7 +215,7 @@ test('the admin setting reaches the server through the settings route that valid
 test('pickers: app.js and mobile.js choose through HubLooks, build previews from text nodes, and the pages remember the default', () => {
   const app = read('app.js'), mob = read('mobile.js');
   for (const [name, src] of [['app.js', app], ['mobile.js', mob]]) {
-    assert.match(src, /L\.choose\(look\.id, window\.localStorage\)/, name);
+    assert.match(src, /L\.choose\(look\.id, L\.storageOf\(window\)\)/, name);   // review r1: guarded storage
     assert.match(src, /L\.apply\(document, look\.id\)/, name);
     assert.match(src, /createTextNode\('Aa'\)/, name);
     assert.match(src, /Applies to this device\. Simple mode works with every look\./, name);
@@ -246,4 +249,81 @@ test('the attach button carries a class, and every light look gives it dark text
     const css = read(`looks/${id}.css`);
     assert.match(css, new RegExp(`html\\[data-look="${id}"\\]:not\\(\\.mm-simple\\) \\.input-area button\\.attach-btn \\{ color: var\\(--text\\); \\}`), id);
   }
+});
+
+test('review r1: a shared browser does not keep the last person\'s default (an account without one gets Engineering)', () => {
+  const s = fakeStorage({ mmLookDefault: 'quiet' }), d = fakeDoc();
+  L.apply(d, L.current(s));
+  assert.strictEqual(d.documentElement.dataset.look, 'quiet', 'the page opens in the cached default');
+  assert.strictEqual(L.rememberDefault(undefined, s, d), 'engineering');
+  assert.strictEqual(s._m.has('mmLookDefault'), false);
+  assert.strictEqual(d.documentElement.dataset.look, 'engineering');
+  assert.strictEqual(d.getElementById('mm-look-css'), null);
+  assert.strictEqual(L.current(s), 'engineering', 'and the next load starts in Engineering');
+  const blocked = fakeStorage({}, { blocked: true }), d2 = fakeDoc();
+  L.apply(d2, 'quiet');
+  assert.strictEqual(L.rememberDefault(null, blocked, d2), 'engineering');
+  assert.strictEqual(d2.documentElement.dataset.look, 'engineering', 'blocked storage: this page still shows Engineering');
+  for (const [name, src] of [['app.js', read('app.js')], ['mobile.js', read('mobile.js')]]) {
+    assert.match(src, /if \(window\.HubLooks && (?:window\.)?hubMe\) window\.HubLooks\.rememberDefault\((?:window\.)?hubMe\.look, window\.HubLooks\.storageOf\(window\)\)/, `${name} reconciles on every account load`);
+  }
+});
+
+test('review r1: storage that throws on read or on write never breaks a picker, and the pressed card is the look in force', () => {
+  const win = {};
+  Object.defineProperty(win, 'localStorage', { get() { throw new Error('SecurityError'); } });
+  assert.strictEqual(L.storageOf(win), null);
+  assert.strictEqual(L.storageOf(null), null);
+  const ok = fakeStorage();
+  assert.strictEqual(L.storageOf({ localStorage: ok }), ok);
+  const d = fakeDoc();
+  assert.strictEqual(L.applied(d), 'engineering');
+  const readOnly = fakeStorage();
+  readOnly.setItem = () => { throw new Error('QuotaExceeded'); };
+  assert.strictEqual(L.choose('quiet', readOnly), 'quiet');
+  L.apply(d, 'quiet');
+  assert.strictEqual(L.current(readOnly), 'engineering', 'the choice was not stored');
+  assert.strictEqual(L.applied(d), 'quiet', 'but the page shows Quiet, and the picker marks Quiet');
+  d.documentElement.dataset.look = 'bogus';
+  assert.strictEqual(L.applied(d), 'engineering');
+  const app = read('app.js'), mob = read('mobile.js');
+  for (const [src, fn] of [[app, 'lookPickerBuild'], [mob, 'lookPickerPaint']]) {
+    const a = src.indexOf(`function ${fn}(`), body = src.slice(a, src.indexOf('\n  const note', a) > 0 ? src.indexOf('note.className', a) : a + 3000);
+    assert.doesNotMatch(body, /window\.localStorage/, `${fn} reads storage only through HubLooks`);
+    assert.match(body, /const cur = L\.applied\(document\);/, fn);
+    assert.match(body, /\.find\(x => x\.dataset\.look === look\.id\);\s*if \(again\) again\.focus\(\);/, `${fn} keeps keyboard focus on the chosen card`);
+  }
+});
+
+test('review r1: while the page is parsing, the loader writes the look\'s stylesheet into the head (it holds the first paint)', () => {
+  const vm = require('vm');
+  const src = read('lib/ui-looks.js');
+  const run = (stored) => {
+    const doc = fakeDoc();
+    doc.readyState = 'loading';
+    doc.written = [];
+    doc.write = (h) => doc.written.push(h);
+    vm.runInNewContext(src, { window: { document: doc, localStorage: fakeStorage(stored) } });
+    return doc;
+  };
+  let doc = run({ mmLook: 'broadsheet' });
+  assert.deepStrictEqual(doc.written, ['<link rel="stylesheet" id="mm-look-css" href="/looks/broadsheet.css">']);
+  assert.strictEqual(doc.head.children.length, 0);
+  assert.strictEqual(doc.documentElement.dataset.look, 'broadsheet');
+  doc = run({ mmLook: '"><script>x</script>' });
+  assert.deepStrictEqual(doc.written, [], 'an unknown stored value is Engineering: nothing written');
+  assert.strictEqual(doc.documentElement.dataset.look, 'engineering');
+  doc = run({});
+  assert.deepStrictEqual(doc.written, []);
+  const later = fakeDoc();
+  later.readyState = 'complete'; later.write = () => { throw new Error('must not write after parsing'); };
+  L.apply(later, 'quiet', { parsing: true });
+  assert.strictEqual(later.head.children[0].href, '/looks/quiet.css', 'after parsing: a normal link');
+});
+
+test('review r1: look stylesheets are served for their exact names only', () => {
+  const { resolve } = require('../lib/static-files');
+  assert.ok(resolve('/looks/broadsheet.css'));
+  assert.strictEqual(resolve('/looks/broadsheet.CSS'), null);
+  assert.strictEqual(resolve('/looks/nope.css'), null);
 });

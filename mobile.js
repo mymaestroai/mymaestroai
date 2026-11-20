@@ -13178,7 +13178,7 @@ async function loadMe() {
     if (r.ok) {
       hubMe = await r.json();
       if (window.hubSimple) { try { window.hubSimple.apply(hubMe); } catch { /* the page stays as it is */ } }   // Simple mode and theme classes on <html>
-      try { if (window.HubLooks && hubMe && hubMe.look) window.HubLooks.rememberDefault(hubMe.look, window.localStorage); } catch { /* looks are optional: the page keeps the look it has */ }
+      try { if (window.HubLooks && hubMe) window.HubLooks.rememberDefault(hubMe.look, window.HubLooks.storageOf(window)); } catch { /* looks are optional: the page keeps the look it has */ }   // every load: no default clears the last person's
       { const ti = $('menu-tiger'); if (ti) ti.hidden = !(hubMe && hubMe.isAdmin === true); }
       // (the Tiger Teams link above: admins only, the page and its API are admin-only; likewise the Subscriptions entry)
       { const su = $('menu-subs'); if (su) su.hidden = !(hubMe && hubMe.isAdmin === true); }
@@ -13509,7 +13509,7 @@ function lookPickerPaint(host) {
   const L = window.HubLooks;
   if (!host || !L) return;
   while (host.firstChild) host.removeChild(host.firstChild);
-  const cur = L.current(window.localStorage);
+  const cur = L.applied(document);   // the look in force, also when this phone can't store a choice
   const row = document.createElement('div');
   row.setAttribute('role', 'group'); row.setAttribute('aria-label', 'Look for this phone');
   row.style.display = 'grid'; row.style.gridTemplateColumns = 'repeat(3, 1fr)'; row.style.gap = '8px';
@@ -13525,9 +13525,11 @@ function lookPickerPaint(host) {
     lab.style.display = 'block'; lab.style.marginTop = '4px';
     b.appendChild(lookSwatch(look)); b.appendChild(lab);
     b.addEventListener('click', () => {
-      if (!L.choose(look.id, window.localStorage)) return;
+      if (!L.choose(look.id, L.storageOf(window))) return;
       L.apply(document, look.id);   // no reload: the stylesheet swaps in place
       lookPickerPaint(host);
+      const again = [...host.querySelectorAll('button[data-look]')].find(x => x.dataset.look === look.id);
+      if (again) again.focus();   // focus stays on the swatch just chosen
     });
     row.appendChild(b);
   }
