@@ -46,7 +46,7 @@ function load(dom) {
   const a = app.indexOf(BEGIN), b = app.indexOf(END);
   assert.ok(a > 0 && b > a, 'helper markers present');
   const ctx = vm.createContext({ Map, document: { getElementById: (id) => dom[id] || null } });
-  vm.runInContext(`${app.slice(a, b)}; this.liveReplyText = liveReplyText; this.noteLiveReply = noteLiveReply; this.dropLiveReply = dropLiveReply;`, ctx);
+  vm.runInContext(`${app.slice(a, b)}; this.liveReplyText = liveReplyText; this.noteLiveReply = noteLiveReply; this.dropLiveReply = dropLiveReply; this.closeOpenThinking = closeOpenThinking;`, ctx);
   return ctx;
 }
 
@@ -97,4 +97,36 @@ test('streamResponseSolo keeps liveReplyText current on every reply delta and dr
 test('the phone keeps its tracked reply text for a dropped stream (rec.full), not the bubble\'s text', () => {
   assert.match(mjs, /enterReattach\(agent, text, rec\.bubble, rec\.gotAny \? rec\.bubble\.body\.innerHTML : '', rec\.full, null, rec\.startedAt\);/);
   assert.doesNotMatch(mjs, /\.textContent : ''\)?;?\s*\n\s*(const|let) partial/);
+});
+
+// The real parseThinking, sliced out of app.js (brace matching from its opening brace).
+function sliceFn(src, name) {
+  const a = src.indexOf(`function ${name}(`);
+  assert.ok(a > 0, name);
+  let i = src.indexOf('{', src.indexOf(')', a)), depth = 0;
+  for (; i < src.length; i++) { if (src[i] === '{') depth++; else if (src[i] === '}' && --depth === 0) break; }
+  return src.slice(a, i + 1);
+}
+
+test('a thinking block the stream left open is closed, so the reconnect and stop notices stay visible (review r1)', () => {
+  const C = load({});
+  vm.runInContext(`${sliceFn(app, 'parseThinking')}; this.parseThinking = parseThinking;`, C);
+  C.noteLiveReply('m1', 'Answer start.\n<think>checking the edge');
+  const partial = C.partialReplyText('m1');
+  assert.strictEqual(partial, 'Answer start.\n<think>checking the edge</think>');
+  for (const notice of ['⟳ Connection lost; reconnecting to the turn…', '[Stopped]']) {
+    const r = C.parseThinking(`${partial}\n\n${notice}`);
+    assert.strictEqual(r.stillThinking, false, 'the thinking box is closed (collapsible), not still running');
+    assert.match(r.thinking, /checking the edge/);
+    assert.ok(r.response.includes(notice), 'the notice is outside the thinking box');
+    assert.ok(r.response.includes('Answer start.'));
+    assert.ok(!r.thinking.includes(notice));
+  }
+  // every tag form parseThinking knows; closed blocks and text without tags are left alone
+  for (const [o, c] of [['<thinking>', '</thinking>'], ['<reasoning>', '</reasoning>'], ['[think]', '[/think]'], ['[thinking]', '[/thinking]']]) {
+    assert.strictEqual(C.closeOpenThinking(`x ${o}y`), `x ${o}y${c}`);
+  }
+  assert.strictEqual(C.closeOpenThinking('a <think>b</think> c'), 'a <think>b</think> c');
+  assert.strictEqual(C.closeOpenThinking('plain text'), 'plain text');
+  assert.strictEqual(C.closeOpenThinking('<thinking>done</thinking> then <think>open'), '<thinking>done</thinking> then <think>open</think>');
 });

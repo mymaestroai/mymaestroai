@@ -11110,8 +11110,19 @@
       scan.querySelectorAll('.reason-stream, .tool-stream, .inline-thinking, .msg-copy, .msg-speak, .msg-time, .live-activity, .token-usage, .file-cards').forEach((n) => n.remove());
       return scan.textContent || '';
     }
+    // A thinking block the stream left open (a model writing <think>… in its reply) is closed, so what the page adds after
+    // the partial reply ("Connection lost…", "[Stopped]") is not swallowed by the collapsed thinking box (review r1).
+    const THINK_TAGS = [['<think>', '</think>'], ['<thinking>', '</thinking>'], ['<reasoning>', '</reasoning>'], ['[think]', '[/think]'], ['[thinking]', '[/thinking]']];
+    function closeOpenThinking(text) {
+      let t = String(text || '');
+      for (const [open, close] of THINK_TAGS) {
+        const low = t.toLowerCase();
+        if (low.lastIndexOf(open) > low.lastIndexOf(close)) t += close;
+      }
+      return t;
+    }
     function partialReplyText(msgId) {
-      if (liveReplyText.has(msgId)) return liveReplyText.get(msgId) || '';
+      if (liveReplyText.has(msgId)) return closeOpenThinking(liveReplyText.get(msgId) || '');
       return messageOwnText(document.getElementById(msgId));
     }
     // ── live reply text (end) ──
