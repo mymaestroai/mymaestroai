@@ -85,9 +85,9 @@ test('record: reported vs estimated vs unknown cost, provider derivation, roundi
 test('today / days aggregate per local day across a day boundary (injected clock), per agent, cost-desc', () => {
   const { l, clock } = mk();
   const at = (d, h, mi) => { clock.t = new Date(2026, 4, d, h, mi).getTime(); };
-  at(10, 23, 59); l.record({ agent: 'a', model: 'x', costUsd: 1, inputTokens: 100, outputTokens: 10 });
-  at(11, 0, 1);   l.record({ agent: 'a', model: 'x', costUsd: 2, inputTokens: 5, outputTokens: 1 });
-  l.record({ agent: 'b', model: 'x', costUsd: 5 }); l.record({ agent: 'b', model: 'unknown-m' });
+  at(10, 23, 59); l.record({ agent: 'a', model: 'anthropic/x', costUsd: 1, inputTokens: 100, outputTokens: 10 });
+  at(11, 0, 1);   l.record({ agent: 'a', model: 'anthropic/x', costUsd: 2, inputTokens: 5, outputTokens: 1 });
+  l.record({ agent: 'b', model: 'anthropic/x', costUsd: 5 }); l.record({ agent: 'b', model: 'anthropic/unknown-m' });
   assert.strictEqual(l.today().day, '2026-05-11');
   const t = l.today();
   assert.deepStrictEqual([t.total, t.turns], [7, 3]);
@@ -95,7 +95,7 @@ test('today / days aggregate per local day across a day boundary (injected clock
   assert.deepStrictEqual([t.agents[1].inputTokens, t.agents[1].outputTokens, t.agents[0].inputTokens], [5, 1, 0]);
   const y = l.today('2026-05-10');
   assert.deepStrictEqual([y.total, y.turns, y.agents.length], [1, 1, 1]);
-  assert.deepStrictEqual(l.today('2020-01-01'), { day: '2020-01-01', total: 0, turns: 0, agents: [] });
+  assert.deepStrictEqual(l.today('2020-01-01'), { day: '2020-01-01', total: 0, turns: 0, paidTurns: 0, unpriced: 0, planTurns: 0, planValue: 0, agents: [] });
   assert.deepStrictEqual(l.days().map(d => [d.day, d.turns, d.cost]), [['2026-05-11', 3, 7], ['2026-05-10', 1, 1]]);
   assert.strictEqual(l.days(1).length, 1);
 });
@@ -113,15 +113,15 @@ test('caps(): off by default; normalises zero, negative, NaN, text, null and num
 test('overCap: caps off never caps; per-agent first, then hub; limits are inclusive; other agents\' spend only counts toward the hub', () => {
   let c = {};
   const { l, clock } = mk({ getCaps: () => c });
-  l.record({ agent: 'big', model: 'x', costUsd: 3 }); l.record({ agent: 'small', model: 'x', costUsd: 1 });
+  l.record({ agent: 'big', model: 'anthropic/x', costUsd: 3 }); l.record({ agent: 'small', model: 'anthropic/x', costUsd: 1 });
   assert.deepStrictEqual(l.overCap('big'), { capped: false, reason: null, agentSpend: 3, hubSpend: 4, caps: { perAgentDailyUsd: null, hubDailyUsd: null } });
   c = { perAgentDailyUsd: 3 };
   assert.strictEqual(l.overCap('big').capped, true, '>= is inclusive');
-  assert.strictEqual(l.overCap('big').reason, 'big is over its daily cap ($3.00 of $3)');
+  assert.strictEqual(l.overCap('big').reason, 'big is over its daily pay-per-use cap ($3.00 of $3)');
   assert.strictEqual(l.overCap('small').capped, false);
   assert.strictEqual(l.overCap('never-seen').agentSpend, 0);
   c = { hubDailyUsd: 4 };
-  assert.strictEqual(l.overCap('small').reason, 'the hub is over its daily cap ($4.00 of $4)');
+  assert.strictEqual(l.overCap('small').reason, 'the hub is over its daily pay-per-use cap ($4.00 of $4)');
   assert.strictEqual(l.overCap('never-seen').capped, true, 'hub cap applies to agents with no spend');
   c = { perAgentDailyUsd: 3, hubDailyUsd: 4 };
   assert.match(l.overCap('big').reason, /^big is over/, 'agent reason wins when both apply');
@@ -136,7 +136,7 @@ test('an unusable ledger file disables the ledger quietly: record returns null, 
   fs.writeFileSync(path.join(dir, 'blocker'), 'x');
   const l = createLedger({ file: path.join(dir, 'blocker', 'sub', 'ledger.db'), now: () => 0, getCaps: () => ({ hubDailyUsd: 1 }) });
   assert.strictEqual(quiet(() => l.record({ agent: 'a', model: 'x', costUsd: 9 })), null);
-  assert.deepStrictEqual(l.today('2026-01-01'), { day: '2026-01-01', total: 0, agents: [], turns: 0 });
+  assert.deepStrictEqual(l.today('2026-01-01'), { day: '2026-01-01', total: 0, turns: 0, paidTurns: 0, unpriced: 0, planTurns: 0, planValue: 0, agents: [] });
   assert.deepStrictEqual(l.days(), []);
   assert.strictEqual(l.overCap('a').capped, false);
 });
