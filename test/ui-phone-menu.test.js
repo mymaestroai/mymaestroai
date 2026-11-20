@@ -1,0 +1,118 @@
+'use strict';
+// The phone menu order: Look on top, everyday items, Advanced (folded) in groups, Sign out last.
+const { test } = require('node:test');
+const assert = require('node:assert');
+const fs = require('fs');
+const path = require('path');
+const read = (f) => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
+const html = read('mobile.html');
+const js = read('mobile.js');
+const menu = html.slice(html.indexOf('<div id="menu">'), html.indexOf('<div id="toast">'));
+const at = (needle) => { const i = menu.indexOf(needle); assert.ok(i >= 0, 'missing ' + needle); return i; };
+const idAt = (id) => at('id="' + id + '"');
+
+const TOP = ['menu-look', 'menu-simple', 'menu-notify', 'menu-files', 'menu-reload', 'menu-profile'];
+const GROUPS = {
+  chat: ['menu-agentwork', 'menu-recall', 'menu-copy', 'menu-fold', 'menu-notify-agent', 'menu-compact', 'menu-clear'],
+  tools: ['menu-activity', 'menu-workers', 'menu-memory', 'menu-subs', 'menu-recordings', 'menu-tiger', 'menu-voice', 'menu-wallet'],
+  notify: ['menu-notify-prefs', 'menu-notify-test', 'menu-active-top'],
+  account: ['menu-security', 'menu-help', 'menu-about'],
+  admin: ['menu-users', 'menu-connectors', 'menu-remote', 'menu-update', 'menu-restart'],
+  views: ['HREF:/?desktop=once', 'use-full-site'],
+};
+const pos = (k) => (k.startsWith('HREF:') ? at('href="' + k.slice(5) + '"') : idAt(k));
+
+test('notices come first, then the top group in order, then Advanced, then Sign out last', () => {
+  assert.ok(idAt('menu-credit') < idAt('menu-2fa-note'));
+  assert.ok(idAt('menu-2fa-note') < idAt('menu-look'));
+  let prev = -1;
+  for (const id of TOP) { const p = idAt(id); assert.ok(p > prev, id + ' out of order'); prev = p; }
+  assert.ok(idAt('menu-look-pick') > idAt('menu-look') && idAt('menu-look-pick') < idAt('menu-simple'));
+  assert.ok(idAt('menu-adv-toggle') > idAt('menu-profile') && idAt('menu-adv') > idAt('menu-adv-toggle'));
+  assert.ok(idAt('menu-signout') > at('id="use-full-site"'));
+  assert.ok(idAt('menu-signout') > menu.lastIndexOf('menu-group'));
+});
+
+test('Advanced holds every other item, in its group and order', () => {
+  const signout = idAt('menu-signout');
+  const groups = Object.keys(GROUPS);
+  let prevGroup = idAt('menu-adv');
+  for (const g of groups) {
+    const gs = at('data-group="' + g + '"');
+    assert.ok(gs > prevGroup, g + ' group order');
+    const next = groups[groups.indexOf(g) + 1];
+    const ge = next ? at('data-group="' + next + '"') : signout;
+    let prev = gs;
+    for (const k of GROUPS[g]) { const p = pos(k); assert.ok(p > prev && p < ge, k + ' in ' + g + ' in order'); prev = p; }
+    prevGroup = gs;
+  }
+  for (const t of ['This chat', 'Tools', 'Notifications and view', 'Account and help', 'Admin', 'Other views']) assert.ok(menu.includes('<div class="menu-group-title">' + t + '</div>'), t);
+});
+
+test('all 36 inventory items appear exactly once, plus the new ones', () => {
+  const ids = [...TOP.filter(i => i !== 'menu-look'), 'menu-credit', 'menu-2fa-note', 'menu-signout', ...Object.values(GROUPS).flat().filter(k => !k.startsWith('HREF:'))];
+  assert.strictEqual(ids.length + 1, 36);   // the "Open full UI" link has no id: counted by its href
+  for (const id of ids) assert.strictEqual(menu.split('id="' + id + '"').length - 1, 1, id);
+  assert.strictEqual(menu.split('href="/?desktop=once"').length - 1, 1);
+  for (const id of ['menu-look', 'menu-look-pick', 'menu-look-name', 'menu-adv-toggle', 'menu-adv']) assert.strictEqual(menu.split('id="' + id + '"').length - 1, 1, id);
+  assert.match(menu, /<button id="menu-look" aria-expanded="false" aria-controls="menu-look-pick">/);
+  assert.match(menu, /<div id="menu-look-pick" hidden><\/div>/);
+  assert.match(menu, /<button id="menu-adv-toggle" aria-expanded="false" aria-controls="menu-adv">/);
+  assert.match(menu, /<div id="menu-adv" hidden>/);
+  assert.ok(menu.includes('class="menu-adv-dot" hidden'));
+});
+
+// pure helpers, sliced out of mobile.js
+const block = js.slice(js.indexOf('// ── phone menu (begin) ──'), js.indexOf('// ── phone menu (end) ──'));
+const helpers = block.slice(0, block.indexOf('function menuGroupsSync'));
+const H = new Function(helpers + '; return { menuAdvRead, menuAdvWrite, menuGroupVisible };')();
+
+test('menuAdvRead / menuAdvWrite: folded by default, "1" is open, a throwing storage never throws', () => {
+  const m = {};
+  const s = { getItem: (k) => (k in m ? m[k] : null), setItem: (k, v) => { m[k] = String(v); } };
+  assert.strictEqual(H.menuAdvRead(s), false);
+  H.menuAdvWrite(s, true);
+  assert.strictEqual(m['mm-menu-advanced'], '1');
+  assert.strictEqual(H.menuAdvRead(s), true);
+  H.menuAdvWrite(s, false);
+  assert.strictEqual(H.menuAdvRead(s), false);
+  m['mm-menu-advanced'] = 'yes';
+  assert.strictEqual(H.menuAdvRead(s), false);
+  const bad = { getItem() { throw new Error('denied'); }, setItem() { throw new Error('full'); } };
+  assert.strictEqual(H.menuAdvRead(bad), false);
+  assert.doesNotThrow(() => H.menuAdvWrite(bad, true));
+  assert.strictEqual(H.menuAdvRead(null), false);
+  assert.doesNotThrow(() => H.menuAdvWrite(undefined, true));
+});
+
+test('menuGroupVisible: all hidden, only chat-only with no chat, one visible', () => {
+  assert.strictEqual(H.menuGroupVisible([{ hidden: true }, { hidden: true, chatOnly: true }], false), false);
+  assert.strictEqual(H.menuGroupVisible([{ chatOnly: true }, { chatOnly: true }], true), false);
+  assert.strictEqual(H.menuGroupVisible([{ chatOnly: true }, { chatOnly: true }], false), true);
+  assert.strictEqual(H.menuGroupVisible([{ hidden: true }, { hidden: false }], true), true);
+  assert.strictEqual(H.menuGroupVisible([], false), false);
+});
+
+test('source: the toggle saves and keeps the menu open; groups and dot sync on open', () => {
+  assert.match(block, /tg\.addEventListener\('click', \(e\) => \{\s*e\.stopPropagation\(\);[\s\S]*?menuAdvWrite\(store, open\);/);
+  assert.ok(!/classList\.remove\('open'\)/.test(block), 'the block never closes the menu');
+  assert.match(block, /pick\.addEventListener\('click', \(e\) => e\.stopPropagation\(\)\)/);
+  assert.match(block, /closest\('\.menu-group-title'\)\) e\.stopPropagation\(\)/);
+  const open = js.slice(js.indexOf('function toggleMenu('), js.indexOf('async function refreshMemoryHealth'));
+  assert.match(open, /menuOnOpen\(\)/);
+  const onOpen = block.slice(block.indexOf('function menuOnOpen'));
+  assert.match(onOpen, /menuGroupsSync\(\);\s*menuAdvDotSync\(\);/);
+  for (const f of ['function updateDots', 'function paintUpdateCard', 'async function refreshMemoryHealth']) {
+    const i = js.indexOf(f); assert.ok(i > 0, f);
+    assert.match(js.slice(i, i + 2600), /typeof menuAdvDotSync === 'function' && menuAdvDotSync\(\)/, f);
+  }
+  assert.match(js, /canDownload === true\); typeof menuGroupsSync === 'function' && menuGroupsSync\(\)/);
+});
+
+test('source: simpleSettingsOpen puts Look first; the Profile sheet keeps its Look section', () => {
+  const i = js.indexOf('function simpleSettingsOpen()');
+  const fn = js.slice(i, i + 3500);
+  assert.match(fn, /d\.insertBefore\(ls, d\.querySelector\('\.ss-sec'\)\)/);
+  assert.ok(!fn.includes("querySelector('.ss-row')"));
+  assert.match(js, /lookPickerPaint\(\$\('prof-looks'\)\);/);
+});
