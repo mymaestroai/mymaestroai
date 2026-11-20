@@ -288,3 +288,27 @@ test('server.js: the ChatGPT reading at start is started beside the Claude plan'
   const server = read('server.js');
   assert.match(server, /getPlanUsage\(\)\.start\(\);[^\n]*\n[^\n]*\n\s*try \{ require\('\.\/lib\/codex-usage'\)\.getCodexUsage\(\)\.start\(\); \}/);
 });
+
+for (const [name, src] of [['app.js', app], ['mobile.js', mjs]]) {
+  const C = load(src);
+  test(`${name}: codexAfterAsk keeps the hub's reason when it refused a read, so the badge says "no reading" and why`, () => {
+    const empty = { enabled: true, readAt: null, error: null, reading: false, limits: [], weekly: [] };
+    const refused = C.codexAfterAsk(empty, { ok: false, error: 'Codex is updating; try again in a few minutes.', snapshot: { ...empty } });
+    assert.strictEqual(refused.error, 'Codex is updating; try again in a few minutes.');
+    assert.strictEqual(C.codexPendingBadge(refused).text, 'ChatGPT: no reading');
+    const unreachable = C.codexAfterAsk(empty, { ok: false, error: "Couldn't reach your Maestro to read it." });
+    assert.strictEqual(unreachable.error, "Couldn't reach your Maestro to read it.");
+    assert.strictEqual(C.codexPendingBadge(unreachable).text, 'ChatGPT: no reading');
+    // a good answer replaces; the hub's own stored reason is kept as it is; nothing loaded and no snapshot: unchanged
+    const good = { ...empty, readAt: iso(0) };
+    assert.strictEqual(C.codexAfterAsk(empty, { ok: true, snapshot: good }), good);
+    const own = { ...empty, error: "Codex isn't signed in to ChatGPT." };
+    assert.strictEqual(C.codexAfterAsk(empty, { ok: false, error: "Codex isn't signed in to ChatGPT.", snapshot: own }).error, "Codex isn't signed in to ChatGPT.");
+    assert.strictEqual(C.codexAfterAsk(null, { ok: false, error: 'x' }), null);
+  });
+}
+
+test('both pages: the read request uses codexAfterAsk for every answer, failures included', () => {
+  assert.match(app.slice(app.indexOf('function codexAskRead()'), app.indexOf('const subsIsCodex')), /\.catch\(\(\) => \(\{ ok: false, error: "Couldn't reach your Maestro to read it\." \}\)\)[^\n]*\n\s*\.then\(d => \{ const next = codexAfterAsk\(codexLast, d\);/);
+  assert.match(mjs.slice(mjs.indexOf('function codexAskRead()'), mjs.indexOf('async function refreshCodexUsage(')), /\.catch\(\(\) => \(\{ ok: false, error: "Couldn't reach your Maestro to read it\." \}\)\)[^\n]*\n\s*\.then\(d => \{ const next = codexAfterAsk\(codexUsageLast, d\);/);
+});

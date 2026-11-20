@@ -1391,6 +1391,15 @@ function codexShouldRead(snap, now, askedAt) {
   const t = Date.parse(snap.readAt || '');
   return !Number.isFinite(t) || now - t > 30 * 60000;
 }
+/** The snapshot after a page's read request: the answer's snapshot, carrying the hub's reason when it refused or failed
+ *  without storing one (a Codex update, the hub unreachable), so the badge says "no reading" and why instead of
+ *  "reading..." (review r1). */
+function codexAfterAsk(prev, answer) {
+  const snap = answer && typeof answer === 'object' && answer.snapshot && typeof answer.snapshot === 'object' ? answer.snapshot : prev;
+  if (!snap) return prev;
+  if (answer && answer.ok === false && answer.error && !snap.error) return Object.assign({}, snap, { error: String(answer.error).slice(0, 200), reading: false });
+  return snap;
+}
 // ── subscriptions helpers (end) ──
 const subsEnabled = () => subsOnFlag !== false && !(codexUsageLast && codexUsageLast.enabled === false);
 // One read of the ChatGPT plan asked for by this page (POST /api/codex-usage/refresh: no turn; the hub allows one a minute
@@ -1399,9 +1408,9 @@ let codexAskAt = 0;
 function codexAskRead() {
   codexAskAt = Date.now();
   api('/api/codex-usage/refresh', { method: 'POST' })
-    .then(r => r.json().catch(() => ({})))
-    .then(d => { if (d && d.snapshot) { codexUsageLast = d.snapshot; paintPlan(); paintSubsSheet(); } })
-    .catch(() => { /* the hub is restarting: the next paint asks again after a minute */ });
+    .then(r => r.json().catch(() => ({ ok: false, error: `HTTP ${r.status}` })))
+    .catch(() => ({ ok: false, error: "Couldn't reach your Maestro to read it." }))   // the next paint asks again after a minute
+    .then(d => { const next = codexAfterAsk(codexUsageLast, d); if (next && next !== codexUsageLast) { codexUsageLast = next; paintPlan(); paintSubsSheet(); } });
 }
 async function refreshCodexUsage() {
   try {
