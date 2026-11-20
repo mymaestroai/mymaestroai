@@ -13851,13 +13851,13 @@ function lookPickerPaint(host, onChosen) {
   if (!L) {   // a page newer than the running server: /ui-looks.js was not served, so there is nothing to pick yet
     const msg = document.createElement('div');
     msg.className = 'sec-hint looks-restart';
-    msg.appendChild(document.createTextNode('Restart your Maestro to load the looks.'));
+    msg.appendChild(document.createTextNode('Restart your Maestro to load the interface styles.'));
     host.appendChild(msg);
     return;
   }
   const cur = L.applied(document);   // the look in force, also when this phone can't store a choice
   const row = document.createElement('div');
-  row.setAttribute('role', 'group'); row.setAttribute('aria-label', 'Look for this phone');
+  row.setAttribute('role', 'group'); row.setAttribute('aria-label', 'Interface style for this phone');
   row.style.display = 'grid'; row.style.gridTemplateColumns = 'repeat(3, 1fr)'; row.style.gap = '8px';
   for (const look of L.LOOKS) {
     const on = look.id === cur;
@@ -13882,7 +13882,7 @@ function lookPickerPaint(host, onChosen) {
   }
   const note = document.createElement('div');
   note.className = 'sec-hint';
-  note.appendChild(document.createTextNode('Applies to this device. Simple mode works with every look.'));
+  note.appendChild(document.createTextNode('Applies to this device. Simple mode works with every interface style.'));
   host.appendChild(row); host.appendChild(note);
 }
 
@@ -13905,7 +13905,7 @@ function openProfileSheet() {
       <div class="sec-msg" id="prof-tz-msg"></div>
     </div>
     <div class="sec-section">
-      <div class="sec-title">Look</div>
+      <div class="sec-title">Interface style</div>
       <div id="prof-looks"></div>
     </div>
     <div class="sec-actions" style="margin-top:10px"><button id="prof-close">Close</button></div>`;
@@ -15409,7 +15409,7 @@ function simpleSettingsOpen() {
     '<button type="button" class="ss-row" id="ss-out"><b>Sign out</b></button>' +
     '<button type="button" class="ss-close">Close</button>';
   d.querySelector('.ss-val').textContent = name;
-  { const ls = document.createElement('div'); ls.className = 'ss-sec'; const lt = document.createElement('div'); lt.className = 'ss-title'; lt.appendChild(document.createTextNode('Look')); const lh = document.createElement('div'); ls.appendChild(lt); ls.appendChild(lh); d.insertBefore(ls, d.querySelector('.ss-sec')); lookPickerPaint(lh); }   // Look is the first section, right after the h3
+  { const ls = document.createElement('div'); ls.className = 'ss-sec'; const lt = document.createElement('div'); lt.className = 'ss-title'; lt.appendChild(document.createTextNode('Interface style')); const lh = document.createElement('div'); ls.appendChild(lt); ls.appendChild(lh); d.insertBefore(ls, d.querySelector('.ss-sec')); lookPickerPaint(lh); }   // Interface style is the first section, right after the h3
   const paint = () => { const cur = (hubMe && hubMe.theme) || 'auto'; d.querySelectorAll('.ss-seg button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.theme === cur))); };
   paint();
   d.querySelectorAll('.ss-seg button').forEach(b => b.addEventListener('click', async () => {
