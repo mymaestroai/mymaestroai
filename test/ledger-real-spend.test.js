@@ -119,7 +119,7 @@ test('desktop source: the chip hides below half a cent and never prints planValu
   assert.match(fn, /const show = !!t && typeof t\.paidTurns === 'number' && \(t\.total \|\| 0\) >= 0\.005/, 'an older hub answer (no paidTurns) never shows');
   assert.ok(!/planValue|planTurns/.test(fn), 'plan figures never reach the sidebar chip');
   assert.ok(fn.includes('`spent today ${usd(t.total)}`'));
-  assert.ok(fn.includes('Pay-per-use spend today (API keys)') && fn.includes('Use of your Claude and ChatGPT plans is not counted here'));
+  assert.ok(fn.includes('Pay-per-use spend today (API keys and paid cloud voices)') && fn.includes('Use of your Claude and ChatGPT plans is not counted here'));
   const set = app.slice(app.indexOf('async function paintSpendSettings'), app.indexOf('async function paintSpendSettings') + 2500);
   assert.ok(set.includes('No pay-per-use spend today'));
   assert.ok(set.includes('so it is not billed'));
@@ -128,10 +128,10 @@ test('desktop source: the chip hides below half a cent and never prints planValu
   assert.ok(set.includes("'less than $0.01'") && set.includes('with no known price'), 'sub-cent and unpriced calls are said, not hidden');
   assert.ok(set.includes('pay-per-use caps:'));
   assert.ok(app.includes('Daily pay-per-use cap per agent ($)') && app.includes('Daily pay-per-use cap, whole hub ($)'));
-  assert.ok(app.includes('Caps count pay-per-use spend only (API keys), never plan use.'));
+  assert.ok(app.includes('Caps count pay-per-use spend only (API keys and paid cloud voices), never plan use.'));
   const tag = html.match(/<span id="spend-today"[^>]*>/)[0];
   assert.ok(!/API-equivalent/.test(tag));
-  assert.ok(tag.includes('title="Pay-per-use spend today (API keys); click for caps"'));
+  assert.ok(tag.includes('title="Pay-per-use spend today (API keys and paid cloud voices); click for caps"'));
 });
 
 test('metered providers outside the API list count as spend and against caps: cloud voice, codex/ on the OpenAI key, unknown routes', () => {
@@ -170,4 +170,30 @@ test('the gateway books a bare model name under the provider it is sent to', () 
   dirs.push(ISO.root);
   const { resolveProvider } = require(path.join(ISO.inst, 'lib', 'gateway-client.js'));
   assert.deepStrictEqual(['claude-opus-5-5', 'gpt-6', 'gemini-pro'].map(m => resolveProvider(m).provider), ['anthropic', 'openai', 'google']);
+});
+
+test('a paid call with no usage and no cost is unpriced, not $0; a failed call with no cost is not a paid call at all', () => {
+  const { l } = mk();
+  assert.deepStrictEqual(l.record({ agent: 'a', model: 'openai/gpt-5' }), { cost: null, source: 'none' }, 'priced model, no usage: unknown, not zero');
+  assert.strictEqual(l.record({ agent: 'a', model: 'openai/gpt-5', inputTokens: 0, outputTokens: 0 }).cost, 0, 'usage reported as zero stays zero');
+  l.record({ agent: 'b', model: 'openai/gpt-5', ok: false });   // failed, nothing reported: not billed
+  const t = l.today();
+  assert.deepStrictEqual([t.paidTurns, t.unpriced, t.turns], [2, 1, 3]);
+});
+
+test('providers compare without regard to case', () => {
+  const { l } = mk();
+  l.record({ agent: 'a', model: 'LMStudio/q', inputTokens: 5, outputTokens: 5 });
+  l.record({ agent: 'a', model: 'Claude-SDK/claude-opus-5-5', costUsd: 30 });
+  const t = l.today();
+  assert.deepStrictEqual([t.total, t.paidTurns, t.planTurns], [0, 0, 1]);
+  near(t.planValue, 30);
+});
+
+test('Settings on an older hub answer: no figure, but caps and credits are still filled in', () => {
+  const app = read('app.js');
+  const set = app.slice(app.indexOf('async function paintSpendSettings'), app.indexOf('async function saveSpendCaps'));
+  assert.ok(set.includes("const legacy = typeof t.paidTurns !== 'number';"));
+  assert.ok(!/paidTurns !== 'number'\)[^\n]*return;/.test(set), 'the older-hub path must not return before the cap inputs are filled');
+  assert.ok(set.indexOf("box.textContent = 'Restart your Maestro to see pay-per-use spend.'") < set.indexOf("agentInp.value = caps.perAgentDailyUsd"));
 });

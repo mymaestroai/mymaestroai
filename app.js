@@ -3905,7 +3905,7 @@
           <input type="text" id="st-cap-hub" placeholder="unlimited" inputmode="decimal" style="max-width:120px">
           <button class="st-test-btn" id="st-caps-save" onclick="saveSpendCaps()">Save</button>
         </div>
-        <div class="st-hint" style="margin-left:158px">Caps count pay-per-use spend only (API keys), never plan use. Over a cap, an agent's decided actions (sending, writing outside its folders, admin, destructive) switch to ask for the rest of the day; nothing is silently stopped. Blank = unlimited.</div>
+        <div class="st-hint" style="margin-left:158px">Caps count pay-per-use spend only (API keys and paid cloud voices), never plan use. Over a cap, an agent's decided actions (sending, writing outside its folders, admin, destructive) switch to ask for the rest of the day; nothing is silently stopped. Blank = unlimited.</div>
         <div class="st-row">
           <label style="flex-basis:150px" title="A monthly API credit, for example the one that comes with a Claude Max plan. The header then shows this period's spend through the hub against it.">Monthly API credit ($)</label>
           <select id="st-credit-provider" onchange="fillCreditInputs()" style="max-width:120px">${CREDIT_PROVIDERS.map(([id, label]) => `<option value="${id}">${label}</option>`).join('')}</select>
@@ -6125,7 +6125,7 @@
       if (!show) { el.textContent = ''; return; }
       el.textContent = `spent today ${usd(t.total)}`;
       const top = (t.agents || []).filter(a => (a.cost || 0) > 0).slice(0, 3).map(a => `${agentDisplayName(a.agent)} ${usd(a.cost)}`).join(', ');
-      el.title = `Pay-per-use spend today (API keys): ${usd(t.total)} over ${t.paidTurns || 0} turn${t.paidTurns === 1 ? '' : 's'}${top ? ` · ${top}` : ''}. Use of your Claude and ChatGPT plans is not counted here; see Settings → Subscriptions. Click for caps.`;
+      el.title = `Pay-per-use spend today (API keys and paid cloud voices): ${usd(t.total)} over ${t.paidTurns || 0} call${t.paidTurns === 1 ? '' : 's'}${top ? ` · ${top}` : ''}. Use of your Claude and ChatGPT plans is not counted here; see Settings → Subscriptions. Click for caps.`;
     }
     // Monthly API credits (settings.apiCredits, POST /api/ledger/credits): the header shows the fullest one.
     const CREDIT_PROVIDERS = [['anthropic', 'Anthropic'], ['openai', 'OpenAI'], ['google', 'Google'], ['openrouter', 'OpenRouter'], ['perplexity', 'Perplexity']];
@@ -6184,15 +6184,18 @@
       if (fetchFirst || !spendToday) await refreshSpendToday();
       const t = spendToday;
       if (!t) { box.textContent = 'No ledger on this hub.'; stSum('money', 'spend', 'no spend ledger'); return; }
-      if (typeof t.paidTurns !== 'number') { box.textContent = 'Restart your Maestro to see pay-per-use spend.'; stSum('money', 'spend', 'restart to see spend'); return; }
+      // An older hub (no paidTurns: its total still counts plan use) gets no figure, but the caps and credits below are
+      // still filled in, so saving one cap never blanks the other.
+      const legacy = typeof t.paidTurns !== 'number';
       const paid = (t.paidTurns || 0) > 0;
       const amount = (t.total || 0) >= 0.005 ? usd(t.total) : (t.total || 0) > 0 ? 'less than $0.01' : '$0.00';
       const unpriced = (t.unpriced || 0) > 0 ? `, plus ${t.unpriced} call${t.unpriced === 1 ? '' : 's'} with no known price` : '';
       const top = (t.agents || []).filter(a => (a.cost || 0) > 0).slice(0, 5).map(a => `${esc(agentDisplayName(a.agent))} ${usd(a.cost)} (${a.paidTurns || 0})`).join(' · ');
       const plan = (t.planTurns || 0) > 0 ? `<div style="margin-top:2px">On your plans today: ${t.planTurns} turn${t.planTurns === 1 ? '' : 's'} (about ${usd(t.planValue || 0)} if paid through the API; your plans cover it, so it is not billed).</div>` : '';
-      box.innerHTML = (paid ? `<b style="color:var(--text)">${amount}</b> pay-per-use over ${t.paidTurns} turn${t.paidTurns === 1 ? '' : 's'}${unpriced}${top ? `<div style="margin-top:2px">${top}</div>` : ''}` : 'No pay-per-use spend today.') + plan;
+      if (legacy) box.textContent = 'Restart your Maestro to see pay-per-use spend.';
+      else box.innerHTML = (paid ? `<b style="color:var(--text)">${amount}</b> pay-per-use over ${t.paidTurns} call${t.paidTurns === 1 ? '' : 's'}${unpriced}${top ? `<div style="margin-top:2px">${top}</div>` : ''}` : 'No pay-per-use spend today.') + plan;
       const caps = t.caps || {};
-      stSum('money', 'spend', paid ? `Spent today ${amount}` : 'No pay-per-use spend today');
+      stSum('money', 'spend', legacy ? 'restart to see spend' : paid ? `Spent today ${amount}` : 'No pay-per-use spend today');
       stSum('money', 'caps', caps.perAgentDailyUsd || caps.hubDailyUsd ? `pay-per-use caps: ${[caps.perAgentDailyUsd ? `${usd(caps.perAgentDailyUsd)} per agent` : '', caps.hubDailyUsd ? `${usd(caps.hubDailyUsd)} whole hub` : ''].filter(Boolean).join(', ')}` : 'no daily caps');
       const credits = t.credits || [];
       const listEl = document.getElementById('st-credit-list');
