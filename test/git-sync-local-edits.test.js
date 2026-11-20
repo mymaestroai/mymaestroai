@@ -245,3 +245,21 @@ test('source: the server routes and both pages', () => {
     assert.ok(/Your Maestro won't put them back; you can find them with git stash list\./.test(src), `${file}: the confirm`);
   }
 });
+
+test('review r1: putAsideOnly works with local commits present (a rewritten history the changed files block); a failed clean-check never reports success', async () => {
+  const s = scenario();
+  commit(s.work, 'c.txt', 'local\n', 'a local commit');   // ahead of origin
+  put(s.work, 'a.txt', 'my edit\n');
+  const before = head(s);
+  const r = await s.sync.putAsideOnly();
+  assert.strictEqual(r.success, true, r.error);
+  assert.deepStrictEqual(r.files, ['a.txt']);
+  assert.strictEqual(head(s), before, 'no commit moved');
+  assert.strictEqual(read(s, 'a.txt'), 'one\n');
+  // the clean-check after the stash: a failure to read git status returns a failure, never ok
+  const src = fs.readFileSync(SRC, 'utf8');
+  const a = src.indexOf('async function putAside(');
+  const body = src.slice(a, src.indexOf('\n}\n', a));
+  assert.match(body, /try \{ left = await localChanges\(\); \}\s*catch \(e\) \{ return \{ ok: false, name, ref,/);
+  assert.doesNotMatch(body, /let left = \[\];/);
+});

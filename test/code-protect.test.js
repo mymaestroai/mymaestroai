@@ -87,7 +87,7 @@ test('decide(), protection on: reads, git that only looks, and data / workspaces
     assert.ok(!refused(dec(agent, 'Write', { file_path: P('workspaces', agent.name, 'x') })), 'own workspace');
     assert.ok(!refused(dec(agent, 'mcp__hub__Edit', { file_path: P('workspaces', agent.name, 'x') })), 'mcp edit workspace');
   }
-  for (const cmd of [`git -C ${ROOT} status`, `git -C ${ROOT} log`, `cat ${P('lib', 'a.js')}`, `cd ${ROOT} && git diff`, `cd ${ROOT} && git commit -m x`, `git -C ${ROOT} stash list`, `git -C ${P('workspaces', 'sam')} checkout main`]) {
+  for (const cmd of [`git -C ${ROOT} status`, `git -C ${ROOT} log`, `cat ${P('lib', 'a.js')}`, `cd ${ROOT} && git diff`, `cd ${ROOT} && git commit -m x`, `git -C ${ROOT} stash list`]) {
     assert.ok(!refused(dec(lead, 'Bash', { command: cmd })), cmd);
   }
   assert.ok(!refused(dec(lead, 'Read', { file_path: P('lib', 'a.js') })), 'Read');
@@ -186,4 +186,72 @@ test('review prep: GIT_WORK_TREE / GIT_DIR in front of git point it at the insta
   const server = fs.readFileSync(path.join(ROOT_DIR, 'server.js'), 'utf8');
   assert.match(server, /require\('\.\/lib\/tool-policy'\)\.setCodeProtectProvider\(\(\) => require\('\.\/lib\/code-protect'\)\.getCodeProtect\(\)\)/);
   assert.ok(server.indexOf('setCodeProtectProvider') < server.indexOf("server.listen(") || server.indexOf("server.listen(") < 0);
+});
+
+
+test('review r1: git run from a workspace without a repository of its own works on the install: refused; a workspace with its own repository is not', () => {
+  // the clone this test runs in is a git checkout: a workspace folder in it has no .git, so git walks up to the install
+  assert.ok(fs.existsSync(path.join(ROOT, '.git')), 'the test runs in a git checkout');
+  for (const cmd of ['git reset --hard HEAD', 'git stash pop', 'git stash', 'git checkout main', 'git pull']) {
+    assert.ok(refused(dec(lead, 'Bash', { command: cmd })), `from the workspace: ${cmd}`);
+    assert.ok(refused(dec(lead, 'Bash', { command: `cd ${P('workspaces', 'sam')} && ${cmd}` })), `cd into a workspace: ${cmd}`);
+  }
+  assert.ok(!refused(dec(lead, 'Bash', { command: 'git status' })), 'looking is fine');
+  // a separate install in a temporary folder: a workspace with its own .git is its own repository
+  const t = fs.mkdtempSync(path.join(os.tmpdir(), 'cp-repo-'));
+  try {
+    fs.mkdirSync(path.join(t, '.git'));
+    fs.mkdirSync(path.join(t, 'workspaces', 'sam', '.git'), { recursive: true });
+    fs.mkdirSync(path.join(t, 'workspaces', 'kim'), { recursive: true });
+    const cp = createCodeProtect({ stateOf: () => 'on', hubRoot: t });
+    assert.strictEqual(cp.gitChangesTree('git checkout main', path.join(t, 'workspaces', 'sam')), false, 'own repository');
+    assert.strictEqual(cp.gitChangesTree('git checkout main', path.join(t, 'workspaces', 'kim')), true, 'no repository of its own');
+    assert.strictEqual(cp.gitChangesTree(`git -C ${path.join(t, 'workspaces', 'kim')} reset --hard`, '/'), true);
+    assert.strictEqual(cp.gitChangesTree('git checkout main', path.join(os.tmpdir())), false, 'outside the install, no repository');
+  } finally { fs.rmSync(t, { recursive: true, force: true }); }
+});
+
+test('review r1: attached -C, --git-dir, env-wrapped GIT_DIR / GIT_WORK_TREE, aliases and the plumbing that writes files', () => {
+  const out = '/';
+  for (const cmd of [
+    `git -C${ROOT} reset --hard HEAD`,
+    `git --git-dir=${P('.git')} --work-tree=${ROOT} checkout -- lib/a.js`,
+    `git --git-dir ${P('.git')} stash pop`,
+    `env GIT_DIR=${P('.git')} GIT_WORK_TREE=${ROOT} git checkout -- lib/a.js`,
+    `env -i GIT_WORK_TREE=${ROOT} git reset --hard`,
+    `git -C ${ROOT} -c alias.co=checkout co -- lib/a.js`,
+    `git -C ${ROOT} read-tree -u --reset HEAD`,
+    `git -C ${ROOT} checkout-index -a -f`,
+    `git -C ${ROOT} worktree add ${P('lib', 'x')}`,
+  ]) {
+    // run from / (no repository there), so only the option or the variable points git at the install
+    tp.setCodeProtectProvider(() => make('on'));
+    try { assert.ok(refused(tp.decide({ agent: lead, tool: 'Bash', input: { command: cmd }, cwd: out })), cmd); }
+    finally { tp.setCodeProtectProvider(null); }
+  }
+  tp.setCodeProtectProvider(() => make('on'));
+  try { assert.ok(!refused(tp.decide({ agent: lead, tool: 'Bash', input: { command: 'git -C /tmp checkout main' }, cwd: out })), 'another folder'); }
+  finally { tp.setCodeProtectProvider(null); }
+  // updating the install from an agent's shell
+  for (const cmd of [`${P('scripts', 'hub-cli.js')} update`, 'mymaestro update --put-aside', `node ${P('scripts', 'hub-cli.js')} update`]) {
+    assert.ok(refused(dec(lead, 'Bash', { command: cmd })), cmd);
+  }
+});
+
+test('review r1: a detection error inside the command reading refuses (no internal catch); the settings files in data/ are protected', () => {
+  const cp = make('on');
+  const verify = require('../lib/selfcheck/verify');
+  const orig = verify.shellWritePaths;
+  verify.shellWritePaths = () => { throw new Error('scan broke'); };
+  try {
+    assert.throws(() => cp.commandWritesProtected(`echo change > ${P('app.js')}`, '/'), /scan broke/);
+    tp.setCodeProtectProvider(() => cp);
+    try { assert.ok(refused(tp.decide({ agent: lead, tool: 'Bash', input: { command: `echo change > ${P('app.js')}` }, cwd: cwdOf(lead) }))); }
+    finally { tp.setCodeProtectProvider(null); }
+  } finally { verify.shellWritePaths = orig; }
+  assert.strictEqual(cp.isProtectedPath(P('data', 'behaviour-reviews.json')), true);
+  assert.strictEqual(cp.isProtectedPath(P('data', 'put-aside.json')), true);
+  assert.strictEqual(cp.isProtectedPath(P('data', 'other.json')), false);
+  assert.ok(refused(dec(lead, 'Write', { file_path: P('data', 'behaviour-reviews.json') })));
+  assert.ok(refused(dec(lead, 'Bash', { command: `echo '{}' > ${P('data', 'behaviour-reviews.json')}` })));
 });

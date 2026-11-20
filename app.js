@@ -2958,7 +2958,7 @@
       }
       // Changed files of the code itself: nothing moves the code over them. Put them aside (git stash) or cancel.
       const gsLocal = s.localChanges || [];
-      if (gsLocal.length > 0 && !s.rewritten) {
+      if (gsLocal.length > 0) {
         html += `<div class="gs-blocker" id="gs-local"><strong>Your Maestro's own files were changed on this computer</strong>${
           gsLocal.slice(0, 10).map(f => `<div class="gs-file">${esc(f)}</div>`).join('')
         }${gsLocal.length > 10 ? `<div class="gs-sub">and ${gsLocal.length - 10} more</div>` : ''}<p class="gs-sub">An update would stop on them, or they may break after one.</p></div>`;
@@ -2985,7 +2985,8 @@
       }
       if (s.canPutAside && !s.upToDate) {
         html += `<button class="gs-btn" id="gs-force" onclick="runGitSync(true)">Put my changes aside and update</button>`;
-      } else if (s.canPutAside) {
+      } else if (s.canPutAside || (s.rewritten && gsLocal.length > 0)) {
+        // up to date, or a rewritten history that the changed files block: put them aside only (no update)
         html += `<button class="gs-btn" id="gs-force" onclick="runGitSync('aside')">Put my changes aside</button>`;
       }
       if (s.canRewriteUpdate) {

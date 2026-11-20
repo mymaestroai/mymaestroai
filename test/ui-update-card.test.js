@@ -63,7 +63,8 @@ test('review fixes: Later names its version, busy agents are confirmed at the cl
   // Changed on purpose (local-edits change): nothing is discarded any more. The phone offers "Put my changes aside" (git stash,
   // never put back), with a confirm, using the chosen channel; the desktop dialog does the same.
   assert.match(mobile, /Put my changes aside and update/);
-  assert.match(mobile, /if \(confirm\(`Put these \$\{lc\.length\} change[\s\S]*?runUpdateFromPhone\(s\.upToDate \? null : chosen\(\), true, s\.upToDate\)/);
+  // review r1: put-aside-only also when a rewritten history is blocked by the changed files (asideOnly), not only when up to date
+  assert.match(mobile, /if \(confirm\(`Put these \$\{lc\.length\} change[\s\S]*?runUpdateFromPhone\(asideOnly \? null : chosen\(\), true, asideOnly\)/);
   assert.match(mobile, /asideOnly \? '\/api\/git-sync\/put-aside' : force \? '\/api\/git-sync\/force-update' : '\/api\/git-sync\/update'/);
   assert.match(app, /Put my changes aside and update/);
   assert.match(app, /Put these \$\{n\} change/, 'desktop: the same confirm');

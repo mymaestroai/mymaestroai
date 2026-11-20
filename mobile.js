@@ -11845,18 +11845,21 @@ async function openUpdateSheet() {
   const stayLabel = s.canUpdate ? 'Update & restart' : (s.upToDate ? 'Up to date' : 'Blocked');
   // Changed files of the code itself: nothing moves the code over them. Put them aside (git stash) or cancel.
   const lc = s.localChanges || [];
-  const force = lc.length && !s.rewritten ? `<div class="upd-err" id="upd-local"><b>Your Maestro's own files were changed on this computer</b>${lc.slice(0, 10).map(f => `<div><small>${esc(f)}</small></div>`).join('')}${lc.length > 10 ? `<div><small>and ${lc.length - 10} more</small></div>` : ''}<p><small>An update would stop on them, or they may break after one.</small></p></div>` : '';
-  const asideLabel = s.upToDate ? 'Put my changes aside' : 'Put my changes aside and update';
-  d.innerHTML = `<h3>Update hub</h3><p>Branch <b>${esc(s.branch)}</b>${s.upToDate ? ' — up to date on this channel' : ''}</p><div>${radios}</div>${blockers}${force}${incoming}<div class="btns"><button id="upd-close">Cancel</button>${s.canPutAside ? `<button id="upd-force">${asideLabel}</button>` : ''}<button id="upd-go" class="go accent" ${s.canUpdate ? '' : 'disabled'}>${stayLabel}</button></div>`;
+  const force = lc.length ? `<div class="upd-err" id="upd-local"><b>Your Maestro's own files were changed on this computer</b>${lc.slice(0, 10).map(f => `<div><small>${esc(f)}</small></div>`).join('')}${lc.length > 10 ? `<div><small>and ${lc.length - 10} more</small></div>` : ''}<p><small>An update would stop on them, or they may break after one.</small></p></div>` : '';
+  // up to date, or a rewritten history that the changed files block: put them aside only (no update)
+  const asideOnly = s.upToDate || (!s.canPutAside && !!s.rewritten && lc.length > 0);
+  const canAside = s.canPutAside || asideOnly && lc.length > 0;
+  const asideLabel = asideOnly ? 'Put my changes aside' : 'Put my changes aside and update';
+  d.innerHTML = `<h3>Update hub</h3><p>Branch <b>${esc(s.branch)}</b>${s.upToDate ? ' — up to date on this channel' : ''}</p><div>${radios}</div>${blockers}${force}${incoming}<div class="btns"><button id="upd-close">Cancel</button>${canAside ? `<button id="upd-force">${asideLabel}</button>` : ''}<button id="upd-go" class="go accent" ${s.canUpdate ? '' : 'disabled'}>${stayLabel}</button></div>`;
   // Putting the changes aside, then updating (the chosen channel, or only putting aside when already up to date).
-  if (s.canPutAside) $('upd-force').addEventListener('click', () => { if (confirm(`Put these ${lc.length} change${lc.length === 1 ? '' : 's'} aside? Your Maestro won't put them back; you can find them with git stash list.`)) runUpdateFromPhone(s.upToDate ? null : chosen(), true, s.upToDate); });
+  if (canAside) $('upd-force').addEventListener('click', () => { if (confirm(`Put these ${lc.length} change${lc.length === 1 ? '' : 's'} aside? Your Maestro won't put them back; you can find them with git stash list.`)) runUpdateFromPhone(asideOnly ? null : chosen(), true, asideOnly); });
   const go = $('upd-go');
   const chosen = () => { const sel = d.querySelector('input[name="upd-channel"]:checked'); return sel && sel.value !== ch.current ? sel.value : null; };
   const refresh = () => {
     const other = chosen() ? ch.channels.find(c => c.id === chosen()) : null;
     if (other) { go.disabled = false; go.textContent = `Switch to ${other.label} & restart`; }
     else { go.disabled = !s.canUpdate; go.textContent = stayLabel; }
-    if ($('upd-force') && !s.upToDate) $('upd-force').textContent = other ? `Put my changes aside and switch to ${other.label}` : asideLabel;
+    if ($('upd-force') && !asideOnly) $('upd-force').textContent = other ? `Put my changes aside and switch to ${other.label}` : asideLabel;
     if (lc.length) go.disabled = true;   // the update itself would stop on the changed files
   };
   for (const r of d.querySelectorAll('input[name="upd-channel"]')) r.addEventListener('change', refresh);
