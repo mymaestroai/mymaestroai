@@ -2412,10 +2412,35 @@
     .handoff-cards .ho-pill.ho-failed, .handoff-cards .ho-pill.ho-interrupted { color: var(--danger, #f85149); border-color: var(--danger, #f85149); }
     .handoff-cards .ho-topic { margin-top: 4px; overflow-wrap: anywhere; white-space: normal; }
     .handoff-cards .ho-time { margin-top: 2px; font-size: 12px; color: var(--text-dim); }
-    .handoff-cards .ho-status { color: var(--accent); }
+    .handoff-cards .ho-status { color: var(--accent); background: none; border: 0; padding: 0; margin: 0; font: inherit; text-decoration: underline; cursor: pointer; }
     .handoff-cards .ho-card.ho-ended { display: flex; align-items: center; gap: 8px; padding: 4px 10px; font-size: 13px; }
     .handoff-cards .ho-ended .ho-line { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-dim); }
     .handoff-cards .ho-ended .ho-pill, .handoff-cards .ho-ended .ho-status { flex: none; }
+    /* the strip: one compact line that expands into the cards */
+    .handoff-cards { gap: 4px; }
+    .handoff-cards .ho-strip { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 32px; white-space: nowrap; overflow: hidden; box-sizing: border-box; padding: 6px 10px; font: inherit; font-size: 13px; text-align: left; color: var(--text); background: var(--bg-input); border: 1px solid var(--border); border-radius: 8px; cursor: pointer; transition: border-color .3s, background-color .3s; }
+    .handoff-cards .ho-sum { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .handoff-cards .ho-chev { flex: none; width: 7px; height: 7px; border-right: 2px solid var(--text-dim); border-bottom: 2px solid var(--text-dim); transform: rotate(45deg); margin-top: -3px; transition: transform .15s; }
+    .handoff-cards .ho-strip[aria-expanded="true"] .ho-chev { transform: rotate(-135deg); margin-top: 3px; }
+    .handoff-cards .ho-list { display: flex; flex-direction: column; gap: 4px; }
+    .handoff-cards .ho-list[hidden] { display: none; }
+    .handoff-cards .ho-list .ho-card:not(.ho-ended) { padding: 6px 10px; }
+    .handoff-cards .ho-strip.ho-flash { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 15%, var(--bg-input)); }
+    @media (prefers-reduced-motion: reduce) { .handoff-cards .ho-strip, .handoff-cards .ho-chev { transition: none; } }
+    /* The hand-off Status sheet (lib/ui-hand-off-card.js openStatus): a centred panel; its body reads like a chat message */
+    .ho-sheet { padding: 0; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-secondary, var(--bg-input)); color: var(--text); width: min(720px, calc(100vw - 32px)); max-width: 720px; max-height: 80vh; overflow: hidden; box-sizing: border-box; }
+    .ho-sheet[open] { display: flex; flex-direction: column; }
+    .ho-sheet { margin: auto; inset: 0; }   /* the page's reset zeroes margins: a modal dialog is centred by margin auto */
+    .ho-sheet::backdrop { background: rgba(0, 0, 0, 0.5); }
+    .ho-sheet .ho-sheet-inner { display: flex; flex-direction: column; min-height: 0; max-height: 80vh; padding: 14px 18px; box-sizing: border-box; }
+    .ho-sheet .ho-sheet-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
+    .ho-sheet .ho-sheet-titles { min-width: 0; flex: 1; }
+    .ho-sheet .ho-sheet-title { font-weight: 700; font-size: 16px; overflow-wrap: anywhere; }
+    .ho-sheet .ho-sheet-sub { margin-top: 2px; font-size: 13px; color: var(--text-dim); }
+    .ho-sheet .ho-sheet-close { flex: none; font: inherit; font-size: 14px; color: var(--text); background: var(--bg-input); border: 1px solid var(--border); border-radius: 8px; padding: 6px 14px; cursor: pointer; }
+    .ho-sheet .ho-sheet-body { flex: 1; min-height: 0; overflow-y: auto; padding-top: 12px; font-size: 15px; line-height: 1.5; overflow-wrap: anywhere; }
+    .ho-sheet .ho-sheet-body pre { overflow-x: auto; }
+    .ho-sheet .ho-sheet-body img { max-width: 100%; height: auto; }
     /* Download cards under an agent's reply (lib/ui-file-card.js) */
     .file-cards { display: flex; flex-direction: column; gap: 8px; margin: 4px 0 8px; }
     .file-card { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; max-width: 420px; box-sizing: border-box; display: flex; flex-direction: column; gap: 8px; background: var(--bg-input); }

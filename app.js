@@ -1526,7 +1526,7 @@
       return c && !c.isGroup && c.agent ? String(c.agent) : '';
     }
     // Hand-off cards above the message box (lib/ui-hand-off-card.js): follows the open one-agent chat.
-    if (window.HandOffCard) HandOffCard.track({ getAgent: filesActiveAgent, getContainer: () => document.getElementById('handoff-cards-' + window.__activeChatId) });
+    if (window.HandOffCard) HandOffCard.track({ getAgent: filesActiveAgent, getContainer: () => document.getElementById('handoff-cards-' + window.__activeChatId), renderMarkdown: (t) => window.formatContentForSheets(t) });
     function filesOwnerParam() {
       const me = window.hubMe;
       if (!me || !me.isAdmin) return '';
@@ -22062,6 +22062,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       return '<div class="image-gallery">' + images.map(u => `<img src="${escapeHtml(u)}" class="generated-image" alt="Generated image"${inlineStyle ? ` style="${inlineStyle}"` : ''}>`).join('') + '</div>';
     }
 
+    window.formatContentForSheets = formatContent;   // the hand-off Status sheet renders its Markdown like a chat message
     function formatContent(content) {
       if (!content) return '<span style="opacity:0.5">...</span>';
 
