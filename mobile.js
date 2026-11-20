@@ -1707,7 +1707,7 @@ async function loadAgents() {
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     agents = (await r.json()).agents || [];
     if (typeof voiceWakeRecheck === 'function') voiceWakeRecheck();   // an agent's recognizer can have changed
-    { const ri = $('menu-recordings'); if (ri) ri.hidden = !agents.some(a => a && a.recordings && a.recordings.canDownload === true); }   // ⋮ menu: Recordings only for a person on at least one agent's download list
+    { const ri = $('menu-recordings'); if (ri) ri.hidden = !agents.some(a => a && a.recordings && a.recordings.canDownload === true); typeof menuGroupsSync === 'function' && menuGroupsSync(); }   // ⋮ menu: Recordings only for a person on at least one agent's download list
     if (agents.some(a => 'busy' in a)) {
       const map = {};
       for (const a of agents) map[a.name] = { busy: a.busy, busySince: a.busySince, activity: a.activity, pendingQuestion: a.pendingQuestion };
@@ -2511,6 +2511,7 @@ function updateDots() {
   if (a) {
     a.textContent = actUnseen > 99 ? '99+' : String(actUnseen);
     a.classList.toggle('on', actUnseen > 0 && screen !== 'activity');
+    typeof menuAdvDotSync === 'function' && menuAdvDotSync();
   }
   // Actions waiting for approval (any agent): amber count on the Agents tab.
   const ap = $('agents-approvals');
@@ -12088,6 +12089,7 @@ function paintUpdateCard() {
   const s = isAdmin() ? ucState : null;
   const avail = !!(s && s.enabled && s.available);
   if (note) note.textContent = avail ? ` · ${s.latestVersion && s.latestVersion !== s.currentVersion ? s.latestVersion : 'new version'} ready` : '';
+  typeof menuAdvDotSync === 'function' && menuAdvDotSync();
   if (!card) return;
   if (!avail || s.snoozed) { card.hidden = true; card.innerHTML = ''; return; }
   card.classList.toggle('sec', !!s.security);
@@ -13431,6 +13433,7 @@ async function loadMe() {
       { const su = $('menu-subs'); if (su) su.hidden = !(hubMe && hubMe.isAdmin === true); }
       if (typeof simpleMenuHide === 'function') simpleMenuHide();   // "Switch to Simple" only for a real account (not the legacy single-password login)
       if (typeof simpleToggleSync === 'function') simpleToggleSync();   // the Simple view switch (and Simple's theme button) only for a real account
+      typeof menuGroupsSync === 'function' && menuGroupsSync();
       // Signed in: recorded-call pieces the hub never acknowledged (a closed app, a reload, a dead network) are sent now, one at a time (lib/ui-voice-call.js).
       if (hubMe && hubMe.user) setTimeout(() => { try { voiceRecResendPending((u, i) => fetch(u, { credentials: 'include', ...i }), { userId: hubMe.user.id }); } catch { /* the call code is not up yet */ } }, 0);
     }
@@ -13495,6 +13498,7 @@ function applyMultiUser() {
     $('menu-2fa-note').hidden = !(hubMe.isAdmin && !hubMe.user.totpEnabled && hubMe.admin2faRequired !== false);
     $('menu-signout').textContent = `Sign out (${hubMe.user.name || hubMe.user.login})`;
   }
+  typeof menuGroupsSync === 'function' && menuGroupsSync();
 }
 
 // Reload app (menu): fetch the page's own files fresh, ask the service worker to look for a new version, then reload.
@@ -13524,6 +13528,7 @@ function reloadApp() {
   return appReloaderInst.reload();
 }
 
+
 function toggleMenu(e) {
   e.stopPropagation();
   const menu = $('menu');
@@ -13532,7 +13537,92 @@ function toggleMenu(e) {
   if (menu.classList.contains('open')) paintMenuCredit();
   if (menu.classList.contains('open')) paintVersionLabel();
   if (menu.classList.contains('open')) refreshMemoryHealth();
+  if (menu.classList.contains('open') && typeof menuOnOpen === 'function') menuOnOpen();
 }
+
+// ── phone menu (begin) ──
+// The ⋮ menu: Look on top, everyday items, then "Advanced" (folded, remembered on this phone) in groups.
+const MENU_ADV_KEY = 'mm-menu-advanced';
+function menuAdvRead(storage) {
+  try { return !!storage && storage.getItem(MENU_ADV_KEY) === '1'; } catch { return false; }
+}
+function menuAdvWrite(storage, open) {
+  try { if (storage) storage.setItem(MENU_ADV_KEY, open ? '1' : '0'); } catch { /* a phone that cannot store it keeps it for this visit */ }
+}
+// items: [{ hidden, chatOnly }]; a chat-only item does not count when no chat is open.
+function menuGroupVisible(items, noChat) {
+  return (items || []).some(it => it && !it.hidden && !(it.chatOnly && noChat));
+}
+function menuGroupsSync() {
+  const menu = document.getElementById('menu');
+  if (!menu) return;
+  const noChat = menu.classList.contains('no-chat');
+  for (const g of menu.querySelectorAll('.menu-group')) {
+    const items = [...g.children].filter(c => !c.classList.contains('menu-group-title'))
+      .map(c => ({ hidden: c.hidden, chatOnly: c.classList.contains('chat-only') }));
+    g.hidden = !menuGroupVisible(items, noChat);
+  }
+}
+function menuAdvDotSync() {
+  const dot = document.querySelector('#menu-adv-toggle .menu-adv-dot'), adv = document.getElementById('menu-adv');
+  if (!dot || !adv) return;
+  const on = (id) => { const e = document.getElementById(id); return !!(e && e.classList.contains('on')); };
+  const note = document.getElementById('menu-update-note');
+  const wants = on('act-unread') || on('menu-memory-count') || !!(note && (note.textContent || '').trim());
+  dot.hidden = !(adv.hidden && wants);
+  const tg = document.getElementById('menu-adv-toggle');   // the dot is visual: the row says it in words too
+  if (tg) { if (dot.hidden) tg.removeAttribute('aria-label'); else tg.setAttribute('aria-label', 'Advanced, something inside needs attention'); }
+}
+function menuAdvApply(open) {
+  const adv = document.getElementById('menu-adv'), tg = document.getElementById('menu-adv-toggle');
+  if (!adv || !tg) return;
+  adv.hidden = !open;
+  tg.setAttribute('aria-expanded', String(!!open));
+  const ch = tg.querySelector('.menu-adv-chev');
+  if (ch) ch.textContent = open ? '▾' : '▸';
+  menuAdvDotSync();
+}
+function menuLookName() {
+  const L = window.HubLooks, el = document.getElementById('menu-look-name');
+  if (!el || !L) return;
+  let label = '';
+  try { const cur = L.applied(document); const m = (L.LOOKS || []).find(l => l.id === cur); label = m ? m.label : ''; } catch { /* no label */ }
+  el.textContent = label ? label + ' ›' : '›';
+}
+function menuOnOpen() {
+  menuGroupsSync();
+  menuAdvDotSync();
+  menuLookName();
+}
+if (typeof document !== 'undefined' && document.getElementById) {
+  const look = document.getElementById('menu-look'), pick = document.getElementById('menu-look-pick'), tg = document.getElementById('menu-adv-toggle');
+  let store = null;
+  try { store = window.localStorage; } catch { store = null; }
+  if (look) look.hidden = !window.HubLooks;   // shown by this script only: an older cached script has no handler for it
+  if (look && pick) {
+    look.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const open = pick.hidden;
+      pick.hidden = !open;
+      look.setAttribute('aria-expanded', String(open));
+      if (open) lookPickerPaint(pick, menuLookName);
+    });
+    pick.addEventListener('click', (e) => e.stopPropagation());   // choosing a look repaints the picker in place: the menu stays open
+  }
+  if (tg) {
+    tg.hidden = false;   // the page shows every item until this script runs (an older cached script never folds them)
+    menuAdvApply(menuAdvRead(store));
+    tg.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const open = document.getElementById('menu-adv').hidden;   // folded now: open it
+      menuAdvWrite(store, open);
+      menuAdvApply(open);
+    });
+  }
+  const adv = document.getElementById('menu-adv');
+  if (adv) adv.addEventListener('click', (e) => { if (e.target && e.target.closest && e.target.closest('.menu-group-title')) e.stopPropagation(); });
+}
+// ── phone menu (end) ──
 
 // Memory (lib/memory-health): admins see the agents the last check flagged; the menu line shows only when there are
 // some. Read-only here: Settings → Status → Memory on a computer has the details.
@@ -13552,6 +13642,8 @@ async function refreshMemoryHealth() {
     c.textContent = n ? String(n) : '';
     c.classList.toggle('on', !!n);
   } catch {}
+  typeof menuGroupsSync === 'function' && menuGroupsSync();
+  typeof menuAdvDotSync === 'function' && menuAdvDotSync();
   paintMemorySheet();
 }
 function memorySheet() {
@@ -13752,7 +13844,7 @@ function lookSwatch(look) {
   panel.appendChild(aa); panel.appendChild(dot); box.appendChild(panel);
   return box;
 }
-function lookPickerPaint(host) {
+function lookPickerPaint(host, onChosen) {
   const L = window.HubLooks;
   if (!host) return;
   while (host.firstChild) host.removeChild(host.firstChild);
@@ -13781,7 +13873,8 @@ function lookPickerPaint(host) {
     b.addEventListener('click', () => {
       if (!L.choose(look.id, L.storageOf(window))) return;
       L.apply(document, look.id);   // no reload: the stylesheet swaps in place
-      lookPickerPaint(host);
+      lookPickerPaint(host, onChosen);
+      if (typeof onChosen === 'function') { try { onChosen(look.id); } catch { /* the caller's refresh must not undo the choice */ } }
       const again = [...host.querySelectorAll('button[data-look]')].find(x => x.dataset.look === look.id);
       if (again) again.focus();   // focus stays on the swatch just chosen
     });
@@ -15316,7 +15409,7 @@ function simpleSettingsOpen() {
     '<button type="button" class="ss-row" id="ss-out"><b>Sign out</b></button>' +
     '<button type="button" class="ss-close">Close</button>';
   d.querySelector('.ss-val').textContent = name;
-  { const ls = document.createElement('div'); ls.className = 'ss-sec'; const lt = document.createElement('div'); lt.className = 'ss-title'; lt.appendChild(document.createTextNode('Look')); const lh = document.createElement('div'); ls.appendChild(lt); ls.appendChild(lh); d.insertBefore(ls, d.querySelector('.ss-row')); lookPickerPaint(lh); }
+  { const ls = document.createElement('div'); ls.className = 'ss-sec'; const lt = document.createElement('div'); lt.className = 'ss-title'; lt.appendChild(document.createTextNode('Look')); const lh = document.createElement('div'); ls.appendChild(lt); ls.appendChild(lh); d.insertBefore(ls, d.querySelector('.ss-sec')); lookPickerPaint(lh); }   // Look is the first section, right after the h3
   const paint = () => { const cur = (hubMe && hubMe.theme) || 'auto'; d.querySelectorAll('.ss-seg button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.theme === cur))); };
   paint();
   d.querySelectorAll('.ss-seg button').forEach(b => b.addEventListener('click', async () => {

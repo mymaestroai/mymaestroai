@@ -99,7 +99,7 @@ test('the toggle itself is unchanged: same API call, notifyArmed and the no-devi
 
 test('the ⋮ menu: a Notifications item next to the test item opens the defaults sheet with the per-agent list and Reset', () => {
   const i = html.indexOf('id="menu-notify-test"'), j = html.indexOf('id="menu-notify-prefs"');
-  assert.ok(i > 0 && j > i && j - i < 200, 'right after Send a test notification');
+  assert.ok(i > 0 && j > 0 && Math.abs(j - i) < 300, 'next to Send a test notification');   // phone-menu reorder: Notification settings now comes just before the test item in the same group
   assert.ok(html.includes('<dialog id="notify-prefs-sheet"'));
   assert.ok(js.includes("$('menu-notify-prefs')?.addEventListener('click'") && js.includes('openNotifyPrefsSheet()'));
   const paint = fn('paintNotifyPrefsSheet');
