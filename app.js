@@ -11094,6 +11094,28 @@
     // history, so the window re-attaches to that instead.
     const REATTACH_GIVE_UP_MS = 30 * 60 * 1000;   // only used when the hub cannot tell us whether the agent is busy
 
+    // ── live reply text (begin) ──
+    // The reply text a live stream has received so far, by message id (streamResponseSolo keeps it current). A dropped,
+    // stalled or cancelled stream keeps exactly this as its partial reply. Never the bubble's textContent: that also holds
+    // the reasoning and tool panels (their labels, "thinking…", the ⤢ and show buttons and the whole reasoning text),
+    // which then showed as reply text until the real reply came in.
+    const liveReplyText = new Map();
+    // Called by the stream and its error paths (plain calls: page-slice tests stub unknown functions).
+    function noteLiveReply(msgId, text) { liveReplyText.set(msgId, text); }
+    function dropLiveReply(msgId) { liveReplyText.delete(msgId); }
+    // The message's own text when no stream text is known: a copy without the panels, buttons and status lines.
+    function messageOwnText(el) {
+      if (!el) return '';
+      const scan = el.cloneNode(true);
+      scan.querySelectorAll('.reason-stream, .tool-stream, .inline-thinking, .msg-copy, .msg-speak, .msg-time, .live-activity, .token-usage, .file-cards').forEach((n) => n.remove());
+      return scan.textContent || '';
+    }
+    function partialReplyText(msgId) {
+      if (liveReplyText.has(msgId)) return liveReplyText.get(msgId) || '';
+      return messageOwnText(document.getElementById(msgId));
+    }
+    // ── live reply text (end) ──
+
     function enterReattach(chatId, msgId, content, partialText, reason, since = null, sentAt = null) {
       const chat = chats[chatId];
       if (!chat) return;
@@ -11542,8 +11564,8 @@
         const wasUserCancelled = !hubRecovered && (err.name === 'AbortError' || chat.status === 'idle' || !chat.controller);
         if (wasUserCancelled) {
           // Keep whatever was already streamed — don't overwrite
-          const msgEl = document.getElementById(msgId);
-          const existing = msgEl ? msgEl.textContent : '';
+          const existing = partialReplyText(msgId);   // the reply's own text, never the panels' (reasoning, tools)
+          dropLiveReply(msgId);
           const wasPaused = chat.paused;
           if (existing && existing !== '⏳ Thinking...' && existing !== '🔄 Reconnecting...') {
             const existingIdx = chat.messages.findIndex(m => m.role === 'assistant' && m.partial);
@@ -11559,9 +11581,9 @@
           }
           delete chat.lastMsgId;
         } else {
-          const msgEl = document.getElementById(msgId);
-          const existing = msgEl ? msgEl.textContent : '';
-          const partialText = existing && existing !== '⏳ Thinking...' ? existing : '';
+          const existing = partialReplyText(msgId);   // the reply's own text, never the panels' (reasoning, tools)
+          dropLiveReply(msgId);
+          const partialText = existing && existing !== '⏳ Thinking...' && existing !== '🔄 Reconnecting...' ? existing : '';
           const isConnectionLoss = hubRecovered ||
                                    err.name === 'TypeError' ||              // fetch(): network error / failed to fetch
                                    err.message.includes('network') ||
@@ -12645,6 +12667,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
               if (typeof simpleOn === 'function' && simpleOn()) simpleFirstReply(chatId, msgId);   // Simple: the Thinking box goes at the first reply text
               fullResponse += delta;
               displayContent += delta;
+              noteLiveReply(msgId, fullResponse);   // what a dropped stream keeps (never the bubble's textContent)
 
               // Start a new step if text arrives after tool results completed
               if (lastEventWasToolResult) {
@@ -12683,6 +12706,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       }
 
       const partial = !fullResponse || fullResponse.length === 0;
+      dropLiveReply(msgId);
       if (!fullResponse) fullResponse = '[No response]';
       return { text: fullResponse, images, toolActivity, partial, steps };
     }
