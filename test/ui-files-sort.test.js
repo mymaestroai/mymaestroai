@@ -66,3 +66,41 @@ for (const [label, make] of [['desktop', desktop], ['phone', phone]]) {
     assert.deepStrictEqual(make(ls).names().slice(2), ['new.txt', 'mid.txt', 'old.txt']);
   });
 }
+
+const broken = () => { const s = store(); s.setItem = () => { throw new Error('QuotaExceededError'); }; return s; };
+for (const [label, make] of [['desktop', desktop], ['phone', phone]]) {
+  test(`${label}: sorting still works when localStorage.setItem throws (private mode)`, () => {
+    const v = make(broken());
+    v.sortBy('name');
+    assert.deepStrictEqual(v.names(), ['a-folder', 'b-folder', 'mid.txt', 'new.txt', 'old.txt']);
+    v.sortBy('name');
+    assert.deepStrictEqual(v.names(), ['b-folder', 'a-folder', 'old.txt', 'new.txt', 'mid.txt']);
+  });
+}
+
+test('desktop: after sorting by size, each row\'s data-i points at the entry whose name the row shows', () => {
+  const v = desktop(store());
+  v.sortBy('size');
+  const html = v.list.innerHTML;
+  const rows = [...html.matchAll(/<tr data-i="(\d+)">\s*<td class="name">(.*?)<\/td>/gs)];
+  assert.strictEqual(rows.length, 5);
+  const names = v.names();
+  for (const [, i, cell] of rows) {
+    assert.ok(cell.includes(names[Number(i)]), `row ${i} shows "${cell}" but entries[${i}] is ${names[Number(i)]}`);
+    // the action handlers of that row use the same index
+    const row = html.slice(html.indexOf(`<tr data-i="${i}">`)).split('</tr>')[0];
+    assert.ok(row.includes(`filesRename(${i})`) && row.includes(`filesDelete(${i})`));
+  }
+  assert.deepStrictEqual(rows.map(r => r[2].replace(/<[^>]*>/g, '').replace(/^\S+\s/, '').trim()), names);
+});
+
+test('markup: desktop headers are buttons with aria-sort; phone chips have aria-pressed and a 40px touch height', () => {
+  const d = desktop(store()).list.innerHTML;
+  assert.ok(d.includes('<button'), 'header button');
+  assert.ok(d.includes('aria-sort="descending"') && d.includes('aria-sort="none"'));
+  assert.ok(d.includes('class="fs-sort-btn"'));
+  const p = phone(store()).list.innerHTML;
+  assert.ok(p.includes('aria-pressed="true"') && p.includes('aria-pressed="false"'));
+  assert.ok(p.includes('min-height:40px'));
+  assert.ok(p.includes('flex-wrap:wrap'));
+});

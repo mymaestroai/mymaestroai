@@ -14017,8 +14017,8 @@ function filesRenderList() {
   const entries = filesState.entries;
   if (!entries.length) { list.innerHTML = `<div class="fs-empty">${filesState.path ? 'This folder is empty.' : 'No files yet.'} Use Upload to add some.</div>`; return; }
   const srt = filesSortGet();
-  const chip = (key, label) => `<button data-act="sort-${key}" style="background:${srt.key === key ? 'var(--accent, #3987e5)' : 'transparent'};color:${srt.key === key ? '#fff' : 'inherit'};border:1px solid var(--border, #444);border-radius:12px;padding:2px 10px;margin-right:6px;font-size:12px">${label}${srt.key === key ? (srt.dir === 'asc' ? ' ▲' : ' ▼') : ''}</button>`;
-  const sortBar = `<div class="fs-sortbar" style="padding:4px 0 8px">Sort: ${chip('mtime', 'Date')}${chip('name', 'Name')}${chip('size', 'Size')}</div>`;
+  const chip = (key, label) => `<button data-act="sort-${key}" aria-pressed="${srt.key === key ? 'true' : 'false'}" style="background:${srt.key === key ? 'var(--accent, #3987e5)' : 'transparent'};color:${srt.key === key ? '#fff' : 'inherit'};border:1px solid var(--border, #444);border-radius:12px;padding:2px 10px;min-height:40px;font-size:12px">${label}${srt.key === key ? (srt.dir === 'asc' ? ' ▲' : ' ▼') : ''}</button>`;
+  const sortBar = `<div class="fs-sortbar" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:4px 0 8px">Sort: ${chip('mtime', 'Date')}${chip('name', 'Name')}${chip('size', 'Size')}</div>`;
   const when = (t) => { if (!t) return ''; const d = new Date(t); return isNaN(d) ? '' : d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }); };
   list.innerHTML = sortBar + entries.map((e, i) => {
     const isDir = e.type === 'dir';
@@ -14037,8 +14037,11 @@ function filesRenderList() {
   }).join('');
 }
 // Sort choice shared with the desktop (localStorage 'hub-files-sort'), newest first by default; folders stay on top.
+let filesSortMem = null;   // the current choice kept in memory too, so sorting works when localStorage can't be written (private mode)
+const filesSortValid = (s) => !!s && ['name', 'size', 'mtime'].includes(s.key) && ['asc', 'desc'].includes(s.dir);
 function filesSortGet() {
-  try { const s = JSON.parse(localStorage.getItem('hub-files-sort') || 'null'); if (s && ['name', 'size', 'mtime'].includes(s.key) && ['asc', 'desc'].includes(s.dir)) return s; } catch {}
+  if (filesSortValid(filesSortMem)) return filesSortMem;
+  try { const s = JSON.parse(localStorage.getItem('hub-files-sort') || 'null'); if (filesSortValid(s)) return s; } catch {}
   return { key: 'mtime', dir: 'desc' };
 }
 function filesSortApply(list) {
@@ -14052,6 +14055,7 @@ function filesSortApply(list) {
 function filesSortBy(key) {
   const cur = filesSortGet();
   const next = cur.key === key ? { key, dir: cur.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: key === 'name' ? 'asc' : 'desc' };
+  filesSortMem = next;
   try { localStorage.setItem('hub-files-sort', JSON.stringify(next)); } catch {}
   filesState.openRow = -1;
   filesState.entries = filesSortApply(filesState.entries);

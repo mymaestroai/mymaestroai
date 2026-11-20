@@ -1672,7 +1672,7 @@
       if (!entries.length) { list.className = 'files-empty'; list.textContent = filesState.path ? 'This folder is empty. Drop files here or use Upload.' : 'No files yet. Drop files here or use Upload.'; return; }
       list.className = '';
       const when = (t) => { if (!t) return ''; const d = new Date(t); return isNaN(d) ? esc(String(t)) : d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }); };
-      const th = (key, label, style = '') => `<th style="cursor:pointer;user-select:none;${style}" onclick="filesSortBy('${key}')" title="Sort by ${label.toLowerCase()}">${label}${srt.key === key ? (srt.dir === 'asc' ? ' ▲' : ' ▼') : ''}</th>`;
+      const th = (key, label, style = '') => `<th aria-sort="${srt.key === key ? (srt.dir === 'asc' ? 'ascending' : 'descending') : 'none'}" style="${style}"><button type="button" class="fs-sort-btn" onclick="filesSortBy('${key}')" title="Sort by ${label.toLowerCase()}" style="background:none;border:0;padding:0;color:inherit;font:inherit;cursor:pointer;user-select:none">${label}${srt.key === key ? (srt.dir === 'asc' ? ' ▲' : ' ▼') : ''}</button></th>`;
       list.innerHTML = `<table><thead><tr>${th('name', 'Name')}${th('size', 'Size', 'text-align:right')}${th('mtime', 'Modified')}<th></th></tr></thead><tbody>` + entries.map((e, i) => {
         const rel = filesJoin(filesState.path, e.name);
         const isDir = e.type === 'dir';
@@ -1691,13 +1691,17 @@
       }).join('') + '</tbody></table>';
       filesState.entries = entries;
     }
+    let filesSortMem = null;   // the current choice kept in memory too, so sorting works when localStorage can't be written (private mode)
+    const filesSortValid = (s) => !!s && ['name', 'size', 'mtime'].includes(s.key) && ['asc', 'desc'].includes(s.dir);
     function filesSortGet() {
-      try { const s = JSON.parse(localStorage.getItem('hub-files-sort') || 'null'); if (s && ['name', 'size', 'mtime'].includes(s.key) && ['asc', 'desc'].includes(s.dir)) return s; } catch {}
+      if (filesSortValid(filesSortMem)) return filesSortMem;
+      try { const s = JSON.parse(localStorage.getItem('hub-files-sort') || 'null'); if (filesSortValid(s)) return s; } catch {}
       return { key: 'mtime', dir: 'desc' };
     }
     function filesSortBy(key) {
       const cur = filesSortGet();
       const next = cur.key === key ? { key, dir: cur.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: key === 'name' ? 'asc' : 'desc' };
+      filesSortMem = next;
       try { localStorage.setItem('hub-files-sort', JSON.stringify(next)); } catch {}
       filesRenderList();
     }
