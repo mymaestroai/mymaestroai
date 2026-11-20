@@ -1055,6 +1055,17 @@
   }
   function lockboxRuleWords(rule) { return Object.prototype.hasOwnProperty.call(LOCKBOX_RULES, rule) ? LOCKBOX_RULES[rule] : String(rule || ''); }
   function lockboxEnvNames(text) { return String(text || '').split(',').map(s => s.trim()).filter(Boolean); }
+  /** Why the control can't be used, from the status check's answer (code 0 = no answer). null: a member, who gets no control. */
+  function lockboxWhy(code, error, isAdmin) {
+    if (code === 403 && error === 'admin_only' && !isAdmin) return null;
+    if (code === 401 && error === 'totp_required') return 'Can\'t check the command lockbox: this sign-in still needs its two-factor code. Sign in again, then reload this page.';
+    if (code === 401) return 'Can\'t check the command lockbox: you are signed out. Sign in again, then reload this page.';
+    if (code === 403) return 'Can\'t check the command lockbox: only an admin\'s own browser sign-in may see or change it. Sign out and in again in this browser, then reload this page.';
+    if (code === 404) return 'Can\'t check the command lockbox: your Maestro is running an older version without it. A restart loads it.';
+    if (!code) return 'Can\'t check the command lockbox: no answer from your Maestro. Reload this page.';
+    if (code >= 200 && code < 300) return 'Can\'t check the command lockbox: your Maestro\'s answer could not be read. Reload this page.';
+    return 'Can\'t check the command lockbox: your Maestro answered ' + code + (error ? ' (' + String(error).slice(0, 80) + ')' : '') + '. Reload this page.';
+  }
   // lockbox:end
 
   let lockboxState = { status: null, agent: null };
@@ -1062,13 +1073,34 @@
     const block = document.getElementById('lockbox-block');
     if (!block) return;
     lockboxState.agent = agent || null;
+    lockboxState.status = null;
+    let code = 0, error = '';
     try {
       const r = await fetch('/api/lockbox/status', { credentials: 'include' });
-      if (!r.ok) { block.style.display = 'none'; return; }   // not an admin session: no control
-      lockboxState.status = await r.json();
-    } catch { block.style.display = 'none'; return; }
-    block.style.display = '';
+      code = r.status;
+      if (r.ok) lockboxState.status = await r.json();
+      else { try { const j = await r.json(); error = String((j && j.error) || ''); } catch { error = ''; } }
+    } catch { /* no answer, or an answer that isn't JSON: said below */ }
     const sel = document.getElementById('lockbox-mode');
+    if (!lockboxState.status || typeof lockboxState.status !== 'object') {
+      lockboxState.status = null;
+      // A member gets no control. Anyone else sees the row with the reason, never an empty space where it should be.
+      let admin = false;
+      // Unknown (no answer from /api/me) counts as an admin: the reason is shown rather than the row hidden from one.
+      if (code === 403) { try { const me = await apiFetch('/api/me'); admin = !!(me && me.isAdmin); } catch { admin = true; } }
+      const why = lockboxWhy(code, error, admin);
+      if (why === null) { block.style.display = 'none'; return; }
+      block.style.display = '';
+      sel.disabled = true;
+      document.getElementById('lockbox-help').textContent = why;
+      document.getElementById('lockbox-env-row').style.display = 'none';
+      document.getElementById('lockbox-log-title').style.display = 'none';
+      document.getElementById('lockbox-log').textContent = '';
+      return;
+    }
+    block.style.display = '';
+    sel.disabled = false;
+    document.getElementById('lockbox-log-title').style.display = '';
     sel.options[0].textContent = 'Hub default (' + lockboxCap(lockboxState.status.default || 'off') + ')';
     sel.value = (agent && agent.lockbox) || 'inherit';
     document.getElementById('lockbox-env').value = ((agent && agent.lockboxEnv) || []).join(', ');
