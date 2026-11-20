@@ -11843,36 +11843,45 @@ async function openUpdateSheet() {
   const blockers = s.blockers && s.blockers.length ? `<p class="upd-err">Update blocked: ${esc(s.blockers.join('; '))}</p>` : '';
   const incoming = s.commits && s.commits.length ? `<details><summary>${s.commits.length} incoming commit${s.commits.length === 1 ? '' : 's'}</summary>${s.commits.map(c => `<div>${esc(c)}</div>`).join('')}</details>` : '';
   const stayLabel = s.canUpdate ? 'Update & restart' : (s.upToDate ? 'Up to date' : 'Blocked');
-  const force = s.canForce ? `<p><small>The changed files are application files, not your data: they can be discarded.</small></p>` : '';
-  d.innerHTML = `<h3>Update hub</h3><p>Branch <b>${esc(s.branch)}</b>${s.upToDate ? ' — up to date on this channel' : ''}</p><div>${radios}</div>${blockers}${force}${incoming}<div class="btns"><button id="upd-close">Cancel</button>${s.canForce ? '<button id="upd-force">Discard changes &amp; update</button>' : ''}<button id="upd-go" class="go accent" ${s.canUpdate ? '' : 'disabled'}>${stayLabel}</button></div>`;
-  // Discarding updates the current channel only, so it is off while another channel is chosen.
-  if (s.canForce) $('upd-force').addEventListener('click', () => { if (chosen()) return; if (confirm(`Discard ${s.dirty.length} changed application file${s.dirty.length === 1 ? '' : 's'} and update ${s.branch}? Your chats, agents and data are not touched.`)) runUpdateFromPhone(null, true); });
+  // Changed files of the code itself: nothing moves the code over them. Put them aside (git stash) or cancel.
+  const lc = s.localChanges || [];
+  const force = lc.length && !s.rewritten ? `<div class="upd-err" id="upd-local"><b>Your Maestro's own files were changed on this computer</b>${lc.slice(0, 10).map(f => `<div><small>${esc(f)}</small></div>`).join('')}${lc.length > 10 ? `<div><small>and ${lc.length - 10} more</small></div>` : ''}<p><small>An update would stop on them, or they may break after one.</small></p></div>` : '';
+  const asideLabel = s.upToDate ? 'Put my changes aside' : 'Put my changes aside and update';
+  d.innerHTML = `<h3>Update hub</h3><p>Branch <b>${esc(s.branch)}</b>${s.upToDate ? ' — up to date on this channel' : ''}</p><div>${radios}</div>${blockers}${force}${incoming}<div class="btns"><button id="upd-close">Cancel</button>${s.canPutAside ? `<button id="upd-force">${asideLabel}</button>` : ''}<button id="upd-go" class="go accent" ${s.canUpdate ? '' : 'disabled'}>${stayLabel}</button></div>`;
+  // Putting the changes aside, then updating (the chosen channel, or only putting aside when already up to date).
+  if (s.canPutAside) $('upd-force').addEventListener('click', () => { if (confirm(`Put these ${lc.length} change${lc.length === 1 ? '' : 's'} aside? Your Maestro won't put them back; you can find them with git stash list.`)) runUpdateFromPhone(s.upToDate ? null : chosen(), true, s.upToDate); });
   const go = $('upd-go');
   const chosen = () => { const sel = d.querySelector('input[name="upd-channel"]:checked'); return sel && sel.value !== ch.current ? sel.value : null; };
   const refresh = () => {
     const other = chosen() ? ch.channels.find(c => c.id === chosen()) : null;
     if (other) { go.disabled = false; go.textContent = `Switch to ${other.label} & restart`; }
     else { go.disabled = !s.canUpdate; go.textContent = stayLabel; }
-    if ($('upd-force')) $('upd-force').disabled = !!other;
+    if ($('upd-force') && !s.upToDate) $('upd-force').textContent = other ? `Put my changes aside and switch to ${other.label}` : asideLabel;
+    if (lc.length) go.disabled = true;   // the update itself would stop on the changed files
   };
   for (const r of d.querySelectorAll('input[name="upd-channel"]')) r.addEventListener('change', refresh);
   $('upd-close').addEventListener('click', () => d.close());
   go.addEventListener('click', () => runUpdateFromPhone(chosen()));
 }
 
-async function runUpdateFromPhone(channel, force = false) {
+async function runUpdateFromPhone(channel, force = false, asideOnly = false) {
   const d = $('update-sheet');
   const go = $('upd-go');
   if (go) { go.disabled = true; go.textContent = channel ? 'Switching…' : 'Updating…'; }
   let r;
   try {
-    const resp = await api(force ? '/api/git-sync/force-update' : '/api/git-sync/update', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(channel && !force ? { channel } : {}) });
+    const resp = await api(asideOnly ? '/api/git-sync/put-aside' : force ? '/api/git-sync/force-update' : '/api/git-sync/update', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(channel && !asideOnly ? { channel } : {}) });
     r = await resp.json();
   } catch (e) { r = { success: false, error: e.message }; }
   if (!r || !r.success) {
     d.innerHTML = `<p class="upd-err">Update failed: ${esc((r && r.error) || 'unknown error')}</p><div class="btns"><button id="upd-close">Close</button><button id="upd-details" class="go">Details</button></div>`;
     $('upd-close').addEventListener('click', () => d.close());
     $('upd-details').addEventListener('click', () => openUpdateSheet());
+    return;
+  }
+  if (asideOnly) {   // no update, so no restart
+    d.innerHTML = `<p>${r.steps && r.steps.length ? 'Changes put aside.' : 'Nothing to put aside.'}</p>${(r.steps || []).map(st => `<div><small>• ${esc(st)}</small></div>`).join('')}<div class="btns"><button id="upd-close">Close</button></div>`;
+    $('upd-close').addEventListener('click', () => d.close());
     return;
   }
   d.innerHTML = `<p>Updated to ${esc(r.head)}.</p>${(r.steps || []).map(st => `<div><small>• ${esc(st)}</small></div>`).join('')}<p>Restarting…</p>`;
@@ -13537,6 +13546,31 @@ async function chooseTimeZone(sel) {
   secMsg('prof-tz-msg', error ? `Not saved: ${error}` : 'Saved.', !error);
 }
 
+// "Protect your Maestro's own code": the switch IS the state of the behaviour change 'protect-own-code' (admin-only route).
+async function mountCodeProtect(el) {
+  if (!el) return;
+  el.innerHTML = '<div class="sec-title">Protect your Maestro\'s own code</div><label class="sec-hint" style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="sec-code-protect" style="width:auto" disabled> Protect your Maestro\'s own code</label><div class="sec-hint">Agents can\'t change the program files of your Maestro on this computer, and a refused agent describes the change to you instead. Also on the Changes page.</div><div class="sec-msg" id="sec-code-protect-msg"></div>';
+  const box = el.querySelector('#sec-code-protect'), msg = el.querySelector('#sec-code-protect-msg');
+  try {
+    const r = await fetch('/api/behaviour-changes', { credentials: 'include' });
+    const j = r.ok ? await r.json() : null;
+    const e = j && (j.changes || []).find((c) => c.id === 'protect-own-code');
+    if (!e) { msg.textContent = 'Could not read this setting.'; return; }
+    box.checked = e.state === 'on';
+    box.disabled = false;
+    box.addEventListener('change', async () => {
+      const want = box.checked ? 'on' : 'off';
+      box.disabled = true;
+      try {
+        const p = await fetch('/api/behaviour-changes/protect-own-code', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ decision: want }) });
+        if (!p.ok) throw new Error((await p.json().catch(() => ({}))).error || 'Could not save.');
+        msg.textContent = want === 'on' ? 'On.' : 'Off.';
+      } catch (err) { box.checked = !box.checked; msg.textContent = err.message; }
+      box.disabled = false;
+    });
+  } catch { msg.textContent = 'Could not read this setting.'; }
+}
+
 function openSecuritySheet() {
   $('menu').classList.remove('open');
   const sheet = $('security-sheet');
@@ -13555,12 +13589,14 @@ function openSecuritySheet() {
       <div class="sec-title">Sessions</div>
       <div class="sec-actions"><button id="sec-revoke" class="danger">Sign out everywhere</button></div>
     </div>
+    ${hubMe && hubMe.isAdmin ? '<div class="sec-section" id="sec-code-protect-box"></div>' : ''}
     ${hubMe && hubMe.isAdmin ? `<div class="sec-section" id="sec-share" data-no-dirty>${shareSettingsHtml()}</div>` : ''}
     <div class="sec-actions" style="margin-top:10px"><button id="sec-close">Close</button></div>`;
   $('sec-pw-go').addEventListener('click', changePassword);
   $('sec-revoke').addEventListener('click', signOutEverywhere);
   $('sec-close').addEventListener('click', () => dialogRequestClose(sheet));
   paintTwoFactor();
+  mountCodeProtect($('sec-code-protect-box'));
   if ($('sec-share')) shareSettingsMount($('sec-share'), shareLinksListOpen);
   if (!sheet.open) sheet.showModal();
 }

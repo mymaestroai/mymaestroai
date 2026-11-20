@@ -2918,10 +2918,22 @@ async function handleHttpRequest(req, res) {
       }
     }
 
+    // Put the local changes aside (git stash, never put back by the hub), then update. The old name "force-update" stays for pages opened before.
     if (pathname === '/api/git-sync/force-update' && req.method === 'POST') {
-      const { runForceUpdate } = require('./lib/git-sync');
+      const { runPutAsideUpdate } = require('./lib/git-sync');
       try {
-        return jsonResponse(res, 200, await runForceUpdate());
+        let body = {}; try { body = JSON.parse((await readBody(req)) || '{}') || {}; } catch {}
+        return jsonResponse(res, 200, await runPutAsideUpdate({ channel: body && body.channel ? String(body.channel) : null }));
+      } catch (e) {
+        return jsonResponse(res, 500, { success: false, error: e.message });
+      }
+    }
+
+    // Put the local changes aside without updating.
+    if (pathname === '/api/git-sync/put-aside' && req.method === 'POST') {
+      const { putAsideOnly } = require('./lib/git-sync');
+      try {
+        return jsonResponse(res, 200, await putAsideOnly());
       } catch (e) {
         return jsonResponse(res, 500, { success: false, error: e.message });
       }
@@ -3801,6 +3813,11 @@ async function handleHttpRequest(req, res) {
 }
 
 // ── Start ───────────────────────────────────────────────────────────────
+
+// "Protect your Maestro's own code" (lib/code-protect): the policy asks this server's instance, which reads the owner's
+// choice (behaviour change 'protect-own-code'). Registered before any agent can run.
+try { require('./lib/tool-policy').setCodeProtectProvider(() => require('./lib/code-protect').getCodeProtect()); }
+catch (e) { console.error('[code-protect] could not register:', e.message); }
 
 // Leaked-key detector: if ETH leaves a trading wallet and the hub sent nothing, say so loudly.
 setInterval(() => {

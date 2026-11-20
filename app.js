@@ -709,11 +709,13 @@
             <div class="sec-hint" id="sec-sessions">Loading…</div>
             <div class="sec-actions"><button class="sec-btn danger" onclick="signOutEverywhere()">Sign out everywhere</button></div>
           </div>
+          ${window.hubMe && window.hubMe.isAdmin ? '<div class="sec-section" id="sec-code-protect-box"></div>' : ''}
           <div class="sec-actions"><button class="sec-btn" onclick="dialogRequestClose(this)">Close</button></div>
         </div>`;
       document.body.appendChild(overlay);
       paintTwoFactor();
       loadSessionsInfo();
+      mountCodeProtect(document.getElementById('sec-code-protect-box'));
     }
     // Profile: who you are here (your name and sign-in, set by an admin on the Users page) and the time zone your agents
     // use. Security keeps password, two-factor and sessions.
@@ -899,6 +901,31 @@
         secMsg('sec-pw-msg', 'Password changed.', true);
       } catch (e) { secMsg('sec-pw-msg', e.message); }
     }
+    // "Protect your Maestro's own code": the switch IS the state of the behaviour change 'protect-own-code' (admin-only route).
+    async function mountCodeProtect(el) {
+      if (!el) return;
+      el.innerHTML = '<div class="sec-title">Protect your Maestro\'s own code</div><label class="sec-hint" style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="sec-code-protect" style="width:auto" disabled> Protect your Maestro\'s own code</label><div class="sec-hint">Agents can\'t change the program files of your Maestro on this computer, and a refused agent describes the change to you instead. Also on the Changes page.</div><div class="sec-msg" id="sec-code-protect-msg"></div>';
+      const box = el.querySelector('#sec-code-protect'), msg = el.querySelector('#sec-code-protect-msg');
+      try {
+        const r = await fetch('/api/behaviour-changes', { credentials: 'include' });
+        const j = r.ok ? await r.json() : null;
+        const e = j && (j.changes || []).find((c) => c.id === 'protect-own-code');
+        if (!e) { msg.textContent = 'Could not read this setting.'; return; }
+        box.checked = e.state === 'on';
+        box.disabled = false;
+        box.addEventListener('change', async () => {
+          const want = box.checked ? 'on' : 'off';
+          box.disabled = true;
+          try {
+            const p = await fetch('/api/behaviour-changes/protect-own-code', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ decision: want }) });
+            if (!p.ok) throw new Error((await p.json().catch(() => ({}))).error || 'Could not save.');
+            msg.textContent = want === 'on' ? 'On.' : 'Off.';
+          } catch (err) { box.checked = !box.checked; msg.textContent = err.message; }
+          box.disabled = false;
+        });
+      } catch { msg.textContent = 'Could not read this setting.'; }
+    }
+
     async function loadSessionsInfo() {
       const el = document.getElementById('sec-sessions');
       try {
@@ -2907,7 +2934,7 @@
       if (s.upToDate) html += `<div class="gs-ok">✓ Already up to date on this channel</div>`;
 
       if (s.rewritten) {
-        html += `<div class="gs-box"><h4>GitHub's history was rewritten</h4><p class="gs-sub">The ${s.ahead} commit${s.ahead === 1 ? '' : 's'} this copy has that GitHub does not are the same changes under new ids (GitHub's history was rewritten, for example to remove personal details). Updating moves this copy to GitHub's history. Your data, agents and workspaces are not touched; the old position is kept as a backup branch${s.canRewriteUpdate ? '.' : '. Discard the uncommitted files below first.'}</p></div>`;
+        html += `<div class="gs-box"><h4>GitHub's history was rewritten</h4><p class="gs-sub">The ${s.ahead} commit${s.ahead === 1 ? '' : 's'} this copy has that GitHub does not are the same changes under new ids (GitHub's history was rewritten, for example to remove personal details). Updating moves this copy to GitHub's history. Your data, agents and workspaces are not touched; the old position is kept as a backup branch${s.canRewriteUpdate ? '.' : '. Put the changed files below aside first.'}</p></div>`;
         if (s.localOnlyCount > 0) {
           html += `<div class="gs-blocker"><strong>${s.localOnlyCount} commit${s.localOnlyCount === 1 ? ' has' : 's have'} no copy on GitHub</strong><p class="gs-sub">A rewrite can drop a commit whose only change was removed by it. If one of these is your own work, push it first. Otherwise it stays on the backup branch.</p>${
             s.localOnly.map(c => `<div class="gs-commit">${esc(c)}</div>`).join('')
@@ -2919,20 +2946,22 @@
         html += `<div class="gs-blocker"><strong>Update blocked</strong><ul>${
           s.blockers.map(b => `<li>${esc(b)}</li>`).join('')
         }</ul></div>`;
-        if (s.dirty.length > 0) {
-          html += `<div class="gs-box"><h4>Uncommitted files</h4>${
-            s.dirty.map(d => `<div class="gs-file">${esc(d.status)} ${esc(d.file)}</div>`).join('')
-          }</div>`;
-        }
-        if (s.canForce) {
-          html += `<p class="gs-sub">These are application files, not your data. Safe to discard.</p>`;
+        if (s.canPutAside) {
+          // the changed files and the two choices are in the box below
         } else if (s.localOnly && s.localOnly.length) {
           html += `<div class="gs-box"><h4>Local commits not on GitHub</h4>${
             s.localOnly.map(c => `<div class="gs-commit">${esc(c)}</div>`).join('')
           }</div><p class="gs-sub">These look like your own work: push or save them first — nothing was changed.</p>`;
         } else {
-          html += `<p class="gs-sub">Commit, stash, or discard these first — nothing was changed.</p>`;
+          html += `<p class="gs-sub">Commit or save these first — nothing was changed.</p>`;
         }
+      }
+      // Changed files of the code itself: nothing moves the code over them. Put them aside (git stash) or cancel.
+      const gsLocal = s.localChanges || [];
+      if (gsLocal.length > 0 && !s.rewritten) {
+        html += `<div class="gs-blocker" id="gs-local"><strong>Your Maestro's own files were changed on this computer</strong>${
+          gsLocal.slice(0, 10).map(f => `<div class="gs-file">${esc(f)}</div>`).join('')
+        }${gsLocal.length > 10 ? `<div class="gs-sub">and ${gsLocal.length - 10} more</div>` : ''}<p class="gs-sub">An update would stop on them, or they may break after one.</p></div>`;
       }
 
       if (s.commits.length > 0) {
@@ -2949,13 +2978,15 @@
         html += `<p class="gs-sub">Packages changed: the update installs them first. If that fails, it puts everything back and nothing restarts.</p>`;
       }
 
-      html += `<div class="gs-actions">${gsClose}`;
+      html += `<div class="gs-actions">${gsLocal.length > 0 ? gsClose.replace('>Close<', '>Cancel<') : gsClose}`;
       const otherAvailable = ch.channels.some(c => !c.current && c.available);
-      if (s.canUpdate || otherAvailable) {
+      if (s.canUpdate || (otherAvailable && gsLocal.length === 0)) {
         html += `<button class="gs-btn" id="gs-go" onclick="runGitSync()" ${s.canUpdate ? '' : 'disabled'}>${s.canUpdate ? 'Update &amp; Restart' : 'Up to date'}</button>`;
       }
-      if (s.canForce) {
-        html += `<button class="gs-btn" id="gs-force" onclick="runGitSync(true)">Discard Changes &amp; Update</button>`;
+      if (s.canPutAside && !s.upToDate) {
+        html += `<button class="gs-btn" id="gs-force" onclick="runGitSync(true)">Put my changes aside and update</button>`;
+      } else if (s.canPutAside) {
+        html += `<button class="gs-btn" id="gs-force" onclick="runGitSync('aside')">Put my changes aside</button>`;
       }
       if (s.canRewriteUpdate) {
         html += `<button class="gs-btn" id="gs-rewrite" data-confirm="${s.localOnlyCount || 0}" ${s.localOnlyCount ? 'disabled' : ''} onclick="runGitSync('rewrite')">Move to GitHub's History &amp; Restart</button>`;
@@ -2978,23 +3009,29 @@
       const c = other && gsStatus && gsStatus.channels ? gsStatus.channels.channels.find(x => x.id === other) : null;
       if (c) { go.disabled = false; go.innerHTML = `Switch to ${esc(c.label)} &amp; Restart`; }
       else { go.disabled = !(gsStatus && gsStatus.canUpdate); go.innerHTML = gsStatus && gsStatus.canUpdate ? 'Update &amp; Restart' : 'Up to date'; }
-      // Discarding updates the current channel only, so it is off while another channel is chosen.
-      const force = document.getElementById('gs-force'); if (force) force.disabled = !!c;
+      // Putting changes aside and updating uses the chosen channel (a switch when another one is chosen).
+      const force = document.getElementById('gs-force');
+      if (force && !(gsStatus && gsStatus.upToDate)) force.textContent = c ? `Put my changes aside and switch to ${c.label}` : 'Put my changes aside and update';
     }
 
     async function runGitSync(force) {
-      const btnId = force === 'rewrite' ? 'gs-rewrite' : force ? 'gs-force' : 'gs-go';
-      const channel = force ? null : gsChosenChannel();
+      const asideOnly = force === 'aside';
+      if (force === true || asideOnly) {
+        const n = ((gsStatus && gsStatus.localChanges) || []).length;
+        if (!confirm(`Put these ${n} change${n === 1 ? '' : 's'} aside? Your Maestro won't put them back; you can find them with git stash list.`)) return;
+      }
+      const btnId = force === 'rewrite' ? 'gs-rewrite' : asideOnly ? 'gs-force' : force ? 'gs-force' : 'gs-go';
+      const channel = force === 'rewrite' || asideOnly ? null : gsChosenChannel();
       for (const id of ['gs-go', 'gs-force', 'gs-rewrite']) {
         const b = document.getElementById(id);
         if (!b) continue;
         b.disabled = true;
-        if (id === btnId) b.textContent = channel ? 'Switching…' : 'Updating…';
+        if (id === btnId) b.textContent = asideOnly ? 'Putting aside…' : channel ? 'Switching…' : 'Updating…';
       }
 
       let r;
       try {
-        const endpoint = force === 'rewrite' ? '/api/git-sync/rewrite-update' : force ? '/api/git-sync/force-update' : '/api/git-sync/update';
+        const endpoint = force === 'rewrite' ? '/api/git-sync/rewrite-update' : asideOnly ? '/api/git-sync/put-aside' : force ? '/api/git-sync/force-update' : '/api/git-sync/update';
         const rw = force === 'rewrite' ? document.getElementById('gs-rewrite') : null;
         const resp = await fetch(endpoint, rw
           ? { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirmLocalOnly: Number(rw.dataset.confirm) || 0 }) }
@@ -3016,6 +3053,13 @@
         return;
       }
 
+      if (asideOnly) {   // no update, so no restart
+        gsModal(`<h3>⬇ Update from GitHub</h3>
+          <div class="gs-ok">✓ ${r.steps && r.steps.length ? 'Changes put aside' : 'Nothing to put aside'}</div>
+          <div class="gs-box">${(r.steps || []).map(st => `<div class="gs-commit">• ${esc(st)}</div>`).join('')}</div>
+          <div class="gs-actions">${gsClose}</div>`);
+        return;
+      }
       gsModal(`<h3>⬇️ Update from GitHub</h3>
         <div class="gs-ok">✓ Updated to ${esc(r.head)}</div>
         <div class="gs-box"><h4>Steps</h4>${
@@ -4472,7 +4516,7 @@
       try { r = await (await fetch('/api/git-sync/update', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: '{}' })).json(); }
       catch (e) { r = { success: false, error: e.message }; }
       if (!r || !r.success) {
-        // The Update dialog has the ways out (discard changes, move to a rewritten history): send the admin there.
+        // The Update dialog has the ways out (put the changes aside, move to a rewritten history): send the admin there.
         if (msg) msg.innerHTML = `<div class="uc-err">The update didn't run: ${esc((r && r.error) || 'unknown error')}</div>`;
         if (now) { now.disabled = false; now.textContent = 'Details'; now.onclick = () => openGitSync(); }
         if (later) later.disabled = false;

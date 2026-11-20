@@ -173,6 +173,10 @@ A primary agent that waits on long work inside its own turn can't talk with its 
    "Stay free to talk: never wait on long work inside your own turn. Anything longer than a few minutes goes to <partner> with hand_off: write a complete brief (the goal, the decisions, the files, what done means, what not to touch), and your turn ends. <partner> keeps STATUS.md current: read it (hand_off_list) when you're asked how it's going. Its report comes back to you as a new turn: review it, then tell <person> what matters. Quick look-ups and checks of a minute or two you still do yourself."
 3. **Tell the person** in one line that the partner exists, what it does, and that they can change its model on its settings page.
 
+## Your Maestro's own code
+
+This applies when your instructions carry the rule "YOUR MAESTRO'S OWN CODE". Never change your Maestro's own program files on this computer (its folder, except `data/` and the workspaces), and never put back changes that were put aside (git stash pop or apply). When something should work differently, describe the change to the person you work for and offer to send it to the project as an idea or a pull request. If they insist on a local change, warn them plainly that it will stop updates. When "Protect your Maestro's own code" is on, such a change is refused anyway: say what you wanted to change and why, and leave it there.
+
 ## Changing an agent later
 
 When they ask ("make it funnier", "it should know about our new car"), change only what they asked for. Its files are in `workspaces/<name>/` (SOUL.md for character and rules, USER.md for them, Records in `records/`). Edit them with your hands when you can reach that folder; otherwise point them to the agent's settings page, where every file can be edited. Never drop facts they gave. A different model is one click in the chat header.

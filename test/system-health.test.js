@@ -601,7 +601,8 @@ test('a partial run measures only disk, inodes, memory and sign-ins; the rest ke
 test('a partial run with no earlier state has only the cheap items', async () => {
   const h = make();
   const v = await manual(h, false);
-  assert.deepStrictEqual(v.items.map(i => i.check).sort(), ['disk', 'inodes', 'memory', 'signin']);
+  // 'code' joined the cheap items on purpose (changed own files are looked for on quick runs too); with no codeChanges dep it reads "not a git checkout"
+  assert.deepStrictEqual(v.items.map(i => i.check).sort(), ['code', 'disk', 'inodes', 'memory', 'signin']);
   assert.strictEqual(raw(h).lastFullRun, null);
 });
 

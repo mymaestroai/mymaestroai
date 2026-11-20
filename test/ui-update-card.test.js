@@ -60,12 +60,13 @@ test('review fixes: Later names its version, busy agents are confirmed at the cl
   assert.match(mobile, /card\.dataset\.remote = s\.remote \|\| ''/);
   assert.match(mobile, /d\.dataset\.remote = s\.remote \|\| ''/);
   assert.match(mobile, /updateLater\(\(b\.closest\('#update-sheet, #update-card'\) \|\| \{\}\)\.dataset\?\.remote \|\| ''\)/);
-  assert.match(mobile, /<button id="upd-force">Discard changes &amp; update<\/button>/);
-  assert.match(mobile, /if \(confirm\(`Discard \$\{s\.dirty\.length\}[\s\S]*?runUpdateFromPhone\(null, true\)/);
-  assert.match(mobile, /force \? '\/api\/git-sync\/force-update' : '\/api\/git-sync\/update'/);
-  assert.match(mobile, /if \(\$\('upd-force'\)\) \$\('upd-force'\)\.disabled = !!other;/, 'phone: no discard while another channel is chosen');
-  assert.match(mobile, /'click', \(\) => \{ if \(chosen\(\)\) return;/);
-  assert.match(app, /const force = document\.getElementById\('gs-force'\); if \(force\) force\.disabled = !!c;/, 'desktop: the same');
+  // Changed on purpose (local-edits change): nothing is discarded any more. The phone offers "Put my changes aside" (git stash,
+  // never put back), with a confirm, using the chosen channel; the desktop dialog does the same.
+  assert.match(mobile, /Put my changes aside and update/);
+  assert.match(mobile, /if \(confirm\(`Put these \$\{lc\.length\} change[\s\S]*?runUpdateFromPhone\(s\.upToDate \? null : chosen\(\), true, s\.upToDate\)/);
+  assert.match(mobile, /asideOnly \? '\/api\/git-sync\/put-aside' : force \? '\/api\/git-sync\/force-update' : '\/api\/git-sync\/update'/);
+  assert.match(app, /Put my changes aside and update/);
+  assert.match(app, /Put these \$\{n\} change/, 'desktop: the same confirm');
   const now = app.slice(app.indexOf('async function updateNow()'), app.indexOf('// Settings → Status → Updates.'));
   assert.ok(now.indexOf('busyAgentNames()') < now.indexOf("/api/git-sync/update"), 'desktop asks before updating');
   assert.match(now, /if \(refused\)/);
