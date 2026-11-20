@@ -1377,8 +1377,32 @@ function codexBadge(snap, levels, now) {
   const title = (main.weekly ? `ChatGPT plan: ${pct}% of this week's allowance, resets ${when}` : `ChatGPT plan: ${pct}% of the ${main.label || 'usage'} allowance, resets ${when}`) + seen;
   return { text, cls, title };
 }
+/** The ChatGPT badge before any usable reading: "reading…" while one is awaited, "no reading" with the reason after a
+ *  failed one (never "reading…" for ever). */
+function codexPendingBadge(snap) {
+  if (snap && snap.error && !snap.reading) return { text: 'ChatGPT: no reading', cls: '', title: `No reading of the ChatGPT plan yet: ${String(snap.error).slice(0, 200)}` };
+  return { text: 'ChatGPT: reading\u2026', cls: '', title: "Reading the ChatGPT plan's usage (no turn is spent)" };
+}
+/** Whether a page showing a Codex chat should ask for a reading: the snapshot loaded and on, none running, the last
+ *  reading missing or over 30 minutes old; at most once a minute per page (askedAt). The hub limits reads too. */
+function codexShouldRead(snap, now, askedAt) {
+  if (!snap || snap.enabled === false || snap.reading) return false;
+  if (Number(askedAt) && now - Number(askedAt) < 60000) return false;
+  const t = Date.parse(snap.readAt || '');
+  return !Number.isFinite(t) || now - t > 30 * 60000;
+}
 // ── subscriptions helpers (end) ──
 const subsEnabled = () => subsOnFlag !== false && !(codexUsageLast && codexUsageLast.enabled === false);
+// One read of the ChatGPT plan asked for by this page (POST /api/codex-usage/refresh: no turn; the hub allows one a minute
+// and none during a Codex update); the answer repaints the header and the Subscriptions sheet.
+let codexAskAt = 0;
+function codexAskRead() {
+  codexAskAt = Date.now();
+  api('/api/codex-usage/refresh', { method: 'POST' })
+    .then(r => r.json().catch(() => ({})))
+    .then(d => { if (d && d.snapshot) { codexUsageLast = d.snapshot; paintPlan(); paintSubsSheet(); } })
+    .catch(() => { /* the hub is restarting: the next paint asks again after a minute */ });
+}
 async function refreshCodexUsage() {
   try {
     const r = await api('/api/codex-usage');
@@ -1428,7 +1452,13 @@ function paintPlan() {
   const el = $('chat-plan'); if (!el) return;
   const d = planUsageLast; const a = agentByName(current); const model = String((a && a.model) || '');
   if (/^codex-cli\//.test(model)) {   // a ChatGPT-plan agent: the ChatGPT reading (when the setting is on and one exists)
-    const b = subsEnabled() ? codexBadge(codexUsageLast, null, Date.now()) : null;
+    let b = subsEnabled() ? codexBadge(codexUsageLast, null, Date.now()) : null;
+    // An admin with a Codex chat open: a missing or old reading is asked for (no turn spent), and until one exists the
+    // header says so instead of showing nothing.
+    if (subsEnabled() && isAdmin()) {
+      if (codexShouldRead(codexUsageLast, Date.now(), codexAskAt)) codexAskRead();
+      if (!b) b = codexPendingBadge(codexUsageLast);
+    }
     if (!b) { el.hidden = true; el.textContent = ''; return; }
     el.textContent = b.text;
     el.className = 'sub' + (b.cls ? ' ' + b.cls : '');

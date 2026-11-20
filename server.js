@@ -4009,6 +4009,8 @@ server.listen(PORT, HOST, () => {
       startDiscovery();
       // Subscription usage windows (5-hour, 7-day, per-model weekly) polled through the Claude client; drives the plan-limit fallback.
       try { require('./lib/plan-usage').getPlanUsage().start(); } catch (e) { console.error('[plan-usage] not started:', e.message); }
+      // The ChatGPT plan: one no-token reading about 30 s after start, so Codex agents' chats show it before any turn runs.
+      try { require('./lib/codex-usage').getCodexUsage().start(); } catch (e) { console.error('[codex-usage] not started:', e.message); }
     } catch (e) {
       console.error('[model-discovery] Failed to start:', e.message);
     }
