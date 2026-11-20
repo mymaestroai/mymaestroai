@@ -15133,6 +15133,6 @@ if (typeof document.addEventListener === 'function') document.addEventListener('
 // ── end Simple mode: phone ──
 
 // Hand-off cards above the message box (lib/ui-hand-off-card.js): follow the open chat; none while another screen is shown.
-if (window.HandOffCard) HandOffCard.track({ getAgent: () => (screen === 'chat' ? current : null), getContainer: () => $('handoff-cards') });
+if (window.HandOffCard) HandOffCard.track({ getAgent: () => (screen === 'chat' ? current : null), getContainer: () => $('handoff-cards'), renderMarkdown: (t) => formatContent(t) });
 
 init();
