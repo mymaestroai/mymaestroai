@@ -329,3 +329,27 @@ test('review r1: look stylesheets are served for their exact names only', () => 
   assert.strictEqual(resolve('/looks/broadsheet.CSS'), null);
   assert.strictEqual(resolve('/looks/nope.css'), null);
 });
+
+test('full width: no look narrows the chat, the message box or the strip above it (as in Engineering)', () => {
+  const chatSel = /(^|[\s>+~,])(\.messages|#messages|\.input-area|\.composer|#composer|\.handoff-cards|\.ho-strip|\.chat-busy-card|#msg-input|\.chat-panel|\.chat-area|\.main)\b/;
+  for (const look of L.LOOKS.filter(l => l.css)) {
+    const css = read(look.css.replace(/^\//, '')).replace(/\/\*[\s\S]*?\*\//g, '');
+    const cmw = [...css.matchAll(/--chat-max-width\s*:\s*([^;]+);/g)].map(m => m[1].trim());
+    assert.ok(cmw.every(v => v === 'none'), `${look.id}: --chat-max-width is Engineering's none (${cmw.join(', ')})`);
+    for (const m of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      const sel = m[1].trim(), body = m[2];
+      if (!chatSel.test(sel)) continue;
+      assert.doesNotMatch(body, /(^|;|\s)max-width\s*:/, `${look.id}: ${sel} sets a max-width`);
+      assert.doesNotMatch(body, /margin(-inline)?\s*:\s*[^;]*\bauto\b/, `${look.id}: ${sel} centres itself with auto margins`);
+    }
+  }
+});
+
+test('full width: a collapsed sidebar keeps no border in any look (Engineering\'s .sidebar.collapsed has none)', () => {
+  for (const look of L.LOOKS.filter(l => l.css)) {
+    const css = read(look.css.replace(/^\//, '')).replace(/\/\*[\s\S]*?\*\//g, '');
+    for (const m of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      if (/\.sidebar(?![\w-])(?!:not\(\.collapsed\))/.test(m[1]) && /border-right\s*:/.test(m[2])) assert.fail(`${look.id}: ${m[1].trim()} draws a border even when collapsed`);
+    }
+  }
+});

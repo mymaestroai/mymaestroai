@@ -90,7 +90,7 @@ html[data-look="quiet"]:not(.mm-simple) {
   --bg-card: #FFFDF6;
   --bg-input: #F6F1E6;
   --radius: 8px;
-  --chat-max-width: 760px;
+  --chat-max-width: none;   /* full width, as in Engineering: the chat and the message box fill the screen */
   --chat-pad-x: clamp(16px, 3vw, 40px);
   --sidebar-bg: var(--bg-card);
   --active-group-active-count-bg: #EEF2E6;
@@ -492,7 +492,7 @@ html[data-look="quiet"]:not(.mm-simple) .tool-stream .ts-head { border-radius: 4
 html[data-look="quiet"]:not(.mm-simple) .reason-stream { border-radius: 4px; }
 
 /* Sidebar and composer: hairlines, soft corners */
-html[data-look="quiet"]:not(.mm-simple) .sidebar { border-right: 1px solid var(--border); }
+html[data-look="quiet"]:not(.mm-simple) .sidebar:not(.collapsed) { border-right: 1px solid var(--border); }   /* collapsed: no border, the chat takes the whole width */
 html[data-look="quiet"]:not(.mm-simple) .input-area { border-top: 1px solid var(--border); padding-top: 14px; padding-bottom: 16px; }
 html[data-look="quiet"]:not(.mm-simple) .input-area textarea {
   background: var(--bg-card); border: 1px solid var(--border-strong); border-radius: 10px; color: var(--text);

@@ -60,7 +60,7 @@ html[data-look="broadsheet"]:not(.mm-simple) {
   --bg-card: #ECE4D5;
   --bg-input: #FBF9F4;
   --radius: 2px;
-  --chat-max-width: 760px;
+  --chat-max-width: none;   /* full width, as in Engineering: the chat and the message box fill the screen */
   --chat-pad-x: clamp(16px, 3vw, 40px);
   --sidebar-bg: var(--bg-card);
   --active-group-active-count-bg: #CBC1AE;
@@ -470,7 +470,7 @@ html[data-look="broadsheet"]:not(.mm-simple) h1,
 html[data-look="broadsheet"]:not(.mm-simple) h2,
 html[data-look="broadsheet"]:not(.mm-simple) h3 { font-family: var(--font-heading); font-weight: 700; letter-spacing: 0; text-transform: none; }
 html[data-look="broadsheet"]:not(.mm-simple) .main-header { border-bottom: 2px solid var(--text); }
-html[data-look="broadsheet"]:not(.mm-simple) .sidebar { border-right: 1px solid var(--border-strong); }
+html[data-look="broadsheet"]:not(.mm-simple) .sidebar:not(.collapsed) { border-right: 1px solid var(--border-strong); }   /* collapsed: no border, the chat takes the whole width */
 
 /* ---- desktop reading column: replies sit on a centred folio, no bubble ---- */
 html[data-look="broadsheet"]:not(.mm-simple) .messages {
@@ -506,7 +506,7 @@ html[data-look="broadsheet"]:not(.mm-simple) .topbar {
 }
 html[data-look="broadsheet"]:not(.mm-simple) .topbar h1 { font-size: 16px; }
 html[data-look="broadsheet"]:not(.mm-simple) #messages {
-  max-width: 720px; margin: 0 auto; width: 100%; gap: 12px; background: var(--bg-input);
+  width: 100%; gap: 12px; background: var(--bg-input);   /* full width, as in Engineering */
 }
 html[data-look="broadsheet"]:not(.mm-simple) .msg { font-family: var(--font-reading); line-height: 1.55; }
 html[data-look="broadsheet"]:not(.mm-simple) .msg.assistant {

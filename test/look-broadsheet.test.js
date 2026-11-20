@@ -115,3 +115,11 @@ test('contrast pairs listed in the header are each >= 4.5 and match the hex valu
   }
   assert.deepStrictEqual(problems, []);
 });
+
+test('full width: the reading column and the message box are not capped (desktop and phone)', () => {
+  assert.match(stripped, /--chat-max-width:\s*none;/, 'the desktop column keeps Engineering\'s --chat-max-width (none)');
+  assert.deepStrictEqual([...stripped.matchAll(/--chat-max-width\s*:\s*([^;]+);/g)].map(m => m[1].trim()), ['none'], 'set once, to none');
+  const phoneList = stripped.match(/#messages\s*\{([^}]*)\}/);
+  assert.ok(phoneList, 'the phone message list rule exists');
+  assert.doesNotMatch(phoneList[1], /max-width|margin\s*:\s*0 auto/, 'the phone message list fills the screen');
+});
