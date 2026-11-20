@@ -107,11 +107,11 @@ test('rememberDefault: caches the person default; shows it only when this device
   assert.strictEqual(d.documentElement.dataset.look, 'quiet');
   d = fakeDoc(); s = fakeStorage({ mmLook: 'broadsheet' });
   L.apply(d, 'broadsheet');
-  assert.strictEqual(L.rememberDefault('quiet', s, d), 'quiet');
+  assert.strictEqual(L.rememberDefault('quiet', s, d), 'broadsheet', 'returns the look in force: the device\'s own choice');
   assert.strictEqual(s._m.get('mmLookDefault'), 'quiet');
   assert.strictEqual(d.documentElement.dataset.look, 'broadsheet', "this device's own choice stays");
   // Review r1: an account without a (valid) default clears the cached one; this device's own choice still stays.
-  assert.strictEqual(L.rememberDefault('nope', s, d), 'engineering');
+  assert.strictEqual(L.rememberDefault('nope', s, d), 'broadsheet');
   assert.strictEqual(s._m.has('mmLookDefault'), false);
   assert.strictEqual(d.documentElement.dataset.look, 'broadsheet');
   assert.doesNotThrow(() => L.rememberDefault('quiet', fakeStorage({}, { blocked: true }), fakeDoc()));
@@ -288,7 +288,9 @@ test('review r1: storage that throws on read or on write never breaks a picker, 
   assert.strictEqual(L.applied(d), 'engineering');
   const app = read('app.js'), mob = read('mobile.js');
   for (const [src, fn] of [[app, 'lookPickerBuild'], [mob, 'lookPickerPaint']]) {
-    const a = src.indexOf(`function ${fn}(`), body = src.slice(a, src.indexOf('\n  const note', a) > 0 ? src.indexOf('note.className', a) : a + 3000);
+    const a = src.indexOf(`function ${fn}(`), z = src.indexOf('note.className', a);
+    assert.ok(a > 0 && z > a && z - a < 4000, `${fn} found, with its note`);
+    const body = src.slice(a, z);
     assert.doesNotMatch(body, /window\.localStorage/, `${fn} reads storage only through HubLooks`);
     assert.match(body, /const cur = L\.applied\(document\);/, fn);
     assert.match(body, /\.find\(x => x\.dataset\.look === look\.id\);\s*if \(again\) again\.focus\(\);/, `${fn} keeps keyboard focus on the chosen card`);
