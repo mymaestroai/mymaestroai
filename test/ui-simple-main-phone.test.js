@@ -179,7 +179,9 @@ test('CSS: person bubble colours, links and code, the dots, the narrow top bar',
 });
 
 test('CSS: the switch has an accent track when on, grey when off, a sliding knob, and fits a narrow bar', () => {
-  assert.match(html, /\.mode-toggle\[aria-checked="true"\] \.mt-track \{ background: #8b6fd6; \}/);
+  // looks-vars: the on-colour moved into :root as --toggle-on-bg (same value)
+  assert.match(html, /\.mode-toggle\[aria-checked="true"\] \.mt-track \{ background: var\(--toggle-on-bg\); \}/);
+  assert.match(html, /--toggle-on-bg:\s*#8b6fd6;/);
   assert.match(html, /\.mode-toggle \.mt-track \{[^}]*background: var\(--border-strong\)/);
   assert.match(html, /\.mode-toggle\[aria-checked="true"\] \.mt-knob \{ transform: translateX/);
   assert.match(html, /\.mode-toggle\[hidden\] \{ display: none !important; \}/);

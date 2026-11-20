@@ -86,7 +86,8 @@ test('CSS: colours of the person vs the agent, scoped under html.mm-simple', () 
 
 test('CSS: the switch is visible in Advanced too, and styled for Simple', () => {
   assert.match(html, /\n    \.mode-toggle \{[^}]*display: inline-flex/);
-  assert.match(html, /\.mode-toggle\[aria-checked="true"\] \.mt-track \{ background: #8b6fd6; \}/);
+    // looks-vars: the value is unchanged; index.html/app.js now spell it as a variable (defined in index.html :root)
+  assert.match(html, /\.mode-toggle\[aria-checked="true"\] \.mt-track \{ background: var\(--brand-violet\); \}/);
   assert.match(html, /\.mode-toggle\[aria-checked="true"\] \.mt-knob \{ transform: translateX/);
   assert.match(cssBlock, /html\.mm-simple #simple-top-ctl \{ position: absolute; top: 8px; right: 16px;/);
   assert.match(cssBlock, /html\.mm-simple \.simple-theme-btn \{/);

@@ -13178,6 +13178,7 @@ async function loadMe() {
     if (r.ok) {
       hubMe = await r.json();
       if (window.hubSimple) { try { window.hubSimple.apply(hubMe); } catch { /* the page stays as it is */ } }   // Simple mode and theme classes on <html>
+      try { if (window.HubLooks && hubMe && hubMe.look) window.HubLooks.rememberDefault(hubMe.look, window.localStorage); } catch { /* looks are optional: the page keeps the look it has */ }
       { const ti = $('menu-tiger'); if (ti) ti.hidden = !(hubMe && hubMe.isAdmin === true); }
       // (the Tiger Teams link above: admins only, the page and its API are admin-only; likewise the Subscriptions entry)
       { const su = $('menu-subs'); if (su) su.hidden = !(hubMe && hubMe.isAdmin === true); }
@@ -13484,6 +13485,58 @@ function secMsg(id, text, ok) {
   el.classList.toggle('ok', !!ok);
 }
 
+// The look of this phone (lib/ui-looks, window.HubLooks): a row of three swatches with labels, in the Profile sheet and in
+// Simple mode's settings sheet. Built from text nodes and style properties (the registry's colours), never from markup.
+function lookSwatch(look) {
+  const p = look.preview;
+  const box = document.createElement('div');
+  box.setAttribute('aria-hidden', 'true');
+  box.style.height = '40px'; box.style.borderRadius = '8px'; box.style.padding = '4px'; box.style.boxSizing = 'border-box';
+  box.style.background = p.bg; box.style.border = '1px solid ' + p.ink + '33';
+  const panel = document.createElement('div');
+  panel.style.background = p.panel; panel.style.borderRadius = '5px'; panel.style.height = '100%';
+  panel.style.display = 'flex'; panel.style.alignItems = 'center'; panel.style.justifyContent = 'space-between'; panel.style.padding = '0 6px';
+  const aa = document.createElement('span');
+  aa.appendChild(document.createTextNode('Aa'));
+  aa.style.color = p.ink; aa.style.fontSize = '16px'; aa.style.fontWeight = '600';
+  aa.style.fontFamily = p.font === 'serif' ? "Georgia, 'Times New Roman', serif" : "-apple-system, 'Segoe UI', Roboto, sans-serif";
+  const dot = document.createElement('span');
+  dot.style.width = '8px'; dot.style.height = '8px'; dot.style.borderRadius = '50%'; dot.style.background = p.accent;
+  panel.appendChild(aa); panel.appendChild(dot); box.appendChild(panel);
+  return box;
+}
+function lookPickerPaint(host) {
+  const L = window.HubLooks;
+  if (!host || !L) return;
+  while (host.firstChild) host.removeChild(host.firstChild);
+  const cur = L.current(window.localStorage);
+  const row = document.createElement('div');
+  row.setAttribute('role', 'group'); row.setAttribute('aria-label', 'Look for this phone');
+  row.style.display = 'grid'; row.style.gridTemplateColumns = 'repeat(3, 1fr)'; row.style.gap = '8px';
+  for (const look of L.LOOKS) {
+    const on = look.id === cur;
+    const b = document.createElement('button');
+    b.type = 'button'; b.dataset.look = look.id; b.setAttribute('aria-pressed', String(on));
+    b.style.display = 'block'; b.style.padding = '6px'; b.style.borderRadius = '10px'; b.style.background = 'transparent';
+    b.style.color = 'inherit'; b.style.font = 'inherit'; b.style.fontSize = '0.75rem'; b.style.textAlign = 'center';
+    b.style.border = on ? '2px solid var(--accent)' : '1px solid var(--border)';
+    const lab = document.createElement('span');
+    lab.appendChild(document.createTextNode(look.label));
+    lab.style.display = 'block'; lab.style.marginTop = '4px';
+    b.appendChild(lookSwatch(look)); b.appendChild(lab);
+    b.addEventListener('click', () => {
+      if (!L.choose(look.id, window.localStorage)) return;
+      L.apply(document, look.id);   // no reload: the stylesheet swaps in place
+      lookPickerPaint(host);
+    });
+    row.appendChild(b);
+  }
+  const note = document.createElement('div');
+  note.className = 'sec-hint';
+  note.appendChild(document.createTextNode('Applies to this device. Simple mode works with every look.'));
+  host.appendChild(row); host.appendChild(note);
+}
+
 // Profile: who you are here (your name and sign-in, set by an admin on the Users page) and the time zone your agents
 // use. Security keeps password, two-factor and sessions.
 function openProfileSheet() {
@@ -13502,7 +13555,12 @@ function openProfileSheet() {
       <select id="prof-tz" aria-label="Time zone your agents use"></select>
       <div class="sec-msg" id="prof-tz-msg"></div>
     </div>
+    <div class="sec-section">
+      <div class="sec-title">Look</div>
+      <div id="prof-looks"></div>
+    </div>
     <div class="sec-actions" style="margin-top:10px"><button id="prof-close">Close</button></div>`;
+  lookPickerPaint($('prof-looks'));
   $('prof-name').textContent = hubMe.user.name || hubMe.user.login;
   $('prof-login').textContent = `Signed in as ${hubMe.user.login} · ${hubMe.user.role === 'admin' ? 'admin' : 'member'}`;
   $('prof-tz').addEventListener('change', (e) => chooseTimeZone(e.target));
@@ -14024,7 +14082,7 @@ function shareLinkFormHtml(name, s) {
   return `<div class="sec-section" data-no-dirty><div class="sec-title">${escapeHtml(name)}</div>
     <label class="sec-hint" for="sl-hours">Link works for</label><select class="sl-hours" id="sl-hours">${opts}</select>
     <label class="sec-hint" style="display:flex;gap:8px;align-items:center"><input type="checkbox" class="sl-once" style="width:auto"> Only one download</label>
-    <div class="sec-msg sl-msg" role="alert" style="color:var(--error,#e55)"></div></div>
+    <div class="sec-msg sl-msg" role="alert" style="color:var(--error)"></div></div>
     <div class="sec-actions"><button type="button" class="sec-btn sl-cancel">Cancel</button><button type="button" class="sec-btn sl-create">Create link</button></div>`;
 }
 function shareLinkResultHtml(link, origin) {
@@ -14320,7 +14378,7 @@ function filesRenderList() {
   const entries = filesState.entries;
   if (!entries.length) { list.innerHTML = `<div class="fs-empty">${filesState.path ? 'This folder is empty.' : 'No files yet.'} Use Upload to add some.</div>`; return; }
   const srt = filesSortGet();
-  const chip = (key, label) => `<button data-act="sort-${key}" aria-pressed="${srt.key === key ? 'true' : 'false'}" style="background:${srt.key === key ? 'var(--accent, #3987e5)' : 'transparent'};color:${srt.key === key ? '#fff' : 'inherit'};border:1px solid var(--border, #444);border-radius:12px;padding:2px 10px;min-height:40px;font-size:12px">${label}${srt.key === key ? (srt.dir === 'asc' ? ' ▲' : ' ▼') : ''}</button>`;
+  const chip = (key, label) => `<button data-act="sort-${key}" aria-pressed="${srt.key === key ? 'true' : 'false'}" style="background:${srt.key === key ? 'var(--accent)' : 'transparent'};color:${srt.key === key ? 'var(--on-accent)' : 'inherit'};border:1px solid var(--border);border-radius:12px;padding:2px 10px;min-height:40px;font-size:12px">${label}${srt.key === key ? (srt.dir === 'asc' ? ' ▲' : ' ▼') : ''}</button>`;
   const sortBar = `<div class="fs-sortbar" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:4px 0 8px">Sort: ${chip('mtime', 'Date')}${chip('name', 'Name')}${chip('size', 'Size')}</div>`;
   const when = (t) => { if (!t) return ''; const d = new Date(t); return isNaN(d) ? '' : d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }); };
   list.innerHTML = sortBar + entries.map((e, i) => {
@@ -15002,6 +15060,7 @@ function simpleSettingsOpen() {
     '<button type="button" class="ss-row" id="ss-out"><b>Sign out</b></button>' +
     '<button type="button" class="ss-close">Close</button>';
   d.querySelector('.ss-val').textContent = name;
+  { const ls = document.createElement('div'); ls.className = 'ss-sec'; const lt = document.createElement('div'); lt.className = 'ss-title'; lt.appendChild(document.createTextNode('Look')); const lh = document.createElement('div'); ls.appendChild(lt); ls.appendChild(lh); d.insertBefore(ls, d.querySelector('.ss-row')); lookPickerPaint(lh); }
   const paint = () => { const cur = (hubMe && hubMe.theme) || 'auto'; d.querySelectorAll('.ss-seg button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.theme === cur))); };
   paint();
   d.querySelectorAll('.ss-seg button').forEach(b => b.addEventListener('click', async () => {

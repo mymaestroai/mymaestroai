@@ -325,7 +325,8 @@ test('r3: the play and copy buttons sit below a reply / beside a user bubble in 
 });
 
 test('r3: while a turn runs, Interject and Cancel use the Simple colours (accent / neutral), both themes via variables', () => {
-  assert.match(cssBlock, /html\.mm-simple \.input-area \[id\^="send-"\]\[style\*="--warning"\] \{ background: #8b6fd6 !important; color: #fff !important; \}/);
+    // looks-vars: the value is unchanged; index.html/app.js now spell it as a variable (defined in index.html :root)
+  assert.match(cssBlock, /html\.mm-simple \.input-area \[id\^="send-"\]\[style\*="--warning"\] \{ background: var\(--brand-violet\) !important; color: var\(--on-color-text\) !important; \}/);
   assert.match(cssBlock, /html\.mm-simple \.chat-actions \[id\^="cancel-"\] \{ background: var\(--sm-raised\) !important; color: var\(--sm-sec\) !important; border: 1px solid var\(--sm-border\) !important/);
   assert.match(app, /sendBtn\.style\.background = 'var\(--warning\)'/);   // the page's inline orange is what the selector matches
 });
