@@ -350,12 +350,29 @@ test('full width: no look narrows the chat, the message box or the strip above i
 });
 
 test('full width: a collapsed sidebar keeps no border in any look (Engineering\'s .sidebar.collapsed has none)', () => {
-  for (const look of L.LOOKS.filter(l => l.css)) {
-    const css = read(look.css.replace(/^\//, '')).replace(/\/\*[\s\S]*?\*\//g, '');
+  // A rule on the sidebar itself (its last compound selector holds .sidebar) applies to the collapsed sidebar unless it is
+  // limited to :not(.collapsed); its border must then be none. Descendants of the sidebar are not the sidebar.
+  const onSidebar = (one) => { const last = one.trim().split(/[\s>+~]+/).pop(); return /\.sidebar(?![\w-])/.test(last) ? last : null; };
+  const borderValues = (body) => [...body.matchAll(/(?:^|;)\s*(border|border-right|border-inline-end)\s*:\s*([^;]+)/g)].map(m => m[2].trim().replace(/\s*!important$/, ''));
+  const bad = (css) => {
+    const out = [];
     for (const m of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
-      for (const one of m[1].split(',')) {   // a rule styling the sidebar itself (not a descendant, not its collapsed state)
-        if (/\.sidebar(?![\w-])(?!:not\(\.collapsed\)|\.collapsed)[^\s>+~]*$/.test(one.trim()) && /border-right\s*:\s*(?!none)/.test(m[2])) assert.fail(`${look.id}: ${one.trim()} draws a border even when collapsed`);
+      for (const one of m[1].split(',')) {
+        const last = onSidebar(one);
+        if (!last || /:not\(\.collapsed\)/.test(last)) continue;
+        if (borderValues(m[2]).some(v => !/^(none|0)$/.test(v))) out.push(one.trim());
       }
     }
+    return out;
+  };
+  for (const look of L.LOOKS.filter(l => l.css)) {
+    const css = read(look.css.replace(/^\//, '')).replace(/\/\*[\s\S]*?\*\//g, '');
+    assert.deepStrictEqual(bad(css), [], `${look.id}: a rule that reaches the collapsed sidebar draws a border`);
   }
+  // the rule itself, on samples
+  assert.deepStrictEqual(bad('x .sidebar { border-right: 1px solid red; }'), ['x .sidebar']);
+  assert.deepStrictEqual(bad('x .sidebar.collapsed { border-right: 1px solid red; }'), ['x .sidebar.collapsed']);
+  assert.deepStrictEqual(bad('x .sidebar.collapsed { border-right: none; } x .sidebar.narrow { border-right: none; }'), []);
+  assert.deepStrictEqual(bad('x .sidebar:not(.collapsed) { border-right: 1px solid red; } x .sidebar .item { border-right: 1px solid red; }'), []);
+  assert.deepStrictEqual(bad('x .sidebar { border: 1px solid red; }'), ['x .sidebar']);
 });
