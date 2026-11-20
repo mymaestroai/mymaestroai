@@ -14302,7 +14302,7 @@ async function filesRefresh() {
   filesState.root = data.root || null;
   filesState.path = data.path || '';
   filesState.maxUploadBytes = data.maxUploadBytes || 0;
-  filesState.entries = (data.entries || []).slice().sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : a.type === 'dir' ? -1 : 1));
+  filesState.entries = filesSortApply(data.entries || []);
   const root = filesState.root || {};
   $('fs-title').textContent = `${root.label || 'Files'}${filesState.agent ? '' : ' (no chat open)'}`;
   $('fs-root').innerHTML = `${filesState.agent ? 'Only this agent sees these files.' : 'General folder: open an agent\'s chat to see its files.'}<br><code>${esc(root.absPath || '')}</code>${filesState.maxUploadBytes ? ` · up to ${humanSize(filesState.maxUploadBytes)} per file` : ''}`;
@@ -14319,8 +14319,11 @@ function filesRenderList() {
   const list = $('fs-list');
   const entries = filesState.entries;
   if (!entries.length) { list.innerHTML = `<div class="fs-empty">${filesState.path ? 'This folder is empty.' : 'No files yet.'} Use Upload to add some.</div>`; return; }
+  const srt = filesSortGet();
+  const chip = (key, label) => `<button data-act="sort-${key}" aria-pressed="${srt.key === key ? 'true' : 'false'}" style="background:${srt.key === key ? 'var(--accent, #3987e5)' : 'transparent'};color:${srt.key === key ? '#fff' : 'inherit'};border:1px solid var(--border, #444);border-radius:12px;padding:2px 10px;min-height:40px;font-size:12px">${label}${srt.key === key ? (srt.dir === 'asc' ? ' ▲' : ' ▼') : ''}</button>`;
+  const sortBar = `<div class="fs-sortbar" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:4px 0 8px">Sort: ${chip('mtime', 'Date')}${chip('name', 'Name')}${chip('size', 'Size')}</div>`;
   const when = (t) => { if (!t) return ''; const d = new Date(t); return isNaN(d) ? '' : d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }); };
-  list.innerHTML = entries.map((e, i) => {
+  list.innerHTML = sortBar + entries.map((e, i) => {
     const isDir = e.type === 'dir';
     const row = `<div class="fs-row" data-i="${i}">
       <button class="fs-name" data-act="${isDir ? 'open' : 'more'}"><span>${isDir ? '&#x1F4C1;' : '&#x1F4C4;'} ${esc(e.name)}</span><small>${isDir ? 'Folder' : humanSize(e.size)}${e.mtime ? ` · ${when(e.mtime)}` : ''}</small></button>
@@ -14336,9 +14339,35 @@ function filesRenderList() {
     </div>`;
   }).join('');
 }
+// Sort choice shared with the desktop (localStorage 'hub-files-sort'), newest first by default; folders stay on top.
+let filesSortMem = null;   // the current choice kept in memory too, so sorting works when localStorage can't be written (private mode)
+const filesSortValid = (s) => !!s && ['name', 'size', 'mtime'].includes(s.key) && ['asc', 'desc'].includes(s.dir);
+function filesSortGet() {
+  if (filesSortValid(filesSortMem)) return filesSortMem;
+  try { const s = JSON.parse(localStorage.getItem('hub-files-sort') || 'null'); if (filesSortValid(s)) return s; } catch {}
+  return { key: 'mtime', dir: 'desc' };
+}
+function filesSortApply(list) {
+  const srt = filesSortGet();
+  const cmp = { name: (a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true }),
+    size: (a, b) => (a.size || 0) - (b.size || 0),
+    mtime: (a, b) => (Date.parse(a.mtime) || 0) - (Date.parse(b.mtime) || 0) }[srt.key];
+  return list.slice().sort((a, b) => (a.type !== b.type ? (a.type === 'dir' ? -1 : 1)
+    : ((srt.dir === 'asc' ? cmp(a, b) : cmp(b, a)) || a.name.localeCompare(b.name))));
+}
+function filesSortBy(key) {
+  const cur = filesSortGet();
+  const next = cur.key === key ? { key, dir: cur.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: key === 'name' ? 'asc' : 'desc' };
+  filesSortMem = next;
+  try { localStorage.setItem('hub-files-sort', JSON.stringify(next)); } catch {}
+  filesState.openRow = -1;
+  filesState.entries = filesSortApply(filesState.entries);
+  filesRenderList();
+}
 async function onFilesListClick(e) {
   const btn = e.target.closest('button[data-act]');
   if (!btn) return;
+  if (btn.dataset.act.startsWith('sort-')) { filesSortBy(btn.dataset.act.slice(5)); return; }
   const holder = btn.closest('[data-i]');
   const i = Number(holder.dataset.i);
   const entry = filesState.entries[i];

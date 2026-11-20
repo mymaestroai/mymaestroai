@@ -1692,11 +1692,18 @@
     }
     function filesRenderList() {
       const list = document.getElementById('files-list'); if (!list) return;
-      const entries = filesState.entries.slice().sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : a.type === 'dir' ? -1 : 1));
+      // Sortable columns, newest first by default; the choice is kept per device. Folders stay on top.
+      const srt = filesSortGet();
+      const cmp = { name: (a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true }),
+        size: (a, b) => (a.size || 0) - (b.size || 0),
+        mtime: (a, b) => (Date.parse(a.mtime) || 0) - (Date.parse(b.mtime) || 0) }[srt.key];
+      const entries = filesState.entries.slice().sort((a, b) => (a.type !== b.type ? (a.type === 'dir' ? -1 : 1)
+        : ((srt.dir === 'asc' ? cmp(a, b) : cmp(b, a)) || a.name.localeCompare(b.name))));
       if (!entries.length) { list.className = 'files-empty'; list.textContent = filesState.path ? 'This folder is empty. Drop files here or use Upload.' : 'No files yet. Drop files here or use Upload.'; return; }
       list.className = '';
       const when = (t) => { if (!t) return ''; const d = new Date(t); return isNaN(d) ? esc(String(t)) : d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }); };
-      list.innerHTML = `<table><thead><tr><th>Name</th><th style="text-align:right">Size</th><th>Modified</th><th></th></tr></thead><tbody>` + entries.map((e, i) => {
+      const th = (key, label, style = '') => `<th aria-sort="${srt.key === key ? (srt.dir === 'asc' ? 'ascending' : 'descending') : 'none'}" style="${style}"><button type="button" class="fs-sort-btn" onclick="filesSortBy('${key}')" title="Sort by ${label.toLowerCase()}" style="background:none;border:0;padding:0;color:inherit;font:inherit;cursor:pointer;user-select:none">${label}${srt.key === key ? (srt.dir === 'asc' ? ' ▲' : ' ▼') : ''}</button></th>`;
+      list.innerHTML = `<table><thead><tr>${th('name', 'Name')}${th('size', 'Size', 'text-align:right')}${th('mtime', 'Modified')}<th></th></tr></thead><tbody>` + entries.map((e, i) => {
         const rel = filesJoin(filesState.path, e.name);
         const isDir = e.type === 'dir';
         const nameHtml = isDir ? `<a onclick="openFilesPanel(filesJoin(filesState.path, filesState.entries[${i}].name))">📁 ${esc(e.name)}</a>` : `📄 ${esc(e.name)}`;
@@ -1713,6 +1720,20 @@
           </div></td></tr>`;
       }).join('') + '</tbody></table>';
       filesState.entries = entries;
+    }
+    let filesSortMem = null;   // the current choice kept in memory too, so sorting works when localStorage can't be written (private mode)
+    const filesSortValid = (s) => !!s && ['name', 'size', 'mtime'].includes(s.key) && ['asc', 'desc'].includes(s.dir);
+    function filesSortGet() {
+      if (filesSortValid(filesSortMem)) return filesSortMem;
+      try { const s = JSON.parse(localStorage.getItem('hub-files-sort') || 'null'); if (filesSortValid(s)) return s; } catch {}
+      return { key: 'mtime', dir: 'desc' };
+    }
+    function filesSortBy(key) {
+      const cur = filesSortGet();
+      const next = cur.key === key ? { key, dir: cur.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: key === 'name' ? 'asc' : 'desc' };
+      filesSortMem = next;
+      try { localStorage.setItem('hub-files-sort', JSON.stringify(next)); } catch {}
+      filesRenderList();
     }
     async function filesCopy(text, btn) {
       let ok = false;
