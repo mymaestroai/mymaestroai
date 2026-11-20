@@ -1060,6 +1060,7 @@
     if (code === 403 && error === 'admin_only' && !isAdmin) return null;
     if (code === 401 && error === 'totp_required') return 'Can\'t check the command lockbox: this sign-in still needs its two-factor code. Sign in again, then reload this page.';
     if (code === 401) return 'Can\'t check the command lockbox: you are signed out. Sign in again, then reload this page.';
+    if (code === 403 && error && error !== 'admin_only') return 'Can\'t check the command lockbox: your Maestro refused the request (' + String(error).slice(0, 80) + '). Reload this page; if it stays, sign out and in again.';
     if (code === 403) return 'Can\'t check the command lockbox: only an admin\'s own browser sign-in may see or change it. Sign out and in again in this browser, then reload this page.';
     if (code === 404) return 'Can\'t check the command lockbox: your Maestro is running an older version without it. A restart loads it.';
     if (!code) return 'Can\'t check the command lockbox: no answer from your Maestro. Reload this page.';
@@ -1069,35 +1070,58 @@
   // lockbox:end
 
   let lockboxState = { status: null, agent: null };
+  let lockboxSeq = 0;   // each load takes the next number; an answer for an older load is dropped
+  /** The row with the select disabled and the reason under it. */
+  function lockboxShowWhy(why) {
+    const block = document.getElementById('lockbox-block');
+    if (!block) return;
+    block.style.display = '';
+    document.getElementById('lockbox-mode').disabled = true;
+    document.getElementById('lockbox-help').textContent = why;
+    document.getElementById('lockbox-env-row').style.display = 'none';
+    document.getElementById('lockbox-log-title').style.display = 'none';
+    document.getElementById('lockbox-log').textContent = '';
+  }
+  /** loadModels failed before it loaded the lockbox row: load the agent on its own, so the row still shows or says why. */
+  async function loadLockboxAlone() {
+    const seq = ++lockboxSeq;
+    let agent = null;
+    try {
+      const r = await fetch('/api/agents', { credentials: 'include' });
+      if (r.ok) { const d = await r.json(); agent = ((d && d.agents) || []).find(a => a && a.name === agentName) || null; }
+    } catch { agent = null; }
+    if (seq !== lockboxSeq) return;
+    if (agent) return loadLockbox(agent);
+    lockboxState.status = null;
+    lockboxShowWhy('Can\'t check the command lockbox: this agent\'s settings could not be loaded. Reload this page.');
+  }
   async function loadLockbox(agent) {
     const block = document.getElementById('lockbox-block');
     if (!block) return;
+    const seq = ++lockboxSeq;
     lockboxState.agent = agent || null;
     lockboxState.status = null;
-    let code = 0, error = '';
+    let code = 0, error = '', status = null;
     try {
       const r = await fetch('/api/lockbox/status', { credentials: 'include' });
       code = r.status;
-      if (r.ok) lockboxState.status = await r.json();
+      if (r.ok) { const s = await r.json(); if (s && typeof s === 'object' && Array.isArray(s.agents)) status = s; }
       else { try { const j = await r.json(); error = String((j && j.error) || ''); } catch { error = ''; } }
     } catch { /* no answer, or an answer that isn't JSON: said below */ }
+    if (seq !== lockboxSeq) return;
     const sel = document.getElementById('lockbox-mode');
-    if (!lockboxState.status || typeof lockboxState.status !== 'object') {
-      lockboxState.status = null;
+    if (!status) {
       // A member gets no control. Anyone else sees the row with the reason, never an empty space where it should be.
-      let admin = false;
-      // Unknown (no answer from /api/me) counts as an admin: the reason is shown rather than the row hidden from one.
-      if (code === 403) { try { const me = await apiFetch('/api/me'); admin = !!(me && me.isAdmin); } catch { admin = true; } }
+      // Hidden only when /api/me answers for a signed-in user who is not an admin; any other answer counts as an admin.
+      let admin = true;
+      if (code === 403 && error === 'admin_only') { try { const me = await apiFetch('/api/me'); admin = !(me && me.user && me.isAdmin === false); } catch { admin = true; } }
+      if (seq !== lockboxSeq) return;
       const why = lockboxWhy(code, error, admin);
       if (why === null) { block.style.display = 'none'; return; }
-      block.style.display = '';
-      sel.disabled = true;
-      document.getElementById('lockbox-help').textContent = why;
-      document.getElementById('lockbox-env-row').style.display = 'none';
-      document.getElementById('lockbox-log-title').style.display = 'none';
-      document.getElementById('lockbox-log').textContent = '';
+      lockboxShowWhy(why);
       return;
     }
+    lockboxState.status = status;
     block.style.display = '';
     sel.disabled = false;
     document.getElementById('lockbox-log-title').style.display = '';
@@ -1105,7 +1129,7 @@
     sel.value = (agent && agent.lockbox) || 'inherit';
     document.getElementById('lockbox-env').value = ((agent && agent.lockboxEnv) || []).join(', ');
     renderLockbox();
-    loadLockboxLog();
+    loadLockboxLog(seq);
   }
   /** The effect line, the variables box (Watch or Enforce only) and the log title follow the select. */
   function renderLockbox() {
@@ -1117,7 +1141,7 @@
     document.getElementById('lockbox-env-row').style.display = (mode === 'watch' || mode === 'enforce') ? '' : 'none';
     document.getElementById('lockbox-log-title').textContent = mode === 'watch' ? 'Recently blocked (watch)' : 'Recently blocked';
   }
-  async function loadLockboxLog() {
+  async function loadLockboxLog(seq) {
     const box = document.getElementById('lockbox-log');
     box.textContent = '';
     let entries = [];
@@ -1125,6 +1149,7 @@
       const r = await fetch('/api/lockbox/watch?agent=' + encodeURIComponent(agentName) + '&limit=10', { credentials: 'include' });
       if (r.ok) entries = (await r.json()).entries || [];
     } catch { /* shown as nothing yet */ }
+    if (seq !== undefined && seq !== lockboxSeq) return;   // a newer load fills the log
     if (!entries.length) { const d = document.createElement('div'); d.className = 'lb-empty'; d.textContent = 'Nothing yet.'; box.appendChild(d); return; }
     for (const e of entries.slice(0, 10)) {
       const item = document.createElement('div'); item.className = 'lb-entry';
@@ -1696,6 +1721,7 @@
 
   // ── Load Models ─────────────────────────────────────────────────────
   async function loadModels() {
+    let lockboxStarted = false;
     try {
       const [agentsData, modelsData] = await Promise.all([
         apiFetch('/api/agents'),
@@ -1728,7 +1754,7 @@
       document.getElementById('auto-model').checked = !!agent?.autoModel;
       fillAutoModelHelp(agent?.model || currentModel);
       const sbSel = document.getElementById('sandbox-mode'); if (sbSel) sbSel.value = agent?.sandbox || 'inherit';
-      loadLockbox(agent);
+      lockboxStarted = true; loadLockbox(agent);
       const toolsSel = document.getElementById('tools-mode'); if (toolsSel) toolsSel.value = agent?.tools || 'inherit';
       const effSel = document.getElementById('effort-mode');
       if (effSel) {
@@ -1764,6 +1790,8 @@
       initModelOffer(agent);
     } catch (e) {
       showStatus('model-status', 'error', e.message);
+      // The lockbox row doesn't depend on the model list: load it on its own when the failure came first.
+      if (!lockboxStarted && typeof loadLockboxAlone === 'function') loadLockboxAlone();
     }
   }
 
