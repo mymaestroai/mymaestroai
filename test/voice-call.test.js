@@ -67,7 +67,8 @@ test('holds: only waiting kinds are held; users, comms and alerts always go thro
   assert.strictEqual(r.calls.holds('planner', consult()), false, 'no call, nothing held');
   r.calls.start('planner', { userId: 'u1', person: 'Sam' });
   for (const kind of ['user', 'comms', 'alert', 'voice']) assert.strictEqual(r.calls.holds('planner', { id: `${kind}:1`, kind, label: 'x' }), false, kind);
-  assert.deepStrictEqual([...HELD_KINDS].sort(), ['consult_reply', 'consultation', 'job_notice', 'job_report', 'schedule', 'task']);
+  // hand-offs (lib/hand-offs): a hand-off's turn or report waits during a call too
+  assert.deepStrictEqual([...HELD_KINDS].sort(), ['consult_reply', 'consultation', 'hand_off', 'job_notice', 'job_report', 'schedule', 'task']);
   for (const kind of HELD_KINDS) assert.strictEqual(r.calls.holds('planner', { id: `${kind}:1`, kind, label: 'x' }), true, kind);
   assert.strictEqual(r.calls.holds('other', consult()), false, 'another agent is not on a call');
 

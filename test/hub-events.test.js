@@ -114,7 +114,9 @@ test('wiring: chat handler taps hub-initiated turns and every hub caller tags it
   // member origin (test/member-origin.test.js): what a member's turn starts carries member
   assert.match(chat, /origin: \{ kind: opts\.temporal \? 'task' : 'consultation', from: coordinatorName \|\| null, \.\.\.\(consultMember \? \{ member: true \} : \{\}\) \}/);
   assert.match(chat, /function wakeAgent\(agentName, message, onReply, meta = null\)/);
-  assert.match(chat, /handleChatStream\(\{ agent: agentName, message, origin(, [a-z_]+: [^}]+)? \}, sink\)/);
+  // hand-offs (lib/hand-offs): a wake-up in a hand-off runs at consult depth; the hand-off's own turns add body fields
+  assert.match(chat, /handleChatStream\(\{ agent: agentName, message, origin, exclude_tools: meta\?\.exclude_tools, \.\.\.\(handOff \? \{ consultation_depth: 1 \} : \{\}\) \}, sink\)/);
+  assert.match(chat, /handleChatStream\(\{ agent: agentName, message, origin, \.\.\.\(extraBody \|\| \{\}\) \}, sink\)/);
   const jobs = read('lib/jobs.js');
   assert.match(jobs, /kind: p\.kind === 'report' \? 'job_report' : 'job_notice'/);
   const sched = read('lib/scheduler.js');

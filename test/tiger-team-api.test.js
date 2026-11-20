@@ -65,6 +65,20 @@ test('completed team requires Continue, not Resume', async () => {
   const h = load(); h.state.status = 'completed'; const res = h.response();
   await h.ctx.route('/api/tiger-team/resume', h.req, res); assert.equal(res.status, 409);
 });
+test('Resume with a note queues it for the coordinator before the team resumes; without one it just resumes', async () => {
+  let queuedAtResume;
+  const h = load(async () => { queuedAtResume = [...(h.state.pendingMessages || [])]; });
+  const withNote = h.response();
+  await h.ctx.route('/api/tiger-team/resume', { method: 'POST', body: { session_id: 'tt', message: '  use the 2025 numbers  ' } }, withNote);
+  assert.deepEqual(queuedAtResume, ['use the 2025 numbers'], 'durably queued (the coordinator picks it up before its next model call) before the run starts');
+  assert.deepEqual(h.state.userDirectives.map(d => d.message), ['use the 2025 numbers']);
+  assert.match(withNote.writes.join(''), /"type":"tt_user_message"[^}]*"kind":"resume_note"/);
+  const h2 = load(async () => { queuedAtResume = [...(h2.state.pendingMessages || [])]; });
+  const plain = h2.response();
+  await h2.ctx.route('/api/tiger-team/resume', h2.req, plain);
+  assert.equal(plain.status, 200); assert.deepEqual(queuedAtResume, []);
+  assert.equal(plain.writes.join('').includes('resume_note'), false);
+});
 test('bad IDs are rejected before touching disk', async () => {
   const h = load(); const res = h.response(); h.req.body.session_id = '../secret';
   await h.ctx.route('/api/tiger-team/resume', h.req, res); assert.equal(res.status, 400);
@@ -111,7 +125,7 @@ for (const mode of ['roundtable', 'led']) {
       readBody: async req => { let b = ''; for await (const chunk of req) b += chunk; return b; },
       jsonResponse: (res, code, body) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(body)); },
       getTigerTeamState: () => state,
-      stopTigerTeam: () => { state.status = 'stopped'; release('Tiger Team failed: Tiger Team stopped'); },
+      stopTigerTeam: () => { state.status = 'stopped'; release('Tiger Team failed: Tiger Team stopped'); return true; },   // the real stopTigerTeam answers whether it stopped anything
       setInterval, clearInterval, setTimeout,
       ttValidId: id => /^[a-zA-Z0-9_-]+$/.test(id), ttStore: journal(), activeTigerTeams: new Map(),
     };

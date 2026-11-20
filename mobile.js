@@ -1053,10 +1053,12 @@ function originLabel(origin) {
     case 'consultation': return `consulted by ${origin.from || 'another agent'}`;
     case 'job_notice': return `your job finished${origin.jobName ? `: ${origin.jobName}` : ''}`;
     case 'job_report': return `job report from ${origin.from || 'a worker'}${origin.jobName ? ` (${origin.jobName})` : ''}`;
-    case 'schedule': return origin.by ? `scheduled task set by ${origin.by === 'owner' ? 'you' : origin.by}${origin.from ? `: ${origin.from}` : ''}` : `scheduled task${origin.from ? `: ${origin.from}` : ''}`;
+    case 'schedule': return origin.by ? `scheduled task set by ${origin.by === '@owner' ? 'you' : origin.by}${origin.from ? `: ${origin.from}` : ''}` : `scheduled task${origin.from ? `: ${origin.from}` : ''}`;
     case 'task': return origin.from && origin.from !== 'hub' ? `queued task from ${origin.from}` : origin.label ? `hub: ${origin.label}` : 'hub turn';
     case 'alert': return `alert from ${origin.from || 'a monitor'}`;
     case 'consult_reply': return 'queued consultation reply delivered';
+    case 'hand_off': return `hand-off from ${origin.from || 'another agent'}`;
+    case 'hand_off_report': return `hand-off finished: ${origin.from || 'another agent'}`;
     case 'comms': return 'message from a messaging channel';
     default: return 'hub turn';
   }
@@ -1253,6 +1255,136 @@ function noteCtxReading(name, g) {
 // Claude plan usage in the chat header for agents on the Claude subscription (admins; GET /api/plan-usage on load,
 // every 10 minutes and on plan events): the weekly window that governs the open agent's model.
 let planUsageLast = null;
+let codexUsageLast = null;   // GET /api/codex-usage (the ChatGPT plan), admins only
+let subsOnFlag = true;       // the setting subscriptionUsage (on unless false)
+// ── subscriptions helpers (begin) ──
+// Pure: the usage bars of Settings -> Subscriptions and the chat-header ChatGPT badge. Same text in app.js and mobile.js.
+function subsWhen(iso) {
+  const t = Date.parse(iso || '');
+  return Number.isFinite(t) ? new Date(Math.round(t / 60000) * 60000).toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : '';
+}
+function subsLevels(l) {
+  const a = (Array.isArray(l) ? l : []).map(Number).filter(n => Number.isFinite(n));
+  return a.length ? a : [75, 90];
+}
+function subsColor(pct, reached, levels) {
+  const lv = subsLevels(levels);
+  const first = lv[0], last = lv[lv.length - 1];
+  return reached || pct >= 100 ? '#d4588b' : pct >= last ? '#d95926' : pct >= first ? '#c9a227' : '#3987e5';
+}
+function subsBarHtml(label, pct, metaText, color, expired) {
+  const p = Math.max(0, Math.min(100, Math.round(Number(pct) || 0)));
+  const shown = expired ? 0 : p;
+  return `<div class="subs-bar"><span class="subs-label">${escapeHtml(label)}</span><span class="subs-meta">${escapeHtml(metaText)}</span>` +
+    `<div class="subs-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${shown}" aria-label="${escapeHtml(label)}">` +
+    `<div class="subs-fill" style="width:${shown}%;background:${color}"></div></div></div>`;
+}
+function subsClaudeRows(snap) {
+  const out = [];
+  const w = (snap && snap.windows) || {};
+  const models = (snap && snap.models) || {};
+  const add = (label, x) => { if (x && x.utilization != null) out.push({ label, pct: Math.round(Number(x.utilization) || 0), resetsAt: x.resets_at, rejected: !!x.rejected }); };
+  add('5-hour', w.five_hour);
+  add('Weekly, all models', w.seven_day);
+  if (!models.opus) add('Weekly, Opus', w.seven_day_opus);
+  if (!models.sonnet) add('Weekly, Sonnet', w.seven_day_sonnet);
+  for (const k of Object.keys(models)) add(`Weekly, ${models[k].display_name || k}`, models[k]);
+  return out;
+}
+function subsCodexRows(snap) {
+  const out = [];
+  const limits = (snap && Array.isArray(snap.limits)) ? snap.limits : [];
+  for (const l of limits) {
+    const lname = l.label || l.name || l.id || 'Codex';
+    const wins = (Array.isArray(l.windows) ? l.windows : []).slice().sort((a, b) => (Number(a.minutes) || 0) - (Number(b.minutes) || 0));
+    for (const x of wins) {
+      const wl = String(x.label || 'usage');
+      out.push({ label: limits.length > 1 ? `${lname}, ${wl}` : wl.charAt(0).toUpperCase() + wl.slice(1), pct: Math.round(Number(x.usedPercent) || 0), resetsAt: x.resetsAt, expired: !!x.expired, reached: !!l.reached });
+    }
+  }
+  return out;
+}
+function subsReachedLines(snap) {
+  const lines = [];
+  for (const l of ((snap && snap.limits) || [])) {
+    if (!l.reached) continue;
+    const t = `ChatGPT plan limit reached until ${subsWhen(l.reachedUntil) || 'it resets'}`;
+    if (!lines.includes(t)) lines.push(t);
+  }
+  return lines;
+}
+function subsWindowsHtml(claudeSnap, codexSnap, opts) {
+  const o = opts || {};
+  if (o.on === false) return '';
+  const now = Number.isFinite(Number(o.now)) ? Number(o.now) : Date.now();
+  let html = '';
+  if (claudeSnap) {
+    const lv = subsLevels(o.levels || (claudeSnap.warn && claudeSnap.warn.at));
+    const rows = subsClaudeRows(claudeSnap);
+    html += `<div class="subs-block"><div class="subs-head">Claude${claudeSnap.subscription ? ` (${escapeHtml(claudeSnap.subscription)})` : ''}</div>`;
+    html += rows.length ? rows.map(r => subsBarHtml(r.label, r.pct, `${r.pct}% used · ${r.rejected ? 'refused until' : 'resets'} ${subsWhen(r.resetsAt) || 'the reset'}`, subsColor(r.pct, r.rejected, lv))).join('') : '<div class="subs-note">No reading yet.</div>';
+    if (claudeSnap.fetchedAt) html += `<div class="subs-note">Read ${escapeHtml(subsWhen(claudeSnap.fetchedAt))}</div>`;
+    if (claudeSnap.error) html += `<div class="subs-note subs-err">${escapeHtml(String(claudeSnap.error).slice(0, 200))}</div>`;
+    html += '</div>';
+  }
+  const hasReading = !!(codexSnap && (codexSnap.readAt || (codexSnap.limits || []).length));
+  if (codexSnap && (o.codexAgents || hasReading)) {
+    const lv = subsLevels(o.levels || (codexSnap.warn && codexSnap.warn.at));
+    const rows = subsCodexRows(codexSnap);
+    html += `<div class="subs-block"><div class="subs-head">ChatGPT${codexSnap.planType ? ` (${escapeHtml(codexSnap.planType)})` : ''}</div>`;
+    for (const t of subsReachedLines(codexSnap)) html += `<div class="subs-note subs-reached">${escapeHtml(t)}</div>`;
+    html += rows.map(r => subsBarHtml(r.label, r.pct, r.expired ? `Reset at ${subsWhen(r.resetsAt) || 'the reset'}; no reading since` : `${r.pct}% used · resets ${subsWhen(r.resetsAt) || 'the reset'}`, subsColor(r.pct, r.reached, lv), r.expired)).join('');
+    const t = Date.parse(codexSnap.readAt || '');
+    if (!codexSnap.readAt || !Number.isFinite(t)) html += '<div class="subs-note">No reading yet. Codex reports it during its turns, or press Read now.</div>';
+    else html += `<div class="subs-note">${now - t < 30 * 60000 ? 'Read' : 'Last seen'} ${escapeHtml(subsWhen(codexSnap.readAt))}</div>`;
+    const rc = Number(codexSnap.resetCredits);
+    if (rc > 0) html += `<div class="subs-note">${rc} reset credit${rc === 1 ? '' : 's'} available</div>`;
+    if (codexSnap.error) html += `<div class="subs-note subs-err">${escapeHtml(String(codexSnap.error).slice(0, 200))}</div>`;
+    html += '</div>';
+  }
+  return html;
+}
+function codexBadge(snap, levels, now) {
+  if (!snap || !snap.readAt) return null;
+  const lv = subsLevels(levels || (snap.warn && snap.warn.at));
+  const t0 = Number.isFinite(Number(now)) ? Number(now) : Date.now();
+  const all = [];
+  let reachedLimit = null;
+  for (const l of (snap.limits || [])) {
+    if (l.reached && !reachedLimit) reachedLimit = l;
+    for (const w of (l.windows || [])) all.push(w);
+  }
+  if (!reachedLimit && !all.some(w => !w.expired)) return null;
+  const pctOf = (w) => Math.round(Number(w.usedPercent) || 0);
+  const live = all.filter(w => !w.expired);
+  const weekly = live.filter(w => w.weekly);
+  const best = (a) => a.reduce((x, y) => (pctOf(y) > pctOf(x) ? y : x));
+  let main = weekly.length ? best(weekly) : null;
+  if (!main && live.length) main = live.reduce((x, y) => ((Number(y.minutes) || 0) > (Number(x.minutes) || 0) ? y : x));
+  const age = t0 - Date.parse(snap.readAt);
+  const seen = age > 30 * 60000 ? `; last seen ${subsWhen(snap.readAt)}` : '';
+  if (reachedLimit) {
+    const when = subsWhen(reachedLimit.reachedUntil);
+    return { text: 'ChatGPT limit reached', cls: 'refused', title: `ChatGPT plan limit reached until ${when || 'it resets'}${seen}` };
+  }
+  const pct = pctOf(main);
+  let text = main.weekly ? `ChatGPT ${pct}%` : `ChatGPT ${main.label || 'usage'} ${pct}%`;
+  const shorts = live.filter(w => w.short && w !== main && pctOf(w) > 50);
+  if (shorts.length) { const s = best(shorts); text += ` · ${String(s.label || '5-hour').replace(/-hour$/, 'h')} ${pctOf(s)}%`; }
+  const passed = lv.filter(l => pct >= l);
+  const cls = pct >= 100 ? 'refused' : passed.length && passed.length === lv.length ? 'hot' : passed.length ? 'warn' : '';
+  const when = subsWhen(main.resetsAt) || 'the reset';
+  const title = (main.weekly ? `ChatGPT plan: ${pct}% of this week's allowance, resets ${when}` : `ChatGPT plan: ${pct}% of the ${main.label || 'usage'} allowance, resets ${when}`) + seen;
+  return { text, cls, title };
+}
+// ── subscriptions helpers (end) ──
+const subsEnabled = () => subsOnFlag !== false && !(codexUsageLast && codexUsageLast.enabled === false);
+async function refreshCodexUsage() {
+  try {
+    const r = await api('/api/codex-usage');
+    if (r.ok) { codexUsageLast = await r.json(); if (codexUsageLast && typeof codexUsageLast.enabled === 'boolean') subsOnFlag = codexUsageLast.enabled; }
+  } catch { /* the hub is restarting: the next round asks again */ }
+}
 async function refreshPlanUsage() {
   if (!isAdmin()) return;
   clearTimeout(refreshPlanUsage.timer);
@@ -1262,6 +1394,7 @@ async function refreshPlanUsage() {
     if (r.status === 403) return;
     if (r.ok) planUsageLast = await r.json(); else next = 30000;
   } catch { next = 30000; }
+  await refreshCodexUsage();
   // No reading yet (the hub just started): ask again every 15 s for up to 2 minutes.
   if (!planUsageLast || !planUsageLast.fetchedAt) { refreshPlanUsage.tries = (refreshPlanUsage.tries || 0) + 1; if (refreshPlanUsage.tries <= 8) next = Math.min(next, 15000); }
   else refreshPlanUsage.tries = 0;
@@ -1294,6 +1427,15 @@ function planFamilyOf(model) {
 function paintPlan() {
   const el = $('chat-plan'); if (!el) return;
   const d = planUsageLast; const a = agentByName(current); const model = String((a && a.model) || '');
+  if (/^codex-cli\//.test(model)) {   // a ChatGPT-plan agent: the ChatGPT reading (when the setting is on and one exists)
+    const b = subsEnabled() ? codexBadge(codexUsageLast, null, Date.now()) : null;
+    if (!b) { el.hidden = true; el.textContent = ''; return; }
+    el.textContent = b.text;
+    el.className = 'sub' + (b.cls ? ' ' + b.cls : '');
+    el.title = b.title;
+    el.hidden = false;
+    return;
+  }
   const fam = planFamilyOf(model);
   const wins = d && /^claude-sdk\//.test(model) ? (d.weekly || []).filter(w => w.utilization != null && (w.family == null || (fam && w.family === fam))) : [];
   if (!wins.length) { el.hidden = true; el.textContent = ''; return; }
@@ -1301,6 +1443,8 @@ function paintPlan() {
   const levels = (d.warn && Array.isArray(d.warn.at)) ? d.warn.at : [];
   const { pct, extra, cls } = planState(w, levels);
   el.textContent = `${w.family ? w.label : 'Plan'} ${planPctText(w, levels)}`;
+  const five = d.windows && d.windows.five_hour;
+  if (subsEnabled() && five && five.utilization != null && Number(five.utilization) > 50) el.textContent += ` · 5h ${Math.round(Number(five.utilization))}%`;
   el.className = 'sub' + (cls ? ' ' + cls : '');
   el.title = extra
     ? `${w.family ? w.label : 'All models'}: the weekly Claude plan is used up until ${Number.isFinite(Date.parse(w.resetsAt || '')) ? new Date(w.resetsAt).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : 'the reset'}; extra usage is paying`
@@ -1775,11 +1919,11 @@ const NOTIFY_KINDS = [
   { kind: 'questions', label: 'Questions', hint: 'When an agent needs your answer or approval' },
   { kind: 'requested', label: 'Requests you made', hint: 'Things you asked an agent to tell you about, and replies you asked to hear about' },
   { kind: 'other', label: 'Everything else', hint: 'Reports and other notices' },
-  { kind: 'security', label: 'Security and access', hint: 'Sign-in and passkey changes, wallet locks, failed backups, access changes, a halted hub' },
+  { kind: 'security', label: 'Security and access', hint: 'Sign-in and passkey changes, wallet locks, failed backups, access changes, a halted hub, health problems (a full disk)' },
 ];
 // The kinds an agent can have its own setting for (security is a default only).
 const NOTIFY_AGENT_KINDS = NOTIFY_KINDS.filter(k => k.kind !== 'security');
-const NOTIFY_SECURITY_WARNING = "You won't be told about sign-in and passkey changes, wallet locks, failed backups, access changes or a halted hub.";
+const NOTIFY_SECURITY_WARNING = "You won't be told about sign-in and passkey changes, wallet locks, failed backups, access changes, a halted hub or health problems such as a full disk.";
 function notifyModeLabel(mode) {
   if (mode === 'off') return 'Off';
   if (mode === 'away') return "Only when I'm away";
@@ -2494,6 +2638,8 @@ function chatViewBusyText(origin, activity) {
       case 'consultation': return `Answering a consultation from ${cap(o.from) || 'another agent'}`;
       case 'schedule': { const l = o.label || o.from; return l ? `Working on a scheduled task: ${l}` : 'Working on a scheduled task'; }
       case 'job_notice': return o.jobName ? `Reading a job result: ${o.jobName}` : 'Reading a job result';
+      case 'hand_off': return o.label || 'Working on a hand-off';
+      case 'hand_off_report': return 'Reading a hand-off report';
       case 'job_report': return o.jobName ? `Reading a job report: ${o.jobName}` : 'Reading a job report';
       case 'consult_reply': return 'Reading consultation replies';
       case 'alert': return 'Handling a monitor alert';
@@ -2554,6 +2700,8 @@ function autoInfoOf(entry) {
     else if (o.kind === 'job_report') label = `Job report${o.jobName ? ': ' + o.jobName : ''}`;
     else if (o.kind === 'task') label = o.label === 'context compression' ? 'Resumed after compression' : `Hub task${o.label ? ': ' + o.label : ''}`;
     else if (o.kind === 'consult_reply') label = 'Consultation replies delivered';
+    else if (o.kind === 'hand_off') label = o.label || `Hand-off from ${from || 'another agent'}`;
+    else if (o.kind === 'hand_off_report') label = o.label || 'Hand-off finished';
     else if (o.kind === 'alert') label = 'Monitor alert';
     else label = 'Hub turn';
     return { kind, from, label };
@@ -6624,6 +6772,7 @@ function renderEntry(m, time = '') {
 // (links to /api/files/download, absolute paths) get a card each in a .file-cards box right after the reply body.
 // Never on a streaming chunk; no candidates means no request; nothing here may throw into the chat code.
 async function attachFileCards(el, body) {
+  if (window.HandOffCard) HandOffCard.refreshSoon();   // a reply just ended: look again for hand-offs (calls close together make one request)
   try {
     const H = window.hubFileCard;
     if (!el || !el.classList || !el.classList.contains('assistant')) return;
@@ -11694,36 +11843,48 @@ async function openUpdateSheet() {
   const blockers = s.blockers && s.blockers.length ? `<p class="upd-err">Update blocked: ${esc(s.blockers.join('; '))}</p>` : '';
   const incoming = s.commits && s.commits.length ? `<details><summary>${s.commits.length} incoming commit${s.commits.length === 1 ? '' : 's'}</summary>${s.commits.map(c => `<div>${esc(c)}</div>`).join('')}</details>` : '';
   const stayLabel = s.canUpdate ? 'Update & restart' : (s.upToDate ? 'Up to date' : 'Blocked');
-  const force = s.canForce ? `<p><small>The changed files are application files, not your data: they can be discarded.</small></p>` : '';
-  d.innerHTML = `<h3>Update hub</h3><p>Branch <b>${esc(s.branch)}</b>${s.upToDate ? ' — up to date on this channel' : ''}</p><div>${radios}</div>${blockers}${force}${incoming}<div class="btns"><button id="upd-close">Cancel</button>${s.canForce ? '<button id="upd-force">Discard changes &amp; update</button>' : ''}<button id="upd-go" class="go accent" ${s.canUpdate ? '' : 'disabled'}>${stayLabel}</button></div>`;
-  // Discarding updates the current channel only, so it is off while another channel is chosen.
-  if (s.canForce) $('upd-force').addEventListener('click', () => { if (chosen()) return; if (confirm(`Discard ${s.dirty.length} changed application file${s.dirty.length === 1 ? '' : 's'} and update ${s.branch}? Your chats, agents and data are not touched.`)) runUpdateFromPhone(null, true); });
+  // Changed files of the code itself: nothing moves the code over them. Put them aside (git stash) or cancel.
+  const lc = s.localChanges || [];
+  const force = lc.length ? `<div class="upd-err" id="upd-local"><b>Your Maestro's own files were changed on this computer</b>${lc.slice(0, 10).map(f => `<div><small>${esc(f)}</small></div>`).join('')}${lc.length > 10 ? `<div><small>and ${lc.length - 10} more</small></div>` : ''}<p><small>An update would stop on them, or they may break after one.</small></p></div>` : '';
+  // up to date, or a rewritten history that the changed files block: put them aside only (no update)
+  const asideOnly = s.upToDate || (!s.canPutAside && !!s.rewritten && lc.length > 0);
+  const canAside = s.canPutAside || asideOnly && lc.length > 0;
+  const asideLabel = asideOnly ? 'Put my changes aside' : 'Put my changes aside and update';
+  d.innerHTML = `<h3>Update hub</h3><p>Branch <b>${esc(s.branch)}</b>${s.upToDate ? ' — up to date on this channel' : ''}</p><div>${radios}</div>${blockers}${force}${incoming}<div class="btns"><button id="upd-close">Cancel</button>${canAside ? `<button id="upd-force">${asideLabel}</button>` : ''}<button id="upd-go" class="go accent" ${s.canUpdate ? '' : 'disabled'}${lc.length ? ' hidden' : ''}>${stayLabel}</button></div>`;
+  // Putting the changes aside, then updating (the chosen channel, or only putting aside when already up to date).
+  if (canAside) $('upd-force').addEventListener('click', () => { if (confirm(`Put these ${lc.length} change${lc.length === 1 ? '' : 's'} aside? Your Maestro won't put them back; you can find them with git stash list.`)) runUpdateFromPhone(asideOnly ? null : chosen(), true, asideOnly); });
   const go = $('upd-go');
   const chosen = () => { const sel = d.querySelector('input[name="upd-channel"]:checked'); return sel && sel.value !== ch.current ? sel.value : null; };
   const refresh = () => {
     const other = chosen() ? ch.channels.find(c => c.id === chosen()) : null;
     if (other) { go.disabled = false; go.textContent = `Switch to ${other.label} & restart`; }
     else { go.disabled = !s.canUpdate; go.textContent = stayLabel; }
-    if ($('upd-force')) $('upd-force').disabled = !!other;
+    if ($('upd-force') && !asideOnly) $('upd-force').textContent = other ? `Put my changes aside and switch to ${other.label}` : asideLabel;
+    if (lc.length) go.disabled = true;   // the update itself would stop on the changed files
   };
   for (const r of d.querySelectorAll('input[name="upd-channel"]')) r.addEventListener('change', refresh);
   $('upd-close').addEventListener('click', () => d.close());
   go.addEventListener('click', () => runUpdateFromPhone(chosen()));
 }
 
-async function runUpdateFromPhone(channel, force = false) {
+async function runUpdateFromPhone(channel, force = false, asideOnly = false) {
   const d = $('update-sheet');
   const go = $('upd-go');
   if (go) { go.disabled = true; go.textContent = channel ? 'Switching…' : 'Updating…'; }
   let r;
   try {
-    const resp = await api(force ? '/api/git-sync/force-update' : '/api/git-sync/update', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(channel && !force ? { channel } : {}) });
+    const resp = await api(asideOnly ? '/api/git-sync/put-aside' : force ? '/api/git-sync/force-update' : '/api/git-sync/update', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(channel && !asideOnly ? { channel } : {}) });
     r = await resp.json();
   } catch (e) { r = { success: false, error: e.message }; }
   if (!r || !r.success) {
     d.innerHTML = `<p class="upd-err">Update failed: ${esc((r && r.error) || 'unknown error')}</p><div class="btns"><button id="upd-close">Close</button><button id="upd-details" class="go">Details</button></div>`;
     $('upd-close').addEventListener('click', () => d.close());
     $('upd-details').addEventListener('click', () => openUpdateSheet());
+    return;
+  }
+  if (asideOnly) {   // no update, so no restart
+    d.innerHTML = `<p>${r.steps && r.steps.length ? 'Changes put aside.' : 'Nothing to put aside.'}</p>${(r.steps || []).map(st => `<div><small>• ${esc(st)}</small></div>`).join('')}<div class="btns"><button id="upd-close">Close</button></div>`;
+    $('upd-close').addEventListener('click', () => d.close());
     return;
   }
   d.innerHTML = `<p>Updated to ${esc(r.head)}.</p>${(r.steps || []).map(st => `<div><small>• ${esc(st)}</small></div>`).join('')}<p>Restarting…</p>`;
@@ -12205,6 +12366,13 @@ function connectEvents() {
   on('plan_limit', () => refreshPlanUsage());
   on('plan_extra_usage', () => refreshPlanUsage());
   on('plan_warning', () => refreshPlanUsage());
+  // The ChatGPT plan (lib/codex-usage): its warnings lead to the Subscriptions sheet; new readings repaint the header and the sheet.
+  on('plan_warning', (ev) => {
+    if (!ev || ev.provider !== 'chatgpt' || !isAdmin()) return;
+    const when = subsWhen(ev.resetsAt);
+    toast(ev.reached ? `ChatGPT plan limit reached until ${when || 'it resets'}` : `ChatGPT plan: ${Math.round(Number(ev.utilization) || 0)}% of this week's allowance (resets ${when || 'the reset'})`, 8000, openSubsSheet);
+  });
+  on('codex_usage', (ev) => { if (!ev || !isAdmin()) return; codexUsageLast = ev; paintPlan(); paintSubsSheet(); });
   // (Re)connected: whatever happened to the open chat's turn meanwhile comes from the hub's turn view.
   source.onopen = () => { esLastEventAt = Date.now(); reattachCheckAll(); catchUpOpenAgent(); };
   // A dead session closes the stream with no status code: probe an API call, which redirects to /login on 401.
@@ -12841,6 +13009,7 @@ function wire() {
   $('menu-workers').addEventListener('click', () => openWorkerSheet('history'));
   $('menu-wallet')?.addEventListener('click', openWalletSheet);   // ?.: a phone page cached from before has no menu entry
   $('menu-memory')?.addEventListener('click', openMemorySheet);   // a phone page cached from before this line has no menu entry
+  $('menu-subs')?.addEventListener('click', openSubsSheet);       // likewise
   $('chat-workers-btn').addEventListener('click', () => openWorkerSheet('list'));
   $('menu-compact').addEventListener('click', compressNow);
   $('files-upload-input').addEventListener('change', (e) => { filesUpload(e.target.files); e.target.value = ''; });
@@ -12973,6 +13142,34 @@ function wire() {
   }, 5000);
 }
 
+// ── system health notice (begin) ──
+// Admins only: a red bar at the top of the agent list while the nightly health check has a critical problem. The
+// sign-in items are left out (the setup checklist has its own notice). The phone has no Status page, so the link opens
+// the computer page at Settings → Status. An error or a non-200 answer leaves the bar as it is.
+function healthNoticeItems(view) {
+  return ((view && view.items) || []).filter(i => i && i.level === 'critical' && !String(i.id || '').startsWith('health-signin-'));
+}
+let healthNoticeSeq = 0;
+async function paintHealthNotice() {
+  const bar = $('health-notice');
+  if (!bar) return;
+  const seq = ++healthNoticeSeq;
+  if (!hubMe || hubMe.isAdmin !== true || !hubMe.user) { bar.hidden = true; bar.textContent = ''; return; }
+  let view = null;
+  try {
+    const r = await api('/api/system-health');
+    if (!r.ok) return;
+    view = await r.json();
+  } catch { return; }
+  if (seq !== healthNoticeSeq) return;   // a newer paint is on its way
+  const crit = healthNoticeItems(view);
+  if (!crit.length) { bar.hidden = true; bar.textContent = ''; return; }
+  bar.innerHTML = `Health: ${crit.map(i => esc(i.title)).join('; ')}. <a href="/?health=1">Open Settings → Status</a>`;
+  bar.hidden = false;
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) paintHealthNotice().catch(() => {}); });
+// ── system health notice (end) ──
+
 // ── Multi-user: owner switcher, account menu, Profile and Security sheets ──────
 
 async function loadMe() {
@@ -12981,6 +13178,9 @@ async function loadMe() {
     if (r.ok) {
       hubMe = await r.json();
       if (window.hubSimple) { try { window.hubSimple.apply(hubMe); } catch { /* the page stays as it is */ } }   // Simple mode and theme classes on <html>
+      { const ti = $('menu-tiger'); if (ti) ti.hidden = !(hubMe && hubMe.isAdmin === true); }
+      // (the Tiger Teams link above: admins only, the page and its API are admin-only; likewise the Subscriptions entry)
+      { const su = $('menu-subs'); if (su) su.hidden = !(hubMe && hubMe.isAdmin === true); }
       if (typeof simpleMenuHide === 'function') simpleMenuHide();   // "Switch to Simple" only for a real account (not the legacy single-password login)
       if (typeof simpleToggleSync === 'function') simpleToggleSync();   // the Simple view switch (and Simple's theme button) only for a real account
       // Signed in: recorded-call pieces the hub never acknowledged (a closed app, a reload, a dead network) are sent now, one at a time (lib/ui-voice-call.js).
@@ -13158,6 +13358,82 @@ function paintMemorySheet() {
   body.scrollTop = scroll;
 }
 
+// Subscriptions (menu): the same switch and usage bars as Settings -> Subscriptions on a computer. Admins only.
+function subsSheet() {
+  let sh = $('subs-sheet');
+  if (sh) return sh;
+  sh = document.createElement('div');
+  sh.id = 'subs-sheet';
+  sh.className = 'rsn-sheet mh-sheet subs-sheet';
+  sh.setAttribute('role', 'dialog');
+  sh.setAttribute('aria-modal', 'true');
+  sh.setAttribute('aria-label', 'Subscriptions');
+  sh.dataset.noDirty = '';
+  sh.innerHTML = '<div class="rsn-sheet-head"><span class="rsn-sheet-title">Subscriptions</span><span class="rsn-sheet-count"></span>' +
+    '<button type="button" class="rsn-sheet-close" aria-label="Close">&#x2715;</button></div><div class="mh-body subs-body" tabindex="-1"></div>' +
+    '<div class="subs-foot"><button type="button" class="subs-close">Close</button></div>';
+  const close = () => { sh.classList.remove('open'); dialogGuard.closed(sh); };
+  sh.querySelector('.rsn-sheet-close').addEventListener('click', close);
+  sh.querySelector('.subs-close').addEventListener('click', close);
+  sh.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); } });
+  sh.addEventListener('change', (e) => { if (e.target && e.target.id === 'subs-on') saveSubsOn(e.target.checked); });
+  sh.addEventListener('click', (e) => { const b = e.target.closest && e.target.closest('[data-subs-read]'); if (b) subsReadNow(b.dataset.subsRead); });
+  sh.closeSheet = close;
+  document.body.appendChild(sh);
+  return sh;
+}
+function openSubsSheet() {
+  $('menu').classList.remove('open');
+  const sh = subsSheet();
+  if (!sh.classList.contains('open')) { sh.classList.add('open'); dialogGuard.open(sh, { close: sh.closeSheet }); }
+  paintSubsSheet();
+  (async () => {
+    if (!planUsageLast) { try { const r = await api('/api/plan-usage'); if (r.ok) planUsageLast = await r.json(); } catch { /* shown as no reading */ } }
+    await refreshCodexUsage();
+    paintSubsSheet();
+    const t = codexUsageLast && codexUsageLast.readAt ? Date.parse(codexUsageLast.readAt) : NaN;
+    if (subsOnFlag && (!Number.isFinite(t) || Date.now() - t > 30 * 60000)) subsReadNow('codex');   // the hub allows one read a minute
+  })();
+}
+function paintSubsSheet(msg) {
+  const sh = $('subs-sheet');
+  if (!sh || !sh.classList.contains('open')) return;
+  const body = sh.querySelector('.subs-body');
+  const keep = body.querySelector('.subs-msg');
+  const text = msg !== undefined ? msg : (keep ? keep.textContent : '');
+  const codexAgents = (typeof agents !== 'undefined' && Array.isArray(agents) ? agents : []).some(a => a && /^codex-cli\//.test(String(a.model || '')));
+  const scroll = body.scrollTop;
+  body.innerHTML = `<label class="subs-switch"><input type="checkbox" id="subs-on" ${subsOnFlag ? 'checked' : ''}> <span>Subscription usage</span></label>` +
+    `<div class="subs-hint">${escapeHtml("Shows how much of each subscription's allowance is used, in Settings, the chat header and your lead's notes. Free: no turns are spent to read it.")}</div>` +
+    (subsOnFlag ? subsWindowsHtml(planUsageLast, codexUsageLast, { now: Date.now(), codexAgents }) +
+      '<div class="subs-actions"><button type="button" data-subs-read="claude">Read now (Claude)</button><button type="button" data-subs-read="codex">Read now (ChatGPT)</button></div>' : '') +
+    `<div class="subs-msg subs-err">${escapeHtml(text)}</div>`;
+  body.scrollTop = scroll;
+}
+async function subsReadNow(which) {
+  paintSubsSheet('Reading...');
+  let err = '';
+  try {
+    const r = await api(`/api/${which === 'claude' ? 'plan-usage' : 'codex-usage'}/refresh`, { method: 'POST' });
+    const d = await r.json().catch(() => ({}));
+    if (which === 'claude') { if (r.ok) planUsageLast = d; else err = d.error || r.status; }
+    else { if (d && d.snapshot) codexUsageLast = d.snapshot; if (!r.ok || d.ok === false) err = d.error || r.status; }
+  } catch (e) { err = e.message; }
+  paintPlan();
+  paintSubsSheet(err ? String(err).slice(0, 200) : '');
+}
+async function saveSubsOn(on) {
+  try {
+    const r = await api('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ subscriptionUsage: !!on }) });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || r.status);
+    subsOnFlag = !!on;
+    paintPlan();
+    paintSubsSheet('');
+    if (on) refreshCodexUsage().then(() => { paintPlan(); paintSubsSheet(); });
+  } catch (e) { paintSubsSheet(`Could not save: ${e.message}`); }
+}
+
 // Monthly API credit (set on the desktop, Settings → Spend): this period's spend through the hub against it.
 async function paintMenuCredit() {
   const el = $('menu-credit');
@@ -13273,6 +13549,31 @@ async function chooseTimeZone(sel) {
   secMsg('prof-tz-msg', error ? `Not saved: ${error}` : 'Saved.', !error);
 }
 
+// "Protect your Maestro's own code": the switch IS the state of the behaviour change 'protect-own-code' (admin-only route).
+async function mountCodeProtect(el) {
+  if (!el) return;
+  el.innerHTML = '<div class="sec-title">Protect your Maestro\'s own code</div><label class="sec-hint" style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="sec-code-protect" style="width:auto" disabled> Protect your Maestro\'s own code</label><div class="sec-hint">Agents can\'t change the program files of your Maestro on this computer, and a refused agent describes the change to you instead. Also on the Changes page.</div><div class="sec-msg" id="sec-code-protect-msg"></div>';
+  const box = el.querySelector('#sec-code-protect'), msg = el.querySelector('#sec-code-protect-msg');
+  try {
+    const r = await fetch('/api/behaviour-changes', { credentials: 'include' });
+    const j = r.ok ? await r.json() : null;
+    const e = j && (j.changes || []).find((c) => c.id === 'protect-own-code');
+    if (!e) { msg.textContent = 'Could not read this setting.'; return; }
+    box.checked = e.state === 'on';
+    box.disabled = false;
+    box.addEventListener('change', async () => {
+      const want = box.checked ? 'on' : 'off';
+      box.disabled = true;
+      try {
+        const p = await fetch('/api/behaviour-changes/protect-own-code', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ decision: want }) });
+        if (!p.ok) throw new Error((await p.json().catch(() => ({}))).error || 'Could not save.');
+        msg.textContent = want === 'on' ? 'On.' : 'Off.';
+      } catch (err) { box.checked = !box.checked; msg.textContent = err.message; }
+      box.disabled = false;
+    });
+  } catch { msg.textContent = 'Could not read this setting.'; }
+}
+
 function openSecuritySheet() {
   $('menu').classList.remove('open');
   const sheet = $('security-sheet');
@@ -13291,12 +13592,14 @@ function openSecuritySheet() {
       <div class="sec-title">Sessions</div>
       <div class="sec-actions"><button id="sec-revoke" class="danger">Sign out everywhere</button></div>
     </div>
+    ${hubMe && hubMe.isAdmin ? '<div class="sec-section" id="sec-code-protect-box"></div>' : ''}
     ${hubMe && hubMe.isAdmin ? `<div class="sec-section" id="sec-share" data-no-dirty>${shareSettingsHtml()}</div>` : ''}
     <div class="sec-actions" style="margin-top:10px"><button id="sec-close">Close</button></div>`;
   $('sec-pw-go').addEventListener('click', changePassword);
   $('sec-revoke').addEventListener('click', signOutEverywhere);
   $('sec-close').addEventListener('click', () => dialogRequestClose(sheet));
   paintTwoFactor();
+  mountCodeProtect($('sec-code-protect-box'));
   if ($('sec-share')) shareSettingsMount($('sec-share'), shareLinksListOpen);
   if (!sheet.open) sheet.showModal();
 }
@@ -14265,6 +14568,7 @@ async function init() {
   applyMultiUser();
   refreshPlanUsage();
   if (hubMe) { presenceStart(); loadNotifyPrefs(); }   // signed in: tell the hub this page is open; the bell shows 🔕 for an agent set to Off
+  paintHealthNotice().catch(() => {});
   if (new URLSearchParams(location.search).get('security') === '1') openSecuritySheet();
   await loadAgents();
   activeJobsSync();
@@ -14827,5 +15131,8 @@ function simpleMenuHide(ms) { ms = ms || document.getElementById('menu-simple');
 }
 if (typeof document.addEventListener === 'function') document.addEventListener('click', (e) => { if (e.target && e.target.closest && e.target.closest('.mode-toggle')) simpleModeTap(); });
 // ── end Simple mode: phone ──
+
+// Hand-off cards above the message box (lib/ui-hand-off-card.js): follow the open chat; none while another screen is shown.
+if (window.HandOffCard) HandOffCard.track({ getAgent: () => (screen === 'chat' ? current : null), getContainer: () => $('handoff-cards') });
 
 init();

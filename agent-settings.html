@@ -83,6 +83,19 @@
   .model-filter {
     margin-bottom: 8px;
   }
+
+  /* Command lockbox: everything wraps, so it fits at 360 px with no sideways scroll */
+  .lb-block { margin-top: 14px; min-width: 0; }
+  .lb-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .lb-row select { width: auto; max-width: 100%; min-width: 0; flex: 1 1 200px; }
+  .lb-text { color: #999; display: block; margin-top: 4px; overflow-wrap: anywhere; word-break: break-word; }
+  .lb-title { margin-top: 12px; font-size: 13px; color: #aaa; }
+  .lb-log { margin-top: 4px; font-size: 12px; color: #ccc; }
+  .lb-entry { padding: 6px 0; border-top: 1px solid #2a2a40; overflow-wrap: anywhere; word-break: break-word; }
+  .lb-entry:first-child { border-top: none; }
+  .lb-when { color: #aaa; }
+  .lb-path, .lb-cmd { font-family: monospace; font-size: 11px; color: #bbb; }
+  .lb-empty { color: #888; }
 </style>
 </head>
 <body>
@@ -356,6 +369,17 @@
     <button class="btn btn-test" id="test-btn" onclick="testModel()" title="Test if this model responds">⚡ Test</button>
   </div>
   <div id="model-status" class="status"></div>
+  <div id="model-offer" style="display:none;margin-top:8px;padding:10px;border:1px solid #444;border-radius:6px;">
+    <div id="model-offer-title" style="font-weight:600;"></div>
+    <div id="model-offer-why" style="color:#999;font-size:0.85rem;margin:4px 0 8px;"></div>
+    <button class="btn" id="model-offer-switch" onclick="switchToOffer()">Switch</button>
+    <button class="btn" id="model-offer-decline" onclick="declineOffer()">Not now</button>
+  </div>
+  <div id="model-pinned-row" style="display:none;align-items:center;gap:8px;margin-top:10px;">
+    <input type="checkbox" id="model-pinned" onchange="saveModelPinned()" style="width:auto;">
+    <label for="model-pinned" style="margin:0;cursor:pointer;">Keep this model (no suggestions)</label>
+  </div>
+  <div id="model-pinned-status" class="status"></div>
   <div id="health-status" class="health-status"></div>
   <div style="display:flex;align-items:center;gap:8px;margin-top:10px;">
     <input type="checkbox" id="auto-model" onchange="saveAutoModel()" style="width:auto;">
@@ -373,6 +397,27 @@
   </div>
   <small id="sandbox-help" style="color:#999;display:block;margin-top:4px;">In a sandbox the agent's shell and file tools run in a container that holds only this agent's folders: no hub data, no keys, no other agents. Memory, Records, consultations and the policy gate stay in the hub. Needs Docker and the sandbox image (Settings page). Without them a sandboxed agent gets no shell rather than running on the host.</small>
   <div id="sandbox-status" class="status"></div>
+  <div id="lockbox-block" class="lb-block" style="display:none;">
+    <div class="lb-row">
+      <label for="lockbox-mode" style="margin:0;">Command lockbox</label>
+      <select id="lockbox-mode" onchange="saveLockbox()">
+        <option value="inherit">Hub default</option>
+        <option value="off">Off</option>
+        <option value="watch">Watch</option>
+        <option value="enforce">Enforce</option>
+      </select>
+    </div>
+    <small id="lockbox-help" class="lb-text"></small>
+    <div id="lockbox-status" class="status"></div>
+    <div id="lockbox-env-row" style="display:none;margin-top:10px;">
+      <label for="lockbox-env" style="margin:0 0 4px;">Environment variables kept</label>
+      <input type="text" id="lockbox-env" placeholder="NAME_ONE, NAME_TWO" autocomplete="off" spellcheck="false" onchange="saveLockboxEnv()">
+      <small class="lb-text">Comma-separated names. Inside the lockbox this agent's commands see only a short list of ordinary variables (PATH, HOME, LANG and the like) plus these.</small>
+      <div id="lockbox-env-status" class="status"></div>
+    </div>
+    <div id="lockbox-log-title" class="lb-title">Recently blocked</div>
+    <div id="lockbox-log" class="lb-log"></div>
+  </div>
   <div id="effort-row" style="display:flex;align-items:center;gap:8px;margin-top:14px;">
     <label for="effort-mode" style="margin:0;">Reasoning effort</label>
     <select id="effort-mode" onchange="saveEffort()" style="width:auto;">
@@ -414,6 +459,13 @@
   </div>
   <small id="team-role-help" style="color:#999;display:block;margin-top:4px;">A worker or challenger is listed to the other agents as a platform worker they can hand jobs to; a challenger is marked as the one to ask for adversarial reviews.</small>
   <div id="team-role-status" class="status"></div>
+  <div id="build-partner-row" style="display:flex;align-items:center;gap:8px;margin-top:14px;">
+    <label for="build-partner" style="margin:0;">Build partner</label>
+    <input id="build-partner" list="build-partner-list" placeholder="none" onchange="saveBuildPartner()" style="width:auto;min-width:10em;" autocomplete="off">
+    <datalist id="build-partner-list"></datalist>
+  </div>
+  <small id="build-partner-help" style="color:#999;display:block;margin-top:4px;">The agent that takes this one's long work (development, production, long research) with hand_off, so this one stays free to talk with you. Leave it empty for none.</small>
+  <div id="build-partner-status" class="status"></div>
   <div id="call-display-row" style="display:flex;align-items:center;gap:8px;margin-top:14px;flex-wrap:wrap;">
     <label for="call-display" style="margin:0;">Default call display</label>
     <select id="call-display" onchange="saveCallDisplay()" style="width:auto;">
@@ -493,10 +545,13 @@
     ['saveCategory', 'category-status', byId('agent-category')],
     ['saveLimits', 'limits-status', byId('context-budget', 'max-context-messages', 'max-output-tokens')],
     ['saveSandbox', 'sandbox-status', byId('sandbox-mode')],
+    ['saveLockbox', 'lockbox-status', byId('lockbox-mode')],
+    ['saveLockboxEnv', 'lockbox-env-status', byId('lockbox-env')],
     ['saveEffort', 'effort-status', byId('effort-mode')],
     ['saveTier', 'tier-status', byId('tier-mode')],
     ['saveTeamGuidance', 'team-guidance-status', byId('team-guidance-mode')],
     ['saveTeamRole', 'team-role-status', byId('team-role')],
+    ['saveBuildPartner', 'build-partner-status', byId('build-partner')],
     ['saveCallDisplay', 'call-display-status', byId('call-display')],
     ['saveVoiceDefaults', 'voice-defaults-status', byId('voice-defaults', 'vd-pause', 'vd-wait', 'vd-sens', 'vd-speed')],
     ['saveAgentVoice', 'voice-status', byId('voice-select', 'voice-stt', 'voice-tts', 'voice-cloud-select', 'voice-cloud-id')],
@@ -506,6 +561,7 @@
     ['saveAllowedModels', 'allowed-models-status', byId('auto-model-checkboxes')],
     ['saveDisplayName', 'display-status', byId('display-name')],
     ['saveModel', 'model-status', byId('model-select')],
+    ['saveModelPinned', 'model-pinned-status', byId('model-pinned')],
     ['saveCurrentFile', 'file-status', () => [document.getElementById(`editor-${currentFile}`)]],
     ['saveRecord', 'records-status', byId('records-content')],
     ['saveCompaction', 'compaction-status', byId('compaction-mode', 'compaction-at', 'compaction-window')],
@@ -515,7 +571,7 @@
   // changed again while its save runs, is saved once more when that save ends, with its newest value. A Save button
   // pressed again meanwhile is refused with a message: a queued run would read the fields only when it starts and could
   // also save edits made after the press, so those edits stay unsaved until Save is pressed again.
-  const SAVES_ON_CHANGE = new Set(['saveCategory', 'saveLead', 'saveOwner', 'saveShared', 'saveModel', 'saveAutoModel', 'saveSandbox', 'saveEffort', 'saveTeamGuidance', 'saveTeamRole', 'saveTier', 'saveCallDisplay', 'saveVoiceDefaults', 'saveToolsMode', 'saveRecordings', 'saveAgentVoice']);
+  const SAVES_ON_CHANGE = new Set(['saveCategory', 'saveLead', 'saveOwner', 'saveShared', 'saveModel', 'saveModelPinned', 'saveAutoModel', 'saveSandbox', 'saveLockbox', 'saveLockboxEnv', 'saveEffort', 'saveTeamGuidance', 'saveTeamRole', 'saveBuildPartner', 'saveTier', 'saveCallDisplay', 'saveVoiceDefaults', 'saveToolsMode', 'saveRecordings', 'saveAgentVoice']);
   const pendingSaves = {};   // status id -> { commit, reload, fields, settled, again }
   for (const [fn, statusId, fields, how] of SAVES) {
     const orig = window[fn];
@@ -977,6 +1033,94 @@
       else showStatus('sandbox-status', 'error', (result && result.error) || 'Failed');
     } catch (e) { showStatus('sandbox-status', 'error', e.message); }
   }
+  // lockbox:begin (the pure part is run by test/lockbox-settings.test.js)
+  const LOCKBOX_RULES = { 'write-outside': 'write outside its folders', 'secret-read': 'read a secret file', 'unix-socket': 'local socket', 'io_uring': 'io_uring', 'sudo-unconfined': 'ran with sudo, outside the box', 'watch-unavailable': 'watch not possible' };
+  const LOCKBOX_EFFECT = {
+    off: 'Commands run as they do today.',
+    watch: 'Commands run as today; anything the lockbox would have blocked is listed below.',
+    enforce: 'Commands can write only in this agent\'s folders, can\'t read secret files, and can\'t use docker, systemd or other local services. Git over SSH and signed commits fail inside it.',
+  };
+  const LOCKBOX_LEAD = 'The lead needs sudo for crontab, systemctl --user and docker.';
+  function lockboxCap(s) { return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
+  /** The effective mode: the agent's own choice, else the hub default. */
+  function lockboxEffective(setting, hubDefault) { return setting === 'inherit' ? (hubDefault || 'off') : setting; }
+  /** The one line under the select. status = the agent's row from /api/lockbox/status, host = status.host. */
+  function lockboxLine(mode, coverage, host, lead) {
+    if (coverage === 'container') return 'This agent\'s commands already run in its own container.';
+    if (coverage === 'codex-client') return 'This agent uses Codex\'s own tools, which the lockbox can\'t box; switch it to the hub\'s hands.';
+    if (coverage === 'unavailable') return 'Not available on this computer: ' + String((host && host.reason) || 'unknown reason').replace(/[.\s]+$/, '') + '.';
+    const base = LOCKBOX_EFFECT[mode] || LOCKBOX_EFFECT.off;
+    return mode === 'enforce' && lead ? base + ' ' + LOCKBOX_LEAD : base;
+  }
+  function lockboxRuleWords(rule) { return Object.prototype.hasOwnProperty.call(LOCKBOX_RULES, rule) ? LOCKBOX_RULES[rule] : String(rule || ''); }
+  function lockboxEnvNames(text) { return String(text || '').split(',').map(s => s.trim()).filter(Boolean); }
+  // lockbox:end
+
+  let lockboxState = { status: null, agent: null };
+  async function loadLockbox(agent) {
+    const block = document.getElementById('lockbox-block');
+    if (!block) return;
+    lockboxState.agent = agent || null;
+    try {
+      const r = await fetch('/api/lockbox/status', { credentials: 'include' });
+      if (!r.ok) { block.style.display = 'none'; return; }   // not an admin session: no control
+      lockboxState.status = await r.json();
+    } catch { block.style.display = 'none'; return; }
+    block.style.display = '';
+    const sel = document.getElementById('lockbox-mode');
+    sel.options[0].textContent = 'Hub default (' + lockboxCap(lockboxState.status.default || 'off') + ')';
+    sel.value = (agent && agent.lockbox) || 'inherit';
+    document.getElementById('lockbox-env').value = ((agent && agent.lockboxEnv) || []).join(', ');
+    renderLockbox();
+    loadLockboxLog();
+  }
+  /** The effect line, the variables box (Watch or Enforce only) and the log title follow the select. */
+  function renderLockbox() {
+    const st = lockboxState.status; if (!st) return;
+    const setting = document.getElementById('lockbox-mode').value;
+    const mode = lockboxEffective(setting, st.default);
+    const row = (st.agents || []).find(a => a.name === agentName) || {};
+    document.getElementById('lockbox-help').textContent = lockboxLine(mode, row.coverage || 'covered', st.host, !!(lockboxState.agent && lockboxState.agent.lead === true));
+    document.getElementById('lockbox-env-row').style.display = (mode === 'watch' || mode === 'enforce') ? '' : 'none';
+    document.getElementById('lockbox-log-title').textContent = mode === 'watch' ? 'Recently blocked (watch)' : 'Recently blocked';
+  }
+  async function loadLockboxLog() {
+    const box = document.getElementById('lockbox-log');
+    box.textContent = '';
+    let entries = [];
+    try {
+      const r = await fetch('/api/lockbox/watch?agent=' + encodeURIComponent(agentName) + '&limit=10', { credentials: 'include' });
+      if (r.ok) entries = (await r.json()).entries || [];
+    } catch { /* shown as nothing yet */ }
+    if (!entries.length) { const d = document.createElement('div'); d.className = 'lb-empty'; d.textContent = 'Nothing yet.'; box.appendChild(d); return; }
+    for (const e of entries.slice(0, 10)) {
+      const item = document.createElement('div'); item.className = 'lb-entry';
+      const when = document.createElement('div'); when.className = 'lb-when';
+      const t = e && e.ts ? new Date(e.ts) : null;
+      when.textContent = (t && !isNaN(t) ? t.toLocaleString() : '') + (t && !isNaN(t) ? ' · ' : '') + lockboxRuleWords(e && e.rule);
+      item.appendChild(when);
+      if (e && e.path) { const p = document.createElement('div'); p.className = 'lb-path'; p.textContent = String(e.path); item.appendChild(p); }
+      if (e && e.cmd) { const c = document.createElement('div'); c.className = 'lb-cmd'; c.textContent = String(e.cmd).slice(0, 80); item.appendChild(c); }
+      box.appendChild(item);
+    }
+  }
+  async function saveLockbox() {
+    const v = document.getElementById('lockbox-mode').value;
+    renderLockbox();
+    try {
+      const result = await apiFetch(`/api/agents/${encodeURIComponent(agentName)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lockbox: v }) });
+      if (result && (result.success || result.ok)) showStatus('lockbox-status', 'success', v === 'inherit' ? 'Following the hub default' : 'Command lockbox: ' + v);
+      else showStatus('lockbox-status', 'error', (result && result.error) || 'Failed');
+    } catch (e) { showStatus('lockbox-status', 'error', e.message); }
+  }
+  async function saveLockboxEnv() {
+    const names = lockboxEnvNames(document.getElementById('lockbox-env').value);
+    try {
+      const result = await apiFetch(`/api/agents/${encodeURIComponent(agentName)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lockboxEnv: names }) });
+      if (result && (result.success || result.ok)) showStatus('lockbox-env-status', 'success', 'Saved: takes effect with the next command');
+      else showStatus('lockbox-env-status', 'error', (result && result.error) || 'Failed');
+    } catch (e) { showStatus('lockbox-env-status', 'error', e.message); }
+  }
   async function saveEffort() {
     const v = document.getElementById('effort-mode').value;
     try {
@@ -1030,6 +1174,25 @@
       if (result && (result.success || result.ok)) showStatus('team-role-status', 'success', 'Saved: takes effect on the next turn');
       else showStatus('team-role-status', 'error', (result && result.error) || 'Failed');
     } catch (e) { showStatus('team-role-status', 'error', e.message); }
+  }
+  async function saveBuildPartner() {
+    const v = String(document.getElementById('build-partner').value || '').trim().toLowerCase();
+    try {
+      const result = await apiFetch(`/api/agents/${encodeURIComponent(agentName)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ buildPartner: v || null }) });
+      if (result && (result.success || result.ok)) showStatus('build-partner-status', 'success', v ? 'Saved: takes effect on the next turn' : 'Removed');
+      else showStatus('build-partner-status', 'error', (result && result.error) || 'Failed');
+    } catch (e) { showStatus('build-partner-status', 'error', e.message); }
+  }
+  // The other agents, offered as build partners (text only: option values, never markup).
+  async function loadBuildPartners(agent) {
+    const box = document.getElementById('build-partner'); if (box) box.value = agent?.buildPartner || '';
+    const list = document.getElementById('build-partner-list'); if (!list) return;
+    try {
+      const all = await apiFetch('/api/agents');
+      const names = (Array.isArray(all) ? all : (all && all.agents) || []).map(a => a && a.name).filter(n => n && n !== agentName).sort();
+      while (list.firstChild) list.removeChild(list.firstChild);
+      for (const n of names) { const o = document.createElement('option'); o.value = n; list.appendChild(o); }
+    } catch { /* no list: the box still takes a name */ }
   }
   // ── Default call display: None / Orb / an installed character (GET /api/faces); PATCH { callDisplay } ──
   const CALL_DISPLAY_FIXED = [{ value: 'none', label: 'None' }, { value: 'orb', label: 'Orb' }];
@@ -1532,6 +1695,7 @@
       document.getElementById('auto-model').checked = !!agent?.autoModel;
       fillAutoModelHelp(agent?.model || currentModel);
       const sbSel = document.getElementById('sandbox-mode'); if (sbSel) sbSel.value = agent?.sandbox || 'inherit';
+      loadLockbox(agent);
       const toolsSel = document.getElementById('tools-mode'); if (toolsSel) toolsSel.value = agent?.tools || 'inherit';
       const effSel = document.getElementById('effort-mode');
       if (effSel) {
@@ -1545,6 +1709,7 @@
       loadTier(agent);
       const tgSel = document.getElementById('team-guidance-mode'); if (tgSel) tgSel.value = agent?.teamGuidance || 'inherit';
       const trSel = document.getElementById('team-role'); if (trSel) trSel.value = agent?.teamRole || '';
+      loadBuildPartners(agent);
       loadCallDisplay(agent);
       loadVoiceDefaults(agent);
       loadVoiceRecord(agent);
@@ -1563,6 +1728,7 @@
       renderModelSelect(allModels, currentModel);
       watchModelRebuild(modelsData);
       loadOwnership(agent);
+      initModelOffer(agent);
     } catch (e) {
       showStatus('model-status', 'error', e.message);
     }
@@ -1697,6 +1863,85 @@
     renderModelSelect(filtered, currentModel);
   }
 
+  // ── Model suggestions (GET /api/agents/:name/model-offer): every text from the server goes in with textContent ──
+  let currentOffer = null;
+  let pageIsAdmin = false;
+  // Every hide and every load starts a new generation: an answer that arrives after a newer one began (a pin saved, a
+  // suggestion declined, a model picked) is dropped, so a late answer never brings the box back (review r1, GPT-6).
+  let offerGen = 0;
+  function hideOffer() { offerGen++; currentOffer = null; const box = document.getElementById('model-offer'); if (box) box.style.display = 'none'; }
+  async function loadModelOffer() {
+    hideOffer();
+    const gen = offerGen;
+    const pin = document.getElementById('model-pinned');
+    if (pin && pin.checked) return;
+    try {
+      const d = await apiFetch(`/api/agents/${encodeURIComponent(agentName)}/model-offer`);
+      const o = d && d.offer;
+      if (gen !== offerGen || (pin && pin.checked)) return;   // overtaken, or pinned meanwhile
+      if (!o || !o.to) return;
+      currentOffer = o;
+      document.getElementById('model-offer-title').textContent = (o.kind === 'stronger' ? 'A stronger model for second opinions: ' : 'A newer model is available: ') + o.to;
+      document.getElementById('model-offer-why').textContent = `${o.why || ''}${o.route ? `; ${o.route}` : ''}${o.cost ? `, ${o.cost}` : ''}`;
+      document.getElementById('model-offer-decline').style.display = pageIsAdmin ? '' : 'none';
+      document.getElementById('model-offer').style.display = 'block';
+    } catch { /* no suggestion shown */ }
+  }
+  async function switchToOffer() {
+    const o = currentOffer;
+    if (!o) return;
+    try {
+      const result = await apiFetch(`/api/agents/${encodeURIComponent(agentName)}/model`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: o.to }),
+      });
+      if (result.success) {
+        showStatus('model-status', 'success', `Model set to ${o.to}`);
+        if (window.opener) { try { window.opener.loadAgents?.(); } catch {} }
+        const select = document.getElementById('model-select');
+        renderModelSelect(allModels, o.to);
+        if (select) select.value = o.to;
+        await loadModelOffer();
+      } else {
+        showStatus('model-status', 'error', result.error || 'Failed');
+      }
+    } catch (e) { showStatus('model-status', 'error', e.message); }
+  }
+  async function declineOffer() {
+    const o = currentOffer;
+    if (!o) return;
+    try {
+      const result = await apiFetch(`/api/agents/${encodeURIComponent(agentName)}/model-offer/decline`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: o.to }),
+      });
+      if (result && result.ok) hideOffer();
+      else showStatus('model-status', 'error', (result && result.error) || 'Failed');
+    } catch (e) { showStatus('model-status', 'error', e.message); }
+  }
+  async function saveModelPinned() {
+    const pin = document.getElementById('model-pinned');
+    const on = !!pin.checked;
+    try {
+      const result = await apiFetch(`/api/agents/${encodeURIComponent(agentName)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ modelPinned: on }) });
+      // Its own status line: the page runs one save per status line at a time (SAVES), so the pin never waits on a model save.
+      if (result && (result.success || result.ok)) {
+        showStatus('model-pinned-status', 'success', on ? 'This model is kept: no suggestions.' : 'Suggestions are on again.');
+        if (on) hideOffer(); else loadModelOffer();
+      } else showStatus('model-pinned-status', 'error', (result && result.error) || 'Failed');
+    } catch (e) { showStatus('model-pinned-status', 'error', e.message); }
+  }
+  async function initModelOffer(agent) {
+    const row = document.getElementById('model-pinned-row');
+    const pin = document.getElementById('model-pinned');
+    if (pin) { pin.checked = agent?.modelPinned === true; if (typeof pageGuard !== 'undefined' && pageGuard.markLoaded) pageGuard.markLoaded(pin); }   // the stored value: not an edit
+    try { const me = await apiFetch('/api/me'); pageIsAdmin = !!(me && me.isAdmin); } catch { pageIsAdmin = false; }
+    if (row) row.style.display = pageIsAdmin ? 'flex' : 'none';
+    await loadModelOffer();
+  }
+
   async function saveModel() {
     const model = document.getElementById('model-select').value;
     if (!model) return;
@@ -1712,6 +1957,7 @@
       });
       if (result.success) {
         showStatus('model-status', 'success', `Model set to ${model}`);
+        if (typeof loadModelOffer === 'function') loadModelOffer();   // a model picked by hand may answer the suggestion
         // Notify parent window to refresh agent list
         if (window.opener) {
           try { window.opener.loadAgents?.(); } catch {}

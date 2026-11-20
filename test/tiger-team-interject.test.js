@@ -24,6 +24,7 @@ function load({ running = ['alice', 'bob'], active = ['alice', 'bob'] } = {}) {
     ttStore: { save() {}, append: (id, st, ev) => appended.push(ev) },
     jsonResponse: (res, status, body) => { res.status = status; res.body = body; },
     ttValidId: require('../lib/tiger-team-recovery').validId, activeTigerTeams: new Map(),
+    getAgents: async () => [{ name: 'alice', display: 'Alice Writer' }, { name: 'bob', display: 'Bob' }],
   };
   vm.createContext(ctx);
   // The war-room helpers (ttLive, ttNewStream, ttTeamOf) as server.js defines them.
@@ -64,6 +65,61 @@ test('a named participant gets it live only while working; otherwise 409 with ad
   assert.deepEqual(ok.body.delivered, [{ agent: 'alice', how: 'live' }]); assert.deepEqual(h.state.pendingMessages, [], 'not queued for the coordinator');
   const no = await h.call({ message: 'bob?', target: 'bob' }); assert.equal(no.status, 409); assert.match(no.body.error, /not working right now/);
   const empty = await h.call({ message: '' }); assert.equal(empty.status, 400);
+});
+
+test('a team that has ended answers 409 "This team is not running." and nothing is delivered or queued', async () => {
+  const h = load();
+  h.state.completedAt = Date.now();   // completed, stopped, failed or interrupted: the run is over
+  for (const target of ['team', 'coordinator', 'alice']) {
+    const res = await h.call({ message: 'hello?', target });
+    assert.equal(res.status, 409); assert.equal(res.body.error, 'This team is not running.');
+  }
+  assert.deepEqual(h.state.pendingMessages, []); assert.equal(h.interjections.length, 0); assert.equal(h.appended.length, 0);
+  assert.equal(h.writes.length, 0);
+});
+
+test('a message to one member is labelled with that member, not "the whole team"', async () => {
+  const h = load();
+  await h.call({ message: 'check the logs', target: 'alice' });
+  assert.equal(h.interjections.length, 1);
+  assert.equal(h.interjections[0].message, '[Interjection from the war room, addressed to Alice Writer]: check the logs');
+  const t = await h.call({ message: 'all hands' });
+  assert.match(t.body.delivered.length ? h.interjections[1].message : '', /^\[Interjection from the war room, addressed to the whole team\]: all hands/);
+});
+
+/** The /api/tiger-team/stop route run against fakes. */
+function loadStop({ stopped }) {
+  const session = { tigerTeamId: 'tt', stopped: false };
+  const stops = [];
+  const ctx = {
+    console: { log() {} }, JSON, Object, String,
+    require, readBody: async req => JSON.stringify(req.body), global: { __tigerTeamSessions: { s1: session } },
+    ttTeamOf: body => body.tiger_team_id || null,
+    stopTigerTeam: id => { stops.push(id); return stopped; },
+    jsonResponse: (res, status, body) => { res.status = status; res.body = body; },
+  };
+  vm.createContext(ctx);
+  const start = source.indexOf("    if (pathname === '/api/tiger-team/stop' && req.method === 'POST') {");
+  const end = source.indexOf('    // Tiger Team save (manual', start);
+  assert.ok(start > 0 && end > start, 'stop route not found in server.js');
+  vm.runInContext('this.route = async (pathname, req, res) => {' + source.slice(start, end) + '};', ctx);
+  return { stops, call: async body => { const res = {}; await ctx.route('/api/tiger-team/stop', { method: 'POST', body }, res); return { status: res.status, body: JSON.parse(JSON.stringify(res.body)) }; } };
+}
+
+test('Stop answers 409 "This team has already ended." when nothing was stopped, 200 when something was', async () => {
+  const done = loadStop({ stopped: false });
+  const no = await done.call({ session_id: 's1', tiger_team_id: 'tt' });
+  assert.equal(no.status, 409); assert.equal(no.body.error, 'This team has already ended.');
+  assert.deepEqual(done.stops, ['tt']);
+  const live = loadStop({ stopped: true });
+  const yes = await live.call({ session_id: 's1', tiger_team_id: 'tt' });
+  assert.equal(yes.status, 200); assert.deepEqual(yes.body, { ok: true });
+});
+
+test('the war room shows those sentences and keeps the target list in step with the team', () => {
+  const html = fs.readFileSync(path.join(__dirname, '../tiger-team.html'), 'utf8');
+  assert.match(html, /r\.status === 409\) addSystemMsg\(\(await r\.json\(\)\.catch\(\(\) => \(\{\}\)\)\)\.error \|\| 'This team has already ended\.'\)/);
+  assert.match(html, /if \(!ir\.ok\) \{ st\.textContent = '✗ ' \+ \(ij\.error/, 'the inject error sentence is shown on the card');
 });
 
 test('the war room labels the control as Interject and shows pickup acknowledgements', () => {

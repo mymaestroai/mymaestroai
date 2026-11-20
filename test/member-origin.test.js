@@ -181,8 +181,9 @@ test('sdk-chat: consults and workers, queued consults, their delivery turn, sche
   assert.match(SDK, /q\.enqueue\(\{ from: coordinatorName, to: agentName, prompt, depth, turnId, member: member === true \}\)/);
   assert.match(SDK, /queuedRun: true, queuedTurnId: job\.turnId \|\| null, member: job\.member === true \}/);
   assert.match(SDK, /wakeAgent\(owner, DELIVERY_NOTE, null, \{ kind: 'consult_reply', from: 'hub', \.\.\.\(q\.mailboxHasMember\(owner\) \? \{ member: true \} : \{\}\) \}\)/);
-  assert.match(SDK, /\.\.\.\(meta\?\.label \? \{ label: meta\.label \} : \{\}\), \.\.\.\(meta\?\.member === true \? \{ member: true \} : \{\}\) \};/);
-  assert.equal((SDK.match(/\{ consultedBy, member: isMemberTurn\(agentName\) \}/g) || []).length, 4, 'schedule_task and run_job on both tool paths');
+  // hand-offs added handOff and handOffReport after member (test/hand-off-wiring.test.js)
+  assert.match(SDK, /\.\.\.\(meta\?\.label \? \{ label: meta\.label \} : \{\}\), \.\.\.\(meta\?\.member === true \? \{ member: true \} : \{\}\), \.\.\.\(handOff \? \{ handOff \} : \{\}\)/);
+  assert.equal((SDK.match(/\{ consultedBy, member: isMemberTurn\(agentName\), handOff: handOffOfTurn\(agentName\) \}/g) || []).length, 4, 'schedule_task and run_job on both tool paths');
   assert.match(SDK, /return def\.handler\(args, \{ agentName, member: isMemberTurn\(agentName\) \}\);/);
   // the worker model check uses the turn
   assert.match(SDK, /function memberWorkerModels\(agentName, \{ memberTurn = isMemberTurn\(agentName\) \} = \{\}\) \{/);

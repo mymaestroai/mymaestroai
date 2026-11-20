@@ -59,6 +59,7 @@
       paintSetupNotice();
       paintNoAccountsNotice();
       paintReadinessBanner().catch(() => {});
+      paintHealthBanner().catch(() => {});
       paintSecurityBanner().catch(() => {});
       paintRecoveryBanner().catch(() => {});
       paintUpdateCard().catch(() => {});
@@ -708,11 +709,13 @@
             <div class="sec-hint" id="sec-sessions">Loading…</div>
             <div class="sec-actions"><button class="sec-btn danger" onclick="signOutEverywhere()">Sign out everywhere</button></div>
           </div>
+          ${window.hubMe && window.hubMe.isAdmin ? '<div class="sec-section" id="sec-code-protect-box"></div>' : ''}
           <div class="sec-actions"><button class="sec-btn" onclick="dialogRequestClose(this)">Close</button></div>
         </div>`;
       document.body.appendChild(overlay);
       paintTwoFactor();
       loadSessionsInfo();
+      mountCodeProtect(document.getElementById('sec-code-protect-box'));
     }
     // Profile: who you are here (your name and sign-in, set by an admin on the Users page) and the time zone your agents
     // use. Security keeps password, two-factor and sessions.
@@ -898,6 +901,31 @@
         secMsg('sec-pw-msg', 'Password changed.', true);
       } catch (e) { secMsg('sec-pw-msg', e.message); }
     }
+    // "Protect your Maestro's own code": the switch IS the state of the behaviour change 'protect-own-code' (admin-only route).
+    async function mountCodeProtect(el) {
+      if (!el) return;
+      el.innerHTML = '<div class="sec-title">Protect your Maestro\'s own code</div><label class="sec-hint" style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="sec-code-protect" style="width:auto" disabled> Protect your Maestro\'s own code</label><div class="sec-hint">Agents can\'t change the program files of your Maestro on this computer, and a refused agent describes the change to you instead. Also on the Changes page.</div><div class="sec-msg" id="sec-code-protect-msg"></div>';
+      const box = el.querySelector('#sec-code-protect'), msg = el.querySelector('#sec-code-protect-msg');
+      try {
+        const r = await fetch('/api/behaviour-changes', { credentials: 'include' });
+        const j = r.ok ? await r.json() : null;
+        const e = j && (j.changes || []).find((c) => c.id === 'protect-own-code');
+        if (!e) { msg.textContent = 'Could not read this setting.'; return; }
+        box.checked = e.state === 'on';
+        box.disabled = false;
+        box.addEventListener('change', async () => {
+          const want = box.checked ? 'on' : 'off';
+          box.disabled = true;
+          try {
+            const p = await fetch('/api/behaviour-changes/protect-own-code', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ decision: want }) });
+            if (!p.ok) throw new Error((await p.json().catch(() => ({}))).error || 'Could not save.');
+            msg.textContent = want === 'on' ? 'On.' : 'Off.';
+          } catch (err) { box.checked = !box.checked; msg.textContent = err.message; }
+          box.disabled = false;
+        });
+      } catch { msg.textContent = 'Could not read this setting.'; }
+    }
+
     async function loadSessionsInfo() {
       const el = document.getElementById('sec-sessions');
       try {
@@ -1497,6 +1525,8 @@
       const c = window.__activeChatId ? chats[window.__activeChatId] : null;
       return c && !c.isGroup && c.agent ? String(c.agent) : '';
     }
+    // Hand-off cards above the message box (lib/ui-hand-off-card.js): follows the open one-agent chat.
+    if (window.HandOffCard) HandOffCard.track({ getAgent: filesActiveAgent, getContainer: () => document.getElementById('handoff-cards-' + window.__activeChatId) });
     function filesOwnerParam() {
       const me = window.hubMe;
       if (!me || !me.isAdmin) return '';
@@ -2925,7 +2955,7 @@
       if (s.upToDate) html += `<div class="gs-ok">✓ Already up to date on this channel</div>`;
 
       if (s.rewritten) {
-        html += `<div class="gs-box"><h4>GitHub's history was rewritten</h4><p class="gs-sub">The ${s.ahead} commit${s.ahead === 1 ? '' : 's'} this copy has that GitHub does not are the same changes under new ids (GitHub's history was rewritten, for example to remove personal details). Updating moves this copy to GitHub's history. Your data, agents and workspaces are not touched; the old position is kept as a backup branch${s.canRewriteUpdate ? '.' : '. Discard the uncommitted files below first.'}</p></div>`;
+        html += `<div class="gs-box"><h4>GitHub's history was rewritten</h4><p class="gs-sub">The ${s.ahead} commit${s.ahead === 1 ? '' : 's'} this copy has that GitHub does not are the same changes under new ids (GitHub's history was rewritten, for example to remove personal details). Updating moves this copy to GitHub's history. Your data, agents and workspaces are not touched; the old position is kept as a backup branch${s.canRewriteUpdate ? '.' : '. Put the changed files below aside first.'}</p></div>`;
         if (s.localOnlyCount > 0) {
           html += `<div class="gs-blocker"><strong>${s.localOnlyCount} commit${s.localOnlyCount === 1 ? ' has' : 's have'} no copy on GitHub</strong><p class="gs-sub">A rewrite can drop a commit whose only change was removed by it. If one of these is your own work, push it first. Otherwise it stays on the backup branch.</p>${
             s.localOnly.map(c => `<div class="gs-commit">${esc(c)}</div>`).join('')
@@ -2937,20 +2967,22 @@
         html += `<div class="gs-blocker"><strong>Update blocked</strong><ul>${
           s.blockers.map(b => `<li>${esc(b)}</li>`).join('')
         }</ul></div>`;
-        if (s.dirty.length > 0) {
-          html += `<div class="gs-box"><h4>Uncommitted files</h4>${
-            s.dirty.map(d => `<div class="gs-file">${esc(d.status)} ${esc(d.file)}</div>`).join('')
-          }</div>`;
-        }
-        if (s.canForce) {
-          html += `<p class="gs-sub">These are application files, not your data. Safe to discard.</p>`;
+        if (s.canPutAside) {
+          // the changed files and the two choices are in the box below
         } else if (s.localOnly && s.localOnly.length) {
           html += `<div class="gs-box"><h4>Local commits not on GitHub</h4>${
             s.localOnly.map(c => `<div class="gs-commit">${esc(c)}</div>`).join('')
           }</div><p class="gs-sub">These look like your own work: push or save them first — nothing was changed.</p>`;
         } else {
-          html += `<p class="gs-sub">Commit, stash, or discard these first — nothing was changed.</p>`;
+          html += `<p class="gs-sub">Commit or save these first — nothing was changed.</p>`;
         }
+      }
+      // Changed files of the code itself: nothing moves the code over them. Put them aside (git stash) or cancel.
+      const gsLocal = s.localChanges || [];
+      if (gsLocal.length > 0) {
+        html += `<div class="gs-blocker" id="gs-local"><strong>Your Maestro's own files were changed on this computer</strong>${
+          gsLocal.slice(0, 10).map(f => `<div class="gs-file">${esc(f)}</div>`).join('')
+        }${gsLocal.length > 10 ? `<div class="gs-sub">and ${gsLocal.length - 10} more</div>` : ''}<p class="gs-sub">An update would stop on them, or they may break after one.</p></div>`;
       }
 
       if (s.commits.length > 0) {
@@ -2967,13 +2999,16 @@
         html += `<p class="gs-sub">Packages changed: the update installs them first. If that fails, it puts everything back and nothing restarts.</p>`;
       }
 
-      html += `<div class="gs-actions">${gsClose}`;
+      html += `<div class="gs-actions">${gsLocal.length > 0 ? gsClose.replace('>Close<', '>Cancel<') : gsClose}`;
       const otherAvailable = ch.channels.some(c => !c.current && c.available);
-      if (s.canUpdate || otherAvailable) {
+      if (s.canUpdate || (otherAvailable && gsLocal.length === 0)) {
         html += `<button class="gs-btn" id="gs-go" onclick="runGitSync()" ${s.canUpdate ? '' : 'disabled'}>${s.canUpdate ? 'Update &amp; Restart' : 'Up to date'}</button>`;
       }
-      if (s.canForce) {
-        html += `<button class="gs-btn" id="gs-force" onclick="runGitSync(true)">Discard Changes &amp; Update</button>`;
+      if (s.canPutAside && !s.upToDate) {
+        html += `<button class="gs-btn" id="gs-force" onclick="runGitSync(true)">Put my changes aside and update</button>`;
+      } else if (s.canPutAside || (s.rewritten && gsLocal.length > 0)) {
+        // up to date, or a rewritten history that the changed files block: put them aside only (no update)
+        html += `<button class="gs-btn" id="gs-force" onclick="runGitSync('aside')">Put my changes aside</button>`;
       }
       if (s.canRewriteUpdate) {
         html += `<button class="gs-btn" id="gs-rewrite" data-confirm="${s.localOnlyCount || 0}" ${s.localOnlyCount ? 'disabled' : ''} onclick="runGitSync('rewrite')">Move to GitHub's History &amp; Restart</button>`;
@@ -2996,23 +3031,29 @@
       const c = other && gsStatus && gsStatus.channels ? gsStatus.channels.channels.find(x => x.id === other) : null;
       if (c) { go.disabled = false; go.innerHTML = `Switch to ${esc(c.label)} &amp; Restart`; }
       else { go.disabled = !(gsStatus && gsStatus.canUpdate); go.innerHTML = gsStatus && gsStatus.canUpdate ? 'Update &amp; Restart' : 'Up to date'; }
-      // Discarding updates the current channel only, so it is off while another channel is chosen.
-      const force = document.getElementById('gs-force'); if (force) force.disabled = !!c;
+      // Putting changes aside and updating uses the chosen channel (a switch when another one is chosen).
+      const force = document.getElementById('gs-force');
+      if (force && !(gsStatus && gsStatus.upToDate)) force.textContent = c ? `Put my changes aside and switch to ${c.label}` : 'Put my changes aside and update';
     }
 
     async function runGitSync(force) {
-      const btnId = force === 'rewrite' ? 'gs-rewrite' : force ? 'gs-force' : 'gs-go';
-      const channel = force ? null : gsChosenChannel();
+      const asideOnly = force === 'aside';
+      if (force === true || asideOnly) {
+        const n = ((gsStatus && gsStatus.localChanges) || []).length;
+        if (!confirm(`Put these ${n} change${n === 1 ? '' : 's'} aside? Your Maestro won't put them back; you can find them with git stash list.`)) return;
+      }
+      const btnId = force === 'rewrite' ? 'gs-rewrite' : asideOnly ? 'gs-force' : force ? 'gs-force' : 'gs-go';
+      const channel = force === 'rewrite' || asideOnly ? null : gsChosenChannel();
       for (const id of ['gs-go', 'gs-force', 'gs-rewrite']) {
         const b = document.getElementById(id);
         if (!b) continue;
         b.disabled = true;
-        if (id === btnId) b.textContent = channel ? 'Switching…' : 'Updating…';
+        if (id === btnId) b.textContent = asideOnly ? 'Putting aside…' : channel ? 'Switching…' : 'Updating…';
       }
 
       let r;
       try {
-        const endpoint = force === 'rewrite' ? '/api/git-sync/rewrite-update' : force ? '/api/git-sync/force-update' : '/api/git-sync/update';
+        const endpoint = force === 'rewrite' ? '/api/git-sync/rewrite-update' : asideOnly ? '/api/git-sync/put-aside' : force ? '/api/git-sync/force-update' : '/api/git-sync/update';
         const rw = force === 'rewrite' ? document.getElementById('gs-rewrite') : null;
         const resp = await fetch(endpoint, rw
           ? { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirmLocalOnly: Number(rw.dataset.confirm) || 0 }) }
@@ -3034,6 +3075,13 @@
         return;
       }
 
+      if (asideOnly) {   // no update, so no restart
+        gsModal(`<h3>⬇ Update from GitHub</h3>
+          <div class="gs-ok">✓ ${r.steps && r.steps.length ? 'Changes put aside' : 'Nothing to put aside'}</div>
+          <div class="gs-box">${(r.steps || []).map(st => `<div class="gs-commit">• ${esc(st)}</div>`).join('')}</div>
+          <div class="gs-actions">${gsClose}</div>`);
+        return;
+      }
       gsModal(`<h3>⬇️ Update from GitHub</h3>
         <div class="gs-ok">✓ Updated to ${esc(r.head)}</div>
         <div class="gs-box"><h4>Steps</h4>${
@@ -3136,11 +3184,11 @@
       return out;
     }
     const ST_GROUPS = [
-      { id: 'status', title: '🩺 Status', sections: ['st-ready-section', 'st-sec-section', 'st-memory-section', 'st-selfcheck-section', 'st-updates-section'] },
+      { id: 'status', title: '🩺 Status', sections: ['st-ready-section', 'st-health-section', 'st-sec-section', 'st-memory-section', 'st-selfcheck-section', 'st-components-section', 'st-updates-section'] },
       { id: 'security', title: '🔐 Security', sections: ['st-security-section'] },
       { id: 'backups', title: '💾 Backups', sections: ['st-backups-section'] },
-      { id: 'models', title: '🧠 AI models', sections: ['st-prov-section', 'st-or-section', 'st-plan-section', 'st-local-models-section', 'st-classifier-section'] },
-      { id: 'agents', title: '🤖 Agents', sections: ['st-defaults-section', 'st-workers-section', 'st-sb-section', 'st-mp-section', 'st-approvals-section', 'st-chat-section'] },
+      { id: 'models', title: '🧠 AI models', sections: ['st-prov-section', 'st-or-section', 'st-subs-section', 'st-plan-section', 'st-local-models-section', 'st-classifier-section'] },
+      { id: 'agents', title: '🤖 Agents', sections: ['st-defaults-section', 'st-workers-section', 'st-sb-section', 'st-lb-section', 'st-mp-section', 'st-approvals-section', 'st-chat-section'] },
       { id: 'notify', title: '🔔 Notifications', sections: ['st-notify-section'] },
       { id: 'tools', title: '🧰 Tools and data', sections: ['st-ws-section', 'st-voice-section', 'st-cx-section', 'st-modules-section'] },
       { id: 'money', title: '💰 Money and safety', sections: ['st-spend-section', 'st-emergency-section'] },
@@ -3393,6 +3441,22 @@
         <div id="st-ready-list" class="st-hint" style="margin-left:0">Checking…</div>
         <div class="st-row"><label style="flex-basis:150px"></label><button class="st-test-btn" onclick="loadReadiness()">Check again</button><span id="st-ready-state" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px"></span></div>
       </div>`;
+      // Health (lib/system-health): the nightly look at this computer itself; admins only.
+      if (isHubAdmin()) {
+        const hlTick = (id, label) => `<div class="st-row"><label style="flex-basis:150px">${label}</label><input type="checkbox" id="${id}"></div>`;
+        html += `<div class="st-section" id="st-health-section"><h4>Health</h4>
+        <div class="st-hint">Every night, and after a start, your Maestro looks at this computer: free disk space, memory, backups, databases, sign-ins and more. It tells you when something needs you.</div>
+        <div id="st-hl-list" class="st-hint" style="margin-left:0">Checking…</div>
+        <div id="st-hl-msg" class="st-hint mh-msg" role="status" style="margin-left:0"></div>
+        <div class="st-row"><label style="flex-basis:150px"></label><button class="st-test-btn" id="st-hl-run" onclick="loadHealth(true)">Check now</button><span id="st-hl-state" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px"></span></div>
+        ${hlTick('st-hl-enabled', 'Run checks')}
+        <div class="st-row"><label style="flex-basis:150px">Each night at</label><input type="time" id="st-hl-at"></div>
+        <div class="st-row"><label style="flex-basis:150px">Notices</label><select id="st-hl-notify"><option value="critical">Critical problems only</option><option value="warnings">Warnings too</option><option value="off">Off</option></select></div>
+        ${HL_NUMBERS.map(([k, label]) => `<div class="st-row"><label style="flex-basis:150px">${esc(label)}</label><input type="number" id="st-hl-n-${k}" min="0" step="1"></div>`).join('')}
+        <div class="st-row"><label style="flex-basis:150px"></label><button class="st-test-btn" onclick="saveHealthSettings()">Save</button><span id="st-hl-save-state" role="status" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px"></span></div>
+      </div>`;
+        setTimeout(() => { hlSettings = null; loadHealth(); }, 0);   // the form is new: fill it from the hub
+      }
       // Security check (lib/security-check): the hub reviews its own security configuration, nightly and on demand.
       html += `<div class="st-section" id="st-sec-section"><h4>Security check</h4>
         <div class="st-hint">The hub reviews how it is set up: accounts and two-factor, how it can be reached, secrets and file permissions, agent policies and sandboxes, tokens and root, this machine's open doors. It runs every night and on demand. The same check runs from a terminal with no hub and no agent: <code>node scripts/security-check.js</code>.</div>
@@ -3424,6 +3488,16 @@
         <div class="st-row"><label style="flex-basis:150px"></label><button class="st-test-btn" onclick="saveSelfCheckSettings()">Save</button><span id="st-sc-save-state" role="status" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px"></span></div>
       </div>`;
         setTimeout(() => { scSettings = null; loadSelfCheck(); }, 0);   // the form is new: fill it from the hub
+      }
+      // Software your Maestro relies on (lib/component-watch): the Codex and Claude clients, what is installed and what is out; admins only.
+      if (isHubAdmin()) {
+        html += `<div class="st-section" id="st-components-section"><h4>Software your Maestro relies on</h4>
+        <div class="st-hint" style="margin-left:0">Newer clients can unlock newer models. Your Maestro looks now and then and shows here what is installed and what is out.</div>
+        <div id="st-cw-list" class="st-hint" style="margin-left:0">Checking…</div>
+        <div id="st-cw-codex"></div>
+        <div class="st-row"><label style="flex-basis:150px"></label><button class="st-test-btn" id="st-cw-check" onclick="checkComponentsNow(this)">Check now</button><span id="st-cw-state" role="status" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px"></span></div>
+      </div>`;
+        setTimeout(loadComponents, 0);
       }
       // Updates (lib/update-check): the daily look at GitHub behind the "Update available" card.
       html += `<div class="st-section" id="st-updates-section"><h4>Updates</h4>
@@ -3525,12 +3599,25 @@
           <span id="st-reasoning-state" style="font-size:0.8rem;color:var(--text-dim)">${data.showReasoning !== false ? 'Shown above each reply.' : 'Not shown.'}</span>
         </div>
         <div class="st-hint">Models that reason before they answer (Claude, Codex, DeepSeek, Grok, Qwen…) show it in a panel above the reply: open or close it, drag its bottom edge to any height, ⤢ for the full window. Starts with the next reply.</div>
+        ${isHubAdmin() ? `<div class="st-row">
+          <label>Model suggestions</label>
+          <label class="toggle-switch"><input type="checkbox" id="st-model-offers" ${data.modelOffers !== false ? 'checked' : ''} onchange="saveModelOffersToggle(this.checked)"><span class="toggle-slider"></span></label>
+          <span id="st-model-offers-state" style="font-size:0.8rem;color:var(--text-dim)">${data.modelOffers !== false ? 'Your Maestro suggests newer models for your agents.' : 'No model suggestions.'}</span>
+        </div>` : ''}
       </div>`;
 
       if (isHubAdmin()) {
         html += `<div class="st-section" id="st-workers-section"><h4>Workers at once</h4>
         <div id="st-wao-rows" class="st-hint" style="margin-left:0">Loading…</div>
         <div class="st-hint">How many workers and consults may run at once on this service. If the service pushes back, My Maestro drops to one at a time and climbs back up.</div>
+        <div class="st-row">
+          <label>Notice long waits on workers</label>
+          <input type="number" id="st-hw-minutes" min="0" max="240" step="1" value="${data.handOffWaitMinutes !== undefined && data.handOffWaitMinutes !== null && Number.isFinite(Number(data.handOffWaitMinutes)) ? Number(data.handOffWaitMinutes) : 10}" style="max-width:90px"> <span style="font-size:0.8rem;color:var(--text-dim)">minutes (0 turns it off)</span>
+        </div>
+        <div class="st-row">
+          <label class="gs-sub"><input type="checkbox" id="st-hw-notice" ${data.buildPartnerNotice !== false ? 'checked' : ''}> Tell the lead when an agent has no build partner</label>
+        </div>
+        <div class="st-hint">An agent that waits a long time on its workers can't talk with you meanwhile. After two such waits in a week, the lead can offer you a build partner. Nothing is created without your yes.</div>
       </div>`;
         waoStored = (data.workersAtOnce && typeof data.workersAtOnce === 'object') ? { ...data.workersAtOnce } : {};
         setTimeout(loadWorkersAtOnce, 0);
@@ -3605,6 +3692,15 @@
         </div>
         <div class="st-hint" style="margin-left:158px">An agent other than the lead runs root commands only while you have granted it root on its settings page (Tool policy → Root). Active grants are listed here with a revoke button; they expire on their own.</div>
       </div>`;
+      // Subscriptions: how much of the Claude and ChatGPT plans' allowances is used (read for free, no turns spent).
+      subsOnFlag = data.subscriptionUsage !== false;
+      html += `<div class="st-section" id="st-subs-section"><h4>Subscriptions</h4>
+        <div class="st-row"><label style="flex-basis:150px">Subscription usage</label><label class="toggle-switch"><input type="checkbox" id="st-subs-on" ${subsOnFlag ? 'checked' : ''} onchange="saveSubsOn(this.checked)"><span class="toggle-slider"></span></label><span id="st-subs-state" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px"></span></div>
+        <div class="st-hint">Shows how much of each subscription's allowance is used, in Settings, the chat header and your lead's notes. Free: no turns are spent to read it.</div>
+        <div id="st-subs-body"></div>
+      </div>`;
+      loadSubsBox.asked = false;   // one automatic read each time the section opens
+      setTimeout(loadSubsBox, 0);
       // Claude plan (lib/plan-usage): the subscription's usage windows, warning levels, and every Claude agent's model.
       html += `<div class="st-section" id="st-plan-section"><h4>Claude plan</h4>
         <div class="st-hint">The hub reads your Claude subscription's usage every 10 minutes. When a weekly allowance passes a warning level you get a notice in the sidebar, a toast, a push to your phone and one line in each affected agent's next reply; then you choose each agent's model, here or in its chat header.</div>
@@ -3657,6 +3753,13 @@
         <div id="st-sb-status" class="st-hint" style="margin-left:158px"></div>
       </div>`;
         setTimeout(loadSandboxStatus, 0);
+        const lbd = ['off', 'watch', 'enforce'].includes(data && data.lockboxDefault) ? data.lockboxDefault : 'off';
+        html += `<div class="st-section" id="st-lb-section"><h4>Command lockbox</h4>
+        <div class="st-hint">Applies to every agent set to Hub default. Off runs commands as they do today. Watch lists what the lockbox would have blocked; Enforce blocks it. Each agent can be set on its own settings page.</div>
+        <div class="st-row" style="flex-wrap:wrap;row-gap:6px"><label style="flex-basis:150px">Hub default</label>${selSb('st-lb-default', [['off', 'Off'], ['watch', 'Watch'], ['enforce', 'Enforce']], lbd)}<button class="st-test-btn" onclick="saveLockboxDefault()" style="margin-left:8px">Save</button><span id="st-lb-state" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px"></span></div>
+        <div class="st-row"><label style="flex-basis:150px">This computer</label><span id="st-lb-host" style="flex:1;min-width:0;overflow-wrap:anywhere;font-size:0.78rem;color:var(--text-dim)">Checking…</span></div>
+      </div>`;
+        setTimeout(loadLockboxHost, 0);
       }
       {
         const wsc = (data && data.webSearch) || {};
@@ -3767,6 +3870,28 @@
         el.textContent = d.error ? `Not ready: ${d.error}` : `Ready: Docker up, image ${d.image} built. Containers: ${boxes}.`;
       } catch { el.textContent = 'Could not read the sandbox status.'; }
     }
+    // Command lockbox (lib/lockbox): what this computer offers, and the hub default for agents left on "Hub default".
+    async function loadLockboxHost() {
+      const el = document.getElementById('st-lb-host'); if (!el) return;
+      try {
+        const r = await fetch('/api/lockbox/status', { credentials: 'include' });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const h = (await r.json()).host || {};
+        const abi = h.landlockAbi !== undefined ? h.landlockAbi : h.abi;
+        el.textContent = h.ok ? `Available: Landlock ABI ${abi !== undefined && abi !== null ? abi : '?'}` : `Not available on this computer: ${String(h.reason || 'unknown reason').replace(/[.\s]+$/, '')}`;
+      } catch (e) { el.textContent = 'Could not read the lockbox status: ' + e.message; }
+    }
+    async function saveLockboxDefault() {
+      const sel = document.getElementById('st-lb-default');
+      const saved = dialogGuard.savePoint([sel]);
+      const state = document.getElementById('st-lb-state');
+      try {
+        const r = await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ lockboxDefault: sel.value }) });
+        if (!r.ok) { let m = `HTTP ${r.status}`; try { const j = await r.json(); if (j && j.error) m = j.error; } catch {} throw new Error(m); }
+        saved();
+        if (state) state.textContent = 'Saved. Applies to agents set to "Hub default" from their next command.';
+      } catch (e) { if (state) state.textContent = 'Could not save: ' + e.message; }
+    }
     async function saveMemberPolicy() {
       const saved = dialogGuard.savePoint(['st-mp-web', 'st-mp-read_outside', 'st-mp-write_outside', 'st-mp-send'].map(id => document.getElementById(id)));
       const state = document.getElementById('st-mp-state');
@@ -3839,19 +3964,37 @@
       if (!me || !me.isAdmin || !me.user) { if (bar) bar.remove(); return; }
       let d = null;
       try { d = await (await fetch('/api/readiness', { credentials: 'include' })).json(); } catch { return; }
-      const crit = (d && d.items || []).filter(i => i.level === 'critical' && i.id !== 'accounts' && i.id !== 'provider');   // those two have their own banners
+      const crit = (d && d.items || []).filter(i => i.level === 'critical' && i.id !== 'accounts' && i.id !== 'provider' && !String(i.id || '').startsWith('health-'));   // those two have their own banners; the health banner shows the health- items
       if (!crit.length) { if (bar) bar.remove(); layoutBanners(); return; }
       if (!bar) { bar = document.createElement('div'); bar.id = 'hub-readiness-notice'; bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9996;background:#7a3b12;color:#fff;padding:6px 14px;font-weight:600;box-sizing:border-box'; document.body.prepend(bar); }
       bar.innerHTML = `Setup needs attention: ${crit.map(i => esc(i.title)).join('; ')}. <a href="#" onclick="openSettingsAt('st-ready-section'); return false" style="color:#fff;text-decoration:underline">Open the setup checklist</a>.`;
       layoutBanners();
     }
+    // Banner for admins while the nightly health check has a critical problem (a full disk...). The sign-in items are
+    // left out: the setup checklist's own banner covers them. An error or a non-200 answer leaves the bar as it is.
+    function healthBannerItems(view) {
+      return ((view && view.items) || []).filter(i => i && i.level === 'critical' && !String(i.id || '').startsWith('health-signin-'));
+    }
+    async function paintHealthBanner() {
+      const me = window.hubMe;
+      let bar = document.getElementById('hub-health-notice');
+      if (!me || !me.isAdmin || !me.user) { if (bar) { bar.remove(); layoutBanners(); } return; }
+      let d = null;
+      try { const r = await fetch('/api/system-health', { credentials: 'include' }); if (!r.ok) return; d = await r.json(); } catch { return; }
+      bar = document.getElementById('hub-health-notice');
+      const crit = healthBannerItems(d);
+      if (!crit.length) { if (bar) bar.remove(); layoutBanners(); return; }
+      if (!bar) { bar = document.createElement('div'); bar.id = 'hub-health-notice'; bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9995;background:#7a1212;color:#fff;padding:6px 14px;font-weight:700;box-sizing:border-box'; document.body.prepend(bar); }
+      bar.innerHTML = `Health: ${crit.map(i => esc(i.title)).join('; ')}. <a href="#" onclick="openSettingsAt('st-health-section'); return false" style="color:#fff;text-decoration:underline">Open Settings → Status</a>`;
+      layoutBanners();
+    }
     // The notices fixed at the top stack in this order, whichever painted first: the phone-layout bar
-    // (showMobileBanner), no AI provider yet, the setup checklist, security. Each one sits below the ones above it, so
+    // (showMobileBanner), no AI provider yet, the setup checklist, health, security. Each one sits below the ones above it, so
     // none covers another (or its X), and the page moves down by their height (--banner-h), so they never cover the
     // header and its Settings button.
     function layoutBanners() {
       let top = 0;
-      for (const id of ['hub-phone-layout-notice', 'hub-no-accounts-notice', 'hub-recovery-notice', 'hub-setup-notice', 'hub-readiness-notice', 'hub-security-notice']) {
+      for (const id of ['hub-phone-layout-notice', 'hub-no-accounts-notice', 'hub-recovery-notice', 'hub-setup-notice', 'hub-readiness-notice', 'hub-health-notice', 'hub-security-notice']) {
         const n = document.getElementById(id);
         if (!n) continue;
         n.style.top = `${top}px`;
@@ -4150,6 +4293,125 @@
       } catch (e) { say(`Not saved: ${e.message}`); }
     }
     // ── self-check page (end) ──
+    // System health (lib/system-health): the nightly look at the computer itself (disk, memory, backups, databases...).
+    // The page shows the last run and one row per item, Check now, and a small settings form that saves by PUT with only
+    // the keys that changed. test/ui-system-health.test.js lifts this block out and runs it against a stand-in page.
+    // ── health page (begin) ──
+    const HL_LEVEL = { critical: ['Critical', '#d64545'], warn: ['Warning', '#d9a21b'], ok: ['OK', '#3fa65b'], unknown: ["Couldn't check", '#8a8f98'], info: ['Info', '#8a8f98'] };
+    const HL_TRIGGER = { start: 'after a start', nightly: 'nightly', manual: 'run by hand' };
+    const HL_POLL_MS = 2000, HL_POLL_MAX_MS = 3 * 60 * 1000;
+    const HL_NUMBERS = [['diskWarnPct', 'Disk: warn under (% free)'], ['diskWarnGB', 'Disk: warn under (GB free)'], ['diskCritPct', 'Disk: critical under (% free)'], ['diskCritGB', 'Disk: critical under (GB free)'],
+      ['fullInDays', 'Warn when full in under (days)'], ['backupWarnHours', 'Backups: warn after (hours)'], ['backupCritHours', 'Backups: critical after (hours)'], ['warnNights', 'Warning nights before a notice'],
+      ['clearMarginPct', 'Clears only this far above (% points)'], ['clearMarginGB', 'Clears only this far above (GB)']];
+    let hlLoad = 0, hlSettings = null, hlPollUntil = 0;
+    function hlWhen(iso) { const d = new Date(iso); return isNaN(d) ? String(iso || '') : d.toLocaleString(); }
+    function hlMsg(text, bad = true) {
+      const m = document.getElementById('st-hl-msg'); if (!m) return;
+      m.textContent = text || '';
+      m.classList.toggle('mh-msg-bad', !!text && bad);
+    }
+    function hlRunning(on) {
+      const btn = document.getElementById('st-hl-run'), state = document.getElementById('st-hl-state');
+      if (btn) btn.disabled = !!on;
+      if (state) state.textContent = on ? 'Checking…' : '';
+    }
+    function hlRender(v) {
+      const el = document.getElementById('st-hl-list'); if (!el) return;
+      v = v || {};
+      const run = v.lastRun, items = Array.isArray(v.items) ? v.items : [];
+      let html = run
+        ? `<div class="sc-last">Last checked ${esc(hlWhen(run.finishedAt || run.startedAt))} (${esc(HL_TRIGGER[run.trigger] || run.trigger || 'earlier')})</div>`
+        : '<div class="sc-last">Not checked yet.</div>';
+      for (const i of items) {
+        const lv = HL_LEVEL[i.level] || [i.level || '?', '#8a8f98'];
+        const problem = i.level === 'critical' || i.level === 'warn';
+        html += `<div class="sc-row"><div class="sc-head"><span class="hl-mark" style="color:${lv[1]}" aria-label="${esc(lv[0])}">●</span> <b>${esc(i.title)}</b> <span style="color:${lv[1]}">${esc(lv[0])}</span></div>`
+          + (i.detail ? `<div class="sc-note">${esc(i.detail)}</div>` : '')
+          + (i.fix ? `<div class="sc-note">${esc(i.fix)}</div>` : '')
+          + (problem && i.since ? `<div class="sc-note">since ${esc(hlWhen(i.since))}</div>` : '')
+          + '</div>';
+      }
+      if (run && !items.length) html += '<div class="sc-note">Nothing to report.</div>';
+      el.innerHTML = html;
+      const unknown = items.filter(i => i.level === 'unknown').length;   // a check that couldn't run is never "all fine"
+      stSum('status', 'health', !run ? 'Health: not checked yet' : v.critical ? 'Health: problem found' : v.warnings ? 'Health: warnings' : unknown ? "Health: some checks couldn't run" : 'Health: all fine', !!v.critical);
+    }
+    function hlFillSettings(s) {
+      if (!s) return;
+      hlSettings = s;
+      const $ = (id) => document.getElementById(id);
+      if ($('st-hl-enabled')) $('st-hl-enabled').checked = s.enabled !== false;
+      if ($('st-hl-at')) $('st-hl-at').value = s.checkAt || '';
+      if ($('st-hl-notify')) $('st-hl-notify').value = s.notify || 'critical';
+      for (const [k] of HL_NUMBERS) if ($(`st-hl-n-${k}`)) $(`st-hl-n-${k}`).value = s[k] === undefined || s[k] === null ? '' : String(s[k]);
+    }
+    function hlFillSettingsOnce(s) { if (!hlSettings) hlFillSettings(s); }
+    // Last result, or a new run (POST) that is then followed every 2 s while the hub says it runs, for up to 3 minutes.
+    async function loadHealth(runNow = false, poll = false) {
+      if (!document.getElementById('st-hl-list')) return;
+      if (window.hubMe && window.hubMe.isAdmin !== true) return;
+      const mine = ++hlLoad;
+      const json = async (r) => { try { return await r.json(); } catch { return {}; } };
+      try {
+        if (runNow) {
+          hlMsg('');
+          hlRunning(true);
+          const r = await fetch('/api/system-health/run', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+          if (!r.ok) {
+            const b = await json(r);
+            if (r.status === 409 && b.error === 'running') hlMsg('A check is already running.');
+            else if (r.status === 409 && b.error === 'disabled') { hlMsg('The health check is turned off.'); hlRunning(false); return; }
+            else { hlMsg(`Couldn't start the health check: ${b.error || `HTTP ${r.status}`}`); hlRunning(false); return; }
+          }
+          hlPollUntil = Date.now() + HL_POLL_MAX_MS;
+        }
+        const r = await fetch('/api/system-health', { credentials: 'include' });
+        const v = await json(r);
+        if (mine !== hlLoad) return;   // a newer load answered first
+        if (!r.ok) throw new Error(v.error || `HTTP ${r.status}`);
+        hlRender(v);
+        hlFillSettingsOnce(v.settings);
+        hlRunning(!!v.running);
+        if (!runNow && !poll && v.running && hlPollUntil <= Date.now()) hlPollUntil = Date.now() + HL_POLL_MAX_MS;
+        if (v.running && Date.now() < hlPollUntil) setTimeout(() => { if (mine === hlLoad) loadHealth(false, true); }, HL_POLL_MS);
+        else if (v.running) hlMsg('Still checking after 3 minutes; look again later.', false);
+        else { const m = document.getElementById('st-hl-msg'); if (m && m.textContent === 'A check is already running.') hlMsg(''); }
+      } catch (e) {
+        if (mine !== hlLoad) return;
+        hlRunning(false);
+        hlMsg(`Couldn't load the health check: ${e.message}`);
+        stSum('status', 'health', "Health: couldn't load");
+      }
+    }
+    // Only the keys that differ from what the hub has go to PUT; the hub's own error text is shown on a 400.
+    function hlSettingsChanges() {
+      const $ = (id) => document.getElementById(id), cur = hlSettings || {};
+      const out = {};
+      if ($('st-hl-enabled') && $('st-hl-enabled').checked !== (cur.enabled !== false)) out.enabled = $('st-hl-enabled').checked;
+      if ($('st-hl-at') && $('st-hl-at').value && $('st-hl-at').value !== cur.checkAt) out.checkAt = $('st-hl-at').value;
+      if ($('st-hl-notify') && $('st-hl-notify').value && $('st-hl-notify').value !== (cur.notify || 'critical')) out.notify = $('st-hl-notify').value;
+      for (const [k] of HL_NUMBERS) {
+        const f = $(`st-hl-n-${k}`); if (!f) continue;
+        const t = String(f.value).trim();
+        if (t !== '' && t !== String(cur[k])) out[k] = Number(t);
+      }
+      return out;
+    }
+    async function saveHealthSettings() {
+      const state = document.getElementById('st-hl-save-state');
+      const say = (t) => { if (state) state.textContent = t; };
+      const changes = hlSettingsChanges();
+      if (!Object.keys(changes).length) { say('Nothing to save.'); return; }
+      say('Saving…');
+      try {
+        const r = await fetch('/api/system-health/settings', { method: 'PUT', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(changes) });
+        const b = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(b.error || `HTTP ${r.status}`);
+        hlFillSettings(b.settings);
+        say('Saved.');
+      } catch (e) { say(`Not saved: ${e.message}`); }
+    }
+    // ── health page (end) ──
     function securityActionHtml(a) {
       if (!a) return '';
       if (a.href) return ` <a href="${esc(a.href)}" class="st-test-btn" style="text-decoration:none">${esc(a.label)}</a>`;
@@ -4276,7 +4538,7 @@
       try { r = await (await fetch('/api/git-sync/update', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: '{}' })).json(); }
       catch (e) { r = { success: false, error: e.message }; }
       if (!r || !r.success) {
-        // The Update dialog has the ways out (discard changes, move to a rewritten history): send the admin there.
+        // The Update dialog has the ways out (put the changes aside, move to a rewritten history): send the admin there.
         if (msg) msg.innerHTML = `<div class="uc-err">The update didn't run: ${esc((r && r.error) || 'unknown error')}</div>`;
         if (now) { now.disabled = false; now.textContent = 'Details'; now.onclick = () => openGitSync(); }
         if (later) later.disabled = false;
@@ -4316,6 +4578,104 @@
         paintUpdateCard().catch(() => {});
       } catch (e) { if (state) state.textContent = 'Not saved: ' + e.message; }
     }
+    // The last update's outcome under a component row: the date of a good one; for a failed one the server's own reason, as
+    // one plain sentence (first line, at most 300 characters), so the person knows what went wrong. -> HTML ('' for none)
+    function componentUpdateLine(lu, day) {
+      if (!lu || typeof lu !== 'object') return '';
+      if (lu.ok) return `<div>Updated from ${escapeHtml(lu.from)} to ${escapeHtml(lu.to)} on ${escapeHtml(day(lu.at))}</div>`;
+      let why = typeof lu.error === 'string' ? lu.error.split('\n')[0].trim().slice(0, 300) : '';
+      if (why && !/[.!?]$/.test(why)) why += '.';
+      if (why) return `<div>Last update${day(lu.at) ? ` (${escapeHtml(day(lu.at))})` : ''}: ${escapeHtml(why)}</div>`;
+      return lu.to ? `<div>Update to ${escapeHtml(lu.to)} failed${lu.rolledBack ? `; ${escapeHtml(lu.from)} was put back` : ''}.</div>` : '<div>Not updated: the update did not run.</div>';
+    }
+    // Software your Maestro relies on (Settings → Status, lib/component-watch): rows from GET /api/components. Every server
+    // text goes through escapeHtml.
+    function paintComponents(data) {
+      const list = document.getElementById('st-cw-list');
+      const codexBox = document.getElementById('st-cw-codex');
+      if (!list) return;
+      const items = Array.isArray(data && data.items) ? data.items : [];
+      const day = (t) => { const d = new Date(t); return isNaN(d) ? '' : d.toLocaleDateString(); };
+      list.innerHTML = items.length ? items.map((it) => {
+        const upd = componentUpdateLine(it.lastUpdate, day);
+        return `<div class="st-cw-row" style="margin-bottom:8px"><strong>${escapeHtml(it.name)}</strong>: installed ${escapeHtml(it.installed || 'not installed')}, newest ${escapeHtml(it.latest || 'unknown')}${it.behind ? ' (newer is out)' : ''}${it.how ? `<div>${escapeHtml(it.how)}</div>` : ''}${it.waiting ? `<div>${escapeHtml(it.waiting)}</div>` : ''}${upd}</div>`;
+      }).join('') : 'Nothing to show yet.';
+      if (!codexBox) return;
+      const codex = items.find((it) => it && it.id === 'codex');
+      const cur = (data.setting && data.setting.codex) || 'auto';
+      // With Codex updates Off the watch leaves Codex out of the list: the select stays, so they can be switched on again.
+      if (!codex && cur !== 'off') { codexBox.innerHTML = ''; return; }
+      const opt = (v, t) => `<option value="${v}"${cur === v ? ' selected' : ''}>${t}</option>`;
+      codexBox.innerHTML = `<div class="st-row"><label style="flex-basis:150px">Codex updates</label><select id="st-cw-codex-sel" onchange="saveCodexUpdates(this.value)">${opt('auto', 'Automatic')}${opt('notify', 'Tell me')}${opt('off', 'Off')}</select></div>`
+        + (codex && codex.behind && cur !== 'off' ? `<div class="st-row"><label style="flex-basis:150px"></label><button class="st-test-btn" id="st-cw-codex-update" onclick="updateCodexNow(this)">Update Codex now</button></div>` : '');
+    }
+    async function loadComponents() {
+      const list = document.getElementById('st-cw-list');
+      try {
+        const r = await fetch('/api/components', { credentials: 'include' });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        paintComponents(await r.json());
+      } catch (e) { if (list) list.textContent = 'Could not load: ' + e.message; }
+    }
+    async function checkComponentsNow(btn) {
+      const st = document.getElementById('st-cw-state');
+      if (btn) { btn.disabled = true; btn.textContent = 'Checking…'; }
+      try {
+        const r = await fetch('/api/components/check', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        await loadComponents();
+        if (st) st.textContent = '';
+      } catch (e) { if (st) st.textContent = 'Could not check: ' + e.message; }
+      if (btn) { btn.disabled = false; btn.textContent = 'Check now'; }
+    }
+    async function saveCodexUpdates(value) {
+      const st = document.getElementById('st-cw-state');
+      try {
+        const r = await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ componentUpdates: { codex: value } }) });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        await loadComponents();
+      } catch (e) { alert('Could not save: ' + e.message); if (st) st.textContent = ''; }
+    }
+    // The update takes minutes: POST answers 202 at once (409 with the reason when it is refused), then GET /api/components
+    // is polled every 3 s (at most 15 minutes) until the Codex item's lastUpdate is newer than the one seen when pressed.
+    async function updateCodexNow(btn) {
+      const say = (t) => { const el = document.getElementById('st-cw-state'); if (el) el.textContent = t; };
+      const codexOf = (d) => (Array.isArray(d && d.items) ? d.items.find((it) => it && it.id === 'codex') : null);
+      if (btn) btn.disabled = true;
+      let baseline = 0;
+      try {
+        const g = await fetch('/api/components', { credentials: 'include' });
+        const lu0 = g.ok ? (codexOf(await g.json()) || {}).lastUpdate : null;
+        baseline = lu0 && Number(lu0.at) ? Number(lu0.at) : 0;
+        if (!g.ok) baseline = Date.now();   // unknown: only an outcome from after the press counts
+      } catch (e) { baseline = Date.now(); }
+      let text = '';
+      try {
+        const r = await fetch('/api/components/codex/update', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+        const j = await r.json().catch(() => ({}));
+        if (r.status === 202) {
+          say('Updating Codex…');
+          if (btn) btn.textContent = 'Updating…';
+          const until = Date.now() + 15 * 60 * 1000;
+          let lu = null;
+          while (Date.now() < until) {
+            await new Promise((ok) => setTimeout(ok, 3000));
+            try {
+              const g = await fetch('/api/components', { credentials: 'include' });
+              if (!g.ok) continue;
+              const data = await g.json();
+              const l = (codexOf(data) || {}).lastUpdate;
+              if (l && Number(l.at) > baseline) { lu = l; paintComponents(data); break; }
+            } catch (e) { /* the hub may be busy: try again */ }
+          }
+          if (!lu) text = 'Codex update is still running. Check again in a few minutes.';
+          else text = lu.ok ? `Codex updated${lu.to ? ' to ' + lu.to : ''}.` : `Codex was not updated: ${lu.error || 'unknown error'}`;
+        } else text = r.ok ? `Codex updated${j.to ? ' to ' + j.to : ''}.` : (j.error || `Codex was not updated: HTTP ${r.status}`);
+      } catch (e) { text = 'Could not update: ' + e.message; }
+      await loadComponents();
+      say(text);
+    }
+
     async function checkUpdatesNow(btn) {
       if (btn) { btn.disabled = true; btn.textContent = 'Checking…'; }
       try {
@@ -4864,6 +5224,16 @@
       } catch (e) { alert('Could not save: ' + e.message); }
     }
 
+    // Model suggestions on/off (settings.modelOffers, on unless turned off): saved at once.
+    async function saveModelOffersToggle(on) {
+      const state = document.getElementById('st-model-offers-state');
+      try {
+        const r = await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ modelOffers: !!on }) });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        if (state) state.textContent = on ? 'Your Maestro suggests newer models for your agents.' : 'No model suggestions.';
+      } catch (e) { alert('Could not save: ' + e.message); }
+    }
+
     // Approval cards on/off: saved at once, takes effect on the next tool call of any agent.
     async function saveApprovalsToggle(on) {
       const state = document.getElementById('st-approvals-state');
@@ -4976,11 +5346,11 @@
       ['questions', 'Questions', 'When an agent needs your answer or approval'],
       ['requested', 'Requests you made', 'Things you asked an agent to tell you about, and replies you asked to hear about'],
       ['other', 'Everything else', 'Reports and other notices'],
-      ['security', 'Security and access', 'Sign-in and passkey changes, wallet locks, failed backups, access changes, a halted hub'],
+      ['security', 'Security and access', 'Sign-in and passkey changes, wallet locks, failed backups, access changes, a halted hub, health problems (a full disk)'],
     ];
     const NOTIFY_AGENT_KINDS = NOTIFY_KINDS.filter(k => k[0] !== 'security');   // the kinds an agent can have its own setting for
     function notifySecurityWarning(mode) {
-      return mode === 'off' ? `<div class="st-hint notify-security-warning" role="note">You won't be told about sign-in and passkey changes, wallet locks, failed backups, access changes or a halted hub.</div>` : '';
+      return mode === 'off' ? `<div class="st-hint notify-security-warning" role="note">You won't be told about sign-in and passkey changes, wallet locks, failed backups, access changes, a halted hub or health problems such as a full disk.</div>` : '';
     }
     function notifyModeLabel(mode) { return mode === 'off' ? 'Off' : mode === 'away' ? "Only when I'm away" : 'On'; }
     function notifyEffective(prefs, agent, kind) {
@@ -5166,6 +5536,150 @@
     // allowance is past the first warning level; the Settings box shows the windows, the levels, the optional automatic
     // switch, and a model picker for every agent on the Claude client. ──
     let planLast = null;
+    let codexLast = null;       // GET /api/codex-usage (the ChatGPT plan), admins only
+    let subsOnFlag = true;      // the setting subscriptionUsage (on unless false)
+    // ── subscriptions helpers (begin) ──
+    // Pure: the usage bars of Settings -> Subscriptions and the chat-header ChatGPT badge. Same text in app.js and mobile.js.
+    function subsWhen(iso) {
+      const t = Date.parse(iso || '');
+      return Number.isFinite(t) ? new Date(Math.round(t / 60000) * 60000).toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : '';
+    }
+    function subsLevels(l) {
+      const a = (Array.isArray(l) ? l : []).map(Number).filter(n => Number.isFinite(n));
+      return a.length ? a : [75, 90];
+    }
+    function subsColor(pct, reached, levels) {
+      const lv = subsLevels(levels);
+      const first = lv[0], last = lv[lv.length - 1];
+      return reached || pct >= 100 ? '#d4588b' : pct >= last ? '#d95926' : pct >= first ? '#c9a227' : '#3987e5';
+    }
+    function subsBarHtml(label, pct, metaText, color, expired) {
+      const p = Math.max(0, Math.min(100, Math.round(Number(pct) || 0)));
+      const shown = expired ? 0 : p;
+      return `<div class="subs-bar"><span class="subs-label">${escapeHtml(label)}</span><span class="subs-meta">${escapeHtml(metaText)}</span>` +
+        `<div class="subs-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${shown}" aria-label="${escapeHtml(label)}">` +
+        `<div class="subs-fill" style="width:${shown}%;background:${color}"></div></div></div>`;
+    }
+    function subsClaudeRows(snap) {
+      const out = [];
+      const w = (snap && snap.windows) || {};
+      const models = (snap && snap.models) || {};
+      const add = (label, x) => { if (x && x.utilization != null) out.push({ label, pct: Math.round(Number(x.utilization) || 0), resetsAt: x.resets_at, rejected: !!x.rejected }); };
+      add('5-hour', w.five_hour);
+      add('Weekly, all models', w.seven_day);
+      if (!models.opus) add('Weekly, Opus', w.seven_day_opus);
+      if (!models.sonnet) add('Weekly, Sonnet', w.seven_day_sonnet);
+      for (const k of Object.keys(models)) add(`Weekly, ${models[k].display_name || k}`, models[k]);
+      return out;
+    }
+    function subsCodexRows(snap) {
+      const out = [];
+      const limits = (snap && Array.isArray(snap.limits)) ? snap.limits : [];
+      for (const l of limits) {
+        const lname = l.label || l.name || l.id || 'Codex';
+        const wins = (Array.isArray(l.windows) ? l.windows : []).slice().sort((a, b) => (Number(a.minutes) || 0) - (Number(b.minutes) || 0));
+        for (const x of wins) {
+          const wl = String(x.label || 'usage');
+          out.push({ label: limits.length > 1 ? `${lname}, ${wl}` : wl.charAt(0).toUpperCase() + wl.slice(1), pct: Math.round(Number(x.usedPercent) || 0), resetsAt: x.resetsAt, expired: !!x.expired, reached: !!l.reached });
+        }
+      }
+      return out;
+    }
+    function subsReachedLines(snap) {
+      const lines = [];
+      for (const l of ((snap && snap.limits) || [])) {
+        if (!l.reached) continue;
+        const t = `ChatGPT plan limit reached until ${subsWhen(l.reachedUntil) || 'it resets'}`;
+        if (!lines.includes(t)) lines.push(t);
+      }
+      return lines;
+    }
+    function subsWindowsHtml(claudeSnap, codexSnap, opts) {
+      const o = opts || {};
+      if (o.on === false) return '';
+      const now = Number.isFinite(Number(o.now)) ? Number(o.now) : Date.now();
+      let html = '';
+      if (claudeSnap) {
+        const lv = subsLevels(o.levels || (claudeSnap.warn && claudeSnap.warn.at));
+        const rows = subsClaudeRows(claudeSnap);
+        html += `<div class="subs-block"><div class="subs-head">Claude${claudeSnap.subscription ? ` (${escapeHtml(claudeSnap.subscription)})` : ''}</div>`;
+        html += rows.length ? rows.map(r => subsBarHtml(r.label, r.pct, `${r.pct}% used · ${r.rejected ? 'refused until' : 'resets'} ${subsWhen(r.resetsAt) || 'the reset'}`, subsColor(r.pct, r.rejected, lv))).join('') : '<div class="subs-note">No reading yet.</div>';
+        if (claudeSnap.fetchedAt) html += `<div class="subs-note">Read ${escapeHtml(subsWhen(claudeSnap.fetchedAt))}</div>`;
+        if (claudeSnap.error) html += `<div class="subs-note subs-err">${escapeHtml(String(claudeSnap.error).slice(0, 200))}</div>`;
+        html += '</div>';
+      }
+      const hasReading = !!(codexSnap && (codexSnap.readAt || (codexSnap.limits || []).length));
+      if (codexSnap && (o.codexAgents || hasReading)) {
+        const lv = subsLevels(o.levels || (codexSnap.warn && codexSnap.warn.at));
+        const rows = subsCodexRows(codexSnap);
+        html += `<div class="subs-block"><div class="subs-head">ChatGPT${codexSnap.planType ? ` (${escapeHtml(codexSnap.planType)})` : ''}</div>`;
+        for (const t of subsReachedLines(codexSnap)) html += `<div class="subs-note subs-reached">${escapeHtml(t)}</div>`;
+        html += rows.map(r => subsBarHtml(r.label, r.pct, r.expired ? `Reset at ${subsWhen(r.resetsAt) || 'the reset'}; no reading since` : `${r.pct}% used · resets ${subsWhen(r.resetsAt) || 'the reset'}`, subsColor(r.pct, r.reached, lv), r.expired)).join('');
+        const t = Date.parse(codexSnap.readAt || '');
+        if (!codexSnap.readAt || !Number.isFinite(t)) html += '<div class="subs-note">No reading yet. Codex reports it during its turns, or press Read now.</div>';
+        else html += `<div class="subs-note">${now - t < 30 * 60000 ? 'Read' : 'Last seen'} ${escapeHtml(subsWhen(codexSnap.readAt))}</div>`;
+        const rc = Number(codexSnap.resetCredits);
+        if (rc > 0) html += `<div class="subs-note">${rc} reset credit${rc === 1 ? '' : 's'} available</div>`;
+        if (codexSnap.error) html += `<div class="subs-note subs-err">${escapeHtml(String(codexSnap.error).slice(0, 200))}</div>`;
+        html += '</div>';
+      }
+      return html;
+    }
+    function codexBadge(snap, levels, now) {
+      if (!snap || !snap.readAt) return null;
+      const lv = subsLevels(levels || (snap.warn && snap.warn.at));
+      const t0 = Number.isFinite(Number(now)) ? Number(now) : Date.now();
+      const all = [];
+      let reachedLimit = null;
+      for (const l of (snap.limits || [])) {
+        if (l.reached && !reachedLimit) reachedLimit = l;
+        for (const w of (l.windows || [])) all.push(w);
+      }
+      if (!reachedLimit && !all.some(w => !w.expired)) return null;
+      const pctOf = (w) => Math.round(Number(w.usedPercent) || 0);
+      const live = all.filter(w => !w.expired);
+      const weekly = live.filter(w => w.weekly);
+      const best = (a) => a.reduce((x, y) => (pctOf(y) > pctOf(x) ? y : x));
+      let main = weekly.length ? best(weekly) : null;
+      if (!main && live.length) main = live.reduce((x, y) => ((Number(y.minutes) || 0) > (Number(x.minutes) || 0) ? y : x));
+      const age = t0 - Date.parse(snap.readAt);
+      const seen = age > 30 * 60000 ? `; last seen ${subsWhen(snap.readAt)}` : '';
+      if (reachedLimit) {
+        const when = subsWhen(reachedLimit.reachedUntil);
+        return { text: 'ChatGPT limit reached', cls: 'refused', title: `ChatGPT plan limit reached until ${when || 'it resets'}${seen}` };
+      }
+      const pct = pctOf(main);
+      let text = main.weekly ? `ChatGPT ${pct}%` : `ChatGPT ${main.label || 'usage'} ${pct}%`;
+      const shorts = live.filter(w => w.short && w !== main && pctOf(w) > 50);
+      if (shorts.length) { const s = best(shorts); text += ` · ${String(s.label || '5-hour').replace(/-hour$/, 'h')} ${pctOf(s)}%`; }
+      const passed = lv.filter(l => pct >= l);
+      const cls = pct >= 100 ? 'refused' : passed.length && passed.length === lv.length ? 'hot' : passed.length ? 'warn' : '';
+      const when = subsWhen(main.resetsAt) || 'the reset';
+      const title = (main.weekly ? `ChatGPT plan: ${pct}% of this week's allowance, resets ${when}` : `ChatGPT plan: ${pct}% of the ${main.label || 'usage'} allowance, resets ${when}`) + seen;
+      return { text, cls, title };
+    }
+    // ── subscriptions helpers (end) ──
+    const subsEnabled = () => subsOnFlag !== false && !(codexLast && codexLast.enabled === false);
+    const subsIsCodex = (model) => String(model || '').startsWith('codex-cli/');
+    function openSubsSettings() { return openSettingsAt('st-subs-section'); }
+    /** The ChatGPT weekly window past the first warning level that most needs attention, or null. */
+    function codexTopWarning() {
+      if (!codexLast || !subsEnabled()) return null;
+      const lv = subsLevels(codexLast.warn && codexLast.warn.at);
+      let top = null;
+      for (const w of (codexLast.weekly || [])) {
+        const pct = Math.round(Number(w.usedPercent) || 0);
+        if ((w.reached || pct >= lv[0]) && (!top || pct > top.pct)) top = { pct, label: w.label, resetsAt: w.resetsAt, reached: !!w.reached };
+      }
+      return top;
+    }
+    /** A plan_warning for the ChatGPT plan: a brief notice that leads to Settings -> Subscriptions. */
+    function subsPlanWarning(ev) {
+      if (!ev || ev.provider !== 'chatgpt' || (window.hubMe && !window.hubMe.isAdmin)) return;
+      const when = subsWhen(ev.resetsAt) || 'the reset';
+      const text = ev.reached ? `ChatGPT plan limit reached until ${subsWhen(ev.resetsAt) || 'it resets'}` : `ChatGPT plan: ${Math.round(Number(ev.utilization) || 0)}% of this week's allowance (resets ${when})`;
+      hubToast(text, 8000, () => openSubsSettings());
+    }
     const planWhen = (iso) => { const t = Date.parse(iso || ''); return Number.isFinite(t) ? new Date(Math.round(t / 60000) * 60000).toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : 'the reset'; };
     /** The window most in need of attention: { label, utilization, resetsAt, level } or null when none passed a level. */
     function planTopWarning(d) {
@@ -5193,13 +5707,30 @@
       // (up to 2 minutes) instead of waiting 10 minutes with nothing to show.
       if (!planLast || !planLast.fetchedAt) { refreshPlanChip.tries = (refreshPlanChip.tries || 0) + 1; if (refreshPlanChip.tries <= 8) next = Math.min(next, 15000); }
       else refreshPlanChip.tries = 0;
+      await refreshCodexUsage();
       paintPlanChip(); paintPlanBadges();
       refreshPlanChip.timer = setTimeout(refreshPlanChip, next);
+    }
+    async function refreshCodexUsage() {
+      try {
+        const r = await fetch('/api/codex-usage', { credentials: 'include' });
+        if (r.ok) { codexLast = await r.json(); if (codexLast && codexLast.enabled === false) subsOnFlag = false; else if (codexLast && codexLast.enabled === true) subsOnFlag = true; }
+      } catch { /* the hub is restarting: the next round asks again */ }
     }
     function paintPlanChip() {
       const el = document.getElementById('plan-warn');
       if (!el) return;
       const top = planTopWarning(planLast);
+      const ctop = codexTopWarning();
+      el.onclick = () => openPlanSettings();
+      if (ctop && !(top && Number(top.utilization) >= ctop.pct)) {
+        el.classList.add('on');
+        el.textContent = `⚠ ChatGPT ${ctop.pct}%`;
+        el.classList.toggle('hot', ctop.reached || ctop.pct >= 100);
+        el.title = ctop.reached ? `Your ChatGPT plan limit is reached until ${subsWhen(ctop.resetsAt) || 'it resets'}. Click for the subscriptions.` : `Your ChatGPT plan has used ${ctop.pct}% of this week's allowance (resets ${subsWhen(ctop.resetsAt) || 'the reset'}). Click for the subscriptions.`;
+        el.onclick = () => openSubsSettings();
+        return;
+      }
       el.classList.toggle('on', !!top);
       if (!top) { el.textContent = ''; return; }
       if (top.extraUsage && !top.rejected) {
@@ -5248,10 +5779,24 @@
       for (const [id, chat] of Object.entries(chats)) {
         const el = document.getElementById(`plan-badge-${id}`);
         if (!el) continue;
+        el.onclick = () => openPlanSettings();
+        if (chat && !chat.isGroup && chat.agent && subsIsCodex(chatModelOf(chat))) {
+          const b = subsEnabled() ? codexBadge(codexLast, null, Date.now()) : null;
+          if (!b) { el.hidden = true; el.textContent = ''; continue; }
+          el.textContent = b.text;
+          el.className = 'plan-badge' + (b.cls ? ' ' + b.cls : '');
+          el.title = `${b.title}. Click for the subscriptions (Settings → Subscriptions).`;
+          el.onclick = () => openSubsSettings();
+          el.hidden = false;
+          continue;
+        }
         const w = chat && !chat.isGroup && chat.agent ? planWindowFor(chatModelOf(chat)) : null;
         if (!w) { el.hidden = true; el.textContent = ''; continue; }
         const { pct, extra, cls } = planState(w, levels);
         el.textContent = `${w.family ? w.label : 'Plan'} ${planPctText(w, levels)} this week`;
+        const fiveW = planLast.windows && planLast.windows.five_hour;
+        const five5 = subsEnabled() && fiveW && fiveW.utilization != null && Number(fiveW.utilization) > 50 ? Math.round(Number(fiveW.utilization)) : null;
+        if (five5 != null) el.textContent += ` · 5h ${five5}%`;
         el.className = 'plan-badge' + (cls ? ' ' + cls : '');
         const all = (planLast.weekly || []).find(x => x.family == null);
         const five = planLast.windows && planLast.windows.five_hour;
@@ -5264,6 +5809,56 @@
     async function openPlanSettings() {
       await openSettingsAt('st-plan-section');
     }
+    // Settings -> Subscriptions: the switch, then (when on) a Claude block and a ChatGPT block of usage bars.
+    function paintSubsBox() {
+      const body = document.getElementById('st-subs-body');
+      if (!body) return;
+      const box = document.getElementById('st-subs-on');
+      if (box && box.checked !== subsOnFlag) box.checked = subsOnFlag;
+      if (!subsOnFlag) { body.innerHTML = ''; return; }
+      const codexAgents = (typeof AGENTS !== 'undefined' && Array.isArray(AGENTS) ? AGENTS : []).some(a => subsIsCodex(a && a.model));
+      body.innerHTML = subsWindowsHtml(planLast, codexLast, { now: Date.now(), codexAgents })
+        + `<div class="st-row"><button class="st-test-btn" onclick="subsReadNow('claude')">Read now (Claude)</button><button class="st-test-btn" style="margin-left:8px" onclick="subsReadNow('codex')">Read now (ChatGPT)</button><span id="st-subs-read-state" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px"></span></div>`;
+    }
+    async function subsReadNow(which) {
+      const st = document.getElementById('st-subs-read-state');
+      if (st) st.textContent = 'Reading…';
+      let err = '';
+      try {
+        const r = await fetch(`/api/${which === 'claude' ? 'plan-usage' : 'codex-usage'}/refresh`, { method: 'POST', credentials: 'include' });
+        const d = await r.json().catch(() => ({}));
+        if (which === 'claude') { if (r.ok) planLast = d; else err = d.error || r.status; }
+        else { if (d && d.snapshot) codexLast = d.snapshot; if (!r.ok || d.ok === false) err = d.error || r.status; }
+      } catch (e) { err = e.message; }
+      paintPlanChip(); paintPlanBadges(); paintSubsBox();
+      const st2 = document.getElementById('st-subs-read-state');
+      if (st2) st2.textContent = err ? String(err).slice(0, 200) : '';
+    }
+    async function loadSubsBox() {
+      if (!document.getElementById('st-subs-body')) return;
+      if (!planLast) { try { const r = await fetch('/api/plan-usage', { credentials: 'include' }); if (r.ok) planLast = await r.json(); } catch { /* shown as no reading */ } }
+      await refreshCodexUsage();
+      paintSubsBox();
+      const t = codexLast && codexLast.readAt ? Date.parse(codexLast.readAt) : NaN;
+      if (subsOnFlag && (!Number.isFinite(t) || Date.now() - t > 30 * 60000) && !loadSubsBox.asked) { loadSubsBox.asked = true; subsReadNow('codex'); }
+    }
+    async function saveSubsOn(on) {
+      const st = document.getElementById('st-subs-state');
+      const box = document.getElementById('st-subs-on');
+      try {
+        const r = await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ subscriptionUsage: !!on }) });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(d.error || r.status);
+        subsOnFlag = !!on;
+        if (st) st.textContent = '';
+        paintSubsBox(); paintPlanBadges();
+        if (document.getElementById('st-plan-section')) loadPlanBox();   // the Claude plan box draws its bars only while this is off
+        if (on) loadSubsBox();
+      } catch (e) {
+        if (box) box.checked = !on;
+        if (st) st.textContent = `Could not save: ${e.message}`;
+      }
+    }
     async function loadPlanBox(readNow = false) {
       const usageEl = document.getElementById('st-plan-usage');
       if (!usageEl) return;
@@ -5275,7 +5870,7 @@
         d = await r.json();
         if (!r.ok) throw new Error(d.error || r.status);
       } catch (e) { usageEl.textContent = `Could not read the plan: ${e.message}`; if (state) state.textContent = ''; return; }
-      planLast = d; paintPlanChip(); paintPlanBadges();
+      planLast = d; paintPlanChip(); paintPlanBadges(); paintSubsBox();
       const worst = (d.weekly || []).reduce((a, w) => (Number(w.utilization) || 0) > (a ? Number(a.utilization) || 0 : -1) ? w : a, null);
       stSum('models', 'plan', worst ? `${worst.family ? worst.label : 'Claude plan'} ${Math.round(Number(worst.utilization) || 0)}% this week` : '');
       if (state) state.textContent = d.fetchedAt ? `read ${new Date(d.fetchedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : (d.error ? `last read failed: ${String(d.error).slice(25, 140)}` : '');
@@ -5286,7 +5881,10 @@
       if (five && five.utilization != null) rows.push({ label: '5-hour window', utilization: five.utilization, resetsAt: five.resets_at, extraUsage: !!five.extraUsage && !five.rejected });
       for (const w of (d.weekly || [])) rows.push({ label: w.family ? `${w.label} (weekly)` : 'All models (weekly)', utilization: w.utilization, resetsAt: w.resetsAt, rejected: w.rejected, extraUsage: !!w.extraUsage && !w.rejected, weekly: true });
       const extraRow = rows.find(w => w.extraUsage && w.weekly);   // the hint speaks of the weekly plan
-      usageEl.innerHTML = rows.length ? rows.map(w => {
+      // The usage bars live in one place: Settings → Subscriptions, above. Only with Subscription usage turned off are
+      // they drawn here, as before that section existed.
+      if (subsEnabled() && document.getElementById('st-subs-section')) usageEl.innerHTML = d.error && !rows.length ? `No reading yet: ${esc(String(d.error).slice(25, 200))}` : 'The usage of each window is shown under Subscriptions, above.';
+      else usageEl.innerHTML = rows.length ? rows.map(w => {
         const pct = Math.round(Number(w.utilization) || 0);
         const color = w.extraUsage ? '#c9a227' : w.rejected || pct >= 100 ? '#d4588b' : (w.weekly && pct >= last) ? '#d95926' : (w.weekly && pct >= first) ? '#c9a227' : '#3987e5';
         return `<div style="display:flex;align-items:center;gap:10px;margin:3px 0"><span style="flex-basis:150px;flex-shrink:0">${esc(w.label)}</span><span style="width:140px;height:6px;background:var(--border);border-radius:3px;overflow:hidden;flex-shrink:0"><span style="display:block;height:100%;width:${Math.min(pct, 100)}%;background:${color}"></span></span><b style="color:${color};min-width:44px">${esc(planPctText(w))}</b><span style="color:var(--text-dim)">${w.rejected ? 'refused until ' : 'resets '}${esc(planWhen(w.resetsAt))}</span></div>`;
@@ -5578,6 +6176,10 @@
       if (maxContext > 0) patch.maxContextMessages = maxContext;
       const wao = workersAtOnceFromPage();
       if (wao !== undefined) patch.workersAtOnce = wao;
+      const hwMin = document.getElementById('st-hw-minutes');
+      if (hwMin) patch.handOffWaitMinutes = parseInt(hwMin.value, 10);
+      const hwNotice = document.getElementById('st-hw-notice');
+      if (hwNotice) patch.buildPartnerNotice = !!hwNotice.checked;
 
       try {
         const r = await fetch('/api/settings', {
@@ -6476,7 +7078,7 @@
       try { u = new URL(data.url, origin); } catch { return null; }
       if (u.origin !== origin || !OPEN_TARGET_MAIN.test(u.pathname)) return null;
       const q = u.searchParams;
-      return { agent: q.get('agent') || '', backups: q.get('backups') === '1', update: q.get('update') === '1', security: q.get('security') === '1', memory: q.get('memory') === '1', selfcheck: q.get('selfcheck') === '1', connectors: q.get('connectors') === '1', wallet: q.get('wallet') === 'unlock' };
+      return { agent: q.get('agent') || '', backups: q.get('backups') === '1', update: q.get('update') === '1', security: q.get('security') === '1', memory: q.get('memory') === '1', selfcheck: q.get('selfcheck') === '1', health: q.get('health') === '1', connectors: q.get('connectors') === '1', wallet: q.get('wallet') === 'unlock' };
     }
     function createTargetStore(storage, now = () => Date.now(), ttlMs = 10 * 60 * 1000) {
       return {
@@ -6554,6 +7156,7 @@
       if (t.backups) openSettingsAt('st-backups-section');
       if (t.memory) openSettingsAt('st-memory-section');
       if (t.selfcheck) openSettingsAt('st-selfcheck-section');
+      if (t.health) openSettingsAt('st-health-section');
       if (t.connectors) openSettingsAt('st-modules-section');
       if (t.wallet) openWalletPanel();
       if (t.update) paintUpdateCard().then(() => showUpdateCard()).catch(() => {});
@@ -6589,12 +7192,12 @@
       await Promise.all([loadAgents()]);
       // The page's own address: "/?agent=<name>" opens that agent's chat (the Welcome page hands over to Maestro's setup
       // interview this way, and a notification tapped with no hub tab open lands here), ?backups=1 the backups settings
-      // (a backup warning), ?memory=1 the memory check, ?selfcheck=1 the self-check, ?update=1 the update card, ?security=1 the security dialog, ?wallet=unlock the Wallet panel. Then any notification tapped
+      // (a backup warning), ?memory=1 the memory check, ?selfcheck=1 the self-check, ?health=1 the health check, ?update=1 the update card, ?security=1 the security dialog, ?wallet=unlock the Wallet panel. Then any notification tapped
       // while the page was loading.
       const own = parseOpenTarget({ type: 'open-target', url: location.href }, location.origin);
-      if (own && (own.update || own.backups || own.security || own.memory || own.selfcheck || own.connectors || own.wallet)) {   // one-shot actions: a reload must not repeat them
+      if (own && (own.update || own.backups || own.security || own.memory || own.selfcheck || own.health || own.connectors || own.wallet)) {   // one-shot actions: a reload must not repeat them
         const u = new URL(location.href);
-        for (const k of ['update', 'backups', 'security', 'memory', 'selfcheck', 'connectors', 'wallet']) u.searchParams.delete(k);
+        for (const k of ['update', 'backups', 'security', 'memory', 'selfcheck', 'health', 'connectors', 'wallet']) u.searchParams.delete(k);
         history.replaceState(history.state, '', u.pathname + u.search + u.hash);
       }
       // After a Reload: open the chats that were open, in their tab order, each with the text that was in its message
@@ -8668,6 +9271,8 @@
           case 'consultation': return `Answering a consultation from ${cap(o.from) || 'another agent'}`;
           case 'schedule': { const l = o.label || o.from; return l ? `Working on a scheduled task: ${l}` : 'Working on a scheduled task'; }
           case 'job_notice': return o.jobName ? `Reading a job result: ${o.jobName}` : 'Reading a job result';
+          case 'hand_off': return o.label || 'Working on a hand-off';
+          case 'hand_off_report': return 'Reading a hand-off report';
           case 'job_report': return o.jobName ? `Reading a job report: ${o.jobName}` : 'Reading a job report';
           case 'consult_reply': return 'Reading consultation replies';
           case 'alert': return 'Handling a monitor alert';
@@ -8728,6 +9333,8 @@
         else if (o.kind === 'job_report') label = `Job report${o.jobName ? ': ' + o.jobName : ''}`;
         else if (o.kind === 'task') label = o.label === 'context compression' ? 'Resumed after compression' : `Hub task${o.label ? ': ' + o.label : ''}`;
         else if (o.kind === 'consult_reply') label = 'Consultation replies delivered';
+        else if (o.kind === 'hand_off') label = o.label || `Hand-off from ${from || 'another agent'}`;
+        else if (o.kind === 'hand_off_report') label = o.label || 'Hand-off finished';
         else if (o.kind === 'alert') label = 'Monitor alert';
         else label = 'Hub turn';
         return { kind, from, label };
@@ -8953,10 +9560,12 @@
         case 'consultation': return `consulted by ${origin.from || 'another agent'}`;
         case 'job_notice': return `your job finished${origin.jobName ? `: ${origin.jobName}` : ''}`;
         case 'job_report': return `job report from ${origin.from || 'a worker'}${origin.jobName ? ` (${origin.jobName})` : ''}`;
-        case 'schedule': return origin.by ? `scheduled task set by ${origin.by === 'owner' ? 'you' : origin.by}${origin.from ? `: ${origin.from}` : ''}` : `scheduled task${origin.from ? `: ${origin.from}` : ''}`;
+        case 'schedule': return origin.by ? `scheduled task set by ${origin.by === '@owner' ? 'you' : origin.by}${origin.from ? `: ${origin.from}` : ''}` : `scheduled task${origin.from ? `: ${origin.from}` : ''}`;
         case 'task': return origin.from && origin.from !== 'hub' ? `queued task from ${origin.from}` : origin.label ? `hub: ${origin.label}` : 'hub turn';
         case 'alert': return `alert from ${origin.from || 'a monitor'}`;
         case 'consult_reply': return 'queued consultation reply delivered';
+        case 'hand_off': return `hand-off from ${origin.from || 'another agent'}`;
+        case 'hand_off_report': return `hand-off finished: ${origin.from || 'another agent'}`;
         case 'comms': return 'message from a messaging channel';
         default: return 'hub turn';
       }
@@ -9609,7 +10218,9 @@
       // badge next to each Claude agent's model, the sidebar chip, and the Settings box.
       source.addEventListener('plan_limit', e => { const ev = parse(e); if (!ev) return; refreshPlanChip(); if (document.getElementById('st-plan-section')) loadPlanBox(); });
       source.addEventListener('plan_extra_usage', e => { const ev = parse(e); if (!ev) return; refreshPlanChip(); if (document.getElementById('st-plan-section')) loadPlanBox(); });
-      source.addEventListener('plan_warning', e => { const ev = parse(e); if (!ev) return; refreshPlanChip(); if (document.getElementById('st-plan-section')) loadPlanBox(); });
+      source.addEventListener('plan_warning', e => { const ev = parse(e); if (!ev) return; refreshPlanChip(); subsPlanWarning(ev); if (document.getElementById('st-plan-section')) loadPlanBox(); });
+      // The ChatGPT plan's usage (lib/codex-usage): the payload is the snapshot; the badges, the chip and the Subscriptions box repaint.
+      source.addEventListener('codex_usage', e => { const ev = parse(e); if (!ev || (window.hubMe && !window.hubMe.isAdmin)) return; codexLast = ev; paintPlanChip(); paintPlanBadges(); paintSubsBox(); });
       // Data connectors: a connector or group changed (saved, locked, unlocked, expired); repaint the Settings box.
       source.addEventListener('connectors_changed', e => { const ev = parse(e); if (ev) onConnectorsChanged(ev); });
       // (Re)connected: what happened to followed turns meanwhile comes from the hub's turn view.
@@ -9673,10 +10284,12 @@
       hubToast(busy ? `Re-synced with the hub, following ${chat.display || chat.agent}'s turn` : 'Re-synced with the hub');
     }
 
-    function hubToast(text, ms = 3000) {
+    function hubToast(text, ms = 3000, onTap = null) {
       let t = document.getElementById('hub-toast');
       if (!t) { t = document.createElement('div'); t.id = 'hub-toast'; document.body.appendChild(t); }
       t.textContent = text;
+      t.onclick = onTap ? () => { t.classList.remove('on'); onTap(); } : null;   // a notice that leads somewhere
+      t.style.cursor = onTap ? 'pointer' : '';
       t.classList.add('on');
       clearTimeout(hubToast.timer);
       hubToast.timer = setTimeout(() => t.classList.remove('on'), ms);
@@ -9821,6 +10434,7 @@
         </div>
         <div class="compaction-line" id="compaction-line-${chatId}" style="display:none" title="Context compression: the agent writes its own working brief (see the agent's settings page)"></div>
         <div class="messages" id="messages-${chatId}"></div>
+        <div class="handoff-cards" id="handoff-cards-${chatId}" hidden></div>
         <div class="input-area">
           <div class="input-wrapper">
             <div class="image-preview-area" id="image-preview-${chatId}"></div>
@@ -11646,7 +12260,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
                   coordinator: oc.coordinator,
                   participants: (oc.participants || []).join(','),
                   objective: oc.objective,
-                  maxRounds: (oc.max_rounds || 5).toString(),
+                  maxRounds: (oc.max_rounds ?? 5).toString(),
                   ...(oc.context ? { context: oc.context } : {}),
                   ...(oc.challenger ? { challenger: oc.challenger } : {})
                 });
@@ -11899,7 +12513,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
                   coordinator: oc2.coordinator,
                   participants: (oc2.participants || []).join(','),
                   objective: oc2.objective,
-                  maxRounds: (oc2.max_rounds || 5).toString(),
+                  maxRounds: (oc2.max_rounds ?? 5).toString(),
                   ...(oc2.context ? { context: oc2.context } : {}),
                   ...(oc2.challenger ? { challenger: oc2.challenger } : {})
                 });
@@ -12164,7 +12778,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
                   coordinator: oc3.coordinator,
                   participants: (oc3.participants || []).join(','),
                   objective: oc3.objective,
-                  maxRounds: (oc3.max_rounds || 5).toString(),
+                  maxRounds: (oc3.max_rounds ?? 5).toString(),
                   ...(oc3.context ? { context: oc3.context } : {})
                 });
                 window.open(`/tiger-team?${params.toString()}`, '_blank');
@@ -17799,6 +18413,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     // (links to /api/files/download, absolute paths) get a card each in a .file-cards box right after the message.
     // Never on a streaming chunk; no candidates means no request; nothing here may throw into the chat code.
     async function attachFileCards(el) {
+      if (window.HandOffCard) HandOffCard.refreshSoon();   // a reply just ended: look again for hand-offs (calls close together make one request)
       try {
         const H = window.hubFileCard;
         if (!H || !el || !el.isConnected || !el.classList.contains('assistant')) return;
@@ -22118,7 +22733,7 @@ Report what you found, did, or discovered.`;
                     coordinator: gw.coordinator,
                     participants: (gw.participants || []).join(','),
                     objective: gw.objective,
-                    maxRounds: (gw.max_rounds || 5).toString(),
+                    maxRounds: (gw.max_rounds ?? 5).toString(),
                     ...(gw.context ? { context: gw.context } : {}),
                     ...(gw.challenger ? { challenger: gw.challenger } : {})
                   });

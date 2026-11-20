@@ -281,7 +281,7 @@ test('the defaults sheet: a plain warning under Security and access only when it
   assert.ok(order.every((x, i) => x > 0 && (i === 0 || x > order[i - 1])), 'four rows in order');
   ctx.notifyPrefs = { default: { questions: 'on', requested: 'on', other: 'on', security: 'off' }, agents: {} };
   ctx.paint();
-  const w = "You won't be told about sign-in and passkey changes, wallet locks, failed backups, access changes or a halted hub.";
+  const w = "You won't be told about sign-in and passkey changes, wallet locks, failed backups, access changes, a halted hub or health problems such as a full disk.";
   assert.ok(el.innerHTML.includes(w), 'warning shown');
   assert.ok(el.innerHTML.indexOf(w) > el.innerHTML.indexOf('data-nd="security"') && el.innerHTML.indexOf(w) < el.innerHTML.indexOf('Agents with their own setting'), 'right under the security row');
   ctx.notifyPrefs = { default: { security: 'away' }, agents: {} };

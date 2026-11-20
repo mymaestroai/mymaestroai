@@ -202,6 +202,19 @@ const PORT = parseInt(process.env.PORT || '8888', 10);
 // Security check (lib/security-check): the hub reviews its own security configuration (Settings → Security check,
 // GET /api/security-check, nightly). Wired with how this process actually listens.
 function securityCheck() { return require('./lib/security-check').getSecurityCheck({ exposed: () => !!BIND.exposed, port: PORT, host: HOST }); }
+// Component watch (lib/component-watch): the software the hub relies on (the Codex client, the Claude client), what is
+// installed and what is out; one instance, made with the hub's deps (is Codex in use; which Claude client a pending
+// My Maestro update would bring) and started once after the server listens (GET /api/components, Settings → Status).
+let _componentWatch = null;
+function componentWatch() {
+  if (!_componentWatch) {
+    _componentWatch = require('./lib/component-watch').createComponentWatch({
+      codexInUse: () => require('./lib/sdk-chat').codexInUse(),
+      claudeOffered: () => require('./lib/claude-offered').claudeOffered({ root: __dirname, updateStatus: () => require('./lib/update-check').getUpdateCheck().status(null) }),
+    });
+  }
+  return _componentWatch;
+}
 /** The step-up: this signed-in account's password (and two-factor code when the account has it) from a request body.
  *  Returns null when right, else the message to show. Used by the backup routes and the module permission routes. */
 function accountStepUp(user, b, ip) {
@@ -235,6 +248,7 @@ const MAX_BODY_SIZE = 50 * 1024 * 1024; // 50MB to accommodate large screenshot 
 const localModels = () => require('./lib/local-models').getLocalModels();
 // The lead agent's per-turn brief about this hub (lib/hub-map): needs the port and the exposure decision.
 require('./lib/hub-map').getHubMap().init({ port: PORT, host: HOST, exposed: () => !!BIND.exposed, setupNeeded: () => isSetupNeeded() });
+require('./lib/hub-map').getHubMap().init({ components: () => componentWatch().items() });   // the brief reads this server's component watch
 
 // Model health cache (populated by /api/models/health and /api/models/test)
 const _modelHealthCache = {};
@@ -1325,6 +1339,16 @@ async function handleHttpRequest(req, res) {
       return jsonResponse(res, 200, { ok: true, ...pu.snapshot(), agents: agentsOnPlan });
     }
 
+    // The ChatGPT plan's usage as Codex reports it (lib/codex-usage; admins). POST .../refresh asks Codex now (no turn,
+    // at most once a minute): 409 with the reason when it was refused or failed.
+    if ((pathname === '/api/codex-usage' && req.method === 'GET') || (pathname === '/api/codex-usage/refresh' && req.method === 'POST')) {
+      if (!access.isAdmin(req.hubUser || { role: 'admin' })) return jsonResponse(res, 403, { error: 'admin_only' });
+      const cu = require('./lib/codex-usage').getCodexUsage();
+      if (req.method === 'GET') return jsonResponse(res, 200, cu.snapshot());
+      const r = await cu.readNow();
+      return jsonResponse(res, r && r.ok ? 200 : 409, { ...(r || { ok: false, error: 'Unknown error' }), snapshot: (r && r.snapshot) || cu.snapshot() });
+    }
+
     if (pathname === '/api/models' && req.method === 'GET') {
       const models = await getAvailableModels();
       console.log(`[api/models] Returning ${models.length} models:`, models.slice(0, 5));
@@ -1488,6 +1512,28 @@ async function handleHttpRequest(req, res) {
       return jsonResponse(res, result.success ? 200 : 400, result);
     }
 
+    // /api/agents/:name/model-offer: the newer (or stronger) model on offer for this agent, or null (lib/model-offers-service)
+    // Admins only, like the settings page itself (the access gate classifies both model-offer routes as admin routes).
+    if (/^\/api\/agents\/([^/]+)\/model-offer$/.test(pathname) && req.method === 'GET') {
+      if (!req.hubService && !access.isAdmin(req.hubUser)) return jsonResponse(res, 403, { error: 'admin_only' });
+      let name; try { name = decodeURIComponent(pathname.split('/')[3]); } catch { return jsonResponse(res, 400, { error: 'bad agent name' }); }
+      const o = await require('./lib/model-offers-service').getModelOffers().offerFor(name);
+      if (!o) return jsonResponse(res, 200, { offer: null });
+      return jsonResponse(res, 200, { offer: { from: o.from, to: o.to, kind: o.kind, why: o.why, route: o.route, cost: o.cost } });
+    }
+
+    // /api/agents/:name/model-offer/decline: "Not now" (admin only); the model must be the current offer
+    if (/^\/api\/agents\/([^/]+)\/model-offer\/decline$/.test(pathname) && req.method === 'POST') {
+      if (!req.hubService && !access.isAdmin(req.hubUser)) return jsonResponse(res, 403, { error: 'admin_only' });
+      let name; try { name = decodeURIComponent(pathname.split('/')[3]); } catch { return jsonResponse(res, 400, { error: 'bad agent name' }); }
+      let body; try { body = JSON.parse(await readBody(req)); } catch { return jsonResponse(res, 400, { error: 'invalid JSON' }); }
+      const svc = require('./lib/model-offers-service').getModelOffers();
+      const o = await svc.offerFor(name);
+      if (!o || !body || o.to !== body.model) return jsonResponse(res, 409, { error: 'That suggestion is no longer current.' });
+      const r = svc.decline(name, o.to);
+      return r && r.ok ? jsonResponse(res, 200, { ok: true }) : jsonResponse(res, 500, { error: (r && r.error) || 'Could not save.' });
+    }
+
     // /api/agents/:name/display
     if (/^\/api\/agents\/([^/]+)\/display$/.test(pathname) && req.method === 'POST') {
       const name = pathname.split('/')[3];
@@ -1518,6 +1564,8 @@ async function handleHttpRequest(req, res) {
       if (recordingsChange && (req.hubService || req.hubToken || !req.hubUser || !hubAuth.isOwner(req.hubUser) || req.hubPendingTotp)) return jsonResponse(res, 403, { error: 'only the owner can change: recordings' });
       // Which environment variables an agent's commands keep is a signed-in admin's call: never a member, and never the hub's own service calls (an agent could widen itself).
       if (body && typeof body === 'object' && 'envKeep' in body && (req.hubService || req.hubToken || !req.hubUser || !access.isAdmin(req.hubUser) || req.hubPendingTotp)) return jsonResponse(res, 403, { error: 'only an admin can change: envKeep' });
+      // The command lockbox changes what an agent's commands may touch: a signed-in admin's own browser session only (never a member, a token, the hub's own service or an agent).
+      if (!!body && typeof body === 'object' && ('lockbox' in body || 'lockboxEnv' in body) && !require('./lib/lockbox/settings').isAdminSession(req)) return jsonResponse(res, 403, { error: 'Sign in with an admin account in your browser to change the command lockbox.' });
       const recSettings = require('./lib/recordings/settings');
       const allowedBefore = recordingsChange ? recSettings.recordingsOf((await getAgents()).find(a => a.name === name)).allowed : [];
       if (!req.hubService && !access.isAdmin(req.hubUser)) {
@@ -1529,7 +1577,10 @@ async function handleHttpRequest(req, res) {
       // Voice: a cloud engine for an agent kept on this computer needs the owner (the earliest admin), not just any admin.
       const result = await updateAgentField(name, body, { isOwner: !req.hubService && !!req.hubUser && hubAuth.isOwner(req.hubUser), userId: req.hubUser ? String(req.hubUser.id) : '',
         // Changes to the call-recordings setting are audited (agent.recordings): who, which agent, keep on/off, the allowed ids, the mic.
-        audit: (action, detail) => hubAuth.audit(req.hubUser ? String(req.hubUser.id) : null, action, detail, hubAuth.clientIp(req)) });
+        audit: (action, detail) => hubAuth.audit(req.hubUser ? String(req.hubUser.id) : null, action, detail, hubAuth.clientIp(req)),
+        // A lockbox change is told to the admins in plain words (a security notice), like the admin 2-factor rule.
+        userName: req.hubUser ? String(req.hubUser.name || req.hubUser.login || req.hubUser.id || '') : '',
+        notifyAdmins: (text) => require('./lib/push').getPush().notify({ title: 'Command lockbox changed', body: text, tag: 'lockbox-change' }, { adminsOnly: true, kind: 'security' }) });
       if (!result.success && result.status) return jsonResponse(res, result.status, { error: result.error });
       // Handing a head agent to a member: it introduces itself in its (still empty) chat.
       if (result.success && body && body.owner) { const u = hubAuth.getUser(String(body.owner)); if (u && u.role === 'member') require('./lib/teams').greetIfFresh(name, u).catch(() => {}); }
@@ -2103,6 +2154,16 @@ async function handleHttpRequest(req, res) {
       }
       return jsonResponse(res, 404, { error: 'unknown sandbox route' });
     }
+    // ── Command lockbox (lib/lockbox): host state with each agent's mode, and the latest would-block lines. Admin session only. ──
+    if (pathname.startsWith('/api/lockbox/')) {
+      const handled = await require('./lib/lockbox/settings').handle(pathname, req, res, {
+        jsonResponse, getAgents, getSetting: (k) => hubSettings.getSetting(k), lockbox: require('./lib/lockbox'),
+        sandboxedOf: (a) => require('./lib/sandbox').getSandbox().isSandboxed(a),
+        handsOf: (a) => require('./lib/hub-tools').modeFor(a, (k) => hubSettings.getSetting(k)),
+      });
+      if (handled) return;
+      return jsonResponse(res, 404, { error: 'unknown lockbox route' });
+    }
     // ── Readiness (lib/readiness): what this machine is missing and what to do about it; admin-only. ──
     if (pathname === '/api/readiness' && req.method === 'GET') {
       const r = await require('./lib/readiness').getReadiness({ exposed: () => !!BIND.exposed, setupNeeded: () => isSetupNeeded() }).check();
@@ -2113,6 +2174,19 @@ async function handleHttpRequest(req, res) {
     if (pathname === '/api/security-check' && req.method === 'GET') {
       const r = await securityCheck().latest({ maxAgeMs: 60 * 60 * 1000 });
       return jsonResponse(res, 200, { ok: true, ...r });
+    }
+    // ── Health check (lib/system-health): admin-only (the route class above, checked again in the handler). GET the last
+    // result, POST /run checks now in the background, PUT /settings saves the systemHealth settings. ──
+    if (pathname === '/api/system-health' || pathname.startsWith('/api/system-health/')) {
+      const hlBody = req.method === 'PUT' ? await authJson() : {};
+      const r = await require('./lib/system-health/routes').handle({
+        method: req.method, pathname, admin: !!req.hubService || (access.isAdmin(req.hubUser) && !req.hubPendingTotp), body: hlBody,
+        health: () => require('./lib/system-health/wire').getSystemHealth(),
+        validateSettings: (o) => require('./lib/system-health').validateSettings(o),
+        saveSettings: (v) => hubSettings.updateSettings({ systemHealth: v }),
+        log: (m) => console.warn(m),
+      });
+      if (r) return jsonResponse(res, r.status, r.body);
     }
     // ── Self-check (lib/selfcheck, lib/selfcheck-routes): admin-only (the route class above, checked again in the handler).
     // GET the last result, POST /run starts one in the background, PUT /settings saves the selfCheck settings. ──
@@ -2126,6 +2200,22 @@ async function handleHttpRequest(req, res) {
         log: (m) => console.warn(m),
       });
       if (r) return jsonResponse(res, r.status, r.body);
+    }
+    // ── Component watch (lib/component-watch): admin-only (the route class above). GET the items and the Codex setting,
+    // POST /check looks now (a look only: updates run on the schedule or with the button), POST /codex/update starts the
+    // Codex client update and answers 202 at once (409 when it is refused at once); the outcome is the item's lastUpdate. ──
+    if (pathname === '/api/components' && req.method === 'GET') {
+      return jsonResponse(res, 200, { items: componentWatch().items(), setting: { codex: (hubSettings.getSetting('componentUpdates', {}) || {}).codex || 'auto' } });
+    }
+    if (pathname === '/api/components/check' && req.method === 'POST') {
+      try { await componentWatch().check({ reason: 'manual', allowUpdate: false }); } catch (e) { return jsonResponse(res, 500, { error: e.message }); }
+      return jsonResponse(res, 200, { items: componentWatch().items() });
+    }
+    if (pathname === '/api/components/codex/update' && req.method === 'POST') {
+      const can = componentWatch().canUpdateCodexNow();
+      if (!can || !can.ok) return jsonResponse(res, 409, { ok: false, error: (can && can.error) || 'the update did not run' });
+      componentWatch().updateCodexNow().catch((e) => console.warn(`[component-watch] Codex update failed: ${e && e.message}`));   // not awaited: it takes minutes
+      return jsonResponse(res, 202, { started: true });
     }
     // ── Memory health (lib/memory-health): admin-only. GET answers with the last result while it is under 26 hours old
     // (else checks now); run checks now. Nightly from the schedule at start.
@@ -2401,6 +2491,15 @@ async function handleHttpRequest(req, res) {
       return jsonResponse(res, result.success ? 200 : (result.status || 400), result);
     }
 
+    // Hand-offs (lib/hand-offs): the jobs this agent handed to others, for the cards above its chat. The access check is the
+    // route's (agent in the query, classified in lib/access like the chat history): an admin any agent, a member their own.
+    if (pathname === '/api/hand-offs' && req.method === 'GET') {
+      const name = agentFromQuery(req);
+      if (!name || !(await getAgents()).some(a => a.name === name)) return jsonResponse(res, 404, { error: 'unknown agent' });
+      const handOffs = require('./lib/sdk-chat').getHandOffRunner().list(name, { includeDone: false, withStatus: false });
+      return jsonResponse(res, 200, { ok: true, handOffs });   // no folderLink: the Files panel has no link that opens a folder
+    }
+
     // ── Session/History Routes ──────────────────────────────────────
     if (/^\/api\/history\/([^/]+)$/.test(pathname) && req.method === 'GET') {
       const name = pathname.split('/')[3];
@@ -2661,6 +2760,10 @@ async function handleHttpRequest(req, res) {
           if (patch && typeof patch === 'object' && 'requireAdmin2fa' in patch) { console.warn('[settings] ignored requireAdmin2fa in /api/settings patch (use Settings → Security)'); delete patch.requireAdmin2fa; }
           // receiverAliases makes paths public (lib/modules/receivers): set only by hand in data/settings.json.
           if (patch && typeof patch === 'object' && 'receiverAliases' in patch) { console.warn('[settings] ignored receiverAliases in /api/settings patch (edit data/settings.json directly)'); delete patch.receiverAliases; }
+          // The command lockbox hub default (off | watch | enforce): a signed-in admin's own browser session only; a change is audited and told to the admins.
+          const lockboxCheck = require('./lib/lockbox/settings').checkDefaultPatch(patch, req, (k) => hubSettings.getSetting(k));
+          if (!lockboxCheck.ok) return jsonResponse(res, lockboxCheck.status, { error: lockboxCheck.error });
+          const lockboxChange = lockboxCheck.change;
           // Hub default for every member agent: grantable classes and valid decisions only (lib/tool-policy).
           if (patch && patch.memberPolicy !== undefined) patch.memberPolicy = require('./lib/tool-policy').sanitizeGrants({ policy: patch.memberPolicy }).policy || {};
           // Per-class approval cards: known class names only (lib/policy-gate APPROVAL_CLASSES).
@@ -2674,9 +2777,16 @@ async function handleHttpRequest(req, res) {
           // Share links: enabled, defaultHours, maxHours (hard maximum 168), merged onto the stored value (lib/share-links cleanSettings).
           if (patch && patch.shareLinks !== undefined) patch.shareLinks = require('./lib/share-links').cleanSettings(patch.shareLinks, hubSettings.getSetting('shareLinks'));
           if (patch && patch.showReasoning !== undefined) patch.showReasoning = patch.showReasoning !== false;
+          if (patch && patch.modelOffers !== undefined) patch.modelOffers = patch.modelOffers !== false;
+          // Subscription usage (lib/codex-usage, Settings → Subscriptions): on unless turned off.
+          if (patch && patch.subscriptionUsage !== undefined) patch.subscriptionUsage = patch.subscriptionUsage !== false;
+          if (patch && patch.componentUpdates !== undefined) patch.componentUpdates = { codex: ['auto', 'notify', 'off'].includes(patch.componentUpdates && patch.componentUpdates.codex) ? patch.componentUpdates.codex : 'auto' };
           if (patch && patch.walletLockedNotice !== undefined) patch.walletLockedNotice = patch.walletLockedNotice !== false;
           // Workers allowed at once per AI service: integers 1..32 only (lib/provider-pacing); applied to the running hub below.
           if (patch && patch.workersAtOnce !== undefined) patch.workersAtOnce = require('./lib/provider-pacing').cleanWorkersAtOnce(patch.workersAtOnce);
+          // Long waits on workers (lib/long-waits): minutes 0..240 (0 = off, junk = the default 10); the lead notice is on unless false.
+          if (patch && patch.handOffWaitMinutes !== undefined) patch.handOffWaitMinutes = require('./lib/long-waits').cleanMinutes(patch.handOffWaitMinutes);
+          if (patch && patch.buildPartnerNotice !== undefined) patch.buildPartnerNotice = patch.buildPartnerNotice !== false;
           // Voice: known keys only, merged onto the stored value (lib/voice/manifest cleanVoiceSettings). "enabled" changes
           // only through /api/voice/enable and /disable, which also install the engines and stop or resume the worker.
           if (patch && patch.voice !== undefined) {
@@ -2686,6 +2796,10 @@ async function handleHttpRequest(req, res) {
           }
           const providersChanged = !!(patch && patch.providers);
           hubSettings.updateSettings(patch);
+          if (lockboxChange) {
+            try { hubAuth.audit(String(req.hubUser.id), 'settings.lockboxDefault', lockboxChange, hubAuth.clientIp(req)); } catch {}
+            try { Promise.resolve(require('./lib/push').getPush().notify({ title: 'Command lockbox changed', body: lockboxChange, tag: 'lockbox-change' }, { adminsOnly: true, kind: 'security' })).catch(() => {}); } catch {}
+          }
           if (patch && patch.workersAtOnce !== undefined) getPacing().setCaps(hubSettings.getSetting('workersAtOnce'));
           // A new key or URL changes which models exist — rediscover now
           // rather than waiting for the 6-hour cycle.
@@ -2804,10 +2918,22 @@ async function handleHttpRequest(req, res) {
       }
     }
 
+    // Put the local changes aside (git stash, never put back by the hub), then update. The old name "force-update" stays for pages opened before.
     if (pathname === '/api/git-sync/force-update' && req.method === 'POST') {
-      const { runForceUpdate } = require('./lib/git-sync');
+      const { runPutAsideUpdate } = require('./lib/git-sync');
       try {
-        return jsonResponse(res, 200, await runForceUpdate());
+        let body = {}; try { body = JSON.parse((await readBody(req)) || '{}') || {}; } catch {}
+        return jsonResponse(res, 200, await runPutAsideUpdate({ channel: body && body.channel ? String(body.channel) : null }));
+      } catch (e) {
+        return jsonResponse(res, 500, { success: false, error: e.message });
+      }
+    }
+
+    // Put the local changes aside without updating.
+    if (pathname === '/api/git-sync/put-aside' && req.method === 'POST') {
+      const { putAsideOnly } = require('./lib/git-sync');
+      try {
+        return jsonResponse(res, 200, await putAsideOnly());
       } catch (e) {
         return jsonResponse(res, 500, { success: false, error: e.message });
       }
@@ -3046,6 +3172,8 @@ async function handleHttpRequest(req, res) {
       if (!session && !ttId) return jsonResponse(res, 404, { error: 'Session not found' });
       const state = ttId && getTigerTeamState(ttId);
       if (!state) return jsonResponse(res, 409, { error: 'Team is still starting.  Retry after it is ready.' });
+      // A team that has ended (completed, stopped, failed, interrupted) has nobody to hear it: Continue or Resume it instead.
+      if (state.completedAt) return jsonResponse(res, 409, { error: 'This team is not running.' });
       // Interject: the coordinator gets it durably (journaled; picked up before its next model
       // call, survives resume). With target "team" (default) every participant working RIGHT NOW
       // also gets it live, at its next tool boundary, so nobody keeps working on stale
@@ -3057,7 +3185,14 @@ async function handleHttpRequest(req, res) {
       if (target !== 'team' && target !== 'coordinator' && !live.length) return jsonResponse(res, 409, { error: `"${target}" is not working right now; send it to the team or the coordinator instead.` });
       const delivered = [];
       if (target === 'team' || target === 'coordinator') { ttRecovery.queueDirective(ttStore, ttId, state, message); delivered.push({ agent: state.coordinator, how: 'queued' }); }
-      for (const agent of live) { const r = ttInterject({ agent, message: `[Interjection from the war room, addressed to the whole team]: ${message}` }); if (r.success) delivered.push({ agent, how: 'live' }); }
+      // The label names who it is for: the whole team, or the one member it was sent to.
+      let addressee = 'the whole team';
+      if (target !== 'team') {
+        let display = target;
+        try { const found = (await getAgents()).find(a => a.name === target); if (found && found.display) display = found.display; } catch {}
+        addressee = display;
+      }
+      for (const agent of live) { const r = ttInterject({ agent, message: `[Interjection from the war room, addressed to ${addressee}]: ${message}` }); if (r.success) delivered.push({ agent, how: 'live' }); }
       try { ttStore.append(ttId, state, { type: 'tt_interjection', message, target, delivered, at: new Date().toISOString() }); } catch {}
       console.log(`[tiger-team] interjection for ${ttId} (${target}): ${delivered.map(d => `${d.agent}:${d.how}`).join(', ') || 'nobody'}`);
       // Every page on this team sees the interjection (and a page that replays later draws it too).
@@ -3094,10 +3229,12 @@ async function handleHttpRequest(req, res) {
       if (session) session.stopped = true;
       // Target ONLY this team, not every running TT - stopTigerTeam(null) previously killed every concurrent
       // investigation. The run then ends itself and tells every attached page (tt_interrupted, status stopped).
+      let stopped = true;
       if (ttId) {
         for (const s of Object.values(global.__tigerTeamSessions)) if (s.tigerTeamId === ttId) s.stopped = true;
-        stopTigerTeam(ttId);
+        stopped = stopTigerTeam(ttId);
       } else session.abortController?.abort();
+      if (!stopped) return jsonResponse(res, 409, { error: 'This team has already ended.' });
       return jsonResponse(res, 200, { ok: true });
     }
 
@@ -3405,11 +3542,17 @@ async function handleHttpRequest(req, res) {
         res.write('data: ' + JSON.stringify({ gateway: { type: 'tt_session', session_id: sessionId } }) + '\n\n');
         stream.attach(res);
         if (resume && !state.legacyRecovery) {
+          // An optional note rides along: queued for the coordinator like an interjection (durable, picked up before its next model call).
+          if (typeof message === 'string' && message.trim()) {
+            ttRecovery.queueDirective(ttStore, id, state, message.trim());
+            stream.write('data: ' + JSON.stringify({ gateway: { type: 'tt_user_message', message: message.trim(), target: 'coordinator', kind: 'resume_note', delivered: [{ agent: state.coordinator, how: 'queued' }] } }) + '\n\n');
+          }
           await resumeTigerTeam(id, stream, session);
         } else {
           if (resume) {
             stream.write('data: ' + JSON.stringify({ gateway: { type: 'tt_notice', message: 'Legacy save: recovering from transcript only.  In-flight tool outcomes are unknown and must be verified before repeating actions.' } }) + '\n\n');
-            message = 'Resume the interrupted investigation using the saved findings.  Do not repeat completed work.  This is a legacy transcript without a tool journal: verify uncertain actions using read-only checks before repeating anything that changes state.';
+            const note = typeof message === 'string' && message.trim() ? `\n\nA note from the owner: ${message.trim()}` : '';
+            message = 'Resume the interrupted investigation using the saved findings.  Do not repeat completed work.  This is a legacy transcript without a tool journal: verify uncertain actions using read-only checks before repeating anything that changes state.' + note;
           }
           await continueTigerTeam(id, message, stream);
         }
@@ -3496,7 +3639,7 @@ async function handleHttpRequest(req, res) {
           );
         } else {
           result = await runTigerTeam(
-            { objective, coordinator, participants: effectiveParticipants, max_rounds: max_rounds || 5, context: context || '', challenger: challenger || '', challengerDirective: challengerDirective || '', directives: directives || {}, session },
+            { objective, coordinator, participants: effectiveParticipants, max_rounds, context: context || '', challenger: challenger || '', challengerDirective: challengerDirective || '', directives: directives || {}, session },
             stream,
             'tiger-team-ui'
           );
@@ -3671,6 +3814,11 @@ async function handleHttpRequest(req, res) {
 
 // ── Start ───────────────────────────────────────────────────────────────
 
+// "Protect your Maestro's own code" (lib/code-protect): the policy asks this server's instance, which reads the owner's
+// choice (behaviour change 'protect-own-code'). Registered before any agent can run.
+try { require('./lib/tool-policy').setCodeProtectProvider(() => require('./lib/code-protect').getCodeProtect()); }
+catch (e) { console.error('[code-protect] could not register:', e.message); }
+
 // Leaked-key detector: if ETH leaves a trading wallet and the hub sent nothing, say so loudly.
 setInterval(() => {
   try { const svc = require('./lib/wallet/service').getWalletService(); if (svc.keystore.list().length) svc.checkOutflows('base').catch(() => {}); }
@@ -3765,6 +3913,20 @@ server.listen(PORT, HOST, () => {
   // the nightly check off (Check now still works).
   try { if (process.env.HUB_MEMORY_HEALTH !== 'off') require('./lib/memory-health').getMemoryHealth().schedule(); }
   catch (e) { console.warn(`[memory-health] ${e.message}`); }
+  // Health check (lib/system-health): the computer itself (disk, memory, databases, backups, sign-ins...) a minute after
+  // each start and each night; it only reports. The backup facts come from this server's backup service and scheduler.
+  try {
+    require('./lib/system-health/wire').init({
+      backupState: () => {
+        const st = backupService().status();
+        if (!st.key || !st.key.configured || st.needsPassword || (st.recovery && !st.recovery.resumedAt)) return null;   // not set up or paused: the backup page's own item says so
+        const sched = require('./lib/backup/schedule').current();
+        const lastOk = Math.max(Date.parse(st.last && st.last.created) || 0, Date.parse(sched && sched.info(st).lastOkAt) || 0);
+        return { enabled: !!(st.schedule && st.schedule.enabled), lastOkAt: lastOk ? new Date(lastOk).toISOString() : null, setUpAt: st.key.createdAt || null };
+      },
+      backupFolders: () => (backupService().status().folders || []).map(f => (typeof f === 'string' ? f : f && f.dir)).filter(Boolean),
+    }).start();
+  } catch (e) { console.warn(`[health] ${e.message}`); }
   // Self-check: real turns on hidden check agents 60 s after start and each night (Settings → Status → Self-check);
   // HUB_SELFCHECK=off turns both off (Run now still works). Never delays startup.
   try { if (process.env.HUB_SELFCHECK !== 'off') { const sc = require('./lib/selfcheck').getSelfCheck(); sc.onStarted(); sc.schedule(); } }
@@ -3786,6 +3948,9 @@ server.listen(PORT, HOST, () => {
   // push per new version (lib/update-check.js; Settings → Updates turns it off, HUB_UPDATE_CHECK_HOURS=0 too).
   try { require('./lib/update-check').getUpdateCheck().start(); } catch (e) { console.warn(`[update-check] ${e.message}`); }
 
+  // Component watch: a look at the software the hub relies on soon after start and then on its own schedule (lib/component-watch).
+  try { componentWatch().start(); } catch (e) { console.warn(`[component-watch] ${e.message}`); }
+
   // Detached jobs: reconcile jobs that ended while the hub was down, announce them, start polling.
   try { const jr = getJobRunner().start(); console.log(`[jobs] runner started (${jr.mode()}; ${jr.list(null).filter(j => j.status === 'running').length} running)`); }
   catch (e) { console.error('[jobs] runner failed to start:', e.message); }
@@ -3793,6 +3958,8 @@ server.listen(PORT, HOST, () => {
   // Scheduled tasks: queue anything that came due while the hub was down (fires once, marked late), start polling.
   try { const st = getScheduledTasks().start(); st.prune(30); console.log(`[sched-tasks] started (${st.list(scheduledTasksLib.OWNER).filter(t => t.status === 'active').length} active, ${st.pending.length} due now)`); }
   catch (e) { console.error('[sched-tasks] failed to start:', e.message); }
+  // Hand-offs (lib/hand-offs): a hand-off whose turn died with the restart is reported to its caller as interrupted.
+  try { require('./lib/sdk-chat').getHandOffRunner().start(); } catch (e) { console.error('[hand-offs] could not start:', e.message); }
   // Behaviour changes waiting for the owner: the lead is asked to review them (one task, never twice for an entry), and the weekly
   // team review follows the worker-proposals decision. After the scheduler exists; the hub creates these, the owner decides on /changes.
   (async () => {

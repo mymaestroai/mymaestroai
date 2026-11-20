@@ -169,3 +169,21 @@ test('brief: one line while behaviour changes wait for the owner, left out when 
   // the real reader, in the throwaway install: no state file yet (a new install) = nothing waits
   assert.strictEqual((await createHubMap(deps()).briefFor('maestro')).includes('Changes to how agents behave'), false);
 });
+
+test('brief: a line for agents with long waits and no build partner; none when the notice setting is off', async () => {
+  const lwFile = path.join(ISO.data, 'long-waits.jsonl');
+  const now = Date.now();
+  const row = (agent, ago) => JSON.stringify({ at: new Date(now - ago).toISOString(), agent, tool: 'spawn_workers', minutes: 14 });
+  fs.mkdirSync(ISO.data, { recursive: true });
+  fs.writeFileSync(lwFile, [row('sam', 3600000), row('sam', 2 * 86400000), row('maestro', 3600000), row('maestro', 7200000)].join('\n') + '\n');
+  const withSam = { agents: async () => [{ name: 'maestro', category: 'primary' }, { name: 'sam', category: 'primary' }] };
+  try {
+    const pick = async (over) => (await createHubMap(deps({ ...withSam, ...over })).briefFor('maestro')).split('\n').find(l => l.startsWith('- Build partners'));
+    const line = await pick({});
+    assert.ok(line && line.startsWith('- Build partners: sam waited 2 times on workers this week (longest 14 min, on '), line);
+    assert.ok(!line.includes('maestro'), 'a lead is never named');
+    assert.ok(line.includes('create nothing without their yes'));
+    assert.strictEqual(await pick({ getSetting: (k, d) => (k === 'buildPartnerNotice' ? false : d) }), undefined, 'switched off');
+    assert.strictEqual(await createHubMap(deps({ ...withSam })).briefFor('sam'), '', 'only the lead gets the brief');
+  } finally { fs.writeFileSync(lwFile, ''); }
+});

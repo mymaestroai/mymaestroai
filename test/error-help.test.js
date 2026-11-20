@@ -130,7 +130,7 @@ test('wired into the replies: the API route and the OpenAI Responses failure; ra
   const chat = fs.readFileSync(path.join(root, 'lib/sdk-chat.js'), 'utf8');
   const gw = fs.readFileSync(path.join(root, 'lib/gateway-client.js'), 'utf8');
   assert.match(chat, /turnErrorInfo = errorHelp\.explain\(e, \{ model \}\);/);
-  assert.match(chat, /const explained = errorHelp\.format\(turnErrorInfo\);\n\s*sendSSE\(res, makeChunk\(`\\n\\n\$\{explained\}`, model\)\);/);
+  assert.match(chat, /const explained = ttMember \? errorHelp\.formatMember\(turnErrorInfo\) : errorHelp\.format\(turnErrorInfo\);\n\s*sendSSE\(res, makeChunk\(`\\n\\n\$\{explained\}`, model\)\);/);
   assert.match(chat, /fullResponse \+= \(fullResponse \? '\\n\\n' : ''\) \+ explained;/, 'saved with the reply: a reload or another device shows why there was no answer');
   assert.match(chat, /if \(!terminalError\) writeAutoMemory\(agentName, userMessage, fullResponse\)/, 'a failed reply is not written to the agent\'s session notes');
   assert.doesNotMatch(chat, /\[Error: \$\{e\.message\}\]|Network error occurred/, 'the raw texts are gone from replies');

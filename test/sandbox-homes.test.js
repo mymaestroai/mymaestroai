@@ -12,7 +12,7 @@ const os = require('os');
 const path = require('path');
 const { friendly } = require('../lib/timezone');
 const { createSandbox, homeVolumeFor } = require('../lib/sandbox');
-const { createHomes } = require('../lib/sandbox-homes');
+const { createHomes, sizeText } = require('../lib/sandbox-homes');
 
 const IDLE_TOP = 'PID ARGS\n1 /sbin/docker-init -- sleep infinity\n7 sleep infinity\n';
 const IMG1 = 'sha256:' + 'a'.repeat(64);
@@ -778,7 +778,21 @@ test('26. not enough free disk space for a second copy: no copy at all, the box 
   assert.strictEqual(homeOfCreate(boxCreates(r).pop()), OLDER);
   const f = r.moves().failed.alpha;
   assert.match(f.why, /enough free disk space/);
-  assert.match(f.why, /4096 MB/);
+  assert.match(f.why, /the home folder holds 4 GB, 8 GB are free, 9\.8 GB are needed/);
+});
+
+test('sizes read as people say them: KB, MB, then GB with one decimal place below 10 GB', () => {
+  const MBk = 1024, GBk = 1024 * 1024;
+  assert.strictEqual(sizeText(0), '0 KB');
+  assert.strictEqual(sizeText(800), '800 KB');
+  assert.strictEqual(sizeText(512 * MBk), '512 MB');
+  assert.strictEqual(sizeText(1023 * MBk), '1023 MB');
+  assert.strictEqual(sizeText(GBk - 100), '1 GB', 'what rounds to 1024 MB reads as 1 GB');
+  assert.strictEqual(sizeText(1536 * MBk), '1.5 GB');
+  assert.strictEqual(sizeText(5120 * MBk), '5 GB');
+  assert.strictEqual(sizeText(9.8 * GBk), '9.8 GB');
+  assert.strictEqual(sizeText(9.97 * GBk), '10 GB');
+  assert.strictEqual(sizeText(120.4 * GBk), '120 GB');
 });
 
 // Follow-ups: the free-space check counts sparse files at full length; three failures in a row for the same reason stop

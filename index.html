@@ -1785,6 +1785,16 @@
     .chat-actions .plan-badge.warn { color: #c9a227; border-color: rgba(201, 162, 39, 0.55); }
     .chat-actions .plan-badge.hot { color: #d95926; border-color: rgba(217, 89, 38, 0.6); }
     .chat-actions .plan-badge.refused { color: #d4588b; border-color: rgba(212, 88, 139, 0.6); }
+    /* Settings -> Subscriptions: one bar per usage window */
+    #st-subs-body .subs-block { margin: 10px 0 4px; }
+    #st-subs-body .subs-head { font-weight: 600; margin-bottom: 4px; }
+    #st-subs-body .subs-bar { display: grid; grid-template-columns: 1fr auto; column-gap: 12px; margin: 6px 0; font-size: 0.85rem; max-width: 520px; }
+    #st-subs-body .subs-meta { color: var(--text-dim); text-align: right; }
+    #st-subs-body .subs-track { grid-column: 1 / -1; height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; margin-top: 3px; }
+    #st-subs-body .subs-fill { height: 100%; }
+    #st-subs-body .subs-note { font-size: 0.8rem; color: var(--text-dim); margin: 3px 0; }
+    #st-subs-body .subs-err { color: #d4588b; }
+    #st-subs-body .subs-reached { color: #d4588b; font-weight: 600; }
     .chat-actions .model-pick option, .chat-actions .model-pick optgroup { background: var(--bg-input, #1a1a19); color: var(--text); }
     .chat-actions .group-name {
       margin-left: auto; color: var(--purple); font-weight: 500;
@@ -2389,6 +2399,23 @@
     #files-panel .files-recent a.fr-dl:hover { text-decoration: underline; }
     #files-panel .files-recent button.fr-all { align-self: flex-start; background: none; border: 0; padding: 2px 0; margin: 0; font: inherit; font-size: 12px; color: var(--accent); cursor: pointer; }
     #files-panel .files-recent button.fr-all:hover { text-decoration: underline; }
+    /* Hand-off cards above the message box (lib/ui-hand-off-card.js): the same column as .messages and .input-area */
+    .handoff-cards { display: flex; flex-direction: column; gap: 6px; max-width: var(--chat-max-width); width: 100%; margin: 0 auto; padding: 6px var(--chat-pad-x) 0; box-sizing: border-box; }
+    .handoff-cards[hidden] { display: none; }
+    .handoff-cards .ho-card { background: var(--bg-input); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; min-width: 0; font-size: 14px; color: var(--text); }
+    .handoff-cards .ho-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; justify-content: space-between; }
+    .handoff-cards .ho-title { font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
+    .handoff-cards .ho-pill { flex: none; border-radius: 999px; padding: 2px 9px; font-size: 12px; border: 1px solid var(--border); color: var(--text-dim); }
+    .handoff-cards .ho-pill.ho-running { color: var(--accent); border-color: var(--accent); }
+    .handoff-cards .ho-pill.ho-queued, .handoff-cards .ho-pill.ho-waiting { color: var(--warning); border-color: var(--warning); }
+    .handoff-cards .ho-pill.ho-done { color: var(--success, #3fb950); border-color: var(--success, #3fb950); }
+    .handoff-cards .ho-pill.ho-failed, .handoff-cards .ho-pill.ho-interrupted { color: var(--danger, #f85149); border-color: var(--danger, #f85149); }
+    .handoff-cards .ho-topic { margin-top: 4px; overflow-wrap: anywhere; white-space: normal; }
+    .handoff-cards .ho-time { margin-top: 2px; font-size: 12px; color: var(--text-dim); }
+    .handoff-cards .ho-status { color: var(--accent); }
+    .handoff-cards .ho-card.ho-ended { display: flex; align-items: center; gap: 8px; padding: 4px 10px; font-size: 13px; }
+    .handoff-cards .ho-ended .ho-line { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-dim); }
+    .handoff-cards .ho-ended .ho-pill, .handoff-cards .ho-ended .ho-status { flex: none; }
     /* Download cards under an agent's reply (lib/ui-file-card.js) */
     .file-cards { display: flex; flex-direction: column; gap: 8px; margin: 4px 0 8px; }
     .file-card { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; max-width: 420px; box-sizing: border-box; display: flex; flex-direction: column; gap: 8px; background: var(--bg-input); }
@@ -3115,6 +3142,7 @@
   <script src="/ui-face-player.js"></script>
   <script src="/ui-call-display.js"></script>
   <script src="/ui-file-card.js"></script>
+  <script src="/ui-hand-off-card.js"></script>
   <script src="/ui-team-card.js"></script>
   <script src="/ui-simple.js"></script>
   <script src="app.js"></script>

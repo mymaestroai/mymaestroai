@@ -183,7 +183,7 @@ test('four kinds in order, labels and hints; the agent kinds are the first three
   assert.strictEqual(h.NOTIFY_KINDS[0][2], 'When an agent needs your answer or approval');
   assert.strictEqual(h.NOTIFY_KINDS[1][2], 'Things you asked an agent to tell you about, and replies you asked to hear about');
   assert.strictEqual(h.NOTIFY_KINDS[2][2], 'Reports and other notices');
-  assert.strictEqual(h.NOTIFY_KINDS[3][2], 'Sign-in and passkey changes, wallet locks, failed backups, access changes, a halted hub');
+  assert.strictEqual(h.NOTIFY_KINDS[3][2], 'Sign-in and passkey changes, wallet locks, failed backups, access changes, a halted hub, health problems (a full disk)');
   assert.deepStrictEqual([...h.NOTIFY_AGENT_KINDS.map(k => k[0])], ['questions', 'requested', 'other']);
 });
 
@@ -210,7 +210,7 @@ test('bell icon with three kinds: muted only when all three are off; security do
 test('security off shows one plain warning line; on and away show none', () => {
   const h = lift();
   const w = h.notifySecurityWarning('off');
-  assert.ok(w.includes("You won't be told about sign-in and passkey changes, wallet locks, failed backups, access changes or a halted hub."));
+  assert.ok(w.includes("You won't be told about sign-in and passkey changes, wallet locks, failed backups, access changes, a halted hub or health problems such as a full disk."));
   assert.strictEqual(h.notifySecurityWarning('on'), '');
   assert.strictEqual(h.notifySecurityWarning('away'), '');
   assert.strictEqual(h.notifySecurityWarning(undefined), '');
