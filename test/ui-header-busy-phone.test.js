@@ -323,10 +323,11 @@ function liveHarness(live = {}, extra = {}) {
   const turnSteps = extra.turnSteps || {};
   const setLiveSrc = cut('function setLive(name, patch)', '// opts.namedOnly');
   const snapSrc = cut('function applySnapshot(map', 'let wkGoneState = {};');
-  const mod = new Function('live', 'turnSteps', 'openTurns', 'repaintAgentStatus', 'paintStatus', 'busyIsWorker', 'followedHubTurn', 'reattachIfIdle', 'wkSeen', 'workerGoneStep', 'wkInferEnd',
+  const turnOrigins = extra.turnOrigins || {};
+  const mod = new Function('live', 'turnSteps', 'turnOrigins', 'openTurns', 'repaintAgentStatus', 'paintStatus', 'busyIsWorker', 'followedHubTurn', 'reattachIfIdle', 'wkSeen', 'workerGoneStep', 'wkInferEnd',
     `let statusKnown = false, wkGoneState = {}, current = null; ${setLiveSrc}; ${snapSrc}; return { setLive, applySnapshot };`)(
-    live, turnSteps, {}, (a) => repainted.push(a), () => {}, (n, e) => (e && typeof e.worker === 'boolean' ? e.worker : /^tw-/.test(n)), () => false, () => {}, new Map(), () => ({ gone: [], next: {} }), () => {});
-  return { mod, repainted, live, turnSteps };
+    live, turnSteps, turnOrigins, {}, (a) => repainted.push(a), () => {}, (n, e) => (e && typeof e.worker === 'boolean' ? e.worker : /^tw-/.test(n)), () => false, () => {}, new Map(), () => ({ gone: [], next: {} }), () => {});
+  return { mod, repainted, live, turnSteps, turnOrigins };
 }
 
 test('setLive: a consultedBy change X -> Y repaints both X and Y; a helper repaints its parent', () => {
@@ -362,4 +363,12 @@ test('a full status snapshot that drops a running helper repaints its parent and
   const n = liveHarness({ casework: { busy: true, busySince: 'a' }, 'tw-2': { busy: true, worker: true, parent: 'casework' } });
   n.mod.applySnapshot({ casework: { busy: true, busySince: 'a' } }, true, { namedOnly: true });
   assert.ok(n.live['tw-2']);
+});
+
+test('review r2: going idle drops the old turn\'s origin, so a missed turn_end cannot name the next turn\'s caller', () => {
+  const h = liveHarness({ casework: { busy: true, busySince: 'a' } }, { turnOrigins: { casework: { turnId: 'A', origin: { kind: 'hand_off', from: 'cnc' }, hub: true, since: 1 } } });
+  h.mod.setLive('casework', { busy: true, activity: 'x' });
+  assert.ok(h.turnOrigins.casework, 'busy keeps it');
+  h.mod.setLive('casework', { busy: false });
+  assert.ok(!('casework' in h.turnOrigins));
 });

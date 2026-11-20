@@ -9624,7 +9624,7 @@
       const key = chatViewStepKey(turnId, item);
       if (item.status === 'running') {
         if (item.callId != null && st.done.includes(key)) return false;
-        st.calls = st.calls.filter(c => c.key !== key || item.callId == null);
+        st.calls = st.calls.filter(c => c.key !== key);   // the same call again (a call without an id: the turn's id-less call is replaced)
         st.calls.push({ key, turnId: turnId || '', item });
         return true;
       }
@@ -9656,14 +9656,16 @@
         }
       }
       if (st.done.length > 50) st.done.splice(0, st.done.length - 50);
+      // Calls only the snapshot knows started before anything this page saw live since it asked: they go first, in their order.
+      const add = [];
       activity.forEach((it, i) => {
         if (!it || it.kind !== 'tool' || it.status !== 'running') return;
         const closed = activity.slice(i + 1).some(d => d && d.kind === 'tool' && d.status === 'done' && (it.callId == null ? d.callId == null : d.callId === it.callId));
         const key = chatViewStepKey(turnId, it);
-        if (closed || (it.callId != null && st.done.includes(key)) || st.calls.some(c => c.key === key)) return;
-        st.calls.push({ key, turnId: turnId || '', item: it });
-        changed = true;
+        if (closed || (it.callId != null && st.done.includes(key)) || st.calls.some(c => c.key === key) || add.some(c => c.key === key)) return;
+        add.push({ key, turnId: turnId || '', item: it });
       });
+      if (add.length) { st.calls = add.concat(st.calls); changed = true; }
       return changed;
     }
     function chatViewStepsNewest(st) { return st && st.calls.length ? st.calls[st.calls.length - 1].item : null; }

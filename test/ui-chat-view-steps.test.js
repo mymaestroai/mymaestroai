@@ -75,7 +75,7 @@ test('snapshot: still-running calls of a fetched turn join; finished and already
   V.chatViewStepsOn(st, 't9', tool('Read', 'running', 'live'));
   const activity = [tool('Read', 'running', 'a'), tool('Read', 'done', 'a'), tool('Bash', 'running', 'b', { summary: 'npm test' }), tool('Read', 'running', 'live')];
   assert.strictEqual(V.chatViewStepsSnapshot(st, 't9', activity), true);
-  assert.deepStrictEqual(st.calls.map(c => c.item.callId), ['live', 'b']);
+  assert.deepStrictEqual(st.calls.map(c => c.item.callId), ['b', 'live']);   // review r2: snapshot-only calls go before the live ones (the live call stays the step)
   assert.strictEqual(V.chatViewStepsSnapshot(st, 't9', activity), false, 'a second merge adds nothing');
   assert.strictEqual(V.chatViewStepsSnapshot(st, 't9', 'nope'), false);
 });
@@ -103,4 +103,22 @@ test('the done list keeps at most 50 keys, the oldest go first', () => {
   const st2 = V.chatViewStepsNew();
   V.chatViewStepsSnapshot(st2, 't', Array.from({ length: 60 }, (_, i) => tool('Read', 'done', 'c' + i)));
   assert.strictEqual(st2.done.length, 50);
+});
+
+test('review r2: a late snapshot never puts an older call over one seen live since the request', () => {
+  const st = V.chatViewStepsNew();
+  V.chatViewStepsOn(st, 'A', { kind: 'tool', tool: 'Read', callId: 'r', status: 'running' });   // seen live after the request went out
+  V.chatViewStepsSnapshot(st, 'A', [{ kind: 'tool', tool: 'Bash', callId: 'b', status: 'running', summary: 'npm test' }]);
+  assert.strictEqual(V.chatViewStepsNewest(st).tool, 'Read', 'the live call stays the step');
+  V.chatViewStepsOn(st, 'A', { kind: 'tool', tool: 'Read', callId: 'r', status: 'done' });
+  assert.strictEqual(V.chatViewStepsNewest(st).tool, 'Bash', 'and the snapshot call shows once it is done');
+});
+
+test('review r2: a call without an id replaces the turn\'s earlier id-less call, so one done clears it', () => {
+  const st = V.chatViewStepsNew();
+  V.chatViewStepsOn(st, 'A', { kind: 'tool', tool: 'bash', status: 'running' });   // tool_start
+  V.chatViewStepsOn(st, 'A', { kind: 'tool', tool: 'bash', status: 'running', summary: 'ls' });   // tool_use for the same call
+  assert.strictEqual(st.calls.length, 1);
+  V.chatViewStepsOn(st, 'A', { kind: 'tool', tool: 'bash', status: 'done' });
+  assert.strictEqual(V.chatViewStepsNewest(st), null);
 });
