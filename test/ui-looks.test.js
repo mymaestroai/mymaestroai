@@ -238,3 +238,12 @@ test('pickers: app.js and mobile.js choose through HubLooks, build previews from
 test('no emoji with a variation selector in the files this feature adds', () => {
   for (const f of ['lib/ui-looks.js', 'test/ui-looks.test.js', 'looks/broadsheet.css', 'looks/quiet.css']) assert.ok(!read(f).includes(String.fromCharCode(0xFE0F)), f);
 });
+
+test('the attach button carries a class, and every light look gives it dark text (the message box makes buttons white for the accent Send)', () => {
+  assert.match(read('app.js'), /<button class="attach-btn" onclick="document\.getElementById\('file-input-/);
+  assert.doesNotMatch(read('index.html'), /\.attach-btn/, 'Engineering keeps today\'s rule set');
+  for (const id of ['broadsheet', 'quiet']) {
+    const css = read(`looks/${id}.css`);
+    assert.match(css, new RegExp(`html\\[data-look="${id}"\\]:not\\(\\.mm-simple\\) \\.input-area button\\.attach-btn \\{ color: var\\(--text\\); \\}`), id);
+  }
+});

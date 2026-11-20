@@ -468,11 +468,11 @@ html[data-look="quiet"]:not(.mm-simple) {
 
 /* Desktop: a calm reading column. Your message is a soft tinted box; replies are plain writing, no bubble. */
 html[data-look="quiet"]:not(.mm-simple) .message.user {
-  border: 1px solid #D8DFCB; border-radius: 12px; padding: 12px 18px; font-weight: 400;
+  border: 1px solid #D8DFCB; border-radius: 12px; padding: 12px 40px 12px 18px; font-weight: 400;   /* right: room for the copy button */
 }
 html[data-look="quiet"]:not(.mm-simple) .message.user::before { color: var(--accent); }
 html[data-look="quiet"]:not(.mm-simple) .message.assistant {
-  background: transparent; border: 0; border-radius: 0; padding: 4px 2px;
+  background: transparent; border: 0; border-radius: 0; padding: 4px 64px 4px 2px;   /* room on the right for the copy and read-aloud buttons */
   font-size: 1.04rem; line-height: 1.7; color: var(--text);
 }
 html[data-look="quiet"]:not(.mm-simple) .message.assistant h1,
@@ -497,6 +497,7 @@ html[data-look="quiet"]:not(.mm-simple) .input-area { border-top: 1px solid var(
 html[data-look="quiet"]:not(.mm-simple) .input-area textarea {
   background: var(--bg-card); border: 1px solid var(--border-strong); border-radius: 10px; color: var(--text);
 }
+html[data-look="quiet"]:not(.mm-simple) .input-area button.attach-btn { color: var(--text); }   /* it sits on the light input colour; a plain-glyph paperclip would be white on light */
 html[data-look="quiet"]:not(.mm-simple) .input-area textarea:focus { outline: 2px solid var(--focus-ring); outline-offset: 1px; border-color: var(--accent); }
 html[data-look="quiet"]:not(.mm-simple) .input-area textarea::placeholder { color: var(--text-tertiary); }
 html[data-look="quiet"]:not(.mm-simple) .handoff-cards .ho-card,

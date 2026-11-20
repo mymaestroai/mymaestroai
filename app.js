@@ -3239,6 +3239,7 @@
       }
       const note = document.createElement('div');
       note.className = 'st-hint';
+      note.style.margin = '8px 0 4px';   // clear of the last card
       note.appendChild(document.createTextNode('Applies to this device. Simple mode works with every look.'));
       host.appendChild(list); host.appendChild(note);
     }
@@ -10534,7 +10535,7 @@
             <textarea id="input-${chatId}" placeholder="Type your message... (Ctrl+V to paste images)" onkeydown="handleKeyDown(event, '${chatId}')" onpaste="handlePaste(event, '${chatId}')" oninput="autoGrowTextarea(this)"></textarea>
           </div>
           <input type="file" id="file-input-${chatId}" multiple style="display:none" onchange="handleFileSelect(event, '${chatId}')">
-          <button onclick="document.getElementById('file-input-${chatId}').click()" title="Attach a file: images are sent with the message, other files are uploaded to your files and their path is added to the message" style="background:var(--bg-input); border:1px solid var(--border); padding:8px 10px; font-size:1rem; cursor:pointer;">📎</button>
+          <button class="attach-btn" onclick="document.getElementById('file-input-${chatId}').click()" title="Attach a file: images are sent with the message, other files are uploaded to your files and their path is added to the message" style="background:var(--bg-input); border:1px solid var(--border); padding:8px 10px; font-size:1rem; cursor:pointer;">📎</button>
           <button type="button" onclick="voiceMicToggle('${chatId}')" id="mic-${chatId}" class="mic-btn" style="display:none" aria-pressed="false" aria-label="Dictate" title="Talk (tap to start, tap to stop)">${VOICE_MIC_SVG}</button><span class="mic-meter" id="mic-meter-${chatId}" style="display:none" aria-hidden="true"><i></i></span><span class="voice-extra" style="display:none"><button type="button" class="voice-mode-chip" id="vmode-${chatId}" onclick="voiceModeToggle()" title="Talk mode: tap to switch" style="display:none">${voiceModeLabel()}</button><button type="button" class="voice-set-btn" id="vset-${chatId}" onclick="voicePopToggle('${chatId}')" aria-label="Voice settings" aria-expanded="false" title="Voice settings">${VOICE_LEVELS_SVG}</button><div class="voice-pop" id="voice-pop-${chatId}" role="dialog" aria-label="Voice settings" hidden></div></span>
           <button onclick="toggleNotifyDone('${chatId}')" id="notify-${chatId}" class="notify-done-btn" style="display:none" aria-pressed="false" title="Get a notification on your phone when this reply is done">🔔 Notify me</button>
           <button onclick="sendSoloMessage('${chatId}')" id="send-${chatId}">Send</button>
