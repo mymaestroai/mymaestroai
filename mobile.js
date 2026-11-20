@@ -13390,7 +13390,7 @@ if (typeof document !== 'undefined' && document.getElementById) {
   const look = document.getElementById('menu-look'), pick = document.getElementById('menu-look-pick'), tg = document.getElementById('menu-adv-toggle');
   let store = null;
   try { store = window.localStorage; } catch { store = null; }
-  if (look && !window.HubLooks) look.hidden = true;
+  if (look) look.hidden = !window.HubLooks;   // shown by this script only: an older cached script has no handler for it
   if (look && pick) {
     look.addEventListener('click', (e) => {
       e.stopPropagation();

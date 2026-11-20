@@ -56,7 +56,6 @@ test('all 36 inventory items appear exactly once, plus the new ones', () => {
   for (const id of ids) assert.strictEqual(menu.split('id="' + id + '"').length - 1, 1, id);
   assert.strictEqual(menu.split('href="/?desktop=once"').length - 1, 1);
   for (const id of ['menu-look', 'menu-look-pick', 'menu-look-name', 'menu-adv-toggle', 'menu-adv']) assert.strictEqual(menu.split('id="' + id + '"').length - 1, 1, id);
-  assert.match(menu, /<button id="menu-look" aria-expanded="false" aria-controls="menu-look-pick">/);
   assert.match(menu, /<div id="menu-look-pick" hidden><\/div>/);
   // review r1: progressive: the HTML shows every Advanced item and hides the row, so an older cached mobile.js (which
   // never folds them) still reaches everything; mobile.js reveals the row and applies the saved fold state.
@@ -68,6 +67,8 @@ test('all 36 inventory items appear exactly once, plus the new ones', () => {
   assert.match(blk, /tg\.hidden = false;[^\n]*\n\s*menuAdvApply\(menuAdvRead\(store\)\);/);
   assert.match(blk, /setAttribute\('aria-label', 'Advanced, something inside needs attention'\)/);
   assert.match(menu, /class="menu-adv-end" aria-hidden="true"/);
+  assert.match(menu, /<button id="menu-look" aria-expanded="false" aria-controls="menu-look-pick" hidden>/);   // the Look row too: shown by the script
+  assert.match(blk, /if \(look\) look\.hidden = !window\.HubLooks;/);
   assert.ok(menu.includes('class="menu-adv-dot" hidden'));
 });
 
