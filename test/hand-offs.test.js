@@ -226,7 +226,8 @@ test('view: next only for a waiting hand-off (task / job / nothing / throwing de
   answer = null;
   assert.strictEqual(env.h.view(env.h.get(v.id)).next, null);
   answer = 'throw';
-  assert.strictEqual(env.h.view(env.h.get(v.id)).next, null, 'a throwing nextStepOf gives null');
+  // step-2 review: a lookup that fails leaves next out (the page then says "Working"), unlike a lookup that found nothing (null)
+  assert.ok(!Object.prototype.hasOwnProperty.call(env.h.view(env.h.get(v.id)), 'next'), 'a throwing nextStepOf leaves next out');
   assert.ok(asked.length >= 4);
 
   // the default (no dep): null
@@ -955,4 +956,21 @@ test('review r8: hand-offs being created count toward the cap (the folder helper
   env2.h.folderHelper = { plainName: () => true, run: async () => ({ ok: false, code: 'error' }) };
   await assert.rejects(mk(env2), /Couldn't make the hand-off folder/);
   assert.strictEqual(env2.h.creating.size, 0);
+});
+
+test('step-2 review: handOffNextStep (lib/sdk-chat.js): the earliest ACTIVE task wins; a paused task has no time; then a job; else null', () => {
+  const vm = require('vm');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'sdk-chat.js'), 'utf8');
+  const a = src.indexOf('function handOffNextStep(');
+  const b = src.indexOf('\n}\n', a) + 2;
+  const ctx = {}; vm.createContext(ctx);
+  vm.runInContext(src.slice(a, b) + '\nthis.f = handOffNextStep;', ctx);
+  const f = ctx.f;
+  const t = (status, at) => ({ status, nextRunAt: at });
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(f({ tasks: [t('active', '2026-11-20T12:30:00Z'), t('active', '2026-11-20T12:10:00Z')], jobs: [{}] }))), { kind: 'task', at: Date.parse('2026-11-20T12:10:00Z') });
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(f({ tasks: [t('paused', '2026-11-20T12:05:00Z'), t('active', '2026-11-20T12:20:00Z')], jobs: [] }))), { kind: 'task', at: Date.parse('2026-11-20T12:20:00Z') }, 'a paused task is not the next step');
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(f({ tasks: [t('paused', '2026-11-20T12:05:00Z')], jobs: [] }))), { kind: 'task', at: null });
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(f({ tasks: [], jobs: [{}] }))), { kind: 'job' });
+  assert.strictEqual(f({ tasks: [], jobs: [] }), null);
+  assert.match(src, /nextStepOf: \(id\) => handOffNextStep\(handOffContinuations\(id, \{ strict: true \}\)\)/);
 });
