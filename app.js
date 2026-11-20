@@ -9941,7 +9941,7 @@
         if (typeof turn.text === 'string' && turn.text.length >= (ra.partial || '').length) ra.partial = turn.text;
         if (turn.ended) {
           const ok = turn.ended.ok !== false;
-          finishReattach(chatId, ok ? (turn.text || '(no reply)') : `${turn.text ? turn.text + '\n\n' : ''}⚠ turn failed: ${turn.ended.error || 'unknown error'}`, ok);
+          finishReattach(chatId, ok ? (turn.text || '(no reply)') : withNotice(turn.text, `⚠ turn failed: ${turn.ended.error || 'unknown error'}`), ok);
           return;
         }
         paintReattach(chatId, reattachLine(chat, ra));
@@ -10054,7 +10054,7 @@
         if (hubStarted && chat && chatViewGet(localStorage) === 'main' && !chat.controller && !chat.reattach) soloHistoryRefresh(chat.id);   // a marked reply shows; nothing else moves
         if (chat?.reattach) {
           if (ev.reply) finishReattach(chat.id, ev.reply, true);
-          else if (ev.ok === false) finishReattach(chat.id, `${chat.reattach.partial ? chat.reattach.partial + '\n\n' : ''}⚠ turn failed: ${ev.error || 'unknown error'}`, false);
+          else if (ev.ok === false) finishReattach(chat.id, withNotice(chat.reattach.partial, `⚠ turn failed: ${ev.error || 'unknown error'}`), false);
           else reattachCheck(chat.id);
         }
         return;
@@ -10738,8 +10738,8 @@
       if (chat.reattach) {
         const ra = chat.reattach;
         delete chat.reattach;
-        updateMessage(ra.msgId, ra.partial ? `${ra.partial}\n\n[Stopped]` : '[Stopped]');
-        if (ra.partial) chat.messages.push({ role: 'assistant', content: `${ra.partial} [Stopped]`, partial: true });
+        updateMessage(ra.msgId, withNotice(ra.partial, '[Stopped]'));
+        if (ra.partial) chat.messages.push({ role: 'assistant', content: withNotice(ra.partial, '[Stopped]', ' '), partial: true });
         delete chat.lastMsgId;
         setAgentStatus(chat.agent, '');
       }
@@ -11110,8 +11110,9 @@
       scan.querySelectorAll('.reason-stream, .tool-stream, .inline-thinking, .msg-copy, .msg-speak, .msg-time, .live-activity, .token-usage, .file-cards').forEach((n) => n.remove());
       return scan.textContent || '';
     }
-    // A thinking block the stream left open (a model writing <think>… in its reply) is closed, so what the page adds after
-    // the partial reply ("Connection lost…", "[Stopped]") is not swallowed by the collapsed thinking box (review r1).
+    // A thinking block a partial reply left open (a model writing <think>… in its reply) is closed wherever the page adds a
+    // notice after it ("Connection lost…", "[Stopped]", "⚠ …"), so the collapsed thinking box does not swallow the notice
+    // (review r1, r2). The partial itself stays raw: the hub's catch-up compares its length.
     const THINK_TAGS = [['<think>', '</think>'], ['<thinking>', '</thinking>'], ['<reasoning>', '</reasoning>'], ['[think]', '[/think]'], ['[thinking]', '[/thinking]']];
     function closeOpenThinking(text) {
       let t = String(text || '');
@@ -11121,8 +11122,11 @@
       }
       return t;
     }
+    function withNotice(partial, notice, sep = '\n\n') {
+      return partial ? `${closeOpenThinking(partial)}${sep}${notice}` : notice;
+    }
     function partialReplyText(msgId) {
-      if (liveReplyText.has(msgId)) return closeOpenThinking(liveReplyText.get(msgId) || '');
+      if (liveReplyText.has(msgId)) return liveReplyText.get(msgId) || '';
       return messageOwnText(document.getElementById(msgId));
     }
     // ── live reply text (end) ──
@@ -11147,7 +11151,7 @@
     function paintReattach(chatId, line) {
       const ra = chats[chatId]?.reattach;
       if (!ra) return;
-      if (!ra.items || !ra.items.size) { updateMessage(ra.msgId, ra.partial ? `${ra.partial}\n\n${line}` : line); restoreLiveBars(ra.msgId); return; }
+      if (!ra.items || !ra.items.size) { updateMessage(ra.msgId, withNotice(ra.partial, line)); restoreLiveBars(ra.msgId); return; }
       const steps = turnSteps(ra, ra.partial || '');
       steps.push({ text: line, tools: [] });   // what the turn is doing now, below what it has done
       renderSteps(ra.msgId, steps, turnToolActivity(ra), [], true);
@@ -11307,14 +11311,14 @@
             // The hub never got the message: hand it back, never resend on our own.
             const input = document.getElementById(`input-${chatId}`);
             if (input && !input.value) input.value = ra.content;
-            finishReattach(chatId, `${ra.partial ? ra.partial + '\n\n' : ''}⚠ The hub has no record of this message, so it is back in the input box. If you are not sure it was lost, reload the chat before sending it again.`, false);
+            finishReattach(chatId, withNotice(ra.partial, `⚠ The hub has no record of this message, so it is back in the input box. If you are not sure it was lost, reload the chat before sending it again.`), false);
           } else {
-            finishReattach(chatId, `${ra.partial ? ra.partial + '\n\n' : ''}⚠ ${chat.display || chat.agent} stopped without a reply (the hub may have restarted).`, false);
+            finishReattach(chatId, withNotice(ra.partial, `⚠ ${chat.display || chat.agent} stopped without a reply (the hub may have restarted).`), false);
           }
           return;
         }
         if (stillBusy === null && waited > REATTACH_GIVE_UP_MS) {
-          finishReattach(chatId, `${ra.partial ? ra.partial + '\n\n' : ''}⚠ No reply arrived in 30 minutes and this hub cannot say whether ${chat.agent} is still working. Check the history or resend.`, false);
+          finishReattach(chatId, withNotice(ra.partial, `⚠ No reply arrived in 30 minutes and this hub cannot say whether ${chat.agent} is still working. Check the history or resend.`), false);
           return;
         }
         paintReattach(chatId, stillBusy === false
@@ -11584,7 +11588,7 @@
               chat.messages[existingIdx].content = existing;
             } else {
               const tag = wasPaused ? ' [Paused]' : ' [Cancelled]';
-              chat.messages.push({ role: 'assistant', content: existing + tag, partial: true });
+              chat.messages.push({ role: 'assistant', content: closeOpenThinking(existing) + tag, partial: true });
             }
           }
           if (!wasPaused) {
@@ -11614,7 +11618,7 @@
           // A real error from the hub (4xx, bad request, ...)
           if (partialText) {
             chat.messages.push({ role: 'assistant', content: partialText, partial: true });
-            updateMessage(msgId, `${partialText}\n\n❌ Stream interrupted: ${err.message}`);
+            updateMessage(msgId, withNotice(partialText, `❌ Stream interrupted: ${err.message}`));
           } else {
             updateMessage(msgId, `❌ Error: ${err.message}`);
           }

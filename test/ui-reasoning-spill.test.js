@@ -46,7 +46,7 @@ function load(dom) {
   const a = app.indexOf(BEGIN), b = app.indexOf(END);
   assert.ok(a > 0 && b > a, 'helper markers present');
   const ctx = vm.createContext({ Map, document: { getElementById: (id) => dom[id] || null } });
-  vm.runInContext(`${app.slice(a, b)}; this.liveReplyText = liveReplyText; this.noteLiveReply = noteLiveReply; this.dropLiveReply = dropLiveReply; this.closeOpenThinking = closeOpenThinking;`, ctx);
+  vm.runInContext(`${app.slice(a, b)}; this.liveReplyText = liveReplyText; this.noteLiveReply = noteLiveReply; this.dropLiveReply = dropLiveReply; this.closeOpenThinking = closeOpenThinking; this.withNotice = withNotice;`, ctx);
   return ctx;
 }
 
@@ -108,20 +108,23 @@ function sliceFn(src, name) {
   return src.slice(a, i + 1);
 }
 
-test('a thinking block the stream left open is closed, so the reconnect and stop notices stay visible (review r1)', () => {
+test('a notice joined to a partial reply with an open thinking block stays visible; the partial itself stays raw (review r1, r2)', () => {
   const C = load({});
   vm.runInContext(`${sliceFn(app, 'parseThinking')}; this.parseThinking = parseThinking;`, C);
   C.noteLiveReply('m1', 'Answer start.\n<think>checking the edge');
-  const partial = C.partialReplyText('m1');
-  assert.strictEqual(partial, 'Answer start.\n<think>checking the edge</think>');
-  for (const notice of ['⟳ Connection lost; reconnecting to the turn…', '[Stopped]']) {
-    const r = C.parseThinking(`${partial}\n\n${notice}`);
+  assert.strictEqual(C.partialReplyText('m1'), 'Answer start.\n<think>checking the edge', 'raw: the hub catch-up compares its length');
+  // the drop, then the hub's catch-up snapshot (raw, still open), then the notices the page joins to it
+  const snapshot = 'Answer start.\n<think>checking further';
+  for (const notice of ['⟳ Connection lost; reconnecting to the turn…', '[Stopped]', '⚠ turn failed: boom', '❌ Stream interrupted: network']) {
+    const r = C.parseThinking(C.withNotice(snapshot, notice));
     assert.strictEqual(r.stillThinking, false, 'the thinking box is closed (collapsible), not still running');
-    assert.match(r.thinking, /checking the edge/);
-    assert.ok(r.response.includes(notice), 'the notice is outside the thinking box');
+    assert.ok(r.response.includes(notice), `${notice} is outside the thinking box`);
     assert.ok(r.response.includes('Answer start.'));
     assert.ok(!r.thinking.includes(notice));
+    assert.match(r.thinking, /checking further/);
   }
+  assert.strictEqual(C.withNotice('', 'line'), 'line');
+  assert.strictEqual(C.withNotice('plain', '[Stopped]', ' '), 'plain [Stopped]');
   // every tag form parseThinking knows; closed blocks and text without tags are left alone
   for (const [o, c] of [['<thinking>', '</thinking>'], ['<reasoning>', '</reasoning>'], ['[think]', '[/think]'], ['[thinking]', '[/thinking]']]) {
     assert.strictEqual(C.closeOpenThinking(`x ${o}y`), `x ${o}y${c}`);
@@ -129,4 +132,14 @@ test('a thinking block the stream left open is closed, so the reconnect and stop
   assert.strictEqual(C.closeOpenThinking('a <think>b</think> c'), 'a <think>b</think> c');
   assert.strictEqual(C.closeOpenThinking('plain text'), 'plain text');
   assert.strictEqual(C.closeOpenThinking('<thinking>done</thinking> then <think>open'), '<thinking>done</thinking> then <think>open</think>');
+});
+
+test('every notice joined to a partial reply goes through withNotice (no other join is left)', () => {
+  assert.doesNotMatch(app, /ra\.partial \? ra\.partial \+ '\\n\\n'/);
+  assert.doesNotMatch(app, /\$\{ra\.partial\}\\n\\n/);
+  assert.doesNotMatch(app, /chat\.reattach\.partial \? chat\.reattach\.partial \+/);
+  assert.doesNotMatch(app, /turn\.text \? turn\.text \+ '\\n\\n'/);
+  assert.doesNotMatch(app, /\$\{partialText\}\\n\\n/);
+  assert.ok((app.match(/withNotice\(/g) || []).length >= 10, 'the helper and its call sites');
+  assert.match(app, /content: closeOpenThinking\(existing\) \+ tag, partial: true/);
 });
