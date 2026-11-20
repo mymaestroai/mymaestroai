@@ -197,13 +197,13 @@ function turnHarness({ view = 'main', fold = true, forOwnerPending = {} } = {}) 
   const f = new Function('activeTurnStart', 'openTurns', 'hubTurns', 'setLive', 'noteTurnOrigin', 'ownTurnFor', 'chatOpenFor', 'streams', 'chatHistory', 'samePrompt', 'foldAutoOn',
     'autoKindOfOrigin', 'autoInfoOf', 'reattaches', 'promptRecent', 'cardIsLast', 'makeFoldHeader', 'chatEl', 'timeLabel', 'addNote', 'addUserBubble', 'setBubbleTime', 'msgTimeLabel',
     'addAssistantBubble', 'withRenderTarget', 'originLabel', 'forOwnerPending', 'moveReplyOut', 'catchUpOpenAgent', 'scrollChat', 'paintStatus', 'viewNow', 'chatViewIsHubOrigin',
-    'autoCardKind', 'reasoningEnd', 'paintChatStatus', 'busyCardEl', 'turnStep',
+    'autoCardKind', 'reasoningEnd', 'paintChatStatus', 'busyCardEl',
     `let lastHistoryCard = null; ${unhide}; ${src}; return { onTurnStart, unhideHubTurn };`)(
     () => {}, {}, hubTurns, () => {}, () => {}, () => false, () => true, new Map(), [], () => false, () => fold,
     () => 'consultation', () => ({ kind: 'consultation', label: 'Consultation from Forge', firstLine: 'hi' }), new Map(), () => true, () => false,
     () => mkCard(), () => box, () => 't', () => mkEl(box), () => mkEl(box), () => {}, () => 't', () => { const el = mkEl(box); return { el, body: mkEl() }; },
     (el, fn) => fn(), () => 'x', forOwnerPending, (t) => { moved.push(t); f2.unhideHubTurn(t); }, () => {}, () => {}, () => {}, () => view, V.chatViewIsHubOrigin,
-    () => 'consultation', () => {}, () => {}, null, {});
+    () => 'consultation', () => {}, () => {}, null);
   const f2 = f;
   return { f, box, hubTurns, moved };
 }
@@ -259,10 +259,10 @@ function busyHarness({ view = 'main', screen = 'chat', live = {}, turnOrigins = 
   let observers = 0, observerCb = null;
   class MO { constructor(cb) { observerCb = cb; observers++; } observe() {} disconnect() { observers--; } }
   const S = { view, screen, current: 'forge', live, turnOrigins, own };
-  const mod = new Function('S', 'viewNow', 'ownTurnFor', 'live', 'turnOrigins', 'openTurns', 'chatViewBusyText', 'chatViewElapsed', 'displayName', 'chatEl', 'scrollChat', 'document', 'setInterval', 'clearInterval', 'MutationObserver', 'Date', 'chatViewWaiting', 'chatViewStep',
+  const mod = new Function('S', 'viewNow', 'ownTurnFor', 'live', 'turnOrigins', 'openTurns', 'chatViewBusyText', 'chatViewElapsed', 'displayName', 'chatEl', 'scrollChat', 'document', 'setInterval', 'clearInterval', 'MutationObserver', 'Date', 'chatViewWaiting', 'chatViewStep', 'turnSteps', 'chatViewStepsNewest',
     `let screen = S.screen, current = S.current; ${src}; return { busyCardInfo, paintBusyCard, set: (k, v) => { if (k === 'screen') screen = v; if (k === 'current') current = v; } };`)(
     S, () => S.view, () => S.own, live, turnOrigins, openTurns, V.chatViewBusyText, V.chatViewElapsed, (n) => n.charAt(0).toUpperCase() + n.slice(1), () => box, () => {}, { createElement: () => mkEl() },
-    (fn, ms) => { timers.push({ fn, ms }); return timers.length; }, (id) => cleared.push(id), MO, { now: () => now, parse: Date.parse }, V.chatViewWaiting, V.chatViewStep);   // no helper / step in these states: the busy card's text is the words only
+    (fn, ms) => { timers.push({ fn, ms }); return timers.length; }, (id) => cleared.push(id), MO, { now: () => now, parse: Date.parse }, V.chatViewWaiting, V.chatViewStep, {}, V.chatViewStepsNewest);   // no helper / step in these states: the busy card's text is the words only
   return { mod, box, timers, cleared, S, observers: () => observers, fireObserver: () => observerCb && observerCb() };
 }
 const cards = (box) => box.children.filter(c => c.className === 'chat-busy-card');
@@ -343,7 +343,7 @@ function turnEndHarness({ turnOrigins = {}, hubTurns = {}, streams = new Map(), 
   const calls = { reread: [], render: 0, bubbles: 0 };
   const hist = { cur: [{ ts: 1, role: 'user', content: 'hi' }] };   // what the re-read puts into chatHistory
   const scroll = { scrollHeight: 1000, scrollTop: 100, clientHeight: 300 };
-  const names = ['rrImpl', 'activeTurnEnd', 'openTurns', 'setLive', 'wkSettleAgent', 'notifyArmed', 'refreshCtx', 'pollStatusSoon', 'hubTurns', 'turnOrigins', 'chatViewIsHubOrigin', 'streams', 'recentOwn', 'reattaches', 'reasoningEnd', 'chatOpenFor', 'setReplyText', 'feedEnd', 'promptCardLine', 'autoFirstLine', 'setBubbleTime', 'msgTimeLine', 'scrollChat', 'finishReattach', 'reattachCheck', 'viewNow', 'forOwnerPending', 'addAssistantBubble', 'msgTimeLabel', 'markUnread', 'activity', 'ACTIVITY_MAX', 'saveJson', 'renderActivity', 'paintStatus', 'updateDots', 'renderHistory', 'setTimeout', '$', 'hist', 'repaintNotifyAgentSheet', 'turnStep'];
+  const names = ['rrImpl', 'activeTurnEnd', 'openTurns', 'setLive', 'wkSettleAgent', 'notifyArmed', 'refreshCtx', 'pollStatusSoon', 'hubTurns', 'turnOrigins', 'chatViewIsHubOrigin', 'streams', 'recentOwn', 'reattaches', 'reasoningEnd', 'chatOpenFor', 'setReplyText', 'feedEnd', 'promptCardLine', 'autoFirstLine', 'setBubbleTime', 'msgTimeLine', 'scrollChat', 'finishReattach', 'reattachCheck', 'viewNow', 'forOwnerPending', 'addAssistantBubble', 'msgTimeLabel', 'markUnread', 'activity', 'ACTIVITY_MAX', 'saveJson', 'renderActivity', 'paintStatus', 'updateDots', 'renderHistory', 'setTimeout', '$', 'hist', 'repaintNotifyAgentSheet', 'turnSteps', 'chatViewStepsEndTurn', 'repaintAgentStatus'];
   const impl = {
     activeTurnEnd: () => true, openTurns: {}, setLive() {}, wkSettleAgent() {}, notifyArmed: {}, refreshCtx() {}, pollStatusSoon() {}, hubTurns, turnOrigins,
     chatViewIsHubOrigin: V.chatViewIsHubOrigin, streams, recentOwn: new Map(), reattaches, reasoningEnd() {}, chatOpenFor: () => open, setReplyText() {}, feedEnd() {},
@@ -353,7 +353,7 @@ function turnEndHarness({ turnOrigins = {}, hubTurns = {}, streams = new Map(), 
     rrImpl: async (a) => { calls.reread.push(a); if (reread && changes) hist.cur = hist.cur.concat([{ ts: 2, role: 'assistant', content: 'owner reply' }]); return reread; },
     renderHistory: () => { calls.render++; scroll.scrollHeight = 1500; },
     $: (id) => (id === 'chat-scroll' ? scroll : null), hist,
-    turnStep: {},
+    turnSteps: {}, chatViewStepsEndTurn: V.chatViewStepsEndTurn, repaintAgentStatus() {},
     repaintNotifyAgentSheet() {},   // onTurnEnd repaints an open notification sheet (the "Notify me" item ends with the reply)
   };
   // rereadHistory, like the real one, bumps histGen when it replaced the history and says so

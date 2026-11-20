@@ -41,7 +41,7 @@ function world(o = {}) {
     isBusy(n) { return ctx.streams.has(n) || !!(ctx.live[n] && (ctx.live[n].busy || ctx.live[n].pendingQuestion)); },
     ownTurnFor(n) { return ctx.streams.has(n); },
     busyText(n) { const s = ctx.live[n] || {}; return s.pendingQuestion ? '❓ waiting for your answer · 2m' : `⏳ ${s.activity || 'working'} · 2m`; },
-    turnOrigins: {}, openTurns: {}, turnStep: {}, chatViewWaiting: require('../lib/ui-chat-view').chatViewWaiting, chatViewStep: require('../lib/ui-chat-view').chatViewStep, chatViewBusyText: require('../lib/ui-chat-view').chatViewBusyText, turnOriginFetch() {},
+    turnOrigins: {}, openTurns: {}, turnSteps: {}, chatViewStepsNewest: require('../lib/ui-chat-view').chatViewStepsNewest, chatViewWaiting: require('../lib/ui-chat-view').chatViewWaiting, chatViewStep: require('../lib/ui-chat-view').chatViewStep, chatViewBusyText: require('../lib/ui-chat-view').chatViewBusyText, turnOriginFetch() {},
     elapsed: (since) => (since ? '2m' : ''),
     chatViewElapsed(since, t) { return `${Math.floor((t - since) / 60000)} min`; },
     toast(text, ms) { toasts.push({ text, ms }); },
@@ -50,7 +50,7 @@ function world(o = {}) {
   };
   vm.createContext(ctx);
   vm.runInContext(cut('function currentTurnOrigin(agent) {', '// A page opened mid-turn got no turn_start'), ctx);
-  vm.runInContext(cut('function chatBusyDetail(name) {', '// The running tool call of a fetched'), ctx);
+  vm.runInContext(cut('function chatBusyDetail(name) {', '// A turn_activity event'), ctx);
   vm.runInContext(cut('function chatStatusFull(name) {', '// ── "Notify me when done"'), ctx);
   return ctx;
 }

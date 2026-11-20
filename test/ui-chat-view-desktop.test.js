@@ -204,11 +204,11 @@ function busyPage({ view = null, status = {}, run = {} } = {}) {
   const panel = el('messages');
   const timers = []; let now = 1000000;
   const agentStatus = status; const busyRun = run; const localBusy = new Map();
-  const mk = () => new Function('document', 'agentStatus', 'busyRun', 'localBusy', 'localStorage', 'chatViewGet', 'chatViewBusyText', 'chatViewElapsed', 'autoScroll', 'setInterval', 'clearInterval', 'Date', 'chats', 'agentDisplayName', 'busyOriginFetch', 'headerBusyPaint', 'chatViewWaiting', 'chatViewStep',
-    `let busyCardTimer = null; const turnStep = {};\n${extract('agentDoingNow')}\n${extract('busyCardState')}\n${extract('busyCardRefresh')}\n${extract('busyCardRefreshAll')}\n${extract('busyCardKeepLast')}\nreturn { busyCardState, busyCardRefresh, busyCardRefreshAll, busyCardKeepLast, timer: () => busyCardTimer };`);
+  const mk = () => new Function('document', 'agentStatus', 'busyRun', 'localBusy', 'localStorage', 'chatViewGet', 'chatViewBusyText', 'chatViewElapsed', 'autoScroll', 'setInterval', 'clearInterval', 'Date', 'chats', 'agentDisplayName', 'busyOriginFetch', 'headerBusyPaint', 'chatViewWaiting', 'chatViewStep', 'chatViewStepsNewest',
+    `let busyCardTimer = null; const agentSteps = {};\n${extract('agentDoingNow')}\n${extract('busyCardState')}\n${extract('busyCardRefresh')}\n${extract('busyCardRefreshAll')}\n${extract('busyCardKeepLast')}\nreturn { busyCardState, busyCardRefresh, busyCardRefreshAll, busyCardKeepLast, timer: () => busyCardTimer };`);
   const chat = { id: 'c1', agent: 'forge' };
   const FakeDate = { now: () => now, parse: Date.parse };
-  const api = mk()({ getElementById: () => panel, createElement: () => el() }, agentStatus, busyRun, localBusy, storage(view), V.chatViewGet, V.chatViewBusyText, V.chatViewElapsed, () => {}, (f, ms) => { timers.push(ms); return timers.length; }, () => {}, FakeDate, { c1: chat }, (n) => n.charAt(0).toUpperCase() + n.slice(1), () => {}, () => false, V.chatViewWaiting, V.chatViewStep);
+  const api = mk()({ getElementById: () => panel, createElement: () => el() }, agentStatus, busyRun, localBusy, storage(view), V.chatViewGet, V.chatViewBusyText, V.chatViewElapsed, () => {}, (f, ms) => { timers.push(ms); return timers.length; }, () => {}, FakeDate, { c1: chat }, (n) => n.charAt(0).toUpperCase() + n.slice(1), () => {}, () => false, V.chatViewWaiting, V.chatViewStep, V.chatViewStepsNewest);
   return { ...api, panel, chat, timers, advance: (ms) => { now += ms; }, status, run, localBusy, nowMs: () => now };
 }
 const busyCards = (p) => p.panel.children.filter(c => c.className === 'chat-busy-card');
@@ -469,7 +469,7 @@ function turnEndPage({ view = null, run = null, followed = false, chat = {}, ori
   const chats = { c1: Object.assign({ id: 'c1', agent: 'forge' }, chat) };
   const busyRun = run ? { forge: run } : {};
   const hubTurns = followed ? { t1: { chatId: 'c-none' } } : {};
-  const body = `const turnStep = {};\n${extract('onHubTurnEnd')}\nreturn onHubTurnEnd;`;
+  const body = `const agentSteps = {}, chatViewStepsEndTurn = () => false, turnStepRepaintNow = () => {};\n${extract('onHubTurnEnd')}\nreturn onHubTurnEnd;`;
   const fn = new Function('activeTurnEnd', 'openTurns', 'setAgentLive', 'notifyArmed', 'paintNotifyBtns', 'findSoloChat', 'setTimeout', 'compactionRefresh', 'busyRun', 'busyCardRefresh', 'scheduleWorkerStatusPoll', 'hubTurns', 'chatViewIsHubOrigin', 'chatViewGet', 'localStorage', 'soloHistoryRefresh', 'finishReattach', 'reattachCheck', 'chats', body)(
     () => true, {}, () => {}, {}, () => {}, () => chats.c1, () => {}, () => {}, busyRun, () => {}, () => {}, hubTurns, V.chatViewIsHubOrigin, V.chatViewGet, storage(view), (id) => { loads.push(id); return Promise.resolve(); }, () => {}, () => {}, chats);
   return { end: (ev) => fn(Object.assign({ turnId: 't1', agent: 'forge', ok: true, reply: 'r', origin }, ev)), loads, chats };

@@ -11,7 +11,10 @@ const js = fs.readFileSync(path.join(__dirname, '..', 'mobile.js'), 'utf8');
 const cut = (from, to) => { const a = js.indexOf(from); assert.ok(a >= 0, from); const b = js.indexOf(to, a + from.length); assert.ok(b > a, to); return js.slice(a, b); };
 const displayName = (n) => ({ cnc: 'CNC', casework: 'Casework', sam: 'Sam' }[n] || n);
 
-function harness({ live = {}, turnOrigins = {}, openTurns = {}, reply, elapsed, streamNames = [] } = {}) {
+const STEP_NAMES = ['turnSteps', 'chatViewStepsNew', 'chatViewStepsOn', 'chatViewStepsEndTurn', 'chatViewStepsSnapshot', 'chatViewStepsNewest'];
+const stepArgs = (turnSteps) => [turnSteps, V.chatViewStepsNew, V.chatViewStepsOn, V.chatViewStepsEndTurn, V.chatViewStepsSnapshot, V.chatViewStepsNewest];
+
+function harness({ live = {}, turnOrigins = {}, openTurns = {}, turnSteps = {}, reply, elapsed, streamNames = [] } = {}) {
   const calls = [];
   const painted = [];
   const src = cut('function currentTurnOrigin(agent)', 'let busyCardEl = null');
@@ -21,11 +24,11 @@ function harness({ live = {}, turnOrigins = {}, openTurns = {}, reply, elapsed, 
   const noteSrc = cut('function noteTurnOrigin(agent', '// What the busy card says');
   const elapsedFn = elapsed || ((since) => (since ? '4m' : ''));
   const streams = new Set(streamNames);
-  const mod = new Function('S', 'live', 'turnOrigins', 'openTurns', 'chatViewBusyText', 'chatViewIsHubOrigin', 'chatViewElapsed', 'chatViewWaiting', 'chatViewStep', 'displayName', 'api', 'AbortSignal', 'paintChatStatus', 'paintBusyCard', 'viewNow', 'ownTurnFor', 'elapsed', 'streams', 'screen', 'renderAgents',
-    `const current = S.current; ${noteSrc}; ${src}; ${busySrc}; return { chatBusyWords, chatBusyDetail, turnOriginFetch, busyText, noteTurnOrigin, noteTurnStep, turnStep };`)(
+  const mod = new Function('S', 'live', 'turnOrigins', 'openTurns', 'chatViewBusyText', 'chatViewIsHubOrigin', 'chatViewElapsed', 'chatViewWaiting', 'chatViewStep', 'displayName', 'api', 'AbortSignal', 'paintChatStatus', 'paintBusyCard', 'viewNow', 'ownTurnFor', 'elapsed', 'streams', 'screen', 'renderAgents', ...STEP_NAMES,
+    `const current = S.current; ${noteSrc}; ${src}; ${busySrc}; return { chatBusyWords, chatBusyDetail, turnOriginFetch, busyText, noteTurnOrigin, noteTurnStep };`)(
     S, live, turnOrigins, openTurns, V.chatViewBusyText, V.chatViewIsHubOrigin, V.chatViewElapsed, V.chatViewWaiting, V.chatViewStep, displayName, api, { timeout: (ms) => ({ ms }) },
-    () => painted.push('status'), () => painted.push('card'), () => 'main', () => false, elapsedFn, streams, 'chat', () => painted.push('list'));
-  return { mod, calls, painted };
+    () => painted.push('status'), () => painted.push('card'), () => 'main', () => false, elapsedFn, streams, 'chat', () => painted.push('list'), ...stepArgs(turnSteps));
+  return { mod, calls, painted, turnSteps, live, turnOrigins, openTurns };
 }
 const tick = () => new Promise(r => setImmediate(r));
 const handOffTurn = { ok: true, json: async () => ({ ok: true, agent: 'casework', active: true, turn: { turnId: 'T1', origin: { kind: 'hand_off', from: 'cnc', label: 'Hand-off from cnc: x' }, startedAt: '2026-11-20T10:00:00Z' } }) };
@@ -113,11 +116,11 @@ function headerHarness({ live, turnOrigins = {}, openTurns = {}, now = Date.now(
   const fullSrc = cut('function chatStatusFull(name)', 'function showChatStatus');
   const paintSrc = cut('function paintChatStatus()', '// ── "Notify me when done"');
   const S = { current: 'casework' };
-  const mod = new Function('S', 'live', 'turnOrigins', 'openTurns', 'chatViewBusyText', 'chatViewIsHubOrigin', 'chatViewElapsed', 'chatViewWaiting', 'chatViewStep', 'displayName', 'api', 'AbortSignal', 'paintBusyCard', 'viewNow', 'ownTurnFor', 'streams', 'screen', 'renderAgents', '$', 'agentByName', 'modelText', 'isBusy', 'paintNotifyBtn', 'setSendMode',
-    `const current = S.current; ${elapsedSrc}; ${noteSrc}; ${src}; ${busySrc}; ${fullSrc}; ${paintSrc}; return { paintChatStatus, chatStatusFull, noteTurnStep, turnOriginFetch, turnStep, chatBusyDetail };`)(
+  const mod = new Function('S', 'live', 'turnOrigins', 'openTurns', 'chatViewBusyText', 'chatViewIsHubOrigin', 'chatViewElapsed', 'chatViewWaiting', 'chatViewStep', 'displayName', 'api', 'AbortSignal', 'paintBusyCard', 'viewNow', 'ownTurnFor', 'streams', 'screen', 'renderAgents', '$', 'agentByName', 'modelText', 'isBusy', 'paintNotifyBtn', 'setSendMode', ...STEP_NAMES,
+    `const current = S.current; ${elapsedSrc}; ${noteSrc}; ${src}; ${busySrc}; ${fullSrc}; ${paintSrc}; return { paintChatStatus, chatStatusFull, noteTurnStep, turnOriginFetch, chatBusyDetail };`)(
     S, live, turnOrigins, openTurns, V.chatViewBusyText, V.chatViewIsHubOrigin, V.chatViewElapsed, V.chatViewWaiting, V.chatViewStep, displayName, async () => ({ ok: false }), { timeout: () => ({}) },
     () => {}, () => 'main', () => false, new Set(), 'chat', () => {},
-    (id) => (id === 'chat-busy' ? el : id === 'chat-model' ? { textContent: '' } : stub), () => ({}), () => 'model', (n) => !!(live[n] && live[n].busy), () => {}, () => {});
+    (id) => (id === 'chat-busy' ? el : id === 'chat-model' ? { textContent: '' } : stub), () => ({}), () => 'model', (n) => !!(live[n] && live[n].busy), () => {}, () => {}, ...stepArgs(base.turnSteps));
   return { mod, el, base };
 }
 const minsAgo = (m) => new Date(Date.now() - m * 60000).toISOString();
@@ -142,18 +145,18 @@ test('(a) the header names what the turn waits on: a helper started with spawn_w
 test('(b) with no helpers the header shows the running tool step; a done item with the same callId clears it', () => {
   const live = { casework: { busy: true, busySince: minsAgo(9), activity: 'hand-off' } };
   const h = headerHarness({ live, turnOrigins: { casework: handOffOrigin }, openTurns: { casework: ['T1'] } });
-  h.mod.noteTurnStep('casework', { kind: 'tool', tool: 'mcp__hub__Bash', summary: 'npm test', status: 'running', callId: 'c1' });
+  h.mod.noteTurnStep('casework', 'T1', { kind: 'tool', tool: 'mcp__hub__Bash', summary: 'npm test', status: 'running', callId: 'c1' });
   h.mod.paintChatStatus();
   assert.match(h.el.textContent, /· running a command: npm test$/);
-  h.mod.noteTurnStep('casework', { kind: 'tool', tool: 'mcp__hub__Bash', status: 'done', callId: 'c0' });   // another call's end: kept
-  assert.strictEqual(h.mod.turnStep.casework.callId, 'c1');
-  h.mod.noteTurnStep('casework', { kind: 'tool', tool: 'mcp__hub__Bash', status: 'done', callId: 'c1' });
-  assert.strictEqual(h.mod.turnStep.casework, undefined);
+  h.mod.noteTurnStep('casework', 'T1', { kind: 'tool', tool: 'mcp__hub__Bash', status: 'done', callId: 'c0' });   // another call's end: kept
+  assert.strictEqual(V.chatViewStepsNewest(h.base.turnSteps.casework).callId, 'c1');
+  h.mod.noteTurnStep('casework', 'T1', { kind: 'tool', tool: 'mcp__hub__Bash', status: 'done', callId: 'c1' });
+  assert.strictEqual(V.chatViewStepsNewest(h.base.turnSteps.casework), null);
   h.mod.paintChatStatus();
   assert.strictEqual(h.el.textContent, '⏳ Working on a hand-off from CNC · 9m');
   // helpers win over the step
   live.wk = { busy: true, busySince: minsAgo(2), worker: true, parent: 'casework', label: 'RULES coder' };
-  h.mod.noteTurnStep('casework', { kind: 'tool', tool: 'spawn_workers', status: 'running', callId: 'c2' });
+  h.mod.noteTurnStep('casework', 'T1', { kind: 'tool', tool: 'spawn_workers', status: 'running', callId: 'c2' });
   assert.match(h.mod.chatBusyDetail('casework'), /^waiting on 1 helper/);
 });
 
@@ -177,7 +180,7 @@ test('(d2) a worker row keeps its old text even when it has a parent', () => {
   assert.strictEqual(h.base.mod.busyText('wk'), '⏳ working · 4m');   // the base harness's elapsed stub says 4m
 });
 
-test('(e) turnOriginFetch sets turnStep from the fetched activity: the last running tool without a later done', async () => {
+test('(e) turnOriginFetch merges the fetched activity into the steps: the running tool without a later done', async () => {
   const activity = [
     { kind: 'tool', tool: 'mcp__hub__Read', status: 'running', callId: 'r1' },
     { kind: 'tool', tool: 'mcp__hub__Read', status: 'done', callId: 'r1' },
@@ -186,19 +189,19 @@ test('(e) turnOriginFetch sets turnStep from the fetched activity: the last runn
   const reply = () => ({ ok: true, json: async () => ({ ok: true, active: true, turn: { turnId: 'T1', origin: { kind: 'hand_off', from: 'cnc' }, startedAt: '2026-11-20T10:00:00Z', activity } }) });
   const h = harness({ live: { casework: { busy: true, busySince: 'a', activity: 'hand-off' } }, reply });
   await h.mod.turnOriginFetch('casework');
-  assert.strictEqual(h.mod.turnStep.casework.callId, 'b1');
+  assert.strictEqual(V.chatViewStepsNewest(h.turnSteps.casework).callId, 'b1');
   assert.strictEqual(h.mod.chatBusyDetail('casework'), 'running a command: npm test');
   // a closed last call leaves nothing
   const closed = harness({ live: { casework: { busy: true, busySince: 'b', activity: 'hand-off' } }, reply: () => ({ ok: true, json: async () => ({ ok: true, active: true, turn: { turnId: 'T2', origin: { kind: 'hand_off', from: 'cnc' }, activity: activity.slice(0, 2) } }) }) });
   await closed.mod.turnOriginFetch('casework');
-  assert.strictEqual(closed.mod.turnStep.casework, undefined);
+  assert.strictEqual(V.chatViewStepsNewest(closed.turnSteps.casework), null);
 });
 
-test('wiring: a second turn_activity handler, step cleared at turn start/end, helper changes repaint the parent, 15 s tick', () => {
-  assert.match(js, /on\('turn_activity', \(ev\) => \{ if \(ev && ev\.agent\) noteTurnStep\(ev\.agent, ev\.item\); \}\)/);
-  assert.match(cut('function onTurnStart(ev)', 'if (ev.turnId && hubTurns'), /delete turnStep\[ev\.agent\]/);
-  assert.match(cut('function onTurnEnd(ev)', 'if (!activeTurnEnd'), /delete turnStep\[ev\.agent\]/);
-  assert.match(cut('function setLive(name, patch)', 'if (!next.busy && typeof voiceCallHubIdle'), /repaintAgentStatus\(waiter\)/);
+test('wiring: a second turn_activity handler, only the ended turn\'s steps go at turn_end, none at turn_start, helper changes repaint the waiters, 15 s tick', () => {
+  assert.match(js, /on\('turn_activity', \(ev\) => \{ if \(ev && ev\.agent\) noteTurnStep\(ev\.agent, ev\.turnId, ev\.item\); \}\)/);
+  assert.doesNotMatch(cut('function onTurnStart(ev)', 'if (ev.turnId && hubTurns'), /turnSteps/);
+  assert.match(cut('function onTurnEnd(ev)', 'const reply ='), /chatViewStepsEndTurn\(turnSteps\[ev\.agent\], ev\.turnId\)/);   // after the context refresh (ui-compaction pins that within 400 characters)
+  assert.match(cut('function setLive(name, patch)', 'if (!next.busy && typeof voiceCallHubIdle'), /repaintAgentStatus\(w\)/);
   assert.match(js, /const STATUS_TICK_MS = 15000/);
   assert.match(cut('function paintBusyCard()', 'A hub-started turn kept out'), /chatBusyDetail\(current\)/);
 });
@@ -231,4 +234,132 @@ test('the header paints the words and asks for the origin; the tap text uses the
   const f = cut('function chatStatusFull(name)', 'function showChatStatus');
   assert.match(f, /chatBusyWords\(name\)/);
   assert.doesNotMatch(f, /busyCardInfo/);
+});
+
+// ── steps per call and per turn ──
+const tool = (tl, status, callId, summary) => ({ kind: 'tool', tool: tl, status, callId, summary });
+const BASH = (status, callId = 'b1') => tool('mcp__hub__Bash', status, callId, 'sleep 60');
+const READ = (status, callId = 'r1') => tool('mcp__hub__Read', status, callId);
+const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
+const turnReply = (turn) => ({ ok: true, json: async () => ({ ok: true, active: true, turn }) });
+
+test('parallel calls: a long Bash then a Read; the Read finishing brings the Bash step back', () => {
+  const h = harness({ live: { casework: { busy: true, busySince: 'a', activity: 'working' } } });
+  h.mod.noteTurnStep('casework', 'T1', BASH('running'));
+  h.mod.noteTurnStep('casework', 'T1', READ('running'));
+  assert.strictEqual(h.mod.chatBusyDetail('casework'), 'reading a file');
+  h.mod.noteTurnStep('casework', 'T1', READ('done'));
+  assert.strictEqual(h.mod.chatBusyDetail('casework'), 'running a command: sleep 60');
+  h.mod.noteTurnStep('casework', 'T1', BASH('done'));
+  assert.strictEqual(h.mod.chatBusyDetail('casework'), '');
+});
+
+test('overlapping turns: one turn ending leaves the other turn\'s step; turn_start keeps steps', () => {
+  const h = harness({ live: { casework: { busy: true, busySince: 'a', activity: 'working' } } });
+  h.mod.noteTurnStep('casework', 'A', BASH('running', 'x'));
+  h.mod.noteTurnStep('casework', 'B', READ('running', 'y'));
+  // the onTurnEnd line, as wired: only that turn's calls go
+  assert.strictEqual(V.chatViewStepsEndTurn(h.turnSteps.casework, 'B'), true);
+  assert.strictEqual(h.mod.chatBusyDetail('casework'), 'running a command: sleep 60');
+  assert.strictEqual(V.chatViewStepsEndTurn(h.turnSteps.casework, 'A'), true);
+  assert.strictEqual(h.mod.chatBusyDetail('casework'), '');
+  // onTurnStart does not touch the steps (checked on the source: it names turnSteps nowhere)
+  assert.doesNotMatch(cut('function onTurnStart(ev) {', 'function onTurnDelta'), /turnSteps/);
+});
+
+test('late fetch: a done event before the answer keeps the call gone', async () => {
+  const d = deferred();
+  const h = harness({ live: { casework: { busy: true, busySince: 'a', activity: 'working' } }, reply: () => d.promise });
+  const p = h.mod.turnOriginFetch('casework');
+  h.mod.noteTurnStep('casework', 'T1', BASH('done'));   // finished while the request was out
+  d.resolve(turnReply({ turnId: 'T1', origin: { kind: 'hand_off', from: 'cnc' }, activity: [BASH('running')] }));
+  await p;
+  assert.strictEqual(h.mod.chatBusyDetail('casework'), '');
+  assert.ok(h.turnOrigins.casework, 'the origin is still noted');
+});
+
+test('late fetch: an answer after busySince changed (or the agent went idle) applies nothing', async () => {
+  const d = deferred();
+  const live = { casework: { busy: true, busySince: 'a', activity: 'working' } };
+  const h = harness({ live, reply: () => d.promise });
+  const p = h.mod.turnOriginFetch('casework');
+  live.casework = { busy: true, busySince: 'b', activity: 'working' };   // a new turn began
+  d.resolve(turnReply({ turnId: 'T1', origin: { kind: 'hand_off', from: 'cnc' }, activity: [BASH('running')] }));
+  await p;
+  assert.deepStrictEqual(h.turnSteps, {});
+  assert.deepStrictEqual(h.turnOrigins, {});
+  assert.deepStrictEqual(h.painted, []);
+  const d2 = deferred();
+  const live2 = { sam: { busy: true, busySince: 'a' } };
+  const h2 = harness({ live: live2, reply: () => d2.promise });
+  const p2 = h2.mod.turnOriginFetch('sam');
+  live2.sam = { busy: false, busySince: null };
+  d2.resolve(turnReply({ turnId: 'T1', origin: { kind: 'hand_off', from: 'cnc' }, activity: [BASH('running')] }));
+  await p2;
+  assert.deepStrictEqual(h2.turnSteps, {});
+  assert.deepStrictEqual(h2.turnOrigins, {});
+});
+
+test('late fetch: a turn without an origin object still gets its step; a known origin is kept', async () => {
+  const h = harness({ live: { casework: { busy: true, busySince: 'a', activity: 'working' } }, reply: () => turnReply({ turnId: 'T1', activity: [BASH('running')] }) });
+  await h.mod.turnOriginFetch('casework');
+  assert.strictEqual(h.mod.chatBusyDetail('casework'), 'running a command: sleep 60');
+  assert.deepStrictEqual(h.turnOrigins, {});
+  // the origin came with turn_start already: the fetch leaves it alone but still adds the steps
+  const known = { turnId: 'T1', origin: { kind: 'hand_off', from: 'sam' }, hub: true, since: 1 };
+  const k = harness({ live: { casework: { busy: true, busySince: 'a' } }, turnOrigins: { casework: known }, openTurns: { casework: ['T1'] },
+    reply: () => turnReply({ turnId: 'T1', origin: { kind: 'hand_off', from: 'cnc' }, activity: [BASH('running')] }) });
+  await k.mod.turnOriginFetch('casework');   // origin known, steps not: one fetch
+  assert.strictEqual(k.calls.length, 1);
+  assert.strictEqual(k.turnOrigins.casework, known);
+  assert.strictEqual(k.mod.chatBusyDetail('casework'), 'running a command: sleep 60');
+  await k.mod.turnOriginFetch('casework');   // both known now
+  assert.strictEqual(k.calls.length, 1);
+});
+
+// setLive / applySnapshot with the real source
+function liveHarness(live = {}, extra = {}) {
+  const repainted = [];
+  const turnSteps = extra.turnSteps || {};
+  const setLiveSrc = cut('function setLive(name, patch)', '// opts.namedOnly');
+  const snapSrc = cut('function applySnapshot(map', 'let wkGoneState = {};');
+  const mod = new Function('live', 'turnSteps', 'openTurns', 'repaintAgentStatus', 'paintStatus', 'busyIsWorker', 'followedHubTurn', 'reattachIfIdle', 'wkSeen', 'workerGoneStep', 'wkInferEnd',
+    `let statusKnown = false, wkGoneState = {}, current = null; ${setLiveSrc}; ${snapSrc}; return { setLive, applySnapshot };`)(
+    live, turnSteps, {}, (a) => repainted.push(a), () => {}, (n, e) => (e && typeof e.worker === 'boolean' ? e.worker : /^tw-/.test(n)), () => false, () => {}, new Map(), () => ({ gone: [], next: {} }), () => {});
+  return { mod, repainted, live, turnSteps };
+}
+
+test('setLive: a consultedBy change X -> Y repaints both X and Y; a helper repaints its parent', () => {
+  const h = liveHarness({ forge: { busy: true, busySince: 'a', consultedBy: 'x' } });
+  h.mod.setLive('forge', { consultedBy: 'y' });
+  assert.deepStrictEqual([...h.repainted].sort(), ['x', 'y']);
+  h.repainted.length = 0;
+  h.mod.setLive('forge', { busy: false });   // idle: whoever waited says so
+  assert.deepStrictEqual(h.repainted, ['y']);
+  h.repainted.length = 0;
+  h.mod.setLive('tw-1', { busy: true, worker: true, parent: 'casework', consultedBy: 'sam' });
+  assert.deepStrictEqual([...h.repainted].sort(), ['casework', 'sam']);
+  h.repainted.length = 0;
+  h.mod.setLive('casework', { busy: true });   // not a helper, no waiter, never itself
+  assert.deepStrictEqual(h.repainted, []);
+});
+
+test('setLive: an agent going idle drops its steps', () => {
+  const h = liveHarness({ casework: { busy: true, busySince: 'a' } }, { turnSteps: { casework: V.chatViewStepsNew(), sam: V.chatViewStepsNew() } });
+  h.mod.setLive('casework', { busy: false });
+  assert.deepStrictEqual(Object.keys(h.turnSteps), ['sam']);
+});
+
+test('a full status snapshot that drops a running helper repaints its parent and consultedBy agent', () => {
+  const h = liveHarness({
+    casework: { busy: true, busySince: 'a' },
+    'tw-1': { busy: true, busySince: 'a', worker: true, parent: 'casework', consultedBy: 'sam' },
+  });
+  h.mod.applySnapshot({ casework: { busy: true, busySince: 'a' } });
+  assert.strictEqual(h.live['tw-1'], undefined);
+  assert.deepStrictEqual([...h.repainted].sort(), ['casework', 'sam']);
+  // the named-only feed leaves a helper alone
+  const n = liveHarness({ casework: { busy: true, busySince: 'a' }, 'tw-2': { busy: true, worker: true, parent: 'casework' } });
+  n.mod.applySnapshot({ casework: { busy: true, busySince: 'a' } }, true, { namedOnly: true });
+  assert.ok(n.live['tw-2']);
 });

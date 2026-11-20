@@ -33,7 +33,7 @@ function page({ status = {}, run = {}, chat = {}, fetchImpl = null } = {}) {
     querySelector: (sel) => (sel === '#tab-c1 .status' ? tab : null),
   };
   const fetchFn = (url, opts) => { fetches.push({ url, opts }); return fetchImpl ? fetchImpl(url, opts) : Promise.reject(new Error('no fetch')); };
-  const body = `const busyOriginMemo = new Set(); const busyOriginFlight = new Set(); const turnStep = {}; const turnStepLast = {}; let agentRowTicker = null;\n${['busyOriginFetch', 'headerBusyPaint', 'busyCardState', 'busyCardRefresh', 'agentDoingNow', 'turnStepRepaintNow', 'turnStepRepaint', 'turnStepSet', 'turnStepOnActivity', 'turnStepFromActivity', 'paintAgentStatus', 'agentRowTick', 'busyAgentNames', 'elapsedLabel'].map(extract).join('\n')}\nreturn { headerBusyPaint, busyOriginFetch, busyCardRefresh, agentDoingNow, turnStepOnActivity, paintAgentStatus, turnStep, agentRowTick, tickerOn: () => !!agentRowTicker };`;
+  const body = `const busyOriginMemo = new Set(); const busyOriginFlight = new Set(); const agentSteps = {}; const turnStepLast = {}; let agentRowTicker = null; let busyCardTimer = null;\n${['busyOriginFetch', 'headerBusyPaint', 'busyCardState', 'busyCardRefresh', 'busyCardRefreshAll', 'agentDoingNow', 'turnStepRepaintNow', 'turnStepRepaint', 'paintAgentStatus', 'agentRowTick', 'busyAgentNames', 'elapsedLabel'].map(extract).join('\n')}\nreturn { headerBusyPaint, busyOriginFetch, busyCardRefresh, agentDoingNow, turnStepRepaint, paintAgentStatus, agentSteps, agentRowTick, tickerOn: () => !!agentRowTicker };`;
   class FakeDate extends Date { static now() { return NOW; } }
   const timers = [];
   const fakeSetTimeout = (f, ms) => { timers.push({ f, ms }); return timers.length; };
@@ -44,9 +44,11 @@ function page({ status = {}, run = {}, chat = {}, fetchImpl = null } = {}) {
   rowEls.line = null;
   const rowBtn = { classList: { toggle() {} }, querySelector: (s) => (s === '.agent-busy-line' ? rowEls.line : s === '.agent-info' ? { appendChild: (l) => { rowEls.line = rowLine; } } : null) };
   const rowDoc = { ...doc, createElement: () => rowLine, getElementById: (id) => (id === 'agent-status-casework' || id === 'agent-status-sam' ? rowDot : id === 'agent-btn-casework' || id === 'agent-btn-sam' ? rowBtn : doc.getElementById(id)) };
-  const fn = new Function('busyRun', 'agentStatus', 'document', 'chats', 'fetch', 'Date', 'chatViewBusyText', 'chatViewElapsed', 'chatViewIsHubOrigin', 'chatViewGet', 'localStorage', 'localBusy', 'agentDisplayName', 'findSoloChat', 'AbortSignal', 'chatViewWaiting', 'chatViewStep', 'setTimeout', 'setInterval', 'clearInterval', 'statusKnown', body);
-  const api = fn(run, status, rowDoc, chats, fetchFn, FakeDate, V.chatViewBusyText, V.chatViewElapsed, V.chatViewIsHubOrigin, V.chatViewGet, { getItem: () => null }, new Map(), nameOf, (a) => Object.values(chats).find(c => c.agent === a) || null, AbortSignal, V.chatViewWaiting, V.chatViewStep, fakeSetTimeout, fakeSetInterval, () => {}, true);
-  return { ...api, dot, text, tab, chat: chatObj, fetches, run, status, rowDot, rowLine, rowEls, timers };
+  const fn = new Function('busyRun', 'agentStatus', 'document', 'chats', 'fetch', 'Date', 'chatViewBusyText', 'chatViewElapsed', 'chatViewIsHubOrigin', 'chatViewGet', 'localStorage', 'localBusy', 'agentDisplayName', 'findSoloChat', 'AbortSignal', 'chatViewWaiting', 'chatViewStep', 'chatViewStepsNew', 'chatViewStepsOn', 'chatViewStepsSnapshot', 'chatViewStepsNewest', 'setTimeout', 'setInterval', 'clearInterval', 'statusKnown', body);
+  const api = fn(run, status, rowDoc, chats, fetchFn, FakeDate, V.chatViewBusyText, V.chatViewElapsed, V.chatViewIsHubOrigin, V.chatViewGet, { getItem: () => null }, new Map(), nameOf, (a) => Object.values(chats).find(c => c.agent === a) || null, AbortSignal, V.chatViewWaiting, V.chatViewStep, V.chatViewStepsNew, V.chatViewStepsOn, V.chatViewStepsSnapshot, V.chatViewStepsNewest, fakeSetTimeout, fakeSetInterval, () => {}, true);
+  // the turn_activity listener of app.js: feed the agent's step state, repaint when it changed
+  const onActivity = (ev) => { if (ev.agent && V.chatViewStepsOn(api.agentSteps[ev.agent] ||= V.chatViewStepsNew(), ev.turnId, ev.item)) api.turnStepRepaint(ev.agent); };
+  return { ...api, onActivity, dot, text, tab, chat: chatObj, fetches, run, status, rowDot, rowLine, rowEls, timers };
 }
 const flush = () => new Promise(r => setImmediate(r));
 const min = (n) => NOW - n * 60000;
@@ -163,22 +165,22 @@ test('(now-a) blocked on a helper: the header says who started the turn, how lon
 
 test('(now-b) no helpers: the current tool step ends the line; its done item (same callId) clears it', () => {
   const p = page({ status: { casework: { busy: true, busySince: new Date(min(2)).toISOString(), activity: 'hand-off' } }, run: handOffRun });
-  p.turnStepOnActivity({ agent: 'casework', item: { kind: 'tool', tool: 'mcp__hub__Bash', summary: 'npm test', status: 'running', callId: 'k1' } });
+  p.onActivity({ agent: 'casework', item: { kind: 'tool', tool: 'mcp__hub__Bash', summary: 'npm test', status: 'running', callId: 'k1' } });
   p.headerBusyPaint(p.chat);
   assert.match(p.text.textContent, /^Working on a hand-off from CNC · 9 min · running a command: npm test$/);
-  p.turnStepOnActivity({ agent: 'casework', item: { kind: 'tool', tool: 'mcp__hub__Bash', status: 'done', callId: 'other' } });
-  assert.ok(p.turnStep.casework, 'another call finishing does not clear the step');
-  p.turnStepOnActivity({ agent: 'casework', item: { kind: 'tool', tool: 'mcp__hub__Bash', status: 'done', callId: 'k1' } });
-  assert.strictEqual(p.turnStep.casework, undefined);
+  p.onActivity({ agent: 'casework', item: { kind: 'tool', tool: 'mcp__hub__Bash', status: 'done', callId: 'other' } });
+  assert.ok(V.chatViewStepsNewest(p.agentSteps.casework), 'another call finishing does not clear the step');
+  p.onActivity({ agent: 'casework', item: { kind: 'tool', tool: 'mcp__hub__Bash', status: 'done', callId: 'k1' } });
+  assert.strictEqual(V.chatViewStepsNewest(p.agentSteps.casework), null);
   p.headerBusyPaint(p.chat);
   assert.strictEqual(p.text.textContent, 'Working on a hand-off from CNC · 9 min');
 });
 
 test('(now-b2) a burst of steps repaints an agent at most once per 500 ms (one trailing call)', () => {
   const p = page({ status: { casework: { busy: true, busySince: new Date(min(2)).toISOString(), activity: 'hand-off' } }, run: handOffRun });
-  for (let i = 0; i < 5; i++) p.turnStepOnActivity({ agent: 'casework', item: { kind: 'tool', tool: 'Read', status: 'running', callId: 'r' + i } });
+  for (let i = 0; i < 5; i++) p.onActivity({ agent: 'casework', item: { kind: 'tool', tool: 'Read', status: 'running', callId: 'r' + i } });
   assert.strictEqual(p.timers.filter(t => !t.interval && t.ms <= 500).length, 1, 'first paints at once, the rest share one trailing timer');
-  assert.strictEqual(p.turnStep.casework.callId, 'r4');
+  assert.strictEqual(V.chatViewStepsNewest(p.agentSteps.casework).callId, 'r4');
 });
 
 test('(now-c) the agent list row says what it does now and is never just the status word', () => {
@@ -215,25 +217,179 @@ test('(now-e) busyOriginFetch sets the step from a fetched activity list: the la
   });
   p.busyOriginFetch('casework');
   await flush();
-  assert.strictEqual(p.turnStep.casework.callId, 'b');
+  assert.strictEqual(V.chatViewStepsNewest(p.agentSteps.casework).callId, 'b');
   p.headerBusyPaint(p.chat);
   assert.strictEqual(p.text.textContent, 'Working on a hand-off from CNC · 2 min · running a command: npm test');
 });
 
 test('wiring in app.js: the listener, turn_start/end, setAgentLive and the row ticker feed the step and the helper line', () => {
-  assert.match(src, /addEventListener\('turn_activity', e => \{ const ev = parse\(e\); if \(ev\) \{ try \{ turnStepOnActivity\(ev\); \}/);
-  assert.match(extract('onHubTurnStart'), /delete turnStep\[ev\.agent\]/);
-  assert.match(extract('onHubTurnEnd'), /delete turnStep\[ev\.agent\]/);
+  assert.match(src, /addEventListener\('turn_activity', e => \{ const ev = parse\(e\); if \(ev\) \{ try \{ if \(ev\.agent && chatViewStepsOn\(agentSteps\[ev\.agent\] \|\|= chatViewStepsNew\(\), ev\.turnId, ev\.item\)\) turnStepRepaint\(ev\.agent\); \} catch \{\}/);
+  assert.ok(!/agentSteps/.test(extract('onHubTurnStart')), 'a replayed turn_start must not wipe the live step');
+  assert.match(extract('onHubTurnEnd'), /chatViewStepsEndTurn\(agentSteps\[ev\.agent\], ev\.turnId\)/);
   const s = extract('setAgentLive');
-  assert.match(s, /cur\.consultedBy, next\.consultedBy/);
-  assert.match(s, /cur\.worker && cur\.parent, next\.worker && next\.parent/);
+  assert.match(s, /repaintWaiters\(name, cur, next\);/);
+  assert.match(extract('repaintWaiters'), /if \(r\.worker && r\.parent\) who\.add\(r\.parent\); if \(r\.consultedBy\) who\.add\(r\.consultedBy\);/);
   assert.match(extract('paintAgentStatus'), /setInterval\(agentRowTick, 15000\)/);
 });
 
 test('wiring in app.js: setStatus clears the marker on thinking and repaints at its end; switchToChat refreshes', () => {
   const s = extract('setStatus');
-  assert.match(s, /if \(status === 'thinking'\) delete statusTextEl\.dataset\.hubBusy;/);
+  assert.match(s, /textContent = statusText \|\| [^\n]*\n\s*delete statusTextEl\.dataset\.hubBusy; delete statusTextEl\.dataset\.hubPrev;/);   // any text setStatus writes is the chat's own
+  assert.match(s, /status !== 'thinking'\) chats\[chatId\]\.ownEndedAt = Date\.now\(\)/);
   assert.match(s, /if \(status !== 'thinking' && status !== 'paused'\) \{ try \{ headerBusyPaint\(chats\[chatId\]\); \} catch \{\} \}\s*\}$/);
   assert.match(extract('switchToChat'), /busyCardRefresh\(opened\)/);
   assert.match(extract('busyCardRefresh'), /headerBusyPaint\(chat\)/);
+});
+
+// ── steps per call and per turn ──
+const tool = (name, status, callId, summary) => ({ kind: 'tool', tool: name, status, callId, ...(summary ? { summary } : {}) });
+const busyStatus = () => ({ casework: { busy: true, busySince: new Date(min(2)).toISOString(), activity: 'hand-off' } });
+
+test('(steps-a) parallel calls: a long Bash then a Read; the Read finishing shows the Bash again', () => {
+  const p = page({ status: busyStatus(), run: handOffRun });
+  p.onActivity({ agent: 'casework', turnId: 't1', item: tool('Bash', 'running', 'b1', 'npm test') });
+  p.onActivity({ agent: 'casework', turnId: 't1', item: tool('Read', 'running', 'r1', 'a.js') });
+  p.headerBusyPaint(p.chat);
+  assert.match(p.text.textContent, /reading a file: a\.js$/);
+  p.onActivity({ agent: 'casework', turnId: 't1', item: tool('Read', 'done', 'r1') });
+  p.headerBusyPaint(p.chat);
+  assert.match(p.text.textContent, /running a command: npm test$/);
+});
+
+test('(steps-b) overlapping turns: one turn ending leaves the other turn\'s step', () => {
+  const p = page({ status: busyStatus(), run: handOffRun });
+  p.onActivity({ agent: 'casework', turnId: 'A', item: tool('Bash', 'running', 'x', 'build') });
+  p.onActivity({ agent: 'casework', turnId: 'B', item: tool('Read', 'running', 'x', 'b.js') });
+  assert.strictEqual(V.chatViewStepsEndTurn(p.agentSteps.casework, 'B'), true);
+  p.headerBusyPaint(p.chat);
+  assert.match(p.text.textContent, /running a command: build$/);
+  V.chatViewStepsEndTurn(p.agentSteps.casework, 'A');
+  p.headerBusyPaint(p.chat);
+  assert.strictEqual(p.text.textContent, 'Working on a hand-off from CNC · 9 min');
+});
+
+// ── a late answer of the origin fetch ──
+function deferred() { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; }
+const turnAnswer = (activity, extra = {}) => ({ ok: true, json: async () => ({ ok: true, active: true, turn: { turnId: 't9', origin: { kind: 'hand_off', from: 'cnc' }, startedAt: new Date(min(2)).toISOString(), activity, ...extra } }) });
+
+test('(late-a) a done event that arrives before the fetch answer keeps that call gone', async () => {
+  const d = deferred();
+  const p = page({ status: busyStatus(), fetchImpl: () => d.promise });
+  p.busyOriginFetch('casework');
+  p.onActivity({ agent: 'casework', turnId: 't9', item: tool('Bash', 'running', 'k1', 'npm test') });
+  p.onActivity({ agent: 'casework', turnId: 't9', item: tool('Bash', 'done', 'k1') });
+  d.resolve(turnAnswer([tool('Bash', 'running', 'k1', 'npm test')]));
+  await flush();
+  assert.strictEqual(V.chatViewStepsNewest(p.agentSteps.casework), null, 'the finished call is not brought back');
+  assert.strictEqual(p.run.casework.turnId, 't9', 'the origin still applies');
+});
+
+test('(late-b) a fetch answered after busySince changed applies nothing', async () => {
+  const d = deferred();
+  const p = page({ status: busyStatus(), fetchImpl: () => d.promise });
+  p.busyOriginFetch('casework');
+  p.status.casework.busySince = new Date(min(1)).toISOString();   // a new turn began meanwhile
+  d.resolve(turnAnswer([tool('Bash', 'running', 'k1', 'old')]));
+  await flush();
+  assert.strictEqual(p.agentSteps.casework, undefined);
+  assert.strictEqual(p.run.casework, undefined);
+  const q = page({ status: busyStatus(), fetchImpl: () => d.promise });
+  const d2 = deferred(); q.busyOriginFetch('casework');
+  q.status.casework.busy = false;   // or the turn ended
+  await flush();
+  assert.strictEqual(q.run.casework, undefined);
+});
+
+test('(late-c) the steps apply even when the fetched turn has no origin; busyRun stays unset', async () => {
+  const p = page({ status: busyStatus(), fetchImpl: async () => turnAnswer([tool('Read', 'running', 'r1', 'a.js')], { origin: null }) });
+  p.busyOriginFetch('casework');
+  await flush();
+  assert.strictEqual(V.chatViewStepsNewest(p.agentSteps.casework).callId, 'r1');
+  assert.strictEqual(p.run.casework, undefined);
+});
+
+// ── the line after an error, the timer, the own-stream flicker ──
+test('(err) the line shows what it said before a hub turn took it, once the agent is idle again', () => {
+  const p = page({ status: busyStatus(), run: handOffRun, chat: { status: 'error' } });
+  p.text.textContent = 'Error: x'; p.dot.className = 'status-dot error'; p.tab.className = 'status error';
+  p.headerBusyPaint(p.chat);
+  assert.match(p.text.textContent, /^Working on a hand-off/);
+  assert.strictEqual(p.text.dataset.hubPrev, 'Error: x');
+  p.headerBusyPaint(p.chat);   // a second paint keeps the saved text
+  assert.strictEqual(p.text.dataset.hubPrev, 'Error: x');
+  p.status.casework.busy = false;
+  p.headerBusyPaint(p.chat);
+  assert.strictEqual(p.text.textContent, 'Error: x');
+  assert.strictEqual(p.dot.className, 'status-dot error');
+  assert.ok(!('hubBusy' in p.text.dataset) && !('hubPrev' in p.text.dataset));
+  // no saved text: the status word
+  for (const [st, word] of [['error', 'Error'], ['idle', 'Idle']]) {
+    const q = page({ status: busyStatus(), chat: { status: st } });
+    q.text.dataset.hubBusy = '1'; q.text.textContent = 'Working on something';
+    q.status.casework.busy = false;
+    q.headerBusyPaint(q.chat);
+    assert.strictEqual(q.text.textContent, word);
+  }
+});
+
+test('(timer) the 5 s timer starts when only the header shows work (no card panel)', () => {
+  const p = page({ status: busyStatus(), run: handOffRun });
+  assert.strictEqual(p.timers.filter(t => t.interval && t.ms === 5000).length, 0);
+  assert.strictEqual(p.busyCardRefresh(p.chat), true);
+  assert.strictEqual(p.timers.filter(t => t.interval && t.ms === 5000).length, 1);
+  p.busyCardRefresh(p.chat);
+  assert.strictEqual(p.timers.filter(t => t.interval && t.ms === 5000).length, 1, 'one timer only');
+});
+
+test('(flicker) no working text within 4 s of this window\'s own stream ending; normal painting after', () => {
+  for (const setup of [{ run: { casework: { turnId: 't', origin: { kind: 'user' }, since: min(1), own: true } }, activity: 'working' }, { run: {}, activity: 'replying to you' }]) {
+    const p = page({ status: { casework: { busy: true, busySince: new Date(min(1)).toISOString(), activity: setup.activity } }, run: setup.run, chat: { ownEndedAt: NOW - 1000 } });
+    assert.strictEqual(p.headerBusyPaint(p.chat), true, 'still counts as working, so the timer runs');
+    assert.strictEqual(p.text.textContent, 'Idle', 'no working text yet');
+    p.chat.ownEndedAt = NOW - 4500;   // what the 5 s timer sees later
+    p.headerBusyPaint(p.chat);
+    assert.match(p.text.textContent, /^(Replying to your message|Working on|Replying)|·/);
+    assert.notStrictEqual(p.text.textContent, 'Idle');
+  }
+  const h = page({ status: busyStatus(), run: handOffRun, chat: { ownEndedAt: NOW - 1000 } });   // a hand-off is not the person's own turn
+  h.headerBusyPaint(h.chat);
+  assert.match(h.text.textContent, /^Working on a hand-off from CNC/);
+});
+
+// ── setAgentLive / applyStatusSnapshot / setStatus ──
+function livePage() {
+  const calls = [];
+  const body = `const agentStatus = {}, openTurns = {}, agentSteps = {}, busyRun = {}; let statusKnown = false;
+    const findSoloChat = (n) => ({ solo: n }), busyCardRefresh = (c) => calls.push('card:' + c.solo);
+    const paintAgentStatus = (n) => calls.push('row:' + n), paintAgentsWorking = () => {}, paintAllAgentStatus = () => {}, reattachIfIdle = () => {};
+    const busyIsWorker = (name, e) => e && typeof e.worker === 'boolean' ? e.worker : /^tw-/.test(name);
+    ${extract('setAgentLive')}
+    ${extract('repaintWaiters')}
+    ${extract('dropGoneWorker')}
+    ${extract('statusPatchOf')}
+    const chats = {}; let workerGoneState = {}; const endWorkerRunUnreported = () => {};
+    ${extract('workerGoneStep')}
+    ${extract('applyStatusSnapshot')}
+    return { agentStatus, agentSteps, busyRun, setAgentLive, applyStatusSnapshot };`;
+  return { ...new Function('calls', body)(calls), calls };
+}
+
+test('(live-a) going idle drops the agent\'s steps and its old turn origin; going busy keeps them', () => {
+  const p = livePage();
+  p.setAgentLive('casework', { busy: true });
+  p.agentSteps.casework = V.chatViewStepsNew(); p.busyRun.casework = { turnId: 't1' };
+  p.setAgentLive('casework', { busy: true, activity: 'x' });
+  assert.ok(p.agentSteps.casework && p.busyRun.casework);
+  p.setAgentLive('casework', { busy: false });
+  assert.ok(!('casework' in p.agentSteps) && !('casework' in p.busyRun));
+});
+
+test('(live-b) a helper that vanishes from a full snapshot repaints its parent and its consultedBy agent', () => {
+  const p = livePage();
+  p.applyStatusSnapshot({ lead: { busy: true }, 'tw-lead-1': { busy: true, worker: true, parent: 'lead', consultedBy: 'boss' } });
+  p.calls.length = 0;
+  p.applyStatusSnapshot({ lead: { busy: true } });
+  assert.ok(!('tw-lead-1' in p.agentStatus));
+  assert.ok(p.calls.includes('row:lead') && p.calls.includes('card:lead'), p.calls.join());
+  assert.ok(p.calls.includes('row:boss') && p.calls.includes('card:boss'), p.calls.join());
 });

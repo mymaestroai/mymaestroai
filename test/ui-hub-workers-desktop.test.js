@@ -19,11 +19,13 @@ function extract(name) {
 }
 
 function page() {
-  const body = `const agentStatus = {}, openTurns = {}, turnStep = {}; let statusKnown = false;
+  const body = `const agentStatus = {}, openTurns = {}, agentSteps = {}, busyRun = {}; let statusKnown = false;
     const findSoloChat = () => null, busyCardRefresh = () => {};
     const paintAgentStatus = () => {}, paintAgentsWorking = () => {}, paintAllAgentStatus = () => {}, reattachIfIdle = () => {};
     const busyIsWorker = (name, e) => e && typeof e.worker === 'boolean' ? e.worker : /^tw-/.test(name);
     ${extract('setAgentLive')}
+    ${extract('repaintWaiters')}
+    ${extract('dropGoneWorker')}
     ${extract('statusPatchOf')}
     const chats = {}; let workerGoneState = {}; const endWorkerRunUnreported = () => {};
     ${extract('workerGoneStep')}

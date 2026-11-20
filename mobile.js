@@ -25,6 +25,7 @@ const recentOwn = new Map();   // agent -> time our own stream for it ended (ded
 let pendingImages = [];
 let stick = true;
 const live = {};               // name -> { busy, busySince, activity, pendingQuestion } from the hub
+const turnSteps = {};          // name -> chatViewStepsNew() state: the tool calls the agent is running now, per turn (turn_activity)
 const openTurns = {};          // name -> [turnIds] the hub started and has not ended (activeTurnStart / activeTurnEnd)
 let statusKnown = false;       // true once the hub told us anything about busy state (older hubs never do)
 let workingFilter = false;     // Agents list shows only working agents
@@ -1737,9 +1738,12 @@ function setLive(name, patch) {
   if (!next.busy) { next.busySince = null; next.activity = null; next.pendingQuestion = false; next.consultedBy = null; }
   else if (!next.busySince) next.busySince = cur.busySince || new Date().toISOString();
   live[name] = next;
-  // A helper (temporary worker) or a consulted agent changed: the agent waiting on it says so (its header and list line).
-  const waiter = (next.worker && next.parent) || next.consultedBy || cur.consultedBy || (cur.worker && cur.parent) || null;
-  if (waiter && waiter !== name && typeof repaintAgentStatus === 'function') repaintAgentStatus(waiter);
+  if (!next.busy) delete turnSteps[name];   // idle: no tool call is running
+  // A helper (temporary worker) or a consulted agent changed: every agent waiting on it (before or after) says so (its header and list line).
+  if (typeof repaintAgentStatus === 'function') {
+    const waiters = new Set([next.worker && next.parent, cur.worker && cur.parent, next.consultedBy, cur.consultedBy]);
+    for (const w of waiters) if (w && w !== name) repaintAgentStatus(w);
+  }
   if (!next.busy && typeof voiceCallHubIdle === 'function') { try { voiceCallHubIdle(name); } catch { /* the call carries on */ } }   // a call waiting for a hub-started turn learns it is over
 }
 
@@ -1759,8 +1763,12 @@ function applySnapshot(map, repaint = true, opts = {}) {
   }
   for (const name of Object.keys(live)) {
     if (name in map) continue;
-    if (busyIsWorker(name, live[name])) { if (!namedOnly) { delete live[name]; delete openTurns[name]; } }   // a worker that is gone, not an agent gone idle
-    else { setLive(name, { busy: false }); delete openTurns[name]; }
+    if (busyIsWorker(name, live[name])) {   // a worker that is gone, not an agent gone idle
+      if (namedOnly) continue;
+      const gone = live[name];
+      delete live[name]; delete openTurns[name]; delete turnSteps[name];
+      for (const w of new Set([gone.parent, gone.consultedBy])) if (w && w !== name) repaintAgentStatus(w);   // whoever waited on it stops saying so
+    } else { setLive(name, { busy: false }); delete openTurns[name]; }
   }
   if (repaint) paintStatus();
   // Woke up (or just loaded) while the open chat's agent is mid-turn: follow that turn.
@@ -2764,6 +2772,58 @@ function chatViewStep(item) {
   const sum = typeof item.summary === 'string' ? item.summary.replace(/\s+/g, ' ').trim() : '';
   return sum && !/^(spawn_workers|ask_user)$/.test(name) ? `${words}: ${sum.length > 60 ? sum.slice(0, 59) + '...' : sum}` : words;
 }
+// The running tool calls of one agent, so parallel calls and overlapping turns keep the right step:
+// { calls: [{ key, turnId, item }] (oldest first), done: [keys] (recently finished; a late snapshot never brings one back) }.
+function chatViewStepsNew() { return { calls: [], done: [] }; }
+function chatViewStepKey(turnId, item) { return `${turnId || ''}|${item && item.callId != null ? item.callId : ''}`; }
+function chatViewStepsOn(st, turnId, item) {
+  if (!st || !item || item.kind !== 'tool') return false;
+  const key = chatViewStepKey(turnId, item);
+  if (item.status === 'running') {
+    if (item.callId != null && st.done.includes(key)) return false;
+    st.calls = st.calls.filter(c => c.key !== key || item.callId == null);
+    st.calls.push({ key, turnId: turnId || '', item });
+    return true;
+  }
+  if (item.status !== 'done') return false;
+  if (item.callId != null) { st.done.push(key); if (st.done.length > 50) st.done.splice(0, st.done.length - 50); }
+  let i = -1;
+  for (let k = st.calls.length - 1; k >= 0 && i < 0; k--) if (st.calls[k].key === key) i = k;
+  if (i < 0 && item.callId == null) for (let k = st.calls.length - 1; k >= 0 && i < 0; k--) if (st.calls[k].turnId === (turnId || '')) i = k;
+  if (i < 0) return false;
+  st.calls.splice(i, 1);
+  return true;
+}
+function chatViewStepsEndTurn(st, turnId) {
+  if (!st) return false;
+  const before = st.calls.length;
+  st.calls = turnId ? st.calls.filter(c => c.turnId !== turnId) : [];
+  return st.calls.length !== before;
+}
+// A fetched turn (GET /api/agents/<name>/turn: { turnId, activity }): its still-running calls join the list unless already
+// known or seen finishing; its finished calls count as done.
+function chatViewStepsSnapshot(st, turnId, activity) {
+  if (!st || !Array.isArray(activity)) return false;
+  let changed = false;
+  for (const it of activity) {
+    if (it && it.kind === 'tool' && it.status === 'done' && it.callId != null) {
+      const key = chatViewStepKey(turnId, it);
+      if (!st.done.includes(key)) st.done.push(key);
+      const n = st.calls.length; st.calls = st.calls.filter(c => c.key !== key); if (st.calls.length !== n) changed = true;
+    }
+  }
+  if (st.done.length > 50) st.done.splice(0, st.done.length - 50);
+  activity.forEach((it, i) => {
+    if (!it || it.kind !== 'tool' || it.status !== 'running') return;
+    const closed = activity.slice(i + 1).some(d => d && d.kind === 'tool' && d.status === 'done' && (it.callId == null ? d.callId == null : d.callId === it.callId));
+    const key = chatViewStepKey(turnId, it);
+    if (closed || (it.callId != null && st.done.includes(key)) || st.calls.some(c => c.key === key)) return;
+    st.calls.push({ key, turnId: turnId || '', item: it });
+    changed = true;
+  });
+  return changed;
+}
+function chatViewStepsNewest(st) { return st && st.calls.length ? st.calls[st.calls.length - 1].item : null; }
 // The full line: what the turn is, then what it waits on or (when it waits on nobody) its current step.
 function chatViewNow(words, waiting, step) {
   return [words, waiting || step].filter(Boolean).join(' \u00b7 ');
@@ -12433,7 +12493,7 @@ function connectEvents() {
   on('turn_delta', onTurnDelta);
   on('turn_reasoning', onTurnReasoning);
   on('turn_activity', onTurnActivity);
-  on('turn_activity', (ev) => { if (ev && ev.agent) noteTurnStep(ev.agent, ev.item); });   // the agent's current tool step, for its status line
+  on('turn_activity', (ev) => { if (ev && ev.agent) noteTurnStep(ev.agent, ev.turnId, ev.item); });   // the agent's current tool step, for its status line
   on('turn_progress', onTurnProgress);
   on('turn_worker_delta', onTurnWorkerDelta);
   on('turn_end', onTurnEnd);
@@ -12648,55 +12708,36 @@ const turnOriginAsked = new Set();
 const turnOriginInFlight = new Set();
 async function turnOriginFetch(agent) {
   const s = agent && live[agent];
-  if (!s || !s.busy || turnOrigins[agent] || turnOriginInFlight.has(agent)) return;
+  if (!s || !s.busy || (currentTurnOrigin(agent) && turnSteps[agent]) || turnOriginInFlight.has(agent)) return;   // once per turn, while the origin or the steps are unknown
   const key = `${agent}|${s.busySince}`;
   if (turnOriginAsked.has(key)) return;
   turnOriginAsked.add(key);
   turnOriginInFlight.add(agent);
+  const since0 = s.busySince;
   try {
     const res = await api(`/api/agents/${encodeURIComponent(agent)}/turn`, { signal: AbortSignal.timeout(8000) });
     if (!res || !res.ok) return;
     const d = await res.json();
     const t = d && d.active && d.turn;
-    if (!t || !t.origin || typeof t.origin !== 'object') return;
+    if (!t) return;
     const now = live[agent];
-    if (!now || !now.busy) return;
-    const stepBefore = turnStep[agent];
-    const st = turnStepFromActivity(t.activity);
-    if (st && !turnStep[agent]) turnStep[agent] = st;
-    if (turnOrigins[agent]) { if (turnStep[agent] !== stepBefore) repaintAgentStatus(agent); return; }
-    noteTurnOrigin(agent, t.turnId, t.origin, t.startedAt);
-    if (agent === current) { paintChatStatus(); paintBusyCard(); }
-    else repaintAgentStatus(agent);   // the agents list (the open chat was just painted)
+    if (!now || !now.busy || now.busySince !== since0) return;   // the answer is about a turn that is over
+    const stepsChanged = chatViewStepsSnapshot(turnSteps[agent] ||= chatViewStepsNew(), t.turnId, t.activity);
+    const noteOrigin = !!t.origin && typeof t.origin === 'object' && !currentTurnOrigin(agent);
+    if (noteOrigin) noteTurnOrigin(agent, t.turnId, t.origin, t.startedAt);
+    if (noteOrigin && agent === current) { paintChatStatus(); paintBusyCard(); }
+    else if (noteOrigin || stepsChanged) repaintAgentStatus(agent);   // the agents list (the open chat was just painted)
   } catch (e) { /* leave it: the status feed's words stay */ }
   finally { turnOriginInFlight.delete(agent); }
 }
-// Per agent: the tool call it is running right now (the turn_activity item), gone when it is done or the turn ends.
-const turnStep = {};
-// What the agent is waiting on or doing now: its helpers / consulted agents, else its current tool step ('' when neither).
+// What the agent is waiting on or doing now: its helpers / consulted agents, else its newest running tool call ('' when neither).
 function chatBusyDetail(name) {
-  return chatViewWaiting(name, live, Date.now(), displayName) || chatViewStep(turnStep[name]);
+  return chatViewWaiting(name, live, Date.now(), displayName) || chatViewStep(chatViewStepsNewest(turnSteps[name]));
 }
-// The running tool call of a fetched turn's activity list: the last 'running' tool item with no later 'done' of the same callId.
-function turnStepFromActivity(list) {
-  if (!Array.isArray(list)) return null;
-  for (let i = list.length - 1; i >= 0; i--) {
-    const it = list[i];
-    if (!it || it.kind !== 'tool' || it.status !== 'running') continue;
-    const closed = list.slice(i + 1).some(d => d && d.kind === 'tool' && d.status === 'done' && it.callId != null && d.callId === it.callId);
-    if (!closed) return it;
-  }
-  return null;
-}
-function noteTurnStep(agent, item) {
-  if (!agent || !item || item.kind !== 'tool') return;
-  if (item.status === 'running') turnStep[agent] = item;
-  else if (item.status === 'done') {
-    const cur = turnStep[agent];
-    if (cur && (cur.callId == null || item.callId == null || cur.callId === item.callId)) delete turnStep[agent];
-    else return;
-  } else return;
-  repaintAgentStatus(agent);
+// A turn_activity event: the agent's running tool calls changed (repaint what its status says).
+function noteTurnStep(agent, turnId, item) {
+  if (!agent || !item) return;
+  if (chatViewStepsOn(turnSteps[agent] ||= chatViewStepsNew(), turnId, item)) repaintAgentStatus(agent);
 }
 // Repaint what an agent's status says (open chat header, the agents list): per agent at most once per 500 ms (a trailing call
 // follows), the list re-render at most once per second overall.
@@ -12757,7 +12798,7 @@ function unhideHubTurn(t) {
 }
 
 function onTurnStart(ev) {
-  if (ev && ev.agent) { activeTurnStart(openTurns, ev.agent, ev.turnId); delete turnStep[ev.agent]; }
+  if (ev && ev.agent) activeTurnStart(openTurns, ev.agent, ev.turnId);
   if (ev.turnId && hubTurns[ev.turnId]) return;   // replayed after a reconnect (?since=): the turn is already followed
   setLive(ev.agent, { busy: true, busySince: ev.startedAt || null, activity: ev.activity || originLabel(ev.origin) });
   noteTurnOrigin(ev.agent, ev.turnId, ev.origin, ev.startedAt);
@@ -12922,11 +12963,11 @@ function onForOwner(ev) {
 }
 
 function onTurnEnd(ev) {
-  if (ev && ev.agent) delete turnStep[ev.agent];
   if (!activeTurnEnd(openTurns, ev.agent, ev.turnId)) setLive(ev.agent, { busy: false });   // busy while another turn is open
   if (ev.agent) wkSettleAgent(ev.agent, ev.turnId || null);
   if (ev.agent && notifyArmed[ev.agent]) { notifyArmed[ev.agent] = null; if (ev.agent === current) paintNotifyBtn(); }
   if (ev.agent && ev.agent === current) setTimeout(() => refreshCtx(ev.agent), 3500);   // the hub records the size 2.5 s after the turn
+  if (ev && ev.agent && chatViewStepsEndTurn(turnSteps[ev.agent], ev.turnId)) repaintAgentStatus(ev.agent);   // only this turn's calls: another open turn keeps its own
   if (ev.agent) pollStatusSoon();   // re-read the status once: a reply can run without a turn of its own
   const reply = ev.reply || (ev.ok ? '(no reply)' : `⚠ turn failed: ${ev.error || 'unknown error'}`);
   const t = hubTurns[ev.turnId];
