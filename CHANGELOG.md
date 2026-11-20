@@ -6,6 +6,7 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
+- **Sort your files.** The Files panel now lists the newest files first. On the desktop, click Name, Size or Modified to sort by it, and click again to reverse; on the phone, use the Sort row (Date, Name, Size). Folders stay on top, and each device remembers your choice. (`app.js`, `mobile.js`)
 - **Simple mode uses the whole window again.** Its messages and message box were held to a 720-pixel column in the middle; they now fill the window like the main view, on the desktop and on wide phone or tablet screens, with the box lined up under the messages; a reply's time now sits under its text on the left. The greeting and its suggestions stay centred. (`index.html`, `mobile.html`)
 - **Clearer notices about agents' boxes and home folders.** Settings → Status now shows their times in your local time ("Nov 18, 10:35 AM EST"), says in plain words why a home folder couldn't be moved (for example "a file in the home folder can't be read: cache/locked.bin"), and Move now says exactly why it didn't try.
 - **A home folder that can't be moved stops being retried, and you can move it yourself.** If moving an agent's home folder fails three times in a row for the same reason, your Maestro stops trying on its own; Settings → Status says why and has a Move now button for admins, which tries once when the agent is idle. The free-space check before a move now counts files at their full length, so a large sparse file can no longer fill the disk mid-copy.
