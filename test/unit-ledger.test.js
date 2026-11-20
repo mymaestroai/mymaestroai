@@ -95,7 +95,7 @@ test('today / days aggregate per local day across a day boundary (injected clock
   assert.deepStrictEqual([t.agents[1].inputTokens, t.agents[1].outputTokens, t.agents[0].inputTokens], [5, 1, 0]);
   const y = l.today('2026-05-10');
   assert.deepStrictEqual([y.total, y.turns, y.agents.length], [1, 1, 1]);
-  assert.deepStrictEqual(l.today('2020-01-01'), { day: '2020-01-01', total: 0, turns: 0, paidTurns: 0, planTurns: 0, planValue: 0, agents: [] });
+  assert.deepStrictEqual(l.today('2020-01-01'), { day: '2020-01-01', total: 0, turns: 0, paidTurns: 0, unpriced: 0, planTurns: 0, planValue: 0, agents: [] });
   assert.deepStrictEqual(l.days().map(d => [d.day, d.turns, d.cost]), [['2026-05-11', 3, 7], ['2026-05-10', 1, 1]]);
   assert.strictEqual(l.days(1).length, 1);
 });
@@ -136,7 +136,7 @@ test('an unusable ledger file disables the ledger quietly: record returns null, 
   fs.writeFileSync(path.join(dir, 'blocker'), 'x');
   const l = createLedger({ file: path.join(dir, 'blocker', 'sub', 'ledger.db'), now: () => 0, getCaps: () => ({ hubDailyUsd: 1 }) });
   assert.strictEqual(quiet(() => l.record({ agent: 'a', model: 'x', costUsd: 9 })), null);
-  assert.deepStrictEqual(l.today('2026-01-01'), { day: '2026-01-01', total: 0, turns: 0, paidTurns: 0, planTurns: 0, planValue: 0, agents: [] });
+  assert.deepStrictEqual(l.today('2026-01-01'), { day: '2026-01-01', total: 0, turns: 0, paidTurns: 0, unpriced: 0, planTurns: 0, planValue: 0, agents: [] });
   assert.deepStrictEqual(l.days(), []);
   assert.strictEqual(l.overCap('a').capped, false);
 });

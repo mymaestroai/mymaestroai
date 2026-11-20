@@ -6118,7 +6118,9 @@
       const el = document.getElementById('spend-today');
       if (!el) return;
       const t = spendToday;
-      const show = !!t && (t.total || 0) >= 0.005;   // pay-per-use only: plan use never shows here
+      // pay-per-use only: plan use never shows here. An older hub (no paidTurns: its total still counts plan use, until
+      // it restarts after an update) shows nothing rather than a misleading figure.
+      const show = !!t && typeof t.paidTurns === 'number' && (t.total || 0) >= 0.005;
       el.classList.toggle('on', show);
       if (!show) { el.textContent = ''; return; }
       el.textContent = `spent today ${usd(t.total)}`;
@@ -6182,12 +6184,15 @@
       if (fetchFirst || !spendToday) await refreshSpendToday();
       const t = spendToday;
       if (!t) { box.textContent = 'No ledger on this hub.'; stSum('money', 'spend', 'no spend ledger'); return; }
-      const paid = (t.total || 0) >= 0.005;
+      if (typeof t.paidTurns !== 'number') { box.textContent = 'Restart your Maestro to see pay-per-use spend.'; stSum('money', 'spend', 'restart to see spend'); return; }
+      const paid = (t.paidTurns || 0) > 0;
+      const amount = (t.total || 0) >= 0.005 ? usd(t.total) : (t.total || 0) > 0 ? 'less than $0.01' : '$0.00';
+      const unpriced = (t.unpriced || 0) > 0 ? `, plus ${t.unpriced} call${t.unpriced === 1 ? '' : 's'} with no known price` : '';
       const top = (t.agents || []).filter(a => (a.cost || 0) > 0).slice(0, 5).map(a => `${esc(agentDisplayName(a.agent))} ${usd(a.cost)} (${a.paidTurns || 0})`).join(' · ');
       const plan = (t.planTurns || 0) > 0 ? `<div style="margin-top:2px">On your plans today: ${t.planTurns} turn${t.planTurns === 1 ? '' : 's'} (about ${usd(t.planValue || 0)} if paid through the API; your plans cover it, so it is not billed).</div>` : '';
-      box.innerHTML = (paid ? `<b style="color:var(--text)">${usd(t.total)}</b> pay-per-use over ${t.paidTurns || 0} turn${t.paidTurns === 1 ? '' : 's'}${top ? `<div style="margin-top:2px">${top}</div>` : ''}` : 'No pay-per-use spend today.') + plan;
+      box.innerHTML = (paid ? `<b style="color:var(--text)">${amount}</b> pay-per-use over ${t.paidTurns} turn${t.paidTurns === 1 ? '' : 's'}${unpriced}${top ? `<div style="margin-top:2px">${top}</div>` : ''}` : 'No pay-per-use spend today.') + plan;
       const caps = t.caps || {};
-      stSum('money', 'spend', paid ? `Spent today ${usd(t.total)}` : 'No pay-per-use spend today');
+      stSum('money', 'spend', paid ? `Spent today ${amount}` : 'No pay-per-use spend today');
       stSum('money', 'caps', caps.perAgentDailyUsd || caps.hubDailyUsd ? `pay-per-use caps: ${[caps.perAgentDailyUsd ? `${usd(caps.perAgentDailyUsd)} per agent` : '', caps.hubDailyUsd ? `${usd(caps.hubDailyUsd)} whole hub` : ''].filter(Boolean).join(', ')}` : 'no daily caps');
       const credits = t.credits || [];
       const listEl = document.getElementById('st-credit-list');

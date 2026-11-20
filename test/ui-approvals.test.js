@@ -94,7 +94,7 @@ test('desktop: spend readout and caps come from /api/ledger', () => {
   assert.ok(app.includes('JSON.stringify({ perAgentDailyUsd, hubDailyUsd })'));
   assert.ok(html.includes('id="spend-today"'), 'sidebar readout');
   assert.ok(app.includes('`spent today ${usd(t.total)}`'));
-  assert.match(app, /const show = !!t && \(t\.total \|\| 0\) >= 0\.005/, 'hidden below half a cent of pay-per-use spend');
+  assert.match(app, /const show = !!t && typeof t\.paidTurns === 'number' && \(t\.total \|\| 0\) >= 0\.005/, 'hidden below half a cent of pay-per-use spend, and on an older hub answer');
   assert.match(app, /const SPEND_REFRESH_MS = 60000/);
   assert.match(app, /'turn_end'[^\n]*scheduleSpendRefresh\(\)/, 'refreshed after each turn_end');
   assert.ok(app.includes('id="st-cap-agent"') && app.includes('id="st-cap-hub"') && app.includes('placeholder="unlimited"'));

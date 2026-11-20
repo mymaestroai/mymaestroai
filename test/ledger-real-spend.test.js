@@ -1,6 +1,7 @@
 'use strict';
-// Real spend: the money the app shows counts pay-per-use (API key) turns only. Subscription turns (claude-sdk,
-// codex-cli, codex) keep their API-equivalent value as planValue; local and unknown turns count in turns only.
+// Real spend: the money the app shows counts every turn a plan does not pay for and that did not run locally (API keys,
+// cloud voice, codex/ on the OpenAI key, unknown routes). Plan turns (claude-sdk, codex-cli) keep their API-equivalent
+// value as planValue; local turns count in turns only.
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('fs');
@@ -37,6 +38,8 @@ test('billing: one list of pay-per-use and subscription prefixes, and billingOf 
   for (const p of billing.SUBSCRIPTION_PREFIXES) assert.strictEqual(billing.billingOf(`${p}/m`).kind, 'subscription', p);
   assert.strictEqual(billing.billingOf('lmstudio/q').kind, 'local');
   assert.strictEqual(billing.billingOf('mystery').kind, 'unknown');
+  assert.deepStrictEqual(billing.PLAN_PREFIXES, ['claude-sdk', 'codex-cli'], 'codex/ runs on the OpenAI key: not a plan turn');
+  for (const p of billing.LOCAL_PREFIXES) assert.strictEqual(billing.billingOf(`${p}/m`).kind, 'local', p);
 });
 
 test('today(): total is pay-per-use only; plan turns carry planValue; local counts in turns only', () => {
@@ -60,10 +63,10 @@ test('today(): total is pay-per-use only; plan turns carry planValue; local coun
 test('today(): only subscription turns means no spend at all; empty day has the full shape', () => {
   const { l } = mk();
   l.record({ agent: 'maestro', model: 'claude-sdk/claude-opus-5-5', costUsd: 50 });
-  l.record({ agent: 'maestro', model: 'mystery', costUsd: 9 });   // unknown provider: never money
+  l.record({ agent: 'maestro', model: 'lmstudio/q', costUsd: 0 });
   const t = l.today();
-  assert.deepStrictEqual([t.total, t.paidTurns, t.planTurns, t.turns, t.planValue], [0, 0, 1, 2, 50]);
-  assert.deepStrictEqual(l.today('2020-01-01'), { day: '2020-01-01', total: 0, turns: 0, paidTurns: 0, planTurns: 0, planValue: 0, agents: [] });
+  assert.deepStrictEqual([t.total, t.paidTurns, t.planTurns, t.turns, t.planValue, t.unpriced], [0, 0, 1, 2, 50, 0]);
+  assert.deepStrictEqual(l.today('2020-01-01'), { day: '2020-01-01', total: 0, turns: 0, paidTurns: 0, unpriced: 0, planTurns: 0, planValue: 0, agents: [] });
 });
 
 test('days(): the same split per day, newest first', () => {
@@ -113,18 +116,58 @@ test('desktop source: the chip hides below half a cent and never prints planValu
   const app = read('app.js'), html = read('index.html');
   const fn = app.slice(app.indexOf('function paintSpendToday()'), app.indexOf('// Monthly API credits'));
   assert.ok(fn.length > 100);
-  assert.match(fn, /const show = !!t && \(t\.total \|\| 0\) >= 0\.005/);
+  assert.match(fn, /const show = !!t && typeof t\.paidTurns === 'number' && \(t\.total \|\| 0\) >= 0\.005/, 'an older hub answer (no paidTurns) never shows');
   assert.ok(!/planValue|planTurns/.test(fn), 'plan figures never reach the sidebar chip');
   assert.ok(fn.includes('`spent today ${usd(t.total)}`'));
   assert.ok(fn.includes('Pay-per-use spend today (API keys)') && fn.includes('Use of your Claude and ChatGPT plans is not counted here'));
   const set = app.slice(app.indexOf('async function paintSpendSettings'), app.indexOf('async function paintSpendSettings') + 2500);
   assert.ok(set.includes('No pay-per-use spend today'));
   assert.ok(set.includes('so it is not billed'));
-  assert.ok(set.includes('Spent today ${usd(t.total)}'));
+  assert.ok(set.includes('Spent today ${amount}'));
+  assert.ok(set.includes("'Restart your Maestro to see pay-per-use spend.'"), 'an older hub answer gets a restart line, not a figure');
+  assert.ok(set.includes("'less than $0.01'") && set.includes('with no known price'), 'sub-cent and unpriced calls are said, not hidden');
   assert.ok(set.includes('pay-per-use caps:'));
   assert.ok(app.includes('Daily pay-per-use cap per agent ($)') && app.includes('Daily pay-per-use cap, whole hub ($)'));
   assert.ok(app.includes('Caps count pay-per-use spend only (API keys), never plan use.'));
   const tag = html.match(/<span id="spend-today"[^>]*>/)[0];
   assert.ok(!/API-equivalent/.test(tag));
   assert.ok(tag.includes('title="Pay-per-use spend today (API keys); click for caps"'));
+});
+
+test('metered providers outside the API list count as spend and against caps: cloud voice, codex/ on the OpenAI key, unknown routes', () => {
+  const { l, c } = mk({ hubDailyUsd: 0.05 });
+  l.record({ agent: 'voice', model: 'elevenlabs/eleven_flash_v2_5', costUsd: 0.06 });
+  let t = l.today();
+  near(t.total, 0.06); assert.strictEqual(t.paidTurns, 1);
+  assert.strictEqual(l.overCap('voice').capped, true, 'an ElevenLabs-only day trips the hub cap');
+  assert.match(l.overCap('voice').reason, /pay-per-use cap/);
+  c.v = { perAgentDailyUsd: 0.25 };
+  l.record({ agent: 'worker', model: 'codex/gpt-5.5', costUsd: 0.3 });
+  assert.strictEqual(l.overCap('worker').capped, true, 'codex/ goes through the OpenAI API key: real spend');
+  l.record({ agent: 'gw', model: 'mystery', costUsd: 0.5 });
+  t = l.today();
+  near(t.total, 0.86); assert.strictEqual(t.paidTurns, 3, 'an unknown route is shown as money, never hidden');
+  near(l.days(1)[0].cost, 0.86);
+});
+
+test('unpriced pay-per-use calls are counted apart, so the page can say the total is incomplete', () => {
+  const { l } = mk();
+  l.record({ agent: 'a', model: 'openai/brand-new-model', inputTokens: 10, outputTokens: 10 });   // no price known
+  l.record({ agent: 'a', model: 'anthropic/claude-sonnet-5-5', costUsd: 0.004 });
+  l.record({ agent: 'a', model: 'claude-sdk/claude-opus-5-5' });                                  // plan, no cost: not unpriced spend
+  const t = l.today();
+  assert.deepStrictEqual([t.paidTurns, t.unpriced, t.planTurns], [2, 1, 1]);
+  near(t.total, 0.004);
+  assert.strictEqual(t.agents[0].unpriced, 1);
+});
+
+test('the gateway books a bare model name under the provider it is sent to', () => {
+  const src = read('lib/sdk-chat.js');
+  assert.match(src, /chatCompletion, supportsImages, resolveProvider \} = require\('\.\/gateway-client'\)/);
+  assert.ok(src.includes("!model.includes('/') ? (() => { try { return `${resolveProvider(model).provider}/${model}`; }"));
+  // gateway-client reads settings when it loads: load it from a throwaway install (test/helpers/isolated-install.js).
+  const ISO = require('./helpers/isolated-install').makeIsolatedInstall('real-spend-gw-');
+  dirs.push(ISO.root);
+  const { resolveProvider } = require(path.join(ISO.inst, 'lib', 'gateway-client.js'));
+  assert.deepStrictEqual(['claude-opus-5-5', 'gpt-6', 'gemini-pro'].map(m => resolveProvider(m).provider), ['anthropic', 'openai', 'google']);
 });
