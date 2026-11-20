@@ -728,3 +728,19 @@ test('sheetMarkdown: heading lines become bold lines; other lines are unchanged'
   assert.equal(H.sheetMarkdown('# Price survey\n\n- step 1\n## Next ##\nText # not a heading'), '**Price survey**\n\n- step 1\n**Next**\nText # not a heading');
   assert.equal(H.sheetMarkdown(''), '');
 });
+
+test('review s1: a listed file that fails to download shows the failure message, never "No status written yet"; an empty STATUS.md shows the brief', async () => {
+  const base = okFetch({ status: 'S', statusAt: NOW, brief: 'The brief' });
+  // the listing works, the download of STATUS.md fails (offline at that moment)
+  const flaky = async (url) => (url.includes('download') ? (() => { throw new Error('offline'); })() : base(url));
+  const doc = sheetDoc();
+  const m = await H.openStatus(view, { document: doc, fetchFn: flaky, now: NOW });
+  assert.match(m.body, /Couldn't load the status/);
+  // a 500 on the listed file is a failure too
+  const err500 = async (url) => (url.includes('download') ? { ok: false, status: 500, text: async () => '{"error":"x"}' } : base(url));
+  assert.equal(await H.loadStatusAnswer(view, err500).catch(() => 'threw'), 'threw');
+  // an empty STATUS.md: the brief is shown under "No status written yet"
+  const m2 = await H.openStatus(view, { document: doc, fetchFn: okFetch({ status: '  \n', statusAt: NOW, brief: 'The brief' }), now: NOW });
+  assert.equal(m2.body, 'No status written yet. The brief:\n\nThe brief');
+  assert.equal(m2.updated, 'No status written yet');
+});
