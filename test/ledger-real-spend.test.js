@@ -177,8 +177,11 @@ test('a paid call with no usage and no cost is unpriced, not $0; a failed call w
   assert.deepStrictEqual(l.record({ agent: 'a', model: 'openai/gpt-5' }), { cost: null, source: 'none' }, 'priced model, no usage: unknown, not zero');
   assert.strictEqual(l.record({ agent: 'a', model: 'openai/gpt-5', inputTokens: 0, outputTokens: 0 }).cost, 0, 'usage reported as zero stays zero');
   l.record({ agent: 'b', model: 'openai/gpt-5', ok: false });   // failed, nothing reported: not billed
-  const t = l.today();
+  let t = l.today();
   assert.deepStrictEqual([t.paidTurns, t.unpriced, t.turns], [2, 1, 3]);
+  l.record({ agent: 'c', model: 'openai/custom', ok: false, inputTokens: 500, outputTokens: 100 });   // failed but used tokens, no known price: may be billed
+  t = l.today();
+  assert.deepStrictEqual([t.paidTurns, t.unpriced, t.turns], [3, 2, 4]);
 });
 
 test('providers compare without regard to case', () => {
