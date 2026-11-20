@@ -248,3 +248,23 @@ test('selfcheck doRun: a halted run does not call afterRun', async () => {
   await sc.run({ trigger: 'manual' });
   assert.strictEqual(n, 0);
 });
+
+test('proof finding: only a turn that threw is critical; untried steps and check files that could not be set up are not (decision D4)', async () => {
+  const h = make();
+  h.sc = { finishedAt: new Date(T0).toISOString(), classes: classes({
+    lead: { status: 'error', note: "The agent didn't do every step (15 not tried: read files in the install folder)", actions: {} },
+    host: { status: 'error', note: 'The check files were changed by something else before the check ran, so it was stopped.', actions: {} },
+  }) };
+  const it = item(await quick(h), 'health-selfcheck');
+  assert.deepStrictEqual([it.level, it.title], ['ok', 'The last self-check ran']);
+  assert.deepStrictEqual(h.notices, []);
+  // a turn that threw, marked by the self-check (threw: true), is critical whatever its note says
+  const t = make();
+  t.sc = { finishedAt: new Date(T0).toISOString(), classes: classes({ lead: { status: 'error', threw: true, note: "Couldn't run: x is not defined", actions: {} } }) };
+  const ti = item(await quick(t), 'health-selfcheck');
+  assert.strictEqual(ti.level, 'critical');
+  assert.match(ti.title, /x is not defined/);
+  // the self-check marks both places a turn can throw
+  const src = require('fs').readFileSync(require('path').join(__dirname, '..', 'lib', 'selfcheck', 'index.js'), 'utf8');
+  assert.strictEqual((src.match(/status: 'error', threw: true, note: `Couldn't run: /g) || []).length, 2);
+});

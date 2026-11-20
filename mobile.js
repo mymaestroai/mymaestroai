@@ -11850,7 +11850,7 @@ async function openUpdateSheet() {
   const asideOnly = s.upToDate || (!s.canPutAside && !!s.rewritten && lc.length > 0);
   const canAside = s.canPutAside || asideOnly && lc.length > 0;
   const asideLabel = asideOnly ? 'Put my changes aside' : 'Put my changes aside and update';
-  d.innerHTML = `<h3>Update hub</h3><p>Branch <b>${esc(s.branch)}</b>${s.upToDate ? ' — up to date on this channel' : ''}</p><div>${radios}</div>${blockers}${force}${incoming}<div class="btns"><button id="upd-close">Cancel</button>${canAside ? `<button id="upd-force">${asideLabel}</button>` : ''}<button id="upd-go" class="go accent" ${s.canUpdate ? '' : 'disabled'}>${stayLabel}</button></div>`;
+  d.innerHTML = `<h3>Update hub</h3><p>Branch <b>${esc(s.branch)}</b>${s.upToDate ? ' — up to date on this channel' : ''}</p><div>${radios}</div>${blockers}${force}${incoming}<div class="btns"><button id="upd-close">Cancel</button>${canAside ? `<button id="upd-force">${asideLabel}</button>` : ''}<button id="upd-go" class="go accent" ${s.canUpdate ? '' : 'disabled'}${lc.length ? ' hidden' : ''}>${stayLabel}</button></div>`;
   // Putting the changes aside, then updating (the chosen channel, or only putting aside when already up to date).
   if (canAside) $('upd-force').addEventListener('click', () => { if (confirm(`Put these ${lc.length} change${lc.length === 1 ? '' : 's'} aside? Your Maestro won't put them back; you can find them with git stash list.`)) runUpdateFromPhone(asideOnly ? null : chosen(), true, asideOnly); });
   const go = $('upd-go');
