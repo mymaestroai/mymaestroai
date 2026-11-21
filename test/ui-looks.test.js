@@ -234,7 +234,7 @@ test('pickers: app.js and mobile.js choose through HubLooks, build previews from
   assert.match(app, /'Interface style for new members'/);
   assert.match(app, /if \(!isHubAdmin\(\)\) return;\s*const row/);
   assert.match(mob, /id="prof-looks"/);
-  assert.match(mob, /lookPickerPaint\(lh\)/);
+  assert.match(mob, /lookPickerPaint\(d\.querySelector\('#ss-style'\)\)/);   // the Simple sheet's picker (was an inline section; now markup right after Appearance)
   assert.match(mob, /gridTemplateColumns = 'repeat\(3, 1fr\)'/);
 });
 
@@ -384,7 +384,7 @@ test('people read "Interface style", never "Look": every label and sentence of t
     ['app.js lookPickerBuild', fn(app, 'lookPickerBuild')], ['app.js lookSectionPaint', fn(app, 'lookSectionPaint')],
     ['mobile.js lookPickerPaint', fn(mob, 'lookPickerPaint')], ['mobile.js openProfileSheet', fn(mob, 'openProfileSheet')],
     ['mobile.js menuLookName', fn(mob, 'menuLookName')],
-    ['mobile.js Simple sheet', mob.slice(mob.indexOf("lt.className = 'ss-title'") - 200, mob.indexOf("lt.className = 'ss-title'") + 400)],
+    ['mobile.js Simple sheet', mob.slice(mob.indexOf('id="ss-style-sec"') - 200, mob.indexOf('id="ss-style-sec"') + 400)],
     ['mobile.html menu', html.slice(html.indexOf('id="menu-look"') - 20, html.indexOf('id="menu-look-pick"') + 40)],
   ];
   // What a person reads: quoted text with a space, a one-word label, or markup text between tags (not ids, classes or selectors).
@@ -399,6 +399,6 @@ test('people read "Interface style", never "Look": every label and sentence of t
   }
   for (const l of L.LOOKS) assert.doesNotMatch(`${l.label} ${l.blurb}`, /\blooks?\b/i, `${l.id}: its name and description in the picker`);
   assert.match(html, /&#x1F3A8; Interface style<\/span>/);
-  assert.match(mob, /lt\.appendChild\(document\.createTextNode\('Interface style'\)\)/);
+  assert.match(mob, /<div class="ss-title">Interface style<\/div>/);
   assert.match(mob, /<div class="sec-title">Interface style<\/div>/);
 });

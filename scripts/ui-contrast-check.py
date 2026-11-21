@@ -9,7 +9,7 @@ Run it against a running Maestro you are signed in to (Python 3 with Playwright 
 Exit 0 when Broadsheet House and Quiet Page have no violation at all and Engineering has none beyond the list in
 scripts/ui-contrast-engineering-baseline.json (today's Engineering, kept as it is by decision; that list may only
 shrink). --write-baseline rewrites the list from this run (Engineering only)."""
-import argparse, http.cookiejar, json, os, sys, time
+import argparse, http.cookiejar, json, os, re, sys, time
 from playwright.sync_api import sync_playwright
 
 ap = argparse.ArgumentParser()
@@ -19,6 +19,7 @@ ap.add_argument('--out', default='')
 ap.add_argument('--styles', default='engineering,broadsheet,quiet')
 ap.add_argument('--only', default='', help='comma-separated scene names')
 ap.add_argument('--write-baseline', action='store_true')
+ap.add_argument('--simple', default='', choices=['', 'dark', 'light'], help='the account is in Simple mode with this Simple theme: check the Simple scenes')
 args = ap.parse_args()
 base, jarp = args.base.rstrip('/'), args.cookies
 styles = [s for s in args.styles.split(',') if s]
@@ -46,10 +47,25 @@ PAGES = [
     ('changes', '/changes.html', 'both', ''), ('help', '/help.html', 'both', ''), ('local-models', '/local-models.html', 'both', ''),
     ('modules', '/modules.html', 'both', ''), ('tiger-team', '/tiger-team.html', 'both', ''), ('recordings', '/recordings.html', 'both', ''),
     ('welcome', '/welcome.html', 'both', ''), ('login', '/login.html', 'both-anon', ''),
+    # Tiger Team's run-time parts, which an empty page does not show: the page's own classes and badge markup
+    ('tiger-team-samples', '/tiger-team.html', 'both', "const d = document.createElement('div'); d.id = 'mm-samples'; d.innerHTML = "
+     "'<div class=\"agent-block-header\"><span class=\"block-agent\">Coordinator</span><span class=\"block-role\">lead</span></div>'"
+     " + '<div class=\"tool-call-line done\"><span class=\"tool-call-name\">Bash</span> <span class=\"tool-call-input\">npm test</span> <span class=\"tool-call-toggle\">show</span></div>'"
+     " + '<span style=\"background:var(--tt-amber2-20); color:var(--tt-amber2-text); padding:1px 6px; border-radius:3px; font-size:10px; margin-left:8px;\">IN PROGRESS</span>'"
+     " + '<span style=\"background:var(--tt-ok2-20); color:var(--tt-ok2-text); padding:1px 6px; border-radius:3px; font-size:10px; margin-left:8px;\">AUTO-SAVED</span>'"
+     " + '<span style=\"font-size:11px;color:var(--tt-model);opacity:var(--tt-op-badge);margin-left:8px;font-weight:normal;\">claude-sonnet</span>'; document.body.prepend(d);"),
 ]
 
 CHECK = r"""() => {
-  const parse = (s) => { const m = s && s.match(/rgba?\(([^)]+)\)/); if (!m) return null; const p = m[1].split(/[ ,\/]+/).filter(Boolean).map(Number); return { r: p[0], g: p[1], b: p[2], a: p.length > 3 ? p[3] : 1 }; };
+  const parse = (s) => {
+    if (!s) return null;
+    if (s === 'transparent') return { r: 0, g: 0, b: 0, a: 0 };
+    let m = s.match(/^rgba?\(([^)]+)\)$/);
+    if (m) { const p = m[1].split(/[ ,\/]+/).filter(Boolean).map(Number); return { r: p[0], g: p[1], b: p[2], a: p.length > 3 ? p[3] : 1 }; }
+    m = s.match(/^color\(srgb ([^)]+)\)$/);   // color-mix() and other modern colours compute to this
+    if (m) { const p = m[1].split(/[ \/]+/).filter(Boolean).map(Number); return { r: p[0] * 255, g: p[1] * 255, b: p[2] * 255, a: p.length > 3 ? p[3] : 1 }; }
+    return undefined;   // a colour this check cannot read: reported, never skipped
+  };
   const over = (top, under) => { const a = top.a; return { r: top.r * a + under.r * (1 - a), g: top.g * a + under.g * (1 - a), b: top.b * a + under.b * (1 - a), a: 1 }; };
   const lum = (c) => { const f = v => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }; return 0.2126 * f(c.r) + 0.7152 * f(c.g) + 0.0722 * f(c.b); };
   const ratio = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };
@@ -57,7 +73,9 @@ CHECK = r"""() => {
   const behind = (el, includeSelf) => {
     const layers = [];
     for (let e = includeSelf ? el : el.parentElement; e; e = e.parentElement) {
-      const c = parse(getComputedStyle(e).backgroundColor); if (c && c.a > 0) { layers.push(c); if (c.a >= 1) break; }
+      const c = parse(getComputedStyle(e).backgroundColor);
+      if (c === undefined) { unreadable.push(getComputedStyle(e).backgroundColor); continue; }
+      if (c && c.a > 0) { layers.push(c); if (c.a >= 1) break; }
     }
     let col = { r: 255, g: 255, b: 255, a: 1 };
     for (let i = layers.length - 1; i >= 0; i--) col = over(layers[i], col);
@@ -69,7 +87,8 @@ CHECK = r"""() => {
     return true;
   };
   const key = (el) => { let s = el.tagName.toLowerCase(); if (el.id) s += '#' + el.id; else if (el.className && typeof el.className === 'string') s += '.' + el.className.trim().split(/\s+/).slice(0, 2).join('.'); const p = el.parentElement; return (p ? (p.id ? '#' + p.id : p.tagName.toLowerCase()) + ' > ' : '') + s; };
-  const bad = [];
+  const bad = [], unreadable = [];
+  const fade = (el) => { let o = 1; for (let e = el; e; e = e.parentElement) o *= parseFloat(getComputedStyle(e).opacity); return o; };
   for (const el of document.querySelectorAll('body *')) {
     if (['SCRIPT', 'STYLE', 'NOSCRIPT', 'SVG', 'PATH', 'OPTION'].includes(el.tagName)) continue;
     const ctrl = /^(INPUT|SELECT|TEXTAREA|BUTTON)$/.test(el.tagName);
@@ -80,8 +99,14 @@ CHECK = r"""() => {
     const shown = (el.value || [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('')).trim();
     const emojiOnly = shown && /^[\p{Extended_Pictographic}\p{Emoji_Component}\uFE0F\u200D\s]+$/u.test(shown);   // an emoji draws its own colours
     if (ownText && !emojiOnly) {
-      const fg = parse(cs.color); if (!fg) continue;
-      const bg = behind(el, true), col = fg.a < 1 ? over(fg, bg) : fg;
+      const fg0 = parse(cs.color);
+      if (fg0 === undefined) { bad.push({ kind: 'colour', el: key(el), text: shown.slice(0, 40), ratio: 0, need: 4.5, fg: cs.color, bg: '' }); continue; }
+      if (!fg0) continue;
+      unreadable.length = 0;
+      const bg = behind(el, true);
+      if (unreadable.length) { bad.push({ kind: 'colour', el: key(el), text: shown.slice(0, 40), ratio: 0, need: 4.5, fg: cs.color, bg: unreadable[0] }); continue; }
+      const fg = { ...fg0, a: fg0.a * fade(el) };   // the element's and its ancestors' opacity fade the text into what is behind it
+      const col = fg.a < 1 ? over(fg, bg) : fg;
       const size = parseFloat(cs.fontSize), boldish = parseInt(cs.fontWeight, 10) >= 700;
       const need = size >= 24 || (size >= 18.66 && boldish) ? 3 : 4.5;
       const r = ratio(col, bg);
@@ -90,10 +115,23 @@ CHECK = r"""() => {
     // A field's edge (WCAG 1.4.11): inputs people type in, selects and text areas. A button is identified by its text.
     const field = el.tagName === 'SELECT' || el.tagName === 'TEXTAREA' || (el.tagName === 'INPUT' && !/^(hidden|checkbox|radio|range|color|button|submit|reset|image|file)$/.test(el.type));
     if (field) {
+      unreadable.length = 0;
       const outside = behind(el, false), own = behind(el, true);
       const bw = parseFloat(cs.borderTopWidth) + parseFloat(cs.borderBottomWidth);
-      const bc = parse(cs.borderTopColor), edge = bw > 0 && bc && bc.a > 0 ? over(bc, outside) : null;
-      const r = Math.max(edge ? ratio(edge, outside) : 1, ratio(own, outside));
+      const bc = parse(cs.borderTopColor);
+      if (bc === undefined || unreadable.length) { bad.push({ kind: 'colour', el: key(el), text: '', ratio: 0, need: 3, border: cs.borderTopColor, bg: unreadable[0] || '' }); continue; }
+      const edge = bw > 0 && bc && bc.a > 0 ? over(bc, outside) : null;
+      let r = Math.max(edge ? ratio(edge, outside) : 1, ratio(own, outside));
+      // a field drawn without an edge of its own inside a box that draws it (a rounded message box): the box is the edge
+      if (r < 3 && !edge && ratio(own, outside) < 1.05) {
+        for (let a = el.parentElement, n = 0; a && n < 3 && r < 3; a = a.parentElement, n++) {
+          const acs = getComputedStyle(a), aout = behind(a, false), aown = behind(a, true);
+          const abw = parseFloat(acs.borderTopWidth), abc = parse(acs.borderTopColor);
+          const aedge = abw > 0 && abc && abc.a > 0 ? over(abc, aout) : null;
+          const ar = Math.max(aedge ? ratio(aedge, aout) : 1, ratio(aown, aout));
+          if (aedge || ar >= 1.05) { r = ar; break; }   // the first box that draws anything is the field's edge
+        }
+      }
       const visibleKind = el.tagName === 'BUTTON' || el.type === 'button' || el.type === 'submit';
       // a text-like button with no edge at all is a link-styled button: its text is the control
       if (r < 3 && !(visibleKind && ownText && (!edge || ratio(edge, outside) < 1.05) && ratio(own, outside) < 1.05)) {
@@ -104,6 +142,12 @@ CHECK = r"""() => {
   return { bad, look: document.documentElement.dataset.look || '' };
 }"""
 
+SIMPLE_PAGES = [
+    ('main', '/', 'desktop', ''), ('settings', '/', 'desktop', 'openSimpleSettings()'), ('chat', '/', 'desktop', OPEN_D),
+    ('mobile', '/mobile', 'phone', ''), ('mobile-settings', '/mobile', 'phone', 'simpleSettingsOpen()'), ('mobile-chat', '/mobile', 'phone', OPEN_P),
+]
+if args.simple:   # Simple mode: its own scenes, named simple-<theme>-<scene>
+    PAGES = [(f'simple-{args.simple}-{n}', p, w, a) for n, p, w, a in SIMPLE_PAGES]
 ONLY = [x for x in args.only.split(',') if x]
 if ONLY:
     PAGES = [p for p in PAGES if p[0] in ONLY]
@@ -131,6 +175,9 @@ with sync_playwright() as pw:
                         time.sleep(5)
                     r = pg.evaluate(CHECK)
                     r['url'] = pg.url.replace(base, '')
+                    want = path.split('?')[0]
+                    if r.get('look') != style or not (r['url'].split('?')[0] == want or (want == '/' and r['url'].split('?')[0] in ('/', '/index.html'))):
+                        r['error'] = f"wrong page or style: {r['url']} in {r.get('look')!r}, expected {path} in {style!r}"   # e.g. an expired session sent it to the sign-in page
                 except Exception as e:
                     r = {'error': str(e)[:200], 'bad': []}
                 res[f'{style}|{name}|{kind}'] = r
@@ -139,16 +186,20 @@ with sync_playwright() as pw:
 if args.out:
     json.dump(res, open(args.out, 'w'), indent=1)
 
-def vkey(scene, v):   # what a violation is, without its exact ratio (fonts render slightly differently between machines)
-    return f"{scene}|{v['kind']}|{v['el']}|{v.get('text', '')}"
+def vkey(scene, v):   # what a violation is, without its exact ratio, a message's random id, or the digits of a time or count
+    el = re.sub(r'#msg-[0-9a-z-]+', '#msg-*', v['el'])
+    text = re.sub(r'[0-9]+', 'N', v.get('text', ''))
+    return f"{scene}|{v['kind']}|{el}|{text}"
 
 known = set()
 if os.path.exists(BASELINE):
     known = set(json.load(open(BASELINE)).get('violations', []))
 eng_now = sorted({vkey(k.split('|', 1)[1], v) for k, r in res.items() if k.startswith('engineering|') for v in r.get('bad', [])})
 if args.write_baseline:
-    json.dump({'about': 'Engineering (today\'s interface style, kept as it is) fails these WCAG AA checks; the list may only shrink.', 'violations': eng_now}, open(BASELINE, 'w'), indent=1)
-    print(f'wrote {len(eng_now)} Engineering violations to {BASELINE}')
+    ran = {k.split('|')[1] for k in res if k.startswith('engineering|')}
+    kept = [v for v in known if v.split('|')[0] not in ran]   # other scenes' entries (e.g. the Simple or the Advanced run)
+    json.dump({'about': 'Engineering (today\'s interface style, kept as it is) fails these WCAG AA checks; the list may only shrink.', 'violations': sorted(set(kept) | set(eng_now))}, open(BASELINE, 'w'), indent=1)
+    print(f'wrote {len(set(kept) | set(eng_now))} Engineering violations to {BASELINE} ({len(eng_now)} from this run)')
 
 fail = 0
 for k, r in sorted(res.items()):

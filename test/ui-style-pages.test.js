@@ -85,3 +85,20 @@ test('the browser contrast check and its Engineering list are in the repo', () =
   assert.ok(Array.isArray(base.violations) && base.violations.length > 0);
   assert.ok(base.violations.every(v => typeof v === 'string' && v.split('|').length >= 4), 'scene|kind|element|text');
 });
+
+test('Simple mode takes each light style\'s palette (both Simple variants), and its text reads at 4.5:1', () => {
+  const hex = (h) => { h = h.replace('#', ''); return [0, 2, 4].map(i => parseInt(h.slice(i, i + 2), 16)); };
+  const lum = (c) => { const f = (v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }; return 0.2126 * f(c[0]) + 0.7152 * f(c[1]) + 0.0722 * f(c[2]); };
+  const ratio = (a, b) => { const x = lum(hex(a)), y = lum(hex(b)); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };
+  for (const [id, lf] of [['broadsheet', 'looks/broadsheet.css'], ['quiet', 'looks/quiet.css']]) {
+    const css = read(lf).replace(/\/\*[\s\S]*?\*\//g, '');
+    const at = css.indexOf(`html[data-look="${id}"].mm-simple,\nhtml[data-look="${id}"].mm-simple.mm-light {`);
+    assert.ok(at >= 0, `${lf}: one block for dark Simple and .mm-light`);
+    const block = css.slice(at, css.indexOf('}', at));
+    const v = (n) => { const m = block.match(new RegExp(`--${n}:\\s*(#[0-9A-Fa-f]{6});`)); assert.ok(m, `${lf} Simple --${n}`); return m[1]; };
+    for (const [fg, bg] of [['sm-text', 'sm-page'], ['sm-sec', 'sm-page'], ['sm-muted', 'sm-page'], ['sm-text', 'sm-side'], ['sm-sec', 'sm-side'], ['sm-muted', 'sm-side'], ['sm-text', 'sm-raised'], ['sm-sec', 'sm-raised'], ['text', 'bg-dark'], ['text-dim', 'bg-card'], ['text-tertiary', 'bg-card']]) {
+      assert.ok(ratio(v(fg), v(bg)) >= 4.5, `${lf}: Simple --${fg} on --${bg} is ${ratio(v(fg), v(bg)).toFixed(2)}:1`);
+    }
+    assert.match(block, /color-scheme: light;/);
+  }
+});

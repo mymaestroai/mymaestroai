@@ -18,6 +18,7 @@
     --as-warning: #f5a623; --as-warning-2: #e67e22;
     --as-btn: #2d2d44; --as-btn-hover: #3d3d54; --as-row-active: #1f1f33;
     --as-overlay-3: rgba(255,255,255,0.03); --as-overlay-6: rgba(255,255,255,0.06); --as-overlay-8: rgba(255,255,255,0.08);
+    --as-op-hint: .7;   /* a faded hint in Engineering; full strength in the light styles */
   }
   html[data-look]:not([data-look="engineering"]) {
     --as-page: var(--bg-dark); --as-field: var(--bg-input); --as-tab: var(--bg-card);
@@ -31,6 +32,7 @@
     --as-warning: var(--warning); --as-warning-2: var(--warning);
     --as-btn: var(--bg-card); --as-btn-hover: color-mix(in srgb, var(--text) 8%, var(--bg-card)); --as-row-active: var(--accent-tint-10);
     --as-overlay-3: color-mix(in srgb, var(--text) 3%, transparent); --as-overlay-6: color-mix(in srgb, var(--text) 6%, transparent); --as-overlay-8: color-mix(in srgb, var(--text) 8%, transparent);
+    --as-op-hint: 1;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
@@ -164,7 +166,7 @@
   </label>
   <div id="lead-status" class="status"></div>
   <div style="margin-top:10px;">
-    <label>Short description <span style="opacity:.7;font-weight:normal">(hover tooltip, one line)</span></label>
+    <label>Short description <span style="opacity:var(--as-op-hint);font-weight:normal">(hover tooltip, one line)</span></label>
     <div style="display:flex;gap:8px;">
       <input type="text" id="agent-blurb" maxlength="120" placeholder="e.g. Family GP: history, diagnosis, coordinates specialists" style="flex:1;">
       <button onclick="saveBlurb()">Save</button>

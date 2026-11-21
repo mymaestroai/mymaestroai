@@ -15348,6 +15348,20 @@ if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
   if (typeof wide.addEventListener === 'function') wide.addEventListener('change', wideChange);
   else if (typeof wide.addListener === 'function') wide.addListener(wideChange);
 }
+// Under Broadsheet House or Quiet Page the style's own palette decides Simple's colours: that style's label, else null (Engineering).
+function simpleStyleLabel() {
+  const L = typeof window !== 'undefined' ? window.HubLooks : null;
+  if (!L || typeof L.applied !== 'function') return null;
+  const id = L.applied(document);
+  if (id === 'engineering') return null;
+  const look = typeof L.byId === 'function' ? L.byId(id) : null;
+  return look ? look.label : id;
+}
+let simpleLookSheetOff = null;   // removes the open settings sheet's mm-look-change listener
+// The top-bar theme button follows the style on its own too (one document listener, added once).
+if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+  document.addEventListener('mm-look-change', () => { try { if (typeof simpleToggleSync === 'function') simpleToggleSync(); } catch { /* cosmetic */ } });
+}
 // The Simple view switch (Advanced top bars and Simple's top bar) and Simple's theme button: only for a real account.
 function simpleToggleSync() {
   const ok = simpleAccountOk(hubMe);
@@ -15356,7 +15370,7 @@ function simpleToggleSync() {
   for (const id of ['agents-head', 'chat-head']) { const h = document.getElementById(id); if (h) h.classList.toggle('has-mode-toggle', ok); }
   const tb = document.querySelector('#simple-top .simple-theme-btn');
   if (tb) {
-    tb.hidden = !ok;
+    tb.hidden = !ok || !!(typeof simpleStyleLabel === 'function' && simpleStyleLabel());   // under a light style its own palette decides: nothing to switch
     const t = window.hubSimple.themeLabel(hubMe && hubMe.theme);
     tb.querySelector('.stb-ic').textContent = t.icon;
     tb.querySelector('.stb-lab').textContent = t.label;
@@ -15403,15 +15417,29 @@ function simpleSettingsOpen() {
   d.setAttribute('aria-label', 'Settings');
   d.innerHTML = '<h3>Settings</h3>' +
     '<div class="ss-sec"><div class="ss-title">Appearance</div><div class="ss-seg" role="group" aria-label="Appearance">' +
-    '<button type="button" data-theme="light">Light</button><button type="button" data-theme="dark">Dark</button><button type="button" data-theme="auto">Match device</button></div></div>' +
+    '<button type="button" data-theme="light">Light</button><button type="button" data-theme="dark">Dark</button><button type="button" data-theme="auto">Match device</button></div><div class="ss-follow" hidden></div></div>' +
+    '<div class="ss-sec" id="ss-style-sec"><div class="ss-title">Interface style</div><div id="ss-style"></div></div>' +
     '<div class="ss-sec"><div class="ss-title">Name</div><div class="ss-val"></div></div>' +
     '<button type="button" class="ss-row" id="ss-adv"><b>Switch to Advanced</b><small>All tools, agents’ work and settings</small></button>' +
     '<button type="button" class="ss-row" id="ss-out"><b>Sign out</b></button>' +
     '<button type="button" class="ss-close">Close</button>';
   d.querySelector('.ss-val').textContent = name;
-  { const ls = document.createElement('div'); ls.className = 'ss-sec'; const lt = document.createElement('div'); lt.className = 'ss-title'; lt.appendChild(document.createTextNode('Interface style')); const lh = document.createElement('div'); ls.appendChild(lt); ls.appendChild(lh); d.insertBefore(ls, d.querySelector('.ss-sec')); lookPickerPaint(lh); }   // Interface style is the first section, right after the h3
+  lookPickerPaint(d.querySelector('#ss-style'));   // Interface style sits right after Appearance
   const paint = () => { const cur = (hubMe && hubMe.theme) || 'auto'; d.querySelectorAll('.ss-seg button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.theme === cur))); };
   paint();
+  // Under a light style its own palette decides the colours: the buttons give way to one line (the stored theme is untouched).
+  const paintFollow = () => {
+    const label = simpleStyleLabel();
+    const seg = d.querySelector('.ss-seg'); const line = d.querySelector('.ss-follow');
+    if (seg) seg.style.display = label ? 'none' : '';
+    if (line) { line.hidden = !label; line.textContent = label ? 'Colours follow your interface style (' + label + ').' : ''; }
+  };
+  paintFollow();
+  if (simpleLookSheetOff) simpleLookSheetOff();
+  const onLook = () => { if (!d.isConnected) { document.removeEventListener('mm-look-change', onLook); return; } paintFollow(); };
+  document.addEventListener('mm-look-change', onLook);
+  simpleLookSheetOff = () => document.removeEventListener('mm-look-change', onLook);
+  d.addEventListener('close', () => { if (simpleLookSheetOff) { simpleLookSheetOff(); simpleLookSheetOff = null; } }, { once: true });
   d.querySelectorAll('.ss-seg button').forEach(b => b.addEventListener('click', async () => {
     if (simpleThemeSaving) return;   // one theme save at a time (shared with the theme button)
     simpleThemeSaving = true;

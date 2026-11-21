@@ -119,10 +119,13 @@ test('source: the toggle saves and keeps the menu open; groups and dot sync on o
   assert.match(js, /canDownload === true\); typeof menuGroupsSync === 'function' && menuGroupsSync\(\)/);
 });
 
-test('source: simpleSettingsOpen puts Look first; the Profile sheet keeps its Look section', () => {
+test('source: simpleSettingsOpen puts the interface style at the top, beside Appearance; the Profile sheet keeps its section', () => {
+  // Simple follows the interface style (2026-11-20): the picker sits right after the Appearance row, which says which
+  // style the colours follow; both are the first two sections of the sheet.
   const i = js.indexOf('function simpleSettingsOpen()');
   const fn = js.slice(i, i + 3500);
-  assert.match(fn, /d\.insertBefore\(ls, d\.querySelector\('\.ss-sec'\)\)/);
+  const app = fn.indexOf('<div class="ss-title">Appearance</div>'), sty = fn.indexOf('<div class="ss-title">Interface style</div>'), name = fn.indexOf('<div class="ss-title">Name</div>');
+  assert.ok(app > 0 && sty > app && name > sty, 'Appearance, then Interface style, then the rest');
   assert.ok(!fn.includes("querySelector('.ss-row')"));
   assert.match(js, /lookPickerPaint\(\$\('prof-looks'\)\);/);
 });

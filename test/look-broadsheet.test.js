@@ -91,12 +91,17 @@ test('no network url(), @import or @font-face', () => {
   assert.ok(!/\uFE0F/.test(css), 'no variation selector');
 });
 
-test('Simple mode keeps its palette: the colour block excludes html.mm-simple', () => {
-  const colourRule = rules(stripped).find((r) => /--bg-dark\s*:/.test(r.body));
-  assert.ok(colourRule && /:not\(\.mm-simple\)/.test(colourRule.sel));
-  const simple = rules(stripped).filter((r) => /\.mm-simple\s*$/.test(r.sel) && !/:not/.test(r.sel));
-  assert.ok(simple.length >= 1);
-  for (const r of simple) assert.ok(!/#[0-9a-f]{3,8}\b|rgba?\(/i.test(r.body), 'Simple rule carries fonts only');
+test('Simple mode takes the style\'s colours (owner, 2026-11-20): one block covers both of Simple\'s variants with this palette', () => {
+  const colourRule = rules(stripped).find((r) => /--bg-dark\s*:/.test(r.body) && /:not\(\.mm-simple\)/.test(r.sel));
+  assert.ok(colourRule, 'the main colour block (Simple keeps its own layout rules)');
+  const val = (body, n) => { const m = body.match(new RegExp(`--${n}:\\s*([^;]+);`)); return m && m[1].trim(); };
+  const simple = rules(stripped).find((r) => /--sm-page\s*:/.test(r.body));
+  assert.ok(simple, 'a Simple palette block');
+  assert.match(simple.sel, /\.mm-simple,\s*html\[data-look="broadsheet"\]\.mm-simple\.mm-light$/, 'it covers dark Simple and .mm-light');
+  for (const n of ['bg-dark', 'bg-card', 'bg-input', 'accent', 'text', 'text-dim', 'text-tertiary', 'border', 'border-strong']) {
+    assert.strictEqual(val(simple.body, n), val(colourRule.body, n), `--${n} in Simple is the style's`);
+  }
+  for (const n of ['sm-page', 'sm-text', 'sm-sec', 'sm-muted', 'sm-border', 'sp-bubble', 'sp-me-bg', 'sp-me-text']) assert.ok(val(simple.body, n), `--${n}`);
 });
 
 test('contrast pairs listed in the header are each >= 4.5 and match the hex values in the file', () => {
