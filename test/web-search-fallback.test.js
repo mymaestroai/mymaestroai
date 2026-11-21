@@ -29,7 +29,20 @@ function mk({ webSearch = {}, providerKeys = {}, fetchImpl } = {}) {
 // ── summary() ─────────────────────────────────────────────────────────────────────────────────────────────────────
 test('summary: no keys means DuckDuckGo alone, flagged as the fallback', () => {
   const s = mk().summary();
-  assert.deepStrictEqual(s, { inUse: 'duckduckgo', inUseLabel: 'DuckDuckGo (scraped, no key)', fallbackOnly: true, perplexityKey: false });
+  assert.deepStrictEqual(s, { inUse: 'duckduckgo', inUseLabel: 'DuckDuckGo (scraped, no key)', off: false, fallbackOnly: true, perplexityKey: false, perplexityOn: false });
+});
+
+test('summary: a saved order with duplicates is read once per backend, so DuckDuckGo twice is still the fallback', () => {
+  const ws = mk({ webSearch: { order: ['duckduckgo', 'duckduckgo'] } });
+  assert.deepStrictEqual(ws.chain(), ['duckduckgo']);
+  assert.strictEqual(ws.summary().fallbackOnly, true);
+});
+
+test('summary: off when the chain is empty; a Perplexity key with Perplexity turned off is set but not on', () => {
+  const s = mk({ webSearch: { disabled: ['duckduckgo', 'perplexity'] }, providerKeys: { perplexity: 'pplx-example' } }).summary();
+  assert.strictEqual(s.off, true);
+  assert.strictEqual(s.perplexityKey, true);
+  assert.strictEqual(s.perplexityOn, false);
 });
 
 test('summary: a Brave key puts Brave first and the fallback flag goes off', () => {
@@ -124,7 +137,8 @@ test('readiness: an empty chain says web search is off', async () => {
   const it = byId(await ready({ searchSummary: () => ({ inUse: null, inUseLabel: null, fallbackOnly: true, chain: [] }) }), 'search');
   assert.strictEqual(it.level, 'warn');
   assert.strictEqual(it.title, 'Web search is off');
-  assert.strictEqual(it.detail, 'No search backend is set up, so agents that search through your Maestro get no results.');
+  assert.strictEqual(it.detail, 'No search service is available, so agents that search through your Maestro get no results.');
+  assert.strictEqual(it.fix, 'Add a search key (Brave, Serper or Tavily) in Settings → Web search and fetch, or ask your lead agent to switch DuckDuckGo back on.');
   assert.deepStrictEqual(it.action, { label: 'Open web search settings', href: '/?websearch=1' });
 });
 
@@ -142,7 +156,87 @@ test('Settings: In use row, Test web search button, Brave link and cost, Perplex
   assert.match(app, /Your Perplexity key is set, so searches can use it\./);
   assert.match(app, /No Perplexity key; add one under LLM Providers to use Perplexity search\./);
   assert.match(app, /Web search is using the free fallback; results are thin\. Add a search key for much better research\./);
-  assert.match(app, /stSum\('tools', 'search', s\.fallbackOnly \? 'web search: free fallback' : `web search: \$\{s\.inUseLabel \|\| chain\}`, !!s\.fallbackOnly\)/);
+});
+
+// ── the Settings status rows, run from app.js's own code against stub elements ───────────────────────────────────────
+function loadStatusWith(respond) {
+  const start = app.indexOf('    const WS_LABELS = {');
+  const end = app.indexOf('    async function saveWebSearch() {');
+  assert.ok(start > 0 && end > start, 'the web search status block is found in app.js');
+  const els = {};
+  for (const id of ['st-ws-status', 'st-ws-inuse', 'st-ws-pplx']) els[id] = { id, textContent: 'Checking…', innerHTML: '' };
+  const sums = [];
+  const document = { getElementById: (id) => els[id] || null };
+  const esc = (s) => String(s).replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
+  const stSum = (...a) => sums.push(a);
+  const fetch = async () => respond();
+  const run = new Function('document', 'esc', 'stSum', 'fetch', `${app.slice(start, end)}\nreturn loadWebSearchStatus();`);
+  return run(document, esc, stSum, fetch).then(() => ({ els, sums }));
+}
+const okJson = (search) => ({ ok: true, status: 200, json: async () => ({ ok: true, search, fetch: {} }) });
+
+test('Settings status: an error answer (503) is "unavailable", never "off", and clears the Perplexity line', async () => {
+  const { els, sums } = await loadStatusWith(() => ({ ok: false, status: 503, json: async () => ({ error: 'unavailable' }) }));
+  assert.strictEqual(els['st-ws-inuse'].textContent, 'Search status unavailable.');
+  assert.doesNotMatch(els['st-ws-inuse'].innerHTML, /off/);
+  assert.strictEqual(els['st-ws-pplx'].textContent, '');
+  assert.deepStrictEqual(sums, [['tools', 'search', 'web search: status unavailable', false]]);
+});
+
+test('Settings status: a good read then a failed refresh on the same page replaces the old summary and rows', async () => {
+  const start = app.indexOf('    const WS_LABELS = {');
+  const end = app.indexOf('    async function saveWebSearch() {');
+  const els = {};
+  for (const id of ['st-ws-status', 'st-ws-inuse', 'st-ws-pplx']) els[id] = { id, textContent: 'Checking…', innerHTML: '' };
+  const sums = [];
+  const answers = [okJson({ chain: ['duckduckgo'], backends: [], perplexityKey: true, perplexityOn: false, off: false, fallbackOnly: true }), { ok: false, status: 503, json: async () => ({}) }];
+  const load = new Function('document', 'esc', 'stSum', 'fetch', `${app.slice(start, end)}\nreturn loadWebSearchStatus;`)(
+    { getElementById: (id) => els[id] || null }, (s) => String(s), (...a) => sums.push(a), async () => answers.shift());
+  await load();
+  assert.deepStrictEqual(sums[0], ['tools', 'search', 'web search: free fallback', true]);
+  assert.match(els['st-ws-pplx'].textContent, /set, but Perplexity search is turned off/);
+  await load();
+  assert.deepStrictEqual(sums[1], ['tools', 'search', 'web search: status unavailable', false]);
+  assert.strictEqual(els['st-ws-inuse'].textContent, 'Search status unavailable.');
+  assert.strictEqual(els['st-ws-pplx'].textContent, '');
+});
+
+test('Settings status: a 200 answer without a chain is "unavailable" too', async () => {
+  const { els } = await loadStatusWith(() => ({ ok: true, status: 200, json: async () => ({ ok: true, search: {} }) }));
+  assert.strictEqual(els['st-ws-inuse'].textContent, 'Search status unavailable.');
+});
+
+test('Settings status: an older server listing DuckDuckGo twice still shows the fallback warning', async () => {
+  const { els, sums } = await loadStatusWith(() => okJson({ chain: ['duckduckgo', 'duckduckgo'], backends: [] }));
+  assert.match(els['st-ws-inuse'].innerHTML, /using the free fallback/);
+  assert.deepStrictEqual(sums[0], ['tools', 'search', 'web search: free fallback', true]);
+});
+
+test('Settings status: an empty chain says web search is off, not the free fallback', async () => {
+  const { els, sums } = await loadStatusWith(() => okJson({ chain: [], backends: [], inUse: null, inUseLabel: null, off: true, fallbackOnly: true, perplexityKey: false, perplexityOn: false }));
+  assert.match(els['st-ws-inuse'].innerHTML, /Web search is off/);
+  assert.doesNotMatch(els['st-ws-inuse'].innerHTML, /free fallback/);
+  assert.deepStrictEqual(sums[0], ['tools', 'search', 'web search: off', true]);
+});
+
+test('Settings status: an older server (chain and backends only) still shows the fallback warning and the Perplexity key', async () => {
+  const { els, sums } = await loadStatusWith(() => okJson({ chain: ['duckduckgo'], backends: [{ id: 'perplexity', configured: false, disabled: true, hasKey: true }, { id: 'duckduckgo', configured: true }] }));
+  assert.match(els['st-ws-inuse'].innerHTML, /using the free fallback; results are thin/);
+  assert.deepStrictEqual(sums[0], ['tools', 'search', 'web search: free fallback', true]);
+  assert.strictEqual(els['st-ws-pplx'].textContent, 'Your Perplexity key is set, but Perplexity search is turned off here.');
+});
+
+test('Settings status: a keyed chain names the first backend and what follows, with no warning', async () => {
+  const { els, sums } = await loadStatusWith(() => okJson({ chain: ['brave', 'duckduckgo'], backends: [], inUse: 'brave', inUseLabel: 'Brave Search API', off: false, fallbackOnly: false, perplexityKey: true, perplexityOn: false }));
+  assert.strictEqual(els['st-ws-inuse'].innerHTML, 'In use now: Brave Search API (then DuckDuckGo (scraped, no key))');
+  assert.deepStrictEqual(sums[0], ['tools', 'search', 'web search: Brave Search API', false]);
+  assert.strictEqual(els['st-ws-pplx'].textContent, 'Your Perplexity key is set, but Perplexity search is turned off here.');
+});
+
+test('Settings status: a failed status request says so instead of leaving "Checking…"', async () => {
+  const { els } = await loadStatusWith(() => { throw new Error('offline'); });
+  assert.strictEqual(els['st-ws-inuse'].textContent, 'Search status unavailable.');
+  assert.strictEqual(els['st-ws-status'].textContent, 'Could not read the web search status.');
 });
 
 test('?websearch=1 opens Settings at the web search section and is dropped from the address', () => {

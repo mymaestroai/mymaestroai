@@ -4831,26 +4831,50 @@
       if (btn) { btn.disabled = false; btn.textContent = 'Check now'; }
     }
     // Web search and fetch (lib/web-search, lib/web-fetch): backend chain, keys, SearXNG container, fetch guards.
+    const WS_LABELS = { brave: 'Brave Search API', perplexity: 'Perplexity Search API', serper: 'Serper (Google results)', tavily: 'Tavily', searxng: 'SearXNG (self-hosted)', duckduckgo: 'DuckDuckGo (scraped, no key)' };
     async function loadWebSearchStatus() {
       const el = document.getElementById('st-ws-status'); if (!el) return;
+      const inuse = document.getElementById('st-ws-inuse');
       try {
-        const d = await (await fetch('/api/websearch/status', { credentials: 'include' })).json();
-        const s = d.search || {}, f = d.fetch || {};
-        const chain = (s.chain || []).join(' → ') || 'none';
-        stSum('tools', 'search', s.fallbackOnly ? 'web search: free fallback' : `web search: ${s.inUseLabel || chain}`, !!s.fallbackOnly);
-        const inuse = document.getElementById('st-ws-inuse');
+        const resp = await fetch('/api/websearch/status', { credentials: 'include' });
+        const d = resp.ok ? await resp.json() : null;
+        // Only a real status answer is read: an error page or an answer without a chain is "unavailable", never "off".
+        if (!d || !d.search || !Array.isArray(d.search.chain)) throw new Error('no status');
+        const s = d.search, f = d.fetch || {};
+        // An older server (page updated, hub not yet restarted) sends chain and backends but none of the summary fields,
+        // and may list a backend twice.
+        const c = s.chain.filter((b, i, a) => a.indexOf(b) === i);
+        const isOff = s.off != null ? !!s.off : c.length === 0;
+        const thin = !isOff && (s.fallbackOnly != null ? !!s.fallbackOnly : (c.length === 1 && c[0] === 'duckduckgo'));
+        const label = b => WS_LABELS[b] || b;
+        const firstLabel = s.inUseLabel || (c[0] ? label(c[0]) : '');
+        const rest = c.slice(1).map(label);
+        const pb = (s.backends || []).find(b => b.id === 'perplexity') || {};
+        const pKey = s.perplexityKey != null ? !!s.perplexityKey : !!pb.hasKey;
+        const pOn = s.perplexityOn != null ? !!s.perplexityOn : c.includes('perplexity');
+        const chain = c.join(' → ') || 'none';
+        stSum('tools', 'search', isOff ? 'web search: off' : thin ? 'web search: free fallback' : `web search: ${firstLabel}`, isOff || thin);
         if (inuse) {
-          inuse.innerHTML = s.fallbackOnly
-            ? '<span style="color:var(--warning)">Web search is using the free fallback; results are thin. Add a search key for much better research.</span>'
-            : `In use now: ${esc(s.inUseLabel || '')}`;
+          inuse.innerHTML = isOff
+            ? '<span style="color:var(--warning)">Web search is off: no search service is available, so agents get no results. Add a search key below, or ask your lead agent to switch DuckDuckGo back on.</span>'
+            : thin
+              ? '<span style="color:var(--warning)">Web search is using the free fallback; results are thin. Add a search key for much better research.</span>'
+              : `In use now: ${esc(firstLabel)}${rest.length ? esc(` (then ${rest.join(', ')})`) : ''}`;
         }
         const pplx = document.getElementById('st-ws-pplx');
-        if (pplx) pplx.textContent = s.perplexityKey ? 'Your Perplexity key is set, so searches can use it.' : 'No Perplexity key; add one under LLM Providers to use Perplexity search.';
+        if (pplx) pplx.textContent = !pKey ? 'No Perplexity key; add one under LLM Providers to use Perplexity search.'
+          : pOn ? 'Your Perplexity key is set, so searches can use it.'
+            : 'Your Perplexity key is set, but Perplexity search is turned off here.';
         const off = (s.backends || []).filter(b => !b.configured).map(b => `${b.id} (needs ${b.needs})`).join(', ');
         const sx = s.searxng || {};
         const sxState = sx.container ? `container ${sx.name} ${sx.container}${sx.healthy ? ', healthy' : ', not answering'}` : sx.url ? (sx.healthy ? `external at ${sx.url}, healthy` : `${sx.url} not answering`) : 'not running';
         el.textContent = `Search chain now: ${chain}.${off ? ` Not configured: ${off}.` : ''} SearXNG: ${sxState}. Fetch: private addresses ${f.allowPrivate}, browser rendering ${f.render}${f.renderer ? ' (Firefox available)' : ' (no Playwright Firefox found: rendering unavailable)'}, PDF ${f.pdftotext ? 'yes' : 'no (install poppler-utils)'}, cache ${f.cacheMinutes} min.`;
-      } catch { el.textContent = 'Could not read the web search status.'; }
+      } catch {
+        el.textContent = 'Could not read the web search status.';
+        if (inuse) inuse.textContent = 'Search status unavailable.';
+        stSum('tools', 'search', 'web search: status unavailable', false);
+        const pplx = document.getElementById('st-ws-pplx'); if (pplx) pplx.textContent = '';
+      }
     }
     async function saveWebSearch() {
       const saved = dialogGuard.savePoint(['st-ws-key-brave', 'st-ws-key-serper', 'st-ws-key-tavily', 'st-ws-order', 'st-ws-searxng', 'st-wf-private', 'st-wf-render', 'st-wf-jina'].map(id => document.getElementById(id)));
@@ -4885,7 +4909,6 @@
         out.textContent = `${r.ms != null ? `${r.ms} ms. ` : ''}${r.rendered || r.error || ''}`;
       } catch (e) { out.textContent = 'Search failed: ' + e.message; }
     }
-    const WS_LABELS = { brave: 'Brave Search API', perplexity: 'Perplexity Search API', serper: 'Serper (Google results)', tavily: 'Tavily', searxng: 'SearXNG (self-hosted)', duckduckgo: 'DuckDuckGo (scraped, no key)' };
     async function testWebSearch() {
       const out = document.getElementById('st-ws-test'); if (!out) return;
       out.textContent = 'Searching…';
