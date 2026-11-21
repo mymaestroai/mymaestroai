@@ -738,21 +738,21 @@ test('review r4: a lookup that fails at delivery keeps the report and delivers i
   assert.match(a.wakes[0].message, /THE REPORT/);
 });
 
-test('review r4: agentIdentity: box id, else owner; a re-made agent differs; a settings edit does not; unreadable throws', () => {
-  const { agentIdentity } = require(path.join(ISO.inst, 'lib', 'agents.js'));
+test('review r4: agentIdentityStrict: box id, else name (identityOf); a re-made agent differs; a settings edit does not; unreadable throws', () => {
+  const { agentIdentityStrict } = require(path.join(ISO.inst, 'lib', 'agents.js'));
   const list = [
     { name: 'sam-agent', owner: 'u_sam', box: 'b1', model: 'm1' },
     { name: 'old-agent', owner: 'u_sam', model: 'm1' },
   ];
-  assert.equal(agentIdentity('sam-agent', { load: () => list }), 'box:b1');
-  assert.equal(agentIdentity('old-agent', { load: () => list }), 'owner:u_sam');
-  assert.equal(agentIdentity('nobody', { load: () => list }), null);
+  assert.equal(agentIdentityStrict('sam-agent', { load: () => list }), 'box:b1');
+  assert.equal(agentIdentityStrict('old-agent', { load: () => list }), 'name:old-agent');
+  assert.equal(agentIdentityStrict('nobody', { load: () => list }), null);
   // a settings edit (the model) keeps it
-  assert.equal(agentIdentity('sam-agent', { load: () => [{ ...list[0], model: 'm2', blurb: 'x' }] }), 'box:b1');
+  assert.equal(agentIdentityStrict('sam-agent', { load: () => [{ ...list[0], model: 'm2', blurb: 'x' }] }), 'box:b1');
   // deleted and re-made by the same owner: a new box id
-  assert.notEqual(agentIdentity('sam-agent', { load: () => [{ name: 'sam-agent', owner: 'u_sam', box: 'b2' }] }), 'box:b1');
-  assert.throws(() => agentIdentity('sam-agent', { load: () => [] }), /could not be read/);
-  assert.throws(() => agentIdentity('sam-agent', { load: () => null }), /could not be read/);
+  assert.notEqual(agentIdentityStrict('sam-agent', { load: () => [{ name: 'sam-agent', owner: 'u_sam', box: 'b2' }] }), 'box:b1');
+  assert.throws(() => agentIdentityStrict('sam-agent', { load: () => [] }), /could not be read/);
+  assert.throws(() => agentIdentityStrict('sam-agent', { load: () => null }), /could not be read/);
 });
 
 // ── review r5: a strict read for the identity, seeded agents with box ids, and a check as each worker starts ──
@@ -778,19 +778,19 @@ test('review r5: the runner hands the launcher an admit check that turns false o
   assert.equal(a.wakes.length, 0, 'nothing delivered to the new agent');
 });
 
-test('review r5: agentIdentity reads agents.json itself: never the last good copy or the .bak, never a seed', () => {
+test('review r5: agentIdentityStrict reads agents.json itself: never the last good copy or the .bak, never a seed', () => {
   const agents = require(path.join(ISO.inst, 'lib', 'agents.js'));
   const f = path.join(ISO.inst, 'data', 'agents.json');
   fs.writeFileSync(f, JSON.stringify([{ name: 'sam-agent', owner: 'u_sam', box: 'b1' }]));
-  assert.equal(agents.agentIdentity('sam-agent'), 'box:b1');
-  assert.equal(agents.agentIdentity('nobody'), null);
+  assert.equal(agents.agentIdentityStrict('sam-agent'), 'box:b1');
+  assert.equal(agents.agentIdentityStrict('nobody'), null);
   // unreadable now, with an older .bak that does not list the agent: "can't tell", never "gone"
   fs.writeFileSync(f + '.bak', JSON.stringify([{ name: 'other-agent', owner: 'u_sam', box: 'b9' }]));
   fs.writeFileSync(f, '{not json');
-  assert.throws(() => agents.agentIdentity('sam-agent'));
+  assert.throws(() => agents.agentIdentityStrict('sam-agent'));
   // missing: "can't tell", and nothing is seeded
   fs.unlinkSync(f);
-  assert.throws(() => agents.agentIdentity('sam-agent'));
+  assert.throws(() => agents.agentIdentityStrict('sam-agent'));
   assert.equal(fs.existsSync(f), false, 'no seed written');
   fs.unlinkSync(f + '.bak');
 });

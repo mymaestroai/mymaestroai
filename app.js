@@ -3924,11 +3924,14 @@
         const keyRow = (id, label, note) => `<div class="st-row"><label style="flex-basis:150px">${label}</label><input type="password" id="st-ws-key-${id}" placeholder="${keys[id] ? esc(keys[id]) : 'Not set'}" style="width:260px" autocomplete="off"> <span class="st-hint" style="margin:0 0 0 8px">${note}</span></div>`;
         html += `<div class="st-section" id="st-ws-section"><h4>Web search and fetch</h4>
         <div class="st-hint">Every agent on every model uses the same WebSearch and WebFetch tools; the hub does the work. Search walks the backends below in order and returns the first that answers: paid or keyed ones when you add a key, a self-hosted SearXNG the hub can run for you, and DuckDuckGo as the free floor. An agent may name a backend (for instance perplexity) when it wants that one. Fetch returns pages as markdown with links kept, reads PDFs, renders JavaScript-only pages in a browser when the plain fetch is empty, and refuses private and local addresses unless allowed below.</div>
+        <div class="st-row"><label style="flex-basis:150px">In use</label><span id="st-ws-inuse" style="flex:1">Checking…</span></div>
+        <div class="st-row"><label style="flex-basis:150px"></label><button class="st-test-btn" onclick="testWebSearch()">Test web search</button></div>
+        <div id="st-ws-test" class="st-hint" style="margin-left:158px;overflow-wrap:anywhere"></div>
         <div class="st-row"><label style="flex-basis:150px">Backend order</label><input type="text" id="st-ws-order" value="${esc(Array.isArray(wsc.order) ? wsc.order.join(', ') : 'brave, perplexity, serper, tavily, searxng, duckduckgo')}" style="flex:1"> <span class="st-hint" style="margin:0 0 0 8px">comma-separated; unconfigured ones are skipped</span></div>
-        ${keyRow('brave', 'Brave key', 'api.search.brave.com; independent index')}
+        ${keyRow('brave', 'Brave key', '<a href="https://brave.com/search/api/" target="_blank" rel="noopener" style="color:var(--link)">brave.com/search/api</a> · $5 per 1,000 searches, $5 of free credit each month (about 1,000 searches); Brave asks for a card')}
         ${keyRow('serper', 'Serper key', 'serper.dev; Google results')}
         ${keyRow('tavily', 'Tavily key', 'tavily.com; LLM-ready results')}
-        <div class="st-row"><label style="flex-basis:150px">Perplexity</label><span class="st-hint" style="margin:0">uses the Perplexity provider key above</span></div>
+        <div class="st-row"><label style="flex-basis:150px">Perplexity</label><span class="st-hint" style="margin:0">uses the Perplexity provider key above. <span id="st-ws-pplx"></span></span></div>
         <div class="st-row"><label style="flex-basis:150px">SearXNG URL</label><input type="text" id="st-ws-searxng" value="${esc((wsc.searxng && wsc.searxng.url) || '')}" placeholder="http://127.0.0.1:8888" style="width:260px"> <button class="st-test-btn" onclick="searxngStart()">Run SearXNG here (Docker)</button><button class="st-test-btn" onclick="searxngStop()">Stop it</button></div>
         <div class="st-row"><label style="flex-basis:150px">Private addresses</label>${selWs('st-wf-private', [['admin', 'admin-side agents may fetch them (default)'], ['none', 'nobody'], ['all', 'every agent']], wfc.allowPrivate || 'admin')} &nbsp; Browser rendering ${selWs('st-wf-render', [['auto', 'auto (when the plain fetch is empty)'], ['off', 'off'], ['always', 'always']], wfc.render || 'auto')} &nbsp; <label><input type="checkbox" id="st-wf-jina" ${wfc.jina ? 'checked' : ''}> Jina Reader fallback (sends the URL to r.jina.ai)</label></div>
         <div class="st-row"><label style="flex-basis:150px"></label><button class="st-test-btn" onclick="saveWebSearch()">Save web settings</button><span id="st-ws-state" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px"></span></div>
@@ -4080,7 +4083,7 @@
     const READY_ICON = { ok: '✅', info: 'ℹ️', warn: '⚠️', critical: '❌' };
     function readinessActionHtml(a) {
       if (!a) return '';
-      if (a.href) return ` <a href="${esc(a.href)}" class="st-test-btn" style="text-decoration:none">${esc(a.label)}</a>`;
+      if (a.href) return ` <a href="${esc(a.href)}" class="st-test-btn" style="text-decoration:none;display:inline-block;margin-top:3px">${esc(a.label)}</a>`;
       if (a.api) return ` <button class="st-test-btn" onclick="readinessAction('${esc(a.api)}', '${esc(a.method || 'POST')}', this)">${esc(a.label)}</button>`;
       return '';
     }
@@ -4569,7 +4572,7 @@
     // ── health page (end) ──
     function securityActionHtml(a) {
       if (!a) return '';
-      if (a.href) return ` <a href="${esc(a.href)}" class="st-test-btn" style="text-decoration:none">${esc(a.label)}</a>`;
+      if (a.href) return ` <a href="${esc(a.href)}" class="st-test-btn" style="text-decoration:none;display:inline-block;margin-top:3px">${esc(a.label)}</a>`;
       if (a.api) return ` <button class="st-test-btn" onclick="securityAction('${esc(a.api)}', '${esc(a.method || 'POST')}', this)">${esc(a.label)}</button>`;
       return '';
     }
@@ -4841,18 +4844,50 @@
       if (btn) { btn.disabled = false; btn.textContent = 'Check now'; }
     }
     // Web search and fetch (lib/web-search, lib/web-fetch): backend chain, keys, SearXNG container, fetch guards.
+    const WS_LABELS = { brave: 'Brave Search API', perplexity: 'Perplexity Search API', serper: 'Serper (Google results)', tavily: 'Tavily', searxng: 'SearXNG (self-hosted)', duckduckgo: 'DuckDuckGo (scraped, no key)' };
     async function loadWebSearchStatus() {
       const el = document.getElementById('st-ws-status'); if (!el) return;
+      const inuse = document.getElementById('st-ws-inuse');
       try {
-        const d = await (await fetch('/api/websearch/status', { credentials: 'include' })).json();
-        const s = d.search || {}, f = d.fetch || {};
-        const chain = (s.chain || []).join(' → ') || 'none';
-        stSum('tools', 'search', `Search: ${chain}`);
+        const resp = await fetch('/api/websearch/status', { credentials: 'include' });
+        const d = resp.ok ? await resp.json() : null;
+        // Only a real status answer is read: an error page or an answer without a chain is "unavailable", never "off".
+        if (!d || !d.search || !Array.isArray(d.search.chain)) throw new Error('no status');
+        const s = d.search, f = d.fetch || {};
+        // An older server (page updated, hub not yet restarted) sends chain and backends but none of the summary fields,
+        // and may list a backend twice.
+        const c = s.chain.filter((b, i, a) => a.indexOf(b) === i);
+        const isOff = s.off != null ? !!s.off : c.length === 0;
+        const thin = !isOff && (s.fallbackOnly != null ? !!s.fallbackOnly : (c.length === 1 && c[0] === 'duckduckgo'));
+        const label = b => WS_LABELS[b] || b;
+        const firstLabel = s.inUseLabel || (c[0] ? label(c[0]) : '');
+        const rest = c.slice(1).map(label);
+        const pb = (s.backends || []).find(b => b.id === 'perplexity') || {};
+        const pKey = s.perplexityKey != null ? !!s.perplexityKey : !!pb.hasKey;
+        const pOn = s.perplexityOn != null ? !!s.perplexityOn : c.includes('perplexity');
+        const chain = c.join(' → ') || 'none';
+        stSum('tools', 'search', isOff ? 'web search: off' : thin ? 'web search: free fallback' : `web search: ${firstLabel}`, isOff || thin);
+        if (inuse) {
+          inuse.innerHTML = isOff
+            ? '<span style="color:var(--warning)">Web search is off: no search service is available, so agents get no results. Add a search key below, or ask your lead agent to switch DuckDuckGo back on.</span>'
+            : thin
+              ? '<span style="color:var(--warning)">Web search is using the free fallback; results are thin. Add a search key for much better research.</span>'
+              : `${esc(firstLabel)}${rest.length ? esc(` (then ${rest.join(', ')})`) : ''}`;
+        }
+        const pplx = document.getElementById('st-ws-pplx');
+        if (pplx) pplx.textContent = !pKey ? 'No Perplexity key; add one under LLM Providers to use Perplexity search.'
+          : pOn ? 'Your Perplexity key is set, so searches can use it.'
+            : 'Your Perplexity key is set, but Perplexity search is turned off here.';
         const off = (s.backends || []).filter(b => !b.configured).map(b => `${b.id} (needs ${b.needs})`).join(', ');
         const sx = s.searxng || {};
         const sxState = sx.container ? `container ${sx.name} ${sx.container}${sx.healthy ? ', healthy' : ', not answering'}` : sx.url ? (sx.healthy ? `external at ${sx.url}, healthy` : `${sx.url} not answering`) : 'not running';
         el.textContent = `Search chain now: ${chain}.${off ? ` Not configured: ${off}.` : ''} SearXNG: ${sxState}. Fetch: private addresses ${f.allowPrivate}, browser rendering ${f.render}${f.renderer ? ' (Firefox available)' : ' (no Playwright Firefox found: rendering unavailable)'}, PDF ${f.pdftotext ? 'yes' : 'no (install poppler-utils)'}, cache ${f.cacheMinutes} min.`;
-      } catch { el.textContent = 'Could not read the web search status.'; }
+      } catch {
+        el.textContent = 'Could not read the web search status.';
+        if (inuse) inuse.textContent = 'Search status unavailable.';
+        stSum('tools', 'search', 'web search: status unavailable', false);
+        const pplx = document.getElementById('st-ws-pplx'); if (pplx) pplx.textContent = '';
+      }
     }
     async function saveWebSearch() {
       const saved = dialogGuard.savePoint(['st-ws-key-brave', 'st-ws-key-serper', 'st-ws-key-tavily', 'st-ws-order', 'st-ws-searxng', 'st-wf-private', 'st-wf-render', 'st-wf-jina'].map(id => document.getElementById(id)));
@@ -4885,6 +4920,35 @@
       try {
         const r = await (await fetch('/api/websearch/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ query, backend, maxResults: 5 }) })).json();
         out.textContent = `${r.ms != null ? `${r.ms} ms. ` : ''}${r.rendered || r.error || ''}`;
+      } catch (e) { out.textContent = 'Search failed: ' + e.message; }
+    }
+    async function testWebSearch() {
+      const out = document.getElementById('st-ws-test'); if (!out) return;
+      out.textContent = 'Searching…';
+      try {
+        const r = await (await fetch('/api/websearch/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ query: 'weather forecast tomorrow', maxResults: 10 }) })).json();
+        const n = Array.isArray(r.results) ? r.results.length : 0;
+        if (r.backend && n) {
+          out.textContent = `Answered by ${WS_LABELS[r.backend] || r.backend}${r.backend === 'duckduckgo' ? ', the free no-key fallback' : ''}: ${n} result(s) in ${((r.ms || 0) / 1000).toFixed(1)} s`;
+        } else {
+          // One short reason per search tried, never a raw JSON error body. "The key was refused" only where a key was sent
+          // (Brave, Serper, Tavily, Perplexity) and the answer is about the key: a 401, or an explicit bad-credential message.
+          // Any other refusal is the service's; a plain-text reason (an IP allowlist, say) is kept, cut short.
+          const KEYED = ['brave', 'serper', 'tavily', 'perplexity'];
+          const BAD_KEY = /SUBSCRIPTION_TOKEN_INVALID|\binvalid[ _-]?(api[ _-]?)?key\b|\b(api[ _-]?)?key (is )?(invalid|missing|not valid)\b|\bmissing or invalid api key\b|\binvalid[ _-]?(access[ _-]?)?token\b/i;
+          const why = (t) => {
+            const e = String(t.error || 'no answer');
+            const m = /^HTTP (\d{3})(?::\s*([\s\S]*))?$/.exec(e);
+            if (m && ['401', '403', '422'].includes(m[1])) {
+              if (KEYED.includes(t.backend) && (m[1] === '401' || BAD_KEY.test(e))) return `the key was refused (HTTP ${m[1]})`;
+              const body = (m[2] || '').trim();
+              const said = body && !/^[[{<]/.test(body) ? `: ${body.length > 80 ? `${body.slice(0, 80)}…` : body}` : '';
+              return `${m[1] === '422' ? 'the service rejected the request' : 'the service refused the request'} (HTTP ${m[1]})${said}`;
+            }
+            return e.length > 120 ? `${e.slice(0, 120)}…` : e;
+          };
+          out.textContent = 'No results: ' + ((r.tried || []).map(t => `${WS_LABELS[t.backend] || t.backend}: ${why(t)}`).join('; ') || r.error || 'no search backend is configured');
+        }
       } catch (e) { out.textContent = 'Search failed: ' + e.message; }
     }
     async function tryWebFetch() {
@@ -7343,7 +7407,7 @@
       try { u = new URL(data.url, origin); } catch { return null; }
       if (u.origin !== origin || !OPEN_TARGET_MAIN.test(u.pathname)) return null;
       const q = u.searchParams;
-      return { agent: q.get('agent') || '', backups: q.get('backups') === '1', update: q.get('update') === '1', security: q.get('security') === '1', memory: q.get('memory') === '1', selfcheck: q.get('selfcheck') === '1', health: q.get('health') === '1', connectors: q.get('connectors') === '1', wallet: q.get('wallet') === 'unlock' };
+      return { agent: q.get('agent') || '', backups: q.get('backups') === '1', update: q.get('update') === '1', security: q.get('security') === '1', memory: q.get('memory') === '1', selfcheck: q.get('selfcheck') === '1', health: q.get('health') === '1', connectors: q.get('connectors') === '1', wallet: q.get('wallet') === 'unlock', websearch: q.get('websearch') === '1' };
     }
     function createTargetStore(storage, now = () => Date.now(), ttlMs = 10 * 60 * 1000) {
       return {
@@ -7423,6 +7487,7 @@
       if (t.selfcheck) openSettingsAt('st-selfcheck-section');
       if (t.health) openSettingsAt('st-health-section');
       if (t.connectors) openSettingsAt('st-modules-section');
+      if (t.websearch) openSettingsAt('st-ws-section');
       if (t.wallet) openWalletPanel();
       if (t.update) paintUpdateCard().then(() => showUpdateCard()).catch(() => {});
       if (!t.agent) return;
@@ -7460,9 +7525,9 @@
       // (a backup warning), ?memory=1 the memory check, ?selfcheck=1 the self-check, ?health=1 the health check, ?update=1 the update card, ?security=1 the security dialog, ?wallet=unlock the Wallet panel. Then any notification tapped
       // while the page was loading.
       const own = parseOpenTarget({ type: 'open-target', url: location.href }, location.origin);
-      if (own && (own.update || own.backups || own.security || own.memory || own.selfcheck || own.health || own.connectors || own.wallet)) {   // one-shot actions: a reload must not repeat them
+      if (own && (own.update || own.backups || own.security || own.memory || own.selfcheck || own.health || own.connectors || own.wallet || own.websearch)) {   // one-shot actions: a reload must not repeat them
         const u = new URL(location.href);
-        for (const k of ['update', 'backups', 'security', 'memory', 'selfcheck', 'health', 'connectors', 'wallet']) u.searchParams.delete(k);
+        for (const k of ['update', 'backups', 'security', 'memory', 'selfcheck', 'health', 'connectors', 'wallet', 'websearch']) u.searchParams.delete(k);
         history.replaceState(history.state, '', u.pathname + u.search + u.hash);
       }
       // After a Reload: open the chats that were open, in their tab order, each with the text that was in its message

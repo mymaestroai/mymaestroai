@@ -589,7 +589,8 @@ test('r1 B2: identities and access are checked before every start and report; a 
   assert.match(env.h.get(v.id).error, /may no longer hand work/);
   await env.h.tick();
   assert.strictEqual(env.delivered.length, 1);
-  assert.match(env.delivered[0].message, /^\[Hand-off failed\]/);
+  // a hand-off that has to stop is reported as interrupted, with the reason (it never started here, so no replies)
+  assert.match(env.delivered[0].message, /^\[Hand-off interrupted\] .*because agent "sam" may no longer hand work to "lead"\./);
   // the target re-made under the same name while queued
   allowed = true;
   const env2 = setup({ stampOf: (n) => stamps[n] || null, mayTarget: async () => true });

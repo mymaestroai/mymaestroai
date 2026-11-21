@@ -25,7 +25,7 @@ test('a fresh Mac install updated from before multi-user: no account, no Docker,
   assert.match(byId(r, 'docker').fix, /Docker Desktop for Mac/);
   assert.match(byId(r, 'poppler').fix, /brew install poppler/);
   assert.match(byId(r, 'browser-render').fix, /playwright install firefox/);
-  assert.strictEqual(byId(r, 'search').level, 'info');
+  assert.strictEqual(byId(r, 'search').level, 'warn', 'DuckDuckGo alone is the thin fallback: a warning now, not advice');
   assert.match(byId(r, 'supervisor').title, /no launchd service/);
   assert.strictEqual(byId(r, 'provider').level, 'ok');
   assert.strictEqual(r.critical, 1);
