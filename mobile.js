@@ -2146,6 +2146,107 @@ async function onNotifyPrefsSheetChange(e) {
   if (d.open) paintNotifyPrefsSheet();
 }
 
+// ── Deep research choice (GET/POST /api/research-pref): ⋮ menu row + small sheet, and a section in the Simple settings sheet.
+// Shown only when the hub answers on:true; any failed or unreadable GET shows nothing.
+const RESEARCH_CHOICES = [['ask', 'Ask each time'], ['always', 'Always'], ['never', 'Never']];
+const RESEARCH_HINT = 'When a question needs research, your agents can offer a deep research run (a few minutes, many sources).';
+function researchChoiceLabel(choice) { const m = RESEARCH_CHOICES.find(c => c[0] === choice); return m ? m[1] : RESEARCH_CHOICES[0][1]; }
+function researchMenuText(choice) { return 'Deep research: ' + researchChoiceLabel(choice); }
+function researchChoiceOk(choice) { return RESEARCH_CHOICES.some(c => c[0] === choice); }
+let researchPrefOn = false;
+let researchPrefChoice = 'ask';
+let researchPrefSaving = false;   // one save at a time: a choice made while one is in flight is ignored
+async function researchPrefLoad() {
+  let d = null;
+  try { const r = await api('/api/research-pref'); if (r.ok) d = await r.json(); } catch { d = null; }
+  researchPrefOn = !!(d && d.on === true);
+  if (researchPrefOn && !researchPrefSaving) researchPrefChoice = researchChoiceOk(d.choice) ? d.choice : 'ask';
+  researchPrefPaintAll();
+  return researchPrefOn;
+}
+function researchPrefPaintAll() {
+  const row = $('menu-research');
+  if (row) { row.hidden = !researchPrefOn; row.textContent = researchMenuText(researchPrefChoice); }
+  typeof menuGroupsSync === 'function' && menuGroupsSync();
+  const sh = $('research-sheet');
+  if (sh && sh.open) researchSheetPaint();
+  const ss = $('simple-settings-sheet');
+  if (ss && ss.open) researchSimplePaint(ss);
+}
+async function researchPick(choice) {
+  if (researchPrefSaving || !researchPrefOn || !researchChoiceOk(choice)) return false;
+  researchPrefSaving = true;
+  const before = researchPrefChoice;
+  researchPrefChoice = choice;
+  researchPrefPaintAll();
+  let err = '';
+  try {
+    const r = await api('/api/research-pref', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ choice }) });
+    const d = await r.json().catch(() => ({}));
+    if (r.ok && d && d.ok) { if (researchChoiceOk(d.choice)) researchPrefChoice = d.choice; } else err = (d && d.error) || 'Could not save that';
+  } catch { err = 'Could not save that'; }
+  researchPrefSaving = false;
+  if (err) researchPrefChoice = before;   // the previous choice goes back
+  researchPrefPaintAll();
+  toast(err ? String(err) : researchMenuText(researchPrefChoice));
+  return !err;
+}
+function researchSheetPaint() {
+  const d = $('research-sheet');
+  if (!d) return;
+  while (d.firstChild) d.removeChild(d.firstChild);
+  const h = document.createElement('h3'); h.textContent = 'Deep research';
+  const hint = document.createElement('div'); hint.className = 'sec-hint'; hint.textContent = RESEARCH_HINT;
+  d.appendChild(h); d.appendChild(hint);
+  for (const [v, l] of RESEARCH_CHOICES) {
+    const b = document.createElement('button');
+    b.type = 'button'; b.dataset.research = v; b.textContent = (v === researchPrefChoice ? '✓ ' : '') + l;
+    b.setAttribute('aria-pressed', String(v === researchPrefChoice));
+    d.appendChild(b);
+  }
+  const c = document.createElement('button');
+  c.type = 'button'; c.dataset.research = ''; c.textContent = 'Close';
+  d.appendChild(c);
+}
+function openResearchSheet() {
+  $('menu').classList.remove('open');
+  const d = $('research-sheet');
+  if (!d || !researchPrefOn) return;
+  researchSheetPaint();
+  if (!d.open) d.showModal();
+}
+async function onResearchSheetClick(e) {
+  const d = $('research-sheet');
+  if (e.target === d) { d.close(); return; }   // a tap on the backdrop
+  const b = e.target.closest && e.target.closest('button[data-research]');
+  if (!b) return;
+  if (!b.dataset.research) { d.close(); return; }
+  const ok = await researchPick(b.dataset.research);
+  if (ok && d.open) d.close();
+}
+// Simple settings sheet: the same three choices as a section after Appearance and Interface style; only when on.
+function researchSimplePaint(d) {
+  if (!d) return;
+  const old = d.querySelector('#ss-research-sec');
+  if (old) old.remove();
+  if (!researchPrefOn) return;
+  const anchor = d.querySelector('#ss-style-sec');
+  if (!anchor) return;
+  const sec = document.createElement('div'); sec.className = 'ss-sec'; sec.id = 'ss-research-sec';
+  const t = document.createElement('div'); t.className = 'ss-title'; t.textContent = 'Deep research';
+  const seg = document.createElement('div'); seg.className = 'ss-rseg'; seg.setAttribute('role', 'group'); seg.setAttribute('aria-label', 'Deep research');
+  for (const [v, l] of RESEARCH_CHOICES) {
+    const b = document.createElement('button');
+    b.type = 'button'; b.dataset.research = v; b.textContent = l;
+    b.setAttribute('aria-pressed', String(v === researchPrefChoice));
+    b.addEventListener('click', () => { researchPick(v); });
+    seg.appendChild(b);
+  }
+  const hint = document.createElement('div'); hint.className = 'ss-rhint'; hint.textContent = RESEARCH_HINT;
+  sec.appendChild(t); sec.appendChild(seg); sec.appendChild(hint);
+  anchor.after(sec);
+}
+
 // ── Presence: the hub judges "Only when I'm away" from these. One random id per page load; visible on load, on
 // visibilitychange and every 60 s while visible; a beacon at pagehide says hidden. Silent on failure. ──
 const presencePage = 'p' + Math.random().toString(36).slice(2, 12) + Date.now().toString(36);
@@ -13287,6 +13388,9 @@ function wire() {
   $('menu-notify-test')?.addEventListener('click', testPush);
   $('menu-notify-agent')?.addEventListener('click', (e) => { e.stopPropagation(); $('menu').classList.remove('open'); openNotifyAgentSheet(); });
   $('menu-notify-prefs')?.addEventListener('click', (e) => { e.stopPropagation(); openNotifyPrefsSheet(); });
+  $('menu-research')?.addEventListener('click', (e) => { e.stopPropagation(); typeof openResearchSheet === 'function' && openResearchSheet(); });
+  $('research-sheet')?.addEventListener('click', (e) => { typeof onResearchSheetClick === 'function' && onResearchSheetClick(e); });
+  typeof researchPrefLoad === 'function' && researchPrefLoad();   // shows the menu row only when the hub says deep research is on
   $('messages').addEventListener('click', onMessagesClick);
   $('messages').addEventListener('pointerdown', onReasoningGrip);
   $('messages').addEventListener('pointerdown', onToolsGrip);
@@ -13602,6 +13706,7 @@ function menuOnOpen() {
   menuGroupsSync();
   menuAdvDotSync();
   menuLookName();
+  typeof researchPrefLoad === 'function' && researchPrefLoad();   // the row's label follows a change made on another device
 }
 if (typeof document !== 'undefined' && document.getElementById) {
   const look = document.getElementById('menu-look'), pick = document.getElementById('menu-look-pick'), tg = document.getElementById('menu-adv-toggle');
@@ -15466,6 +15571,8 @@ function simpleSettingsOpen() {
   $('ss-out').addEventListener('click', () => { signOut(); });
   d.querySelector('.ss-close').addEventListener('click', () => d.close());
   if (!d.open) d.showModal();
+  typeof researchSimplePaint === 'function' && researchSimplePaint(d);   // Deep research, when the hub has it on
+  typeof researchPrefLoad === 'function' && researchPrefLoad();   // repaints the open sheet with the hub's answer
 }
 
 // The reasoning level, in the composer's second row: a button naming the level; a tap opens the four plain-word choices.

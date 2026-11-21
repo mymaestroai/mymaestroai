@@ -3747,6 +3747,16 @@
           <label class="toggle-switch"><input type="checkbox" id="st-model-offers" ${data.modelOffers !== false ? 'checked' : ''} onchange="saveModelOffersToggle(this.checked)"><span class="toggle-slider"></span></label>
           <span id="st-model-offers-state" style="font-size:0.8rem;color:var(--text-dim)">${data.modelOffers !== false ? 'Your Maestro suggests newer models for your agents.' : 'No model suggestions.'}</span>
         </div>` : ''}
+        ${isHubAdmin() ? (() => {
+          const rd = Number.isInteger(data.researchReminderDays) && data.researchReminderDays >= 0 ? data.researchReminderDays : 7;
+          const opts = [[7, 'Once a week'], [14, 'Every two weeks'], [30, 'Once a month'], [0, 'Never']];
+          if (!opts.some(o => o[0] === rd)) opts.push([rd, `Every ${rd} days`]);
+          return `<div class="st-row">
+          <label for="st-research-remind">Deep research reminder</label>
+          <select id="st-research-remind" onchange="saveResearchReminder(this.value, this)">${opts.map(([v, l]) => `<option value="${v}"${v === rd ? ' selected' : ''}>${l}</option>`).join('')}</select>
+        </div>
+        <div class="st-hint">How often someone who chose Never for deep research is reminded, at the end of a reply, that it is off.</div>`;
+        })() : ''}
       </div>`;
 
       if (isHubAdmin()) {
@@ -3783,9 +3793,11 @@
           <select id="st-question-after" onchange="saveQuestionAfter(this.value)">${qaOpts.map(([v, l]) => `<option value="${v}"${v === qaVal ? ' selected' : ''}>${l}</option>`).join('')}</select>
         </div>
         <div class="st-hint">A notification when an agent's question (or an approval) is still unanswered after this long. Finished replies notify only when you click 🔔 Notify me next to Cancel while the reply is running.</div>
+        <div id="st-research-pref" role="group" aria-label="Deep research" hidden></div>
         <div id="st-notify-mine" role="group" aria-label="Your notifications"><div class="st-hint" style="margin-left:0">Loading…</div></div>
       </div>`;
         setTimeout(loadNotifySettings, 0);
+        setTimeout(() => { typeof researchPrefLoad === 'function' && researchPrefLoad(); }, 0);
       }
 
       html += `<div class="st-section" id="st-chat-section"><h4>Chat</h4>
@@ -5377,6 +5389,22 @@
       } catch (e) { alert('Could not save: ' + e.message); }
     }
 
+    // Deep research reminder (settings.researchReminderDays, days 0..365, 0 = never): saved at once; a failure puts it back.
+    let researchReminderSaved = null;
+    async function saveResearchReminder(value, sel) {
+      const days = Number(value);
+      if (researchReminderSaved === null && sel) researchReminderSaved = String([...sel.options].find(o => o.defaultSelected)?.value || '7');   // the value the page was drawn with
+      try {
+        const r = await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ researchReminderDays: days }) });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        researchReminderSaved = String(days);
+        hubToast(days === 0 ? 'Deep research reminder: never.' : `Deep research reminder: every ${days} days.`);
+      } catch (e) {
+        if (sel && researchReminderSaved !== null) sel.value = researchReminderSaved;
+        hubToast('Could not save: ' + e.message);
+      }
+    }
+
     // Approval cards on/off: saved at once, takes effect on the next tool call of any agent.
     async function saveApprovalsToggle(on) {
       const state = document.getElementById('st-approvals-state');
@@ -5578,6 +5606,51 @@
         notifySettingsPaint();
       } catch (e) { sel.value = before; hubToast('Could not save: ' + e.message); }
       finally { sel.disabled = false; }
+    }
+    // Settings -> Notifications: the person's deep research choice (GET/POST /api/research-pref). Hidden unless the hub says on.
+    const RESEARCH_CHOICES = [['ask', 'Ask each time'], ['always', 'Always'], ['never', 'Never']];
+    const RESEARCH_HINT = 'When a question needs research, your agents can offer a deep research run (a few minutes, many sources).';
+    function researchChoiceLabel(choice) { const m = RESEARCH_CHOICES.find(c => c[0] === choice); return m ? m[1] : RESEARCH_CHOICES[0][1]; }
+    let researchPrefSaving = false;   // one save at a time: a choice made while one is in flight is ignored
+    let researchPrefChoice = 'ask';
+    function researchPrefPaint(box) {
+      while (box.firstChild) box.removeChild(box.firstChild);
+      const row = document.createElement('div');
+      row.className = 'st-row';
+      const lab = document.createElement('label');
+      lab.htmlFor = 'st-research-choice'; lab.textContent = 'Deep research';
+      const sel = document.createElement('select');
+      sel.id = 'st-research-choice';
+      for (const [v, l] of RESEARCH_CHOICES) { const o = document.createElement('option'); o.value = v; o.textContent = l; sel.appendChild(o); }
+      sel.value = researchPrefChoice;
+      sel.addEventListener('change', async () => {
+        if (researchPrefSaving) { sel.value = researchPrefChoice; return; }
+        const want = sel.value, before = researchPrefChoice;
+        researchPrefSaving = true; sel.disabled = true;
+        let err = '';
+        try {
+          const r = await fetch('/api/research-pref', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ choice: want }) });
+          const d = await r.json().catch(() => ({}));
+          if (r.ok && d && d.ok) researchPrefChoice = ['ask', 'always', 'never'].includes(d.choice) ? d.choice : want; else err = (d && d.error) || 'Could not save that';
+        } catch (e) { err = 'Could not save that'; }
+        researchPrefSaving = false; sel.disabled = false;
+        if (err) { researchPrefChoice = before; hubToast(String(err)); } else hubToast(`Deep research: ${researchChoiceLabel(researchPrefChoice)}.`);
+        sel.value = researchPrefChoice;
+      });
+      row.appendChild(lab); row.appendChild(sel);
+      const hint = document.createElement('div');
+      hint.className = 'st-hint'; hint.textContent = RESEARCH_HINT;
+      box.appendChild(row); box.appendChild(hint);
+    }
+    async function researchPrefLoad() {
+      const box = document.getElementById('st-research-pref');
+      if (!box) return;
+      let d = null;
+      try { const r = await fetch('/api/research-pref', { credentials: 'include' }); if (r.ok) d = await r.json(); } catch { d = null; }
+      if (!d || d.on !== true) { box.hidden = true; return; }   // off, failed or unreadable: nothing shown
+      researchPrefChoice = ['ask', 'always', 'never'].includes(d.choice) ? d.choice : 'ask';
+      researchPrefPaint(box);
+      box.hidden = false;
     }
     async function notifyAgentReset(agent) {
       try { await notifyPrefsRequest('PUT', { agent, prefs: null }); hubToast('Back to your default.'); notifySettingsPaint(); } catch (e) { hubToast('Could not save: ' + e.message); }

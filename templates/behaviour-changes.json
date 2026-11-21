@@ -110,6 +110,17 @@
       "check": "Whether your lead has been editing your Maestro's files on this computer, and whether anything here depends on such a local change.",
       "on": "The lead gets the rule and leaves your Maestro's code alone.",
       "off": "The lead gets no such rule; \"Protect your Maestro's own code\" can still refuse the edits."
+    },
+    {
+      "id": "deep-research",
+      "leadMay": true,
+      "title": "Agents offer deep research when a question needs it",
+      "changes": "Gives agents a deep research tool and a short section in their instructions. When a question needs real research (the current state of a field, comparisons, what is best, recent findings), the agent offers a deep research run and the person answers Yes, No, Always yes or Never; Always yes and Never are remembered for that person and can be changed in Settings. A yes runs in the background: helpers on a fast, inexpensive model research parts of the question and read the actual sources, then the agent's own model checks and summarises them; the report, with a verdict first, links, dates and how confident it is, arrives in the same chat. A person who chose Never is reminded now and then (once a week by default) that it is off.",
+      "benefits": "Much better answers to research questions: many searches and the sources themselves instead of one or two searches, with the evidence and disagreements laid out. The person stays in charge of when it runs, and can keep talking while it does.",
+      "costs": "About 80 words more in agents' instructions in every turn. Each run uses several helper runs and one summary run: several times a normal answer, from the plan's allowance on a subscription or paid per use on an API key. Nothing runs without a yes, or an Always yes the person chose.",
+      "check": "Which agents here answer research questions, which models their helpers may use (a member's agents only the models an admin allows), whether web search works on this install, and how much pay-per-use budget a run could take.",
+      "on": "Agents offer deep research on research questions; each person decides each time or once for all.",
+      "off": "No agent offers deep research; agents answer research questions as before."
     }
   ]
 }

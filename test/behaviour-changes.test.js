@@ -32,10 +32,10 @@ const setup = () => {
 const put = (f, doc) => fs.writeFileSync(f, typeof doc === 'string' ? doc : JSON.stringify(doc));
 const ent = (state, by = 'owner') => ({ state, by, at: '2026-01-01T00:00:00.000Z' });
 
-test('manifest: the shipped file has the ten entries with every field; invalid ids are dropped', () => {
+test('manifest: the shipped file has the eleven entries with every field; invalid ids are dropped', () => {
   const real = bc.manifest(path.join(REAL, 'templates', 'behaviour-changes.json'));
-  // Owner, 06:09: work-check-ins and work-suggestions joined the five.
-  assert.deepStrictEqual(real.map((e) => e.id), ['team-guidance', 'starter-team', 'member-worker-models', 'worker-proposals', 'ask-lead-for-workers', 'work-check-ins', 'work-suggestions', 'hand-off-guidance', 'protect-own-code', 'own-code-guidance']);   // ten entries: protect-own-code and own-code-guidance (lib/code-protect) joined the eight;   // hand-offs (lib/hand-offs): the rule to hand long work to a build partner
+  // Owner, 06:09: work-check-ins and work-suggestions joined the five. deep-research (lib/research) joined the ten.
+  assert.deepStrictEqual(real.map((e) => e.id), ['team-guidance', 'starter-team', 'member-worker-models', 'worker-proposals', 'ask-lead-for-workers', 'work-check-ins', 'work-suggestions', 'hand-off-guidance', 'protect-own-code', 'own-code-guidance', 'deep-research']);   // ten entries: protect-own-code and own-code-guidance (lib/code-protect) joined the eight;   // hand-offs (lib/hand-offs): the rule to hand long work to a build partner
   for (const e of real) for (const k of ['title', 'changes', 'benefits', 'costs', 'check', 'on', 'off']) assert.ok(e[k], `${e.id}.${k}`);
   assert.deepStrictEqual(bc.manifest(setup().manifestFile).map((e) => e.id), ['alpha', 'beta-two']);
   assert.deepStrictEqual(bc.manifest(path.join(tempDir(), 'nope.json')), []);

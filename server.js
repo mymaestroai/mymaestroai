@@ -852,6 +852,24 @@ async function handleHttpRequest(req, res) {
       if (!r.ok) return jsonResponse(res, 400, { error: r.error });
       return jsonResponse(res, 200, { ok: true, uiMode: r.user.uiMode || (access.isAdmin(req.hubUser) ? 'advanced' : 'simple'), theme: r.user.theme || 'auto' });
     }
+    // This person's deep research choice (lib/research-prefs): ask | always | never, theirs only. on: the behaviour change
+    // 'deep-research' is on. A signed-in person's own session ('owner' on an install with no accounts); never a token or the hub.
+    if (pathname === '/api/research-pref' && (req.method === 'GET' || req.method === 'POST')) {
+      if (req.hubService || req.hubToken || req.hubPendingTotp) return jsonResponse(res, 401, { error: 'Sign in first' });
+      const key = hubAuth.hasUsers()
+        ? (req.hubUser && req.hubIdentKind === 'user' && req.hubUser.id != null ? String(req.hubUser.id).slice(0, 64) : null)
+        : 'owner';
+      if (!key) return jsonResponse(res, 401, { error: 'Sign in first' });
+      const prefs = require('./lib/research-prefs').getResearchPrefs();
+      let on = false;
+      try { on = require('./lib/behaviour-changes').isOn('deep-research'); } catch { on = false; }
+      if (req.method === 'GET') return jsonResponse(res, 200, { on, choice: prefs.choiceOf(key) });
+      if (!on) return jsonResponse(res, 403, { error: 'Deep research is off on this Maestro.' });
+      let body = {};
+      try { body = JSON.parse(await readBody(req) || '{}') || {}; } catch { return jsonResponse(res, 400, { error: 'Bad request' }); }
+      try { return jsonResponse(res, 200, { ok: true, choice: prefs.setChoice(key, body && body.choice) }); }
+      catch (e) { return jsonResponse(res, e && e.code === 'bad_request' ? 400 : 500, { error: e && e.code === 'bad_request' ? e.message : 'Could not save that' }); }
+    }
     // This person's time zone (lib/timezone): the page in use reports its own ({tz, auto: true}; the zone follows the
     // device unless pinned); the Profile pins one ({tz, pinned: true}) or follows the device again ({tz, pinned: false}).
     if (pathname === '/api/me/timezone' && req.method === 'POST') {
@@ -2781,6 +2799,12 @@ async function handleHttpRequest(req, res) {
           if (patch && patch.shareLinks !== undefined) patch.shareLinks = require('./lib/share-links').cleanSettings(patch.shareLinks, hubSettings.getSetting('shareLinks'));
           if (patch && patch.showReasoning !== undefined) patch.showReasoning = patch.showReasoning !== false;
           if (patch && patch.modelOffers !== undefined) patch.modelOffers = patch.modelOffers !== false;
+          // Deep research (lib/research): how often a person who chose Never is reminded that it is off, in days 0..365 (0 = never).
+          if (patch && patch.researchReminderDays !== undefined) {
+            const d = Number(patch.researchReminderDays);
+            if (!Number.isInteger(d) || d < 0 || d > 365) return jsonResponse(res, 400, { error: 'researchReminderDays must be a whole number of days from 0 to 365' });
+            patch.researchReminderDays = d;
+          }
           // Subscription usage (lib/codex-usage, Settings → Subscriptions): on unless turned off.
           if (patch && patch.subscriptionUsage !== undefined) patch.subscriptionUsage = patch.subscriptionUsage !== false;
           if (patch && patch.componentUpdates !== undefined) patch.componentUpdates = { codex: ['auto', 'notify', 'off'].includes(patch.componentUpdates && patch.componentUpdates.codex) ? patch.componentUpdates.codex : 'auto' };
@@ -3963,6 +3987,8 @@ server.listen(PORT, HOST, () => {
   catch (e) { console.error('[sched-tasks] failed to start:', e.message); }
   // Hand-offs (lib/hand-offs): a hand-off whose turn died with the restart is reported to its caller as interrupted.
   try { require('./lib/sdk-chat').getHandOffRunner().start(); } catch (e) { console.error('[hand-offs] could not start:', e.message); }
+  // Deep research (lib/research): a run the restart cut short is reported to its agent.
+  try { require('./lib/sdk-chat').startResearch(); } catch (e) { console.error('[research] could not start:', e.message); }
   // Behaviour changes waiting for the owner: the lead is asked to review them (one task, never twice for an entry), and the weekly
   // team review follows the worker-proposals decision. After the scheduler exists; the hub creates these, the owner decides on /changes.
   (async () => {
