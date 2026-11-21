@@ -121,14 +121,14 @@ test('readiness: the default (nothing passed) is the fallback warning, and an ol
   assert.strictEqual(byId(await ready({}), 'search').level, 'warn');
   const it = byId(await ready({ searchChain: () => ['brave', 'duckduckgo'] }), 'search');
   assert.strictEqual(it.level, 'ok');
-  assert.match(it.detail, /^In use: Brave Search API \(then duckduckgo\)\.$/);
+  assert.strictEqual(it.detail, 'In use: Brave Search API (then DuckDuckGo (scraped, no key)).');
 });
 
 test('readiness: a keyed backend is ok and names the label and what follows', async () => {
   const it = byId(await ready({ searchSummary: () => ({ inUse: 'brave', inUseLabel: 'Brave Search API', fallbackOnly: false, chain: ['brave', 'duckduckgo'] }) }), 'search');
   assert.strictEqual(it.level, 'ok');
   assert.strictEqual(it.title, 'Web search ready');
-  assert.strictEqual(it.detail, 'In use: Brave Search API (then duckduckgo).');
+  assert.strictEqual(it.detail, 'In use: Brave Search API (then DuckDuckGo (scraped, no key)).');
   const alone = byId(await ready({ searchSummary: () => ({ inUse: 'serper', inUseLabel: 'Serper (Google results)', fallbackOnly: false, chain: ['serper'] }) }), 'search');
   assert.strictEqual(alone.detail, 'In use: Serper (Google results).');
 });
@@ -150,7 +150,7 @@ test('Settings: In use row, Test web search button, Brave link and cost, Perplex
   assert.match(app, /async function testWebSearch\(\)/);
   assert.match(app, /query: 'weather forecast tomorrow', maxResults: 10/);
   assert.match(app, /Answered by \$\{WS_LABELS\[r\.backend\] \|\| r\.backend\}\$\{r\.backend === 'duckduckgo' \? ', the free no-key fallback' : ''\}: \$\{n\} result\(s\) in/);
-  assert.match(app, /<a href="https:\/\/brave\.com\/search\/api\/" target="_blank" rel="noopener">brave\.com\/search\/api<\/a>/);
+  assert.match(app, /<a href="https:\/\/brave\.com\/search\/api\/" target="_blank" rel="noopener" style="color:var\(--link\)">brave\.com\/search\/api<\/a>/);
   assert.match(app, /\$5 per 1,000 searches, \$5 of free credit each month \(about 1,000 searches\); Brave asks for a card/);
   assert.match(app, /id="st-ws-pplx"/);
   assert.match(app, /Your Perplexity key is set, so searches can use it\./);
@@ -228,7 +228,7 @@ test('Settings status: an older server (chain and backends only) still shows the
 
 test('Settings status: a keyed chain names the first backend and what follows, with no warning', async () => {
   const { els, sums } = await loadStatusWith(() => okJson({ chain: ['brave', 'duckduckgo'], backends: [], inUse: 'brave', inUseLabel: 'Brave Search API', off: false, fallbackOnly: false, perplexityKey: true, perplexityOn: false }));
-  assert.strictEqual(els['st-ws-inuse'].innerHTML, 'In use now: Brave Search API (then DuckDuckGo (scraped, no key))');
+  assert.strictEqual(els['st-ws-inuse'].innerHTML, 'Brave Search API (then DuckDuckGo (scraped, no key))');
   assert.deepStrictEqual(sums[0], ['tools', 'search', 'web search: Brave Search API', false]);
   assert.strictEqual(els['st-ws-pplx'].textContent, 'Your Perplexity key is set, but Perplexity search is turned off here.');
 });
@@ -237,6 +237,59 @@ test('Settings status: a failed status request says so instead of leaving "Check
   const { els } = await loadStatusWith(() => { throw new Error('offline'); });
   assert.strictEqual(els['st-ws-inuse'].textContent, 'Search status unavailable.');
   assert.strictEqual(els['st-ws-status'].textContent, 'Could not read the web search status.');
+});
+
+function testButtonWith(answer) {
+  const lStart = app.indexOf('    const WS_LABELS = {');
+  const lEnd = app.indexOf('    async function loadWebSearchStatus() {');
+  const labels = app.slice(lStart, lEnd);
+  const start = app.indexOf('    async function testWebSearch() {');
+  const end = app.indexOf('    async function tryWebFetch() {');
+  assert.ok(lStart > 0 && lEnd > lStart && labels.includes('WS_LABELS') && start > 0 && end > start, 'the Test web search code is found in app.js');
+  const out = { textContent: '' };
+  const run = new Function('document', 'fetch', `${labels}${app.slice(start, end)}\nreturn testWebSearch();`);
+  return run({ getElementById: (id) => (id === 'st-ws-test' ? out : null) }, async () => ({ json: async () => answer })).then(() => out.textContent);
+}
+
+test('Test web search: names who answered and how many results', async () => {
+  const t = await testButtonWith({ backend: 'duckduckgo', results: [{}, {}, {}], ms: 1234 });
+  assert.strictEqual(t, 'Answered by DuckDuckGo (scraped, no key), the free no-key fallback: 3 result(s) in 1.2 s');
+});
+
+test('Test web search: a refused key reads as refused, not as the raw error body; long errors are cut', async () => {
+  const raw = 'HTTP 422: {"error":{"code":"SUBSCRIPTION_TOKEN_INVALID","detail":"The provided subscription token is invalid."}}';
+  const t = await testButtonWith({ backend: null, results: [], tried: [{ backend: 'brave', error: raw }, { backend: 'duckduckgo', error: 'DuckDuckGo asked for a captcha' }, { backend: 'tavily', error: 'x'.repeat(300) }] });
+  assert.strictEqual(t, `No results: Brave Search API: the key was refused (HTTP 422); DuckDuckGo (scraped, no key): DuckDuckGo asked for a captcha; Tavily: ${'x'.repeat(120)}…`);
+  assert.doesNotMatch(t, /SUBSCRIPTION_TOKEN_INVALID/);
+});
+
+test('Test web search: services without a key, and a 422 that is not about the key, never read as a refused key', async () => {
+  const t = await testButtonWith({ backend: null, results: [], tried: [
+    { backend: 'searxng', error: 'HTTP 403: Forbidden' },
+    { backend: 'duckduckgo', error: 'HTTP 403' },
+    { backend: 'serper', error: 'HTTP 422: {"message":"query too long"}' },
+    { backend: 'tavily', error: 'HTTP 401: {"detail":{"error":"Unauthorized: missing or invalid API key."}}' },
+  ] });
+  assert.strictEqual(t, 'No results: SearXNG (self-hosted): the service refused the request (HTTP 403): Forbidden; DuckDuckGo (scraped, no key): the service refused the request (HTTP 403); Serper (Google results): the service rejected the request (HTTP 422); Tavily: the key was refused (HTTP 401)');
+});
+
+test('Test web search: a keyed service refusing for another reason (IP allowlist, a token limit) is not a refused key', async () => {
+  const t = await testButtonWith({ backend: null, results: [], tried: [
+    { backend: 'brave', error: 'HTTP 403: IP address not allowed' },
+    { backend: 'serper', error: 'HTTP 422: query exceeds token limit' },
+    { backend: 'perplexity', error: 'HTTP 403: {"error":{"message":"Invalid API key provided"}}' },
+    { backend: 'serper', error: 'HTTP 422: invalid keyword' },
+    { backend: 'tavily', error: 'HTTP 422: invalid tokenizer setting' },
+    { backend: 'brave', error: 'HTTP 403: Unauthorized IP address' },
+  ] });
+  assert.strictEqual(t, 'No results: Brave Search API: the service refused the request (HTTP 403): IP address not allowed; Serper (Google results): the service rejected the request (HTTP 422): query exceeds token limit; Perplexity Search API: the key was refused (HTTP 403); Serper (Google results): the service rejected the request (HTTP 422): invalid keyword; Tavily: the service rejected the request (HTTP 422): invalid tokenizer setting; Brave Search API: the service refused the request (HTTP 403): Unauthorized IP address');
+});
+
+test('checklist and security link buttons are inline-block, so a wrapped one never lies over the line above', () => {
+  const links = app.match(/if \(a\.href\) return ` <a href="\$\{esc\(a\.href\)\}" class="st-test-btn" style="[^"]*"/g) || [];
+  assert.strictEqual(links.length, 2);
+  for (const l of links) assert.match(l, /display:inline-block/);
+  assert.match(app, /<a href="https:\/\/brave\.com\/search\/api\/" target="_blank" rel="noopener" style="color:var\(--link\)">/);
 });
 
 test('?websearch=1 opens Settings at the web search section and is dropped from the address', () => {

@@ -3912,10 +3912,11 @@
         const keyRow = (id, label, note) => `<div class="st-row"><label style="flex-basis:150px">${label}</label><input type="password" id="st-ws-key-${id}" placeholder="${keys[id] ? esc(keys[id]) : 'Not set'}" style="width:260px" autocomplete="off"> <span class="st-hint" style="margin:0 0 0 8px">${note}</span></div>`;
         html += `<div class="st-section" id="st-ws-section"><h4>Web search and fetch</h4>
         <div class="st-hint">Every agent on every model uses the same WebSearch and WebFetch tools; the hub does the work. Search walks the backends below in order and returns the first that answers: paid or keyed ones when you add a key, a self-hosted SearXNG the hub can run for you, and DuckDuckGo as the free floor. An agent may name a backend (for instance perplexity) when it wants that one. Fetch returns pages as markdown with links kept, reads PDFs, renders JavaScript-only pages in a browser when the plain fetch is empty, and refuses private and local addresses unless allowed below.</div>
-        <div class="st-row"><label style="flex-basis:150px">In use</label><span id="st-ws-inuse" style="flex:1">Checking…</span><button class="st-test-btn" onclick="testWebSearch()">Test web search</button></div>
-        <div id="st-ws-test" class="st-hint" style="margin-left:158px"></div>
+        <div class="st-row"><label style="flex-basis:150px">In use</label><span id="st-ws-inuse" style="flex:1">Checking…</span></div>
+        <div class="st-row"><label style="flex-basis:150px"></label><button class="st-test-btn" onclick="testWebSearch()">Test web search</button></div>
+        <div id="st-ws-test" class="st-hint" style="margin-left:158px;overflow-wrap:anywhere"></div>
         <div class="st-row"><label style="flex-basis:150px">Backend order</label><input type="text" id="st-ws-order" value="${esc(Array.isArray(wsc.order) ? wsc.order.join(', ') : 'brave, perplexity, serper, tavily, searxng, duckduckgo')}" style="flex:1"> <span class="st-hint" style="margin:0 0 0 8px">comma-separated; unconfigured ones are skipped</span></div>
-        ${keyRow('brave', 'Brave key', '<a href="https://brave.com/search/api/" target="_blank" rel="noopener">brave.com/search/api</a> · $5 per 1,000 searches, $5 of free credit each month (about 1,000 searches); Brave asks for a card')}
+        ${keyRow('brave', 'Brave key', '<a href="https://brave.com/search/api/" target="_blank" rel="noopener" style="color:var(--link)">brave.com/search/api</a> · $5 per 1,000 searches, $5 of free credit each month (about 1,000 searches); Brave asks for a card')}
         ${keyRow('serper', 'Serper key', 'serper.dev; Google results')}
         ${keyRow('tavily', 'Tavily key', 'tavily.com; LLM-ready results')}
         <div class="st-row"><label style="flex-basis:150px">Perplexity</label><span class="st-hint" style="margin:0">uses the Perplexity provider key above. <span id="st-ws-pplx"></span></span></div>
@@ -4070,7 +4071,7 @@
     const READY_ICON = { ok: '✅', info: 'ℹ️', warn: '⚠️', critical: '❌' };
     function readinessActionHtml(a) {
       if (!a) return '';
-      if (a.href) return ` <a href="${esc(a.href)}" class="st-test-btn" style="text-decoration:none">${esc(a.label)}</a>`;
+      if (a.href) return ` <a href="${esc(a.href)}" class="st-test-btn" style="text-decoration:none;display:inline-block;margin-top:3px">${esc(a.label)}</a>`;
       if (a.api) return ` <button class="st-test-btn" onclick="readinessAction('${esc(a.api)}', '${esc(a.method || 'POST')}', this)">${esc(a.label)}</button>`;
       return '';
     }
@@ -4559,7 +4560,7 @@
     // ── health page (end) ──
     function securityActionHtml(a) {
       if (!a) return '';
-      if (a.href) return ` <a href="${esc(a.href)}" class="st-test-btn" style="text-decoration:none">${esc(a.label)}</a>`;
+      if (a.href) return ` <a href="${esc(a.href)}" class="st-test-btn" style="text-decoration:none;display:inline-block;margin-top:3px">${esc(a.label)}</a>`;
       if (a.api) return ` <button class="st-test-btn" onclick="securityAction('${esc(a.api)}', '${esc(a.method || 'POST')}', this)">${esc(a.label)}</button>`;
       return '';
     }
@@ -4859,7 +4860,7 @@
             ? '<span style="color:var(--warning)">Web search is off: no search service is available, so agents get no results. Add a search key below, or ask your lead agent to switch DuckDuckGo back on.</span>'
             : thin
               ? '<span style="color:var(--warning)">Web search is using the free fallback; results are thin. Add a search key for much better research.</span>'
-              : `In use now: ${esc(firstLabel)}${rest.length ? esc(` (then ${rest.join(', ')})`) : ''}`;
+              : `${esc(firstLabel)}${rest.length ? esc(` (then ${rest.join(', ')})`) : ''}`;
         }
         const pplx = document.getElementById('st-ws-pplx');
         if (pplx) pplx.textContent = !pKey ? 'No Perplexity key; add one under LLM Providers to use Perplexity search.'
@@ -4918,7 +4919,23 @@
         if (r.backend && n) {
           out.textContent = `Answered by ${WS_LABELS[r.backend] || r.backend}${r.backend === 'duckduckgo' ? ', the free no-key fallback' : ''}: ${n} result(s) in ${((r.ms || 0) / 1000).toFixed(1)} s`;
         } else {
-          out.textContent = 'No results: ' + ((r.tried || []).map(t => `${t.backend}: ${t.error}`).join(', ') || r.error || 'no search backend is configured');
+          // One short reason per search tried, never a raw JSON error body. "The key was refused" only where a key was sent
+          // (Brave, Serper, Tavily, Perplexity) and the answer is about the key: a 401, or an explicit bad-credential message.
+          // Any other refusal is the service's; a plain-text reason (an IP allowlist, say) is kept, cut short.
+          const KEYED = ['brave', 'serper', 'tavily', 'perplexity'];
+          const BAD_KEY = /SUBSCRIPTION_TOKEN_INVALID|\binvalid[ _-]?(api[ _-]?)?key\b|\b(api[ _-]?)?key (is )?(invalid|missing|not valid)\b|\bmissing or invalid api key\b|\binvalid[ _-]?(access[ _-]?)?token\b/i;
+          const why = (t) => {
+            const e = String(t.error || 'no answer');
+            const m = /^HTTP (\d{3})(?::\s*([\s\S]*))?$/.exec(e);
+            if (m && ['401', '403', '422'].includes(m[1])) {
+              if (KEYED.includes(t.backend) && (m[1] === '401' || BAD_KEY.test(e))) return `the key was refused (HTTP ${m[1]})`;
+              const body = (m[2] || '').trim();
+              const said = body && !/^[[{<]/.test(body) ? `: ${body.length > 80 ? `${body.slice(0, 80)}…` : body}` : '';
+              return `${m[1] === '422' ? 'the service rejected the request' : 'the service refused the request'} (HTTP ${m[1]})${said}`;
+            }
+            return e.length > 120 ? `${e.slice(0, 120)}…` : e;
+          };
+          out.textContent = 'No results: ' + ((r.tried || []).map(t => `${WS_LABELS[t.backend] || t.backend}: ${why(t)}`).join('; ') || r.error || 'no search backend is configured');
         }
       } catch (e) { out.textContent = 'Search failed: ' + e.message; }
     }
