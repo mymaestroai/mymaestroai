@@ -562,6 +562,8 @@ html[data-look="broadsheet"].mm-simple.mm-light {
   --simple-surface: #F6F1E7; --simple-side-bg: #ECE4D5; --simple-raised-bg: #FBF9F4; --simple-border: #CBC1AE; --simple-muted-text: #665F52;
   --simple-modal-sm-out-text: #A32620; --simple-modal-sm-out-text-2: #A32620;
   --error: #A32620; --field-border: #857861;   /* the main block (not Simple) sets these for Advanced */
+  --warning: #8A5A00; --on-warning: #FFFFFF; --success: #1F6B45; --blue: #2A5C9A; --consult: #6A4C9C; --toggle-on-bg: #29523D;
+  --hover-tint-strong: rgba(28,27,24,0.08); --line-tint: rgba(28,27,24,0.22);
 }
 
 /* ---- a chat tab's close button reads on the light tab (Engineering fades it to 50%) ---- */
@@ -571,3 +573,13 @@ html[data-look="broadsheet"]:not(.mm-simple) .chat-tab .close-tab { opacity: .8;
 html[data-look="broadsheet"].mm-simple .input-area,
 html[data-look="broadsheet"].mm-simple #composer .row { border-color: var(--field-border); }
 html[data-look="broadsheet"].mm-simple .message > .msg-time { opacity: 1; }
+
+/* ---- Simple: the toast is ink on paper; busy and question dots pulse no lower than 80% so they keep 3:1 on paper ---- */
+html[data-look="broadsheet"].mm-simple #toast { background: var(--text); color: var(--bg-dark); }
+@keyframes broadsheet-simple-dot { 0%, 100% { opacity: 1; } 50% { opacity: .8; } }
+@keyframes broadsheet-simple-dot-shrink { 50% { opacity: .8; transform: scale(.7); } }
+html[data-look="broadsheet"].mm-simple #agent-list .agent-btn .agent-status.live-busy,
+html[data-look="broadsheet"].mm-simple #agent-list .agent-btn .agent-status.live-question,
+html[data-look="broadsheet"].mm-simple #agent-list .simple-more .sm-dot { animation-name: broadsheet-simple-dot; }
+html[data-look="broadsheet"].mm-simple .sa-dot.busy,
+html[data-look="broadsheet"].mm-simple .sa-dot.question { animation-name: broadsheet-simple-dot-shrink; }

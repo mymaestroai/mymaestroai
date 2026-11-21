@@ -23,7 +23,9 @@ function rules(src) {
     let depth = 1, j = open + 1;
     while (j < src.length && depth) { if (src[j] === '{') depth++; else if (src[j] === '}') depth--; j++; }
     const body = src.slice(open + 1, j - 1);
-    if (/^@(media|supports)/.test(sel)) out.push(...rules(body)); else out.push({ sel, body });
+    if (/^@(media|supports)/.test(sel)) out.push(...rules(body));
+    else if (/^@keyframes broadsheet-[a-z0-9-]+$/.test(sel)) { /* keyframes named for this style only: names are global, so they carry its prefix */ }
+    else out.push({ sel, body });
     i = j;
   }
   return out;
@@ -59,6 +61,8 @@ test('every rule is scoped to html[data-look="broadsheet"]', () => {
     for (const s of r.sel.split(',').map((x) => x.trim())) if (!s.startsWith(SCOPE)) bad.push(s);
   }
   assert.deepStrictEqual(bad, []);
+  for (const m of stripped.matchAll(/@keyframes\s+([^\s{]+)/g)) assert.ok(/^broadsheet-/.test(m[1]), 'keyframes outside the broadsheet- prefix: ' + m[1]);
+  for (const f of ['index.html', 'mobile.html', 'app.js', 'mobile.js']) assert.ok(!/@keyframes\s+broadsheet-/.test(fs.readFileSync(path.join(__dirname, '..', f), 'utf8')), f + ' uses the broadsheet- keyframe prefix');
 });
 
 test('sets every variable named in vars-desktop.md and vars-phone.md', () => {

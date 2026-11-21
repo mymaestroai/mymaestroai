@@ -30,7 +30,7 @@ host = base.split('//', 1)[-1].split('/', 1)[0].split(':', 1)[0]
 cookies = [{'name': c.name, 'value': c.value, 'domain': host, 'path': c.path or '/'} for c in jar]
 
 OPEN_D = "(() => { const e = [...document.querySelectorAll('[data-agent]')].find(x => x.dataset.agent === 'maestro'); if (e) e.click(); })()"
-OPEN_P = "(() => { const e = [...document.querySelectorAll('div,span,b')].find(x => x.children.length === 0 && x.textContent.trim() === 'Maestro'); if (e) e.click(); })()"
+OPEN_P = "(() => { const r = document.querySelector('.agent-row[data-agent=maestro]'); if (r) r.click(); })()"
 PAGES = [
     ('main', '/', 'desktop', ''), ('mobile', '/mobile', 'phone', ''),
     # panels inside the main pages (Files, scheduler, Recall, Guide, Security, Settings incl. the security check, the phone menu and sheets)
@@ -122,8 +122,8 @@ CHECK = r"""() => {
       if (bc === undefined || unreadable.length) { bad.push({ kind: 'colour', el: key(el), text: '', ratio: 0, need: 3, border: cs.borderTopColor, bg: unreadable[0] || '' }); continue; }
       const edge = bw > 0 && bc && bc.a > 0 ? over(bc, outside) : null;
       let r = Math.max(edge ? ratio(edge, outside) : 1, ratio(own, outside));
-      // a field drawn without an edge of its own inside a box that draws it (a rounded message box): the box is the edge
-      if (r < 3 && !edge && ratio(own, outside) < 1.05) {
+      // the message box only (desktop .input-area, phone #composer): the text area has no edge of its own and the rounded box around it draws it
+      if (r < 3 && !edge && ratio(own, outside) < 1.05 && el.closest('.input-area, #composer')) {
         for (let a = el.parentElement, n = 0; a && n < 3 && r < 3; a = a.parentElement, n++) {
           const acs = getComputedStyle(a), aout = behind(a, false), aown = behind(a, true);
           const abw = parseFloat(acs.borderTopWidth), abc = parse(acs.borderTopColor);
@@ -148,6 +148,21 @@ SIMPLE_PAGES = [
 ]
 if args.simple:   # Simple mode: its own scenes, named simple-<theme>-<scene>
     PAGES = [(f'simple-{args.simple}-{n}', p, w, a) for n, p, w, a in SIMPLE_PAGES]
+def expect(act):   # what the scene must show before it is measured; a setup that went wrong is an error, not a pass
+    h = 'document.documentElement.classList'
+    checks = [(f"{h}.contains('mm-simple')", 'Simple mode is off'),
+              (f"{h}.contains('mm-light') === {'true' if args.simple == 'light' else 'false'}", f"Simple's {args.simple} theme is not on")] if args.simple \
+        else [(f"!{h}.contains('mm-simple')", 'Simple mode is on')]
+    if act.startswith(OPEN_D):
+        checks.append(("/Maestro/.test((document.querySelector('.chat-tab.active') || {}).textContent || '')", 'the chat did not open'))
+    if act.startswith(OPEN_P):
+        checks.append(("typeof current !== 'undefined' && current === 'maestro'", 'the chat did not open'))
+    if act == 'openSimpleSettings()':
+        checks.append(("!!document.getElementById('simple-settings')", 'the settings sheet did not open'))
+    if act == 'simpleSettingsOpen()':
+        checks.append(("!!(document.getElementById('simple-settings-sheet') || {}).open", 'the settings sheet did not open'))
+    return '() => [' + ', '.join(f'({c}) ? "" : {json.dumps(m)}' for c, m in checks) + '].filter(Boolean).join("; ")'
+
 ONLY = [x for x in args.only.split(',') if x]
 if ONLY:
     PAGES = [p for p in PAGES if p[0] in ONLY]
@@ -174,10 +189,13 @@ with sync_playwright() as pw:
                         pg.evaluate('() => { ' + act + ' }')
                         time.sleep(5)
                     r = pg.evaluate(CHECK)
-                    r['url'] = pg.url.replace(base, '')
+                    wrong = pg.evaluate(expect(act))
+                    r['url'] = pg.url.replace(base, '').split('#')[0]   # the phone keeps the open chat in the address's #part
                     want = path.split('?')[0]
                     if r.get('look') != style or not (r['url'].split('?')[0] == want or (want == '/' and r['url'].split('?')[0] in ('/', '/index.html'))):
                         r['error'] = f"wrong page or style: {r['url']} in {r.get('look')!r}, expected {path} in {style!r}"   # e.g. an expired session sent it to the sign-in page
+                    elif wrong:
+                        r['error'] = f'wrong scene: {wrong}'
                 except Exception as e:
                     r = {'error': str(e)[:200], 'bad': []}
                 res[f'{style}|{name}|{kind}'] = r
