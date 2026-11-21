@@ -18,17 +18,24 @@ test('spawn returns the live child, consumes stderr, and reports exit; descendan
   const w = W.forTurn({ agentName: 't', log: (m) => logs.push(m), onStderr: (d) => errs.push(String(d)) });
   // a "client" that starts a grandchild and keeps running
   const child = w.spawn({ command: 'bash', args: ['-c', 'echo oops 1>&2; sleep 7391 & sleep 7392'], cwd: process.cwd(), env: process.env });
+  let exit = null;
+  child.on('exit', (code, signal) => { exit = { code, signal }; });
   assert.ok(child.pid > 0 && w.pid() === child.pid);
-  assert.ok(await until(async () => (await w.descendants()).length >= 2), 'both sleepers appeared');
-  const kids = await w.descendants();
-  assert.ok(kids.some(k => /sleep 7391/.test(k.args)) && kids.some(k => /sleep 7392/.test(k.args)), JSON.stringify(kids));
-  assert.ok(kids.every(k => typeof k.etimes === 'number' && k.ppid === child.pid));
+  // Wait for the sleepers themselves, as the client's own children. A bash child that has forked but not yet exec'd
+  // still shows the whole command line, which contains both texts, so a text match alone can pass before they exist.
+  const both = (list) => ['sleep 7391', 'sleep 7392'].every(a => list.some(k => k.args === a && k.ppid === child.pid));
+  let kids = [], killed = null, exitBeforeKill = null;
+  // every message carries the tree, what was killed and how the client ended, so a failure names its cause
+  const why = (what) => `${what}: ${JSON.stringify({ kids, killed, exitBeforeKill, exit })}`;
+  assert.ok(await until(async () => both(kids = await w.descendants())), why('both sleepers appeared'));
+  assert.ok(kids.every(k => typeof k.etimes === 'number' && k.ppid === child.pid), why('ages and parents'));
   assert.match(errs.join(''), /oops/);
-  const killed = await w.killAll();
-  await sleep(300);
-  assert.ok(!alive(child.pid), 'client killed');
-  assert.ok(killed.some(k => /sleep 7391/.test(k.args)) && killed.some(k => k.args === '(client)'));
-  assert.ok(!kids.some(k => alive(k.pid)), 'grandchildren killed too');
+  exitBeforeKill = exit;
+  killed = await w.killAll();
+  assert.ok(killed.some(k => k.args === 'sleep 7391'), why('the grandchild is reported killed'));
+  assert.ok(killed.some(k => k.args === '(client)'), why('the client is reported killed'));
+  assert.ok(await until(async () => !alive(child.pid)), why('client killed'));
+  assert.ok(await until(async () => !kids.some(k => alive(k.pid))), why('grandchildren killed too'));
 });
 
 test('expectExit: after the grace period, processes still under the client are killed, logged and reported', async () => {
@@ -78,12 +85,17 @@ test('wiring: the SDK path spawns the client through the watch, arms it on end_t
 
 test('hub Bash kills the whole process group on timeout, so nothing outlives the call', async () => {
   const { runShell } = require('../lib/hub-tools');
-  const r = await runShell('sleep 7396 & sleep 7397', { timeoutMs: 400 });
+  const { spawn, execFileSync } = require('child_process');
+  // runShell starts the shell detached, so its pid is the call's process group: look only at that group, never at
+  // other processes that happen to run the same text (another copy of this file, for one)
+  let group = null;
+  const spawnImpl = (...a) => { const c = spawn(...a); group = c.pid; return c; };
+  const r = await runShell('sleep 7396 & sleep 7397', { timeoutMs: 400, spawnImpl });
   assert.strictEqual(r.timedOut, true);
-  await sleep(300);
-  const { execFileSync } = require('child_process');
-  const left = execFileSync('ps', ['-eo', 'args=']).toString().split('\n').filter(l => /^sleep 739[67]$/.test(l.trim()));
-  assert.deepStrictEqual(left, [], 'no sleeper survived the timeout');
+  assert.ok(group > 0);
+  const members = () => execFileSync('ps', ['-eo', 'pid=,pgid=,stat=,args=']).toString().split('\n')
+    .map(l => l.trim().split(/\s+/)).filter(f => Number(f[1]) === group && !/^Z/.test(f[2] || '')).map(f => f.slice(3).join(' '));
+  assert.ok(await until(async () => members().length === 0), `no process of the call survived the timeout: ${JSON.stringify(members())}`);
   const ok = await runShell('echo hi; echo err 1>&2; exit 2', { timeoutMs: 5000 });
   assert.deepStrictEqual([ok.stdout.trim(), ok.stderr.trim(), ok.code, ok.timedOut], ['hi', 'err', 2, false]);
 });

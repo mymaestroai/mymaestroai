@@ -91,9 +91,9 @@ test('agent settings: a Records section after Tool policy lists, edits, creates 
   assert.ok(settings.includes("prompt('Name for the new record (a file name, e.g. clients.md):', '')"), 'New record asks for a name');
   assert.match(settings, /if \(!confirm\(`Delete the record "\$\{name\}"\?[^`]*`\)\) return;[\s\S]*?method: 'DELETE'/, 'Delete confirms first');
   assert.ok(settings.includes('onclick="newRecord()"') && settings.includes('onclick="saveRecord()"') && settings.includes('onclick="deleteRecord()"'), 'buttons');
-  assert.ok(settings.includes("const link = r.symlink ? `<div style=\"font-size:11px;color:#777;\">link → ${escapeHtml(r.target || '?')}</div>` : '';"), 'symlinks show link → target');
+  assert.ok(settings.includes("const link = r.symlink ? `<div style=\"font-size:11px;color:var(--as-dim-777);\">link → ${escapeHtml(r.target || '?')}</div>` : '';"), 'symlinks show link → target');
   assert.ok(settings.includes('${humanBytes(r.bytes)}') && settings.includes("when && !isNaN(when) ? escapeHtml(when.toLocaleString()) : ''"), 'size and updated time');
-  assert.ok(settings.includes('const over = recordsState.maxBytes && total > recordsState.maxBytes;') && settings.includes("totalEl.style.color = over ? '#e74c3c' : '#888';"), 'total vs cap, red when over');
+  assert.ok(settings.includes('const over = recordsState.maxBytes && total > recordsState.maxBytes;') && settings.includes("totalEl.style.color = over ? 'var(--as-error)' : 'var(--as-dim-888)';"), 'total vs cap, red when over');
   assert.ok(settings.includes("if (!data || !data.ok)"), 'checks { ok } (not success)');
   assert.match(settings, /loadPolicy\(\);\s*\n\s*loadRecords\(\);/, 'loaded at init');
 });

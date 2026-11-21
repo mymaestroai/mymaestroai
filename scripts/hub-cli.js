@@ -10,7 +10,7 @@
  *   mymaestro setup-link             the first-run Welcome link (until the first account exists)
  *   mymaestro connect chatgpt        use your ChatGPT subscription: installs Codex and signs it in (--device-auth: sign in with a code)
  *   mymaestro codex-check [--repair] is Codex where this install needs it? --repair reinstalls it (the installer runs this)
- *   mymaestro update [--channel stable|experimental]   newest version of the channel, then restart (the Update button)
+ *   mymaestro update [--channel stable|experimental] [--put-aside]   newest version of the channel, then restart (the Update button); --put-aside: first put changed files aside (git stash, never put back)
  *   mymaestro doctor                 security and setup checks (scripts/security-check.js)
  *   mymaestro backup [--to <dir>]    an encrypted backup of everything that makes this install yours (--setup: choose the backup password)
  *   mymaestro backups                list the backups on this computer and in your backup folders
@@ -230,8 +230,19 @@ const commands = {
     const channel = arg('channel');
     if (channel && !['stable', 'experimental'].includes(channel)) fail('Channel is "stable" or "experimental".');
     out('Checking for a newer version…');
-    const r = await gs.runUpdate({ channel });
-    if (!r.success) { out(r.error || 'Update failed.'); process.exitCode = /up to date/i.test(r.error || '') ? 0 : 1; return; }
+    const putAside = flag('--put-aside');
+    const r = putAside ? await gs.runPutAsideUpdate({ channel }) : await gs.runUpdate({ channel });
+    if (!r.success) {
+      out(r.error || 'Update failed.');
+      // Changed files of the code itself: nothing moves the code over them. Say which, and how to put them aside.
+      if (Array.isArray(r.localChanges) && r.localChanges.length) {
+        for (const file of r.localChanges.slice(0, 20)) out(`  ${file}`);
+        if (r.localChanges.length > 20) out(`  (and ${r.localChanges.length - 20} more)`);
+        out('Run `mymaestro update --put-aside` to put them aside and update.');
+      }
+      process.exitCode = /up to date/i.test(r.error || '') ? 0 : 1;
+      return;
+    }
     for (const step of r.steps || []) out(`  ${step}`);
     await commands.restart();
   },

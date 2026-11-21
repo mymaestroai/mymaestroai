@@ -107,7 +107,7 @@ test('dirty parsing: leading-space status column kept, untracked ignored, staged
   put(s.work, 'untracked.txt', 'u\n');           // ignored (--untracked-files=no)
   put(s.work, 'new.txt', 'n\n'); g(s.work, 'add', 'new.txt');   // "A  new.txt"
   const r = await s.sync.getSyncStatus();
-  assert.deepStrictEqual(r.dirty.sort((a, b) => a.file.localeCompare(b.file)), [{ status: 'M', file: 'a.txt' }, { status: 'A', file: 'new.txt' }]);
+  assert.deepStrictEqual(r.dirty.sort((a, b) => a.file.localeCompare(b.file)), [{ status: 'M', file: 'a.txt', raw: ' M a.txt' }, { status: 'A', file: 'new.txt', raw: 'A  new.txt' }]);   // raw added by the local-edits change: the whole porcelain line
   assert.strictEqual(r.blockers[0], '2 uncommitted changes to tracked files');
   assert.strictEqual(r.canUpdate, false);
   assert.strictEqual(r.canForce, true);
@@ -120,8 +120,10 @@ test('runUpdate: up to date and dirty tree are refused without touching the tree
   put(s.work, 'a.txt', 'mine\n');
   const r = await s.sync.runUpdate();
   assert.strictEqual(r.success, false);
-  assert.strictEqual(r.error, 'Cannot update: 1 uncommitted change to tracked files.');
-  assert.strictEqual(r.status.canForce, true);
+  // Changed on purpose (local-edits change): runUpdate refuses up front with the file list and the plain message,
+  // before it looks at the status, so there is no status in the answer.
+  assert.deepStrictEqual(r.localChanges, ['a.txt']);
+  assert.match(r.error, /^Your Maestro's own files were changed on this computer, so it won't update over them: a\.txt\. Put the changes aside and update, or cancel\.$/);
   assert.strictEqual(fs.readFileSync(path.join(s.work, 'a.txt'), 'utf8'), 'mine\n');
 });
 
@@ -151,14 +153,15 @@ test('runUpdate fast-forwards, reports HEAD, clears the model cache only when pr
   assert.deepStrictEqual(r2.steps, ['Updated to 1 new commit']);   // no cache file -> no second step
 });
 
-test('runForceUpdate discards tracked edits then updates; refuses when ahead', async () => {
+test('runForceUpdate (alias of runPutAsideUpdate) puts tracked edits aside, never discards or re-applies them, then updates; refuses when ahead', async () => {
   const s = scenario();
   assert.strictEqual((await s.sync.runForceUpdate()).error, 'Already up to date.');
   s.publish('a.txt', 'two\n', 'upstream');
   put(s.work, 'a.txt', 'mine\n');
   const r = await s.sync.runForceUpdate();
   assert.strictEqual(r.success, true);
-  assert.strictEqual(fs.readFileSync(path.join(s.work, 'a.txt'), 'utf8'), 'two\n');
+  assert.strictEqual(fs.readFileSync(path.join(s.work, 'a.txt'), 'utf8'), 'two\n');   // upstream content; the edit is in the stash
+  assert.match(g(s.work, 'stash', 'list'), /local edits before/);
   commit(s.work, 'l.txt', 'l\n', 'local');
   s.publish('z.txt', 'z\n', 'more');
   const r2 = await s.sync.runForceUpdate();
@@ -350,7 +353,8 @@ test('channels: stable (main) and experimental (dev) are listed with what each a
   put(s.work, 'a.txt', 'edited\n');
   const dirty = await s.sync.runUpdate({ channel: 'experimental' });
   assert.strictEqual(dirty.success, false);
-  assert.match(dirty.error, /Cannot switch channel: 1 uncommitted change/);
+  // Changed on purpose (local-edits change): the refusal names the files and the way out.
+  assert.match(dirty.error, /won't switch channel over them: .*Put the changes aside and switch, or cancel/);
   assert.strictEqual(g(s.work, 'rev-parse', '--abbrev-ref', 'HEAD'), 'main');
   g(s.work, 'checkout', '-q', '--', 'a.txt');
   const bad = await s.sync.runUpdate({ channel: 'nightly' });

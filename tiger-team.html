@@ -8,6 +8,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <title>Tiger Team // War Room</title>
+  <script src="/ui-looks.js"></script>
   <style>
     :root {
       --bg-dark: #090B0F;
@@ -26,6 +27,185 @@
       --radius: 6px;
       --tiger: #f97316;
     }
+    /* page colours: today's exact values (Engineering) */
+    :root {
+      --tt-ac0: #f97316;
+      --tt-ac0-bg: rgba(249,115,22,0.08);
+      --tt-ac0-bd: rgba(249,115,22,0.25);
+      --tt-ac1: #3b82f6;
+      --tt-ac1-bg: rgba(59,130,246,0.08);
+      --tt-ac1-bd: rgba(59,130,246,0.25);
+      --tt-ac2: #a855f7;
+      --tt-ac2-bg: rgba(168,85,247,0.08);
+      --tt-ac2-bd: rgba(168,85,247,0.25);
+      --tt-ac3: #14b8a6;
+      --tt-ac3-bg: rgba(20,184,166,0.08);
+      --tt-ac3-bd: rgba(20,184,166,0.25);
+      --tt-ac4: #ec4899;
+      --tt-ac4-bg: rgba(236,72,153,0.08);
+      --tt-ac4-bd: rgba(236,72,153,0.25);
+      --tt-ac5: #eab308;
+      --tt-ac5-bg: rgba(234,179,8,0.08);
+      --tt-ac5-bd: rgba(234,179,8,0.25);
+      --tt-ac6: #06b6d4;
+      --tt-ac6-bg: rgba(6,182,212,0.08);
+      --tt-ac6-bd: rgba(6,182,212,0.25);
+      --tt-ac7: #84cc16;
+      --tt-ac7-bg: rgba(132,204,22,0.08);
+      --tt-ac7-bd: rgba(132,204,22,0.25);
+      --tt-ac8: #f43f5e;
+      --tt-ac8-bg: rgba(244,63,94,0.08);
+      --tt-ac8-bd: rgba(244,63,94,0.25);
+      --tt-ac9: #8b5cf6;
+      --tt-ac9-bg: rgba(139,92,246,0.08);
+      --tt-ac9-bd: rgba(139,92,246,0.25);
+      --tt-head-top: #111318;
+      --tt-head-bot: #090B0F;
+      --tt-tiger-glow: rgba(249,115,22,0.6);
+      --tt-err-40: rgba(255,76,76,0.4);
+      --tt-err-10: rgba(255,76,76,0.1);
+      --tt-ok-40: rgba(76,175,80,0.4);
+      --tt-ok: #4caf50;
+      --tt-ok-10: rgba(76,175,80,0.1);
+      --tt-info-40: rgba(100,181,246,0.4);
+      --tt-info: #64b5f6;
+      --tt-info-10: rgba(100,181,246,0.1);
+      --tt-tiger-20: rgba(249,115,22,0.2);
+      --tt-tiger-30: rgba(249,115,22,0.3);
+      --tt-ok-20: rgba(0,211,149,0.2);
+      --tt-ok-30: rgba(0,211,149,0.3);
+      --tt-err-20: rgba(255,76,76,0.2);
+      --tt-err-30: rgba(255,76,76,0.3);
+      --tt-side-top: #0d1117;
+      --tt-side-bot: #14171F;
+      --tt-wash-03: rgba(255,255,255,0.03);
+      --tt-wash-06: rgba(255,255,255,0.06);
+      --tt-tiger-15: rgba(249,115,22,0.15);
+      --tt-wash-05: rgba(255,255,255,0.05);
+      --tt-red: #ef4444;
+      --tt-tiger-05: rgba(249,115,22,0.05);
+      --tt-red-50: rgba(239,68,68,0.5);
+      --tt-amber: #f59e0b;
+      --tt-on-ok: #090B0F;
+      --tt-on-fill: #fff;
+      --tt-user-inj: #e2e8f0;
+      --tt-user-inj-bg: rgba(226,232,240,0.05);
+      --tt-user-inj-bd: rgba(226,232,240,0.2);
+      --tt-grey-15: rgba(100,100,120,0.15);
+      --tt-grey-25: rgba(100,100,120,0.25);
+      --tt-tool-ok: #4ade80;
+      --tt-tool-err: #f87171;
+      --tt-grey-08: rgba(100,100,120,0.08);
+      --tt-grey-20: rgba(100,100,120,0.2);
+      --tt-code-bg: rgba(0,0,0,0.3);
+      --tt-wash-04: rgba(255,255,255,0.04);
+      --tt-amber-50: rgba(245,158,11,0.5);
+      --tt-err-12: rgba(255,76,76,0.12);
+      --tt-amber-12: rgba(245,158,11,0.12);
+      --tt-amber-40: rgba(245,158,11,0.4);
+      --tt-wash-15: rgba(255,255,255,0.15);
+      --tt-overlay: rgba(0,0,0,0.8);
+      --tt-crash: #e94560;
+      --tt-amber-05: rgba(245,158,11,0.05);
+      --tt-green: #22c55e;
+      --tt-model: #8ab4f8;
+      --tt-amber2: #ffb74d;
+      --tt-amber2-20: rgba(255,152,0,0.2);
+      --tt-ok2-20: rgba(76,175,80,0.2);
+      --tt-ok2: #81c784;
+      /* fading and badge text: Engineering's values; the light styles show them at full strength (faded grey on paper is unreadable) */
+      --tt-op-role: 0.7; --tt-op-done: 0.7; --tt-op-input: 0.6; --tt-op-toggle: 0.6; --tt-op-remove: 0.6; --tt-op-badge: 0.8;
+      --tt-amber2-text: #ffb74d; --tt-ok2-text: #81c784;
+    }
+    /* Broadsheet House and Quiet Page: the same names, mapped to the style roles */
+    html[data-look]:not([data-look="engineering"]) {
+      --tt-ac0: color-mix(in srgb, #f97316 45%, var(--text));
+      --tt-ac0-bg: color-mix(in srgb, var(--tt-ac0) 9%, transparent);
+      --tt-ac0-bd: color-mix(in srgb, var(--tt-ac0) 35%, transparent);
+      --tt-ac1: color-mix(in srgb, #3b82f6 45%, var(--text));
+      --tt-ac1-bg: color-mix(in srgb, var(--tt-ac1) 9%, transparent);
+      --tt-ac1-bd: color-mix(in srgb, var(--tt-ac1) 35%, transparent);
+      --tt-ac2: color-mix(in srgb, #a855f7 45%, var(--text));
+      --tt-ac2-bg: color-mix(in srgb, var(--tt-ac2) 9%, transparent);
+      --tt-ac2-bd: color-mix(in srgb, var(--tt-ac2) 35%, transparent);
+      --tt-ac3: color-mix(in srgb, #14b8a6 45%, var(--text));
+      --tt-ac3-bg: color-mix(in srgb, var(--tt-ac3) 9%, transparent);
+      --tt-ac3-bd: color-mix(in srgb, var(--tt-ac3) 35%, transparent);
+      --tt-ac4: color-mix(in srgb, #ec4899 45%, var(--text));
+      --tt-ac4-bg: color-mix(in srgb, var(--tt-ac4) 9%, transparent);
+      --tt-ac4-bd: color-mix(in srgb, var(--tt-ac4) 35%, transparent);
+      --tt-ac5: color-mix(in srgb, #eab308 45%, var(--text));
+      --tt-ac5-bg: color-mix(in srgb, var(--tt-ac5) 9%, transparent);
+      --tt-ac5-bd: color-mix(in srgb, var(--tt-ac5) 35%, transparent);
+      --tt-ac6: color-mix(in srgb, #06b6d4 45%, var(--text));
+      --tt-ac6-bg: color-mix(in srgb, var(--tt-ac6) 9%, transparent);
+      --tt-ac6-bd: color-mix(in srgb, var(--tt-ac6) 35%, transparent);
+      --tt-ac7: color-mix(in srgb, #84cc16 45%, var(--text));
+      --tt-ac7-bg: color-mix(in srgb, var(--tt-ac7) 9%, transparent);
+      --tt-ac7-bd: color-mix(in srgb, var(--tt-ac7) 35%, transparent);
+      --tt-ac8: color-mix(in srgb, #f43f5e 45%, var(--text));
+      --tt-ac8-bg: color-mix(in srgb, var(--tt-ac8) 9%, transparent);
+      --tt-ac8-bd: color-mix(in srgb, var(--tt-ac8) 35%, transparent);
+      --tt-ac9: color-mix(in srgb, #8b5cf6 45%, var(--text));
+      --tt-ac9-bg: color-mix(in srgb, var(--tt-ac9) 9%, transparent);
+      --tt-ac9-bd: color-mix(in srgb, var(--tt-ac9) 35%, transparent);
+      --tt-head-top: var(--bg-card);
+      --tt-head-bot: var(--bg-dark);
+      --tt-tiger-glow: color-mix(in srgb, var(--tiger) 40%, transparent);
+      --tt-err-40: color-mix(in srgb, var(--error) 45%, transparent);
+      --tt-err-10: color-mix(in srgb, var(--error) 10%, transparent);
+      --tt-ok-40: color-mix(in srgb, var(--success) 45%, transparent);
+      --tt-ok: var(--success);
+      --tt-ok-10: color-mix(in srgb, var(--success) 10%, transparent);
+      --tt-info-40: color-mix(in srgb, var(--accent) 45%, transparent);
+      --tt-info: var(--accent);
+      --tt-info-10: color-mix(in srgb, var(--accent) 10%, transparent);
+      --tt-tiger-20: color-mix(in srgb, var(--tiger) 12%, transparent);
+      --tt-tiger-30: color-mix(in srgb, var(--tiger) 40%, transparent);
+      --tt-ok-20: color-mix(in srgb, var(--success) 12%, transparent);
+      --tt-ok-30: color-mix(in srgb, var(--success) 40%, transparent);
+      --tt-err-20: color-mix(in srgb, var(--error) 12%, transparent);
+      --tt-err-30: color-mix(in srgb, var(--error) 40%, transparent);
+      --tt-side-top: var(--bg-dark);
+      --tt-side-bot: var(--bg-card);
+      --tt-wash-03: color-mix(in srgb, var(--text) 4%, transparent);
+      --tt-wash-06: color-mix(in srgb, var(--text) 7%, transparent);
+      --tt-tiger-15: color-mix(in srgb, var(--tiger) 14%, transparent);
+      --tt-wash-05: color-mix(in srgb, var(--text) 5%, transparent);
+      --tt-red: var(--error);
+      --tt-tiger-05: color-mix(in srgb, var(--tiger) 6%, transparent);
+      --tt-red-50: color-mix(in srgb, var(--error) 50%, transparent);
+      --tt-amber: var(--warning);
+      --tt-on-ok: var(--on-color-text);
+      --tt-on-fill: var(--on-color-text);
+      --tt-user-inj: var(--text);
+      --tt-user-inj-bg: color-mix(in srgb, var(--text) 5%, transparent);
+      --tt-user-inj-bd: color-mix(in srgb, var(--text) 25%, transparent);
+      --tt-grey-15: color-mix(in srgb, var(--text) 16%, transparent);
+      --tt-grey-25: color-mix(in srgb, var(--text) 28%, transparent);
+      --tt-tool-ok: var(--success);
+      --tt-tool-err: var(--error);
+      --tt-grey-08: color-mix(in srgb, var(--text) 6%, transparent);
+      --tt-grey-20: color-mix(in srgb, var(--text) 22%, transparent);
+      --tt-code-bg: color-mix(in srgb, var(--text) 7%, transparent);
+      --tt-wash-04: color-mix(in srgb, var(--text) 5%, transparent);
+      --tt-amber-50: color-mix(in srgb, var(--warning) 50%, transparent);
+      --tt-err-12: color-mix(in srgb, var(--error) 10%, transparent);
+      --tt-amber-12: color-mix(in srgb, var(--warning) 12%, transparent);
+      --tt-amber-40: color-mix(in srgb, var(--warning) 45%, transparent);
+      --tt-wash-15: var(--border-strong);
+      --tt-overlay: color-mix(in srgb, var(--bg-dark) 94%, transparent);
+      --tt-crash: var(--error);
+      --tt-amber-05: color-mix(in srgb, var(--warning) 7%, transparent);
+      --tt-green: var(--success);
+      --tt-model: var(--accent-hover);
+      --tt-amber2: var(--warning);
+      --tt-amber2-20: color-mix(in srgb, var(--warning) 14%, transparent);
+      --tt-ok2-20: color-mix(in srgb, var(--success) 14%, transparent);
+      --tt-ok2: var(--success);
+      --tt-op-role: 1; --tt-op-done: 1; --tt-op-input: 1; --tt-op-toggle: 1; --tt-op-remove: 1; --tt-op-badge: 1;
+      --tt-amber2-text: var(--text); --tt-ok2-text: var(--text);   /* the status labels sit on their own tint */
+    }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
@@ -39,29 +219,29 @@
     }
 
     /* ── Agent Color Palette (10 distinct colors) ── */
-    .agent-color-0  { --agent-color: #f97316; --agent-bg: rgba(249,115,22,0.08); --agent-border: rgba(249,115,22,0.25); }
-    .agent-color-1  { --agent-color: #3b82f6; --agent-bg: rgba(59,130,246,0.08); --agent-border: rgba(59,130,246,0.25); }
-    .agent-color-2  { --agent-color: #a855f7; --agent-bg: rgba(168,85,247,0.08); --agent-border: rgba(168,85,247,0.25); }
-    .agent-color-3  { --agent-color: #14b8a6; --agent-bg: rgba(20,184,166,0.08); --agent-border: rgba(20,184,166,0.25); }
-    .agent-color-4  { --agent-color: #ec4899; --agent-bg: rgba(236,72,153,0.08); --agent-border: rgba(236,72,153,0.25); }
-    .agent-color-5  { --agent-color: #eab308; --agent-bg: rgba(234,179,8,0.08); --agent-border: rgba(234,179,8,0.25); }
-    .agent-color-6  { --agent-color: #06b6d4; --agent-bg: rgba(6,182,212,0.08); --agent-border: rgba(6,182,212,0.25); }
-    .agent-color-7  { --agent-color: #84cc16; --agent-bg: rgba(132,204,22,0.08); --agent-border: rgba(132,204,22,0.25); }
-    .agent-color-8  { --agent-color: #f43f5e; --agent-bg: rgba(244,63,94,0.08); --agent-border: rgba(244,63,94,0.25); }
-    .agent-color-9  { --agent-color: #8b5cf6; --agent-bg: rgba(139,92,246,0.08); --agent-border: rgba(139,92,246,0.25); }
+    .agent-color-0  { --agent-color: var(--tt-ac0); --agent-bg: var(--tt-ac0-bg); --agent-border: var(--tt-ac0-bd); }
+    .agent-color-1  { --agent-color: var(--tt-ac1); --agent-bg: var(--tt-ac1-bg); --agent-border: var(--tt-ac1-bd); }
+    .agent-color-2  { --agent-color: var(--tt-ac2); --agent-bg: var(--tt-ac2-bg); --agent-border: var(--tt-ac2-bd); }
+    .agent-color-3  { --agent-color: var(--tt-ac3); --agent-bg: var(--tt-ac3-bg); --agent-border: var(--tt-ac3-bd); }
+    .agent-color-4  { --agent-color: var(--tt-ac4); --agent-bg: var(--tt-ac4-bg); --agent-border: var(--tt-ac4-bd); }
+    .agent-color-5  { --agent-color: var(--tt-ac5); --agent-bg: var(--tt-ac5-bg); --agent-border: var(--tt-ac5-bd); }
+    .agent-color-6  { --agent-color: var(--tt-ac6); --agent-bg: var(--tt-ac6-bg); --agent-border: var(--tt-ac6-bd); }
+    .agent-color-7  { --agent-color: var(--tt-ac7); --agent-bg: var(--tt-ac7-bg); --agent-border: var(--tt-ac7-bd); }
+    .agent-color-8  { --agent-color: var(--tt-ac8); --agent-bg: var(--tt-ac8-bg); --agent-border: var(--tt-ac8-bd); }
+    .agent-color-9  { --agent-color: var(--tt-ac9); --agent-bg: var(--tt-ac9-bg); --agent-border: var(--tt-ac9-bd); }
 
     /* ── Header ── */
     .tt-header {
-      background: linear-gradient(180deg, #111318 0%, #090B0F 100%);
+      background: linear-gradient(180deg, var(--tt-head-top) 0%, var(--tt-head-bot) 100%);
       border-bottom: 1px solid var(--tiger);
-      box-shadow: 0 1px 0 rgba(249,115,22,0.25), 0 4px 12px rgba(0,0,0,0.4);
+      box-shadow: 0 1px 0 var(--tt-ac0-bd), 0 4px 12px rgba(0,0,0,0.4);
       padding: 10px 20px;
       display: flex;
       align-items: center;
       gap: 12px;
       flex-shrink: 0;
     }
-    .tt-header .tiger-icon { display: flex; align-items: center; filter: drop-shadow(0 0 5px rgba(249,115,22,0.6)); }
+    .tt-header .tiger-icon { display: flex; align-items: center; filter: drop-shadow(0 0 5px var(--tt-tiger-glow)); }
     .tt-header .objective {
       flex: 1;
       font-size: 13px;
@@ -108,12 +288,12 @@
       letter-spacing: 0.05em;
     }
     .tt-btn:hover { border-color: var(--text-dim); color: var(--text); }
-    .tt-btn.stop { border-color: rgba(255,76,76,0.4); color: var(--error); }
-    .tt-btn.stop:hover { background: rgba(255,76,76,0.1); border-color: var(--error); }
-    .tt-btn.save { border-color: rgba(76,175,80,0.4); color: #4caf50; }
-    .tt-btn.save:hover { background: rgba(76,175,80,0.1); border-color: #4caf50; }
-    .tt-btn.load { border-color: rgba(100,181,246,0.4); color: #64b5f6; }
-    .tt-btn.load:hover { background: rgba(100,181,246,0.1); border-color: #64b5f6; }
+    .tt-btn.stop { border-color: var(--tt-err-40); color: var(--error); }
+    .tt-btn.stop:hover { background: var(--tt-err-10); border-color: var(--error); }
+    .tt-btn.save { border-color: var(--tt-ok-40); color: var(--tt-ok); }
+    .tt-btn.save:hover { background: var(--tt-ok-10); border-color: var(--tt-ok); }
+    .tt-btn.load { border-color: var(--tt-info-40); color: var(--tt-info); }
+    .tt-btn.load:hover { background: var(--tt-info-10); border-color: var(--tt-info); }
     .tt-btn:disabled { opacity: 0.3; cursor: not-allowed; }
     .status-badge {
       padding: 3px 10px;
@@ -124,11 +304,11 @@
       letter-spacing: 0.15em;
       font-family: 'Geist Mono', monospace;
     }
-    .status-badge.running { background: rgba(249,115,22,0.2); color: var(--tiger); border: 1px solid rgba(249,115,22,0.3); }
+    .status-badge.running { background: var(--tt-tiger-20); color: var(--tiger); border: 1px solid var(--tt-tiger-30); }
     .status-badge.running::before { content: '● '; font-size: 10px; color: var(--tiger); animation: blink 1s step-end infinite; }
-    .status-badge.complete { background: rgba(0,211,149,0.2); color: var(--success); border: 1px solid rgba(0,211,149,0.3); }
-    .status-badge.error { background: rgba(255,76,76,0.2); color: var(--error); border: 1px solid rgba(255,76,76,0.3); }
-    .round-counter { font-family: 'Geist Mono', monospace; font-size: 10px; color: var(--tiger); background: rgba(249,115,22,0.08); padding: 4px 10px; border-radius: 2px; border: 1px solid rgba(249,115,22,0.3); letter-spacing: 0.12em; text-transform: uppercase; }
+    .status-badge.complete { background: var(--tt-ok-20); color: var(--success); border: 1px solid var(--tt-ok-30); }
+    .status-badge.error { background: var(--tt-err-20); color: var(--error); border: 1px solid var(--tt-err-30); }
+    .round-counter { font-family: 'Geist Mono', monospace; font-size: 10px; color: var(--tiger); background: var(--tt-ac0-bg); padding: 4px 10px; border-radius: 2px; border: 1px solid var(--tt-tiger-30); letter-spacing: 0.12em; text-transform: uppercase; }
     @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
     @keyframes blink { 50% { opacity: 0; } }
 
@@ -139,7 +319,7 @@
     .roster-panel {
       width: 200px;
       min-width: 160px;
-      background: linear-gradient(180deg, #0d1117 0%, #14171F 100%);
+      background: linear-gradient(180deg, var(--tt-side-top) 0%, var(--tt-side-bot) 100%);
       border-right: 1px solid var(--border);
       display: flex;
       flex-direction: column;
@@ -157,27 +337,27 @@
       margin-bottom: 8px;
       transition: all 0.2s;
       border: 1px solid var(--border);
-      background: rgba(255,255,255,0.03);
+      background: var(--tt-wash-03);
       position: relative;
     }
-    .roster-agent:hover { background: rgba(255,255,255,0.06); border-color: var(--border-strong); }
-    .roster-agent.active { border-color: var(--agent-color, var(--tiger)); background: var(--agent-bg, rgba(249,115,22,0.08)); box-shadow: 0 0 12px rgba(249,115,22,0.15); }
-    .roster-agent .agent-icon { font-size: 22px; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; background: rgba(255,255,255,0.05); border-radius: 6px; flex-shrink: 0; }
+    .roster-agent:hover { background: var(--tt-wash-06); border-color: var(--border-strong); }
+    .roster-agent.active { border-color: var(--agent-color, var(--tiger)); background: var(--agent-bg, var(--tt-ac0-bg)); box-shadow: 0 0 12px var(--tt-tiger-15); }
+    .roster-agent .agent-icon { font-size: 22px; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; background: var(--tt-wash-05); border-radius: 6px; flex-shrink: 0; }
     .roster-agent .agent-name { font-size: 15px; font-weight: 700; color: var(--text); line-height: 1.2; }
     .roster-agent .agent-role { font-size: 11px; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.5px; margin-top: 2px; }
     .roster-agent .color-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
     .roster-agent .activity-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--border); flex-shrink: 0; }
     .roster-agent .activity-dot.working { background: var(--tiger); animation: pulse 1s infinite; }
-    .roster-agent .remove-btn { display: none; background: none; border: none; color: var(--text-dim); font-size: 16px; cursor: pointer; padding: 2px 6px; line-height: 1; opacity: 0.6; position: absolute; top: 6px; right: 6px; }
-    .roster-agent .remove-btn:hover { color: #ef4444; opacity: 1; }
+    .roster-agent .remove-btn { display: none; background: none; border: none; color: var(--text-dim); font-size: 16px; cursor: pointer; padding: 2px 6px; line-height: 1; opacity: var(--tt-op-remove); position: absolute; top: 6px; right: 6px; }
+    .roster-agent .remove-btn:hover { color: var(--tt-red); opacity: 1; }
     .roster-agent:hover .remove-btn { display: inline; }
     .add-participant-btn { display: flex; align-items: center; gap: 8px; padding: 10px 14px; margin-top: 10px; background: none; border: 1px dashed var(--border); border-radius: 6px; color: var(--text-dim); font-size: 13px; cursor: pointer; width: 100%; font-weight: 500; }
-    .add-participant-btn:hover { border-color: var(--tiger); color: var(--tiger); background: rgba(249,115,22,0.05); }
+    .add-participant-btn:hover { border-color: var(--tiger); color: var(--tiger); background: var(--tt-tiger-05); }
     .add-dropdown { position: absolute; left: 10px; right: 10px; background: var(--bg); border: 1px solid var(--border-strong); border-radius: 6px; max-height: 240px; overflow-y: auto; z-index: 100; box-shadow: 0 4px 16px rgba(0,0,0,0.6); }
     .add-dropdown-item { padding: 10px 14px; font-size: 14px; cursor: pointer; color: var(--text); display: flex; align-items: center; gap: 10px; }
-    .add-dropdown-item:hover { background: rgba(249,115,22,0.15); }
+    .add-dropdown-item:hover { background: var(--tt-tiger-15); }
     .roster-agent .activity-dot.done { background: var(--success); }
-    .roster-agent .activity-dot.failed { background: #ef4444; }
+    .roster-agent .activity-dot.failed { background: var(--tt-red); }
 
     /* ── Timeline ── */
     .timeline-panel { flex: 1; display: flex; flex-direction: column; overflow: hidden; position: relative; }
@@ -199,12 +379,34 @@
       border: 1px solid var(--agent-border);
       border-left: 3px solid var(--agent-color, var(--tiger));
     }
-    .agent-block.failed { border-color: rgba(239,68,68,0.5); }
+    .agent-block.failed { border-color: var(--tt-red-50); }
     /* A short line inside a card: the task a member was given, a member waiting its turn, why it failed. */
     .block-note { font-size: 12px; color: var(--text-dim); margin-top: 6px; line-height: 1.4; }
     .block-note.task { margin-top: 0; margin-bottom: 6px; font-style: italic; }
-    .block-note.waiting { color: #f59e0b; }
-    .block-note.failed { color: #ef4444; font-weight: 600; }
+    .block-note.waiting { color: var(--tt-amber); }
+    .block-note.failed { color: var(--tt-red); font-weight: 600; }
+    .approval-card { border: 1px solid var(--warning); border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; background: var(--bg-input); }
+    .approval-card.answered { opacity: 0.65; border-color: var(--border-strong); }
+    .approval-title { font-weight: 600; font-size: 14px; }
+    .approval-summary { font-size: 13px; color: var(--text-dim); margin-top: 4px; word-break: break-word; }
+    .approval-detail { font-size: 12px; color: var(--text-dim); white-space: pre-wrap; word-break: break-word; max-height: 120px; overflow-y: auto; margin-top: 4px; }
+    .approval-meta { display: flex; justify-content: space-between; gap: 8px; margin-top: 6px; font-size: 12px; color: var(--text-tertiary); }
+    .approval-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 8px; }
+    .approval-actions button { border: 1px solid var(--border-strong); border-radius: 6px; padding: 6px 14px; background: transparent; color: var(--text); cursor: pointer; font-size: 13px; }
+    .approval-actions .allow { background: var(--success); color: var(--tt-on-ok); border-color: var(--success); }
+    .approval-actions .deny { background: var(--error); color: var(--tt-on-fill); border-color: var(--error); }
+    .approval-actions button:disabled { opacity: 0.5; cursor: default; }
+    .file-cards { display: flex; flex-direction: column; gap: 8px; margin: 8px 0 4px; }
+    .file-card { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; max-width: 420px; display: flex; flex-direction: column; gap: 8px; background: var(--bg-input); }
+    .file-card .fc-head { display: flex; align-items: center; gap: 10px; min-width: 0; }
+    .file-card .fc-icon { font-size: 24px; line-height: 1; flex: 0 0 auto; }
+    .file-card .fc-meta { min-width: 0; flex: 1 1 auto; }
+    .file-card .fc-name { font-size: 14px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .file-card .fc-sub { font-size: 12px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .file-card .fc-preview { max-width: 100%; max-height: 160px; object-fit: contain; border-radius: 6px; align-self: flex-start; }
+    .file-card .fc-preview-link { color: var(--accent); font-size: 13px; text-decoration: none; align-self: flex-start; }
+    .file-card .fc-download { display: block; text-align: center; background: var(--accent); border-radius: 6px; padding: 8px 14px; color: var(--tt-on-fill); font-size: 13px; font-weight: 600; text-decoration: none; }
+    .file-card .fc-download:hover { background: var(--accent-hover); }
     .agent-block-header {
       display: flex;
       align-items: center;
@@ -223,22 +425,22 @@
       font-weight: 500;
       text-transform: uppercase;
       letter-spacing: 0.5px;
-      opacity: 0.7;
+      opacity: var(--tt-op-role);
       padding: 2px 6px;
       border-radius: 3px;
-      background: rgba(255,255,255,0.05);
+      background: var(--tt-wash-05);
     }
     .agent-block-header .block-time { margin-left: auto; font-size: 10px; color: var(--text-tertiary); font-family: 'Geist Mono', monospace; }
 
     .agent-block-body { padding: 12px 16px; font-size: 13px; line-height: 1.7; color: var(--text-dim); }
-    .agent-block.user-inject { --agent-color: #e2e8f0; --agent-bg: rgba(226,232,240,0.05); --agent-border: rgba(226,232,240,0.2); }
+    .agent-block.user-inject { --agent-color: var(--tt-user-inj); --agent-bg: var(--tt-user-inj-bg); --agent-border: var(--tt-user-inj-bd); }
 
     /* ── Tool Calls (matching main UI style) ── */
     .tool-calls-container {
       margin: 8px 0 12px 0;
       padding: 8px 0;
-      border-top: 1px solid rgba(100,100,120,0.15);
-      border-bottom: 1px solid rgba(100,100,120,0.15);
+      border-top: 1px solid var(--tt-grey-15);
+      border-bottom: 1px solid var(--tt-grey-15);
     }
     .tool-call-line {
       display: flex;
@@ -252,13 +454,13 @@
     }
     .tool-call-line + .tool-call-line { margin-top: 2px; }
     .tool-call-line.running { color: var(--text-dim); }
-    .tool-call-line.done { opacity: 0.7; }
+    .tool-call-line.done { opacity: var(--tt-op-done); }
     .tool-call-line.error { opacity: 0.9; }
     .tool-call-spinner {
       display: inline-block;
       width: 12px;
       height: 12px;
-      border: 2px solid rgba(100,100,120,0.25);
+      border: 2px solid var(--tt-grey-25);
       border-top-color: var(--accent);
       border-radius: 50%;
       animation: tool-spin 0.7s linear infinite;
@@ -268,17 +470,17 @@
     .tool-call-icon { flex-shrink: 0; font-size: 0.75rem; width: 12px; text-align: center; }
     .tool-call-info { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
     .tool-call-name { font-weight: 600; color: var(--accent); white-space: nowrap; }
-    .tool-call-input { color: var(--text-dim); opacity: 0.6; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 500px; }
+    .tool-call-input { color: var(--text-dim); opacity: var(--tt-op-input); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 500px; }
     .tool-call-status { font-size: 0.65rem; font-weight: 500; white-space: nowrap; }
-    .tool-call-status.done { color: #4ade80; }
-    .tool-call-status.error { color: #f87171; }
+    .tool-call-status.done { color: var(--tt-tool-ok); }
+    .tool-call-status.error { color: var(--tt-tool-err); }
     .tool-call-result {
       margin-top: 4px;
       margin-left: 20px;
       padding: 6px 10px;
-      background: rgba(100,100,120,0.08);
+      background: var(--tt-grey-08);
       border-radius: 4px;
-      border-left: 2px solid rgba(100,100,120,0.2);
+      border-left: 2px solid var(--tt-grey-20);
       font-size: 0.68rem;
       font-family: 'Geist Mono', monospace;
       color: var(--text-dim);
@@ -289,7 +491,7 @@
       display: none;
     }
     .tool-call-result.visible { display: block; }
-    .tool-call-toggle { font-size: 0.63rem; color: var(--accent); cursor: pointer; opacity: 0.6; white-space: nowrap; }
+    .tool-call-toggle { font-size: 0.63rem; color: var(--accent); cursor: pointer; opacity: var(--tt-op-toggle); white-space: nowrap; }
     .tool-call-toggle:hover { opacity: 1; }
 
     /* ── Dividers ── */
@@ -306,9 +508,9 @@
     }
     .tl-divider::before, .tl-divider::after { content: ''; flex: 1; height: 1px; background: var(--border); }
     .tl-divider.round { color: var(--tiger); }
-    .tl-divider.round::before, .tl-divider.round::after { background: rgba(249,115,22,0.3); }
+    .tl-divider.round::before, .tl-divider.round::after { background: var(--tt-tiger-30); }
     .tl-divider.complete { color: var(--success); }
-    .tl-divider.complete::before, .tl-divider.complete::after { background: rgba(0,211,149,0.3); }
+    .tl-divider.complete::before, .tl-divider.complete::after { background: var(--tt-ok-30); }
 
     .system-msg {
       padding: 4px 12px;
@@ -329,12 +531,12 @@
     .agent-block-body p { margin: 3px 0; }
     .agent-block-body ul, .agent-block-body ol { margin: 3px 0; padding-left: 18px; }
     .agent-block-body li { margin: 2px 0; }
-    .agent-block-body code { font-family: 'Geist Mono', monospace; background: rgba(0,0,0,0.3); padding: 1px 4px; border-radius: 3px; font-size: 12px; }
-    .agent-block-body pre { background: rgba(0,0,0,0.3); padding: 8px 12px; border-radius: 4px; overflow-x: auto; margin: 6px 0; }
+    .agent-block-body code { font-family: 'Geist Mono', monospace; background: var(--tt-code-bg); padding: 1px 4px; border-radius: 3px; font-size: 12px; }
+    .agent-block-body pre { background: var(--tt-code-bg); padding: 8px 12px; border-radius: 4px; overflow-x: auto; margin: 6px 0; }
     .agent-block-body pre code { background: transparent; padding: 0; }
     .agent-block-body table { width: 100%; border-collapse: collapse; margin: 6px 0; font-size: 12px; }
     .agent-block-body th, .agent-block-body td { padding: 4px 8px; border: 1px solid var(--border); text-align: left; }
-    .agent-block-body th { background: rgba(255,255,255,0.05); font-weight: 600; }
+    .agent-block-body th { background: var(--tt-wash-05); font-weight: 600; }
     .agent-block-body a { color: var(--accent); text-decoration: none; }
     .agent-block-body a:hover { text-decoration: underline; }
     .agent-block-body strong { font-weight: 600; color: var(--text); }
@@ -352,8 +554,12 @@
       gap: 10px;
     }
     .input-bar .input-label { font-size: 11px; color: var(--text-dim); font-weight: 600; white-space: nowrap; }
-    .input-bar input {
+    .input-bar input, .input-bar textarea {
       flex: 1;
+      min-width: 0;
+      resize: none;
+      line-height: 1.4;
+      max-height: calc(1.4em * 3 + 18px);   /* grows to 3 lines, then scrolls */
       background: var(--bg-input);
       border: 1px solid var(--border-strong);
       border-radius: 6px;
@@ -364,15 +570,15 @@
       outline: none;
       transition: border-color 0.15s;
     }
-    .input-bar input:focus { border-color: var(--accent); }
-    .input-bar input::placeholder { color: var(--text-tertiary); }
-    .input-bar input:disabled { opacity: 0.4; }
+    .input-bar input:focus, .input-bar textarea:focus { border-color: var(--accent); }
+    .input-bar input::placeholder, .input-bar textarea::placeholder { color: var(--text-tertiary); }
+    .input-bar input:disabled, .input-bar textarea:disabled { opacity: 0.4; }
     .input-bar .send-btn {
       padding: 8px 16px;
       border-radius: 6px;
       border: none;
       background: var(--accent);
-      color: #fff;
+      color: var(--tt-on-fill);
       font-size: 12px;
       font-weight: 600;
       cursor: pointer;
@@ -380,12 +586,107 @@
     }
     .input-bar .send-btn:hover { background: var(--accent-hover); }
     .input-bar .send-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+
+    /* ── Member state: the current step in the side roster; the chip strip is phone-only ── */
+    .roster-agent .agent-step { font-size: 11px; color: var(--text-dim); margin-top: 3px; overflow-wrap: anywhere; line-height: 1.3; }
+    .roster-agent .agent-step:empty { display: none; }
+    .roster-agent .activity-dot.waiting { background: var(--warning); animation: pulse 1.6s infinite; }
+    .member-strip { display: none; }
+    .chip-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--border-strong); flex-shrink: 0; }
+    .chip-dot.working { background: var(--tiger); animation: pulse 1s infinite; }
+    .chip-dot.done { background: var(--success); }
+    .chip-dot.failed { background: var(--tt-red); }
+    .chip-dot.waiting { background: var(--warning); animation: pulse 1.6s infinite; }
+
+    /* ── Header: the More menu and the Back link exist for the phone only ── */
+    .tt-more { display: contents; }
+    .tt-more-btn, .tt-back { display: none; }
+    .tt-back { text-decoration: none; }
+    .from-mobile .tt-back { display: flex; align-items: center; min-height: 40px; }   /* opened from the phone app: a way back */
+
+    /* ── Teams list (the phone's way in: /tiger-team?from=mobile with no team to load) ── */
+    .teams-home { padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
+    .teams-home h2 { font-size: 16px; color: var(--text); }
+    .teams-home .teams-empty { color: var(--text-dim); font-size: 14px; }
+    .team-row { display: block; text-decoration: none; color: inherit; border: 1px solid var(--border); border-radius: 8px; padding: 12px; background: var(--bg-card); min-height: 44px; }
+    .team-row:active { border-color: var(--accent); }
+    .team-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .team-chip { font-family: 'Geist Mono', monospace; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; padding: 3px 8px; border-radius: 2px; background: var(--tt-wash-06); color: var(--text-dim); }
+    .team-chip.running { background: var(--tt-tiger-20); color: var(--tiger); }
+    .team-chip.completed { background: var(--tt-ok-20); color: var(--success); }
+    .team-chip.problem { background: var(--tt-err-20); color: var(--error); }
+    .team-time { font-size: 11px; color: var(--text-tertiary); font-family: 'Geist Mono', monospace; }
+    /* The list alone: no input bar, no roster, no controls, only the status badge. */
+    .teams-view .input-bar, .teams-view .roster-panel, .teams-view .member-strip { display: none !important; }
+    .teams-view .tt-controls > :not(.status-badge) { display: none !important; }
+    .teams-view .timeline-scroll { padding-bottom: 16px; }
+    .team-obj { margin-top: 6px; font-size: 14px; line-height: 1.4; color: var(--text); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+
+    /* ── Phone: a usable view of a running team (390 px wide and up) ── */
+    @media (max-width: 700px) {
+      html, body { max-width: 100vw; overflow-x: hidden; }
+      body { height: 100vh; height: 100dvh; font-size: 14px; }
+
+      /* Header: the mission on one line, round + status + Stop visible, everything else in More. */
+      .tt-header { flex-wrap: wrap; padding: 8px 10px; gap: 8px; position: relative; }
+      .tt-header .tiger-icon img { width: 24px; height: 24px; }
+      .tt-header .objective { flex: 1 1 0; min-width: 0; }
+      .tt-header .objective .obj-label { display: none; }
+      .tt-controls { order: 3; flex: 1 0 100%; flex-wrap: wrap; gap: 6px; justify-content: space-between; }
+      .tt-controls .tt-btn { min-height: 40px; padding: 6px 12px; }
+      .tt-more-btn { display: flex; }
+      .tt-more { display: none; position: absolute; right: 10px; top: 100%; z-index: 200; flex-direction: column; gap: 6px; min-width: 12rem; max-width: calc(100vw - 20px); padding: 8px; background: var(--bg-card); border: 1px solid var(--border-strong); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.6); }
+      .tt-more.open { display: flex; }
+      .tt-more .tt-btn { width: 100%; justify-content: flex-start; }
+      #tt-error-banner, #tt-retry-banner { padding: 6px 10px !important; overflow-wrap: anywhere; }
+
+      /* Roster: the side column becomes a strip of chips under the header. */
+      .roster-panel { display: none; }
+      .member-strip { display: flex; gap: 8px; overflow-x: auto; overflow-y: hidden; padding: 8px 10px; flex-shrink: 0; border-bottom: 1px solid var(--border); background: var(--tt-side-top); -webkit-overflow-scrolling: touch; }
+      .member-strip:empty { display: none; }
+      .member-chip { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; min-height: 44px; max-width: 220px; padding: 6px 12px; border-radius: 22px; border: 1px solid var(--agent-border, var(--border-strong)); background: var(--agent-bg, var(--tt-wash-04)); color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+      .chip-icon { font-size: 18px; flex-shrink: 0; }
+      .chip-main { display: flex; flex-direction: column; min-width: 0; }
+      .chip-name { font-size: 13px; font-weight: 700; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .chip-step { font-size: 11px; line-height: 1.2; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .chip-step:empty { display: none; }
+
+      /* Timeline: full width, small padding, nothing wider than the screen; room at the bottom for the fixed input bar. */
+      .tt-body { flex-direction: column; min-height: 0; }
+      .timeline-panel { width: 100%; min-width: 0; }
+      .timeline-scroll { padding: 10px 10px calc(var(--input-h, 130px) + 16px + env(safe-area-inset-bottom, 0px)); overflow-x: hidden; }
+      .agent-block { overflow: visible; margin-bottom: 12px; max-width: 100%; }
+      .agent-block-header { padding: 8px 10px; flex-wrap: wrap; }
+      /* The reply (the coordinator's final report included) reads at 15 px and wraps instead of clipping. */
+      .agent-block-body { padding: 10px; font-size: 15px; line-height: 1.6; overflow-wrap: anywhere; word-break: break-word; }
+      .agent-block-body pre { white-space: pre-wrap; overflow-x: auto; max-width: 100%; }
+      .agent-block-body code { font-size: 13px; overflow-wrap: anywhere; }
+      .agent-block-body table { display: block; overflow-x: auto; max-width: 100%; }
+      .agent-block-body img { max-width: 100%; height: auto; }
+      .agent-block-body button { min-height: 40px; }
+      .block-note, .system-msg { overflow-wrap: anywhere; }
+      .tool-call-line { padding: 4px 6px; }
+      .tool-call-info { flex-wrap: nowrap; overflow: hidden; }
+      .tool-call-input { flex: 1 1 0; min-width: 0; max-width: none; }
+      .tool-call-result { margin-left: 8px; overflow-wrap: anywhere; }
+      .approval-actions button { min-height: 40px; min-width: 88px; }
+      .file-card { max-width: 100%; }
+      #saved-panel { padding: 12px !important; }
+
+      /* Input bar: fixed at the bottom, the label above the box, the box grows to 3 lines, the button stays in view. */
+      .input-bar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 50; flex-wrap: wrap; gap: 6px; padding: 8px 10px calc(8px + env(safe-area-inset-bottom, 0px)); }
+      .input-bar .input-label { flex: 0 0 100%; white-space: normal; }
+      .input-bar #interject-target { flex: 0 0 100%; min-height: 40px; margin-right: 0 !important; }
+      .input-bar textarea { flex: 1 1 0; min-height: 40px; font-size: 16px; }
+      .input-bar .send-btn { flex: 0 0 auto; min-height: 40px; min-width: 84px; font-size: 14px; }
+    }
   </style>
 </head>
 <body>
 
   <!-- Header -->
   <div class="tt-header">
+    <a class="tt-btn tt-back" id="tt-back" href="/mobile" title="Back to the phone app">&lsaquo; Back</a>
     <span class="tiger-icon"><img src="/images/tiger-logo.svg" width="32" height="32" alt="Tiger Team"></span>
     <div class="objective" onclick="this.classList.toggle('expanded')" title="Click to expand/collapse">
       <span class="obj-label">Mission</span>
@@ -393,17 +694,23 @@
     </div>
     <div class="tt-controls">
       <span class="round-counter" id="round-counter">-</span>
-      <button class="tt-btn" id="btn-resume" onclick="resumeInterruptedTeam()" style="display:none; border-color: rgba(245,158,11,0.5); color: #f59e0b;" title="Resume this interrupted/stopped/blocked investigation">▶ Resume Interrupted</button>
+      <button class="tt-btn" id="btn-resume" onclick="resumeInterruptedTeam()" style="display:none; border-color: var(--tt-amber-50); color: var(--tt-amber);" title="Resume this interrupted/stopped/blocked investigation">▶ Resume Interrupted</button>
       <button class="tt-btn stop" id="btn-stop" onclick="stopSession()" disabled>⏹ Stop</button>
-      <button class="tt-btn save" id="btn-save" onclick="saveSession()" disabled>💾 Save</button>
-      <button class="tt-btn" onclick="reconcileUnknownOutcomes()" title="Record verified outcomes for uncertain operations">Resolve Unknowns</button>
-      <button class="tt-btn" onclick="downloadFullRecord()" title="Download prompts, stream events, full tool results and raw artifacts">Full Record</button>
-      <button class="tt-btn load" id="btn-load" onclick="toggleSavedPanel()">📂 Load</button>
+      <button class="tt-btn tt-more-btn" id="btn-more" type="button" aria-haspopup="true" aria-expanded="false" onclick="toggleMoreMenu(event)">&#x22EF; More</button>
+      <div class="tt-more" id="tt-more">
+        <button class="tt-btn save" id="btn-save" onclick="saveSession()" disabled>💾 Save</button>
+        <button class="tt-btn" onclick="reconcileUnknownOutcomes()" title="Record verified outcomes for uncertain operations">Resolve Unknowns</button>
+        <button class="tt-btn" onclick="downloadFullRecord()" title="Download prompts, stream events, full tool results and raw artifacts">Full Record</button>
+        <button class="tt-btn load" id="btn-load" onclick="toggleSavedPanel()">📂 Load</button>
+      </div>
       <span class="status-badge running" id="status-badge">Starting</span>
     </div>
   </div>
-  <div id="tt-error-banner" style="display:none; background: rgba(255,76,76,0.12); border-bottom: 1px solid rgba(255,76,76,0.4); color: var(--error); padding: 6px 20px; font-size: 12px; font-weight:600;"></div>
-  <div id="tt-retry-banner" style="display:none; background: rgba(245,158,11,0.12); border-bottom: 1px solid rgba(245,158,11,0.4); color: #f59e0b; padding: 6px 20px; font-size: 12px; font-weight:600;"></div>
+  <div id="tt-error-banner" style="display:none; background: var(--tt-err-12); border-bottom: 1px solid var(--tt-err-40); color: var(--error); padding: 6px 20px; font-size: 12px; font-weight:600;"></div>
+  <div id="tt-retry-banner" style="display:none; background: var(--tt-amber-12); border-bottom: 1px solid var(--tt-amber-40); color: var(--tt-amber); padding: 6px 20px; font-size: 12px; font-weight:600;"></div>
+
+  <!-- Phone: the members as a strip of chips (state dot + current step); hidden on a wide screen, where the roster shows them -->
+  <div class="member-strip" id="member-strip" role="list" aria-label="Team members"></div>
 
   <!-- Body -->
   <div class="tt-body">
@@ -431,16 +738,16 @@
   <!-- Input Bar -->
   <div class="input-bar" id="input-bar">
     <span class="input-label">💬 Inject:</span>
-    <select id="interject-target" title="Who receives it now" style="padding:6px;border-radius:6px;border:1px solid rgba(255,255,255,0.15);background:transparent;color:inherit;font:inherit;margin-right:6px">
+    <select id="interject-target" title="Who receives it now" style="padding:6px;border-radius:6px;border:1px solid var(--tt-wash-15);background:transparent;color:inherit;font:inherit;margin-right:6px">
       <option value="team">Team: coordinator + everyone working now</option>
       <option value="coordinator">Coordinator only</option>
     </select>
-    <input type="text" id="user-input" placeholder="Interject: tell the team something now..." disabled>
+    <textarea id="user-input" rows="1" placeholder="Tell the team something now…" disabled></textarea>
     <button class="send-btn" id="btn-send" onclick="injectMessage()" disabled>Interject</button>
   </div>
 
   <!-- Saved Sessions Panel (overlay) -->
-  <div id="saved-panel" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.8); z-index:9999; overflow-y:auto; padding:40px;">
+  <div id="saved-panel" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:var(--tt-overlay); z-index:9999; overflow-y:auto; padding:40px;">
     <div style="max-width:700px; margin:0 auto; background:var(--bg); border:1px solid var(--border); border-radius:8px; padding:24px;">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
         <h2 style="margin:0; color:var(--text); font-size:18px;">📂 Saved Tiger Teams</h2>
@@ -454,12 +761,16 @@
   <script src="/vendor/marked.umd.js"></script>
   <script src="/vendor/purify.min.js"></script>
   <script src="/ui-dialog.js"></script>
+  <script src="/ui-file-card.js"></script>
   <script>
     window.dialogGuard = typeof createDialogGuard === 'function' ? createDialogGuard({ trackSaves: false }) : null;
     // Every agent- or server-supplied string that goes into markup passes through this.
     function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
     // ── Parse URL params ──
     const params = new URLSearchParams(window.location.search);
+    // Opened from the phone app (its menu): a "‹ Back" link to /mobile, and the Teams list when there is no team to open.
+    const fromMobile = params.get('from') === 'mobile';
+    if (fromMobile) document.body.classList.add('from-mobile');
     const launchId = params.get('launch');
     let coordinator = params.get('coordinator');
     let participants = (params.get('participants') || '').split(',').filter(Boolean);
@@ -484,7 +795,7 @@
         coordinator = data.coordinator || coordinator;
         participants = data.participants || participants;
         objective = data.objective || objective;
-        maxRounds = data.max_rounds || maxRounds;
+        maxRounds = data.max_rounds ?? maxRounds;
         context = data.context || context;
         mode = data.mode || mode;
         challenger = data.challenger || challenger;
@@ -494,7 +805,7 @@
         autoLaunched = data.autoLaunched || autoLaunched;
         stagedReady = true;
       } catch (e) {
-        document.body.innerHTML = `<div style="color: #e94560; padding: 40px; font-size: 16px;">Error loading Tiger Team: ${e.message}<br><br>The launch may have expired (5 min TTL). Try launching again.</div>`;
+        document.body.innerHTML = `<div style="color: var(--tt-crash); padding: 40px; font-size: 16px;">Error loading Tiger Team: ${e.message}<br><br>The launch may have expired (5 min TTL). Try launching again.</div>`;
       }
     }
 
@@ -548,17 +859,64 @@
       // Fail closed: without the sanitizer, agent output is shown as escaped text, never parsed as HTML.
       if (!purifyReady()) return esc(text).replace(/\n/g, '<br>');
       const html = typeof marked !== 'undefined' ? marked.parse(text) : esc(text).replace(/\n/g, '<br>');
+      ensurePurifyHook();
       return DOMPurify.sanitize(html, {
         ALLOWED_TAGS: ['b','i','em','strong','code','pre','br','p','ul','ol','li','h1','h2','h3','h4','h5','h6','a','blockquote','hr','span','div','table','thead','tbody','tr','th','td','img','details','summary','del','s','sub','sup'],
-        ALLOWED_ATTR: ['href','target','rel','src','alt','class','id'],
+        ALLOWED_ATTR: ['href','target','rel','src','alt','class'],
         ALLOW_DATA_ATTR: false,
-        FORBID_ATTR: ['onerror','onload','onclick','onmouseover','onfocus','onblur','style']
+        SANITIZE_DOM: true,
+        FORBID_ATTR: ['onerror','onload','onclick','onmouseover','onfocus','onblur','style','id','name']
       });
     }
+    // Member text must not load remote images (tracking) or carry page ids (DOM clobbering).
+    let purifyHooked = false;
+    /** Registers the node hook once; called before EVERY DOMPurify.sanitize (live text and saved transcripts alike). */
+    function ensurePurifyHook() {
+      if (purifyHooked || !purifyReady() || typeof DOMPurify.addHook !== 'function') return;
+      purifyHooked = true;
+      DOMPurify.addHook('afterSanitizeAttributes', purifyFixNode);
+    }
+    /** An img src survives only as a plain same-origin path: no whitespace or control characters anywhere (browsers
+     *  strip a tab/newline/CR inside "/&#9;/evil.example" and load //evil.example), starts with "/" but not "//" or "/\". */
+    function sameOriginImgSrc(src, origin) {
+      if (typeof src !== 'string' || !src) return false;
+      if (/[\s\x00-\x1f\x7f]/.test(src)) return false;
+      if (!(src.charAt(0) === '/' && src.charAt(1) !== '/' && src.charAt(1) !== '\\')) return false;
+      try { return new URL(src, origin).origin === origin; } catch { return false; }
+    }
+    function purifyFixNode(node) {
+      if (!node || !node.tagName) return;
+      const tag = node.tagName.toLowerCase();
+      if (tag === 'img') {
+        const src = node.getAttribute('src') || '';
+        if (!sameOriginImgSrc(src, location.origin)) node.removeAttribute('src');
+      } else if (tag === 'a') {
+        const href = node.getAttribute('href') || '';
+        node.setAttribute('rel', 'noopener noreferrer');
+        if (/^[a-z][a-z0-9+.-]*:|^\/\//i.test(href)) node.setAttribute('target', '_blank');
+        else node.removeAttribute('target');
+      }
+    }
 
-    function elapsed() {
-      const s = Math.max(0, Math.floor(((eventNow || Date.now()) - startTime) / 1000));
+    /** Seconds as the war room writes them: "42s", "3m 12s". */
+    function fmtDuration(totalSeconds) {
+      const s = Math.max(0, Math.floor(totalSeconds));
       return s >= 60 ? `${Math.floor(s/60)}m ${s%60}s` : `${s}s`;
+    }
+    /** The local clock time of a moment, 24 hours: "22:14". */
+    function clockTime(ms) {
+      const d = new Date(ms);
+      return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+    }
+    /** The stamp on a card or note: the clock time it happened, "22:14" (a finished member card adds " · took 42s"). */
+    function stampText(nowMs) {
+      return clockTime(nowMs);
+    }
+    function elapsed() {
+      return fmtDuration(((eventNow || Date.now()) - startTime) / 1000);
+    }
+    function stamp() {
+      return stampText(eventNow || Date.now(), startTime);
     }
 
     let userScrolledUp = false;
@@ -611,6 +969,8 @@
     }
 
     async function init() {
+      // From the phone app with no team to open (no launch, no load, no parameters): the list of teams to choose from.
+      if (fromMobile && !launchId && !loadParam && !coordinator) { await showTeamsHome(); return; }
       // Fetch staged params if launched via launchId
       if (launchId && !loadSaveId) await fetchStagedParams();
       if (!stagedReady && !loadSaveId) return;
@@ -619,7 +979,7 @@
       // check below sees the correct backendRecoveryAvailable value.
       await checkBackendRecovery();
 
-      document.getElementById('objective-text').textContent = loadOnly ? 'Select a saved session to load' : objective;
+      showObjective(loadOnly ? 'Select a saved session to load' : objective);
       try {
         const res = await fetch('/api/agents');
         const data = await res.json();
@@ -651,6 +1011,7 @@
     function buildRoster() {
       const coordEl = document.getElementById('coordinator-roster');
       const partEl = document.getElementById('participants-roster');
+      if (inputMode === 'running') buildTargetOptions();   // the member list changed: so does the target list
       const challEl = document.getElementById('challenger-roster');
       const challSection = document.getElementById('challenger-section');
 
@@ -670,6 +1031,8 @@
           challSection.style.display = 'none';
         }
       }
+      buildChips();   // the phone's strip of chips (and a rebuilt roster shows each member's state again)
+      for (const slug of memberStates.keys()) renderMember(slug);
     }
 
     function agentRosterHTML(slug, role, isCoord = false) {
@@ -682,6 +1045,7 @@
           <div style="flex:1">
             <div class="agent-name">${esc(a.display || slug)}</div>
             <div class="agent-role">${role}</div>
+            <div class="agent-step" id="step-${esc(slug)}"></div>
           </div>
           ${removeBtn}
           <span class="activity-dot" id="dot-${slug}"></span>
@@ -693,7 +1057,115 @@
       if (dot) dot.className = 'activity-dot ' + status;
       const row = document.getElementById('roster-' + slug);
       if (row) row.classList.toggle('active', status === 'working');
+      noteDotChange(slug, status);   // the member's state (and its current step) follows the dot
     }
+
+    // ── Member state: where each member stands right now ──
+    // memberStates: slug -> { state: 'working' | 'done' | 'failed' | 'waiting', step: string, at: ms }.
+    // The same events that draw the cards keep it current (dot changes, tool start/use/result, text, notices), so a
+    // replay (loadTeam) rebuilds it too. It is drawn in the side roster (desktop) and in the chips (phone), as text only.
+    const memberStates = new Map();
+    /** A tool's input as one short readable piece: a path shows its file name, a command its first words. */
+    function toolSummary(input) {
+      if (input === null || input === undefined || input === '') return '';
+      let v = input;
+      if (typeof v === 'string') {
+        const t = v.trim();
+        if (t.charAt(0) === '{') { try { v = JSON.parse(t); } catch { v = t; } } else v = t;
+      }
+      if (v && typeof v === 'object') {
+        const keys = ['file_path', 'path', 'file', 'filename', 'command', 'cmd', 'query', 'url', 'pattern', 'name', 'text'];
+        const k = keys.find(key => typeof v[key] === 'string' && v[key]);
+        v = k ? v[k] : (Object.values(v).find(x => typeof x === 'string' && x) || '');
+        if (['file_path', 'path', 'file'].includes(k)) v = String(v).split(/[\\/]/).filter(Boolean).pop() || v;
+      }
+      v = String(v).replace(/\s+/g, ' ').trim();
+      return v.length > 40 ? v.slice(0, 40) + '…' : v;
+    }
+    /** "Read draft.txt": the tool's name and a short summary of what it works on. */
+    function toolStepText(name, input) {
+      const s = toolSummary(input);
+      return String(name || 'tool') + (s ? ' ' + s : '');
+    }
+    /** What a member's chip or roster line says: the step while it works, "done 22:51", "failed", the wait. */
+    function memberStepLabel(m, slug) {
+      if (!m) return '';
+      if (coordWaiting(m, slug)) return 'waiting for the team';
+      if (m.state === 'done') return 'done ' + clockTime(m.at);
+      if (m.state === 'failed') return 'failed';
+      return m.step || (m.state === 'working' ? 'working…' : '');
+    }
+    /** The coordinator's card closes when it hands work out; while a member still works or waits, it is waiting, not done. */
+    function coordWaiting(m, slug) {
+      if (!m || m.state !== 'done' || !slug || slug !== coordinator || mode === 'roundtable') return false;   // a roundtable takes turns
+      for (const [s, v] of memberStates) if (s !== coordinator && (v.state === 'working' || v.state === 'waiting')) return true;
+      return false;
+    }
+    function renderMember(slug) {
+      const m = memberStates.get(slug);
+      if (!m) return;
+      const label = memberStepLabel(m, slug);
+      const shown = coordWaiting(m, slug) ? 'waiting' : m.state;
+      for (const id of ['step-', 'chipstep-']) {
+        const el = document.getElementById(id + slug);
+        if (el && el.textContent !== label) el.textContent = label;   // textContent: whatever a tool put in the summary stays text
+      }
+      for (const id of ['dot-', 'chipdot-']) {
+        const el = document.getElementById(id + slug);
+        if (el) el.className = (id === 'dot-' ? 'activity-dot ' : 'chip-dot ') + shown;
+      }
+    }
+    function setMemberState(slug, state, step) {
+      if (!slug) return;
+      const prev = memberStates.get(slug);
+      if (prev && prev.state === state && prev.step === (step || '') && state !== 'done') return;
+      memberStates.set(slug, { state, step: step || '', at: eventNow || Date.now() });
+      renderMember(slug);
+      if (slug !== coordinator && coordinator) renderMember(coordinator);   // the coordinator's "waiting for the team" follows its members
+    }
+    /** The member's current step while it is working (a tool running, text arriving). */
+    function setMemberStep(slug, step) { setMemberState(slug, 'working', step); }
+    /** setDot's status says working / done / failed: the state follows it (a working member keeps the step it has). */
+    function noteDotChange(slug, status) {
+      if (status !== 'working' && status !== 'done' && status !== 'failed') return;
+      const prev = memberStates.get(slug);
+      if (status === 'working') { if (!prev || prev.state !== 'working') setMemberState(slug, 'working', 'starting…'); return; }
+      setMemberState(slug, status, '');
+    }
+    /** A wait notice from the hub ("is busy with another conversation", "is on a voice call") as the short step text. */
+    function noticeStepText(message) {
+      const m = String(message || '');
+      if (/voice call/i.test(m)) return 'waiting: on a voice call';
+      if (/busy/i.test(m)) return 'waiting: busy';
+      return 'waiting';
+    }
+    /** One chip per member: icon, name, state dot, current step. Tapping it scrolls to the member's latest card. */
+    function buildChips() {
+      const strip = document.getElementById('member-strip');
+      if (!strip) return;
+      const slugs = [];
+      for (const s of [coordinator, ...participants, mode === 'roundtable' ? '' : challenger]) if (s && !slugs.includes(s)) slugs.push(s);
+      strip.innerHTML = slugs.map(slug => {
+        const a = agents[slug] || { display: slug, icon: '🤖' };
+        return `<button type="button" class="member-chip ${getAgentColorClass(slug)}" role="listitem" data-slug="${esc(slug)}" id="chip-${esc(slug)}">` +
+          `<span class="chip-icon">${esc(a.icon || '🤖')}</span>` +
+          `<span class="chip-main"><span class="chip-name">${esc(a.display || slug)}</span><span class="chip-step" id="chipstep-${esc(slug)}"></span></span>` +
+          `<span class="chip-dot" id="chipdot-${esc(slug)}"></span></button>`;
+      }).join('');
+      for (const slug of slugs) renderMember(slug);
+    }
+    /** Scroll the timeline to a member's latest card. */
+    function scrollToMember(slug) {
+      const tl = document.getElementById('timeline');
+      if (!tl) return;
+      const cards = Array.from(tl.querySelectorAll('.agent-block')).filter(b => b.dataset && b.dataset.agent === slug);
+      const card = cards[cards.length - 1];
+      if (card && card.scrollIntoView) card.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    }
+    document.getElementById('member-strip').addEventListener('click', (e) => {
+      const chip = e.target && e.target.closest && e.target.closest('.member-chip');
+      if (chip && chip.dataset.slug) scrollToMember(chip.dataset.slug);
+    });
 
     async function removeParticipant(slug) {
       participants = participants.filter(p => p !== slug);
@@ -741,14 +1213,67 @@
     function setRunning(running) {
       isRunning = running;
       document.getElementById('btn-stop').disabled = !running;
-      if (running) {
-        document.getElementById('btn-send').onclick = injectMessage;
-        document.getElementById('user-input').disabled = false;
-        document.getElementById('btn-send').disabled = false;
-        document.getElementById('user-input').placeholder = 'Interject: tell the team something now...';
-        document.querySelector('.input-label').textContent = '💬 Interject:';
-        document.getElementById('interject-target').style.display = '';
+      if (running) setInputMode('running');
+    }
+
+    /** The target choices while the team runs: the team, the coordinator, and each member by name. */
+    function buildTargetOptions() {
+      const sel = document.getElementById('interject-target');
+      if (!sel) return;
+      const keep = sel.value;
+      const opts = [['team', 'Team: coordinator + everyone working now'], ['coordinator', 'Coordinator only']];
+      for (const slug of participants) opts.push([slug, ((agents[slug] && agents[slug].display) || slug) + ' only']);
+      sel.innerHTML = opts.map(([v, t]) => `<option value="${esc(v)}">${esc(t)}</option>`).join('');
+      if (opts.some(([v]) => v === keep)) sel.value = keep;
+    }
+
+    // ── Input bar: one control, three states (running / complete / ended) ──
+    let inputMode = 'running';
+    function setInputMode(m) {
+      inputMode = m;
+      const input = document.getElementById('user-input');
+      const btn = document.getElementById('btn-send');
+      const label = document.querySelector('.input-label');
+      const sel = document.getElementById('interject-target');
+      if (m === 'running') {
+        buildTargetOptions();
+        sel.style.display = '';
+        label.textContent = '💬 Interject:';
+        input.placeholder = 'Tell the team something now…';
+        btn.textContent = 'Interject';
+        btn.onclick = injectMessage;
+        input.disabled = false; btn.disabled = false;
+      } else if (m === 'complete') {
+        sel.style.display = 'none';
+        label.textContent = '🔄 Continue:';
+        input.placeholder = 'Ask a follow-up or give a new directive…';
+        btn.textContent = 'Continue';
+        btn.onclick = continueSession;
+        input.disabled = false; btn.disabled = false;   // what is in the box stays (a draft is never thrown away by the team finishing)
+      } else {   // 'ended': stopped, failed or interrupted; a note resumes it from where it stopped
+        sel.style.display = 'none';
+        label.textContent = '🔄 Continue:';
+        input.placeholder = 'A note for the team; it resumes from where it stopped…';
+        btn.textContent = 'Resume with this note';
+        btn.onclick = resumeWithNote;
+        const can = !!(tigerTeamId && backendRecoveryAvailable);
+        input.disabled = !can; btn.disabled = !can;
       }
+      restoreUnsentNote();
+    }
+
+    // A note the page could not send (the team was running again in another window) is kept in this tab's storage for that
+    // team, so the reload the page asks for does not lose it: it comes back into the empty box once, then is forgotten.
+    function unsentNoteKey() { return tigerTeamId ? 'tt-unsent-note:' + tigerTeamId : ''; }
+    function keepUnsentNote(note) { try { const k = unsentNoteKey(); if (k && note) { sessionStorage.setItem(k, note); return true; } } catch (e) {} return false; }
+    function clearUnsentNote() { try { const k = unsentNoteKey(); if (k) sessionStorage.removeItem(k); } catch (e) {} }
+    function restoreUnsentNote() {
+      try {
+        const k = unsentNoteKey(); if (!k) return;
+        const note = sessionStorage.getItem(k); if (!note) return;
+        const input = document.getElementById('user-input');
+        if (input && !input.value.trim()) { input.value = note; if (typeof growInput === 'function') growInput(); }   // kept until something is sent (a replay may clear the box again)
+      } catch (e) {}
     }
 
     // ── Stop ──
@@ -758,6 +1283,7 @@
       try {
         const r = await fetch('/api/tiger-team/stop', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ session_id: sessionId || undefined, tiger_team_id: tigerTeamId || undefined }) });
         if (r.ok) addSystemMsg('■ Stopping the team…');
+        else if (r.status === 409) addSystemMsg((await r.json().catch(() => ({}))).error || 'This team has already ended.');
         else addSystemMsg('Stop failed: ' + ((await r.json().catch(() => ({}))).error || `HTTP ${r.status}`));
       } catch (e) { console.error('Stop failed:', e); addSystemMsg('Stop failed: ' + e.message); }
     }
@@ -768,7 +1294,7 @@
       const input = document.getElementById('user-input');
       const msg = input.value.trim();
       if (!msg || (!sessionId && !tigerTeamId)) return;
-      input.value = '';
+      input.value = ''; clearUnsentNote();
       sentInterjections.push(msg);   // drawn here now; its echo from the team's stream is skipped
 
       closeBlock();
@@ -781,7 +1307,7 @@
           <span class="block-icon">👤</span>
           <span class="block-agent">You</span>
           <span class="block-role">Interjection</span>
-          <span class="block-time">${elapsed()}</span>
+          <span class="block-time">${stamp()}</span>
         </div>
         <div class="agent-block-body"><div class="text-content">${md(msg)}</div><div class="interject-status" style="font-size:11px;color:var(--text-dim);margin-top:4px">sending…</div></div>`;
       tl.appendChild(block);
@@ -792,7 +1318,7 @@
         const ir = await fetch('/api/tiger-team/inject', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ session_id: sessionId || undefined, tiger_team_id: tigerTeamId || undefined, message: msg, target }) });
         const ij = await ir.json().catch(() => ({}));
         const st = block.querySelector('.interject-status');
-        if (!ir.ok) { st.textContent = '✗ ' + (ij.error || `HTTP ${ir.status}`); st.style.color = '#ef4444'; }
+        if (!ir.ok) { st.textContent = '✗ ' + (ij.error || `HTTP ${ir.status}`); st.style.color = 'var(--tt-red)'; }
         else st.textContent = (ij.delivered || []).map(d => `${d.agent} (${d.how === 'live' ? 'now' : 'at its next step'})`).join(', ') ? 'sent to ' + (ij.delivered || []).map(d => `${d.agent} (${d.how === 'live' ? 'now' : 'at its next step'})`).join(', ') + ' · waiting for pickup…' : 'sent';
       } catch (e) { addSystemMsg('Inject failed: ' + e.message); }
     }
@@ -808,13 +1334,13 @@
       const tl = document.getElementById('timeline');
       const block = document.createElement('div');
       block.className = 'agent-block user-inject';
-      block.style.borderColor = '#f59e0b';
-      block.style.background = 'rgba(245,158,11,0.05)';
+      block.style.borderColor = 'var(--tt-amber)';
+      block.style.background = 'var(--tt-amber-05)';
       block.innerHTML = `
         <div class="agent-block-header">
           <span class="block-icon">⚠️</span>
-          <span class="block-agent" style="color:#f59e0b">Additional Rounds Requested</span>
-          <span class="block-time">${elapsed()}</span>
+          <span class="block-agent" style="color:var(--tt-amber)">Additional Rounds Requested</span>
+          <span class="block-time">${stamp()}</span>
         </div>
         <div class="agent-block-body">
           <div class="text-content">
@@ -822,8 +1348,8 @@
             <p><strong>Justification:</strong> ${esc(justification)}</p>
           </div>
           <div style="margin-top:12px;display:flex;gap:10px">
-            <button class="approve-rounds-btn" style="padding:8px 16px;background:#22c55e;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600">✓ Approve</button>
-            <button onclick="denyAdditionalRounds()" style="padding:8px 16px;background:#ef4444;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600">✗ Deny</button>
+            <button class="approve-rounds-btn" style="padding:8px 16px;background:var(--tt-green);color:var(--tt-on-fill);border:none;border-radius:6px;cursor:pointer;font-weight:600">✓ Approve</button>
+            <button onclick="denyAdditionalRounds()" style="padding:8px 16px;background:var(--tt-red);color:var(--tt-on-fill);border:none;border-radius:6px;cursor:pointer;font-weight:600">✗ Deny</button>
           </div>
         </div>`;
       // The justification is agent text: it is never placed inside an inline handler.
@@ -839,7 +1365,7 @@
 
       // Remove the approval buttons
       const btns = event.target.closest('div');
-      btns.innerHTML = '<span style="color:#22c55e;font-weight:600">✓ Approved - Continuing...</span>';
+      btns.innerHTML = '<span style="color:var(--tt-green);font-weight:600">✓ Approved - Continuing...</span>';
 
       addDivider('Reconvening Team (Additional Rounds)', 'round');
       setStatus('running', 'Continuing...');
@@ -878,7 +1404,7 @@
 
     function denyAdditionalRounds() {
       const btns = event.target.closest('div');
-      btns.innerHTML = '<span style="color:#ef4444;font-weight:600">✗ Denied - Session ending as-is</span>';
+      btns.innerHTML = '<span style="color:var(--tt-red);font-weight:600">✗ Denied - Session ending as-is</span>';
       setStatus('complete', 'Complete');
       setRunning(false);
       showContinueUI();
@@ -886,15 +1412,36 @@
 
     // ── Continue (after completion) ──
     function showContinueUI() {
+      setInputMode('complete');
+    }
+
+    // ── Resume with a note (after a stop, failure or interruption) ──
+    // POST /api/tiger-team/resume takes an optional message: the server queues it for the coordinator (durably,
+    // like an interjection) before the team resumes. An empty note just resumes.
+    async function resumeWithNote() {
+      if (continuationInFlight) return;
       const input = document.getElementById('user-input');
-      const btn = document.getElementById('btn-send');
-      const label = document.querySelector('.input-label');
-      input.disabled = false;
-      input.placeholder = 'Ask a follow-up question or give a new directive to reconvene the team...';
-      input.value = '';
-      btn.disabled = false;
-      btn.onclick = continueSession;
-      label.textContent = '🔄 Continue:';
+      const note = input.value.trim();
+      // The note stays in the input until the resume POST answers OK: resumeInterruptedTeam draws the card and clears it then.
+      await resumeInterruptedTeam(note);
+    }
+
+    /** The "Note" card of a Resume, drawn only once the hub accepted the resume (never for a note that was not sent). */
+    function drawNoteCard(note) {
+      sentInterjections.push(note);   // drawn just below; its echo from the team's stream is skipped
+      closeBlock();
+      const block = document.createElement('div');
+      block.className = 'agent-block user-inject';
+      block.innerHTML = `
+          <div class="agent-block-header">
+            <span class="block-icon">👤</span>
+            <span class="block-agent">You</span>
+            <span class="block-role">Note</span>
+            <span class="block-time">${stamp()}</span>
+          </div>
+          <div class="agent-block-body"><div class="text-content">${md(note)}</div></div>`;
+      document.getElementById('timeline').appendChild(block);
+      scrollBottom();
     }
 
     async function continueSession() {
@@ -903,7 +1450,7 @@
       const msg = input.value.trim();
       if (!msg || !tigerTeamId) return;
       continuationInFlight = true;
-      input.value = '';
+      input.value = ''; clearUnsentNote();
       input.disabled = true;
       document.getElementById('btn-send').disabled = true;
       sentInterjections.push(msg);   // drawn just below; its echo from the team's stream is skipped
@@ -918,7 +1465,7 @@
           <span class="block-icon">👤</span>
           <span class="block-agent">You</span>
           <span class="block-role">Continuation</span>
-          <span class="block-time">${elapsed()}</span>
+          <span class="block-time">${stamp()}</span>
         </div>
         <div class="agent-block-body"><div class="text-content">${md(msg)}</div></div>`;
       tl.appendChild(block);
@@ -971,12 +1518,13 @@
 
       const block = document.createElement('div');
       block.className = `agent-block ${colorClass}`;
+      block.dataset.agent = slug;   // a chip taps through to this member's latest card
       block.innerHTML = `
         <div class="agent-block-header">
           <span class="block-icon">${esc(a.icon || '🤖')}</span>
           <span class="block-agent">${esc(a.display || slug)}</span>
           <span class="block-role">${esc(role)}</span>
-          <span class="block-time">${elapsed()}</span>
+          <span class="block-time">${stamp()}</span>
         </div>
         <div class="agent-block-body">
           <div class="text-content"></div>
@@ -994,6 +1542,7 @@
         role,
         rawText: '',
         toolCount: 0,
+        startedAt: eventNow || Date.now(),
       };
     }
 
@@ -1013,6 +1562,7 @@
     function appendBlockText(text, block = currentBlock) {
       if (!block) return;
       block.rawText += text;
+      if (block.slug) setMemberStep(block.slug, 'writing…');
       block.textEl.innerHTML = md(block.rawText);
       scrollBottom();
     }
@@ -1032,6 +1582,9 @@
     function finishCallBlock(block, failed) {
       if (!block || block.done) return;
       block.done = true;
+      // "· took 42s": from the card's start to the event that finished it.
+      const timeEl = block.element.querySelector('.block-time');
+      if (timeEl && block.startedAt) timeEl.textContent += ' · took ' + fmtDuration(((eventNow || Date.now()) - block.startedAt) / 1000);
       block.textEl.innerHTML = md(block.rawText);
       block.element.querySelectorAll('.tool-call-line.running').forEach(line => {
         const spinner = line.querySelector('.tool-call-spinner');
@@ -1050,6 +1603,7 @@
       // The dot shows the agent's latest dispatch: working while any of its cards is still open.
       const stillWorking = [...callBlocks.values()].some(b => b.slug === block.slug && !b.done);
       if (!stillWorking) setDot(block.slug, failed ? 'failed' : 'done');
+      attachFileCards(block);   // download cards for files the reply names (also after a replay draws a finished card)
     }
 
     function markUnfinishedTools() {
@@ -1074,6 +1628,7 @@
           if (status) { status.className = 'tool-call-status done'; status.textContent = 'Done'; }
         });
         setDot(currentBlock.slug, 'done');
+        attachFileCards(currentBlock);   // the coordinator's card (its final report included)
         currentBlock = null;
       }
     }
@@ -1084,6 +1639,7 @@
 
       block.toolCount++;
       block.toolsEl.style.display = 'block';
+      if (block.slug) setMemberStep(block.slug, toolStepText(name, input));
 
       // Move tools container before text for proper ordering
       const body = block.element.querySelector('.agent-block-body');
@@ -1105,13 +1661,18 @@
         </div>
         <div class="tool-call-result" id="tool-result-${domId}"></div>`;
       block.toolsEl.appendChild(wrapper);
-      toolMap.set(callId, { wrapper, name, line: wrapper.querySelector('.tool-call-line'), resultEl: wrapper.querySelector('.tool-call-result') });
+      toolMap.set(callId, { wrapper, name, slug: block.slug, line: wrapper.querySelector('.tool-call-line'), resultEl: wrapper.querySelector('.tool-call-result') });
       scrollBottom();
     }
 
     function completeTool(callId, result) {
       const entry = toolMap.get(callId);
       if (!entry) return;
+      if (entry.slug && (memberStates.get(entry.slug) || {}).state === 'working') {
+        // the tool is back: another tool of the same member still running is its step; else it decides what next
+        const other = [...toolMap.values()].find(t => t !== entry && t.slug === entry.slug && t.line && /\brunning\b/.test(t.line.className || ''));
+        setMemberStep(entry.slug, other ? toolStepText(other.name) : 'thinking…');
+      }
       const line = entry.line;
       if (line) {
         line.className = 'tool-call-line done';
@@ -1167,7 +1728,7 @@
       const tl = document.getElementById('timeline');
       const m = document.createElement('div');
       m.className = 'system-msg';
-      m.textContent = `⚙ ${text} (${elapsed()})`;
+      m.textContent = `⚙ ${text} (${stamp()})`;
       tl.appendChild(m);
       scrollBottom();
     }
@@ -1186,6 +1747,7 @@
           const t = await response.text();
           setStatus('error', 'Error');
           setRunning(false);
+          setInputMode('ended');
           addSystemMsg(`API Error ${response.status}: ${t}`);
           return;
         }
@@ -1276,10 +1838,12 @@
       tigerTeamId = s.id; saveKey = s.id; sessionId = null;
       coordinator = s.coordinator; participants = s.participants || []; mode = s.mode || 'led'; challenger = s.challenger || '';
       objective = s.objective || objective; objectiveText = objective;
-      document.getElementById('objective-text').textContent = objective;
+      showObjective(objective);
       getAgentColorClass(coordinator); participants.forEach(p => getAgentColorClass(p));
+      memberStates.clear();   // the replay below rebuilds every member's state from the events
       buildRoster();
       document.getElementById('timeline').innerHTML = '';
+      resetApprovals();
       callBlocks.clear(); currentBlock = null; lastSeq = 0; clockSet = false;
       document.getElementById('btn-save').disabled = false;
       isRunning = true;   // until the history says how it ended (a final event, or tt_state at the end of the replay)
@@ -1296,6 +1860,143 @@
     }
 
     // ── Event Handler ──
+    // ── Approvals ──
+    // A member whose tool needs the owner's OK emits approval_request (and approval_resolved when it is answered, by
+    // anyone, or times out). The card is drawn in the member's card (newest first) with Allow / Deny and a countdown.
+    // POST /api/approvals/<id> { decision: 'allow' | 'deny' }; a 404 means someone else (or the timeout) answered first.
+    const APPROVAL_CLASS_LABELS = { write_outside: 'write outside its folders', send: 'send off this machine', admin: 'change hub data / another agent', destroy: 'destructive action', money: 'move money' };
+    const approvalCards = new Map();       // id -> { data, card, settled } for every card on the page (settled = buttons gone)
+    const resolvedApprovals = new Set();   // ids already decided: a replay must not offer buttons for them
+    let approvalTimer = null;
+
+    function approvalWants(ev) {
+      const a = agents[ev.agent];
+      const who = (a && a.display) || ev.agent || 'An agent';
+      if (ev.cls === 'module') return `${who} needs your OK${ev.detail && ev.detail.module ? ` (${ev.detail.module})` : ''}`;
+      const label = APPROVAL_CLASS_LABELS[ev.cls] || String(ev.cls || 'do something that needs approval');
+      return `${who} wants to ${ev.cls === 'destroy' ? 'take a ' : ''}${label}`;
+    }
+    function approvalCountdown(expiresAt) {
+      const ms = expiresAt ? Date.parse(expiresAt) - Date.now() : NaN;
+      if (!(ms > 0)) return Number.isNaN(ms) ? '' : 'expired: not done';
+      const s = Math.ceil(ms / 1000);
+      return `expires in ${s >= 60 ? `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s` : `${s}s`}`;
+    }
+    function approvalDecisionText(gw) {
+      if (gw.by === 'timeout') return 'Timed out: not done';
+      const word = gw.decision === 'allow' ? 'Approved' : 'Denied';
+      return gw.by && gw.by !== 'owner' ? `${word} (${gw.by})` : word;
+    }
+    /** The buttons go and the card says how it was decided. */
+    // A settled card stays in approvalCards (flagged), so a recorded approval_resolved that arrives later in a replay
+    // still reaches it: the recorded decision overrides an inferred expiry.
+    function settleApproval(id, text) {
+      const rec = approvalCards.get(id);
+      if (!rec) return;
+      rec.settled = true;
+      rec.card.classList.add('answered');
+      rec.card.querySelectorAll('button').forEach(b => b.remove());
+      const note = rec.card.querySelector('.approval-note');
+      if (note) note.textContent = text;
+      const cd = rec.card.querySelector('.approval-countdown');
+      if (cd) cd.textContent = '';
+      stopApprovalTimerIfIdle();
+    }
+    function stopApprovalTimerIfIdle() {
+      if (approvalTimer && ![...approvalCards.values()].some(r => !r.settled)) { clearInterval(approvalTimer); approvalTimer = null; }
+    }
+    /** The timeline is being redrawn: forget every card (their DOM is gone) so a replayed request draws again. */
+    function resetApprovals() {
+      approvalCards.clear(); resolvedApprovals.clear();
+      if (approvalTimer) { clearInterval(approvalTimer); approvalTimer = null; }
+    }
+    function paintApprovalCountdowns() {
+      for (const [id, rec] of [...approvalCards]) {
+        if (rec.settled) continue;
+        const text = approvalCountdown(rec.data.expiresAt);
+        if (text === 'expired: not done') { settleApproval(id, 'Timed out: not done'); continue; }
+        const el = rec.card.querySelector('.approval-countdown');
+        if (el) el.textContent = text;
+      }
+    }
+    async function answerApproval(id, decision) {
+      const rec = approvalCards.get(id);
+      if (!rec || rec.settled) return;
+      const buttons = [...rec.card.querySelectorAll('button')];
+      buttons.forEach(b => { b.disabled = true; });
+      const note = rec.card.querySelector('.approval-note');
+      if (note) note.textContent = 'Sending…';
+      try {
+        const r = await fetch(`/api/approvals/${encodeURIComponent(id)}`, {
+          method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ decision }),
+        });
+        if (r.status === 404) { resolvedApprovals.add(id); settleApproval(id, 'Already answered'); return; }
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        resolvedApprovals.add(id);
+        settleApproval(id, decision === 'allow' ? 'Approved' : 'Denied');
+      } catch (e) {
+        if (note) note.textContent = `Could not send: ${e.message}`;
+        buttons.forEach(b => { b.disabled = false; });
+      }
+    }
+    /** approval_request / approval_resolved from a member's stream (block = its card) or the coordinator's (none). */
+    function handleApprovalEvent(gw, block) {
+      if (!gw || !gw.id) return;
+      if (gw.type === 'approval_resolved') {
+        resolvedApprovals.add(gw.id);
+        settleApproval(gw.id, approvalDecisionText(gw));
+        return;
+      }
+      if (resolvedApprovals.has(gw.id) || approvalCards.has(gw.id)) return;
+      const expired = gw.expiresAt && Date.parse(gw.expiresAt) <= Date.now();
+      const card = document.createElement('div');
+      card.className = 'approval-card';
+      card.dataset.id = String(gw.id);
+      const d = gw.detail && typeof gw.detail === 'object' ? gw.detail : null;
+      const detail = d ? Object.entries(d).filter(([, v]) => v !== null && v !== undefined && v !== '').map(([k, v]) => `${k}: ${typeof v === 'object' ? JSON.stringify(v) : String(v)}`).join('\n') : '';
+      card.innerHTML = `
+        <div class="approval-title">🔐 ${esc(approvalWants(gw))}</div>
+        <div class="approval-summary">${esc(gw.summary || '(no summary)')}</div>
+        ${detail ? `<pre class="approval-detail">${esc(detail.slice(0, 600))}</pre>` : ''}
+        <div class="approval-meta"><span class="approval-countdown">${esc(approvalCountdown(gw.expiresAt))}</span><span class="approval-note"></span></div>
+        <div class="approval-actions"><button type="button" class="deny">Deny</button><button type="button" class="allow">Allow</button></div>`;
+      if (block && block.element) {
+        const body = block.element.querySelector('.agent-block-body');
+        body.insertBefore(card, body.firstChild);   // newest first
+      } else {
+        document.getElementById('timeline').appendChild(card);
+      }
+      approvalCards.set(gw.id, { data: gw, card });
+      if (expired) { settleApproval(gw.id, 'Timed out: not done'); return; }
+      card.querySelector('.allow').onclick = () => answerApproval(gw.id, 'allow');
+      card.querySelector('.deny').onclick = () => answerApproval(gw.id, 'deny');
+      if (!approvalTimer) approvalTimer = setInterval(paintApprovalCountdowns, 1000);
+      scrollBottom();
+    }
+
+    // ── Download cards ──
+    // Files a reply names (lib/ui-file-card.js, window.hubFileCard) get a card each in a .file-cards box after the text.
+    // No candidates, no request; nothing here may throw into the page.
+    async function attachFileCards(block) {
+      try {
+        const H = window.hubFileCard;
+        if (!H || !block || !block.textEl || !block.textEl.isConnected) return;
+        const cands = H.candidatesFrom(block.textEl, { agent: block.slug ? String(block.slug) : null });
+        if (!cands || !cands.length) return;
+        const results = await H.resolveBatch((u, o) => fetch(u, o), cands);
+        if (!block.textEl.isConnected) return;
+        const html = results.map(r => (r && r.ok ? H.cardHtml(r, { esc }) : '')).join('');
+        const old = block.textEl.nextElementSibling;
+        if (old && old.classList.contains('file-cards')) old.remove();
+        if (!html) return;
+        const box = document.createElement('div');
+        box.className = 'file-cards';
+        box.innerHTML = html;
+        block.textEl.after(box);
+      } catch (e) { /* the cards are a convenience: the reply itself is already shown */ }
+    }
+
     function handleEvent(evt) {
       if (!evt || typeof evt !== 'object') return;
       // Numbered events (a hub with live replay): draw each once, even when a reconnect's replay overlaps.
@@ -1308,13 +2009,17 @@
       const member = evt.tt_call && (evt.tt_role === 'participant' || evt.tt_role === 'challenger')
         ? callBlock(evt.tt_call, evt.tt_agent, evt.tt_role === 'challenger' ? 'Challenger' : 'Participant') : null;
 
+      if (gw && (gw.type === 'approval_request' || gw.type === 'approval_resolved')) { handleApprovalEvent(gw, member); return; }
+
       if (gw && member) {
         switch (gw.type) {
           case 'tool_start':
             if (gw.tool !== 'consult_agent') addTool(gw.tool, toolKey(evt, gw), gw.input, member);
             return;
           case 'tool_use': {
-            const line = (toolMap.get(toolKey(evt, gw)) || {}).line;
+            const entry = toolMap.get(toolKey(evt, gw)) || {};
+            const line = entry.line;
+            if (line && gw.input) setMemberStep(member.slug, toolStepText(entry.name || gw.tool, gw.input));
             if (line && gw.input) {
               let inputEl = line.querySelector('.tool-call-input');
               if (!inputEl) { const info = line.querySelector('.tool-call-info'); if (info) { inputEl = document.createElement('span'); inputEl.className = 'tool-call-input'; info.appendChild(inputEl); } }
@@ -1327,12 +2032,13 @@
             return;
           case 'tt_member_notice':
             addBlockNote(member, '⏳ ' + (gw.message || ''), 'waiting');
+            setMemberState(member.slug, 'waiting', noticeStepText(gw.message));
             return;
           case 'auto_model': {
             const badge = document.createElement('span');
             badge.className = 'auto-model-badge';
             badge.textContent = (gw.model || '').split('/').pop();
-            badge.style.cssText = 'font-size:11px;color:#8ab4f8;opacity:0.8;margin-left:8px;font-weight:normal;';
+            badge.style.cssText = 'font-size:11px;color:var(--tt-model);opacity:var(--tt-op-badge);margin-left:8px;font-weight:normal;';
             const name = member.element.querySelector('.block-agent');
             if (name) name.appendChild(badge);
             return;
@@ -1377,7 +2083,7 @@
               if (gw.challenger_display) teamInfo += '  ·  ⚔️ Challenger: ' + gw.challenger_display;
               addSystemMsg(teamInfo);
               const displayMax = (gw.max_rounds >= 50 || maxRounds === 0) ? '∞' : (gw.max_rounds || maxRounds);
-              document.getElementById('round-counter').textContent = 'Turn 0/' + displayMax;
+              document.getElementById('round-counter').textContent = (gw.max_rounds === 0 || maxRounds === 0) ? 'Round 0' : 'Round 0 of ' + displayMax;
             }
             break;
 
@@ -1404,7 +2110,7 @@
               const modelBadge = document.createElement('span');
               modelBadge.className = 'auto-model-badge';
               modelBadge.textContent = (gw.model || '').split('/').pop();
-              modelBadge.style.cssText = 'font-size:11px;color:#8ab4f8;opacity:0.8;margin-left:8px;font-weight:normal;';
+              modelBadge.style.cssText = 'font-size:11px;color:var(--tt-model);opacity:var(--tt-op-badge);margin-left:8px;font-weight:normal;';
               const blockAgent = targetBlock.element.querySelector('.block-agent');
               if (blockAgent) blockAgent.appendChild(modelBadge);
             }
@@ -1422,12 +2128,15 @@
 
           case 'tt_dispatch':
             // Update turn counter for Led mode
-            if (gw.turn && gw.max_rounds) {
+            if (mode !== 'roundtable' && (gw.round || gw.turn) && gw.max_rounds) {
               const dMax = gw.max_rounds >= 50 ? '∞' : gw.max_rounds;
-              document.getElementById('round-counter').textContent = 'Turn ' + gw.turn + '/' + dMax;
+              document.getElementById('round-counter').textContent = 'Round ' + (gw.round || gw.turn) + ' of ' + dMax;
+            } else if (mode !== 'roundtable' && (gw.round || gw.turn) && gw.max_rounds === 0) {
+              document.getElementById('round-counter').textContent = 'Round ' + (gw.round || gw.turn);   // no limit: no "of M"
             }
             // If coordinator block is empty (no text and no tool calls), remove it entirely
             if (currentBlock && currentBlock.slug === coordinator && !currentBlock.rawText.trim() && !currentBlock.toolCount) {
+              setDot(currentBlock.slug, 'done');   // its turn ended in the hand-out: from here it waits for the team
               currentBlock.element.remove();
               currentBlock = null;
             } else {
@@ -1482,8 +2191,8 @@
               <div class="agent-block-header">
                 <span class="block-icon">👤</span>
                 <span class="block-agent">You</span>
-                <span class="block-role">${gw.kind === 'continuation' ? 'Continuation' : 'Interjection'}${gw.target && gw.target !== 'team' ? ' → ' + esc(gw.target) : ''}</span>
-                <span class="block-time">${elapsed()}</span>
+                <span class="block-role">${gw.kind === 'continuation' ? 'Continuation' : gw.kind === 'resume_note' ? 'Note' : 'Interjection'}${gw.target && gw.target !== 'team' ? ' → ' + esc((agents[gw.target] && agents[gw.target].display) || gw.target) : ''}</span>
+                <span class="block-time">${stamp()}</span>
               </div>
               <div class="agent-block-body"><div class="text-content">${md(gw.message || '')}</div><div class="interject-status" style="font-size:11px;color:var(--text-dim);margin-top:4px"></div></div>`;
             const who = (gw.delivered || []).map(d => `${d.agent} (${d.how === 'live' ? 'now' : 'at its next step'})`).join(', ');
@@ -1512,7 +2221,7 @@
             // An agent picked the interjection up: say who and when, under the interjection it belongs to.
             const who = gw.agent || 'agent';
             const st = lastInterjectBlock && lastInterjectBlock.querySelector('.interject-status');
-            if (st) { st.textContent = (st.textContent.replace(/ · waiting for pickup…$/, '') + ` · ✓ ${who} picked it up ${elapsed()}`).replace(/^sending…/, 'sent'); st.style.color = '#22c55e'; }
+            if (st) { st.textContent = (st.textContent.replace(/ · waiting for pickup…$/, '') + ` · ✓ ${who} picked it up ${elapsed()}`).replace(/^sending…/, 'sent'); st.style.color = 'var(--tt-green)'; }
             else addSystemMsg(`✓ ${who} picked up the interjection`);
             break;
           }
@@ -1557,10 +2266,14 @@
             break;
 
           case 'tt_error':
+            // The run ended: a member card still open ends with it (else its chip, and the coordinator's
+            // "waiting for the team", would stay as if it still worked).
+            for (const b of callBlocks.values()) if (!b.done) { addBlockNote(b, '■ Ended', 'failed'); finishCallBlock(b, true); }
             markUnfinishedTools();
             closeBlock();
             setStatus('error', 'Error');
             setRunning(false);
+            setInputMode('ended');   // a failed run is resumed (with an optional note), never "continued" as if it had finished
             stopAutoSave();
             addSystemMsg('Error: ' + gw.message);
             document.title = '❌ Tiger Team - Error';
@@ -1593,9 +2306,8 @@
             const errorBanner = document.getElementById('tt-error-banner');
             errorBanner.textContent = stopped ? 'Stopped. Everything so far is saved; Resume carries on from here.' : (gw.message || gw.reason || 'Connection interrupted');
             errorBanner.style.display = 'block';
-            document.getElementById('user-input').disabled = true;
-            document.getElementById('btn-send').disabled = true;
             setRunning(false);
+            setInputMode('ended');
             stopAutoSave();
             addDivider(stopped ? 'Session Stopped' : (gw.reason || 'Session Interrupted'), '');
             if (stopped) addSystemMsg('■ Stopped. Prior progress was checkpointed - use Resume to continue.');
@@ -1636,7 +2348,9 @@
             // Update tool input display (tool_use carries the input summary)
             if (gw.tool === 'consult_agent') break;
             if (!currentBlock) break;
-            const toolLine = (toolMap.get(toolKey(evt, gw)) || {}).line;
+            const toolEntry = toolMap.get(toolKey(evt, gw)) || {};
+            const toolLine = toolEntry.line;
+            if (toolLine && gw.input) setMemberStep(currentBlock.slug, toolStepText(toolEntry.name || gw.tool, gw.input));
             if (toolLine && gw.input) {
               let inputEl = toolLine.querySelector('.tool-call-input');
               if (!inputEl) {
@@ -1671,10 +2385,95 @@
       }
     }
 
-    // Enter key sends
+    // ── Phone: the header, the More menu, the input box ──
+    /** The mission in the header: one line on a phone (a tap expands it); the full text is also its title. */
+    function showObjective(text) {
+      const el = document.getElementById('objective-text');
+      el.textContent = text;
+      if (el.parentElement) el.parentElement.title = String(text || '');
+    }
+    /** The phone's "More" menu: Save, Resolve unknowns, Full record and Load behind one small button. */
+    function setMoreMenu(open) {
+      const menu = document.getElementById('tt-more'), btn = document.getElementById('btn-more');
+      if (!menu || !btn) return;
+      menu.classList.toggle('open', !!open);
+      btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    }
+    function toggleMoreMenu(e) {
+      if (e && e.stopPropagation) e.stopPropagation();
+      setMoreMenu(!document.getElementById('tt-more').classList.contains('open'));
+    }
+    document.addEventListener('click', (e) => {
+      const menu = document.getElementById('tt-more');
+      if (menu && menu.classList.contains('open') && !(e.target && e.target.closest && e.target.closest('#tt-more'))) setMoreMenu(false);
+      else if (menu && menu.classList.contains('open') && e.target.closest('button')) setMoreMenu(false);   // a choice closes it
+    });
+    /** The input box grows with what is typed, up to 3 lines (then it scrolls); the page keeps room under the fixed bar. */
+    function growInput() {
+      const input = document.getElementById('user-input');
+      if (!input || !input.style) return;
+      input.style.height = 'auto';
+      const max = 3 * 1.4 * (parseFloat(getComputedStyle(input).fontSize) || 13) + 18;
+      input.style.height = Math.min(input.scrollHeight + 2, max) + 'px';
+    }
+    function syncInputPad() {
+      const bar = document.getElementById('input-bar');
+      if (bar) document.documentElement.style.setProperty('--input-h', bar.offsetHeight + 'px');
+    }
+    document.getElementById('user-input').addEventListener('input', () => { growInput(); syncInputPad(); });
+    if (typeof ResizeObserver === 'function') new ResizeObserver(syncInputPad).observe(document.getElementById('input-bar'));
+    window.addEventListener('resize', syncInputPad);
+
+    // ── The Teams list (the phone app's way in: /tiger-team?from=mobile with no team to open) ──
+    // GET /api/tiger-team/list gives { sessions: [{ id, status, objective, completed_at, ... }] }: running teams first, then the rest.
+    const TEAM_LIVE_STATUSES = ['running', 'retrying', 'stopping'];
+    function teamTimeText(iso) {
+      const ms = iso ? Date.parse(iso) : NaN;
+      if (!Number.isFinite(ms)) return '';
+      return 'ended ' + new Date(ms).toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' + clockTime(ms);
+    }
+    function teamsListHTML(sessions) {
+      const rows = (Array.isArray(sessions) ? sessions : []).filter(s => s && s.id);
+      const live = s => TEAM_LIVE_STATUSES.includes(s.status);
+      const endedAt = s => { const ms = s.completed_at ? Date.parse(s.completed_at) : NaN; return Number.isFinite(ms) ? ms : 0; };
+      rows.sort((a, b) => (live(b) - live(a)) || (endedAt(b) - endedAt(a)));   // running first, then the latest finished
+      if (!rows.length) return '<div class="teams-home"><h2>Teams</h2><div class="teams-empty">No Tiger Teams yet.</div></div>';
+      return '<div class="teams-home"><h2>Teams</h2>' + rows.map(s => {
+        const cls = live(s) ? 'running' : s.status === 'completed' ? 'completed' : 'problem';
+        const when = live(s) ? 'running now' : teamTimeText(s.completed_at);
+        return `<a class="team-row" href="/tiger-team?load=${esc(encodeURIComponent(s.id))}&amp;from=mobile">` +
+          `<div class="team-top"><span class="team-chip ${cls}">${esc(s.status || 'unknown')}</span><span class="team-time">${esc(when)}</span></div>` +
+          `<div class="team-obj">${esc(s.objective || '(no objective)')}</div></a>`;
+      }).join('') + '</div>';
+    }
+    async function showTeamsHome() {
+      document.body.classList.add('teams-view');
+      showObjective('Tiger Teams');
+      setStatus('complete', 'Teams');
+      const tl = document.getElementById('timeline');
+      tl.innerHTML = '<div class="teams-home"><h2>Teams</h2><div class="teams-empty">Loading…</div></div>';
+      try {
+        const r = await fetch('/api/tiger-team/list');
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        tl.innerHTML = teamsListHTML((await r.json()).sessions);
+      } catch (e) {
+        tl.innerHTML = `<div class="teams-home"><h2>Teams</h2><div class="teams-empty">Could not load the teams: ${esc(e.message)}</div></div>`;
+      }
+    }
+
+    // Enter key sends (Shift+Enter makes a new line); Enter that confirms an input-method candidate (Japanese, Chinese,
+    // Korean keyboards) is not a send.
     document.getElementById('user-input').addEventListener('keydown', (e) => {
+      if (e.isComposing || e.keyCode === 229) return;
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); document.getElementById('btn-send').click(); }
     });
+    // Escape closes the More menu and gives the focus back to its button.
+    document.addEventListener('keydown', (e) => {
+      const menu = document.getElementById('tt-more');
+      if (e.key === 'Escape' && menu && menu.classList.contains('open')) { setMoreMenu(false); const b = document.getElementById('btn-more'); if (b && b.focus) b.focus(); }
+    });
+    // A sent note empties the box without an input event: shrink it back afterwards.
+    document.getElementById('btn-send').addEventListener('click', () => setTimeout(() => { growInput(); syncInputPad(); }, 0));
 
     // ── Save Session ──
     let loadedSaveId = null;
@@ -1744,11 +2543,11 @@
         }
         list.innerHTML = data.sessions.map(s => {
           const statusBadge = ['interrupted', 'stopped', 'blocked'].includes(s.status)
-            ? '<span style="color:#ffb74d;margin-left:8px">' + s.status.toUpperCase() + ' - RESUMABLE</span>'
+            ? '<span style="color:var(--tt-amber2);margin-left:8px">' + s.status.toUpperCase() + ' - RESUMABLE</span>'
             : s.status === 'in_progress' 
-            ? '<span style="background:rgba(255,152,0,0.2); color:#ffb74d; padding:1px 6px; border-radius:3px; font-size:10px; margin-left:8px;">IN PROGRESS</span>'
+            ? '<span style="background:var(--tt-amber2-20); color:var(--tt-amber2-text); padding:1px 6px; border-radius:3px; font-size:10px; margin-left:8px;">IN PROGRESS</span>'
             : s.auto_saved 
-              ? '<span style="background:rgba(76,175,80,0.2); color:#81c784; padding:1px 6px; border-radius:3px; font-size:10px; margin-left:8px;">AUTO-SAVED</span>'
+              ? '<span style="background:var(--tt-ok2-20); color:var(--tt-ok2-text); padding:1px 6px; border-radius:3px; font-size:10px; margin-left:8px;">AUTO-SAVED</span>'
               : '';
           return `
           <div style="border:1px solid var(--border); border-radius:6px; padding:12px; cursor:pointer; transition:border-color 0.2s;" 
@@ -1761,7 +2560,7 @@
             <div style="font-size:12px; color:var(--text-dim); margin-top:4px;">${esc(s.objective || '')}</div>
             <div style="font-size:11px; color:var(--text-dim); margin-top:4px;">👑 ${esc(s.coordinator)} · 👥 ${esc((s.participants||[]).join(', '))}</div>
             <button onclick="event.stopPropagation(); deleteSaved('${esc(s.id)}', this.closest('div[style*=border]'))"
-                    style="margin-top:8px; background:none; border:1px solid rgba(255,76,76,0.3); color:var(--error); padding:2px 8px; border-radius:4px; cursor:pointer; font-size:11px;">🗑 Delete</button>
+                    style="margin-top:8px; background:none; border:1px solid var(--tt-err-30); color:var(--error); padding:2px 8px; border-radius:4px; cursor:pointer; font-size:11px;">🗑 Delete</button>
           </div>`;
         }).join('');
       } catch (e) {
@@ -1819,7 +2618,7 @@
         
         // Set header
         objectiveText = data.objective;
-        document.getElementById('objective-text').textContent = data.objective || '';
+        showObjective(data.objective || '');
         const status = data.status || 'complete';
         const statusLabelMap = { completed: 'Complete', running: 'Running elsewhere', retrying: 'Retrying', stopping: 'Stopping', complete: 'Loaded', interrupted: 'Interrupted', stopped: 'Stopped', blocked: 'Blocked', in_progress: 'In Progress (stale)' };
         const statusClassMap = { completed: 'complete', running: 'running', retrying: 'running', stopping: 'error', complete: 'complete', interrupted: 'error', stopped: 'error', blocked: 'error', in_progress: 'error' };
@@ -1830,6 +2629,7 @@
         coordinator = data.coordinator;
         mode = data.mode || 'led';
         participants = data.participants || [];
+        memberStates.clear();   // a saved transcript has no events to rebuild the members' steps from
         buildRoster();
         
         // Restore transcript.  Durable-only entries (recovered from a
@@ -1837,15 +2637,17 @@
         // render plainTranscript safely as escaped/markdown text instead of
         // assuming HTML is present.
         const timeline = document.getElementById('timeline');
+        resetApprovals();   // the DOM is about to be replaced: no card of the old draw is still there
         if (data.transcript && data.transcript.trim()) {
           const rawTranscript = data.transcript;
           if (purifyReady()) {
             // No inline handlers survive a save: the "▶ output" toggles work through the delegated
             // listener (data-call-id, else the sibling result block); approval buttons are history.
+            ensurePurifyHook();   // the same img/link rules as live text
             timeline.innerHTML = DOMPurify.sanitize(rawTranscript, {
-              ADD_ATTR: ['target','rel','class','id','data-call-id'],
+              ADD_ATTR: ['target','rel','class','data-call-id'],
               FORBID_TAGS: ['script','iframe','object','embed','form','input','textarea','select','style'],
-              FORBID_ATTR: ['style','onerror','onload','onclick','onmouseover','onfocus','onblur','onmouseenter','onanimationend']
+              FORBID_ATTR: ['id','name','style','onerror','onload','onclick','onmouseover','onfocus','onblur','onmouseenter','onanimationend']
             });
           } else {
             timeline.textContent = rawTranscript;   // fail closed: no sanitizer, no HTML
@@ -1879,10 +2681,8 @@
         document.getElementById('btn-save').disabled = false;
 
         if (['interrupted', 'stopped', 'blocked', 'running', 'retrying', 'stopping', 'in_progress'].includes(status)) {
-          // Offer Resume for anything that did not reach a clean completion.
-          input.disabled = true;
-          btn.disabled = true;
-          if (label) label.textContent = '⏸ Not running:';
+          // Offer Resume for anything that did not reach a clean completion: the same mode a live run ends in.
+          setInputMode('ended');
           resumeBtn.style.display = backendRecoveryAvailable ? 'inline-flex' : 'none';
           if (data.error) {
             const banner = document.getElementById('tt-error-banner');
@@ -1892,11 +2692,7 @@
         } else {
           // Completed (or legacy in_progress with no durable status) - normal continue flow.
           resumeBtn.style.display = 'none';
-          input.disabled = false;
-          input.placeholder = 'Ask a follow-up question or give a new directive to reconvene the team...';
-          btn.disabled = false;
-          btn.onclick = continueSession;
-          if (label) label.textContent = '🔄 Continue:';
+          setInputMode('complete');
         }
         
         addSystemMsg(`📂 Loaded saved session: "${data.title}"${data.durable ? ' (recovered from checkpoint)' : ''}`);
@@ -1908,12 +2704,20 @@
     // already be running (e.g. two tabs open on the same investigation).
     // No automatic retry on failure - resume outcome is ambiguous if the
     // request fails mid-flight, so the user must explicitly click again.
-    async function resumeInterruptedTeam() {
+    async function resumeInterruptedTeam(note) {
+      note = typeof note === 'string' ? note.trim() : '';   // the button's click passes an event, not a note
       if (!tigerTeamId || continuationInFlight) return;
       const resumeBtn = document.getElementById('btn-resume');
       resumeBtn.disabled = true;
       resumeBtn.textContent = '⏳ Checking status...';
       document.getElementById('tt-error-banner').style.display = 'none';
+      // While the status is checked the box is locked, so the note being sent is exactly what is in it. A team that turned out
+      // to be finished or running elsewhere redraws the page; the unsent note is then put back with a line saying so.
+      const draftBox = document.getElementById('user-input'), draftBtn = document.getElementById('btn-send');
+      const wasLocked = draftBox.disabled;
+      if (note) { draftBox.disabled = true; draftBtn.disabled = true; }
+      const unlockDraft = () => { if (note) { draftBox.disabled = wasLocked; draftBtn.disabled = wasLocked; } };
+      const keepDraft = (why) => { if (!note) return; if (!draftBox.value.trim()) { draftBox.value = note; if (typeof growInput === 'function') growInput(); } addSystemMsg(why); };   // never over text typed since
 
       try {
         const statusResp = await fetch(`/api/tiger-team/status?id=${encodeURIComponent(tigerTeamId)}`);
@@ -1921,26 +2725,43 @@
           resumeBtn.disabled = false;
           resumeBtn.textContent = '▶ Resume Interrupted';
           addSystemMsg('No saved recovery state was found for this investigation.  Try loading its latest saved session.');
+          unlockDraft();
           return;
         }
         if (!statusResp.ok) throw new Error('Status check HTTP ' + statusResp.status);
         const statusData = await statusResp.json();
         if (statusData.id) tigerTeamId = statusData.id;
-        if (statusData.status === 'completed') { if (!(await loadTeam(tigerTeamId))) await loadSaved(tigerTeamId); return; }
+        if (statusData.status === 'completed') {
+          if (!(await loadTeam(tigerTeamId))) await loadSaved(tigerTeamId);
+          keepDraft('This team finished in another window, so your note was not sent. It is back in the box: send it to continue the team.');
+          return;
+        }
         if (statusResp.ok && ['running', 'retrying', 'stopping'].includes(statusData.status)) {
           // Still working (a closed page no longer stops a team): follow it instead of starting a second run.
+          // With a note waiting, the page does not start following (that would redraw it and could later clear the box):
+          // the note stays in the box and the person reloads to follow the team.
+          if (note && statusData.has_stream) {
+            unlockDraft(); draftBox.value = note; if (typeof growInput === 'function') growInput(); const kept = keepUnsentNote(note);
+            resumeBtn.disabled = false; resumeBtn.textContent = '▶ Resume Interrupted';
+            addSystemMsg(kept
+              ? 'The team is already running again (from another window), so your note was not sent. It is still in the box, and it will be back in the box after you reload this page to follow the team; then send it as an interjection.'
+              : 'The team is already running again (from another window), so your note was not sent. It is still in the box: copy it before you reload this page to follow the team (this browser could not keep it), then send it as an interjection.');
+            return;
+          }
           resumeBtn.style.display = 'none';
           if (statusData.has_stream && await loadTeam(tigerTeamId)) return;
           addSystemMsg('⚠ This Tiger Team is already running elsewhere - not launching a duplicate. Check other open tabs.');
           resumeBtn.style.display = 'inline-flex';
           resumeBtn.disabled = false;
           resumeBtn.textContent = '▶ Resume Interrupted';
+          unlockDraft();
           return;
         }
       } catch (e) {
         addSystemMsg('Status check failed: ' + e.message + ' - resume aborted (no automatic retry).');
         resumeBtn.disabled = false;
         resumeBtn.textContent = '▶ Resume Interrupted';
+        unlockDraft();
         return;
       }
 
@@ -1958,7 +2779,7 @@
         const resp = await fetch('/api/tiger-team/resume', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ session_id: tigerTeamId }),
+          body: JSON.stringify({ session_id: tigerTeamId, ...(note ? { message: note } : {}) }),
         });
         if (!resp.ok) {
           const errData = await resp.json().catch(() => ({}));
@@ -1967,9 +2788,12 @@
           resumeBtn.disabled = false;
           resumeBtn.textContent = '▶ Resume Interrupted';
           continuationInFlight = false;
+          setInputMode('ended'); input.value = note; if (typeof growInput === 'function') growInput();   // the note is kept for another try
           return;
         }
 
+        // The hub accepted the resume (and queued the note): only now is the note sent, drawn and cleared.
+        if (note) { drawNoteCard(note); input.value = ''; clearUnsentNote(); }
         isRunning = true;
         resumeBtn.style.display = 'none';
         document.getElementById('btn-stop').disabled = false;
@@ -1997,10 +2821,10 @@
     let objectiveText = objective;
 
     // ── Auto-save system ──
-    async function autoSave() {
+    async function autoSave(force) {
       if (!saveKey && !sessionId && !tigerTeamId) return;
       const now = Date.now();
-      if (now - lastAutoSave < 10000) return; // Debounce: no more than every 10s
+      if (force !== true && now - lastAutoSave < 10000) return; // Debounce: no more than every 10s (the final save is forced)
       lastAutoSave = now;
       const timeline = document.getElementById('timeline');
       const transcript = timeline ? timeline.innerHTML : '';
@@ -2028,7 +2852,7 @@
 
     function stopAutoSave() {
       if (autoSaveInterval) { clearInterval(autoSaveInterval); autoSaveInterval = null; }
-      autoSave(); // Final save on stop
+      autoSave(true); // Final save on stop: forced, so the last events are never lost to the 10 s debounce
     }
 
     // Save on page unload (navigation away, close tab)
@@ -2050,6 +2874,7 @@
       }
     });
 
+    syncInputPad();
     init();
   </script>
 </body>

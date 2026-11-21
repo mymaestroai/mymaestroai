@@ -46,6 +46,7 @@
           window.hubMe = await r.json();
           try { if (window.hubSimple) { window.hubSimple.apply(window.hubMe); simpleBoot(); } } catch { /* Simple mode is optional: the page runs as before without it */ }
           try { if (typeof simpleTopSync === 'function') simpleTopSync(); } catch { /* the view switch is optional */ }
+          try { if (window.HubLooks && window.hubMe) window.HubLooks.rememberDefault(window.hubMe.look, window.HubLooks.storageOf(window)); } catch { /* looks are optional: the page keeps the look it has */ }   // every load: no default clears the last person's
           // Signed in: recorded-call pieces the hub never acknowledged (a closed tab, a reload, a dead network) are sent now, one at a time (lib/ui-voice-call.js).
           if (window.hubMe && window.hubMe.user) setTimeout(() => { try { voiceRecResendPending((u, i) => fetch(u, i), { userId: window.hubMe.user.id }); } catch { /* the call page's code is not up yet */ } }, 0);
         }
@@ -59,6 +60,7 @@
       paintSetupNotice();
       paintNoAccountsNotice();
       paintReadinessBanner().catch(() => {});
+      paintHealthBanner().catch(() => {});
       paintSecurityBanner().catch(() => {});
       paintRecoveryBanner().catch(() => {});
       paintUpdateCard().catch(() => {});
@@ -388,6 +390,7 @@
         simpleThemeBtnPaint(theme, me);
         if (theme.parentNode !== ctl) ctl.appendChild(theme);
         if (tog.parentNode !== ctl) ctl.appendChild(tog);
+        simpleLookListen(); simpleThemeBtnVisible();
       } else {
         if (theme) theme.remove();
         if (ctl) ctl.remove();
@@ -424,7 +427,32 @@
       try { await simplePrefs({ uiMode: mode }); location.reload(); }
       catch (e) { simpleSwitching = false; hubToast(`Could not switch: ${e.message}`); }
     }
-    function simpleCloseSettings() { const o = document.getElementById('simple-settings'); if (o) o.remove(); }
+    // Under Broadsheet House or Quiet Page the style's own palette decides Simple's colours: the label of that style, else null (Engineering).
+    function simpleStyleLabel() {
+      const L = window.HubLooks;
+      if (!L || typeof L.applied !== 'function') return null;
+      const id = L.applied(document);
+      if (id === 'engineering') return null;
+      const look = typeof L.byId === 'function' ? L.byId(id) : null;
+      return look ? look.label : id;
+    }
+    // Simple's top-bar theme button has nothing to switch under a light style; it is back in Engineering. (An inline display
+    // beats the button's own display rule, which the hidden attribute alone would not.)
+    function simpleThemeBtnVisible() {
+      const b = document.querySelector('.simple-theme-btn');
+      if (b) { const off = !!simpleStyleLabel(); b.hidden = off; b.style.display = off ? 'none' : ''; }
+    }
+    let simpleLookOnce = false;
+    let simpleLookOff = null;   // removes the open sheet's listener
+    function simpleLookListen() {
+      if (simpleLookOnce) return;
+      simpleLookOnce = true;
+      document.addEventListener('mm-look-change', () => { try { simpleThemeBtnVisible(); } catch { /* cosmetic */ } });
+    }
+    function simpleCloseSettings() {
+      if (simpleLookOff) { simpleLookOff(); simpleLookOff = null; }
+      const o = document.getElementById('simple-settings'); if (o) o.remove();
+    }
     function openSimpleSettings() {
       simpleCloseSettings();
       const me = window.hubMe || {};
@@ -434,7 +462,8 @@
       overlay.innerHTML =
         '<div class="simple-modal" role="dialog" aria-label="Settings">' +
           '<div class="sm-h"><h2>Settings</h2><button type="button" class="sm-x" aria-label="Close">✕</button></div>' +
-          '<div class="sm-set"><span class="sm-lab">Appearance</span><div class="sm-seg"><button type="button" data-theme="light">Light</button><button type="button" data-theme="dark">Dark</button><button type="button" data-theme="auto">Match device</button></div></div>' +
+          '<div class="sm-set"><span class="sm-lab">Appearance</span><div class="sm-seg"><button type="button" data-theme="light">Light</button><button type="button" data-theme="dark">Dark</button><button type="button" data-theme="auto">Match device</button></div><div class="sm-follow" hidden></div></div>' +
+          '<div class="sm-set"><span class="sm-lab">Interface style</span><div class="sm-style"></div></div>' +
           '<div class="sm-set"><span class="sm-lab">Name</span><div class="sm-name"></div></div>' +
           '<div class="sm-set"><button type="button" class="sm-plain" data-act="advanced"><div><b>Switch to Advanced</b><span>All tools, agents\' work and settings</span></div><span aria-hidden="true">›</span></button></div>' +
           '<div class="sm-set"><button type="button" class="sm-plain sm-out" data-act="signout">Sign out</button></div>' +
@@ -442,6 +471,18 @@
       overlay.querySelector('.sm-name').textContent = name;
       const paintSeg = () => { const cur = me.theme === 'light' || me.theme === 'dark' ? me.theme : 'auto'; overlay.querySelectorAll('.sm-seg button').forEach(b => b.classList.toggle('on', b.dataset.theme === cur)); };
       paintSeg();
+      // Under a light style its own palette decides the colours: the buttons give way to one line (the stored theme is untouched).
+      const paintFollow = () => {
+        const label = simpleStyleLabel();
+        const seg = overlay.querySelector('.sm-seg'); const line = overlay.querySelector('.sm-follow');
+        if (seg) seg.style.display = label ? 'none' : '';
+        if (line) { line.hidden = !label; line.textContent = label ? 'Colours follow your interface style (' + label + ').' : ''; }
+      };
+      paintFollow();
+      if (typeof lookPickerBuild === 'function') { try { lookPickerBuild(overlay.querySelector('.sm-style')); } catch { /* the sheet still opens */ } }
+      const onLook = () => { if (!overlay.isConnected) { document.removeEventListener('mm-look-change', onLook); return; } paintFollow(); };
+      document.addEventListener('mm-look-change', onLook);
+      simpleLookOff = () => document.removeEventListener('mm-look-change', onLook);
       overlay.addEventListener('click', async (e) => {
         if (e.target === overlay || e.target.closest('.sm-x')) { simpleCloseSettings(); return; }
         const t = e.target.closest('.sm-seg button');
@@ -551,8 +592,8 @@
       if (bar) return;
       bar = document.createElement('div');
       bar.id = 'hub-no-accounts-notice';
-      bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9997;background:#7a3b12;color:#fff;padding:6px 14px;font-weight:600;box-sizing:border-box';
-      bar.innerHTML = 'This hub has no login yet: anyone who can reach it has full control, and multi-user features (members, sharing, the account menu, member sandboxes) stay off until an admin account exists. <a href="/welcome" style="color:#fff;text-decoration:underline">Create the admin account</a> (you will need the setup link: run mymaestro setup-link).';
+      bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9997;background:var(--banner-setup-bg);color:var(--on-color-text);padding:6px 14px;font-weight:600;box-sizing:border-box';
+      bar.innerHTML = 'This hub has no login yet: anyone who can reach it has full control, and multi-user features (members, sharing, the account menu, member sandboxes) stay off until an admin account exists. <a href="/welcome" style="color:var(--on-color-text);text-decoration:underline">Create the admin account</a> (you will need the setup link: run mymaestro setup-link).';
       document.body.prepend(bar);
       layoutBanners();
     }
@@ -568,8 +609,8 @@
       if (bar) return;
       bar = document.createElement('div');
       bar.id = 'hub-setup-notice';
-      bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9998;background:#1f4e79;color:#fff;padding:6px 14px;font-weight:600;box-sizing:border-box';
-      bar.innerHTML = 'No AI provider is configured yet, so agents cannot answer. <a href="/welcome" style="color:#fff;text-decoration:underline">Open the Welcome page</a> to connect a Claude or ChatGPT subscription, an API key or a local model.';
+      bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9998;background:var(--banner-info-bg);color:var(--on-color-text);padding:6px 14px;font-weight:600;box-sizing:border-box';
+      bar.innerHTML = 'No AI provider is configured yet, so agents cannot answer. <a href="/welcome" style="color:var(--on-color-text);text-decoration:underline">Open the Welcome page</a> to connect a Claude or ChatGPT subscription, an API key or a local model.';
       document.body.prepend(bar);
       layoutBanners();
     }
@@ -708,11 +749,13 @@
             <div class="sec-hint" id="sec-sessions">Loading…</div>
             <div class="sec-actions"><button class="sec-btn danger" onclick="signOutEverywhere()">Sign out everywhere</button></div>
           </div>
+          ${window.hubMe && window.hubMe.isAdmin ? '<div class="sec-section" id="sec-code-protect-box"></div>' : ''}
           <div class="sec-actions"><button class="sec-btn" onclick="dialogRequestClose(this)">Close</button></div>
         </div>`;
       document.body.appendChild(overlay);
       paintTwoFactor();
       loadSessionsInfo();
+      mountCodeProtect(document.getElementById('sec-code-protect-box'));
     }
     // Profile: who you are here (your name and sign-in, set by an admin on the Users page) and the time zone your agents
     // use. Security keeps password, two-factor and sessions.
@@ -809,7 +852,7 @@
       const el = document.getElementById(id);
       if (!el) return;
       el.textContent = text || '';
-      el.style.color = ok ? 'var(--green, #4caf50)' : 'var(--accent)';
+      el.style.color = ok ? 'var(--green, var(--ok-text))' : 'var(--accent)';
     }
     async function beginTwoFactor() {
       try {
@@ -898,6 +941,31 @@
         secMsg('sec-pw-msg', 'Password changed.', true);
       } catch (e) { secMsg('sec-pw-msg', e.message); }
     }
+    // "Protect your Maestro's own code": the switch IS the state of the behaviour change 'protect-own-code' (admin-only route).
+    async function mountCodeProtect(el) {
+      if (!el) return;
+      el.innerHTML = '<div class="sec-title">Protect your Maestro\'s own code</div><label class="sec-hint" style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="sec-code-protect" style="width:auto" disabled> Protect your Maestro\'s own code</label><div class="sec-hint">Agents can\'t change the program files of your Maestro on this computer, and a refused agent describes the change to you instead. Also on the Changes page.</div><div class="sec-msg" id="sec-code-protect-msg"></div>';
+      const box = el.querySelector('#sec-code-protect'), msg = el.querySelector('#sec-code-protect-msg');
+      try {
+        const r = await fetch('/api/behaviour-changes', { credentials: 'include' });
+        const j = r.ok ? await r.json() : null;
+        const e = j && (j.changes || []).find((c) => c.id === 'protect-own-code');
+        if (!e) { msg.textContent = 'Could not read this setting.'; return; }
+        box.checked = e.state === 'on';
+        box.disabled = false;
+        box.addEventListener('change', async () => {
+          const want = box.checked ? 'on' : 'off';
+          box.disabled = true;
+          try {
+            const p = await fetch('/api/behaviour-changes/protect-own-code', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ decision: want }) });
+            if (!p.ok) throw new Error((await p.json().catch(() => ({}))).error || 'Could not save.');
+            msg.textContent = want === 'on' ? 'On.' : 'Off.';
+          } catch (err) { box.checked = !box.checked; msg.textContent = err.message; }
+          box.disabled = false;
+        });
+      } catch { msg.textContent = 'Could not read this setting.'; }
+    }
+
     async function loadSessionsInfo() {
       const el = document.getElementById('sec-sessions');
       try {
@@ -1397,9 +1465,9 @@
       let rec = state ? state.recovery : undefined;
       if (rec === undefined) { try { rec = (await bkApi('/api/backups/recovery', undefined, 'GET')).recovery; } catch { return; } }
       if (!rec || rec.resumedAt) { if (bar) { bar.remove(); layoutBanners(); } return; }
-      if (!bar) { bar = document.createElement('div'); bar.id = 'hub-recovery-notice'; bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9997;background:#6b4a0e;color:#fff;padding:6px 14px;font-weight:600;box-sizing:border-box'; document.body.prepend(bar); }
+      if (!bar) { bar = document.createElement('div'); bar.id = 'hub-recovery-notice'; bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9997;background:var(--banner-backup-bg);color:var(--on-color-text);padding:6px 14px;font-weight:600;box-sizing:border-box'; document.body.prepend(bar); }
       const held = (rec.held || []).length;
-      bar.innerHTML = `Restored from the backup of ${esc(bkWhen(rec.restoredFrom))}. Agents are paused until you press Resume${held ? `; ${held} item${held === 1 ? '' : 's'} wait${held === 1 ? 's' : ''} for Run or Skip` : ''}. <a href="#" onclick="openSettingsAt('st-backups-section'); return false" style="color:#fff;text-decoration:underline">Open Backups</a> <button onclick="bkResume(this)" style="margin-left:8px;padding:2px 10px;border-radius:4px;border:1px solid #fff;background:transparent;color:#fff;cursor:pointer">Resume</button>`;
+      bar.innerHTML = `Restored from the backup of ${esc(bkWhen(rec.restoredFrom))}. Agents are paused until you press Resume${held ? `; ${held} item${held === 1 ? '' : 's'} wait${held === 1 ? 's' : ''} for Run or Skip` : ''}. <a href="#" onclick="openSettingsAt('st-backups-section'); return false" style="color:var(--on-color-text);text-decoration:underline">Open Backups</a> <button onclick="bkResume(this)" style="margin-left:8px;padding:2px 10px;border-radius:4px;border:1px solid var(--on-color-text);background:transparent;color:var(--on-color-text);cursor:pointer">Resume</button>`;
       layoutBanners();
     }
 
@@ -1497,6 +1565,8 @@
       const c = window.__activeChatId ? chats[window.__activeChatId] : null;
       return c && !c.isGroup && c.agent ? String(c.agent) : '';
     }
+    // Hand-off cards above the message box (lib/ui-hand-off-card.js): follows the open one-agent chat.
+    if (window.HandOffCard) HandOffCard.track({ getAgent: filesActiveAgent, getContainer: () => document.getElementById('handoff-cards-' + window.__activeChatId), renderMarkdown: (t) => window.formatContentForSheets(t) });
     function filesOwnerParam() {
       const me = window.hubMe;
       if (!me || !me.isAdmin) return '';
@@ -1801,7 +1871,7 @@
       return `<div class="sec-section" data-no-dirty><div class="sec-title">${escapeHtml(name)}</div>
         <label class="sec-hint" for="sl-hours">Link works for</label><select class="sl-hours" id="sl-hours">${opts}</select>
         <label class="sec-hint" style="display:flex;gap:8px;align-items:center"><input type="checkbox" class="sl-once" style="width:auto"> Only one download</label>
-        <div class="sec-msg sl-msg" role="alert" style="color:var(--error,#e55)"></div></div>
+        <div class="sec-msg sl-msg" role="alert" style="color:var(--error)"></div></div>
         <div class="sec-actions"><button type="button" class="sec-btn sl-cancel">Cancel</button><button type="button" class="sec-btn sl-create">Create link</button></div>`;
     }
     function shareLinkResultHtml(link, origin) {
@@ -1944,7 +2014,7 @@
       ov.querySelector('.sl-create').focus();
     }
     function shareLinksListOpen() {
-      const ov = shareOverlay('share-list-overlay', 'Shared links', `<div class="sl-list sec-section">Loading…</div><div class="sec-msg sl-msg" role="alert" style="color:var(--error,#e55)"></div><div class="sec-actions"><button type="button" class="sec-btn sl-close">Close</button></div>`);
+      const ov = shareOverlay('share-list-overlay', 'Shared links', `<div class="sl-list sec-section">Loading…</div><div class="sec-msg sl-msg" role="alert" style="color:var(--error)"></div><div class="sec-actions"><button type="button" class="sec-btn sl-close">Close</button></div>`);
       ov.querySelector('.sl-close').onclick = () => dialogRequestClose(ov);
       shareLinksListFill(ov, isHubAdmin());
     }
@@ -1990,7 +2060,7 @@
             try { await uploadFileToHub(file, dir, { overwrite: true, onProgress: (f) => { pct.textContent = `${Math.round(f * 100)}%`; bar.style.width = `${f * 100}%`; } }); pct.textContent = 'done'; done++; setTimeout(() => row.remove(), 1500); continue; }
             catch (e2) { e = e2; }
           }
-          pct.textContent = 'failed'; pct.style.color = 'var(--error, #FF4C4C)'; failed++;
+          pct.textContent = 'failed'; pct.style.color = 'var(--error)'; failed++;
           filesStatus(`${file.name}: ${e.message}`, 'error');
           setTimeout(() => row.remove(), 6000);
         }
@@ -2337,15 +2407,15 @@
       const shown = data.jobs.filter(j => schedKeep('job', j, v.scope, now));
       const when = (iso) => iso ? new Date(iso).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
       const badge = (j) => {
-        const c = { running: '#2e7d32', cancelling: '#ef6c00', finished: '#1565c0', failed: '#c62828', cancelled: '#616161', timed_out: '#c62828', lost: '#c62828' }[j.status] || '#616161';
+        const c = { running: 'var(--job-status-run)', cancelling: 'var(--job-status-warn)', finished: 'var(--job-status-done)', failed: 'var(--job-status-bad)', cancelled: 'var(--job-status-idle)', timed_out: 'var(--job-status-bad)', lost: 'var(--job-status-bad)' }[j.status] || 'var(--job-status-idle)';
         const extra = j.status === 'running' ? ` · ${j.runningFor}` : (j.exitCode !== null && j.exitCode !== undefined ? ` · exit ${j.exitCode}` : '');
-        return `<span style="display:inline-block;padding:1px 7px;border-radius:10px;font-size:11px;color:#fff;background:${c}">${j.status.replace('_', ' ')}${esc(extra)}</span>`;
+        return `<span style="display:inline-block;padding:1px 7px;border-radius:10px;font-size:11px;color:var(--on-color-text);background:${c}">${j.status.replace('_', ' ')}${esc(extra)}</span>`;
       };
       const handoff = (j) => !j.reportTo ? (j.notifiedAt ? '<span title="owner woken with the result">woken ✓</span>' : '')
         : (j.reportedAt ? `<span title="owner woken, its report forwarded to ${esc(j.reportTo)}">reported to ${esc(j.reportTo)} ✓</span>`
           : j.notifiedAt ? `<span title="owner woken; waiting for its reply to forward">owner woken, report to ${esc(j.reportTo)} pending…</span>`
             : `<span>reports to ${esc(j.reportTo)}</span>`);
-      const rows = shown.length ? shown.map(j => `<tr style="border-top:1px solid var(--border,#333)">
+      const rows = shown.length ? shown.map(j => `<tr style="border-top:1px solid var(--border)">
           <td><b>${esc(j.name)}</b><br><code style="font-size:11px">${esc(j.id)}</code></td>
           <td>${esc(j.owner)}${j.reportTo ? ` <span title="master agent">→ ${esc(j.reportTo)}</span>` : ''}</td>
           <td>${badge(j)}<br><small>${handoff(j)}</small></td>
@@ -2468,10 +2538,10 @@
       const mdShown = data.tasksMd.filter(t => schedKeep('md', t, v.scope, now));
       const mdRunsShown = data.tasksMdRuns.filter(r => schedKeep('mdrun', r, v.scope, now));
       const when = (iso) => iso ? new Date(iso).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
-      const col = { active: '#2e7d32', paused: '#ef6c00', done: '#1565c0', cancelled: '#616161', missed: '#c62828', failed: '#c62828' };
-      const pill = (s, extra) => `<span style="display:inline-block;padding:1px 7px;border-radius:10px;font-size:11px;color:#fff;background:${col[s] || '#616161'}">${esc(s)}${extra ? esc(extra) : ''}</span>`;
+      const col = { active: 'var(--job-status-run)', paused: 'var(--job-status-warn)', done: 'var(--job-status-done)', cancelled: 'var(--job-status-idle)', missed: 'var(--job-status-bad)', failed: 'var(--job-status-bad)' };
+      const pill = (s, extra) => `<span style="display:inline-block;padding:1px 7px;border-radius:10px;font-size:11px;color:var(--on-color-text);background:${col[s] || 'var(--job-status-idle)'}">${esc(s)}${extra ? esc(extra) : ''}</span>`;
       const btn = (a, id, label) => `<button class="gs-btn secondary" onclick="schedAct('${a}', '${esc(id)}')">${label}</button>`;
-      const rows = tasks.length ? tasks.map(t => `<tr style="border-top:1px solid var(--border,#333)">
+      const rows = tasks.length ? tasks.map(t => `<tr style="border-top:1px solid var(--border)">
           <td><b>${esc(t.label)}</b><br><code style="font-size:11px">${esc(t.id)}</code></td>
           <td>${esc(t.agent)}<br><small>by ${esc(t.createdBy === '@owner' ? 'you' : t.createdBy === '@hub' ? 'the hub' : t.unconfirmedOwner ? '"owner" (not confirmed as you)' : t.createdBy)}</small>${t.unconfirmedOwner ? `<br>${btn('adopt', t.id, 'Mine')}` : ''}</td>
           <td><small>${esc(t.schedule)}</small>${t.nextRunLocal ? `<br><small>next: <b>${esc(t.nextRunLocal)}</b></small>` : ''}</td>
@@ -2482,15 +2552,15 @@
             ${t.status === 'active' || t.status === 'paused' ? btn('cancel', t.id, 'Cancel') : btn('delete', t.id, 'Delete')}</td>
         </tr>`).join('') : `<tr><td colspan="5"><i>${!data.tasks.length ? 'No scheduled tasks yet. Add one with ＋ New task, or agents create them with schedule_task.'
           : v.scope === 'active' ? 'No active scheduled tasks.' : `No scheduled tasks ${schedScopeWords(v.scope)}.`}</i></td></tr>`;
-      const runs = runsShown.length ? runsShown.map(r => `<tr style="border-top:1px solid var(--border,#333)"><td><small>${esc(when(r.firedAt || r.dueAt))}</small></td><td>${esc(r.agent)}</td><td>${esc(r.label)}</td>
+      const runs = runsShown.length ? runsShown.map(r => `<tr style="border-top:1px solid var(--border)"><td><small>${esc(when(r.firedAt || r.dueAt))}</small></td><td>${esc(r.agent)}</td><td>${esc(r.label)}</td>
           <td>${pill(r.status === 'replied' || r.status === 'delivered' ? 'done' : r.status === 'no_reply' ? 'paused' : 'failed', '')} <small>${esc(r.status)}${r.late ? ` · ${esc(r.lateNote || 'late')}` : ''}</small></td>
           <td><small>${esc((r.replyPreview || r.note || '').slice(0, 220))}</small></td></tr>`).join('')
         : `<tr><td colspan="5"><i>${data.runs.length && v.scope !== 'all' ? `No runs ${schedScopeWords(v.scope)}.` : 'No runs yet.'}</i></td></tr>`;
-      const md = mdShown.length ? mdShown.map(t => `<tr style="border-top:1px solid var(--border,#333)"><td><b>${esc(t.id)}</b></td><td>${esc(t.agent)}</td>
+      const md = mdShown.length ? mdShown.map(t => `<tr style="border-top:1px solid var(--border)"><td><b>${esc(t.id)}</b></td><td>${esc(t.agent)}</td>
           <td><small>${esc(t.trigger)}${t.expression ? ` <code>${esc(t.expression)}</code>` : ''}${t.nextRunLocal ? `<br>next: <b>${esc(t.nextRunLocal)}</b>` : ''}</small></td>
           <td>${pill(t.enabled ? 'active' : 'paused', '')}</td><td><small>${esc(t.action)}</small></td></tr>`).join('')
         : `<tr><td colspan="5"><i>${data.tasksMd.length ? 'No enabled TASKS.md tasks.' : 'No TASKS.md tasks.'}</i></td></tr>`;
-      const mdRuns = mdRunsShown.length ? mdRunsShown.slice(0, 12).map(r => `<tr style="border-top:1px solid var(--border,#333)"><td><small>${esc(when(r.timestamp))}</small></td><td>${esc(r.agent)}</td><td>${esc(r.taskId)}</td>
+      const mdRuns = mdRunsShown.length ? mdRunsShown.slice(0, 12).map(r => `<tr style="border-top:1px solid var(--border)"><td><small>${esc(when(r.timestamp))}</small></td><td>${esc(r.agent)}</td><td>${esc(r.taskId)}</td>
           <td><small>${esc(r.status)}${r.error ? ': ' + esc(r.error) : ''}</small></td></tr>`).join('') : '<tr><td colspan="4"><i>No runs today or yesterday.</i></td></tr>';
       const th = (cols) => `<thead><tr>${cols.map(c => `<th style="text-align:left">${c}</th>`).join('')}</tr></thead>`;
       let html = '';
@@ -2543,7 +2613,7 @@
         const el = document.getElementById('sched-preview'); const w = document.getElementById('sched-when')?.value.trim();
         if (!el) return; if (!w) { el.textContent = ''; return; }
         try { const p = await schedApi('/preview', { when: w }); el.textContent = `${p.type === 'once' ? 'Once' : 'Recurring'} · next run ${p.nextRunLocal}`; el.style.color = ''; }
-        catch (e) { el.textContent = e.message; el.style.color = '#c62828'; }
+        catch (e) { el.textContent = e.message; el.style.color = 'var(--job-status-bad)'; }
       }, 350);
     }
     async function schedSave() {
@@ -2552,7 +2622,7 @@
       try {
         if (schedEditId) { const t = await schedApi('/update', { id: schedEditId, ...body }); schedEditId = null; return openSchedulePanel(`Saved ${t.id}: next run ${t.nextRunLocal || '—'}.`); }
         const t = await schedApi('', body); return openSchedulePanel(`Scheduled "${t.label}" for ${t.agent}: next run ${t.nextRunLocal}.`);
-      } catch (e) { const el = document.getElementById('sched-preview'); if (el) { el.textContent = e.message; el.style.color = '#c62828'; } }
+      } catch (e) { const el = document.getElementById('sched-preview'); if (el) { el.textContent = e.message; el.style.color = 'var(--job-status-bad)'; } }
     }
     async function schedAct(action, id) {
       try {
@@ -2572,7 +2642,7 @@
     async function openWalletPanel(flash, extra = {}, opts = {}) {
       const gen = ++walletPanelGen;
       const panelGone = () => { const ov = document.getElementById('gs-overlay'); return !(ov && ov.isConnected && ov.querySelector('#pk-box')); };
-      const dock = { dock: true, title: '👛 Trading wallets' }; const head = ''; const field = 'width:100%;padding:8px;border-radius:6px;border:1px solid #555;background:transparent;color:inherit;font:inherit;margin:6px 0';
+      const dock = { dock: true, title: '👛 Trading wallets' }; const head = ''; const field = 'width:100%;padding:8px;border-radius:6px;border:1px solid var(--field-border);background:transparent;color:inherit;font:inherit;margin:6px 0';
       let s, err = null; try { s = await walletApi('status'); } catch (e) { err = e; }
       if (gen !== walletPanelGen) return;   // a newer load or a run started meanwhile
       if (opts.refresh && panelGone()) return;
@@ -2591,7 +2661,7 @@
       }
       const srcLabel = { generated: 'generated', 'imported-key': 'imported key', 'imported-seed': 'imported from seed' };
       const tierTag = w => w.tier === 'open'
-        ? `<strong style="color:var(--danger,#e55)" title="Transactions from this wallet are NOT checked against the address book. Only theft primitives are blocked.">OPEN: no signing firewall</strong> · cap $${esc(String(w.fundingCapUsd))}${w.tierVerified === 'ok' ? '' : ' · <em>tier signature ' + esc(String(w.tierVerified)) + '</em>'}`
+        ? `<strong style="color:var(--danger, var(--danger-text-fallback))" title="Transactions from this wallet are NOT checked against the address book. Only theft primitives are blocked.">OPEN: no signing firewall</strong> · cap $${esc(String(w.fundingCapUsd))}${w.tierVerified === 'ok' ? '' : ' · <em>tier signature ' + esc(String(w.tierVerified)) + '</em>'}`
         : 'guarded (signing firewall)';
       const rows = s.wallets.map(w => `<div class="gs-commit"><strong>${esc(w.name)}</strong> — <code>${esc(w.address)}</code> <a href="https://basescan.org/address/${esc(w.address)}" target="_blank" rel="noopener">view</a>
           <span class="gs-sub" style="margin:0 6px">${esc(srcLabel[w.source] || w.source || '')}${w.hasSeed ? ' · has seed phrase' : ''} · ${tierTag(w)}${w.paused ? ' · <strong>PAUSED</strong>' : ''}</span>
@@ -2925,7 +2995,7 @@
       if (s.upToDate) html += `<div class="gs-ok">✓ Already up to date on this channel</div>`;
 
       if (s.rewritten) {
-        html += `<div class="gs-box"><h4>GitHub's history was rewritten</h4><p class="gs-sub">The ${s.ahead} commit${s.ahead === 1 ? '' : 's'} this copy has that GitHub does not are the same changes under new ids (GitHub's history was rewritten, for example to remove personal details). Updating moves this copy to GitHub's history. Your data, agents and workspaces are not touched; the old position is kept as a backup branch${s.canRewriteUpdate ? '.' : '. Discard the uncommitted files below first.'}</p></div>`;
+        html += `<div class="gs-box"><h4>GitHub's history was rewritten</h4><p class="gs-sub">The ${s.ahead} commit${s.ahead === 1 ? '' : 's'} this copy has that GitHub does not are the same changes under new ids (GitHub's history was rewritten, for example to remove personal details). Updating moves this copy to GitHub's history. Your data, agents and workspaces are not touched; the old position is kept as a backup branch${s.canRewriteUpdate ? '.' : '. Put the changed files below aside first.'}</p></div>`;
         if (s.localOnlyCount > 0) {
           html += `<div class="gs-blocker"><strong>${s.localOnlyCount} commit${s.localOnlyCount === 1 ? ' has' : 's have'} no copy on GitHub</strong><p class="gs-sub">A rewrite can drop a commit whose only change was removed by it. If one of these is your own work, push it first. Otherwise it stays on the backup branch.</p>${
             s.localOnly.map(c => `<div class="gs-commit">${esc(c)}</div>`).join('')
@@ -2937,20 +3007,22 @@
         html += `<div class="gs-blocker"><strong>Update blocked</strong><ul>${
           s.blockers.map(b => `<li>${esc(b)}</li>`).join('')
         }</ul></div>`;
-        if (s.dirty.length > 0) {
-          html += `<div class="gs-box"><h4>Uncommitted files</h4>${
-            s.dirty.map(d => `<div class="gs-file">${esc(d.status)} ${esc(d.file)}</div>`).join('')
-          }</div>`;
-        }
-        if (s.canForce) {
-          html += `<p class="gs-sub">These are application files, not your data. Safe to discard.</p>`;
+        if (s.canPutAside) {
+          // the changed files and the two choices are in the box below
         } else if (s.localOnly && s.localOnly.length) {
           html += `<div class="gs-box"><h4>Local commits not on GitHub</h4>${
             s.localOnly.map(c => `<div class="gs-commit">${esc(c)}</div>`).join('')
           }</div><p class="gs-sub">These look like your own work: push or save them first — nothing was changed.</p>`;
         } else {
-          html += `<p class="gs-sub">Commit, stash, or discard these first — nothing was changed.</p>`;
+          html += `<p class="gs-sub">Commit or save these first — nothing was changed.</p>`;
         }
+      }
+      // Changed files of the code itself: nothing moves the code over them. Put them aside (git stash) or cancel.
+      const gsLocal = s.localChanges || [];
+      if (gsLocal.length > 0) {
+        html += `<div class="gs-blocker" id="gs-local"><strong>Your Maestro's own files were changed on this computer</strong>${
+          gsLocal.slice(0, 10).map(f => `<div class="gs-file">${esc(f)}</div>`).join('')
+        }${gsLocal.length > 10 ? `<div class="gs-sub">and ${gsLocal.length - 10} more</div>` : ''}<p class="gs-sub">An update would stop on them, or they may break after one.</p></div>`;
       }
 
       if (s.commits.length > 0) {
@@ -2967,13 +3039,16 @@
         html += `<p class="gs-sub">Packages changed: the update installs them first. If that fails, it puts everything back and nothing restarts.</p>`;
       }
 
-      html += `<div class="gs-actions">${gsClose}`;
+      html += `<div class="gs-actions">${gsLocal.length > 0 ? gsClose.replace('>Close<', '>Cancel<') : gsClose}`;
       const otherAvailable = ch.channels.some(c => !c.current && c.available);
-      if (s.canUpdate || otherAvailable) {
+      if (s.canUpdate || (otherAvailable && gsLocal.length === 0)) {
         html += `<button class="gs-btn" id="gs-go" onclick="runGitSync()" ${s.canUpdate ? '' : 'disabled'}>${s.canUpdate ? 'Update &amp; Restart' : 'Up to date'}</button>`;
       }
-      if (s.canForce) {
-        html += `<button class="gs-btn" id="gs-force" onclick="runGitSync(true)">Discard Changes &amp; Update</button>`;
+      if (s.canPutAside && !s.upToDate) {
+        html += `<button class="gs-btn" id="gs-force" onclick="runGitSync(true)">Put my changes aside and update</button>`;
+      } else if (s.canPutAside || (s.rewritten && gsLocal.length > 0)) {
+        // up to date, or a rewritten history that the changed files block: put them aside only (no update)
+        html += `<button class="gs-btn" id="gs-force" onclick="runGitSync('aside')">Put my changes aside</button>`;
       }
       if (s.canRewriteUpdate) {
         html += `<button class="gs-btn" id="gs-rewrite" data-confirm="${s.localOnlyCount || 0}" ${s.localOnlyCount ? 'disabled' : ''} onclick="runGitSync('rewrite')">Move to GitHub's History &amp; Restart</button>`;
@@ -2996,23 +3071,29 @@
       const c = other && gsStatus && gsStatus.channels ? gsStatus.channels.channels.find(x => x.id === other) : null;
       if (c) { go.disabled = false; go.innerHTML = `Switch to ${esc(c.label)} &amp; Restart`; }
       else { go.disabled = !(gsStatus && gsStatus.canUpdate); go.innerHTML = gsStatus && gsStatus.canUpdate ? 'Update &amp; Restart' : 'Up to date'; }
-      // Discarding updates the current channel only, so it is off while another channel is chosen.
-      const force = document.getElementById('gs-force'); if (force) force.disabled = !!c;
+      // Putting changes aside and updating uses the chosen channel (a switch when another one is chosen).
+      const force = document.getElementById('gs-force');
+      if (force && !(gsStatus && gsStatus.upToDate)) force.textContent = c ? `Put my changes aside and switch to ${c.label}` : 'Put my changes aside and update';
     }
 
     async function runGitSync(force) {
-      const btnId = force === 'rewrite' ? 'gs-rewrite' : force ? 'gs-force' : 'gs-go';
-      const channel = force ? null : gsChosenChannel();
+      const asideOnly = force === 'aside';
+      if (force === true || asideOnly) {
+        const n = ((gsStatus && gsStatus.localChanges) || []).length;
+        if (!confirm(`Put these ${n} change${n === 1 ? '' : 's'} aside? Your Maestro won't put them back; you can find them with git stash list.`)) return;
+      }
+      const btnId = force === 'rewrite' ? 'gs-rewrite' : asideOnly ? 'gs-force' : force ? 'gs-force' : 'gs-go';
+      const channel = force === 'rewrite' || asideOnly ? null : gsChosenChannel();
       for (const id of ['gs-go', 'gs-force', 'gs-rewrite']) {
         const b = document.getElementById(id);
         if (!b) continue;
         b.disabled = true;
-        if (id === btnId) b.textContent = channel ? 'Switching…' : 'Updating…';
+        if (id === btnId) b.textContent = asideOnly ? 'Putting aside…' : channel ? 'Switching…' : 'Updating…';
       }
 
       let r;
       try {
-        const endpoint = force === 'rewrite' ? '/api/git-sync/rewrite-update' : force ? '/api/git-sync/force-update' : '/api/git-sync/update';
+        const endpoint = force === 'rewrite' ? '/api/git-sync/rewrite-update' : asideOnly ? '/api/git-sync/put-aside' : force ? '/api/git-sync/force-update' : '/api/git-sync/update';
         const rw = force === 'rewrite' ? document.getElementById('gs-rewrite') : null;
         const resp = await fetch(endpoint, rw
           ? { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirmLocalOnly: Number(rw.dataset.confirm) || 0 }) }
@@ -3034,6 +3115,13 @@
         return;
       }
 
+      if (asideOnly) {   // no update, so no restart
+        gsModal(`<h3>⬇ Update from GitHub</h3>
+          <div class="gs-ok">✓ ${r.steps && r.steps.length ? 'Changes put aside' : 'Nothing to put aside'}</div>
+          <div class="gs-box">${(r.steps || []).map(st => `<div class="gs-commit">• ${esc(st)}</div>`).join('')}</div>
+          <div class="gs-actions">${gsClose}</div>`);
+        return;
+      }
       gsModal(`<h3>⬇️ Update from GitHub</h3>
         <div class="gs-ok">✓ Updated to ${esc(r.head)}</div>
         <div class="gs-box"><h4>Steps</h4>${
@@ -3135,11 +3223,111 @@
       }
       return out;
     }
+    // Appearance (lib/ui-looks, window.HubLooks): one card per look, chosen for this device; admins also pick the look new members start with.
+    // Everything is built from text nodes and style properties (the registry's colours), never from markup.
+    function lookPreviewBox(look) {
+      const p = look.preview;
+      const box = document.createElement('div');
+      box.setAttribute('aria-hidden', 'true');
+      box.style.width = '72px'; box.style.height = '52px'; box.style.flex = '0 0 72px';
+      box.style.borderRadius = '8px'; box.style.padding = '6px'; box.style.boxSizing = 'border-box';
+      box.style.background = p.bg; box.style.border = '1px solid ' + p.ink + '33';
+      const panel = document.createElement('div');
+      panel.style.background = p.panel; panel.style.borderRadius = '5px'; panel.style.height = '100%';
+      panel.style.display = 'flex'; panel.style.alignItems = 'center'; panel.style.justifyContent = 'space-between'; panel.style.padding = '0 6px';
+      const aa = document.createElement('span');
+      aa.appendChild(document.createTextNode('Aa'));
+      aa.style.color = p.ink; aa.style.fontSize = '18px'; aa.style.fontWeight = '600';
+      aa.style.fontFamily = p.font === 'serif' ? "Georgia, 'Times New Roman', serif" : "-apple-system, 'Segoe UI', Roboto, sans-serif";
+      const dot = document.createElement('span');
+      dot.style.width = '10px'; dot.style.height = '10px'; dot.style.borderRadius = '50%'; dot.style.background = p.accent;
+      panel.appendChild(aa); panel.appendChild(dot); box.appendChild(panel);
+      return box;
+    }
+    function lookPickerBuild(host) {
+      const L = window.HubLooks;
+      if (!host || !L) return;
+      while (host.firstChild) host.removeChild(host.firstChild);
+      const cur = L.applied(document);   // the look in force, also when this device can't store a choice
+      const list = document.createElement('div');
+      list.setAttribute('role', 'group'); list.setAttribute('aria-label', 'Interface style for this device');
+      list.style.display = 'grid'; list.style.gap = '8px';
+      for (const look of L.LOOKS) {
+        const on = look.id === cur;
+        const card = document.createElement('button');
+        card.type = 'button'; card.dataset.look = look.id; card.setAttribute('aria-pressed', String(on));
+        card.style.display = 'flex'; card.style.gap = '12px'; card.style.alignItems = 'center'; card.style.textAlign = 'left';
+        card.style.padding = '8px'; card.style.borderRadius = '10px'; card.style.cursor = 'pointer'; card.style.font = 'inherit';
+        card.style.color = 'var(--text)'; card.style.background = 'transparent';
+        card.style.border = on ? '2px solid var(--accent)' : '1px solid var(--border)';
+        const text = document.createElement('span');
+        text.style.display = 'block';
+        const name = document.createElement('strong');
+        name.appendChild(document.createTextNode(look.label + (on ? ' (in use)' : '')));
+        const blurb = document.createElement('span');
+        blurb.appendChild(document.createTextNode(look.blurb));
+        blurb.style.display = 'block'; blurb.style.fontSize = '0.8rem'; blurb.style.color = 'var(--text-dim)';
+        text.appendChild(name); text.appendChild(blurb);
+        card.appendChild(lookPreviewBox(look)); card.appendChild(text);
+        card.addEventListener('click', () => {
+          if (!L.choose(look.id, L.storageOf(window))) return;
+          L.apply(document, look.id);   // no reload: the stylesheet swaps in place
+          lookPickerBuild(host);
+          const again = [...host.querySelectorAll('button[data-look]')].find(x => x.dataset.look === look.id);
+          if (again) again.focus();   // keyboard focus stays on the card just chosen
+        });
+        list.appendChild(card);
+      }
+      const note = document.createElement('div');
+      note.className = 'st-hint';
+      note.style.margin = '8px 0 4px';   // clear of the last card
+      note.appendChild(document.createTextNode('Applies to this device. Simple mode works with every interface style.'));
+      host.appendChild(list); host.appendChild(note);
+    }
+    // The Appearance section: the picker, and for admins "Interface style for new members" (setting lookDefaultForNewMembers, saved on change).
+    function lookSectionPaint(data) {
+      const host = document.getElementById('st-looks-body');
+      if (!host) return;
+      while (host.firstChild) host.removeChild(host.firstChild);   // painting twice never doubles the picker or the select's id
+      if (!window.HubLooks) {   // a page newer than the running server: /ui-looks.js was not served, so there is nothing to pick yet
+        const msg = document.createElement('div');
+        msg.className = 'st-hint'; msg.id = 'st-looks-restart';
+        msg.appendChild(document.createTextNode('Restart your Maestro to load the interface styles.'));
+        host.appendChild(msg);
+        return;
+      }
+      const picker = document.createElement('div');
+      host.appendChild(picker);
+      lookPickerBuild(picker);
+      if (!isHubAdmin()) return;
+      const row = document.createElement('div');
+      row.className = 'st-row';
+      const lab = document.createElement('label');
+      lab.style.flexBasis = '220px'; lab.htmlFor = 'st-look-new';   // 'Interface style for new members' on one line
+      lab.appendChild(document.createTextNode('Interface style for new members'));
+      const sel = document.createElement('select');
+      sel.id = 'st-look-new';
+      for (const look of window.HubLooks.LOOKS) { const o = document.createElement('option'); o.value = look.id; o.appendChild(document.createTextNode(look.label)); sel.appendChild(o); }
+      sel.value = window.HubLooks.byId(data && data.lookDefaultForNewMembers) ? data.lookDefaultForNewMembers : 'engineering';
+      const state = document.createElement('span');
+      state.setAttribute('role', 'status'); state.style.fontSize = '0.8rem'; state.style.color = 'var(--text-dim)';
+      sel.addEventListener('change', async () => {
+        state.textContent = 'Saving...';
+        try {
+          const r = await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ lookDefaultForNewMembers: sel.value }) });
+          const d = await r.json().catch(() => ({}));
+          state.textContent = r.ok ? 'Saved. People who join from now on start with this interface style.' : 'Not saved: ' + (d.error || ('HTTP ' + r.status));
+        } catch (e) { state.textContent = 'Not saved: ' + (e.message || 'failed'); }
+      });
+      row.appendChild(lab); row.appendChild(sel); row.appendChild(state);
+      host.appendChild(row);
+    }
     const ST_GROUPS = [
-      { id: 'status', title: '🩺 Status', sections: ['st-ready-section', 'st-sec-section', 'st-memory-section', 'st-selfcheck-section', 'st-updates-section'] },
+      { id: 'status', title: '🩺 Status', sections: ['st-ready-section', 'st-health-section', 'st-sec-section', 'st-memory-section', 'st-selfcheck-section', 'st-components-section', 'st-updates-section'] },
+      { id: 'looks', title: '🎨 Appearance', sections: ['st-looks-section'] },
       { id: 'security', title: '🔐 Security', sections: ['st-security-section'] },
       { id: 'backups', title: '💾 Backups', sections: ['st-backups-section'] },
-      { id: 'models', title: '🧠 AI models', sections: ['st-prov-section', 'st-or-section', 'st-plan-section', 'st-local-models-section', 'st-classifier-section'] },
+      { id: 'models', title: '🧠 AI models', sections: ['st-prov-section', 'st-or-section', 'st-subs-section', 'st-plan-section', 'st-local-models-section', 'st-classifier-section'] },
       { id: 'agents', title: '🤖 Agents', sections: ['st-defaults-section', 'st-workers-section', 'st-sb-section', 'st-mp-section', 'st-approvals-section', 'st-chat-section'] },
       { id: 'notify', title: '🔔 Notifications', sections: ['st-notify-section'] },
       { id: 'tools', title: '🧰 Tools and data', sections: ['st-ws-section', 'st-voice-section', 'st-cx-section', 'st-modules-section'] },
@@ -3198,7 +3386,7 @@
       const el = document.getElementById('st-a2fa-msg');
       if (!el) return;
       el.textContent = text || '';
-      el.style.color = ok ? 'var(--green, #4caf50)' : 'var(--accent)';
+      el.style.color = ok ? 'var(--green, var(--ok-text))' : 'var(--accent)';
     }
     async function stAdmin2faPaint() {
       try {
@@ -3230,7 +3418,7 @@
         <div class="st-row"><label style="flex-basis:150px">Your password</label><input type="password" id="st-a2fa-pw" autocomplete="current-password"></div>
         ${me && me.user && me.user.totpEnabled ? '<div class="st-row"><label style="flex-basis:150px">Code</label><input type="text" id="st-a2fa-code" inputmode="numeric" autocomplete="one-time-code" placeholder="123456 or a recovery code"></div>' : ''}
         <div class="st-row"><label style="flex-basis:150px"></label>
-          <button class="st-test-btn" style="color:#fff;background:#b71c1c" onclick="stAdmin2faOff()">Turn it off</button>
+          <button class="st-test-btn" style="color:var(--on-color-text);background:var(--halt-banner-bg)" onclick="stAdmin2faOff()">Turn it off</button>
           <button class="st-test-btn" onclick="stAdmin2faCancel()">Cancel</button></div>`;
       document.getElementById('st-a2fa-pw').focus();
     }
@@ -3387,12 +3575,31 @@
 
       let html = `<h3>⚙️ Settings</h3><p class="st-sub">Open a group, or search for a setting. Provider keys and agent defaults are kept with Save at the bottom; every other box saves on its own.</p>`;
 
+      // Appearance: the look of this device (lib/ui-looks); admins also choose the look new members start with.
+      html += `<div class="st-section" id="st-looks-section"><h4>Appearance</h4><div id="st-looks-body"></div></div>`;
+      setTimeout(() => lookSectionPaint(data), 0);
       // Setup checklist (lib/readiness): what this machine is missing and what to do about it, in its own words.
       html += `<div class="st-section" id="st-ready-section"><h4>Setup checklist</h4>
         <div class="st-hint">The hub checks its own machine: accounts and two-factor, a way to run models, Docker and the sandbox image for member agents, PDF and web reading, how it is restarted. Each line says what is missing and the exact step to fix it on this computer.</div>
         <div id="st-ready-list" class="st-hint" style="margin-left:0">Checking…</div>
         <div class="st-row"><label style="flex-basis:150px"></label><button class="st-test-btn" onclick="loadReadiness()">Check again</button><span id="st-ready-state" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px"></span></div>
       </div>`;
+      // Health (lib/system-health): the nightly look at this computer itself; admins only.
+      if (isHubAdmin()) {
+        const hlTick = (id, label) => `<div class="st-row"><label style="flex-basis:150px">${label}</label><input type="checkbox" id="${id}"></div>`;
+        html += `<div class="st-section" id="st-health-section"><h4>Health</h4>
+        <div class="st-hint">Every night, and after a start, your Maestro looks at this computer: free disk space, memory, backups, databases, sign-ins and more. It tells you when something needs you.</div>
+        <div id="st-hl-list" class="st-hint" style="margin-left:0">Checking…</div>
+        <div id="st-hl-msg" class="st-hint mh-msg" role="status" style="margin-left:0"></div>
+        <div class="st-row"><label style="flex-basis:150px"></label><button class="st-test-btn" id="st-hl-run" onclick="loadHealth(true)">Check now</button><span id="st-hl-state" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px"></span></div>
+        ${hlTick('st-hl-enabled', 'Run checks')}
+        <div class="st-row"><label style="flex-basis:150px">Each night at</label><input type="time" id="st-hl-at"></div>
+        <div class="st-row"><label style="flex-basis:150px">Notices</label><select id="st-hl-notify"><option value="critical">Critical problems only</option><option value="warnings">Warnings too</option><option value="off">Off</option></select></div>
+        ${HL_NUMBERS.map(([k, label]) => `<div class="st-row"><label style="flex-basis:150px">${esc(label)}</label><input type="number" id="st-hl-n-${k}" min="0" step="1"></div>`).join('')}
+        <div class="st-row"><label style="flex-basis:150px"></label><button class="st-test-btn" onclick="saveHealthSettings()">Save</button><span id="st-hl-save-state" role="status" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px"></span></div>
+      </div>`;
+        setTimeout(() => { hlSettings = null; loadHealth(); }, 0);   // the form is new: fill it from the hub
+      }
       // Security check (lib/security-check): the hub reviews its own security configuration, nightly and on demand.
       html += `<div class="st-section" id="st-sec-section"><h4>Security check</h4>
         <div class="st-hint">The hub reviews how it is set up: accounts and two-factor, how it can be reached, secrets and file permissions, agent policies and sandboxes, tokens and root, this machine's open doors. It runs every night and on demand. The same check runs from a terminal with no hub and no agent: <code>node scripts/security-check.js</code>.</div>
@@ -3424,6 +3631,16 @@
         <div class="st-row"><label style="flex-basis:150px"></label><button class="st-test-btn" onclick="saveSelfCheckSettings()">Save</button><span id="st-sc-save-state" role="status" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px"></span></div>
       </div>`;
         setTimeout(() => { scSettings = null; loadSelfCheck(); }, 0);   // the form is new: fill it from the hub
+      }
+      // Software your Maestro relies on (lib/component-watch): the Codex and Claude clients, what is installed and what is out; admins only.
+      if (isHubAdmin()) {
+        html += `<div class="st-section" id="st-components-section"><h4>Software your Maestro relies on</h4>
+        <div class="st-hint" style="margin-left:0">Newer clients can unlock newer models. Your Maestro looks now and then and shows here what is installed and what is out.</div>
+        <div id="st-cw-list" class="st-hint" style="margin-left:0">Checking…</div>
+        <div id="st-cw-codex"></div>
+        <div class="st-row"><label style="flex-basis:150px"></label><button class="st-test-btn" id="st-cw-check" onclick="checkComponentsNow(this)">Check now</button><span id="st-cw-state" role="status" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px"></span></div>
+      </div>`;
+        setTimeout(loadComponents, 0);
       }
       // Updates (lib/update-check): the daily look at GitHub behind the "Update available" card.
       html += `<div class="st-section" id="st-updates-section"><h4>Updates</h4>
@@ -3525,12 +3742,25 @@
           <span id="st-reasoning-state" style="font-size:0.8rem;color:var(--text-dim)">${data.showReasoning !== false ? 'Shown above each reply.' : 'Not shown.'}</span>
         </div>
         <div class="st-hint">Models that reason before they answer (Claude, Codex, DeepSeek, Grok, Qwen…) show it in a panel above the reply: open or close it, drag its bottom edge to any height, ⤢ for the full window. Starts with the next reply.</div>
+        ${isHubAdmin() ? `<div class="st-row">
+          <label>Model suggestions</label>
+          <label class="toggle-switch"><input type="checkbox" id="st-model-offers" ${data.modelOffers !== false ? 'checked' : ''} onchange="saveModelOffersToggle(this.checked)"><span class="toggle-slider"></span></label>
+          <span id="st-model-offers-state" style="font-size:0.8rem;color:var(--text-dim)">${data.modelOffers !== false ? 'Your Maestro suggests newer models for your agents.' : 'No model suggestions.'}</span>
+        </div>` : ''}
       </div>`;
 
       if (isHubAdmin()) {
         html += `<div class="st-section" id="st-workers-section"><h4>Workers at once</h4>
         <div id="st-wao-rows" class="st-hint" style="margin-left:0">Loading…</div>
         <div class="st-hint">How many workers and consults may run at once on this service. If the service pushes back, My Maestro drops to one at a time and climbs back up.</div>
+        <div class="st-row">
+          <label>Notice long waits on workers</label>
+          <input type="number" id="st-hw-minutes" min="0" max="240" step="1" value="${data.handOffWaitMinutes !== undefined && data.handOffWaitMinutes !== null && Number.isFinite(Number(data.handOffWaitMinutes)) ? Number(data.handOffWaitMinutes) : 10}" style="max-width:90px"> <span style="font-size:0.8rem;color:var(--text-dim)">minutes (0 turns it off)</span>
+        </div>
+        <div class="st-row">
+          <label class="gs-sub"><input type="checkbox" id="st-hw-notice" ${data.buildPartnerNotice !== false ? 'checked' : ''}> Tell the lead when an agent has no build partner</label>
+        </div>
+        <div class="st-hint">An agent that waits a long time on its workers can't talk with you meanwhile. After two such waits in a week, the lead can offer you a build partner. Nothing is created without your yes.</div>
       </div>`;
         waoStored = (data.workersAtOnce && typeof data.workersAtOnce === 'object') ? { ...data.workersAtOnce } : {};
         setTimeout(loadWorkersAtOnce, 0);
@@ -3574,7 +3804,7 @@
       html += `<div class="st-section" id="st-emergency-section"><h4>Emergency</h4>
         <div class="st-row">
           <label>Kill switch</label>
-          <button class="st-test-btn" style="color:#fff;background:#b71c1c" onclick="haltHub()">⛔ Halt all agents</button>
+          <button class="st-test-btn" style="color:var(--on-color-text);background:var(--halt-banner-bg)" onclick="haltHub()">⛔ Halt all agents</button>
         </div>
         <div class="st-hint">Stops every running turn and job and blocks new ones until you press Resume.</div>
         <div class="st-row">
@@ -3605,6 +3835,15 @@
         </div>
         <div class="st-hint" style="margin-left:158px">An agent other than the lead runs root commands only while you have granted it root on its settings page (Tool policy → Root). Active grants are listed here with a revoke button; they expire on their own.</div>
       </div>`;
+      // Subscriptions: how much of the Claude and ChatGPT plans' allowances is used (read for free, no turns spent).
+      subsOnFlag = data.subscriptionUsage !== false;
+      html += `<div class="st-section" id="st-subs-section"><h4>Subscriptions</h4>
+        <div class="st-row"><label style="flex-basis:150px">Subscription usage</label><label class="toggle-switch"><input type="checkbox" id="st-subs-on" ${subsOnFlag ? 'checked' : ''} onchange="saveSubsOn(this.checked)"><span class="toggle-slider"></span></label><span id="st-subs-state" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px"></span></div>
+        <div class="st-hint">Shows how much of each subscription's allowance is used, in Settings, the chat header and your lead's notes. Free: no turns are spent to read it.</div>
+        <div id="st-subs-body"></div>
+      </div>`;
+      loadSubsBox.asked = false;   // one automatic read each time the section opens
+      setTimeout(loadSubsBox, 0);
       // Claude plan (lib/plan-usage): the subscription's usage windows, warning levels, and every Claude agent's model.
       html += `<div class="st-section" id="st-plan-section"><h4>Claude plan</h4>
         <div class="st-hint">The hub reads your Claude subscription's usage every 10 minutes. When a weekly allowance passes a warning level you get a notice in the sidebar, a toast, a push to your phone and one line in each affected agent's next reply; then you choose each agent's model, here or in its chat header.</div>
@@ -3693,19 +3932,19 @@
 
       html += `<div class="st-section" id="st-spend-section"><h4>Spend</h4>
         <div class="st-row">
-          <label style="flex-basis:150px">Today</label>
+          <label style="flex-basis:150px">Spent today</label>
           <div id="st-spend" style="flex:1;font-size:0.8rem;color:var(--text-dim)">Loading…</div>
         </div>
         <div class="st-row">
-          <label style="flex-basis:150px">Daily cap per agent ($)</label>
+          <label style="flex-basis:150px">Daily pay-per-use cap per agent ($)</label>
           <input type="text" id="st-cap-agent" placeholder="unlimited" inputmode="decimal" style="max-width:120px">
         </div>
         <div class="st-row">
-          <label style="flex-basis:150px">Daily cap, whole hub ($)</label>
+          <label style="flex-basis:150px">Daily pay-per-use cap, whole hub ($)</label>
           <input type="text" id="st-cap-hub" placeholder="unlimited" inputmode="decimal" style="max-width:120px">
           <button class="st-test-btn" id="st-caps-save" onclick="saveSpendCaps()">Save</button>
         </div>
-        <div class="st-hint" style="margin-left:158px">Over a cap, an agent's decided actions (sending, writing outside its folders, admin, destructive) switch to ask for the rest of the day; nothing is silently stopped. Blank = unlimited.</div>
+        <div class="st-hint" style="margin-left:158px">Caps count pay-per-use spend only (API keys and paid cloud voices), never plan use. Over a cap, an agent's decided actions (sending, writing outside its folders, admin, destructive) switch to ask for the rest of the day; nothing is silently stopped. Blank = unlimited.</div>
         <div class="st-row">
           <label style="flex-basis:150px" title="A monthly API credit, for example the one that comes with a Claude Max plan. The header then shows this period's spend through the hub against it.">Monthly API credit ($)</label>
           <select id="st-credit-provider" onchange="fillCreditInputs()" style="max-width:120px">${CREDIT_PROVIDERS.map(([id, label]) => `<option value="${id}">${label}</option>`).join('')}</select>
@@ -3806,7 +4045,7 @@
     }
     function readinessFixHtml(fix) {
       // `code` in the fix text becomes a copyable command
-      return esc(String(fix || '')).replace(/`([^`]+)`/g, '<code style="user-select:all;background:rgba(255,255,255,0.06);padding:1px 5px;border-radius:3px">$1</code>');
+      return esc(String(fix || '')).replace(/`([^`]+)`/g, '<code style="user-select:all;background:var(--separator-tint);padding:1px 5px;border-radius:3px">$1</code>');
     }
     async function loadReadiness() {
       const el = document.getElementById('st-ready-list'); if (!el) return;
@@ -3839,19 +4078,37 @@
       if (!me || !me.isAdmin || !me.user) { if (bar) bar.remove(); return; }
       let d = null;
       try { d = await (await fetch('/api/readiness', { credentials: 'include' })).json(); } catch { return; }
-      const crit = (d && d.items || []).filter(i => i.level === 'critical' && i.id !== 'accounts' && i.id !== 'provider');   // those two have their own banners
+      const crit = (d && d.items || []).filter(i => i.level === 'critical' && i.id !== 'accounts' && i.id !== 'provider' && !String(i.id || '').startsWith('health-'));   // those two have their own banners; the health banner shows the health- items
       if (!crit.length) { if (bar) bar.remove(); layoutBanners(); return; }
-      if (!bar) { bar = document.createElement('div'); bar.id = 'hub-readiness-notice'; bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9996;background:#7a3b12;color:#fff;padding:6px 14px;font-weight:600;box-sizing:border-box'; document.body.prepend(bar); }
-      bar.innerHTML = `Setup needs attention: ${crit.map(i => esc(i.title)).join('; ')}. <a href="#" onclick="openSettingsAt('st-ready-section'); return false" style="color:#fff;text-decoration:underline">Open the setup checklist</a>.`;
+      if (!bar) { bar = document.createElement('div'); bar.id = 'hub-readiness-notice'; bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9996;background:var(--banner-setup-bg);color:var(--on-color-text);padding:6px 14px;font-weight:600;box-sizing:border-box'; document.body.prepend(bar); }
+      bar.innerHTML = `Setup needs attention: ${crit.map(i => esc(i.title)).join('; ')}. <a href="#" onclick="openSettingsAt('st-ready-section'); return false" style="color:var(--on-color-text);text-decoration:underline">Open the setup checklist</a>.`;
+      layoutBanners();
+    }
+    // Banner for admins while the nightly health check has a critical problem (a full disk...). The sign-in items are
+    // left out: the setup checklist's own banner covers them. An error or a non-200 answer leaves the bar as it is.
+    function healthBannerItems(view) {
+      return ((view && view.items) || []).filter(i => i && i.level === 'critical' && !String(i.id || '').startsWith('health-signin-'));
+    }
+    async function paintHealthBanner() {
+      const me = window.hubMe;
+      let bar = document.getElementById('hub-health-notice');
+      if (!me || !me.isAdmin || !me.user) { if (bar) { bar.remove(); layoutBanners(); } return; }
+      let d = null;
+      try { const r = await fetch('/api/system-health', { credentials: 'include' }); if (!r.ok) return; d = await r.json(); } catch { return; }
+      bar = document.getElementById('hub-health-notice');
+      const crit = healthBannerItems(d);
+      if (!crit.length) { if (bar) bar.remove(); layoutBanners(); return; }
+      if (!bar) { bar = document.createElement('div'); bar.id = 'hub-health-notice'; bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9995;background:var(--banner-critical-bg);color:var(--on-color-text);padding:6px 14px;font-weight:700;box-sizing:border-box'; document.body.prepend(bar); }
+      bar.innerHTML = `Health: ${crit.map(i => esc(i.title)).join('; ')}. <a href="#" onclick="openSettingsAt('st-health-section'); return false" style="color:var(--on-color-text);text-decoration:underline">Open Settings → Status</a>`;
       layoutBanners();
     }
     // The notices fixed at the top stack in this order, whichever painted first: the phone-layout bar
-    // (showMobileBanner), no AI provider yet, the setup checklist, security. Each one sits below the ones above it, so
+    // (showMobileBanner), no AI provider yet, the setup checklist, health, security. Each one sits below the ones above it, so
     // none covers another (or its X), and the page moves down by their height (--banner-h), so they never cover the
     // header and its Settings button.
     function layoutBanners() {
       let top = 0;
-      for (const id of ['hub-phone-layout-notice', 'hub-no-accounts-notice', 'hub-recovery-notice', 'hub-setup-notice', 'hub-readiness-notice', 'hub-security-notice']) {
+      for (const id of ['hub-phone-layout-notice', 'hub-no-accounts-notice', 'hub-recovery-notice', 'hub-setup-notice', 'hub-readiness-notice', 'hub-health-notice', 'hub-security-notice']) {
         const n = document.getElementById(id);
         if (!n) continue;
         n.style.top = `${top}px`;
@@ -4150,6 +4407,125 @@
       } catch (e) { say(`Not saved: ${e.message}`); }
     }
     // ── self-check page (end) ──
+    // System health (lib/system-health): the nightly look at the computer itself (disk, memory, backups, databases...).
+    // The page shows the last run and one row per item, Check now, and a small settings form that saves by PUT with only
+    // the keys that changed. test/ui-system-health.test.js lifts this block out and runs it against a stand-in page.
+    // ── health page (begin) ──
+    const HL_LEVEL = { critical: ['Critical', 'var(--health-critical)'], warn: ['Warning', 'var(--health-warn)'], ok: ['OK', 'var(--health-ok)'], unknown: ["Couldn't check", 'var(--health-unknown)'], info: ['Info', 'var(--health-unknown)'] };
+    const HL_TRIGGER = { start: 'after a start', nightly: 'nightly', manual: 'run by hand' };
+    const HL_POLL_MS = 2000, HL_POLL_MAX_MS = 3 * 60 * 1000;
+    const HL_NUMBERS = [['diskWarnPct', 'Disk: warn under (% free)'], ['diskWarnGB', 'Disk: warn under (GB free)'], ['diskCritPct', 'Disk: critical under (% free)'], ['diskCritGB', 'Disk: critical under (GB free)'],
+      ['fullInDays', 'Warn when full in under (days)'], ['backupWarnHours', 'Backups: warn after (hours)'], ['backupCritHours', 'Backups: critical after (hours)'], ['warnNights', 'Warning nights before a notice'],
+      ['clearMarginPct', 'Clears only this far above (% points)'], ['clearMarginGB', 'Clears only this far above (GB)']];
+    let hlLoad = 0, hlSettings = null, hlPollUntil = 0;
+    function hlWhen(iso) { const d = new Date(iso); return isNaN(d) ? String(iso || '') : d.toLocaleString(); }
+    function hlMsg(text, bad = true) {
+      const m = document.getElementById('st-hl-msg'); if (!m) return;
+      m.textContent = text || '';
+      m.classList.toggle('mh-msg-bad', !!text && bad);
+    }
+    function hlRunning(on) {
+      const btn = document.getElementById('st-hl-run'), state = document.getElementById('st-hl-state');
+      if (btn) btn.disabled = !!on;
+      if (state) state.textContent = on ? 'Checking…' : '';
+    }
+    function hlRender(v) {
+      const el = document.getElementById('st-hl-list'); if (!el) return;
+      v = v || {};
+      const run = v.lastRun, items = Array.isArray(v.items) ? v.items : [];
+      let html = run
+        ? `<div class="sc-last">Last checked ${esc(hlWhen(run.finishedAt || run.startedAt))} (${esc(HL_TRIGGER[run.trigger] || run.trigger || 'earlier')})</div>`
+        : '<div class="sc-last">Not checked yet.</div>';
+      for (const i of items) {
+        const lv = HL_LEVEL[i.level] || [i.level || '?', 'var(--health-unknown)'];
+        const problem = i.level === 'critical' || i.level === 'warn';
+        html += `<div class="sc-row"><div class="sc-head"><span class="hl-mark" style="color:${lv[1]}" aria-label="${esc(lv[0])}">●</span> <b>${esc(i.title)}</b> <span style="color:${lv[1]}">${esc(lv[0])}</span></div>`
+          + (i.detail ? `<div class="sc-note">${esc(i.detail)}</div>` : '')
+          + (i.fix ? `<div class="sc-note">${esc(i.fix)}</div>` : '')
+          + (problem && i.since ? `<div class="sc-note">since ${esc(hlWhen(i.since))}</div>` : '')
+          + '</div>';
+      }
+      if (run && !items.length) html += '<div class="sc-note">Nothing to report.</div>';
+      el.innerHTML = html;
+      const unknown = items.filter(i => i.level === 'unknown').length;   // a check that couldn't run is never "all fine"
+      stSum('status', 'health', !run ? 'Health: not checked yet' : v.critical ? 'Health: problem found' : v.warnings ? 'Health: warnings' : unknown ? "Health: some checks couldn't run" : 'Health: all fine', !!v.critical);
+    }
+    function hlFillSettings(s) {
+      if (!s) return;
+      hlSettings = s;
+      const $ = (id) => document.getElementById(id);
+      if ($('st-hl-enabled')) $('st-hl-enabled').checked = s.enabled !== false;
+      if ($('st-hl-at')) $('st-hl-at').value = s.checkAt || '';
+      if ($('st-hl-notify')) $('st-hl-notify').value = s.notify || 'critical';
+      for (const [k] of HL_NUMBERS) if ($(`st-hl-n-${k}`)) $(`st-hl-n-${k}`).value = s[k] === undefined || s[k] === null ? '' : String(s[k]);
+    }
+    function hlFillSettingsOnce(s) { if (!hlSettings) hlFillSettings(s); }
+    // Last result, or a new run (POST) that is then followed every 2 s while the hub says it runs, for up to 3 minutes.
+    async function loadHealth(runNow = false, poll = false) {
+      if (!document.getElementById('st-hl-list')) return;
+      if (window.hubMe && window.hubMe.isAdmin !== true) return;
+      const mine = ++hlLoad;
+      const json = async (r) => { try { return await r.json(); } catch { return {}; } };
+      try {
+        if (runNow) {
+          hlMsg('');
+          hlRunning(true);
+          const r = await fetch('/api/system-health/run', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+          if (!r.ok) {
+            const b = await json(r);
+            if (r.status === 409 && b.error === 'running') hlMsg('A check is already running.');
+            else if (r.status === 409 && b.error === 'disabled') { hlMsg('The health check is turned off.'); hlRunning(false); return; }
+            else { hlMsg(`Couldn't start the health check: ${b.error || `HTTP ${r.status}`}`); hlRunning(false); return; }
+          }
+          hlPollUntil = Date.now() + HL_POLL_MAX_MS;
+        }
+        const r = await fetch('/api/system-health', { credentials: 'include' });
+        const v = await json(r);
+        if (mine !== hlLoad) return;   // a newer load answered first
+        if (!r.ok) throw new Error(v.error || `HTTP ${r.status}`);
+        hlRender(v);
+        hlFillSettingsOnce(v.settings);
+        hlRunning(!!v.running);
+        if (!runNow && !poll && v.running && hlPollUntil <= Date.now()) hlPollUntil = Date.now() + HL_POLL_MAX_MS;
+        if (v.running && Date.now() < hlPollUntil) setTimeout(() => { if (mine === hlLoad) loadHealth(false, true); }, HL_POLL_MS);
+        else if (v.running) hlMsg('Still checking after 3 minutes; look again later.', false);
+        else { const m = document.getElementById('st-hl-msg'); if (m && m.textContent === 'A check is already running.') hlMsg(''); }
+      } catch (e) {
+        if (mine !== hlLoad) return;
+        hlRunning(false);
+        hlMsg(`Couldn't load the health check: ${e.message}`);
+        stSum('status', 'health', "Health: couldn't load");
+      }
+    }
+    // Only the keys that differ from what the hub has go to PUT; the hub's own error text is shown on a 400.
+    function hlSettingsChanges() {
+      const $ = (id) => document.getElementById(id), cur = hlSettings || {};
+      const out = {};
+      if ($('st-hl-enabled') && $('st-hl-enabled').checked !== (cur.enabled !== false)) out.enabled = $('st-hl-enabled').checked;
+      if ($('st-hl-at') && $('st-hl-at').value && $('st-hl-at').value !== cur.checkAt) out.checkAt = $('st-hl-at').value;
+      if ($('st-hl-notify') && $('st-hl-notify').value && $('st-hl-notify').value !== (cur.notify || 'critical')) out.notify = $('st-hl-notify').value;
+      for (const [k] of HL_NUMBERS) {
+        const f = $(`st-hl-n-${k}`); if (!f) continue;
+        const t = String(f.value).trim();
+        if (t !== '' && t !== String(cur[k])) out[k] = Number(t);
+      }
+      return out;
+    }
+    async function saveHealthSettings() {
+      const state = document.getElementById('st-hl-save-state');
+      const say = (t) => { if (state) state.textContent = t; };
+      const changes = hlSettingsChanges();
+      if (!Object.keys(changes).length) { say('Nothing to save.'); return; }
+      say('Saving…');
+      try {
+        const r = await fetch('/api/system-health/settings', { method: 'PUT', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(changes) });
+        const b = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(b.error || `HTTP ${r.status}`);
+        hlFillSettings(b.settings);
+        say('Saved.');
+      } catch (e) { say(`Not saved: ${e.message}`); }
+    }
+    // ── health page (end) ──
     function securityActionHtml(a) {
       if (!a) return '';
       if (a.href) return ` <a href="${esc(a.href)}" class="st-test-btn" style="text-decoration:none">${esc(a.label)}</a>`;
@@ -4207,12 +4583,12 @@
       const level = crit.length ? 'critical' : 'warn';
       bar.dataset.level = level;
       bar.dataset.key = level === 'warn' ? key : '';
-      bar.style.cssText = `position:fixed;top:0;left:0;right:0;z-index:9995;background:${level === 'critical' ? '#7a1212' : '#8a6a00'};color:#fff;padding:6px 44px 6px 14px;font-weight:600;box-sizing:border-box`;
-      const link = `<a href="#" onclick="openSettingsAt('st-sec-section'); return false" style="color:#fff;text-decoration:underline">Open the security check</a>`;
+      bar.style.cssText = `position:fixed;top:0;left:0;right:0;z-index:9995;background:${level === 'critical' ? 'var(--banner-critical-bg)' : 'var(--banner-warn-bg)'};color:var(--on-color-text);padding:6px 44px 6px 14px;font-weight:600;box-sizing:border-box`;
+      const link = `<a href="#" onclick="openSettingsAt('st-sec-section'); return false" style="color:var(--on-color-text);text-decoration:underline">Open the security check</a>`;
       bar.innerHTML = level === 'critical'
         ? `Security needs attention: ${crit.map(i => esc(i.title)).join('; ')}. ${link}.`
         : `Security: ${warn.length} warning${warn.length === 1 ? '' : 's'} to review. ${link}.`
-          + `<button type="button" class="sec-dismiss" aria-label="Dismiss security warnings" title="Hide until the warnings change" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:0;color:#fff;font-size:20px;line-height:1;cursor:pointer;padding:2px 6px">&times;</button>`;
+          + `<button type="button" class="sec-dismiss" aria-label="Dismiss security warnings" title="Hide until the warnings change" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:0;color:var(--on-color-text);font-size:20px;line-height:1;cursor:pointer;padding:2px 6px">&times;</button>`;
       const x = bar.querySelector('.sec-dismiss');
       if (x) x.addEventListener('click', () => dismissSecurityBanner());
       layoutBanners();
@@ -4276,7 +4652,7 @@
       try { r = await (await fetch('/api/git-sync/update', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: '{}' })).json(); }
       catch (e) { r = { success: false, error: e.message }; }
       if (!r || !r.success) {
-        // The Update dialog has the ways out (discard changes, move to a rewritten history): send the admin there.
+        // The Update dialog has the ways out (put the changes aside, move to a rewritten history): send the admin there.
         if (msg) msg.innerHTML = `<div class="uc-err">The update didn't run: ${esc((r && r.error) || 'unknown error')}</div>`;
         if (now) { now.disabled = false; now.textContent = 'Details'; now.onclick = () => openGitSync(); }
         if (later) later.disabled = false;
@@ -4316,6 +4692,104 @@
         paintUpdateCard().catch(() => {});
       } catch (e) { if (state) state.textContent = 'Not saved: ' + e.message; }
     }
+    // The last update's outcome under a component row: the date of a good one; for a failed one the server's own reason, as
+    // one plain sentence (first line, at most 300 characters), so the person knows what went wrong. -> HTML ('' for none)
+    function componentUpdateLine(lu, day) {
+      if (!lu || typeof lu !== 'object') return '';
+      if (lu.ok) return `<div>Updated from ${escapeHtml(lu.from)} to ${escapeHtml(lu.to)} on ${escapeHtml(day(lu.at))}</div>`;
+      let why = typeof lu.error === 'string' ? lu.error.split('\n')[0].trim().slice(0, 300) : '';
+      if (why && !/[.!?]$/.test(why)) why += '.';
+      if (why) return `<div>Last update${day(lu.at) ? ` (${escapeHtml(day(lu.at))})` : ''}: ${escapeHtml(why)}</div>`;
+      return lu.to ? `<div>Update to ${escapeHtml(lu.to)} failed${lu.rolledBack ? `; ${escapeHtml(lu.from)} was put back` : ''}.</div>` : '<div>Not updated: the update did not run.</div>';
+    }
+    // Software your Maestro relies on (Settings → Status, lib/component-watch): rows from GET /api/components. Every server
+    // text goes through escapeHtml.
+    function paintComponents(data) {
+      const list = document.getElementById('st-cw-list');
+      const codexBox = document.getElementById('st-cw-codex');
+      if (!list) return;
+      const items = Array.isArray(data && data.items) ? data.items : [];
+      const day = (t) => { const d = new Date(t); return isNaN(d) ? '' : d.toLocaleDateString(); };
+      list.innerHTML = items.length ? items.map((it) => {
+        const upd = componentUpdateLine(it.lastUpdate, day);
+        return `<div class="st-cw-row" style="margin-bottom:8px"><strong>${escapeHtml(it.name)}</strong>: installed ${escapeHtml(it.installed || 'not installed')}, newest ${escapeHtml(it.latest || 'unknown')}${it.behind ? ' (newer is out)' : ''}${it.how ? `<div>${escapeHtml(it.how)}</div>` : ''}${it.waiting ? `<div>${escapeHtml(it.waiting)}</div>` : ''}${upd}</div>`;
+      }).join('') : 'Nothing to show yet.';
+      if (!codexBox) return;
+      const codex = items.find((it) => it && it.id === 'codex');
+      const cur = (data.setting && data.setting.codex) || 'auto';
+      // With Codex updates Off the watch leaves Codex out of the list: the select stays, so they can be switched on again.
+      if (!codex && cur !== 'off') { codexBox.innerHTML = ''; return; }
+      const opt = (v, t) => `<option value="${v}"${cur === v ? ' selected' : ''}>${t}</option>`;
+      codexBox.innerHTML = `<div class="st-row"><label style="flex-basis:150px">Codex updates</label><select id="st-cw-codex-sel" onchange="saveCodexUpdates(this.value)">${opt('auto', 'Automatic')}${opt('notify', 'Tell me')}${opt('off', 'Off')}</select></div>`
+        + (codex && codex.behind && cur !== 'off' ? `<div class="st-row"><label style="flex-basis:150px"></label><button class="st-test-btn" id="st-cw-codex-update" onclick="updateCodexNow(this)">Update Codex now</button></div>` : '');
+    }
+    async function loadComponents() {
+      const list = document.getElementById('st-cw-list');
+      try {
+        const r = await fetch('/api/components', { credentials: 'include' });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        paintComponents(await r.json());
+      } catch (e) { if (list) list.textContent = 'Could not load: ' + e.message; }
+    }
+    async function checkComponentsNow(btn) {
+      const st = document.getElementById('st-cw-state');
+      if (btn) { btn.disabled = true; btn.textContent = 'Checking…'; }
+      try {
+        const r = await fetch('/api/components/check', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        await loadComponents();
+        if (st) st.textContent = '';
+      } catch (e) { if (st) st.textContent = 'Could not check: ' + e.message; }
+      if (btn) { btn.disabled = false; btn.textContent = 'Check now'; }
+    }
+    async function saveCodexUpdates(value) {
+      const st = document.getElementById('st-cw-state');
+      try {
+        const r = await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ componentUpdates: { codex: value } }) });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        await loadComponents();
+      } catch (e) { alert('Could not save: ' + e.message); if (st) st.textContent = ''; }
+    }
+    // The update takes minutes: POST answers 202 at once (409 with the reason when it is refused), then GET /api/components
+    // is polled every 3 s (at most 15 minutes) until the Codex item's lastUpdate is newer than the one seen when pressed.
+    async function updateCodexNow(btn) {
+      const say = (t) => { const el = document.getElementById('st-cw-state'); if (el) el.textContent = t; };
+      const codexOf = (d) => (Array.isArray(d && d.items) ? d.items.find((it) => it && it.id === 'codex') : null);
+      if (btn) btn.disabled = true;
+      let baseline = 0;
+      try {
+        const g = await fetch('/api/components', { credentials: 'include' });
+        const lu0 = g.ok ? (codexOf(await g.json()) || {}).lastUpdate : null;
+        baseline = lu0 && Number(lu0.at) ? Number(lu0.at) : 0;
+        if (!g.ok) baseline = Date.now();   // unknown: only an outcome from after the press counts
+      } catch (e) { baseline = Date.now(); }
+      let text = '';
+      try {
+        const r = await fetch('/api/components/codex/update', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+        const j = await r.json().catch(() => ({}));
+        if (r.status === 202) {
+          say('Updating Codex…');
+          if (btn) btn.textContent = 'Updating…';
+          const until = Date.now() + 15 * 60 * 1000;
+          let lu = null;
+          while (Date.now() < until) {
+            await new Promise((ok) => setTimeout(ok, 3000));
+            try {
+              const g = await fetch('/api/components', { credentials: 'include' });
+              if (!g.ok) continue;
+              const data = await g.json();
+              const l = (codexOf(data) || {}).lastUpdate;
+              if (l && Number(l.at) > baseline) { lu = l; paintComponents(data); break; }
+            } catch (e) { /* the hub may be busy: try again */ }
+          }
+          if (!lu) text = 'Codex update is still running. Check again in a few minutes.';
+          else text = lu.ok ? `Codex updated${lu.to ? ' to ' + lu.to : ''}.` : `Codex was not updated: ${lu.error || 'unknown error'}`;
+        } else text = r.ok ? `Codex updated${j.to ? ' to ' + j.to : ''}.` : (j.error || `Codex was not updated: HTTP ${r.status}`);
+      } catch (e) { text = 'Could not update: ' + e.message; }
+      await loadComponents();
+      say(text);
+    }
+
     async function checkUpdatesNow(btn) {
       if (btn) { btn.disabled = true; btn.textContent = 'Checking…'; }
       try {
@@ -4864,6 +5338,16 @@
       } catch (e) { alert('Could not save: ' + e.message); }
     }
 
+    // Model suggestions on/off (settings.modelOffers, on unless turned off): saved at once.
+    async function saveModelOffersToggle(on) {
+      const state = document.getElementById('st-model-offers-state');
+      try {
+        const r = await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ modelOffers: !!on }) });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        if (state) state.textContent = on ? 'Your Maestro suggests newer models for your agents.' : 'No model suggestions.';
+      } catch (e) { alert('Could not save: ' + e.message); }
+    }
+
     // Approval cards on/off: saved at once, takes effect on the next tool call of any agent.
     async function saveApprovalsToggle(on) {
       const state = document.getElementById('st-approvals-state');
@@ -4976,11 +5460,11 @@
       ['questions', 'Questions', 'When an agent needs your answer or approval'],
       ['requested', 'Requests you made', 'Things you asked an agent to tell you about, and replies you asked to hear about'],
       ['other', 'Everything else', 'Reports and other notices'],
-      ['security', 'Security and access', 'Sign-in and passkey changes, wallet locks, failed backups, access changes, a halted hub'],
+      ['security', 'Security and access', 'Sign-in and passkey changes, wallet locks, failed backups, access changes, a halted hub, health problems (a full disk)'],
     ];
     const NOTIFY_AGENT_KINDS = NOTIFY_KINDS.filter(k => k[0] !== 'security');   // the kinds an agent can have its own setting for
     function notifySecurityWarning(mode) {
-      return mode === 'off' ? `<div class="st-hint notify-security-warning" role="note">You won't be told about sign-in and passkey changes, wallet locks, failed backups, access changes or a halted hub.</div>` : '';
+      return mode === 'off' ? `<div class="st-hint notify-security-warning" role="note">You won't be told about sign-in and passkey changes, wallet locks, failed backups, access changes, a halted hub or health problems such as a full disk.</div>` : '';
     }
     function notifyModeLabel(mode) { return mode === 'off' ? 'Off' : mode === 'away' ? "Only when I'm away" : 'On'; }
     function notifyEffective(prefs, agent, kind) {
@@ -5166,6 +5650,183 @@
     // allowance is past the first warning level; the Settings box shows the windows, the levels, the optional automatic
     // switch, and a model picker for every agent on the Claude client. ──
     let planLast = null;
+    let codexLast = null;       // GET /api/codex-usage (the ChatGPT plan), admins only
+    let subsOnFlag = true;      // the setting subscriptionUsage (on unless false)
+    // ── subscriptions helpers (begin) ──
+    // Pure: the usage bars of Settings -> Subscriptions and the chat-header ChatGPT badge. Same text in app.js and mobile.js.
+    function subsWhen(iso) {
+      const t = Date.parse(iso || '');
+      return Number.isFinite(t) ? new Date(Math.round(t / 60000) * 60000).toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : '';
+    }
+    function subsLevels(l) {
+      const a = (Array.isArray(l) ? l : []).map(Number).filter(n => Number.isFinite(n));
+      return a.length ? a : [75, 90];
+    }
+    function subsColor(pct, reached, levels) {
+      const lv = subsLevels(levels);
+      const first = lv[0], last = lv[lv.length - 1];
+      return reached || pct >= 100 ? '#d4588b' : pct >= last ? '#d95926' : pct >= first ? '#c9a227' : '#3987e5';
+    }
+    function subsBarHtml(label, pct, metaText, color, expired) {
+      const p = Math.max(0, Math.min(100, Math.round(Number(pct) || 0)));
+      const shown = expired ? 0 : p;
+      return `<div class="subs-bar"><span class="subs-label">${escapeHtml(label)}</span><span class="subs-meta">${escapeHtml(metaText)}</span>` +
+        `<div class="subs-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${shown}" aria-label="${escapeHtml(label)}">` +
+        `<div class="subs-fill" style="width:${shown}%;background:${color}"></div></div></div>`;
+    }
+    function subsClaudeRows(snap) {
+      const out = [];
+      const w = (snap && snap.windows) || {};
+      const models = (snap && snap.models) || {};
+      const add = (label, x) => { if (x && x.utilization != null) out.push({ label, pct: Math.round(Number(x.utilization) || 0), resetsAt: x.resets_at, rejected: !!x.rejected }); };
+      add('5-hour', w.five_hour);
+      add('Weekly, all models', w.seven_day);
+      if (!models.opus) add('Weekly, Opus', w.seven_day_opus);
+      if (!models.sonnet) add('Weekly, Sonnet', w.seven_day_sonnet);
+      for (const k of Object.keys(models)) add(`Weekly, ${models[k].display_name || k}`, models[k]);
+      return out;
+    }
+    function subsCodexRows(snap) {
+      const out = [];
+      const limits = (snap && Array.isArray(snap.limits)) ? snap.limits : [];
+      for (const l of limits) {
+        const lname = l.label || l.name || l.id || 'Codex';
+        const wins = (Array.isArray(l.windows) ? l.windows : []).slice().sort((a, b) => (Number(a.minutes) || 0) - (Number(b.minutes) || 0));
+        for (const x of wins) {
+          const wl = String(x.label || 'usage');
+          out.push({ label: limits.length > 1 ? `${lname}, ${wl}` : wl.charAt(0).toUpperCase() + wl.slice(1), pct: Math.round(Number(x.usedPercent) || 0), resetsAt: x.resetsAt, expired: !!x.expired, reached: !!l.reached });
+        }
+      }
+      return out;
+    }
+    function subsReachedLines(snap) {
+      const lines = [];
+      for (const l of ((snap && snap.limits) || [])) {
+        if (!l.reached) continue;
+        const t = `ChatGPT plan limit reached until ${subsWhen(l.reachedUntil) || 'it resets'}`;
+        if (!lines.includes(t)) lines.push(t);
+      }
+      return lines;
+    }
+    function subsWindowsHtml(claudeSnap, codexSnap, opts) {
+      const o = opts || {};
+      if (o.on === false) return '';
+      const now = Number.isFinite(Number(o.now)) ? Number(o.now) : Date.now();
+      let html = '';
+      if (claudeSnap) {
+        const lv = subsLevels(o.levels || (claudeSnap.warn && claudeSnap.warn.at));
+        const rows = subsClaudeRows(claudeSnap);
+        html += `<div class="subs-block"><div class="subs-head">Claude${claudeSnap.subscription ? ` (${escapeHtml(claudeSnap.subscription)})` : ''}</div>`;
+        html += rows.length ? rows.map(r => subsBarHtml(r.label, r.pct, `${r.pct}% used · ${r.rejected ? 'refused until' : 'resets'} ${subsWhen(r.resetsAt) || 'the reset'}`, subsColor(r.pct, r.rejected, lv))).join('') : '<div class="subs-note">No reading yet.</div>';
+        if (claudeSnap.fetchedAt) html += `<div class="subs-note">Read ${escapeHtml(subsWhen(claudeSnap.fetchedAt))}</div>`;
+        if (claudeSnap.error) html += `<div class="subs-note subs-err">${escapeHtml(String(claudeSnap.error).slice(0, 200))}</div>`;
+        html += '</div>';
+      }
+      const hasReading = !!(codexSnap && (codexSnap.readAt || (codexSnap.limits || []).length));
+      if (codexSnap && (o.codexAgents || hasReading)) {
+        const lv = subsLevels(o.levels || (codexSnap.warn && codexSnap.warn.at));
+        const rows = subsCodexRows(codexSnap);
+        html += `<div class="subs-block"><div class="subs-head">ChatGPT${codexSnap.planType ? ` (${escapeHtml(codexSnap.planType)})` : ''}</div>`;
+        for (const t of subsReachedLines(codexSnap)) html += `<div class="subs-note subs-reached">${escapeHtml(t)}</div>`;
+        html += rows.map(r => subsBarHtml(r.label, r.pct, r.expired ? `Reset at ${subsWhen(r.resetsAt) || 'the reset'}; no reading since` : `${r.pct}% used · resets ${subsWhen(r.resetsAt) || 'the reset'}`, subsColor(r.pct, r.reached, lv), r.expired)).join('');
+        const t = Date.parse(codexSnap.readAt || '');
+        if (!codexSnap.readAt || !Number.isFinite(t)) html += '<div class="subs-note">No reading yet. Codex reports it during its turns, or press Read now.</div>';
+        else html += `<div class="subs-note">${now - t < 30 * 60000 ? 'Read' : 'Last seen'} ${escapeHtml(subsWhen(codexSnap.readAt))}</div>`;
+        const rc = Number(codexSnap.resetCredits);
+        if (rc > 0) html += `<div class="subs-note">${rc} reset credit${rc === 1 ? '' : 's'} available</div>`;
+        if (codexSnap.error) html += `<div class="subs-note subs-err">${escapeHtml(String(codexSnap.error).slice(0, 200))}</div>`;
+        html += '</div>';
+      }
+      return html;
+    }
+    function codexBadge(snap, levels, now) {
+      if (!snap || !snap.readAt) return null;
+      const lv = subsLevels(levels || (snap.warn && snap.warn.at));
+      const t0 = Number.isFinite(Number(now)) ? Number(now) : Date.now();
+      const all = [];
+      let reachedLimit = null;
+      for (const l of (snap.limits || [])) {
+        if (l.reached && !reachedLimit) reachedLimit = l;
+        for (const w of (l.windows || [])) all.push(w);
+      }
+      if (!reachedLimit && !all.some(w => !w.expired)) return null;
+      const pctOf = (w) => Math.round(Number(w.usedPercent) || 0);
+      const live = all.filter(w => !w.expired);
+      const weekly = live.filter(w => w.weekly);
+      const best = (a) => a.reduce((x, y) => (pctOf(y) > pctOf(x) ? y : x));
+      let main = weekly.length ? best(weekly) : null;
+      if (!main && live.length) main = live.reduce((x, y) => ((Number(y.minutes) || 0) > (Number(x.minutes) || 0) ? y : x));
+      const age = t0 - Date.parse(snap.readAt);
+      const seen = age > 30 * 60000 ? `; last seen ${subsWhen(snap.readAt)}` : '';
+      if (reachedLimit) {
+        const when = subsWhen(reachedLimit.reachedUntil);
+        return { text: 'ChatGPT limit reached', cls: 'refused', title: `ChatGPT plan limit reached until ${when || 'it resets'}${seen}` };
+      }
+      const pct = pctOf(main);
+      let text = main.weekly ? `ChatGPT ${pct}%` : `ChatGPT ${main.label || 'usage'} ${pct}%`;
+      const shorts = live.filter(w => w.short && w !== main && pctOf(w) > 50);
+      if (shorts.length) { const s = best(shorts); text += ` · ${String(s.label || '5-hour').replace(/-hour$/, 'h')} ${pctOf(s)}%`; }
+      const passed = lv.filter(l => pct >= l);
+      const cls = pct >= 100 ? 'refused' : passed.length && passed.length === lv.length ? 'hot' : passed.length ? 'warn' : '';
+      const when = subsWhen(main.resetsAt) || 'the reset';
+      const title = (main.weekly ? `ChatGPT plan: ${pct}% of this week's allowance, resets ${when}` : `ChatGPT plan: ${pct}% of the ${main.label || 'usage'} allowance, resets ${when}`) + seen;
+      return { text, cls, title };
+    }
+    /** The ChatGPT badge before any usable reading: "reading…" while one is awaited, "no reading" with the reason after a
+     *  failed one (never "reading…" for ever). */
+    function codexPendingBadge(snap) {
+      if (snap && snap.error && !snap.reading) return { text: 'ChatGPT: no reading', cls: '', title: `No reading of the ChatGPT plan yet: ${String(snap.error).slice(0, 200)}` };
+      return { text: 'ChatGPT: reading\u2026', cls: '', title: "Reading the ChatGPT plan's usage (no turn is spent)" };
+    }
+    /** Whether a page showing a Codex chat should ask for a reading: the snapshot loaded and on, none running, the last
+     *  reading missing or over 30 minutes old; at most once a minute per page (askedAt). The hub limits reads too. */
+    function codexShouldRead(snap, now, askedAt) {
+      if (!snap || snap.enabled === false || snap.reading) return false;
+      if (Number(askedAt) && now - Number(askedAt) < 60000) return false;
+      const t = Date.parse(snap.readAt || '');
+      return !Number.isFinite(t) || now - t > 30 * 60000;
+    }
+    /** The snapshot after a page's read request: the answer's snapshot, carrying the hub's reason when it refused or failed
+     *  without storing one (a Codex update, the hub unreachable), so the badge says "no reading" and why instead of
+     *  "reading..." (review r1). */
+    function codexAfterAsk(prev, answer) {
+      const snap = answer && typeof answer === 'object' && answer.snapshot && typeof answer.snapshot === 'object' ? answer.snapshot : prev;
+      if (!snap) return prev;
+      if (answer && answer.ok === false && answer.error && !snap.error) return Object.assign({}, snap, { error: String(answer.error).slice(0, 200), reading: false });
+      return snap;
+    }
+    // ── subscriptions helpers (end) ──
+    const subsEnabled = () => subsOnFlag !== false && !(codexLast && codexLast.enabled === false);
+    // One read of the ChatGPT plan asked for by this page (POST /api/codex-usage/refresh: no turn; the hub allows one a
+    // minute and none during a Codex update); the answer repaints the badges and the Subscriptions box.
+    let codexAskAt = 0;
+    function codexAskRead() {
+      codexAskAt = Date.now();
+      fetch('/api/codex-usage/refresh', { method: 'POST', credentials: 'include' })
+        .then(r => r.json().catch(() => ({ ok: false, error: `HTTP ${r.status}` })))
+        .catch(() => ({ ok: false, error: "Couldn't reach your Maestro to read it." }))   // the next paint asks again after a minute
+        .then(d => { const next = codexAfterAsk(codexLast, d); if (next && next !== codexLast) { codexLast = next; paintPlanBadges(); paintSubsBox(); } });
+    }
+    const subsIsCodex = (model) => String(model || '').startsWith('codex-cli/');
+    function openSubsSettings() { return openSettingsAt('st-subs-section'); }
+    /** The ChatGPT weekly window past the first warning level that most needs attention, or null. */
+    function codexTopWarning() {
+      if (!codexLast || !subsEnabled()) return null;
+      const lv = subsLevels(codexLast.warn && codexLast.warn.at);
+      let top = null;
+      for (const w of (codexLast.weekly || [])) {
+        const pct = Math.round(Number(w.usedPercent) || 0);
+        if ((w.reached || pct >= lv[0]) && (!top || pct > top.pct)) top = { pct, label: w.label, resetsAt: w.resetsAt, reached: !!w.reached };
+      }
+      return top;
+    }
+    /** A plan_warning for the ChatGPT plan: a brief notice that leads to Settings -> Subscriptions. */
+    function subsPlanWarning(ev) {
+      if (!ev || ev.provider !== 'chatgpt' || (window.hubMe && !window.hubMe.isAdmin)) return;
+      const when = subsWhen(ev.resetsAt) || 'the reset';
+      const text = ev.reached ? `ChatGPT plan limit reached until ${subsWhen(ev.resetsAt) || 'it resets'}` : `ChatGPT plan: ${Math.round(Number(ev.utilization) || 0)}% of this week's allowance (resets ${when})`;
+      hubToast(text, 8000, () => openSubsSettings());
+    }
     const planWhen = (iso) => { const t = Date.parse(iso || ''); return Number.isFinite(t) ? new Date(Math.round(t / 60000) * 60000).toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : 'the reset'; };
     /** The window most in need of attention: { label, utilization, resetsAt, level } or null when none passed a level. */
     function planTopWarning(d) {
@@ -5193,13 +5854,30 @@
       // (up to 2 minutes) instead of waiting 10 minutes with nothing to show.
       if (!planLast || !planLast.fetchedAt) { refreshPlanChip.tries = (refreshPlanChip.tries || 0) + 1; if (refreshPlanChip.tries <= 8) next = Math.min(next, 15000); }
       else refreshPlanChip.tries = 0;
+      await refreshCodexUsage();
       paintPlanChip(); paintPlanBadges();
       refreshPlanChip.timer = setTimeout(refreshPlanChip, next);
+    }
+    async function refreshCodexUsage() {
+      try {
+        const r = await fetch('/api/codex-usage', { credentials: 'include' });
+        if (r.ok) { codexLast = await r.json(); if (codexLast && codexLast.enabled === false) subsOnFlag = false; else if (codexLast && codexLast.enabled === true) subsOnFlag = true; }
+      } catch { /* the hub is restarting: the next round asks again */ }
     }
     function paintPlanChip() {
       const el = document.getElementById('plan-warn');
       if (!el) return;
       const top = planTopWarning(planLast);
+      const ctop = codexTopWarning();
+      el.onclick = () => openPlanSettings();
+      if (ctop && !(top && Number(top.utilization) >= ctop.pct)) {
+        el.classList.add('on');
+        el.textContent = `⚠ ChatGPT ${ctop.pct}%`;
+        el.classList.toggle('hot', ctop.reached || ctop.pct >= 100);
+        el.title = ctop.reached ? `Your ChatGPT plan limit is reached until ${subsWhen(ctop.resetsAt) || 'it resets'}. Click for the subscriptions.` : `Your ChatGPT plan has used ${ctop.pct}% of this week's allowance (resets ${subsWhen(ctop.resetsAt) || 'the reset'}). Click for the subscriptions.`;
+        el.onclick = () => openSubsSettings();
+        return;
+      }
       el.classList.toggle('on', !!top);
       if (!top) { el.textContent = ''; return; }
       if (top.extraUsage && !top.rejected) {
@@ -5248,10 +5926,30 @@
       for (const [id, chat] of Object.entries(chats)) {
         const el = document.getElementById(`plan-badge-${id}`);
         if (!el) continue;
+        el.onclick = () => openPlanSettings();
+        if (chat && !chat.isGroup && chat.agent && subsIsCodex(chatModelOf(chat))) {
+          let b = subsEnabled() ? codexBadge(codexLast, null, Date.now()) : null;
+          // An admin with a Codex chat open: a missing or old reading is asked for (no turn spent), and until one
+          // exists the badge says so instead of showing nothing.
+          if (subsEnabled() && !(window.hubMe && !window.hubMe.isAdmin)) {
+            if (codexShouldRead(codexLast, Date.now(), codexAskAt)) codexAskRead();
+            if (!b) b = codexPendingBadge(codexLast);
+          }
+          if (!b) { el.hidden = true; el.textContent = ''; continue; }
+          el.textContent = b.text;
+          el.className = 'plan-badge' + (b.cls ? ' ' + b.cls : '');
+          el.title = `${b.title}. Click for the subscriptions (Settings → Subscriptions).`;
+          el.onclick = () => openSubsSettings();
+          el.hidden = false;
+          continue;
+        }
         const w = chat && !chat.isGroup && chat.agent ? planWindowFor(chatModelOf(chat)) : null;
         if (!w) { el.hidden = true; el.textContent = ''; continue; }
         const { pct, extra, cls } = planState(w, levels);
         el.textContent = `${w.family ? w.label : 'Plan'} ${planPctText(w, levels)} this week`;
+        const fiveW = planLast.windows && planLast.windows.five_hour;
+        const five5 = subsEnabled() && fiveW && fiveW.utilization != null && Number(fiveW.utilization) > 50 ? Math.round(Number(fiveW.utilization)) : null;
+        if (five5 != null) el.textContent += ` · 5h ${five5}%`;
         el.className = 'plan-badge' + (cls ? ' ' + cls : '');
         const all = (planLast.weekly || []).find(x => x.family == null);
         const five = planLast.windows && planLast.windows.five_hour;
@@ -5264,6 +5962,56 @@
     async function openPlanSettings() {
       await openSettingsAt('st-plan-section');
     }
+    // Settings -> Subscriptions: the switch, then (when on) a Claude block and a ChatGPT block of usage bars.
+    function paintSubsBox() {
+      const body = document.getElementById('st-subs-body');
+      if (!body) return;
+      const box = document.getElementById('st-subs-on');
+      if (box && box.checked !== subsOnFlag) box.checked = subsOnFlag;
+      if (!subsOnFlag) { body.innerHTML = ''; return; }
+      const codexAgents = (typeof AGENTS !== 'undefined' && Array.isArray(AGENTS) ? AGENTS : []).some(a => subsIsCodex(a && a.model));
+      body.innerHTML = subsWindowsHtml(planLast, codexLast, { now: Date.now(), codexAgents })
+        + `<div class="st-row"><button class="st-test-btn" onclick="subsReadNow('claude')">Read now (Claude)</button><button class="st-test-btn" style="margin-left:8px" onclick="subsReadNow('codex')">Read now (ChatGPT)</button><span id="st-subs-read-state" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px"></span></div>`;
+    }
+    async function subsReadNow(which) {
+      const st = document.getElementById('st-subs-read-state');
+      if (st) st.textContent = 'Reading…';
+      let err = '';
+      try {
+        const r = await fetch(`/api/${which === 'claude' ? 'plan-usage' : 'codex-usage'}/refresh`, { method: 'POST', credentials: 'include' });
+        const d = await r.json().catch(() => ({}));
+        if (which === 'claude') { if (r.ok) planLast = d; else err = d.error || r.status; }
+        else { if (d && d.snapshot) codexLast = d.snapshot; if (!r.ok || d.ok === false) err = d.error || r.status; }
+      } catch (e) { err = e.message; }
+      paintPlanChip(); paintPlanBadges(); paintSubsBox();
+      const st2 = document.getElementById('st-subs-read-state');
+      if (st2) st2.textContent = err ? String(err).slice(0, 200) : '';
+    }
+    async function loadSubsBox() {
+      if (!document.getElementById('st-subs-body')) return;
+      if (!planLast) { try { const r = await fetch('/api/plan-usage', { credentials: 'include' }); if (r.ok) planLast = await r.json(); } catch { /* shown as no reading */ } }
+      await refreshCodexUsage();
+      paintSubsBox();
+      const t = codexLast && codexLast.readAt ? Date.parse(codexLast.readAt) : NaN;
+      if (subsOnFlag && (!Number.isFinite(t) || Date.now() - t > 30 * 60000) && !loadSubsBox.asked) { loadSubsBox.asked = true; subsReadNow('codex'); }
+    }
+    async function saveSubsOn(on) {
+      const st = document.getElementById('st-subs-state');
+      const box = document.getElementById('st-subs-on');
+      try {
+        const r = await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ subscriptionUsage: !!on }) });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(d.error || r.status);
+        subsOnFlag = !!on;
+        if (st) st.textContent = '';
+        paintSubsBox(); paintPlanBadges();
+        if (document.getElementById('st-plan-section')) loadPlanBox();   // the Claude plan box draws its bars only while this is off
+        if (on) loadSubsBox();
+      } catch (e) {
+        if (box) box.checked = !on;
+        if (st) st.textContent = `Could not save: ${e.message}`;
+      }
+    }
     async function loadPlanBox(readNow = false) {
       const usageEl = document.getElementById('st-plan-usage');
       if (!usageEl) return;
@@ -5275,7 +6023,7 @@
         d = await r.json();
         if (!r.ok) throw new Error(d.error || r.status);
       } catch (e) { usageEl.textContent = `Could not read the plan: ${e.message}`; if (state) state.textContent = ''; return; }
-      planLast = d; paintPlanChip(); paintPlanBadges();
+      planLast = d; paintPlanChip(); paintPlanBadges(); paintSubsBox();
       const worst = (d.weekly || []).reduce((a, w) => (Number(w.utilization) || 0) > (a ? Number(a.utilization) || 0 : -1) ? w : a, null);
       stSum('models', 'plan', worst ? `${worst.family ? worst.label : 'Claude plan'} ${Math.round(Number(worst.utilization) || 0)}% this week` : '');
       if (state) state.textContent = d.fetchedAt ? `read ${new Date(d.fetchedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : (d.error ? `last read failed: ${String(d.error).slice(25, 140)}` : '');
@@ -5286,9 +6034,12 @@
       if (five && five.utilization != null) rows.push({ label: '5-hour window', utilization: five.utilization, resetsAt: five.resets_at, extraUsage: !!five.extraUsage && !five.rejected });
       for (const w of (d.weekly || [])) rows.push({ label: w.family ? `${w.label} (weekly)` : 'All models (weekly)', utilization: w.utilization, resetsAt: w.resetsAt, rejected: w.rejected, extraUsage: !!w.extraUsage && !w.rejected, weekly: true });
       const extraRow = rows.find(w => w.extraUsage && w.weekly);   // the hint speaks of the weekly plan
-      usageEl.innerHTML = rows.length ? rows.map(w => {
+      // The usage bars live in one place: Settings → Subscriptions, above. Only with Subscription usage turned off are
+      // they drawn here, as before that section existed.
+      if (subsEnabled() && document.getElementById('st-subs-section')) usageEl.innerHTML = d.error && !rows.length ? `No reading yet: ${esc(String(d.error).slice(25, 200))}` : 'The usage of each window is shown under Subscriptions, above.';
+      else usageEl.innerHTML = rows.length ? rows.map(w => {
         const pct = Math.round(Number(w.utilization) || 0);
-        const color = w.extraUsage ? '#c9a227' : w.rejected || pct >= 100 ? '#d4588b' : (w.weekly && pct >= last) ? '#d95926' : (w.weekly && pct >= first) ? '#c9a227' : '#3987e5';
+        const color = w.extraUsage ? 'var(--status-warn)' : w.rejected || pct >= 100 ? 'var(--status-hot)' : (w.weekly && pct >= last) ? 'var(--status-high)' : (w.weekly && pct >= first) ? 'var(--status-warn)' : 'var(--status-info)';
         return `<div style="display:flex;align-items:center;gap:10px;margin:3px 0"><span style="flex-basis:150px;flex-shrink:0">${esc(w.label)}</span><span style="width:140px;height:6px;background:var(--border);border-radius:3px;overflow:hidden;flex-shrink:0"><span style="display:block;height:100%;width:${Math.min(pct, 100)}%;background:${color}"></span></span><b style="color:${color};min-width:44px">${esc(planPctText(w))}</b><span style="color:var(--text-dim)">${w.rejected ? 'refused until ' : 'resets '}${esc(planWhen(w.resetsAt))}</span></div>`;
       }).join('') : (d.error ? `No reading yet: ${esc(String(d.error).slice(25, 200))}` : 'No reading yet (the first one comes a few seconds after the hub starts).');
       if (extraRow) usageEl.innerHTML += `<div class="st-hint" style="margin-left:0">${esc(`The weekly plan is used up until ${planWhen(extraRow.resetsAt)}; extra usage is paying for Claude replies until then.`)}</div>`;
@@ -5321,7 +6072,7 @@
       el.innerHTML = `<div class="st-hint" style="margin-left:0;margin-bottom:4px">Your agents on the Claude client, by model. Changing one here is the same as its chat header picker: the next turn runs on the new model.</div>` +
         [...groups.entries()].sort((a, b) => order.indexOf(a[0]) - order.indexOf(b[0])).map(([fam, list]) => {
           const note = hot.has(fam) ? 'past a warning level' : hot.has('*') ? 'the all-models allowance is past a warning level' : '';
-          return `<details ${note ? 'open' : ''} style="margin:4px 0"><summary style="cursor:pointer;font-size:0.85rem"><b>${esc(famLabel[fam] || 'Other')}</b> · ${list.length} agent${list.length === 1 ? '' : 's'}${note ? ` · <span style="color:#c9a227">${note}</span>` : ''}</summary>` +
+          return `<details ${note ? 'open' : ''} style="margin:4px 0"><summary style="cursor:pointer;font-size:0.85rem"><b>${esc(famLabel[fam] || 'Other')}</b> · ${list.length} agent${list.length === 1 ? '' : 's'}${note ? ` · <span style="color:var(--status-warn)">${note}</span>` : ''}</summary>` +
             list.sort((x, y) => String(x.display || x.name).localeCompare(String(y.display || y.name))).map(a => `<div class="st-row" style="margin:2px 0 2px 12px"><label style="flex-basis:150px">${esc(a.icon || '🤖')} ${esc(a.display || a.name)}</label><select data-agent="${esc(a.name)}" data-model="${esc(a.model)}" onchange="planAgentModel(this)" style="padding:3px;max-width:340px">${options(a.model)}</select></div>`).join('') + '</details>';
         }).join('');
     }
@@ -5384,12 +6135,14 @@
       const el = document.getElementById('spend-today');
       if (!el) return;
       const t = spendToday;
-      const show = !!t && ((t.total || 0) > 0 || (t.turns || 0) > 0);
+      // pay-per-use only: plan use never shows here. An older hub (no paidTurns: its total still counts plan use, until
+      // it restarts after an update) shows nothing rather than a misleading figure.
+      const show = !!t && typeof t.paidTurns === 'number' && (t.total || 0) >= 0.005;
       el.classList.toggle('on', show);
       if (!show) { el.textContent = ''; return; }
-      el.textContent = `today ${usd(t.total)}`;
-      const top = (t.agents || []).slice(0, 3).map(a => `${agentDisplayName(a.agent)} ${usd(a.cost)}`).join(', ');
-      el.title = `API-equivalent spend today: ${usd(t.total)} over ${t.turns || 0} turn${t.turns === 1 ? '' : 's'}${top ? ` · ${top}` : ''}. Click for caps.`;
+      el.textContent = `spent today ${usd(t.total)}`;
+      const top = (t.agents || []).filter(a => (a.cost || 0) > 0).slice(0, 3).map(a => `${agentDisplayName(a.agent)} ${usd(a.cost)}`).join(', ');
+      el.title = `Pay-per-use spend today (API keys and paid cloud voices): ${usd(t.total)} over ${t.paidTurns || 0} call${t.paidTurns === 1 ? '' : 's'}${top ? ` · ${top}` : ''}. Use of your Claude and ChatGPT plans is not counted here; see Settings → Subscriptions. Click for caps.`;
     }
     // Monthly API credits (settings.apiCredits, POST /api/ledger/credits): the header shows the fullest one.
     const CREDIT_PROVIDERS = [['anthropic', 'Anthropic'], ['openai', 'OpenAI'], ['google', 'Google'], ['openrouter', 'OpenRouter'], ['perplexity', 'Perplexity']];
@@ -5448,11 +6201,19 @@
       if (fetchFirst || !spendToday) await refreshSpendToday();
       const t = spendToday;
       if (!t) { box.textContent = 'No ledger on this hub.'; stSum('money', 'spend', 'no spend ledger'); return; }
-      const top = (t.agents || []).slice(0, 5).map(a => `${esc(agentDisplayName(a.agent))} ${usd(a.cost)} (${a.turns})`).join(' · ');
-      box.innerHTML = `<b style="color:var(--text)">${usd(t.total)}</b> over ${t.turns || 0} turn${t.turns === 1 ? '' : 's'}${top ? `<div style="margin-top:2px">${top}</div>` : ''}`;
+      // An older hub (no paidTurns: its total still counts plan use) gets no figure, but the caps and credits below are
+      // still filled in, so saving one cap never blanks the other.
+      const legacy = typeof t.paidTurns !== 'number';
+      const paid = (t.paidTurns || 0) > 0;
+      const amount = (t.total || 0) >= 0.005 ? usd(t.total) : (t.total || 0) > 0 ? 'less than $0.01' : '$0.00';
+      const unpriced = (t.unpriced || 0) > 0 ? `, plus ${t.unpriced} call${t.unpriced === 1 ? '' : 's'} with no known price` : '';
+      const top = (t.agents || []).filter(a => (a.cost || 0) > 0).slice(0, 5).map(a => `${esc(agentDisplayName(a.agent))} ${usd(a.cost)} (${a.paidTurns || 0})`).join(' · ');
+      const plan = (t.planTurns || 0) > 0 ? `<div style="margin-top:2px">On your plans today: ${t.planTurns} turn${t.planTurns === 1 ? '' : 's'} (about ${usd(t.planValue || 0)} if paid through the API; your plans cover it, so it is not billed).</div>` : '';
+      if (legacy) box.textContent = 'Restart your Maestro to see pay-per-use spend.';
+      else box.innerHTML = (paid ? `<b style="color:var(--text)">${amount}</b> pay-per-use over ${t.paidTurns} call${t.paidTurns === 1 ? '' : 's'}${unpriced}${top ? `<div style="margin-top:2px">${top}</div>` : ''}` : 'No pay-per-use spend today.') + plan;
       const caps = t.caps || {};
-      stSum('money', 'spend', `Today ${usd(t.total)}`);
-      stSum('money', 'caps', caps.perAgentDailyUsd || caps.hubDailyUsd ? `caps: ${[caps.perAgentDailyUsd ? `${usd(caps.perAgentDailyUsd)} per agent` : '', caps.hubDailyUsd ? `${usd(caps.hubDailyUsd)} whole hub` : ''].filter(Boolean).join(', ')}` : 'no daily caps');
+      stSum('money', 'spend', legacy ? 'restart to see spend' : paid ? `Spent today ${amount}` : 'No pay-per-use spend today');
+      stSum('money', 'caps', caps.perAgentDailyUsd || caps.hubDailyUsd ? `pay-per-use caps: ${[caps.perAgentDailyUsd ? `${usd(caps.perAgentDailyUsd)} per agent` : '', caps.hubDailyUsd ? `${usd(caps.hubDailyUsd)} whole hub` : ''].filter(Boolean).join(', ')}` : 'no daily caps');
       const credits = t.credits || [];
       const listEl = document.getElementById('st-credit-list');
       if (listEl) listEl.textContent = credits.length ? credits.map(creditLine).join(' · ') : 'None set. Enter an amount to see it next to today\'s spend.';
@@ -5578,6 +6339,10 @@
       if (maxContext > 0) patch.maxContextMessages = maxContext;
       const wao = workersAtOnceFromPage();
       if (wao !== undefined) patch.workersAtOnce = wao;
+      const hwMin = document.getElementById('st-hw-minutes');
+      if (hwMin) patch.handOffWaitMinutes = parseInt(hwMin.value, 10);
+      const hwNotice = document.getElementById('st-hw-notice');
+      if (hwNotice) patch.buildPartnerNotice = !!hwNotice.checked;
 
       try {
         const r = await fetch('/api/settings', {
@@ -6251,7 +7016,7 @@
           </div>
           <div style="display:flex;gap:8px;justify-content:flex-end;">
             <button onclick="dialogRequestClose(this)" style="padding:6px 14px;background:var(--bg-input);border:1px solid var(--border);border-radius:5px;color:var(--text);cursor:pointer;">Cancel</button>
-            <button id="create-confirm-btn" onclick="confirmCreateAgent()" style="padding:6px 14px;background:var(--accent);border:1px solid var(--accent);border-radius:5px;color:#fff;cursor:pointer;">Create</button>
+            <button id="create-confirm-btn" onclick="confirmCreateAgent()" style="padding:6px 14px;background:var(--accent);border:1px solid var(--accent);border-radius:5px;color:var(--on-color-text);cursor:pointer;">Create</button>
           </div>
         </div>
       `;
@@ -6365,7 +7130,7 @@
           <div id="clone-error" style="color:var(--accent);font-size:0.8rem;display:none;margin-bottom:8px;"></div>
           <div style="display:flex;gap:8px;justify-content:flex-end;">
             <button onclick="dialogRequestClose(this)" style="padding:6px 14px;background:var(--bg-input);border:1px solid var(--border);border-radius:5px;color:var(--text);cursor:pointer;">Cancel</button>
-            <button id="clone-confirm-btn" onclick="confirmCloneAgent()" style="padding:6px 14px;background:var(--accent);border:1px solid var(--accent);border-radius:5px;color:#fff;cursor:pointer;">Clone</button>
+            <button id="clone-confirm-btn" onclick="confirmCloneAgent()" style="padding:6px 14px;background:var(--accent);border:1px solid var(--accent);border-radius:5px;color:var(--on-color-text);cursor:pointer;">Clone</button>
           </div>
         </div>
       `;
@@ -6476,7 +7241,7 @@
       try { u = new URL(data.url, origin); } catch { return null; }
       if (u.origin !== origin || !OPEN_TARGET_MAIN.test(u.pathname)) return null;
       const q = u.searchParams;
-      return { agent: q.get('agent') || '', backups: q.get('backups') === '1', update: q.get('update') === '1', security: q.get('security') === '1', memory: q.get('memory') === '1', selfcheck: q.get('selfcheck') === '1', connectors: q.get('connectors') === '1', wallet: q.get('wallet') === 'unlock' };
+      return { agent: q.get('agent') || '', backups: q.get('backups') === '1', update: q.get('update') === '1', security: q.get('security') === '1', memory: q.get('memory') === '1', selfcheck: q.get('selfcheck') === '1', health: q.get('health') === '1', connectors: q.get('connectors') === '1', wallet: q.get('wallet') === 'unlock' };
     }
     function createTargetStore(storage, now = () => Date.now(), ttlMs = 10 * 60 * 1000) {
       return {
@@ -6554,6 +7319,7 @@
       if (t.backups) openSettingsAt('st-backups-section');
       if (t.memory) openSettingsAt('st-memory-section');
       if (t.selfcheck) openSettingsAt('st-selfcheck-section');
+      if (t.health) openSettingsAt('st-health-section');
       if (t.connectors) openSettingsAt('st-modules-section');
       if (t.wallet) openWalletPanel();
       if (t.update) paintUpdateCard().then(() => showUpdateCard()).catch(() => {});
@@ -6589,12 +7355,12 @@
       await Promise.all([loadAgents()]);
       // The page's own address: "/?agent=<name>" opens that agent's chat (the Welcome page hands over to Maestro's setup
       // interview this way, and a notification tapped with no hub tab open lands here), ?backups=1 the backups settings
-      // (a backup warning), ?memory=1 the memory check, ?selfcheck=1 the self-check, ?update=1 the update card, ?security=1 the security dialog, ?wallet=unlock the Wallet panel. Then any notification tapped
+      // (a backup warning), ?memory=1 the memory check, ?selfcheck=1 the self-check, ?health=1 the health check, ?update=1 the update card, ?security=1 the security dialog, ?wallet=unlock the Wallet panel. Then any notification tapped
       // while the page was loading.
       const own = parseOpenTarget({ type: 'open-target', url: location.href }, location.origin);
-      if (own && (own.update || own.backups || own.security || own.memory || own.selfcheck || own.connectors || own.wallet)) {   // one-shot actions: a reload must not repeat them
+      if (own && (own.update || own.backups || own.security || own.memory || own.selfcheck || own.health || own.connectors || own.wallet)) {   // one-shot actions: a reload must not repeat them
         const u = new URL(location.href);
-        for (const k of ['update', 'backups', 'security', 'memory', 'selfcheck', 'connectors', 'wallet']) u.searchParams.delete(k);
+        for (const k of ['update', 'backups', 'security', 'memory', 'selfcheck', 'health', 'connectors', 'wallet']) u.searchParams.delete(k);
         history.replaceState(history.state, '', u.pathname + u.search + u.hash);
       }
       // After a Reload: open the chats that were open, in their tab order, each with the text that was in its message
@@ -6647,8 +7413,8 @@
       try { if (closeStore && closeStore.getItem(closeKey) === 'off') return; } catch (e) { /* storage blocked: show it */ }
       const bar = document.createElement('div');
       bar.id = 'hub-phone-layout-notice';   // first in the notice stack (layoutBanners): the notices and the page move down below it
-      bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;display:flex;align-items:center;justify-content:space-between;padding:6px 12px;background:#14171F;border-bottom:1px solid #222632;color:#F3F4F6;font-size:13px;box-sizing:border-box';
-      bar.innerHTML = '<span><span style="color:#C3C2B7">This is the computer layout.</span> <a id="hub-phone-layout-open" href="/mobile" style="color:#5A93FF;text-decoration:none">Open the phone layout</a></span><button aria-label="Dismiss" style="background:none;border:0;color:#9CA3AF;font-size:16px;padding:4px 8px">\u2715</button>';
+      bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;display:flex;align-items:center;justify-content:space-between;padding:6px 12px;background:var(--notice-bar-bg);border-bottom:1px solid var(--notice-bar-border);color:var(--notice-bar-text);font-size:13px;box-sizing:border-box';
+      bar.innerHTML = '<span><span style="color:var(--auto-head-text)">This is the computer layout.</span> <a id="hub-phone-layout-open" href="/mobile" style="color:var(--notice-bar-link);text-decoration:none">Open the phone layout</a></span><button aria-label="Dismiss" style="background:none;border:0;color:var(--notice-bar-close);font-size:16px;padding:4px 8px">\u2715</button>';
       // Choosing the phone layout again also undoes "Use the full site"; the link still navigates by itself.
       bar.querySelector('#hub-phone-layout-open').addEventListener('click', () => { try { localStorage.removeItem('hub-keep-desktop'); } catch (e) { /* storage blocked */ } });
       bar.querySelector('button').addEventListener('click', () => { try { closeStore.setItem(closeKey, 'off'); } catch (e) { /* storage blocked: close it for now */ } bar.remove(); layoutBanners(); });
@@ -6748,24 +7514,24 @@
 
       const overlay = document.createElement('div');
       overlay.id = 'restart-notify-overlay';
-      overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:10000;display:flex;align-items:center;justify-content:center;';
+      overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:var(--overlay-bg-dim);z-index:10000;display:flex;align-items:center;justify-content:center;';
 
       const popup = document.createElement('div');
-      popup.style.cssText = 'background:var(--bg-secondary, #1e1e1e);border:1px solid var(--border-color, #444);border-radius:12px;padding:24px;max-width:420px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,0.4);';
+      popup.style.cssText = 'background:var(--bg-secondary, var(--dialog-bg));border:1px solid var(--border-color, var(--dialog-border));border-radius:12px;padding:24px;max-width:420px;width:90%;box-shadow:0 8px 32px var(--shadow-color-menu);';
 
       const icon = document.createElement('div');
       icon.style.cssText = 'font-size:28px;margin-bottom:12px;';
       icon.textContent = allOk ? '✅' : '⚠️';
 
       const title = document.createElement('h3');
-      title.style.cssText = 'margin:0 0 16px 0;color:var(--text-primary, #fff);font-size:16px;';
+      title.style.cssText = 'margin:0 0 16px 0;color:var(--text-primary, var(--on-color-text));font-size:16px;';
       title.textContent = allOk ? 'Restarted successfully' : 'Restarted — issues detected';
 
       const checkList = document.createElement('div');
       checkList.style.cssText = 'margin-bottom:20px;';
       for (const c of checks) {
         const row = document.createElement('div');
-        row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 0;color:var(--text-primary, #ddd);font-size:14px;';
+        row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 0;color:var(--text-primary, var(--dialog-text));font-size:14px;';
         const statusIcon = c.ok ? '✅' : '❌';
         const detail = c.detail ? ` — ${c.detail}` : '';
         row.textContent = `${statusIcon} ${c.name}${detail}`;
@@ -6776,7 +7542,7 @@
       buttons.style.cssText = 'display:flex;justify-content:flex-end;';
       const okBtn = document.createElement('button');
       okBtn.textContent = 'OK';
-      okBtn.style.cssText = 'padding:8px 24px;border-radius:6px;border:none;background:#4CAF50;color:#fff;cursor:pointer;font-size:13px;font-weight:600;';
+      okBtn.style.cssText = 'padding:8px 24px;border-radius:6px;border:none;background:var(--ok-text);color:var(--on-color-text);cursor:pointer;font-size:13px;font-weight:600;';
       okBtn.onclick = () => overlay.remove();
       buttons.appendChild(okBtn);
 
@@ -6799,25 +7565,25 @@
       const overlay = document.createElement('div');
       overlay.id = 'resume-popup-overlay';
       overlay.dataset.dialogPersistent = '1';   // Resume or not is a choice: Esc and the backdrop leave it open
-      overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:10000;display:flex;align-items:center;justify-content:center;';
+      overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:var(--overlay-bg-dim);z-index:10000;display:flex;align-items:center;justify-content:center;';
 
       const popup = document.createElement('div');
-      popup.style.cssText = 'background:var(--bg-secondary, #1e1e1e);border:1px solid var(--border-color, #444);border-radius:12px;padding:24px;max-width:500px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,0.4);';
+      popup.style.cssText = 'background:var(--bg-secondary, var(--dialog-bg));border:1px solid var(--border-color, var(--dialog-border));border-radius:12px;padding:24px;max-width:500px;width:90%;box-shadow:0 8px 32px var(--shadow-color-menu);';
 
       const icon = document.createElement('div');
       icon.style.cssText = 'font-size:28px;margin-bottom:12px;';
       icon.textContent = '🔄';
 
       const title = document.createElement('h3');
-      title.style.cssText = 'margin:0 0 8px 0;color:var(--text-primary, #fff);font-size:16px;';
+      title.style.cssText = 'margin:0 0 8px 0;color:var(--text-primary, var(--on-color-text));font-size:16px;';
       title.textContent = 'Restarted — resume?';
 
       const reason = document.createElement('div');
-      reason.style.cssText = 'color:var(--text-secondary, #aaa);font-size:12px;margin-bottom:12px;';
+      reason.style.cssText = 'color:var(--text-secondary, var(--text-muted-alt));font-size:12px;margin-bottom:12px;';
       reason.textContent = `Restart reason: ${pending.reason || 'N/A'}`;
 
       const message = document.createElement('div');
-      message.style.cssText = 'color:var(--text-primary, #ddd);font-size:14px;margin-bottom:20px;line-height:1.5;background:var(--bg-tertiary, #2a2a2a);padding:12px;border-radius:8px;';
+      message.style.cssText = 'color:var(--text-primary, var(--dialog-text));font-size:14px;margin-bottom:20px;line-height:1.5;background:var(--bg-tertiary, var(--dialog-row-border));padding:12px;border-radius:8px;';
       message.textContent = pending.resume_message;
 
       const buttons = document.createElement('div');
@@ -6825,7 +7591,7 @@
 
       const noBtn = document.createElement('button');
       noBtn.textContent = 'Dismiss';
-      noBtn.style.cssText = 'padding:8px 20px;border-radius:6px;border:1px solid var(--border-color, #555);background:transparent;color:var(--text-primary, #ccc);cursor:pointer;font-size:13px;';
+      noBtn.style.cssText = 'padding:8px 20px;border-radius:6px;border:1px solid var(--border-color, var(--field-border));background:transparent;color:var(--text-primary, var(--step-text));cursor:pointer;font-size:13px;';
       noBtn.onclick = async () => {
         overlay.remove();
         await fetch('/api/restart/pending', { method: 'DELETE', credentials: 'include' });
@@ -6833,7 +7599,7 @@
 
       const yesBtn = document.createElement('button');
       yesBtn.textContent = '▶ Resume';
-      yesBtn.style.cssText = 'padding:8px 20px;border-radius:6px;border:none;background:#4CAF50;color:#fff;cursor:pointer;font-size:13px;font-weight:600;';
+      yesBtn.style.cssText = 'padding:8px 20px;border-radius:6px;border:none;background:var(--ok-text);color:var(--on-color-text);cursor:pointer;font-size:13px;font-weight:600;';
       yesBtn.onclick = async () => {
         overlay.remove();
         await fetch('/api/restart/pending', { method: 'DELETE', credentials: 'include' });
@@ -7085,12 +7851,12 @@
           const og = document.createElement('optgroup');
           og.className = 'cyber-group';
           og.label = `\u26A0 ${CYBER_TAG} - direct OpenAI key, NOT via LLM Gateway`;
-          og.style.color = '#ffb347';
+          og.style.color = 'var(--model-offline-text)';
           for (const m of CYBER_MODELS) {
             const o = document.createElement('option');
             o.value = m;
             o.textContent = `[${CYBER_TAG}] ${m.replace(/^cyber\//, '')}`;
-            o.style.color = '#ffb347';
+            o.style.color = 'var(--model-offline-text)';
             og.appendChild(o);
           }
           sel.appendChild(og);
@@ -7187,7 +7953,7 @@
         return `<div onclick="toggleGroupAgent('${hubEsc(a.name)}', '${hubEsc(a.model || '')}', event)"
                      class="tt-pick${selected ? ' tt-picked' : ''}"
                      style="display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px; padding:10px 6px; border-radius:8px; cursor:pointer; 
-                            background:${selected ? 'var(--purple)' : 'var(--bg-card)'}; color:${selected ? 'white' : 'var(--text)'}; 
+                            background:${selected ? 'var(--purple)' : 'var(--bg-card)'}; color:${selected ? 'var(--on-color-text)' : 'var(--text)'}; 
                             border:1px solid ${selected ? 'var(--purple)' : 'var(--border)'}; transition:all 0.15s ease;">
           <span style="font-size:22px;">${icon}</span>
           <span style="font-size:12px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:100%; text-align:center;">${display}</span>
@@ -7974,6 +8740,33 @@
     // ── The busy card: ONE line at the bottom of the main view while the agent works on a hub-started turn ──
     const busyRun = {};   // agent -> { turnId, origin, since, own }: the agent's running turn as turn_start announced it
     let busyCardTimer = null;
+    // agent -> its running tool calls (chatViewSteps*, from turn_activity, every agent): parallel calls and overlapping turns each keep a step.
+    const agentSteps = {};
+    const turnStepLast = {};   // agent -> { at, timer }: repaint throttle (at most once per 500 ms, trailing call)
+    function turnStepRepaintNow(agent) {
+      try { paintAgentStatus(agent); } catch {}
+      try { const c = findSoloChat(agent); if (c) busyCardRefresh(c); } catch {}
+    }
+    function turnStepRepaint(agent) {
+      if (!agent) return;
+      const t = turnStepLast[agent] || (turnStepLast[agent] = { at: 0, timer: null });
+      if (t.timer) return;   // a trailing repaint is already queued
+      const wait = 500 - (Date.now() - t.at);
+      if (wait <= 0) { t.at = Date.now(); turnStepRepaintNow(agent); return; }
+      t.timer = setTimeout(() => { t.timer = null; t.at = Date.now(); turnStepRepaintNow(agent); }, wait);
+    }
+    // What the agent is doing NOW: words (the turn), detail (what it waits on, else its current step), question.
+    function agentDoingNow(name) {
+      const st = agentStatus[name] || {};
+      const question = !!st.pendingQuestion;
+      const run = st.busy ? busyRun[name] : null;
+      let words;
+      if (question) words = 'Waiting for your answer';
+      else if (!run && localBusy.has(name)) words = 'Replying to your message';
+      else words = chatViewBusyText(run ? run.origin : null, st.activity, agentDisplayName);
+      const detail = question ? '' : (chatViewWaiting(name, agentStatus, Date.now(), agentDisplayName) || chatViewStep(chatViewStepsNewest(agentSteps[name])));
+      return { words, detail, question };
+    }
     function busyCardState(chat) {
       if (!chat || chat.isGroup || chat.isWorker || chat.isHistory || !chat.agent) return null;
       if (chatViewGet(localStorage) !== 'main') return null;
@@ -7981,28 +8774,98 @@
       let run = busyRun[chat.agent];
       const stNow = agentStatus[chat.agent];
       if (run && !(stNow && stNow.busy)) { delete busyRun[chat.agent]; run = null; }   // a turn_end was missed: the card must not stay
-      if (run) return run.own ? null : { text: chatViewBusyText(run.origin, null), since: run.since };
+      if (run) { if (run.own) return null; const d = agentDoingNow(chat.agent); return { text: chatViewBusyText(run.origin, null, agentDisplayName), detail: d.detail, since: run.since }; }
       const st = agentStatus[chat.agent];   // the page opened mid-turn: the status feed's words
       if (!st || !st.busy || st.pendingQuestion || localBusy.has(chat.agent)) return null;
       if (st.activity === 'replying to you') return null;
-      return { text: chatViewBusyText(null, st.activity), since: Date.parse(st.busySince) || Date.now() };
+      busyOriginFetch(chat.agent);   // who called is not in the feed: ask the hub once
+      return { text: chatViewBusyText(null, st.activity, agentDisplayName), detail: agentDoingNow(chat.agent).detail, since: Date.parse(st.busySince) || Date.now() };
+    }
+    // The page opened mid-turn: no turn_start was seen, so busyRun is empty. Ask the hub once per turn who started it.
+    const busyOriginMemo = new Set();     // `${agent}|${busySince}` already asked
+    const busyOriginFlight = new Set();   // agents with a request in flight
+    function busyOriginFetch(agent) {
+      const st = agentStatus[agent];
+      if (!agent || !st || !st.busy || busyRun[agent]) return;
+      const key = `${agent}|${st.busySince}`;
+      if (busyOriginMemo.has(key) || busyOriginFlight.has(agent)) return;
+      busyOriginMemo.add(key); busyOriginFlight.add(agent);
+      const since0 = st.busySince;   // the turn this request is about
+      (async () => {
+        try {
+          const r = await fetch(`/api/agents/${encodeURIComponent(agent)}/turn`, { credentials: 'include', signal: AbortSignal.timeout(8000) });
+          const d = r && r.ok ? await r.json() : null;
+          const t = d && d.active && d.turn;
+          const now = agentStatus[agent];
+          if (!t || !now || !now.busy || now.busySince !== since0) return;   // the turn ended or a new one began while asking
+          if (Array.isArray(t.activity) && chatViewStepsSnapshot(agentSteps[agent] ||= chatViewStepsNew(), t.turnId, t.activity)) turnStepRepaint(agent);
+          if (!t.origin || typeof t.origin !== 'object' || busyRun[agent]) return;
+          busyRun[agent] = { turnId: t.turnId, origin: t.origin, since: Date.parse(t.startedAt) || Date.now(), own: !chatViewIsHubOrigin(t.origin) };
+          const solo = findSoloChat(agent);
+          if (solo) busyCardRefresh(solo);
+        } catch { /* the status words still show */ } finally { busyOriginFlight.delete(agent); }
+      })();
+    }
+    // The status line under the tabs follows the hub's feed while this window is not streaming the turn itself.
+    function headerBusyPaint(chat) {
+      if (!chat || chat.isGroup || chat.isWorker || chat.isHistory || !chat.agent) return false;
+      if (chat.controller || chat.reattach || chat.status === 'thinking' || chat.status === 'paused') return false;
+      const id = chat.chatId || chat.id;
+      const dot = document.getElementById(`status-dot-${id}`);
+      const textEl = document.getElementById(`status-text-${id}`);
+      const tab = document.querySelector(`#tab-${id} .status`);
+      const st = agentStatus[chat.agent];
+      const working = !!(st && (st.busy || st.pendingQuestion));
+      if (!working) {
+        if (textEl && textEl.dataset && textEl.dataset.hubBusy === '1') {
+          if (dot) dot.className = `status-dot ${chat.status || 'idle'}`;
+          textEl.textContent = typeof textEl.dataset.hubPrev === 'string' ? textEl.dataset.hubPrev : chat.status === 'error' ? 'Error' : chat.status === 'paused' ? 'Paused' : 'Idle';
+          if (tab) tab.className = `status ${chat.status || 'idle'}`;
+          delete textEl.dataset.hubBusy; delete textEl.dataset.hubPrev;
+        }
+        return false;
+      }
+      let since;
+      if (st.pendingQuestion) {
+        since = Date.parse(st.busySince) || Date.now();
+      } else {
+        let run = busyRun[chat.agent];
+        if (run && !st.busy) { delete busyRun[chat.agent]; run = null; }
+        if (!run) busyOriginFetch(chat.agent);
+        since = (run && run.since) || Date.parse(st.busySince) || Date.now();
+      }
+      const { words, detail } = agentDoingNow(chat.agent);
+      if (!textEl) return false;
+      if (!st.pendingQuestion) {   // this window's own reply has just ended: the status feed lags it, so the person's own turn is not painted as work yet
+        const run = busyRun[chat.agent];
+        if ((run ? run.own : st.activity === 'replying to you') && chat.ownEndedAt && Date.now() - chat.ownEndedAt < 4000) return true;
+      }
+      if (dot) dot.className = 'status-dot thinking';
+      if (textEl.dataset.hubBusy !== '1') textEl.dataset.hubPrev = textEl.textContent;   // what the line said before the hub's turn took it
+      textEl.textContent = `${words} · ${chatViewElapsed(since, Date.now())}${detail ? ' · ' + detail : ''}`;
+      textEl.dataset.hubBusy = '1';
+      if (tab) tab.className = 'status thinking';
+      return true;
     }
     // Show, update or remove the chat's busy card; it is always the last element of the messages list.
     function busyCardRefresh(chat) {
       if (!chat) return false;
+      let header = false;
+      try { header = headerBusyPaint(chat); } catch {}
+      const keep = (v) => { if (v && !busyCardTimer) busyCardTimer = setInterval(busyCardRefreshAll, 5000); return v; };   // the elapsed time moves while shown
+      keep(header);
       const panel = document.getElementById(`messages-${chat.id}`);
-      if (!panel) return false;
+      if (!panel) return header;
       let el = panel.querySelector(':scope > .chat-busy-card');
       const st = busyCardState(chat);
-      if (!st) { if (el) el.remove(); return false; }
-      const text = `⏳ ${st.text} · ${chatViewElapsed(st.since, Date.now())}`;
+      if (!st) { if (el) el.remove(); return header; }
+      const text = `⏳ ${st.text} · ${chatViewElapsed(st.since, Date.now())}${st.detail ? ' · ' + st.detail : ''}`;
       const fresh = !el;
       if (!el) { el = document.createElement('div'); el.className = 'chat-busy-card'; el.setAttribute('role', 'status'); }
       if (el.textContent !== text) el.textContent = text;
       if (panel.lastElementChild !== el) panel.appendChild(el);
       if (fresh) autoScroll(panel);
-      if (!busyCardTimer) busyCardTimer = setInterval(busyCardRefreshAll, 5000);   // the elapsed time moves while shown
-      return true;
+      return keep(true);
     }
     function busyCardRefreshAll() {
       let any = false;
@@ -8251,10 +9114,24 @@
       if (!next.busy) { next.busySince = null; next.activity = null; next.pendingQuestion = false; next.consultedBy = null; }
       else if (!next.busySince) next.busySince = cur.busySince || new Date().toISOString();
       agentStatus[name] = next;
+      if (!next.busy) { delete agentSteps[name]; delete busyRun[name]; }   // idle: no step or turn origin survives into the next turn (a turn_end may have been missed)
       if (!next.busy && typeof voiceCallHubIdle === 'function') { try { voiceCallHubIdle(name); } catch { /* the call carries on */ } }   // a call waiting for a hub-started turn learns it is over
       paintAgentStatus(name);
       paintAgentsWorking();
       { const c = findSoloChat(name); if (c) busyCardRefresh(c); }   // the busy card follows the status feed
+      repaintWaiters(name, cur, next);   // a helper or a consulted agent changed: the agent waiting on it says so now
+    }
+    // A temporary worker the full feed no longer lists: forget it, and the agent that waited on it says so now.
+    function dropGoneWorker(name) { const gone = agentStatus[name]; delete agentStatus[name]; repaintWaiters(name, gone); }
+    // The agents waiting on <name> (its parent when it is a helper, the agent that consulted it), from each status record given.
+    function repaintWaiters(name, ...recs) {
+      const who = new Set();
+      for (const r of recs) if (r) { if (r.worker && r.parent) who.add(r.parent); if (r.consultedBy) who.add(r.consultedBy); }
+      for (const w of who) {
+        if (!w || w === name) continue;
+        try { paintAgentStatus(w); } catch {}
+        try { const c = findSoloChat(w); if (c) busyCardRefresh(c); } catch {}
+      }
     }
 
     // keepMissing (the /api/agents list, which has no worker fields): a key the entry lacks is left as it is. A full feed
@@ -8274,7 +9151,7 @@
       for (const name of Object.keys(agentStatus)) {
         if (name in map) continue;
         if (!busyIsWorker(name, agentStatus[name])) setAgentLive(name, { busy: false });
-        else if (!namedOnly) delete agentStatus[name];   // a worker that is gone
+        else if (!namedOnly) dropGoneWorker(name);   // a worker that is gone
       }
       paintAllAgentStatus();
       // A window opened mid-turn has no stream to it: attach and show the reply when it lands.
@@ -8367,8 +9244,8 @@
       if (!bar) {
         bar = document.createElement('div');
         bar.id = 'hub-halt-banner';
-        bar.style.cssText = 'position:fixed;top:0;left:0;right:0;box-sizing:border-box;z-index:10000;background:#b71c1c;color:#fff;padding:8px 14px;display:flex;align-items:center;gap:12px;font-weight:600';
-        bar.innerHTML = '<span id="hub-halt-text"></span><button id="hub-halt-resume" style="margin-left:auto;padding:4px 12px;border:1px solid #fff;background:transparent;color:#fff;border-radius:4px;cursor:pointer">Resume</button>';
+        bar.style.cssText = 'position:fixed;top:0;left:0;right:0;box-sizing:border-box;z-index:10000;background:var(--halt-banner-bg);color:var(--on-color-text);padding:8px 14px;display:flex;align-items:center;gap:12px;font-weight:600';
+        bar.innerHTML = '<span id="hub-halt-text"></span><button id="hub-halt-resume" style="margin-left:auto;padding:4px 12px;border:1px solid var(--on-color-text);background:transparent;color:var(--on-color-text);border-radius:4px;cursor:pointer">Resume</button>';
         document.body.insertBefore(bar, document.body.firstChild);
         bar.querySelector('#hub-halt-resume').onclick = resumeHub;
         if (!isHubAdmin()) bar.querySelector('#hub-halt-resume').style.display = 'none';
@@ -8456,7 +9333,7 @@
         bar = document.createElement('div');
         bar.id = 'hub-pacing-banner';
         // Fixed, not sticky: the body is a flex row, so a sticky block inserted into it rendered as a tall column on the left.
-        bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;background:#b26a00;color:#fff;padding:6px 14px;display:flex;flex-direction:column;gap:4px;font-weight:600;box-sizing:border-box';
+        bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;background:var(--banner-pending-bg);color:var(--on-color-text);padding:6px 14px;display:flex;flex-direction:column;gap:4px;font-weight:600;box-sizing:border-box';
       }
       // Directly under the red halt banner when there is one, else at the very top.
       const halt = document.getElementById('hub-halt-banner');
@@ -8480,7 +9357,7 @@
           text.style.cssText = 'white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
           const btn = document.createElement('button');
           btn.title = 'Owner override: restore full parallel now';
-          btn.style.cssText = 'margin-left:auto;padding:4px 12px;border:1px solid #fff;background:transparent;color:#fff;border-radius:4px;cursor:pointer;white-space:nowrap';
+          btn.style.cssText = 'margin-left:auto;padding:4px 12px;border:1px solid var(--on-color-text);background:transparent;color:var(--on-color-text);border-radius:4px;cursor:pointer;white-space:nowrap';
           if (!isHubAdmin()) btn.style.display = 'none';
           row.append(text, btn);
           bar.appendChild(row);
@@ -8502,7 +9379,7 @@
       if (!pacing.size) { box.textContent = 'All providers at full parallel.'; return; }
       for (const [provider, e] of pacing) {
         const row = document.createElement('div');
-        row.style.cssText = 'display:flex;align-items:center;gap:8px;color:#f5a623';
+        row.style.cssText = 'display:flex;align-items:center;gap:8px;color:var(--warning)';
         const text = document.createElement('span');
         text.textContent = pacingLine(e).replace(/^⚠ Pacing: /, '');
         const btn = document.createElement('button');
@@ -8523,6 +9400,12 @@
       } catch (e) { alert(`Could not resume full speed: ${e.message}`); }
     }
 
+    let agentRowTicker = null;
+    function agentRowTick() {
+      const names = busyAgentNames();
+      for (const n of names) { try { paintAgentStatus(n); } catch {} }
+      if (!names.length && agentRowTicker) { clearInterval(agentRowTicker); agentRowTicker = null; }
+    }
     function paintAgentStatus(name) {
       const dot = document.getElementById(`agent-status-${name}`);
       const btn = document.getElementById(`agent-btn-${name}`);
@@ -8561,6 +9444,16 @@
         if (!line) { line = document.createElement('span'); line.className = 'agent-busy-line'; btn.querySelector('.agent-info')?.appendChild(line); }
         line.classList.toggle('question', question);
         line.textContent = question ? `❓ waiting for your answer${elapsedShort ? ` · ${elapsedShort}` : ''}` : `⏳ ${activity}${elapsedShort ? ` · ${elapsedShort}` : ''}`;
+        // A named agent (not a temporary worker) says what it does NOW: the turn, how long, what it waits on or its step.
+        if (!question && !(s && s.worker)) {
+          if (s && s.busy && !busyRun[name] && !mine) busyOriginFetch(name);   // once per turn: who started it (a page opened mid-turn)
+          const d = agentDoingNow(name);
+          const det = d.detail ? ` · ${d.detail}` : '';
+          line.textContent = `⏳ ${d.words}${elapsedShort ? ` · ${elapsedShort}` : ''}${det}`;
+          line.title = `${d.words}${elapsed ? ` · ${elapsed}` : ''}${det}`;
+          dot.title = line.title;
+        } else line.removeAttribute('title');
+        if (!agentRowTicker) agentRowTicker = setInterval(agentRowTick, 15000);   // elapsed and detail keep moving
       } else if (line) {
         line.remove();
       }
@@ -8660,14 +9553,28 @@
       const k = origin && typeof origin === 'object' ? origin.kind : '';
       return !!k && typeof k === 'string' && k !== 'user' && k !== 'comms';
     }
-    function chatViewBusyText(origin, activity) {
+    function chatViewBusyText(origin, activity, nameOf) {
       const o = origin && typeof origin === 'object' ? origin : null;
       const cap = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
+      const who = (n) => {   // the agent's display name when the page knows it, else the name with a capital
+        if (!n) return n;
+        try { const d = typeof nameOf === 'function' ? nameOf(String(n)) : ''; if (d && typeof d === 'string') return d; } catch (e) { /* the plain name */ }
+        return cap(String(n));
+      };
       if (o && o.kind) {
         switch (o.kind) {
-          case 'consultation': return `Answering a consultation from ${cap(o.from) || 'another agent'}`;
+          case 'user': case 'comms': return 'Replying to your message';
+          case 'consultation': return `Answering a consultation from ${who(o.from) || 'another agent'}`;
           case 'schedule': { const l = o.label || o.from; return l ? `Working on a scheduled task: ${l}` : 'Working on a scheduled task'; }
           case 'job_notice': return o.jobName ? `Reading a job result: ${o.jobName}` : 'Reading a job result';
+          case 'hand_off': {
+            // The target's turn is labelled "Hand-off from <caller>: <topic>"; the caller's report turn "Hand-off <state>: <topic>".
+            const l = typeof o.label === 'string' ? o.label : '';
+            if (/^Hand-off from /.test(l) || (!l && o.from)) return o.from ? `Working on a hand-off from ${who(o.from)}` : 'Working on a hand-off';
+            if (/^Hand-off \S+:/.test(l)) return o.from ? `Reading a hand-off report from ${who(o.from)}` : 'Reading a hand-off report';
+            return 'Working on a hand-off';
+          }
+          case 'hand_off_report': return o.from ? `Reading a hand-off report from ${who(o.from)}` : 'Reading a hand-off report';
           case 'job_report': return o.jobName ? `Reading a job report: ${o.jobName}` : 'Reading a job report';
           case 'consult_reply': return 'Reading consultation replies';
           case 'alert': return 'Handling a monitor alert';
@@ -8677,13 +9584,114 @@
       }
       const a = typeof activity === 'string' ? activity.trim() : '';
       let m = /^consulted by (.+)$/i.exec(a);
-      if (m) return `Answering a consultation from ${cap(m[1])}`;
+      if (m) return `Answering a consultation from ${who(m[1])}`;
       m = /^scheduled task(?::\s*(.+))?$/i.exec(a);
       if (m) return m[1] ? `Working on a scheduled task: ${m[1]}` : 'Working on a scheduled task';
       if (/^job finished/i.test(a)) return 'Reading a job result';
       if (/^job report/i.test(a)) return 'Reading a job report';
+      if (/^hand-off finished/i.test(a)) return 'Reading a hand-off report';
+      if (/^hand-off$/i.test(a)) return 'Working on a hand-off';
+      if (/^replying to you$/i.test(a)) return 'Replying to your message';
       if (/^alert$/i.test(a)) return 'Handling a monitor alert';
       return 'Working on a hub task';
+    }
+    // What a working agent waits on: its own helpers (temporary workers whose parent is it) and agents it consulted, from the
+    // status feed { <name>: { busy, busySince, worker, parent, label, consultedBy } }. '' when it waits on nobody.
+    function chatViewWaiting(agent, statuses, nowMs, nameOf) {
+      const all = statuses && typeof statuses === 'object' ? statuses : {};
+      const cap = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
+      const who = (n) => { try { const d = typeof nameOf === 'function' ? nameOf(String(n)) : ''; if (d && typeof d === 'string') return d; } catch (e) { /* plain */ } return cap(String(n)); };
+      const since = (s) => Date.parse(s && s.busySince) || 0;
+      const age = (s) => (since(s) ? chatViewElapsed(since(s), nowMs) : '');
+      const helpers = [], asked = [];
+      for (const [name, s] of Object.entries(all)) {
+        if (!s || !s.busy || name === agent) continue;
+        if (s.worker && s.parent === agent) helpers.push(s);
+        else if (!s.worker && s.consultedBy === agent) asked.push(Object.assign({ name }, s));
+      }
+      helpers.sort((a, b) => since(a) - since(b)); asked.sort((a, b) => since(a) - since(b));
+      const parts = [];
+      if (helpers.length === 1) { const h = helpers[0], t = age(h); parts.push(`waiting on 1 helper (${h.label || 'unnamed'}${t ? ', ' + t : ''})`); }
+      else if (helpers.length > 1) {
+        const names = helpers.slice(0, 2).map(h => h.label || 'unnamed').join(', ') + (helpers.length > 2 ? ', ...' : '');
+        const t = age(helpers[0]);
+        parts.push(`waiting on ${helpers.length} helpers (${names}${t ? '; the first for ' + t : ''})`);
+      }
+      if (asked.length === 1) { const t = age(asked[0]); parts.push(`waiting on ${who(asked[0].name)}${t ? ' (' + t + ')' : ''}`); }
+      else if (asked.length > 1) parts.push(`waiting on ${asked.length} agents (${asked.slice(0, 2).map(a => who(a.name)).join(', ')}${asked.length > 2 ? ', ...' : ''})`);
+      return parts.join(', ');
+    }
+    // A running tool step in plain words, from a turn_activity item { kind: 'tool', tool, summary, status }. '' for anything else.
+    function chatViewStep(item) {
+      if (!item || item.kind !== 'tool' || item.status !== 'running') return '';
+      const raw = String(item.tool || '');
+      const name = raw.replace(/^mcp__[^_]+(?:_[^_]+)*?__/, '');
+      const words = {
+        spawn_workers: 'starting helpers', consult_agent: 'asking another agent', run_job: 'starting a background job',
+        hand_off: 'handing off work', ask_user: 'waiting for your answer', Bash: 'running a command', Read: 'reading a file',
+        Write: 'writing a file', Edit: 'editing a file', Grep: 'searching files', Glob: 'searching files',
+        WebSearch: 'searching the web', WebFetch: 'reading a web page', schedule_task: 'scheduling a task',
+      }[name] || `using ${name || 'a tool'}`;
+      const sum = typeof item.summary === 'string' ? item.summary.replace(/\s+/g, ' ').trim() : '';
+      return sum && !/^(spawn_workers|ask_user)$/.test(name) ? `${words}: ${sum.length > 60 ? sum.slice(0, 59) + '...' : sum}` : words;
+    }
+    // The running tool calls of one agent, so parallel calls and overlapping turns keep the right step:
+    // { calls: [{ key, turnId, item }] (oldest first), done: [keys] (recently finished; a late snapshot never brings one back) }.
+    function chatViewStepsNew() { return { calls: [], done: [] }; }
+    function chatViewStepKey(turnId, item) { return `${turnId || ''}|${item && item.callId != null ? item.callId : ''}`; }
+    function chatViewStepsOn(st, turnId, item) {
+      if (!st || !item || item.kind !== 'tool') return false;
+      const key = chatViewStepKey(turnId, item);
+      if (item.status === 'running') {
+        if (item.callId != null && st.done.includes(key)) return false;
+        st.calls = st.calls.filter(c => c.key !== key);   // the same call again (a call without an id: the turn's id-less call is replaced)
+        st.calls.push({ key, turnId: turnId || '', item });
+        return true;
+      }
+      if (item.status !== 'done') return false;
+      if (item.callId != null) { st.done.push(key); if (st.done.length > 50) st.done.splice(0, st.done.length - 50); }
+      let i = -1;
+      for (let k = st.calls.length - 1; k >= 0 && i < 0; k--) if (st.calls[k].key === key) i = k;
+      if (i < 0 && item.callId == null) for (let k = st.calls.length - 1; k >= 0 && i < 0; k--) if (st.calls[k].turnId === (turnId || '')) i = k;
+      if (i < 0) return false;
+      st.calls.splice(i, 1);
+      return true;
+    }
+    function chatViewStepsEndTurn(st, turnId) {
+      if (!st) return false;
+      const before = st.calls.length;
+      st.calls = turnId ? st.calls.filter(c => c.turnId !== turnId) : [];
+      return st.calls.length !== before;
+    }
+    // A fetched turn (GET /api/agents/<name>/turn: { turnId, activity }): its still-running calls join the list unless already
+    // known or seen finishing; its finished calls count as done.
+    function chatViewStepsSnapshot(st, turnId, activity) {
+      if (!st || !Array.isArray(activity)) return false;
+      let changed = false;
+      for (const it of activity) {
+        if (it && it.kind === 'tool' && it.status === 'done' && it.callId != null) {
+          const key = chatViewStepKey(turnId, it);
+          if (!st.done.includes(key)) st.done.push(key);
+          const n = st.calls.length; st.calls = st.calls.filter(c => c.key !== key); if (st.calls.length !== n) changed = true;
+        }
+      }
+      if (st.done.length > 50) st.done.splice(0, st.done.length - 50);
+      // Calls only the snapshot knows started before anything this page saw live since it asked: they go first, in their order.
+      const add = [];
+      activity.forEach((it, i) => {
+        if (!it || it.kind !== 'tool' || it.status !== 'running') return;
+        const closed = activity.slice(i + 1).some(d => d && d.kind === 'tool' && d.status === 'done' && (it.callId == null ? d.callId == null : d.callId === it.callId));
+        const key = chatViewStepKey(turnId, it);
+        if (closed || (it.callId != null && st.done.includes(key)) || st.calls.some(c => c.key === key) || add.some(c => c.key === key)) return;
+        add.push({ key, turnId: turnId || '', item: it });
+      });
+      if (add.length) { st.calls = add.concat(st.calls); changed = true; }
+      return changed;
+    }
+    function chatViewStepsNewest(st) { return st && st.calls.length ? st.calls[st.calls.length - 1].item : null; }
+    // The full line: what the turn is, then what it waits on or (when it waits on nobody) its current step.
+    function chatViewNow(words, waiting, step) {
+      return [words, waiting || step].filter(Boolean).join(' \u00b7 ');
     }
     function chatViewElapsed(sinceMs, nowMs) {
       const s = Math.max(0, Math.floor(((Number(nowMs) || 0) - (Number(sinceMs) || 0)) / 1000));
@@ -8728,6 +9736,8 @@
         else if (o.kind === 'job_report') label = `Job report${o.jobName ? ': ' + o.jobName : ''}`;
         else if (o.kind === 'task') label = o.label === 'context compression' ? 'Resumed after compression' : `Hub task${o.label ? ': ' + o.label : ''}`;
         else if (o.kind === 'consult_reply') label = 'Consultation replies delivered';
+        else if (o.kind === 'hand_off') label = o.label || `Hand-off from ${from || 'another agent'}`;
+        else if (o.kind === 'hand_off_report') label = o.label || 'Hand-off finished';
         else if (o.kind === 'alert') label = 'Monitor alert';
         else label = 'Hub turn';
         return { kind, from, label };
@@ -8953,10 +9963,12 @@
         case 'consultation': return `consulted by ${origin.from || 'another agent'}`;
         case 'job_notice': return `your job finished${origin.jobName ? `: ${origin.jobName}` : ''}`;
         case 'job_report': return `job report from ${origin.from || 'a worker'}${origin.jobName ? ` (${origin.jobName})` : ''}`;
-        case 'schedule': return origin.by ? `scheduled task set by ${origin.by === 'owner' ? 'you' : origin.by}${origin.from ? `: ${origin.from}` : ''}` : `scheduled task${origin.from ? `: ${origin.from}` : ''}`;
+        case 'schedule': return origin.by ? `scheduled task set by ${origin.by === '@owner' ? 'you' : origin.by}${origin.from ? `: ${origin.from}` : ''}` : `scheduled task${origin.from ? `: ${origin.from}` : ''}`;
         case 'task': return origin.from && origin.from !== 'hub' ? `queued task from ${origin.from}` : origin.label ? `hub: ${origin.label}` : 'hub turn';
         case 'alert': return `alert from ${origin.from || 'a monitor'}`;
         case 'consult_reply': return 'queued consultation reply delivered';
+        case 'hand_off': return `hand-off from ${origin.from || 'another agent'}`;
+        case 'hand_off_report': return `hand-off finished: ${origin.from || 'another agent'}`;
         case 'comms': return 'message from a messaging channel';
         default: return 'hub turn';
       }
@@ -9332,7 +10344,7 @@
         if (typeof turn.text === 'string' && turn.text.length >= (ra.partial || '').length) ra.partial = turn.text;
         if (turn.ended) {
           const ok = turn.ended.ok !== false;
-          finishReattach(chatId, ok ? (turn.text || '(no reply)') : `${turn.text ? turn.text + '\n\n' : ''}⚠ turn failed: ${turn.ended.error || 'unknown error'}`, ok);
+          finishReattach(chatId, ok ? (turn.text || '(no reply)') : withNotice(turn.text, `⚠ turn failed: ${turn.ended.error || 'unknown error'}`), ok);
           return;
         }
         paintReattach(chatId, reattachLine(chat, ra));
@@ -9428,13 +10440,14 @@
     }
 
     function onHubTurnEnd(ev) {
-      if (!activeTurnEnd(openTurns, ev.agent, ev.turnId)) setAgentLive(ev.agent, { busy: false });   // busy while another turn is open
+      const endedRun = busyRun[ev.agent];
+      if (!activeTurnEnd(openTurns, ev.agent, ev.turnId)) setAgentLive(ev.agent, { busy: false });
       if (ev.agent && notifyArmed[ev.agent]) { notifyArmed[ev.agent] = null; paintNotifyBtns(ev.agent); }
       { const c = findSoloChat(ev.agent); if (c) { c.inProgress = null; setTimeout(() => compactionRefresh(c.id), 3500); } }   // context % moved (the hub records it 2.5 s after the turn)
       { const c = findSoloChat(ev.agent); if (c && typeof simpleThinkClear === 'function') simpleThinkClear(c.id); }   // Simple: the Thinking box ends with the turn
-      const endedRun = busyRun[ev.agent];   // read before it is dropped: says whether the turn was hub-started
       if (busyRun[ev.agent] && (!ev.turnId || busyRun[ev.agent].turnId === ev.turnId)) delete busyRun[ev.agent];
       { const c = findSoloChat(ev.agent); if (c) busyCardRefresh(c); }   // the busy card goes with the turn
+      if (ev.agent && chatViewStepsEndTurn(agentSteps[ev.agent], ev.turnId)) turnStepRepaintNow(ev.agent);   // only the ended turn's steps go with it
       if (ev.agent) scheduleWorkerStatusPoll();   // re-read the status once: a reply can run without a turn of its own
       const t = hubTurns[ev.turnId]; delete hubTurns[ev.turnId];
       if (!t) {
@@ -9445,7 +10458,7 @@
         if (hubStarted && chat && chatViewGet(localStorage) === 'main' && !chat.controller && !chat.reattach) soloHistoryRefresh(chat.id);   // a marked reply shows; nothing else moves
         if (chat?.reattach) {
           if (ev.reply) finishReattach(chat.id, ev.reply, true);
-          else if (ev.ok === false) finishReattach(chat.id, `${chat.reattach.partial ? chat.reattach.partial + '\n\n' : ''}⚠ turn failed: ${ev.error || 'unknown error'}`, false);
+          else if (ev.ok === false) finishReattach(chat.id, withNotice(chat.reattach.partial, `⚠ turn failed: ${ev.error || 'unknown error'}`), false);
           else reattachCheck(chat.id);
         }
         return;
@@ -9569,7 +10582,7 @@
       source.addEventListener('provider_recovered', e => { const ev = parse(e); if (ev && ev.provider) clearPacing(ev.provider); });
       source.addEventListener('turn_start', e => { const ev = parse(e); if (ev) onHubTurnStart(ev).catch(err => console.error('[hub-events]', err)); });
       source.addEventListener('turn_delta', e => { const ev = parse(e); if (ev) onHubTurnDelta(ev); });
-      source.addEventListener('turn_activity', e => { const ev = parse(e); if (ev) { onHubTurnActivity(ev); if (ev.item && ev.item.kind === 'worker') scheduleWorkerStatusPoll(); } });
+      source.addEventListener('turn_activity', e => { const ev = parse(e); if (ev) { try { if (ev.agent && chatViewStepsOn(agentSteps[ev.agent] ||= chatViewStepsNew(), ev.turnId, ev.item)) turnStepRepaint(ev.agent); } catch {} onHubTurnActivity(ev); if (ev.item && ev.item.kind === 'worker') scheduleWorkerStatusPoll(); } });
       source.addEventListener('turn_reasoning', e => { const ev = parse(e); if (ev) onHubTurnReasoning(ev); });
       source.addEventListener('turn_progress', e => { const ev = parse(e); if (ev) onHubTurnProgress(ev); });
       source.addEventListener('turn_worker_delta', e => { const ev = parse(e); if (ev) onHubTurnWorkerDelta(ev); });
@@ -9609,7 +10622,9 @@
       // badge next to each Claude agent's model, the sidebar chip, and the Settings box.
       source.addEventListener('plan_limit', e => { const ev = parse(e); if (!ev) return; refreshPlanChip(); if (document.getElementById('st-plan-section')) loadPlanBox(); });
       source.addEventListener('plan_extra_usage', e => { const ev = parse(e); if (!ev) return; refreshPlanChip(); if (document.getElementById('st-plan-section')) loadPlanBox(); });
-      source.addEventListener('plan_warning', e => { const ev = parse(e); if (!ev) return; refreshPlanChip(); if (document.getElementById('st-plan-section')) loadPlanBox(); });
+      source.addEventListener('plan_warning', e => { const ev = parse(e); if (!ev) return; refreshPlanChip(); subsPlanWarning(ev); if (document.getElementById('st-plan-section')) loadPlanBox(); });
+      // The ChatGPT plan's usage (lib/codex-usage): the payload is the snapshot; the badges, the chip and the Subscriptions box repaint.
+      source.addEventListener('codex_usage', e => { const ev = parse(e); if (!ev || (window.hubMe && !window.hubMe.isAdmin)) return; codexLast = ev; paintPlanChip(); paintPlanBadges(); paintSubsBox(); });
       // Data connectors: a connector or group changed (saved, locked, unlocked, expired); repaint the Settings box.
       source.addEventListener('connectors_changed', e => { const ev = parse(e); if (ev) onConnectorsChanged(ev); });
       // (Re)connected: what happened to followed turns meanwhile comes from the hub's turn view.
@@ -9673,10 +10688,12 @@
       hubToast(busy ? `Re-synced with the hub, following ${chat.display || chat.agent}'s turn` : 'Re-synced with the hub');
     }
 
-    function hubToast(text, ms = 3000) {
+    function hubToast(text, ms = 3000, onTap = null) {
       let t = document.getElementById('hub-toast');
       if (!t) { t = document.createElement('div'); t.id = 'hub-toast'; document.body.appendChild(t); }
       t.textContent = text;
+      t.onclick = onTap ? () => { t.classList.remove('on'); onTap(); } : null;   // a notice that leads somewhere
+      t.style.cursor = onTap ? 'pointer' : '';
       t.classList.add('on');
       clearTimeout(hubToast.timer);
       hubToast.timer = setTimeout(() => t.classList.remove('on'), ms);
@@ -9821,13 +10838,14 @@
         </div>
         <div class="compaction-line" id="compaction-line-${chatId}" style="display:none" title="Context compression: the agent writes its own working brief (see the agent's settings page)"></div>
         <div class="messages" id="messages-${chatId}"></div>
+        <div class="handoff-cards" id="handoff-cards-${chatId}" hidden></div>
         <div class="input-area">
           <div class="input-wrapper">
             <div class="image-preview-area" id="image-preview-${chatId}"></div>
             <textarea id="input-${chatId}" placeholder="Type your message... (Ctrl+V to paste images)" onkeydown="handleKeyDown(event, '${chatId}')" onpaste="handlePaste(event, '${chatId}')" oninput="autoGrowTextarea(this)"></textarea>
           </div>
           <input type="file" id="file-input-${chatId}" multiple style="display:none" onchange="handleFileSelect(event, '${chatId}')">
-          <button onclick="document.getElementById('file-input-${chatId}').click()" title="Attach a file: images are sent with the message, other files are uploaded to your files and their path is added to the message" style="background:var(--bg-input); border:1px solid var(--border); padding:8px 10px; font-size:1rem; cursor:pointer;">📎</button>
+          <button class="attach-btn" onclick="document.getElementById('file-input-${chatId}').click()" title="Attach a file: images are sent with the message, other files are uploaded to your files and their path is added to the message" style="background:var(--bg-input); border:1px solid var(--border); padding:8px 10px; font-size:1rem; cursor:pointer;">📎</button>
           <button type="button" onclick="voiceMicToggle('${chatId}')" id="mic-${chatId}" class="mic-btn" style="display:none" aria-pressed="false" aria-label="Dictate" title="Talk (tap to start, tap to stop)">${VOICE_MIC_SVG}</button><span class="mic-meter" id="mic-meter-${chatId}" style="display:none" aria-hidden="true"><i></i></span><span class="voice-extra" style="display:none"><button type="button" class="voice-mode-chip" id="vmode-${chatId}" onclick="voiceModeToggle()" title="Talk mode: tap to switch" style="display:none">${voiceModeLabel()}</button><button type="button" class="voice-set-btn" id="vset-${chatId}" onclick="voicePopToggle('${chatId}')" aria-label="Voice settings" aria-expanded="false" title="Voice settings">${VOICE_LEVELS_SVG}</button><div class="voice-pop" id="voice-pop-${chatId}" role="dialog" aria-label="Voice settings" hidden></div></span>
           <button onclick="toggleNotifyDone('${chatId}')" id="notify-${chatId}" class="notify-done-btn" style="display:none" aria-pressed="false" title="Get a notification on your phone when this reply is done">🔔 Notify me</button>
           <button onclick="sendSoloMessage('${chatId}')" id="send-${chatId}">Send</button>
@@ -9882,7 +10900,7 @@
           <button onclick="clearChat('${chatId}')">🗑️ Clear</button>
           <button onclick="saveChat('${chatId}')">💾 Save</button>
           <button onclick="cancelGroupRequest('${chatId}')" id="cancel-${chatId}" style="display:none;">⏹️ Stop</button>
-          <button onclick="resetChat('${chatId}')" style="background:var(--warning); color:black;">🔄 Reset</button>
+          <button onclick="resetChat('${chatId}')" style="background:var(--warning); color:var(--on-light-text);">🔄 Reset</button>
 
           <span class="group-name">🐯 Tiger Team</span>
         </div>
@@ -9946,6 +10964,7 @@
       document.getElementById(`panel-${chatId}`)?.classList.add('active');
       if (wasUnread) { const m = document.getElementById(`messages-${chatId}`); if (m) m.scrollTop = m.scrollHeight; }
       if (opened && !opened.isGroup && !opened.isWorker && !opened.isHistory && opened.agent && opened.viewLoaded !== undefined) soloViewReload(opened);   // the view changed while it was behind
+      if (opened && !opened.isGroup && !opened.isWorker && !opened.isHistory && opened.agent) { try { busyCardRefresh(opened); } catch {} }   // the status line and card follow the hub's feed on arrival
       activeChat = chatId;
       window.__activeChatId = chatId;
       if (document.getElementById('files-panel')) filesRefresh(); // the Files panel follows the active chat's agent
@@ -10124,8 +11143,8 @@
       if (chat.reattach) {
         const ra = chat.reattach;
         delete chat.reattach;
-        updateMessage(ra.msgId, ra.partial ? `${ra.partial}\n\n[Stopped]` : '[Stopped]');
-        if (ra.partial) chat.messages.push({ role: 'assistant', content: `${ra.partial} [Stopped]`, partial: true });
+        updateMessage(ra.msgId, withNotice(ra.partial, '[Stopped]'));
+        if (ra.partial) chat.messages.push({ role: 'assistant', content: withNotice(ra.partial, '[Stopped]', ' '), partial: true });
         delete chat.lastMsgId;
         setAgentStatus(chat.agent, '');
       }
@@ -10163,6 +11182,7 @@
     }
     
     function setStatus(chatId, status, statusText = null) {
+      if (chats[chatId].status === 'thinking' && status !== 'thinking') chats[chatId].ownEndedAt = Date.now();   // the hub's feed lags this: see headerBusyPaint
       chats[chatId].status = status;
 
       // Stop tool tracker when leaving thinking state
@@ -10181,6 +11201,7 @@
       if (statusDot) statusDot.className = `status-dot ${status}`;
       if (statusTextEl) {
         statusTextEl.textContent = statusText || (status === 'thinking' ? 'Processing...' : status === 'paused' ? 'Paused' : status === 'error' ? 'Error' : 'Idle');
+        delete statusTextEl.dataset.hubBusy; delete statusTextEl.dataset.hubPrev;   // this text is the chat's own; headerBusyPaint (below) saves it again before a hub turn covers it
       }
 
       const pauseBtn = document.getElementById(`pause-${chatId}`);
@@ -10198,7 +11219,7 @@
           sendBtn.disabled = false;
           sendBtn.textContent = '⚡ Interject';
           sendBtn.style.background = 'var(--warning)';
-          sendBtn.style.color = 'black';
+          sendBtn.style.color = 'var(--on-light-text)';
         }
         if (input) input.placeholder = 'Type to interject new info into the running agent...';
         if (typeof simpleBusyLook === 'function') simpleBusyLook(sendBtn, input, cancelBtn);   // Simple: Send, a plain placeholder, Stop
@@ -10233,6 +11254,8 @@
           input.placeholder = 'Type your message... (Ctrl+V to paste images)';
         }
       }
+      // An own stream ended while another turn of the agent still runs: the line shows that turn.
+      if (status !== 'thinking' && status !== 'paused') { try { headerBusyPaint(chats[chatId]); } catch {} }
     }
     
     // 'thinking' = this browser is streaming a reply from the agent; '' = done.  The sidebar dot
@@ -10480,6 +11503,43 @@
     // history, so the window re-attaches to that instead.
     const REATTACH_GIVE_UP_MS = 30 * 60 * 1000;   // only used when the hub cannot tell us whether the agent is busy
 
+    // ── live reply text (begin) ──
+    // The reply text a live stream has received so far, by message id (streamResponseSolo keeps it current). A dropped,
+    // stalled or cancelled stream keeps exactly this as its partial reply. Never the bubble's textContent: that also holds
+    // the reasoning and tool panels (their labels, "thinking…", the ⤢ and show buttons and the whole reasoning text),
+    // which then showed as reply text until the real reply came in.
+    const liveReplyText = new Map();
+    // Called by the stream and its error paths (plain calls: page-slice tests stub unknown functions).
+    function noteLiveReply(msgId, text) { liveReplyText.set(msgId, text); }
+    function dropLiveReply(msgId) { liveReplyText.delete(msgId); }
+    // The message's own text when no stream text is known: a copy without the panels, buttons and status lines.
+    function messageOwnText(el) {
+      if (!el) return '';
+      const scan = el.cloneNode(true);
+      scan.querySelectorAll('.reason-stream, .tool-stream, .inline-thinking, .msg-copy, .msg-speak, .msg-time, .live-activity, .token-usage, .file-cards').forEach((n) => n.remove());
+      return scan.textContent || '';
+    }
+    // A thinking block a partial reply left open (a model writing <think>… in its reply) is closed wherever the page adds a
+    // notice after it ("Connection lost…", "[Stopped]", "⚠ …"), so the collapsed thinking box does not swallow the notice
+    // (review r1, r2). The partial itself stays raw: the hub's catch-up compares its length.
+    function closeOpenThinking(text) {
+      const tags = [['<think>', '</think>'], ['<thinking>', '</thinking>'], ['<reasoning>', '</reasoning>'], ['[think]', '[/think]'], ['[thinking]', '[/thinking]']];
+      let t = String(text || '');
+      for (const [open, close] of tags) {
+        const low = t.toLowerCase();
+        if (low.lastIndexOf(open) > low.lastIndexOf(close)) t += close;
+      }
+      return t;
+    }
+    function withNotice(partial, notice, sep = '\n\n') {
+      return partial ? `${closeOpenThinking(partial)}${sep}${notice}` : notice;
+    }
+    function partialReplyText(msgId) {
+      if (liveReplyText.has(msgId)) return liveReplyText.get(msgId) || '';
+      return messageOwnText(document.getElementById(msgId));
+    }
+    // ── live reply text (end) ──
+
     function enterReattach(chatId, msgId, content, partialText, reason, since = null, sentAt = null) {
       const chat = chats[chatId];
       if (!chat) return;
@@ -10500,7 +11560,7 @@
     function paintReattach(chatId, line) {
       const ra = chats[chatId]?.reattach;
       if (!ra) return;
-      if (!ra.items || !ra.items.size) { updateMessage(ra.msgId, ra.partial ? `${ra.partial}\n\n${line}` : line); restoreLiveBars(ra.msgId); return; }
+      if (!ra.items || !ra.items.size) { updateMessage(ra.msgId, withNotice(ra.partial, line)); restoreLiveBars(ra.msgId); return; }
       const steps = turnSteps(ra, ra.partial || '');
       steps.push({ text: line, tools: [] });   // what the turn is doing now, below what it has done
       renderSteps(ra.msgId, steps, turnToolActivity(ra), [], true);
@@ -10660,14 +11720,14 @@
             // The hub never got the message: hand it back, never resend on our own.
             const input = document.getElementById(`input-${chatId}`);
             if (input && !input.value) input.value = ra.content;
-            finishReattach(chatId, `${ra.partial ? ra.partial + '\n\n' : ''}⚠ The hub has no record of this message, so it is back in the input box. If you are not sure it was lost, reload the chat before sending it again.`, false);
+            finishReattach(chatId, withNotice(ra.partial, `⚠ The hub has no record of this message, so it is back in the input box. If you are not sure it was lost, reload the chat before sending it again.`), false);
           } else {
-            finishReattach(chatId, `${ra.partial ? ra.partial + '\n\n' : ''}⚠ ${chat.display || chat.agent} stopped without a reply (the hub may have restarted).`, false);
+            finishReattach(chatId, withNotice(ra.partial, `⚠ ${chat.display || chat.agent} stopped without a reply (the hub may have restarted).`), false);
           }
           return;
         }
         if (stillBusy === null && waited > REATTACH_GIVE_UP_MS) {
-          finishReattach(chatId, `${ra.partial ? ra.partial + '\n\n' : ''}⚠ No reply arrived in 30 minutes and this hub cannot say whether ${chat.agent} is still working. Check the history or resend.`, false);
+          finishReattach(chatId, withNotice(ra.partial, `⚠ No reply arrived in 30 minutes and this hub cannot say whether ${chat.agent} is still working. Check the history or resend.`), false);
           return;
         }
         paintReattach(chatId, stillBusy === false
@@ -10928,8 +11988,8 @@
         const wasUserCancelled = !hubRecovered && (err.name === 'AbortError' || chat.status === 'idle' || !chat.controller);
         if (wasUserCancelled) {
           // Keep whatever was already streamed — don't overwrite
-          const msgEl = document.getElementById(msgId);
-          const existing = msgEl ? msgEl.textContent : '';
+          const existing = partialReplyText(msgId);   // the reply's own text, never the panels' (reasoning, tools)
+          dropLiveReply(msgId);
           const wasPaused = chat.paused;
           if (existing && existing !== '⏳ Thinking...' && existing !== '🔄 Reconnecting...') {
             const existingIdx = chat.messages.findIndex(m => m.role === 'assistant' && m.partial);
@@ -10937,7 +11997,7 @@
               chat.messages[existingIdx].content = existing;
             } else {
               const tag = wasPaused ? ' [Paused]' : ' [Cancelled]';
-              chat.messages.push({ role: 'assistant', content: existing + tag, partial: true });
+              chat.messages.push({ role: 'assistant', content: closeOpenThinking(existing) + tag, partial: true });
             }
           }
           if (!wasPaused) {
@@ -10945,9 +12005,9 @@
           }
           delete chat.lastMsgId;
         } else {
-          const msgEl = document.getElementById(msgId);
-          const existing = msgEl ? msgEl.textContent : '';
-          const partialText = existing && existing !== '⏳ Thinking...' ? existing : '';
+          const existing = partialReplyText(msgId);   // the reply's own text, never the panels' (reasoning, tools)
+          dropLiveReply(msgId);
+          const partialText = existing && existing !== '⏳ Thinking...' && existing !== '🔄 Reconnecting...' ? existing : '';
           const isConnectionLoss = hubRecovered ||
                                    err.name === 'TypeError' ||              // fetch(): network error / failed to fetch
                                    err.message.includes('network') ||
@@ -10967,7 +12027,7 @@
           // A real error from the hub (4xx, bad request, ...)
           if (partialText) {
             chat.messages.push({ role: 'assistant', content: partialText, partial: true });
-            updateMessage(msgId, `${partialText}\n\n❌ Stream interrupted: ${err.message}`);
+            updateMessage(msgId, withNotice(partialText, `❌ Stream interrupted: ${err.message}`));
           } else {
             updateMessage(msgId, `❌ Error: ${err.message}`);
           }
@@ -11615,7 +12675,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
                   if (container) {
                     const cib = container.querySelector('.context-info-box');
                     if (cib && !cib.dataset.modelAppended) {
-                      cib.innerHTML += ` · <strong style="color:#7eb8f7">${esc(modelShort)}</strong>`;
+                      cib.innerHTML += ` · <strong style="color:var(--model-accent-text)">${esc(modelShort)}</strong>`;
                       cib.dataset.modelAppended = '1';
                     }
                   }
@@ -11646,7 +12706,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
                   coordinator: oc.coordinator,
                   participants: (oc.participants || []).join(','),
                   objective: oc.objective,
-                  maxRounds: (oc.max_rounds || 5).toString(),
+                  maxRounds: (oc.max_rounds ?? 5).toString(),
                   ...(oc.context ? { context: oc.context } : {}),
                   ...(oc.challenger ? { challenger: oc.challenger } : {})
                 });
@@ -11657,13 +12717,13 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
                 if (container) {
                   const banner = document.createElement('div');
                   banner.className = 'tiger-team-launch-banner';
-                  banner.innerHTML = `<div style="background: linear-gradient(135deg, #1a1a2e, #16213e); border: 1px solid #0f3460; border-radius: 8px; padding: 12px 16px; margin: 8px 0; display: flex; align-items: center; gap: 12px; cursor: pointer;" onclick="window.open('${url}', '_blank')">
+                  banner.innerHTML = `<div style="background: linear-gradient(135deg, var(--orch-banner-bg-1), var(--orch-banner-bg-2)); border: 1px solid var(--orch-banner-border); border-radius: 8px; padding: 12px 16px; margin: 8px 0; display: flex; align-items: center; gap: 12px; cursor: pointer;" onclick="window.open('${url}', '_blank')">
                     <span style="font-size: 24px;">🐯</span>
                     <div style="flex:1">
-                      <div style="color: #e94560; font-weight: 600; font-size: 13px;">Tiger Team Launched</div>
-                      <div style="color: #aaa; font-size: 12px; margin-top: 2px;">${oc.coordinator} coordinating ${(oc.participants||[]).join(', ')}</div>
+                      <div style="color: var(--orch-banner-title); font-weight: 600; font-size: 13px;">Tiger Team Launched</div>
+                      <div style="color: var(--text-muted-alt); font-size: 12px; margin-top: 2px;">${oc.coordinator} coordinating ${(oc.participants||[]).join(', ')}</div>
                     </div>
-                    <span style="color: #0f3460; font-size: 20px;">→</span>
+                    <span style="color: var(--orch-banner-border); font-size: 20px;">→</span>
                   </div>`;
                   container.appendChild(banner);
                   autoScroll(container);
@@ -11899,7 +12959,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
                   coordinator: oc2.coordinator,
                   participants: (oc2.participants || []).join(','),
                   objective: oc2.objective,
-                  maxRounds: (oc2.max_rounds || 5).toString(),
+                  maxRounds: (oc2.max_rounds ?? 5).toString(),
                   ...(oc2.context ? { context: oc2.context } : {}),
                   ...(oc2.challenger ? { challenger: oc2.challenger } : {})
                 });
@@ -11908,13 +12968,13 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
                 if (container) {
                   console.log('[TIGER-TEAM-BANNER] Creating banner, url:', url);
                   const banner = document.createElement('div');
-                  banner.innerHTML = `<div style="background: linear-gradient(135deg, #1a1a2e, #16213e); border: 1px solid #0f3460; border-radius: 8px; padding: 12px 16px; margin: 8px 0; display: flex; align-items: center; gap: 12px; cursor: pointer;" onclick="window.open('${url}', '_blank')">
+                  banner.innerHTML = `<div style="background: linear-gradient(135deg, var(--orch-banner-bg-1), var(--orch-banner-bg-2)); border: 1px solid var(--orch-banner-border); border-radius: 8px; padding: 12px 16px; margin: 8px 0; display: flex; align-items: center; gap: 12px; cursor: pointer;" onclick="window.open('${url}', '_blank')">
                     <span style="font-size: 24px;">🐯</span>
                     <div style="flex:1">
-                      <div style="color: #e94560; font-weight: 600; font-size: 13px;">Tiger Team Launched</div>
-                      <div style="color: #aaa; font-size: 12px; margin-top: 2px;">${oc2.coordinator} coordinating ${(oc2.participants||[]).join(', ')}</div>
+                      <div style="color: var(--orch-banner-title); font-weight: 600; font-size: 13px;">Tiger Team Launched</div>
+                      <div style="color: var(--text-muted-alt); font-size: 12px; margin-top: 2px;">${oc2.coordinator} coordinating ${(oc2.participants||[]).join(', ')}</div>
                     </div>
-                    <span style="color: #0f3460; font-size: 20px;">→</span>
+                    <span style="color: var(--orch-banner-border); font-size: 20px;">→</span>
                   </div>`;
                   container.appendChild(banner);
                   autoScroll(container);
@@ -11933,7 +12993,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
                 if (container) {
                   const cib = container.querySelector('.context-info-box');
                   if (cib && !cib.dataset.modelAppended) {
-                    cib.innerHTML += ` · <strong style="color:#7eb8f7">${esc(modelShort)}</strong>`;
+                    cib.innerHTML += ` · <strong style="color:var(--model-accent-text)">${esc(modelShort)}</strong>`;
                     cib.dataset.modelAppended = '1';
                   }
                 }
@@ -12031,6 +13091,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
               if (typeof simpleOn === 'function' && simpleOn()) simpleFirstReply(chatId, msgId);   // Simple: the Thinking box goes at the first reply text
               fullResponse += delta;
               displayContent += delta;
+              noteLiveReply(msgId, fullResponse);   // what a dropped stream keeps (never the bubble's textContent)
 
               // Start a new step if text arrives after tool results completed
               if (lastEventWasToolResult) {
@@ -12069,6 +13130,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       }
 
       const partial = !fullResponse || fullResponse.length === 0;
+      dropLiveReply(msgId);
       if (!fullResponse) fullResponse = '[No response]';
       return { text: fullResponse, images, toolActivity, partial, steps };
     }
@@ -12164,7 +13226,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
                   coordinator: oc3.coordinator,
                   participants: (oc3.participants || []).join(','),
                   objective: oc3.objective,
-                  maxRounds: (oc3.max_rounds || 5).toString(),
+                  maxRounds: (oc3.max_rounds ?? 5).toString(),
                   ...(oc3.context ? { context: oc3.context } : {})
                 });
                 window.open(`/tiger-team?${params.toString()}`, '_blank');
@@ -12227,9 +13289,9 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       // The stall check ended the read: a group chat has no re-attach, so say the reply may be cut off
       // rather than pass it on as complete.
       if (stallTriggered) {
-        const note = '\n\n⚠ The connection went quiet for 90 seconds, so this reply may be cut off.';
-        fullResponse += note;
-        displayContent += note;
+        const note = '⚠ The connection went quiet for 90 seconds, so this reply may be cut off.';
+        fullResponse = withNotice(fullResponse, note);       // an open thinking block is closed first (review r3)
+        displayContent = withNotice(displayContent, note);
         updateGroupMessage(msgId, displayContent, agentName, colorIndex);
       }
 
@@ -12247,8 +13309,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     
     function handleStreamError(err, msgId, fullResponse, chat) {
       if (err.name === 'AbortError') {
-        updateMessage(msgId, fullResponse + '\n\n*[Cancelled]*');
-        chat.messages.push({ role: 'assistant', content: fullResponse + ' [Cancelled]' });
+        updateMessage(msgId, withNotice(fullResponse, '*[Cancelled]*'));
+        chat.messages.push({ role: 'assistant', content: withNotice(fullResponse, '[Cancelled]', ' ') });
       } else {
         updateMessage(msgId, `*Error: ${err.message}*`);
         setStatus(chat.id, 'error');
@@ -17799,6 +18861,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     // (links to /api/files/download, absolute paths) get a card each in a .file-cards box right after the message.
     // Never on a streaming chunk; no candidates means no request; nothing here may throw into the chat code.
     async function attachFileCards(el) {
+      if (window.HandOffCard) HandOffCard.refreshSoon();   // a reply just ended: look again for hand-offs (calls close together make one request)
       try {
         const H = window.hubFileCard;
         if (!H || !el || !el.isConnected || !el.classList.contains('assistant')) return;
@@ -17854,7 +18917,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       // Append auto-model if already known
       const pending = window.__pendingAutoModel && window.__pendingAutoModel[chatId];
       if (pending) {
-        html += ` · <strong style="color:#7eb8f7">${esc(pending)}</strong>`;
+        html += ` · <strong style="color:var(--model-accent-text)">${esc(pending)}</strong>`;
         div.dataset.modelAppended = '1';
         delete window.__pendingAutoModel[chatId];
       }
@@ -17880,7 +18943,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const limit = (data.context_limit || 200000).toLocaleString();
       const toolCalls = data.tool_calls || 0;
       const categories = data.categories || [];
-      const color = pct >= 90 ? '#f85149' : pct >= 75 ? '#d29922' : 'var(--text-secondary)';
+      const color = pct >= 90 ? 'var(--usage-critical)' : pct >= 75 ? 'var(--usage-warn)' : 'var(--text-secondary)';
 
       // Remove old top bars
       document.querySelectorAll('[id^="context-health-"]').forEach(el => el.remove());
@@ -17895,7 +18958,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (!footer) {
         footer = document.createElement('div');
         footer.id = 'context-footer';
-        footer.style.cssText = 'position:sticky;bottom:0;padding:6px 14px;font-size:11px;color:var(--text-secondary);background:var(--bg-primary,#0d1117);border-top:1px solid var(--border);display:flex;align-items:center;gap:10px;z-index:5;flex-wrap:wrap;';
+        footer.style.cssText = 'position:sticky;bottom:0;padding:6px 14px;font-size:11px;color:var(--text-secondary);background:var(--bg-primary, var(--context-bar-bg));border-top:1px solid var(--border);display:flex;align-items:center;gap:10px;z-index:5;flex-wrap:wrap;';
       }
 
       // Build category breakdown if available
@@ -17921,7 +18984,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const container = document.getElementById(`messages-${chatId}`);
       if (!container) return;
       const div = document.createElement('div');
-      div.style.cssText = 'background:#d2992222;border:1px solid #d29922;border-radius:8px;padding:12px 16px;margin:12px 0;color:#d29922;font-size:13px;';
+      div.style.cssText = 'background:var(--usage-warn-tint);border:1px solid var(--usage-warn);border-radius:8px;padding:12px 16px;margin:12px 0;color:var(--usage-warn);font-size:13px;';
       div.innerHTML = `<strong>⚠️ Agent process stopped, session intact</strong><br><span style="color:var(--text-secondary);font-size:12px">${esc(String(data.error || '').slice(0, 200))} · at ${data.usage_percent || 0}% of context. Send your next message to continue; the agent resumes where it left off.</span>`;
       container.appendChild(div);
       autoScroll(container);
@@ -17933,7 +18996,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const container = document.getElementById(`messages-${chatId}`);
       if (!container) return;
       const div = document.createElement('div');
-      div.style.cssText = 'background:#f8514922;border:1px solid #f85149;border-radius:8px;padding:12px 16px;margin:12px 0;color:#f85149;font-size:13px;';
+      div.style.cssText = 'background:var(--usage-critical-tint);border:1px solid var(--usage-critical);border-radius:8px;padding:12px 16px;margin:12px 0;color:var(--usage-critical);font-size:13px;';
       div.innerHTML = `<strong>🛑 Session ended — context window full</strong><br><span style="color:var(--text-secondary);font-size:12px">Used ${pct}% over ${turns} turns. Start a new conversation to continue. Memory and session notes are preserved.</span>`;
       container.appendChild(div);
       autoScroll(container);
@@ -17941,8 +19004,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       // Update the footer to show exhausted state
       const footer = document.getElementById('context-footer');
       if (footer) {
-        footer.style.background = '#f8514922';
-        footer.style.color = '#f85149';
+        footer.style.background = 'var(--usage-critical-tint)';
+        footer.style.color = 'var(--usage-critical)';
         footer.innerHTML = '<span style="font-weight:600">CONTEXT EXHAUSTED</span>';
       }
     }
@@ -18354,8 +19417,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         const statusIcon = tc.status === 'running'
           ? '<div class="tool-call-spinner"></div>'
           : tc.status === 'error'
-            ? `<span class="tool-call-icon" style="color:#f87171"${toolResultDenied(tc.result) ? ' title="Denied by policy"' : ''}>✗</span>`
-            : '<span class="tool-call-icon" style="color:#4ade80">✓</span>';
+            ? `<span class="tool-call-icon" style="color:var(--tool-error-text)"${toolResultDenied(tc.result) ? ' title="Denied by policy"' : ''}>✗</span>`
+            : '<span class="tool-call-icon" style="color:var(--tool-done-text)">✓</span>';
 
         const inputHtml = tc.input ? `<span class="tool-call-input">— ${esc(tc.input)}</span>` : '';
         
@@ -19179,7 +20242,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           html += `<div class="${cls}">${formatContent(step.text.replace(/^\s*\n/, ''))}</div>`;   // the paragraph break after a tool call is the layout's job
         }
         // The person's interjections, where they came in the reply (the same marker as the bubble sendInterjection draws).
-        for (const ij of step.ijs || []) html += `<div class="step-interjection" style="margin:6px 0;padding:6px 10px;border-left:3px solid ${ij.emergency ? '#d32f2f' : '#f9a825'};background:rgba(128,128,128,0.12);border-radius:4px">${esc(interjectionBubbleText(ij))}${imageGalleryHtml(ij.images, 'max-height:200px;')}</div>`;
+        for (const ij of step.ijs || []) html += `<div class="step-interjection" style="margin:6px 0;padding:6px 10px;border-left:3px solid ${ij.emergency ? 'var(--interject-emergency)' : 'var(--interject-normal)'};background:var(--interject-bg);border-radius:4px">${esc(interjectionBubbleText(ij))}${imageGalleryHtml(ij.images, 'max-height:200px;')}</div>`;
       }
 
       // Append images (escaped; click handled by the delegated listener)
@@ -21447,6 +22510,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       return '<div class="image-gallery">' + images.map(u => `<img src="${escapeHtml(u)}" class="generated-image" alt="Generated image"${inlineStyle ? ` style="${inlineStyle}"` : ''}>`).join('') + '</div>';
     }
 
+    window.formatContentForSheets = formatContent;   // the hand-off Status sheet renders its Markdown like a chat message
     function formatContent(content) {
       if (!content) return '<span style="opacity:0.5">...</span>';
 
@@ -21550,7 +22614,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         // so neither matches.
         .replace(/(^|\n)_(?=[^\s_])([^\n]*?[^\s_])_(?=\n|$)/g, '$1<em>$2</em>');
       // Bare URLs: strict charset, cut before any quote or angle bracket (the text is already escaped).
-      formatted = autolinkEscaped(formatted, ' style="color: #6ea8fe; text-decoration: underline;"')
+      formatted = autolinkEscaped(formatted, ' style="color: var(--link); text-decoration: underline;"')
         .replace(/\n/g, '<br>');
 
       for (let i = 0; i < visualTokens.length; i++) {
@@ -21570,7 +22634,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         const u = safeLinkUrl(url);
         const eText = escapeHtml(text);
         const linkTag = u
-          ? `<a href="${escapeHtml(u)}" target="_blank" rel="noopener noreferrer" style="color: #6ea8fe; text-decoration: underline;">${eText}</a>`
+          ? `<a href="${escapeHtml(u)}" target="_blank" rel="noopener noreferrer" style="color: var(--link); text-decoration: underline;">${eText}</a>`
           : `<code>[blocked link: ${eText}]</code>`;
         formatted = formatted.replace(mk('L', i), () => linkTag);
       }
@@ -22118,7 +23182,7 @@ Report what you found, did, or discovered.`;
                     coordinator: gw.coordinator,
                     participants: (gw.participants || []).join(','),
                     objective: gw.objective,
-                    maxRounds: (gw.max_rounds || 5).toString(),
+                    maxRounds: (gw.max_rounds ?? 5).toString(),
                     ...(gw.context ? { context: gw.context } : {}),
                     ...(gw.challenger ? { challenger: gw.challenger } : {})
                   });
@@ -22126,13 +23190,13 @@ Report what you found, did, or discovered.`;
                   const container = document.getElementById(`messages-${chatId}`);
                   if (container) {
                     const banner = document.createElement('div');
-                    banner.innerHTML = `<div style="background: linear-gradient(135deg, #1a1a2e, #16213e); border: 1px solid #0f3460; border-radius: 8px; padding: 12px 16px; margin: 8px 0; display: flex; align-items: center; gap: 12px; cursor: pointer;" onclick="window.open('${url}', '_blank')">
+                    banner.innerHTML = `<div style="background: linear-gradient(135deg, var(--orch-banner-bg-1), var(--orch-banner-bg-2)); border: 1px solid var(--orch-banner-border); border-radius: 8px; padding: 12px 16px; margin: 8px 0; display: flex; align-items: center; gap: 12px; cursor: pointer;" onclick="window.open('${url}', '_blank')">
                       <span style="font-size: 24px;">🐯</span>
                       <div style="flex:1">
-                        <div style="color: #e94560; font-weight: 600; font-size: 13px;">Tiger Team Launched</div>
-                        <div style="color: #aaa; font-size: 12px; margin-top: 2px;">${gw.coordinator} coordinating ${(gw.participants||[]).join(', ')}</div>
+                        <div style="color: var(--orch-banner-title); font-weight: 600; font-size: 13px;">Tiger Team Launched</div>
+                        <div style="color: var(--text-muted-alt); font-size: 12px; margin-top: 2px;">${gw.coordinator} coordinating ${(gw.participants||[]).join(', ')}</div>
                       </div>
-                      <span style="color: #0f3460; font-size: 20px;">→</span>
+                      <span style="color: var(--orch-banner-border); font-size: 20px;">→</span>
                     </div>`;
                     container.appendChild(banner);
                     autoScroll(container);
@@ -22274,9 +23338,9 @@ Report what you found, did, or discovered.`;
       document.getElementById('mode-roundtable').className = mode === 'roundtable' ? 'mode-btn active' : 'mode-btn';
       document.getElementById('mode-led').className = mode === 'led' ? 'mode-btn active' : 'mode-btn';
       document.getElementById('mode-roundtable').style.background = mode === 'roundtable' ? 'var(--purple)' : 'var(--bg-card)';
-      document.getElementById('mode-roundtable').style.color = mode === 'roundtable' ? 'white' : 'var(--text)';
+      document.getElementById('mode-roundtable').style.color = mode === 'roundtable' ? 'var(--on-color-text)' : 'var(--text)';
       document.getElementById('mode-led').style.background = mode === 'led' ? 'var(--purple)' : 'var(--bg-card)';
-      document.getElementById('mode-led').style.color = mode === 'led' ? 'white' : 'var(--text)';
+      document.getElementById('mode-led').style.color = mode === 'led' ? 'var(--on-color-text)' : 'var(--text)';
       document.getElementById('led-leader-section').style.display = mode === 'led' ? 'block' : 'none';
       // In Led mode, hide discussion type / rounds (leader drives autonomously)
       document.getElementById('discussion-type').closest('label').style.display = mode === 'led' ? 'none' : '';

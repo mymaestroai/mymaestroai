@@ -14,7 +14,7 @@ test('mobile.html links the manifest and has the two tabs; Activity is in the â‹
   assert.deepStrictEqual([...bar.matchAll(/<button id="(tab-[a-z]+)"/g)].map(m => m[1]), ['tab-agents', 'tab-chat'], 'Agents and Chat only: Activity was easy to tap by accident');
   const menu = html.slice(html.indexOf('<div id="menu">'), html.indexOf('</div>', html.indexOf('id="menu-restart"')));
   assert.ok(menu.includes('<a id="menu-activity" href="#activity"><span>&#x26A1; Activity</span><span class="menu-count" id="act-unread"></span></a>'), 'Activity, with its count of new events: a plain #activity link, which a script from before the move follows too');
-  assert.ok(menu.indexOf('id="menu-activity"') < menu.indexOf('id="menu-files"'));
+  assert.ok(menu.indexOf('id="menu-activity"') > menu.indexOf('id="menu-files"'));   // phone-menu reorder: Files is in the top group, Activity under Advanced > Tools
   assert.ok(html.includes('</nav>\n  <!-- Activity moved into the â‹® menu.') && html.includes('<button id="tab-activity" hidden aria-hidden="true" tabindex="-1"></button>'), 'an invisible stand-in for scripts from before the move, outside the bar');
   assert.ok(html.includes('src="mobile.js"'));
   const js = read('mobile.js');
@@ -166,7 +166,7 @@ test('phone: Update hub in the menu (admins only) asks the channel like the desk
   assert.ok(js.includes('async function openUpdateSheet()') && js.includes("$('menu-update').addEventListener('click', openUpdateSheet);"));
   assert.ok(js.includes("const r = await api('/api/git-sync/status');"), 'reads the same status as the desktop dialog');
   assert.ok(js.includes(`name="upd-channel"`) && js.includes('Switch to ${other.label} & restart'), 'channel radios with the switch label');
-  assert.ok(js.includes("await api(force ? '/api/git-sync/force-update' : '/api/git-sync/update', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(channel && !force ? { channel } : {}) });"), 'the update, or with confirmation the discard-and-update');
+  assert.ok(js.includes("await api(asideOnly ? '/api/git-sync/put-aside' : force ? '/api/git-sync/force-update' : '/api/git-sync/update', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(channel && !asideOnly ? { channel } : {}) });"), 'the update, or (after a confirm) put the changes aside and update; the chosen channel is kept (changed with the local-edits rule: nothing is discarded). Was: the update, or with confirmation the discard-and-update');
   assert.ok(js.includes("if (hubMe && !hubMe.isAdmin) { $('menu-restart').hidden = true; $('menu-update').hidden = true; }"), 'members see neither Update nor Restart');
   assert.ok(js.includes('setTimeout(() => { d.close(); restartHub(); }, 800);'), 'reuses the Restart button\'s wait-for-hub path');
 });

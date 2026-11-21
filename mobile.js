@@ -25,6 +25,7 @@ const recentOwn = new Map();   // agent -> time our own stream for it ended (ded
 let pendingImages = [];
 let stick = true;
 const live = {};               // name -> { busy, busySince, activity, pendingQuestion } from the hub
+const turnSteps = {};          // name -> chatViewStepsNew() state: the tool calls the agent is running now, per turn (turn_activity)
 const openTurns = {};          // name -> [turnIds] the hub started and has not ended (activeTurnStart / activeTurnEnd)
 let statusKnown = false;       // true once the hub told us anything about busy state (older hubs never do)
 let workingFilter = false;     // Agents list shows only working agents
@@ -33,7 +34,7 @@ const rawText = new WeakMap(); // bubble element -> the message's plain text / m
 let es = null;                 // the /api/events EventSource
 const STATUS_POLL_MS = 20000;
 const TURN_POLL_MS = 4000;       // a followed turn's view, while the live event stream is down
-const STATUS_TICK_MS = 30000;
+const STATUS_TICK_MS = 15000;   // elapsed times and "waiting on" details refresh at least this often while an agent is busy
 const REATTACH_GIVE_UP_MS = 30 * 60 * 1000;
 let unread = loadJson('hub-mobile-unread', {});
 let activity = loadJson('hub-mobile-activity', []);
@@ -1053,10 +1054,12 @@ function originLabel(origin) {
     case 'consultation': return `consulted by ${origin.from || 'another agent'}`;
     case 'job_notice': return `your job finished${origin.jobName ? `: ${origin.jobName}` : ''}`;
     case 'job_report': return `job report from ${origin.from || 'a worker'}${origin.jobName ? ` (${origin.jobName})` : ''}`;
-    case 'schedule': return origin.by ? `scheduled task set by ${origin.by === 'owner' ? 'you' : origin.by}${origin.from ? `: ${origin.from}` : ''}` : `scheduled task${origin.from ? `: ${origin.from}` : ''}`;
+    case 'schedule': return origin.by ? `scheduled task set by ${origin.by === '@owner' ? 'you' : origin.by}${origin.from ? `: ${origin.from}` : ''}` : `scheduled task${origin.from ? `: ${origin.from}` : ''}`;
     case 'task': return origin.from && origin.from !== 'hub' ? `queued task from ${origin.from}` : origin.label ? `hub: ${origin.label}` : 'hub turn';
     case 'alert': return `alert from ${origin.from || 'a monitor'}`;
     case 'consult_reply': return 'queued consultation reply delivered';
+    case 'hand_off': return `hand-off from ${origin.from || 'another agent'}`;
+    case 'hand_off_report': return `hand-off finished: ${origin.from || 'another agent'}`;
     case 'comms': return 'message from a messaging channel';
     default: return 'hub turn';
   }
@@ -1253,6 +1256,169 @@ function noteCtxReading(name, g) {
 // Claude plan usage in the chat header for agents on the Claude subscription (admins; GET /api/plan-usage on load,
 // every 10 minutes and on plan events): the weekly window that governs the open agent's model.
 let planUsageLast = null;
+let codexUsageLast = null;   // GET /api/codex-usage (the ChatGPT plan), admins only
+let subsOnFlag = true;       // the setting subscriptionUsage (on unless false)
+// ── subscriptions helpers (begin) ──
+// Pure: the usage bars of Settings -> Subscriptions and the chat-header ChatGPT badge. Same text in app.js and mobile.js.
+function subsWhen(iso) {
+  const t = Date.parse(iso || '');
+  return Number.isFinite(t) ? new Date(Math.round(t / 60000) * 60000).toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : '';
+}
+function subsLevels(l) {
+  const a = (Array.isArray(l) ? l : []).map(Number).filter(n => Number.isFinite(n));
+  return a.length ? a : [75, 90];
+}
+function subsColor(pct, reached, levels) {
+  const lv = subsLevels(levels);
+  const first = lv[0], last = lv[lv.length - 1];
+  return reached || pct >= 100 ? '#d4588b' : pct >= last ? '#d95926' : pct >= first ? '#c9a227' : '#3987e5';
+}
+function subsBarHtml(label, pct, metaText, color, expired) {
+  const p = Math.max(0, Math.min(100, Math.round(Number(pct) || 0)));
+  const shown = expired ? 0 : p;
+  return `<div class="subs-bar"><span class="subs-label">${escapeHtml(label)}</span><span class="subs-meta">${escapeHtml(metaText)}</span>` +
+    `<div class="subs-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${shown}" aria-label="${escapeHtml(label)}">` +
+    `<div class="subs-fill" style="width:${shown}%;background:${color}"></div></div></div>`;
+}
+function subsClaudeRows(snap) {
+  const out = [];
+  const w = (snap && snap.windows) || {};
+  const models = (snap && snap.models) || {};
+  const add = (label, x) => { if (x && x.utilization != null) out.push({ label, pct: Math.round(Number(x.utilization) || 0), resetsAt: x.resets_at, rejected: !!x.rejected }); };
+  add('5-hour', w.five_hour);
+  add('Weekly, all models', w.seven_day);
+  if (!models.opus) add('Weekly, Opus', w.seven_day_opus);
+  if (!models.sonnet) add('Weekly, Sonnet', w.seven_day_sonnet);
+  for (const k of Object.keys(models)) add(`Weekly, ${models[k].display_name || k}`, models[k]);
+  return out;
+}
+function subsCodexRows(snap) {
+  const out = [];
+  const limits = (snap && Array.isArray(snap.limits)) ? snap.limits : [];
+  for (const l of limits) {
+    const lname = l.label || l.name || l.id || 'Codex';
+    const wins = (Array.isArray(l.windows) ? l.windows : []).slice().sort((a, b) => (Number(a.minutes) || 0) - (Number(b.minutes) || 0));
+    for (const x of wins) {
+      const wl = String(x.label || 'usage');
+      out.push({ label: limits.length > 1 ? `${lname}, ${wl}` : wl.charAt(0).toUpperCase() + wl.slice(1), pct: Math.round(Number(x.usedPercent) || 0), resetsAt: x.resetsAt, expired: !!x.expired, reached: !!l.reached });
+    }
+  }
+  return out;
+}
+function subsReachedLines(snap) {
+  const lines = [];
+  for (const l of ((snap && snap.limits) || [])) {
+    if (!l.reached) continue;
+    const t = `ChatGPT plan limit reached until ${subsWhen(l.reachedUntil) || 'it resets'}`;
+    if (!lines.includes(t)) lines.push(t);
+  }
+  return lines;
+}
+function subsWindowsHtml(claudeSnap, codexSnap, opts) {
+  const o = opts || {};
+  if (o.on === false) return '';
+  const now = Number.isFinite(Number(o.now)) ? Number(o.now) : Date.now();
+  let html = '';
+  if (claudeSnap) {
+    const lv = subsLevels(o.levels || (claudeSnap.warn && claudeSnap.warn.at));
+    const rows = subsClaudeRows(claudeSnap);
+    html += `<div class="subs-block"><div class="subs-head">Claude${claudeSnap.subscription ? ` (${escapeHtml(claudeSnap.subscription)})` : ''}</div>`;
+    html += rows.length ? rows.map(r => subsBarHtml(r.label, r.pct, `${r.pct}% used · ${r.rejected ? 'refused until' : 'resets'} ${subsWhen(r.resetsAt) || 'the reset'}`, subsColor(r.pct, r.rejected, lv))).join('') : '<div class="subs-note">No reading yet.</div>';
+    if (claudeSnap.fetchedAt) html += `<div class="subs-note">Read ${escapeHtml(subsWhen(claudeSnap.fetchedAt))}</div>`;
+    if (claudeSnap.error) html += `<div class="subs-note subs-err">${escapeHtml(String(claudeSnap.error).slice(0, 200))}</div>`;
+    html += '</div>';
+  }
+  const hasReading = !!(codexSnap && (codexSnap.readAt || (codexSnap.limits || []).length));
+  if (codexSnap && (o.codexAgents || hasReading)) {
+    const lv = subsLevels(o.levels || (codexSnap.warn && codexSnap.warn.at));
+    const rows = subsCodexRows(codexSnap);
+    html += `<div class="subs-block"><div class="subs-head">ChatGPT${codexSnap.planType ? ` (${escapeHtml(codexSnap.planType)})` : ''}</div>`;
+    for (const t of subsReachedLines(codexSnap)) html += `<div class="subs-note subs-reached">${escapeHtml(t)}</div>`;
+    html += rows.map(r => subsBarHtml(r.label, r.pct, r.expired ? `Reset at ${subsWhen(r.resetsAt) || 'the reset'}; no reading since` : `${r.pct}% used · resets ${subsWhen(r.resetsAt) || 'the reset'}`, subsColor(r.pct, r.reached, lv), r.expired)).join('');
+    const t = Date.parse(codexSnap.readAt || '');
+    if (!codexSnap.readAt || !Number.isFinite(t)) html += '<div class="subs-note">No reading yet. Codex reports it during its turns, or press Read now.</div>';
+    else html += `<div class="subs-note">${now - t < 30 * 60000 ? 'Read' : 'Last seen'} ${escapeHtml(subsWhen(codexSnap.readAt))}</div>`;
+    const rc = Number(codexSnap.resetCredits);
+    if (rc > 0) html += `<div class="subs-note">${rc} reset credit${rc === 1 ? '' : 's'} available</div>`;
+    if (codexSnap.error) html += `<div class="subs-note subs-err">${escapeHtml(String(codexSnap.error).slice(0, 200))}</div>`;
+    html += '</div>';
+  }
+  return html;
+}
+function codexBadge(snap, levels, now) {
+  if (!snap || !snap.readAt) return null;
+  const lv = subsLevels(levels || (snap.warn && snap.warn.at));
+  const t0 = Number.isFinite(Number(now)) ? Number(now) : Date.now();
+  const all = [];
+  let reachedLimit = null;
+  for (const l of (snap.limits || [])) {
+    if (l.reached && !reachedLimit) reachedLimit = l;
+    for (const w of (l.windows || [])) all.push(w);
+  }
+  if (!reachedLimit && !all.some(w => !w.expired)) return null;
+  const pctOf = (w) => Math.round(Number(w.usedPercent) || 0);
+  const live = all.filter(w => !w.expired);
+  const weekly = live.filter(w => w.weekly);
+  const best = (a) => a.reduce((x, y) => (pctOf(y) > pctOf(x) ? y : x));
+  let main = weekly.length ? best(weekly) : null;
+  if (!main && live.length) main = live.reduce((x, y) => ((Number(y.minutes) || 0) > (Number(x.minutes) || 0) ? y : x));
+  const age = t0 - Date.parse(snap.readAt);
+  const seen = age > 30 * 60000 ? `; last seen ${subsWhen(snap.readAt)}` : '';
+  if (reachedLimit) {
+    const when = subsWhen(reachedLimit.reachedUntil);
+    return { text: 'ChatGPT limit reached', cls: 'refused', title: `ChatGPT plan limit reached until ${when || 'it resets'}${seen}` };
+  }
+  const pct = pctOf(main);
+  let text = main.weekly ? `ChatGPT ${pct}%` : `ChatGPT ${main.label || 'usage'} ${pct}%`;
+  const shorts = live.filter(w => w.short && w !== main && pctOf(w) > 50);
+  if (shorts.length) { const s = best(shorts); text += ` · ${String(s.label || '5-hour').replace(/-hour$/, 'h')} ${pctOf(s)}%`; }
+  const passed = lv.filter(l => pct >= l);
+  const cls = pct >= 100 ? 'refused' : passed.length && passed.length === lv.length ? 'hot' : passed.length ? 'warn' : '';
+  const when = subsWhen(main.resetsAt) || 'the reset';
+  const title = (main.weekly ? `ChatGPT plan: ${pct}% of this week's allowance, resets ${when}` : `ChatGPT plan: ${pct}% of the ${main.label || 'usage'} allowance, resets ${when}`) + seen;
+  return { text, cls, title };
+}
+/** The ChatGPT badge before any usable reading: "reading…" while one is awaited, "no reading" with the reason after a
+ *  failed one (never "reading…" for ever). */
+function codexPendingBadge(snap) {
+  if (snap && snap.error && !snap.reading) return { text: 'ChatGPT: no reading', cls: '', title: `No reading of the ChatGPT plan yet: ${String(snap.error).slice(0, 200)}` };
+  return { text: 'ChatGPT: reading\u2026', cls: '', title: "Reading the ChatGPT plan's usage (no turn is spent)" };
+}
+/** Whether a page showing a Codex chat should ask for a reading: the snapshot loaded and on, none running, the last
+ *  reading missing or over 30 minutes old; at most once a minute per page (askedAt). The hub limits reads too. */
+function codexShouldRead(snap, now, askedAt) {
+  if (!snap || snap.enabled === false || snap.reading) return false;
+  if (Number(askedAt) && now - Number(askedAt) < 60000) return false;
+  const t = Date.parse(snap.readAt || '');
+  return !Number.isFinite(t) || now - t > 30 * 60000;
+}
+/** The snapshot after a page's read request: the answer's snapshot, carrying the hub's reason when it refused or failed
+ *  without storing one (a Codex update, the hub unreachable), so the badge says "no reading" and why instead of
+ *  "reading..." (review r1). */
+function codexAfterAsk(prev, answer) {
+  const snap = answer && typeof answer === 'object' && answer.snapshot && typeof answer.snapshot === 'object' ? answer.snapshot : prev;
+  if (!snap) return prev;
+  if (answer && answer.ok === false && answer.error && !snap.error) return Object.assign({}, snap, { error: String(answer.error).slice(0, 200), reading: false });
+  return snap;
+}
+// ── subscriptions helpers (end) ──
+const subsEnabled = () => subsOnFlag !== false && !(codexUsageLast && codexUsageLast.enabled === false);
+// One read of the ChatGPT plan asked for by this page (POST /api/codex-usage/refresh: no turn; the hub allows one a minute
+// and none during a Codex update); the answer repaints the header and the Subscriptions sheet.
+let codexAskAt = 0;
+function codexAskRead() {
+  codexAskAt = Date.now();
+  api('/api/codex-usage/refresh', { method: 'POST' })
+    .then(r => r.json().catch(() => ({ ok: false, error: `HTTP ${r.status}` })))
+    .catch(() => ({ ok: false, error: "Couldn't reach your Maestro to read it." }))   // the next paint asks again after a minute
+    .then(d => { const next = codexAfterAsk(codexUsageLast, d); if (next && next !== codexUsageLast) { codexUsageLast = next; paintPlan(); paintSubsSheet(); } });
+}
+async function refreshCodexUsage() {
+  try {
+    const r = await api('/api/codex-usage');
+    if (r.ok) { codexUsageLast = await r.json(); if (codexUsageLast && typeof codexUsageLast.enabled === 'boolean') subsOnFlag = codexUsageLast.enabled; }
+  } catch { /* the hub is restarting: the next round asks again */ }
+}
 async function refreshPlanUsage() {
   if (!isAdmin()) return;
   clearTimeout(refreshPlanUsage.timer);
@@ -1262,6 +1428,7 @@ async function refreshPlanUsage() {
     if (r.status === 403) return;
     if (r.ok) planUsageLast = await r.json(); else next = 30000;
   } catch { next = 30000; }
+  await refreshCodexUsage();
   // No reading yet (the hub just started): ask again every 15 s for up to 2 minutes.
   if (!planUsageLast || !planUsageLast.fetchedAt) { refreshPlanUsage.tries = (refreshPlanUsage.tries || 0) + 1; if (refreshPlanUsage.tries <= 8) next = Math.min(next, 15000); }
   else refreshPlanUsage.tries = 0;
@@ -1294,6 +1461,21 @@ function planFamilyOf(model) {
 function paintPlan() {
   const el = $('chat-plan'); if (!el) return;
   const d = planUsageLast; const a = agentByName(current); const model = String((a && a.model) || '');
+  if (/^codex-cli\//.test(model)) {   // a ChatGPT-plan agent: the ChatGPT reading (when the setting is on and one exists)
+    let b = subsEnabled() ? codexBadge(codexUsageLast, null, Date.now()) : null;
+    // An admin with a Codex chat open: a missing or old reading is asked for (no turn spent), and until one exists the
+    // header says so instead of showing nothing.
+    if (subsEnabled() && isAdmin()) {
+      if (codexShouldRead(codexUsageLast, Date.now(), codexAskAt)) codexAskRead();
+      if (!b) b = codexPendingBadge(codexUsageLast);
+    }
+    if (!b) { el.hidden = true; el.textContent = ''; return; }
+    el.textContent = b.text;
+    el.className = 'sub' + (b.cls ? ' ' + b.cls : '');
+    el.title = b.title;
+    el.hidden = false;
+    return;
+  }
   const fam = planFamilyOf(model);
   const wins = d && /^claude-sdk\//.test(model) ? (d.weekly || []).filter(w => w.utilization != null && (w.family == null || (fam && w.family === fam))) : [];
   if (!wins.length) { el.hidden = true; el.textContent = ''; return; }
@@ -1301,6 +1483,8 @@ function paintPlan() {
   const levels = (d.warn && Array.isArray(d.warn.at)) ? d.warn.at : [];
   const { pct, extra, cls } = planState(w, levels);
   el.textContent = `${w.family ? w.label : 'Plan'} ${planPctText(w, levels)}`;
+  const five = d.windows && d.windows.five_hour;
+  if (subsEnabled() && five && five.utilization != null && Number(five.utilization) > 50) el.textContent += ` · 5h ${Math.round(Number(five.utilization))}%`;
   el.className = 'sub' + (cls ? ' ' + cls : '');
   el.title = extra
     ? `${w.family ? w.label : 'All models'}: the weekly Claude plan is used up until ${Number.isFinite(Date.parse(w.resetsAt || '')) ? new Date(w.resetsAt).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : 'the reset'}; extra usage is paying`
@@ -1523,7 +1707,7 @@ async function loadAgents() {
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     agents = (await r.json()).agents || [];
     if (typeof voiceWakeRecheck === 'function') voiceWakeRecheck();   // an agent's recognizer can have changed
-    { const ri = $('menu-recordings'); if (ri) ri.hidden = !agents.some(a => a && a.recordings && a.recordings.canDownload === true); }   // ⋮ menu: Recordings only for a person on at least one agent's download list
+    { const ri = $('menu-recordings'); if (ri) ri.hidden = !agents.some(a => a && a.recordings && a.recordings.canDownload === true); typeof menuGroupsSync === 'function' && menuGroupsSync(); }   // ⋮ menu: Recordings only for a person on at least one agent's download list
     if (agents.some(a => 'busy' in a)) {
       const map = {};
       for (const a of agents) map[a.name] = { busy: a.busy, busySince: a.busySince, activity: a.activity, pendingQuestion: a.pendingQuestion };
@@ -1554,6 +1738,12 @@ function setLive(name, patch) {
   if (!next.busy) { next.busySince = null; next.activity = null; next.pendingQuestion = false; next.consultedBy = null; }
   else if (!next.busySince) next.busySince = cur.busySince || new Date().toISOString();
   live[name] = next;
+  if (!next.busy) { delete turnSteps[name]; if (typeof turnOrigins !== 'undefined') delete turnOrigins[name]; }   // idle: no tool call runs, and the old turn's origin must not name the next turn's caller
+  // A helper (temporary worker) or a consulted agent changed: every agent waiting on it (before or after) says so (its header and list line).
+  if (typeof repaintAgentStatus === 'function') {
+    const waiters = new Set([next.worker && next.parent, cur.worker && cur.parent, next.consultedBy, cur.consultedBy]);
+    for (const w of waiters) if (w && w !== name) repaintAgentStatus(w);
+  }
   if (!next.busy && typeof voiceCallHubIdle === 'function') { try { voiceCallHubIdle(name); } catch { /* the call carries on */ } }   // a call waiting for a hub-started turn learns it is over
 }
 
@@ -1573,8 +1763,12 @@ function applySnapshot(map, repaint = true, opts = {}) {
   }
   for (const name of Object.keys(live)) {
     if (name in map) continue;
-    if (busyIsWorker(name, live[name])) { if (!namedOnly) { delete live[name]; delete openTurns[name]; } }   // a worker that is gone, not an agent gone idle
-    else { setLive(name, { busy: false }); delete openTurns[name]; }
+    if (busyIsWorker(name, live[name])) {   // a worker that is gone, not an agent gone idle
+      if (namedOnly) continue;
+      const gone = live[name];
+      delete live[name]; delete openTurns[name]; delete turnSteps[name];
+      for (const w of new Set([gone.parent, gone.consultedBy])) if (w && w !== name) repaintAgentStatus(w);   // whoever waited on it stops saying so
+    } else { setLive(name, { busy: false }); delete openTurns[name]; }
   }
   if (repaint) paintStatus();
   // Woke up (or just loaded) while the open chat's agent is mid-turn: follow that turn.
@@ -1626,8 +1820,15 @@ function busyText(name) {
   const since = (s && s.busySince) || null;
   const e = elapsed(since);
   if (s && s.pendingQuestion) return `❓ waiting for your answer${e ? ` · ${e}` : ''}`;
-  const activity = (s && s.activity) || (streams.has(name) ? 'replying to you' : 'working');
-  return `⏳ ${activity}${e ? ` · ${e}` : ''}`;
+  if (s && s.worker) {   // a temporary worker keeps the status word
+    const activity = s.activity || 'working';
+    return `⏳ ${activity}${e ? ` · ${e}` : ''}`;
+  }
+  // A named agent: what it is doing now (who started the turn, what it waits on or runs), never the bare status word.
+  const words = streams.has(name) ? 'Replying to your message' : chatBusyWords(name);
+  if (s && s.busy && !streams.has(name) && !currentTurnOrigin(name)) turnOriginFetch(name);   // once per turn: who started it
+  const detail = chatBusyDetail(name);
+  return `⏳ ${words}${e ? ` · ${e}` : ''}${detail ? ` · ${detail}` : ''}`;
 }
 
 function paintStatus() {
@@ -1662,9 +1863,9 @@ function chatStatusFull(name) {
   const since = Date.parse(s.busySince) || null;
   const took = (t) => (t ? ` · ${chatViewElapsed(t, Date.now())}` : '');
   if (s.pendingQuestion) return `${who} is waiting for your answer${took(since)}`;
-  const info = busyCardInfo(name);
-  if (info) return `${who}: ${info.text}${took(info.since)}`;
-  return `${who}: ${s.activity || (streams.has(name) ? 'replying to you' : 'working')}${took(since)}`;
+  const o = currentTurnOrigin(name);
+  const detail = chatBusyDetail(name);
+  return `${who}: ${chatBusyWords(name)}${took(o ? o.since : since)}${detail ? ` · ${detail}` : ''}`;
 }
 function showChatStatus() {
   if (!current || !isBusy(current) || ownTurnFor(current)) return;
@@ -1683,7 +1884,10 @@ function paintChatStatus() {
   const busy = $('chat-busy');
   if (busy) {
     const question = working && !!(live[current] && live[current].pendingQuestion);
-    busy.textContent = working ? busyText(current) : '';
+    const e = working ? elapsed((live[current] && live[current].busySince) || null) : '';
+    const detail = working && !question ? chatBusyDetail(current) : '';
+    busy.textContent = working ? `${question ? '❓' : '⏳'} ${chatBusyWords(current)}${e ? ` · ${e}` : ''}${detail ? ` · ${detail}` : ''}` : '';
+    if (working && !question && !currentTurnOrigin(current)) turnOriginFetch(current);
     busy.hidden = !working;
     busy.classList.toggle('question', question);
     busy.setAttribute('aria-label', working ? chatStatusFull(current) : '');
@@ -1775,11 +1979,11 @@ const NOTIFY_KINDS = [
   { kind: 'questions', label: 'Questions', hint: 'When an agent needs your answer or approval' },
   { kind: 'requested', label: 'Requests you made', hint: 'Things you asked an agent to tell you about, and replies you asked to hear about' },
   { kind: 'other', label: 'Everything else', hint: 'Reports and other notices' },
-  { kind: 'security', label: 'Security and access', hint: 'Sign-in and passkey changes, wallet locks, failed backups, access changes, a halted hub' },
+  { kind: 'security', label: 'Security and access', hint: 'Sign-in and passkey changes, wallet locks, failed backups, access changes, a halted hub, health problems (a full disk)' },
 ];
 // The kinds an agent can have its own setting for (security is a default only).
 const NOTIFY_AGENT_KINDS = NOTIFY_KINDS.filter(k => k.kind !== 'security');
-const NOTIFY_SECURITY_WARNING = "You won't be told about sign-in and passkey changes, wallet locks, failed backups, access changes or a halted hub.";
+const NOTIFY_SECURITY_WARNING = "You won't be told about sign-in and passkey changes, wallet locks, failed backups, access changes, a halted hub or health problems such as a full disk.";
 function notifyModeLabel(mode) {
   if (mode === 'off') return 'Off';
   if (mode === 'away') return "Only when I'm away";
@@ -2307,6 +2511,7 @@ function updateDots() {
   if (a) {
     a.textContent = actUnseen > 99 ? '99+' : String(actUnseen);
     a.classList.toggle('on', actUnseen > 0 && screen !== 'activity');
+    typeof menuAdvDotSync === 'function' && menuAdvDotSync();
   }
   // Actions waiting for approval (any agent): amber count on the Agents tab.
   const ap = $('agents-approvals');
@@ -2486,14 +2691,28 @@ function chatViewIsHubOrigin(origin) {
   const k = origin && typeof origin === 'object' ? origin.kind : '';
   return !!k && typeof k === 'string' && k !== 'user' && k !== 'comms';
 }
-function chatViewBusyText(origin, activity) {
+function chatViewBusyText(origin, activity, nameOf) {
   const o = origin && typeof origin === 'object' ? origin : null;
   const cap = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
+  const who = (n) => {   // the agent's display name when the page knows it, else the name with a capital
+    if (!n) return n;
+    try { const d = typeof nameOf === 'function' ? nameOf(String(n)) : ''; if (d && typeof d === 'string') return d; } catch (e) { /* the plain name */ }
+    return cap(String(n));
+  };
   if (o && o.kind) {
     switch (o.kind) {
-      case 'consultation': return `Answering a consultation from ${cap(o.from) || 'another agent'}`;
+      case 'user': case 'comms': return 'Replying to your message';
+      case 'consultation': return `Answering a consultation from ${who(o.from) || 'another agent'}`;
       case 'schedule': { const l = o.label || o.from; return l ? `Working on a scheduled task: ${l}` : 'Working on a scheduled task'; }
       case 'job_notice': return o.jobName ? `Reading a job result: ${o.jobName}` : 'Reading a job result';
+      case 'hand_off': {
+        // The target's turn is labelled "Hand-off from <caller>: <topic>"; the caller's report turn "Hand-off <state>: <topic>".
+        const l = typeof o.label === 'string' ? o.label : '';
+        if (/^Hand-off from /.test(l) || (!l && o.from)) return o.from ? `Working on a hand-off from ${who(o.from)}` : 'Working on a hand-off';
+        if (/^Hand-off \S+:/.test(l)) return o.from ? `Reading a hand-off report from ${who(o.from)}` : 'Reading a hand-off report';
+        return 'Working on a hand-off';
+      }
+      case 'hand_off_report': return o.from ? `Reading a hand-off report from ${who(o.from)}` : 'Reading a hand-off report';
       case 'job_report': return o.jobName ? `Reading a job report: ${o.jobName}` : 'Reading a job report';
       case 'consult_reply': return 'Reading consultation replies';
       case 'alert': return 'Handling a monitor alert';
@@ -2503,13 +2722,114 @@ function chatViewBusyText(origin, activity) {
   }
   const a = typeof activity === 'string' ? activity.trim() : '';
   let m = /^consulted by (.+)$/i.exec(a);
-  if (m) return `Answering a consultation from ${cap(m[1])}`;
+  if (m) return `Answering a consultation from ${who(m[1])}`;
   m = /^scheduled task(?::\s*(.+))?$/i.exec(a);
   if (m) return m[1] ? `Working on a scheduled task: ${m[1]}` : 'Working on a scheduled task';
   if (/^job finished/i.test(a)) return 'Reading a job result';
   if (/^job report/i.test(a)) return 'Reading a job report';
+  if (/^hand-off finished/i.test(a)) return 'Reading a hand-off report';
+  if (/^hand-off$/i.test(a)) return 'Working on a hand-off';
+  if (/^replying to you$/i.test(a)) return 'Replying to your message';
   if (/^alert$/i.test(a)) return 'Handling a monitor alert';
   return 'Working on a hub task';
+}
+// What a working agent waits on: its own helpers (temporary workers whose parent is it) and agents it consulted, from the
+// status feed { <name>: { busy, busySince, worker, parent, label, consultedBy } }. '' when it waits on nobody.
+function chatViewWaiting(agent, statuses, nowMs, nameOf) {
+  const all = statuses && typeof statuses === 'object' ? statuses : {};
+  const cap = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
+  const who = (n) => { try { const d = typeof nameOf === 'function' ? nameOf(String(n)) : ''; if (d && typeof d === 'string') return d; } catch (e) { /* plain */ } return cap(String(n)); };
+  const since = (s) => Date.parse(s && s.busySince) || 0;
+  const age = (s) => (since(s) ? chatViewElapsed(since(s), nowMs) : '');
+  const helpers = [], asked = [];
+  for (const [name, s] of Object.entries(all)) {
+    if (!s || !s.busy || name === agent) continue;
+    if (s.worker && s.parent === agent) helpers.push(s);
+    else if (!s.worker && s.consultedBy === agent) asked.push(Object.assign({ name }, s));
+  }
+  helpers.sort((a, b) => since(a) - since(b)); asked.sort((a, b) => since(a) - since(b));
+  const parts = [];
+  if (helpers.length === 1) { const h = helpers[0], t = age(h); parts.push(`waiting on 1 helper (${h.label || 'unnamed'}${t ? ', ' + t : ''})`); }
+  else if (helpers.length > 1) {
+    const names = helpers.slice(0, 2).map(h => h.label || 'unnamed').join(', ') + (helpers.length > 2 ? ', ...' : '');
+    const t = age(helpers[0]);
+    parts.push(`waiting on ${helpers.length} helpers (${names}${t ? '; the first for ' + t : ''})`);
+  }
+  if (asked.length === 1) { const t = age(asked[0]); parts.push(`waiting on ${who(asked[0].name)}${t ? ' (' + t + ')' : ''}`); }
+  else if (asked.length > 1) parts.push(`waiting on ${asked.length} agents (${asked.slice(0, 2).map(a => who(a.name)).join(', ')}${asked.length > 2 ? ', ...' : ''})`);
+  return parts.join(', ');
+}
+// A running tool step in plain words, from a turn_activity item { kind: 'tool', tool, summary, status }. '' for anything else.
+function chatViewStep(item) {
+  if (!item || item.kind !== 'tool' || item.status !== 'running') return '';
+  const raw = String(item.tool || '');
+  const name = raw.replace(/^mcp__[^_]+(?:_[^_]+)*?__/, '');
+  const words = {
+    spawn_workers: 'starting helpers', consult_agent: 'asking another agent', run_job: 'starting a background job',
+    hand_off: 'handing off work', ask_user: 'waiting for your answer', Bash: 'running a command', Read: 'reading a file',
+    Write: 'writing a file', Edit: 'editing a file', Grep: 'searching files', Glob: 'searching files',
+    WebSearch: 'searching the web', WebFetch: 'reading a web page', schedule_task: 'scheduling a task',
+  }[name] || `using ${name || 'a tool'}`;
+  const sum = typeof item.summary === 'string' ? item.summary.replace(/\s+/g, ' ').trim() : '';
+  return sum && !/^(spawn_workers|ask_user)$/.test(name) ? `${words}: ${sum.length > 60 ? sum.slice(0, 59) + '...' : sum}` : words;
+}
+// The running tool calls of one agent, so parallel calls and overlapping turns keep the right step:
+// { calls: [{ key, turnId, item }] (oldest first), done: [keys] (recently finished; a late snapshot never brings one back) }.
+function chatViewStepsNew() { return { calls: [], done: [] }; }
+function chatViewStepKey(turnId, item) { return `${turnId || ''}|${item && item.callId != null ? item.callId : ''}`; }
+function chatViewStepsOn(st, turnId, item) {
+  if (!st || !item || item.kind !== 'tool') return false;
+  const key = chatViewStepKey(turnId, item);
+  if (item.status === 'running') {
+    if (item.callId != null && st.done.includes(key)) return false;
+    st.calls = st.calls.filter(c => c.key !== key);   // the same call again (a call without an id: the turn's id-less call is replaced)
+    st.calls.push({ key, turnId: turnId || '', item });
+    return true;
+  }
+  if (item.status !== 'done') return false;
+  if (item.callId != null) { st.done.push(key); if (st.done.length > 50) st.done.splice(0, st.done.length - 50); }
+  let i = -1;
+  for (let k = st.calls.length - 1; k >= 0 && i < 0; k--) if (st.calls[k].key === key) i = k;
+  if (i < 0 && item.callId == null) for (let k = st.calls.length - 1; k >= 0 && i < 0; k--) if (st.calls[k].turnId === (turnId || '')) i = k;
+  if (i < 0) return false;
+  st.calls.splice(i, 1);
+  return true;
+}
+function chatViewStepsEndTurn(st, turnId) {
+  if (!st) return false;
+  const before = st.calls.length;
+  st.calls = turnId ? st.calls.filter(c => c.turnId !== turnId) : [];
+  return st.calls.length !== before;
+}
+// A fetched turn (GET /api/agents/<name>/turn: { turnId, activity }): its still-running calls join the list unless already
+// known or seen finishing; its finished calls count as done.
+function chatViewStepsSnapshot(st, turnId, activity) {
+  if (!st || !Array.isArray(activity)) return false;
+  let changed = false;
+  for (const it of activity) {
+    if (it && it.kind === 'tool' && it.status === 'done' && it.callId != null) {
+      const key = chatViewStepKey(turnId, it);
+      if (!st.done.includes(key)) st.done.push(key);
+      const n = st.calls.length; st.calls = st.calls.filter(c => c.key !== key); if (st.calls.length !== n) changed = true;
+    }
+  }
+  if (st.done.length > 50) st.done.splice(0, st.done.length - 50);
+  // Calls only the snapshot knows started before anything this page saw live since it asked: they go first, in their order.
+  const add = [];
+  activity.forEach((it, i) => {
+    if (!it || it.kind !== 'tool' || it.status !== 'running') return;
+    const closed = activity.slice(i + 1).some(d => d && d.kind === 'tool' && d.status === 'done' && (it.callId == null ? d.callId == null : d.callId === it.callId));
+    const key = chatViewStepKey(turnId, it);
+    if (closed || (it.callId != null && st.done.includes(key)) || st.calls.some(c => c.key === key) || add.some(c => c.key === key)) return;
+    add.push({ key, turnId: turnId || '', item: it });
+  });
+  if (add.length) { st.calls = add.concat(st.calls); changed = true; }
+  return changed;
+}
+function chatViewStepsNewest(st) { return st && st.calls.length ? st.calls[st.calls.length - 1].item : null; }
+// The full line: what the turn is, then what it waits on or (when it waits on nobody) its current step.
+function chatViewNow(words, waiting, step) {
+  return [words, waiting || step].filter(Boolean).join(' \u00b7 ');
 }
 function chatViewElapsed(sinceMs, nowMs) {
   const s = Math.max(0, Math.floor(((Number(nowMs) || 0) - (Number(sinceMs) || 0)) / 1000));
@@ -2554,6 +2874,8 @@ function autoInfoOf(entry) {
     else if (o.kind === 'job_report') label = `Job report${o.jobName ? ': ' + o.jobName : ''}`;
     else if (o.kind === 'task') label = o.label === 'context compression' ? 'Resumed after compression' : `Hub task${o.label ? ': ' + o.label : ''}`;
     else if (o.kind === 'consult_reply') label = 'Consultation replies delivered';
+    else if (o.kind === 'hand_off') label = o.label || `Hand-off from ${from || 'another agent'}`;
+    else if (o.kind === 'hand_off_report') label = o.label || 'Hand-off finished';
     else if (o.kind === 'alert') label = 'Monitor alert';
     else label = 'Hub turn';
     return { kind, from, label };
@@ -6624,6 +6946,7 @@ function renderEntry(m, time = '') {
 // (links to /api/files/download, absolute paths) get a card each in a .file-cards box right after the reply body.
 // Never on a streaming chunk; no candidates means no request; nothing here may throw into the chat code.
 async function attachFileCards(el, body) {
+  if (window.HandOffCard) HandOffCard.refreshSoon();   // a reply just ended: look again for hand-offs (calls close together make one request)
   try {
     const H = window.hubFileCard;
     if (!el || !el.classList || !el.classList.contains('assistant')) return;
@@ -11694,36 +12017,48 @@ async function openUpdateSheet() {
   const blockers = s.blockers && s.blockers.length ? `<p class="upd-err">Update blocked: ${esc(s.blockers.join('; '))}</p>` : '';
   const incoming = s.commits && s.commits.length ? `<details><summary>${s.commits.length} incoming commit${s.commits.length === 1 ? '' : 's'}</summary>${s.commits.map(c => `<div>${esc(c)}</div>`).join('')}</details>` : '';
   const stayLabel = s.canUpdate ? 'Update & restart' : (s.upToDate ? 'Up to date' : 'Blocked');
-  const force = s.canForce ? `<p><small>The changed files are application files, not your data: they can be discarded.</small></p>` : '';
-  d.innerHTML = `<h3>Update hub</h3><p>Branch <b>${esc(s.branch)}</b>${s.upToDate ? ' — up to date on this channel' : ''}</p><div>${radios}</div>${blockers}${force}${incoming}<div class="btns"><button id="upd-close">Cancel</button>${s.canForce ? '<button id="upd-force">Discard changes &amp; update</button>' : ''}<button id="upd-go" class="go accent" ${s.canUpdate ? '' : 'disabled'}>${stayLabel}</button></div>`;
-  // Discarding updates the current channel only, so it is off while another channel is chosen.
-  if (s.canForce) $('upd-force').addEventListener('click', () => { if (chosen()) return; if (confirm(`Discard ${s.dirty.length} changed application file${s.dirty.length === 1 ? '' : 's'} and update ${s.branch}? Your chats, agents and data are not touched.`)) runUpdateFromPhone(null, true); });
+  // Changed files of the code itself: nothing moves the code over them. Put them aside (git stash) or cancel.
+  const lc = s.localChanges || [];
+  const force = lc.length ? `<div class="upd-err" id="upd-local"><b>Your Maestro's own files were changed on this computer</b>${lc.slice(0, 10).map(f => `<div><small>${esc(f)}</small></div>`).join('')}${lc.length > 10 ? `<div><small>and ${lc.length - 10} more</small></div>` : ''}<p><small>An update would stop on them, or they may break after one.</small></p></div>` : '';
+  // up to date, or a rewritten history that the changed files block: put them aside only (no update)
+  const asideOnly = s.upToDate || (!s.canPutAside && !!s.rewritten && lc.length > 0);
+  const canAside = s.canPutAside || asideOnly && lc.length > 0;
+  const asideLabel = asideOnly ? 'Put my changes aside' : 'Put my changes aside and update';
+  d.innerHTML = `<h3>Update hub</h3><p>Branch <b>${esc(s.branch)}</b>${s.upToDate ? ' — up to date on this channel' : ''}</p><div>${radios}</div>${blockers}${force}${incoming}<div class="btns"><button id="upd-close">Cancel</button>${canAside ? `<button id="upd-force">${asideLabel}</button>` : ''}<button id="upd-go" class="go accent" ${s.canUpdate ? '' : 'disabled'}${lc.length ? ' hidden' : ''}>${stayLabel}</button></div>`;
+  // Putting the changes aside, then updating (the chosen channel, or only putting aside when already up to date).
+  if (canAside) $('upd-force').addEventListener('click', () => { if (confirm(`Put these ${lc.length} change${lc.length === 1 ? '' : 's'} aside? Your Maestro won't put them back; you can find them with git stash list.`)) runUpdateFromPhone(asideOnly ? null : chosen(), true, asideOnly); });
   const go = $('upd-go');
   const chosen = () => { const sel = d.querySelector('input[name="upd-channel"]:checked'); return sel && sel.value !== ch.current ? sel.value : null; };
   const refresh = () => {
     const other = chosen() ? ch.channels.find(c => c.id === chosen()) : null;
     if (other) { go.disabled = false; go.textContent = `Switch to ${other.label} & restart`; }
     else { go.disabled = !s.canUpdate; go.textContent = stayLabel; }
-    if ($('upd-force')) $('upd-force').disabled = !!other;
+    if ($('upd-force') && !asideOnly) $('upd-force').textContent = other ? `Put my changes aside and switch to ${other.label}` : asideLabel;
+    if (lc.length) go.disabled = true;   // the update itself would stop on the changed files
   };
   for (const r of d.querySelectorAll('input[name="upd-channel"]')) r.addEventListener('change', refresh);
   $('upd-close').addEventListener('click', () => d.close());
   go.addEventListener('click', () => runUpdateFromPhone(chosen()));
 }
 
-async function runUpdateFromPhone(channel, force = false) {
+async function runUpdateFromPhone(channel, force = false, asideOnly = false) {
   const d = $('update-sheet');
   const go = $('upd-go');
   if (go) { go.disabled = true; go.textContent = channel ? 'Switching…' : 'Updating…'; }
   let r;
   try {
-    const resp = await api(force ? '/api/git-sync/force-update' : '/api/git-sync/update', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(channel && !force ? { channel } : {}) });
+    const resp = await api(asideOnly ? '/api/git-sync/put-aside' : force ? '/api/git-sync/force-update' : '/api/git-sync/update', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(channel && !asideOnly ? { channel } : {}) });
     r = await resp.json();
   } catch (e) { r = { success: false, error: e.message }; }
   if (!r || !r.success) {
     d.innerHTML = `<p class="upd-err">Update failed: ${esc((r && r.error) || 'unknown error')}</p><div class="btns"><button id="upd-close">Close</button><button id="upd-details" class="go">Details</button></div>`;
     $('upd-close').addEventListener('click', () => d.close());
     $('upd-details').addEventListener('click', () => openUpdateSheet());
+    return;
+  }
+  if (asideOnly) {   // no update, so no restart
+    d.innerHTML = `<p>${r.steps && r.steps.length ? 'Changes put aside.' : 'Nothing to put aside.'}</p>${(r.steps || []).map(st => `<div><small>• ${esc(st)}</small></div>`).join('')}<div class="btns"><button id="upd-close">Close</button></div>`;
+    $('upd-close').addEventListener('click', () => d.close());
     return;
   }
   d.innerHTML = `<p>Updated to ${esc(r.head)}.</p>${(r.steps || []).map(st => `<div><small>• ${esc(st)}</small></div>`).join('')}<p>Restarting…</p>`;
@@ -11754,6 +12089,7 @@ function paintUpdateCard() {
   const s = isAdmin() ? ucState : null;
   const avail = !!(s && s.enabled && s.available);
   if (note) note.textContent = avail ? ` · ${s.latestVersion && s.latestVersion !== s.currentVersion ? s.latestVersion : 'new version'} ready` : '';
+  typeof menuAdvDotSync === 'function' && menuAdvDotSync();
   if (!card) return;
   if (!avail || s.snoozed) { card.hidden = true; card.innerHTML = ''; return; }
   card.classList.toggle('sec', !!s.security);
@@ -12161,6 +12497,7 @@ function connectEvents() {
   on('turn_delta', onTurnDelta);
   on('turn_reasoning', onTurnReasoning);
   on('turn_activity', onTurnActivity);
+  on('turn_activity', (ev) => { if (ev && ev.agent) noteTurnStep(ev.agent, ev.turnId, ev.item); });   // the agent's current tool step, for its status line
   on('turn_progress', onTurnProgress);
   on('turn_worker_delta', onTurnWorkerDelta);
   on('turn_end', onTurnEnd);
@@ -12205,6 +12542,13 @@ function connectEvents() {
   on('plan_limit', () => refreshPlanUsage());
   on('plan_extra_usage', () => refreshPlanUsage());
   on('plan_warning', () => refreshPlanUsage());
+  // The ChatGPT plan (lib/codex-usage): its warnings lead to the Subscriptions sheet; new readings repaint the header and the sheet.
+  on('plan_warning', (ev) => {
+    if (!ev || ev.provider !== 'chatgpt' || !isAdmin()) return;
+    const when = subsWhen(ev.resetsAt);
+    toast(ev.reached ? `ChatGPT plan limit reached until ${when || 'it resets'}` : `ChatGPT plan: ${Math.round(Number(ev.utilization) || 0)}% of this week's allowance (resets ${when || 'the reset'})`, 8000, openSubsSheet);
+  });
+  on('codex_usage', (ev) => { if (!ev || !isAdmin()) return; codexUsageLast = ev; paintPlan(); paintSubsSheet(); });
   // (Re)connected: whatever happened to the open chat's turn meanwhile comes from the hub's turn view.
   source.onopen = () => { esLastEventAt = Date.now(); reattachCheckAll(); catchUpOpenAgent(); };
   // A dead session closes the stream with no status code: probe an API call, which redirects to /login on 401.
@@ -12342,14 +12686,85 @@ function busyCardInfo(agent) {
   if (!agent || viewNow() !== 'main' || ownTurnFor(agent)) return null;
   const s = live[agent];
   if (!s || !s.busy) return null;
-  const o = turnOrigins[agent];
-  const ids = openTurns[agent];
-  if (o && !(o.turnId && ids && ids.length && !ids.includes(o.turnId))) {
-    return o.hub ? { text: chatViewBusyText(o.origin, s.activity), since: o.since } : null;
+  const o = currentTurnOrigin(agent);
+  if (o) {
+    return o.hub ? { text: chatViewBusyText(o.origin, s.activity, displayName), since: o.since } : null;
   }
   // No turn_start seen (the page opened mid-turn): the status feed's words.
   if (s.pendingQuestion || s.activity === 'replying to you') return null;
-  return { text: chatViewBusyText(null, s.activity), since: Date.parse(s.busySince) || Date.now() };
+  return { text: chatViewBusyText(null, s.activity, displayName), since: Date.parse(s.busySince) || Date.now() };
+}
+// The noted origin of the agent's running turn, or null when none is known or it belongs to an older turn.
+function currentTurnOrigin(agent) {
+  const o = turnOrigins[agent];
+  const ids = openTurns[agent];
+  return o && !(o.turnId && ids && ids.length && !ids.includes(o.turnId)) ? o : null;
+}
+// The words for what an agent is doing on a turn this phone is not streaming (the chat header and its tap text).
+function chatBusyWords(name) {
+  const s = live[name] || {};
+  if (s.pendingQuestion) return 'Waiting for your answer';
+  const o = currentTurnOrigin(name);
+  return chatViewBusyText(o ? o.origin : null, s.activity, displayName);
+}
+// A page opened mid-turn got no turn_start: ask the hub once per turn who started it, so the text can name the caller.
+const turnOriginAsked = new Set();
+const turnOriginInFlight = new Set();
+async function turnOriginFetch(agent) {
+  const s = agent && live[agent];
+  if (!s || !s.busy || (currentTurnOrigin(agent) && turnSteps[agent]) || turnOriginInFlight.has(agent)) return;   // once per turn, while the origin or the steps are unknown
+  const key = `${agent}|${s.busySince}`;
+  if (turnOriginAsked.has(key)) return;
+  turnOriginAsked.add(key);
+  turnOriginInFlight.add(agent);
+  const since0 = s.busySince;
+  try {
+    const res = await api(`/api/agents/${encodeURIComponent(agent)}/turn`, { signal: AbortSignal.timeout(8000) });
+    if (!res || !res.ok) return;
+    const d = await res.json();
+    const t = d && d.active && d.turn;
+    if (!t) return;
+    const now = live[agent];
+    if (!now || !now.busy || now.busySince !== since0) return;   // the answer is about a turn that is over
+    const stepsChanged = chatViewStepsSnapshot(turnSteps[agent] ||= chatViewStepsNew(), t.turnId, t.activity);
+    const noteOrigin = !!t.origin && typeof t.origin === 'object' && !currentTurnOrigin(agent);
+    if (noteOrigin) noteTurnOrigin(agent, t.turnId, t.origin, t.startedAt);
+    if (noteOrigin && agent === current) { paintChatStatus(); paintBusyCard(); }
+    else if (noteOrigin || stepsChanged) repaintAgentStatus(agent);   // the agents list (the open chat was just painted)
+  } catch (e) { /* leave it: the status feed's words stay */ }
+  finally { turnOriginInFlight.delete(agent); }
+}
+// What the agent is waiting on or doing now: its helpers / consulted agents, else its newest running tool call ('' when neither).
+function chatBusyDetail(name) {
+  return chatViewWaiting(name, live, Date.now(), displayName) || chatViewStep(chatViewStepsNewest(turnSteps[name]));
+}
+// A turn_activity event: the agent's running tool calls changed (repaint what its status says).
+function noteTurnStep(agent, turnId, item) {
+  if (!agent || !item) return;
+  if (chatViewStepsOn(turnSteps[agent] ||= chatViewStepsNew(), turnId, item)) repaintAgentStatus(agent);
+}
+// Repaint what an agent's status says (open chat header, the agents list): per agent at most once per 500 ms (a trailing call
+// follows), the list re-render at most once per second overall.
+const statusPaintAt = {}, statusPaintTimer = {};
+let statusListAt = 0, statusListTimer = null;
+function repaintAgentStatus(agent) {
+  if (!agent) return;
+  const now = Date.now();
+  const wait = 500 - (now - (statusPaintAt[agent] || 0));
+  if (wait > 0) {
+    if (!statusPaintTimer[agent]) statusPaintTimer[agent] = setTimeout(() => { delete statusPaintTimer[agent]; repaintAgentStatus(agent); }, wait);
+    return;
+  }
+  statusPaintAt[agent] = now;
+  if (agent === current) paintChatStatus();
+  if (screen !== 'agents') return;
+  const lw = 1000 - (now - statusListAt);
+  if (lw > 0) {
+    if (!statusListTimer) statusListTimer = setTimeout(() => { statusListTimer = null; statusListAt = Date.now(); if (screen === 'agents') renderAgents(); }, lw);
+    return;
+  }
+  statusListAt = now;
+  renderAgents();
 }
 let busyCardEl = null, busyCardTimer = null, busyCardObs = null;
 // Shows, updates or removes the card; it is always the last element of the messages list.
@@ -12368,7 +12783,8 @@ function paintBusyCard() {
     busyCardEl.className = 'chat-busy-card';
     busyCardEl.setAttribute('role', 'status');
   }
-  busyCardEl.textContent = `\u23F3 ${info.text} \u00B7 ${chatViewElapsed(info.since, Date.now())}`;
+  const detail = chatBusyDetail(current);
+  busyCardEl.textContent = `\u23F3 ${info.text} \u00B7 ${chatViewElapsed(info.since, Date.now())}${detail ? ` \u00B7 ${detail}` : ''}`;   // as the header: words, time, detail
   if (box.lastElementChild !== busyCardEl) box.appendChild(busyCardEl);
   if (fresh) scrollChat();
   if (!busyCardTimer) busyCardTimer = setInterval(paintBusyCard, 5000);
@@ -12551,16 +12967,17 @@ function onForOwner(ev) {
 }
 
 function onTurnEnd(ev) {
+  const to = turnOrigins[ev.agent];
   if (!activeTurnEnd(openTurns, ev.agent, ev.turnId)) setLive(ev.agent, { busy: false });   // busy while another turn is open
   if (ev.agent) wkSettleAgent(ev.agent, ev.turnId || null);
   if (ev.agent && notifyArmed[ev.agent]) { notifyArmed[ev.agent] = null; if (ev.agent === current) paintNotifyBtn(); }
   if (ev.agent && ev.agent === current) setTimeout(() => refreshCtx(ev.agent), 3500);   // the hub records the size 2.5 s after the turn
+  if (ev && ev.agent && chatViewStepsEndTurn(turnSteps[ev.agent], ev.turnId)) repaintAgentStatus(ev.agent);   // only this turn's calls: another open turn keeps its own
   if (ev.agent) pollStatusSoon();   // re-read the status once: a reply can run without a turn of its own
   const reply = ev.reply || (ev.ok ? '(no reply)' : `⚠ turn failed: ${ev.error || 'unknown error'}`);
   const t = hubTurns[ev.turnId];
   delete hubTurns[ev.turnId];
-  const to = turnOrigins[ev.agent];
-  if (to && (!ev.turnId || !to.turnId || to.turnId === ev.turnId)) delete turnOrigins[ev.agent];   // the busy card goes with paintStatus below
+  if (to && (!ev.turnId || !to.turnId || to.turnId === ev.turnId) && turnOrigins[ev.agent] === to) delete turnOrigins[ev.agent];   // `to` was read first: setLive drops the origin when the agent goes idle   // the busy card goes with paintStatus below
   if (ev.agent) repaintNotifyAgentSheet(ev.agent);   // an open agent sheet drops its "Notify me" item when the reply ends
   const ownTurn = ev.origin?.kind === 'user';
   // Hub-started: by the turn_start this page saw (read before it was cleared above) or by the end event's origin.
@@ -12841,6 +13258,7 @@ function wire() {
   $('menu-workers').addEventListener('click', () => openWorkerSheet('history'));
   $('menu-wallet')?.addEventListener('click', openWalletSheet);   // ?.: a phone page cached from before has no menu entry
   $('menu-memory')?.addEventListener('click', openMemorySheet);   // a phone page cached from before this line has no menu entry
+  $('menu-subs')?.addEventListener('click', openSubsSheet);       // likewise
   $('chat-workers-btn').addEventListener('click', () => openWorkerSheet('list'));
   $('menu-compact').addEventListener('click', compressNow);
   $('files-upload-input').addEventListener('change', (e) => { filesUpload(e.target.files); e.target.value = ''; });
@@ -12973,6 +13391,34 @@ function wire() {
   }, 5000);
 }
 
+// ── system health notice (begin) ──
+// Admins only: a red bar at the top of the agent list while the nightly health check has a critical problem. The
+// sign-in items are left out (the setup checklist has its own notice). The phone has no Status page, so the link opens
+// the computer page at Settings → Status. An error or a non-200 answer leaves the bar as it is.
+function healthNoticeItems(view) {
+  return ((view && view.items) || []).filter(i => i && i.level === 'critical' && !String(i.id || '').startsWith('health-signin-'));
+}
+let healthNoticeSeq = 0;
+async function paintHealthNotice() {
+  const bar = $('health-notice');
+  if (!bar) return;
+  const seq = ++healthNoticeSeq;
+  if (!hubMe || hubMe.isAdmin !== true || !hubMe.user) { bar.hidden = true; bar.textContent = ''; return; }
+  let view = null;
+  try {
+    const r = await api('/api/system-health');
+    if (!r.ok) return;
+    view = await r.json();
+  } catch { return; }
+  if (seq !== healthNoticeSeq) return;   // a newer paint is on its way
+  const crit = healthNoticeItems(view);
+  if (!crit.length) { bar.hidden = true; bar.textContent = ''; return; }
+  bar.innerHTML = `Health: ${crit.map(i => esc(i.title)).join('; ')}. <a href="/?health=1">Open Settings → Status</a>`;
+  bar.hidden = false;
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) paintHealthNotice().catch(() => {}); });
+// ── system health notice (end) ──
+
 // ── Multi-user: owner switcher, account menu, Profile and Security sheets ──────
 
 async function loadMe() {
@@ -12981,8 +13427,13 @@ async function loadMe() {
     if (r.ok) {
       hubMe = await r.json();
       if (window.hubSimple) { try { window.hubSimple.apply(hubMe); } catch { /* the page stays as it is */ } }   // Simple mode and theme classes on <html>
+      try { if (window.HubLooks && hubMe) window.HubLooks.rememberDefault(hubMe.look, window.HubLooks.storageOf(window)); } catch { /* looks are optional: the page keeps the look it has */ }   // every load: no default clears the last person's
+      { const ti = $('menu-tiger'); if (ti) ti.hidden = !(hubMe && hubMe.isAdmin === true); }
+      // (the Tiger Teams link above: admins only, the page and its API are admin-only; likewise the Subscriptions entry)
+      { const su = $('menu-subs'); if (su) su.hidden = !(hubMe && hubMe.isAdmin === true); }
       if (typeof simpleMenuHide === 'function') simpleMenuHide();   // "Switch to Simple" only for a real account (not the legacy single-password login)
       if (typeof simpleToggleSync === 'function') simpleToggleSync();   // the Simple view switch (and Simple's theme button) only for a real account
+      typeof menuGroupsSync === 'function' && menuGroupsSync();
       // Signed in: recorded-call pieces the hub never acknowledged (a closed app, a reload, a dead network) are sent now, one at a time (lib/ui-voice-call.js).
       if (hubMe && hubMe.user) setTimeout(() => { try { voiceRecResendPending((u, i) => fetch(u, { credentials: 'include', ...i }), { userId: hubMe.user.id }); } catch { /* the call code is not up yet */ } }, 0);
     }
@@ -13047,6 +13498,7 @@ function applyMultiUser() {
     $('menu-2fa-note').hidden = !(hubMe.isAdmin && !hubMe.user.totpEnabled && hubMe.admin2faRequired !== false);
     $('menu-signout').textContent = `Sign out (${hubMe.user.name || hubMe.user.login})`;
   }
+  typeof menuGroupsSync === 'function' && menuGroupsSync();
 }
 
 // Reload app (menu): fetch the page's own files fresh, ask the service worker to look for a new version, then reload.
@@ -13076,6 +13528,7 @@ function reloadApp() {
   return appReloaderInst.reload();
 }
 
+
 function toggleMenu(e) {
   e.stopPropagation();
   const menu = $('menu');
@@ -13084,7 +13537,92 @@ function toggleMenu(e) {
   if (menu.classList.contains('open')) paintMenuCredit();
   if (menu.classList.contains('open')) paintVersionLabel();
   if (menu.classList.contains('open')) refreshMemoryHealth();
+  if (menu.classList.contains('open') && typeof menuOnOpen === 'function') menuOnOpen();
 }
+
+// ── phone menu (begin) ──
+// The ⋮ menu: Look on top, everyday items, then "Advanced" (folded, remembered on this phone) in groups.
+const MENU_ADV_KEY = 'mm-menu-advanced';
+function menuAdvRead(storage) {
+  try { return !!storage && storage.getItem(MENU_ADV_KEY) === '1'; } catch { return false; }
+}
+function menuAdvWrite(storage, open) {
+  try { if (storage) storage.setItem(MENU_ADV_KEY, open ? '1' : '0'); } catch { /* a phone that cannot store it keeps it for this visit */ }
+}
+// items: [{ hidden, chatOnly }]; a chat-only item does not count when no chat is open.
+function menuGroupVisible(items, noChat) {
+  return (items || []).some(it => it && !it.hidden && !(it.chatOnly && noChat));
+}
+function menuGroupsSync() {
+  const menu = document.getElementById('menu');
+  if (!menu) return;
+  const noChat = menu.classList.contains('no-chat');
+  for (const g of menu.querySelectorAll('.menu-group')) {
+    const items = [...g.children].filter(c => !c.classList.contains('menu-group-title'))
+      .map(c => ({ hidden: c.hidden, chatOnly: c.classList.contains('chat-only') }));
+    g.hidden = !menuGroupVisible(items, noChat);
+  }
+}
+function menuAdvDotSync() {
+  const dot = document.querySelector('#menu-adv-toggle .menu-adv-dot'), adv = document.getElementById('menu-adv');
+  if (!dot || !adv) return;
+  const on = (id) => { const e = document.getElementById(id); return !!(e && e.classList.contains('on')); };
+  const note = document.getElementById('menu-update-note');
+  const wants = on('act-unread') || on('menu-memory-count') || !!(note && (note.textContent || '').trim());
+  dot.hidden = !(adv.hidden && wants);
+  const tg = document.getElementById('menu-adv-toggle');   // the dot is visual: the row says it in words too
+  if (tg) { if (dot.hidden) tg.removeAttribute('aria-label'); else tg.setAttribute('aria-label', 'Advanced, something inside needs attention'); }
+}
+function menuAdvApply(open) {
+  const adv = document.getElementById('menu-adv'), tg = document.getElementById('menu-adv-toggle');
+  if (!adv || !tg) return;
+  adv.hidden = !open;
+  tg.setAttribute('aria-expanded', String(!!open));
+  const ch = tg.querySelector('.menu-adv-chev');
+  if (ch) ch.textContent = open ? '▾' : '▸';
+  menuAdvDotSync();
+}
+function menuLookName() {
+  const L = window.HubLooks, el = document.getElementById('menu-look-name');
+  if (!el || !L) return;
+  let label = '';
+  try { const cur = L.applied(document); const m = (L.LOOKS || []).find(l => l.id === cur); label = m ? m.label : ''; } catch { /* no label */ }
+  el.textContent = label ? label + ' ›' : '›';
+}
+function menuOnOpen() {
+  menuGroupsSync();
+  menuAdvDotSync();
+  menuLookName();
+}
+if (typeof document !== 'undefined' && document.getElementById) {
+  const look = document.getElementById('menu-look'), pick = document.getElementById('menu-look-pick'), tg = document.getElementById('menu-adv-toggle');
+  let store = null;
+  try { store = window.localStorage; } catch { store = null; }
+  if (look) look.hidden = !window.HubLooks;   // shown by this script only: an older cached script has no handler for it
+  if (look && pick) {
+    look.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const open = pick.hidden;
+      pick.hidden = !open;
+      look.setAttribute('aria-expanded', String(open));
+      if (open) lookPickerPaint(pick, menuLookName);
+    });
+    pick.addEventListener('click', (e) => e.stopPropagation());   // choosing a look repaints the picker in place: the menu stays open
+  }
+  if (tg) {
+    tg.hidden = false;   // the page shows every item until this script runs (an older cached script never folds them)
+    menuAdvApply(menuAdvRead(store));
+    tg.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const open = document.getElementById('menu-adv').hidden;   // folded now: open it
+      menuAdvWrite(store, open);
+      menuAdvApply(open);
+    });
+  }
+  const adv = document.getElementById('menu-adv');
+  if (adv) adv.addEventListener('click', (e) => { if (e.target && e.target.closest && e.target.closest('.menu-group-title')) e.stopPropagation(); });
+}
+// ── phone menu (end) ──
 
 // Memory (lib/memory-health): admins see the agents the last check flagged; the menu line shows only when there are
 // some. Read-only here: Settings → Status → Memory on a computer has the details.
@@ -13104,6 +13642,8 @@ async function refreshMemoryHealth() {
     c.textContent = n ? String(n) : '';
     c.classList.toggle('on', !!n);
   } catch {}
+  typeof menuGroupsSync === 'function' && menuGroupsSync();
+  typeof menuAdvDotSync === 'function' && menuAdvDotSync();
   paintMemorySheet();
 }
 function memorySheet() {
@@ -13158,6 +13698,82 @@ function paintMemorySheet() {
   body.scrollTop = scroll;
 }
 
+// Subscriptions (menu): the same switch and usage bars as Settings -> Subscriptions on a computer. Admins only.
+function subsSheet() {
+  let sh = $('subs-sheet');
+  if (sh) return sh;
+  sh = document.createElement('div');
+  sh.id = 'subs-sheet';
+  sh.className = 'rsn-sheet mh-sheet subs-sheet';
+  sh.setAttribute('role', 'dialog');
+  sh.setAttribute('aria-modal', 'true');
+  sh.setAttribute('aria-label', 'Subscriptions');
+  sh.dataset.noDirty = '';
+  sh.innerHTML = '<div class="rsn-sheet-head"><span class="rsn-sheet-title">Subscriptions</span><span class="rsn-sheet-count"></span>' +
+    '<button type="button" class="rsn-sheet-close" aria-label="Close">&#x2715;</button></div><div class="mh-body subs-body" tabindex="-1"></div>' +
+    '<div class="subs-foot"><button type="button" class="subs-close">Close</button></div>';
+  const close = () => { sh.classList.remove('open'); dialogGuard.closed(sh); };
+  sh.querySelector('.rsn-sheet-close').addEventListener('click', close);
+  sh.querySelector('.subs-close').addEventListener('click', close);
+  sh.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); } });
+  sh.addEventListener('change', (e) => { if (e.target && e.target.id === 'subs-on') saveSubsOn(e.target.checked); });
+  sh.addEventListener('click', (e) => { const b = e.target.closest && e.target.closest('[data-subs-read]'); if (b) subsReadNow(b.dataset.subsRead); });
+  sh.closeSheet = close;
+  document.body.appendChild(sh);
+  return sh;
+}
+function openSubsSheet() {
+  $('menu').classList.remove('open');
+  const sh = subsSheet();
+  if (!sh.classList.contains('open')) { sh.classList.add('open'); dialogGuard.open(sh, { close: sh.closeSheet }); }
+  paintSubsSheet();
+  (async () => {
+    if (!planUsageLast) { try { const r = await api('/api/plan-usage'); if (r.ok) planUsageLast = await r.json(); } catch { /* shown as no reading */ } }
+    await refreshCodexUsage();
+    paintSubsSheet();
+    const t = codexUsageLast && codexUsageLast.readAt ? Date.parse(codexUsageLast.readAt) : NaN;
+    if (subsOnFlag && (!Number.isFinite(t) || Date.now() - t > 30 * 60000)) subsReadNow('codex');   // the hub allows one read a minute
+  })();
+}
+function paintSubsSheet(msg) {
+  const sh = $('subs-sheet');
+  if (!sh || !sh.classList.contains('open')) return;
+  const body = sh.querySelector('.subs-body');
+  const keep = body.querySelector('.subs-msg');
+  const text = msg !== undefined ? msg : (keep ? keep.textContent : '');
+  const codexAgents = (typeof agents !== 'undefined' && Array.isArray(agents) ? agents : []).some(a => a && /^codex-cli\//.test(String(a.model || '')));
+  const scroll = body.scrollTop;
+  body.innerHTML = `<label class="subs-switch"><input type="checkbox" id="subs-on" ${subsOnFlag ? 'checked' : ''}> <span>Subscription usage</span></label>` +
+    `<div class="subs-hint">${escapeHtml("Shows how much of each subscription's allowance is used, in Settings, the chat header and your lead's notes. Free: no turns are spent to read it.")}</div>` +
+    (subsOnFlag ? subsWindowsHtml(planUsageLast, codexUsageLast, { now: Date.now(), codexAgents }) +
+      '<div class="subs-actions"><button type="button" data-subs-read="claude">Read now (Claude)</button><button type="button" data-subs-read="codex">Read now (ChatGPT)</button></div>' : '') +
+    `<div class="subs-msg subs-err">${escapeHtml(text)}</div>`;
+  body.scrollTop = scroll;
+}
+async function subsReadNow(which) {
+  paintSubsSheet('Reading...');
+  let err = '';
+  try {
+    const r = await api(`/api/${which === 'claude' ? 'plan-usage' : 'codex-usage'}/refresh`, { method: 'POST' });
+    const d = await r.json().catch(() => ({}));
+    if (which === 'claude') { if (r.ok) planUsageLast = d; else err = d.error || r.status; }
+    else { if (d && d.snapshot) codexUsageLast = d.snapshot; if (!r.ok || d.ok === false) err = d.error || r.status; }
+  } catch (e) { err = e.message; }
+  paintPlan();
+  paintSubsSheet(err ? String(err).slice(0, 200) : '');
+}
+async function saveSubsOn(on) {
+  try {
+    const r = await api('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ subscriptionUsage: !!on }) });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || r.status);
+    subsOnFlag = !!on;
+    paintPlan();
+    paintSubsSheet('');
+    if (on) refreshCodexUsage().then(() => { paintPlan(); paintSubsSheet(); });
+  } catch (e) { paintSubsSheet(`Could not save: ${e.message}`); }
+}
+
 // Monthly API credit (set on the desktop, Settings → Spend): this period's spend through the hub against it.
 async function paintMenuCredit() {
   const el = $('menu-credit');
@@ -13208,6 +13824,68 @@ function secMsg(id, text, ok) {
   el.classList.toggle('ok', !!ok);
 }
 
+// The look of this phone (lib/ui-looks, window.HubLooks): a row of three swatches with labels, in the Profile sheet and in
+// Simple mode's settings sheet. Built from text nodes and style properties (the registry's colours), never from markup.
+function lookSwatch(look) {
+  const p = look.preview;
+  const box = document.createElement('div');
+  box.setAttribute('aria-hidden', 'true');
+  box.style.height = '40px'; box.style.borderRadius = '8px'; box.style.padding = '4px'; box.style.boxSizing = 'border-box';
+  box.style.background = p.bg; box.style.border = '1px solid ' + p.ink + '33';
+  const panel = document.createElement('div');
+  panel.style.background = p.panel; panel.style.borderRadius = '5px'; panel.style.height = '100%';
+  panel.style.display = 'flex'; panel.style.alignItems = 'center'; panel.style.justifyContent = 'space-between'; panel.style.padding = '0 6px';
+  const aa = document.createElement('span');
+  aa.appendChild(document.createTextNode('Aa'));
+  aa.style.color = p.ink; aa.style.fontSize = '16px'; aa.style.fontWeight = '600';
+  aa.style.fontFamily = p.font === 'serif' ? "Georgia, 'Times New Roman', serif" : "-apple-system, 'Segoe UI', Roboto, sans-serif";
+  const dot = document.createElement('span');
+  dot.style.width = '8px'; dot.style.height = '8px'; dot.style.borderRadius = '50%'; dot.style.background = p.accent;
+  panel.appendChild(aa); panel.appendChild(dot); box.appendChild(panel);
+  return box;
+}
+function lookPickerPaint(host, onChosen) {
+  const L = window.HubLooks;
+  if (!host) return;
+  while (host.firstChild) host.removeChild(host.firstChild);
+  if (!L) {   // a page newer than the running server: /ui-looks.js was not served, so there is nothing to pick yet
+    const msg = document.createElement('div');
+    msg.className = 'sec-hint looks-restart';
+    msg.appendChild(document.createTextNode('Restart your Maestro to load the interface styles.'));
+    host.appendChild(msg);
+    return;
+  }
+  const cur = L.applied(document);   // the look in force, also when this phone can't store a choice
+  const row = document.createElement('div');
+  row.setAttribute('role', 'group'); row.setAttribute('aria-label', 'Interface style for this phone');
+  row.style.display = 'grid'; row.style.gridTemplateColumns = 'repeat(3, 1fr)'; row.style.gap = '8px';
+  for (const look of L.LOOKS) {
+    const on = look.id === cur;
+    const b = document.createElement('button');
+    b.type = 'button'; b.dataset.look = look.id; b.setAttribute('aria-pressed', String(on));
+    b.style.display = 'block'; b.style.padding = '6px'; b.style.borderRadius = '10px'; b.style.background = 'transparent';
+    b.style.color = 'inherit'; b.style.font = 'inherit'; b.style.fontSize = '0.75rem'; b.style.textAlign = 'center';
+    b.style.border = on ? '2px solid var(--accent)' : '1px solid var(--border)';
+    const lab = document.createElement('span');
+    lab.appendChild(document.createTextNode(look.label));
+    lab.style.display = 'block'; lab.style.marginTop = '4px';
+    b.appendChild(lookSwatch(look)); b.appendChild(lab);
+    b.addEventListener('click', () => {
+      if (!L.choose(look.id, L.storageOf(window))) return;
+      L.apply(document, look.id);   // no reload: the stylesheet swaps in place
+      lookPickerPaint(host, onChosen);
+      if (typeof onChosen === 'function') { try { onChosen(look.id); } catch { /* the caller's refresh must not undo the choice */ } }
+      const again = [...host.querySelectorAll('button[data-look]')].find(x => x.dataset.look === look.id);
+      if (again) again.focus();   // focus stays on the swatch just chosen
+    });
+    row.appendChild(b);
+  }
+  const note = document.createElement('div');
+  note.className = 'sec-hint';
+  note.appendChild(document.createTextNode('Applies to this device. Simple mode works with every interface style.'));
+  host.appendChild(row); host.appendChild(note);
+}
+
 // Profile: who you are here (your name and sign-in, set by an admin on the Users page) and the time zone your agents
 // use. Security keeps password, two-factor and sessions.
 function openProfileSheet() {
@@ -13226,7 +13904,12 @@ function openProfileSheet() {
       <select id="prof-tz" aria-label="Time zone your agents use"></select>
       <div class="sec-msg" id="prof-tz-msg"></div>
     </div>
+    <div class="sec-section">
+      <div class="sec-title">Interface style</div>
+      <div id="prof-looks"></div>
+    </div>
     <div class="sec-actions" style="margin-top:10px"><button id="prof-close">Close</button></div>`;
+  lookPickerPaint($('prof-looks'));
   $('prof-name').textContent = hubMe.user.name || hubMe.user.login;
   $('prof-login').textContent = `Signed in as ${hubMe.user.login} · ${hubMe.user.role === 'admin' ? 'admin' : 'member'}`;
   $('prof-tz').addEventListener('change', (e) => chooseTimeZone(e.target));
@@ -13273,6 +13956,31 @@ async function chooseTimeZone(sel) {
   secMsg('prof-tz-msg', error ? `Not saved: ${error}` : 'Saved.', !error);
 }
 
+// "Protect your Maestro's own code": the switch IS the state of the behaviour change 'protect-own-code' (admin-only route).
+async function mountCodeProtect(el) {
+  if (!el) return;
+  el.innerHTML = '<div class="sec-title">Protect your Maestro\'s own code</div><label class="sec-hint" style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="sec-code-protect" style="width:auto" disabled> Protect your Maestro\'s own code</label><div class="sec-hint">Agents can\'t change the program files of your Maestro on this computer, and a refused agent describes the change to you instead. Also on the Changes page.</div><div class="sec-msg" id="sec-code-protect-msg"></div>';
+  const box = el.querySelector('#sec-code-protect'), msg = el.querySelector('#sec-code-protect-msg');
+  try {
+    const r = await fetch('/api/behaviour-changes', { credentials: 'include' });
+    const j = r.ok ? await r.json() : null;
+    const e = j && (j.changes || []).find((c) => c.id === 'protect-own-code');
+    if (!e) { msg.textContent = 'Could not read this setting.'; return; }
+    box.checked = e.state === 'on';
+    box.disabled = false;
+    box.addEventListener('change', async () => {
+      const want = box.checked ? 'on' : 'off';
+      box.disabled = true;
+      try {
+        const p = await fetch('/api/behaviour-changes/protect-own-code', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ decision: want }) });
+        if (!p.ok) throw new Error((await p.json().catch(() => ({}))).error || 'Could not save.');
+        msg.textContent = want === 'on' ? 'On.' : 'Off.';
+      } catch (err) { box.checked = !box.checked; msg.textContent = err.message; }
+      box.disabled = false;
+    });
+  } catch { msg.textContent = 'Could not read this setting.'; }
+}
+
 function openSecuritySheet() {
   $('menu').classList.remove('open');
   const sheet = $('security-sheet');
@@ -13291,12 +13999,14 @@ function openSecuritySheet() {
       <div class="sec-title">Sessions</div>
       <div class="sec-actions"><button id="sec-revoke" class="danger">Sign out everywhere</button></div>
     </div>
+    ${hubMe && hubMe.isAdmin ? '<div class="sec-section" id="sec-code-protect-box"></div>' : ''}
     ${hubMe && hubMe.isAdmin ? `<div class="sec-section" id="sec-share" data-no-dirty>${shareSettingsHtml()}</div>` : ''}
     <div class="sec-actions" style="margin-top:10px"><button id="sec-close">Close</button></div>`;
   $('sec-pw-go').addEventListener('click', changePassword);
   $('sec-revoke').addEventListener('click', signOutEverywhere);
   $('sec-close').addEventListener('click', () => dialogRequestClose(sheet));
   paintTwoFactor();
+  mountCodeProtect($('sec-code-protect-box'));
   if ($('sec-share')) shareSettingsMount($('sec-share'), shareLinksListOpen);
   if (!sheet.open) sheet.showModal();
 }
@@ -13721,7 +14431,7 @@ function shareLinkFormHtml(name, s) {
   return `<div class="sec-section" data-no-dirty><div class="sec-title">${escapeHtml(name)}</div>
     <label class="sec-hint" for="sl-hours">Link works for</label><select class="sl-hours" id="sl-hours">${opts}</select>
     <label class="sec-hint" style="display:flex;gap:8px;align-items:center"><input type="checkbox" class="sl-once" style="width:auto"> Only one download</label>
-    <div class="sec-msg sl-msg" role="alert" style="color:var(--error,#e55)"></div></div>
+    <div class="sec-msg sl-msg" role="alert" style="color:var(--error)"></div></div>
     <div class="sec-actions"><button type="button" class="sec-btn sl-cancel">Cancel</button><button type="button" class="sec-btn sl-create">Create link</button></div>`;
 }
 function shareLinkResultHtml(link, origin) {
@@ -14017,7 +14727,7 @@ function filesRenderList() {
   const entries = filesState.entries;
   if (!entries.length) { list.innerHTML = `<div class="fs-empty">${filesState.path ? 'This folder is empty.' : 'No files yet.'} Use Upload to add some.</div>`; return; }
   const srt = filesSortGet();
-  const chip = (key, label) => `<button data-act="sort-${key}" aria-pressed="${srt.key === key ? 'true' : 'false'}" style="background:${srt.key === key ? 'var(--accent, #3987e5)' : 'transparent'};color:${srt.key === key ? '#fff' : 'inherit'};border:1px solid var(--border, #444);border-radius:12px;padding:2px 10px;min-height:40px;font-size:12px">${label}${srt.key === key ? (srt.dir === 'asc' ? ' ▲' : ' ▼') : ''}</button>`;
+  const chip = (key, label) => `<button data-act="sort-${key}" aria-pressed="${srt.key === key ? 'true' : 'false'}" style="background:${srt.key === key ? 'var(--accent)' : 'transparent'};color:${srt.key === key ? 'var(--on-accent)' : 'inherit'};border:1px solid var(--border);border-radius:12px;padding:2px 10px;min-height:40px;font-size:12px">${label}${srt.key === key ? (srt.dir === 'asc' ? ' ▲' : ' ▼') : ''}</button>`;
   const sortBar = `<div class="fs-sortbar" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:4px 0 8px">Sort: ${chip('mtime', 'Date')}${chip('name', 'Name')}${chip('size', 'Size')}</div>`;
   const when = (t) => { if (!t) return ''; const d = new Date(t); return isNaN(d) ? '' : d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }); };
   list.innerHTML = sortBar + entries.map((e, i) => {
@@ -14265,6 +14975,7 @@ async function init() {
   applyMultiUser();
   refreshPlanUsage();
   if (hubMe) { presenceStart(); loadNotifyPrefs(); }   // signed in: tell the hub this page is open; the bell shows 🔕 for an agent set to Off
+  paintHealthNotice().catch(() => {});
   if (new URLSearchParams(location.search).get('security') === '1') openSecuritySheet();
   await loadAgents();
   activeJobsSync();
@@ -14637,6 +15348,20 @@ if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
   if (typeof wide.addEventListener === 'function') wide.addEventListener('change', wideChange);
   else if (typeof wide.addListener === 'function') wide.addListener(wideChange);
 }
+// Under Broadsheet House or Quiet Page the style's own palette decides Simple's colours: that style's label, else null (Engineering).
+function simpleStyleLabel() {
+  const L = typeof window !== 'undefined' ? window.HubLooks : null;
+  if (!L || typeof L.applied !== 'function') return null;
+  const id = L.applied(document);
+  if (id === 'engineering') return null;
+  const look = typeof L.byId === 'function' ? L.byId(id) : null;
+  return look ? look.label : id;
+}
+let simpleLookSheetOff = null;   // removes the open settings sheet's mm-look-change listener
+// The top-bar theme button follows the style on its own too (one document listener, added once).
+if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+  document.addEventListener('mm-look-change', () => { try { if (typeof simpleToggleSync === 'function') simpleToggleSync(); } catch { /* cosmetic */ } });
+}
 // The Simple view switch (Advanced top bars and Simple's top bar) and Simple's theme button: only for a real account.
 function simpleToggleSync() {
   const ok = simpleAccountOk(hubMe);
@@ -14645,7 +15370,7 @@ function simpleToggleSync() {
   for (const id of ['agents-head', 'chat-head']) { const h = document.getElementById(id); if (h) h.classList.toggle('has-mode-toggle', ok); }
   const tb = document.querySelector('#simple-top .simple-theme-btn');
   if (tb) {
-    tb.hidden = !ok;
+    tb.hidden = !ok || !!(typeof simpleStyleLabel === 'function' && simpleStyleLabel());   // under a light style its own palette decides: nothing to switch
     const t = window.hubSimple.themeLabel(hubMe && hubMe.theme);
     tb.querySelector('.stb-ic').textContent = t.icon;
     tb.querySelector('.stb-lab').textContent = t.label;
@@ -14692,14 +15417,29 @@ function simpleSettingsOpen() {
   d.setAttribute('aria-label', 'Settings');
   d.innerHTML = '<h3>Settings</h3>' +
     '<div class="ss-sec"><div class="ss-title">Appearance</div><div class="ss-seg" role="group" aria-label="Appearance">' +
-    '<button type="button" data-theme="light">Light</button><button type="button" data-theme="dark">Dark</button><button type="button" data-theme="auto">Match device</button></div></div>' +
+    '<button type="button" data-theme="light">Light</button><button type="button" data-theme="dark">Dark</button><button type="button" data-theme="auto">Match device</button></div><div class="ss-follow" hidden></div></div>' +
+    '<div class="ss-sec" id="ss-style-sec"><div class="ss-title">Interface style</div><div id="ss-style"></div></div>' +
     '<div class="ss-sec"><div class="ss-title">Name</div><div class="ss-val"></div></div>' +
     '<button type="button" class="ss-row" id="ss-adv"><b>Switch to Advanced</b><small>All tools, agents’ work and settings</small></button>' +
     '<button type="button" class="ss-row" id="ss-out"><b>Sign out</b></button>' +
     '<button type="button" class="ss-close">Close</button>';
   d.querySelector('.ss-val').textContent = name;
+  lookPickerPaint(d.querySelector('#ss-style'));   // Interface style sits right after Appearance
   const paint = () => { const cur = (hubMe && hubMe.theme) || 'auto'; d.querySelectorAll('.ss-seg button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.theme === cur))); };
   paint();
+  // Under a light style its own palette decides the colours: the buttons give way to one line (the stored theme is untouched).
+  const paintFollow = () => {
+    const label = simpleStyleLabel();
+    const seg = d.querySelector('.ss-seg'); const line = d.querySelector('.ss-follow');
+    if (seg) seg.style.display = label ? 'none' : '';
+    if (line) { line.hidden = !label; line.textContent = label ? 'Colours follow your interface style (' + label + ').' : ''; }
+  };
+  paintFollow();
+  if (simpleLookSheetOff) simpleLookSheetOff();
+  const onLook = () => { if (!d.isConnected) { document.removeEventListener('mm-look-change', onLook); return; } paintFollow(); };
+  document.addEventListener('mm-look-change', onLook);
+  simpleLookSheetOff = () => document.removeEventListener('mm-look-change', onLook);
+  d.addEventListener('close', () => { if (simpleLookSheetOff) { simpleLookSheetOff(); simpleLookSheetOff = null; } }, { once: true });
   d.querySelectorAll('.ss-seg button').forEach(b => b.addEventListener('click', async () => {
     if (simpleThemeSaving) return;   // one theme save at a time (shared with the theme button)
     simpleThemeSaving = true;
@@ -14827,5 +15567,8 @@ function simpleMenuHide(ms) { ms = ms || document.getElementById('menu-simple');
 }
 if (typeof document.addEventListener === 'function') document.addEventListener('click', (e) => { if (e.target && e.target.closest && e.target.closest('.mode-toggle')) simpleModeTap(); });
 // ── end Simple mode: phone ──
+
+// Hand-off cards above the message box (lib/ui-hand-off-card.js): follow the open chat; none while another screen is shown.
+if (window.HandOffCard) HandOffCard.track({ getAgent: () => (screen === 'chat' ? current : null), getContainer: () => $('handoff-cards'), renderMarkdown: (t) => formatContent(t) });
 
 init();

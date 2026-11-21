@@ -25,22 +25,22 @@ function groupsFromSource(app) {
   return groups;
 }
 
-test('eight groups, and every section openSettings draws belongs to exactly one of them', () => {
+test('nine groups, and every section openSettings draws belongs to exactly one of them', () => {
   const app = read('app.js');
   const groups = groupsFromSource(app);
-  assert.deepStrictEqual(groups.map(g => g.title), ['🩺 Status', '🔐 Security', '💾 Backups', '🧠 AI models', '🤖 Agents', '🔔 Notifications', '🧰 Tools and data', '💰 Money and safety']);
+  assert.deepStrictEqual(groups.map(g => g.title), ['🩺 Status', '🎨 Appearance', '🔐 Security', '💾 Backups', '🧠 AI models', '🤖 Agents', '🔔 Notifications', '🧰 Tools and data', '💰 Money and safety']);
   // The Voices section is drawn by voiceSettingsHtml(data), called from openSettings.
   const vAt = app.indexOf('function voiceSettingsHtml(data) {');
   assert.ok(vAt > 0 && settingsSource(app).includes('html += voiceSettingsHtml(data);'), 'Voices is drawn by openSettings');
   const src = settingsSource(app) + app.slice(vAt, app.indexOf('function voicePaintSettings(', vAt));
   const drawn = [...src.matchAll(/class="st-section" id="(st-[a-z0-9-]+-section)"/g)].map(m => m[1]);
-  assert.strictEqual(drawn.length, 25, 'all 25 sections carry an id');
+  assert.strictEqual(drawn.length, 29, 'all 29 sections carry an id');
   assert.doesNotMatch(src, /class="st-section">/, 'no section without an id');
   const grouped = groups.flatMap(g => g.sections);
   assert.strictEqual(new Set(grouped).size, grouped.length, 'no section in two groups');
   assert.deepStrictEqual([...grouped].sort(), [...drawn].sort(), 'the groups name exactly the sections drawn');
   const byId = Object.fromEntries(groups.map(g => [g.id, g.sections]));
-  assert.deepStrictEqual(byId.status, ['st-ready-section', 'st-sec-section', 'st-memory-section', 'st-selfcheck-section', 'st-updates-section']);
+  assert.deepStrictEqual(byId.status, ['st-ready-section', 'st-health-section', 'st-sec-section', 'st-memory-section', 'st-selfcheck-section', 'st-components-section', 'st-updates-section']);
   assert.deepStrictEqual(byId.money, ['st-spend-section', 'st-emergency-section']);
   assert.deepStrictEqual(byId.backups, ['st-backups-section']);
   assert.deepStrictEqual(byId.security, ['st-security-section']);

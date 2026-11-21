@@ -318,3 +318,27 @@ test('session: the process exiting mid-turn fails the turn and pending requests'
   assert.match(r.error, /exited/);
   await assert.rejects(s.client.request('test/state', {}), /not running/);
 });
+
+// ── rate limits hook ─────────────────────────────────────────────────────
+
+test('CodexAppSession: onRateLimits gets account/rateLimits/updated only, a throwing hook is survived, the turn listener still hears it', () => {
+  const seen = [];
+  const heard = [];
+  const s = Object.create(as.CodexAppSession.prototype);
+  s.opts = { onRateLimits: (rl) => { seen.push(rl); throw new Error('hook broke'); } };
+  s.agentName = 'x'; s.threadId = 't1';
+  s.turnListener = (m) => heard.push(m);
+  const origErr = console.error; console.error = () => {};
+  try {
+    s._onNotification('account/rateLimits/updated', { rateLimits: { limitId: 'codex', primary: { usedPercent: 5 } } });
+    s._onNotification('account/rateLimits/updated', { rateLimits: null });
+    s._onNotification('account/rateLimits/updated', {});
+    s._onNotification('item/started', { rateLimits: { limitId: 'no' } });
+    s._onNotification('turn/completed', {});
+  } finally { console.error = origErr; }
+  assert.deepStrictEqual(seen, [{ limitId: 'codex', primary: { usedPercent: 5 } }]);
+  assert.deepStrictEqual(heard, ['account/rateLimits/updated', 'account/rateLimits/updated', 'account/rateLimits/updated', 'item/started', 'turn/completed']);
+  const none = Object.create(as.CodexAppSession.prototype);
+  none.opts = {}; none.turnListener = null;
+  none._onNotification('account/rateLimits/updated', { rateLimits: {} });   // no hook: nothing happens
+});

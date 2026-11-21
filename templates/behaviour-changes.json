@@ -77,6 +77,39 @@
       "check": "How the owner uses the primary agents today, whether there are repeated jobs or long projects that a specialist, a project lead or cheaper models would serve better, and whether the owner welcomes suggestions.",
       "on": "Primary agents make short suggestions when they are relevant.",
       "off": "No suggestions about better ways of working."
+    },
+    {
+      "id": "hand-off-guidance",
+      "leadMay": true,
+      "title": "Primary agents hand long work to a build partner and stay free to talk",
+      "changes": "A primary agent no longer waits on long work inside its own turn. Anything longer than a few minutes (development, production, long research) goes to its build partner or another teammate with hand_off, and the agent is free to talk with you at once. The other agent keeps a status file next to the brief, and its report comes back to your agent when it is done. When the lead creates a primary agent for long development or creative work, it also creates that agent's build partner.",
+      "benefits": "You can talk to your main agents while long work is running, ask how it is going and change course, instead of waiting until the work ends.",
+      "costs": "About 150 words more in each primary agent's instructions (a few more for the lead). A build partner is one more agent, on a model the lead chooses from what you already have (subscription before pay-per-use). Each hand-off costs the other agent's turns, as the same work would cost on workers.",
+      "check": "Which primary agents here run long work (development, production, long research) and wait on workers or consultations inside their own turns, whether they already have a build partner or a teammate that can take it, and which model a partner would use.",
+      "on": "Primary agents get the rule and hand long work off; the lead creates a build partner with each new primary agent for long development or creative work.",
+      "off": "Primary agents may still wait on long work inside their own turns, as before; hand_off stays available when they choose it."
+    },
+    {
+      "id": "protect-own-code",
+      "leadMay": false,
+      "title": "Protect your Maestro's own code",
+      "changes": "Agents can no longer change the program files of your Maestro on this computer: everything in its folder except your data, the agents' workspaces and installed packages. That includes git commands that change those files (stash pop, checkout, reset, pull and the like). An agent that is refused is told to describe the change to you instead. This applies to every agent, the lead too.",
+      "benefits": "A change an agent makes to your Maestro's code can stop the next update or break your Maestro so that every agent turn fails. With this on, that cannot happen by an agent's hand; you decide what changes, and the lead describes what it would like to change.",
+      "costs": "An agent that maintains your Maestro's code, as on a developer's install, cannot do its work while this is on. The check reads a file of yours (data/behaviour-reviews.json); if it cannot be read, the protection stays on and Setup shows a notice.",
+      "check": "Ask your lead to add a line to a file in lib/: it is refused with the message that your Maestro's own code is protected. Whether any agent here maintains your Maestro's code (a developer's install), in which case you may want this off.",
+      "on": "No agent can change your Maestro's program files on this computer, or run git commands that change them.",
+      "off": "Agents with the right to write there can change the code. Needed only if an agent maintains your Maestro's code, as a developer's install does."
+    },
+    {
+      "id": "own-code-guidance",
+      "leadMay": true,
+      "title": "Your lead leaves your Maestro's code alone",
+      "changes": "Adds a short section to your lead's instructions: it never changes your Maestro's own program files on this computer, describes the change to you instead and offers to send it to the project as an idea or a pull request, warns you plainly if you insist on a local change (it stops updates), and never puts back changes that were put aside (git stash pop or apply).",
+      "benefits": "Your lead explains what it would change instead of editing code that your updates replace, so updates keep working.",
+      "costs": "About 120 words more in the lead's instructions in every turn.",
+      "check": "Whether your lead has been editing your Maestro's files on this computer, and whether anything here depends on such a local change.",
+      "on": "The lead gets the rule and leaves your Maestro's code alone.",
+      "off": "The lead gets no such rule; \"Protect your Maestro's own code\" can still refuse the edits."
     }
   ]
 }

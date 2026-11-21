@@ -99,7 +99,7 @@ test('the toggle itself is unchanged: same API call, notifyArmed and the no-devi
 
 test('the ⋮ menu: a Notifications item next to the test item opens the defaults sheet with the per-agent list and Reset', () => {
   const i = html.indexOf('id="menu-notify-test"'), j = html.indexOf('id="menu-notify-prefs"');
-  assert.ok(i > 0 && j > i && j - i < 200, 'right after Send a test notification');
+  assert.ok(i > 0 && j > 0 && Math.abs(j - i) < 300, 'next to Send a test notification');   // phone-menu reorder: Notification settings now comes just before the test item in the same group
   assert.ok(html.includes('<dialog id="notify-prefs-sheet"'));
   assert.ok(js.includes("$('menu-notify-prefs')?.addEventListener('click'") && js.includes('openNotifyPrefsSheet()'));
   const paint = fn('paintNotifyPrefsSheet');
@@ -281,7 +281,7 @@ test('the defaults sheet: a plain warning under Security and access only when it
   assert.ok(order.every((x, i) => x > 0 && (i === 0 || x > order[i - 1])), 'four rows in order');
   ctx.notifyPrefs = { default: { questions: 'on', requested: 'on', other: 'on', security: 'off' }, agents: {} };
   ctx.paint();
-  const w = "You won't be told about sign-in and passkey changes, wallet locks, failed backups, access changes or a halted hub.";
+  const w = "You won't be told about sign-in and passkey changes, wallet locks, failed backups, access changes, a halted hub or health problems such as a full disk.";
   assert.ok(el.innerHTML.includes(w), 'warning shown');
   assert.ok(el.innerHTML.indexOf(w) > el.innerHTML.indexOf('data-nd="security"') && el.innerHTML.indexOf(w) < el.innerHTML.indexOf('Agents with their own setting'), 'right under the security row');
   ctx.notifyPrefs = { default: { security: 'away' }, agents: {} };

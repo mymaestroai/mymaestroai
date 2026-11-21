@@ -260,7 +260,7 @@ test('runner: a location.replace that throws restores the page and does not thro
 });
 
 test('desktopOnlyLink: the computer layout panels the phone page lacks', () => {
-  assert.deepStrictEqual(L.DESKTOP_ONLY_PARAMS, ['memory', 'selfcheck', 'connectors', 'backups']);
+  assert.deepStrictEqual(L.DESKTOP_ONLY_PARAMS, ['memory', 'selfcheck', 'connectors', 'backups', 'health']);
   for (const s of ['?memory=1', '?selfcheck=1', '?connectors=1', '?backups=1', '?a=2&memory=1']) assert.strictEqual(L.desktopOnlyLink(s), true, s);
   for (const s of ['', '?memory=0', '?update=1', '?security=1', '?wallet=unlock', '?agent=sam', null, undefined]) assert.strictEqual(L.desktopOnlyLink(s), false, String(s));
 });
@@ -347,7 +347,7 @@ test('wiring: mobile page links to the desktop with ?desktop=once and never send
   assert.strictEqual(html.split('id="use-full-site"').length - 1, 1);
   const menu = html.slice(html.indexOf('<div id="menu">'));
   assert.ok(menu.includes('<a id="use-full-site" href="/?desktop=1">Use the full site</a>'), 'inside the menu');
-  assert.ok(menu.indexOf('use-full-site') > menu.indexOf('Open full UI') && menu.indexOf('use-full-site') < menu.indexOf('menu-reload'));
+  assert.ok(menu.indexOf('use-full-site') > menu.indexOf('Open full UI') && menu.indexOf('use-full-site') > menu.indexOf('menu-reload'));   // phone-menu reorder: Reload app is in the top group, the desktop links under Advanced > Other views
   const js = read('mobile.js');
   assert.ok(!js.includes("location.replace('/')"));
   assert.ok(!js.includes("location.href = '/'"));

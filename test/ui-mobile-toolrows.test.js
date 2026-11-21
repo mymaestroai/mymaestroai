@@ -16,9 +16,14 @@ test('a tool row puts the tool name in its own bold span and marks a failed call
 
 test('tool calls are blue on a tinted panel; failed calls stay red (the rule comes last)', () => {
   const h = read('mobile.html');
-  assert.match(h, /\.feed \{[^}]*border-left: 2px solid rgba\(61, 123, 255, 0\.65\); background: rgba\(61, 123, 255, 0\.07\);/);
-  assert.match(h, /\.frow\.tool \.fline, \.ftool \{ color: #8AB4FF; \}/);
-  assert.match(h, /\.ftname \{ font-weight: 600; color: #B5CEFF; \}/);
+  // looks-vars: the colours moved into :root variables (same values); each rule uses the variable and :root keeps the old literal
+  assert.match(h, /\.feed \{[^}]*border-left: 2px solid var\(--accent-edge\); background: var\(--feed-bg\);/);
+  assert.match(h, /--accent-edge:\s*rgba\(61, 123, 255, 0\.65\);/);
+  assert.match(h, /--feed-bg:\s*rgba\(61, 123, 255, 0\.07\);/);
+  assert.match(h, /\.frow\.tool \.fline, \.ftool \{ color: var\(--tool-text\); \}/);
+  assert.match(h, /--tool-text:\s*#8AB4FF;/);
+  assert.match(h, /\.ftname \{ font-weight: 600; color: var\(--tool-name-text\); \}/);
+  assert.match(h, /--tool-name-text:\s*#B5CEFF;/);
   const tool = h.indexOf('.frow.tool .fline, .ftool');
   const failed = h.indexOf('.frow.failed .fline, .frow.failed .ftname { color: var(--error); }');
   assert.ok(tool > 0 && failed > tool, 'the red rule follows the blue one, so a failed call wins');

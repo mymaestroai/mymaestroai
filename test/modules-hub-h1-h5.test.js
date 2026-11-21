@@ -517,11 +517,18 @@ test('H2 approvals: a module request uses its own wait, shows on the hub event s
 });
 
 test('H2 approvals: request() without a timeout option keeps the settings window', () => {
-  const ap = createApprovals({ timeoutMs: 90000, log: () => {} });
+  // a clock that moves 1 ms on every reading: what a busy computer does between two lines
+  let t = Date.parse('2026-01-05T10:00:00.000Z');
+  const ap = createApprovals({ timeoutMs: 90000, now: () => t++, log: () => {} });
   const a = ap.request({ agent: 'x', tool: 't', input: {}, cls: 'send', summary: 's' });
   const rec = ap.get(a.id);
   assert.strictEqual(Date.parse(rec.expiresAt) - Date.parse(rec.createdAt), 90000);
   ap.resolve(a.id, 'deny');
+  // and a module's own wait, likewise exact
+  const b = ap.request({ agent: 'x', tool: 't', input: {}, cls: 'send', summary: 's', timeoutMs: 45000 });
+  const recB = ap.get(b.id);
+  assert.strictEqual(Date.parse(recB.expiresAt) - Date.parse(recB.createdAt), 45000);
+  ap.resolve(b.id, 'deny');
 });
 
 test('H2 push: a module request reaches the phone and names the module and the agent', async (t) => {
