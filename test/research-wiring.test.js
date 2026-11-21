@@ -245,7 +245,8 @@ test('review r1: no reminder spent on a turn the hub started; the run is detache
   L.turn('sam-agent', { origin: { kind: 'schedule' }, personKey: null });
   assert.doesNotMatch(await L.ctx.run('sam-agent', L.live, { action: 'offer', question: 'Q?' }), /turn deep research back on/);
   assert.equal(L.prefs.remindDue('u_owner', WEEK), true, 'still due for when they are reading');
-  assert.match(SRC, /spawn: \(agent, workers, signal\) => runSpawnWorkers\(agent, workers, null, signal \|\| null, null, \{ detached: true, raw: true \}\)/);
+  // review r5 added the admit check to the same call
+  assert.match(SRC, /spawn: \(agent, workers, signal, opts = \{\}\) => runSpawnWorkers\(agent, workers, null, signal \|\| null, null, \{ detached: true, raw: true, admit:/);
   assert.match(SRC, /const parentTurn = opts\.detached \? null :/);
   assert.match(SRC, /const callerTurn = \(opts\.queuedRun \|\| opts\.detached\) \? null :/);
   assert.match(SRC, /if \(raw\) return results\.map\(r => \(\{ label: r\.label, ok: r\.ok === true && !isStoppedResult\(r\.text\), text: String\(r\.text \|\| ''\) \}\)\);/);
@@ -317,4 +318,9 @@ test('review r3: a card overtaken by a newer call says its answer counts for not
 test('review r4: the hub stamps a run with agentIdentity (the raw record\'s box id), not the listed agents', () => {
   assert.match(SRC, /stampOf: \(agent\) => require\('\.\/agents'\)\.agentIdentity\(agent\)/);
   assert.doesNotMatch(SRC, /stampOf:[^\n]*getAgentsSync/);
+});
+
+test('review r5: the launcher asks admit right before each worker is dispatched, and the research wiring passes it', () => {
+  assert.match(SRC, /runOne: \(job, v\) => \{\n\s+if \(typeof admit === 'function' && !admit\(\)\) throw new Error\(/);
+  assert.match(SRC, /spawn: \(agent, workers, signal, opts = \{\}\) => runSpawnWorkers\([^\n]*admit: \(opts && opts\.admit\) \|\| null/);
 });

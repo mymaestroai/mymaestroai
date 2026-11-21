@@ -754,3 +754,62 @@ test('review r4: agentIdentity: box id, else owner; a re-made agent differs; a s
   assert.throws(() => agentIdentity('sam-agent', { load: () => [] }), /could not be read/);
   assert.throws(() => agentIdentity('sam-agent', { load: () => null }), /could not be read/);
 });
+
+// ── review r5: a strict read for the identity, seeded agents with box ids, and a check as each worker starts ──
+test('review r5: the runner hands the launcher an admit check that turns false once the agent is replaced', async () => {
+  let who = 'box:aaa';
+  const seen = [];
+  const a = makeRunner({
+    stampOf: () => who,
+    spawn: async (agent, workers, signal, opts) => {
+      seen.push(opts && opts.admit);
+      if (workers[0].label === 'Research summary') {
+        who = 'box:bbb';   // replaced after the runner's own check, while the launcher is still getting ready
+        return opts.admit() ? 'THE REPORT' : [{ label: 'Research summary', ok: false, text: 'not started' }];
+      }
+      assert.equal(opts.admit(), true, 'the same agent is admitted');
+      return 'FINDINGS';
+    },
+  });
+  const r = a.runner.start({ agent: 'sam-agent', question: 'Q?', subQuestions: SUBS });
+  await until(() => a.runner.get(r.id).state === 'failed');
+  assert.equal(seen.length, 2);
+  assert.ok(seen.every((f) => typeof f === 'function'), 'both dispatches carry admit');
+  assert.equal(a.wakes.length, 0, 'nothing delivered to the new agent');
+});
+
+test('review r5: agentIdentity reads agents.json itself: never the last good copy or the .bak, never a seed', () => {
+  const agents = require(path.join(ISO.inst, 'lib', 'agents.js'));
+  const f = path.join(ISO.inst, 'data', 'agents.json');
+  fs.writeFileSync(f, JSON.stringify([{ name: 'sam-agent', owner: 'u_sam', box: 'b1' }]));
+  assert.equal(agents.agentIdentity('sam-agent'), 'box:b1');
+  assert.equal(agents.agentIdentity('nobody'), null);
+  // unreadable now, with an older .bak that does not list the agent: "can't tell", never "gone"
+  fs.writeFileSync(f + '.bak', JSON.stringify([{ name: 'other-agent', owner: 'u_sam', box: 'b9' }]));
+  fs.writeFileSync(f, '{not json');
+  assert.throws(() => agents.agentIdentity('sam-agent'));
+  // missing: "can't tell", and nothing is seeded
+  fs.unlinkSync(f);
+  assert.throws(() => agents.agentIdentity('sam-agent'));
+  assert.equal(fs.existsSync(f), false, 'no seed written');
+  fs.unlinkSync(f + '.bak');
+});
+
+test('review r5: a first-run seed gives every seeded agent a box id of its own', () => {
+  const iso2 = makeIsolatedInstall('research-seed-');
+  const agents2 = require(path.join(iso2.inst, 'lib', 'agents.js'));
+  agents2.getAgentsSync(true);
+  const f = path.join(iso2.inst, 'data', 'agents.json');
+  const first = JSON.parse(fs.readFileSync(f, 'utf8'));
+  assert.ok(first.length > 0);
+  assert.ok(first.every((a) => typeof a.box === 'string' && /^[0-9a-f]{12}$/.test(a.box)), 'each has a box id');
+  assert.equal(new Set(first.map((a) => a.box)).size, first.length, 'all different');
+  // seeded again after a lost list: new box ids, so a saved report can't match the earlier agent
+  fs.unlinkSync(f);
+  agents2.getAgentsSync(true);
+  const again = JSON.parse(fs.readFileSync(f, 'utf8'));
+  for (const a of again) {
+    const before = first.find((b) => b.name === a.name);
+    if (before) assert.notEqual(a.box, before.box);
+  }
+});
