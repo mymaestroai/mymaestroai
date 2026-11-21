@@ -122,7 +122,7 @@ function phone(apiImpl) {
   };
   vm.createContext(ctx);
   const code = [lineOf(mob, 'const RESEARCH_CHOICES'), lineOf(mob, 'function researchChoiceLabel'), lineOf(mob, 'function researchMenuText'), lineOf(mob, 'function researchChoiceOk'),
-    'let researchPrefOn = false; let researchPrefChoice = "ask"; let researchPrefSaving = false;',
+    'let researchPrefOn = false; let researchPrefChoice = "ask"; let researchPrefSaving = false; let researchPrefReadSeq = 0;',
     'function researchPrefPaintAll() {}',
     fnSrc(mob, 'researchPrefLoad'), fnSrc(mob, 'researchPick'),
     'this.h = { load: researchPrefLoad, pick: researchPick, state: () => JSON.stringify({ on: researchPrefOn, choice: researchPrefChoice, saving: researchPrefSaving }) };'].join('\n');
@@ -197,4 +197,22 @@ test('phone: a pick is ignored while the feature is off', async () => {
   await p.h.load();
   assert.strictEqual(await p.h.pick('never'), false);
   assert.strictEqual(p.calls.length, 1);
+});
+
+test('phone (review r1): a read that began before a save never repaints the older choice', async () => {
+  let releaseGet;
+  const getGate = new Promise(r => { releaseGet = r; });
+  let gets = 0;
+  const p = phone(async (path, o) => {
+    if (o && o.method === 'POST') return res(200, { ok: true, choice: JSON.parse(o.body).choice });
+    gets++;
+    if (gets === 2) { await getGate; return res(200, { on: true, choice: 'ask' }); }   // the slow read still says ask
+    return res(200, { on: true, choice: 'ask' });
+  });
+  await p.h.load();
+  const slowRead = p.h.load();             // a read on its way (the menu opened)
+  assert.strictEqual(await p.h.pick('never'), true);
+  releaseGet();
+  await slowRead;
+  assert.strictEqual(p.h.state().choice, 'never', 'the older read did not put ask back');
 });

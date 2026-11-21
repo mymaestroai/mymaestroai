@@ -123,5 +123,6 @@ test('the hub links to it: account menu for admins, a Settings box, the phone â‹
 });
 
 test('POST /api/ask_response tells handleAskResponse whether the caller is an admin', () => {
-  assert.match(server, /handleAskResponse\(body, \{ isAdmin: access\.isAdmin\(req\.hubUser\) \}\)/);
+  // and who is answering (deep research: a card only the person it asked may answer, lib/research)
+  assert.match(server, /handleAskResponse\(body, \{ isAdmin: access\.isAdmin\(req\.hubUser\), personKey \}\)/);
 });

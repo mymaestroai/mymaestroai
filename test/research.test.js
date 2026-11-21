@@ -173,13 +173,19 @@ test('offerText: every outcome', () => {
   assert.match(o({ run: true, by: 'yes' }), /^The person wants a deep research run\. Plan 2 to 8 sub-questions/);
   assert.match(o({ run: true, by: 'always' }), /^The person wants a deep research run \(they chose always\)\. Plan/);
   assert.match(o({ run: true, by: 'always-now' }), /^The person wants a deep research run \(and from now on without being asked\)\. Plan/);
-  for (const by of ['yes', 'always', 'always-now']) assert.match(o({ run: true, by }), /action "start", the question and sub_questions\..*report will appear here/);
+  for (const by of ['yes', 'always', 'always-now']) assert.match(o({ run: true, by }), /action "start", the same question and sub_questions\..*report will appear here/);
+  // review r1: a choice that could not be saved is said plainly
+  assert.match(o({ run: true, by: 'always-now', saved: false }), /could not be saved, so they may be asked again/);
+  assert.doesNotMatch(o({ run: true, by: 'always-now', saved: false }), /from now on without being asked/);
+  assert.match(o({ run: false, by: 'never-now', saved: false }), /could not be saved/);
   assert.match(o({ run: false, by: 'never' }), /chose never to be asked.*Do not offer research\.$/);
   assert.match(o({ run: false, by: 'never-now' }), /will not be asked again\. Answer normally now\.$/);
   assert.equal(o({ run: false, by: 'no' }), 'The person said no to deep research this time. Answer normally now.');
   assert.match(o({ run: false, by: 'no-one-to-ask' }), /No one can be asked right now.*offering a deep research run/);
   assert.match(o({ run: false, by: 'no-answer' }), /^No answer came\./);
-  assert.equal(o({ run: false, by: 'typed', text: 'only 2024 papers' }), 'The person answered: "only 2024 papers". Act on that: if it means yes, call deep_research with action "start"; otherwise answer normally.');
+  // review r1: typed text is never a yes; the agent may offer again so the person can choose Yes
+  assert.equal(o({ run: false, by: 'typed', text: 'no thanks' }), 'The person typed "no thanks" instead of choosing. That is not a yes: answer normally now. If their words ask for research, call deep_research with action "offer" again so they can choose Yes.');
+  assert.doesNotMatch(o({ run: false, by: 'typed', text: 'x' }), /action "start"/);
 });
 
 // ── chooseHelperModel ──
@@ -543,4 +549,72 @@ test('runner: runs are saved; one under way at a restart is reported as cut shor
   const c = makeRunner({ store: { load() { throw new Error('bad'); }, save() { throw new Error('full'); } } });
   const r3 = c.runner.start({ agent: 'a3', question: 'Q?', subQuestions: SUBS });
   await until(() => c.runner.get(r3.id).state === 'delivered');
+});
+
+// ── review r1: worker outcomes, the deadline, the saved report ──
+const res = (label, ok, text) => ({ label, ok, text });
+
+test('review r1: each worker outcome counts: failed helpers are left out, all failed or a failed summary is a failed report', async () => {
+  // some helpers failed: the findings name the missing parts; the wrapper never reaches the report
+  let seen = null;
+  const a = makeRunner({ spawn: async (agent, w) => {
+    if (w[0].label === 'Research summary') { seen = w[0].task; return [res('Research summary', true, '**Verdict** X')]; }
+    return [res('Research 1', true, 'found A'), res('Research 2', false, 'FAILED: rate limit'), res('Research 3', true, 'found C')];
+  } });
+  let r = a.runner.start({ agent: 'a1', question: 'Q?', subQuestions: SUBS });
+  await until(() => a.runner.get(r.id).state === 'delivered');
+  assert.match(seen, /### Research 1\nfound A[\s\S]*### Research 3\nfound C[\s\S]*1 of 3 helpers did not finish/);
+  assert.doesNotMatch(seen, /rate limit/);
+  assert.ok(a.wakes[0].message.startsWith('[Deep research finished]'));
+  assert.ok(a.wakes[0].message.endsWith('Report:\n**Verdict** X'));
+  // every helper failed: no summary, a failed report
+  let bCalls = 0;
+  const b = makeRunner({ spawn: async (agent, w) => { bCalls++; return w.map((x) => res(x.label, false, 'FAILED: no web tool')); } });
+  r = b.runner.start({ agent: 'a1', question: 'Q?', subQuestions: SUBS });
+  await until(() => b.runner.get(r.id).state === 'delivered');
+  assert.equal(bCalls, 1, 'no summary without findings');
+  assert.match(b.wakes[0].message, /^\[Deep research failed\].*none of the helpers finished: FAILED: no web tool/);
+  // the summary worker failed (or was stopped): a failed report, never "finished"
+  const c = makeRunner({ spawn: async (agent, w) => (w[0].label === 'Research summary' ? [res('Research summary', false, 'FAILED: provider down')] : [res('Research 1', true, 'A'), res('Research 2', true, 'B')]) });
+  r = c.runner.start({ agent: 'a1', question: 'Q?', subQuestions: ['x', 'y'] });
+  await until(() => c.runner.get(r.id).state === 'delivered');
+  assert.match(c.wakes[0].message, /^\[Deep research failed\].*the summary did not finish: FAILED: provider down/);
+  assert.doesNotMatch(c.wakes[0].message, /Deep research report ready/);
+});
+
+test('review r1: a run that takes longer than the deadline is ended and reported; the workers get an abort signal', async () => {
+  let signal = null;
+  const a = makeRunner({ deadlineMs: 20, spawn: async (agent, w, s) => { signal = s; return new Promise(() => {}); } });
+  const r = a.runner.start({ agent: 'a1', question: 'Q?', subQuestions: SUBS });
+  for (let i = 0; i < 200 && a.runner.get(r.id).state !== 'delivered'; i++) await new Promise((ok) => setTimeout(ok, 5));
+  assert.match(a.wakes[0].message, /^\[Deep research failed\].*took longer than 0 minutes/);
+  assert.equal(signal.aborted, true);
+  // a new run for that agent can start again
+  assert.equal(a.runner.start({ agent: 'a1', question: 'Q2?', subQuestions: SUBS }).ok, true);
+});
+
+test('review r1: the finished report is saved before delivery; a restart resumes it; after every try it is kept, not dropped', async () => {
+  let saved = [];
+  const store = { load: () => saved, save: (x) => { saved = JSON.parse(JSON.stringify(x)); } };
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const a = makeRunner({ store, wake: async () => { await gate; throw new Error('busy'); } });
+  const r = a.runner.start({ agent: 'a1', question: 'Q?', subQuestions: SUBS });
+  await until(() => saved.some((x) => x.id === r.id && x.state === 'delivering'));
+  assert.match(saved.find((x) => x.id === r.id).message, /^\[Deep research finished\][\s\S]*THE REPORT$/);
+  // the hub restarts while the agent is busy: the saved report is delivered, not "cut short"
+  const b = makeRunner({ store });
+  b.runner.recover();
+  await until(() => b.runner.get(r.id).state === 'delivered');
+  assert.match(b.wakes[0].message, /^\[Deep research finished\][\s\S]*THE REPORT$/);
+  assert.equal(saved.find((x) => x.id === r.id).message, null, 'delivered: the copy is dropped');
+  release();
+  // fast tries then slow tries; given up, the report stays in the saved runs
+  let saved2 = [];
+  const store2 = { load: () => saved2, save: (x) => { saved2 = JSON.parse(JSON.stringify(x)); } };
+  const c = makeRunner({ store: store2, maxWakeTries: 2, slowTries: 2, retryMs: 5, slowRetryMs: 7, wake: async () => { throw new Error('busy'); } });
+  const r2 = c.runner.start({ agent: 'a1', question: 'Q?', subQuestions: SUBS });
+  await until(() => c.runner.get(r2.id).state === 'failed');
+  assert.deepEqual(c.sleeps, [5, 7, 7]);
+  assert.match(saved2.find((x) => x.id === r2.id).message, /THE REPORT$/);
 });

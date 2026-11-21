@@ -1729,7 +1729,9 @@ async function handleHttpRequest(req, res) {
 
     if (pathname === '/api/ask_response' && req.method === 'POST') {
       const body = JSON.parse(await readBody(req));
-      const result = handleAskResponse(body, { isAdmin: access.isAdmin(req.hubUser) });
+      // personKey: the account answering (as lib/sdk-chat records the person of a turn), for cards only one person may answer
+      const personKey = !hubAuth.hasUsers() ? 'owner' : (req.hubUser && req.hubIdentKind === 'user' && !req.hubPendingTotp && req.hubUser.id != null ? String(req.hubUser.id).slice(0, 64) : null);
+      const result = handleAskResponse(body, { isAdmin: access.isAdmin(req.hubUser), personKey });
       return jsonResponse(res, result.success ? 200 : 400, result);
     }
 

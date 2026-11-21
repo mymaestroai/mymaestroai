@@ -185,3 +185,68 @@ test('the tool is on both tool lists, the guidance on every route, the person on
   assert.equal(cls({ action: 'set', choice: 'ask' }), 'write_inside');
   assert.equal(cls({ action: 'start', question: 'Q?' }), 'delegate');
 });
+
+// ── review r1: approvals, the person of a typed turn, the card's answerer, the reminder on hub turns ──
+test('review r1: "No thanks" or any typed text never approves a start; a later offer ends an earlier yes; the question must match', async () => {
+  const subs = ['a', 'b'];
+  const T = load({ askAnswer: 'No thanks' });
+  T.turn('sam-agent');
+  assert.match(await T.ctx.run('sam-agent', T.live, { action: 'offer', question: 'Q?' }), /not a yes/);
+  assert.match(await T.ctx.run('sam-agent', T.live, { action: 'start', question: 'Q?', sub_questions: subs }), /^Ask first/);
+  // a yes, then a second offer answered No: the earlier yes no longer counts
+  const L = load({ askAnswer: 'Yes' });
+  L.turn('sam-agent');
+  await L.ctx.run('sam-agent', L.live, { action: 'offer', question: 'Q1?' });
+  assert.match(await L.ctx.run('sam-agent', L.live, { action: 'start', question: 'Other question?', sub_questions: subs }), /^Ask first/, 'another question');
+  L.ctx.runAskUser = async () => 'No';   // the same question offered again, answered No
+  await L.ctx.run('sam-agent', L.live, { action: 'offer', question: 'Q1?' });
+  assert.match(await L.ctx.run('sam-agent', L.live, { action: 'start', question: 'Q1?', sub_questions: subs }), /^Ask first/, 'the later No ended the yes');
+  L.ctx.runAskUser = async () => 'Yes';
+  await L.ctx.run('sam-agent', L.live, { action: 'offer', question: 'Q1?' });
+  await L.ctx.run('sam-agent', L.live, { action: 'set', choice: 'ask' });
+  assert.match(await L.ctx.run('sam-agent', L.live, { action: 'start', question: 'Q1?', sub_questions: subs }), /^Ask first/, 'set ended the approval');
+});
+
+test('review r1: a typed turn without a trusted person never falls back to the owner: no card, no stored choice used or changed', async () => {
+  const L = load();
+  L.prefs.setChoice('u_owner', 'always');
+  L.turn('sam-agent', { origin: { kind: 'user' }, personKey: null });
+  const out = await L.ctx.run('sam-agent', L.live, { action: 'offer', question: 'Q?' });
+  assert.match(out, /No one can be asked/);
+  assert.equal(L.asked.length, 0);
+  assert.match(await L.ctx.run('sam-agent', L.live, { action: 'start', question: 'Q?', sub_questions: ['a', 'b'] }), /^Ask first/, "the owner's always is not borrowed");
+  assert.equal(L.prefs.choiceOf('u_owner'), 'always');
+});
+
+test('review r1: the card is bound to the person it asks; only their answer counts', async () => {
+  const L = load();
+  L.turn('sam-agent');
+  await L.ctx.run('sam-agent', L.live, { action: 'offer', question: 'Q?' });
+  assert.equal(L.asked[0].forUser, 'u_sam');
+  const SRC2 = fs.readFileSync(path.join(REAL, 'lib', 'sdk-chat.js'), 'utf8');
+  const a = SRC2.indexOf('function handleAskResponse('), b = SRC2.indexOf('\n}\n', a);
+  const ctx = vm.createContext({ pendingQuestions: new Map(), questionAgents: new Map() });
+  vm.runInContext(SRC2.slice(a, b + 2) + '\nthis.h = handleAskResponse;', ctx);
+  let got = null;
+  ctx.pendingQuestions.set('q1', { resolve: (x) => { got = x; }, adminOnly: false, forUser: 'u_sam' });
+  ctx.questionAgents.set('q1', 'sam-agent');
+  assert.equal(ctx.h({ request_id: 'q1', answers: 'Always yes', agent: 'sam-agent' }, { personKey: 'u_other' }).success, false);
+  assert.equal(got, null);
+  assert.equal(ctx.h({ request_id: 'q1', answers: 'Always yes', agent: 'sam-agent' }, { personKey: 'u_sam' }).success, true);
+  assert.equal(got, 'Always yes');
+  const server = fs.readFileSync(path.join(REAL, 'server.js'), 'utf8');
+  assert.match(server, /handleAskResponse\(body, \{ isAdmin: access\.isAdmin\(req\.hubUser\), personKey \}\)/);
+});
+
+test('review r1: no reminder spent on a turn the hub started; the run is detached from later turns and reads raw outcomes', async () => {
+  const L = load();
+  L.prefs.setChoice('u_owner', 'never');
+  L.advance(WEEK);
+  L.turn('sam-agent', { origin: { kind: 'schedule' }, personKey: null });
+  assert.doesNotMatch(await L.ctx.run('sam-agent', L.live, { action: 'offer', question: 'Q?' }), /turn deep research back on/);
+  assert.equal(L.prefs.remindDue('u_owner', WEEK), true, 'still due for when they are reading');
+  assert.match(SRC, /spawn: \(agent, workers, signal\) => runSpawnWorkers\(agent, workers, null, signal \|\| null, null, \{ detached: true, raw: true \}\)/);
+  assert.match(SRC, /const parentTurn = opts\.detached \? null :/);
+  assert.match(SRC, /const callerTurn = \(opts\.queuedRun \|\| opts\.detached\) \? null :/);
+  assert.match(SRC, /if \(raw\) return results\.map\(r => \(\{ label: r\.label, ok: r\.ok === true && !isStoppedResult\(r\.text\), text: String\(r\.text \|\| ''\) \}\)\);/);
+});

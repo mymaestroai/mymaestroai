@@ -2156,9 +2156,12 @@ function researchChoiceOk(choice) { return RESEARCH_CHOICES.some(c => c[0] === c
 let researchPrefOn = false;
 let researchPrefChoice = 'ask';
 let researchPrefSaving = false;   // one save at a time: a choice made while one is in flight is ignored
+let researchPrefReadSeq = 0;   // a save starts a new number: a read that began before it never repaints the older choice
 async function researchPrefLoad() {
+  const seq = ++researchPrefReadSeq;
   let d = null;
   try { const r = await api('/api/research-pref'); if (r.ok) d = await r.json(); } catch { d = null; }
+  if (seq !== researchPrefReadSeq) return researchPrefOn;   // a save (or a newer read) came after this read began
   researchPrefOn = !!(d && d.on === true);
   if (researchPrefOn && !researchPrefSaving) researchPrefChoice = researchChoiceOk(d.choice) ? d.choice : 'ask';
   researchPrefPaintAll();
@@ -2176,6 +2179,7 @@ function researchPrefPaintAll() {
 async function researchPick(choice) {
   if (researchPrefSaving || !researchPrefOn || !researchChoiceOk(choice)) return false;
   researchPrefSaving = true;
+  researchPrefReadSeq++;   // reads already on their way are now older than this choice
   const before = researchPrefChoice;
   researchPrefChoice = choice;
   researchPrefPaintAll();
