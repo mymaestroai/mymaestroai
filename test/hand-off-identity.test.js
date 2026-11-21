@@ -351,6 +351,54 @@ test('review r3: hand_off_note refuses when the caller may no longer reach the t
   assert.strictEqual(fetched, 0);
 });
 
+test('review r4: a cancel or a note reaches only the hand-off\'s own turn, never the person\'s chat with the target', async () => {
+  // the hub's rule (lib/sdk-chat): the running turn's origin must carry this hand-off's id
+  const registry = new Map();
+  const stopped = [], interjected = [];
+  let active = false;
+  const env = setup({
+    isAgentActive: () => active,
+    stopTurn: (agent, id) => { const t = registry.get(agent); if (id && t && t.origin.handOff === id) stopped.push([agent, id]); },
+    interject: (agent, text, id) => { const t = registry.get(agent); if (!id || !(t && t.origin.handOff === id)) return false; interjected.push([agent, id]); return true; },
+    startTurn: async () => new Promise(() => {}),   // admission never finishes: the record says running meanwhile
+  });
+  const v = await env.h.create({ caller: 'sam', target: 'lead', topic: 'Tidy the list', brief: 'Do it' });
+  env.h.tick();
+  await flush(); await flush();
+  assert.strictEqual(env.h.get(v.id).state, 'running');
+  registry.set('lead', { origin: { kind: 'user' } }); active = true;   // the person's own chat with lead runs
+  const n = env.h.note({ caller: 'sam', id: v.id, text: 'one more thing' });
+  assert.deepStrictEqual(interjected, []);
+  assert.strictEqual(n.queuedNotes, 1, 'kept for the hand-off\'s next step');
+  env.h.cancel({ caller: 'sam', id: v.id });
+  assert.deepStrictEqual(stopped, [], 'the person\'s turn keeps running');
+  // the hand-off's own turn is still reached (a fresh runner: the first admission still holds lead in this one)
+  const env2 = setup({ isAgentActive: () => active, stopTurn: env.opts.stopTurn, interject: env.opts.interject, startTurn: env.opts.startTurn });
+  const v2 = await env2.h.create({ caller: 'sam', target: 'lead', topic: 'Second', brief: 'Do it' });
+  active = false; env2.h.tick(); await flush(); await flush();
+  assert.strictEqual(env2.h.get(v2.id).state, 'running');
+  registry.set('lead', { origin: { kind: 'hand_off', handOff: v2.id } }); active = true;
+  env2.h.note({ caller: 'sam', id: v2.id, text: 'go on' });
+  assert.deepStrictEqual(interjected, [['lead', v2.id]]);
+  env2.h.cancel({ caller: 'sam', id: v2.id });
+  assert.deepStrictEqual(stopped, [['lead', v2.id]]);
+  const sdk = read('lib/sdk-chat.js');
+  const factory = sdk.slice(sdk.indexOf('function getHandOffRunner() {'), sdk.indexOf("voiceCall.registerProducer('hand_off'"));
+  assert.match(factory, /interject: \(agent, text, id\) => \{\n\s+const t = turnRegistry\.get\(agent\);\n\s+if \(!id \|\| !\(t && t\.origin && t\.origin\.handOff === id\)\) return false;/);
+  assert.match(factory, /stopTurn: \(agent, id\) => \{\n\s+const t = turnRegistry\.get\(agent\);\n\s+if \(!id \|\| !\(t && t\.origin && t\.origin\.handOff === id\)\) return;/);
+  assert.ok(!/this\.stopTurn\(r\.target\)|this\.interject\(r\.target, noteMessage\(r, \[n\]\)\)/.test(read('lib/hand-offs.js')), 'every call passes the id');
+});
+
+test('review r4: hand_off_note gives another agent of the caller\'s name nothing about an earlier agent\'s hand-off', async () => {
+  const env = setup();
+  const v = await env.h.create({ caller: 'sam', target: 'lead', topic: 'Tidy the list', brief: 'Do it' });
+  env.recs.sam = { name: 'sam', box: '5e5e5e5e5e' };
+  const tools = require('../lib/hand-off-tools');
+  const out = await tools.runTool('hand_off_note', { id: v.id, text: 'hi' }, 'sam', { runner: env.h, mayTarget: async () => false });
+  assert.ok(!out.includes('lead'), out);
+  assert.match(out, /No such hand-off/);
+});
+
 test('the hub wires hand-offs to the identity, its matching rule, the caller\'s owner and the owner notice; other checks keep the strict stamp', () => {
   const sdk = read('lib/sdk-chat.js');
   const factory = sdk.slice(sdk.indexOf('function getHandOffRunner() {'), sdk.indexOf("voiceCall.registerProducer('hand_off'"));
