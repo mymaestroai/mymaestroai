@@ -219,26 +219,6 @@ test('B1: a refuse whose own rule was "ask" (turned into a deny for a check agen
   assert.strictEqual(both.actions.refuse.ok, true);
 });
 
-test('B3: with the command lockbox on, a result carries the wrapped command and still counts; a different command that only names bash.txt does not', () => {
-  const home = FOLDERS.home;
-  const noBash = goodEvents().filter(e => !(e.tool === 'Bash' && e.input.command === SCRIPTED.home));
-  // the shape of lockbox clientCommand: python3 ... lockbox-run.py ... -- bash -c '<inner>' with the inner single quotes escaped as '\''
-  const inner = SCRIPTED.home.replace(/'/g, `'\\''`);
-  const wrapped = `python3 /hub/lib/lockbox/lockbox-run.py --profile p -- bash -c '${inner}'`;
-  assert.ok(!wrapped.includes(SCRIPTED.home), 'the wrapper really hides the scripted string');
-  let v = verify({ events: [...noBash, dec('Bash', { command: SCRIPTED.home }), res('Bash', { command: wrapped }, true, '')] });
-  assert.deepStrictEqual(failed(v), []);
-  assert.strictEqual(v.actions['bash@home'].tried, true);
-  // a wrapped result for a command that names bash.txt but has no nonce
-  const other = `python3 /hub/lib/lockbox/lockbox-run.py --profile p -- bash -c 'echo x > '\\''${home}/bash.txt'\\'''`;
-  v = verify({ events: [...noBash, dec('Bash', { command: SCRIPTED.home }), res('Bash', { command: other }, true, '')] });
-  assert.deepStrictEqual(failed(v), ['bash@home']);
-  // the decision must still be the scripted command: an allowed different one fails the step even with a good wrapped result
-  v = verify({ events: [...noBash, dec('Bash', { command: `echo ${FX.home.B} > ${home}/bash.txt` }), res('Bash', { command: wrapped }, true, '')] });
-  assert.deepStrictEqual(failed(v), ['bash@home']);
-  assert.strictEqual(v.actions['bash@home'].reason, 'It ran a different command than the one the check asked for.');
-});
-
 test('extra: a Write, Edit or Bash outside both folders fails the class', () => {
   let v = verify({ events: [...goodEvents(), ...call('Write', { file_path: '/hub/workspaces/other/x.txt', content: 'x' }, 'ok')] });
   assert.deepStrictEqual(v.extra, [{ tool: 'Write', path: '/hub/workspaces/other/x.txt' }]);

@@ -3328,7 +3328,7 @@
       { id: 'security', title: '🔐 Security', sections: ['st-security-section'] },
       { id: 'backups', title: '💾 Backups', sections: ['st-backups-section'] },
       { id: 'models', title: '🧠 AI models', sections: ['st-prov-section', 'st-or-section', 'st-subs-section', 'st-plan-section', 'st-local-models-section', 'st-classifier-section'] },
-      { id: 'agents', title: '🤖 Agents', sections: ['st-defaults-section', 'st-workers-section', 'st-sb-section', 'st-lb-section', 'st-mp-section', 'st-approvals-section', 'st-chat-section'] },
+      { id: 'agents', title: '🤖 Agents', sections: ['st-defaults-section', 'st-workers-section', 'st-sb-section', 'st-mp-section', 'st-approvals-section', 'st-chat-section'] },
       { id: 'notify', title: '🔔 Notifications', sections: ['st-notify-section'] },
       { id: 'tools', title: '🧰 Tools and data', sections: ['st-ws-section', 'st-voice-section', 'st-cx-section', 'st-modules-section'] },
       { id: 'money', title: '💰 Money and safety', sections: ['st-spend-section', 'st-emergency-section'] },
@@ -3896,13 +3896,6 @@
         <div id="st-sb-status" class="st-hint" style="margin-left:158px"></div>
       </div>`;
         setTimeout(loadSandboxStatus, 0);
-        const lbd = ['off', 'watch', 'enforce'].includes(data && data.lockboxDefault) ? data.lockboxDefault : 'off';
-        html += `<div class="st-section" id="st-lb-section"><h4>Command lockbox</h4>
-        <div class="st-hint">Applies to every agent set to Hub default. Off runs commands as they do today. Watch lists what the lockbox would have blocked; Enforce blocks it. Each agent can be set on its own settings page.</div>
-        <div class="st-row" style="flex-wrap:wrap;row-gap:6px"><label style="flex-basis:150px">Hub default</label>${selSb('st-lb-default', [['off', 'Off'], ['watch', 'Watch'], ['enforce', 'Enforce']], lbd)}<button class="st-test-btn" onclick="saveLockboxDefault()" style="margin-left:8px">Save</button><span id="st-lb-state" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px"></span></div>
-        <div class="st-row"><label style="flex-basis:150px">This computer</label><span id="st-lb-host" style="flex:1;min-width:0;overflow-wrap:anywhere;font-size:0.78rem;color:var(--text-dim)">Checking…</span></div>
-      </div>`;
-        setTimeout(loadLockboxHost, 0);
       }
       {
         const wsc = (data && data.webSearch) || {};
@@ -4012,28 +4005,6 @@
         const boxes = (d.containers || []).map(c => `${c.agent} (${c.status})`).join(', ') || 'none';
         el.textContent = d.error ? `Not ready: ${d.error}` : `Ready: Docker up, image ${d.image} built. Containers: ${boxes}.`;
       } catch { el.textContent = 'Could not read the sandbox status.'; }
-    }
-    // Command lockbox (lib/lockbox): what this computer offers, and the hub default for agents left on "Hub default".
-    async function loadLockboxHost() {
-      const el = document.getElementById('st-lb-host'); if (!el) return;
-      try {
-        const r = await fetch('/api/lockbox/status', { credentials: 'include' });
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        const h = (await r.json()).host || {};
-        const abi = h.landlockAbi !== undefined ? h.landlockAbi : h.abi;
-        el.textContent = h.ok ? `Available: Landlock ABI ${abi !== undefined && abi !== null ? abi : '?'}` : `Not available on this computer: ${String(h.reason || 'unknown reason').replace(/[.\s]+$/, '')}`;
-      } catch (e) { el.textContent = 'Could not read the lockbox status: ' + e.message; }
-    }
-    async function saveLockboxDefault() {
-      const sel = document.getElementById('st-lb-default');
-      const saved = dialogGuard.savePoint([sel]);
-      const state = document.getElementById('st-lb-state');
-      try {
-        const r = await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ lockboxDefault: sel.value }) });
-        if (!r.ok) { let m = `HTTP ${r.status}`; try { const j = await r.json(); if (j && j.error) m = j.error; } catch {} throw new Error(m); }
-        saved();
-        if (state) state.textContent = 'Saved. Applies to agents set to "Hub default" from their next command.';
-      } catch (e) { if (state) state.textContent = 'Could not save: ' + e.message; }
     }
     async function saveMemberPolicy() {
       const saved = dialogGuard.savePoint(['st-mp-web', 'st-mp-read_outside', 'st-mp-write_outside', 'st-mp-send'].map(id => document.getElementById(id)));
