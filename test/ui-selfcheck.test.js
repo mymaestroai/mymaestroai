@@ -297,7 +297,7 @@ test('the deep link: ?selfcheck=1 is parsed, opens Settings → Status at the se
   assert.strictEqual(parseOpenTarget({ type: 'open-target', url: '/?selfcheck=0' }, 'http://localhost:8888').selfcheck, false);
   assert.ok(app.includes("if (t.selfcheck) openSettingsAt('st-selfcheck-section');"), 'runPageTarget opens the section');
   assert.match(app, /own\.memory \|\| own\.selfcheck \|\| own\.health \|\| own\.connectors/, 'a one-shot link');
-  assert.match(app, /for \(const k of \['update', 'backups', 'security', 'memory', 'selfcheck', 'health', 'connectors', 'wallet'\]\) u\.searchParams\.delete\(k\)/);
+  assert.match(app, /for \(const k of \['update', 'backups', 'security', 'memory', 'selfcheck', 'health', 'connectors', 'wallet', 'websearch'\]\) u\.searchParams\.delete\(k\)/);
 });
 
 test('the section is drawn after Memory in the Status group, for admins only, with the controls the spec lists', () => {

@@ -3912,11 +3912,13 @@
         const keyRow = (id, label, note) => `<div class="st-row"><label style="flex-basis:150px">${label}</label><input type="password" id="st-ws-key-${id}" placeholder="${keys[id] ? esc(keys[id]) : 'Not set'}" style="width:260px" autocomplete="off"> <span class="st-hint" style="margin:0 0 0 8px">${note}</span></div>`;
         html += `<div class="st-section" id="st-ws-section"><h4>Web search and fetch</h4>
         <div class="st-hint">Every agent on every model uses the same WebSearch and WebFetch tools; the hub does the work. Search walks the backends below in order and returns the first that answers: paid or keyed ones when you add a key, a self-hosted SearXNG the hub can run for you, and DuckDuckGo as the free floor. An agent may name a backend (for instance perplexity) when it wants that one. Fetch returns pages as markdown with links kept, reads PDFs, renders JavaScript-only pages in a browser when the plain fetch is empty, and refuses private and local addresses unless allowed below.</div>
+        <div class="st-row"><label style="flex-basis:150px">In use</label><span id="st-ws-inuse" style="flex:1">Checking…</span><button class="st-test-btn" onclick="testWebSearch()">Test web search</button></div>
+        <div id="st-ws-test" class="st-hint" style="margin-left:158px"></div>
         <div class="st-row"><label style="flex-basis:150px">Backend order</label><input type="text" id="st-ws-order" value="${esc(Array.isArray(wsc.order) ? wsc.order.join(', ') : 'brave, perplexity, serper, tavily, searxng, duckduckgo')}" style="flex:1"> <span class="st-hint" style="margin:0 0 0 8px">comma-separated; unconfigured ones are skipped</span></div>
-        ${keyRow('brave', 'Brave key', 'api.search.brave.com; independent index')}
+        ${keyRow('brave', 'Brave key', '<a href="https://brave.com/search/api/" target="_blank" rel="noopener">brave.com/search/api</a> · $5 per 1,000 searches, $5 of free credit each month (about 1,000 searches); Brave asks for a card')}
         ${keyRow('serper', 'Serper key', 'serper.dev; Google results')}
         ${keyRow('tavily', 'Tavily key', 'tavily.com; LLM-ready results')}
-        <div class="st-row"><label style="flex-basis:150px">Perplexity</label><span class="st-hint" style="margin:0">uses the Perplexity provider key above</span></div>
+        <div class="st-row"><label style="flex-basis:150px">Perplexity</label><span class="st-hint" style="margin:0">uses the Perplexity provider key above. <span id="st-ws-pplx"></span></span></div>
         <div class="st-row"><label style="flex-basis:150px">SearXNG URL</label><input type="text" id="st-ws-searxng" value="${esc((wsc.searxng && wsc.searxng.url) || '')}" placeholder="http://127.0.0.1:8888" style="width:260px"> <button class="st-test-btn" onclick="searxngStart()">Run SearXNG here (Docker)</button><button class="st-test-btn" onclick="searxngStop()">Stop it</button></div>
         <div class="st-row"><label style="flex-basis:150px">Private addresses</label>${selWs('st-wf-private', [['admin', 'admin-side agents may fetch them (default)'], ['none', 'nobody'], ['all', 'every agent']], wfc.allowPrivate || 'admin')} &nbsp; Browser rendering ${selWs('st-wf-render', [['auto', 'auto (when the plain fetch is empty)'], ['off', 'off'], ['always', 'always']], wfc.render || 'auto')} &nbsp; <label><input type="checkbox" id="st-wf-jina" ${wfc.jina ? 'checked' : ''}> Jina Reader fallback (sends the URL to r.jina.ai)</label></div>
         <div class="st-row"><label style="flex-basis:150px"></label><button class="st-test-btn" onclick="saveWebSearch()">Save web settings</button><span id="st-ws-state" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px"></span></div>
@@ -4835,7 +4837,15 @@
         const d = await (await fetch('/api/websearch/status', { credentials: 'include' })).json();
         const s = d.search || {}, f = d.fetch || {};
         const chain = (s.chain || []).join(' → ') || 'none';
-        stSum('tools', 'search', `Search: ${chain}`);
+        stSum('tools', 'search', s.fallbackOnly ? 'web search: free fallback' : `web search: ${s.inUseLabel || chain}`, !!s.fallbackOnly);
+        const inuse = document.getElementById('st-ws-inuse');
+        if (inuse) {
+          inuse.innerHTML = s.fallbackOnly
+            ? '<span style="color:var(--warning)">Web search is using the free fallback; results are thin. Add a search key for much better research.</span>'
+            : `In use now: ${esc(s.inUseLabel || '')}`;
+        }
+        const pplx = document.getElementById('st-ws-pplx');
+        if (pplx) pplx.textContent = s.perplexityKey ? 'Your Perplexity key is set, so searches can use it.' : 'No Perplexity key; add one under LLM Providers to use Perplexity search.';
         const off = (s.backends || []).filter(b => !b.configured).map(b => `${b.id} (needs ${b.needs})`).join(', ');
         const sx = s.searxng || {};
         const sxState = sx.container ? `container ${sx.name} ${sx.container}${sx.healthy ? ', healthy' : ', not answering'}` : sx.url ? (sx.healthy ? `external at ${sx.url}, healthy` : `${sx.url} not answering`) : 'not running';
@@ -4873,6 +4883,20 @@
       try {
         const r = await (await fetch('/api/websearch/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ query, backend, maxResults: 5 }) })).json();
         out.textContent = `${r.ms != null ? `${r.ms} ms. ` : ''}${r.rendered || r.error || ''}`;
+      } catch (e) { out.textContent = 'Search failed: ' + e.message; }
+    }
+    const WS_LABELS = { brave: 'Brave Search API', perplexity: 'Perplexity Search API', serper: 'Serper (Google results)', tavily: 'Tavily', searxng: 'SearXNG (self-hosted)', duckduckgo: 'DuckDuckGo (scraped, no key)' };
+    async function testWebSearch() {
+      const out = document.getElementById('st-ws-test'); if (!out) return;
+      out.textContent = 'Searching…';
+      try {
+        const r = await (await fetch('/api/websearch/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ query: 'weather forecast tomorrow', maxResults: 10 }) })).json();
+        const n = Array.isArray(r.results) ? r.results.length : 0;
+        if (r.backend && n) {
+          out.textContent = `Answered by ${WS_LABELS[r.backend] || r.backend}${r.backend === 'duckduckgo' ? ', the free no-key fallback' : ''}: ${n} result(s) in ${((r.ms || 0) / 1000).toFixed(1)} s`;
+        } else {
+          out.textContent = 'No results: ' + ((r.tried || []).map(t => `${t.backend}: ${t.error}`).join(', ') || r.error || 'no search backend is configured');
+        }
       } catch (e) { out.textContent = 'Search failed: ' + e.message; }
     }
     async function tryWebFetch() {
@@ -7270,7 +7294,7 @@
       try { u = new URL(data.url, origin); } catch { return null; }
       if (u.origin !== origin || !OPEN_TARGET_MAIN.test(u.pathname)) return null;
       const q = u.searchParams;
-      return { agent: q.get('agent') || '', backups: q.get('backups') === '1', update: q.get('update') === '1', security: q.get('security') === '1', memory: q.get('memory') === '1', selfcheck: q.get('selfcheck') === '1', health: q.get('health') === '1', connectors: q.get('connectors') === '1', wallet: q.get('wallet') === 'unlock' };
+      return { agent: q.get('agent') || '', backups: q.get('backups') === '1', update: q.get('update') === '1', security: q.get('security') === '1', memory: q.get('memory') === '1', selfcheck: q.get('selfcheck') === '1', health: q.get('health') === '1', connectors: q.get('connectors') === '1', wallet: q.get('wallet') === 'unlock', websearch: q.get('websearch') === '1' };
     }
     function createTargetStore(storage, now = () => Date.now(), ttlMs = 10 * 60 * 1000) {
       return {
@@ -7350,6 +7374,7 @@
       if (t.selfcheck) openSettingsAt('st-selfcheck-section');
       if (t.health) openSettingsAt('st-health-section');
       if (t.connectors) openSettingsAt('st-modules-section');
+      if (t.websearch) openSettingsAt('st-ws-section');
       if (t.wallet) openWalletPanel();
       if (t.update) paintUpdateCard().then(() => showUpdateCard()).catch(() => {});
       if (!t.agent) return;
@@ -7387,9 +7412,9 @@
       // (a backup warning), ?memory=1 the memory check, ?selfcheck=1 the self-check, ?health=1 the health check, ?update=1 the update card, ?security=1 the security dialog, ?wallet=unlock the Wallet panel. Then any notification tapped
       // while the page was loading.
       const own = parseOpenTarget({ type: 'open-target', url: location.href }, location.origin);
-      if (own && (own.update || own.backups || own.security || own.memory || own.selfcheck || own.health || own.connectors || own.wallet)) {   // one-shot actions: a reload must not repeat them
+      if (own && (own.update || own.backups || own.security || own.memory || own.selfcheck || own.health || own.connectors || own.wallet || own.websearch)) {   // one-shot actions: a reload must not repeat them
         const u = new URL(location.href);
-        for (const k of ['update', 'backups', 'security', 'memory', 'selfcheck', 'health', 'connectors', 'wallet']) u.searchParams.delete(k);
+        for (const k of ['update', 'backups', 'security', 'memory', 'selfcheck', 'health', 'connectors', 'wallet', 'websearch']) u.searchParams.delete(k);
         history.replaceState(history.state, '', u.pathname + u.search + u.hash);
       }
       // After a Reload: open the chats that were open, in their tab order, each with the text that was in its message

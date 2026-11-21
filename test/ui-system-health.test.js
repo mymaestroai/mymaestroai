@@ -186,7 +186,7 @@ test('?health=1 opens Settings at the Health section, and leaves the address onc
   assert.strictEqual(parseOpenTarget({ type: 'open-target', url: '/' }, 'http://x').health, false);
   assert.match(app, /if \(t\.health\) openSettingsAt\('st-health-section'\);/);
   assert.match(app, /own\.selfcheck \|\| own\.health \|\|/);
-  assert.match(app, /'selfcheck', 'health', 'connectors', 'wallet'\]\) u\.searchParams\.delete\(k\);/);
+  assert.match(app, /'selfcheck', 'health', 'connectors', 'wallet', 'websearch'\]\) u\.searchParams\.delete\(k\);/);
   const L = require('../lib/ui-phone-layout.js');
   assert.ok(L.DESKTOP_ONLY_PARAMS.includes('health'), 'a phone following the link stays on the computer page');
   assert.strictEqual(L.desktopOnlyLink('?health=1'), true);
