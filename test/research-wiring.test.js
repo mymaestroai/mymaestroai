@@ -171,8 +171,8 @@ test('the tool is on both tool lists, the guidance on every route, the person on
   assert.match(SRC, /\.\.\.\(deepResearchOffered\(agentName, consultationDepth, tigerTeam\) \? \[\{\n\s+name: researchLib\.TOOL\.name/);
   assert.match(SRC, /\.\.\.\(deepResearchOffered\(agentName, consultationDepth, tigerTeam\) \? \[sdk\.tool\(researchLib\.TOOL\.name/);
   assert.equal((SRC.match(/\+ researchGuidanceFor\(agentName, /g) || []).length, 3, 'gateway, Claude and Codex instructions');
-  assert.match(SRC, /const personKey = turnOrigin\.kind === 'user' \? \(trustedUserId \? String\(trustedUserId\)\.slice\(0, 64\) : \(trustedAccounts === false \? 'owner' : null\)\) : null;/);
-  assert.match(SRC, /wake: \(agent, message\) => wakeAgent\(agent, message, null, \{ kind: 'research_report', from: 'hub' \}\)/);
+  assert.match(SRC, /const personKey = turnOrigin\.kind === 'user' \? \(trustedAccounts === false \? 'owner' : \(trustedUserId \? String\(trustedUserId\)\.slice\(0, 64\) : null\)\) : null;/);   // review r2: no accounts (also the older single password) -> 'owner'
+  assert.match(SRC, /\{ kind: 'research_report', from: 'hub' \}\)/);   // the report turn's origin (delivery itself: the review r2 test)
   const server = fs.readFileSync(path.join(REAL, 'server.js'), 'utf8');
   assert.match(server, /require\('\.\/lib\/sdk-chat'\)\.startResearch\(\)/);
   assert.match(server, /pathname === '\/api\/research-pref'/);
@@ -249,4 +249,39 @@ test('review r1: no reminder spent on a turn the hub started; the run is detache
   assert.match(SRC, /const parentTurn = opts\.detached \? null :/);
   assert.match(SRC, /const callerTurn = \(opts\.queuedRun \|\| opts\.detached\) \? null :/);
   assert.match(SRC, /if \(raw\) return results\.map\(r => \(\{ label: r\.label, ok: r\.ok === true && !isStoppedResult\(r\.text\), text: String\(r\.text \|\| ''\) \}\)\);/);
+});
+
+// ── review r2: one card at a time, a newer call wins, a failed start keeps the approval, legacy installs, delivery ──
+test('review r2: a second offer while a card waits is refused; a set made meanwhile wins over the older card', async () => {
+  const L = load();
+  L.turn('sam-agent');
+  let answerFirst;
+  L.ctx.runAskUser = () => new Promise((r) => { answerFirst = r; });
+  const first = L.ctx.run('sam-agent', L.live, { action: 'offer', question: 'Q1?' });
+  await new Promise((r) => setImmediate(r));
+  assert.match(await L.ctx.run('sam-agent', L.live, { action: 'offer', question: 'Q2?' }), /already waiting for the person's answer/);
+  // the person changes their choice by words while the card is still open
+  assert.match(await L.ctx.run('sam-agent', L.live, { action: 'set', choice: 'never' }), /off/);
+  answerFirst('Always yes');
+  await first;
+  assert.equal(L.prefs.choiceOf('u_sam'), 'never', 'the older card does not overwrite the newer choice');
+  assert.match(await L.ctx.run('sam-agent', L.live, { action: 'start', question: 'Q1?', sub_questions: ['a', 'b'] }), /^Ask first/, 'and approves nothing');
+});
+
+test('review r2: a start that the runner refuses keeps the approval so the agent can correct it', async () => {
+  const L = load({ askAnswer: 'Yes' });
+  L.turn('sam-agent');
+  await L.ctx.run('sam-agent', L.live, { action: 'offer', question: 'Q?' });
+  let calls = 0;
+  L.ctx.setRunner({ start: () => (++calls === 1 ? { ok: false, error: 'Give 2 to 8 different sub-questions that together answer the question.' } : { ok: true, id: 'dr-00000002' }), recover() {} });
+  assert.match(await L.ctx.run('sam-agent', L.live, { action: 'start', question: 'Q?', sub_questions: ['only one'] }), /2 to 8/);
+  assert.match(await L.ctx.run('sam-agent', L.live, { action: 'start', question: 'Q?', sub_questions: ['a', 'b'] }), /^Started \(id dr-00000002\)/);
+  assert.match(await L.ctx.run('sam-agent', L.live, { action: 'start', question: 'Q?', sub_questions: ['a', 'b'] }), /^Ask first/, 'used once it started');
+});
+
+test('review r2: delivery counts only when the report turn ended with a reply; the deadline stops started workers', () => {
+  assert.match(SRC, /wakeAgent\(agent, message, \(text\) => \(String\(text \|\| ''\)\.trim\(\) \? resolve\(\) : reject\(new Error\('the report turn ended without a reply'\)\)\), \{ kind: 'research_report', from: 'hub' \}\)/);
+  assert.match(SRC, /if \(detached && signal\) signal\.addEventListener\('abort', stopStarted, \{ once: true \}\);/);
+  assert.match(SRC, /const stopStarted = \(\) => \{ for \(const id of startedIds\) \{ try \{ cancelWorker\(id, \{ admin: true \}\); \}/);
+  assert.match(SRC, /if \(detached\) \{ startedIds\.add\(v\.id\); if \(signal && signal\.aborted\) stopStarted\(\); \}/);
 });

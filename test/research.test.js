@@ -618,3 +618,41 @@ test('review r1: the finished report is saved before delivery; a restart resumes
   assert.deepEqual(c.sleeps, [5, 7, 7]);
   assert.match(saved2.find((x) => x.id === r2.id).message, /THE REPORT$/);
 });
+
+// ── review r2: nothing sent after the deadline, placeholders, redelivery after a restart, a gone agent ──
+test('review r2: a model lookup that ends after the deadline sends no work at all', async () => {
+  let releasePick;
+  let spawnCalls = 0;
+  const a = makeRunner({ deadlineMs: 20, pickHelperModel: () => new Promise((r) => { releasePick = r; }), spawn: async () => { spawnCalls++; return [res('x', true, 'y')]; } });
+  const r = a.runner.start({ agent: 'a1', question: 'Q?', subQuestions: SUBS });
+  for (let i = 0; i < 200 && a.runner.get(r.id).state !== 'delivered'; i++) await new Promise((ok) => setTimeout(ok, 5));
+  assert.match(a.wakes[0].message, /took longer than/);
+  releasePick('claude-sdk/claude-test-fast');
+  for (let i = 0; i < 20; i++) await tick();
+  assert.equal(spawnCalls, 0, 'no helper or summary dispatched after the deadline');
+});
+
+test('review r2: an empty, missing or stopped reply is not a result', async () => {
+  const a = makeRunner({ spawn: async (agent, w) => (w[0].label === 'Research summary' ? [res('Research summary', true, '(empty reply)')] : [res('Research 1', true, '(no response)'), res('Research 2', true, 'real finding')]) });
+  const r = a.runner.start({ agent: 'a1', question: 'Q?', subQuestions: ['x', 'y'] });
+  await until(() => a.runner.get(r.id).state === 'delivered');
+  assert.match(a.wakes[0].message, /^\[Deep research failed\].*the summary did not finish/);
+});
+
+test('review r2: a report whose delivery was given up is tried again after a restart; a gone agent is not retried for a day', async () => {
+  let saved = [];
+  const store = { load: () => saved, save: (x) => { saved = JSON.parse(JSON.stringify(x)); } };
+  const a = makeRunner({ store, maxWakeTries: 2, retryMs: 1, wake: async () => { throw new Error('busy'); } });
+  const r = a.runner.start({ agent: 'a1', question: 'Q?', subQuestions: SUBS });
+  await until(() => a.runner.get(r.id).state === 'failed');
+  const b = makeRunner({ store });
+  b.runner.recover();
+  await until(() => b.runner.get(r.id).state === 'delivered');
+  assert.match(b.wakes[0].message, /THE REPORT$/);
+  // the agent no longer exists: one try, then given up
+  let tries = 0;
+  const c = makeRunner({ maxWakeTries: 5, slowTries: 5, retryMs: 1, slowRetryMs: 1, wake: async () => { tries++; throw new Error('hub refused the wake-up turn (404)'); } });
+  const r2 = c.runner.start({ agent: 'gone', question: 'Q?', subQuestions: SUBS });
+  await until(() => c.runner.get(r2.id).state === 'failed');
+  assert.equal(tries, 1);
+});
