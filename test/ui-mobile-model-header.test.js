@@ -108,7 +108,7 @@ test('a tap on the name or the status: who, what and how long, in full; nothing 
   assert.strictEqual(own.toasts.length, 0);
   // In every view the same words (no longer only where the busy card shows).
   const other = world({ live: { sam: { ...busyNow, activity: 'hand-off' } } });
-  assert.strictEqual(other.chatStatusFull('sam'), 'Sam the long-named agent: Working on a hand-off · 2 min');
+  assert.strictEqual(other.chatStatusFull('sam'), 'Sam the long-named agent: Working on a task · 2 min');
   assert.match(js, /\$\('chat-title'\)\?\.addEventListener\('click', showChatStatus\);/);
 });
 

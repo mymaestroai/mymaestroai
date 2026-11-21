@@ -25,7 +25,7 @@ function harness({ live = {}, turnOrigins = {}, openTurns = {}, turnSteps = {}, 
   const elapsedFn = elapsed || ((since) => (since ? '4m' : ''));
   const streams = new Set(streamNames);
   const mod = new Function('S', 'live', 'turnOrigins', 'openTurns', 'chatViewBusyText', 'chatViewIsHubOrigin', 'chatViewElapsed', 'chatViewWaiting', 'chatViewStep', 'displayName', 'api', 'AbortSignal', 'paintChatStatus', 'paintBusyCard', 'viewNow', 'ownTurnFor', 'elapsed', 'streams', 'screen', 'renderAgents', ...STEP_NAMES,
-    `const current = S.current; ${noteSrc}; ${src}; ${busySrc}; return { chatBusyWords, chatBusyDetail, turnOriginFetch, busyText, noteTurnOrigin, noteTurnStep };`)(
+    `${V.chatViewActivityWord}; const current = S.current; ${noteSrc}; ${src}; ${busySrc}; return { chatBusyWords, chatBusyDetail, turnOriginFetch, busyText, noteTurnOrigin, noteTurnStep };`)(
     S, live, turnOrigins, openTurns, V.chatViewBusyText, V.chatViewIsHubOrigin, V.chatViewElapsed, V.chatViewWaiting, V.chatViewStep, displayName, api, { timeout: (ms) => ({ ms }) },
     () => painted.push('status'), () => painted.push('card'), () => 'main', () => false, elapsedFn, streams, 'chat', () => painted.push('list'), ...stepArgs(turnSteps));
   return { mod, calls, painted, turnSteps, live, turnOrigins, openTurns };
@@ -37,24 +37,24 @@ test('a hand-off known from turnOrigins is named in the header words', () => {
   const live = { casework: { busy: true, busySince: '2026-11-20T10:00:00Z', activity: 'hand-off' } };
   const turnOrigins = { casework: { turnId: 'T1', origin: { kind: 'hand_off', from: 'cnc', label: 'Hand-off from cnc: x' }, hub: true, since: 1 } };
   const h = harness({ live, turnOrigins, openTurns: { casework: ['T1'] } });
-  assert.strictEqual(h.mod.chatBusyWords('casework'), 'Working on a hand-off from CNC');
+  assert.strictEqual(h.mod.chatBusyWords('casework'), 'Working on a task from CNC');
   // an origin of an older turn is not used
   const stale = harness({ live, turnOrigins, openTurns: { casework: ['T2'] } });
-  assert.strictEqual(stale.mod.chatBusyWords('casework'), 'Working on a hand-off');
+  assert.strictEqual(stale.mod.chatBusyWords('casework'), 'Working on a task');
 });
 
 test('status feed only: vague words, one fetch per turn, then the caller is named', async () => {
   const live = { casework: { busy: true, busySince: '2026-11-20T10:00:00Z', activity: 'hand-off' } };
   const turnOrigins = {};
   const h = harness({ live, turnOrigins, reply: () => handOffTurn });
-  assert.strictEqual(h.mod.chatBusyWords('casework'), 'Working on a hand-off');
+  assert.strictEqual(h.mod.chatBusyWords('casework'), 'Working on a task');
   h.mod.turnOriginFetch('casework');
   h.mod.turnOriginFetch('casework');   // in flight: no second request
   await tick(); await tick();
   assert.strictEqual(h.calls.length, 1);
   assert.strictEqual(h.calls[0].url, '/api/agents/casework/turn');
   assert.ok(turnOrigins.casework, 'origin noted');
-  assert.strictEqual(h.mod.chatBusyWords('casework'), 'Working on a hand-off from CNC');
+  assert.strictEqual(h.mod.chatBusyWords('casework'), 'Working on a task from CNC');
   assert.deepStrictEqual(h.painted, ['status', 'card']);
   // same busySince again after the origin went: never asked twice
   delete turnOrigins.casework;
@@ -93,7 +93,7 @@ test('(d) the agent list row text: agents say what they do now, workers and ques
     wk1: { busy: true, busySince: 'a', worker: true, parent: 'sam', label: 'RULES coder', activity: 'working' },
     wk2: { busy: true, worker: true, parent: 'sam' },
   } });
-  assert.strictEqual(h.mod.busyText('casework'), '⏳ Working on a hand-off · 4m');
+  assert.strictEqual(h.mod.busyText('casework'), '⏳ Working on a task · 4m');
   assert.strictEqual(h.mod.busyText('sam'), '❓ waiting for your answer · 4m');
   assert.notStrictEqual(h.mod.busyText('owner'), '⏳ working');
   assert.match(h.mod.busyText('owner'), /^⏳ Working/);
@@ -117,7 +117,7 @@ function headerHarness({ live, turnOrigins = {}, openTurns = {}, now = Date.now(
   const paintSrc = cut('function paintChatStatus()', '// ── "Notify me when done"');
   const S = { current: 'casework' };
   const mod = new Function('S', 'live', 'turnOrigins', 'openTurns', 'chatViewBusyText', 'chatViewIsHubOrigin', 'chatViewElapsed', 'chatViewWaiting', 'chatViewStep', 'displayName', 'api', 'AbortSignal', 'paintBusyCard', 'viewNow', 'ownTurnFor', 'streams', 'screen', 'renderAgents', '$', 'agentByName', 'modelText', 'isBusy', 'paintNotifyBtn', 'setSendMode', ...STEP_NAMES,
-    `const current = S.current; ${elapsedSrc}; ${noteSrc}; ${src}; ${busySrc}; ${fullSrc}; ${paintSrc}; return { paintChatStatus, chatStatusFull, noteTurnStep, turnOriginFetch, chatBusyDetail };`)(
+    `${V.chatViewActivityWord}; const current = S.current; ${elapsedSrc}; ${noteSrc}; ${src}; ${busySrc}; ${fullSrc}; ${paintSrc}; return { paintChatStatus, chatStatusFull, noteTurnStep, turnOriginFetch, chatBusyDetail };`)(
     S, live, turnOrigins, openTurns, V.chatViewBusyText, V.chatViewIsHubOrigin, V.chatViewElapsed, V.chatViewWaiting, V.chatViewStep, displayName, async () => ({ ok: false }), { timeout: () => ({}) },
     () => {}, () => 'main', () => false, new Set(), 'chat', () => {},
     (id) => (id === 'chat-busy' ? el : id === 'chat-model' ? { textContent: '' } : stub), () => ({}), () => 'model', (n) => !!(live[n] && live[n].busy), () => {}, () => {}, ...stepArgs(base.turnSteps));
@@ -133,13 +133,13 @@ test('(a) the header names what the turn waits on: a helper started with spawn_w
   };
   const h = headerHarness({ live, turnOrigins: { casework: handOffOrigin }, openTurns: { casework: ['T1'] } });
   h.mod.paintChatStatus();
-  assert.strictEqual(h.el.textContent, '⏳ Working on a hand-off from CNC · 9m · waiting on 1 helper (RULES coder, 9 min)');
+  assert.strictEqual(h.el.textContent, '⏳ Working on a task from CNC · 9m · waiting on 1 helper (RULES coder, 9 min)');
   assert.strictEqual(h.el.hidden, false);
-  assert.match(h.mod.chatStatusFull('casework'), /^Casework: Working on a hand-off from CNC · 9 min · waiting on 1 helper \(RULES coder, 9 min\)$/);
+  assert.match(h.mod.chatStatusFull('casework'), /^Casework: Working on a task from CNC · 9 min · waiting on 1 helper \(RULES coder, 9 min\)$/);
   // the helper is done: no more detail
   live.wk.busy = false;
   h.mod.paintChatStatus();
-  assert.strictEqual(h.el.textContent, '⏳ Working on a hand-off from CNC · 9m');
+  assert.strictEqual(h.el.textContent, '⏳ Working on a task from CNC · 9m');
 });
 
 test('(b) with no helpers the header shows the running tool step; a done item with the same callId clears it', () => {
@@ -153,7 +153,7 @@ test('(b) with no helpers the header shows the running tool step; a done item wi
   h.mod.noteTurnStep('casework', 'T1', { kind: 'tool', tool: 'mcp__hub__Bash', status: 'done', callId: 'c1' });
   assert.strictEqual(V.chatViewStepsNewest(h.base.turnSteps.casework), null);
   h.mod.paintChatStatus();
-  assert.strictEqual(h.el.textContent, '⏳ Working on a hand-off from CNC · 9m');
+  assert.strictEqual(h.el.textContent, '⏳ Working on a task from CNC · 9m');
   // helpers win over the step
   live.wk = { busy: true, busySince: minsAgo(2), worker: true, parent: 'casework', label: 'RULES coder' };
   h.mod.noteTurnStep('casework', 'T1', { kind: 'tool', tool: 'spawn_workers', status: 'running', callId: 'c2' });
@@ -168,7 +168,7 @@ test('(c) the list row says what the agent does now, never the bare status word'
   const h = headerHarness({ live, turnOrigins: { casework: handOffOrigin }, openTurns: { casework: ['T1'] } });
   const row = h.base.mod.busyText('casework');
   // the base harness shares live/turnOrigins/openTurns, so it sees the same state
-  assert.match(row, /Working on a hand-off from CNC/);
+  assert.match(row, /Working on a task from CNC/);
   assert.match(row, /waiting on 1 helper \(RULES coder/);
   assert.notStrictEqual(row, '⏳ hand-off · 9m');
   assert.doesNotMatch(row, /⏳ hand-off/);

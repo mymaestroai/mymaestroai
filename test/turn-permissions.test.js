@@ -247,7 +247,7 @@ for (const [name, label] of Object.entries(pageFns)) {
     // the owner's scheduler identity is '@owner' (lib/scheduled-tasks); a plain 'owner' is an agent of that name
     assert.strictEqual(label({ kind: 'schedule', by: '@owner', from: 'Morning check' }), 'scheduled task set by you: Morning check');
     assert.strictEqual(label({ kind: 'schedule', by: 'owner', from: 'Morning check' }), 'scheduled task set by owner: Morning check');
-    assert.strictEqual(label({ kind: 'hand_off', from: 'lead' }), 'hand-off from lead');
+    assert.strictEqual(label({ kind: 'hand_off', from: 'lead' }), 'task from lead');   // the owner's wording (11-20): a hand-off reads "task" on screen
     assert.strictEqual(label({ kind: 'schedule', by: 'peer-a', from: 'Nightly' }), 'scheduled task set by peer-a: Nightly');
     assert.strictEqual(label({ kind: 'schedule', by: 'TASKS.md', from: 'cleanup' }), 'scheduled task set by TASKS.md: cleanup');
     assert.strictEqual(label({ kind: 'schedule', by: 'peer-a' }), 'scheduled task set by peer-a');

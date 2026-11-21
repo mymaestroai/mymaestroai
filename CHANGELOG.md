@@ -8,6 +8,7 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 - **The command lockbox row explains itself instead of vanishing.** On an agent's settings page an admin always sees the Command lockbox row. When your Maestro can't check the lockbox (an expired sign-in, a version that needs a restart, an error), the row says why and what to do, instead of leaving no trace of the control.
 - **Command lockbox (experimental, off unless you turn it on).** On Linux, your Maestro can run an agent's shell commands inside a lockbox: they can write only in that agent's own folders, can't read your Maestro's secret files or the keys it holds, and can't reach Docker, systemd or other programs running on the computer, however the command is written. Choose Off, Watch (commands run as today, and the agent's settings page lists what the lockbox would have blocked) or Enforce for each agent on its settings page, or for every agent under Settings → Agents.
+- **Work handed between agents is called a task.** While an agent works on something another agent handed to it, its status reads "Working on a task from" that agent (or "Reading a task report from" it when the result comes back), in the chat header, the agent list and its tooltip on desktop and phone. The line above the message box reads "Tasks: 1 running · 1 done", each card says "Task for" the agent doing it, and such turns in the chat history are labelled "Task from…".
 
 ## [5.12.0] - 2026-11-20
 

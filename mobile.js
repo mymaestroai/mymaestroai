@@ -1058,8 +1058,8 @@ function originLabel(origin) {
     case 'task': return origin.from && origin.from !== 'hub' ? `queued task from ${origin.from}` : origin.label ? `hub: ${origin.label}` : 'hub turn';
     case 'alert': return `alert from ${origin.from || 'a monitor'}`;
     case 'consult_reply': return 'queued consultation reply delivered';
-    case 'hand_off': return `hand-off from ${origin.from || 'another agent'}`;
-    case 'hand_off_report': return `hand-off finished: ${origin.from || 'another agent'}`;
+    case 'hand_off': return `task from ${origin.from || 'another agent'}`;
+    case 'hand_off_report': return `task finished: ${origin.from || 'another agent'}`;
     case 'comms': return 'message from a messaging channel';
     default: return 'hub turn';
   }
@@ -1821,7 +1821,7 @@ function busyText(name) {
   const e = elapsed(since);
   if (s && s.pendingQuestion) return `❓ waiting for your answer${e ? ` · ${e}` : ''}`;
   if (s && s.worker) {   // a temporary worker keeps the status word
-    const activity = s.activity || 'working';
+    const activity = chatViewActivityWord(s.activity) || 'working';
     return `⏳ ${activity}${e ? ` · ${e}` : ''}`;
   }
   // A named agent: what it is doing now (who started the turn, what it waits on or runs), never the bare status word.
@@ -2708,11 +2708,11 @@ function chatViewBusyText(origin, activity, nameOf) {
       case 'hand_off': {
         // The target's turn is labelled "Hand-off from <caller>: <topic>"; the caller's report turn "Hand-off <state>: <topic>".
         const l = typeof o.label === 'string' ? o.label : '';
-        if (/^Hand-off from /.test(l) || (!l && o.from)) return o.from ? `Working on a hand-off from ${who(o.from)}` : 'Working on a hand-off';
-        if (/^Hand-off \S+:/.test(l)) return o.from ? `Reading a hand-off report from ${who(o.from)}` : 'Reading a hand-off report';
-        return 'Working on a hand-off';
+        if (/^Hand-off from /.test(l) || (!l && o.from)) return o.from ? `Working on a task from ${who(o.from)}` : 'Working on a task';
+        if (/^Hand-off \S+:/.test(l)) return o.from ? `Reading a task report from ${who(o.from)}` : 'Reading a task report';
+        return 'Working on a task';
       }
-      case 'hand_off_report': return o.from ? `Reading a hand-off report from ${who(o.from)}` : 'Reading a hand-off report';
+      case 'hand_off_report': return o.from ? `Reading a task report from ${who(o.from)}` : 'Reading a task report';
       case 'job_report': return o.jobName ? `Reading a job report: ${o.jobName}` : 'Reading a job report';
       case 'consult_reply': return 'Reading consultation replies';
       case 'alert': return 'Handling a monitor alert';
@@ -2727,11 +2727,19 @@ function chatViewBusyText(origin, activity, nameOf) {
   if (m) return m[1] ? `Working on a scheduled task: ${m[1]}` : 'Working on a scheduled task';
   if (/^job finished/i.test(a)) return 'Reading a job result';
   if (/^job report/i.test(a)) return 'Reading a job report';
-  if (/^hand-off finished/i.test(a)) return 'Reading a hand-off report';
-  if (/^hand-off$/i.test(a)) return 'Working on a hand-off';
+  // the hub's status words for a hand-off turn ("hand-off", "hand-off finished") and the pages' own ("task from X", "task finished: X")
+  m = /^(?:hand-off|task) finished(?::\s*(.+))?$/i.exec(a);
+  if (m) return m[1] ? `Reading a task report from ${who(m[1])}` : 'Reading a task report';
+  m = /^(?:hand-off|task)(?: from (.+))?$/i.exec(a);
+  if (m) return m[1] ? `Working on a task from ${who(m[1])}` : 'Working on a task';
   if (/^replying to you$/i.test(a)) return 'Replying to your message';
   if (/^alert$/i.test(a)) return 'Handling a monitor alert';
   return 'Working on a hub task';
+}
+// The status feed's short word for what an agent does, as the pages show it: the hub's hand-off words read "task".
+function chatViewActivityWord(activity) {
+  const a = typeof activity === 'string' ? activity : '';
+  return a.replace(/^hand-off finished\b/i, 'task finished').replace(/^hand-off\b/i, 'task');
 }
 // What a working agent waits on: its own helpers (temporary workers whose parent is it) and agents it consulted, from the
 // status feed { <name>: { busy, busySince, worker, parent, label, consultedBy } }. '' when it waits on nobody.
@@ -2766,7 +2774,7 @@ function chatViewStep(item) {
   const name = raw.replace(/^mcp__[^_]+(?:_[^_]+)*?__/, '');
   const words = {
     spawn_workers: 'starting helpers', consult_agent: 'asking another agent', run_job: 'starting a background job',
-    hand_off: 'handing off work', ask_user: 'waiting for your answer', Bash: 'running a command', Read: 'reading a file',
+    hand_off: 'handing over a task', ask_user: 'waiting for your answer', Bash: 'running a command', Read: 'reading a file',
     Write: 'writing a file', Edit: 'editing a file', Grep: 'searching files', Glob: 'searching files',
     WebSearch: 'searching the web', WebFetch: 'reading a web page', schedule_task: 'scheduling a task',
   }[name] || `using ${name || 'a tool'}`;
@@ -2874,8 +2882,9 @@ function autoInfoOf(entry) {
     else if (o.kind === 'job_report') label = `Job report${o.jobName ? ': ' + o.jobName : ''}`;
     else if (o.kind === 'task') label = o.label === 'context compression' ? 'Resumed after compression' : `Hub task${o.label ? ': ' + o.label : ''}`;
     else if (o.kind === 'consult_reply') label = 'Consultation replies delivered';
-    else if (o.kind === 'hand_off') label = o.label || `Hand-off from ${from || 'another agent'}`;
-    else if (o.kind === 'hand_off_report') label = o.label || 'Hand-off finished';
+    // on screen a hand-off reads "task" (the owner's wording); the hub's own label starts "Hand-off from X: " or "Hand-off done: "
+    else if (o.kind === 'hand_off') label = o.label ? o.label.replace(/^Hand-off\b/, 'Task') : `Task from ${from || 'another agent'}`;
+    else if (o.kind === 'hand_off_report') label = o.label ? o.label.replace(/^Hand-off\b/, 'Task') : 'Task finished';
     else if (o.kind === 'alert') label = 'Monitor alert';
     else label = 'Hub turn';
     return { kind, from, label };
@@ -8737,7 +8746,7 @@ function reattachLine(ra) {
   const s = live[ra.agent];
   const running = ra.feed && [...ra.feed.items.values()].some(x => x.status === 'running');
   const phase = ra.progress && Date.now() - ra.progress.at < 10000 ? phaseText(ra.progress) : '';
-  const what = (!running && phase) || feedStatus(ra.feed) || (s && s.activity) || 'working';
+  const what = (!running && phase) || feedStatus(ra.feed) || (s && chatViewActivityWord(s.activity)) || 'working';
   const e = elapsed(ra.since || (s && s.busySince) || new Date(ra.startedAt).toISOString());
   return `⟳ ${displayName(ra.agent)}: ${what}${e ? ` · ${e}` : ''}`;
 }
@@ -11286,7 +11295,7 @@ async function sendMessage(fallback) {
   const s = live[agent];
   if (s && s.busy) {
     const e = elapsed(s.busySince);
-    addNote(`⏳ ${displayName(agent)} is still working on the previous message (${s.activity || 'working'}${e ? `, ${e}` : ''}). Your message will queue or be refused until it finishes.`);
+    addNote(`⏳ ${displayName(agent)} is still working on the previous message (${chatViewActivityWord(s.activity) || 'working'}${e ? `, ${e}` : ''}). Your message will queue or be refused until it finishes.`);
   }
   const userEl = fallback ? fallback.userEl : addUserBubble(text, images);
   if (!fallback) setBubbleTime(userEl, msgTimeLabel(Date.now()));
