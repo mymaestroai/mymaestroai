@@ -974,3 +974,139 @@ test('step-2 review: handOffNextStep (lib/sdk-chat.js): the earliest ACTIVE task
   assert.strictEqual(f({ tasks: [], jobs: [] }), null);
   assert.match(src, /nextStepOf: \(id\) => handOffNextStep\(handOffContinuations\(id, \{ strict: true \}\)\)/);
 });
+
+
+// ── The report is never replaced by a later, shorter reply (a test server's job ending after the report) ──
+const FULL_REPORT = 'Final report: the cause was X; fixed in abc123; suite 100/100; reviews both ACCEPT; proof 12/12; follow-ups: none. ' + 'Details. '.repeat(40);
+const JOB_NOTE = 'This notice is expected: the throwaway test server shut itself off. Nothing to do.';
+
+test('a report followed by a job-notice turn: the report is delivered first, the note after it, in one finished message', async () => {
+  const env = setup();
+  const v = await mk(env);
+  await env.h.tick();
+  env.continuations.add(v.id);            // the target started a 40-minute test server (run_job)
+  env.turns[0].finish(FULL_REPORT);       // its turn ends with the full final report
+  await flush(); await flush();
+  let r = env.h.get(v.id);
+  assert.strictEqual(r.state, 'waiting');
+  assert.strictEqual(r.report, null);
+  assert.strictEqual(env.delivered.length, 0);
+  // the job ends: the hub wakes the target with the job notice; its short reply ends the hand-off
+  assert.strictEqual(env.h.turnStarted(v.id, 'lead'), true);
+  env.continuations.delete(v.id);
+  env.h.turnEnded(v.id, JOB_NOTE, 'lead');
+  r = env.h.get(v.id);
+  assert.strictEqual(r.state, 'done');
+  assert.strictEqual(r.turns, 2);
+  assert.strictEqual(r.result, FULL_REPORT, 'the report is the full one, not the note');
+  await env.h.tick();
+  assert.strictEqual(env.delivered.length, 1, 'one finished message, no second one');
+  const m = env.delivered[0].message;
+  assert.ok(m.startsWith(`[Hand-off finished] "Big Job" (id ${v.id}): agent "lead" finished after 2 turns.`));
+  assert.ok(m.includes('Its report (turn 1 of 2):\n' + FULL_REPORT));
+  assert.ok(m.includes('Added after that report:\nTurn 2: ' + JOB_NOTE));
+  assert.ok(m.indexOf(FULL_REPORT) < m.indexOf(JOB_NOTE), 'the report first');
+  assert.ok(!m.includes('Its final report:'));
+});
+
+test('the same when the hand-off ends by the reconcile (the job note left it waiting, then nothing was left)', async () => {
+  const env = setup({ pollMs: 1000 });
+  const v = await mk(env);
+  await env.h.tick();
+  env.continuations.add(v.id);
+  env.turns[0].finish(FULL_REPORT);
+  await flush();
+  env.h.turnStarted(v.id);
+  env.h.turnEnded(v.id, JOB_NOTE);        // a continuation still listed when this turn ended
+  assert.strictEqual(env.h.get(v.id).state, 'waiting');
+  env.continuations.delete(v.id);
+  await env.h.tick(); env.t += 2000; await env.h.tick(); await env.h.tick();
+  const r = env.h.get(v.id);
+  assert.strictEqual(r.state, 'done');
+  assert.strictEqual(r.result, FULL_REPORT);
+  assert.strictEqual(env.delivered.length, 1);
+  assert.ok(env.delivered[0].message.includes('Its report (turn 1 of 2):\n' + FULL_REPORT + '\n\nAdded after that report:\nTurn 2: ' + JOB_NOTE));
+});
+
+test('a real multi-step hand-off (scheduled continuations) still reports its last, fullest reply as before', async () => {
+  const env = setup();
+  const v = await mk(env);
+  await env.h.tick();
+  env.continuations.add(v.id);
+  env.turns[0].finish('Step 1 done; continuing tomorrow.');
+  await flush();
+  env.h.turnStarted(v.id);
+  env.h.turnEnded(v.id, 'Step 2 done; one more step scheduled.');
+  env.h.turnStarted(v.id);
+  env.continuations.delete(v.id);
+  env.h.turnEnded(v.id, FULL_REPORT);
+  const r = env.h.get(v.id);
+  assert.strictEqual(r.result, FULL_REPORT);
+  assert.deepStrictEqual(r.resultLater, []);
+  await env.h.tick();
+  const m = env.delivered[0].message;
+  assert.ok(m.includes('Its final report:\n' + FULL_REPORT));
+  assert.ok(!m.includes('Added after that report'));
+  assert.ok(!m.includes('Step 1 done'));
+});
+
+test('a longer interim reply and a shorter final one: both are delivered, in order; an empty last reply adds nothing', async () => {
+  const env = setup();
+  const v = await mk(env);
+  await env.h.tick();
+  env.continuations.add(v.id);
+  env.turns[0].finish(FULL_REPORT);
+  await flush();
+  env.h.turnStarted(v.id);
+  env.h.turnEnded(v.id, 'Second turn: also merged the docs.');
+  env.h.turnStarted(v.id);
+  env.continuations.delete(v.id);
+  env.h.turnEnded(v.id, '   ');
+  const r = env.h.get(v.id);
+  assert.strictEqual(r.result, FULL_REPORT);
+  assert.deepStrictEqual(r.resultLater.map((l) => [l.turn, l.text]), [[2, 'Second turn: also merged the docs.']]);
+  assert.match(reportMessage(r), /Its report \(turn 1 of 3\):[\s\S]*Added after that report:\nTurn 2: Second turn: also merged the docs\.\n\nThis is agent "lead"'s report/);
+});
+
+test('later replies are bounded: the latest 5, each cut, and the count left out is said', async () => {
+  const env = setup();
+  const v = await mk(env);
+  await env.h.tick();
+  env.continuations.add(v.id);
+  env.turns[0].finish('R'.repeat(5000));
+  await flush();
+  for (let i = 2; i <= 8; i++) { env.h.turnStarted(v.id); if (i === 8) env.continuations.delete(v.id); env.h.turnEnded(v.id, (i === 8 ? 'L'.repeat(4000) : 'note ' + i)); }
+  const r = env.h.get(v.id);
+  assert.strictEqual(r.state, 'done');
+  assert.deepStrictEqual(r.resultLater.map((l) => l.turn), [4, 5, 6, 7, 8]);
+  assert.strictEqual(r.resultLaterLeftOut, 2);
+  assert.strictEqual(r.resultLater[4].text.length, 2001);
+  assert.ok(r.resultLater[4].text.endsWith('…'));
+  assert.match(reportMessage(r), /Added after that report \(the latest 5; 2 earlier left out\):\nTurn 4: note 4/);
+});
+
+test('a hand-off waiting through the update (no stored report yet) keeps its earlier reply as the report', async () => {
+  const env = setup();
+  const v = await mk(env);
+  await env.h.tick();
+  env.continuations.add(v.id);
+  env.turns[0].finish(FULL_REPORT);
+  await flush();
+  const rec = env.h.get(v.id);
+  delete rec.best; delete rec.later; delete rec.laterLeftOut;   // as written by the hub before this change
+  env.h._save();
+  const h2 = new HandOffs(env.opts);
+  h2.turnStarted(v.id);
+  env.continuations.delete(v.id);
+  h2.turnEnded(v.id, JOB_NOTE);
+  const r = h2.get(v.id);
+  assert.strictEqual(r.result, FULL_REPORT);
+  assert.deepStrictEqual(r.resultLater.map((l) => l.text), [JOB_NOTE]);
+});
+
+test('the framing tells the target that a running job holds the report and a shorter later reply goes below it', () => {
+  const env = setup();
+  const msg = framingMessage({ caller: 'sam', topic: 't', id: 'ho-1', brief: 'b', folder: '/x', notes: [] });
+  assert.match(msg, /A job you started that is still running \(a test server, say\) keeps the hand-off open until it ends; your report waits for it, and a shorter reply after it \(on that job's end, say\) is added below your report, never in its place\./);
+  assert.ok(env);
+});
