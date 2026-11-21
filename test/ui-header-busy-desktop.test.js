@@ -59,7 +59,7 @@ test('(a) a hand-off turn known from busyRun: header says who and how long; chat
     run: { casework: { turnId: 't1', origin: { kind: 'hand_off', from: 'cnc', label: 'Hand-off from cnc: x' }, since: min(4), own: false } },
   });
   assert.strictEqual(p.headerBusyPaint(p.chat), true);
-  assert.strictEqual(p.text.textContent, 'Working on a hand-off from CNC · 4 min');
+  assert.strictEqual(p.text.textContent, 'Working on a task from CNC · 4 min');
   assert.strictEqual(p.dot.className, 'status-dot thinking');
   assert.strictEqual(p.tab.className, 'status thinking');
   assert.strictEqual(p.text.dataset.hubBusy, '1');
@@ -74,7 +74,7 @@ test('(b) status feed only: the words show, one fetch names the caller, the same
     fetchImpl: async () => ({ ok: true, json: async () => ({ ok: true, agent: 'casework', active: true, turn: { turnId: 't9', origin: { kind: 'hand_off', from: 'cnc', label: 'Hand-off from cnc: x' }, startedAt: new Date(min(2)).toISOString() } }) }),
   });
   assert.strictEqual(p.headerBusyPaint(p.chat), true);
-  assert.strictEqual(p.text.textContent, 'Working on a hand-off · 2 min');
+  assert.strictEqual(p.text.textContent, 'Working on a task · 2 min');
   p.headerBusyPaint(p.chat);   // a second paint while the request is in flight
   assert.strictEqual(p.fetches.length, 1);
   assert.strictEqual(p.fetches[0].url, '/api/agents/casework/turn');
@@ -85,7 +85,7 @@ test('(b) status feed only: the words show, one fetch names the caller, the same
   assert.strictEqual(p.run.casework.own, false);
   assert.strictEqual(p.run.casework.since, min(2));
   p.busyCardRefresh(p.chat);   // what the 5 s timer does
-  assert.strictEqual(p.text.textContent, 'Working on a hand-off from CNC · 2 min');
+  assert.strictEqual(p.text.textContent, 'Working on a task from CNC · 2 min');
   p.headerBusyPaint(p.chat); p.busyOriginFetch('casework');
   delete p.run.casework;       // even if the run were forgotten, the same busySince is not asked again
   p.headerBusyPaint(p.chat);
@@ -100,7 +100,7 @@ test('(b2) a failed fetch is not retried for the same turn and leaves the words'
   p.headerBusyPaint(p.chat);
   await flush();
   assert.strictEqual(p.fetches.length, 1);
-  assert.strictEqual(p.text.textContent, 'Working on a hand-off · 1 min');
+  assert.strictEqual(p.text.textContent, 'Working on a task · 1 min');
 });
 
 test('(c) the agent goes idle: the line says Idle again and the marker is gone', () => {
@@ -160,20 +160,20 @@ const waitingStatus = () => ({
 test('(now-a) blocked on a helper: the header says who started the turn, how long and what it waits on', () => {
   const p = page({ status: waitingStatus(), run: handOffRun });
   assert.strictEqual(p.headerBusyPaint(p.chat), true);
-  assert.strictEqual(p.text.textContent, 'Working on a hand-off from CNC · 9 min · waiting on 1 helper (RULES coder, 9 min)');
+  assert.strictEqual(p.text.textContent, 'Working on a task from CNC · 9 min · waiting on 1 helper (RULES coder, 9 min)');
 });
 
 test('(now-b) no helpers: the current tool step ends the line; its done item (same callId) clears it', () => {
   const p = page({ status: { casework: { busy: true, busySince: new Date(min(2)).toISOString(), activity: 'hand-off' } }, run: handOffRun });
   p.onActivity({ agent: 'casework', item: { kind: 'tool', tool: 'mcp__hub__Bash', summary: 'npm test', status: 'running', callId: 'k1' } });
   p.headerBusyPaint(p.chat);
-  assert.match(p.text.textContent, /^Working on a hand-off from CNC · 9 min · running a command: npm test$/);
+  assert.match(p.text.textContent, /^Working on a task from CNC · 9 min · running a command: npm test$/);
   p.onActivity({ agent: 'casework', item: { kind: 'tool', tool: 'mcp__hub__Bash', status: 'done', callId: 'other' } });
   assert.ok(V.chatViewStepsNewest(p.agentSteps.casework), 'another call finishing does not clear the step');
   p.onActivity({ agent: 'casework', item: { kind: 'tool', tool: 'mcp__hub__Bash', status: 'done', callId: 'k1' } });
   assert.strictEqual(V.chatViewStepsNewest(p.agentSteps.casework), null);
   p.headerBusyPaint(p.chat);
-  assert.strictEqual(p.text.textContent, 'Working on a hand-off from CNC · 9 min');
+  assert.strictEqual(p.text.textContent, 'Working on a task from CNC · 9 min');
 });
 
 test('(now-b2) a burst of steps repaints an agent at most once per 500 ms (one trailing call)', () => {
@@ -188,10 +188,10 @@ test('(now-c) the agent list row says what it does now and is never just the sta
   p.paintAgentStatus('casework');
   const t = p.rowLine.textContent;
   assert.notStrictEqual(t, '⏳ hand-off · 9m');
-  assert.ok(t.includes('Working on a hand-off from CNC'), t);
+  assert.ok(t.includes('Working on a task from CNC'), t);
   assert.ok(t.includes('waiting on 1 helper (RULES coder'), t);
-  assert.strictEqual(t, '⏳ Working on a hand-off from CNC · 9m · waiting on 1 helper (RULES coder, 9 min)');
-  assert.strictEqual(p.rowLine.title, 'Working on a hand-off from CNC · 9 min · waiting on 1 helper (RULES coder, 9 min)');
+  assert.strictEqual(t, '⏳ Working on a task from CNC · 9m · waiting on 1 helper (RULES coder, 9 min)');
+  assert.strictEqual(p.rowLine.title, 'Working on a task from CNC · 9 min · waiting on 1 helper (RULES coder, 9 min)');
   assert.strictEqual(p.rowDot.title, p.rowLine.title);
   assert.ok(p.timers.some(t2 => t2.interval && t2.ms <= 15000), 'a ticker repaints busy rows at least every 15 s');
 });
@@ -219,7 +219,7 @@ test('(now-e) busyOriginFetch sets the step from a fetched activity list: the la
   await flush();
   assert.strictEqual(V.chatViewStepsNewest(p.agentSteps.casework).callId, 'b');
   p.headerBusyPaint(p.chat);
-  assert.strictEqual(p.text.textContent, 'Working on a hand-off from CNC · 2 min · running a command: npm test');
+  assert.strictEqual(p.text.textContent, 'Working on a task from CNC · 2 min · running a command: npm test');
 });
 
 test('wiring in app.js: the listener, turn_start/end, setAgentLive and the row ticker feed the step and the helper line', () => {
@@ -265,7 +265,7 @@ test('(steps-b) overlapping turns: one turn ending leaves the other turn\'s step
   assert.match(p.text.textContent, /running a command: build$/);
   V.chatViewStepsEndTurn(p.agentSteps.casework, 'A');
   p.headerBusyPaint(p.chat);
-  assert.strictEqual(p.text.textContent, 'Working on a hand-off from CNC · 9 min');
+  assert.strictEqual(p.text.textContent, 'Working on a task from CNC · 9 min');
 });
 
 // ── a late answer of the origin fetch ──
@@ -313,7 +313,7 @@ test('(err) the line shows what it said before a hub turn took it, once the agen
   const p = page({ status: busyStatus(), run: handOffRun, chat: { status: 'error' } });
   p.text.textContent = 'Error: x'; p.dot.className = 'status-dot error'; p.tab.className = 'status error';
   p.headerBusyPaint(p.chat);
-  assert.match(p.text.textContent, /^Working on a hand-off/);
+  assert.match(p.text.textContent, /^Working on a task/);
   assert.strictEqual(p.text.dataset.hubPrev, 'Error: x');
   p.headerBusyPaint(p.chat);   // a second paint keeps the saved text
   assert.strictEqual(p.text.dataset.hubPrev, 'Error: x');
@@ -353,7 +353,7 @@ test('(flicker) no working text within 4 s of this window\'s own stream ending; 
   }
   const h = page({ status: busyStatus(), run: handOffRun, chat: { ownEndedAt: NOW - 1000 } });   // a hand-off is not the person's own turn
   h.headerBusyPaint(h.chat);
-  assert.match(h.text.textContent, /^Working on a hand-off from CNC/);
+  assert.match(h.text.textContent, /^Working on a task from CNC/);
 });
 
 // ── setAgentLive / applyStatusSnapshot / setStatus ──

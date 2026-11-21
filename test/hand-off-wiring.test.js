@@ -185,7 +185,7 @@ test('labels: the target\'s chat shows "Hand-off from <caller>"; the caller\'s s
   for (const page of ['app.js', 'mobile.js']) {
     const src = read(page);
     assert.match(src, /else if \(o\.kind === 'hand_off'\) label = o\.label \|\| `Hand-off from \$\{from \|\| 'another agent'\}`;/, page);
-    assert.match(src, /case 'hand_off': return `hand-off from \$\{origin\.from \|\| 'another agent'\}`;/, page);
+    assert.match(src, /case 'hand_off': return `task from \$\{origin\.from \|\| 'another agent'\}`;/, page);   // on screen a hand-off reads "task" (owner, 11-20)
   }
 });
 
