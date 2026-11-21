@@ -656,3 +656,31 @@ test('review r2: a report whose delivery was given up is tried again after a res
   await until(() => c.runner.get(r2.id).state === 'failed');
   assert.equal(tries, 1);
 });
+
+// ── review r3: the report goes only to the agent that started the run ──
+test('review r3: a report is never delivered to another agent given the same name; a model 404 is not "the agent is gone"', async () => {
+  let who = 'owner:u_sam';
+  let saved = [];
+  const store = { load: () => saved, save: (x) => { saved = JSON.parse(JSON.stringify(x)); } };
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const a = makeRunner({ store, stampOf: () => who, wake: async () => { await gate; throw new Error('busy'); } });
+  const r = a.runner.start({ agent: 'helper-agent', question: 'Q?', subQuestions: SUBS });
+  await until(() => saved.some((x) => x.id === r.id && x.state === 'delivering'));
+  assert.equal(saved.find((x) => x.id === r.id).stamp, 'owner:u_sam');
+  // the agent is deleted and its name given to another person's agent; the hub restarts
+  who = 'owner:u_other';
+  const b = makeRunner({ store, stampOf: () => who });
+  b.runner.recover();
+  await until(() => b.runner.get(r.id).state === 'failed');
+  assert.equal(b.wakes.length, 0, 'not delivered to the new agent');
+  assert.equal(b.runner.get(r.id).message, null, 'and the report is dropped');
+  assert.match(b.runner.get(r.id).error, /gone or was replaced/);
+  release();
+  // an error that merely mentions 404 (a model call) keeps trying
+  let tries = 0;
+  const c = makeRunner({ maxWakeTries: 3, retryMs: 1, wake: async () => { tries++; if (tries < 3) throw new Error('upstream model returned 404'); } });
+  const r2 = c.runner.start({ agent: 'a1', question: 'Q?', subQuestions: SUBS });
+  await until(() => c.runner.get(r2.id).state === 'delivered');
+  assert.equal(tries, 3);
+});

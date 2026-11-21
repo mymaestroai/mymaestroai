@@ -285,3 +285,31 @@ test('review r2: delivery counts only when the report turn ended with a reply; t
   assert.match(SRC, /const stopStarted = \(\) => \{ for \(const id of startedIds\) \{ try \{ cancelWorker\(id, \{ admin: true \}\); \}/);
   assert.match(SRC, /if \(detached\) \{ startedIds\.add\(v\.id\); if \(signal && signal\.aborted\) stopStarted\(\); \}/);
 });
+
+// ── review r3: two offers at once, a superseded card says so ──
+test('review r3: two offers started together open exactly one card; the second is refused at once', async () => {
+  const L = load();
+  L.turn('sam-agent');
+  let opened = 0, answer;
+  L.ctx.runAskUser = () => { opened++; return new Promise((r) => { answer = r; }); };
+  const a = L.ctx.run('sam-agent', L.live, { action: 'offer', question: 'Q1?' });
+  const b = L.ctx.run('sam-agent', L.live, { action: 'offer', question: 'Q2?' });   // same tick, before any model lookup
+  assert.match(await b, /already waiting/);
+  for (let i = 0; i < 5 && !answer; i++) await new Promise((r) => setImmediate(r));
+  assert.equal(opened, 1);
+  answer('Yes');
+  assert.match(await a, /wants a deep research run/);
+});
+
+test('review r3: a card overtaken by a newer call says its answer counts for nothing', async () => {
+  const L = load();
+  L.turn('sam-agent');
+  let answer;
+  L.ctx.runAskUser = () => new Promise((r) => { answer = r; });
+  const a = L.ctx.run('sam-agent', L.live, { action: 'offer', question: 'Q1?' });
+  for (let i = 0; i < 5 && !answer; i++) await new Promise((r) => setImmediate(r));
+  await L.ctx.run('sam-agent', L.live, { action: 'set', choice: 'ask' });
+  answer('Always yes');
+  assert.match(await a, /changed their deep research choice while this question was open/);
+  assert.equal(L.prefs.choiceOf('u_sam'), 'ask');
+});
