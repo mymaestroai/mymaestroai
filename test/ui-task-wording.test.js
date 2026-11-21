@@ -82,7 +82,28 @@ test('the pages carry the new wording and show the status word through chatViewA
   assert.ok(mob.includes("previous message (${chatViewActivityWord(s.activity) || 'working'}"), 'phone still-working notice');
 });
 
-test('the hand-off line above the message box and the tool keep their names', () => {
-  assert.ok(read('lib/ui-hand-off-card.js').includes('Hand-offs: 1 running'), 'the hand-off line');
+test('the line above the message box and its cards say task: "Tasks: 1 running", "Task for <agent>"', () => {
+  const H = require('../lib/ui-hand-off-card');
+  const NOW = Date.parse('2026-11-20T12:00:00Z');
+  assert.strictEqual(H.summaryLine([{ id: '1', state: 'running', createdAt: NOW - 60000 }, { id: '2', state: 'done', createdAt: NOW - 60000, endedAt: NOW - 1000 }], { now: NOW }), 'Tasks: 1 running · 1 done');
+  assert.strictEqual(H.cardModel({ target: 'scout', topic: 'Find prices', state: 'running' }, { now: NOW }).title, 'Task for scout');
+  const src = read('lib/ui-hand-off-card.js').replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+  assert.ok(!/'[^'\n]*Hand-offs?\b[^'\n]*'|'Handed off/.test(src), 'no visible hand-off wording left in the strip or its Status sheet');
+});
+
+test('the agent list tooltip, a worker row and the chat history labels show "task" too', () => {
+  const app = read('app.js'), mob = read('mobile.js');
+  assert.ok(app.includes("const activity = chatViewActivityWord(s && s.activity) || (mine ? 'replying to you' : 'working');"), 'desktop status dot tooltip');
+  assert.ok(mob.includes("const activity = chatViewActivityWord(s.activity) || 'working';"), 'phone worker row');
+  const A = require('../lib/ui-auto-turns');
+  const info = (o) => A.autoInfoOf({ role: 'user', origin: o }).label;
+  assert.strictEqual(info({ kind: 'hand_off', from: 'lead', label: 'Hand-off from lead: tidy' }), 'Task from lead: tidy');
+  assert.strictEqual(info({ kind: 'hand_off_report', from: 'scout', label: 'Hand-off done: tidy' }), 'Task done: tidy');
+  assert.strictEqual(info({ kind: 'hand_off', from: 'lead' }), 'Task from lead');
+  assert.strictEqual(info({ kind: 'hand_off_report' }), 'Task finished');
+});
+
+test('the tool, ids, API fields and the hub\'s own words keep their names', () => {
   assert.ok(read('lib/hub-events.js').includes("case 'hand_off': return 'hand-off';"), 'the hub\'s status word is unchanged (the pages show it as "task")');
+  assert.ok(read('lib/ui-hand-off-card.js').includes("'/api/hand-offs?agent='"), 'the API path');
 });

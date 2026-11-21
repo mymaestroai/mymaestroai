@@ -176,15 +176,15 @@ test('the rule text (behaviour change hand-off-guidance): primary agents only, i
   for (const k of ['title', 'changes', 'benefits', 'costs', 'check', 'on', 'off']) assert.ok(e[k] && e[k].length > 10, k);
 });
 
-test('labels: the target\'s chat shows "Hand-off from <caller>"; the caller\'s shows the report, on both pages', () => {
+test('labels: the target\'s chat shows "Task from <caller>"; the caller\'s shows the report, on both pages (a hand-off reads "task" on screen)', () => {
   const auto = require('../lib/ui-auto-turns.js');
   const info = (auto.autoInfoOf || (() => null));
   const a = info({ role: 'user', origin: { kind: 'hand_off', from: 'lead', label: 'Hand-off from lead: site' } });
   const b = info({ role: 'user', origin: { kind: 'hand_off_report', from: 'scout', label: 'Hand-off finished: site' } });
-  if (a) { assert.equal(a.label, 'Hand-off from lead: site'); assert.equal(b.label, 'Hand-off finished: site'); }
+  if (a) { assert.equal(a.label, 'Task from lead: site'); assert.equal(b.label, 'Task finished: site'); }
   for (const page of ['app.js', 'mobile.js']) {
     const src = read(page);
-    assert.match(src, /else if \(o\.kind === 'hand_off'\) label = o\.label \|\| `Hand-off from \$\{from \|\| 'another agent'\}`;/, page);
+    assert.match(src, /else if \(o\.kind === 'hand_off'\) label = o\.label \? o\.label\.replace\(\/\^Hand-off\\b\/, 'Task'\) : `Task from \$\{from \|\| 'another agent'\}`;/, page);
     assert.match(src, /case 'hand_off': return `task from \$\{origin\.from \|\| 'another agent'\}`;/, page);   // on screen a hand-off reads "task" (owner, 11-20)
   }
 });

@@ -1821,7 +1821,7 @@ function busyText(name) {
   const e = elapsed(since);
   if (s && s.pendingQuestion) return `❓ waiting for your answer${e ? ` · ${e}` : ''}`;
   if (s && s.worker) {   // a temporary worker keeps the status word
-    const activity = s.activity || 'working';
+    const activity = chatViewActivityWord(s.activity) || 'working';
     return `⏳ ${activity}${e ? ` · ${e}` : ''}`;
   }
   // A named agent: what it is doing now (who started the turn, what it waits on or runs), never the bare status word.
@@ -2882,8 +2882,9 @@ function autoInfoOf(entry) {
     else if (o.kind === 'job_report') label = `Job report${o.jobName ? ': ' + o.jobName : ''}`;
     else if (o.kind === 'task') label = o.label === 'context compression' ? 'Resumed after compression' : `Hub task${o.label ? ': ' + o.label : ''}`;
     else if (o.kind === 'consult_reply') label = 'Consultation replies delivered';
-    else if (o.kind === 'hand_off') label = o.label || `Hand-off from ${from || 'another agent'}`;
-    else if (o.kind === 'hand_off_report') label = o.label || 'Hand-off finished';
+    // on screen a hand-off reads "task" (the owner's wording); the hub's own label starts "Hand-off from X: " or "Hand-off done: "
+    else if (o.kind === 'hand_off') label = o.label ? o.label.replace(/^Hand-off\b/, 'Task') : `Task from ${from || 'another agent'}`;
+    else if (o.kind === 'hand_off_report') label = o.label ? o.label.replace(/^Hand-off\b/, 'Task') : 'Task finished';
     else if (o.kind === 'alert') label = 'Monitor alert';
     else label = 'Hub turn';
     return { kind, from, label };

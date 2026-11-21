@@ -25,7 +25,7 @@ function harness({ live = {}, turnOrigins = {}, openTurns = {}, turnSteps = {}, 
   const elapsedFn = elapsed || ((since) => (since ? '4m' : ''));
   const streams = new Set(streamNames);
   const mod = new Function('S', 'live', 'turnOrigins', 'openTurns', 'chatViewBusyText', 'chatViewIsHubOrigin', 'chatViewElapsed', 'chatViewWaiting', 'chatViewStep', 'displayName', 'api', 'AbortSignal', 'paintChatStatus', 'paintBusyCard', 'viewNow', 'ownTurnFor', 'elapsed', 'streams', 'screen', 'renderAgents', ...STEP_NAMES,
-    `const current = S.current; ${noteSrc}; ${src}; ${busySrc}; return { chatBusyWords, chatBusyDetail, turnOriginFetch, busyText, noteTurnOrigin, noteTurnStep };`)(
+    `${V.chatViewActivityWord}; const current = S.current; ${noteSrc}; ${src}; ${busySrc}; return { chatBusyWords, chatBusyDetail, turnOriginFetch, busyText, noteTurnOrigin, noteTurnStep };`)(
     S, live, turnOrigins, openTurns, V.chatViewBusyText, V.chatViewIsHubOrigin, V.chatViewElapsed, V.chatViewWaiting, V.chatViewStep, displayName, api, { timeout: (ms) => ({ ms }) },
     () => painted.push('status'), () => painted.push('card'), () => 'main', () => false, elapsedFn, streams, 'chat', () => painted.push('list'), ...stepArgs(turnSteps));
   return { mod, calls, painted, turnSteps, live, turnOrigins, openTurns };
@@ -117,7 +117,7 @@ function headerHarness({ live, turnOrigins = {}, openTurns = {}, now = Date.now(
   const paintSrc = cut('function paintChatStatus()', '// ── "Notify me when done"');
   const S = { current: 'casework' };
   const mod = new Function('S', 'live', 'turnOrigins', 'openTurns', 'chatViewBusyText', 'chatViewIsHubOrigin', 'chatViewElapsed', 'chatViewWaiting', 'chatViewStep', 'displayName', 'api', 'AbortSignal', 'paintBusyCard', 'viewNow', 'ownTurnFor', 'streams', 'screen', 'renderAgents', '$', 'agentByName', 'modelText', 'isBusy', 'paintNotifyBtn', 'setSendMode', ...STEP_NAMES,
-    `const current = S.current; ${elapsedSrc}; ${noteSrc}; ${src}; ${busySrc}; ${fullSrc}; ${paintSrc}; return { paintChatStatus, chatStatusFull, noteTurnStep, turnOriginFetch, chatBusyDetail };`)(
+    `${V.chatViewActivityWord}; const current = S.current; ${elapsedSrc}; ${noteSrc}; ${src}; ${busySrc}; ${fullSrc}; ${paintSrc}; return { paintChatStatus, chatStatusFull, noteTurnStep, turnOriginFetch, chatBusyDetail };`)(
     S, live, turnOrigins, openTurns, V.chatViewBusyText, V.chatViewIsHubOrigin, V.chatViewElapsed, V.chatViewWaiting, V.chatViewStep, displayName, async () => ({ ok: false }), { timeout: () => ({}) },
     () => {}, () => 'main', () => false, new Set(), 'chat', () => {},
     (id) => (id === 'chat-busy' ? el : id === 'chat-model' ? { textContent: '' } : stub), () => ({}), () => 'model', (n) => !!(live[n] && live[n].busy), () => {}, () => {}, ...stepArgs(base.turnSteps));
