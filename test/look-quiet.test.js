@@ -61,6 +61,7 @@ function splitSelectors(head) {
 
 function collectRules(src, into) {
   for (const p of pieces(src)) {
+    if (/^@keyframes quiet-[a-z0-9-]+$/.test(p.head)) continue;   // keyframes named for this style only (names are global; no page uses this prefix)
     if (p.head.startsWith('@')) {
       assert.ok(/^@(media|supports)\b/.test(p.head), 'only @media and @supports blocks are allowed, found: ' + p.head);
       assert.ok(p.body !== null, 'an at-rule without a block is not allowed: ' + p.head);
@@ -83,8 +84,9 @@ test('every rule is scoped to html[data-look="quiet"]', () => {
       assert.ok(/^html\[data-look="quiet"\](?=$|[\s.:#\[>+~])/.test(sel), 'bad scope: ' + sel);
     }
   }
-  // no keyframes (their selectors cannot be scoped), no :root rule
-  assert.ok(!/@keyframes/.test(bare), 'no @keyframes');
+  // keyframes only under this style's own prefix (keyframe names are global and cannot be scoped), and no page uses that prefix
+  for (const m of bare.matchAll(/@keyframes\s+([^\s{]+)/g)) assert.ok(/^quiet-/.test(m[1]), 'keyframes outside the quiet- prefix: ' + m[1]);
+  for (const f of ['index.html', 'mobile.html', 'app.js', 'mobile.js']) assert.ok(!/@keyframes\s+quiet-/.test(fs.readFileSync(path.join(__dirname, '..', f), 'utf8')), f + ' uses the quiet- keyframe prefix');
 });
 
 function varNames(file) {

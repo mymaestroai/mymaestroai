@@ -102,3 +102,33 @@ test('Simple mode takes each light style\'s palette (both Simple variants), and 
     assert.match(block, /color-scheme: light;/);
   }
 });
+
+test('Simple in a light style: status colours, the toggle and the toast take the style, and busy dots keep 3:1 while they pulse', () => {
+  const hex = (h) => { h = h.replace('#', ''); return [0, 2, 4].map(i => parseInt(h.slice(i, i + 2), 16)); };
+  const lum = (c) => { const f = (v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }; return 0.2126 * f(c[0]) + 0.7152 * f(c[1]) + 0.0722 * f(c[2]); };
+  const ratio = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };
+  const fade = (fg, bg, t) => fg.map((c, i) => Math.round(c * t + bg[i] * (1 - t)));
+  for (const [id, lf] of [['broadsheet', 'looks/broadsheet.css'], ['quiet', 'looks/quiet.css']]) {
+    const css = read(lf).replace(/\/\*[\s\S]*?\*\//g, '');
+    const at = css.indexOf(`html[data-look="${id}"].mm-simple,\nhtml[data-look="${id}"].mm-simple.mm-light {`);
+    assert.ok(at >= 0, `${lf}: the Simple block`);
+    const block = css.slice(at, css.indexOf('}', at));
+    const v = (n) => { const m = block.match(new RegExp(`--${n}:\\s*(#[0-9A-Fa-f]{6});`)); assert.ok(m, `${lf}: Simple sets --${n}`); return hex(m[1]); };
+    for (const n of ['line-tint', 'hover-tint-strong']) assert.match(block, new RegExp(`--${n}:\\s*rgba\\(`), `${lf}: Simple sets --${n} (Engineering's is a white tint)`);
+    v('on-warning'); v('success'); v('consult');
+    assert.ok(ratio(v('toggle-on-bg'), v('bg-card')) >= 3, `${lf}: Simple's switch track`);
+    const S = `html[data-look="${id}"].mm-simple`;
+    const floor = css.match(new RegExp(`@keyframes ${id}-simple-dot-shrink \\{ 50% \\{ opacity: ([.0-9]+);`));
+    const floorD = css.match(new RegExp(`@keyframes ${id}-simple-dot \\{ 0%, 100% \\{ opacity: 1; \\} 50% \\{ opacity: ([.0-9]+);`));
+    assert.ok(floor && floorD, `${lf}: the Simple dots' own pulse`);
+    for (const dot of ['warning', 'blue']) for (const bg of ['bg-dark', 'bg-card', 'bg-input']) {
+      const t = Math.min(Number(floor[1]), Number(floorD[1]));
+      const r = ratio(fade(v(dot), v(bg), t), v(bg));
+      assert.ok(r >= 3, `${lf}: Simple --${dot} on --${bg} at its dimmest pulse is ${r.toFixed(2)}:1`);
+    }
+    assert.ok(css.includes(`${S} .sa-dot.busy,\n${S} .sa-dot.question { animation-name: ${id}-simple-dot-shrink; }`), `${lf}: phone dots use it`);
+    assert.ok(css.includes(`${S} #agent-list .simple-more .sm-dot { animation-name: ${id}-simple-dot; }`), `${lf}: desktop dots use it`);
+    assert.ok(css.includes(`${S} #toast { background: var(--text); color: var(--bg-dark); }`), `${lf}: the phone toast in Simple is ink on paper`);
+    assert.ok(ratio(v('bg-dark'), v('text')) >= 4.5, `${lf}: toast text`);
+  }
+});
