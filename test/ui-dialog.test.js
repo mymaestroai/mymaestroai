@@ -554,7 +554,7 @@ test('review 2: the pages\' own reloads (hub restarted, new version) wait while 
 
 test('review 2: web search keys: only a key saved as typed is cleared; a newer one and a failed save keep what was typed', async () => {
   const app = read('app.js');
-  const a = app.indexOf('    async function saveWebSearch() {'), b = app.indexOf('    async function tryWebSearch(');
+  const a = app.indexOf('    async function saveWebSearch(opts = {}) {'), b = app.indexOf('    async function tryWebSearch(');
   const src = app.slice(a, b);
   const run = async (answer, during) => {
     const els = {};
@@ -705,4 +705,166 @@ test('review 2: agent settings: a wrapped save never writes its status after it 
     assert.ok(!/\bawait\b[\s\S]*\b(?:showStatus|recordsStatus|compactionStatus)\(/.test(rest), fn + ': a status after an await that follows success');
     assert.ok(!/\.then\(/.test(body.slice(i)), fn + ': no callbacks after success');
   }
+});
+
+// ── guard.changed(scope) and the main Save of the Settings dialog ──
+
+test('guard.changed(scope): an unchanged field is false, a typed one true, a saved one false again; containers, removed fields and null entries', () => {
+  const p = dialogPage();
+  const other = p.el('input', { id: 'other' }, p.box); other.value = 'x';
+  assert.strictEqual(typeof p.g.changed, 'function');
+  assert.strictEqual(p.g.changed(p.name), false, 'nothing typed');
+  p.typeInto(p.name, 'Changed');
+  assert.strictEqual(p.g.changed(p.name), true, 'typed');
+  assert.strictEqual(p.g.changed([p.notes, other]), false, 'other fields are not touched');
+  assert.strictEqual(p.g.changed([null, undefined, p.notes, p.name]), true, 'null entries ignored, a changed one found');
+  assert.strictEqual(p.g.changed([null, undefined]), false);
+  assert.strictEqual(p.g.changed(null), false);
+  assert.strictEqual(p.g.changed(p.box), true, 'a container of fields');
+  p.g.savePoint(p.name)();
+  assert.strictEqual(p.g.changed(p.name), false, 'typed, then committed');
+  assert.strictEqual(p.g.changed(p.box), false);
+  p.typeInto(other, 'y');
+  assert.strictEqual(p.g.changed(p.box), true);
+  other.remove();
+  assert.strictEqual(p.g.changed(other), false, 'a removed field no longer counts');
+  assert.strictEqual(p.g.changed(p.box), false);
+  const unseen = p.el('input', { id: 'unseen' }, p.box); unseen.value = 'q';
+  assert.strictEqual(p.g.changed(unseen), false, 'no baseline yet: never touched');
+});
+
+// The pieces of the main Save, lifted out of app.js: the registry and saveSettings (one slice), saveWebSearch (another).
+function mainSavePage({ answers = {}, hlIds = [], scIds = [] } = {}) {
+  const app = read('app.js');
+  const a = app.indexOf('    // The main Save also runs'), b = app.indexOf('    // A ChatGPT subscription runs');
+  const c = app.indexOf('    async function saveWebSearch('), e = app.indexOf('    async function tryWebSearch(');
+  assert.ok(a > 0 && b > a && c > 0 && e > c, 'the main Save code is found in app.js');
+  const d = makeDom();
+  const guard = ui.createDialogGuard({ doc: d.doc, win: d.win });
+  const ov = d.el('div', { id: 'st-overlay' });
+  const box = d.el('div', {}, ov);
+  const f = {};
+  for (const id of ['st-ws-key-brave', 'st-ws-key-serper', 'st-ws-key-tavily', 'st-ws-order', 'st-ws-searxng', 'st-wf-private', 'st-wf-render', 'st-hw-minutes', 'st-cap-agent', 'st-cap-hub']) f[id] = d.el('input', { id }, box);
+  f['st-wf-jina'] = d.el('input', { id: 'st-wf-jina', type: 'checkbox' }, box);
+  f['st-ws-state'] = d.el('div', { id: 'st-ws-state' }, box);
+  f['st-saved'] = d.el('div', { id: 'st-saved' }, box);
+  f['st-hw-minutes'].value = '5';
+  const fetchLog = [], alerts = [];
+  const fetch = async (url, init) => {
+    const body = init && init.body ? JSON.parse(init.body) : null;
+    fetchLog.push({ url, method: (init && init.method) || 'GET', body });
+    const ans = answers[url] || { ok: true };
+    const ok = ans.httpOk !== false;
+    return { ok, status: ok ? 200 : 500, json: async () => ans };
+  };
+  // The fake DOM's selector matcher knows no attribute prefixes or descendant selectors: those queries find nothing here.
+  const document = Object.create(d.doc);
+  document.querySelectorAll = (sel) => (sel.includes('^=') || sel.includes(' .') ? [] : d.doc.querySelectorAll(sel));
+  const calls = { saveCredit: 0 };
+  const src = `${app.slice(a, b)}\n${app.slice(c, e)}\nreturn { saveSettings, ST_SECTION_SAVES, saveWebSearch };`;
+  const api = new Function('document', 'fetch', 'dialogGuard', 'PROVIDERS', 'workersAtOnceFromPage', 'loadWebSearchStatus', 'alert', 'setTimeout', 'hlFieldEls', 'scFieldEls',
+    'saveClassifier', 'saveMemberPolicy', 'saveSandboxDefaults', 'saveLockboxDefault', 'savePlanWarn', 'saveSpendCaps', 'saveCredit', 'saveHealthSettings', 'saveSelfCheckSettings', src)(
+    document, fetch, guard, [], () => undefined, () => {}, (m) => alerts.push(m), () => 0, () => [], () => [],
+    async () => true, async () => true, async () => true, async () => true, async () => true, async () => true, async () => { calls.saveCredit++; return true; }, async () => true, async () => true);
+  guard.open(ov);
+  return { d, guard, ov, f, fetchLog, alerts, api, calls };
+}
+const typeKey = (p, id, v) => p.d.typeInto(p.f[id], v);
+const cfgCalls = (p) => p.fetchLog.filter(x => x.url === '/api/websearch/config');
+
+test('main Save: a key typed in "Web search and fetch" is sent, the dialog is clean afterwards, the field says "set"', async () => {
+  const p = mainSavePage();
+  typeKey(p, 'st-ws-key-brave', 'brave-test-1');
+  assert.strictEqual(p.guard.isDirty(p.ov), true, 'the guard sees the typed key');
+  await p.api.saveSettings();
+  const cfg = cfgCalls(p);
+  assert.strictEqual(cfg.length, 1, 'POST /api/websearch/config');
+  assert.strictEqual(cfg[0].method, 'POST');
+  assert.strictEqual(cfg[0].body.keys.brave, 'brave-test-1');
+  assert.strictEqual(p.guard.isDirty(p.ov), false, 'Close would not ask "Discard changes?"');
+  assert.strictEqual(p.f['st-ws-key-brave'].value, '');
+  assert.strictEqual(p.f['st-ws-key-brave'].placeholder, 'set');
+  assert.deepStrictEqual(p.alerts, []);
+  assert.deepStrictEqual(p.fetchLog.map(x => x.url).sort(), ['/api/settings', '/api/websearch/config']);
+});
+
+test('main Save: a section nothing was typed in sends nothing', async () => {
+  const p = mainSavePage();
+  p.f['st-ws-order'].value = 'brave,serper';   // shown by the page, not typed
+  await p.api.saveSettings();
+  assert.strictEqual(cfgCalls(p).length, 0, 'no web search request');
+  assert.deepStrictEqual(p.fetchLog.map(x => x.url), ['/api/settings']);
+  assert.strictEqual(p.calls.saveCredit, 0, 'no other section ran either');
+  assert.deepStrictEqual(p.alerts, []);
+});
+
+test('main Save: a section that fails shows ONE message naming it, keeps what was typed and stays changed', async () => {
+  const p = mainSavePage({ answers: { '/api/websearch/config': { ok: false, error: 'nope' } } });
+  typeKey(p, 'st-ws-key-brave', 'brave-test-1');
+  await p.api.saveSettings();
+  assert.strictEqual(p.f['st-ws-key-brave'].value, 'brave-test-1', 'the typed key stays');
+  assert.strictEqual(p.guard.isDirty(p.ov), true);
+  assert.strictEqual(p.alerts.length, 1, 'one alert');
+  assert.match(p.alerts[0], /Web search and fetch: nope/);
+  assert.match(p.alerts[0], /^Not saved: /);
+  assert.ok(!p.f['st-saved'].classList.contains('show'), 'no "Saved" note after a failure');
+});
+
+test('main Save: the settings POST failing does not stop the sections; every failure is in the one alert', async () => {
+  const p = mainSavePage({ answers: { '/api/settings': { httpOk: false }, '/api/websearch/config': { ok: false, error: 'nope' } } });
+  typeKey(p, 'st-ws-key-brave', 'brave-test-1');
+  await p.api.saveSettings();
+  assert.strictEqual(cfgCalls(p).length, 1, 'the section still ran');
+  assert.strictEqual(p.alerts.length, 1);
+  assert.match(p.alerts[0], /Settings: HTTP 500; Web search and fetch: nope/);
+});
+
+test('main Save: a changed hand-off minutes field is clean afterwards', async () => {
+  const p = mainSavePage();
+  typeKey(p, 'st-hw-minutes', '9');
+  assert.strictEqual(p.guard.isDirty(p.ov), true);
+  await p.api.saveSettings();
+  assert.strictEqual(p.fetchLog[0].body.handOffWaitMinutes, 9);
+  assert.strictEqual(p.guard.isDirty(p.ov), false);
+});
+
+test('main Save: the section saves run one at a time, in registry order, quietly', async () => {
+  const p = mainSavePage();
+  const order = [];
+  // swap in recording saves: the registry calls entry.save({ quiet: true })
+  for (const e of p.api.ST_SECTION_SAVES) e.save = async (o) => { order.push(`${e.label}:${o && o.quiet}`); return e.label === 'Spend caps' ? 'Caps must be a dollar amount, or blank for unlimited.' : true; };
+  typeKey(p, 'st-ws-key-brave', 'brave-test-1');
+  typeKey(p, 'st-cap-agent', 'abc');
+  await p.api.saveSettings();
+  assert.deepStrictEqual(order, ['Web search and fetch:true', 'Spend caps:true']);
+  assert.deepStrictEqual(p.alerts, ['Not saved: Spend caps: Caps must be a dollar amount, or blank for unlimited.']);
+});
+
+test('main Save registry: ten sections, each naming an existing async function, every field id in the dialog markup', () => {
+  const app = read('app.js');
+  const between = (x, y) => { const i = app.indexOf(x), j = app.indexOf(y); assert.ok(i > 0 && j > i, x); return app.slice(i + x.length, j); };
+  const HL = between('// ── health page (begin) ──', '// ── health page (end) ──');
+  const SC = between('// ── self-check page (begin) ──', '// ── self-check page (end) ──');
+  const a = app.indexOf('    const ST_SECTION_SAVES = ['), b = app.indexOf('    async function saveSettings() {');
+  assert.ok(a > 0 && b > a);
+  const reg = app.slice(a, b);
+  const ids = [];
+  const document = { getElementById: (id) => { ids.push(id); return { id }; } };
+  const esc = (s) => String(s), stSum = () => {};
+  const out = new Function('document', 'esc', 'stSum', 'window', 'dialogGuard', `${HL}\n${SC}\n${reg}\nreturn { ST_SECTION_SAVES, hlFieldEls, scFieldEls };`)(document, esc, stSum, {}, {});
+  assert.deepStrictEqual(out.ST_SECTION_SAVES.map(e => e.label), ['Web search and fetch', 'Auto model classifier', 'Member defaults', 'Sandbox defaults', 'Command lockbox default', 'Plan usage warning', 'Spend caps', 'API credit', 'System health', 'Self-check']);
+  for (const entry of out.ST_SECTION_SAVES) {
+    ids.length = 0;
+    const els = entry.fields();
+    assert.ok(els.length > 0 && ids.length === els.length, `${entry.label}: fields() reads elements by id`);
+    for (const id of ids) {
+      const direct = app.includes(`id="${id}"`) || new RegExp(`\\$\\{\\w+\\('${id}'`).test(app), templated = app.includes('id="' + id.slice(0, id.lastIndexOf('-') + 1) + '${');
+      assert.ok(direct || templated, `${entry.label}: #${id} is in the dialog markup`);
+    }
+  }
+  for (const m of reg.matchAll(/save: \(o\) => (\w+)\(o\)/g)) assert.match(app, new RegExp(`async function ${m[1]}\\(opts = \\{\\}\\)`), `${m[1]} exists and takes opts`);
+  assert.strictEqual([...reg.matchAll(/save: \(o\) =>/g)].length, 10);
+  // the health and self-check saves use the same lists as the registry
+  assert.match(HL, /dialogGuard\.savePoint\(hlFieldEls\(\)\)/);
+  assert.match(SC, /dialogGuard\.savePoint\(scFieldEls\(\)\)/);
 });

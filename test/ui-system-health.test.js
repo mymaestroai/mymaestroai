@@ -48,9 +48,11 @@ function build(routes, { me = { isAdmin: true, user: { id: 'owner' } } } = {}) {
   };
   const setTimeout = (fn, ms) => { timers.push({ fn, ms }); return timers.length; };
   const stSum = (g, k, text, crit) => sums.push({ g, k, text, crit });
-  const make = new Function('document', 'fetch', 'setTimeout', 'stSum', 'window', `${ESC}\n${HL}\nreturn { hlRender, loadHealth, saveHealthSettings, hlFillSettings, HL_POLL_MS, HL_POLL_MAX_MS };`);
-  const S = make(page.document, fetch, setTimeout, stSum, { hubMe: me });
-  return { ...page, S, calls, sums, timers };
+  const guardLog = [];   // stand-in for the dialog guard: what the save settled
+  const dialogGuard = { savePoint: (fields) => () => guardLog.push(`commit ${fields.length}`), markLoaded: (els) => guardLog.push(`loaded ${els.length}`) };
+  const make = new Function('document', 'fetch', 'setTimeout', 'stSum', 'window', 'dialogGuard', `${ESC}\n${HL}\nreturn { hlRender, loadHealth, saveHealthSettings, hlFillSettings, HL_POLL_MS, HL_POLL_MAX_MS };`);
+  const S = make(page.document, fetch, setTimeout, stSum, { hubMe: me }, dialogGuard);
+  return { ...page, S, calls, sums, timers, guardLog };
 }
 const SETTINGS = { enabled: true, afterStart: true, checkAt: '03:15', diskWarnPct: 15, diskWarnGB: 20, diskCritPct: 5, diskCritGB: 5, fullInDays: 14, inodeWarnPct: 10, inodeCritPct: 3, backupWarnHours: 36, backupCritHours: 72, notify: 'critical', warnNights: 3 };
 const T0 = '2026-11-17T08:45:00.000Z';
@@ -165,6 +167,7 @@ test('settings: only the changed keys go by PUT; a 400 shows the hub\'s error te
   const put = t.calls.find(c => c.key === 'PUT /api/system-health/settings');
   assert.deepStrictEqual(put.body, { enabled: false, checkAt: '04:00', notify: 'warnings', diskWarnPct: 3 });
   assert.strictEqual(t.els['st-hl-save-state'].textContent, 'Not saved: Warn must be above critical.');
+  assert.deepStrictEqual(t.guardLog, [], 'a refused save leaves the form changed (Close still asks)');
 });
 
 test('settings: a 200 fills the form from the answer; nothing changed sends nothing', async () => {
@@ -174,9 +177,11 @@ test('settings: a 200 fills the form from the answer; nothing changed sends noth
   await t.S.saveHealthSettings();
   assert.strictEqual(t.calls.filter(c => c.key.startsWith('PUT')).length, 0);
   assert.strictEqual(t.els['st-hl-save-state'].textContent, 'Nothing to save.');
+  assert.deepStrictEqual(t.guardLog, ['commit 13'], 'nothing to save: the form counts as saved');
   t.els['st-hl-at'].value = '04:00';
   await t.S.saveHealthSettings();
   assert.strictEqual(t.els['st-hl-save-state'].textContent, 'Saved.');
+  assert.deepStrictEqual(t.guardLog, ['commit 13', 'loaded 13'], 'refilled from the answer: the form is settled');
 });
 
 // ── ?health=1 ──

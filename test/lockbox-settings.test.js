@@ -521,7 +521,7 @@ test('settings page: the section, the select, the one line, the host state and t
   const g = app.match(/id: 'agents', title: '[^']+', sections: \[([^\]]*)\]/)[1];
   assert.ok(g.indexOf('st-sb-section') < g.indexOf('st-lb-section') && g.includes('st-lb-section'));
   // the host reason comes from the status route, so it is written with textContent
-  const a = app.indexOf('async function loadLockboxHost()'), b = app.indexOf('async function saveMemberPolicy()');
+  const a = app.indexOf('async function loadLockboxHost()'), b = app.indexOf('async function saveMemberPolicy(');
   assert.doesNotMatch(app.slice(a, b), /innerHTML/);
 });
 

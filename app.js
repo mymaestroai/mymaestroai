@@ -3996,7 +3996,7 @@
     }
 
     // Auto model classifier (lib/classifier): settings, tallies, and the side-by-side try-it box.
-    async function saveClassifier() {
+    async function saveClassifier(opts = {}) {
       const saved = dialogGuard.savePoint(['st-cl-backend', 'st-cl-provider', 'st-cl-model', 'st-cl-think', 'st-cl-floor', 'st-cl-keep', 'st-cl-shadow'].map(id => document.getElementById(id)));
       const v = id => (document.getElementById(id) || {}).value; const chk = id => !!(document.getElementById(id) || {}).checked;
       const state = document.getElementById('st-cl-state');
@@ -4008,7 +4008,8 @@
         saved();
         if (state) state.textContent = `Saved. Backend ${d.config.backend}${d.config.shadow ? ' (shadow)' : ''}; local server: ${d.localServer ? `${d.localServer.provider} / ${d.localServer.model}` : 'none reachable'}; Perplexity key: ${d.perplexityKey ? 'yes' : 'no'}.`;
         loadClassifierStats();
-      } catch (e) { if (state) state.textContent = 'Could not save: ' + e.message; }
+        return true;
+      } catch (e) { if (state) state.textContent = 'Could not save: ' + e.message; return e.message; }
     }
     // Agent sandboxes (lib/sandbox): Docker and image state, running containers, defaults, image build as a job.
     // One read-only line: which agents run on the host (sandbox set to "off" on their page), and what the
@@ -4039,7 +4040,7 @@
         el.textContent = h.ok ? `Available: Landlock ABI ${abi !== undefined && abi !== null ? abi : '?'}` : `Not available on this computer: ${String(h.reason || 'unknown reason').replace(/[.\s]+$/, '')}`;
       } catch (e) { el.textContent = 'Could not read the lockbox status: ' + e.message; }
     }
-    async function saveLockboxDefault() {
+    async function saveLockboxDefault(opts = {}) {
       const sel = document.getElementById('st-lb-default');
       const saved = dialogGuard.savePoint([sel]);
       const state = document.getElementById('st-lb-state');
@@ -4048,9 +4049,10 @@
         if (!r.ok) { let m = `HTTP ${r.status}`; try { const j = await r.json(); if (j && j.error) m = j.error; } catch {} throw new Error(m); }
         saved();
         if (state) state.textContent = 'Saved. Applies to agents set to "Hub default" from their next command.';
-      } catch (e) { if (state) state.textContent = 'Could not save: ' + e.message; }
+        return true;
+      } catch (e) { if (state) state.textContent = 'Could not save: ' + e.message; return e.message; }
     }
-    async function saveMemberPolicy() {
+    async function saveMemberPolicy(opts = {}) {
       const saved = dialogGuard.savePoint(['st-mp-web', 'st-mp-read_outside', 'st-mp-write_outside', 'st-mp-send'].map(id => document.getElementById(id)));
       const state = document.getElementById('st-mp-state');
       const memberPolicy = {};
@@ -4059,9 +4061,10 @@
         const r = await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ memberPolicy }) });
         if (r.ok) saved();
         if (state) state.textContent = r.ok ? 'Saved. Applies to member agents from their next tool call.' : `Could not save (HTTP ${r.status})`;
-      } catch (e) { if (state) state.textContent = 'Could not save: ' + e.message; }
+        return r.ok ? true : `HTTP ${r.status}`;
+      } catch (e) { if (state) state.textContent = 'Could not save: ' + e.message; return e.message; }
     }
-    async function saveSandboxDefaults() {
+    async function saveSandboxDefaults(opts = {}) {
       const saved = dialogGuard.savePoint(['st-sb-member', 'st-sb-admin', 'st-tools-default'].map(id => document.getElementById(id)));
       const state = document.getElementById('st-sb-state');
       try {
@@ -4070,7 +4073,8 @@
         saved();
         if (state) state.textContent = 'Saved. Applies to agents set to "hub default" from their next turn.';
         stSum('agents', 'sb', stSandboxText({ member: document.getElementById('st-sb-member').value, admin: document.getElementById('st-sb-admin').value }));
-      } catch (e) { if (state) state.textContent = 'Could not save: ' + e.message; }
+        return true;
+      } catch (e) { if (state) state.textContent = 'Could not save: ' + e.message; return e.message; }
     }
     async function buildSandboxImage() {
       const state = document.getElementById('st-sb-state');
@@ -4435,20 +4439,27 @@
       if (model !== (cur.model || 'auto')) out.model = model;
       return { changes: out, classes };
     }
-    async function saveSelfCheckSettings() {
+    // Every field scSettingsChanges reads: one list for the save and for the main Save's registry.
+    function scFieldEls() {
+      return ['st-sc-enabled', 'st-sc-after', 'st-sc-at', ...SC_CLASSES.map(k => `st-sc-c-${k}`), 'st-sc-model'].map(id => document.getElementById(id));
+    }
+    async function saveSelfCheckSettings(opts = {}) {
+      const saved = dialogGuard.savePoint(scFieldEls());
       const state = document.getElementById('st-sc-save-state');
       const say = (t) => { if (state) state.textContent = t; };
       const { changes, classes } = scSettingsChanges();
-      if (!classes.length) { say('Keep at least one kind of agent ticked.'); return; }
-      if (!Object.keys(changes).length) { say('Nothing to save.'); return; }
+      if (!classes.length) { const m = 'Keep at least one kind of agent ticked.'; say(m); return m; }
+      if (!Object.keys(changes).length) { say('Nothing to save.'); saved(); return true; }
       say('Saving…');
       try {
         const r = await fetch('/api/selfcheck/settings', { method: 'PUT', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(changes) });
         const b = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error(b.error || `HTTP ${r.status}`);
         scFillSettings(b.settings);
+        dialogGuard.markLoaded(scFieldEls());   // refilled from the hub's answer
         say('Saved.');
-      } catch (e) { say(`Not saved: ${e.message}`); }
+        return true;
+      } catch (e) { say(`Not saved: ${e.message}`); return e.message; }
     }
     // ── self-check page (end) ──
     // System health (lib/system-health): the nightly look at the computer itself (disk, memory, backups, databases...).
@@ -4555,19 +4566,26 @@
       }
       return out;
     }
-    async function saveHealthSettings() {
+    // Every field hlSettingsChanges reads: one list for the save and for the main Save's registry.
+    function hlFieldEls() {
+      return ['st-hl-enabled', 'st-hl-at', 'st-hl-notify', ...HL_NUMBERS.map(([k]) => `st-hl-n-${k}`)].map(id => document.getElementById(id));
+    }
+    async function saveHealthSettings(opts = {}) {
+      const saved = dialogGuard.savePoint(hlFieldEls());
       const state = document.getElementById('st-hl-save-state');
       const say = (t) => { if (state) state.textContent = t; };
       const changes = hlSettingsChanges();
-      if (!Object.keys(changes).length) { say('Nothing to save.'); return; }
+      if (!Object.keys(changes).length) { say('Nothing to save.'); saved(); return true; }
       say('Saving…');
       try {
         const r = await fetch('/api/system-health/settings', { method: 'PUT', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(changes) });
         const b = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error(b.error || `HTTP ${r.status}`);
         hlFillSettings(b.settings);
+        dialogGuard.markLoaded(hlFieldEls());   // refilled from the hub's answer
         say('Saved.');
-      } catch (e) { say(`Not saved: ${e.message}`); }
+        return true;
+      } catch (e) { say(`Not saved: ${e.message}`); return e.message; }
     }
     // ── health page (end) ──
     function securityActionHtml(a) {
@@ -4889,7 +4907,7 @@
         const pplx = document.getElementById('st-ws-pplx'); if (pplx) pplx.textContent = '';
       }
     }
-    async function saveWebSearch() {
+    async function saveWebSearch(opts = {}) {
       const saved = dialogGuard.savePoint(['st-ws-key-brave', 'st-ws-key-serper', 'st-ws-key-tavily', 'st-ws-order', 'st-ws-searxng', 'st-wf-private', 'st-wf-render', 'st-wf-jina'].map(id => document.getElementById(id)));
       const state = document.getElementById('st-ws-state');
       const keys = {}, sent = {};   // sent: each key field as it was when Save was pressed
@@ -4910,7 +4928,8 @@
           for (const [k, v] of Object.entries(sent)) { const inp = document.getElementById(`st-ws-key-${k}`); if (inp && inp.value === v) { inp.placeholder = 'set'; inp.value = ''; dialogGuard.markLoaded(inp); } }
         }
         loadWebSearchStatus();
-      } catch (e) { if (state) state.textContent = 'Could not save: ' + e.message; }
+        return r.ok ? true : (r.error || 'Could not save');
+      } catch (e) { if (state) state.textContent = 'Could not save: ' + e.message; return e.message; }
     }
     async function tryWebSearch() {
       const out = document.getElementById('st-ws-result'); if (!out) return;
@@ -6255,7 +6274,7 @@
         setTimeout(loadPlanBox, 400);
       } catch (e) { sel.value = prev; alert(`Could not change the model: ${e.message}`); }
     }
-    async function savePlanWarn() {
+    async function savePlanWarn(opts = {}) {
       const saved = dialogGuard.savePoint(document.getElementById('st-plan-warn'));
       const v = document.getElementById('st-plan-warn').value;
       const at = String(v).split(/[,\s]+/).filter(Boolean).map(Number).filter(n => Number.isFinite(n) && n >= 1 && n <= 100);
@@ -6266,7 +6285,8 @@
         saved();
         if (st) st.textContent = at.length ? 'Saved.' : 'Saved: no warnings.';
         loadPlanBox();
-      } catch (e) { if (st) st.textContent = `Could not save: ${e.message}`; }
+        return true;
+      } catch (e) { if (st) st.textContent = `Could not save: ${e.message}`; return e.message; }
     }
     async function savePlanAuto(on) {
       try {
@@ -6339,7 +6359,8 @@
       if (amt) amt.value = c ? String(c.monthlyUsd) : '';
       if (day) day.value = c ? String(c.resetDay) : '';
     }
-    async function saveCredit() {
+    async function saveCredit(opts = {}) {
+      let result = true;
       const btn = document.getElementById('st-credit-save');
       const body = {
         provider: document.getElementById('st-credit-provider')?.value,
@@ -6357,9 +6378,11 @@
         if (btn) { btn.className = 'st-test-btn ok'; btn.textContent = 'Saved'; }
       } catch (e) {
         if (btn) { btn.className = 'st-test-btn fail'; btn.textContent = 'Failed'; }
-        alert(`Could not save the credit: ${e.message}`);
+        result = e.message;
+        if (!opts.quiet) alert(`Could not save the credit: ${e.message}`);
       }
       if (btn) { btn.disabled = false; setTimeout(() => { btn.className = 'st-test-btn'; btn.textContent = 'Save'; }, 3000); }
+      return result;
     }
     async function paintSpendSettings(fetchFirst = true) {
       const box = document.getElementById('st-spend');
@@ -6397,13 +6420,18 @@
       if (agentInp && document.activeElement !== agentInp) agentInp.value = caps.perAgentDailyUsd ? String(caps.perAgentDailyUsd) : '';
       if (hubInp && document.activeElement !== hubInp) hubInp.value = caps.hubDailyUsd ? String(caps.hubDailyUsd) : '';
     }
-    async function saveSpendCaps() {
+    async function saveSpendCaps(opts = {}) {
+      let result = true;
       const saved = dialogGuard.savePoint(['st-cap-agent', 'st-cap-hub'].map(id => document.getElementById(id)));
       const btn = document.getElementById('st-caps-save');
       const val = (id) => { const v = (document.getElementById(id)?.value || '').trim().replace(/^\$/, ''); return v === '' ? null : Number(v); };
       const perAgentDailyUsd = val('st-cap-agent');
       const hubDailyUsd = val('st-cap-hub');
-      for (const v of [perAgentDailyUsd, hubDailyUsd]) if (v !== null && !(Number.isFinite(v) && v >= 0)) { alert('Caps must be a dollar amount, or blank for unlimited.'); return; }
+      for (const v of [perAgentDailyUsd, hubDailyUsd]) if (v !== null && !(Number.isFinite(v) && v >= 0)) {
+        const m = 'Caps must be a dollar amount, or blank for unlimited.';
+        if (!opts.quiet) alert(m);
+        return m;
+      }
       if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
       try {
         const r = await fetch('/api/ledger/caps', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ perAgentDailyUsd, hubDailyUsd }) });
@@ -6416,9 +6444,11 @@
         setTimeout(() => document.getElementById('st-saved')?.classList.remove('show'), 2000);
       } catch (e) {
         if (btn) { btn.className = 'st-test-btn fail'; btn.textContent = 'Failed'; }
-        alert(`Could not save caps: ${e.message}`);
+        result = e.message;
+        if (!opts.quiet) alert(`Could not save caps: ${e.message}`);
       }
       if (btn) { btn.disabled = false; setTimeout(() => { btn.className = 'st-test-btn'; btn.textContent = 'Save'; }, 3000); }
+      return result;
     }
     setInterval(refreshSpendToday, SPEND_REFRESH_MS);
 
@@ -6477,9 +6507,22 @@
       paintDesktopPush();
     }
 
+    // The main Save also runs each section of this dialog that has its own Save button, when that section's fields changed
+    // (one at a time: several post to /api/settings). A section that did not change sends nothing.
+    const ST_SECTION_SAVES = [
+      { label: 'Web search and fetch', fields: () => ['st-ws-key-brave', 'st-ws-key-serper', 'st-ws-key-tavily', 'st-ws-order', 'st-ws-searxng', 'st-wf-private', 'st-wf-render', 'st-wf-jina'].map(id => document.getElementById(id)), save: (o) => saveWebSearch(o) },
+      { label: 'Auto model classifier', fields: () => ['st-cl-backend', 'st-cl-provider', 'st-cl-model', 'st-cl-think', 'st-cl-floor', 'st-cl-keep', 'st-cl-shadow'].map(id => document.getElementById(id)), save: (o) => saveClassifier(o) },
+      { label: 'Member defaults', fields: () => ['st-mp-web', 'st-mp-read_outside', 'st-mp-write_outside', 'st-mp-send'].map(id => document.getElementById(id)), save: (o) => saveMemberPolicy(o) },
+      { label: 'Sandbox defaults', fields: () => ['st-sb-member', 'st-sb-admin', 'st-tools-default'].map(id => document.getElementById(id)), save: (o) => saveSandboxDefaults(o) },
+      { label: 'Command lockbox default', fields: () => [document.getElementById('st-lb-default')], save: (o) => saveLockboxDefault(o) },
+      { label: 'Plan usage warning', fields: () => [document.getElementById('st-plan-warn')], save: (o) => savePlanWarn(o) },
+      { label: 'Spend caps', fields: () => ['st-cap-agent', 'st-cap-hub'].map(id => document.getElementById(id)), save: (o) => saveSpendCaps(o) },
+      { label: 'API credit', fields: () => ['st-credit-provider', 'st-credit-amount', 'st-credit-day'].map(id => document.getElementById(id)), save: (o) => saveCredit(o) },
+      { label: 'System health', fields: () => hlFieldEls(), save: (o) => saveHealthSettings(o) },
+      { label: 'Self-check', fields: () => scFieldEls(), save: (o) => saveSelfCheckSettings(o) },
+    ];
     async function saveSettings() {
-      // This Save writes the provider keys and URLs and the two defaults; it settles only those (lib/ui-dialog savePoint).
-      const saved = dialogGuard.savePoint([...document.querySelectorAll('#st-overlay [id^="st-key-"], #st-overlay [id^="st-url-"]'), ...['st-maxTokens', 'st-maxContext'].map(id => document.getElementById(id))]);
+      const failures = [];
       const patch = { providers: {} };
 
       for (const p of PROVIDERS) {
@@ -6510,6 +6553,10 @@
       const hwNotice = document.getElementById('st-hw-notice');
       if (hwNotice) patch.buildPartnerNotice = !!hwNotice.checked;
 
+      // This part of the Save writes the provider keys and URLs, the defaults and the hand-off fields; it settles only those
+      // (lib/ui-dialog savePoint). A workers-at-once row refused above (validationMessage set) keeps what was typed.
+      const waoOk = [...document.querySelectorAll('#st-overlay .st-wao-input')].filter(i => !i.validationMessage);
+      const saved = dialogGuard.savePoint([...document.querySelectorAll('#st-overlay [id^="st-key-"], #st-overlay [id^="st-url-"]'), ...['st-maxTokens', 'st-maxContext', 'st-hw-minutes', 'st-hw-notice'].map(id => document.getElementById(id)), ...waoOk]);
       try {
         const r = await fetch('/api/settings', {
           method: 'POST',
@@ -6519,11 +6566,24 @@
         });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         saved();
-        const note = document.getElementById('st-saved');
-        if (note) { note.classList.add('show'); setTimeout(() => note.classList.remove('show'), 2000); }
       } catch (e) {
-        alert('Save failed: ' + e.message);
+        failures.push('Settings: ' + e.message);
       }
+
+      // The sections with their own Save button: only those whose fields changed, one at a time.
+      for (const entry of ST_SECTION_SAVES) {
+        try {
+          if (!dialogGuard.changed(entry.fields())) continue;
+          const r = await entry.save({ quiet: true });
+          if (r !== true) failures.push(`${entry.label}: ${r}`);
+        } catch (e) {
+          failures.push(`${entry.label}: ${e && e.message ? e.message : e}`);
+        }
+      }
+
+      if (failures.length) { alert('Not saved: ' + failures.join('; ')); return; }
+      const note = document.getElementById('st-saved');
+      if (note) { note.classList.add('show'); setTimeout(() => note.classList.remove('show'), 2000); }
     }
 
     // A ChatGPT subscription runs through the Codex client: no key here, only where its sign-in stands (lib/welcome).
@@ -22449,7 +22509,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       /** savePoint(fields): the fields a save writes (an element, a container of them, or a list), with the values they
        *  have now, as the save starts. The returned commit(), called once the hub confirmed the save, makes exactly those
        *  values the fields' baselines: an edit made while the save ran stays changed, and nothing else is touched. */
-      function savePoint(scope) {
+      function fieldsIn(scope) {
         const list = [];
         const add = (el) => {
           if (!el) return;
@@ -22457,10 +22517,22 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           else if (el.querySelectorAll) for (const f of el.querySelectorAll('input, textarea, select')) if (dialogField(f)) list.push(f);
         };
         if (Array.isArray(scope) || (scope && typeof scope.length === 'number' && !scope.tagName)) for (const el of scope) add(el); else add(scope);
-        const snap = list.map(el => [el, dialogFieldValue(el)]);
+        return list;
+      }
+      function savePoint(scope) {
+        const snap = fieldsIn(scope).map(el => [el, dialogFieldValue(el)]);
         return function commit() {
           for (const [el, v] of snap) { if (el.isConnected === false) continue; const s = scopeOf(el); if (s) s.baselines.set(el, v); }
         };
+      }
+      /** changed(scope): does any of these fields (same forms as savePoint) still on the page differ from its baseline? */
+      function changed(scope) {
+        for (const el of fieldsIn(scope)) {
+          if (el.isConnected === false) continue;
+          const s = scopeOf(el);
+          if (s && s.baselines.has(el) && dialogFieldValue(el) !== s.baselines.get(el)) return true;
+        }
+        return false;
       }
 
       // ── Wiring ──
@@ -22529,6 +22601,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         isDirty: (elOrChild) => dirty(layerOf(elOrChild)) || (!layerOf(elOrChild) && !!page && dialogIsDirty(page.baselines)),
         hasChanges,
         savePoint,
+        changed,
         markLoaded: (els) => { for (const el of (Array.isArray(els) ? els : [els])) { const l = el && scopeOf(el); if (l) l.baselines.delete(el); } },   // put in by the page, not typed
         layers: () => layers.slice(),
         _confirm: () => confirmOpen,

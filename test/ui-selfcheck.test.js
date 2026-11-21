@@ -49,9 +49,11 @@ function build(routes, { ids = IDS } = {}) {
   };
   const setTimeout = (fn, ms) => { timers.push({ fn, ms }); return timers.length; };
   const stSum = (g, k, text, crit) => sums.push({ g, k, text, crit });
-  const make = new Function('document', 'fetch', 'setTimeout', 'stSum', `${ESC}\n${BLOCK}\nreturn { scRender, loadSelfCheck, saveSelfCheckSettings, scFillSettings, scFailText, SC_POLL_MS, SC_POLL_MAX_MS };`);
-  const S = make(page.document, fetch, setTimeout, stSum);
-  return { ...page, S, calls, sums, timers };
+  const guardLog = [];   // stand-in for the dialog guard: what the save settled
+  const dialogGuard = { savePoint: (fields) => () => guardLog.push(`commit ${fields.length}`), markLoaded: (els) => guardLog.push(`loaded ${els.length}`) };
+  const make = new Function('document', 'fetch', 'setTimeout', 'stSum', 'dialogGuard', `${ESC}\n${BLOCK}\nreturn { scRender, loadSelfCheck, saveSelfCheckSettings, scFillSettings, scFailText, SC_POLL_MS, SC_POLL_MAX_MS };`);
+  const S = make(page.document, fetch, setTimeout, stSum, dialogGuard);
+  return { ...page, S, calls, sums, timers, guardLog };
 }
 
 const T0 = '2026-11-17T08:45:00.000Z';
@@ -251,6 +253,7 @@ test('saving sends only the keys that changed, and nothing at all when nothing c
   await t.S.saveSelfCheckSettings();
   assert.deepStrictEqual(t.calls, [{ key: 'PUT /api/selfcheck/settings', body: { afterStart: false, nightlyAt: '04:10' } }]);
   assert.strictEqual(t.els['st-sc-save-state'].textContent, 'Saved.');
+  assert.deepStrictEqual(t.guardLog.map(x => x.split(' ')[0]), ['commit', 'loaded'], 'refilled from the answer: the form is settled');
   // the next save compares with what the hub answered
   t.calls.length = 0;
   await t.S.saveSelfCheckSettings();
@@ -286,6 +289,7 @@ test('a refused save (400) shows the hub\'s words and keeps the form', async () 
   await t.S.saveSelfCheckSettings();
   assert.strictEqual(t.els['st-sc-save-state'].textContent, 'Not saved: nightlyAt must be HH:MM');
   assert.strictEqual(t.els['st-sc-at'].value, '25:99');
+  assert.deepStrictEqual(t.guardLog, [], 'a refused save leaves the form changed (Close still asks)');
 });
 
 test('the deep link: ?selfcheck=1 is parsed, opens Settings → Status at the section, and is dropped from the address after', () => {

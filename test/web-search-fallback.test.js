@@ -161,7 +161,7 @@ test('Settings: In use row, Test web search button, Brave link and cost, Perplex
 // ── the Settings status rows, run from app.js's own code against stub elements ───────────────────────────────────────
 function loadStatusWith(respond) {
   const start = app.indexOf('    const WS_LABELS = {');
-  const end = app.indexOf('    async function saveWebSearch() {');
+  const end = app.indexOf('    async function saveWebSearch(');
   assert.ok(start > 0 && end > start, 'the web search status block is found in app.js');
   const els = {};
   for (const id of ['st-ws-status', 'st-ws-inuse', 'st-ws-pplx']) els[id] = { id, textContent: 'Checking…', innerHTML: '' };
@@ -185,7 +185,7 @@ test('Settings status: an error answer (503) is "unavailable", never "off", and 
 
 test('Settings status: a good read then a failed refresh on the same page replaces the old summary and rows', async () => {
   const start = app.indexOf('    const WS_LABELS = {');
-  const end = app.indexOf('    async function saveWebSearch() {');
+  const end = app.indexOf('    async function saveWebSearch(');
   const els = {};
   for (const id of ['st-ws-status', 'st-ws-inuse', 'st-ws-pplx']) els[id] = { id, textContent: 'Checking…', innerHTML: '' };
   const sums = [];
