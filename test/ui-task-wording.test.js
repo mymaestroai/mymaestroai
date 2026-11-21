@@ -103,6 +103,10 @@ test('the agent list tooltip, a worker row and the chat history labels show "tas
   assert.strictEqual(info({ kind: 'hand_off_report' }), 'Task finished');
 });
 
+test('a running hand_off step reads "handing over a task"', () => {
+  assert.match(V.chatViewStep({ kind: 'tool', tool: 'hand_off', status: 'running' }) || '', /^handing over a task/);
+});
+
 test('the tool, ids, API fields and the hub\'s own words keep their names', () => {
   assert.ok(read('lib/hub-events.js').includes("case 'hand_off': return 'hand-off';"), 'the hub\'s status word is unchanged (the pages show it as "task")');
   assert.ok(read('lib/ui-hand-off-card.js').includes("'/api/hand-offs?agent='"), 'the API path');

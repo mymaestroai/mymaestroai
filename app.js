@@ -9665,7 +9665,7 @@
       const name = raw.replace(/^mcp__[^_]+(?:_[^_]+)*?__/, '');
       const words = {
         spawn_workers: 'starting helpers', consult_agent: 'asking another agent', run_job: 'starting a background job',
-        hand_off: 'handing off work', ask_user: 'waiting for your answer', Bash: 'running a command', Read: 'reading a file',
+        hand_off: 'handing over a task', ask_user: 'waiting for your answer', Bash: 'running a command', Read: 'reading a file',
         Write: 'writing a file', Edit: 'editing a file', Grep: 'searching files', Glob: 'searching files',
         WebSearch: 'searching the web', WebFetch: 'reading a web page', schedule_task: 'scheduling a task',
       }[name] || `using ${name || 'a tool'}`;
