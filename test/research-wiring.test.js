@@ -313,3 +313,8 @@ test('review r3: a card overtaken by a newer call says its answer counts for not
   assert.match(await a, /changed their deep research choice while this question was open/);
   assert.equal(L.prefs.choiceOf('u_sam'), 'ask');
 });
+
+test('review r4: the hub stamps a run with agentIdentity (the raw record\'s box id), not the listed agents', () => {
+  assert.match(SRC, /stampOf: \(agent\) => require\('\.\/agents'\)\.agentIdentity\(agent\)/);
+  assert.doesNotMatch(SRC, /stampOf:[^\n]*getAgentsSync/);
+});

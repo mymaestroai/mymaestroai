@@ -684,3 +684,73 @@ test('review r3: a report is never delivered to another agent given the same nam
   await until(() => c.runner.get(r2.id).state === 'delivered');
   assert.equal(tries, 3);
 });
+
+// ── review r4: identity checked before each dispatch; a failed lookup is not "gone" ──
+test('review r4: a run is not started when the agent can\'t be confirmed or does not exist', () => {
+  const a = makeRunner({ stampOf: () => { throw new Error('unreadable'); } });
+  const r = a.runner.start({ agent: 'sam-agent', question: 'Q?', subQuestions: SUBS });
+  assert.equal(r.ok, false);
+  assert.match(r.error, /Could not confirm which agent/);
+  const b = makeRunner({ stampOf: () => null });
+  const r2 = b.runner.start({ agent: 'sam-agent', question: 'Q?', subQuestions: SUBS });
+  assert.equal(r2.ok, false);
+  assert.equal(a.runner.list().length + b.runner.list().length, 0, 'nothing saved, nothing spawned');
+  assert.equal(a.spawns.length + b.spawns.length, 0);
+});
+
+test('review r4: an agent replaced while the helpers work gets no summary worker and no report', async () => {
+  let who = 'box:aaa';
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const a = makeRunner({
+    stampOf: () => who,
+    spawn: async (agent, workers) => {
+      a.spawns.push({ agent, workers });
+      if (workers[0].label === 'Research summary') return 'THE REPORT';
+      await gate;
+      return 'FINDINGS';
+    },
+  });
+  const r = a.runner.start({ agent: 'sam-agent', question: 'Q?', subQuestions: SUBS });
+  await until(() => a.spawns.length === 1);
+  who = 'box:bbb';   // deleted and re-made under the same name (same owner): a new box id
+  release();
+  await until(() => a.runner.get(r.id).state === 'failed');
+  assert.equal(a.spawns.length, 1, 'no summary worker started');
+  assert.equal(a.wakes.length, 0, 'nothing delivered to the new agent');
+  assert.match(a.runner.get(r.id).error, /gone or was replaced/);
+});
+
+test('review r4: a lookup that fails at delivery keeps the report and delivers it to the same agent later', async () => {
+  let fail = 2;
+  let saved = [];
+  const store = { load: () => saved, save: (x) => { saved = JSON.parse(JSON.stringify(x)); } };
+  let deliveryStarted = false;
+  const a = makeRunner({
+    store, maxWakeTries: 5, retryMs: 1,
+    stampOf: () => { if (deliveryStarted && fail > 0) { fail--; throw new Error('unreadable'); } return 'box:aaa'; },
+    spawn: async (agent, workers) => { if (workers[0].label === 'Research summary') { deliveryStarted = true; return 'THE REPORT'; } return 'FINDINGS'; },
+  });
+  const r = a.runner.start({ agent: 'sam-agent', question: 'Q?', subQuestions: SUBS });
+  await until(() => a.runner.get(r.id).state === 'delivered');
+  assert.equal(fail, 0, 'the failed lookups happened');
+  assert.equal(a.wakes.length, 1);
+  assert.match(a.wakes[0].message, /THE REPORT/);
+});
+
+test('review r4: agentIdentity: box id, else owner; a re-made agent differs; a settings edit does not; unreadable throws', () => {
+  const { agentIdentity } = require(path.join(ISO.inst, 'lib', 'agents.js'));
+  const list = [
+    { name: 'sam-agent', owner: 'u_sam', box: 'b1', model: 'm1' },
+    { name: 'old-agent', owner: 'u_sam', model: 'm1' },
+  ];
+  assert.equal(agentIdentity('sam-agent', { load: () => list }), 'box:b1');
+  assert.equal(agentIdentity('old-agent', { load: () => list }), 'owner:u_sam');
+  assert.equal(agentIdentity('nobody', { load: () => list }), null);
+  // a settings edit (the model) keeps it
+  assert.equal(agentIdentity('sam-agent', { load: () => [{ ...list[0], model: 'm2', blurb: 'x' }] }), 'box:b1');
+  // deleted and re-made by the same owner: a new box id
+  assert.notEqual(agentIdentity('sam-agent', { load: () => [{ name: 'sam-agent', owner: 'u_sam', box: 'b2' }] }), 'box:b1');
+  assert.throws(() => agentIdentity('sam-agent', { load: () => [] }), /could not be read/);
+  assert.throws(() => agentIdentity('sam-agent', { load: () => null }), /could not be read/);
+});
