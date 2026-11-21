@@ -184,7 +184,7 @@ async function call(url, { agents, list }) {
   const agentFromQuery = (r) => new URL(r.url, 'http://x').searchParams.get('agent');
   const seen = [];
   // the route uses the runner the hub made at start-up (lib/sdk-chat getHandOffRunner)
-  const fakeRequire = (m) => { assert.equal(m, './lib/sdk-chat'); return { getHandOffRunner: () => ({ list: (...a) => { seen.push(a); return list; } }) }; };
+  const fakeRequire = (m) => { assert.equal(m, './lib/sdk-chat'); return { getHandOffRunner: () => ({ listShown: async (...a) => { seen.push(a); return list; } }) }; };   // review r2 (hand-off identity): the route shows listShown
   const r = await handler()(new URL(url, 'http://x').pathname, req, out, agentFromQuery, async () => agents, (res, code, data) => { res.code = code; res.data = data; return 'sent'; }, fakeRequire);
   return { r, out, seen };
 }

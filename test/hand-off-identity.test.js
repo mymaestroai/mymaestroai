@@ -251,6 +251,53 @@ test('review r1: the owner notice is told once and records how many devices it r
   assert.strictEqual(env.h.get(v.id).report.ownerTold.sent, 2);
 });
 
+test('review r2: an agent made again under the caller\'s name never sees, notes or cancels the earlier agent\'s hand-offs', async () => {
+  const env = setup();
+  const v = await env.h.create({ caller: 'sam', target: 'lead', topic: 'Tidy the list', brief: 'Do it' });
+  await env.h.tick();
+  env.continuations.add(v.id);
+  env.turns[0].finish('PRIVATE FIGURES 4411'); await flush();
+  assert.strictEqual(env.h.list('sam').length, 1);
+  env.recs.sam = { name: 'sam', box: '5e5e5e5e5e' };
+  assert.deepStrictEqual(env.h.list('sam', { includeDone: true }), []);
+  assert.deepStrictEqual(await env.h.listShown('sam', { includeDone: true, withStatus: true }), []);
+  assert.throws(() => env.h.note({ caller: 'sam', id: v.id, text: 'hello' }), /No such hand-off/);
+  assert.throws(() => env.h.cancel({ caller: 'sam', id: v.id }), /No such hand-off/);
+  // an identity that can't be read shows none
+  const env2 = setup({ stampOf: () => { throw new Error('unreadable'); } });
+  env2.h.items.set(v.id, { ...env.h.get(v.id) });
+  assert.deepStrictEqual(env2.h.list('sam', { includeDone: true }), []);
+});
+
+test('review r2: listShown gives none of the target\'s words for a target the caller may no longer reach, or can\'t be checked', async () => {
+  let allowed = true, broken = false;
+  const env = setup({ mayTarget: async () => { if (broken) throw new Error('accounts unreadable'); return allowed; } });
+  const v = await env.h.create({ caller: 'sam', target: 'lead', topic: 'Tidy the list', brief: 'Do it' });
+  await env.h.tick();
+  env.continuations.add(v.id);
+  env.turns[0].finish('PRIVATE FIGURES 4411'); await flush();
+  fs.writeFileSync(path.join(v.folder, 'STATUS.md'), 'PRIVATE STATUS 77');
+  const shown = await env.h.listShown('sam', { withStatus: true });
+  assert.match(shown[0].lastReply, /PRIVATE FIGURES/);
+  assert.match(String(shown[0].status), /PRIVATE STATUS/);
+  for (const set of [() => { allowed = false; }, () => { allowed = true; broken = true; }]) {
+    set();
+    for (const withStatus of [true, false]) {
+      const rows = await env.h.listShown('sam', { withStatus });
+      assert.strictEqual(rows.length, 1);
+      assert.strictEqual(rows[0].lastReply, null);
+      assert.strictEqual(rows[0].withheld, true);
+      if (withStatus) assert.strictEqual(rows[0].status, null);
+      assert.ok(!JSON.stringify(rows).includes('PRIVATE'), JSON.stringify(rows));
+    }
+  }
+  // the agent's tool says why
+  const tools = require('../lib/hand-off-tools');
+  const out = await tools.runTool('hand_off_list', {}, 'sam', { runner: env.h, mayTarget: async () => false });
+  assert.match(out, /STATUS\.md: not shown \(you may no longer hand work to lead\)\./);
+  assert.ok(!out.includes('PRIVATE'));
+});
+
 test('the hub wires hand-offs to the identity, its matching rule, the caller\'s owner and the owner notice; other checks keep the strict stamp', () => {
   const sdk = read('lib/sdk-chat.js');
   const factory = sdk.slice(sdk.indexOf('function getHandOffRunner() {'), sdk.indexOf("voiceCall.registerProducer('hand_off'"));

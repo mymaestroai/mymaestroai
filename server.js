@@ -2497,7 +2497,8 @@ async function handleHttpRequest(req, res) {
     if (pathname === '/api/hand-offs' && req.method === 'GET') {
       const name = agentFromQuery(req);
       if (!name || !(await getAgents()).some(a => a.name === name)) return jsonResponse(res, 404, { error: 'unknown agent' });
-      const handOffs = require('./lib/sdk-chat').getHandOffRunner().list(name, { includeDone: false, withStatus: false });
+      // listShown: only this agent's own hand-offs, and no target's words where it may no longer reach that target
+      const handOffs = await require('./lib/sdk-chat').getHandOffRunner().listShown(name, { includeDone: false, withStatus: false });
       return jsonResponse(res, 200, { ok: true, handOffs });   // no folderLink: the Files panel has no link that opens a folder
     }
 

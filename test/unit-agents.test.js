@@ -61,11 +61,12 @@ test('first run: no agents.json seeds from agents.example.json, else a default m
 });
 
 test('first run: every seeded agent gets its own box id, so a hand-off of an earlier agent of that name is never taken for it', () => {
-  const a = load({ example: [{ name: 'zed', model: 'm1' }, { name: 'abe' }] });
+  const a = load({ example: [{ name: 'zed', model: 'm1', box: 'aaaaaaaaaaaa' }, { name: 'abe' }] });   // a template that brings a box id
   a.ag.getAgentsSync();   // the first read seeds
   const recs = a.readJson();
   for (const r of recs) assert.match(String(r.box || ''), /^[0-9a-f]{12}$/, r.name);
   assert.notStrictEqual(recs[0].box, recs[1].box);
+  assert.notStrictEqual(recs[0].box, 'aaaaaaaaaaaa', 'the template\'s own id is never kept');
   assert.strictEqual(a.ag.agentIdentity('zed'), `box:${recs[0].box}`);
   const b = load();
   b.ag.getAgentsSync();
