@@ -1003,8 +1003,8 @@ test('a report followed by a job-notice turn: the report is delivered first, the
   assert.strictEqual(env.delivered.length, 1, 'one finished message, no second one');
   const m = env.delivered[0].message;
   assert.ok(m.startsWith(`[Hand-off finished] "Big Job" (id ${v.id}): agent "lead" finished after 2 turns.`));
-  assert.ok(m.includes('Its report (turn 1 of 2):\n' + FULL_REPORT));
-  assert.ok(m.includes('Added after that report:\nTurn 2: ' + JOB_NOTE));
+  assert.ok(m.includes('Its fullest reply (turn 1 of 2):\n' + FULL_REPORT));
+  assert.ok(m.includes('Its later, shorter replies, in order:\nTurn 2: ' + JOB_NOTE));
   assert.ok(m.indexOf(FULL_REPORT) < m.indexOf(JOB_NOTE), 'the report first');
   assert.ok(!m.includes('Its final report:'));
 });
@@ -1025,7 +1025,7 @@ test('the same when the hand-off ends by the reconcile (the job note left it wai
   assert.strictEqual(r.state, 'done');
   assert.strictEqual(r.result, FULL_REPORT);
   assert.strictEqual(env.delivered.length, 1);
-  assert.ok(env.delivered[0].message.includes('Its report (turn 1 of 2):\n' + FULL_REPORT + '\n\nAdded after that report:\nTurn 2: ' + JOB_NOTE));
+  assert.ok(env.delivered[0].message.includes('Its fullest reply (turn 1 of 2):\n' + FULL_REPORT + '\n\nIts later, shorter replies, in order:\nTurn 2: ' + JOB_NOTE));
 });
 
 test('a real multi-step hand-off (scheduled continuations) still reports its last, fullest reply as before', async () => {
@@ -1046,7 +1046,7 @@ test('a real multi-step hand-off (scheduled continuations) still reports its las
   await env.h.tick();
   const m = env.delivered[0].message;
   assert.ok(m.includes('Its final report:\n' + FULL_REPORT));
-  assert.ok(!m.includes('Added after that report'));
+  assert.ok(!m.includes('Its later, shorter replies, in order'));
   assert.ok(!m.includes('Step 1 done'));
 });
 
@@ -1065,7 +1065,7 @@ test('a longer interim reply and a shorter final one: both are delivered, in ord
   const r = env.h.get(v.id);
   assert.strictEqual(r.result, FULL_REPORT);
   assert.deepStrictEqual(r.resultLater.map((l) => [l.turn, l.text]), [[2, 'Second turn: also merged the docs.']]);
-  assert.match(reportMessage(r), /Its report \(turn 1 of 3\):[\s\S]*Added after that report:\nTurn 2: Second turn: also merged the docs\.\n\nThis is agent "lead"'s report/);
+  assert.match(reportMessage(r), /Its fullest reply \(turn 1 of 3\):[\s\S]*Its later, shorter replies, in order:\nTurn 2: Second turn: also merged the docs\.\n\nThis is agent "lead"'s report/);
 });
 
 test('later replies are bounded: the latest 5, each cut, and the count left out is said', async () => {
@@ -1075,14 +1075,15 @@ test('later replies are bounded: the latest 5, each cut, and the count left out 
   env.continuations.add(v.id);
   env.turns[0].finish('R'.repeat(5000));
   await flush();
-  for (let i = 2; i <= 8; i++) { env.h.turnStarted(v.id); if (i === 8) env.continuations.delete(v.id); env.h.turnEnded(v.id, (i === 8 ? 'L'.repeat(4000) : 'note ' + i)); }
+  for (let i = 2; i <= 8; i++) { env.h.turnStarted(v.id); if (i === 8) env.continuations.delete(v.id); env.h.turnEnded(v.id, (i === 8 ? 'L'.repeat(4000) : i === 7 ? 'M'.repeat(3000) : 'note ' + i)); }
   const r = env.h.get(v.id);
   assert.strictEqual(r.state, 'done');
   assert.deepStrictEqual(r.resultLater.map((l) => l.turn), [4, 5, 6, 7, 8]);
   assert.strictEqual(r.resultLaterLeftOut, 2);
-  assert.strictEqual(r.resultLater[4].text.length, 2001);
-  assert.ok(r.resultLater[4].text.endsWith('…'));
-  assert.match(reportMessage(r), /Added after that report \(the latest 5; 2 earlier left out\):\nTurn 4: note 4/);
+  assert.strictEqual(r.resultLater[4].text, 'L'.repeat(4000), 'the newest later reply is kept whole');
+  assert.strictEqual(r.resultLater[3].text.length, 2001, 'an earlier one is cut');
+  assert.ok(r.resultLater[3].text.endsWith('…'));
+  assert.match(reportMessage(r), /Its later, shorter replies, in order \(the latest 5; 2 earlier left out\):\nTurn 4: note 4/);
 });
 
 test('a hand-off waiting through the update (no stored report yet) keeps its earlier reply as the report', async () => {
@@ -1109,4 +1110,56 @@ test('the framing tells the target that a running job holds the report and a sho
   const msg = framingMessage({ caller: 'sam', topic: 't', id: 'ho-1', brief: 'b', folder: '/x', notes: [] });
   assert.match(msg, /A job you started that is still running \(a test server, say\) keeps the hand-off open until it ends; your report waits for it, and a shorter reply after it \(on that job's end, say\) is added below your report, never in its place\./);
   assert.ok(env);
+});
+
+test('review r1: an old record whose saved reply was already cut keeps it as the report; a later longer reply comes after it, whole', async () => {
+  const env = setup();
+  const v = await mk(env);
+  await env.h.tick();
+  env.continuations.add(v.id);
+  env.turns[0].finish('A'.repeat(20000));   // saved by the old code as 12000 characters and an ellipsis
+  await flush();
+  const rec = env.h.get(v.id);
+  delete rec.best; delete rec.later; delete rec.laterLeftOut;
+  rec.turns = 2;                            // an empty turn in between: the turn of the saved reply is unknown
+  env.h._save();
+  const h2 = new HandOffs(env.opts);
+  h2.turnStarted(v.id);
+  h2.turnEnded(v.id, 'B'.repeat(12500));    // still waiting: the record is saved and read back in between
+  h2._save();
+  const h3 = new HandOffs(env.opts);
+  h3.turnStarted(v.id);
+  env.continuations.delete(v.id);
+  h3.turnEnded(v.id, 'OK');
+  const r = h3.get(v.id);
+  assert.strictEqual(r.result, 'A'.repeat(RESULT_CHARS) + '…', 'the saved report stays the report');
+  assert.deepStrictEqual(r.resultLater.map((l) => [l.turn, l.text.length]), [[3, 2001], [4, 2]]);
+  const m = reportMessage(r);
+  assert.ok(m.includes('Its fullest reply (an earlier turn; 4 in all):\n' + 'A'.repeat(RESULT_CHARS) + '…'));
+  assert.ok(m.includes('Its later, shorter replies, in order:\nTurn 3: ' + 'B'.repeat(2000) + '…\nTurn 4: OK'));
+});
+
+test('review r1: a restart during the job-notice turn: the interrupted notice still carries the report', async () => {
+  const env = setup();
+  const v = await mk(env);
+  await env.h.tick();
+  env.continuations.add(v.id);
+  env.turns[0].finish(FULL_REPORT);
+  await flush();
+  env.h.turnStarted(v.id);                   // the job-notice turn is running when the hub restarts
+  assert.strictEqual(env.h.get(v.id).state, 'running');
+  const h2 = new HandOffs(env.opts);
+  h2.start(); h2.stop();
+  const r = h2.get(v.id);
+  assert.strictEqual(r.state, 'interrupted');
+  const m = reportMessage(r);
+  assert.ok(m.startsWith(`[Hand-off interrupted] "Big Job" (id ${v.id})`));
+  assert.ok(m.includes('What it had replied before the restart:\n' + FULL_REPORT));
+  // a hand-off cut short in its first turn has nothing to add
+  const env2 = setup();
+  const v2 = await mk(env2);
+  await env2.h.tick();
+  const h3 = new HandOffs(env2.opts);
+  h3.start(); h3.stop();
+  assert.ok(!reportMessage(h3.get(v2.id)).includes('What it had replied'));
 });
