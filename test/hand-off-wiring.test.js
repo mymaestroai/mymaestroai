@@ -191,7 +191,8 @@ test('labels: the target\'s chat shows "Task from <caller>"; the caller\'s shows
 
 test('review r1: the runner checks identities, access and earlier deliveries; a hand-off turn never queues a consultation; the rule text is not given inside a hand-off turn', () => {
   const factory = SDK.slice(SDK.indexOf('function getHandOffRunner() {'), SDK.indexOf("voiceCall.registerProducer('hand_off'"));
-  assert.match(factory, /stampOf: \(name\) => require\('\.\/agents'\)\.agentStamp\(name\),/);
+  // the agent's identity (box id, or its name from before box ids), not the whole-record stamp: a model switch keeps the hand-off
+  assert.match(factory, /stampOf: \(name\) => require\('\.\/agents'\)\.agentIdentity\(name\),/);
   assert.match(factory, /mayTarget: \(caller, target\) => consultAllowed\(caller, target\),/);
   assert.match(factory, /alreadyDelivered: \(caller, id\) => \{\n\s+for \(const l of tailLines\(path\.join\(CONV_DIR, `\$\{caller\}\.jsonl`\), 400\)\) \{\n\s+try \{ const e = JSON\.parse\(l\.text\); if \(e && e\.origin && e\.origin\.handOffReport === id\) return true; \} catch \{\}/);
   assert.match(SDK, /for \(const k of \['kind', 'from', 'by', 'label', 'jobName', 'taskId', 'handOff', 'handOffReport'\]\)/, 'the conversation log keeps the ids');
