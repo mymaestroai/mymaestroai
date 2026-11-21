@@ -209,9 +209,10 @@ test('desktop: Auto waiting in line behind another change, then a model: the sup
   assert.strictEqual(d.sel.value, 'claude-sdk/c');
 });
 
+// looks-vars: the colour is var(--model-accent-text), defined in index.html :root as #7eb8f7 (same value, spelled as a variable)
 test('desktop: model names in the auto_model HTML are escaped (the two stream readers and the context box)', () => {
-  assert.strictEqual((app.match(/<strong style="color:#7eb8f7">\$\{esc\(modelShort\)\}<\/strong>/g) || []).length, 2);
-  assert.match(app, /<strong style="color:#7eb8f7">\$\{esc\(pending\)\}<\/strong>/);
+  assert.strictEqual((app.match(/<strong style="color:var\(--model-accent-text\)">\$\{esc\(modelShort\)\}<\/strong>/g) || []).length, 2);
+  assert.match(app, /<strong style="color:var\(--model-accent-text\)">\$\{esc\(pending\)\}<\/strong>/);
   assert.ok(!/headerSpan\.textContent\s*=/.test(app), 'no handler rewrites the header text');
 });
 

@@ -203,6 +203,58 @@ test('continuation -> waiting, turnStarted -> running, final turn -> done and re
   });
 });
 
+test('view: next only for a waiting hand-off (task / job / nothing / throwing dep); reported only after delivery', async () => {
+  const asked = [];
+  let answer = { kind: 'task', at: '2026-11-19T15:05:00Z' };
+  const env = setup({ nextStepOf: (id) => { asked.push(id); if (answer === 'throw') throw new Error('boom'); return answer; } });
+  const v = await mk(env);
+  assert.strictEqual(v.next, null);
+  assert.strictEqual(v.reported, false);
+  assert.strictEqual(v.reportedAt, null);
+  assert.deepStrictEqual(asked, [], 'not computed for a queued hand-off');
+  await env.h.tick();
+  assert.strictEqual(env.h.view(env.h.get(v.id)).next, null);
+  assert.deepStrictEqual(asked, [], 'not computed for a running hand-off');
+
+  env.continuations.add(v.id);
+  env.turns[0].finish('first');
+  await flush(); await flush();
+  assert.strictEqual(env.h.get(v.id).state, 'waiting');
+  assert.deepStrictEqual(env.h.view(env.h.get(v.id)).next, { kind: 'task', at: '2026-11-19T15:05:00Z' });
+  answer = { kind: 'job' };
+  assert.deepStrictEqual(env.h.view(env.h.get(v.id)).next, { kind: 'job' });
+  answer = null;
+  assert.strictEqual(env.h.view(env.h.get(v.id)).next, null);
+  answer = 'throw';
+  // step-2 review: a lookup that fails leaves next out (the page then says "Working"), unlike a lookup that found nothing (null)
+  assert.ok(!Object.prototype.hasOwnProperty.call(env.h.view(env.h.get(v.id)), 'next'), 'a throwing nextStepOf leaves next out');
+  assert.ok(asked.length >= 4);
+
+  // the default (no dep): null
+  const plain = setup();
+  const p = await mk(plain);
+  await plain.h.tick(); plain.continuations.add(p.id); plain.turns[0].finish('x'); await flush(); await flush();
+  assert.strictEqual(plain.h.view(plain.h.get(p.id)).next, null);
+
+  // reported: false while the report is pending, true with its time once delivered
+  env.continuations.delete(v.id);
+  env.deliverFails = 1;
+  env.h.turnEnded(v.id, 'final');
+  let view = env.h.view(env.h.get(v.id));
+  assert.strictEqual(view.state, 'done');
+  assert.strictEqual(view.next, null, 'not computed once done');
+  assert.strictEqual(view.reported, false);
+  await env.h.tick();   // the delivery fails once: still pending
+  view = env.h.view(env.h.get(v.id));
+  assert.strictEqual(view.reported, false);
+  assert.strictEqual(view.reportedAt, null);
+  env.t += 20000;
+  await env.h.tick();
+  view = env.h.view(env.h.get(v.id));
+  assert.strictEqual(view.reported, true);
+  assert.strictEqual(view.reportedAt, env.t);
+});
+
 test('empty reply gives "(no reply text)" and long result is cut', async () => {
   const env = setup();
   const v = await mk(env);
@@ -385,8 +437,9 @@ test('view fields', async () => {
   const env = setup();
   env.active.add('lead');
   const v = await mk(env);
+  // next, reported and reportedAt were added for the hand-off strip (what a waiting hand-off waits for; whether its report arrived)
   assert.deepStrictEqual(Object.keys(v).sort(), [
-    'caller', 'createdAt', 'endedAt', 'error', 'folder', 'id', 'lastReply', 'queuedNotes', 'startedAt', 'state', 'target', 'topic', 'turns',
+    'caller', 'createdAt', 'endedAt', 'error', 'folder', 'id', 'lastReply', 'next', 'queuedNotes', 'reported', 'reportedAt', 'startedAt', 'state', 'target', 'topic', 'turns',
   ]);
   assert.match(v.id, /^ho-[0-9a-f]{8}$/);
 });
@@ -903,4 +956,21 @@ test('review r8: hand-offs being created count toward the cap (the folder helper
   env2.h.folderHelper = { plainName: () => true, run: async () => ({ ok: false, code: 'error' }) };
   await assert.rejects(mk(env2), /Couldn't make the hand-off folder/);
   assert.strictEqual(env2.h.creating.size, 0);
+});
+
+test('step-2 review: handOffNextStep (lib/sdk-chat.js): the earliest ACTIVE task wins; a paused task has no time; then a job; else null', () => {
+  const vm = require('vm');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'sdk-chat.js'), 'utf8');
+  const a = src.indexOf('function handOffNextStep(');
+  const b = src.indexOf('\n}\n', a) + 2;
+  const ctx = {}; vm.createContext(ctx);
+  vm.runInContext(src.slice(a, b) + '\nthis.f = handOffNextStep;', ctx);
+  const f = ctx.f;
+  const t = (status, at) => ({ status, nextRunAt: at });
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(f({ tasks: [t('active', '2026-11-20T12:30:00Z'), t('active', '2026-11-20T12:10:00Z')], jobs: [{}] }))), { kind: 'task', at: Date.parse('2026-11-20T12:10:00Z') });
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(f({ tasks: [t('paused', '2026-11-20T12:05:00Z'), t('active', '2026-11-20T12:20:00Z')], jobs: [] }))), { kind: 'task', at: Date.parse('2026-11-20T12:20:00Z') }, 'a paused task is not the next step');
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(f({ tasks: [t('paused', '2026-11-20T12:05:00Z')], jobs: [] }))), { kind: 'task', at: null });
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(f({ tasks: [], jobs: [{}] }))), { kind: 'job' });
+  assert.strictEqual(f({ tasks: [], jobs: [] }), null);
+  assert.match(src, /nextStepOf: \(id\) => handOffNextStep\(handOffContinuations\(id, \{ strict: true \}\)\)/);
 });

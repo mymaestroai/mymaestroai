@@ -49,7 +49,7 @@ test('ledger: records turns, totals today per agent, estimates cost from the pri
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ledger-'));
   let capsCfg = {};
   const l = createLedger({ file: path.join(dir, 'ledger.db'), getCaps: () => capsCfg });
-  assert.deepStrictEqual(l.record({ agent: 'gp', model: 'claude-fable-5-1', inputTokens: 1000, outputTokens: 500, costUsd: 0.05, durationMs: 1200, tools: 3 }), { cost: 0.05, source: 'reported' });
+  assert.deepStrictEqual(l.record({ agent: 'gp', model: 'anthropic/claude-fable-5-1', inputTokens: 1000, outputTokens: 500, costUsd: 0.05, durationMs: 1200, tools: 3 }), { cost: 0.05, source: 'reported' });
   const est = l.record({ agent: 'gemini', model: 'google/gemini-pro-latest', inputTokens: 1_000_000, outputTokens: 0, durationMs: 10 });
   assert.strictEqual(est.source, 'estimated');
   assert.strictEqual(est.cost, 1.25);
@@ -63,10 +63,10 @@ test('ledger: records turns, totals today per agent, estimates cost from the pri
   assert.strictEqual(l.overCap('gemini').capped, false, 'no caps configured = unlimited');
   capsCfg = { perAgentDailyUsd: 1, hubDailyUsd: 100 };
   assert.strictEqual(l.overCap('gemini').capped, true);
-  assert.match(l.overCap('gemini').reason, /gemini is over its daily cap/);
+  assert.match(l.overCap('gemini').reason, /gemini is over its daily pay-per-use cap/);
   assert.strictEqual(l.overCap('gp').capped, false);
   capsCfg = { hubDailyUsd: 1 };
-  assert.match(l.overCap('gp').reason, /hub is over its daily cap/);
+  assert.match(l.overCap('gp').reason, /hub is over its daily pay-per-use cap/);
   assert.strictEqual(l.days().length, 1);
   assert.strictEqual(priceFor('claude-sdk/claude-haiku-4-5-20251001')[0], 1);
   assert.strictEqual(estimateCost('openai/gpt-5.4-mini', 1_000_000, 1_000_000), 2.0);

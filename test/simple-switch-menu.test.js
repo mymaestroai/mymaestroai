@@ -40,5 +40,6 @@ test('phone: "Switch to Simple" sits right after About, near the top of the menu
   assert.strictEqual(menu.split('id="menu-simple"').length - 1, 1);
   const about = menu.indexOf('id="menu-about"');
   const item = menu.indexOf('<button id="menu-simple">Switch to Simple</button>');
-  assert.ok(about > 0 && item > about && item < menu.indexOf('href="/?desktop=once"'), 'right after About');
+  // phone-menu reorder: Switch to Simple is now in the top group (after Look), About moved under Advanced
+  assert.ok(about > 0 && item > 0 && item < about && item < menu.indexOf('id="menu-adv"'), 'in the top group, before Advanced');
 });

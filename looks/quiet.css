@@ -1,0 +1,578 @@
+/*
+ * Quiet Page: a calm light notebook. Off-white page, soft hairlines, a quiet leaf-green accent,
+ * clay for the small marks (tool steps, the lead tag), user messages in a soft green-tinted box,
+ * agent replies as plain writing across the full width of the chat (a white card on the phone).
+ * Loaded when <html data-look="quiet">. Every rule starts with html[data-look="quiet"].
+ *
+ * The colours, tints and layout below apply to html[data-look="quiet"]:not(.mm-simple); Simple mode (html.mm-simple)
+ * keeps its own layout and takes this palette and the fonts (the Simple block at the end of the file).
+ * System fonts only; nothing is hidden; nothing is fetched.
+ *
+ * Contrast (WCAG 2 ratio, foreground on background; "(UI" = a border that carries meaning, needs 3:1;
+ * the rest are text, need 4.5:1). Paper #FAF7F0, sheet #FFFDF6, soft field #F6F1E6, user box #EEF2E6.
+ *   #2A2620 on #FAF7F0  14.05  main text on the page
+ *   #2A2620 on #FFFDF6  14.77  main text on a card or the sidebar
+ *   #2A2620 on #F6F1E6  13.35  main text in an input or a code block
+ *   #2A2620 on #EEF2E6  13.23  your message (ink on the green wash)
+ *   #6E6558 on #FAF7F0  5.35  secondary text on the page
+ *   #6E6558 on #FFFDF6  5.63  secondary text on a card
+ *   #6E6558 on #F6F1E6  5.09  secondary text in an input
+ *   #6E6558 on #EEF2E6  5.04  secondary text on the green wash
+ *   #756A5A on #FAF7F0  4.95  hints and labels on the page
+ *   #756A5A on #FFFDF6  5.20  hints and labels on a card
+ *   #756A5A on #EEF2E6  4.66  hints and labels on the green wash
+ *   #3F6B4D on #FAF7F0  5.74  accent text and links on the page
+ *   #3F6B4D on #FFFDF6  6.03  accent text on a card
+ *   #3F6B4D on #EEF2E6  5.40  accent text on the green wash
+ *   #FFFFFF on #3F6B4D  6.14  send button, filled accent
+ *   #2F5A3E on #FAF7F0  7.40  accent hover, phone links
+ *   #2B5F8A on #FAF7F0  6.32  links to the outside
+ *   #8A3F20 on #F6F1E6  6.63  inline code
+ *   #94492A on #FAF7F0  6.05  tool-step labels (clay)
+ *   #94492A on #FFFDF6  6.36  tool-step labels on a card
+ *   #70529A on #FAF7F0  5.84  reasoning accent
+ *   #2A724A on #FAF7F0  5.45  OK / success text
+ *   #2A724A on #FFFDF6  5.72  OK text on a card
+ *   #2A724A on #EEF2E6  5.13  OK text on the green wash
+ *   #8F5E00 on #FAF7F0  5.21  warning text
+ *   #8F5E00 on #FFFDF6  5.47  warning text on a card
+ *   #B3261E on #FAF7F0  6.11  error text
+ *   #B3261E on #FFFDF6  6.42  error text on a card
+ *   #A0480F on #FAF7F0  5.72  slow tool timing
+ *   #B0501E on #FAF7F0  4.89  plan usage high
+ *   #876300 on #FAF7F0  5.14  plan usage caution
+ *   #A8326A on #FAF7F0  5.90  pink agent names, plan limit reached
+ *   #8A1F4B on #FAF7F0  8.25  alert chips
+ *   #6B4FA8 on #FAF7F0  5.93  orchestration notices
+ *   #2F6EA8 on #FAF7F0  5.01  busy worker blue
+ *   #FFFFFF on #B3261E  6.54  white on error, call and danger buttons
+ *   #FFFFFF on #2A724A  5.83  white on success buttons
+ *   #FFFFFF on #8F5E00  5.57  white on warning badges and the interject button
+ *   #FFFFFF on #1F5C7A  7.32  info banner
+ *   #FFFFFF on #6B4A0E  8.04  backup banner
+ *   #FFFFFF on #8E1F1A  8.89  critical banner, health notice
+ *   #FFFFFF on #8F5400  6.11  pending banner, pacing bar
+ *   #FFFFFF on #7A3B12  8.53  setup banner
+ *   #FFFFFF on #7A5C00  6.25  warning banner
+ *   #FFFFFF on #A31D1D  7.63  halt banner
+ *   #8F8470 on #FFFDF6  3.62  (UI input and dialog borders on a card)
+ *   #8F8470 on #FAF7F0  3.44  (UI input borders on the page)
+ */
+
+/* ---------- Fonts: the same in the normal view and in Simple mode ---------- */
+html[data-look="quiet"] {
+  --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-ui-short: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-simple: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-heading: Charter, "Bitstream Charter", "Iowan Old Style", Cambria, Georgia, "Times New Roman", serif;
+  --font-reading: Charter, "Bitstream Charter", "Iowan Old Style", Cambria, Georgia, "Times New Roman", serif;
+  --font-mono: "SF Mono", "Cascadia Code", Consolas, Menlo, ui-monospace, monospace;
+  --font-mono-geist-sf: "SF Mono", "Cascadia Code", Consolas, Menlo, ui-monospace, monospace;
+  --font-mono-geist-full: "SF Mono", "Cascadia Code", Consolas, Menlo, ui-monospace, monospace;
+  --font-mono-jetbrains: "SF Mono", "Cascadia Code", Consolas, Menlo, ui-monospace, monospace;
+  --font-mono-sf: "SF Mono", "Cascadia Code", Consolas, Menlo, ui-monospace, monospace;
+  --font-mono-menlo: "SF Mono", "Cascadia Code", Consolas, Menlo, ui-monospace, monospace;
+  --font-mono-ui: "SF Mono", "Cascadia Code", Consolas, Menlo, ui-monospace, monospace;
+  --font-mono-geist-ui: "SF Mono", "Cascadia Code", Consolas, Menlo, ui-monospace, monospace;
+  --font-mono-short: "SF Mono", "Cascadia Code", Consolas, Menlo, ui-monospace, monospace;
+  --font-mono-sys: "SF Mono", "Cascadia Code", Consolas, Menlo, ui-monospace, monospace;
+  --font-mono-sys-short: "SF Mono", "Cascadia Code", Consolas, Menlo, ui-monospace, monospace;
+}
+/* In Simple mode --font-ui follows --font-simple (the page sets that); keep it so. */
+html[data-look="quiet"].mm-simple { --font-ui: var(--font-simple); }
+
+/* ---------- Palette (normal view; Simple mode keeps its own) ---------- */
+html[data-look="quiet"]:not(.mm-simple) {
+  color-scheme: light;
+
+  /* surfaces */
+  --bg-dark: #FAF7F0;
+  --bg-card: #FFFDF6;
+  --bg-input: #F6F1E6;
+  --radius: 8px;
+  --chat-max-width: none;   /* full width, as in Engineering: the chat and the message box fill the screen */
+  --chat-pad-x: clamp(16px, 3vw, 40px);
+  --sidebar-bg: var(--bg-card);
+  --active-group-active-count-bg: #EEF2E6;
+  --agent-btn-active-bg: rgba(63,107,77,0.10);
+  --agent-btn-hover-bg: rgba(63,107,77,0.06);
+  --agent-btn-in-group-bg: rgba(112,82,154,0.07);
+  --agent-btn-is-summarizer-bg: rgba(47,110,168,0.07);
+  --agent-btn-no-model-bg: rgba(179,38,30,0.09);
+  --agents-working-bg: rgba(143,94,0,0.12);
+  --chat-actions-button-active-bg: rgba(179,38,30,0.12);
+  --chat-tab-active-bg: rgba(63,107,77,0.10);
+  --chat-tab-orchestration-active-bg: rgba(112,82,154,0.16);
+  --hub-toast-bg: rgba(255,253,246,0.98);
+  --input-area-autonomous-bg: rgba(112,82,154,0.05);
+  --mode-toggle-mt-track-bg: #CFC5B0;
+  --orch-msg-error-bg: rgba(179,38,30,0.07);
+  --orch-msg-instruction-bg: rgba(143,94,0,0.07);
+  --panel-bg: #FFFDF6;
+  --question-option-selected-bg: rgba(63,107,77,0.14);
+  --toggle-slider-bg: #CFC5B0;
+  --brand-violet: #3F6B4D;
+  --simple-accent-hover: #2F5A3E;
+  --simple-raised-bg: #FFFDF6;
+  --simple-side-bg: #F6F1E6;
+  --simple-surface: #FFFDF6;
+  --context-bar-bg: #F6F1E6;
+  --dialog-bg: #FFFDF6;
+  --qr-bg: #ffffff;
+  --toggle-knob: #ffffff;
+  --visual-bg: #FFFDF6;
+
+  /* text */
+  --text: #2A2620;
+  --text-dim: #6E6558;
+  --text-tertiary: #756A5A;
+  --agent-color-2-text: #A8326A;
+  --agent-color-7-text: #8E3BA8;
+  --agent-group-title-hover-text: #2A4F36;
+  --model-accent-text: #3F6B4D;
+  --approval-actions-approve-text: #ffffff;
+  --auto-head-text: #5C5346;
+  --auto-time-text: #756A5A;
+  --on-color-text: #ffffff;
+  --on-light-text: #ffffff;
+  --simple-modal-sm-out-text: #B3261E;
+  --simple-modal-sm-out-text-2: #B3261E;
+  --simple-muted-text: #756A5A;
+  --ok-text: #2A724A;
+  --danger-text-fallback: #B3261E;
+  --dialog-text: #2A2620;
+  --model-offline-text: #8F5E00;
+  --text-muted-alt: #6E6558;
+  --alert-soft-text: #8A1F4B;
+  --alert-text: #8A1F4B;
+  --chat-plan-hot-text: #B0501E;
+  --feed-head-text: #3F6B4D;
+  --iconbtn-stop-remote-text: #B3261E;
+  --on-accent: #ffffff;
+  --on-error: #ffffff;
+  --on-health-notice: #ffffff;
+  --on-pacing: #ffffff;
+  --on-warning: #ffffff;
+
+  /* accents and status */
+  --accent: #3F6B4D;
+  --accent-hover: #2F5A3E;
+  --success: #2A724A;
+  --warning: #8F5E00;
+  --error: #B3261E;
+  --purple: #6B4FA8;
+  --blue: #2F5F9E;
+  --accent-edge: rgba(177,96,58,0.70);
+  --accent-tint-10: rgba(63,107,77,0.08);
+  --accent-tint-14: rgba(63,107,77,0.14);
+  --alert: #A8326A;
+  --button-opt-selected-bg: rgba(63,107,77,0.16);
+  --caution: #876300;
+  --consult: #6B4FA8;
+  --error-strong: #B3261E;
+  --iconbtn-stop-remote-border: rgba(179,38,30,0.50);
+  --notice-grey: #756A5A;
+  --simple-interject-bg: #8F5E00;
+  --toggle-on-bg: #3F6B4D;
+
+  /* borders, separators and tints */
+  --border: #E6DCCA;
+  --border-strong: #8F8470;
+  --agent-btn-model-offline-bg: rgba(143,94,0,0.09);
+  --chat-view-btn-border: #B1603A;
+  --hover-tint: rgba(42,38,32,0.05);
+  --hover-tint-strong: rgba(42,38,32,0.08);
+  --line-tint: rgba(110,101,88,0.28);
+  --line-tint-mid: rgba(110,101,88,0.26);
+  --line-tint-soft: rgba(110,101,88,0.20);
+  --line-tint-strong: rgba(110,101,88,0.32);
+  --separator-tint: rgba(110,101,88,0.16);
+  --simple-border: #E6DCCA;
+  --tint-faint: rgba(42,38,32,0.04);
+  --tint-faintest: rgba(42,38,32,0.03);
+  --dialog-border: #8F8470;
+  --dialog-row-border: #E6DCCA;
+  --field-border: #857B6E;   /* form fields' edge: at least 3.69:1 on the page, card and input colours (WCAG 1.4.11) */
+  --uc-btn-border: rgba(110,101,88,0.35);
+  --auto-divider: rgba(110,101,88,0.25);
+  --ij-seg-bg: rgba(110,101,88,0.12);
+
+  /* chat messages */
+  --msg-agent-text: var(--text);
+  --msg-agent-bg: transparent;
+  --msg-agent-border: transparent;
+  --msg-synthesis-bg: rgba(47,110,168,0.05);
+  --msg-system-bg: rgba(42,114,74,0.06);
+  --msg-user-bg: #EEF2E6;
+  --msg-user-text: #2A2620;
+  --feed-bg: rgba(177,96,58,0.07);
+  --mark-bg: rgba(240,190,40,0.45);
+  --working-chip-bg: rgba(143,94,0,0.14);
+
+  /* tool steps, reasoning and activity (clay for tools, plum for reasoning) */
+  --tr-hover-bg: rgba(63,107,77,0.05);
+  --compaction-line-bg: rgba(143,94,0,0.06);
+  --focus-ring: rgba(63,107,77,0.70);
+  --kf-thinking-glow-bg: rgba(112,82,154,0.10);
+  --kf-thinking-glow-bg-2: rgba(143,94,0,0.10);
+  --kf-thinking-glow-bg-3: rgba(112,82,154,0.16);
+  --kf-thinking-glow-bg-4: rgba(143,94,0,0.16);
+  --live-activity-bg: rgba(63,107,77,0.07);
+  --live-activity-border: rgba(63,107,77,0.25);
+  --live-activity-phase-reasoning-bg: rgba(112,82,154,0.08);
+  --live-activity-phase-reasoning-border: rgba(112,82,154,0.28);
+  --reason-stream-bg: rgba(112,82,154,0.05);
+  --reason-stream-bg-2: rgba(112,82,154,0.03);
+  --reason-stream-border: rgba(112,82,154,0.25);
+  --reason-stream-border-2: rgba(112,82,154,0.55);
+  --reason-stream-border-3: rgba(112,82,154,0.30);
+  --reason-stream-rs-full-hover-border: rgba(112,82,154,0.45);
+  --reason-stream-rs-grip-after-bg: rgba(112,82,154,0.35);
+  --reason-stream-rs-grip-border: rgba(112,82,154,0.14);
+  --reason-stream-rs-head-focus-visibl-ring: rgba(112,82,154,0.60);
+  --reason-stream-rs-head-hover-bg: rgba(112,82,154,0.08);
+  --reasoning-accent: #70529A;
+  --reasoning: #70529A;
+  --rs-grip-hover-after-bg: rgba(112,82,154,0.70);
+  --step-text: #4A4236;
+  --thinking-panel-bg: rgba(143,94,0,0.07);
+  --thinking-panel-border: rgba(143,94,0,0.30);
+  --token-usage-bg: rgba(42,114,74,0.06);
+  --token-usage-border: rgba(42,114,74,0.18);
+  --token-usage-text: #6E6558;
+  --token-usage-tu-label-text: #2A724A;
+  --tool-accent: #94492A;
+  --tool-bg: rgba(177,96,58,0.05);
+  --tool-bg-done: rgba(177,96,58,0.03);
+  --tool-border: rgba(177,96,58,0.25);
+  --tool-border-accent: rgba(177,96,58,0.75);
+  --tool-border-accent-done: rgba(177,96,58,0.40);
+  --tool-call-result-bg: rgba(110,101,88,0.07);
+  --tool-call-result-border: rgba(110,101,88,0.25);
+  --tool-call-spinner-border: rgba(110,101,88,0.30);
+  --tool-calls-container-step-text-border: rgba(110,101,88,0.18);
+  --tool-done-text: #2A724A;
+  --tool-elapsed-text: #8F5E00;
+  --tool-error-text: #B3261E;
+  --tool-result-bg: rgba(112,82,154,0.04);
+  --tool-result-border: rgba(112,82,154,0.30);
+  --tool-slow-text: #A0480F;
+  --tool-stream-ts-fail-border: rgba(179,38,30,0.45);
+  --tool-stream-ts-grip-after-bg: rgba(177,96,58,0.35);
+  --tool-stream-ts-head-hover-bg: rgba(177,96,58,0.07);
+  --ts-grip-hover-after-bg: rgba(177,96,58,0.70);
+  --ts-sep-bg: rgba(177,96,58,0.14);
+  --ts-state-run-before-border: rgba(110,101,88,0.35);
+  --workers-btn-alert-bg: rgba(168,50,101,0.10);
+  --workers-btn-alert-text: #8A1F4B;
+  --workers-btn-busy-border: rgba(47,110,168,0.60);
+  --tool-name-text: #94492A;
+  --tool-text: #5C5346;
+  --tsn-bg: rgba(177,96,58,0.05);
+  --tsn-bg-2: rgba(177,96,58,0.03);
+  --tsn-border: rgba(177,96,58,0.28);
+  --tsn-border-2: rgba(177,96,58,0.30);
+  --tsn-fail-border: rgba(179,38,30,0.45);
+  --tsn-fail-text: #B3261E;
+  --tsn-full-bg: rgba(177,96,58,0.16);
+  --tsn-grip-bg: rgba(177,96,58,0.40);
+  --tsn-sep-bg: rgba(177,96,58,0.16);
+  --tsn-state-text: #2A724A;
+  --tsn-time-text: #8F5E00;
+  --wk-tool-text: #5C5346;
+  --rsn-bg: rgba(112,82,154,0.06);
+  --rsn-bg-2: rgba(112,82,154,0.035);
+  --rsn-border: rgba(112,82,154,0.28);
+  --rsn-border-2: rgba(112,82,154,0.60);
+  --rsn-border-3: rgba(112,82,154,0.32);
+  --rsn-full-bg: rgba(112,82,154,0.16);
+  --rsn-grip-bg: rgba(112,82,154,0.40);
+  --rsn-grip-border: rgba(112,82,154,0.14);
+
+  /* code and links */
+  --code-bg: rgba(177,96,58,0.10);
+  --code-text: #8A3F20;
+  --link: #2B5F8A;
+
+  /* overlays and shadows */
+  --keyframes-mic-pulse-shadow: rgba(179,38,30,0.25);
+  --simple-call-live-shadow: rgba(179,38,30,0.30);
+  --overlay-bg: rgba(42,38,32,0.50);
+  --overlay-bg-dim: rgba(42,38,32,0.35);
+  --overlay-bg-image: rgba(42,38,32,0.82);
+  --overlay-bg-question: rgba(42,38,32,0.50);
+  --overlay-bg-reasoning: rgba(42,38,32,0.45);
+  --overlay-bg-discard: rgba(42,38,32,0.50);
+  --overlay-bg-soft: rgba(42,38,32,0.35);
+  --shadow-color: rgba(60,48,30,0.16);
+  --shadow-color-heavy: rgba(60,48,30,0.28);
+  --shadow-color-menu: rgba(60,48,30,0.20);
+  --shadow-color-pop: rgba(60,48,30,0.22);
+  --shadow-color-simple: rgba(60,48,30,0.14);
+  --shadow-color-simple-soft: rgba(60,48,30,0.10);
+  --shadow-color-soft: rgba(42,38,32,0.05);
+  --shadow-menu: rgba(60,48,30,0.22);
+  --shadow-sheet: rgba(60,48,30,0.28);
+  --workers-btn-busy-wb-dot-shadow: rgba(47,110,168,0.25);
+  --workers-btn-flash-shadow: rgba(47,110,168,0.40);
+  --mt-knob-shadow: rgba(60,48,30,0.30);
+  --simple-call-btn-in-call-shadow: rgba(179,38,30,0.30);
+  --simple-effort-sheet-shadow: rgba(60,48,30,0.15);
+  --wk-detail-bg: rgba(42,38,32,0.05);
+
+  /* pills, badges, notices and status */
+  --bk-modal-bk-info-bg: rgba(47,110,168,0.07);
+  --gs-ok-bg: rgba(42,114,74,0.09);
+  --st-btn-bk-danger-bg: #B3261E;
+  --st-btn-bk-danger-hover-bg: #8E1F1A;
+  --wh-item-open-bg: rgba(63,107,77,0.06);
+  --worker-tabs-bar-chat-tab-active-bg: rgba(63,107,77,0.14);
+  --worker-tabs-bar-chat-tab-bg: rgba(63,107,77,0.05);
+  --bk-modal-bk-danger-title-text: #9C2A1F;
+  --wh-text-wh-error-text: #8A1F4B;
+  --status-info: #2F6EA8;
+  --bk-modal-bk-info-border: rgba(47,110,168,0.35);
+  --bk-modal-bk-restore-border: rgba(179,38,30,0.50);
+  --dream-modal-border: rgba(112,82,154,0.30);
+  --gs-blocker-border: rgba(179,38,30,0.30);
+  --gs-ok-border: rgba(42,114,74,0.30);
+  --hub-update-card-border: rgba(63,107,77,0.55);
+  --hub-update-card-sec-border: rgba(135,99,0,0.75);
+  --hub-update-card-uc-primary-border: #3F6B4D;
+  --wm-stop-border: rgba(168,50,101,0.55);
+  --worker-tabs-bar-chat-tab-border: rgba(63,107,77,0.30);
+  --agent-btn-cyber-tag-bg: #F0A04B;
+  --agent-btn-cyber-tag-text: #2A2620;
+  --agent-btn-lead-badge-filter: rgba(177,96,58,0.40);
+  --lead-badge-filter: rgba(177,96,58,0.40);
+  --auto-notice-text: #756A5A;
+  --bk-strip-bk-bad-bg: rgba(179,38,30,0.08);
+  --bk-strip-bk-bad-border: rgba(179,38,30,0.50);
+  --bk-strip-bk-ok-bg: rgba(42,114,74,0.07);
+  --bk-strip-bk-ok-border: rgba(42,114,74,0.40);
+  --bk-strip-bk-warn-bg: rgba(143,94,0,0.08);
+  --bk-strip-bk-warn-border: rgba(143,94,0,0.45);
+  --bk-tag-bk-tag-warn-border: rgba(143,94,0,0.55);
+  --call-bg: #B3261E;
+  --call-bg-hover: #8E1F1A;
+  --chat-actions-plan-badge-hot-border: rgba(176,80,30,0.55);
+  --chat-actions-plan-badge-warn-border: rgba(135,99,0,0.50);
+  --chat-tab-status-paused-bg: #4F7FB8;
+  --credit-meter-hot-bg: rgba(168,50,101,0.10);
+  --credit-meter-warn-bg: rgba(135,99,0,0.10);
+  --cyber-tag-billing-api-bg: rgba(176,80,30,0.14);
+  --status-high: #B0501E;
+  --handoff-cards-ho-pill-ho-done-border: #2A724A;
+  --handoff-cards-ho-pill-ho-failed-border: #B3261E;
+  --input-area-mic-btn-rec-bg: rgba(179,38,30,0.12);
+  --input-area-mic-btn-rec-text: #9C1C1C;
+  --mic-btn-rec-hover-bg: rgba(179,38,30,0.20);
+  --simple-call-live-bg: #B3261E;
+  --meter-warn: #C99A1A;
+  --meter-ok: #3F8F5C;
+  --mic-rec: #C4382F;
+  --more-btn-more-badge-bg: rgba(63,107,77,0.16);
+  --more-btn-more-badge-border: rgba(63,107,77,0.45);
+  --plan-warn-border: rgba(135,99,0,0.35);
+  --plan-warn-hot-border: rgba(168,50,101,0.40);
+  --recall-panel-mark-bg: rgba(240,190,40,0.45);
+  --security-modal-sec-badge-on-bg: rgba(42,114,74,0.14);
+  --status-hot: #A8326A;
+  --status-ok: #2A724A;
+  --status-warn: #876300;
+  --system-notice-bg: rgba(143,94,0,0.06);
+  --system-notice-border: rgba(143,94,0,0.22);
+  --system-notice-notice-complete-bg: rgba(42,114,74,0.08);
+  --system-notice-notice-complete-border: rgba(42,114,74,0.35);
+  --system-notice-notice-failed-bg: rgba(179,38,30,0.08);
+  --system-notice-notice-failed-border: rgba(179,38,30,0.35);
+  --system-notice-notice-failed-text: #B3261E;
+  --system-notice-notice-round-bg: rgba(107,79,168,0.07);
+  --system-notice-notice-round-border: rgba(107,79,168,0.30);
+  --system-notice-notice-round-text: #6B4FA8;
+  --system-notice-notice-tiger-team-bg: rgba(176,80,30,0.10);
+  --system-notice-notice-tiger-team-border: rgba(176,80,30,0.40);
+  --system-notice-notice-tiger-team-text: #A0480F;
+  --system-notice-notice-tiger-working-bg: rgba(143,94,0,0.07);
+  --system-notice-notice-tiger-working-border: rgba(143,94,0,0.30);
+  --system-notice-notice-tiger-working-text: #8F5E00;
+  --system-notice-notice-working-border: rgba(143,94,0,0.35);
+  --update-chip-bg: rgba(63,107,77,0.12);
+  --update-chip-sec-bg: rgba(135,99,0,0.12);
+  --update-chip-text: #2F5A3E;
+  --wh-chip-on-bg: rgba(63,107,77,0.14);
+  --update-card-sec-bg: rgba(135,99,0,0.08);
+  --update-card-border: rgba(63,107,77,0.55);
+  --update-card-sec-border: rgba(135,99,0,0.75);
+  --wk-chip-alert-bg: rgba(168,50,101,0.10);
+  --wk-chip-f-on-bg: rgba(47,110,168,0.14);
+  --wk-end-bad-border: rgba(168,50,101,0.45);
+  --wk-end-border: rgba(42,114,74,0.40);
+  --wk-end-text: #2A724A;
+  --wk-hitem-open-bg: rgba(47,110,168,0.07);
+  --wk-stop-border: rgba(168,50,101,0.60);
+  --worker-busy: #2F6EA8;
+  --worker-busy-glow: rgba(47,110,168,0.25);
+  --worker-done: #2A724A;
+  --health-notice-bg: #8E1F1A;
+  --pacing-bar-bg: #8F5400;
+  --pacing-bar-bg-2: #7A4700;
+  --pill-failed: #B3261E;
+
+  /* banners and dialogs (all carry white text) */
+  --banner-backup-bg: #6B4A0E;
+  --banner-critical-bg: #8E1F1A;
+  --banner-info-bg: #1F5C7A;
+  --banner-pending-bg: #8F5400;
+  --banner-setup-bg: #7A3B12;
+  --banner-warn-bg: #7A5C00;
+  --halt-banner-bg: #A31D1D;
+  --health-critical: #B3261E;
+  --health-ok: #2A724A;
+  --health-unknown: #756A5A;
+  --health-warn: #8F5E00;
+  --interject-bg: rgba(110,101,88,0.12);
+  --interject-emergency: #B3261E;
+  --interject-normal: #8F5E00;
+  --job-status-bad: #B3261E;
+  --job-status-done: #2B5F8A;
+  --job-status-idle: #6E6558;
+  --job-status-run: #2A724A;
+  --job-status-warn: #8F5E00;
+  --notice-bar-bg: #F6F1E6;
+  --notice-bar-border: #E6DCCA;
+  --notice-bar-close: #6E6558;
+  --notice-bar-link: #2F5A3E;
+  --notice-bar-text: #2A2620;
+  --orch-banner-bg-1: #EEF2E6;
+  --orch-banner-bg-2: #F6F1E6;
+  --orch-banner-border: #C9D3BE;
+  --orch-banner-title: #A8326A;
+  --usage-critical: #B3261E;
+  --usage-critical-tint: #B3261E22;
+  --usage-warn: #8F5E00;
+  --usage-warn-tint: #8F5E0022;
+
+  /* the small pages (help, welcome, tiger team) */
+  --bg: #FAF7F0;
+  --card: #FFFDF6;
+  --soft: #F6F1E6;
+  --input: #F6F1E6;
+  --dim: #6E6558;
+  --warn: #8F5E00;
+  --bg-soft: #F6F1E6;
+  --tiger: #A0480F;
+}
+
+/* ---------- Layout (normal view) ---------- */
+
+/* Desktop: a calm page at the chat's full width. Your message is a soft tinted box; replies are plain writing, no bubble. */
+html[data-look="quiet"]:not(.mm-simple) .message.user {
+  border: 1px solid #D8DFCB; border-radius: 12px; padding: 12px 40px 12px 18px; font-weight: 400;   /* right: room for the copy button */
+}
+html[data-look="quiet"]:not(.mm-simple) .message.user::before { color: var(--accent); }
+html[data-look="quiet"]:not(.mm-simple) .message.assistant {
+  background: transparent; border: 0; border-radius: 0; padding: 4px 64px 4px 2px;   /* room on the right for the copy and read-aloud buttons */
+  font-size: 1.04rem; line-height: 1.7; color: var(--text);
+}
+html[data-look="quiet"]:not(.mm-simple) .message.assistant h1,
+html[data-look="quiet"]:not(.mm-simple) .message.assistant h2,
+html[data-look="quiet"]:not(.mm-simple) .message.assistant h3,
+html[data-look="quiet"]:not(.mm-simple) .message.assistant h4 { font-weight: 600; letter-spacing: 0; }
+html[data-look="quiet"]:not(.mm-simple) .message.assistant code { color: var(--code-text); }
+html[data-look="quiet"]:not(.mm-simple) .message pre {
+  background: var(--bg-input); border: 1px solid var(--border); border-radius: 8px;
+}
+html[data-look="quiet"]:not(.mm-simple) .message pre code { color: var(--text); }
+html[data-look="quiet"]:not(.mm-simple) .message.assistant a { color: var(--link); }
+
+/* Tool steps: a thin clay rule on a faint wash, small type */
+html[data-look="quiet"]:not(.mm-simple) .tool-stream { border-radius: 4px; margin-right: 0; }
+html[data-look="quiet"]:not(.mm-simple) .tool-stream .ts-head { border-radius: 4px; font-size: 0.78rem; letter-spacing: 0.02em; }
+html[data-look="quiet"]:not(.mm-simple) .reason-stream { border-radius: 4px; }
+
+/* Sidebar and composer: hairlines, soft corners */
+html[data-look="quiet"]:not(.mm-simple) .sidebar:not(.collapsed) { border-right: 1px solid var(--border); }   /* collapsed: no border, the chat takes the whole width */
+html[data-look="quiet"]:not(.mm-simple) .input-area { border-top: 1px solid var(--border); padding-top: 14px; padding-bottom: 16px; }
+html[data-look="quiet"]:not(.mm-simple) .input-area textarea {
+  background: var(--bg-card); border: 1px solid var(--border-strong); border-radius: 10px; color: var(--text);
+}
+html[data-look="quiet"]:not(.mm-simple) .input-area button.attach-btn { color: var(--text); }   /* it sits on the light input colour; a plain-glyph paperclip would be white on light */
+html[data-look="quiet"]:not(.mm-simple) .input-area textarea:focus { outline: 2px solid var(--focus-ring); outline-offset: 1px; border-color: var(--accent); }
+html[data-look="quiet"]:not(.mm-simple) .input-area textarea::placeholder { color: var(--text-tertiary); }
+html[data-look="quiet"]:not(.mm-simple) .handoff-cards .ho-card,
+html[data-look="quiet"]:not(.mm-simple) .handoff-cards .ho-strip { background: var(--bg-card); border-radius: 8px; }
+html[data-look="quiet"]:not(.mm-simple) .ho-sheet { background: var(--bg-card); border-radius: 12px; box-shadow: 0 12px 36px var(--shadow-color-pop); }
+html[data-look="quiet"]:not(.mm-simple) .message > .msg-copy { background: var(--bg-card); }
+
+/* Phone: compact top controls, the message box always in view, the concept's white reply card */
+html[data-look="quiet"]:not(.mm-simple) .topbar { min-height: 44px; padding: 2px 6px 2px 8px; gap: 6px; }
+html[data-look="quiet"]:not(.mm-simple) .topbar h1 { font-size: 16px; font-weight: 700; }
+html[data-look="quiet"]:not(.mm-simple) .iconbtn { min-width: 40px; min-height: 40px; font-size: 18px; border-radius: 8px; }
+html[data-look="quiet"]:not(.mm-simple) .msg { border-radius: 14px; line-height: 1.5; }
+html[data-look="quiet"]:not(.mm-simple) .msg.user {
+  background: var(--msg-user-bg); color: var(--msg-user-text); border: 1px solid #D8DFCB;
+  border-bottom-right-radius: 14px;
+}
+html[data-look="quiet"]:not(.mm-simple) .msg.assistant {
+  background: var(--bg-card); border: 1px solid var(--border); border-bottom-left-radius: 14px; color: var(--text);
+}
+html[data-look="quiet"]:not(.mm-simple) .tsn { border-radius: 4px; }
+html[data-look="quiet"]:not(.mm-simple) #composer {
+  padding: 4px 8px 6px; background: var(--bg-card); border-top: 1px solid var(--border);
+}
+html[data-look="quiet"]:not(.mm-simple) #msg-input {
+  background: var(--bg-card); border: 1px solid var(--border-strong); border-radius: 12px; min-height: 40px; padding: 8px 12px; color: var(--text);
+}
+html[data-look="quiet"]:not(.mm-simple) #msg-input:focus { border-color: var(--accent); }
+html[data-look="quiet"]:not(.mm-simple) #send-btn { min-width: 56px; min-height: 40px; border-radius: 12px; font-weight: 600; }
+
+/* ---- form fields on every page: an edge people can see (3:1 against what is behind them) ---- */
+html[data-look="quiet"]:not(.mm-simple) #owner-view,
+html[data-look="quiet"]:not(.mm-simple) input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]):not([type=hidden]):not([type=file]):not([type=submit]):not([type=button]):not([type=reset]):not([type=image]),
+html[data-look="quiet"]:not(.mm-simple) select,
+html[data-look="quiet"]:not(.mm-simple) textarea {
+  border-color: var(--field-border) !important;   /* over inline and id-level field rules on every page (#owner-view: styled by id in index.html) */
+}
+html[data-look="quiet"]:not(.mm-simple) #owner-view:focus,
+html[data-look="quiet"]:not(.mm-simple) input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]):not([type=hidden]):not([type=file]):not([type=submit]):not([type=button]):not([type=reset]):not([type=image]):focus,
+html[data-look="quiet"]:not(.mm-simple) select:focus,
+html[data-look="quiet"]:not(.mm-simple) textarea:focus {
+  border-color: var(--accent) !important;   /* a focused field still shows the accent */
+}
+
+/* ---- the phone's toast and the Security and Profile sheets' buttons ---- */
+html[data-look="quiet"]:not(.mm-simple) #toast { background: var(--text); color: var(--bg-dark); }   /* ink on paper: it stands out on every screen */
+html[data-look="quiet"]:not(.mm-simple) #security-sheet .sec-actions button:not(.go),
+html[data-look="quiet"]:not(.mm-simple) #profile-sheet .sec-actions button:not(.go) { background: var(--bg-card); border: 1px solid var(--border-strong); }   /* .go keeps its accent fill */
+
+/* ---- Simple mode takes this style's colours (its layout stays its own). Both of Simple's own variants (dark and
+   .mm-light) are covered, so Simple's Light/Dark/Auto choice has nothing to switch while this style is on; the
+   account keeps that choice for Engineering. Desktop uses --sm-*, the phone --sp-*; both use the role variables. ---- */
+html[data-look="quiet"].mm-simple,
+html[data-look="quiet"].mm-simple.mm-light {
+  color-scheme: light;
+  --bg-dark: #FAF7F0; --bg-card: #FFFDF6; --bg-input: #F6F1E6; --bg-tertiary: #FFFDF6;
+  --accent: #3F6B4D; --accent-hover: #2F5A3E; --purple: #6B4FA8;
+  --text: #2A2620; --text-primary: #2A2620; --text-dim: #6E6558; --text-secondary: #6E6558; --text-tertiary: #756A5A;
+  --border: #E6DCCA; --border-strong: #8F8470;
+  --sm-page: #FAF7F0; --sm-side: #FFFDF6; --sm-raised: #F6F1E6; --sm-border: #E6DCCA;
+  --sm-text: #2A2620; --sm-sec: #6E6558; --sm-muted: #756A5A;
+  --sm-bubble: #FFFDF6; --sm-sel: color-mix(in srgb, #3F6B4D 13%, transparent); --sm-hover: color-mix(in srgb, #2A2620 5%, transparent);
+  --sm-shadow: 0 2px 12px rgba(0,0,0,.08);
+  --sm-user-bg: color-mix(in srgb, #3F6B4D 12%, #F6F1E6); --sm-user-text: #2A2620; --sm-user-code: color-mix(in srgb, #2A2620 10%, transparent);
+  --sp-bubble: #FFFDF6; --sp-soft: #FFFDF6; --sp-shadow: 0 2px 12px rgba(0,0,0,.08);
+  --sp-me-bg: color-mix(in srgb, #3F6B4D 12%, #F6F1E6); --sp-me-text: #2A2620; --sp-me-code: color-mix(in srgb, #2A2620 10%, transparent);
+  --brand-violet: #3F6B4D; --simple-interject-bg: #3F6B4D; --simple-accent-hover: #2F5A3E;
+  --simple-surface: #FAF7F0; --simple-side-bg: #FFFDF6; --simple-raised-bg: #F6F1E6; --simple-border: #E6DCCA; --simple-muted-text: #756A5A;
+  --simple-modal-sm-out-text: #B3261E; --simple-modal-sm-out-text-2: #B3261E;
+  --error: #B3261E; --field-border: #857B6E;   /* the main block (not Simple) sets these for Advanced */
+}
+
+/* ---- a chat tab's close button reads on the light tab (Engineering fades it to 50%) ---- */
+html[data-look="quiet"]:not(.mm-simple) .chat-tab .close-tab { opacity: .8; }
+
+/* ---- Simple's message box: its rounded box is the field's edge (3:1); message times at full strength on paper ---- */
+html[data-look="quiet"].mm-simple .input-area,
+html[data-look="quiet"].mm-simple #composer .row { border-color: var(--field-border); }
+html[data-look="quiet"].mm-simple .message > .msg-time { opacity: 1; }

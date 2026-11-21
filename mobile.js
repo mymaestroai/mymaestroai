@@ -25,6 +25,7 @@ const recentOwn = new Map();   // agent -> time our own stream for it ended (ded
 let pendingImages = [];
 let stick = true;
 const live = {};               // name -> { busy, busySince, activity, pendingQuestion } from the hub
+const turnSteps = {};          // name -> chatViewStepsNew() state: the tool calls the agent is running now, per turn (turn_activity)
 const openTurns = {};          // name -> [turnIds] the hub started and has not ended (activeTurnStart / activeTurnEnd)
 let statusKnown = false;       // true once the hub told us anything about busy state (older hubs never do)
 let workingFilter = false;     // Agents list shows only working agents
@@ -33,7 +34,7 @@ const rawText = new WeakMap(); // bubble element -> the message's plain text / m
 let es = null;                 // the /api/events EventSource
 const STATUS_POLL_MS = 20000;
 const TURN_POLL_MS = 4000;       // a followed turn's view, while the live event stream is down
-const STATUS_TICK_MS = 30000;
+const STATUS_TICK_MS = 15000;   // elapsed times and "waiting on" details refresh at least this often while an agent is busy
 const REATTACH_GIVE_UP_MS = 30 * 60 * 1000;
 let unread = loadJson('hub-mobile-unread', {});
 let activity = loadJson('hub-mobile-activity', []);
@@ -1377,8 +1378,41 @@ function codexBadge(snap, levels, now) {
   const title = (main.weekly ? `ChatGPT plan: ${pct}% of this week's allowance, resets ${when}` : `ChatGPT plan: ${pct}% of the ${main.label || 'usage'} allowance, resets ${when}`) + seen;
   return { text, cls, title };
 }
+/** The ChatGPT badge before any usable reading: "reading…" while one is awaited, "no reading" with the reason after a
+ *  failed one (never "reading…" for ever). */
+function codexPendingBadge(snap) {
+  if (snap && snap.error && !snap.reading) return { text: 'ChatGPT: no reading', cls: '', title: `No reading of the ChatGPT plan yet: ${String(snap.error).slice(0, 200)}` };
+  return { text: 'ChatGPT: reading\u2026', cls: '', title: "Reading the ChatGPT plan's usage (no turn is spent)" };
+}
+/** Whether a page showing a Codex chat should ask for a reading: the snapshot loaded and on, none running, the last
+ *  reading missing or over 30 minutes old; at most once a minute per page (askedAt). The hub limits reads too. */
+function codexShouldRead(snap, now, askedAt) {
+  if (!snap || snap.enabled === false || snap.reading) return false;
+  if (Number(askedAt) && now - Number(askedAt) < 60000) return false;
+  const t = Date.parse(snap.readAt || '');
+  return !Number.isFinite(t) || now - t > 30 * 60000;
+}
+/** The snapshot after a page's read request: the answer's snapshot, carrying the hub's reason when it refused or failed
+ *  without storing one (a Codex update, the hub unreachable), so the badge says "no reading" and why instead of
+ *  "reading..." (review r1). */
+function codexAfterAsk(prev, answer) {
+  const snap = answer && typeof answer === 'object' && answer.snapshot && typeof answer.snapshot === 'object' ? answer.snapshot : prev;
+  if (!snap) return prev;
+  if (answer && answer.ok === false && answer.error && !snap.error) return Object.assign({}, snap, { error: String(answer.error).slice(0, 200), reading: false });
+  return snap;
+}
 // ── subscriptions helpers (end) ──
 const subsEnabled = () => subsOnFlag !== false && !(codexUsageLast && codexUsageLast.enabled === false);
+// One read of the ChatGPT plan asked for by this page (POST /api/codex-usage/refresh: no turn; the hub allows one a minute
+// and none during a Codex update); the answer repaints the header and the Subscriptions sheet.
+let codexAskAt = 0;
+function codexAskRead() {
+  codexAskAt = Date.now();
+  api('/api/codex-usage/refresh', { method: 'POST' })
+    .then(r => r.json().catch(() => ({ ok: false, error: `HTTP ${r.status}` })))
+    .catch(() => ({ ok: false, error: "Couldn't reach your Maestro to read it." }))   // the next paint asks again after a minute
+    .then(d => { const next = codexAfterAsk(codexUsageLast, d); if (next && next !== codexUsageLast) { codexUsageLast = next; paintPlan(); paintSubsSheet(); } });
+}
 async function refreshCodexUsage() {
   try {
     const r = await api('/api/codex-usage');
@@ -1428,7 +1462,13 @@ function paintPlan() {
   const el = $('chat-plan'); if (!el) return;
   const d = planUsageLast; const a = agentByName(current); const model = String((a && a.model) || '');
   if (/^codex-cli\//.test(model)) {   // a ChatGPT-plan agent: the ChatGPT reading (when the setting is on and one exists)
-    const b = subsEnabled() ? codexBadge(codexUsageLast, null, Date.now()) : null;
+    let b = subsEnabled() ? codexBadge(codexUsageLast, null, Date.now()) : null;
+    // An admin with a Codex chat open: a missing or old reading is asked for (no turn spent), and until one exists the
+    // header says so instead of showing nothing.
+    if (subsEnabled() && isAdmin()) {
+      if (codexShouldRead(codexUsageLast, Date.now(), codexAskAt)) codexAskRead();
+      if (!b) b = codexPendingBadge(codexUsageLast);
+    }
     if (!b) { el.hidden = true; el.textContent = ''; return; }
     el.textContent = b.text;
     el.className = 'sub' + (b.cls ? ' ' + b.cls : '');
@@ -1667,7 +1707,7 @@ async function loadAgents() {
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     agents = (await r.json()).agents || [];
     if (typeof voiceWakeRecheck === 'function') voiceWakeRecheck();   // an agent's recognizer can have changed
-    { const ri = $('menu-recordings'); if (ri) ri.hidden = !agents.some(a => a && a.recordings && a.recordings.canDownload === true); }   // ⋮ menu: Recordings only for a person on at least one agent's download list
+    { const ri = $('menu-recordings'); if (ri) ri.hidden = !agents.some(a => a && a.recordings && a.recordings.canDownload === true); typeof menuGroupsSync === 'function' && menuGroupsSync(); }   // ⋮ menu: Recordings only for a person on at least one agent's download list
     if (agents.some(a => 'busy' in a)) {
       const map = {};
       for (const a of agents) map[a.name] = { busy: a.busy, busySince: a.busySince, activity: a.activity, pendingQuestion: a.pendingQuestion };
@@ -1698,6 +1738,12 @@ function setLive(name, patch) {
   if (!next.busy) { next.busySince = null; next.activity = null; next.pendingQuestion = false; next.consultedBy = null; }
   else if (!next.busySince) next.busySince = cur.busySince || new Date().toISOString();
   live[name] = next;
+  if (!next.busy) { delete turnSteps[name]; if (typeof turnOrigins !== 'undefined') delete turnOrigins[name]; }   // idle: no tool call runs, and the old turn's origin must not name the next turn's caller
+  // A helper (temporary worker) or a consulted agent changed: every agent waiting on it (before or after) says so (its header and list line).
+  if (typeof repaintAgentStatus === 'function') {
+    const waiters = new Set([next.worker && next.parent, cur.worker && cur.parent, next.consultedBy, cur.consultedBy]);
+    for (const w of waiters) if (w && w !== name) repaintAgentStatus(w);
+  }
   if (!next.busy && typeof voiceCallHubIdle === 'function') { try { voiceCallHubIdle(name); } catch { /* the call carries on */ } }   // a call waiting for a hub-started turn learns it is over
 }
 
@@ -1717,8 +1763,12 @@ function applySnapshot(map, repaint = true, opts = {}) {
   }
   for (const name of Object.keys(live)) {
     if (name in map) continue;
-    if (busyIsWorker(name, live[name])) { if (!namedOnly) { delete live[name]; delete openTurns[name]; } }   // a worker that is gone, not an agent gone idle
-    else { setLive(name, { busy: false }); delete openTurns[name]; }
+    if (busyIsWorker(name, live[name])) {   // a worker that is gone, not an agent gone idle
+      if (namedOnly) continue;
+      const gone = live[name];
+      delete live[name]; delete openTurns[name]; delete turnSteps[name];
+      for (const w of new Set([gone.parent, gone.consultedBy])) if (w && w !== name) repaintAgentStatus(w);   // whoever waited on it stops saying so
+    } else { setLive(name, { busy: false }); delete openTurns[name]; }
   }
   if (repaint) paintStatus();
   // Woke up (or just loaded) while the open chat's agent is mid-turn: follow that turn.
@@ -1770,8 +1820,15 @@ function busyText(name) {
   const since = (s && s.busySince) || null;
   const e = elapsed(since);
   if (s && s.pendingQuestion) return `❓ waiting for your answer${e ? ` · ${e}` : ''}`;
-  const activity = (s && s.activity) || (streams.has(name) ? 'replying to you' : 'working');
-  return `⏳ ${activity}${e ? ` · ${e}` : ''}`;
+  if (s && s.worker) {   // a temporary worker keeps the status word
+    const activity = s.activity || 'working';
+    return `⏳ ${activity}${e ? ` · ${e}` : ''}`;
+  }
+  // A named agent: what it is doing now (who started the turn, what it waits on or runs), never the bare status word.
+  const words = streams.has(name) ? 'Replying to your message' : chatBusyWords(name);
+  if (s && s.busy && !streams.has(name) && !currentTurnOrigin(name)) turnOriginFetch(name);   // once per turn: who started it
+  const detail = chatBusyDetail(name);
+  return `⏳ ${words}${e ? ` · ${e}` : ''}${detail ? ` · ${detail}` : ''}`;
 }
 
 function paintStatus() {
@@ -1806,9 +1863,9 @@ function chatStatusFull(name) {
   const since = Date.parse(s.busySince) || null;
   const took = (t) => (t ? ` · ${chatViewElapsed(t, Date.now())}` : '');
   if (s.pendingQuestion) return `${who} is waiting for your answer${took(since)}`;
-  const info = busyCardInfo(name);
-  if (info) return `${who}: ${info.text}${took(info.since)}`;
-  return `${who}: ${s.activity || (streams.has(name) ? 'replying to you' : 'working')}${took(since)}`;
+  const o = currentTurnOrigin(name);
+  const detail = chatBusyDetail(name);
+  return `${who}: ${chatBusyWords(name)}${took(o ? o.since : since)}${detail ? ` · ${detail}` : ''}`;
 }
 function showChatStatus() {
   if (!current || !isBusy(current) || ownTurnFor(current)) return;
@@ -1827,7 +1884,10 @@ function paintChatStatus() {
   const busy = $('chat-busy');
   if (busy) {
     const question = working && !!(live[current] && live[current].pendingQuestion);
-    busy.textContent = working ? busyText(current) : '';
+    const e = working ? elapsed((live[current] && live[current].busySince) || null) : '';
+    const detail = working && !question ? chatBusyDetail(current) : '';
+    busy.textContent = working ? `${question ? '❓' : '⏳'} ${chatBusyWords(current)}${e ? ` · ${e}` : ''}${detail ? ` · ${detail}` : ''}` : '';
+    if (working && !question && !currentTurnOrigin(current)) turnOriginFetch(current);
     busy.hidden = !working;
     busy.classList.toggle('question', question);
     busy.setAttribute('aria-label', working ? chatStatusFull(current) : '');
@@ -2451,6 +2511,7 @@ function updateDots() {
   if (a) {
     a.textContent = actUnseen > 99 ? '99+' : String(actUnseen);
     a.classList.toggle('on', actUnseen > 0 && screen !== 'activity');
+    typeof menuAdvDotSync === 'function' && menuAdvDotSync();
   }
   // Actions waiting for approval (any agent): amber count on the Agents tab.
   const ap = $('agents-approvals');
@@ -2630,16 +2691,28 @@ function chatViewIsHubOrigin(origin) {
   const k = origin && typeof origin === 'object' ? origin.kind : '';
   return !!k && typeof k === 'string' && k !== 'user' && k !== 'comms';
 }
-function chatViewBusyText(origin, activity) {
+function chatViewBusyText(origin, activity, nameOf) {
   const o = origin && typeof origin === 'object' ? origin : null;
   const cap = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
+  const who = (n) => {   // the agent's display name when the page knows it, else the name with a capital
+    if (!n) return n;
+    try { const d = typeof nameOf === 'function' ? nameOf(String(n)) : ''; if (d && typeof d === 'string') return d; } catch (e) { /* the plain name */ }
+    return cap(String(n));
+  };
   if (o && o.kind) {
     switch (o.kind) {
-      case 'consultation': return `Answering a consultation from ${cap(o.from) || 'another agent'}`;
+      case 'user': case 'comms': return 'Replying to your message';
+      case 'consultation': return `Answering a consultation from ${who(o.from) || 'another agent'}`;
       case 'schedule': { const l = o.label || o.from; return l ? `Working on a scheduled task: ${l}` : 'Working on a scheduled task'; }
       case 'job_notice': return o.jobName ? `Reading a job result: ${o.jobName}` : 'Reading a job result';
-      case 'hand_off': return o.label || 'Working on a hand-off';
-      case 'hand_off_report': return 'Reading a hand-off report';
+      case 'hand_off': {
+        // The target's turn is labelled "Hand-off from <caller>: <topic>"; the caller's report turn "Hand-off <state>: <topic>".
+        const l = typeof o.label === 'string' ? o.label : '';
+        if (/^Hand-off from /.test(l) || (!l && o.from)) return o.from ? `Working on a hand-off from ${who(o.from)}` : 'Working on a hand-off';
+        if (/^Hand-off \S+:/.test(l)) return o.from ? `Reading a hand-off report from ${who(o.from)}` : 'Reading a hand-off report';
+        return 'Working on a hand-off';
+      }
+      case 'hand_off_report': return o.from ? `Reading a hand-off report from ${who(o.from)}` : 'Reading a hand-off report';
       case 'job_report': return o.jobName ? `Reading a job report: ${o.jobName}` : 'Reading a job report';
       case 'consult_reply': return 'Reading consultation replies';
       case 'alert': return 'Handling a monitor alert';
@@ -2649,13 +2722,114 @@ function chatViewBusyText(origin, activity) {
   }
   const a = typeof activity === 'string' ? activity.trim() : '';
   let m = /^consulted by (.+)$/i.exec(a);
-  if (m) return `Answering a consultation from ${cap(m[1])}`;
+  if (m) return `Answering a consultation from ${who(m[1])}`;
   m = /^scheduled task(?::\s*(.+))?$/i.exec(a);
   if (m) return m[1] ? `Working on a scheduled task: ${m[1]}` : 'Working on a scheduled task';
   if (/^job finished/i.test(a)) return 'Reading a job result';
   if (/^job report/i.test(a)) return 'Reading a job report';
+  if (/^hand-off finished/i.test(a)) return 'Reading a hand-off report';
+  if (/^hand-off$/i.test(a)) return 'Working on a hand-off';
+  if (/^replying to you$/i.test(a)) return 'Replying to your message';
   if (/^alert$/i.test(a)) return 'Handling a monitor alert';
   return 'Working on a hub task';
+}
+// What a working agent waits on: its own helpers (temporary workers whose parent is it) and agents it consulted, from the
+// status feed { <name>: { busy, busySince, worker, parent, label, consultedBy } }. '' when it waits on nobody.
+function chatViewWaiting(agent, statuses, nowMs, nameOf) {
+  const all = statuses && typeof statuses === 'object' ? statuses : {};
+  const cap = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
+  const who = (n) => { try { const d = typeof nameOf === 'function' ? nameOf(String(n)) : ''; if (d && typeof d === 'string') return d; } catch (e) { /* plain */ } return cap(String(n)); };
+  const since = (s) => Date.parse(s && s.busySince) || 0;
+  const age = (s) => (since(s) ? chatViewElapsed(since(s), nowMs) : '');
+  const helpers = [], asked = [];
+  for (const [name, s] of Object.entries(all)) {
+    if (!s || !s.busy || name === agent) continue;
+    if (s.worker && s.parent === agent) helpers.push(s);
+    else if (!s.worker && s.consultedBy === agent) asked.push(Object.assign({ name }, s));
+  }
+  helpers.sort((a, b) => since(a) - since(b)); asked.sort((a, b) => since(a) - since(b));
+  const parts = [];
+  if (helpers.length === 1) { const h = helpers[0], t = age(h); parts.push(`waiting on 1 helper (${h.label || 'unnamed'}${t ? ', ' + t : ''})`); }
+  else if (helpers.length > 1) {
+    const names = helpers.slice(0, 2).map(h => h.label || 'unnamed').join(', ') + (helpers.length > 2 ? ', ...' : '');
+    const t = age(helpers[0]);
+    parts.push(`waiting on ${helpers.length} helpers (${names}${t ? '; the first for ' + t : ''})`);
+  }
+  if (asked.length === 1) { const t = age(asked[0]); parts.push(`waiting on ${who(asked[0].name)}${t ? ' (' + t + ')' : ''}`); }
+  else if (asked.length > 1) parts.push(`waiting on ${asked.length} agents (${asked.slice(0, 2).map(a => who(a.name)).join(', ')}${asked.length > 2 ? ', ...' : ''})`);
+  return parts.join(', ');
+}
+// A running tool step in plain words, from a turn_activity item { kind: 'tool', tool, summary, status }. '' for anything else.
+function chatViewStep(item) {
+  if (!item || item.kind !== 'tool' || item.status !== 'running') return '';
+  const raw = String(item.tool || '');
+  const name = raw.replace(/^mcp__[^_]+(?:_[^_]+)*?__/, '');
+  const words = {
+    spawn_workers: 'starting helpers', consult_agent: 'asking another agent', run_job: 'starting a background job',
+    hand_off: 'handing off work', ask_user: 'waiting for your answer', Bash: 'running a command', Read: 'reading a file',
+    Write: 'writing a file', Edit: 'editing a file', Grep: 'searching files', Glob: 'searching files',
+    WebSearch: 'searching the web', WebFetch: 'reading a web page', schedule_task: 'scheduling a task',
+  }[name] || `using ${name || 'a tool'}`;
+  const sum = typeof item.summary === 'string' ? item.summary.replace(/\s+/g, ' ').trim() : '';
+  return sum && !/^(spawn_workers|ask_user)$/.test(name) ? `${words}: ${sum.length > 60 ? sum.slice(0, 59) + '...' : sum}` : words;
+}
+// The running tool calls of one agent, so parallel calls and overlapping turns keep the right step:
+// { calls: [{ key, turnId, item }] (oldest first), done: [keys] (recently finished; a late snapshot never brings one back) }.
+function chatViewStepsNew() { return { calls: [], done: [] }; }
+function chatViewStepKey(turnId, item) { return `${turnId || ''}|${item && item.callId != null ? item.callId : ''}`; }
+function chatViewStepsOn(st, turnId, item) {
+  if (!st || !item || item.kind !== 'tool') return false;
+  const key = chatViewStepKey(turnId, item);
+  if (item.status === 'running') {
+    if (item.callId != null && st.done.includes(key)) return false;
+    st.calls = st.calls.filter(c => c.key !== key);   // the same call again (a call without an id: the turn's id-less call is replaced)
+    st.calls.push({ key, turnId: turnId || '', item });
+    return true;
+  }
+  if (item.status !== 'done') return false;
+  if (item.callId != null) { st.done.push(key); if (st.done.length > 50) st.done.splice(0, st.done.length - 50); }
+  let i = -1;
+  for (let k = st.calls.length - 1; k >= 0 && i < 0; k--) if (st.calls[k].key === key) i = k;
+  if (i < 0 && item.callId == null) for (let k = st.calls.length - 1; k >= 0 && i < 0; k--) if (st.calls[k].turnId === (turnId || '')) i = k;
+  if (i < 0) return false;
+  st.calls.splice(i, 1);
+  return true;
+}
+function chatViewStepsEndTurn(st, turnId) {
+  if (!st) return false;
+  const before = st.calls.length;
+  st.calls = turnId ? st.calls.filter(c => c.turnId !== turnId) : [];
+  return st.calls.length !== before;
+}
+// A fetched turn (GET /api/agents/<name>/turn: { turnId, activity }): its still-running calls join the list unless already
+// known or seen finishing; its finished calls count as done.
+function chatViewStepsSnapshot(st, turnId, activity) {
+  if (!st || !Array.isArray(activity)) return false;
+  let changed = false;
+  for (const it of activity) {
+    if (it && it.kind === 'tool' && it.status === 'done' && it.callId != null) {
+      const key = chatViewStepKey(turnId, it);
+      if (!st.done.includes(key)) st.done.push(key);
+      const n = st.calls.length; st.calls = st.calls.filter(c => c.key !== key); if (st.calls.length !== n) changed = true;
+    }
+  }
+  if (st.done.length > 50) st.done.splice(0, st.done.length - 50);
+  // Calls only the snapshot knows started before anything this page saw live since it asked: they go first, in their order.
+  const add = [];
+  activity.forEach((it, i) => {
+    if (!it || it.kind !== 'tool' || it.status !== 'running') return;
+    const closed = activity.slice(i + 1).some(d => d && d.kind === 'tool' && d.status === 'done' && (it.callId == null ? d.callId == null : d.callId === it.callId));
+    const key = chatViewStepKey(turnId, it);
+    if (closed || (it.callId != null && st.done.includes(key)) || st.calls.some(c => c.key === key) || add.some(c => c.key === key)) return;
+    add.push({ key, turnId: turnId || '', item: it });
+  });
+  if (add.length) { st.calls = add.concat(st.calls); changed = true; }
+  return changed;
+}
+function chatViewStepsNewest(st) { return st && st.calls.length ? st.calls[st.calls.length - 1].item : null; }
+// The full line: what the turn is, then what it waits on or (when it waits on nobody) its current step.
+function chatViewNow(words, waiting, step) {
+  return [words, waiting || step].filter(Boolean).join(' \u00b7 ');
 }
 function chatViewElapsed(sinceMs, nowMs) {
   const s = Math.max(0, Math.floor(((Number(nowMs) || 0) - (Number(sinceMs) || 0)) / 1000));
@@ -11915,6 +12089,7 @@ function paintUpdateCard() {
   const s = isAdmin() ? ucState : null;
   const avail = !!(s && s.enabled && s.available);
   if (note) note.textContent = avail ? ` · ${s.latestVersion && s.latestVersion !== s.currentVersion ? s.latestVersion : 'new version'} ready` : '';
+  typeof menuAdvDotSync === 'function' && menuAdvDotSync();
   if (!card) return;
   if (!avail || s.snoozed) { card.hidden = true; card.innerHTML = ''; return; }
   card.classList.toggle('sec', !!s.security);
@@ -12322,6 +12497,7 @@ function connectEvents() {
   on('turn_delta', onTurnDelta);
   on('turn_reasoning', onTurnReasoning);
   on('turn_activity', onTurnActivity);
+  on('turn_activity', (ev) => { if (ev && ev.agent) noteTurnStep(ev.agent, ev.turnId, ev.item); });   // the agent's current tool step, for its status line
   on('turn_progress', onTurnProgress);
   on('turn_worker_delta', onTurnWorkerDelta);
   on('turn_end', onTurnEnd);
@@ -12510,14 +12686,85 @@ function busyCardInfo(agent) {
   if (!agent || viewNow() !== 'main' || ownTurnFor(agent)) return null;
   const s = live[agent];
   if (!s || !s.busy) return null;
-  const o = turnOrigins[agent];
-  const ids = openTurns[agent];
-  if (o && !(o.turnId && ids && ids.length && !ids.includes(o.turnId))) {
-    return o.hub ? { text: chatViewBusyText(o.origin, s.activity), since: o.since } : null;
+  const o = currentTurnOrigin(agent);
+  if (o) {
+    return o.hub ? { text: chatViewBusyText(o.origin, s.activity, displayName), since: o.since } : null;
   }
   // No turn_start seen (the page opened mid-turn): the status feed's words.
   if (s.pendingQuestion || s.activity === 'replying to you') return null;
-  return { text: chatViewBusyText(null, s.activity), since: Date.parse(s.busySince) || Date.now() };
+  return { text: chatViewBusyText(null, s.activity, displayName), since: Date.parse(s.busySince) || Date.now() };
+}
+// The noted origin of the agent's running turn, or null when none is known or it belongs to an older turn.
+function currentTurnOrigin(agent) {
+  const o = turnOrigins[agent];
+  const ids = openTurns[agent];
+  return o && !(o.turnId && ids && ids.length && !ids.includes(o.turnId)) ? o : null;
+}
+// The words for what an agent is doing on a turn this phone is not streaming (the chat header and its tap text).
+function chatBusyWords(name) {
+  const s = live[name] || {};
+  if (s.pendingQuestion) return 'Waiting for your answer';
+  const o = currentTurnOrigin(name);
+  return chatViewBusyText(o ? o.origin : null, s.activity, displayName);
+}
+// A page opened mid-turn got no turn_start: ask the hub once per turn who started it, so the text can name the caller.
+const turnOriginAsked = new Set();
+const turnOriginInFlight = new Set();
+async function turnOriginFetch(agent) {
+  const s = agent && live[agent];
+  if (!s || !s.busy || (currentTurnOrigin(agent) && turnSteps[agent]) || turnOriginInFlight.has(agent)) return;   // once per turn, while the origin or the steps are unknown
+  const key = `${agent}|${s.busySince}`;
+  if (turnOriginAsked.has(key)) return;
+  turnOriginAsked.add(key);
+  turnOriginInFlight.add(agent);
+  const since0 = s.busySince;
+  try {
+    const res = await api(`/api/agents/${encodeURIComponent(agent)}/turn`, { signal: AbortSignal.timeout(8000) });
+    if (!res || !res.ok) return;
+    const d = await res.json();
+    const t = d && d.active && d.turn;
+    if (!t) return;
+    const now = live[agent];
+    if (!now || !now.busy || now.busySince !== since0) return;   // the answer is about a turn that is over
+    const stepsChanged = chatViewStepsSnapshot(turnSteps[agent] ||= chatViewStepsNew(), t.turnId, t.activity);
+    const noteOrigin = !!t.origin && typeof t.origin === 'object' && !currentTurnOrigin(agent);
+    if (noteOrigin) noteTurnOrigin(agent, t.turnId, t.origin, t.startedAt);
+    if (noteOrigin && agent === current) { paintChatStatus(); paintBusyCard(); }
+    else if (noteOrigin || stepsChanged) repaintAgentStatus(agent);   // the agents list (the open chat was just painted)
+  } catch (e) { /* leave it: the status feed's words stay */ }
+  finally { turnOriginInFlight.delete(agent); }
+}
+// What the agent is waiting on or doing now: its helpers / consulted agents, else its newest running tool call ('' when neither).
+function chatBusyDetail(name) {
+  return chatViewWaiting(name, live, Date.now(), displayName) || chatViewStep(chatViewStepsNewest(turnSteps[name]));
+}
+// A turn_activity event: the agent's running tool calls changed (repaint what its status says).
+function noteTurnStep(agent, turnId, item) {
+  if (!agent || !item) return;
+  if (chatViewStepsOn(turnSteps[agent] ||= chatViewStepsNew(), turnId, item)) repaintAgentStatus(agent);
+}
+// Repaint what an agent's status says (open chat header, the agents list): per agent at most once per 500 ms (a trailing call
+// follows), the list re-render at most once per second overall.
+const statusPaintAt = {}, statusPaintTimer = {};
+let statusListAt = 0, statusListTimer = null;
+function repaintAgentStatus(agent) {
+  if (!agent) return;
+  const now = Date.now();
+  const wait = 500 - (now - (statusPaintAt[agent] || 0));
+  if (wait > 0) {
+    if (!statusPaintTimer[agent]) statusPaintTimer[agent] = setTimeout(() => { delete statusPaintTimer[agent]; repaintAgentStatus(agent); }, wait);
+    return;
+  }
+  statusPaintAt[agent] = now;
+  if (agent === current) paintChatStatus();
+  if (screen !== 'agents') return;
+  const lw = 1000 - (now - statusListAt);
+  if (lw > 0) {
+    if (!statusListTimer) statusListTimer = setTimeout(() => { statusListTimer = null; statusListAt = Date.now(); if (screen === 'agents') renderAgents(); }, lw);
+    return;
+  }
+  statusListAt = now;
+  renderAgents();
 }
 let busyCardEl = null, busyCardTimer = null, busyCardObs = null;
 // Shows, updates or removes the card; it is always the last element of the messages list.
@@ -12536,7 +12783,8 @@ function paintBusyCard() {
     busyCardEl.className = 'chat-busy-card';
     busyCardEl.setAttribute('role', 'status');
   }
-  busyCardEl.textContent = `\u23F3 ${info.text} \u00B7 ${chatViewElapsed(info.since, Date.now())}`;
+  const detail = chatBusyDetail(current);
+  busyCardEl.textContent = `\u23F3 ${info.text} \u00B7 ${chatViewElapsed(info.since, Date.now())}${detail ? ` \u00B7 ${detail}` : ''}`;   // as the header: words, time, detail
   if (box.lastElementChild !== busyCardEl) box.appendChild(busyCardEl);
   if (fresh) scrollChat();
   if (!busyCardTimer) busyCardTimer = setInterval(paintBusyCard, 5000);
@@ -12719,16 +12967,17 @@ function onForOwner(ev) {
 }
 
 function onTurnEnd(ev) {
+  const to = turnOrigins[ev.agent];
   if (!activeTurnEnd(openTurns, ev.agent, ev.turnId)) setLive(ev.agent, { busy: false });   // busy while another turn is open
   if (ev.agent) wkSettleAgent(ev.agent, ev.turnId || null);
   if (ev.agent && notifyArmed[ev.agent]) { notifyArmed[ev.agent] = null; if (ev.agent === current) paintNotifyBtn(); }
   if (ev.agent && ev.agent === current) setTimeout(() => refreshCtx(ev.agent), 3500);   // the hub records the size 2.5 s after the turn
+  if (ev && ev.agent && chatViewStepsEndTurn(turnSteps[ev.agent], ev.turnId)) repaintAgentStatus(ev.agent);   // only this turn's calls: another open turn keeps its own
   if (ev.agent) pollStatusSoon();   // re-read the status once: a reply can run without a turn of its own
   const reply = ev.reply || (ev.ok ? '(no reply)' : `⚠ turn failed: ${ev.error || 'unknown error'}`);
   const t = hubTurns[ev.turnId];
   delete hubTurns[ev.turnId];
-  const to = turnOrigins[ev.agent];
-  if (to && (!ev.turnId || !to.turnId || to.turnId === ev.turnId)) delete turnOrigins[ev.agent];   // the busy card goes with paintStatus below
+  if (to && (!ev.turnId || !to.turnId || to.turnId === ev.turnId) && turnOrigins[ev.agent] === to) delete turnOrigins[ev.agent];   // `to` was read first: setLive drops the origin when the agent goes idle   // the busy card goes with paintStatus below
   if (ev.agent) repaintNotifyAgentSheet(ev.agent);   // an open agent sheet drops its "Notify me" item when the reply ends
   const ownTurn = ev.origin?.kind === 'user';
   // Hub-started: by the turn_start this page saw (read before it was cleared above) or by the end event's origin.
@@ -13178,11 +13427,13 @@ async function loadMe() {
     if (r.ok) {
       hubMe = await r.json();
       if (window.hubSimple) { try { window.hubSimple.apply(hubMe); } catch { /* the page stays as it is */ } }   // Simple mode and theme classes on <html>
+      try { if (window.HubLooks && hubMe) window.HubLooks.rememberDefault(hubMe.look, window.HubLooks.storageOf(window)); } catch { /* looks are optional: the page keeps the look it has */ }   // every load: no default clears the last person's
       { const ti = $('menu-tiger'); if (ti) ti.hidden = !(hubMe && hubMe.isAdmin === true); }
       // (the Tiger Teams link above: admins only, the page and its API are admin-only; likewise the Subscriptions entry)
       { const su = $('menu-subs'); if (su) su.hidden = !(hubMe && hubMe.isAdmin === true); }
       if (typeof simpleMenuHide === 'function') simpleMenuHide();   // "Switch to Simple" only for a real account (not the legacy single-password login)
       if (typeof simpleToggleSync === 'function') simpleToggleSync();   // the Simple view switch (and Simple's theme button) only for a real account
+      typeof menuGroupsSync === 'function' && menuGroupsSync();
       // Signed in: recorded-call pieces the hub never acknowledged (a closed app, a reload, a dead network) are sent now, one at a time (lib/ui-voice-call.js).
       if (hubMe && hubMe.user) setTimeout(() => { try { voiceRecResendPending((u, i) => fetch(u, { credentials: 'include', ...i }), { userId: hubMe.user.id }); } catch { /* the call code is not up yet */ } }, 0);
     }
@@ -13247,6 +13498,7 @@ function applyMultiUser() {
     $('menu-2fa-note').hidden = !(hubMe.isAdmin && !hubMe.user.totpEnabled && hubMe.admin2faRequired !== false);
     $('menu-signout').textContent = `Sign out (${hubMe.user.name || hubMe.user.login})`;
   }
+  typeof menuGroupsSync === 'function' && menuGroupsSync();
 }
 
 // Reload app (menu): fetch the page's own files fresh, ask the service worker to look for a new version, then reload.
@@ -13276,6 +13528,7 @@ function reloadApp() {
   return appReloaderInst.reload();
 }
 
+
 function toggleMenu(e) {
   e.stopPropagation();
   const menu = $('menu');
@@ -13284,7 +13537,92 @@ function toggleMenu(e) {
   if (menu.classList.contains('open')) paintMenuCredit();
   if (menu.classList.contains('open')) paintVersionLabel();
   if (menu.classList.contains('open')) refreshMemoryHealth();
+  if (menu.classList.contains('open') && typeof menuOnOpen === 'function') menuOnOpen();
 }
+
+// ── phone menu (begin) ──
+// The ⋮ menu: Look on top, everyday items, then "Advanced" (folded, remembered on this phone) in groups.
+const MENU_ADV_KEY = 'mm-menu-advanced';
+function menuAdvRead(storage) {
+  try { return !!storage && storage.getItem(MENU_ADV_KEY) === '1'; } catch { return false; }
+}
+function menuAdvWrite(storage, open) {
+  try { if (storage) storage.setItem(MENU_ADV_KEY, open ? '1' : '0'); } catch { /* a phone that cannot store it keeps it for this visit */ }
+}
+// items: [{ hidden, chatOnly }]; a chat-only item does not count when no chat is open.
+function menuGroupVisible(items, noChat) {
+  return (items || []).some(it => it && !it.hidden && !(it.chatOnly && noChat));
+}
+function menuGroupsSync() {
+  const menu = document.getElementById('menu');
+  if (!menu) return;
+  const noChat = menu.classList.contains('no-chat');
+  for (const g of menu.querySelectorAll('.menu-group')) {
+    const items = [...g.children].filter(c => !c.classList.contains('menu-group-title'))
+      .map(c => ({ hidden: c.hidden, chatOnly: c.classList.contains('chat-only') }));
+    g.hidden = !menuGroupVisible(items, noChat);
+  }
+}
+function menuAdvDotSync() {
+  const dot = document.querySelector('#menu-adv-toggle .menu-adv-dot'), adv = document.getElementById('menu-adv');
+  if (!dot || !adv) return;
+  const on = (id) => { const e = document.getElementById(id); return !!(e && e.classList.contains('on')); };
+  const note = document.getElementById('menu-update-note');
+  const wants = on('act-unread') || on('menu-memory-count') || !!(note && (note.textContent || '').trim());
+  dot.hidden = !(adv.hidden && wants);
+  const tg = document.getElementById('menu-adv-toggle');   // the dot is visual: the row says it in words too
+  if (tg) { if (dot.hidden) tg.removeAttribute('aria-label'); else tg.setAttribute('aria-label', 'Advanced, something inside needs attention'); }
+}
+function menuAdvApply(open) {
+  const adv = document.getElementById('menu-adv'), tg = document.getElementById('menu-adv-toggle');
+  if (!adv || !tg) return;
+  adv.hidden = !open;
+  tg.setAttribute('aria-expanded', String(!!open));
+  const ch = tg.querySelector('.menu-adv-chev');
+  if (ch) ch.textContent = open ? '▾' : '▸';
+  menuAdvDotSync();
+}
+function menuLookName() {
+  const L = window.HubLooks, el = document.getElementById('menu-look-name');
+  if (!el || !L) return;
+  let label = '';
+  try { const cur = L.applied(document); const m = (L.LOOKS || []).find(l => l.id === cur); label = m ? m.label : ''; } catch { /* no label */ }
+  el.textContent = label ? label + ' ›' : '›';
+}
+function menuOnOpen() {
+  menuGroupsSync();
+  menuAdvDotSync();
+  menuLookName();
+}
+if (typeof document !== 'undefined' && document.getElementById) {
+  const look = document.getElementById('menu-look'), pick = document.getElementById('menu-look-pick'), tg = document.getElementById('menu-adv-toggle');
+  let store = null;
+  try { store = window.localStorage; } catch { store = null; }
+  if (look) look.hidden = !window.HubLooks;   // shown by this script only: an older cached script has no handler for it
+  if (look && pick) {
+    look.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const open = pick.hidden;
+      pick.hidden = !open;
+      look.setAttribute('aria-expanded', String(open));
+      if (open) lookPickerPaint(pick, menuLookName);
+    });
+    pick.addEventListener('click', (e) => e.stopPropagation());   // choosing a look repaints the picker in place: the menu stays open
+  }
+  if (tg) {
+    tg.hidden = false;   // the page shows every item until this script runs (an older cached script never folds them)
+    menuAdvApply(menuAdvRead(store));
+    tg.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const open = document.getElementById('menu-adv').hidden;   // folded now: open it
+      menuAdvWrite(store, open);
+      menuAdvApply(open);
+    });
+  }
+  const adv = document.getElementById('menu-adv');
+  if (adv) adv.addEventListener('click', (e) => { if (e.target && e.target.closest && e.target.closest('.menu-group-title')) e.stopPropagation(); });
+}
+// ── phone menu (end) ──
 
 // Memory (lib/memory-health): admins see the agents the last check flagged; the menu line shows only when there are
 // some. Read-only here: Settings → Status → Memory on a computer has the details.
@@ -13304,6 +13642,8 @@ async function refreshMemoryHealth() {
     c.textContent = n ? String(n) : '';
     c.classList.toggle('on', !!n);
   } catch {}
+  typeof menuGroupsSync === 'function' && menuGroupsSync();
+  typeof menuAdvDotSync === 'function' && menuAdvDotSync();
   paintMemorySheet();
 }
 function memorySheet() {
@@ -13484,6 +13824,68 @@ function secMsg(id, text, ok) {
   el.classList.toggle('ok', !!ok);
 }
 
+// The look of this phone (lib/ui-looks, window.HubLooks): a row of three swatches with labels, in the Profile sheet and in
+// Simple mode's settings sheet. Built from text nodes and style properties (the registry's colours), never from markup.
+function lookSwatch(look) {
+  const p = look.preview;
+  const box = document.createElement('div');
+  box.setAttribute('aria-hidden', 'true');
+  box.style.height = '40px'; box.style.borderRadius = '8px'; box.style.padding = '4px'; box.style.boxSizing = 'border-box';
+  box.style.background = p.bg; box.style.border = '1px solid ' + p.ink + '33';
+  const panel = document.createElement('div');
+  panel.style.background = p.panel; panel.style.borderRadius = '5px'; panel.style.height = '100%';
+  panel.style.display = 'flex'; panel.style.alignItems = 'center'; panel.style.justifyContent = 'space-between'; panel.style.padding = '0 6px';
+  const aa = document.createElement('span');
+  aa.appendChild(document.createTextNode('Aa'));
+  aa.style.color = p.ink; aa.style.fontSize = '16px'; aa.style.fontWeight = '600';
+  aa.style.fontFamily = p.font === 'serif' ? "Georgia, 'Times New Roman', serif" : "-apple-system, 'Segoe UI', Roboto, sans-serif";
+  const dot = document.createElement('span');
+  dot.style.width = '8px'; dot.style.height = '8px'; dot.style.borderRadius = '50%'; dot.style.background = p.accent;
+  panel.appendChild(aa); panel.appendChild(dot); box.appendChild(panel);
+  return box;
+}
+function lookPickerPaint(host, onChosen) {
+  const L = window.HubLooks;
+  if (!host) return;
+  while (host.firstChild) host.removeChild(host.firstChild);
+  if (!L) {   // a page newer than the running server: /ui-looks.js was not served, so there is nothing to pick yet
+    const msg = document.createElement('div');
+    msg.className = 'sec-hint looks-restart';
+    msg.appendChild(document.createTextNode('Restart your Maestro to load the interface styles.'));
+    host.appendChild(msg);
+    return;
+  }
+  const cur = L.applied(document);   // the look in force, also when this phone can't store a choice
+  const row = document.createElement('div');
+  row.setAttribute('role', 'group'); row.setAttribute('aria-label', 'Interface style for this phone');
+  row.style.display = 'grid'; row.style.gridTemplateColumns = 'repeat(3, 1fr)'; row.style.gap = '8px';
+  for (const look of L.LOOKS) {
+    const on = look.id === cur;
+    const b = document.createElement('button');
+    b.type = 'button'; b.dataset.look = look.id; b.setAttribute('aria-pressed', String(on));
+    b.style.display = 'block'; b.style.padding = '6px'; b.style.borderRadius = '10px'; b.style.background = 'transparent';
+    b.style.color = 'inherit'; b.style.font = 'inherit'; b.style.fontSize = '0.75rem'; b.style.textAlign = 'center';
+    b.style.border = on ? '2px solid var(--accent)' : '1px solid var(--border)';
+    const lab = document.createElement('span');
+    lab.appendChild(document.createTextNode(look.label));
+    lab.style.display = 'block'; lab.style.marginTop = '4px';
+    b.appendChild(lookSwatch(look)); b.appendChild(lab);
+    b.addEventListener('click', () => {
+      if (!L.choose(look.id, L.storageOf(window))) return;
+      L.apply(document, look.id);   // no reload: the stylesheet swaps in place
+      lookPickerPaint(host, onChosen);
+      if (typeof onChosen === 'function') { try { onChosen(look.id); } catch { /* the caller's refresh must not undo the choice */ } }
+      const again = [...host.querySelectorAll('button[data-look]')].find(x => x.dataset.look === look.id);
+      if (again) again.focus();   // focus stays on the swatch just chosen
+    });
+    row.appendChild(b);
+  }
+  const note = document.createElement('div');
+  note.className = 'sec-hint';
+  note.appendChild(document.createTextNode('Applies to this device. Simple mode works with every interface style.'));
+  host.appendChild(row); host.appendChild(note);
+}
+
 // Profile: who you are here (your name and sign-in, set by an admin on the Users page) and the time zone your agents
 // use. Security keeps password, two-factor and sessions.
 function openProfileSheet() {
@@ -13502,7 +13904,12 @@ function openProfileSheet() {
       <select id="prof-tz" aria-label="Time zone your agents use"></select>
       <div class="sec-msg" id="prof-tz-msg"></div>
     </div>
+    <div class="sec-section">
+      <div class="sec-title">Interface style</div>
+      <div id="prof-looks"></div>
+    </div>
     <div class="sec-actions" style="margin-top:10px"><button id="prof-close">Close</button></div>`;
+  lookPickerPaint($('prof-looks'));
   $('prof-name').textContent = hubMe.user.name || hubMe.user.login;
   $('prof-login').textContent = `Signed in as ${hubMe.user.login} · ${hubMe.user.role === 'admin' ? 'admin' : 'member'}`;
   $('prof-tz').addEventListener('change', (e) => chooseTimeZone(e.target));
@@ -14024,7 +14431,7 @@ function shareLinkFormHtml(name, s) {
   return `<div class="sec-section" data-no-dirty><div class="sec-title">${escapeHtml(name)}</div>
     <label class="sec-hint" for="sl-hours">Link works for</label><select class="sl-hours" id="sl-hours">${opts}</select>
     <label class="sec-hint" style="display:flex;gap:8px;align-items:center"><input type="checkbox" class="sl-once" style="width:auto"> Only one download</label>
-    <div class="sec-msg sl-msg" role="alert" style="color:var(--error,#e55)"></div></div>
+    <div class="sec-msg sl-msg" role="alert" style="color:var(--error)"></div></div>
     <div class="sec-actions"><button type="button" class="sec-btn sl-cancel">Cancel</button><button type="button" class="sec-btn sl-create">Create link</button></div>`;
 }
 function shareLinkResultHtml(link, origin) {
@@ -14320,7 +14727,7 @@ function filesRenderList() {
   const entries = filesState.entries;
   if (!entries.length) { list.innerHTML = `<div class="fs-empty">${filesState.path ? 'This folder is empty.' : 'No files yet.'} Use Upload to add some.</div>`; return; }
   const srt = filesSortGet();
-  const chip = (key, label) => `<button data-act="sort-${key}" aria-pressed="${srt.key === key ? 'true' : 'false'}" style="background:${srt.key === key ? 'var(--accent, #3987e5)' : 'transparent'};color:${srt.key === key ? '#fff' : 'inherit'};border:1px solid var(--border, #444);border-radius:12px;padding:2px 10px;min-height:40px;font-size:12px">${label}${srt.key === key ? (srt.dir === 'asc' ? ' ▲' : ' ▼') : ''}</button>`;
+  const chip = (key, label) => `<button data-act="sort-${key}" aria-pressed="${srt.key === key ? 'true' : 'false'}" style="background:${srt.key === key ? 'var(--accent)' : 'transparent'};color:${srt.key === key ? 'var(--on-accent)' : 'inherit'};border:1px solid var(--border);border-radius:12px;padding:2px 10px;min-height:40px;font-size:12px">${label}${srt.key === key ? (srt.dir === 'asc' ? ' ▲' : ' ▼') : ''}</button>`;
   const sortBar = `<div class="fs-sortbar" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:4px 0 8px">Sort: ${chip('mtime', 'Date')}${chip('name', 'Name')}${chip('size', 'Size')}</div>`;
   const when = (t) => { if (!t) return ''; const d = new Date(t); return isNaN(d) ? '' : d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }); };
   list.innerHTML = sortBar + entries.map((e, i) => {
@@ -14941,6 +15348,20 @@ if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
   if (typeof wide.addEventListener === 'function') wide.addEventListener('change', wideChange);
   else if (typeof wide.addListener === 'function') wide.addListener(wideChange);
 }
+// Under Broadsheet House or Quiet Page the style's own palette decides Simple's colours: that style's label, else null (Engineering).
+function simpleStyleLabel() {
+  const L = typeof window !== 'undefined' ? window.HubLooks : null;
+  if (!L || typeof L.applied !== 'function') return null;
+  const id = L.applied(document);
+  if (id === 'engineering') return null;
+  const look = typeof L.byId === 'function' ? L.byId(id) : null;
+  return look ? look.label : id;
+}
+let simpleLookSheetOff = null;   // removes the open settings sheet's mm-look-change listener
+// The top-bar theme button follows the style on its own too (one document listener, added once).
+if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+  document.addEventListener('mm-look-change', () => { try { if (typeof simpleToggleSync === 'function') simpleToggleSync(); } catch { /* cosmetic */ } });
+}
 // The Simple view switch (Advanced top bars and Simple's top bar) and Simple's theme button: only for a real account.
 function simpleToggleSync() {
   const ok = simpleAccountOk(hubMe);
@@ -14949,7 +15370,7 @@ function simpleToggleSync() {
   for (const id of ['agents-head', 'chat-head']) { const h = document.getElementById(id); if (h) h.classList.toggle('has-mode-toggle', ok); }
   const tb = document.querySelector('#simple-top .simple-theme-btn');
   if (tb) {
-    tb.hidden = !ok;
+    tb.hidden = !ok || !!(typeof simpleStyleLabel === 'function' && simpleStyleLabel());   // under a light style its own palette decides: nothing to switch
     const t = window.hubSimple.themeLabel(hubMe && hubMe.theme);
     tb.querySelector('.stb-ic').textContent = t.icon;
     tb.querySelector('.stb-lab').textContent = t.label;
@@ -14996,14 +15417,29 @@ function simpleSettingsOpen() {
   d.setAttribute('aria-label', 'Settings');
   d.innerHTML = '<h3>Settings</h3>' +
     '<div class="ss-sec"><div class="ss-title">Appearance</div><div class="ss-seg" role="group" aria-label="Appearance">' +
-    '<button type="button" data-theme="light">Light</button><button type="button" data-theme="dark">Dark</button><button type="button" data-theme="auto">Match device</button></div></div>' +
+    '<button type="button" data-theme="light">Light</button><button type="button" data-theme="dark">Dark</button><button type="button" data-theme="auto">Match device</button></div><div class="ss-follow" hidden></div></div>' +
+    '<div class="ss-sec" id="ss-style-sec"><div class="ss-title">Interface style</div><div id="ss-style"></div></div>' +
     '<div class="ss-sec"><div class="ss-title">Name</div><div class="ss-val"></div></div>' +
     '<button type="button" class="ss-row" id="ss-adv"><b>Switch to Advanced</b><small>All tools, agents’ work and settings</small></button>' +
     '<button type="button" class="ss-row" id="ss-out"><b>Sign out</b></button>' +
     '<button type="button" class="ss-close">Close</button>';
   d.querySelector('.ss-val').textContent = name;
+  lookPickerPaint(d.querySelector('#ss-style'));   // Interface style sits right after Appearance
   const paint = () => { const cur = (hubMe && hubMe.theme) || 'auto'; d.querySelectorAll('.ss-seg button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.theme === cur))); };
   paint();
+  // Under a light style its own palette decides the colours: the buttons give way to one line (the stored theme is untouched).
+  const paintFollow = () => {
+    const label = simpleStyleLabel();
+    const seg = d.querySelector('.ss-seg'); const line = d.querySelector('.ss-follow');
+    if (seg) seg.style.display = label ? 'none' : '';
+    if (line) { line.hidden = !label; line.textContent = label ? 'Colours follow your interface style (' + label + ').' : ''; }
+  };
+  paintFollow();
+  if (simpleLookSheetOff) simpleLookSheetOff();
+  const onLook = () => { if (!d.isConnected) { document.removeEventListener('mm-look-change', onLook); return; } paintFollow(); };
+  document.addEventListener('mm-look-change', onLook);
+  simpleLookSheetOff = () => document.removeEventListener('mm-look-change', onLook);
+  d.addEventListener('close', () => { if (simpleLookSheetOff) { simpleLookSheetOff(); simpleLookSheetOff = null; } }, { once: true });
   d.querySelectorAll('.ss-seg button').forEach(b => b.addEventListener('click', async () => {
     if (simpleThemeSaving) return;   // one theme save at a time (shared with the theme button)
     simpleThemeSaving = true;

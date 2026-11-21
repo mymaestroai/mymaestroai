@@ -243,3 +243,72 @@ test('Settings: the Claude bars are drawn once: in Subscriptions, and in the Cla
   const save = app.slice(app.indexOf('async function saveSubsOn('), app.indexOf('async function loadPlanBox('));
   assert.match(save, /if \(document\.getElementById\('st-plan-section'\)\) loadPlanBox\(\);/, 'the switch redraws the Claude plan box');
 });
+
+// Reading at start, follow-up: before any reading the badge says so, and a page with a Codex chat asks for a reading.
+for (const [name, src] of [['app.js', app], ['mobile.js', mjs]]) {
+  const C = load(src);
+  test(`${name}: codexPendingBadge says "reading…" while one is awaited, "no reading" with the reason after a failure`, () => {
+    assert.strictEqual(C.codexPendingBadge(null).text, 'ChatGPT: reading…');
+    assert.strictEqual(C.codexPendingBadge({ readAt: null, error: null }).text, 'ChatGPT: reading…');
+    assert.strictEqual(C.codexPendingBadge({ error: "Codex isn't signed in to ChatGPT.", reading: true }).text, 'ChatGPT: reading…', 'a read under way');
+    const f = C.codexPendingBadge({ error: "Codex isn't signed in to ChatGPT.", reading: false });
+    assert.strictEqual(f.text, 'ChatGPT: no reading');
+    assert.match(f.title, /Codex isn't signed in to ChatGPT\./);
+  });
+  test(`${name}: codexShouldRead: loaded and on, nothing running, missing or older than 30 minutes, once a minute per page`, () => {
+    assert.strictEqual(C.codexShouldRead(null, NOW, 0), false, 'not loaded yet: the GET comes first');
+    assert.strictEqual(C.codexShouldRead({ enabled: false, readAt: null }, NOW, 0), false, 'off');
+    assert.strictEqual(C.codexShouldRead({ enabled: true, readAt: null, reading: true }, NOW, 0), false, 'one is running');
+    assert.strictEqual(C.codexShouldRead({ enabled: true, readAt: null }, NOW, 0), true, 'no reading yet');
+    assert.strictEqual(C.codexShouldRead({ enabled: true, readAt: iso(-31) }, NOW, 0), true, 'over 30 minutes old');
+    assert.strictEqual(C.codexShouldRead({ enabled: true, readAt: iso(-29) }, NOW, 0), false, 'fresh enough');
+    assert.strictEqual(C.codexShouldRead({ enabled: true, readAt: null }, NOW, NOW - 30000), false, 'asked 30 s ago');
+    assert.strictEqual(C.codexShouldRead({ enabled: true, readAt: null }, NOW, NOW - 61000), true, 'asked over a minute ago');
+  });
+}
+
+test('app.js: a Codex chat header asks for a reading and shows the pending badge, for admins only', () => {
+  const a = app.indexOf('function paintPlanBadges()');
+  const body = app.slice(a, app.indexOf('async function openPlanSettings(', a));
+  assert.match(body, /if \(subsEnabled\(\) && !\(window\.hubMe && !window\.hubMe\.isAdmin\)\) \{\s*if \(codexShouldRead\(codexLast, Date\.now\(\), codexAskAt\)\) codexAskRead\(\);\s*if \(!b\) b = codexPendingBadge\(codexLast\);/);
+  const ask = app.slice(app.indexOf('function codexAskRead()'), app.indexOf('const subsIsCodex'));
+  assert.match(ask, /codexAskAt = Date\.now\(\);/);
+  assert.match(ask, /fetch\('\/api\/codex-usage\/refresh', \{ method: 'POST', credentials: 'include' \}\)/);
+});
+
+test('mobile.js: the Codex chat header asks for a reading and shows the pending badge, for admins only', () => {
+  const a = mjs.indexOf('function paintPlan()');
+  const body = mjs.slice(a, a + 1500);
+  assert.match(body, /if \(subsEnabled\(\) && isAdmin\(\)\) \{\s*if \(codexShouldRead\(codexUsageLast, Date\.now\(\), codexAskAt\)\) codexAskRead\(\);\s*if \(!b\) b = codexPendingBadge\(codexUsageLast\);/);
+  const ask = mjs.slice(mjs.indexOf('function codexAskRead()'), mjs.indexOf('async function refreshCodexUsage('));
+  assert.match(ask, /api\('\/api\/codex-usage\/refresh', \{ method: 'POST' \}\)/);
+});
+
+test('server.js: the ChatGPT reading at start is started beside the Claude plan', () => {
+  const server = read('server.js');
+  assert.match(server, /getPlanUsage\(\)\.start\(\);[^\n]*\n[^\n]*\n\s*try \{ require\('\.\/lib\/codex-usage'\)\.getCodexUsage\(\)\.start\(\); \}/);
+});
+
+for (const [name, src] of [['app.js', app], ['mobile.js', mjs]]) {
+  const C = load(src);
+  test(`${name}: codexAfterAsk keeps the hub's reason when it refused a read, so the badge says "no reading" and why`, () => {
+    const empty = { enabled: true, readAt: null, error: null, reading: false, limits: [], weekly: [] };
+    const refused = C.codexAfterAsk(empty, { ok: false, error: 'Codex is updating; try again in a few minutes.', snapshot: { ...empty } });
+    assert.strictEqual(refused.error, 'Codex is updating; try again in a few minutes.');
+    assert.strictEqual(C.codexPendingBadge(refused).text, 'ChatGPT: no reading');
+    const unreachable = C.codexAfterAsk(empty, { ok: false, error: "Couldn't reach your Maestro to read it." });
+    assert.strictEqual(unreachable.error, "Couldn't reach your Maestro to read it.");
+    assert.strictEqual(C.codexPendingBadge(unreachable).text, 'ChatGPT: no reading');
+    // a good answer replaces; the hub's own stored reason is kept as it is; nothing loaded and no snapshot: unchanged
+    const good = { ...empty, readAt: iso(0) };
+    assert.strictEqual(C.codexAfterAsk(empty, { ok: true, snapshot: good }), good);
+    const own = { ...empty, error: "Codex isn't signed in to ChatGPT." };
+    assert.strictEqual(C.codexAfterAsk(empty, { ok: false, error: "Codex isn't signed in to ChatGPT.", snapshot: own }).error, "Codex isn't signed in to ChatGPT.");
+    assert.strictEqual(C.codexAfterAsk(null, { ok: false, error: 'x' }), null);
+  });
+}
+
+test('both pages: the read request uses codexAfterAsk for every answer, failures included', () => {
+  assert.match(app.slice(app.indexOf('function codexAskRead()'), app.indexOf('const subsIsCodex')), /\.catch\(\(\) => \(\{ ok: false, error: "Couldn't reach your Maestro to read it\." \}\)\)[^\n]*\n\s*\.then\(d => \{ const next = codexAfterAsk\(codexLast, d\);/);
+  assert.match(mjs.slice(mjs.indexOf('function codexAskRead()'), mjs.indexOf('async function refreshCodexUsage(')), /\.catch\(\(\) => \(\{ ok: false, error: "Couldn't reach your Maestro to read it\." \}\)\)[^\n]*\n\s*\.then\(d => \{ const next = codexAfterAsk\(codexUsageLast, d\);/);
+});

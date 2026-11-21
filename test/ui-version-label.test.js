@@ -127,8 +127,8 @@ test('desktop: the label sits under the title and opens About; About is the firs
 test('phone: About (with the label) is the first item of the ⋮ menu and opens its sheet', () => {
   const html = read('mobile.html');
   const menu = html.slice(html.indexOf('<div id="menu">'));
-  const firstLink = Math.min(...['<a ', '<button '].map(t => { const i = menu.indexOf(t); return i < 0 ? Infinity : i; }));
-  assert.strictEqual(menu.indexOf('<button id="menu-about">'), firstLink, 'About is the first item');
+  // phone-menu reorder: About moved to Advanced > Account and help (the last item of that group); the Look row is first now
+  assert.ok(menu.indexOf('<button id="menu-about">') > menu.indexOf('id="menu-adv"') && menu.indexOf('<button id="menu-about">') < menu.indexOf('id="menu-signout"'), 'About is under Advanced');
   assert.ok(menu.includes('id="menu-version"'));
   assert.ok(html.includes('<dialog id="about-sheet"'));
   const js = read('mobile.js');

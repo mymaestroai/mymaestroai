@@ -49,8 +49,11 @@ test('desktop: the look is applied when the composer is set up and after every c
   assert.match(fnSource(app, 'voiceCallPaintBtn'), /if \(typeof simpleCallLook === 'function'\) simpleCallLook\(b, on\);/);
   assert.match(fnSource(app, 'simpleComposerInit'), /if \(mic\) simpleCallLook\(mic, mic\.classList\.contains\('call'\)\);/);
   const css = read('index.html');
-  assert.match(css, /html\.mm-simple \.input-area \.mic-btn\.simple-call \{[^}]*background: #8b6fd6;/);
-  assert.match(css, /html\.mm-simple \.input-area \.mic-btn\.simple-call\.call \{ background: #e5484d;/);
+  // looks-vars: the value is unchanged; index.html/app.js now spell it as a variable (defined in index.html :root)
+  assert.match(css, /html\.mm-simple \.input-area \.mic-btn\.simple-call \{[^}]*background: var\(--brand-violet\);/);
+  assert.match(css, /--brand-violet:\s*#8b6fd6;/);
+  assert.match(css, /html\.mm-simple \.input-area \.mic-btn\.simple-call\.call \{ background: var\(--simple-call-live-bg\);/);
+  assert.match(css, /--simple-call-live-bg:\s*#e5484d;/);
 });
 
 test('phone: the dictation mic is hidden in Simple; the call button still follows whether voice is on', () => {

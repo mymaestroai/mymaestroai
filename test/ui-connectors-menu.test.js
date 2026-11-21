@@ -73,7 +73,7 @@ test('app.js: Settings has the Go to line for admins (Data connectors always, Re
 });
 
 test('mobile.html: menu-remote follows menu-connectors, hidden by default, no variation selector', () => {
-  assert.ok(mobileHtml.includes('<a id="menu-connectors" href="/modules" hidden>&#x1F50C; Data connectors</a>\n    <a id="menu-remote" href="/modules#remote-computers" hidden>&#x1F4BB; Remote computers</a>'));
+  assert.ok(mobileHtml.includes('<a id="menu-connectors" href="/modules" hidden>&#x1F50C; Data connectors</a>\n      <a id="menu-remote" href="/modules#remote-computers" hidden>&#x1F4BB; Remote computers</a>'));
   assert.ok(!/menu-remote[^\n]*&#xFE0F;/.test(mobileHtml));
 });
 

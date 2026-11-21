@@ -58,7 +58,8 @@ test('extra usage paying: warning (not refused) on the chip, the badge, the Sett
   assert.ok(app.includes('is used up for this week until ${planWhen(top.resetsAt)}; extra usage is paying for Claude replies until then. Click to choose your agents\' models.`'), 'chip title');
   assert.ok(app.includes("el.className = 'plan-badge' + (cls ? ' ' + cls : '');") && !/el\.className = 'plan-badge' \+ \(w\.rejected/.test(app), 'badge class from planState');
   assert.ok(app.includes('is used up for this week until ${planWhen(w.resetsAt)}; extra usage is paying for Claude replies until then. Click to choose models (Settings → Claude plan).`'), 'badge title');
-  assert.ok(app.includes("const color = w.extraUsage ? '#c9a227' : w.rejected || pct >= 100 ? '#d4588b'"), 'extra row in warning gold, before the refused colour');
+  // looks-vars: the value is unchanged; index.html/app.js now spell it as a variable (defined in index.html :root)
+  assert.ok(app.includes("const color = w.extraUsage ? 'var(--status-warn)' : w.rejected || pct >= 100 ? 'var(--status-hot)'"), 'extra row in warning gold, before the refused colour');
   assert.ok(app.includes('${esc(planPctText(w))}</b>'), 'row shows "100% · extra usage"');
   assert.ok(app.includes('The weekly plan is used up until ${planWhen(extraRow.resetsAt)}; extra usage is paying for Claude replies until then.'), 'Settings line');
   assert.ok(app.includes("d.overage && d.overage.status === 'allowed_warning'") && app.includes('Extra usage is close to its monthly limit') && app.includes('when it is reached, every Claude agent stops.'), 'monthly-limit line');

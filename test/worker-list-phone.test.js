@@ -385,8 +385,8 @@ test('a check that never answers is cut off by its time limit; a turn end that a
 });
 
 test('applySnapshot namedOnly: workers missing from a named-only map stay, and keys the map lacks are not wiped', () => {
-  const body = `const live = {}, openTurns = {}; let statusKnown = false; let current = null; const hubTurns = {};
-    const paintStatus = () => {}; const reattachIfIdle = () => {};
+  const body = `const live = {}, openTurns = {}, turnSteps = {}; let statusKnown = false; let current = null; const hubTurns = {};
+    const paintStatus = () => {}; const reattachIfIdle = () => {}; const repaintAgentStatus = () => {};   // status fixes: setLive and applySnapshot repaint waiting agents and drop steps
     ${extract('busyIsWorker')}
     ${extract('setLive')}
     const wkSeen = new Map(); let wkGoneState = {}; const wkInferEnd = () => {};

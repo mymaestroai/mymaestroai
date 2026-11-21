@@ -300,6 +300,191 @@ test('agent page: each rule in words, unknown rules shown as they are, names spl
   assert.deepStrictEqual(Array.from(f.lockboxEnvNames(' A, B ,,C ')), ['A', 'B', 'C']);
 });
 
+// The page's loader, run against a stand-in page: the status check's answer decides what the admin sees.
+function lockboxPage() {
+  const els = {};
+  const el = () => ({ style: { display: '' }, textContent: '', value: '', disabled: false, checked: false, options: [{ textContent: '' }], children: [], appendChild(c) { this.children.push(c); }, querySelector: () => null, addEventListener() {} });
+  for (const id of ['lockbox-block', 'lockbox-mode', 'lockbox-help', 'lockbox-env', 'lockbox-env-row', 'lockbox-log-title', 'lockbox-log']) els[id] = el();
+  els['lockbox-block'].style.display = 'none';   // as the page starts
+  return { els, el, document: { getElementById: (id) => els[id] || (els[id] = el()), createElement: () => el(), querySelector: () => null, querySelectorAll: () => [] } };
+}
+const reply = (status, body) => ({ ok: status >= 200 && status < 300, status, json: async () => { if (body === undefined) throw new SyntaxError('not JSON'); return body; } });
+const okStatus = { ok: true, host: { ok: true, landlockAbi: 8 }, default: 'off', agents: [{ name: 'sam', setting: 'inherit', mode: 'off', coverage: 'covered' }] };
+const memberMe = { user: { id: 'u_sam', role: 'member' }, isAdmin: false };
+
+/** routes: url prefix -> () => reply | throw. calls: every url asked for. */
+function lockboxLoader(routes, page = lockboxPage(), extra = '') {
+  const html = read('agent-settings.html');
+  const a = html.indexOf('// lockbox:begin'), b = html.indexOf('async function saveLockbox()');
+  assert.ok(a > 0 && b > a, 'the loader is there');
+  const calls = [];
+  const answer = async (url) => {
+    calls.push(url);
+    const key = Object.keys(routes).find(k => url.startsWith(k));
+    if (!key) throw new Error('unexpected ' + url);
+    return routes[key]();
+  };
+  const ctx = vm.createContext({
+    agentName: 'sam', document: page.document, encodeURIComponent,
+    fetch: answer,
+    apiFetch: async (url) => (await answer(url)).json(),
+  });
+  vm.runInContext(html.slice(a, b) + extra + '\nthis.load = loadLockbox; this.alone = loadLockboxRow;', ctx);
+  return { ctx, load: ctx.load, alone: ctx.alone, els: page.els, calls };
+}
+const watchOk = () => reply(200, { entries: [] });
+
+test('agent page: an admin always sees the lockbox row; a failed check says why instead of hiding it', async () => {
+  let t = lockboxLoader({ '/api/lockbox/status': () => reply(200, okStatus), '/api/lockbox/watch': watchOk });
+  await t.load({ name: 'sam' });
+  assert.strictEqual(t.els['lockbox-block'].style.display, '');
+  assert.strictEqual(t.els['lockbox-mode'].disabled, false);
+  assert.strictEqual(t.els['lockbox-help'].textContent, 'Commands run as they do today.');
+  assert.ok(t.calls.some(u => u.startsWith('/api/lockbox/watch')));
+
+  const cases = [
+    [() => reply(500, { error: 'boom' }), null, /your Maestro answered 500 \(boom\)\. Reload this page\./],
+    [() => reply(502, undefined), null, /your Maestro answered 502\. Reload this page\./],
+    [() => { throw new Error('network down'); }, null, /no answer from your Maestro/],
+    [() => reply(200, undefined), null, /answer could not be read/],
+    [() => reply(200, {}), null, /answer could not be read/],
+    [() => reply(401, { error: 'totp_required' }), null, /still needs its two-factor code/],
+    [() => reply(401, { error: 'unauthorized' }), null, /you are signed out/],
+    [() => reply(403, { error: 'forbidden_origin' }), null, /refused the request \(forbidden_origin\)/],
+    [() => reply(403, undefined), null, /only an admin's own browser sign-in/],
+    [() => reply(403, { error: 'admin_only' }), () => reply(200, { user: { id: 'u1' }, isAdmin: true }), /only an admin's own browser sign-in/],
+    [() => reply(403, { error: 'admin_only' }), () => { throw new Error('down'); }, /only an admin's own browser sign-in/],
+    [() => reply(403, { error: 'admin_only' }), () => reply(401, { error: 'unauthorized' }), /only an admin's own browser sign-in/],
+    [() => reply(403, { error: 'admin_only' }), () => reply(500, undefined), /only an admin's own browser sign-in/],
+    [() => reply(404, { error: 'not found' }), null, /older version without it\. A restart loads it\./],
+  ];
+  for (const [status, me, why] of cases) {
+    const routes = { '/api/lockbox/status': status, '/api/lockbox/watch': watchOk };
+    if (me) routes['/api/me'] = me;
+    t = lockboxLoader(routes);
+    await t.load({ name: 'sam' });
+    const label = String(why);
+    assert.strictEqual(t.els['lockbox-block'].style.display, '', label + ': the row shows');
+    assert.strictEqual(t.els['lockbox-mode'].disabled, true, label + ': nothing to change');
+    assert.match(t.els['lockbox-help'].textContent, why);
+    assert.strictEqual(t.els['lockbox-env-row'].style.display, 'none');
+    assert.strictEqual(t.els['lockbox-log-title'].style.display, 'none');
+    assert.ok(!t.calls.some(u => u.startsWith('/api/lockbox/watch')), label + ': no log is asked for');
+  }
+});
+
+test('agent page: a member gets no lockbox row; a later good check brings the control back', async () => {
+  const page = lockboxPage();
+  let t = lockboxLoader({ '/api/lockbox/status': () => reply(403, { error: 'admin_only' }), '/api/me': () => reply(200, memberMe) }, page);
+  await t.load({ name: 'sam' });
+  assert.strictEqual(t.els['lockbox-block'].style.display, 'none');
+  assert.ok(t.calls.includes('/api/me'));
+  // the same page: a failed check, then a good one
+  t = lockboxLoader({ '/api/lockbox/status': () => reply(500, { error: 'boom' }) }, page);
+  await t.load({ name: 'sam', lockbox: 'watch' });
+  assert.strictEqual(page.els['lockbox-mode'].disabled, true);
+  t = lockboxLoader({ '/api/lockbox/status': () => reply(200, okStatus), '/api/lockbox/watch': watchOk }, page);
+  await t.load({ name: 'sam', lockbox: 'watch' });
+  assert.strictEqual(page.els['lockbox-block'].style.display, '');
+  assert.strictEqual(page.els['lockbox-mode'].disabled, false);
+  assert.strictEqual(page.els['lockbox-log-title'].style.display, '');
+  assert.strictEqual(page.els['lockbox-mode'].value, 'watch');
+  assert.strictEqual(page.els['lockbox-env-row'].style.display, '');
+});
+
+test('agent page: an answer for an older load never overwrites a newer one', async () => {
+  let release;
+  const slow = new Promise(r => { release = r; });
+  let n = 0;
+  const t = lockboxLoader({
+    '/api/lockbox/status': () => (++n === 1 ? slow.then(() => reply(500, { error: 'old' })) : reply(200, okStatus)),
+    '/api/lockbox/watch': watchOk,
+  });
+  const first = t.load({ name: 'sam' });
+  await t.load({ name: 'sam', lockbox: 'watch' });
+  release();
+  await first;
+  assert.strictEqual(t.els['lockbox-mode'].disabled, false);
+  assert.strictEqual(t.els['lockbox-mode'].value, 'watch');
+  assert.doesNotMatch(t.els['lockbox-help'].textContent, /old/);
+});
+
+test('agent page: the lockbox row loads at page start on its own, never from the model list', () => {
+  const html = read('agent-settings.html');
+  const lm = html.slice(html.indexOf('  async function loadModels() {'), html.indexOf('  // Vendor from the model id prefix'));
+  assert.ok(lm.length > 500, 'loadModels is there');
+  assert.doesNotMatch(lm, /loadLockbox/, 'the model list never decides the lockbox row');
+  const init = html.slice(html.indexOf('  // ── Init ──'));
+  assert.match(init, /\n  loadLockboxRow\(\);/, 'the row is loaded at page start, not after await loadModels()');
+  assert.ok(init.indexOf('loadLockboxRow();') < init.indexOf('loadFiles();'));
+});
+
+test('agent page: the row takes the setting from a good agent answer, and says so when there is none', async () => {
+  const record = { name: 'sam', lockbox: 'enforce' };
+  let t = lockboxLoader({ '/api/agents': () => reply(200, { agents: [record] }), '/api/lockbox/status': () => reply(200, okStatus), '/api/lockbox/watch': watchOk });
+  await t.alone();
+  assert.strictEqual(t.els['lockbox-block'].style.display, '');
+  assert.strictEqual(t.els['lockbox-mode'].disabled, false);
+  assert.strictEqual(t.els['lockbox-mode'].value, 'enforce');
+  for (const agents of [() => reply(503, { error: 'unavailable' }), () => reply(502, undefined), () => reply(200, { agents: [] }), () => { throw new Error('down'); }]) {
+    t = lockboxLoader({ '/api/agents': agents, '/api/lockbox/status': () => reply(200, okStatus), '/api/lockbox/watch': watchOk });
+    await t.alone();
+    assert.strictEqual(t.els['lockbox-block'].style.display, '');
+    assert.strictEqual(t.els['lockbox-mode'].disabled, true, 'never a guessed setting');
+    assert.match(t.els['lockbox-help'].textContent, /this agent's settings could not be loaded/);
+    assert.ok(!t.calls.includes('/api/lockbox/status'));
+  }
+});
+
+test('agent page: while the answers are on their way the row says it is checking, with nothing to change', async () => {
+  let release;
+  const t = lockboxLoader({ '/api/agents': () => new Promise(r => { release = r; }), '/api/lockbox/status': () => reply(200, okStatus), '/api/lockbox/watch': watchOk });
+  const p = t.alone();
+  await new Promise(r => setImmediate(r));
+  assert.strictEqual(t.els['lockbox-block'].style.display, '');
+  assert.strictEqual(t.els['lockbox-mode'].disabled, true);
+  assert.strictEqual(t.els['lockbox-help'].textContent, 'Checking the command lockbox…');
+  release(reply(200, { agents: [{ name: 'sam', lockbox: 'watch' }] }));
+  await p;
+  for (let i = 0; i < 10; i++) await new Promise(r => setImmediate(r));
+  assert.strictEqual(t.els['lockbox-mode'].disabled, false);
+  assert.strictEqual(t.els['lockbox-mode'].value, 'watch');
+});
+
+test('agent page: a late agent answer, a late /api/me answer and a late log never undo a newer load', async () => {
+  // the page-start lookup answers after a newer load finished
+  let releaseAgents;
+  let t = lockboxLoader({ '/api/agents': () => new Promise(r => { releaseAgents = r; }), '/api/lockbox/status': () => reply(200, okStatus), '/api/lockbox/watch': watchOk });
+  const row = t.alone();
+  await t.load({ name: 'sam', lockbox: 'watch' });
+  releaseAgents(reply(503, { error: 'unavailable' }));
+  await row;
+  assert.strictEqual(t.els['lockbox-mode'].disabled, false);
+  assert.strictEqual(t.els['lockbox-mode'].value, 'watch');
+  // a member check that answers after a newer good load
+  let releaseMe, n = 0;
+  t = lockboxLoader({ '/api/lockbox/status': () => (++n === 1 ? reply(403, { error: 'admin_only' }) : reply(200, okStatus)),
+    '/api/me': () => new Promise(r => { releaseMe = r; }), '/api/lockbox/watch': watchOk });
+  const first = t.load({ name: 'sam' });
+  for (let i = 0; i < 5 && !releaseMe; i++) await new Promise(r => setImmediate(r));
+  await t.load({ name: 'sam', lockbox: 'watch' });
+  releaseMe(reply(200, memberMe));
+  await first;
+  assert.strictEqual(t.els['lockbox-block'].style.display, '');
+  assert.strictEqual(t.els['lockbox-mode'].disabled, false);
+  // an older load's log that answers after a newer load's log
+  let releaseLog, m = 0;
+  t = lockboxLoader({ '/api/lockbox/status': () => reply(200, okStatus),
+    '/api/lockbox/watch': () => (++m === 1 ? new Promise(r => { releaseLog = r; }) : reply(200, { entries: [] })) });
+  await t.load({ name: 'sam' });
+  await t.load({ name: 'sam' });
+  for (let i = 0; i < 5; i++) await new Promise(r => setImmediate(r));
+  const before = t.els['lockbox-log'].children.length;
+  releaseLog(reply(200, { entries: [] }));
+  for (let i = 0; i < 5; i++) await new Promise(r => setImmediate(r));
+  assert.strictEqual(t.els['lockbox-log'].children.length, before, 'the older log adds nothing');
+});
+
 test('agent page: the control, the log and the save are wired, nothing from the log goes in as HTML, and it wraps at 360 px', () => {
   const html = read('agent-settings.html');
   assert.match(html, /<select id="lockbox-mode" onchange="saveLockbox\(\)">/);

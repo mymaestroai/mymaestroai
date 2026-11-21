@@ -41,12 +41,11 @@ function make(over = {}) {
 const settle = () => new Promise(r => setImmediate(r));
 
 test('mobile.html: the menu has "↻ Reload app" after Open full UI and Use the full site, always shown (no chat-only)', () => {
-  const i = html.indexOf('<a href="/?desktop=once">Open full UI</a>');
+  // phone-menu reorder: Reload app is in the top group (after Files, before Profile); the desktop links sit under Advanced > Other views
+  const i = html.indexOf('<button id="menu-reload">&#x21BB; Reload app</button>');
   assert.ok(i > 0);
-  const rest = html.slice(i).split('\n');
-  assert.strictEqual(rest[1].trim(), '<a id="use-full-site" href="/?desktop=1">Use the full site</a>');
-  assert.strictEqual(rest[2].trim(), '<button id="menu-reload">&#x21BB; Reload app</button>');
-  assert.doesNotMatch(rest[2], /chat-only/);
+  assert.ok(i > html.indexOf('id="menu-files"') && i < html.indexOf('id="menu-profile"') && i < html.indexOf('id="menu-adv"'));
+  assert.doesNotMatch(html.slice(i, html.indexOf('\n', i)), /chat-only/);
 });
 
 test('wire(): the menu entry click is wired with ?. , closes the menu and calls reloadApp', () => {

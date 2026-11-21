@@ -14,7 +14,7 @@ test('mobile.html links the manifest and has the two tabs; Activity is in the â‹
   assert.deepStrictEqual([...bar.matchAll(/<button id="(tab-[a-z]+)"/g)].map(m => m[1]), ['tab-agents', 'tab-chat'], 'Agents and Chat only: Activity was easy to tap by accident');
   const menu = html.slice(html.indexOf('<div id="menu">'), html.indexOf('</div>', html.indexOf('id="menu-restart"')));
   assert.ok(menu.includes('<a id="menu-activity" href="#activity"><span>&#x26A1; Activity</span><span class="menu-count" id="act-unread"></span></a>'), 'Activity, with its count of new events: a plain #activity link, which a script from before the move follows too');
-  assert.ok(menu.indexOf('id="menu-activity"') < menu.indexOf('id="menu-files"'));
+  assert.ok(menu.indexOf('id="menu-activity"') > menu.indexOf('id="menu-files"'));   // phone-menu reorder: Files is in the top group, Activity under Advanced > Tools
   assert.ok(html.includes('</nav>\n  <!-- Activity moved into the â‹® menu.') && html.includes('<button id="tab-activity" hidden aria-hidden="true" tabindex="-1"></button>'), 'an invisible stand-in for scripts from before the move, outside the bar');
   assert.ok(html.includes('src="mobile.js"'));
   const js = read('mobile.js');

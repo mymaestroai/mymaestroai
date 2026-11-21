@@ -394,7 +394,8 @@ test('voiceRecResendPending: a piece a live recorder is still sending is left al
 for (const [name, file] of [['desktop', 'app.js'], ['phone', 'mobile.js']]) {
   test(`${name} page: pieces are resent after sign-in is known and when a call starts; a page being hidden or closed sends the open segment`, () => {
     const src = read(file);
-    const me = src.slice(src.indexOf('async function loadMe()'), src.indexOf('async function loadMe()') + 1200);
+    // window widened 1200 -> 1800: the look loader line added to loadMe pushed the resend call further down (same code, same order)
+    const me = src.slice(src.indexOf('async function loadMe()'), src.indexOf('async function loadMe()') + 1800);
     assert.match(me, /voiceRecResendPending\(/, 'after /api/me says who is signed in');
     assert.match(src, /voiceRecFlushOpen/);
     assert.match(src, /if \(document\.hidden\) \{ voiceRecFlushOpen\(\); return; \}|try \{ voiceRecFlushOpen\(\); \} catch/, 'hidden: the open segment is sent (inside the one visibility handler)');

@@ -307,7 +307,8 @@ test('banner levels: critical is red and cannot be dismissed; warnings are dark 
   p.result = { items: [{ id: 'node', level: 'critical', title: 'Node.js misses fixes' }, W('totp')] };
   await ctx.paint();
   assert.strictEqual(bar().dataset.level, 'critical');
-  assert.match(bar().style.cssText, /#7a1212/);
+  // looks-vars: the banner colour is now var(--banner-critical-bg), defined in index.html :root as #7a1212 (same value, spelled as a variable)
+  assert.match(bar().style.cssText, /var\(--banner-critical-bg\)/);
   assert.ok(!/Dismiss/.test(bar().innerHTML), 'critical has no dismiss button');
   assert.strictEqual(bar().x, null);
   ctx.dismiss();
@@ -317,7 +318,8 @@ test('banner levels: critical is red and cannot be dismissed; warnings are dark 
   p.result = { items: [W('totp'), W('approvals'), W('ok1', 'ok')] };
   await ctx.paint();
   assert.strictEqual(bar().dataset.level, 'warn');
-  assert.match(bar().style.cssText, /#8a6a00/);
+  // looks-vars: var(--banner-warn-bg) is #8a6a00 in :root (same value)
+  assert.match(bar().style.cssText, /var\(--banner-warn-bg\)/);
   assert.match(bar().innerHTML, /2 warnings to review/);
   assert.strictEqual(bar().dataset.key, 'approvals,totp');
   assert.doesNotMatch(bar().innerHTML, /onclick="dismiss/, 'no handler built into the HTML');

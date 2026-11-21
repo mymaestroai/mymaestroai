@@ -148,9 +148,13 @@ test('the per-device setting: hub-fold-auto key, default on, menu item wired', (
 });
 
 test('CSS: kind colours, left border, stack, from line', () => {
-  assert.match(html, /\.auto-card-consult \{[^}]*#8b6fd6/);
-  assert.match(html, /\.auto-card-schedule \{[^}]*#c9a227/);
-  assert.match(html, /\.auto-card-notice \{[^}]*#8a8a85/);
+  // looks-vars: the colours moved into :root variables (same values); each rule uses the variable and :root keeps the old literal
+  assert.match(html, /\.auto-card-consult \{[^}]*var\(--consult\)/);
+  assert.match(html, /--consult:\s*#8b6fd6;/);
+  assert.match(html, /\.auto-card-schedule \{[^}]*var\(--caution\)/);
+  assert.match(html, /--caution:\s*#c9a227;/);
+  assert.match(html, /\.auto-card-notice \{[^}]*var\(--notice-grey\)/);
+  assert.match(html, /--notice-grey:\s*#8a8a85;/);
   assert.match(html, /border-left: 3px solid/);
   assert.match(html, /\.auto-stack/);
   assert.match(html, /\.auto-from \{/);
