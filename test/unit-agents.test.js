@@ -60,6 +60,20 @@ test('first run: no agents.json seeds from agents.example.json, else a default m
   assert.strictEqual(b.readJson()[0].name, 'maestro');
 });
 
+test('first run: every seeded agent gets its own box id, so a hand-off of an earlier agent of that name is never taken for it', () => {
+  const a = load({ example: [{ name: 'zed', model: 'm1' }, { name: 'abe' }] });
+  a.ag.getAgentsSync();   // the first read seeds
+  const recs = a.readJson();
+  for (const r of recs) assert.match(String(r.box || ''), /^[0-9a-f]{12}$/, r.name);
+  assert.notStrictEqual(recs[0].box, recs[1].box);
+  assert.strictEqual(a.ag.agentIdentity('zed'), `box:${recs[0].box}`);
+  const b = load();
+  b.ag.getAgentsSync();
+  assert.match(String(b.readJson()[0].box || ''), /^[0-9a-f]{12}$/, 'the default maestro too');
+  assert.strictEqual(a.ag.sameAgentIdentity('name:zed', a.ag.agentIdentity('zed')), false, 'not the earlier box-less zed');
+  assert.strictEqual(a.ag.sameAgentIdentity('rec:' + 'b'.repeat(64), a.ag.agentIdentity('zed')), false);
+});
+
 test('a corrupt agents.json is never overwritten: the file is left for a human, the .bak copy is used if present, else an empty list', () => {
   const a = load({ agents: '{ not json' });
   const errs = []; const orig = console.error; console.error = (...x) => errs.push(x.join(' '));

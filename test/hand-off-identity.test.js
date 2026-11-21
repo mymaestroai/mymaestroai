@@ -202,16 +202,68 @@ test('a record from before the update (an older stamp) keeps working after a mod
   assert.strictEqual(env3.notices.filter(n => n.id === v2.id).length, 1);
 });
 
+test('review r1: access lost after the target replied: the hand-off ends and the caller gets no word of what the target wrote', async () => {
+  let allowed = true;
+  const env = setup({ mayTarget: async () => allowed });
+  const v = await env.h.create({ caller: 'sam', target: 'lead', topic: 'Tidy the list', brief: 'Do it' });
+  await env.h.tick();
+  env.continuations.add(v.id);
+  env.turns[0].finish('PRIVATE FIGURES 4411'); await flush();
+  allowed = false;   // the owner stops sam from reaching lead
+  assert.strictEqual(await env.h.mayContinue(v.id, 'lead'), false);
+  await settle(env);
+  assert.strictEqual(env.delivered.length, 1);
+  assert.match(env.delivered[0].message, /^\[Hand-off interrupted\] .*because agent "sam" may no longer hand work to "lead"\./);
+  assert.ok(!env.delivered[0].message.includes('PRIVATE FIGURES'), 'none of the target\'s words');
+});
+
+test('review r1: a finished report waiting for delivery when access is lost goes without the target\'s words; an access check that fails waits', async () => {
+  let allowed = true, broken = false;
+  const env = setup({ mayTarget: async () => { if (broken) throw new Error('accounts unreadable'); return allowed; } });
+  let busy = true;
+  env.opts.deliver = async (agent, message, meta) => { if (busy) throw new Error('busy'); env.delivered.push({ agent, message, meta }); };
+  env.h = new HandOffs(env.opts);
+  const v = await env.h.create({ caller: 'sam', target: 'lead', topic: 'Tidy the list', brief: 'Do it' });
+  await env.h.tick();
+  env.turns[0].finish('PRIVATE FIGURES 4411'); await flush();
+  await settle(env);
+  assert.strictEqual(env.h.get(v.id).state, 'done');
+  assert.strictEqual(env.delivered.length, 0, 'the caller was busy');
+  busy = false; broken = true;
+  env.t += 60000; await env.h.tick(); await flush();
+  assert.strictEqual(env.delivered.length, 0, 'no answer on access: tried again later, not sent');
+  assert.strictEqual(env.h.get(v.id).report.state, 'pending');
+  broken = false; allowed = false;
+  env.t += 60000; await env.h.tick(); await flush();
+  assert.strictEqual(env.delivered.length, 1);
+  assert.match(env.delivered[0].message, /^\[Hand-off ended\] "Tidy the list" \(id ho-[0-9a-f]+\): agent "sam" may no longer hand work to "lead", so what agent "lead" replied is not passed on\.$/);
+  assert.strictEqual(env.h.get(v.id).result, null, 'not kept for a later delivery either');
+});
+
+test('review r1: the owner notice is told once and records how many devices it reached', async () => {
+  const env = setup({ notifyOwner: async (r, why) => { env.notices.push({ id: r.id, why }); return { sent: 2 }; } });
+  const v = await env.h.create({ caller: 'sam', target: 'lead', topic: 'Tidy the list', brief: 'Do it' });
+  await env.h.tick();
+  env.recs.sam = { name: 'sam', box: '5e5e5e5e5e' };
+  env.turns[0].finish('done'); await flush();
+  await settle(env); await settle(env);
+  assert.strictEqual(env.notices.length, 1);
+  assert.strictEqual(env.h.get(v.id).report.ownerTold.sent, 2);
+});
+
 test('the hub wires hand-offs to the identity, its matching rule, the caller\'s owner and the owner notice; other checks keep the strict stamp', () => {
   const sdk = read('lib/sdk-chat.js');
   const factory = sdk.slice(sdk.indexOf('function getHandOffRunner() {'), sdk.indexOf("voiceCall.registerProducer('hand_off'"));
   assert.match(factory, /stampOf: \(name\) => require\('\.\/agents'\)\.agentIdentity\(name\),/);
   assert.match(factory, /sameAgent: \(stored, now\) => require\('\.\/agents'\)\.sameAgentIdentity\(stored, now\),/);
   assert.match(factory, /ownerOf: \(name\) =>/);
-  assert.match(factory, /notifyOwner: \(r, why\) =>/);
-  assert.match(factory, /push\.notifyUsers\(payload, \[r\.callerOwner\], \{ kind: 'other' \}\)/);
+  assert.match(factory, /notifyOwner: async \(r, why\) =>/);
+  assert.match(factory, /await push\.notifyUsers\(payload, \[r\.callerOwner\], \{ kind: 'other' \}\)/);
   assert.match(factory, /push\.notify\(payload, \{ adminsOnly: true, kind: 'other' \}\)/);
   assert.ok(!factory.includes('agentStamp('), 'hand-offs no longer use the whole-record stamp');
+  const notice = factory.slice(factory.indexOf('notifyOwner: async'), factory.indexOf('mayTarget:'));
+  assert.ok(!/r\.topic/.test(notice), 'the phone notice names agents only, never the topic');
+  assert.match(notice, /if \(sent\) return \{ sent \};\n\s+\}\n\s+const a = await push\.notify\(payload, \{ adminsOnly: true, kind: 'other' \}\);/, 'the admins when no member device got it');
   for (const f of ['lib/behaviour-switch.js', 'lib/model-offer-switch.js', 'lib/connector-access.js']) assert.match(read(f), /agentStamp\(name\)/, f);
   assert.strictEqual(typeof stampOf, 'function');
 });
