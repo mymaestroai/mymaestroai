@@ -10,9 +10,12 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
+// lib/ comes from a throwaway install, so nothing under the real data/ is touched.
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('memctx-iso-');
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'memctx-'));
-process.env.HUB_MEMORY_DB = path.join(tmp, 'memory.db');
-const mem = require('../lib/memory-db');
+process.env.HUB_MEMORY_DB = path.join(tmp, 'memory.db');   // after the helper, which clears HUB_*_DB
+const mem = require(path.join(ISO.lib, 'memory-db'));
 
 test('oversized general section keeps the newest entries, not the oldest', () => {
   const lines = [];

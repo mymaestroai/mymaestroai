@@ -113,10 +113,11 @@ test('the manifest, setup and check load through the hub loader', () => {
   assert.deepStrictEqual(mf.tools, {
     computers: 'read', info: 'read', screenshot: 'read', run: 'write', click: 'write', type: 'write', key: 'write', scroll: 'write',
     health: 'hub', start: 'hub', installer_link: 'hub', computers_status: 'hub',
+    desktop_sessions: 'hub', desktop_open: 'hub', desktop_endpoint: 'hub', desktop_connect: 'hub', desktop_end: 'hub',
   });
   assert.deepStrictEqual(TOOLS.map((t) => t.name).sort(), Object.keys(mf.tools).sort());
   const byKey = Object.fromEntries(mf.settings.map((s) => [s.key, s]));
-  assert.deepStrictEqual(Object.keys(byKey), ['address_name', 'listen_ip', 'control_port', 'agent_port', 'agent_allowed', 'levels', 'no_ask_agents', 'session_minutes', 'run_as', 'service_name']);
+  assert.deepStrictEqual(Object.keys(byKey), ['address_name', 'listen_ip', 'control_port', 'agent_port', 'agent_allowed', 'levels', 'no_ask_agents', 'approval_policy', 'session_minutes', 'run_as', 'service_name', 'desktop_who', 'desktop_minutes', 'desktop_address']);
   assert.strictEqual(byKey.run_as.default, 'auto');
   assert.strictEqual(byKey.service_name.default, 'mymaestro-remote');
   assert.strictEqual(byKey.agent_allowed.default, '100.64.0.0/10');
@@ -127,7 +128,7 @@ test('the manifest, setup and check load through the hub loader', () => {
   assert.strictEqual(byKey.session_minutes.default, 30);
   assert.deepStrictEqual([byKey.control_port.min, byKey.control_port.max, byKey.agent_port.min, byKey.agent_port.max, byKey.session_minutes.min, byKey.session_minutes.max], [1024, 65535, 1024, 65535, 5, 120]);
   for (const s of mf.settings) assert.ok(s.label && s.help, `${s.key} has a label and help`);
-  assert.deepStrictEqual(safeSettings(mf, {}), { address_name: '', listen_ip: '', control_port: 9971, agent_port: 9972, agent_allowed: '100.64.0.0/10', levels: [], no_ask_agents: [], session_minutes: 30, run_as: 'auto', service_name: 'mymaestro-remote' });
+  assert.deepStrictEqual(safeSettings(mf, {}), { address_name: '', listen_ip: '', control_port: 9971, agent_port: 9972, agent_allowed: '100.64.0.0/10', levels: [], no_ask_agents: [], approval_policy: [], session_minutes: 30, run_as: 'auto', service_name: 'mymaestro-remote', desktop_who: 'admins', desktop_minutes: 30, desktop_address: '' });
   const allowed = (v) => new RegExp(byKey.agent_allowed.pattern).test(v);
   for (const ok of ['100.64.0.0/10', '10.0.0.1', '100.64.0.0/10, 192.168.0.5', '1.2.3.4/32,5.6.7.8/0']) assert.ok(allowed(ok), ok);
   for (const bad of ['', 'hub', '100.64.0.256', '100.64.0.0/33', '100.64.0.0/', '1.2.3.4,', '1.2.3.4;5.6.7.8', '::1']) assert.ok(!allowed(bad), bad);

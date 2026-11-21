@@ -8,14 +8,20 @@ const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
 const { EventEmitter } = require('events');
-const manifestLib = require('../lib/modules/manifest');
-const installer = require('../lib/modules/installer');
-const { createModules } = require('../lib/modules');
-const { createConnectors } = require('../lib/connectors');
-const { createApprovals } = require('../lib/approvals');
-const { HUB_HOME } = require('../lib/hub-home');
+// lib/ comes from a throwaway install, so nothing under the real data/ is touched.
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('modules-h-iso-');
+const L = (p) => require(path.join(ISO.lib, p));
+const manifestLib = L('modules/manifest');
+const installer = L('modules/installer');
+const { createModules } = L('modules');
+const { createConnectors } = L('connectors');
+const { createApprovals } = L('approvals');
+const { HUB_HOME } = L('hub-home');
+/** An allow also carries dayEnds (the owner's next midnight); the rest of the answer is compared as before. */
+const noDay = (r) => { assert.ok(Number.isFinite(r.dayEnds) && r.dayEnds > 0, 'an allow carries dayEnds'); const { dayEnds, ...rest } = r; return rest; };
 
-const GUARD = path.join(__dirname, '..', 'lib', 'modules', 'mcp-guard.js');
+const GUARD = path.join(ISO.lib, 'modules', 'mcp-guard.js');
 const HUB_SECRET = 'cd'.repeat(32);
 const tmp = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
 const rm = (d) => fs.rmSync(d, { recursive: true, force: true });
@@ -99,7 +105,7 @@ function rig(o = {}) {
     respond(id, result) { this.responses.push({ id, result }); }
     respondError(id, code, message) { this.errors.push({ id, code, message }); }
   }
-  const cx = createConnectors({ file: path.join(dir, 'connectors.json'), keyFile: path.join(dir, '.auth-key'), McpClient: FakeClient, log: () => {}, unlockTtlMs: 0, baseEnv: { PATH: process.env.PATH }, leadNames: () => ['owner'], ...o });
+  const cx = createConnectors({ file: path.join(dir, 'connectors.json'), keyFile: path.join(dir, '.auth-key'), McpClient: FakeClient, log: () => {}, unlockTtlMs: 0, baseEnv: { PATH: process.env.PATH }, leadNames: () => ['owner'], zone: () => 'UTC', ...o });   // a fixed zone: the default reads the owner's account
   const up = (extra = {}) => cx.upsert({ id: 'rc', label: 'Remote computers', kind: 'mcp', command: process.execPath, args: ['x'], module: 'rc', enabled: true, ...extra }, { byModule: true });
   const tick = async () => { for (let i = 0; i < 8; i++) await new Promise(r => setImmediate(r)); };
   return { cx, dir, all, up, tick, done: () => { cx.shutdown(); rm(dir); } };
@@ -285,7 +291,7 @@ test('R1 connectors: the agent on the card is the hub record of the call; unknow
     const ask = async (cl, params) => { const id = cl.responses.length + cl.errors.length + 1; cl.emit('request', { id, method: 'hub/approve', params }); await r.tick(); clock.t += 16000; return cl.errors.find(e => e.id === id) || cl.responses.find(x => x.id === id); };
     // a name the module sends is ignored: the hub's record of the caller wins
     const ok = await ask(one.client, { call: one.id, agent: 'owner', title: 'Open it' });
-    assert.deepStrictEqual(ok.result, { decision: 'allow' });
+    assert.deepStrictEqual(noDay(ok.result), { decision: 'allow' });
     assert.strictEqual(asked[0].agent, 'sam');
     // no call id, a made-up one, another connector's: refused, nothing reaches the owner
     for (const call of [undefined, 'nope', '00000000-0000-4000-8000-000000000000', two.id]) {
@@ -299,7 +305,7 @@ test('R1 connectors: the agent on the card is the hub record of the call; unknow
     // the id lives 5 seconds after its call returned
     const fresh = await callAs(r, 'sam', 'rc');
     clock.t += 4000;
-    assert.deepStrictEqual((await ask(fresh.client, { call: fresh.id, title: 'again' })).result, { decision: 'allow' });
+    assert.deepStrictEqual(noDay((await ask(fresh.client, { call: fresh.id, title: 'again' })).result), { decision: 'allow' });
     const old = await callAs(r, 'sam', 'rc');
     clock.t += 6000;
     const gone = await ask(old.client, { call: old.id, title: 'late' });
@@ -325,7 +331,7 @@ test('R1 connectors: an agent that lost access cannot ask; a running call keeps 
     const live = cl.calls[cl.calls.length - 1].args.__call;
     clock.t += 100000;   // inside the callTimeout + 60 s ceiling
     cl.emit('request', { id: 1, method: 'hub/approve', params: { call: live, title: 'during' } }); await r.tick();
-    assert.deepStrictEqual(cl.responses[0].result, { decision: 'allow' }, 'a long call keeps its id while it runs');
+    assert.deepStrictEqual(noDay(cl.responses[0].result), { decision: 'allow' }, 'a long call keeps its id while it runs');
     release(); await slow;
     clock.t += 16000;
     cl.emit('request', { id: 2, method: 'hub/approve', params: { call: live, title: 'after' } }); await r.tick();
@@ -349,7 +355,7 @@ test('R1 connectors: a lead that stopped being lead (no grant) is refused at app
     assert.strictEqual(asked.length, 0);
     leads.push('owner');
     cl.emit('request', { id: 2, method: 'hub/approve', params: { call, title: 'back' } }); await r.tick();
-    assert.deepStrictEqual(cl.responses[0].result, { decision: 'allow' });
+    assert.deepStrictEqual(noDay(cl.responses[0].result), { decision: 'allow' });
   } finally { r.done(); }
 });
 
@@ -506,7 +512,7 @@ test('H2 approvals: a module request uses its own wait, shows on the hub event s
     await r.tick();
     assert.ok(ap.resolve(ap.list()[0].id, 'allow').ok);
     await r.tick();
-    assert.deepStrictEqual(cl.responses[1].result, { decision: 'allow' });
+    assert.deepStrictEqual(noDay(cl.responses[1].result), { decision: 'allow' });
   } finally { r.done(); }
 });
 
@@ -520,7 +526,7 @@ test('H2 approvals: request() without a timeout option keeps the settings window
 
 test('H2 push: a module request reaches the phone and names the module and the agent', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
-  const { createPush, QUESTION_DELAY_MS } = require('../lib/push');
+  const { createPush, QUESTION_DELAY_MS } = L('push');
   const dir = tmp('hub-hp-'); const sent = [];
   try {
     const push = createPush({ dir, now: () => 1_000_000, minGapMs: 20000, displayName: (a) => ({ sam: 'Sam' }[a] || a),
@@ -804,14 +810,17 @@ test('R1 installer and modules: a second Install while one runs is refused', asy
 
 // ---- H5: backups ----
 test('H5 backup rules: runtime/ and pkg/ of a module are left out, everything else under data/modules stays', () => {
-  const { DATA_LEAVE_OUT } = require('../lib/backup/collect');
+  const { DATA_LEAVE_OUT } = L('backup/collect');
   const out = (rel) => DATA_LEAVE_OUT.some(re => re.test(rel));
   for (const rel of ['modules/demo/runtime', 'modules/demo/runtime/node_modules/a/index.js', 'modules/demo/pkg', 'modules/demo/pkg/node_modules/x/package.json', 'modules/my-mod/runtime/package.json']) assert.ok(out(rel), rel);
   for (const rel of ['modules', 'modules/demo', 'modules/demo/home/keys.json', 'modules/demo/audit.jsonl', 'modules/demo/usage.json', 'modules/demo/runtime-notes.txt', 'modules/demo/home/runtime/x', 'modules/demo/pkgs/x', 'modules.json', 'runtime/x']) assert.ok(!out(rel), rel);
+  // the speech engine's downloads (binaries, models, browser files, markers) are left out; lookalikes are not
+  for (const rel of ['voice', 'voice/node_modules/sherpa-onnx-node/package.json', 'voice/models/whisper-tiny.en/x.onnx', 'voice/state.json', 'voice/.done/a.json']) assert.ok(out(rel), rel);
+  for (const rel of ['voices.json', 'voice.json', 'voices/x', 'modules/demo/home/voice/x', 'agents/voice/x']) assert.ok(!out(rel), rel);
 });
 
 test('H5 snapshot: a real data tree keeps module homes and state and drops the installs', async () => {
-  const collect = require('../lib/backup/collect');
+  const collect = L('backup/collect');
   const dir = tmp('hub-h5-');
   try {
     const root = path.join(dir, 'app'); const hubHome = path.join(dir, 'hh'); const home = path.join(dir, 'home');

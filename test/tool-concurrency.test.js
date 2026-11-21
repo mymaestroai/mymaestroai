@@ -5,9 +5,13 @@ const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
 
-const tc = require('../lib/tool-concurrency');
-const sdkChat = require('../lib/sdk-chat');
-const workerPolicy = require('../lib/worker-policy');
+// lib/ comes from a throwaway install, so nothing under the real data/ is touched.
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('tool-concurrency-iso-');
+const L = (p) => require(path.join(ISO.lib, p));
+const tc = L('tool-concurrency');
+const sdkChat = L('sdk-chat');
+const workerPolicy = L('worker-policy');
 
 const EXPECTED = ['consult_agent', 'spawn_workers', 'list_agents', 'read_memory', 'read_session_notes', 'read_shared_memory',
   'search_shared_memory', 'run_job', 'job_status', 'job_cancel', 'list_jobs',

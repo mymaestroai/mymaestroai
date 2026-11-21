@@ -249,3 +249,13 @@ test('a card at the very end of history', () => {
   assert.deepEqual(promptOnly[1].indexes, [1]);
   assert.deepEqual(autoGroupHistory([]), []);
 });
+
+test('an interjection line is not an automatic turn and ends a card like a question line', () => {
+  const ij = u('[OPERATOR INTERJECTION]: hurry', { interjection: { id: 'ij-1' } });
+  assert.equal(autoInfoOf(ij), null);
+  assert.equal(autoInfoOf(u('[Consultation from agent "lead"]\n\nx', { interjection: { id: 'ij-2' } })), null);
+  const h = [consult(), a('Working. '), ij, a('Rest.', { base: 9 })];
+  const items = autoGroupHistory(h);
+  assert.deepEqual(items.map(i => i.type), ['card', 'entry', 'entry'], 'the card ends before the interjection; it and the rest of the reply are plain entries');
+  assert.deepEqual(items[0].indexes, [0, 1]);
+});

@@ -432,9 +432,9 @@ test('server: installer_link needs the tailnet name', async () => {
   assert.match(r.error, /tailnet name/);
 });
 
-test('server: computers_status lists names, systems and online state without an agent', async () => {
+test('server: computers_status lists node ids, names, systems and online state without an agent (the id opens a desktop)', async () => {
   const s = newRemote({ nodes: { 'mesh//g1': [{ _id: 'node//Abcdefghijkl0123456789', name: 'demo-pc', osdesc: 'Windows 11', conn: 1 }, { _id: 'node//Bcdefghijklm9876543210', name: 'Laptop', osdesc: 'Windows 10', conn: 0 }] } });
-  assert.deepStrictEqual(await s.tool('computers_status'), [{ name: 'demo-pc', os: 'Windows 11', online: true }, { name: 'Laptop', os: 'Windows 10', online: false }]);
+  assert.deepStrictEqual(await s.tool('computers_status'), [{ nodeid: 'node//Abcdefghijkl0123456789', name: 'demo-pc', os: 'Windows 11', online: true }, { nodeid: 'node//Bcdefghijklm9876543210', name: 'Laptop', os: 'Windows 10', online: false }]);
 });
 
 test('server: the sessions cookies are read from a login reply', () => {

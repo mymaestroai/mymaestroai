@@ -90,7 +90,8 @@ test('mobile: a Files menu item for everyone opens a Files sheet with the same a
   assert.ok(mjs.includes("if (agent) q.set('agent', agent);") && mjs.includes("function filesUrl(route, params, agent = filesState.agent)"), 'list/upload/download/delete URLs carry agent=');
   assert.ok(mjs.includes("filesApi(filesUrl('', { path: filesState.path }))"), 'GET /api/files list');
   assert.ok(mjs.includes("xhr.open('POST', filesUrl('/upload', { path: dir, name: file.name, overwrite: overwrite ? '1' : '' }, agent))"), '/api/files/upload with agent=');
-  assert.ok(mjs.includes("window.open(filesUrl('/download', { path: rel }), '_blank')"), '/api/files/download via window.open');
+  // Easier downloads: a file row's Download opens the Save / Share sheet (fetched with the app's own session), no longer a new window.
+  assert.ok(/openDownloadSheet\(\{ url: filesUrl\('\/download', \{ path: rel \}\)/.test(mjs), '/api/files/download through the Save / Share sheet');
   assert.ok(mjs.includes("filesApi(filesUrl('', { path: rel }), { method: 'DELETE' })"), 'DELETE /api/files');
   assert.ok(mjs.includes("...(filesState.agent ? { agent: filesState.agent } : {})"), 'JSON bodies carry agent');
   assert.ok(mjs.includes("filesJson('/api/files/mkdir', { path: filesState.path, name: n })"));
@@ -110,5 +111,5 @@ test('mobile: paperclip accepts any file; non-images upload to the open agent\'s
   assert.ok(mhtml.includes('id="camera-input" accept="image/*"'), 'camera unchanged');
   assert.ok(mjs.includes("if (f.type.startsWith('image/')) addImageFile(f); else uploadFileForChat(f);"));
   assert.ok(mjs.includes("uploadFileToHub(file, '', false, agent)") && mjs.includes("const agent = current || ''; // this chat's agent folder"), 'chat uploads land in the open agent\'s folder');
-  assert.ok(sw.includes("const VERSION = 'hub-mobile-v64';"), 'service worker cache bumped');
+  assert.ok(sw.includes("const VERSION = 'hub-mobile-v70';"), 'service worker cache bumped');
 });

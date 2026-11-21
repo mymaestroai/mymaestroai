@@ -4,9 +4,21 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { createConnectorAccess, runTool, OWNER_ONLY } = require('../lib/connector-access');
+// lib/ comes from a throwaway install, so nothing under the real data/ is touched.
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('connector-access-iso-');
+const L = (p) => require(path.join(ISO.lib, p));
+const { createConnectorAccess, runTool, OWNER_ONLY } = L('connector-access');
 
 const YES = async () => true;
+// A stand-in for agents.agentStamp over a test roster: the box id, else the whole record (as the real one digests it).
+const STAMP = (list) => (n) => {
+  const a = (typeof list === 'function' ? list() : list).find(x => x && x.name === n);
+  if (!a) return null;
+  if (a.box) return `box:${a.box}`;
+  const rest = { ...a }; delete rest.teamGuidance;
+  return `rec:${JSON.stringify(rest)}`;
+};
 
 function rig({ pushThrows = false, auditPath } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'conn-access-'));
@@ -27,7 +39,7 @@ function rig({ pushThrows = false, auditPath } = {}) {
   const auditFile = auditPath || path.join(dir, 'sub', 'connector-access.jsonl');
   const access = createConnectorAccess({
     connectors, modules, agents, leadNames: ['owner'], push, auditFile, now: () => Date.UTC(2026, 10, 6, 12),
-    isMemberOwned: (a) => a.owner === 'member1', isVirtual: (n) => n === 'temp1',
+    isMemberOwned: (a) => a.owner === 'member1', isVirtual: (n) => n === 'temp1', stampOf: STAMP(agents),
   });
   return { access, calls, rows, auditFile, dir, connectors };
 }
@@ -82,7 +94,7 @@ test('audit lines (mode 0600) and one admin notice per change', async () => {
   assert.equal(lines[3].state, 'done');
   assert.equal(fs.statSync(auditFile).mode & 0o777, 0o600);
   assert.equal(calls.push.length, 2);
-  assert.deepEqual(calls.push[0], [{ title: 'Data connector access changed', body: 'owner gave scout access to Notes', url: '/?connectors=1' }, { adminsOnly: true }]);
+  assert.deepEqual(calls.push[0], [{ title: 'Data connector access changed', body: 'owner gave scout access to Notes', url: '/?connectors=1' }, { adminsOnly: true, kind: 'security' }]);   // an access change is a security notice (the "Security and access" setting; it replaced always: true)
   assert.equal(calls.push[1][0].body, "owner removed scout's access to Notes");
 });
 
@@ -180,12 +192,12 @@ test('the owner_turn mark is set on the stream route too, with the same expressi
 });
 
 test('ownerLeadNames: owner-less and admin-owned flagged leads, never a member-owned one, no fallback', () => {
-  const agents = require('../lib/agents');
+  const agents = L('agents');
   const list = [
     { name: 'a1', lead: true }, { name: 'a2', lead: true, owner: 'adm1' }, { name: 'a3', lead: true, owner: 'mem1' },
     { name: 'a4', category: 'primary' }, { name: 'a5', lead: false },
   ];
-  const auth = require('../lib/auth'); const real = auth.getAuth;
+  const auth = L('auth'); const real = auth.getAuth;
   auth.getAuth = () => ({ admins: () => [{ id: 'adm1' }] });
   try {
     assert.deepEqual(agents.ownerLeadNames(list), ['a1', 'a2']);
@@ -273,7 +285,7 @@ function rig2() {
   const leads = ['owner']; const virtual = new Set();
   const access = createConnectorAccess({
     connectors: r.connectors, modules: { setAgents() {} }, agents: () => agentList, leadNames: () => leads, push: { notify: () => Promise.resolve() },
-    auditFile: r.auditFile, isMemberOwned: (a) => a.owner === 'member1', isVirtual: (n) => virtual.has(n),
+    auditFile: r.auditFile, isMemberOwned: (a) => a.owner === 'member1', isVirtual: (n) => virtual.has(n), stampOf: STAMP(() => agentList),
   });
   return { ...r, access, agentList, leads, virtual };
 }
@@ -283,7 +295,7 @@ test('a replaced agent (new box id, same name) or a connector that gained a stam
   const mk = (list, rowsArr) => createConnectorAccess({
     connectors: { list: () => ({ connectors: rowsArr }), setGrants: (id, names) => { rowsArr[0].agents = names; } },
     modules: {}, agents: () => list, leadNames: [], push: { notify: () => Promise.resolve() }, auditFile: path.join(dir, 'a.jsonl'),
-    isMemberOwned: () => false, isVirtual: () => false,
+    isMemberOwned: () => false, isVirtual: () => false, stampOf: STAMP(list),
   });
   const MSG = 'The agent or connector changed while you were answering, so nothing changed.';
   const row = () => [{ id: 'notes', label: 'Notes', tools: { r: { cls: 'read' } }, agents: [], createdAt: 't1' }];
@@ -301,5 +313,76 @@ test('a replaced agent (new box id, same name) or a connector that gained a stam
   list = [{ name: 'scout', box: 'box-1' }]; r = row();
   const d = mk(list, r);
   assert.deepEqual(await d.grant({ connector: 'notes', agent: 'scout', by: 'owner', confirm: YES }), { ok: true, agents: ['scout'] });
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// The roster agents.getAgentsSync() really returns carries no box id, so the replaced-agent check must not read it there:
+// it reads agents.agentStamp (fresh from disk). Each of these grants went through before (both stamps were null).
+function rigProjection(stampOf) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'conn-access-p-'));
+  const rows = [{ id: 'notes', label: 'Notes', tools: { r: { cls: 'read' } }, agents: [], createdAt: 't1' }];
+  const roster = [{ name: 'owner' }, { name: 'scout', category: 'specialist' }];   // like the projection: no box
+  const access = createConnectorAccess({
+    connectors: { list: () => ({ connectors: rows }), setGrants: (id, names) => { rows[0].agents = names; } },
+    modules: {}, agents: () => roster, leadNames: ['owner'], push: { notify: () => Promise.resolve() }, auditFile: path.join(dir, 'a.jsonl'),
+    isMemberOwned: () => false, isVirtual: () => false, stampOf,
+  });
+  return { access, rows, dir, done: () => fs.rmSync(dir, { recursive: true, force: true }) };
+}
+
+test('replaced agent: a re-made agent of the same name is caught from its stamp on disk, not from the roster (which has no box id)', async () => {
+  let box = 'box-1';
+  const r = rigProjection((n) => (n === 'scout' ? `box:${box}` : null));
+  await assert.rejects(r.access.grant({ connector: 'notes', agent: 'scout', by: 'owner', confirm: async () => { box = 'box-2'; return true; } }),
+    { message: 'The agent or connector changed while you were answering, so nothing changed.' });
+  assert.deepEqual(r.rows[0].agents, []);
+  box = 'box-1';
+  assert.deepEqual(await r.access.grant({ connector: 'notes', agent: 'scout', by: 'owner', confirm: YES }), { ok: true, agents: ['scout'] });
+  r.done();
+});
+
+test('replaced agent: no readable stamp (no record on disk, or the read fails) refuses the change before and after the answer', async () => {
+  const r1 = rigProjection(() => null);
+  let asked = 0;
+  await assert.rejects(r1.access.grant({ connector: 'notes', agent: 'scout', by: 'owner', confirm: async () => { asked++; return true; } }), /Couldn't read scout's record, so nothing changed\./);
+  assert.equal(asked, 0);
+  r1.done();
+  const r2 = rigProjection(() => { throw new Error('disk'); });
+  await assert.rejects(r2.access.grant({ connector: 'notes', agent: 'scout', by: 'owner', confirm: YES }), /Couldn't read scout's record/);
+  r2.done();
+  let gone = false;
+  const r3 = rigProjection((n) => (gone ? null : `box:${n}`));
+  await assert.rejects(r3.access.grant({ connector: 'notes', agent: 'scout', by: 'owner', confirm: async () => { gone = true; return true; } }), /Couldn't read scout's record/);
+  assert.deepEqual(r3.rows[0].agents, []);
+  r3.done();
+});
+
+test('replaced agent (source): the default stamp is agents.agentStamp, and nothing is awaited between the last check and the write', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'connector-access.js'), 'utf8');
+  assert.match(src, /stampOf = \(name\) => \{ try \{ return require\('\.\/agents'\)\.agentStamp\(name\); \} catch \{ return null; \} \}/);
+  assert.doesNotMatch(src, /rec\.box/, 'the roster has no box id');
+  const tail = src.slice(src.indexOf('const again = vet(connector, agent);'), src.indexOf("try { audit(rec2('done'));"));
+  assert.ok(tail.length > 100);
+  assert.doesNotMatch(tail, /\bawait\b/, 'no await between the re-check and the write');
+  const agentsSrc = fs.readFileSync(path.join(__dirname, '..', 'lib', 'agents.js'), 'utf8');
+  assert.match(agentsSrc, /function agentStamp\(agentName\) \{\n  try \{ return stampOf\(loadAgentsFromDisk\(\)\.find\(a => a && a\.name === agentName\)\); \} catch \{ return null; \}/);
+});
+
+test('replaced agent, end to end: the real agents.agentStamp reads the throwaway install\'s agents list, and a re-made agent is refused', async () => {
+  const file = path.join(ISO.data, 'agents.json');
+  const write = (box) => fs.writeFileSync(file, JSON.stringify([{ name: 'owner', model: 'anthropic/x', lead: true, box: 'box-o' }, { name: 'scout', model: 'anthropic/x', category: 'specialist', box }]));
+  write('box-1');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'conn-access-e-'));
+  const rows = [{ id: 'notes', label: 'Notes', tools: { r: { cls: 'read' } }, agents: [], createdAt: 't1' }];
+  const access = createConnectorAccess({   // stampOf is the default here: agents.agentStamp
+    connectors: { list: () => ({ connectors: rows }), setGrants: (id, names) => { rows[0].agents = names; } },
+    modules: {}, agents: () => [{ name: 'owner' }, { name: 'scout' }], leadNames: ['owner'], push: { notify: () => Promise.resolve() },
+    auditFile: path.join(dir, 'a.jsonl'), isMemberOwned: () => false, isVirtual: () => false,
+  });
+  await assert.rejects(access.grant({ connector: 'notes', agent: 'scout', by: 'owner', confirm: async () => { write('box-2'); return true; } }),
+    { message: 'The agent or connector changed while you were answering, so nothing changed.' });
+  assert.deepEqual(rows[0].agents, []);
+  assert.deepEqual(await access.grant({ connector: 'notes', agent: 'scout', by: 'owner', confirm: YES }), { ok: true, agents: ['scout'] });
+  await assert.rejects(access.grant({ connector: 'notes', agent: 'ghost', by: 'owner', confirm: YES }), /No agent named "ghost"/);
   fs.rmSync(dir, { recursive: true, force: true });
 });

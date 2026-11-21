@@ -33,9 +33,20 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 function serviceFor(inst, extra = {}) {
   const restarts = [];
   const settings = extra.settings || memSettings();
-  const svc = createBackupService({ ...inst, platform: 'linux', settings, hubInfo: HUB, restart: (why) => restarts.push(why), modulePlaces: noModulePlaces(), ...extra });
+  // _holdBoxes: never real agent boxes in a test (on macOS createBackup would otherwise try to pause them)
+  const svc = createBackupService({ ...inst, platform: 'linux', _holdBoxes: () => () => {}, settings, hubInfo: HUB, restart: (why) => restarts.push(why), modulePlaces: noModulePlaces(), ...extra });
   return { svc, settings, restarts };
 }
+
+test('the service hands the box-holding stand-in to createBackup, so a backup on a computer without /proc never touches real boxes', async () => {
+  const inst = makeInstall(TMP, 'seam');
+  const held = [];
+  const { svc } = serviceFor(inst, { platform: 'darwin', _procOk: false, _holdBoxes: (platform) => { held.push(platform); return () => {}; } });
+  await svc.setup(PW, { logN: 15 });
+  const r = await svc.backupNow({ now: true });
+  assert.strictEqual(r.done, true);
+  assert.deepStrictEqual(held, ['darwin'], 'the stand-in was used, once, for this platform');
+});
 
 test('backing up: refused before setup, waits for working agents unless now, one at a time, copied to extra folders', async () => {
   const inst = makeInstall(TMP, 'b1');
@@ -126,6 +137,47 @@ test('names and upload ids are checked; uploads are checked, size-limited and le
   await assert.rejects(svc.acceptUpload(fs.createReadStream(file), { limit: 1000 }), (e) => e.code === 'ENOSPC');
   await assert.rejects(svc.acceptUpload(Readable.from([Buffer.from('x')]), { limit: 1000, expected: 5000 }), (e) => e.code === 'ENOSPC');
   assert.deepStrictEqual(fs.readdirSync(dir), [`${up.uploadId}.age`], 'refused uploads leave no file');
+});
+
+test('a piece refused before its file has opened leaves no file: the removal waits for the late open (the flaky "leave nothing behind")', async () => {
+  const inst = makeInstall(TMP, 'u2');
+  const { svc } = serviceFor(inst);
+  await svc.setup(PW, { logN: 15 });
+  const file = svc.filePath((await svc.backupNow({ now: true })).backup.name);
+  const dir = path.join(inst.root, '.restore', 'uploads');
+  // The upload's file opens late (a busy disk): the piece is refused at its first chunk, before the open finishes.
+  const open = fs.open;
+  fs.open = function (p, ...rest) {
+    if (String(p).startsWith(dir)) { setTimeout(() => open.call(fs, p, ...rest), 150); return; }   // the open itself happens late
+    return open.call(this, p, ...rest);
+  };
+  try {
+    await assert.rejects(svc.acceptUpload(fs.createReadStream(file), { limit: 1000 }), (e) => e.code === 'ENOSPC');
+    await assert.rejects(svc.acceptUpload(fs.createReadStream(file, { highWaterMark: 64 }), { limit: 100 }), (e) => e.code === 'ENOSPC');
+  } finally { fs.open = open; }
+  assert.deepStrictEqual(fs.existsSync(dir) ? fs.readdirSync(dir) : [], [], 'nothing right after the refusal');
+  await sleep(400);   // past any late open
+  assert.deepStrictEqual(fs.existsSync(dir) ? fs.readdirSync(dir) : [], [], 'and nothing appears later');
+});
+
+test('an upload whose sender goes away without an end or an error is refused, not left waiting, and leaves no file', async () => {
+  const inst = makeInstall(TMP, 'u3');
+  const { svc } = serviceFor(inst);
+  await svc.setup(PW, { logN: 15 });
+  const dir = path.join(inst.root, '.restore', 'uploads');
+  // settles within 2 s, or fails as "still waiting" (a real timer: it keeps the test alive while it waits)
+  const within = (p) => { let t; return Promise.race([p, new Promise((_r, reject) => { t = setTimeout(() => reject(new Error('still waiting')), 2000); })]).finally(() => clearTimeout(t)); };
+  // one piece arrives, then the source closes with neither 'end' nor 'error'
+  const cut = new Readable({ read() {} });
+  cut.push(Buffer.alloc(64, 1));
+  setTimeout(() => cut.destroy(), 50);
+  await assert.rejects(within(svc.acceptUpload(cut, { expected: 128 })), (e) => e.code === 'EABORTED');
+  // a later piece of an upload whose sender is gone before it was read
+  const first = await svc.acceptUpload(Readable.from([Buffer.alloc(32, 2)]), { expected: 32, done: false });
+  const gone = new Readable({ read() {} }); gone.destroy();
+  await assert.rejects(within(svc.acceptUpload(gone, { uploadId: first.uploadId, offset: 32, done: false })), (e) => e.code === 'EABORTED');
+  await sleep(50);
+  assert.deepStrictEqual(fs.existsSync(dir) ? fs.readdirSync(dir) : [], [], 'a cut-off upload is removed, like any refused one');
 });
 
 test('a restore onto a fresh install: from an upload, an admin sign-in from the backup, then confirmed; cancelled before, not after', async () => {

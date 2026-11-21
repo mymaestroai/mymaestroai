@@ -85,6 +85,32 @@ test('targetAllowed confines record symlinks to the hub home and workspaces, nev
   assert.ok(!rec.targetAllowed(path.join(REAL, 'lib', 'sdk-chat.js')), 'a link to the hub code is refused');
 });
 
+test('insideInstallRefused: on both layouts only workspaces/ and an in-install hub home are open inside the install folder', () => {
+  const rec = require(path.join(REAL, 'lib', 'records.js'));
+  const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'rec-layout-')));   // real paths, as targetAllowed gets
+  const make = (...p) => { const d = path.join(base, ...p); fs.mkdirSync(d, { recursive: true }); return d; };
+  // Old layout: the hub home is the install folder's parent (share/ and users/ sit beside the install).
+  const oldHome = make('old');
+  const oldRoot = make('old', 'install');
+  make('old', 'install', 'workspaces', 'sam'); make('old', 'install', 'lib'); make('old', 'install', 'data'); make('old', 'share', 'common');
+  // New layout: the hub home is a folder inside the install.
+  const newRoot = make('new', 'install');
+  const newHome = make('new', 'install', 'home');
+  make('new', 'install', 'workspaces', 'sam'); make('new', 'install', 'lib'); make('new', 'install', 'home', 'share', 'common');
+  for (const [label, root, hubHome] of [['old', oldRoot, oldHome], ['new', newRoot, newHome]]) {
+    const o = { root, hubHome };
+    assert.ok(rec.insideInstallRefused(path.join(root, 'lib', 'sdk-chat.js'), o), `${label}: code is refused`);
+    assert.ok(rec.insideInstallRefused(path.join(root, 'data', 'settings.json'), o), `${label}: data/ is refused`);
+    assert.ok(rec.insideInstallRefused(path.join(root, '.env'), o), `${label}: .env is refused`);
+    assert.ok(rec.insideInstallRefused(path.join(root, 'node_modules', 'x', 'index.js'), o), `${label}: node_modules is refused`);
+    assert.ok(rec.insideInstallRefused(root, o), `${label}: the install folder itself is refused`);
+    assert.ok(!rec.insideInstallRefused(path.join(root, 'workspaces', 'sam', 'notes.md'), o), `${label}: workspaces/ is open`);
+    assert.ok(!rec.insideInstallRefused(path.join(hubHome, 'share', 'common', 'plan.md'), o), `${label}: the hub home is open`);
+    assert.ok(!rec.insideInstallRefused(path.join(base, 'elsewhere', 'x.md'), o), `${label}: outside the install is not this check's call`);
+  }
+  assert.ok(rec.insideInstallRefused(path.join(newRoot, 'homework', 'x.md'), { root: newRoot, hubHome: newHome }), 'a sibling sharing the hub home\'s prefix is refused');
+});
+
 test('contextSection: every record in full, cap by bytes (agent field, settings, default 256 KB), files index appended', () => {
   const { rec } = load();
   assert.strictEqual(rec.contextSection('nobody'), '');
@@ -102,7 +128,8 @@ test('contextSection: every record in full, cap by bytes (agent field, settings,
   global.__recCap = 0;
   assert.strictEqual(rec.maxBytesFor('x'), rec.DEFAULT_MAX);
   const withIdx = rec.contextSection('x', { filesIndex: '/tmp/files\n- plan.pdf (10 bytes, 2026-10-01)' });
-  assert.match(withIdx, /### Files folder index \(maintained by the hub\)\n\/tmp\/files\n- plan\.pdf/);
+  // the heading tells the agent the paths are relative and how to offer one for download (file mentions)
+  assert.match(withIdx, /### Files folder index \(maintained by the hub\)\nPaths below are relative to the folder on the first line; to offer one for download, write its full path in backticks\.\n\/tmp\/files\n- plan\.pdf/);
 });
 
 test('filesIndex: recursive, newest first, hidden skipped, capped with a count', () => {
@@ -217,11 +244,12 @@ test('routeCap works the cap out as the gateway does before a turn; a cap rememb
 });
 
 test('unloadable: Records the prompt never loads and never mentions (a dead link, a link outside the area, a name it can\'t open) are named for the check', () => {
-  const { rec } = load();
+  const { rec, root } = load();
   rec.write('ul', 'fine.md', 'ok');
   const dir = rec.folderFor('ul');
   fs.symlinkSync(path.join(dir, '..', 'gone.md'), path.join(dir, 'dead.md'));
-  fs.symlinkSync('/etc/hostname', path.join(dir, 'outside.md'));
+  const outsideFile = path.join(root, 'outside-target.txt'); fs.writeFileSync(outsideFile, 'not a Record');   // a real file outside the Records area
+  fs.symlinkSync(outsideFile, path.join(dir, 'outside.md'));
   const long = `${'x'.repeat(130)}.md`;
   fs.writeFileSync(path.join(dir, long), 'never opened');
   fs.symlinkSync(path.join(dir, 'loop-b.md'), path.join(dir, 'loop-a.md'));
@@ -278,7 +306,8 @@ test('snapshot: every Record as it reads now, in one private file beside records
 });
 
 test('snapshot: a write that takes only part of the copy goes on until all of it is written; a full disk leaves no new file and every earlier copy; pruning keeps the newest whole copies and clears junk', { skip: process.getuid && process.getuid() === 0 }, () => {
-  const { rec, hub } = load();
+  const { rec, hub, root } = load();
+  const outsideFile = path.join(root, 'outside-target.txt'); fs.writeFileSync(outsideFile, 'not a Record');
   rec.write('gp', 'facts.md', '# Facts\n' + 'x'.repeat(5000));
   const ws = path.join(hub, 'workspaces', 'gp');
   let t = Date.parse('2026-11-05T21:00:00Z');
@@ -300,7 +329,7 @@ test('snapshot: a write that takes only part of the copy goes on until all of it
   t += 60000; const s4 = rec.snapshot('gp', { now: () => t, prune: false });
   assert.strictEqual(copies().length, 4);
   fs.writeFileSync(path.join(ws, '.records-before-condense-20261105T220000Z.json'), '{"files": [');   // cut short
-  fs.symlinkSync('/etc/hostname', path.join(ws, '.records-before-condense-20261105T220100Z.json'));
+  fs.symlinkSync(outsideFile, path.join(ws, '.records-before-condense-20261105T220100Z.json'));
   assert.strictEqual(rec.pruneSnapshots('gp'), 3, 'the oldest whole copy and the two junk entries');
   assert.deepStrictEqual(copies(), [...three.slice(1), s4.name]);
   assert.strictEqual(rec.discardSnapshot('gp', s4.name), true);
@@ -309,14 +338,15 @@ test('snapshot: a write that takes only part of the copy goes on until all of it
 });
 
 test('pruneSnapshots: a copy it cannot read is not junk (pruning stops, deleting nothing); the copy just made is kept even when the clock went back', { skip: process.getuid && process.getuid() === 0 }, () => {
-  const { rec, hub } = load();
+  const { rec, hub, root } = load();
+  const outsideFile = path.join(root, 'outside-target.txt'); fs.writeFileSync(outsideFile, 'not a Record');
   rec.write('gp', 'facts.md', '# Facts');
   const ws = path.join(hub, 'workspaces', 'gp');
   const copies = () => fs.readdirSync(ws).filter(n => n.startsWith('.records-before-condense-')).sort();
   let t = Date.parse('2026-11-05T22:00:00Z');
   const made = [];
   for (let i = 0; i < 4; i++) { made.push(rec.snapshot('gp', { now: () => t, prune: false }).name); t += 60000; }
-  fs.symlinkSync('/etc/hostname', path.join(ws, '.records-before-condense-20261105T230000Z.json'));   // junk, which would go
+  fs.symlinkSync(outsideFile, path.join(ws, '.records-before-condense-20261105T230000Z.json'));   // junk, which would go
   fs.chmodSync(path.join(ws, made[0]), 0o000);
   try {
     assert.throws(() => rec.pruneSnapshots('gp'), /EACCES/);

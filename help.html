@@ -43,6 +43,11 @@
     <li><b>Or by hand</b>: <b>+ New Agent</b> above the agent list. Give it a name, a model and a description of its role.</li>
   </ul>
   <p class="dim">New agents are ready at once. No restart is needed. If one doesn't show in the list, reload the page.</p>
+  <h3>Your team</h3>
+  <p>Your lead agent works with a starter team: a Challenger that reviews important work and finds what is wrong, Scout for lookups and summaries, Builder for coding and multi-step work, and Researcher for research and writing. A new install offers them on the Welcome page, on cheaper models where your plan has them; the Challenger on another company's model when you have connected one. An install that was set up before the team existed shows a one-time Set up your team card; to see it again, open your Maestro with ?team=setup at the end of its address.</p>
+  <p>How the lead uses them: it hands out parts of a bigger job, asks the Challenger to check important work, and checks what comes back. You can also talk to any of them directly.</p>
+  <p>To change one: open it in the agent list and change its model, name or personality on its settings page, or delete it. A starter you delete is not set up again.</p>
+  <p>The advice your agents get about working as a team can be set to Full, Light or Off in the More menu (Team guidance), or switched off for one agent on its settings page.</p>
   <h3>Change an agent</h3>
   <ul>
     <li><b>Ask Maestro</b>: "Make Doc more concise", "Give Counsel a Record with my lease dates".</li>
@@ -85,6 +90,7 @@
   <div class="tip warn"><b>A Claude agent says "not signed in", "authentication" or "expired".</b> The Claude sign-in on this computer is missing or has run out. Open a terminal, type <code>claude</code> and press Enter, sign in, then type <code>/exit</code>. Send your message again. No restart is needed. (<code>mymaestro doctor</code> tests the sign-in.)</div>
   <table>
     <tr><td><b>An agent seems stuck</b></td><td>Press ↻ in the chat bar to re-sync, or reload the page. Still stuck: press Stop and send the message again.</td></tr>
+    <tr><td><b>The screen looks out of date</b></td><td>Reload the app: ⋯ → Reload on a computer (the installed app also has ↻ at the top), ⋮ → Reload app on the phone.</td></tr>
     <tr><td><b>"Usage limit reached"</b></td><td>Your plan's limit is used up until it resets. Meanwhile switch the agent's model at the top of its chat.</td></tr>
     <tr><td><b>An API key is refused</b></td><td>Settings → LLM Providers: paste a fresh key from the provider's website.</td></tr>
     <tr><td><b>A local model doesn't answer</b></td><td>Start LM Studio or Ollama with the model loaded, or open Local models in your account menu.</td></tr>
@@ -105,6 +111,7 @@ mymaestro doctor        security and setup checks, Claude sign-in test
 mymaestro backup        your data, settings and agents in one archive
 mymaestro setup-link    the first-time setup link
 mymaestro connect chatgpt   use your ChatGPT subscription
+mymaestro team          which starter agents are set up
 mymaestro reset-2fa you@example.com   turn off two-factor for an account
 mymaestro service install             start by itself at boot or login</pre>
 </main>

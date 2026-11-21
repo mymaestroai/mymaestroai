@@ -79,8 +79,8 @@ test('mobile: slim bar on all three screens, confirm dialog before resetting, /a
 
 test('desktop sends become interjections whenever the hub reports the agent busy, and a busy bounce is interjected once', () => {
   assert.ok(app.includes("const agentWorking = chat.status === 'thinking' || !!(liveNow && liveNow.busy);"));
-  assert.ok(app.includes('if (content && agentWorking && pendingImages.length === 0 && !skipInterjectOnce.delete(chatId)) {'));
-  assert.ok(app.includes("if (!imagesToSend.length && !chat.bounced409) {"), '409 busy -> interjection, once');
+  assert.ok(app.includes('if ((content || pendingImages.length > 0) && agentWorking && !skipInterjectOnce.delete(chatId)) {'), 'pictures go as an interjection too');
+  assert.ok(app.includes("if (!chat.bounced409) {"), '409 busy -> interjection, once');
   assert.match(app, /not currently processing/, 'turn already over -> normal send');
   assert.ok(app.includes('skipInterjectOnce.add(chatId);'));
 });

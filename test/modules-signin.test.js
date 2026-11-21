@@ -5,8 +5,12 @@ const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { createConnectors } = require('../lib/connectors');
-const { createModules } = require('../lib/modules');
+// lib/ comes from a throwaway copy of the install (test/helpers/isolated-install.js), so nothing under the real data/ is touched.
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('mod-signin-iso-');
+const L = (p) => require(path.join(ISO.lib, p));
+const { createConnectors } = L('connectors');
+const { createModules } = L('modules');
 
 const FIX_ROOT = path.join(__dirname, 'fixtures', 'modules');
 const DEVICE_CODE = 'DEVICE-CODE-SECRET-123';
@@ -216,7 +220,7 @@ function crig({ exchange } = {}) {
   const calls = [];
   const oauthCode = {
     pkce: () => ({ verifier: 'V'.repeat(43), challenge: 'CHALLENGE-FAKE' }),
-    authorizeUrl: require('../lib/oauth-code').authorizeUrl,
+    authorizeUrl: L('oauth-code').authorizeUrl,
     async exchange(a) { calls.push(a); if (exchange) return exchange(a); return { accessToken: 'acc', expiresAt: clock.t + 1000, refreshToken: REFRESH_TOKEN_IN }; },
   };
   const mods = createModules({
@@ -403,10 +407,10 @@ test('server.js: the start route uses the page\'s origin only when its host equa
   assert.ok(!accept('javascript:alert(1)', 'hub.example.test'));
 });
 test('access: /oauth/callback/<id> is an admin page and is outside the /api origin guard', () => {
-  const access = require('../lib/access');
+  const access = L('access');
   assert.deepStrictEqual(access.classifyRoute('/oauth/callback/oura', 'GET'), { kind: 'admin', page: true });
   assert.notStrictEqual(access.classifyRoute('/oauth/callback/oura/extra', 'GET').kind, 'admin');
-  const guard = require('../lib/origin-guard');
+  const guard = L('origin-guard');
   assert.strictEqual(guard.crossOriginRefusal({ method: 'GET', headers: { 'sec-fetch-site': 'cross-site', host: 'localhost:3000' } }, '/oauth/callback/oura'), null);
 });
 test('modules.html: code-flow button goes to an https authorize URL in the same tab; ?signin= shown and removed; {{redirectUri}} escaped', () => {

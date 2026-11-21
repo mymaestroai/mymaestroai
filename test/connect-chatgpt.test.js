@@ -8,7 +8,10 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
-const CLI = path.join(__dirname, '..', 'scripts', 'hub-cli.js');
+// The command runs from a throwaway install (lib/ and scripts/ copied), so nothing under the real data/ is touched.
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('connect-chatgpt-iso-', { copy: ['scripts'] });
+const CLI = path.join(ISO.inst, 'scripts', 'hub-cli.js');
 
 // signedIn: the stand-in's starting state; login: 'ok' signs it in, anything else leaves it signed out.
 function install({ signedIn = false, login = 'ok', status = 'Logged in using ChatGPT' } = {}) {
@@ -56,8 +59,19 @@ test('on a desktop the sign-in opens the browser', () => {
   assert.match(r.stdout, /opens ChatGPT in your browser/);
 });
 
+// The command runs as a child process, so the platform can't be injected: this case runs on macOS only.
+test('on macOS a missing DISPLAY is not "no desktop": the sign-in opens the browser', { skip: process.platform !== 'darwin' }, () => {
+  const home = install();
+  const r = run(home, ['chatgpt'], {});
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.strictEqual(calls(home), 'login');
+  assert.match(r.stdout, /opens ChatGPT in your browser/);
+});
+
 test('with no desktop, over SSH, or when asked, it signs in with a code and says what to do if that is switched off', () => {
-  for (const [args, env] of [[['chatgpt'], {}], [['chatgpt'], { DISPLAY: ':0', SSH_CONNECTION: '1 2 3 4' }], [['chatgpt', '--device-auth'], { DISPLAY: ':0' }]]) {
+  // A missing DISPLAY means "no desktop" only off macOS; a Mac always has one (see the darwin case below).
+  const noDisplay = process.platform === 'darwin' ? [] : [[['chatgpt'], {}]];
+  for (const [args, env] of [...noDisplay, [['chatgpt'], { DISPLAY: ':0', SSH_CONNECTION: '1 2 3 4' }], [['chatgpt', '--device-auth'], { DISPLAY: ':0' }]]) {
     const home = install();
     const r = run(home, args, env);
     assert.strictEqual(r.status, 0, r.stderr);
@@ -82,7 +96,11 @@ test('a sign-in that did not finish fails plainly; an API-key sign-in is replace
 test('the help text lists it, and the install goes where the hub looks for Codex', () => {
   const src = fs.readFileSync(CLI, 'utf8');
   assert.match(src, /mymaestro connect chatgpt {8}use your ChatGPT subscription/);
-  assert.match(src, /'install', '-g', '--prefix', path\.join\(os\.homedir\(\), '\.npm-global'\), '@openai\/codex', '--ignore-scripts'/);
+  // the install moved to lib/codex-cli/setup.js (one place for connect, the installer's check and readiness): same prefix
+  assert.match(src, /setup\.installCodex\(\{ env: process\.env \}\)/);
+  const setupSrc = fs.readFileSync(path.join(__dirname, '..', 'lib', 'codex-cli', 'setup.js'), 'utf8');
+  assert.match(setupSrc, /'install', '-g', '--prefix', codexPrefix\(env\), '@openai\/codex', '--ignore-scripts'/);
+  assert.match(setupSrc, /function codexPrefix\(env = process\.env\) \{ return path\.join\(homeOf\(env\), '\.npm-global'\); \}/);
   assert.match(spawnSync(process.execPath, [CLI, 'help'], { encoding: 'utf8' }).stdout, /mymaestro connect chatgpt/);
   assert.match(fs.readFileSync(path.join(__dirname, '..', 'lib', 'codex-cli', 'index.js'), 'utf8'), /path\.join\(home, '\.npm-global', 'bin', 'codex'\)/);
 });

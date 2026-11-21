@@ -12,6 +12,7 @@
   <link rel="icon" type="image/png" sizes="64x64" href="/favicon-64.png">
   <!-- Installed as an app (Chrome/Edge "Install page as app", Safari "Add to Dock"): the desktop layout, with the Maestro icon. The phone app has its own manifest (/manifest.json, start_url /mobile.html). -->
   <link rel="manifest" href="/icons/desktop.webmanifest">
+  <link rel="stylesheet" href="/ui-call-display.css">
   <link rel="apple-touch-icon" href="/icons/hub-192.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -279,6 +280,14 @@
     }
     .collapse-arrow.collapsed { transform: rotate(-90deg); }
     .agent-group-items { transition: all 0.15s; display: flex; flex-direction: column; gap: 4px; padding: 2px; }
+    .active-group .active-count { margin-left: 6px; padding: 0 6px; border-radius: 8px; background: var(--bg-card, #333); font-size: 11px; }
+    .agent-btn.active-done { opacity: .6; }
+    .active-copy .action-btn { display: none; }
+    /* Background-job line on an agent row (normal rows and Active copies): 'Background job: <name> + N more · 4 min'. */
+    .agent-btn .agent-job-line { display: flex; font-size: 0.6rem; color: var(--text-dim); white-space: nowrap; overflow: hidden; min-width: 0; }
+    .agent-btn .agent-job-line .ajl-name { overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 0 1 auto; }
+    .agent-btn .agent-job-line .ajl-tail { flex: none; white-space: pre; }
+    @media (prefers-reduced-motion: reduce) { #agent-active-group { animation: none; transition: none; } }
     .group-actions { display: flex; gap: 6px; }
     .group-action-btn {
       font-size: 0.6rem; text-transform: none; letter-spacing: 0;
@@ -536,6 +545,19 @@
     .mh-confirm { margin-top: 6px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; color: var(--text); }
     .mh-confirm input { width: 12em; }
     .mh-msg { color: var(--text); font-weight: 600; } .mh-msg:empty { display: none; } .mh-msg-bad { color: #d4588b; }
+    .sc-row { padding: 6px 0; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
+    .sc-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; color: var(--text); }
+    .sc-chip { font-size: 0.75rem; padding: 1px 8px; border-radius: 10px; border: 1px solid var(--border); white-space: nowrap; }
+    .sc-ok { color: #199e70; border-color: #199e70; } .sc-bad { color: #d4588b; border-color: #d4588b; } .sc-idle { color: var(--text-dim); }
+    .sc-note, .sc-fail, .sc-h { margin: 2px 0 0 4px; overflow-wrap: anywhere; } .sc-fail { color: #d4588b; }
+    .sc-last { color: var(--text); margin-bottom: 4px; overflow-wrap: anywhere; }
+    .sc-hist { margin-top: 6px; } .sc-hist > summary { cursor: pointer; color: var(--text-dim); }
+    .sc-kinds { flex-wrap: wrap; } .sc-kind { display: inline-flex; align-items: center; gap: 4px; margin-right: 12px; }
+    /* the kinds are plain labels, not the row's right-aligned 100 px label; on a phone a row wraps and its field shrinks */
+    .sc-kinds .sc-kind { flex: 0 0 auto; text-align: left; color: var(--text); white-space: nowrap; }
+    #st-selfcheck-section .st-row { flex-wrap: wrap; }
+    #st-selfcheck-section .st-row input[type="text"] { flex: 1 1 160px; min-width: 0; max-width: 100%; }
+    #st-selfcheck-section .st-row input[type="time"] { min-width: 0; max-width: 100%; }
     .wm-row { display: grid; grid-template-columns: 16px minmax(0,1fr) auto auto auto; align-items: center; gap: 10px; padding: 9px 12px; cursor: pointer; border-bottom: 1px solid rgba(255,255,255,0.06); font-size: 0.85rem; }
     .wm-row:hover, .wm-row:focus { background: rgba(255,255,255,0.05); outline: none; }
     .wm-mark { width: 10px; height: 10px; display: inline-flex; align-items: center; justify-content: center; font-size: 0.8rem; color: #199e70; }
@@ -543,9 +565,9 @@
     .wm-group { font-size: 11px; opacity: .7; padding: 6px 10px 2px; text-transform: none; }
     .wm-hub { grid-template-columns: 16px minmax(0,1fr) auto auto; }
     .wm-failed .wm-mark { color: #d4588b; }
-    .wm-stopped .wm-mark { color: var(--text-dim); }
+    .wm-stopped .wm-mark, .wm-ended .wm-mark { color: var(--text-dim); }
     .wm-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-primary); }
-    .wm-done .wm-name, .wm-stopped .wm-name { color: var(--text-secondary); }
+    .wm-done .wm-name, .wm-stopped .wm-name, .wm-ended .wm-name { color: var(--text-secondary); }
     .wm-unseen .wm-name { color: #ffd0de; font-weight: 600; }
     .wm-meta { color: var(--text-dim); font-size: 0.78rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 200px; }
     .wm-when { color: var(--text-dim); font-size: 0.78rem; white-space: nowrap; font-variant-numeric: tabular-nums; }
@@ -595,8 +617,22 @@
     .header-controls { display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
     .header-btn { background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); border-radius: 6px; padding: 4px 8px; cursor: pointer; font-size: 14px; color: var(--text-secondary); transition: all 0.2s; }
     .header-btn:hover { background: rgba(255,255,255,0.15); color: var(--text-primary); }
+    /* The Simple view switch (both modes; app.js simpleTopSync adds it for real accounts only) */
+    .mode-toggle { display: inline-flex; align-items: center; gap: 8px; flex: none; min-height: 28px; padding: 3px 9px 3px 11px; border: 1px solid rgba(255,255,255,0.15); border-radius: 16px; background: rgba(255,255,255,0.08); color: var(--text-secondary); font: inherit; font-size: 13px; line-height: 1; cursor: pointer; white-space: nowrap; }
+    .mode-toggle:hover { background: rgba(255,255,255,0.15); color: var(--text-primary); }
+    .mode-toggle .mt-track { position: relative; width: 30px; height: 16px; border-radius: 8px; background: #77766d; flex: none; transition: background .15s; }
+    .mode-toggle .mt-knob { position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: #fff; transition: transform .15s; }
+    .mode-toggle[aria-checked="true"] .mt-track { background: #8b6fd6; }
+    .mode-toggle[aria-checked="true"] .mt-knob { transform: translateX(14px); }
+    .mode-toggle:focus-visible { outline: 2px solid #8b6fd6; outline-offset: 2px; }
     .header-btn.restarting { opacity: 0.5; pointer-events: none; animation: pulse 1s infinite; }
     .chat-actions .resync-btn { font-size: 1rem; line-height: 1; padding: 6px 10px; }
+    .chat-actions .notify-bell-btn { font-size: 1rem; line-height: 1; padding: 6px 10px; }
+    .chat-actions .notify-bell-btn[aria-expanded="true"] { border-color: var(--accent); }
+    .notify-bell-menu { position: fixed; z-index: 1300; width: 290px; max-width: calc(100vw - 16px); box-sizing: border-box; padding: 10px 12px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 6px 24px rgba(0,0,0,.35); font-size: 0.85rem; color: var(--text); display: flex; flex-direction: column; gap: 8px; }
+    .notify-bell-menu .notify-bell-title { font-weight: 600; }
+    .notify-bell-menu .notify-bell-row { display: flex; flex-direction: column; gap: 3px; color: var(--text-dim); font-size: 0.78rem; }
+    .notify-bell-menu select { font-size: 0.8rem; padding: 4px 6px; background: var(--bg-input); color: var(--text); border: 1px solid var(--border); border-radius: 4px; }
     /* "Notify me when done": next to Interject while a reply runs; filled once clicked. */
     .input-area .notify-done-btn { border: 1px solid var(--accent); color: var(--accent); background: rgba(61,123,255,.10); font-weight: 600; white-space: nowrap; cursor: pointer; }
     .input-area .notify-done-btn.on { background: var(--accent); border-color: var(--accent); color: #fff; }
@@ -642,7 +678,11 @@
     .more-menu .more-row .toggle-label { font-family: inherit; font-size: 0.8rem; color: var(--text); }
     .more-menu .more-row .max-tokens-control { justify-content: space-between; gap: 10px; font-size: 0.8rem; }
     .more-menu .more-row .max-tokens-control select { font-size: 0.75rem; padding: 3px 6px; background: var(--bg-input); color: var(--text); }
+    .more-menu .more-row #team-guidance-select { font-size: 0.75rem; opacity: 1; background: var(--bg-input) !important; color: var(--text) !important; border-color: var(--border) !important; padding: 3px 6px !important; }
     .more-menu .more-row #sdk-workers-select { font-size: 0.75rem; opacity: 1; background: var(--bg-input) !important; color: var(--text) !important; border-color: var(--border) !important; padding: 3px 6px !important; }
+    .header-controls .header-btn.reload-btn { display: none; }   /* only in the installed app, which has no browser reload button; the selector also beats the narrow-screen .main-header-top .header-btn rule */
+    html.app-installed .header-controls .header-btn.reload-btn { display: inline-flex; align-items: center; justify-content: center; }
+    .reload-btn[aria-busy="true"], #reload-app-item[aria-busy="true"] { opacity: 0.5; pointer-events: none; }
     .more-menu .more-row .toggle-switch[style] { gap: 10px !important; justify-content: space-between; }
     .more-menu .more-hint { font-size: 0.7rem; color: var(--text-dim); line-height: 1.3; white-space: normal; }
 
@@ -824,6 +864,12 @@
     .auto-card-body, .auto-stack-body { margin: 8px 0 4px 14px; padding-left: 10px; border-left: 1px solid var(--border); }
     .auto-card-body[hidden], .auto-stack-body[hidden] { display: none; }
     .auto-from { margin: 4px 0 4px; font-size: 0.75rem; color: #8f8e84; }
+    .chat-view-hidden { display: none !important; }
+    .chat-busy-card { margin: 8px 0; padding: 4px 10px; font-size: 0.75rem; color: #8f8e84; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .chat-earlier-btn { display: block; margin: 6px auto 10px; padding: 4px 14px; font-size: 0.78rem; color: #8f8e84; background: transparent; border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer; }
+    .chat-earlier-btn:disabled { opacity: 0.6; cursor: default; }
+    .message.msg-archived > .msg-time { font-size: 0.7rem; color: #8f8e84; }
+    .chat-view-btn[aria-pressed="true"] { border-color: var(--accent, #d97757); }
     .system-notice {
       background: rgba(245, 166, 35, 0.06);
       border: 1px solid rgba(245, 166, 35, 0.2);
@@ -1030,6 +1076,69 @@
     }
     .input-area button:hover { background: var(--accent-hover); }
     .input-area button:disabled { background: var(--border); cursor: not-allowed; opacity: 0.5; }
+    /* Voice: mic button in the composer (idle, recording, waiting for the text), its level meter, the speaker on replies */
+    .input-area .mic-btn { background: var(--bg-input); border: 1px solid var(--border); padding: 8px 10px; font-size: 1rem; color: var(--text); white-space: nowrap; font-variant-numeric: tabular-nums; }
+    .input-area .mic-btn svg { display: block; width: 20px; height: 20px; }
+    .input-area .mic-btn:hover { background: var(--bg-input); border-color: var(--accent); }
+    .input-area .mic-btn.rec { background: rgba(239, 68, 68, 0.18); border-color: #ef4444; color: #fca5a5; animation: mic-pulse 1.2s ease-in-out infinite; }
+    .input-area .mic-btn.rec:hover { background: rgba(239, 68, 68, 0.28); }
+    .input-area .mic-btn.wait { opacity: 0.7; cursor: progress; }
+    @keyframes mic-pulse { 50% { box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.25); } }
+    .mic-meter, .voice-meter { display: inline-block; width: 56px; height: 8px; align-self: center; border-radius: 4px; background: var(--bg-input); border: 1px solid var(--border); overflow: hidden; vertical-align: middle; }
+    .mic-meter > i, .voice-meter > i { display: block; height: 100%; width: 0%; background: linear-gradient(90deg, #22c55e, #eab308 75%, #ef4444); transition: width 0.08s linear; }
+    .voice-meter { width: 120px; }
+    /* Voice call: the red hang-up mic button and the call bar above the message box */
+    .input-area .mic-btn.call { background: #dc2626; border-color: #ef4444; color: #fff; }
+    .input-area .mic-btn.call:hover { background: #b91c1c; }
+    .voice-callbar { margin: 0 12px 6px; padding: 8px 12px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; font-size: 0.85rem; color: var(--text); display: flex; flex-direction: column; gap: 6px; }
+    .voice-callbar .vcb-top, .voice-callbar .vcb-sliders { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+    .voice-callbar .vcb-state { font-weight: 600; min-width: 5.5em; color: var(--accent); }
+    .voice-callbar label { display: inline-flex; gap: 6px; align-items: center; cursor: pointer; color: var(--text-dim); }
+    .voice-callbar input[type=range] { width: 140px; }
+    .voice-callbar .vcb-hang { margin-left: auto; display: inline-flex; gap: 6px; align-items: center; background: #dc2626; border: 1px solid #ef4444; color: #fff; border-radius: 6px; padding: 5px 12px; cursor: pointer; }
+    .voice-callbar .vcb-disp { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+    .voice-callbar .vcb-disp select { background: var(--bg-input); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 3px 6px; font-size: 13px; }
+    .voice-callbar .vcb-focus-hint { color: var(--text-dim); font-size: 0.8rem; }
+    .voice-callbar .vcb-focus-hint[hidden] { display: none; }
+    .voice-callbar .vcb-hang:hover { background: #b91c1c; }
+    .voice-callbar .vcb-hang svg { width: 16px; height: 16px; display: block; }
+    .voice-callbar .vcb-activity { color: var(--text-dim); font-size: 0.8rem; min-height: 1.1em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .voice-callbar .vcb-heard { color: var(--text-dim); font-style: italic; min-height: 1.2em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .voice-callbar .vcb-held:empty { display: none; }
+    .voice-callbar .vcb-micinfo.vcb-mic-lost { color: #ef4444; font-weight: 600; }
+    .voice-callbar .vcb-item { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 4px 0; border-top: 1px solid var(--border); }
+    .voice-callbar .vcb-item.later { opacity: 0.75; }
+    .voice-callbar .vcb-item-label { flex: 1; min-width: 10em; }
+    .voice-callbar .vcb-item button { background: var(--bg-input); border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 3px 10px; cursor: pointer; font-size: 0.8rem; }
+    .voice-callbar .vcb-item button:hover { border-color: var(--accent); }
+    .voice-callbar .vcb-help { font-size: 0.75rem; color: var(--text-dim); }
+    /* Voice controls in the chat: the Talk mode chip and the Voice settings panel next to the mic */
+    .input-area .voice-extra { position: relative; display: inline-flex; gap: 6px; align-items: center; }
+    .input-area .voice-mode-chip { background: var(--bg-input); border: 1px solid var(--border); color: var(--text-dim); border-radius: 999px; padding: 4px 10px; font-size: 0.75rem; font-weight: 600; white-space: nowrap; cursor: pointer; }
+    .input-area .voice-mode-chip:hover { background: var(--bg-input); border-color: var(--accent); color: var(--text); }
+    .input-area .voice-set-btn { background: var(--bg-input); border: 1px solid var(--border); color: var(--text); padding: 8px 9px; }
+    .input-area .voice-set-btn:hover, .input-area .voice-set-btn[aria-expanded="true"] { background: var(--bg-input); border-color: var(--accent); }
+    .input-area .voice-set-btn svg { display: block; width: 18px; height: 18px; }
+    .voice-pop { position: absolute; right: 0; bottom: calc(100% + 8px); z-index: 60; width: 320px; max-width: 92vw; max-height: 70vh; overflow-y: auto; box-sizing: border-box; padding: 10px 12px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 6px 24px rgba(0,0,0,.35); font-size: 0.85rem; color: var(--text); display: flex; flex-direction: column; gap: 8px; }
+    .voice-pop[hidden] { display: none; }
+    .voice-pop .vp-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; color: var(--text-dim); }
+    .voice-pop .vp-label { flex: 0 0 9.5em; }
+    .voice-pop input[type=range] { width: 110px; }
+    .voice-pop .vp-seg { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+    .voice-pop .vp-seg button { background: var(--bg-input); border: 0; color: var(--text-dim); padding: 4px 10px; font-size: 0.8rem; cursor: pointer; }
+    .voice-pop .vp-seg button[aria-pressed="true"] { background: var(--accent); color: #fff; }
+    .voice-left-bar { flex-direction: row; align-items: center; gap: 10px; }
+    .voice-left-bar button { background: var(--accent); border: 0; color: #fff; border-radius: 6px; padding: 4px 12px; cursor: pointer; }
+    .voice-left-bar button[data-vleft="dismiss"] { background: var(--bg-input); color: var(--text); border: 1px solid var(--border); }
+    .message > .msg-speak {
+      display: none; position: absolute; top: 4px; right: 34px; border: 1px solid var(--border); background: var(--bg-card);
+      color: var(--text-dim); border-radius: 6px; font-size: 0.8rem; line-height: 1; padding: 3px 6px; cursor: pointer; opacity: 0.45; transition: opacity 0.15s;
+    }
+    body.voice-on .message > .msg-speak { display: block; }
+    .message:hover > .msg-speak, .message > .msg-speak:focus, .message > .msg-speak.on { opacity: 0.95; }
+    .message > .msg-speak:hover { color: var(--text); border-color: var(--accent); }
+    .message > .msg-speak.on { color: var(--accent); border-color: var(--accent); }
+    @media (hover: none) { .message > .msg-speak { opacity: 0.6; } }
     .input-area button.secondary {
       background: var(--purple);
     }
@@ -2270,6 +2379,29 @@
     #files-panel .files-progress { display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
     #files-panel .files-progress .bar { height: 4px; background: var(--bg-input); border-radius: 2px; overflow: hidden; }
     #files-panel .files-progress .bar i { display: block; height: 100%; background: var(--accent); width: 0; transition: width .15s; }
+    /* Recent from agents (the newest files agents wrote here) */
+    #files-panel .files-recent { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; display: flex; flex-direction: column; gap: 4px; }
+    #files-panel .files-recent h4 { margin: 0 0 2px; font-size: 12px; font-weight: 600; color: var(--text-dim); }
+    #files-panel .files-recent .fr-row { display: flex; align-items: center; gap: 8px; font-size: 12.5px; min-width: 0; }
+    #files-panel .files-recent .fr-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #files-panel .files-recent .fr-info { flex: 0 1 auto; color: var(--text-dim); font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 45%; }
+    #files-panel .files-recent a.fr-dl { color: var(--accent); text-decoration: none; font-size: 12px; white-space: nowrap; }
+    #files-panel .files-recent a.fr-dl:hover { text-decoration: underline; }
+    #files-panel .files-recent button.fr-all { align-self: flex-start; background: none; border: 0; padding: 2px 0; margin: 0; font: inherit; font-size: 12px; color: var(--accent); cursor: pointer; }
+    #files-panel .files-recent button.fr-all:hover { text-decoration: underline; }
+    /* Download cards under an agent's reply (lib/ui-file-card.js) */
+    .file-cards { display: flex; flex-direction: column; gap: 8px; margin: 4px 0 8px; }
+    .file-card { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; max-width: 420px; box-sizing: border-box; display: flex; flex-direction: column; gap: 8px; background: var(--bg-input); }
+    .file-card .fc-head { display: flex; align-items: center; gap: 10px; min-width: 0; }
+    .file-card .fc-icon { font-size: 24px; line-height: 1; flex: 0 0 auto; }
+    .file-card .fc-meta { min-width: 0; flex: 1 1 auto; }
+    .file-card .fc-name { font-size: 14px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .file-card .fc-sub { font-size: 12px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .file-card .fc-preview { max-width: 100%; max-height: 160px; object-fit: contain; border-radius: 6px; align-self: flex-start; }
+    .file-card .fc-preview-link { color: var(--accent); font-size: 13px; text-decoration: none; align-self: flex-start; }
+    .file-card .fc-download { display: block; text-align: center; background: var(--accent); border: none; border-radius: 6px; padding: 10px 16px; color: #fff; cursor: pointer; font-size: 0.95rem; font-weight: 600; text-decoration: none; }
+    .file-card .fc-download:hover { background: var(--accent-hover); }
+    @media (max-width: 480px) { .file-card { max-width: 100%; } }
     /* Context compression line under a chat's toolbar (see compactionRefresh in app.js) */
     .compaction-line { padding: 3px 20px; font-size: 0.72rem; color: var(--text-dim); border-bottom: 1px solid var(--border); background: rgba(245, 166, 35, 0.04); }
     .compaction-line.hot { color: #f5a623; }
@@ -2416,6 +2548,267 @@
     .visual-html iframe.visual-frame { display: block; width: 100%; height: 360px; border: 0; background: #1a1a19; }
     .visual-html.expanded iframe.visual-frame { height: 80vh; }
     .visual .visual-note { padding: 4px 10px; font-size: 0.75rem; color: var(--error); border-bottom: 1px solid var(--border); }
+      /* share links: Settings, Security block (#st-share-block) matches the other Settings rows, selects and buttons */
+    #st-share-block label.sec-hint { font-size: 0.8rem; color: var(--text-secondary); margin: 0; }
+    #st-share-block select { width: 100%; padding: 6px 10px; font-size: 0.8rem; background: var(--bg-input); border: 1px solid var(--border); border-radius: 4px; color: var(--text); }
+    #st-share-block select:focus { border-color: var(--accent); outline: none; }
+    #st-share-block .sec-actions { display: flex; gap: 8px; }
+    #st-share-block .sec-btn { padding: 5px 10px; font-size: 0.72rem; background: var(--bg-input); border: 1px solid var(--border); border-radius: 4px; color: var(--text); cursor: pointer; }
+    #st-share-block .sec-btn:hover { border-color: var(--accent); }
+    #st-share-block .sec-msg { font-size: 0.68rem; color: var(--text-dim); min-height: 1em; }
+</style>
+  <style id="simple-mode-css">
+    /* Simple mode (lib/ui-simple.js sets html.mm-simple, and .mm-light for the light theme). Advanced never matches any rule here. */
+    html.mm-simple {
+      --bg-dark: #1a1a19; --bg-card: #1a1a19; --bg-input: #232322; --bg-tertiary: #232322;
+      --accent: #8b6fd6; --accent-hover: #9d84e0; --purple: #8b6fd6;
+      --text: #ffffff; --text-primary: #ffffff; --text-dim: #c3c2b7; --text-secondary: #c3c2b7; --text-tertiary: #8a897f;
+      --border: #2f2f2d; --border-strong: #3a3a37;
+      --chat-pad-x: 24px;   /* the chat column stays full width (--chat-max-width from :root), as in the main view */
+      --sm-page: #1a1a19; --sm-side: #161615; --sm-raised: #232322; --sm-border: #2f2f2d; --sm-text: #fff; --sm-sec: #c3c2b7; --sm-muted: #8a897f;
+      --sm-bubble: #2a2a28; --sm-sel: rgba(139,111,214,.22); --sm-hover: rgba(255,255,255,.05); --sm-shadow: none;
+      --sm-user-bg: #5b46a8; --sm-user-text: #ffffff; --sm-user-code: rgba(255,255,255,.18);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    }
+    html.mm-simple.mm-light {
+      color-scheme: light;
+      --bg-dark: #ffffff; --bg-card: #ffffff; --bg-input: #ffffff; --bg-tertiary: #f6f6f3;
+      --text: #1a1a19; --text-primary: #1a1a19; --text-dim: #55544c; --text-secondary: #55544c; --text-tertiary: #8a897f;
+      --border: #e4e3dd; --border-strong: #d4d3cb;
+      --sm-page: #ffffff; --sm-side: #f6f6f3; --sm-raised: #ffffff; --sm-border: #e4e3dd; --sm-text: #1a1a19; --sm-sec: #55544c; --sm-muted: #8a897f;
+      --sm-bubble: #f1f0ec; --sm-sel: rgba(139,111,214,.13); --sm-hover: rgba(0,0,0,.04); --sm-shadow: 0 2px 12px rgba(0,0,0,.08);
+      --sm-user-bg: #ebe6fb; --sm-user-text: #1d1640; --sm-user-code: rgba(29,22,64,.10);
+    }
+    html.mm-simple body { font-family: inherit; background: var(--sm-page); color: var(--sm-text); }
+
+    /* Hidden in Simple: tools, workers, badges, pickers, the menus full of options */
+    html.mm-simple .main-header,
+    html.mm-simple #worker-tabs,
+    html.mm-simple #empty-state,
+    html.mm-simple #hub-version,
+    html.mm-simple .sidebar-header-text > :not(h1),
+    html.mm-simple #agents-working, html.mm-simple #spend-today, html.mm-simple #credit-meter, html.mm-simple #update-chip, html.mm-simple #plan-warn,
+    html.mm-simple .sidebar-collapse-btn, html.mm-simple .sidebar-resize-handle, html.mm-simple .sidebar-expand-btn,
+    html.mm-simple .sidebar .tabs, html.mm-simple #group-chat-panel, html.mm-simple #guide-panel,
+    html.mm-simple #owner-view, html.mm-simple #account-menu,
+    html.mm-simple #agent-list .agent-group-title, html.mm-simple #agent-list .group-action-btn, html.mm-simple #agent-list > div:not([class]),
+    html.mm-simple #agent-active-group,
+    html.mm-simple .agent-btn .agent-status, html.mm-simple .agent-btn .model, html.mm-simple .agent-btn .actions, html.mm-simple .agent-btn .action-btn,
+    html.mm-simple .agent-btn .lead-badge, html.mm-simple .agent-btn .agent-busy-line, html.mm-simple .agent-btn .agent-job-line,
+    html.mm-simple .chat-container .status-bar, html.mm-simple .chat-container .thinking-panel,
+    html.mm-simple .chat-container .compaction-line,
+    html.mm-simple .chat-actions > :not([id^="cancel-"]):not(.agent-name),
+    html.mm-simple .chat-actions .agent-name > :not(.agent-name-text),
+    html.mm-simple .message .tool-stream, html.mm-simple .message .reason-stream, html.mm-simple #rsn-full,
+    html.mm-simple .message .live-activity, html.mm-simple .message .token-usage, html.mm-simple .message .inline-thinking,
+    html.mm-simple .context-info-box, html.mm-simple .token-usage, html.mm-simple .live-activity,
+    html.mm-simple .system-notice, html.mm-simple .tiger-team-launch-banner,
+    html.mm-simple .step-text.step-intermediate,
+    html.mm-simple .message.synthesis,
+    html.mm-simple .notify-done-btn, html.mm-simple .chat-view-btn, html.mm-simple .busy-card,
+    html.mm-simple .simple-auto > *, html.mm-simple .simple-auto-hide,
+    html.mm-simple .tool-stream, html.mm-simple .reason-stream,
+    html.mm-simple [id^="panel-worker-"] { display: none !important; }
+
+    /* Sidebar: the flat list */
+    html.mm-simple .sidebar { width: 260px !important; min-width: 260px; background: var(--sm-side); border-right: 1px solid var(--sm-border); padding: 16px 12px 0; }
+    html.mm-simple .sidebar-header { padding: 4px 8px 0; border: 0; background: none; }
+    html.mm-simple .sidebar-header h1 { font-size: 16px; font-weight: 600; color: var(--sm-text); margin: 0; }
+    html.mm-simple .sidebar-header-text { display: block; }
+    html.mm-simple .sidebar .tab-content { padding: 0; }
+    html.mm-simple #agents-panel { padding: 18px 0 8px; }
+    html.mm-simple #agents-panel::before { content: "Chats"; display: block; font-size: 12.5px; font-weight: 500; color: var(--sm-muted); padding: 8px 12px; }
+    html.mm-simple #agent-list .agent-group { margin: 0; }
+    html.mm-simple #agent-list .agent-group-items { display: flex !important; flex-direction: column; gap: 2px; padding: 0; }
+    html.mm-simple .agent-btn { height: 42px; margin: 0; padding: 0 12px; border: 0; border-radius: 12px; background: none; color: var(--sm-text); font-size: 15px; gap: 12px; }
+    html.mm-simple .agent-btn:hover { background: var(--sm-hover); border: 0; color: var(--sm-text); }
+    html.mm-simple .agent-btn.active { background: var(--sm-sel); border: 0; color: var(--sm-text); }
+    html.mm-simple .agent-btn .agent-icon { width: 24px; text-align: center; font-size: 17px; }
+    html.mm-simple .agent-btn .name { font-size: 15px; font-weight: 400; color: var(--sm-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    html.mm-simple #user-chip-wrap { margin-top: auto; padding: 10px 0 12px; border-top: 1px solid var(--sm-border); }
+    html.mm-simple #user-chip { height: 48px; padding: 0 12px; border: 0; border-radius: 12px; background: none; color: var(--sm-text); font-size: 15px; gap: 12px; }
+    html.mm-simple #user-chip:hover { background: var(--sm-hover); border: 0; }
+    html.mm-simple #user-chip .user-chip-role { display: none; }
+    html.mm-simple #user-chip .simple-av, html.mm-simple .simple-modal .simple-av { width: 30px; height: 30px; border-radius: 50%; background: #8b6fd6; color: #fff; display: inline-grid; place-items: center; font-size: 14px; font-weight: 600; flex: none; }
+
+    /* Conversation: user bubbles right, agent text left without a bubble */
+    html.mm-simple .chat-container { background: var(--sm-page); }
+    html.mm-simple .chat-container:not(.active) { display: none; }
+    html.mm-simple .chat-actions { padding: 6px 24px 0; display: flex; justify-content: center; min-height: 46px; background: none; border: 0; }
+    html.mm-simple .chat-actions .agent-name { display: none; }
+    html.mm-simple .chat-actions [id^="cancel-"] { border: 1px solid var(--sm-border); background: var(--sm-raised); color: var(--sm-text); border-radius: 18px; padding: 6px 16px; font-size: 14px; }
+    html.mm-simple .messages { padding-top: 28px; padding-bottom: 20px; }
+    html.mm-simple .message { font-size: 15.5px; line-height: 1.65; }
+    html.mm-simple .message.user { background: var(--sm-user-bg); color: var(--sm-user-text); border: 0; border-radius: 20px; border-bottom-right-radius: 8px; padding: 12px 18px; margin: 0 0 28px auto; max-width: 80%; width: fit-content; font-weight: 400; }
+    html.mm-simple .message.user::before { content: none; }
+    html.mm-simple .message.user a { color: inherit; text-decoration: underline; }
+    html.mm-simple .message.user strong, html.mm-simple .message.user em { color: inherit; }
+    html.mm-simple .message.user :not(pre) > code { background: var(--sm-user-code); color: inherit; }
+    html.mm-simple .message.user pre { background: var(--sm-user-code); color: inherit; border-color: transparent; }
+    html.mm-simple .message.user.simple-auto { color: var(--sm-text); }
+    html.mm-simple .message.assistant { background: none; border: 0; border-radius: 0; padding: 0; color: var(--sm-text); }
+    html.mm-simple .message.assistant strong, html.mm-simple .message.assistant h1, html.mm-simple .message.assistant h2, html.mm-simple .message.assistant h3,
+    html.mm-simple .message.assistant h4, html.mm-simple .message.assistant h5, html.mm-simple .message.assistant h6 { color: var(--sm-text); }
+    html.mm-simple .message.assistant a { color: #8b6fd6; }
+    html.mm-simple .message.assistant code, html.mm-simple .message :not(pre) > code { color: var(--sm-text); background: var(--sm-bubble); }
+    html.mm-simple .message pre { background: var(--sm-side); border: 1px solid var(--sm-border); color: var(--sm-text); }
+    html.mm-simple .message .agent-label { display: none; }
+    html.mm-simple .message > .msg-time { color: var(--sm-muted); }
+    html.mm-simple .message.assistant > .msg-time { left: 64px; right: auto; }   /* no bubble: the time sits under the reply's text, after the Copy (left 0) and Play (left 30px) buttons, not across the full-width column */
+    /* Play and copy: never on the text. A reply: a small muted pair just below it, on hover (always on touch screens). A user bubble: beside it, on hover. */
+    html.mm-simple .message > .msg-copy, html.mm-simple .message > .msg-speak {
+      top: 100%; right: auto; left: 0; margin-top: 2px; border: 0; background: none; color: var(--sm-muted);
+      font-size: 13px; padding: 2px 6px; border-radius: 6px; opacity: 0; transition: opacity .15s;
+    }
+    html.mm-simple .message > .msg-speak { left: 30px; }
+    html.mm-simple .message.user > .msg-copy { top: 50%; left: auto; right: calc(100% + 4px); margin-top: 0; transform: translateY(-50%); }
+    html.mm-simple .message:hover > .msg-copy, html.mm-simple .message:hover > .msg-speak,
+    html.mm-simple .message > .msg-copy:focus, html.mm-simple .message > .msg-speak:focus, html.mm-simple .message > .msg-speak.on { opacity: .85; }
+    html.mm-simple .message > .msg-copy:hover, html.mm-simple .message > .msg-speak:hover { color: var(--sm-text); background: var(--sm-hover); border: 0; }
+    html.mm-simple .message > .msg-speak.on { color: #8b6fd6; }
+    @media (hover: none) { html.mm-simple .message.assistant > .msg-copy, html.mm-simple .message.assistant > .msg-speak { opacity: .6; } }
+    /* While a turn runs the composer's Interject button and the Cancel pill use the Simple colours (the page sets the orange inline) */
+    html.mm-simple .input-area [id^="send-"][style*="--warning"] { background: #8b6fd6 !important; color: #fff !important; }
+    html.mm-simple .input-area [id^="send-"][style*="--warning"]:hover { background: #9d84e0 !important; }
+    html.mm-simple .chat-actions [id^="cancel-"] { background: var(--sm-raised) !important; color: var(--sm-sec) !important; border: 1px solid var(--sm-border) !important; box-shadow: none; }
+    html.mm-simple .chat-actions [id^="cancel-"]:hover { background: var(--sm-hover) !important; color: var(--sm-text) !important; }
+    html.mm-simple .message.user.simple-auto { background: none; padding: 0; margin: 0 0 18px; max-width: 100%; width: auto; border-radius: 0; }
+    html.mm-simple .message.user.simple-auto::before { content: attr(data-note); font-size: 12.5px; color: var(--sm-muted); }
+    html.mm-simple .auto-card, html.mm-simple .auto-stack { --auto-color: var(--sm-muted); }
+    html.mm-simple .auto-card-head, html.mm-simple .auto-stack-head { background: none; color: var(--sm-muted); }
+    html.mm-simple .auto-card-line { color: var(--sm-sec); }
+
+    /* Empty chat: greeting and starters */
+    html.mm-simple .simple-empty { margin: 14vh auto 0; max-width: 720px; text-align: center; }
+    html.mm-simple .simple-greet { font-size: 32px; font-weight: 600; letter-spacing: -.01em; margin-bottom: 28px; color: var(--sm-text); }
+    html.mm-simple .simple-starters { display: flex; flex-direction: column; text-align: left; max-width: 640px; margin: 0 auto; }
+    html.mm-simple .simple-starters button { text-align: left; padding: 11px 14px; border: 0; border-radius: 12px; background: none; color: var(--sm-sec); font: inherit; font-size: 15px; min-height: 44px; cursor: pointer; }
+    html.mm-simple .simple-starters button:hover { background: var(--sm-hover); }
+
+    /* Reasoning box: Thinking… and the last lines */
+    html.mm-simple .simple-think { margin: 0 0 18px; }
+    html.mm-simple .message.simple-wait { display: none; }   /* the "⏳ Thinking..." placeholder: the Thinking box replaces it */
+    html.mm-simple .simple-think .st-head { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 500; color: var(--sm-muted); margin-bottom: 6px; }
+    html.mm-simple .simple-think .st-dot { width: 8px; height: 8px; border-radius: 50%; background: #8b6fd6; animation: simple-pulse 1.4s ease-in-out infinite; }
+    html.mm-simple .simple-think .st-body { font-size: 13px; line-height: 1.55; color: var(--sm-muted); border-left: 1px solid var(--sm-border); padding-left: 12px; white-space: pre-wrap; overflow-wrap: anywhere;
+      /* never taller than five lines, however the text wraps: the newest text stays at the bottom, the top is cut and faded */
+      max-height: calc(1.55em * 5); overflow: hidden; display: flex; flex-direction: column; justify-content: flex-end;
+      -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 60%); mask-image: linear-gradient(to bottom, transparent 0, #000 60%); }
+    html.mm-simple .simple-think .st-body:empty { display: none; }
+    html.mm-simple .simple-think .st-consult { font-size: 13px; color: var(--sm-sec); margin-top: 6px; }
+    html.mm-simple .simple-think .st-consult:empty { display: none; }
+    @keyframes simple-pulse { 0%, 100% { opacity: .35; transform: scale(.8); } 50% { opacity: 1; transform: scale(1.1); } }
+
+    /* Composer: one rounded box */
+    html.mm-simple .input-area { max-width: var(--chat-max-width); position: relative; align-items: center; flex-wrap: wrap; gap: 4px 6px;
+      background: var(--sm-raised); border: 1px solid var(--sm-border); border-radius: 26px; box-shadow: var(--sm-shadow); padding: 10px 12px 8px 14px; margin: 0 auto 14px; width: calc(100% - 2 * var(--chat-pad-x)); }   /* the messages' column: same edges as their text */
+    /* Two rows: the text on its own full-width row; underneath, attach and the reasoning level on the left, mic, call and Send on the right */
+    html.mm-simple .input-area > * { order: 5; }
+    html.mm-simple .input-wrapper { min-width: 0; order: 0; flex: 1 1 100%; width: 100%; }
+    html.mm-simple .input-area > button[title^="Attach"] { order: 1; }
+    html.mm-simple .input-area > .simple-lvl { order: 2; margin-right: auto; }
+    html.mm-simple .input-area:not(:has(> .simple-lvl.on)) > button[title^="Attach"] { margin-right: auto; }   /* no reasoning level for this model: the rest still sits right */
+    html.mm-simple .input-area textarea { width: 100%; min-height: 44px; max-height: 168px; overflow-y: auto; border: 0; background: none; color: var(--sm-text); font: inherit; font-size: 16px; padding: 8px 6px; resize: none; box-shadow: none; }
+    html.mm-simple .input-area textarea:focus { border: 0; box-shadow: none; }
+    html.mm-simple .input-area textarea::placeholder { color: var(--sm-muted); }
+    html.mm-simple .input-area button { background: none; color: var(--sm-sec); border: 0; border-radius: 50%; padding: 0; font-weight: 400; }
+    html.mm-simple .input-area button:hover { background: var(--sm-hover); }
+    html.mm-simple .input-area > button[title^="Attach"] { width: 40px; height: 40px; border: 0 !important; background: none !important; color: var(--sm-sec) !important; border-radius: 50% !important; font-size: 20px !important; }
+    html.mm-simple .input-area .mic-btn { width: 40px; height: 40px; border: 0; background: none; color: var(--sm-sec); border-radius: 50%; }
+    html.mm-simple .input-area .mic-btn:hover { background: var(--sm-hover); border: 0; }
+    html.mm-simple .input-area .mic-btn.call { background: #8b6fd6; color: #fff; }
+    /* Simple has no dictation: the voice button is the voice call (purple, sound-wave icon); during a call it is the red Hang up */
+    html.mm-simple .input-area .mic-btn.simple-call { width: 44px; height: 44px; background: #8b6fd6; color: #fff; }
+    html.mm-simple .input-area .mic-btn.simple-call:hover { background: #9d84e0; }
+    html.mm-simple .input-area .mic-btn.simple-call.call { background: #e5484d; box-shadow: 0 0 0 3px rgba(229, 72, 77, .35); }
+    html.mm-simple .input-area [id^="send-"] { background: #8b6fd6; color: #fff; border-radius: 20px; padding: 0 18px; height: 40px; font-size: 14px; font-weight: 600; }
+    html.mm-simple .input-area [id^="send-"]:hover { background: #9d84e0; }
+    html.mm-simple .input-area .image-preview-area { background: none; }
+    html.mm-simple .input-area .voice-extra .voice-set-btn { display: none; }
+    html.mm-simple .input-area .voice-mode-chip { display: none !important; }   /* no "Tap to talk" in Simple: the button is the voice call */
+    html.mm-simple .simple-lvl { display: none; position: relative; flex: none; }
+    html.mm-simple .simple-lvl.on { display: inline-flex; }
+    html.mm-simple .input-area .simple-lvl > button { height: 36px; padding: 0 10px 0 12px; border-radius: 18px; font-size: 14px; color: var(--sm-sec); white-space: nowrap; }
+    html.mm-simple .simple-lvl-menu { position: absolute; right: 0; bottom: calc(100% + 14px); width: 300px; background: var(--sm-raised); border: 1px solid var(--sm-border); border-radius: 16px; box-shadow: 0 6px 24px rgba(0,0,0,.18); padding: 6px; z-index: 50; }
+    html.mm-simple .simple-lvl-menu[hidden] { display: none; }
+    html.mm-simple .input-area .simple-lvl-menu button { display: flex; align-items: center; gap: 10px; width: 100%; height: auto; min-height: 44px; padding: 9px 12px; border-radius: 11px; text-align: left; color: var(--sm-text); }
+    html.mm-simple .simple-lvl-menu .sl-tick { width: 18px; color: #8b6fd6; visibility: hidden; }
+    html.mm-simple .simple-lvl-menu button.on .sl-tick { visibility: visible; }
+    html.mm-simple .simple-lvl-menu b { display: block; font-weight: 500; font-size: 15px; }
+    html.mm-simple .simple-lvl-menu small { display: block; font-size: 13px; color: var(--sm-muted); }
+
+    /* Questions, download cards, voice calls */
+    html.mm-simple .question-overlay { background: rgba(0,0,0,.35); backdrop-filter: none; }
+    html.mm-simple.mm-light .question-overlay { background: rgba(0,0,0,.35); }
+    html.mm-simple .question-modal { background: var(--sm-raised); color: var(--sm-text); border: 1px solid var(--sm-border); border-radius: 20px; box-shadow: 0 8px 36px rgba(0,0,0,.18); }
+    html.mm-simple .question-modal h3 { color: var(--sm-text); }
+    html.mm-simple .question-modal .question-header { background: var(--sm-bubble); color: var(--sm-sec); }
+    html.mm-simple .question-modal .question-text { color: var(--sm-text); }
+    html.mm-simple .question-option { background: var(--sm-raised); color: var(--sm-text); border: 1px solid var(--sm-border); border-radius: 12px; }
+    html.mm-simple .question-option:hover, html.mm-simple .question-option.selected { border-color: #8b6fd6; background: var(--sm-sel); }
+    html.mm-simple .question-modal textarea, html.mm-simple .question-modal input[type=text] { background: var(--sm-page); color: var(--sm-text); border: 1px solid var(--sm-border); border-radius: 12px; }
+    html.mm-simple #question-submit { background: #8b6fd6; color: #fff; border: 0; border-radius: 18px; }
+    html.mm-simple #question-skip { background: none; color: var(--sm-sec); border: 1px solid var(--sm-border); border-radius: 18px; }
+    html.mm-simple .file-card { background: var(--sm-raised); border: 1px solid var(--sm-border); border-radius: 14px; }
+    html.mm-simple .file-card .fc-name { color: var(--sm-text); }
+    html.mm-simple .file-card .fc-sub { color: var(--sm-muted); }
+    html.mm-simple .file-card .fc-download { background: #8b6fd6; color: #fff; border-radius: 18px; }
+    html.mm-simple .file-card .fc-preview-link { color: #8b6fd6; }
+    html.mm-simple .voice-callbar { background: var(--sm-raised); border: 1px solid var(--sm-border); border-radius: 16px; color: var(--sm-text); }
+    html.mm-simple .voice-callbar .vcb-state { color: #8b6fd6; }
+    html.mm-simple .voice-callbar label, html.mm-simple .voice-callbar .vcb-activity, html.mm-simple .voice-callbar .vcb-heard, html.mm-simple .voice-callbar .vcb-help, html.mm-simple .voice-callbar .vcb-focus-hint { color: var(--sm-muted); }
+    html.mm-simple .voice-callbar .vcb-item { border-top-color: var(--sm-border); }
+    html.mm-simple .voice-callbar .vcb-item button, html.mm-simple .voice-callbar .vcb-disp select { background: var(--sm-page); color: var(--sm-text); border: 1px solid var(--sm-border); }
+
+    /* Toasts */
+    html.mm-simple #hub-toast { background: var(--sm-raised); color: var(--sm-text); border: 1px solid var(--sm-border); box-shadow: 0 2px 12px rgba(0,0,0,.12); }
+
+    /* Simple settings modal */
+    html.mm-simple .simple-scrim { position: fixed; inset: 0; z-index: 10050; background: rgba(0,0,0,.35); display: grid; place-items: center; }
+    html.mm-simple .simple-scrim { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+    html.mm-simple .simple-modal { width: 440px; max-width: calc(100vw - 32px); background: var(--sm-raised, #232322); color: var(--sm-text, #fff); border: 1px solid var(--sm-border, #2f2f2d); border-radius: 20px; box-shadow: 0 8px 36px rgba(0,0,0,.18); padding: 22px 24px 12px; font-size: 15px; }
+    html.mm-simple .simple-modal .sm-h { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+    html.mm-simple .simple-modal h2 { font-size: 19px; font-weight: 600; margin: 0; }
+    html.mm-simple .simple-modal button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+    html.mm-simple .simple-modal .sm-x { width: 32px; height: 32px; border-radius: 8px; color: var(--sm-muted, #8a897f); font-size: 18px; }
+    html.mm-simple .simple-modal .sm-set { padding: 16px 0; border-top: 1px solid var(--sm-border, #2f2f2d); }
+    html.mm-simple .simple-modal .sm-set:first-of-type { border-top: 0; }
+    html.mm-simple .simple-modal .sm-lab { display: block; font-size: 13px; color: var(--sm-muted, #8a897f); margin-bottom: 8px; font-weight: 500; }
+    html.mm-simple .simple-modal .sm-seg { display: flex; background: var(--sm-side, #161615); border: 1px solid var(--sm-border, #2f2f2d); border-radius: 12px; padding: 3px; gap: 3px; }
+    html.mm-simple .simple-modal .sm-seg button { flex: 1; height: 36px; border-radius: 9px; font-size: 14px; color: var(--sm-sec, #c3c2b7); }
+    html.mm-simple .simple-modal .sm-seg button.on { background: var(--sm-raised, #232322); color: var(--sm-text, #fff); font-weight: 600; box-shadow: 0 1px 4px rgba(0,0,0,.12); outline: 1px solid #8b6fd6; }
+    html.mm-simple .simple-modal .sm-name { font-size: 15px; }
+    html.mm-simple .simple-modal .sm-plain { display: flex; align-items: center; justify-content: space-between; width: 100%; text-align: left; min-height: 44px; }
+    html.mm-simple .simple-modal .sm-plain b { display: block; font-weight: 500; }
+    html.mm-simple .simple-modal .sm-plain span { font-size: 13px; color: var(--sm-muted, #8a897f); }
+    html.mm-simple .simple-modal .sm-out { color: #ff7a70; font-weight: 500; }
+    html.mm-simple.mm-light .simple-modal .sm-out { color: #c8372d; }
+
+    /* Agent list: busy dot at the right end of the row, "More agents", plain-word group headings */
+    html.mm-simple #agent-list .agent-btn .agent-status.live-busy,
+    html.mm-simple #agent-list .agent-btn .agent-status.live-question { display: block !important; position: absolute; top: 50%; right: 14px; left: auto; width: 9px; height: 9px; margin: -4px 0 0; padding: 0; border-radius: 50%; font-size: 0; line-height: 0; box-shadow: none; }
+    html.mm-simple #agent-list .agent-btn .agent-status.live-busy { background: var(--warning, #F5A623); animation: pulse 1s infinite; }
+    html.mm-simple #agent-list .agent-btn .agent-status.live-question { background: var(--blue, #3d7bff); animation: pulse 1.6s infinite; }
+    html.mm-simple #agent-list .simple-more-hide { display: none !important; }
+    html.mm-simple #agent-list .simple-more { display: flex; align-items: center; gap: 12px; position: relative; width: 100%; height: 38px; margin: 4px 0 0; padding: 0 12px; border: 0; border-radius: 12px; background: none; color: var(--sm-sec); font: inherit; font-size: 14px; cursor: pointer; text-align: left; }
+    html.mm-simple #agent-list .simple-more:hover { background: var(--sm-hover); color: var(--sm-text); }
+    html.mm-simple #agent-list .simple-more .sm-chev { width: 24px; text-align: center; font-size: 17px; transition: transform .15s; }
+    html.mm-simple #agent-list .simple-more.open .sm-chev { transform: rotate(90deg); }
+    html.mm-simple #agent-list .simple-more .sm-dot { display: none; position: absolute; top: 50%; right: 14px; width: 9px; height: 9px; margin-top: -4px; border-radius: 50%; background: var(--warning, #F5A623); animation: pulse 1s infinite; }
+    html.mm-simple #agent-list .simple-more.has-busy .sm-dot { display: block; }
+    html.mm-simple #agent-list .simple-more-h { padding: 12px 12px 4px; font-size: 12px; font-weight: 500; color: var(--sm-muted); }
+
+    /* Top right of the chat area: appearance button and the Simple view switch */
+    html.mm-simple .main { position: relative; }
+    html.mm-simple #simple-top-ctl { position: absolute; top: 8px; right: 16px; z-index: 30; display: flex; align-items: center; gap: 8px; }
+    html.mm-simple .simple-theme-btn { display: inline-flex; align-items: center; gap: 6px; min-height: 30px; padding: 3px 12px; border: 1px solid var(--sm-border); border-radius: 16px; background: var(--sm-raised); color: var(--sm-sec); font: inherit; font-size: 13px; line-height: 1; cursor: pointer; white-space: nowrap; }
+    html.mm-simple .simple-theme-btn:hover { background: var(--sm-hover); color: var(--sm-text); }
+    html.mm-simple .mode-toggle { border-color: var(--sm-border); background: var(--sm-raised); color: var(--sm-text); }
+    html.mm-simple .mode-toggle:hover { background: var(--sm-hover); color: var(--sm-text); }
+    html.mm-simple .mode-toggle .mt-track { background: #8a897f; }
+    html.mm-simple .mode-toggle[aria-checked="true"] .mt-track { background: #8b6fd6; }
+
+    @media (max-width: 760px) { html.mm-simple .sidebar { width: 240px !important; min-width: 240px; } }
   </style>
 </head>
 <body>
@@ -2574,8 +2967,10 @@
         <div id="account-2fa-note" style="display:none">Two-factor is required for admins: <a onclick="openSecurityDialog()">set it up</a></div>
         <button class="account-item" role="menuitem" onclick="openProfileDialog()">Profile</button>
         <button class="account-item" role="menuitem" onclick="openSecurityDialog()">Security</button>
+        <button class="account-item" role="menuitem" id="account-simple" style="display:none" onclick="toggleAccountMenu(false); simpleSwitchMode('simple')">Switch to Simple</button>
         <a class="account-item" role="menuitem" id="account-users" href="/users" style="display:none">Users</a>
         <a class="account-item" role="menuitem" id="account-modules" href="/modules" style="display:none">Data connectors</a>
+        <a class="account-item" role="menuitem" id="account-remote" href="/modules#remote-computers" style="display:none">Remote computers</a>
         <a class="account-item" role="menuitem" id="account-local-models" href="/local-models" style="display:none">Local models</a>
         <button class="account-item" role="menuitem" onclick="signOut()">Sign out</button>
       </div>
@@ -2598,10 +2993,16 @@
         <button id="schedule-btn" class="header-btn" title="Task scheduler: scheduled tasks and background jobs for all agents" onclick="openSchedulePanel()">📅</button>
         <button id="settings-btn" class="header-btn" title="Settings" onclick="openSettings()">⚙️</button>
         <button id="help-btn" class="header-btn" title="Help: how-tos, the phone app, and what to do when something's wrong" aria-label="Help" onclick="openHelpPanel()">?</button>
+        <button id="reload-btn" class="header-btn reload-btn" title="Reload the app" aria-label="Reload the app" onclick="reloadApp()">↻</button>
         <div class="more-wrap" id="more-wrap">
           <button id="more-btn" class="header-btn" aria-label="More" title="More options" aria-haspopup="menu" aria-expanded="false" aria-controls="more-menu" onclick="toggleMoreMenu()">⋯<span class="more-badge" id="more-badge">Advanced</span></button>
           <div id="more-menu" class="more-menu" role="menu" aria-label="More options">
             <button id="about-btn" class="more-item" role="menuitem" title="Version, channel, commit and update status of this hub" onclick="closeMoreMenu(); openAboutDialog()">ℹ️ About My Maestro AI</button>
+            <button id="reload-app-item" class="more-item" role="menuitem" title="Reload the app" onclick="closeMoreMenu(); reloadApp()">↻ Reload</button>
+            <button id="more-modules-item" class="more-item" role="menuitem" title="Data connectors" onclick="closeMoreMenu(); location.href = '/modules'">🔌 Data connectors</button>
+            <button id="more-remote-item" class="more-item" role="menuitem" title="Open a computer's desktop" style="display:none" onclick="closeMoreMenu(); location.href = '/modules#remote-computers'">💻 Remote computers</button>
+            <button id="notify-agent-item" class="more-item" role="menuitem" title="Choose which notifications this agent may send you" onclick="closeMoreMenu(); notifyBellOpenVisible()">🔔 Notifications for this agent</button>
+            <button id="recordings-item" class="more-item" role="menuitem" title="Call recordings you may open" style="display:none" onclick="closeMoreMenu(); location.href = '/recordings'">🎙 Recordings</button>
             <button id="comms-btn" class="more-item" role="menuitem" title="Messaging channels (Telegram etc)" onclick="closeMoreMenu(); openCommsPanel()">💬 Messaging</button>
             <button id="wallet-btn" class="more-item" role="menuitem" title="Trading wallets (on-chain)" onclick="closeMoreMenu(); openWalletPanel()">👛 Wallets</button>
             <button id="dream-btn" class="more-item" role="menuitem" title="Agent Dreaming — consolidate learnings" onclick="closeMoreMenu(); startDream()">💤 Dream (consolidate learnings)</button>
@@ -2636,6 +3037,16 @@
                   </select>
                 </label>
                 <div class="more-hint">How agents delegate. Fallback: hub agents first, SDK sub-workers only if needed. Off: no SDK sub-workers.</div>
+              </div>
+              <div class="more-row">
+                <label class="toggle-switch" style="gap:6px" title="How agents are told to run a team: delegate, match models to jobs, get second opinions. Light is for small local models; Off removes it. An agent's own setting can still switch it off.">
+                  <span class="toggle-label">Team guidance</span>
+                  <select id="team-guidance-select" style="background:transparent;color:inherit;border:1px solid currentColor;border-radius:6px;padding:1px 4px;font:inherit;opacity:.85">
+                    <option value="full">Full</option>
+                    <option value="light">Light</option>
+                    <option value="off">Off</option>
+                  </select>
+                </label>
               </div>
               <div class="more-row">
                 <label class="toggle-switch" title="Caveman Mode: Ultra-terse responses. Minimum words necessary. No filler, no pleasantries.">
@@ -2699,6 +3110,13 @@
       </div>
     </div>
   </div>
+  <script src="/ui-voice-thinking.js"></script>
+  <script src="/ui-voice-orb.js"></script>
+  <script src="/ui-face-player.js"></script>
+  <script src="/ui-call-display.js"></script>
+  <script src="/ui-file-card.js"></script>
+  <script src="/ui-team-card.js"></script>
+  <script src="/ui-simple.js"></script>
   <script src="app.js"></script>
   <script src="comms-panel.js"></script>
   <!-- Image Modal -->

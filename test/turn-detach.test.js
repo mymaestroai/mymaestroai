@@ -5,13 +5,17 @@ const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
 
-const sdkChat = require('../lib/sdk-chat');
-const hubEvents = require('../lib/hub-events');
+// lib/ comes from a throwaway install, so nothing under the real data/ is touched.
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('turn-detach-iso-');
+const L = (p) => require(path.join(ISO.lib, p));
+const sdkChat = L('sdk-chat');
+const hubEvents = L('hub-events');
 const { sendSSE, makeChunk, turnRegistry, pendingToolConfirms, setTestStreamer } = sdkChat.__turn;
 const { runAskUser, questionAgents, pendingQuestions } = sdkChat.__askUser;
 
 const AGENTS = ['zz_detach_a', 'zz_detach_b', 'zz_detach_c', 'zz_detach_d', 'zz_detach_e'];
-const convDir = path.join(__dirname, '..', 'data', 'conversations');
+const convDir = path.join(ISO.data, 'conversations');
 fs.mkdirSync(convDir, { recursive: true });
 after(() => { setTestStreamer(null); for (const a of AGENTS) try { fs.unlinkSync(path.join(convDir, `${a}.jsonl`)); } catch {} });
 

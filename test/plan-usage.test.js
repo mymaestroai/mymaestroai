@@ -7,7 +7,11 @@ const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { createPlanUsage, familyOf, cleanWarn, cleanPolicy, DEFAULT_POLICY, DEFAULT_WARN } = require('../lib/plan-usage');
+// lib/ comes from a throwaway copy of the install (test/helpers/isolated-install.js), so nothing under the real data/ is touched.
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('plan-usage-iso-');
+const L = (p) => require(path.join(ISO.lib, p));
+const { createPlanUsage, familyOf, cleanWarn, cleanPolicy, DEFAULT_POLICY, DEFAULT_WARN } = L('plan-usage');
 
 const T0 = Date.parse('2026-10-12T12:00:00Z');
 const later = '2026-10-14T23:59:59Z';
@@ -172,7 +176,7 @@ test('cleanWarn / cleanPolicy: what the Settings box may store', () => {
 });
 
 // ---- extra usage (pay-as-you-go) after the weekly allowance is used up ----
-const { classifyEvent, refusalReason, dateText, whenText } = require('../lib/plan-usage');
+const { classifyEvent, refusalReason, dateText, whenText } = L('plan-usage');
 const CAPTURED = { status: 'rejected', resetsAt: 1794441600, rateLimitType: 'seven_day', overageStatus: 'allowed', overageResetsAt: 1796083200, isUsingOverage: true, overageInUse: true, unifiedWindows: { seven_day: { utilization: 1, resetsAt: 1794441600 } } };
 const CAPTURED_RESET = new Date(1794441600 * 1000).toISOString();
 const CAPTURED_OVERAGE_RESET = new Date(1796083200 * 1000).toISOString();
@@ -297,7 +301,7 @@ test('sdk-chat: the rate_limit_event handler uses classifyEvent and extraUsageLi
 });
 
 // ---- review round 1: a fresh reading wins, a refusal stays, the family bucket is only touched by a covering window ----
-const { refusalText } = require('../lib/plan-usage');
+const { refusalText } = L('plan-usage');
 const REFUSED_OOC = { ...CAPTURED, overageStatus: 'rejected', isUsingOverage: false, overageInUse: false, overageDisabledReason: 'out_of_credits' };
 const usageWith = (extra, seven = { utilization: 100, resets_at: CAPTURED_RESET }) => ({ rate_limits_available: true, rate_limits: { seven_day: seven, ...(extra === undefined ? {} : { extra_usage: extra }) } });
 

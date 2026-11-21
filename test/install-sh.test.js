@@ -51,7 +51,9 @@ test('safe defaults: umask 077, data/ 0700, .env 0600, an existing different pro
   assert.match(src, /chmod 600 "\$DIR\/\.env"/);
   assert.match(src, /already holds a different git project/);
   assert.match(src, /has local code changes/);
-  assert.match(src, /^main "\$@"$/m, 'a truncated download runs nothing (everything is inside main)');
+  // main still runs only from the last line (now behind the tests' functions-only switch): a truncated download runs nothing
+  assert.match(src, /^\[ "\$\{MM_INSTALLER_FUNCTIONS_ONLY:-\}" = 1 \] \|\| main "\$@"\n?$/m, 'a truncated download runs nothing (everything is inside main)');
+  assert.ok(src.trimEnd().endsWith('|| main "$@"'), 'main is called on the last line');
   assert.match(src, /setup-link --plain/, 'opens the Welcome page with the setup code');
 });
 
@@ -78,4 +80,179 @@ test('the installer says whether Claude Code is here and signed in (the Welcome 
   assert.match(run(() => {}), /Claude: Claude Code is not on this computer\./);
   assert.match(run((h) => { fs.mkdirSync(path.join(h, '.claude')); fs.writeFileSync(path.join(h, '.claude', '.credentials.json'), '{"claudeAiOauth":{}}'); }), /Claude: Claude Code is on this computer and signed in\./);
   assert.match(run((h) => { fs.mkdirSync(path.join(h, '.local', 'bin'), { recursive: true }); fs.writeFileSync(path.join(h, '.local', 'bin', 'claude'), '#!/bin/sh\n'); fs.chmodSync(path.join(h, '.local', 'bin', 'claude'), 0o755); }), /Claude: Claude Code is on this computer but not signed in yet\./);
+});
+
+// Updating the bundled Node.js replaced its whole folder and took a Codex installed with its npm with it (report from
+// another install: 22.23.4 -> 22.23.5, codex gone, ~/.local/bin/codex dangling). The real install_node runs here with a
+// local archive and a stand-in curl; MM_INSTALLER_FUNCTIONS_ONLY=1 defines the installer's functions without running it.
+function nodeUpdateWorld({ withCodex = true, codexOutside = false } = {}) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'install-codex-'));
+  const home = path.join(root, 'home');
+  const state = path.join(root, 'state');
+  const nodeDir = path.join(state, 'node');
+  const wrapper = (version) => `#!/bin/sh\nif [ "$1" = --version ]; then echo v${version}; exit 0; fi\nexec "${process.execPath}" "$@"\n`;
+  fs.mkdirSync(path.join(nodeDir, 'bin'), { recursive: true });
+  fs.writeFileSync(path.join(nodeDir, 'bin', 'node'), wrapper('1.0.0'), { mode: 0o755 });
+  fs.mkdirSync(path.join(home, '.local', 'bin'), { recursive: true });
+  fs.mkdirSync(path.join(home, '.codex'));
+  fs.writeFileSync(path.join(home, '.codex', 'auth.json'), 'sign-in stand-in');
+  if (withCodex) {
+    const pkg = path.join(nodeDir, 'lib', 'node_modules', '@openai', 'codex');
+    fs.mkdirSync(path.join(pkg, 'bin'), { recursive: true });
+    fs.writeFileSync(path.join(pkg, 'package.json'), JSON.stringify({ name: '@openai/codex', bin: { codex: 'bin/codex.js' } }));
+    fs.writeFileSync(path.join(pkg, 'bin', 'codex.js'), '#!/bin/sh\necho codex-from-old-node\n', { mode: 0o755 });
+    fs.mkdirSync(path.join(nodeDir, 'lib', 'node_modules', '@openai', 'codex-linux-x64', 'vendor'), { recursive: true });
+    fs.writeFileSync(path.join(nodeDir, 'lib', 'node_modules', '@openai', 'codex-linux-x64', 'vendor', 'codex'), 'native');
+    fs.symlinkSync('../lib/node_modules/@openai/codex/bin/codex.js', path.join(nodeDir, 'bin', 'codex'));
+    fs.symlinkSync(path.join(nodeDir, 'bin', 'codex'), path.join(home, '.local', 'bin', 'codex'));
+  }
+  if (codexOutside) {
+    const out = path.join(home, '.npm-global', 'lib', 'node_modules', '@openai', 'codex');
+    fs.mkdirSync(out, { recursive: true });
+    fs.writeFileSync(path.join(out, 'package.json'), '{"name":"@openai/codex","version":"outside"}');
+  }
+  // the new Node.js archive that the stand-in curl "downloads"
+  const pkgRoot = path.join(root, 'pkg');
+  fs.mkdirSync(path.join(pkgRoot, 'node-v99.0.0-linux-x64', 'bin'), { recursive: true });
+  fs.writeFileSync(path.join(pkgRoot, 'node-v99.0.0-linux-x64', 'bin', 'node'), wrapper('99.0.0'), { mode: 0o755 });
+  const tarball = path.join(root, 'node.tar.gz');
+  execFileSync('tar', ['-czf', tarball, '-C', pkgRoot, 'node-v99.0.0-linux-x64']);
+  const sha = require('crypto').createHash('sha256').update(fs.readFileSync(tarball)).digest('hex');
+  const fakeBin = path.join(root, 'fakebin');
+  fs.mkdirSync(fakeBin);
+  fs.writeFileSync(path.join(fakeBin, 'curl'), `#!/bin/sh\nwhile [ $# -gt 0 ]; do if [ "$1" = -o ]; then out="$2"; fi; shift; done\ncp "${tarball}" "$out"\n`, { mode: 0o755 });
+  const run = () => spawnSync('bash', ['-c', `MM_INSTALLER_FUNCTIONS_ONLY=1 . "${SH}"; NODE_VERSION=99.0.0; OS=linux; ARCH=x64; NODE_SHA_linux_x64=${sha}; STATE_DIR="${state}"; DRY=0; install_node`],
+    { env: { PATH: `${fakeBin}:/usr/bin:/bin`, HOME: home }, encoding: 'utf8', timeout: 60000 });
+  return { root, home, nodeDir, run, done: () => fs.rmSync(root, { recursive: true, force: true }) };
+}
+
+test('updating the bundled Node.js keeps a Codex installed with its npm: moved to ~/.npm-global before the swap; ~/.codex untouched', () => {
+  const w = nodeUpdateWorld();
+  try {
+    const r = w.run();
+    assert.strictEqual(r.status, 0, r.stderr + r.stdout);
+    assert.match(r.stdout, /Codex moved out of the Node\.js folder/);
+    assert.strictEqual(execFileSync(path.join(w.nodeDir, 'bin', 'node'), ['--version'], { encoding: 'utf8' }).trim(), 'v99.0.0', 'the new Node.js is in place');
+    const out = path.join(w.home, '.npm-global');
+    assert.ok(fs.existsSync(path.join(out, 'lib', 'node_modules', '@openai', 'codex', 'package.json')), 'Codex moved');
+    assert.ok(fs.existsSync(path.join(out, 'lib', 'node_modules', '@openai', 'codex-linux-x64', 'vendor', 'codex')), 'its platform package too');
+    assert.strictEqual(fs.readlinkSync(path.join(out, 'bin', 'codex')), '../lib/node_modules/@openai/codex/bin/codex.js', 'linked as npm links it');
+    assert.strictEqual(execFileSync(path.join(out, 'bin', 'codex'), { encoding: 'utf8' }).trim(), 'codex-from-old-node');
+    assert.ok(!fs.existsSync(path.join(w.nodeDir, 'lib', 'node_modules', '@openai')), 'nothing of it in the new Node.js folder');
+    assert.strictEqual(fs.readFileSync(path.join(w.home, '.codex', 'auth.json'), 'utf8'), 'sign-in stand-in');
+    // the user's own link pointed into the old Node.js folder: the installer's check (codex-check) repoints it
+    const setup = require('../lib/codex-cli/setup');
+    const link = path.join(w.home, '.local', 'bin', 'codex');
+    assert.deepStrictEqual(setup.repairLinks({ env: { HOME: w.home }, binDirs: [path.dirname(link)], nodeDirs: [w.nodeDir] }), [link]);
+    assert.strictEqual(execFileSync(link, { encoding: 'utf8' }).trim(), 'codex-from-old-node');
+  } finally { w.done(); }
+});
+
+test('the Node.js update with no Codex inside changes nothing outside; a Codex already outside is kept as it is', () => {
+  const w = nodeUpdateWorld({ withCodex: false });
+  try {
+    const r = w.run();
+    assert.strictEqual(r.status, 0, r.stderr + r.stdout);
+    assert.doesNotMatch(r.stdout, /Codex moved/);
+    assert.ok(!fs.existsSync(path.join(w.home, '.npm-global')), 'no ~/.npm-global made');
+  } finally { w.done(); }
+  const w2 = nodeUpdateWorld({ codexOutside: true });
+  try {
+    const r = w2.run();
+    assert.strictEqual(r.status, 0, r.stderr + r.stdout);
+    assert.strictEqual(JSON.parse(fs.readFileSync(path.join(w2.home, '.npm-global', 'lib', 'node_modules', '@openai', 'codex', 'package.json'), 'utf8')).version, 'outside', 'the copy outside wins');
+    assert.ok(fs.existsSync(path.join(w2.home, '.npm-global', 'lib', 'node_modules', '@openai', 'codex-linux-x64')), 'a platform package not yet outside is moved');
+  } finally { w2.done(); }
+});
+
+// Review r1 (GPT-5.6 BLOCK): a move that fails (a full disk, a folder that can't be written) must not let the old
+// Node.js folder, with Codex still in it, be removed.
+test('a failed move of Codex stops the Node.js update: the old folder and Codex in it stay, no half-made copy is left', (t) => {
+  if (process.getuid && process.getuid() === 0) { t.skip('root can write a read-only folder'); return; }
+  const w = nodeUpdateWorld();
+  const scope = path.join(w.home, '.npm-global', 'lib', 'node_modules', '@openai');
+  try {
+    fs.mkdirSync(scope, { recursive: true });
+    fs.chmodSync(scope, 0o555);   // the move into it fails
+    const r = w.run();
+    assert.notStrictEqual(r.status, 0);
+    assert.match(r.stderr + r.stdout, /could not be moved out of the Node\.js folder[^\n]*so Node\.js was not updated and nothing was removed/);
+    assert.strictEqual(execFileSync(path.join(w.nodeDir, 'bin', 'node'), ['--version'], { encoding: 'utf8' }).trim(), 'v1.0.0', 'the old Node.js stays');
+    assert.ok(fs.existsSync(path.join(w.nodeDir, 'lib', 'node_modules', '@openai', 'codex', 'package.json')), 'Codex stays in it');
+    fs.chmodSync(scope, 0o755);
+    assert.deepStrictEqual(fs.readdirSync(scope), [], 'nothing half-made outside');
+  } finally { try { fs.chmodSync(scope, 0o755); } catch { /* gone */ } w.done(); }
+});
+
+// Review r2 (GPT-5.6 BLOCKs, Sonnet): a run that stops after the first package (a copy that fails partway) keeps every
+// original; the next run finishes the move, clears what an earlier run left in its temporary folders, and only then
+// lets the old Node.js folder go.
+test('a run that stops partway keeps every original; the next run moves the rest and clears leftover temporary folders', (t) => {
+  if (process.getuid && process.getuid() === 0) { t.skip('root reads an unreadable file'); return; }
+  const w = nodeUpdateWorld();
+  const plat = path.join(w.nodeDir, 'lib', 'node_modules', '@openai', 'codex-linux-x64', 'vendor', 'codex');
+  const scope = path.join(w.home, '.npm-global', 'lib', 'node_modules', '@openai');
+  try {
+    fs.chmodSync(plat, 0o000);   // the copy of the platform package fails
+    const r1 = w.run();
+    assert.notStrictEqual(r1.status, 0);
+    assert.match(r1.stderr + r1.stdout, /so Node\.js was not updated and nothing was removed/);
+    assert.ok(fs.existsSync(path.join(scope, 'codex', 'package.json')), 'the first package is in place outside');
+    assert.ok(fs.existsSync(path.join(w.nodeDir, 'lib', 'node_modules', '@openai', 'codex-linux-x64', 'vendor')), 'the second is still in the old folder');
+    assert.deepStrictEqual(fs.readdirSync(scope).sort(), ['codex'], 'no temporary folder left');
+    assert.strictEqual(execFileSync(path.join(w.nodeDir, 'bin', 'node'), ['--version'], { encoding: 'utf8' }).trim(), 'v1.0.0');
+    // a leftover temporary folder from some earlier stopped run, then a run with the file readable again
+    fs.mkdirSync(path.join(scope, '.mm-moving-abc123', 'pkg'), { recursive: true });
+    fs.chmodSync(plat, 0o644);
+    const r2 = w.run();
+    assert.strictEqual(r2.status, 0, r2.stderr + r2.stdout);
+    assert.ok(fs.existsSync(path.join(scope, 'codex-linux-x64', 'vendor', 'codex')), 'the rest moved');
+    assert.deepStrictEqual(fs.readdirSync(scope).sort(), ['codex', 'codex-linux-x64'], 'the leftover cleared, nothing nested');
+    assert.strictEqual(execFileSync(path.join(w.nodeDir, 'bin', 'node'), ['--version'], { encoding: 'utf8' }).trim(), 'v99.0.0');
+    assert.strictEqual(execFileSync(path.join(w.home, '.npm-global', 'bin', 'codex'), { encoding: 'utf8' }).trim(), 'codex-from-old-node');
+  } finally { try { fs.chmodSync(plat, 0o644); } catch { /* gone */ } w.done(); }
+});
+
+// Review r3 (GPT-5.6 BLOCK): a run that stopped after the last package was moved and removed but before bin/codex was
+// linked leaves nothing in the old Node.js folder; the next run still links the saved package, with no download.
+test('a run that stopped just before linking: the next run links ~/.npm-global/bin/codex to the saved package', () => {
+  const w = nodeUpdateWorld({ withCodex: false, codexOutside: true });
+  const pre = path.join(w.home, '.npm-global');
+  const pkg = path.join(pre, 'lib', 'node_modules', '@openai', 'codex');
+  try {
+    fs.writeFileSync(path.join(pkg, 'package.json'), JSON.stringify({ name: '@openai/codex', bin: { codex: 'bin/codex.js' } }));
+    fs.mkdirSync(path.join(pkg, 'bin'));
+    fs.writeFileSync(path.join(pkg, 'bin', 'codex.js'), '#!/bin/sh\necho codex-saved\n', { mode: 0o755 });
+    const r = w.run();
+    assert.strictEqual(r.status, 0, r.stderr + r.stdout);
+    assert.strictEqual(fs.readlinkSync(path.join(pre, 'bin', 'codex')), '../lib/node_modules/@openai/codex/bin/codex.js');
+    assert.strictEqual(execFileSync(path.join(pre, 'bin', 'codex'), { encoding: 'utf8' }).trim(), 'codex-saved');
+    // a second run leaves the link as it is; a user's own file at that name is never replaced
+    fs.unlinkSync(path.join(pre, 'bin', 'codex'));
+    fs.writeFileSync(path.join(pre, 'bin', 'codex'), 'mine');
+    assert.strictEqual(w.run().status, 0);
+    assert.strictEqual(fs.readFileSync(path.join(pre, 'bin', 'codex'), 'utf8'), 'mine');
+  } finally { w.done(); }
+});
+
+// Review r1 (GPT-5.6 follow-up): the installer's own check step runs the install's codex-check with --repair --quiet,
+// says nothing when the command is not there yet (an older version), and never stops the install.
+test('check_codex runs codex-check --repair --quiet with the install\'s Node.js and goes on whatever it says', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'install-check-'));
+  try {
+    const dir = path.join(root, 'app');
+    fs.mkdirSync(path.join(dir, 'scripts'), { recursive: true });
+    const log = path.join(root, 'args');
+    // a stand-in hub-cli.js: records how it was called and fails, as a missing Codex would
+    fs.writeFileSync(path.join(dir, 'scripts', 'hub-cli.js'), `// codex-check stand-in\nrequire('fs').writeFileSync(${JSON.stringify(log)}, process.argv.slice(2).join(' '));\nconsole.log('Codex is not installed. Fix: mymaestro connect chatgpt');\nprocess.exit(1);\n`);
+    const run = () => spawnSync('bash', ['-c', `MM_INSTALLER_FUNCTIONS_ONLY=1 . "${SH}"; DIR="${dir}"; NODE="${process.execPath}"; DRY=0; check_codex; echo "after:$?"`], { env: { PATH: '/usr/bin:/bin', HOME: root }, encoding: 'utf8', timeout: 30000 });
+    const r = run();
+    assert.match(r.stdout, /after:0/, 'the install goes on');
+    assert.strictEqual(fs.readFileSync(log, 'utf8'), 'codex-check --repair --quiet');
+    assert.strictEqual((r.stdout.match(/mymaestro connect chatgpt/g) || []).length, 1, 'one message, from the check itself');
+    fs.writeFileSync(path.join(dir, 'scripts', 'hub-cli.js'), '// an older version without the command\nprocess.exit(3);\n');
+    fs.writeFileSync(log, 'not run');
+    assert.match(run().stdout, /after:0/);
+    assert.strictEqual(fs.readFileSync(log, 'utf8'), 'not run', 'an older hub-cli.js is not asked');
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

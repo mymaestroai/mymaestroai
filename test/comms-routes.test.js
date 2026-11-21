@@ -14,8 +14,11 @@ const os = require('node:os');
 const http = require('node:http');
 const { EventEmitter } = require('node:events');
 
-const { getCommsService } = require('../lib/comms/service');
-const routes = require('../lib/comms/routes');
+// lib/ comes from a throwaway install, so nothing under the real data/ is touched.
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('comms-routes-iso-');
+const { getCommsService } = require(path.join(ISO.lib, 'comms/service'));
+const routes = require(path.join(ISO.lib, 'comms/routes'));
 
 const FAKE_TOKEN = 'FAKE:not-a-real-token';
 const BAD_TOKEN = 'FAKE:bad-token';

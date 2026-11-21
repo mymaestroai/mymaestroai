@@ -40,7 +40,10 @@ test('server: account, user-management, me, filtered agents/status/events, login
 
 test('internal loopback calls carry the service token on every path', () => {
   assert.ok(sdk.includes("[hubAuthMod.SERVICE_HEADER]: hubAuthMod.SERVICE_TOKEN"));
-  for (const f of ['lib/scheduler.js', 'lib/task-queue.js']) assert.ok(read(f).includes("require('./auth').SERVICE_TOKEN"), f);
+  assert.ok(read('lib/scheduler.js').includes("require('./auth').SERVICE_TOKEN"), 'lib/scheduler.js');
+  // The task queue no longer calls /api/chat with the service token: it starts the turn in-process (startHubTurn) with a named origin.
+  assert.ok(!read('lib/task-queue.js').includes('SERVICE_TOKEN'), 'lib/task-queue.js');
+  assert.ok(read('lib/task-queue.js').includes("origin: { kind: 'task', from: task.creator_agent"), 'task turns name their creator');
 });
 
 test('sdk-chat: list_agents, rosters, consults and shared memory are scoped by owner', () => {
@@ -110,7 +113,8 @@ test('server: 2026-10-16 review fixes are wired (static allow-list, hub-only bod
   assert.ok(!server.includes("const safePath = path.normalize(pathname)"), 'the old normalize-and-join fallback is gone');
   assert.strictEqual((server.match(/stripHubOnlyChatFields\(JSON\.parse\(await readBody\(req\)\), req\)/g) || []).length, 2, 'both chat routes strip hub-only fields');
   assert.ok(server.includes("const HUB_ONLY_CHAT_FIELDS = ['image_files', 'consulted_by', 'origin', 'owner_turn'];"));
-  assert.ok(server.includes("const allowed = require('./lib/settings').getSetting('memberModels');"));
+  // Starter team part 6: the memberModels rule moved into lib/member-models (shared with a member's spawn_workers).
+  assert.ok(server.includes("const mm = require('./lib/member-models');") && server.includes('if (!mm.memberMayUse(body.model))'));
   assert.ok(server.includes("!(access.isAdmin(req.hubUser) && !req.hubPendingTotp)"));
   assert.ok(server.includes("if (req.hubToken && req.hubToken.agents && !req.hubToken.agents.includes(agentName)) return jsonResponse(res, 403, { error: 'token_scope'"));
   assert.ok(server.includes("handleHttpRequest(req, res).catch((err) => {"));

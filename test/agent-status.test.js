@@ -1,7 +1,12 @@
 'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { statusExtras } = require('../lib/sdk-chat');
+// lib/ comes from a throwaway install (test/helpers/isolated-install.js), so nothing under the real data/ is touched.
+const path = require('path');
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('agent-status-iso-');
+const L = (p) => require(path.join(ISO.lib, p));
+const { statusExtras } = L('sdk-chat');
 
 const known = new Set(['owner-agent', 'lead', 'helper']);
 const virtuals = {

@@ -9,13 +9,17 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const sdkChat = require('../lib/sdk-chat');
-const { ConsultQueue } = require('../lib/consult-queue');
+// lib/ comes from a throwaway install, so nothing under the real data/ is touched.
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('stop-workers-iso-');
+const L = (p) => require(path.join(ISO.lib, p));
+const sdkChat = L('sdk-chat');
+const { ConsultQueue } = L('consult-queue');
 const { sendSSE, makeChunk, turnRegistry, setTestStreamer, turnLinks, createTurnLink, pendingConsults, stoppedWorkers, isStoppedResult } = sdkChat.__turn;
 
 const AGENTS = ['zz_stop_p', 'zz_stop_c', 'zz_stop_g', 'zz_stop_u', 'zz_stop_q'];
 const [P, C, G, U, Q] = AGENTS;
-const convDir = path.join(__dirname, '..', 'data', 'conversations');
+const convDir = path.join(ISO.data, 'conversations');
 fs.mkdirSync(convDir, { recursive: true });
 after(() => { setTestStreamer(null); for (const a of AGENTS) try { fs.unlinkSync(path.join(convDir, `${a}.jsonl`)); } catch {} });
 const tick = (ms = 0) => new Promise(r => setTimeout(r, ms));
@@ -189,7 +193,7 @@ test('a call still on its way when its turn is stopped (link not picked up yet) 
 });
 
 test('the hub\'s turn view remembers a stop, so a reloaded page shows Stopped, not Failed', () => {
-  const { createHubEvents } = require('../lib/hub-events');
+  const { createHubEvents } = L('hub-events');
   const hub = createHubEvents();
   const items = [];
   hub.onPublish(ev => { if (ev.type === 'turn_activity' && ev.item && ev.item.kind === 'worker') items.push(ev.item); });

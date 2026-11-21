@@ -5,7 +5,12 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const path = require('path');
 const os = require('os');
+// This file keeps the REAL lib/tool-policy: its assertions compare against that module's HUB_ROOT and classify paths of the
+// install it lives in, so a copy under /tmp would change the answers. Nothing under the real data/ is touched: tool-policy reads
+// data/ only through its member providers (lib/settings -> data/settings.json, lib/auth -> data/users.json), which are set here
+// to what an install without member policy or grants answers, before any test runs.
 const tp = require('../lib/tool-policy');
+tp.setMemberProviders({ memberDefaults: () => ({}), ownerGrants: () => ({}) });
 
 const HUB = tp.HUB_ROOT;
 const worker = { name: 'haiku', category: 'worker' };
@@ -333,4 +338,18 @@ test('reboot words: reading the reboot-required file is not a reboot; real reboo
     // classification strings only, never run: systemd unit actions and the D-Bus call reboot the machine too
     'systemd-run --property=SuccessAction=reboot-force /usr/bin/true', 'systemd-run -p FailureAction=poweroff-immediate false',
     'busctl call org.freedesktop.login1 /org/freedesktop/login1 org.freedesktop.login1.Manager Reboot b false', 'echo b > /proc/sysrq-trigger']) assert.strictEqual(cls(c), 'destroy', c);
+});
+
+test('another process\'s start environment counts like .env: /proc/<x>/environ and ps with the e option are admin', () => {
+  const o = { cwd: path.join(HUB, 'workspaces', 'haiku'), roots: [path.join(HUB, 'workspaces', 'haiku')], agentName: 'haiku' };
+  const c = (cmd) => tp.classifyCommand(cmd, o).cls;
+  for (const cmd of ['cat /proc/123/environ', "tr '\\0' '\\n' < /proc/self/environ", 'cat /proc/thread-self/environ', 'cat /proc/1/task/1/environ',
+    'cat /proc/*/environ', 'ps eww', 'ps e', 'ps auxe', 'ps axeww', '/bin/ps aux e']) assert.strictEqual(c(cmd), 'admin', cmd);
+  for (const cmd of ['ps -ef', 'ps aux', 'ps -e', 'ps -u sam', 'ps', 'cat /proc/cpuinfo', 'cat /proc/self/status']) assert.notStrictEqual(c(cmd), 'admin', cmd);
+  assert.strictEqual(tp.isSensitiveRead('/proc/1/environ'), true);
+  assert.strictEqual(tp.isSensitiveRead('/proc/self/environ'), true);
+  assert.strictEqual(tp.isSensitiveRead('/proc/cpuinfo'), false);
+  assert.strictEqual(tp.isSensitiveRead('/proc/1/status'), false);
+  assert.strictEqual(tp.classifyReadPath('/proc/1/environ', { roots: o.roots, agentName: 'haiku' }), 'admin');
+  assert.strictEqual(tp.classifyTool({ tool: 'Read', input: { file_path: '/proc/1/environ' }, agentName: 'haiku', policy: tp.policyFor(worker) }).cls, 'admin');
 });

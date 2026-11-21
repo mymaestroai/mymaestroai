@@ -8,15 +8,19 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const sdkChat = require('../lib/sdk-chat');
-const hubEvents = require('../lib/hub-events');
-const { createPush } = require('../lib/push');
-const scheduledTasks = require('../lib/scheduled-tasks');
+// lib/ comes from a throwaway install, so nothing under the real data/ is touched.
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('for-owner-iso-');
+const L = (p) => require(path.join(ISO.lib, p));
+const sdkChat = L('sdk-chat');
+const hubEvents = L('hub-events');
+const { createPush } = L('push');
+const scheduledTasks = L('scheduled-tasks');
 const { handleForOwner, forOwnerMarks, FOR_OWNER_DESC, getWorkspaceTools } = sdkChat.__forOwner;
 const { buildHubMcpServer, appendConversationLog } = sdkChat.__askUser;
 
 const AGENT = 'zz_for_owner_test';
-const convFile = path.join(__dirname, '..', 'data', 'conversations', `${AGENT}.jsonl`);
+const convFile = path.join(ISO.data, 'conversations', `${AGENT}.jsonl`);
 fs.mkdirSync(path.dirname(convFile), { recursive: true });
 after(() => { try { fs.unlinkSync(convFile); } catch {} });
 const readLog = () => fs.existsSync(convFile) ? fs.readFileSync(convFile, 'utf8').trim().split('\n').filter(Boolean).map(l => JSON.parse(l)) : [];
@@ -37,6 +41,10 @@ test('for_owner is on the gateway tool list at depth 0 and absent when consulted
   assert.ok(t, 'offered on its own turn');
   assert.strictEqual(t.description, FOR_OWNER_DESC);
   assert.deepStrictEqual(t.parameters.required, ['reason']);
+  assert.strictEqual(t.parameters.properties.asks.type, 'boolean', 'asks is an optional boolean');
+  assert.strictEqual(t.parameters.properties.requested.type, 'boolean', 'requested is an optional boolean');
+  assert.ok(!t.parameters.required.includes('requested'));
+  assert.match(t.parameters.properties.requested.description, /"Requests you made" setting/);
   assert.ok(!getWorkspaceTools(AGENT, fakeRes(), 1).some(x => x.name === 'for_owner'), 'withheld when another agent consults it');
 });
 
@@ -45,8 +53,11 @@ test('for_owner is in the hub MCP server (Claude and Codex clients) at depth 0 a
   const t = own.tools.find(x => x.name === 'for_owner');
   assert.ok(t, 'registered');
   assert.strictEqual(t.description, FOR_OWNER_DESC);
-  assert.deepStrictEqual(Object.keys(t.shape), ['reason']);
+  assert.deepStrictEqual(Object.keys(t.shape), ['reason', 'asks', 'requested']);   // asks and requested: optional, added with per-agent notification settings
   assert.ok(!t.shape.reason.isOptional(), 'reason is required');
+  assert.ok(t.shape.asks.isOptional(), 'asks is optional');
+  assert.ok(t.shape.requested.isOptional(), 'requested is optional');
+  assert.match(FOR_OWNER_DESC, /requested: true when they asked you to tell them \("let me know when\.\.\."\); requested also works in a turn they started/);
   const consulted = await buildHubMcpServer(AGENT, fakeRes(), fakeSdk, { consultationDepth: 1 });
   assert.ok(!consulted.tools.some(x => x.name === 'for_owner'));
 });
@@ -62,7 +73,7 @@ test('for_owner is not offered on tiger-team or ephemeral turns', async () => {
 });
 
 test('the tool policy classes for_owner as a harmless write inside the hub', () => {
-  const tp = require('../lib/tool-policy');
+  const tp = L('tool-policy');
   const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'tool-policy.js'), 'utf8');
   assert.match(src, /HUB_WRITE_INSIDE = new Set\([^)]*'for_owner'/);
   assert.ok(tp);
@@ -86,6 +97,20 @@ test('an automatic turn: the handler stores the mark for that turn and publishes
   if (typeof off === 'function') off();
 });
 
+test('asks: true is published only for a strict boolean true', () => {
+  const seen = [];
+  const off = hubEvents.events.onPublish(ev => { if (ev.type === 'for_owner') seen.push(ev); });
+  for (const [i, asks] of [[1, true], [2, 'true'], [3, 1], [4, false], [5, undefined]]) {
+    forOwnerMarks.clear();
+    const tap = startTurn({ kind: 'schedule', label: 'check' }, 'fo-asks-' + i);
+    handleForOwner(AGENT, { reason: 'r', asks });
+    tap.finish(true, null);
+  }
+  if (typeof off === 'function') off();
+  assert.deepStrictEqual(seen.map(e => e.asks), [true, undefined, undefined, undefined, undefined]);
+  assert.ok(!('asks' in seen[1]));
+});
+
 test('a turn the owner started: nothing is stored, and no turn running stores nothing either', () => {
   forOwnerMarks.clear();
   const tap = startTurn({ kind: 'user' }, 'fo-turn-user');
@@ -98,6 +123,58 @@ test('a turn the owner started: nothing is stored, and no turn running stores no
   handleForOwner(AGENT, { reason: 'r' });
   assert.strictEqual(forOwnerMarks.has(AGENT), false, 'a channel message came from the person');
   comms.finish(true, null);
+});
+
+test('requested: true is published only for a strict true, and wins over asks', () => {
+  const seen = [];
+  const off = hubEvents.events.onPublish(ev => { if (ev.type === 'for_owner') seen.push(ev); });
+  const cases = [[1, { requested: true }], [2, { requested: true, asks: true }], [3, { requested: 'true' }], [4, { requested: 1 }], [5, { requested: false, asks: true }]];
+  for (const [i, extra] of cases) {
+    forOwnerMarks.clear();
+    const tap = startTurn({ kind: 'schedule', label: 'check' }, 'fo-req-' + i);
+    handleForOwner(AGENT, { reason: 'r', ...extra });
+    tap.finish(true, null);
+  }
+  if (typeof off === 'function') off();
+  assert.deepStrictEqual(seen.map(e => e.requested), [true, true, undefined, undefined, undefined]);
+  assert.deepStrictEqual(seen.map(e => e.asks), [undefined, undefined, undefined, undefined, true], 'asks is dropped when requested is true');
+});
+
+test('requested: true in a turn the person started marks and publishes (the reply already shows; the push goes); a plain call does not', () => {
+  for (const kind of ['user', 'comms']) {
+    forOwnerMarks.clear();
+    const seen = [];
+    const off = hubEvents.events.onPublish(ev => { if (ev.type === 'for_owner') seen.push(ev); });
+    const tap = startTurn({ kind }, 'fo-req-user-' + kind);
+    assert.match(handleForOwner(AGENT, { reason: 'plain' }), /no mark needed/);
+    assert.strictEqual(seen.length, 0, 'a plain call is still refused');
+    assert.match(handleForOwner(AGENT, { reason: 'Done: all work finished', requested: true }), /^Marked/);
+    assert.strictEqual(forOwnerMarks.get(AGENT).turnId, 'fo-req-user-' + kind);
+    assert.strictEqual(seen.length, 1);
+    assert.strictEqual(seen[0].requested, true);
+    assert.strictEqual(seen[0].reason, 'Done: all work finished');
+    tap.finish(true, null);
+    if (typeof off === 'function') off();
+  }
+});
+
+test('requested: true in a consultation is still refused', () => {
+  forOwnerMarks.clear();
+  const seen = [];
+  const off = hubEvents.events.onPublish(ev => { if (ev.type === 'for_owner') seen.push(ev); });
+  const tap = startTurn({ kind: 'consultation', from: 'lead' }, 'fo-req-consult');
+  assert.match(handleForOwner(AGENT, { reason: 'r', requested: true }), /consultation stays folded/);
+  assert.strictEqual(forOwnerMarks.has(AGENT), false);
+  assert.strictEqual(seen.length, 0);
+  tap.finish(true, null);
+  if (typeof off === 'function') off();
+});
+
+test('a requested mark with no reason is still allowed', () => {
+  forOwnerMarks.clear();
+  const tap = startTurn({ kind: 'schedule', label: 'check' }, 'fo-req-noreason');
+  assert.match(handleForOwner(AGENT, { requested: true }), /^Marked/);
+  tap.finish(true, null);
 });
 
 test('a consultation-origin turn is refused: nothing is stored and no event is published', () => {
@@ -195,7 +272,8 @@ test('push: for_owner sends once per turn to the devices that follow the agent, 
 
 test('the agent notes explain for_owner, and automatic prompts carry the one-line reminder', () => {
   assert.match(scheduledTasks.policyText(), /## REPLIES THEY MUST SEE[\s\S]*`for_owner`/);
-  const jobs = require('../lib/jobs');
+  assert.match(scheduledTasks.policyText(), /asks you to tell them when something happens \("let me know when\.\.\."\), arrange to check for it \(schedule_task or a job\) and, when it happens, call `for_owner` with requested: true and a one-line message saying what happened/);
+  const jobs = L('jobs');
   const src = (f) => fs.readFileSync(path.join(__dirname, '..', 'lib', f), 'utf8');
   assert.ok(src('scheduler.js').includes(REMINDER), 'TASKS.md prompt');
   assert.ok(src('scheduled-tasks.js').includes(REMINDER), 'scheduled-task prompt');

@@ -3,12 +3,16 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('fs'), path = require('path');
-const effort = require('../lib/effort');
+// lib/ comes from a throwaway install, so nothing under the real data/ is touched.
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('effort-iso-');
+const L = (p) => require(path.join(ISO.lib, p));
+const effort = L('effort');
 const log = console.log; console.log = () => {};
-const gw = require('../lib/gateway-client');
+const gw = L('gateway-client');
 console.log = log;
-const codexCli = require('../lib/codex-cli');
-const appServer = require('../lib/codex-cli/app-server');
+const codexCli = L('codex-cli');
+const appServer = L('codex-cli/app-server');
 const read = (f) => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
 
 test('levels map to what each provider accepts (checked against the live APIs)', () => {
@@ -17,7 +21,7 @@ test('levels map to what each provider accepts (checked against the live APIs)',
   assert.strictEqual(effort.forModel('claude-sdk/claude-fable-5-1', 'max'), 'max');
   assert.strictEqual(effort.forModel('anthropic/claude-sonnet-5-5', 'xhigh'), 'xhigh');
   assert.strictEqual(effort.forModel('openai/gpt-5.5', 'max'), 'xhigh', 'OpenAI tops out at xhigh');
-  assert.strictEqual(effort.forModel('codex-cli/gpt-6-astra', 'max'), 'xhigh');
+  assert.strictEqual(effort.forModel('codex-cli/gpt-6-astra', 'max'), 'max', 'GPT-6 takes max');
   assert.strictEqual(effort.forModel('google/gemini-flash-latest', 'xhigh'), 'high', 'Gemini tops out at high');
   assert.strictEqual(effort.forModel('openai/gpt-4.1', 'high'), null, 'non-reasoning OpenAI models reject the field');
   assert.strictEqual(effort.forModel('ninfer/qwen3.8-27b', 'high'), null, 'local servers get nothing');
@@ -32,7 +36,7 @@ test('gateway: Anthropic gets output_config.effort, OpenAI/Gemini reasoning_effo
   assert.deepStrictEqual(gw.applyEffort({}, 'google/gemini-flash-latest', 'max', 'chat'), { reasoning_effort: 'high' });
   assert.deepStrictEqual(gw.applyEffort({}, 'openai/gpt-4.1', 'high', 'chat'), {});
   assert.deepStrictEqual(gw.applyEffort({}, 'openai/gpt-5.5', 'default', 'chat'), {});
-  assert.deepStrictEqual(require('../lib/openai-responses').toResponsesBody({ model: 'gpt-6', messages: [], reasoning_effort: 'xhigh' }).reasoning, { effort: 'xhigh', summary: 'auto' }, 'the Responses translation carries it');
+  assert.deepStrictEqual(L('openai-responses').toResponsesBody({ model: 'gpt-6', messages: [], reasoning_effort: 'xhigh' }).reasoning, { effort: 'xhigh', summary: 'auto' }, 'the Responses translation carries it');
 });
 
 test('Codex client: model_reasoning_effort on both transports', () => {
@@ -48,14 +52,14 @@ test('Codex client: model_reasoning_effort on both transports', () => {
 
 test('wired: Claude client query option, gateway option, Codex; agent field validated; members cannot change it', () => {
   const chat = read('lib/sdk-chat.js');
-  assert.match(chat, /const sdkEffort = effortLib\.forModel\(`claude-sdk\/\$\{sdkModel\}`, await agentEffort\(agentName\)\);/);
+  assert.match(chat, /const sdkEffort = options && options\.effort \? effortLib\.forTurn\(`claude-sdk\/\$\{sdkModel\}`, options\.effort, await agentEffort\(agentName\)\) : effortLib\.forModel\(`claude-sdk\/\$\{sdkModel\}`, await agentEffort\(agentName\)\);/);
   assert.match(chat, /\.\.\.\(sdkEffort \? \{ effort: sdkEffort \} : \{\}\),/);
-  assert.match(chat, /agent: agentName, effort: turnEffort \}/);
-  assert.match(chat, /ephemeral: !!ephemeral, effort: codexEffort, reasoningSummary: showReasoning\(\) \? 'auto' : null \}\);/);
+  assert.match(chat, /agent: agentName, effort: turnEffort, tier: tierNow \}/);
+  assert.match(chat, /ephemeral: !!ephemeral, effort: codexEffort, reasoningSummary: showReasoning\(\) \? 'auto' : null, serviceTier: codexServiceTier \}\);/);
   const agents = read('lib/agents.js');
   assert.match(agents, /effort: require\('\.\/effort'\)\.normalize\(a\.effort\)/);
-  assert.match(agents, /'tools', 'effort'\];/);
-  assert.match(agents, /effort must be default, low, medium, high, xhigh or max/);
+  assert.match(agents, /'tools', 'effort'(, 'tier')?(, 'teamGuidance', 'teamRole')?(, 'voice')?(, 'callDisplay')?(, 'voiceDefaults')?\];/);   // tier (speed and price), the team-guidance fields, the voice build and the call display add fields after effort
+  assert.match(agents, /effort must be default, low, medium, high, xhigh, max or ultra/);
   const server = read('server.js');
   assert.match(server, /const MEMBER_EDITABLE = new Set\(\['blurb', 'maxContextMessages', 'maxOutputTokens', 'contextBudget', 'compaction', 'minimalContext'\]\);/, 'effort is not member-editable');
   assert.match(server, /autoModel: !!a\.autoModel, effort: a\.effort \|\| 'default', changed:/);

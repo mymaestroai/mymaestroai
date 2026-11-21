@@ -132,7 +132,10 @@
 
   // Where to go after a successful sign-in: the requested page, else the hub (a phone is sent on to the phone layout by the script on "/", which respects "Use the full site").
   function destination() {
-    if (next && next.startsWith('/') && !next.startsWith('//')) return next;
+    // Same-site paths only: one leading '/', then not '/' or a backslash; no backslash or control character anywhere.
+    if (next && next.charAt(0) === '/' && next.charAt(1) !== '/' && next.charAt(1) !== '\\' && !/[\\\u0000-\u001f\u007f]/.test(next)) {
+      try { if (new URL(next, location.origin).origin === location.origin) return next; } catch (e) { /* not a URL */ }
+    }
     return '/';
   }
 

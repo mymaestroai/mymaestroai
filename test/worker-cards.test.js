@@ -21,7 +21,7 @@ function extract(src, name) {
   return src.slice(at, i + 1);
 }
 
-const NAMES = ['workerCardKey', 'workerRunOf', 'workerRunsActive', 'settleWorkerCard', 'startWorkerRun', 'handleWorkerEvent',
+const NAMES = ['workerCardKey', 'workerRunOf', 'workerRunsActive', 'settleWorkerCard', 'startWorkerRun', 'reopenEndedWorkerRun', 'handleWorkerEvent',
   'workerCallerLabel', 'paintWorkerCaller', 'cleanupWorkerTabs', 'forgetWorkerCard', 'cancelWorkerCard', 'cancelWorker',
   'turnWorkerUpsert', 'paintWorkerRun', 'markWorkerRunCancelled', 'closeWorkerCardsOf'];
 const ok = { success: true, stopped: 'running', turns: 1 };

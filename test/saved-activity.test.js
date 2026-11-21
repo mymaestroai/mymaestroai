@@ -3,8 +3,13 @@
 // stream), and text that resumes after a tool call starts a new paragraph.
 const { test } = require('node:test');
 const assert = require('node:assert');
-const hubEvents = require('../lib/hub-events');
-const { activityForSave, paragraphAfterTool, metaForPiece } = require('../lib/sdk-chat');
+// lib/ comes from a throwaway install (test/helpers/isolated-install.js), so nothing under the real data/ is touched.
+const path = require('path');
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('saved-activity-iso-');
+const L = (p) => require(path.join(ISO.lib, p));
+const hubEvents = L('hub-events');
+const { activityForSave, paragraphAfterTool, metaForPiece } = L('sdk-chat');
 
 function fakeRes() { const r = { chunks: [], write: (s) => { r.chunks.push(s); return true; } }; return r; }
 const sse = (res, obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
@@ -40,9 +45,13 @@ test('activityForSave: tool calls and workers with their offsets in the saved te
   assert.strictEqual(activityForSave('nobody-here', 'x'), null, 'no turn: nothing');
 });
 
-test('metaForPiece: a piece saved after a question keeps only its own calls, offsets from its start', () => {
+test('metaForPiece: a piece keeps the calls no earlier piece holds (by id, whatever their offset), offsets from its start', () => {
   const meta = { activity: [{ id: 'a', at: 5 }, { id: 'b', at: 30 }, { id: 'c' }] };
-  assert.deepStrictEqual(metaForPiece(meta, 20).activity, [{ id: 'b', at: 10 }, { id: 'c' }]);
+  assert.deepStrictEqual(metaForPiece(meta, 20, new Set(['a'])).activity, [{ id: 'b', at: 10 }, { id: 'c' }]);
+  // a call that started before the piece's base and is in no earlier piece goes in, drawn at the piece's start
+  assert.deepStrictEqual(metaForPiece(meta, 20).activity, [{ id: 'a', at: 0 }, { id: 'b', at: 10 }, { id: 'c' }]);
+  // an item without an id keeps the old rule: only offsets from the base on
+  assert.deepStrictEqual(metaForPiece({ activity: [{ at: 5 }, { at: 30 }] }, 20).activity, [{ at: 10 }]);
   assert.deepStrictEqual(metaForPiece(meta, 0), meta);
   assert.deepStrictEqual(metaForPiece(undefined, 4), {});
 });

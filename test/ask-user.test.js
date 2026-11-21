@@ -5,11 +5,15 @@ const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
 
-const sdkChat = require('../lib/sdk-chat');
+// lib/ comes from a throwaway install, so nothing under the real data/ is touched.
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('ask-user-iso-');
+const L = (p) => require(path.join(ISO.lib, p));
+const sdkChat = L('sdk-chat');
 const { runAskUser, buildHubMcpServer, pendingQuestions, ASK_USER_TIMEOUT_MS, ASK_USER_UNAVAILABLE, appendConversationLog } = sdkChat.__askUser;
 
 const AGENT = 'zz_ask_user_test';
-const convFile = path.join(__dirname, '..', 'data', 'conversations', `${AGENT}.jsonl`);
+const convFile = path.join(ISO.data, 'conversations', `${AGENT}.jsonl`);
 fs.mkdirSync(path.dirname(convFile), { recursive: true });
 after(() => { try { fs.unlinkSync(convFile); } catch {} });
 const readLog = () => fs.existsSync(convFile) ? fs.readFileSync(convFile, 'utf8').trim().split('\n').filter(Boolean).map(l => JSON.parse(l)) : [];
@@ -65,8 +69,8 @@ test('emits an ask_user_question gateway event and returns the typed answer', as
 });
 
 test('each option can carry a line (descriptions), and choose_model adds a drop-down of every model the hub can use, grouped by maker and how it is paid', async () => {
-  const agentsMod = require('../lib/agents');
-  const healthMod = require('../lib/model-health');
+  const agentsMod = L('agents');
+  const healthMod = L('model-health');
   const real = { list: agentsMod.availableModelsNow, health: healthMod.getModelHealth };
   agentsMod.availableModelsNow = async () => ['local/qwen-x', 'openai/gpt-x', 'claude-sdk/claude-sonnet-5-5', 'codex-cli/gpt-6-astra', 'anthropic/claude-opus-5-5', 'google/gemini-y'];
   healthMod.getModelHealth = () => ({ view: () => ({ 'openai/gpt-x': { state: 'fail' }, 'google/gemini-y': { state: 'warn' } }) });

@@ -108,16 +108,17 @@ test('a failed turn ends with ok:false and the error text', () => {
 test('wiring: chat handler taps hub-initiated turns and every hub caller tags its origin', () => {
   const chat = read('lib/sdk-chat.js');
   assert.match(chat, /const hubEvents = require\('\.\/hub-events'\)/);
-  assert.match(chat, /consulted_by, origin, turn_link(, owner_turn)? \} = body;/);
+  assert.match(chat, /consulted_by, origin, turn_link(, owner_turn)?(, voice)? \} = body;/);
   assert.match(chat, /hubEvents\.events\.tapTurn\(res, \{ agent, origin: turnOrigin, message, turnId, startedAt \}\)/);
   assert.match(chat, /tap\.finish\(!turnError && !stopped, turnError \? turnError\.message : stopped \? 'stopped' : null\)/);
-  assert.match(chat, /origin: \{ kind: opts\.temporal \? 'task' : 'consultation', from: coordinatorName \|\| null \}/);
+  // member origin (test/member-origin.test.js): what a member's turn starts carries member
+  assert.match(chat, /origin: \{ kind: opts\.temporal \? 'task' : 'consultation', from: coordinatorName \|\| null, \.\.\.\(consultMember \? \{ member: true \} : \{\}\) \}/);
   assert.match(chat, /function wakeAgent\(agentName, message, onReply, meta = null\)/);
   assert.match(chat, /handleChatStream\(\{ agent: agentName, message, origin(, [a-z_]+: [^}]+)? \}, sink\)/);
   const jobs = read('lib/jobs.js');
   assert.match(jobs, /kind: p\.kind === 'report' \? 'job_report' : 'job_notice'/);
   const sched = read('lib/scheduler.js');
-  assert.match(sched, /origin: \{ kind: 'schedule', from: taskId \}/);
+  assert.match(sched, /origin: \{ kind: 'schedule', from: taskId, by: 'TASKS\.md' \}/);   // names who started it (R6)
   const server = read('server.js');
   assert.match(server, /pathname === '\/api\/events' && req\.method === 'GET'/);
   assert.match(server, /require\('\.\/lib\/hub-events'\)\.events\.subscribe\(req, res\)/);
@@ -128,7 +129,7 @@ test('wiring: UI subscribes, opens one window per agent, and lands hub turns in 
   assert.match(app, /new EventSource\('\/api\/events'/);
   assert.match(app, /startHubEventMonitor\(\);/);
   assert.match(app, /if \(existing\) \{ if \(!background\) switchToChat\(existing\.id\); return existing\.id; \}/);
-  assert.match(app, /chats\[chatId\]\.historyLoaded = fetch\(/);
+  assert.match(app, /chats\[chatId\]\.historyLoaded = soloHistoryLoad\(chatId\)/);
   assert.match(app, /HUB_AUTO_OPEN = new Set\(\['job_notice', 'job_report', 'schedule'\]\)/);
   assert.match(app, /startSoloChat\(ev\.agent, [^)]*\{ background: true \}\)/, 'a job or scheduled turn opens its window in the background');
   assert.doesNotMatch(app, /kind === 'job_report'\) switchToChat/, 'a job report no longer takes the screen');

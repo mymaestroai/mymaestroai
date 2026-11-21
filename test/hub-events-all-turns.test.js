@@ -4,13 +4,17 @@ const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
 
-const hubEvents = require('../lib/hub-events');
-const sdkChat = require('../lib/sdk-chat');
+// lib/ comes from a throwaway install, so nothing under the real data/ is touched.
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('hub-events-turns-iso-');
+const L = (p) => require(path.join(ISO.lib, p));
+const hubEvents = L('hub-events');
+const sdkChat = L('sdk-chat');
 const { sendSSE, makeChunk, setTestStreamer } = sdkChat.__turn;
 const { runAskUser, questionAgents } = sdkChat.__askUser;
 
 const AGENT = 'zz_allturns_a';
-after(() => { setTestStreamer(null); try { fs.unlinkSync(path.join(__dirname, '..', 'data', 'conversations', `${AGENT}.jsonl`)); } catch {} });
+after(() => { setTestStreamer(null); try { fs.unlinkSync(path.join(ISO.data, 'conversations', `${AGENT}.jsonl`)); } catch {} });
 const tick = (ms = 0) => new Promise(r => setTimeout(r, ms));
 
 function sseClient(headers = {}) {

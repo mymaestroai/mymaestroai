@@ -36,7 +36,8 @@ const SETUP = { steps: [
 ] };
 const PW = 'correct horse battery staple';
 const perm = (level, ask = true) => ({ level, askEachSession: ask });
-const ADMIN = { adminBrowser: true, userId: 'u_admin', name: 'Jo' };
+const ADMIN = { adminBrowser: true, userId: 'u_admin', name: 'Jo', steppedUp: true };   // the server sets steppedUp after the account password was checked
+const ADMIN_NO_STEP = { adminBrowser: true, userId: 'u_admin', name: 'Jo' };
 
 /** A temp hub with a copy of lib/, a real createModules over fake connectors, and the lifecycle hooks of agents.js and auth.js pointed at it. */
 async function hub({ agents = [] } = {}) {

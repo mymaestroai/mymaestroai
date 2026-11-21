@@ -9,6 +9,7 @@
  *   mymaestro open                   open it in the browser, or print the address
  *   mymaestro setup-link             the first-run Welcome link (until the first account exists)
  *   mymaestro connect chatgpt        use your ChatGPT subscription: installs Codex and signs it in (--device-auth: sign in with a code)
+ *   mymaestro codex-check [--repair] is Codex where this install needs it? --repair reinstalls it (the installer runs this)
  *   mymaestro update [--channel stable|experimental]   newest version of the channel, then restart (the Update button)
  *   mymaestro doctor                 security and setup checks (scripts/security-check.js)
  *   mymaestro backup [--to <dir>]    an encrypted backup of everything that makes this install yours (--setup: choose the backup password)
@@ -17,6 +18,10 @@
  *   mymaestro reset-2fa <email>      turn off two-factor for an account (lost phone); it is set up again at next sign-in
  *   mymaestro service install|remove start by itself at boot (Linux) or login (Mac)
  *   mymaestro move-home [--yes]      move shared folders (share/, users/...) out of your home folder into the install; --yes does it
+ *   mymaestro face install <folder|owl> [--id <slug>]   add a character pack (the voice call face) from a folder, or download one (owl)
+ *   mymaestro face list              the installed character packs
+ *   mymaestro face remove <id> [--yes]   move a pack to <hub home>/faces-removed (never deleted; restore with face install)
+ *   mymaestro team                   the starter team (Challenger, Scout, Builder, Researcher): which are set up; read-only
  *   mymaestro uninstall              remove the service, this command and the private Node; keeps the folder and data
  *   mymaestro version
  */
@@ -104,6 +109,16 @@ function version() {
   return { v, commit, branch, channel };
 }
 function auth() { return require(path.join(DIR, 'lib', 'auth')).createAuth({ log: () => {}, dataDir: path.join(DIR, 'data') }); }
+// Folders where a `codex` link may sit: the one the installer put the mymaestro command in, and ~/.local/bin.
+function binDirsForCodex() {
+  const dirs = [path.join(os.homedir(), '.local', 'bin')];
+  try { const b = JSON.parse(fs.readFileSync(path.join(DIR, 'data', 'install.json'), 'utf8')).bin; if (b) dirs.unshift(path.dirname(b)); } catch { /* not installed by the installer */ }
+  return [...new Set(dirs)];
+}
+// The installer's own Node.js folder (data/install.json): a codex link into it was left by an npm -g there.
+function nodeDirsForCodex() {
+  try { const d = JSON.parse(fs.readFileSync(path.join(DIR, 'data', 'install.json'), 'utf8')).nodeDir; return d ? [d] : []; } catch { return []; }
+}
 function setupLink() {
   if (auth().hasUsers()) return null;
   const code = require(path.join(DIR, 'lib', 'welcome')).createWelcome({ dataDir: path.join(DIR, 'data') }).ensureSetupToken();
@@ -164,20 +179,20 @@ const commands = {
     if (flag('--plain')) { if (link) out(link); return; }   // for the installer: just the link, or nothing once an account exists
     out(link ? `Open this link to finish setting up ${PRODUCT}:\n\n  ${link}\n\nIt works until the first account is created.` : `Setup is done: an account exists. Sign in at ${URL_BASE}/login`);
   },
-  // Installs Codex with this install's own Node, where the hub looks for it (lib/codex-cli resolveBinary), then runs
-  // Codex's own sign-in in this terminal. The hub never sees the sign-in.
+  // Installs Codex into ~/.npm-global with this install's own npm (lib/codex-cli/setup: outside the Node.js folder the
+  // installer replaces), where the hub looks for it, then runs Codex's own sign-in in this terminal. The hub never sees
+  // the sign-in.
   async connect() {
     if (argv[1] !== 'chatgpt') fail('Usage: mymaestro connect chatgpt [--device-auth]');
     const codex = require(path.join(DIR, 'lib', 'codex-cli'));
+    const setup = require(path.join(DIR, 'lib', 'codex-cli', 'setup'));
     const env = codex.withNode(process.env);
     let bin = codex.resolveBinary(env);
     if (!bin) {
       out('Installing Codex, the OpenAI program that connects to your ChatGPT subscription…');
-      const dir = path.dirname(process.execPath);
-      const npm = fs.existsSync(path.join(dir, 'npm')) ? path.join(dir, 'npm') : 'npm';
-      const r = spawnSync(npm, ['install', '-g', '--prefix', path.join(os.homedir(), '.npm-global'), '@openai/codex', '--ignore-scripts', '--no-audit', '--no-fund', '--loglevel=error'], { stdio: 'inherit', env });
-      bin = r.status === 0 ? codex.resolveBinary(env) : null;
+      bin = setup.installCodex({ env: process.env }).bin;
       if (!bin) fail('Codex did not install. Check the internet connection and run this again.');
+      setup.repairLinks({ env: process.env, binDirs: binDirsForCodex(), nodeDirs: nodeDirsForCodex() });
     }
     const before = await codex.loginStatus({ bin, env });
     if (before.loggedIn && before.mode === 'chatgpt') {
@@ -192,6 +207,23 @@ const commands = {
       if (!(after.loggedIn && after.mode === 'chatgpt')) fail('\nThe sign-in did not finish. Run this again when you are ready.');
     }
     out(`\nDone. Back in ${PRODUCT}, press Check on the setup page, or in Settings under AI models.`);
+  },
+  // After the installer replaced its Node.js (or any time): is Codex where this install needs it? --repair repoints a
+  // dangling codex link and reinstalls Codex into ~/.npm-global. Exit 1 when it is needed and still missing. --quiet
+  // (the installer): say something only when a link was repointed, Codex was reinstalled, or it is still missing.
+  'codex-check'() {
+    const setup = require(path.join(DIR, 'lib', 'codex-cli', 'setup'));
+    const quiet = flag('--quiet');
+    if (flag('--repair') && !quiet) out('Checking Codex…');
+    const r = setup.checkCodex({ env: process.env, dataDir: path.join(DIR, 'data'), binDirs: binDirsForCodex(), nodeDirs: nodeDirsForCodex(), repair: flag('--repair') });
+    for (const l of r.relinked) out(`Codex link ${l} now points at ${path.join(setup.codexPrefix(), 'bin', 'codex')}.`);
+    if (r.installed) out(`Codex reinstalled in ${setup.codexPrefix()}.`);
+    if (!r.needed) { if (!quiet) out(r.bin ? `Codex: ${r.bin}` : 'Codex: not used by this install.'); return; }
+    if (r.bin) { if (!quiet) out(`Codex: ${r.bin}`); return; }
+    // only a ChatGPT sign-in folder (the Codex desktop app or an editor extension make one): a hint, not a fault
+    if (!r.inUse) { if (!quiet) out(`Codex (the ChatGPT client) is not installed. To let your agents use your ChatGPT plan: ${r.fix}`); return; }
+    out(`Codex is not installed, and this install uses it (an agent on ChatGPT). Fix: ${r.fix}`);
+    process.exitCode = 1;
   },
   async update() {
     const gs = require(path.join(DIR, 'lib', 'git-sync'));
@@ -210,6 +242,11 @@ const commands = {
     out(`Answering: ${(await up()) ? 'yes' : 'no'} (${URL_BASE})\n`);
     const r = spawnSync(process.execPath, [path.join(DIR, 'scripts', 'security-check.js')], { cwd: DIR, stdio: 'inherit' });
     process.exitCode = r.status || 0;
+    // Codex (the ChatGPT client), when this install uses it: found, or the one command that brings it back.
+    try {
+      const cx = require(path.join(DIR, 'lib', 'codex-cli', 'setup')).checkCodex({ env: process.env, dataDir: path.join(DIR, 'data'), binDirs: binDirsForCodex(), nodeDirs: nodeDirsForCodex() });
+      if (cx.needed) out(cx.bin ? `\nCodex (ChatGPT): ${cx.bin}` : cx.inUse ? `\nCodex (ChatGPT): not installed, and an agent uses it. Fix: ${cx.fix}` : `\nCodex (ChatGPT): not installed (only needed for agents on your ChatGPT plan: ${cx.fix}).`);
+    } catch { /* no module */ }
     // The Claude sign-in: proven with one tiny request through the same client the agents use (lib/welcome).
     let installed = false; try { installed = require(path.join(DIR, 'lib', 'claude-auth')).hasSdkCredentials(); } catch { /* no module */ }
     if (!installed) { out('\nClaude sign-in: not set up on this computer (only needed for Claude subscription models).'); return; }
@@ -354,6 +391,83 @@ const commands = {
     } else if (wasRunning) out('The hub stays stopped until the folders above are back in place; then: mymaestro start');
     if (!r.ok) process.exitCode = 1;
   },
+  // Character packs for the voice call face (lib/faces): install from a local folder into <hub home>/faces/<id>, or list them.
+  async face() {
+    const sub = argv[1];
+    const { HUB_HOME } = require(path.join(DIR, 'lib', 'hub-home'));
+    const faces = require(path.join(DIR, 'lib', 'faces', 'packs'));
+    if (sub === 'install') {
+      const folder = argv[2] && !argv[2].startsWith('--') ? argv[2] : null;
+      if (!folder) fail('Usage: mymaestro face install <folder|owl> [--id <slug>]');
+      if (!fs.existsSync(folder) && require(path.join(DIR, 'lib', 'faces', 'catalog')).catalogEntry(folder)) {
+        if (arg('id')) fail('--id is only for installing from a folder.');
+        const download = require(path.join(DIR, 'lib', 'faces', 'download'));
+        const entry = require(path.join(DIR, 'lib', 'faces', 'catalog')).catalogEntry(folder);
+        const mb = (n) => Math.round(n / 1000000);
+        let st = download.startDownload(entry.id, { home: HUB_HOME });
+        if (st.state === 'busy') fail(st.error);
+        if (st.state === 'done') { out(`The character pack "${entry.id}" is already installed.`); return; }
+        let lastLine = 0, shownInstalling = false;
+        while (st.state === 'downloading' || st.state === 'installing') {
+          const now = Date.now();
+          if (st.state === 'downloading' && now - lastLine >= 1000) {
+            lastLine = now;
+            out(`Downloading the ${entry.name.toLowerCase()}\u2026 ${Math.floor(st.received * 100 / st.total)}% \u00b7 ${mb(st.received)} of ${mb(st.total)} MB`);
+          } else if (st.state === 'installing' && !shownInstalling) {
+            shownInstalling = true;
+            out(`Downloading the ${entry.name.toLowerCase()}\u2026 100% \u00b7 ${mb(st.total)} of ${mb(st.total)} MB`);
+            out('Installing\u2026');
+          }
+          await new Promise(res => setTimeout(res, 250));
+          st = download.downloadStatus(entry.id, { home: HUB_HOME });
+        }
+        if (st.state !== 'done') fail(`Could not install: ${st.error || 'the download failed'}`);
+        if (!shownInstalling) { out(`Downloading the ${entry.name.toLowerCase()}\u2026 100% \u00b7 ${mb(st.total)} of ${mb(st.total)} MB`); out('Installing\u2026'); }
+        const pack = faces.getPack(entry.id, { home: HUB_HOME });
+        const total = pack ? Object.values(pack.files).reduce((a, f) => a + f.size, 0) : st.total;
+        out(`Installed the character pack "${entry.id}" (${pack ? Object.keys(pack.files).length : '?'} files, ${(total / 1000000).toFixed(1)} MB) in ${path.join(HUB_HOME, 'faces', entry.id)}.`);
+        out('Choose it per device in the voice panel, or as an agent\'s default on the agent settings page.');
+        return;
+      }
+      try {
+        const r = faces.installPack(folder, { home: HUB_HOME, id: arg('id') || undefined });
+        out(`Installed the character pack "${r.id}" (${r.files.length} files, ${(r.total / 1048576).toFixed(1)} MB) in ${r.dir}.`);
+        out('Choose it per device in the voice panel, or as an agent\'s default on the agent settings page.');
+      } catch (e) { fail(`Could not install: ${e.message}`); }
+      return;
+    }
+    if (sub === 'list') {
+      const list = faces.listPacks({ home: HUB_HOME });
+      if (!list.length) { out('No character packs are installed. Add one: mymaestro face install <folder|owl>'); return; }
+      for (const p of list) out(`${p.id}  ${p.manifest.name || p.id}  ${p.manifest.clips.length} clips`);
+      return;
+    }
+    // Remove = ONE rename into <hub home>/faces-removed/<id>-<timestamp>; nothing is deleted, and restoring is an install.
+    if (sub === 'remove') {
+      const id = argv[2] && !argv[2].startsWith('--') ? argv[2] : null;
+      if (!id) fail('Usage: mymaestro face remove <id> [--yes]');
+      let plan;
+      try { plan = faces.removePack(id, { home: HUB_HOME, dryRun: true }); } catch (e) { fail(`Could not remove: ${e.message}`); }
+      out(`The character pack "${id}" moves out of use:\n  ${plan.from}\n  -> ${plan.to}`);
+      out('Nothing is deleted. It stops being listed or served at once; the hub does not need a restart.');
+      if (!flag('--yes')) {
+        const answer = await new Promise((resolve) => {
+          const rl = require('readline').createInterface({ input: process.stdin, output: process.stdout });
+          rl.on('close', () => resolve(''));   // closed input (nothing piped in) counts as "no"
+          rl.question('Move it? Type y to confirm: ', (a) => { resolve(a); rl.close(); });
+        });
+        if (!/^(y|yes)$/i.test(String(answer).trim())) { process.stdin.destroy(); fail('Nothing was changed.'); }
+        process.stdin.destroy();
+      }
+      try {
+        const r = faces.removePack(id, { home: HUB_HOME });
+        out(`Moved the character pack "${r.id}" to ${r.to}`);
+        out(`To bring it back:  ${r.restore}`);
+      } catch (e) { fail(`Could not remove: ${e.message}`); }
+      return;
+    }
+    fail('Usage: mymaestro face install <folder|owl> [--id <slug>]\n       mymaestro face list\n       mymaestro face remove <id> [--yes]');
+  },
   async uninstall() {
     const m = svc(); const inst = m.readInstall();
     m.remove(); out('Service removed.');
@@ -362,8 +476,43 @@ const commands = {
     out(`\nYour data and the program are still in ${DIR}.`);
     out(`To delete everything, back up first (mymaestro backup), then run:  rm -rf "${DIR}"`);
   },
+  // Read-only: creation happens only in the running hub, which owns the ledger (data/team.json).
+  team() {
+    const data = path.join(DIR, 'data');
+    const st = require(path.join(DIR, 'lib', 'starter-team'));
+    const ledger = st.readLedger(path.join(data, 'team.json'));
+    let agents = [];
+    try { const a = JSON.parse(fs.readFileSync(path.join(data, 'agents.json'), 'utf8')); if (Array.isArray(a)) agents = a; } catch { /* no agents list yet */ }
+    let unfinished = false;
+    try { const p = JSON.parse(fs.readFileSync(path.join(data, 'welcome.json'), 'utf8')) || {}; unfinished = !!p.startedAt && !p.finishedAt; } catch { /* no setup record */ }
+    out('Your starter team:');
+    if (ledger.unreadable) {
+      out('  The team ledger (data/team.json) could not be read, so nothing is created while it is unreadable. Fix or restore that file first.');
+      return;
+    }
+    let missing = 0;
+    for (const r of st.ROLES) {
+      const had = ledger.roles[r.role];
+      const find = (name) => agents.find(a => a && a.name === name);
+      let line;
+      if (had) {
+        const a = find(had.name);
+        if (a) line = `created (agent ${a.name}, model ${a.model || 'not set'})`;
+        else if (had.status === 'reserved') line = 'stopped halfway (interrupted)';
+        else line = 'set up earlier, since removed or renamed';
+      } else if (find(r.name) || agents.some(a => a && String(a.display || '').toLowerCase() === r.display.toLowerCase())) line = 'name taken by your own agent';
+      else line = 'not set up';
+      if (line === 'not set up') missing++;
+      out(`  ${r.display}: ${line}`);
+    }
+    if (ledger.skippedAt) out(`  (You chose to skip the team on ${ledger.skippedAt}.)`);
+    if (!missing) return;   // nothing the hub could still set up
+    out('');
+    out(unfinished ? `To create the missing ones, open ${URL_BASE}/welcome on this computer.` : `To add them, open ${URL_BASE}/?team=setup on this computer and choose Set up your team.`);
+  },
   version() { const { v, commit, channel } = version(); out(`${PRODUCT} ${v} (${commit}, ${channel} channel)`); },
-  help() { out(fs.readFileSync(__filename, 'utf8').split('\n').slice(3, 21).map(l => l.replace(/^ \* ?/, '')).join('\n')); },
+  // The help is the comment block at the top of this file: lines 4 to 26 (one more than before `team` was listed).
+  help() { out(fs.readFileSync(__filename, 'utf8').split('\n').slice(3, 26).map(l => l.replace(/^ \* ?/, '')).join('\n')); },
 };
 
 (async () => {

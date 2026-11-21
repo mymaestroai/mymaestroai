@@ -196,3 +196,32 @@ test('a leftover hub-home after an undo counts as not undone: the hub must not s
   assert.match(r.error, /could not be fully undone: .*hub-home: could not be removed/);
   assert.ok(fs.existsSync(path.join(c.home, 'share', 'common')), 'the folder itself is back');
 });
+
+test('a folder named call-recordings beside an install does not make its parent a hub home', () => {
+  const { home, root } = layout({ make: ['call-recordings/agent/session'], installDir: 'inst' });
+  const beside = path.dirname(root);
+  assert.strictEqual(resolveHubHome({ root, home, env: {} }), path.join(root, INSIDE), 'in the home folder');
+  const outer = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-home-'));
+  tmps.push(outer);
+  const sub = path.join(outer, 'agent-hub', 'agent-hub-9.9.9');
+  fs.mkdirSync(path.join(sub, 'data'), { recursive: true });
+  fs.mkdirSync(path.join(outer, 'agent-hub', 'call-recordings'), { recursive: true });
+  assert.strictEqual(resolveHubHome({ root: sub, home: path.join(outer, 'elsewhere'), env: {} }), path.join(sub, INSIDE), 'beside an install');
+  assert.ok(beside);
+});
+
+test('move-home moves call-recordings only when it holds the marker file; otherwise it stays and says so', () => {
+  for (const marked of [true, false]) {
+    const { home, root } = layout({ make: ['share/common', 'call-recordings/biographer/20260101-000000-abcdef'] });
+    if (marked) fs.writeFileSync(path.join(home, 'call-recordings', '.mymaestro-recordings'), 'x');
+    const plan = moveHome({ root, home, env: {} });
+    assert.strictEqual(plan.ok, true);
+    assert.deepStrictEqual(plan.plan.map(s => s.name), marked ? ['share', 'call-recordings'] : ['share']);
+    if (!marked) assert.ok(plan.notes.some(n => /call-recordings/.test(n) && /marker/.test(n)), 'a note says it was left');
+    const r = moveHome({ root, home, env: {}, apply: true });
+    assert.strictEqual(r.ok, true, r.error);
+    const inside = path.join(root, INSIDE, 'call-recordings');
+    assert.strictEqual(fs.existsSync(path.join(inside, 'biographer')), marked);
+    if (!marked) assert.ok(fs.existsSync(path.join(home, 'call-recordings', 'biographer')) && !fs.lstatSync(path.join(home, 'call-recordings')).isSymbolicLink());
+  }
+});

@@ -8,17 +8,21 @@ const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
 const { EventEmitter } = require('events');
-const manifestLib = require('../lib/modules/manifest');
-const { createModules } = require('../lib/modules');
-const { createConnectors } = require('../lib/connectors');
-const { createReceivers } = require('../lib/modules/receivers');
+// lib/ comes from a throwaway install, so nothing under the real data/ is touched.
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('modules-b2-iso-');
+const L = (p) => require(path.join(ISO.lib, p));
+const manifestLib = L('modules/manifest');
+const { createModules } = L('modules');
+const { createConnectors } = L('connectors');
+const { createReceivers } = L('modules/receivers');
 
 const FIX = path.join(__dirname, 'fixtures', 'modules', 'guarddemo');
 const base = () => JSON.parse(fs.readFileSync(path.join(FIX, 'module.json'), 'utf8'));
 const probs = (m) => manifestLib.validateManifest(m, 'guarddemo').problems.join(' | ');
 const SECRETS = [{ name: 'GD_USER', label: 'User' }, { name: 'GD_TOKEN', label: 'Token', optional: true }];
 const HUB_SECRET = 'ab'.repeat(32);
-const GUARD = path.join(__dirname, '..', 'lib', 'modules', 'mcp-guard.js');
+const GUARD = path.join(ISO.lib, 'modules', 'mcp-guard.js');
 
 // ── manifest ──
 test('manifest: rotatingSecret, server.callTimeoutSec and receiver.timeoutSec accept good values', () => {

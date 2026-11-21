@@ -260,8 +260,8 @@ test('runner: a location.replace that throws restores the page and does not thro
 });
 
 test('desktopOnlyLink: the computer layout panels the phone page lacks', () => {
-  assert.deepStrictEqual(L.DESKTOP_ONLY_PARAMS, ['memory', 'connectors', 'backups']);
-  for (const s of ['?memory=1', '?connectors=1', '?backups=1', '?a=2&memory=1']) assert.strictEqual(L.desktopOnlyLink(s), true, s);
+  assert.deepStrictEqual(L.DESKTOP_ONLY_PARAMS, ['memory', 'selfcheck', 'connectors', 'backups']);
+  for (const s of ['?memory=1', '?selfcheck=1', '?connectors=1', '?backups=1', '?a=2&memory=1']) assert.strictEqual(L.desktopOnlyLink(s), true, s);
   for (const s of ['', '?memory=0', '?update=1', '?security=1', '?wallet=unlock', '?agent=sam', null, undefined]) assert.strictEqual(L.desktopOnlyLink(s), false, String(s));
 });
 
@@ -347,7 +347,7 @@ test('wiring: mobile page links to the desktop with ?desktop=once and never send
   assert.strictEqual(html.split('id="use-full-site"').length - 1, 1);
   const menu = html.slice(html.indexOf('<div id="menu">'));
   assert.ok(menu.includes('<a id="use-full-site" href="/?desktop=1">Use the full site</a>'), 'inside the menu');
-  assert.ok(menu.indexOf('use-full-site') > menu.indexOf('Open full UI') && menu.indexOf('use-full-site') < menu.indexOf('menu-notify'));
+  assert.ok(menu.indexOf('use-full-site') > menu.indexOf('Open full UI') && menu.indexOf('use-full-site') < menu.indexOf('menu-reload'));
   const js = read('mobile.js');
   assert.ok(!js.includes("location.replace('/')"));
   assert.ok(!js.includes("location.href = '/'"));
@@ -362,8 +362,9 @@ test('wiring: the desktop banner and the help text', () => {
   assert.ok(app.includes("const closeKey = pl.phone && pl.keepDesktop ? 'hub-mobile-banner-kept' : 'hub-mobile-banner';"));
   assert.ok(app.includes("closeStore = closeKey === 'hub-mobile-banner-kept' ? sessionStorage : localStorage;"));
   assert.ok(app.includes("if (closeStore && closeStore.getItem(closeKey) === 'off') return;"));
+  assert.ok(app.includes("for (const id of ['hub-phone-layout-notice', 'hub-no-accounts-notice',"), 'the bar is the first notice in the stack, so it covers none of them');
   const fn = app.slice(app.indexOf('function showMobileBanner()'), app.indexOf('// ── Hub Health Monitor'));
-  assert.ok(fn.length > 0 && fn.includes('bar.remove(); });') && fn.includes('document.body.appendChild(bar);'), 'drawn and dismissed');
+  assert.ok(fn.includes("bar.id = 'hub-phone-layout-notice'") && fn.includes('bar.remove(); layoutBanners();') && /appendChild\(bar\);\n\s*layoutBanners\(\);/.test(fn), 'drawn and dismissed through layoutBanners');
   assert.ok(app.includes('Open the phone layout'));
   assert.ok(fn.includes('id="hub-phone-layout-open"'), 'the link has an id');
   assert.match(fn, /querySelector\('#hub-phone-layout-open'\)\.addEventListener\('click', \(\) => \{ try \{ localStorage\.removeItem\('hub-keep-desktop'\); \}/, 'choosing the phone layout undoes "Use the full site"');

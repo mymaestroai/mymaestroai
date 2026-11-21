@@ -142,8 +142,10 @@ test('gateway loop: a call that returns nothing is retried twice for a local eng
   const sdk = read('lib/sdk-chat.js');
   const i = sdk.indexOf('EMPTY STREAM: the call returned nothing at all');
   assert.ok(i > 0, 'guard present');
-  const block = sdk.slice(i, i + 1800);
-  assert.ok(block.includes("!assistantText && toolCallMap.size === 0 && !lastFinishReason && !callUsage && !streamInterrupted"), 'only when nothing at all arrived');
+  const block = sdk.slice(i, i + 2400);
+  assert.ok(block.includes("!assistantText && !callRawText && toolCallMap.size === 0 && !lastFinishReason && !callUsage && !streamInterrupted"), 'only when nothing at all arrived in THIS call (per-call raw text flag, not a sticky one)');
+  assert.ok(!block.slice(0, 400).includes('voiceMood.seen'), 'the sticky voiceMood.seen() is not part of the guard');
+  assert.ok(sdk.includes('let callRawText = false;') && sdk.includes('{ callRawText = true; emitText(voiceMood.push(choice.delta.content)); }'), 'flag is per call and set on raw text before the filter');
   assert.ok(block.includes("['local', 'lmstudio', 'ollama', 'omlx', 'ninfer'].includes(prov)") && block.includes('emptyStreams <= 2') && block.includes('continue;'), 'two retries for local providers');
   assert.ok(block.includes("emptyStreams === 1 ? 2500 : 6000"), '2.5 s then 6 s');
   assert.ok(block.includes('throw new Error(`The model returned nothing'), 'error instead of a blank reply');

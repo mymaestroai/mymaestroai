@@ -7,12 +7,16 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
-const { createHubEvents, events: shared } = require('../lib/hub-events');
-const sdkChat = require('../lib/sdk-chat');
-const gw = require('../lib/gateway-client');
-const as = require('../lib/codex-cli/app-server');
-const codexCli = require('../lib/codex-cli');
-const { wrapResponsesStream } = require('../lib/openai-responses');
+// lib/ comes from a throwaway install (test/helpers/isolated-install.js), so nothing under the real data/ is touched.
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('reasoning-panel-iso-');
+const L = (p) => require(path.join(ISO.lib, p));
+const { createHubEvents, events: shared } = L('hub-events');
+const sdkChat = L('sdk-chat');
+const gw = L('gateway-client');
+const as = L('codex-cli/app-server');
+const codexCli = L('codex-cli');
+const { wrapResponsesStream } = L('openai-responses');
 const read = (f) => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 

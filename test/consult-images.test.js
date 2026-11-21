@@ -8,6 +8,9 @@ const path = require('path');
 const http = require('http');
 const net = require('net');
 
+// lib/ comes from a throwaway install, so nothing under the real data/ is touched.
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('consult-images-iso-');
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'consult-images-'));
 const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(64, 1)]);
 const JPG = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(64, 2)]);
@@ -20,7 +23,7 @@ const dataUrl = `data:image/png;base64,${PNG.toString('base64')}`;
 
 let server, sdkChat, ci, port;
 const seen = [];          // what each consulted turn received
-const convDir = path.join(__dirname, '..', 'data', 'conversations');
+const convDir = path.join(ISO.data, 'conversations');
 const TARGET = 'zz_img_target';
 
 before(async () => {
@@ -28,8 +31,8 @@ before(async () => {
   process.env.PORT = String(port);                       // sdk-chat reads the hub port when it loads
   delete process.env.HUB_AUTH_USERNAME; delete process.env.HUB_AUTH_PASSWORD;
   process.env.HUB_HALT_FILE = path.join(tmp, 'hub-halt.json');
-  sdkChat = require('../lib/sdk-chat');
-  ci = require('../lib/consult-images');
+  sdkChat = require(path.join(ISO.lib, 'sdk-chat'));
+  ci = require(path.join(ISO.lib, 'consult-images'));
   const { sendSSE, makeChunk, setTestStreamer } = sdkChat.__turn;
   setTestStreamer(async ({ agent, res, message, imagePaths, finalMessage }) => {
     seen.push({ agent, message, imagePaths: [...imagePaths], finalMessage });

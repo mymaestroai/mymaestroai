@@ -95,9 +95,10 @@ test('wiring: admin route, Settings checklist, admin banner, Users page note, ch
   assert.match(users, /id="invite-readiness"/);
   assert.match(users, /fetch\('\/api\/readiness'/);
   const sdk = read('lib/sdk-chat.js');
-  assert.match(sdk, /function sandboxWithheldNotice\(\)[\s\S]*Install Docker Desktop for Mac[\s\S]*Setup checklist/);
-  assert.match(sdk, /if \(sandboxWithheld\) sendSSE\(res, makeChunk\(sandboxWithheldNotice\(\), sdkModel\)\);/);
-  assert.match(sdk, /if \(sseRes\) sendSSE\(sseRes, makeChunk\(sandboxWithheldNotice\(\), 'gateway'\)\);/, 'gateway agents are told too');
+  // security R2: the notice takes the reason the box was withheld (ECREDPURGE has its own text); the Docker notice is unchanged
+  assert.match(sdk, /function sandboxWithheldNotice\(code = null\)[\s\S]*Install Docker Desktop for Mac[\s\S]*Setup checklist/);
+  assert.match(sdk, /if \(sandboxWithheld\) sendSSE\(res, makeChunk\(sandboxWithheldNotice\(hands\.withheldCode\), sdkModel\)\);/);
+  assert.match(sdk, /if \(sseRes\) sendSSE\(sseRes, makeChunk\(sandboxWithheldNotice\(hands\.withheldCode\), 'gateway'\)\);/, 'gateway agents are told too');
 });
 
 test('agents on ChatGPT with Codex signed out: critical, with the command that fixes it; signed in or no such agents: quiet', async () => {
@@ -109,6 +110,19 @@ test('agents on ChatGPT with Codex signed out: critical, with the command that f
   assert.match(JSON.stringify(byId(out, 'chatgpt-signin')), /mymaestro connect chatgpt/);
   assert.strictEqual(byId(await createReadiness({ ...base, agents, hasCodexSignIn: async () => true }).check(), 'chatgpt-signin'), undefined);
   assert.strictEqual(byId(await createReadiness({ ...base, agents: async () => [{ name: 'a', model: 'claude-sdk/x' }], hasCodexSignIn: () => false }).check(), 'chatgpt-signin'), undefined);
+});
+
+test('agents on ChatGPT with Codex itself missing (a Node.js update took it): critical, says Codex is not installed, one fix command', async () => {
+  const base = { hasUsers: () => true, setupNeeded: () => false, hasSdkCredentials: () => true, sandboxStatus: async () => ({ docker: true, imageReady: true }), fetchStatus: async () => ({ renderer: true, pdftotext: true }), searchChain: () => ['perplexity'], supervisor: () => 'systemd', exposed: () => false };
+  const agents = async () => [{ name: 'maestro', model: 'codex-cli/gpt-x' }, { name: 'b', model: 'codex-cli/gpt-y' }];
+  let asked = 0;
+  const out = await createReadiness({ ...base, agents, hasCodexBinary: () => false, hasCodexSignIn: async () => { asked++; return false; } }).check();
+  const item = byId(out, 'chatgpt-signin');
+  assert.strictEqual(item.level, 'critical');
+  assert.match(item.title, /2 agent\(s\) use ChatGPT through Codex but Codex is not installed/);
+  assert.match(JSON.stringify(item), /mymaestro connect chatgpt/);
+  assert.strictEqual(asked, 0, 'the sign-in is not asked of a program that is not there');
+  assert.strictEqual(byId(await createReadiness({ ...base, agents: async () => [{ name: 'a', model: 'claude-sdk/x' }], hasCodexBinary: () => false }).check(), 'chatgpt-signin'), undefined, 'no ChatGPT agents: quiet');
 });
 
 test('the memory check\'s line joins the checklist with its link to Settings → Status → Memory', async () => {

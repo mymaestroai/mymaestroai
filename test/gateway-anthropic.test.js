@@ -4,8 +4,12 @@
 // with 400 "Unexpected role \"tool\"" and the ledger booked these turns at $0 (reported by a tester).
 const test = require('node:test');
 const assert = require('node:assert');
+const path = require('node:path');
+// lib/ comes from a throwaway install, so nothing under the real data/ is touched.
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('gateway-anthropic-iso-');
 const log = console.log; console.log = () => {};
-const gw = require('../lib/gateway-client');
+const gw = require(path.join(ISO.lib, 'gateway-client'));
 console.log = log;
 
 test('assistant tool_calls -> tool_use blocks; tool results -> one user message of tool_result blocks', () => {
@@ -92,7 +96,7 @@ test('OpenAI and Google streams ask for usage; the gateway loop books provider t
 });
 
 test('a chat turn for an agent that does not exist is refused with 404, not run on a default model', async () => {
-  const sdkChat = require('../lib/sdk-chat');
+  const sdkChat = require(path.join(ISO.lib, 'sdk-chat'));
   let status, body;
   await sdkChat.handleChatStream({ agent: 'zz_no_such_agent_404', message: 'hi' },
     { writableEnded: false, destroyed: false, on() {}, writeHead(s) { status = s; }, write() { return true; }, end(d) { body = d; this.writableEnded = true; } });

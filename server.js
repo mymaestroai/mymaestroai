@@ -21,13 +21,10 @@ try { restoredAtBoot = require('./lib/backup/apply').applyAtBoot({ root: __dirna
 catch (e) { console.error(`[restore] the restore could not be finished or rolled back, so My Maestro AI stops here to keep your data safe: ${e.message}`); process.exit(1); }
 
 // Load .env BEFORE any other requires — skill-manager reads env at import time
-try {
-  const envFile = fs.readFileSync(path.join(__dirname, '.env'), 'utf8');
-  for (const line of envFile.split('\n')) {
-    const match = line.match(/^([A-Z_]+)=(.*)$/);
-    if (match) process.env[match[1]] = match[2].trim();
-  }
-} catch {}
+// Secret values (keys, tokens, passwords) go to a private in-memory store (lib/hub-secrets), not process.env, so no
+// child process the hub starts carries them in its start environment.
+const hubSecrets = require('./lib/hub-secrets');
+try { hubSecrets.loadEnvFile(path.join(__dirname, '.env')); } catch {}
 
 // Agents' boxes a backup paused and couldn't let go (the process stopped mid-copy): let them go now, after .env (it may say
 // how to reach Docker). Their record sits in .restore/, which a restore never moves; it stays until each box is let go.
@@ -116,7 +113,17 @@ const hubSettings = require('./lib/settings');
 const hubAuth = require('./lib/auth').getAuth();          // accounts, sessions, TOTP, invites (lib/auth)
 const admin2fa = require('./lib/admin-2fa').createAdmin2fa({   // "Require two-factor sign-in for admins" (lib/admin-2fa)
   getSetting: hubSettings.getSetting, updateSettings: hubSettings.updateSettings, auth: hubAuth,
-  notify: (p) => require('./lib/push').getPush().notify(p, { adminsOnly: true }), log: (m) => console.log(m),
+  notify: (p) => require('./lib/push').getPush().notify(p, { adminsOnly: true, kind: 'security' }), log: (m) => console.log(m),   // a security notice (the person's Security and access setting)
+});
+// Five wrong second-factor codes lock that account's codes for a minute (lib/auth): one security notice to that person and every admin.
+hubAuth.setTotpLockNotifier(({ user }) => {
+  const ids = [...new Set([user.id, ...hubAuth.admins().map(a => a.id)].filter(Boolean).map(String))];
+  console.log(`[auth] two-factor locked for a minute: ${user.login}`);
+  Promise.resolve(require('./lib/push').getPush().notifyUsers({
+    title: 'Two-factor sign-in locked for a minute',
+    body: `5 wrong two-factor codes for ${user.name || user.login}. Codes are refused for a minute. If this wasn't ${user.name || user.login}, someone knows the password: change it.`,
+    url: '/', tag: 'totp-lock',
+  }, ids, { kind: 'security' })).catch(() => {});
 });
 const access = require('./lib/access');                   // route classes + agent ownership/sharing (lib/access)
 const temporalWorkersLib = require('./lib/temporal-workers');
@@ -184,7 +191,7 @@ process.on('exit', () => {
 // (HUB_BIND_HOST) that is refused unless Basic auth is configured — see
 // lib/bind-host.js.
 const { isSameOriginStreamRequest, isTailnetUserAllowed } = require('./lib/bind-host');
-const BIND = require('./lib/bind-host').resolveBindHost(process.env, {
+const BIND = require('./lib/bind-host').resolveBindHost(hubSecrets.envView(), {
   hasUsers: () => hubAuth.hasUsers(),
   hasSecuredAdmin: () => hubAuth.admins().some(u => u.totp && u.totp.enabled),
 });
@@ -195,6 +202,16 @@ const PORT = parseInt(process.env.PORT || '8888', 10);
 // Security check (lib/security-check): the hub reviews its own security configuration (Settings → Security check,
 // GET /api/security-check, nightly). Wired with how this process actually listens.
 function securityCheck() { return require('./lib/security-check').getSecurityCheck({ exposed: () => !!BIND.exposed, port: PORT, host: HOST }); }
+/** The step-up: this signed-in account's password (and two-factor code when the account has it) from a request body.
+ *  Returns null when right, else the message to show. Used by the backup routes and the module permission routes. */
+function accountStepUp(user, b, ip) {
+  const u = user;
+  b = b && typeof b === 'object' ? b : {};
+  const r = hubAuth.login(u.login, String(b.password || ''), { ip });
+  if (!r.ok) return r.locked ? r.error : 'That password is not right.';
+  if (r.needsTotp) { const t = hubAuth.totpCheck(u.id, String(b.code || '').replace(/\s+/g, '')); if (!t || !t.ok) return (t && t.locked) ? t.error : 'That two-factor code is not right.'; }
+  return null;
+}
 // Backups (lib/backup/service): one instance for the routes; download links last two minutes and work once.
 let backupSvc = null;
 const backupDownloads = new Map();
@@ -224,8 +241,8 @@ const _modelHealthCache = {};
 let _modelHealthLastRun = 0;
 
 // Basic Auth (optional)
-const AUTH_USERNAME = process.env.HUB_AUTH_USERNAME || '';
-const AUTH_PASSWORD = process.env.HUB_AUTH_PASSWORD || '';
+const AUTH_USERNAME = hubSecrets.get('HUB_AUTH_USERNAME') || '';
+const AUTH_PASSWORD = hubSecrets.get('HUB_AUTH_PASSWORD') || '';
 if (AUTH_USERNAME && hubAuth.hasUsers()) console.warn('[auth] HUB_AUTH_USERNAME/HUB_AUTH_PASSWORD are set but accounts exist: the old password login is ignored. Remove the two lines from .env; scripts and bots use API tokens (Users page).');
 
 // ── Helpers ─────────────────────────────────────────────────────────────
@@ -246,6 +263,11 @@ function readBodyRaw(req) {
     req.on('end', () => resolve(Buffer.concat(chunks).toString()));
     req.on('error', reject);
   });
+}
+
+/** The agent a non-JSON request names: ?agent=<name> or the X-Agent header (audio upload to /api/voice/stt). */
+function agentFromQuery(req) {
+  try { return new URL(req.url, 'http://x').searchParams.get('agent') || String(req.headers['x-agent'] || '') || null; } catch { return null; }
 }
 
 function jsonResponse(res, code, data) {
@@ -289,16 +311,94 @@ function stripHubOnlyChatFields(body, req) {
   return body;
 }
 
+// Share links: the store and the routes are made once, on first use (the store loads data/share-links.json and prunes daily).
+let _shareLinkRoutes = null;
+function shareLinkRoutes() {
+  if (!_shareLinkRoutes) {
+    const SL = require('./lib/share-links');
+    const store = SL.createStore({ file: path.join(__dirname, 'data', 'share-links.json'), log: (m) => console.warn(m) });
+    store.startPruneTimer();
+    _shareLinkRoutes = require('./lib/share-links-routes').createShareLinkRoutes({
+      store, access, hubAuth, log: (m) => console.warn(m),
+      getFiles: () => require('./lib/files').getFiles({ getUser: (id) => hubAuth.getUser(id), isAdminUser: (u) => access.isAdmin(u),
+        maxUploadBytes: () => Math.max(1, Number(hubSettings.getSetting('filesMaxUploadMb')) || 512) * 1048576 }),
+      getAgents: () => getAgents(),
+      settings: () => hubSettings.getSetting('shareLinks'),
+      push: () => require('./lib/push').getPush(),
+    });
+  }
+  return _shareLinkRoutes;
+}
+
+// A share token must never reach a log line (also when URL-encoded inside next=).
+const redactShareToken = (s) => String(s).replace(/\/s\/[A-Za-z0-9_-]{43}/g, '/s/<token>').replace(/%2[Ff]s%2[Ff][A-Za-z0-9_-]{43}/g, '%2Fs%2F<token>');
+
 // A request can never take the process down: whatever throws before or outside the route try-block below (cookie
 // or URL decoding, identity, the bridge) answers 400 and the hub carries on (review F07).
 const server = http.createServer((req, res) => {
   handleHttpRequest(req, res).catch((err) => {
-    console.error(`[server] ${req.method} ${String(req.url || '').slice(0, 200)}: ${err && err.message ? err.message : err}`);
+    console.error(`[server] ${req.method} ${redactShareToken(String(req.url || '')).slice(0, 200)}: ${redactShareToken(err && err.message ? err.message : err)}`);
     try {
       if (!res.headersSent) res.writeHead(400, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'bad_request' }));
     } catch { /* socket gone */ }
   });
+});
+// Open desktop (Remote computers): routes, session map and the websocket relay (lib/remote-desktop). Only while the module is on.
+let _remoteDesktop = null;
+function remoteDesktop() {
+  if (!_remoteDesktop) {
+    const modsOf = () => require('./lib/modules').getModules();
+    const identifyReq = (req) => {
+      // A request that went through the gate in handleHttpRequest already carries its identity; an upgrade does not, so it is worked out here.
+      if (req.hubIdentKind !== undefined) return { user: req.hubUser, pendingTotp: req.hubPendingTotp, service: req.hubService, token: req.hubToken };
+      const ident = hubAuth.identify(req, { legacyCheck: (r) => !!AUTH_USERNAME && !hubAuth.hasUsers() && checkAuth(r) });
+      return {
+        user: ident && (ident.kind === 'user' || ident.kind === 'legacy') ? ident.user : null,
+        pendingTotp: !!(ident && ident.kind === 'user' && ident.pendingTotp),
+        service: !!(ident && ident.kind === 'service'),
+        token: ident && ident.kind === 'token' ? ident.token : null,
+      };
+    };
+    _remoteDesktop = require('./lib/remote-desktop').createRemoteDesktop({
+      callTool: (tool, args) => require('./lib/connectors').getConnectors().callTool('remote-computers', tool, args, { hub: true, timeoutMs: 30000 }),
+      parse: (t) => require('./lib/modules').parseToolText(t),
+      identify: identifyReq,
+      isAdmin: (u) => access.isAdmin(u),
+      isOwner: (u) => hubAuth.isOwner(u),
+      // The current account record, not the one seen when the session opened: it still exists, is not disabled and is still an admin.
+      // (The legacy single-password sign-in has no account record: it counts while the hub has no accounts.)
+      stillAdmin: (userId) => {
+        if (String(userId) === 'legacy') return !hubAuth.hasUsers();
+        const u = hubAuth.getUser(String(userId));
+        return !!u && !u.disabled && access.isAdmin(u);
+      },
+      tailnetOk: (req) => isTailnetUserAllowed(req, PORT),
+      enabled: () => { try { return !!modsOf().detail('remote-computers').enabled; } catch { return false; } },
+      settings: () => { try { return modsOf().detail('remote-computers').settings || {}; } catch { return {}; } },
+      readPage: () => fs.readFileSync(path.join(__dirname, 'remote-desktop.html'), 'utf8'),
+      log: (line) => console.log(line),
+      audit: (rec) => {
+        try {
+          const dir = path.join(__dirname, 'data', 'modules', 'remote-computers');
+          fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+          fs.appendFileSync(path.join(dir, 'audit.jsonl'), JSON.stringify(rec) + '\n', { mode: 0o600 });
+        } catch (e) { console.error('[remote-desktop] audit:', e.message); }
+      },
+    });
+  }
+  return _remoteDesktop;
+}
+/** Ends desktop sessions that must no longer run, right after a change to the module (only when the desktop instance exists). Never throws. */
+function sweepRemoteDesktop(moduleId) {
+  if (moduleId !== 'remote-computers' || !_remoteDesktop) return;
+  try { _remoteDesktop.sweep().catch(() => {}); } catch { /* the 15 s sweep follows */ }
+}
+// Websocket upgrades: only the desktop relay is answered; every other path keeps today's behaviour (the socket is closed).
+server.on('upgrade', (req, socket, head) => {
+  let handled = false;
+  try { handled = remoteDesktop().upgrade(req, socket, head); } catch (e) { console.error('[remote-desktop] upgrade:', e && e.message ? e.message : e); }
+  if (!handled) { try { socket.destroy(); } catch { /* gone */ } }
 });
 // Public receivers (/hooks/<id>/<sub>): lib/modules/receivers checks every request itself, so they are answered before the tailnet gate.
 let _receivers = null;
@@ -317,7 +417,7 @@ function receivers() {
 }
 // Passkey (Face ID / fingerprint) unlock of the wallet keystore (lib/wallet/passkey-routes).
 let _pkRoutes = null;
-const passkeyRoutes = () => _pkRoutes || (_pkRoutes = require('./lib/wallet/passkey-routes').createPasskeyRoutes({ svc: require('./lib/wallet/service').getWalletService(), getSetting: (k) => hubSettings.getSetting(k), notify: (p) => require('./lib/push').getPush().notifyEach(p, { adminsOnly: true, urgency: 'high' }) }));
+const passkeyRoutes = () => _pkRoutes || (_pkRoutes = require('./lib/wallet/passkey-routes').createPasskeyRoutes({ svc: require('./lib/wallet/service').getWalletService(), getSetting: (k) => hubSettings.getSetting(k), notify: (p) => require('./lib/push').getPush().notifyEach(p, { adminsOnly: true, urgency: 'high', kind: 'security' }) }));   // passkey added/removed: a security notice
 // Notices from data connectors to their notice agent (lib/modules/notices); registered with the connectors at start-up.
 let _notices = null;
 function notices() {
@@ -401,6 +501,7 @@ async function handleHttpRequest(req, res) {
     // A token may call only what its scopes list, and chat/interject only for its own agents.
     let agentName = route.agent || null;
     if (route.from === 'body') { try { agentName = JSON.parse((await readBody(req)) || '{}').agent; } catch {} }
+    if (route.from === 'query') agentName = agentFromQuery(req);
     const allow = access.tokenAllows(req.hubToken, pathname, req.method, { agent: agentName });
     if (!allow.ok) return jsonResponse(res, 403, { error: 'token_scope', detail: allow.reason });
   } else if (route.kind !== 'public') {
@@ -417,6 +518,7 @@ async function handleHttpRequest(req, res) {
       if (route.kind === 'agent' && !access.isAdmin(req.hubUser)) {
         let agentName = route.agent;
         if (route.from === 'body') { try { agentName = JSON.parse((await readBody(req)) || '{}').agent; } catch {} }
+        if (route.from === 'query') agentName = agentFromQuery(req);
         const allowed = agentName && access.canAccessAgent(req.hubUser, agentName, { agents: await getAgents(), resolveVirtual: (n) => temporalWorkersLib.getVirtual(n) });
         if (!allowed) return jsonResponse(res, 403, { error: 'no_access_to_agent' });
       }
@@ -424,6 +526,10 @@ async function handleHttpRequest(req, res) {
   }
 
   try {
+    // ── Share links (lib/share-links, lib/share-links-routes): /api/share-links*, /s/<token>. A person on a browser session only. ──
+    if (pathname.startsWith('/api/share-links') || pathname.startsWith('/s/')) {
+      if (await shareLinkRoutes().handle(req, res, pathname)) return;
+    }
     // ── OpenAI-Compatible Routes ────────────────────────────────────
     if (pathname === '/v1/chat/completions' && req.method === 'POST') {
       return openaiCompat.handleChatCompletion(req, res);
@@ -538,6 +644,74 @@ async function handleHttpRequest(req, res) {
       require('./lib/welcome').getWelcome().markFinished(b.how === 'skip' ? 'skip' : 'done');
       return jsonResponse(res, 200, { ok: true });
     }
+    // The starter team (lib/welcome-team): admin only. lib/access classifies these as admin because they are not in PUBLIC_EXACT.
+    if (pathname === '/api/welcome/team' && req.method === 'GET') {
+      const out = await require('./lib/welcome-team').plan({ lead: new URL(req.url, 'http://x').searchParams.get('lead') || '' });
+      return jsonResponse(res, out.status, out.body);
+    }
+    if (pathname === '/api/welcome/team' && req.method === 'POST') {
+      const b = (await authJson()) || {};
+      const out = await require('./lib/welcome-team').create(b);
+      return jsonResponse(res, out.status, out.body);
+    }
+    if (pathname === '/api/welcome/team/plan' && req.method === 'POST') {
+      const b = (await authJson()) || {};
+      const out = await require('./lib/welcome-team').plan({ lead: typeof b.lead === 'string' ? b.lead : '', models: b.models });
+      return jsonResponse(res, out.status, out.body);
+    }
+    if (pathname === '/api/welcome/team/skip' && req.method === 'POST') {
+      const out = await require('./lib/welcome-team').skip();
+      return jsonResponse(res, out.status, out.body);
+    }
+    // The "Set up your team" card for existing installs (lib/team-card): admin only (lib/access: not in PUBLIC_EXACT).
+    if (pathname === '/api/team/card' && req.method === 'GET') {
+      const out = await require('./lib/team-card').cardState({ again: new URL(req.url, 'http://x').searchParams.get('again') === '1' });
+      return jsonResponse(res, out.status, out.body);
+    }
+    // Behaviour changes waiting for the owner (lib/behaviour-changes): admin only (lib/access: not in PUBLIC_EXACT, not a session route).
+    if (pathname === '/api/behaviour-changes' && req.method === 'GET') {
+      const bc = require('./lib/behaviour-changes');
+      const changes = bc.list();
+      let cadence = 'weekly'; try { cadence = require('./lib/settings').getSetting('workerProposals', 'weekly') === 'off' ? 'off' : 'weekly'; } catch { /* default */ }
+      return jsonResponse(res, 200, { ok: true, changes, workerProposals: cadence, ...(changes.some((c) => c.unreadable) ? { unreadable: true } : {}) });
+    }
+    // How often the lead looks at how the install is used (worker-proposals): saves the setting, then makes the weekly task match.
+    if (pathname === '/api/behaviour-changes/worker-proposals/cadence' && req.method === 'POST') {
+      // Only the owner decides: a signed-in admin's own browser session (never the hub's service identity, a token or an agent).
+      if (!require('./lib/access').isAdminSession(req)) return jsonResponse(res, 403, { ok: false, error: 'Sign in with an admin account in your browser to decide this.' });
+      const b = (await authJson()) || {};
+      if (b.cadence !== 'weekly' && b.cadence !== 'off') return jsonResponse(res, 400, { ok: false, error: 'cadence must be "weekly" or "off"' });
+      try {
+        require('./lib/settings').updateSettings({ workerProposals: b.cadence });
+        const r = await require('./lib/behaviour-review').syncProposalsTask();
+        console.log(`[behaviour] worker proposals set to ${b.cadence} by ${(req.hubUser && req.hubUser.id) || 'unknown'} (${r.action})`);
+        return jsonResponse(res, 200, { ok: true, cadence: b.cadence });
+      } catch (e) { return jsonResponse(res, 409, { ok: false, error: e && e.message ? e.message : String(e) }); }
+    }
+    {
+      const m = pathname.match(/^\/api\/behaviour-changes\/([a-z][a-z0-9-]{1,40})$/);
+      if (m && req.method === 'POST') {
+        // Only the owner decides: a signed-in admin's own browser session (never the hub's service identity, a token or an agent).
+        if (!require('./lib/access').isAdminSession(req)) return jsonResponse(res, 403, { ok: false, error: 'Sign in with an admin account in your browser to decide this.' });
+        const b = (await authJson()) || {};
+        if (b.decision !== 'on' && b.decision !== 'off') return jsonResponse(res, 400, { ok: false, error: 'decision must be "on" or "off"' });
+        const bc = require('./lib/behaviour-changes');
+        if (!bc.manifest().some((e) => e.id === m[1])) return jsonResponse(res, 404, { ok: false, error: 'no such change' });
+        try {
+          await bc.decide(m[1], b.decision, { user: req.hubUser && req.hubUser.id });
+          console.log(`[behaviour] ${m[1]} turned ${b.decision} by ${(req.hubUser && req.hubUser.id) || 'unknown'}`);
+          if (m[1] === 'worker-proposals') {
+            try { await require('./lib/behaviour-review').syncProposalsTask(); } catch (e) { console.warn('[behaviour] could not update the weekly team review:', e.message); }
+          }
+          return jsonResponse(res, 200, { ok: true, change: bc.list().find((c) => c.id === m[1]) });
+        } catch (e) { return jsonResponse(res, 409, { ok: false, error: e && e.message ? e.message : String(e) }); }
+      }
+    }
+    if (pathname === '/api/team/card/answer' && req.method === 'POST') {
+      const b = (await authJson()) || {};
+      const out = await require('./lib/team-card').answerCard({ answer: b.answer });
+      return jsonResponse(res, out.status, out.body);
+    }
     if (pathname === '/api/welcome/api-key' && req.method === 'POST') {
       const b = (await authJson()) || {};
       return jsonResponse(res, 200, await require('./lib/welcome').getWelcome().connectApiKey(b.provider, b.apiKey));
@@ -575,6 +749,7 @@ async function handleHttpRequest(req, res) {
       const b = await authJson(); if (!b) return jsonResponse(res, 400, { error: 'invalid JSON' });
       const user = hubAuth.getUser(sess.user_id);
       const r = hubAuth.totpCheck(user.id, b.code);
+      if (!r.ok && r.locked) return jsonResponse(res, 429, { ok: false, locked: true, error: r.error });
       if (!r.ok) return jsonResponse(res, 401, { ok: false, error: r.error });
       hubAuth.markTotpOk(sess.id);
       const cookiesOut = [];
@@ -619,7 +794,7 @@ async function handleHttpRequest(req, res) {
       const adminAccount = access.isAdmin(u);   // the account as stored now, read after the body arrived
       if (adminAccount && admin2fa.required()) return jsonResponse(res, 403, { error: require('./lib/admin-2fa').REQUIRED_MESSAGE, code: 'admin_2fa_required' });
       if (!hubAuth.login(u.login, b.password).ok) return jsonResponse(res, 401, { error: 'password check failed' });
-      if (adminAccount && u.totp && u.totp.enabled) { const t = hubAuth.totpCheck(u.id, String(b.code || '').replace(/\s+/g, '')); if (!t || !t.ok) return jsonResponse(res, 403, { error: 'That two-factor code is not right.' }); }
+      if (adminAccount && u.totp && u.totp.enabled) { const t = hubAuth.totpCheck(u.id, String(b.code || '').replace(/\s+/g, '')); if (!t || !t.ok) return jsonResponse(res, (t && t.locked) ? 429 : 403, { error: (t && t.locked) ? t.error : 'That two-factor code is not right.' }); }
       return jsonResponse(res, 200, hubAuth.totpDisable(u.id));
     }
     if (pathname === '/api/auth/password' && req.method === 'POST') {
@@ -644,9 +819,23 @@ async function handleHttpRequest(req, res) {
       // accounts: false = no admin account exists yet (an updated older install): no login, multi-user features off.
       const out = { user: u, isAdmin, accounts: hubAuth.hasUsers() };
       if (req.hubUser) out.admin2faRequired = admin2fa.required();
+      out.isOwner = !!(req.hubUser && !req.hubService && !req.hubPendingTotp && hubAuth.isOwner(req.hubUser));
       if (isAdmin) { const oe = access.ownerEntries(await getAgents(), hubAuth.listUsers()); out.owners = oe.owners; out.infraCount = oe.infraCount; }
       out.timeZone = u ? require('./lib/timezone').zoneForUser(u.id) : require('./lib/timezone').hubZone();   // what this person's agents use
+      // This person's look (Simple mode): the saved choice, else by role (a member starts in Simple, an admin in Advanced).
+      out.uiMode = (u && u.uiMode) || (isAdmin ? 'advanced' : 'simple');
+      out.theme = (u && u.theme) || 'auto';
       return jsonResponse(res, 200, out);
+    }
+    // This person's page mode and theme: { uiMode?: 'simple'|'advanced', theme?: 'light'|'dark'|'auto' }. A signed-in
+    // person only (the hub's own calls and API tokens have no person); bad values get a plain 400.
+    if (pathname === '/api/me/prefs' && req.method === 'POST') {
+      if (!req.hubUser || req.hubService || req.hubToken || req.hubPendingTotp) return jsonResponse(res, 401, { error: 'Sign in first' });
+      let body = {};
+      try { body = JSON.parse(await readBody(req) || '{}') || {}; } catch { return jsonResponse(res, 400, { error: 'Bad request' }); }
+      const r = hubAuth.setPrefs(req.hubUser.id, { uiMode: body.uiMode, theme: body.theme });
+      if (!r.ok) return jsonResponse(res, 400, { error: r.error });
+      return jsonResponse(res, 200, { ok: true, uiMode: r.user.uiMode || (access.isAdmin(req.hubUser) ? 'advanced' : 'simple'), theme: r.user.theme || 'auto' });
     }
     // This person's time zone (lib/timezone): the page in use reports its own ({tz, auto: true}; the zone follows the
     // device unless pinned); the Profile pins one ({tz, pinned: true}) or follows the device again ({tz, pinned: false}).
@@ -738,6 +927,25 @@ async function handleHttpRequest(req, res) {
         return jsonResponse(res, 200, { ok: true, agent: agentName, active: !!(turn && turn.active), turn });
       }
     }
+    // Notification settings per person and agent, and the presence pings that decide "only when I'm away" (lib/notify-prefs-routes).
+    // The person is always the signed-in user ('*' on a hub without accounts), never a parameter.
+    if (pathname === '/api/notify/prefs' || pathname === '/api/notify/presence') {
+      const body = req.method === 'GET' ? {} : await authJson();   // a beacon's Blob body arrives as plain text: JSON either way
+      const accounts = hubAuth.hasUsers();
+      const who = req.hubUser || null;
+      // A hub without accounts (also its single-password sign-in, whose session user is 'legacy') has one person, '*':
+      // lib/push maps devices without an account to '*', so the settings must be kept there too.
+      const all = (req.method === 'PUT' && (who || !accounts)) ? await getAgents() : [];
+      const out = require('./lib/notify-prefs-routes').handle({
+        method: req.method, pathname, body, service: req.hubService, token: req.hubToken,
+        userId: !accounts ? '*' : (who ? String(who.id) : null),
+        prefs: require('./lib/notify-prefs').getNotifyPrefs(),
+        beforeSecurityOff: (uid) => { require('./lib/push').getPush().notifyUsers({ title: 'Security and access notifications turned off', body: 'Changed from a signed-in page. Turn them back on in Notification settings.', url: '/mobile', tag: 'security-off' }, [uid], { kind: 'security', ignorePrefs: true }).catch(() => {}); },   // one last notice to the person's own devices, sent before the setting is saved
+        agentExists: (n) => all.some(a => a.name === n),
+        agentVisible: (n) => !who || access.isAdmin(who) || access.canAccessAgent(who, n, { agents: all, resolveVirtual: (v) => temporalWorkersLib.getVirtual(v) }),
+      });
+      return jsonResponse(res, out.status, out.json);
+    }
     // "Notify me when done": the 🔔 next to Stop while a reply runs. One push to this person's devices when that turn
     // ends (lib/push); every page of theirs shows the bell's state (turn_notify). A person on a page, not a program.
     {
@@ -753,7 +961,10 @@ async function handleHttpRequest(req, res) {
         if (!r) return jsonResponse(res, 409, { error: 'not_running', detail: `${agentName} is not working on a reply right now` });
         let devices = 0;
         try { devices = require('./lib/push').getPush().devicesFor(user); } catch {}
-        return jsonResponse(res, 200, { ok: true, agent: agentName, turnId: r.turnId, on: r.on, devices });
+        // The person's effective "Requests you made" mode for this agent, from the server's own settings (a page's cached copy may be stale).
+        let requested;
+        try { requested = require('./lib/notify-prefs').getNotifyPrefs().mode(!hubAuth.hasUsers() ? '*' : (who ? String(who.id) : null), agentName, 'requested'); } catch { requested = undefined; }
+        return jsonResponse(res, 200, { ok: true, agent: agentName, turnId: r.turnId, on: r.on, devices, ...(requested ? { requested } : {}) });
       }
     }
     {
@@ -789,30 +1000,103 @@ async function handleHttpRequest(req, res) {
 
     // ── Files area: upload / download / browse one folder per owner (lib/files) ──
     if (pathname === '/api/files' || pathname.startsWith('/api/files/')) {
-      const files = require('./lib/files').getFiles({ getUser: (id) => hubAuth.getUser(id), isAdminUser: (u) => access.isAdmin(u),
-        maxUploadBytes: () => Math.max(1, Number(hubSettings.getSetting('filesMaxUploadMb')) || 512) * 1048576 });
+      const filesLib = require('./lib/files');
+      const files = filesLib.getFiles({ getUser: (id) => hubAuth.getUser(id), isAdminUser: (u) => access.isAdmin(u),
+        maxUploadBytes: () => Math.max(1, Number(hubSettings.getSetting('filesMaxUploadMb')) || 512) * 1048576, dataDir: path.join(__dirname, 'data') });
       const q = new URL(req.url, 'http://x').searchParams;
       let jsonBody = null;
       if (req.method === 'POST' && pathname !== '/api/files/upload') { jsonBody = await authJson(); if (!jsonBody) return jsonResponse(res, 400, { error: 'invalid JSON' }); }
       const want = (k) => (jsonBody && jsonBody[k] !== undefined) ? jsonBody[k] : q.get(k);
       const who = req.hubUser || { id: 'service', role: 'admin' };
-      // Per agent when the page names the active chat's agent (the user must be allowed that agent);
-      // otherwise the owner's general folder.
-      let own = null;
-      const agentName = want('agent');
-      if (agentName) {
+      // Per agent when the page names an agent (the person must be allowed that agent); otherwise the owner's general folder.
+      // scopeFor(agentName, ownerReq, agents?) -> { own } | { code, error }: the one owner/agent rule, run once per request here
+      // and per item in /resolve.
+      const scopeFor = async (agentName, ownerReq, agentsList) => {
+        if (agentName) {
+          const agents = agentsList || await getAgents();
+          const rec = agents.find(a => a.name === String(agentName));
+          if (!rec) return { code: 404, error: 'no such agent' };
+          if (!access.isAdmin(who) && !access.canAccessAgent(who, rec.name, { agents })) return { code: 403, error: 'no_access_to_agent' };
+          const memberOwned = !!(rec.owner && !hubAuth.listUsers().some(u => u.id === String(rec.owner) && u.role === 'admin'));
+          return { own: files.resolveAgent(who, rec, { memberOwned }) };
+        }
+        const own = files.resolveOwner(who, ownerReq);
+        return own ? { own } : { code: 403, error: 'no such owner' };
+      };
+      // POST /api/files/resolve { items }: Files-folder paths an agent wrote (abs, spaces allowed), download links ({agent|owner, path}) or a bare
+      // file name an agent mentioned ({name, agent}: searched only in that agent's own folder, answered only when exactly one file has it) -> file facts + download URLs.
+      // Anything outside the folders this person may read answers { ok:false, error:'not found' }, same as a missing file.
+      if (pathname === '/api/files/resolve' && req.method === 'POST') {
+        const items = jsonBody && jsonBody.items;
+        if (!Array.isArray(items) || items.length > 12) return jsonResponse(res, 400, { error: 'items must be a list of at most 12' });
+        const nf = { ok: false, error: 'not found' };
         const agents = await getAgents();
-        const rec = agents.find(a => a.name === String(agentName));
-        if (!rec) return jsonResponse(res, 404, { error: 'no such agent' });
-        if (!access.isAdmin(who) && !access.canAccessAgent(who, rec.name, { agents })) return jsonResponse(res, 403, { error: 'no_access_to_agent' });
-        const memberOwned = !!(rec.owner && !hubAuth.listUsers().some(u => u.id === String(rec.owner) && u.role === 'admin'));
-        own = files.resolveAgent(who, rec, { memberOwned });
-      } else {
-        own = files.resolveOwner(who, want('owner'));
+        let roots = null;   // the roots this person may read, agent roots first, then their folders: built once, only for { abs } items
+        const rootsFor = async () => {
+          if (roots) return roots;
+          roots = [];
+          for (const a of agents) {
+            const s = await scopeFor(a.name, null, agents);
+            if (s.own) roots.push({ root: s.own.root, agent: s.own.agent, owner: null });
+          }
+          const owners = access.isAdmin(who) ? ['mine', ...hubAuth.listUsers().map(u => u.id)] : [null];
+          for (const o of owners) { const s = await scopeFor(null, o, agents); if (s.own) roots.push({ root: s.own.root, agent: null, owner: s.own.ownerId }); }
+          return roots;
+        };
+        const out = [];
+        const nameIdx = new Map();   // folder -> files.nameIndex(), for { name, agent } items
+        for (const it of items) {
+          if (!it || typeof it !== 'object' || Array.isArray(it)) { out.push(nf); continue; }
+          let r = null;
+          try {
+            if (typeof it.abs === 'string') {
+              for (const c of await rootsFor()) {
+                const hit = files.resolveAbs(c.root, it.abs);
+                const info = hit && files.fileInfo(c.root, hit.rel, c);
+                if (info) { r = info; break; }
+              }
+            } else if (typeof it.path === 'string') {
+              const s = await scopeFor(it.agent ? String(it.agent) : null, it.owner, agents);
+              if (s.own) r = files.fileInfo(s.own.root, it.path, { agent: s.own.agent || null, owner: s.own.ownerId });
+            } else if (typeof it.name === 'string' && typeof it.agent === 'string') {
+              // A bare file name: only in that agent's own folder (scopeFor refuses an agent this person may not open), and only when
+              // exactly one file there has the name.
+              const s = await scopeFor(it.agent, null, agents);
+              if (s.own) {
+                const rootKey = String(s.own.root);
+                if (!nameIdx.has(rootKey)) nameIdx.set(rootKey, files.nameIndex(s.own.root));   // one walk per folder per request
+                const rel = files.findByName(s.own.root, it.name, { index: nameIdx.get(rootKey) });
+                r = rel ? files.fileInfo(s.own.root, rel, { agent: s.own.agent || null, owner: s.own.ownerId }) : null;
+              }
+            }
+          } catch { r = null; }
+          out.push(r || nf);
+        }
+        return jsonResponse(res, 200, { ok: true, items: out });
       }
-      if (!own) return jsonResponse(res, 403, { error: 'no such owner' });
+      const sc = await scopeFor(want('agent'), want('owner'));
+      if (!sc.own) return jsonResponse(res, sc.code, { error: sc.error });
+      const own = sc.own;
       const rel = String(want('path') || '');
       const fail = (r) => jsonResponse(res, r.code || 400, { error: r.error });
+      // GET /api/files/recent: the newest files agents wrote under this folder (uploads left out).
+      if (pathname === '/api/files/recent' && req.method === 'GET') {
+        const r = files.recent(own.root, { limit: q.get('limit') });
+        const where = { agent: own.agent || null, owner: own.agent ? null : own.ownerId };
+        return jsonResponse(res, 200, { ok: true, truncated: r.truncated, files: r.files.map(f => ({ ...f,
+          download: filesLib.downloadUrl({ ...where, path: f.path }),
+          inline: filesLib.isActiveName(f.name) ? null : filesLib.downloadUrl({ ...where, path: f.path }, { inline: true }) })) });
+      }
+      // GET /api/files/zip: a folder as one .zip (check=1: only the access checks and the size scan, answered as JSON).
+      if (pathname === '/api/files/zip' && req.method === 'GET') {
+        const lim = filesLib.zipLimits(hubSettings.getSetting('filesZipMaxMb'), hubSettings.getSetting('filesZipMaxFiles'));
+        const plan = files.zipPlan(own.root, rel, lim);
+        if (!plan.ok) return fail(plan);
+        if (plan.tooBig) return jsonResponse(res, 413, { error: plan.error, files: plan.count, bytes: plan.bytes, maxFiles: plan.maxFiles, maxBytes: plan.maxBytes });
+        if (q.get('check') === '1') return jsonResponse(res, 200, { ok: true, files: plan.count, bytes: plan.bytes, maxFiles: plan.maxFiles, maxBytes: plan.maxBytes });
+        console.log(`[files] ${who.id} zipped ${rel || '(root)'} (${plan.count} files) from ${own.agent || (own.ownerId === 'mine' ? 'share' : own.ownerId)}`);
+        return files.streamZip(own.root, plan, res, { maxBytes: plan.maxBytes });
+      }
       if (pathname === '/api/files' && req.method === 'GET') {
         const r = files.list(own.root, rel);
         if (!r.ok) return fail(r);
@@ -918,7 +1202,15 @@ async function handleHttpRequest(req, res) {
       // A member never learns the caller of a consultation they may not use (consultedBy, the activity text).
       if (!req.hubService && !access.isAdmin(req.hubUser)) status = access.statusForViewer(req.hubUser, status, { agents: all, resolveVirtual: (n) => temporalWorkersLib.getVirtual(n) });
       const idle = { busy: false, busySince: null, activity: null, pendingQuestion: false };
-      return jsonResponse(res, 200, { agents: agents.map(a => ({ ...a, ...(status[a.name] || idle) })) });
+      // keptOnBox: this agent's data is meant to stay on this computer (medical/legal folders or the keep-on-box list): the voice settings warn before a cloud engine.
+      const kept = require('./lib/voice/cloud').keptOnBox;
+      // Who confirmed a cloud engine, and when, is for admins only.
+      const isAdm = !!req.hubService || access.isAdmin(req.hubUser);
+      const stripVoice = (a) => require('./lib/voice/cloud').publicAgentVoice(a, isAdm);
+      // Call recordings: a signed-in admin sees the whole setting; everybody else (members, the hub's own service calls that agents' tools use) gets it without the allowed list. canDownload: is this caller on the list.
+      const recView = { admin: access.isAdmin(req.hubUser) && !req.hubPendingTotp, userId: req.hubUser && !req.hubPendingTotp ? String(req.hubUser.id) : '' };
+      const recordingsFor = require('./lib/recordings/settings').recordingsForViewer;
+      return jsonResponse(res, 200, { agents: agents.map(a => ({ ...stripVoice(a), ...(recView.admin ? {} : { envKeep: undefined }), recordings: recordingsFor(a, recView), keptOnBox: kept(a, hubSettings.getSetting), effortUltra: require('./lib/effort').ultraFor(a.model), tierOptions: require('./lib/tier').tiersFor(a.model), tierLabels: require('./lib/tier').labelsFor(a.model), ...(status[a.name] || idle) })) });
     }
 
     if (pathname === '/api/agents/status' && req.method === 'GET') {
@@ -1184,9 +1476,11 @@ async function handleHttpRequest(req, res) {
       // The model decides which code path and which hands an agent gets (a Codex model is a host shell on this box),
       // so a member may only pick from the admin's list, settings.memberModels (review F22/F35).
       if (!req.hubService && !access.isAdmin(req.hubUser)) {
-        const allowed = require('./lib/settings').getSetting('memberModels');
-        if (!Array.isArray(allowed) || !allowed.includes(String(body.model || ''))) {
-          return jsonResponse(res, 403, { error: 'admin_only', detail: 'only an admin can change this agent\'s model' + (Array.isArray(allowed) && allowed.length ? ` (members may choose: ${allowed.join(', ')})` : '') });
+        // lib/member-models: the same rule decides which models a member's temporary workers (spawn_workers) may use.
+        const mm = require('./lib/member-models');
+        const allowed = mm.list();
+        if (!mm.memberMayUse(body.model)) {
+          return jsonResponse(res, 403, { error: 'admin_only', detail: 'only an admin can change this agent\'s model' + (allowed.length ? ` (members may choose: ${allowed.join(', ')})` : '') });
         }
       }
       const result = await setAgentModel(name, body.model);
@@ -1218,15 +1512,41 @@ async function handleHttpRequest(req, res) {
       const body = JSON.parse(await readBody(req));
       // A member may tune their own agent's conversation settings, never its permissions, folders, sandbox, tools,
       // owner or sharing: those are admin decisions (member grants: Users page, Settings page, agent settings page).
+      // Call recordings are switched and shared by a signed-in admin only: never a member (not in MEMBER_EDITABLE below) and never the hub's own service calls (agents' tools).
+      // Only the owner (the earliest admin) does: who may download a family's recordings is not any admin's call.
+      const recordingsChange = !!body && typeof body === 'object' && 'recordings' in body;
+      if (recordingsChange && (req.hubService || req.hubToken || !req.hubUser || !hubAuth.isOwner(req.hubUser) || req.hubPendingTotp)) return jsonResponse(res, 403, { error: 'only the owner can change: recordings' });
+      // Which environment variables an agent's commands keep is a signed-in admin's call: never a member, and never the hub's own service calls (an agent could widen itself).
+      if (body && typeof body === 'object' && 'envKeep' in body && (req.hubService || req.hubToken || !req.hubUser || !access.isAdmin(req.hubUser) || req.hubPendingTotp)) return jsonResponse(res, 403, { error: 'only an admin can change: envKeep' });
+      const recSettings = require('./lib/recordings/settings');
+      const allowedBefore = recordingsChange ? recSettings.recordingsOf((await getAgents()).find(a => a.name === name)).allowed : [];
       if (!req.hubService && !access.isAdmin(req.hubUser)) {
         const MEMBER_EDITABLE = new Set(['blurb', 'maxContextMessages', 'maxOutputTokens', 'contextBudget', 'compaction', 'minimalContext']);
         const refused = Object.keys(body || {}).filter(k => !MEMBER_EDITABLE.has(k));
         if (refused.length) return jsonResponse(res, 403, { error: `only an admin can change: ${refused.join(', ')}` });
       }
       const { updateAgentField } = require('./lib/agents');
-      const result = await updateAgentField(name, body);
+      // Voice: a cloud engine for an agent kept on this computer needs the owner (the earliest admin), not just any admin.
+      const result = await updateAgentField(name, body, { isOwner: !req.hubService && !!req.hubUser && hubAuth.isOwner(req.hubUser), userId: req.hubUser ? String(req.hubUser.id) : '',
+        // Changes to the call-recordings setting are audited (agent.recordings): who, which agent, keep on/off, the allowed ids, the mic.
+        audit: (action, detail) => hubAuth.audit(req.hubUser ? String(req.hubUser.id) : null, action, detail, hubAuth.clientIp(req)) });
+      if (!result.success && result.status) return jsonResponse(res, result.status, { error: result.error });
       // Handing a head agent to a member: it introduces itself in its (still empty) chat.
       if (result.success && body && body.owner) { const u = hubAuth.getUser(String(body.owner)); if (u && u.role === 'member') require('./lib/teams').greetIfFresh(name, u).catch(() => {}); }
+      // A change of who may download this agent's recordings is told to everybody on the old and the new list.
+      if (result.success && recordingsChange) {
+        try {
+          const rec = (await getAgents()).find(a => a.name === name);
+          const allowedAfter = recSettings.recordingsOf(rec).allowed;
+          if (allowedBefore.length !== allowedAfter.length || allowedBefore.some(id => !allowedAfter.includes(id))) {
+            await require('./lib/push').getPush().notifyUsers({
+              title: 'Recording access changed',
+              body: `${(rec && rec.display) || name}: the list of people who can download its recordings was changed.`,
+              tag: `rec-access-${name}`,
+            }, [...new Set([...allowedBefore, ...allowedAfter])], { kind: 'security' });
+          }
+        } catch {}
+      }
       if (result.success) await publishAgentUpdate(name, Object.keys(body || {}));
       // Folders, sandbox mode or hands changed: the container is rebuilt with the new mounts on the agent's next turn
       // (and removed when the sandbox was switched off). The session volume stays.
@@ -1318,14 +1638,16 @@ async function handleHttpRequest(req, res) {
       const body = stripHubOnlyChatFields(JSON.parse(await readBody(req)), req);
       // The owner's own message (same test as /api/chat below): lets connector_access be offered in this turn.
       if (body && typeof body === 'object') body.owner_turn = req.hubIdentKind === 'user' && !req.hubPendingTotp && !req.hubToken && !req.hubService && access.isAdmin(req.hubUser);
-      return handleChatStream(body, res);
+      // Identity comes only from the authenticated session (req.hubUser), never from the body.
+      return handleChatStream(body, res, { userId: (req.hubUser && req.hubUser.id) || null, service: !!req.hubService, accounts: hubAuth.hasUsers(), admin: access.isAdmin(req.hubUser) });
     }
 
     if (pathname === '/api/chat' && req.method === 'POST') {
       const body = stripHubOnlyChatFields(JSON.parse(await readBody(req)), req);
       // The owner's own message: a signed-in admin's browser session (never an API token, the hub itself or legacy credentials).
       if (body && typeof body === 'object') body.owner_turn = req.hubIdentKind === 'user' && !req.hubPendingTotp && !req.hubToken && !req.hubService && access.isAdmin(req.hubUser);
-      return handleChat(body, res);
+      // Same trusted identity as the stream route (never from the body), so the voice call match works here too.
+      return handleChat(body, res, { userId: (req.hubUser && req.hubUser.id) || null, service: !!req.hubService, accounts: hubAuth.hasUsers(), admin: access.isAdmin(req.hubUser) });
     }
 
     // Stop button: a browser disconnect no longer ends a turn, so stopping is explicit.
@@ -1373,6 +1695,12 @@ async function handleHttpRequest(req, res) {
 
     // ── Messaging channels (Telegram etc); all logic lives in lib/comms ────────────────────
     if (pathname.startsWith('/api/comms/')) return require('./lib/comms/routes').handle(pathname, req, res, { readBody, jsonResponse, getAgents });
+    // ── Call recordings (lib/recordings): uploads from the person on the call, and list/play/download/delete for the allowed users only ──
+    if (pathname === '/api/recordings' || pathname.startsWith('/api/recordings/')) return require('./lib/recordings/routes').handle(pathname, req, res, { readBody, jsonResponse, getAgents });
+    // ── Voice: local speech-to-text and text-to-speech (lib/voice) ─────────────────────────
+    if (pathname.startsWith('/api/voice/')) return require('./lib/voice/routes').handle(pathname, req, res, { readBody, jsonResponse, getAgents, getSetting: hubSettings.getSetting, updateSettings: hubSettings.updateSettings });
+    // ── Character packs for the call face view (lib/faces; packs live in <hub home>/faces) ──
+    if (pathname === '/api/faces' || pathname.startsWith('/api/faces/')) return require('./lib/faces/routes').handle(pathname, req, res, { readBody, jsonResponse });
 
     // ── Trading wallet (owner controls; agents only ever get the wallet_* tools) ──────────
     if (pathname.startsWith('/api/wallet/')) {
@@ -1534,6 +1862,21 @@ async function handleHttpRequest(req, res) {
       hubSettings.updateSettings({ sdkWorkers: requested });
       console.log(`[settings] sdkWorkers = ${requested}`);
       return jsonResponse(res, 200, { mode: wp.getMode() });
+    }
+
+    // Team guidance level: 'full' (default) | 'light' | 'off'  — see lib/team-guidance.js (admin only, like /api/sdk_workers)
+    if (pathname === '/api/team_guidance' && req.method === 'GET') {
+      const tg = require('./lib/team-guidance');
+      return jsonResponse(res, 200, { level: tg.getLevel(), levels: tg.LEVELS, default: tg.DEFAULT_LEVEL });
+    }
+    if (pathname === '/api/team_guidance' && req.method === 'POST') {
+      const tg = require('./lib/team-guidance');
+      const body = JSON.parse(await readBody(req));
+      const requested = String(body.level || '').trim().toLowerCase();
+      if (!tg.LEVELS.includes(requested)) return jsonResponse(res, 400, { error: `level must be one of: ${tg.LEVELS.join(', ')}` });
+      hubSettings.updateSettings({ teamGuidance: requested });
+      console.log(`[settings] teamGuidance = ${requested}`);
+      return jsonResponse(res, 200, { level: tg.getLevel() });
     }
 
     // Detached jobs started by agents with run_job (owner view: every job)
@@ -1741,6 +2084,15 @@ async function handleHttpRequest(req, res) {
         const job = await runner.run({ owner: 'maestro', name: 'build sandbox image', command: cmd, cwd: __dirname, timeoutMinutes: 30 });
         return jsonResponse(res, 200, { ok: true, job: job && job.id ? job.id : null });
       }
+      // "Move now" on Settings -> Status (admins only, like every /api/sandbox route): one try of a home move that failed
+      const mh = pathname.match(/^\/api\/sandbox\/agents\/([^/]+)\/move-home$/);
+      if (mh && req.method === 'POST') {
+        let nm; try { nm = decodeURIComponent(mh[1]); } catch { nm = mh[1]; }
+        const a = (await getAgents()).find(x => x.name === nm);
+        if (!a) return jsonResponse(res, 404, { error: 'unknown agent' });
+        const r = await sb.moveHomeNow(a, { busy: () => temporalWorkersLib.listVirtual().some(v => v && v.parent === a.name) });
+        return jsonResponse(res, r.ok ? 200 : 409, r);
+      }
       const m = pathname.match(/^\/api\/sandbox\/agents\/([^/]+)\/(reset|stop)$/);
       if (m && req.method === 'POST') {
         const a = (await getAgents()).find(x => x.name === m[1]);
@@ -1761,6 +2113,19 @@ async function handleHttpRequest(req, res) {
     if (pathname === '/api/security-check' && req.method === 'GET') {
       const r = await securityCheck().latest({ maxAgeMs: 60 * 60 * 1000 });
       return jsonResponse(res, 200, { ok: true, ...r });
+    }
+    // ── Self-check (lib/selfcheck, lib/selfcheck-routes): admin-only (the route class above, checked again in the handler).
+    // GET the last result, POST /run starts one in the background, PUT /settings saves the selfCheck settings. ──
+    if (pathname === '/api/selfcheck' || pathname.startsWith('/api/selfcheck/')) {
+      const scBody = req.method === 'PUT' ? await authJson() : {};
+      const r = await require('./lib/selfcheck-routes').handle({
+        method: req.method, pathname, admin: !!req.hubService || (access.isAdmin(req.hubUser) && !req.hubPendingTotp), body: scBody,
+        selfCheck: () => require('./lib/selfcheck').getSelfCheck(),
+        validateSettings: (o) => require('./lib/selfcheck').validateSettings(o),
+        saveSettings: (v) => hubSettings.updateSettings({ selfCheck: v }),
+        log: (m) => console.warn(m),
+      });
+      if (r) return jsonResponse(res, r.status, r.body);
     }
     // ── Memory health (lib/memory-health): admin-only. GET answers with the last result while it is under 26 hours old
     // (else checks now); run checks now. Nightly from the schedule at start.
@@ -1852,7 +2217,20 @@ async function handleHttpRequest(req, res) {
     if (pathname === '/api/modules' || pathname.startsWith('/api/modules/')) {
       const mods = require('./lib/modules').getModules();
       const bodyJson = async () => { try { return JSON.parse((await readBody(req)) || '{}'); } catch { return {}; } };
-      const fail = (e) => jsonResponse(res, [403, 409, 500].includes(e.status) ? e.status : 400, { error: e.message, ...(e.check ? { check: e.check } : {}), ...(e.needsAck ? { needsAck: true } : {}) });
+      const userHasTotp = () => !!(req.hubUser && ((req.hubUser.totp && req.hubUser.totp.enabled) || req.hubUser.totpEnabled));
+      const fail = (e) => jsonResponse(res, [403, 409, 500].includes(e.status) ? e.status : 400, { error: e.message, ...(e.check ? { check: e.check } : {}), ...(e.needsAck ? { needsAck: true } : {}), ...(e.needsStepUp ? { needsStepUp: true, totp: e.totp !== undefined ? !!e.totp : userHasTotp() } : {}) });
+      // Asking less needs the account password (and code) in the body. They are taken out before the module sees the input; steppedUp comes only from this check.
+      const takeStepUp = (b) => {
+        const input = b && typeof b === 'object' && !Array.isArray(b) ? { ...b } : b;
+        if (!input || typeof input !== 'object' || Array.isArray(input) || typeof input.password !== 'string') {
+          if (input && typeof input === 'object' && !Array.isArray(input)) { delete input.password; delete input.code; }
+          return { input, steppedUp: false, denied: null };
+        }
+        const given = { password: input.password, code: input.code };
+        delete input.password; delete input.code;
+        const no = accountStepUp(req.hubUser, given, req.socket && req.socket.remoteAddress);
+        return no ? { input, steppedUp: false, denied: no } : { input, steppedUp: true, denied: null };
+      };
       // Changes come from a person on the page, never from the hub's internal service identity (agents' calls back into the hub).
       if (req.method !== 'GET' && req.hubService) return jsonResponse(res, 403, { error: 'Module changes need a signed-in admin.' });
       try {
@@ -1889,7 +2267,39 @@ async function handleHttpRequest(req, res) {
           // What agents may do on a module (and whether each session is asked): a signed-in admin's own browser session only. Never the hub service,
           // an API token, a session still owing its two-factor code, a member or the legacy single password; nothing in the body says who is asking.
           if (!(req.hubIdentKind === 'user' && !req.hubPendingTotp && !req.hubToken && !req.hubService && access.isAdmin(req.hubUser))) return jsonResponse(res, 403, { error: 'Sign in with an admin account in your browser to change agent permissions.' });
-          return jsonResponse(res, 200, mods.setAgentPermissions(m[1], await bodyJson(), { adminBrowser: true, userId: String(req.hubUser.id), name: req.hubUser.name || req.hubUser.login || undefined }));
+          const su = takeStepUp(await bodyJson());
+          if (su.denied) return jsonResponse(res, 403, { error: su.denied, stepUp: true });
+          return jsonResponse(res, 200, mods.setAgentPermissions(m[1], su.input, { adminBrowser: true, userId: String(req.hubUser.id), name: req.hubUser.name || req.hubUser.login || undefined, steppedUp: su.steppedUp }));
+        }
+        m = pathname.match(/^\/api\/modules\/([a-z][a-z0-9-]{1,31})\/approval-policy$/);
+        if (m && (req.method === 'GET' || req.method === 'POST')) {
+          // How long one approval lasts and which agents are never asked, per computer: the same signed-in admin's own browser as the permission editor.
+          if (!(req.hubIdentKind === 'user' && !req.hubPendingTotp && !req.hubToken && !req.hubService && access.isAdmin(req.hubUser))) return jsonResponse(res, 403, { error: 'Sign in with an admin account in your browser to change agent permissions.' });
+          // The computers as the module reports them (never names from the request), or null when they can't be read.
+          const computersOf = async (timeoutMs) => {
+            try {
+              const raw = await require('./lib/connectors').getConnectors().callTool(m[1], 'computers_status', {}, { hub: true, timeoutMs });
+              const parsed = require('./lib/modules').parseToolText(raw);
+              const rows = Array.isArray(parsed) ? parsed : (parsed && Array.isArray(parsed.computers) ? parsed.computers : null);
+              if (!rows || (parsed && !Array.isArray(parsed) && parsed.error)) return null;
+              return rows.filter((x) => x && typeof x === 'object' && typeof x.nodeid === 'string' && x.nodeid)
+                .map((x) => ({ id: x.nodeid.split('/').pop(), nodeid: x.nodeid, name: String(x.name || '').replace(/[\u0000-\u001f\u007f-\u009f]+/g, ' ').trim().slice(0, 80), online: !!x.online }));
+            } catch { return null; }
+          };
+          if (req.method === 'POST') {
+            const su = takeStepUp(await bodyJson());
+            if (su.denied) return jsonResponse(res, 403, { error: su.denied, stepUp: true });
+            const body = su.input;
+            const listed = body && typeof body.computer === 'string' ? await computersOf(10000) : null;
+            const known = listed ? listed.find((x) => x.id === body.computer) : null;
+            // Asking less needs a computer the module lists right now (computerKnown true); an unlisted one (false) or an unreadable or empty list (null) is refused then. Asking more works for any id (setApprovalPolicy decides).
+            const computerKnown = listed && listed.length ? !!known : null;
+            return jsonResponse(res, 200, mods.setApprovalPolicy(m[1], body, { adminBrowser: true, userId: String(req.hubUser.id), name: req.hubUser.name || req.hubUser.login || undefined, steppedUp: su.steppedUp }, { computerName: known ? known.name : '', computerKnown }));
+          }
+          const out = { ok: true, ...mods.approvalPolicy(m[1]), computers: [] };
+          const list = await computersOf(30000);
+          if (list) out.computers = list; else out.computersError = 'Could not load the computers.';
+          return jsonResponse(res, 200, out);
         }
         m = pathname.match(/^\/api\/modules\/([a-z][a-z0-9-]{1,31})\/help$/);
         if (m && req.method === 'GET') { const q = new URL(req.url, 'http://x').searchParams; return jsonResponse(res, 200, mods.help(m[1], { step: q.get('step') || '', error: q.get('error') || '' })); }
@@ -1901,12 +2311,34 @@ async function handleHttpRequest(req, res) {
             const b = await bodyJson();
             if (act === 'step') return jsonResponse(res, 200, await mods.runStep(id, String(b.step || ''), b.input || {}));
             if (act === 'check') return jsonResponse(res, 200, { ok: true, check: await mods.check(id, b.check), module: mods.detail(id) });
-            if (act === 'settings') return jsonResponse(res, 200, { ok: true, module: mods.saveSettings(id, b.values || {}) });
-            if (act === 'enable' || act === 'disable') return jsonResponse(res, 200, { ok: true, module: mods.setEnabled(id, act === 'enable') });
+            if (act === 'settings') {
+              // Who may open a computer's desktop, and the address it opens at, are the owner's to change (compared with what is stored now).
+              if (id === 'remote-computers' && b.values && typeof b.values === 'object' && !(req.hubUser && !req.hubService && !req.hubToken && !req.hubPendingTotp && hubAuth.isOwner(req.hubUser))) {
+                const cur = mods.detail(id).settings || {};
+                for (const k of ['desktop_who', 'desktop_address']) {
+                  if (Object.prototype.hasOwnProperty.call(b.values, k) && String(b.values[k] === null || b.values[k] === undefined ? '' : b.values[k]) !== String(cur[k] === undefined || cur[k] === null ? '' : cur[k])) {
+                    return jsonResponse(res, 403, { error: 'Only the owner can change who may open a desktop and its address.' });
+                  }
+                }
+              }
+              const saved = mods.saveSettings(id, b.values || {});
+              sweepRemoteDesktop(id);
+              return jsonResponse(res, 200, { ok: true, module: saved });
+            }
+            if (act === 'enable' || act === 'disable') {
+              const changed = mods.setEnabled(id, act === 'enable');
+              sweepRemoteDesktop(id);
+              return jsonResponse(res, 200, { ok: true, module: changed });
+            }
           }
         }
         return jsonResponse(res, 404, { error: 'unknown modules route' });
       } catch (e) { return fail(e); }
+    }
+
+    // ── Open desktop (Remote computers): /api/remote-desktop and /remote-desktop/<session>/ (lib/remote-desktop checks sign-in, role, session and origin itself) ──
+    if (pathname === '/api/remote-desktop' || pathname.startsWith('/api/remote-desktop/') || pathname.startsWith('/remote-desktop/')) {
+      if (await remoteDesktop().handle(req, res)) return;
     }
 
     if (pathname.startsWith('/api/connector')) {
@@ -1972,6 +2404,22 @@ async function handleHttpRequest(req, res) {
     // ── Session/History Routes ──────────────────────────────────────
     if (/^\/api\/history\/([^/]+)$/.test(pathname) && req.method === 'GET') {
       const name = pathname.split('/')[3];
+      const hq = new URL(req.url, 'http://x').searchParams;
+      if (hq.has('view') || hq.has('limit') || hq.has('before')) {
+        // Paged, filtered history (lib/chat-history): the whole chat log, then the transcript archive behind it.
+        const view = hq.get('view') === 'all' ? 'all' : 'main';
+        const before = hq.get('before') || null;
+        if (before !== null && !require('./lib/chat-history').parseCursor(before)) return jsonResponse(res, 400, { error: 'bad_cursor' });
+        const hubEv = require('./lib/hub-events');
+        const tr = require('./lib/transcript').getTranscript();
+        const page = require('./lib/chat-history').historyPage({
+          logEntries: loadConversationLog(name, 0),
+          archive: { rowsBefore: (o) => tr.rowsBefore(name, o), forOwnerTurns: (ids) => tr.forOwnerTurns(name, ids), lastMarkTs: (tool) => tr.lastMarkTs(name, tool) },
+          view, before, limit: hq.get('limit'),
+          inProgressMark: (entries) => hubEv.markInProgress(entries, hubEv.events.turnFor(name)),
+        });
+        return jsonResponse(res, 200, { history: page.history, next: page.next, view });
+      }
       const history = loadConversationLog(name);
       // The running turn's reply is saved every 5 s as plain text (so a restart loses nothing); it is not a finished
       // reply. Flagged, pages show the live turn in its place (text and tool calls) instead of a text-only copy.
@@ -2223,10 +2671,19 @@ async function handleHttpRequest(req, res) {
           if (patch && patch.openrouter !== undefined) patch.openrouter = require('./lib/openrouter').cleanOpenRouterSettings(patch.openrouter);
           if (patch && patch.planFallback !== undefined) patch.planFallback = require('./lib/plan-usage').cleanPolicy(patch.planFallback, hubSettings.getSetting('planFallback'));
           // The reasoning panel (lib/sdk-chat showReasoning): on unless turned off.
+          // Share links: enabled, defaultHours, maxHours (hard maximum 168), merged onto the stored value (lib/share-links cleanSettings).
+          if (patch && patch.shareLinks !== undefined) patch.shareLinks = require('./lib/share-links').cleanSettings(patch.shareLinks, hubSettings.getSetting('shareLinks'));
           if (patch && patch.showReasoning !== undefined) patch.showReasoning = patch.showReasoning !== false;
           if (patch && patch.walletLockedNotice !== undefined) patch.walletLockedNotice = patch.walletLockedNotice !== false;
           // Workers allowed at once per AI service: integers 1..32 only (lib/provider-pacing); applied to the running hub below.
           if (patch && patch.workersAtOnce !== undefined) patch.workersAtOnce = require('./lib/provider-pacing').cleanWorkersAtOnce(patch.workersAtOnce);
+          // Voice: known keys only, merged onto the stored value (lib/voice/manifest cleanVoiceSettings). "enabled" changes
+          // only through /api/voice/enable and /disable, which also install the engines and stop or resume the worker.
+          if (patch && patch.voice !== undefined) {
+            const storedVoice = hubSettings.getSetting('voice');
+            patch.voice = require('./lib/voice/manifest').cleanVoiceSettings(patch.voice, storedVoice);
+            patch.voice.enabled = !!(storedVoice && storedVoice.enabled === true);
+          }
           const providersChanged = !!(patch && patch.providers);
           hubSettings.updateSettings(patch);
           if (patch && patch.workersAtOnce !== undefined) getPacing().setCaps(hubSettings.getSetting('workersAtOnce'));
@@ -2386,13 +2843,7 @@ async function handleHttpRequest(req, res) {
       if (!access.isAdmin(req.hubUser) || req.hubPendingTotp) return jsonResponse(res, 403, { error: 'admin_only' });
       const svc = backupService();
       const body = async () => { try { return JSON.parse((await readBody(req)) || '{}'); } catch { return {}; } };
-      const stepUp = (b) => {
-        const u = req.hubUser;
-        const r = hubAuth.login(u.login, String(b.password || ''), { ip: req.socket && req.socket.remoteAddress });
-        if (!r.ok) return r.locked ? r.error : 'That password is not right.';
-        if (r.needsTotp) { const t = hubAuth.totpCheck(u.id, String(b.code || '').replace(/\s+/g, '')); if (!t || !t.ok) return 'That two-factor code is not right.'; }
-        return null;
-      };
+      const stepUp = (b) => accountStepUp(req.hubUser, b, req.socket && req.socket.remoteAddress);
       try {
         if (pathname === '/api/backups' && req.method === 'GET') { const st = svc.status(); const sch = require('./lib/backup/schedule').current(); return jsonResponse(res, 200, { ...st, nightly: sch ? sch.info(st) : null, backups: await svc.list() }); }
         // Nightly backups: turning them off or keeping fewer would let older backups go, so the step-up first
@@ -3141,6 +3592,10 @@ async function handleHttpRequest(req, res) {
       filePath = path.join(__dirname, 'login.html');
     } else if (pathname === '/users') {
       filePath = path.join(__dirname, 'users.html');
+    } else if (pathname === '/changes') {
+      filePath = path.join(__dirname, 'changes.html');   // admin page (lib/access ADMIN_PAGES)
+    } else if (pathname === '/recordings') {
+      filePath = path.join(__dirname, 'recordings.html');   // any signed-in user may load the page; the data routes refuse anyone not on an agent's list
     } else if (/^\/oauth\/callback\/[a-z][a-z0-9-]{1,31}$/.test(pathname)) {
       // A data connector's sign-in comes back here (lib/modules signinCallback). A signed-in admin only, never the hub service or a token.
       const id = pathname.split('/')[3];
@@ -3197,6 +3652,7 @@ async function handleHttpRequest(req, res) {
       };
       const headers = { 'Content-Type': mimeTypes[ext] || 'application/octet-stream' };
       if (ext === '.html') headers['Cache-Control'] = 'no-store, no-cache, must-revalidate';
+      if (pathname === '/login' || pathname === '/invite') headers['Referrer-Policy'] = 'no-referrer';   // a share link's token rides in ?next=: it never goes to another site
       res.writeHead(200, headers);
       fs.createReadStream(filePath).pipe(res);
       return;
@@ -3206,7 +3662,7 @@ async function handleHttpRequest(req, res) {
     jsonResponse(res, 404, { error: 'Not found' });
 
   } catch (err) {
-    console.error(`[server] ${req.method} ${pathname}: ${err.message}`);
+    console.error(`[server] ${req.method} ${redactShareToken(pathname)}: ${redactShareToken(err.message)}`);
     if (!res.headersSent) {
       jsonResponse(res, 500, { error: err.message });
     }
@@ -3242,6 +3698,16 @@ server.listen(PORT, HOST, () => {
   // Only now: this process holds the port, so no older hub on it is still writing; and first, before any turn can
   // write (lib/transcript splitCombined; the old file is kept as transcript.db.pre-split).
   try { require('./lib/transcript').getTranscript().migrate(); } catch (e) { console.error('[transcript] split not run:', e.message); }
+  // A hub restart during the voice download leaves the setting on and nothing installing: pick the install up again.
+  setTimeout(() => { try { require('./lib/voice/routes').resumeIfNeeded({ getSetting: hubSettings.getSetting, log: (m) => console.log(m) }); } catch (e) { console.error('[voice] resume:', e.message); } }, 10000).unref();
+  // After a restart the Remote computers module may still hold desktop sessions this hub no longer knows; they block agent input until ended.
+  // Once, 30 s after the start (the module is up by then), only while the module is on; never throws.
+  setTimeout(() => {
+    try {
+      if (!require('./lib/modules').getModules().detail('remote-computers').enabled) return;
+      remoteDesktop().reconcile().catch(() => {});
+    } catch { /* the Computers box ends them when it is opened */ }
+  }, 30000).unref();
   // A restored setup that has run for 30 s counts as healthy: its 7-day undo clock starts (lib/backup/apply).
   setTimeout(() => { try { if (require('./lib/backup/apply').markHealthy({ root: __dirname })) console.log('[restore] the restored setup started fine; it can be undone for 7 days'); } catch (e) { console.error('[restore]', e.message); } }, 30000).unref();
   // once a day: set-aside copies past their 7 days, a checked restore nobody confirmed, old uploads (not only at a start)
@@ -3250,7 +3716,7 @@ server.listen(PORT, HOST, () => {
   // when one fails or none was made for 3 days (lib/backup/schedule). Nothing runs until backups are set up.
   try {
     require('./lib/backup/schedule').createScheduler({ service: backupService(), root: __dirname, zone: () => require('./lib/timezone').hubZone(),
-      notify: (p) => require('./lib/push').getPush().notifyEach(p, { adminsOnly: true, urgency: 'high' }), log: (m) => console.log(m) }).start();
+      notify: (p) => require('./lib/push').getPush().notifyEach(p, { adminsOnly: true, urgency: 'high', kind: 'security' }), log: (m) => console.log(m) }).start();   // data safety: a security notice
   } catch (e) { console.error('[backup] nightly backups not started:', e.message); }
   // Maestro is the lead agent. New installs are seeded with the mark; an older install that marks no lead (and so
   // counted every admin-side primary agent as one) gets maestro marked once (lib/agents ensureMaestroLead). It runs
@@ -3259,6 +3725,16 @@ server.listen(PORT, HOST, () => {
   try {
     if (require('./lib/agents').ensureMaestroLead().changed) console.log('[agents] marked maestro as the lead agent (no agent was marked)');
   } catch (e) { console.warn('[agents] could not mark the lead agent:', e.message); }
+  // Team guidance (lib/team-guidance): agents that existed before this update keep their old prompt (switched off once); lead agents get it.
+  try {
+    const tg = require('./lib/agents').migrateTeamGuidance();
+    if (tg.changed > 0) console.log(`[agents] team guidance switched off for ${tg.changed} agents that existed before this update (lead agents keep it)`);
+  } catch (e) { console.warn('[agents] could not migrate team guidance:', e.message); }
+  // Behaviour changes (lib/behaviour-changes): on an install that already has agents each one waits, off, for the owner's decision.
+  try {
+    const bm = require('./lib/behaviour-changes').migrate({ agentsFile: path.join(__dirname, 'data', 'agents.json') });
+    if (bm.added && bm.added.length) console.log(`[behaviour] ${bm.added.length} change(s) waiting for the owner's decision: ${bm.added.join(', ')}`);
+  } catch (e) { console.warn('[behaviour] could not check the behaviour changes:', e.message); }
   console.log(`\n  My Maestro AI v${require('./package.json').version} (multi-provider)`);
   console.log(`  Server:   http://${URL_HOST}:${PORT}  (${BIND.exposed ? 'NETWORK-EXPOSED' : 'localhost only'})`);
   if (BIND.warning) console.warn(`  WARNING:  ${BIND.warning}`);
@@ -3289,6 +3765,10 @@ server.listen(PORT, HOST, () => {
   // the nightly check off (Check now still works).
   try { if (process.env.HUB_MEMORY_HEALTH !== 'off') require('./lib/memory-health').getMemoryHealth().schedule(); }
   catch (e) { console.warn(`[memory-health] ${e.message}`); }
+  // Self-check: real turns on hidden check agents 60 s after start and each night (Settings → Status → Self-check);
+  // HUB_SELFCHECK=off turns both off (Run now still works). Never delays startup.
+  try { if (process.env.HUB_SELFCHECK !== 'off') { const sc = require('./lib/selfcheck').getSelfCheck(); sc.onStarted(); sc.schedule(); } }
+  catch (e) { console.warn(`[selfcheck] ${e.message}`); }
   // Data connector health: a nightly check of every switched-on module that declares one (lib/modules/health).
   try { require('./lib/modules/health').getModulesHealth().start(); }
   catch (e) { console.warn(`[modules-health] ${e.message}`); }
@@ -3299,7 +3779,7 @@ server.listen(PORT, HOST, () => {
 
   // The keystore is locked after every restart: a minute later the admins' phones get "Your wallet is locked" (Settings turns it off).
   try {
-    setTimeout(() => { require('./lib/wallet/locked-notice').walletLockedNotice({ getSetting: (k) => hubSettings.getSetting(k), keystore: require('./lib/wallet/service').getWalletService().keystore, notifyEach: (p, o) => require('./lib/push').getPush().notifyEach(p, o) }).catch(() => {}); }, require('./lib/wallet/locked-notice').LOCKED_NOTICE_DELAY_MS).unref();
+    setTimeout(() => { require('./lib/wallet/locked-notice').walletLockedNotice({ getSetting: (k) => hubSettings.getSetting(k), keystore: require('./lib/wallet/service').getWalletService().keystore, notifyEach: (p, o) => require('./lib/push').getPush().notifyEach(p, { ...o, kind: 'security' }) }).catch(() => {}); }, require('./lib/wallet/locked-notice').LOCKED_NOTICE_DELAY_MS).unref();
   } catch (e) { console.warn(`[wallet] locked notice not scheduled: ${e.message}`); }
 
   // Update check: a look at GitHub soon after start and then daily; admins get the "Update available" card and one
@@ -3313,9 +3793,32 @@ server.listen(PORT, HOST, () => {
   // Scheduled tasks: queue anything that came due while the hub was down (fires once, marked late), start polling.
   try { const st = getScheduledTasks().start(); st.prune(30); console.log(`[sched-tasks] started (${st.list(scheduledTasksLib.OWNER).filter(t => t.status === 'active').length} active, ${st.pending.length} due now)`); }
   catch (e) { console.error('[sched-tasks] failed to start:', e.message); }
+  // Behaviour changes waiting for the owner: the lead is asked to review them (one task, never twice for an entry), and the weekly
+  // team review follows the worker-proposals decision. After the scheduler exists; the hub creates these, the owner decides on /changes.
+  (async () => {
+    try {
+      const review = require('./lib/behaviour-review');
+      const r = await review.scheduleReview({ scheduler: getScheduledTasks() });
+      if (r.taskId) console.log(`[behaviour] review scheduled for ${r.lead} (${r.taskId}): ${r.ids.join(', ')}`);
+      const p = await review.syncProposalsTask({ scheduler: getScheduledTasks() });
+      if (p.action === 'created') console.log(`[behaviour] weekly team review scheduled for ${p.lead} (${p.taskId})`);
+    } catch (e) { console.warn('[behaviour] could not schedule the review:', e.message); }
+  })();
   // A deleted agent whose things were not all moved into its bundle (a stop part-way, Docker not answering) is finished
   // now (lib/agent-archive); after the scheduler, so the tasks that would wake it can leave the list too.
   require('./lib/agents').finishArchivingAgents().catch((e) => console.error('[agents] unfinished removals:', e.message));
+  // The owner's Claude sign-in is never copied into an agent's box any more. Earlier versions did: remove the copies they
+  // left in the agents' home volumes (lib/sandbox sweepCredentials), and the old client wrapper scripts in data/sandbox.
+  // Asynchronous and never awaited here: starting the hub does not wait for Docker. Only the agents listed in agents.json.
+  try {
+    const n = require('./lib/sandbox').removeOldWrappers();
+    if (n) console.log(`[sandbox] removed ${n} old client wrapper script(s) from data/sandbox`);
+  } catch (e) { console.warn(`[sandbox] old wrapper scripts not removed: ${e.message}`); }
+  (async () => {
+    const sb = require('./lib/sandbox').getSandbox();
+    if (!(await sb.available())) return;
+    await sb.sweepCredentials(await getAgents());
+  })().catch((e) => console.error('[sandbox] sign-in copy sweep failed:', e.message));
 
   // Messaging channels (Telegram etc): opt out with HUB_COMMS_DISABLED=1.
   if (process.env.HUB_COMMS_DISABLED !== '1') {

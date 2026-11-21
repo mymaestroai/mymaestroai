@@ -5,12 +5,16 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
-const { createGate } = require('../lib/policy-gate');
-const { createApprovals } = require('../lib/approvals');
-const { createAllowances } = require('../lib/tool-policy');
-const { createHubEvents } = require('../lib/hub-events');
-const bridge = require('../lib/codex-cli/bridge');
-const appServer = require('../lib/codex-cli/app-server');
+// lib/ comes from a throwaway copy of the install (test/helpers/isolated-install.js), so nothing under the real data/ is touched.
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('policy-int-iso-');
+const L = (p) => require(path.join(ISO.lib, p));
+const { createGate } = L('policy-gate');
+const { createApprovals } = L('approvals');
+const { createAllowances } = L('tool-policy');
+const { createHubEvents } = L('hub-events');
+const bridge = L('codex-cli/bridge');
+const appServer = L('codex-cli/app-server');
 
 const root = path.join(__dirname, '..');
 const read = (f) => fs.readFileSync(path.join(root, f), 'utf8');
@@ -50,7 +54,9 @@ test('gate: allow passes, deny returns policy text, ask waits for the owner and 
 test('gate: SDK hook denies with a PreToolUse permissionDecision; Codex approval requests map to accept/decline', async () => {
   const g = gateWith({ name: 'haiku', category: 'worker' });
   const hook = g.sdkHook({ agentName: 'haiku', cwd: '/tmp' });
-  assert.deepStrictEqual(await hook({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: '/x' } }), {});
+  // an allowed client Read answers allow explicitly (r2-read-fix: the client otherwise asks for paths outside its cwd)
+  assert.strictEqual((await hook({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: '/x' } })).hookSpecificOutput.permissionDecision, 'allow');
+  assert.deepStrictEqual(await hook({ hook_event_name: 'PreToolUse', tool_name: 'WebSearch', tool_input: { query: 'x' } }), {}, 'other allowed tools: no decision');
   const out = await hook({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'git push origin main' } });
   assert.strictEqual(out.decision, 'block', 'a refusal blocks the call, it does not end the turn');
   assert.match(out.reason, /DENIED BY POLICY/);
@@ -91,10 +97,11 @@ test('Codex bridge runs beforeCall before a hub tool and returns its refusal as 
 });
 
 test('sdk-chat: hook in SDK query options, gate in the gateway pre-step, Codex bridge + approvals, ledger on every path, stop cancels approvals', () => {
-  assert.ok(sdk.includes("hooks: { PreToolUse: [{ hooks: [gate.sdkHook({ agentName, cwd: sandboxOpts ? sandboxOpts.cwd : process.cwd(), origin: options.origin || null"), 'SDK hook');
+  // Security R2: the client never runs in a box (no sandboxOpts.cwd any more) and the hook is told whether the agent is boxed.
+  assert.ok(sdk.includes("hooks: { PreToolUse: [{ hooks: [gate.sdkHook({ agentName, cwd: hubHands ? hands.tools.cwd : process.cwd(), boxed: !!hands.sandboxed, origin: options.origin || null"), 'SDK hook');
   assert.ok(sdk.includes("timeout: Math.ceil(approvals.timeoutMs / 1000) + 120"), 'hook timeout follows the approval window');
   assert.ok(sdk.includes("getSetting('approvalTimeoutMinutes', 60)"), 'approval window configurable, default an hour');
-  assert.ok(sdk.includes("const verdict = await gate.check({ agentName, tool: toolName, input: parsedArgs, cwd: (handlers && handlers.__cwd) || process.cwd(), origin: options.origin || null"), 'gateway pre-step, same working directory as the hands (review F23)');
+  assert.ok(sdk.includes("const verdict = await gate.check({ agentName, tool: toolName, input: parsedArgs, cwd: (handlers && handlers.__cwd) || process.cwd(), boxed: !!(handlers && handlers.__boxed), origin: options.origin || null"), 'gateway pre-step, same working directory as the hands (review F23), and the turn\'s boxed flag (security R2)');
   assert.ok(!sdk.includes("const confirmEnabled = global.__confirmToolsEnabled ?? confirmTools;"), 'old confirm_tools prompt removed');
   assert.ok(sdk.includes("beforeCall: (name, args) => gate.check({ agentName, tool: name, input: args"), 'Codex bridge gated');
   assert.ok(sdk.includes("onServerRequest: (method, params) => gate.codexServerRequest("), 'Codex approvals handled');
@@ -103,8 +110,8 @@ test('sdk-chat: hook in SDK query options, gate in the gateway pre-step, Codex b
   assert.ok(sdk.includes("try { approvals.cancelFor(agent); } catch {}"));
   assert.ok(sdk.includes("hubEvents.events.setApprovalsProvider(() => approvals.list())"));
   assert.strictEqual((sdk.match(/      origin: turnOrigin,\n/g) || []).length, 3, 'origin reaches all three stream paths');
-  assert.strictEqual(require('../lib/codex-cli').approvalPolicyFor({}), 'untrusted');
-  assert.strictEqual(require('../lib/codex-cli').approvalPolicyFor({ HUB_CODEX_APPROVALS: 'never' }), 'never');
+  assert.strictEqual(L('codex-cli').approvalPolicyFor({}), 'untrusted');
+  assert.strictEqual(L('codex-cli').approvalPolicyFor({ HUB_CODEX_APPROVALS: 'never' }), 'never');
 });
 
 test('server routes, status_snapshot approvals, push notice, agents.json policy field', () => {
@@ -137,7 +144,7 @@ test('gate: with approval cards off (the default install) an ask is allowed sile
 });
 
 test('classifier: words inside quoted strings are data, not commands (a grep for "kill" is a read)', () => {
-  const tp = require('../lib/tool-policy');
+  const tp = L('tool-policy');
   const lead = { name: 'maestro', category: 'primary', lead: true };
   const d = (cmd) => tp.decide({ agent: lead, tool: 'Bash', input: { command: cmd }, cwd: path.join(tp.HUB_HOME, 'agent-hub-5.1.0') });
   assert.strictEqual(d('grep -nE "abort|killed|SIGKILL|kill)" server.log | tail -5').cls, 'read');
@@ -190,5 +197,5 @@ test('gate: per-class cards (settings.approvalClasses) raise a card for the list
   assert.ok(sdk.includes("approvalClasses: () => { try { const a = require('./settings').getSetting('approvalClasses', []);"));
   assert.ok(read('server.js').includes("patch.approvalClasses = Array.isArray(patch.approvalClasses)"));
   assert.ok(read('app.js').includes('id="st-approval-classes"') && read('app.js').includes('async function saveApprovalClasses()'));
-  assert.deepStrictEqual(require('../lib/policy-gate').APPROVAL_CLASSES.slice(0, 3), ['sudo', 'destroy', 'money']);
+  assert.deepStrictEqual(L('policy-gate').APPROVAL_CLASSES.slice(0, 3), ['sudo', 'destroy', 'money']);
 });

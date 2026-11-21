@@ -50,19 +50,10 @@ mkdir -p "$STAGING_DIR/data/conversations"
 mkdir -p "$STAGING_DIR/data/uploads"
 mkdir -p "$STAGING_DIR/logs"
 
-# Create default agents.json with just Maestro
-cat > "$STAGING_DIR/data/agents.json" << 'AGENTS_EOF'
-[
-  {
-    "name": "maestro",
-    "model": "claude-sdk/claude-opus-4-5",
-    "display": "Maestro",
-    "category": "primary"
-  }
-]
-AGENTS_EOF
+# No agents list in the bundle: the hub seeds it from the example at its first start, which is also how it knows it is
+# a new install (lib/behaviour-changes: a new install gets every behaviour change on).
 
-echo "  ✓ Clean data directory with Maestro agent"
+echo "  ✓ Clean data directory (agents are seeded at the first start)"
 
 # Create default Maestro workspace
 echo "==> Creating Maestro workspace..."

@@ -30,16 +30,16 @@ function divBlock(src, startMarker) {
 
 const ids = (block) => Array.from(block.matchAll(/\bid="([^"]+)"/g)).map((m) => m[1]);
 
-const TUNING = ['prescan-toggle', 'lazy-tools-toggle', 'sdk-workers-select', 'caveman-toggle', 'max-tokens-select', 'max-context-select'];
+const TUNING = ['prescan-toggle', 'lazy-tools-toggle', 'sdk-workers-select', 'team-guidance-select', 'caveman-toggle', 'max-tokens-select', 'max-context-select'];
 const MOVED_BUTTONS = ['comms-btn', 'wallet-btn', 'dream-btn', 'git-sync-btn', 'restart-hub-btn'];
 
-test('header-controls holds only Workers, Files, Scheduler, Settings, Help and the ⋯ button (plus the menus they anchor)', () => {
+test('header-controls holds only Workers, Files, Scheduler, Settings, Help, Reload (shown in the installed app only) and the ⋯ button (plus the menus they anchor)', () => {
   const header = divBlock(html, '<div class="header-controls">');
   // Direct controls: strip the menu out and look at what is left.
   const menuBlock = divBlock(header, '<div id="more-menu"');
   const outsideMenu = header.replace(menuBlock, '');
   const buttonIds = Array.from(outsideMenu.matchAll(/<button[^>]*\bid="([^"]+)"/g)).map((m) => m[1]);
-  assert.deepStrictEqual(buttonIds, ['workers-btn', 'files-btn', 'schedule-btn', 'settings-btn', 'help-btn', 'more-btn']);
+  assert.deepStrictEqual(buttonIds, ['workers-btn', 'files-btn', 'schedule-btn', 'settings-btn', 'help-btn', 'reload-btn', 'more-btn']);
   for (const id of [...TUNING, ...MOVED_BUTTONS, 'advanced-toggle']) {
     assert.ok(!ids(outsideMenu).includes(id), `${id} is not in the header proper`);
   }
@@ -72,10 +72,11 @@ test('#more-menu holds the moved buttons in order, a separator, the advanced sec
   assert.match(html, /<button id="settings-btn"[^>]*onclick="openSettings\(\)"/);
 });
 
-test('advanced section: six tuning controls, plain-English labels and a hint per row; hidden unless the flag is on', () => {
+test('advanced section: seven tuning controls (team guidance added after SDK workers), plain-English labels and a hint per row but the team guidance row (its help is the row title); hidden unless the flag is on', () => {
   const adv = divBlock(html, '<div class="more-advanced" id="more-advanced">');
   for (const id of TUNING) assert.ok(adv.includes(`id="${id}"`), `advanced section holds #${id}`);
-  assert.strictEqual((adv.match(/<div class="more-row">/g) || []).length, 6);
+  // Team guidance: a row beside SDK workers (so 7 rows); it explains itself in the row's title, not in a hint line (so 6 hints).
+  assert.strictEqual((adv.match(/<div class="more-row">/g) || []).length, 7);
   assert.strictEqual((adv.match(/<div class="more-hint">/g) || []).length, 6);
   assert.ok(adv.includes('<span>Reply length limit</span>'));
   assert.ok(adv.includes('<span>Message history sent</span>'));

@@ -97,3 +97,15 @@ test('server: the Welcome page takes over "/" only while the hub has no accounts
   const app = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
   assert.ok(app.includes("id = 'hub-setup-notice'") && app.includes('href="/welcome"'), 'the hub page tells an admin when no provider is configured');
 });
+
+// destination() cut out of login.html and run with a stubbed location: only a same-site path is followed.
+test('login.html: next is followed only for a same-site path (one leading slash, no backslash or control character)', () => {
+  const m = login.match(/function destination\(\) \{[\s\S]*?\n  \}\n/);
+  assert.ok(m, 'destination() found');
+  const run = (nextValue) => new Function('next', 'location', `${m[0]}\nreturn destination();`)(nextValue, { origin: 'https://hub.example' });
+  const tok = 'A'.repeat(43);
+  assert.equal(run(`/s/${tok}`), `/s/${tok}`);
+  assert.equal(run('/mobile?x=1'), '/mobile?x=1');
+  assert.equal(run('/%5Cevil'), '/%5Cevil', 'percent-encoded stays a path on this origin');
+  for (const bad of ['//evil.example', '/\\evil.example', 'https://evil.example', '/a\nb', '/a\\b', '/a\u0000b', '', 'evil', '/\t/evil.example']) assert.equal(run(bad), '/', JSON.stringify(bad));
+});

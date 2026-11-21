@@ -9,9 +9,12 @@ const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 
+// lib/ comes from a throwaway copy of the install (test/helpers/isolated-install.js), so nothing under the real data/ is touched.
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('unit-auth-iso-');
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'unit-auth-'));
-process.env.HUB_AUTH_DIR = TMP;
-const A = require('../lib/auth');
+process.env.HUB_AUTH_DIR = TMP;   // after makeIsolatedInstall, which points it at the copy's data/
+const A = require(path.join(ISO.lib, 'auth'));
 
 const T0 = Date.parse('2026-01-01T00:00:00Z');
 function fresh() {
@@ -67,7 +70,7 @@ test('publicUser never leaks hashes, secrets or recovery codes', () => {
   const forbidden = ['passwordHash', 'totpPending', 'totp', 'recovery'];
   for (const u2 of [auth.publicUser(raw), ...auth.listUsers()]) {
     for (const k of forbidden) assert.ok(!(k in u2), `${k} must not be exposed`);
-    assert.deepStrictEqual(Object.keys(u2).sort(), ['createdAt', 'disabled', 'grants', 'id', 'lastLoginAt', 'login', 'name', 'role', 'timeZone', 'timeZonePinned', 'totpEnabled']);
+    assert.deepStrictEqual(Object.keys(u2).sort(), ['createdAt', 'disabled', 'grants', 'id', 'lastLoginAt', 'login', 'name', 'role', 'theme', 'timeZone', 'timeZonePinned', 'totpEnabled', 'uiMode']);
   }
 });
 

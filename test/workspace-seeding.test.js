@@ -2,7 +2,10 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert');
 const fs = require('fs'), os = require('os'), path = require('path');
-const { seedDefaultWorkspaces } = require('../lib/agents');
+// lib/ comes from a throwaway copy of the install (test/helpers/isolated-install.js), so nothing under the real data/ is touched.
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('seeding-iso-');
+const { seedDefaultWorkspaces } = require(path.join(ISO.lib, 'agents'));
 
 function sandbox() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'seed-'));

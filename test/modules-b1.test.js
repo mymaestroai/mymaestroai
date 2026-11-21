@@ -6,9 +6,13 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
-const manifestLib = require('../lib/modules/manifest');
-const { createModules } = require('../lib/modules');
-const { HUB_HOME } = require('../lib/hub-home');
+// lib/ comes from a throwaway install, so nothing under the real data/ is touched.
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+const ISO = makeIsolatedInstall('modules-b1-iso-');
+const L = (p) => require(path.join(ISO.lib, p));
+const manifestLib = L('modules/manifest');
+const { createModules } = L('modules');
+const { HUB_HOME } = L('hub-home');
 
 const FIX = path.join(__dirname, 'fixtures', 'modules', 'guarddemo');
 const base = () => JSON.parse(fs.readFileSync(path.join(FIX, 'module.json'), 'utf8'));
@@ -56,7 +60,7 @@ function guardRoot(manifestExtra) {
 }
 async function withGuard(manifestExtra, fn) {
   const { dir, root } = guardRoot(manifestExtra);
-  const g = spawn(process.execPath, [path.join(__dirname, '..', 'lib', 'modules', 'mcp-guard.js'), 'guarddemo', '--root', root, '--data', path.join(dir, 'modules'), '--state', path.join(dir, 'modules.json'), '--connectors', path.join(dir, 'connectors.json')], { stdio: ['pipe', 'pipe', 'ignore'], env: { PATH: process.env.PATH } });
+  const g = spawn(process.execPath, [path.join(ISO.lib, 'modules', 'mcp-guard.js'), 'guarddemo', '--root', root, '--data', path.join(dir, 'modules'), '--state', path.join(dir, 'modules.json'), '--connectors', path.join(dir, 'connectors.json')], { stdio: ['pipe', 'pipe', 'ignore'], env: { PATH: process.env.PATH } });
   try {
     const out = []; let buf = '';
     g.stdout.on('data', d => { buf += d; let i; while ((i = buf.indexOf('\n')) >= 0) { out.push(JSON.parse(buf.slice(0, i))); buf = buf.slice(i + 1); } });
@@ -108,7 +112,7 @@ test('guard: hub/refresh_token is passed up only for a module whose manifest rot
   for (const rotates of [true, false]) {
     const { dir, root } = guardRoot({ secrets, oauth: { ...oauth, rotatesRefreshToken: rotates } });
     fs.writeFileSync(path.join(root, 'guarddemo', 'server.js'), src);
-    const g = spawn(process.execPath, [path.join(__dirname, '..', 'lib', 'modules', 'mcp-guard.js'), 'guarddemo', '--root', root, '--data', path.join(dir, 'modules'), '--state', path.join(dir, 'modules.json'), '--connectors', path.join(dir, 'connectors.json')], { stdio: ['pipe', 'pipe', 'ignore'], env: { PATH: process.env.PATH } });
+    const g = spawn(process.execPath, [path.join(ISO.lib, 'modules', 'mcp-guard.js'), 'guarddemo', '--root', root, '--data', path.join(dir, 'modules'), '--state', path.join(dir, 'modules.json'), '--connectors', path.join(dir, 'connectors.json')], { stdio: ['pipe', 'pipe', 'ignore'], env: { PATH: process.env.PATH } });
     try {
       const out = []; let buf = '';
       g.stdout.on('data', d => { buf += d; let i; while ((i = buf.indexOf('\n')) >= 0) { out.push(JSON.parse(buf.slice(0, i))); buf = buf.slice(i + 1); } });
@@ -157,7 +161,7 @@ test('notice agent: refused unless installed and declared, lead or granted, not 
 });
 
 test('notice agent: stored, followed by mediaDir, clearing on ungrant (needs real leads: uses lib/agents ownerLeadNames)', async () => {
-  const agentsLib = require('../lib/agents');
+  const agentsLib = L('agents');
   const orig = agentsLib.ownerLeadNames;
   agentsLib.ownerLeadNames = () => ['boss'];
   const r = rig();
@@ -187,7 +191,7 @@ test('notice agent: stored, followed by mediaDir, clearing on ungrant (needs rea
 });
 
 test('mediaDirFor: no agent gives null; names are sanitised like a plain agent Files folder', async () => {
-  const agentsLib = require('../lib/agents');
+  const agentsLib = L('agents');
   const orig = agentsLib.ownerLeadNames;
   agentsLib.ownerLeadNames = () => [];
   const r = rig();
@@ -201,7 +205,7 @@ test('mediaDirFor: no agent gives null; names are sanitised like a plain agent F
 });
 
 test('notice agent: a granted agent that no longer exists, or is member-owned, is not a notice agent', async () => {
-  const agentsLib = require('../lib/agents');
+  const agentsLib = L('agents');
   const orig = agentsLib.ownerLeadNames;
   agentsLib.ownerLeadNames = () => ['boss'];
   const agents = [{ name: 'boss' }, { name: 'helper' }, { name: 'kidbot', owner: 'u_member' }];
@@ -221,7 +225,7 @@ test('notice agent: a granted agent that no longer exists, or is member-owned, i
 });
 
 test('mediaDirFor: an agent with a team folder grant uses that folder', async () => {
-  const agentsLib = require('../lib/agents');
+  const agentsLib = L('agents');
   const orig = agentsLib.ownerLeadNames;
   agentsLib.ownerLeadNames = () => ['Doc'];
   const r = rig({ agents: [{ name: 'Doc', policy: { roots: [path.join(HUB_HOME, 'medical')] } }] });
