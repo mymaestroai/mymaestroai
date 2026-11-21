@@ -1,7 +1,8 @@
 /* Broadsheet House: warm newsprint paper, press-ink text, a carmine accent, serif headings, replies set in a reading
  * column (no bubbles), and a dark-green rule down the left of the tool steps. Source: gemini-4-carbon concept.
- * Every rule is scoped to html[data-look="broadsheet"]. Simple mode keeps its own palette: the colours below are set
- * on html[data-look="broadsheet"]:not(.mm-simple), and only the fonts reach html.mm-simple.
+ * Every rule is scoped to html[data-look="broadsheet"]. The colours and layout below are set on
+ * html[data-look="broadsheet"]:not(.mm-simple); Simple mode keeps its own layout and takes this palette and the fonts
+ * (the Simple block at the end of the file).
  *
  * Contrast (WCAG 2.x ratio, computed by test/look-broadsheet.test.js from the hex values in this file; body text needs 4.5):
  * PAIR --text #1C1B18 on --bg-dark #F6F1E7 = 15.30
@@ -167,7 +168,7 @@ html[data-look="broadsheet"]:not(.mm-simple) {
   --tint-faintest: rgba(28,27,24,0.03);
   --dialog-border: #8C826F;
   --dialog-row-border: #CBC1AE;
-  --field-border: #8C826F;
+  --field-border: #857861;   /* form fields' edge: at least 3.42:1 on the page, card and input colours (WCAG 1.4.11) */
   --auto-divider: rgba(28,27,24,0.16);
   --feed-bg: rgba(41,82,61,0.06);
   --ij-seg-bg: rgba(28,27,24,0.07);
@@ -461,7 +462,7 @@ html[data-look="broadsheet"]:not(.mm-simple) {
   --dim: #575248;
   --warn: #8A5A00;
   --bg-soft: #E6D9BE;
-  --tiger: #A64B14;
+  --tiger: #9C4612;   /* 4.9:1 on the Tiger Team header and paper */
 }
 
 /* ---- paper, headings and rules ---- */
@@ -520,3 +521,53 @@ html[data-look="broadsheet"]:not(.mm-simple) #composer { border-top: 2px solid v
 html[data-look="broadsheet"]:not(.mm-simple) #msg-input,
 html[data-look="broadsheet"]:not(.mm-simple) .qcustom input { border-radius: 3px; min-height: 40px; padding: 8px 10px; }
 html[data-look="broadsheet"]:not(.mm-simple) .tsn { border-radius: 2px; border-left: 3px solid var(--accent-edge); }
+
+/* ---- form fields on every page: an edge people can see (3:1 against what is behind them) ---- */
+html[data-look="broadsheet"]:not(.mm-simple) #owner-view,
+html[data-look="broadsheet"]:not(.mm-simple) input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]):not([type=hidden]):not([type=file]):not([type=submit]):not([type=button]):not([type=reset]):not([type=image]),
+html[data-look="broadsheet"]:not(.mm-simple) select,
+html[data-look="broadsheet"]:not(.mm-simple) textarea {
+  border-color: var(--field-border) !important;   /* over inline and id-level field rules on every page (#owner-view: styled by id in index.html) */
+}
+html[data-look="broadsheet"]:not(.mm-simple) #owner-view:focus,
+html[data-look="broadsheet"]:not(.mm-simple) input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]):not([type=hidden]):not([type=file]):not([type=submit]):not([type=button]):not([type=reset]):not([type=image]):focus,
+html[data-look="broadsheet"]:not(.mm-simple) select:focus,
+html[data-look="broadsheet"]:not(.mm-simple) textarea:focus {
+  border-color: var(--accent) !important;   /* a focused field still shows the accent */
+}
+
+/* ---- the phone's toast and the Security and Profile sheets' buttons ---- */
+html[data-look="broadsheet"]:not(.mm-simple) #toast { background: var(--text); color: var(--bg-dark); }   /* ink on paper: it stands out on every screen */
+html[data-look="broadsheet"]:not(.mm-simple) #security-sheet .sec-actions button:not(.go),
+html[data-look="broadsheet"]:not(.mm-simple) #profile-sheet .sec-actions button:not(.go) { background: var(--bg-card); border: 1px solid var(--border-strong); }   /* .go keeps its accent fill */
+
+/* ---- Simple mode takes this style's colours (its layout stays its own). Both of Simple's own variants (dark and
+   .mm-light) are covered, so Simple's Light/Dark/Auto choice has nothing to switch while this style is on; the
+   account keeps that choice for Engineering. Desktop uses --sm-*, the phone --sp-*; both use the role variables. ---- */
+html[data-look="broadsheet"].mm-simple,
+html[data-look="broadsheet"].mm-simple.mm-light {
+  color-scheme: light;
+  --bg-dark: #F6F1E7; --bg-card: #ECE4D5; --bg-input: #FBF9F4; --bg-tertiary: #ECE4D5;
+  --accent: #9B2928; --accent-hover: #7F1F1E; --purple: #6A4C9C;
+  --text: #1C1B18; --text-primary: #1C1B18; --text-dim: #575248; --text-secondary: #575248; --text-tertiary: #665F52;
+  --border: #CBC1AE; --border-strong: #8C826F;
+  --sm-page: #F6F1E7; --sm-side: #ECE4D5; --sm-raised: #FBF9F4; --sm-border: #CBC1AE;
+  --sm-text: #1C1B18; --sm-sec: #575248; --sm-muted: #665F52;
+  --sm-bubble: #ECE4D5; --sm-sel: color-mix(in srgb, #9B2928 13%, transparent); --sm-hover: color-mix(in srgb, #1C1B18 5%, transparent);
+  --sm-shadow: 0 2px 12px rgba(0,0,0,.08);
+  --sm-user-bg: color-mix(in srgb, #9B2928 12%, #FBF9F4); --sm-user-text: #1C1B18; --sm-user-code: color-mix(in srgb, #1C1B18 10%, transparent);
+  --sp-bubble: #ECE4D5; --sp-soft: #ECE4D5; --sp-shadow: 0 2px 12px rgba(0,0,0,.08);
+  --sp-me-bg: color-mix(in srgb, #9B2928 12%, #FBF9F4); --sp-me-text: #1C1B18; --sp-me-code: color-mix(in srgb, #1C1B18 10%, transparent);
+  --brand-violet: #9B2928; --simple-interject-bg: #9B2928; --simple-accent-hover: #7F1F1E;
+  --simple-surface: #F6F1E7; --simple-side-bg: #ECE4D5; --simple-raised-bg: #FBF9F4; --simple-border: #CBC1AE; --simple-muted-text: #665F52;
+  --simple-modal-sm-out-text: #A32620; --simple-modal-sm-out-text-2: #A32620;
+  --error: #A32620; --field-border: #857861;   /* the main block (not Simple) sets these for Advanced */
+}
+
+/* ---- a chat tab's close button reads on the light tab (Engineering fades it to 50%) ---- */
+html[data-look="broadsheet"]:not(.mm-simple) .chat-tab .close-tab { opacity: .8; }
+
+/* ---- Simple's message box: its rounded box is the field's edge (3:1); message times at full strength on paper ---- */
+html[data-look="broadsheet"].mm-simple .input-area,
+html[data-look="broadsheet"].mm-simple #composer .row { border-color: var(--field-border); }
+html[data-look="broadsheet"].mm-simple .message > .msg-time { opacity: 1; }

@@ -390,6 +390,7 @@
         simpleThemeBtnPaint(theme, me);
         if (theme.parentNode !== ctl) ctl.appendChild(theme);
         if (tog.parentNode !== ctl) ctl.appendChild(tog);
+        simpleLookListen(); simpleThemeBtnVisible();
       } else {
         if (theme) theme.remove();
         if (ctl) ctl.remove();
@@ -426,7 +427,32 @@
       try { await simplePrefs({ uiMode: mode }); location.reload(); }
       catch (e) { simpleSwitching = false; hubToast(`Could not switch: ${e.message}`); }
     }
-    function simpleCloseSettings() { const o = document.getElementById('simple-settings'); if (o) o.remove(); }
+    // Under Broadsheet House or Quiet Page the style's own palette decides Simple's colours: the label of that style, else null (Engineering).
+    function simpleStyleLabel() {
+      const L = window.HubLooks;
+      if (!L || typeof L.applied !== 'function') return null;
+      const id = L.applied(document);
+      if (id === 'engineering') return null;
+      const look = typeof L.byId === 'function' ? L.byId(id) : null;
+      return look ? look.label : id;
+    }
+    // Simple's top-bar theme button has nothing to switch under a light style; it is back in Engineering. (An inline display
+    // beats the button's own display rule, which the hidden attribute alone would not.)
+    function simpleThemeBtnVisible() {
+      const b = document.querySelector('.simple-theme-btn');
+      if (b) { const off = !!simpleStyleLabel(); b.hidden = off; b.style.display = off ? 'none' : ''; }
+    }
+    let simpleLookOnce = false;
+    let simpleLookOff = null;   // removes the open sheet's listener
+    function simpleLookListen() {
+      if (simpleLookOnce) return;
+      simpleLookOnce = true;
+      document.addEventListener('mm-look-change', () => { try { simpleThemeBtnVisible(); } catch { /* cosmetic */ } });
+    }
+    function simpleCloseSettings() {
+      if (simpleLookOff) { simpleLookOff(); simpleLookOff = null; }
+      const o = document.getElementById('simple-settings'); if (o) o.remove();
+    }
     function openSimpleSettings() {
       simpleCloseSettings();
       const me = window.hubMe || {};
@@ -436,7 +462,8 @@
       overlay.innerHTML =
         '<div class="simple-modal" role="dialog" aria-label="Settings">' +
           '<div class="sm-h"><h2>Settings</h2><button type="button" class="sm-x" aria-label="Close">✕</button></div>' +
-          '<div class="sm-set"><span class="sm-lab">Appearance</span><div class="sm-seg"><button type="button" data-theme="light">Light</button><button type="button" data-theme="dark">Dark</button><button type="button" data-theme="auto">Match device</button></div></div>' +
+          '<div class="sm-set"><span class="sm-lab">Appearance</span><div class="sm-seg"><button type="button" data-theme="light">Light</button><button type="button" data-theme="dark">Dark</button><button type="button" data-theme="auto">Match device</button></div><div class="sm-follow" hidden></div></div>' +
+          '<div class="sm-set"><span class="sm-lab">Interface style</span><div class="sm-style"></div></div>' +
           '<div class="sm-set"><span class="sm-lab">Name</span><div class="sm-name"></div></div>' +
           '<div class="sm-set"><button type="button" class="sm-plain" data-act="advanced"><div><b>Switch to Advanced</b><span>All tools, agents\' work and settings</span></div><span aria-hidden="true">›</span></button></div>' +
           '<div class="sm-set"><button type="button" class="sm-plain sm-out" data-act="signout">Sign out</button></div>' +
@@ -444,6 +471,18 @@
       overlay.querySelector('.sm-name').textContent = name;
       const paintSeg = () => { const cur = me.theme === 'light' || me.theme === 'dark' ? me.theme : 'auto'; overlay.querySelectorAll('.sm-seg button').forEach(b => b.classList.toggle('on', b.dataset.theme === cur)); };
       paintSeg();
+      // Under a light style its own palette decides the colours: the buttons give way to one line (the stored theme is untouched).
+      const paintFollow = () => {
+        const label = simpleStyleLabel();
+        const seg = overlay.querySelector('.sm-seg'); const line = overlay.querySelector('.sm-follow');
+        if (seg) seg.style.display = label ? 'none' : '';
+        if (line) { line.hidden = !label; line.textContent = label ? 'Colours follow your interface style (' + label + ').' : ''; }
+      };
+      paintFollow();
+      if (typeof lookPickerBuild === 'function') { try { lookPickerBuild(overlay.querySelector('.sm-style')); } catch { /* the sheet still opens */ } }
+      const onLook = () => { if (!overlay.isConnected) { document.removeEventListener('mm-look-change', onLook); return; } paintFollow(); };
+      document.addEventListener('mm-look-change', onLook);
+      simpleLookOff = () => document.removeEventListener('mm-look-change', onLook);
       overlay.addEventListener('click', async (e) => {
         if (e.target === overlay || e.target.closest('.sm-x')) { simpleCloseSettings(); return; }
         const t = e.target.closest('.sm-seg button');
