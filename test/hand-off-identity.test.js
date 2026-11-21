@@ -280,22 +280,75 @@ test('review r2: listShown gives none of the target\'s words for a target the ca
   const shown = await env.h.listShown('sam', { withStatus: true });
   assert.match(shown[0].lastReply, /PRIVATE FIGURES/);
   assert.match(String(shown[0].status), /PRIVATE STATUS/);
-  for (const set of [() => { allowed = false; }, () => { allowed = true; broken = true; }]) {
+  for (const [set, kind] of [[() => { allowed = false; }, 'access'], [() => { allowed = true; broken = true; }, 'unchecked']]) {
     set();
     for (const withStatus of [true, false]) {
       const rows = await env.h.listShown('sam', { withStatus });
       assert.strictEqual(rows.length, 1);
       assert.strictEqual(rows[0].lastReply, null);
-      assert.strictEqual(rows[0].withheld, true);
+      assert.strictEqual(rows[0].withheld, kind);
+      assert.strictEqual(rows[0].folder, null, 'no folder, so no Status button');
       if (withStatus) assert.strictEqual(rows[0].status, null);
       assert.ok(!JSON.stringify(rows).includes('PRIVATE'), JSON.stringify(rows));
     }
   }
+  broken = false; allowed = false;
   // the agent's tool says why
   const tools = require('../lib/hand-off-tools');
   const out = await tools.runTool('hand_off_list', {}, 'sam', { runner: env.h, mayTarget: async () => false });
   assert.match(out, /STATUS\.md: not shown \(you may no longer hand work to lead\)\./);
   assert.ok(!out.includes('PRIVATE'));
+});
+
+test('review r3: a record without a caller stamp is not shown to, noted or cancelled by any agent while identities are checked', async () => {
+  const env = setup();
+  const v = await env.h.create({ caller: 'sam', target: 'lead', topic: 'Tidy the list', brief: 'Do it' });
+  env.h.get(v.id).callerStamp = null;
+  assert.deepStrictEqual(env.h.list('sam', { includeDone: true }), []);
+  assert.throws(() => env.h.note({ caller: 'sam', id: v.id, text: 'x' }), /No such hand-off/);
+  assert.throws(() => env.h.cancel({ caller: 'sam', id: v.id }), /No such hand-off/);
+});
+
+test('review r3: a target made again under the same name gets no note, and neither a cancel nor the ending stops its turn', async () => {
+  const stopped = [];
+  let busy = false;   // the target is busy once its turn runs (the runner waits for an idle target to start one)
+  const env = setup({ isAgentActive: () => busy, stopTurn: (a) => stopped.push(a) });
+  const v = await env.h.create({ caller: 'sam', target: 'lead', topic: 'Tidy the list', brief: 'Do it' });
+  await env.h.tick(); busy = true;
+  assert.strictEqual(env.h.get(v.id).state, 'running');
+  env.recs.lead = { name: 'lead', box: '7a7a7a7a7a' };   // re-made while the record still says running
+  assert.throws(() => env.h.note({ caller: 'sam', id: v.id, text: 'more' }), /not the agent it was handed to any more, so the note was not sent/);
+  env.h.cancel({ caller: 'sam', id: v.id });
+  assert.deepStrictEqual(stopped, [], 'the new agent\'s turn is not stopped by a cancel');
+  const v2 = await env.h.create({ caller: 'sam', target: 'lead', topic: 'Second', brief: 'Do it' });
+  busy = false;   // v2 goes to the lead agent there is now
+  await env.h.tick(); busy = true;
+  assert.strictEqual(env.h.get(v2.id).state, 'running');
+  env.recs.lead = { name: 'lead', box: '8b8b8b8b8b' };
+  assert.strictEqual(await env.h.mayContinue(v2.id, 'lead'), false);
+  assert.deepStrictEqual(stopped, [], 'nor by the hand-off ending');
+  // the same target: a cancel still stops its running turn
+  busy = false;
+  const env2 = setup({ isAgentActive: () => busy, stopTurn: (a) => stopped.push(a) });
+  const v3 = await env2.h.create({ caller: 'sam', target: 'lead', topic: 'Third', brief: 'Do it' });
+  await env2.h.tick(); busy = true;
+  env2.h.cancel({ caller: 'sam', id: v3.id });
+  assert.deepStrictEqual(stopped, ['lead']);
+});
+
+test('review r3: hand_off_note refuses when the caller may no longer reach the target; the card never opens Status for a withheld row', async () => {
+  const env = setup();
+  const v = await env.h.create({ caller: 'sam', target: 'lead', topic: 'Tidy the list', brief: 'Do it' });
+  await env.h.tick();
+  const tools = require('../lib/hand-off-tools');
+  const out = await tools.runTool('hand_off_note', { id: v.id, text: 'more please' }, 'sam', { runner: env.h, mayTarget: async () => false });
+  assert.match(out, /You may no longer hand work to "lead", so the note was not sent\./);
+  assert.strictEqual(env.h.get(v.id).notes.length, 0);
+  const H = require('../lib/ui-hand-off-card');
+  let fetched = 0;
+  const r = await H.openStatus({ id: v.id, target: 'lead', topic: 'T', state: 'running', folder: null, withheld: 'access' }, { document: {}, fetchFn: async () => { fetched++; return { ok: false }; } });
+  assert.strictEqual(r, null);
+  assert.strictEqual(fetched, 0);
 });
 
 test('the hub wires hand-offs to the identity, its matching rule, the caller\'s owner and the owner notice; other checks keep the strict stamp', () => {
