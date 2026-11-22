@@ -2194,8 +2194,9 @@ test('r9a-9 a hard cap on the check per source: too large to check', () => {
   assert.ok(Date.now() - t0 < 1000, `took ${Date.now() - t0} ms`);
   // a link destination with one level of parentheses is blanked whole; its figures are not source text
   assert.strictEqual(T.checkFigure('1250', '[Foo](https://en.example/wiki/Foo_(bar)_1250)'), 'not_found_as_written');
-  // r16: from each "](" the rest of the line is blanked (no balancing of parentheses), so text after the link on the same line does not count
-  assert.strictEqual(T.checkFigure('1250', '[Foo](https://en.example/wiki/Foo_(bar)_1250) and 1250'), 'not_found_as_written');
+  // r17 4: the destination ends at its matching ")" (nested parentheses counted), so text after the link on the same line is text again
+  // (was r16: the rest of the line was blanked: 'not_found_as_written')
+  assert.strictEqual(T.checkFigure('1250', '[Foo](https://en.example/wiki/Foo_(bar)_1250) and 1250'), 'found_as_written');
   assert.strictEqual(T.checkFigure('1250', '[Foo](https://en.example/wiki/Foo_(bar)_1250)\nand 1250'), 'found_as_written');
 });
 
@@ -2634,7 +2635,8 @@ test('r10 4 the brief lists the figures of the report text in their own block; a
   assert.strictEqual(ent.length, 60);
   assert.deepStrictEqual(ent.slice(0, 3).map((f) => [f.fid, f.figure]), [['p1', '31001'], ['p2', '31002'], ['p3', '31003']]);
   // r11: a sentence longer than 400 characters is not shown to the reviewer at all (was: cut to 400 around the figure)
-  const wordy = `${'word '.repeat(150)}had 1250 participants ${'more '.repeat(150)}(${R_SRC}).`;
+  // (r17 6: the limit is 1600 characters, was 800: the block is longer than 1600 here)
+  const wordy = `${'word '.repeat(350)}had 1250 participants ${'more '.repeat(350)}(${R_SRC}).`;
   const w = T.figureExcerpts(T.checkReport({ prose: wordy, claims, fetched }).claims, fetched, undefined, wordy).filter((f) => f.prose);
   assert.deepStrictEqual(w, []);
 });
@@ -2729,11 +2731,11 @@ test('r11 2 entities: more names; an undecoded one taints the number; one betwee
   fd('1250 text', 'plain 1250 text');
 });
 
-test('r11 3 a report block longer than 800 characters is not presented, so its meaning stays not checked', () => {
+test('r11 3 a report block longer than 1600 characters is not presented, so its meaning stays not checked', () => {
   const { fetched, claims } = rFigs('Enrollment totaled 1250 participants.', 'Enrollment totaled 1250 participants', '1250 participants');
-  // r16: the context is the whole block (was: the sentence, at most 400 characters), at most 800 characters
-  const long = (verb) => `The treatment ${verb} 1250 participants ${'in many sites across the study '.repeat(30)}(${R_SRC}).`;
-  assert.ok(long('enrolled').length > 800);
+  // r16: the context is the whole block (was: the sentence, at most 400 characters), at most 800 characters; r17 6: at most 1600
+  const long = (verb) => `The treatment ${verb} 1250 participants ${'in many sites across the study '.repeat(60)}(${R_SRC}).`;
+  assert.ok(long('enrolled').length > 1600);
   const prose = long('enrolled');
   const all = T.figureExcerpts(T.checkReport({ prose, claims, fetched }).claims, fetched, undefined, prose);
   assert.deepStrictEqual(all.filter((f) => f.prose), []);
@@ -2744,9 +2746,9 @@ test('r11 3 a report block longer than 800 characters is not presented, so its m
   const keys = { [sAll[0].meaningKey]: { meaning: 'matches', quote: 'Enrollment totaled 1250 participants' } };
   const r = T.checkReport({ prose, claims, fetched, counts: {}, meaningKeys: keys });
   assert.deepStrictEqual([r.totals.proseFound, r.totals.proseMatches, r.totals.proseDiffers], [1, 0, 0]);
-  // a block of 800 characters or less is still presented
-  const ok = `The treatment enrolled 1250 participants ${'x '.repeat(300)}(${R_SRC}).`;
-  assert.ok(ok.length <= 800 && ok.length > 400 && T.figureExcerpts(T.checkReport({ prose: ok, claims, fetched }).claims, fetched, undefined, ok).some((f) => f.prose));
+  // a block of 1600 characters or less is still presented (one over 800 now too)
+  const ok = `The treatment enrolled 1250 participants ${'x '.repeat(700)}(${R_SRC}).`;
+  assert.ok(ok.length <= 1600 && ok.length > 800 && T.figureExcerpts(T.checkReport({ prose: ok, claims, fetched }).claims, fetched, undefined, ok).some((f) => f.prose));
 });
 
 test('r11 4 the span of a figure with a wrapped sign starts at the sign as the text writes it', () => {
@@ -3320,8 +3322,9 @@ test('r16 2 markdown links: "](" blanks the rest of the line, reference labels a
   const nf = (src) => assert.strictEqual(T.checkFigure('1250 participants', src), NF, JSON.stringify(src).slice(0, 80));
   const fd = (src) => assert.strictEqual(T.checkFigure('1250 participants', src), FD, JSON.stringify(src).slice(0, 80));
   nf('[x](a "old 1250 participants")');
-  nf('[x](a(b(c(d(e)))) 1250 participants) tail');         // no balancing of parentheses: everything after "](" on the line is blanked
-  nf('See [text](u) 1250 participants');                   // the rest of the line after a link is not read
+  nf('[x](a(b(c(d(e)))) 1250 participants) tail');         // nested parentheses are counted: the destination ends at the last ")"
+  // r17 4: the rest of the line after a link is read again (was r16: not read); a destination with a quote (a title) still blanks to the line's end
+  fd('See [text](u) 1250 participants');
   nf('[text][1250 participants]');                         // a reference label
   nf('[a][1250 participants] and [c][d]');
   nf('[a][b 1250 participants');                           // a label that never closes: blanked to the end of its line only ...
@@ -3398,7 +3401,7 @@ test('r16 4 arXiv paper identity: a fetch whose finalUrl is another paper credit
   assert.strictEqual(T.checkClaims(claim(U + 'v2'), [...other, { url: U + 'v2', finalUrl: U + 'v2', ok: true, text }]).claims[0].status, 'found_as_written');
 });
 
-test('r16 5 the second mark reads the whole block of the report text: paragraph, or list item with its parents and lead-in; at most 800 characters', () => {
+test('r16 5 the second mark reads the whole block of the report text: paragraph, or list item with its parents and lead-in; at most 1600 characters', () => {
   const { fetched, claims } = rFigs('Enrollment totaled 1250 participants.', 'Enrollment totaled 1250 participants', '1250 participants');
   const figsOf = (prose) => T.figureExcerpts(T.checkReport({ prose, claims, fetched }).claims, fetched, undefined, prose).filter((f) => f.prose);
   const check = (prose, keys) => T.checkReport({ prose, claims, fetched, counts: {}, meaningKeys: keys });
@@ -3434,15 +3437,151 @@ test('r16 5 the second mark reads the whole block of the report text: paragraph,
   // the key: heading path + block + position + figure + passage
   assert.strictEqual(figsOf(`## A\n\n${para('x')}`)[0].heading, 'A');
   assert.notStrictEqual(figsOf(`## A\n\n${para('x')}`)[0].meaningKey, figsOf(`## B\n\n${para('x')}`)[0].meaningKey);
-  // a block over 800 characters is not presented (not checked); a figure in a heading line neither
-  const big = `${'Filler words that go on. '.repeat(40)}The study enrolled 1250 participants (${R_SRC}).`;
-  assert.ok(big.length > 800);
+  // a block over 1600 characters (r17 6; was 800) is not presented (not checked); a figure in a heading line neither
+  const big = `${'Filler words that go on. '.repeat(80)}The study enrolled 1250 participants (${R_SRC}).`;
+  assert.ok(big.length > 1600);
   assert.deepStrictEqual(figsOf(big), []);
-  const bigItem = `- ${'Filler words that go on. '.repeat(40)}\n  - Total 1250 participants (${R_SRC})`;
+  const bigItem = `- ${'Filler words that go on. '.repeat(80)}\n  - Total 1250 participants (${R_SRC})`;
   assert.deepStrictEqual(figsOf(bigItem), []);
   assert.strictEqual(figsOf(`The study enrolled 1250 participants (${R_SRC}).`).length, 1);
   // the brief shows the block with the occurrence marked
   const all = figsOf(nested('Enrollment:'));
   const b = T.challengeBrief('Q?', T.checkReport({ prose: nested('Enrollment:'), claims, fetched }).claims, T.challengeExcerpts(claims, fetched), all);
   assert.ok(b.includes(`the report writes: "Enrollment: Total ⟦1250⟧ participants (${R_SRC})"`));
+});
+
+// ================================================================ r17: final-round fixes
+test('r17 1 a parenthesised rate or bound after a number is that rate or qualifier', () => {
+  const cases = [
+    ['1250 mg', '1250 mg (per day)', NF],
+    ['1250 mg (per day)', '1250 mg', NF],
+    ['12.5%', '12.5% (at most)', NF],
+    ['12.5% (at most)', '12.5%', NF],
+    ['1250 mg (per day)', '1250 mg per day', FD],
+    ['1250 mg per day', '1250 mg (per day)', FD],
+    ['1250 mg (a month)', '1250 mg per month', FD],
+    ['1250 mg (per day)', '1250 mg (per month)', NF],
+    ['12.5% (annually)', '12.5% annually', FD],
+    ['12.5% (at most)', '12.5% (at least)', NF],
+    ['1250 (or more)', '1250 or more', FD],
+    ['1250 (or more)', '1250', NF],
+    ['12.5% (about)', '12.5%', FD],                   // an approximation in the claim is met by the exact figure, as with "about 12.5%"
+    ['12.5%', '12.5% (about)', NF],
+    ['56.4% (n = 20)', '56.4%', FD],                  // unchanged from before: a bracket that is no rate or qualifier is not read
+    ['56.4%', '56.4% (n = 20)', FD],
+    ['56.4% (n = 20)', '56.4% (n = 30)', FD],
+  ];
+  for (const [fig, src, want] of cases) assert.strictEqual(T.checkFigure(fig, src), want, `${fig} vs ${src}`);
+  for (const s of ['1250 mg (per day)', '12.5% (at most)', '12.5% (/s)', '1250 (or more)', '1250 mg (monthly)', '1250 mg (up to)']) assert.strictEqual(T.checkFigure(s, s), FD, s);
+  assert.strictEqual(T.parseFigure('12.5% (at most)').qual, '≤');
+  assert.strictEqual(T.parseFigure('1250 mg (per day)').form, '||mg per day');
+  // a bracket further from the number is not read
+  assert.strictEqual(T.checkFigure('1250 patients', '1250 patients were enrolled (up to day 30)'), FD);
+});
+
+test('r17 2 stacked qualifiers before a number are both, in order', () => {
+  // the qualifier stands in the claim's text, so the claim is checked against the source (the figure alone has no words in front of it)
+  const status = (claim, src) => T.checkClaims([{ id: 'c1', claim, source_url: R_SRC, figures: [] }], [{ url: R_SRC, ok: true, text: src }]).claims[0].figures[0].status;
+  const cases = [
+    ['The share was about 1.25%.', 'The share was a maximum of about 1.25%.', NF],
+    ['The share was a maximum of about 1.25%.', 'The share was about 1.25%.', NF],
+    ['The share was a maximum of 1.25%.', 'The share was a maximum of about 1.25%.', NF],
+    ['Growth was up to roughly 1250 users.', 'Growth was up to 1250 users.', NF],
+    ['Growth was roughly up to 1250 users.', 'Growth was up to roughly 1250 users.', NF], // the order matters
+    ['The share was a maximum of about 1.25%.', 'The share was a maximum of about 1.25%.', FD],
+    ['Growth was up to roughly 1250 users.', 'Growth was up to roughly 1250 users.', FD],
+    ['Growth was up to 1250 users.', 'Growth was up to 1250 users.', FD],
+    ['Growth was about 1250 users.', 'Growth was about 1250 users.', FD],
+  ];
+  for (const [claim, src, want] of cases) assert.strictEqual(status(claim, src), want, `${claim} vs ${src}`);
+  const q = (s) => T.numbersIn(s)[0].qual;
+  assert.strictEqual(q('a maximum of about 1.25%'), '≤~');
+  assert.strictEqual(q('up to roughly 1250'), '≤~');
+  assert.strictEqual(q('never up to roughly 1250'), 'not ≤~');
+  assert.strictEqual(q('not about 1250'), 'not ~');
+  assert.strictEqual(q('about 1250'), '~');
+});
+
+test('r17 3 a figure in a source table row is presented with that table\'s header row; no header row: not presented', () => {
+  const rows = Array.from({ length: 35 }, (_, i) => `| Area ${i + 1} | ${300 + i} |`).join('\n');
+  const table = (head) => `District figures.\n\n| ${head} |\n|---|---|\n${rows}\n| North | 1250 |\n| South | 777 |\n\nEnd.`;
+  const claim = [{ id: 'c1', claim: 'North enrollment', source_url: R_SRC, figures: ['1250'] }];
+  const run = (text, keys) => {
+    const fetched = [{ url: R_SRC, title: 'Districts', ok: true, text }];
+    const checked = T.checkReport({ prose: 'x', claims: claim, fetched, counts: {}, meaningKeys: keys });
+    return { checked, figs: T.figureExcerpts(checked.claims, fetched) };
+  };
+  const a = run(table('District | Enrollment'));
+  assert.strictEqual(a.figs.length, 1);
+  assert.ok(a.figs[0].excerpt.startsWith('| District | Enrollment | |---|---| … '), a.figs[0].excerpt.slice(0, 80));
+  assert.ok(a.figs[0].excerpt.includes('| North | 1250 |'));
+  assert.strictEqual(a.figs[0].excerpt.slice(a.figs[0].span.start, a.figs[0].span.end), '1250');
+  // the answer for this passage counts; the same source under another header is another key, so it is not checked after the re-check
+  const keys = T.figureMeanings(a.figs, { results: [{ id: 'c1', figures: [{ fid: 'c1.f1', meaning: 'matches', quote: '| North | 1250 |' }] }] }).keys;
+  assert.strictEqual(run(table('District | Enrollment'), keys).checked.claims[0].figure_checks[0].meaning, 'matches');
+  const b = run(table('District | Deaths'), keys);
+  assert.notStrictEqual(b.figs[0].meaningKey, a.figs[0].meaningKey);
+  assert.strictEqual(b.checked.claims[0].figure_checks[0].meaning, 'not checked');
+  // a short table: the passage reaches the header, which is not repeated
+  const small = run('| District | Enrollment |\n|---|---|\n| North | 1250 |\n');
+  assert.strictEqual(small.figs[0].excerpt, '| District | Enrollment | |---|---| | North | 1250 |');
+  assert.strictEqual(small.figs[0].excerpt.slice(small.figs[0].span.start, small.figs[0].span.end), '1250');
+  // no header row (no separator line after the first row): the figure is found but not presented
+  const bare = run(`| North | 1250 |\n${rows}\n`);
+  assert.strictEqual(bare.checked.claims[0].figure_checks[0].status, 'found_as_written');
+  assert.deepStrictEqual(bare.figs, []);
+  // text outside a table is cut as before
+  assert.ok(!run('Enrollment in the north was 1250.').figs[0].excerpt.includes('|'));
+  // the figures of the report text: the same rule
+  const fetched = [{ url: R_SRC, title: 'Districts', ok: true, text: table('District | Enrollment') }];
+  const prose = `North enrollment was 1250 (${R_SRC}).`;
+  const pf = T.figureExcerpts(T.checkReport({ prose, claims: claim, fetched }).claims, fetched, undefined, prose).filter((f) => f.prose);
+  assert.strictEqual(pf.length, 1);
+  assert.ok(pf[0].excerpt.startsWith('| District | Enrollment | |---|---| … '));
+  const bareFetched = [{ url: R_SRC, title: 'Districts', ok: true, text: `| North | 1250 |\n${rows}\n` }];
+  assert.deepStrictEqual(T.figureExcerpts(T.checkReport({ prose, claims: claim, fetched: bareFetched }).claims, bareFetched, undefined, prose).filter((f) => f.prose), []);
+});
+
+test('r17 4 a link destination ends at its matching ")" on the line; with a quote or no closing ")" the rest of the line is blanked', () => {
+  assert.strictEqual(T.checkFigure('85.2', '| [GPT-4](https://x.example/m) | 85.2 | 90.1 |'), FD);
+  assert.strictEqual(T.checkFigure('90.1', '| [GPT-4](https://x.example/m) | 85.2 | 90.1 |'), FD);
+  assert.strictEqual(T.checkFigure('12.5%', 'According to [Gartner](https://g.example/r), the market grew 12.5%.'), FD);
+  assert.strictEqual(T.checkFigure('1250 participants', '[x](a "a closing ) and old 1250 participants here")'), NF);
+  assert.strictEqual(T.checkFigure('1250 participants', '[x](a \'t) 1250 participants'), NF);          // a quote: to the end of the line
+  assert.strictEqual(T.checkFigure('1250 participants', '[x](a 1250 participants'), NF);              // no closing ")": to the end of the line
+  assert.strictEqual(T.checkFigure('1250', '[x](https://x.example/a_1250) see'), NF);                  // the destination itself is no text
+  assert.strictEqual(T.checkFigure('1250 participants', '[a](b(c)) 1250 participants'), FD);           // nested parentheses
+  assert.strictEqual(T.checkFigure('1250 participants', '[a](b(c) 1250 participants'), NF);            // not closed: the line
+  assert.strictEqual(T.checkFigure('1250 participants', '[a](b) and [c](d) 1250 participants'), FD);
+  assert.strictEqual(T.checkFigure('1250 participants', '[a](b) and [c](d "t) 1250 participants'), NF);
+  assert.strictEqual(T.checkFigure('1250 participants', '[a](b)\n[c](d "t") and 1250 participants'), NF);
+});
+
+test('r17 5 a redirect is expected for a URL that is not arXiv: the fetch counts when the claim matches its url or its finalUrl', () => {
+  const text = 'The study enrolled 1,250 participants in total.';
+  const claim = (url) => [{ id: 'c1', claim: 'The study enrolled participants', source_url: url, figures: ['1,250 participants'] }];
+  const DOI = 'https://doi.org/10.1000/x';
+  const redirected = [{ url: DOI, finalUrl: 'https://publisher.example/a', ok: true, text }];
+  assert.strictEqual(T.checkClaims(claim(DOI), redirected).claims[0].status, 'found_as_written');
+  assert.strictEqual(T.checkReport({ prose: `The study enrolled 1,250 participants (${DOI}).`, claims: claim(DOI), fetched: redirected, counts: {} }).claims[0].check_status, 'found_as_written');
+  // the claim names the page the fetch landed on
+  assert.strictEqual(T.checkClaims(claim('https://publisher.example/a'), redirected).claims[0].status, 'found_as_written');
+  // a fetch of another page is no source
+  assert.deepStrictEqual(T.checkClaims(claim('https://other.example/z'), redirected).claims.map((c) => c.status), ['no_source']);
+  // arXiv keeps its rule: a finalUrl that is another paper credits nothing
+  const U = 'https://arxiv.org/abs/2401.12345';
+  const other = [{ url: U, finalUrl: 'https://arxiv.org/abs/2401.54321', ok: true, text }];
+  assert.deepStrictEqual(T.checkClaims(claim(U), other).claims.map((c) => c.status), ['no_source']);
+});
+
+test('r17 6 a report block of up to 1600 characters is presented', () => {
+  const { fetched, claims } = rFigs('Enrollment totaled 1250 participants.', 'Enrollment totaled 1250 participants', '1250 participants');
+  const block = (n) => `The study enrolled 1250 participants ${'x '.repeat(n)}(${R_SRC}).`;
+  const figsOf = (prose) => T.figureExcerpts(T.checkReport({ prose, claims, fetched }).claims, fetched, undefined, prose).filter((f) => f.prose);
+  const at = (len) => { let n = 0; while (block(n).length < len) n++; return block(n); };
+  const edge = at(1600);
+  assert.ok(edge.length >= 1600 && edge.length <= 1601, String(edge.length));
+  const fits = edge.length === 1600 ? edge : block(Math.max(0, (edge.length - 1) - 1)).slice(0, 0) + at(1599);
+  assert.strictEqual(figsOf(fits).length, 1, String(fits.length));
+  assert.deepStrictEqual(figsOf(at(1602)), []);
 });
