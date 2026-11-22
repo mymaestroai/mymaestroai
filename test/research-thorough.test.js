@@ -4072,3 +4072,242 @@ test('D3 a section number is no figure of a source', () => {
   assert.strictEqual(T.checkFigure('2.1', 'The gain in accuracy was 2.1 on the evaluation set.\n2.1 Evaluation setup', ['accuracy']), 'found_as_written');
   assert.ok(claim);
 });
+
+// ---------------------------------------------------------------- run 2 (real run), spec E
+test('run-2 E1 a plus-or-minus pair printed twice (arXiv TeX echo) is read once as 3.164 ± 0.093', () => {
+  const pm = 'Creativity 3.164±0.0933.164\\pm 0.093 for poems';
+  assert.strictEqual(T.numbersIn(pm).length, 2); // 3.164 and 0.093, not four numbers
+  assert.strictEqual(T.checkFigure('3.164±0.093', pm), FD);
+  assert.strictEqual(T.checkFigure('3.164 ± 0.093', pm), FD); // glued or spaced is one written form
+  assert.strictEqual(T.checkFigure('3.164 ± 0.093', 'Creativity 3.164 ± 0.093 for poems'), FD);
+  // both ways: another SD, another mean, a copy that is not the echo of the first, and the bare mean (the tail is part of the form, as before)
+  assert.strictEqual(T.checkFigure('3.164 ± 0.094', pm), NF);
+  assert.strictEqual(T.checkFigure('3.165±0.093', pm), NF);
+  assert.strictEqual(T.checkFigure('3.164±0.093', 'Creativity 3.164±0.0933.165\\pm 0.093'), NF);
+  assert.strictEqual(T.checkFigure('3.164', pm), NF);
+  // a 5.00±0.00 pair
+  assert.strictEqual(T.checkFigure('5.001±0.003', 'score 5.001±0.0035.001\\pm 0.003 end'), FD);
+});
+
+test('run-2 E1 a label with "=" in front of a number is no part of its form', () => {
+  const tau = 'Kendall τb=0.3117\\tau_{b}=0.3117 over humans';
+  assert.strictEqual(T.checkFigure('0.3117', tau), FD);
+  assert.strictEqual(T.checkFigure('τb = 0.3117', tau), FD);
+  assert.strictEqual(T.checkFigure('τb=0.3117', tau), FD);
+  assert.strictEqual(T.checkFigure('0.3118', tau), NF);
+  assert.strictEqual(T.checkFigure('τb = 0.3118', tau), NF);
+  assert.strictEqual(T.numbersIn(tau).length, 1); // the TeX copy of label and number is nothing
+  assert.strictEqual(T.checkFigure('0.0711', 'Spearman ρ=0.0711\\rho=0.0711.'), FD);
+  assert.strictEqual(T.checkFigure('0.6213', 'we find r=0.6213 here'), FD);
+  assert.strictEqual(T.checkFigure('κ = 0.3317', 'Cohen κ = 0.3317 overall'), FD);
+  assert.strictEqual(T.checkFigure('0.3317', 'Cohen κ = 0.3317 overall'), FD);
+  assert.strictEqual(T.checkFigure('0.538', 'agreement ICC(A,2)=0.538 on poems'), FD);
+  assert.strictEqual(T.checkFigure('0.539', 'agreement ICC(A,2)=0.538 on poems'), NF);
+  // a qualifier in front of the label still applies; a bound written with "=" is still a bound
+  assert.strictEqual(T.checkFigure('about 0.6213', 'about r=0.6213 here'), FD);
+  assert.strictEqual(T.checkFigure('0.6213', 'about r=0.6213 here'), NF);
+  assert.strictEqual(T.checkFigure('0.0517', 'significant at p<=0.0517'), NF); // "<=" is not a label's "=": unchanged
+  assert.strictEqual(T.checkFigure('0.0517', 'significant at p ≤ 0.0517'), NF);
+});
+
+test('run-2 E1 a hyphenated ordinary noun glued after a number is ignored; a hyphenated unit counts', () => {
+  assert.strictEqual(T.checkFigure('2,480-pair', 'a held-out test set of 2,480 debiased pairs'), FD);
+  assert.strictEqual(T.checkFigure('2,480', 'a test set of 2,480-pair items'), FD);
+  assert.strictEqual(T.checkFigure('2,480-pair', 'a test set of 2,480-pair items'), FD);
+  assert.strictEqual(T.checkFigure('2,480', 'a test set of 2,480-pair. Then more'), FD);
+  assert.strictEqual(T.checkFigure('2,481', 'a test set of 2,480-pair items'), NF); // another number
+  assert.strictEqual(T.checkFigure('2,480 mg', 'a test set of 2,480-pair items'), NF); // another unit
+  assert.strictEqual(T.checkFigure('2,480-judge', 'all 2,480 judges'), FD);
+  // a hyphenated unit still counts: mg, day, -fold
+  for (const unit of ['mg', 'day', 'fold']) {
+    assert.strictEqual(T.checkFigure('2,480', `a ${'2,480'}-${unit} course`), NF, unit);
+    assert.strictEqual(T.checkFigure(`2,480-${unit}`, `a 2,480-${unit} course`), FD, unit);
+  }
+  assert.strictEqual(T.checkFigure('2,480-mg', 'a 2,480-pair course'), NF);
+  // the ignored noun is read like an ordinary following word ("2,480 pair items per year" has no rate); a rate right after it stays
+  assert.strictEqual(T.checkFigure('2,480', 'a test set of 2,480-pair items per year'), FD);
+  assert.strictEqual(T.checkFigure('2,480', 'a test of 2,480-pair per year'), NF);
+  assert.strictEqual(T.checkFigure('2,480 per year', 'a test of 2,480-pair per year'), FD);
+});
+
+test('run-2 E1 arrows and "to" ranges across cells are compounds; one end alone is not found', () => {
+  const arrow = 'Accuracy went 0.4137 → 0.6213 on the test';
+  assert.strictEqual(T.checkFigure('0.4137 → 0.6213', arrow), FD);
+  assert.strictEqual(T.checkFigure('0.4137→0.6213', arrow), FD);
+  assert.strictEqual(T.checkFigure('23.14% → 80.05%', 'rate 23.14%→\\rightarrow80.05% overall'), FD); // with arXiv\'s TeX echo
+  assert.strictEqual(T.checkFigure('0.4137 → 0.6214', arrow), NF);
+  // one end alone is not found (no change for a "to" range, and now also for an arrow)
+  assert.strictEqual(T.checkFigure('0.6213', arrow), NF);
+  assert.strictEqual(T.checkFigure('0.4137', arrow), NF);
+  const to = 'Accuracy rose 0.4137 to 0.6213 on the test';
+  assert.strictEqual(T.checkFigure('0.4137 to 0.6213', to), FD);
+  assert.strictEqual(T.checkFigure('0.6213', to), NF);
+  assert.strictEqual(T.checkFigure('0.4137', to), NF);
+  // an arrow and a "to" are written differently: not the same form
+  assert.strictEqual(T.checkFigure('0.4137 to 0.6213', arrow), NF);
+  assert.strictEqual(T.checkFigure('0.4137 → 0.6213', to), NF);
+  assert.strictEqual(T.figuresInProse('It went 0.4137 → 0.6213 here.').length, 1);
+});
+
+const Q_SRC = 'https://s.example/lit';
+const qCheck = (prose) => T.checkReport({
+  prose,
+  claims: [{ id: 'c1', claim: 'The human study reports 56.4% agreement', source_url: Q_SRC, figures: ['56.4%'] }],
+  fetched: [{ url: Q_SRC, title: 'Literature study', ok: true, text: 'The human study reports 56.4% agreement among crowd-workers. A total of 8821 words was used.' }],
+  counts: {},
+});
+const qProse = (corr) => `## Verdict\nIt holds.\n\n## Evidence\n- The human study reports 56.4% agreement [${Q_SRC}].\n\n## Corrections to the first pass\n${corr}\n`;
+
+test('run-2 E2 a figure inside « » is the first pass\'s value: not checked, not marked, not counted, shown as written', () => {
+  const r = qCheck(qProse(`- The first pass said «59.4%»; the full text gives 56.4% [${Q_SRC}].`));
+  assert.ok(r.prose.includes('«59.4%»'), 'shown as written');
+  assert.ok(!/59\.4%»? \[/.test(r.prose), 'not marked');
+  assert.ok(!r.prose.includes('[not found in source]') && !r.prose.includes('[no source to check]'));
+  assert.strictEqual(r.totals.proseFigures, 2); // 56.4% twice, not 59.4%
+  assert.strictEqual(r.totals.proseNotFound, 0);
+  // the same text without « »: the first pass's value is checked and not found
+  const plain = qCheck(qProse(`- The first pass reported 59.4% agreement; the full text gives 56.4% [${Q_SRC}].`));
+  assert.ok(plain.prose.includes('59.4% [not found in source]'));
+  assert.strictEqual(plain.totals.proseFigures, 3);
+  // « » anywhere in the report exempts what it holds; what is outside is still checked
+  const mixed = qCheck(qProse(`- The full text gives 8821 words, not «9999 words», in ${Q_SRC}.`));
+  assert.ok(mixed.prose.includes('«9999 words»') && !/9999 words»? \[/.test(mixed.prose));
+  const why = (prose) => T.classifyProseNumbers(prose).filter((x) => x.exempt === 'quoted error').map((x) => x.token.text);
+  assert.deepStrictEqual(why('The first pass said «59.4%» and «1,450».'), ['59.4%', '1,450']);
+  // an unclosed « exempts nothing
+  assert.deepStrictEqual(why('The first pass said «59.4% and more.'), []);
+});
+
+test('run-2 E2 fallback: a clause with a retraction cue and no assertion cue, in "Corrections to the first pass" only', () => {
+  const bullets = [
+    '- The 1450 words versus 840 for rejected are not supported by the excerpts and are removed.',
+    '- The first pass attached the 1,800-pair and 52.7% figures to the StoryAlign URL. That page contains none of them.',
+    '- The 1,133-instance count could not be confirmed and is dropped.',
+    '- The 18 open-weight split does not appear in the full text.',
+    '- A figure of 777 was reported as 888 in the first pass.',
+  ].join('\n');
+  const r = qCheck(qProse(bullets));
+  assert.ok(!r.prose.includes('[not found in source]') && !r.prose.includes('[no source to check]'), r.prose);
+  assert.strictEqual(r.totals.proseFigures, 1); // only the 56.4% of the evidence bullet
+  // an asserted figure in the same bullet after ";" is still checked; the cue clause before it is not
+  const two = qCheck(qProse(`- The 1450 words are not supported; the full text gives 8821 words and 7777 more [${Q_SRC}].`));
+  assert.ok(!/1450 \[/.test(two.prose), 'the retracted figure is exempt');
+  assert.ok(two.prose.includes('7777 [not found in source]'), 'the asserted figure is checked');
+  assert.ok(!/8821 \[/.test(two.prose));
+  assert.strictEqual(two.totals.proseFigures, 3);
+  // a cue clause that also asserts ("gives", "is", "supported", "shows") keeps its figures checked
+  const both = qCheck(qProse(`- The first pass said 59.4% but the full text gives 56.4% [${Q_SRC}].`));
+  assert.ok(both.prose.includes('59.4% [not found in source]'));
+  // the clause is the sentence (cut at sentence ends and ";", not at commas): an assertion in it keeps every figure of it checked
+  const isIt = qCheck(qProse('- The 4321 is not in the excerpts, and 66.3 is GPT-4o.'));
+  assert.ok(isIt.prose.includes('66.3 [') && /4321 \[/.test(isIt.prose));
+  // "is dropped" and "are not supported" are retractions, not assertions
+  const aux = qCheck(qProse('- The 4321 count is dropped. The 6543 split is not supported.'));
+  assert.ok(!/(?:4321|6543) \[/.test(aux.prose), aux.prose);
+});
+
+test('run-2 E2 fallback: the same words outside the corrections section are checked', () => {
+  const prose = `## Verdict\nIt holds.\n\n## Evidence\n- The 4321 words are not supported by the excerpts and are removed [${Q_SRC}].\n\n## Corrections to the first pass\nNone\n`;
+  const r = qCheck(prose);
+  assert.ok(r.prose.includes('4321 [not found in source]'));
+  // a "Corrections" heading that ends: the next heading's text is outside
+  const after = qCheck(`## Corrections to the first pass\n- The 1450 words are removed.\n\n## Confidence\nThe 4321 words are removed [${Q_SRC}].\n`);
+  assert.ok(!/1450 \[/.test(after.prose) && after.prose.includes('4321 ['));
+});
+
+test('run-2 E2 the synthesis and revision briefs ask for « » around the first pass\'s values', () => {
+  const b = T.synthesisBrief('Q?', ['first pass'], ['notes'], []);
+  assert.ok(b.includes('«59.4%»'));
+  assert.match(b, /does not check a figure inside « »/);
+  const rv = T.reviseBrief('Q?', 'prose', [], []);
+  assert.match(rv, /keep the « » as they are/);
+});
+
+test('run-2 E3 pinned sources are taken round-robin by Evidence bullet, so the cap never cuts a whole bullet', () => {
+  const u = (n) => `https://x.example/p${n}`;
+  const sum = ['## Verdict', `Short answer [${u(0)}].`, '## Evidence', `- one [${u(1)}] and [${u(2)}] and [${u(3)}]`, `- two [${u(4)}]`, `- three [${u(5)}] [${u(6)}]`, '## Other', `- not evidence [${u(7)}]`].join('\n');
+  const all = T.firstPassSources(sum, 12).map((p) => p.url);
+  assert.deepStrictEqual(all, [u(0), u(1), u(4), u(5), u(2), u(6), u(3)]);
+  // the cap: the first URL of every bullet, none cut whole (citation order would have kept p0 p1 p2 p3 and cut bullets two and three)
+  assert.deepStrictEqual(T.firstPassSources(sum, 4).map((p) => p.url), [u(0), u(1), u(4), u(5)]);
+  assert.deepStrictEqual(T.pinnedSources(sum, [sum], 4).map((p) => p.url), [u(0), u(1), u(4), u(5)]);
+  // a paper cited by two bullets belongs to the first
+  const dup = ['## Evidence', `- a [${u(1)}] [${u(2)}]`, `- b [${u(1)}] [${u(3)}]`].join('\n');
+  assert.deepStrictEqual(T.firstPassSources(dup, 12).map((p) => p.url), [u(1), u(3), u(2)]);
+  // numbered bullets and a bullet that wraps onto a second line
+  const wrapped = ['## Evidence', `1. a [${u(1)}]`, `   and also [${u(2)}]`, `2. b [${u(3)}]`].join('\n');
+  assert.deepStrictEqual(T.firstPassSources(wrapped, 12).map((p) => p.url), [u(1), u(3), u(2)]);
+  // a summary with one URL per bullet keeps its order
+  const one = ['## Evidence', `- a [${u(1)}]`, `- b [${u(2)}]`, `- c [${u(3)}]`].join('\n');
+  assert.deepStrictEqual(T.firstPassSources(one, 2).map((p) => p.url), [u(1), u(2)]);
+});
+
+test('run-2 E3 the first-pass brief asks for the URL of every statement', () => {
+  const b = T.firstPassBrief('Q?', ['finding']);
+  assert.match(b, /Keep the source URL of EVERY statement you take from the findings/);
+  assert.match(b, /no URL the findings give for a statement is dropped/);
+});
+
+test('run-2 E3 "Also found, not read in full": the unread sources the helpers cited, with their description, not the ones read', () => {
+  const A = 'https://a.example/pa';
+  const D = 'https://d.example/pd';
+  const E = 'https://e.example/pe';
+  const F = 'https://f.example/pf';
+  const findings = [`### Research 1\n- Paper A on judges ${A}\n- Paper D tested persona prompts ${D}\n- ${F} a note on bias\nSOURCES READ:\n- ${A}\n- ${E}`];
+  const firstPass = `## Verdict\nIt works.\n\n## Evidence\n- Persona prompts raise diversity by 12.5% [${D}]`;
+  const fetched = [
+    { url: A, ok: true, text: 'x' },
+    { url: 'https://redirect.example/r', finalUrl: F, ok: true, text: 'y' },
+    { url: E, ok: true, partial: true, partialReason: 'abstract page only', text: 'z' },
+  ];
+  const s = T.alsoFoundSources(findings, firstPass, fetched);
+  assert.deepStrictEqual(s.map((x) => x.url), [D, E]); // A read, F read through its final address, E only in part
+  assert.strictEqual(s[0].description, 'Persona prompts raise diversity by 12.5%'); // from the first pass
+  assert.strictEqual(s[1].description, ''); // none anywhere
+  const sec = T.alsoFoundSection(findings, firstPass, fetched);
+  assert.strictEqual(sec.count, 2);
+  assert.match(sec.markdown, /^## Also found, not read in full\n/);
+  assert.ok(sec.markdown.includes(`- ${D} - Persona prompts raise diversity by 12.5% (not checked)`));
+  assert.ok(sec.markdown.includes(`- ${E} (not checked)`));
+  assert.ok(!sec.markdown.includes(A) && !sec.markdown.includes(F));
+  // a description from the findings when the first pass has none
+  assert.ok(T.alsoFoundSection(findings, '', [{ url: A, ok: true, text: 'x' }]).markdown.includes(`- ${D} - Paper D tested persona prompts (not checked)`));
+  // nothing unread: no section
+  assert.deepStrictEqual(T.alsoFoundSection([`- ${A}`], '', [{ url: A, ok: true, text: 'x' }]), { markdown: '', count: 0, sources: [] });
+  // an arXiv paper read under another version or form counts as read
+  assert.strictEqual(T.alsoFoundSources(['- https://arxiv.org/abs/2401.00001v2'], '', [{ url: 'https://arxiv.org/pdf/2401.00001', ok: true, text: 'x' }]).length, 0);
+  // the long list is cut and says how many more
+  const many = Array.from({ length: 70 }, (_, i) => `- https://m.example/p${i}`).join('\n');
+  const big = T.alsoFoundSection([many], '', []);
+  assert.strictEqual(big.count, 70);
+  assert.match(big.markdown, /And 10 more, not listed here\./);
+});
+
+test('run-2 E3 the figures of "Also found" are not checked: not counted, marked not checked, kept in the document', () => {
+  const D = 'https://d.example/pd';
+  const sec = T.alsoFoundSection([`- Paper D ${D}`], `## Evidence\n- Persona prompts raise diversity by 12.5% on 77 stories [${D}]`, []);
+  const marked = T.markUnverified(sec.markdown);
+  assert.ok(marked.includes('12.5% [not checked]') && marked.includes('77 [not checked]'), marked);
+  assert.ok(!marked.includes('[not found in source]'));
+  // the report check counts no figure of it when it is left out of the checked text (the runner adds it after the check)
+  const base = qProse(`- The first pass said «59.4%»; the full text gives 56.4% [${Q_SRC}].`);
+  assert.strictEqual(qCheck(base).totals.proseFigures, 2);
+  const doc = T.renderDocument({ question: 'Q?', prose: base + '\n\n' + marked, claims: [], sources: [] });
+  assert.match(doc.markdown, /## Also found, not read in full/);
+  assert.ok(doc.markdown.includes('12.5% [not checked]'));
+  assert.ok(doc.markdown.includes('«59.4%»'), 'the document shows a quoted first-pass value as written');
+});
+
+test('run-2 E3 the chat report gives the count of unread helper sources in one sentence', () => {
+  const base = { prose: '## Verdict\nIt holds.', claims: [], totals: { figures: 0, found: 0, notFound: 0, notOpened: 0 }, files: {} };
+  const three = T.chatReport({ ...base, alsoFound: 3 });
+  assert.ok(three.includes('3 more sources the helpers cited were not read in full and are not checked; the document lists them under "Also found, not read in full".'));
+  assert.ok(T.chatReport({ ...base, alsoFound: 1 }).includes('1 more source the helpers cited was not read in full and is not checked; the document lists it under'));
+  assert.ok(!/not read in full/.test(T.chatReport({ ...base, alsoFound: 0 })));
+  assert.ok(!/not read in full/.test(T.chatReport(base)));
+});
+
+test('run-2 E4 the counts sentence keeps "(N of them in the claims table)"', () => {
+  const r = T.chatReport({ prose: '## Verdict\nIt holds.', claims: [], totals: { figures: 9, found: 4, notFound: 1, notOpened: 0, noSource: 0, proseFound: 3, proseNotFound: 1, tableFigures: 5 }, files: {} });
+  assert.match(r, /Of 9 figures \(5 of them in the claims table\), 7 were found/);
+});

@@ -1082,6 +1082,33 @@ test('thorough runner: the stages in order with the right models, progress in or
   assert.equal(run.claims[0].check, '1 of 1 found as written');
 });
 
+test('run-2 E: a source the helpers cited and nobody read is listed in the report and the document, counted in the chat report', async () => {
+  const SRC_D = 'https://example.org/paper-d';
+  const m = makeThorough({
+    script: {
+      Research: (ws) => ws.map((w) => ({ label: w.label, ok: true, text: `Finding for ${w.label}. Method A scored 56.4%.\n- Paper D tested persona prompts on 77 stories ${SRC_D}\nSOURCES READ:\n- ${SRC_A}\n- ${SRC_B}\n- ${SRC_C}` })),
+      'First pass summary': (ws) => ws.map((w) => ({ label: w.label, ok: true, text: `## Verdict\nMethod A wins.\n\n## Evidence\n- Method A scored 56.4% on the test [${SRC_A}]\n\n## Other points\n- Persona diversification of 77 stories helps [${SRC_D}]` })),
+    },
+  });
+  const r = startThorough(m);
+  await until(() => m.runner.get(r.id).state === 'delivered');
+  const doc = m.written[0].doc.markdown;
+  assert.match(doc, /## Also found, not read in full/);
+  const section = doc.split('## Also found, not read in full')[1].split('\n## ')[0];
+  assert.ok(section.includes(SRC_D), 'the unread source is listed');
+  assert.ok(!section.includes(SRC_A) && !section.includes(SRC_B) && !section.includes(SRC_C), 'the ones that were read are not');
+  assert.match(section, /Persona diversification/, 'with its one-line description from the first pass');
+  assert.match(section, /\(not checked\)/);
+  assert.match(m.wakes[0].message, /\n1 more source the helpers cited was not read in full and is not checked; the document lists it under "Also found, not read in full"\./);
+});
+
+test('run-2 E: the agent is told to pass the figure-check sentences on unchanged, with the claims-table parenthesis', () => {
+  const msg = research.reportMessage({ id: 'dr-1', question: 'Q?', report: 'Of 9 figures (4 of them in the claims table), 5 were found', level: 'thorough' });
+  assert.match(msg, /word for word, unchanged/);
+  assert.match(msg, /"\(N of them in the claims table\)"/);
+  assert.match(msg, /Of 9 figures \(4 of them in the claims table\)/);
+});
+
 test('thorough runner: readers go in batches of readersAtOnce groups, one spawn call per batch', async () => {
   const m = makeThorough({ deps: { thoroughSettings: () => ({ maxSources: 12, readersAtOnce: 1, reviewRounds: 0, timeLimitMinutes: 60, pdf: false, readerModel: 'own' }) } });
   const r = startThorough(m);
