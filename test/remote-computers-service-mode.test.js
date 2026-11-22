@@ -481,7 +481,7 @@ test('hub mode: health says so and warns; the paths and the process are as befor
   const t = toolRemote({ run_as: 'hub' });
   const h = await t.remote.callTool('health');
   assert.strictEqual(h.mode, 'hub');
-  assert.ok(h.warnings.includes('MeshCentral runs under My Maestro\'s own account. On Linux, set "Run as" to service to give it its own locked-down account.'));
+  assert.ok(h.warnings.includes('MeshCentral runs under My Maestro\'s own account. On Linux, set "How the server runs" to service to give it its own locked-down account.'));
   assert.strictEqual(h.reason, undefined);
   const mesh = t.remote.mesh;
   assert.strictEqual(mesh.mode, 'hub');

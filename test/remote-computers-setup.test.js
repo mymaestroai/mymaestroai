@@ -31,19 +31,16 @@ test('setup: the module loads through the hub\'s loader without problems', () =>
 test('setup: the steps come in the planned order with the right types', () => {
   const { setup } = loadModule(DIR);
   assert.deepStrictEqual(setup.steps.map((s) => [s.id, s.type]), [
-    ['about', 'explain'], ['install', 'install'], ['prefs', 'settings'], ['server', 'check'], ['pc', 'outside'],
-    ['installer', 'check'], ['computer', 'check'], ['levels', 'settings'], ['agents', 'grant'], ['done', 'finish'],
+    ['about', 'explain'], ['setup', 'auto'], ['add', 'check'], ['computer', 'check'], ['agents', 'grant'], ['done', 'finish'],
   ]);
   const by = Object.fromEntries(setup.steps.map((s) => [s.id, s]));
   assert.strictEqual(by.about.confirm, 'I understand that agents I allow can fully control the computers I add.');
-  assert.deepStrictEqual(by.prefs.fields, ['address_name', 'listen_ip', 'control_port', 'agent_port', 'run_as']);
-  assert.deepStrictEqual(by.levels.fields, ['session_minutes']);
-  assert.match(by.prefs.body, /tailscale status/);
+  assert.strictEqual(by.about.precheck, 'prereqs');
   assert.match(by.about.body, /phone/);
-  assert.strictEqual(by.server.title, 'Start the server');
-  assert.strictEqual(by.installer.title, 'Get the installer');
-  assert.strictEqual(by.computer.title, 'Check the PC is connected');
-  assert.strictEqual(by.pc.title, 'Prepare the PC');
+  assert.strictEqual(by.setup.title, 'Set it up');
+  assert.strictEqual(by.add.check, 'installer');
+  assert.strictEqual(by.add.title, 'Add a computer');
+  assert.strictEqual(by.computer.title, 'Wait for the computer');
 });
 
 test('setup: the guide has the planned sections and no placeholder text', () => {
@@ -454,7 +451,7 @@ test('check installer: shows the address and the Windows advice, once, and keeps
   const r = await checks.installer(ctxOf({ installer_link: JSON.stringify({ url, expiresAt: '2026-11-07T14:20:00.000Z' }) }));
   assert.strictEqual(r.ok, true);
   assert.strictEqual(r.once, true);
-  assert.strictEqual(r.lines[0], `On the PC, open this address in a browser within 15 minutes (the whole address, including the part after the ? mark): ${url}`);
+  assert.strictEqual(r.lines[0], `On the computer you want to control, open this address in a browser within 15 minutes (the whole address, including the part after the ? mark): ${url}`);
   assert.ok(r.lines.includes('It downloads MyMaestro-RemoteAgent.exe. Run it and choose Install. Windows Defender or SmartScreen may warn that it is a remote-access tool; that is expected for this kind of software.'));
   assert.ok(!r.summary.includes(url) && !r.summary.includes('abcd2345'));
 });
@@ -481,10 +478,10 @@ test('check computer: passes when a computer is online', async () => {
 
 test('check computer: fails with the plain text when none has connected or none is online', async () => {
   const none = await checks.computer(ctxOf({ computers_status: '[]' }));
-  assert.deepStrictEqual([none.ok, none.summary], [false, 'No computer has connected yet. Run the installer on the PC, then check again.']);
+  assert.deepStrictEqual([none.ok, none.summary], [false, 'No computer has connected yet. Run the installer on the computer you want to control, then check again.']);
   const off = await checks.computer(ctxOf({ computers_status: JSON.stringify([{ name: 'demo-pc', os: 'Windows 11', online: false }]) }));
   assert.strictEqual(off.ok, false);
-  assert.match(off.summary, /demo-pc registered, but none is online/);
+  assert.match(off.summary, /demo-pc registered, but it is offline/);
   const err = await checks.computer(ctxOf({ computers_status: 'The Remote computers server is not ready yet. Try again in a minute.' }));
   assert.strictEqual(err.ok, false);
   assert.match(err.summary, /not ready/);
@@ -497,11 +494,11 @@ test('check server: unchanged, still reads the health tool', async () => {
   assert.deepStrictEqual([r.ok, r.summary], [true, 'The server is running. 1 computer registered, 1 online.']);
 });
 
-test('check server: on a system other than Linux it says so and does not call the server', async () => {
+test('check server: on a system other than Linux or a Mac it says so and does not call the server', async () => {
   let called = false;
   const ctx = { ...ctxOf({ health: () => { called = true; return '{}'; } }), platform: 'win32' };
   const r = await checks.server(ctx);
-  assert.deepStrictEqual([r.ok, r.summary], [false, 'Remote computers needs My Maestro on Linux for now.']);
+  assert.deepStrictEqual([r.ok, r.summary], [false, 'Remote computers can\'t run on this system yet. It runs on Linux and Mac.']);
   assert.strictEqual(called, false);
 });
 

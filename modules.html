@@ -109,6 +109,13 @@
   .signin-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 10px 0; }
   .redirect-uri { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; padding: 4px 8px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--bg-input); display: inline-block; user-select: all; word-break: break-all; }
   a.open-link { color: var(--accent); word-break: break-all; }
+  .suggest-note { color: var(--text-tertiary); font-size: 12px; }
+  .pre-lines { margin: 8px 0 0 20px; line-height: 1.5; }
+  .auto-lines { margin: 10px 0; display: flex; flex-direction: column; gap: 4px; }
+  .auto-line { padding: 4px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+  .admin-choices { display: flex; flex-direction: column; gap: 12px; }
+  details.advanced { margin-top: 16px; border: 1px solid var(--border); border-radius: 6px; padding: 8px 12px; }
+  details.advanced summary { cursor: pointer; color: var(--text-dim); font-size: 13px; }
   /* Phone (390 px wide): one column everywhere, tap targets of at least 40 px. */
   @media (max-width: 760px) {
     main { padding: 12px; }
@@ -213,9 +220,11 @@ async function loadList() {
 async function openModule(id, stepId) {
   const { module } = await api('GET', `/api/modules/${id}`);
   current = module;
+  preRes = {}; suggestions = {}; autoRes = {};
   const firstOpen = module.steps.find(s => !s.done);
   selected = stepId || (module.finishedAt ? null : (firstOpen ? firstOpen.id : null));
   render();
+  loadSuggestions(module);   // a finished setup is never asked: nothing is detected on load
   history.replaceState(null, '', `#${id}`);
   document.getElementById('panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
@@ -236,6 +245,8 @@ function render() {
     </div>`;
   if (!selected) loadDesktopBox();
   if (!selected) loadApprovals();
+  const open = selected ? m.steps.find(s => s.id === selected) : null;
+  if (open && open.type === 'explain' && open.precheck && !preRes[open.id]) loadPrecheck(open.id);   // "Before you start" runs when the step opens
 }
 
 // ── Agent approvals (remote-computers only, admins only): how often agents must ask before controlling each computer ──
@@ -381,13 +392,31 @@ async function deskOpen(btn) {
     } catch (e) { setMsg('err', e.message); loadDesktopBox(); }
   });
 }
-function selectStep(id) { selected = id; render(); }
+function selectStep(id) { selected = id; if (id) delete preRes[id]; render(); }
 function closePanel() { stopSignin(); permPending = null; if (typeof PasswordEye !== 'undefined') PasswordEye.hideAll(document.getElementById('panel')); document.getElementById('panel').classList.remove('open'); current = null; history.replaceState(null, '', '#'); }
 
 function setMsg(kind, text) { const el = document.getElementById('step-msg'); if (!el) return; el.className = `msg show ${kind}`; el.textContent = text; }
 
+const emptyValue = (v) => v === undefined || v === null || v === '' || (Array.isArray(v) && v.length === 0);
+// A suggestion read from this computer (admins only, never for a finished setup): used only for a text or number field whose saved value is empty.
+function suggestionFor(st, value) {
+  const s = suggestions && suggestions[st.key];
+  if (!s || !st.suggest || !emptyValue(value) || (st.type !== 'string' && st.type !== 'number')) return null;
+  return s && Array.isArray(s.candidates) && s.candidates.length ? s : null;
+}
+function suggestedField(st, s) {
+  const id = `set-${st.key}`;
+  const help = st.help ? `<span class="help">${esc(st.help)}</span>` : '';
+  const note = '<span class="help suggest-note">Filled in from this computer</span>';
+  const control = s.candidates.length > 1
+    ? `<select id="${id}">${s.candidates.map((c, i) => `<option value="${esc(c)}" ${i === 0 ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select>`
+    : `<input type="${st.type === 'number' ? 'number' : 'text'}" id="${id}" value="${esc(s.value)}">`;
+  return `<div class="field"><span class="lbl">${esc(st.label)}</span>${control}${note}${help}</div>`;
+}
 function settingField(st, value) {
   const id = `set-${st.key}`;
+  const sug = suggestionFor(st, value);
+  if (sug) return suggestedField(st, sug);
   const help = st.help ? `<span class="help">${esc(st.help)}</span>` : '';
   if (st.type === 'boolean') return `<label class="chk"><input type="checkbox" id="${id}" ${value ? 'checked' : ''}><span><span class="lbl">${esc(st.label)}</span><br>${help}</span></label>`;
   if (st.type === 'choice' && st.multiple) return `<div class="field"><span class="lbl">${esc(st.label)}</span>${st.options.map(o => { const v = typeof o === 'object' ? o.value : o; return `<label class="chk" style="margin:2px 0"><input type="checkbox" data-multi="${esc(st.key)}" value="${esc(v)}" ${(value || []).includes(v) ? 'checked' : ''}> ${esc(typeof o === 'object' ? o.label : o)}</label>`; }).join('')}${help}</div>`;
@@ -419,13 +448,129 @@ function readSettings(keys) {
   return out;
 }
 
+// ── Facts about the computer Maestro runs on (admins only): the "Before you start" check, suggested settings, the one-button setup ──
+let preRes = {};        // step id -> the precheck's answer { ok, summary, lines, blocker } | { loading: true }
+let suggestions = {};   // setting key -> { value, candidates, source } for the open module (empty for a finished setup)
+let autoRes = {};       // step id -> { running, lines, error, check, choose, admin, choices, done }
+const advancedSettings = (m) => visibleSettings(m).filter(st => st.advanced === true);
+
+function precheckHtml(s) {
+  const r = preRes[s.id];
+  if (!r || r.loading) return '<div class="dim" id="pre-area">Checking this computer…</div>';
+  const lines = (r.lines || []).map(l => `<li>${esc(l)}</li>`).join('');
+  const again = `<div class="actions"><button onclick="checkAgain('${esc(s.id)}', this)">Check again</button></div>`;
+  if (r.ok) return `<div id="pre-area"><h4 style="margin:0 0 6px">Before you start</h4><div class="msg show ok"><span class="tick">✓</span> ${esc(r.summary || 'Ready')}</div>${lines ? `<ul class="pre-lines">${lines}</ul>` : ''}${again}</div>`;
+  return `<div id="pre-area"><h4 style="margin:0 0 6px">Before you start</h4><div class="msg show err">${esc(r.summary || 'Not ready')}${r.blocker ? `\n<span class="dim">(${esc(r.blocker)})</span>` : ''}</div>${lines ? `<ul class="pre-lines">${lines}</ul>` : ''}${again}</div>`;
+}
+async function loadPrecheck(stepId) {
+  const m = current; if (!m) return;
+  preRes[stepId] = { loading: true };
+  let r;
+  try { const s = (m.steps || []).find(x => x.id === stepId); r = await api('GET', `/api/modules/${m.id}/precheck/${encodeURIComponent(s.precheck)}`); }
+  catch (e) { r = { ok: false, summary: e.message, lines: [], blocker: null }; }
+  if (current !== m) return;
+  preRes[stepId] = r;
+  if (selected === stepId) { const a = document.getElementById('step-area'); if (a) a.innerHTML = stepHtml(m.steps.find(x => x.id === stepId)); }
+}
+function checkAgain(stepId, btn) { if (btn) btn.disabled = true; loadPrecheck(stepId); }
+async function loadSuggestions(m) {
+  suggestions = {};
+  if (!m || m.finishedAt || !(m.manifest.settings || []).some(st => st.suggest)) return;
+  try { const r = await api('GET', `/api/modules/${m.id}/suggestions`); if (current === m && r.suggestions && Object.keys(r.suggestions).length) { suggestions = r.suggestions; render(); } }
+  catch { /* the fields stay empty */ }
+}
+
+function autoAreaHtml(s) {
+  const a = autoRes[s.id] || {};
+  let h = '';
+  if (a.running) h += '<p class="dim" id="auto-working">Working: this can take a few minutes the first time.</p>';
+  if (a.lines && a.lines.length) h += `<div class="auto-lines">${a.lines.map(l => `<div class="auto-line">${esc(l)}</div>`).join('')}</div>`;
+  if (a.choose) {
+    const c = a.choose;
+    h += `<div class="field"><span class="lbl">${esc(c.label)}</span>${(c.options || []).map((o, i) => `<label class="chk" style="margin:2px 0"><input type="radio" name="auto-choice" value="${esc(o.value)}" ${i === 0 ? 'checked' : ''}> ${esc(o.label)}</label>`).join('')}</div><div class="actions"><button class="primary" onclick="autoContinue('${esc(s.id)}', this)">Continue</button></div>`;
+  }
+  if (a.admin) {
+    const ad = a.admin;
+    h += `<div class="msg show err">${esc((a.check && a.check.summary) || a.error || 'The server did not start.')}</div><p><b>The server needs an administrator to finish. Pick one:</b></p>
+      <div class="admin-choices"><div class="admin-choice">${askButton(s.id)}</div>
+      <div class="admin-choice"><div class="dim">Copy the command and run it on that computer as an administrator:</div><pre class="redirect-uri mono" id="admin-cmd" style="white-space:pre-wrap">${esc(ad.command)}</pre><button onclick="copyAdminCmd(this)">Copy the command</button></div>
+      ${ad.label ? `<div class="admin-choice"><button onclick="autoAdmin('${esc(s.id)}', this)">${esc(ad.label)}</button>${ad.warning ? `<div class="dim" style="font-size:12px">${esc(ad.warning)}</div>` : ''}</div>` : ''}</div>`;
+  }
+  if (a.done) {
+    const idx = current.steps.findIndex(x => x.id === s.id);
+    const next = current.steps.slice(idx + 1).find(x => !x.done);
+    h += `<div class="msg show ok">Done.</div>${next ? `<div class="actions"><button class="primary" onclick="selectStep('${esc(next.id)}')">Next: ${esc(next.title)}</button></div>` : ''}`;
+  } else if (a.error && !a.choose && !a.admin) {
+    h += `<div class="msg show err">${esc(a.error)}${a.check && a.check.lines && a.check.lines.length ? '\n' + esc(a.check.lines.join('\n')) : ''}</div>`;
+  }
+  return `<div id="auto-area">${h}</div>`;
+}
+function autoPaint(stepId) {
+  if (!current || selected !== stepId) return;
+  const el = document.getElementById('auto-area'); if (!el) return;
+  const s = current.steps.find(x => x.id === stepId);
+  const tmp = document.createElement('div'); tmp.innerHTML = autoAreaHtml(s);
+  el.innerHTML = tmp.firstChild ? tmp.firstChild.innerHTML : '';
+}
+async function runAutoStep(stepId, extra, btn) {
+  const m = current; const prev = autoRes[stepId] || {};
+  const choices = { ...(prev.choices || {}), ...((extra && extra.choices) || {}) };
+  const input = { ...(Object.keys(choices).length ? { choices } : {}), ...(extra && extra.adminChoice ? { adminChoice: true } : {}) };
+  autoRes[stepId] = { running: true, choices, lines: [] };
+  autoPaint(stepId);
+  if (btn) btn.disabled = true;
+  try {
+    const r = await api('POST', `/api/modules/${m.id}/step`, { step: stepId, input });
+    if (current !== m) return;
+    current = r.module;
+    autoRes[stepId] = { done: true, choices, lines: (r.result && r.result.lines) || [] };
+    render(); loadList();
+  } catch (e) {
+    if (current !== m) return;
+    const d = e.data || {};
+    autoRes[stepId] = { error: e.message, check: d.check || null, choose: d.choose || null, admin: d.admin || null, choices, lines: [] };
+    if (selected === stepId) {
+      const a = document.getElementById('step-area'); if (a) a.innerHTML = stepHtml(current.steps.find(x => x.id === stepId));
+      if (!d.choose) setMsg('err', e.message + (d.check && d.check.lines && d.check.lines.length ? '\n' + d.check.lines.join('\n') : ''));   // what Ask Maestro quotes
+    }
+  } finally { const b = document.getElementById('btn-auto'); if (b) b.disabled = false; }
+}
+function autoContinue(stepId, btn) {
+  const picked = document.querySelector('input[name="auto-choice"]:checked');
+  const a = autoRes[stepId] || {};
+  if (!picked || !a.choose) return;
+  runAutoStep(stepId, { choices: { [a.choose.key]: picked.value } }, btn);
+}
+function autoAdmin(stepId, btn) { runAutoStep(stepId, { adminChoice: true }, btn); }
+async function copyAdminCmd(btn) {
+  const t = (document.getElementById('admin-cmd') || {}).textContent || '';
+  try { await navigator.clipboard.writeText(t); if (btn) btn.textContent = 'Copied'; } catch { if (btn) btn.textContent = 'Select the command and copy it'; }
+}
+// The collapsed fold of settings marked advanced. `all` = the overview, where the one Save button below saves every field on the page.
+function advancedHtml(m, all) {
+  const adv = advancedSettings(m);
+  if (!adv.length) return '';
+  return `<details class="advanced" id="advanced"><summary>Advanced settings</summary>${adv.map(st => settingField(st, m.settings[st.key])).join('')}<div class="actions"><button onclick="${all ? 'saveAll(this)' : 'saveAdvanced(this)'}">Save advanced settings</button></div></details>`;
+}
+async function saveAdvanced(btn) {
+  const keys = advancedSettings(current).map(st => st.key);
+  await busy(btn, async () => {
+    try { current = (await api('POST', `/api/modules/${current.id}/settings`, { values: readSettings(keys) })).module; setMsg('ok', 'Saved. The new settings apply the next time the server starts.'); }
+    catch (e) { setMsg('err', e.message); }
+  });
+}
+
 function stepHtml(s) {
   const m = current;
   const links = (s.links || []).map(l => `<a href="${esc(l.url)}" target="_blank" rel="noopener noreferrer">${esc(l.label)} ↗</a>`).join('');
   let inner = '';
   if (s.type === 'explain' || s.type === 'outside') {
-    inner = (s.confirm ? `<label class="chk"><input type="checkbox" id="confirm"><span>${esc(s.confirm)}</span></label>` : '') +
-      `<div class="actions"><button class="primary" onclick="doStep('${esc(s.id)}', { confirmed: ${s.confirm ? "document.getElementById('confirm').checked" : 'true'} })">Continue</button></div>`;
+    const gate = s.precheck ? !(preRes[s.id] && preRes[s.id].ok === true) : false;   // the tick box and Next wait for the check
+    inner = (s.precheck ? precheckHtml(s) : '') +
+      (s.confirm ? `<label class="chk"><input type="checkbox" id="confirm" ${gate ? 'disabled' : ''}><span>${esc(s.confirm)}</span></label>` : '') +
+      `<div class="actions"><button class="primary" id="btn-next" ${gate ? 'disabled' : ''} onclick="doStep('${esc(s.id)}', { confirmed: ${s.confirm ? "document.getElementById('confirm').checked" : 'true'} })">Continue</button></div>`;
+  } else if (s.type === 'auto') {
+    inner = `<div class="actions"><button class="primary" id="btn-auto" ${(autoRes[s.id] || {}).running ? 'disabled' : ''} onclick="runAutoStep('${esc(s.id)}', {}, this)">${esc(s.title)}</button></div>${autoAreaHtml(s)}${advancedHtml(m, false)}`;
   } else if (s.type === 'install') {
     inner = `<p class="dim">${m.installed ? 'Installed.' : 'Not installed yet.'}</p><div class="actions"><button class="primary" id="btn-go" onclick="doStep('${esc(s.id)}', {}, this)">${m.installed ? 'Check the install' : 'Install'}</button></div>`;
   } else if (s.type === 'secrets') {
@@ -606,6 +751,7 @@ function askButton(stepId) {
   return `<button onclick="askMaestro(${stepId ? `'${esc(stepId)}'` : 'null'}, this)">Ask Maestro</button>`;
 }
 
+const RUN_MODE_LINE = { service: 'The server is running as its own locked-down service.', hub: "The server is running under your Maestro's own account." };
 function overviewHtml() {
   const m = current;
   const ask = needsAttention(m) ? askButton(null) : '';
@@ -619,6 +765,7 @@ function overviewHtml() {
     <div>${leadRows(m)}${others.map(n => { const label = `<label class="agent-row"><input type="checkbox" checked disabled> ${esc(n)}</label>`; return levelsConfig(m) ? permRow(m, label, n, false) : label; }).join('')}${(leadsLocked(m) && (m.leads || []).length) || others.length ? '' : '<span class="dim">none</span>'}</div>
     ${levelsConfig(m) ? `<div id="perm-warning"></div><div class="actions"><button class="primary" onclick="savePermissions(this)">Save permissions</button></div>` : ''}
     <div><b>Status:</b> ${esc(STATE_LABEL[m.state] || m.state)}${m.note ? ` <span class="dim">(${esc(m.note)})</span>` : ''}</div>
+    ${RUN_MODE_LINE[m.runMode] ? `<div class="run-mode">${esc(RUN_MODE_LINE[m.runMode])}</div>` : ''}
     ${checkLine(lc)}
     <div class="actions">
       ${m.enabled ? `<button onclick="toggle(false, this)">Switch off</button>` : `<button class="primary" onclick="toggle(true, this)">Switch on</button>`}
@@ -628,7 +775,8 @@ function overviewHtml() {
     </div>
     ${m.id === 'remote-computers' && m.enabled ? '<div class="desk-box" id="desk-box"><h3 style="font-size:14px">Computers</h3><div id="desk-list" class="dim">Loading…</div></div><div class="desk-box" id="appr-box" hidden><h3 style="font-size:14px">Agent approvals</h3><div id="appr-list" class="dim">Loading…</div></div>' : ''}
     <h3 style="font-size:14px;margin-top:8px">Limits and settings</h3>
-    ${visibleSettings(m).map(st => settingField(st, m.settings[st.key])).join('')}
+    ${visibleSettings(m).filter(st => st.advanced !== true).map(st => settingField(st, m.settings[st.key])).join('')}
+    ${advancedHtml(m, true)}
     <div class="actions"><button class="primary" onclick="saveAll(this)">Save settings</button></div>
     ${m.manifest.docs && m.manifest.docs.revoke ? `<p class="dim" style="margin-top:10px">${esc(m.manifest.docs.revoke)}</p>` : ''}
     <div class="msg" id="step-msg"></div><div id="audit"></div></div>`;

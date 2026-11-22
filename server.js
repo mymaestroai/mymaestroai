@@ -2345,7 +2345,7 @@ async function handleHttpRequest(req, res) {
       const mods = require('./lib/modules').getModules();
       const bodyJson = async () => { try { return JSON.parse((await readBody(req)) || '{}'); } catch { return {}; } };
       const userHasTotp = () => !!(req.hubUser && ((req.hubUser.totp && req.hubUser.totp.enabled) || req.hubUser.totpEnabled));
-      const fail = (e) => jsonResponse(res, [403, 409, 500].includes(e.status) ? e.status : 400, { error: e.message, ...(e.check ? { check: e.check } : {}), ...(e.needsAck ? { needsAck: true } : {}), ...(e.needsStepUp ? { needsStepUp: true, totp: e.totp !== undefined ? !!e.totp : userHasTotp() } : {}) });
+      const fail = (e) => jsonResponse(res, [403, 409, 500].includes(e.status) ? e.status : 400, { error: e.message, ...(e.check ? { check: e.check } : {}), ...(e.choose ? { choose: e.choose } : {}), ...(e.admin ? { admin: e.admin } : {}), ...(e.needsAck ? { needsAck: true } : {}), ...(e.needsStepUp ? { needsStepUp: true, totp: e.totp !== undefined ? !!e.totp : userHasTotp() } : {}) });
       // Asking less needs the account password (and code) in the body. They are taken out before the module sees the input; steppedUp comes only from this check.
       const takeStepUp = (b) => {
         const input = b && typeof b === 'object' && !Array.isArray(b) ? { ...b } : b;
@@ -2427,6 +2427,13 @@ async function handleHttpRequest(req, res) {
           const list = await computersOf(30000);
           if (list) out.computers = list; else out.computersError = 'Could not load the computers.';
           return jsonResponse(res, 200, out);
+        }
+        // Facts about the computer the hub runs on (the precheck, the suggested settings): a signed-in admin only, never the hub's service identity or a member, and never offered to anyone else.
+        m = pathname.match(/^\/api\/modules\/([a-z][a-z0-9-]{1,31})\/(?:precheck\/([A-Za-z0-9_-]{1,40})|suggestions)$/);
+        if (m && req.method === 'GET') {
+          if (req.hubService || (req.hubUser && !access.isAdmin(req.hubUser))) return jsonResponse(res, 403, { error: 'Only a signed-in admin can see this.' });
+          if (m[2] !== undefined) return jsonResponse(res, 200, await mods.precheck(m[1], m[2]));
+          return jsonResponse(res, 200, { suggestions: await mods.suggestions(m[1]) });
         }
         m = pathname.match(/^\/api\/modules\/([a-z][a-z0-9-]{1,31})\/help$/);
         if (m && req.method === 'GET') { const q = new URL(req.url, 'http://x').searchParams; return jsonResponse(res, 200, mods.help(m[1], { step: q.get('step') || '', error: q.get('error') || '' })); }

@@ -253,13 +253,13 @@ test('changing a level shows the ask box only for the levels that need a yes; an
   assert.strictEqual(els['perm-warning'].innerHTML, '');
 });
 
-test('remote-computers setup: id levels kept, session length only; grant step explains the levels', () => {
+test('remote-computers setup: no step holds the levels setting; the session length lives under Advanced; grant step explains the levels', () => {
   const setup = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'modules', 'remote-computers', 'setup.json'), 'utf8'));
   const by = Object.fromEntries(setup.steps.map(s => [s.id, s]));
-  assert.deepStrictEqual(by.levels.fields, ['session_minutes']);
-  assert.strictEqual(by.levels.title, 'Session length');
-  assert.strictEqual(by.levels.type, 'settings');
-  assert.ok(!/maestro:look|one entry per agent/i.test(by.levels.body));
+  assert.strictEqual(by.levels, undefined, 'the session length has no step of its own');
+  const mf = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'modules', 'remote-computers', 'module.json'), 'utf8'));
+  assert.strictEqual(mf.settings.find(s => s.key === 'session_minutes').advanced, true);
+  assert.ok(!/maestro:look|one entry per agent/i.test(by.agents.body));
   assert.strictEqual(by.agents.type, 'grant');
   for (const w of ['Look', 'Act', 'Drive', 'Ask me before each session']) assert.ok(by.agents.body.includes(w), w);
   const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'modules', 'remote-computers', 'module.json'), 'utf8'));

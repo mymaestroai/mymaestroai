@@ -23,7 +23,7 @@ const WINDOWS_ONLY = 'Screenshots and mouse/keyboard work on Windows computers f
 const NOT_YET = 'This tool arrives in the next part of the build.';
 const REINSTALL = 'Reinstall needed: open Data connectors and run Install again';
 const WAITING = 'Waiting for setup';
-const LINUX_ONLY = 'Remote computers needs My Maestro on Linux for now.';   // it uses /proc and /proc/self/fd
+const LINUX_ONLY = 'Remote computers can\'t run on this system yet. It runs on Linux and Mac.';
 const MAX_OUTPUT_BYTES = 64 * 1024;
 const SHOT_TIMEOUT_MS = 30000, INPUT_TIMEOUT_MS = 20000;
 const BUSY_AFTER_RUN_TIMEOUT_MS = 10 * 60000, BUSY_AFTER_SCREEN_TIMEOUT_MS = 60000;
@@ -213,23 +213,24 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
   const runtimeDir = env.MODULE_RUNTIME_DIR || '';
   const home = env.CONNECTOR_DATA_HOME || '';
   const meshcentralJs = runtimeDir ? path.join(runtimeDir, 'node_modules', 'meshcentral', 'meshcentral.js') : '';
-  const supported = (deps.platform || process.platform) === 'linux';   // the private picture copies use /proc and /proc/self/fd
+  const platform = deps.platform || process.platform;
+  const supported = platform === 'linux' || platform === 'darwin';   // the private picture copies use /proc/self/fd on Linux and a path-based way on a Mac
   const runtimeOk = supported && !!runtimeDir && fs.existsSync(meshcentralJs);
 
   // A start that failed before any process was made is retried by the supervisor; when it works, the rest of the start sequence follows.
   // hub mode: MeshCentral runs under My Maestro's own account; service mode: as its own systemd service (installed once by the owner).
-  const systemd = typeof deps.serviceSupported === 'function' ? !!deps.serviceSupported() : deps.serviceSupported !== undefined ? !!deps.serviceSupported : (supported && fs.existsSync('/run/systemd/system'));
+  const systemd = typeof deps.serviceSupported === 'function' ? !!deps.serviceSupported() : deps.serviceSupported !== undefined ? !!deps.serviceSupported : (platform === 'linux' && fs.existsSync('/run/systemd/system'));
   // A setup that already ran in hub mode keeps it under 'auto': its computers know that MeshCentral's certificates, and a new service has new ones.
   const legacyHub = !!home && fs.existsSync(path.join(home, 'meshcentral-data', 'root-cert-public.crt'));
-  const mode = settings.run_as === 'service' ? 'service' : settings.run_as === 'hub' ? 'hub' : (supported && systemd && !legacyHub ? 'service' : 'hub');
+  const mode = settings.run_as === 'service' ? 'service' : settings.run_as === 'hub' ? 'hub' : (platform === 'linux' && systemd && !legacyHub ? 'service' : 'hub');   // a Mac always falls to hub: there is no systemd service there
   const serviceName = SERVICE_NAME_RE.test(String(settings.service_name)) ? settings.service_name : DEFAULT_SERVICE_NAME;
   const mesh = runtimeOk && home ?createMeshServer({ runtimeDir, home, settings, log, mode, serviceName, moduleDir: __dirname, onRetryReady: () => { if (!stopped && state.phase !== 'ready') startSequence().catch(() => {}); }, ...(deps.mesh || {}) }) : null;
   const WebSocket = () => deps.WebSocket || require(path.join(runtimeDir, 'node_modules', 'ws'));
   const state = { phase: !supported ? 'unsupported' : runtimeOk ? 'idle' : 'reinstall', waiting: !supported ? LINUX_ONLY : runtimeOk ? null : REINSTALL, group: null, lastError: null, warnings: [], service: null };
-  const HUB_MODE_WARNING = 'MeshCentral runs under My Maestro\'s own account. On Linux, set "Run as" to service to give it its own locked-down account.'
+  const HUB_MODE_WARNING = 'MeshCentral runs under My Maestro\'s own account.' + (platform === 'linux' ? ' On Linux, set "How the server runs" to service to give it its own locked-down account.' : '')
     + (legacyHub && settings.run_as !== 'hub' ? ' This setup started in hub mode, so after the switch its computers need their agent installed again.' : '');
   // A range that holds 100.100.100.100 (Tailscale's own address) is wider than one computer: most likely the whole tailnet (the default).
-  const MAGIC_DNS_WARNING = 'The allowed addresses cover more than your computer: they include 100.100.100.100, so most likely your whole tailnet. Once your computer is connected, set "Addresses the computers may connect from" to its own 100.x address, then run the install command again, so no other device can connect to MeshCentral.';
+  const MAGIC_DNS_WARNING = 'The allowed addresses cover more than your computer: they include 100.100.100.100, so most likely your whole tailnet. Once your computer is connected, set "Addresses the other computers may connect from" to its own 100.x address, then run the install command again, so no other device can connect to MeshCentral.';
   const coversMagicDns = (list) => String(list === undefined || list === null || String(list).trim() === '' ? '100.64.0.0/10' : list).split(',').some((entry) => {
     const m = /^\s*(\d+)\.(\d+)\.(\d+)\.(\d+)(?:\/(\d+))?\s*$/.exec(entry);
     if (!m) return false;
@@ -306,6 +307,7 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
       ok: false, mode, running: st.running, version: VERSION, group: state.group || (mesh ? mesh.state.read().meshid || null : null),
       computers: null, online: null, warnings: [...state.warnings], lastError: state.lastError || st.lastError || null,
     };
+    if (typeof installer.stats === 'function') { try { out.helper = installer.stats(); } catch { /* not known */ } }   // for the setup's "why is no computer here" sentence
     if (!supported) { out.waiting = LINUX_ONLY; out.lastError = null; return out; }
     if (state.waiting) { out.waiting = state.waiting; return out; }
     if (mode === 'hub') out.warnings.push(HUB_MODE_WARNING);
@@ -343,7 +345,7 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
   const now = deps.now || Date.now;
   const known = new Map();   // short id -> { id, nodeid, name }, from the last list (the toast needs the full node id)
   const busy = new Map();    // short id -> when a command may be finished (Infinity while one runs)
-  const shots = createShotStore({ home, now, log });   // a private copy of each picture, for troubleshooting only
+  const shots = createShotStore({ home, now, log, portable: process.platform !== 'linux' });   // a private copy of each picture, for troubleshooting only
   const shotsOf = new Map(); // agent -> the last 20 screenshots it took: { id, agent, computerId, width, height, sx, sy, screenWidth, screenHeight, takenAt }
   const newShotId = () => { let s = ''; for (let i = 0; i < 8; i++) s += SHOT_ALPHABET[crypto.randomInt(SHOT_ALPHABET.length)]; return s; };
   function rememberShot(agent, entry) {

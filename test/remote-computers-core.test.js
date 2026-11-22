@@ -1351,9 +1351,9 @@ test('a failed start is reported in health and can be retried', async () => {
   await remote.stop();
 });
 
-test('on a system other than Linux, health and the server check say it needs Linux for now, the agent tools refuse, and nothing starts', async () => {
-  const LINUX_ONLY = 'Remote computers needs My Maestro on Linux for now.';
-  for (const platform of ['win32', 'darwin']) {
+test('on a system other than Linux or a Mac, health and the server check say so, the agent tools refuse, and nothing starts', async () => {
+  const LINUX_ONLY = 'Remote computers can\'t run on this system yet. It runs on Linux and Mac.';
+  for (const platform of ['win32', 'freebsd']) {
     const runtimeDir = fakeRuntime(), home = tmp();
     const exec = fakeExec('Done.\n'), spawn = fakeSpawn();
     const remote = createRemote({

@@ -17,6 +17,7 @@ const RATE_LIMIT = 10, RATE_WINDOW_MS = 60000;   // RATE_LIMIT: bad, expired or 
 const OVERALL_LIMIT = 60;
 const CONFIG_FILE = 'installer-win64.json';
 const FILE_NAME = 'MyMaestro-RemoteAgent.exe';
+const LINK_FILE = 'installer-link.json';
 const RECEIVE_FETCH_MS = 20000;   // the receiver's absolute limit when it has to fetch (the cache vanished after the link was made)
 const PREPARE_MS = 90000;         // the same, for making the link
 const GONE ='This link has expired. Make a new one in Data connectors -> Remote computers.\n';
@@ -187,7 +188,39 @@ function createInstaller({ home, now = Date.now, log = () => {}, fetchInstaller,
     return m.replace(/[\u0000-\u001f\u007f]+/g, ' ').trim().slice(0, 120);
   };
 
+  // A small record in the connector's own folder: when the last link was made and when one was last opened (times only, never a token).
+  // The setup's "wait for the computer" check reads it to say why no computer has appeared.
+  let seen = null;
+  const readSeen = () => {
+    if (seen) return seen;
+    seen = { madeAt: null, usedAt: null };
+    if (!home) return seen;
+    try {
+      const j = JSON.parse(fs.readFileSync(path.join(home, LINK_FILE), 'utf8'));
+      if (j && Number.isFinite(j.madeAt)) seen.madeAt = j.madeAt;
+      if (j && Number.isFinite(j.usedAt)) seen.usedAt = j.usedAt;
+    } catch { /* none yet */ }
+    return seen;
+  };
+  const writeSeen = () => {
+    if (!home) return;
+    const file = path.join(home, LINK_FILE), tmp = `${file}.${process.pid}.tmp`;
+    try {
+      fs.mkdirSync(home, { recursive: true, mode: 0o700 });
+      fs.writeFileSync(tmp, JSON.stringify(seen) + '\n', { mode: 0o600 });
+      fs.renameSync(tmp, file);
+    } catch (e) {
+      try { fs.unlinkSync(tmp); } catch { /* none */ }
+      log('could not keep the link record:', String((e && e.code) || 'error').slice(0, 40));
+    }
+  };
+
   return {
+    /** { made, used }: a link was ever made; the last link made was opened (the helper was downloaded). */
+    stats() {
+      const s = readSeen();
+      return { made: s.madeAt !== null, used: s.usedAt !== null && (s.madeAt === null || s.usedAt >= s.madeAt) };
+    },
     /** Makes sure a valid cached installer exists (fetching it when the cache is missing or was built for another setup). Throws a plain error. */
     async prepare() {
       try { await installer(prepareMs); } catch (e) {
@@ -198,6 +231,7 @@ function createInstaller({ home, now = Date.now, log = () => {}, fetchInstaller,
     link() {
       const name = address();
       const { token, expiresAt } = tokens.make();
+      readSeen().madeAt = now(); writeSeen();
       return { url: `https://${name}/hooks/remote-computers/installer?t=${token}`, expiresAt: new Date(expiresAt).toISOString() };
     },
     // params: the hub's hub/receive request ({ method, path: 'installer', query: { t: '<token>' }, ... }); the hub routes only /hooks/<id>/<path>
@@ -216,6 +250,7 @@ function createInstaller({ home, now = Date.now, log = () => {}, fetchInstaller,
       if (expiresAt === null) { bad.push(now()); return text(404, GONE); }
       try {
         const buf = await installer(receiveMs);   // the link was made after the file was prepared: normally no fetch here
+        readSeen().usedAt = now(); writeSeen();
         return {
           status: 200,
           headers: { 'content-type': 'application/octet-stream', 'content-disposition': `attachment; filename="${FILE_NAME}"`, 'cache-control': 'no-store' },
@@ -230,4 +265,4 @@ function createInstaller({ home, now = Date.now, log = () => {}, fetchInstaller,
   };
 }
 
-module.exports = { PlainError, RECEIVE_FETCH_MS, PREPARE_MS, createTokens, createInstaller, defaultFetcher, sessionCookies, ALPHABET, TOKEN_LENGTH, TOKEN_TTL_MS, MAX_TOKENS, CACHE_FILE, CACHE_TTL_MS, RATE_LIMIT, OVERALL_LIMIT, CONFIG_FILE, FILE_NAME, GONE, UNAVAILABLE };
+module.exports = { PlainError, RECEIVE_FETCH_MS, PREPARE_MS, createTokens, createInstaller, defaultFetcher, sessionCookies, ALPHABET, TOKEN_LENGTH, TOKEN_TTL_MS, MAX_TOKENS, CACHE_FILE, CACHE_TTL_MS, RATE_LIMIT, OVERALL_LIMIT, CONFIG_FILE, FILE_NAME, LINK_FILE, GONE, UNAVAILABLE };

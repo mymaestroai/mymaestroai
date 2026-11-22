@@ -44,25 +44,30 @@ Status and limits (Save permissions).
 - **Clicks use the screenshot's shot id.** click (and scroll at a place) must name the shot id of the screenshot the
   agent looked at. It works for 10 minutes, only for that agent and computer, and is refused if the screen size has
   changed since.
-- **Linux only for now.** This connector needs My Maestro on Linux. On any other system the health check says so and
-  nothing starts.
+- **Linux and Mac.** The computer your Maestro runs on must be Linux or a Mac. On a Mac it is new and not yet
+  proven on a real Mac. Windows is not supported yet: the setup says so on its first step and nothing is installed.
 
 ## What each step does
 
-- **What this does:** explains the levels and asks you to confirm that agents you allow can fully control the
-  computers you add.
-- **Install:** puts the server in place. It downloads about 210 MB in all (more space on disk once unpacked): about 85 MB of server programs now and about 125 MB of helper programs for the PCs, downloaded the first time the server starts. It is downloaded once.
-- **Your settings:** the tailnet name and tailnet address of My Maestro's computer (the computer My Maestro runs on, not the PC you want to control), and the two ports.
-- **Start the server:** starts the server and checks that it is running and ready. You do not need to be at My Maestro's computer: if the server needs an administrator command, press Ask Maestro and Maestro runs it for you (it needs administrator rights on My Maestro's computer).
-- **Prepare the PC:** done by you on the PC: Windows 11 with a local account, signing in automatically, never
-  locking or sleeping, Tailscale installed and signed in to the same tailnet as My Maestro's computer, nothing personal on it. Do not sign in to My Maestro on that PC: an agent using the PC could use that sign-in.
-- **Get the installer:** makes a link that works once, for 15 minutes. Open it in a browser on the PC. It downloads
-  `MyMaestro-RemoteAgent.exe`. Run it and choose Install. Open the link on the PC right away. If you change settings or
-  restart My Maestro first, make a new link.
-- **Check the PC is connected:** passes when at least one PC is online.
-- **Session length:** how long one yes for Act or Drive lasts.
-- **Who can use it at all:** which agents may use remote computers, the level for each (Look, Act or Drive) and
-  whether you are asked before each Act or Drive session. The lead agent is always allowed.
+- **What this does:** explains the levels and checks, before anything is installed, that the computer your Maestro runs on can run it:
+  a supported system, Tailscale installed and signed in (it shows the name and address it found), and 300 MB free.
+  Then you confirm that agents you allow can fully control the computers you add.
+- **Set it up:** one button. It downloads the server once (about 210 MB in all), fills in the name and address of the computer your Maestro runs on
+  on your private network from Tailscale, keeps ports 9971 and 9972 or picks the next free pair, starts the server and
+  checks it. If that computer has more than one address on your private network, it asks which one. On Linux with
+  systemd the server runs as its own locked-down service, which needs an administrator once: press Ask Maestro (it runs
+  the command when it may), copy the command and run it yourself, or choose "Run it without an administrator", which
+  runs the server under your Maestro's own account (it then has the same access to files as your Maestro). On a Mac,
+  and on Linux without systemd, it runs under your Maestro's own account. Saved settings are never changed by it.
+  Every setting stays under **Advanced settings**.
+- **Add a computer:** Windows computers for now. On that computer: sign in to Tailscale with the same account, open the
+  one-time link in a browser within 15 minutes, run the downloaded `MyMaestro-RemoteAgent.exe` and choose Install. For
+  agents to see the screen, use a local account that signs in by itself, set it to never lock or sleep, and keep
+  personal files and accounts off it. Do not sign in to My Maestro on that computer.
+- **Wait for the computer:** passes when a computer is online. When none is, it says which part did not happen: the
+  link was not opened, the helper was downloaded but never connected, or the computer is offline.
+- **Who may use it:** which agents may use remote computers, the level for each (Look, Act or Drive) and whether you
+  are asked on your phone before each Act or Drive session. The lead agent is always allowed.
 
 ## What each setting does
 

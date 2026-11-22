@@ -79,9 +79,18 @@ function tlsProbe(port, host = '127.0.0.1') {
   });
 }
 
+// The command line of a process on a Mac (no /proc there): `ps -p <pid> -o command=`, short timeout, null when the process is gone or ps fails.
+function psCommandOf(pid) {
+  try {
+    const out = childProcess.execFileSync('ps', ['-p', String(pid), '-o', 'command='], { timeout: 2000, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 256 * 1024 });
+    const line = String(out).trim();
+    return line || null;
+  } catch { return null; }
+}
+
 function createMeshServer({ runtimeDir, home, settings, spawn = childProcess.spawn, execFile = childProcess.execFile, now = Date.now, log = () => {},
   probe = tlsProbe, timers = { setTimeout, clearTimeout }, npmGuard = NPM_GUARD, procRoot = '/proc', killPid = process.kill.bind(process), onRetryReady = null,
-  mode = 'hub', serviceName = DEFAULT_SERVICE_NAME, moduleDir = '', ensureAgents = ensureAgentFiles } = {}) {
+  mode = 'hub', serviceName = DEFAULT_SERVICE_NAME, moduleDir = '', ensureAgents = ensureAgentFiles, platform = process.platform, psCommand = psCommandOf } = {}) {
   if (!runtimeDir || !home) throw new Error('createMeshServer needs runtimeDir and home');
   const service = mode === 'service';
   if (service && !SERVICE_NAME_RE.test(String(serviceName))) throw new Error('The service name is not valid. Use mymaestro-remote, or mymaestro-remote- and up to 16 letters or digits.');
@@ -417,8 +426,23 @@ function createMeshServer({ runtimeDir, home, settings, spawn = childProcess.spa
 
   // ── a process an earlier run left behind ──
   // meshcentral.pid holds the pid of the process we started. Only a process whose command line has OUR meshcentral.js and OUR --datapath is ever signalled.
-  const procArgs = (pid) => { try { return fs.readFileSync(path.join(procRoot, String(pid), 'cmdline'), 'utf8').split('\0').filter(Boolean); } catch { return null; } };
-  const isOurs = (args) => !!args && args.includes(paths.mainJs) && args.some((a, i) => a === '--datapath' && args[i + 1] === paths.dataPath);
+  // Linux reads the separate arguments from /proc; a Mac has no /proc, so the one command-line string `ps` gives is used (a path with spaces cannot be told apart
+  // from two arguments there, so a path counts only when it stands whole: after the start, a space or a quote, and before the end, a space or a quote).
+  const procArgs = (pid) => {
+    if (platform === 'darwin') { try { const s = psCommand(pid); return typeof s === 'string' && s ? s : null; } catch { return null; } }
+    try { return fs.readFileSync(path.join(procRoot, String(pid), 'cmdline'), 'utf8').split('\0').filter(Boolean); } catch { return null; }
+  };
+  const standsWhole = (line, text) => {
+    for (let at = line.indexOf(text); at !== -1; at = line.indexOf(text, at + 1)) {
+      const before = at === 0 ? ' ' : line[at - 1], after = line[at + text.length] || ' ';
+      if (/[\s"']/.test(before) && /[\s"']/.test(after)) return true;
+    }
+    return false;
+  };
+  const isOurs = (args) => {
+    if (typeof args === 'string') return standsWhole(args, paths.mainJs) && standsWhole(args, `--datapath ${paths.dataPath}`);
+    return !!args && args.includes(paths.mainJs) && args.some((a, i) => a === '--datapath' && args[i + 1] === paths.dataPath);
+  };
   const removePid = (pid) => {
     try { if (pid === undefined || fs.readFileSync(paths.pidFile, 'utf8').trim() === String(pid)) fs.unlinkSync(paths.pidFile); } catch { /* none */ }
   };
@@ -632,4 +656,5 @@ function createMeshServer({ runtimeDir, home, settings, spawn = childProcess.spa
   return { paths, mode: service ? 'service' : 'hub', configFor, writeConfig, npmGuardArgs, bootstrap, accounts, personAccount, savePersonAccount, state, start, stop, status, isRunning, logTail, checkService };
 }
 
-module.exports = { createMeshServer, DEFAULT_SERVICE_NAME, SERVICE_NAME_RE, REPROBE_MS, writeFileAtomic, tlsProbe, hashPassword, redact, VERSION, GROUP_NAME, RESTART_DELAYS_MS, NPM_GUARD, DNS_RE, IPV4_RE, LOG_ROTATE_BYTES };
+module.exports = {
+  psCommandOf, createMeshServer, DEFAULT_SERVICE_NAME, SERVICE_NAME_RE, REPROBE_MS, writeFileAtomic, tlsProbe, hashPassword, redact, VERSION, GROUP_NAME, RESTART_DELAYS_MS, NPM_GUARD, DNS_RE, IPV4_RE, LOG_ROTATE_BYTES };

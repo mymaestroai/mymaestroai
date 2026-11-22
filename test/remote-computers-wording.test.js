@@ -13,37 +13,40 @@ const meshserver = fs.readFileSync(path.join(DIR, 'lib', 'meshserver.js'), 'utf8
 const setting = (key) => moduleJson.settings.find((s) => s.key === key);
 const step = (id) => setup.steps.find((s) => s.id === id);
 
-test('the tailnet name and address settings say they are about My Maestro\'s computer, not the PC', () => {
-  for (const key of ['address_name', 'listen_ip']) {
-    const s = setting(key);
-    assert.ok(s.label.startsWith('My Maestro\'s computer'), `${key} label: ${s.label}`);
-    assert.ok(s.help.includes('NOT the PC you want to control'), `${key} help`);
-  }
+test('the setting labels name the computer your Maestro runs on in plain words', () => {
+  assert.strictEqual(setting('address_name').label, 'This computer\'s name on your private network');
+  assert.strictEqual(setting('listen_ip').label, 'This computer\'s address on your private network');
+  assert.strictEqual(setting('control_port').label, 'Port on this computer for the connector');
+  assert.strictEqual(setting('agent_port').label, 'Port the other computers connect to');
+  assert.strictEqual(setting('run_as').label, 'How the server runs');
 });
 
-test('no setting label or help, and no body of the prefs, server, pc and install steps, says "this computer"', () => {
+test('no setting label, help or step body uses "tailnet", "systemd" or "MeshCentral" (the service option may name systemd)', () => {
   for (const s of moduleJson.settings) {
-    assert.ok(!/this computer/i.test(s.label || ''), `${s.key} label`);
-    assert.ok(!/this computer/i.test(s.help || ''), `${s.key} help`);
+    for (const [what, text] of [['label', s.label], ['help', s.help]]) {
+      assert.ok(!/tailnet|MeshCentral/i.test(text || ''), `${s.key} ${what}`);
+      if (s.key !== 'run_as') assert.ok(!/systemd/i.test(text || ''), `${s.key} ${what}`);
+    }
   }
-  for (const id of ['prefs', 'server', 'pc', 'install']) assert.ok(!/this computer/i.test(step(id).body), `step ${id}`);
+  for (const st of setup.steps) {
+    for (const text of [st.title, st.body, st.confirm]) assert.ok(!/tailnet|systemd|MeshCentral/i.test(text || ''), `step ${st.id}`);
+  }
 });
 
-test('the server step tells the owner to press Ask Maestro; the pc step says not to sign in to My Maestro on the PC', () => {
-  assert.ok(step('server').body.includes('Ask Maestro'));
-  assert.ok(step('pc').body.includes('Don\'t sign in to My Maestro on that PC'));
-  assert.ok(step('pc').body.includes('the same tailnet as My Maestro\'s computer'));
+test('the setup says "the computer your Maestro runs on" and "the computer you want to control", never "PC"', () => {
+  for (const st of setup.steps) assert.ok(!/\bPCs?\b/.test(`${st.title} ${st.body || ''}`), `step ${st.id}`);
+  assert.ok(step('setup').body.includes('the computer your Maestro runs on'));
+  assert.ok(step('add').body.includes('the computer you want to control'));
 });
 
 test('the install size is the same, and the measured 210 MB, in the setup step and in the guide', () => {
-  const re = /about (\d+) MB in all/i;
-  const a = re.exec(step('install').body);
-  const b = re.exec(guide);
+  const a = /about (\d+) MB once/i.exec(step('setup').body);
+  const b = /about (\d+) MB in all/i.exec(guide);
   assert.ok(a && b, 'both say the total');
   assert.strictEqual(a[1], b[1]);
   assert.strictEqual(a[1], '210');
   assert.ok(!guide.includes('110 MB') && !guide.includes('230 MB'));
-  assert.ok(!step('install').body.includes('230 MB'));
+  assert.ok(!step('setup').body.includes('230 MB'));
 });
 
 test('the guide never says "this computer"', () => {

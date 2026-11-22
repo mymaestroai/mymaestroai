@@ -155,13 +155,15 @@ test('brief on the shipped modules with nothing set up: the exact line a lead se
 test('review r1: a module whose manifest "platforms" leaves out this system is "not available on this system yet", never offered; the wording comes only from the platform list', async () => {
   const r = rig(SHIPPED, [{ name: 'maestro', lead: true }]);
   try {
-    const mac = await r.mods.addonFacts('maestro', { platform: 'darwin' }), linux = await r.mods.addonFacts('maestro', { platform: 'linux' });
-    assert.ok(!mac.notSetUp.some((x) => x.name === 'Remote computers'));
-    assert.deepStrictEqual(mac.unsupported.map((x) => [x.name, x.needs]), [['Remote computers', shipped().find((m) => m.id === 'remote-computers').platforms]]);
+    // remote computers runs on Linux and a Mac (since the one-button setup); Windows is the system it leaves out
+    const win = await r.mods.addonFacts('maestro', { platform: 'win32' }), linux = await r.mods.addonFacts('maestro', { platform: 'linux' }), mac = await r.mods.addonFacts('maestro', { platform: 'darwin' });
+    assert.ok(!win.notSetUp.some((x) => x.name === 'Remote computers'));
+    assert.deepStrictEqual(win.unsupported.map((x) => [x.name, x.needs]), [['Remote computers', shipped().find((m) => m.id === 'remote-computers').platforms]]);
     assert.ok(linux.notSetUp.some((x) => x.name === 'Remote computers') && !linux.unsupported.length);
-    const hm = createHubMap(hubDeps({ addons: (n) => r.mods.addonFacts(n, { platform: 'darwin' }) })).init({ port: 8888, host: '127.0.0.1', exposed: () => false, setupNeeded: () => false });
+    assert.ok(mac.notSetUp.some((x) => x.name === 'Remote computers') && !mac.unsupported.length, 'a Mac is offered it');
+    const hm = createHubMap(hubDeps({ addons: (n) => r.mods.addonFacts(n, { platform: 'win32' }) })).init({ port: 8888, host: '127.0.0.1', exposed: () => false, setupNeeded: () => false });
     const line = addonLineOf(await hm.briefFor('maestro'));
-    assert.match(line, /Not available on this system yet: Remote computers \(needs My Maestro on Linux\); say so plainly if someone asks for one of these\./);
+    assert.match(line, /Not available on this system yet: Remote computers \(needs My Maestro on Linux or a Mac\); say so plainly if someone asks for one of these\./);
     assert.doesNotMatch(line.split('Not available')[0], /Remote computers/, 'not in the list of add-ons to offer');
     const two = createHubMap(hubDeps({ addons: () => ({ unsupported: [{ name: 'X', needs: ['linux', 'darwin', 'beos'] }] }) })).init({ port: 8888, host: '127.0.0.1', exposed: () => false, setupNeeded: () => false });
     assert.match(addonLineOf(await two.briefFor('maestro')), /X \(needs My Maestro on Linux or a Mac\)/, 'unknown values are dropped; only fixed names reach the prompt');
