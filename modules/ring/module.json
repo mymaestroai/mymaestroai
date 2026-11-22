@@ -1,6 +1,7 @@
 {
   "id": "ring", "name": "Ring cameras", "icon": "📹", "category": "Home",
   "summary": "Tells your notice agent when a Ring camera sees motion or a doorbell is pressed, with a still picture, and lets your agents look at your cameras when you ask: the latest picture, a live picture, a short clip, a recorded clip and the recent event history. Read-only.",
+  "purpose": "doorbell and motion notices with a picture; look at your Ring cameras",
   "risk": "read",
   "catalog": { "verified": "2026-11-06", "api": "Ring Partner API", "official": false },
   "health": { "check": "ring" },

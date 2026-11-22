@@ -1,6 +1,7 @@
 {
   "id": "remote-computers", "name": "Remote computers", "icon": "💻", "category": "Computers",
   "summary": "Lets your agents see and, when you allow it, control other computers over your private Tailscale network, through a MeshCentral server that runs inside this connector. Each agent starts at Look (pictures and facts only); Act and Drive ask for your approval each session unless you turn asking off for that agent.",
+  "purpose": "see and control your other computers: screen, commands, keyboard and mouse",
   "risk": "write",
   "catalog": { "verified": "2026-11-07", "api": "MeshCentral 1.3.1", "official": false },
   "health": { "check": "server" },
