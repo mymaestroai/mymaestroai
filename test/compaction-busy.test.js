@@ -17,7 +17,7 @@ const busyErr = () => Object.assign(new Error('the agent is busy (HTTP 409: Agen
 
 /** A compaction with a fake clock: sleep(ms) advances it. busy(t) says whether the agent is in another turn at time t; script(i, msg) may
  *  throw (a refusal) or return a reply; a compression or assisted-final prompt that is answered writes the brief at that time, unless noWrite. */
-function make({ mode = 'on', busy = () => false, script = null, noWrite = false, waitMs = BUSY_WAIT_MS, yieldEachSleep = false, onReset = null } = {}) {
+function make({ mode = 'on', busy = () => false, script = null, noWrite = false, waitMs = BUSY_WAIT_MS, yieldEachSleep = false, onReset = null, writeIf = null } = {}) {
   let t = 10_000_000; let briefAt = 0; let n = 0;
   const posts = [], resets = [], events = [], logs = [], busyAtReset = [];
   const isBusyNow = () => !!busy(t);
@@ -28,7 +28,7 @@ function make({ mode = 'on', busy = () => false, script = null, noWrite = false,
       if (script) { const r = script(i, message, t); if (r instanceof Error) throw r; }
       else if (isBusyNow()) throw busyErr();
       posts.push({ agent, message, at: t });
-      if (!noWrite && /working-brief\.md/.test(message) && !/^\[Resumed/.test(message)) briefAt = t;
+      if (!noWrite && (!writeIf || writeIf(i)) && /working-brief\.md/.test(message) && !/^\[Resumed/.test(message)) briefAt = t;
       return 'done';
     },
     resetSession: async (agent) => { busyAtReset.push(isBusyNow()); resets.push(agent); if (onReset) onReset(); },
@@ -190,6 +190,34 @@ test('review r1: a request the agent makes while the run waits is answered by th
   assert.ok(r.ok && r.reset && asked, JSON.stringify(r));
   assert.strictEqual(h.c.get('anvil').requested, null);
   assert.strictEqual(h.c.noteUsage('anvil', 100, 1000, 's2'), null, 'nothing runs again at the next turn end');
+});
+
+test('review r2: an agent-requested run postponed because another turn overtook its brief never resets on that brief; the retry needs a strictly newer one', async () => {
+  let busyFrom = Infinity, busyTo = Infinity;
+  const h = make({ busy: (t) => t >= busyFrom && t < busyTo, writeIf: (i) => i === 0,
+    script: (i, m, t) => { if (i === 0) { busyFrom = t; busyTo = t + 45_000; } return null; } });
+  h.c.noteUsage('maestro', 100, 1000, 's7');
+  h.c.request('maestro', 'agent');
+  const r1 = await h.c.run('maestro', 'agent');
+  assert.deepStrictEqual([r1.ok, r1.busy, r1.reset], [false, true, false]);
+  assert.strictEqual(h.c.get('maestro').requested, 'agent', 'the request is kept for the retry');
+  h.tick(45_000);   // the overtaking turn ended; the retry does NOT write a new brief
+  const r2 = await h.c.run('maestro', 'agent');
+  assert.strictEqual(h.resets.length, 0, 'never reset on the overtaken brief');
+  assert.strictEqual(r2.ok, false);
+  assert.match(r2.error, /the agent didn't write its brief during the compression turn/);
+});
+
+test('review r2: after the overtaken brief, a newer brief written on the retry is accepted and the mark is cleared', async () => {
+  let busyFrom = Infinity, busyTo = Infinity;
+  const h = make({ busy: (t) => t >= busyFrom && t < busyTo, script: (i, m, t) => { if (i === 0) { busyFrom = t; busyTo = t + 45_000; } return null; } });
+  const r1 = await h.c.run('anvil', 'threshold');
+  assert.strictEqual(r1.busy, true);
+  assert.ok(Number.isFinite(h.c.get('anvil').overtakenBriefMs));
+  h.tick(45_000);
+  const r2 = await h.c.run('anvil', 'threshold');
+  assert.deepStrictEqual([r2.ok, r2.reset], [true, true]);
+  assert.strictEqual(h.c.get('anvil').overtakenBriefMs, null);
 });
 
 test('no second compression while one waits: a run in progress answers "already running"', async () => {

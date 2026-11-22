@@ -2343,9 +2343,10 @@
       const when = new Date(Number(d.lastRunAt));
       const bits = [compactionModeLabel(d.lastMode), d.lastReason].filter(Boolean).join(', ');
       last = `Last compression: ${isNaN(when) ? '?' : when.toLocaleString()}${bits ? ` (${bits})` : ''}${d.lastReset ? ', session reset' : ''}`;
-      if (d.lastBusy) last += `. Latest attempt postponed: ${d.lastError || 'the agent stayed busy'}`;   // not a failure: it runs again after a later turn
-      else if (d.lastOk === false) last += ` — failed: ${d.lastError || 'unknown error'}`;
+      if (!d.lastBusy && d.lastOk === false) last += ` — failed: ${d.lastError || 'unknown error'}`;
     }
+    // A postponed attempt does not move lastRunAt (a first-ever one leaves it unset): said on its own, not a failure; it runs again after a later turn.
+    if (d.lastBusy) last += `. Latest attempt postponed: ${d.lastError || 'the agent stayed busy'}`;
     document.getElementById('compaction-last').textContent = last;
     const running = !!(d.running || d.requested);
     document.getElementById('compaction-running').style.display = running ? '' : 'none';
