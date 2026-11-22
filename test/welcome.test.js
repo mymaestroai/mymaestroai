@@ -128,7 +128,7 @@ test('a failed Claude turn caused by the sign-in gets the fix in plain words; ot
 test('server: the first account needs the setup code; the code is printed at start while no account exists', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
   assert.match(src, /if \(!welcome\.checkSetupToken\(b\.setupToken\)\) return jsonResponse\(res, 403, \{ error: 'setup_code'/);
-  assert.match(src, /welcome\.clearSetupToken\(\);\s*\n\s*welcome\.markStarted\(\);[^\n]*\n\s*finishSignIn\(hubAuth\.getUser\(r\.user\.id\), \{ totpOk: true \}\);/);
+  assert.match(src, /welcome\.clearSetupToken\(\);\s*\n\s*welcome\.markStarted\(\);[^\n]*\n\s*if \(!finishSignIn\(hubAuth\.getUser\(r\.user\.id\), \{ totpOk: true \}\)\) return jsonResponse\(res, 409, /);
   assert.match(src, /First-time setup: http:\/\/localhost:\$\{PORT\}\/welcome\?token=\$\{code\}/);
   assert.match(src, /function isSetupNeeded\(\) \{[\s\S]*?if \(!hubAuth\.hasUsers\(\)\) return true;\s*\n\s*return !require\('\.\/lib\/welcome'\)\.getWelcome\(\)\.hasProvider\(\);/);
   assert.ok(!src.includes("'/api/setup/save'") && !src.includes("'/api/setup/test-gateway'"), 'the old wizard routes (one rewrote .env wholesale) are gone');

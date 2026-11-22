@@ -65,3 +65,19 @@ test('before/after: a stale save never overwrites a newer file (hub loaded, CLI 
   assert.strictEqual(d.theme, 'dark');
   assert.ok(A.verifyPassword(NEW, d.passwordHash), 'both changes are in the file');
 });
+
+test('r1: several processes adding accounts at the same time lose none (users.json.lock around read-modify-replace)', async () => {
+  const dir = fs.mkdtempSync(path.join(TMP, 'd-'));
+  const code = "const A=require(process.argv[1]);const a=A.createAuth({dataDir:process.argv[2],log:()=>{}});"
+    + "for(let i=0;i<10;i++){const r=a.createUser({login:'p'+process.argv[3]+'-'+i+'@example.com'});if(!r.ok){console.error(r.error);process.exit(2);}}";
+  const run = (n) => new Promise((resolve) => {
+    const c = require('child_process').spawn(process.execPath, ['-e', code, path.join(ISO.inst, 'lib', 'auth'), dir, String(n)], { stdio: ['ignore', 'ignore', 'inherit'] });
+    c.on('close', resolve);
+  });
+  const codes = await Promise.all([1, 2, 3, 4].map(run));
+  assert.deepStrictEqual(codes, [0, 0, 0, 0]);
+  const users = JSON.parse(fs.readFileSync(path.join(dir, 'users.json'), 'utf8')).users;
+  assert.strictEqual(users.length, 40, 'every account is in the file');
+  assert.strictEqual(new Set(users.map(u => u.login)).size, 40);
+  assert.deepStrictEqual(fs.readdirSync(dir).filter(f => f.endsWith('.tmp') || f.endsWith('.lock')), []);
+});

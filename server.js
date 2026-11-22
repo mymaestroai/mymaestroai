@@ -557,8 +557,12 @@ async function handleHttpRequest(req, res) {
 
     // ── Accounts: sign-in, two-factor, invites, self-service (lib/auth) ──
     const authJson = async () => { try { return JSON.parse((await readBody(req)) || '{}') || {}; } catch { return null; } };
+    // null when the account changed between the password check and the session (deleted, turned off, or a new password set from the
+    // terminal): no cookie, and the caller answers that sign-in failed.
     const finishSignIn = (user, { totpOk }) => {
-      const sess = hubAuth.createSession(user, { req, totpOk });
+      let sess;
+      try { sess = hubAuth.createSession(user, { req, totpOk }); }
+      catch (e) { if (e && e.message === 'the account changed; sign in again') return null; throw e; }
       res.setHeader('Set-Cookie', sess.cookie);
       return sess;
     };
@@ -627,7 +631,7 @@ async function handleHttpRequest(req, res) {
       if (!r.ok) return jsonResponse(res, 400, r);
       welcome.clearSetupToken();
       welcome.markStarted();   // "/" brings this admin back to /welcome until setup is finished or skipped
-      finishSignIn(hubAuth.getUser(r.user.id), { totpOk: true });
+      if (!finishSignIn(hubAuth.getUser(r.user.id), { totpOk: true })) return jsonResponse(res, 409, { ok: false, error: 'The account changed a moment ago; sign in again.' });
       return jsonResponse(res, 200, { ok: true, user: r.user });
     }
     // ── First-run setup (the Welcome page; lib/welcome) ──
@@ -752,7 +756,7 @@ async function handleHttpRequest(req, res) {
       if (!r.ok) return jsonResponse(res, r.locked ? 429 : 401, { ok: false, error: r.error });
       const cookies = hubAuth.parseCookies(req);
       const trusted = r.needsTotp && hubAuth.isTrusted(r.user, cookies[hubAuth.TRUST_COOKIE]);
-      finishSignIn(r.user, { totpOk: !r.needsTotp || trusted });
+      if (!finishSignIn(r.user, { totpOk: !r.needsTotp || trusted })) return jsonResponse(res, 401, { ok: false, error: 'Wrong login or password' });
       return jsonResponse(res, 200, { ok: true, needsTotp: r.needsTotp && !trusted, user: hubAuth.publicUser(r.user) });
     }
     if (pathname === '/api/auth/totp/verify' && req.method === 'POST') {
@@ -787,7 +791,7 @@ async function handleHttpRequest(req, res) {
       const r = hubAuth.acceptInvite(b.token, { password: b.password, name: b.name });
       if (!r.ok) return jsonResponse(res, 400, r);
       if (r.user.role === 'member') require('./lib/teams').createDefaultAssistant(r.user).then(a => { if (!a || !a.ok) console.error('[users] default assistant not made:', a && a.error); }, e => console.error('[users] default assistant:', e.message));
-      finishSignIn(r.user, { totpOk: true });
+      if (!finishSignIn(r.user, { totpOk: true })) return jsonResponse(res, 409, { ok: false, error: 'The account changed a moment ago; sign in again.' });
       return jsonResponse(res, 200, { ok: true, user: hubAuth.publicUser(r.user), needsTotpEnrol: r.user.role === 'admin' && admin2fa.required() });
     }
     // Self-service (any signed-in user)

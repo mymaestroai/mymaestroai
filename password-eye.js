@@ -13,7 +13,8 @@
  * The input stays the same element in the same place (name, id, autocomplete untouched, password managers keep working).
  * The button is the input's next sibling, pulled over the input's right end with a negative margin, so the input keeps its
  * width and its row keeps its layout. A field goes back to hidden on its form's submit and reset, when its <dialog>
- * closes, and through hideAll(). A freshly created field always starts hidden.
+ * closes, through hideAll(), when the person presses any other button, on Enter in the field, and when the page is
+ * hidden (pagehide, visibilitychange). A freshly created field always starts hidden.
  */
 (function (global) {
   'use strict';
@@ -30,7 +31,7 @@
     '  margin: -10px 0 -10px calc(-1 * var(--pw-eye-w) - var(--pw-eye-gap, 0px)); display: inline-flex; align-items: center; justify-content: center; align-self: center; vertical-align: middle;',
     '  position: relative; cursor: pointer; border-radius: 6px; color: var(--text-dim, var(--text-tertiary, currentColor)); -webkit-tap-highlight-color: transparent; }',
     '.pw-eye-wrap { position: relative; display: block; align-self: stretch; min-width: 0; }',
-    '.pw-eye-wrap > input[data-eye] { display: block; width: 100%; box-sizing: border-box; }',
+    '.pw-eye-wrap > input[data-eye] { display: block; width: 100%; max-width: none; min-width: 0; margin: 0; box-sizing: border-box; }',
     '.pw-eye.pw-eye.pw-eye-float { position: absolute; right: 4px; top: 50%; margin: 0; transform: translateY(-50%); }',
     '.pw-eye.pw-eye:hover { color: var(--text, currentColor); }',
     '.pw-eye.pw-eye:focus-visible { outline: 2px solid var(--accent, currentColor); outline-offset: -2px; }',
@@ -101,11 +102,34 @@
       if (typeof global.getComputedStyle !== 'function' || !input.parentNode) return out;
       var pcs = global.getComputedStyle(input.parentNode);
       var pd = pcs.display || '';
-      var icsd = (global.getComputedStyle(input).display || '');
-      if (/grid/.test(pd) || (/flex/.test(pd) && /^column/.test(pcs.flexDirection || '')) || icsd === 'block') out.stacked = true;
-      else if (/flex/.test(pd)) { var g = parseFloat(pcs.columnGap); out.gap = isFinite(g) && g > 0 ? g : 0; }
+      // The parent decides first: a flex or grid item's own computed display is always blockified, so it says nothing.
+      if (/grid/.test(pd)) out.stacked = true;
+      else if (/flex/.test(pd)) {
+        if (/^column/.test(pcs.flexDirection || '')) out.stacked = true;
+        else { var g = parseFloat(pcs.columnGap); out.gap = isFinite(g) && g > 0 ? g : 0; }   // a row: never wrapped
+      } else if ((global.getComputedStyle(input).display || '') === 'block') out.stacked = true;
     } catch (e) { /* no layout information: the row form */ }
     return out;
+  }
+
+  // A wrapped input hands its sizing in the parent to the wrapper (the wrapper is the item the parent lays out); the input
+  // then fills the wrapper.
+  function carrySizing(input, wrap) {
+    if (!wrap.style || !wrap.style.setProperty) return;
+    try {
+      var cs = global.getComputedStyle(input);
+      var put = function (prop, v) { if (v !== undefined && v !== null && v !== '') wrap.style.setProperty(prop, String(v)); };
+      if (cs.flexGrow !== undefined && cs.flexGrow !== '' && cs.flexShrink !== undefined && cs.flexShrink !== '' && cs.flexBasis) {
+        put('flex', cs.flexGrow + ' ' + cs.flexShrink + ' ' + cs.flexBasis);
+      }
+      if (input.style && input.style.width) put('width', input.style.width);
+      if (cs.maxWidth && cs.maxWidth !== 'none') put('max-width', cs.maxWidth);
+      if (cs.minWidth && cs.minWidth !== 'auto') put('min-width', cs.minWidth);
+      var margin = cs.margin || (cs.marginTop !== undefined ? [cs.marginTop, cs.marginRight, cs.marginBottom, cs.marginLeft].join(' ') : '');
+      if (margin && !/^(0(px)?\s*)+$/.test(margin)) put('margin', margin);
+      if (cs.gridColumn && cs.gridColumn !== 'auto' && cs.gridColumn !== 'auto / auto') put('grid-column', cs.gridColumn);
+      if (cs.gridRow && cs.gridRow !== 'auto' && cs.gridRow !== 'auto / auto') put('grid-row', cs.gridRow);
+    } catch (e) { /* no layout information: the wrapper keeps its stylesheet sizing */ }
   }
 
   function attachOne(input) {
@@ -145,6 +169,7 @@
       if (focused) { try { s0 = input.selectionStart; s1 = input.selectionEnd; sd = input.selectionDirection; } catch (e) { /* ignore */ } }
       var wrap = d.createElement('span');
       wrap.className = 'pw-eye-wrap';
+      carrySizing(input, wrap);
       input.parentNode.insertBefore(wrap, input);
       wrap.appendChild(input);
       wrap.appendChild(btn);
@@ -165,6 +190,27 @@
     d.addEventListener('submit', function (e) { hideAll(e && e.target); }, true);
     d.addEventListener('reset', function (e) { hideAll(e && e.target); }, true);
     d.addEventListener('close', function (e) { hideAll(e && e.target); }, true);   // <dialog> close does not bubble
+    // Button-driven pages (no <form>): any other button the person presses hides every shown field first. The values stay,
+    // so the page's own handler reads the same text.
+    d.addEventListener('click', function (e) {
+      var el = e && e.target;
+      while (el && el.nodeType !== 9) {
+        var tag = String(el.tagName || '').toLowerCase();
+        var cls = el.className && typeof el.className === 'string' ? el.className : '';
+        if (/(^|\s)pw-eye(\s|$)/.test(cls)) return;
+        var role = el.getAttribute ? el.getAttribute('role') : null;
+        var ty = String(el.type || (el.getAttribute && el.getAttribute('type')) || '').toLowerCase();
+        if (tag === 'button' || role === 'button' || (tag === 'input' && (ty === 'submit' || ty === 'button'))) { hideAll(d); return; }
+        el = el.parentNode;
+      }
+    }, true);
+    d.addEventListener('keydown', function (e) {
+      var t = e && e.target;
+      if (e && e.key === 'Enter' && t && String(t.tagName || '').toLowerCase() === 'input' && t.getAttribute && t.getAttribute('data-eye') !== null && isShown(t)) setShown(t, false);
+    }, true);
+    d.addEventListener('pagehide', function () { hideAll(d); }, true);
+    d.addEventListener('visibilitychange', function () { if (d.visibilityState === 'hidden') hideAll(d); }, true);
+    if (global !== d && typeof global.addEventListener === 'function') global.addEventListener('pagehide', function () { hideAll(d); }, true);
   }
 
   function attach(root) {

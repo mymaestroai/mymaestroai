@@ -330,6 +330,148 @@ test('an eye field never feeds spell checkers or the phone keyboard: spellcheck,
   assert.strictEqual(key.getAttribute('spellcheck'), null, 'a field without data-eye is left exactly as it was');
 });
 
+// ---- R1: layout decided from the parent; hidden again on the person's actions ----------------------------------------
+function withStyles(fn) {
+  const styles = new Map();   // element -> computed style
+  globalThis.getComputedStyle = (el) => styles.get(el) || { display: 'block', flexDirection: '', columnGap: '0' };
+  try { fn(styles); } finally { delete globalThis.getComputedStyle; }
+}
+function recordingSpans(doc) {   // every created span keeps what is written to its inline style
+  const make = doc.createElement;
+  doc.createElement = (t) => {
+    const el = make(t);
+    if (t === 'span') { el.written = {}; el.style = { setProperty(k, v) { el.written[k] = v; } }; }
+    return el;
+  };
+}
+
+test('layout: a flex row parent is never wrapped, even when the input reports display block', () => {
+  const { doc, PasswordEye } = fresh();
+  withStyles((styles) => {
+    const row = doc.createElement('div'); doc.body.appendChild(row);
+    const pw = input(doc, row, { 'data-eye': '' });
+    styles.set(row, { display: 'flex', flexDirection: 'row', columnGap: '8px' });
+    styles.set(pw, { display: 'block' });   // a flex item is blockified
+    PasswordEye.attach(doc);
+    assert.strictEqual(pw.parentNode, row, 'not wrapped');
+    assert.ok(eyeOf(pw), 'the eye is the next sibling');
+    // a flex parent whose direction is empty behaves as a row too
+    const row2 = doc.createElement('div'); doc.body.appendChild(row2);
+    const pw2 = input(doc, row2, { 'data-eye': '' });
+    styles.set(row2, { display: 'inline-flex', flexDirection: '' });
+    styles.set(pw2, { display: 'block' });
+    PasswordEye.attach(doc);
+    assert.strictEqual(pw2.parentNode, row2);
+  });
+});
+
+test('layout: a grid parent and a column flex parent are wrapped; a plain parent only for a block input', () => {
+  const { doc, PasswordEye } = fresh();
+  withStyles((styles) => {
+    const grid = doc.createElement('div'); doc.body.appendChild(grid);
+    const col = doc.createElement('div'); doc.body.appendChild(col);
+    const plainInline = doc.createElement('div'); doc.body.appendChild(plainInline);
+    const plainBlock = doc.createElement('div'); doc.body.appendChild(plainBlock);
+    const g = input(doc, grid, { 'data-eye': '' }), c = input(doc, col, { 'data-eye': '' });
+    const pi = input(doc, plainInline, { 'data-eye': '' }), pb = input(doc, plainBlock, { 'data-eye': '' });
+    styles.set(grid, { display: 'grid' });
+    styles.set(col, { display: 'flex', flexDirection: 'column' });
+    styles.set(plainInline, { display: 'block' }); styles.set(pi, { display: 'inline-block' });
+    styles.set(plainBlock, { display: 'block' }); styles.set(pb, { display: 'block' });
+    PasswordEye.attach(doc);
+    assert.match(g.parentNode.className, /\bpw-eye-wrap\b/, 'grid parent');
+    assert.match(c.parentNode.className, /\bpw-eye-wrap\b/, 'column flex parent');
+    assert.strictEqual(pi.parentNode, plainInline, 'inline input in a normal parent: row form');
+    assert.match(pb.parentNode.className, /\bpw-eye-wrap\b/, 'block input in a normal parent');
+  });
+});
+
+test('layout: a wrapped input hands its flex, max-width, min-width, margin, grid placement and inline width to the wrapper', () => {
+  const { doc, PasswordEye } = fresh();
+  recordingSpans(doc);
+  withStyles((styles) => {
+    const col = doc.createElement('div'); doc.body.appendChild(col);
+    const pw = input(doc, col, { 'data-eye': '' });
+    pw.style = { width: '70%', setProperty() {} };
+    styles.set(col, { display: 'flex', flexDirection: 'column' });
+    styles.set(pw, { display: 'block', flexGrow: '1', flexShrink: '1', flexBasis: '160px', maxWidth: '420px', minWidth: '120px', margin: '4px 0px 0px 8px', gridColumn: '1 / 3', gridRow: '2' });
+    PasswordEye.attach(doc);
+    const w = pw.parentNode;
+    assert.match(w.className, /\bpw-eye-wrap\b/);
+    assert.deepStrictEqual(w.written, { flex: '1 1 160px', width: '70%', 'max-width': '420px', 'min-width': '120px', margin: '4px 0px 0px 8px', 'grid-column': '1 / 3', 'grid-row': '2' });
+  });
+  // without an inline width, no width is copied
+  const f2 = fresh(); recordingSpans(f2.doc);
+  withStyles((styles) => {
+    const col = f2.doc.createElement('div'); f2.doc.body.appendChild(col);
+    const pw = input(f2.doc, col, { 'data-eye': '' });
+    styles.set(col, { display: 'grid' });
+    styles.set(pw, { display: 'block', flexGrow: '0', flexShrink: '1', flexBasis: 'auto', maxWidth: 'none', width: '300px' });
+    f2.PasswordEye.attach(f2.doc);
+    assert.strictEqual(pw.parentNode.written.width, undefined);
+    assert.strictEqual(pw.parentNode.written['max-width'], undefined);
+  });
+});
+
+test('a click on any other button, [role=button], submit or button input hides every shown field; the eyes themselves do not', () => {
+  const { doc, PasswordEye } = fresh();
+  const a = input(doc, doc.body, { id: 'p1', 'data-eye': '' });
+  const b = input(doc, doc.body, { id: 'p2', 'data-eye': '' });
+  const btn = doc.createElement('button'); doc.body.appendChild(btn);
+  const inner = doc.createElement('span'); btn.appendChild(inner);
+  const roleBtn = doc.createElement('div'); roleBtn.setAttribute('role', 'button'); doc.body.appendChild(roleBtn);
+  const sub = doc.createElement('input'); sub.setAttribute('type', 'submit'); doc.body.appendChild(sub);
+  const bi = doc.createElement('input'); bi.setAttribute('type', 'button'); doc.body.appendChild(bi);
+  const plain = doc.createElement('div'); doc.body.appendChild(plain);
+  PasswordEye.attach(doc);
+  const show = () => { for (const el of [a, b]) if (el.type !== 'text') eyeOf(el).click(); };
+  show();
+  assert.deepStrictEqual([a.type, b.type], ['text', 'text'], 'showing the second field does not hide the first');
+  eyeOf(b).click();
+  assert.deepStrictEqual([a.type, b.type], ['text', 'password'], 'a click on the second field\'s eye only toggles it');
+  eyeOf(b).click();
+  plain.click();
+  assert.deepStrictEqual([a.type, b.type], ['text', 'text'], 'a click on plain content does not');
+  btn.click();
+  assert.deepStrictEqual([a.type, b.type], ['password', 'password'], 'another button');
+  for (const el of [roleBtn, sub, bi, inner]) {
+    show();
+    el.click();
+    assert.deepStrictEqual([a.type, b.type], ['password', 'password'], el.tagName + ' ' + (el.getAttribute('role') || el.getAttribute('type') || ''));
+  }
+  a.value = 'secret'; show(); btn.click();
+  assert.strictEqual(a.value, 'secret', 'the value is untouched');
+});
+
+test('Enter in a shown field hides it; other keys and other fields do not', () => {
+  const { doc, PasswordEye } = fresh();
+  const a = input(doc, doc.body, { id: 'p1', 'data-eye': '' });
+  const b = input(doc, doc.body, { id: 'p2', 'data-eye': '' });
+  PasswordEye.attach(doc);
+  eyeOf(a).click(); eyeOf(b).click();
+  a.dispatch('keydown', { key: 'a' });
+  assert.strictEqual(a.type, 'text');
+  a.dispatch('keydown', { key: 'Enter' });
+  assert.strictEqual(a.type, 'password');
+  assert.strictEqual(b.type, 'text', 'only the field Enter was pressed in');
+  assert.strictEqual(eyeOf(a).getAttribute('aria-pressed'), 'false');
+});
+
+test('pagehide and visibilitychange to hidden hide every shown field; visibilitychange to visible does not', () => {
+  const { doc, PasswordEye } = fresh();
+  const a = input(doc, doc.body, { id: 'p1', 'data-eye': '' });
+  const b = input(doc, doc.body, { id: 'p2', 'data-eye': '' });
+  PasswordEye.attach(doc);
+  eyeOf(a).click(); eyeOf(b).click();
+  doc.visibilityState = 'visible'; doc.dispatch('visibilitychange');
+  assert.deepStrictEqual([a.type, b.type], ['text', 'text']);
+  doc.visibilityState = 'hidden'; doc.dispatch('visibilitychange');
+  assert.deepStrictEqual([a.type, b.type], ['password', 'password']);
+  eyeOf(a).click(); eyeOf(b).click();
+  doc.dispatch('pagehide');
+  assert.deepStrictEqual([a.type, b.type], ['password', 'password']);
+});
+
 test('a stacked field that already has focus keeps it, with its caret, when it is wrapped for the eye', () => {
   const { doc, PasswordEye } = fresh();
   const realAppend = El.prototype.appendChild;

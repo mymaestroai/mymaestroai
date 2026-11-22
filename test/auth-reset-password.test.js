@@ -6,7 +6,7 @@ const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { spawnSync } = require('child_process');
+const { spawnSync, spawn } = require('child_process');
 
 const ROOT = path.join(__dirname, '..');
 // lib/ and scripts/ come from a throwaway install, so nothing under the real data/ is touched.
@@ -36,6 +36,14 @@ function run(login, opts) {
 }
 const dbRows = (dir, sql, ...p) => { const d = new Database(path.join(dir, 'auth.db'), { readonly: true }); try { return d.prepare(sql).all(...p); } finally { d.close(); } };
 const onDisk = (file, id) => JSON.parse(fs.readFileSync(file, 'utf8')).users.find(x => x.id === id);
+// A writer from an older version: it does not take users.json.lock, it writes a temp file and renames it over users.json.
+function legacyWrite(file, change) {
+  const d = JSON.parse(fs.readFileSync(file, 'utf8'));
+  change(d);
+  const tmp = `${file}.legacy-${process.pid}-${Math.random().toString(16).slice(2)}`;
+  fs.writeFileSync(tmp, JSON.stringify(d, null, 2), { mode: 0o600 });
+  fs.renameSync(tmp, file);
+}
 
 test('reset-password: sets the new password after two matching, policy-passing entries', async () => {
   const { hub, mk } = fresh();
@@ -206,12 +214,12 @@ test('a change by someone else between the load and the rename: the write starts
   const { hub, mk, file } = fresh();
   const u = hub.createUser({ login: 'person@example.com', password: OLD }).user;
   hub.listUsers();
-  const cli = mk();
   const realFsync = fs.fsyncSync;
   let fired = false;
   fs.fsyncSync = function (fd) {
     const r = realFsync.call(fs, fd);
-    if (!fired) { fired = true; fs.fsyncSync = realFsync; cli.setPrefs(u.id, { uiMode: 'advanced' }); }   // the other process writes while the hub is about to rename
+    // an older version (it takes no lock) writes while the hub is about to rename
+    if (!fired) { fired = true; fs.fsyncSync = realFsync; legacyWrite(file, (d) => { d.users.find(x => x.id === u.id).uiMode = 'advanced'; }); }
     return r;
   };
   try { assert.ok(hub.setPrefs(u.id, { theme: 'dark' }).ok); } finally { fs.fsyncSync = realFsync; }
@@ -225,12 +233,11 @@ test('a file that keeps changing: gives up after 3 tries with a clear error, sav
   const { hub, mk, file } = fresh();
   const u = hub.createUser({ login: 'person@example.com', password: OLD }).user;
   hub.listUsers();
-  const cli = mk();
   const realFsync = fs.fsyncSync;
   let busy = false, n = 0;
   fs.fsyncSync = function (fd) {
     const r = realFsync.call(fs, fd);
-    if (!busy) { busy = true; try { cli.setPrefs(u.id, { uiMode: n++ % 2 ? 'simple' : 'advanced' }); } finally { busy = false; } }
+    if (!busy) { busy = true; try { legacyWrite(file, (d) => { d.users.find(x => x.id === u.id).uiMode = n++ % 2 ? 'simple' : 'advanced'; }); } finally { busy = false; } }   // an older version, no lock
     return r;
   };
   try { assert.throws(() => hub.setPrefs(u.id, { theme: 'dark' }), /keeps changing/); } finally { fs.fsyncSync = realFsync; }
@@ -307,4 +314,333 @@ test('the sign-in page has the muted forgotten-password line under the password 
   const hint = form.indexOf('Forgot it? On the computer that runs your Maestro, run: <code>mymaestro reset-password &lt;your email&gt;</code>');
   assert.ok(pw > 0 && hint > pw);
   assert.ok(hint < form.indexOf('type="submit"'));
+});
+
+// ── Review round 1: an unreadable file, the lock, the owner, sessions after a reset, the terminal prompt ──
+const IS_ROOT = typeof process.getuid === 'function' && process.getuid() === 0;
+const SKIP_ROOT = IS_ROOT ? 'running as root: mode 000 does not lock the owner out' : false;
+const leftovers = (dir) => fs.readdirSync(dir).filter(f => f.endsWith('.tmp') || f.endsWith('.lock'));
+
+test('r1 unreadable: a users.json that cannot be read keeps the copy in memory, a change is refused and saves nothing, sign-in still works', { skip: SKIP_ROOT }, () => {
+  const { hub, logs, file, dir } = fresh();
+  const u = hub.createUser({ login: 'person@example.com', password: OLD }).user;
+  hub.listUsers();
+  const before = fs.readFileSync(file, 'utf8');
+  fs.chmodSync(file, 0);
+  try {
+    assert.strictEqual(hub.listUsers().length, 1, 'reads keep serving the copy in memory');
+    assert.throws(() => hub.setPrefs(u.id, { theme: 'dark' }), /users\.json can't be read.*nothing was saved.*sudo/);
+    assert.strictEqual(hub.login('person@example.com', OLD).ok, true, 'people can still sign in');
+    assert.strictEqual(hub.login('person@example.com', OLD).ok, true);
+    assert.strictEqual(logs.filter(l => /sign-in went through but its time was not saved/.test(l)).length, 1, 'logged once');
+    assert.ok(hub.createSession(hub.getUser(u.id)).token, 'and a session can start');
+  } finally { fs.chmodSync(file, 0o600); }
+  assert.strictEqual(fs.readFileSync(file, 'utf8'), before, 'the file is unchanged');
+  assert.deepStrictEqual(leftovers(dir), [], 'no temp file and no lock left');
+  assert.ok(hub.setPrefs(u.id, { theme: 'dark' }).ok, 'works again once it can be read');
+});
+
+test('r1 unreadable: a NEWER file that cannot be read (written by root) is never overwritten by the older copy in memory', { skip: SKIP_ROOT }, () => {
+  const { hub, mk, file } = fresh();
+  const u = hub.createUser({ login: 'person@example.com', password: OLD }).user;
+  hub.listUsers();
+  assert.ok(mk().setPassword(u.id, NEW, { by: 'cli' }).ok);   // the newer file
+  const newer = fs.readFileSync(file, 'utf8');
+  fs.chmodSync(file, 0);
+  try {
+    assert.strictEqual(hub.listUsers().length, 1);
+    assert.throws(() => hub.setTimeZone(u.id, 'Europe/Paris'), /can't be read/);
+    assert.throws(() => hub.setPrefs(u.id, { theme: 'dark' }), /can't be read/, 'still refused the second time');
+  } finally { fs.chmodSync(file, 0o600); }
+  assert.strictEqual(fs.readFileSync(file, 'utf8'), newer, 'the newer file is untouched');
+  assert.ok(A.verifyPassword(NEW, onDisk(file, u.id).passwordHash));
+  assert.strictEqual(hub.login('person@example.com', OLD).ok, false, 'once readable the hub follows the new file');
+  assert.strictEqual(hub.login('person@example.com', NEW).ok, true);
+});
+
+test('r1 vanished: a users.json that disappears after a load keeps the copy, a change is refused and nothing is created', () => {
+  const { hub, dir, file } = fresh();
+  const u = hub.createUser({ login: 'person@example.com', password: OLD }).user;
+  hub.listUsers();
+  fs.unlinkSync(file);
+  assert.strictEqual(hub.listUsers().length, 1, 'the copy in memory is served');
+  assert.throws(() => hub.setPrefs(u.id, { theme: 'dark' }), /users\.json can't be read.*nothing was saved/);
+  assert.ok(!fs.existsSync(file), 'no users.json was made');
+  assert.deepStrictEqual(leftovers(dir), []);
+  assert.strictEqual(hub.login('person@example.com', OLD).ok, true, 'sign-in still works');
+  assert.ok(!fs.existsSync(file));
+  fs.rmSync(dir, { recursive: true, force: true });   // the whole folder gone: still nothing is created
+  assert.throws(() => hub.setPrefs(u.id, { theme: 'dark' }), /can't be read/);
+  assert.ok(!fs.existsSync(dir), 'not even the folder');
+});
+
+test('r1 vanished: reset-password reports the refusal and exits 1 instead of crashing', async () => {
+  const { hub, mk, file } = fresh();
+  hub.createUser({ login: 'person@example.com', password: OLD });
+  const cli = mk();
+  cli.listUsers();
+  fs.unlinkSync(file);
+  const r = await run('person@example.com', { a: cli, read: reader([NEW, NEW]) });
+  assert.strictEqual(r.code, 1);
+  assert.match(r.err[0], /users\.json can't be read/);
+  assert.ok(!fs.existsSync(file));
+});
+
+test('r1 lock: a fresh lock held by another process makes the change wait, then it succeeds once the lock is released', async () => {
+  const { hub, dir, file } = fresh();
+  const u = hub.createUser({ login: 'person@example.com', password: OLD }).user;
+  const lock = path.join(dir, 'users.json.lock');
+  // The child holds the lock for 1.5 s and reports the moment it let go; timing does not depend on how fast its output arrives.
+  const child = spawn(process.execPath, ['-e', "const fs=require('fs');fs.writeFileSync(process.argv[1],'x',{flag:'wx'});console.log('ready');setTimeout(()=>{const t=Date.now();fs.unlinkSync(process.argv[1]);console.log('released '+t);},1500);", lock], { stdio: ['ignore', 'pipe', 'inherit'] });
+  let outText = '';
+  child.stdout.on('data', (d) => { outText += d; });
+  await new Promise((res, rej) => { child.stdout.once('data', res); child.once('error', rej); });
+  assert.ok(fs.existsSync(lock), 'the lock is held');
+  assert.ok(hub.setPrefs(u.id, { theme: 'dark' }).ok);   // blocks while the lock is held
+  const done = Date.now();
+  await new Promise((res) => child.once('close', res));
+  const released = Number((outText.match(/released (\d+)/) || [])[1]);
+  assert.ok(released > 0, 'the child released the lock');
+  assert.ok(done >= released, `the save finished only after the lock was released (${done - released} ms after)`);
+  assert.strictEqual(onDisk(file, u.id).theme, 'dark');
+  assert.ok(!fs.existsSync(lock), 'the lock is released afterwards');
+});
+
+test('r1 lock: a lock that stays gives up after about 3 s with "busy" and saves nothing; the other holder\'s lock is not removed', () => {
+  const { hub, dir, file } = fresh();
+  const u = hub.createUser({ login: 'person@example.com', password: OLD }).user;
+  const lock = path.join(dir, 'users.json.lock');
+  fs.writeFileSync(lock, 'someone else', { flag: 'wx' });
+  const t0 = Date.now();
+  assert.throws(() => hub.setPrefs(u.id, { theme: 'dark' }), /users\.json is busy; nothing was saved\. Try again\./);
+  const waited = Date.now() - t0;
+  assert.ok(waited >= 2900 && waited < 8000, `waited ${waited} ms`);
+  assert.strictEqual(fs.readFileSync(lock, 'utf8'), 'someone else');
+  assert.ok(!onDisk(file, u.id).theme);
+  fs.unlinkSync(lock);
+});
+
+test('r1 lock: a stale lock (older than 10 s) is taken over, once logged, and removed afterwards', () => {
+  const { hub, dir, file, logs } = fresh();
+  const u = hub.createUser({ login: 'person@example.com', password: OLD }).user;
+  const lock = path.join(dir, 'users.json.lock');
+  for (let i = 0; i < 2; i++) {
+    fs.writeFileSync(lock, 'a process that stopped');
+    const old = new Date(Date.now() - 20000);
+    fs.utimesSync(lock, old, old);
+    const t0 = Date.now();
+    assert.ok(hub.setPrefs(u.id, { theme: i ? 'light' : 'dark' }).ok);
+    assert.ok(Date.now() - t0 < 2000, 'no waiting for a stale lock');
+    assert.ok(!fs.existsSync(lock));
+  }
+  assert.strictEqual(onDisk(file, u.id).theme, 'light');
+  assert.strictEqual(logs.filter(l => /users\.json\.lock was left behind/.test(l)).length, 1, 'logged once');
+});
+
+test('r1 lock: temp files older than 60 s are removed under the lock, fresh ones are left', () => {
+  const { hub, dir } = fresh();
+  const u = hub.createUser({ login: 'person@example.com', password: OLD }).user;
+  const oldTmp = path.join(dir, '.users.deadbeef.tmp'), freshTmp = path.join(dir, '.users.cafe.tmp');
+  fs.writeFileSync(oldTmp, 'x'); fs.writeFileSync(freshTmp, 'x');
+  const old = new Date(Date.now() - 120000); fs.utimesSync(oldTmp, old, old);
+  assert.ok(hub.setPrefs(u.id, { theme: 'dark' }).ok);
+  assert.ok(!fs.existsSync(oldTmp));
+  assert.ok(fs.existsSync(freshTmp));
+});
+
+test('r1 lock: a change always re-reads users.json under the lock, even when another writer left the same size and the same mtime', () => {
+  const { hub, file } = fresh();
+  const u = hub.createUser({ login: 'person@example.com', password: OLD }).user;
+  assert.ok(hub.setPrefs(u.id, { theme: 'dark' }).ok);
+  const T = new Date('2026-01-01T00:00:00Z');
+  fs.utimesSync(file, T, T);
+  hub.listUsers();   // the hub loads: its stamp is (T, size, inode)
+  const ino = fs.statSync(file).ino;
+  fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('"theme": "dark"', '"theme": "lite"'));   // in place: same inode, same size
+  fs.utimesSync(file, T, T);
+  assert.strictEqual(fs.statSync(file).ino, ino);
+  assert.ok(hub.setPrefs(u.id, { uiMode: 'advanced' }).ok);
+  const d = onDisk(file, u.id);
+  assert.strictEqual(d.theme, 'lite', 'the other writer\'s change survives');
+  assert.strictEqual(d.uiMode, 'advanced');
+});
+
+test('r1 root: keepFileOwner changes the owner of the open file to the existing users.json owner, else the data folder\'s, only as root', () => {
+  const calls = [];
+  const fchown = (fd, uid, gid) => calls.push([fd, uid, gid]);
+  const owners = { '/d/users.json': { uid: 1001, gid: 1002 }, '/d': { uid: 2001, gid: 2002 } };
+  const mkStat = (has) => (p) => { if (p === '/d/users.json' && !has) { const e = new Error('nope'); e.code = 'ENOENT'; throw e; } return owners[p]; };
+  const o = { dataDir: '/d', usersFile: '/d/users.json' };
+  assert.deepStrictEqual(A.keepFileOwner(7, { ...o, getuid: () => 0, fchown, stat: mkStat(true) }), { uid: 1001, gid: 1002 });
+  assert.deepStrictEqual(A.keepFileOwner(8, { ...o, getuid: () => 0, fchown, stat: mkStat(false) }), { uid: 2001, gid: 2002 });
+  assert.strictEqual(A.keepFileOwner(9, { ...o, getuid: () => 1000, fchown, stat: mkStat(true) }), null);
+  assert.strictEqual(A.keepFileOwner(9, { ...o, getuid: null, fchown, stat: mkStat(true) }), null);
+  assert.deepStrictEqual(calls, [[7, 1001, 1002], [8, 2001, 2002]]);
+  assert.strictEqual(A.keepFileOwner(5, { ...o, getuid: () => 0, fchown: () => { throw new Error('EPERM'); }, stat: mkStat(true) }), null, 'a failing chown does not stop the save');
+});
+
+test('r1 root: a change made as root chowns the temp file before the rename (injected getuid / fchown); not as root it never does', () => {
+  const dir = fs.mkdtempSync(path.join(TMP, 'd-'));
+  const calls = [];
+  const root = A.createAuth({ dataDir: dir, log: () => {}, getuid: () => 0, fchown: (fd, uid, gid) => calls.push({ fd, uid, gid, tmpExists: fs.readdirSync(dir).some(f => /^\.users\..*\.tmp$/.test(f)), usersJson: fs.existsSync(path.join(dir, 'users.json')) }) });
+  const dirOwner = fs.statSync(dir);
+  assert.ok(root.createUser({ login: 'one@example.com' }).ok);
+  assert.strictEqual(calls.length, 1);
+  assert.deepStrictEqual([calls[0].uid, calls[0].gid, calls[0].tmpExists, calls[0].usersJson], [dirOwner.uid, dirOwner.gid, true, false], 'no users.json yet: the data folder\'s owner');
+  const fileOwner = fs.statSync(path.join(dir, 'users.json'));
+  assert.ok(root.createUser({ login: 'two@example.com' }).ok);
+  assert.deepStrictEqual([calls[1].uid, calls[1].gid, calls[1].usersJson], [fileOwner.uid, fileOwner.gid, true], 'the existing file\'s owner');
+  const plain = [];
+  const user = A.createAuth({ dataDir: dir, log: () => {}, getuid: () => 1000, fchown: (...a) => plain.push(a) });
+  assert.ok(user.createUser({ login: 'three@example.com' }).ok);
+  assert.deepStrictEqual(plain, []);
+  assert.strictEqual(root.listUsers().length, 3);
+});
+
+test('r1 root: the command prints one line when it runs as root on a data folder owned by someone else, and nothing otherwise', async () => {
+  const st = (uid) => () => ({ uid });
+  assert.match(CLI.rootOwnerNote({ getuid: () => 0, stat: st(1000) }), /^Running as root: users\.json keeps its owner/);
+  assert.strictEqual(CLI.rootOwnerNote({ getuid: () => 0, stat: st(0) }), null);
+  assert.strictEqual(CLI.rootOwnerNote({ getuid: () => 1000, stat: st(1000) }), null);
+  assert.strictEqual(CLI.rootOwnerNote({ getuid: () => 0, stat: () => { throw new Error('x'); } }), null);
+  const { hub, mk } = fresh();
+  hub.createUser({ login: 'person@example.com', password: OLD });
+  const r = await run('person@example.com', { a: mk(), read: reader([NEW, NEW]), rootNote: () => 'Running as root: users.json keeps its owner (user id 1000), so the hub can still read it.' });
+  assert.strictEqual(r.code, 0);
+  assert.strictEqual(r.said.filter(s => /^Running as root/.test(s)).length, 1);
+  assert.strictEqual(r.said.length, 2);
+});
+
+test('r1 sessions: a sign-in that verified the old password while a reset ran gets "Wrong login or password" and no session', () => {
+  const { hub, mk, dir, file } = fresh();
+  const u = hub.createUser({ login: 'person@example.com', password: OLD }).user;
+  hub.listUsers();
+  const other = mk();
+  const realOpen = fs.openSync;
+  let fired = false;
+  // the reset lands after login checked the old password and before its write (the first thing the write opens is the lock, or in old code the temp file)
+  fs.openSync = function (p) {
+    if (!fired && /users\.json\.lock$|\.users\.[0-9a-f]+\.tmp$/.test(String(p))) { fired = true; fs.openSync = realOpen; assert.ok(other.setPassword(u.id, NEW, { by: 'cli' }).ok); }
+    return realOpen.apply(fs, arguments);
+  };
+  let r;
+  try { r = hub.login('person@example.com', OLD); } finally { fs.openSync = realOpen; }
+  assert.ok(fired);
+  assert.deepStrictEqual(r, { ok: false, error: 'Wrong login or password' });
+  assert.ok(!onDisk(file, u.id).lastLoginAt, 'no sign-in was recorded');
+  assert.deepStrictEqual(dbRows(dir, 'SELECT id FROM sessions'), []);
+  assert.strictEqual(hub.login('person@example.com', NEW).ok, true, 'the new password works');
+});
+
+test('r1 sessions: a sign-in is refused while the account is turned off', () => {
+  const { hub, mk } = fresh();
+  hub.createUser({ login: 'boss@example.com', role: 'admin', password: OLD });
+  const u = hub.createUser({ login: 'person@example.com', password: OLD }).user;
+  hub.listUsers();
+  const other = mk();
+  const realOpen = fs.openSync;
+  let fired = false;
+  fs.openSync = function (p) {
+    if (!fired && /users\.json\.lock$|\.users\.[0-9a-f]+\.tmp$/.test(String(p))) { fired = true; fs.openSync = realOpen; assert.ok(other.updateUser(u.id, { disabled: true }).ok); }
+    return realOpen.apply(fs, arguments);
+  };
+  let r;
+  try { r = hub.login('person@example.com', OLD); } finally { fs.openSync = realOpen; }
+  assert.ok(fired);
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.error, 'Wrong login or password');
+});
+
+test('r1 sessions: createSession throws when the account changed since the password was checked (new hash, turned off, deleted); a user without a hash skips the hash check', () => {
+  const { hub, mk, dir } = fresh();
+  hub.createUser({ login: 'boss@example.com', role: 'admin', password: OLD });
+  const u = hub.createUser({ login: 'person@example.com', password: OLD }).user;
+  const w = hub.createUser({ login: 'other@example.com', password: OLD }).user;
+  hub.listUsers();
+  const checked = hub.getUser(u.id);   // what a sign-in holds: carries the old passwordHash
+  assert.ok(checked.passwordHash);
+  assert.ok(hub.createSession(checked).token, 'unchanged: fine');
+  assert.ok(mk().setPassword(u.id, NEW, { by: 'cli' }).ok);
+  assert.throws(() => hub.createSession(checked), /^Error: the account changed; sign in again$/);
+  assert.deepStrictEqual(dbRows(dir, 'SELECT id FROM sessions WHERE user_id = ?', u.id), [], 'the reset also ended the earlier session, and no new one started');
+  assert.ok(hub.createSession(hub.getUser(u.id)).token, 'with the current hash it works');
+  assert.ok(hub.createSession({ id: u.id }).token, 'no hash on the passed user (a passkey): only the account is checked');
+  assert.ok(hub.updateUser(w.id, { disabled: true }).ok);
+  assert.throws(() => hub.createSession({ id: w.id }), /the account changed; sign in again/);
+  assert.ok(hub.deleteUser(w.id).ok);
+  assert.throws(() => hub.createSession({ id: w.id }), /the account changed; sign in again/);
+  assert.throws(() => hub.createSession({ id: 'nobody' }), /the account changed; sign in again/);
+});
+
+test('r1 sessions: setPassword by another id ends the account\'s sessions BEFORE the write as well as after it; by the person themselves it does not', () => {
+  const { hub, mk, dir } = fresh();
+  const a1 = hub.createUser({ login: 'one@example.com', password: OLD }).user;
+  const count = () => dbRows(dir, 'SELECT id FROM sessions WHERE user_id = ?', a1.id).length;
+  hub.createSession(a1); hub.createSession(a1);
+  assert.strictEqual(count(), 2);
+  // a failure at the write (the crash between the steps): the sessions from before the reset are already gone
+  const cli = mk();
+  const realOpen = fs.openSync;
+  fs.openSync = function (p) { if (/users\.json\.lock$/.test(String(p))) throw new Error('simulated crash at the write'); return realOpen.apply(fs, arguments); };
+  try { assert.throws(() => cli.setPassword(a1.id, NEW, { by: 'cli' }), /simulated crash/); } finally { fs.openSync = realOpen; }
+  assert.strictEqual(count(), 0, 'revoked before the write');
+  assert.ok(A.verifyPassword(OLD, hub.getUser(a1.id).passwordHash), 'and the password is unchanged');
+  // a session that starts while the reset is writing is ended after it
+  fs.openSync = function (p) { if (/users\.json\.lock$/.test(String(p))) { fs.openSync = realOpen; hub.createSession(a1); } return realOpen.apply(fs, arguments); };
+  try { assert.ok(cli.setPassword(a1.id, NEW, { by: 'cli' }).ok); } finally { fs.openSync = realOpen; }
+  assert.strictEqual(count(), 0, 'revoked after the write');
+  // the person changing their own password keeps their sessions
+  hub.createSession(a1);
+  assert.ok(cli.setPassword(a1.id, OLD, { by: a1.id }).ok);
+  assert.strictEqual(count(), 1);
+});
+
+test('r1 terminal: raw mode goes on before the prompt and stays on between the two prompts, a tab is kept, the signals restore the terminal and are removed afterwards', async () => {
+  const { EventEmitter } = require('events');
+  const fake = new EventEmitter();
+  const events = [];
+  fake.setRawMode = (on) => events.push(`raw:${on}`);
+  fake.setEncoding = () => {}; fake.resume = () => events.push('resume'); fake.pause = () => events.push('pause');
+  const realStdin = Object.getOwnPropertyDescriptor(process, 'stdin');
+  const realWrite = process.stdout.write;
+  const prompts = ['New password: ', 'Type it again: '];
+  process.stdout.write = function (s) { if (prompts.includes(String(s))) { events.push(`prompt:${String(s)}`); return true; } return realWrite.apply(process.stdout, arguments); };
+  Object.defineProperty(process, 'stdin', { value: fake, configurable: true });
+  const sigs = ['SIGTERM', 'SIGHUP', 'SIGINT', 'SIGQUIT'];
+  const before = sigs.map(s => process.listenerCount(s));
+  try {
+    const p1 = CLI.readHidden('New password: ');
+    fake.emit('data', 'a\tb\u001b[Ac\r');
+    assert.strictEqual(await p1, 'a\tbc');
+    assert.deepStrictEqual(sigs.map(s => process.listenerCount(s)), before.map(n => n + 1), 'all four signals are handled while raw mode is on');
+    const p2 = CLI.readHidden('Type it again: ');
+    fake.emit('data', 'x\r');
+    assert.strictEqual(await p2, 'x');
+    assert.ok(!events.includes('raw:false'), 'raw mode was never turned off between the prompts');
+    assert.ok(events.indexOf('raw:true') < events.indexOf('prompt:New password: '), 'raw mode is on before the first prompt is printed');
+    assert.strictEqual(events.filter(e => e === 'raw:true').length, 1);
+    CLI.endHidden();
+    assert.ok(events.includes('raw:false'));
+    assert.deepStrictEqual(sigs.map(s => process.listenerCount(s)), before, 'the handlers are removed afterwards');
+  } finally {
+    process.stdout.write = realWrite;
+    Object.defineProperty(process, 'stdin', realStdin);
+    CLI.endHidden();
+  }
+});
+
+test('r1 server: every sign-in route checks that a session was made, so a reset during sign-in answers a failure instead of a 400 or a cookie', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'server.js'), 'utf8');
+  assert.match(src, /catch \(e\) \{ if \(e && e\.message === 'the account changed; sign in again'\) return null; throw e; \}/);
+  assert.strictEqual((src.match(/^\s*finishSignIn\(/gm) || []).length, 0, 'no route ignores the result');
+  assert.strictEqual((src.match(/if \(!finishSignIn\(/g) || []).length, 3);
+  assert.match(src, /if \(!finishSignIn\(r\.user, \{ totpOk: !r\.needsTotp \|\| trusted \}\)\) return jsonResponse\(res, 401, \{ ok: false, error: 'Wrong login or password' \}\);/);
+  const A2 = require(path.join(ISO.inst, 'lib', 'auth'));
+  const dir = fs.mkdtempSync(path.join(TMP, 'srv-'));
+  const a = A2.createAuth({ dataDir: dir, now: () => T0, log: () => {} });
+  const u = a.createUser({ login: 'sam@example.com', role: 'admin', password: OLD }).user;
+  const r = a.login('sam@example.com', OLD);
+  assert.strictEqual(r.ok, true);
+  A2.createAuth({ dataDir: dir, now: () => T0, log: () => {} }).setPassword(u.id, NEW, { by: 'cli' });
+  assert.throws(() => a.createSession(r.user), { message: 'the account changed; sign in again' });
 });
