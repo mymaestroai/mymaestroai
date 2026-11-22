@@ -815,3 +815,79 @@ test('r3 sessions: a users.json that cannot be read refuses the request but neve
   const later = A.createAuth({ dataDir: dir, now: () => T0, log: () => {} });
   assert.ok(later.getSession(s.token), 'readable again: the session works');
 });
+
+// An auth.db from before sessions were bound: the sessions table without cred and one session for userId (token 'old-token').
+function oldSchemaDb(dir, userId) {
+  for (const x of ['', '-wal', '-shm']) fs.rmSync(path.join(dir, 'auth.db' + x), { force: true });
+  const d = new Database(path.join(dir, 'auth.db'));
+  d.exec('CREATE TABLE sessions (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, created_at TEXT, last_seen TEXT, expires_at TEXT, ua TEXT, ip TEXT, totp_ok INTEGER DEFAULT 0)');
+  d.prepare('INSERT INTO sessions (id, user_id, created_at, last_seen, expires_at) VALUES (?,?,?,?,?)').run(require('crypto').createHash('sha256').update('old-token').digest('hex'), userId, 'x', 'x', new Date(T0 + 86400000).toISOString());
+  d.close();
+}
+
+test('r4 sessions: a reset from a fresh process binds the account\'s old sessions to the OLD password before the new hash is written, also when binding was skipped at open', { skip: process.getuid && process.getuid() === 0 ? 'root reads any file' : false }, () => {
+  const dir = fs.mkdtempSync(path.join(TMP, 'd-'));
+  const first = A.createAuth({ dataDir: dir, now: () => T0, log: () => {} });
+  const u = first.createUser({ login: 'person@example.com', password: OLD }).user;
+  const oldDigest = credOfHash(first.getUser(u.id).passwordHash);
+  const usersFile = path.join(dir, 'users.json');
+  // (a) the terminal command's order: nothing has opened auth.db before setPassword
+  oldSchemaDb(dir, u.id);
+  const seen = [];
+  const owner = fs.statSync(usersFile);
+  // getuid 0 + an fstat that already shows the right owner: keepFileOwner runs (no chown) at the moment the temp file is written,
+  // i.e. after the bind and before the rename; that is where the rows are looked at
+  const cli = A.createAuth({ dataDir: dir, now: () => T0, log: () => {}, getuid: () => 0, fchown: () => {},
+    fstat: () => { seen.push(dbRows(dir, 'SELECT cred FROM sessions').map(r => r.cred)); return { uid: owner.uid, gid: owner.gid }; } });
+  assert.ok(cli.setPassword(u.id, NEW, { by: 'cli' }).ok);
+  assert.deepStrictEqual(seen[0], [oldDigest], 'bound to the old password while the new hash was being written');
+  // (b) binding skipped at open (users.json unreadable then), then a reset once it is readable again
+  const second = A.createAuth({ dataDir: dir, now: () => T0, log: () => {} });
+  const v = second.createUser({ login: 'sam@example.com', password: OLD }).user;
+  const vDigest = credOfHash(second.getUser(v.id).passwordHash);
+  oldSchemaDb(dir, v.id);
+  fs.chmodSync(usersFile, 0o000);
+  const hub = A.createAuth({ dataDir: dir, now: () => T0, log: () => {} });
+  try { hub.listSessions(v.id); } finally { fs.chmodSync(usersFile, 0o600); }   // opens auth.db while users.json cannot be read
+  assert.deepStrictEqual(dbRows(dir, 'SELECT cred FROM sessions').map(r => r.cred), [null], 'not bound at open');
+  const seen2 = [];
+  const cli2 = A.createAuth({ dataDir: dir, now: () => T0, log: () => {}, getuid: () => 0, fchown: () => {},
+    fstat: () => { seen2.push(dbRows(dir, 'SELECT cred FROM sessions').map(r => r.cred)); return { uid: owner.uid, gid: owner.gid }; } });
+  cli2.listSessions(v.id);   // its own open binds now (readable): make the skipped case explicit by clearing it again
+  const d = new Database(path.join(dir, 'auth.db')); d.prepare('UPDATE sessions SET cred = NULL').run(); d.close();
+  assert.ok(cli2.setPassword(v.id, NEW, { by: 'cli' }).ok);
+  assert.deepStrictEqual(seen2[0], [vDigest], 'setPassword bound the unbound row to the old password before writing');
+});
+
+test('r4 sessions: a warm hub whose users.json changed but cannot be read refuses the old session and keeps its row', { skip: process.getuid && process.getuid() === 0 ? 'root reads any file' : false }, () => {
+  const dir = fs.mkdtempSync(path.join(TMP, 'd-'));
+  const hub = A.createAuth({ dataDir: dir, now: () => T0, log: () => {} });
+  const u = hub.createUser({ login: 'person@example.com', password: OLD }).user;
+  const s = hub.createSession(hub.getUser(u.id));
+  assert.ok(hub.getSession(s.token), 'warm: the hub holds the old hash');
+  const usersFile = path.join(dir, 'users.json');
+  const data = JSON.parse(fs.readFileSync(usersFile, 'utf8'));
+  data.users.find(x => x.id === u.id).passwordHash = A.hashPassword(NEW);   // a reset written, its revoke cut short
+  fs.writeFileSync(usersFile, JSON.stringify(data, null, 2));
+  fs.chmodSync(usersFile, 0o000);
+  try {
+    assert.strictEqual(hub.getSession(s.token), null, 'the old session is refused');
+    assert.strictEqual(dbRows(dir, 'SELECT id FROM sessions WHERE id = ?', s.id).length, 1, 'its row is kept for when the file is readable');
+  } finally { fs.chmodSync(usersFile, 0o600); }
+  assert.strictEqual(hub.getSession(s.token), null, 'readable again: the new password is seen and the session ends');
+  assert.strictEqual(dbRows(dir, 'SELECT id FROM sessions WHERE id = ?', s.id).length, 0);
+});
+
+test('r4 sessions: an account without a password is bound too; a password set later ends its sessions even without the revoke', () => {
+  const dir = fs.mkdtempSync(path.join(TMP, 'd-'));
+  const hub = A.createAuth({ dataDir: dir, now: () => T0, log: () => {} });
+  const u = hub.createUser({ login: 'person@example.com' }).user;
+  const s = hub.createSession(hub.getUser(u.id));
+  assert.ok(sessRow(dir, s.id).cred, 'bound to the no-password marker');
+  assert.ok(hub.getSession(s.token));
+  const usersFile = path.join(dir, 'users.json');
+  const data = JSON.parse(fs.readFileSync(usersFile, 'utf8'));
+  data.users.find(x => x.id === u.id).passwordHash = A.hashPassword(NEW);
+  fs.writeFileSync(usersFile, JSON.stringify(data, null, 2));
+  assert.strictEqual(hub.getSession(s.token), null);
+});
