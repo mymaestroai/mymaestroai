@@ -17,7 +17,7 @@ const busyErr = () => Object.assign(new Error('the agent is busy (HTTP 409: Agen
 
 /** A compaction with a fake clock: sleep(ms) advances it. busy(t) says whether the agent is in another turn at time t; script(i, msg) may
  *  throw (a refusal) or return a reply; a compression or assisted-final prompt that is answered writes the brief at that time, unless noWrite. */
-function make({ mode = 'on', busy = () => false, script = null, noWrite = false, waitMs = BUSY_WAIT_MS, yieldEachSleep = false } = {}) {
+function make({ mode = 'on', busy = () => false, script = null, noWrite = false, waitMs = BUSY_WAIT_MS, yieldEachSleep = false, onReset = null } = {}) {
   let t = 10_000_000; let briefAt = 0; let n = 0;
   const posts = [], resets = [], events = [], logs = [], busyAtReset = [];
   const isBusyNow = () => !!busy(t);
@@ -31,7 +31,7 @@ function make({ mode = 'on', busy = () => false, script = null, noWrite = false,
       if (!noWrite && /working-brief\.md/.test(message) && !/^\[Resumed/.test(message)) briefAt = t;
       return 'done';
     },
-    resetSession: async (agent) => { busyAtReset.push(isBusyNow()); resets.push(agent); },
+    resetSession: async (agent) => { busyAtReset.push(isBusyNow()); resets.push(agent); if (onReset) onReset(); },
     getAgent: (name) => ({ name, compaction: { mode, at: 0.5 } }),
     onEvent: (ev) => events.push(ev),
     getRecentRows: async () => [{ ts: '2026-11-22T10:00:00Z', kind: 'user', text: 'a'.repeat(3000) }, { ts: '2026-11-22T10:01:00Z', kind: 'assistant', text: 'b'.repeat(3000) }],
@@ -126,9 +126,9 @@ test('assisted mode: a busy answer in the middle of the slices waits and carries
   const h = make({ mode: 'assisted', script: (i) => (i === 1 ? busyErr() : null) });
   const r = await h.c.run('local1', 'threshold');
   assert.deepStrictEqual([r.ok, r.reset], [true, true], JSON.stringify(r));
-  const parts = h.posts.filter((p) => /slice|part/i.test(p.message)).length;
-  assert.ok(r.parts >= 2 && h.posts.length >= r.parts + 1, JSON.stringify({ parts: r.parts, posts: h.posts.length }));
-  assert.ok(parts >= 0);
+  assert.ok(r.parts >= 2, String(r.parts));
+  const sent = h.posts.map((p) => p.message);
+  for (let i = 1; i <= r.parts; i++) assert.strictEqual(sent.filter((m) => m.includes(`part ${i} of ${r.parts}`) || m.includes(`${i}/${r.parts}`) || m.includes(`slice ${i} of ${r.parts}`)).length, 1, `slice ${i} sent exactly once`);
 });
 
 test('dry mode: busy then free gives a written brief and no reset, as before', async () => {
@@ -139,18 +139,57 @@ test('dry mode: busy then free gives a written brief and no reset, as before', a
   assert.deepStrictEqual([r.ok, r.reset, r.mode], [true, false, 'dry']);
 });
 
-test('another turn starts between the compression turn and the reset: the reset waits for it; if it outlasts the ceiling the run is postponed, never a mid-turn reset', async () => {
+test('review r1: another turn starts between the compression turn and the reset: no reset on that brief; postponed (no gap); the next run asks for a fresh brief', async () => {
   let busyFrom = Infinity, busyTo = Infinity;
   const h = make({ busy: (t) => t >= busyFrom && t < busyTo, script: (i, m, t) => { if (i === 0) { busyFrom = t; busyTo = t + 45_000; } return null; } });
   const r = await h.c.run('anvil', 'threshold');
-  assert.deepStrictEqual([r.ok, r.reset], [true, true]);
-  assert.deepStrictEqual(h.busyAtReset, [false]);
-  const g = make({ busy: (t) => t >= busyFrom, script: (i, m, t) => { if (i === 0) busyFrom = t; return null; } });
-  busyFrom = Infinity;
+  assert.deepStrictEqual([r.ok, r.reset, r.busy], [false, false, true]);
+  assert.strictEqual(r.error, 'another turn started after the brief was written, so the session was kept; a fresh brief is asked for after that turn');
+  assert.strictEqual(h.resets.length, 0);
+  assert.ok(!h.c.get('anvil').lastRunAt, 'no one-hour gap');
+  h.tick(60_000);   // that turn ended
+  const r2 = await h.c.noteUsage('anvil', 900, 1000, 's1');
+  assert.ok(r2 && r2.ok && r2.reset, JSON.stringify(r2));
+  assert.strictEqual(h.posts.filter((p) => /\[Context compression/.test(p.message)).length, 2, 'asked again for a fresh brief');
+});
+
+test('review r1: the reset is recorded (compactedAt, readings cleared) before the resume turn is sent', async () => {
+  let seenAtResume = null;
+  const h = make({ script: (i, m) => { if (/^\[Resumed/.test(m)) seenAtResume = h.c.get('anvil'); return null; } });
+  h.c.noteUsage('anvil', 100, 1000, 's1');
+  const r = await h.c.run('anvil', 'threshold');
+  assert.ok(r.ok && r.reset);
+  assert.ok(seenAtResume && seenAtResume.compactedAt && seenAtResume.sessionId === null && seenAtResume.tokens === 0, JSON.stringify(seenAtResume));
+  assert.strictEqual(h.c.get('anvil').compactedAt, seenAtResume.compactedAt, 'the final write keeps the time of the reset');
+});
+
+test('review r1: the resume turn is skipped when another turn already runs (it opens the fresh session); a 409 on it is not an error', async () => {
+  let busyNow = false;
+  const h = make({ busy: () => busyNow, script: (i, m) => { if (!/^\[Resumed/.test(m)) return null; return busyErr(); } });
+  const r = await h.c.run('anvil', 'threshold');
+  assert.deepStrictEqual([r.ok, r.reset, r.resumed], [true, true, null]);
+  assert.ok(h.logs.some((l) => /resume turn skipped/.test(l)));
+  let started = false;
+  const g = make({ busy: () => started, onReset: () => { started = true; } });   // the person's turn starts right after the reset
   const r2 = await g.c.run('forge', 'threshold');
-  assert.deepStrictEqual([r2.ok, r2.reset, r2.busy], [false, false, true]);
-  assert.match(r2.error, /the brief is written, but the session could not be reset/);
-  assert.strictEqual(g.resets.length, 0);
+  assert.deepStrictEqual([r2.ok, r2.reset, r2.resumed], [true, true, null]);
+  assert.ok(!g.posts.some((x) => /^\[Resumed/.test(x.message)), 'the resume prompt is not sent into a running turn');
+});
+
+test('review r1: the refusal cap says how many refusals, not "20 minutes"', async () => {
+  const h = make({ script: () => busyErr() });
+  const r = await h.c.run('worker', 'threshold');
+  assert.match(r.error, /^the compression turn could not start: the hub refused it 6 times \(the agent is busy \(HTTP 409: /);
+  assert.doesNotMatch(r.error, /20 minutes/);
+});
+
+test('review r1: a request the agent makes while the run waits is answered by that run (no second compression right after)', async () => {
+  let idleFrom = Infinity, asked = false;
+  const h = make({ busy: (t) => { if (!asked && t > 10_000_000 + 4000) { asked = true; h.c.request('anvil', 'agent'); } if (t > 10_000_000 + 30_000 && idleFrom === Infinity) idleFrom = t; return t < idleFrom; } });
+  const r = await h.c.run('anvil', 'threshold');
+  assert.ok(r.ok && r.reset && asked, JSON.stringify(r));
+  assert.strictEqual(h.c.get('anvil').requested, null);
+  assert.strictEqual(h.c.noteUsage('anvil', 100, 1000, 's2'), null, 'nothing runs again at the next turn end');
 });
 
 test('no second compression while one waits: a run in progress answers "already running"', async () => {
@@ -182,7 +221,7 @@ function loadPostHubTurn(port) {
   return ctx.postHubTurn;
 }
 test('postHubTurn (fails on the old code): 2xx resolves the reply; 409 rejects busy; a voice-call hold is busy; 503 rejects with the hub reason; never an empty reply for a refusal', async () => {
-  const answers = [[200, { response: 'hello' }], [409, { error: 'agent busy', detail: 'Agent is busy; use interject or wait for the current turn.' }], [409, { error: 'on_voice_call', held: true }], [503, { error: 'hub halted' }], [200, 'not json']];
+  const answers = [[200, { response: 'hello' }], [409, { error: 'agent busy', detail: 'Agent is busy; use interject or wait for the current turn.' }], [409, { error: 'agent busy', detail: 'on_voice_call', agent: 'a' }], [503, { error: 'hub halted' }], [200, 'not json']];
   let i = 0;
   const srv = http.createServer((req, res) => { req.resume(); req.on('end', () => { const [st, body] = answers[i++]; res.writeHead(st, { 'Content-Type': 'application/json' }); res.end(typeof body === 'string' ? body : JSON.stringify(body)); }); });
   await new Promise((r) => srv.listen(0, '127.0.0.1', r));
