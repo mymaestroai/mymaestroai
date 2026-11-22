@@ -80,6 +80,7 @@ test('Settings → For an agent: the chat on screen first, then the phone\'s ope
   assert.match(fnSrc(app, 'async function notifyAgentReset(agent) {'), /notifySettingsPaint\(\); if \(typeof stNotifyAgentPaint === 'function'\) stNotifyAgentPaint\(false\);/);
   // review r1: reply length and message history: one editor (Agent Defaults); the menu's duplicates and their page-load POST are gone
   assert.ok(!idx.includes('max-tokens-select') && !app.includes('/api/max_completion_tokens'));
+  assert.ok(!idx.includes('max-context-select') && !app.includes('/api/max_context_messages'));
 });
 
 test('phone: a "This device" group for everyone; Notification settings, Notifications for this agent and Deep research stay for members only', () => {
