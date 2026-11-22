@@ -911,6 +911,12 @@
     .notify-bell-menu .notify-bell-title { font-weight: 600; }
     .notify-bell-menu .notify-bell-row { display: flex; flex-direction: column; gap: 3px; color: var(--text-dim); font-size: 0.78rem; }
     .notify-bell-menu select { font-size: 0.8rem; padding: 4px 6px; background: var(--bg-input); color: var(--text); border: 1px solid var(--border); border-radius: 4px; }
+    /* the same rows inside Settings → Notifications → For an agent (app.js stNotifyAgentPaint) */
+    .st-nb-box { display: flex; flex-direction: column; gap: 8px; margin: 0 0 10px 108px; max-width: 320px; }
+    .st-nb-box .notify-bell-title { font-weight: 600; font-size: 0.8rem; color: var(--text); }
+    .st-nb-box .notify-bell-row { display: flex; flex-direction: column; gap: 3px; color: var(--text-dim); font-size: 0.78rem; }
+    .st-nb-box select { font-size: 0.8rem; padding: 4px 6px; background: var(--bg-input); color: var(--text); border: 1px solid var(--border); border-radius: 4px; }
+    @media (max-width: 600px) { .st-nb-box { margin-left: 0; max-width: none; } }
     /* "Notify me when done": next to Interject while a reply runs; filled once clicked. */
     .input-area .notify-done-btn { border: 1px solid var(--accent); color: var(--accent); background: var(--agent-btn-active-bg); font-weight: 600; white-space: nowrap; cursor: pointer; }
     .input-area .notify-done-btn.on { background: var(--accent); border-color: var(--accent); color: var(--on-color-text); }
