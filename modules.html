@@ -511,9 +511,10 @@ function autoAreaHtml(s) {
   }
   if (a.admin) {
     const ad = a.admin;
-    h += `<div class="msg show info" id="admin-info">${esc((a.check && a.check.summary) || a.error || 'The server did not start.')}</div><p><b>The server needs an administrator to finish. Pick one:</b></p>
+    const compName = ad.computer ? ` (${esc(ad.computer)})` : '';
+    h += `<div class="msg show info" id="admin-info">${esc((a.check && a.check.summary) || a.error || 'The server did not start.')}</div><p><b>The server needs an administrator on the computer your Maestro runs on${compName} to finish. Pick one:</b></p>
       <div class="admin-choices"><div class="admin-choice">${askButton(s.id)}</div>
-      <div class="admin-choice"><div class="dim">Copy the command and run it on that computer as an administrator:</div><pre class="redirect-uri mono" id="admin-cmd" style="white-space:pre-wrap">${esc(ad.command)}</pre><button onclick="copyAdminCmd(this)">Copy the command</button></div>
+      <div class="admin-choice"><div class="dim">Copy the command and run it as an administrator on the computer your Maestro runs on${compName}:</div><pre class="redirect-uri mono" id="admin-cmd" style="white-space:pre-wrap">${esc(ad.command)}</pre><button onclick="copyAdminCmd(this)">Copy the command</button></div>
       ${ad.label ? `<div class="admin-choice"><button onclick="autoAdmin('${esc(s.id)}', this)">${esc(ad.label)}</button>${ad.warning ? `<div class="dim" style="font-size:12px">${esc(ad.warning)}</div>` : ''}</div>` : ''}</div>`;
   }
   if (a.waiting) {
@@ -522,11 +523,14 @@ function autoAreaHtml(s) {
   } else if (a.tryAgain) {
     h += `<div class="msg show info" id="auto-tryagain">${esc((a.check && a.check.summary) || a.error || '')}</div><div class="actions"><button class="primary" id="btn-tryagain" onclick="runAutoStep('${esc(s.id)}', { tryAgain: true }, this)">Try again</button></div>`;
   }
+  const nextOpen = () => { const idx = current.steps.findIndex(x => x.id === s.id); return current.steps.slice(idx + 1).find(x => !x.done); };
+  const nextBtn = (next) => next ? `<div class="actions"><button class="primary" onclick="selectStep('${esc(next.id)}')">Next: ${esc(next.title)}</button></div>` : '';
   if (a.done) {
-    const idx = current.steps.findIndex(x => x.id === s.id);
-    const next = current.steps.slice(idx + 1).find(x => !x.done);
     const sum = a.check && a.check.summary ? ' ' + esc(a.check.summary) : '';
-    h += `<div class="msg show ok">Done.${sum}</div>${next ? `<div class="actions"><button class="primary" onclick="selectStep('${esc(next.id)}')">Next: ${esc(next.title)}</button></div>` : ''}`;
+    h += `<div class="msg show ok">Done.${sum}</div>${nextBtn(nextOpen())}`;
+  } else if (!autoRes[s.id] && s.done) {
+    // nothing pressed in this page visit (a reload): say it was done, and when
+    h += `<div class="msg show ok" id="auto-done">Done${s.doneAt ? ' on ' + esc(fmtStamp(s.doneAt)) : ''}.</div>${nextBtn(nextOpen())}`;
   } else if (a.error && !a.choose && !a.admin && !a.tryAgain) {
     // the progress lines are already listed above; the error is shown once, with its summary
     h += `<div class="msg show err">${esc((a.check && a.check.summary) || a.error)}</div>`;
@@ -636,7 +640,7 @@ function stepHtml(s) {
       `<div class="actions"><button class="primary" onclick="saveSecrets('${esc(s.id)}', this)">Save</button></div>`;
   } else if (s.type === 'check') {
     const lc = m.lastCheck;
-    inner = (lc ? `<div class="msg show ${lc.ok ? (lc.warnings.length ? 'warn' : 'ok') : 'err'}">${esc(lc.summary)}${lc.lines.length ? '\n' + esc(lc.lines.join('\n')) : ''}${lc.warnings.length ? '\n⚠ ' + esc(lc.warnings.join('\n⚠ ')) : ''}\n<span class="dim">${esc(lc.at)}</span></div>` : '') +
+    inner = (lc ? `<div class="msg show ${lc.ok ? (lc.warnings.length ? 'warn' : 'ok') : 'err'}">${esc(lc.summary)}${lc.lines.length ? '\n' + esc(lc.lines.join('\n')) : ''}${lc.warnings.length ? '\n⚠ ' + esc(lc.warnings.join('\n⚠ ')) : ''}\n<span class="dim">Checked ${esc(fmtStamp(lc.at))}</span></div>` : '') +
       `<div id="ack-area"></div><div class="actions"><button class="primary" onclick="runCheck('${esc(s.id)}', this)">Run the check</button></div>`;
   } else if (s.type === 'settings') {
     inner = visibleSettings(m).filter(st => (s.fields || []).includes(st.key)).map(st => settingField(st, m.settings[st.key])).join('') +

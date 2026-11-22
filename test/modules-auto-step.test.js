@@ -260,7 +260,7 @@ test('a check that fails with a command: e.check and e.admin { command, label, w
     assert.strictEqual(e.check.ok, false);
     assert.strictEqual(e.check.summary, 'The server could not be started as a service.');
     assert.ok(e.check.lines.includes('needs an administrator'));
-    assert.deepStrictEqual(e.admin, { command: 'sudo systemctl start demo', label: OWNER_ADMIN.label, warning: OWNER_ADMIN.warning, ask: true });
+    assert.deepStrictEqual(e.admin, { command: 'sudo systemctl start demo', label: OWNER_ADMIN.label, warning: OWNER_ADMIN.warning, ask: true, computer: 'hub.example.ts.net' });
     assert.strictEqual(r.state().settings.run_as, 'auto');
     assert.strictEqual(r.mods.detail('auto-demo').steps.find(s => s.id === 'setup').done, false);
     const stopsBefore = r.ev.stops;

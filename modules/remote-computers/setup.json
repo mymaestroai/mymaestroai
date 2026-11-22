@@ -1,10 +1,10 @@
 { "steps": [
   { "id": "about", "type": "explain", "title": "What this does", "precheck": "prereqs", "confirm": "I understand that agents I allow can fully control the computers I add.",
     "body": "Agents you allow can see other computers over your private network (Tailscale), and control them when you allow it.\n\nThere are three levels:\n\n- **Look:** see the screen and facts.\n- **Act:** run commands as administrator.\n- **Drive:** use the mouse and keyboard.\n\nYour phone is asked before an agent's first Act or Drive in each session.\n\nUse a computer with nothing personal on it.\n\nAn agent you allow to Act or Drive can do anything on it." },
-  { "id": "setup", "type": "auto", "title": "Set it up", "precheck": "prereqs", "install": true, "prepare": true, "check": "server",
+  { "id": "setup", "type": "auto", "title": "Set it up", "formerly": ["install", "prefs", "server"], "precheck": "prereqs", "install": true, "prepare": true, "check": "server",
     "adminChoice": { "setting": "run_as", "value": "hub", "label": "Run it without an administrator", "warning": "The server then has the same access to files as your Maestro." },
     "body": "Installs the remote-control server on the computer your Maestro runs on, finds this computer on your private network, and starts the server. It downloads about 210 MB once." },
-  { "id": "add", "type": "check", "check": "installer", "title": "Add a computer",
+  { "id": "add", "type": "check", "check": "installer", "title": "Add a computer", "formerly": ["pc", "installer"],
     "body": "Windows computers for now.\n\nOn the computer you want to control:\n\n1. Sign in to Tailscale on it with the same account.\n2. Open the link below in a browser there within 15 minutes.\n3. Run the downloaded file and choose **Install**.\n4. This page shows it when it connects.\n\nFor agents to see the screen:\n\n- Use a local account that signs in by itself.\n- Set it to never lock or sleep.\n- Keep personal files and accounts off it." },
   { "id": "computer", "type": "check", "check": "computer", "title": "Wait for the computer",
     "body": "This page checks that the computer has connected. It can take a minute." },
