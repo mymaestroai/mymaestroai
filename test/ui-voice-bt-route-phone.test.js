@@ -47,8 +47,8 @@ const makeVc = (extra) => Object.assign({ thinkCtx: { closed: false, close() { t
 
 test('voiceCallStart gives voiceCreateVad micChoice: voiceMicChoiceId; the id comes from the prefs micDevice', () => {
   const start = sliceBetween('function voiceCallStart()', 'function voiceCallWire()');
-  assert.match(start, /voiceCreateVad\(\{[^}]*micChoice: voiceMicChoiceId[^}]*\}\)/);
-  assert.match(start, /voiceCreateVad\(\{[^}]*bluetoothFirst: voiceIsAndroidNav\(navigator\)[^}]*\}\)/);
+  assert.match(start, /voiceCreateVad\(\{[^}]*micChoice: voiceMicChoiceId[^}]*(?:\} : \{\}\) )?\}\)/);   // (a Tap to talk call adds ...(press ? { manual: true } : {}) at the end)
+  assert.match(start, /voiceCreateVad\(\{[^}]*bluetoothFirst: voiceIsAndroidNav\(navigator\)[^}]*(?:\} : \{\}\) )?\}\)/);
   const t = env({ prefsNow: () => ({ micDevice: { id: 'dev-a', label: 'Mic A' } }) });
   assert.strictEqual(t.fns.voiceMicChoiceId(), 'dev-a');
   assert.strictEqual(env({ prefsNow: () => ({}) }).fns.voiceMicChoiceId(), null);

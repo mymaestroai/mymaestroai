@@ -149,7 +149,7 @@ test('a person\'s zone: reports from their device follow them; a pinned zone sta
   const src = read('lib/auth.js');
   const fn = src.slice(src.indexOf('function setTimeZone('), src.indexOf('function deleteUser('));
   assert.ok(!/if \(auto\)[\s\S]*?audit\(/.test(fn.slice(fn.indexOf('if (auto)'), fn.indexOf('if (pinned && !tz)'))), 'a device report is not audited');
-  assert.match(fn, /if \(changed\) \{ save\(\); audit\(id, 'user\.timezone'/, 'a choice in the Profile is');
+  assert.match(fn, /if \(r\.ok && r\.changed\) audit\(id, 'user\.timezone'/, 'a choice in the Profile is');
 });
 
 test('what agents read: recall results, history stamps and the current request are local, zone named', () => {

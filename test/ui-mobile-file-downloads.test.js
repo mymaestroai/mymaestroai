@@ -63,7 +63,7 @@ test('cards are attached on history and when a reply is final, never per streami
   for (const per of ['paintReply', 'setReplyText', 'paintReattach', 'readStream']) assert.doesNotMatch(grab(per), /attachFileCards/, `${per} runs per chunk`);
   const a = grab('attachFileCards');
   assert.match(a, /cardHtml\(r, \{ esc, phone: true \}\)/, 'the phone form of the card');
-  assert.match(a, /querySelectorAll\('\.feed, \.tsn, \.rsn, \.reattach, \.copy, \.note'\)\.forEach/, 'tool and reasoning panels are skipped');
+  assert.match(a, /querySelectorAll\('\.feed, \.tsn, \.rsn, \.reattach, \.copy, \.code-copy, \.note'\)\.forEach/, 'tool and reasoning panels are skipped');
   assert.match(a, /catch \(e\) \{/, 'never throws into the chat code');
 });
 
@@ -383,7 +383,7 @@ test('a card\'s Download button opens the sheet; sw.js needs no change (its SHEL
   assert.match(js, /closest\('button\.fc-download'\)[\s\S]{0,200}openDownloadSheet\(\{ url: b\.dataset\.download, name: b\.dataset\.name,/);
   assert.match(read('sw.js'), /const SHELL = \['\/mobile\.html', '\/mobile\.js'\];/);
   assert.doesNotMatch(read('sw.js'), /'\/ui-[a-z-]+\.js'/, 'no /ui-*.js asset is precached');
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v70';/, 'VERSION is not bumped: the shell list did not change');
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v74';/, 'VERSION moved with the password eye (mobile.html and mobile.js changed); the shell list did not');
 });
 
 test('nothing added here carries an emoji variation selector (U+FE0F)', () => {

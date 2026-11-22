@@ -155,7 +155,8 @@ test('for_owner event: subscribed, and the reply moves out of the card with the 
 test('setting: key hub-fold-auto, default on, Chat section in Settings', () => {
   assert.match(app, /function foldAutoOn\(\) \{ try \{ return localStorage\.getItem\('hub-fold-auto'\) !== 'off'; \} catch \{ return true; \} \}/);
   assert.match(app, /localStorage\.setItem\('hub-fold-auto', on \? 'on' : 'off'\)/);
-  assert.match(app, /sections: \[[^\]]*'st-chat-section'\]/);
+  // menu split (gear = what you set, ⋯ = what you do): the agents group now ends with 'st-tuning-section', right after 'st-chat-section'
+  assert.match(app, /sections: \[[^\]]*'st-chat-section', 'st-tuning-section'\]/);
   const sec = block(app, 'id="st-chat-section"', 'id="st-emergency-section"');
   assert.match(sec, /<h4>Chat<\/h4>/);
   assert.match(sec, /type="checkbox"/);

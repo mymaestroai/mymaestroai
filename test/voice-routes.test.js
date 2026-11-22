@@ -162,8 +162,23 @@ test('POST stt: 400 without an agent, 415 for other content types, 409 voice_off
   assert.strictEqual(r.statusCode, 413); assert.strictEqual(t.calls.stt.length, 0);
   r = await send('/api/voice/stt?agent=maestro', { 'content-type': 'audio/wav' }, []);
   assert.strictEqual(r.statusCode, 400);
-  assert.strictEqual(routes.MAX_AUDIO_BYTES, 10 * 1024 * 1024, 'default cap is 10 MB');
+  assert.strictEqual(routes.MAX_AUDIO_BYTES, 32 * 1024 * 1024, 'default cap is 32 MiB (a 15-minute press is about 28.8 MB)');
   t.cleanup(); off.cleanup(); notReady.cleanup();
+});
+
+test('POST stt: a 30 MB WAV (a long Tap to talk press) is accepted whole with the default cap; one over 32 MiB is refused with 413 before it is read', async () => {
+  const t = setup();
+  const big = wavBytes(30 * 1000 * 1000 - 44), chunks = [];
+  for (let i = 0; i < big.length; i += 1024 * 1024) chunks.push(big.subarray(i, i + 1024 * 1024));
+  let r = await t.call(fakeReq('POST', '/api/voice/stt?agent=maestro', { headers: { 'content-type': 'audio/wav', 'content-length': String(big.length) }, body: chunks }));
+  assert.strictEqual(r.statusCode, 200, r.body().toString().slice(0, 200)); assert.deepStrictEqual(t.calls.stt, [big.length], 'the engine got all 30 MB');
+  r = await t.call(fakeReq('POST', '/api/voice/stt?agent=maestro', { headers: { 'content-type': 'audio/wav', 'content-length': String(32 * 1024 * 1024 + 1) }, body: wavBytes(10) }));
+  assert.strictEqual(r.statusCode, 413);
+  const over = wavBytes(32 * 1024 * 1024 + 1000 - 44), oc = [];   // a body that lies about its length (none declared)
+  for (let i = 0; i < over.length; i += 1024 * 1024) oc.push(over.subarray(i, i + 1024 * 1024));
+  r = await t.call(fakeReq('POST', '/api/voice/stt?agent=maestro', { headers: { 'content-type': 'audio/wav' }, body: oc }));
+  assert.strictEqual(r.statusCode, 413); assert.strictEqual(t.calls.stt.length, 1, 'the oversize body never reached the engine');
+  t.cleanup();
 });
 
 test('POST stt: unreadable audio is a 400 with the reason; an engine failure is a 500 that does not leak details', async () => {

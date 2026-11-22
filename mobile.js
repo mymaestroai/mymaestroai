@@ -576,7 +576,7 @@ function createDialogGuard({ doc = document, win = window, auto = '', useHistory
   /** savePoint(fields): the fields a save writes (an element, a container of them, or a list), with the values they
    *  have now, as the save starts. The returned commit(), called once the hub confirmed the save, makes exactly those
    *  values the fields' baselines: an edit made while the save ran stays changed, and nothing else is touched. */
-  function savePoint(scope) {
+  function fieldsIn(scope) {
     const list = [];
     const add = (el) => {
       if (!el) return;
@@ -584,10 +584,22 @@ function createDialogGuard({ doc = document, win = window, auto = '', useHistory
       else if (el.querySelectorAll) for (const f of el.querySelectorAll('input, textarea, select')) if (dialogField(f)) list.push(f);
     };
     if (Array.isArray(scope) || (scope && typeof scope.length === 'number' && !scope.tagName)) for (const el of scope) add(el); else add(scope);
-    const snap = list.map(el => [el, dialogFieldValue(el)]);
+    return list;
+  }
+  function savePoint(scope) {
+    const snap = fieldsIn(scope).map(el => [el, dialogFieldValue(el)]);
     return function commit() {
       for (const [el, v] of snap) { if (el.isConnected === false) continue; const s = scopeOf(el); if (s) s.baselines.set(el, v); }
     };
+  }
+  /** changed(scope): does any of these fields (same forms as savePoint) still on the page differ from its baseline? */
+  function changed(scope) {
+    for (const el of fieldsIn(scope)) {
+      if (el.isConnected === false) continue;
+      const s = scopeOf(el);
+      if (s && s.baselines.has(el) && dialogFieldValue(el) !== s.baselines.get(el)) return true;
+    }
+    return false;
   }
 
   // ── Wiring ──
@@ -656,6 +668,8 @@ function createDialogGuard({ doc = document, win = window, auto = '', useHistory
     isDirty: (elOrChild) => dirty(layerOf(elOrChild)) || (!layerOf(elOrChild) && !!page && dialogIsDirty(page.baselines)),
     hasChanges,
     savePoint,
+    changed,
+    saving: (elOrChild) => { const l = layerOf(elOrChild); return !!l && l.saving > 0; },   // a save started here is not answered yet
     markLoaded: (els) => { for (const el of (Array.isArray(els) ? els : [els])) { const l = el && scopeOf(el); if (l) l.baselines.delete(el); } },   // put in by the page, not typed
     layers: () => layers.slice(),
     _confirm: () => confirmOpen,
@@ -991,21 +1005,38 @@ function formatContent(content) {
   // [a-z0-9~], untouched by escaping and inline formatting.
   const MARK = 'm' + ((window.crypto && crypto.getRandomValues) ? Array.from(crypto.getRandomValues(new Uint8Array(16)), b => (b % 36).toString(36)).join('') : Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2));
   const mk = (kind, i) => `${MARK}${kind}${i}~`;
+  // A code-box marker inside an attribute value (image alt / src, link URL) cannot hold a box: it is pulled out of the
+  // attribute and the box is placed right after the element, so no marker text is left and no HTML lands in an attribute.
+  const codeMarkRe = new RegExp(MARK + 'C\\d+~', 'g');
+  const pullCode = (s) => { const held = []; const clean = String(s).replace(codeMarkRe, (mm) => { held.push(mm); return ''; }); return { clean, held: held.join('') }; };
+  // A link URL: image markers go out with the code markers (the image pass resolves them after the </a>).
+  const attrMarkRe = new RegExp(MARK + '[IC]\\d+~', 'g');
+  const imageMarkRe = new RegExp(MARK + 'I(\\d+)~', 'g');
+  const pullAttrMarks = (s) => { const held = []; const clean = String(s).replace(attrMarkRe, (mm) => { held.push(mm); return ''; }); return { clean, held: held.join('') }; };
   const visuals = [];
-  const withVisuals = response.replace(/```(\w*)\n([\s\S]*?)```/g, (m, lang, code) => {
+  // Every other closed fence is held out the same way (C tokens): escaped here and built into a code box with its own
+  // copy button (lib/ui-code-copy.js), so the copied text is the source byte for byte (the browser normalises line endings to LF; no bold, no <br> inside).
+  const codeBoxes = [];
+  const withVisuals = response.replace(/```(\w*)\r?\n([\s\S]*?)```/g, (m, lang, code) => {
     const kind = visualKind(lang);
-    if (!kind) return m;
+    if (!kind) {
+      const inner = autolinkEscaped(esc(code));
+      codeBoxes.push(window.CodeCopy ? window.CodeCopy.blockHtml(inner) : `<pre><code>${inner}</code></pre>`);
+      return ' ' + mk('C', codeBoxes.length - 1) + ' ';   // spaces end a bare URL right before the fence (the autolinker would take the marker into the href); they collapse around the block box
+    }
     visuals.push(visualPlaceholder(kind, esc(code)));
     return mk('V', visuals.length - 1);
   });
 
   const images = [];
   let text = withVisuals.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (m, alt, src) => {
-    let imgSrc = src;
-    if (src.startsWith('/') && !src.startsWith('/api/')) {
-      try { imgSrc = '/api/image/' + btoa(src); } catch { imgSrc = null; }
+    // Code-box markers come out of src and alt BEFORE the path is encoded (btoa would hide them); they stay with the image.
+    const pa = pullCode(alt), ps = pullCode(src);
+    let imgSrc = ps.clean;
+    if (imgSrc.startsWith('/') && !imgSrc.startsWith('/api/')) {
+      try { imgSrc = '/api/image/' + btoa(imgSrc); } catch { imgSrc = null; }
     }
-    images.push({ alt, src: imgSrc });
+    images.push({ alt: pa.clean, src: imgSrc, held: pa.held + ps.held });
     return mk('I', images.length - 1);
   });
   const links = [];
@@ -1025,7 +1056,6 @@ function formatContent(content) {
   });
 
   let out = escapeHtml(text)   // all five characters: the autolinker below relies on quotes being entities, never raw
-    .replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>')
     .replace(/`([^`]+)`/g, '<code>$1</code>')
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
     .replace(/\*([^*]+)\*/g, '<em>$1</em>')
@@ -1035,16 +1065,29 @@ function formatContent(content) {
   out = autolinkEscaped(out).replace(/\n/g, '<br>');
 
   visuals.forEach((v, i) => { out = out.replace(mk('V', i), () => v); });
-  images.forEach((im, i) => {
-    const tag = imageHtml(im.src, im.alt);
-    out = out.replace(mk('I', i), () => tag);
-  });
+  // Tables FIRST: a table cell holds image / link / code markers, resolved by the passes below.
+  tables.forEach((t, i) => { out = out.replace(mk('T', i), () => t); });
+  // Links BEFORE images: a link's text can hold an image marker, resolved by the image pass inside the <a>.
   links.forEach((l, i) => {
-    const u = safeLinkUrl(l.url);
-    const tag = u ? `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(l.label)}</a>` : `<code>[blocked link: ${esc(l.label)}]</code>`;
+    // A code box never ends up inside a link: code markers in the text and image / code markers in the URL go after </a>, and so do
+    // the boxes held by an image inside the text (the image stays in the link).
+    const pt = pullCode(l.label);
+    const pu = pullAttrMarks(l.url);
+    const u = safeLinkUrl(pu.clean);
+    let after = pt.held + pu.held;
+    for (const im of pt.clean.matchAll(imageMarkRe)) {
+      const tok = images[Number(im[1])];
+      if (tok && tok.held) { after += tok.held; tok.held = ''; }
+    }
+    const tag = (u ? `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(pt.clean)}</a>` : `<code>[blocked link: ${esc(pt.clean)}]</code>`) + after;
     out = out.replace(mk('L', i), () => tag);
   });
-  tables.forEach((t, i) => { out = out.replace(mk('T', i), () => t); });
+  images.forEach((im, i) => {
+    const tag = imageHtml(im.src, im.alt) + im.held;
+    out = out.replace(mk('I', i), () => tag);
+  });
+  // Code boxes last: a fence inside link text, a table cell or an image's alt text still gets its box.
+  codeBoxes.forEach((c, i) => { out = out.replace(mk('C', i), () => c); });   // function replacer: $-sequences in the code stay literal
   return thinkHtml + out;
 }
 
@@ -1058,8 +1101,8 @@ function originLabel(origin) {
     case 'task': return origin.from && origin.from !== 'hub' ? `queued task from ${origin.from}` : origin.label ? `hub: ${origin.label}` : 'hub turn';
     case 'alert': return `alert from ${origin.from || 'a monitor'}`;
     case 'consult_reply': return 'queued consultation reply delivered';
-    case 'hand_off': return `hand-off from ${origin.from || 'another agent'}`;
-    case 'hand_off_report': return `hand-off finished: ${origin.from || 'another agent'}`;
+    case 'hand_off': return `task from ${origin.from || 'another agent'}`;
+    case 'hand_off_report': return `task finished: ${origin.from || 'another agent'}`;
     case 'comms': return 'message from a messaging channel';
     default: return 'hub turn';
   }
@@ -1821,7 +1864,7 @@ function busyText(name) {
   const e = elapsed(since);
   if (s && s.pendingQuestion) return `❓ waiting for your answer${e ? ` · ${e}` : ''}`;
   if (s && s.worker) {   // a temporary worker keeps the status word
-    const activity = s.activity || 'working';
+    const activity = chatViewActivityWord(s.activity) || 'working';
     return `⏳ ${activity}${e ? ` · ${e}` : ''}`;
   }
   // A named agent: what it is doing now (who started the turn, what it waits on or runs), never the bare status word.
@@ -2144,6 +2187,150 @@ async function onNotifyPrefsSheetChange(e) {
   try { ok = await saveNotifyPrefs({ default: { [s.dataset.nd]: s.value } }); } finally { s.disabled = false; }
   if (ok) toast(`${NOTIFY_KINDS.find(k => k.kind === s.dataset.nd).label}: ${notifyModeLabel(s.value)}`);
   if (d.open) paintNotifyPrefsSheet();
+}
+
+// ── Deep research choice (GET/POST /api/research-pref): ⋮ menu row + small sheet, and a section in the Simple settings sheet.
+// Shown only when the hub answers on:true; any failed or unreadable GET shows nothing.
+const RESEARCH_CHOICES = [['ask', 'Ask each time'], ['always', 'Always'], ['never', 'Never']];
+const RESEARCH_HINT = 'When a question needs research, your agents can offer a deep research run (a few minutes, many sources).';
+function researchChoiceLabel(choice) { const m = RESEARCH_CHOICES.find(c => c[0] === choice); return m ? m[1] : RESEARCH_CHOICES[0][1]; }
+function researchMenuText(choice, level) { return 'Deep research: ' + researchChoiceLabel(choice) + (choice === 'always' && level === 'thorough' ? ' (Thorough)' : ''); }
+const RESEARCH_LEVELS = [['quick', 'Quick'], ['thorough', 'Thorough']];
+function researchLevelOk(level) { return RESEARCH_LEVELS.some(c => c[0] === level); }
+function researchChoiceOk(choice) { return RESEARCH_CHOICES.some(c => c[0] === choice); }
+let researchPrefOn = false;
+let researchPrefChoice = 'ask';
+let researchPrefLevel = 'quick';   // what Always yes runs
+let researchPrefSaving = false;   // one save at a time: a choice made while one is in flight is ignored
+let researchPrefReadSeq = 0;   // a save starts a new number: a read that began before it never repaints the older choice
+async function researchPrefLoad() {
+  const seq = ++researchPrefReadSeq;
+  let d = null;
+  try { const r = await api('/api/research-pref'); if (r.ok) d = await r.json(); } catch { d = null; }
+  if (seq !== researchPrefReadSeq) return researchPrefOn;   // a save (or a newer read) came after this read began
+  researchPrefOn = !!(d && d.on === true);
+  if (researchPrefOn && !researchPrefSaving) { researchPrefChoice = researchChoiceOk(d.choice) ? d.choice : 'ask'; researchPrefLevel = d.alwaysLevel === 'thorough' ? 'thorough' : 'quick'; }
+  researchPrefPaintAll();
+  return researchPrefOn;
+}
+function researchPrefPaintAll() {
+  const row = $('menu-research');
+  if (row) { row.hidden = !researchPrefOn || !!(hubMe && hubMe.isAdmin); row.textContent = researchMenuText(researchPrefChoice, researchPrefLevel); }   // an admin's is in Settings → Notifications
+  typeof menuGroupsSync === 'function' && menuGroupsSync();
+  const sh = $('research-sheet');
+  if (sh && sh.open) researchSheetPaint();
+  const ss = $('simple-settings-sheet');
+  if (ss && ss.open) researchSimplePaint(ss);
+}
+async function researchPick(choice) {
+  if (researchPrefSaving || !researchPrefOn || !researchChoiceOk(choice)) return false;
+  researchPrefSaving = true;
+  researchPrefReadSeq++;   // reads already on their way are now older than this choice
+  const before = researchPrefChoice;
+  researchPrefChoice = choice;
+  researchPrefPaintAll();
+  let err = '';
+  try {
+    const r = await api('/api/research-pref', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ choice }) });
+    const d = await r.json().catch(() => ({}));
+    if (r.ok && d && d.ok) { if (researchChoiceOk(d.choice)) researchPrefChoice = d.choice; } else err = (d && d.error) || 'Could not save that';
+  } catch { err = 'Could not save that'; }
+  researchPrefSaving = false;
+  if (err) researchPrefChoice = before;   // the previous choice goes back
+  researchPrefPaintAll();
+  toast(err ? String(err) : researchMenuText(researchPrefChoice));
+  return !err;
+}
+// Always yes runs Quick or Thorough: saved like a choice (one save at a time; a failure puts the old level back).
+async function researchLevelPick(level) {
+  if (researchPrefSaving || !researchPrefOn || !researchLevelOk(level)) return false;
+  researchPrefSaving = true;
+  researchPrefReadSeq++;
+  const before = researchPrefLevel;
+  researchPrefLevel = level;
+  researchPrefPaintAll();
+  let err = '';
+  try {
+    const r = await api('/api/research-pref', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ alwaysLevel: level }) });
+    const d = await r.json().catch(() => ({}));
+    if (r.ok && d && d.ok) { if (researchLevelOk(d.alwaysLevel)) researchPrefLevel = d.alwaysLevel; } else err = (d && d.error) || 'Could not save that';
+  } catch { err = 'Could not save that'; }
+  researchPrefSaving = false;
+  if (err) researchPrefLevel = before;
+  researchPrefPaintAll();
+  toast(err ? String(err) : 'Always yes: ' + (researchPrefLevel === 'thorough' ? 'Thorough' : 'Quick') + ' research.');
+  return !err;
+}
+// The two buttons "Always yes runs: Quick" / "Always yes runs: Thorough", only while the choice is Always.
+function researchLevelButtons(parent, onPick) {
+  if (researchPrefChoice !== 'always') return;
+  for (const [v, l] of RESEARCH_LEVELS) {
+    const b = document.createElement('button');
+    b.type = 'button'; b.dataset.researchLevel = v; b.textContent = 'Always yes runs: ' + l;
+    b.setAttribute('aria-pressed', String(v === researchPrefLevel));
+    if (onPick) b.addEventListener('click', () => { researchLevelPick(v); });
+    parent.appendChild(b);
+  }
+}
+function researchSheetPaint() {
+  const d = $('research-sheet');
+  if (!d) return;
+  while (d.firstChild) d.removeChild(d.firstChild);
+  const h = document.createElement('h3'); h.textContent = 'Deep research';
+  const hint = document.createElement('div'); hint.className = 'sec-hint'; hint.textContent = RESEARCH_HINT;
+  d.appendChild(h); d.appendChild(hint);
+  for (const [v, l] of RESEARCH_CHOICES) {
+    const b = document.createElement('button');
+    b.type = 'button'; b.dataset.research = v; b.textContent = (v === researchPrefChoice ? '✓ ' : '') + l;
+    b.setAttribute('aria-pressed', String(v === researchPrefChoice));
+    d.appendChild(b);
+  }
+  researchLevelButtons(d, false);   // clicks go through onResearchSheetClick
+  const c = document.createElement('button');
+  c.type = 'button'; c.dataset.research = ''; c.textContent = 'Close';
+  d.appendChild(c);
+}
+function openResearchSheet() {
+  $('menu').classList.remove('open');
+  const d = $('research-sheet');
+  if (!d || !researchPrefOn) return;
+  researchSheetPaint();
+  if (!d.open) d.showModal();
+}
+async function onResearchSheetClick(e) {
+  const d = $('research-sheet');
+  if (e.target === d) { d.close(); return; }   // a tap on the backdrop
+  const lv = e.target.closest && e.target.closest('button[data-research-level]');
+  if (lv) { await researchLevelPick(lv.dataset.researchLevel); return; }   // the sheet stays open
+  const b = e.target.closest && e.target.closest('button[data-research]');
+  if (!b) return;
+  if (!b.dataset.research) { d.close(); return; }
+  const ok = await researchPick(b.dataset.research);
+  if (ok && d.open) d.close();
+}
+// Simple settings sheet: the same three choices as a section after Appearance and Interface style; only when on.
+function researchSimplePaint(d) {
+  if (!d) return;
+  const old = d.querySelector('#ss-research-sec');
+  if (old) old.remove();
+  if (!researchPrefOn) return;
+  const anchor = d.querySelector('#ss-style-sec');
+  if (!anchor) return;
+  const sec = document.createElement('div'); sec.className = 'ss-sec'; sec.id = 'ss-research-sec';
+  const t = document.createElement('div'); t.className = 'ss-title'; t.textContent = 'Deep research';
+  const seg = document.createElement('div'); seg.className = 'ss-rseg'; seg.setAttribute('role', 'group'); seg.setAttribute('aria-label', 'Deep research');
+  for (const [v, l] of RESEARCH_CHOICES) {
+    const b = document.createElement('button');
+    b.type = 'button'; b.dataset.research = v; b.textContent = l;
+    b.setAttribute('aria-pressed', String(v === researchPrefChoice));
+    b.addEventListener('click', () => { researchPick(v); });
+    seg.appendChild(b);
+  }
+  const hint = document.createElement('div'); hint.className = 'ss-rhint'; hint.textContent = RESEARCH_HINT;
+  sec.appendChild(t); sec.appendChild(seg);
+  if (researchPrefChoice === 'always') { const lseg = document.createElement('div'); lseg.className = 'ss-rseg'; lseg.setAttribute('role', 'group'); lseg.setAttribute('aria-label', 'Always yes runs'); researchLevelButtons(lseg, true); sec.appendChild(lseg); }
+  sec.appendChild(hint);
+  anchor.after(sec);
 }
 
 // ── Presence: the hub judges "Only when I'm away" from these. One random id per page load; visible on load, on
@@ -2708,11 +2895,11 @@ function chatViewBusyText(origin, activity, nameOf) {
       case 'hand_off': {
         // The target's turn is labelled "Hand-off from <caller>: <topic>"; the caller's report turn "Hand-off <state>: <topic>".
         const l = typeof o.label === 'string' ? o.label : '';
-        if (/^Hand-off from /.test(l) || (!l && o.from)) return o.from ? `Working on a hand-off from ${who(o.from)}` : 'Working on a hand-off';
-        if (/^Hand-off \S+:/.test(l)) return o.from ? `Reading a hand-off report from ${who(o.from)}` : 'Reading a hand-off report';
-        return 'Working on a hand-off';
+        if (/^Hand-off from /.test(l) || (!l && o.from)) return o.from ? `Working on a task from ${who(o.from)}` : 'Working on a task';
+        if (/^Hand-off \S+:/.test(l)) return o.from ? `Reading a task report from ${who(o.from)}` : 'Reading a task report';
+        return 'Working on a task';
       }
-      case 'hand_off_report': return o.from ? `Reading a hand-off report from ${who(o.from)}` : 'Reading a hand-off report';
+      case 'hand_off_report': return o.from ? `Reading a task report from ${who(o.from)}` : 'Reading a task report';
       case 'job_report': return o.jobName ? `Reading a job report: ${o.jobName}` : 'Reading a job report';
       case 'consult_reply': return 'Reading consultation replies';
       case 'alert': return 'Handling a monitor alert';
@@ -2727,11 +2914,19 @@ function chatViewBusyText(origin, activity, nameOf) {
   if (m) return m[1] ? `Working on a scheduled task: ${m[1]}` : 'Working on a scheduled task';
   if (/^job finished/i.test(a)) return 'Reading a job result';
   if (/^job report/i.test(a)) return 'Reading a job report';
-  if (/^hand-off finished/i.test(a)) return 'Reading a hand-off report';
-  if (/^hand-off$/i.test(a)) return 'Working on a hand-off';
+  // the hub's status words for a hand-off turn ("hand-off", "hand-off finished") and the pages' own ("task from X", "task finished: X")
+  m = /^(?:hand-off|task) finished(?::\s*(.+))?$/i.exec(a);
+  if (m) return m[1] ? `Reading a task report from ${who(m[1])}` : 'Reading a task report';
+  m = /^(?:hand-off|task)(?: from (.+))?$/i.exec(a);
+  if (m) return m[1] ? `Working on a task from ${who(m[1])}` : 'Working on a task';
   if (/^replying to you$/i.test(a)) return 'Replying to your message';
   if (/^alert$/i.test(a)) return 'Handling a monitor alert';
   return 'Working on a hub task';
+}
+// The status feed's short word for what an agent does, as the pages show it: the hub's hand-off words read "task".
+function chatViewActivityWord(activity) {
+  const a = typeof activity === 'string' ? activity : '';
+  return a.replace(/^hand-off finished\b/i, 'task finished').replace(/^hand-off\b/i, 'task');
 }
 // What a working agent waits on: its own helpers (temporary workers whose parent is it) and agents it consulted, from the
 // status feed { <name>: { busy, busySince, worker, parent, label, consultedBy } }. '' when it waits on nobody.
@@ -2766,7 +2961,7 @@ function chatViewStep(item) {
   const name = raw.replace(/^mcp__[^_]+(?:_[^_]+)*?__/, '');
   const words = {
     spawn_workers: 'starting helpers', consult_agent: 'asking another agent', run_job: 'starting a background job',
-    hand_off: 'handing off work', ask_user: 'waiting for your answer', Bash: 'running a command', Read: 'reading a file',
+    hand_off: 'handing over a task', ask_user: 'waiting for your answer', Bash: 'running a command', Read: 'reading a file',
     Write: 'writing a file', Edit: 'editing a file', Grep: 'searching files', Glob: 'searching files',
     WebSearch: 'searching the web', WebFetch: 'reading a web page', schedule_task: 'scheduling a task',
   }[name] || `using ${name || 'a tool'}`;
@@ -2874,8 +3069,9 @@ function autoInfoOf(entry) {
     else if (o.kind === 'job_report') label = `Job report${o.jobName ? ': ' + o.jobName : ''}`;
     else if (o.kind === 'task') label = o.label === 'context compression' ? 'Resumed after compression' : `Hub task${o.label ? ': ' + o.label : ''}`;
     else if (o.kind === 'consult_reply') label = 'Consultation replies delivered';
-    else if (o.kind === 'hand_off') label = o.label || `Hand-off from ${from || 'another agent'}`;
-    else if (o.kind === 'hand_off_report') label = o.label || 'Hand-off finished';
+    // on screen a hand-off reads "task" (the owner's wording); the hub's own label starts "Hand-off from X: " or "Hand-off done: "
+    else if (o.kind === 'hand_off') label = o.label ? o.label.replace(/^Hand-off\b/, 'Task') : `Task from ${from || 'another agent'}`;
+    else if (o.kind === 'hand_off_report') label = o.label ? o.label.replace(/^Hand-off\b/, 'Task') : 'Task finished';
     else if (o.kind === 'alert') label = 'Monitor alert';
     else label = 'Hub turn';
     return { kind, from, label };
@@ -3263,7 +3459,7 @@ function voiceCleanPrefs(raw) {
   for (const k of ['micLevel', 'interruptSensitivity']) {
     if (typeof raw[k] === 'number' && Number.isFinite(raw[k])) p[k] = Math.max(0, Math.min(100, raw[k]));
   }
-  if (raw.mode === 'handsfree' || raw.mode === 'tap') p.mode = raw.mode;
+  if (raw.mode === 'handsfree' || raw.mode === 'press' || raw.mode === 'tap') p.mode = raw.mode;
   if (VOICE_END_PAUSES.includes(raw.endPause)) p.endPause = raw.endPause;
   if (typeof raw.voiceSpeed === 'number' && Number.isFinite(raw.voiceSpeed)) p.voiceSpeed = voiceCleanSpeed(raw.voiceSpeed);
   if (VOICE_CONTINUE_WAITS.includes(raw.continueWait)) p.continueWait = raw.continueWait;
@@ -3728,6 +3924,144 @@ function voiceCreateLoudness(ctx) {
   try { ctx.__voiceLoudness = chain; } catch {}
   return chain;
 }
+// The press button of a Tap to talk call (el: the mic button, the display's Talk slot). getCall() -> the call controller (talk(on)). Pointer events: a press
+// on the button starts listening (talk(true)); let go after VOICE_PRESS_HOLD_MS or more = hold to talk, release sends (talk(false)); a shorter tap keeps listening;
+// a tap while listening sends on its release. The click after a pointer sequence is swallowed. Enter / Space toggle (no auto-repeat). The page calls
+// handle.paint(on) from the call's ui.press(on): aria-pressed (listening or not), the title and the visible text ("Tap to talk" / "Tap to send") follow it; the aria-label stays "Talk".
+// opts: now(), cls (pressed style, default 'rec'), text (also set textContent), off() (true: the button is doing something else, e.g. the call display's "Try the microphone
+// again": the press handlers do nothing). A pointer sequence that is cancelled or loses its capture ends the press it opened (and sends), whatever its length;
+// a pointerdown that finds a sequence of the same pointer that never ended, or one older than VOICE_PRESS_STALE_MS whose pointer no longer has capture, starts over. handle.el is the button.
+const VOICE_PRESS_HOLD_MS = 400;
+const VOICE_PRESS_STALE_MS = 10000;
+const VOICE_PRESS_LABELS = ['Tap to talk', 'Tap to send'];
+function voicePressButton(el, getCall, opts) {
+  const o = opts || {};
+  const now = typeof o.now === 'function' ? o.now : () => Date.now();
+  const cls = typeof o.cls === 'string' ? o.cls : 'rec';
+  const bornAt = now();   // the button is often made inside the very tap that starts the call: that tap's own click is not a press
+
+  let painted = false;   // the visible state (ui.press), not the requested one: a press requested during the previous press's tail is shown only when admitted
+  let began = false, downId, downAt = 0, requestedAtDown = false;
+  let swallowUntil = -Infinity, keyDown = false, keyClickUntil = -Infinity;
+
+  function quiet(fn) {
+    try { return fn(); } catch { return undefined; }
+  }
+  const off = () => typeof o.off === 'function' && quiet(() => o.off()) === true;
+  const stop = e => quiet(() => e?.preventDefault?.());
+  const isToggleKey = e => ['Enter', ' ', 'Spacebar'].includes(e?.key);
+
+  // A toggle asks the call (call.pressing: the requested state, call.talk), never the painted state.
+  function toggle() {
+    quiet(() => {
+      const call = getCall();
+      if (call) call.talk(!call.pressing);
+    });
+  }
+
+  quiet(() => el.setAttribute('aria-label', 'Talk'));
+
+  function paint(on) {
+    painted = !!on;
+    const label = VOICE_PRESS_LABELS[painted ? 1 : 0];
+    quiet(() => el.setAttribute('aria-pressed', String(painted)));
+    quiet(() => el.setAttribute('title', label));
+    if (o.text) quiet(() => { el.textContent = label; });
+    if (cls) quiet(() => el.classList?.toggle(cls, painted));
+  }
+
+  function onDown(e) {
+    if (off()) return;
+    if (e?.pointerType === 'mouse' && typeof e.button === 'number' && e.button !== 0) return;
+    stop(e);
+
+    const id = e?.pointerId;
+    const t = now();
+    // a second finger on a press that is under way is ignored; a sequence that never ended (no pointerup, no cancel) starts over when it is of the same pointer, or older than VOICE_PRESS_STALE_MS
+    // and its pointer no longer has capture (a long legitimate hold keeps its capture: a second finger cannot take it over)
+    if (began) {
+      const samePointer = id !== undefined && id === downId;
+      const stale = t - downAt > VOICE_PRESS_STALE_MS;
+      if (!samePointer && (!stale || quiet(() => el.hasPointerCapture?.(downId)))) return;
+    }
+
+    const call = quiet(getCall);
+    if (!call) return;
+    requestedAtDown = call.pressing === true;
+    began = true;
+    downId = id;
+    downAt = t;
+    swallowUntil = Infinity;
+    if (id !== undefined) quiet(() => el.setPointerCapture?.(id));
+    if (!requestedAtDown) quiet(() => call.talk(true));
+  }
+
+  // Only the pointer that opened the press can end it: the release, cancel or lost capture of a second finger changes nothing.
+  function finishPointer(e, cancelled) {
+    if (!began || e?.pointerId !== downId) return;
+    const t = now();
+    began = false;
+    downId = undefined;
+    swallowUntil = t + 700;
+    stop(e);
+    // cancelled (pointercancel, lostpointercapture): the press ends now, whatever its length
+    if (cancelled || requestedAtDown || t - downAt >= VOICE_PRESS_HOLD_MS) {
+      quiet(() => getCall()?.talk(false));
+    }
+  }
+
+  function onClick(e) {
+    if (off()) return;
+    stop(e);
+    if (began) return;   // a secondary click cannot consume the owner's swallow flag
+    const t = now();
+    if (t - bornAt < 700 || t <= swallowUntil) {
+      swallowUntil = -Infinity;
+      return;
+    }
+    if (keyDown || t <= keyClickUntil) {
+      keyClickUntil = -Infinity;
+      return;
+    }
+    toggle();   // a click from nothing we saw (assistive technology): a toggle
+  }
+
+  function onKeyDown(e) {
+    if (!isToggleKey(e) || off()) return;
+    stop(e);
+    if (e.repeat || keyDown) return;
+    keyDown = true;
+    keyClickUntil = now() + 700;
+    toggle();
+  }
+
+  function onKeyUp(e) {
+    if (!isToggleKey(e) || !keyDown) return;
+    stop(e);
+    keyDown = false;
+    // Space can produce its click on release, even after a long hold.
+    keyClickUntil = now() + 700;
+  }
+
+  const listeners = [
+    ['pointerdown', onDown],
+    ['pointerup', e => finishPointer(e, false)],
+    ['pointercancel', e => finishPointer(e, true)],
+    ['lostpointercapture', e => finishPointer(e, true)],
+    ['click', onClick],
+    ['keydown', onKeyDown],
+    ['keyup', onKeyUp],
+  ];
+  for (const [name, fn] of listeners) el.addEventListener(name, fn);
+  return {
+    el,
+    paint,
+    get pressing() { return painted; }, // Existing handle API reports the visible state.
+    detach() {
+      for (const [name, fn] of listeners) quiet(() => el.removeEventListener(name, fn));
+    },
+  };
+}
 // ── voice helpers (end) ──
 
 // Hands-free call controller: shared with lib/ui-voice-call.js, kept in step by test/ui-voice-call.test.js.
@@ -3737,8 +4071,14 @@ const VOICE_MIC_LOST_LINE = 'I lost the microphone. Tap the button to try it aga
 // The frame watchdog: while the person is speaking, the detector sends a frame every 32 ms. No frame for VOICE_FRAME_GAP_MS means the audio no longer reaches it
 // (iOS interrupted it); one piece longer than VOICE_PIECE_MAX_MS is cut and sent. The check runs every VOICE_WATCHDOG_TICK_MS.
 const VOICE_FRAME_GAP_MS = 2000, VOICE_PIECE_MAX_MS = 60000, VOICE_WATCHDOG_TICK_MS = 500;
+// Mute mid-speech with a detector that cannot end a piece on request (no endPiece): how long the end that follows the silence is waited for.
+const VOICE_MUTE_END_MS = 5000;
 const VOICE_FRAMES_LOST_LINE = 'The microphone stopped sending sound, so I restarted it.';
 const VOICE_PIECE_LONG_LINE = 'You talked for over a minute, so I sent what I heard.';
+// Tap to talk (deps.press): a press is cut only at this length, not at VOICE_PIECE_MAX_MS; VOICE_PRESS_MIN_MS: a press with less audio than this is a false start (adapter).
+// VOICE_PRESS_TAIL_MS: a press goes on accepting frames this long after the release (the pipeline's lag: frames captured before the release are processed after it).
+const VOICE_PRESS_MAX_MS = 15 * 60 * 1000, VOICE_PRESS_MIN_MS = 250, VOICE_PRESS_TAIL_MS = 200;
+const VOICE_PRESS_LONG_LINE = 'You talked for 15 minutes, so I sent what I heard.';
 const VOICE_EMPTY_LINE = 'I didn\'t catch that.';   // the recognizer answered with no words at all for a piece of at least 1 s
 // While a reply plays, a stricter talk-over (iPhone, iPad: the speaker's echo is loud) caps the sensitivity at this value.
 const VOICE_STRICT_TALKOVER_SENS = 20;
@@ -4010,6 +4350,10 @@ function voiceCreateCall(deps) {
   const d = deps || {};
   const ui = Object.assign({ state() {}, heard() {}, held() {}, toast() {}, summary() {}, level() {}, activity() {}, reply() {}, mic() {}, micLost() {} }, d.ui);   // ui.mic(info): the open microphone; ui.micLost(bool): it was lost / is back; ui.thinkingPulse(event) is optional; ui.reply(kind): 'start' | 'end' | 'drop' | 'resume' (a reply's boundaries, for the display's reaction)
   const server = d.server || {}, vad = d.vad || {};
+  // Tap to talk (deps.press === true, fixed for the call): the microphone is heard only while the person presses (talk(true) ... talk(false)). Between presses the
+  // call is muted the way Mute does it (tracks off), but ui.press(on) says it, not the muted display. No standby or wake phrase. pressing: a press is on.
+  const press = d.press === true;
+  let pressing = false, pressShown = false;   // pressing: a press is requested; pressShown: ui.press(true) was said (the press was admitted: the detector reported its start)
   const now = () => d.now();
   const quiet = (fn) => { try { return fn(); } catch { return undefined; } };
   let state = '', mode = 'announce', ended = false, started = false, endPromise = null;
@@ -4050,8 +4394,11 @@ function voiceCreateCall(deps) {
   // deps.keepAlive ({ start(), stop() }, optional): an inaudible sound that keeps a Bluetooth / car audio route awake. It starts with the call and
   // the first spoken line of the call waits until VOICE_CALL_LEAD_IN_MS after that (the route needs a moment to open, or the first syllable is lost).
   let leadInUntil = 0, keepAliveOn = false, micLost = false;
-  // Mute (setMuted, the call bar's Mute button). sinceUnmute: a piece of speech began after the last unmute (an end or misfire for one that began before is ignored).
-  let muted = false, sinceUnmute = true;
+  // Mute (setMuted, the call bar's Mute button). sinceUnmute: a piece of speech began after the last unmute (an end or misfire for one that began before is ignored,
+  // a stray fragment of the detector). muteEnd: the pieceId of the piece Mute ended at the tap (-1: none): its one end or misfire is taken, muted or not.
+  // muteSeq counts the Mute taps: a piece that sees it change (or the call muted) while it would wait for more is sent at once. muteEnding: endAtMute is running.
+  // muteCut: the pieceId endAtMute is cutting; muteAgain: a later Mute found a newer piece under way, cut once the running cut is done.
+  let muted = false, sinceUnmute = true, muteEnd = -1, muteSeq = 0, muteEnding = false, muteCut = -1, muteAgain = false;
   let linkLost = false, linkWasLost = false, linkDropped = false;   // the connection to the server is lost (setLinkLost): nothing is reported as an error
   // Outage count: each loss adds one. A piece of speech remembers the count when it began (-1 if the link was already lost). The link state NEVER
   // discards a piece whose transcript arrived (the request itself is the test: speech heard during an outage is still sent to d.stt). It only decides
@@ -4172,7 +4519,7 @@ function voiceCreateCall(deps) {
   // heard; an awake call that stays quiet for quietMs goes back to standby. Wake mode starts only with local true, and once on it fails
   // closed: if local turns false the call stays in (or returns to) standby and nothing heard there is even transcribed. Only the
   // person switching it off (wake() -> null) makes it an ordinary call. Without deps.wake nothing here acts.
-  const wake = () => { if (!d.wake) return null; const w = quiet(() => d.wake()); return w && typeof w === 'object' ? w : null; };
+  const wake = () => { if (press || !d.wake) return null; const w = quiet(() => d.wake()); return w && typeof w === 'object' ? w : null; };
   const wakePhrase = () => { const w = wake(); return w && typeof w.phrase === 'string' ? w.phrase : ''; };
   let standby = false, wakeMode = false, wakeSeq = 0, quietTimer = null, chimeTimer = null, statePhrase = '';
   let capWake = null, heardShown = false;   // heardShown: a 'Heard' line is on screen (cleared when the call goes back to standby)   // { sb, seq } taken when the person starts to speak: what counts is whether the call was in standby then
@@ -4476,7 +4823,7 @@ function voiceCreateCall(deps) {
       if (ended || muted || !personSpeaking) return;   // not speaking (or muted): nothing to watch; the next piece arms it again
       const t = now();
       if (lastFrameAt > 0 && t - lastFrameAt >= VOICE_FRAME_GAP_MS) { fireWatch('frames'); return; }
-      if (t - pieceStartAt >= VOICE_PIECE_MAX_MS) { fireWatch('long'); return; }
+      if (t - pieceStartAt >= (press ? VOICE_PRESS_MAX_MS : VOICE_PIECE_MAX_MS)) { fireWatch('long'); return; }
       armWatch();
     }, VOICE_WATCHDOG_TICK_MS);
   }
@@ -4486,7 +4833,13 @@ function voiceCreateCall(deps) {
   // says the microphone is lost, never "Listening" while nothing is heard.
   async function fireWatch(reason) {
     const id = pieceId;
-    quiet(() => ui.toast(reason === 'frames' ? VOICE_FRAMES_LOST_LINE : VOICE_PIECE_LONG_LINE));
+    quiet(() => ui.toast(reason === 'frames' ? VOICE_FRAMES_LOST_LINE : press ? VOICE_PRESS_LONG_LINE : VOICE_PIECE_LONG_LINE));
+    // Tap to talk: the press ends here, as if the person let go (the piece is cut and sent at once by Mute's path); the microphone is opened again after lost frames.
+    if (press) {
+      talk(false);
+      if (reason === 'frames' && !ended) { try { await retryMic(); } catch { /* retryMic never throws */ } }
+      return;
+    }
     let listening = false;
     if (typeof vad.endPiece === 'function') { try { listening = (await vad.endPiece()) !== false; } catch { listening = false; } }
     if (!ended && !muted && personSpeaking && pieceId === id) dropSpeech();
@@ -4500,7 +4853,7 @@ function voiceCreateCall(deps) {
     const c = lastSeg;
     // The earlier piece qualifies while its text is not sent yet (its transcript pending, held, or in the continue wait): one chain,
     // in order, however slow the transcription is, so a later stop word still wins over it.
-    if (c && !c.done && !c.hold) {
+    if (c && !c.done && !c.hold && !press) {   // (tap to talk: every press is its own message, never joined)
       let resolve; const promise = new Promise((r) => { resolve = r; });
       c.hold = { promise, resolve }; curCand = c;
       if (c.onJoin) { const f = c.onJoin; c.onJoin = null; quiet(f); }   // the wait for more is over: the next piece is coming
@@ -4511,6 +4864,12 @@ function voiceCreateCall(deps) {
     segActive = false;
     const c = curCand; curCand = null;
     if (c && c.hold) { c.hold.resolve(null); c.hold = null; }
+  }
+  // Tap to talk: ui.press(true) follows the admission of the press (the detector's start report for it), not the request (talk(true)). Once per press.
+  function showPress() {
+    if (!press || !pressing || pressShown) return;
+    pressShown = true;
+    quiet(() => { if (typeof ui.press === 'function') ui.press(true); });
   }
   function onSpeechBegin() {
     if (ended || personSpeaking || muted) return;
@@ -4528,6 +4887,7 @@ function voiceCreateCall(deps) {
   // Real speech began (the VAD adapter calls this from onSpeechRealStart, so a cough or a click does not cut the reading).
   function onSpeechStart() {
     if (ended || muted) return;
+    showPress();
     sinceUnmute = true;
     clearBegin();
     if (watchTimer === null) { pieceStartAt = now(); armWatch(); }   // real speech: the watchdog runs until the piece ends
@@ -4551,7 +4911,7 @@ function voiceCreateCall(deps) {
   }
   // The VAD heard no real speech after all (a false start): the person is not speaking, and a reply that was cut by it is read on.
   function onMisfire() {
-    if (ended || muted || !sinceUnmute) return;
+    if (ended || (muteEnd !== pieceId && (muted || !sinceUnmute))) return;
     dropSpeech();
   }
   function dropSpeech() {
@@ -4577,7 +4937,10 @@ function voiceCreateCall(deps) {
     return typeof p === 'number' && Number.isFinite(p) && p < 0.35;
   }
   function onSpeechEnd(audio) {
-    if (ended || muted || !sinceUnmute) return Promise.resolve();   // muted: nothing is heard; just unmuted: a piece begun before it is not sent
+    // Muted: nothing is heard, except the piece Mute ended at the tap (muteEnd), which is sent. Just unmuted: an end with no speech begun since is a stray fragment.
+    const atMute = muteEnd === pieceId;
+    if (ended || (!atMute && (muted || !sinceUnmute))) return Promise.resolve();
+    if (atMute) muteEnd = -1;
     clearBegin(); disarmWatch(); pieceId++;
     // The recorded audio of this speech (null when it was not recorded: standby, paused, no recorder): its transcript is saved below.
     const recHandle = recOn ? quiet(() => recorder.end()) || null : null;
@@ -4586,7 +4949,7 @@ function voiceCreateCall(deps) {
     // sb and seq: was this said in standby (when it began, or now), and how many wakes had there been. Said in standby, it needs the phrase unless a wake came
     // in between (the phrase said alone, then this): so neither a switch-off nor a lost recognizer check can release it.
     const cap = capWake || { sb: standby, seq: wakeSeq }; capWake = null;
-    const mine = { endAt: now(), ann: speechAnn, carry: '', done: false, hold: null, waiting: false, onJoin: null, sb: cap.sb || standby, seq: cap.seq,
+    const mine = { endAt: now(), ann: speechAnn, carry: '', done: false, hold: null, waiting: false, onJoin: null, sb: cap.sb || standby, seq: cap.seq, muteSeq,
       linkGen: segLinkGen === linkGen && !linkLost ? linkGen : -1 };
     const linkHit = () => linkLost || mine.linkGen !== linkGen;   // the link was lost now, or an outage began since / was going when this piece began
     speechAnn = null; segActive = false;
@@ -4644,9 +5007,11 @@ function voiceCreateCall(deps) {
           if (waitTimer !== null) quiet(() => d.clearTimer(waitTimer));
           mine.waiting = false; mine.onJoin = null;
         };
-        if (!mine.hold && !ended && !voiceIsStopCommand(t) && !sleepy && !pendingAsk && mine.ann == null && !pendingAnnounce) {
+        // Mute was tapped (now, or while the end-of-turn model decided): sent as it is, no wait for more.
+        const mutedSince = () => muted || muteSeq !== mine.muteSeq;   // counted from the end of this piece, before its transcription
+        if (!mine.hold && !ended && !atMute && !mutedSince() && !voiceIsStopCommand(t) && !sleepy && !pendingAsk && mine.ann == null && !pendingAnnounce) {
           ms = continueWait();
-          if (ms > 0 && await soundsUnfinished(t, audio)) {
+          if (ms > 0 && await soundsUnfinished(t, audio) && !mutedSince()) {
             waited = true; waitStart = now();
             await waitMore(ms);
             if (ended) return;
@@ -4664,7 +5029,7 @@ function voiceCreateCall(deps) {
           if (timedOut || !waited) break;
           // A misfire (cough, click) ended the wait early: the rest of the wait goes on.
           const left = ms - (now() - waitStart);
-          if (left <= 0) break;
+          if (left <= 0 || mutedSince()) break;
           await waitMore(left);
           if (ended) return;
         }
@@ -4852,17 +5217,61 @@ function voiceCreateCall(deps) {
     try { return Promise.resolve(vad.reopen()).then((r) => !!r, () => false); } catch { return Promise.resolve(false); }
   }
 
-  // Mute: the agent hears nothing. The microphone tracks are switched off (vad.setMuted: the speech detector, the recognizer and the recorder get digital
-  // silence, also from a microphone opened again while muted) and the speech events are ignored here. Speech under way when Mute is tapped is dropped as a
-  // false start: nothing of it is sent or recorded, and a reply it had cut reads on. After unmute, only speech that begins after it counts. The agent's own
-  // speech, the thinking sound, the keep-alive and the music focus are not touched. Every call starts unmuted; the end of the call clears it. -> muted.
+  // Mute: the agent hears nothing said after the tap. The microphone tracks are switched off (vad.setMuted: the speech detector, the recognizer and the
+  // recorder get digital silence, also from a microphone opened again while muted) and new speech events are ignored here. Speech under way when Mute is
+  // tapped ENDS at the tap and is sent, as if the person had paused (endAtMute): everything said before the tap reaches the agent, and is recorded when the
+  // call is. A piece waiting for more ('Wait for me to go on') is sent at once; pieces being transcribed or in line go on as usual. The agent's reply is
+  // read while muted. After unmute, only speech that begins after it counts. The agent's own speech, the thinking sound, the keep-alive and the music
+  // focus are not touched. Every call starts unmuted; the end of the call clears it. -> muted.
   function setMuted(on) {
     const want = !!on;
     if (ended || want === muted) return muted;
     muted = want;
     quiet(() => { if (typeof vad.setMuted === 'function') vad.setMuted(want); });
-    if (want) { sinceUnmute = false; disarmWatch(); if (personSpeaking || segActive) dropSpeech(); }
+    if (want) {
+      sinceUnmute = false; disarmWatch(); muteSeq++;
+      if (personSpeaking || segActive) {
+        if (!muteEnding) endAtMute();
+        else if (pieceId === muteCut) muteEnd = pieceId;   // a second tap on the piece being cut: that cut covers it
+        else muteAgain = true;   // a newer piece (begun after a quick unmute): cut it when the running cut is done
+      }
+      const w = lastSeg;
+      if (w && w.waiting && w.onJoin && !segActive) { const f = w.onJoin; w.onJoin = null; quiet(f); }   // waiting for more that will not come: sent now
+    }
     return muted;
+  }
+  // The piece under way when Mute was tapped: the detector ends it now (vad.endPiece, as the frame watchdog does), so what was heard up to the tap is
+  // transcribed and sent through the normal onSpeechEnd (muteEnd lets that one end through). A detector without endPiece ends it on the silence that
+  // follows (within VOICE_MUTE_END_MS). When no end or misfire came, the piece is let go; a detector that could not listen again is opened again.
+  async function endAtMute() {
+    const id = pieceId;
+    muteEnd = id; muteEnding = true; muteCut = id; muteAgain = false;
+    let listening = true, asked = false;
+    try {
+      if (typeof vad.endPiece === 'function') { asked = true; try { listening = (await vad.endPiece()) !== false; } catch { listening = false; } }
+      else await new Promise((r) => { d.setTimer(r, VOICE_MUTE_END_MS); });
+    } finally { muteEnding = false; muteCut = -1; }
+    if (muteEnd === id) muteEnd = -1;
+    if (!ended && personSpeaking && pieceId === id) dropSpeech();
+    if (asked && !listening && !ended) { try { await retryMic(); } catch { /* retryMic never throws */ } }
+    if (muteAgain) { muteAgain = false; if (!ended && muted && (personSpeaking || segActive)) await endAtMute(); }
+  }
+  // Tap to talk (press mode only; false and nothing done in any other call). talk(true): the microphone opens and a piece begins at once (the adapter reports it
+  // from setMuted(false); a detector that does not gets it from here), so a reply being read is cut as when the person speaks over it. talk(false): the
+  // microphone closes, which ends the piece and sends it at once (Mute's endAtMute: no wait for more, no joining). Idempotent. -> the pressing state.
+  function talk(on) {
+    if (!press) return false;
+    const want = !!on;
+    if (ended || !started || state === 'starting' || want === pressing) return pressing;
+    pressing = want;
+    if (want) {
+      setMuted(false);
+      if (!vad.manual) { if (!personSpeaking) { onSpeechBegin(); onSpeechStart(); } else showPress(); }   // only a detector that cannot report the start (a manual one reports it itself, up to a press tail later, and ui.press(true) follows that report)
+    } else {
+      pressShown = false; setMuted(true);
+      quiet(() => { if (typeof ui.press === 'function') ui.press(false); });
+    }
+    return pressing;
   }
   // The Interrupt button while muted (the Talk floor asks this instead of taking the floor: nothing is listened for while muted): the reply being read
   // stops and the rest of this turn's reply is not read, as when the person cuts it by speaking. -> true when something was stopped.
@@ -4908,6 +5317,7 @@ function voiceCreateCall(deps) {
     await vadStarting;
     if (ended) { quiet(() => vad.stop()); return false; }   // hung up while starting: a microphone that came up late is let go
     if (vadErr) return fail('Could not start the microphone: ' + (vadErr.message || vadErr));
+    if (press) { setMuted(true); quiet(() => { if (typeof ui.press === 'function') ui.press(false); }); }   // tap to talk: the microphone is off until the first press
     hydrate(startRes && startRes.held);
     beat();
     if (!wake()) { wakeMode = false; standby = false; }   // switched off while the call started (wakeChanged waits for the start)
@@ -4963,15 +5373,17 @@ function voiceCreateCall(deps) {
   // unchanged may move the call). Switched off: an ordinary call. Switched on (with a local recognizer): standby now if idle, else after
   // the quiet time. Anything else (a new phrase or quiet time, a check that failed) leaves the mode and the state as they are.
   function wakeChanged() {
-    if (ended || !started || state === 'starting') return;
+    if (press || ended || !started || state === 'starting') return;   // (tap to talk: no wake phrase)
     const w = wake();
     if (!w) { wakeMode = false; if (standby) leaveStandby(); else settle(); return; }
     if (!wakeMode && w.local === true) { wakeMode = true; if (!standby && wakeIdle()) enterStandby(); }
     settle();
   }
   return {
-    start, hangUp, release, wakeChanged, isStandby: () => standby, setMuted, isMuted: () => muted, interrupt, setPrefs, retryMic, setLinkLost, onSpeechBegin, onSpeechStart, onMisfire, onSpeechEnd, onReplyText, onReadFull, resetReadFull, onActivity, onAsk, onAskDone, onHeld, onHeldDone, decide, setMode, onHubOwner, backgroundDone,
+    get pressing() { return pressing; },
+    start, hangUp, release, wakeChanged, isStandby: () => standby, setMuted, isMuted: () => muted, talk, interrupt, setPrefs, retryMic, setLinkLost, onSpeechBegin, onSpeechStart, onMisfire, onSpeechEnd, onReplyText, onReadFull, resetReadFull, onActivity, onAsk, onAskDone, onHeld, onHeldDone, decide, setMode, onHubOwner, backgroundDone,
     get background() { return bgWords.length > 0; },
+    get press() { return press; },
     get state() { return state; }, get callId() { return callId; }, get mode() { return mode; }, get held() { return heldList.map(h => Object.assign({}, h)); },
   };
 }
@@ -5465,9 +5877,12 @@ function voiceCreateVad(opts) {
     devPending: false,   // a devicechange arrived while the first route step was running: deviceChanged() runs once when it ends
     unprocessed: !!o.unprocessed,   // the call's own microphone is opened with echo cancellation, noise suppression and auto gain off (a recorded call, mic 'unprocessed': the fallback)
     recRaw: null, recSrc: null, recTrack: null, recOff: null, srcWatchers: [], openWaiters: [],   // the recording's own second microphone track (openRecordingTap) and who follows the tap
-    muted: false,   // setMuted: every microphone track of the call is switched off
+    manual: o.manual === true,   // tap to talk: the detector's speech events decide nothing; a piece is the frames heard between setMuted(false) and setMuted(true)
+    open: null, ended: [],   // manual: each press is its own { frames (Float32Array, 16 kHz), len, endedAt, taken }; the press that is open now, and the ended ones that are still in their tail or not yet taken by endPiece
+    muted: o.manual === true,   // setMuted: every microphone track of the call is switched off (a tap-to-talk call starts switched off)
     paused: false };   // endPiece paused the detector and has not started it again (a failed start): reopen() starts it
   const win = () => o.win || window;
+  const nowMs = typeof o.now === 'function' ? o.now : () => Date.now();
   const setT = o.setTimer || ((fn, ms) => { const w = win(); return (typeof w.setTimeout === 'function' ? w.setTimeout.bind(w) : setTimeout)(fn, ms); });
   const clearT = o.clearTimer || ((id) => { const w = win(); return (typeof w.clearTimeout === 'function' ? w.clearTimeout.bind(w) : clearTimeout)(id); });
   const clearHold = () => { if (st.holdTimer !== null) { try { clearT(st.holdTimer); } catch { /* gone */ } st.holdTimer = null; } };
@@ -5828,16 +6243,23 @@ function voiceCreateVad(opts) {
         // only; a candidate that never gets there ends in onVADMisfire.
         // submitUserSpeechOnPause: pausing the detector (endPiece) ends the piece in progress and delivers its audio through onSpeechEnd (or onVADMisfire when too short).
         submitUserSpeechOnPause: true,
-        onSpeechStart: () => { if (live() && handlers.onSpeechBegin) handlers.onSpeechBegin(); },
+        onSpeechStart: () => { if (!st.manual && live() && handlers.onSpeechBegin) handlers.onSpeechBegin(); },   // (manual: the speech events decide nothing)
         // Real speech passed the raised thresholds: an echo hold-over still running (after a reply or a thinking pulse) ends at once, so
         // it never stays raised over the person's own words.
         onSpeechRealStart: () => {
           if (st.holdTimer !== null) { clearHold(); st.playing = false; apply(); }
-          if (live() && handlers.onSpeechStart) handlers.onSpeechStart();
+          if (!st.manual && live() && handlers.onSpeechStart) handlers.onSpeechStart();
         },
-        onSpeechEnd: (audio) => (live() && handlers.onSpeechEnd ? handlers.onSpeechEnd(audio) : undefined),
-        onVADMisfire: () => { if (live() && handlers.onMisfire) handlers.onMisfire(); },
-        onFrameProcessed: (probs, frame) => { if (live() && handlers.onFrame) handlers.onFrame(voiceLevelDb(frame), probs); },
+        onSpeechEnd: (audio) => (!st.manual && live() && handlers.onSpeechEnd ? handlers.onSpeechEnd(audio) : undefined),
+        onVADMisfire: () => { if (!st.manual && live() && handlers.onMisfire) handlers.onMisfire(); },
+        onFrameProcessed: (probs, frame) => {
+          if (!live()) return;   // a late callback from a detector that has been replaced or released stores nothing and reports nothing
+          if (st.manual && frame && frame.length) {   // a frame belongs to the press that is open and admitted, else to the admitted one still in its tail (its copy: the detector may reuse its frame)
+            const p = st.open && st.open.admitted ? st.open : tailOwner();
+            if (p) { p.frames.push(Float32Array.from(frame)); p.len += frame.length; }
+          }
+          if (handlers.onFrame) handlers.onFrame(voiceLevelDb(frame), probs);
+        },
       });
       if (stale()) throw new Error('stopped');
       await st.vad.start();
@@ -5857,6 +6279,7 @@ function voiceCreateVad(opts) {
     flushOpen(false); dropRecording(); st.srcWatchers = [];
     st.vad = st.raw = st.dest = st.ctx = st.gain = st.src = st.defSnap = null;
     st.paused = false; st.settling = null; st.devPending = false;
+    st.open = null; st.ended = [];
     st.handlers = {};   // nothing the detector emits while it is destroyed (a last SpeechEnd from its pause) reaches the call
     if (src) { try { src.disconnect(); } catch { /* gone */ } }
     voiceStopStream(raw); voiceStopStream(dest);   // first, so the microphone is free even when the rest is slow
@@ -5864,8 +6287,27 @@ function voiceCreateVad(opts) {
     try { if (ctx) await ctx.close(); } catch { /* already closed */ }
   }
   async function stop() { st.gen++; await release(); }
+  // Tap to talk (manual). This is a 200 ms admission delay (VOICE_PRESS_TAIL_MS), not an acknowledgment from the detector: a press that starts while the
+  // previous press is still in its tail keeps the tracks muted until that tail ends, then is admitted (tracks on, onSpeechBegin, onSpeechStart). Speech in
+  // that delay is not heard. A press released or a call stopped before then is never admitted (st.open !== p).
+  function admitPress(p) {
+    if (st.open !== p || p.admitted) return;
+    p.admitted = true;
+    st.muted = false; applyMute();
+    const h = st.handlers;
+    try { if (typeof h.onSpeechBegin === 'function') h.onSpeechBegin(); } catch { /* the call's own problem */ }
+    try { if (typeof h.onSpeechStart === 'function') h.onSpeechStart(); } catch { /* the call's own problem */ }
+  }
+  // The admitted press that was released within VOICE_PRESS_TAIL_MS (its frames are still in the pipeline): it keeps the audio.
+  function tailOwner() {
+    const t = nowMs();
+    for (let i = 0; i < st.ended.length; i++) { const p = st.ended[i]; if (p.admitted && t < p.endedAt + VOICE_PRESS_TAIL_MS) return p; }
+    return undefined;
+  }
   return {
     start, stop,
+    // true: the detector reports the start of a press itself (the call does not fake it).
+    get manual() { return st.manual; },
     // While a reply plays the barge-in thresholds are raised. Playback stopping does NOT lower them at once: a car cabin's echo of the reply
     // reaches the microphone 150-300 ms after playback stops (longer through Bluetooth), and would be heard as the person speaking. So they stay
     // raised for echoHoldMs (default VOICE_ECHO_HOLD_MS; 0 = off: lowered at once) and a new playback in between cancels the lowering.
@@ -5906,6 +6348,26 @@ function voiceCreateVad(opts) {
     // segment and delivers it through onSpeechEnd (VADMisfire when too short) because of submitUserSpeechOnPause; start() on the same instance reconnects the
     // stream and listens again. An iOS context left 'interrupted' is resumed first (1 s at most). -> Promise of true when the detector listens again.
     async endPiece() {
+      if (st.manual) {   // tap to talk: the frames of the most recently ended press are the piece; the detector is neither paused nor restarted
+        let p = null;   // the newest press nobody took (a plain loop: no Array.prototype.findLast, older Safari)
+        for (let i = st.ended.length - 1; i >= 0; i--) { const e = st.ended[i]; if (!e.taken && !e.superseded) { p = e; break; } }
+        if (!p) { try { if (typeof st.handlers.onMisfire === 'function') st.handlers.onMisfire(); } catch { /* the call's own problem */ } return true; }
+        p.taken = true;
+        const left = p.endedAt + VOICE_PRESS_TAIL_MS - nowMs();   // the press's tail (frames still in the pipeline) is waited out first (a press never admitted has no tail)
+        if (p.admitted && left > 0) await new Promise((r) => { try { setT(r, left); } catch { r(); } });
+        const i = st.ended.indexOf(p);   // stop() clears st.ended, also when a new call has started since
+        if (i < 0) return true;
+        st.ended.splice(i, 1);
+        const h = st.handlers;
+        if (p.len >= VOICE_PRESS_MIN_MS * 16) {
+          const audio = new Float32Array(p.len);
+          let at = 0;
+          for (const f of p.frames) { audio.set(f, at); at += f.length; }
+          p.frames.length = 0;   // joined: the frame list is dropped at once (a long press is big)
+          try { if (typeof h.onSpeechEnd === 'function') { const pr = h.onSpeechEnd(audio); if (pr && typeof pr.catch === 'function') pr.catch(() => {}); } } catch { /* the call's own problem */ }   // handed over, not awaited (as MicVAD delivers a piece)
+        } else { p.frames.length = 0; try { if (typeof h.onMisfire === 'function') h.onMisfire(); } catch { /* the call's own problem */ } }
+        return true;
+      }
       if (!st.vad || !st.ctx) return false;
       const v = st.vad;
       try {
@@ -5937,7 +6399,29 @@ function voiceCreateVad(opts) {
     openRecordingTap,
     setMicLevel(v) { st.micLevel = v; if (st.gain) st.gain.gain.value = voiceGainFromSlider(v); },
     // Mute (see applyMute): true switches every microphone track of the call off, false on again (whatever is open now, after any reopen).
-    setMuted(on) { st.muted = !!on; applyMute(); },
+    // Tap to talk (manual): unmuting starts a piece (the frames are kept from here; onSpeechBegin, then onSpeechStart), muting stops keeping frames (endPiece takes them).
+    setMuted(on) {
+      if (!st.manual) { st.muted = !!on; applyMute(); return; }
+      if (on) {   // the press ends: an admitted one keeps taking frames for VOICE_PRESS_TAIL_MS (see onFrameProcessed) and waits for endPiece
+        const p = st.open; st.open = null;
+        st.muted = true; applyMute();
+        if (!p) return;
+        if (p.timer !== null) { try { clearT(p.timer); } catch { /* gone */ } p.timer = null; }   // released before its admission: it is never admitted
+        p.endedAt = nowMs();
+        // The audio owner is kept through its tail even when a short, queued press has already ended; only the newest untaken press may be submitted.
+        st.ended = st.ended.filter((e) => e.taken || (e.admitted && nowMs() < e.endedAt + VOICE_PRESS_TAIL_MS));
+        for (const e of st.ended) if (!e.taken) e.superseded = true;
+        st.ended.push(p);
+        return;
+      }
+      if (st.open) return;   // already on: a press is under way
+      const p = { frames: [], len: 0, endedAt: null, taken: false, admitted: false, superseded: false, timer: null };
+      st.open = p;
+      const a = tailOwner();
+      if (!a) { admitPress(p); return; }
+      // Inside the previous press's tail: the tracks stay muted until it ends (admitPress does nothing when the press was released or the call stopped meanwhile).
+      try { p.timer = setT(() => { p.timer = null; admitPress(p); }, Math.max(0, a.endedAt + VOICE_PRESS_TAIL_MS - nowMs())); } catch { admitPress(p); }
+    },
     isMuted() { return st.muted; },
     setInterruptSensitivity(v) { st.sens = v; apply(); },
     // 'Pause before I'm done': only the END of a turn waits this long; the start of speech (barge-in) is not delayed.
@@ -6953,7 +7437,7 @@ async function attachFileCards(el, body) {
     if (!body) body = el.querySelector(':scope > .body');
     if (!H || !body || !el.isConnected) return;
     const scan = body.cloneNode(true);   // the reply's own text: not the tool panel, the reasoning panel or the notes
-    scan.querySelectorAll('.feed, .tsn, .rsn, .reattach, .copy, .note').forEach((n) => n.remove());
+    scan.querySelectorAll('.feed, .tsn, .rsn, .reattach, .copy, .code-copy, .note').forEach((n) => n.remove());
     const agent = (typeof current === 'string' && current) || null;   // the agent whose chat is open: a bare file name is looked up in its folder
     const cands = H.candidatesFrom(scan, { agent });
     if (!cands.length) return;
@@ -7215,6 +7699,7 @@ async function openChat(name) {
   current = name;
   localStorage.setItem('hub-mobile-last', name);
   voiceStatusRefresh();   // the mic button shows only while the hub voice is on and ready
+  researchLinePaint(); researchLineLoad(name);   // the deep research progress line
   if (!same && $('files-sheet')?.open) filesRefresh(); // the Files sheet follows the open agent
   $('chat-icon').textContent = a?.icon || '🤖';
   $('chat-name').textContent = a?.display || name;
@@ -8636,7 +9121,9 @@ function wkPaintRun(run, w) {
         body.appendChild(wkEl('div', 'wk-tool', `⚙ ${tool}${text.startsWith(tool) ? ` ${text.slice(tool.length).trim()}` : ` ${text}`}`.slice(0, 600)));
       } else {
         const out = wkEl('details', 'wk-out');
-        out.append(wkEl('summary', null, 'output'), wkEl('pre', null, String(r.text || '').slice(0, 20000)));
+        const pre = wkEl('pre', null, String(r.text || '').slice(0, 20000));
+        out.append(wkEl('summary', null, 'output'), pre);
+        if (window.CodeCopy) window.CodeCopy.wrap(pre);   // a copy button on the worker's output, like a code box in a reply
         body.appendChild(out);
       }
     }
@@ -8737,7 +9224,7 @@ function reattachLine(ra) {
   const s = live[ra.agent];
   const running = ra.feed && [...ra.feed.items.values()].some(x => x.status === 'running');
   const phase = ra.progress && Date.now() - ra.progress.at < 10000 ? phaseText(ra.progress) : '';
-  const what = (!running && phase) || feedStatus(ra.feed) || (s && s.activity) || 'working';
+  const what = (!running && phase) || feedStatus(ra.feed) || (s && chatViewActivityWord(s.activity)) || 'working';
   const e = elapsed(ra.since || (s && s.busySince) || new Date(ra.startedAt).toISOString());
   return `⟳ ${displayName(ra.agent)}: ${what}${e ? ` · ${e}` : ''}`;
 }
@@ -9080,6 +9567,13 @@ function voiceBarPaint(pct) { const i = document.querySelector('#voice-level i')
 function voiceMicPaint() {
   if (typeof voiceStripPaint === 'function') voiceStripPaint();   // the mode chip and the settings button follow the mic
   const b = $('mic-btn'); if (!b) return;
+  if (voiceCall && voiceCall.press) {   // a Tap to talk call: the button stays a mic and is the press button (Hang up is the call panel's and the display's)
+    b.classList.remove('call', 'busy');
+    if (!b.querySelector('svg') || b.querySelector('svg.hang')) b.innerHTML = VOICE_MIC_SVG;
+    voiceCallPressAttach(voiceCall, b, { cls: 'rec' });
+    const barP = $('voice-level'); if (barP) barP.hidden = true;
+    return;
+  }
   if (voiceCall) {   // a call is up: the button is the red hang-up
     b.classList.remove('rec', 'busy'); b.classList.add('call');
     b.setAttribute('aria-pressed', 'true'); b.setAttribute('aria-label', 'Hang up'); b.title = 'Hang up';
@@ -9092,9 +9586,9 @@ function voiceMicPaint() {
   b.classList.toggle('rec', rec);
   b.classList.toggle('busy', voiceRec.state === 'starting' || voiceRec.state === 'sending');
   b.setAttribute('aria-pressed', rec ? 'true' : 'false');
-  const hands = voicePrefsNow().mode !== 'tap';
-  b.setAttribute('aria-label', rec ? 'Stop and transcribe' : hands ? 'Talk hands-free' : 'Dictate');
-  b.title = rec ? 'Tap to stop' : hands ? 'Tap to start a hands-free call' : 'Tap to dictate, tap again to stop';
+  const mode = voicePrefsNow().mode, hands = mode !== 'tap';
+  b.setAttribute('aria-label', rec ? 'Stop and transcribe' : mode === 'press' ? 'Tap to talk' : hands ? 'Talk hands-free' : 'Dictate');
+  b.title = rec ? 'Tap to stop' : mode === 'press' ? 'Tap to talk: a voice call you press to speak in' : hands ? 'Tap to start a hands-free call' : 'Tap to dictate, tap again to stop';
   if (rec) b.textContent = `● ${Math.floor((Date.now() - voiceRec.t0) / 1000)}s`;
   else if (voiceRec.state === 'sending') b.textContent = '…';
   else if (!b.querySelector('svg') || b.querySelector('svg.hang')) b.innerHTML = VOICE_MIC_SVG;
@@ -9109,13 +9603,27 @@ function voiceMicCancel() {
   voiceMicPaint();
 }
 
+// How long the pointer that produced a tap on the idle mic button was held (voiceMicPointer records its down and up, registered before the button's own tap handler);
+// 0 for a click with no pointer (the keyboard, assistive technology), which counts as a tap. Read once: the next tap starts clean.
+const voiceMicPtr = { downAt: 0, upAt: 0 };
+let voicePressEndedAt = 0;   // when a Tap to talk call last ended (a tap on the mic within 1 s of it is the trailing click of a press, not a new call)
+function voiceMicPointer(up) { const t = Date.now(); if (up) voiceMicPtr.upAt = t; else { voiceMicPtr.downAt = t; voiceMicPtr.upAt = 0; } }
+function voiceMicHeldMs() {
+  const p = voiceMicPtr, held = p.downAt && p.upAt >= p.downAt && Date.now() - p.upAt < 1000 ? p.upAt - p.downAt : 0;
+  p.downAt = 0; p.upAt = 0;
+  return held;
+}
 async function voiceMicTap() {
   keepKeyboard && keepKeyboard.elsewhere();   // the mic button took the touch: the keyboard guard must not bring the keyboard back
-  if (voiceCall) { voiceCallHangUp(); return; }   // during a call it is the red phone: it hangs up first, whatever else is busy
+  if (voiceCall) { if (voiceCall.press) return; voiceCallHangUp(); return; }   // during a call it is the red phone: it hangs up first, whatever else is busy (in a Tap to talk call it is the press button, voicePressButton; Hang up is the panel's)
+  if (voicePressEndedAt && Date.now() - voicePressEndedAt < 1000) return;   // the trailing click of a press that outlived a Tap to talk call
   if (voiceRec.state === 'starting' || voiceRec.state === 'sending' || voiceRec.guard.pending || voiceTest.guard.pending) return;
   if (voiceRec.state === 'recording') { voiceMicStop(); return; }
   if (!current) { toast('Pick an agent first'); return; }
-  if (voicePrefsNow().mode !== 'tap') { voiceCallStart(); return; }   // hands-free: a tap starts a call (nothing awaited before call.start, for iOS)
+  // hands-free and Tap to talk: a tap starts a call (voiceCallStart reads which; it runs synchronously, for iOS). Tap to talk: a pointer held for VOICE_PRESS_HOLD_MS or
+  // more has already been let go, so that call comes up idle (nothing is heard until the next press); a tap starts it and listens.
+  const held = voiceMicHeldMs() >= VOICE_PRESS_HOLD_MS;
+  if (voicePrefsNow().mode !== 'tap') { voiceCallStart(); if (held && voiceCall) voiceCall.idle = true; return; }   // (the call object exists at once; its first talk(true) comes after call.start() resolves)
   if (voiceTest.handle) voiceTestStop();
   voiceStopPlayback();   // the phone's own speaker must not be heard by the mic
   voiceUnlockAudio();
@@ -9403,7 +9911,7 @@ function addSpeakButton(el) {
 // The controller (voiceCreateCall) and the microphone/VAD adapter (voiceCreateVad) are in the voice call block of this
 // file; this part gives them their deps: the hub routes, the chat, playback and the call panel above the composer.
 // Hands-free works with the app open and the screen on: a hidden page hangs up, the screen stays on during a call.
-const VOICE_CALL_HELP = 'Hands-free works with the app open and the screen on, also through a car\'s Bluetooth hands-free or a Bluetooth speaker. Locked-screen use and car apps (CarPlay, Android Auto) are not supported.';
+const VOICE_CALL_HELP = 'Hands-free works with the app open and the screen on, also through a car\'s Bluetooth hands-free or a Bluetooth speaker. Locked-screen use and car apps (CarPlay, Android Auto) are not supported. Tap to talk: tap the mic, speak, tap again to send (or hold it while you speak and let go).';
 const VOICE_LINK_LOST_TEXT = 'Connection lost', VOICE_LINK_ENDED_TEXT = 'Call ended: connection lost';
 const VOICE_CALL_STATE_TEXT = { starting: 'Starting', listening: 'Listening', hearing: 'Hearing you', thinking: 'Thinking', speaking: 'Speaking', background: 'Working in the background', ended: 'Call ended' };
 const voiceCallPost = (path, body, opts) => api(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), ...(opts || {}) });
@@ -9523,7 +10031,9 @@ function voiceDispBegin(vc) {
       dock: () => $('composer'),   // whenever no full view is shown (None, Back to chat, a character loading) the call screen's bar takes the composer's place; the call panel lives in its Controls drawer
       onTalk: voiceDispTalk, onHangUp: () => voiceCallHangUp(), onRetryMic: voiceCallRetryMicTap, onChange: () => voiceDispPaintPanel(),
       onRecordingToggle: (wantPaused) => (voiceCall && voiceCall.rec ? voiceCall.rec.togglePause(wantPaused) : undefined),   // the Pause / Resume recording button of a recorded call
-      onMute: voiceCallMuteTap });   // the Pause / Resume recording button of a recorded call
+      ...(vc.press === true
+        ? { press: true, onPressButton: (el) => voiceCallPressAttach(vc, el, { cls: '', off: () => { try { const c = voiceDisp.cur; return !!c && c.info().talk === 'mic'; } catch { return false; } } }) }   // Tap to talk: the Talk slot is the press button (it does nothing while it reads "Try the microphone again"), and there is no Mute (the microphone is off between presses)
+        : { onMute: voiceCallMuteTap }) });
     voiceDisp.cur = d;
     d.start();   // synchronous: the audio context is made and resumed inside the tap that started the call
   } catch { voiceDisp.cur = null; }
@@ -9624,9 +10134,37 @@ function voiceDispSetInterrupt(on) {
   voiceDispPaintPanel();
 }
 
+// A Tap to talk call's state line: listening and not pressing says what a tap does; pressing says how to send. Other states as in a hands-free call.
+function voiceCallPressText(vc, name) {
+  if (!vc || !vc.press) return '';
+  if (vc.pressing && (name === 'listening' || name === 'hearing')) return 'Listening, tap to send';
+  return !vc.pressing && name === 'listening' ? 'Tap to talk' : '';
+}
+// A press button of this call (the mic button, the display's Talk slot): voicePressButton from the voice helpers, painted with the press state, let go at hang-up.
+function voiceCallPressAttach(vc, el, opts) {
+  if (!vc || !vc.press || !el) return null;
+  vc.pressBtns = (vc.pressBtns || []).filter((h) => {   // a handle whose button left the page (the display closed) is let go
+    const gone = h.el && (h.el.isConnected === false || (h.el.isConnected === undefined && typeof document !== 'undefined' && typeof document.contains === 'function' && !document.contains(h.el)));
+    if (gone && h.el !== el) { try { h.detach(); } catch { /* gone */ } return false; }
+    return true;
+  });
+  const old = vc.pressBtns.find(h => h.el === el);
+  if (old) return old;
+  const h = voicePressButton(el, () => (voiceCall === vc ? vc.call : null), opts); h.el = el; h.paint(vc.pressing === true);
+  vc.pressBtns.push(h);
+  return h;
+}
+function voiceCallPressDetach(vc) { for (const h of (vc && vc.pressBtns) || []) { try { h.detach(); } catch { /* gone */ } } if (vc) vc.pressBtns = []; }
+// The call's ui.press(on): the mic button (a press button here), the state line and the display's Talk slot.
+function voiceCallPressPaint(vc, on) {
+  vc.pressing = !!on;
+  for (const h of vc.pressBtns || []) h.paint(vc.pressing);
+  const s = $('cp-state'); if (s && !vc.linkLostOn) s.textContent = voiceCallPressText(vc, s.dataset.state) || voiceCallStateText(s.dataset.state, s.dataset.phrase || '');
+  if (typeof voiceDisplayHook === 'function') voiceDisplayHook('setPress', vc.pressing);
+}
 function voiceCallPaintState(name, phrase) {
   const lostNow = typeof voiceCall !== 'undefined' && voiceCall && voiceCall.linkLostOn;   // while the connection is lost the line keeps saying so
-  const s = $('cp-state'); if (s) { s.textContent = lostNow ? VOICE_LINK_LOST_TEXT : voiceCallStateText(name, phrase); s.dataset.state = name; s.dataset.phrase = phrase || ''; }
+  const s = $('cp-state'); if (s) { s.textContent = lostNow ? VOICE_LINK_LOST_TEXT : (voiceCallPressText(typeof voiceCall !== 'undefined' ? voiceCall : null, name) || voiceCallStateText(name, phrase)); s.dataset.state = name; s.dataset.phrase = phrase || ''; }
   const p = $('call-panel'); if (p) p.dataset.state = name;
 }
 function voiceCallPaintMeter(db) {
@@ -9693,6 +10231,8 @@ function voiceCallTeardown(vc) {
   if (vc.focus) { try { vc.focus.stop(); } catch {} }
   if (typeof voiceFocusHint === 'function') voiceFocusHint(false);
   voiceThinkingClose(vc);
+  if (vc.press) voicePressEndedAt = Date.now();   // the trailing click of a press that outlived the call must not start a new one (voiceMicTap)
+  voiceCallPressDetach(vc);   // the press buttons (a Tap to talk call) are let go
   voiceCallPanel(false);
   voiceMicPaint();
 }
@@ -10189,6 +10729,7 @@ function voiceCallDeps(vc) {
   return {
     thinking: voiceThinkingDeps(vc),
     agent,
+    ...(vc.press === true ? { press: true } : {}),   // Tap to talk: the microphone is heard only while the person presses (call.talk)
     ...(vc.rec ? { recorder: vc.rec.recorder, recordTranscript: (seq, text) => vc.rec.recordTranscript(seq, text), recordReplyText: (text) => vc.rec.recordReplyText(text) } : {}),   // a recorded call only
     now: () => Date.now(),
     perfNow: () => performance.now(),
@@ -10198,7 +10739,8 @@ function voiceCallDeps(vc) {
     // Everything the controller uses passes through: the "now" of setPlaybackActive (a cut by the person drops the echo guard at once),
     // reopen ("Try the microphone again" after a lost microphone), info, setMuted (the call bar's Mute) and endPiece (the frame watchdog ends a piece).
     vad: { start: (h) => { const w = typeof voiceDisp !== 'undefined' && voiceDisp.floor ? voiceDisp.floor.wrap(h) : h; return vc.vad.start({ ...w, onRoute: (r) => voiceCallOnRoute(vc, r), onMicChange: (ev) => { try { voiceCallOnMicChange(vc, ev); } catch { /* the outputs stay as they were */ } return w && w.onMicChange ? w.onMicChange(ev) : undefined; } }); }, stop: () => vc.vad.stop(),
-      setPlaybackActive: (on, now) => vc.vad.setPlaybackActive(on, now), reopen: () => vc.vad.reopen(), info: () => vc.vad.info(), setMuted: (on) => vc.vad.setMuted(on), endPiece: () => vc.vad.endPiece() },
+      setPlaybackActive: (on, now) => vc.vad.setPlaybackActive(on, now), reopen: () => vc.vad.reopen(), info: () => vc.vad.info(), setMuted: (on) => vc.vad.setMuted(on), endPiece: () => vc.vad.endPiece(),
+      get manual() { return !!(vc.vad && vc.vad.manual); } },   // tap to talk: the live adapter's manual (the controller leaves the start of a press to a manual detector)
     stt: (f32) => voiceCallStt(agent, f32),
     isTurnRunning: () => isBusy(agent) || ownTurnFor(agent),
     send: (text) => voiceCallSend(vc, text),
@@ -10225,6 +10767,7 @@ function voiceCallDeps(vc) {
         if (on) voiceCallPaintMeter(-Infinity);
         if (typeof voiceDisplayHook === 'function') voiceDisplayHook('micLost', !!on);
       },
+      press: (on) => { if (voiceCall === vc) voiceCallPressPaint(vc, on); },   // Tap to talk: the press button, the state line and the display follow the press
       state: (name, phrase) => { if (voiceCall !== vc) return; voiceCallPaintState(name, phrase); if (typeof voiceDisplayHook === 'function') voiceDisplayHook('setState', name, phrase); if (name === 'ended' && !vc.hangingUp) voiceCallTeardown(vc); },
       thinkingPulse: (ev) => { if (voiceCall === vc && typeof voiceDisplayHook === 'function') voiceDisplayHook('thinkingPulse', ev); },
       reply: (kind) => { if (voiceCall === vc && typeof voiceDisplayHook === 'function') voiceDisplayHook('reply', kind, 'seq:' + vc.sendSeq); },   // the reply's boundaries: the character's reaction plays once, after the whole reply
@@ -10286,7 +10829,7 @@ function voiceLinkPaint(vc, on) {
   if (voiceCall !== vc) return;
   vc.linkLostOn = !!on;
   const s = $('cp-state');
-  if (s) { if (on) s.textContent = VOICE_LINK_LOST_TEXT; else s.textContent = voiceCallStateText(s.dataset.state || 'listening', s.dataset.phrase || ''); }   // back: the call's own line, standby's "Waiting for ..." included
+  if (s) { if (on) s.textContent = VOICE_LINK_LOST_TEXT; else s.textContent = voiceCallPressText(voiceCall, s.dataset.state || 'listening') || voiceCallStateText(s.dataset.state || 'listening', s.dataset.phrase || ''); }   // back: the call's own line, standby's "Waiting for ..." included
   if (typeof voiceDisplayHook === 'function') voiceDisplayHook('connLost', !!on);
 }
 function voiceCallLinkGiveUp(vc) {
@@ -10325,8 +10868,9 @@ function voiceCallStart() {
   voiceUnlockAudio();
   const prefs = voiceEffNow(agent);   // this agent's voice defaults for any setting the person has not set on this device
   voiceEndedBar(false); voiceCallBgNote = false;   // a new call: the "call ended" bar goes away
-  const vc = { agent, call: null, vad: null, callTurns: new Set(), hubTurns: new Map(), hubOwner: new Set(), hubEnded: new Map(), asks: new Map(), lastText: '', sendSeq: 0, expecting: false, wake: null, startedAt: Date.now(), lastFrame: Date.now(), lastTick: Date.now(), beatTimer: null, thinkSnd: null, thinkCtx: null, thinkOn: false };
-  vc.vad = voiceCreateVad({ baseUrl: '/api/voice/web/', micLevel: prefs.micLevel, interruptSensitivity: prefs.interruptSensitivity, endPause: prefs.endPause, echoHoldMs: prefs.echoHold, strictTalkOver: voiceIsIOS(), micChoice: voiceMicChoiceId, bluetoothFirst: voiceIsAndroidNav(navigator) });
+  const press = voicePrefsNow().mode === 'press';   // Tap to talk: the microphone is heard only while the person presses (fixed for this call); any other saved mode starts a hands-free call here
+  const vc = { agent, press, pressing: false, pressBtns: [], call: null, vad: null, callTurns: new Set(), hubTurns: new Map(), hubOwner: new Set(), hubEnded: new Map(), asks: new Map(), lastText: '', sendSeq: 0, expecting: false, wake: null, startedAt: Date.now(), lastFrame: Date.now(), lastTick: Date.now(), beatTimer: null, thinkSnd: null, thinkCtx: null, thinkOn: false };
+  vc.vad = voiceCreateVad({ baseUrl: '/api/voice/web/', micLevel: prefs.micLevel, interruptSensitivity: prefs.interruptSensitivity, endPause: prefs.endPause, echoHoldMs: prefs.echoHold, strictTalkOver: voiceIsIOS(), micChoice: voiceMicChoiceId, bluetoothFirst: voiceIsAndroidNav(navigator), ...(press ? { manual: true } : {}) });
   if (typeof voiceRouteReadyMake === 'function') voiceRouteReadyMake(vc);
   voiceThinkingCtxMake(vc);   // iOS: the thinking sound's AudioContext is made and resumed inside this tap, before any await
   if (vc.thinkCtx && typeof voiceCreateKeepAlive === 'function') vc.keepAlive = voiceCreateKeepAlive({ ctx: vc.thinkCtx, allow: voiceKeepAliveAllowed });   // the Bluetooth / car route stays awake; the controller starts it, it sounds only while allowed
@@ -10350,7 +10894,7 @@ function voiceCallStart() {
   voiceCallPanel(true); voiceCallPaintState('starting'); voiceMicPaint(); if (typeof voiceDispPaintPanel === 'function') voiceDispPaintPanel();   // the Display select is filled at call start
   if (typeof voiceDispBegin === 'function') voiceDispBegin(vc);   // synchronous, still inside the tap
   const bail = () => { if (voiceCall === vc) voiceCallTeardown(vc); };
-  Promise.resolve(vc.call.start()).then((ok) => { if (!ok) bail(); }, bail);
+  Promise.resolve(vc.call.start()).then((ok) => { if (!ok) bail(); else if (press && voiceCall === vc && !vc.idle) { try { vc.call.talk(true); } catch { /* the press button starts it */ } } }, bail);   // Tap to talk: the first tap both starts the call and starts listening (vc.idle: the idle mic was held and let go before the call existed, voiceMicTap: it comes up idle)
   voiceWakeAcquire(vc);
 }
 // The "Try the microphone again" tap (the panel's button and the display's own retry control).
@@ -10862,7 +11406,8 @@ function voiceSheet() {
     '<div class="vs-row"><span id="vs-mode-label">Talk mode</span></div>' +
     '<div class="vs-seg" role="radiogroup" aria-labelledby="vs-mode-label">' +
     '<label class="vs-opt"><input type="radio" name="vs-mode" value="handsfree"> <span>Hands-free</span></label>' +
-    '<label class="vs-opt"><input type="radio" name="vs-mode" value="tap"> <span>Tap to talk</span></label></div>' +
+    '<label class="vs-opt"><input type="radio" name="vs-mode" value="press"> <span>Tap to talk</span></label>' +
+    '<label class="vs-opt"><input type="radio" name="vs-mode" value="tap"> <span>Dictation</span></label></div>' +
     '<p class="vs-hint vs-help"></p>' +
     '<label class="vs-row" for="vs-sens"><span>Interrupt sensitivity</span><b class="vs-sens-val"></b></label>' +
     '<input type="range" id="vs-sens" class="vs-level vs-sens" min="0" max="100" step="1">' +
@@ -10928,7 +11473,7 @@ function voiceSheet() {
   sh.querySelector('#vs-loudness-bt').addEventListener('change', (e) => voiceLoudnessSave('loudnessBt', e.target.value));
   sh.querySelector('.vs-activity').addEventListener('change', (e) => voicePrefsSave({ speakActivity: !!e.target.checked }));
   sh.querySelector('#vs-interrupt').addEventListener('change', (e) => voiceDispSetInterrupt(!!e.target.checked));
-  for (const r of sh.querySelectorAll('input[name="vs-mode"]')) r.addEventListener('change', (e) => { if (e.target.checked) { voicePrefsSave({ mode: e.target.value }); voiceMicPaint(); paintVoiceSheet(); } });
+  for (const r of sh.querySelectorAll('input[name="vs-mode"]')) r.addEventListener('change', (e) => { if (e.target.checked) { const prev = voicePrefsNow().mode; voicePrefsSave({ mode: e.target.value }); voiceMicPaint(); paintVoiceSheet(); voiceModeNextCallToast(prev, e.target.value); } });
   sh.querySelector('.vs-room').addEventListener('click', voiceRoomRun);
   sh.querySelector('.vs-car').addEventListener('click', voiceCarRun);
   voiceRouteWire(sh);
@@ -10971,7 +11516,7 @@ function paintVoiceSheet() {
   if (document.activeElement !== echoEl) echoEl.value = String(p.echoHold);
   sh.querySelector('.vs-keepalive').checked = p.keepAlive !== false;
   for (const r of sh.querySelectorAll('input[name="vs-mode"]')) r.checked = r.value === p.mode;
-  sh.querySelector('.vs-help').textContent = (p.mode === 'tap' ? 'Tap to talk: tap the mic to dictate a message, tap it again to stop. ' : 'Hands-free: tap the mic to start a call, talk any time, and hang up with the red button. ') + VOICE_CALL_HELP;
+  sh.querySelector('.vs-help').textContent = (p.mode === 'tap' ? 'Dictation: tap the mic to turn what you say into text in the message box. ' : p.mode === 'press' ? 'Tap to talk: a voice call where the agent answers aloud; tap the mic, speak, tap again to send (or hold it while you speak and let go). ' : 'Hands-free: tap the mic to start a call; it hears you whenever you speak. ') + VOICE_CALL_HELP;
   sh.querySelector('.vs-read').checked = !!p.readAloud;
   sh.querySelector('.vs-fallback').checked = !!p.deviceVoiceFallback;
   const note = sh.querySelector('.vs-note');
@@ -10983,7 +11528,7 @@ function paintVoiceSheet() {
   const enableBox = sh.querySelector('.vs-enable'), enableText = sh.querySelector('.vs-enable-text'), enableBtn = sh.querySelector('.vs-enable-btn');
   const prog = sh.querySelector('.vs-progress'), progLine = sh.querySelector('.vs-progress-line');
   let noteText, showBox = false, boxText = '', btnText = 'Enable voice';
-  if (voiceOn()) noteText = `Voice is on${st.stt && st.stt.engine ? ` (${st.stt.engine})` : ''}. Tap the mic beside the message box to ${p.mode === 'tap' ? 'dictate' : 'start a hands-free call'}.`;
+  if (voiceOn()) noteText = `Voice is on${st.stt && st.stt.engine ? ` (${st.stt.engine})` : ''}. Tap the mic beside the message box to ${p.mode === 'tap' ? 'dictate' : p.mode === 'press' ? 'start a Tap to talk call' : 'start a hands-free call'}.`;
   else if (unsupported) noteText = VOICE_UNSUPPORTED_TEXT;
   else if (installing) { noteText = 'Voice is installing on your Maestro.'; showBox = true; }
   else if (failed) {
@@ -11093,13 +11638,16 @@ function plusSheetWire() {
     Promise.resolve().then(() => { const a = document.activeElement; if (plusSheetOpen() && a && a !== document.body && leftSheet(a)) plusSheetShow(false); });
   });
 }
+function voiceModeName(m) { return m === 'press' ? 'Tap to talk' : m === 'tap' ? 'Dictation' : 'Hands-free'; }
+// A Talk mode picked while a call is up is saved for the next call; the call keeps the mode it started with (the chip keeps naming it).
+function voiceModeNextCallToast(prev, next) { try { if (voiceCall && next !== prev) toast(`From your next call: ${voiceModeName(next)}.`); } catch { /* a toast is a comfort */ } }
 function voiceStripPaint() {
   const on = voiceOn();
   const strip = $('voice-strip'), btn = $('voice-settings-btn'), chip = $('voice-mode-chip');
   if (strip) strip.hidden = !on || !voiceCall;   // the Hands-free pill only while a call is up; the mode stays in Voice settings
   if (btn) btn.hidden = !on;
   if (chip) {
-    const hands = voicePrefsNow().mode !== 'tap';
+    const press = voiceCall ? voiceCall.press === true : voicePrefsNow().mode === 'press', hands = !press;   // the chip shows during a call only: the RUNNING call's mode, Hands-free or Tap to talk (fixed at its start; a mode picked meanwhile counts from the next call; Dictation is not a call mode)
     chip.textContent = hands ? 'Hands-free' : 'Tap to talk';
     chip.classList.toggle('hands', hands);
     chip.setAttribute('aria-label', `Talk mode: ${hands ? 'Hands-free' : 'Tap to talk'}. Tap to switch.`);
@@ -11171,8 +11719,8 @@ function voicePanelWire() {
     voicePanelShow(open);
     if (open) requestAnimationFrame(voicePanelFocusFirst);   // the sheet (and the button that had focus) just closed: land on the panel, not <body>
   });
-  $('voice-mode-chip')?.addEventListener('click', () => save({ mode: voicePrefsNow().mode === 'tap' ? 'handsfree' : 'tap' }));
-  for (const r of p.querySelectorAll('input[name="vp-mode"]')) r.addEventListener('change', (e) => { if (e.target.checked) save({ mode: e.target.value }); });
+  $('voice-mode-chip')?.addEventListener('click', () => { const prev = voicePrefsNow().mode, next = prev === 'handsfree' ? 'press' : 'handsfree'; save({ mode: next }); voiceModeNextCallToast(prev, next); });   // Hands-free -> Tap to talk -> Hands-free; a saved Dictation goes to Hands-free; during a call it is saved for the next one
+  for (const r of p.querySelectorAll('input[name="vp-mode"]')) r.addEventListener('change', (e) => { if (e.target.checked) { const prev = voicePrefsNow().mode; save({ mode: e.target.value }); voiceModeNextCallToast(prev, e.target.value); } });
   const speed = $('vp-speed');
   speed?.addEventListener('input', () => { const l = p.querySelector('.vp-speed-val'); if (l) l.textContent = voiceSpeedLabel(speed.value); });
   speed?.addEventListener('change', () => save({ voiceSpeed: voiceCleanSpeed(speed.value) }));
@@ -11286,7 +11834,7 @@ async function sendMessage(fallback) {
   const s = live[agent];
   if (s && s.busy) {
     const e = elapsed(s.busySince);
-    addNote(`⏳ ${displayName(agent)} is still working on the previous message (${s.activity || 'working'}${e ? `, ${e}` : ''}). Your message will queue or be refused until it finishes.`);
+    addNote(`⏳ ${displayName(agent)} is still working on the previous message (${chatViewActivityWord(s.activity) || 'working'}${e ? `, ${e}` : ''}). Your message will queue or be refused until it finishes.`);
   }
   const userEl = fallback ? fallback.userEl : addUserBubble(text, images);
   if (!fallback) setBubbleTime(userEl, msgTimeLabel(Date.now()));
@@ -12232,6 +12780,7 @@ async function walletApi(path, body, signal) {
 // Closing the sheet: cancel any run, drop in-flight loads, and empty every password input in it (run or no run).
 function walletClose(sh) {
   pkCancel(); walletGen++;
+  if (typeof PasswordEye !== 'undefined') PasswordEye.hideAll(sh);   // first: a shown field is type text and the next line finds password fields
   sh.querySelectorAll('input[type="password"]').forEach((i) => { i.value = ''; });
   sh.classList.remove('open'); dialogGuard.closed(sh);
 }
@@ -12297,7 +12846,7 @@ function walletPaint() {
   const pkHere = pkOk.ok && pkList.some(p => p.rpId === location.hostname);
   const unlockBox = ks.unlocked ? '' : `<div class="sec-section">
       ${pkHere ? '<button type="button" class="wl-big" data-wl="pkunlock">Unlock with Face ID / fingerprint</button>' : ''}
-      <input id="wl-pass" type="password" autocomplete="off" placeholder="Wallet passphrase" aria-label="Wallet passphrase">
+      <input id="wl-pass" type="password" autocomplete="off" data-eye placeholder="Wallet passphrase" aria-label="Wallet passphrase">
       <div class="sec-actions"><button type="button" data-wl="unlock">Unlock with passphrase</button></div>
     </div>`;
   const rows = pkList.map(p => `<div class="wl-pk"><div class="wl-pk-info"><strong>${esc(p.label)}</strong>
@@ -12305,7 +12854,7 @@ function walletPaint() {
         <button type="button" class="wl-rm" data-wl="pkremove" data-id="${esc(p.id)}">Remove</button></div>`).join('')
     || '<div class="sec-hint">None set up yet.</div>';
   const addForm = pkOk.ok ? `<input id="wl-pk-label" value="${esc(pkDeviceLabel())}" maxlength="40" placeholder="Name for this phone" aria-label="Name for this phone">
-      <input id="wl-pk-pass" type="password" autocomplete="off" placeholder="Wallet passphrase (needed once; never stored)" aria-label="Wallet passphrase">
+      <input id="wl-pk-pass" type="password" autocomplete="off" data-eye placeholder="Wallet passphrase (needed once; never stored)" aria-label="Wallet passphrase">
       <div id="wl-confirm-row"></div>
       <div class="sec-actions"><button type="button" class="go" data-wl="pkadd">Add this phone</button></div>`
     : `<div class="sec-hint">${esc(pkOk.text)}</div>`;
@@ -12503,6 +13052,8 @@ function connectEvents() {
   on('turn_end', onTurnEnd);
   on('for_owner', onForOwner);
   on('turn_notify', onTurnNotify);
+  on('research_progress', researchLineApply);
+  on('hello', () => { if (screen === 'chat' && current) researchLineLoad(current); });   // after a reconnect: the runs as they are now
   on('ask_user', (ev) => {
     setLive(ev.agent, { busy: true, pendingQuestion: true }); paintStatus();
     // The question itself: shown now if that chat is open, else kept until it is (dedup by request id in showQuestion).
@@ -12597,6 +13148,74 @@ function resyncClick() {
   toast(busy ? `Re-synced with the hub, following ${displayName(current)}'s turn` : 'Re-synced with the hub');
 }
 
+// Deep research progress line (the hub's research_progress event, GET /api/research/status): one text line per active run
+// above the message box, in the style of the hand-off Tasks line. Text only; gone when the run is delivered or failed.
+const researchRuns = new Map();   // agent -> Map(run id -> { id, level, stage, label, done, total, startedAt })
+function researchLineText(run, now) {
+  const lv = String((run && run.level) || 'quick');
+  const level = lv.charAt(0).toUpperCase() + lv.slice(1);
+  const label = String((run && (run.label || run.stage)) || 'working');
+  let text = `Deep research (${level}): ${label}`;
+  const t0 = Number(run && run.startedAt);
+  if (t0 > 0) { const mins = Math.floor(Math.max(0, (now === undefined ? Date.now() : now) - t0) / 60000); text += ' · ' + (mins < 1 ? 'just started' : `${mins} min`); }
+  return text;
+}
+function researchLineFill(box, agent) {
+  if (!box) return;
+  const runs = agent && researchRuns.has(agent) ? [...researchRuns.get(agent).values()].sort((a, b) => (Number(a.startedAt) || 0) - (Number(b.startedAt) || 0)).slice(0, 3) : [];
+  box.textContent = '';
+  const now = Date.now();
+  for (const r of runs) { const d = document.createElement('div'); d.className = 'ho-strip research-line'; d.setAttribute('role', 'status'); d.textContent = researchLineText(r, now); box.appendChild(d); }
+  box.hidden = runs.length === 0;
+}
+const researchEnded = new Set();   // ids of runs that already got a terminal event (delivered or failed); kept small
+function researchEndedAdd(id) { researchEnded.add(id); if (researchEnded.size > 200) researchEnded.delete(researchEnded.values().next().value); }
+function researchLineApply(ev) {
+  if (!ev || !ev.agent || ev.id == null) return;
+  const id = String(ev.id);
+  if (ev.state === 'delivered' || ev.state === 'failed') {
+    researchEndedAdd(id);   // a status answer still on its way must not bring this run back
+    const m = researchRuns.get(ev.agent);
+    if (m) { m.delete(id); if (!m.size) researchRuns.delete(ev.agent); }
+  } else {
+    if (researchEnded.has(id)) return;
+    const old = researchRuns.has(ev.agent) ? researchRuns.get(ev.agent).get(id) : null;
+    if (old && Number.isFinite(old.seq) && Number.isFinite(ev.seq) && ev.seq < old.seq) return;   // an older event never overwrites a newer one
+    if (!researchRuns.has(ev.agent)) researchRuns.set(ev.agent, new Map());
+    researchRuns.get(ev.agent).set(id, { id, level: ev.level, stage: ev.stage, label: ev.label, done: ev.done, total: ev.total, startedAt: ev.startedAt, seq: ev.seq, seenAt: Date.now() });
+  }
+  researchLinePaint();
+}
+function researchLinePaint() { researchLineFill(document.getElementById('research-lines'), screen === 'chat' ? current : null); }
+async function researchLineLoad(agent) {
+  if (!agent) return;
+  const t0 = Date.now();   // events that arrive from here on are newer than the answer being fetched
+  try {
+    const r = await api('/api/research/status?agent=' + encodeURIComponent(agent));
+    const d = r.ok ? await r.json() : null;
+    if (!d || !Array.isArray(d.runs)) return;
+    // merged into what the events built meanwhile: never replaced, an ended run is not brought back, and an older answer
+    // never overwrites a newer event for the same run (by the run's sequence number, else by when the event came)
+    const m = new Map(researchRuns.get(agent) || []);
+    const inAnswer = new Set();
+    for (const x of d.runs) {
+      if (!x || x.id == null) continue;
+      const id = String(x.id);
+      inAnswer.add(id);
+      if (researchEnded.has(id)) continue;
+      const cur = m.get(id);
+      const x_seq = Number(x.seq);
+      if (cur && (Number.isFinite(cur.seq) && Number.isFinite(x_seq) ? cur.seq >= x_seq : (cur.seenAt || 0) >= t0)) continue;
+      m.set(id, { id, level: x.level, stage: x.stage, label: x.label, done: x.done, total: x.total, startedAt: x.startedAt, seq: Number.isFinite(x_seq) ? x_seq : undefined, seenAt: t0 });
+    }
+    // a run the answer does not list and no event touched since the fetch began has ended
+    for (const [id, e] of [...m]) if (!inAnswer.has(id) && (e.seenAt || 0) < t0) m.delete(id);
+    if (m.size) researchRuns.set(agent, m); else researchRuns.delete(agent);
+    researchLinePaint();
+  } catch { /* the line stays as it was */ }
+}
+setInterval(() => { if (researchRuns.size) researchLinePaint(); }, 60000);   // the minutes move on
+
 function chatOpenFor(agent) {
   return screen === 'chat' && current === agent;
 }
@@ -12625,7 +13244,8 @@ function onCompactionProgress(ev) {
 function onCompactionEnd(ev) {
   if (!ev || !chatOpenFor(ev.agent)) return;
   compactionNote = null;
-  if (ev.ok === false || ev.error) addNote(`⚠ compression failed: ${ev.error || 'unknown error'}`);
+  if (ev.busy) addNote(`⏸ compression postponed: ${ev.error || 'the agent stayed busy'}`);   // not a failure: it runs again after a later turn
+  else if (ev.ok === false || ev.error) addNote(`⚠ compression failed: ${ev.error || 'unknown error'}`);
   else addNote(ev.reset ? '✓ brief written, fresh session started' : '✓ brief written');
   scrollChat();
 }
@@ -13251,6 +13871,7 @@ function wire() {
   // Esc, Back or a tap outside the approval sheet is Later: hidden until a new request comes, never answered.
   $('approval-sheet').__dialogClose = () => { approvalsHidden = true; paintApprovals(); };
   $('menu-profile')?.addEventListener('click', openProfileSheet);   // ?.: a page cached before Profile existed has no such item
+  $('menu-settings')?.addEventListener('click', settingsSheetOpen);   // ?.: a page cached before Settings existed has no such item
   $('menu-security').addEventListener('click', openSecuritySheet);
   $('menu-files').addEventListener('click', openFilesSheet);
   $('menu-recall').addEventListener('click', openRecallSheet);
@@ -13278,6 +13899,9 @@ function wire() {
   $('menu-notify-test')?.addEventListener('click', testPush);
   $('menu-notify-agent')?.addEventListener('click', (e) => { e.stopPropagation(); $('menu').classList.remove('open'); openNotifyAgentSheet(); });
   $('menu-notify-prefs')?.addEventListener('click', (e) => { e.stopPropagation(); openNotifyPrefsSheet(); });
+  $('menu-research')?.addEventListener('click', (e) => { e.stopPropagation(); typeof openResearchSheet === 'function' && openResearchSheet(); });
+  $('research-sheet')?.addEventListener('click', (e) => { typeof onResearchSheetClick === 'function' && onResearchSheetClick(e); });
+  typeof researchPrefLoad === 'function' && researchPrefLoad();   // shows the menu row only when the hub says deep research is on
   $('messages').addEventListener('click', onMessagesClick);
   $('messages').addEventListener('pointerdown', onReasoningGrip);
   $('messages').addEventListener('pointerdown', onToolsGrip);
@@ -13343,7 +13967,11 @@ function wire() {
   $('notify-prefs-sheet').addEventListener('click', onNotifyPrefsSheetClick);
   $('notify-prefs-sheet').addEventListener('change', onNotifyPrefsSheetChange);
   // The mic acts on the touch itself too (the box keeps its state, no keyboard opens). Its status is polled every 60 s while the page is visible.
-  if ($('mic-btn')) onComposerTap($('mic-btn'), voiceMicTap);
+  if ($('mic-btn')) {
+    $('mic-btn').addEventListener('pointerdown', () => voiceMicPointer(false));   // before the tap handler below, which acts on the pointerup: how long the idle mic was held decides if a Tap to talk call listens at once
+    $('mic-btn').addEventListener('pointerup', () => voiceMicPointer(true));
+    onComposerTap($('mic-btn'), voiceMicTap);
+  }
   voiceCallWire();
   setInterval(() => { if (!document.hidden && current) voiceStatusRefresh(); }, 60000);
 
@@ -13495,6 +14123,10 @@ function applyMultiUser() {
     }
     if ($('menu-wallet')) $('menu-wallet').hidden = !hubMe.isAdmin;   // admins only
     if ($('menu-profile')) $('menu-profile').hidden = !hubMe.user;
+    if ($('menu-settings')) $('menu-settings').hidden = !hubMe.isAdmin;   // admins only, as the desktop's Settings (the hub refuses its routes to members)
+    // what an admin sets is in Settings (Notifications: yours, for an agent, deep research); a member keeps them here, their only home
+    for (const id of ['menu-notify-prefs', 'menu-notify-agent']) if ($(id)) $(id).hidden = !!hubMe.isAdmin;
+    researchPrefPaintAll();
     $('menu-2fa-note').hidden = !(hubMe.isAdmin && !hubMe.user.totpEnabled && hubMe.admin2faRequired !== false);
     $('menu-signout').textContent = `Sign out (${hubMe.user.name || hubMe.user.login})`;
   }
@@ -13593,6 +14225,7 @@ function menuOnOpen() {
   menuGroupsSync();
   menuAdvDotSync();
   menuLookName();
+  typeof researchPrefLoad === 'function' && researchPrefLoad();   // the row's label follows a change made on another device
 }
 if (typeof document !== 'undefined' && document.getElementById) {
   const look = document.getElementById('menu-look'), pick = document.getElementById('menu-look-pick'), tg = document.getElementById('menu-adv-toggle');
@@ -13888,6 +14521,117 @@ function lookPickerPaint(host, onChosen) {
 
 // Profile: who you are here (your name and sign-in, set by an admin on the Users page) and the time zone your agents
 // use. Security keeps password, two-factor and sessions.
+// ── settings sheet (begin) ──
+// Settings: the desktop page's Settings dialog alone (/?settings-only=1, app.js settingsOnlyStart) in a frame that fills
+// the screen, so the phone has every section the desktop has, with the same routes, permissions, masking, main Save and
+// "Discard changes?" question. Back and the sheet's Close ask the dialog in the frame to close through its own guard;
+// the frame says when it closed. Messages carry only their type and are taken only from this frame at this origin.
+const SETTINGS_SHEET_URL = '/?settings-only=1&desktop=once';
+const SETTINGS_SHEET_WAIT_MS = 20000;
+let settingsSheet = null;   // { el, frame, ready, timer }
+function settingsSheetOpen() {
+  try { $('menu').classList.remove('open'); } catch { /* no menu */ }
+  if (settingsSheet) return;
+  const el = document.createElement('div');
+  el.id = 'settings-sheet';
+  el.setAttribute('role', 'dialog'); el.setAttribute('aria-label', 'Settings');
+  el.innerHTML = '<div class="ssh-bar" hidden><button type="button" class="ssh-done">Close</button></div><iframe title="Settings"></iframe>' +
+    '<div class="ssh-wait" role="status"><p class="ssh-msg">Opening Settings…</p>' +
+    '<div class="ssh-btns" hidden><button type="button" class="ssh-retry">Try again</button><button type="button" class="ssh-close">Close</button></div>' +
+    '<div class="ssh-btns ssh-stuck" hidden><button type="button" class="ssh-wait-more">Keep waiting</button><button type="button" class="ssh-force">Close anyway</button></div></div>';
+  document.body.appendChild(el);
+  settingsSheet = { el, frame: el.querySelector('iframe'), ready: false, timer: null };
+  el.__dialogClose = settingsSheetRequestClose;   // Back: the dialog in the frame decides (unsaved changes, a save running)
+  el.querySelector('.ssh-retry').addEventListener('click', settingsSheetLoad);
+  el.querySelector('.ssh-close').addEventListener('click', settingsSheetClosed);
+  el.querySelector('.ssh-done').addEventListener('click', settingsSheetClosed);   // shown once the frame left Settings
+  el.querySelector('.ssh-wait-more').addEventListener('click', settingsSheetKeepWaiting);
+  el.querySelector('.ssh-force').addEventListener('click', settingsSheetClosed);
+  settingsSheet.frame.addEventListener('load', settingsSheetFrameLoaded);
+  window.addEventListener('message', settingsSheetMessage);
+  dialogGuard.open(el);
+  settingsSheetLoad();
+}
+function settingsSheetLoad() {
+  const s = settingsSheet;
+  if (!s) return;
+  s.ready = false; s.away = false;
+  s.el.classList.remove('ready');
+  s.el.querySelector('.ssh-bar').hidden = true;
+  s.el.querySelector('.ssh-msg').textContent = 'Opening Settings…';
+  s.el.querySelector('.ssh-btns').hidden = true;
+  s.el.querySelector('.ssh-stuck').hidden = true;
+  clearTimeout(s.timer);
+  s.timer = setTimeout(settingsSheetFailed, SETTINGS_SHEET_WAIT_MS);
+  // the chat this phone has open: Settings → Notifications → "For an agent" starts on it
+  s.frame.src = SETTINGS_SHEET_URL + (typeof current === 'string' && current ? '&agent=' + encodeURIComponent(current) : '');
+}
+// Nothing came back in time (offline, the hub down): a plain message with a retry, never a blank screen.
+function settingsSheetFailed() {
+  const s = settingsSheet;
+  if (!s || s.ready) return;
+  s.el.querySelector('.ssh-msg').textContent = "Settings didn't open. Check the connection and try again.";
+  s.el.querySelector('.ssh-btns').hidden = false;
+}
+// The frame left the Settings page (the sign-in page after the session ended, Data connectors, another page Settings
+// links to): that page shows as it is, with a Close bar, and Back closes the sheet (nothing of Settings is left to lose).
+function settingsSheetFrameLoaded() {
+  const s = settingsSheet;
+  if (!s) return;
+  let loc = null;
+  try { loc = s.frame.contentWindow.location; } catch { loc = null; }
+  if (!loc) { s.ready = false; clearTimeout(s.timer); s.el.classList.remove('ready'); settingsSheetFailed(); return; }   // the browser's error page (offline): Try again
+  const onSettings = loc.pathname === '/' && new URLSearchParams(loc.search).get('settings-only') === '1';
+  if (onSettings) return;
+  s.ready = false; s.away = true;
+  clearTimeout(s.timer); clearTimeout(s.closeTimer);
+  s.el.classList.add('ready');
+  s.el.querySelector('.ssh-bar').hidden = false;
+}
+function settingsSheetRequestClose() {
+  const s = settingsSheet;
+  if (!s) return;
+  if (!s.ready) { settingsSheetClosed(); return; }   // nothing of Settings in the frame: nothing to lose
+  try { s.frame.contentWindow.postMessage({ type: 'mm-settings-close' }, location.origin); } catch { settingsSheetClosed(); return; }
+  // the dialog answers at once (closed, or kept with its question up). No answer: the sheet stays and asks, since the frame
+  // may hold changes; it is never closed without the person saying so.
+  clearTimeout(s.closeTimer);
+  s.closeTimer = setTimeout(settingsSheetNoAnswer, 8000);
+}
+function settingsSheetNoAnswer() {
+  const s = settingsSheet;
+  if (!s) return;
+  s.el.querySelector('.ssh-msg').textContent = "Settings isn't answering. Changes not saved there are lost if you close it now.";
+  s.el.querySelector('.ssh-btns').hidden = true;
+  s.el.querySelector('.ssh-stuck').hidden = false;
+  s.el.classList.remove('ready');
+  dialogGuard.open(s.el);   // Back works again (the question took the last one)
+}
+function settingsSheetKeepWaiting() {
+  const s = settingsSheet;
+  if (!s) return;
+  s.el.querySelector('.ssh-stuck').hidden = true;
+  s.el.classList.add('ready');
+}
+function settingsSheetMessage(e) {
+  const s = settingsSheet;
+  if (!s || !e || e.source !== s.frame.contentWindow || e.origin !== location.origin) return;
+  const type = e.data && e.data.type;
+  if (type === 'mm-settings-ready') { s.ready = true; s.away = false; clearTimeout(s.timer); s.el.classList.add('ready'); s.el.querySelector('.ssh-bar').hidden = true; }   // back on Settings (after signing in again)
+  else if (type === 'mm-settings-closed') settingsSheetClosed();
+  else if (type === 'mm-settings-kept') { clearTimeout(s.closeTimer); settingsSheetKeepWaiting(); dialogGuard.open(s.el); }   // a late answer also clears "isn't answering"   // "Discard changes?", a save running or an inner box closed: the sheet stays, Back works again
+}
+function settingsSheetClosed() {
+  const s = settingsSheet;
+  if (!s) return;
+  settingsSheet = null;
+  clearTimeout(s.timer); clearTimeout(s.closeTimer);
+  window.removeEventListener('message', settingsSheetMessage);
+  dialogGuard.closed(s.el);
+  s.el.remove();
+}
+// ── settings sheet (end) ──
+
 function openProfileSheet() {
   $('menu').classList.remove('open');
   if (!hubMe || !hubMe.user) return;
@@ -13989,9 +14733,9 @@ function openSecuritySheet() {
     <div id="sec-2fa" class="sec-section"></div>
     <div class="sec-section">
       <div class="sec-title">Change password</div>
-      <input type="password" id="sec-pw-current" placeholder="Current password" autocomplete="current-password">
-      <input type="password" id="sec-pw-new" placeholder="New password (12+ characters)" autocomplete="new-password">
-      <input type="password" id="sec-pw-new2" placeholder="New password again" autocomplete="new-password">
+      <input type="password" data-eye id="sec-pw-current" placeholder="Current password" autocomplete="current-password">
+      <input type="password" data-eye id="sec-pw-new" placeholder="New password (12+ characters)" autocomplete="new-password">
+      <input type="password" data-eye id="sec-pw-new2" placeholder="New password again" autocomplete="new-password">
       <div class="sec-actions"><button id="sec-pw-go" class="go">Change password</button></div>
       <div class="sec-msg" id="sec-pw-msg"></div>
     </div>
@@ -14853,7 +15597,7 @@ function paintTwoFactor() {
     box.innerHTML = `
       <div class="sec-title">Two-factor authentication: on</div>
       ${adminLocked ? `<div class="sec-hint">Two-factor sign-in is on. Admins can't remove it while "Require two-factor sign-in for admins" is on in Settings, Security on a computer.</div>` : `
-      <input type="password" id="sec-2fa-password" placeholder="Password (to turn it off)" autocomplete="current-password">
+      <input type="password" data-eye id="sec-2fa-password" placeholder="Password (to turn it off)" autocomplete="current-password">
       ${adminFree ? '<input type="text" id="sec-2fa-disable-code" inputmode="numeric" autocomplete="one-time-code" placeholder="123456 or a recovery code">' : ''}
       <div class="sec-actions"><button id="sec-2fa-disable" class="danger">${adminFree ? 'Remove two-factor' : 'Disable 2FA'}</button></div>`}
       <div class="sec-msg" id="sec-2fa-msg"></div>`;
@@ -15420,6 +16164,7 @@ function simpleSettingsOpen() {
     '<button type="button" data-theme="light">Light</button><button type="button" data-theme="dark">Dark</button><button type="button" data-theme="auto">Match device</button></div><div class="ss-follow" hidden></div></div>' +
     '<div class="ss-sec" id="ss-style-sec"><div class="ss-title">Interface style</div><div id="ss-style"></div></div>' +
     '<div class="ss-sec"><div class="ss-title">Name</div><div class="ss-val"></div></div>' +
+    (hubMe && hubMe.isAdmin === false ? '' : '<button type="button" class="ss-row" id="ss-all"><b>All settings</b><small>Provider keys, web search, voice, backups and the rest</small></button>') +   // admins only, as on the desktop
     '<button type="button" class="ss-row" id="ss-adv"><b>Switch to Advanced</b><small>All tools, agents’ work and settings</small></button>' +
     '<button type="button" class="ss-row" id="ss-out"><b>Sign out</b></button>' +
     '<button type="button" class="ss-close">Close</button>';
@@ -15455,8 +16200,11 @@ function simpleSettingsOpen() {
   }));
   $('ss-adv').addEventListener('click', async () => { if (await simplePrefsPost({ uiMode: 'advanced' })) simpleReload(); else toast('Could not switch'); });
   $('ss-out').addEventListener('click', () => { signOut(); });
+  $('ss-all')?.addEventListener('click', () => { d.close(); settingsSheetOpen(); });
   d.querySelector('.ss-close').addEventListener('click', () => d.close());
   if (!d.open) d.showModal();
+  typeof researchSimplePaint === 'function' && researchSimplePaint(d);   // Deep research, when the hub has it on
+  typeof researchPrefLoad === 'function' && researchPrefLoad();   // repaints the open sheet with the hub's answer
 }
 
 // The reasoning level, in the composer's second row: a button naming the level; a tap opens the four plain-word choices.

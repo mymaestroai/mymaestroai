@@ -16,6 +16,7 @@
  *   mymaestro backups                list the backups on this computer and in your backup folders
  *   mymaestro restore <file|latest>  put a backup back: its password, what changes, then RESTORE (--recovery-key; --undo: the setup before)
  *   mymaestro reset-2fa <email>      turn off two-factor for an account (lost phone); it is set up again at next sign-in
+ *   mymaestro reset-password <email>   set a new password for an account (forgotten password); asks for it twice, hidden
  *   mymaestro service install|remove start by itself at boot (Linux) or login (Mac)
  *   mymaestro move-home [--yes]      move shared folders (share/, users/...) out of your home folder into the install; --yes does it
  *   mymaestro face install <folder|owl> [--id <slug>]   add a character pack (the voice call face) from a folder, or download one (owl)
@@ -47,6 +48,89 @@ function askHidden(q) {
     rl._writeToOutput = (str) => { if (str.includes(q)) process.stdout.write(q); };
     rl.question(q, (a) => { rl.close(); process.stdout.write('\n'); resolve(a); });
   });
+}
+
+// Reads one line from the terminal without echoing it: raw mode, Enter ends, Backspace edits, Ctrl-C restores the terminal and exits 130.
+// The typed characters are never written anywhere. Only for a real terminal (the caller checks); tests inject their own reader.
+// Raw mode goes on BEFORE the prompt is printed and stays on between prompts (so nothing typed ahead is echoed); endHidden() puts the terminal
+// back. SIGTERM, SIGHUP, SIGINT, SIGQUIT and a normal exit all restore it.
+let hiddenSignals = null;
+function endHidden() {
+  try { process.stdin.setRawMode(false); } catch { /* not a terminal any more */ }
+  try { process.stdin.pause(); } catch { /* closed */ }
+  if (!hiddenSignals) return;
+  process.removeListener('exit', endHidden);
+  for (const [sig, h] of hiddenSignals) process.removeListener(sig, h);
+  hiddenSignals = null;
+}
+function beginHidden() {
+  if (hiddenSignals) return;
+  const stop = (code) => () => { endHidden(); process.stdout.write('\n'); process.exit(code); };
+  hiddenSignals = [['SIGTERM', stop(143)], ['SIGHUP', stop(129)], ['SIGINT', stop(130)], ['SIGQUIT', stop(131)]];
+  for (const [sig, h] of hiddenSignals) process.on(sig, h);
+  process.on('exit', endHidden);
+  process.stdin.setEncoding('utf8');
+  process.stdin.setRawMode(true);
+}
+function readHidden(q) {
+  return new Promise((resolve) => {
+    const stdin = process.stdin;
+    let chars = [];
+    beginHidden();
+    function onData(chunk) {
+      // Arrow keys and other escape sequences arrive as one chunk starting with ESC: they are not part of the password.
+      const text = String(chunk).replace(/\u001b\[[0-9;?]*[ -\/]*[@-~]|\u001b[@-~]?/g, '');
+      for (const ch of Array.from(text)) {
+        if (ch === '\r' || ch === '\n') { stdin.removeListener('data', onData); try { stdin.pause(); } catch { /* closed */ } process.stdout.write('\n'); resolve(chars.join('')); return; }
+        if (ch === '\u0003') { endHidden(); process.stdout.write('\n'); process.exit(130); }
+        if (ch === '\u001c') { endHidden(); process.stdout.write('\n'); process.exit(131); }   // Ctrl-\ (quit)
+        if (ch === '\u007f' || ch === '\b') { chars.pop(); continue; }
+        if (ch === '\t' || ch >= ' ') chars.push(ch);   // a tab is part of the password
+      }
+    }
+    process.stdout.write(q);
+    stdin.resume();
+    stdin.on('data', onData);
+  });
+}
+
+// The refusal line for a person running as root (sudo) on an install whose data folder belongs to someone else: root would leave
+// root-owned files (users.json, auth.db-wal, auth.db-shm) the hub cannot use. Null when there is nothing to refuse.
+function rootOwnerNote({ getuid = process.getuid ? process.getuid.bind(process) : null, stat = fs.statSync, dataDir = path.join(DIR, 'data') } = {}) {
+  if (typeof getuid !== 'function' || getuid() !== 0) return null;
+  let st; try { st = stat(dataDir); } catch { return null; }
+  if (st.uid === 0) return null;
+  return `Run this without sudo, as the user that runs your Maestro (user id ${st.uid}).`;
+}
+
+// `mymaestro reset-password <email>`: returns the exit code (0 = the password was set). `readHidden` can be injected for tests.
+async function resetPassword(login, { a = null, read = readHidden, interactive = !!(process.stdin.isTTY && process.stdout.isTTY), say = out, sayErr = (s) => process.stderr.write(s + '\n'), policy = null, rootNote = rootOwnerNote } = {}) {
+  if (!login) { sayErr('Usage: mymaestro reset-password <email>'); return 1; }
+  const refuse = rootNote(); if (refuse) { sayErr(refuse); return 1; }   // before anything is opened or read
+  if (!interactive) { sayErr('reset-password asks for the new password in a terminal; run it in a terminal on the computer that runs your Maestro.'); return 1; }
+  a = a || auth();
+  const check = policy || require(path.join(DIR, 'lib', 'auth')).passwordPolicy;
+  const u = a.findByLogin(login);
+  if (!u) { sayErr(`No account "${login}".`); return 1; }
+  let pw = null;
+  try {
+    for (let tries = 0; tries < 3 && pw === null; tries++) {
+      const first = await read('New password: ');
+      const problem = check(first);
+      if (problem) { say(problem); continue; }
+      const second = await read('Type it again: ');
+      if (first !== second) { say('The two passwords are not the same. Try again.'); continue; }
+      pw = first;
+    }
+  } finally { endHidden(); }   // the terminal is back to normal before anything else is said
+  if (pw === null) { sayErr('Too many tries. The password was not changed.'); return 1; }
+  let r;
+  try { r = a.setPassword(u.id, pw, { by: 'cli' }); } catch (e) { sayErr(e.message); return 1; }   // e.g. users.json cannot be read: nothing was saved
+  if (!r.ok) { sayErr(r.error); return 1; }
+  a.clearFailures(u.login);
+  say(`Password set for ${u.login}. Every other sign-in of this account was signed out. Sign in with the new password; if the phone with two-factor is lost too, run: mymaestro reset-2fa ${u.login}`);
+  if (u.disabled) say('This account is turned off; an admin can turn it back on on the Users page (account menu → Users → Enable).');
+  return 0;
 }
 
 function ask(q) {
@@ -353,9 +437,15 @@ const commands = {
   },
   'reset-2fa'() {
     const login = argv[1]; if (!login) fail('Usage: mymaestro reset-2fa <email>');
+    const refuse = rootOwnerNote(); if (refuse) fail(refuse);   // before auth.db is opened or users.json read
     const a = auth(); const u = a.findByLogin(login); if (!u) fail(`No account "${login}".`);
-    const r = a.totpDisable(u.id, { by: 'cli' }); if (!r.ok) fail(r.error);
+    let r; try { r = a.totpDisable(u.id, { by: 'cli' }); } catch (e) { fail(e.message); }   // e.g. users.json cannot be read: nothing was saved
+    if (!r.ok) fail(r.error);
     out(`Two-factor is off for ${u.login}. Sign in with the password, then set up two-factor again (account menu → Security).`);
+  },
+  async 'reset-password'() {
+    const code = await resetPassword(argv[1]);
+    if (code) process.exit(code);
   },
   service() {
     const sub = argv[1];
@@ -522,11 +612,13 @@ const commands = {
     out(unfinished ? `To create the missing ones, open ${URL_BASE}/welcome on this computer.` : `To add them, open ${URL_BASE}/?team=setup on this computer and choose Set up your team.`);
   },
   version() { const { v, commit, channel } = version(); out(`${PRODUCT} ${v} (${commit}, ${channel} channel)`); },
-  // The help is the comment block at the top of this file: lines 4 to 26 (one more than before `team` was listed).
-  help() { out(fs.readFileSync(__filename, 'utf8').split('\n').slice(3, 26).map(l => l.replace(/^ \* ?/, '')).join('\n')); },
+  // The help is the comment block at the top of this file: lines 4 to 27 (one more than before `reset-password` was listed).
+  help() { out(fs.readFileSync(__filename, 'utf8').split('\n').slice(3, 27).map(l => l.replace(/^ \* ?/, '')).join('\n')); },
 };
 
-(async () => {
+module.exports = { resetPassword, readHidden, endHidden, rootOwnerNote };   // for tests: the command's logic with an injectable password reader
+
+if (require.main === module) (async () => {
   const fn = commands[cmd] || (cmd === '--help' || cmd === '-h' ? commands.help : null);
   if (!fn) { out(`Unknown command "${cmd}".\n`); commands.help(); process.exit(2); }
   await fn();

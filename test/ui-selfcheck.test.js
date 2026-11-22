@@ -15,6 +15,7 @@ const between = (a, b) => {
 };
 const BLOCK = between('// ── self-check page (begin) ──', '// ── self-check page (end) ──');
 const ESC = app.match(/^\s*const esc = \(s\) => .*$/m)[0];
+const SAVE_FETCH = between('// ── save fetch (begin) ──', '// ── save fetch (end) ──');
 
 // A stand-in page: elements by id with the few fields the section uses.
 function makePage(ids) {
@@ -49,9 +50,11 @@ function build(routes, { ids = IDS } = {}) {
   };
   const setTimeout = (fn, ms) => { timers.push({ fn, ms }); return timers.length; };
   const stSum = (g, k, text, crit) => sums.push({ g, k, text, crit });
-  const make = new Function('document', 'fetch', 'setTimeout', 'stSum', `${ESC}\n${BLOCK}\nreturn { scRender, loadSelfCheck, saveSelfCheckSettings, scFillSettings, scFailText, SC_POLL_MS, SC_POLL_MAX_MS };`);
-  const S = make(page.document, fetch, setTimeout, stSum);
-  return { ...page, S, calls, sums, timers };
+  const guardLog = [];   // stand-in for the dialog guard: what the save settled
+  const dialogGuard = { savePoint: (fields) => () => guardLog.push(`commit ${fields.length}`), markLoaded: (els) => guardLog.push(`loaded ${els.length}`) };
+  const make = new Function('document', 'fetch', 'setTimeout', 'stSum', 'dialogGuard', `${ESC}\n${SAVE_FETCH}\n${BLOCK}\nreturn { scRender, loadSelfCheck, saveSelfCheckSettings, scFillSettings, scFailText, SC_POLL_MS, SC_POLL_MAX_MS };`);
+  const S = make(page.document, fetch, setTimeout, stSum, dialogGuard);
+  return { ...page, S, calls, sums, timers, guardLog };
 }
 
 const T0 = '2026-11-17T08:45:00.000Z';
@@ -251,10 +254,23 @@ test('saving sends only the keys that changed, and nothing at all when nothing c
   await t.S.saveSelfCheckSettings();
   assert.deepStrictEqual(t.calls, [{ key: 'PUT /api/selfcheck/settings', body: { afterStart: false, nightlyAt: '04:10' } }]);
   assert.strictEqual(t.els['st-sc-save-state'].textContent, 'Saved.');
+  assert.deepStrictEqual(t.guardLog, ['commit 8', 'commit 8'], 'nothing to save, then refilled from the answer: the form is settled');
   // the next save compares with what the hub answered
   t.calls.length = 0;
   await t.S.saveSelfCheckSettings();
   assert.strictEqual(t.calls.length, 0);
+});
+
+test('saving: a field edited while the save runs keeps the newer text; the others show the answer', async () => {
+  const s0 = allPass().settings;
+  let t;
+  t = build({ 'PUT /api/selfcheck/settings': () => { t.els['st-sc-model'].value = 'claude-sdk/haiku-y'; return { status: 200, body: { settings: { ...s0, nightlyAt: '04:10' } } }; } });
+  t.S.scFillSettings(s0);
+  t.els['st-sc-at'].value = '04:10';
+  await t.S.saveSelfCheckSettings();
+  assert.strictEqual(t.els['st-sc-at'].value, '04:10');
+  assert.strictEqual(t.els['st-sc-model'].value, 'claude-sdk/haiku-y', 'the edit made during the save is kept');
+  assert.deepStrictEqual(t.guardLog, ['commit 8']);
 });
 
 test('saving: a changed model and a changed set of kinds go in order; an empty model means auto', async () => {
@@ -286,6 +302,7 @@ test('a refused save (400) shows the hub\'s words and keeps the form', async () 
   await t.S.saveSelfCheckSettings();
   assert.strictEqual(t.els['st-sc-save-state'].textContent, 'Not saved: nightlyAt must be HH:MM');
   assert.strictEqual(t.els['st-sc-at'].value, '25:99');
+  assert.deepStrictEqual(t.guardLog, [], 'a refused save leaves the form changed (Close still asks)');
 });
 
 test('the deep link: ?selfcheck=1 is parsed, opens Settings → Status at the section, and is dropped from the address after', () => {
@@ -297,7 +314,7 @@ test('the deep link: ?selfcheck=1 is parsed, opens Settings → Status at the se
   assert.strictEqual(parseOpenTarget({ type: 'open-target', url: '/?selfcheck=0' }, 'http://localhost:8888').selfcheck, false);
   assert.ok(app.includes("if (t.selfcheck) openSettingsAt('st-selfcheck-section');"), 'runPageTarget opens the section');
   assert.match(app, /own\.memory \|\| own\.selfcheck \|\| own\.health \|\| own\.connectors/, 'a one-shot link');
-  assert.match(app, /for \(const k of \['update', 'backups', 'security', 'memory', 'selfcheck', 'health', 'connectors', 'wallet'\]\) u\.searchParams\.delete\(k\)/);
+  assert.match(app, /for \(const k of \['update', 'backups', 'security', 'memory', 'selfcheck', 'health', 'connectors', 'wallet', 'websearch'\]\) u\.searchParams\.delete\(k\)/);
 });
 
 test('the section is drawn after Memory in the Status group, for admins only, with the controls the spec lists', () => {

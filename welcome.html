@@ -29,7 +29,7 @@
   .sub { color: var(--text-dim); font-size: 14px; margin-bottom: 18px; }
   section { display: none; } section.on { display: block; }
   label { display: block; font-size: 12px; color: var(--text-dim); margin: 12px 0 5px; }
-  input[type="text"], input[type="email"], input[type="password"], select {
+  input[type="text"], input[type="email"], input[type="password"], input[data-eye], select {
     width: 100%; padding: 11px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-input); color: var(--text); font-size: 16px; outline: none; }
   input:focus, select:focus { border-color: var(--accent); }
   input.code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 4px; text-align: center; font-size: 20px; }
@@ -128,7 +128,7 @@
     <input type="file" id="r-file" accept=".age">
     <div class="msg" id="r-file-msg"></div>
     <div id="r-open" hidden>
-      <div id="r-pwbox"><label for="r-pw">Backup password</label><input type="password" id="r-pw" autocomplete="off"></div>
+      <div id="r-pwbox"><label for="r-pw">Backup password</label><input type="password" id="r-pw" autocomplete="off" data-eye></div>
       <div id="r-keybox" hidden><label for="r-key">Recovery key</label><input type="text" id="r-key" autocomplete="off" spellcheck="false" placeholder="AGE-SECRET-KEY-1…"></div>
       <p class="hint"><a href="#" class="link" id="r-switch">Use the recovery key instead</a></p>
       <button class="primary" id="r-go">Open and check</button>
@@ -143,7 +143,7 @@
     <ul class="notes" id="rc-notes"></ul>
     <label for="rc-login">Sign in with an admin account from the backup</label>
     <input type="email" id="rc-login" autocomplete="username" placeholder="email">
-    <input type="password" id="rc-pass" autocomplete="current-password" placeholder="password" style="margin-top:8px">
+    <input type="password" id="rc-pass" autocomplete="current-password" data-eye placeholder="password" style="margin-top:8px">
     <input type="text" id="rc-code" inputmode="numeric" autocomplete="one-time-code" placeholder="two-factor code, if it was on" style="margin-top:8px">
     <label for="rc-word">Type RESTORE to confirm</label>
     <input type="text" id="rc-word" autocomplete="off" spellcheck="false">
@@ -164,8 +164,8 @@
     <form id="f-account" autocomplete="on">
       <label for="a-name">Your name</label><input type="text" id="a-name" autocomplete="name" required>
       <label for="a-email">Email (your login)</label><input type="email" id="a-email" autocomplete="username" required>
-      <label for="a-pass">Password (at least 12 characters)</label><input type="password" id="a-pass" autocomplete="new-password" minlength="12" required>
-      <label for="a-pass2">Password again</label><input type="password" id="a-pass2" autocomplete="new-password" minlength="12" required>
+      <label for="a-pass">Password (at least 12 characters)</label><input type="password" id="a-pass" autocomplete="new-password" data-eye minlength="12" required>
+      <label for="a-pass2">Password again</label><input type="password" id="a-pass2" autocomplete="new-password" data-eye minlength="12" required>
       <button class="primary" type="submit">Create account</button>
     </form>
     <div class="msg" id="account-msg"></div>
@@ -305,6 +305,8 @@
   <div class="foot">My Maestro AI · setup</div>
 </div>
 
+<script src="/password-eye.js"></script>
+<script>document.addEventListener('DOMContentLoaded', function () { PasswordEye.watch(); });</script>
 <script>
 (() => {
   'use strict';

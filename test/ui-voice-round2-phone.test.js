@@ -84,7 +84,7 @@ test('chat controls: every control writes the same per-device prefs and reaches 
 test('chat controls: the mode chip shows only during a call, names the mode, and the settings button follows the mic visibility (run)', () => {
   const src = sliceBetween('const VOICE_WAIT_LABELS', 'function voicePanelPaint()');
   const els = { 'voice-strip': { hidden: true }, 'voice-settings-btn': { hidden: true }, 'voice-mode-chip': { textContent: '', classList: { toggle(c, v) { this.on = v; } }, setAttribute(k, v) { this.aria = v; } } };
-  let prefs = { mode: 'tap' }, on = false, repainted = 0;
+  let prefs = { mode: 'press' }, on = false, repainted = 0;   // 'press' is Tap to talk now; 'tap' is Dictation, which is not a call mode, so the chip never shows it
   const f = new Function('VOICE_CONTINUE_WAITS', '$', 'voicePrefsNow', 'voiceOn', 'voicePanelShow', 'voicePanelPaint', 'let voiceCall = null;\n' + src + '\nreturn { voiceStripPaint, voiceContinueWaitNow, setCall: (v) => { voiceCall = v; } };')([1500, 3000, 5000], (id) => els[id], () => prefs, () => on, () => {}, () => { repainted++; });
   f.voiceStripPaint();
   assert.strictEqual(els['voice-strip'].hidden, true); assert.strictEqual(els['voice-settings-btn'].hidden, true);
@@ -95,11 +95,15 @@ test('chat controls: the mode chip shows only during a call, names the mode, and
   assert.strictEqual(els['voice-strip'].hidden, false, 'during a call the pill shows');
   f.setCall(null); f.voiceStripPaint();
   assert.strictEqual(els['voice-strip'].hidden, true, 'after the call it goes again');
-  f.setCall({ call: {} }); f.voiceStripPaint();
+  f.setCall({ call: {}, press: true }); f.voiceStripPaint();   // the chip names the RUNNING call's mode (call.press), not the saved one
   assert.strictEqual(els['voice-mode-chip'].textContent, 'Tap to talk');
   prefs = { mode: 'handsfree' }; f.voiceStripPaint();
+  assert.strictEqual(els['voice-mode-chip'].textContent, 'Tap to talk', 'a mode saved during the call counts from the next call: the chip keeps the running call\'s');
+  f.setCall({ call: {} }); f.voiceStripPaint();
   assert.strictEqual(els['voice-mode-chip'].textContent, 'Hands-free');
   assert.match(els['voice-mode-chip'].aria, /Hands-free/);
+  prefs = { mode: 'tap' }; f.voiceStripPaint();
+  assert.strictEqual(els['voice-mode-chip'].textContent, 'Hands-free', 'Dictation is not a call mode: the chip does not name it');
   prefs = { continueWait: 5000 }; assert.strictEqual(f.voiceContinueWaitNow(), 5000);
   prefs = { continueWait: 777 }; assert.strictEqual(f.voiceContinueWaitNow(), 3000, 'default 3 s');
   prefs = {}; assert.strictEqual(f.voiceContinueWaitNow(), 3000);

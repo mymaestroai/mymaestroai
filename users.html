@@ -53,12 +53,12 @@
   button.primary:hover { background: var(--accent-hover); }
   button.danger { color: var(--error); border-color: rgba(255, 76, 76, .5); }
   button.danger:hover { background: rgba(255, 76, 76, .12); border-color: var(--error); }
-  input[type="text"], input[type="email"], input[type="password"], select {
+  input[type="text"], input[type="email"], input[type="password"], input[data-eye], select {
     font: inherit; font-size: 13px; padding: 7px 9px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-input); color: var(--text); outline: none; min-width: 0;
   }
   input:focus, select:focus { border-color: var(--accent); }
   .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-  .row input[type="text"], .row input[type="email"], .row input[type="password"] { flex: 1 1 160px; }
+  .row input[type="text"], .row input[type="email"], .row input[type="password"], .row input[data-eye] { flex: 1 1 160px; }
   .msg { display: none; margin-top: 10px; padding: 8px 10px; border-radius: var(--radius); font-size: 13px; white-space: pre-wrap; line-height: 1.4; }
   .msg.on { display: block; }
   .msg.error { background: rgba(255, 76, 76, .1); border: 1px solid rgba(255, 76, 76, .35); color: var(--error); }
@@ -150,7 +150,7 @@
       <input type="email" id="create-login" placeholder="email (their login)" autocomplete="off" required>
       <input type="text" id="create-name" placeholder="name" autocomplete="off">
       <select id="create-role"><option value="member">member</option><option value="admin">admin</option></select>
-      <input type="password" id="create-password" placeholder="password (12+ characters)" autocomplete="new-password" required>
+      <input type="password" id="create-password" data-eye placeholder="password (12+ characters)" autocomplete="new-password" required>
       <button class="primary" type="submit">Create user</button>
     </form>
     <div class="hint">For accounts you set up in person. Tell them the password out of band; they can change it from the hub's security dialog.</div>
@@ -197,6 +197,8 @@
   </section>
 </main>
 
+<script src="/password-eye.js"></script>
+<script>document.addEventListener('DOMContentLoaded', function () { PasswordEye.watch(); });</script>
 <script>
 (function () {
   'use strict';
@@ -299,7 +301,7 @@
 
   // One inline panel at a time under the table (edit / password / team / delete confirmations).
   function openPanel(html) { const p = $('users-panel'); p.innerHTML = `<div class="inline-form">${html}</div>`; const f = p.querySelector('input,select'); if (f) f.focus(); return p; }
-  function closePanel() { $('users-panel').innerHTML = ''; }
+  function closePanel() { if (typeof PasswordEye !== 'undefined') PasswordEye.hideAll($('users-panel')); $('users-panel').innerHTML = ''; }
 
   $('users-rows').addEventListener('click', async (e) => {
     const btn = e.target.closest('button[data-act]'); if (!btn) return;
@@ -342,8 +344,8 @@
       await act(btn, 'users-msg', () => api(`/api/users/${encodeURIComponent(id)}`, { method: 'PATCH', body: { disabled } }), `${u.name} ${disabled ? 'disabled: their sessions end and they cannot sign in' : 'enabled'}`);
     } else if (act_ === 'password') {
       const p = openPanel(`<div class="row"><b>New password for ${esc(u.name)}</b></div>
-        <div class="row"><input type="password" id="p-pw" placeholder="at least 12 characters" autocomplete="new-password">
-        <input type="password" id="p-pw2" placeholder="again" autocomplete="new-password">
+        <div class="row"><input type="password" id="p-pw" data-eye placeholder="at least 12 characters" autocomplete="new-password">
+        <input type="password" id="p-pw2" data-eye placeholder="again" autocomplete="new-password">
         <button class="primary" id="p-save">Set password</button><button id="p-cancel">Cancel</button></div>
         <div class="hint">Their other sessions are signed out. Tell them the new password out of band.</div>`);
       p.querySelector('#p-cancel').onclick = closePanel;

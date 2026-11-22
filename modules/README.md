@@ -22,6 +22,8 @@ as for any connector. A module's connector can only be changed by the module (th
 |---|---|
 | `id` | Folder name; lowercase letters, digits, dashes. Also the connector id; tools reach agents as `<id>__<tool>`. |
 | `name`, `icon`, `category`, `summary` | Shown on the Modules page (cards are grouped by category). |
+| `purpose` (optional) | A few words on what the module is for (one line, 3 to 80 characters). The lead agent's per-turn hub facts list modules that are not set up yet by name and purpose, so it offers them instead of building a substitute. |
+| `platforms` (optional) | The systems My Maestro must run on for the module to work: any of `linux`, `darwin`, `win32`. No field means every system. Declare it when the module's health check refuses a system: the lead is then told the module is not available on this system yet instead of offering it, and `test/addons-known.test.js` fails when the field and the health check disagree. |
 | `risk` | `read`, `write`, `send` or `money`. Any `money` tool requires `risk: "money"`. |
 | `requires` | e.g. `{ "node": ">=22" }`; checked before installing. |
 | `server` | `{ "type": "mcp-stdio", "npm": { "package", "version", "bin" }, "args", "env", "dataEnv" }` or `{ "type": "mcp-stdio", "script": "server.js" }` (a file inside the folder). `version` must be exact: updates are deliberate. `dataEnv` names an environment variable that receives the module's private data folder (also its `HOME`). |

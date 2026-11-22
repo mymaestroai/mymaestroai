@@ -1178,7 +1178,7 @@ test('server.js reports "Reinstall needed" and starts nothing when the runtime i
     assert.deepStrictEqual({ ok: h.ok, running: h.running, version: h.version, group: h.group, computers: h.computers }, { ok: false, running: false, version: '1.3.1', group: null, computers: null });
     assert.deepStrictEqual(h.warnings, []);
     assert.strictEqual(h.waiting, REINSTALL);
-    assert.match(REINSTALL, /Reinstall needed: open Data connectors and run Install again/);
+    assert.match(REINSTALL, /Reinstall needed\. Run Set it up again\./);
     const started = JSON.parse((await rpc.tool('start')).content[0].text);
     assert.strictEqual(started.waiting, REINSTALL);
     assert.deepStrictEqual(fs.readdirSync(home), [], 'nothing was created');
@@ -1327,7 +1327,7 @@ test('the server check is ok only when the control connection works (health.ok =
   const b = await run({ ...base, ok: false, warnings: ['The computer list could not be read (ETIMEDOUT).', 'second'] });
   assert.deepStrictEqual([b.ok, b.summary], [false, 'The computer list could not be read (ETIMEDOUT).']);
   const c = await run({ ...base, ok: false });
-  assert.deepStrictEqual([c.ok, c.summary], [false, 'The control connection is not ready.']);
+  assert.deepStrictEqual([c.ok, c.summary], [false, 'The server is getting ready. This page shows it when it is ready.']);
   const d = await run({ ...base, ok: true, computers: 3, online: 1 });
   assert.deepStrictEqual([d.ok, d.summary], [true, 'The server is running. 3 computers registered, 1 online.']);
   assert.strictEqual((await run({ ...base, ok: true, computers: 1, online: 0 })).summary, 'The server is running. 1 computer registered, 0 online.');
@@ -1351,9 +1351,9 @@ test('a failed start is reported in health and can be retried', async () => {
   await remote.stop();
 });
 
-test('on a system other than Linux, health and the server check say it needs Linux for now, the agent tools refuse, and nothing starts', async () => {
-  const LINUX_ONLY = 'Remote computers needs My Maestro on Linux for now.';
-  for (const platform of ['win32', 'darwin']) {
+test('on a system other than Linux or a Mac, health and the server check say so, the agent tools refuse, and nothing starts', async () => {
+  const LINUX_ONLY = 'Remote computers can\'t run on this system yet. It runs on Linux and Mac.';
+  for (const platform of ['win32', 'freebsd']) {
     const runtimeDir = fakeRuntime(), home = tmp();
     const exec = fakeExec('Done.\n'), spawn = fakeSpawn();
     const remote = createRemote({

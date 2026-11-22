@@ -115,7 +115,7 @@ test('the chain falls through on HTTP errors, thrown errors and empty answers, a
   assert.strictEqual(r.tried[2].error, 'no results');
   const text = ws.render(r);
   assert.match(text, /\[1\] Example A\n {4}https:\/\/example\.org\/a\n {4}Snippet for A/);
-  assert.match(text, /— 2 result\(s\) via duckduckgo; tried first: brave \(HTTP 429: rate limited\), serper \(socket hang up\), tavily \(no results\)/);
+  assert.match(text, /— 2 result\(s\) via DuckDuckGo, the free no-key fallback: results are thin; tried first: brave \(HTTP 429: rate limited\), serper \(socket hang up\), tavily \(no results\)/);
 });
 
 test('when everything fails the result is empty and the rendering says why; a captcha page is an error, not silence', async () => {
@@ -142,7 +142,7 @@ test('a named backend goes first; an unknown or unconfigured name is noted and t
   const off = await ws.search('q', { backend: 'tavily' });
   assert.deepStrictEqual(off.tried, [{ backend: 'tavily', error: 'not configured on this hub' }]);
   assert.strictEqual(off.backend, 'brave');
-  assert.match(ws.render(off), /via brave; tried first: tavily \(not configured on this hub\)/);
+  assert.match(ws.render(off), /via Brave Search API; tried first: tavily \(not configured on this hub\)/);
   assert.deepStrictEqual(calls.map(c => c.host), ['api.perplexity.ai', 'api.search.brave.com', 'api.search.brave.com']);
 });
 

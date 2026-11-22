@@ -61,7 +61,7 @@ test('settings: Voices section in the tools group, admin controls and per-device
 });
 
 test('composer: mic button next to attach, shown only when voice is enabled and ready', () => {
-  assert.match(app, /id="mic-\$\{chatId\}" class="mic-btn" style="display:none"[^>]*title="Talk \(tap to start, tap to stop\)"/);
+  assert.match(app, /id="mic-\$\{chatId\}" class="mic-btn" style="display:none"[^>]*title="\$\{voiceMicIdleTitle\(\)\}"/);   // the title follows the saved mode (Talk hands-free / Tap to talk / Dictation)
   assert.match(app, /onclick="voiceMicToggle\('\$\{chatId\}'\)"/);
   const at = app.indexOf('id="mic-${chatId}"');
   assert.ok(app.indexOf('document.getElementById(\'file-input-${chatId}\').click()') < at, 'after the attach button');
@@ -185,7 +185,7 @@ function makeEnv(opts = {}) {
     voiceSpeechText: (t) => t,
     voiceCleanSpeed: L.voiceCleanSpeed, voiceSpeedLabel: L.voiceSpeedLabel, VOICE_END_PAUSES: L.VOICE_END_PAUSES, VOICE_DETAILS_READ_WORDS: L.VOICE_DETAILS_READ_WORDS,
     voiceEffectivePrefs: L.voiceEffectivePrefs, voiceMarkChosen: L.voiceMarkChosen, voiceIsIOSNav: DEV.voiceIsIOSNav, voiceEchoHoldOk: DEV.voiceEchoHoldOk, voiceEchoHoldLabel: DEV.voiceEchoHoldLabel, VOICE_ECHO_HOLDS: DEV.VOICE_ECHO_HOLDS, voiceEchoChoices: DEV.voiceEchoChoices, VOICE_DEVICE_DEFAULT_KEYS: DEV.VOICE_DEVICE_DEFAULT_KEYS, voiceMarkDeviceSet: DEV.voiceMarkDeviceSet, voiceDevicePrefs: DEV.voiceDevicePrefs, VOICE_ECHO_HOLD_IOS: DEV.VOICE_ECHO_HOLD_IOS, voiceMarkDeviceChanged: DEV.voiceMarkDeviceChanged, VOICE_AGENT_DEFAULT_KEYS: L.VOICE_AGENT_DEFAULT_KEYS, VOICE_DEFAULT_PREFS: L.VOICE_DEFAULT_PREFS, AGENTS: [], capName: (n) => n,   // agent voice defaults (part 6)   // voice fixes 1: speed and end-of-turn pause
-    voiceMicGuard: L.voiceMicGuard, voiceWaitLocalVoice: L.voiceWaitLocalVoice, voicePickLocalVoice: L.voicePickLocalVoice,
+    voiceMicGuard: L.voiceMicGuard, voiceWaitLocalVoice: L.voiceWaitLocalVoice, voicePickLocalVoice: L.voicePickLocalVoice, VOICE_PRESS_HOLD_MS: L.VOICE_PRESS_HOLD_MS,   // (voiceMicToggle tells a tap from a hold of the idle mic)
   };
   if (opts.gum) stubs.navigator.mediaDevices.getUserMedia = opts.gum(calls);
   const names = Object.keys(stubs);
@@ -429,11 +429,12 @@ test('Voices settings: both checkboxes sit in the value column (text may wrap th
 });
 
 test('mic icon is an inline SVG, not the U+1F399 emoji; Dictate label; recording is the red .rec state', () => {
-  assert.match(app, /id="mic-\$\{chatId\}" class="mic-btn" style="display:none" aria-pressed="false" aria-label="Dictate" title="[^"]+">\$\{VOICE_MIC_SVG\}<\/button>/);
+  assert.match(app, /id="mic-\$\{chatId\}" class="mic-btn" style="display:none" aria-pressed="false" aria-label="\$\{voiceMicIdleLabel\(\)\}" title="[^"]+">\$\{VOICE_MIC_SVG\}<\/button>/);   // the label follows the saved mode; 'Dictate' is the Dictation label (voiceMicIdleLabel)
   const b = voiceBlock();
   assert.match(b, /const VOICE_MIC_SVG = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor"[^']*aria-hidden="true"/);
   assert.ok(!b.includes('\u{1F399}') && !/&#127897;/.test(app.slice(app.indexOf('id="mic-${chatId}"'), app.indexOf('id="mic-${chatId}"') + 400)));
-  assert.match(b, /b\.setAttribute\('aria-label', state === 'rec' \? 'Stop dictation' : 'Dictate'\)/);
+  assert.match(b, /b\.setAttribute\('aria-label', state === 'rec' \? 'Stop dictation' : voiceMicIdleLabel\(\)\)/);
+  assert.match(app, /function voiceMicIdleLabel\(\) \{ const m = voicePrefsNow\(\)\.mode; return m === 'press' \? 'Tap to talk' : m === 'tap' \? 'Dictate' : 'Talk hands-free'; \}/);
     // looks-vars: the value is unchanged; index.html/app.js now spell it as a variable (defined in index.html :root)
   assert.match(html, /\.input-area \.mic-btn\.rec \{[^}]*var\(--mic-rec\)/);
   assert.match(html, /--mic-rec:\s*#ef4444;/);

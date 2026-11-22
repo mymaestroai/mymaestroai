@@ -60,7 +60,9 @@ test('agent settings: GET, PUT { mode, at } and POST run on /api/agents/<name>/c
   assert.ok(settings.includes("data = await apiFetch(`${compactionUrl()}/run`, { method: 'POST'"), 'POST run');
   assert.match(settings, /if \(!confirm\(`Compress now\?[\s\S]*?\/run`, \{ method: 'POST'/, 'confirm before the POST');
   assert.ok(settings.includes("`${agentName} will write its working brief (working-brief.md), then its session is reset") && settings.includes('the session goes on unchanged (dry run)'), 'the confirm says what the current mode does');
-  assert.ok(settings.includes('}, 5000);') && settings.includes('if (d.running || d.requested) return;'), 'polls GET every 5 s until running is false');
+  // Polls until the run is over; a postponed run (compression-busy) is said at once, a kept request otherwise keeps it polling.
+  assert.ok(settings.includes('}, 5000);') && settings.includes('if (d.running) return;') && settings.includes('if (d.requested) return;'), 'polls GET every 5 s until running is false');
+  assert.ok(settings.indexOf('if (d.lastBusy && lastRun') < settings.indexOf('if (d.requested) return;'), 'a postponed run is reported before a kept request keeps the poll going');
   assert.ok(settings.includes("compactionStatus('success', d.lastReset ? '✅ Done: brief written, fresh session started' : '✅ Done, read the brief');"), 'Done, read the brief');
   assert.ok(settings.includes("document.getElementById('compaction-brief-btn').style.display = '';"), 'the brief button appears when done');
   assert.ok(settings.includes("const name = compactionState.briefFile || 'working-brief.md';") && settings.includes('const i = recordsState.records.findIndex(r => r.name === name);') && settings.includes('await openRecord(i);'), 'openBrief opens working-brief.md in the Records editor');
@@ -122,5 +124,5 @@ test('mobile: the same notices in the open chat, and a chat-only Compress now me
 });
 
 test('service worker cache bumped to v18', () => {
-  assert.ok(sw.includes("const VERSION = 'hub-mobile-v70';"));
+  assert.ok(sw.includes("const VERSION = 'hub-mobile-v74';"));
 });

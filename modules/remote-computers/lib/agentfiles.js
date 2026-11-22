@@ -110,7 +110,7 @@ async function download(entry, dir, fetchFn, timeoutMs) {
   }
 }
 
-async function ensureAgentFiles({ runtimeDir, fetch = globalThis.fetch, log = () => {}, concurrency = 3, timeoutMs = 120000 } = {}) {
+async function ensureAgentFiles({ runtimeDir, fetch = globalThis.fetch, log = () => {}, concurrency = 3, timeoutMs = 120000, onProgress = null } = {}) {
   if (!runtimeDir) throw new Error('ensureAgentFiles needs runtimeDir');
   const dir = path.join(runtimeDir, 'node_modules', 'meshcentral', 'agents');
   const list = readManifest(path.join(dir, MANIFEST));
@@ -130,10 +130,14 @@ async function ensureAgentFiles({ runtimeDir, fetch = globalThis.fetch, log = ()
   const sum = todo.reduce((n, e) => n + e.size, 0);
   log(`Downloading ${todo.length} MeshCentral agent files (${Math.max(1, Math.round(sum / 1048576))} MB) from GitHub ...`);
   let next = 0, failure = null, downloaded = 0, bytes = 0;
+  // Progress for the page: files and bytes of what has to be downloaded (files that were already good are not counted). Called once at the start
+  // (done 0, so the total is known) and after each file. A failing callback never stops the download.
+  const report = () => { if (typeof onProgress === 'function') { try { onProgress({ done: downloaded, total: todo.length, bytes, totalBytes: sum }); } catch { /* not ours to fail */ } } };
+  report();
   const worker = async () => {
     while (!failure && next < todo.length) {
       const e = todo[next++];
-      try { await download(e, dir, fetch, timeoutMs); downloaded += 1; bytes += e.size; } catch (err) { failure = failure || err; }
+      try { await download(e, dir, fetch, timeoutMs); downloaded += 1; bytes += e.size; report(); } catch (err) { failure = failure || err; }
     }
   };
   const n = Math.max(1, Math.min(Math.floor(Number(concurrency)) || 1, todo.length));

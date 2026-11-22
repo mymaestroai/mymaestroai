@@ -114,7 +114,7 @@ function makeEnv(opts = {}) {
 // ── help text and Media Session ──
 
 test('help line: the new text; the old one is gone; the phone-only word "app" is not used on the desktop', () => {
-  const NEW = "Hands-free works with the page open and the screen on, also through a car's Bluetooth hands-free or a Bluetooth speaker. Locked-screen use and car apps (CarPlay, Android Auto) are not supported.";
+  const NEW = "Hands-free works with the page open and the screen on, also through a car's Bluetooth hands-free or a Bluetooth speaker. Locked-screen use and car apps (CarPlay, Android Auto) are not supported. Tap to talk: tap the mic, speak, tap again to send (or hold it while you speak and let go).";   // the Tap to talk sentence was added with the press mode
   assert.ok(app.includes("const VOICE_CALL_HELP = '" + NEW.replace(/'/g, "\\'") + "'") || app.includes('const VOICE_CALL_HELP = "' + NEW + '"'), 'VOICE_CALL_HELP is the spec text');
   assert.ok(!app.includes('locked-screen and car systems'));
 });

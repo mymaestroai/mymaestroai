@@ -16,6 +16,7 @@ const between = (src, a, b) => {
 };
 const HL = between(app, '// ── health page (begin) ──', '// ── health page (end) ──');
 const ESC = app.match(/^\s*const esc = \(s\) => .*$/m)[0];
+const SAVE_FETCH = between(app, '// ── save fetch (begin) ──', '// ── save fetch (end) ──');
 // A top-level function of app.js, from its first line to the first line that is just its closing brace.
 const fnSrc = (src, head) => {
   const i = src.indexOf(head);
@@ -48,9 +49,11 @@ function build(routes, { me = { isAdmin: true, user: { id: 'owner' } } } = {}) {
   };
   const setTimeout = (fn, ms) => { timers.push({ fn, ms }); return timers.length; };
   const stSum = (g, k, text, crit) => sums.push({ g, k, text, crit });
-  const make = new Function('document', 'fetch', 'setTimeout', 'stSum', 'window', `${ESC}\n${HL}\nreturn { hlRender, loadHealth, saveHealthSettings, hlFillSettings, HL_POLL_MS, HL_POLL_MAX_MS };`);
-  const S = make(page.document, fetch, setTimeout, stSum, { hubMe: me });
-  return { ...page, S, calls, sums, timers };
+  const guardLog = [];   // stand-in for the dialog guard: what the save settled
+  const dialogGuard = { savePoint: (fields) => () => guardLog.push(`commit ${fields.length}`), markLoaded: (els) => guardLog.push(`loaded ${els.length}`) };
+  const make = new Function('document', 'fetch', 'setTimeout', 'stSum', 'window', 'dialogGuard', `${ESC}\n${SAVE_FETCH}\n${HL}\nreturn { hlRender, loadHealth, saveHealthSettings, hlFillSettings, HL_POLL_MS, HL_POLL_MAX_MS };`);
+  const S = make(page.document, fetch, setTimeout, stSum, { hubMe: me }, dialogGuard);
+  return { ...page, S, calls, sums, timers, guardLog };
 }
 const SETTINGS = { enabled: true, afterStart: true, checkAt: '03:15', diskWarnPct: 15, diskWarnGB: 20, diskCritPct: 5, diskCritGB: 5, fullInDays: 14, inodeWarnPct: 10, inodeCritPct: 3, backupWarnHours: 36, backupCritHours: 72, notify: 'critical', warnNights: 3 };
 const T0 = '2026-11-17T08:45:00.000Z';
@@ -165,6 +168,7 @@ test('settings: only the changed keys go by PUT; a 400 shows the hub\'s error te
   const put = t.calls.find(c => c.key === 'PUT /api/system-health/settings');
   assert.deepStrictEqual(put.body, { enabled: false, checkAt: '04:00', notify: 'warnings', diskWarnPct: 3 });
   assert.strictEqual(t.els['st-hl-save-state'].textContent, 'Not saved: Warn must be above critical.');
+  assert.deepStrictEqual(t.guardLog, [], 'a refused save leaves the form changed (Close still asks)');
 });
 
 test('settings: a 200 fills the form from the answer; nothing changed sends nothing', async () => {
@@ -174,9 +178,35 @@ test('settings: a 200 fills the form from the answer; nothing changed sends noth
   await t.S.saveHealthSettings();
   assert.strictEqual(t.calls.filter(c => c.key.startsWith('PUT')).length, 0);
   assert.strictEqual(t.els['st-hl-save-state'].textContent, 'Nothing to save.');
+  assert.deepStrictEqual(t.guardLog, ['commit 13'], 'nothing to save: the saved values shown and settled');
   t.els['st-hl-at'].value = '04:00';
   await t.S.saveHealthSettings();
   assert.strictEqual(t.els['st-hl-save-state'].textContent, 'Saved.');
+  assert.deepStrictEqual(t.guardLog, ['commit 13', 'commit 13'], 'refilled from the answer: the form is settled');
+});
+
+test('settings: a cleared number is not a change the hub takes: "Nothing to save" puts the saved value back', async () => {
+  const t = build({ 'GET /api/system-health': { status: 200, body: view([]) } });
+  await t.S.loadHealth();
+  const was = t.els['st-hl-n-diskWarnPct'].value;
+  assert.ok(was !== '', 'the stand-in has a saved threshold');
+  t.els['st-hl-n-diskWarnPct'].value = '';
+  await t.S.saveHealthSettings();
+  assert.strictEqual(t.calls.filter(c => c.key.startsWith('PUT')).length, 0);
+  assert.strictEqual(t.els['st-hl-n-diskWarnPct'].value, was, 'the form shows what is saved');
+  assert.deepStrictEqual(t.guardLog, ['commit 13']);
+});
+
+test('settings: a field edited while the save runs keeps the newer text (still changed); the others show the answer', async () => {
+  let t;
+  const saved = { ...SETTINGS, checkAt: '04:00' };
+  t = build({ 'GET /api/system-health': { status: 200, body: view([]) }, 'PUT /api/system-health/settings': () => { t.els['st-hl-notify'].value = 'warnings'; return { status: 200, body: { settings: saved } }; } });
+  await t.S.loadHealth();
+  t.els['st-hl-at'].value = '04:00';
+  await t.S.saveHealthSettings();
+  assert.strictEqual(t.els['st-hl-at'].value, '04:00');
+  assert.strictEqual(t.els['st-hl-notify'].value, 'warnings', 'the edit made during the save is kept');
+  assert.deepStrictEqual(t.guardLog, ['commit 13'], 'settled to the answer before the newer text went back');
 });
 
 // ── ?health=1 ──
@@ -186,7 +216,7 @@ test('?health=1 opens Settings at the Health section, and leaves the address onc
   assert.strictEqual(parseOpenTarget({ type: 'open-target', url: '/' }, 'http://x').health, false);
   assert.match(app, /if \(t\.health\) openSettingsAt\('st-health-section'\);/);
   assert.match(app, /own\.selfcheck \|\| own\.health \|\|/);
-  assert.match(app, /'selfcheck', 'health', 'connectors', 'wallet'\]\) u\.searchParams\.delete\(k\);/);
+  assert.match(app, /'selfcheck', 'health', 'connectors', 'wallet', 'websearch'\]\) u\.searchParams\.delete\(k\);/);
   const L = require('../lib/ui-phone-layout.js');
   assert.ok(L.DESKTOP_ONLY_PARAMS.includes('health'), 'a phone following the link stays on the computer page');
   assert.strictEqual(L.desktopOnlyLink('?health=1'), true);

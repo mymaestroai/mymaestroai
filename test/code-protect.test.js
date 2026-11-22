@@ -238,6 +238,27 @@ test('review r1: attached -C, --git-dir, env-wrapped GIT_DIR / GIT_WORK_TREE, al
   }
 });
 
+test('setting a password or turning off two-factor from an agent\'s shell is refused like update; status, setup-link and the other commands are not', () => {
+  for (const cmd of ['mymaestro reset-2fa a@example.com', `node ${P('scripts', 'hub-cli.js')} reset-2fa a@example.com`, 'sudo mymaestro reset-2fa a@example.com',
+    'mymaestro reset-password a@example.com', `node ${P('scripts', 'hub-cli.js')} reset-password a@example.com`,
+    `${P('scripts', 'hub-cli.js')} reset-password a@example.com`, 'cd /tmp && mymaestro reset-password a@example.com', 'sudo mymaestro reset-password a@example.com']) {
+    assert.ok(refused(dec(lead, 'Bash', { command: cmd })), cmd);
+  }
+  for (const cmd of ['mymaestro status', `node ${P('scripts', 'hub-cli.js')} status`, 'mymaestro logs', 'mymaestro setup-link']) {
+    assert.ok(!refused(dec(lead, 'Bash', { command: cmd })), cmd);
+  }
+});
+
+test('r2: the same commands inside quotes or backticks (sh -c, bash -c, command substitution) are refused', () => {
+  for (const cmd of ["sh -c 'mymaestro reset-password x'", 'bash -c "mymaestro reset-2fa x"', '`mymaestro reset-password x`', '$(mymaestro reset-2fa x)',
+    `bash -c '${P('scripts', 'hub-cli.js')} reset-password x'`, "sh -c 'sudo mymaestro reset-password x'", "sh -c 'mymaestro update'"]) {
+    assert.ok(refused(dec(lead, 'Bash', { command: cmd })), cmd);
+  }
+  for (const cmd of ["sh -c 'mymaestro status'", 'echo "mymaestro-reset-password"', 'bash -c "mymaestro logs"']) {
+    assert.ok(!refused(dec(lead, 'Bash', { command: cmd })), cmd);
+  }
+});
+
 test('review r1: a detection error inside the command reading refuses (no internal catch); the settings files in data/ are protected', () => {
   const cp = make('on');
   const verify = require('../lib/selfcheck/verify');

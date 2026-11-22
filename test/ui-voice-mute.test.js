@@ -78,38 +78,220 @@ test('mute: a reply being spoken is not cancelled by speech while muted', async 
   assert.strictEqual(count(h, 'cancelSpeech'), 0); assert.deepStrictEqual(h.stt, []);
 });
 
-test('mute while the person is speaking: the piece is dropped (recorder.drop), a later end sends nothing, muted or after unmute', async () => {
-  const h = await started();
+// Mute mid-statement (owner's report 2026-11-22: a minute of useful talk was lost when Mute was tapped): the statement ENDS at the tap and is sent.
+// endPiece stands for the real detector: MicVAD.pause() delivers the audio heard so far through onSpeechEnd (or onVADMisfire when too short).
+function endPieceVad(h, deliver) {
+  return { start: async (hd) => { h.handlers = hd; }, stop() { h.log.push('vad.stop'); }, setPlaybackActive() {}, setMuted: (on) => { h.vadMuted.push(on); h.log.push('vad.muted ' + on); },
+    reopen: async () => { h.log.push('reopen'); return true; },
+    endPiece: async () => { h.log.push('endPiece'); return deliver ? deliver() : true; } };
+}
+
+test('mute while the person is speaking: what was said up to the tap is transcribed and sent, recorded (end, not drop), tracks off first', async () => {
+  const h = harness(); h.deps.vad = endPieceVad(h, () => { h.handlers.onSpeechEnd({ text: 'a long useful statement' }); return true; });
+  h.call = voiceCreateCall(h.deps); await h.call.start(); h.log.length = 0;
   h.handlers.onSpeechBegin(); h.handlers.onSpeechStart();
   assert.strictEqual(count(h, 'begin'), 1);
-  h.call.setMuted(true);
-  assert.strictEqual(count(h, 'drop'), 1, 'dropped like a false start');
-  h.handlers.onSpeechEnd({ text: 'half a sentence' }); await tick();
-  assert.deepStrictEqual(h.stt, []); assert.deepStrictEqual(h.sent, []);
+  h.call.setMuted(true); await tick(30);
+  assert.deepStrictEqual(h.log.filter(x => x === 'vad.muted true' || x === 'endPiece'), ['vad.muted true', 'endPiece'], 'the microphone is off before the piece is ended');
+  assert.deepStrictEqual(h.stt, ['a long useful statement']);
+  assert.deepStrictEqual(h.sent, ['a long useful statement'], 'sent as a normal turn');
+  assert.strictEqual(count(h, 'end'), 1, 'the recording keeps it'); assert.strictEqual(count(h, 'drop'), 0);
+  assert.strictEqual(h.call.isMuted(), true);
+});
+
+test('mute mid-statement: speech after the tap is not heard, muted; after unmute a stray end of an old piece is ignored and fresh speech is sent', async () => {
+  const h = harness(); h.deps.vad = endPieceVad(h, () => { h.handlers.onSpeechEnd({ text: 'before the tap' }); return true; });
+  h.call = voiceCreateCall(h.deps); await h.call.start();
+  h.handlers.onSpeechBegin(); h.handlers.onSpeechStart();
+  h.call.setMuted(true); await tick(30);
+  h.handlers.onSpeechBegin(); h.handlers.onSpeechStart(); h.handlers.onSpeechEnd({ text: 'said while muted' }); h.handlers.onMisfire(); await tick(30);
+  assert.deepStrictEqual(h.sent, ['before the tap']);
+  h.running = false;   // that turn is over
   h.call.setMuted(false);
-  h.handlers.onSpeechEnd({ text: 'the tail of it' }); await tick();
-  assert.deepStrictEqual(h.stt, [], 'a piece begun before the mute is never sent');
+  h.handlers.onSpeechEnd({ text: 'stray fragment' }); await tick(30);
+  assert.deepStrictEqual(h.stt, ['before the tap'], 'an end with no speech begun since the unmute is a stray fragment');
+  h.handlers.onSpeechBegin(); h.handlers.onSpeechStart(); h.handlers.onSpeechEnd({ text: 'after unmute' }); await tick(30);
+  assert.deepStrictEqual(h.sent, ['before the tap', 'after unmute']);
+});
+
+test('mute mid-statement, unmuted again before the detector delivered the end: the statement is still sent', async () => {
+  const h = harness(); let release;
+  h.deps.vad = endPieceVad(h, () => new Promise((r) => { release = () => { h.handlers.onSpeechEnd({ text: 'kept anyway' }); r(true); }; }));
+  h.call = voiceCreateCall(h.deps); await h.call.start();
+  h.handlers.onSpeechBegin(); h.handlers.onSpeechStart();
+  h.call.setMuted(true); await tick(); h.call.setMuted(false);
+  release(); await tick(30);
+  assert.deepStrictEqual(h.sent, ['kept anyway']);
+});
+
+test('mute after only onSpeechBegin: the detector calls it a misfire, nothing is sent, and the call listens on after unmute', async () => {
+  const h = harness(); h.deps.vad = endPieceVad(h, () => { h.handlers.onMisfire(); return true; });
+  h.call = voiceCreateCall(h.deps); await h.call.start(); h.log.length = 0;
+  h.handlers.onSpeechBegin();
+  h.call.setMuted(true); await tick(30);
+  assert.deepStrictEqual(h.stt, []); assert.strictEqual(count(h, 'drop'), 1);
+  h.call.setMuted(false);
+  h.handlers.onSpeechBegin(); h.handlers.onSpeechStart(); h.handlers.onSpeechEnd({ text: 'fresh' }); await tick(30);
+  assert.deepStrictEqual(h.sent, ['fresh']);
+});
+
+test('mute mid-statement: an earlier piece still being transcribed is not dropped; it joins the cut piece into one message', async () => {
+  const h = harness(); const slow = [];
+  h.deps.stt = (audio) => new Promise((r) => { h.stt.push(audio.text); slow.push(() => r(audio.text)); });
+  h.deps.vad = endPieceVad(h, () => { h.handlers.onSpeechEnd({ text: 'and the second part' }); return true; });
+  h.call = voiceCreateCall(h.deps); await h.call.start();
+  h.handlers.onSpeechBegin(); h.handlers.onSpeechStart(); h.handlers.onSpeechEnd({ text: 'the first part' }); await tick();
+  await advance(h, 500);
+  h.handlers.onSpeechBegin(); h.handlers.onSpeechStart();   // the second piece begins while the first is being transcribed
+  h.call.setMuted(true); await tick(30);
+  while (slow.length) { slow.shift()(); await tick(30); }
+  assert.deepStrictEqual(h.sent, ['the first part and the second part']);
+});
+
+test('mute while a piece waits for more (it sounded unfinished): it is sent at once, not after the wait', async () => {
+  const h = harness({ prefs: () => ({ continueWait: 8000, thinkingSound: false }) }); h.deps.vad = endPieceVad(h);
+  h.call = voiceCreateCall(h.deps); await h.call.start();
+  h.handlers.onSpeechBegin(); h.handlers.onSpeechStart(); h.handlers.onSpeechEnd({ text: 'I want to talk about the budget and' }); await tick(30);
+  assert.deepStrictEqual(h.sent, [], 'waiting for more');
+  h.call.setMuted(true); await tick(30);
+  assert.deepStrictEqual(h.sent, ['I want to talk about the budget and']);
+  assert.strictEqual(h.log.includes('endPiece'), false, 'nothing was under way at the detector');
+  assert.strictEqual(h.timers.filter(x => x.at === 8000).length, 0, 'the 8 s wait timer is gone');
+});
+
+test('review r1: Mute while the end-of-turn model is still deciding: the piece is sent at once when it answers "not finished"', async () => {
+  let answer;
+  const h = harness({ prefs: () => ({ continueWait: 8000, thinkingSound: false }), turnModel: () => new Promise((r) => { answer = r; }) });
+  h.deps.vad = endPieceVad(h); h.call = voiceCreateCall(h.deps); await h.call.start();
+  h.handlers.onSpeechBegin(); h.handlers.onSpeechStart(); h.handlers.onSpeechEnd({ text: 'I want to talk about the budget.' }); await tick(30);
+  assert.strictEqual(typeof answer, 'function', 'the model is deciding');
+  h.call.setMuted(true); await tick(5);
+  answer(0.1); await tick(30);
+  assert.deepStrictEqual(h.sent, ['I want to talk about the budget.']);
+});
+
+test('review r1: Mute while the end-of-turn model decides, then a quick unmute: still sent at once', async () => {
+  let answer;
+  const h = harness({ prefs: () => ({ continueWait: 8000, thinkingSound: false }), turnModel: () => new Promise((r) => { answer = r; }) });
+  h.deps.vad = endPieceVad(h); h.call = voiceCreateCall(h.deps); await h.call.start();
+  h.handlers.onSpeechBegin(); h.handlers.onSpeechStart(); h.handlers.onSpeechEnd({ text: 'I want to talk about the budget.' }); await tick(30);
+  h.call.setMuted(true); h.call.setMuted(false); answer(0.1); await tick(30);
+  assert.deepStrictEqual(h.sent, ['I want to talk about the budget.']);
+});
+
+test('review r1: a waiting piece held by a cough, then Mute (the cough is a misfire): sent at once, not after the rest of the wait', async () => {
+  const h = harness({ prefs: () => ({ continueWait: 8000, thinkingSound: false }) });
+  h.deps.vad = endPieceVad(h, () => { h.handlers.onMisfire(); return true; });
+  h.call = voiceCreateCall(h.deps); await h.call.start();
+  h.handlers.onSpeechBegin(); h.handlers.onSpeechStart(); h.handlers.onSpeechEnd({ text: 'I want to talk about the budget and' }); await tick(30);
+  await advance(h, 1000);
+  h.handlers.onSpeechBegin(); await tick(5);   // a cough: the waiting piece is held for it
+  h.call.setMuted(true); await tick(30);
+  assert.deepStrictEqual(h.sent, ['I want to talk about the budget and']);
+});
+
+test('review r1: Mute, unmute, Mute before the detector answered: one endPiece, the statement is sent once', async () => {
+  const h = harness(); let release;
+  h.deps.vad = endPieceVad(h, () => new Promise((r) => { release = () => { h.handlers.onSpeechEnd({ text: 'said before the taps' }); r(true); }; }));
+  h.call = voiceCreateCall(h.deps); await h.call.start(); h.log.length = 0;
+  h.handlers.onSpeechBegin(); h.handlers.onSpeechStart();
+  h.call.setMuted(true); h.call.setMuted(false); h.call.setMuted(true); await tick();
+  release(); await tick(30);
+  assert.strictEqual(count(h, 'endPiece'), 1);
+  assert.deepStrictEqual(h.sent, ['said before the taps']);
+});
+
+test('review r2: Mute and a quick unmute while an earlier piece is still being transcribed: it is sent at once when its text arrives', async () => {
+  const h = harness({ prefs: () => ({ continueWait: 8000, thinkingSound: false }) }); const slow = [];
+  h.deps.stt = (audio) => new Promise((r) => { h.stt.push(audio.text); slow.push(() => r(audio.text)); });
+  h.deps.vad = endPieceVad(h); h.call = voiceCreateCall(h.deps); await h.call.start();
+  h.handlers.onSpeechBegin(); h.handlers.onSpeechStart(); h.handlers.onSpeechEnd({ text: 'I want to talk about the budget and' }); await tick(5);
+  await advance(h, 200); h.call.setMuted(true);
+  await advance(h, 400); h.call.setMuted(false);
+  await advance(h, 600); slow.shift()(); await tick(30);
+  assert.deepStrictEqual(h.sent, ['I want to talk about the budget and'], 'no 8 s wait');
+});
+
+test('review r2: a second Mute on a newer piece (begun after a quick unmute) while the first cut runs: that piece is cut too once the first is done', async () => {
+  const h = harness(); const pend = [];
+  h.deps.vad = endPieceVad(h, () => new Promise((r) => { pend.push(r); }));
+  h.call = voiceCreateCall(h.deps); await h.call.start(); h.log.length = 0;
+  h.handlers.onSpeechBegin(); h.handlers.onSpeechStart();
+  h.call.setMuted(true); await tick();
+  h.handlers.onSpeechEnd({ text: 'the first statement' }); await tick(30);   // the detector delivered the cut piece; its restart is still running
+  h.running = false; h.call.setMuted(false);
+  h.handlers.onSpeechBegin(); h.handlers.onSpeechStart();   // speaking again at once
+  h.call.setMuted(true); await tick();
+  assert.strictEqual(count(h, 'endPiece'), 1, 'one cut at a time');
+  pend.shift()(true); await tick(30);
+  assert.strictEqual(count(h, 'endPiece'), 2, 'the newer piece is cut after the first');
+  h.handlers.onSpeechEnd({ text: 'and the second one' }); pend.shift()(true); await tick(30);
+  assert.deepStrictEqual(h.sent, ['the first statement', 'and the second one']);
+});
+
+test('review r1: hang-up while the cut at Mute runs: no reopen, nothing sent afterwards, no error', async () => {
+  const h = harness(); let release;
+  h.deps.vad = endPieceVad(h, () => new Promise((r) => { release = () => r(false); }));
+  h.call = voiceCreateCall(h.deps); await h.call.start(); h.log.length = 0;
+  h.handlers.onSpeechBegin(); h.handlers.onSpeechStart();
+  h.call.setMuted(true); await tick();
+  await h.call.hangUp(); release(); await tick(30);
+  assert.strictEqual(count(h, 'reopen'), 0);
   assert.deepStrictEqual(h.sent, []);
 });
 
-test('mute after only onSpeechBegin (no real start yet) also drops, and the end after unmute is ignored', async () => {
-  const h = await started();
-  h.handlers.onSpeechBegin();
-  h.call.setMuted(true); h.call.setMuted(false);
-  h.handlers.onSpeechEnd({ text: 'old piece' }); await tick();
-  assert.deepStrictEqual(h.stt, []); assert.deepStrictEqual(h.sent, []);
+test('the piece Mute ended is sent as it is: it does not wait for more even when it sounds unfinished', async () => {
+  const h = harness({ prefs: () => ({ continueWait: 8000, thinkingSound: false }) });
+  h.deps.vad = endPieceVad(h, () => { h.handlers.onSpeechEnd({ text: 'the next thing we should do is' }); return true; });
+  h.call = voiceCreateCall(h.deps); await h.call.start();
+  h.handlers.onSpeechBegin(); h.handlers.onSpeechStart();
+  h.call.setMuted(true); await tick(30);
+  assert.deepStrictEqual(h.sent, ['the next thing we should do is']);
 });
 
-test('mute while a reply was cut by the person: the cut reply reads on (resume) as after a false start', async () => {
-  const h = await started();
+test('mute with nothing under way: no endPiece, nothing sent, only the microphone goes off', async () => {
+  const h = harness(); h.deps.vad = endPieceVad(h);
+  h.call = voiceCreateCall(h.deps); await h.call.start(); h.log.length = 0;
+  h.call.setMuted(true); await tick(30); await advance(h, 10000);
+  assert.deepStrictEqual(h.log, ['vad.muted true']); assert.deepStrictEqual(h.sent, []); assert.deepStrictEqual(h.stt, []);
+});
+
+test('mute mid-statement, the detector gives no end and cannot listen again: the piece is let go and the microphone is opened again', async () => {
+  const h = harness(); h.deps.vad = endPieceVad(h, () => false);
+  h.call = voiceCreateCall(h.deps); await h.call.start(); h.log.length = 0;
+  h.handlers.onSpeechBegin(); h.handlers.onSpeechStart();
+  h.call.setMuted(true); await tick(30);
+  assert.strictEqual(count(h, 'drop'), 1); assert.strictEqual(count(h, 'reopen'), 1);
+  h.handlers.onSpeechEnd({ text: 'too late' }); await tick(30);
+  assert.deepStrictEqual(h.sent, [], 'muted: a later end is not taken');
+});
+
+test('a detector without endPiece: the end that follows the silence (within VOICE_MUTE_END_MS) is sent; none at all lets the piece go', async () => {
+  const h = await started();   // the harness vad has no endPiece
+  h.handlers.onSpeechBegin(); h.handlers.onSpeechStart();
+  h.call.setMuted(true); await advance(h, 900);
+  h.handlers.onSpeechEnd({ text: 'ended by the silence' }); await tick(30);
+  assert.deepStrictEqual(h.sent, ['ended by the silence']);
+  h.call.setMuted(false);
+  const g = await started();
+  g.handlers.onSpeechBegin(); g.handlers.onSpeechStart();
+  g.call.setMuted(true); await advance(g, 5000); await tick(30);
+  assert.strictEqual(count(g, 'drop'), 1, 'let go after the wait');
+  g.handlers.onSpeechEnd({ text: 'much later' }); await tick(30);
+  assert.deepStrictEqual(g.sent, []);
+});
+
+test('mute while the person had cut a reply: their statement is sent as a new turn, like a pause', async () => {
+  const h = harness(); h.deps.vad = endPieceVad(h, () => { h.handlers.onSpeechEnd({ text: 'no wait, one more thing' }); return true; });
+  h.call = voiceCreateCall(h.deps); await h.call.start();
   h.handlers.onSpeechStart(); h.handlers.onSpeechEnd({ text: 'read it' }); await tick();
   h.call.onReplyText('Sentence one. Sentence two. Sentence three. ', false);
-  await advance(h, 5000); h.stt.length = 0; h.sent.length = 0;
+  await advance(h, 5000); h.stt.length = 0; h.sent.length = 0; h.running = false;
   h.handlers.onSpeechBegin(); h.handlers.onSpeechStart(); await tick();
   assert.strictEqual(count(h, 'cancelSpeech'), 1, 'the person cut it');
-  h.call.setMuted(true);
-  assert.strictEqual(count(h, 'drop'), 1);
-  assert.deepStrictEqual(h.stt, []);
+  h.call.setMuted(true); await tick(30);
+  assert.deepStrictEqual(h.stt, ['no wait, one more thing']);
+  assert.strictEqual(count(h, 'drop'), 0);
 });
 
 test('unmute: a fresh onSpeechBegin / onSpeechStart / onSpeechEnd is transcribed and sent as usual', async () => {

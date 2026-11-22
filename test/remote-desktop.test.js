@@ -716,7 +716,8 @@ test('server.js wiring: stillAdmin reads the current account; sweeps after setti
   const s = read('server.js');
   assert.match(s, /stillAdmin: \(userId\) => \{[\s\S]*?hubAuth\.getUser\(String\(userId\)\)[\s\S]*?!u\.disabled && access\.isAdmin\(u\)/);
   assert.match(s, /function sweepRemoteDesktop\(moduleId\) \{\s*if \(moduleId !== 'remote-computers' \|\| !_remoteDesktop\) return;/);
-  assert.match(s, /const saved = mods\.saveSettings\(id, b\.values \|\| \{\}\);\s*sweepRemoteDesktop\(id\);/);
+  // the save is awaited: a changed private-network address is checked against this computer's own before it is saved
+  assert.match(s, /const saved = await mods\.saveSettings\(id, b\.values \|\| \{\}\);\s*sweepRemoteDesktop\(id\);/);
   assert.match(s, /const changed = mods\.setEnabled\(id, act === 'enable'\);\s*sweepRemoteDesktop\(id\);/);
   const at = s.indexOf('server.listen(PORT, HOST, () => {');
   const rec = s.indexOf('remoteDesktop().reconcile()');

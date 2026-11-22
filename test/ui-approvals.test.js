@@ -75,7 +75,7 @@ test('mobile: one bottom sheet for every screen, badge on the Agents tab, servic
   assert.match(mobile, /ap\.classList\.toggle\('on', approvals\.size > 0\)/);
   assert.ok(mobile.includes('sheet.show()'), 'non-modal: the rest of the app stays usable');
   assert.ok(mobile.includes("api('/api/approvals'"), 'pending list fetched on poll / foreground');
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v70'/);
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v74'/);
 });
 
 test('agent settings: tool policy section reads /api/policy/<agent> and PATCHes policy (empty = role defaults)', () => {
@@ -90,7 +90,7 @@ test('agent settings: tool policy section reads /api/policy/<agent> and PATCHes 
 
 test('desktop: spend readout and caps come from /api/ledger', () => {
   assert.ok(app.includes("fetch('/api/ledger/today'"));
-  assert.match(app, /fetch\('\/api\/ledger\/caps', \{ method: 'POST'/);
+  assert.match(app, /stSaveFetch\('\/api\/ledger\/caps', \{ method: 'POST'/);
   assert.ok(app.includes('JSON.stringify({ perAgentDailyUsd, hubDailyUsd })'));
   assert.ok(html.includes('id="spend-today"'), 'sidebar readout');
   assert.ok(app.includes('`spent today ${usd(t.total)}`'));

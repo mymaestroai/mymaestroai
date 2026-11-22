@@ -32,7 +32,7 @@ test('Settings has a Web search and fetch section with the backend order, keys, 
 test('the box functions exist and talk to the websearch routes; key fields are cleared after saving', () => {
   for (const fn of ['loadWebSearchStatus', 'saveWebSearch', 'tryWebSearch', 'tryWebFetch', 'searxngStart', 'searxngStop']) assert.match(app, new RegExp(`async function ${fn}\\(`), fn);
   assert.match(app, /fetch\('\/api\/websearch\/status', \{ credentials: 'include' \}\)/);
-  assert.match(app, /fetch\('\/api\/websearch\/config', \{ method: 'POST'/);
+  assert.match(app, /stSaveFetch\('\/api\/websearch\/config', \{ method: 'POST'/);
   assert.match(app, /fetch\('\/api\/websearch\/test', \{ method: 'POST'/);
   assert.match(app, /fetch\('\/api\/websearch\/fetch-test', \{ method: 'POST'/);
   assert.match(app, /fetch\('\/api\/websearch\/searxng\/start', \{ method: 'POST'/);

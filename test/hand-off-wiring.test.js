@@ -22,7 +22,7 @@ function fakeRunner() {
   return {
     calls,
     create: async (o) => { calls.push(['create', o]); return { id: 'ho-0000abcd', target: o.target, topic: o.topic, state: 'queued', folder: '/files/scout/hand-offs/lead-site' }; },
-    listWithStatus: async (caller, o) => { calls.push(['listWithStatus', caller, o]); return [{ id: 'ho-0000abcd', target: 'scout', topic: 'site', state: 'running', folder: '/f', turns: 2, queuedNotes: 1, status: 'Step 3 of 5\nnext: tests' }, { id: 'ho-0000abce', target: 'scout', topic: 'other', state: 'done', folder: '/g', turns: 1, queuedNotes: 0, status: null }]; },
+    listShown: async (caller, o) => { calls.push(['listShown', caller, o]); return [{ id: 'ho-0000abcd', target: 'scout', topic: 'site', state: 'running', folder: '/f', turns: 2, queuedNotes: 1, status: 'Step 3 of 5\nnext: tests' }, { id: 'ho-0000abce', target: 'scout', topic: 'other', state: 'done', folder: '/g', turns: 1, queuedNotes: 0, status: null }]; },
     note: (o) => { calls.push(['note', o]); return { id: o.id, target: 'scout', state: 'running', queuedNotes: 0 }; },
     cancel: (o) => { calls.push(['cancel', o]); return { id: o.id, target: 'scout', topic: 'site', folder: '/f', state: 'cancelled' }; },
   };
@@ -50,14 +50,14 @@ test('hand_off_list, hand_off_note, hand_off_cancel: plain text from the runner,
   const r = fakeRunner();
   const d = { runner: r, mayTarget: async () => true };
   const list = await tools.runTool('hand_off_list', { include_done: 'true' }, 'lead', d);
-  assert.deepEqual(r.calls[0], ['listWithStatus', 'lead', { includeDone: true }]);
+  assert.deepEqual(r.calls[0], ['listShown', 'lead', { includeDone: true, withStatus: true }]);   // review r2: what the caller may be shown
   assert.match(list, /ho-0000abcd to scout: "site", running, 2 steps so far, 1 note waiting\./);
   assert.match(list, /STATUS\.md:\n {4}Step 3 of 5\n {4}next: tests/);
   assert.match(list, /ho-0000abce to scout: "other", done, 1 step so far\.\n {2}Folder: \/g\n {2}STATUS\.md: not written yet\./);
   assert.match(await tools.runTool('hand_off_note', { id: ' ho-0000abcd ', text: 'use blue' }, 'lead', d), /Note delivered to scout/);
   assert.deepEqual(r.calls[1], ['note', { caller: 'lead', id: 'ho-0000abcd', text: 'use blue' }]);
   assert.match(await tools.runTool('hand_off_cancel', { id: 'ho-0000abcd' }, 'lead', d), /^Cancelled ho-0000abcd \("site"\): scout's running step was stopped/);
-  assert.match(await tools.runTool('hand_off_list', {}, 'lead', { ...d, runner: { ...r, listWithStatus: async () => [] } }), /^No hand-offs\.$/);
+  assert.match(await tools.runTool('hand_off_list', {}, 'lead', { ...d, runner: { ...r, listShown: async () => [] } }), /^No hand-offs\.$/);
   assert.equal(tools.jsonSchema(tools.TOOL_SPECS[0]).required.join(','), 'agent,topic,brief');
   assert.deepEqual(tools.jsonSchema(tools.TOOL_SPECS[1]).required, []);
 });
@@ -145,7 +145,7 @@ test('voice calls: a hand-off turn or report waits while the person is on a call
 test('the hub starts the runner at start-up (a hand-off whose turn died is reported) and the cards\' route uses it', () => {
   const server = read('server.js');
   assert.match(server, /try \{ require\('\.\/lib\/sdk-chat'\)\.getHandOffRunner\(\)\.start\(\); \} catch \(e\) \{ console\.error\('\[hand-offs\] could not start:'/);
-  assert.match(server, /const handOffs = require\('\.\/lib\/sdk-chat'\)\.getHandOffRunner\(\)\.list\(name, \{ includeDone: false, withStatus: false \}\);/);
+  assert.match(server, /const handOffs = await require\('\.\/lib\/sdk-chat'\)\.getHandOffRunner\(\)\.listShown\(name, \{ includeDone: false, withStatus: false \}\);/);   // review r2
   assert.match(read('lib/hand-offs.js'), /r\.report = \{ kind: 'interrupted', state: 'pending', attempts: 0, deliveredAt: null \};\n\s+\/\/ its scheduled continuations[^\n]*\n\s+try \{ this\.cancelContinuations\(r\.id\); \}/);
 });
 
@@ -176,22 +176,23 @@ test('the rule text (behaviour change hand-off-guidance): primary agents only, i
   for (const k of ['title', 'changes', 'benefits', 'costs', 'check', 'on', 'off']) assert.ok(e[k] && e[k].length > 10, k);
 });
 
-test('labels: the target\'s chat shows "Hand-off from <caller>"; the caller\'s shows the report, on both pages', () => {
+test('labels: the target\'s chat shows "Task from <caller>"; the caller\'s shows the report, on both pages (a hand-off reads "task" on screen)', () => {
   const auto = require('../lib/ui-auto-turns.js');
   const info = (auto.autoInfoOf || (() => null));
   const a = info({ role: 'user', origin: { kind: 'hand_off', from: 'lead', label: 'Hand-off from lead: site' } });
   const b = info({ role: 'user', origin: { kind: 'hand_off_report', from: 'scout', label: 'Hand-off finished: site' } });
-  if (a) { assert.equal(a.label, 'Hand-off from lead: site'); assert.equal(b.label, 'Hand-off finished: site'); }
+  if (a) { assert.equal(a.label, 'Task from lead: site'); assert.equal(b.label, 'Task finished: site'); }
   for (const page of ['app.js', 'mobile.js']) {
     const src = read(page);
-    assert.match(src, /else if \(o\.kind === 'hand_off'\) label = o\.label \|\| `Hand-off from \$\{from \|\| 'another agent'\}`;/, page);
-    assert.match(src, /case 'hand_off': return `hand-off from \$\{origin\.from \|\| 'another agent'\}`;/, page);
+    assert.match(src, /else if \(o\.kind === 'hand_off'\) label = o\.label \? o\.label\.replace\(\/\^Hand-off\\b\/, 'Task'\) : `Task from \$\{from \|\| 'another agent'\}`;/, page);
+    assert.match(src, /case 'hand_off': return `task from \$\{origin\.from \|\| 'another agent'\}`;/, page);   // on screen a hand-off reads "task" (owner, 11-20)
   }
 });
 
 test('review r1: the runner checks identities, access and earlier deliveries; a hand-off turn never queues a consultation; the rule text is not given inside a hand-off turn', () => {
   const factory = SDK.slice(SDK.indexOf('function getHandOffRunner() {'), SDK.indexOf("voiceCall.registerProducer('hand_off'"));
-  assert.match(factory, /stampOf: \(name\) => require\('\.\/agents'\)\.agentStamp\(name\),/);
+  // the agent's identity (box id, or its name from before box ids), not the whole-record stamp: a model switch keeps the hand-off
+  assert.match(factory, /stampOf: \(name\) => require\('\.\/agents'\)\.agentIdentity\(name\),/);
   assert.match(factory, /mayTarget: \(caller, target\) => consultAllowed\(caller, target\),/);
   assert.match(factory, /alreadyDelivered: \(caller, id\) => \{\n\s+for \(const l of tailLines\(path\.join\(CONV_DIR, `\$\{caller\}\.jsonl`\), 400\)\) \{\n\s+try \{ const e = JSON\.parse\(l\.text\); if \(e && e\.origin && e\.origin\.handOffReport === id\) return true; \} catch \{\}/);
   assert.match(SDK, /for \(const k of \['kind', 'from', 'by', 'label', 'jobName', 'taskId', 'handOff', 'handOffReport'\]\)/, 'the conversation log keeps the ids');

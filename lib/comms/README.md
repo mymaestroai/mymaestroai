@@ -157,7 +157,7 @@ self-contained otherwise (own `commsApi()` fetch helper), max ~250 lines.
    and at boot (after the server is listening, guarded by try/catch and skipped when
    `process.env.HUB_COMMS_DISABLED === '1'`):
    `require('./lib/comms/service').getCommsService().attach({ wakeAgent, isAgentActive, getAgents }).start();`
-4. `index.html`: header button `💬` (id `comms-btn`, `onclick="openCommsPanel()"`) next
+4. Settings → Tools and data → Messaging channels (`#st-comms-section` in `app.js` openSettings): a button that calls `openCommsPanel()` (the panel opens over Settings).
    to `wallet-btn`; `<script src="comms-panel.js"></script>` after `app.js`.
 5. `app.js`: `case 'comms': return 'message from a messaging channel';` in the
    origin-kind label switch (next to `consult_reply`).

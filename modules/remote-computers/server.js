@@ -21,9 +21,9 @@ const APPROVE_HUB_TIMEOUT_MS = APPROVE_MINUTES * 60000 + 20000;
 const MAX_CMD_CHARS = 7000;                           // cmd.exe takes about 8191 characters in a line
 const WINDOWS_ONLY = 'Screenshots and mouse/keyboard work on Windows computers for now.';
 const NOT_YET = 'This tool arrives in the next part of the build.';
-const REINSTALL = 'Reinstall needed: open Data connectors and run Install again';
+const REINSTALL = 'Reinstall needed. Run Set it up again.';
 const WAITING = 'Waiting for setup';
-const LINUX_ONLY = 'Remote computers needs My Maestro on Linux for now.';   // it uses /proc and /proc/self/fd
+const LINUX_ONLY = 'Remote computers can\'t run on this system yet. It runs on Linux and Mac.';
 const MAX_OUTPUT_BYTES = 64 * 1024;
 const SHOT_TIMEOUT_MS = 30000, INPUT_TIMEOUT_MS = 20000;
 const BUSY_AFTER_RUN_TIMEOUT_MS = 10 * 60000, BUSY_AFTER_SCREEN_TIMEOUT_MS = 60000;
@@ -59,7 +59,7 @@ const TOOLS = [
   { name: 'desktop_endpoint', description: 'Used by the hub only. Where the desktop viewer reaches the server: port, certificate name and the certificate to trust.', inputSchema: obj({ session: { type: 'string' } }, ['session']) },
   { name: 'desktop_connect', description: 'Used by the hub only. Starts the desktop tunnel of a live session and returns the query for the viewer\'s connection.', inputSchema: obj({ session: { type: 'string' }, tunnelid: { type: 'string', pattern: '^[A-Za-z0-9]{6,64}$' } }, ['session', 'tunnelid']) },
   { name: 'desktop_end', description: 'Used by the hub only. Ends a desktop session: by its session, or by the computer (nodeid) and the start time of the session when the hub no longer knows the session, after a restart.', inputSchema: obj({ session: { type: 'string' }, nodeid: { type: 'string', maxLength: 300 }, start: { type: 'number' }, reason: { type: 'string', maxLength: 40 } }) },
-  { name: 'health', description: 'Whether the server runs and its device group exists. Used by the nightly check.', inputSchema: obj() },
+  { name: 'health', description: 'Whether the server runs and its device group exists. Used by the nightly check.', inputSchema: obj({ retry: { type: 'boolean', description: 'Start a failed helper-program download again. Used by the setup page\'s Try again.' } }) },
   { name: 'start', description: 'Starts the server (and makes it ready) if it is not running. Used by the setup only.', inputSchema: obj() },
   { name: 'installer_link', description: 'A one-time link to download the helper for a computer. Used by the setup only.', inputSchema: obj() },
   { name: 'computers_status', description: 'The names, systems and online state of the computers that are set up. Used by the setup only.', inputSchema: obj() },
@@ -213,23 +213,24 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
   const runtimeDir = env.MODULE_RUNTIME_DIR || '';
   const home = env.CONNECTOR_DATA_HOME || '';
   const meshcentralJs = runtimeDir ? path.join(runtimeDir, 'node_modules', 'meshcentral', 'meshcentral.js') : '';
-  const supported = (deps.platform || process.platform) === 'linux';   // the private picture copies use /proc and /proc/self/fd
+  const platform = deps.platform || process.platform;
+  const supported = platform === 'linux' || platform === 'darwin';   // the private picture copies exist on Linux only; on a Mac they are off
   const runtimeOk = supported && !!runtimeDir && fs.existsSync(meshcentralJs);
 
   // A start that failed before any process was made is retried by the supervisor; when it works, the rest of the start sequence follows.
   // hub mode: MeshCentral runs under My Maestro's own account; service mode: as its own systemd service (installed once by the owner).
-  const systemd = typeof deps.serviceSupported === 'function' ? !!deps.serviceSupported() : deps.serviceSupported !== undefined ? !!deps.serviceSupported : (supported && fs.existsSync('/run/systemd/system'));
+  const systemd = typeof deps.serviceSupported === 'function' ? !!deps.serviceSupported() : deps.serviceSupported !== undefined ? !!deps.serviceSupported : (platform === 'linux' && fs.existsSync('/run/systemd/system'));
   // A setup that already ran in hub mode keeps it under 'auto': its computers know that MeshCentral's certificates, and a new service has new ones.
   const legacyHub = !!home && fs.existsSync(path.join(home, 'meshcentral-data', 'root-cert-public.crt'));
-  const mode = settings.run_as === 'service' ? 'service' : settings.run_as === 'hub' ? 'hub' : (supported && systemd && !legacyHub ? 'service' : 'hub');
+  const mode = settings.run_as === 'service' ? 'service' : settings.run_as === 'hub' ? 'hub' : (platform === 'linux' && systemd && !legacyHub ? 'service' : 'hub');   // a Mac always falls to hub: there is no systemd service there
   const serviceName = SERVICE_NAME_RE.test(String(settings.service_name)) ? settings.service_name : DEFAULT_SERVICE_NAME;
   const mesh = runtimeOk && home ?createMeshServer({ runtimeDir, home, settings, log, mode, serviceName, moduleDir: __dirname, onRetryReady: () => { if (!stopped && state.phase !== 'ready') startSequence().catch(() => {}); }, ...(deps.mesh || {}) }) : null;
   const WebSocket = () => deps.WebSocket || require(path.join(runtimeDir, 'node_modules', 'ws'));
   const state = { phase: !supported ? 'unsupported' : runtimeOk ? 'idle' : 'reinstall', waiting: !supported ? LINUX_ONLY : runtimeOk ? null : REINSTALL, group: null, lastError: null, warnings: [], service: null };
-  const HUB_MODE_WARNING = 'MeshCentral runs under My Maestro\'s own account. On Linux, set "Run as" to service to give it its own locked-down account.'
+  const HUB_MODE_WARNING = 'MeshCentral runs under My Maestro\'s own account.' + (platform === 'linux' ? ' On Linux, set "How the server runs" to service to give it its own locked-down account.' : '')
     + (legacyHub && settings.run_as !== 'hub' ? ' This setup started in hub mode, so after the switch its computers need their agent installed again.' : '');
   // A range that holds 100.100.100.100 (Tailscale's own address) is wider than one computer: most likely the whole tailnet (the default).
-  const MAGIC_DNS_WARNING = 'The allowed addresses cover more than your computer: they include 100.100.100.100, so most likely your whole tailnet. Once your computer is connected, set "Addresses the computers may connect from" to its own 100.x address, then run the install command again, so no other device can connect to MeshCentral.';
+  const MAGIC_DNS_WARNING = 'The allowed addresses cover more than your computer: they include 100.100.100.100, so most likely your whole tailnet. Once your computer is connected, set "Addresses the other computers may connect from" to its own 100.x address, then run the install command again, so no other device can connect to MeshCentral.';
   const coversMagicDns = (list) => String(list === undefined || list === null || String(list).trim() === '' ? '100.64.0.0/10' : list).split(',').some((entry) => {
     const m = /^\s*(\d+)\.(\d+)\.(\d+)\.(\d+)(?:\/(\d+))?\s*$/.exec(entry);
     if (!m) return false;
@@ -296,16 +297,44 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
     return startP;
   }
 
-  async function toolHealth() {
+  // Service mode: the helper-program download runs in the background (one at a time; mesh.bootstrap joins a run that is going).
+  let helperBoot = null;
+  function startHelperBoot() {
+    if (helperBoot) return helperBoot;
+    let p;
+    try { p = Promise.resolve(mesh.bootstrap()); } catch (e) { p = Promise.reject(e); }
+    const mine = { done: false };
+    helperBoot = mine;
+    mine.promise = p.then(() => { if (/^Could not download the MeshCentral agent files/.test(state.lastError || '')) state.lastError = null; }, (e) => { if (e && e.code !== 'ECANCEL' && !/^Waiting for setup/.test(e.message)) state.lastError = clean(e.message || e.code, 400); })
+      .then(() => { mine.done = true; if (helperBoot === mine) helperBoot = null; });
+    return mine;
+  }
+  // Health only looks. It never restarts a failed download by itself: that is asked for with { retry: true } (the page's Try again).
+  async function toolHealth(args) {
     let serviceNow = null;   // service mode: look at the service again on every call
+    const helperState = () => (mesh && typeof mesh.helpers === 'function' ? mesh.helpers().state : 'idle');
     if (mode === 'service' && mesh && supported && !state.waiting && !stopped) {
-      try { serviceNow = await mesh.checkService(); } catch (e) { if (e && e.code !== 'ECANCEL' && !/^Waiting for setup/.test(e.message)) state.lastError = clean(e.message || e.code, 400); }
+      let dl = helperState();
+      if (dl === 'failed' && args && args.retry === true) { startHelperBoot(); dl = helperState(); }   // answers at once: 'downloading'
+      else if (dl === 'idle' || dl === 'downloading') {
+        // Start (or join) the background run and answer at once with the progress: the first reader never waits for the download.
+        const run = startHelperBoot();
+        await Promise.race([run.promise, new Promise((r) => setImmediate(r))]);
+        dl = helperState();
+        // Nothing to download (the service is installed with these settings, or the run was refused for another reason): look at the service now.
+        if (dl === 'idle' && run.done) dl = 'done';
+      }
+      if (dl === 'done') {
+        try { serviceNow = await mesh.checkService(); } catch (e) { if (e && e.code !== 'ECANCEL' && !/^Waiting for setup/.test(e.message)) state.lastError = clean(e.message || e.code, 400); }
+      }
     }
     const st = mesh ? mesh.status() : { running: false, restarts: 0, lastError: null };
     const out = {
       ok: false, mode, running: st.running, version: VERSION, group: state.group || (mesh ? mesh.state.read().meshid || null : null),
       computers: null, online: null, warnings: [...state.warnings], lastError: state.lastError || st.lastError || null,
     };
+    if (mesh && typeof mesh.helpers === 'function') { try { out.helpers = mesh.helpers(); } catch { /* not known */ } }   // the helper-program download, for the setup page
+    if (typeof installer.stats === 'function') { try { out.helper = installer.stats(); } catch { /* not known */ } }   // for the setup's "why is no computer here" sentence
     if (!supported) { out.waiting = LINUX_ONLY; out.lastError = null; return out; }
     if (state.waiting) { out.waiting = state.waiting; return out; }
     if (mode === 'hub') out.warnings.push(HUB_MODE_WARNING);
@@ -343,7 +372,7 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
   const now = deps.now || Date.now;
   const known = new Map();   // short id -> { id, nodeid, name }, from the last list (the toast needs the full node id)
   const busy = new Map();    // short id -> when a command may be finished (Infinity while one runs)
-  const shots = createShotStore({ home, now, log });   // a private copy of each picture, for troubleshooting only
+  const shots = createShotStore({ home, now, log, platform });   // a private copy of each picture, for troubleshooting only
   const shotsOf = new Map(); // agent -> the last 20 screenshots it took: { id, agent, computerId, width, height, sx, sy, screenWidth, screenHeight, takenAt }
   const newShotId = () => { let s = ''; for (let i = 0; i < 8; i++) s += SHOT_ALPHABET[crypto.randomInt(SHOT_ALPHABET.length)]; return s; };
   function rememberShot(agent, entry) {

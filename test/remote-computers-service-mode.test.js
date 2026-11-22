@@ -446,13 +446,15 @@ test('the server check passes the message and the command through to the setup p
   const run = async () => checks.server({ platform: 'linux', settings: {}, parse: JSON.parse, callTool: async (name) => JSON.stringify(await t.remote.callTool(name)) });
   const c = await run();
   assert.strictEqual(c.ok, false);
-  assert.match(c.summary, /^MeshCentral needs to be installed as its own service once\./);
+  assert.strictEqual(c.summary, 'Starting the server as its own locked-down service needs an administrator password once.');
   assert.match(c.command, /^sudo bash '/);
-  assert.ok(c.summary.includes(c.command));
-  assert.deepStrictEqual(c.lines, [c.command]);
+  assert.ok(!c.summary.includes(c.command) && !c.summary.includes('sudo'), 'the command is never inside the summary');
+  assert.strictEqual(c.lines, undefined, 'the command goes only in command');
+  assert.notStrictEqual(c.retry, true, 'it needs a person: no waiting');
   markInstalled(t.remote.mesh);
   const c2 = await run();
   assert.strictEqual(c2.reason, 'not-running');
+  assert.notStrictEqual(c2.retry, true);
   assert.strictEqual(c2.command, 'sudo systemctl restart mymaestro-remote');
   await t.remote.stop();
 });
@@ -481,7 +483,7 @@ test('hub mode: health says so and warns; the paths and the process are as befor
   const t = toolRemote({ run_as: 'hub' });
   const h = await t.remote.callTool('health');
   assert.strictEqual(h.mode, 'hub');
-  assert.ok(h.warnings.includes('MeshCentral runs under My Maestro\'s own account. On Linux, set "Run as" to service to give it its own locked-down account.'));
+  assert.ok(h.warnings.includes('MeshCentral runs under My Maestro\'s own account. On Linux, set "How the server runs" to service to give it its own locked-down account.'));
   assert.strictEqual(h.reason, undefined);
   const mesh = t.remote.mesh;
   assert.strictEqual(mesh.mode, 'hub');

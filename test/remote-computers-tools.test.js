@@ -816,6 +816,20 @@ test('tools: screenshot goes through the desktop channel (authcookie, websocket 
   assert.strictEqual(t.sockets.length, 2, 'refusals open nothing');
 });
 
+test('tools: on a Mac the agent gets its screenshot as before, and no private copy is made (the log says once that they are off)', async () => {
+  const t = setup({ deps: { platform: 'darwin' } });
+  const a = await t.raw('screenshot', { ...AGENT, computer: 'demo-pc' });
+  const b = await t.raw('screenshot', { ...AGENT, computer: 'demo-pc' });
+  for (const raw of [a, b]) {
+    assert.strictEqual(raw.isError, undefined);
+    assert.deepStrictEqual(raw.content[1], { type: 'image', data: JPEG.toString('base64'), mimeType: 'image/jpeg' });
+    assert.match(JSON.parse(raw.content[0].text).shot, /^[a-z0-9]{8}$/);
+  }
+  assert.ok(!fs.existsSync(path.join(t.mediaDir, 'screens')), 'nothing was written');
+  assert.strictEqual(t.logs.filter((l) => /private copies of pictures are off/.test(l)).length, 1);
+  assert.ok(!t.logs.some((l) => /could not keep a private copy/.test(l)));
+});
+
 test('tools: a screenshot of a computer with several screens says so when the capture could not tell which is the main one', async () => {
   const t = setup();
   const same = await t.call('screenshot', { ...AGENT, computer: 'demo-pc' });

@@ -25,7 +25,7 @@ test('stateLabel: every state has its words', () => {
 
 test('cardModel: title, topic, label, ago (from startedAt, else createdAt) and open', () => {
   const m = H.cardModel({ target: 'scout', topic: 'Find prices', state: 'running', createdAt: iso(30 * MIN), startedAt: iso(5 * MIN) }, { now: NOW });
-  assert.deepEqual(m, { title: 'Handed off to scout', topic: 'Find prices', state: 'running', label: 'Running', ago: '5 min ago', open: true });
+  assert.deepEqual(m, { title: 'Task for scout', topic: 'Find prices', state: 'running', label: 'Running', ago: '5 min ago', open: true });
   const q = H.cardModel({ target: 'scout', topic: 't', state: 'queued', createdAt: iso(3 * HOUR) }, { now: NOW });
   assert.equal(q.ago, '3 h ago');
   assert.equal(q.open, true);
@@ -49,7 +49,7 @@ test('stateLabel: a view gives the words for every state and the waiting variant
   assert.equal(H.stateLabel({ state: 'waiting', next: null }), 'Finishing up');
   // step 1: a server that sends no next field (today's live one): "Working", never "Waiting for its next step"
   assert.equal(H.stateLabel({ state: 'waiting' }), 'Working');
-  assert.equal(H.summaryLine([{ id: 'w', state: 'waiting', createdAt: NOW - MIN }], { now: NOW }), 'Hand-offs: 1 running', 'Working counts as in progress');
+  assert.equal(H.summaryLine([{ id: 'w', state: 'waiting', createdAt: NOW - MIN }], { now: NOW }), 'Tasks: 1 running', 'Working counts as in progress');
   assert.equal(H.stateLabel({ state: 'done', reported: true }), 'Done (report sent)');
   assert.equal(H.stateLabel({ state: 'done', reported: false }), 'Done');
   assert.equal(H.stateLabel({ state: 'failed' }), 'Failed');
@@ -119,7 +119,7 @@ test('render: text nodes only, replaces what was there, empty hides', () => {
   assert.equal(box.hidden, false);
   const cards = find(box, 'ho-card');
   assert.equal(cards.length, 2);
-  assert.equal(find(cards[0], 'ho-title')[0].children[0].text, 'Handed off to scout');
+  assert.equal(find(cards[0], 'ho-title')[0].children[0].text, 'Task for scout');
   assert.equal(find(cards[0], 'ho-topic')[0].children[0].text, 'Look at <b>this</b> & <img src=x onerror=1>');
   assert.equal(find(cards[0], 'ho-pill')[0].className, 'ho-pill ho-running');
   assert.equal(textOf(find(cards[0], 'ho-pill')[0]), 'Running');
@@ -184,7 +184,7 @@ async function call(url, { agents, list }) {
   const agentFromQuery = (r) => new URL(r.url, 'http://x').searchParams.get('agent');
   const seen = [];
   // the route uses the runner the hub made at start-up (lib/sdk-chat getHandOffRunner)
-  const fakeRequire = (m) => { assert.equal(m, './lib/sdk-chat'); return { getHandOffRunner: () => ({ list: (...a) => { seen.push(a); return list; } }) }; };
+  const fakeRequire = (m) => { assert.equal(m, './lib/sdk-chat'); return { getHandOffRunner: () => ({ listShown: async (...a) => { seen.push(a); return list; } }) }; };   // review r2 (hand-off identity): the route shows listShown
   const r = await handler()(new URL(url, 'http://x').pathname, req, out, agentFromQuery, async () => agents, (res, code, data) => { res.code = code; res.data = data; return 'sent'; }, fakeRequire);
   return { r, out, seen };
 }
@@ -266,19 +266,19 @@ test('summaryLine: groups in order, only when > 0, counting everything kept', ()
   assert.equal(H.summaryLine([], { now: NOW }), '');
   assert.equal(H.summaryLine(null, { now: NOW }), '');
   assert.equal(H.summaryLine([v('a', 'running'), v('b', 'waiting', { next: { kind: 'task', at: 1 } }), v('c', 'done'), v('d', 'done')], { now: NOW }),
-    'Hand-offs: 1 running · 1 waiting · 2 done');
+    'Tasks: 1 running · 1 waiting · 2 done');
   // running = running + finishing up + running a job; waiting = a pending task only
   assert.equal(H.summaryLine([v('a', 'running'), v('b', 'waiting'), v('c', 'waiting', { next: { kind: 'job' } }), v('d', 'waiting', { next: { kind: 'task', at: 1 } })], { now: NOW }),
-    'Hand-offs: 3 running · 1 waiting');
+    'Tasks: 3 running · 1 waiting');
   // the full order; failed and interrupted share a group
   // (at most 3 ended ones are kept, so the two halves of the order are checked apart)
   assert.equal(H.summaryLine([v('2', 'interrupted'), v('3', 'failed'), v('4', 'done'), v('5', 'waiting', { next: { kind: 'task', at: 1 } }), v('6', 'running'), v('7', 'queued')], { now: NOW }),
-    'Hand-offs: 1 queued · 1 running · 1 waiting · 1 done · 2 failed');
-  assert.equal(H.summaryLine([v('1', 'cancelled'), v('2', 'failed'), v('6', 'running')], { now: NOW }), 'Hand-offs: 1 running · 1 failed · 1 cancelled');
+    'Tasks: 1 queued · 1 running · 1 waiting · 1 done · 2 failed');
+  assert.equal(H.summaryLine([v('1', 'cancelled'), v('2', 'failed'), v('6', 'running')], { now: NOW }), 'Tasks: 1 running · 1 failed · 1 cancelled');
   // review r1: the list shows every open one the header counts (7 open ones)
   const seven = Array.from({ length: 7 }, (_, i) => v('r' + i, 'running'));
   assert.equal(H.visible(seven, { now: NOW }).length, 7);
-  assert.equal(H.summaryLine(seven, { now: NOW }), 'Hand-offs: 7 running');
+  assert.equal(H.summaryLine(seven, { now: NOW }), 'Tasks: 7 running');
   // an old ended one is not counted
   assert.equal(H.summaryLine([v('x', 'done', { endedAt: iso(HOUR) })], { now: NOW }), '');
 });
@@ -299,7 +299,7 @@ test('render: collapsed by default; a click expands and saves "1", a second clic
   let header = find(box, 'ho-strip')[0];
   assert.equal(header.tag, 'button');
   assert.equal(header.getAttribute('aria-expanded'), 'false');
-  assert.equal(textOf(find(header, 'ho-sum')[0]), 'Hand-offs: 1 running');
+  assert.equal(textOf(find(header, 'ho-sum')[0]), 'Tasks: 1 running');
   assert.equal(find(header, 'ho-chev').length, 1);
   assert.equal(find(box, 'ho-list')[0].hidden, true);
   header.click();

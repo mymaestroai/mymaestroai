@@ -557,8 +557,12 @@ async function handleHttpRequest(req, res) {
 
     // ── Accounts: sign-in, two-factor, invites, self-service (lib/auth) ──
     const authJson = async () => { try { return JSON.parse((await readBody(req)) || '{}') || {}; } catch { return null; } };
+    // null when the account changed between the password check and the session (deleted, turned off, or a new password set from the
+    // terminal): no cookie, and the caller answers that sign-in failed.
     const finishSignIn = (user, { totpOk }) => {
-      const sess = hubAuth.createSession(user, { req, totpOk });
+      let sess;
+      try { sess = hubAuth.createSession(user, { req, totpOk }); }
+      catch (e) { if (e && e.message === 'the account changed; sign in again') return null; throw e; }
       res.setHeader('Set-Cookie', sess.cookie);
       return sess;
     };
@@ -627,7 +631,7 @@ async function handleHttpRequest(req, res) {
       if (!r.ok) return jsonResponse(res, 400, r);
       welcome.clearSetupToken();
       welcome.markStarted();   // "/" brings this admin back to /welcome until setup is finished or skipped
-      finishSignIn(hubAuth.getUser(r.user.id), { totpOk: true });
+      if (!finishSignIn(hubAuth.getUser(r.user.id), { totpOk: true })) return jsonResponse(res, 409, { ok: false, error: 'The account changed a moment ago; sign in again.' });
       return jsonResponse(res, 200, { ok: true, user: r.user });
     }
     // ── First-run setup (the Welcome page; lib/welcome) ──
@@ -752,7 +756,7 @@ async function handleHttpRequest(req, res) {
       if (!r.ok) return jsonResponse(res, r.locked ? 429 : 401, { ok: false, error: r.error });
       const cookies = hubAuth.parseCookies(req);
       const trusted = r.needsTotp && hubAuth.isTrusted(r.user, cookies[hubAuth.TRUST_COOKIE]);
-      finishSignIn(r.user, { totpOk: !r.needsTotp || trusted });
+      if (!finishSignIn(r.user, { totpOk: !r.needsTotp || trusted })) return jsonResponse(res, 401, { ok: false, error: 'Wrong login or password' });
       return jsonResponse(res, 200, { ok: true, needsTotp: r.needsTotp && !trusted, user: hubAuth.publicUser(r.user) });
     }
     if (pathname === '/api/auth/totp/verify' && req.method === 'POST') {
@@ -787,7 +791,7 @@ async function handleHttpRequest(req, res) {
       const r = hubAuth.acceptInvite(b.token, { password: b.password, name: b.name });
       if (!r.ok) return jsonResponse(res, 400, r);
       if (r.user.role === 'member') require('./lib/teams').createDefaultAssistant(r.user).then(a => { if (!a || !a.ok) console.error('[users] default assistant not made:', a && a.error); }, e => console.error('[users] default assistant:', e.message));
-      finishSignIn(r.user, { totpOk: true });
+      if (!finishSignIn(r.user, { totpOk: true })) return jsonResponse(res, 409, { ok: false, error: 'The account changed a moment ago; sign in again.' });
       return jsonResponse(res, 200, { ok: true, user: hubAuth.publicUser(r.user), needsTotpEnrol: r.user.role === 'admin' && admin2fa.required() });
     }
     // Self-service (any signed-in user)
@@ -851,6 +855,36 @@ async function handleHttpRequest(req, res) {
       const r = hubAuth.setPrefs(req.hubUser.id, { uiMode: body.uiMode, theme: body.theme });
       if (!r.ok) return jsonResponse(res, 400, { error: r.error });
       return jsonResponse(res, 200, { ok: true, uiMode: r.user.uiMode || (access.isAdmin(req.hubUser) ? 'advanced' : 'simple'), theme: r.user.theme || 'auto' });
+    }
+    // This person's deep research choice (lib/research-prefs): ask | always | never, theirs only. on: the behaviour change
+    // 'deep-research' is on. A signed-in person's own session ('owner' on an install with no accounts); never a token or the hub.
+    if (pathname === '/api/research-pref' && (req.method === 'GET' || req.method === 'POST')) {
+      if (req.hubService || req.hubToken || req.hubPendingTotp) return jsonResponse(res, 401, { error: 'Sign in first' });
+      const key = hubAuth.hasUsers()
+        ? (req.hubUser && req.hubIdentKind === 'user' && req.hubUser.id != null ? String(req.hubUser.id).slice(0, 64) : null)
+        : 'owner';
+      if (!key) return jsonResponse(res, 401, { error: 'Sign in first' });
+      const prefs = require('./lib/research-prefs').getResearchPrefs();
+      let on = false;
+      try { on = require('./lib/behaviour-changes').isOn('deep-research'); } catch { on = false; }
+      if (req.method === 'GET') return jsonResponse(res, 200, { on, choice: prefs.choiceOf(key), alwaysLevel: prefs.alwaysLevelOf(key) });
+      if (!on) return jsonResponse(res, 403, { error: 'Deep research is off on this Maestro.' });
+      let body = {};
+      try { body = JSON.parse(await readBody(req) || '{}') || {}; } catch { return jsonResponse(res, 400, { error: 'Bad request' }); }
+      // each part is checked before anything is saved; choice and alwaysLevel may come together
+      const hasChoice = body && body.choice !== undefined, hasLevel = body && body.alwaysLevel !== undefined;
+      if (!hasChoice && !hasLevel) return jsonResponse(res, 400, { error: 'choice or alwaysLevel is required' });
+      const prefsMod = require('./lib/research-prefs');
+      if (hasChoice && !prefsMod.CHOICES.includes(body.choice)) return jsonResponse(res, 400, { error: `choice must be one of: ${prefsMod.CHOICES.join(', ')}` });
+      if (hasLevel && !prefsMod.LEVELS.includes(body.alwaysLevel)) return jsonResponse(res, 400, { error: `alwaysLevel must be one of: ${prefsMod.LEVELS.join(', ')}` });
+      try {
+        // both together: one write, so a failure saves neither
+        if (hasChoice && hasLevel) prefs.setChoiceAndLevel(key, body.choice, body.alwaysLevel);
+        else if (hasChoice) prefs.setChoice(key, body.choice);
+        else prefs.setAlwaysLevel(key, body.alwaysLevel);
+        return jsonResponse(res, 200, { ok: true, choice: prefs.choiceOf(key), alwaysLevel: prefs.alwaysLevelOf(key) });
+      }
+      catch (e) { return jsonResponse(res, e && e.code === 'bad_request' ? 400 : 500, { error: e && e.code === 'bad_request' ? e.message : 'Could not save that' }); }
     }
     // This person's time zone (lib/timezone): the page in use reports its own ({tz, auto: true}; the zone follows the
     // device unless pinned); the Profile pins one ({tz, pinned: true}) or follows the device again ({tz, pinned: false}).
@@ -1711,7 +1745,9 @@ async function handleHttpRequest(req, res) {
 
     if (pathname === '/api/ask_response' && req.method === 'POST') {
       const body = JSON.parse(await readBody(req));
-      const result = handleAskResponse(body, { isAdmin: access.isAdmin(req.hubUser) });
+      // personKey: the account answering (as lib/sdk-chat records the person of a turn), for cards only one person may answer
+      const personKey = !hubAuth.hasUsers() ? 'owner' : (req.hubUser && req.hubIdentKind === 'user' && !req.hubPendingTotp && req.hubUser.id != null ? String(req.hubUser.id).slice(0, 64) : null);
+      const result = handleAskResponse(body, { isAdmin: access.isAdmin(req.hubUser), personKey });
       return jsonResponse(res, result.success ? 200 : 400, result);
     }
 
@@ -2309,7 +2345,7 @@ async function handleHttpRequest(req, res) {
       const mods = require('./lib/modules').getModules();
       const bodyJson = async () => { try { return JSON.parse((await readBody(req)) || '{}'); } catch { return {}; } };
       const userHasTotp = () => !!(req.hubUser && ((req.hubUser.totp && req.hubUser.totp.enabled) || req.hubUser.totpEnabled));
-      const fail = (e) => jsonResponse(res, [403, 409, 500].includes(e.status) ? e.status : 400, { error: e.message, ...(e.check ? { check: e.check } : {}), ...(e.needsAck ? { needsAck: true } : {}), ...(e.needsStepUp ? { needsStepUp: true, totp: e.totp !== undefined ? !!e.totp : userHasTotp() } : {}) });
+      const fail = (e) => jsonResponse(res, [403, 409, 500].includes(e.status) ? e.status : 400, { error: e.message, ...(e.check ? { check: e.check } : {}), ...(e.choose ? { choose: e.choose } : {}), ...(e.admin ? { admin: e.admin } : {}), ...(e.needsAck ? { needsAck: true } : {}), ...(e.needsStepUp ? { needsStepUp: true, totp: e.totp !== undefined ? !!e.totp : userHasTotp() } : {}) });
       // Asking less needs the account password (and code) in the body. They are taken out before the module sees the input; steppedUp comes only from this check.
       const takeStepUp = (b) => {
         const input = b && typeof b === 'object' && !Array.isArray(b) ? { ...b } : b;
@@ -2392,6 +2428,14 @@ async function handleHttpRequest(req, res) {
           if (list) out.computers = list; else out.computersError = 'Could not load the computers.';
           return jsonResponse(res, 200, out);
         }
+        // Facts about the computer the hub runs on (the precheck, the suggested settings): a signed-in admin only, never the hub's service identity or a member, and never offered to anyone else.
+        m = pathname.match(/^\/api\/modules\/([a-z][a-z0-9-]{1,31})\/(?:precheck\/([A-Za-z0-9_-]{1,40})|suggestions)$/);
+        if (m && req.method === 'GET') {
+          if (req.hubService || (req.hubUser && !access.isAdmin(req.hubUser))) return jsonResponse(res, 403, { error: 'Only a signed-in admin can see this.' });
+          // ?fresh=1 (the "Check again" button) looks again instead of using the answer kept for a few seconds.
+          if (m[2] !== undefined) return jsonResponse(res, 200, await mods.precheck(m[1], m[2], { fresh: new URL(req.url, 'http://x').searchParams.get('fresh') === '1' }));
+          return jsonResponse(res, 200, { suggestions: await mods.suggestions(m[1]) });
+        }
         m = pathname.match(/^\/api\/modules\/([a-z][a-z0-9-]{1,31})\/help$/);
         if (m && req.method === 'GET') { const q = new URL(req.url, 'http://x').searchParams; return jsonResponse(res, 200, mods.help(m[1], { step: q.get('step') || '', error: q.get('error') || '' })); }
         m = pathname.match(/^\/api\/modules\/([a-z][a-z0-9-]{1,31})\/(step|check|settings|enable|disable|audit)$/);
@@ -2412,7 +2456,7 @@ async function handleHttpRequest(req, res) {
                   }
                 }
               }
-              const saved = mods.saveSettings(id, b.values || {});
+              const saved = await mods.saveSettings(id, b.values || {});
               sweepRemoteDesktop(id);
               return jsonResponse(res, 200, { ok: true, module: saved });
             }
@@ -2497,8 +2541,21 @@ async function handleHttpRequest(req, res) {
     if (pathname === '/api/hand-offs' && req.method === 'GET') {
       const name = agentFromQuery(req);
       if (!name || !(await getAgents()).some(a => a.name === name)) return jsonResponse(res, 404, { error: 'unknown agent' });
-      const handOffs = require('./lib/sdk-chat').getHandOffRunner().list(name, { includeDone: false, withStatus: false });
+      // listShown: only this agent's own hand-offs, and no target's words where it may no longer reach that target
+      const handOffs = await require('./lib/sdk-chat').getHandOffRunner().listShown(name, { includeDone: false, withStatus: false });
       return jsonResponse(res, 200, { ok: true, handOffs });   // no folderLink: the Files panel has no link that opens a folder
+    }
+
+    // Deep research progress (lib/sdk-chat researchStatusFor): the active runs of ONE agent, for the line above its chat.
+    // Signed-in only (the gate above); a person who may not see that agent gets the same 404 as an unknown one.
+    if (pathname === '/api/research/status' && req.method === 'GET') {
+      const name = agentFromQuery(req);
+      const allAgents = await getAgents();
+      if (!name || !allAgents.some(a => a.name === name)) return jsonResponse(res, 404, { error: 'unknown agent' });
+      if (!req.hubService && !access.isAdmin(req.hubUser) && !access.canAccessAgent(req.hubUser, name, { agents: allAgents, resolveVirtual: (n) => temporalWorkersLib.getVirtual(n) })) return jsonResponse(res, 404, { error: 'unknown agent' });
+      let runs = [];
+      try { const fn = require('./lib/sdk-chat').researchStatusFor; if (typeof fn === 'function') runs = fn(name); } catch { runs = []; }
+      return jsonResponse(res, 200, { runs: Array.isArray(runs) ? runs : [] });
     }
 
     // ── Session/History Routes ──────────────────────────────────────
@@ -2781,6 +2838,46 @@ async function handleHttpRequest(req, res) {
           if (patch && patch.shareLinks !== undefined) patch.shareLinks = require('./lib/share-links').cleanSettings(patch.shareLinks, hubSettings.getSetting('shareLinks'));
           if (patch && patch.showReasoning !== undefined) patch.showReasoning = patch.showReasoning !== false;
           if (patch && patch.modelOffers !== undefined) patch.modelOffers = patch.modelOffers !== false;
+          // Deep research (lib/research): how often a person who chose Never is reminded that it is off, in days 0..365 (0 = never).
+          if (patch && patch.researchReminderDays !== undefined) {
+            const d = Number(patch.researchReminderDays);
+            if (!Number.isInteger(d) || d < 0 || d > 365) return jsonResponse(res, 400, { error: 'researchReminderDays must be a whole number of days from 0 to 365' });
+            patch.researchReminderDays = d;
+          }
+          // Thorough deep research caps (admin): known fields only, each in its range (lib/research-thorough); merged onto the stored value.
+          if (patch && patch.researchThorough !== undefined) {
+            const v = patch.researchThorough;
+            if (!v || typeof v !== 'object' || Array.isArray(v)) return jsonResponse(res, 400, { error: 'researchThorough must be an object' });
+            const ranges = { maxSources: [1, 40], readersAtOnce: [1, 12], reviewRounds: [0, 5], timeLimitMinutes: [10, 240],
+              leadSteps: [5, 300], leadWallMinutes: [10, 1440], leadReaderCalls: [1, 400], leadReviewRounds: [0, 50], leadTopicSearches: [0, 20], leadSourcesPerSub: [0, 20], leadTopNewPerSub: [0, 10], leadPdfMaxMB: [4, 64], leadReaderTextMax: [20000, 2000000], leadReaderTopTextMax: [20000, 2000000] };
+            const modelKeys = ['leadModel', 'leadReaderModel', 'leadReaderTopModel'];
+            const known = [...Object.keys(ranges), 'pdf', 'readerModel', 'engine', ...modelKeys];
+            const merged = { ...(hubSettings.getSetting('researchThorough') || {}) };
+            for (const [k, val] of Object.entries(v)) {
+              if (!known.includes(k)) return jsonResponse(res, 400, { error: `researchThorough.${k} is not a setting` });
+              if (ranges[k]) {
+                const [lo, hi] = ranges[k];
+                const n = typeof val === 'string' && /^\s*-?\d+\s*$/.test(val) ? Number(val) : val;
+                if (typeof n !== 'number' || !Number.isInteger(n) || n < lo || n > hi) return jsonResponse(res, 400, { error: `researchThorough.${k} must be a whole number from ${lo} to ${hi}` });
+                merged[k] = n;
+              } else if (k === 'pdf') {
+                if (typeof val !== 'boolean') return jsonResponse(res, 400, { error: 'researchThorough.pdf must be true or false' });
+                merged[k] = val;
+              } else if (k === 'engine') {
+                if (val !== 'lead' && val !== 'pipeline') return jsonResponse(res, 400, { error: "researchThorough.engine must be 'lead' or 'pipeline'" });
+                merged[k] = val;
+              } else if (modelKeys.includes(k)) {
+                if (typeof val !== 'string' || !(val === 'auto' || (val.length >= 1 && val.length <= 120 && /^[A-Za-z0-9._:/@[\]-]+$/.test(val)))) return jsonResponse(res, 400, { error: `researchThorough.${k} must be 'auto' or a model id` });
+                merged[k] = val;
+              } else {
+                if (val !== 'own' && val !== 'helper') return jsonResponse(res, 400, { error: "researchThorough.readerModel must be 'own' or 'helper'" });
+                merged[k] = val;
+              }
+            }
+            patch.researchThorough = merged;
+          }
+          // Which search the research helpers use: their usual one (default) or also the hub's (a test option).
+          if (patch && patch.researchHelperSearch !== undefined && patch.researchHelperSearch !== 'default' && patch.researchHelperSearch !== 'both') return jsonResponse(res, 400, { error: "researchHelperSearch must be 'default' or 'both'" });
           // Subscription usage (lib/codex-usage, Settings → Subscriptions): on unless turned off.
           if (patch && patch.subscriptionUsage !== undefined) patch.subscriptionUsage = patch.subscriptionUsage !== false;
           if (patch && patch.componentUpdates !== undefined) patch.componentUpdates = { codex: ['auto', 'notify', 'off'].includes(patch.componentUpdates && patch.componentUpdates.codex) ? patch.componentUpdates.codex : 'auto' };
@@ -3963,6 +4060,8 @@ server.listen(PORT, HOST, () => {
   catch (e) { console.error('[sched-tasks] failed to start:', e.message); }
   // Hand-offs (lib/hand-offs): a hand-off whose turn died with the restart is reported to its caller as interrupted.
   try { require('./lib/sdk-chat').getHandOffRunner().start(); } catch (e) { console.error('[hand-offs] could not start:', e.message); }
+  // Deep research (lib/research): a run the restart cut short is reported to its agent.
+  try { require('./lib/sdk-chat').startResearch(); } catch (e) { console.error('[research] could not start:', e.message); }
   // Behaviour changes waiting for the owner: the lead is asked to review them (one task, never twice for an entry), and the weekly
   // team review follows the worker-proposals decision. After the scheduler exists; the hub creates these, the owner decides on /changes.
   (async () => {

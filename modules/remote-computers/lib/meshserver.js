@@ -79,9 +79,18 @@ function tlsProbe(port, host = '127.0.0.1') {
   });
 }
 
+// The command line of a process on a Mac (no /proc there): `ps -p <pid> -o command=`, short timeout, null when the process is gone or ps fails.
+function psCommandOf(pid) {
+  try {
+    const out = childProcess.execFileSync('ps', ['-p', String(pid), '-o', 'command='], { timeout: 2000, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 256 * 1024 });
+    const line = String(out).trim();
+    return line || null;
+  } catch { return null; }
+}
+
 function createMeshServer({ runtimeDir, home, settings, spawn = childProcess.spawn, execFile = childProcess.execFile, now = Date.now, log = () => {},
   probe = tlsProbe, timers = { setTimeout, clearTimeout }, npmGuard = NPM_GUARD, procRoot = '/proc', killPid = process.kill.bind(process), onRetryReady = null,
-  mode = 'hub', serviceName = DEFAULT_SERVICE_NAME, moduleDir = '', ensureAgents = ensureAgentFiles } = {}) {
+  mode = 'hub', serviceName = DEFAULT_SERVICE_NAME, moduleDir = '', ensureAgents = ensureAgentFiles, platform = process.platform, psCommand = psCommandOf } = {}) {
   if (!runtimeDir || !home) throw new Error('createMeshServer needs runtimeDir and home');
   const service = mode === 'service';
   if (service && !SERVICE_NAME_RE.test(String(serviceName))) throw new Error('The service name is not valid. Use mymaestro-remote, or mymaestro-remote- and up to 16 letters or digits.');
@@ -98,13 +107,15 @@ function createMeshServer({ runtimeDir, home, settings, spawn = childProcess.spa
   };
   paths.configFile = path.join(paths.dataPath, 'config.json');
   paths.rootCert = path.join(paths.dataPath, 'root-cert-public.crt');
+  // The service's folder: the request for the root script, and what the service shares back. Hub mode only looks at these two files, to see a request that was never run.
+  const serviceRequestFile = path.join(home, 'service', 'request.env'), serviceInstalledFile = path.join(home, 'service', 'installed.json');
   if (service) {
     // In service mode MeshCentral runs as its own system service; the hub only keeps a request for the root script and reads what the service shares back.
     paths.serviceDir = path.join(home, 'service');
     paths.rootCert = path.join(paths.serviceDir, 'root-cert-public.crt');
-    paths.request = path.join(paths.serviceDir, 'request.env');
+    paths.request = serviceRequestFile;
     paths.serviceConfig = path.join(paths.serviceDir, 'config.json');
-    paths.installed = path.join(paths.serviceDir, 'installed.json');
+    paths.installed = serviceInstalledFile;
   }
   const baseEnv = () => ({ PATH: process.env.PATH, HOME: home });
 
@@ -253,8 +264,19 @@ function createMeshServer({ runtimeDir, home, settings, spawn = childProcess.spa
     }
     return `sudo bash '${path.join(moduleDir, 'service', 'install.sh')}' '${paths.request}'`;
   }
+  // The helper-program download as the page says it: no paths, no addresses.
+  let agentFiles = { state: 'idle', bytes: 0, totalBytes: 0, error: null };
+  const helpers = () => ({ ...agentFiles });
   const restartCommand = () => `sudo systemctl restart ${serviceName}`;
   async function bootstrapService() {
+    let reachedDownload = false;
+    try { return await bootstrapServiceRun(() => { reachedDownload = true; }); } catch (e) {
+      // A refusal that is not about the download (a bad path, a quote in a folder name) must not leave an old download failure on the page.
+      if (!reachedDownload && agentFiles.state === 'failed') agentFiles = { state: 'idle', bytes: 0, totalBytes: 0, error: null };
+      throw e;
+    }
+  }
+  async function bootstrapServiceRun(reachDownload) {
     const cfg = configFor(settings, { service: true });
     const cfgText = JSON.stringify(cfg, null, 2) + '\n';
     const existing = readAccountsStrict();
@@ -282,7 +304,20 @@ function createMeshServer({ runtimeDir, home, settings, spawn = childProcess.spa
     if (/[\r\n]/.test(allowed)) throw new Error('The allowed addresses are not valid.');
     const command = installCommand();
     // The service has no internet, so the agent programs are put into the runtime now; the root script copies the runtime into the service.
-    try { await ensureAgents({ runtimeDir, log }); } catch (e) { throw new Error(`Could not download the MeshCentral agent files: ${clean(e && e.message, 300)}`); }
+    reachDownload();
+    agentFiles = { state: 'downloading', bytes: 0, totalBytes: 0, error: null };
+    try {
+      await ensureAgents({ runtimeDir, log, onProgress: (p) => {
+        if (agentFiles.state !== 'downloading') return;
+        agentFiles = { state: 'downloading', bytes: Number(p && p.bytes) || 0, totalBytes: Number(p && p.totalBytes) || 0, error: null };
+      } });
+      agentFiles = { state: 'done', bytes: agentFiles.totalBytes, totalBytes: agentFiles.totalBytes, error: null };
+    } catch (e) {
+      // A short reason with no address and no folder in it (the page shows it to the person).
+      const why = clean(e && e.message, 200).replace(/https?:\/\/\S+/gi, '').replace(/(?:\/[\w.-]+){2,}/g, '').replace(/\s+/g, ' ').trim().slice(0, 120);
+      agentFiles = { state: 'failed', bytes: agentFiles.bytes, totalBytes: agentFiles.totalBytes, error: why || 'unknown reason' };
+      throw new Error(`Could not download the MeshCentral agent files: ${clean(e && e.message, 300)}`);
+    }
     fs.mkdirSync(paths.home, { recursive: true, mode: 0o700 });
     fs.mkdirSync(paths.serviceDir, { recursive: true, mode: 0o700 });
     if (created) {
@@ -314,11 +349,30 @@ function createMeshServer({ runtimeDir, home, settings, spawn = childProcess.spa
     if (service) return bootstrapServiceOnce();
     const my = epoch;
     const alive = () => { if (epoch !== my) throw cancelled(); };
-    if (readAccountsStrict()) return { created: false };
+    // accounts.json left by "Set it up" for the locked-down service (a request nobody ran, no installed.json) does not mean the accounts exist in
+    // MeshCentral's own database: the root script was meant to make them in the service's data folder. Then they are made here.
+    // The accounts are made in MeshCentral's database with the passwords ALREADY in accounts.json (an administrator's service install running at the same
+    // moment gets the very same credentials, so no mismatch is possible), accounts.json is marked hubMade, and the request file is never removed
+    // (an install in progress may still read it). Once hubMade is there, a request nobody ran changes nothing here.
+    const staleRequest = fs.existsSync(serviceRequestFile) && !fs.existsSync(serviceInstalledFile);
+    let existing = null, readError = null;
+    try { existing = readAccountsStrict(); } catch (e) { readError = e; }
+    if (readError && !staleRequest) throw readError;
+    // A waiting service request with no usable account file: any new passwords would differ from the ones the request holds (an install that
+    // already copied it, or runs it later, would make other accounts). So nothing is changed, and the person is told plainly.
+    if (staleRequest && (readError || !existing)) {
+      throw new Error('The server\'s account file is missing or damaged while a request to install the locked-down service is still waiting. Its passwords cannot be made again from that request: restore the file from a backup, or ask Maestro for help.');
+    }
+    if (existing && (!staleRequest || existing.hubMade === true)) return { created: false };
     if (isRunning()) throw new Error('The server is running; the first accounts can only be made while it is stopped.');
     writeConfig();
     try { fs.unlinkSync(paths.pendingFile); } catch { /* none, as it should be */ }
-    const accountPass = { admin: crypto.randomBytes(24).toString('base64url'), maestro: crypto.randomBytes(24).toString('base64url') };
+    // existing is only set here for a stale request with a usable admin/agent pair: the same passwords are kept. Otherwise (no file, or one that cannot be used) fresh ones.
+    const keep = existing || null;
+    const accountPass = keep
+      ? { admin: keep.admin.pass, maestro: keep.agent.pass }
+      : { admin: crypto.randomBytes(24).toString('base64url'), maestro: crypto.randomBytes(24).toString('base64url') };
+    const names = keep ? { admin: keep.admin.user, maestro: keep.agent.user } : { admin: 'admin', maestro: 'maestro' };
     const secrets = [accountPass.admin, accountPass.maestro];
     const step = async (what, extra, hashed) => {
       alive();
@@ -329,23 +383,26 @@ function createMeshServer({ runtimeDir, home, settings, spawn = childProcess.spa
       return { err, out, sec, ok: /\bDone\./.test(out) && !(err && err.killed), what };
     };
     const fail = (r) => new Error(`Could not ${r.what}: ${tailLines(r.out, r.sec) || clean(redact(r.err && r.err.message, r.sec), 120) || 'no output'}`);
-    const account = async (user, pass) => {
+    const account = async (role, user, pass) => {
       const h = hashPassword(pass);
-      let r = await step(`create the ${user === 'admin' ? 'admin' : 'agent'} account`, ['--createaccount', user, '--hashpass', h.arg], h);
+      let r = await step(`create the ${role} account`, ['--createaccount', user, '--hashpass', h.arg], h);
       if (!r.ok && /already exists/i.test(r.out)) {
-        r = await step(`reset the ${user === 'admin' ? 'admin' : 'agent'} account's password`, ['--resetaccount', user, '--hashpass', h.arg], h);
+        r = await step(`reset the ${role} account's password`, ['--resetaccount', user, '--hashpass', h.arg], h);
       }
       if (!r.ok) throw fail(r);
     };
-    await account('admin', accountPass.admin);
-    const adm = await step('make admin an administrator', ['--adminaccount', 'admin'], null);
+    await account('admin', names.admin, accountPass.admin);
+    const adm = await step('make admin an administrator', ['--adminaccount', names.admin], null);
     if (!adm.ok) throw fail(adm);
-    await account('maestro', accountPass.maestro);
+    await account('agent', names.maestro, accountPass.maestro);
     alive();
+    // accounts.json is written last, only when every step worked. hubMade: the accounts exist in MeshCentral's own database now.
     writeFileAtomic(paths.accountsFile, JSON.stringify({
-      admin: { user: 'admin', pass: accountPass.admin },
-      agent: { user: 'maestro', pass: accountPass.maestro },
-      createdAt: new Date(now()).toISOString(),
+      admin: { user: names.admin, pass: accountPass.admin },
+      agent: { user: names.maestro, pass: accountPass.maestro },
+      ...(keep && keep.person !== undefined ? { person: keep.person } : {}),
+      createdAt: keep && keep.createdAt ? keep.createdAt : new Date(now()).toISOString(),
+      hubMade: true,
     }, null, 2) + '\n');
     return { created: true };
   }
@@ -417,8 +474,23 @@ function createMeshServer({ runtimeDir, home, settings, spawn = childProcess.spa
 
   // ── a process an earlier run left behind ──
   // meshcentral.pid holds the pid of the process we started. Only a process whose command line has OUR meshcentral.js and OUR --datapath is ever signalled.
-  const procArgs = (pid) => { try { return fs.readFileSync(path.join(procRoot, String(pid), 'cmdline'), 'utf8').split('\0').filter(Boolean); } catch { return null; } };
-  const isOurs = (args) => !!args && args.includes(paths.mainJs) && args.some((a, i) => a === '--datapath' && args[i + 1] === paths.dataPath);
+  // Linux reads the separate arguments from /proc; a Mac has no /proc, so the one command-line string `ps` gives is used (a path with spaces cannot be told apart
+  // from two arguments there, so a path counts only when it stands whole: after the start, a space or a quote, and before the end, a space or a quote).
+  const procArgs = (pid) => {
+    if (platform === 'darwin') { try { const s = psCommand(pid); return typeof s === 'string' && s ? s : null; } catch { return null; } }
+    try { return fs.readFileSync(path.join(procRoot, String(pid), 'cmdline'), 'utf8').split('\0').filter(Boolean); } catch { return null; }
+  };
+  const standsWhole = (line, text) => {
+    for (let at = line.indexOf(text); at !== -1; at = line.indexOf(text, at + 1)) {
+      const before = at === 0 ? ' ' : line[at - 1], after = line[at + text.length] || ' ';
+      if (/[\s"']/.test(before) && /[\s"']/.test(after)) return true;
+    }
+    return false;
+  };
+  const isOurs = (args) => {
+    if (typeof args === 'string') return standsWhole(args, paths.mainJs) && standsWhole(args, `--datapath ${paths.dataPath}`);
+    return !!args && args.includes(paths.mainJs) && args.some((a, i) => a === '--datapath' && args[i + 1] === paths.dataPath);
+  };
   const removePid = (pid) => {
     try { if (pid === undefined || fs.readFileSync(paths.pidFile, 'utf8').trim() === String(pid)) fs.unlinkSync(paths.pidFile); } catch { /* none */ }
   };
@@ -629,7 +701,8 @@ function createMeshServer({ runtimeDir, home, settings, spawn = childProcess.spa
     };
   }
 
-  return { paths, mode: service ? 'service' : 'hub', configFor, writeConfig, npmGuardArgs, bootstrap, accounts, personAccount, savePersonAccount, state, start, stop, status, isRunning, logTail, checkService };
+  return { paths, mode: service ? 'service' : 'hub', configFor, writeConfig, npmGuardArgs, bootstrap, accounts, personAccount, savePersonAccount, state, start, stop, status, isRunning, logTail, checkService, helpers };
 }
 
-module.exports = { createMeshServer, DEFAULT_SERVICE_NAME, SERVICE_NAME_RE, REPROBE_MS, writeFileAtomic, tlsProbe, hashPassword, redact, VERSION, GROUP_NAME, RESTART_DELAYS_MS, NPM_GUARD, DNS_RE, IPV4_RE, LOG_ROTATE_BYTES };
+module.exports = {
+  psCommandOf, createMeshServer, DEFAULT_SERVICE_NAME, SERVICE_NAME_RE, REPROBE_MS, writeFileAtomic, tlsProbe, hashPassword, redact, VERSION, GROUP_NAME, RESTART_DELAYS_MS, NPM_GUARD, DNS_RE, IPV4_RE, LOG_ROTATE_BYTES };

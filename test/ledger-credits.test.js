@@ -84,7 +84,7 @@ test('desktop: a credit chip beside today\'s spend (amber at 75%, rose at 90%), 
   assert.match(app, /paintSpendToday\(\);\n\s+paintCreditMeter\(\);/, 'repainted with every ledger refresh');
   assert.match(app, /id="st-credit-provider" onchange="fillCreditInputs\(\)"/);
   assert.match(app, /onclick="saveCredit\(\)"/);
-  assert.match(app, /fetch\('\/api\/ledger\/credits', \{ method: 'POST'/);
+  assert.match(app, /stSaveFetch\('\/api\/ledger\/credits', \{ method: 'POST'/);
   assert.match(app, /'credit-meter', 'spend-today', 'plan-warn'/, 'members never see it');
 });
 
@@ -93,7 +93,7 @@ test('phone: the ⋮ menu shows the credit to admins when one is set', () => {
   assert.match(html, /<div id="menu">\n\s+<div id="menu-credit" hidden><\/div>/);
   assert.match(js, /if \(menu\.classList\.contains\('open'\)\) paintMenuCredit\(\);/);
   assert.match(js, /async function paintMenuCredit\(\) \{[\s\S]*?if \(!isAdmin\(\)\) \{ el\.hidden = true; return; \}[\s\S]*?api\('\/api\/ledger\/today'\)/);
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v70'/);
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v74'/);
 });
 
 test('no ledger: no credit figures, rather than a reassuring $0', () => {

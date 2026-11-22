@@ -197,9 +197,9 @@ test('sdk-chat appends the team guidance at the gateway, SDK and Codex sites (so
   assert.match(src, /async function teamGuidanceTextFor\(agentName\) \{[\s\S]*?temporalWorkers\.isVirtual\(agentName\)\) return '';[\s\S]*?require\('\.\/team-guidance'\)\.textFor\(\{ agent: rec, isLead: isLeadAgent\(agentName, agents\), member \}\)[\s\S]*?catch \{ return ''; \}/);
   // each site appends the team guidance, then the independent "need a worker?" line (askLeadTextFor, its own gate),
   // then check-ins and suggestions (workPracticesTextFor, their own gates)
-  assert.match(src, /systemPrompt \+= workerPolicy\.platformPolicyText\(gwRoster\) \+ \(await teamGuidanceTextFor\(agentName\)\) \+ \(await askLeadTextFor\(agentName\)\) \+ \(await workPracticesTextFor\(agentName\)\);/, 'gateway');
-  assert.match(src, /const workerPolicyText = ephemeral \? '' : workerPolicy\.policyText\(workerMode, workerRoster\) \+ \(await teamGuidanceTextFor\(agentName\)\) \+ \(await askLeadTextFor\(agentName\)\) \+ \(await workPracticesTextFor\(agentName\)\);/, 'SDK: also when policyText is empty (sdkWorkers allow)');
-  assert.match(src, /const workerPolicyText = ephemeral \? '' : workerPolicy\.platformPolicyText\(workerRoster\) \+ \(await teamGuidanceTextFor\(agentName\)\) \+ \(await askLeadTextFor\(agentName\)\) \+ \(await workPracticesTextFor\(agentName\)\);/, 'Codex');
+  assert.match(src, /systemPrompt \+= workerPolicy\.platformPolicyText\(gwRoster\) \+ \(await teamGuidanceTextFor\(agentName\)\) \+ \(await askLeadTextFor\(agentName\)\) \+ \(await workPracticesTextFor\(agentName\)\) \+ researchGuidanceFor\(agentName, consultationDepth, tigerTeam\);/, 'gateway');   // deep research (lib/research) appends its section after the others
+  assert.match(src, /const workerPolicyText = ephemeral \? '' : workerPolicy\.policyText\(workerMode, workerRoster\) \+ \(await teamGuidanceTextFor\(agentName\)\) \+ \(await askLeadTextFor\(agentName\)\) \+ \(await workPracticesTextFor\(agentName\)\) \+ researchGuidanceFor\(agentName, options\.consultationDepth \|\| 0, !!options\.tigerTeam\);/, 'SDK: also when policyText is empty (sdkWorkers allow)');
+  assert.match(src, /const workerPolicyText = ephemeral \? '' : workerPolicy\.platformPolicyText\(workerRoster\) \+ \(await teamGuidanceTextFor\(agentName\)\) \+ \(await askLeadTextFor\(agentName\)\) \+ \(await workPracticesTextFor\(agentName\)\) \+ researchGuidanceFor\(agentName, options\.consultationDepth \|\| 0, !!options\.tigerTeam\);/, 'Codex');
   assert.strictEqual((src.match(/await teamGuidanceTextFor\(agentName\)/g) || []).length, 3);
   assert.strictEqual(wp.policyText('allow', []), '', 'sdkWorkers allow: the delegation text is empty, so the guidance is all that is added');
 });
@@ -292,9 +292,11 @@ test('first-run seeding writes the marker, so a fresh install is never migrated'
 });
 
 // ── pages ──
-test('the pages carry the controls: the more-menu select, and the two agent-settings rows', () => {
+test('the pages carry the controls: the Settings tuning select, and the two agent-settings rows', () => {
   const idx = read('index.html'), app = read('app.js'), as = read('agent-settings.html');
-  assert.match(idx, /id="sdk-workers-select"[\s\S]*?<\/div>\s*<div class="more-row">\s*<label class="toggle-switch"[^>]*title="How agents are told to run a team:[\s\S]*?id="team-guidance-select"[\s\S]*?value="full">Full<[\s\S]*?value="light">Light<[\s\S]*?value="off">Off</);
+  // menu split (gear = what you set, ⋯ = what you do): the select moved from the ⋯ menu into #st-tuning-body, right after SDK workers
+  assert.match(idx, /<div id="st-tuning-body" data-no-dirty hidden>[\s\S]*?id="sdk-workers-select"[\s\S]*?<\/div>\s*<div class="st-hint">[^<]*<\/div>\s*<div class="st-row"><label for="team-guidance-select">Team guidance<\/label><select id="team-guidance-select">[\s\S]*?value="full">Full<[\s\S]*?value="light">Light<[\s\S]*?value="off">Off</);
+  assert.doesNotMatch(idx.slice(idx.indexOf('id="more-menu"'), idx.indexOf('id="st-tuning-body"')), /team-guidance-select/);
   // Review r1: the save moved into bindTeamGuidanceSelect (one save at a time, the stored value put back on failure); its behaviour is tested below.
   assert.match(app, /doFetch\('\/api\/team_guidance', \{ method: 'POST'[^}]*\}[^)]*body: JSON\.stringify\(\{ level: want \}\)/);
   assert.match(app, /if \(teamGuidanceSelect\) bindTeamGuidanceSelect\(teamGuidanceSelect, /);

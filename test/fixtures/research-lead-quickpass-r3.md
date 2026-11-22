@@ -1,0 +1,26 @@
+## What the quick pass said
+
+## Verdict
+For the judge, the best-supported approach is a task-specific reward model trained on story preference pairs (LitBench, about 78%; StoryReward, 75% vs GPT-4o's 66.3%). It should sit inside a multi-judge panel and use pairwise comparison with position swapping. Prompted zero-shot judges are weaker (Claude-3.7-Sonnet 73.1%) and show judge collapse and self-preference on originality. For premise creation, the findings favor structured and diversity-aware generation: MoPS modular premises, Verbalized Sampling, DivPO/CrPO-style objectives, and embedding-based dedup. None of these has been shown to improve reader enjoyment of premises, and the findings say fully automated originality judgment remains weak. So the design should be pipeline stages plus a calibrated judge, with periodic human audits as a hedge.
+
+## Evidence
+- LitBench has 2,480 debiased story comparisons. Claude-3.7-Sonnet reached 73.1% agreement with humans as the best zero-shot judge. Trained Bradley-Terry and generative reward models both reached 78%. About 40% of human judgments still disagreed with the trained reward model. [https://arxiv.org/abs/2507.00769]
+- StoryReward was trained on ~100,000 preference pairs. It scores 75% on StoryRMB (1,133 human-verified instances) vs GPT-4o's 66.3%. Existing reward models often favor LLM-written over human-written stories. The labels come from engagement metrics, and generalization beyond WritingPrompts is untested. [https://arxiv.org/html/2605.04831v1] [https://arxiv.org/abs/2605.04831]
+- StoryER reached 73.93% pairwise accuracy. Its correlation with humans varied by domain: ρ = 0.583 on WritingPrompts, 0.578 on scary stories and 0.343 on machine-generated stories. [https://arxiv.org/html/2210.08459] Hemingway-bench reports that expert judges agreed with automated tools only ~43% of the time. [https://surgehq.ai/blog/hemingway-bench-ai-writing-leaderboard]
+- Pairwise judging needs position swapping. Swapping mitigates position bias but does not eliminate it, and the bias is strongest when candidates are close in quality. [https://arxiv.org/abs/2406.07791] Pairwise comparison can also amplify verbosity and authoritative-tone bias. [https://arxiv.org/abs/2406.12319] A 2026 follow-up reports that position bias has "nearly disappeared" in recent judges. [https://arxiv.org/html/2410.02736]
+- Judge panels: calibrated weighted majority voting tracks the oracle to within 0.5 percentage points in simulation. [https://arxiv.org/abs/2609.12002] Calibration fails if the judges share the same bias. A 2025 paper argues that higher self-preference scores may partly reflect real quality, so out-of-family judges or diverse panels are recommended. [https://arxiv.org/pdf/2506.02592] Validators averaged 96% TPR but only ~25% TNR on invalid data. [https://arxiv.org/html/2510.11822]
+- LLM judges fail on creativity. In a 2026 preprint, an open-weight judge rated AI stories higher on all 11 dimensions, while humans found them indistinguishable. Ceiling effects appeared, and Kendall's τb was below 0.30 on most dimensions. [https://www.alphaxiv.org/abs/2608.23705] Best-of-n optimization against a proxy reward shows peak-then-decline (Goodhart), so optimization strength should be calibrated against a held-out human judge. [https://arxiv.org/html/2506.19248] [https://arxiv.org/html/2604.13602v1]
+- Premise generation starts from a homogeneity problem. Humans beat LLMs on novelty, surprise and semantic diversity (all p<0.0001) across 60 LLMs vs 60 humans. [https://arxiv.org/html/2411.02316v2] Different models converge on the same outputs ("Artificial Hivemind"). [https://arxiv.org/html/2510.22954v2] Si et al. found LLM research ideas rated more novel (5.64 vs 4.84), but novelty dropped more at execution, so novelty ratings do not predict final value. [https://arxiv.org/html/2409.04109v1]
+- Premise-generation levers:
+  - MoPS: modular theme/background/persona premises, with reported gains in originality, fascination and completeness. [https://arxiv.org/abs/2406.05690]
+  - Verbalized Sampling: 1.6–2.1× diversity, training-free. [https://arxiv.org/abs/2510.01171]
+  - DivPO: 74.6% more diverse outputs for a 6.4% quality drop. [https://arxiv.org/html/2501.18101v2]
+  - CrPO: state-of-the-art on NoveltyBench. [https://arxiv.org/html/2505.14442v1]
+  - NoveltyBench: measures diversity with distinct_k and finds LLMs less diverse than humans. [https://arxiv.org/html/2504.05228v1]
+  - Gap: no study links any of these to reader enjoyment of premises. [https://arxiv.org/abs/2604.25929]
+  - Gap: no automated originality metric is reliable (lexical diversity shows near-zero correlation with human originality ratings). [https://www.alphaxiv.org/abs/2608.23705]
+- Pipeline and engagement design:
+  - Staging: outline → plan → write with critique loops (StoryWriter, Agents' Room, based on 9,900 pairwise writer ratings). [https://arxiv.org/abs/2506.16445] [https://arxiv.org/html/2410.02603.pdf]
+  - Reasoning before writing: preferred 76.5% of the time vs base. [https://arxiv.org/html/2503.22828]
+  - Engagement proxy: expectation features lifted explanatory power by ~31% on 30,258 Wattpad chapters. [https://arxiv.org/html/2412.15239v2]
+  - Limit: even the best systems rank below human-written text. [https://arxiv.org/html/2410.02603.pdf]

@@ -67,7 +67,8 @@ test('signin polling: 5-second floor, stops with the panel, a hidden page, Cance
 });
 
 test('Ask Maestro: on every step and on a module that needs attention; help, then /api/chat/stream, then /?agent=', () => {
-  assert.match(page, /<div class="actions">\$\{askButton\(s\.id\)\}<\/div><div class="msg" id="step-msg">/, 'every step');
+  assert.match(page, /const ask = ar && ar\.admin \? '' : `<div class="actions">\$\{askButton\(s\.id\)\}<\/div>`;/, 'every step (the administrator choices carry their own)');
+  assert.match(page, /\$\{inner\}\$\{ask\}<div class="msg" id="step-msg">/);
   assert.match(page, /const ask = needsAttention\(m\) \? askButton\(null\) : '';/);
   const fn = page.slice(page.indexOf('async function askMaestro('), page.indexOf('async function busy('));
   const help = fn.indexOf('/help?'), chat = fn.indexOf("'/api/chat/stream'"), go = fn.indexOf("location.href = '/?agent=' + encodeURIComponent(h.agent)");
@@ -123,5 +124,6 @@ test('the hub links to it: account menu for admins, a Settings box, the phone â‹
 });
 
 test('POST /api/ask_response tells handleAskResponse whether the caller is an admin', () => {
-  assert.match(server, /handleAskResponse\(body, \{ isAdmin: access\.isAdmin\(req\.hubUser\) \}\)/);
+  // and who is answering (deep research: a card only the person it asked may answer, lib/research)
+  assert.match(server, /handleAskResponse\(body, \{ isAdmin: access\.isAdmin\(req\.hubUser\), personKey \}\)/);
 });

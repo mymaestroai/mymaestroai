@@ -57,7 +57,7 @@
   .field { display: flex; flex-direction: column; gap: 4px; margin: 10px 0; }
   .field .lbl { font-size: 13px; }
   .field .help { color: var(--text-tertiary); font-size: 12px; }
-  input[type="text"], input[type="password"], input[type="number"], textarea, select {
+  input[type="text"], input[type="password"], input[data-eye], input[type="number"], textarea, select {
     font: inherit; font-size: 13px; padding: 7px 9px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-input); color: var(--text); outline: none; width: 100%;
   }
   textarea { min-height: 80px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
@@ -74,6 +74,7 @@
   .msg.show { display: block; }
   .msg.ok { background: rgba(0, 211, 149, .1); border: 1px solid rgba(0, 211, 149, .4); }
   .msg.err { background: rgba(255, 76, 76, .1); border: 1px solid rgba(255, 76, 76, .4); }
+  .msg.info { background: rgba(120, 160, 255, .08); border: 1px solid var(--border); }
   .msg.warn { background: rgba(245, 166, 35, .1); border: 1px solid rgba(245, 166, 35, .4); }
   .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
   .dim { color: var(--text-dim); }
@@ -109,6 +110,13 @@
   .signin-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 10px 0; }
   .redirect-uri { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; padding: 4px 8px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--bg-input); display: inline-block; user-select: all; word-break: break-all; }
   a.open-link { color: var(--accent); word-break: break-all; }
+  .suggest-note { color: var(--text-tertiary); font-size: 12px; }
+  .pre-lines { margin: 8px 0 0 20px; line-height: 1.5; }
+  .auto-lines { margin: 10px 0; display: flex; flex-direction: column; gap: 4px; }
+  .auto-line { padding: 4px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+  .admin-choices { display: flex; flex-direction: column; gap: 12px; }
+  details.advanced { margin-top: 16px; border: 1px solid var(--border); border-radius: 6px; padding: 8px 12px; }
+  details.advanced summary { cursor: pointer; color: var(--text-dim); font-size: 13px; }
   /* Phone (390 px wide): one column everywhere, tap targets of at least 40 px. */
   @media (max-width: 760px) {
     main { padding: 12px; }
@@ -116,7 +124,7 @@
     .layout { grid-template-columns: 1fr; }
     .top { padding: 10px 12px; }
     .top a { display: inline-flex; align-items: center; min-height: 40px; }
-    button, input[type="text"], input[type="password"], input[type="number"], select { min-height: 40px; font-size: 16px; }
+    button, input[type="text"], input[type="password"], input[data-eye], input[type="number"], select { min-height: 40px; font-size: 16px; }
     ol.steps li { min-height: 40px; }
     label.chk, .agent-row { min-height: 40px; align-items: center; }
     .links a { display: inline-flex; align-items: center; min-height: 40px; }
@@ -136,6 +144,8 @@
   <div id="list"></div>
   <section class="panel" id="panel"></section>
 </main>
+<script src="/password-eye.js"></script>
+<script type="text/javascript">document.addEventListener('DOMContentLoaded', function () { PasswordEye.watch(); });</script>
 <script>
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const STATE_LABEL = { available: 'Not set up', setup: 'Setup in progress', ready: 'On', off: 'Off', attention: 'Needs attention', broken: 'Broken' };
@@ -211,9 +221,11 @@ async function loadList() {
 async function openModule(id, stepId) {
   const { module } = await api('GET', `/api/modules/${id}`);
   current = module;
+  preRes = {}; suggestions = {}; autoRes = {};
   const firstOpen = module.steps.find(s => !s.done);
   selected = stepId || (module.finishedAt ? null : (firstOpen ? firstOpen.id : null));
   render();
+  loadSuggestions(module);   // a finished setup is never asked: nothing is detected on load
   history.replaceState(null, '', `#${id}`);
   document.getElementById('panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
@@ -234,6 +246,8 @@ function render() {
     </div>`;
   if (!selected) loadDesktopBox();
   if (!selected) loadApprovals();
+  const open = selected ? m.steps.find(s => s.id === selected) : null;
+  if (open && open.type === 'explain' && open.precheck && !preRes[open.id]) loadPrecheck(open.id);   // "Before you start" runs when the step opens
 }
 
 // ── Agent approvals (remote-computers only, admins only): how often agents must ask before controlling each computer ──
@@ -379,13 +393,31 @@ async function deskOpen(btn) {
     } catch (e) { setMsg('err', e.message); loadDesktopBox(); }
   });
 }
-function selectStep(id) { selected = id; render(); }
-function closePanel() { stopSignin(); permPending = null; document.getElementById('panel').classList.remove('open'); current = null; history.replaceState(null, '', '#'); }
+function selectStep(id) { autoPollStop(); selected = id; if (id) delete preRes[id]; render(); if (id && autoRes[id] && autoRes[id].waiting) autoPollArm(id); }
+function closePanel() { stopSignin(); permPending = null; if (typeof PasswordEye !== 'undefined') PasswordEye.hideAll(document.getElementById('panel')); document.getElementById('panel').classList.remove('open'); current = null; history.replaceState(null, '', '#'); }
 
 function setMsg(kind, text) { const el = document.getElementById('step-msg'); if (!el) return; el.className = `msg show ${kind}`; el.textContent = text; }
 
+const emptyValue = (v) => v === undefined || v === null || v === '' || (Array.isArray(v) && v.length === 0);
+// A suggestion read from this computer (admins only, never for a finished setup): used only for a text or number field whose saved value is empty.
+function suggestionFor(st, value) {
+  const s = suggestions && suggestions[st.key];
+  if (!s || !st.suggest || !emptyValue(value) || (st.type !== 'string' && st.type !== 'number')) return null;
+  return s && Array.isArray(s.candidates) && s.candidates.length ? s : null;
+}
+function suggestedField(st, s) {
+  const id = `set-${st.key}`;
+  const help = st.help ? `<span class="help">${esc(st.help)}</span>` : '';
+  const note = '<span class="help suggest-note">Filled in from this computer</span>';
+  const control = s.candidates.length > 1
+    ? `<select id="${id}">${s.candidates.map((c, i) => `<option value="${esc(c)}" ${i === 0 ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select>`
+    : `<input type="${st.type === 'number' ? 'number' : 'text'}" id="${id}" value="${esc(s.value)}">`;
+  return `<div class="field"><span class="lbl">${esc(st.label)}</span>${control}${note}${help}</div>`;
+}
 function settingField(st, value) {
   const id = `set-${st.key}`;
+  const sug = suggestionFor(st, value);
+  if (sug) return suggestedField(st, sug);
   const help = st.help ? `<span class="help">${esc(st.help)}</span>` : '';
   if (st.type === 'boolean') return `<label class="chk"><input type="checkbox" id="${id}" ${value ? 'checked' : ''}><span><span class="lbl">${esc(st.label)}</span><br>${help}</span></label>`;
   if (st.type === 'choice' && st.multiple) return `<div class="field"><span class="lbl">${esc(st.label)}</span>${st.options.map(o => { const v = typeof o === 'object' ? o.value : o; return `<label class="chk" style="margin:2px 0"><input type="checkbox" data-multi="${esc(st.key)}" value="${esc(v)}" ${(value || []).includes(v) ? 'checked' : ''}> ${esc(typeof o === 'object' ? o.label : o)}</label>`; }).join('')}${help}</div>`;
@@ -417,13 +449,188 @@ function readSettings(keys) {
   return out;
 }
 
+// ── Facts about the computer Maestro runs on (admins only): the "Before you start" check, suggested settings, the one-button setup ──
+let preRes = {};        // step id -> the precheck's answer { ok, summary, lines, blocker } | { loading: true }
+let suggestions = {};   // setting key -> { value, candidates, source } for the open module (empty for a finished setup)
+let autoRes = {};       // step id -> { running, lines, error, check, choose, admin, choices, done }
+const advancedSettings = (m) => visibleSettings(m).filter(st => st.advanced === true);
+
+function precheckHtml(s) {
+  const r = preRes[s.id];
+  if (!r || r.loading) return '<div class="dim" id="pre-area">Checking this computer…</div>';
+  const lines = (r.lines || []).map(l => `<li>${esc(l)}</li>`).join('');
+  const again = `<div class="actions"><button onclick="checkAgain('${esc(s.id)}', this)">Check again</button></div>`;
+  if (r.ok) return `<div id="pre-area"><h4 style="margin:0 0 6px">Before you start</h4><div class="msg show ok"><span class="tick">✓</span> ${esc(r.summary || 'Ready')}</div>${lines ? `<ul class="pre-lines">${lines}</ul>` : ''}${again}</div>`;
+  // the blocker's code name (tailscale-missing, ...) is for tests and the lead, never shown to the person
+  return `<div id="pre-area"><h4 style="margin:0 0 6px">Before you start</h4><div class="msg show err">${esc(r.summary || 'Not ready')}</div>${lines ? `<ul class="pre-lines">${lines}</ul>` : ''}${again}</div>`;
+}
+async function loadPrecheck(stepId, fresh) {
+  const m = current; if (!m) return;
+  preRes[stepId] = { loading: true };
+  let r;
+  // "Check again" asks the hub to look again (?fresh=1) instead of using what it kept for a few seconds.
+  try { const s = (m.steps || []).find(x => x.id === stepId); r = await api('GET', `/api/modules/${m.id}/precheck/${encodeURIComponent(s.precheck)}${fresh === true ? '?fresh=1' : ''}`); }
+  catch (e) { r = { ok: false, summary: e.message, lines: [], blocker: null }; }
+  if (current !== m) return;
+  preRes[stepId] = r;
+  if (selected === stepId) { const a = document.getElementById('step-area'); if (a) a.innerHTML = stepHtml(m.steps.find(x => x.id === stepId)); }
+}
+function checkAgain(stepId, btn) { if (btn) btn.disabled = true; loadPrecheck(stepId, true); }
+// A field the person has typed in (or changed) since it was drawn is marked, and is never filled in or replaced afterwards.
+const markTouched = (e) => { const t = e && e.target; if (t && typeof t.id === 'string' && t.id.startsWith('set-')) { if (!t.dataset) t.dataset = {}; t.dataset.touched = '1'; } };
+document.addEventListener('input', markTouched);
+document.addEventListener('change', markTouched);
+// Suggestions are put into the fields already on screen, and only into one that is still empty and untouched. The form is never drawn again,
+// so nothing already typed can be lost.
+function fillSuggestions(m) {
+  for (const st of m.manifest.settings || []) {
+    const s = suggestions[st.key];
+    if (!s || !st.suggest || (st.type !== 'string' && st.type !== 'number') || !emptyValue(m.settings[st.key]) || !Array.isArray(s.candidates) || !s.candidates.length) continue;
+    const el = document.getElementById(`set-${st.key}`);
+    if (!el || (el.dataset && el.dataset.touched) || !emptyValue(el.value)) continue;
+    if (typeof el.insertAdjacentHTML === 'function' && !(el.parentNode && el.parentNode.querySelector && el.parentNode.querySelector('.suggest-note'))) el.insertAdjacentHTML('afterend', '<span class="help suggest-note">Filled in from this computer</span>');
+    if (s.candidates.length > 1 && el.tagName === 'INPUT') el.outerHTML = `<select id="set-${esc(st.key)}">${s.candidates.map((c, i) => `<option value="${esc(c)}" ${i === 0 ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select>`;
+    else el.value = s.value;
+  }
+}
+async function loadSuggestions(m) {
+  suggestions = {};
+  if (!m || m.finishedAt || !(m.manifest.settings || []).some(st => st.suggest)) return;
+  try { const r = await api('GET', `/api/modules/${m.id}/suggestions`); if (current === m && r.suggestions && Object.keys(r.suggestions).length) { suggestions = r.suggestions; fillSuggestions(m); } }
+  catch { /* the fields stay empty */ }
+}
+
+function autoAreaHtml(s) {
+  const a = autoRes[s.id] || {};
+  let h = '';
+  if (a.running) h += '<p class="dim" id="auto-working">Working: this can take a few minutes the first time.</p>';
+  if (a.lines && a.lines.length) h += `<div class="auto-lines">${a.lines.map(l => `<div class="auto-line">${esc(l)}</div>`).join('')}</div>`;
+  if (a.choose) {
+    const c = a.choose;
+    h += `<div class="field"><span class="lbl">${esc(c.label)}</span>${(c.options || []).map((o, i) => `<label class="chk" style="margin:2px 0"><input type="radio" name="auto-choice" value="${esc(o.value)}" ${i === 0 ? 'checked' : ''}> ${esc(o.label)}</label>`).join('')}</div><div class="actions"><button class="primary" onclick="autoContinue('${esc(s.id)}', this)">Continue</button></div>`;
+  }
+  if (a.admin) {
+    const ad = a.admin;
+    const compName = ad.computer ? ` (${esc(ad.computer)})` : '';
+    h += `<div class="msg show info" id="admin-info">${esc((a.check && a.check.summary) || a.error || 'The server did not start.')}</div><p><b>The server needs an administrator on the computer your Maestro runs on${compName} to finish. Pick one:</b></p>
+      <div class="admin-choices"><div class="admin-choice">${askButton(s.id)}</div>
+      <div class="admin-choice"><div class="dim">Copy the command and run it as an administrator on the computer your Maestro runs on${compName}:</div><pre class="redirect-uri mono" id="admin-cmd" style="white-space:pre-wrap">${esc(ad.command)}</pre><button onclick="copyAdminCmd(this)">Copy the command</button></div>
+      ${ad.label ? `<div class="admin-choice"><button onclick="autoAdmin('${esc(s.id)}', this)">${esc(ad.label)}</button>${ad.warning ? `<div class="dim" style="font-size:12px">${esc(ad.warning)}</div>` : ''}</div>` : ''}</div>`;
+  }
+  if (a.waiting) {
+    // still getting ready: a plain box, no red; the page looks again by itself
+    h += `<div class="msg show info" id="auto-waiting">${esc((a.check && a.check.summary) || 'It is getting ready.')}</div>`;
+  } else if (a.tryAgain) {
+    h += `<div class="msg show info" id="auto-tryagain">${esc((a.check && a.check.summary) || a.error || '')}</div><div class="actions"><button class="primary" id="btn-tryagain" onclick="runAutoStep('${esc(s.id)}', { tryAgain: true }, this)">Try again</button></div>`;
+  }
+  const nextOpen = () => { const idx = current.steps.findIndex(x => x.id === s.id); return current.steps.slice(idx + 1).find(x => !x.done); };
+  const nextBtn = (next) => next ? `<div class="actions"><button class="primary" onclick="selectStep('${esc(next.id)}')">Next: ${esc(next.title)}</button></div>` : '';
+  if (a.done) {
+    const sum = a.check && a.check.summary ? ' ' + esc(a.check.summary) : '';
+    h += `<div class="msg show ok">Done.${sum}</div>${nextBtn(nextOpen())}`;
+  } else if (!autoRes[s.id] && s.done) {
+    // nothing pressed in this page visit (a reload): say it was done, and when
+    h += `<div class="msg show ok" id="auto-done">Done${s.doneAt ? ' on ' + esc(fmtStamp(s.doneAt)) : ''}.</div>${nextBtn(nextOpen())}`;
+  } else if (a.error && !a.choose && !a.admin && !a.tryAgain) {
+    // the progress lines are already listed above; the error is shown once, with its summary
+    h += `<div class="msg show err">${esc((a.check && a.check.summary) || a.error)}</div>`;
+  }
+  return `<div id="auto-area">${h}</div>`;
+}
+function autoPaint(stepId) {
+  if (!current || selected !== stepId) return;
+  const el = document.getElementById('auto-area'); if (!el) return;
+  const s = current.steps.find(x => x.id === stepId);
+  const tmp = document.createElement('div'); tmp.innerHTML = autoAreaHtml(s);
+  el.innerHTML = tmp.firstChild ? tmp.firstChild.innerHTML : '';
+}
+// While a step says "getting ready" the page asks again every 10 seconds (with { poll: true }: one check, no wait on the server), only while that step is on screen.
+let AUTO_POLL_MS = 10000;
+let autoPollTimer = null, autoPollBusy = false;
+function autoPollStop() { if (autoPollTimer) { clearTimeout(autoPollTimer); autoPollTimer = null; } }
+function autoPollArm(stepId) {
+  autoPollStop();
+  const m = current;
+  autoPollTimer = setTimeout(() => { autoPollTimer = null; autoPoll(stepId, m); }, AUTO_POLL_MS);
+}
+async function autoPoll(stepId, m) {
+  const a = autoRes[stepId];
+  if (current !== m || selected !== stepId || !a || !a.waiting || a.running || autoPollBusy) return;   // the step was left: no more asking
+  autoPollBusy = true;
+  try { await autoStepCall(stepId, a.choices || {}, {}, true, m); } finally { autoPollBusy = false; }
+}
+async function autoStepCall(stepId, choices, extra, poll, m) {
+  const input = { ...(Object.keys(choices).length ? { choices } : {}), ...(extra && extra.adminChoice ? { adminChoice: true } : {}), ...(extra && extra.tryAgain === true ? { tryAgain: true } : {}), ...(poll ? { poll: true } : {}) };
+  try {
+    const r = await api('POST', `/api/modules/${m.id}/step`, { step: stepId, input });
+    if (current !== m) return;
+    current = r.module;
+    if (r.result && r.result.waiting === true) {
+      autoRes[stepId] = { waiting: true, choices, lines: r.result.lines || [], check: r.result.check || null };
+      if (poll) autoPaint(stepId); else { render(); }
+      if (selected === stepId) autoPollArm(stepId);
+      return;
+    }
+    autoRes[stepId] = { done: true, choices, lines: (r.result && r.result.lines) || [], check: (r.result && r.result.check) || null };
+    render(); loadList();
+  } catch (e) {
+    if (current !== m) return;
+    const d = e.data || {};
+    // A look that could not be answered at all (no check in the answer) is not an error while it is getting ready: look again later.
+    if (poll && !d.check && !d.choose && !d.admin && autoRes[stepId] && autoRes[stepId].waiting) { if (selected === stepId) autoPollArm(stepId); return; }
+    // the lines the setup got through, then the error once, in the auto area (the page's step message is not filled; Ask Maestro quotes the auto area)
+    autoRes[stepId] = { error: e.message, check: d.check || null, choose: d.choose || null, admin: d.admin || null, tryAgain: !!(d.check && d.check.tryAgain === true), choices, lines: (d.check && d.check.lines) || [] };
+    if (selected === stepId) {
+      const a = document.getElementById('step-area'); if (a) a.innerHTML = stepHtml(current.steps.find(x => x.id === stepId));
+    }
+  }
+}
+async function runAutoStep(stepId, extra, btn) {
+  const m = current; const prev = autoRes[stepId] || {};
+  const choices = { ...(prev.choices || {}), ...((extra && extra.choices) || {}) };
+  autoPollStop();
+  autoRes[stepId] = { running: true, choices, lines: [] };
+  autoPaint(stepId);
+  if (btn) btn.disabled = true;
+  try { await autoStepCall(stepId, choices, extra, false, m); }
+  finally { const b = document.getElementById('btn-auto'); if (b) b.disabled = false; }
+}
+function autoContinue(stepId, btn) {
+  const picked = document.querySelector('input[name="auto-choice"]:checked');
+  const a = autoRes[stepId] || {};
+  if (!picked || !a.choose) return;
+  runAutoStep(stepId, { choices: { [a.choose.key]: picked.value } }, btn);
+}
+function autoAdmin(stepId, btn) { runAutoStep(stepId, { adminChoice: true }, btn); }
+async function copyAdminCmd(btn) {
+  const t = (document.getElementById('admin-cmd') || {}).textContent || '';
+  try { await navigator.clipboard.writeText(t); if (btn) btn.textContent = 'Copied'; } catch { if (btn) btn.textContent = 'Select the command and copy it'; }
+}
+// The collapsed fold of settings marked advanced. `all` = the overview, where the one Save button below saves every field on the page.
+function advancedHtml(m, all) {
+  const adv = advancedSettings(m);
+  if (!adv.length) return '';
+  return `<details class="advanced" id="advanced"><summary>Advanced settings</summary>${adv.map(st => settingField(st, m.settings[st.key])).join('')}<div class="actions"><button onclick="${all ? 'saveAll(this)' : 'saveAdvanced(this)'}">Save advanced settings</button></div></details>`;
+}
+async function saveAdvanced(btn) {
+  const keys = advancedSettings(current).map(st => st.key);
+  await busy(btn, async () => {
+    try { current = (await api('POST', `/api/modules/${current.id}/settings`, { values: readSettings(keys) })).module; setMsg('ok', 'Saved. The new settings apply the next time the server starts.'); }
+    catch (e) { setMsg('err', e.message); }
+  });
+}
+
 function stepHtml(s) {
   const m = current;
   const links = (s.links || []).map(l => `<a href="${esc(l.url)}" target="_blank" rel="noopener noreferrer">${esc(l.label)} ↗</a>`).join('');
   let inner = '';
   if (s.type === 'explain' || s.type === 'outside') {
-    inner = (s.confirm ? `<label class="chk"><input type="checkbox" id="confirm"><span>${esc(s.confirm)}</span></label>` : '') +
-      `<div class="actions"><button class="primary" onclick="doStep('${esc(s.id)}', { confirmed: ${s.confirm ? "document.getElementById('confirm').checked" : 'true'} })">Continue</button></div>`;
+    const gate = s.precheck ? !(preRes[s.id] && preRes[s.id].ok === true) : false;   // the tick box and Next wait for the check
+    inner = (s.precheck ? precheckHtml(s) : '') +
+      (s.confirm ? `<label class="chk"><input type="checkbox" id="confirm" ${gate ? 'disabled' : ''}><span>${esc(s.confirm)}</span></label>` : '') +
+      `<div class="actions"><button class="primary" id="btn-next" ${gate ? 'disabled' : ''} onclick="doStep('${esc(s.id)}', { confirmed: ${s.confirm ? "document.getElementById('confirm').checked" : 'true'} })">Continue</button></div>`;
+  } else if (s.type === 'auto') {
+    inner = `<div class="actions"><button class="primary" id="btn-auto" ${(autoRes[s.id] || {}).running ? 'disabled' : ''} onclick="runAutoStep('${esc(s.id)}', {}, this)">${esc(s.title)}</button></div>${autoAreaHtml(s)}${advancedHtml(m, false)}`;
   } else if (s.type === 'install') {
     inner = `<p class="dim">${m.installed ? 'Installed.' : 'Not installed yet.'}</p><div class="actions"><button class="primary" id="btn-go" onclick="doStep('${esc(s.id)}', {}, this)">${m.installed ? 'Check the install' : 'Install'}</button></div>`;
   } else if (s.type === 'secrets') {
@@ -433,7 +640,7 @@ function stepHtml(s) {
       `<div class="actions"><button class="primary" onclick="saveSecrets('${esc(s.id)}', this)">Save</button></div>`;
   } else if (s.type === 'check') {
     const lc = m.lastCheck;
-    inner = (lc ? `<div class="msg show ${lc.ok ? (lc.warnings.length ? 'warn' : 'ok') : 'err'}">${esc(lc.summary)}${lc.lines.length ? '\n' + esc(lc.lines.join('\n')) : ''}${lc.warnings.length ? '\n⚠ ' + esc(lc.warnings.join('\n⚠ ')) : ''}\n<span class="dim">${esc(lc.at)}</span></div>` : '') +
+    inner = (lc ? `<div class="msg show ${lc.ok ? (lc.warnings.length ? 'warn' : 'ok') : 'err'}">${esc(lc.summary)}${lc.lines.length ? '\n' + esc(lc.lines.join('\n')) : ''}${lc.warnings.length ? '\n⚠ ' + esc(lc.warnings.join('\n⚠ ')) : ''}\n<span class="dim">Checked ${esc(fmtStamp(lc.at))}</span></div>` : '') +
       `<div id="ack-area"></div><div class="actions"><button class="primary" onclick="runCheck('${esc(s.id)}', this)">Run the check</button></div>`;
   } else if (s.type === 'settings') {
     inner = visibleSettings(m).filter(st => (s.fields || []).includes(st.key)).map(st => settingField(st, m.settings[st.key])).join('') +
@@ -456,7 +663,10 @@ function stepHtml(s) {
     inner = open.length ? `<div class="msg warn show">Still to do: ${esc(open.map(x => x.title).join('; '))}</div>` :
       `<div class="actions"><button class="primary" onclick="doStep('${esc(s.id)}', {}, this)">${m.finishedAt ? 'Done' : 'Switch it on'}</button></div>`;
   }
-  return `<div class="step"><h3>${esc(s.title)}</h3><div class="body">${md(s.body)}</div><div class="links">${links}</div>${inner}<div class="actions">${askButton(s.id)}</div><div class="msg" id="step-msg"></div></div>`;
+  // the administrator choices carry their own Ask Maestro: one on the screen
+  const ar = s.type === 'auto' ? autoRes[s.id] : null;
+  const ask = ar && ar.admin ? '' : `<div class="actions">${askButton(s.id)}</div>`;
+  return `<div class="step"><h3>${esc(s.title)}</h3><div class="body">${md(s.body)}</div><div class="links">${links}</div>${inner}${ask}<div class="msg" id="step-msg"></div></div>`;
 }
 
 // The lead agents can always use every connector: shown ticked and locked, ahead of the agents you choose.
@@ -529,7 +739,7 @@ function permsNeedWarning(permissions) {
 function stepUpFieldsHtml(cls, totp) {
   const code = totp === false ? ''
     : `<label class="su-lbl">${totp === true ? '' : 'two-factor code, if you use one'}<input type="text" class="${cls}-code su-code" inputmode="numeric" autocomplete="one-time-code" placeholder="123 456"></label>`;
-  return `<div class="su-fields"><label class="su-lbl">Your account password${totp === true ? ' and two-factor code' : ''}<input type="password" class="${cls}-pass su-pass" autocomplete="current-password" placeholder="account password"></label>${code}</div>`;
+  return `<div class="su-fields"><label class="su-lbl">Your account password${totp === true ? ' and two-factor code' : ''}<input type="password" data-eye class="${cls}-pass su-pass" autocomplete="current-password" placeholder="account password"></label>${code}</div>`;
 }
 let meTotp = null, meTotpTried = false;   // whether the signed-in account has two-factor (GET /api/me, read once); null = not known
 function loadMeTotp() {
@@ -604,6 +814,7 @@ function askButton(stepId) {
   return `<button onclick="askMaestro(${stepId ? `'${esc(stepId)}'` : 'null'}, this)">Ask Maestro</button>`;
 }
 
+const RUN_MODE_LINE = { service: 'The server is running as its own locked-down service.', hub: "The server is running under your Maestro's own account." };
 function overviewHtml() {
   const m = current;
   const ask = needsAttention(m) ? askButton(null) : '';
@@ -617,6 +828,7 @@ function overviewHtml() {
     <div>${leadRows(m)}${others.map(n => { const label = `<label class="agent-row"><input type="checkbox" checked disabled> ${esc(n)}</label>`; return levelsConfig(m) ? permRow(m, label, n, false) : label; }).join('')}${(leadsLocked(m) && (m.leads || []).length) || others.length ? '' : '<span class="dim">none</span>'}</div>
     ${levelsConfig(m) ? `<div id="perm-warning"></div><div class="actions"><button class="primary" onclick="savePermissions(this)">Save permissions</button></div>` : ''}
     <div><b>Status:</b> ${esc(STATE_LABEL[m.state] || m.state)}${m.note ? ` <span class="dim">(${esc(m.note)})</span>` : ''}</div>
+    ${RUN_MODE_LINE[m.runMode] ? `<div class="run-mode">${esc(RUN_MODE_LINE[m.runMode])}</div>` : ''}
     ${checkLine(lc)}
     <div class="actions">
       ${m.enabled ? `<button onclick="toggle(false, this)">Switch off</button>` : `<button class="primary" onclick="toggle(true, this)">Switch on</button>`}
@@ -626,7 +838,8 @@ function overviewHtml() {
     </div>
     ${m.id === 'remote-computers' && m.enabled ? '<div class="desk-box" id="desk-box"><h3 style="font-size:14px">Computers</h3><div id="desk-list" class="dim">Loading…</div></div><div class="desk-box" id="appr-box" hidden><h3 style="font-size:14px">Agent approvals</h3><div id="appr-list" class="dim">Loading…</div></div>' : ''}
     <h3 style="font-size:14px;margin-top:8px">Limits and settings</h3>
-    ${visibleSettings(m).map(st => settingField(st, m.settings[st.key])).join('')}
+    ${visibleSettings(m).filter(st => st.advanced !== true).map(st => settingField(st, m.settings[st.key])).join('')}
+    ${advancedHtml(m, true)}
     <div class="actions"><button class="primary" onclick="saveAll(this)">Save settings</button></div>
     ${m.manifest.docs && m.manifest.docs.revoke ? `<p class="dim" style="margin-top:10px">${esc(m.manifest.docs.revoke)}</p>` : ''}
     <div class="msg" id="step-msg"></div><div id="audit"></div></div>`;
@@ -717,7 +930,9 @@ async function signinCopy(btn) {
 // ── Ask Maestro: get a ready-made question for the lead agent, send it as a chat message, and go to that chat ──
 async function askMaestro(stepId, btn) {
   const msgEl = document.getElementById('step-msg');
-  const shown = msgEl && msgEl.classList.contains('err') ? msgEl.textContent : '';
+  let shown = msgEl && msgEl.classList.contains('err') ? msgEl.textContent : '';
+  const ar = stepId ? autoRes[stepId] : null;
+  if (!shown && ar && ar.error && !ar.done) shown = [(ar.check && ar.check.summary) || ar.error, ...(ar.lines || [])].join('\n');   // the auto step shows its error in its own area
   await busy(btn, async () => {
     try {
       const q = new URLSearchParams();

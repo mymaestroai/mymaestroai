@@ -1,3 +1,9 @@
+    // Settings-only page (/?settings-only=1): the Settings dialog alone, for the phone app's Settings sheet (settingsOnlyStart).
+    // The parameter only hides the rest of the page and starts nothing else; it grants nothing.
+    const SETTINGS_ONLY = settingsOnlyRequested(location.search);
+    globalThis.mmSettingsOnly = SETTINGS_ONLY;   // read by the functions that would start something (absent when they run on their own: false)
+    if (SETTINGS_ONLY) document.documentElement.classList.add('mm-settings-only');   // the rest of the page never shows
+
     // ── Session expiry: any same-origin API 401 means the login session is gone ──
     // The password-check endpoints answer 401 for a wrong password, so they keep their own error handling.
     (function installSessionGuard() {
@@ -16,7 +22,9 @@
             }
             if (u.origin === location.origin && u.pathname.startsWith('/api/') && !keep) {
               redirecting = true;
-              location.href = '/login?next=' + encodeURIComponent(location.pathname + location.search);
+              // the phone's Settings sheet: the frame's one history entry is replaced, so Back still closes the sheet
+              if (SETTINGS_ONLY) location.replace('/login?next=' + encodeURIComponent(location.pathname + location.search));
+              else location.href = '/login?next=' + encodeURIComponent(location.pathname + location.search);
             }
           } catch (e) { /* unparsable URL: leave the response alone */ }
         }
@@ -465,6 +473,7 @@
           '<div class="sm-set"><span class="sm-lab">Appearance</span><div class="sm-seg"><button type="button" data-theme="light">Light</button><button type="button" data-theme="dark">Dark</button><button type="button" data-theme="auto">Match device</button></div><div class="sm-follow" hidden></div></div>' +
           '<div class="sm-set"><span class="sm-lab">Interface style</span><div class="sm-style"></div></div>' +
           '<div class="sm-set"><span class="sm-lab">Name</span><div class="sm-name"></div></div>' +
+          (me.isAdmin === false ? '' : '<div class="sm-set"><button type="button" class="sm-plain" data-act="settings"><div><b>All settings</b><span>Provider keys, web search, voice, backups and the rest</span></div><span aria-hidden="true">›</span></button></div>') +   // admins only, as the gear in Advanced
           '<div class="sm-set"><button type="button" class="sm-plain" data-act="advanced"><div><b>Switch to Advanced</b><span>All tools, agents\' work and settings</span></div><span aria-hidden="true">›</span></button></div>' +
           '<div class="sm-set"><button type="button" class="sm-plain sm-out" data-act="signout">Sign out</button></div>' +
         '</div>';
@@ -497,7 +506,8 @@
         }
         const a = e.target.closest('[data-act]');
         if (!a) return;
-        if (a.dataset.act === 'advanced') simpleSwitchMode('advanced');
+        if (a.dataset.act === 'settings') { simpleCloseSettings(); openSettings(); }   // the full Settings dialog, as in Advanced
+        else if (a.dataset.act === 'advanced') simpleSwitchMode('advanced');
         else if (a.dataset.act === 'signout') signOut();
       });
       overlay.addEventListener('keydown', (e) => { if (e.key === 'Escape') simpleCloseSettings(); });
@@ -637,7 +647,7 @@
       if (!me || me.isAdmin) return;
       document.body.classList.add('member-view');
       // Every item of the ⋯ menu is an admin control, so the whole menu goes (more-wrap), not just its rows.
-      for (const id of ['more-modules-item', 'more-remote-item', 'comms-btn', 'wallet-btn', 'dream-btn', 'git-sync-btn', 'restart-hub-btn', 'more-advanced', 'advanced-toggle',
+      for (const id of ['more-modules-item', 'more-remote-item', 'wallet-btn', 'dream-btn', 'git-sync-btn', 'restart-hub-btn',
                         'settings-btn', 'schedule-btn', 'credit-meter', 'spend-today', 'plan-warn', 'hub-halt-bar', 'halt-btn', 'more-wrap', 'update-chip']) {
         const el = document.getElementById(id);
         if (!el) continue;
@@ -738,9 +748,9 @@
           <div id="sec-2fa" class="sec-section"></div>
           <div class="sec-section">
             <div class="sec-title">Change password</div>
-            <input type="password" id="sec-pw-current" placeholder="Current password" autocomplete="current-password">
-            <input type="password" id="sec-pw-new" placeholder="New password (12+ characters)" autocomplete="new-password">
-            <input type="password" id="sec-pw-new2" placeholder="New password again" autocomplete="new-password">
+            <input type="password" data-eye id="sec-pw-current" placeholder="Current password" autocomplete="current-password">
+            <input type="password" data-eye id="sec-pw-new" placeholder="New password (12+ characters)" autocomplete="new-password">
+            <input type="password" data-eye id="sec-pw-new2" placeholder="New password again" autocomplete="new-password">
             <div class="sec-actions"><button class="sec-btn" onclick="changePassword()">Change password</button></div>
             <div class="sec-msg" id="sec-pw-msg"></div>
           </div>
@@ -836,7 +846,7 @@
         box.innerHTML = `
           <div class="sec-title">Two-factor authentication <span class="sec-badge on">on</span></div>
           ${adminLocked ? `<div class="sec-hint">Two-factor sign-in is on. Admins can't remove it while "Require two-factor sign-in for admins" is on in Settings, 🔐 Security.</div>` : `
-          <input type="password" id="sec-2fa-password" placeholder="Password (to turn it off)" autocomplete="current-password">
+          <input type="password" data-eye id="sec-2fa-password" placeholder="Password (to turn it off)" autocomplete="current-password">
           ${adminFree ? '<input type="text" id="sec-2fa-disable-code" inputmode="numeric" autocomplete="one-time-code" placeholder="123456 or a recovery code">' : ''}
           <div class="sec-actions"><button class="sec-btn danger" onclick="disableTwoFactor()">${adminFree ? 'Remove two-factor' : 'Disable 2FA'}</button></div>`}
           <div class="sec-msg" id="sec-2fa-msg"></div>`;
@@ -1024,10 +1034,10 @@
       const el = document.getElementById('bk-body'); const s = bkState; if (!el || !s) return;
       if (!s.key.configured) {
         el.innerHTML = `<div class="bk-strip bk-warn"><span class="bk-strip-text">Backups are off. Choose a backup password to turn them on.</span></div>
-          <div class="st-row"><label>Backup password</label><input type="password" id="bk-pw1" autocomplete="new-password" placeholder="at least 12 characters"></div>
-          <div class="st-row"><label>Again</label><input type="password" id="bk-pw2" autocomplete="new-password"></div>
+          <div class="st-row"><label>Backup password</label><input type="password" data-eye id="bk-pw1" autocomplete="new-password" placeholder="at least 12 characters"></div>
+          <div class="st-row"><label>Again</label><input type="password" data-eye id="bk-pw2" autocomplete="new-password"></div>
           <div class="st-hint">A few random words work well. It isn't stored anywhere: if you forget it, your backups can't be opened.</div>
-          <div class="st-row"><label>Account password</label><input type="password" id="bk-acct" autocomplete="current-password" placeholder="your sign-in password">${window.hubMe && window.hubMe.user && window.hubMe.user.totpEnabled ? '<input type="text" id="bk-code" inputmode="numeric" autocomplete="one-time-code" placeholder="two-factor code" style="flex:0 0 130px">' : ''}</div>
+          <div class="st-row"><label>Account password</label><input type="password" data-eye id="bk-acct" autocomplete="current-password" placeholder="your sign-in password">${window.hubMe && window.hubMe.user && window.hubMe.user.totpEnabled ? '<input type="text" id="bk-code" inputmode="numeric" autocomplete="one-time-code" placeholder="two-factor code" style="flex:0 0 130px">' : ''}</div>
           <div class="st-row"><label></label><button class="st-test-btn bk-primary" onclick="setupBackups(this)">Turn on backups</button><span id="bk-msg" class="bk-msg"></span></div>`;
         stSum('backups', 'last', 'Backups off');
         return;
@@ -1131,7 +1141,7 @@
     // The backup password and key (keys.js): change the password (same key), "it may have leaked" (a new key, then our
     // backups re-encrypted or deleted), see the recovery key again. Each asks for the account password again.
     const bkProblems = (r) => [...(r.failed || []).map(f => `<div class="bk-info">Not changed: ${esc(f.file)} (${esc(f.error)})</div>`), ...(r.unreachable || []).map(d => `<div class="bk-info">Couldn't reach ${esc(d)}: backups there still use the old lock.</div>`)].join('');
-    const bkAccountRow = (id) => { const totp = !!(window.hubMe && window.hubMe.user && window.hubMe.user.totpEnabled); return `<label class="bk-label">Your account password${totp ? ' and two-factor code' : ''}</label><div class="bk-two"><input type="password" id="${id}-acct" autocomplete="current-password" placeholder="account password">${totp ? `<input type="text" id="${id}-code" inputmode="numeric" autocomplete="one-time-code" placeholder="123 456">` : ''}</div>`; };
+    const bkAccountRow = (id) => { const totp = !!(window.hubMe && window.hubMe.user && window.hubMe.user.totpEnabled); return `<label class="bk-label">Your account password${totp ? ' and two-factor code' : ''}</label><div class="bk-two"><input type="password" data-eye id="${id}-acct" autocomplete="current-password" placeholder="account password">${totp ? `<input type="text" id="${id}-code" inputmode="numeric" autocomplete="one-time-code" placeholder="123 456">` : ''}</div>`; };
     function bkSecretSwitch(o, prefix, labels) {
       const sw = o.querySelector(`#${prefix}-switch`);
       sw.onclick = (e) => { e.preventDefault(); const k = o.querySelector(`#${prefix}-keybox`), p = o.querySelector(`#${prefix}-oldbox`); const toKey = k.hidden; k.hidden = !toKey; p.hidden = toKey; sw.textContent = toKey ? labels[1] : labels[0]; (toKey ? k : p).querySelector('input').focus(); };
@@ -1140,11 +1150,11 @@
       const leaked = mode === 'leaked';
       const o = bkOverlay('bk-pw-overlay', `<div id="bk-pw-body"><h3>${leaked ? 'My backup password may have leaked' : 'Change the backup password'}</h3>
         <p class="bk-p">${leaked ? 'This makes a new backup key, with a new password and a new recovery key. Then every backup on this computer and in your backup folders is re-encrypted with the new key, or deleted if you choose. Copies you keep anywhere else still open with the old password and the old recovery key: delete them.' : 'The backup key stays the same, so your recovery key keeps working. Backups on this computer and in your backup folders get the new password. Copies you keep anywhere else still open with the old one, and whoever has the old password and an old copy can unlock the key from it: if the password may have leaked, use “It may have leaked…” instead.'}</p>
-        <div id="bk-pw-oldbox"${preferRecovery ? ' hidden' : ''}><label class="bk-label">Current backup password</label><input type="password" id="bk-pw-old" autocomplete="off"></div>
+        <div id="bk-pw-oldbox"${preferRecovery ? ' hidden' : ''}><label class="bk-label">Current backup password</label><input type="password" data-eye id="bk-pw-old" autocomplete="off"></div>
         <div id="bk-pw-keybox"${preferRecovery ? '' : ' hidden'}><label class="bk-label">Recovery key</label><input type="text" id="bk-pw-key" autocomplete="off" spellcheck="false" placeholder="AGE-SECRET-KEY-1…"></div>
         <a href="#" class="bk-link" id="bk-pw-switch">${preferRecovery ? 'Use the current password instead' : 'Use the recovery key instead'}</a>
-        <label class="bk-label">New backup password</label><input type="password" id="bk-pw-new1" autocomplete="new-password" placeholder="at least 12 characters">
-        <label class="bk-label">Again</label><input type="password" id="bk-pw-new2" autocomplete="new-password">
+        <label class="bk-label">New backup password</label><input type="password" data-eye id="bk-pw-new1" autocomplete="new-password" placeholder="at least 12 characters">
+        <label class="bk-label">Again</label><input type="password" data-eye id="bk-pw-new2" autocomplete="new-password">
         ${bkAccountRow('bk-pw')}
         <div class="bk-msg" id="bk-pw-msg"></div>
         <div class="bk-actions"><button class="st-btn secondary" onclick="dialogRequestClose(this)">Cancel</button><button class="st-btn${leaked ? ' bk-danger' : ''}" id="bk-pw-go">${leaked ? 'Make a new key' : 'Change password'}</button></div></div>`);
@@ -1205,10 +1215,10 @@
     function bkFinishDialog() {
       const o = bkOverlay('bk-pw-overlay', `<div id="bk-pw-body"><h3>Finish replacing the old backup key</h3>
         <p class="bk-p">Backups that still use the old key are re-encrypted with the new one, or deleted. This needs the old backup password (or the old recovery key) and the new backup password.</p>
-        <div id="bk-fin-oldbox"><label class="bk-label">Old backup password</label><input type="password" id="bk-fin-old" autocomplete="off"></div>
+        <div id="bk-fin-oldbox"><label class="bk-label">Old backup password</label><input type="password" data-eye id="bk-fin-old" autocomplete="off"></div>
         <div id="bk-fin-keybox" hidden><label class="bk-label">Old recovery key</label><input type="text" id="bk-fin-key" autocomplete="off" spellcheck="false" placeholder="AGE-SECRET-KEY-1…"></div>
         <a href="#" class="bk-link" id="bk-fin-switch">Use the old recovery key instead</a>
-        <label class="bk-label">New backup password</label><input type="password" id="bk-fin-new" autocomplete="off">
+        <label class="bk-label">New backup password</label><input type="password" data-eye id="bk-fin-new" autocomplete="off">
         <label class="bk-check"><input type="radio" name="bk-rot-act" value="reencrypt" checked> Re-encrypt with the new key</label>
         <label class="bk-check"><input type="radio" name="bk-rot-act" value="delete"> Delete them</label>
         ${bkAccountRow('bk-fin')}
@@ -1226,7 +1236,7 @@
     function bkShowKeyDialog() {
       const o = bkOverlay('bk-pw-overlay', `<div id="bk-pw-body"><h3>Show the recovery key</h3>
         <p class="bk-p">The recovery key is not stored as such: the backup password unlocks it. Anyone who sees it can open every backup.</p>
-        <label class="bk-label">Backup password</label><input type="password" id="bk-sk-pw" autocomplete="off">
+        <label class="bk-label">Backup password</label><input type="password" data-eye id="bk-sk-pw" autocomplete="off">
         ${bkAccountRow('bk-sk')}
         <div class="bk-msg" id="bk-sk-msg"></div>
         <div class="bk-actions"><button class="st-btn secondary" onclick="dialogRequestClose(this)">Cancel</button><button class="st-btn" id="bk-sk-go">Show it</button></div></div>`);
@@ -1301,9 +1311,9 @@
         const totp = !!(window.hubMe && window.hubMe.user && window.hubMe.user.totpEnabled);
         const o = bkOverlay('bk-stepup-overlay', `<h3>${esc(title)}</h3><p class="bk-p">${esc(why)}</p>
           <label class="bk-label">Your account password${totp ? ' and two-factor code' : ''}</label>
-          <div class="bk-two"><input type="password" id="bk-su-pw" autocomplete="current-password" placeholder="account password">${totp ? '<input type="text" id="bk-su-code" inputmode="numeric" autocomplete="one-time-code" placeholder="123 456">' : ''}</div>
+          <div class="bk-two"><input type="password" data-eye id="bk-su-pw" autocomplete="current-password" placeholder="account password">${totp ? '<input type="text" id="bk-su-code" inputmode="numeric" autocomplete="one-time-code" placeholder="123 456">' : ''}</div>
           <div class="bk-actions"><button class="st-btn secondary" id="bk-su-cancel">Cancel</button><button class="st-btn" id="bk-su-ok">Continue</button></div>`);
-        const done = (v) => { o.remove(); resolve(v); };
+        const done = (v) => { if (typeof PasswordEye !== 'undefined') PasswordEye.hideAll(o); o.remove(); resolve(v); };
         o.querySelector('#bk-su-cancel').onclick = () => done(null);
         o.querySelector('#bk-su-ok').onclick = () => done({ password: o.querySelector('#bk-su-pw').value, code: (o.querySelector('#bk-su-code') || {}).value || '' });
         o.querySelector('#bk-su-pw').focus();
@@ -1360,7 +1370,7 @@
         <p class="bk-p">Backup: <b>${esc(src.fileName || src.name || 'the file you chose')}</b>${src.created ? ` · made ${esc(bkWhen(src.created))}` : ''}${src.version ? ` · My Maestro AI ${esc(src.version)}` : ''}</p>
         ${src.keyOld ? '<p class="bk-note">This backup was made with an older backup key: use the password or recovery key from that time.</p>' : ''}
         <p class="bk-p">First it is opened and every file checked. Nothing changes until you confirm on the next screen.</p>
-        <div id="bk-r-pwbox"><label class="bk-label">The backup password</label><input type="password" id="bk-r-pw" autocomplete="off"></div>
+        <div id="bk-r-pwbox"><label class="bk-label">The backup password</label><input type="password" data-eye id="bk-r-pw" autocomplete="off"></div>
         <div id="bk-r-keybox" hidden><label class="bk-label">The recovery key</label><input type="text" id="bk-r-key" autocomplete="off" spellcheck="false" placeholder="AGE-SECRET-KEY-1…"></div>
         <a href="#" class="bk-link" id="bk-r-switch" onclick="bkSwitchSecret(); return false">Use the recovery key instead</a>
         <div class="bk-msg" id="bk-r-msg"></div>
@@ -1414,7 +1424,7 @@
         ${lost.length ? `<div class="bk-lost-title">Lost if you continue (everything since ${esc(bkWhen(b.created))}):</div><ul class="bk-lost">${lost.map(x => `<li>${x}</li>`).join('')}</ul>` : ''}
         ${notes.map(n => `<div class="bk-info">${n}</div>`).join('')}
         <label class="bk-label">Your account password${totp ? ' and two-factor code' : ''}</label>
-        <div class="bk-two"><input type="password" id="bk-c-pw" autocomplete="current-password" placeholder="account password">${totp ? '<input type="text" id="bk-c-code" inputmode="numeric" autocomplete="one-time-code" placeholder="123 456">' : ''}</div>
+        <div class="bk-two"><input type="password" data-eye id="bk-c-pw" autocomplete="current-password" placeholder="account password">${totp ? '<input type="text" id="bk-c-code" inputmode="numeric" autocomplete="one-time-code" placeholder="123 456">' : ''}</div>
         <label class="bk-label">Type RESTORE to confirm</label><input type="text" id="bk-c-word" autocomplete="off" spellcheck="false">
         <div class="bk-msg" id="bk-c-msg"></div>
         <div class="bk-actions"><button class="st-btn secondary" onclick="bkCancelRestore(this)">Cancel</button><button class="st-btn bk-danger" id="bk-c-go" disabled>Restore and restart</button></div>`;
@@ -1566,7 +1576,7 @@
       return c && !c.isGroup && c.agent ? String(c.agent) : '';
     }
     // Hand-off cards above the message box (lib/ui-hand-off-card.js): follows the open one-agent chat.
-    if (window.HandOffCard) HandOffCard.track({ getAgent: filesActiveAgent, getContainer: () => document.getElementById('handoff-cards-' + window.__activeChatId), renderMarkdown: (t) => window.formatContentForSheets(t) });
+    if (window.HandOffCard && globalThis.mmSettingsOnly !== true) HandOffCard.track({ getAgent: filesActiveAgent, getContainer: () => document.getElementById('handoff-cards-' + window.__activeChatId), renderMarkdown: (t) => window.formatContentForSheets(t) });
     function filesOwnerParam() {
       const me = window.hubMe;
       if (!me || !me.isAdmin) return '';
@@ -2518,6 +2528,7 @@
       if (!form.hidden) document.getElementById('sched-when')?.focus();
     }
     async function refreshScheduleBadge() {
+      if (globalThis.mmSettingsOnly === true) return;   // the settings-only page starts nothing else
       const btn = document.getElementById('schedule-btn'); if (!btn) return;
       const [sched, jobs] = await Promise.all([schedApi().catch(() => null), jobsApi().catch(() => null)]);
       const tasks = sched?.tasks || [];
@@ -2656,7 +2667,7 @@
       if (!s.keystore.exists) {
         pkCancel();
         return gsModal(`${head}${note}<p class="gs-sub">Create an encrypted keystore. The passphrase is the only thing protecting the keys on disk, and it cannot be recovered: if you lose it, move funds out first or the wallets are gone.</p>
-          <input id="w-pass" type="password" placeholder="Passphrase (12+ characters)" style="${field}"><input id="w-pass2" type="password" placeholder="Repeat passphrase" style="${field}">
+          <input id="w-pass" type="password" data-eye placeholder="Passphrase (12+ characters)" style="${field}"><input id="w-pass2" type="password" data-eye placeholder="Repeat passphrase" style="${field}">
           <div class="gs-actions">${gsClose}<button class="gs-btn" onclick="walletAct('init')">Create keystore</button></div>`, dock);
       }
       const srcLabel = { generated: 'generated', 'imported-key': 'imported key', 'imported-seed': 'imported from seed' };
@@ -2676,7 +2687,7 @@
       const recoveryBox = `<div class="gs-box"><h4>Recovery</h4>
         <div class="gs-sub" style="margin-bottom:6px">The encrypted keystore file is copied to <code>${esc(s.keystore.backupDir || '')}</code> after every change${lastBk ? ` (last: ${esc(lastBk.file.split('/').pop())}, ${lastBk.count} copies)` : ' (no copies yet)'}. A copy is useless without the passphrase, so keep copies anywhere. Without the hub: <code>node scripts/wallet-recover.js &lt;file&gt;</code> prints the keys.</div>
         <div class="gs-sub" style="margin-bottom:4px">"Reveal key" on a wallet needs the passphrase here every time, is audited, and is never available to agents.</div>
-        <input id="w-reveal-pass" type="password" autocomplete="new-password" placeholder="Keystore passphrase (for Reveal key)" style="${field}">
+        <input id="w-reveal-pass" type="password" data-eye autocomplete="new-password" placeholder="Keystore passphrase (for Reveal key)" style="${field}">
         <div class="gs-actions"><button class="gs-btn secondary" onclick="walletAct('backup')">Back up now</button></div></div>`;
       const who = (s.walletAgents || []).join(', ');
       // Locked: the Unlock box comes FIRST, before the Executor and Hyperliquid boxes, which have passphrase fields of their own.
@@ -2685,7 +2696,7 @@
       const unlockBox = s.keystore.unlocked ? '' : `<div class="gs-box" style="border-color:var(--accent)"><h4>Unlock the keystore</h4>
         <div class="gs-sub" style="margin-bottom:4px">Locked since the hub last started. ${pkHere ? 'Use this device, or type' : 'Type'} the keystore passphrase here (this box, not the Executor or Hyperliquid ones) and press Enter or Unlock.</div>
         ${pkHere ? `<div class="gs-actions" style="margin:6px 0"><button class="gs-btn" id="pk-unlock-btn" onclick="walletAct('pkunlock')">Unlock with Face ID / fingerprint</button></div>` : ''}
-        <input id="w-pass" type="password" autocomplete="new-password" placeholder="Keystore passphrase" style="${field}" onkeydown="if(event.key==='Enter'){event.preventDefault();walletAct('unlock')}">
+        <input id="w-pass" type="password" data-eye autocomplete="new-password" placeholder="Keystore passphrase" style="${field}" onkeydown="if(event.key==='Enter'){event.preventDefault();walletAct('unlock')}">
         <div class="gs-actions"><button class="gs-btn" onclick="walletAct('unlock')">Unlock</button></div></div>`;
       const pkRows = pkList.map(p => `<div class="gs-commit"><strong>${esc(p.label)}</strong> <span class="gs-sub" style="margin:0 6px">${esc(p.rpId)} · added ${esc(new Date(p.createdAt).toLocaleDateString())}</span>
           <button class="gs-btn secondary" style="padding:2px 8px;font-size:0.72rem" data-pk-id="${escAttr(p.id)}" onclick="walletAct('pkremove', this.dataset.pkId)">Remove</button></div>`).join('')
@@ -2695,7 +2706,7 @@
         ${pkRows}
         ${pkOk.ok ? `<div class="gs-sub" style="margin-top:8px">Add this device</div>
           <input id="pk-label" value="${escAttr(pkDeviceLabel())}" maxlength="40" placeholder="Name for this device" style="${field}">
-          <input id="pk-pass" type="password" autocomplete="off" placeholder="Keystore passphrase (needed once; never stored)" style="${field}" onkeydown="if(event.key==='Enter'){event.preventDefault();walletAct('pkadd')}">
+          <input id="pk-pass" type="password" autocomplete="off" data-eye placeholder="Keystore passphrase (needed once; never stored)" style="${field}" onkeydown="if(event.key==='Enter'){event.preventDefault();walletAct('pkadd')}">
           <div id="pk-confirm-row"></div>
           <div class="gs-actions"><button class="gs-btn" id="pk-add-btn" onclick="walletAct('pkadd')">Add</button></div>`
           : `<div class="gs-sub" style="margin-top:8px">${esc(pkOk.text)}</div>`}
@@ -2720,7 +2731,7 @@
             <input id="x-cap-hour" value="${esc(String(x.caps.maxPerHour))}" size="2"> per hour · <input id="x-cap-day" value="${esc(String(x.caps.maxPerDay))}" size="2"> per day
             · used: ${x.usedLastHour}/h, ${x.usedLastDay}/day · token: ${x.hasToken ? 'set ' + esc(String(x.tokenCreated || '').slice(0, 16)) : '<strong>none</strong>'}</div>
           ${recent}
-          <input id="x-pass" type="password" autocomplete="off" placeholder="Keystore passphrase (required to save or make a token; never stored)" style="${field}">
+          <input id="x-pass" type="password" data-eye autocomplete="off" placeholder="Keystore passphrase (required to save or make a token; never stored)" style="${field}">
           <div class="gs-sub">"New token" replaces the current token at once; scripts using the old one stop working.</div>
           <div class="gs-actions"><button class="gs-btn secondary" onclick="walletAct('xtoken')">New token</button><button class="gs-btn" onclick="walletAct('xsave')">Save executor settings</button></div></div>`;
       }
@@ -2743,7 +2754,7 @@
           <div class="gs-sub" style="margin-top:6px"><strong>Agents the exchange lists on this account:</strong> ${Array.isArray(h.externalAgents) ? (h.externalAgents.length ? h.externalAgents.map(a => `<code>${esc(String(a.address))}</code> ${esc(String(a.name || '(unnamed)'))}`).join(' · ') : 'none') : '(not readable right now)'}</div>
           <div class="gs-sub" style="margin-top:4px">Authorize an <em>external</em> agent wallet (a bot's own key, kept outside the keystore). It can trade this account but cannot withdraw or transfer funds out. Signed by the main wallet's key; the hub's own agent is not touched.<br>
             address <input id="h-ext-addr" size="44" placeholder="0x…" autocomplete="off"> name <input id="h-ext-name" size="14" placeholder="e.g. trader-own" autocomplete="off"></div>
-          <input id="h-pass" type="password" autocomplete="off" placeholder="Keystore passphrase (to save or set up the agent key from here; never stored)" style="${field}">
+          <input id="h-pass" type="password" data-eye autocomplete="off" placeholder="Keystore passphrase (to save or set up the agent key from here; never stored)" style="${field}">
           <div class="gs-actions"><button class="gs-btn secondary" onclick="walletAct('hagent')">Set up Hyperliquid agent key</button><button class="gs-btn secondary" onclick="walletAct('hextagent')">Authorize external agent</button><button class="gs-btn" onclick="walletAct('hsave')">Save Hyperliquid settings</button></div></div>`;
       }
       let fw = null; try { fw = await walletApi('allowlist'); } catch { /* older server */ }
@@ -2776,7 +2787,7 @@
           <div class="gs-sub" id="fw-hint" style="margin:4px 0"></div>
           <input id="fw-label" placeholder="label, e.g. Aerodrome Slipstream NPM (Base)" autocomplete="off" style="${field}">
           <input id="fw-verified" placeholder="verified by (required): report path or source" autocomplete="off" style="${field}">
-          <input id="fw-pass" type="password" autocomplete="new-password" placeholder="Keystore passphrase (signs the record; never stored)" style="${field}">
+          <input id="fw-pass" type="password" data-eye autocomplete="new-password" placeholder="Keystore passphrase (signs the record; never stored)" style="${field}">
           <div class="gs-sub">Deactivate also uses this passphrase field. "Allow value" only has an effect together with "any selector". Neither is allowed on an executor.</div>
           <div class="gs-actions"><button class="gs-btn" onclick="walletAct('fwadd')">Add to firewall</button></div></div>`;
       }
@@ -3202,7 +3213,7 @@
       } catch (e) { box.textContent = `Could not load: ${e.message}`; }
     }
     // The saved map for the Save button: stored entries stay, each row sets its value or (equal to its default) removes the key.
-    function workersAtOnceFromPage() {
+    function workersAtOnceFromPage(failures) {
       const box = document.getElementById('st-wao-rows');
       if (!box || box.dataset.loaded !== '1') return undefined;
       const out = { ...waoStored };
@@ -3219,7 +3230,8 @@
       }
       if (bad.length) {
         bad[0].reportValidity();
-        alert(`Workers at once: ${bad.map(i => WAO_LABELS[i.dataset.provider] || i.dataset.provider).join(', ')} must be a whole number from 1 to 32; the previous value is kept.`);
+        const m = `Workers at once: ${bad.map(i => WAO_LABELS[i.dataset.provider] || i.dataset.provider).join(', ')} must be a whole number from 1 to 32; the previous value is kept.`;
+        if (Array.isArray(failures)) failures.push(m); else alert(m);
       }
       return out;
     }
@@ -3328,9 +3340,9 @@
       { id: 'security', title: '🔐 Security', sections: ['st-security-section'] },
       { id: 'backups', title: '💾 Backups', sections: ['st-backups-section'] },
       { id: 'models', title: '🧠 AI models', sections: ['st-prov-section', 'st-or-section', 'st-subs-section', 'st-plan-section', 'st-local-models-section', 'st-classifier-section'] },
-      { id: 'agents', title: '🤖 Agents', sections: ['st-defaults-section', 'st-workers-section', 'st-sb-section', 'st-lb-section', 'st-mp-section', 'st-approvals-section', 'st-chat-section'] },
+      { id: 'agents', title: '🤖 Agents', sections: ['st-defaults-section', 'st-workers-section', 'st-sb-section', 'st-lb-section', 'st-mp-section', 'st-approvals-section', 'st-chat-section', 'st-tuning-section'] },
       { id: 'notify', title: '🔔 Notifications', sections: ['st-notify-section'] },
-      { id: 'tools', title: '🧰 Tools and data', sections: ['st-ws-section', 'st-voice-section', 'st-cx-section', 'st-modules-section'] },
+      { id: 'tools', title: '🧰 Tools and data', sections: ['st-ws-section', 'st-voice-section', 'st-comms-section', 'st-cx-section', 'st-modules-section'] },
       { id: 'money', title: '💰 Money and safety', sections: ['st-spend-section', 'st-emergency-section'] },
     ];
     const stSumParts = {};   // group -> { key: { text, crit } }: the one-line summary on each group's header
@@ -3415,7 +3427,7 @@
       if (!panel) return;
       stAdmin2faMsg('');
       panel.innerHTML = `<div class="st-hint">Allow admins to remove their own two-factor? An admin who removes it signs in with a password alone, so anyone who learns that password could sign in as that admin.</div>
-        <div class="st-row"><label style="flex-basis:150px">Your password</label><input type="password" id="st-a2fa-pw" autocomplete="current-password"></div>
+        <div class="st-row"><label style="flex-basis:150px">Your password</label><input type="password" id="st-a2fa-pw" autocomplete="current-password" data-eye></div>
         ${me && me.user && me.user.totpEnabled ? '<div class="st-row"><label style="flex-basis:150px">Code</label><input type="text" id="st-a2fa-code" inputmode="numeric" autocomplete="one-time-code" placeholder="123456 or a recovery code"></div>' : ''}
         <div class="st-row"><label style="flex-basis:150px"></label>
           <button class="st-test-btn" style="color:var(--on-color-text);background:var(--halt-banner-bg)" onclick="stAdmin2faOff()">Turn it off</button>
@@ -3675,6 +3687,10 @@
       html += voiceSettingsHtml(data);
       setTimeout(voiceSettingsInit, 0);
       // Data connectors (lib/modules): outside services with a guided setup live on their own page.
+      // Messaging channels (moved from the ⋯ menu): the existing panel, opened over Settings with its own saves
+      html += `<div class="st-section" id="st-comms-section"><h4>Messaging channels</h4>
+        <div class="st-hint">Telegram and other messaging apps: which agents use each channel, who may write to them, and a test message. <button class="st-test-btn" onclick="openCommsPanel()">Open messaging channels</button></div>
+      </div>`;
       html += `<div class="st-section" id="st-modules-section"><h4>Data connectors</h4>
         <div class="st-hint">Connect outside services such as Google Drive and Oura, with a guided setup. <button class="st-test-btn" onclick="location.href='/modules'">Open Data connectors</button></div>
       </div>`;
@@ -3747,6 +3763,17 @@
           <label class="toggle-switch"><input type="checkbox" id="st-model-offers" ${data.modelOffers !== false ? 'checked' : ''} onchange="saveModelOffersToggle(this.checked)"><span class="toggle-slider"></span></label>
           <span id="st-model-offers-state" style="font-size:0.8rem;color:var(--text-dim)">${data.modelOffers !== false ? 'Your Maestro suggests newer models for your agents.' : 'No model suggestions.'}</span>
         </div>` : ''}
+        ${isHubAdmin() ? (() => {
+          const rd = Number.isInteger(data.researchReminderDays) && data.researchReminderDays >= 0 ? data.researchReminderDays : 7;
+          const opts = [[7, 'Once a week'], [14, 'Every two weeks'], [30, 'Once a month'], [0, 'Never']];
+          if (!opts.some(o => o[0] === rd)) opts.push([rd, `Every ${rd} days`]);
+          return `<div class="st-row">
+          <label for="st-research-remind">Deep research reminder</label>
+          <select id="st-research-remind" onchange="saveResearchReminder(this.value, this)">${opts.map(([v, l]) => `<option value="${v}"${v === rd ? ' selected' : ''}>${l}</option>`).join('')}</select>
+        </div>
+        <div class="st-hint">How often someone who chose Never for deep research is reminded, at the end of a reply, that it is off.</div>`;
+        })() : ''}
+        ${isHubAdmin() ? researchThoroughBlockHtml(data) : ''}
       </div>`;
 
       if (isHubAdmin()) {
@@ -3783,9 +3810,14 @@
           <select id="st-question-after" onchange="saveQuestionAfter(this.value)">${qaOpts.map(([v, l]) => `<option value="${v}"${v === qaVal ? ' selected' : ''}>${l}</option>`).join('')}</select>
         </div>
         <div class="st-hint">A notification when an agent's question (or an approval) is still unanswered after this long. Finished replies notify only when you click 🔔 Notify me next to Cancel while the reply is running.</div>
+        <div id="st-research-pref" role="group" aria-label="Deep research" hidden></div>
         <div id="st-notify-mine" role="group" aria-label="Your notifications"><div class="st-hint" style="margin-left:0">Loading…</div></div>
+        <div class="st-row" id="st-notify-agent" data-no-dirty><label for="st-nb-agent">For an agent</label><select id="st-nb-agent" onchange="stNotifyAgentPaint()"></select></div>
+        <div class="st-hint">Which notifications one agent may send you; the 🔔 next to its chat does the same. Each choice is saved as you make it.</div>
+        <div id="st-nb-agent-box" class="st-nb-box" data-no-dirty></div>
       </div>`;
         setTimeout(loadNotifySettings, 0);
+        setTimeout(() => { typeof researchPrefLoad === 'function' && researchPrefLoad(); }, 0);
       }
 
       html += `<div class="st-section" id="st-chat-section"><h4>Chat</h4>
@@ -3799,6 +3831,12 @@
         <div class="st-hint">This browser only. Agents that are working right now also appear in an Active section at the top of the list; off shows the list exactly as before.</div>
         ${simpleAccountOk(window.hubMe) ? `<div class="st-row"><button type="button" id="st-switch-simple" onclick="simpleSwitchMode('simple')">Switch to Simple</button></div>
         <div class="st-hint">The calm view: just the conversation, with the tools and settings out of sight. You can switch back here.</div>` : ''}
+      </div>`;
+
+      // Tuning (moved from the ⋯ menu): the controls in #st-tuning-body, wired at page load, are placed here (stTuningMount)
+      html += `<div class="st-section" id="st-tuning-section"><h4>Tuning</h4>
+        <div class="st-hint" style="margin-left:0">How each agent turn is put together: pre-scan, lazy tools, SDK workers, team guidance and terse replies. Each one is saved as you change it. Reply length and message history sent are Max tokens and Context msgs under Agent Defaults.</div>
+        <div id="st-tuning-slot"></div>
       </div>`;
 
       html += `<div class="st-section" id="st-emergency-section"><h4>Emergency</h4>
@@ -3908,21 +3946,26 @@
         const wsc = (data && data.webSearch) || {};
         const wfc = (data && data.webFetch) || {};
         const keys = wsc.keys || {};
-        const selWs = (id, opts, cur) => `<select id="${id}" style="padding:4px">${opts.map(([v, l]) => `<option value="${v}" ${cur === v ? 'selected' : ''}>${l}</option>`).join('')}</select>`;
+        const selWs = (id, opts, cur) => `<select id="${id}" style="padding:4px;min-width:0;max-width:100%">${opts.map(([v, l]) => `<option value="${v}" ${cur === v ? 'selected' : ''}>${l}</option>`).join('')}</select>`;
         const keyRow = (id, label, note) => `<div class="st-row"><label style="flex-basis:150px">${label}</label><input type="password" id="st-ws-key-${id}" placeholder="${keys[id] ? esc(keys[id]) : 'Not set'}" style="width:260px" autocomplete="off"> <span class="st-hint" style="margin:0 0 0 8px">${note}</span></div>`;
         html += `<div class="st-section" id="st-ws-section"><h4>Web search and fetch</h4>
         <div class="st-hint">Every agent on every model uses the same WebSearch and WebFetch tools; the hub does the work. Search walks the backends below in order and returns the first that answers: paid or keyed ones when you add a key, a self-hosted SearXNG the hub can run for you, and DuckDuckGo as the free floor. An agent may name a backend (for instance perplexity) when it wants that one. Fetch returns pages as markdown with links kept, reads PDFs, renders JavaScript-only pages in a browser when the plain fetch is empty, and refuses private and local addresses unless allowed below.</div>
+        <div class="st-row"><label style="flex-basis:150px">In use</label><span id="st-ws-inuse" style="flex:1">Checking…</span></div>
+        <div class="st-row"><label style="flex-basis:150px"></label><button class="st-test-btn" onclick="testWebSearch()">Test web search</button></div>
+        <div id="st-ws-test" class="st-hint" style="margin-left:158px;overflow-wrap:anywhere"></div>
         <div class="st-row"><label style="flex-basis:150px">Backend order</label><input type="text" id="st-ws-order" value="${esc(Array.isArray(wsc.order) ? wsc.order.join(', ') : 'brave, perplexity, serper, tavily, searxng, duckduckgo')}" style="flex:1"> <span class="st-hint" style="margin:0 0 0 8px">comma-separated; unconfigured ones are skipped</span></div>
-        ${keyRow('brave', 'Brave key', 'api.search.brave.com; independent index')}
+        ${keyRow('brave', 'Brave key', '<a href="https://brave.com/search/api/" target="_blank" rel="noopener" style="color:var(--link)">brave.com/search/api</a> · $5 per 1,000 searches, $5 of free credit each month (about 1,000 searches); Brave asks for a card')}
         ${keyRow('serper', 'Serper key', 'serper.dev; Google results')}
         ${keyRow('tavily', 'Tavily key', 'tavily.com; LLM-ready results')}
-        <div class="st-row"><label style="flex-basis:150px">Perplexity</label><span class="st-hint" style="margin:0">uses the Perplexity provider key above</span></div>
-        <div class="st-row"><label style="flex-basis:150px">SearXNG URL</label><input type="text" id="st-ws-searxng" value="${esc((wsc.searxng && wsc.searxng.url) || '')}" placeholder="http://127.0.0.1:8888" style="width:260px"> <button class="st-test-btn" onclick="searxngStart()">Run SearXNG here (Docker)</button><button class="st-test-btn" onclick="searxngStop()">Stop it</button></div>
-        <div class="st-row"><label style="flex-basis:150px">Private addresses</label>${selWs('st-wf-private', [['admin', 'admin-side agents may fetch them (default)'], ['none', 'nobody'], ['all', 'every agent']], wfc.allowPrivate || 'admin')} &nbsp; Browser rendering ${selWs('st-wf-render', [['auto', 'auto (when the plain fetch is empty)'], ['off', 'off'], ['always', 'always']], wfc.render || 'auto')} &nbsp; <label><input type="checkbox" id="st-wf-jina" ${wfc.jina ? 'checked' : ''}> Jina Reader fallback (sends the URL to r.jina.ai)</label></div>
+        <div class="st-row"><label style="flex-basis:150px">Perplexity</label><span class="st-hint" style="margin:0">uses the Perplexity provider key above. <span id="st-ws-pplx"></span></span></div>
+        <div class="st-row" style="flex-wrap:wrap;row-gap:6px"><label style="flex-basis:150px">SearXNG URL</label><input type="text" id="st-ws-searxng" value="${esc((wsc.searxng && wsc.searxng.url) || '')}" placeholder="http://127.0.0.1:8888" style="flex:1 1 180px;min-width:0;max-width:260px"> <button class="st-test-btn" onclick="searxngStart()">Run SearXNG here (Docker)</button><button class="st-test-btn" onclick="searxngStop()">Stop it</button></div>
+        <div class="st-row"><label style="flex-basis:150px">Private addresses</label>${selWs('st-wf-private', [['admin', 'admin-side agents may fetch them (default)'], ['none', 'nobody'], ['all', 'every agent']], wfc.allowPrivate || 'admin')}</div>
+        <div class="st-row"><label style="flex-basis:150px" for="st-wf-render">Browser rendering</label>${selWs('st-wf-render', [['auto', 'auto (when the plain fetch is empty)'], ['off', 'off'], ['always', 'always']], wfc.render || 'auto')}</div>
+        <div class="st-row"><label style="flex-basis:150px">Jina Reader</label><label style="flex:1;min-width:0;display:flex;gap:6px;align-items:center;text-align:left;cursor:pointer"><input type="checkbox" id="st-wf-jina" ${wfc.jina ? 'checked' : ''}> Fallback reader (sends the URL to r.jina.ai)</label></div>
         <div class="st-row"><label style="flex-basis:150px"></label><button class="st-test-btn" onclick="saveWebSearch()">Save web settings</button><span id="st-ws-state" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px"></span></div>
         <div id="st-ws-status" class="st-hint" style="margin-left:158px"></div>
         <div class="st-row"><label style="flex-basis:150px">Try a search</label><input type="text" id="st-ws-try" placeholder="query" style="flex:1" onkeydown="if(event.key==='Enter')tryWebSearch()"> ${selWs('st-ws-try-backend', [['', 'chain'], ['brave', 'brave'], ['perplexity', 'perplexity'], ['serper', 'serper'], ['tavily', 'tavily'], ['searxng', 'searxng'], ['duckduckgo', 'duckduckgo']], '')}<button class="st-test-btn" onclick="tryWebSearch()">Search</button></div>
-        <div class="st-row"><label style="flex-basis:150px">Try a fetch</label><input type="text" id="st-wf-try" placeholder="https://…" style="flex:1" onkeydown="if(event.key==='Enter')tryWebFetch()"> <label><input type="checkbox" id="st-wf-try-render"> render</label><button class="st-test-btn" onclick="tryWebFetch()">Fetch</button></div>
+        <div class="st-row"><label style="flex-basis:150px">Try a fetch</label><input type="text" id="st-wf-try" placeholder="https://…" style="flex:1;min-width:0" onkeydown="if(event.key==='Enter')tryWebFetch()"> <label style="flex:0 0 auto;display:flex;gap:4px;align-items:center"><input type="checkbox" id="st-wf-try-render"> render</label><button class="st-test-btn" onclick="tryWebFetch()">Fetch</button></div>
         <div id="st-ws-result" style="margin-left:158px;margin-top:6px;font-size:0.78rem;color:var(--text-dim);font-family:ui-monospace,monospace;white-space:pre-wrap;max-height:260px;overflow:auto"></div>
       </div>`;
         setTimeout(loadWebSearchStatus, 0);
@@ -3973,6 +4016,7 @@
       </div>`;
 
       stModal(html);
+      stTuningMount(); stNotifyAgentFill();   // the moved tuning controls and the per-agent notification choices
       groupSettings(data);
       paintDesktopPush();
       paintPacingSettings();
@@ -3981,19 +4025,20 @@
     }
 
     // Auto model classifier (lib/classifier): settings, tallies, and the side-by-side try-it box.
-    async function saveClassifier() {
+    async function saveClassifier(opts = {}) {
       const saved = dialogGuard.savePoint(['st-cl-backend', 'st-cl-provider', 'st-cl-model', 'st-cl-think', 'st-cl-floor', 'st-cl-keep', 'st-cl-shadow'].map(id => document.getElementById(id)));
       const v = id => (document.getElementById(id) || {}).value; const chk = id => !!(document.getElementById(id) || {}).checked;
       const state = document.getElementById('st-cl-state');
       try {
-        const r = await fetch('/api/auto-model/classifier', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
+        const r = await stSaveFetch('/api/auto-model/classifier', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
           body: JSON.stringify({ backend: v('st-cl-backend'), localProvider: v('st-cl-provider'), localModel: v('st-cl-model'), localThinking: chk('st-cl-think'), confidenceFloor: Number(v('st-cl-floor')), shadow: chk('st-cl-shadow'), keepOnBox: v('st-cl-keep') }) });
         const d = await r.json();
         if (!r.ok) throw new Error(d.error || r.status);
         saved();
         if (state) state.textContent = `Saved. Backend ${d.config.backend}${d.config.shadow ? ' (shadow)' : ''}; local server: ${d.localServer ? `${d.localServer.provider} / ${d.localServer.model}` : 'none reachable'}; Perplexity key: ${d.perplexityKey ? 'yes' : 'no'}.`;
         loadClassifierStats();
-      } catch (e) { if (state) state.textContent = 'Could not save: ' + e.message; }
+        return true;
+      } catch (e) { if (state) state.textContent = 'Could not save: ' + e.message; return e.message; }
     }
     // Agent sandboxes (lib/sandbox): Docker and image state, running containers, defaults, image build as a job.
     // One read-only line: which agents run on the host (sandbox set to "off" on their page), and what the
@@ -4024,38 +4069,41 @@
         el.textContent = h.ok ? `Available: Landlock ABI ${abi !== undefined && abi !== null ? abi : '?'}` : `Not available on this computer: ${String(h.reason || 'unknown reason').replace(/[.\s]+$/, '')}`;
       } catch (e) { el.textContent = 'Could not read the lockbox status: ' + e.message; }
     }
-    async function saveLockboxDefault() {
+    async function saveLockboxDefault(opts = {}) {
       const sel = document.getElementById('st-lb-default');
       const saved = dialogGuard.savePoint([sel]);
       const state = document.getElementById('st-lb-state');
       try {
-        const r = await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ lockboxDefault: sel.value }) });
+        const r = await stSaveFetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ lockboxDefault: sel.value }) });
         if (!r.ok) { let m = `HTTP ${r.status}`; try { const j = await r.json(); if (j && j.error) m = j.error; } catch {} throw new Error(m); }
         saved();
         if (state) state.textContent = 'Saved. Applies to agents set to "Hub default" from their next command.';
-      } catch (e) { if (state) state.textContent = 'Could not save: ' + e.message; }
+        return true;
+      } catch (e) { if (state) state.textContent = 'Could not save: ' + e.message; return e.message; }
     }
-    async function saveMemberPolicy() {
+    async function saveMemberPolicy(opts = {}) {
       const saved = dialogGuard.savePoint(['st-mp-web', 'st-mp-read_outside', 'st-mp-write_outside', 'st-mp-send'].map(id => document.getElementById(id)));
       const state = document.getElementById('st-mp-state');
       const memberPolicy = {};
       for (const k of ['web', 'read_outside', 'write_outside', 'send']) { const v = (document.getElementById(`st-mp-${k}`) || {}).value; if (v) memberPolicy[k] = v; }
       try {
-        const r = await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ memberPolicy }) });
+        const r = await stSaveFetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ memberPolicy }) });
         if (r.ok) saved();
         if (state) state.textContent = r.ok ? 'Saved. Applies to member agents from their next tool call.' : `Could not save (HTTP ${r.status})`;
-      } catch (e) { if (state) state.textContent = 'Could not save: ' + e.message; }
+        return r.ok ? true : `HTTP ${r.status}`;
+      } catch (e) { if (state) state.textContent = 'Could not save: ' + e.message; return e.message; }
     }
-    async function saveSandboxDefaults() {
+    async function saveSandboxDefaults(opts = {}) {
       const saved = dialogGuard.savePoint(['st-sb-member', 'st-sb-admin', 'st-tools-default'].map(id => document.getElementById(id)));
       const state = document.getElementById('st-sb-state');
       try {
-        const r = await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ sandboxDefaults: { member: document.getElementById('st-sb-member').value, admin: document.getElementById('st-sb-admin').value }, toolsDefault: (document.getElementById('st-tools-default') || {}).value === 'hub' ? 'hub' : 'client' }) });
+        const r = await stSaveFetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ sandboxDefaults: { member: document.getElementById('st-sb-member').value, admin: document.getElementById('st-sb-admin').value }, toolsDefault: (document.getElementById('st-tools-default') || {}).value === 'hub' ? 'hub' : 'client' }) });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         saved();
         if (state) state.textContent = 'Saved. Applies to agents set to "hub default" from their next turn.';
         stSum('agents', 'sb', stSandboxText({ member: document.getElementById('st-sb-member').value, admin: document.getElementById('st-sb-admin').value }));
-      } catch (e) { if (state) state.textContent = 'Could not save: ' + e.message; }
+        return true;
+      } catch (e) { if (state) state.textContent = 'Could not save: ' + e.message; return e.message; }
     }
     async function buildSandboxImage() {
       const state = document.getElementById('st-sb-state');
@@ -4068,7 +4116,7 @@
     const READY_ICON = { ok: '✅', info: 'ℹ️', warn: '⚠️', critical: '❌' };
     function readinessActionHtml(a) {
       if (!a) return '';
-      if (a.href) return ` <a href="${esc(a.href)}" class="st-test-btn" style="text-decoration:none">${esc(a.label)}</a>`;
+      if (a.href) return ` <a href="${esc(a.href)}" class="st-test-btn" style="text-decoration:none;display:inline-block;margin-top:3px">${esc(a.label)}</a>`;
       if (a.api) return ` <button class="st-test-btn" onclick="readinessAction('${esc(a.api)}', '${esc(a.method || 'POST')}', this)">${esc(a.label)}</button>`;
       return '';
     }
@@ -4420,20 +4468,33 @@
       if (model !== (cur.model || 'auto')) out.model = model;
       return { changes: out, classes };
     }
-    async function saveSelfCheckSettings() {
+    // Every field scSettingsChanges reads: one list for the save and for the main Save's registry.
+    function scFieldEls() {
+      return ['st-sc-enabled', 'st-sc-after', 'st-sc-at', ...SC_CLASSES.map(k => `st-sc-c-${k}`), 'st-sc-model'].map(id => document.getElementById(id));
+    }
+    async function saveSelfCheckSettings(opts = {}) {
+      const fields = scFieldEls(), val = (el) => (el ? (String(el.type || '').toLowerCase() === 'checkbox' ? el.checked : el.value) : undefined), before = fields.map(val);
+      // Refill from the hub's answer and settle the form; a field edited while the save ran keeps the newer text, still changed.
+      const refill = (s) => {
+        const newer = fields.map((el, i) => (el && val(el) !== before[i] ? { v: val(el) } : null));
+        scFillSettings(s);
+        dialogGuard.savePoint(fields)();
+        fields.forEach((el, i) => { if (!newer[i]) return; if (String(el.type || '').toLowerCase() === 'checkbox') el.checked = newer[i].v; else el.value = newer[i].v; });
+      };
       const state = document.getElementById('st-sc-save-state');
       const say = (t) => { if (state) state.textContent = t; };
       const { changes, classes } = scSettingsChanges();
-      if (!classes.length) { say('Keep at least one kind of agent ticked.'); return; }
-      if (!Object.keys(changes).length) { say('Nothing to save.'); return; }
+      if (!classes.length) { const m = 'Keep at least one kind of agent ticked.'; say(m); return m; }
+      if (!Object.keys(changes).length) { if (scSettings) refill(scSettings); say('Nothing to save.'); return true; }
       say('Saving…');
       try {
-        const r = await fetch('/api/selfcheck/settings', { method: 'PUT', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(changes) });
+        const r = await stSaveFetch('/api/selfcheck/settings', { method: 'PUT', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(changes) });
         const b = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error(b.error || `HTTP ${r.status}`);
-        scFillSettings(b.settings);
+        refill(b.settings);
         say('Saved.');
-      } catch (e) { say(`Not saved: ${e.message}`); }
+        return true;
+      } catch (e) { say(`Not saved: ${e.message}`); return e.message; }
     }
     // ── self-check page (end) ──
     // System health (lib/system-health): the nightly look at the computer itself (disk, memory, backups, databases...).
@@ -4540,24 +4601,37 @@
       }
       return out;
     }
-    async function saveHealthSettings() {
+    // Every field hlSettingsChanges reads: one list for the save and for the main Save's registry.
+    function hlFieldEls() {
+      return ['st-hl-enabled', 'st-hl-at', 'st-hl-notify', ...HL_NUMBERS.map(([k]) => `st-hl-n-${k}`)].map(id => document.getElementById(id));
+    }
+    async function saveHealthSettings(opts = {}) {
+      const fields = hlFieldEls(), val = (el) => (el ? (String(el.type || '').toLowerCase() === 'checkbox' ? el.checked : el.value) : undefined), before = fields.map(val);
+      // Refill from the hub's answer and settle the form; a field edited while the save ran keeps the newer text, still changed.
+      const refill = (s) => {
+        const newer = fields.map((el, i) => (el && val(el) !== before[i] ? { v: val(el) } : null));
+        hlFillSettings(s);
+        dialogGuard.savePoint(fields)();
+        fields.forEach((el, i) => { if (!newer[i]) return; if (String(el.type || '').toLowerCase() === 'checkbox') el.checked = newer[i].v; else el.value = newer[i].v; });
+      };
       const state = document.getElementById('st-hl-save-state');
       const say = (t) => { if (state) state.textContent = t; };
       const changes = hlSettingsChanges();
-      if (!Object.keys(changes).length) { say('Nothing to save.'); return; }
+      if (!Object.keys(changes).length) { if (hlSettings) refill(hlSettings); say('Nothing to save.'); return true; }
       say('Saving…');
       try {
-        const r = await fetch('/api/system-health/settings', { method: 'PUT', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(changes) });
+        const r = await stSaveFetch('/api/system-health/settings', { method: 'PUT', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(changes) });
         const b = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error(b.error || `HTTP ${r.status}`);
-        hlFillSettings(b.settings);
+        refill(b.settings);
         say('Saved.');
-      } catch (e) { say(`Not saved: ${e.message}`); }
+        return true;
+      } catch (e) { say(`Not saved: ${e.message}`); return e.message; }
     }
     // ── health page (end) ──
     function securityActionHtml(a) {
       if (!a) return '';
-      if (a.href) return ` <a href="${esc(a.href)}" class="st-test-btn" style="text-decoration:none">${esc(a.label)}</a>`;
+      if (a.href) return ` <a href="${esc(a.href)}" class="st-test-btn" style="text-decoration:none;display:inline-block;margin-top:3px">${esc(a.label)}</a>`;
       if (a.api) return ` <button class="st-test-btn" onclick="securityAction('${esc(a.api)}', '${esc(a.method || 'POST')}', this)">${esc(a.label)}</button>`;
       return '';
     }
@@ -4829,20 +4903,52 @@
       if (btn) { btn.disabled = false; btn.textContent = 'Check now'; }
     }
     // Web search and fetch (lib/web-search, lib/web-fetch): backend chain, keys, SearXNG container, fetch guards.
+    const WS_LABELS = { brave: 'Brave Search API', perplexity: 'Perplexity Search API', serper: 'Serper (Google results)', tavily: 'Tavily', searxng: 'SearXNG (self-hosted)', duckduckgo: 'DuckDuckGo (scraped, no key)' };
     async function loadWebSearchStatus() {
       const el = document.getElementById('st-ws-status'); if (!el) return;
+      const inuse = document.getElementById('st-ws-inuse');
       try {
-        const d = await (await fetch('/api/websearch/status', { credentials: 'include' })).json();
-        const s = d.search || {}, f = d.fetch || {};
-        const chain = (s.chain || []).join(' → ') || 'none';
-        stSum('tools', 'search', `Search: ${chain}`);
+        const resp = await fetch('/api/websearch/status', { credentials: 'include' });
+        const d = resp.ok ? await resp.json() : null;
+        // Only a real status answer is read: an error page or an answer without a chain is "unavailable", never "off".
+        if (!d || !d.search || !Array.isArray(d.search.chain)) throw new Error('no status');
+        const s = d.search, f = d.fetch || {};
+        // An older server (page updated, hub not yet restarted) sends chain and backends but none of the summary fields,
+        // and may list a backend twice.
+        const c = s.chain.filter((b, i, a) => a.indexOf(b) === i);
+        const isOff = s.off != null ? !!s.off : c.length === 0;
+        const thin = !isOff && (s.fallbackOnly != null ? !!s.fallbackOnly : (c.length === 1 && c[0] === 'duckduckgo'));
+        const label = b => WS_LABELS[b] || b;
+        const firstLabel = s.inUseLabel || (c[0] ? label(c[0]) : '');
+        const rest = c.slice(1).map(label);
+        const pb = (s.backends || []).find(b => b.id === 'perplexity') || {};
+        const pKey = s.perplexityKey != null ? !!s.perplexityKey : !!pb.hasKey;
+        const pOn = s.perplexityOn != null ? !!s.perplexityOn : c.includes('perplexity');
+        const chain = c.join(' → ') || 'none';
+        stSum('tools', 'search', isOff ? 'web search: off' : thin ? 'web search: free fallback' : `web search: ${firstLabel}`, isOff || thin);
+        if (inuse) {
+          inuse.innerHTML = isOff
+            ? '<span style="color:var(--warning)">Web search is off: no search service is available, so agents get no results. Add a search key below, or ask your lead agent to switch DuckDuckGo back on.</span>'
+            : thin
+              ? '<span style="color:var(--warning)">Web search is using the free fallback; results are thin. Add a search key for much better research.</span>'
+              : `${esc(firstLabel)}${rest.length ? esc(` (then ${rest.join(', ')})`) : ''}`;
+        }
+        const pplx = document.getElementById('st-ws-pplx');
+        if (pplx) pplx.textContent = !pKey ? 'No Perplexity key; add one under LLM Providers to use Perplexity search.'
+          : pOn ? 'Your Perplexity key is set, so searches can use it.'
+            : 'Your Perplexity key is set, but Perplexity search is turned off here.';
         const off = (s.backends || []).filter(b => !b.configured).map(b => `${b.id} (needs ${b.needs})`).join(', ');
         const sx = s.searxng || {};
         const sxState = sx.container ? `container ${sx.name} ${sx.container}${sx.healthy ? ', healthy' : ', not answering'}` : sx.url ? (sx.healthy ? `external at ${sx.url}, healthy` : `${sx.url} not answering`) : 'not running';
         el.textContent = `Search chain now: ${chain}.${off ? ` Not configured: ${off}.` : ''} SearXNG: ${sxState}. Fetch: private addresses ${f.allowPrivate}, browser rendering ${f.render}${f.renderer ? ' (Firefox available)' : ' (no Playwright Firefox found: rendering unavailable)'}, PDF ${f.pdftotext ? 'yes' : 'no (install poppler-utils)'}, cache ${f.cacheMinutes} min.`;
-      } catch { el.textContent = 'Could not read the web search status.'; }
+      } catch {
+        el.textContent = 'Could not read the web search status.';
+        if (inuse) inuse.textContent = 'Search status unavailable.';
+        stSum('tools', 'search', 'web search: status unavailable', false);
+        const pplx = document.getElementById('st-ws-pplx'); if (pplx) pplx.textContent = '';
+      }
     }
-    async function saveWebSearch() {
+    async function saveWebSearch(opts = {}) {
       const saved = dialogGuard.savePoint(['st-ws-key-brave', 'st-ws-key-serper', 'st-ws-key-tavily', 'st-ws-order', 'st-ws-searxng', 'st-wf-private', 'st-wf-render', 'st-wf-jina'].map(id => document.getElementById(id)));
       const state = document.getElementById('st-ws-state');
       const keys = {}, sent = {};   // sent: each key field as it was when Save was pressed
@@ -4854,7 +4960,7 @@
         fetch: { allowPrivate: document.getElementById('st-wf-private').value, render: document.getElementById('st-wf-render').value, jina: document.getElementById('st-wf-jina').checked },
       };
       try {
-        const r = await (await fetch('/api/websearch/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify(body) })).json();
+        const r = await (await stSaveFetch('/api/websearch/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify(body) })).json();
         if (state) state.textContent = r.ok ? 'Saved. Applies to the next search or fetch.' : (r.error || 'Could not save');
         if (r.ok) {
           saved();
@@ -4863,7 +4969,8 @@
           for (const [k, v] of Object.entries(sent)) { const inp = document.getElementById(`st-ws-key-${k}`); if (inp && inp.value === v) { inp.placeholder = 'set'; inp.value = ''; dialogGuard.markLoaded(inp); } }
         }
         loadWebSearchStatus();
-      } catch (e) { if (state) state.textContent = 'Could not save: ' + e.message; }
+        return r.ok ? true : (r.error || 'Could not save');
+      } catch (e) { if (state) state.textContent = 'Could not save: ' + e.message; return e.message; }
     }
     async function tryWebSearch() {
       const out = document.getElementById('st-ws-result'); if (!out) return;
@@ -4873,6 +4980,35 @@
       try {
         const r = await (await fetch('/api/websearch/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ query, backend, maxResults: 5 }) })).json();
         out.textContent = `${r.ms != null ? `${r.ms} ms. ` : ''}${r.rendered || r.error || ''}`;
+      } catch (e) { out.textContent = 'Search failed: ' + e.message; }
+    }
+    async function testWebSearch() {
+      const out = document.getElementById('st-ws-test'); if (!out) return;
+      out.textContent = 'Searching…';
+      try {
+        const r = await (await fetch('/api/websearch/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ query: 'weather forecast tomorrow', maxResults: 10 }) })).json();
+        const n = Array.isArray(r.results) ? r.results.length : 0;
+        if (r.backend && n) {
+          out.textContent = `Answered by ${WS_LABELS[r.backend] || r.backend}${r.backend === 'duckduckgo' ? ', the free no-key fallback' : ''}: ${n} result(s) in ${((r.ms || 0) / 1000).toFixed(1)} s`;
+        } else {
+          // One short reason per search tried, never a raw JSON error body. "The key was refused" only where a key was sent
+          // (Brave, Serper, Tavily, Perplexity) and the answer is about the key: a 401, or an explicit bad-credential message.
+          // Any other refusal is the service's; a plain-text reason (an IP allowlist, say) is kept, cut short.
+          const KEYED = ['brave', 'serper', 'tavily', 'perplexity'];
+          const BAD_KEY = /SUBSCRIPTION_TOKEN_INVALID|\binvalid[ _-]?(api[ _-]?)?key\b|\b(api[ _-]?)?key (is )?(invalid|missing|not valid)\b|\bmissing or invalid api key\b|\binvalid[ _-]?(access[ _-]?)?token\b/i;
+          const why = (t) => {
+            const e = String(t.error || 'no answer');
+            const m = /^HTTP (\d{3})(?::\s*([\s\S]*))?$/.exec(e);
+            if (m && ['401', '403', '422'].includes(m[1])) {
+              if (KEYED.includes(t.backend) && (m[1] === '401' || BAD_KEY.test(e))) return `the key was refused (HTTP ${m[1]})`;
+              const body = (m[2] || '').trim();
+              const said = body && !/^[[{<]/.test(body) ? `: ${body.length > 80 ? `${body.slice(0, 80)}…` : body}` : '';
+              return `${m[1] === '422' ? 'the service rejected the request' : 'the service refused the request'} (HTTP ${m[1]})${said}`;
+            }
+            return e.length > 120 ? `${e.slice(0, 120)}…` : e;
+          };
+          out.textContent = 'No results: ' + ((r.tried || []).map(t => `${WS_LABELS[t.backend] || t.backend}: ${why(t)}`).join('; ') || r.error || 'no search backend is configured');
+        }
       } catch (e) { out.textContent = 'Search failed: ' + e.message; }
     }
     async function tryWebFetch() {
@@ -4995,10 +5131,10 @@
         const members = Array.isArray(g.connectors) && g.connectors.length ? g.connectors.map(hubEsc).join(', ') : 'no connectors';
         const act = g.unlocked
           ? `<button class="st-test-btn" onclick="cxGroupLock('${hubEsc(g.id)}')">Lock</button>`
-          : `<input type="password" id="st-cx-gpass-${hubEsc(g.id)}" placeholder="passphrase" autocomplete="off" style="max-width:160px" onkeydown="if(event.key==='Enter')cxGroupUnlock('${hubEsc(g.id)}')"><button class="st-test-btn" onclick="cxGroupUnlock('${hubEsc(g.id)}')">Unlock</button>`;
+          : `<input type="password" data-eye id="st-cx-gpass-${hubEsc(g.id)}" placeholder="passphrase" autocomplete="off" style="max-width:160px" onkeydown="if(event.key==='Enter')cxGroupUnlock('${hubEsc(g.id)}')"><button class="st-test-btn" onclick="cxGroupUnlock('${hubEsc(g.id)}')">Unlock</button>`;
         return `<div class="cx-row">
           <div class="cx-main"><strong>${hubEsc(g.label || g.id)}</strong> <span class="cx-id">(${hubEsc(g.id)})</span> ${g.unlocked ? cxBadge('unlocked' + (g.unlockedSince ? ' since ' + cxWhen(g.unlockedSince) : ''), 'var(--success)') : cxBadge('locked')}<div class="cx-sub">group · ${members}</div></div>
-          <div class="cx-actions">${act}<input type="password" id="st-cx-gdel-${hubEsc(g.id)}" placeholder="passphrase to delete" autocomplete="off" style="max-width:150px"><button class="st-test-btn" onclick="cxGroupDelete('${hubEsc(g.id)}')">Delete</button></div>
+          <div class="cx-actions">${act}<input type="password" data-eye id="st-cx-gdel-${hubEsc(g.id)}" placeholder="passphrase to delete" autocomplete="off" style="max-width:150px"><button class="st-test-btn" onclick="cxGroupDelete('${hubEsc(g.id)}')">Delete</button></div>
         </div>`;
       }).join('');
     }
@@ -5026,7 +5162,7 @@
           + (c.lastOk ? `${errText ? ' · ' : ''}last ok ${hubEsc(cxWhen(c.lastOk))}` : '');
         const lockBtn = !c.protect || c.protect === 'none' ? ''
           : c.unlocked ? `<button class="st-test-btn" onclick="cxLock('${id}')">Lock</button>`
-            : `<input type="password" id="st-cx-pass-${id}" placeholder="passphrase" autocomplete="off" style="max-width:140px" onkeydown="if(event.key==='Enter')cxUnlock('${id}')"><button class="st-test-btn" onclick="cxUnlock('${id}')">Unlock</button>`;
+            : `<input type="password" data-eye id="st-cx-pass-${id}" placeholder="passphrase" autocomplete="off" style="max-width:140px" onkeydown="if(event.key==='Enter')cxUnlock('${id}')"><button class="st-test-btn" onclick="cxUnlock('${id}')">Unlock</button>`;
         const tested = cxState.tests[c.id];
         const tools = tested ? `<div class="cx-tools">${tested.length ? tested.map(t => `<div><code>${hubEsc(t.name)}</code> ${cxBadge(t.cls || 'read')} <span style="color:var(--text-dim)">${hubEsc(t.description || '')}</span></div>`).join('') : 'no tools reported'}</div>` : '';
         return `<div class="cx-row" id="st-cx-row-${id}">
@@ -5107,8 +5243,8 @@
         <div class="cx-form-title">New group</div>
         <div class="st-row"><label style="flex-basis:150px">Id</label><input type="text" id="st-cx-g-id" placeholder="medical" style="max-width:200px"></div>
         <div class="st-row"><label style="flex-basis:150px">Label</label><input type="text" id="st-cx-g-label" placeholder="Medical records" style="max-width:300px"></div>
-        <div class="st-row"><label style="flex-basis:150px">Passphrase</label><input type="password" id="st-cx-g-pass" autocomplete="new-password" style="max-width:220px"></div>
-        <div class="st-row"><label style="flex-basis:150px">Passphrase again</label><input type="password" id="st-cx-g-pass2" autocomplete="new-password" style="max-width:220px"></div>
+        <div class="st-row"><label style="flex-basis:150px">Passphrase</label><input type="password" data-eye id="st-cx-g-pass" autocomplete="new-password" style="max-width:220px"></div>
+        <div class="st-row"><label style="flex-basis:150px">Passphrase again</label><input type="password" data-eye id="st-cx-g-pass2" autocomplete="new-password" style="max-width:220px"></div>
         <div class="st-row"><label style="flex-basis:150px"></label><button class="st-test-btn" onclick="cxGroupCreate()">Create group</button><button class="st-test-btn" onclick="cxCancel()">Cancel</button><span id="st-cx-form-err" style="font-size:0.78rem;color:var(--error);margin-left:8px"></span></div>
       </div>`;
     }
@@ -5200,10 +5336,10 @@
         <div class="st-row">${L('Agents')}<span class="cx-sub">The lead agents can always use it; tick the others that may.</span></div>
         <div id="st-cx-f-agents" class="cx-checks">${leadNames.map(n => `<label><input type="checkbox" checked disabled> ${hubEsc(n)} (lead): always</label>`).join('')}${agentNames.length ? agentNames.map(n => `<label><input type="checkbox" data-cx-agent="${hubEsc(n)}" ${granted.has(n) ? 'checked' : ''}> ${hubEsc(n)}</label>`).join('') : (leadNames.length ? '' : '<span class="cx-sub">no agents loaded</span>')}</div>
         <div class="st-row">${L('Protect')}${sel('st-cx-f-protect', [['none', 'none: always on'], ['own', 'own passphrase'], ['group', 'group passphrase']], c.protect || 'none', 'onchange="cxFormProtectChange()"')}<span id="st-cx-f-group-wrap">${groups.length ? sel('st-cx-f-group', groups, c.group || groups[0][0], 'onchange="cxFormProtectChange()"') : '<span class="cx-sub">no groups yet</span>'}</span></div>
-        <div class="st-row" id="st-cx-f-curpass-row">${L('Current passphrase')}<input type="password" id="st-cx-f-curpass" autocomplete="off" style="max-width:220px"><span class="cx-sub">needed to change how a protected connector is locked</span></div>
+        <div class="st-row" id="st-cx-f-curpass-row">${L('Current passphrase')}<input type="password" data-eye id="st-cx-f-curpass" autocomplete="off" style="max-width:220px"><span class="cx-sub">needed to change how a protected connector is locked</span></div>
         <div id="st-cx-f-newpass-rows">
-          <div class="st-row">${L('New passphrase')}<input type="password" id="st-cx-f-newpass" autocomplete="new-password" style="max-width:220px"><span class="cx-sub">${editing && c.protect === 'own' ? 'leave blank to keep the current one' : ''}</span></div>
-          <div class="st-row">${L('Repeat')}<input type="password" id="st-cx-f-newpass2" autocomplete="new-password" style="max-width:220px"></div>
+          <div class="st-row">${L('New passphrase')}<input type="password" data-eye id="st-cx-f-newpass" autocomplete="new-password" style="max-width:220px"><span class="cx-sub">${editing && c.protect === 'own' ? 'leave blank to keep the current one' : ''}</span></div>
+          <div class="st-row">${L('Repeat')}<input type="password" data-eye id="st-cx-f-newpass2" autocomplete="new-password" style="max-width:220px"></div>
         </div>
         <div class="st-row">${L('Sensitive')}<label style="flex:0 0 auto;text-align:left"><input type="checkbox" id="st-cx-f-sensitive" ${c.sensitive ? 'checked' : ''}> reads need the owner's policy nod</label></div>
         <div class="st-row">${L('Data folder')}<input type="text" id="st-cx-f-dataHome" value="${hubEsc(c.dataHome || '')}" placeholder="(hub default)"></div>
@@ -5377,6 +5513,111 @@
       } catch (e) { alert('Could not save: ' + e.message); }
     }
 
+    // Deep research reminder (settings.researchReminderDays, days 0..365, 0 = never): saved at once; a failure puts it back.
+    let researchReminderSaved = null;
+    async function saveResearchReminder(value, sel) {
+      const days = Number(value);
+      if (researchReminderSaved === null && sel) researchReminderSaved = String([...sel.options].find(o => o.defaultSelected)?.value || '7');   // the value the page was drawn with
+      try {
+        const r = await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ researchReminderDays: days }) });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        researchReminderSaved = String(days);
+        hubToast(days === 0 ? 'Deep research reminder: never.' : `Deep research reminder: every ${days} days.`);
+      } catch (e) {
+        if (sel && researchReminderSaved !== null) sel.value = researchReminderSaved;
+        hubToast('Could not save: ' + e.message);
+      }
+    }
+
+    // Thorough deep research (admin): settings.researchThorough { maxSources, readersAtOnce, reviewRounds, timeLimitMinutes, pdf,
+    // readerModel } and settings.researchHelperSearch ('default' | 'both'). Each control saves at once, one save at a time;
+    // a failure puts the control back to the last saved value. The phone has no admin settings, so none of this is on the phone.
+    function researchThoroughBlockHtml(data) {
+      const t = (data && data.researchThorough && typeof data.researchThorough === 'object') ? data.researchThorough : {};
+      const num = (k, lo, hi, d) => { const n = Number(t[k]); return Number.isInteger(n) && n >= lo && n <= hi ? n : d; };
+      const vals = { maxSources: num('maxSources', 1, 40, 12), readersAtOnce: num('readersAtOnce', 1, 12, 4), reviewRounds: num('reviewRounds', 0, 5, 2), timeLimitMinutes: num('timeLimitMinutes', 10, 240, 60),
+        leadSteps: num('leadSteps', 5, 300, 60), leadWallMinutes: num('leadWallMinutes', 10, 1440, 360), leadReaderCalls: num('leadReaderCalls', 1, 400, 100), leadReviewRounds: num('leadReviewRounds', 0, 50, 10),
+        leadTopicSearches: num('leadTopicSearches', 0, 20, 3), leadSourcesPerSub: num('leadSourcesPerSub', 0, 20, 2),
+        leadTopNewPerSub: num('leadTopNewPerSub', 0, 10, 2), leadPdfMaxMB: num('leadPdfMaxMB', 4, 64, 32) };
+      const engine = t.engine === 'pipeline' ? 'pipeline' : 'lead';
+      const modelVal = (k) => (typeof t[k] === 'string' && t[k] !== 'auto' && t[k].length <= 120 && /^[A-Za-z0-9._:/@[\]-]+$/.test(t[k]) ? t[k] : '');
+      const modelRow = (id, key, label) => { const mv = modelVal(key).replace(/&/g, '&amp;').replace(/"/g, '&quot;'); return `<div class="st-row">
+          <label for="${id}">${label}</label>
+          <input type="text" id="${id}" maxlength="120" placeholder="automatic" value="${mv}" data-saved="${mv}" style="max-width:260px" onchange="saveResearchSetting('${key}', this)">
+        </div>`; };
+      const pdf = t.pdf === false;
+      const readerModel = t.readerModel === 'helper' ? 'helper' : 'own';
+      const both = data && data.researchHelperSearch === 'both';
+      const numRow = (id, key, label, lo, hi, hint) => `<div class="st-row">
+          <label for="${id}">${label}</label>
+          <input type="number" id="${id}" min="${lo}" max="${hi}" step="1" value="${vals[key]}" data-saved="${vals[key]}" style="max-width:90px" onchange="saveResearchSetting('${key}', this)">
+        </div>
+        <div class="st-hint">${hint}</div>`;
+      return `<div id="st-research-thorough">
+        <div class="st-row"><label><b>Thorough research</b></label></div>
+        <div class="st-row">
+          <label for="st-rt-engine">How Thorough runs</label>
+          <select id="st-rt-engine" data-saved="${engine}" onchange="saveResearchSetting('engine', this)"><option value="lead"${engine === 'lead' ? ' selected' : ''}>A lead model leads it (recommended)</option><option value="pipeline"${engine === 'pipeline' ? ' selected' : ''}>Fixed stages (the earlier method)</option></select>
+        </div>
+        <div class="st-hint">A lead model chooses and reads the key sources, sends readers back, checks every figure and has the report reviewed until it holds up. The fixed stages are the earlier method, kept for comparison.</div>
+        ${numRow('st-rt-steps', 'leadSteps', 'Lead steps', 5, 300, 'How many turns the lead may take. In each turn it can search, open, send readers, check and revise several things at once (5 to 300).')}
+        ${numRow('st-rt-leadmin', 'leadWallMinutes', 'Time limit, minutes', 10, 1440, 'A lead run still going after this long finishes with what it has and says what was left open (10 to 1440).')}
+        ${numRow('st-rt-reads', 'leadReaderCalls', 'Reader calls', 1, 400, 'How many times the lead may send a reader to a source (1 to 400).')}
+        ${numRow('st-rt-leadrounds', 'leadReviewRounds', 'Review rounds', 0, 50, 'How many times the report goes back to its reviewers. 0 turns the review off (0 to 50).')}
+        ${numRow('st-rt-topics', 'leadTopicSearches', 'Topic searches per sub-question', 0, 20, 'Before the first draft the lead must run this many topic searches for each sub-question, one of them limited to recent work. 0 switches the rule off.')}
+        ${numRow('st-rt-persub', 'leadSourcesPerSub', 'Sources per sub-question', 0, 20, 'Distinct sources those searches must find for each sub-question before the first draft.')}
+        ${numRow('st-rt-topnew', 'leadTopNewPerSub', 'Top new results to read per sub-question', 0, 10, 'Before the first draft the lead reads (or waives with a reason) this many of the newest-found results of each sub-question\'s topic searches. 0 switches this part off.')}
+        ${numRow('st-rt-pdfmb', 'leadPdfMaxMB', 'Largest PDF to read, MB', 4, 64, 'Bigger papers are fetched up to this size; longer texts are read in part.')}
+        ${modelRow('st-rt-lead', 'leadModel', 'Lead model')}
+        ${modelRow('st-rt-reader2', 'leadReaderModel', 'Reader model')}
+        ${modelRow('st-rt-readertop', 'leadReaderTopModel', 'Top-tier reader model')}
+        <div class="st-hint">Automatic: the lead is the strongest model on the asking agent's own service, readers one tier below it, the top-tier reader is the lead, and the reviewers are a model from another vendor plus one on the agent's service. Agents whose content stays on their own service always use their own model. Type a model id to choose one.</div>
+        <div class="st-row">
+          <label class="gs-sub"><input type="checkbox" id="st-rt-pdf" ${pdf ? '' : 'checked'} data-saved="${pdf ? 'false' : 'true'}" onchange="saveResearchSetting('pdf', this)"> Make a PDF</label>
+        </div>
+        <div class="st-hint">Needs Chrome or Chromium on this computer; without one the document is Markdown and HTML.</div>
+        <div id="st-rt-pipeline"${engine === 'lead' ? ' style="display:none"' : ''}>
+        <div class="st-row"><label><b>Fixed stages only</b></label></div>
+        ${numRow('st-rt-sources', 'maxSources', 'Sources read in full', 1, 40, 'How many pages the research reads whole, after the quick pass picks the ones the answer depends on most (1 to 40).')}
+        ${numRow('st-rt-readers', 'readersAtOnce', 'Readers at once', 1, 12, 'How many readers work at the same time. More is faster but uses more of the AI service at once (1 to 12).')}
+        ${numRow('st-rt-rounds', 'reviewRounds', 'Review rounds', 0, 5, 'How many times a second reviewer checks the findings against the sources and sends back what does not hold (0 to 5).')}
+        ${numRow('st-rt-minutes', 'timeLimitMinutes', 'Time limit, minutes', 10, 240, 'A thorough run that is still going after this long is stopped and reports what it has (10 to 240).')}
+        <div class="st-row">
+          <label for="st-rt-reader">Readers use</label>
+          <select id="st-rt-reader" data-saved="${readerModel}" onchange="saveResearchSetting('readerModel', this)"><option value="own"${readerModel === 'own' ? ' selected' : ''}>the agent's own model</option><option value="helper"${readerModel === 'helper' ? ' selected' : ''}>the fast helper model</option></select>
+        </div>
+        <div class="st-hint">The fast helper model is cheaper and quicker; the agent's own model reads more carefully.</div>
+        </div>
+        <div class="st-row">
+          <label for="st-rt-search">Research helpers search with</label>
+          <select id="st-rt-search" data-saved="${both ? 'both' : 'default'}" onchange="saveResearchSetting('researchHelperSearch', this)"><option value="default"${both ? '' : ' selected'}>their usual search</option><option value="both"${both ? ' selected' : ''}>their usual search and the hub's search (test)</option></select>
+        </div>
+        <div class="st-hint">A test: helpers and readers get the hub's own web search as well as the one they have. Leave it on the usual search unless you are comparing results.</div>
+      </div>`;
+    }
+    let researchThoroughSaving = false;
+    async function saveResearchSetting(key, el) {
+      const saved = el.dataset.saved;
+      const back = () => { if (el.type === 'checkbox') el.checked = saved === 'true'; else el.value = saved; };
+      if (researchThoroughSaving) { back(); hubToast('Another setting is saving. Try again in a moment.'); return; }
+      let value = el.type === 'checkbox' ? el.checked : el.type === 'number' ? Number(el.value) : el.value;
+      const isModel = key === 'leadModel' || key === 'leadReaderModel' || key === 'leadReaderTopModel';
+      if (isModel) { value = String(value).trim(); if (!value) value = 'auto'; }
+      const patch = key === 'researchHelperSearch' ? { researchHelperSearch: value } : { researchThorough: { [key]: value } };
+      researchThoroughSaving = true;
+      try {
+        const r = await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify(patch) });
+        if (!r.ok) { let m = 'HTTP ' + r.status; try { const j = await r.json(); if (j && j.error) m = j.error; } catch {} throw new Error(m); }
+        el.dataset.saved = isModel && value === 'auto' ? '' : String(value);
+        if (isModel) el.value = value === 'auto' ? '' : value;
+        if (key === 'engine' && typeof document !== 'undefined') { const p = document.getElementById('st-rt-pipeline'); if (p) p.style.display = value === 'pipeline' ? '' : 'none'; }
+        hubToast('Saved.');
+      } catch (e) {
+        back();
+        hubToast('Could not save: ' + e.message);
+      } finally { researchThoroughSaving = false; }
+    }
+
     // Approval cards on/off: saved at once, takes effect on the next tool call of any agent.
     async function saveApprovalsToggle(on) {
       const state = document.getElementById('st-approvals-state');
@@ -5408,25 +5649,45 @@
     // ── OpenRouter box: the catalogue with search, the offer (ticked), privacy (only providers that do not store or
     // train on prompts), defaults (the newest tool-capable model of each vendor the hub has no key for). ──
     let orView = null;
+    // Ticks not saved yet, by model id (true ticked, false unticked): they survive a new Find, the tools filter and a refresh.
+    // A tick on a row the filter hides stays on the page as a hidden row, so both Saves send it and Close still warns.
+    const orPending = new Map();
+    let orDrawn = new Set();   // the saved offer the rows on the page were drawn from
     async function loadOpenRouterBox(refresh) {
       const body = document.getElementById('st-or-body');
       if (!body) return;
       try {
         const r = await fetch('/api/openrouter' + (refresh ? '?refresh=1' : ''), { credentials: 'include' });
-        orView = await r.json();
-      } catch (e) { body.textContent = 'Could not load the OpenRouter list: ' + e.message; return; }
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const next = await r.json();
+        if (!next || !Array.isArray(next.models)) throw new Error('the answer had no model list');
+        orView = next;
+      } catch (e) {
+        const m = 'Could not load the OpenRouter list: ' + e.message;
+        if (refresh && body.querySelector('.st-or-pick')) hubToast(m); else body.textContent = m;   // a failed Refresh keeps the list and its ticks
+        return;
+      }
       if (orView && orView.hasKey) stSum('models', 'or', `OpenRouter: ${(orView.chosen || []).length} models`);
-      renderOpenRouterBox();
+      renderOpenRouterBox(refresh ? {} : { fresh: true });   // Settings opened: a new start; Refresh keeps the ticks
     }
     function orPrice(m) {
       if (m.prompt == null || m.completion == null) return '';
       const f = (x) => { const v = Number((x * 1e6).toPrecision(12)); return v === 0 ? '0' : v < 0.1 ? v.toFixed(3) : v < 10 ? v.toFixed(2) : v.toFixed(0); };
       return `$${f(m.prompt)} / $${f(m.completion)} per M`;
     }
-    function renderOpenRouterBox() {
+    function renderOpenRouterBox(opts = {}) {
       const body = document.getElementById('st-or-body');
       if (!body || !orView) return;
       const v = orView;
+      const savedSet = new Set(v.chosen || []);
+      if (opts.fresh) orPending.clear();
+      else {
+        // Each box against the offer it was drawn from: that is what the person changed. Then an edit the offer now has
+        // (saved here or by someone else) stops counting.
+        for (const b of body.querySelectorAll('.st-or-pick')) { if (b.checked === orDrawn.has(b.value)) orPending.delete(b.value); else orPending.set(b.value, b.checked); }
+        for (const [id, on] of orPending) if (on === savedSet.has(id)) orPending.delete(id);
+      }
+      orDrawn = savedSet;
       const q = (document.getElementById('st-or-q')?.value || '').trim().toLowerCase();
       const all = !!document.getElementById('st-or-all')?.checked;
       const chosen = new Set(v.chosen || []);
@@ -5439,36 +5700,42 @@
           <span style="flex:1;min-width:0"><b>${esc(m.name || m.id)}</b> <code style="font-size:0.75rem;color:var(--text-dim)">${esc(m.id)}</code></span>
           <span style="font-size:0.75rem;color:var(--text-dim);white-space:nowrap">${m.tools ? '🛠' : ''}${m.reasoning ? ' 🧠' : ''}${m.images ? ' 🖼' : ''} ${ctx(m.context)} ${esc(orPrice(m))}</span>
         </label>`).join('');
+      const shown = new Set(list.slice(0, 300).map(m => m.id));
+      const hiddenRows = [...orPending.keys()].filter(id => !shown.has(id)).map(id => `<label class="or-row" hidden><input type="checkbox" class="st-or-pick" value="${esc(id)}"${chosen.has(id) ? ' checked' : ''}></label>`).join('');
       const keyLine = v.hasKey ? '' : `<div style="color:var(--warning);margin-bottom:6px">No OpenRouter key yet: get one at <a href="https://openrouter.ai/keys" target="_blank" rel="noopener" style="color:var(--accent)">openrouter.ai/keys</a>, paste it in LLM Providers above, press Test, then Save. The models below show up in the pickers once the key is saved.</div>`;
       body.innerHTML = `${keyLine}
         <div class="st-row"><label style="flex-basis:150px">Privacy</label><label style="flex:1;display:flex;gap:6px;align-items:center;cursor:pointer"><input type="checkbox" id="st-or-privacy"${v.privacy ? ' checked' : ''} onchange="saveOpenRouter()"> Only use providers that do not store or train on prompts</label></div>
-        <div class="st-row"><label style="flex-basis:150px">Offered</label><span>${(v.chosen || []).length} model(s)${v.custom ? '' : ' (the default offer)'} · catalogue ${(v.models || []).length} models${v.fetchedAt ? `, read ${esc(new Date(v.fetchedAt).toLocaleString())}` : ''}</span></div>
-        <div class="st-row" style="flex-wrap:wrap"><label style="flex-basis:150px">Find</label><input type="text" id="st-or-q" value="${esc(q)}" placeholder="grok, deepseek, kimi, qwen, llama, claude…" oninput="renderOpenRouterBox()" style="flex:1;min-width:160px">
-          <label style="display:flex;gap:4px;align-items:center;margin-left:8px;font-size:0.8rem;white-space:nowrap"><input type="checkbox" id="st-or-all"${all ? ' checked' : ''} onchange="renderOpenRouterBox()"> show models without tools</label></div>
-        <div id="st-or-list" style="max-height:320px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:6px 10px">${rows || '<i>No model matches.</i>'}${list.length > 300 ? `<div style="color:var(--text-dim)">… ${list.length - 300} more: narrow the search.</div>` : ''}</div>
+        <div class="st-row"><label style="flex-basis:150px">Offered</label><span>${(v.chosen || []).length} model(s)${v.custom ? '' : ' (the default offer)'}${orPending.size ? ` · ${orPending.size} change${orPending.size === 1 ? '' : 's'} not saved yet` : ''} · catalogue ${(v.models || []).length} models${v.fetchedAt ? `, read ${esc(new Date(v.fetchedAt).toLocaleString())}` : ''}</span></div>
+        <div class="st-row" style="flex-wrap:wrap"><label style="flex-basis:150px">Find</label><input type="text" id="st-or-q" data-no-dirty value="${esc(q)}" placeholder="grok, deepseek, kimi, qwen, llama, claude…" oninput="renderOpenRouterBox()" style="flex:1;min-width:160px">
+          <label style="display:flex;gap:4px;align-items:center;margin-left:8px;font-size:0.8rem;white-space:nowrap"><input type="checkbox" id="st-or-all" data-no-dirty${all ? ' checked' : ''} onchange="renderOpenRouterBox()"> show models without tools</label></div>
+        <div id="st-or-list" style="max-height:320px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:6px 10px">${rows || '<i>No model matches.</i>'}${hiddenRows}${list.length > 300 ? `<div style="color:var(--text-dim)">… ${list.length - 300} more: narrow the search.</div>` : ''}</div>
         <div class="st-hint" style="margin-top:8px">🛠 can use tools (agents need this) · 🧠 takes a reasoning level · 🖼 reads images · context window · price in / out per million tokens</div>
         <div class="st-row"><label style="flex-basis:150px"></label><button class="st-test-btn" onclick="saveOpenRouter(true)">Save the ticked models</button>
           <button class="st-test-btn" onclick="openRouterDefaults()" style="margin-left:6px">Use the defaults</button>
           <button class="st-test-btn" onclick="loadOpenRouterBox(true)" style="margin-left:6px">Refresh the list</button></div>`;
+      // Rows are drawn as saved; a tick not saved yet goes on top, so the dialog counts it as a change.
+      for (const b of body.querySelectorAll('.st-or-pick')) if (orPending.has(b.value)) { dialogGuard.savePoint([b])(); b.checked = orPending.get(b.value); }
       const qEl = document.getElementById('st-or-q');
       if (q && qEl) { qEl.focus(); qEl.setSelectionRange(q.length, q.length); }
     }
-    async function postOpenRouter(payload, done) {
+    // Returns true once saved, or the reason; quiet (from the main Save) leaves the failure to the main Save's message.
+    async function postOpenRouter(payload, done, opts = {}) {
       try {
-        const r = await fetch('/api/openrouter', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+        const r = await stSaveFetch('/api/openrouter', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
         const j = await r.json();
-        if (!r.ok || !j.ok) { hubToast(j.error || 'Could not save.'); return; }
-        orView = j; renderOpenRouterBox(); __modelListCache = null;   // the pickers refetch the model list
+        if (!r.ok || !j.ok) { const m = j.error || 'Could not save.'; if (!opts.quiet) hubToast(m); return m; }
+        orView = j; renderOpenRouterBox(payload.models === null ? { fresh: true } : {}); __modelListCache = null;   // the pickers refetch the model list; ticks made while it saved stay
         if (done) hubToast(done(j));
-      } catch (e) { hubToast('Could not save: ' + e.message); }
+        return true;
+      } catch (e) { if (!opts.quiet) hubToast('Could not save: ' + e.message); return e.message; }
     }
-    function saveOpenRouter(withModels) {
+    function saveOpenRouter(withModels, opts = {}) {
       const privacy = !!document.getElementById('st-or-privacy')?.checked;
       if (!withModels) return postOpenRouter({ privacy }, () => (privacy ? 'OpenRouter: only providers that do not store or train on prompts.' : 'OpenRouter: any provider.'));
-      // Keep ticks that the current search hides: start from the saved offer, apply the visible boxes.
+      // Start from the saved offer and apply every box: the shown rows and the hidden rows holding ticks a search hides.
       const keep = new Set(orView && orView.chosen || []);
       for (const b of document.querySelectorAll('.st-or-pick')) { if (b.checked) keep.add(b.value); else keep.delete(b.value); }
-      postOpenRouter({ privacy, models: [...keep] }, (j) => `OpenRouter: ${j.chosen.length} model(s) offered in the pickers.`);
+      return postOpenRouter({ privacy, models: [...keep] }, (j) => `OpenRouter: ${j.chosen.length} model(s) offered in the pickers.`, opts);
     }
     function openRouterDefaults() { postOpenRouter({ models: null }, (j) => `OpenRouter: back to the default offer (${j.chosen.length} models).`); }
 
@@ -5579,8 +5846,87 @@
       } catch (e) { sel.value = before; hubToast('Could not save: ' + e.message); }
       finally { sel.disabled = false; }
     }
+    // Settings -> Notifications: the person's deep research choice (GET/POST /api/research-pref). Hidden unless the hub says on.
+    const RESEARCH_CHOICES = [['ask', 'Ask each time'], ['always', 'Always'], ['never', 'Never']];
+    const RESEARCH_HINT = 'When a question needs research, your agents can offer a deep research run (a few minutes, many sources).';
+    function researchChoiceLabel(choice) { const m = RESEARCH_CHOICES.find(c => c[0] === choice); return m ? m[1] : RESEARCH_CHOICES[0][1]; }
+    let researchPrefSaving = false;   // one save at a time: a choice made while one is in flight is ignored
+    let researchPrefChoice = 'ask';
+    let researchPrefLevel = 'quick';   // what Always yes runs: quick | thorough
+    const RESEARCH_LEVEL_HINT = 'Thorough reads the key sources in full and checks figures; it can take up to an hour.';
+    function researchPrefPaint(box) {
+      while (box.firstChild) box.removeChild(box.firstChild);
+      const row = document.createElement('div');
+      row.className = 'st-row';
+      const lab = document.createElement('label');
+      lab.htmlFor = 'st-research-choice'; lab.textContent = 'Deep research';
+      const sel = document.createElement('select');
+      sel.id = 'st-research-choice';
+      for (const [v, l] of RESEARCH_CHOICES) { const o = document.createElement('option'); o.value = v; o.textContent = l; sel.appendChild(o); }
+      sel.value = researchPrefChoice;
+      sel.addEventListener('change', async () => {
+        if (researchPrefSaving) { sel.value = researchPrefChoice; return; }
+        const want = sel.value, before = researchPrefChoice;
+        researchPrefSaving = true; sel.disabled = true;
+        let err = '';
+        try {
+          const r = await fetch('/api/research-pref', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ choice: want }) });
+          const d = await r.json().catch(() => ({}));
+          if (r.ok && d && d.ok) researchPrefChoice = ['ask', 'always', 'never'].includes(d.choice) ? d.choice : want; else err = (d && d.error) || 'Could not save that';
+        } catch (e) { err = 'Could not save that'; }
+        researchPrefSaving = false; sel.disabled = false;
+        if (err) { researchPrefChoice = before; hubToast(String(err)); } else hubToast(`Deep research: ${researchChoiceLabel(researchPrefChoice)}.`);
+        sel.value = researchPrefChoice;
+        levelBox.hidden = researchPrefChoice !== 'always';   // shown only for Always (its value is kept while hidden)
+      });
+      row.appendChild(lab); row.appendChild(sel);
+      const hint = document.createElement('div');
+      hint.className = 'st-hint'; hint.textContent = RESEARCH_HINT;
+      // Always yes runs: Quick | Thorough, only while the choice is Always
+      const levelBox = document.createElement('div');
+      levelBox.id = 'st-research-level-box';
+      levelBox.hidden = researchPrefChoice !== 'always';
+      const lrow = document.createElement('div');
+      lrow.className = 'st-row';
+      const llab = document.createElement('label');
+      llab.htmlFor = 'st-research-level'; llab.textContent = 'Always yes runs';
+      const lsel = document.createElement('select');
+      lsel.id = 'st-research-level';
+      for (const [v, l] of [['quick', 'Quick'], ['thorough', 'Thorough']]) { const o = document.createElement('option'); o.value = v; o.textContent = l; lsel.appendChild(o); }
+      lsel.value = researchPrefLevel;
+      lsel.addEventListener('change', async () => {
+        if (researchPrefSaving) { lsel.value = researchPrefLevel; return; }
+        const want = lsel.value, before = researchPrefLevel;
+        researchPrefSaving = true; lsel.disabled = true; sel.disabled = true;
+        let err = '';
+        try {
+          const r = await fetch('/api/research-pref', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ alwaysLevel: want }) });
+          const d = await r.json().catch(() => ({}));
+          if (r.ok && d && d.ok) researchPrefLevel = ['quick', 'thorough'].includes(d.alwaysLevel) ? d.alwaysLevel : want; else err = (d && d.error) || 'Could not save that';
+        } catch (e) { err = 'Could not save that'; }
+        researchPrefSaving = false; lsel.disabled = false; sel.disabled = false;
+        if (err) { researchPrefLevel = before; hubToast(String(err)); } else hubToast(`Always yes: ${researchPrefLevel === 'thorough' ? 'Thorough' : 'Quick'} research.`);
+        lsel.value = researchPrefLevel;
+      });
+      lrow.appendChild(llab); lrow.appendChild(lsel);
+      const lhint = document.createElement('div');
+      lhint.className = 'st-hint'; lhint.textContent = RESEARCH_LEVEL_HINT;
+      levelBox.appendChild(lrow); levelBox.appendChild(lhint);
+      box.appendChild(row); box.appendChild(hint); box.appendChild(levelBox);
+    }
+    async function researchPrefLoad() {
+      const box = document.getElementById('st-research-pref');
+      if (!box) return;
+      let d = null;
+      try { const r = await fetch('/api/research-pref', { credentials: 'include' }); if (r.ok) d = await r.json(); } catch { d = null; }
+      if (!d || d.on !== true) { box.hidden = true; return; }   // off, failed or unreadable: nothing shown
+      researchPrefChoice = ['ask', 'always', 'never'].includes(d.choice) ? d.choice : 'ask';
+      researchPrefLevel = d.alwaysLevel === 'thorough' ? 'thorough' : 'quick';
+      researchPrefPaint(box);
+      box.hidden = false;
+    }
     async function notifyAgentReset(agent) {
-      try { await notifyPrefsRequest('PUT', { agent, prefs: null }); hubToast('Back to your default.'); notifySettingsPaint(); } catch (e) { hubToast('Could not save: ' + e.message); }
+      try { await notifyPrefsRequest('PUT', { agent, prefs: null }); hubToast('Back to your default.'); notifySettingsPaint(); if (typeof stNotifyAgentPaint === 'function') stNotifyAgentPaint(false); } catch (e) { hubToast('Could not save: ' + e.message); }
     }
     // Chat header bell: a small menu for this agent.
     function notifyBellClose(refocus) {
@@ -5641,11 +5987,53 @@
       } catch { /* the cached values stay */ }
     }
 
-    // ⋯ header menu, "Notifications for this agent": opens the bell menu of the chat on screen.
-    function notifyBellOpenVisible() {
-      const id = typeof activeChat !== 'undefined' ? activeChat : null;
-      if (id && document.getElementById(`notify-bell-${id}`)) { notifyBellToggle(id); return; }
-      hubToast('Open a chat with an agent first.');
+    // Settings → Notifications → "For an agent" (moved from the ⋯ menu): the bell's own choices and saves for any agent,
+    // the chat on screen first (on the phone's Settings sheet, the chat the phone has open: ?agent=).
+    let stNotifyAgentWanted = '';
+    function stNotifyAgentFill() {
+      const sel = document.getElementById('st-nb-agent');
+      if (!sel) return;
+      const list = (Array.isArray(AGENTS) ? AGENTS : []).filter((a) => a && a.name);
+      const onScreen = typeof activeChat !== 'undefined' && activeChat && chats[activeChat] ? chats[activeChat].agent : '';
+      const want = [onScreen, stNotifyAgentWanted].find((n) => n && list.some((a) => a.name === n)) || (list[0] && list[0].name) || '';
+      sel.innerHTML = list.map((a) => `<option value="${esc(a.name)}"${a.name === want ? ' selected' : ''}>${esc(a.display || capName(a.name))}</option>`).join('');
+      stNotifyAgentPaint();
+    }
+    function stNotifyAgentPaint(fetchFirst = true) {
+      const sel = document.getElementById('st-nb-agent'), box = document.getElementById('st-nb-agent-box');
+      if (!sel || !box) return;
+      const agent = sel.value;
+      if (!agent) { box.textContent = ''; return; }
+      const a = (AGENTS || []).find((x) => x && x.name === agent);
+      const display = (a && a.display) || capName(agent);
+      box.dataset.agent = agent;
+      box.innerHTML = notifyBellMenuHtml(agent, display).replace(' id="notify-bell-title"', '');
+      if (!box.__nbBound) {   // one listener: the same save as the bell
+        box.__nbBound = true;
+        box.addEventListener('change', async (e) => {
+          const s2 = e.target.closest('select[data-nb-kind]'); if (!s2) return;
+          const who = box.dataset.agent, whoA = (AGENTS || []).find((x) => x && x.name === who), name = (whoA && whoA.display) || capName(who);
+          const kind = s2.dataset.nbKind;
+          s2.disabled = true;
+          try {
+            await notifyPrefsRequest('PUT', { agent: who, prefs: { [kind]: s2.value === '' ? null : s2.value } });
+            hubToast(`${name}: ${(NOTIFY_AGENT_KINDS.find(k => k[0] === kind) || [0, kind])[1]} ${s2.value === '' ? 'follows your default' : notifyModeLabel(s2.value)}.`);
+            try { notifySettingsPaint(); } catch { /* the list repaints on the next open */ }   // "Agents with their own setting", from the saved answer
+          } catch (err) { hubToast('Could not save: ' + err.message); }
+          finally { s2.disabled = false; }
+          if (box.dataset.agent === who) stNotifyAgentPaint(false);
+        });
+      }
+      if (fetchFirst) notifyPrefsLoad().then(() => { if (box.isConnected && box.dataset.agent === agent && !box.contains(document.activeElement)) box.innerHTML = notifyBellMenuHtml(agent, display).replace(' id="notify-bell-title"', ''); }).catch(() => {});
+    }
+    // Settings → Agents → Tuning (moved from the ⋯ menu): the controls keep their page-load wiring; the one block moves in.
+    function stTuningMount() {
+      const body = document.getElementById('st-tuning-body') || stTuningMount.body;
+      const slot = document.getElementById('st-tuning-slot');
+      if (!body || !slot) return;
+      stTuningMount.body = body;   // kept: the block leaves the document with the dialog and comes back on the next open
+      body.hidden = false;
+      slot.appendChild(body);
     }
 
     // Presence: tells the hub whether any page of this person is in front, so "Only when I'm away" can be judged.
@@ -6118,18 +6506,19 @@
         setTimeout(loadPlanBox, 400);
       } catch (e) { sel.value = prev; alert(`Could not change the model: ${e.message}`); }
     }
-    async function savePlanWarn() {
+    async function savePlanWarn(opts = {}) {
       const saved = dialogGuard.savePoint(document.getElementById('st-plan-warn'));
       const v = document.getElementById('st-plan-warn').value;
       const at = String(v).split(/[,\s]+/).filter(Boolean).map(Number).filter(n => Number.isFinite(n) && n >= 1 && n <= 100);
       const st = document.getElementById('st-plan-warn-state');
       try {
-        const r = await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ planWarn: { at } }) });
+        const r = await stSaveFetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ planWarn: { at } }) });
         if (!r.ok) throw new Error(r.status);
         saved();
         if (st) st.textContent = at.length ? 'Saved.' : 'Saved: no warnings.';
         loadPlanBox();
-      } catch (e) { if (st) st.textContent = `Could not save: ${e.message}`; }
+        return true;
+      } catch (e) { if (st) st.textContent = `Could not save: ${e.message}`; return e.message; }
     }
     async function savePlanAuto(on) {
       try {
@@ -6202,7 +6591,8 @@
       if (amt) amt.value = c ? String(c.monthlyUsd) : '';
       if (day) day.value = c ? String(c.resetDay) : '';
     }
-    async function saveCredit() {
+    async function saveCredit(opts = {}) {
+      let result = true;
       const btn = document.getElementById('st-credit-save');
       const body = {
         provider: document.getElementById('st-credit-provider')?.value,
@@ -6211,7 +6601,7 @@
       };
       if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
       try {
-        const r = await fetch('/api/ledger/credits', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        const r = await stSaveFetch('/api/ledger/credits', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
         const d = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
         if (spendToday) spendToday.credits = d.credits || [];
@@ -6220,9 +6610,11 @@
         if (btn) { btn.className = 'st-test-btn ok'; btn.textContent = 'Saved'; }
       } catch (e) {
         if (btn) { btn.className = 'st-test-btn fail'; btn.textContent = 'Failed'; }
-        alert(`Could not save the credit: ${e.message}`);
+        result = e.message;
+        if (!opts.quiet) alert(`Could not save the credit: ${e.message}`);
       }
       if (btn) { btn.disabled = false; setTimeout(() => { btn.className = 'st-test-btn'; btn.textContent = 'Save'; }, 3000); }
+      return result;
     }
     async function paintSpendSettings(fetchFirst = true) {
       const box = document.getElementById('st-spend');
@@ -6257,33 +6649,43 @@
       }
       const agentInp = document.getElementById('st-cap-agent');
       const hubInp = document.getElementById('st-cap-hub');
-      if (agentInp && document.activeElement !== agentInp) agentInp.value = caps.perAgentDailyUsd ? String(caps.perAgentDailyUsd) : '';
-      if (hubInp && document.activeElement !== hubInp) hubInp.value = caps.hubDailyUsd ? String(caps.hubDailyUsd) : '';
+      // A cap typed but not saved (or refused) keeps what was typed: the repaint fills only unchanged fields.
+      if (agentInp && document.activeElement !== agentInp && !dialogGuard.changed(agentInp)) agentInp.value = caps.perAgentDailyUsd ? String(caps.perAgentDailyUsd) : '';
+      if (hubInp && document.activeElement !== hubInp && !dialogGuard.changed(hubInp)) hubInp.value = caps.hubDailyUsd ? String(caps.hubDailyUsd) : '';
     }
-    async function saveSpendCaps() {
+    async function saveSpendCaps(opts = {}) {
+      let result = true;
       const saved = dialogGuard.savePoint(['st-cap-agent', 'st-cap-hub'].map(id => document.getElementById(id)));
       const btn = document.getElementById('st-caps-save');
       const val = (id) => { const v = (document.getElementById(id)?.value || '').trim().replace(/^\$/, ''); return v === '' ? null : Number(v); };
       const perAgentDailyUsd = val('st-cap-agent');
       const hubDailyUsd = val('st-cap-hub');
-      for (const v of [perAgentDailyUsd, hubDailyUsd]) if (v !== null && !(Number.isFinite(v) && v >= 0)) { alert('Caps must be a dollar amount, or blank for unlimited.'); return; }
+      for (const v of [perAgentDailyUsd, hubDailyUsd]) if (v !== null && !(Number.isFinite(v) && v >= 0)) {
+        const m = 'Caps must be a dollar amount, or blank for unlimited.';
+        if (!opts.quiet) alert(m);
+        return m;
+      }
       if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
       try {
-        const r = await fetch('/api/ledger/caps', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ perAgentDailyUsd, hubDailyUsd }) });
+        const r = await stSaveFetch('/api/ledger/caps', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ perAgentDailyUsd, hubDailyUsd }) });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         saved();
         const d = await r.json().catch(() => null);
         if (d && d.caps && spendToday) spendToday.caps = d.caps;
         if (btn) { btn.className = 'st-test-btn ok'; btn.textContent = 'Saved'; }
-        document.getElementById('st-saved')?.classList.add('show');
-        setTimeout(() => document.getElementById('st-saved')?.classList.remove('show'), 2000);
+        if (!opts.quiet) {
+          document.getElementById('st-saved')?.classList.add('show');
+          setTimeout(() => document.getElementById('st-saved')?.classList.remove('show'), 2000);
+        }
       } catch (e) {
         if (btn) { btn.className = 'st-test-btn fail'; btn.textContent = 'Failed'; }
-        alert(`Could not save caps: ${e.message}`);
+        result = e.message;
+        if (!opts.quiet) alert(`Could not save caps: ${e.message}`);
       }
       if (btn) { btn.disabled = false; setTimeout(() => { btn.className = 'st-test-btn'; btn.textContent = 'Save'; }, 3000); }
+      return result;
     }
-    setInterval(refreshSpendToday, SPEND_REFRESH_MS);
+    setInterval(refreshSpendToday, SPEND_REFRESH_MS);   // the Spend section's data too (a read that failed comes again), so also on the settings-only page
 
     // ── Desktop push notifications (optional; the same /sw.js the phone UI uses) ──
     function desktopPushSupported() {
@@ -6302,6 +6704,12 @@
       const btn = document.getElementById('st-push-btn');
       const hint = document.getElementById('st-push-hint');
       if (!btn) return;
+      if (globalThis.mmSettingsOnly === true) {   // the phone app's Settings sheet: the phone's notices are the app's own (its menu), never this page's
+        btn.textContent = 'In the app menu'; btn.disabled = true;
+        if (hint) hint.textContent = "On the phone, notifications are turned on in the app's menu (Notifications).";
+        stSum('notify', 'push', 'phone notifications: in the app menu');
+        return;
+      }
       if (!desktopPushSupported()) { btn.textContent = 'Not supported'; btn.disabled = true; stSum('notify', 'push', 'push not available in this browser'); return; }
       if (Notification.permission === 'denied') { btn.textContent = 'Blocked'; btn.disabled = true; if (hint) hint.textContent = 'Notifications are blocked for this site in the browser settings.'; stSum('notify', 'push', 'push blocked in this browser'); return; }
       const sub = await desktopPushSubscription();
@@ -6311,6 +6719,7 @@
     }
 
     async function toggleDesktopPush() {
+      if (globalThis.mmSettingsOnly === true) return;   // the settings-only page registers no notifications of its own
       const btn = document.getElementById('st-push-btn');
       if (btn) btn.disabled = true;
       try {
@@ -6340,9 +6749,70 @@
       paintDesktopPush();
     }
 
+    // ── save fetch (begin) ──
+    // Every Settings save goes through stSaveFetch: the request and its answer get ST_SAVE_TIMEOUT_MS. Past that the request
+    // is aborted and the save fails with ST_SAVE_TIMEOUT_TEXT: nothing is marked saved, what was typed stays, and a late
+    // answer is never read, so it cannot mark anything saved or be applied twice. The answer is read in full here, so a
+    // body that never ends is covered too.
+    const ST_SAVE_TIMEOUT_MS = 30000;
+    const ST_SAVE_TIMEOUT_TEXT = 'your Maestro did not answer within 30 seconds. Try again';
+    let stSaveRequests = 0;   // Settings save requests still running, until their answer is read in full (or they time out)
+    async function stSaveFetch(url, init = {}) {
+      stSaveRequests++;
+      const ctl = new AbortController();
+      let timer;
+      const late = new Promise((resolve, reject) => { timer = setTimeout(() => { ctl.abort(); reject(new Error(ST_SAVE_TIMEOUT_TEXT)); }, ST_SAVE_TIMEOUT_MS); });
+      const answer = (async () => {
+        const r = await fetch(url, { ...init, signal: ctl.signal });
+        const raw = typeof r.text === 'function' ? await r.text() : undefined;   // a stand-in answer may have json() only
+        return { ok: r.ok, status: r.status, json: async () => (raw === undefined ? r.json() : JSON.parse(raw)) };
+      })();
+      answer.catch(() => {});   // after the time limit its failure (the abort) is expected and unread
+      try { return await Promise.race([late, answer]); } finally { clearTimeout(timer); stSaveRequests--; }
+    }
+    // ── save fetch (end) ──
+    // The main Save also runs each section of this dialog that has its own Save button, when that section's fields changed
+    // (one at a time: several post to /api/settings). A section that did not change sends nothing.
+    const ST_SECTION_SAVES = [
+      { label: 'Web search and fetch', fields: () => ['st-ws-key-brave', 'st-ws-key-serper', 'st-ws-key-tavily', 'st-ws-order', 'st-ws-searxng', 'st-wf-private', 'st-wf-render', 'st-wf-jina'].map(id => document.getElementById(id)), save: (o) => saveWebSearch(o) },
+      { label: 'Auto model classifier', fields: () => ['st-cl-backend', 'st-cl-provider', 'st-cl-model', 'st-cl-think', 'st-cl-floor', 'st-cl-keep', 'st-cl-shadow'].map(id => document.getElementById(id)), save: (o) => saveClassifier(o) },
+      { label: 'Member defaults', fields: () => ['st-mp-web', 'st-mp-read_outside', 'st-mp-write_outside', 'st-mp-send'].map(id => document.getElementById(id)), save: (o) => saveMemberPolicy(o) },
+      { label: 'Sandbox defaults', fields: () => ['st-sb-member', 'st-sb-admin', 'st-tools-default'].map(id => document.getElementById(id)), save: (o) => saveSandboxDefaults(o) },
+      { label: 'Command lockbox default', fields: () => [document.getElementById('st-lb-default')], save: (o) => saveLockboxDefault(o) },
+      { label: 'Plan usage warning', fields: () => [document.getElementById('st-plan-warn')], save: (o) => savePlanWarn(o) },
+      { label: 'Spend caps', fields: () => ['st-cap-agent', 'st-cap-hub'].map(id => document.getElementById(id)), save: (o) => saveSpendCaps(o) },
+      { label: 'API credit', fields: () => ['st-credit-provider', 'st-credit-amount', 'st-credit-day'].map(id => document.getElementById(id)), save: (o) => saveCredit(o) },
+      { label: 'System health', fields: () => hlFieldEls(), save: (o) => saveHealthSettings(o) },
+      { label: 'Self-check', fields: () => scFieldEls(), save: (o) => saveSelfCheckSettings(o) },
+      { label: 'OpenRouter models', fields: () => [...document.querySelectorAll('#st-or-list .st-or-pick')], save: (o) => saveOpenRouter(true, o) },
+    ];
+    let stMainSaving = false;   // a press while the main Save runs does nothing: the first press is still sending
     async function saveSettings() {
-      // This Save writes the provider keys and URLs and the two defaults; it settles only those (lib/ui-dialog savePoint).
-      const saved = dialogGuard.savePoint([...document.querySelectorAll('#st-overlay [id^="st-key-"], #st-overlay [id^="st-url-"]'), ...['st-maxTokens', 'st-maxContext'].map(id => document.getElementById(id))]);
+      if (stMainSaving) return;
+      const box = document.getElementById('st-overlay');
+      // A section's own Save still waiting for the hub: saving again now could send its values twice, out of order.
+      if (stSaveRequests > 0 || (box && dialogGuard.saving(box))) { alert('A save in Settings is still running. Press Save again when it is done.'); return; }
+      stMainSaving = true;
+      // While it saves the dialog takes no typing or clicks (inert) and its buttons show as waiting, so every section sends
+      // what it showed at the press and no other Save runs beside it.
+      const held = box ? [...box.querySelectorAll('button')].filter(b => !b.disabled) : [];
+      for (const b of held) b.disabled = true;
+      if (box) box.inert = true;
+      try { await saveSettingsNow(); } finally {
+        stMainSaving = false;
+        if (box) box.inert = false;
+        for (const b of held) b.disabled = false;
+      }
+    }
+    async function saveSettingsNow() {
+      const failures = [];
+      // The sections to save are the ones changed when Save was pressed. Each posts the values it shows when its turn comes
+      // (the dialog takes no typing meanwhile) and marks exactly those saved (its own savePoint).
+      const sections = [];
+      for (const entry of ST_SECTION_SAVES) {
+        try { if (dialogGuard.changed(entry.fields())) sections.push(entry); }
+        catch (e) { failures.push(`${entry.label}: ${e && e.message ? e.message : e}`); }
+      }
       const patch = { providers: {} };
 
       for (const p of PROVIDERS) {
@@ -6366,15 +6836,19 @@
       const maxContext = parseInt(document.getElementById('st-maxContext')?.value);
       if (maxTokens > 0) patch.maxCompletionTokens = maxTokens;
       if (maxContext > 0) patch.maxContextMessages = maxContext;
-      const wao = workersAtOnceFromPage();
+      const wao = workersAtOnceFromPage(failures);
       if (wao !== undefined) patch.workersAtOnce = wao;
       const hwMin = document.getElementById('st-hw-minutes');
       if (hwMin) patch.handOffWaitMinutes = parseInt(hwMin.value, 10);
       const hwNotice = document.getElementById('st-hw-notice');
       if (hwNotice) patch.buildPartnerNotice = !!hwNotice.checked;
 
+      // This part of the Save writes the provider keys and URLs, the defaults and the hand-off fields; it settles only those
+      // (lib/ui-dialog savePoint). A workers-at-once row refused above (validationMessage set) keeps what was typed.
+      const waoOk = [...document.querySelectorAll('#st-overlay .st-wao-input')].filter(i => !i.validationMessage);
+      const saved = dialogGuard.savePoint([...document.querySelectorAll('#st-overlay [id^="st-key-"], #st-overlay [id^="st-url-"]'), ...['st-maxTokens', 'st-maxContext', 'st-hw-minutes', 'st-hw-notice'].map(id => document.getElementById(id)), ...waoOk]);
       try {
-        const r = await fetch('/api/settings', {
+        const r = await stSaveFetch('/api/settings', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
@@ -6382,11 +6856,26 @@
         });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         saved();
-        const note = document.getElementById('st-saved');
-        if (note) { note.classList.add('show'); setTimeout(() => note.classList.remove('show'), 2000); }
       } catch (e) {
-        alert('Save failed: ' + e.message);
+        failures.push('Settings: ' + e.message);
       }
+      let silent = failures.some(f => f.endsWith(ST_SAVE_TIMEOUT_TEXT));
+
+      // The sections with their own Save button: only those changed at the press, one at a time.
+      for (const entry of sections) {
+        if (silent) { failures.push(`${entry.label}: not tried, because your Maestro did not answer`); continue; }
+        try {
+          const r = await entry.save({ quiet: true });
+          if (r !== true) failures.push(`${entry.label}: ${r}`);
+          if (r === ST_SAVE_TIMEOUT_TEXT) silent = true;
+        } catch (e) {
+          failures.push(`${entry.label}: ${e && e.message ? e.message : e}`);
+        }
+      }
+
+      if (failures.length) { alert('Not saved: ' + failures.join('; ')); return; }
+      const note = document.getElementById('st-saved');
+      if (note) { note.classList.add('show'); setTimeout(() => note.classList.remove('show'), 2000); }
     }
 
     // A ChatGPT subscription runs through the Codex client: no key here, only where its sign-in stands (lib/welcome).
@@ -6545,7 +7034,7 @@
       }
     }
     // Auto-open sidebar on mobile if no chats open
-    if (isMobile()) { setTimeout(openSidebar, 300); }
+    if (isMobile() && globalThis.mmSettingsOnly !== true) { setTimeout(openSidebar, 300); }
 
     // ── Sidebar collapse/expand ──
     function collapseSidebar() {
@@ -6614,16 +7103,13 @@
     // v5.1: All requests go through multi-provider LLM routing
 
     // ── "⋯" header menu ──
-    // The rarely used header actions (messaging, wallets, dream, update, restart) live in a
-    // dropdown under #more-btn; the tuning controls (pre-scan, lazy tools, SDK workers, terse,
-    // reply length, message history) sit in an "Advanced" section of the same menu that only
-    // shows when the "Advanced controls" checkbox is on (localStorage 'hub-advanced', default off).
-    // The controls stay in the DOM either way so the wiring below keeps working.
+    // Things you do or open right now (About, Reload, Data connectors, Remote computers, Recordings, Wallets, Dream, Update,
+    // Restart) live in a dropdown under #more-btn; what you set is in Settings (gear). The tuning controls wired below sit in
+    // #st-tuning-body, which Settings → Agents → Tuning shows (stTuningMount); notifications for an agent and messaging
+    // channels are in Settings too, and the menu's last line says so.
     const moreBtn = document.getElementById('more-btn');
     const moreMenu = document.getElementById('more-menu');
     const moreWrap = document.getElementById('more-wrap');
-    const advancedToggle = document.getElementById('advanced-toggle');
-    const ADVANCED_KEY = 'hub-advanced';
     function isMoreMenuOpen() { return !!(moreMenu && moreMenu.classList.contains('open')); }
     function openMoreMenu() {
       if (!moreMenu) return;
@@ -6639,22 +7125,7 @@
       if (refocus) moreBtn.focus();
     }
     function toggleMoreMenu() { if (isMoreMenuOpen()) closeMoreMenu(true); else openMoreMenu(); }
-    function applyAdvanced(on) {
-      if (moreMenu) moreMenu.classList.toggle('advanced', on);
-      if (moreBtn) {
-        moreBtn.classList.toggle('advanced', on);
-        moreBtn.title = on ? 'More options (advanced controls on)' : 'More options';
-      }
-      if (advancedToggle) advancedToggle.checked = on;
-    }
     if (moreMenu) {
-      applyAdvanced(localStorage.getItem(ADVANCED_KEY) === '1');
-      if (advancedToggle) {
-        advancedToggle.addEventListener('change', () => {
-          localStorage.setItem(ADVANCED_KEY, advancedToggle.checked ? '1' : '0');
-          applyAdvanced(advancedToggle.checked);
-        });
-      }
       // Clicking anywhere outside the button + menu closes it.
       document.addEventListener('click', (e) => {
         if (isMoreMenuOpen() && moreWrap && !moreWrap.contains(e.target)) closeMoreMenu();
@@ -6783,43 +7254,9 @@
     // allow / ask / deny per action class, and "ask" shows an approval card; see the
     // Action approvals section below and the Tool policy section in agent settings.)
 
-    // ── Max completion tokens control ──
-    const maxTokensSelect = document.getElementById('max-tokens-select');
-    // Restore from localStorage
-    const savedMaxTokens = localStorage.getItem('maxCompletionTokens') || '32000';
-    maxTokensSelect.value = savedMaxTokens;
-    maxTokensSelect.addEventListener('change', () => {
-      localStorage.setItem('maxCompletionTokens', maxTokensSelect.value);
-      fetch('/api/max_completion_tokens', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ value: parseInt(maxTokensSelect.value, 10) })
-      }).catch(() => {});
-    });
-    // Sync initial state to server on page load
-    fetch('/api/max_completion_tokens', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ value: parseInt(maxTokensSelect.value, 10) })
-    }).catch(() => {});
-
-    // ── Max context messages control ──
-    const maxCtxSelect = document.getElementById('max-context-select');
-    const savedMaxCtx = localStorage.getItem('maxContextMessages') || '40';
-    maxCtxSelect.value = savedMaxCtx;
-    maxCtxSelect.addEventListener('change', () => {
-      localStorage.setItem('maxContextMessages', maxCtxSelect.value);
-      fetch('/api/max_context_messages', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ value: parseInt(maxCtxSelect.value, 10) })
-      }).catch(() => {});
-    });
-    fetch('/api/max_context_messages', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ value: parseInt(maxCtxSelect.value, 10) })
-    }).catch(() => {});
+    // Reply length and message history: one editor each, Settings → Agents → Agent defaults (Max tokens, Context msgs, saved
+    // with the main Save). The ⋯ menu's two selects that also wrote them (and posted this browser's own copy at every page
+    // load, over the hub's value) are gone with the menu split.
 
 
     // ── Action approvals: a card for every tool call the agent's policy marks "ask" ──
@@ -7270,7 +7707,7 @@
       try { u = new URL(data.url, origin); } catch { return null; }
       if (u.origin !== origin || !OPEN_TARGET_MAIN.test(u.pathname)) return null;
       const q = u.searchParams;
-      return { agent: q.get('agent') || '', backups: q.get('backups') === '1', update: q.get('update') === '1', security: q.get('security') === '1', memory: q.get('memory') === '1', selfcheck: q.get('selfcheck') === '1', health: q.get('health') === '1', connectors: q.get('connectors') === '1', wallet: q.get('wallet') === 'unlock' };
+      return { agent: q.get('agent') || '', backups: q.get('backups') === '1', update: q.get('update') === '1', security: q.get('security') === '1', memory: q.get('memory') === '1', selfcheck: q.get('selfcheck') === '1', health: q.get('health') === '1', connectors: q.get('connectors') === '1', wallet: q.get('wallet') === 'unlock', websearch: q.get('websearch') === '1' };
     }
     function createTargetStore(storage, now = () => Date.now(), ttlMs = 10 * 60 * 1000) {
       return {
@@ -7350,6 +7787,7 @@
       if (t.selfcheck) openSettingsAt('st-selfcheck-section');
       if (t.health) openSettingsAt('st-health-section');
       if (t.connectors) openSettingsAt('st-modules-section');
+      if (t.websearch) openSettingsAt('st-ws-section');
       if (t.wallet) openWalletPanel();
       if (t.update) paintUpdateCard().then(() => showUpdateCard()).catch(() => {});
       if (!t.agent) return;
@@ -7372,6 +7810,7 @@
     }
 
     document.addEventListener('DOMContentLoaded', async () => {
+      if (SETTINGS_ONLY) { settingsOnlyStart(); return; }   // the Settings dialog alone: no chats, streams or timers
       paintInstalledApp();
       for (const q of ['(display-mode: standalone)', '(display-mode: minimal-ui)', '(display-mode: window-controls-overlay)']) {
         try { if (typeof window.matchMedia === 'function') window.matchMedia(q).addEventListener('change', paintInstalledApp); } catch { /* an old browser: painted once */ }
@@ -7387,9 +7826,9 @@
       // (a backup warning), ?memory=1 the memory check, ?selfcheck=1 the self-check, ?health=1 the health check, ?update=1 the update card, ?security=1 the security dialog, ?wallet=unlock the Wallet panel. Then any notification tapped
       // while the page was loading.
       const own = parseOpenTarget({ type: 'open-target', url: location.href }, location.origin);
-      if (own && (own.update || own.backups || own.security || own.memory || own.selfcheck || own.health || own.connectors || own.wallet)) {   // one-shot actions: a reload must not repeat them
+      if (own && (own.update || own.backups || own.security || own.memory || own.selfcheck || own.health || own.connectors || own.wallet || own.websearch)) {   // one-shot actions: a reload must not repeat them
         const u = new URL(location.href);
-        for (const k of ['update', 'backups', 'security', 'memory', 'selfcheck', 'health', 'connectors', 'wallet']) u.searchParams.delete(k);
+        for (const k of ['update', 'backups', 'security', 'memory', 'selfcheck', 'health', 'connectors', 'wallet', 'websearch']) u.searchParams.delete(k);
         history.replaceState(history.state, '', u.pathname + u.search + u.hash);
       }
       // After a Reload: open the chats that were open, in their tab order, each with the text that was in its message
@@ -8048,6 +8487,76 @@
       });
     }
     
+    // Deep research progress line (the hub's research_progress event, GET /api/research/status): one text line per active run
+    // above the message box, in the style of the hand-off Tasks line. Text only; gone when the run is delivered or failed.
+    const researchRuns = new Map();   // agent -> Map(run id -> { id, level, stage, label, done, total, startedAt })
+    function researchLineText(run, now) {
+      const lv = String((run && run.level) || 'quick');
+      const level = lv.charAt(0).toUpperCase() + lv.slice(1);
+      const label = String((run && (run.label || run.stage)) || 'working');
+      let text = `Deep research (${level}): ${label}`;
+      const t0 = Number(run && run.startedAt);
+      if (t0 > 0) { const mins = Math.floor(Math.max(0, (now === undefined ? Date.now() : now) - t0) / 60000); text += ' · ' + (mins < 1 ? 'just started' : `${mins} min`); }
+      return text;
+    }
+    function researchLineFill(box, agent) {
+      if (!box) return;
+      const runs = agent && researchRuns.has(agent) ? [...researchRuns.get(agent).values()].sort((a, b) => (Number(a.startedAt) || 0) - (Number(b.startedAt) || 0)).slice(0, 3) : [];
+      box.textContent = '';
+      const now = Date.now();
+      for (const r of runs) { const d = document.createElement('div'); d.className = 'ho-strip research-line'; d.setAttribute('role', 'status'); d.textContent = researchLineText(r, now); box.appendChild(d); }
+      box.hidden = runs.length === 0;
+    }
+    const researchEnded = new Set();   // ids of runs that already got a terminal event (delivered or failed); kept small
+    function researchEndedAdd(id) { researchEnded.add(id); if (researchEnded.size > 200) researchEnded.delete(researchEnded.values().next().value); }
+    function researchLineApply(ev) {
+      if (!ev || !ev.agent || ev.id == null) return;
+      const id = String(ev.id);
+      if (ev.state === 'delivered' || ev.state === 'failed') {
+        researchEndedAdd(id);   // a status answer still on its way must not bring this run back
+        const m = researchRuns.get(ev.agent);
+        if (m) { m.delete(id); if (!m.size) researchRuns.delete(ev.agent); }
+      } else {
+        if (researchEnded.has(id)) return;
+        const old = researchRuns.has(ev.agent) ? researchRuns.get(ev.agent).get(id) : null;
+        if (old && Number.isFinite(old.seq) && Number.isFinite(ev.seq) && ev.seq < old.seq) return;   // an older event never overwrites a newer one
+        if (!researchRuns.has(ev.agent)) researchRuns.set(ev.agent, new Map());
+        researchRuns.get(ev.agent).set(id, { id, level: ev.level, stage: ev.stage, label: ev.label, done: ev.done, total: ev.total, startedAt: ev.startedAt, seq: ev.seq, seenAt: Date.now() });
+      }
+      researchLinePaint();
+    }
+    function researchLinePaint() {
+      for (const k of Object.keys(chats)) { const c = chats[k]; if (c && !c.isGroup && !c.isWorker && c.agent) researchLineFill(document.getElementById('research-lines-' + k), c.agent); }
+    }
+    async function researchLineLoad(agent) {
+      if (!agent) return;
+      const t0 = Date.now();   // events that arrive from here on are newer than the answer being fetched
+      try {
+        const r = await fetch('/api/research/status?agent=' + encodeURIComponent(agent), { credentials: 'include' });
+        const d = r.ok ? await r.json() : null;
+        if (!d || !Array.isArray(d.runs)) return;
+        // merged into what the events built meanwhile: never replaced, an ended run is not brought back, and an older answer
+        // never overwrites a newer event for the same run (by the run's sequence number, else by when the event came)
+        const m = new Map(researchRuns.get(agent) || []);
+        const inAnswer = new Set();
+        for (const x of d.runs) {
+          if (!x || x.id == null) continue;
+          const id = String(x.id);
+          inAnswer.add(id);
+          if (researchEnded.has(id)) continue;
+          const cur = m.get(id);
+          const x_seq = Number(x.seq);
+          if (cur && (Number.isFinite(cur.seq) && Number.isFinite(x_seq) ? cur.seq >= x_seq : (cur.seenAt || 0) >= t0)) continue;
+          m.set(id, { id, level: x.level, stage: x.stage, label: x.label, done: x.done, total: x.total, startedAt: x.startedAt, seq: Number.isFinite(x_seq) ? x_seq : undefined, seenAt: t0 });
+        }
+        // a run the answer does not list and no event touched since the fetch began has ended
+        for (const [id, e] of [...m]) if (!inAnswer.has(id) && (e.seenAt || 0) < t0) m.delete(id);
+        if (m.size) researchRuns.set(agent, m); else researchRuns.delete(agent);
+        researchLinePaint();
+      } catch { /* the line stays as it was */ }
+    }
+    setInterval(() => { if (researchRuns.size) researchLinePaint(); }, 60000);   // the minutes move on
+
     function findSoloChat(agentName) {
       return Object.values(chats).find(c => c && !c.isGroup && !c.isWorker && c.agent === agentName) || null;
     }
@@ -9058,6 +9567,7 @@
     // Only a known admin polls (window.hubMe loads asynchronously: unknown = no request; loadMe re-runs the sync).
     function activeJobsWanted() { return !activeJobsStopped && !!(window.hubMe && window.hubMe.isAdmin === true) && document.visibilityState === 'visible'; }
     function activeJobsSync() {
+      if (globalThis.mmSettingsOnly === true) return;   // the settings-only page starts nothing else
       const want = activeJobsWanted();
       if (want && !activeJobsTimer) { activeJobsPoll(); activeJobsTimer = setInterval(activeJobsPoll, ACTIVE_JOBS_MS); }
       else if (!want && activeJobsTimer) { clearInterval(activeJobsTimer); activeJobsTimer = null; }
@@ -9251,6 +9761,7 @@
     }
 
     async function pollAgentStatus() {
+      if (globalThis.mmSettingsOnly === true) return;   // the settings-only page starts nothing else
       try {
         const r = await fetch('/api/agents/status', { credentials: 'include', signal: AbortSignal.timeout(8000) });
         if (!r.ok) return;                       // 404 on an older hub: nothing to show
@@ -9443,7 +9954,7 @@
       const mine = localBusy.get(name);
       const busy = !!(s && s.busy) || !!mine;
       const question = !!(s && s.pendingQuestion);
-      const activity = (s && s.activity) || (mine ? 'replying to you' : 'working');
+      const activity = chatViewActivityWord(s && s.activity) || (mine ? 'replying to you' : 'working');
       const since = (s && s.busySince) || mine || null;
       const elapsed = elapsedLabel(since, false);
       const elapsedShort = elapsedLabel(since, true);
@@ -9522,6 +10033,7 @@
     // Hub-wide worker freshness: poll the full status feed while the Workers menu is open or a worker / consulted agent is busy.
     let workerPollBusy = false, workerPollSoon = null;
     async function pollWorkerStatus() {
+      if (globalThis.mmSettingsOnly === true) return;   // the settings-only page starts nothing else
       if (workerPollBusy) return;
       workerPollBusy = true;
       try {
@@ -9599,11 +10111,11 @@
           case 'hand_off': {
             // The target's turn is labelled "Hand-off from <caller>: <topic>"; the caller's report turn "Hand-off <state>: <topic>".
             const l = typeof o.label === 'string' ? o.label : '';
-            if (/^Hand-off from /.test(l) || (!l && o.from)) return o.from ? `Working on a hand-off from ${who(o.from)}` : 'Working on a hand-off';
-            if (/^Hand-off \S+:/.test(l)) return o.from ? `Reading a hand-off report from ${who(o.from)}` : 'Reading a hand-off report';
-            return 'Working on a hand-off';
+            if (/^Hand-off from /.test(l) || (!l && o.from)) return o.from ? `Working on a task from ${who(o.from)}` : 'Working on a task';
+            if (/^Hand-off \S+:/.test(l)) return o.from ? `Reading a task report from ${who(o.from)}` : 'Reading a task report';
+            return 'Working on a task';
           }
-          case 'hand_off_report': return o.from ? `Reading a hand-off report from ${who(o.from)}` : 'Reading a hand-off report';
+          case 'hand_off_report': return o.from ? `Reading a task report from ${who(o.from)}` : 'Reading a task report';
           case 'job_report': return o.jobName ? `Reading a job report: ${o.jobName}` : 'Reading a job report';
           case 'consult_reply': return 'Reading consultation replies';
           case 'alert': return 'Handling a monitor alert';
@@ -9618,11 +10130,19 @@
       if (m) return m[1] ? `Working on a scheduled task: ${m[1]}` : 'Working on a scheduled task';
       if (/^job finished/i.test(a)) return 'Reading a job result';
       if (/^job report/i.test(a)) return 'Reading a job report';
-      if (/^hand-off finished/i.test(a)) return 'Reading a hand-off report';
-      if (/^hand-off$/i.test(a)) return 'Working on a hand-off';
+      // the hub's status words for a hand-off turn ("hand-off", "hand-off finished") and the pages' own ("task from X", "task finished: X")
+      m = /^(?:hand-off|task) finished(?::\s*(.+))?$/i.exec(a);
+      if (m) return m[1] ? `Reading a task report from ${who(m[1])}` : 'Reading a task report';
+      m = /^(?:hand-off|task)(?: from (.+))?$/i.exec(a);
+      if (m) return m[1] ? `Working on a task from ${who(m[1])}` : 'Working on a task';
       if (/^replying to you$/i.test(a)) return 'Replying to your message';
       if (/^alert$/i.test(a)) return 'Handling a monitor alert';
       return 'Working on a hub task';
+    }
+    // The status feed's short word for what an agent does, as the pages show it: the hub's hand-off words read "task".
+    function chatViewActivityWord(activity) {
+      const a = typeof activity === 'string' ? activity : '';
+      return a.replace(/^hand-off finished\b/i, 'task finished').replace(/^hand-off\b/i, 'task');
     }
     // What a working agent waits on: its own helpers (temporary workers whose parent is it) and agents it consulted, from the
     // status feed { <name>: { busy, busySince, worker, parent, label, consultedBy } }. '' when it waits on nobody.
@@ -9657,7 +10177,7 @@
       const name = raw.replace(/^mcp__[^_]+(?:_[^_]+)*?__/, '');
       const words = {
         spawn_workers: 'starting helpers', consult_agent: 'asking another agent', run_job: 'starting a background job',
-        hand_off: 'handing off work', ask_user: 'waiting for your answer', Bash: 'running a command', Read: 'reading a file',
+        hand_off: 'handing over a task', ask_user: 'waiting for your answer', Bash: 'running a command', Read: 'reading a file',
         Write: 'writing a file', Edit: 'editing a file', Grep: 'searching files', Glob: 'searching files',
         WebSearch: 'searching the web', WebFetch: 'reading a web page', schedule_task: 'scheduling a task',
       }[name] || `using ${name || 'a tool'}`;
@@ -9765,8 +10285,9 @@
         else if (o.kind === 'job_report') label = `Job report${o.jobName ? ': ' + o.jobName : ''}`;
         else if (o.kind === 'task') label = o.label === 'context compression' ? 'Resumed after compression' : `Hub task${o.label ? ': ' + o.label : ''}`;
         else if (o.kind === 'consult_reply') label = 'Consultation replies delivered';
-        else if (o.kind === 'hand_off') label = o.label || `Hand-off from ${from || 'another agent'}`;
-        else if (o.kind === 'hand_off_report') label = o.label || 'Hand-off finished';
+        // on screen a hand-off reads "task" (the owner's wording); the hub's own label starts "Hand-off from X: " or "Hand-off done: "
+        else if (o.kind === 'hand_off') label = o.label ? o.label.replace(/^Hand-off\b/, 'Task') : `Task from ${from || 'another agent'}`;
+        else if (o.kind === 'hand_off_report') label = o.label ? o.label.replace(/^Hand-off\b/, 'Task') : 'Task finished';
         else if (o.kind === 'alert') label = 'Monitor alert';
         else label = 'Hub turn';
         return { kind, from, label };
@@ -9996,8 +10517,8 @@
         case 'task': return origin.from && origin.from !== 'hub' ? `queued task from ${origin.from}` : origin.label ? `hub: ${origin.label}` : 'hub turn';
         case 'alert': return `alert from ${origin.from || 'a monitor'}`;
         case 'consult_reply': return 'queued consultation reply delivered';
-        case 'hand_off': return `hand-off from ${origin.from || 'another agent'}`;
-        case 'hand_off_report': return `hand-off finished: ${origin.from || 'another agent'}`;
+        case 'hand_off': return `task from ${origin.from || 'another agent'}`;
+        case 'hand_off_report': return `task finished: ${origin.from || 'another agent'}`;
         case 'comms': return 'message from a messaging channel';
         default: return 'hub turn';
       }
@@ -10165,7 +10686,7 @@
 
     function reattachLine(chat, ra) {
       const live = agentStatus[chat.agent];
-      const what = turnStatusText(ra) || live?.activity || 'still working';
+      const what = turnStatusText(ra) || chatViewActivityWord(live?.activity) || 'still working';
       const since = ra.since || live?.busySince || new Date(ra.startedAt).toISOString();
       return `⏳ ${chat.display || chat.agent}: ${what} on the server (${elapsedLabel(since, true) || 'just now'}). This window will show the reply when it lands.`;
     }
@@ -10386,6 +10907,7 @@
 
     // Every chat following a turn without a stream of its own.
     function catchUpAll() {
+      if (globalThis.mmSettingsOnly === true) return;   // the settings-only page starts nothing else
       for (const [chatId, chat] of Object.entries(chats)) {
         if (!chat || chat.isWorker || chat.isGroup || chat.controller) continue;
         if (chat.reattach || Object.values(hubTurns).some(t => t.chatId === chatId)) catchUpTurn(chatId);
@@ -10569,7 +11091,8 @@
       const chat = findSoloChat(ev.agent);
       if (!chat) return;
       chat.compactionNotice = null;
-      if (ev.ok === false || ev.error) appendSystemNotice(chat.id, `⚠ compression failed: ${ev.error || 'unknown error'}`, 'failed');
+      if (ev.busy) appendSystemNotice(chat.id, `⏸ compression postponed: ${ev.error || 'the agent stayed busy'}`, 'working');   // not a failure: it runs again after a later turn
+      else if (ev.ok === false || ev.error) appendSystemNotice(chat.id, `⚠ compression failed: ${ev.error || 'unknown error'}`, 'failed');
       else appendSystemNotice(chat.id, ev.reset ? '✓ brief written, fresh session started' : '✓ brief written', 'complete');
       compactionRefresh(chat.id);
     }
@@ -10578,6 +11101,7 @@
     let hubLastEventAt = 0;          // when the last event of any kind (the hub's 15 s ping included) arrived
     let hubLastSeq = 0;              // sequence of the last ring event seen: a deliberate reconnect asks for ?since= it, so nothing is lost
     function startHubEventMonitor() {
+      if (globalThis.mmSettingsOnly === true) return;   // the settings-only page starts nothing else
       if (hubEventSource) { try { hubEventSource.close(); } catch {} }   // one stream alive at a time
       const source = new EventSource('/api/events' + (hubLastSeq > 0 ? `?since=${hubLastSeq}` : ''), { withCredentials: true });
       hubEventSource = source;
@@ -10623,6 +11147,7 @@
         notifyArmed[ev.agent] = ev.on ? ev.turnId : null;
         paintNotifyBtns(ev.agent);
       });
+      source.addEventListener('research_progress', e => { const ev = parse(e); if (ev) researchLineApply(ev); });
       source.addEventListener('ask_user', e => {
         const ev = parse(e); if (!ev) return;
         setAgentLive(ev.agent, { busy: true, pendingQuestion: true });
@@ -10650,6 +11175,8 @@
       // Plan warnings and refusals (lib/plan-usage) are shown near the top, never as a pop-up over the input: the usage
       // badge next to each Claude agent's model, the sidebar chip, and the Settings box.
       source.addEventListener('plan_limit', e => { const ev = parse(e); if (!ev) return; refreshPlanChip(); if (document.getElementById('st-plan-section')) loadPlanBox(); });
+      // The usage was re-read (a sign-in change, a faster poll near the limit): only the time is sent, the figures come from the admin route.
+      source.addEventListener('plan_usage', e => { const ev = parse(e); if (!ev || (window.hubMe && !window.hubMe.isAdmin)) return; refreshPlanChip(); if (document.getElementById('st-plan-section')) loadPlanBox(); });
       source.addEventListener('plan_extra_usage', e => { const ev = parse(e); if (!ev) return; refreshPlanChip(); if (document.getElementById('st-plan-section')) loadPlanBox(); });
       source.addEventListener('plan_warning', e => { const ev = parse(e); if (!ev) return; refreshPlanChip(); subsPlanWarning(ev); if (document.getElementById('st-plan-section')) loadPlanBox(); });
       // The ChatGPT plan's usage (lib/codex-usage): the payload is the snapshot; the badges, the chip and the Subscriptions box repaint.
@@ -10689,6 +11216,7 @@
     // pageshow all fire together on a wake.
     let resyncAt = Date.now();
     function resync(force = false) {
+      if (globalThis.mmSettingsOnly === true) return;   // the settings-only page starts nothing else
       const now = Date.now();
       if (now - resyncAt < 2000) return false;
       resyncAt = now;
@@ -10868,6 +11396,7 @@
         <div class="compaction-line" id="compaction-line-${chatId}" style="display:none" title="Context compression: the agent writes its own working brief (see the agent's settings page)"></div>
         <div class="messages" id="messages-${chatId}"></div>
         <div class="handoff-cards" id="handoff-cards-${chatId}" hidden></div>
+        <div class="handoff-cards research-lines" id="research-lines-${chatId}" hidden></div>
         <div class="input-area">
           <div class="input-wrapper">
             <div class="image-preview-area" id="image-preview-${chatId}"></div>
@@ -10875,7 +11404,7 @@
           </div>
           <input type="file" id="file-input-${chatId}" multiple style="display:none" onchange="handleFileSelect(event, '${chatId}')">
           <button class="attach-btn" onclick="document.getElementById('file-input-${chatId}').click()" title="Attach a file: images are sent with the message, other files are uploaded to your files and their path is added to the message" style="background:var(--bg-input); border:1px solid var(--border); padding:8px 10px; font-size:1rem; cursor:pointer;">📎</button>
-          <button type="button" onclick="voiceMicToggle('${chatId}')" id="mic-${chatId}" class="mic-btn" style="display:none" aria-pressed="false" aria-label="Dictate" title="Talk (tap to start, tap to stop)">${VOICE_MIC_SVG}</button><span class="mic-meter" id="mic-meter-${chatId}" style="display:none" aria-hidden="true"><i></i></span><span class="voice-extra" style="display:none"><button type="button" class="voice-mode-chip" id="vmode-${chatId}" onclick="voiceModeToggle()" title="Talk mode: tap to switch" style="display:none">${voiceModeLabel()}</button><button type="button" class="voice-set-btn" id="vset-${chatId}" onclick="voicePopToggle('${chatId}')" aria-label="Voice settings" aria-expanded="false" title="Voice settings">${VOICE_LEVELS_SVG}</button><div class="voice-pop" id="voice-pop-${chatId}" role="dialog" aria-label="Voice settings" hidden></div></span>
+          <button type="button" onpointerdown="voiceMicPointer(false)" onpointerup="voiceMicPointer(true)" onclick="voiceMicToggle('${chatId}')" id="mic-${chatId}" class="mic-btn" style="display:none" aria-pressed="false" aria-label="${voiceMicIdleLabel()}" title="${voiceMicIdleTitle()}">${VOICE_MIC_SVG}</button><span class="mic-meter" id="mic-meter-${chatId}" style="display:none" aria-hidden="true"><i></i></span><span class="voice-extra" style="display:none"><button type="button" class="voice-mode-chip" id="vmode-${chatId}" onclick="voiceModeToggle()" title="Talk mode: tap to switch" style="display:none">${voiceModeLabel()}</button><button type="button" class="voice-set-btn" id="vset-${chatId}" onclick="voicePopToggle('${chatId}')" aria-label="Voice settings" aria-expanded="false" title="Voice settings">${VOICE_LEVELS_SVG}</button><div class="voice-pop" id="voice-pop-${chatId}" role="dialog" aria-label="Voice settings" hidden></div></span>
           <button onclick="toggleNotifyDone('${chatId}')" id="notify-${chatId}" class="notify-done-btn" style="display:none" aria-pressed="false" title="Get a notification on your phone when this reply is done">🔔 Notify me</button>
           <button onclick="sendSoloMessage('${chatId}')" id="send-${chatId}">Send</button>
         </div>
@@ -10997,6 +11526,7 @@
       activeChat = chatId;
       window.__activeChatId = chatId;
       if (document.getElementById('files-panel')) filesRefresh(); // the Files panel follows the active chat's agent
+      if (opened && !opened.isGroup && !opened.isWorker && opened.agent) { researchLinePaint(); researchLineLoad(opened.agent); }   // the deep research progress line
       if (document.getElementById('recall-panel') && chats[chatId] && !chats[chatId].isGroup && chats[chatId].agent && String(chats[chatId].agent) !== recallState.agent) openRecallPanel(chatId); // so does Recall
       document.getElementById(`input-${chatId}`)?.focus();
       if (typeof scheduleWorkerListRefresh === 'function') scheduleWorkerListRefresh();
@@ -11545,7 +12075,7 @@
     function messageOwnText(el) {
       if (!el) return '';
       const scan = el.cloneNode(true);
-      scan.querySelectorAll('.reason-stream, .tool-stream, .inline-thinking, .msg-copy, .msg-speak, .msg-time, .live-activity, .token-usage, .file-cards').forEach((n) => n.remove());
+      scan.querySelectorAll('.reason-stream, .tool-stream, .inline-thinking, .msg-copy, .code-copy, .msg-speak, .msg-time, .live-activity, .token-usage, .file-cards').forEach((n) => n.remove());
       return scan.textContent || '';
     }
     // A thinking block a partial reply left open (a model writing <think>… in its reply) is closed wherever the page adds a
@@ -11907,7 +12437,7 @@
       const live = agentStatus[chat.agent];
       if (live && live.busy) {
         const since = elapsedLabel(live.busySince, false);
-        appendSystemNotice(chatId, `⏳ ${chat.display || chat.agent} is still working on the previous message (${live.activity || 'working'}${since ? `, ${since}` : ''}). Your message will queue or be refused (409) until it finishes.`);
+        appendSystemNotice(chatId, `⏳ ${chat.display || chat.agent} is still working on the previous message (${chatViewActivityWord(live.activity) || 'working'}${since ? `, ${since}` : ''}). Your message will queue or be refused (409) until it finishes.`);
       }
 
       setStatus(chatId, 'thinking', `${chat.agent} responding...`);
@@ -13628,7 +14158,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       for (const k of ['micLevel', 'interruptSensitivity']) {
         if (typeof raw[k] === 'number' && Number.isFinite(raw[k])) p[k] = Math.max(0, Math.min(100, raw[k]));
       }
-      if (raw.mode === 'handsfree' || raw.mode === 'tap') p.mode = raw.mode;
+      if (raw.mode === 'handsfree' || raw.mode === 'press' || raw.mode === 'tap') p.mode = raw.mode;
       if (VOICE_END_PAUSES.includes(raw.endPause)) p.endPause = raw.endPause;
       if (typeof raw.voiceSpeed === 'number' && Number.isFinite(raw.voiceSpeed)) p.voiceSpeed = voiceCleanSpeed(raw.voiceSpeed);
       if (VOICE_CONTINUE_WAITS.includes(raw.continueWait)) p.continueWait = raw.continueWait;
@@ -14093,6 +14623,144 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       try { ctx.__voiceLoudness = chain; } catch {}
       return chain;
     }
+    // The press button of a Tap to talk call (el: the mic button, the display's Talk slot). getCall() -> the call controller (talk(on)). Pointer events: a press
+    // on the button starts listening (talk(true)); let go after VOICE_PRESS_HOLD_MS or more = hold to talk, release sends (talk(false)); a shorter tap keeps listening;
+    // a tap while listening sends on its release. The click after a pointer sequence is swallowed. Enter / Space toggle (no auto-repeat). The page calls
+    // handle.paint(on) from the call's ui.press(on): aria-pressed (listening or not), the title and the visible text ("Tap to talk" / "Tap to send") follow it; the aria-label stays "Talk".
+    // opts: now(), cls (pressed style, default 'rec'), text (also set textContent), off() (true: the button is doing something else, e.g. the call display's "Try the microphone
+    // again": the press handlers do nothing). A pointer sequence that is cancelled or loses its capture ends the press it opened (and sends), whatever its length;
+    // a pointerdown that finds a sequence of the same pointer that never ended, or one older than VOICE_PRESS_STALE_MS whose pointer no longer has capture, starts over. handle.el is the button.
+    const VOICE_PRESS_HOLD_MS = 400;
+    const VOICE_PRESS_STALE_MS = 10000;
+    const VOICE_PRESS_LABELS = ['Tap to talk', 'Tap to send'];
+    function voicePressButton(el, getCall, opts) {
+      const o = opts || {};
+      const now = typeof o.now === 'function' ? o.now : () => Date.now();
+      const cls = typeof o.cls === 'string' ? o.cls : 'rec';
+      const bornAt = now();   // the button is often made inside the very tap that starts the call: that tap's own click is not a press
+
+      let painted = false;   // the visible state (ui.press), not the requested one: a press requested during the previous press's tail is shown only when admitted
+      let began = false, downId, downAt = 0, requestedAtDown = false;
+      let swallowUntil = -Infinity, keyDown = false, keyClickUntil = -Infinity;
+
+      function quiet(fn) {
+        try { return fn(); } catch { return undefined; }
+      }
+      const off = () => typeof o.off === 'function' && quiet(() => o.off()) === true;
+      const stop = e => quiet(() => e?.preventDefault?.());
+      const isToggleKey = e => ['Enter', ' ', 'Spacebar'].includes(e?.key);
+
+      // A toggle asks the call (call.pressing: the requested state, call.talk), never the painted state.
+      function toggle() {
+        quiet(() => {
+          const call = getCall();
+          if (call) call.talk(!call.pressing);
+        });
+      }
+
+      quiet(() => el.setAttribute('aria-label', 'Talk'));
+
+      function paint(on) {
+        painted = !!on;
+        const label = VOICE_PRESS_LABELS[painted ? 1 : 0];
+        quiet(() => el.setAttribute('aria-pressed', String(painted)));
+        quiet(() => el.setAttribute('title', label));
+        if (o.text) quiet(() => { el.textContent = label; });
+        if (cls) quiet(() => el.classList?.toggle(cls, painted));
+      }
+
+      function onDown(e) {
+        if (off()) return;
+        if (e?.pointerType === 'mouse' && typeof e.button === 'number' && e.button !== 0) return;
+        stop(e);
+
+        const id = e?.pointerId;
+        const t = now();
+        // a second finger on a press that is under way is ignored; a sequence that never ended (no pointerup, no cancel) starts over when it is of the same pointer, or older than VOICE_PRESS_STALE_MS
+        // and its pointer no longer has capture (a long legitimate hold keeps its capture: a second finger cannot take it over)
+        if (began) {
+          const samePointer = id !== undefined && id === downId;
+          const stale = t - downAt > VOICE_PRESS_STALE_MS;
+          if (!samePointer && (!stale || quiet(() => el.hasPointerCapture?.(downId)))) return;
+        }
+
+        const call = quiet(getCall);
+        if (!call) return;
+        requestedAtDown = call.pressing === true;
+        began = true;
+        downId = id;
+        downAt = t;
+        swallowUntil = Infinity;
+        if (id !== undefined) quiet(() => el.setPointerCapture?.(id));
+        if (!requestedAtDown) quiet(() => call.talk(true));
+      }
+
+      // Only the pointer that opened the press can end it: the release, cancel or lost capture of a second finger changes nothing.
+      function finishPointer(e, cancelled) {
+        if (!began || e?.pointerId !== downId) return;
+        const t = now();
+        began = false;
+        downId = undefined;
+        swallowUntil = t + 700;
+        stop(e);
+        // cancelled (pointercancel, lostpointercapture): the press ends now, whatever its length
+        if (cancelled || requestedAtDown || t - downAt >= VOICE_PRESS_HOLD_MS) {
+          quiet(() => getCall()?.talk(false));
+        }
+      }
+
+      function onClick(e) {
+        if (off()) return;
+        stop(e);
+        if (began) return;   // a secondary click cannot consume the owner's swallow flag
+        const t = now();
+        if (t - bornAt < 700 || t <= swallowUntil) {
+          swallowUntil = -Infinity;
+          return;
+        }
+        if (keyDown || t <= keyClickUntil) {
+          keyClickUntil = -Infinity;
+          return;
+        }
+        toggle();   // a click from nothing we saw (assistive technology): a toggle
+      }
+
+      function onKeyDown(e) {
+        if (!isToggleKey(e) || off()) return;
+        stop(e);
+        if (e.repeat || keyDown) return;
+        keyDown = true;
+        keyClickUntil = now() + 700;
+        toggle();
+      }
+
+      function onKeyUp(e) {
+        if (!isToggleKey(e) || !keyDown) return;
+        stop(e);
+        keyDown = false;
+        // Space can produce its click on release, even after a long hold.
+        keyClickUntil = now() + 700;
+      }
+
+      const listeners = [
+        ['pointerdown', onDown],
+        ['pointerup', e => finishPointer(e, false)],
+        ['pointercancel', e => finishPointer(e, true)],
+        ['lostpointercapture', e => finishPointer(e, true)],
+        ['click', onClick],
+        ['keydown', onKeyDown],
+        ['keyup', onKeyUp],
+      ];
+      for (const [name, fn] of listeners) el.addEventListener(name, fn);
+      return {
+        el,
+        paint,
+        get pressing() { return painted; }, // Existing handle API reports the visible state.
+        detach() {
+          for (const [name, fn] of listeners) quiet(() => el.removeEventListener(name, fn));
+        },
+      };
+    }
     // ── voice helpers (end) ──
 
     // Hands-free call controller: shared with lib/ui-voice-call.js, kept in step by test/ui-voice-call.test.js.
@@ -14102,8 +14770,14 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     // The frame watchdog: while the person is speaking, the detector sends a frame every 32 ms. No frame for VOICE_FRAME_GAP_MS means the audio no longer reaches it
     // (iOS interrupted it); one piece longer than VOICE_PIECE_MAX_MS is cut and sent. The check runs every VOICE_WATCHDOG_TICK_MS.
     const VOICE_FRAME_GAP_MS = 2000, VOICE_PIECE_MAX_MS = 60000, VOICE_WATCHDOG_TICK_MS = 500;
+    // Mute mid-speech with a detector that cannot end a piece on request (no endPiece): how long the end that follows the silence is waited for.
+    const VOICE_MUTE_END_MS = 5000;
     const VOICE_FRAMES_LOST_LINE = 'The microphone stopped sending sound, so I restarted it.';
     const VOICE_PIECE_LONG_LINE = 'You talked for over a minute, so I sent what I heard.';
+    // Tap to talk (deps.press): a press is cut only at this length, not at VOICE_PIECE_MAX_MS; VOICE_PRESS_MIN_MS: a press with less audio than this is a false start (adapter).
+    // VOICE_PRESS_TAIL_MS: a press goes on accepting frames this long after the release (the pipeline's lag: frames captured before the release are processed after it).
+    const VOICE_PRESS_MAX_MS = 15 * 60 * 1000, VOICE_PRESS_MIN_MS = 250, VOICE_PRESS_TAIL_MS = 200;
+    const VOICE_PRESS_LONG_LINE = 'You talked for 15 minutes, so I sent what I heard.';
     const VOICE_EMPTY_LINE = 'I didn\'t catch that.';   // the recognizer answered with no words at all for a piece of at least 1 s
     // While a reply plays, a stricter talk-over (iPhone, iPad: the speaker's echo is loud) caps the sensitivity at this value.
     const VOICE_STRICT_TALKOVER_SENS = 20;
@@ -14375,6 +15049,10 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const d = deps || {};
       const ui = Object.assign({ state() {}, heard() {}, held() {}, toast() {}, summary() {}, level() {}, activity() {}, reply() {}, mic() {}, micLost() {} }, d.ui);   // ui.mic(info): the open microphone; ui.micLost(bool): it was lost / is back; ui.thinkingPulse(event) is optional; ui.reply(kind): 'start' | 'end' | 'drop' | 'resume' (a reply's boundaries, for the display's reaction)
       const server = d.server || {}, vad = d.vad || {};
+      // Tap to talk (deps.press === true, fixed for the call): the microphone is heard only while the person presses (talk(true) ... talk(false)). Between presses the
+      // call is muted the way Mute does it (tracks off), but ui.press(on) says it, not the muted display. No standby or wake phrase. pressing: a press is on.
+      const press = d.press === true;
+      let pressing = false, pressShown = false;   // pressing: a press is requested; pressShown: ui.press(true) was said (the press was admitted: the detector reported its start)
       const now = () => d.now();
       const quiet = (fn) => { try { return fn(); } catch { return undefined; } };
       let state = '', mode = 'announce', ended = false, started = false, endPromise = null;
@@ -14415,8 +15093,11 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       // deps.keepAlive ({ start(), stop() }, optional): an inaudible sound that keeps a Bluetooth / car audio route awake. It starts with the call and
       // the first spoken line of the call waits until VOICE_CALL_LEAD_IN_MS after that (the route needs a moment to open, or the first syllable is lost).
       let leadInUntil = 0, keepAliveOn = false, micLost = false;
-      // Mute (setMuted, the call bar's Mute button). sinceUnmute: a piece of speech began after the last unmute (an end or misfire for one that began before is ignored).
-      let muted = false, sinceUnmute = true;
+      // Mute (setMuted, the call bar's Mute button). sinceUnmute: a piece of speech began after the last unmute (an end or misfire for one that began before is ignored,
+      // a stray fragment of the detector). muteEnd: the pieceId of the piece Mute ended at the tap (-1: none): its one end or misfire is taken, muted or not.
+      // muteSeq counts the Mute taps: a piece that sees it change (or the call muted) while it would wait for more is sent at once. muteEnding: endAtMute is running.
+      // muteCut: the pieceId endAtMute is cutting; muteAgain: a later Mute found a newer piece under way, cut once the running cut is done.
+      let muted = false, sinceUnmute = true, muteEnd = -1, muteSeq = 0, muteEnding = false, muteCut = -1, muteAgain = false;
       let linkLost = false, linkWasLost = false, linkDropped = false;   // the connection to the server is lost (setLinkLost): nothing is reported as an error
       // Outage count: each loss adds one. A piece of speech remembers the count when it began (-1 if the link was already lost). The link state NEVER
       // discards a piece whose transcript arrived (the request itself is the test: speech heard during an outage is still sent to d.stt). It only decides
@@ -14537,7 +15218,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       // heard; an awake call that stays quiet for quietMs goes back to standby. Wake mode starts only with local true, and once on it fails
       // closed: if local turns false the call stays in (or returns to) standby and nothing heard there is even transcribed. Only the
       // person switching it off (wake() -> null) makes it an ordinary call. Without deps.wake nothing here acts.
-      const wake = () => { if (!d.wake) return null; const w = quiet(() => d.wake()); return w && typeof w === 'object' ? w : null; };
+      const wake = () => { if (press || !d.wake) return null; const w = quiet(() => d.wake()); return w && typeof w === 'object' ? w : null; };
       const wakePhrase = () => { const w = wake(); return w && typeof w.phrase === 'string' ? w.phrase : ''; };
       let standby = false, wakeMode = false, wakeSeq = 0, quietTimer = null, chimeTimer = null, statePhrase = '';
       let capWake = null, heardShown = false;   // heardShown: a 'Heard' line is on screen (cleared when the call goes back to standby)   // { sb, seq } taken when the person starts to speak: what counts is whether the call was in standby then
@@ -14841,7 +15522,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           if (ended || muted || !personSpeaking) return;   // not speaking (or muted): nothing to watch; the next piece arms it again
           const t = now();
           if (lastFrameAt > 0 && t - lastFrameAt >= VOICE_FRAME_GAP_MS) { fireWatch('frames'); return; }
-          if (t - pieceStartAt >= VOICE_PIECE_MAX_MS) { fireWatch('long'); return; }
+          if (t - pieceStartAt >= (press ? VOICE_PRESS_MAX_MS : VOICE_PIECE_MAX_MS)) { fireWatch('long'); return; }
           armWatch();
         }, VOICE_WATCHDOG_TICK_MS);
       }
@@ -14851,7 +15532,13 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       // says the microphone is lost, never "Listening" while nothing is heard.
       async function fireWatch(reason) {
         const id = pieceId;
-        quiet(() => ui.toast(reason === 'frames' ? VOICE_FRAMES_LOST_LINE : VOICE_PIECE_LONG_LINE));
+        quiet(() => ui.toast(reason === 'frames' ? VOICE_FRAMES_LOST_LINE : press ? VOICE_PRESS_LONG_LINE : VOICE_PIECE_LONG_LINE));
+        // Tap to talk: the press ends here, as if the person let go (the piece is cut and sent at once by Mute's path); the microphone is opened again after lost frames.
+        if (press) {
+          talk(false);
+          if (reason === 'frames' && !ended) { try { await retryMic(); } catch { /* retryMic never throws */ } }
+          return;
+        }
         let listening = false;
         if (typeof vad.endPiece === 'function') { try { listening = (await vad.endPiece()) !== false; } catch { listening = false; } }
         if (!ended && !muted && personSpeaking && pieceId === id) dropSpeech();
@@ -14865,7 +15552,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         const c = lastSeg;
         // The earlier piece qualifies while its text is not sent yet (its transcript pending, held, or in the continue wait): one chain,
         // in order, however slow the transcription is, so a later stop word still wins over it.
-        if (c && !c.done && !c.hold) {
+        if (c && !c.done && !c.hold && !press) {   // (tap to talk: every press is its own message, never joined)
           let resolve; const promise = new Promise((r) => { resolve = r; });
           c.hold = { promise, resolve }; curCand = c;
           if (c.onJoin) { const f = c.onJoin; c.onJoin = null; quiet(f); }   // the wait for more is over: the next piece is coming
@@ -14876,6 +15563,12 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         segActive = false;
         const c = curCand; curCand = null;
         if (c && c.hold) { c.hold.resolve(null); c.hold = null; }
+      }
+      // Tap to talk: ui.press(true) follows the admission of the press (the detector's start report for it), not the request (talk(true)). Once per press.
+      function showPress() {
+        if (!press || !pressing || pressShown) return;
+        pressShown = true;
+        quiet(() => { if (typeof ui.press === 'function') ui.press(true); });
       }
       function onSpeechBegin() {
         if (ended || personSpeaking || muted) return;
@@ -14893,6 +15586,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       // Real speech began (the VAD adapter calls this from onSpeechRealStart, so a cough or a click does not cut the reading).
       function onSpeechStart() {
         if (ended || muted) return;
+        showPress();
         sinceUnmute = true;
         clearBegin();
         if (watchTimer === null) { pieceStartAt = now(); armWatch(); }   // real speech: the watchdog runs until the piece ends
@@ -14916,7 +15610,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       }
       // The VAD heard no real speech after all (a false start): the person is not speaking, and a reply that was cut by it is read on.
       function onMisfire() {
-        if (ended || muted || !sinceUnmute) return;
+        if (ended || (muteEnd !== pieceId && (muted || !sinceUnmute))) return;
         dropSpeech();
       }
       function dropSpeech() {
@@ -14942,7 +15636,10 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         return typeof p === 'number' && Number.isFinite(p) && p < 0.35;
       }
       function onSpeechEnd(audio) {
-        if (ended || muted || !sinceUnmute) return Promise.resolve();   // muted: nothing is heard; just unmuted: a piece begun before it is not sent
+        // Muted: nothing is heard, except the piece Mute ended at the tap (muteEnd), which is sent. Just unmuted: an end with no speech begun since is a stray fragment.
+        const atMute = muteEnd === pieceId;
+        if (ended || (!atMute && (muted || !sinceUnmute))) return Promise.resolve();
+        if (atMute) muteEnd = -1;
         clearBegin(); disarmWatch(); pieceId++;
         // The recorded audio of this speech (null when it was not recorded: standby, paused, no recorder): its transcript is saved below.
         const recHandle = recOn ? quiet(() => recorder.end()) || null : null;
@@ -14951,7 +15648,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         // sb and seq: was this said in standby (when it began, or now), and how many wakes had there been. Said in standby, it needs the phrase unless a wake came
         // in between (the phrase said alone, then this): so neither a switch-off nor a lost recognizer check can release it.
         const cap = capWake || { sb: standby, seq: wakeSeq }; capWake = null;
-        const mine = { endAt: now(), ann: speechAnn, carry: '', done: false, hold: null, waiting: false, onJoin: null, sb: cap.sb || standby, seq: cap.seq,
+        const mine = { endAt: now(), ann: speechAnn, carry: '', done: false, hold: null, waiting: false, onJoin: null, sb: cap.sb || standby, seq: cap.seq, muteSeq,
           linkGen: segLinkGen === linkGen && !linkLost ? linkGen : -1 };
         const linkHit = () => linkLost || mine.linkGen !== linkGen;   // the link was lost now, or an outage began since / was going when this piece began
         speechAnn = null; segActive = false;
@@ -15009,9 +15706,11 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
               if (waitTimer !== null) quiet(() => d.clearTimer(waitTimer));
               mine.waiting = false; mine.onJoin = null;
             };
-            if (!mine.hold && !ended && !voiceIsStopCommand(t) && !sleepy && !pendingAsk && mine.ann == null && !pendingAnnounce) {
+            // Mute was tapped (now, or while the end-of-turn model decided): sent as it is, no wait for more.
+            const mutedSince = () => muted || muteSeq !== mine.muteSeq;   // counted from the end of this piece, before its transcription
+            if (!mine.hold && !ended && !atMute && !mutedSince() && !voiceIsStopCommand(t) && !sleepy && !pendingAsk && mine.ann == null && !pendingAnnounce) {
               ms = continueWait();
-              if (ms > 0 && await soundsUnfinished(t, audio)) {
+              if (ms > 0 && await soundsUnfinished(t, audio) && !mutedSince()) {
                 waited = true; waitStart = now();
                 await waitMore(ms);
                 if (ended) return;
@@ -15029,7 +15728,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
               if (timedOut || !waited) break;
               // A misfire (cough, click) ended the wait early: the rest of the wait goes on.
               const left = ms - (now() - waitStart);
-              if (left <= 0) break;
+              if (left <= 0 || mutedSince()) break;
               await waitMore(left);
               if (ended) return;
             }
@@ -15217,17 +15916,61 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         try { return Promise.resolve(vad.reopen()).then((r) => !!r, () => false); } catch { return Promise.resolve(false); }
       }
 
-      // Mute: the agent hears nothing. The microphone tracks are switched off (vad.setMuted: the speech detector, the recognizer and the recorder get digital
-      // silence, also from a microphone opened again while muted) and the speech events are ignored here. Speech under way when Mute is tapped is dropped as a
-      // false start: nothing of it is sent or recorded, and a reply it had cut reads on. After unmute, only speech that begins after it counts. The agent's own
-      // speech, the thinking sound, the keep-alive and the music focus are not touched. Every call starts unmuted; the end of the call clears it. -> muted.
+      // Mute: the agent hears nothing said after the tap. The microphone tracks are switched off (vad.setMuted: the speech detector, the recognizer and the
+      // recorder get digital silence, also from a microphone opened again while muted) and new speech events are ignored here. Speech under way when Mute is
+      // tapped ENDS at the tap and is sent, as if the person had paused (endAtMute): everything said before the tap reaches the agent, and is recorded when the
+      // call is. A piece waiting for more ('Wait for me to go on') is sent at once; pieces being transcribed or in line go on as usual. The agent's reply is
+      // read while muted. After unmute, only speech that begins after it counts. The agent's own speech, the thinking sound, the keep-alive and the music
+      // focus are not touched. Every call starts unmuted; the end of the call clears it. -> muted.
       function setMuted(on) {
         const want = !!on;
         if (ended || want === muted) return muted;
         muted = want;
         quiet(() => { if (typeof vad.setMuted === 'function') vad.setMuted(want); });
-        if (want) { sinceUnmute = false; disarmWatch(); if (personSpeaking || segActive) dropSpeech(); }
+        if (want) {
+          sinceUnmute = false; disarmWatch(); muteSeq++;
+          if (personSpeaking || segActive) {
+            if (!muteEnding) endAtMute();
+            else if (pieceId === muteCut) muteEnd = pieceId;   // a second tap on the piece being cut: that cut covers it
+            else muteAgain = true;   // a newer piece (begun after a quick unmute): cut it when the running cut is done
+          }
+          const w = lastSeg;
+          if (w && w.waiting && w.onJoin && !segActive) { const f = w.onJoin; w.onJoin = null; quiet(f); }   // waiting for more that will not come: sent now
+        }
         return muted;
+      }
+      // The piece under way when Mute was tapped: the detector ends it now (vad.endPiece, as the frame watchdog does), so what was heard up to the tap is
+      // transcribed and sent through the normal onSpeechEnd (muteEnd lets that one end through). A detector without endPiece ends it on the silence that
+      // follows (within VOICE_MUTE_END_MS). When no end or misfire came, the piece is let go; a detector that could not listen again is opened again.
+      async function endAtMute() {
+        const id = pieceId;
+        muteEnd = id; muteEnding = true; muteCut = id; muteAgain = false;
+        let listening = true, asked = false;
+        try {
+          if (typeof vad.endPiece === 'function') { asked = true; try { listening = (await vad.endPiece()) !== false; } catch { listening = false; } }
+          else await new Promise((r) => { d.setTimer(r, VOICE_MUTE_END_MS); });
+        } finally { muteEnding = false; muteCut = -1; }
+        if (muteEnd === id) muteEnd = -1;
+        if (!ended && personSpeaking && pieceId === id) dropSpeech();
+        if (asked && !listening && !ended) { try { await retryMic(); } catch { /* retryMic never throws */ } }
+        if (muteAgain) { muteAgain = false; if (!ended && muted && (personSpeaking || segActive)) await endAtMute(); }
+      }
+      // Tap to talk (press mode only; false and nothing done in any other call). talk(true): the microphone opens and a piece begins at once (the adapter reports it
+      // from setMuted(false); a detector that does not gets it from here), so a reply being read is cut as when the person speaks over it. talk(false): the
+      // microphone closes, which ends the piece and sends it at once (Mute's endAtMute: no wait for more, no joining). Idempotent. -> the pressing state.
+      function talk(on) {
+        if (!press) return false;
+        const want = !!on;
+        if (ended || !started || state === 'starting' || want === pressing) return pressing;
+        pressing = want;
+        if (want) {
+          setMuted(false);
+          if (!vad.manual) { if (!personSpeaking) { onSpeechBegin(); onSpeechStart(); } else showPress(); }   // only a detector that cannot report the start (a manual one reports it itself, up to a press tail later, and ui.press(true) follows that report)
+        } else {
+          pressShown = false; setMuted(true);
+          quiet(() => { if (typeof ui.press === 'function') ui.press(false); });
+        }
+        return pressing;
       }
       // The Interrupt button while muted (the Talk floor asks this instead of taking the floor: nothing is listened for while muted): the reply being read
       // stops and the rest of this turn's reply is not read, as when the person cuts it by speaking. -> true when something was stopped.
@@ -15273,6 +16016,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         await vadStarting;
         if (ended) { quiet(() => vad.stop()); return false; }   // hung up while starting: a microphone that came up late is let go
         if (vadErr) return fail('Could not start the microphone: ' + (vadErr.message || vadErr));
+        if (press) { setMuted(true); quiet(() => { if (typeof ui.press === 'function') ui.press(false); }); }   // tap to talk: the microphone is off until the first press
         hydrate(startRes && startRes.held);
         beat();
         if (!wake()) { wakeMode = false; standby = false; }   // switched off while the call started (wakeChanged waits for the start)
@@ -15328,15 +16072,17 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       // unchanged may move the call). Switched off: an ordinary call. Switched on (with a local recognizer): standby now if idle, else after
       // the quiet time. Anything else (a new phrase or quiet time, a check that failed) leaves the mode and the state as they are.
       function wakeChanged() {
-        if (ended || !started || state === 'starting') return;
+        if (press || ended || !started || state === 'starting') return;   // (tap to talk: no wake phrase)
         const w = wake();
         if (!w) { wakeMode = false; if (standby) leaveStandby(); else settle(); return; }
         if (!wakeMode && w.local === true) { wakeMode = true; if (!standby && wakeIdle()) enterStandby(); }
         settle();
       }
       return {
-        start, hangUp, release, wakeChanged, isStandby: () => standby, setMuted, isMuted: () => muted, interrupt, setPrefs, retryMic, setLinkLost, onSpeechBegin, onSpeechStart, onMisfire, onSpeechEnd, onReplyText, onReadFull, resetReadFull, onActivity, onAsk, onAskDone, onHeld, onHeldDone, decide, setMode, onHubOwner, backgroundDone,
+        get pressing() { return pressing; },
+        start, hangUp, release, wakeChanged, isStandby: () => standby, setMuted, isMuted: () => muted, talk, interrupt, setPrefs, retryMic, setLinkLost, onSpeechBegin, onSpeechStart, onMisfire, onSpeechEnd, onReplyText, onReadFull, resetReadFull, onActivity, onAsk, onAskDone, onHeld, onHeldDone, decide, setMode, onHubOwner, backgroundDone,
         get background() { return bgWords.length > 0; },
+        get press() { return press; },
         get state() { return state; }, get callId() { return callId; }, get mode() { return mode; }, get held() { return heldList.map(h => Object.assign({}, h)); },
       };
     }
@@ -15830,9 +16576,12 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         devPending: false,   // a devicechange arrived while the first route step was running: deviceChanged() runs once when it ends
         unprocessed: !!o.unprocessed,   // the call's own microphone is opened with echo cancellation, noise suppression and auto gain off (a recorded call, mic 'unprocessed': the fallback)
         recRaw: null, recSrc: null, recTrack: null, recOff: null, srcWatchers: [], openWaiters: [],   // the recording's own second microphone track (openRecordingTap) and who follows the tap
-        muted: false,   // setMuted: every microphone track of the call is switched off
+        manual: o.manual === true,   // tap to talk: the detector's speech events decide nothing; a piece is the frames heard between setMuted(false) and setMuted(true)
+        open: null, ended: [],   // manual: each press is its own { frames (Float32Array, 16 kHz), len, endedAt, taken }; the press that is open now, and the ended ones that are still in their tail or not yet taken by endPiece
+        muted: o.manual === true,   // setMuted: every microphone track of the call is switched off (a tap-to-talk call starts switched off)
         paused: false };   // endPiece paused the detector and has not started it again (a failed start): reopen() starts it
       const win = () => o.win || window;
+      const nowMs = typeof o.now === 'function' ? o.now : () => Date.now();
       const setT = o.setTimer || ((fn, ms) => { const w = win(); return (typeof w.setTimeout === 'function' ? w.setTimeout.bind(w) : setTimeout)(fn, ms); });
       const clearT = o.clearTimer || ((id) => { const w = win(); return (typeof w.clearTimeout === 'function' ? w.clearTimeout.bind(w) : clearTimeout)(id); });
       const clearHold = () => { if (st.holdTimer !== null) { try { clearT(st.holdTimer); } catch { /* gone */ } st.holdTimer = null; } };
@@ -16193,16 +16942,23 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
             // only; a candidate that never gets there ends in onVADMisfire.
             // submitUserSpeechOnPause: pausing the detector (endPiece) ends the piece in progress and delivers its audio through onSpeechEnd (or onVADMisfire when too short).
             submitUserSpeechOnPause: true,
-            onSpeechStart: () => { if (live() && handlers.onSpeechBegin) handlers.onSpeechBegin(); },
+            onSpeechStart: () => { if (!st.manual && live() && handlers.onSpeechBegin) handlers.onSpeechBegin(); },   // (manual: the speech events decide nothing)
             // Real speech passed the raised thresholds: an echo hold-over still running (after a reply or a thinking pulse) ends at once, so
             // it never stays raised over the person's own words.
             onSpeechRealStart: () => {
               if (st.holdTimer !== null) { clearHold(); st.playing = false; apply(); }
-              if (live() && handlers.onSpeechStart) handlers.onSpeechStart();
+              if (!st.manual && live() && handlers.onSpeechStart) handlers.onSpeechStart();
             },
-            onSpeechEnd: (audio) => (live() && handlers.onSpeechEnd ? handlers.onSpeechEnd(audio) : undefined),
-            onVADMisfire: () => { if (live() && handlers.onMisfire) handlers.onMisfire(); },
-            onFrameProcessed: (probs, frame) => { if (live() && handlers.onFrame) handlers.onFrame(voiceLevelDb(frame), probs); },
+            onSpeechEnd: (audio) => (!st.manual && live() && handlers.onSpeechEnd ? handlers.onSpeechEnd(audio) : undefined),
+            onVADMisfire: () => { if (!st.manual && live() && handlers.onMisfire) handlers.onMisfire(); },
+            onFrameProcessed: (probs, frame) => {
+              if (!live()) return;   // a late callback from a detector that has been replaced or released stores nothing and reports nothing
+              if (st.manual && frame && frame.length) {   // a frame belongs to the press that is open and admitted, else to the admitted one still in its tail (its copy: the detector may reuse its frame)
+                const p = st.open && st.open.admitted ? st.open : tailOwner();
+                if (p) { p.frames.push(Float32Array.from(frame)); p.len += frame.length; }
+              }
+              if (handlers.onFrame) handlers.onFrame(voiceLevelDb(frame), probs);
+            },
           });
           if (stale()) throw new Error('stopped');
           await st.vad.start();
@@ -16222,6 +16978,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         flushOpen(false); dropRecording(); st.srcWatchers = [];
         st.vad = st.raw = st.dest = st.ctx = st.gain = st.src = st.defSnap = null;
         st.paused = false; st.settling = null; st.devPending = false;
+        st.open = null; st.ended = [];
         st.handlers = {};   // nothing the detector emits while it is destroyed (a last SpeechEnd from its pause) reaches the call
         if (src) { try { src.disconnect(); } catch { /* gone */ } }
         voiceStopStream(raw); voiceStopStream(dest);   // first, so the microphone is free even when the rest is slow
@@ -16229,8 +16986,27 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         try { if (ctx) await ctx.close(); } catch { /* already closed */ }
       }
       async function stop() { st.gen++; await release(); }
+      // Tap to talk (manual). This is a 200 ms admission delay (VOICE_PRESS_TAIL_MS), not an acknowledgment from the detector: a press that starts while the
+      // previous press is still in its tail keeps the tracks muted until that tail ends, then is admitted (tracks on, onSpeechBegin, onSpeechStart). Speech in
+      // that delay is not heard. A press released or a call stopped before then is never admitted (st.open !== p).
+      function admitPress(p) {
+        if (st.open !== p || p.admitted) return;
+        p.admitted = true;
+        st.muted = false; applyMute();
+        const h = st.handlers;
+        try { if (typeof h.onSpeechBegin === 'function') h.onSpeechBegin(); } catch { /* the call's own problem */ }
+        try { if (typeof h.onSpeechStart === 'function') h.onSpeechStart(); } catch { /* the call's own problem */ }
+      }
+      // The admitted press that was released within VOICE_PRESS_TAIL_MS (its frames are still in the pipeline): it keeps the audio.
+      function tailOwner() {
+        const t = nowMs();
+        for (let i = 0; i < st.ended.length; i++) { const p = st.ended[i]; if (p.admitted && t < p.endedAt + VOICE_PRESS_TAIL_MS) return p; }
+        return undefined;
+      }
       return {
         start, stop,
+        // true: the detector reports the start of a press itself (the call does not fake it).
+        get manual() { return st.manual; },
         // While a reply plays the barge-in thresholds are raised. Playback stopping does NOT lower them at once: a car cabin's echo of the reply
         // reaches the microphone 150-300 ms after playback stops (longer through Bluetooth), and would be heard as the person speaking. So they stay
         // raised for echoHoldMs (default VOICE_ECHO_HOLD_MS; 0 = off: lowered at once) and a new playback in between cancels the lowering.
@@ -16271,6 +17047,26 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         // segment and delivers it through onSpeechEnd (VADMisfire when too short) because of submitUserSpeechOnPause; start() on the same instance reconnects the
         // stream and listens again. An iOS context left 'interrupted' is resumed first (1 s at most). -> Promise of true when the detector listens again.
         async endPiece() {
+          if (st.manual) {   // tap to talk: the frames of the most recently ended press are the piece; the detector is neither paused nor restarted
+            let p = null;   // the newest press nobody took (a plain loop: no Array.prototype.findLast, older Safari)
+            for (let i = st.ended.length - 1; i >= 0; i--) { const e = st.ended[i]; if (!e.taken && !e.superseded) { p = e; break; } }
+            if (!p) { try { if (typeof st.handlers.onMisfire === 'function') st.handlers.onMisfire(); } catch { /* the call's own problem */ } return true; }
+            p.taken = true;
+            const left = p.endedAt + VOICE_PRESS_TAIL_MS - nowMs();   // the press's tail (frames still in the pipeline) is waited out first (a press never admitted has no tail)
+            if (p.admitted && left > 0) await new Promise((r) => { try { setT(r, left); } catch { r(); } });
+            const i = st.ended.indexOf(p);   // stop() clears st.ended, also when a new call has started since
+            if (i < 0) return true;
+            st.ended.splice(i, 1);
+            const h = st.handlers;
+            if (p.len >= VOICE_PRESS_MIN_MS * 16) {
+              const audio = new Float32Array(p.len);
+              let at = 0;
+              for (const f of p.frames) { audio.set(f, at); at += f.length; }
+              p.frames.length = 0;   // joined: the frame list is dropped at once (a long press is big)
+              try { if (typeof h.onSpeechEnd === 'function') { const pr = h.onSpeechEnd(audio); if (pr && typeof pr.catch === 'function') pr.catch(() => {}); } } catch { /* the call's own problem */ }   // handed over, not awaited (as MicVAD delivers a piece)
+            } else { p.frames.length = 0; try { if (typeof h.onMisfire === 'function') h.onMisfire(); } catch { /* the call's own problem */ } }
+            return true;
+          }
           if (!st.vad || !st.ctx) return false;
           const v = st.vad;
           try {
@@ -16302,7 +17098,29 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         openRecordingTap,
         setMicLevel(v) { st.micLevel = v; if (st.gain) st.gain.gain.value = voiceGainFromSlider(v); },
         // Mute (see applyMute): true switches every microphone track of the call off, false on again (whatever is open now, after any reopen).
-        setMuted(on) { st.muted = !!on; applyMute(); },
+        // Tap to talk (manual): unmuting starts a piece (the frames are kept from here; onSpeechBegin, then onSpeechStart), muting stops keeping frames (endPiece takes them).
+        setMuted(on) {
+          if (!st.manual) { st.muted = !!on; applyMute(); return; }
+          if (on) {   // the press ends: an admitted one keeps taking frames for VOICE_PRESS_TAIL_MS (see onFrameProcessed) and waits for endPiece
+            const p = st.open; st.open = null;
+            st.muted = true; applyMute();
+            if (!p) return;
+            if (p.timer !== null) { try { clearT(p.timer); } catch { /* gone */ } p.timer = null; }   // released before its admission: it is never admitted
+            p.endedAt = nowMs();
+            // The audio owner is kept through its tail even when a short, queued press has already ended; only the newest untaken press may be submitted.
+            st.ended = st.ended.filter((e) => e.taken || (e.admitted && nowMs() < e.endedAt + VOICE_PRESS_TAIL_MS));
+            for (const e of st.ended) if (!e.taken) e.superseded = true;
+            st.ended.push(p);
+            return;
+          }
+          if (st.open) return;   // already on: a press is under way
+          const p = { frames: [], len: 0, endedAt: null, taken: false, admitted: false, superseded: false, timer: null };
+          st.open = p;
+          const a = tailOwner();
+          if (!a) { admitPress(p); return; }
+          // Inside the previous press's tail: the tracks stay muted until it ends (admitPress does nothing when the press was released or the call stopped meanwhile).
+          try { p.timer = setT(() => { p.timer = null; admitPress(p); }, Math.max(0, a.endedAt + VOICE_PRESS_TAIL_MS - nowMs())); } catch { admitPress(p); }
+        },
         isMuted() { return st.muted; },
         setInterruptSensitivity(v) { st.sens = v; apply(); },
         // 'Pause before I'm done': only the END of a turn waits this long; the start of speech (barge-in) is not delayed.
@@ -16881,7 +17699,14 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     }
     function voiceThinkingOnNow() { return voicePrefsNow().thinkingSound !== false; }
     function voiceThinkingVolNow() { const v = Number(voicePrefsNow().thinkingVolume); return Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0.5; }
-    function voiceModeLabel() { return voicePrefsNow().mode === 'tap' ? 'Tap to talk' : 'Hands-free'; }
+    // The three Talk modes, in the order every picker lists them: handsfree "Hands-free", press "Tap to talk" (a call you press to speak in), tap "Dictation" (the mic writes text).
+    // The chip next to the mic exists only during a call and Dictation is not a call mode, so its label is Hands-free or Tap to talk.
+    // During a call the chip names the RUNNING call's mode (fixed at its start, voiceCallS.press); the saved mode only counts from the next call.
+    function voiceModeLabel() {
+      let live = false, press = false;
+      try { live = !!voiceCallS.call; press = voiceCallS.press === true; } catch { live = false; }
+      return (live ? press : voicePrefsNow().mode === 'press') ? 'Tap to talk' : 'Hands-free';
+    }
     const VOICE_LEVELS_SVG = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 6h10"></path><path d="M18 6h2"></path><circle cx="16" cy="6" r="2"></circle><path d="M4 12h2"></path><path d="M10 12h10"></path><circle cx="8" cy="12" r="2"></circle><path d="M4 18h10"></path><path d="M18 18h2"></path><circle cx="16" cy="18" r="2"></circle></svg>';
     const voiceReady = () => !!(voiceStatus && voiceStatus.enabled && voiceStatus.ready);
     const voiceDeviceFallback = () => !!(voicePrefsNow().deviceVoiceFallback && window.speechSynthesis && typeof SpeechSynthesisUtterance !== 'undefined');
@@ -16890,6 +17715,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       for (const b of document.querySelectorAll('.input-area .mic-btn')) b.style.display = voiceReady() ? '' : 'none';
       for (const b of document.querySelectorAll('.input-area .voice-extra')) b.style.display = voiceReady() ? '' : 'none';
       if (typeof voiceModeChipPaint === 'function') voiceModeChipPaint();   // a chat bar drawn during a call gets its pill
+      try { if (voiceCallS.call && voiceCallS.press && voiceCallS.chatId) voiceCallPaintBtn(voiceCallS.chatId, true); } catch { /* the press button is put on a redrawn mic button */ }
       document.body.classList.toggle('voice-on', voiceReady() || voiceDeviceFallback());
     }
     async function voiceRefreshStatus() {
@@ -16944,7 +17770,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       b.classList.toggle('wait', state === 'wait');
       b.setAttribute('aria-pressed', state === 'rec' ? 'true' : 'false');
       b.disabled = state === 'wait';
-      b.setAttribute('aria-label', state === 'rec' ? 'Stop dictation' : 'Dictate');
+      b.setAttribute('aria-label', state === 'rec' ? 'Stop dictation' : voiceMicIdleLabel());
+      if (state !== 'rec') b.title = voiceMicIdleTitle();
       if (state === 'rec') b.textContent = `■ ${label || '0:00'}`;
       else if (state === 'wait') b.textContent = '…';
       else if (!b.querySelector('svg')) b.innerHTML = VOICE_MIC_SVG;
@@ -16960,13 +17787,30 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (i) i.style.width = `${voiceMeterPercent(voiceRec.level)}%`;
       if (s >= VOICE_MAX_RECORD_S) voiceMicStop(true);
     }
+    // How long the pointer that produced a click on the idle mic button was held (voiceMicPointer records its down and up); 0 for a click with no pointer
+    // (the keyboard, assistive technology), which counts as a tap. Read once: the next click starts clean.
+    const voiceMicPtr = { downAt: 0, upAt: 0 };
+    let voicePressEndedAt = 0;   // when a Tap to talk call last ended (a click on the mic within 1 s of it is the trailing click of a press, not a new call)
+    function voiceMicPointer(up) { const t = Date.now(); if (up) voiceMicPtr.upAt = t; else { voiceMicPtr.downAt = t; voiceMicPtr.upAt = 0; } }
+    function voiceMicHeldMs() {
+      const p = voiceMicPtr, held = p.downAt && p.upAt >= p.downAt && Date.now() - p.upAt < 1000 ? p.upAt - p.downAt : 0;
+      p.downAt = 0; p.upAt = 0;
+      return held;
+    }
     async function voiceMicToggle(chatId) {
-      if (voiceCallS.active || voiceCallS.starting) { voiceCallHangUp(); return; }   // the red hang-up button
+      if (voiceCallS.active || voiceCallS.starting) {
+        if (voiceCallS.press) return;   // a Tap to talk call: the button is the press button (voicePressButton); Hang up is the call bar's and the display's
+        voiceCallHangUp(); return;   // the red hang-up button
+      }
+      if (voicePressEndedAt && Date.now() - voicePressEndedAt < 1000) return;   // the trailing click of a press that outlived a Tap to talk call
       if (voiceRec.busy || voiceRec.guard.pending) return;   // a second tap while the microphone is still being asked for is ignored
       if (voiceRec.chatId) { await voiceMicStop(true); return; }   // a second tap, or a tap in another chat: end this recording
       if (!voiceReady()) { hubToast('Voice is off. An admin can turn it on in Settings, Voices.'); voiceRefreshStatus(); return; }
-      if (typeof simpleOn === 'function' && simpleOn()) { voiceCallStart(chatId); return; }   // Simple: the button is the voice call only (no dictation)
-      if (voicePrefsNow().mode !== 'tap') { voiceCallStart(chatId); return; }   // hands-free is the default; 'tap' keeps dictation
+      // Tap to talk: a tap starts the call and listens; a pointer held for VOICE_PRESS_HOLD_MS or more starts it idle (the person has already let go: nothing is heard until the next press).
+      // (the call object exists at once, before voiceCallStart's first await; its first talk(true) comes after call.start() resolves)
+      const held = voiceMicHeldMs() >= VOICE_PRESS_HOLD_MS;
+      if (typeof simpleOn === 'function' && simpleOn()) { voiceCallStart(chatId); if (held && voiceCallS.call) voiceCallS.idle = true; return; }   // Simple: the button is the voice call only (no dictation)
+      if (voicePrefsNow().mode !== 'tap') { voiceCallStart(chatId); if (held && voiceCallS.call) voiceCallS.idle = true; return; }   // hands-free is the default and 'press' is a call you press to speak in (voiceCallStart reads the mode); 'tap' (Dictation) keeps dictation
       if (voiceTest.mic || voiceTest.guard.pending) { hubToast('The microphone is in use in Settings.'); return; }
       voiceStopPlayback();   // do not record the hub talking
       const token = voiceRec.guard.begin();
@@ -17222,7 +18066,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       }
       h += `<div class="st-hint" style="margin-top:10px">On this device only:</div>`;
       h += row('Mic level', `<input type="range" min="0" max="100" step="1" id="st-voice-mic" value="${voiceMicLevelNow()}" oninput="voiceSettingMicInput(this)" onchange="voiceSettingsSavePrefs()" style="width:180px"> <span id="st-voice-mic-val" style="min-width:2.5em;display:inline-block">${voiceMicLevelNow()}</span> <span class="voice-meter"><i id="st-voice-meter"></i></span> <button class="st-test-btn" id="st-voice-testmic" type="button" onclick="voiceTestMic()">Test the mic</button>`);
-      h += row('Talk mode', `<select id="st-voice-mode" onchange="voiceSettingsSavePrefs()" style="padding:4px"><option value="handsfree" ${p.mode !== 'tap' ? 'selected' : ''}>Hands-free</option><option value="tap" ${p.mode === 'tap' ? 'selected' : ''}>Tap to talk</option></select>`);
+      h += row('Talk mode', `<select id="st-voice-mode" onchange="voiceSettingsSavePrefs()" style="padding:4px"><option value="handsfree" ${p.mode !== 'tap' && p.mode !== 'press' ? 'selected' : ''}>Hands-free</option><option value="press" ${p.mode === 'press' ? 'selected' : ''}>Tap to talk</option><option value="tap" ${p.mode === 'tap' ? 'selected' : ''}>Dictation</option></select>`);
+      h += `<div class="st-hint">Hands-free: tap the mic to start a call; it hears you whenever you speak. Tap to talk: a voice call where the agent answers aloud; tap the mic, speak, tap again to send (or hold it while you speak and let go). Dictation: tap the mic to turn what you say into text in the message box.</div>`;
       h += row('Interrupt sensitivity', `<input type="range" min="0" max="100" step="1" id="st-voice-sens" value="${voiceSensNow()}" oninput="voiceSettingSensInput(this)" onchange="voiceSettingsSavePrefs('interruptSensitivity')" style="width:180px"> <span id="st-voice-sens-val" style="min-width:2.5em;display:inline-block">${voiceSensNow()}</span>`);
       h += row('Pause before I\'m done', `${voicePauseSelectHtml('st-voice-pause', 'onchange="voiceSettingsSavePrefs(\'endPause\')"')} <span class="st-hint" style="margin:0 0 0 8px">How long a quiet moment ends your turn: short 0.8 s, normal 1.2 s, long 2 s, very long 4 s.</span>`);
       h += row('Read short extra parts aloud', `<select id="st-voice-details" onchange="voiceSettingsSavePrefs()" style="padding:4px">${VOICE_DETAILS_READ_WORDS.map(n => `<option value="${n}"${n === (p.detailsReadWords == null ? 40 : p.detailsReadWords) ? ' selected' : ''}>${n ? 'Up to ' + n + ' words' : 'Off'}</option>`).join('')}</select> <span class="st-hint" style="margin:0 0 0 8px">When a reply has only a little more than what is read on a call, read that too. Longer lists, tables and code stay in the chat.</span>`);
@@ -17330,7 +18175,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const echo = voiceById('st-voice-echo'), keep = voiceById('st-voice-keepalive'), loud = voiceById('st-voice-loudness'), loudBt = voiceById('st-voice-loudness-bt');
       const saved = dialogGuard.savePoint([mic, ra, fb, mode, sens, pause, details, hubCue, bgCue, speed, act, echo, keep, loud, loudBt].filter(Boolean));
       const echoNow = echo && voiceEchoHoldOk(Number(echo.value)) ? Number(echo.value) : voiceEchoHoldNow();
-      let prefs = { ...voicePrefsNow(), micLevel: Number(mic.value), interruptSensitivity: Number(sens.value), mode: mode.value === 'tap' ? 'tap' : 'handsfree', readAloud: ra.checked, deviceVoiceFallback: fb.checked,
+      const modeBefore = voicePrefsNow().mode;
+      let prefs = { ...voicePrefsNow(), micLevel: Number(mic.value), interruptSensitivity: Number(sens.value), mode: mode.value === 'tap' || mode.value === 'press' ? mode.value : 'handsfree', readAloud: ra.checked, deviceVoiceFallback: fb.checked,
         endPause: Number(pause.value), voiceSpeed: voiceCleanSpeed(speed.value), speakActivity: act.checked, echoHold: echoNow, keepAlive: keep ? !!keep.checked : voiceKeepAliveNow(),
         loudness: loud && Object.prototype.hasOwnProperty.call(VOICE_LOUDNESS, loud.value) ? loud.value : voiceLoudnessFor(voicePrefsNow(), 'speaker'),
         loudnessBt: loudBt && Object.prototype.hasOwnProperty.call(VOICE_LOUDNESS, loudBt.value) ? loudBt.value : voiceLoudnessFor(voicePrefsNow(), 'bluetooth') };
@@ -17350,7 +18196,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       saved();
       voicePaint();
       voiceEchoKeepPaint();   // the chat's voice panel follows
-      voiceModePaint();   // the chat's Talk mode chip follows
+      voiceModePaint();   // the chat's Talk mode chip follows (during a call it keeps the running call's mode)
+      if (prefs.mode !== modeBefore) voiceModeNextCallToast(prefs.mode);
       if (voiceCallS.call && typeof voiceCallS.call.setPrefs === 'function') voiceCallS.call.setPrefs();
       const st = voiceById('st-voice-prefs-state'); if (st) st.textContent = 'Saved on this device.';
     }
@@ -17445,7 +18292,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     function voiceDisplayRoute(ctx, src) { const d = voiceDisp.cur; if (d) { try { d.routeBufferSource(ctx, src); return; } catch { /* plain playback below */ } } src.connect(voiceOutNode(ctx)); }
     function voiceDisplaySpeech(kind) { voiceDisplayHook('speech', kind); }
     // The VAD handlers pass through the Talk floor, so a tap on Talk is released when the microphone hears nothing.
-    function voiceDispVad(vad) { return { start: (h) => vad.start(voiceDisp.floor ? voiceDisp.floor.wrap(h) : h), stop: () => vad.stop(), setPlaybackActive: (on, now) => vad.setPlaybackActive(on, now), reopen: () => vad.reopen(), info: () => vad.info(), setMuted: (on) => vad.setMuted(on), endPiece: () => vad.endPiece() }; }
+    function voiceDispVad(vad) { return { start: (h) => vad.start(voiceDisp.floor ? voiceDisp.floor.wrap(h) : h), stop: () => vad.stop(), setPlaybackActive: (on, now) => vad.setPlaybackActive(on, now), reopen: () => vad.reopen(), info: () => vad.info(), setMuted: (on) => vad.setMuted(on), endPiece: () => vad.endPiece(), get manual() { return !!(vad && vad.manual); } }; }   // manual: the live adapter's (the controller leaves the start of a press to a manual detector)
     // The call bar's Mute (display option onMute): the call is muted or unmuted and the bar shows what the call says now.
     function voiceCallMuteTap(want) { const c = voiceCallS.call; if (!c || typeof c.setMuted !== 'function') return; const m = c.setMuted(want); const d = voiceDisp.cur; if (d) { try { d.setMuted(m); } catch { /* the display is gone */ } } }
     function voiceFacePackBody() { const d = voiceDisp.cur; const slug = d && typeof d.activeFacePack === 'function' ? d.activeFacePack() : null; return slug ? { facePack: slug } : {}; }
@@ -17467,7 +18314,9 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           dock: () => { const i = voiceById(`input-${chatId}`); return i ? i.closest('.input-area') : null; },   // whenever no full view is shown (None, Back to chat, a character loading) the call screen's bar takes the message box's place in this chat; the call bar lives in its Controls drawer
           onTalk: voiceDispTalk, onHangUp: () => voiceCallHangUp(), onRetryMic: voiceCallRetryMicTap, onChange: () => voiceDispPaintPanel(chatId),
           onRecordingToggle: (wantPaused) => (voiceCallS.rec ? voiceCallS.rec.togglePause(wantPaused) : undefined),   // the Pause / Resume recording button of a recorded call
-          onMute: voiceCallMuteTap });   // the Pause / Resume recording button of a recorded call
+          ...(voiceCallS.press === true
+            ? { press: true, onPressButton: (el) => voiceCallPressAttach(el, { cls: '', off: () => { try { const c = voiceDisp.cur; return !!c && c.info().talk === 'mic'; } catch { return false; } } }) }   // Tap to talk: the Talk slot is the press button (it does nothing while it reads "Try the microphone again"), and there is no Mute (the microphone is off between presses)
+            : { onMute: voiceCallMuteTap }) });
         voiceDisp.cur = d;
         d.start();
       } catch { voiceDisp.cur = null; }
@@ -17574,7 +18423,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       voiceInterruptPaint();
       if (chatId && typeof voiceDispPaintPanel === 'function') voiceDispPaintPanel(chatId);
     }
-    const VOICE_CALL_HELP = 'Hands-free works with the page open and the screen on, also through a car\'s Bluetooth hands-free or a Bluetooth speaker. Locked-screen use and car apps (CarPlay, Android Auto) are not supported.';
+    const VOICE_CALL_HELP = 'Hands-free works with the page open and the screen on, also through a car\'s Bluetooth hands-free or a Bluetooth speaker. Locked-screen use and car apps (CarPlay, Android Auto) are not supported. Tap to talk: tap the mic, speak, tap again to send (or hold it while you speak and let go).';
     // The reply playback context (made the way voicePlayHub makes it): the replies, the call's thinking pulse and the keep-alive all go out through it.
     function voiceOutputCtx() {
       if (!voicePlay.ctx || voicePlay.ctx.state === 'closed') { const AC = window.AudioContext || window.webkitAudioContext; if (AC) voicePlay.ctx = new AC(); }
@@ -17785,7 +18634,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     const VOICE_ROUTE_PLAIN_LINE = 'Your car or Bluetooth device is connected, but this call is using the phone. Voice settings → Sound route can switch it.';
     // The controller hands the VAD only onMicInfo / onMicChange; onRoute and the page's own look at a changed microphone ride on the same start() through this view of the VAD.
     function voiceCallVadFor(vad) {
-      return { ...vad, start: (h) => vad.start({ ...(h || {}),
+      return { ...vad, get manual() { return !!(vad && vad.manual); }, start: (h) => vad.start({ ...(h || {}),   // (a spread copies a getter's value: manual is read live from the adapter)
         onRoute: (r) => { try { voiceCallOnRoute(vad, r); } catch { /* never breaks the microphone */ } },
         onMicChange: (ev) => { try { if (h && h.onMicChange) h.onMicChange(ev); } finally { try { voiceCallOnMicChange(vad, ev); } catch { /* the call goes on */ } } } }) };
     }
@@ -17961,6 +18810,40 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         return voicePlayWakeChime(ctx) === true;
       } catch { return false; }
     }
+    // A Tap to talk call's state line: listening and not pressing says what a tap does; pressing says how to send. Other states as in a hands-free call.
+    function voiceCallPressText(name) {
+      const S = voiceCallS;
+      if (!S.press) return '';
+      if (S.pressing && (name === 'listening' || name === 'hearing')) return 'Listening, tap to send';
+      return !S.pressing && name === 'listening' ? 'Tap to talk' : '';
+    }
+    function voiceCallPaintStateLine(s) { if (s) s.textContent = voiceCallS.linkLost ? VOICE_LINK_LOST_TEXT : (voiceCallPressText(s.dataset.state) || voiceCallStateText(s.dataset.state, s.dataset.phrase || '')); }
+    // The call's ui.press(on): the mic button (a press button here), the state line and the display's Talk slot.
+    function voiceCallPressPaint(chatId, on) {
+      const S = voiceCallS; S.pressing = !!on;
+      for (const h of S.pressBtns || []) h.paint(S.pressing);
+      voiceCallPaintStateLine(voiceById(`vcb-state-${chatId}`));
+      voiceDisplayHook('setPress', S.pressing);
+    }
+    // A press button of this call (the mic button, the display's Talk slot): voicePressButton from the voice helpers, painted with the press state, let go at hang-up.
+    function voiceCallPressAttach(el, opts) {
+      const S = voiceCallS;
+      if (!el || !S.press) return null;
+      S.pressBtns = (S.pressBtns || []).filter((h) => {   // a handle whose button left the page (a chat redrawn, the display closed) is let go
+        const gone = h.el && (h.el.isConnected === false || (h.el.isConnected === undefined && typeof document !== 'undefined' && typeof document.contains === 'function' && !document.contains(h.el)));
+        if (gone && h.el !== el) { try { h.detach(); } catch { /* gone */ } return false; }
+        return true;
+      });
+      const old = S.pressBtns.find(h => h.el === el);
+      if (old) return old;
+      const h = voicePressButton(el, () => voiceCallS.call, opts); h.el = el; h.paint(S.pressing === true);
+      S.pressBtns.push(h);
+      return h;
+    }
+    function voiceCallPressDetach(el) {
+      const S = voiceCallS, list = S.pressBtns || [];
+      S.pressBtns = list.filter((h) => { if (el && h.el !== el) return true; try { h.detach(); } catch { /* gone */ } return false; });
+    }
     function voiceCallStateText(name, phrase) { return name === 'standby' ? (phrase ? `Waiting for “${phrase}”` : 'Waiting') : (VOICE_CALL_STATE_TEXT[name] || name); }
     function voiceWakeAgentOf(chatId) { const c = chats[chatId]; return c && !c.isGroup && !c.isWorker && c.agent ? c.agent : ''; }
     function voiceWakeName(agent) { const a = (typeof AGENTS !== 'undefined' && Array.isArray(AGENTS) ? AGENTS : []).find(x => x && x.name === agent); return String((a && a.display) || agent || ''); }
@@ -18024,10 +18907,11 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         onNetFail: (e) => voiceLinkNetFail(e, voiceLinkOwner()),
         now: () => Date.now(), setTimer: (fn, ms) => setTimeout(fn, ms), clearTimer: (t) => clearTimeout(t) });
     }
-    function voiceCallDeps(chatId, agent, vad, thinking, keepAlive, rec) {
+    function voiceCallDeps(chatId, agent, vad, thinking, keepAlive, rec, press) {
       const barEl = (n) => voiceById(`vcb-${n}-${chatId}`);
       return {
         agent,
+        ...(press === true ? { press: true } : {}),   // Tap to talk: the microphone is heard only while the person presses (call.talk)
         ...(thinking ? { thinking } : {}),
         ...(keepAlive ? { keepAlive } : {}),
         ...(rec ? { recorder: rec.recorder, recordTranscript: (seq, text) => rec.recordTranscript(seq, text), recordReplyText: (text) => rec.recordReplyText(text) } : {}),   // a recorded call only
@@ -18076,7 +18960,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           decide: (id, choice, callId) => voiceCallApi('/api/voice/call/decide', { agent, id, choice, callId }),
         },
         ui: {
-          state: (name, phrase) => { const s = barEl('state'); if (s) { s.textContent = voiceCallS.linkLost ? VOICE_LINK_LOST_TEXT : voiceCallStateText(name, phrase); s.dataset.state = name; s.dataset.phrase = phrase || ''; } voiceDisplayHook('setState', name, phrase); },   // while the connection is lost the bar keeps saying so
+          state: (name, phrase) => { const s = barEl('state'); if (s) { s.textContent = voiceCallS.linkLost ? VOICE_LINK_LOST_TEXT : (voiceCallPressText(name) || voiceCallStateText(name, phrase)); s.dataset.state = name; s.dataset.phrase = phrase || ''; } voiceDisplayHook('setState', name, phrase); },   // while the connection is lost the bar keeps saying so
+          press: (on) => voiceCallPressPaint(chatId, on),   // Tap to talk: the press button, the state line and the display follow the press
           thinkingPulse: (ev) => { voiceDisplayHook('thinkingPulse', ev); },
           reply: (kind) => { voiceDisplayHook('reply', kind, 'seq:' + voiceCallS.sendSeq); },   // the reply's boundaries: the character's reaction plays once, after the whole reply
           thinkingWanted: () => voiceDisplayHook('showsPulse') === true,   // no view shown (None, hidden): the call's thinking sound is exactly the plain one
@@ -18174,15 +19059,29 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       box.innerHTML = (list || []).map(h => `<div class="vcb-item${h.later ? ' later' : ''}"><span class="vcb-item-label">${hubEsc(h.label || h.kind || 'Something')}${h.from ? ` <small>from ${hubEsc(h.from)}</small>` : ''}${h.later ? ' <small>(later)</small>' : ''}</span>`
         + ['now', 'later', 'skip'].map(c => `<button type="button" data-vcb="decide" data-id="${hubEsc(h.id)}" data-choice="${c}">${c === 'now' ? 'Now' : c === 'later' ? 'Later' : 'Skip'}</button>`).join('') + '</div>').join('');
     }
-    // The mic button is the call's hang-up button while a call is up.
+    // The idle mic button (no call, no recording): what a tap does in the saved mode.
+    function voiceMicIdleLabel() { const m = voicePrefsNow().mode; return m === 'press' ? 'Tap to talk' : m === 'tap' ? 'Dictate' : 'Talk hands-free'; }
+    function voiceMicIdleTitle() { const m = voicePrefsNow().mode; return m === 'press' ? 'Tap to talk: a voice call you press to speak in' : m === 'tap' ? 'Dictation: tap to speak, tap again to stop' : 'Hands-free: tap to start a call'; }
+    // The mic button is the call's hang-up button while a call is up (in a Tap to talk call it is the press button).
     function voiceCallPaintBtn(chatId, on) {
       const b = voiceById(`mic-${chatId}`);
       if (!b) return;
-      b.classList.toggle('call', on);
       b.disabled = false;
+      if (on && voiceCallS.press) {   // a Tap to talk call: the mic button stays a mic and is the press button (Hang up is the call bar's and the display's)
+        b.classList.toggle('call', false);
+        if (!/<svg/.test(b.innerHTML || '')) b.innerHTML = VOICE_MIC_SVG;
+        b.style.touchAction = 'none';   // a press that moves a little is not a scroll or a pan: the browser must not cancel it
+        voiceCallPressAttach(b, { cls: 'rec' });
+        if (typeof simpleCallLook === 'function') simpleCallLook(b, false);
+        return;
+      }
+      b.style.touchAction = '';
+      voiceCallPressDetach(b);
+      b.classList.toggle('rec', false);
+      b.classList.toggle('call', on);
       b.setAttribute('aria-pressed', on ? 'true' : 'false');
-      b.setAttribute('aria-label', on ? 'Hang up' : 'Dictate');
-      b.title = on ? 'Hang up' : 'Talk (tap to start, tap to stop)';
+      b.setAttribute('aria-label', on ? 'Hang up' : voiceMicIdleLabel());
+      b.title = on ? 'Hang up' : voiceMicIdleTitle();
       b.innerHTML = on ? VOICE_HANGUP_SVG : VOICE_MIC_SVG;
       if (typeof simpleCallLook === 'function') simpleCallLook(b, on);   // Simple: a voice-call button, not a dictation mic
     }
@@ -18227,6 +19126,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       voiceStopPlayback();
       voiceCallWake(false);
       if (chatId) { voiceCallHideBar(chatId); voiceCallPaintBtn(chatId, false); }
+      if (S.press) voicePressEndedAt = Date.now();   // the trailing click of a press that outlived the call must not start a new one (voiceMicToggle)
+      voiceCallPressDetach(); S.press = false; S.pressing = false;   // the press buttons (a Tap to talk call) are let go
       if (typeof voiceModeChipPaint === 'function') voiceModeChipPaint();
     }
     function voiceCallHangUp() {
@@ -18314,7 +19215,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const S = voiceCallS;
       S.linkLost = !!on;
       const s = S.chatId ? voiceById(`vcb-state-${S.chatId}`) : null;
-      if (s) s.textContent = on ? VOICE_LINK_LOST_TEXT : voiceCallStateText((S.call && S.call.state) || s.dataset.state || 'listening', s.dataset.phrase || '');   // back: the call's own line, standby's "Waiting for ..." included
+      if (s) { const nm = (S.call && S.call.state) || s.dataset.state || 'listening'; s.textContent = on ? VOICE_LINK_LOST_TEXT : (voiceCallPressText(nm) || voiceCallStateText(nm, s.dataset.phrase || '')); }   // back: the call's own line, standby's "Waiting for ..." included
       voiceDisplayHook('connLost', !!on);
     }
     function voiceCallLinkGiveUp(call) {
@@ -18347,7 +19248,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       voiceRec.guard.cancel(); if (voiceRec.chatId) voiceMicStop(false);   // dictation ends, nothing uploaded
       voiceStopPlayback();
       const eff = voiceEffNow(chat.agent);   // this agent's voice defaults for any setting the person has not set on this device
-      const vad = voiceCreateVad({ baseUrl: '/api/voice/web/', micLevel: voiceMicLevelNow(), interruptSensitivity: eff.interruptSensitivity, endPause: eff.endPause, echoHoldMs: voiceEchoHoldNow(), strictTalkOver: voiceIsIOSNav(navigator), micChoice: voiceMicChoiceId, bluetoothFirst: voiceIsAndroidNav(navigator) });
+      const press = voicePrefsNow().mode === 'press';   // Tap to talk: a call whose microphone is heard only while the person presses (fixed for this call); every other saved mode starts a hands-free call here
+      const vad = voiceCreateVad({ baseUrl: '/api/voice/web/', micLevel: voiceMicLevelNow(), interruptSensitivity: eff.interruptSensitivity, endPause: eff.endPause, echoHoldMs: voiceEchoHoldNow(), strictTalkOver: voiceIsIOSNav(navigator), micChoice: voiceMicChoiceId, bluetoothFirst: voiceIsAndroidNav(navigator), ...(press ? { manual: true } : {}) });
       const thinking = voiceCallThinking(vad);   // makes / resumes the reply playback context (voicePlay.ctx) inside the tap
       // Keep Bluetooth awake: a very quiet hiss on the same output context as the replies; the controller starts and stops it, and it sounds
       // only while the switch is on (a change applies at once, mid-call).
@@ -18367,8 +19269,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const recCfg = typeof voiceRecSettings === 'function' ? voiceRecSettings((typeof AGENTS !== 'undefined' && Array.isArray(AGENTS) ? AGENTS : []).find(x => x && x.name === chat.agent)) : { keep: false, mic: 'processed' };
       const rec = recCfg.keep ? voiceRecMake(chat.agent, vad, recCfg, true) : null;
       if (typeof voiceRecResendPending === 'function') voiceRecResendPending((u, i) => fetch(u, i), { userId: window.hubMe && window.hubMe.user ? window.hubMe.user.id : '' }).catch(() => {});   // pieces left from an earlier call or page are sent while this one starts
-      const call = voiceCreateCall(voiceCallDeps(chatId, chat.agent, voiceCallVadFor(vad), thinking, keepAlive, rec));
-      voiceLeftNoticeHide(); S.leftChat = null;
+      const call = voiceCreateCall(voiceCallDeps(chatId, chat.agent, voiceCallVadFor(vad), thinking, keepAlive, rec, press));
+      voiceLeftNoticeHide(); S.leftChat = null; S.press = press; S.pressing = false; S.idle = false;
       S.rec = rec; S.call = call; S.focus = focus; S.vad = vad; S.thinking = thinking; S.keepAlive = keepAlive; S.micLine = ''; S.micLabel = ''; S.route = null; S.routeToasted = false; S.routeSeen = 0; S.routeFirstSent = false; S.routeReportAt = 0; S.routeTrail = null; S.routeFirstTimer = null; S.routeFirstTries = 0; S.outputsRenewed = 0; S.renewPending = false; S.renewing = false; S.renewFails = 0; S.callStartedAt = Date.now(); if (typeof voiceRouteReadyMake === 'function') voiceRouteReadyMake(); S.micLost = false; S.starting = true; S.chatId = chatId; S.agent = chat.agent;
       window.__voiceBt = { keepAliveRunning: () => !!(S.keepAlive && S.keepAlive.running), micInfo: () => S.micLine || '', micLost: () => !!S.micLost, echoHold: () => voiceEchoHoldNow(), outputsRenewed: () => S.outputsRenewed || 0, route: () => S.route || null };   // read-only hooks for the browser proof
       voiceLoudApply();   // the reply loudness chain, at the level of the pref
@@ -18384,6 +19286,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (S.call !== call) return;   // hung up while it was starting
       if (!ok) { voiceCallTeardown(); return; }   // the controller already said why
       S.starting = false; S.active = true;
+      if (press && !S.idle) { try { call.talk(true); } catch { /* the press button starts it */ } }   // the first tap both starts the call and starts listening (S.idle: the idle mic was held and let go before the call existed, voiceMicToggle: it comes up idle)
     }
     function voiceCallSseMood(chatId, mood) { const S = voiceCallS; if (S.call && S.chatId === chatId) voiceDispMood(S.sendSeq, mood); }
     // The chat stream's voice_read_full for this page's own spoken send (turnId: the hub turn it belongs to, may be null). The flag belongs to that one reply (voiceReadFullGate).
@@ -18517,11 +19420,12 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     // They write the same per-device prefs as Settings, Voices, and act on a running call at once.
     const VOICE_POP_KEYS = { mic: 'micLevel', sens: 'interruptSensitivity', speed: 'voiceSpeed', pause: 'endPause', wait: 'continueWait', think: 'thinkingSound', thinkvol: 'thinkingVolume', mode: 'mode', echo: 'echoHold', keep: 'keepAlive', loudness: 'loudness', loudnessBt: 'loudnessBt' };
     function voicePopHtml(chatId) {
-      const id = (n) => `vp-${n}-${chatId}`, tap = voicePrefsNow().mode === 'tap';
+      const id = (n) => `vp-${n}-${chatId}`, curMode = voicePrefsNow().mode;
       const waits = VOICE_CONTINUE_WAITS.map((ms) => `<option value="${ms}"${ms === voiceContinueWaitNow() ? ' selected' : ''}>${ms === 8000 ? 'Very long (8 s)' : ms / 1000 + ' s'}</option>`).join('');
       const agent = (chats[chatId] && chats[chatId].agent) || '';
       return `<div class="vp-row"><span class="vp-label">Talk mode</span><span class="vp-seg" role="group" aria-label="Talk mode">
-          <button type="button" data-vp="mode" data-val="handsfree" aria-pressed="${tap ? 'false' : 'true'}">Hands-free</button><button type="button" data-vp="mode" data-val="tap" aria-pressed="${tap ? 'true' : 'false'}">Tap to talk</button></span></div>
+          <button type="button" data-vp="mode" data-val="handsfree" aria-pressed="${curMode !== 'tap' && curMode !== 'press' ? 'true' : 'false'}">Hands-free</button><button type="button" data-vp="mode" data-val="press" aria-pressed="${curMode === 'press' ? 'true' : 'false'}">Tap to talk</button><button type="button" data-vp="mode" data-val="tap" aria-pressed="${curMode === 'tap' ? 'true' : 'false'}">Dictation</button></span></div>
+        <div class="vp-display-note">Hands-free: tap the mic to start a call; it hears you whenever you speak. Tap to talk: a voice call where the agent answers aloud; tap the mic, speak, tap again to send (or hold it while you speak and let go). Dictation: tap the mic to turn what you say into text in the message box.</div>
         <label class="vp-row"><span class="vp-label">Voice speed</span><input type="range" min="0.75" max="1.5" step="0.05" id="${id('speed')}" data-vp="speed" value="${voiceSpeedNow()}"> <span id="${id('speed-val')}">${voiceSpeedLabel(voiceSpeedNow())}</span></label>${voiceFollowLine(agent, 'voiceSpeed')}
         <label class="vp-row"><span class="vp-label">Voice loudness, speaker</span>${voiceLoudnessSelectHtml(id('loudness'), 'data-vp="loudness"', 'loudness')}</label>
         <label class="vp-row"><span class="vp-label">Voice loudness, Bluetooth / car</span>${voiceLoudnessSelectHtml(id('loudnessBt'), 'data-vp="loudnessBt"', 'loudnessBt')}</label>
@@ -18584,17 +19488,22 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         });
       }
     }
-    function voiceModeToggle() { voiceCtlSet('mode', voicePrefsNow().mode === 'tap' ? 'handsfree' : 'tap', true); }
+    // The chip (shown during a call only) cycles Hands-free -> Tap to talk -> Hands-free; Dictation is not a call mode, so a saved Dictation goes to Hands-free.
+    function voiceModeToggle() { voiceCtlSet('mode', voicePrefsNow().mode === 'handsfree' ? 'press' : 'handsfree', true); }
+    function voiceModeName(m) { return m === 'press' ? 'Tap to talk' : m === 'tap' ? 'Dictation' : 'Hands-free'; }
+    // A Talk mode picked while a call is up is saved for the next call; the call keeps the mode it started with (the chip keeps naming it, voiceModeLabel).
+    function voiceModeNextCallToast(m) { try { if (voiceCallS.call) hubToast(`From your next call: ${voiceModeName(m)}.`); } catch { /* a toast is a comfort */ } }
     function voiceModePaint() {
-      const tap = voicePrefsNow().mode === 'tap';
+      const cur = voicePrefsNow().mode;
       for (const c of document.querySelectorAll('.voice-mode-chip')) c.textContent = voiceModeLabel();
-      for (const b of document.querySelectorAll('.voice-pop [data-vp="mode"]')) b.setAttribute('aria-pressed', (b.dataset.val === 'tap') === tap ? 'true' : 'false');
+      for (const b of document.querySelectorAll('.voice-pop [data-vp="mode"]')) b.setAttribute('aria-pressed', b.dataset.val === cur ? 'true' : 'false');
+      if (!voiceCallS.call && !voiceRec.chatId) for (const b of document.querySelectorAll('.input-area .mic-btn:not(.call):not(.rec):not(.wait)')) { b.setAttribute('aria-label', voiceMicIdleLabel()); b.title = voiceMicIdleTitle(); }   // what a tap on the idle mic does in the saved mode
     }
     // One setting changed in the panel: shown everywhere it is shown, live on a running call, saved when `save` (on release / pick).
     function voiceCtlSet(which, v, save) {
       const S = voiceCallS, vad = S.vad, key = VOICE_POP_KEYS[which];
       if (!key) return;
-      const val = which === 'speed' ? voiceCleanSpeed(v) : which === 'mode' ? (v === 'tap' ? 'tap' : 'handsfree') : which === 'think' || which === 'keep' ? !!v : which === 'echo' ? (voiceEchoHoldOk(Number(v)) ? Number(v) : 600) : which === 'thinkvol' ? Math.max(0, Math.min(1, Number(v) || 0)) : which === 'loudness' || which === 'loudnessBt' ? (Object.prototype.hasOwnProperty.call(VOICE_LOUDNESS, v) ? v : (which === 'loudnessBt' ? 'normal' : 'louder')) : Number(v);
+      const val = which === 'speed' ? voiceCleanSpeed(v) : which === 'mode' ? (v === 'tap' || v === 'press' ? v : 'handsfree') : which === 'think' || which === 'keep' ? !!v : which === 'echo' ? (voiceEchoHoldOk(Number(v)) ? Number(v) : 600) : which === 'thinkvol' ? Math.max(0, Math.min(1, Number(v) || 0)) : which === 'loudness' || which === 'loudnessBt' ? (Object.prototype.hasOwnProperty.call(VOICE_LOUDNESS, v) ? v : (which === 'loudnessBt' ? 'normal' : 'louder')) : Number(v);
       for (const el of document.querySelectorAll(`[id^="vp-${which}-val-"], [id^="vcb-${which}-val-"]`)) el.textContent = which === 'speed' ? voiceSpeedLabel(val) : String(val);
       for (const el of document.querySelectorAll(`.voice-pop [data-vp="${which}"], .voice-callbar [data-vcb="${which}"]`)) if (el.type === 'range' || el.tagName === 'SELECT') el.value = String(val);
       if (vad) {
@@ -18612,7 +19521,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         for (const el of document.querySelectorAll(`.voice-follow[data-follow="${key}"]`)) el.remove();   // so its "Following ..." line goes
       }
       if (save) { const prefs = voiceSavePrefs(localStorage, voicePrefsCache); voicePrefsCache = { ...voicePrefsCache, ...prefs, [key]: val }; }
-      if (which === 'mode') voiceModePaint();
+      if (which === 'mode') { voiceModePaint(); if (val !== prevPrefs.mode) voiceModeNextCallToast(val); }
       if (which === 'echo' || which === 'keep') voiceEchoKeepPaint();   // Settings follows the panel
       if (which === 'keep') voiceKeepAliveRefresh();   // the switch acts on a running call at once
       if (S.call && typeof S.call.setPrefs === 'function') S.call.setPrefs();
@@ -18895,7 +19804,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         const H = window.hubFileCard;
         if (!H || !el || !el.isConnected || !el.classList.contains('assistant')) return;
         const scan = el.cloneNode(true);   // the reply's own text: not the tool panel or the reasoning panel
-        scan.querySelectorAll('.tool-stream, .reason-stream, .inline-thinking, .msg-copy, .msg-speak').forEach((n) => n.remove());
+        scan.querySelectorAll('.tool-stream, .reason-stream, .inline-thinking, .msg-copy, .code-copy, .msg-speak').forEach((n) => n.remove());
         let agent = null;   // the replying agent (a bare file name is looked up in its folder); none in a group chat
         try {
           const box = el.closest('[id^="messages-"]');
@@ -21135,6 +22044,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       return hubWorkerGroups(agentStatus, { known, skipIds, skipKeys, now });
     }
     function refreshWorkerList() {
+      if (globalThis.mmSettingsOnly === true) return;   // the settings-only page starts nothing else
       const btn = document.getElementById('workers-btn');
       const { items, gone, counts, alert } = workerListOf(chats, Date.now(), activeChat);
       const hubGroups = hubWorkerGroupsNow(Date.now());
@@ -22302,7 +23212,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       /** savePoint(fields): the fields a save writes (an element, a container of them, or a list), with the values they
        *  have now, as the save starts. The returned commit(), called once the hub confirmed the save, makes exactly those
        *  values the fields' baselines: an edit made while the save ran stays changed, and nothing else is touched. */
-      function savePoint(scope) {
+      function fieldsIn(scope) {
         const list = [];
         const add = (el) => {
           if (!el) return;
@@ -22310,10 +23220,22 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           else if (el.querySelectorAll) for (const f of el.querySelectorAll('input, textarea, select')) if (dialogField(f)) list.push(f);
         };
         if (Array.isArray(scope) || (scope && typeof scope.length === 'number' && !scope.tagName)) for (const el of scope) add(el); else add(scope);
-        const snap = list.map(el => [el, dialogFieldValue(el)]);
+        return list;
+      }
+      function savePoint(scope) {
+        const snap = fieldsIn(scope).map(el => [el, dialogFieldValue(el)]);
         return function commit() {
           for (const [el, v] of snap) { if (el.isConnected === false) continue; const s = scopeOf(el); if (s) s.baselines.set(el, v); }
         };
+      }
+      /** changed(scope): does any of these fields (same forms as savePoint) still on the page differ from its baseline? */
+      function changed(scope) {
+        for (const el of fieldsIn(scope)) {
+          if (el.isConnected === false) continue;
+          const s = scopeOf(el);
+          if (s && s.baselines.has(el) && dialogFieldValue(el) !== s.baselines.get(el)) return true;
+        }
+        return false;
       }
 
       // ── Wiring ──
@@ -22382,6 +23304,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         isDirty: (elOrChild) => dirty(layerOf(elOrChild)) || (!layerOf(elOrChild) && !!page && dialogIsDirty(page.baselines)),
         hasChanges,
         savePoint,
+        changed,
+        saving: (elOrChild) => { const l = layerOf(elOrChild); return !!l && l.saving > 0; },   // a save started here is not answered yet
         markLoaded: (els) => { for (const el of (Array.isArray(els) ? els : [els])) { const l = el && scopeOf(el); if (l) l.baselines.delete(el); } },   // put in by the page, not typed
         layers: () => layers.slice(),
         _confirm: () => confirmOpen,
@@ -22443,6 +23367,117 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     // One way out of every dialog on this page: Escape, Close / Cancel / ✕, a click on the backdrop (lib/ui-dialog.js).
     // The overlays below are found when they appear; the image viewer registers itself. A dialog's own buttons that
     // dismiss it call dialogRequestClose(this); a successful Save or Create still removes it directly.
+    // ── settings-only page (begin) ──
+    // /?settings-only=1 shows the Settings dialog alone, full screen: the phone app's Settings sheet holds it in a frame
+    // (mobile.js settingsSheetOpen). It reads who is signed in (/api/me, the same permissions as the full page) and opens
+    // the dialog; nothing else starts. Its parent may ask it to close (through dialogGuard, so changes are never lost
+    // silently), and it tells its parent when the dialog closed. Messages carry only their type and are taken only from
+    // the parent window at the same origin.
+    function settingsOnlyRequested(search) {
+      try { return new URLSearchParams(String(search || '')).get('settings-only') === '1'; } catch { return false; }
+    }
+    function settingsOnlyPost(type) {
+      try { if (window.parent && window.parent !== window) window.parent.postMessage({ type }, location.origin); } catch { /* no parent */ }
+    }
+    async function settingsOnlyStart() {
+      document.documentElement.classList.add('mm-settings-only');
+      try {
+        const r = await fetch('/api/me', { credentials: 'include' });
+        if (r.ok) window.hubMe = await r.json();
+        else if (r.status === 401) return;   // the session guard sends the frame to the sign-in page
+        // the person's Simple colours (light or dark), as the page behind the sheet shows them; nothing of Simple starts
+        try { if (window.hubSimple && window.hubMe) window.hubSimple.apply(window.hubMe); } catch { /* the default colours */ }
+      } catch { /* offline: the dialog says it could not load */ }
+      try { stNotifyAgentWanted = new URLSearchParams(location.search).get('agent') || ''; } catch { /* none */ }   // the phone's open chat
+      window.addEventListener('message', settingsOnlyMessage);
+      // a member has no Settings dialog on the desktop either (the gear is an admin control and the hub refuses its routes)
+      if (!isHubAdmin()) stModal(`<h3>&#x2699;&#xFE0F; Settings</h3><p class="st-sub">Settings are kept by the admins of this Maestro.</p><div class="st-actions"><button class="st-btn secondary" onclick="dialogRequestClose(this)">Close</button></div>`);
+      else {
+        // as the full page has them (sandbox, subscriptions); a hub slow to answer never holds the dialog back more than 5 s
+        try { await Promise.race([loadAgents(), new Promise((r) => setTimeout(r, 5000))]); } catch { /* the sections that list agents say so */ }
+        await openSettings();
+      }
+      document.addEventListener('click', settingsOnlyLeaveGuard, true);
+      settingsOnlyWatch();
+      settingsOnlyPost('mm-settings-ready');
+    }
+    // The dialog is gone (Close, Escape, Discard): the parent closes its sheet. stModal swaps the overlay in one step,
+    // so a re-render never reads as closed.
+    function settingsOnlyWatch() {
+      let sent = false;
+      const check = () => {
+        if (sent || document.getElementById('st-overlay')) return;
+        sent = true;
+        // the dialog closed on its way to another page (a link, with Discard chosen): that page opens in the sheet
+        if (settingsOnlyGoing) { location.replace(settingsOnlyGoing); return; }   // replaced: Back closes the sheet
+        settingsOnlyPost('mm-settings-closed');
+      };
+      try { new MutationObserver(check).observe(document.body, { childList: true }); } catch { /* old browser: Close still posts */ }
+      check();
+    }
+    function settingsOnlyMessage(e) {
+      if (!e || e.source !== window.parent || e.origin !== location.origin) return;
+      const type = e.data && e.data.type;
+      if (type !== 'mm-settings-close') return;
+      settingsOnlyGoing = '';   // Back is not the way to the page a link asked for
+      // Back closes the innermost layer first (a box opened over Settings, then Settings), as everywhere else
+      const ls = dialogGuard.layers();
+      const top = ls.length ? ls[ls.length - 1].el : document.getElementById('st-overlay');
+      if (!top) { settingsOnlyPost('mm-settings-closed'); return; }
+      const how = dialogGuard.requestClose(top, 'back');
+      // the "Discard changes?" question, a save running, or an inner box closed with Settings still open: the sheet stays.
+      // Settings itself closed: the watch says so.
+      if (how !== 'closed' || document.getElementById('st-overlay')) settingsOnlyPost('mm-settings-kept');
+    }
+    // A link or button in the dialog that opens another page of this hub: with changes not saved anywhere in the dialog, it
+    // asks first ("Discard changes?"), as Close does; with nothing to lose the page opens in the sheet.
+    // Discard on that question closes the dialog and opens the page (settingsOnlyWatch); Keep editing, Escape or any other
+    // click forgets it.
+    let settingsOnlyGoing = '';
+    function settingsOnlyLeaveGuard(e) {
+      const tg = e.target;
+      if (settingsOnlyGoing && !(tg && tg.closest && tg.closest('.dlg-discard-go'))) settingsOnlyGoing = '';
+      const t = tg && tg.closest ? tg.closest('a[href], [onclick^="location.href="]') : null;
+      if (!t) return;
+      let dest = '';
+      let href = '';
+      if (String(t.tagName).toUpperCase() === 'A') {
+        href = t.getAttribute('href') || '';
+        // a download (a backup file) or a hub route is not a page change: the browser handles it, the dialog stays
+        if (!href || href.startsWith('#') || t.target === '_blank' || t.hasAttribute('download')) return;
+      } else {
+        const m = /^location\.href=['"]([^'"]*)['"]/.exec(t.getAttribute('onclick') || '');
+        if (!m) return;
+        href = m[1];
+      }
+      let u;
+      try { u = new URL(href, location.href); } catch { return; }
+      if (u.origin !== location.origin) {
+        // another origin never replaces Settings in the sheet: a link opens in a new window, a button does nothing
+        e.preventDefault(); e.stopImmediatePropagation();
+        if (String(t.tagName).toUpperCase() === 'A' && /^https?:$/.test(u.protocol)) { try { window.open(u.href, '_blank', 'noopener'); } catch { /* blocked */ } }
+        return;
+      }
+      if (u.pathname.startsWith('/api/')) return;
+      dest = u.href;   // the whole URL that passed the check (a path starting with // would read as another host)
+      e.preventDefault(); e.stopImmediatePropagation();
+      // nothing to lose: the page opens in the sheet at once, in place of this one (Back then closes the sheet)
+      if (!dialogGuard.layers().some((l) => dialogGuard.isDirty(l.el))) { location.replace(dest); return; }
+      settingsOnlyGoing = dest;
+      // close from the innermost layer out; the first one with changes asks ("Discard changes?") and the way stops there.
+      // A save still running ('busy') asks nothing: the page is forgotten, never opened later without a question.
+      for (let i = 0; i < 20; i++) {
+        const ls = dialogGuard.layers();
+        if (!ls.length) break;
+        const how = dialogGuard.requestClose(ls[ls.length - 1].el, 'close');
+        if (how === 'closed') continue;
+        if (how !== 'confirm') settingsOnlyGoing = '';
+        return;
+      }
+    }
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') settingsOnlyGoing = ''; }, true);
+    // ── settings-only page (end) ──
+
     const dialogGuard = createDialogGuard({ auto: '.question-overlay, .gs-overlay, .st-overlay, .dream-overlay, #restart-notify-overlay, #resume-popup-overlay' });
     function dialogRequestClose(el, how) { return dialogGuard.requestClose(el, how || 'close'); }
 
@@ -22576,10 +23611,26 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       // leave them untouched.
       const MARK = 'm' + ((window.crypto && crypto.getRandomValues) ? Array.from(crypto.getRandomValues(new Uint8Array(16)), b => (b % 36).toString(36)).join('') : Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2));
       const mk = (kind, i) => `${MARK}${kind}${i}~`;
+      // A code-box marker inside an attribute value (image alt / src, link URL) cannot hold a box: it is pulled out
+      // of the attribute and the box is placed right after the element, so no marker text is left and no HTML lands in an attribute.
+      const codeMarkRe = new RegExp(MARK + 'C\\d+~', 'g');
+      const pullCode = (s) => { const held = []; const clean = String(s).replace(codeMarkRe, (m) => { held.push(m); return ''; }); return { clean, held: held.join('') }; };
+      // A link URL: image markers go out with the code markers (the image pass resolves them after the </a>).
+      const attrMarkRe = new RegExp(MARK + '[IC]\\d+~', 'g');
+      const imageMarkRe = new RegExp(MARK + 'I(\\d+)~', 'g');
+      const pullAttrMarks = (s) => { const held = []; const clean = String(s).replace(attrMarkRe, (m) => { held.push(m); return ''; }); return { clean, held: held.join('') }; };
       const visualTokens = [];
-      const withVisualPlaceholders = response.replace(/```(\w*)\n([\s\S]*?)```/g, (match, lang, code) => {
+      // Every other closed fence is held out the same way (C tokens): its code is escaped here and built into a
+      // code box with its own copy button (lib/ui-code-copy.js), so the text a reader copies is the source byte for
+      // byte (the browser normalises line endings to LF): no bold, no <br>, no inline-code or link passes inside it.
+      const codeTokens = [];
+      const withVisualPlaceholders = response.replace(/```(\w*)\r?\n([\s\S]*?)```/g, (match, lang, code) => {
         const kind = visualKind(lang);
-        if (!kind) return match;
+        if (!kind) {
+          const inner = autolinkEscaped(escapeHtml(code), ' style="color: var(--link); text-decoration: underline;"');
+          codeTokens.push(window.CodeCopy ? window.CodeCopy.blockHtml(inner) : `<pre><code>${inner}</code></pre>`);
+          return ' ' + mk('C', codeTokens.length - 1) + ' ';   // spaces end a bare URL right before the fence (the autolinker would take the marker into the href); they collapse around the block box
+        }
         visualTokens.push(visualPlaceholder(kind, code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')));
         return mk('V', visualTokens.length - 1);
       });
@@ -22592,11 +23643,14 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const withImagePlaceholders = withVisualPlaceholders.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (match, alt, src) => {
         const idx = imageTokens.length;
         // Convert absolute file paths to /api/image/ URLs
-        let imgSrc = src;
-        if (src.startsWith('/') && !src.startsWith('/api/')) {
-          imgSrc = '/api/image/' + btoa(src);
+        // Code-box markers are pulled out of src and alt BEFORE the path is encoded (btoa would hide them) and kept with
+        // the image token, so the box is placed right after the image.
+        const pa = pullCode(alt), ps = pullCode(src);
+        let imgSrc = ps.clean;
+        if (imgSrc.startsWith('/') && !imgSrc.startsWith('/api/')) {
+          imgSrc = '/api/image/' + btoa(imgSrc);
         }
-        imageTokens.push({ alt, src: imgSrc });
+        imageTokens.push({ alt: pa.clean, src: imgSrc, held: pa.held + ps.held });
         return mk('I', idx);
       });
 
@@ -22634,7 +23688,6 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       });
 
       let formatted = escapeHtml(withTablePlaceholders)   // all five characters: the autolinker relies on quotes being entities, never raw
-        .replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>')
         .replace(/`([^`]+)`/g, '<code>$1</code>')
         .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
         .replace(/\*([^*]+)\*/g, '<em>$1</em>')
@@ -22650,27 +23703,41 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         formatted = formatted.replace(mk('V', i), () => visualTokens[i]);
       }
 
-      // Re-insert extracted images: inline when same-origin / data: / blob:, a link for any other host.
-      for (let i = 0; i < imageTokens.length; i++) {
-        const { alt, src } = imageTokens[i];
-        const imgTag = imageHtml(src, alt, 'max-height:300px;');
-        formatted = formatted.replace(mk('I', i), () => imgTag);
+      // Re-insert extracted tables FIRST (function replacer so $-sequences in the HTML are literal): a table cell holds
+      // image / link / code markers, and those are resolved by the passes below.
+      for (let i = 0; i < tableTokens.length; i++) {
+        formatted = formatted.replace(mk('T', i), () => tableTokens[i]);
       }
 
-      // Re-insert extracted links: only http(s), mailto and same-origin paths; everything escaped.
+      // Re-insert extracted links BEFORE images: only http(s), mailto and same-origin paths; everything escaped. A link's
+      // text can hold an image marker; it is resolved by the image pass below, inside the <a>.
+      // A code box never ends up inside a link: code markers in the link text and image / code markers in the URL are pulled out and
+      // placed after the closing </a>, and so are the boxes held by an image inside the link text (the image stays in the link).
       for (let i = 0; i < linkTokens.length; i++) {
-        const { text, url } = linkTokens[i];
-        const u = safeLinkUrl(url);
-        const eText = escapeHtml(text);
-        const linkTag = u
+        const pt = pullCode(linkTokens[i].text);
+        const pu = pullAttrMarks(linkTokens[i].url);
+        const u = safeLinkUrl(pu.clean);
+        const eText = escapeHtml(pt.clean);
+        let after = pt.held + pu.held;
+        for (const im of pt.clean.matchAll(imageMarkRe)) {
+          const tok = imageTokens[Number(im[1])];
+          if (tok && tok.held) { after += tok.held; tok.held = ''; }
+        }
+        const linkTag = (u
           ? `<a href="${escapeHtml(u)}" target="_blank" rel="noopener noreferrer" style="color: var(--link); text-decoration: underline;">${eText}</a>`
-          : `<code>[blocked link: ${eText}]</code>`;
+          : `<code>[blocked link: ${eText}]</code>`) + after;
         formatted = formatted.replace(mk('L', i), () => linkTag);
       }
 
-      // Re-insert extracted tables (function replacer so $-sequences in the HTML are literal).
-      for (let i = 0; i < tableTokens.length; i++) {
-        formatted = formatted.replace(mk('T', i), () => tableTokens[i]);
+      // Re-insert extracted images: inline when same-origin / data: / blob:, a link for any other host.
+      for (let i = 0; i < imageTokens.length; i++) {
+        const imgTag = imageHtml(imageTokens[i].src, imageTokens[i].alt, 'max-height:300px;') + imageTokens[i].held;
+        formatted = formatted.replace(mk('I', i), () => imgTag);
+      }
+
+      // Code boxes last: a fence inside link text, a table cell or an image's alt text still gets its box.
+      for (let i = 0; i < codeTokens.length; i++) {
+        formatted = formatted.replace(mk('C', i), () => codeTokens[i]);   // function replacer: $-sequences in the code stay literal
       }
 
       return thinkingHtml + formatted;

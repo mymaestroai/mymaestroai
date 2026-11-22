@@ -109,6 +109,6 @@ test('index.html carries the connector styles', () => {
 test('agent sandboxes: Settings box with defaults and build, per-agent selector on the agent page', () => {
   const app = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
   const page = fs.readFileSync(path.join(__dirname, '..', 'agent-settings.html'), 'utf8');
-  for (const s of ['<h4>Agent sandboxes</h4>', 'async function loadSandboxStatus()', 'async function saveSandboxDefaults()', 'async function buildSandboxImage()', "'/api/sandbox/status'", "'/api/sandbox/build'"]) assert.ok(app.includes(s), s);
+  for (const s of ['<h4>Agent sandboxes</h4>', 'async function loadSandboxStatus()', 'async function saveSandboxDefaults(', 'async function buildSandboxImage()', "'/api/sandbox/status'", "'/api/sandbox/build'"]) assert.ok(app.includes(s), s);
   for (const s of ['id="sandbox-mode"', 'async function saveSandbox()', "JSON.stringify({ sandbox: v })", "sbSel.value = agent?.sandbox || 'inherit'"]) assert.ok(page.includes(s), s);
 });

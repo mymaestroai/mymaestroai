@@ -11,8 +11,8 @@ const CD = require('../lib/ui-call-display');
 
 const PAGES = [
   // The state line paints the call's own text, or "Connection lost" while the link is down (lost connection, 2026-11-13).
-  { name: 'desktop', js: read('app.js'), html: null, prefs: 'voicePrefsNow', stateText: /textContent\s*=\s*(?:voiceCallS\.linkLost \? VOICE_LINK_LOST_TEXT : )?voiceCallStateText\(name,\s*phrase\)/ },
-  { name: 'phone', js: read('mobile.js'), html: read('mobile.html'), prefs: 'voicePrefsNow', stateText: /textContent\s*=\s*(?:lostNow \? VOICE_LINK_LOST_TEXT : )?voiceCallStateText\(name,\s*phrase\)/ },
+  { name: 'desktop', js: read('app.js'), html: null, prefs: 'voicePrefsNow', stateText: /textContent\s*=\s*(?:voiceCallS\.linkLost \? VOICE_LINK_LOST_TEXT : )?\(?(?:voiceCallPressText\(name\) \|\| )?voiceCallStateText\(name,\s*phrase\)/ },   // a Tap to talk call's state line comes first (voiceCallPressText), else the usual text
+  { name: 'phone', js: read('mobile.js'), html: read('mobile.html'), prefs: 'voicePrefsNow', stateText: /textContent\s*=\s*(?:lostNow \? VOICE_LINK_LOST_TEXT : )?\(?(?:voiceCallPressText\([^)]*\) \|\| )?voiceCallStateText\(name,\s*phrase\)/ },   // a Tap to talk call's state line comes first (voiceCallPressText), else the usual text
 ];
 
 function extract(src, name) {

@@ -274,6 +274,26 @@
     .msg.assistant pre { background: var(--bg-input); border: 1px solid var(--border); border-radius: 6px; padding: 8px; margin: 6px 0; overflow-x: auto; font-size: 13px; }
     .msg.assistant code { font-family: var(--font-mono); font-size: 13px; background: var(--bg-input); padding: 1px 4px; border-radius: 3px; }
     .msg.assistant pre code { background: none; padding: 0; }
+    /* A code box: the pre plus its own copy button (lib/ui-code-copy.js). The box carries the pre's outer margin so the button sits at the pre's corner. */
+    .code-box { position: relative; max-width: 100%; }   /* also in the worker sheet, which is not a .msg */
+    .code-box > pre { padding-right: 44px; }   /* room for the 36px tap target, so it never sits over the first line */
+    .msg.assistant .code-box { margin: 6px 0; }
+    .msg.assistant .code-box > pre { margin: 0; padding-right: 44px; }   /* (.msg.assistant pre sets padding: 8px and would win otherwise) */
+    .code-copy {
+      position: absolute; top: 2px; right: 2px; z-index: 2; width: 36px; height: 36px; padding: 0; box-sizing: border-box;
+      display: flex; align-items: center; justify-content: center; cursor: pointer; user-select: none; -webkit-user-select: none;
+      border: 1px solid var(--border); background: var(--bg-input); color: var(--text-dim); border-radius: 8px; line-height: 1; opacity: 1;   /* always shown on the phone; opaque (the pre's own background, also in Simple mode) so code text that scrolls under it is hidden, not overprinted */
+    }
+    .code-copy .cc-ico { width: 22px; height: 22px; pointer-events: none; }
+    .code-copy .cc-ico-tick { display: none; }
+    .code-copy:active { background: var(--hover-tint); }
+    .code-copy:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+    .code-copy.copied { opacity: 1; color: var(--success); }
+    .code-copy.copied .cc-ico-copy { display: none; }
+    .code-copy.copied .cc-ico-tick { display: block; }
+    .code-copy.copy-failed { opacity: 1; color: var(--warning); }
+    .code-copy-live { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; border: 0; }
+    @media print { .code-copy, .code-copy-live { display: none !important; } }
     .msg.assistant table { border-collapse: collapse; display: block; overflow-x: auto; margin: 6px 0; font-size: 13px; }
     .msg.assistant th, .msg.assistant td { border: 1px solid var(--border-strong); padding: 4px 8px; text-align: left; vertical-align: top; }
     .msg.assistant img { max-width: 100%; border-radius: 6px; }
@@ -395,7 +415,7 @@
     .wl-body .sec-hint { font-size: 13px; color: var(--text-dim); }
     .wl-body .sec-msg { min-height: 1em; margin: 6px 0; font-size: 14px; color: var(--error); }
     .wl-body .sec-msg.ok { color: var(--success); }
-    .wl-body input[type="password"], .wl-body input:not([type]) { min-height: 44px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg-input); color: var(--text); font-size: 16px; }
+    .wl-body input[type="password"], .wl-body input[data-eye], .wl-body input:not([type]) { min-height: 44px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg-input); color: var(--text); font-size: 16px; }
     .wl-body .sec-actions { display: flex; gap: 8px; justify-content: flex-end; }
     .wl-body .sec-actions button { min-height: 44px; padding: 0 16px; border-radius: 8px; background: var(--border); color: var(--text); }
     .wl-body .sec-actions button.go { background: var(--accent); color: var(--on-accent); }
@@ -673,9 +693,26 @@
   #notify-agent-sheet button, #notify-prefs-sheet button { min-height: 44px; padding: 0 16px; border-radius: 8px; background: var(--border); color: var(--text); }
   #notify-agent-sheet button.on { background: var(--accent); color: var(--on-accent); }
   #notify-agent-sheet .sec-actions, #notify-prefs-sheet .sec-actions { display: flex; gap: 8px; justify-content: flex-end; }
+  #research-sheet { width: min(94vw, 420px); max-height: 88vh; overflow-y: auto; }
+  #research-sheet h3 { margin-bottom: 8px; }
+  #research-sheet .sec-hint { font-size: 13px; color: var(--text-dim); margin-bottom: 8px; }
+  #research-sheet button { display: block; width: 100%; min-height: 44px; margin-top: 8px; padding: 0 16px; border-radius: 8px; background: var(--border); color: var(--text); text-align: left; }
+  #research-sheet button[aria-pressed="true"] { box-shadow: inset 0 0 0 2px var(--accent); }
   #notify-prefs-sheet .np-row { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
   #notify-prefs-sheet .np-row button { min-height: 36px; padding: 0 12px; flex: none; }
   #security-sheet, #profile-sheet { width: min(94vw, 420px); max-height: 88vh; overflow-y: auto; }
+  /* Settings (mobile.js settingsSheetOpen): the desktop page's Settings dialog alone, in a frame that fills the screen */
+  #settings-sheet { position: fixed; inset: 0; z-index: 40; display: flex; flex-direction: column; background: var(--bg-dark); padding: var(--sat) 0 var(--sab); }
+  #settings-sheet iframe { flex: 1 1 auto; width: 100%; min-height: 0; border: 0; background: var(--bg-dark); }
+  #settings-sheet .ssh-wait { position: absolute; inset: var(--sat) 0 var(--sab); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 24px; background: var(--bg-dark); color: var(--text); text-align: center; font-size: 16px; }
+  #settings-sheet.ready .ssh-wait { display: none; }
+  #settings-sheet .ssh-btns { display: flex; gap: 10px; }
+  #settings-sheet .ssh-btns[hidden] { display: none; }
+  #settings-sheet .ssh-btns button { min-height: 44px; padding: 0 18px; border-radius: 10px; border: 1px solid var(--border-strong); background: var(--bg-card); color: var(--text); font-size: 16px; }
+  #settings-sheet .ssh-btns .ssh-retry, #settings-sheet .ssh-btns .ssh-wait-more { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  #settings-sheet .ssh-bar { display: flex; justify-content: flex-end; padding: 6px 10px; border-bottom: 1px solid var(--border); background: var(--bg-card); }
+  #settings-sheet .ssh-bar[hidden] { display: none; }
+  #settings-sheet .ssh-done { min-height: 40px; padding: 0 16px; border-radius: 10px; border: 1px solid var(--border-strong); background: var(--bg-dark); color: var(--text); font-size: 16px; }
   #security-sheet h3, #profile-sheet h3 { margin-bottom: 8px; }
   #security-sheet .sec-section, #profile-sheet .sec-section { padding: 10px 0; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 8px; }
   #security-sheet .sec-title, #profile-sheet .sec-title { font-weight: 600; }
@@ -885,6 +922,7 @@
   .handoff-cards .ho-list .ho-card:not(.ho-ended) { padding: 6px 10px; }
   .handoff-cards .ho-strip.ho-flash { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 15%, var(--bg-input)); }
   @media (prefers-reduced-motion: reduce) { .handoff-cards .ho-strip, .handoff-cards .ho-chev { transition: none; } }
+  .research-lines .research-line { cursor: default; white-space: normal; overflow-wrap: anywhere; overflow: visible; min-height: 0; }
   /* The hand-off Status sheet (lib/ui-hand-off-card.js openStatus): a bottom sheet at normal reading size */
   .ho-sheet { position: fixed; inset: auto 0 0 0; margin: 0; padding: 0; border: 0; border-top: 1px solid var(--border); border-radius: 14px 14px 0 0; background: var(--bg-secondary, var(--bg-input)); color: var(--text); width: 100%; max-width: 100%; max-height: 85vh; overflow: hidden; box-sizing: border-box; }
   .ho-sheet[open] { display: flex; flex-direction: column; }
@@ -1181,6 +1219,10 @@ html.mm-simple .ss-follow[hidden] { display: none; }
 html.mm-simple .ss-seg button { flex: 1; min-height: 48px; border: 1px solid var(--border); border-radius: 24px; color: var(--text-dim); font-size: 16px; padding: 0 8px; }
 html.mm-simple .ss-seg button[aria-pressed="true"] { border-color: var(--accent); color: var(--text); background: var(--sp-soft); box-shadow: inset 0 0 0 1px var(--accent); }
 html.mm-simple .ss-val { font-size: 18px; }
+html.mm-simple .ss-rseg { display: flex; gap: 6px; }
+html.mm-simple .ss-rseg button { flex: 1; min-height: 48px; border: 1px solid var(--border); border-radius: 24px; color: var(--text-dim); font-size: 16px; padding: 0 8px; }
+html.mm-simple .ss-rseg button[aria-pressed="true"] { border-color: var(--accent); color: var(--text); background: var(--sp-soft); box-shadow: inset 0 0 0 1px var(--accent); }
+html.mm-simple .ss-rhint { font-size: 13px; color: var(--text-dim); margin-top: 8px; }
 html.mm-simple .ss-row { display: block; width: 100%; min-height: 56px; padding: 10px 14px; border-radius: 16px; text-align: left; color: var(--text); font-size: 17px; }
 html.mm-simple .ss-row:active { background: var(--sp-soft); }
 html.mm-simple .ss-row small { display: block; color: var(--text-tertiary); font-size: 14px; line-height: 1.3; }
@@ -1257,17 +1299,20 @@ html.mm-simple #simple-side { display: none; }
         <button type="button" id="cp-levels" class="cp-levels">Levels</button>
         <button type="button" id="cp-hangup" class="cp-hang ucd-dup" aria-label="Hang up"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 15c2-4 16-4 18 0l-3 2.5-3-1.5v-2c-2-.7-4-.7-6 0v2l-3 1.5z"></path></svg><span>Hang up</span></button>
       </div>
-      <p id="cp-help">Hands-free works with the app open and the screen on, also through a car's Bluetooth hands-free or a Bluetooth speaker. Locked-screen use and car apps (CarPlay, Android Auto) are not supported.</p>
+      <p id="cp-help">Hands-free works with the app open and the screen on, also through a car's Bluetooth hands-free or a Bluetooth speaker. Locked-screen use and car apps (CarPlay, Android Auto) are not supported. Tap to talk: tap the mic, speak, tap again to send (or hold it while you speak and let go).</p>
     </div>
     <div id="composer">
       <div id="handoff-cards" class="handoff-cards" hidden></div>
+      <div id="research-lines" class="handoff-cards research-lines" hidden></div>
       <div id="previews"></div>
       <div id="voice-strip" hidden><button type="button" id="voice-mode-chip" class="voice-chip" aria-label="Talk mode: tap to switch">Tap to talk</button></div>
       <div id="voice-panel" role="dialog" aria-label="Voice settings" hidden>
         <div class="vp-row vp-modes" role="radiogroup" aria-label="Talk mode">
           <label class="vs-opt"><input type="radio" name="vp-mode" value="handsfree"> <span>Hands-free</span></label>
-          <label class="vs-opt"><input type="radio" name="vp-mode" value="tap"> <span>Tap to talk</span></label>
+          <label class="vs-opt"><input type="radio" name="vp-mode" value="press"> <span>Tap to talk</span></label>
+          <label class="vs-opt"><input type="radio" name="vp-mode" value="tap"> <span>Dictation</span></label>
         </div>
+        <div class="vp-display-note" id="vp-mode-help">Hands-free: tap the mic to start a call; it hears you whenever you speak. Tap to talk: a voice call where the agent answers aloud; tap the mic, speak, tap again to send (or hold it while you speak and let go). Dictation: tap the mic to turn what you say into text in the message box.</div>
         <label class="vp-row" for="vp-speed"><span>Voice speed</span><b class="vp-speed-val"></b></label>
         <input type="range" id="vp-speed" class="vs-level" min="0.75" max="1.5" step="0.05">
         <div class="vp-display-note vp-follow" id="vp-follow-voiceSpeed" hidden></div>
@@ -1358,13 +1403,21 @@ html.mm-simple #simple-side { display: none; }
   <div id="menu">
     <div id="menu-credit" hidden></div>
     <div id="menu-2fa-note" hidden>Two-factor is required for admins: set it up under Security</div>
-    <button id="menu-look" aria-expanded="false" aria-controls="menu-look-pick" hidden><span>&#x1F3A8; Interface style</span><span id="menu-look-name" class="menu-version" aria-hidden="true"></span></button>
-    <div id="menu-look-pick" hidden></div>
     <button id="menu-simple">Switch to Simple</button>
-    <button id="menu-notify">&#x1F514; Notifications</button>
     <button id="menu-files">&#x1F4C1; Files</button>
     <button id="menu-reload">&#x21BB; Reload app</button>
     <button id="menu-profile">&#x1F464; Profile</button>
+    <button id="menu-settings">&#x2699; Settings</button>
+    <!-- This device: how this phone shows things and what it does; what you set for the hub is in Settings (admins) -->
+    <div class="menu-group" data-group="device" role="group" aria-labelledby="menu-gt-device">
+      <div class="menu-group-title" id="menu-gt-device">This device</div>
+      <button id="menu-look" aria-expanded="false" aria-controls="menu-look-pick" hidden><span>&#x1F3A8; Interface style</span><span id="menu-look-name" class="menu-version" aria-hidden="true"></span></button>
+      <div id="menu-look-pick" hidden></div>
+      <button id="menu-notify">&#x1F514; Notifications</button>
+      <button id="menu-notify-test" hidden>&#x1F4E8; Send a test notification</button>
+      <button id="menu-fold" class="chat-only">&#x21C5; Fold automatic turns: On</button>
+      <button id="menu-active-top">⬆ Active agents at the top: On</button>
+    </div>
     <!-- The Advanced row starts hidden and its items shown: mobile.js reveals the row and folds them, so a page with an older cached mobile.js still shows every item. -->
     <button id="menu-adv-toggle" aria-expanded="true" aria-controls="menu-adv" hidden><span>Advanced</span><span class="menu-adv-end" aria-hidden="true"><span class="menu-adv-dot" hidden></span><span class="menu-adv-chev">&#x25BE;</span></span></button>
     <div id="menu-adv">
@@ -1373,8 +1426,6 @@ html.mm-simple #simple-side { display: none; }
       <button id="menu-agentwork" class="chat-only">&#x1F9F0; Show agent work</button>
       <button id="menu-recall" class="chat-only">&#x1F50E; Recall</button>
       <button id="menu-copy" class="chat-only">&#x29C9; Copy whole chat</button>
-      <button id="menu-fold" class="chat-only">&#x21C5; Fold automatic turns: On</button>
-      <button id="menu-notify-agent" class="chat-only">&#x1F514; Notifications for this agent</button>
       <button id="menu-compact" class="chat-only">&#x2699; Compress now</button>
       <button id="menu-clear" class="danger chat-only">Clear chat / new session</button>
     </div>
@@ -1390,10 +1441,10 @@ html.mm-simple #simple-side { display: none; }
       <button id="menu-wallet" hidden>&#x1F45B; Wallet</button>
     </div>
     <div class="menu-group" data-group="notify" role="group" aria-labelledby="menu-gt-notify">
-      <div class="menu-group-title" id="menu-gt-notify">Notifications and view</div>
+      <div class="menu-group-title" id="menu-gt-notify">Your notifications</div>
       <button id="menu-notify-prefs">&#x1F514; Notification settings&hellip;</button>
-      <button id="menu-notify-test" hidden>&#x1F4E8; Send a test notification</button>
-      <button id="menu-active-top">⬆ Active agents at the top: On</button>
+      <button id="menu-notify-agent" class="chat-only">&#x1F514; Notifications for this agent</button>
+      <button id="menu-research" hidden>Deep research: Ask each time</button>
     </div>
     <div class="menu-group" data-group="account" role="group" aria-labelledby="menu-gt-account">
       <div class="menu-group-title" id="menu-gt-account">Account and help</div>
@@ -1427,6 +1478,7 @@ html.mm-simple #simple-side { display: none; }
   <dialog id="profile-sheet"></dialog>
   <dialog id="notify-agent-sheet" aria-label="Notifications for this agent"></dialog>
   <dialog id="notify-prefs-sheet" aria-label="Notifications"></dialog>
+  <dialog id="research-sheet" aria-label="Deep research" data-no-dirty></dialog>
   <dialog id="security-sheet"></dialog>
   <dialog id="files-sheet" data-no-dirty></dialog>
   <dialog id="dl-sheet" data-no-dirty></dialog>
@@ -1440,8 +1492,11 @@ html.mm-simple #simple-side { display: none; }
   <script src="/ui-call-display.js"></script>
   <script src="/ui-file-card.js"></script>
   <script src="/ui-hand-off-card.js"></script>
+  <script src="/ui-code-copy.js"></script>
   <script src="/ui-team-card.js"></script>
   <script src="/ui-simple.js"></script>
+  <script src="/password-eye.js"></script>
+  <script>document.addEventListener('DOMContentLoaded', function () { PasswordEye.watch(); });</script>
   <script src="mobile.js"></script>
 </body>
 </html>
