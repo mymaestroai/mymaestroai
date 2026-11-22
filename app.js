@@ -3202,7 +3202,7 @@
       } catch (e) { box.textContent = `Could not load: ${e.message}`; }
     }
     // The saved map for the Save button: stored entries stay, each row sets its value or (equal to its default) removes the key.
-    function workersAtOnceFromPage() {
+    function workersAtOnceFromPage(failures) {
       const box = document.getElementById('st-wao-rows');
       if (!box || box.dataset.loaded !== '1') return undefined;
       const out = { ...waoStored };
@@ -3219,7 +3219,8 @@
       }
       if (bad.length) {
         bad[0].reportValidity();
-        alert(`Workers at once: ${bad.map(i => WAO_LABELS[i.dataset.provider] || i.dataset.provider).join(', ')} must be a whole number from 1 to 32; the previous value is kept.`);
+        const m = `Workers at once: ${bad.map(i => WAO_LABELS[i.dataset.provider] || i.dataset.provider).join(', ')} must be a whole number from 1 to 32; the previous value is kept.`;
+        if (Array.isArray(failures)) failures.push(m); else alert(m);
       }
       return out;
     }
@@ -4444,19 +4445,25 @@
       return ['st-sc-enabled', 'st-sc-after', 'st-sc-at', ...SC_CLASSES.map(k => `st-sc-c-${k}`), 'st-sc-model'].map(id => document.getElementById(id));
     }
     async function saveSelfCheckSettings(opts = {}) {
-      const saved = dialogGuard.savePoint(scFieldEls());
+      const fields = scFieldEls(), val = (el) => (el ? (String(el.type || '').toLowerCase() === 'checkbox' ? el.checked : el.value) : undefined), before = fields.map(val);
+      // Refill from the hub's answer and settle the form; a field edited while the save ran keeps the newer text, still changed.
+      const refill = (s) => {
+        const newer = fields.map((el, i) => (el && val(el) !== before[i] ? { v: val(el) } : null));
+        scFillSettings(s);
+        dialogGuard.savePoint(fields)();
+        fields.forEach((el, i) => { if (!newer[i]) return; if (String(el.type || '').toLowerCase() === 'checkbox') el.checked = newer[i].v; else el.value = newer[i].v; });
+      };
       const state = document.getElementById('st-sc-save-state');
       const say = (t) => { if (state) state.textContent = t; };
       const { changes, classes } = scSettingsChanges();
       if (!classes.length) { const m = 'Keep at least one kind of agent ticked.'; say(m); return m; }
-      if (!Object.keys(changes).length) { say('Nothing to save.'); saved(); return true; }
+      if (!Object.keys(changes).length) { if (scSettings) refill(scSettings); say('Nothing to save.'); return true; }
       say('Saving…');
       try {
         const r = await fetch('/api/selfcheck/settings', { method: 'PUT', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(changes) });
         const b = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error(b.error || `HTTP ${r.status}`);
-        scFillSettings(b.settings);
-        dialogGuard.markLoaded(scFieldEls());   // refilled from the hub's answer
+        refill(b.settings);
         say('Saved.');
         return true;
       } catch (e) { say(`Not saved: ${e.message}`); return e.message; }
@@ -4571,18 +4578,24 @@
       return ['st-hl-enabled', 'st-hl-at', 'st-hl-notify', ...HL_NUMBERS.map(([k]) => `st-hl-n-${k}`)].map(id => document.getElementById(id));
     }
     async function saveHealthSettings(opts = {}) {
-      const saved = dialogGuard.savePoint(hlFieldEls());
+      const fields = hlFieldEls(), val = (el) => (el ? (String(el.type || '').toLowerCase() === 'checkbox' ? el.checked : el.value) : undefined), before = fields.map(val);
+      // Refill from the hub's answer and settle the form; a field edited while the save ran keeps the newer text, still changed.
+      const refill = (s) => {
+        const newer = fields.map((el, i) => (el && val(el) !== before[i] ? { v: val(el) } : null));
+        hlFillSettings(s);
+        dialogGuard.savePoint(fields)();
+        fields.forEach((el, i) => { if (!newer[i]) return; if (String(el.type || '').toLowerCase() === 'checkbox') el.checked = newer[i].v; else el.value = newer[i].v; });
+      };
       const state = document.getElementById('st-hl-save-state');
       const say = (t) => { if (state) state.textContent = t; };
       const changes = hlSettingsChanges();
-      if (!Object.keys(changes).length) { say('Nothing to save.'); saved(); return true; }
+      if (!Object.keys(changes).length) { if (hlSettings) refill(hlSettings); say('Nothing to save.'); return true; }
       say('Saving…');
       try {
         const r = await fetch('/api/system-health/settings', { method: 'PUT', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(changes) });
         const b = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error(b.error || `HTTP ${r.status}`);
-        hlFillSettings(b.settings);
-        dialogGuard.markLoaded(hlFieldEls());   // refilled from the hub's answer
+        refill(b.settings);
         say('Saved.');
         return true;
       } catch (e) { say(`Not saved: ${e.message}`); return e.message; }
@@ -5554,8 +5567,8 @@
       body.innerHTML = `${keyLine}
         <div class="st-row"><label style="flex-basis:150px">Privacy</label><label style="flex:1;display:flex;gap:6px;align-items:center;cursor:pointer"><input type="checkbox" id="st-or-privacy"${v.privacy ? ' checked' : ''} onchange="saveOpenRouter()"> Only use providers that do not store or train on prompts</label></div>
         <div class="st-row"><label style="flex-basis:150px">Offered</label><span>${(v.chosen || []).length} model(s)${v.custom ? '' : ' (the default offer)'} · catalogue ${(v.models || []).length} models${v.fetchedAt ? `, read ${esc(new Date(v.fetchedAt).toLocaleString())}` : ''}</span></div>
-        <div class="st-row" style="flex-wrap:wrap"><label style="flex-basis:150px">Find</label><input type="text" id="st-or-q" value="${esc(q)}" placeholder="grok, deepseek, kimi, qwen, llama, claude…" oninput="renderOpenRouterBox()" style="flex:1;min-width:160px">
-          <label style="display:flex;gap:4px;align-items:center;margin-left:8px;font-size:0.8rem;white-space:nowrap"><input type="checkbox" id="st-or-all"${all ? ' checked' : ''} onchange="renderOpenRouterBox()"> show models without tools</label></div>
+        <div class="st-row" style="flex-wrap:wrap"><label style="flex-basis:150px">Find</label><input type="text" id="st-or-q" data-no-dirty value="${esc(q)}" placeholder="grok, deepseek, kimi, qwen, llama, claude…" oninput="renderOpenRouterBox()" style="flex:1;min-width:160px">
+          <label style="display:flex;gap:4px;align-items:center;margin-left:8px;font-size:0.8rem;white-space:nowrap"><input type="checkbox" id="st-or-all" data-no-dirty${all ? ' checked' : ''} onchange="renderOpenRouterBox()"> show models without tools</label></div>
         <div id="st-or-list" style="max-height:320px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:6px 10px">${rows || '<i>No model matches.</i>'}${list.length > 300 ? `<div style="color:var(--text-dim)">… ${list.length - 300} more: narrow the search.</div>` : ''}</div>
         <div class="st-hint" style="margin-top:8px">🛠 can use tools (agents need this) · 🧠 takes a reasoning level · 🖼 reads images · context window · price in / out per million tokens</div>
         <div class="st-row"><label style="flex-basis:150px"></label><button class="st-test-btn" onclick="saveOpenRouter(true)">Save the ticked models</button>
@@ -5564,22 +5577,24 @@
       const qEl = document.getElementById('st-or-q');
       if (q && qEl) { qEl.focus(); qEl.setSelectionRange(q.length, q.length); }
     }
-    async function postOpenRouter(payload, done) {
+    // Returns true once saved, or the reason; quiet (from the main Save) leaves the failure to the main Save's message.
+    async function postOpenRouter(payload, done, opts = {}) {
       try {
         const r = await fetch('/api/openrouter', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
         const j = await r.json();
-        if (!r.ok || !j.ok) { hubToast(j.error || 'Could not save.'); return; }
+        if (!r.ok || !j.ok) { const m = j.error || 'Could not save.'; if (!opts.quiet) hubToast(m); return m; }
         orView = j; renderOpenRouterBox(); __modelListCache = null;   // the pickers refetch the model list
         if (done) hubToast(done(j));
-      } catch (e) { hubToast('Could not save: ' + e.message); }
+        return true;
+      } catch (e) { if (!opts.quiet) hubToast('Could not save: ' + e.message); return e.message; }
     }
-    function saveOpenRouter(withModels) {
+    function saveOpenRouter(withModels, opts = {}) {
       const privacy = !!document.getElementById('st-or-privacy')?.checked;
       if (!withModels) return postOpenRouter({ privacy }, () => (privacy ? 'OpenRouter: only providers that do not store or train on prompts.' : 'OpenRouter: any provider.'));
       // Keep ticks that the current search hides: start from the saved offer, apply the visible boxes.
       const keep = new Set(orView && orView.chosen || []);
       for (const b of document.querySelectorAll('.st-or-pick')) { if (b.checked) keep.add(b.value); else keep.delete(b.value); }
-      postOpenRouter({ privacy, models: [...keep] }, (j) => `OpenRouter: ${j.chosen.length} model(s) offered in the pickers.`);
+      return postOpenRouter({ privacy, models: [...keep] }, (j) => `OpenRouter: ${j.chosen.length} model(s) offered in the pickers.`, opts);
     }
     function openRouterDefaults() { postOpenRouter({ models: null }, (j) => `OpenRouter: back to the default offer (${j.chosen.length} models).`); }
 
@@ -6417,8 +6432,9 @@
       }
       const agentInp = document.getElementById('st-cap-agent');
       const hubInp = document.getElementById('st-cap-hub');
-      if (agentInp && document.activeElement !== agentInp) agentInp.value = caps.perAgentDailyUsd ? String(caps.perAgentDailyUsd) : '';
-      if (hubInp && document.activeElement !== hubInp) hubInp.value = caps.hubDailyUsd ? String(caps.hubDailyUsd) : '';
+      // A cap typed but not saved (or refused) keeps what was typed: the repaint fills only unchanged fields.
+      if (agentInp && document.activeElement !== agentInp && !dialogGuard.changed(agentInp)) agentInp.value = caps.perAgentDailyUsd ? String(caps.perAgentDailyUsd) : '';
+      if (hubInp && document.activeElement !== hubInp && !dialogGuard.changed(hubInp)) hubInp.value = caps.hubDailyUsd ? String(caps.hubDailyUsd) : '';
     }
     async function saveSpendCaps(opts = {}) {
       let result = true;
@@ -6440,8 +6456,10 @@
         const d = await r.json().catch(() => null);
         if (d && d.caps && spendToday) spendToday.caps = d.caps;
         if (btn) { btn.className = 'st-test-btn ok'; btn.textContent = 'Saved'; }
-        document.getElementById('st-saved')?.classList.add('show');
-        setTimeout(() => document.getElementById('st-saved')?.classList.remove('show'), 2000);
+        if (!opts.quiet) {
+          document.getElementById('st-saved')?.classList.add('show');
+          setTimeout(() => document.getElementById('st-saved')?.classList.remove('show'), 2000);
+        }
       } catch (e) {
         if (btn) { btn.className = 'st-test-btn fail'; btn.textContent = 'Failed'; }
         result = e.message;
@@ -6520,9 +6538,35 @@
       { label: 'API credit', fields: () => ['st-credit-provider', 'st-credit-amount', 'st-credit-day'].map(id => document.getElementById(id)), save: (o) => saveCredit(o) },
       { label: 'System health', fields: () => hlFieldEls(), save: (o) => saveHealthSettings(o) },
       { label: 'Self-check', fields: () => scFieldEls(), save: (o) => saveSelfCheckSettings(o) },
+      { label: 'OpenRouter models', fields: () => [...document.querySelectorAll('#st-or-list .st-or-pick')], save: (o) => saveOpenRouter(true, o) },
     ];
+    let stMainSaving = false;   // a press while the main Save runs does nothing: the first press is still sending
     async function saveSettings() {
+      if (stMainSaving) return;
+      const box = document.getElementById('st-overlay');
+      // A section's own Save still waiting for the hub: saving again now could send its values twice, out of order.
+      if (box && dialogGuard.saving(box)) { alert('A save in Settings is still running. Press Save again when it is done.'); return; }
+      stMainSaving = true;
+      // While it saves the dialog takes no typing or clicks (inert) and its buttons show as waiting, so every section sends
+      // what it showed at the press and no other Save runs beside it.
+      const held = box ? [...box.querySelectorAll('button')].filter(b => !b.disabled) : [];
+      for (const b of held) b.disabled = true;
+      if (box) box.inert = true;
+      try { await saveSettingsNow(); } finally {
+        stMainSaving = false;
+        if (box) box.inert = false;
+        for (const b of held) b.disabled = false;
+      }
+    }
+    async function saveSettingsNow() {
       const failures = [];
+      // The sections to save are the ones changed when Save was pressed. Each posts the values it shows when its turn comes
+      // (the dialog takes no typing meanwhile) and marks exactly those saved (its own savePoint).
+      const sections = [];
+      for (const entry of ST_SECTION_SAVES) {
+        try { if (dialogGuard.changed(entry.fields())) sections.push(entry); }
+        catch (e) { failures.push(`${entry.label}: ${e && e.message ? e.message : e}`); }
+      }
       const patch = { providers: {} };
 
       for (const p of PROVIDERS) {
@@ -6546,7 +6590,7 @@
       const maxContext = parseInt(document.getElementById('st-maxContext')?.value);
       if (maxTokens > 0) patch.maxCompletionTokens = maxTokens;
       if (maxContext > 0) patch.maxContextMessages = maxContext;
-      const wao = workersAtOnceFromPage();
+      const wao = workersAtOnceFromPage(failures);
       if (wao !== undefined) patch.workersAtOnce = wao;
       const hwMin = document.getElementById('st-hw-minutes');
       if (hwMin) patch.handOffWaitMinutes = parseInt(hwMin.value, 10);
@@ -6570,10 +6614,9 @@
         failures.push('Settings: ' + e.message);
       }
 
-      // The sections with their own Save button: only those whose fields changed, one at a time.
-      for (const entry of ST_SECTION_SAVES) {
+      // The sections with their own Save button: only those changed at the press, one at a time.
+      for (const entry of sections) {
         try {
-          if (!dialogGuard.changed(entry.fields())) continue;
           const r = await entry.save({ quiet: true });
           if (r !== true) failures.push(`${entry.label}: ${r}`);
         } catch (e) {
@@ -22602,6 +22645,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         hasChanges,
         savePoint,
         changed,
+        saving: (elOrChild) => { const l = layerOf(elOrChild); return !!l && l.saving > 0; },   // a save started here is not answered yet
         markLoaded: (els) => { for (const el of (Array.isArray(els) ? els : [els])) { const l = el && scopeOf(el); if (l) l.baselines.delete(el); } },   // put in by the page, not typed
         layers: () => layers.slice(),
         _confirm: () => confirmOpen,

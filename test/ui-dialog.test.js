@@ -840,7 +840,7 @@ test('main Save: the section saves run one at a time, in registry order, quietly
   assert.deepStrictEqual(p.alerts, ['Not saved: Spend caps: Caps must be a dollar amount, or blank for unlimited.']);
 });
 
-test('main Save registry: ten sections, each naming an existing async function, every field id in the dialog markup', () => {
+test('main Save registry: eleven sections, each naming an existing function, every field in the dialog markup', () => {
   const app = read('app.js');
   const between = (x, y) => { const i = app.indexOf(x), j = app.indexOf(y); assert.ok(i > 0 && j > i, x); return app.slice(i + x.length, j); };
   const HL = between('// ── health page (begin) ──', '// ── health page (end) ──');
@@ -849,13 +849,19 @@ test('main Save registry: ten sections, each naming an existing async function, 
   assert.ok(a > 0 && b > a);
   const reg = app.slice(a, b);
   const ids = [];
-  const document = { getElementById: (id) => { ids.push(id); return { id }; } };
+  const sels = [];
+  const document = { getElementById: (id) => { ids.push(id); return { id }; }, querySelectorAll: (sel) => { sels.push(sel); return [{ id: 'pick' }]; } };
   const esc = (s) => String(s), stSum = () => {};
   const out = new Function('document', 'esc', 'stSum', 'window', 'dialogGuard', `${HL}\n${SC}\n${reg}\nreturn { ST_SECTION_SAVES, hlFieldEls, scFieldEls };`)(document, esc, stSum, {}, {});
-  assert.deepStrictEqual(out.ST_SECTION_SAVES.map(e => e.label), ['Web search and fetch', 'Auto model classifier', 'Member defaults', 'Sandbox defaults', 'Command lockbox default', 'Plan usage warning', 'Spend caps', 'API credit', 'System health', 'Self-check']);
+  assert.deepStrictEqual(out.ST_SECTION_SAVES.map(e => e.label), ['Web search and fetch', 'Auto model classifier', 'Member defaults', 'Sandbox defaults', 'Command lockbox default', 'Plan usage warning', 'Spend caps', 'API credit', 'System health', 'Self-check', 'OpenRouter models']);
   for (const entry of out.ST_SECTION_SAVES) {
     ids.length = 0;
     const els = entry.fields();
+    if (entry.label === 'OpenRouter models') {
+      assert.deepStrictEqual(sels, ['#st-or-list .st-or-pick']);
+      assert.ok(app.includes('<div id="st-or-list"') && app.includes('class="st-or-pick"'), 'the ticked-model boxes are in the OpenRouter box');
+      continue;
+    }
     assert.ok(els.length > 0 && ids.length === els.length, `${entry.label}: fields() reads elements by id`);
     for (const id of ids) {
       const direct = app.includes(`id="${id}"`) || new RegExp(`\\$\\{\\w+\\('${id}'`).test(app), templated = app.includes('id="' + id.slice(0, id.lastIndexOf('-') + 1) + '${');
@@ -863,8 +869,102 @@ test('main Save registry: ten sections, each naming an existing async function, 
     }
   }
   for (const m of reg.matchAll(/save: \(o\) => (\w+)\(o\)/g)) assert.match(app, new RegExp(`async function ${m[1]}\\(opts = \\{\\}\\)`), `${m[1]} exists and takes opts`);
-  assert.strictEqual([...reg.matchAll(/save: \(o\) =>/g)].length, 10);
+  assert.strictEqual([...reg.matchAll(/save: \(o\) =>/g)].length, 11);
+  assert.match(reg, /save: \(o\) => saveOpenRouter\(true, o\)/);
+  assert.match(app, /function saveOpenRouter\(withModels, opts = \{\}\) \{[\s\S]{0,600}?return postOpenRouter\(\{ privacy, models: \[\.\.\.keep\] \}/, 'saveOpenRouter returns the save result');
+  // Find and "show models without tools" are view filters: never counted as edits.
+  assert.match(app, /id="st-or-q" data-no-dirty/);
+  assert.match(app, /id="st-or-all" data-no-dirty/);
   // the health and self-check saves use the same lists as the registry
-  assert.match(HL, /dialogGuard\.savePoint\(hlFieldEls\(\)\)/);
-  assert.match(SC, /dialogGuard\.savePoint\(scFieldEls\(\)\)/);
+  assert.match(HL, /const fields = hlFieldEls\(\)[^\n]*\n[\s\S]{0,400}?hlFillSettings\(s\);\n\s*dialogGuard\.savePoint\(fields\)\(\);/);
+  assert.match(SC, /const fields = scFieldEls\(\)[^\n]*\n[\s\S]{0,400}?scFillSettings\(s\);\n\s*dialogGuard\.savePoint\(fields\)\(\);/);
+});
+
+test('main Save: a second press while it saves does nothing; an edit made after the press waits for the next Save', async () => {
+  const p = mainSavePage();
+  const order = [];
+  for (const e of p.api.ST_SECTION_SAVES) e.save = async () => { order.push(e.label); return true; };
+  typeKey(p, 'st-ws-key-brave', 'brave-test-1');
+  const first = p.api.saveSettings();
+  // while the first press is still saving: type a cap and press Save again
+  typeKey(p, 'st-cap-agent', '5');
+  await p.api.saveSettings();
+  await first;
+  assert.deepStrictEqual(order, ['Web search and fetch'], 'only the section changed at the press; the second press ran nothing');
+  assert.strictEqual(p.fetchLog.filter(x => x.url === '/api/settings').length, 1, 'one settings request');
+  assert.strictEqual(p.guard.changed(p.f['st-cap-agent']), true, 'the cap typed after the press is still unsaved');
+});
+
+test('spend box repaint (a credit saved, the periodic refresh) keeps a cap typed but not saved', async () => {
+  const app = read('app.js');
+  const a = app.indexOf('    async function paintSpendSettings('), b = app.indexOf('    async function saveSpendCaps(');
+  assert.ok(a > 0 && b > a);
+  const d = makeDom();
+  const guard = ui.createDialogGuard({ doc: d.doc, win: d.win });
+  const ov = d.el('div', { id: 'st-overlay' });
+  const f = {};
+  for (const id of ['st-cap-agent', 'st-cap-hub']) f[id] = d.el('input', { id }, ov);
+  d.el('div', { id: 'st-spend' }, ov);
+  guard.open(ov);
+  const spendToday = { paidTurns: 0, total: 0, caps: { perAgentDailyUsd: 3, hubDailyUsd: 10 }, credits: [] };
+  const paint = new Function('document', 'dialogGuard', 'spendToday', 'refreshSpendToday', 'stSum', 'usd', 'esc', 'agentDisplayName', 'creditLine', 'creditLabel', 'cap', 'fillCreditInputs',
+    `${app.slice(a, b)}\nreturn paintSpendSettings;`)(d.doc, guard, spendToday, async () => {}, () => {}, (n) => '$' + n, String, String, String, String, String, () => {});
+  await paint(false);
+  assert.strictEqual(f['st-cap-agent'].value, '3', 'unchanged caps show the saved values');
+  d.typeInto(f['st-cap-agent'], '7');
+  d.el('input', {}, ov).focus();   // focus elsewhere, as after pressing a button
+  await paint(false);
+  assert.strictEqual(f['st-cap-agent'].value, '7', 'a typed cap stays');
+  assert.strictEqual(f['st-cap-hub'].value, '10');
+  assert.strictEqual(guard.changed(f['st-cap-agent']), true);
+});
+
+test('main Save: the dialog\'s buttons wait while it saves (a section Save cannot run beside it), then come back as they were', async () => {
+  const p = mainSavePage();
+  const sectionBtn = p.d.el('button', {}, p.ov), offBtn = p.d.el('button', {}, p.ov);
+  offBtn.disabled = true;
+  typeKey(p, 'st-ws-key-brave', 'brave-test-1');
+  const run = p.api.saveSettings();
+  assert.strictEqual(sectionBtn.disabled, true, 'held while the Save runs');
+  assert.strictEqual(p.ov.inert, true, 'no typing or clicks in the dialog while it saves');
+  await run;
+  assert.strictEqual(sectionBtn.disabled, false, 'back afterwards');
+  assert.strictEqual(p.ov.inert, false);
+  assert.strictEqual(offBtn.disabled, true, 'a button that was off stays off');
+  assert.strictEqual(cfgCalls(p).length, 1);
+});
+
+test('main Save: while a section\'s own save is still waiting for the hub, it sends nothing and says so once', async () => {
+  const p = mainSavePage();
+  const btn = p.d.el('button', {}, p.ov);
+  p.guard.saving = () => true;   // a section's Save pressed a moment ago, not answered yet
+  typeKey(p, 'st-ws-key-brave', 'brave-test-1');
+  await p.api.saveSettings();
+  assert.deepStrictEqual(p.fetchLog, [], 'nothing sent');
+  assert.deepStrictEqual(p.alerts, ['A save in Settings is still running. Press Save again when it is done.']);
+  assert.ok(!btn.disabled, 'buttons untouched');
+  assert.ok(!p.ov.inert);
+  assert.strictEqual(p.guard.changed(p.f['st-ws-key-brave']), true, 'the typed key is still unsaved');
+  p.guard.saving = () => false;
+  await p.api.saveSettings();
+  assert.strictEqual(cfgCalls(p).length, 1, 'the next press saves');
+});
+
+test('guard.saving: a POST to /api/ right after a click in a layer counts until the hub answers', async () => {
+  const d = makeDom();
+  let answer;
+  d.win.fetch = () => new Promise(r => { answer = r; });
+  d.win.location = d.win.location || { href: 'http://127.0.0.1/' };
+  const g = ui.createDialogGuard({ doc: d.doc, win: d.win, auto: '.st-overlay' });
+  const ov = d.el('div', { class: 'st-overlay' });
+  const btn = d.el('button', {}, ov);
+  g.open(ov);
+  assert.strictEqual(g.saving(ov), false);
+  d.dispatch(btn, 'pointerdown');
+  const req = d.win.fetch('/api/settings', { method: 'POST' });
+  assert.strictEqual(g.saving(ov), true, 'answered not yet');
+  answer({ ok: true });
+  await req; await flush();
+  assert.strictEqual(g.saving(ov), false, 'answered');
+  assert.strictEqual(g.saving(d.el('div')), false, 'outside any layer');
 });

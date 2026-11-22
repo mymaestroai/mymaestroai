@@ -177,11 +177,35 @@ test('settings: a 200 fills the form from the answer; nothing changed sends noth
   await t.S.saveHealthSettings();
   assert.strictEqual(t.calls.filter(c => c.key.startsWith('PUT')).length, 0);
   assert.strictEqual(t.els['st-hl-save-state'].textContent, 'Nothing to save.');
-  assert.deepStrictEqual(t.guardLog, ['commit 13'], 'nothing to save: the form counts as saved');
+  assert.deepStrictEqual(t.guardLog, ['commit 13'], 'nothing to save: the saved values shown and settled');
   t.els['st-hl-at'].value = '04:00';
   await t.S.saveHealthSettings();
   assert.strictEqual(t.els['st-hl-save-state'].textContent, 'Saved.');
-  assert.deepStrictEqual(t.guardLog, ['commit 13', 'loaded 13'], 'refilled from the answer: the form is settled');
+  assert.deepStrictEqual(t.guardLog, ['commit 13', 'commit 13'], 'refilled from the answer: the form is settled');
+});
+
+test('settings: a cleared number is not a change the hub takes: "Nothing to save" puts the saved value back', async () => {
+  const t = build({ 'GET /api/system-health': { status: 200, body: view([]) } });
+  await t.S.loadHealth();
+  const was = t.els['st-hl-n-diskWarnPct'].value;
+  assert.ok(was !== '', 'the stand-in has a saved threshold');
+  t.els['st-hl-n-diskWarnPct'].value = '';
+  await t.S.saveHealthSettings();
+  assert.strictEqual(t.calls.filter(c => c.key.startsWith('PUT')).length, 0);
+  assert.strictEqual(t.els['st-hl-n-diskWarnPct'].value, was, 'the form shows what is saved');
+  assert.deepStrictEqual(t.guardLog, ['commit 13']);
+});
+
+test('settings: a field edited while the save runs keeps the newer text (still changed); the others show the answer', async () => {
+  let t;
+  const saved = { ...SETTINGS, checkAt: '04:00' };
+  t = build({ 'GET /api/system-health': { status: 200, body: view([]) }, 'PUT /api/system-health/settings': () => { t.els['st-hl-notify'].value = 'warnings'; return { status: 200, body: { settings: saved } }; } });
+  await t.S.loadHealth();
+  t.els['st-hl-at'].value = '04:00';
+  await t.S.saveHealthSettings();
+  assert.strictEqual(t.els['st-hl-at'].value, '04:00');
+  assert.strictEqual(t.els['st-hl-notify'].value, 'warnings', 'the edit made during the save is kept');
+  assert.deepStrictEqual(t.guardLog, ['commit 13'], 'settled to the answer before the newer text went back');
 });
 
 // ── ?health=1 ──

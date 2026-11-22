@@ -253,11 +253,23 @@ test('saving sends only the keys that changed, and nothing at all when nothing c
   await t.S.saveSelfCheckSettings();
   assert.deepStrictEqual(t.calls, [{ key: 'PUT /api/selfcheck/settings', body: { afterStart: false, nightlyAt: '04:10' } }]);
   assert.strictEqual(t.els['st-sc-save-state'].textContent, 'Saved.');
-  assert.deepStrictEqual(t.guardLog.map(x => x.split(' ')[0]), ['commit', 'loaded'], 'refilled from the answer: the form is settled');
+  assert.deepStrictEqual(t.guardLog, ['commit 8', 'commit 8'], 'nothing to save, then refilled from the answer: the form is settled');
   // the next save compares with what the hub answered
   t.calls.length = 0;
   await t.S.saveSelfCheckSettings();
   assert.strictEqual(t.calls.length, 0);
+});
+
+test('saving: a field edited while the save runs keeps the newer text; the others show the answer', async () => {
+  const s0 = allPass().settings;
+  let t;
+  t = build({ 'PUT /api/selfcheck/settings': () => { t.els['st-sc-model'].value = 'claude-sdk/haiku-y'; return { status: 200, body: { settings: { ...s0, nightlyAt: '04:10' } } }; } });
+  t.S.scFillSettings(s0);
+  t.els['st-sc-at'].value = '04:10';
+  await t.S.saveSelfCheckSettings();
+  assert.strictEqual(t.els['st-sc-at'].value, '04:10');
+  assert.strictEqual(t.els['st-sc-model'].value, 'claude-sdk/haiku-y', 'the edit made during the save is kept');
+  assert.deepStrictEqual(t.guardLog, ['commit 8']);
 });
 
 test('saving: a changed model and a changed set of kinds go in order; an empty model means auto', async () => {
