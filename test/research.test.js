@@ -1820,3 +1820,31 @@ test('r9b runner: the meaning marks are saved with the claims and the report tex
   assert.match(run.prose, /56\.4% \[source says otherwise\]/);
   assert.equal(run.checkTotals.meaningDiffers, 1);
 });
+
+// ── r14: the check reads only plain reading text ──
+test('r14 runner: a reading source and an unreadable one: the saved checkTotals carry the three counts and the report shows the line', async () => {
+  const m = makeThorough({
+    // paper A and B are plain reading text; paper C is raw HTML with a hidden element: unreadable, never read
+    fetchPage: async (url) => ({ markdown: url === SRC_C ? '<div hidden>Method A scored 56.4% on the test</div> 200 raters' : `${BODY_MARK} ${url} Method A scored 56.4% on the test with 200 raters.`, truncated: false, via: 'plain', title: 'T' }),
+    script: { 'Research report': () => one('Research report', '## Verdict\nMethod A wins.\n\n## Evidence\n- Method A scored 56.4% on the test (Paper A, ' + SRC_A + ', 2025).\n\n## Where sources disagree\nNone.\n\n## Confidence\nMedium.\n\n## Corrections to the first pass\nNone\n\n' + claimsBlock([
+      { id: 'c1', claim: 'Method A scored 56.4% on the test', source_url: SRC_A, figures: ['56.4%'], measured_result: '56.4%', judged_by: 'humans', evidence_strength: 'strong', inference: false },
+      { id: 'c2', claim: 'Method A scored 56.4% on the test', source_url: SRC_C, figures: ['56.4%'], measured_result: '56.4%', judged_by: 'humans', evidence_strength: 'strong', inference: false },
+    ])) },
+  });
+  const run = await doneRun(m);
+  assert.equal(run.state, 'delivered');
+  assert.equal(run.claims[0].check_status, 'found_as_written');
+  assert.equal(run.claims[1].check_status, 'source_not_opened');
+  assert.equal(run.claims[1].check, 'source could not be read in a checkable form');
+  // the saved totals (what a later report is built from)
+  assert.equal(run.checkTotals.sourcesReading, 2);
+  assert.equal(run.checkTotals.sourcesConverted, 0);
+  assert.equal(run.checkTotals.sourcesUnreadable, 1);
+  assert.ok(m.saves.some((s) => /"sourcesUnreadable":1/.test(s)), 'saved with the run');
+  // the report shows the plain line right under the "In the source" line
+  const lines = m.wakes[0].message.split('\n');
+  const i = lines.findIndex((l) => l.startsWith('In the source'));
+  assert.equal(lines[i + 1], '1 source could not be read in a checkable form; its figures are not checked against it.');
+  // the document marks the source
+  assert.match(m.written[0].doc.markdown, /paper-c.*\(could not be read in a checkable form\)/);
+});
