@@ -4737,3 +4737,37 @@ test('J2-b spaced digit groups keep the "#" form: "1 250" is not "1250" and is "
   assert.strictEqual(run('total 250 users', 'total (1 250 users)'), J_NOT);
   assert.strictEqual(run('total 250 users', 'total $1 250 users'), J_NOT);
 });
+
+test('K2-dash: hyphen, en dash, em dash, figure dash and minus sign are one dash between two numbers', () => {
+  const one = (fig, src) => T.checkClaims([{ id: 'c1', claim: 'Rates overall', source_url: 'https://a.example/a', figures: [fig] }], [{ url: 'https://a.example/a', title: 'T', ok: true, text: src }], {}).claims[0].figures.map((x) => x.status);
+  const F = 'found_as_written';
+  const N = 'not_found_as_written';
+  assert.deepStrictEqual(one('56-60%', 'Rates were 56–60% overall.'), [F]);
+  assert.deepStrictEqual(one('56–60%', 'Rates were 56-60% overall.'), [F]);
+  assert.deepStrictEqual(one('56-60%', 'Rates were 56−60% overall.'), [F]);
+  assert.deepStrictEqual(one('56−60%', 'Rates were 56-60% overall.'), [F]);
+  assert.deepStrictEqual(one('56‒60%', 'Rates were 56—60% overall.'), [F]);
+  assert.deepStrictEqual(one('56-61%', 'Rates were 56–60% overall.'), [N]);
+  assert.deepStrictEqual(one('56−61%', 'Rates were 56–60% overall.'), [N]);
+  // a leading minus sign stays a sign: today's behaviour
+  assert.deepStrictEqual(one('-5%', 'Rates change was -5% overall.'), [F]);
+  assert.deepStrictEqual(one('-5%', 'Rates change was –5% overall.'), [N]);
+  assert.deepStrictEqual(one('-5%', 'Rates change was 5% overall.'), [N]);
+});
+
+test('K2-glyph: "p¿0.5" in a fetched text is "p>0.5"; a Spanish "¿" is left alone', () => {
+  const one = (claim, src) => T.checkClaims([{ id: 'c1', claim, source_url: 'https://a.example/a', figures: [] }], [{ url: 'https://a.example/a', title: 'T', ok: true, text: src }], {}).claims[0].figures.map((x) => x.status);
+  const F = 'found_as_written';
+  const N = 'not_found_as_written';
+  assert.deepStrictEqual(one('Effect significance p>0.5', 'Effect significance p¿0.5 here'), [F]);
+  assert.deepStrictEqual(one('Effect significance p>0.5', 'Effect significance p>0.5 here'), [F]);
+  assert.deepStrictEqual(one('Effect significance p<0.05', 'Effect significance p¡0.05 here'), [F]);
+  // not the other sign, and not any other mark
+  assert.deepStrictEqual(one('Effect significance p>0.5', 'Effect significance p<0.5 here'), [N]);
+  assert.deepStrictEqual(one('Effect significance p>0.5', 'Effect significance p?0.5 here'), [N]);
+  // Spanish prose: the "¿" before a word is no sign
+  assert.strictEqual(T.readGlyphs('¿Qué 5 libros?'), '¿Qué 5 libros?');
+  assert.strictEqual(T.readGlyphs('Dime: ¿Qué 5 libros?'), 'Dime: ¿Qué 5 libros?');
+  assert.strictEqual(T.readGlyphs('p¿0.5 and p¡.05'), 'p>0.5 and p<.05');
+  assert.deepStrictEqual(one('He asked about 5 libros', '¿Qué 5 libros?'), [F]);
+});
