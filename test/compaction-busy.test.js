@@ -39,7 +39,7 @@ function make({ mode = 'on', busy = () => false, script = null, noWrite = false,
     briefStatus: async () => (briefAt ? { exists: true, bytes: 900, mtimeMs: briefAt } : { exists: true, bytes: 900, mtimeMs: 1 }),
     isBusy: () => isBusyNow(), sleep: (ms) => (yieldEachSleep ? new Promise((r) => setImmediate(() => { t += ms; r(); })) : Promise.resolve().then(() => { t += ms; })), busyWaitMs: waitMs,
   });
-  return { c, posts, resets, events, logs, busyAtReset, now: () => t, tick: (ms) => { t += ms; } };
+  return { c, posts, resets, events, logs, busyAtReset, now: () => t, tick: (ms) => { t += ms; }, setBrief: (at) => { briefAt = at; } };
 }
 const ends = (events) => events.filter((e) => e.type === 'compaction_end');
 
@@ -206,6 +206,31 @@ test('review r2: an agent-requested run postponed because another turn overtook 
   assert.strictEqual(h.resets.length, 0, 'never reset on the overtaken brief');
   assert.strictEqual(r2.ok, false);
   assert.match(r2.error, /the agent didn't write its brief during the compression turn/);
+});
+
+test('review r3: after an overtaken run, a brief the intervening turn wrote (newer, but before the retry) is not accepted on the agent request\'s retry', async () => {
+  let busyFrom = Infinity, busyTo = Infinity;
+  const h = make({ busy: (t) => t >= busyFrom && t < busyTo, writeIf: (i) => i === 0,
+    script: (i, m, t) => { if (i === 0) { busyFrom = t; busyTo = t + 45_000; } return null; } });
+  h.c.noteUsage('maestro', 100, 1000, 's7');
+  h.c.request('maestro', 'agent');
+  const r1 = await h.c.run('maestro', 'agent');
+  assert.strictEqual(r1.busy, true);
+  h.tick(10_000); h.setBrief(h.now());   // the intervening turn rewrites working-brief.md (B)
+  h.tick(35_000);                        // that turn ends; the retry writes nothing
+  const r2 = await h.c.run('maestro', 'agent');
+  assert.strictEqual(h.resets.length, 0, 'B was not written during the retry: no reset');
+  assert.match(String(r2.error), /didn't write its brief/);
+});
+
+test('review r3: without a brief check (briefStatus omitted) a run overtaken before its reset postpones and releases the agent', async () => {
+  let busyFrom = Infinity;
+  const c = createCompaction({ now: () => 5_000_000, log: () => {}, persist: false, getAgent: (n) => ({ name: n, compaction: { mode: 'on' } }),
+    post: async () => { busyFrom = 0; return 'ok'; }, resetSession: async () => { throw new Error('must not reset'); },
+    isBusy: () => busyFrom === 0, sleep: async () => {} });
+  const r = await c.run('x', 'threshold');
+  assert.deepStrictEqual([r.ok, r.busy], [false, true]);
+  assert.strictEqual(c.get('x').running, false);
 });
 
 test('review r2: after the overtaken brief, a newer brief written on the retry is accepted and the mark is cleared', async () => {
