@@ -202,8 +202,8 @@ function buildLinuxScript({ host, agentToken, mshText }) {
     '',
     'cd "$DIR"',
     'if [ -d /run/systemd/system ]; then',
+    '  trap \'cd / && rm -rf "$DIR"\' EXIT',   // also when the install fails (set -e)
     '  ./meshagent -fullinstall --copy-msh=1 </dev/null',
-    '  cd / && rm -rf "$DIR"',
     '  echo "The helper is installed as a service. This computer will connect to your Maestro in about a minute."',
     'else',
     '  echo "This computer has no systemd, so the helper runs in this terminal until you close it."',

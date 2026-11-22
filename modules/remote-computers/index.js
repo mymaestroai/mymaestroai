@@ -196,8 +196,9 @@ module.exports = {
             summary: 'The install command is ready. It works once.',
             lines: [
               'On the Linux computer, open a terminal and run this command within 15 minutes. It asks for your password once.',
-              `Command: f=$(mktemp) && curl -fsSL '${a.url}' -o "$f" && sudo sh "$f"; rm -f "$f"`,
-              'It sets up the remote-control agent: as a service where the computer uses systemd, otherwise in that terminal until you close it. If you are already root, or the computer has no sudo, leave out the word sudo.',
+              // in ( ): the folder is cleaned up and the command still ends with the download's or the install's own result
+              `Command: (f=$(mktemp) || exit 1; curl -fsSL '${a.url}' -o "$f" && sudo sh "$f"; rc=$?; rm -f "$f"; exit $rc)`,
+              'It sets up the remote-control agent: as a service where the computer uses systemd, otherwise in that terminal until you close it. If the computer has no sudo, open a root terminal first (for example with su -), then run the command without the word sudo.',
               'If the download fails, nothing is installed: make a new link.',
               last,
             ],
@@ -210,7 +211,7 @@ module.exports = {
             summary: 'The Mac install command is ready. It works once.',
             lines: [
               'On the Mac, open Terminal and run this command within 15 minutes. It asks for your password once.',
-              `Command: d=$(mktemp -d) && curl -fsSL '${a.url}' -o "$d/agent.zip" && unzip -q "$d/agent.zip" -d "$d" && sudo installer -pkg "$d/MeshAgent.pkg" -target /; rm -rf "$d"`,
+              `Command: (d=$(mktemp -d) || exit 1; curl -fsSL '${a.url}' -o "$d/agent.zip" && unzip -q "$d/agent.zip" -d "$d" && sudo installer -pkg "$d/MeshAgent.pkg" -target /; rc=$?; rm -rf "$d"; exit $rc)`,
               'It downloads the remote-control agent for this link only and installs it. If the download fails, nothing is installed: make a new link.',
               'For agents to see the screen: System Settings, Privacy & Security, Screen Recording: switch on meshagent. New on a Mac: not yet proven on a real Mac.',
               last,

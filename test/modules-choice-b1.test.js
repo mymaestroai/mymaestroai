@@ -143,8 +143,8 @@ test('installer check, Linux: the command line, no QR', async () => {
   assert.deepStrictEqual(r.lines, [
     'On the Linux computer, open a terminal and run this command within 15 minutes. It asks for your password once.',
     // review r1: the script is saved first and run only when the download worked (a spent link must not give sh empty input)
-    `Command: f=$(mktemp) && curl -fsSL '${URL_}' -o "$f" && sudo sh "$f"; rm -f "$f"`,
-    'It sets up the remote-control agent: as a service where the computer uses systemd, otherwise in that terminal until you close it. If you are already root, or the computer has no sudo, leave out the word sudo.',
+    `Command: (f=$(mktemp) || exit 1; curl -fsSL '${URL_}' -o "$f" && sudo sh "$f"; rc=$?; rm -f "$f"; exit $rc)`,
+    'It sets up the remote-control agent: as a service where the computer uses systemd, otherwise in that terminal until you close it. If the computer has no sudo, open a root terminal first (for example with su -), then run the command without the word sudo.',
     'If the download fails, nothing is installed: make a new link.',
     'If the link runs out, make a new one.',
   ]);
@@ -157,7 +157,7 @@ test('installer check, Mac: one Terminal command that downloads this link\'s zip
   assert.strictEqual(r.ok, true); assert.strictEqual(r.once, true); assert.strictEqual(r.qr, undefined, 'a command is not scanned');
   assert.strictEqual(r.lines[0], 'On the Mac, open Terminal and run this command within 15 minutes. It asks for your password once.');
   // review r1: never a fixed name in Downloads (an older download there could be installed instead)
-  assert.strictEqual(r.lines[1], `Command: d=$(mktemp -d) && curl -fsSL '${URL_}' -o "$d/agent.zip" && unzip -q "$d/agent.zip" -d "$d" && sudo installer -pkg "$d/MeshAgent.pkg" -target /; rm -rf "$d"`);
+  assert.strictEqual(r.lines[1], `Command: (d=$(mktemp -d) || exit 1; curl -fsSL '${URL_}' -o "$d/agent.zip" && unzip -q "$d/agent.zip" -d "$d" && sudo installer -pkg "$d/MeshAgent.pkg" -target /; rc=$?; rm -rf "$d"; exit $rc)`);
   assert.ok(!r.lines.join('\n').includes('Downloads'));
   assert.match(r.lines[3], /Screen Recording: switch on meshagent\. New on a Mac: not yet proven on a real Mac\.$/);
   assert.strictEqual(r.lines[4], 'If the link runs out, make a new one.');
@@ -299,4 +299,44 @@ test('page: a "Command: " line is shown in a code box with a Copy button that co
   const b2 = { textContent: 'Copy the command' };
   await t.copyAdminCmd(b2);
   assert.strictEqual(copied[1], 'sudo admin');
+});
+
+// Review r2 of items 3-5: the commands are run for real under sh, with stand-in curl, sudo and unzip on PATH.
+// A failed download and a failed install must end with a failure status, nothing may run after a failed download, and the temporary place is removed.
+test('the Linux and Mac commands end with the download\'s or the install\'s own status, run nothing after a failed download, and clean up', async () => {
+  const { spawnSync } = require('child_process');
+  const os = require('os');
+  const box = fs.mkdtempSync(path.join(os.tmpdir(), 'cmd-run-'));
+  const bin = path.join(box, 'bin'); fs.mkdirSync(bin);
+  const log = path.join(box, 'ran.log');
+  const stub = (name, body) => { fs.writeFileSync(path.join(bin, name), `#!/bin/sh\necho "${name} $*" >> "${log}"\n${body}\n`); fs.chmodSync(path.join(bin, name), 0o755); };
+  const cmdOf = async (choice, file) => {
+    const r = await rcMod.checks.installer(ctxFor(choice, JSON.stringify({ url: URL_, os: choice, file })));
+    return r.lines.find((l) => l.startsWith('Command: ')).slice('Command: '.length);
+  };
+  const run = (cmd) => spawnSync('sh', ['-c', cmd], { env: { PATH: `${bin}:/usr/bin:/bin`, TMPDIR: box }, encoding: 'utf8' });
+  const leftovers = () => fs.readdirSync(box).filter((n) => n !== 'bin' && n !== 'ran.log');
+  try {
+    for (const [choice, file] of [['linux', 'install-mymaestro-agent.sh'], ['mac', 'MyMaestro-RemoteAgent-Mac.zip']]) {
+      const cmd = await cmdOf(choice, file);
+      // a spent link: curl -f fails with 22
+      fs.writeFileSync(log, '');
+      stub('curl', 'exit 22'); stub('sudo', 'exit 0'); stub('unzip', 'exit 0');
+      let r = run(cmd);
+      assert.strictEqual(r.status, 22, `${choice}: a failed download is a failure`);
+      assert.ok(!/sudo/.test(fs.readFileSync(log, 'utf8')), `${choice}: nothing runs after a failed download`);
+      assert.deepStrictEqual(leftovers(), [], `${choice}: nothing left behind`);
+      // the download works, the install fails
+      fs.writeFileSync(log, '');
+      stub('curl', 'while [ $# -gt 0 ]; do if [ "$1" = "-o" ]; then shift; echo x > "$1"; fi; shift; done; exit 0'); stub('sudo', 'exit 17');
+      r = run(cmd);
+      assert.strictEqual(r.status, 17, `${choice}: a failed install is a failure`);
+      assert.deepStrictEqual(leftovers(), [], `${choice}: nothing left behind`);
+      // everything works
+      stub('sudo', 'exit 0');
+      r = run(cmd);
+      assert.strictEqual(r.status, 0, `${choice}: success`);
+      assert.deepStrictEqual(leftovers(), [], `${choice}: nothing left behind`);
+    }
+  } finally { fs.rmSync(box, { recursive: true, force: true }); }
 });
