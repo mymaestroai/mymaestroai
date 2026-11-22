@@ -1,6 +1,6 @@
 {
   "id": "remote-computers", "name": "Remote computers", "icon": "💻", "category": "Computers",
-  "summary": "Lets your agents see and, when you allow it, control other computers over your private Tailscale network, through a MeshCentral server that runs inside this connector. Each agent starts at Look (pictures and facts only); Act and Drive ask for your approval each session unless you turn asking off for that agent.",
+  "summary": "Lets your agents see your other computers and, when you allow it, control them, over your private network (Tailscale). Each agent starts at Look: pictures and facts only. Act and Drive ask on your phone each session unless you turn asking off for that agent.",
   "purpose": "see and control your other computers: screen, commands, keyboard and mouse",
   "platforms": ["linux", "darwin"],
   "risk": "write",

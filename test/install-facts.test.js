@@ -125,6 +125,37 @@ test('the answer is cached for 30 seconds, then asked again', async () => {
   assert.deepStrictEqual(p, q);
 });
 
+test('get({ fresh: true }) ignores the kept answer and looks again, and what it finds is kept for the next ordinary call', async () => {
+  let t = 1000, ips = ['100.101.102.103'];
+  const { facts, calls } = make(() => ok(STATUS({ Self: { DNSName: 'hub.example.ts.net.', TailscaleIPs: ips } })), { now: () => t });
+  assert.deepStrictEqual((await facts.get()).tailscale.ips, ['100.101.102.103']);
+  ips = ['100.101.102.150'];
+  assert.deepStrictEqual((await facts.get()).tailscale.ips, ['100.101.102.103'], 'an ordinary call still uses the kept answer');
+  assert.strictEqual(calls.length, 1);
+  assert.deepStrictEqual((await facts.get({ fresh: true })).tailscale.ips, ['100.101.102.150'], 'the page asked again');
+  assert.strictEqual(calls.length, 2);
+  assert.deepStrictEqual((await facts.get()).tailscale.ips, ['100.101.102.150'], 'the fresh answer replaced the kept one');
+  assert.strictEqual(calls.length, 2);
+});
+
+test('an answer without Tailscale up is not kept: fixing it shows on the very next ordinary call; a look that fails is not kept either', async () => {
+  let t = 1000, down = true;
+  const { facts, calls } = make(() => (down ? missing() : ok(STATUS())), { now: () => t });
+  assert.strictEqual((await facts.get()).tailscale.state, 'not-installed');
+  down = false;
+  assert.strictEqual((await facts.get()).tailscale.state, 'running', 'no 30-second wait for the old failure');
+  assert.strictEqual(calls.length > 1, true);
+  const n = calls.length;
+  await facts.get();
+  assert.strictEqual(calls.length, n, 'a good answer is kept');
+  // the look itself failing (the CLI throws something unexpected) is not kept
+  let fail = true;
+  const failing = createInstallFacts({ platform: 'linux', run: async () => { if (fail) throw new Error('boom'); return ok(STATUS()); }, fsx: fsOk, env: {}, hostname: () => 'h', now: () => t });
+  assert.notStrictEqual((await failing.get()).tailscale.state, 'running');
+  fail = false;
+  assert.strictEqual((await failing.get()).tailscale.state, 'running');
+});
+
 test('a caller changing the returned facts cannot change the cached ones', async () => {
   const { facts } = make(() => ok(STATUS()));
   const a = await facts.get(); a.tailscale.ips.push('203.0.113.9');

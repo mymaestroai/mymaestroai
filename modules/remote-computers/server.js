@@ -21,7 +21,7 @@ const APPROVE_HUB_TIMEOUT_MS = APPROVE_MINUTES * 60000 + 20000;
 const MAX_CMD_CHARS = 7000;                           // cmd.exe takes about 8191 characters in a line
 const WINDOWS_ONLY = 'Screenshots and mouse/keyboard work on Windows computers for now.';
 const NOT_YET = 'This tool arrives in the next part of the build.';
-const REINSTALL = 'Reinstall needed: open Data connectors and run Install again';
+const REINSTALL = 'Reinstall needed. Run Set it up again.';
 const WAITING = 'Waiting for setup';
 const LINUX_ONLY = 'Remote computers can\'t run on this system yet. It runs on Linux and Mac.';
 const MAX_OUTPUT_BYTES = 64 * 1024;
@@ -214,7 +214,7 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
   const home = env.CONNECTOR_DATA_HOME || '';
   const meshcentralJs = runtimeDir ? path.join(runtimeDir, 'node_modules', 'meshcentral', 'meshcentral.js') : '';
   const platform = deps.platform || process.platform;
-  const supported = platform === 'linux' || platform === 'darwin';   // the private picture copies use /proc/self/fd on Linux and a path-based way on a Mac
+  const supported = platform === 'linux' || platform === 'darwin';   // the private picture copies exist on Linux only; on a Mac they are off
   const runtimeOk = supported && !!runtimeDir && fs.existsSync(meshcentralJs);
 
   // A start that failed before any process was made is retried by the supervisor; when it works, the rest of the start sequence follows.
@@ -345,7 +345,7 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
   const now = deps.now || Date.now;
   const known = new Map();   // short id -> { id, nodeid, name }, from the last list (the toast needs the full node id)
   const busy = new Map();    // short id -> when a command may be finished (Infinity while one runs)
-  const shots = createShotStore({ home, now, log, portable: process.platform !== 'linux' });   // a private copy of each picture, for troubleshooting only
+  const shots = createShotStore({ home, now, log, platform });   // a private copy of each picture, for troubleshooting only
   const shotsOf = new Map(); // agent -> the last 20 screenshots it took: { id, agent, computerId, width, height, sx, sy, screenWidth, screenHeight, takenAt }
   const newShotId = () => { let s = ''; for (let i = 0; i < 8; i++) s += SHOT_ALPHABET[crypto.randomInt(SHOT_ALPHABET.length)]; return s; };
   function rememberShot(agent, entry) {

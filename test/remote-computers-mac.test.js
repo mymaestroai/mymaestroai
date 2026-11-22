@@ -1,5 +1,5 @@
 'use strict';
-// Remote computers on a Mac: the platform gate, the private picture store without /proc (path-based, no links followed), and the
+// Remote computers on a Mac: the platform gate, the private picture copies (off on a Mac, the /proc way on Linux) and the
 // leftover-process check with `ps`. These run on any system: the Mac way is forced with options and stand-ins.
 const test = require('node:test');
 const assert = require('node:assert');
@@ -55,32 +55,35 @@ test('gate: Windows and other systems stay refused', () => {
   }
 });
 
-// ── the picture store, portable way ──────────────────────────────────────────────────────────────
-const store = (home, over = {}) => createShotStore({ home, portable: true, now: () => Date.UTC(2026, 10, 22, 12, 30, 15), ...over });
-// A Mac has no /proc/self/fd: while this runs, every file call on such a path fails, as it would there.
-function withoutProc(fn) {
-  const names = ['openSync', 'mkdirSync', 'opendirSync', 'lstatSync', 'statSync', 'unlinkSync', 'rmdirSync', 'readdirSync', 'realpathSync'];
-  const saved = names.map((n) => fs[n]);
-  names.forEach((n, i) => { fs[n] = function guarded(p, ...rest) { if (String(p).startsWith('/proc/self/fd')) throw Object.assign(new Error(`ENOENT: ${p}`), { code: 'ENOENT' }); return saved[i].call(this, p, ...rest); }; });
-  try { return fn(); } finally { names.forEach((n, i) => { fs[n] = saved[i]; }); }
-}
-test('shots (portable): no call goes to /proc/self/fd, so it works where there is no /proc', () => {
-  const home = tmp();
-  let calls = 0;
-  const r = withoutProc(() => { for (let i = 0; i < 3; i++) calls++, store(home).save('pc1', JPEG); return store(home).save('pc1', JPEG); });
-  assert.strictEqual(calls, 3);
-  assert.ok(fs.existsSync(r.path));
-  withoutProc(() => { assert.strictEqual(store(home).prune('pc1'), 0); });
-  const tiny = tmp();
-  let t = Date.UTC(2026, 10, 22, 8, 0, 0);
-  withoutProc(() => { const s = createShotStore({ home: tiny, portable: true, keep: 2, now: () => (t += 1000) }); for (let i = 0; i < 5; i++) s.save('pc1', JPEG); });
-  const comp = path.join(tiny, 'screens', 'pc1');
-  assert.strictEqual(fs.readdirSync(comp).flatMap((d) => fs.readdirSync(path.join(comp, d))).length, 2);
+// ── the private picture copies: off on a Mac, the /proc way on Linux ────────────────────────────
+const walk = (d) => (fs.existsSync(d) ? fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(path.join(d, e.name)) : [path.join(d, e.name)])) : []);
+const linuxStore = (home, over = {}) => createShotStore({ home, platform: 'linux', now: () => Date.UTC(2026, 10, 22, 12, 30, 15), ...over });
+
+test('shots on a Mac (darwin and any other system): save and prune do nothing, write nothing, and say so once in the log', () => {
+  for (const platform of ['darwin', 'win32', 'freebsd']) {
+    const home = tmp(), said = [];
+    const s = createShotStore({ home, platform, log: (...a) => said.push(a.join(' ')) });
+    assert.strictEqual(s.save('pc1', JPEG), null, platform);
+    assert.strictEqual(s.save('pc2', JPEG), null, platform);
+    assert.strictEqual(s.prune('pc1'), 0, platform);
+    assert.deepStrictEqual(fs.readdirSync(home), [], `${platform}: nothing was written`);
+    assert.strictEqual(said.length, 1, `${platform}: said once: ${said.join(' | ')}`);
+    assert.match(said[0], /off on this system/);
+  }
 });
 
-test('shots (portable): a picture is saved privately under screens/<computer>/<day>/, new file 0600, folders 0700', () => {
+test('shots on a Mac: no path-based way is left (nothing is made even without a data folder, and a link is not even looked at)', () => {
+  const real = tmp(), parent = tmp(), link = path.join(parent, 'home');
+  fs.symlinkSync(real, link);
+  const s = createShotStore({ home: link, platform: 'darwin' });
+  assert.strictEqual(s.save('pc1', JPEG), null);
+  assert.deepStrictEqual(fs.readdirSync(real), [], 'nothing was written through the link');
+  assert.strictEqual(createShotStore({ home: '', platform: 'darwin' }).save('pc1', JPEG), null);
+});
+
+test('shots on Linux: a picture is saved privately under screens/<computer>/<day>/, new file 0600, folders 0700', () => {
   const home = tmp();
-  const r = store(home).save('Abcdefghijkl0123', JPEG);
+  const r = linuxStore(home).save('Abcdefghijkl0123', JPEG);
   assert.ok(r.path.startsWith(path.join(home, 'screens', 'Abcdefghijkl') + path.sep));
   assert.deepStrictEqual(fs.readFileSync(r.path), JPEG);
   assert.strictEqual(mode(r.path), 0o600);
@@ -88,25 +91,21 @@ test('shots (portable): a picture is saved privately under screens/<computer>/<d
   assert.match(path.basename(r.path), /^\d{6}-[0-9a-f]{4}\.jpg$/);
 });
 
-test('shots (portable): it makes the same tree as the /proc way', () => {
-  const a = tmp(), b = tmp();
-  const ra = store(a).save('pc1', JPEG), rb = createShotStore({ home: b, portable: false, now: () => Date.UTC(2026, 10, 22, 12, 30, 15) }).save('pc1', JPEG);
-  const rel = (home, p) => path.relative(home, p).split(path.sep).slice(0, 3).join('/');
-  assert.strictEqual(rel(a, ra.path), rel(b, rb.path));
-});
-
-test('shots (portable): a link in place of the data folder is refused', () => {
+test('shots on Linux: the default follows the system, and a link in place of the data folder is refused', () => {
+  if (process.platform !== 'linux') return;
+  const home = tmp();
+  assert.ok(fs.existsSync(createShotStore({ home, now: () => Date.UTC(2026, 10, 22, 1, 2, 3) }).save('pc1', JPEG).path));
   const real = tmp(), parent = tmp(), link = path.join(parent, 'home');
   fs.symlinkSync(real, link);
-  assert.throws(() => store(link).save('pc1', JPEG), (e) => e.code === 'ENOTPLAIN');
+  assert.throws(() => linuxStore(link).save('pc1', JPEG), (e) => e.code === 'ENOTPLAIN');
   assert.deepStrictEqual(fs.readdirSync(real), [], 'nothing was written through the link');
 });
 
-test('shots (portable): a link as screens/, as the computer folder or as the day folder is refused and nothing is written outside', () => {
+test('shots on Linux: a link as screens/, as the computer folder or as the day folder is refused and nothing is written outside', () => {
   const outside = tmp();
   for (const depth of ['screens', 'comp', 'day']) {
     const home = tmp();
-    const s = store(home);
+    const s = linuxStore(home);
     if (depth === 'screens') fs.symlinkSync(outside, path.join(home, 'screens'));
     else {
       s.save('pc1', JPEG);   // makes screens/pc1/<day>
@@ -119,34 +118,18 @@ test('shots (portable): a link as screens/, as the computer folder or as the day
   }
 });
 
-test('shots (portable): a file already there is never written over, and a link as the file is not followed', () => {
-  const home = tmp(), outside = path.join(tmp(), 'target');
-  fs.writeFileSync(outside, 'keep');
-  const crypto = require('node:crypto');
-  const orig = crypto.randomBytes;
-  crypto.randomBytes = () => Buffer.from([0xab, 0xcd]);   // a fixed name, so the second save meets the first
-  try {
-    const first = store(home).save('pc1', JPEG);
-    assert.throws(() => store(home).save('pc1', JPEG), (e) => e.code === 'EEXIST');
-    fs.unlinkSync(first.path);
-    fs.symlinkSync(outside, first.path);
-    assert.throws(() => store(home).save('pc1', JPEG));
-    assert.strictEqual(fs.readFileSync(outside, 'utf8'), 'keep');
-  } finally { crypto.randomBytes = orig; }
-});
-
-test('shots (portable): the computer folder name is cleaned, and a name that cleans to nothing is refused', () => {
+test('shots on Linux: the computer folder name is cleaned, and a name that cleans to nothing is refused', () => {
   const home = tmp();
-  const r = store(home).save('../../etc/x', JPEG);
+  const r = linuxStore(home).save('../../etc/x', JPEG);
   assert.ok(r.path.startsWith(path.join(home, 'screens') + path.sep));
   assert.strictEqual(path.basename(path.dirname(path.dirname(r.path))), '______etc_x');
-  assert.throws(() => store(home).save('', JPEG), (e) => e.code === 'ENOTPLAIN');
+  assert.throws(() => linuxStore(home).save('', JPEG), (e) => e.code === 'ENOTPLAIN');
 });
 
-test('shots (portable): each computer keeps its newest pictures only, and a link among the pictures is left alone', () => {
+test('shots on Linux: each computer keeps its newest pictures only, and a link among the pictures is left alone', () => {
   const home = tmp();
   let t = Date.UTC(2026, 10, 22, 8, 0, 0);
-  const s = createShotStore({ home, portable: true, keep: 5, now: () => (t += 1000) });
+  const s = createShotStore({ home, platform: 'linux', keep: 5, now: () => (t += 1000) });
   for (let i = 0; i < 9; i++) s.save('pc1', JPEG);
   const comp = path.join(home, 'screens', 'pc1');
   const files = () => fs.readdirSync(comp).flatMap((d) => fs.readdirSync(path.join(comp, d)));
@@ -158,34 +141,6 @@ test('shots (portable): each computer keeps its newest pictures only, and a link
   s.save('pc1', JPEG);
   assert.strictEqual(fs.readFileSync(outside, 'utf8'), 'x', 'prune never follows a link');
   assert.ok(KEEP === 200);
-});
-
-test('shots (portable): a folder swapped for a link between the check and the use is refused (inode check)', () => {
-  const home = tmp(), outside = tmp();
-  const s = store(home);
-  s.save('pc1', JPEG);
-  const comp = path.join(home, 'screens', 'pc1');
-  const realMkdir = fs.mkdirSync;
-  let swapped = false;
-  fs.mkdirSync = function patched(p, ...rest) {   // the first folder made inside the computer folder triggers the swap of the computer folder
-    if (!swapped && String(p).startsWith(comp + path.sep)) { swapped = true; fs.renameSync(comp, `${comp}.old`); fs.symlinkSync(outside, comp); }
-    return realMkdir.call(this, p, ...rest);
-  };
-  try {
-    const day = '2026-11-23';
-    const when = Date.UTC(2026, 10, 23, 12, 0, 0);
-    assert.throws(() => createShotStore({ home, portable: true, now: () => when }).save('pc1', JPEG), (e) => e.code === 'ENOTPLAIN' || e.code === 'ENOENT');
-    assert.ok(day);
-  } finally { fs.mkdirSync = realMkdir; }
-  // The one gap a path-based way cannot close is the instant between its check and mkdir (an empty folder may be made); no picture is ever written.
-  const walk = (d) => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(path.join(d, e.name)) : [e.name]));
-  assert.deepStrictEqual(walk(outside), [], 'no picture was written through the swapped link');
-});
-
-test('shots: the default way follows the system (portable off Linux)', () => {
-  const home = tmp();
-  const r = createShotStore({ home, now: () => Date.UTC(2026, 10, 22, 1, 2, 3) }).save('pc1', JPEG);
-  assert.ok(fs.existsSync(r.path));
 });
 
 // ── the leftover-process check on a Mac ──────────────────────────────────────────────────────────

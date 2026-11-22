@@ -5,6 +5,7 @@ const LINUX_ONLY = 'Remote computers can\'t run on this system yet. It runs on L
 const MIN_DISK_MB = 300;
 const DEFAULT_PORTS = [9971, 9972];
 const PORT_SPAN = 50;
+const SERVICE_NEEDS_ADMIN = 'Starting the server as its own locked-down service needs an administrator password once.';
 const MODE_SERVICE = 'The server is running as its own locked-down service.';
 const MODE_HUB = 'The server is running under your Maestro\'s own account.';
 const WILL_SERVICE = 'It will run as its own locked-down service.';
@@ -19,7 +20,7 @@ function prereqs(ctx) {
   const facts = (ctx && ctx.facts) || {};
   const os = String(facts.os || (ctx && ctx.platform) || process.platform);
   const ts = facts.tailscale || {};
-  const stop = (blocker, summary, lines = []) => ({ ok: false, summary, lines: [summary, ...lines], blocker });
+  const stop = (blocker, summary, lines = []) => ({ ok: false, summary, lines, blocker });
   if (os !== 'linux' && os !== 'darwin') {
     const name = NAMES[os] || os;
     return stop('unsupported', `Remote computers can't run on ${name} yet. It runs on Linux and Mac.`);
@@ -28,11 +29,14 @@ function prereqs(ctx) {
     return stop('tailscale-missing', 'Tailscale isn\'t installed on the computer your Maestro runs on.', ['Install it from https://tailscale.com/download and sign in.', 'Then come back to this page.']);
   }
   const ips = ipsOf(facts);
+  if (ts.state === 'not-running' || ts.state === 'unknown') {
+    return stop('tailscale-not-running', 'Tailscale is installed on the computer your Maestro runs on, but it isn\'t running. Start Tailscale on it, then come back.');
+  }
   if (ts.state !== 'running' || !ips.length) {
     return stop('tailscale-off', 'Tailscale is installed but not signed in on the computer your Maestro runs on.', ['Open Tailscale on it and sign in.', 'Then come back to this page.']);
   }
   if (ts.userspace === true) {
-    return stop('tailscale-userspace', 'Tailscale on this computer runs in a mode other programs can\'t listen on (userspace networking).', ['Install the Tailscale app instead of the command-line-only version.', 'Then come back to this page.']);
+    return stop('tailscale-userspace', 'Tailscale on the computer your Maestro runs on is the command-line-only kind, which other programs can\'t use. Install the Tailscale app from tailscale.com/download instead.');
   }
   const free = facts.free_disk_mb;
   if (typeof free === 'number' && Number.isFinite(free) && free < MIN_DISK_MB) {
@@ -90,10 +94,13 @@ async function prepare(ctx) {
   out.lines.push(`Found this computer on your private network: ${hostShown ? `${hostShown} (${ip})` : ip}.`);
 
   // the ports
-  const cSaved = !empty(choices.control_port) ? false : isSaved('control_port', DEFAULT_PORTS[0]);
-  const aSaved = !empty(choices.agent_port) ? false : isSaved('agent_port', DEFAULT_PORTS[1]);
-  const cVal = cSaved ? Number(settings.control_port) : !empty(choices.control_port) ? Number(choices.control_port) : DEFAULT_PORTS[0];
-  const aVal = aSaved ? Number(settings.agent_port) : !empty(choices.agent_port) ? Number(choices.agent_port) : DEFAULT_PORTS[1];
+  // A port named in the choices counts only when it is a whole number from 1 to 65535; anything else is treated as not given.
+  const portChoice = (v) => { if (typeof v === 'boolean' || empty(v)) return null; const n = Number(v); return Number.isInteger(n) && n > 0 && n < 65536 ? n : null; };
+  const cChoice = portChoice(choices.control_port), aChoice = portChoice(choices.agent_port);
+  const cSaved = cChoice !== null ? false : isSaved('control_port', DEFAULT_PORTS[0]);
+  const aSaved = aChoice !== null ? false : isSaved('agent_port', DEFAULT_PORTS[1]);
+  const cVal = cSaved ? Number(settings.control_port) : cChoice !== null ? cChoice : DEFAULT_PORTS[0];
+  const aVal = aSaved ? Number(settings.agent_port) : aChoice !== null ? aChoice : DEFAULT_PORTS[1];
   if (cSaved && aSaved) {
     out.lines.push(`Using the saved ports ${cVal} and ${aVal}.`);
   } else {
@@ -140,14 +147,16 @@ module.exports = {
         if (!h || typeof h !== 'object') return { ok: false, summary: String(text || 'The server sent a reply that could not be read.').slice(0, 300) };
         const warnings = Array.isArray(h.warnings) ? h.warnings.filter((w) => typeof w === 'string').slice(0, 5) : [];
         const mode = h.mode === 'service' || h.mode === 'hub' ? { mode: h.mode } : {};
-        if (h.waiting) return { ok: false, summary: String(h.waiting).slice(0, 300), warnings, ...mode };
-        if (h.reason && h.message) {   // service mode: the service is not installed, or not answering; the message already holds the command
+        // retry: true = a state that resolves by itself (starting, first start downloading, the device group not ready); the setup looks again.
+        // "Reinstall needed" and "Waiting for setup" need a person, so they are not retried.
+        if (h.waiting) return { ok: false, ...(/^(Reinstall needed|Waiting for setup)/.test(String(h.waiting)) ? {} : { retry: true }), summary: String(h.waiting).slice(0, 300), warnings, ...mode };
+        if (h.reason && h.message) {   // service mode: the service is not installed, or not answering; it needs a person, so no retry
           const command = typeof h.command === 'string' ? h.command.slice(0, 500) : '';
-          return { ok: false, summary: String(h.message).slice(0, 800), reason: String(h.reason).slice(0, 40), ...(command ? { command, lines: [command] } : {}), warnings, ...mode };
+          return { ok: false, summary: SERVICE_NEEDS_ADMIN, reason: String(h.reason).slice(0, 40), ...(command ? { command } : {}), warnings, ...mode };
         }
-        if (!h.running) return { ok: false, summary: h.lastError ? `The server is not running (${String(h.lastError).slice(0, 200)}).` : 'The server is not running.', warnings, ...mode };
-        if (!h.group) return { ok: false, summary: 'The server runs, but its device group is not ready yet.', warnings, ...mode };
-        if (h.ok !== true) return { ok: false, summary: String(h.lastError || warnings[0] || 'The control connection is not ready.').slice(0, 300), warnings, ...mode };
+        if (!h.running) return { ok: false, ...(h.lastError ? {} : { retry: true }), summary: h.lastError ? `The server is not running (${String(h.lastError).slice(0, 200)}).` : 'The server is not running.', warnings, ...mode };
+        if (!h.group) return { ok: false, retry: true, summary: 'The server runs, but its device group is not ready yet.', warnings, ...mode };
+        if (h.ok !== true) return { ok: false, ...(h.lastError ? {} : { retry: true }), summary: String(h.lastError || warnings[0] || 'The control connection is not ready.').slice(0, 300), warnings, ...mode };
         const n = Number(h.computers) || 0, on = Number(h.online) || 0;
         const how = h.mode === 'service' ? MODE_SERVICE : h.mode === 'hub' ? MODE_HUB : 'The server is running.';
         return { ok: true, summary: `${how} ${n ? `${n} computer${n === 1 ? '' : 's'} registered, ${on} online.` : 'No computer has been added yet.'}`, warnings, ...mode };

@@ -1178,7 +1178,7 @@ test('server.js reports "Reinstall needed" and starts nothing when the runtime i
     assert.deepStrictEqual({ ok: h.ok, running: h.running, version: h.version, group: h.group, computers: h.computers }, { ok: false, running: false, version: '1.3.1', group: null, computers: null });
     assert.deepStrictEqual(h.warnings, []);
     assert.strictEqual(h.waiting, REINSTALL);
-    assert.match(REINSTALL, /Reinstall needed: open Data connectors and run Install again/);
+    assert.match(REINSTALL, /Reinstall needed\. Run Set it up again\./);
     const started = JSON.parse((await rpc.tool('start')).content[0].text);
     assert.strictEqual(started.waiting, REINSTALL);
     assert.deepStrictEqual(fs.readdirSync(home), [], 'nothing was created');

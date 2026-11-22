@@ -1,13 +1,10 @@
 'use strict';
 // A private copy of each screenshot for troubleshooting: <home>/screens/<computer>/<yyyy-mm-dd>/<hhmmss>-<4 hex>.jpg. Agents get the picture inline and
-// never this path. Folders are made one level at a time (0700) and opened without following links (the same care as the ring module's store),
-// the file is made new (0600, never over something), and each computer keeps its newest 200 pictures.
+// never this path (they never depended on these copies). Folders are made one level at a time (0700) and opened without following links (the same
+// care as the ring module's store), the file is made new (0600, never over something), and each computer keeps its newest 200 pictures.
 //
-// Two ways to work "relative to an open folder, never through a link":
-//  - Linux: through /proc/self/fd/<fd>/<name> (the open folder itself decides where the name goes).
-//  - Mac and anything else (portable): by path, with the same guarantees checked at every step: each part is lstat'ed (no link, a folder),
-//    opened with O_NOFOLLOW where the system has it, the open folder must be the very folder lstat saw (device and inode), the real path of
-//    the part must be inside the store root (no link anywhere above it redirects it), and the check is made again just before each use.
+// It works relative to an open folder through /proc/self/fd/<fd>/<name>, so the open folder itself decides where a name goes and no link can redirect it.
+// That exists only on Linux. On any other system (a Mac) the private copies are off: save and prune do nothing, and the log says so once.
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
@@ -25,30 +22,17 @@ const pad = (n, w = 2) => String(n).padStart(w, '0');
 // A folder name for a computer: the first 12 characters of its short id, with anything that is not a plain name character replaced.
 const folderOf = (id) => String(id || '').replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 12);
 
-// portable: true uses the path-based way (the default off Linux; tests force it on Linux).
-function createShotStore({ home, keep = KEEP, now = Date.now, log = () => {}, portable = process.platform !== 'linux' } = {}) {
+function createShotStore({ home, keep = KEEP, now = Date.now, log = () => {}, platform = process.platform } = {}) {
   const notPlain = () => Object.assign(new Error('the folder for pictures is not a plain folder'), { code: 'ENOTPLAIN' });
-  const open = new Map();   // portable only: an open folder's descriptor -> its path
-  let realHome = null, plainHome = null;
 
-  const inside = (fd) => {
-    const p = open.get(fd);
-    if (!p) throw notPlain();
-    return p;
-  };
-  // portable: the open folder is still the folder at its path, and no link above it leads elsewhere.
-  function verify(fd) {
-    const p = inside(fd);
-    const before = fs.lstatSync(p);
-    if (before.isSymbolicLink() || !before.isDirectory()) throw notPlain();
-    const st = fs.fstatSync(fd);
-    if (st.dev !== before.dev || st.ino !== before.ino) throw notPlain();
-    const expected = path.join(realHome, path.relative(plainHome, p));
-    if (fs.realpathSync(p) !== expected) throw notPlain();
-    return p;
+  if (platform !== 'linux') {
+    let said = false;
+    const off = () => { if (!said) { said = true; log('private copies of pictures are off on this system (they need Linux)'); } };
+    return { save() { off(); return null; }, prune() { off(); return 0; }, enabled: false };
   }
-  const at = (fd, name) => (portable ? path.join(verify(fd), name) : `/proc/self/fd/${fd}/${name}`);
-  const close = (fd) => { try { fs.closeSync(fd); } finally { open.delete(fd); } };
+
+  const at = (fd, name) => `/proc/self/fd/${fd}/${name}`;
+  const close = (fd) => { fs.closeSync(fd); };
 
   // The data folder is opened without following a link, then <home>/screens is made (0700) and opened the same way.
   function openRoot() {
@@ -60,9 +44,7 @@ function createShotStore({ home, keep = KEEP, now = Date.now, log = () => {}, po
     try {
       const st = fs.fstatSync(fd);
       if (!st.isDirectory() || st.dev !== before.dev || st.ino !== before.ino) throw notPlain();
-      if (portable) { plainHome = dir; realHome = fs.realpathSync(dir); open.set(fd, dir); }
-      const root = step(fd, SCREENS, true);
-      return root;
+      return step(fd, SCREENS, true);
     } finally { close(fd); }
   }
   // Opens <from>/part, made when missing (0700), refusing a link.
@@ -75,16 +57,12 @@ function createShotStore({ home, keep = KEEP, now = Date.now, log = () => {}, po
       if (e.code === 'ELOOP' || e.code === 'ENOTDIR') throw notPlain();
       throw e;
     }
-    if (portable) {
-      open.set(fd, path.join(inside(from), part));
-      try { verify(fd); } catch (e) { close(fd); throw e; }   // a link in its place, or a folder swapped after lstat: refused
-    }
     if (made) { try { fs.fchmodSync(fd, 0o700); } catch { /* the mode asked for at mkdir stays */ } }
     return fd;
   }
   function names(fd) {
     const out = [];
-    const d = fs.opendirSync(portable ? verify(fd) : `/proc/self/fd/${fd}`, { bufferSize: 64 });
+    const d = fs.opendirSync(`/proc/self/fd/${fd}`, { bufferSize: 64 });
     try { for (let e; (e = d.readSync()) !== null;) { if (out.length >= MAX_LIST) break; out.push(e.name); } } finally { d.closeSync(); }
     return out;
   }
@@ -133,7 +111,7 @@ function createShotStore({ home, keep = KEEP, now = Date.now, log = () => {}, po
     return { path: path.join(path.resolve(home), SCREENS, comp, day, file), takenAt: t.toISOString() };
   }
 
-  return { save, prune: (computerId) => { const root = openRoot(); let c = -1; try { c = step(root, folderOf(computerId), false); return prune(c); } finally { if (c >= 0) close(c); close(root); } } };
+  return { save, prune: (computerId) => { const root = openRoot(); let c = -1; try { c = step(root, folderOf(computerId), false); return prune(c); } finally { if (c >= 0) close(c); close(root); } }, enabled: true };
 }
 
 module.exports = { createShotStore, folderOf, KEEP, SCREENS };

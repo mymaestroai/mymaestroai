@@ -53,8 +53,8 @@ test('prereqs: Tailscale missing says how to get it and to come back', () => {
   assert.ok(r.lines.some((l) => /come back to this page/.test(l)));
 });
 
-test('prereqs: Tailscale signed out, not running, unknown or without an address is "not signed in"', () => {
-  for (const tailscale of [{ state: 'logged-out', ips: [] }, { state: 'not-running', ips: [] }, { state: 'unknown', ips: [] }, { state: 'running', ips: [] }]) {
+test('prereqs: Tailscale signed out or without an address is "not signed in"', () => {
+  for (const tailscale of [{ state: 'logged-out', ips: [] }, { state: 'running', ips: [] }]) {
     const r = mod.prechecks.prereqs({ facts: facts({ tailscale }), settings: {}, platform: 'linux' });
     assert.deepStrictEqual([r.ok, r.blocker], [false, 'tailscale-off'], JSON.stringify(tailscale));
     assert.strictEqual(r.summary, 'Tailscale is installed but not signed in on the computer your Maestro runs on.');
@@ -63,11 +63,56 @@ test('prereqs: Tailscale signed out, not running, unknown or without an address 
   }
 });
 
+test('prereqs: Tailscale installed but not running (or not answering) has its own sentence, not "not signed in"', () => {
+  for (const tailscale of [{ state: 'not-running', ips: [] }, { state: 'unknown', ips: [] }]) {
+    const r = mod.prechecks.prereqs({ facts: facts({ tailscale }), settings: {}, platform: 'linux' });
+    assert.strictEqual(r.ok, false);
+    assert.strictEqual(r.summary, 'Tailscale is installed on the computer your Maestro runs on, but it isn\'t running. Start Tailscale on it, then come back.', JSON.stringify(tailscale));
+    assert.ok(!/signed in/.test(r.summary));
+  }
+});
+
+test('prereqs: the summary is never repeated as the first line of a blocker', () => {
+  for (const tailscale of [{ state: 'not-installed', ips: [], host: '', cli: '' }, { state: 'logged-out', ips: [] }, { state: 'not-running', ips: [] }, { userspace: true }]) {
+    const r = mod.prechecks.prereqs({ facts: facts({ tailscale }), settings: {}, platform: 'linux' });
+    assert.ok(!r.lines.includes(r.summary), JSON.stringify(tailscale));
+  }
+  const w = mod.prechecks.prereqs({ facts: facts({ os: 'win32' }), settings: {}, platform: 'win32' });
+  assert.ok(!w.lines.includes(w.summary));
+  const d = mod.prechecks.prereqs({ facts: facts({ free_disk_mb: 10 }), settings: {}, platform: 'linux' });
+  assert.ok(!d.lines.includes(d.summary));
+});
+
 test('prereqs: userspace networking is refused with the advice to install the app', () => {
   const r = mod.prechecks.prereqs({ facts: facts({ tailscale: { userspace: true } }), settings: {}, platform: 'linux' });
   assert.deepStrictEqual([r.ok, r.blocker], [false, 'tailscale-userspace']);
-  assert.match(r.summary, /runs in a mode other programs can't listen on \(userspace networking\)/);
-  assert.ok(r.lines.some((l) => /Install the Tailscale app instead of the command-line-only version/.test(l)));
+  assert.strictEqual(r.summary, 'Tailscale on the computer your Maestro runs on is the command-line-only kind, which other programs can\'t use. Install the Tailscale app from tailscale.com/download instead.');
+});
+
+test('prepare: a port in the choices that is not a number is ignored, as if it were not given', async () => {
+  for (const bad of ['abc', 'NaN', true, {}, '12.5', '0', '70000', -5]) {
+    const r = await mod.setup.prepare(ctxFor({ saved: {}, choices: { control_port: bad, agent_port: bad } }));
+    assert.deepStrictEqual([r.settings.control_port, r.settings.agent_port, r.stop], [9971, 9972, null], JSON.stringify(bad));
+  }
+  const ok = await mod.setup.prepare(ctxFor({ saved: {}, choices: { control_port: '9100', agent_port: 9200 } }));
+  assert.deepStrictEqual([ok.settings.control_port, ok.settings.agent_port], [9100, 9200]);
+  const savedAll = { control_port: 9100, agent_port: 9200, listen_ip: '100.101.102.103', address_name: 'h', run_as: 'hub' };
+  const kept = await mod.setup.prepare(ctxFor({ saved: savedAll, settings: { ...savedAll }, choices: { control_port: 'abc' }, portFree: async () => { throw new Error('saved ports are not probed'); } }));
+  assert.strictEqual(kept.stop, null);
+  assert.deepStrictEqual(kept.settings, {}, 'a saved port stays when the answer is not a number');
+});
+
+test('check server: "Reinstall needed" and "Waiting for setup" are not retried (they need a person); other waiting texts are', async () => {
+  const run = (waiting) => mod.checks.server(ctxOf({ health: JSON.stringify({ ok: false, running: false, waiting, warnings: [] }) }));
+  const { REINSTALL, WAITING } = require('../modules/remote-computers/server');
+  for (const w of [REINSTALL, WAITING]) { const r = await run(w); assert.strictEqual(r.retry, undefined, w); assert.strictEqual(r.summary, w); }
+  assert.strictEqual((await run('Downloading the server for the first start.')).retry, true);
+});
+
+test('the reinstall text points at "Set it up again", not at an Install step', () => {
+  const { REINSTALL } = require('../modules/remote-computers/server');
+  assert.match(REINSTALL, /Run Set it up again\./);
+  assert.ok(!/Install/.test(REINSTALL));
 });
 
 test('prereqs: under 300 MB free is a disk blocker with the number; 300 and unknown pass', () => {
@@ -195,6 +240,18 @@ const ctxOf = (tools) => ({
   callTool: async (name) => { const v = tools[name]; if (typeof v === 'function') return v(); if (v === undefined) throw new Error(`no stub for ${name}`); return v; },
 });
 const okHealth = (over = {}) => JSON.stringify({ ok: true, running: true, group: 'mesh//g1', computers: 1, online: 1, warnings: [], ...over });
+
+test('check server: a state that resolves by itself says retry; one that needs a person or is an error does not', async () => {
+  const run = (h) => mod.checks.server(ctxOf({ health: JSON.stringify({ warnings: [], ...h }) }));
+  assert.strictEqual((await run({ ok: false, running: false, waiting: 'Downloading the server for the first start.' })).retry, true, 'waiting for the first start');
+  assert.strictEqual((await run({ ok: false, running: false })).retry, true, 'not running yet, no error: starting');
+  assert.strictEqual((await run({ ok: false, running: true, group: '' })).retry, true, 'device group not ready');
+  assert.strictEqual((await run({ ok: false, running: true, group: 'mesh//g1' })).retry, true, 'not ok, no error');
+  assert.strictEqual((await run({ ok: false, running: false, lastError: 'spawn failed' })).retry, undefined, 'an error');
+  assert.strictEqual((await run({ ok: false, running: true, group: 'mesh//g1', lastError: 'login refused' })).retry, undefined, 'an error');
+  assert.strictEqual((await run({ ok: false, running: false, mode: 'service', reason: 'not-installed', message: 'm', command: 'sudo x' })).retry, undefined, 'service mode needs a person');
+  assert.strictEqual((await run({ ok: true, running: true, group: 'mesh//g1' })).retry, undefined);
+});
 
 test('check server: says how the server runs and returns the mode', async () => {
   const svc = await mod.checks.server(ctxOf({ health: okHealth({ mode: 'service' }) }));

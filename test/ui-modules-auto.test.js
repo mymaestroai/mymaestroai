@@ -15,13 +15,14 @@ function load() {
   const el = (id) => els[id] || (els[id] = { id, innerHTML: '', textContent: '', className: '', disabled: false, classList: { add() {}, remove() {}, contains() { return false; } }, scrollIntoView() {} });
   const calls = [];
   const state = { responses: [], radio: null, gate: null };
+  const listeners = {};   // document-level listeners the page registered: type -> [fn]
   const document = {
     hidden: false,
     getElementById: (id) => el(id),
     createElement: () => ({ set innerHTML(v) { this._h = v; this.firstChild = { innerHTML: v.replace(/^<div id="auto-area">/, '').replace(/<\/div>$/, '') }; }, get innerHTML() { return this._h; } }),
     querySelector: (sel) => (sel === 'input[name="auto-choice"]:checked' ? state.radio : null),
     querySelectorAll: () => [],
-    addEventListener() {},
+    addEventListener(type, fn) { (listeners[type] = listeners[type] || []).push(fn); },
   };
   const fetch = async (url, opts) => {
     if (url === '/api/modules') return { ok: true, status: 200, json: async () => ({ modules: [] }) };
@@ -32,8 +33,9 @@ function load() {
     return { ok: r.status < 400, status: r.status, json: async () => r.json };
   };
   const ctx = vm.createContext({ document, window: { addEventListener() {} }, fetch, location: { origin: 'http://hub', search: '', hash: '', pathname: '/modules' }, history: { replaceState() {} }, navigator: { clipboard: { writeText: async (t) => { state.copied = t; } } }, setTimeout, clearTimeout, setInterval, clearInterval, Date, console, URLSearchParams });
-  vm.runInContext(script + '\nthis.t = { stepHtml, overviewHtml, settingField, advancedHtml, render, openModule, selectStep, loadSuggestions, runAutoStep, autoContinue, autoAdmin, copyAdminCmd, loadPrecheck, saveAdvanced, setCurrent(m) { current = m; }, getCurrent() { return current; }, setSelected(s) { selected = s; }, setPre(x) { preRes = x; }, getPre() { return preRes; }, setSug(x) { suggestions = x; }, getSug() { return suggestions; }, setAuto(x) { autoRes = x; }, getAuto() { return autoRes; } };', ctx);
-  return { t: ctx.t, calls, state, els };
+  vm.runInContext(script + '\nthis.t = { stepHtml, overviewHtml, settingField, advancedHtml, render, openModule, selectStep, loadSuggestions, checkAgain, runAutoStep, askMaestro, autoContinue, autoAdmin, copyAdminCmd, loadPrecheck, saveAdvanced, setCurrent(m) { current = m; }, getCurrent() { return current; }, setSelected(s) { selected = s; }, setPre(x) { preRes = x; }, getPre() { return preRes; }, setSug(x) { suggestions = x; }, getSug() { return suggestions; }, setAuto(x) { autoRes = x; }, getAuto() { return autoRes; } };', ctx);
+  const fire = (type, target) => (listeners[type] || []).forEach(fn => fn({ target }));
+  return { t: ctx.t, calls, state, els, fire };
 }
 
 const SETTINGS = [
@@ -124,6 +126,18 @@ test('auto step while it runs: the working line, button off; then the lines one 
   assert.match(done, /Downloaded and installed the server\./);
   assert.match(done, /Found &lt;b&gt;this&lt;\/b&gt; computer\./, 'lines are escaped');
   assert.match(done, /selectStep\('done'\)/);
+  t.setAuto({ setup: { done: true, lines: ['a'], check: { ok: true, summary: 'The server is running as its own locked-down service. No computer has been added yet.' } } });
+  assert.match(t.stepHtml(m.steps[1]), /<div class="auto-lines">.*<\/div><div class="msg show ok">Done\. The server is running as its own locked-down service\. No computer has been added yet\.<\/div>/);
+});
+
+test('the lines are a plain list in every outcome: choice, administrator and error as well', () => {
+  const { t } = load(); const m = detail(); t.setCurrent(m);
+  const base = { error: 'x', lines: ['One.', 'Two.'] };
+  for (const extra of [{ choose: { key: 'k', label: 'Which?', options: [{ value: 'a', label: 'a' }] } }, { admin: { command: 'c', label: null, warning: null, ask: true } }, {}]) {
+    t.setAuto({ setup: { ...base, ...extra } });
+    const out = t.stepHtml(m.steps[1]);
+    assert.strictEqual((out.match(/class="auto-line"/g) || []).length, 2, Object.keys(extra)[0] || 'error');
+  }
 });
 
 test('choose: the label and radio options with the first selected and a Continue button; Continue re-runs with choices', async () => {
@@ -155,7 +169,29 @@ test('a refused run shows what the hub says: e.choose from the error answer, e.a
   state.responses.push({ status: 400, json: { error: 'The setup is already running' } });
   await t.runAutoStep('setup', {}, null);
   assert.match(els['step-area'].innerHTML, /class="msg show err">The setup is already running/);
-  assert.match(els['step-msg'].textContent, /already running/, 'Ask Maestro quotes what is shown');
+  assert.strictEqual((els['step-msg'] || { textContent: '' }).textContent, '', 'the generic step message is not also filled for the auto step');
+  assert.strictEqual((els['step-area'].innerHTML.match(/already running/g) || []).length, 1, 'the error is shown once');
+});
+
+test('an error shows the progress lines as a list, then the error once with its summary (never the lines again inside the red box)', async () => {
+  const { t, state, els } = load(); const m = detail(); t.setCurrent(m); t.setSelected('setup');
+  state.responses.push({ status: 400, json: { error: 'The server runs, but its device group is not ready yet.', check: { ok: false, summary: 'The server runs, but its device group is not ready yet.', lines: ['Downloaded and installed the server.', 'Using the saved ports 9975 and 9976.'] } } });
+  await t.runAutoStep('setup', {}, null);
+  const out = els['step-area'].innerHTML;
+  assert.strictEqual((out.match(/class="auto-line"/g) || []).length, 2);
+  assert.strictEqual((out.match(/Using the saved ports 9975 and 9976\./g) || []).length, 1, 'each line once');
+  assert.strictEqual((out.match(/device group is not ready yet/g) || []).length, 1, 'the error once');
+  assert.strictEqual((out.match(/class="msg show err"/g) || []).length, 1);
+  assert.strictEqual((els['step-msg'] || { textContent: '' }).textContent, '');
+});
+
+test('Ask Maestro quotes the error shown in the auto area', async () => {
+  const { t, calls, state } = load(); const m = detail(); t.setCurrent(m); t.setSelected('setup');
+  state.responses.push({ status: 400, json: { error: 'Nothing answers on its port.', check: { ok: false, summary: 'Nothing answers on its port.', lines: ['Found this computer.'] } } });
+  await t.runAutoStep('setup', {}, null);
+  state.responses.push({ status: 200, json: { agent: 'lead', message: 'help' } }, { status: 200, json: {} });
+  await t.askMaestro('setup', null);
+  assert.match(decodeURIComponent(calls[1].url.replace(/\+/g, ' ')), /error=Nothing answers on its port\.\nFound this computer\./);
 });
 
 test('admin: the check summary, then three choices: Ask Maestro, the command in a code box with a copy button, and the label button with its warning', async () => {
@@ -163,7 +199,11 @@ test('admin: the check summary, then three choices: Ask Maestro, the command in 
   t.setAuto({ setup: { error: 'x', check: { summary: 'The server could not be started as a service.', lines: [] }, admin: { command: 'sudo systemctl start <demo>', label: ADMIN.label, warning: ADMIN.warning, ask: true }, choices: { listen_ip: '100.101.102.103' }, lines: [] } });
   const out = t.stepHtml(m.steps[1]);
   assert.match(out, /The server could not be started as a service\./);
+  assert.match(out, /<div class="msg show info"[^>]*>The server could not be started as a service\.<\/div>/, 'a plain info box, not red');
+  assert.ok(!/msg show err/.test(out));
   assert.match(out, /onclick="askMaestro\('setup', this\)">Ask Maestro<\/button>/);
+  assert.strictEqual((out.match(/Ask Maestro<\/button>/g) || []).length, 1, 'one Ask Maestro on the screen (the step\'s own is hidden)');
+  assert.strictEqual((out.match(/sudo systemctl start &lt;demo&gt;/g) || []).length, 1, 'the command appears once');
   assert.match(out, /<pre class="redirect-uri mono" id="admin-cmd"[^>]*>sudo systemctl start &lt;demo&gt;<\/pre><button onclick="copyAdminCmd\(this\)">Copy the command<\/button>/);
   assert.match(out, /<button onclick="autoAdmin\('setup', this\)">Run it without an administrator<\/button><div class="dim"[^>]*>The server then has the same access to files as your Maestro\.<\/div>/);
   // copy button
@@ -245,6 +285,55 @@ test('suggestions are asked for only on an unfinished setup of a module that has
   d.state.responses.push({ status: 403, json: { error: 'Only a signed-in admin can see this.' } });
   await d.t.loadSuggestions(m);
   assert.strictEqual(JSON.stringify(d.t.getSug()), '{}', 'a member gets nothing and the page shows nothing');
+});
+
+test('suggestions arriving late never wipe typing: only still-empty, untouched fields are filled in place, with the note, and the form is not drawn again', async () => {
+  const { t, calls, state, els, fire } = load(); const m = detail(); t.setCurrent(m); t.setSelected('setup');
+  const notes = [];
+  const field = (id, value = '') => (els[id] = { id, value, dataset: {}, insertAdjacentHTML(where, html) { notes.push([id, where, html]); }, parentNode: { querySelector: () => null } });
+  const name = field('set-address_name'), ip = field('set-listen_ip');
+  els.panel = { id: 'panel', innerHTML: 'SENTINEL: the form as the person sees it', classList: { add() {}, remove() {}, contains() { return false; } }, scrollIntoView() {} };
+  let release; state.gate = new Promise(r => { release = r; });
+  state.responses.push({ status: 200, json: { suggestions: { address_name: { value: 'hub.example.ts.net', candidates: ['hub.example.ts.net'], source: 'this computer' }, listen_ip: { value: '100.101.102.103', candidates: ['100.101.102.103'], source: 'this computer' } } } });
+  const loading = t.loadSuggestions(m);
+  await flush();
+  // the person types a name while the answer is still on its way
+  name.value = 'mine.example.ts.net'; fire('input', name);
+  release(); await loading; await flush();
+  assert.strictEqual(name.value, 'mine.example.ts.net', 'what was typed is kept');
+  assert.strictEqual(ip.value, '100.101.102.103', 'the untouched empty field is filled in place');
+  assert.deepStrictEqual(notes.map(n => [n[0], n[1]]), [['set-listen_ip', 'afterend']], 'the note only where something was filled in');
+  assert.match(notes[0][2], /Filled in from this computer/);
+  assert.strictEqual(els.panel.innerHTML, 'SENTINEL: the form as the person sees it', 'the form was not drawn again');
+  assert.strictEqual(t.getSug().listen_ip.value, '100.101.102.103', 'later drawings still know the suggestions');
+});
+
+test('a field the person typed in and then emptied is left empty (it was touched); a field that already has a value is never replaced', async () => {
+  const { t, state, els, fire } = load(); const m = detail(); t.setCurrent(m); t.setSelected('setup');
+  const mk = (id, value) => (els[id] = { id, value, dataset: {}, insertAdjacentHTML() { throw new Error('no note where nothing was filled in'); }, parentNode: { querySelector: () => null } });
+  const name = mk('set-address_name', ''), ip = mk('set-listen_ip', '100.64.0.1');
+  name.value = 'x'; fire('input', name); name.value = '';   // typed, then cleared
+  state.responses.push({ status: 200, json: { suggestions: { address_name: { value: 'hub.example.ts.net', candidates: ['hub.example.ts.net'], source: 'this computer' }, listen_ip: { value: '100.101.102.103', candidates: ['100.101.102.103'], source: 'this computer' } } } });
+  await t.loadSuggestions(m);
+  assert.strictEqual(name.value, '');
+  assert.strictEqual(ip.value, '100.64.0.1');
+});
+
+test('a select-worthy suggestion (several candidates) replaces only that empty untouched field, in place', async () => {
+  const { t, state, els } = load(); const m = detail(); t.setCurrent(m); t.setSelected('setup');
+  const ip = { id: 'set-listen_ip', tagName: 'INPUT', value: '', dataset: {}, insertAdjacentHTML() {}, parentNode: { querySelector: () => null } };
+  els['set-listen_ip'] = ip;
+  state.responses.push({ status: 200, json: { suggestions: { listen_ip: { value: '100.101.102.103', candidates: ['100.101.102.103', '100.101.102.104'], source: 'this computer' } } } });
+  await t.loadSuggestions(m);
+  assert.match(ip.outerHTML, /^<select id="set-listen_ip"><option value="100\.101\.102\.103" selected>100\.101\.102\.103<\/option><option value="100\.101\.102\.104" >/);
+});
+
+test('Check again asks the hub for a fresh look (?fresh=1); opening the step does not', async () => {
+  const { t, calls, state } = load(); const m = detail(); t.setCurrent(m); t.setSelected('about');
+  state.responses.push({ status: 200, json: { ok: true, summary: 'Ready.', lines: [], blocker: null } }, { status: 200, json: { ok: true, summary: 'Ready.', lines: [], blocker: null } });
+  t.render(); await flush(); await flush();
+  t.checkAgain('about', null); await flush(); await flush();
+  assert.deepStrictEqual(calls.map(c => c.url), ['/api/modules/demo/precheck/prereqs', '/api/modules/demo/precheck/prereqs?fresh=1']);
 });
 
 test('the overview shows the run mode line from the last server check', () => {

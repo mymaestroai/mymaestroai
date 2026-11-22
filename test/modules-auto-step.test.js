@@ -41,16 +41,17 @@ module.exports = {
 `;
 const FACTS = (over = {}) => ({ os: 'linux', supported: true, has_systemd: true, hostname: 'box', hub_port: 9970, free_disk_mb: 5000, tailscale: { state: 'running', userspace: false, cli: 'tailscale', host: 'hub.example.ts.net', ips: ['100.101.102.103'], detail: 'Signed in.' }, ...over });
 
-function rig({ facts = FACTS(), saved, finished = false } = {}) {
+function rig({ facts = FACTS(), saved, finished = false, waitSec, extraSteps = [] } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'auto-'));
   const root = path.join(dir, 'root'), md = path.join(root, 'auto-demo');
   fs.mkdirSync(md, { recursive: true });
   fs.writeFileSync(path.join(md, 'module.json'), JSON.stringify(MODULE_JSON));
-  fs.writeFileSync(path.join(md, 'setup.json'), JSON.stringify(SETUP_JSON));
+  const baseSteps = waitSec === undefined ? SETUP_JSON.steps : SETUP_JSON.steps.map(s => (s.id === 'setup' ? { ...s, waitSec } : s));
+  fs.writeFileSync(path.join(md, 'setup.json'), JSON.stringify({ steps: [...baseSteps.slice(0, -1), ...extraSteps, baseSteps[baseSteps.length - 1]] }));
   fs.writeFileSync(path.join(md, 'index.js'), INDEX_JS);
   const stateFile = path.join(dir, 'modules.json');
   if (saved) fs.writeFileSync(stateFile, JSON.stringify(saved));
-  const conns = new Map(); const ev = { stops: 0, starts: 0, npm: 0, factsCalls: 0, portCalls: [] };
+  const conns = new Map(); const ev = { stops: 0, starts: 0, npm: 0, factsCalls: 0, factsOpts: [], portCalls: [] };
   const connectors = {
     list: () => ({ connectors: [...conns.values()].map(c => ({ ...c, secretNames: [] })) }),
     upsert: (spec) => { const c = { agents: [], ...(conns.get(spec.id) || {}), ...spec }; conns.set(spec.id, c); return c; },
@@ -66,13 +67,15 @@ function rig({ facts = FACTS(), saved, finished = false } = {}) {
     return 'ok';
   };
   const holder = { facts };
+  const clock = { t: Date.parse('2026-01-01T00:00:00Z'), sleeps: [] };   // a fake clock: the wait between two looks at a starting server costs no real time
   const mods = createModules({
+    now: () => clock.t, sleep: async (ms) => { clock.sleeps.push(ms); clock.t += ms; },
     root, dataDir: path.join(dir, 'modules'), stateFile, connectorsFile: path.join(dir, 'connectors.json'), connectors, listAgents: () => [], publish: () => {}, log: () => {}, runNpm,
-    facts: { get: async () => { ev.factsCalls++; return JSON.parse(JSON.stringify(holder.facts)); } },
+    facts: { get: async (opts) => { ev.factsCalls++; ev.factsOpts.push(opts); return JSON.parse(JSON.stringify(holder.facts)); } },
     portFree: async (p, h) => { ev.portCalls.push([p, h]); return true; },
   });
   global.__AUTO = { calls: [], precheck: () => ({ ok: true, summary: 'Ready', lines: ['Found this computer: hub.example.ts.net (100.101.102.103).'], blocker: null }), prepare: () => ({ settings: {}, lines: [], choose: null, stop: null }), check: () => ({ ok: true, summary: 'The server is running.', lines: ['up'] }) };
-  return { dir, mods, conns, ev, stateFile, holder, auto: global.__AUTO, state: () => JSON.parse(fs.readFileSync(stateFile, 'utf8')).modules['auto-demo'], cleanup: () => fs.rmSync(dir, { recursive: true, force: true }) };
+  return { dir, mods, conns, ev, clock, stateFile, holder, auto: global.__AUTO, state: () => (fs.existsSync(stateFile) ? JSON.parse(fs.readFileSync(stateFile, 'utf8')).modules['auto-demo'] : undefined) || {}, cleanup: () => fs.rmSync(dir, { recursive: true, force: true }) };
 }
 const rejects = async (p) => { try { await p; } catch (e) { return e; } assert.fail('should have been refused'); };
 const PREPARE_OK = (ctx) => ({ settings: { address_name: 'hub.example.ts.net', listen_ip: '100.101.102.103', control_port: 9971, agent_port: 9972, run_as: 'auto' }, lines: ['Found this computer.'], choose: null, stop: null });
@@ -98,6 +101,8 @@ test('manifest rules: unknown precheck, prepare without setup.prepare, bad admin
   assert.strictEqual(probs([{ id: 'e', type: 'explain', title: 'E', precheck: 'prereqs' }]), '');
   assert.match(probs([{ ...auto, prepare: true }], { prechecks: hooks.prechecks }), /prepare needs setup\.prepare/);
   assert.match(probs([{ ...auto, check: 'missing' }]), /check "missing" is not exported/);
+  assert.strictEqual(probs([{ ...auto, check: 'server', waitSec: 60 }]), '');
+  assert.match(probs([{ ...auto, check: 'server', waitSec: 'long' }]), /waitSec must be a number/);
   assert.match(probs([{ ...auto, adminChoice: { setting: 'nope', value: 'hub', ...OWNER_ADMIN } }]), /adminChoice\.setting "nope" is not a setting/);
   assert.match(probs([{ ...auto, adminChoice: { setting: 'run_as', value: 'bogus', ...OWNER_ADMIN } }]), /adminChoice\.value is not valid for setting run_as/);
   assert.match(probs([{ ...auto, adminChoice: { setting: 'run_as', value: 'hub', label: 'x' } }]), /adminChoice\.warning is required/);
@@ -246,7 +251,9 @@ test('choose: e.choose = { key, label, options: [{ value, label }] }; the answer
 
 test('a check that fails with a command: e.check and e.admin { command, label, warning, ask: true }; the third choice re-runs with adminChoice', async () => {
   const r = rig(); try {
-    r.auto.prepare = PREPARE_OK;
+    // like the connector, prepare words the run mode from what is saved
+    const HUB_LINE = "It will run under your Maestro's own account. The server then has the same access to files as your Maestro.";
+    r.auto.prepare = (ctx) => ({ settings: ctx.saved.run_as ? {} : { run_as: 'auto' }, lines: ['Found this computer.', ctx.saved.run_as === 'hub' ? HUB_LINE : 'It will run as its own locked-down service.'], choose: null, stop: null });
     r.auto.check = () => ({ ok: false, summary: 'The server could not be started as a service.', lines: ['needs an administrator'], command: 'sudo systemctl start demo' });
     const e = await rejects(r.mods.runStep('auto-demo', 'setup', {}));
     assert.strictEqual(e.check.ok, false);
@@ -260,9 +267,71 @@ test('a check that fails with a command: e.check and e.admin { command, label, w
     const res = await r.mods.runStep('auto-demo', 'setup', { adminChoice: true });
     assert.strictEqual(r.state().settings.run_as, 'hub');
     assert.ok(r.ev.stops > stopsBefore, 'restarted');
-    assert.ok(res.result.lines.includes("It will run under your Maestro's own account. The server then has the same access to files as your Maestro."));
+    assert.ok(res.result.lines.includes(HUB_LINE));
+    assert.strictEqual(res.result.lines.filter(l => /^It will run/.test(l)).length, 1, 'one "It will run" line, from prepare only');
+    assert.ok(!res.result.lines.includes('It will run as its own locked-down service.'), 'never both lines');
     assert.strictEqual(res.module.runMode, 'hub');
     assert.strictEqual(res.module.steps.find(s => s.id === 'setup').done, true);
+  } finally { r.cleanup(); }
+});
+
+test('the administrator choice is saved (and the server restarted) BEFORE prepare, so prepare plans for the chosen way', async () => {
+  const r = rig(); try {
+    const seen = [];
+    r.auto.prepare = (ctx) => { seen.push({ runAs: ctx.saved.run_as, stops: r.ev.stops }); return { settings: {}, lines: [], choose: null, stop: null }; };
+    await r.mods.runStep('auto-demo', 'setup', { adminChoice: true });
+    assert.deepStrictEqual(seen, [{ runAs: 'hub', stops: 1 }]);
+    const r2 = rig(); try {
+      r2.auto.prepare = (ctx) => { seen.push(ctx.saved.run_as); return { settings: {}, lines: [], choose: null, stop: null }; };
+      await r2.mods.runStep('auto-demo', 'setup', {});
+      assert.strictEqual(seen[1], undefined, 'without the choice nothing is saved before prepare');
+    } finally { r2.cleanup(); }
+  } finally { r.cleanup(); }
+});
+
+test('a check that says retry is looked at again every 5 seconds until it passes; the step then succeeds', async () => {
+  const r = rig(); try {
+    r.auto.prepare = PREPARE_OK;
+    let n = 0;
+    r.auto.check = () => (++n < 3 ? { ok: false, retry: true, summary: 'The server is not running.', lines: [] } : { ok: true, summary: 'The server is running.', lines: [] });
+    const res = await r.mods.runStep('auto-demo', 'setup', {});
+    assert.strictEqual(res.result.check.ok, true);
+    assert.strictEqual(n, 3);
+    assert.deepStrictEqual(r.clock.sleeps, [5000, 5000]);
+    assert.strictEqual(res.module.steps.find(s => s.id === 'setup').done, true);
+  } finally { r.cleanup(); }
+});
+
+test('a retry that never resolves fails after waitSec (default 180 s) with the last answer; waitSec on the step changes it', async () => {
+  const r = rig(); try {
+    r.auto.prepare = PREPARE_OK;
+    let n = 0;
+    r.auto.check = () => ({ ok: false, retry: true, summary: `Still starting ${++n}.`, lines: [] });
+    const e = await rejects(r.mods.runStep('auto-demo', 'setup', {}));
+    assert.strictEqual(r.clock.sleeps.length, 36, '180 s in 5 s steps');
+    assert.ok(r.clock.sleeps.every(ms => ms === 5000));
+    assert.strictEqual(e.check.summary, `Still starting ${n}.`);
+    assert.strictEqual(n, 37);
+    assert.strictEqual(r.mods.detail('auto-demo').steps.find(s => s.id === 'setup').done, false);
+  } finally { r.cleanup(); }
+  const r2 = rig({ waitSec: 20 }); try {
+    r2.auto.prepare = PREPARE_OK;
+    r2.auto.check = () => ({ ok: false, retry: true, summary: 'Starting.', lines: [] });
+    await rejects(r2.mods.runStep('auto-demo', 'setup', {}));
+    assert.strictEqual(r2.clock.sleeps.length, 4);
+  } finally { r2.cleanup(); }
+});
+
+test('a failure without retry (a person is needed, or an error) is reported at once, with no waiting', async () => {
+  const r = rig(); try {
+    r.auto.prepare = PREPARE_OK;
+    r.auto.check = () => ({ ok: false, summary: 'needs a person', lines: [], command: 'sudo x' });
+    const e = await rejects(r.mods.runStep('auto-demo', 'setup', {}));
+    assert.strictEqual(e.check.summary, 'needs a person');
+    assert.ok(e.admin);
+    r.auto.check = () => ({ ok: false, retry: 'yes', summary: 'odd', lines: [] });
+    await rejects(r.mods.runStep('auto-demo', 'setup', {}));
+    assert.deepStrictEqual(r.clock.sleeps, []);
   } finally { r.cleanup(); }
 });
 
@@ -366,7 +435,7 @@ test('routes: precheck and suggestions refuse the hub service and members, and e
   const block = server.slice(i, i + 900);
   assert.match(block, /req\.method === 'GET'/);
   assert.match(block, /req\.hubService \|\| \(req\.hubUser && !access\.isAdmin\(req\.hubUser\)\)\) return jsonResponse\(res, 403/);
-  assert.match(block, /mods\.precheck\(m\[1\], m\[2\]\)/);
+  assert.match(block, /mods\.precheck\(m\[1\], m\[2\], \{ fresh: new URL\(req\.url, 'http:\/\/x'\)\.searchParams\.get\('fresh'\) === '1' \}\)/);
   assert.match(block, /\{ suggestions: await mods\.suggestions\(m\[1\]\) \}/);
   const fail = /const fail = \(e\) => [^\n]*/.exec(server)[0];
   assert.match(fail, /e\.choose \? \{ choose: e\.choose \}/);
@@ -374,4 +443,97 @@ test('routes: precheck and suggestions refuse the hub service and members, and e
   assert.match(fail, /e\.check \? \{ check: e\.check \}/);
   // the changes made through step stay behind the existing refusal of the service identity
   assert.match(server, /req\.method !== 'GET' && req\.hubService\) return jsonResponse\(res, 403, \{ error: 'Module changes need a signed-in admin\.'/);
+  assert.match(server, /const saved = await mods\.saveSettings\(id, b\.values \|\| \{\}\)/);
+});
+
+// ── review round 1: every save path checks the listen address ──
+const SETTINGS_STEP = { id: 'sett', type: 'settings', title: 'Settings', fields: ['address_name', 'listen_ip', 'session_minutes'] };
+const asPromise = (fn) => Promise.resolve().then(fn);   // saveSettings may answer at once or after a look at this computer
+const NOT_OWN = /not this computer's address on your private network\.$/;
+
+test('Advanced / overview save (saveSettings): a LAN address is refused with the plain sentence and nothing is saved; a candidate is accepted', async () => {
+  const r = rig(); try {
+    const e = await rejects(asPromise(() => r.mods.saveSettings('auto-demo', { listen_ip: '192.0.2.20', session_minutes: 50 })));
+    assert.strictEqual(e.message, 'Address: 192.0.2.20 is not this computer\'s address on your private network.');
+    assert.ok(!(r.state().settings || {}).listen_ip, 'nothing was saved');
+    assert.ok(!(r.state().settings || {}).session_minutes, 'not even the other setting in the same save');
+    assert.strictEqual(r.ev.stops, 0, 'no restart');
+    await rejects(asPromise(() => r.mods.saveSettings('auto-demo', { listen_ip: '100.64.0.9' })));   // a tailnet address, but not this computer's
+    await rejects(asPromise(() => r.mods.saveSettings('auto-demo', { address_name: 'other.example.ts.net' })));
+    const ok = await r.mods.saveSettings('auto-demo', { listen_ip: '100.101.102.103', address_name: 'hub.example.ts.net', session_minutes: 50 });
+    assert.strictEqual(ok.settings.listen_ip, '100.101.102.103');
+    assert.deepStrictEqual([r.state().settings.listen_ip, r.state().settings.address_name, r.state().settings.session_minutes], ['100.101.102.103', 'hub.example.ts.net', 50]);
+    assert.ok(r.ev.factsOpts.every(o => o && o.fresh === true), 'it looks at this computer afresh when it matters');
+  } finally { r.cleanup(); }
+});
+
+test('a changed saved address is checked too (replacing a saved one with a LAN address is refused)', async () => {
+  const saved = { modules: { 'auto-demo': { steps: {}, settings: { listen_ip: '100.101.102.103', address_name: 'hub.example.ts.net' } } } };
+  const r = rig({ saved }); try {
+    const e = await rejects(asPromise(() => r.mods.saveSettings('auto-demo', { listen_ip: '10.0.0.5' })));
+    assert.match(e.message, NOT_OWN);
+    assert.strictEqual(r.state().settings.listen_ip, '100.101.102.103');
+  } finally { r.cleanup(); }
+});
+
+test('an unchanged saved address is never checked: an existing install saves another setting while Tailscale is down', async () => {
+  const saved = { modules: { 'auto-demo': { steps: {}, installed: '1.0.0', settings: { listen_ip: '100.101.102.104', address_name: 'old.example.ts.net', session_minutes: 30 } } } };
+  const down = FACTS({ tailscale: { state: 'not-running', userspace: false, cli: 'tailscale', host: '', ips: [], detail: 'x' } });
+  const r = rig({ saved, facts: down }); try {
+    const d = r.mods.saveSettings('auto-demo', { listen_ip: '100.101.102.104', address_name: 'old.example.ts.net', session_minutes: 45 });
+    assert.strictEqual((await d).settings.session_minutes, 45);
+    assert.deepStrictEqual([r.state().settings.listen_ip, r.state().settings.address_name], ['100.101.102.104', 'old.example.ts.net']);
+    assert.strictEqual(r.ev.factsCalls, 0, 'this computer was not even looked at');
+    // the same through the page's whole-form save, where every field comes back as text
+    await r.mods.saveSettings('auto-demo', { listen_ip: '100.101.102.104', session_minutes: '50' });
+    assert.strictEqual(r.state().settings.session_minutes, 50);
+    assert.strictEqual(r.ev.factsCalls, 0);
+    // an emptied address is not an address and is not checked
+    await r.mods.saveSettings('auto-demo', { address_name: '' });
+    assert.strictEqual(r.ev.factsCalls, 0);
+  } finally { r.cleanup(); }
+});
+
+test('the settings step checks a changed address the same way, and leaves unchanged ones alone', async () => {
+  const r = rig({ extraSteps: [SETTINGS_STEP] }); try {
+    const e = await rejects(r.mods.runStep('auto-demo', 'sett', { values: { listen_ip: '192.0.2.20' } }));
+    assert.match(e.message, NOT_OWN);
+    assert.ok(!(r.state().settings || {}).listen_ip);
+    const res = await r.mods.runStep('auto-demo', 'sett', { values: { listen_ip: '100.101.102.103', address_name: 'hub.example.ts.net' } });
+    assert.strictEqual(res.result.settings.listen_ip, '100.101.102.103');
+    assert.strictEqual(r.state().settings.listen_ip, '100.101.102.103');
+  } finally { r.cleanup(); }
+  const saved = { modules: { 'auto-demo': { steps: {}, settings: { listen_ip: '100.101.102.104' } } } };
+  const down = FACTS({ tailscale: { state: 'logged-out', userspace: false, cli: 'tailscale', host: '', ips: [], detail: 'x' } });
+  const r2 = rig({ saved, facts: down, extraSteps: [SETTINGS_STEP] }); try {
+    await r2.mods.runStep('auto-demo', 'sett', { values: { listen_ip: '100.101.102.104', session_minutes: 40 } });
+    assert.strictEqual(r2.state().settings.session_minutes, 40);
+    assert.strictEqual(r2.ev.factsCalls, 0);
+  } finally { r2.cleanup(); }
+});
+
+// ── review round 1: follow-ups ──
+test('runAuto: the administrator choice is applied (and the server restarted) only when it differs from what is saved', async () => {
+  const saved = { modules: { 'auto-demo': { steps: {}, installed: '1.0.0', settings: { run_as: 'hub', listen_ip: '100.101.102.103', address_name: 'hub.example.ts.net' } } } };
+  const r = rig({ saved }); try {
+    await r.mods.runStep('auto-demo', 'setup', { adminChoice: true });
+    assert.strictEqual(r.ev.stops, 0, 'already saved as hub: no restart');
+    assert.strictEqual(r.state().settings.run_as, 'hub');
+  } finally { r.cleanup(); }
+  const r2 = rig(); try {
+    await r2.mods.runStep('auto-demo', 'setup', { adminChoice: true });
+    assert.strictEqual(r2.ev.stops, 1, 'a different value is saved with one restart');
+    assert.strictEqual(r2.state().settings.run_as, 'hub');
+    await r2.mods.runStep('auto-demo', 'setup', { adminChoice: true });
+    assert.strictEqual(r2.ev.stops, 1, 'asked again: nothing differs now');
+  } finally { r2.cleanup(); }
+});
+
+test('precheck({ fresh: true }) asks for a fresh look at this computer; an ordinary precheck does not', async () => {
+  const r = rig(); try {
+    await r.mods.precheck('auto-demo', 'prereqs');
+    await r.mods.precheck('auto-demo', 'prereqs', { fresh: true });
+    await r.mods.precheck('auto-demo', 'prereqs', { fresh: false });
+    assert.deepStrictEqual(r.ev.factsOpts, [undefined, { fresh: true }, undefined]);
+  } finally { r.cleanup(); }
 });

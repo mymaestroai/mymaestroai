@@ -13,6 +13,11 @@ const meshserver = fs.readFileSync(path.join(DIR, 'lib', 'meshserver.js'), 'utf8
 const setting = (key) => moduleJson.settings.find((s) => s.key === key);
 const step = (id) => setup.steps.find((s) => s.id === id);
 
+test('the card text: plain words, no server name, asking happens on your phone', () => {
+  assert.strictEqual(moduleJson.summary, 'Lets your agents see your other computers and, when you allow it, control them, over your private network (Tailscale). Each agent starts at Look: pictures and facts only. Act and Drive ask on your phone each session unless you turn asking off for that agent.');
+  assert.ok(!/MeshCentral/i.test(moduleJson.summary));
+});
+
 test('the setting labels name the computer your Maestro runs on in plain words', () => {
   assert.strictEqual(setting('address_name').label, 'This computer\'s name on your private network');
   assert.strictEqual(setting('listen_ip').label, 'This computer\'s address on your private network');

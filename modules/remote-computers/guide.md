@@ -97,8 +97,7 @@ Status and limits (Save permissions).
 
 ## Common errors and fixes
 
-- **"Reinstall needed: open Data connectors and run Install again":** the server program is missing. Run the Install
-  step again.
+- **"Reinstall needed. Run Set it up again.":** the server program is missing. Run Set it up again.
 - **"Waiting for setup":** the tailnet name or address is not saved yet. Fill in the settings step.
 - **"The antivirus ... blocked this click / typing / command":** the PC's antivirus stopped it. The message names the
   detection when Microsoft Defender reports one, and Windows Security > Protection history on the PC shows the block.

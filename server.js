@@ -2432,7 +2432,8 @@ async function handleHttpRequest(req, res) {
         m = pathname.match(/^\/api\/modules\/([a-z][a-z0-9-]{1,31})\/(?:precheck\/([A-Za-z0-9_-]{1,40})|suggestions)$/);
         if (m && req.method === 'GET') {
           if (req.hubService || (req.hubUser && !access.isAdmin(req.hubUser))) return jsonResponse(res, 403, { error: 'Only a signed-in admin can see this.' });
-          if (m[2] !== undefined) return jsonResponse(res, 200, await mods.precheck(m[1], m[2]));
+          // ?fresh=1 (the "Check again" button) looks again instead of using the answer kept for a few seconds.
+          if (m[2] !== undefined) return jsonResponse(res, 200, await mods.precheck(m[1], m[2], { fresh: new URL(req.url, 'http://x').searchParams.get('fresh') === '1' }));
           return jsonResponse(res, 200, { suggestions: await mods.suggestions(m[1]) });
         }
         m = pathname.match(/^\/api\/modules\/([a-z][a-z0-9-]{1,31})\/help$/);
@@ -2455,7 +2456,7 @@ async function handleHttpRequest(req, res) {
                   }
                 }
               }
-              const saved = mods.saveSettings(id, b.values || {});
+              const saved = await mods.saveSettings(id, b.values || {});
               sweepRemoteDesktop(id);
               return jsonResponse(res, 200, { ok: true, module: saved });
             }
