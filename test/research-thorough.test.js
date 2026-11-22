@@ -4165,12 +4165,15 @@ test('run-2 E2 a figure inside « » is the first pass\'s value: not checked, no
   assert.ok(!r.prose.includes('[not found in source]') && !r.prose.includes('[no source to check]'));
   assert.strictEqual(r.totals.proseFigures, 2); // 56.4% twice, not 59.4%
   assert.strictEqual(r.totals.proseNotFound, 0);
-  // the same text without « »: the first pass's value is checked and not found
+  // the same text without « » in the corrections section: the number right after "the first pass reported" is exempt by the fallback
   const plain = qCheck(qProse(`- The first pass reported 59.4% agreement; the full text gives 56.4% [${Q_SRC}].`));
-  assert.ok(plain.prose.includes('59.4% [not found in source]'));
-  assert.strictEqual(plain.totals.proseFigures, 3);
-  // « » anywhere in the report exempts what it holds; what is outside is still checked
-  const mixed = qCheck(qProse(`- The full text gives 8821 words, not «9999 words», in ${Q_SRC}.`));
+  assert.ok(!plain.prose.includes('59.4% ['));
+  assert.strictEqual(plain.totals.proseFigures, 2);
+  // outside the section the same words are checked
+  const outside = qCheck(`## Verdict\nIt holds.\n\n## Evidence\n- The first pass reported 59.4% agreement; the full text gives 56.4% [${Q_SRC}].\n`);
+  assert.ok(outside.prose.includes('59.4% [not found in source]'));
+  // « » exempts what it holds when its sentence speaks of the first pass; what is outside is still checked
+  const mixed = qCheck(qProse(`- The full text gives 8821 words, not the first pass's «9999 words», in ${Q_SRC}.`));
   assert.ok(mixed.prose.includes('«9999 words»') && !/9999 words»? \[/.test(mixed.prose));
   const why = (prose) => T.classifyProseNumbers(prose).filter((x) => x.exempt === 'quoted error').map((x) => x.token.text);
   assert.deepStrictEqual(why('The first pass said «59.4%» and «1,450».'), ['59.4%', '1,450']);
@@ -4178,32 +4181,84 @@ test('run-2 E2 a figure inside « » is the first pass\'s value: not checked, no
   assert.deepStrictEqual(why('The first pass said «59.4% and more.'), []);
 });
 
-test('run-2 E2 fallback: a clause with a retraction cue and no assertion cue, in "Corrections to the first pass" only', () => {
+test('run-2 E2 fallback: a number that follows a first-pass cue closely in its clause, in "Corrections to the first pass" only', () => {
   const bullets = [
-    '- The 1450 words versus 840 for rejected are not supported by the excerpts and are removed.',
-    '- The first pass attached the 1,800-pair and 52.7% figures to the StoryAlign URL. That page contains none of them.',
-    '- The 1,133-instance count could not be confirmed and is dropped.',
-    '- The 18 open-weight split does not appear in the full text.',
-    '- A figure of 777 was reported as 888 in the first pass.',
+    '- The first pass attached the 1,800-pair figure to the StoryAlign URL. That page contains none of them.',
+    '- The first pass\'s 1,133-instance count could not be confirmed and is dropped.',
+    '- The first pass gave 18 open-weight splits; they do not appear in the full text.',
+    '- A figure of 777 was reported as 888 by the first pass.',
   ].join('\n');
   const r = qCheck(qProse(bullets));
-  assert.ok(!r.prose.includes('[not found in source]') && !r.prose.includes('[no source to check]'), r.prose);
-  assert.strictEqual(r.totals.proseFigures, 1); // only the 56.4% of the evidence bullet
+  // 1,800 / 1,133 / 18 follow a cue closely: exempt. 777 and 888 come before the cue: checked (no source).
+  assert.ok(!/(?:1,800|1,133|18)(?:-pair|-instance)? \[/.test(r.prose), r.prose);
+  assert.ok(r.prose.includes('777 [') && r.prose.includes('888 ['), r.prose);
   // an asserted figure in the same bullet after ";" is still checked; the cue clause before it is not
-  const two = qCheck(qProse(`- The 1450 words are not supported; the full text gives 8821 words and 7777 more [${Q_SRC}].`));
+  const two = qCheck(qProse(`- The first pass said 1450 words; the full text gives 8821 words and 7777 more [${Q_SRC}].`));
   assert.ok(!/1450 \[/.test(two.prose), 'the retracted figure is exempt');
   assert.ok(two.prose.includes('7777 [not found in source]'), 'the asserted figure is checked');
   assert.ok(!/8821 \[/.test(two.prose));
   assert.strictEqual(two.totals.proseFigures, 3);
-  // a cue clause that also asserts ("gives", "is", "supported", "shows") keeps its figures checked
-  const both = qCheck(qProse(`- The first pass said 59.4% but the full text gives 56.4% [${Q_SRC}].`));
+  // an assertion cue between the first-pass cue and the number keeps it checked
+  const both = qCheck(qProse(`- The first pass said the full text gives 59.4% [${Q_SRC}].`));
   assert.ok(both.prose.includes('59.4% [not found in source]'));
-  // the clause is the sentence (cut at sentence ends and ";", not at commas): an assertion in it keeps every figure of it checked
+  // a clause with no first-pass cue is checked even when it retracts something
   const isIt = qCheck(qProse('- The 4321 is not in the excerpts, and 66.3 is GPT-4o.'));
   assert.ok(isIt.prose.includes('66.3 [') && /4321 \[/.test(isIt.prose));
-  // "is dropped" and "are not supported" are retractions, not assertions
   const aux = qCheck(qProse('- The 4321 count is dropped. The 6543 split is not supported.'));
-  assert.ok(!/(?:4321|6543) \[/.test(aux.prose), aux.prose);
+  assert.ok(/4321 \[/.test(aux.prose) && /6543 \[/.test(aux.prose), aux.prose);
+});
+
+const fWhy = (prose) => T.classifyProseNumbers(prose).map((x) => [x.token.text, x.exempt === 'quoted error']);
+test('F-1 a « » in a sentence that does not speak of the first pass is checked', () => {
+  const r = fWhy('## Verdict\n\nThe judge reaches «56.4%» agreement [S1].\n').find(([t]) => /56\.4/.test(t));
+  assert.strictEqual(r[1], false);
+  assert.ok(T.figuresInProse('## Verdict\n\nThe judge reaches «56.4%» agreement [S1].\n').some((f) => /56\.4/.test(f.text)));
+});
+test('F-2 only the number after the first-pass cue is exempt, not the whole clause', () => {
+  const r = fWhy('## Corrections to the first pass\n\nThe first pass said 46 participants and the paper used 30 raters.\n');
+  assert.deepStrictEqual(r.filter(([t]) => /^(46|30)\b/.test(t)).map(([t, e]) => [t.split(' ')[0], e]), [['46', true], ['30', false]]);
+});
+test('F-3 a figure the clause asserts stays checked even when the clause later doubts the first pass', () => {
+  const r = fWhy("## Corrections to the first pass\n\nLitBench used 30 raters, so the first pass's claim is not supported.\n");
+  assert.strictEqual(r.find(([t]) => /^30/.test(t))[1], false);
+});
+test('F-4 outside the corrections section: « » with a first-pass cue is exempt, the corrected figure is not', () => {
+  const r = fWhy('## Verdict\n\nThe first pass said «59.4%»; the full text gives 56.4% [S1].\n');
+  assert.strictEqual(r.find(([t]) => /59\.4/.test(t))[1], true);
+  assert.strictEqual(r.find(([t]) => /56\.4/.test(t))[1], false);
+});
+test('F-5 in the section, "The first pass\'s 46-participant ... figure" exempts the 46', () => {
+  const r = fWhy("## Corrections to the first pass\n\nThe first pass's 46-participant agreement figure does not appear in the full text.\n");
+  assert.strictEqual(r.find(([t]) => /^46/.test(t))[1], true);
+});
+
+test('F-6 a paragraph that agrees with the first pass exempts nothing (« » and the fallback, also across "; ")', () => {
+  const C = '## Corrections to the first pass\n\n';
+  const is = (prose, re) => fWhy(prose).find(([t]) => re.test(t))[1];
+  assert.strictEqual(is(C + 'The first pass reported 59.4%, which the full text confirms.\n', /59\.4/), false);
+  assert.strictEqual(is('## Verdict\n\nThe first pass said «59.4%», which the full text confirms [S1].\n', /59\.4/), false);
+  assert.strictEqual(is(C + 'The first pass said 46 participants; the full text confirms it.\n', /^46/), false);
+  assert.strictEqual(is(C + '- The first pass said «46» participants; the paper agrees.\n', /^46/), false);
+});
+
+test('F-7 a negated confirmation is no agreement: the first-pass figure stays exempt', () => {
+  const C = '## Corrections to the first pass\n\n';
+  const is = (prose, re) => fWhy(prose).find(([t]) => re.test(t))[1];
+  assert.strictEqual(is(C + 'The first pass said 46 participants; this could not be confirmed in the full text.\n', /^46/), true);
+  assert.strictEqual(is(C + "The first pass's 46-participant figure is not supported by the full text.\n", /^46/), true);
+  assert.strictEqual(is('## Verdict\n\nThe first pass said «59.4%», which the paper does not confirm; it gives 56.4% [S1].\n', /59\.4/), true);
+});
+
+test('F-8 in "Corrections to the first pass" the heading is the cue for « »; agreement is judged per whole sentence', () => {
+  const C = '## Corrections to the first pass\n\n';
+  const is = (prose, re) => fWhy(prose).find(([t]) => re.test(t))[1];
+  assert.strictEqual(is(C + '- The claim that chosen responses averaged «1450» words is not supported and is removed.\n', /1450/), true);
+  // a bullet that confirms one thing and retracts another: the retracted «0.31» stays exempt, the confirmed 115 is checked
+  const mixed = C + '- The 115 counts are supported. The τb «0.31» could not be confirmed against the excerpts.\n';
+  assert.strictEqual(is(mixed, /0\.31/), true);
+  assert.strictEqual(is(mixed, /^115/), false);
+  // the same « » outside the section, with no first-pass words in its sentence, is checked
+  assert.strictEqual(is('## Evidence\n\n- The claim that chosen responses averaged «1450» words is removed.\n', /1450/), false);
 });
 
 test('run-2 E2 fallback: the same words outside the corrections section are checked', () => {
@@ -4211,7 +4266,7 @@ test('run-2 E2 fallback: the same words outside the corrections section are chec
   const r = qCheck(prose);
   assert.ok(r.prose.includes('4321 [not found in source]'));
   // a "Corrections" heading that ends: the next heading's text is outside
-  const after = qCheck(`## Corrections to the first pass\n- The 1450 words are removed.\n\n## Confidence\nThe 4321 words are removed [${Q_SRC}].\n`);
+  const after = qCheck(`## Corrections to the first pass\n- The first pass said 1450 words.\n\n## Confidence\nThe first pass said 4321 words [${Q_SRC}].\n`);
   assert.ok(!/1450 \[/.test(after.prose) && after.prose.includes('4321 ['));
 });
 
