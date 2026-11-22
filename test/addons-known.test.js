@@ -152,43 +152,54 @@ test('brief on the shipped modules with nothing set up: the exact line a lead se
   } finally { r.cleanup(); }
 });
 
-test('review r1: a module whose own health check says this system cannot run it is "not available on this system yet", never offered', async () => {
+test('review r1: a module whose manifest "platforms" leaves out this system is "not available on this system yet", never offered; the wording comes only from the platform list', async () => {
   const r = rig(SHIPPED, [{ name: 'maestro', lead: true }]);
   try {
     const mac = await r.mods.addonFacts('maestro', { platform: 'darwin' }), linux = await r.mods.addonFacts('maestro', { platform: 'linux' });
     assert.ok(!mac.notSetUp.some((x) => x.name === 'Remote computers'));
-    const rc = mac.unsupported.find((x) => x.name === 'Remote computers');
-    assert.ok(rc && /Linux/.test(rc.why), JSON.stringify(mac.unsupported));
-    assert.deepStrictEqual(mac.unsupported.map((x) => x.name), ['Remote computers'], 'the other add-ons call their tool first: they count as able to run');
+    assert.deepStrictEqual(mac.unsupported.map((x) => [x.name, x.needs]), [['Remote computers', shipped().find((m) => m.id === 'remote-computers').platforms]]);
     assert.ok(linux.notSetUp.some((x) => x.name === 'Remote computers') && !linux.unsupported.length);
     const hm = createHubMap(hubDeps({ addons: (n) => r.mods.addonFacts(n, { platform: 'darwin' }) })).init({ port: 8888, host: '127.0.0.1', exposed: () => false, setupNeeded: () => false });
     const line = addonLineOf(await hm.briefFor('maestro'));
-    assert.match(line, /Not available on this system yet: Remote computers \(Remote computers needs My Maestro on Linux for now\); say so plainly if someone asks for one of these\./);
+    assert.match(line, /Not available on this system yet: Remote computers \(needs My Maestro on Linux\); say so plainly if someone asks for one of these\./);
     assert.doesNotMatch(line.split('Not available')[0], /Remote computers/, 'not in the list of add-ons to offer');
+    const two = createHubMap(hubDeps({ addons: () => ({ unsupported: [{ name: 'X', needs: ['linux', 'darwin', 'beos'] }] }) })).init({ port: 8888, host: '127.0.0.1', exposed: () => false, setupNeeded: () => false });
+    assert.match(addonLineOf(await two.briefFor('maestro')), /X \(needs My Maestro on Linux or a Mac\)/, 'unknown values are dropped; only fixed names reach the prompt');
   } finally { r.cleanup(); }
+  const base = JSON.parse(fs.readFileSync(path.join(FIX_ROOT, 'fakebank', 'module.json'), 'utf8'));
+  for (const bad of [[], ['beos'], 'linux', ['linux', 'linux']]) assert.match(manifestLib.validateManifest({ ...base, platforms: bad }, 'fakebank').problems.join(' | '), /platforms: a list of/, JSON.stringify(bad));
+  assert.deepStrictEqual(manifestLib.validateManifest({ ...base, platforms: ['linux', 'darwin'] }, 'fakebank').problems, []);
 });
 
-test('review r1: the system probe is generic: a fixture check that refuses without a tool call is unsupported; one that calls a tool, throws or hangs is not', async () => {
+test('review r2: every shipped module\'s "platforms" agrees with its own health check on each system (a check that refuses before any tool call = that system is not supported)', async () => {
+  for (const m of manifestLib.discover(SHIPPED)) {
+    const name = m.manifest.health && m.manifest.health.check;
+    const fn = name && m.code.checks && m.code.checks[name];
+    const declared = Array.isArray(m.manifest.platforms) ? m.manifest.platforms : manifestLib.PLATFORMS;
+    for (const platform of manifestLib.PLATFORMS) {
+      let refused = false;
+      if (typeof fn === 'function') {
+        let called = false;
+        const ctx = { platform, settings: manifestLib.safeSettings(m.manifest, {}), parse: () => null, callTool: async () => { called = true; throw new Error('not started'); } };
+        let res = null; try { res = await fn(ctx); } catch { res = null; }
+        refused = !called && !!res && res.ok === false;
+      }
+      assert.strictEqual(!refused, declared.includes(platform), `${m.id} on ${platform}: its health check ${refused ? 'refuses' : 'does not refuse'} but module.json "platforms" ${declared.includes(platform) ? 'includes' : 'leaves out'} it`);
+    }
+  }
+});
+
+test('review r1: a fixture module declaring "platforms" is unsupported elsewhere with no hub code change', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'addons-sys-'));
   try {
-    const mk = (id, body) => {
-      fs.cpSync(path.join(FIX_ROOT, 'fakebank'), path.join(root, id), { recursive: true });
-      const man = JSON.parse(fs.readFileSync(path.join(root, id, 'module.json'), 'utf8'));
-      Object.assign(man, { id, name: `Mod ${id}`, purpose: 'a test add-on', health: { check: 'probe' } });
-      fs.writeFileSync(path.join(root, id, 'module.json'), JSON.stringify(man));
-      const base = JSON.stringify(path.join(FIX_ROOT, 'fakebank', 'index.js'));
-      fs.writeFileSync(path.join(root, id, 'index.js'), `const b = require(${base}); module.exports = { ...b, checks: { ...b.checks, async probe(ctx) { ${body} } } };`);
-    };
-    mk('nosys', "if (ctx.platform !== 'plan9') return { ok: false, summary: 'Needs Plan 9.' }; return { ok: true };");
-    mk('usestool', "await ctx.callTool('x', {}); return { ok: true };");
-    mk('throws', "throw new Error('boom');");
-    mk('hangs', "await new Promise(() => {});");
+    fs.cpSync(path.join(FIX_ROOT, 'fakebank'), path.join(root, 'winonly'), { recursive: true });
+    const man = JSON.parse(fs.readFileSync(path.join(root, 'winonly', 'module.json'), 'utf8'));
+    Object.assign(man, { id: 'winonly', name: 'Windows thing', purpose: 'a test add-on', platforms: ['win32'] });
+    fs.writeFileSync(path.join(root, 'winonly', 'module.json'), JSON.stringify(man));
     const r = rig(root, [{ name: 'maestro', lead: true }]);
     try {
-      const keep = setInterval(() => {}, 200);   // the probe's own 2 s limit is unref'd (it never holds the hub open); the test waits for it
-      let f; try { f = await r.mods.addonFacts('maestro', { platform: 'linux' }); } finally { clearInterval(keep); }
-      assert.deepStrictEqual(f.unsupported.map((x) => [x.name, x.why]), [['Mod nosys', 'Needs Plan 9.']]);
-      assert.deepStrictEqual(f.notSetUp.map((x) => x.name).sort(), ['Mod hangs', 'Mod throws', 'Mod usestool']);
+      assert.deepStrictEqual((await r.mods.addonFacts('maestro', { platform: 'linux' })).unsupported.map((x) => [x.name, x.needs]), [['Windows thing', ['win32']]]);
+      assert.ok((await r.mods.addonFacts('maestro', { platform: 'win32' })).notSetUp.some((x) => x.name === 'Windows thing'));
     } finally { r.cleanup(); }
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
