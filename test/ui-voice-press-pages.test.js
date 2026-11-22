@@ -88,9 +88,10 @@ function fakeButton() {
   e.fire = (t, ev) => { const x = Object.assign({ prevented: false, preventDefault() { this.prevented = true; }, pointerId: 1, pointerType: 'touch', button: 0 }, ev); for (const f of (l[t] || []).slice()) f(x); return x; };
   return e;
 }
-function pressRig(C) {
+function pressRig(C, takesTalk = true) {
   const calls = [], clock = { t: 10000 }, el = fakeButton();
-  const call = { talk(on) { calls.push(on); } };
+  // like the controller: pressing is the REQUESTED state (set by talk), not what btn.paint shows. takesTalk = false: a call that records talk() but never takes the press (not started yet), so pressing stays false.
+  const call = { pressing: false, talk(on) { calls.push(on); if (takesTalk) this.pressing = !!on; } };
   const btn = C.voicePressButton(el, () => call, { now: () => clock.t });
   clock.t += 5000;   // the button is a few seconds old: the click of the tap that made it is long gone
   return { calls, clock, el, btn };
@@ -456,11 +457,11 @@ for (const name of ['lib', 'app.js', 'mobile.js']) {
     assert.deepStrictEqual(r.calls, [], 'no press that began here: nothing to end');
   });
   test(`R1.3 voicePressButton (${name}): a pointerdown that finds an old or same-pointer sequence that never ended starts over; a lost pointer never leaves the clicks swallowed`, () => {
-    let r = pressRig(C);
+    let r = pressRig(C, false);
     r.el.fire('pointerdown', { pointerId: 1 });   // never painted (the call did not take it), no pointerup ever comes
     r.clock.t += 11000; r.el.fire('pointerdown', { pointerId: 2 });
     assert.deepStrictEqual(r.calls, [true, true], 'older than 10 s: reset, not ignored');
-    r = pressRig(C);
+    r = pressRig(C, false);
     r.el.fire('pointerdown', { pointerId: 7 }); r.clock.t += 500; r.el.fire('pointerdown', { pointerId: 7 });
     assert.deepStrictEqual(r.calls, [true, true], 'the same pointer again: its earlier sequence is over');
     r = pressRig(C);
@@ -673,11 +674,11 @@ for (const name of ['lib', 'app.js', 'mobile.js']) {
     assert.deepStrictEqual(r.calls, [true, false], 'finger 1\'s release ends the press (the microphone does not stay on)');
   });
   test(`R3.2 voicePressButton (${name}): an old sequence whose pointer lost its capture is still taken over; so is the same pointer; a second finger inside 10 s is ignored`, () => {
-    let r = pressRig(C);
+    let r = pressRig(C, false);
     r.el.hasPointerCapture = () => false;   // the capture was lost, and no pointerup ever came
     r.el.fire('pointerdown', { pointerId: 1 }); r.clock.t += 11000; r.el.fire('pointerdown', { pointerId: 2 });
     assert.deepStrictEqual(r.calls, [true, true], 'stale and no capture: starts over');
-    r = pressRig(C);
+    r = pressRig(C, false);
     r.el.hasPointerCapture = (id) => id === 1;
     r.el.fire('pointerdown', { pointerId: 1 }); r.clock.t += 20000; r.el.fire('pointerdown', { pointerId: 1 });
     assert.deepStrictEqual(r.calls, [true, true], 'the same pointer again starts over, capture or not');
@@ -685,7 +686,7 @@ for (const name of ['lib', 'app.js', 'mobile.js']) {
     r.el.hasPointerCapture = () => false;
     r.el.fire('pointerdown', { pointerId: 1 }); r.clock.t += 9000; r.el.fire('pointerdown', { pointerId: 2 });
     assert.deepStrictEqual(r.calls, [true], 'not stale yet: ignored even with no capture');
-    r = pressRig(C);
+    r = pressRig(C, false);
     r.el.hasPointerCapture = () => { throw new Error('gone'); };   // a browser that throws: treated as no capture
     r.el.fire('pointerdown', { pointerId: 1 }); r.clock.t += 11000; r.el.fire('pointerdown', { pointerId: 2 });
     assert.deepStrictEqual(r.calls, [true, true]);

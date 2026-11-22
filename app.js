@@ -14605,74 +14605,128 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const now = typeof o.now === 'function' ? o.now : () => Date.now();
       const cls = typeof o.cls === 'string' ? o.cls : 'rec';
       const bornAt = now();   // the button is often made inside the very tap that starts the call: that tap's own click is not a press
-      let pressing = false, began = false, wasPressing = false, downAt = 0, downId, swallowUntil = 0, keyDown = false, keyClick = 0;
-      const quiet = (fn) => { try { return fn(); } catch { return undefined; } };
+
+      let painted = false;   // the visible state (ui.press), not the requested one: a press requested during the previous press's tail is shown only when admitted
+      let began = false, downId, downAt = 0, requestedAtDown = false;
+      let swallowUntil = -Infinity, keyDown = false, keyClickUntil = -Infinity;
+
+      function quiet(fn) {
+        try { return fn(); } catch { return undefined; }
+      }
       const off = () => typeof o.off === 'function' && quiet(() => o.off()) === true;
-      const talk = (on) => { quiet(() => { const c = getCall(); if (c && typeof c.talk === 'function') c.talk(on); }); };
-      const stop = (e) => { if (e && typeof e.preventDefault === 'function') quiet(() => e.preventDefault()); };
+      const stop = e => quiet(() => e?.preventDefault?.());
+      const isToggleKey = e => ['Enter', ' ', 'Spacebar'].includes(e?.key);
+
+      // A toggle asks the call (call.pressing: the requested state, call.talk), never the painted state.
+      function toggle() {
+        quiet(() => {
+          const call = getCall();
+          if (call) call.talk(!call.pressing);
+        });
+      }
+
       quiet(() => el.setAttribute('aria-label', 'Talk'));
+
       function paint(on) {
-        pressing = !!on;
-        const label = VOICE_PRESS_LABELS[pressing ? 1 : 0];
-        quiet(() => el.setAttribute('aria-pressed', pressing ? 'true' : 'false'));
+        painted = !!on;
+        const label = VOICE_PRESS_LABELS[painted ? 1 : 0];
+        quiet(() => el.setAttribute('aria-pressed', String(painted)));
         quiet(() => el.setAttribute('title', label));
         if (o.text) quiet(() => { el.textContent = label; });
-        if (cls) quiet(() => { if (el.classList) el.classList.toggle(cls, pressing); });
+        if (cls) quiet(() => el.classList?.toggle(cls, painted));
       }
+
       function onDown(e) {
-        if (off() || (e && e.pointerType === 'mouse' && e.button !== 0)) return;
+        if (off()) return;
+        if (e?.pointerType === 'mouse' && typeof e.button === 'number' && e.button !== 0) return;
         stop(e);
-        const id = e ? e.pointerId : undefined;
+
+        const id = e?.pointerId;
         const t = now();
         // a second finger on a press that is under way is ignored; a sequence that never ended (no pointerup, no cancel) starts over when it is of the same pointer, or older than VOICE_PRESS_STALE_MS
         // and its pointer no longer has capture (a long legitimate hold keeps its capture: a second finger cannot take it over)
-        if (began && !(id !== undefined && downId === id) && !(t - downAt > VOICE_PRESS_STALE_MS && !quiet(() => el.hasPointerCapture && el.hasPointerCapture(downId)))) return;
+        if (began) {
+          const samePointer = id !== undefined && id === downId;
+          const stale = t - downAt > VOICE_PRESS_STALE_MS;
+          if (!samePointer && (!stale || quiet(() => el.hasPointerCapture?.(downId)))) return;
+        }
+
+        const call = quiet(getCall);
+        if (!call) return;
+        requestedAtDown = call.pressing === true;
         began = true;
         downId = id;
         downAt = t;
-        wasPressing = pressing;
         swallowUntil = Infinity;
-        quiet(() => { if (id !== undefined && el.setPointerCapture) el.setPointerCapture(id); });
-        if (!wasPressing) talk(true);
+        if (id !== undefined) quiet(() => el.setPointerCapture?.(id));
+        if (!requestedAtDown) quiet(() => call.talk(true));
       }
+
       // Only the pointer that opened the press can end it: the release, cancel or lost capture of a second finger changes nothing.
       function finishPointer(e, cancelled) {
-        if (!began || (e ? e.pointerId : undefined) !== downId) return;
+        if (!began || e?.pointerId !== downId) return;
         const t = now();
         began = false;
         downId = undefined;
         swallowUntil = t + 700;
         stop(e);
-        if (cancelled || wasPressing || t - downAt >= VOICE_PRESS_HOLD_MS) talk(false);   // cancelled (pointercancel, lostpointercapture): the press ends now, whatever its length
+        // cancelled (pointercancel, lostpointercapture): the press ends now, whatever its length
+        if (cancelled || requestedAtDown || t - downAt >= VOICE_PRESS_HOLD_MS) {
+          quiet(() => getCall()?.talk(false));
+        }
       }
-      function onUp(e) { finishPointer(e, false); }
-      function onCancel(e) { finishPointer(e, true); }
+
       function onClick(e) {
+        if (off()) return;
         stop(e);
         if (began) return;   // a secondary click cannot consume the owner's swallow flag
-        if (off()) return;
-        if (!began && swallowUntil === Infinity) swallowUntil = 0;   // never left swallowing for good
-        if (now() - bornAt < 700 || now() <= swallowUntil) { swallowUntil = 0; return; }
-        if (now() <= keyClick) { keyClick = 0; return; }
-        talk(!pressing);   // a click from nothing we saw (assistive technology): a toggle
+        const t = now();
+        if (t - bornAt < 700 || t <= swallowUntil) {
+          swallowUntil = -Infinity;
+          return;
+        }
+        if (keyDown || t <= keyClickUntil) {
+          keyClickUntil = -Infinity;
+          return;
+        }
+        toggle();   // a click from nothing we saw (assistive technology): a toggle
       }
+
       function onKeyDown(e) {
-        const k = e && e.key;
-        if (k !== 'Enter' && k !== ' ' && k !== 'Spacebar') return;
-        if (off()) return;
+        if (!isToggleKey(e) || off()) return;
         stop(e);
         if (e.repeat || keyDown) return;
-        keyDown = true; keyClick = now() + 700;
-        talk(!pressing);
+        keyDown = true;
+        keyClickUntil = now() + 700;
+        toggle();
       }
+
       function onKeyUp(e) {
-        const k = e && e.key;
-        if (k !== 'Enter' && k !== ' ' && k !== 'Spacebar') return;
-        stop(e); keyDown = false;
+        if (!isToggleKey(e) || !keyDown) return;
+        stop(e);
+        keyDown = false;
+        // Space can produce its click on release, even after a long hold.
+        keyClickUntil = now() + 700;
       }
-      const on = [['pointerdown', onDown], ['pointerup', onUp], ['pointercancel', onCancel], ['lostpointercapture', onCancel], ['click', onClick], ['keydown', onKeyDown], ['keyup', onKeyUp]];
-      for (const [n, f] of on) el.addEventListener(n, f);
-      return { el, paint, get pressing() { return pressing; }, detach() { for (const [n, f] of on) quiet(() => el.removeEventListener(n, f)); } };
+
+      const listeners = [
+        ['pointerdown', onDown],
+        ['pointerup', e => finishPointer(e, false)],
+        ['pointercancel', e => finishPointer(e, true)],
+        ['lostpointercapture', e => finishPointer(e, true)],
+        ['click', onClick],
+        ['keydown', onKeyDown],
+        ['keyup', onKeyUp],
+      ];
+      for (const [name, fn] of listeners) el.addEventListener(name, fn);
+      return {
+        el,
+        paint,
+        get pressing() { return painted; }, // Existing handle API reports the visible state.
+        detach() {
+          for (const [name, fn] of listeners) quiet(() => el.removeEventListener(name, fn));
+        },
+      };
     }
     // ── voice helpers (end) ──
 
@@ -15992,6 +16046,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         settle();
       }
       return {
+        get pressing() { return pressing; },
         start, hangUp, release, wakeChanged, isStandby: () => standby, setMuted, isMuted: () => muted, talk, interrupt, setPrefs, retryMic, setLinkLost, onSpeechBegin, onSpeechStart, onMisfire, onSpeechEnd, onReplyText, onReadFull, resetReadFull, onActivity, onAsk, onAskDone, onHeld, onHeldDone, decide, setMode, onHubOwner, backgroundDone,
         get background() { return bgWords.length > 0; },
         get press() { return press; },

@@ -506,3 +506,91 @@ test('press R3c: a frame delivered by a detector that has been replaced is not i
   assert.deepStrictEqual(levels, ['new', 'new', 'new', 'new', 'new', 'new', 'new', 'new', 'new', 'new'], 'the replaced detector reports no level either');
   await vad.stop();
 });
+
+// ── review round 4: the press button asks the controller for the REQUESTED state (call.pressing), not what it painted (ui.press, shown only at admission) ──
+// The button receives the real controller through a spy. A is released at relative t = 0 and its 200 ms tail runs; B's inputs come from the button.
+async function queuedButtonRig(t) {
+  const { voicePressButton } = require('../lib/ui-voice');
+  const { b, win, loadScript } = fakeBrowser();
+  const c = clock();
+  const vad = voiceCreateVad({ manual: true, win, loadScript, echoHoldMs: 0, ...c.opts });
+
+  const el = new EventTarget();
+  const attrs = new Map();
+  el.setAttribute = (key, value) => attrs.set(key, value);
+  const calls = [];
+  let call;
+  const button = voicePressButton(el, () => ({
+    get pressing() { return call.pressing; },
+    talk(on) { calls.push(on); return call.talk(on); },
+  }), { now: c.now });
+
+  const h = harness({ vad, ...c.opts, stt: async () => 'A' });
+  call = voiceCreateCall({ ...h.deps, ui: { ...h.deps.ui, press: button.paint } });
+  t.after(async () => { button.detach(); await call.hangUp(); });
+  assert.equal(await call.start(), true);
+
+  const mic = b.created[0].options;
+  await mic.getStream();
+  c.go(800); // Past the button's birth guard before any tested input.
+  call.talk(true);
+  fr(mic, 20, 1);
+  call.talk(false); // Relative t = 0. Use the controller directly to isolate B's inputs.
+  await tick(10);
+
+  function fire(type, props = {}) {
+    const event = new Event(type, { cancelable: true });
+    Object.assign(event, props);
+    el.dispatchEvent(event);
+  }
+  function assertQueued() {
+    assert.equal(call.pressing, true);
+    assert.equal(attrs.get('aria-pressed'), 'false');
+    assert.equal(b.track.enabled, false);
+  }
+  async function assertCancelled() {
+    assert.deepEqual(calls, [true, false]);
+    assert.equal(call.pressing, false);
+    assert.equal(b.track.enabled, false);
+    c.go(100); // From +140 to +240, past the original admission timer.
+    await tick(40);
+    assert.equal(b.track.enabled, false);
+    assert.equal(attrs.get('aria-pressed'), 'false');
+    assert.deepEqual(calls, [true, false]);
+  }
+  return { c, fire, assertQueued, assertCancelled };
+}
+
+// Two pointer taps during A's tail: the second cancels B on release while the button still shows idle; neither trailing click reopens the microphone.
+test('press R4a: two taps during A\'s tail request B and cancel it before admission', async t => {
+  const { c, fire, assertQueued, assertCancelled } = await queuedButtonRig(t);
+  const finger = { pointerId: 1, pointerType: 'touch', button: 0 };
+  c.go(30); fire('pointerdown', finger);
+  c.go(30); fire('pointerup', finger); fire('click');
+  assertQueued();
+  c.go(40); fire('pointerdown', finger);
+  assertQueued();
+  c.go(40); fire('pointerup', finger); fire('click');
+  await assertCancelled();
+});
+
+// Keyboard: Space requests B and Enter cancels it before admission; key repeat and browser-generated clicks add no toggles.
+test('press R4b: keyboard toggles the requested press during A\'s tail', async t => {
+  const { c, fire, assertQueued, assertCancelled } = await queuedButtonRig(t);
+  c.go(30); fire('keydown', { key: ' ' });
+  fire('keydown', { key: ' ', repeat: true });
+  c.go(30); fire('keyup', { key: ' ' }); fire('click');
+  assertQueued();
+  c.go(40); fire('keydown', { key: 'Enter' }); fire('click');
+  c.go(40); fire('keyup', { key: 'Enter' });
+  await assertCancelled();
+});
+
+// Assistive clicks without pointer or keyboard events use the controller's requested state while the button remains visually idle.
+test('press R4c: assistive clicks toggle the requested press during A\'s tail', async t => {
+  const { c, fire, assertQueued, assertCancelled } = await queuedButtonRig(t);
+  c.go(30); fire('click');
+  assertQueued();
+  c.go(110); fire('click');
+  await assertCancelled();
+});
