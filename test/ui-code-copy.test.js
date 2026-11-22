@@ -345,13 +345,14 @@ const evOn = (target) => ({ target, prevented: false, stopped: false, preventDef
 
 test('press on a code button, rebuilt before the click: the click on the host copies the box at the same index', async () => {
   const d = fakeDom('unused');
-  const host = fakeHost(['one', 'two', 'three']);
+  const host = redrawHost(['one', 'two', 'three']);
   let clock = 1000;
   const got = [];
   const h = CC.makeClickHandler({ document: d.doc, now: () => clock, copy: async (t) => { got.push(t); return true; }, setTimeout: () => 1, clearTimeout() {} });
   h.pointerDown(evOn({ closest: (s) => (s === '.code-copy' ? host.buttons[1] : null) }));
-  host.rebuild();   // the streamed chunk replaced every node
+  host.redraw();   // the streamed chunk replaced every node
   clock += 200;
+  h.pointerUp(evOn({ closest: (s) => (s === '.code-copy' ? host.buttons[1] : null) }));   // released on the replacement at the same index
   const ev = evOn({ closest: () => null });   // the click lands on the rebuilt, now unrelated target
   await h(ev);
   assert.deepStrictEqual(got, ['two']);
@@ -364,14 +365,20 @@ test('press on a code button, rebuilt before the click: the click on the host co
 
 test('an old press record (over 1500 ms) or a disconnected host is ignored; a keyboard click (no press) still works', async () => {
   const d = fakeDom('unused');
-  const host = fakeHost(['one', 'two']);
+  const host = redrawHost(['one', 'two']);
   let clock = 0;
   const got = [];
   const h = CC.makeClickHandler({ document: d.doc, now: () => clock, copy: async (t) => { got.push(t); return true; }, setTimeout: () => 1, clearTimeout() {} });
-  h.pointerDown(evOn({ closest: (s) => (s === '.code-copy' ? host.buttons[0] : null) }));
+  const on = (b) => evOn({ closest: (s) => (s === '.code-copy' ? b : null) });
+  h.pointerDown(on(host.buttons[0]));
+  host.redraw();
+  h.pointerUp(on(host.buttons[0]));
   clock = 1600;
   assert.strictEqual(h(evOn({ closest: () => null })), undefined);
-  h.pointerDown(evOn({ closest: (s) => (s === '.code-copy' ? host.buttons[0] : null) }));
+  clock = 0;
+  h.pointerDown(on(host.buttons[0]));
+  host.redraw();
+  h.pointerUp(on(host.buttons[0]));
   host.isConnected = false;
   assert.strictEqual(h(evOn({ closest: () => null })), undefined);
   assert.deepStrictEqual(got, []);
@@ -546,6 +553,7 @@ test('a press that is dragged off its button: the click on the host copies nothi
   pressOn(host.buttons[1]);
   host.redraw();
   clock = 200;
+  h.pointerUp(evOn({ closest: (s) => (s === '.code-copy' ? host.buttons[1] : null) }));
   await h(evOn({ closest: () => null }));
   assert.deepStrictEqual(got, ['two']);
   // the record is cleared after the click
@@ -561,3 +569,95 @@ test('a press that is dragged off its button: the click on the host copies nothi
 test('the pointercancel listener is installed with the others, in the capture phase', () => {
   assert.match(read('lib/ui-code-copy.js'), /document\.addEventListener\('pointercancel', handler\.pointerCancel, true\)/);
 });
+
+// ---- review round 3 ----
+
+test('strict redraw fallback: only a release on the replacement at the same index copies; elsewhere, other index, old records copy nothing; keyboard works', async () => {
+  const d = fakeDom('unused');
+  const host = redrawHost(['one', 'two', 'three']);
+  let clock = 0;
+  const got = [];
+  const h = CC.makeClickHandler({ document: d.doc, now: () => clock, copy: async (t) => { got.push(t); return true; }, setTimeout: () => 1, clearTimeout() {} });
+  const on = (b) => evOn({ closest: (s) => (s === '.code-copy' ? b : null) });
+  const nowhere = () => evOn({ closest: () => null });
+  // press, redraw, release on the replacement at the same index: copies
+  h.pointerDown(on(host.buttons[1])); host.redraw(); clock = 100; h.pointerUp(on(host.buttons[1]));
+  const ev = nowhere(); await h(ev);
+  assert.deepStrictEqual(got, ['two']); assert.ok(ev.prevented);
+  // press, redraw, release elsewhere (up.btn null): no copy, no preventDefault
+  h.pointerDown(on(host.buttons[1])); host.redraw(); h.pointerUp(nowhere());
+  const e2 = nowhere(); assert.strictEqual(h(e2), undefined);
+  assert.ok(!e2.prevented); assert.deepStrictEqual(got, ['two']);
+  // release on a different index: no copy
+  h.pointerDown(on(host.buttons[1])); host.redraw(); h.pointerUp(on(host.buttons[2]));
+  const e3 = nowhere(); assert.strictEqual(h(e3), undefined);
+  assert.ok(!e3.prevented); assert.deepStrictEqual(got, ['two']);
+  // an old release record: no copy
+  clock = 1000;
+  h.pointerDown(on(host.buttons[1])); host.redraw(); h.pointerUp(on(host.buttons[1])); clock = 2600;
+  assert.strictEqual(h(nowhere()), undefined);
+  // a release with no press: no copy
+  h.pointerUp(on(host.buttons[1]));
+  assert.strictEqual(h(nowhere()), undefined);
+  // pointercancel clears both
+  clock = 3000;
+  h.pointerDown(on(host.buttons[1])); host.redraw(); h.pointerUp(on(host.buttons[1])); h.pointerCancel();
+  assert.strictEqual(h(nowhere()), undefined);
+  assert.deepStrictEqual(got, ['two']);
+  // keyboard click: no pointer records, the target is the button
+  await h(on(host.buttons[0]));
+  assert.deepStrictEqual(got, ['two', 'one']);
+});
+
+test('stale tick: copy A, redraw A, copy B before A ends: A shows Copy at once; B shows Copied then Copy', async () => {
+  const d = fakeDom('unused');
+  const host = redrawHost(['A', 'B']);
+  const T = fakeTimers();
+  const { MO, list } = fakeMO();
+  let clock = 0;
+  const h = CC.makeClickHandler({ document: d.doc, now: () => clock, MutationObserver: MO, copy: async () => true, setTimeout: T.setTimeout, clearTimeout: T.clearTimeout });
+  const on = (b) => evOn({ closest: (s) => (s === '.code-copy' ? b : null) });
+  await h(on(host.buttons[0]));
+  host.redraw(); clock = 200; list[0].cb([]);
+  assert.ok(host.buttons[0].classes.has('copied'), 'A repainted on the replacement');
+  clock = 300;
+  await h(on(host.buttons[1]));
+  assert.ok(!host.buttons[0].classes.has('copied'), 'A reset when B starts');
+  assert.strictEqual(host.buttons[0].attrs['aria-label'], 'Copy');
+  assert.ok(host.buttons[1].classes.has('copied'));
+  assert.strictEqual(host.buttons[1].attrs['aria-label'], 'Copied');
+  // a redraw while A's old timer is pending, then all timers: nothing is left on A, B ends on Copy
+  while (T.q.length) { clock += 2000; if (!T.fire()) break; }
+  assert.ok(!host.buttons[0].classes.has('copied') && host.buttons[0].attrs['aria-label'] === 'Copy');
+  assert.ok(!host.buttons[1].classes.has('copied') && host.buttons[1].attrs['aria-label'] === 'Copy');
+});
+
+test("stale tick: an earlier box's own expiry timer resets the button that shows its state", async () => {
+  const d = fakeDom('unused');
+  const host = redrawHost(['A', 'B']);
+  const T = fakeTimers();
+  const { MO, list } = fakeMO();
+  let clock = 0;
+  const h = CC.makeClickHandler({ document: d.doc, now: () => clock, MutationObserver: MO, copy: async () => true, setTimeout: T.setTimeout, clearTimeout: T.clearTimeout });
+  await h(evOn({ closest: (s) => (s === '.code-copy' ? host.buttons[0] : null) }));
+  host.redraw(); clock = 100; list[0].cb([]);
+  const shown = host.buttons[0];
+  assert.ok(shown.classes.has('copied'));
+  const t = T.q.find(x => x.ms === 1500);
+  clock = 1500; T.q.splice(T.q.indexOf(t), 1); t.f();
+  assert.ok(!shown.classes.has('copied') && shown.attrs['aria-label'] === 'Copy');
+});
+
+for (const [name, src] of Object.entries(PAGES)) {
+  test(`${name}: a linked image renders an <img> inside the <a> with no marker; with a fence in its path, exactly one button`, () => {
+    const f = renderer(src);
+    const a = f('[![badge](/b.png)](/x)');
+    assert.match(a, /<a [^>]*href="\/x"[^>]*>[\s\S]*<img[\s\S]*<\/a>/, a);
+    assert.ok(!/m[a-z0-9]{8,}[A-Z]\d+~/.test(a), 'no marker left: ' + a);
+    const b = f('[![photo](/img/```\nx\n```.png)](/gallery)');
+    assert.strictEqual(buttons(b), 1, b);
+    assert.deepStrictEqual(codeTexts(b), ['x\n']);
+    assert.ok(!/m[a-z0-9]{8,}[A-Z]\d+~/.test(b), 'no marker left: ' + b);
+    assert.match(b, /<a [^>]*href="\/gallery"[^>]*>[\s\S]*<img[\s\S]*code-copy[\s\S]*<\/a>/, 'img and box inside the link: ' + b);
+  });
+}

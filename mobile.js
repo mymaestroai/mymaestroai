@@ -1063,15 +1063,16 @@ function formatContent(content) {
   visuals.forEach((v, i) => { out = out.replace(mk('V', i), () => v); });
   // Tables FIRST: a table cell holds image / link / code markers, resolved by the passes below.
   tables.forEach((t, i) => { out = out.replace(mk('T', i), () => t); });
-  images.forEach((im, i) => {
-    const tag = imageHtml(im.src, im.alt) + im.held;
-    out = out.replace(mk('I', i), () => tag);
-  });
+  // Links BEFORE images: a link's text can hold an image marker, resolved by the image pass inside the <a>.
   links.forEach((l, i) => {
     const pu = pullCode(l.url);
     const u = safeLinkUrl(pu.clean);
     const tag = (u ? `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(l.label)}</a>` : `<code>[blocked link: ${esc(l.label)}]</code>`) + pu.held;
     out = out.replace(mk('L', i), () => tag);
+  });
+  images.forEach((im, i) => {
+    const tag = imageHtml(im.src, im.alt) + im.held;
+    out = out.replace(mk('I', i), () => tag);
   });
   // Code boxes last: a fence inside link text, a table cell or an image's alt text still gets its box.
   codeBoxes.forEach((c, i) => { out = out.replace(mk('C', i), () => c); });   // function replacer: $-sequences in the code stay literal

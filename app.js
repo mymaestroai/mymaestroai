@@ -23330,13 +23330,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         formatted = formatted.replace(mk('T', i), () => tableTokens[i]);
       }
 
-      // Re-insert extracted images: inline when same-origin / data: / blob:, a link for any other host.
-      for (let i = 0; i < imageTokens.length; i++) {
-        const imgTag = imageHtml(imageTokens[i].src, imageTokens[i].alt, 'max-height:300px;') + imageTokens[i].held;
-        formatted = formatted.replace(mk('I', i), () => imgTag);
-      }
-
-      // Re-insert extracted links: only http(s), mailto and same-origin paths; everything escaped.
+      // Re-insert extracted links BEFORE images: only http(s), mailto and same-origin paths; everything escaped. A link's
+      // text can hold an image marker; it is resolved by the image pass below, inside the <a>.
       for (let i = 0; i < linkTokens.length; i++) {
         const { text } = linkTokens[i];
         const pu = pullCode(linkTokens[i].url);
@@ -23346,6 +23341,12 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           ? `<a href="${escapeHtml(u)}" target="_blank" rel="noopener noreferrer" style="color: var(--link); text-decoration: underline;">${eText}</a>`
           : `<code>[blocked link: ${eText}]</code>`) + pu.held;
         formatted = formatted.replace(mk('L', i), () => linkTag);
+      }
+
+      // Re-insert extracted images: inline when same-origin / data: / blob:, a link for any other host.
+      for (let i = 0; i < imageTokens.length; i++) {
+        const imgTag = imageHtml(imageTokens[i].src, imageTokens[i].alt, 'max-height:300px;') + imageTokens[i].held;
+        formatted = formatted.replace(mk('I', i), () => imgTag);
       }
 
       // Code boxes last: a fence inside link text, a table cell or an image's alt text still gets its box.
