@@ -250,10 +250,14 @@ function orPage() {
   const body = d.el('div', { id: 'st-or-body' }, box);
   guard.open(ov);
   const posts = [], toasts = [];
-  let reply = null;
-  const fetch = async (url, init) => { posts.push({ url, body: JSON.parse(init.body) }); return answerOf(reply(JSON.parse(init.body))); };
+  let reply = null, getReply = null;
+  const fetch = async (url, init) => {
+    if (!init || !init.body) return getReply(url);   // the list (GET): { ok, status, json() }
+    posts.push({ url, body: JSON.parse(init.body) });
+    return reply(JSON.parse(init.body), url);
+  };
   const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-  const src = `${FAST}\nlet __modelListCache = null;\n${app.slice(a, b)}\nreturn { renderOpenRouterBox, saveOpenRouter, setView: (v) => { orView = v; } };`;
+  const src = `${FAST}\nlet __modelListCache = null;\n${app.slice(a, b)}\nreturn { renderOpenRouterBox, saveOpenRouter, loadOpenRouterBox, setView: (v) => { orView = v; } };`;
   const api = new Function('document', 'fetch', 'dialogGuard', 'esc', 'hubToast', 'stSum', src)(d.doc, fetch, guard, esc, (m) => toasts.push(m), () => {});
   const models = [{ id: 'vendor/a', name: 'A', tools: true, created: 3 }, { id: 'vendor/b', name: 'B', tools: true, created: 2 }, { id: 'other/c', name: 'C', tools: true, created: 1 }];
   api.setView({ hasKey: true, chosen: ['vendor/a'], custom: true, models });
@@ -261,7 +265,7 @@ function orPage() {
   const pick = (id) => d.doc.querySelectorAll('.st-or-pick').find(x => x.value === id);
   const hiddenRows = () => d.doc.querySelectorAll('.or-row').filter(r => r.hidden);
   const setFind = (v) => { d.doc.getElementById('st-or-q').value = v; api.renderOpenRouterBox(); };   // what the Find input does
-  return { d, guard, ov, body, posts, toasts, api, models, pick, hiddenRows, setFind, setReply: (fn) => { reply = fn; } };
+  return { d, guard, ov, body, posts, toasts, api, models, pick, hiddenRows, setFind, setReply: (fn) => { reply = (b, u) => { const r = fn(b, u); return r && typeof r.then === 'function' ? r.then(answerOf) : answerOf(r); }; }, setGetReply: (fn) => { getReply = fn; } };
 }
 
 test('OpenRouter: a tick a new Find hides stays as a hidden row, counts as a change, and goes in the Save with the visible ones', async () => {
@@ -348,4 +352,65 @@ test('Web search section: the SearXNG row wraps its buttons and its field can sh
   const tf = line('id="st-wf-try"');
   assert.match(tf, /id="st-wf-try"[^>]*style="flex:1;min-width:0"/);
   assert.match(tf, /<label style="flex:0 0 auto;display:flex;gap:4px;align-items:center"><input type="checkbox" id="st-wf-try-render">/);
+});
+
+// ── review r1 ──
+test('OpenRouter: a failed Refresh keeps the list and the ticks not saved yet; the error goes to a toast', async () => {
+  const p = orPage();
+  p.pick('vendor/b').checked = true; p.d.fire && p.d.fire(p.pick('vendor/b'), 'change');
+  p.setFind('vendor'); p.setFind('');
+  p.setGetReply(async () => ({ ok: false, status: 502, json: async () => ({}) }));
+  await p.api.loadOpenRouterBox(true);
+  assert.ok(p.pick('vendor/b'), 'the rows are still there');
+  assert.strictEqual(p.pick('vendor/b').checked, true, 'the tick is kept');
+  assert.ok(p.body.innerHTML.includes('1 change not saved yet'));
+  assert.strictEqual(p.guard.isDirty(p.ov), true, 'Close would still ask');
+  assert.ok(p.toasts.some(t => /Could not load the OpenRouter list: HTTP 502/.test(t)), p.toasts.join(' | '));
+});
+
+test('OpenRouter: Refresh after someone else changed the offer is not an edit of this person; their own ticks stay', async () => {
+  const p = orPage();
+  p.pick('other/c').checked = true; p.setFind('');   // this person ticks other/c
+  // Meanwhile the saved offer gained vendor/b elsewhere; Refresh brings it.
+  p.setGetReply(async () => ({ ok: true, status: 200, json: async () => ({ hasKey: true, custom: true, chosen: ['vendor/a', 'vendor/b'], models: p.models }) }));
+  await p.api.loadOpenRouterBox(true);
+  assert.strictEqual(p.pick('vendor/b').checked, true, 'vendor/b shows as saved, ticked');
+  assert.strictEqual(p.pick('other/c').checked, true, 'their own tick is kept');
+  assert.ok(p.body.innerHTML.includes('1 change not saved yet'), 'only their own change counts');
+  p.setReply((b) => ({ ok: true, chosen: b.models, custom: true, hasKey: true, models: p.models }));
+  await p.api.saveOpenRouter(true);
+  assert.deepStrictEqual([...p.posts[0].body.models].sort(), ['other/c', 'vendor/a', 'vendor/b'], 'vendor/b is not removed');
+});
+
+test('OpenRouter: a tick made while "Save the ticked models" is waiting stays ticked and unsaved after the answer', async () => {
+  const p = orPage();
+  let release;
+  p.setReply((b) => new Promise(r => { release = () => r({ ok: true, chosen: b.models, custom: true, hasKey: true, models: p.models }); }));
+  p.pick('vendor/b').checked = true;
+  const saving = p.api.saveOpenRouter(true);
+  await new Promise(r => setImmediate(r));
+  p.pick('other/c').checked = true;   // ticked while the save waits
+  release();
+  assert.strictEqual(await saving, true);
+  assert.deepStrictEqual([...p.posts[0].body.models].sort(), ['vendor/a', 'vendor/b']);
+  assert.strictEqual(p.pick('vendor/b').checked, true, 'saved');
+  assert.strictEqual(p.pick('other/c').checked, true, 'the newer tick is kept');
+  assert.ok(p.body.innerHTML.includes('1 change not saved yet'));
+  assert.strictEqual(p.guard.isDirty(p.ov), true, 'and Close would ask');
+});
+
+test('main Save: does not start while a Settings save is still reading its answer (after the headers)', async () => {
+  let finish;
+  const p = mainSavePage({ answer: (url) => (url === '/api/websearch/config'
+    ? Promise.resolve({ ok: true, status: 200, text: () => new Promise(r => { finish = () => r(JSON.stringify({ ok: true })); }) })
+    : Promise.resolve(answerOf({ ok: true }))) });
+  p.d.typeInto(p.f['st-ws-key-brave'], 'brave-test-1');
+  const own = p.api.saveWebSearch();   // the section's own button; its answer body is still arriving
+  await new Promise(r => setImmediate(r));
+  await p.api.saveSettings();
+  assert.deepStrictEqual(p.fetchLog.map(x => x.url), ['/api/websearch/config'], 'the main Save sent nothing');
+  assert.deepStrictEqual(p.alerts, ['A save in Settings is still running. Press Save again when it is done.']);
+  finish(); await own;
+  await p.api.saveSettings();
+  assert.ok(p.fetchLog.some(x => x.url === '/api/settings'), 'the next press saves');
 });

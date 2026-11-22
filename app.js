@@ -5594,13 +5594,21 @@
     // Ticks not saved yet, by model id (true ticked, false unticked): they survive a new Find, the tools filter and a refresh.
     // A tick on a row the filter hides stays on the page as a hidden row, so both Saves send it and Close still warns.
     const orPending = new Map();
+    let orDrawn = new Set();   // the saved offer the rows on the page were drawn from
     async function loadOpenRouterBox(refresh) {
       const body = document.getElementById('st-or-body');
       if (!body) return;
       try {
         const r = await fetch('/api/openrouter' + (refresh ? '?refresh=1' : ''), { credentials: 'include' });
-        orView = await r.json();
-      } catch (e) { body.textContent = 'Could not load the OpenRouter list: ' + e.message; return; }
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const next = await r.json();
+        if (!next || !Array.isArray(next.models)) throw new Error('the answer had no model list');
+        orView = next;
+      } catch (e) {
+        const m = 'Could not load the OpenRouter list: ' + e.message;
+        if (refresh && body.querySelector('.st-or-pick')) hubToast(m); else body.textContent = m;   // a failed Refresh keeps the list and its ticks
+        return;
+      }
       if (orView && orView.hasKey) stSum('models', 'or', `OpenRouter: ${(orView.chosen || []).length} models`);
       renderOpenRouterBox(refresh ? {} : { fresh: true });   // Settings opened: a new start; Refresh keeps the ticks
     }
@@ -5615,7 +5623,13 @@
       const v = orView;
       const savedSet = new Set(v.chosen || []);
       if (opts.fresh) orPending.clear();
-      else for (const b of body.querySelectorAll('.st-or-pick')) { if (b.checked === savedSet.has(b.value)) orPending.delete(b.value); else orPending.set(b.value, b.checked); }
+      else {
+        // Each box against the offer it was drawn from: that is what the person changed. Then an edit the offer now has
+        // (saved here or by someone else) stops counting.
+        for (const b of body.querySelectorAll('.st-or-pick')) { if (b.checked === orDrawn.has(b.value)) orPending.delete(b.value); else orPending.set(b.value, b.checked); }
+        for (const [id, on] of orPending) if (on === savedSet.has(id)) orPending.delete(id);
+      }
+      orDrawn = savedSet;
       const q = (document.getElementById('st-or-q')?.value || '').trim().toLowerCase();
       const all = !!document.getElementById('st-or-all')?.checked;
       const chosen = new Set(v.chosen || []);
@@ -5652,7 +5666,7 @@
         const r = await stSaveFetch('/api/openrouter', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
         const j = await r.json();
         if (!r.ok || !j.ok) { const m = j.error || 'Could not save.'; if (!opts.quiet) hubToast(m); return m; }
-        orView = j; renderOpenRouterBox(payload.models !== undefined ? { fresh: true } : {}); __modelListCache = null;   // the pickers refetch the model list
+        orView = j; renderOpenRouterBox(payload.models === null ? { fresh: true } : {}); __modelListCache = null;   // the pickers refetch the model list; ticks made while it saved stay
         if (done) hubToast(done(j));
         return true;
       } catch (e) { if (!opts.quiet) hubToast('Could not save: ' + e.message); return e.message; }
@@ -6635,7 +6649,9 @@
     // body that never ends is covered too.
     const ST_SAVE_TIMEOUT_MS = 30000;
     const ST_SAVE_TIMEOUT_TEXT = 'your Maestro did not answer within 30 seconds. Try again';
+    let stSaveRequests = 0;   // Settings save requests still running, until their answer is read in full (or they time out)
     async function stSaveFetch(url, init = {}) {
+      stSaveRequests++;
       const ctl = new AbortController();
       let timer;
       const late = new Promise((resolve, reject) => { timer = setTimeout(() => { ctl.abort(); reject(new Error(ST_SAVE_TIMEOUT_TEXT)); }, ST_SAVE_TIMEOUT_MS); });
@@ -6645,7 +6661,7 @@
         return { ok: r.ok, status: r.status, json: async () => (raw === undefined ? r.json() : JSON.parse(raw)) };
       })();
       answer.catch(() => {});   // after the time limit its failure (the abort) is expected and unread
-      try { return await Promise.race([late, answer]); } finally { clearTimeout(timer); }
+      try { return await Promise.race([late, answer]); } finally { clearTimeout(timer); stSaveRequests--; }
     }
     // ── save fetch (end) ──
     // The main Save also runs each section of this dialog that has its own Save button, when that section's fields changed
@@ -6668,7 +6684,7 @@
       if (stMainSaving) return;
       const box = document.getElementById('st-overlay');
       // A section's own Save still waiting for the hub: saving again now could send its values twice, out of order.
-      if (box && dialogGuard.saving(box)) { alert('A save in Settings is still running. Press Save again when it is done.'); return; }
+      if (stSaveRequests > 0 || (box && dialogGuard.saving(box))) { alert('A save in Settings is still running. Press Save again when it is done.'); return; }
       stMainSaving = true;
       // While it saves the dialog takes no typing or clicks (inert) and its buttons show as waiting, so every section sends
       // what it showed at the press and no other Save runs beside it.
