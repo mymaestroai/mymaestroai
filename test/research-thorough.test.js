@@ -4657,3 +4657,83 @@ test('I6 missingReaderFacts: names, versions, years and "Appendix B.2" are no re
   const many = `## P (${A})\n### Results\n` + Array.from({ length: 9 }, (_, i) => `- result ${1000 + i} points`).join('\n') + '\n';
   assert.strictEqual(T.missingReaderFacts(many, []).length, 5);
 });
+
+// ---- Spec J (run 4): multi-part figures on one source line; a name ending in a digit is no spaced digit group
+const J_FOUND = 'found_as_written';
+const J_NOT = 'not_found_as_written';
+const jStatus = (fig, src) => T.checkFigure(fig, src, []);
+const J_S04 = '| Model | EM-a | EM-b | EM-c |\n|---|---|---|---|\n| EM | 0.651 | 0.827 | 0.662 |\n| | | | |\n| GPT-4 | 0.627 | 0.841 | 0.830 |';
+const J_S07 = '| | Avg | .922 | .742 | .983 | .534 | .990 | .904 | .770 | .990 |';
+const J_S03 = '| Qwen2.5-7B-Instruct | Generative | ✓ | 58.2 | 64.5 | +6.3 |';
+
+test('J1-a parts written as one slash figure are found when each is its own table cell on one row, in order', () => {
+  assert.strictEqual(jStatus('0.651/0.827/0.662', J_S04), J_FOUND);
+  assert.strictEqual(jStatus('0.627/0.841/0.830', J_S04), J_FOUND);
+  assert.strictEqual(jStatus('0.651/0.828/0.662', J_S04), J_NOT, 'a changed part');
+  assert.strictEqual(jStatus('0.662/0.651', J_S04), J_NOT, 'another order');
+  assert.strictEqual(jStatus('0.651/0.841', J_S04), J_NOT, 'two rows');
+  assert.strictEqual(jStatus('0.651/0.827/0.830', J_S04), J_NOT, 'the last part is on another row');
+});
+
+test('J1-b "to" and arrows join parts found as separate cells; a repeated end is found at its later cell', () => {
+  assert.strictEqual(jStatus('.922 to .990', J_S07), J_FOUND);
+  assert.strictEqual(jStatus('.922 → .990', J_S07), J_FOUND);
+  assert.strictEqual(jStatus('.922->.990', J_S07), J_FOUND);
+  assert.strictEqual(jStatus('.990 to .922', J_S07), J_NOT, 'order');
+  assert.strictEqual(jStatus('.922 to .991', J_S07), J_NOT);
+  assert.strictEqual(jStatus('58.2/64.5', J_S03), J_FOUND);
+  assert.strictEqual(jStatus('58.2 → 64.5', J_S03), J_FOUND);
+  assert.strictEqual(jStatus('64.5 → 58.2', J_S03), J_NOT);
+});
+
+test('J1-c parts on two different lines are not found (source 10 case)', () => {
+  const src = '| 57.5 | 56.5 | 45.0 | 27.3 | 36.4 | 46.2 | 50.3 | 9.8 |\n| EN | 64.8 | 50.9 | 52.0 | 52.2 | 37.9 | 56.8 | 7.2 |';
+  assert.strictEqual(jStatus('50.3/56.8', src), J_NOT);
+  assert.strictEqual(jStatus('50.3/56.8', '| RM | 50.3 | 56.8 |'), J_FOUND);
+  assert.strictEqual(jStatus('50.3/56.8', 'first 50.3 and then\n56.8 later'), J_NOT);
+  assert.strictEqual(jStatus('50.3/56.8', 'text has 50.3 and also 56.8 here'), J_FOUND, 'a text line counts too');
+});
+
+test('J1-d a fraction of two integers, a dash range and an empty-cell dash keep their behaviour', () => {
+  assert.strictEqual(jStatus('1/8', '| a | 1 | 8 |'), J_NOT);
+  assert.strictEqual(jStatus('3/4', 'we have 3 of 4 and 3 and 4'), J_NOT);
+  assert.strictEqual(T.checkFigure('1/8', 'a ratio of 1/8 here', ['ratio']), J_FOUND);
+  assert.strictEqual(T.checkFigure('1/8', '| ratio | 1 | 8 |', ['ratio']), J_NOT);
+  assert.strictEqual(jStatus('18.2–81.8%', '| 18.2% | 81.8% |'), J_NOT);
+  assert.strictEqual(T.checkFigure('5–10%', '5–10% of users', ['users']), J_FOUND);
+  assert.strictEqual(T.checkFigure('5–10%', '| users | 5% | 10% |', ['users']), J_NOT);
+  assert.strictEqual(jStatus('52.35/–/61.44', '| Pointwise | 52.35 | - | 61.44 |'), J_NOT);
+});
+
+test('J1-e each part keeps its unit: a % on the last part reaches the others only in a percent table or a line of percents', () => {
+  assert.strictEqual(jStatus('50.3/56.8%', '| Model | Acc (%) | F1 (%) |\n|---|---|---|\n| RM | 50.3 | 56.8 |'), J_FOUND, 'percent table');
+  assert.strictEqual(jStatus('50.3/56.8%', '| RM | 50.3 | 56.8 |'), J_NOT, 'plain table: bare cells');
+  assert.strictEqual(jStatus('50.3/56.8%', 'scores 50.3% and 56.8% here'), J_FOUND, 'all numbers on the line carry %');
+  assert.strictEqual(jStatus('50.3/56.8%', 'scores 50.3 and 56.8% here, 9 runs'), J_NOT, 'a bare 50.3 in text is no percent');
+  assert.strictEqual(jStatus('50.3%/56.8 ms', '| 50.3% | 56.8 ms |'), J_FOUND);
+  assert.strictEqual(jStatus('50.3 ms/56.8%', '| 50.3 | 56.8% |'), J_NOT, 'a part keeps its own unit');
+});
+
+test('J2-a a name that ends in a digit before a number is no spaced digit group (run 4 sources 01 and 06)', () => {
+  const run = (claim, src) => {
+    const r = T.checkClaims([{ id: 'c1', claim, source_url: 'https://a.example/a', figures: [] }], [{ url: 'https://a.example/a', ok: true, text: src }]);
+    return Object.fromEntries(r.claims[0].figures.map((f) => [f.figure, f.status]));
+  };
+  assert.strictEqual(run('LitBench scores: deepseek-r1 0.710, gpt-4.1 0.702 per model', '| deepseek-r1 | 0.7100.710 | 142.8142.8 |\n| gpt-4.1 | 0.702 | 1.1 |')['0.710'], J_FOUND);
+  assert.strictEqual(run('similarity DeepSeek-V3 with qwen-max-2025-01-25 0.82 and more', 'models qwen-max-2025-01-25 share a similarity of 0.820.82, while others')['0.82'], J_FOUND);
+  assert.strictEqual(run('similarity of GPT-4 0.62 on the judge', '| similarity | GPT-4 | 0.62 |')['0.62'], J_FOUND);
+  assert.strictEqual(run('similarity of Llama-3.1-8B 56.4% on the judge', '| Llama-3.1-8B | 56.4% |')['56.4%'], J_FOUND);
+});
+
+test('J2-b spaced digit groups keep the "#" form: "1 250" is not "1250" and is "1 250"', () => {
+  const run = (claim, src) => {
+    const r = T.checkClaims([{ id: 'c1', claim, source_url: 'https://a.example/a', figures: [] }], [{ url: 'https://a.example/a', ok: true, text: src }]);
+    return r.claims[0].figures.find((f) => f.figure === '250').status;
+  };
+  assert.strictEqual(run('total 1 250 users', 'total 1250 users'), J_NOT);
+  assert.strictEqual(run('total 1 250 users', 'total 1 250 users'), J_FOUND);
+  assert.strictEqual(run('total 1,2 250 users', 'total 1250 users'), J_NOT);
+  // after a bracket or a currency sign the digit group is still one (a bare "250" never matches "(1 250" or "$1 250")
+  assert.strictEqual(run('total 250 users', 'total (1 250 users)'), J_NOT);
+  assert.strictEqual(run('total 250 users', 'total $1 250 users'), J_NOT);
+});
