@@ -214,7 +214,7 @@ test('keptOnBox: a model of another vendor fails closed; all on the own vendor r
   const msg1 = await delivered(bad, r1.id);
   assert.match(msg1, /the research models must stay on the agent's own service/);
   assert.ok(!bad.calls.some((c) => /^Lead step/.test(c.label)));
-  const good = make({ deps: { keptOnBox: () => true } });
+  const good = make({ deps: { keptOnBox: () => true }, models: { ...MODELS, reader: BIG, reviewers: [{ model: BIG, label: 'Own' }] } });
   const r2 = startThorough(good);
   const msg2 = await delivered(good, r2.id);
   assert.match(msg2, /Which model did what/);
@@ -385,4 +385,48 @@ test('r2: a salvage after a restart never writes into the Files folder of a re-m
   await new Promise((r) => setTimeout(r, 50));
   assert.strictEqual(m.written.length, 0, 'no document in the new agent\'s folder');
   assert.ok(fs.existsSync(path.join(dir, 'drafts', 'v1.md')), 'the run folder keeps the draft');
+});
+
+// ================================================================ review round 2 fixes
+test('r2-5: kept content allows only the agent\'s own model exactly: a reviewer of the same vendor on another service or model is refused up front', async () => {
+  const m = make({ deps: { keptOnBox: () => true, ownModelOf: async () => 'openai/y' }, models: { lead: 'openai/y', reader: 'openai/y', readerTop: 'openai/y', reviewers: [{ model: 'codex-cli/x', label: 'Codex' }] } });
+  const r = startThorough(m);
+  assert.match(await delivered(m, r.id), /the research models must stay on the agent's own service/);
+  assert.ok(!m.calls.some((c) => /^Lead step/.test(c.label)));
+  // the same vendor, another model of the same service: not the own model either
+  const n = make({ deps: { keptOnBox: () => true }, models: { ...MODELS, reader: BIG, readerTop: BIG, reviewers: [{ model: FAST, label: 'Fast' }] } });
+  const r2 = startThorough(n);
+  assert.match(await delivered(n, r2.id), /must stay on the agent's own service/);
+});
+
+test('r2-5: kept is read again when the launcher dispatches (admit): a policy switched on while a reviewer waits means it is not dispatched; the result says refused', async () => {
+  let kept = false;
+  const dispatched = [];
+  const seen = [];
+  const lead = [
+    act({ type: 'open', url: URL_A }),
+    act({ type: 'read', parts: ['S1'], brief: 'main result' }),
+    act({ type: 'write_draft', markdown: DRAFT }, { type: 'check' }, { type: 'review' }),
+    (t) => { seen.push(t); return act({ type: 'show_draft' }); },
+    act({ type: 'show_draft' }),
+    act({ type: 'finish', summary: 'at the ceiling', open_points: ['no review'] }),
+  ];
+  const spawn = async (agent, workers, signal, opts = {}) => workers.map((w) => {
+    let text = 'x';
+    if (/^Review R/.test(w.label)) {
+      kept = true;   // the policy changes while this worker waits in the launcher
+      if (opts.admit && !opts.admit()) return { label: w.label, ok: false, text: '(no response)' };
+      dispatched.push(w.model);
+      text = '{"verdict":"ACCEPT","findings":[]}';
+    } else if (/^Research \d+$/.test(w.label)) text = `Finding. Method A scored 56.4%.\nSOURCES READ:\n- ${URL_A}`;
+    else if (w.label === 'First pass summary') text = '## Verdict\nA.';
+    else if (/^Read N/.test(w.label)) text = 'Note: Table 6 gives 56.4%.';
+    else { const mm = /^Lead step (\d+)/.exec(w.label); let r = lead[Number(mm[1]) - 1]; if (typeof r === 'function') r = r(w.task); text = r; }
+    return { label: w.label, ok: true, text };
+  });
+  const m = make({ lead, settings: { leadSteps: 5 }, deps: { spawn, keptOnBox: () => kept }, models: { ...MODELS, reviewers: [{ model: 'claude-sdk/claude-test-rev', label: 'Other model' }] } });
+  const r = startThorough(m);
+  await delivered(m, r.id);
+  assert.deepStrictEqual(dispatched, [], 'the reviewer was never dispatched');
+  assert.match(seen[0], /refused: this agent's content must stay on its own service/);
 });

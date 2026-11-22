@@ -210,7 +210,7 @@ test('steps ceiling: CEILING REACHED prompt, other actions refused, the engine e
   assert.strictEqual((log.match(/refused: ceiling reached \(steps\)/g) || []).length, 3);
   assert.strictEqual(res.ceiling, 'steps');
   assert.ok(res.markdown.includes('**This report stopped at a ceiling: steps.**'));
-  assert.deepStrictEqual(res.openPoints, ['Open: a second source', 'Open: B not read']);
+  assert.deepStrictEqual(res.openPoints, ['Open: a second source', 'Open: B not read', 'No figure check of the final draft ran.', 'No review of the final draft completed.']);
   assert.ok(res.markdown.includes('- Open: a second source'));
   assert.ok(res.markdown.includes('[1](https://example.org/a)'));
 });
@@ -221,10 +221,10 @@ test('ceiling: open points are the last Open: lines of the notebook, else "not r
     lead: [{ actions: [{ type: 'write_draft', markdown: 'A plain claim.' }, ...notebookAction] }, { actions: [{ type: 'show_draft' }] }, { actions: [{ type: 'show_draft' }] }],
   });
   const withOpen = await L.runLead(mk([{ type: 'notebook', append: 'Open: first\n- Open: second' }]).opts());
-  assert.deepStrictEqual(withOpen.openPoints, ['Open: first', 'Open: second']);
+  assert.deepStrictEqual(withOpen.openPoints, ['Open: first', 'Open: second', 'No figure check of the final draft ran.', 'No review of the final draft completed.']);
   assert.ok(withOpen.markdown.includes('- Open: first'));
   const none = await L.runLead(mk([]).opts());
-  assert.deepStrictEqual(none.openPoints, ['Open points were not recorded']);
+  assert.deepStrictEqual(none.openPoints, ['Open points were not recorded', 'No figure check of the final draft ran.', 'No review of the final draft completed.']);
 });
 
 test('readerCalls ceiling: a read that would pass it is refused, the next step is a ceiling step and the lead may finish', async () => {
@@ -490,7 +490,7 @@ test('exports and defaults', () => {
   assert.deepStrictEqual(Object.keys(L.LEAD_DEFAULTS).sort(), ['leadSteps', 'maxParallel', 'readerCalls', 'readerTextMax', 'readerTopTextMax', 'reviewRounds', 'stepPromptMax', 'stepResultMax', 'wallMinutes']);
   assert.strictEqual(L.LEAD_DEFAULTS.leadSteps, 60);
   assert.strictEqual(L.LEAD_DEFAULTS.stepPromptMax, 600000);
-  assert.ok(L.ACTION_TYPES.includes('finish') && L.ACTION_TYPES.length === 17);
+  assert.ok(L.ACTION_TYPES.includes('finish') && L.ACTION_TYPES.length === 18 && L.ACTION_TYPES.includes('show_sources'));
   for (const t of ['show_index', 'show_notebook', 'show_quickpass']) assert.ok(L.ACTION_TYPES.includes(t), t);
   assert.ok(Array.isArray(L.READER_RULES) && L.READER_RULES.length >= 6);
 });
@@ -918,9 +918,9 @@ test('r1-7: leadCostLine prices every pay-per-use role whatever the lead\'s bill
   // typical: lead 30 steps (35000 in, 2000 out), 16 reads (35000/3000), 4 top (60000/3000), 4 rounds x 2 reviewers (40000/2000); at most: 60 steps of 150000 in,
   // 40 reader calls of 100000 in, 10 rounds x 2 reviewers of 125000 in
   const typical = (30 * 37000 + 16 * 38000 + 4 * 63000 + 2 * 4 * 42000) / 1e6;
-  const max = (60 * 152000 + 40 * 103000 + 2 * 10 * 127000) / 1e6;
+  const max = (121 * 152000 + 40 * 103000 + 2 * 10 * 127000) / 1e6;
   const usd = (x) => (x < 10 ? `$${x.toFixed(2)}` : `$${Math.round(x)}`);
-  assert.strictEqual(all, `Pay-per-use estimate: a typical Thorough run costs about ${usd(typical * 0.6)} to ${usd(typical * 1.5)} on these models, and at most about ${usd(max)} at its limits.`);
+  assert.strictEqual(all, `Pay-per-use estimate: a typical Thorough run costs about ${usd(typical * 0.6)} to ${usd(typical * 1.5)} on these models; at its limits it could reach about ${usd(max)}.`);
   // the lead on a subscription, a reviewer pay-per-use: that reviewer is priced, the rest is free
   const rev = L.leadCostLine(models, {}, { estimate, kindOf: kinds({ V1: 'api' }) });
   assert.ok(rev.startsWith('Pay-per-use estimate: a typical Thorough run costs about $0.') || rev.startsWith('Pay-per-use estimate: a typical Thorough run costs about $'));
@@ -928,11 +928,157 @@ test('r1-7: leadCostLine prices every pay-per-use role whatever the lead\'s bill
   assert.ok(rev.includes(`about ${usd(onlyRev * 0.6)} to ${usd(onlyRev * 1.5)}`), rev);
   // no pay-per-use role, or a price that is unknown for a needed role
   assert.strictEqual(L.leadCostLine(models, {}, { estimate, kindOf: kinds({}) }), '');
-  assert.strictEqual(L.leadCostLine(models, {}, { estimate: (m, i, o) => (m === 'R/x' ? null : 1), kindOf: kinds({ L: 'api', R: 'api' }) }), '');
-  assert.strictEqual(L.leadCostLine(models, {}, { estimate: () => null, kindOf: kinds({ V2: 'api' }) }), '');
+  assert.strictEqual(L.leadCostLine(models, {}, { estimate: (m, i, o) => (m === 'R/x' ? null : 1), kindOf: kinds({ L: 'api', R: 'api' }) }), 'Pay-per-use: no estimate can be given because the price of R/x is not known here; a Thorough run makes many calls.');
+  assert.strictEqual(L.leadCostLine(models, {}, { estimate: () => null, kindOf: kinds({ V2: 'api' }) }), 'Pay-per-use: no estimate can be given because the price of V2/x is not known here; a Thorough run makes many calls.');
   assert.strictEqual(L.leadCostLine(null, {}, { estimate, kindOf: kinds({}) }), '');
   // the limits follow the settings: stepPromptMax, readerCalls (reader calls at the top-tier size, at most 100000 tokens each)
   const small = L.leadCostLine(models, { stepPromptMax: 40000, readerCalls: 5, readerTopTextMax: 80000, leadSteps: 10, reviewRounds: 1 }, { estimate, kindOf: kinds({ L: 'api', R: 'api', T: 'api', V1: 'api', V2: 'api' }) });
-  const max2 = (10 * (10000 + 2000) + 5 * (20000 + 3000) + 2 * 1 * 127000) / 1e6;
-  assert.ok(small.endsWith(`and at most about ${usd(max2)} at its limits.`), small);
+  const max2 = (21 * (10000 + 2000) + 5 * (20000 + 3000) + 2 * 1 * 127000) / 1e6;
+  assert.ok(small.endsWith(`at its limits it could reach about ${usd(max2)}.`), small);
+});
+
+// ================================================================ review round 2 fixes
+const DOWN = () => { throw new Error('down'); };
+const readState = (dir) => JSON.parse(fs.readFileSync(path.join(dir, 'state.json'), 'utf8'));
+
+test('r2-1: each review round records its draft version and every slot\'s outcome; two rounds with no readable verdict allow a finish without a review, stated', async () => {
+  const e = env({
+    review: DOWN,
+    lead: [
+      A({ type: 'write_draft', markdown: 'A plain claim.' }, { type: 'check' }, { type: 'review' }),
+      A({ type: 'finish', summary: 'too early' }),
+      A({ type: 'review' }),
+      A({ type: 'finish', summary: 'without a review', open_points: ['mine'] }),
+    ],
+  });
+  const res = await L.runLead(e.opts());
+  assert.ok(e.prompts[1].includes('reviewers unavailable') === false, 'one failed round is not yet "unavailable"');
+  assert.ok(e.prompts[2].includes('refused: no review round completed on the current draft (v1)'));
+  assert.ok(e.prompts[3].includes('reviewers unavailable: you may finish without a review; it will be stated.'));
+  assert.strictEqual(res.summary, 'without a review');
+  assert.deepStrictEqual(res.state.rounds, [
+    { round: 1, version: 1, slots: [{ label: 'Alpha', outcome: 'FAILED' }, { label: 'Beta', outcome: 'FAILED' }] },
+    { round: 2, version: 1, slots: [{ label: 'Alpha', outcome: 'FAILED' }, { label: 'Beta', outcome: 'FAILED' }] },
+  ]);
+  assert.deepStrictEqual(res.openPoints, ['mine', 'No reviewer could complete a review of the final draft.', 'The review by Alpha did not complete on the final draft.', 'The review by Beta did not complete on the final draft.']);
+  assert.ok(res.markdown.includes('- No reviewer could complete a review of the final draft.'));
+});
+
+test('r2-1: one readable verdict completes the round; the slot that did not is an open point of the finish', async () => {
+  const e = env({
+    review: (t, model) => (model === 'rev-a' ? '```json\n{"verdict":"ACCEPT","findings":[]}\n```' : 'no json here'),
+    lead: [A({ type: 'write_draft', markdown: 'A plain claim.' }, { type: 'check' }, { type: 'review' }), A({ type: 'finish', summary: 'done' })],
+  });
+  const res = await L.runLead(e.opts());
+  assert.deepStrictEqual(res.state.rounds[0].slots, [{ label: 'Alpha', outcome: 'ACCEPT' }, { label: 'Beta', outcome: 'UNREADABLE' }]);
+  assert.deepStrictEqual(res.openPoints, ['The review by Beta did not complete on the final draft.']);
+  // a slot of an older draft's round is not reported for the final draft
+  const f = env({ review: (t, model) => (model === 'rev-a' ? '{"verdict":"ACCEPT","findings":[]}' : 'x'), lead: [A({ type: 'write_draft', markdown: 'Plain.' }, { type: 'check' }, { type: 'review' }), A({ type: 'edit_draft', replace: [{ old: 'Plain', new: 'Simple' }] }), A({ type: 'check' }, { type: 'review' }), A({ type: 'finish', summary: 'ok' })] });
+  const r2 = await L.runLead(f.opts());
+  assert.deepStrictEqual(r2.state.rounds.map((r) => r.version), [1, 2]);
+});
+
+test('r2-2: a show_source slice counts as read only for the part that reached the lead (the kept prefix of the next prompt)', async () => {
+  const big = 'abcdefghij'.repeat(4000);   // 40000 characters
+  const e = env({
+    pages: { [URL_A]: { title: 'Big', text: big } }, reviewers: [], settings: { stepPromptMax: 20000 },
+    lead: [A({ type: 'open', url: URL_A }), A({ type: 'show_source', sid: 'S1', from: 0, chars: 40000 }), A({ type: 'show_draft' }), A({ type: 'show_draft' })],
+  });
+  await assert.rejects(L.runLead(e.opts()), /no scripted lead reply/);
+  const p = e.prompts[2];
+  assert.ok(p.length <= 20000 && /\[cut: \d+ characters of results left out/.test(p));
+  const st = readState(e.dir);
+  const r = st.sources[0].ranges;
+  assert.ok(r.length === 1 && r[0][0] === 0 && r[0][1] > 5000 && r[0][1] < 20000, JSON.stringify(r));
+  // exactly what is in the prompt: the source characters shown there
+  const shown = (p.split('RESULTS OF YOUR LAST ACTIONS')[1].match(/abcdefghij/g) || []).length * 10;
+  assert.ok(Math.abs(r[0][1] - shown) <= 10, `${r[0][1]} vs ${shown}`);
+  assert.strictEqual(L.coverageOf(st.sources[0]).covered, false);
+});
+
+test('r2-2: a show_source in the step that finishes is never credited (the lead never saw it)', async () => {
+  const e = env({ reviewers: [], lead: [A({ type: 'open', url: URL_A }), A({ type: 'write_draft', markdown: 'Plain.' }, { type: 'check' }), A({ type: 'show_source', sid: 'S1' }, { type: 'finish', summary: 's' })] });
+  const res = await L.runLead(e.opts());
+  assert.strictEqual(res.summary, 's');
+  assert.deepStrictEqual(res.state.sources[0].ranges, []);
+  assert.strictEqual(res.state.sources[0].read, false);
+  // while a slice that reached the next prompt is credited
+  const f = env({ reviewers: [], lead: [A({ type: 'open', url: URL_A }), A({ type: 'show_source', sid: 'S1' }), A({ type: 'write_draft', markdown: 'Plain.' }, { type: 'check' }), A({ type: 'finish', summary: 's' })] });
+  const r2 = await L.runLead(f.opts());
+  assert.deepStrictEqual(r2.state.sources[0].ranges, [[0, TEXT_A.length]]);
+});
+
+test('r2-3: over the cap the SOURCES list keeps its first 50 and last 150 lines; show_sources pages the rest; the variable part is cut last', async () => {
+  const sources = Array.from({ length: 400 }, (_, i) => ({ n: i + 1, title: `Title ${i + 1}`, url: `https://x.example/${i + 1}`, ok: true, chars: 100 }));
+  const base = { playbook: 'PB-PLAYBOOK', run: { question: 'THE-QUESTION?', subQuestions: [] }, firstPass: 'QUICK', findingsText: 'F', settings: { ...L.LEAD_DEFAULTS, stepPromptMax: 20000 }, counts: { steps: 3 }, step: 4, notes: [], found: [], draftVersion: 0, notebook: 'NB', index: [], results: '' };
+  const p = L.leadStepPrompt({ ...base, sources });
+  assert.ok(p.length <= 20000, String(p.length));
+  assert.ok(p.includes('S1 | Title 1 |') && p.includes('S50 | Title 50 |') && !p.includes('S51 | Title 51 |') && !p.includes('S250 | Title 250 |') && p.includes('S251 | Title 251 |') && p.includes('S400 | Title 400 |'));
+  assert.ok(p.includes('[200 sources not listed: show_sources from=50]'));
+  // last resort: nothing else to shrink; the fixed prefix stays whole
+  const notes = Array.from({ length: 3000 }, (_, i) => ({ n: i + 1, sources: ['S1'], level: 'normal' }));
+  const q = L.leadStepPrompt({ ...base, sources: [], notes });
+  assert.ok(q.length <= 20000 && q.endsWith('[prompt cut at the limit; page with the show_* actions]'), String(q.length));
+  assert.ok(q.startsWith('PB-PLAYBOOK') && q.includes('THE-QUESTION?') && q.includes('QUICK'));
+  // below the cap nothing is cut
+  assert.ok(!L.leadStepPrompt({ ...base, settings: L.LEAD_DEFAULTS, sources }).includes('[200 sources not listed'));
+  // the action pages the list
+  const e = env({ reviewers: [], lead: [A({ type: 'open', url: URL_A }, { type: 'open', url: URL_B }), A({ type: 'show_sources', from: 1 }), A({ type: 'show_draft' })] });
+  await assert.rejects(L.runLead(e.opts()), /no scripted lead reply/);
+  const res2 = e.prompts[2].split('RESULTS OF YOUR LAST ACTIONS')[1];
+  assert.ok(res2.includes('SOURCES lines 1-2') && res2.includes('S2 | Report B') && !res2.includes('refused'));
+  assert.ok(e.prompts[0].includes('"type":"show_sources"'));
+});
+
+test('r2-3: reviewBriefLead caps the check text at 100000 characters and names the lines left out', () => {
+  const lines = Array.from({ length: 3000 }, (_, i) => `- not_found: "${i}" ${'x'.repeat(90)}`);
+  const b = L.reviewBriefLead({ question: 'Q', draft: 'D', notes: [], check: lines.join('\n') });
+  assert.ok(b.length < 105000, String(b.length));
+  const m = /\[(\d+) more check lines left out\]/.exec(b);
+  assert.ok(m && Number(m[1]) > 2000 && Number(m[1]) < 2200, m && m[0]);
+  assert.ok(b.includes('- not_found: "0"') && !b.includes('- not_found: "2999"'));
+  assert.ok(!L.reviewBriefLead({ question: 'Q', draft: 'D', notes: [], check: 'short check' }).includes('left out]'));
+});
+
+test('r2-6: the ending without a finish has the same open points as a finish: no check, no completed review, objections, incomplete slots', async () => {
+  const e = env({
+    settings: { leadSteps: 2 },
+    review: (t, model) => (model === 'rev-a' ? BLOCK_REVIEW : DOWN()),
+    lead: [A({ type: 'write_draft', markdown: 'The new method is preferred 56.4% [S1].' }, { type: 'open', url: URL_A }, { type: 'check' }, { type: 'review' }, { type: 'notebook', append: 'Open: one more source' }), A({ type: 'show_draft' }), A({ type: 'show_draft' })],
+  });
+  const res = await L.runLead(e.opts());
+  assert.strictEqual(res.ceiling, 'steps');
+  assert.deepStrictEqual(res.openPoints, ['Open: one more source', 'Reviewer objection not changed in the report: the 56.4% figure: it is a sub-group result', 'The review by Beta did not complete on the final draft.']);
+  assert.ok(res.markdown.includes('- The review by Beta did not complete on the final draft.'));
+  // no check, no review at all
+  const f = env({ settings: { leadSteps: 1 }, lead: [A({ type: 'write_draft', markdown: 'A plain claim.' }), A({ type: 'show_draft' })] });
+  const r2 = await L.runLead(f.opts());
+  assert.deepStrictEqual(r2.openPoints, ['Open points were not recorded', 'No figure check of the final draft ran.', 'No review of the final draft completed.']);
+  // an unreadable-answer ending too
+  const g = env({ reviewers: [], lead: [A({ type: 'write_draft', markdown: 'A plain claim.' }), ['garbage', 'more garbage']] });
+  const r3 = await L.runLead(g.opts());
+  assert.strictEqual(r3.ceiling, 'unreadable answer');
+  assert.deepStrictEqual(r3.openPoints, ['Open points were not recorded', 'No figure check of the final draft ran.']);
+});
+
+test('r2-7: results go to results.md, state.json is compact and has no lastResults; a resume reads them from results.md; an old state.json with lastResults is read once', async () => {
+  const dir = tmp();
+  const lead = [A({ type: 'search', query: 'q' }), A({ type: 'progress', line: 'RESULT-MARK-TWO' }), A({ type: 'show_draft' }), A({ type: 'show_draft' })];
+  const stateSteps = () => { try { return readState(dir).counts.steps; } catch { return 0; } };
+  const e1 = env({ dir, lead, reviewers: [], isDead: () => stateSteps() >= 2 });
+  await assert.rejects(L.runLead(e1.opts()), /stopped/);
+  const raw = fs.readFileSync(path.join(dir, 'state.json'), 'utf8');
+  assert.ok(!raw.includes('lastResults') && !raw.includes('\n') && !/^\{\n/.test(raw), 'compact, no lastResults');
+  assert.ok(fs.readFileSync(path.join(dir, 'results.md'), 'utf8').includes('progress shown'));
+  const e2 = env({ dir, lead, reviewers: [] });
+  await assert.rejects(L.runLead(e2.opts()), /no scripted lead reply/);
+  assert.ok(e2.prompts[0].includes('[action 1: progress]\nprogress shown'), 'step 3 sees the results of step 2');
+  // an old state with lastResults
+  const old = tmp();
+  fs.writeFileSync(path.join(old, 'state.json'), JSON.stringify({ version: 1, counts: { steps: 1 }, lastResults: '[action 1: search]\nOLD-STATE-RESULTS', sources: [], notes: [], reviews: [], found: [], index: [] }));
+  const e3 = env({ dir: old, lead: [A({ type: 'show_draft' }), A({ type: 'show_draft' })], reviewers: [] });
+  await assert.rejects(L.runLead(e3.opts()), /no scripted lead reply/);
+  assert.ok(e3.prompts[0].includes('OLD-STATE-RESULTS'));
+  assert.ok(!('lastResults' in readState(old)));
+  assert.ok(fs.readFileSync(path.join(old, 'results.md'), 'utf8').includes('[action 1: show_draft]'), 'results.md is the new step\'s now');
 });
