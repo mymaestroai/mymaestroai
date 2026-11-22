@@ -99,6 +99,10 @@ per-call wait for slow calls such as an upload; without it the 60 s default appl
 | `signin` | "Sign in" with a short code shown to the person (OAuth device flow), or with a button that sends the person to the service and back (flow `code`). Needs the `oauth` block in module.json and the client ID and secret saved first (an earlier `secrets` step). Done when the sign-in succeeds | |
 | `finish` | Switches the module on when every non-optional step is done | |
 
+### One-button step (`auto` step)
+
+The `auto` step does the whole setup with one button. With `"prepare": true` it asks the module's `setup.prepare(ctx)` for the settings to use. On a first setup it asks **twice**: once before the download, and once after it with fresh facts about the computer. So `prepare` must only look and return an answer: it must not write files, start anything, or rely on being called once. The same answers must always give the same result. (`test/modules-prepare-twice.test.js` checks this for every module that exports `setup.prepare`.)
+
 ### Sign-in (`signin` step)
 
 Admin-only routes: `POST /api/modules/<id>/signin/start` replies `{ userCode, verificationUrl, intervalSec, expiresAt }`

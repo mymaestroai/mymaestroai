@@ -602,8 +602,42 @@ function autoContinue(stepId, btn) {
   runAutoStep(stepId, { choices: { [a.choose.key]: picked.value } }, btn);
 }
 function autoAdmin(stepId, btn) { runAutoStep(stepId, { adminChoice: true }, btn); }
-async function copyAdminCmd(btn) {
-  const t = (document.getElementById('admin-cmd') || {}).textContent || '';
+// A check step's choice: the label, then one radio per option (label in bold, the note under it in the dim style).
+function choiceHtml(s) {
+  const c = s.choice;
+  if (!c || !Array.isArray(c.options)) return '';
+  return `<div class="field step-choice"><span class="lbl">${esc(c.label)}</span>${c.options.map(o => `<label class="chk" style="margin:4px 0;align-items:flex-start"><input type="radio" name="step-choice" value="${esc(o.value)}" ${o.value === c.default ? 'checked' : ''}><span><b>${esc(o.label)}</b>${o.note ? `<br><span class="dim">${esc(o.note)}</span>` : ''}</span></label>`).join('')}</div>`;
+}
+function pickedChoice() {
+  const el = document.querySelector('input[name="step-choice"]:checked');
+  return el && typeof el.value === 'string' ? el.value : undefined;
+}
+// The answer to a check that holds one-time lines: the lines (a line "Command: ..." in a code box with Copy), and the QR code of its link.
+function onceHtml(oc, qrSvg) {
+  const lines = (oc.lines || []).map(l => {
+    const t = String(l);
+    return t.startsWith('Command: ')
+      ? `<div class="cmd-box"><pre class="redirect-uri mono cmd-text" style="white-space:pre-wrap">${esc(t.slice(9))}</pre> <button onclick="copyAdminCmd(this, this.previousElementSibling)">Copy</button></div>`
+      : `<div>${esc(t)}</div>`;
+  }).join('');
+  const qr = qrSvg ? `<div class="once-qr"><div class="qr-box" style="background:#fff;display:inline-block;padding:4px;border-radius:6px">${qrSvg}</div><div class="dim" style="font-size:12px;max-width:200px">Scan it with the computer's camera or a phone to open the link there.</div></div>` : '';
+  return `<div style="display:flex;flex-wrap:wrap;gap:14px;align-items:flex-start"><div style="flex:1 1 280px;min-width:0"><div>${esc(oc.summary || '')}</div>${lines}</div>${qr}</div>`;
+}
+function loadQr() {
+  return new Promise((resolve) => {
+    if (window.qrcode) return resolve();
+    const s = document.createElement('script'); s.src = '/vendor/qrcode.min.js'; s.onload = resolve; s.onerror = resolve; document.head.appendChild(s);
+  });
+}
+async function showOnce(oc) {
+  const el = document.getElementById('step-msg'); if (!el) return;
+  el.className = 'msg show ok'; el.innerHTML = onceHtml(oc, '');
+  if (typeof oc.qr !== 'string' || !oc.qr) return;
+  try { await loadQr(); } catch { /* no code then */ }
+  if (window.qrcode) { try { el.innerHTML = onceHtml(oc, window.qrcode.svg(oc.qr, { size: 168, margin: 2, dark: '#000', light: '#fff' })); } catch { /* the lines stay */ } }
+}
+async function copyAdminCmd(btn, el) {
+  const t = ((el && el.textContent !== undefined ? el : document.getElementById('admin-cmd')) || {}).textContent || '';
   try { await navigator.clipboard.writeText(t); if (btn) btn.textContent = 'Copied'; } catch { if (btn) btn.textContent = 'Select the command and copy it'; }
 }
 // The collapsed fold of settings marked advanced. `all` = the overview, where the one Save button below saves every field on the page.
@@ -641,7 +675,8 @@ function stepHtml(s) {
   } else if (s.type === 'check') {
     const lc = m.lastCheck;
     inner = (lc ? `<div class="msg show ${lc.ok ? (lc.warnings.length ? 'warn' : 'ok') : 'err'}">${esc(lc.summary)}${lc.lines.length ? '\n' + esc(lc.lines.join('\n')) : ''}${lc.warnings.length ? '\n⚠ ' + esc(lc.warnings.join('\n⚠ ')) : ''}\n<span class="dim">Checked ${esc(fmtStamp(lc.at))}</span></div>` : '') +
-      `<div id="ack-area"></div><div class="actions"><button class="primary" onclick="runCheck('${esc(s.id)}', this)">Run the check</button></div>`;
+      choiceHtml(s) +
+      `<div id="ack-area"></div><div class="actions"><button class="primary" onclick="runCheck('${esc(s.id)}', this)">${esc(s.button || 'Run the check')}</button></div>`;
   } else if (s.type === 'settings') {
     inner = visibleSettings(m).filter(st => (s.fields || []).includes(st.key)).map(st => settingField(st, m.settings[st.key])).join('') +
       `<div class="actions"><button class="primary" onclick="doStep('${esc(s.id)}', { values: readSettings(${esc(JSON.stringify(s.fields || []))}) }, this)">Save</button></div>`;
@@ -959,7 +994,7 @@ async function doStep(stepId, input, btn) {
       selected = current.finishedAt && stepId === current.steps[current.steps.length - 1].id ? null : (next ? next.id : null);
       render(); loadList();
       const oc = r.result && r.result.check;
-      if (oc && oc.once && oc.lines && oc.lines.length) setMsg('ok', oc.summary + '\n' + oc.lines.join('\n'));   // one-time lines are only in this answer
+      if (oc && oc.once && oc.lines && oc.lines.length) await showOnce(oc);   // one-time lines (and the QR code) are only in this answer
       done = true;
     } catch (e) {
       setMsg(e.data && e.data.needsAck ? 'warn' : 'err', e.message + (e.data && e.data.check && e.data.check.lines && e.data.check.lines.length ? '\n' + e.data.check.lines.join('\n') : ''));
@@ -1021,7 +1056,8 @@ async function saveSecrets(stepId, btn) {
 }
 async function runCheck(stepId, btn) {
   const ack = document.getElementById('ack');
-  await doStep(stepId, { acknowledged: !!(ack && ack.checked) }, btn);
+  const choice = pickedChoice();
+  await doStep(stepId, { acknowledged: !!(ack && ack.checked), ...(choice !== undefined ? { choice } : {}) }, btn);
 }
 async function toggle(on, btn) { await busy(btn, async () => { try { current = (await api('POST', `/api/modules/${current.id}/${on ? 'enable' : 'disable'}`)).module; render(); loadList(); } catch (e) { setMsg('err', e.message); } }); }
 async function recheck(btn) { await busy(btn, async () => { try { const r = await api('POST', `/api/modules/${current.id}/check`, {}); current = r.module; render(); setMsg(r.check.ok ? 'ok' : 'err', r.check.summary + (r.check.lines.length ? '\n' + r.check.lines.join('\n') : '')); loadList(); } catch (e) { setMsg('err', e.message); } }); }

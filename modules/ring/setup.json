@@ -9,7 +9,7 @@
   { "id": "keys", "type": "secrets", "title": "Client ID, secret and signing key", "fields": ["CLIENT_ID", "CLIENT_SECRET", "HMAC_KEY"],
     "body": "Paste the three values from Ring's developer console." },
   { "id": "prefs", "type": "settings", "title": "Your settings", "fields": ["account_email", "public_url", "time_zone", "houses", "faces", "faces_url"],
-    "body": "Enter the email address of your Ring account, your public https address, and your time zone (for example Europe/London). The houses box is optional: it lets notices say which house a camera is in. Leave face recognition off unless you run a face recognizer on this computer." },
+    "body": "Enter the email address of your Ring account and your public https address. Your time zone is filled in from this computer; change it if your cameras are somewhere else (for example Europe/London). The houses box is optional: it lets notices say which house a camera is in. Leave face recognition off unless you run a face recognizer on this computer." },
   { "id": "urls", "type": "check", "check": "urls", "title": "Addresses for Ring",
     "body": "These are the four addresses to enter in Ring's developer console. If you already entered them, check that they match." },
   { "id": "link", "type": "check", "check": "link", "title": "Connect your Ring account",

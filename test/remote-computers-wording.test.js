@@ -41,7 +41,7 @@ test('no setting label, help or step body uses "tailnet", "systemd" or "MeshCent
 test('the setup says "the computer your Maestro runs on" and "the computer you want to control", never "PC"', () => {
   for (const st of setup.steps) assert.ok(!/\bPCs?\b/.test(`${st.title} ${st.body || ''}`), `step ${st.id}`);
   assert.ok(step('setup').body.includes('the computer your Maestro runs on'));
-  assert.ok(step('add').body.includes('the computer you want to control'));
+  assert.ok(step('add').body.includes('that computer'));
 });
 
 test('the install size is the same, and the measured 210 MB, in the setup step and in the guide', () => {

@@ -41,7 +41,7 @@ from the internet over https, so your Maestro needs a public address (for exampl
   the account is linked. Without it the link page refuses to connect.
 - **Public address of this Maestro:** the https address Ring can reach, with no path. It is only used to show the four
   addresses in the setup; the module itself does not call it.
-- **Time zone:** names like `Europe/London` or `America/Chicago`. Used for the times in notices and for the day
+- **Time zone:** filled in from this computer; you can change it. Names like `Europe/London` or `America/Chicago`. Used for the times in notices and for the day
   folders of pictures. An unknown name falls back to UTC.
 - **Houses:** optional grouping, written as `House A: front, back; House B: garage`. A camera whose name contains one
   of the words belongs to that house. Notices say which house, otherwise "house unknown".

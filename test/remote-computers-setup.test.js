@@ -45,7 +45,8 @@ test('setup: the steps come in the planned order with the right types', () => {
 
 test('setup: the guide has the planned sections and no placeholder text', () => {
   const g = fs.readFileSync(path.join(DIR, 'guide.md'), 'utf8');
-  for (const h of ['What it does', 'Safety', 'What each step does', 'What each setting does', 'Tools', 'Common errors and fixes', 'Removing a computer', 'Switching it off']) assert.match(g, new RegExp(`^## ${h}$`, 'm'), h);
+  // the shorter guide (bundle 2 item 5): one section per thing a person does, then what goes wrong, then the lead's part
+  for (const h of ['What it does', 'Before you start', 'Set it up', 'Add a computer', 'Who may use it', 'When something goes wrong', 'For your Maestro', 'Removing a computer', 'Switching it off']) assert.match(g, new RegExp(`^## ${h}$`, 'm'), h);
   assert.doesNotMatch(g, /placeholder/i);
   assert.doesNotMatch(g, /-fulluninstall/);   // only confirmed for Linux in MeshCentral's scripts, so the guide does not promise it on Windows
   assert.match(g, /Settings -> Apps/);
@@ -478,7 +479,7 @@ test('check computer: passes when a computer is online', async () => {
 
 test('check computer: fails with the plain text when none has connected or none is online', async () => {
   const none = await checks.computer(ctxOf({ computers_status: '[]' }));
-  assert.deepStrictEqual([none.ok, none.summary], [false, 'No computer has connected yet. Run the installer on the computer you want to control, then check again.']);
+  assert.deepStrictEqual([none.ok, none.summary], [false, 'No computer has connected yet. Run the link\'s download or command on that computer, then check again.']);
   const off = await checks.computer(ctxOf({ computers_status: JSON.stringify([{ name: 'demo-pc', os: 'Windows 11', online: false }]) }));
   assert.strictEqual(off.ok, false);
   assert.match(off.summary, /demo-pc registered, but it is offline/);
