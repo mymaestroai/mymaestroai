@@ -358,6 +358,11 @@ function createMeshServer({ runtimeDir, home, settings, spawn = childProcess.spa
     let existing = null, readError = null;
     try { existing = readAccountsStrict(); } catch (e) { readError = e; }
     if (readError && !staleRequest) throw readError;
+    // A waiting service request with no usable account file: any new passwords would differ from the ones the request holds (an install that
+    // already copied it, or runs it later, would make other accounts). So nothing is changed, and the person is told plainly.
+    if (staleRequest && (readError || !existing)) {
+      throw new Error('The server\'s account file is missing or damaged while a request to install the locked-down service is still waiting. Its passwords cannot be made again from that request: restore the file from a backup, or ask Maestro for help.');
+    }
     if (existing && (!staleRequest || existing.hubMade === true)) return { created: false };
     if (isRunning()) throw new Error('The server is running; the first accounts can only be made while it is stopped.');
     writeConfig();

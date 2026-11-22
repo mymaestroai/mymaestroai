@@ -105,19 +105,23 @@ test('part 1 (round 3): a failure in making an account leaves accounts.json exac
   assert.ok(fs.existsSync(svc.paths.request));
 });
 
-test('part 1 (round 3): an accounts.json that cannot be used, with an un-run request, falls back to fresh passwords; without a request it still stops the start', async () => {
-  const home = tmp(), runtimeDir = fakeRuntime();
-  const svc = mk('service', home, runtimeDir);
-  await svc.bootstrap();
-  fs.writeFileSync(svc.paths.accountsFile, '{ not json');
-  const execFile = fakeExec();
-  const hub = mk('hub', home, runtimeDir, { execFile });
-  assert.deepStrictEqual(await hub.bootstrap(), { created: true });
-  const after = JSON.parse(fs.readFileSync(svc.paths.accountsFile, 'utf8'));
-  assert.ok(after.admin.pass && after.agent.pass && after.hubMade === true);
-  assert.ok(fs.existsSync(svc.paths.request));
+test('part 1 (round 4): with an un-run request, a damaged or missing accounts.json changes nothing (no account command, files as they were) and says so; without a request a damaged one still stops the start', async () => {
+  for (const damage of ['damaged', 'missing']) {
+    const home = tmp(), runtimeDir = fakeRuntime();
+    const svc = mk('service', home, runtimeDir);
+    await svc.bootstrap();
+    if (damage === 'damaged') fs.writeFileSync(svc.paths.accountsFile, '{ not json'); else fs.renameSync(svc.paths.accountsFile, svc.paths.accountsFile + '.gone');
+    const before = fs.existsSync(svc.paths.accountsFile) ? fs.readFileSync(svc.paths.accountsFile, 'utf8') : null;
+    const request = fs.readFileSync(svc.paths.request, 'utf8');
+    const execFile = fakeExec();
+    const hub = mk('hub', home, runtimeDir, { execFile });
+    await assert.rejects(() => hub.bootstrap(), /account file is missing or damaged while a request to install the locked-down service is still waiting/, damage);
+    assert.strictEqual(execFile.calls.length, 0, `${damage}: no account command ran`);
+    assert.strictEqual(fs.existsSync(svc.paths.accountsFile) ? fs.readFileSync(svc.paths.accountsFile, 'utf8') : null, before, `${damage}: accounts.json as it was`);
+    assert.strictEqual(fs.readFileSync(svc.paths.request, 'utf8'), request, `${damage}: the request as it was`);
+  }
   // no request: today's strict refusal of an unreadable file
-  const home2 = tmp();
+  const home2 = tmp(), runtimeDir = fakeRuntime();
   fs.writeFileSync(path.join(home2, 'accounts.json'), '{ not json');
   const hub2 = mk('hub', home2, runtimeDir, { execFile: fakeExec() });
   await assert.rejects(() => hub2.bootstrap(), /could not be read/);
