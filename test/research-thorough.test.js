@@ -2480,15 +2480,16 @@ test('r10 1 visibleText: script, style, hidden elements and attributes with ">" 
   // visible text stays
   assert.strictEqual(T.checkFigure('1250 users', '<p>1250 users</p>'), FD);
   assert.strictEqual(T.checkFigure('1250 users', '<script>9</script> 1250 users'), FD);
-  assert.strictEqual(T.checkFigure('1250', '<p aria-hidden="false">1250</p>'), NF); // r11: any aria-hidden attribute makes the source "styled HTML" (was: found)
-  assert.strictEqual(T.checkFigure('1250', '<div title="hidden">1250</div>'), FD); // "hidden" inside a value is no attribute
+  assert.strictEqual(T.checkFigure('1250', '<p aria-hidden="false">1250</p>'), NF); // r11: any aria-hidden attribute hides the element (was: found)
+  assert.strictEqual(T.checkFigure('1250', '<div title="hidden">1250</div>'), NF); // r12: any attribute but href / colspan / rowspan hides the element (was: found)
   assert.strictEqual(T.checkFigure('1250 users', '<br hidden> 1250 users'), FD); // a void element has no contents
   // an element longer than 20,000 characters: blanked from its opening tag to the end of the text
   assert.strictEqual(T.checkFigure('1250 users', '<div hidden>' + 'x '.repeat(11000) + '</div> 1250 users'), NF);
   assert.strictEqual(T.checkFigure('1250 users', '<div hidden>' + 'x '.repeat(5000) + '</div> 1250 users'), FD);
   // the visible text keeps its length (offsets stay valid)
-  const html = 'a <script>var x = "1250";</script> b <p title="a>b">1250 users</p>';
+  const html = 'a <script>var x = "1250";</script> b <p>1250 users</p> <a href="x>y">c</a>'; // r12: a p with a title is no longer shown
   assert.strictEqual(T.checkFigure('1250 users', html), FD);
+  assert.strictEqual(T.checkFigure('1250 users', 'b <p title="a>b">1250 users</p>'), NF);
 });
 
 test('r10 1 tags with ">" in a quoted value are blanked in report text too, and the scan stays fast', () => {
@@ -2566,9 +2567,10 @@ test('r10 4 a figure of the report text is compared on its own: no meaning inher
   assert.strictEqual(p[0].sentence, `The treatment killed 1250 participants (${R_SRC}).`);
   assert.ok(p[0].excerpt.includes('Enrollment totaled 1250 participants'));
   assert.ok(all.some((f) => f.fid === 'c1.f1'), 'the claim entries are still there');
-  // the key follows sha256('prose|' + sentence + '|' + value, unit, form, qual + '|' + passage)
+  // r12: the key follows sha256('prose|' + JSON of [sentence, position in the sentence, heading, value, unit, form, qual, passage])
   const fig = T.parseFigure('1250 participants');
-  assert.strictEqual(p[0].meaningKey, require('crypto').createHash('sha256').update(['prose', p[0].sentence, fig.value, fig.unit, fig.form, fig.qual, p[0].excerpt].join('|')).digest('hex'));
+  assert.strictEqual(p[0].heading, 'Verdict');
+  assert.strictEqual(p[0].meaningKey, require('crypto').createHash('sha256').update(['prose', JSON.stringify([p[0].sentence, 0, 'Verdict', fig.value, fig.unit, fig.form, fig.qual, p[0].excerpt])].join('|')).digest('hex'));
   // the reviewer answers p1 under {"id": "report"}: validated like the others, no verdict, no claim result
   const reply = jsonReply([{ id: 'c1', verdict: 'supported', reason: 'r', figures: [] }, { id: 'report', figures: [{ fid: 'p1', meaning: 'matches', quote: 'Enrollment totaled 1250 participants' }] }]);
   const parsed = T.parseChallenge(reply, ['c1'], all);
@@ -2595,8 +2597,9 @@ test('r10 4 the brief lists the figures of the report text in their own block; a
   const prose = REPORT_TEXT();
   const all = T.figureExcerpts(T.checkReport({ prose, claims, fetched }).claims, fetched, undefined, prose);
   const b = T.challengeBrief('Q?', T.checkReport({ prose, claims, fetched }).claims, T.challengeExcerpts(claims, fetched), all);
-  assert.ok(b.includes('Figures in the report text to compare (each with the sentence of the report that holds it and the passage the hub cut from the source around it):'));
-  assert.ok(b.includes(`  [p1] the report writes: "The treatment killed 1250 participants (${R_SRC})." | the figure: 1250 | passage: "`));
+  // r12: the heading, and the sentence with the occurrence marked ⟦ ⟧
+  assert.ok(b.includes('Figures in the report text to compare (each with the heading it stands under, the sentence of the report that holds it with the occurrence to compare marked ⟦ ⟧, and the passage the hub cut from the source around it):'));
+  assert.ok(b.includes(`  [p1] under the heading: "Verdict" | the report writes: "The treatment killed ⟦1250⟧ participants (${R_SRC})." | the figure: 1250 | passage: "`));
   assert.ok(b.includes('{"id": "report", "figures": [{"fid": "p1"'));
   assert.match(b, /\{"id": "report", "figures": \[\.\.\.\]\}; it has no verdict/);
   assert.ok(b.indexOf('[p1]') > b.indexOf('[c1.f1]'), 'the claim figures come first');
@@ -2669,7 +2672,7 @@ test('r11 1 hidden HTML, as a class: nesting, styled sources, markdown images', 
   nf('1250', '<style>.archive{display:none}</style><span class="archive">1250</span>');
   nf('1250', '<span class="x">1250</span>');
   nf('1250', '<div id="a"><p>x</p><b>1250</b></div>');                      // nesting across tag names
-  nf('1250', '<p style="color:red">text <b>bold</b> more</p><p>1250');        // an element never closed: blanked to the end
+  nf('1250', '<p style="color:red">text <b>bold</b> more 1250');             // an element never closed: blanked to the end (r12: a later plain <p> is shown, so the text after the close is no longer in the test)
   nf('1250', '![Chart: 1250 users](c.png)');
   nf('1250', 'Plot ![1250](a.png "t") end');
   nf('1250', '![Chart 1250][ref]');
@@ -2795,4 +2798,146 @@ test('r11 7 the index cache keeps 24 sources and refreshes an entry on use', () 
   assert.strictEqual(built() - b1, 13, 'source 0 is still cached');
   T.checkFigure('1001', src(1));
   assert.strictEqual(built() - b1, 14, 'source 1 was the least recently used and was dropped');
+});
+
+// ================================================================ r12
+test('r12 1 raw HTML by allowlist: only plain allowed elements show their contents', () => {
+  const nf = (fig, src, kws) => assert.strictEqual(T.checkFigure(fig, src, kws), NF, src);
+  const fd = (fig, src, kws) => assert.strictEqual(T.checkFigure(fig, src, kws), FD, src);
+  nf('1250', '<dialog>1250</dialog>');
+  nf('1250', '<details><summary>Old</summary>1250</details>');
+  nf('1250', '<div hidden/>1250</div>');                  // a self-closing slash on a non-void element is ignored: it is open
+  nf('1250', '<div hidden><div/>x</div>1250</div>');
+  nf('1250', '<span class="x">1250</span>');
+  nf('1250', '<p data-x="1">1250</p>');
+  nf('1250', '<blink>1250</blink>');                      // an unknown tag
+  nf('1250', '<b><dialog><i>1250</i></dialog></b>');      // inside a not shown element, shown ones do not help
+  nf('1250', '<div><p class="a">1250</p></div>');
+  nf('1250', '<a target="_blank" href="x">1250</a>');     // href only
+  nf('1250', '<td style="x">1250</td>');
+  nf('1250', '<p>x</p><span title="t">1250');             // never closed: to the end
+  fd('1250 users', '<table><tr><td>1250 users</td></tr></table>');
+  fd('1250 users', '<p>1250 users</p>');
+  fd('1250 users', '<a href="https://x.example/a?b=1">1250 users</a>');
+  fd('1250 users', '<table><tr><td colspan="2" rowspan=2>1250 users</td></tr></table>');
+  fd('1250 users', '<DIV><P>1250 users</P></DIV>');
+  fd('1250 users', '<div hidden>9</div><p>1250 users</p>');   // a not shown element ends at its own close
+  fd('1250 users', '<img src="a.png"><br/> 1250 users');       // a void element has no contents
+  // the length stays (offsets valid)
+  const html = 'a <dialog>1250</dialog> b <p class="q">c</p> <p>1250 users</p>';
+  assert.strictEqual(T.visibleText(html).length, html.length);
+  // hostile input stays linear
+  const hostile = '<p class=x>' + '<b>'.repeat(100000) + '</c>'.repeat(75000);
+  const t0 = Date.now();
+  assert.strictEqual(T.visibleText(hostile).trim(), ''); // blanked to the end
+  assert.ok(Date.now() - t0 < 1000, `took ${Date.now() - t0} ms`);
+  assert.ok(T.checkFigure('1250', hostile) !== FD); // (over the 600,000 character limit: too large to check)
+  nf('1250', '<p class=x>' + '<b>'.repeat(50000) + '1250' + '</c>'.repeat(40000));
+  // the element pass honours the 2-second deadline: past it the source is too large to check
+  const was = T.INDEX_LIMITS.maxMs;
+  try {
+    T.INDEX_LIMITS.maxMs = -1;
+    assert.strictEqual(T.checkFigure('1', '<p>1 users r12 deadline</p>'), 'source_not_opened');
+  } finally { T.INDEX_LIMITS.maxMs = was; }
+});
+
+test('r12 2 a number split by removed markup or an entity is no plain number on either side', () => {
+  const nf = (fig, src, kws) => assert.strictEqual(T.checkFigure(fig, src, kws), NF, `${fig} vs ${src}`);
+  const fd = (fig, src, kws) => assert.strictEqual(T.checkFigure(fig, src, kws), FD, `${fig} vs ${src}`);
+  nf('250', 'Total: 1,<b>250</b> users', ['total']);
+  nf('250 users', 'Total: 1,<b>250</b> users', ['total']);
+  nf('1', 'Total: 1,<b>250</b> users', ['total']);       // the number before the removed tag is tainted too
+  nf('5', '1.<b>5</b>', ['total']);
+  nf('1', '1.<b>5</b> total', ['total']);
+  nf('1250', 'Enrollment 1250&#46;&#53;');
+  nf('250', 'Enrollment 1,&#50;50', ['enrollment']);
+  nf('1250', '1,&#50;50');
+  nf('250', 'Total: 1,**250** users', ['total']);        // emphasis markers are removed spans too
+  nf('1250', '1<b>,</b>250');
+  nf('12', 'Total 1<b>2</b> users', ['total']);
+  // markup that does not split a number leaves it plain
+  fd('250 users', 'Total: <b>250</b> users', ['total']);
+  fd('1250 users', 'Total: <b>1250</b> users');
+  fd('1250', 'Enrolled <b>1250</b>. Then <i>300</i>.');
+  fd('250 users', 'Total: 1, <b>users</b> 250 users', ['total']);
+  fd('1250', '<td>Total</td><td>1250</td>');
+  // a new line between keeps the number plain
+  fd('250 users', 'Total 1,\n<b>250</b> users', ['total']);
+});
+
+test('r12 3 markdown images: the alt text goes with the image, brackets and new lines inside it', () => {
+  const nf = (fig, src) => assert.strictEqual(T.checkFigure(fig, src), NF, JSON.stringify(src));
+  const fd = (fig, src) => assert.strictEqual(T.checkFigure(fig, src), FD, JSON.stringify(src));
+  nf('1250', '![Chart [1250 users] 2020](c.png)');
+  nf('1250', '![Chart 1250 users]\n[Chart 1250 users]: c.png');   // a shortcut reference image
+  nf('1250', '![Chart 1250 users]');
+  nf('1250', '![Chart\n1250 users](c.png)');                       // a new line in the alt text
+  nf('1250', '![Chart [a [b] 1250] x][ref]');
+  nf('1250', '![Chart 1250 users (unclosed');                      // no closing bracket: the rest of the line
+  fd('1250 users', '![broken alt 99\n1250 users');                 // ... and no more
+  fd('1250 users', 'Plain 1250 users ![pic](c.png) end');
+  fd('1250 users', '![pic](c.png "a (b) c") 1250 users');
+  const text = '![a [b](c.png) 1250 users](d.png) ok';
+  assert.strictEqual(T.visibleText(text).length, text.length);
+  const t0 = Date.now();
+  nf('1250', '![a'.repeat(60000));
+  nf('1250', '![a]('.repeat(30000));
+  assert.ok(Date.now() - t0 < 2000, `took ${Date.now() - t0} ms`);
+});
+
+test('r12 4 every occurrence of a figure in a report sentence has its own id, answer and key; the heading is part of the key', () => {
+  const { fetched, claims } = rFigs('Enrollment totaled 1250 participants.', 'Enrollment totaled 1250 participants', '1250 participants');
+  const sentence = `The study enrolled 1250 participants and later lost 1250 participants (${R_SRC}).`;
+  const figsOf = (prose) => T.figureExcerpts(T.checkReport({ prose, claims, fetched }).claims, fetched, undefined, prose);
+  const check = (prose, keys) => T.checkReport({ prose, claims, fetched, counts: {}, meaningKeys: keys });
+  const answer = (all, fid) => T.figureMeanings(all, T.parseChallenge(jsonReply([{ id: 'c1', verdict: 'supported' }, { id: 'report', figures: [{ fid, meaning: 'matches', quote: 'Enrollment totaled 1250 participants' }] }]), ['c1'], all)).keys;
+  const all = figsOf(sentence);
+  const p = all.filter((f) => f.prose);
+  assert.deepStrictEqual(p.map((f) => f.fid), ['p1', 'p2']);
+  assert.notStrictEqual(p[0].meaningKey, p[1].meaningKey);
+  assert.strictEqual(p[0].sentence, p[1].sentence);
+  assert.ok(p[0].marked.startsWith('The study enrolled ⟦1250⟧ participants and later lost 1250 participants'));
+  assert.ok(p[1].marked.startsWith('The study enrolled 1250 participants and later lost ⟦1250⟧ participants'));
+  // one answer, for p1: that figure matches, the twin is not checked
+  const r = check(sentence, answer(all, 'p1'));
+  assert.deepStrictEqual([r.totals.proseFound, r.totals.proseMatches, r.totals.proseDiffers], [2, 1, 0]);
+  const r2 = check(sentence, answer(all, 'p2'));
+  assert.deepStrictEqual([r2.totals.proseFound, r2.totals.proseMatches], [2, 1]);
+  // a "differs" for the twin marks only that occurrence
+  const dk = T.figureMeanings(all, T.parseChallenge(jsonReply([{ id: 'c1', verdict: 'supported' }, { id: 'report', figures: [{ fid: 'p2', meaning: 'differs', quote: 'Enrollment totaled 1250 participants' }] }]), ['c1'], all)).keys;
+  assert.strictEqual((check(sentence, dk).prose.match(/\[source says otherwise\]/g) || []).length, 1);
+  // the same sentence under another heading is not answered
+  const under = (h) => `## ${h}\n\n${sentence}`;
+  const all2 = figsOf(under('Enrollment'));
+  assert.deepStrictEqual(all2.filter((f) => f.prose).map((f) => f.heading), ['Enrollment', 'Enrollment']);
+  const keys2 = answer(all2, 'p1');
+  assert.deepStrictEqual(check(under('Enrollment'), keys2).totals.proseMatches, 1);
+  assert.deepStrictEqual(check(under('Deaths during follow-up'), keys2).totals.proseMatches, 0);
+  assert.deepStrictEqual(check(sentence, keys2).totals.proseMatches, 0);   // no heading at all: another key
+  assert.strictEqual(figsOf(sentence).find((f) => f.prose).heading, '');
+  // the nearest heading above counts, not the first
+  const nested = figsOf(`# Report\n\n## Enrollment\n\n${sentence}`).filter((f) => f.prose);
+  assert.strictEqual(nested[0].heading, 'Enrollment');
+  // the brief shows the heading, the marked sentence and the passage for each
+  const b = T.challengeBrief('Q?', T.checkReport({ prose: under('Enrollment'), claims, fetched }).claims, T.challengeExcerpts(claims, fetched), all2);
+  assert.ok(b.includes('  [p1] under the heading: "Enrollment" | the report writes: "The study enrolled ⟦1250⟧ participants and later lost 1250 participants'));
+  assert.ok(b.includes('  [p2] under the heading: "Enrollment" | the report writes: "The study enrolled 1250 participants and later lost ⟦1250⟧ participants'));
+});
+
+test('r12 5 the common-number keyword must stand in visible text', () => {
+  const nf = (src, kws) => assert.strictEqual(T.checkFigure('12 users', src, kws), NF, src);
+  const fd = (src, kws) => assert.strictEqual(T.checkFigure('12 users', src, kws), FD, src);
+  nf('<!-- enrollment --> Row 12 users here', ['enrollment']);
+  nf('<span class="a">enrollment</span> Row 12 users here', ['enrollment']);
+  nf('<script>var enrollment;</script> Row 12 users here', ['enrollment']);
+  nf('![enrollment chart](c.png) Row 12 users here', ['enrollment']);
+  fd('Enrollment: Row 12 users here', ['enrollment']);
+  fd('<!-- x --> Enrollment: <b>Row</b> 12 users here', ['enrollment']);
+  // the passage cut for the reviewer is found with the same rule
+  const fig = T.parseFigure('12 users');
+  const indexOf = (text) => { const v = T.visibleText(text); const m = new Map(); for (const t of T.groupRuns(v, T.numbersIn(v))) { if (!m.has(t.mag)) m.set(t.mag, []); m.get(t.mag).push(t); } return m; };
+  const hidden = '<!-- enrollment --> Row 12 users here';
+  assert.strictEqual(T.matchedHit(fig, indexOf(hidden), hidden, ['enrollment']), undefined);
+  const shown = 'Enrollment: Row 12 users here';
+  assert.ok(T.matchedHit(fig, indexOf(shown), shown, ['enrollment']));
 });

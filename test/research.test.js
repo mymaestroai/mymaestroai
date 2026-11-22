@@ -1719,7 +1719,7 @@ test('r9b runner: figure verdicts are validated by code, saved as meaningKeys, a
   // the brief showed the figure with its passage, and the reply shape
   const brief = m.calls.find((c) => c.labels[0] === 'Reviewer').tasks[0];
   assert.match(brief, /Figures to compare \(each with the passage the hub cut from the source around it\):\n  \[c1\.f1\] the report writes: 56\.4% \| passage: "/);
-  assert.match(brief, /Figures in the report text to compare[^\n]*\n  \[p1\] the report writes: "[^"\n]*56\.4%[^"\n]*" \| the figure: 56\.4% \| passage: "/);
+  assert.match(brief, /Figures in the report text to compare[^\n]*\n  \[p1\] under the heading: "[^"\n]*" \| the report writes: "[^"\n]*⟦56\.4%⟧[^"\n]*" \| the figure: 56\.4% \| passage: "/); // r12: the heading, and the occurrence marked ⟦ ⟧
   // the saved run has the keys with the validated answers: the claim figure and the report-text figure
   const run = m.runner.get(r.id);
   const keys = Object.entries(run.meaningKeys || {});
