@@ -1000,13 +1000,18 @@ test('r4-3 claimKey covers measured_result, judged_by, inference, evidence_stren
 });
 
 test('r4-5 parseFigure / numbersIn: prefixes, case-insensitive scale words, ×, bare figure merges with x and pp', () => {
-  for (const f of ['$1.5 Million', '€1.5 million', '£1.5M', '~1.5 BILLION'.replace('BILLION', 'million'), '≈ 1.5M', 'about 1.5 MILLION']) {
+  for (const f of ['~1.5 BILLION'.replace('BILLION', 'million'), '≈ 1.5M', 'about 1.5 MILLION']) {
     assert.deepStrictEqual(T.parseFigure(f), { value: '1500000', unit: '', pct: false }, f);
+  }
+  // a currency sign is the figure's unit (r5)
+  for (const [f, unit] of [['$1.5 Million', 'USD'], ['€1.5 million', 'EUR'], ['£1.5M', 'GBP']]) {
+    assert.deepStrictEqual(T.parseFigure(f), { value: '1500000', unit, pct: false }, f);
   }
   assert.strictEqual(T.parseFigure('about 56.4%').value, '56.4');
   assert.strictEqual(T.parseFigure('about 56.4%').unit, 'pct');
   assert.strictEqual(T.parseFigure('~300k').value, '300000');
-  assert.strictEqual(T.checkFigure('$300k', 'cost 300,000 dollars', []), 'found');
+  assert.strictEqual(T.checkFigure('$300k', 'cost $300,000 in all', []), 'found');
+  assert.strictEqual(T.checkFigure('300k', 'cost 300,000 dollars', []), 'found');
   assert.strictEqual(T.numbersIn('worth 2 BILLION dollars')[0].mag, '2000000000');
   assert.strictEqual(T.numbersIn('worth 2 Billion dollars')[0].mag, '2000000000');
   const x = T.numbersIn('a 3× gain')[0];
@@ -1046,4 +1051,101 @@ test('r4-8 chatReport: a failed figure check says so', () => {
   const t = T.chatReport({ prose: '## Verdict\nA.', claims: [{ id: 'c1', claim: 'A' }], notChecked: true, checkError: true, files: {} });
   assert.match(t, /Figures not checked \(the check failed\); every figure is marked unverified\./);
   assert.doesNotMatch(t, /no list of claims/);
+});
+
+// ---------------------------------------------------------------- r5
+test('r5-1 an explicit citation that resolves to nothing is never borrowed from another source', () => {
+  const A = 'https://a.example/a';
+  const B = 'https://b.example/b';
+  const claims = [{ id: 'c1', claim: 'Study A enrolled participants', source_url: A, figures: ['1,250'] }];
+  const fetched = [{ url: A, title: 'Alpha paper', ok: true, text: 'Study A enrolled 1,250 participants.' }];
+  const r = T.checkReport({ prose: `Study A enrolled 1,250 participants (${A}). Study B enrolled 1,250 participants (${B}).`, claims, fetched, counts: {} });
+  assert.strictEqual(r.totals.proseVerified, 1);
+  assert.strictEqual(r.totals.proseUnverified, 1);
+  assert.match(r.prose, /Study B enrolled 1,250 \[unverified\]/);
+  assert.ok(!/Study A enrolled 1,250 \[unverified\]/.test(r.prose));
+  // a citation to a source that was not fetched is the same
+  const nf = T.checkReport({ prose: `Study A enrolled 1,250 participants (${A}), while 1,250 more joined (${B}).`, claims, fetched, counts: {} });
+  assert.match(nf.prose, /while 1,250 \[unverified\] more/);
+  // the paragraph fallback applies only when the sentence cites nothing at all
+  const fb = T.checkReport({ prose: `Study A (${A}) is the source.\nIt enrolled 1,250 participants.`, claims, fetched, counts: {} });
+  assert.strictEqual(fb.marks, 0);
+});
+
+test('r5-2 currency is a unit', () => {
+  assert.strictEqual(T.checkFigure('€1,250', 'We paid $1,250 in total.'), 'not_found');
+  assert.strictEqual(T.checkFigure('€1,250', 'We paid EUR 1,250 in total.'), 'found');
+  assert.strictEqual(T.checkFigure('EUR 1,250', 'We paid €1,250 in total.'), 'found');
+  assert.strictEqual(T.checkFigure('$4.2B', 'revenue of $4,200,000,000'), 'found');
+  assert.strictEqual(T.checkFigure('$4.2B', 'revenue of 4.2 billion USD'), 'found');
+  assert.strictEqual(T.checkFigure('1,250', 'We paid $1,250 in total.'), 'not_found');
+  assert.strictEqual(T.checkFigure('$1,250', 'We saw 1,250 items.'), 'not_found');
+  assert.strictEqual(T.checkFigure('1,250 usd', 'US$1,250'), 'found');
+  assert.strictEqual(T.checkFigure('£1,250', 'We paid $1,250'), 'not_found');
+  assert.strictEqual(T.numbersIn('costs €1,250 or 1,250 EUR')[0].unit, 'EUR');
+  assert.strictEqual(T.numbersIn('costs €1,250 or 1,250 EUR')[1].unit, 'EUR');
+  assert.strictEqual(T.parseFigure('$').unit, '');
+  assert.strictEqual(T.parseFigure('$5').unit, 'USD');
+  // in a report a bare prose figure is not backed by a currency figure
+  const claims = [{ id: 'c1', claim: 'Revenue', source_url: 'https://a.example/a', figures: ['$1,250'] }];
+  const fetched = [{ url: 'https://a.example/a', title: 'T', ok: true, text: 'Revenue was $1,250.' }];
+  assert.strictEqual(T.checkReport({ prose: 'Revenue was $1,250 (https://a.example/a).', claims, fetched }).marks, 0);
+  assert.strictEqual(T.checkReport({ prose: 'Revenue was €1,250 (https://a.example/a).', claims, fetched }).marks, 1);
+  assert.strictEqual(T.checkReport({ prose: 'Revenue was 1,250 (https://a.example/a).', claims, fetched }).marks, 1);
+});
+
+test('r5-3 a clause with no citation inherits a neighbour clause that has one citation and no figure', () => {
+  const A = 'https://a.example/a';
+  const B = 'https://b.example/b';
+  const claims = [
+    { id: 'c1', claim: 'A accuracy', source_url: A, figures: ['56.4%'] },
+    { id: 'c2', claim: 'B accuracy', source_url: B, figures: ['60.2%'] },
+  ];
+  const fetched = [
+    { url: A, title: 'Alpha paper', ok: true, text: 'Accuracy was 56.4% and 3.2 points above.' },
+    { url: B, title: 'Beta paper', ok: true, text: 'Accuracy was 60.2%.' },
+  ];
+  const r = T.checkReport({ prose: `According to A (${A}), accuracy was 56.4%, and according to B (${B}), 60.2%.`, claims, fetched, counts: {} });
+  assert.strictEqual(r.marks, 0);
+  assert.strictEqual(r.totals.proseVerified, 2);
+  // swapped: each figure is bound to its own source, not the other
+  const sw = T.checkReport({ prose: `According to A (${A}), accuracy was 60.2%, and according to B (${B}), 56.4%.`, claims, fetched, counts: {} });
+  assert.strictEqual(sw.marks, 2);
+  // the neighbour has a figure of its own: no inheritance, so 56.4% stays unverified (its clause cites nothing)
+  const n = T.checkReport({ prose: `A reached 56.4% on X, 3.2 points above baseline (${A}), while B reached 60.2% (${B})`, claims, fetched, counts: {} });
+  assert.match(n.prose, /56\.4% \[unverified\] on X/);
+  assert.ok(!/60\.2% \[unverified\]/.test(n.prose));
+});
+
+test('r5-4 a figures entry with a unit absorbs the same bare number in the claim text', () => {
+  const claims = [{ id: 'c1', claim: 'Preference', source_url: 'https://a.example/a', figures: ['56.4%', '43.6%'], measured_result: '56.4 vs 43.6' }];
+  const fetched = [{ url: 'https://a.example/a', title: 'T', ok: true, text: 'Preferred 56.4% against 43.6%.' }];
+  const res = T.checkClaims(claims, fetched);
+  assert.strictEqual(res.claims[0].status, 'verified');
+  assert.strictEqual(res.claims[0].figures.length, 2);
+  assert.ok(!/unverified/.test(T.applyCheck(claims, res)[0].measured_result));
+  // a bare number of another value is still its own figure
+  const more = T.checkClaims([{ ...claims[0], measured_result: '56.4 vs 43.6 over 7 runs' }], fetched);
+  assert.strictEqual(more.claims[0].figures.length, 3);
+});
+
+test('r5-5 units: percentage points, -fold, times; No. only when capitalised', () => {
+  const u = (s) => T.numbersIn(s).map((t) => t.unit);
+  assert.deepStrictEqual(u('up 3.2 percentage points and 2 percentage point, 4 pp'), ['pp', 'pp', 'pp']);
+  assert.deepStrictEqual(u('a 3-fold gain, 2.5 times faster, 4x'), ['x', 'x', 'x']);
+  assert.strictEqual(T.checkFigure('3.2 pp', 'rose 3.2 percentage points in total', ['rose']), 'found');
+  assert.strictEqual(T.checkFigure('3x', 'a 3-fold improvement', ['improvement']), 'found');
+  assert.strictEqual(T.checkFigure('3x', 'three runs, 3 times as large', ['large']), 'found');
+  assert.strictEqual(T.checkFigure('3.2', 'rose 3.2 percentage points', ['rose']), 'not_found');
+  const s = (t) => T.checkReport({ prose: t, claims: [] }).prose;
+  assert.strictEqual(s('Ranked No. 1,250 of all.'), 'Ranked No. 1,250 [unverified] of all.');
+  // "no." ends a sentence: a figure after it is in a new sentence
+  const A = 'https://a.example/a';
+  const claims = [{ id: 'c1', claim: 'Study A enrolled participants', source_url: A, figures: ['1,250'] }];
+  const fetched = [{ url: A, title: 'Alpha paper', ok: true, text: 'enrolled 1,250 participants' }];
+  // (the second sentence cites an unfetched B; if "no." did not split, B would taint the 1,250)
+  const low = T.checkReport({ prose: `It enrolled 1,250 participants (${A}) was it no. And more were seen (https://b.example/b).`, claims, fetched, counts: {} });
+  assert.strictEqual(low.marks, 0);
+  const cap = T.checkReport({ prose: `It enrolled 1,250 participants (${A}) was it No. And more were seen (https://b.example/b).`, claims, fetched, counts: {} });
+  assert.strictEqual(cap.marks, 1);
 });
