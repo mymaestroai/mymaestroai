@@ -1855,7 +1855,7 @@ test('r9a-2 visible text only: comments, tags, reference definitions, link title
     ['−1250', '&minus;1250', 'found'], // r10: the entity's spaces go before the sign, so it sits right in front of its digits (was: a word of its own, fail-safe)
     ['1250', '<td>1250</td>', 'found'],
     ['1250', '<span class="x">1250</span> people', 'not found'], // "people" is the next word
-    ['1250 people', '<span class="x">1250</span> people', 'found'],
+    ['1250 people', '<span class="x">1250</span> people', 'not found'], // r11: a source with a class attribute is "styled HTML": a number inside an element is not visible (was: found)
     ['1250', '<p>1250</p>', 'found'],
     ['1250', '[1250](https://example.org/x)', 'found'], // the link text stays
   ]);
@@ -2480,7 +2480,7 @@ test('r10 1 visibleText: script, style, hidden elements and attributes with ">" 
   // visible text stays
   assert.strictEqual(T.checkFigure('1250 users', '<p>1250 users</p>'), FD);
   assert.strictEqual(T.checkFigure('1250 users', '<script>9</script> 1250 users'), FD);
-  assert.strictEqual(T.checkFigure('1250', '<p aria-hidden="false">1250</p>'), FD);
+  assert.strictEqual(T.checkFigure('1250', '<p aria-hidden="false">1250</p>'), NF); // r11: any aria-hidden attribute makes the source "styled HTML" (was: found)
   assert.strictEqual(T.checkFigure('1250', '<div title="hidden">1250</div>'), FD); // "hidden" inside a value is no attribute
   assert.strictEqual(T.checkFigure('1250 users', '<br hidden> 1250 users'), FD); // a void element has no contents
   // an element longer than 20,000 characters: blanked from its opening tag to the end of the text
@@ -2612,10 +2612,10 @@ test('r10 4 the brief lists the figures of the report text in their own block; a
   const ent = T.figureExcerpts(T.checkReport({ prose: long, claims: c2, fetched: f2 }).claims, f2, undefined, long).filter((f) => f.prose);
   assert.strictEqual(ent.length, 60);
   assert.deepStrictEqual(ent.slice(0, 3).map((f) => [f.fid, f.figure]), [['p1', '31001'], ['p2', '31002'], ['p3', '31003']]);
-  // a sentence longer than 400 characters is cut to 400 around the figure
+  // r11: a sentence longer than 400 characters is not shown to the reviewer at all (was: cut to 400 around the figure)
   const wordy = `${'word '.repeat(150)}had 1250 participants ${'more '.repeat(150)}(${R_SRC}).`;
   const w = T.figureExcerpts(T.checkReport({ prose: wordy, claims, fetched }).claims, fetched, undefined, wordy).filter((f) => f.prose);
-  assert.ok(w[0].sentence.length <= 400 && w[0].sentence.includes('1250 participants'), String(w[0].sentence.length));
+  assert.deepStrictEqual(w, []);
 });
 
 test('r10 5 a "differs" is never overwritten by a "matches" for the same key: within a round and across rounds', () => {
@@ -2659,4 +2659,140 @@ test('r10 6 a number inside a compound run is indexed only as the compound', () 
   const ex = T.challengeExcerpts(claims, fetched);
   assert.ok(ex[0].excerpts[0].includes('5 to 10 ms'));
   assert.strictEqual(T.figureExcerpts(T.checkReport({ prose: 'x', claims, fetched }).claims, fetched).length, 1);
+});
+
+// ================================================================ r11
+test('r11 1 hidden HTML, as a class: nesting, styled sources, markdown images', () => {
+  const nf = (fig, src) => assert.strictEqual(T.checkFigure(fig, src), NF, src);
+  const fd = (fig, src) => assert.strictEqual(T.checkFigure(fig, src), FD, src);
+  nf('1250', '<div hidden><div>old</div>1250</div>');                       // nested tag of the same name: the first close is not the end
+  nf('1250', '<style>.archive{display:none}</style><span class="archive">1250</span>');
+  nf('1250', '<span class="x">1250</span>');
+  nf('1250', '<div id="a"><p>x</p><b>1250</b></div>');                      // nesting across tag names
+  nf('1250', '<p style="color:red">text <b>bold</b> more</p><p>1250');        // an element never closed: blanked to the end
+  nf('1250', '![Chart: 1250 users](c.png)');
+  nf('1250', 'Plot ![1250](a.png "t") end');
+  nf('1250', '![Chart 1250][ref]');
+  fd('1250 users', '<p>1250 users</p>');                                     // no styling anywhere
+  fd('1250 users', '<style>p{}</style>Plain text: 1250 users');              // outside all elements
+  fd('1250 users', '<div class="a"></div> 1250 users <br> more');            // a void element has no content; text outside stays
+  fd('1250 users', 'Markdown: 1250 users ![pic](c.png)');
+  // an unclosed hidden element still blanks to the end; a nested one inside an element longer than 20,000 characters too
+  nf('1250 users', '<div hidden><div>a</div>' + 'x '.repeat(11000) + '</div> 1250 users');
+  // the length stays (offsets valid)
+  assert.strictEqual(T.visibleText('a <div class="x">1250</div> ![i](p.png) b <p hidden><p>q</p>z</p> c').length, 'a <div class="x">1250</div> ![i](p.png) b <p hidden><p>q</p>z</p> c'.length);
+  const t0 = Date.now();
+  for (const text of ['<div class="a">'.repeat(40000), '<p id=x>'.repeat(40000) + '</p>'.repeat(40000), '![a'.repeat(60000)]) T.checkFigure('1250', text);
+  assert.ok(Date.now() - t0 < 4000, `took ${Date.now() - t0} ms`);
+});
+
+test('r11 2 entities: more names; an undecoded one taints the number; one between digits splits it', () => {
+  const nf = (fig, src) => assert.strictEqual(T.checkFigure(fig, src), NF, `${fig} vs ${src}`);
+  const fd = (fig, src) => assert.strictEqual(T.checkFigure(fig, src), FD, `${fig} vs ${src}`);
+  nf('1250', '&leq; 1250');
+  nf('1250', '&foo; 1250');
+  nf('1250', '1250 &foo;');
+  nf('1250', '&foo;1250');
+  nf('1250', '&#9999999; 1250');                       // invalid code point: stays as written
+  fd('at most 1250', '&leq; 1250');
+  fd('≥1250', '&geq; 1250');
+  assert.strictEqual(T.numbersIn(T.visibleText('&pm; 5'))[0].pre, '±'); // decoded like the character itself
+  nf('250', '1&#44;250');
+  nf('1250', '1&#44;250');
+  nf('-10%', '5&#45;10%');
+  nf('10%', '5&hyphen;10%');
+  nf('5', '5&foo;10');
+  assert.strictEqual(T.visibleText('1&#44;250 and 5&foo;10').slice(0, 9), '1#####250');
+  fd('1250 text', 'plain 1250 text');
+});
+
+test('r11 3 a report sentence longer than 400 characters is not presented, so its meaning stays not checked', () => {
+  const { fetched, claims } = rFigs('Enrollment totaled 1250 participants.', 'Enrollment totaled 1250 participants', '1250 participants');
+  const long = (verb) => `The treatment ${verb} 1250 participants ${'in many sites across the study '.repeat(20)}(${R_SRC}).`;
+  assert.ok(long('enrolled').length > 500);
+  const prose = long('enrolled');
+  const all = T.figureExcerpts(T.checkReport({ prose, claims, fetched }).claims, fetched, undefined, prose);
+  assert.deepStrictEqual(all.filter((f) => f.prose), []);
+  // whatever the reviewer answers (here: every key of the short sentence's shape), the figure is not checked
+  const short = `The treatment enrolled 1250 participants (${R_SRC}).`;
+  const sAll = T.figureExcerpts(T.checkReport({ prose: short, claims, fetched }).claims, fetched, undefined, short).filter((f) => f.prose);
+  assert.strictEqual(sAll.length, 1);
+  const keys = { [sAll[0].meaningKey]: { meaning: 'matches', quote: 'Enrollment totaled 1250 participants' } };
+  const r = T.checkReport({ prose, claims, fetched, counts: {}, meaningKeys: keys });
+  assert.deepStrictEqual([r.totals.proseFound, r.totals.proseMatches, r.totals.proseDiffers], [1, 0, 0]);
+  // a sentence of 400 characters or less is still presented
+  const ok = `The treatment enrolled 1250 participants ${'x '.repeat(100)}(${R_SRC}).`;
+  assert.ok(ok.length <= 400 && T.figureExcerpts(T.checkReport({ prose: ok, claims, fetched }).claims, fetched, undefined, ok).some((f) => f.prose));
+});
+
+test('r11 4 the span of a figure with a wrapped sign starts at the sign as the text writes it', () => {
+  const text = 'Change: **−** 1250 participants in the trial overall.';
+  const { figs } = rFigs(text, 'Change was -1250 participants', '-1250 participants');
+  assert.strictEqual(figs.length, 1);
+  assert.ok(figs[0].excerpt.includes('**−** 1250 participants'));
+  assert.strictEqual(figs[0].excerpt.slice(figs[0].span.start, figs[0].span.start + 1), '−');
+  assert.deepStrictEqual(rAnswer(figs, '1250 participants').keys, {});                 // without the sign: not covered
+  assert.strictEqual(Object.keys(rAnswer(figs, '**−** 1250 participants').keys).length, 1);
+  assert.strictEqual(Object.keys(rAnswer(figs, '−** 1250 participants').keys).length, 1); // starting at the sign itself
+  // an HTML-wrapped sign too
+  const html = rFigs('Change: <b>-</b> 1250 participants in the trial overall.', 'Change was -1250 participants', '-1250 participants');
+  assert.deepStrictEqual(rAnswer(html.figs, '1250 participants in the trial').keys, {});
+  assert.strictEqual(Object.keys(rAnswer(html.figs, '<b>-</b> 1250 participants').keys).length, 1);
+});
+
+test('r11 5 the id of the report text entry is not an id a claim uses', () => {
+  const { fetched, claims } = rFigs('Enrollment totaled 1250 participants.', 'Enrollment totaled 1250 participants', '1250 participants');
+  const prose = `The treatment killed 1250 participants (${R_SRC}).`;
+  for (const [ids, want] of [[['c1'], 'report'], [['report'], 'report-text'], [['report', 'report-text'], 'report-text-2'], [['report', 'report-text', 'report-text-2'], 'report-text-3']]) {
+    assert.strictEqual(T.reportIdFor(ids), want);
+  }
+  const cl = [{ ...claims[0], id: 'report' }];
+  const checked = T.checkReport({ prose, claims: cl, fetched }).claims;
+  const all = T.figureExcerpts(checked, fetched, undefined, prose);
+  assert.deepStrictEqual(all.map((f) => [f.fid, f.id, !!f.prose]), [['report.f1', 'report', false], ['p1', 'report-text', true]]);
+  const brief = T.challengeBrief('Q?', cl, T.challengeExcerpts(cl, fetched), all);
+  assert.ok(brief.includes('{"id": "report-text", "figures": [...]}') && brief.includes('{"id": "report-text", "figures": [{"fid": "p1"'));
+  const reply = jsonReply([{ id: 'report', verdict: 'supported', reason: 'r', figures: [{ fid: 'report.f1', meaning: 'matches', quote: 'Enrollment totaled 1250 participants' }] }, { id: 'report-text', figures: [{ fid: 'p1', meaning: 'matches', quote: 'Enrollment totaled 1250 participants' }] }]);
+  const parsed = T.parseChallenge(reply, ['report'], all);
+  assert.deepStrictEqual([parsed.results.map((x) => x.id), parsed.results[0].figures.map((x) => x.fid), parsed.report.id, parsed.report.figures.map((x) => x.fid), parsed.unknown], [['report'], ['report.f1'], 'report-text', ['p1'], []]);
+  assert.strictEqual(Object.keys(T.figureMeanings(all, parsed).keys).length, 2);
+  // the claim's own "report" entry never lands in the report text's answers
+  const own = T.parseChallenge(jsonReply([{ id: 'report', verdict: 'supported', figures: [{ fid: 'p1', meaning: 'matches', quote: 'whatever it says' }] }]), ['report'], all);
+  assert.deepStrictEqual([own.results[0].figures, own.report.figures], [[], []]);
+});
+
+test('r11 6 a source that cannot be indexed now (too large or too slow) is skipped, never a throw', () => {
+  const was = T.INDEX_LIMITS.maxChars;
+  const text = 'Fresh r11-6 source: enrollment totaled 1250 participants in the lab.';
+  const fig = T.parseFigure('1250 participants');
+  try {
+    T.INDEX_LIMITS.maxChars = 10;
+    assert.strictEqual(T.matchedHit(fig, null, text, []), undefined);
+    const prose = `Enrollment totaled 1250 participants (${R_SRC}).`;
+    const toks = T.figuresInProse(prose, {});
+    const states = toks.map(() => ({ status: 'found_as_written', through: { src: { text }, kws: ['enrollment'] } }));
+    assert.deepStrictEqual(T.proseEntries(prose, toks, states), []);
+    // the claim entries: the saved statuses say found, the source is over the limit now
+    const claims = [{ id: 'c1', claim: 'Enrollment totaled 1250 participants', source_url: R_SRC, figures: ['1250 participants'], figure_checks: [{ figure: '1250 participants', status: 'found_as_written' }] }];
+    assert.deepStrictEqual(T.figureExcerpts(claims, [{ url: R_SRC, ok: true, text }], undefined, prose), []);
+  } finally { T.INDEX_LIMITS.maxChars = was; }
+});
+
+test('r11 7 the index cache keeps 24 sources and refreshes an entry on use', () => {
+  const tag = `r11-7 ${Date.now()} ${Math.random()}`;
+  const src = (i) => `${tag} source ${i}: enrollment totaled ${1000 + i} participants.`;
+  const built = () => T.INDEX_STATS.built;
+  const b0 = built();
+  for (let round = 0; round < 2; round++) for (let i = 0; i < 13; i++) T.checkFigure(String(1000 + i), src(i));
+  assert.strictEqual(built() - b0, 13, 'each of 13 sources is indexed once');
+  // least recently used: source 0 is used again after 23 others, so it survives 2 more new sources; source 1 does not
+  const b1 = built();
+  for (let i = 13; i < 24; i++) T.checkFigure(String(1000 + i), src(i)); // 24 sources in all
+  T.checkFigure('1000', src(0));
+  for (let i = 24; i < 26; i++) T.checkFigure(String(1000 + i), src(i));
+  assert.strictEqual(built() - b1, 13);
+  T.checkFigure('1000', src(0));
+  assert.strictEqual(built() - b1, 13, 'source 0 is still cached');
+  T.checkFigure('1001', src(1));
+  assert.strictEqual(built() - b1, 14, 'source 1 was the least recently used and was dropped');
 });
