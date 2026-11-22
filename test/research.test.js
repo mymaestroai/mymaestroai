@@ -972,7 +972,10 @@ const BODY_MARK = 'SOURCE-BODY-MARKER';
 const claimsBlock = (arr) => '```claims\n' + JSON.stringify(arr) + '\n```';
 const REPORT = (extra = '') => '## Verdict\nMethod A wins.\n\n## Evidence\n- Method A scored 56.4% on the test (Paper A, ' + SRC_A + ', 2025).\n\n## Where sources disagree\nNone.\n\n## Confidence\nMedium: one benchmark.\n\n## Corrections to the first pass\nNone\n\n' + extra
   + claimsBlock([{ id: 'c1', claim: 'Method A scored 56.4% on the test', source_url: SRC_A, figures: ['56.4'], measured_result: '56.4%', judged_by: 'humans', evidence_strength: 'strong', inference: false }]);
-const verdicts = (v) => '```json\n' + JSON.stringify([{ id: 'c1', verdict: v, reason: 'because' }]) + '\n```';
+// H2: a not_supported / partly verdict carries a verbatim quote of what the excerpts say (the fetched text of the fake page)
+const QUOTE = 'Method A scored 56.4% on the test with 200 raters';
+const withQuote = (id, v) => (v === 'not_supported' || v === 'partly' ? { contradiction: QUOTE } : {});
+const verdicts = (v) => '```json\n' + JSON.stringify([{ id: 'c1', verdict: v, reason: 'because', ...withQuote('c1', v) }]) + '\n```';
 async function untilMs(fn, ms = 3000) { const end = Date.now() + ms; while (Date.now() < end) { if (fn()) return; await new Promise((r) => setTimeout(r, 5)); } throw new Error('condition not reached'); }
 const hang = (label) => (w, n, signal) => new Promise((_, rej) => { signal.addEventListener('abort', () => rej(new Error('stopped')), { once: true }); });
 
@@ -1453,7 +1456,7 @@ test('r2 3: a source choice that fails or is unusable falls back to the sources 
   }
 });
 
-test("r2 4: select, synthesis, revision and the quick-summary fallback get tools 'none'; helpers, readers and the reviewer keep 'read'", async () => {
+test("r2 4: select, synthesis, revision and the quick-summary fallback get tools 'none'; helpers and the reviewer keep 'read'; H1: readers get 'none' too", async () => {
   let reviews = 0;
   const m = makeThorough({ script: {
     Reviewer: () => { reviews++; return [{ label: 'Reviewer', ok: true, text: verdicts(reviews === 1 ? 'not_supported' : 'supported') }]; },
@@ -1463,7 +1466,8 @@ test("r2 4: select, synthesis, revision and the quick-summary fallback get tools
   assert.deepEqual([...new Set(toolsOf('Choose sources'))], ['none']);
   assert.deepEqual([...new Set(toolsOf('Research report'))], ['none']);
   assert.deepEqual([...new Set(toolsOf('Revision'))], ['none']);
-  for (const l of ['Research 1', 'Reader', 'Reviewer']) assert.deepEqual([...new Set(toolsOf(l))], ['read'], l);
+  for (const l of ['Research 1', 'Reviewer']) assert.deepEqual([...new Set(toolsOf(l))], ['read'], l);
+  assert.deepEqual([...new Set(toolsOf('Reader'))], ['none'], 'H1: the readers read the hub\'s text, they open nothing');
   const f = makeThorough({ script: { 'Research report': () => [{ label: 'Research report', ok: false, text: '(no response)' }] } });
   await doneRun(f);
   assert.deepEqual([...new Set(f.calls.filter((c) => c.labels[0] === 'Research summary').flatMap((c) => c.tools))], ['none'], 'the fallback summary');
@@ -1472,6 +1476,81 @@ test("r2 4: select, synthesis, revision and the quick-summary fallback get tools
   const norm = tw.normalizeJobs([{ task: 'a task long enough to count', model: BIG, tools: 'none', label: 'x' }], { available: [BIG], callerModel: BIG });
   assert.equal(norm.error, undefined);
   assert.equal(norm.jobs[0].toolScope, 'none');
+});
+
+test("H1 runner: readers get tools 'none' and the hub's text in the brief; a group with no hub text sends no reader and leaves a note for the synthesis", async () => {
+  // SRC_C cannot be fetched: its group (the second of two) has no hub text
+  const fetchPage = async (url) => { if (url === SRC_C) throw new Error('HTTP 404'); return { markdown: `${BODY_MARK} ${url} Method A scored 56.4% on the test with 200 raters.`, truncated: false, via: 'plain', title: 'T' }; };
+  const m = makeThorough({ fetchPage, deps: rounds(0) });
+  const started = startThorough(m);
+  await until(() => m.runner.get(started.id).state === 'delivered');
+  const readerCalls = m.calls.filter((c) => /^Reader/.test(c.labels[0]));
+  assert.equal(readerCalls.length, 1);
+  assert.deepEqual(readerCalls[0].labels, ['Reader 1'], 'the group with no text is not sent');
+  assert.deepEqual(readerCalls[0].tools, ['none']);
+  assert.ok(readerCalls[0].tasks[0].includes('----- BEGIN TEXT OF SOURCE 1 -----'));
+  assert.ok(readerCalls[0].tasks[0].includes(`${BODY_MARK} ${SRC_A}`), 'the hub\'s fetched text is in the brief');
+  assert.doesNotMatch(readerCalls[0].tasks[0], /WebFetch/);
+  const report = m.calls.find((c) => c.labels[0] === 'Research report').tasks[0];
+  assert.match(report, new RegExp(`## (Paper C - )?.*\\(${SRC_C.replace(/[.\/]/g, '\\$&')}\\)\\n- Full text opened: no \\(the hub could not fetch it\\)`));
+  // the group with no text is not counted as a failed reader
+  assert.ok(!m.runner.get(started.id).missing.some((x) => /readers did not finish/.test(x)));
+});
+
+test('H3 runner: one follow-up synthesis when reader results are missing from the claims; its result is used when it has at least as many claims', async () => {
+  const notes = `## Paper A (${SRC_A})\n- Full text opened: yes\n### Results (location, who judged, sample size)\n- Table 2: 30 annotators per task, 90 pairs\n### What mattered most\nNothing\n`;
+  const C3 = { id: 'c2', claim: 'Each task had 30 annotators and 90 pairs', source_url: SRC_A, figures: ['30', '90'], measured_result: '30 annotators, 90 pairs', judged_by: 'humans', evidence_strength: 'moderate', inference: false };
+  let follow = 0;
+  const m = makeThorough({ deps: rounds(0), script: {
+    Reader: (ws) => ws.map((w) => ({ label: w.label, ok: true, text: notes })),
+    'Research report (follow-up)': (ws) => { follow++; return one('Research report (follow-up)', REPORT_C2().replace(/```claims[\s\S]*$/, '') + claimsBlock([{ id: 'c1', claim: 'Method A scored 56.4% on the test', source_url: SRC_A, figures: ['56.4'] }, C3])); },
+  } });
+  const r = startThorough(m);
+  await until(() => m.runner.get(r.id).state === 'delivered');
+  assert.equal(follow, 1, 'exactly one follow-up');
+  const t = m.calls.find((c) => c.labels[0] === 'Research report (follow-up)');
+  assert.deepEqual(t.tools, ['none']);
+  assert.equal(t.models[0], BIG, 'the same model as the synthesis');
+  assert.match(t.tasks[0], /The readers reported these results, and your claims leave them out:/);
+  assert.match(t.tasks[0], /30 annotators per task, 90 pairs/);
+  const run = m.runner.get(r.id);
+  assert.equal(run.claims.length, 2, 'the follow-up claims are used');
+  assert.deepEqual(run.readerFacts, { missing: 2, after: 0 }, 'both fake readers (two groups) reported the line');
+  assert.deepEqual(run.missing, [], 'no stage failure');
+});
+
+test('H3 runner: the first synthesis stands when the follow-up fails or returns fewer claims; nothing is asked when no fact is missing', async () => {
+  const notes = `## Paper A (${SRC_A})\n### Results\n- 30 annotators per task, 90 pairs\n`;
+  for (const follow of [() => { throw new Error('the workers refused'); }, () => one('Research report (follow-up)', 'no claims block here'), () => one('Research report (follow-up)', '## Verdict\nA.\n\n```claims\n[]\n```')]) {
+    const m = makeThorough({ deps: rounds(0), script: { Reader: (ws) => ws.map((w) => ({ label: w.label, ok: true, text: notes })), 'Research report (follow-up)': follow } });
+    const r = startThorough(m);
+    await until(() => m.runner.get(r.id).state === 'delivered');
+    assert.equal(m.calls.filter((c) => c.labels[0] === 'Research report (follow-up)').length, 1);
+    const run = m.runner.get(r.id);
+    assert.equal(run.claims.length, 1, 'the first synthesis stands');
+    assert.deepEqual(run.readerFacts, { missing: 2, after: 2 });
+    assert.ok(!run.missing.some((x) => /synthesis/.test(x)), 'not a stage failure');
+  }
+  const n = makeThorough({ deps: rounds(0) });
+  await doneRun(n);
+  assert.ok(!n.calls.some((c) => /follow-up/.test(c.labels[0])), 'the default notes have no missing result: no follow-up');
+});
+
+test('H2 runner: a not_supported verdict with no quote found is cannot_check (counted in review.unquoted) and the revision does not run; with a quote it does', async () => {
+  const noQuote = makeThorough({ deps: rounds(1), script: { Reviewer: () => one('Reviewer', '```json\n[{"id":"c1","verdict":"not_supported","reason":"not shown"}]\n```') } });
+  const a = startThorough(noQuote);
+  await until(() => noQuote.runner.get(a.id).state === 'delivered' || noQuote.runner.get(a.id).state === 'failed');
+  assert.ok(!noQuote.calls.some((c) => c.labels[0] === 'Revision'));
+  assert.equal(noQuote.runner.get(a.id).review.unquoted, 1);
+  assert.deepEqual(noQuote.runner.get(a.id).doubtedIds, []);
+  // a quote found in the fetched text keeps the verdict: the revision runs and gets the quote
+  const quoted = makeThorough({ deps: rounds(1), script: { Reviewer: () => one('Reviewer', verdicts('not_supported')) } });
+  const b = startThorough(quoted);
+  await until(() => ['delivered', 'failed'].includes(quoted.runner.get(b.id).state));
+  const rev = quoted.calls.find((c) => c.labels[0] === 'Revision');
+  assert.ok(rev, 'the quoted verdict reaches the revision');
+  assert.ok(rev.tasks[0].includes(`| contradiction: "${QUOTE}"`));
+  assert.equal(quoted.runner.get(b.id).review.unquoted, 0);
 });
 
 test('r2 5: an agent whose content must stay on its service: every worker uses its own model, no searchBoth, an unknown lookup counts as kept', async () => {
@@ -1514,7 +1593,7 @@ test('r2 10: the runner owns the data-leak rule: a kept agent ignores a helper, 
 // ── review r3-B: verdicts follow a claim's content, a later failed round, a failing check, restart, leak, local own model ──
 const C2 = { id: 'c2', claim: 'Method A reached 56.4% on the benchmark', source_url: SRC_A, figures: ['56.4'], measured_result: '56.4%', judged_by: 'humans', evidence_strength: 'strong', inference: false };
 const REPORT_C2 = () => REPORT('').replace(/```claims[\s\S]*$/, '') + claimsBlock([C2]);
-const verdictsOf = (id, v) => '```json\n' + JSON.stringify([{ id, verdict: v, reason: 'because' }]) + '\n```';
+const verdictsOf = (id, v) => '```json\n' + JSON.stringify([{ id, verdict: v, reason: 'because', ...withQuote(id, v) }]) + '\n```';
 const one = (label, text, ok = true) => [{ label, ok, text }];
 const rounds = (n) => ({ thoroughSettings: () => ({ maxSources: 12, readersAtOnce: 2, reviewRounds: n, timeLimitMinutes: 60, pdf: true, readerModel: 'own' }) });
 
@@ -1739,7 +1818,7 @@ const E_SAVED = (s) => T_REAL.savedStatus(s);
 // ── r9b: the second mark in a full run ──
 const FIG_QUOTE = 'Method A scored 56.4% on the test';
 // reportFigures: the answers for the figures of the report text, in the reply's entry {"id": "report", ...}
-const reviewerReply = (verdict, figures, reportFigures) => [{ label: 'Reviewer', ok: true, text: '```json\n' + JSON.stringify([{ id: 'c1', verdict, reason: 'because', ...(figures ? { figures } : {}) }, ...(reportFigures ? [{ id: 'report', figures: reportFigures }] : [])]) + '\n```' }];
+const reviewerReply = (verdict, figures, reportFigures) => [{ label: 'Reviewer', ok: true, text: '```json\n' + JSON.stringify([{ id: 'c1', verdict, reason: 'because', ...withQuote('c1', verdict), ...(figures ? { figures } : {}) }, ...(reportFigures ? [{ id: 'report', figures: reportFigures }] : [])]) + '\n```' }];
 
 test('r9b runner: figure verdicts are validated by code, saved as meaningKeys, and both lines reach the report', async () => {
   // r10: the figure of the report text is compared on its own (p1); it no longer takes the meaning of the claim figure

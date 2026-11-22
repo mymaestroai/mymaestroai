@@ -247,9 +247,125 @@ test('selectionBrief / readerBrief / groupForReaders', () => {
   assert.deepStrictEqual(T.groupForReaders(srcs).map((g) => g.length), [2, 1]);
   assert.deepStrictEqual(T.groupForReaders(srcs, 1).length, 3);
   const rb = T.readerBrief('Which method wins?', srcs.slice(0, 2));
-  for (const h of ['## <title> (<url>)', 'Full text opened: yes/no', '### Method', '### Results (location, who judged, sample size)', '### What mattered most', '### Limits', '### Could not read', 'arxiv.org/html', 'offset', 'Never invent or round']) assert.ok(rb.includes(h), h);
+  for (const h of ['## <title> (<url>)', 'Full text opened: yes/no', '### Method', '### Results (location, who judged, sample size)', '### What mattered most', '### Limits', '### Could not read', 'Never invent or round']) assert.ok(rb.includes(h), h);
   assert.match(rb, /https:\/\/b\.example\/2/);
   assert.doesNotMatch(rb, /story/i);
+  assert.doesNotMatch(rb, /WebFetch|arxiv\.org\/html/);   // H1: the readers do not open sources themselves
+});
+
+// ---------------------------------------------------------------- H1 readers read the hub's text
+test('H1 readerBrief: the hub text sits between markers, is cut at the cap with the sentence, a failed source says so, WebFetch is gone', () => {
+  const srcs = [{ url: 'https://a.example/1', title: 'A' }, { url: 'https://b.example/2', title: 'B' }, { url: 'https://c.example/3', title: 'C' }];
+  const big = 'x'.repeat(T.READER_TEXT_MAX + 500);
+  const texts = new Map([
+    ['https://a.example/1', { ok: true, text: 'Method A scored 56.4% (Table 2).', chars: 32 }],
+    ['https://b.example/2', { ok: false, text: '', chars: 0, error: 'HTTP 403' }],
+    ['https://c.example/3', { ok: true, text: big, chars: big.length }],
+  ]);
+  const b = T.readerBrief('Q?', srcs, undefined, undefined, texts);
+  assert.match(b, /----- BEGIN TEXT OF SOURCE 1 -----\nMethod A scored 56\.4% \(Table 2\)\.\n----- END TEXT OF SOURCE 1 -----/);
+  assert.match(b, /The hub could not fetch this source \(HTTP 403\)\. Report it as not read; do not look for another copy\./);
+  assert.ok(!b.includes('BEGIN TEXT OF SOURCE 2'));
+  assert.match(b, /The hub's text of this source is cut at 120,000 of 120,500 characters; say in your notes that you read only that part\./);
+  const c = b.slice(b.indexOf('BEGIN TEXT OF SOURCE 3'), b.indexOf('END TEXT OF SOURCE 3'));
+  assert.ok(c.length > 120000 && c.length < 120100);
+  assert.match(b, /Read ONLY the text given below each source/);
+  assert.match(b, /Could not read/);
+  assert.doesNotMatch(b, /WebFetch/);
+  // an object works as well as a Map
+  assert.match(T.readerBrief('Q?', [srcs[0]], undefined, undefined, { 'https://a.example/1': { ok: true, text: 'hello text' } }), /BEGIN TEXT OF SOURCE 1 -----\nhello text/);
+  // no texts at all: every source says it could not be fetched
+  assert.match(T.readerBrief('Q?', [srcs[0]]), /could not fetch this source/);
+});
+
+// ---------------------------------------------------------------- H2 not shown is not unsupported
+const H2_CLAIMS = [{ id: 'c1', claim: 'A won with 56.4%', source_url: 'https://arxiv.org/abs/2401.00001v2', figures: ['56.4'] }, { id: 'c2', claim: 'B lost', source_url: 'https://b.example/2', figures: [] }];
+const H2_NOTES = '## Paper A (https://arxiv.org/pdf/2401.00001v1)\n- Full text opened: yes\n### Results (Table 2)\n- Method A scored 51.0% overall, not 56.4%.\n### Limits\nNothing\n## Paper B (https://b.example/2)\n- Full text opened: yes\n### Results\n- B won in the main table.\n';
+test('H2 readerNotesLookup / challengeBrief: the reader notes of the claim\'s source are shown (same paper counts), capped, with the new verdict rules', () => {
+  const look = T.readerNotesLookup(H2_NOTES);
+  assert.match(look('https://arxiv.org/abs/2401.00001v2'), /scored 51\.0% overall/);
+  assert.equal(look('https://nowhere.example/x'), '');
+  const b = T.challengeBrief('Q?', H2_CLAIMS, [{ id: 'c1', excerpts: ['e1'] }, { id: 'c2', excerpts: [] }], [], look);
+  assert.match(b, /What the reader of the full text noted about this source:/);
+  assert.match(b, /Method A scored 51\.0% overall/);
+  assert.match(b, /B won in the main table/);
+  assert.ok(b.indexOf('Method A scored 51.0%') < b.indexOf('Claim c2'));      // under claim c1
+  assert.match(b, /"contradiction"/);
+  assert.match(b, /not_supported: ONLY when .*SAY SOMETHING DIFFERENT/);
+  assert.match(b, /cannot_check: .*simply do not show/);
+  const long = T.challengeBrief('Q?', [H2_CLAIMS[0]], [], [], () => 'n'.repeat(9000));
+  assert.match(long, /the notes are cut at 6000 of 9000 characters/);
+  assert.ok(!long.includes('n'.repeat(6001)));
+  // a Map works too; no notes: no heading
+  assert.match(T.challengeBrief('Q?', [H2_CLAIMS[1]], [], [], new Map([['https://b.example/2', 'map notes here']])), /map notes here/);
+  assert.doesNotMatch(T.challengeBrief('Q?', H2_CLAIMS, [], []), /What the reader of the full text noted/);
+});
+test('H2 enforceContradictions: a not_supported / partly verdict needs a quote found in the excerpts or the notes, else it is cannot_check', () => {
+  const look = T.readerNotesLookup(H2_NOTES);
+  const ex = [{ id: 'c1', excerpts: ['The table reports   a score of 49.9 for the other arm.'] }, { id: 'c2', excerpts: [] }];
+  const mk = (rs) => ({ results: rs.map((r) => ({ figures: [], reason: 'r', contradiction: '', ...r })), counts: {}, error: '' });
+  const out = T.enforceContradictions(mk([
+    { id: 'c1', verdict: 'not_supported' },                                                       // no quote
+    { id: 'c2', verdict: 'not_supported', contradiction: 'B lost in every table of the paper' },   // quote in neither
+  ]), H2_CLAIMS, ex, look);
+  assert.deepStrictEqual(out.results.map((r) => [r.verdict, r.downgraded, r.reason]), [['cannot_check', 'no quote', 'r'], ['cannot_check', 'no quote', 'r']]);
+  assert.equal(out.unquoted, 2);
+  assert.deepStrictEqual(out.counts, { supported: 0, partly: 0, not_supported: 0, cannot_check: 2 });
+  // a quote found in the notes: stays; the quote is also found in the excerpts with the white space collapsed; too short does not count
+  const ok = T.enforceContradictions(mk([
+    { id: 'c1', verdict: 'not_supported', contradiction: 'Method A scored 51.0% overall, not 56.4%.' },
+    { id: 'c2', verdict: 'partly', contradiction: 'B won in the main table.' },
+  ]), H2_CLAIMS, ex, look);
+  assert.deepStrictEqual(ok.results.map((r) => r.verdict), ['not_supported', 'partly']);
+  assert.equal(ok.unquoted, 0);
+  const inEx = T.enforceContradictions(mk([{ id: 'c1', verdict: 'partly', contradiction: 'reports a score of 49.9 for the other arm' }]), H2_CLAIMS, ex, look);
+  assert.equal(inEx.results[0].verdict, 'partly');
+  const shortQ = T.enforceContradictions(mk([{ id: 'c1', verdict: 'partly', contradiction: 'B won' }]), H2_CLAIMS, ex, look);
+  assert.equal(shortQ.results[0].verdict, 'cannot_check');
+  // supported and cannot_check are untouched; a quote in another source's notes does not count
+  const other = T.enforceContradictions(mk([{ id: 'c1', verdict: 'not_supported', contradiction: 'B won in the main table.' }, { id: 'c2', verdict: 'supported' }]), H2_CLAIMS, ex, look);
+  assert.deepStrictEqual(other.results.map((r) => r.verdict), ['cannot_check', 'supported']);
+  // parseChallenge keeps the quote field
+  assert.equal(T.parseChallenge('```json\n[{"id":"c1","verdict":"partly","reason":"x","contradiction":" q q q "}]\n```', ['c1']).results[0].contradiction, 'q q q');
+});
+test('H2 reviseBrief carries the contradiction quote, keeps cannot_check as it is and no longer says "could not be confirmed"', () => {
+  const claims = [{ id: 'c1', claim: 'A' }, { id: 'c2', claim: 'B' }];
+  const b = T.reviseBrief('Q?', 'prose', claims, { results: [{ id: 'c1', verdict: 'not_supported', reason: 'r', contradiction: 'the paper says 51.0%' }, { id: 'c2', verdict: 'cannot_check', reason: 'not shown', contradiction: 'ignored' }] });
+  assert.match(b, /c1 \[not_supported\] A \| reviewer: r \| contradiction: "the paper says 51\.0%"/);
+  assert.doesNotMatch(b, /c2 .*contradiction/);
+  assert.doesNotMatch(b, /could not be confirmed/);
+  assert.match(b, /only as its quoted contradiction says/);
+  assert.match(b, /Keep claims marked cannot_check and supported exactly as they are: do not call them unconfirmed, unsupported, not established or removed, and do not drop them\./);
+});
+test('H2/H3 synthesisBrief: not mentioned is not unsupported; every reader result becomes a claim', () => {
+  const b = T.synthesisBrief('Q?', 'f', 'n', []);
+  assert.match(b, /A statement is wrong or unsupported only when a reader's notes say the full text says something different\./);
+  assert.match(b, /leave it out or say it was not checked/);
+  assert.match(b, /Every result a reader reported under Results and What mattered most that bears on the question becomes a claim, including sample sizes, rater counts and which model judged\./);
+  assert.match(b, /the first pass said «59\.4%»/);   // the « » attribution rule stays
+});
+
+// ---------------------------------------------------------------- H3 claims keep the readers' facts
+test('H3 missingReaderFacts: result lines whose numbers no claim holds', () => {
+  const notes = '## Paper (https://p.example/a)\n- Full text opened: yes\n### Results (location, who judged, sample size)\n- Table 3: 30 annotators per task, 90 pairs\n- GenRM-CoT distilled from GPT-4.1\n- Nothing to add here\n### What mattered most (the source\'s own evidence)\n1. Ablation row 4 gave +2.5 points\n### Limits\n- 77 stories only\n## Other (https://p.example/b)\n### Results\n- Judged by 3 humans\n';
+  const m = T.missingReaderFacts(notes, []);
+  assert.deepStrictEqual(m.map((x) => x.line), ['Table 3: 30 annotators per task, 90 pairs', 'GenRM-CoT distilled from GPT-4.1', 'Ablation row 4 gave +2.5 points', 'Judged by 3 humans']);
+  assert.equal(m[0].source, 'Paper (https://p.example/a)');
+  assert.equal(m[3].source, 'Other (https://p.example/b)');
+  const A = 'https://p.example/a';
+  const B = 'https://p.example/b';
+  const some = T.missingReaderFacts(notes, [{ id: 'c1', claim: 'Each task had 30 annotators', figures: ['90'], source_url: A }, { id: 'c2', claim: 'judge was GPT-4.1 distilled', figures: ['4.1'], source_url: A }, { claim: 'x', figures: ['2.5'], source_url: A }, { claim: 'y', figures: ['3'], source_url: B }]);
+  assert.deepStrictEqual(some, []);
+  assert.deepStrictEqual(T.missingReaderFacts(notes, [{ claim: 'c', figures: ['30'], source_url: A }]).map((x) => x.line), ['GenRM-CoT distilled from GPT-4.1', 'Ablation row 4 gave +2.5 points', 'Judged by 3 humans']);   // one number of a line is enough to count it as present: 30 covers line 1
+  // a number in a claim about ANOTHER source does not cover a reader's line (run 3: "30 annotators" was hidden by another paper's "30")
+  assert.deepStrictEqual(T.missingReaderFacts(notes, [{ claim: 'c', figures: ['30'], source_url: B }]).map((x) => x.line)[0], 'Table 3: 30 annotators per task, 90 pairs');
+  // locations are no results: "§3.1", "[141]", "Figures 4, 6 and 7"
+  assert.deepStrictEqual(T.missingReaderFacts('## P (https://p.example/a)\n### Results\n- §3.1 says it moved [141].\n- Figures 4, 6 and 7 are images.\n', []), []);
+  // at most 5 per source, so one long source cannot hide the others
+  const many = '## P (https://p.example/a)\n### Results\n' + Array.from({ length: 60 }, (_, i) => `- result ${1000 + i} points`).join('\n') + '\n## Q (https://p.example/q)\n### Results\n- 4242 items\n';
+  const got = T.missingReaderFacts(many, []);
+  assert.equal(got.filter((x) => x.source.startsWith('P ')).length, 5);
+  assert.equal(got[got.length - 1].line, '4242 items');
 });
 
 // ---------------------------------------------------------------- claims parse
