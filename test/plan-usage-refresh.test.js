@@ -36,17 +36,17 @@ function clock() {
   };
 }
 function rig({ answer = {}, settings = {}, stamp = { v: null } } = {}) {
-  const c = clock(); const published = []; const logs = []; const cur = { answer }; let calls = 0; let hold = null;
-  const pu = createPlanUsage({ getSetting: (k) => settings[k], now: c.now, setTimer: c.setTimer, clearTimer: c.clearTimer,
-    fetchUsage: async () => { calls++; if (hold) await hold; return cur.answer; }, publish: (t, d) => published.push({ t, d }), log: (m) => logs.push(m),
+  const c = clock(); const published = []; const logs = []; const cur = { answer }; let calls = 0; let hold = null; let fails = 0;
+  const pu = createPlanUsage({ getSetting: (k) => { if (settings.throws) throw new Error('settings broke'); return settings[k]; }, now: c.now, setTimer: c.setTimer, clearTimer: c.clearTimer,
+    fetchUsage: async () => { calls++; if (hold) await hold; if (fails > 0) { fails--; throw new Error('no client'); } return cur.answer; }, publish: (t, d) => published.push({ t, d }), log: (m) => logs.push(m),
     listAgents: () => [], notify: () => {}, credentialStamp: () => stamp.v });
-  return { pu, c, published, logs, cur, stamp, calls: () => calls, holdNext: () => { let go; hold = new Promise(r => { go = () => { hold = null; r(); }; }); return go; } };
+  return { pu, c, published, logs, cur, stamp, settings, calls: () => calls, failNext: (n = 1) => { fails = n; }, holdNext: () => { let go; hold = new Promise(r => { go = () => { hold = null; r(); }; }); return go; } };
 }
 const ans = (week, sub = 'max', extra = {}) => ({ subscription_type: sub, rate_limits_available: true, rate_limits: { seven_day: { utilization: week.u, resets_at: week.r }, ...extra } });
 const OLD_FLAGS = () => ({ windows: { seven_day: { utilization: 100, resets_at: WEEK1, rejected: true }, five_hour: { utilization: 100, resets_at: '2026-10-12T15:00:00Z', extraUsage: true } },
   models: { fable: { utilization: 100, resets_at: WEEK1, rejected: true, display_name: 'Fable' } }, overage: { status: 'rejected', inUse: false } });
 
-test('a changed sign-in file is re-read once after the 5 s wait; the old answer\'s flags and models are gone', async () => {
+test('a changed sign-in file is re-read once after the 5 s wait; the pending sign-in lets the answer clear a refusal it contradicts, nothing else is wiped', async () => {
   const r = rig({ answer: ans({ u: 20, r: WEEK1 }), stamp: { v: 'a' } });
   r.pu.start();
   await r.c.advance(5000);                       // the first read
@@ -61,17 +61,17 @@ test('a changed sign-in file is re-read once after the 5 s wait; the old answer\
   await r.c.advance(1);
   assert.strictEqual(r.calls(), 2, 'one re-read after the wait');
   const s = r.pu.snapshot();
-  assert.deepStrictEqual(s.models, {}, 'the old subscription\'s model windows are gone');
-  assert.strictEqual(s.windows.seven_day.rejected, false);
-  assert.strictEqual(s.windows.five_hour.extraUsage, undefined);
-  assert.strictEqual(s.overage, null);
+  assert.strictEqual(s.windows.seven_day.rejected, false, 'the answer reads the refused week at 20% after a sign-in change: cleared');
+  // a stamp change alone is not another subscription (the client rewrites the file on a token renewal): the rest is kept
+  assert.ok(s.models.fable && s.models.fable.rejected, 'the model bucket the answer does not mention is kept');
+  assert.strictEqual(s.windows.five_hour.extraUsage, true);
   assert.ok(r.logs.includes('[plan-usage] sign-in changed: re-read'));
-  await r.c.advance(60000);                      // the stamp stays the same: nothing more
+  await r.c.advance(30000);                      // the stamp stays the same: nothing more (the kept Fable refusal polls every 60 s)
   assert.strictEqual(r.calls(), 2);
   r.pu.stop();
 });
 
-test('each later change is read once; an unknown stamp (null) never triggers; a stamp never known is only learned', async () => {
+test('each later change is read once; an unknown stamp (null) never triggers; a stamp that was absent at start counts when it appears', async () => {
   const r = rig({ answer: ans({ u: 20, r: WEEK1 }), stamp: { v: 'a' } });
   r.pu.start();
   await r.c.advance(5000);
@@ -84,10 +84,120 @@ test('each later change is read once; an unknown stamp (null) never triggers; a 
   r.stamp.v = 'c'; await r.c.advance(120000);
   assert.strictEqual(r.calls(), 3, 'the file back with the stamp it had: no change');
   r.pu.stop();
-  const n = rig({ answer: ans({ u: 20, r: WEEK1 }), stamp: { v: null } });   // macOS keychain: no file, no trigger
+  const n = rig({ answer: ans({ u: 20, r: WEEK1 }), stamp: { v: null } });   // no file at start: the first sign-in later is a change
   n.pu.start(); await n.c.advance(5000); n.stamp.v = 'x'; await n.c.advance(60000);
-  assert.strictEqual(n.calls(), 1, 'a stamp that was never known is only learned');
+  assert.strictEqual(n.calls(), 2, 'null -> present triggers a read');
+  await n.c.advance(120000);
+  assert.strictEqual(n.calls(), 2, 'and only the one');
   n.pu.stop();
+});
+
+test('a stamp change on the same account (same type, same reset) keeps told lines, fallbacks and warnings', async () => {
+  const r = rig({ answer: ans({ u: 80, r: WEEK1 }), stamp: { v: 'a' }, settings: { planFallback: { enabled: true } } });
+  r.pu.start(); await r.c.advance(5000);
+  const warns = () => r.published.filter(p => p.t === 'plan_warning');
+  assert.strictEqual(warns().length, 1);
+  assert.ok(r.pu.warningFor(FABLE, 'lead'), 'the chat line is shown once');
+  assert.strictEqual(r.pu.warningFor(FABLE, 'lead'), null);
+  r.pu._setState({ fallbacks: { 'lead|fable|x': { agent: 'lead', family: 'fable', resetsAt: WEEK1, turns: 1 } } });
+  r.stamp.v = 'b'; await r.c.advance(20000);      // the client renewed its token
+  assert.strictEqual(r.calls(), 2);
+  assert.strictEqual(r.pu.warningFor(FABLE, 'lead'), null, 'the told line is not shown again');
+  assert.strictEqual(r.pu.snapshot().fallbacks.length, 1, 'the fallback record is kept');
+  assert.strictEqual(warns().length, 1, 'the warning is not fired again');
+  r.pu.stop();
+});
+
+test('an answer for another subscription replaces the windows: an old Opus window the new answer lacks is gone', async () => {
+  const r = rig({ answer: { subscription_type: 'max', rate_limits_available: true, rate_limits: { seven_day: { utilization: 40, resets_at: WEEK1 }, seven_day_opus: { utilization: 95, resets_at: WEEK1 } } } });
+  await r.pu.refresh();
+  assert.ok(r.pu.snapshot().weekly.some(w => w.family === 'opus' && w.utilization === 95));
+  r.cur.answer = ans({ u: 10, r: WEEK2 }, 'pro');
+  await r.pu.refresh();
+  const s = r.pu.snapshot();
+  assert.strictEqual(s.windows.seven_day_opus, undefined);
+  assert.deepStrictEqual(s.weekly.map(w => [w.key, w.utilization]), [['seven_day', 10]]);
+  assert.strictEqual(r.pu.fallbackFor(OPUS, {}), null);
+});
+
+test('a sign-in change whose first read fails stays pending: the next successful read clears a refusal it contradicts', async () => {
+  const r = rig({ answer: ans({ u: 10, r: WEEK1 }), stamp: { v: 'a' } });
+  r.pu.start(); await r.c.advance(5000);
+  r.pu._setState({ models: { opus: { utilization: 100, resets_at: WEEK1, rejected: true, rejectedAt: T0 } } });
+  r.cur.answer = { ...ans({ u: 10, r: WEEK1 }), rate_limits: { seven_day: { utilization: 10, resets_at: WEEK1 }, model_scoped: [{ display_name: 'Opus', utilization: 4, resets_at: WEEK1 }] } };
+  r.failNext();
+  r.stamp.v = 'b'; await r.c.advance(20000);      // the change is seen at 10 s, the debounced read at 15 s fails
+  assert.strictEqual(r.calls(), 2);
+  assert.ok(r.pu.snapshot().error);
+  assert.strictEqual(r.pu.snapshot().models.opus.rejected, true);
+  await r.c.advance(60000);                       // the pending sign-in is retried within a minute
+  assert.strictEqual(r.calls(), 3);
+  assert.strictEqual(r.pu.snapshot().models.opus.rejected, false, 'cleared: the sign-in change is pending and the answer reads 4%');
+  assert.strictEqual(r.pu.snapshot().models.opus.utilization, 4);
+  await r.c.advance(POLL_MS - 100000);            // the third read was at about 75 s
+  assert.strictEqual(r.calls(), 3, 'settled: back to the normal poll');
+  r.pu.stop();
+});
+
+test('a refusal yields to a turn that went through after it plus an answer below 100; a plain poll alone keeps it', async () => {
+  const opusAnswer = (u) => ({ ...ans({ u: 10, r: WEEK1 }), rate_limits: { seven_day: { utilization: 10, resets_at: WEEK1 }, model_scoped: [{ display_name: 'Opus', utilization: u, resets_at: WEEK1 }] } });
+  const r = rig({ answer: opusAnswer(4) });
+  r.pu.noteEvent({ status: 'rejected', rateLimitType: 'seven_day_opus', resetsAt: Date.parse(WEEK1) / 1000 }, OPUS, 'lead');
+  assert.strictEqual(r.pu.snapshot().models.opus.rejected, true);
+  assert.strictEqual(typeof r.pu.snapshot().models.opus.rejectedAt, 'number');
+  await r.c.advance(2000); await r.pu.refresh(); await r.c.advance(0);
+  assert.strictEqual(r.pu.snapshot().models.opus.rejected, true, 'a poll alone does not clear it');
+  assert.strictEqual(r.pu.snapshot().models.opus.utilization, 4);
+  await r.c.advance(2000);
+  r.pu.noteTurnOk(OPUS); await r.c.advance(0);    // usedUp -> the evidence read
+  assert.strictEqual(r.pu.snapshot().models.opus.rejected, false);
+  assert.strictEqual(r.pu.snapshot().models.opus.utilization, 4);
+  // an answer at 100 keeps it however many turns went through
+  const q = rig({ answer: opusAnswer(100) });
+  q.pu.noteEvent({ status: 'rejected', rateLimitType: 'seven_day_opus', resetsAt: Date.parse(WEEK1) / 1000 }, OPUS, 'lead');
+  await q.c.advance(2000); q.pu.noteTurnOk(OPUS); await q.c.advance(0);
+  assert.strictEqual(q.pu.snapshot().models.opus.rejected, true);
+});
+
+test('stop() during a read in flight with a sign-in pending: no further read', async () => {
+  const r = rig({ answer: ans({ u: 20, r: WEEK1 }), stamp: { v: 'a' } });
+  r.pu.start(); await r.c.advance(5000);
+  const go = r.holdNext();
+  await r.c.advance(55000);                       // the poll at 10 min is far; make a read in flight by hand
+  const p = r.pu.refresh(); await r.c.advance(0);
+  assert.strictEqual(r.calls(), 2);
+  r.stamp.v = 'b'; await r.c.advance(10000);      // the change is seen while the read is in flight
+  r.pu.stop();
+  go(); await p; await r.c.advance(3600000);
+  assert.strictEqual(r.calls(), 2, 'nothing queued runs after stop()');
+  assert.strictEqual(r.c.pending(), 0);
+});
+
+test('a change during a slow read gets exactly one more read after it, not one per change', async () => {
+  const r = rig({ answer: ans({ u: 20, r: WEEK1 }), stamp: { v: 'a' } });
+  r.pu.start(); await r.c.advance(5000);
+  const go = r.holdNext();
+  const p = r.pu.refresh(); await r.c.advance(0);
+  assert.strictEqual(r.calls(), 2);
+  r.stamp.v = 'b'; await r.c.advance(10000); r.stamp.v = 'c'; await r.c.advance(10000); r.stamp.v = 'd'; await r.c.advance(20000);
+  assert.strictEqual(r.calls(), 2, 'one in flight, nothing stacked');
+  go(); await p; await r.c.advance(0);
+  assert.strictEqual(r.calls(), 3, 'one more read for the changes');
+  await r.c.advance(30000);
+  assert.strictEqual(r.calls(), 3);
+  r.pu.stop();
+});
+
+test('a throwing setting in the poll interval still leaves a poll timer', async () => {
+  const r = rig({ answer: ans({ u: 20, r: WEEK1 }), settings: {} });
+  r.pu.start(); await r.c.advance(4000);
+  r.settings.throws = true;
+  await r.c.advance(1000);                         // the first read runs (and fails in its warning check) and re-arms the poll
+  assert.strictEqual(r.calls(), 1);
+  assert.ok(r.c.pending() >= 2, 'the poll timer and the watch are set');
+  await r.c.advance(POLL_MS);
+  assert.strictEqual(r.calls(), 2, 'polling went on');
+  r.pu.stop();
 });
 
 test('the default stamp is built on stat only: no file is read or opened, CLAUDE_CONFIG_DIR is respected, absent -> null', () => {
@@ -204,13 +314,13 @@ test('another subscription (type or reset time) clears the old flags; the new wi
   assert.deepStrictEqual(q.pu.snapshot().models, {}, 'two and a half hours is another subscription');
 });
 
-test('refresh({ reset: true }) waits for a read in flight, then reads again', async () => {
+test('a second refresh while one is in flight joins it (no chain)', async () => {
   const r = rig({ answer: ans({ u: 20, r: WEEK1 }) });
   const go = r.holdNext();
-  const a = r.pu.refresh(); const b = r.pu.refresh({ reason: 'sign-in changed', reset: true });
+  const a = r.pu.refresh(); const b = r.pu.refresh({ reason: 'sign-in changed' });
   await r.c.advance(0); assert.strictEqual(r.calls(), 1);
   go(); await a; await b; await r.c.advance(0);
-  assert.strictEqual(r.calls(), 2);
+  assert.strictEqual(r.calls(), 1);
 });
 
 test('polling: every 10 minutes, every 60 s at the top level or while refused, back to 10 minutes below; stop() ends it', async () => {

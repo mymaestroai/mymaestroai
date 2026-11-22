@@ -77,19 +77,77 @@ test('a stamp change reads once, after the 5 s quiet time', async () => {
   m.u.stop();
 });
 
-test('an unknown stamp is not a change; sign-out then sign-in (known, gone, a new one) is', async () => {
+test('an absent stamp at start is no change; a first sign-in (null -> present) counts; sign-out then a new sign-in does too', async () => {
   const m = make({ stamp: null });
   startQuiet(m);
-  m.env.stamp = 'a';                    // from unknown to known: not a change
   await m.advance(60 * 1000);
-  assert.strictEqual(m.env.reads, 0);
+  assert.strictEqual(m.env.reads, 0, 'nothing signed in: nothing to read');
+  m.env.stamp = 'a';                    // a first sign-in after start()
+  await m.advance(60 * 1000);
+  assert.strictEqual(m.env.reads, 1);
   m.env.stamp = null;                   // signed out: the file is gone
   await m.advance(60 * 1000);
-  assert.strictEqual(m.env.reads, 0);
+  assert.strictEqual(m.env.reads, 1);
   m.env.stamp = 'c';                    // signed in again, a different file
+  await m.advance(25 * 1000);
+  assert.strictEqual(m.env.reads, 2);
+  m.u.stop();
+});
+
+test('a sign-in change while the old account\'s read is in flight: a second read after the gap', async () => {
+  let release; const gate = new Promise((r) => { release = r; });
+  let calls = 0;
+  const m = make({ read: () => (++calls === 1 ? gate : weeklyRead(10, 'new')) });
+  startQuiet(m);
+  const old = m.u.readNow();            // the old account's read, slow
+  await m.settle();
+  assert.strictEqual(m.env.reads, 1);
+  m.env.stamp = 'b';
+  await m.advance(25 * 1000);           // check at 15 s, debounce at 20 s: joins the old read
+  assert.strictEqual(m.env.reads, 1);
+  release(weeklyRead(10, 'old'));
+  await old; await m.settle();
+  assert.strictEqual(m.env.reads, 1, 'the gap still holds');
+  await m.advance(40 * 1000);
+  assert.strictEqual(m.env.reads, 2, 'a read that started after the change');
+  assert.deepStrictEqual(m.u.snapshot().limits.map(l => l.id), ['new']);
+  await m.advance(10 * 60 * 1000);
+  assert.strictEqual(m.env.reads, 2, 'done: no more tries');
+  m.u.stop();
+});
+
+test('a failed sign-in read is retried when the gap allows, and given up after 5 tries', async () => {
+  let n = 0;
+  const m = make({ read: () => { if (++n === 1) throw new Error('boom'); return weeklyRead(10, 'new'); } });
+  startQuiet(m);
+  m.env.stamp = 'b';
+  await m.advance(25 * 1000);
+  assert.strictEqual(m.env.reads, 1);
+  await m.advance(62 * 1000);
+  assert.strictEqual(m.env.reads, 2, 'retried');
+  assert.deepStrictEqual(m.u.snapshot().limits.map(l => l.id), ['new']);
+  await m.advance(10 * 60 * 1000);
+  assert.strictEqual(m.env.reads, 2, 'a success ends it');
+  m.u.stop();
+
+  const bad = make({ read: () => { throw new Error('down'); } });
+  startQuiet(bad);
+  bad.env.stamp = 'b';
+  await bad.advance(30 * 60 * 1000);
+  assert.strictEqual(bad.env.reads, 5, 'at most 5 tries');
+  bad.u.stop();
+});
+
+test('stop() cancels the pending sign-in retries', async () => {
+  const m = make({ read: () => { throw new Error('down'); } });
+  startQuiet(m);
+  m.env.stamp = 'b';
   await m.advance(25 * 1000);
   assert.strictEqual(m.env.reads, 1);
   m.u.stop();
+  assert.strictEqual(m.timers.length, 0);
+  await m.advance(20 * 60 * 1000);
+  assert.strictEqual(m.env.reads, 1);
 });
 
 test('the sign-in change reads the new account and drops the old one\'s limits and warned entries', async () => {
