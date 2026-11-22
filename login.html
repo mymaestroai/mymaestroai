@@ -41,7 +41,7 @@
   form { display: none; }
   form.on { display: block; }
   label { display: block; font-size: 12px; color: var(--text-dim); margin: 12px 0 5px; }
-  input[type="text"], input[type="email"], input[type="password"] {
+  input[type="text"], input[type="email"], input[type="password"], input[data-eye] {
     width: 100%; padding: 11px 12px; border: 1px solid var(--border); border-radius: 8px;
     background: var(--bg-input); color: var(--text); font-size: 16px; outline: none;
   }
@@ -81,7 +81,7 @@
     <label for="login-email">Email</label>
     <input type="email" id="login-email" name="username" autocomplete="username" inputmode="email" autocapitalize="none" spellcheck="false" required>
     <label for="login-password">Password</label>
-    <input type="password" id="login-password" name="password" autocomplete="current-password" required>
+    <input type="password" id="login-password" name="password" autocomplete="current-password" data-eye required>
     <div class="forgot" id="login-forgot">Forgot it? On the computer that runs your Maestro, run: <code>mymaestro reset-password &lt;your email&gt;</code></div>
     <button class="primary" type="submit">Sign in</button>
     <div class="error" id="login-error"></div>
@@ -109,9 +109,9 @@
     <label for="invite-name">Your name</label>
     <input type="text" id="invite-name" name="name" autocomplete="name" required>
     <label for="invite-password">Password (at least 12 characters)</label>
-    <input type="password" id="invite-password" name="new-password" autocomplete="new-password" minlength="12" required>
+    <input type="password" id="invite-password" name="new-password" autocomplete="new-password" data-eye minlength="12" required>
     <label for="invite-password2">Password again</label>
-    <input type="password" id="invite-password2" autocomplete="new-password" minlength="12" required>
+    <input type="password" id="invite-password2" autocomplete="new-password" data-eye minlength="12" required>
     <button class="primary" type="submit">Create my account</button>
     <div class="error" id="invite-error"></div>
   </form>
@@ -126,6 +126,8 @@
   <div class="foot"><a href="/help#trouble" style="color:var(--accent);text-decoration:none">Trouble signing in? Help</a></div>
 </div>
 
+<script src="/password-eye.js"></script>
+<script>document.addEventListener('DOMContentLoaded', function () { PasswordEye.watch(); });</script>
 <script>
 (function () {
   'use strict';

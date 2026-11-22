@@ -57,7 +57,7 @@
   .field { display: flex; flex-direction: column; gap: 4px; margin: 10px 0; }
   .field .lbl { font-size: 13px; }
   .field .help { color: var(--text-tertiary); font-size: 12px; }
-  input[type="text"], input[type="password"], input[type="number"], textarea, select {
+  input[type="text"], input[type="password"], input[data-eye], input[type="number"], textarea, select {
     font: inherit; font-size: 13px; padding: 7px 9px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-input); color: var(--text); outline: none; width: 100%;
   }
   textarea { min-height: 80px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
@@ -116,7 +116,7 @@
     .layout { grid-template-columns: 1fr; }
     .top { padding: 10px 12px; }
     .top a { display: inline-flex; align-items: center; min-height: 40px; }
-    button, input[type="text"], input[type="password"], input[type="number"], select { min-height: 40px; font-size: 16px; }
+    button, input[type="text"], input[type="password"], input[data-eye], input[type="number"], select { min-height: 40px; font-size: 16px; }
     ol.steps li { min-height: 40px; }
     label.chk, .agent-row { min-height: 40px; align-items: center; }
     .links a { display: inline-flex; align-items: center; min-height: 40px; }
@@ -136,6 +136,8 @@
   <div id="list"></div>
   <section class="panel" id="panel"></section>
 </main>
+<script src="/password-eye.js"></script>
+<script type="text/javascript">document.addEventListener('DOMContentLoaded', function () { PasswordEye.watch(); });</script>
 <script>
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const STATE_LABEL = { available: 'Not set up', setup: 'Setup in progress', ready: 'On', off: 'Off', attention: 'Needs attention', broken: 'Broken' };
@@ -380,7 +382,7 @@ async function deskOpen(btn) {
   });
 }
 function selectStep(id) { selected = id; render(); }
-function closePanel() { stopSignin(); permPending = null; document.getElementById('panel').classList.remove('open'); current = null; history.replaceState(null, '', '#'); }
+function closePanel() { stopSignin(); permPending = null; if (typeof PasswordEye !== 'undefined') PasswordEye.hideAll(document.getElementById('panel')); document.getElementById('panel').classList.remove('open'); current = null; history.replaceState(null, '', '#'); }
 
 function setMsg(kind, text) { const el = document.getElementById('step-msg'); if (!el) return; el.className = `msg show ${kind}`; el.textContent = text; }
 
@@ -529,7 +531,7 @@ function permsNeedWarning(permissions) {
 function stepUpFieldsHtml(cls, totp) {
   const code = totp === false ? ''
     : `<label class="su-lbl">${totp === true ? '' : 'two-factor code, if you use one'}<input type="text" class="${cls}-code su-code" inputmode="numeric" autocomplete="one-time-code" placeholder="123 456"></label>`;
-  return `<div class="su-fields"><label class="su-lbl">Your account password${totp === true ? ' and two-factor code' : ''}<input type="password" class="${cls}-pass su-pass" autocomplete="current-password" placeholder="account password"></label>${code}</div>`;
+  return `<div class="su-fields"><label class="su-lbl">Your account password${totp === true ? ' and two-factor code' : ''}<input type="password" data-eye class="${cls}-pass su-pass" autocomplete="current-password" placeholder="account password"></label>${code}</div>`;
 }
 let meTotp = null, meTotpTried = false;   // whether the signed-in account has two-factor (GET /api/me, read once); null = not known
 function loadMeTotp() {

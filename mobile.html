@@ -395,7 +395,7 @@
     .wl-body .sec-hint { font-size: 13px; color: var(--text-dim); }
     .wl-body .sec-msg { min-height: 1em; margin: 6px 0; font-size: 14px; color: var(--error); }
     .wl-body .sec-msg.ok { color: var(--success); }
-    .wl-body input[type="password"], .wl-body input:not([type]) { min-height: 44px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg-input); color: var(--text); font-size: 16px; }
+    .wl-body input[type="password"], .wl-body input[data-eye], .wl-body input:not([type]) { min-height: 44px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg-input); color: var(--text); font-size: 16px; }
     .wl-body .sec-actions { display: flex; gap: 8px; justify-content: flex-end; }
     .wl-body .sec-actions button { min-height: 44px; padding: 0 16px; border-radius: 8px; background: var(--border); color: var(--text); }
     .wl-body .sec-actions button.go { background: var(--accent); color: var(--on-accent); }
@@ -1472,6 +1472,8 @@ html.mm-simple #simple-side { display: none; }
   <script src="/ui-hand-off-card.js"></script>
   <script src="/ui-team-card.js"></script>
   <script src="/ui-simple.js"></script>
+  <script src="/password-eye.js"></script>
+  <script>document.addEventListener('DOMContentLoaded', function () { PasswordEye.watch(); });</script>
   <script src="mobile.js"></script>
 </body>
 </html>

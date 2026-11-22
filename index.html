@@ -2414,7 +2414,8 @@
       text-align: right;
     }
     .st-row input[type="text"],
-    .st-row input[type="password"] {
+    .st-row input[type="password"],
+    .st-row input[data-eye] {
       flex: 1; padding: 6px 10px; font-size: 0.8rem;
       background: var(--bg-input); border: 1px solid var(--border);
       border-radius: 4px; color: var(--text); font-family: var(--font-mono-ui);
@@ -2477,7 +2478,7 @@
     .bk-modal { max-width: 560px; }
     .bk-modal .bk-p { font-size: 0.84rem; color: var(--text-secondary); margin: 0 0 10px; line-height: 1.45; }
     .bk-modal .bk-label { display: block; font-size: 0.75rem; color: var(--text-dim); margin: 12px 0 4px; }
-    .bk-modal input[type="password"], .bk-modal input[type="text"], .bk-modal input[type="time"], .bk-modal input[type="number"] { width: 100%; box-sizing: border-box; padding: 8px 10px; background: var(--bg-input); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 0.86rem; }
+    .bk-modal input[type="password"], .bk-modal input[data-eye], .bk-modal input[type="text"], .bk-modal input[type="time"], .bk-modal input[type="number"] { width: 100%; box-sizing: border-box; padding: 8px 10px; background: var(--bg-input); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 0.86rem; }
     .bk-modal input[type="time"], .bk-modal input[type="number"] { width: 140px; color-scheme: dark; }
     .bk-modal input[type="number"] + .bk-p, .bk-modal input[type="time"] + .bk-p { margin-top: 12px; }
     .bk-modal .bk-two { display: flex; gap: 8px; }
@@ -2527,7 +2528,7 @@
     .cx-sub { color: var(--text-dim); font-size: 0.72rem; margin-top: 2px; word-break: break-word; }
     .cx-badge { display: inline-block; font-size: 0.65rem; padding: 0 6px; border: 1px solid var(--border); border-radius: 10px; color: var(--text-dim); margin-left: 2px; vertical-align: middle; }
     .cx-actions { display: flex; flex-wrap: wrap; gap: 4px; justify-content: flex-end; max-width: 260px; }
-    .cx-actions input[type="password"] { padding: 4px 8px; font-size: 0.75rem; background: var(--bg-input); border: 1px solid var(--border); border-radius: 4px; color: var(--text); }
+    .cx-actions input[type="password"], .cx-actions input[data-eye] { padding: 4px 8px; font-size: 0.75rem; background: var(--bg-input); border: 1px solid var(--border); border-radius: 4px; color: var(--text); }
     .cx-tools { margin-top: 4px; font-size: 0.75rem; }
     .cx-form { margin: 10px 0; padding: 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-dark); }
     .cx-form-title { font-size: 0.8rem; font-weight: 600; margin-bottom: 8px; }
@@ -3413,6 +3414,8 @@
   <script src="/ui-hand-off-card.js"></script>
   <script src="/ui-team-card.js"></script>
   <script src="/ui-simple.js"></script>
+  <script src="/password-eye.js"></script>
+  <script>document.addEventListener('DOMContentLoaded', function () { PasswordEye.watch(); });</script>
   <script src="app.js"></script>
   <script src="comms-panel.js"></script>
   <!-- Image Modal -->

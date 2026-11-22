@@ -237,7 +237,7 @@ test('the 409 box shows the password field; the code field only when the answer 
   await w.t.apprSave(w.rows['pc-a-1'].button);
   let warn = w.rows['pc-a-1'].warn.innerHTML;
   assert.match(warn, /Your account password(?! and two-factor)/);
-  assert.match(warn, /<input type="password" class="appr-pass su-pass" autocomplete="current-password" placeholder="account password">/);
+  assert.match(warn, /<input type="password" data-eye class="appr-pass su-pass" autocomplete="current-password" placeholder="account password">/);
   assert.ok(!/appr-code|one-time-code/.test(warn));
   assert.match(warn, /Save anyway/); assert.match(warn, /Cancel/);
   w.state.posts.push({ status: 409, json: { error: 'ack', needsAck: true, needsStepUp: true, totp: true } });

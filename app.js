@@ -748,9 +748,9 @@
           <div id="sec-2fa" class="sec-section"></div>
           <div class="sec-section">
             <div class="sec-title">Change password</div>
-            <input type="password" id="sec-pw-current" placeholder="Current password" autocomplete="current-password">
-            <input type="password" id="sec-pw-new" placeholder="New password (12+ characters)" autocomplete="new-password">
-            <input type="password" id="sec-pw-new2" placeholder="New password again" autocomplete="new-password">
+            <input type="password" data-eye id="sec-pw-current" placeholder="Current password" autocomplete="current-password">
+            <input type="password" data-eye id="sec-pw-new" placeholder="New password (12+ characters)" autocomplete="new-password">
+            <input type="password" data-eye id="sec-pw-new2" placeholder="New password again" autocomplete="new-password">
             <div class="sec-actions"><button class="sec-btn" onclick="changePassword()">Change password</button></div>
             <div class="sec-msg" id="sec-pw-msg"></div>
           </div>
@@ -846,7 +846,7 @@
         box.innerHTML = `
           <div class="sec-title">Two-factor authentication <span class="sec-badge on">on</span></div>
           ${adminLocked ? `<div class="sec-hint">Two-factor sign-in is on. Admins can't remove it while "Require two-factor sign-in for admins" is on in Settings, 🔐 Security.</div>` : `
-          <input type="password" id="sec-2fa-password" placeholder="Password (to turn it off)" autocomplete="current-password">
+          <input type="password" data-eye id="sec-2fa-password" placeholder="Password (to turn it off)" autocomplete="current-password">
           ${adminFree ? '<input type="text" id="sec-2fa-disable-code" inputmode="numeric" autocomplete="one-time-code" placeholder="123456 or a recovery code">' : ''}
           <div class="sec-actions"><button class="sec-btn danger" onclick="disableTwoFactor()">${adminFree ? 'Remove two-factor' : 'Disable 2FA'}</button></div>`}
           <div class="sec-msg" id="sec-2fa-msg"></div>`;
@@ -1034,10 +1034,10 @@
       const el = document.getElementById('bk-body'); const s = bkState; if (!el || !s) return;
       if (!s.key.configured) {
         el.innerHTML = `<div class="bk-strip bk-warn"><span class="bk-strip-text">Backups are off. Choose a backup password to turn them on.</span></div>
-          <div class="st-row"><label>Backup password</label><input type="password" id="bk-pw1" autocomplete="new-password" placeholder="at least 12 characters"></div>
-          <div class="st-row"><label>Again</label><input type="password" id="bk-pw2" autocomplete="new-password"></div>
+          <div class="st-row"><label>Backup password</label><input type="password" data-eye id="bk-pw1" autocomplete="new-password" placeholder="at least 12 characters"></div>
+          <div class="st-row"><label>Again</label><input type="password" data-eye id="bk-pw2" autocomplete="new-password"></div>
           <div class="st-hint">A few random words work well. It isn't stored anywhere: if you forget it, your backups can't be opened.</div>
-          <div class="st-row"><label>Account password</label><input type="password" id="bk-acct" autocomplete="current-password" placeholder="your sign-in password">${window.hubMe && window.hubMe.user && window.hubMe.user.totpEnabled ? '<input type="text" id="bk-code" inputmode="numeric" autocomplete="one-time-code" placeholder="two-factor code" style="flex:0 0 130px">' : ''}</div>
+          <div class="st-row"><label>Account password</label><input type="password" data-eye id="bk-acct" autocomplete="current-password" placeholder="your sign-in password">${window.hubMe && window.hubMe.user && window.hubMe.user.totpEnabled ? '<input type="text" id="bk-code" inputmode="numeric" autocomplete="one-time-code" placeholder="two-factor code" style="flex:0 0 130px">' : ''}</div>
           <div class="st-row"><label></label><button class="st-test-btn bk-primary" onclick="setupBackups(this)">Turn on backups</button><span id="bk-msg" class="bk-msg"></span></div>`;
         stSum('backups', 'last', 'Backups off');
         return;
@@ -1141,7 +1141,7 @@
     // The backup password and key (keys.js): change the password (same key), "it may have leaked" (a new key, then our
     // backups re-encrypted or deleted), see the recovery key again. Each asks for the account password again.
     const bkProblems = (r) => [...(r.failed || []).map(f => `<div class="bk-info">Not changed: ${esc(f.file)} (${esc(f.error)})</div>`), ...(r.unreachable || []).map(d => `<div class="bk-info">Couldn't reach ${esc(d)}: backups there still use the old lock.</div>`)].join('');
-    const bkAccountRow = (id) => { const totp = !!(window.hubMe && window.hubMe.user && window.hubMe.user.totpEnabled); return `<label class="bk-label">Your account password${totp ? ' and two-factor code' : ''}</label><div class="bk-two"><input type="password" id="${id}-acct" autocomplete="current-password" placeholder="account password">${totp ? `<input type="text" id="${id}-code" inputmode="numeric" autocomplete="one-time-code" placeholder="123 456">` : ''}</div>`; };
+    const bkAccountRow = (id) => { const totp = !!(window.hubMe && window.hubMe.user && window.hubMe.user.totpEnabled); return `<label class="bk-label">Your account password${totp ? ' and two-factor code' : ''}</label><div class="bk-two"><input type="password" data-eye id="${id}-acct" autocomplete="current-password" placeholder="account password">${totp ? `<input type="text" id="${id}-code" inputmode="numeric" autocomplete="one-time-code" placeholder="123 456">` : ''}</div>`; };
     function bkSecretSwitch(o, prefix, labels) {
       const sw = o.querySelector(`#${prefix}-switch`);
       sw.onclick = (e) => { e.preventDefault(); const k = o.querySelector(`#${prefix}-keybox`), p = o.querySelector(`#${prefix}-oldbox`); const toKey = k.hidden; k.hidden = !toKey; p.hidden = toKey; sw.textContent = toKey ? labels[1] : labels[0]; (toKey ? k : p).querySelector('input').focus(); };
@@ -1150,11 +1150,11 @@
       const leaked = mode === 'leaked';
       const o = bkOverlay('bk-pw-overlay', `<div id="bk-pw-body"><h3>${leaked ? 'My backup password may have leaked' : 'Change the backup password'}</h3>
         <p class="bk-p">${leaked ? 'This makes a new backup key, with a new password and a new recovery key. Then every backup on this computer and in your backup folders is re-encrypted with the new key, or deleted if you choose. Copies you keep anywhere else still open with the old password and the old recovery key: delete them.' : 'The backup key stays the same, so your recovery key keeps working. Backups on this computer and in your backup folders get the new password. Copies you keep anywhere else still open with the old one, and whoever has the old password and an old copy can unlock the key from it: if the password may have leaked, use “It may have leaked…” instead.'}</p>
-        <div id="bk-pw-oldbox"${preferRecovery ? ' hidden' : ''}><label class="bk-label">Current backup password</label><input type="password" id="bk-pw-old" autocomplete="off"></div>
+        <div id="bk-pw-oldbox"${preferRecovery ? ' hidden' : ''}><label class="bk-label">Current backup password</label><input type="password" data-eye id="bk-pw-old" autocomplete="off"></div>
         <div id="bk-pw-keybox"${preferRecovery ? '' : ' hidden'}><label class="bk-label">Recovery key</label><input type="text" id="bk-pw-key" autocomplete="off" spellcheck="false" placeholder="AGE-SECRET-KEY-1…"></div>
         <a href="#" class="bk-link" id="bk-pw-switch">${preferRecovery ? 'Use the current password instead' : 'Use the recovery key instead'}</a>
-        <label class="bk-label">New backup password</label><input type="password" id="bk-pw-new1" autocomplete="new-password" placeholder="at least 12 characters">
-        <label class="bk-label">Again</label><input type="password" id="bk-pw-new2" autocomplete="new-password">
+        <label class="bk-label">New backup password</label><input type="password" data-eye id="bk-pw-new1" autocomplete="new-password" placeholder="at least 12 characters">
+        <label class="bk-label">Again</label><input type="password" data-eye id="bk-pw-new2" autocomplete="new-password">
         ${bkAccountRow('bk-pw')}
         <div class="bk-msg" id="bk-pw-msg"></div>
         <div class="bk-actions"><button class="st-btn secondary" onclick="dialogRequestClose(this)">Cancel</button><button class="st-btn${leaked ? ' bk-danger' : ''}" id="bk-pw-go">${leaked ? 'Make a new key' : 'Change password'}</button></div></div>`);
@@ -1215,10 +1215,10 @@
     function bkFinishDialog() {
       const o = bkOverlay('bk-pw-overlay', `<div id="bk-pw-body"><h3>Finish replacing the old backup key</h3>
         <p class="bk-p">Backups that still use the old key are re-encrypted with the new one, or deleted. This needs the old backup password (or the old recovery key) and the new backup password.</p>
-        <div id="bk-fin-oldbox"><label class="bk-label">Old backup password</label><input type="password" id="bk-fin-old" autocomplete="off"></div>
+        <div id="bk-fin-oldbox"><label class="bk-label">Old backup password</label><input type="password" data-eye id="bk-fin-old" autocomplete="off"></div>
         <div id="bk-fin-keybox" hidden><label class="bk-label">Old recovery key</label><input type="text" id="bk-fin-key" autocomplete="off" spellcheck="false" placeholder="AGE-SECRET-KEY-1…"></div>
         <a href="#" class="bk-link" id="bk-fin-switch">Use the old recovery key instead</a>
-        <label class="bk-label">New backup password</label><input type="password" id="bk-fin-new" autocomplete="off">
+        <label class="bk-label">New backup password</label><input type="password" data-eye id="bk-fin-new" autocomplete="off">
         <label class="bk-check"><input type="radio" name="bk-rot-act" value="reencrypt" checked> Re-encrypt with the new key</label>
         <label class="bk-check"><input type="radio" name="bk-rot-act" value="delete"> Delete them</label>
         ${bkAccountRow('bk-fin')}
@@ -1236,7 +1236,7 @@
     function bkShowKeyDialog() {
       const o = bkOverlay('bk-pw-overlay', `<div id="bk-pw-body"><h3>Show the recovery key</h3>
         <p class="bk-p">The recovery key is not stored as such: the backup password unlocks it. Anyone who sees it can open every backup.</p>
-        <label class="bk-label">Backup password</label><input type="password" id="bk-sk-pw" autocomplete="off">
+        <label class="bk-label">Backup password</label><input type="password" data-eye id="bk-sk-pw" autocomplete="off">
         ${bkAccountRow('bk-sk')}
         <div class="bk-msg" id="bk-sk-msg"></div>
         <div class="bk-actions"><button class="st-btn secondary" onclick="dialogRequestClose(this)">Cancel</button><button class="st-btn" id="bk-sk-go">Show it</button></div></div>`);
@@ -1311,9 +1311,9 @@
         const totp = !!(window.hubMe && window.hubMe.user && window.hubMe.user.totpEnabled);
         const o = bkOverlay('bk-stepup-overlay', `<h3>${esc(title)}</h3><p class="bk-p">${esc(why)}</p>
           <label class="bk-label">Your account password${totp ? ' and two-factor code' : ''}</label>
-          <div class="bk-two"><input type="password" id="bk-su-pw" autocomplete="current-password" placeholder="account password">${totp ? '<input type="text" id="bk-su-code" inputmode="numeric" autocomplete="one-time-code" placeholder="123 456">' : ''}</div>
+          <div class="bk-two"><input type="password" data-eye id="bk-su-pw" autocomplete="current-password" placeholder="account password">${totp ? '<input type="text" id="bk-su-code" inputmode="numeric" autocomplete="one-time-code" placeholder="123 456">' : ''}</div>
           <div class="bk-actions"><button class="st-btn secondary" id="bk-su-cancel">Cancel</button><button class="st-btn" id="bk-su-ok">Continue</button></div>`);
-        const done = (v) => { o.remove(); resolve(v); };
+        const done = (v) => { if (typeof PasswordEye !== 'undefined') PasswordEye.hideAll(o); o.remove(); resolve(v); };
         o.querySelector('#bk-su-cancel').onclick = () => done(null);
         o.querySelector('#bk-su-ok').onclick = () => done({ password: o.querySelector('#bk-su-pw').value, code: (o.querySelector('#bk-su-code') || {}).value || '' });
         o.querySelector('#bk-su-pw').focus();
@@ -1370,7 +1370,7 @@
         <p class="bk-p">Backup: <b>${esc(src.fileName || src.name || 'the file you chose')}</b>${src.created ? ` · made ${esc(bkWhen(src.created))}` : ''}${src.version ? ` · My Maestro AI ${esc(src.version)}` : ''}</p>
         ${src.keyOld ? '<p class="bk-note">This backup was made with an older backup key: use the password or recovery key from that time.</p>' : ''}
         <p class="bk-p">First it is opened and every file checked. Nothing changes until you confirm on the next screen.</p>
-        <div id="bk-r-pwbox"><label class="bk-label">The backup password</label><input type="password" id="bk-r-pw" autocomplete="off"></div>
+        <div id="bk-r-pwbox"><label class="bk-label">The backup password</label><input type="password" data-eye id="bk-r-pw" autocomplete="off"></div>
         <div id="bk-r-keybox" hidden><label class="bk-label">The recovery key</label><input type="text" id="bk-r-key" autocomplete="off" spellcheck="false" placeholder="AGE-SECRET-KEY-1…"></div>
         <a href="#" class="bk-link" id="bk-r-switch" onclick="bkSwitchSecret(); return false">Use the recovery key instead</a>
         <div class="bk-msg" id="bk-r-msg"></div>
@@ -1424,7 +1424,7 @@
         ${lost.length ? `<div class="bk-lost-title">Lost if you continue (everything since ${esc(bkWhen(b.created))}):</div><ul class="bk-lost">${lost.map(x => `<li>${x}</li>`).join('')}</ul>` : ''}
         ${notes.map(n => `<div class="bk-info">${n}</div>`).join('')}
         <label class="bk-label">Your account password${totp ? ' and two-factor code' : ''}</label>
-        <div class="bk-two"><input type="password" id="bk-c-pw" autocomplete="current-password" placeholder="account password">${totp ? '<input type="text" id="bk-c-code" inputmode="numeric" autocomplete="one-time-code" placeholder="123 456">' : ''}</div>
+        <div class="bk-two"><input type="password" data-eye id="bk-c-pw" autocomplete="current-password" placeholder="account password">${totp ? '<input type="text" id="bk-c-code" inputmode="numeric" autocomplete="one-time-code" placeholder="123 456">' : ''}</div>
         <label class="bk-label">Type RESTORE to confirm</label><input type="text" id="bk-c-word" autocomplete="off" spellcheck="false">
         <div class="bk-msg" id="bk-c-msg"></div>
         <div class="bk-actions"><button class="st-btn secondary" onclick="bkCancelRestore(this)">Cancel</button><button class="st-btn bk-danger" id="bk-c-go" disabled>Restore and restart</button></div>`;
@@ -2667,7 +2667,7 @@
       if (!s.keystore.exists) {
         pkCancel();
         return gsModal(`${head}${note}<p class="gs-sub">Create an encrypted keystore. The passphrase is the only thing protecting the keys on disk, and it cannot be recovered: if you lose it, move funds out first or the wallets are gone.</p>
-          <input id="w-pass" type="password" placeholder="Passphrase (12+ characters)" style="${field}"><input id="w-pass2" type="password" placeholder="Repeat passphrase" style="${field}">
+          <input id="w-pass" type="password" data-eye placeholder="Passphrase (12+ characters)" style="${field}"><input id="w-pass2" type="password" data-eye placeholder="Repeat passphrase" style="${field}">
           <div class="gs-actions">${gsClose}<button class="gs-btn" onclick="walletAct('init')">Create keystore</button></div>`, dock);
       }
       const srcLabel = { generated: 'generated', 'imported-key': 'imported key', 'imported-seed': 'imported from seed' };
@@ -2687,7 +2687,7 @@
       const recoveryBox = `<div class="gs-box"><h4>Recovery</h4>
         <div class="gs-sub" style="margin-bottom:6px">The encrypted keystore file is copied to <code>${esc(s.keystore.backupDir || '')}</code> after every change${lastBk ? ` (last: ${esc(lastBk.file.split('/').pop())}, ${lastBk.count} copies)` : ' (no copies yet)'}. A copy is useless without the passphrase, so keep copies anywhere. Without the hub: <code>node scripts/wallet-recover.js &lt;file&gt;</code> prints the keys.</div>
         <div class="gs-sub" style="margin-bottom:4px">"Reveal key" on a wallet needs the passphrase here every time, is audited, and is never available to agents.</div>
-        <input id="w-reveal-pass" type="password" autocomplete="new-password" placeholder="Keystore passphrase (for Reveal key)" style="${field}">
+        <input id="w-reveal-pass" type="password" data-eye autocomplete="new-password" placeholder="Keystore passphrase (for Reveal key)" style="${field}">
         <div class="gs-actions"><button class="gs-btn secondary" onclick="walletAct('backup')">Back up now</button></div></div>`;
       const who = (s.walletAgents || []).join(', ');
       // Locked: the Unlock box comes FIRST, before the Executor and Hyperliquid boxes, which have passphrase fields of their own.
@@ -2696,7 +2696,7 @@
       const unlockBox = s.keystore.unlocked ? '' : `<div class="gs-box" style="border-color:var(--accent)"><h4>Unlock the keystore</h4>
         <div class="gs-sub" style="margin-bottom:4px">Locked since the hub last started. ${pkHere ? 'Use this device, or type' : 'Type'} the keystore passphrase here (this box, not the Executor or Hyperliquid ones) and press Enter or Unlock.</div>
         ${pkHere ? `<div class="gs-actions" style="margin:6px 0"><button class="gs-btn" id="pk-unlock-btn" onclick="walletAct('pkunlock')">Unlock with Face ID / fingerprint</button></div>` : ''}
-        <input id="w-pass" type="password" autocomplete="new-password" placeholder="Keystore passphrase" style="${field}" onkeydown="if(event.key==='Enter'){event.preventDefault();walletAct('unlock')}">
+        <input id="w-pass" type="password" data-eye autocomplete="new-password" placeholder="Keystore passphrase" style="${field}" onkeydown="if(event.key==='Enter'){event.preventDefault();walletAct('unlock')}">
         <div class="gs-actions"><button class="gs-btn" onclick="walletAct('unlock')">Unlock</button></div></div>`;
       const pkRows = pkList.map(p => `<div class="gs-commit"><strong>${esc(p.label)}</strong> <span class="gs-sub" style="margin:0 6px">${esc(p.rpId)} · added ${esc(new Date(p.createdAt).toLocaleDateString())}</span>
           <button class="gs-btn secondary" style="padding:2px 8px;font-size:0.72rem" data-pk-id="${escAttr(p.id)}" onclick="walletAct('pkremove', this.dataset.pkId)">Remove</button></div>`).join('')
@@ -2706,7 +2706,7 @@
         ${pkRows}
         ${pkOk.ok ? `<div class="gs-sub" style="margin-top:8px">Add this device</div>
           <input id="pk-label" value="${escAttr(pkDeviceLabel())}" maxlength="40" placeholder="Name for this device" style="${field}">
-          <input id="pk-pass" type="password" autocomplete="off" placeholder="Keystore passphrase (needed once; never stored)" style="${field}" onkeydown="if(event.key==='Enter'){event.preventDefault();walletAct('pkadd')}">
+          <input id="pk-pass" type="password" autocomplete="off" data-eye placeholder="Keystore passphrase (needed once; never stored)" style="${field}" onkeydown="if(event.key==='Enter'){event.preventDefault();walletAct('pkadd')}">
           <div id="pk-confirm-row"></div>
           <div class="gs-actions"><button class="gs-btn" id="pk-add-btn" onclick="walletAct('pkadd')">Add</button></div>`
           : `<div class="gs-sub" style="margin-top:8px">${esc(pkOk.text)}</div>`}
@@ -2731,7 +2731,7 @@
             <input id="x-cap-hour" value="${esc(String(x.caps.maxPerHour))}" size="2"> per hour · <input id="x-cap-day" value="${esc(String(x.caps.maxPerDay))}" size="2"> per day
             · used: ${x.usedLastHour}/h, ${x.usedLastDay}/day · token: ${x.hasToken ? 'set ' + esc(String(x.tokenCreated || '').slice(0, 16)) : '<strong>none</strong>'}</div>
           ${recent}
-          <input id="x-pass" type="password" autocomplete="off" placeholder="Keystore passphrase (required to save or make a token; never stored)" style="${field}">
+          <input id="x-pass" type="password" data-eye autocomplete="off" placeholder="Keystore passphrase (required to save or make a token; never stored)" style="${field}">
           <div class="gs-sub">"New token" replaces the current token at once; scripts using the old one stop working.</div>
           <div class="gs-actions"><button class="gs-btn secondary" onclick="walletAct('xtoken')">New token</button><button class="gs-btn" onclick="walletAct('xsave')">Save executor settings</button></div></div>`;
       }
@@ -2754,7 +2754,7 @@
           <div class="gs-sub" style="margin-top:6px"><strong>Agents the exchange lists on this account:</strong> ${Array.isArray(h.externalAgents) ? (h.externalAgents.length ? h.externalAgents.map(a => `<code>${esc(String(a.address))}</code> ${esc(String(a.name || '(unnamed)'))}`).join(' · ') : 'none') : '(not readable right now)'}</div>
           <div class="gs-sub" style="margin-top:4px">Authorize an <em>external</em> agent wallet (a bot's own key, kept outside the keystore). It can trade this account but cannot withdraw or transfer funds out. Signed by the main wallet's key; the hub's own agent is not touched.<br>
             address <input id="h-ext-addr" size="44" placeholder="0x…" autocomplete="off"> name <input id="h-ext-name" size="14" placeholder="e.g. trader-own" autocomplete="off"></div>
-          <input id="h-pass" type="password" autocomplete="off" placeholder="Keystore passphrase (to save or set up the agent key from here; never stored)" style="${field}">
+          <input id="h-pass" type="password" data-eye autocomplete="off" placeholder="Keystore passphrase (to save or set up the agent key from here; never stored)" style="${field}">
           <div class="gs-actions"><button class="gs-btn secondary" onclick="walletAct('hagent')">Set up Hyperliquid agent key</button><button class="gs-btn secondary" onclick="walletAct('hextagent')">Authorize external agent</button><button class="gs-btn" onclick="walletAct('hsave')">Save Hyperliquid settings</button></div></div>`;
       }
       let fw = null; try { fw = await walletApi('allowlist'); } catch { /* older server */ }
@@ -2787,7 +2787,7 @@
           <div class="gs-sub" id="fw-hint" style="margin:4px 0"></div>
           <input id="fw-label" placeholder="label, e.g. Aerodrome Slipstream NPM (Base)" autocomplete="off" style="${field}">
           <input id="fw-verified" placeholder="verified by (required): report path or source" autocomplete="off" style="${field}">
-          <input id="fw-pass" type="password" autocomplete="new-password" placeholder="Keystore passphrase (signs the record; never stored)" style="${field}">
+          <input id="fw-pass" type="password" data-eye autocomplete="new-password" placeholder="Keystore passphrase (signs the record; never stored)" style="${field}">
           <div class="gs-sub">Deactivate also uses this passphrase field. "Allow value" only has an effect together with "any selector". Neither is allowed on an executor.</div>
           <div class="gs-actions"><button class="gs-btn" onclick="walletAct('fwadd')">Add to firewall</button></div></div>`;
       }
@@ -3427,7 +3427,7 @@
       if (!panel) return;
       stAdmin2faMsg('');
       panel.innerHTML = `<div class="st-hint">Allow admins to remove their own two-factor? An admin who removes it signs in with a password alone, so anyone who learns that password could sign in as that admin.</div>
-        <div class="st-row"><label style="flex-basis:150px">Your password</label><input type="password" id="st-a2fa-pw" autocomplete="current-password"></div>
+        <div class="st-row"><label style="flex-basis:150px">Your password</label><input type="password" id="st-a2fa-pw" autocomplete="current-password" data-eye></div>
         ${me && me.user && me.user.totpEnabled ? '<div class="st-row"><label style="flex-basis:150px">Code</label><input type="text" id="st-a2fa-code" inputmode="numeric" autocomplete="one-time-code" placeholder="123456 or a recovery code"></div>' : ''}
         <div class="st-row"><label style="flex-basis:150px"></label>
           <button class="st-test-btn" style="color:var(--on-color-text);background:var(--halt-banner-bg)" onclick="stAdmin2faOff()">Turn it off</button>
@@ -5131,10 +5131,10 @@
         const members = Array.isArray(g.connectors) && g.connectors.length ? g.connectors.map(hubEsc).join(', ') : 'no connectors';
         const act = g.unlocked
           ? `<button class="st-test-btn" onclick="cxGroupLock('${hubEsc(g.id)}')">Lock</button>`
-          : `<input type="password" id="st-cx-gpass-${hubEsc(g.id)}" placeholder="passphrase" autocomplete="off" style="max-width:160px" onkeydown="if(event.key==='Enter')cxGroupUnlock('${hubEsc(g.id)}')"><button class="st-test-btn" onclick="cxGroupUnlock('${hubEsc(g.id)}')">Unlock</button>`;
+          : `<input type="password" data-eye id="st-cx-gpass-${hubEsc(g.id)}" placeholder="passphrase" autocomplete="off" style="max-width:160px" onkeydown="if(event.key==='Enter')cxGroupUnlock('${hubEsc(g.id)}')"><button class="st-test-btn" onclick="cxGroupUnlock('${hubEsc(g.id)}')">Unlock</button>`;
         return `<div class="cx-row">
           <div class="cx-main"><strong>${hubEsc(g.label || g.id)}</strong> <span class="cx-id">(${hubEsc(g.id)})</span> ${g.unlocked ? cxBadge('unlocked' + (g.unlockedSince ? ' since ' + cxWhen(g.unlockedSince) : ''), 'var(--success)') : cxBadge('locked')}<div class="cx-sub">group · ${members}</div></div>
-          <div class="cx-actions">${act}<input type="password" id="st-cx-gdel-${hubEsc(g.id)}" placeholder="passphrase to delete" autocomplete="off" style="max-width:150px"><button class="st-test-btn" onclick="cxGroupDelete('${hubEsc(g.id)}')">Delete</button></div>
+          <div class="cx-actions">${act}<input type="password" data-eye id="st-cx-gdel-${hubEsc(g.id)}" placeholder="passphrase to delete" autocomplete="off" style="max-width:150px"><button class="st-test-btn" onclick="cxGroupDelete('${hubEsc(g.id)}')">Delete</button></div>
         </div>`;
       }).join('');
     }
@@ -5162,7 +5162,7 @@
           + (c.lastOk ? `${errText ? ' · ' : ''}last ok ${hubEsc(cxWhen(c.lastOk))}` : '');
         const lockBtn = !c.protect || c.protect === 'none' ? ''
           : c.unlocked ? `<button class="st-test-btn" onclick="cxLock('${id}')">Lock</button>`
-            : `<input type="password" id="st-cx-pass-${id}" placeholder="passphrase" autocomplete="off" style="max-width:140px" onkeydown="if(event.key==='Enter')cxUnlock('${id}')"><button class="st-test-btn" onclick="cxUnlock('${id}')">Unlock</button>`;
+            : `<input type="password" data-eye id="st-cx-pass-${id}" placeholder="passphrase" autocomplete="off" style="max-width:140px" onkeydown="if(event.key==='Enter')cxUnlock('${id}')"><button class="st-test-btn" onclick="cxUnlock('${id}')">Unlock</button>`;
         const tested = cxState.tests[c.id];
         const tools = tested ? `<div class="cx-tools">${tested.length ? tested.map(t => `<div><code>${hubEsc(t.name)}</code> ${cxBadge(t.cls || 'read')} <span style="color:var(--text-dim)">${hubEsc(t.description || '')}</span></div>`).join('') : 'no tools reported'}</div>` : '';
         return `<div class="cx-row" id="st-cx-row-${id}">
@@ -5243,8 +5243,8 @@
         <div class="cx-form-title">New group</div>
         <div class="st-row"><label style="flex-basis:150px">Id</label><input type="text" id="st-cx-g-id" placeholder="medical" style="max-width:200px"></div>
         <div class="st-row"><label style="flex-basis:150px">Label</label><input type="text" id="st-cx-g-label" placeholder="Medical records" style="max-width:300px"></div>
-        <div class="st-row"><label style="flex-basis:150px">Passphrase</label><input type="password" id="st-cx-g-pass" autocomplete="new-password" style="max-width:220px"></div>
-        <div class="st-row"><label style="flex-basis:150px">Passphrase again</label><input type="password" id="st-cx-g-pass2" autocomplete="new-password" style="max-width:220px"></div>
+        <div class="st-row"><label style="flex-basis:150px">Passphrase</label><input type="password" data-eye id="st-cx-g-pass" autocomplete="new-password" style="max-width:220px"></div>
+        <div class="st-row"><label style="flex-basis:150px">Passphrase again</label><input type="password" data-eye id="st-cx-g-pass2" autocomplete="new-password" style="max-width:220px"></div>
         <div class="st-row"><label style="flex-basis:150px"></label><button class="st-test-btn" onclick="cxGroupCreate()">Create group</button><button class="st-test-btn" onclick="cxCancel()">Cancel</button><span id="st-cx-form-err" style="font-size:0.78rem;color:var(--error);margin-left:8px"></span></div>
       </div>`;
     }
@@ -5336,10 +5336,10 @@
         <div class="st-row">${L('Agents')}<span class="cx-sub">The lead agents can always use it; tick the others that may.</span></div>
         <div id="st-cx-f-agents" class="cx-checks">${leadNames.map(n => `<label><input type="checkbox" checked disabled> ${hubEsc(n)} (lead): always</label>`).join('')}${agentNames.length ? agentNames.map(n => `<label><input type="checkbox" data-cx-agent="${hubEsc(n)}" ${granted.has(n) ? 'checked' : ''}> ${hubEsc(n)}</label>`).join('') : (leadNames.length ? '' : '<span class="cx-sub">no agents loaded</span>')}</div>
         <div class="st-row">${L('Protect')}${sel('st-cx-f-protect', [['none', 'none: always on'], ['own', 'own passphrase'], ['group', 'group passphrase']], c.protect || 'none', 'onchange="cxFormProtectChange()"')}<span id="st-cx-f-group-wrap">${groups.length ? sel('st-cx-f-group', groups, c.group || groups[0][0], 'onchange="cxFormProtectChange()"') : '<span class="cx-sub">no groups yet</span>'}</span></div>
-        <div class="st-row" id="st-cx-f-curpass-row">${L('Current passphrase')}<input type="password" id="st-cx-f-curpass" autocomplete="off" style="max-width:220px"><span class="cx-sub">needed to change how a protected connector is locked</span></div>
+        <div class="st-row" id="st-cx-f-curpass-row">${L('Current passphrase')}<input type="password" data-eye id="st-cx-f-curpass" autocomplete="off" style="max-width:220px"><span class="cx-sub">needed to change how a protected connector is locked</span></div>
         <div id="st-cx-f-newpass-rows">
-          <div class="st-row">${L('New passphrase')}<input type="password" id="st-cx-f-newpass" autocomplete="new-password" style="max-width:220px"><span class="cx-sub">${editing && c.protect === 'own' ? 'leave blank to keep the current one' : ''}</span></div>
-          <div class="st-row">${L('Repeat')}<input type="password" id="st-cx-f-newpass2" autocomplete="new-password" style="max-width:220px"></div>
+          <div class="st-row">${L('New passphrase')}<input type="password" data-eye id="st-cx-f-newpass" autocomplete="new-password" style="max-width:220px"><span class="cx-sub">${editing && c.protect === 'own' ? 'leave blank to keep the current one' : ''}</span></div>
+          <div class="st-row">${L('Repeat')}<input type="password" data-eye id="st-cx-f-newpass2" autocomplete="new-password" style="max-width:220px"></div>
         </div>
         <div class="st-row">${L('Sensitive')}<label style="flex:0 0 auto;text-align:left"><input type="checkbox" id="st-cx-f-sensitive" ${c.sensitive ? 'checked' : ''}> reads need the owner's policy nod</label></div>
         <div class="st-row">${L('Data folder')}<input type="text" id="st-cx-f-dataHome" value="${hubEsc(c.dataHome || '')}" placeholder="(hub default)"></div>

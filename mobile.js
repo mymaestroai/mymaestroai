@@ -12400,6 +12400,7 @@ async function walletApi(path, body, signal) {
 // Closing the sheet: cancel any run, drop in-flight loads, and empty every password input in it (run or no run).
 function walletClose(sh) {
   pkCancel(); walletGen++;
+  if (typeof PasswordEye !== 'undefined') PasswordEye.hideAll(sh);   // first: a shown field is type text and the next line finds password fields
   sh.querySelectorAll('input[type="password"]').forEach((i) => { i.value = ''; });
   sh.classList.remove('open'); dialogGuard.closed(sh);
 }
@@ -12465,7 +12466,7 @@ function walletPaint() {
   const pkHere = pkOk.ok && pkList.some(p => p.rpId === location.hostname);
   const unlockBox = ks.unlocked ? '' : `<div class="sec-section">
       ${pkHere ? '<button type="button" class="wl-big" data-wl="pkunlock">Unlock with Face ID / fingerprint</button>' : ''}
-      <input id="wl-pass" type="password" autocomplete="off" placeholder="Wallet passphrase" aria-label="Wallet passphrase">
+      <input id="wl-pass" type="password" autocomplete="off" data-eye placeholder="Wallet passphrase" aria-label="Wallet passphrase">
       <div class="sec-actions"><button type="button" data-wl="unlock">Unlock with passphrase</button></div>
     </div>`;
   const rows = pkList.map(p => `<div class="wl-pk"><div class="wl-pk-info"><strong>${esc(p.label)}</strong>
@@ -12473,7 +12474,7 @@ function walletPaint() {
         <button type="button" class="wl-rm" data-wl="pkremove" data-id="${esc(p.id)}">Remove</button></div>`).join('')
     || '<div class="sec-hint">None set up yet.</div>';
   const addForm = pkOk.ok ? `<input id="wl-pk-label" value="${esc(pkDeviceLabel())}" maxlength="40" placeholder="Name for this phone" aria-label="Name for this phone">
-      <input id="wl-pk-pass" type="password" autocomplete="off" placeholder="Wallet passphrase (needed once; never stored)" aria-label="Wallet passphrase">
+      <input id="wl-pk-pass" type="password" autocomplete="off" data-eye placeholder="Wallet passphrase (needed once; never stored)" aria-label="Wallet passphrase">
       <div id="wl-confirm-row"></div>
       <div class="sec-actions"><button type="button" class="go" data-wl="pkadd">Add this phone</button></div>`
     : `<div class="sec-hint">${esc(pkOk.text)}</div>`;
@@ -14347,9 +14348,9 @@ function openSecuritySheet() {
     <div id="sec-2fa" class="sec-section"></div>
     <div class="sec-section">
       <div class="sec-title">Change password</div>
-      <input type="password" id="sec-pw-current" placeholder="Current password" autocomplete="current-password">
-      <input type="password" id="sec-pw-new" placeholder="New password (12+ characters)" autocomplete="new-password">
-      <input type="password" id="sec-pw-new2" placeholder="New password again" autocomplete="new-password">
+      <input type="password" data-eye id="sec-pw-current" placeholder="Current password" autocomplete="current-password">
+      <input type="password" data-eye id="sec-pw-new" placeholder="New password (12+ characters)" autocomplete="new-password">
+      <input type="password" data-eye id="sec-pw-new2" placeholder="New password again" autocomplete="new-password">
       <div class="sec-actions"><button id="sec-pw-go" class="go">Change password</button></div>
       <div class="sec-msg" id="sec-pw-msg"></div>
     </div>
@@ -15211,7 +15212,7 @@ function paintTwoFactor() {
     box.innerHTML = `
       <div class="sec-title">Two-factor authentication: on</div>
       ${adminLocked ? `<div class="sec-hint">Two-factor sign-in is on. Admins can't remove it while "Require two-factor sign-in for admins" is on in Settings, Security on a computer.</div>` : `
-      <input type="password" id="sec-2fa-password" placeholder="Password (to turn it off)" autocomplete="current-password">
+      <input type="password" data-eye id="sec-2fa-password" placeholder="Password (to turn it off)" autocomplete="current-password">
       ${adminFree ? '<input type="text" id="sec-2fa-disable-code" inputmode="numeric" autocomplete="one-time-code" placeholder="123456 or a recovery code">' : ''}
       <div class="sec-actions"><button id="sec-2fa-disable" class="danger">${adminFree ? 'Remove two-factor' : 'Disable 2FA'}</button></div>`}
       <div class="sec-msg" id="sec-2fa-msg"></div>`;

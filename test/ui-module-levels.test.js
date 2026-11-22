@@ -280,7 +280,7 @@ test('the warning asks for the account password: label, password input, no code 
   const h = els['perm-warning'].innerHTML;
   assert.ok(h.includes(WARNING));
   assert.match(h, /Your account password(?! and two-factor)/);
-  assert.match(h, /<input type="password" class="perm-pass su-pass" autocomplete="current-password" placeholder="account password">/);
+  assert.match(h, /<input type="password" data-eye class="perm-pass su-pass" autocomplete="current-password" placeholder="account password">/);
   assert.ok(!/perm-code|one-time-code/.test(h), 'no code field');
   assert.match(h, /Save with asking off/); assert.match(h, />Cancel</);
   assert.strictEqual(calls.length, 0, 'nothing sent before the confirm');
