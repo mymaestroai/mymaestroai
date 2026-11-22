@@ -90,6 +90,35 @@ test('costLine: by kind', () => {
   assert.equal(research.costLine(undefined), 'Costs several times a normal answer.');
 });
 
+// engine 'pipeline' (the settings' fixed stages) keeps the earlier wording
+test('cardFor: the ask_user arguments (engine pipeline: the earlier wording)', () => {
+  const c = research.cardFor('openai/test-mini', { engine: 'pipeline' });
+  assert.equal(c.header, 'Deep research');
+  assert.equal(c.question, 'This looks like a research question. Research it? Quick takes a few minutes; Thorough takes up to an hour. Pay-per-use: Quick costs several times a normal answer; Thorough costs much more (it reads whole papers and pages and has them checked).');
+  assert.deepEqual(c.options, ['Yes, quick', 'Yes, thorough', 'No', 'Always yes', 'Never']);
+  assert.deepEqual(c.descriptions, [
+    'A few minutes: many searches, the results summarised. You can keep talking meanwhile.',
+    'Up to an hour: also reads the key sources in full and checks every figure against them.',
+    'Answer now from what I know and a quick search.',
+    'Research questions like this without asking, at the level set in Settings (now: Quick).',
+    'Never ask; always answer normally. You can change this in Settings.',
+  ]);
+  assert.equal(c.allow_skip, true);
+  // its time limit is the setting's timeLimitMinutes; a lead cost line does not apply to it
+  const q = (mins) => research.cardFor('openai/test-mini', { engine: 'pipeline', timeLimitMinutes: mins, thoroughCost: 'LEAD COST' });
+  assert.ok(q(45).question.includes('Thorough takes up to 45 minutes. ') && q(45).descriptions[1].startsWith('Up to 45 minutes: '));
+  assert.ok(q(120).question.includes('Thorough takes up to 2 hours. '));
+  assert.ok(q(60).question.includes('Thorough takes up to an hour. ') && !q(60).question.includes('LEAD COST'));
+  assert.equal(research.cardFor('openai/test-mini', { engine: 'pipeline' }).descriptions[1].length <= 160, true);
+});
+
+test('cardFor: the lead wording is the default and stays for engine lead', () => {
+  for (const c of [research.cardFor('openai/test-mini'), research.cardFor('openai/test-mini', { engine: 'lead' }), research.cardFor('openai/test-mini', { engine: 'other' })]) {
+    assert.ok(c.question.includes('Thorough usually takes one to two hours (at most 6 hours).') && c.question.includes('a lead model reads the key sources in full'));
+    assert.equal(c.descriptions[1], 'One to two hours in the background: a lead model reads the key sources in full, checks every figure and has the report reviewed until it holds up.');
+  }
+});
+
 test('cardFor: the ask_user arguments', () => {
   const c = research.cardFor('openai/test-mini');
   assert.equal(c.header, 'Deep research');
@@ -104,6 +133,15 @@ test('cardFor: the ask_user arguments', () => {
   ]);
   assert.equal(c.allow_skip, true);
   assert.deepEqual(Object.keys(c).sort(), ['allow_skip', 'descriptions', 'header', 'options', 'question']);
+});
+
+test('cardFor: the cost sentence per billing kind (engine pipeline: the earlier sentences)', () => {
+  const q = (m) => research.cardFor(m, { engine: 'pipeline' }).question.replace('This looks like a research question. Research it? Quick takes a few minutes; Thorough takes up to an hour. ', '');
+  assert.equal(q(BIG), 'Both use your Claude sign-in plan allowance; Thorough uses several times more than Quick.');
+  assert.equal(q('codex-cli/test-x'), 'Both use your ChatGPT plan allowance; Thorough uses several times more than Quick.');
+  assert.equal(q('openai/test-mini'), 'Pay-per-use: Quick costs several times a normal answer; Thorough costs much more (it reads whole papers and pages and has them checked).');
+  assert.equal(q('local/test-model'), "Both run on this computer's own model: no cost, but Thorough can take well over an hour.");
+  assert.equal(q('mystery/thing'), 'Thorough costs several times more than Quick.');
 });
 
 test('cardFor: the cost sentence per billing kind', () => {

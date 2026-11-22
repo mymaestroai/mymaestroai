@@ -97,9 +97,9 @@ test('full run: search, open, read normal and top, show_note, draft, check, two 
       { actions: [{ type: 'search', query: 'new method vs baseline' }, { type: 'open', url: URL_A, title: 'Survey A' }, { type: 'open', url: URL_B }] },
       { actions: [{ type: 'read', parts: ['S1'], brief: 'Find the main result.' }, { type: 'read', parts: [{ sid: 'S2' }], brief: 'Find the error rate.', level: 'top' }] },
       { actions: [{ type: 'show_note', nid: 'N1' }, { type: 'notebook', append: 'Main result is in Table 6.\nOpen: sample size of B' }, { type: 'write_draft', markdown: DRAFT }, { type: 'progress', line: 'Draft written' }] },
-      { actions: [{ type: 'check' }] },
+      { actions: [{ type: 'edit_draft', replace: [{ old: 'on the hard split', new: 'on the hard split of the survey' }] }, { type: 'check' }] },
       { actions: [{ type: 'review', focus: 'figures' }] },
-      { actions: [{ type: 'edit_draft', replace: [{ old: 'on the hard split', new: 'on the hard split of the survey' }] }, { type: 'finish', summary: 'The new method wins.', open_points: ['B sample size'] }] },
+      { actions: [{ type: 'finish', summary: 'The new method wins.', open_points: ['B sample size'] }] },
     ],
   });
   const res = await L.runLead(e.opts());
@@ -163,18 +163,18 @@ test('full run: search, open, read normal and top, show_note, draft, check, two 
 });
 
 test('onProgress that throws never reaches the engine', async () => {
-  const e = env({ throwProgress: true, lead: [{ actions: [{ type: 'progress', line: 'x' }, { type: 'write_draft', markdown: 'A claim without figures.' }, { type: 'finish', summary: 's' }] }] });
+  const e = env({ throwProgress: true, reviewers: [], lead: [{ actions: [{ type: 'progress', line: 'x' }, { type: 'write_draft', markdown: 'A claim without figures.' }, { type: 'check' }] }, { actions: [{ type: 'finish', summary: 's' }] }] });
   const res = await L.runLead(e.opts());
-  assert.strictEqual(res.counts.steps, 1);
+  assert.strictEqual(res.counts.steps, 2);
 });
 
 // ---------------------------------------------------------------- parse failure
 test('parse failure: a retry with the error line succeeds', async () => {
-  const e = env({ lead: [['I think we should search.', { actions: [{ type: 'write_draft', markdown: 'Plain claim.' }, { type: 'finish', summary: 's' }] }]] });
+  const e = env({ reviewers: [], lead: [['I think we should search.', { actions: [{ type: 'write_draft', markdown: 'Plain claim.' }, { type: 'check' }] }], { actions: [{ type: 'finish', summary: 's' }] }] });
   const res = await L.runLead(e.opts());
-  assert.strictEqual(res.counts.steps, 1);
+  assert.strictEqual(res.counts.steps, 2);
   const calls = e.calls.filter((c) => /^Lead step/.test(c.label));
-  assert.strictEqual(calls.length, 2);
+  assert.strictEqual(calls.length, 3);
   assert.strictEqual(calls[1].task, `${calls[0].task}\n\nYour last answer was not valid action JSON: no JSON object found. Answer with the JSON object only.`);
   assert.strictEqual(res.ceiling, '');
 });
@@ -183,8 +183,9 @@ test('two parse failures end the run with "unreadable answer" and a document bui
   const e = env({ lead: [{ actions: [{ type: 'open', url: URL_A }, { type: 'read', parts: ['S1'], brief: 'b' }] }, ['garbage', '{"actions": [oops]}']] });
   const res = await L.runLead(e.opts());
   assert.strictEqual(res.ceiling, 'unreadable answer');
-  assert.strictEqual(res.summary, 'This report stopped at a ceiling: unreadable answer.');
-  assert.ok(res.markdown.includes('**This report stopped at a ceiling: unreadable answer.**'));
+  const ending = "This report stopped early: the lead's answers could not be read twice in a row.";
+  assert.strictEqual(res.summary, ending);
+  assert.ok(res.markdown.includes(`**${ending}**`) && !res.markdown.includes('at a ceiling'));
   assert.ok(res.markdown.includes('## Survey A') && res.markdown.includes('END-OF-NOTE-MARKER'));
 });
 
@@ -240,7 +241,25 @@ test('readerCalls ceiling: a read that would pass it is refused, the next step i
   assert.ok(e.prompts[2].includes('\n\nCEILING REACHED: reader calls.') && e.prompts[2].startsWith(PLAYBOOK));
   assert.ok(e.prompts[2].includes('refused: the reader-call ceiling (1) would be passed'));
   assert.strictEqual(res.counts.readerCalls, 1);
-  assert.strictEqual(res.ceiling, '');
+  // a finish in the ceiling step keeps the ceiling: the report says so and says what did not run
+  assert.strictEqual(res.ceiling, 'reader calls');
+  assert.strictEqual(res.summary, 'done', 'the lead\'s own summary');
+  assert.ok(res.markdown.includes('**This report stopped at a ceiling: reader calls. The figure check of the final draft did not run. The review of the final draft did not run.**'), res.markdown);
+  assert.deepStrictEqual(res.openPoints, ['Open points were not recorded']);
+});
+
+test('a finish in a ceiling step: the lead\'s open points win over the notebook\'s; none means the notebook\'s Open: lines', async () => {
+  const mk = (finish) => env({
+    settings: { leadSteps: 2 }, reviewers: [],
+    lead: [{ actions: [{ type: 'write_draft', markdown: 'A plain claim.' }, { type: 'check' }, { type: 'notebook', append: 'Open: from the notebook' }] }, { actions: [{ type: 'show_draft' }] }, { actions: [finish] }],
+  });
+  const own = await L.runLead(mk({ type: 'finish', summary: 's', open_points: ['mine'] }).opts());
+  assert.strictEqual(own.ceiling, 'steps');
+  assert.deepStrictEqual(own.openPoints, ['mine']);
+  assert.ok(own.markdown.includes('**This report stopped at a ceiling: steps.**'), 'the check ran, no reviewers: nothing "did not run"');
+  const nb = await L.runLead(mk({ type: 'finish', summary: 's' }).opts());
+  assert.deepStrictEqual(nb.openPoints, ['Open: from the notebook']);
+  assert.ok(nb.markdown.includes('- Open: from the notebook'));
 });
 
 test('review ceiling and wall clock ceiling', async () => {
@@ -268,20 +287,21 @@ test('resume: stop via isDead after 2 steps, start again with the same dir and c
   const lead = [
     { actions: [{ type: 'search', query: 'q' }, { type: 'open', url: URL_A }] },
     { actions: [{ type: 'read', parts: ['S1'], brief: 'b' }] },
-    { actions: [{ type: 'write_draft', markdown: 'A plain claim [S1].' }, { type: 'finish', summary: 'resumed' }] },
+    { actions: [{ type: 'write_draft', markdown: 'A plain claim [S1].' }, { type: 'check' }] },
+    { actions: [{ type: 'finish', summary: 'resumed' }] },
   ];
   const stateSteps = () => { try { return JSON.parse(fs.readFileSync(path.join(dir, 'state.json'), 'utf8')).counts.steps; } catch { return 0; } };
-  const e1 = env({ dir, lead, isDead: () => stateSteps() >= 2 });
+  const e1 = env({ dir, lead, reviewers: [], isDead: () => stateSteps() >= 2 });
   await assert.rejects(L.runLead(e1.opts()), /stopped/);
   assert.strictEqual(e1.prompts.length, 2);
-  const e2 = env({ dir, lead });
+  const e2 = env({ dir, lead, reviewers: [] });
   const res = await L.runLead(e2.opts());
-  assert.strictEqual(e2.prompts.length, 1);
+  assert.strictEqual(e2.prompts.length, 2);
   assert.strictEqual(e2.calls[0].label, 'Lead step 3');
   assert.ok(e2.prompts[0].includes('- steps: 2 of 60'));
   assert.ok(e2.prompts[0].includes('S1 | Survey A') && e2.prompts[0].includes('N1 | sources S1 | normal'));
   assert.ok(e2.prompts[0].includes('step 1 search'), 'the index survives');
-  assert.strictEqual(res.counts.steps, 3);
+  assert.strictEqual(res.counts.steps, 4);
   assert.strictEqual(res.counts.searches, 1);
   assert.strictEqual(res.counts.opens, 1);
   assert.strictEqual(res.counts.readerCalls, 1);
@@ -331,8 +351,10 @@ test('edit_draft: an old string found twice is refused, the others applied', asy
       { actions: [{ type: 'write_draft', markdown: 'Alpha beta gamma. Alpha delta.' }] },
       { actions: [{ type: 'edit_draft', replace: [{ old: 'Alpha', new: 'X' }, { old: 'gamma', new: 'G$&' }, { old: 'missing', new: 'm' }] }, { type: 'show_draft' }] },
       { actions: [{ type: 'edit_draft', replace: [{ old: 'Alpha', new: 'Y' }] }] },
+      { actions: [{ type: 'check' }] },
       { actions: [{ type: 'finish', summary: 's' }] },
     ],
+    reviewers: [],
   });
   const res = await L.runLead(e.opts());
   assert.strictEqual(fs.readFileSync(path.join(e.dir, 'drafts/v2.md'), 'utf8'), 'Alpha beta G$&. Alpha delta.');
@@ -341,18 +363,20 @@ test('edit_draft: an old string found twice is refused, the others applied', asy
   assert.ok(e.prompts[2].includes('1 of 3 replacements applied'));
   assert.ok(e.prompts[3].includes('no change'));
   assert.ok(!fs.existsSync(path.join(e.dir, 'drafts/v3.md')));
-  assert.strictEqual(res.counts.steps, 4);
+  assert.strictEqual(res.counts.steps, 5);
 });
 
 // ---------------------------------------------------------------- show_source, open
 test('show_source slicing with the ask-from line; open dedup by URL; non-http refused; one source per URL', async () => {
   const big = 'abcdefghij'.repeat(10);
   const e = env({
+    reviewers: [],
     pages: { [URL_A]: { title: 'Big', text: big, partial: true } },
     lead: [
       { actions: [{ type: 'open', url: URL_A }, { type: 'open', url: 'HTTPS://Example.org/a/' }, { type: 'open', url: 'ftp://example.org/x' }, { type: 'open', url: 'javascript:alert(1)' }, { type: 'open', url: URL_B }] },
       { actions: [{ type: 'show_source', sid: 'S1', from: 10, chars: 20 }, { type: 'show_source', sid: 'S1', from: 90 }, { type: 'show_source', sid: 'S7' }, { type: 'show_source', sid: 'S2' }] },
-      { actions: [{ type: 'write_draft', markdown: 'Plain.' }, { type: 'finish', summary: 's' }] },
+      { actions: [{ type: 'write_draft', markdown: 'Plain.' }, { type: 'check' }] },
+      { actions: [{ type: 'finish', summary: 's' }] },
     ],
   });
   await L.runLead(e.opts());
@@ -372,9 +396,11 @@ test('show_source slicing with the ask-from line; open dedup by URL; non-http re
 
 test('open: at most 10 per step; unknown action types and bad fields are refused with a result line; long fields refused', async () => {
   const e = env({
+    reviewers: [],
     lead: [
       { actions: [...Array.from({ length: 11 }, (_, i) => ({ type: 'open', url: `https://example.org/p${i}` })), { type: 'dance' }, { type: 'search', query: 'q'.repeat(301) }, { type: 'read', parts: [], brief: 'b' }, { type: 'show_note', nid: 'N9' }, { type: 'finish', summary: 's' }] },
-      { actions: [{ type: 'write_draft', markdown: 'Plain.' }, { type: 'finish', summary: 's' }] },
+      { actions: [{ type: 'write_draft', markdown: 'Plain.' }, { type: 'check' }] },
+      { actions: [{ type: 'finish', summary: 's' }] },
     ],
   });
   await L.runLead(e.opts());
@@ -412,13 +438,16 @@ test('readerBriefLead and reviewBriefLead: content and data wrappers', () => {
 });
 
 test('renderLeadDocument: links, sections, ceiling line with open points, title cut, partial sources', () => {
-  const sources = [{ n: 1, url: URL_A, title: 'A', read: true }, { n: 3, url: URL_B, title: 'B', read: true, partial: true, reason: 'cut at 100 characters' }, { n: 2, url: URL_C, title: 'C', read: false }];
+  const sources = [{ n: 1, url: URL_A, title: 'A', chars: 100, read: true, ranges: [[0, 100]] }, { n: 3, url: URL_B, title: 'B', chars: 100, read: true, ranges: [[0, 100]], partial: true, reason: 'cut at 100 characters' }, { n: 2, url: URL_C, title: 'C', chars: 100, read: false, ranges: [] }];
   const doc = L.renderLeadDocument({ question: 'Q'.repeat(200) + '\nline 2', preparedDate: '2026-11-22', draft: 'Claim [S1] and [S3][S9].', sources, alsoFound: [{ url: 'https://example.org/z', title: 'Z' }], ceilingLine: 'This report stopped at a ceiling: time.', openPoints: ['p1', 'p2'] });
   assert.ok(doc.startsWith(`# Research: ${'Q'.repeat(120)}\n`));
   assert.ok(!doc.split('\n')[0].includes('line 2'));
   assert.ok(doc.includes('**This report stopped at a ceiling: time.**\n\n- p1\n- p2'));
   assert.ok(doc.includes('Claim [1](https://example.org/a) and [3](https://example.org/b)[S9].'));
-  assert.ok(doc.includes('1. [A](https://example.org/a)') && doc.includes('3. [B](https://example.org/b) (partial: cut at 100 characters)'));
+  // a partial fetch is never "read in full"; it is listed with the share read and the reason
+  const full = doc.split('## Sources read in full')[1].split('## Sources read in part')[0];
+  assert.ok(full.includes('1. [A](https://example.org/a)') && !full.includes('[B]'));
+  assert.ok(doc.split('## Sources read in part')[1].split('## Also found')[0].includes('3. [B](https://example.org/b) (100% of the text read; the fetch was partial: cut at 100 characters)'));
   assert.ok(!doc.split('## Sources read in full')[1].split('## Also found')[0].includes('[C]'));
   assert.ok(doc.includes('- [Z](https://example.org/z)'));
   const plain = L.renderLeadDocument({ question: 'Q', preparedDate: 'd', draft: 'x', sources: [], alsoFound: [] });
@@ -440,29 +469,38 @@ test('leadStepPrompt: order of parts, step 1 quick pass in full, later steps poi
 test('a step whose results pass stepResultMax is cut with a note that says how to ask for the rest', async () => {
   const text = 'word '.repeat(2000);
   const e = env({
-    settings: { stepResultMax: 3000 },
+    settings: { stepResultMax: 3000 }, reviewers: [],
     pages: { [URL_A]: { title: 'Long', text } },
-    lead: [{ actions: [{ type: 'open', url: URL_A }] }, { actions: [{ type: 'show_source', sid: 'S1' }, { type: 'show_source', sid: 'S1', from: 5 }] }, { actions: [{ type: 'write_draft', markdown: 'Plain.' }, { type: 'finish', summary: 's' }] }],
+    lead: [{ actions: [{ type: 'open', url: URL_A }] }, { actions: [{ type: 'show_source', sid: 'S1' }, { type: 'show_source', sid: 'S1', from: 5 }] }, { actions: [{ type: 'write_draft', markdown: 'Plain.' }, { type: 'check' }] }, { actions: [{ type: 'finish', summary: 's' }] }],
   });
-  await L.runLead(e.opts());
+  const res = await L.runLead(e.opts());
   assert.ok(e.prompts[2].includes('[result cut: '));
   assert.ok(e.prompts[2].includes('ask show_source again with from='));
   assert.ok(e.prompts[2].includes('[result left out:'));
   assert.ok(e.prompts[2].length < 12000);
+  // a result cut by stepResultMax counts as read only for the part shown: about 3000 of the 10000 characters, so in part
+  const s1 = res.state.sources[0];
+  const shown = s1.ranges[0][1] - s1.ranges[0][0];
+  assert.ok(shown > 2000 && shown < 3000, `shown ${shown}`);
+  assert.strictEqual(s1.ranges.length, 1, 'the second show_source was left out whole: it adds nothing');
+  assert.ok(res.markdown.includes('## Sources read in part') && res.markdown.split('## Sources read in full')[1].split('## Sources read in part')[0].includes('None'));
 });
 
 test('exports and defaults', () => {
-  assert.deepStrictEqual(Object.keys(L.LEAD_DEFAULTS).sort(), ['leadSteps', 'maxParallel', 'readerCalls', 'readerTextMax', 'readerTopTextMax', 'reviewRounds', 'stepResultMax', 'wallMinutes']);
+  assert.deepStrictEqual(Object.keys(L.LEAD_DEFAULTS).sort(), ['leadSteps', 'maxParallel', 'readerCalls', 'readerTextMax', 'readerTopTextMax', 'reviewRounds', 'stepPromptMax', 'stepResultMax', 'wallMinutes']);
   assert.strictEqual(L.LEAD_DEFAULTS.leadSteps, 60);
-  assert.ok(L.ACTION_TYPES.includes('finish') && L.ACTION_TYPES.length === 14);
+  assert.strictEqual(L.LEAD_DEFAULTS.stepPromptMax, 600000);
+  assert.ok(L.ACTION_TYPES.includes('finish') && L.ACTION_TYPES.length === 17);
+  for (const t of ['show_index', 'show_notebook', 'show_quickpass']) assert.ok(L.ACTION_TYPES.includes(t), t);
   assert.ok(Array.isArray(L.READER_RULES) && L.READER_RULES.length >= 6);
 });
 
 test('a source the lead read itself counts as read; a source opened and never read is listed under "Also found"; the quick pass is in every step', async () => {
   const e = env({
+    reviewers: [],
     lead: [
       { actions: [{ type: 'open', url: URL_A }, { type: 'open', url: URL_B }] },
-      { actions: [{ type: 'show_source', sid: 'S1', from: 0, chars: 50 }, { type: 'write_draft', markdown: 'The new method is preferred [S1].' }] },
+      { actions: [{ type: 'show_source', sid: 'S1', from: 0, chars: 5000 }, { type: 'write_draft', markdown: 'The new method is preferred [S1].' }, { type: 'check' }] },
       { actions: [{ type: 'finish', summary: 'Done.' }] },
     ],
   });
@@ -514,4 +552,387 @@ test('open points from a normal finish go into the document as a section', () =>
   assert.ok(doc.indexOf('## Open points') < doc.indexOf('## Sources read in full'));
   const none = L.renderLeadDocument({ question: 'Q?', preparedDate: 'd', draft: 'Body.', sources: [], alsoFound: [], ceilingLine: '', openPoints: [] });
   assert.ok(!none.includes('## Open points'));
+});
+
+// ================================================================ review round 1 fixes
+const A = (...x) => ({ actions: x });
+const BLOCK_REVIEW = '```json\n{"verdict":"REJECT","findings":[{"label":"BLOCK","about":"the 56.4% figure","problem":"it is a sub-group result","quote":"Table 6","source":"S1"},{"label":"FOLLOW-UP","about":"scope","problem":"small","quote":"q","source":"S1"}]}\n```';
+const readIn = (dir, f) => fs.readFileSync(path.join(dir, f), 'utf8');
+
+// ---- 1. a stop with reads in flight never leaves an unhandled rejection
+test('r1-1: a stop with two reads in flight: runLead rejects with "stopped", no unhandled rejection, the reads\' notes are on disk', async () => {
+  const unhandled = [];
+  const on = (r) => unhandled.push(r);
+  process.on('unhandledRejection', on);
+  try {
+    const e = env({
+      reader: async () => { await sleep(40); return BIG_NOTE; },
+      lead: [A({ type: 'open', url: URL_A }, { type: 'open', url: URL_B }), A({ type: 'read', parts: ['S1'], brief: 'one' }, { type: 'read', parts: ['S2'], brief: 'two' }, { type: 'search', query: 'q' })],
+    });
+    const o = e.opts();
+    o.deps.isDead = () => e.calls.filter((c) => /^Read N/.test(c.label)).length >= 2;   // dead as soon as both reads run
+    await assert.rejects(L.runLead(o), (err) => err.message === 'stopped');
+    assert.ok(fs.existsSync(path.join(e.dir, 'notes/N1.md')) && fs.existsSync(path.join(e.dir, 'notes/N2.md')), 'the reads were awaited, their notes are on disk');
+    assert.strictEqual(e.searches.length, 0);
+    const st = JSON.parse(readIn(e.dir, 'state.json'));
+    assert.strictEqual(st.notes.length, 2, 'and in the saved state');
+    await sleep(120);
+    assert.deepStrictEqual(unhandled, []);
+  } finally { process.removeListener('unhandledRejection', on); }
+});
+
+test('r1-1: a read that meets the stop while it runs (its worker fails after the stop) is no unhandled rejection either', async () => {
+  const unhandled = [];
+  const on = (r) => unhandled.push(r);
+  process.on('unhandledRejection', on);
+  try {
+    const e = env({
+      reader: async (task, model, label) => { await sleep(30); if (label === 'Read N2') throw new Error('worker gone'); return BIG_NOTE; },
+      lead: [A({ type: 'open', url: URL_A }, { type: 'open', url: URL_B }), A({ type: 'read', parts: ['S1'], brief: 'one' }, { type: 'read', parts: ['S2'], brief: 'two' }, { type: 'search', query: 'q' })],
+    });
+    const o = e.opts();
+    o.deps.isDead = () => e.calls.filter((c) => /^Read N/.test(c.label)).length >= 2;
+    await assert.rejects(L.runLead(o), (err) => err.message === 'stopped');
+    assert.ok(fs.existsSync(path.join(e.dir, 'notes/N1.md')));
+    await sleep(120);
+    assert.deepStrictEqual(unhandled, []);
+  } finally { process.removeListener('unhandledRejection', on); }
+});
+
+test('r1-1: a review in flight at a stop settles before runLead rejects (both reviewers)', async () => {
+  const e = env({ lead: [A({ type: 'write_draft', markdown: 'A plain claim.' }, { type: 'review' }, { type: 'search', query: 'q' })] });
+  const o = e.opts();
+  o.deps.isDead = () => e.events.filter((x) => x.startsWith('start:')).length >= 2;
+  await assert.rejects(L.runLead(o), (err) => err.message === 'stopped');
+  assert.strictEqual(e.events.filter((x) => x.startsWith('end:')).length, 2, 'both reviewers finished before the rejection');
+  assert.ok(fs.existsSync(path.join(e.dir, 'reviews/R1.md')) && fs.existsSync(path.join(e.dir, 'reviews/R2.md')));
+});
+
+// ---- 2. state saved after every action; salvage from the files
+test('r1-2: a stop after write_draft v2 with a read in the same step running: the state and the salvage have v2 and the read', async () => {
+  const e = env({
+    reader: async () => { await sleep(40); return BIG_NOTE; },
+    lead: [A({ type: 'open', url: URL_A }), A({ type: 'write_draft', markdown: 'Draft one [S1].' }), A({ type: 'read', parts: ['S1'], brief: 'b' }, { type: 'write_draft', markdown: 'Draft two [S1].' }, { type: 'search', query: 'q' })],
+  });
+  const o = e.opts();
+  o.deps.isDead = () => fs.existsSync(path.join(e.dir, 'drafts/v2.md'));
+  await assert.rejects(L.runLead(o), (err) => err.message === 'stopped');
+  const st = JSON.parse(readIn(e.dir, 'state.json'));
+  assert.strictEqual(st.draftVersion, 2, 'saved after the action, not only after the step');
+  assert.strictEqual(st.notes.length, 1);
+  assert.ok(st.sources[0].ranges.length === 1);
+  const salv = L.salvageLead({ dir: e.dir, question: 'Q?', preparedDate: 'd', reason: 'stopped' });
+  assert.ok(salv.markdown.includes('Draft two') && !salv.markdown.includes('Draft one'));
+  assert.ok(salv.markdown.split('## Sources read in full')[1].includes('Survey A'), 'the read counted');
+  // the step's log and index lines are there, in action order (the read before the draft)
+  const log = readIn(e.dir, 'log.jsonl').trim().split('\n').map((l) => JSON.parse(l));
+  assert.deepStrictEqual(log.filter((l) => l.step === 3).map((l) => l.type), ['read', 'write_draft']);
+});
+
+test('r1-2: the index and the log are in ACTION order though a quick action settles before a slow read', async () => {
+  const e = env({
+    reviewers: [], reader: async () => { await sleep(40); return BIG_NOTE; },
+    lead: [A({ type: 'open', url: URL_A }), A({ type: 'read', parts: ['S1'], brief: 'b' }, { type: 'search', query: 'q' }, { type: 'notebook', append: 'x' }), A({ type: 'write_draft', markdown: 'Plain.' }, { type: 'check' }), A({ type: 'finish', summary: 's' })],
+  });
+  const res = await L.runLead(e.opts());
+  const log = readIn(e.dir, 'log.jsonl').trim().split('\n').map((l) => JSON.parse(l)).filter((l) => l.step === 2);
+  assert.deepStrictEqual(log.map((l) => l.type), ['read', 'search', 'notebook']);
+  assert.deepStrictEqual(res.state.index.filter((i) => i.step === 2).map((i) => i.type), ['read', 'search', 'notebook']);
+});
+
+test('r1-2: salvageLead takes the highest draft on disk, not the state\'s counter; the notes folder; the sources\' json for the links', () => {
+  const dir = tmp();
+  for (const sub of ['drafts', 'notes', 'sources']) fs.mkdirSync(path.join(dir, sub));
+  fs.writeFileSync(path.join(dir, 'state.json'), JSON.stringify({ draftVersion: 1, sources: [{ n: 1, url: 'https://old.example/x', title: 'Old title', read: true }], notes: [{ n: 1, nid: 'N1', sources: ['S1'] }] }));
+  fs.writeFileSync(path.join(dir, 'drafts/v1.md'), 'Draft one [S1].');
+  fs.writeFileSync(path.join(dir, 'drafts/v2.md'), 'Draft two [S1].');
+  fs.writeFileSync(path.join(dir, 'sources/S1.json'), JSON.stringify({ n: 1, url: 'https://new.example/y', title: 'File title', ok: true, chars: 10 }));
+  const s = L.salvageLead({ dir, question: 'Q?', preparedDate: 'd', reason: 'it stopped' });
+  assert.ok(s.markdown.includes('Draft two') && !s.markdown.includes('Draft one'));
+  assert.ok(s.markdown.includes('[1](https://new.example/y)'), s.markdown);
+  // notes: from the folder, meta from the state when present, else "sources unknown"
+  const dir2 = tmp();
+  for (const sub of ['drafts', 'notes', 'sources']) fs.mkdirSync(path.join(dir2, sub));
+  fs.writeFileSync(path.join(dir2, 'state.json'), JSON.stringify({ notes: [{ n: 1, nid: 'N1', sources: ['S1'] }], sources: [{ n: 1, url: 'https://a.example', title: 'Known' }] }));
+  fs.writeFileSync(path.join(dir2, 'notes/N1.md'), 'Note one.');
+  fs.writeFileSync(path.join(dir2, 'notes/N2.md'), 'Note two, after the last save.');
+  const n = L.salvageLead({ dir: dir2, question: 'Q?', preparedDate: 'd', reason: 'it stopped' });
+  assert.match(n.markdown, /## Known\n\nNote one\./);
+  assert.match(n.markdown, /## sources unknown\n\nNote two, after the last save\./);
+});
+
+// ---- 3. a finish in a ceiling step keeps the ceiling (see the readerCalls test above)
+
+// ---- 4. finish needs a checked and reviewed current draft
+test('r1-4: finish is refused until a check ran on the current draft and a review round completed on it; the texts say what is missing', async () => {
+  const e = env({
+    lead: [
+      A({ type: 'write_draft', markdown: 'A plain claim.' }),
+      A({ type: 'finish', summary: 's' }),
+      A({ type: 'check' }),
+      A({ type: 'finish', summary: 's' }),
+      A({ type: 'review' }),
+      A({ type: 'finish', summary: 'fin' }),
+    ],
+  });
+  const res = await L.runLead(e.opts());
+  assert.ok(e.prompts[2].includes('refused: no figure check ran on the current draft (v1): run check; no review round completed on the current draft (v1): run review; then finish in a step of its own'));
+  const results4 = e.prompts[4].split('RESULTS OF YOUR LAST ACTIONS')[1].split('ACTIONS (at most')[0];
+  assert.ok(results4.includes('refused: no review round completed on the current draft (v1): run review') && !results4.includes('no figure check ran'));
+  assert.strictEqual(res.counts.steps, 6);
+  assert.strictEqual(res.summary, 'fin');
+  assert.strictEqual(res.ceiling, '');
+});
+
+test('r1-4: without reviewers only the check is needed', async () => {
+  const e = env({ reviewers: [], lead: [A({ type: 'write_draft', markdown: 'A plain claim.' }), A({ type: 'finish', summary: 's' }), A({ type: 'check' }), A({ type: 'finish', summary: 's' })] });
+  const res = await L.runLead(e.opts());
+  const results2 = e.prompts[2].split('RESULTS OF YOUR LAST ACTIONS')[1].split('ACTIONS (at most')[0];
+  assert.ok(results2.includes('refused: no figure check ran on the current draft (v1): run check; then finish') && !results2.includes('review round'));
+  assert.strictEqual(res.counts.steps, 4);
+});
+
+test('r1-4: finish in a step with a read, review, check, write_draft or edit_draft before it is refused: "in a step of its own"', async () => {
+  const e = env({
+    lead: [
+      A({ type: 'write_draft', markdown: 'A plain claim.' }, { type: 'check' }, { type: 'review' }, { type: 'finish', summary: 's' }),
+      A({ type: 'finish', summary: 'second try' }),
+    ],
+  });
+  const res = await L.runLead(e.opts());
+  assert.ok(e.prompts[1].includes('refused: finish in a step of its own, after you have seen the results; this step has write_draft, check, review before it'));
+  assert.strictEqual(res.summary, 'second try');
+  assert.strictEqual(res.counts.steps, 2);
+  // a notebook, progress or show action before the finish does not matter
+  const f = env({ reviewers: [], lead: [A({ type: 'write_draft', markdown: 'Plain.' }, { type: 'check' }), A({ type: 'show_draft' }, { type: 'notebook', append: 'x' }, { type: 'progress', line: 'p' }, { type: 'finish', summary: 'ok' })] });
+  assert.strictEqual((await L.runLead(f.opts())).summary, 'ok');
+});
+
+test('r1-4: a change of the draft after the check and the review needs both again', async () => {
+  const e = env({
+    lead: [
+      A({ type: 'write_draft', markdown: 'A plain claim.' }, { type: 'check' }, { type: 'review' }),
+      A({ type: 'edit_draft', replace: [{ old: 'plain', new: 'simple' }] }),
+      A({ type: 'finish', summary: 's' }),
+      A({ type: 'check' }, { type: 'review' }),
+      A({ type: 'finish', summary: 'done' }),
+    ],
+  });
+  const res = await L.runLead(e.opts());
+  assert.ok(e.prompts[3].includes('refused: no figure check ran on the current draft (v2)') && e.prompts[3].includes('no review round completed on the current draft (v2)'));
+  assert.strictEqual(res.summary, 'done');
+  assert.strictEqual(res.counts.reviewRounds, 2);
+});
+
+test('r1-4: at a ceiling finish is allowed as it was, and the ceiling line says the check and the review did not run', async () => {
+  const e = env({ settings: { leadSteps: 1 }, lead: [A({ type: 'write_draft', markdown: 'A plain claim.' }), A({ type: 'write_draft', markdown: 'A plain claim, changed.' }, { type: 'finish', summary: 'at the ceiling', open_points: ['all of it'] })] });
+  const res = await L.runLead(e.opts());
+  assert.strictEqual(res.ceiling, 'steps');
+  assert.strictEqual(res.summary, 'at the ceiling');
+  assert.ok(res.markdown.includes('**This report stopped at a ceiling: steps. The figure check of the final draft did not run. The review of the final draft did not run.**'));
+  assert.ok(res.markdown.includes('- all of it') && res.markdown.includes('A plain claim, changed.'));
+  // a check of the final draft that did run is not reported as missing
+  const f = env({ settings: { leadSteps: 1 }, reviewers: [], lead: [A({ type: 'write_draft', markdown: 'A plain claim.' }, { type: 'check' }), A({ type: 'finish', summary: 's' })] });
+  const r2 = await L.runLead(f.opts());
+  assert.ok(r2.markdown.includes('**This report stopped at a ceiling: steps.**'));
+});
+
+test('r1-4: BLOCK findings of a review of the current draft become open points "Reviewer objection not changed in the report", deduped, after the lead\'s own', async () => {
+  const e = env({
+    review: () => BLOCK_REVIEW,
+    lead: [A({ type: 'write_draft', markdown: 'The new method is preferred 56.4% [S1].' }, { type: 'open', url: URL_A }), A({ type: 'check' }, { type: 'review' }), A({ type: 'finish', summary: 's', open_points: ['my own point'] })],
+  });
+  const res = await L.runLead(e.opts());
+  assert.deepStrictEqual(res.openPoints, ['my own point', 'Reviewer objection not changed in the report: the 56.4% figure: it is a sub-group result']);
+  assert.ok(res.markdown.includes('- Reviewer objection not changed in the report: the 56.4% figure: it is a sub-group result'));
+  // the objections of an older draft's review do not count: this review is of v1, the finish is at v2 (a ceiling finish)
+  const f = env({ settings: { leadSteps: 2 }, review: () => BLOCK_REVIEW, lead: [A({ type: 'write_draft', markdown: 'Plain claim.' }, { type: 'check' }, { type: 'review' }), A({ type: 'edit_draft', replace: [{ old: 'Plain', new: 'Simple' }] }), A({ type: 'finish', summary: 's', open_points: ['x'] })] });
+  assert.deepStrictEqual((await L.runLead(f.opts())).openPoints, ['x']);
+});
+
+// ---- 5. read means fully read
+test('r1-5: show_source chars:1 reads in part, not in full; the whole text read through show_source reads in full; the ranges are merged in the state', async () => {
+  const e = env({
+    reviewers: [],
+    lead: [A({ type: 'open', url: URL_A }, { type: 'open', url: URL_B }), A({ type: 'show_source', sid: 'S1', chars: 1 }, { type: 'show_source', sid: 'S2', from: 0, chars: 20 }), A({ type: 'show_source', sid: 'S2', from: 10 }), A({ type: 'write_draft', markdown: 'Plain.' }, { type: 'check' }), A({ type: 'finish', summary: 's' })],
+  });
+  const res = await L.runLead(e.opts());
+  const doc = res.markdown;
+  const full = doc.split('## Sources read in full')[1].split('## Sources read in part')[0];
+  const part = doc.split('## Sources read in part')[1].split('## Also found')[0];
+  assert.ok(full.includes('Report B') && !full.includes('Survey A'), 'S2 was shown whole in two slices (they overlap): in full');
+  assert.ok(part.includes(`1. [Survey A](${URL_A}) (${Math.floor(100 / TEXT_A.length)}% of the text read)`), part);
+  assert.ok(!doc.split('## Also found, not read in full')[1].includes('Survey A'), 'a source read in part is not "also found"');
+  assert.deepStrictEqual(res.state.sources[0].ranges, [[0, 1]]);
+  assert.deepStrictEqual(res.state.sources[1].ranges, [[0, TEXT_B.length]]);
+});
+
+test('r1-5: a reader given the whole text reads it in full; two reads that together cover the text too; a partial fetch is never full', async () => {
+  const e = env({
+    reviewers: [],
+    pages: { [URL_A]: { title: 'Survey A', text: TEXT_A }, [URL_B]: { title: 'Report B', text: TEXT_B, partial: true } },
+    lead: [
+      A({ type: 'open', url: URL_A }, { type: 'open', url: URL_B }),
+      A({ type: 'read', parts: [{ sid: 'S1', from: 0, chars: 60 }], brief: 'first half' }, { type: 'read', parts: ['S2'], brief: 'all of B' }),
+      A({ type: 'read', parts: [{ sid: 'S1', from: 50 }], brief: 'second half' }),
+      A({ type: 'write_draft', markdown: 'Plain.' }, { type: 'check' }), A({ type: 'finish', summary: 's' }),
+    ],
+  });
+  const res = await L.runLead(e.opts());
+  assert.deepStrictEqual(res.state.sources[0].ranges, [[0, TEXT_A.length]], 'merged');
+  const full = res.markdown.split('## Sources read in full')[1].split('## Sources read in part')[0];
+  assert.ok(full.includes('Survey A') && !full.includes('Report B'));
+  assert.ok(res.markdown.split('## Sources read in part')[1].split('## Also found')[0].includes('(100% of the text read; the fetch was partial: abstract page only)'));
+});
+
+// ---- 6. bounded prompt sizes
+test('r1-6: the reader gets at most readerTextMax characters over all its parts, shared out in order, and the brief names the ranges', async () => {
+  const e = env({ reviewers: [], settings: { readerTextMax: 150 }, lead: [A({ type: 'open', url: URL_A }, { type: 'open', url: URL_B }), A({ type: 'read', parts: ['S1', 'S2'], brief: 'both' }), A({ type: 'write_draft', markdown: 'Plain.' }, { type: 'check' }), A({ type: 'finish', summary: 's' })] });
+  const res = await L.runLead(e.opts());
+  const task = e.calls.find((c) => /^Read N1/.test(c.label)).task;
+  assert.ok(task.includes('capped at 150 characters'));
+  assert.ok(task.includes(`S1 characters 0-${TEXT_A.length} of ${TEXT_A.length}; S2 characters 0-${150 - TEXT_A.length} of ${TEXT_B.length}`), task);
+  assert.ok(!task.includes(TEXT_B), 'only the first part of B was given');
+  assert.deepStrictEqual(res.state.sources[1].ranges, [[0, 150 - TEXT_A.length]]);
+  assert.ok(res.markdown.split('## Sources read in part')[1].includes('Report B'));
+  // top-level reads use readerTopTextMax
+  const t = env({ reviewers: [], settings: { readerTextMax: 20, readerTopTextMax: 60 }, lead: [A({ type: 'open', url: URL_A }), A({ type: 'read', parts: ['S1'], brief: 'b', level: 'top' }), A({ type: 'write_draft', markdown: 'Plain.' }, { type: 'check' }), A({ type: 'finish', summary: 's' })] });
+  const r2 = await L.runLead(t.opts());
+  assert.deepStrictEqual(r2.state.sources[0].ranges, [[0, 60]]);
+});
+
+test('r1-6: the notes block of a review is capped at 300000 characters; the notes left out are named', async () => {
+  const b = L.reviewBriefLead({ question: 'Q', draft: 'D', check: 'C', notes: [{ nid: 'N1', sources: ['S1'], text: 'a'.repeat(200000) }, { nid: 'N2', sources: ['S2'], text: 'b'.repeat(200000) }, { nid: 'N3', sources: ['S3'], text: 'small' }] });
+  assert.ok(b.includes('a'.repeat(1000)) && !b.includes('b'.repeat(1000)) && b.includes('small'));
+  assert.ok(b.includes('N2 (sources S2)') && b.includes('left out'));
+  assert.ok(b.length < 310000);
+  const e = env({
+    reader: () => 'n'.repeat(200000),
+    lead: [A({ type: 'open', url: URL_A }, { type: 'open', url: URL_B }), A({ type: 'read', parts: ['S1'], brief: 'a' }, { type: 'read', parts: ['S2'], brief: 'b' }), A({ type: 'write_draft', markdown: 'One [S1]. Two [S2].' }, { type: 'check' }, { type: 'review' }), A({ type: 'show_draft' })],
+    settings: { leadSteps: 5 },
+  });
+  await assert.rejects(L.runLead(e.opts()), /no scripted lead reply/);
+  const reviewTask = e.calls.find((c) => /^Review R/.test(c.label)).task;
+  assert.ok(reviewTask.length < 320000);
+  assert.ok(e.prompts[3].includes('notes left out of this review') && e.prompts[3].includes('N2'));
+});
+
+test('r1-6: show_source without "chars" shows at most 100000 characters, with the ask-from line', async () => {
+  const e = env({ pages: { [URL_A]: { title: 'Huge', text: 'a'.repeat(150000) } }, lead: [A({ type: 'open', url: URL_A }), A({ type: 'show_source', sid: 'S1' }), A({ type: 'show_draft' })] });
+  await assert.rejects(L.runLead(e.opts()), /no scripted lead reply/);
+  assert.ok(e.prompts[2].includes('[shown 0-100000 of 150000 characters; ask from=100000 for the rest]'));
+});
+
+test('r1-6: leadStepPrompt over stepPromptMax: results first (head kept), then the index (last lines kept), then the notebook (last part kept); playbook, question and quick pass never', () => {
+  const base = { playbook: 'PB-PLAYBOOK', run: { question: 'THE-QUESTION?', subQuestions: [] }, firstPass: 'QUICK-PASS-TEXT', findingsText: 'FINDINGS', settings: { ...L.LEAD_DEFAULTS, stepPromptMax: 9000 }, counts: { steps: 3 }, step: 4, sources: [], notes: [], found: [], draftVersion: 0 };
+  const idx = (n) => Array.from({ length: n }, (_, i) => ({ line: `index line ${i} ${'x'.repeat(40)}` }));
+  const small = L.leadStepPrompt({ ...base, notebook: 'NB', index: idx(3), results: 'RES' });
+  assert.ok(small.length < 9000 && !small.includes('[cut:'));
+  // 1. results
+  const r = L.leadStepPrompt({ ...base, notebook: 'NB-KEPT', index: idx(3), results: 'R'.repeat(30000) });
+  assert.ok(r.length <= 9000, String(r.length));
+  assert.match(r, /\[cut: \d+ characters of results left out; ask again for them\]/);
+  assert.ok(r.includes('RRRRRRRRRR') && r.includes('NB-KEPT') && r.includes('index line 0'), 'the head of the results; notebook and index whole');
+  // 2. the index
+  const i = L.leadStepPrompt({ ...base, notebook: 'NB-KEPT', index: idx(400), results: 'RES' });
+  assert.ok(i.length <= 9000);
+  assert.ok(i.includes('[earlier index lines: show_index from=0]') && i.includes('index line 399') && !i.includes('index line 0 ') && i.includes('NB-KEPT') && i.includes('RES'));
+  // 3. the notebook
+  const n = L.leadStepPrompt({ ...base, notebook: 'start-of-notebook\n' + 'notebook line\n'.repeat(1500) + 'END-OF-NOTEBOOK', index: idx(400), results: 'R'.repeat(30000) });
+  assert.ok(n.length <= 9000, String(n.length));
+  assert.ok(n.includes('[earlier notebook: show_notebook from=0]') && n.includes('END-OF-NOTEBOOK') && !n.includes('start-of-notebook'));
+  assert.ok(n.includes('[earlier index lines: show_index from=0]') && n.includes('[cut: '));
+  for (const p of [r, i, n]) assert.ok(p.startsWith('PB-PLAYBOOK') && p.includes('THE-QUESTION?') && p.includes('QUICK-PASS-TEXT') && p.includes('FINDINGS'));
+  // the quick pass alone over 200000 characters is cut there, with a line saying so
+  const q = L.leadStepPrompt({ ...base, settings: { ...L.LEAD_DEFAULTS }, firstPass: 'Q'.repeat(250000), notebook: 'NB', index: [], results: 'RES' });
+  assert.ok(q.includes('[cut: the quick pass is') && q.includes('show_quickpass from=200000'));
+  assert.ok(q.length < 215000 && q.length > 200000);
+  // the default cap is 600000
+  assert.strictEqual(L.leadStepPrompt({ ...base, settings: L.LEAD_DEFAULTS, notebook: 'NB', index: [], results: 'R'.repeat(500000) }).includes('[cut: '), false);
+  assert.ok(L.leadStepPrompt({ ...base, settings: L.LEAD_DEFAULTS, notebook: 'NB', index: [], results: 'R'.repeat(700000) }).length <= 600000);
+});
+
+test('r1-6: show_index, show_notebook and show_quickpass return slices with "ask from=" lines; the quick pass is stored as quickpass.md', async () => {
+  const quick = 'Q'.repeat(250000);
+  const e = env({
+    lead: [
+      A({ type: 'notebook', append: 'first notebook entry. ' + 'n'.repeat(60) }, { type: 'search', query: 'q' }),
+      A({ type: 'show_index', from: 0 }, { type: 'show_notebook', from: 0, chars: 30 }, { type: 'show_quickpass', from: 199990, chars: 20 }, { type: 'show_index', from: 1 }),
+      A({ type: 'show_draft' }),
+    ],
+  });
+  const o = e.opts(); o.firstPass = quick; o.findingsText = '';
+  await assert.rejects(L.runLead(o), /no scripted lead reply/);
+  assert.strictEqual(fs.readFileSync(path.join(e.dir, 'quickpass.md'), 'utf8').length, `Summary:\n${quick}\n\nHelpers' findings:\n(none)`.length);
+  const p = e.prompts[2];
+  assert.ok(p.includes('INDEX lines 0-2') && p.includes('step 1 notebook') && p.includes('step 1 search'));
+  assert.ok(p.includes('INDEX lines 1-2') && !p.includes('INDEX lines 1-2\nstep 1 notebook'));
+  assert.ok(p.includes('NOTEBOOK\n## Step 1\nfirst notebook entry\n[shown 0-30 of ') && p.includes('ask from=30 for the rest]'));
+  assert.ok(/\[shown 199990-200010 of \d+ characters; ask from=200010 for the rest\]/.test(p));
+  assert.ok(e.prompts[0].includes('show_quickpass from=200000') && e.prompts[0].length < 215000 + 20000);
+});
+
+// ---- 10. the wall clock counts from the run's start
+test('r1-10: runStartedAt 355 minutes ago with wallMinutes 360: the first lead step after 5 minutes is the ceiling step', async () => {
+  let t = 1700000000000;
+  const MIN = 60000;
+  const e = env({
+    now: () => t, settings: { wallMinutes: 360 }, reviewers: [],
+    lead: [
+      () => { t += 5.5 * MIN; return JSON.stringify(A({ type: 'write_draft', markdown: 'A plain claim.' })); },
+      A({ type: 'finish', summary: 'at the clock' }),
+    ],
+  });
+  const o = e.opts();
+  o.deps.runStartedAt = t - 355 * MIN;
+  const res = await L.runLead(o);
+  assert.ok(e.prompts[0].includes('- time: 355 of 360 minutes') && !e.prompts[0].includes('CEILING REACHED'));
+  assert.ok(e.prompts[1].includes('\n\nCEILING REACHED: time.'), 'the second step is the ceiling step');
+  assert.strictEqual(res.ceiling, 'time');
+  assert.ok(res.state.elapsedMs >= 360 * MIN);
+  // without runStartedAt the clock starts at runLead's own start
+  let t2 = 1700000000000;
+  const f = env({ now: () => t2, settings: { wallMinutes: 360 }, reviewers: [], lead: [() => { t2 += 5.5 * MIN; return JSON.stringify(A({ type: 'write_draft', markdown: 'Plain.' }, { type: 'check' })); }, A({ type: 'finish', summary: 's' })] });
+  assert.strictEqual((await L.runLead(f.opts())).ceiling, '');
+});
+
+// ---- 11. openrouter: the same service means the same prefix AND the same vendor
+test('r1-11: chooseLeadModels on openrouter: the lead and the second reviewer are of the own vendor, the other-vendor reviewer is not the lead', () => {
+  const allowed = ['openrouter/anthropic/claude-haiku-5-5', 'openrouter/anthropic/claude-sonnet-5-5', 'openrouter/google/gemini-3-pro', 'openrouter/openai/gpt-5.6-sol'];
+  const m = L.chooseLeadModels({ own: 'openrouter/anthropic/claude-haiku-5-5', allowed });
+  assert.strictEqual(m.lead, 'openrouter/anthropic/claude-sonnet-5-5', 'not the stronger Gemini that shares only the prefix');
+  assert.ok(!m.reviewers[0].model.includes('/anthropic/') && m.reviewers[0].model.startsWith('openrouter/'));
+  assert.strictEqual(m.reviewers[1].model, m.lead);
+  assert.ok([m.lead, m.reader, m.readerTop].every((x) => x.includes('/anthropic/')));
+  // other prefixes are unchanged: one prefix is one service
+  const n = L.chooseLeadModels({ own: 'claude-sdk/claude-sonnet-5-5', allowed: ['claude-sdk/claude-opus-5-5', 'claude-sdk/claude-sonnet-5-5'] });
+  assert.strictEqual(n.lead, 'claude-sdk/claude-opus-5-5');
+});
+
+// ---- 7. the cost line
+test('r1-7: leadCostLine prices every pay-per-use role whatever the lead\'s billing; \'\' with none or a missing price; the wording', () => {
+  const estimate = (m, i, o) => (i + o) / 1e6;
+  const models = { lead: 'L/x', reader: 'R/x', readerTop: 'T/x', reviewers: [{ model: 'V1/x' }, { model: 'V2/x' }] };
+  const kinds = (map) => (m) => map[m.split('/')[0]] || 'subscription';
+  const all = L.leadCostLine(models, {}, { estimate, kindOf: kinds({ L: 'api', R: 'api', T: 'api', V1: 'api', V2: 'api' }) });
+  // typical: lead 30 steps (35000 in, 2000 out), 16 reads (35000/3000), 4 top (60000/3000), 4 rounds x 2 reviewers (40000/2000); at most: 60 steps of 150000 in,
+  // 40 reader calls of 100000 in, 10 rounds x 2 reviewers of 125000 in
+  const typical = (30 * 37000 + 16 * 38000 + 4 * 63000 + 2 * 4 * 42000) / 1e6;
+  const max = (60 * 152000 + 40 * 103000 + 2 * 10 * 127000) / 1e6;
+  const usd = (x) => (x < 10 ? `$${x.toFixed(2)}` : `$${Math.round(x)}`);
+  assert.strictEqual(all, `Pay-per-use estimate: a typical Thorough run costs about ${usd(typical * 0.6)} to ${usd(typical * 1.5)} on these models, and at most about ${usd(max)} at its limits.`);
+  // the lead on a subscription, a reviewer pay-per-use: that reviewer is priced, the rest is free
+  const rev = L.leadCostLine(models, {}, { estimate, kindOf: kinds({ V1: 'api' }) });
+  assert.ok(rev.startsWith('Pay-per-use estimate: a typical Thorough run costs about $0.') || rev.startsWith('Pay-per-use estimate: a typical Thorough run costs about $'));
+  const onlyRev = (4 * 42000) / 1e6;
+  assert.ok(rev.includes(`about ${usd(onlyRev * 0.6)} to ${usd(onlyRev * 1.5)}`), rev);
+  // no pay-per-use role, or a price that is unknown for a needed role
+  assert.strictEqual(L.leadCostLine(models, {}, { estimate, kindOf: kinds({}) }), '');
+  assert.strictEqual(L.leadCostLine(models, {}, { estimate: (m, i, o) => (m === 'R/x' ? null : 1), kindOf: kinds({ L: 'api', R: 'api' }) }), '');
+  assert.strictEqual(L.leadCostLine(models, {}, { estimate: () => null, kindOf: kinds({ V2: 'api' }) }), '');
+  assert.strictEqual(L.leadCostLine(null, {}, { estimate, kindOf: kinds({}) }), '');
+  // the limits follow the settings: stepPromptMax, readerCalls (reader calls at the top-tier size, at most 100000 tokens each)
+  const small = L.leadCostLine(models, { stepPromptMax: 40000, readerCalls: 5, readerTopTextMax: 80000, leadSteps: 10, reviewRounds: 1 }, { estimate, kindOf: kinds({ L: 'api', R: 'api', T: 'api', V1: 'api', V2: 'api' }) });
+  const max2 = (10 * (10000 + 2000) + 5 * (20000 + 3000) + 2 * 1 * 127000) / 1e6;
+  assert.ok(small.endsWith(`and at most about ${usd(max2)} at its limits.`), small);
 });

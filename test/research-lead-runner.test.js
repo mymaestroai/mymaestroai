@@ -24,7 +24,7 @@ const act = (...a) => JSON.stringify({ actions: a });
 const GOOD_LEAD = [
   act({ type: 'open', url: URL_A, title: 'Survey A' }),
   act({ type: 'read', parts: ['S1'], brief: 'main result', level: 'normal' }),
-  act({ type: 'write_draft', markdown: DRAFT }),
+  act({ type: 'write_draft', markdown: DRAFT }, { type: 'check' }, { type: 'review' }),
   act({ type: 'finish', summary: 'The new method is preferred.', open_points: [] }),
 ];
 
@@ -40,6 +40,7 @@ function make(over = {}) {
     calls.push(...workers.map((w) => ({ label: w.label, model: w.model, tools: w.tools })));
     return workers.map((w) => {
       let text = 'x';
+      if (over.hook) over.hook(w.label);
       const m = /^Lead step (\d+)/.exec(w.label);
       if (/^Research \d+$/.test(w.label)) text = `Finding for ${w.label}. Method A scored 56.4%.\nSOURCES READ:\n- ${URL_A}`;
       else if (w.label === 'First pass summary') text = over.firstPass === undefined ? `## Verdict\nMethod A wins.` : over.firstPass;
@@ -82,7 +83,7 @@ test('lead is the default engine: no fixed stage runs; the document and the repo
   const r = startThorough(m);
   const msg = await delivered(m, r.id);
   const labels = m.calls.map((c) => c.label);
-  assert.deepStrictEqual(labels.filter((l) => !/^Research \d$/.test(l)), ['First pass summary', 'Lead step 1', 'Lead step 2', 'Read N1', 'Lead step 3', 'Lead step 4']);
+  assert.deepStrictEqual(labels.filter((l) => !/^Research \d$/.test(l)), ['First pass summary', 'Lead step 1', 'Lead step 2', 'Read N1', 'Lead step 3', 'Review R1 Reviewer One', 'Lead step 4']);
   for (const fixed of ['Choose sources', 'Reader 1', 'Research report', 'Reviewer', 'Revision']) assert.ok(!labels.includes(fixed), fixed);
   const stages = m.progress.map((p) => p.stage).filter((s, i, a) => s && s !== a[i - 1]);
   assert.deepStrictEqual(stages, ['quick', 'summary', 'lead']);
@@ -99,7 +100,7 @@ test('lead is the default engine: no fixed stage runs; the document and the repo
   assert.match(m.written[0].doc.html, /What the quick pass said/);
   // the report
   assert.match(msg, /The new method is preferred\./);
-  assert.match(msg, /Sources opened: 1\. Reader calls: 1 \(top-tier: 0\)\. Review rounds: 0\. Lead steps: 4\. Time: \d+ minutes\. Estimated tokens: about [\d,]+ \(an estimate from the characters sent and received\)\./);
+  assert.match(msg, /Sources opened: 1\. Reader calls: 1 \(top-tier: 0\)\. Review rounds: 1\. Lead steps: 4\. Time: \d+ minutes\. Estimated tokens: about [\d,]+ \(an estimate from the characters sent and received\)\./);
   assert.match(msg, /Which model did what: lead claude-sdk\/claude-test-big \(the agent's own service\), readers claude-sdk\/claude-test-fast, top-tier reader claude-sdk\/claude-test-big, reviewers Reviewer One\./);
   assert.match(msg, /Full document:\n`\/files\/research\/deep-research-.*\.md`/);
   assert.match(msg, /No PDF: no Chrome/);
@@ -158,7 +159,7 @@ test('a ceiling (leadSteps 5) ends with the ceiling line in the report', async (
 
 test('review off (leadReviewRounds 0): the lead is told and gets no reviewers', async () => {
   const prompts = [];
-  const lead = [(t) => { prompts.push(t); return act({ type: 'write_draft', markdown: 'D [S1]' }); }, act({ type: 'review' }), act({ type: 'finish', summary: 'ok' })];
+  const lead = [(t) => { prompts.push(t); return act({ type: 'write_draft', markdown: 'D [S1]' }); }, act({ type: 'review' }, { type: 'check' }), act({ type: 'finish', summary: 'ok' })];
   const m = make({ settings: { leadReviewRounds: 0 }, lead });
   const r = startThorough(m);
   const msg = await delivered(m, r.id);
@@ -317,4 +318,71 @@ test('leadReport lists open points on a normal finish; the Thorough card text fi
   assert.ok(t.includes('Open points:\n- one thing left'));
   const c = R.cardFor('claude-sdk/claude-sonnet-5-5', { recommend: 'thorough' });
   for (const d of c.descriptions) assert.ok(d.length <= 160, `${d.length}: ${d}`);
+});
+
+// ================================================================ review round 1 fixes
+test('r1-8: kept-on-service is looked at again before every worker: when it switches on between a read and a review, the reviewer of another vendor is never called', async () => {
+  let kept = false;
+  const seen = [];
+  const lead = [
+    act({ type: 'open', url: URL_A }),
+    act({ type: 'read', parts: ['S1'], brief: 'main result' }),
+    () => { kept = true; return act({ type: 'write_draft', markdown: DRAFT }, { type: 'check' }, { type: 'review' }); },
+    (t) => { seen.push(t); return act({ type: 'show_draft' }); },
+    act({ type: 'show_draft' }),
+    act({ type: 'finish', summary: 'at the ceiling', open_points: ['no review was possible'] }),
+  ];
+  const m = make({ lead, settings: { leadSteps: 5 }, deps: { keptOnBox: () => kept }, models: { ...MODELS, reviewers: [{ model: 'openai/test-reviewer', label: 'Other vendor' }] } });
+  const r = startThorough(m);
+  const msg = await delivered(m, r.id);
+  assert.ok(m.calls.some((c) => c.label === 'Read N1'), 'the read ran while kept was off');
+  assert.ok(!m.calls.some((c) => c.model === 'openai/test-reviewer'), 'the reviewer of another vendor was never called');
+  assert.ok(!m.calls.some((c) => /^Review R/.test(c.label)));
+  assert.match(seen[0], /failed: refused: this agent's content must stay on its own service/, 'the action\'s result says so');
+  assert.match(msg, /stopped at a ceiling: steps/);
+  // and a worker of the own vendor still runs when kept is on
+  assert.ok(m.calls.some((c) => c.label === 'Lead step 6' && c.model === BIG));
+});
+
+test('r1-10: the lead\'s wall clock counts from the run\'s start: the quick pass is part of the 360 minutes', async () => {
+  let clock = 1700000000000;
+  const MIN = 60000;
+  const prompts = [];
+  const lead = [
+    (t) => { prompts.push(t); clock += 2 * MIN; return act({ type: 'write_draft', markdown: 'A plain claim.' }); },
+    (t) => { prompts.push(t); return act({ type: 'finish', summary: 'out of time' }); },
+  ];
+  const m = make({ lead, settings: { leadWallMinutes: 30 }, deps: { now: () => clock }, hook: (label) => { if (label === 'First pass summary') clock += 29 * MIN; } });
+  const r = startThorough(m);
+  const msg = await delivered(m, r.id);
+  assert.match(prompts[0], /- time: 29 of 30 minutes/);
+  assert.match(prompts[1], /CEILING REACHED: time\./, 'the second lead step is the ceiling step: 29 + 2 minutes since the run started');
+  assert.match(msg, /stopped at a ceiling: time/);
+  assert.match(msg, /Time: 31 minutes/);
+});
+
+test('r1-12: the playbook says the run states the ceiling and adds "Also found", has the new actions and the finish rule', () => {
+  const pb = fs.readFileSync(path.join(__dirname, '..', 'lib', 'research-playbook.md'), 'utf8');
+  assert.ok(!/"Also found, not read in full" lists the other sources with links/.test(pb), 'the lead is not told to write that section');
+  assert.match(pb, /The run itself states the ceiling at the top of the report/);
+  assert.match(pb, /`open_points`/);
+  for (const a of ['show_index', 'show_notebook', 'show_quickpass']) assert.ok(pb.includes(`\`${a}\``), a);
+  assert.match(pb, /`finish`[^\n]*needs a `check`[^\n]*completed `review`[^\n]*step of its own/);
+  // every action the engine knows is in the playbook's list
+  for (const a of L.ACTION_TYPES) assert.ok(pb.includes(`\`${a}\``), a);
+});
+
+test('r2: a salvage after a restart never writes into the Files folder of a re-made agent of the same name', async () => {
+  const root = tmp();
+  const dir = path.join(root, 'dr-aaaa0002');
+  fs.mkdirSync(path.join(dir, 'drafts'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'drafts', 'v1.md'), 'Saved draft [S1].');
+  fs.writeFileSync(path.join(dir, 'state.json'), JSON.stringify({ draftVersion: 1, sources: [], notes: [], found: [] }));
+  const saved = [{ id: 'dr-aaaa0002', agent: 'a1', stamp: 'box-old', question: 'Which method is best?', subQuestions: SUBS, level: 'thorough', state: 'running', startedAt: Date.now() - 1000, leadDir: dir, firstPass: 'Quick one.', stagesDone: [], missing: [] }];
+  const m = make({ root, saved, deps: { stampOf: () => 'box-new' } });
+  m.runner.recover();
+  await until(() => m.runner.get('dr-aaaa0002').state !== 'running');
+  await new Promise((r) => setTimeout(r, 50));
+  assert.strictEqual(m.written.length, 0, 'no document in the new agent\'s folder');
+  assert.ok(fs.existsSync(path.join(dir, 'drafts', 'v1.md')), 'the run folder keeps the draft');
 });
