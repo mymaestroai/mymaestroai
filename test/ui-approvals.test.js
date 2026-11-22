@@ -90,7 +90,7 @@ test('agent settings: tool policy section reads /api/policy/<agent> and PATCHes 
 
 test('desktop: spend readout and caps come from /api/ledger', () => {
   assert.ok(app.includes("fetch('/api/ledger/today'"));
-  assert.match(app, /fetch\('\/api\/ledger\/caps', \{ method: 'POST'/);
+  assert.match(app, /stSaveFetch\('\/api\/ledger\/caps', \{ method: 'POST'/);
   assert.ok(app.includes('JSON.stringify({ perAgentDailyUsd, hubDailyUsd })'));
   assert.ok(html.includes('id="spend-today"'), 'sidebar readout');
   assert.ok(app.includes('`spent today ${usd(t.total)}`'));

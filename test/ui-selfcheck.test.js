@@ -15,6 +15,7 @@ const between = (a, b) => {
 };
 const BLOCK = between('// ── self-check page (begin) ──', '// ── self-check page (end) ──');
 const ESC = app.match(/^\s*const esc = \(s\) => .*$/m)[0];
+const SAVE_FETCH = between('// ── save fetch (begin) ──', '// ── save fetch (end) ──');
 
 // A stand-in page: elements by id with the few fields the section uses.
 function makePage(ids) {
@@ -51,7 +52,7 @@ function build(routes, { ids = IDS } = {}) {
   const stSum = (g, k, text, crit) => sums.push({ g, k, text, crit });
   const guardLog = [];   // stand-in for the dialog guard: what the save settled
   const dialogGuard = { savePoint: (fields) => () => guardLog.push(`commit ${fields.length}`), markLoaded: (els) => guardLog.push(`loaded ${els.length}`) };
-  const make = new Function('document', 'fetch', 'setTimeout', 'stSum', 'dialogGuard', `${ESC}\n${BLOCK}\nreturn { scRender, loadSelfCheck, saveSelfCheckSettings, scFillSettings, scFailText, SC_POLL_MS, SC_POLL_MAX_MS };`);
+  const make = new Function('document', 'fetch', 'setTimeout', 'stSum', 'dialogGuard', `${ESC}\n${SAVE_FETCH}\n${BLOCK}\nreturn { scRender, loadSelfCheck, saveSelfCheckSettings, scFillSettings, scFailText, SC_POLL_MS, SC_POLL_MAX_MS };`);
   const S = make(page.document, fetch, setTimeout, stSum, dialogGuard);
   return { ...page, S, calls, sums, timers, guardLog };
 }

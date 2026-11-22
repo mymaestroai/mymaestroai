@@ -555,7 +555,7 @@ test('review 2: the pages\' own reloads (hub restarted, new version) wait while 
 test('review 2: web search keys: only a key saved as typed is cleared; a newer one and a failed save keep what was typed', async () => {
   const app = read('app.js');
   const a = app.indexOf('    async function saveWebSearch(opts = {}) {'), b = app.indexOf('    async function tryWebSearch(');
-  const src = app.slice(a, b);
+  const src = app.slice(app.indexOf('    // ── save fetch (begin) ──'), app.indexOf('    // ── save fetch (end) ──')) + '\n' + app.slice(a, b);
   const run = async (answer, during) => {
     const els = {};
     for (const id of ['st-ws-key-brave', 'st-ws-key-serper', 'st-ws-key-tavily', 'st-ws-order', 'st-ws-searxng', 'st-wf-private', 'st-wf-render', 'st-ws-state']) els[id] = { id, value: '', placeholder: '', textContent: '' };
@@ -736,7 +736,7 @@ test('guard.changed(scope): an unchanged field is false, a typed one true, a sav
 // The pieces of the main Save, lifted out of app.js: the registry and saveSettings (one slice), saveWebSearch (another).
 function mainSavePage({ answers = {}, hlIds = [], scIds = [] } = {}) {
   const app = read('app.js');
-  const a = app.indexOf('    // The main Save also runs'), b = app.indexOf('    // A ChatGPT subscription runs');
+  const a = app.indexOf('    // ── save fetch (begin) ──'), b = app.indexOf('    // A ChatGPT subscription runs');
   const c = app.indexOf('    async function saveWebSearch('), e = app.indexOf('    async function tryWebSearch(');
   assert.ok(a > 0 && b > a && c > 0 && e > c, 'the main Save code is found in app.js');
   const d = makeDom();

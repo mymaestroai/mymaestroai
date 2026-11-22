@@ -3922,7 +3922,7 @@
         const wsc = (data && data.webSearch) || {};
         const wfc = (data && data.webFetch) || {};
         const keys = wsc.keys || {};
-        const selWs = (id, opts, cur) => `<select id="${id}" style="padding:4px">${opts.map(([v, l]) => `<option value="${v}" ${cur === v ? 'selected' : ''}>${l}</option>`).join('')}</select>`;
+        const selWs = (id, opts, cur) => `<select id="${id}" style="padding:4px;min-width:0;max-width:100%">${opts.map(([v, l]) => `<option value="${v}" ${cur === v ? 'selected' : ''}>${l}</option>`).join('')}</select>`;
         const keyRow = (id, label, note) => `<div class="st-row"><label style="flex-basis:150px">${label}</label><input type="password" id="st-ws-key-${id}" placeholder="${keys[id] ? esc(keys[id]) : 'Not set'}" style="width:260px" autocomplete="off"> <span class="st-hint" style="margin:0 0 0 8px">${note}</span></div>`;
         html += `<div class="st-section" id="st-ws-section"><h4>Web search and fetch</h4>
         <div class="st-hint">Every agent on every model uses the same WebSearch and WebFetch tools; the hub does the work. Search walks the backends below in order and returns the first that answers: paid or keyed ones when you add a key, a self-hosted SearXNG the hub can run for you, and DuckDuckGo as the free floor. An agent may name a backend (for instance perplexity) when it wants that one. Fetch returns pages as markdown with links kept, reads PDFs, renders JavaScript-only pages in a browser when the plain fetch is empty, and refuses private and local addresses unless allowed below.</div>
@@ -3934,12 +3934,14 @@
         ${keyRow('serper', 'Serper key', 'serper.dev; Google results')}
         ${keyRow('tavily', 'Tavily key', 'tavily.com; LLM-ready results')}
         <div class="st-row"><label style="flex-basis:150px">Perplexity</label><span class="st-hint" style="margin:0">uses the Perplexity provider key above. <span id="st-ws-pplx"></span></span></div>
-        <div class="st-row"><label style="flex-basis:150px">SearXNG URL</label><input type="text" id="st-ws-searxng" value="${esc((wsc.searxng && wsc.searxng.url) || '')}" placeholder="http://127.0.0.1:8888" style="width:260px"> <button class="st-test-btn" onclick="searxngStart()">Run SearXNG here (Docker)</button><button class="st-test-btn" onclick="searxngStop()">Stop it</button></div>
-        <div class="st-row"><label style="flex-basis:150px">Private addresses</label>${selWs('st-wf-private', [['admin', 'admin-side agents may fetch them (default)'], ['none', 'nobody'], ['all', 'every agent']], wfc.allowPrivate || 'admin')} &nbsp; Browser rendering ${selWs('st-wf-render', [['auto', 'auto (when the plain fetch is empty)'], ['off', 'off'], ['always', 'always']], wfc.render || 'auto')} &nbsp; <label><input type="checkbox" id="st-wf-jina" ${wfc.jina ? 'checked' : ''}> Jina Reader fallback (sends the URL to r.jina.ai)</label></div>
+        <div class="st-row" style="flex-wrap:wrap;row-gap:6px"><label style="flex-basis:150px">SearXNG URL</label><input type="text" id="st-ws-searxng" value="${esc((wsc.searxng && wsc.searxng.url) || '')}" placeholder="http://127.0.0.1:8888" style="flex:1 1 180px;min-width:0;max-width:260px"> <button class="st-test-btn" onclick="searxngStart()">Run SearXNG here (Docker)</button><button class="st-test-btn" onclick="searxngStop()">Stop it</button></div>
+        <div class="st-row"><label style="flex-basis:150px">Private addresses</label>${selWs('st-wf-private', [['admin', 'admin-side agents may fetch them (default)'], ['none', 'nobody'], ['all', 'every agent']], wfc.allowPrivate || 'admin')}</div>
+        <div class="st-row"><label style="flex-basis:150px" for="st-wf-render">Browser rendering</label>${selWs('st-wf-render', [['auto', 'auto (when the plain fetch is empty)'], ['off', 'off'], ['always', 'always']], wfc.render || 'auto')}</div>
+        <div class="st-row"><label style="flex-basis:150px">Jina Reader</label><label style="flex:1;min-width:0;display:flex;gap:6px;align-items:center;text-align:left;cursor:pointer"><input type="checkbox" id="st-wf-jina" ${wfc.jina ? 'checked' : ''}> Fallback reader (sends the URL to r.jina.ai)</label></div>
         <div class="st-row"><label style="flex-basis:150px"></label><button class="st-test-btn" onclick="saveWebSearch()">Save web settings</button><span id="st-ws-state" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px"></span></div>
         <div id="st-ws-status" class="st-hint" style="margin-left:158px"></div>
         <div class="st-row"><label style="flex-basis:150px">Try a search</label><input type="text" id="st-ws-try" placeholder="query" style="flex:1" onkeydown="if(event.key==='Enter')tryWebSearch()"> ${selWs('st-ws-try-backend', [['', 'chain'], ['brave', 'brave'], ['perplexity', 'perplexity'], ['serper', 'serper'], ['tavily', 'tavily'], ['searxng', 'searxng'], ['duckduckgo', 'duckduckgo']], '')}<button class="st-test-btn" onclick="tryWebSearch()">Search</button></div>
-        <div class="st-row"><label style="flex-basis:150px">Try a fetch</label><input type="text" id="st-wf-try" placeholder="https://…" style="flex:1" onkeydown="if(event.key==='Enter')tryWebFetch()"> <label><input type="checkbox" id="st-wf-try-render"> render</label><button class="st-test-btn" onclick="tryWebFetch()">Fetch</button></div>
+        <div class="st-row"><label style="flex-basis:150px">Try a fetch</label><input type="text" id="st-wf-try" placeholder="https://…" style="flex:1;min-width:0" onkeydown="if(event.key==='Enter')tryWebFetch()"> <label style="flex:0 0 auto;display:flex;gap:4px;align-items:center"><input type="checkbox" id="st-wf-try-render"> render</label><button class="st-test-btn" onclick="tryWebFetch()">Fetch</button></div>
         <div id="st-ws-result" style="margin-left:158px;margin-top:6px;font-size:0.78rem;color:var(--text-dim);font-family:ui-monospace,monospace;white-space:pre-wrap;max-height:260px;overflow:auto"></div>
       </div>`;
         setTimeout(loadWebSearchStatus, 0);
@@ -4003,7 +4005,7 @@
       const v = id => (document.getElementById(id) || {}).value; const chk = id => !!(document.getElementById(id) || {}).checked;
       const state = document.getElementById('st-cl-state');
       try {
-        const r = await fetch('/api/auto-model/classifier', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
+        const r = await stSaveFetch('/api/auto-model/classifier', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
           body: JSON.stringify({ backend: v('st-cl-backend'), localProvider: v('st-cl-provider'), localModel: v('st-cl-model'), localThinking: chk('st-cl-think'), confidenceFloor: Number(v('st-cl-floor')), shadow: chk('st-cl-shadow'), keepOnBox: v('st-cl-keep') }) });
         const d = await r.json();
         if (!r.ok) throw new Error(d.error || r.status);
@@ -4047,7 +4049,7 @@
       const saved = dialogGuard.savePoint([sel]);
       const state = document.getElementById('st-lb-state');
       try {
-        const r = await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ lockboxDefault: sel.value }) });
+        const r = await stSaveFetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ lockboxDefault: sel.value }) });
         if (!r.ok) { let m = `HTTP ${r.status}`; try { const j = await r.json(); if (j && j.error) m = j.error; } catch {} throw new Error(m); }
         saved();
         if (state) state.textContent = 'Saved. Applies to agents set to "Hub default" from their next command.';
@@ -4060,7 +4062,7 @@
       const memberPolicy = {};
       for (const k of ['web', 'read_outside', 'write_outside', 'send']) { const v = (document.getElementById(`st-mp-${k}`) || {}).value; if (v) memberPolicy[k] = v; }
       try {
-        const r = await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ memberPolicy }) });
+        const r = await stSaveFetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ memberPolicy }) });
         if (r.ok) saved();
         if (state) state.textContent = r.ok ? 'Saved. Applies to member agents from their next tool call.' : `Could not save (HTTP ${r.status})`;
         return r.ok ? true : `HTTP ${r.status}`;
@@ -4070,7 +4072,7 @@
       const saved = dialogGuard.savePoint(['st-sb-member', 'st-sb-admin', 'st-tools-default'].map(id => document.getElementById(id)));
       const state = document.getElementById('st-sb-state');
       try {
-        const r = await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ sandboxDefaults: { member: document.getElementById('st-sb-member').value, admin: document.getElementById('st-sb-admin').value }, toolsDefault: (document.getElementById('st-tools-default') || {}).value === 'hub' ? 'hub' : 'client' }) });
+        const r = await stSaveFetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ sandboxDefaults: { member: document.getElementById('st-sb-member').value, admin: document.getElementById('st-sb-admin').value }, toolsDefault: (document.getElementById('st-tools-default') || {}).value === 'hub' ? 'hub' : 'client' }) });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         saved();
         if (state) state.textContent = 'Saved. Applies to agents set to "hub default" from their next turn.';
@@ -4461,7 +4463,7 @@
       if (!Object.keys(changes).length) { if (scSettings) refill(scSettings); say('Nothing to save.'); return true; }
       say('Saving…');
       try {
-        const r = await fetch('/api/selfcheck/settings', { method: 'PUT', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(changes) });
+        const r = await stSaveFetch('/api/selfcheck/settings', { method: 'PUT', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(changes) });
         const b = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error(b.error || `HTTP ${r.status}`);
         refill(b.settings);
@@ -4593,7 +4595,7 @@
       if (!Object.keys(changes).length) { if (hlSettings) refill(hlSettings); say('Nothing to save.'); return true; }
       say('Saving…');
       try {
-        const r = await fetch('/api/system-health/settings', { method: 'PUT', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(changes) });
+        const r = await stSaveFetch('/api/system-health/settings', { method: 'PUT', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(changes) });
         const b = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error(b.error || `HTTP ${r.status}`);
         refill(b.settings);
@@ -4933,7 +4935,7 @@
         fetch: { allowPrivate: document.getElementById('st-wf-private').value, render: document.getElementById('st-wf-render').value, jina: document.getElementById('st-wf-jina').checked },
       };
       try {
-        const r = await (await fetch('/api/websearch/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify(body) })).json();
+        const r = await (await stSaveFetch('/api/websearch/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify(body) })).json();
         if (state) state.textContent = r.ok ? 'Saved. Applies to the next search or fetch.' : (r.error || 'Could not save');
         if (r.ok) {
           saved();
@@ -5589,6 +5591,9 @@
     // ── OpenRouter box: the catalogue with search, the offer (ticked), privacy (only providers that do not store or
     // train on prompts), defaults (the newest tool-capable model of each vendor the hub has no key for). ──
     let orView = null;
+    // Ticks not saved yet, by model id (true ticked, false unticked): they survive a new Find, the tools filter and a refresh.
+    // A tick on a row the filter hides stays on the page as a hidden row, so both Saves send it and Close still warns.
+    const orPending = new Map();
     async function loadOpenRouterBox(refresh) {
       const body = document.getElementById('st-or-body');
       if (!body) return;
@@ -5597,17 +5602,20 @@
         orView = await r.json();
       } catch (e) { body.textContent = 'Could not load the OpenRouter list: ' + e.message; return; }
       if (orView && orView.hasKey) stSum('models', 'or', `OpenRouter: ${(orView.chosen || []).length} models`);
-      renderOpenRouterBox();
+      renderOpenRouterBox(refresh ? {} : { fresh: true });   // Settings opened: a new start; Refresh keeps the ticks
     }
     function orPrice(m) {
       if (m.prompt == null || m.completion == null) return '';
       const f = (x) => { const v = Number((x * 1e6).toPrecision(12)); return v === 0 ? '0' : v < 0.1 ? v.toFixed(3) : v < 10 ? v.toFixed(2) : v.toFixed(0); };
       return `$${f(m.prompt)} / $${f(m.completion)} per M`;
     }
-    function renderOpenRouterBox() {
+    function renderOpenRouterBox(opts = {}) {
       const body = document.getElementById('st-or-body');
       if (!body || !orView) return;
       const v = orView;
+      const savedSet = new Set(v.chosen || []);
+      if (opts.fresh) orPending.clear();
+      else for (const b of body.querySelectorAll('.st-or-pick')) { if (b.checked === savedSet.has(b.value)) orPending.delete(b.value); else orPending.set(b.value, b.checked); }
       const q = (document.getElementById('st-or-q')?.value || '').trim().toLowerCase();
       const all = !!document.getElementById('st-or-all')?.checked;
       const chosen = new Set(v.chosen || []);
@@ -5620,27 +5628,31 @@
           <span style="flex:1;min-width:0"><b>${esc(m.name || m.id)}</b> <code style="font-size:0.75rem;color:var(--text-dim)">${esc(m.id)}</code></span>
           <span style="font-size:0.75rem;color:var(--text-dim);white-space:nowrap">${m.tools ? '🛠' : ''}${m.reasoning ? ' 🧠' : ''}${m.images ? ' 🖼' : ''} ${ctx(m.context)} ${esc(orPrice(m))}</span>
         </label>`).join('');
+      const shown = new Set(list.slice(0, 300).map(m => m.id));
+      const hiddenRows = [...orPending.keys()].filter(id => !shown.has(id)).map(id => `<label class="or-row" hidden><input type="checkbox" class="st-or-pick" value="${esc(id)}"${chosen.has(id) ? ' checked' : ''}></label>`).join('');
       const keyLine = v.hasKey ? '' : `<div style="color:var(--warning);margin-bottom:6px">No OpenRouter key yet: get one at <a href="https://openrouter.ai/keys" target="_blank" rel="noopener" style="color:var(--accent)">openrouter.ai/keys</a>, paste it in LLM Providers above, press Test, then Save. The models below show up in the pickers once the key is saved.</div>`;
       body.innerHTML = `${keyLine}
         <div class="st-row"><label style="flex-basis:150px">Privacy</label><label style="flex:1;display:flex;gap:6px;align-items:center;cursor:pointer"><input type="checkbox" id="st-or-privacy"${v.privacy ? ' checked' : ''} onchange="saveOpenRouter()"> Only use providers that do not store or train on prompts</label></div>
-        <div class="st-row"><label style="flex-basis:150px">Offered</label><span>${(v.chosen || []).length} model(s)${v.custom ? '' : ' (the default offer)'} · catalogue ${(v.models || []).length} models${v.fetchedAt ? `, read ${esc(new Date(v.fetchedAt).toLocaleString())}` : ''}</span></div>
+        <div class="st-row"><label style="flex-basis:150px">Offered</label><span>${(v.chosen || []).length} model(s)${v.custom ? '' : ' (the default offer)'}${orPending.size ? ` · ${orPending.size} change${orPending.size === 1 ? '' : 's'} not saved yet` : ''} · catalogue ${(v.models || []).length} models${v.fetchedAt ? `, read ${esc(new Date(v.fetchedAt).toLocaleString())}` : ''}</span></div>
         <div class="st-row" style="flex-wrap:wrap"><label style="flex-basis:150px">Find</label><input type="text" id="st-or-q" data-no-dirty value="${esc(q)}" placeholder="grok, deepseek, kimi, qwen, llama, claude…" oninput="renderOpenRouterBox()" style="flex:1;min-width:160px">
           <label style="display:flex;gap:4px;align-items:center;margin-left:8px;font-size:0.8rem;white-space:nowrap"><input type="checkbox" id="st-or-all" data-no-dirty${all ? ' checked' : ''} onchange="renderOpenRouterBox()"> show models without tools</label></div>
-        <div id="st-or-list" style="max-height:320px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:6px 10px">${rows || '<i>No model matches.</i>'}${list.length > 300 ? `<div style="color:var(--text-dim)">… ${list.length - 300} more: narrow the search.</div>` : ''}</div>
+        <div id="st-or-list" style="max-height:320px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:6px 10px">${rows || '<i>No model matches.</i>'}${hiddenRows}${list.length > 300 ? `<div style="color:var(--text-dim)">… ${list.length - 300} more: narrow the search.</div>` : ''}</div>
         <div class="st-hint" style="margin-top:8px">🛠 can use tools (agents need this) · 🧠 takes a reasoning level · 🖼 reads images · context window · price in / out per million tokens</div>
         <div class="st-row"><label style="flex-basis:150px"></label><button class="st-test-btn" onclick="saveOpenRouter(true)">Save the ticked models</button>
           <button class="st-test-btn" onclick="openRouterDefaults()" style="margin-left:6px">Use the defaults</button>
           <button class="st-test-btn" onclick="loadOpenRouterBox(true)" style="margin-left:6px">Refresh the list</button></div>`;
+      // Rows are drawn as saved; a tick not saved yet goes on top, so the dialog counts it as a change.
+      for (const b of body.querySelectorAll('.st-or-pick')) if (orPending.has(b.value)) { dialogGuard.savePoint([b])(); b.checked = orPending.get(b.value); }
       const qEl = document.getElementById('st-or-q');
       if (q && qEl) { qEl.focus(); qEl.setSelectionRange(q.length, q.length); }
     }
     // Returns true once saved, or the reason; quiet (from the main Save) leaves the failure to the main Save's message.
     async function postOpenRouter(payload, done, opts = {}) {
       try {
-        const r = await fetch('/api/openrouter', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+        const r = await stSaveFetch('/api/openrouter', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
         const j = await r.json();
         if (!r.ok || !j.ok) { const m = j.error || 'Could not save.'; if (!opts.quiet) hubToast(m); return m; }
-        orView = j; renderOpenRouterBox(); __modelListCache = null;   // the pickers refetch the model list
+        orView = j; renderOpenRouterBox(payload.models !== undefined ? { fresh: true } : {}); __modelListCache = null;   // the pickers refetch the model list
         if (done) hubToast(done(j));
         return true;
       } catch (e) { if (!opts.quiet) hubToast('Could not save: ' + e.message); return e.message; }
@@ -5648,7 +5660,7 @@
     function saveOpenRouter(withModels, opts = {}) {
       const privacy = !!document.getElementById('st-or-privacy')?.checked;
       if (!withModels) return postOpenRouter({ privacy }, () => (privacy ? 'OpenRouter: only providers that do not store or train on prompts.' : 'OpenRouter: any provider.'));
-      // Keep ticks that the current search hides: start from the saved offer, apply the visible boxes.
+      // Start from the saved offer and apply every box: the shown rows and the hidden rows holding ticks a search hides.
       const keep = new Set(orView && orView.chosen || []);
       for (const b of document.querySelectorAll('.st-or-pick')) { if (b.checked) keep.add(b.value); else keep.delete(b.value); }
       return postOpenRouter({ privacy, models: [...keep] }, (j) => `OpenRouter: ${j.chosen.length} model(s) offered in the pickers.`, opts);
@@ -6386,7 +6398,7 @@
       const at = String(v).split(/[,\s]+/).filter(Boolean).map(Number).filter(n => Number.isFinite(n) && n >= 1 && n <= 100);
       const st = document.getElementById('st-plan-warn-state');
       try {
-        const r = await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ planWarn: { at } }) });
+        const r = await stSaveFetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ planWarn: { at } }) });
         if (!r.ok) throw new Error(r.status);
         saved();
         if (st) st.textContent = at.length ? 'Saved.' : 'Saved: no warnings.';
@@ -6475,7 +6487,7 @@
       };
       if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
       try {
-        const r = await fetch('/api/ledger/credits', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        const r = await stSaveFetch('/api/ledger/credits', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
         const d = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
         if (spendToday) spendToday.credits = d.credits || [];
@@ -6541,7 +6553,7 @@
       }
       if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
       try {
-        const r = await fetch('/api/ledger/caps', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ perAgentDailyUsd, hubDailyUsd }) });
+        const r = await stSaveFetch('/api/ledger/caps', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ perAgentDailyUsd, hubDailyUsd }) });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         saved();
         const d = await r.json().catch(() => null);
@@ -6616,6 +6628,26 @@
       paintDesktopPush();
     }
 
+    // ── save fetch (begin) ──
+    // Every Settings save goes through stSaveFetch: the request and its answer get ST_SAVE_TIMEOUT_MS. Past that the request
+    // is aborted and the save fails with ST_SAVE_TIMEOUT_TEXT: nothing is marked saved, what was typed stays, and a late
+    // answer is never read, so it cannot mark anything saved or be applied twice. The answer is read in full here, so a
+    // body that never ends is covered too.
+    const ST_SAVE_TIMEOUT_MS = 30000;
+    const ST_SAVE_TIMEOUT_TEXT = 'your Maestro did not answer within 30 seconds. Try again';
+    async function stSaveFetch(url, init = {}) {
+      const ctl = new AbortController();
+      let timer;
+      const late = new Promise((resolve, reject) => { timer = setTimeout(() => { ctl.abort(); reject(new Error(ST_SAVE_TIMEOUT_TEXT)); }, ST_SAVE_TIMEOUT_MS); });
+      const answer = (async () => {
+        const r = await fetch(url, { ...init, signal: ctl.signal });
+        const raw = typeof r.text === 'function' ? await r.text() : undefined;   // a stand-in answer may have json() only
+        return { ok: r.ok, status: r.status, json: async () => (raw === undefined ? r.json() : JSON.parse(raw)) };
+      })();
+      answer.catch(() => {});   // after the time limit its failure (the abort) is expected and unread
+      try { return await Promise.race([late, answer]); } finally { clearTimeout(timer); }
+    }
+    // ── save fetch (end) ──
     // The main Save also runs each section of this dialog that has its own Save button, when that section's fields changed
     // (one at a time: several post to /api/settings). A section that did not change sends nothing.
     const ST_SECTION_SAVES = [
@@ -6693,7 +6725,7 @@
       const waoOk = [...document.querySelectorAll('#st-overlay .st-wao-input')].filter(i => !i.validationMessage);
       const saved = dialogGuard.savePoint([...document.querySelectorAll('#st-overlay [id^="st-key-"], #st-overlay [id^="st-url-"]'), ...['st-maxTokens', 'st-maxContext', 'st-hw-minutes', 'st-hw-notice'].map(id => document.getElementById(id)), ...waoOk]);
       try {
-        const r = await fetch('/api/settings', {
+        const r = await stSaveFetch('/api/settings', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
@@ -6704,12 +6736,15 @@
       } catch (e) {
         failures.push('Settings: ' + e.message);
       }
+      let silent = failures.some(f => f.endsWith(ST_SAVE_TIMEOUT_TEXT));
 
       // The sections with their own Save button: only those changed at the press, one at a time.
       for (const entry of sections) {
+        if (silent) { failures.push(`${entry.label}: not tried, because your Maestro did not answer`); continue; }
         try {
           const r = await entry.save({ quiet: true });
           if (r !== true) failures.push(`${entry.label}: ${r}`);
+          if (r === ST_SAVE_TIMEOUT_TEXT) silent = true;
         } catch (e) {
           failures.push(`${entry.label}: ${e && e.message ? e.message : e}`);
         }

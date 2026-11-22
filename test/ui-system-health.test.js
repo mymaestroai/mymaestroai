@@ -16,6 +16,7 @@ const between = (src, a, b) => {
 };
 const HL = between(app, '// ── health page (begin) ──', '// ── health page (end) ──');
 const ESC = app.match(/^\s*const esc = \(s\) => .*$/m)[0];
+const SAVE_FETCH = between(app, '// ── save fetch (begin) ──', '// ── save fetch (end) ──');
 // A top-level function of app.js, from its first line to the first line that is just its closing brace.
 const fnSrc = (src, head) => {
   const i = src.indexOf(head);
@@ -50,7 +51,7 @@ function build(routes, { me = { isAdmin: true, user: { id: 'owner' } } } = {}) {
   const stSum = (g, k, text, crit) => sums.push({ g, k, text, crit });
   const guardLog = [];   // stand-in for the dialog guard: what the save settled
   const dialogGuard = { savePoint: (fields) => () => guardLog.push(`commit ${fields.length}`), markLoaded: (els) => guardLog.push(`loaded ${els.length}`) };
-  const make = new Function('document', 'fetch', 'setTimeout', 'stSum', 'window', 'dialogGuard', `${ESC}\n${HL}\nreturn { hlRender, loadHealth, saveHealthSettings, hlFillSettings, HL_POLL_MS, HL_POLL_MAX_MS };`);
+  const make = new Function('document', 'fetch', 'setTimeout', 'stSum', 'window', 'dialogGuard', `${ESC}\n${SAVE_FETCH}\n${HL}\nreturn { hlRender, loadHealth, saveHealthSettings, hlFillSettings, HL_POLL_MS, HL_POLL_MAX_MS };`);
   const S = make(page.document, fetch, setTimeout, stSum, { hubMe: me }, dialogGuard);
   return { ...page, S, calls, sums, timers, guardLog };
 }

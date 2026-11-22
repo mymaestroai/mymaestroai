@@ -84,7 +84,7 @@ test('desktop: a credit chip beside today\'s spend (amber at 75%, rose at 90%), 
   assert.match(app, /paintSpendToday\(\);\n\s+paintCreditMeter\(\);/, 'repainted with every ledger refresh');
   assert.match(app, /id="st-credit-provider" onchange="fillCreditInputs\(\)"/);
   assert.match(app, /onclick="saveCredit\(\)"/);
-  assert.match(app, /fetch\('\/api\/ledger\/credits', \{ method: 'POST'/);
+  assert.match(app, /stSaveFetch\('\/api\/ledger\/credits', \{ method: 'POST'/);
   assert.match(app, /'credit-meter', 'spend-today', 'plan-warn'/, 'members never see it');
 });
 
