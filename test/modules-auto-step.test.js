@@ -61,6 +61,7 @@ function rig({ facts = FACTS(), saved, finished = false, waitSec, extraSteps = [
   if (finished) conns.set('auto-demo', { id: 'auto-demo', module: 'auto-demo', enabled: true, agents: [] });
   const runNpm = async (args, cwd) => {
     ev.npm++;
+    if (holder.duringInstall) await holder.duringInstall();   // something that happens while the download runs
     const d = path.join(cwd, 'node_modules', 'fake-srv'); fs.mkdirSync(d, { recursive: true });
     fs.writeFileSync(path.join(d, 'package.json'), JSON.stringify({ name: 'fake-srv', version: '1.0.0', bin: { 'fake-srv': 'bin.js' } }));
     fs.writeFileSync(path.join(d, 'bin.js'), '');
@@ -284,13 +285,15 @@ test('the administrator choice is seen by prepare, so it plans for the chosen wa
     const seen = [];
     r.auto.prepare = (ctx) => { seen.push({ runAs: ctx.saved.run_as, choice: ctx.choices.run_as, stored: (r.state().settings || {}).run_as, stops: r.ev.stops }); return { settings: {}, lines: [], choose: null, stop: null }; };
     await r.mods.runStep('auto-demo', 'setup', { adminChoice: true });
-    assert.deepStrictEqual(seen, [{ runAs: 'hub', choice: 'hub', stored: undefined, stops: 0 }]);
+    // asked twice on a first setup: before the download and again after it (review r2); nothing stored and no restart either time
+    assert.deepStrictEqual(seen, [{ runAs: 'hub', choice: 'hub', stored: undefined, stops: 0 }, { runAs: 'hub', choice: 'hub', stored: undefined, stops: 0 }]);
     assert.strictEqual(r.state().settings.run_as, 'hub');
     assert.strictEqual(r.ev.stops, 1);
     const r2 = rig(); try {
-      r2.auto.prepare = (ctx) => { seen.push(ctx.saved.run_as); return { settings: {}, lines: [], choose: null, stop: null }; };
+      const seen2 = [];
+      r2.auto.prepare = (ctx) => { seen2.push(ctx.saved.run_as); return { settings: {}, lines: [], choose: null, stop: null }; };
       await r2.mods.runStep('auto-demo', 'setup', {});
-      assert.strictEqual(seen[1], undefined, 'without the choice nothing is saved before prepare');
+      assert.deepStrictEqual(seen2, [undefined, undefined], 'without the choice nothing is saved before prepare');
     } finally { r2.cleanup(); }
   } finally { r.cleanup(); }
 });
@@ -656,5 +659,38 @@ test('precheck({ fresh: true }) asks for a fresh look at this computer; an ordin
     await r.mods.precheck('auto-demo', 'prereqs', { fresh: true });
     await r.mods.precheck('auto-demo', 'prereqs', { fresh: false });
     assert.deepStrictEqual(r.ev.factsOpts, [undefined, { fresh: true }, undefined]);
+  } finally { r.cleanup(); }
+});
+
+// Bundle 2 review r2: a plan is never stale or invalid when it is saved.
+test('a setting saved under Advanced while the download runs is kept: the plan is made again after the download', async () => {
+  const r = rig(); try {
+    r.auto.prepare = (ctx) => ({ settings: ctx.saved.control_port ? {} : { control_port: 9971 }, lines: [], choose: null, stop: null });
+    r.holder.duringInstall = async () => { r.mods.saveSettings('auto-demo', { control_port: 9999 }); };
+    await r.mods.runStep('auto-demo', 'setup', {});
+    assert.strictEqual(r.ev.npm, 1, 'it did download');
+    assert.strictEqual(r.state().settings.control_port, 9999, 'the newer save wins over the plan made before the download');
+  } finally { r.cleanup(); }
+});
+
+test('the address is looked at again after the download, with fresh facts: a changed Tailscale address is the one saved', async () => {
+  const r = rig(); try {
+    r.auto.prepare = (ctx) => ({ settings: ctx.saved.listen_ip ? {} : { listen_ip: ctx.facts.tailscale.ips[0] }, lines: [], choose: null, stop: null });
+    const before = r.holder.facts.tailscale.ips[0];
+    r.holder.duringInstall = async () => { r.holder.facts = { ...r.holder.facts, tailscale: { ...r.holder.facts.tailscale, ips: ['100.101.102.150'] } }; };
+    await r.mods.runStep('auto-demo', 'setup', {});
+    assert.notStrictEqual(before, '100.101.102.150');
+    assert.strictEqual(r.state().settings.listen_ip, '100.101.102.150');
+    assert.ok(r.ev.factsOpts.some(o => o && o.fresh === true), 'the second look asks for fresh facts');
+  } finally { r.cleanup(); }
+});
+
+test('an invalid answer is refused by the plan, before anything is downloaded or saved', async () => {
+  const r = rig(); try {
+    r.auto.prepare = (ctx) => ({ settings: { run_as: ctx.choices.run_as }, lines: [], choose: null, stop: null });
+    await assert.rejects(r.mods.runStep('auto-demo', 'setup', { choices: { run_as: 'bogus' } }));
+    assert.strictEqual(r.ev.npm, 0, 'nothing downloaded');
+    assert.strictEqual((r.state().settings || {}).run_as, undefined, 'nothing saved');
+    assert.strictEqual(r.ev.stops, 0);
   } finally { r.cleanup(); }
 });
