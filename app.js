@@ -14915,7 +14915,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       let leadInUntil = 0, keepAliveOn = false, micLost = false;
       // Mute (setMuted, the call bar's Mute button). sinceUnmute: a piece of speech began after the last unmute (an end or misfire for one that began before is ignored,
       // a stray fragment of the detector). muteEnd: the pieceId of the piece Mute ended at the tap (-1: none): its one end or misfire is taken, muted or not.
-      let muted = false, sinceUnmute = true, muteEnd = -1;
+      // muteSeq counts the Mute taps: a piece that sees it change (or the call muted) while it would wait for more is sent at once. muteEnding: endAtMute is running.
+      let muted = false, sinceUnmute = true, muteEnd = -1, muteSeq = 0, muteEnding = false;
       let linkLost = false, linkWasLost = false, linkDropped = false;   // the connection to the server is lost (setLinkLost): nothing is reported as an error
       // Outage count: each loss adds one. A piece of speech remembers the count when it began (-1 if the link was already lost). The link state NEVER
       // discards a piece whose transcript arrived (the request itself is the test: speech heard during an outage is still sent to d.stt). It only decides
@@ -15511,9 +15512,11 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
               if (waitTimer !== null) quiet(() => d.clearTimer(waitTimer));
               mine.waiting = false; mine.onJoin = null;
             };
-            if (!mine.hold && !ended && !atMute && !muted && !voiceIsStopCommand(t) && !sleepy && !pendingAsk && mine.ann == null && !pendingAnnounce) {   // Mute ended it: sent as it is
+            // Mute was tapped (now, or while the end-of-turn model decided): sent as it is, no wait for more.
+            const seq0 = muteSeq, mutedSince = () => muted || muteSeq !== seq0;
+            if (!mine.hold && !ended && !atMute && !muted && !voiceIsStopCommand(t) && !sleepy && !pendingAsk && mine.ann == null && !pendingAnnounce) {
               ms = continueWait();
-              if (ms > 0 && await soundsUnfinished(t, audio)) {
+              if (ms > 0 && await soundsUnfinished(t, audio) && !mutedSince()) {
                 waited = true; waitStart = now();
                 await waitMore(ms);
                 if (ended) return;
@@ -15531,7 +15534,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
               if (timedOut || !waited) break;
               // A misfire (cough, click) ended the wait early: the rest of the wait goes on.
               const left = ms - (now() - waitStart);
-              if (left <= 0) break;
+              if (left <= 0 || mutedSince()) break;
               await waitMore(left);
               if (ended) return;
             }
@@ -15731,8 +15734,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         muted = want;
         quiet(() => { if (typeof vad.setMuted === 'function') vad.setMuted(want); });
         if (want) {
-          sinceUnmute = false; disarmWatch();
-          if (personSpeaking || segActive) endAtMute();
+          sinceUnmute = false; disarmWatch(); muteSeq++;
+          if (personSpeaking || segActive) { if (muteEnding) muteEnd = pieceId; else endAtMute(); }   // a second tap while the first cut runs: that cut covers it
           const w = lastSeg;
           if (w && w.waiting && w.onJoin && !segActive) { const f = w.onJoin; w.onJoin = null; quiet(f); }   // waiting for more that will not come: sent now
         }
@@ -15743,10 +15746,12 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       // follows (within VOICE_MUTE_END_MS). When no end or misfire came, the piece is let go; a detector that could not listen again is opened again.
       async function endAtMute() {
         const id = pieceId;
-        muteEnd = id;
+        muteEnd = id; muteEnding = true;
         let listening = true, asked = false;
-        if (typeof vad.endPiece === 'function') { asked = true; try { listening = (await vad.endPiece()) !== false; } catch { listening = false; } }
-        else await new Promise((r) => { d.setTimer(r, VOICE_MUTE_END_MS); });
+        try {
+          if (typeof vad.endPiece === 'function') { asked = true; try { listening = (await vad.endPiece()) !== false; } catch { listening = false; } }
+          else await new Promise((r) => { d.setTimer(r, VOICE_MUTE_END_MS); });
+        } finally { muteEnding = false; }
         if (muteEnd === id) muteEnd = -1;
         if (!ended && personSpeaking && pieceId === id) dropSpeech();
         if (asked && !listening && !ended) { try { await retryMic(); } catch { /* retryMic never throws */ } }
