@@ -4011,3 +4011,64 @@ test('renderDocument: the first-pass summary is an appendix "What the first pass
   // without a summary there is no appendix
   assert.doesNotMatch(T.renderDocument({ question: 'Q?', prose, claims: [], sources: [] }).markdown, /What the first pass said/);
 });
+
+// ================================================================ review blockers D: units keep their identity, arXiv versions, section numbers
+test('D1 a word that looks like a unit is compared exactly; ordinary count nouns stay ordinary', () => {
+  const same = (fig, text) => assert.strictEqual(T.checkFigure(fig, text, KW), 'found_as_written', `${fig} vs ${text}`);
+  const diff = (fig, text) => assert.strictEqual(T.checkFigure(fig, text, KW), 'not_found_as_written', `${fig} vs ${text}`);
+  diff('1250 kilopascals', 'the pressure was 1250 megapascals here');
+  diff('1250 megawatts', 'the plant gave 1250 kilowatts today');
+  diff('1250 lumens', 'the lamp gave 1250 lux in all');
+  diff('1250 fps', 'the engine ran at 1250 rps in all');
+  diff('60 fps', 'the engine ran at 60 rps in all');
+  same('1250 kilopascals', 'the pressure was 1250 kilopascals here');
+  same('1250 kilopascals', 'the pressure was 1250 Kilopascal here');
+  same('1250 fps', 'the engine ran at 1250 fps in all');
+  same('1250 amps', 'the fuse took 1250 amp here');
+  // plural scale words are scales
+  diff('1250 millions', 'there were 1250 billions here');
+  same('1250 millions', 'there were 1250 millions here');
+  // ordinary count nouns, also those that end in a unit stem or begin with a prefix
+  same('46 crowdworkers', 'we recruited 46 U.S./U.K. crowd-workers in all');
+  same('1250 participants', 'we had 1250 raters in all');
+  same('1250 parameters', 'a model with 1250 hyperparameters');
+  same('1250 programs', 'it ran 1250 diagrams here');
+  same('1250 decisions', 'there were 1250 choices here');
+  same('2000 points', 'with 2000 comparisons here');
+});
+
+test('D2 arXiv versions are kept apart in pinning', () => {
+  const A1 = 'https://arxiv.org/abs/2401.12345v1';
+  const A2 = 'https://arxiv.org/abs/2401.12345v2';
+  const AU = 'https://arxiv.org/abs/2401.12345';
+  const sum = (...u) => ['## Verdict', 'A wins.', '## Evidence', ...u.map((x) => `- claim [${x}]`)].join('\n');
+  const both = T.pinnedSources(sum(A1, A2), [sum(A1, A2)], 12);
+  assert.deepStrictEqual(both.map((p) => p.url), [A1, A2]);
+  assert.deepStrictEqual(T.firstPassSources(sum(A1, A2), 12).map((p) => p.url), [A1, A2]);
+  assert.deepStrictEqual(T.mostCitedSources([`${A1} and ${A2}`], 12).map((p) => p.url), [A1, A2]);
+  assert.deepStrictEqual(T.mergePinned([{ url: A1 }, { url: A2 }], [{ url: A1, title: 'T' }], 12).map((p) => p.url), [A1, A2]);
+  assert.deepStrictEqual(T.mergePinned([{ url: A1 }], [{ url: A2 }], 12).map((p) => p.url), [A1, A2]);
+  // an unversioned URL and a versioned one of the paper are one source, the versioned one
+  assert.deepStrictEqual(T.firstPassSources(sum(AU, A1), 12).map((p) => p.url), [A1]);
+  assert.deepStrictEqual(T.firstPassSources(sum(A1, AU), 12).map((p) => p.url), [A1]);
+  assert.deepStrictEqual(T.mostCitedSources([`${AU} ${A2}`], 12).map((p) => p.url), [A2]);
+  assert.deepStrictEqual(T.mergePinned([{ url: AU }], [{ url: A2, title: 'T' }], 12), [{ url: A2, title: 'T', why: '' }]);
+  // known in the findings: that version, or the unversioned paper; not another version
+  assert.deepStrictEqual(T.pinnedSources(sum(A2), [`## Evidence\n- ${A1}`], 12).map((p) => p.url), [A1]); // not pinned: falls back to the most cited
+  assert.ok(!T.pinnedSources(sum(A2), [`## Evidence\n- ${A1}`], 12).some((p) => p.url === A2));
+  assert.deepStrictEqual(T.pinnedSources(sum(A2), [`See ${AU}`], 12).map((p) => p.url), [A2]);
+  assert.deepStrictEqual(T.pinnedSources(sum(AU), [`See ${A1}`], 12).map((p) => p.url), [AU]);
+});
+
+test('D3 a section number is no figure of a source', () => {
+  const claim = 'improved accuracy by 2.1 points on the evaluation set';
+  const st = (text) => T.checkFigure('2.1 points', text, ['accuracy', 'evaluation']);
+  assert.strictEqual(st('## 2.1 Evaluation setup\nWe evaluate the model; accuracy was 0.91 on the evaluation set.'), 'not_found_as_written');
+  assert.strictEqual(st('3.2.1 Evaluation setup\nWe evaluate the model on the evaluation set.'), 'not_found_as_written');
+  assert.strictEqual(st('- 2.1 Evaluation setup\nWe evaluate the model on the evaluation set.'), 'not_found_as_written');
+  assert.strictEqual(st('## 2.1 evaluation setup\nWe evaluate the model on the evaluation set.'), 'not_found_as_written');
+  assert.strictEqual(st('The gain in accuracy was 2.1 points on the evaluation set.'), 'found_as_written');
+  assert.strictEqual(T.checkFigure('2.1', '| Model | gain |\n| A | 2.1 |\n', ['gain']), 'found_as_written');
+  assert.strictEqual(T.checkFigure('2.1', 'The gain in accuracy was 2.1 on the evaluation set.\n2.1 Evaluation setup', ['accuracy']), 'found_as_written');
+  assert.ok(claim);
+});
