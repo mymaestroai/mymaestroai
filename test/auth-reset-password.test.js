@@ -891,3 +891,96 @@ test('r4 sessions: an account without a password is bound too; a password set la
   fs.writeFileSync(usersFile, JSON.stringify(data, null, 2));
   assert.strictEqual(hub.getSession(s.token), null);
 });
+
+// Review r5 (code from the GPT-6 reviewer): a cold start that cannot see users.json never ends a session.
+test('r5 cold lookup keeps a bound session while users.json is missing', () => {
+  const dir = fs.mkdtempSync(path.join(TMP, 'd-'));
+  const options = { dataDir: dir, now: () => T0, log: () => {} };
+  const first = A.createAuth(options);
+  const user = first.createUser({ login: 'person@example.com', password: OLD }).user;
+  const session = first.createSession(first.getUser(user.id));
+  const before = sessRow(dir, session.id);
+  assert.ok(before.cred);
+  const file = path.join(dir, 'users.json');
+  const saved = path.join(dir, 'users.saved');
+  fs.renameSync(file, saved);
+  let cold;
+  try {
+    cold = A.createAuth(options);
+    assert.strictEqual(cold.getSession(session.token), null);
+    assert.deepStrictEqual(sessRow(dir, session.id), before);
+  } finally {
+    fs.renameSync(saved, file);
+  }
+  assert.strictEqual(cold.getSession(session.token).id, session.id);
+});
+
+test('r5 cold lookup keeps a bound session while the account directory is unsearchable', {
+  skip: !process.geteuid || process.geteuid() === 0 ? 'requires an unprivileged POSIX user' : false,
+}, () => {
+  const dir = fs.mkdtempSync(path.join(TMP, 'd-'));
+  const options = { dataDir: dir, now: () => T0, log: () => {} };
+  const first = A.createAuth(options);
+  const user = first.createUser({ login: 'person@example.com', password: OLD }).user;
+  const session = first.createSession(first.getUser(user.id));
+  const before = sessRow(dir, session.id);
+  assert.ok(before.cred);
+  const file = path.join(dir, 'users.json');
+  const accountsDir = path.join(dir, 'accounts');
+  const target = path.join(accountsDir, 'users.json');
+  fs.mkdirSync(accountsDir, { mode: 0o700 });
+  fs.renameSync(file, target);
+  fs.symlinkSync(target, file);
+  let cold;
+  fs.chmodSync(accountsDir, 0o600);
+  try {
+    assert.throws(() => fs.statSync(file), { code: 'EACCES' });
+    cold = A.createAuth(options);
+    assert.strictEqual(cold.getSession(session.token), null);
+    assert.deepStrictEqual(sessRow(dir, session.id), before);
+  } finally {
+    fs.chmodSync(accountsDir, 0o700);
+  }
+  assert.strictEqual(cold.getSession(session.token).id, session.id);
+});
+
+test('r5 an update signs no one out and needs no step: sessions from before the update keep working after the new code opens the database, across restarts', () => {
+  const dir = fs.mkdtempSync(path.join(TMP, 'd-'));
+  const before = A.createAuth({ dataDir: dir, now: () => T0, log: () => {} });
+  const owner = before.createUser({ login: 'owner@example.com', role: 'admin', password: OLD }).user;
+  const sam = before.createUser({ login: 'sam@example.com', password: NEW }).user;
+  before.listUsers();
+  // the database as the previous release left it: no cred column, one session each, no step run by anyone
+  for (const x of ['', '-wal', '-shm']) fs.rmSync(path.join(dir, 'auth.db' + x), { force: true });
+  const d = new Database(path.join(dir, 'auth.db'));
+  d.exec('CREATE TABLE sessions (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, created_at TEXT, last_seen TEXT, expires_at TEXT, ua TEXT, ip TEXT, totp_ok INTEGER DEFAULT 0)');
+  const h = (t) => require('crypto').createHash('sha256').update(t).digest('hex');
+  const ins = d.prepare('INSERT INTO sessions (id, user_id, created_at, last_seen, expires_at, totp_ok) VALUES (?,?,?,?,?,1)');
+  ins.run(h('owner-token'), owner.id, 'x', 'x', new Date(T0 + 86400000).toISOString());
+  ins.run(h('sam-token'), sam.id, 'x', 'x', new Date(T0 + 86400000).toISOString());
+  d.close();
+  for (let start = 0; start < 3; start++) {   // the updated hub starts, and starts again
+    const hub = A.createAuth({ dataDir: dir, now: () => T0, log: () => {} });
+    assert.ok(hub.getSession('owner-token'), `owner still signed in (start ${start + 1})`);
+    assert.ok(hub.getSession('sam-token'), `sam still signed in (start ${start + 1})`);
+  }
+  // only a change of that account's password ends that account's sessions
+  const hub = A.createAuth({ dataDir: dir, now: () => T0, log: () => {} });
+  assert.ok(hub.setPassword(sam.id, 'a different password for sam', { by: owner.id }).ok);
+  assert.strictEqual(hub.getSession('sam-token'), null, 'sam signed out by the change');
+  assert.ok(hub.getSession('owner-token'), 'owner unaffected');
+});
+
+test('r5 changing your own password on the Security page keeps the device you did it from signed in', () => {
+  const dir = fs.mkdtempSync(path.join(TMP, 'd-'));
+  const hub = A.createAuth({ dataDir: dir, now: () => T0, log: () => {} });
+  const u = hub.createUser({ login: 'person@example.com', password: OLD }).user;
+  const r = hub.login('person@example.com', OLD);
+  assert.ok(r.ok);
+  const here = hub.createSession(r.user);
+  assert.ok(hub.setPassword(u.id, NEW, { by: u.id }).ok);   // what POST /api/auth/password does
+  assert.ok(hub.getSession(here.token), 'this device stays signed in');
+  assert.ok(A.createAuth({ dataDir: dir, now: () => T0, log: () => {} }).getSession(here.token), 'also after a restart');
+  assert.strictEqual(hub.login('person@example.com', OLD).ok, false);
+  assert.strictEqual(hub.login('person@example.com', NEW).ok, true);
+});
