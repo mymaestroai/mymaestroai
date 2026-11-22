@@ -159,6 +159,29 @@ for (const name of ['lib', 'app.js', 'mobile.js']) {
   });
 }
 
+// Pointer ownership: a second finger's release, cancel, lost capture or click cannot end the first finger's hold or leave the mic listening after its release.
+for (const name of ['lib', 'app.js', 'mobile.js']) {
+  test(`only the owning pointer can end a hold (${name})`, () => {
+    for (const event of ['pointerup', 'pointercancel', 'lostpointercapture']) {
+      const r = pressRig(copies[name]);
+      r.clock.t += 1000; // past the button's initial click suppression
+      r.el.fire('pointerdown', { pointerId: 1 });
+      r.btn.paint(true);
+      r.clock.t += 100;
+      r.el.fire('pointerdown', { pointerId: 2 });
+      r.clock.t += 50;
+      r.el.fire(event, { pointerId: 2 });
+      r.el.fire('click', { pointerId: 2 });
+      assert.deepEqual(r.calls, [true], event);
+      r.clock.t += 450;
+      r.el.fire('pointerup', { pointerId: 1 });
+      r.btn.paint(false);
+      r.el.fire('click', { pointerId: 1 });
+      assert.deepEqual(r.calls, [true, false], event);
+    }
+  });
+}
+
 // ── 4. a press call from the desktop mic: the harness of ui-voice-call-desktop.test.js, with a few extra stubs ──
 const dsrc = read('test/ui-voice-call-desktop.test.js');
 const dHead = dsrc.slice(0, dsrc.indexOf("test('mic button:"));

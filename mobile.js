@@ -3954,32 +3954,35 @@ function voicePressButton(el, getCall, opts) {
     if (cls) quiet(() => { if (el.classList) el.classList.toggle(cls, pressing); });
   }
   function onDown(e) {
-    if (e && e.pointerType === 'mouse' && typeof e.button === 'number' && e.button !== 0) return;
-    if (off()) return;
+    if (off() || (e && e.pointerType === 'mouse' && e.button !== 0)) return;
     stop(e);
-    if (began) {
-      const id = e ? e.pointerId : undefined;
-      if (now() - downAt <= VOICE_PRESS_STALE_MS && !(id !== undefined && id === downId)) return;   // a second finger on a press that is under way
-      began = false;   // the earlier sequence never ended (no pointerup, no cancel): it is over, this one starts clean
-    }
-    began = true; swallowUntil = Infinity; wasPressing = pressing; downAt = now(); downId = e ? e.pointerId : undefined;
-    quiet(() => { if (e && e.pointerId !== undefined && el.setPointerCapture) el.setPointerCapture(e.pointerId); });
+    const id = e ? e.pointerId : undefined;
+    const t = now();
+    // a second finger on a press that is under way is ignored; a sequence that never ended (no pointerup, no cancel) and is older than VOICE_PRESS_STALE_MS, or of the same pointer, starts over
+    if (began && t - downAt <= VOICE_PRESS_STALE_MS && !(id !== undefined && downId === id)) return;
+    began = true;
+    downId = id;
+    downAt = t;
+    wasPressing = pressing;
+    swallowUntil = Infinity;
+    quiet(() => { if (id !== undefined && el.setPointerCapture) el.setPointerCapture(id); });
     if (!wasPressing) talk(true);
   }
-  function onUp(e) {
-    if (!began) return;
-    began = false; swallowUntil = now() + 700;
+  // Only the pointer that opened the press can end it: the release, cancel or lost capture of a second finger changes nothing.
+  function finishPointer(e, cancelled) {
+    if (!began || (e ? e.pointerId : undefined) !== downId) return;
+    const t = now();
+    began = false;
+    downId = undefined;
+    swallowUntil = t + 700;
     stop(e);
-    if (wasPressing || now() - downAt >= VOICE_PRESS_HOLD_MS) talk(false);
+    if (cancelled || wasPressing || t - downAt >= VOICE_PRESS_HOLD_MS) talk(false);   // cancelled (pointercancel, lostpointercapture): the press ends now, whatever its length
   }
-  function onCancel(e) {   // pointercancel, lostpointercapture: the press this sequence opened (or the tap that was to send) ends now, whatever its length
-    if (!began) return;
-    began = false; swallowUntil = now() + 700;
-    stop(e);
-    talk(false);
-  }
+  function onUp(e) { finishPointer(e, false); }
+  function onCancel(e) { finishPointer(e, true); }
   function onClick(e) {
     stop(e);
+    if (began) return;   // a secondary click cannot consume the owner's swallow flag
     if (off()) return;
     if (!began && swallowUntil === Infinity) swallowUntil = 0;   // never left swallowing for good
     if (now() - bornAt < 700 || now() <= swallowUntil) { swallowUntil = 0; return; }
@@ -5201,7 +5204,7 @@ function voiceCreateCall(deps) {
     pressing = want;
     if (want) {
       setMuted(false);
-      if (!personSpeaking) { onSpeechBegin(); onSpeechStart(); }
+      if (!personSpeaking && !vad.manual) { onSpeechBegin(); onSpeechStart(); }   // only a detector that cannot report the start (a manual one reports it itself, up to a press tail later)
     } else setMuted(true);
     quiet(() => { if (typeof ui.press === 'function') ui.press(want); });
     return pressing;
@@ -6185,9 +6188,8 @@ function voiceCreateVad(opts) {
         onSpeechEnd: (audio) => (!st.manual && live() && handlers.onSpeechEnd ? handlers.onSpeechEnd(audio) : undefined),
         onVADMisfire: () => { if (!st.manual && live() && handlers.onMisfire) handlers.onMisfire(); },
         onFrameProcessed: (probs, frame) => {
-          if (st.manual && frame && frame.length) {   // a frame belongs to the press that is open, else to the one released within VOICE_PRESS_TAIL_MS (its copy: the detector may reuse its frame)
-            let p = st.open;
-            if (!p) { const e = st.ended[st.ended.length - 1]; if (e && nowMs() - e.endedAt <= VOICE_PRESS_TAIL_MS) p = e; }
+          if (st.manual && frame && frame.length) {   // a frame belongs to the press that is open and admitted, else to the admitted one still in its tail (its copy: the detector may reuse its frame)
+            const p = st.open && st.open.admitted ? st.open : tailOwner();
             if (p) { p.frames.push(Float32Array.from(frame)); p.len += frame.length; }
           }
           if (live() && handlers.onFrame) handlers.onFrame(voiceLevelDb(frame), probs);
@@ -6219,8 +6221,27 @@ function voiceCreateVad(opts) {
     try { if (ctx) await ctx.close(); } catch { /* already closed */ }
   }
   async function stop() { st.gen++; await release(); }
+  // Tap to talk (manual). This is a 200 ms admission delay (VOICE_PRESS_TAIL_MS), not an acknowledgment from the detector: a press that starts while the
+  // previous press is still in its tail keeps the tracks muted until that tail ends, then is admitted (tracks on, onSpeechBegin, onSpeechStart). Speech in
+  // that delay is not heard. A press released or a call stopped before then is never admitted (st.open !== p).
+  function admitPress(p) {
+    if (st.open !== p || p.admitted) return;
+    p.admitted = true;
+    st.muted = false; applyMute();
+    const h = st.handlers;
+    try { if (typeof h.onSpeechBegin === 'function') h.onSpeechBegin(); } catch { /* the call's own problem */ }
+    try { if (typeof h.onSpeechStart === 'function') h.onSpeechStart(); } catch { /* the call's own problem */ }
+  }
+  // The admitted press that was released within VOICE_PRESS_TAIL_MS (its frames are still in the pipeline): it keeps the audio.
+  function tailOwner() {
+    const t = nowMs();
+    for (let i = 0; i < st.ended.length; i++) { const p = st.ended[i]; if (p.admitted && t < p.endedAt + VOICE_PRESS_TAIL_MS) return p; }
+    return undefined;
+  }
   return {
     start, stop,
+    // true: the detector reports the start of a press itself (the call does not fake it).
+    get manual() { return st.manual; },
     // While a reply plays the barge-in thresholds are raised. Playback stopping does NOT lower them at once: a car cabin's echo of the reply
     // reaches the microphone 150-300 ms after playback stops (longer through Bluetooth), and would be heard as the person speaking. So they stay
     // raised for echoHoldMs (default VOICE_ECHO_HOLD_MS; 0 = off: lowered at once) and a new playback in between cancels the lowering.
@@ -6262,24 +6283,23 @@ function voiceCreateVad(opts) {
     // stream and listens again. An iOS context left 'interrupted' is resumed first (1 s at most). -> Promise of true when the detector listens again.
     async endPiece() {
       if (st.manual) {   // tap to talk: the frames of the most recently ended press are the piece; the detector is neither paused nor restarted
-        let p = null;
-        for (let i = st.ended.length - 1; i >= 0; i--) if (!st.ended[i].taken) { p = st.ended[i]; break; }
-        if (p) {
-          p.taken = true;
-          st.ended = st.ended.filter((e) => e === p || e.taken || e.endedAt > p.endedAt);   // an older press that nobody took is not sent late with the next one
-          const left = p.endedAt + VOICE_PRESS_TAIL_MS - nowMs();   // the press's tail (frames still in the pipeline) is waited out first
-          if (left > 0) await new Promise((r) => { try { setT(r, left); } catch { r(); } });
-        }
-        const h = st.handlers;   // (taken after the wait: a call that ended meanwhile has none)
-        let frames = [], len = 0;
-        if (p) { frames = p.frames; len = p.len; p.frames = []; p.len = 0; const i = st.ended.indexOf(p); if (i >= 0) st.ended.splice(i, 1); }
-        if (len >= VOICE_PRESS_MIN_MS * 16) {
-          const audio = new Float32Array(len);
+        let p = null;   // the newest press nobody took (a plain loop: no Array.prototype.findLast, older Safari)
+        for (let i = st.ended.length - 1; i >= 0; i--) { const e = st.ended[i]; if (!e.taken && !e.superseded) { p = e; break; } }
+        if (!p) { try { if (typeof st.handlers.onMisfire === 'function') st.handlers.onMisfire(); } catch { /* the call's own problem */ } return true; }
+        p.taken = true;
+        const left = p.endedAt + VOICE_PRESS_TAIL_MS - nowMs();   // the press's tail (frames still in the pipeline) is waited out first (a press never admitted has no tail)
+        if (p.admitted && left > 0) await new Promise((r) => { try { setT(r, left); } catch { r(); } });
+        const i = st.ended.indexOf(p);   // stop() clears st.ended, also when a new call has started since
+        if (i < 0) return true;
+        st.ended.splice(i, 1);
+        const h = st.handlers;
+        if (p.len >= VOICE_PRESS_MIN_MS * 16) {
+          const audio = new Float32Array(p.len);
           let at = 0;
-          for (const f of frames) { audio.set(f, at); at += f.length; }
-          frames = null;   // joined: the frame list is dropped at once (a long press is big)
+          for (const f of p.frames) { audio.set(f, at); at += f.length; }
+          p.frames.length = 0;   // joined: the frame list is dropped at once (a long press is big)
           try { if (typeof h.onSpeechEnd === 'function') { const pr = h.onSpeechEnd(audio); if (pr && typeof pr.catch === 'function') pr.catch(() => {}); } } catch { /* the call's own problem */ }   // handed over, not awaited (as MicVAD delivers a piece)
-        } else { try { if (typeof h.onMisfire === 'function') h.onMisfire(); } catch { /* the call's own problem */ } }
+        } else { p.frames.length = 0; try { if (typeof h.onMisfire === 'function') h.onMisfire(); } catch { /* the call's own problem */ } }
         return true;
       }
       if (!st.vad || !st.ctx) return false;
@@ -6315,22 +6335,26 @@ function voiceCreateVad(opts) {
     // Mute (see applyMute): true switches every microphone track of the call off, false on again (whatever is open now, after any reopen).
     // Tap to talk (manual): unmuting starts a piece (the frames are kept from here; onSpeechBegin, then onSpeechStart), muting stops keeping frames (endPiece takes them).
     setMuted(on) {
-      const was = st.muted;
-      st.muted = !!on; applyMute();
-      if (!st.manual) return;
-      if (st.muted) {   // the press ends: it keeps taking frames for VOICE_PRESS_TAIL_MS (see onFrameProcessed) and waits for endPiece
+      if (!st.manual) { st.muted = !!on; applyMute(); return; }
+      if (on) {   // the press ends: an admitted one keeps taking frames for VOICE_PRESS_TAIL_MS (see onFrameProcessed) and waits for endPiece
         const p = st.open; st.open = null;
-        if (p) {
-          p.endedAt = nowMs(); st.ended.push(p);
-          st.ended = st.ended.filter((e) => e === p || nowMs() - e.endedAt < 2000 || e.taken);   // a press nobody took is let go after a while
-        }
+        st.muted = true; applyMute();
+        if (!p) return;
+        if (p.timer !== null) { try { clearT(p.timer); } catch { /* gone */ } p.timer = null; }   // released before its admission: it is never admitted
+        p.endedAt = nowMs();
+        // The audio owner is kept through its tail even when a short, queued press has already ended; only the newest untaken press may be submitted.
+        st.ended = st.ended.filter((e) => e.taken || (e.admitted && nowMs() < e.endedAt + VOICE_PRESS_TAIL_MS));
+        for (const e of st.ended) if (!e.taken) e.superseded = true;
+        st.ended.push(p);
         return;
       }
-      if (!was) return;   // already on: a piece is under way
-      st.open = { frames: [], len: 0, endedAt: null, taken: false };
-      const h = st.handlers;
-      try { if (typeof h.onSpeechBegin === 'function') h.onSpeechBegin(); } catch { /* the call's own problem */ }
-      try { if (typeof h.onSpeechStart === 'function') h.onSpeechStart(); } catch { /* the call's own problem */ }
+      if (st.open) return;   // already on: a press is under way
+      const p = { frames: [], len: 0, endedAt: null, taken: false, admitted: false, superseded: false, timer: null };
+      st.open = p;
+      const a = tailOwner();
+      if (!a) { admitPress(p); return; }
+      // Inside the previous press's tail: the tracks stay muted until it ends (admitPress does nothing when the press was released or the call stopped meanwhile).
+      try { p.timer = setT(() => { p.timer = null; admitPress(p); }, Math.max(0, a.endedAt + VOICE_PRESS_TAIL_MS - nowMs())); } catch { admitPress(p); }
     },
     isMuted() { return st.muted; },
     setInterruptSensitivity(v) { st.sens = v; apply(); },
