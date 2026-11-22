@@ -201,6 +201,34 @@ test('review r1: Mute, unmute, Mute before the detector answered: one endPiece, 
   assert.deepStrictEqual(h.sent, ['said before the taps']);
 });
 
+test('review r2: Mute and a quick unmute while an earlier piece is still being transcribed: it is sent at once when its text arrives', async () => {
+  const h = harness({ prefs: () => ({ continueWait: 8000, thinkingSound: false }) }); const slow = [];
+  h.deps.stt = (audio) => new Promise((r) => { h.stt.push(audio.text); slow.push(() => r(audio.text)); });
+  h.deps.vad = endPieceVad(h); h.call = voiceCreateCall(h.deps); await h.call.start();
+  h.handlers.onSpeechBegin(); h.handlers.onSpeechStart(); h.handlers.onSpeechEnd({ text: 'I want to talk about the budget and' }); await tick(5);
+  await advance(h, 200); h.call.setMuted(true);
+  await advance(h, 400); h.call.setMuted(false);
+  await advance(h, 600); slow.shift()(); await tick(30);
+  assert.deepStrictEqual(h.sent, ['I want to talk about the budget and'], 'no 8 s wait');
+});
+
+test('review r2: a second Mute on a newer piece (begun after a quick unmute) while the first cut runs: that piece is cut too once the first is done', async () => {
+  const h = harness(); const pend = [];
+  h.deps.vad = endPieceVad(h, () => new Promise((r) => { pend.push(r); }));
+  h.call = voiceCreateCall(h.deps); await h.call.start(); h.log.length = 0;
+  h.handlers.onSpeechBegin(); h.handlers.onSpeechStart();
+  h.call.setMuted(true); await tick();
+  h.handlers.onSpeechEnd({ text: 'the first statement' }); await tick(30);   // the detector delivered the cut piece; its restart is still running
+  h.running = false; h.call.setMuted(false);
+  h.handlers.onSpeechBegin(); h.handlers.onSpeechStart();   // speaking again at once
+  h.call.setMuted(true); await tick();
+  assert.strictEqual(count(h, 'endPiece'), 1, 'one cut at a time');
+  pend.shift()(true); await tick(30);
+  assert.strictEqual(count(h, 'endPiece'), 2, 'the newer piece is cut after the first');
+  h.handlers.onSpeechEnd({ text: 'and the second one' }); pend.shift()(true); await tick(30);
+  assert.deepStrictEqual(h.sent, ['the first statement', 'and the second one']);
+});
+
 test('review r1: hang-up while the cut at Mute runs: no reopen, nothing sent afterwards, no error', async () => {
   const h = harness(); let release;
   h.deps.vad = endPieceVad(h, () => new Promise((r) => { release = () => r(false); }));
