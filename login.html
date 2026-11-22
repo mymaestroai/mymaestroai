@@ -63,6 +63,8 @@
   .error.on { display: block; }
   .error.warn { background: rgba(245, 166, 35, .1); border-color: rgba(245, 166, 35, .35); color: var(--warning); }
   .error.ok { background: rgba(0, 211, 149, .1); border-color: rgba(0, 211, 149, .35); color: var(--success); }
+  .forgot { margin-top: 8px; font-size: 12px; color: var(--text-dim); line-height: 1.4; }
+  .forgot code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; word-break: break-word; }
   .foot { margin-top: 16px; font-size: 12px; color: var(--text-dim); text-align: center; }
   #loading { color: var(--text-dim); font-size: 13px; }
 </style>
@@ -80,6 +82,7 @@
     <input type="email" id="login-email" name="username" autocomplete="username" inputmode="email" autocapitalize="none" spellcheck="false" required>
     <label for="login-password">Password</label>
     <input type="password" id="login-password" name="password" autocomplete="current-password" required>
+    <div class="forgot" id="login-forgot">Forgot it? On the computer that runs your Maestro, run: <code>mymaestro reset-password &lt;your email&gt;</code></div>
     <button class="primary" type="submit">Sign in</button>
     <div class="error" id="login-error"></div>
   </form>

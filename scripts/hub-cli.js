@@ -16,6 +16,7 @@
  *   mymaestro backups                list the backups on this computer and in your backup folders
  *   mymaestro restore <file|latest>  put a backup back: its password, what changes, then RESTORE (--recovery-key; --undo: the setup before)
  *   mymaestro reset-2fa <email>      turn off two-factor for an account (lost phone); it is set up again at next sign-in
+ *   mymaestro reset-password <email>   set a new password for an account (forgotten password); asks for it twice, hidden
  *   mymaestro service install|remove start by itself at boot (Linux) or login (Mac)
  *   mymaestro move-home [--yes]      move shared folders (share/, users/...) out of your home folder into the install; --yes does it
  *   mymaestro face install <folder|owl> [--id <slug>]   add a character pack (the voice call face) from a folder, or download one (owl)
@@ -47,6 +48,69 @@ function askHidden(q) {
     rl._writeToOutput = (str) => { if (str.includes(q)) process.stdout.write(q); };
     rl.question(q, (a) => { rl.close(); process.stdout.write('\n'); resolve(a); });
   });
+}
+
+// Reads one line from the terminal without echoing it: raw mode, Enter ends, Backspace edits, Ctrl-C restores the terminal and exits 130.
+// The typed characters are never written anywhere. Only for a real terminal (the caller checks); tests inject their own reader.
+function readHidden(q) {
+  return new Promise((resolve) => {
+    const stdin = process.stdin;
+    let chars = [];
+    const onTerm = () => { restore(); process.stdout.write('\n'); process.exit(143); };
+    const onHup = () => { restore(); process.stdout.write('\n'); process.exit(129); };
+    function restore() {
+      try { stdin.setRawMode(false); } catch { /* not a terminal any more */ }
+      stdin.removeListener('data', onData);
+      process.removeListener('exit', restore);
+      process.removeListener('SIGTERM', onTerm);
+      process.removeListener('SIGHUP', onHup);
+      try { stdin.pause(); } catch { /* closed */ }
+    }
+    function onData(chunk) {
+      // Arrow keys and other escape sequences arrive as one chunk starting with ESC: they are not part of the password.
+      const text = String(chunk).replace(/\u001b\[[0-9;?]*[ -\/]*[@-~]|\u001b[@-~]?/g, '');
+      for (const ch of Array.from(text)) {
+        if (ch === '\r' || ch === '\n') { restore(); process.stdout.write('\n'); resolve(chars.join('')); return; }
+        if (ch === '\u0003') { restore(); process.stdout.write('\n'); process.exit(130); }
+        if (ch === '\u007f' || ch === '\b') { chars.pop(); continue; }
+        if (ch >= ' ') chars.push(ch);
+      }
+    }
+    process.once('exit', restore);
+    process.once('SIGTERM', onTerm);
+    process.once('SIGHUP', onHup);
+    process.stdout.write(q);
+    stdin.setEncoding('utf8');
+    stdin.setRawMode(true);
+    stdin.resume();
+    stdin.on('data', onData);
+  });
+}
+
+// `mymaestro reset-password <email>`: returns the exit code (0 = the password was set). `readHidden` can be injected for tests.
+async function resetPassword(login, { a = null, read = readHidden, interactive = !!(process.stdin.isTTY && process.stdout.isTTY), say = out, sayErr = (s) => process.stderr.write(s + '\n'), policy = null } = {}) {
+  if (!login) { sayErr('Usage: mymaestro reset-password <email>'); return 1; }
+  if (!interactive) { sayErr('reset-password asks for the new password in a terminal; run it in a terminal on the computer that runs your Maestro.'); return 1; }
+  a = a || auth();
+  const check = policy || require(path.join(DIR, 'lib', 'auth')).passwordPolicy;
+  const u = a.findByLogin(login);
+  if (!u) { sayErr(`No account "${login}".`); return 1; }
+  let pw = null;
+  for (let tries = 0; tries < 3 && pw === null; tries++) {
+    const first = await read('New password: ');
+    const problem = check(first);
+    if (problem) { say(problem); continue; }
+    const second = await read('Type it again: ');
+    if (first !== second) { say('The two passwords are not the same. Try again.'); continue; }
+    pw = first;
+  }
+  if (pw === null) { sayErr('Too many tries. The password was not changed.'); return 1; }
+  const r = a.setPassword(u.id, pw, { by: 'cli' });
+  if (!r.ok) { sayErr(r.error); return 1; }
+  a.clearFailures(u.login);
+  say(`Password set for ${u.login}. Every other sign-in of this account was signed out. Sign in with the new password; if the phone with two-factor is lost too, run: mymaestro reset-2fa ${u.login}`);
+  if (u.disabled) say('This account is turned off; an admin can turn it back on on the Users page (account menu → Users → Enable).');
+  return 0;
 }
 
 function ask(q) {
@@ -357,6 +421,10 @@ const commands = {
     const r = a.totpDisable(u.id, { by: 'cli' }); if (!r.ok) fail(r.error);
     out(`Two-factor is off for ${u.login}. Sign in with the password, then set up two-factor again (account menu → Security).`);
   },
+  async 'reset-password'() {
+    const code = await resetPassword(argv[1]);
+    if (code) process.exit(code);
+  },
   service() {
     const sub = argv[1];
     if (sub === 'install') {
@@ -522,11 +590,13 @@ const commands = {
     out(unfinished ? `To create the missing ones, open ${URL_BASE}/welcome on this computer.` : `To add them, open ${URL_BASE}/?team=setup on this computer and choose Set up your team.`);
   },
   version() { const { v, commit, channel } = version(); out(`${PRODUCT} ${v} (${commit}, ${channel} channel)`); },
-  // The help is the comment block at the top of this file: lines 4 to 26 (one more than before `team` was listed).
-  help() { out(fs.readFileSync(__filename, 'utf8').split('\n').slice(3, 26).map(l => l.replace(/^ \* ?/, '')).join('\n')); },
+  // The help is the comment block at the top of this file: lines 4 to 27 (one more than before `reset-password` was listed).
+  help() { out(fs.readFileSync(__filename, 'utf8').split('\n').slice(3, 27).map(l => l.replace(/^ \* ?/, '')).join('\n')); },
 };
 
-(async () => {
+module.exports = { resetPassword, readHidden };   // for tests: the command's logic with an injectable password reader
+
+if (require.main === module) (async () => {
   const fn = commands[cmd] || (cmd === '--help' || cmd === '-h' ? commands.help : null);
   if (!fn) { out(`Unknown command "${cmd}".\n`); commands.help(); process.exit(2); }
   await fn();
