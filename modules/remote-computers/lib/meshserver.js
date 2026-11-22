@@ -269,6 +269,14 @@ function createMeshServer({ runtimeDir, home, settings, spawn = childProcess.spa
   const helpers = () => ({ ...agentFiles });
   const restartCommand = () => `sudo systemctl restart ${serviceName}`;
   async function bootstrapService() {
+    let reachedDownload = false;
+    try { return await bootstrapServiceRun(() => { reachedDownload = true; }); } catch (e) {
+      // A refusal that is not about the download (a bad path, a quote in a folder name) must not leave an old download failure on the page.
+      if (!reachedDownload && agentFiles.state === 'failed') agentFiles = { state: 'idle', bytes: 0, totalBytes: 0, error: null };
+      throw e;
+    }
+  }
+  async function bootstrapServiceRun(reachDownload) {
     const cfg = configFor(settings, { service: true });
     const cfgText = JSON.stringify(cfg, null, 2) + '\n';
     const existing = readAccountsStrict();
@@ -296,6 +304,7 @@ function createMeshServer({ runtimeDir, home, settings, spawn = childProcess.spa
     if (/[\r\n]/.test(allowed)) throw new Error('The allowed addresses are not valid.');
     const command = installCommand();
     // The service has no internet, so the agent programs are put into the runtime now; the root script copies the runtime into the service.
+    reachDownload();
     agentFiles = { state: 'downloading', bytes: 0, totalBytes: 0, error: null };
     try {
       await ensureAgents({ runtimeDir, log, onProgress: (p) => {
@@ -341,13 +350,24 @@ function createMeshServer({ runtimeDir, home, settings, spawn = childProcess.spa
     const my = epoch;
     const alive = () => { if (epoch !== my) throw cancelled(); };
     // accounts.json left by "Set it up" for the locked-down service (a request nobody ran, no installed.json) does not mean the accounts exist in
-    // MeshCentral's own database: the root script was meant to make them in the service's data folder. Then they are made here, with fresh passwords.
+    // MeshCentral's own database: the root script was meant to make them in the service's data folder. Then they are made here.
+    // The accounts are made in MeshCentral's database with the passwords ALREADY in accounts.json (an administrator's service install running at the same
+    // moment gets the very same credentials, so no mismatch is possible), accounts.json is marked hubMade, and the request file is never removed
+    // (an install in progress may still read it). Once hubMade is there, a request nobody ran changes nothing here.
     const staleRequest = fs.existsSync(serviceRequestFile) && !fs.existsSync(serviceInstalledFile);
-    if (readAccountsStrict() && !staleRequest) return { created: false };
+    let existing = null, readError = null;
+    try { existing = readAccountsStrict(); } catch (e) { readError = e; }
+    if (readError && !staleRequest) throw readError;
+    if (existing && (!staleRequest || existing.hubMade === true)) return { created: false };
     if (isRunning()) throw new Error('The server is running; the first accounts can only be made while it is stopped.');
     writeConfig();
     try { fs.unlinkSync(paths.pendingFile); } catch { /* none, as it should be */ }
-    const accountPass = { admin: crypto.randomBytes(24).toString('base64url'), maestro: crypto.randomBytes(24).toString('base64url') };
+    // existing is only set here for a stale request with a usable admin/agent pair: the same passwords are kept. Otherwise (no file, or one that cannot be used) fresh ones.
+    const keep = existing || null;
+    const accountPass = keep
+      ? { admin: keep.admin.pass, maestro: keep.agent.pass }
+      : { admin: crypto.randomBytes(24).toString('base64url'), maestro: crypto.randomBytes(24).toString('base64url') };
+    const names = keep ? { admin: keep.admin.user, maestro: keep.agent.user } : { admin: 'admin', maestro: 'maestro' };
     const secrets = [accountPass.admin, accountPass.maestro];
     const step = async (what, extra, hashed) => {
       alive();
@@ -358,26 +378,27 @@ function createMeshServer({ runtimeDir, home, settings, spawn = childProcess.spa
       return { err, out, sec, ok: /\bDone\./.test(out) && !(err && err.killed), what };
     };
     const fail = (r) => new Error(`Could not ${r.what}: ${tailLines(r.out, r.sec) || clean(redact(r.err && r.err.message, r.sec), 120) || 'no output'}`);
-    const account = async (user, pass) => {
+    const account = async (role, user, pass) => {
       const h = hashPassword(pass);
-      let r = await step(`create the ${user === 'admin' ? 'admin' : 'agent'} account`, ['--createaccount', user, '--hashpass', h.arg], h);
+      let r = await step(`create the ${role} account`, ['--createaccount', user, '--hashpass', h.arg], h);
       if (!r.ok && /already exists/i.test(r.out)) {
-        r = await step(`reset the ${user === 'admin' ? 'admin' : 'agent'} account's password`, ['--resetaccount', user, '--hashpass', h.arg], h);
+        r = await step(`reset the ${role} account's password`, ['--resetaccount', user, '--hashpass', h.arg], h);
       }
       if (!r.ok) throw fail(r);
     };
-    await account('admin', accountPass.admin);
-    const adm = await step('make admin an administrator', ['--adminaccount', 'admin'], null);
+    await account('admin', names.admin, accountPass.admin);
+    const adm = await step('make admin an administrator', ['--adminaccount', names.admin], null);
     if (!adm.ok) throw fail(adm);
-    await account('maestro', accountPass.maestro);
+    await account('agent', names.maestro, accountPass.maestro);
     alive();
+    // accounts.json is written last, only when every step worked. hubMade: the accounts exist in MeshCentral's own database now.
     writeFileAtomic(paths.accountsFile, JSON.stringify({
-      admin: { user: 'admin', pass: accountPass.admin },
-      agent: { user: 'maestro', pass: accountPass.maestro },
-      createdAt: new Date(now()).toISOString(),
+      admin: { user: names.admin, pass: accountPass.admin },
+      agent: { user: names.maestro, pass: accountPass.maestro },
+      ...(keep && keep.person !== undefined ? { person: keep.person } : {}),
+      createdAt: keep && keep.createdAt ? keep.createdAt : new Date(now()).toISOString(),
+      hubMade: true,
     }, null, 2) + '\n');
-    // The request holds the hashes of the old passwords and is stale now.
-    if (staleRequest) { try { fs.unlinkSync(serviceRequestFile); } catch { /* already gone */ } }
     return { created: true };
   }
 

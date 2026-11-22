@@ -145,7 +145,8 @@ module.exports = {
       const platform = (ctx && ctx.platform) || process.platform;
       if (platform !== 'linux' && platform !== 'darwin') return { ok: false, summary: LINUX_ONLY };
       try {
-        const text = await ctx.callTool('health', {});
+        // Health only looks; a failed helper download is started again only when the person pressed Try again (ctx.tryAgain).
+        const text = await ctx.callTool('health', ctx.tryAgain === true ? { retry: true } : {});
         const h = ctx.parse(text);
         if (!h || typeof h !== 'object') return { ok: false, summary: String(text || 'The server sent a reply that could not be read.').slice(0, 300) };
         const warnings = Array.isArray(h.warnings) ? h.warnings.filter((w) => typeof w === 'string').slice(0, 5) : [];

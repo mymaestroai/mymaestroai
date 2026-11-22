@@ -59,7 +59,7 @@ const TOOLS = [
   { name: 'desktop_endpoint', description: 'Used by the hub only. Where the desktop viewer reaches the server: port, certificate name and the certificate to trust.', inputSchema: obj({ session: { type: 'string' } }, ['session']) },
   { name: 'desktop_connect', description: 'Used by the hub only. Starts the desktop tunnel of a live session and returns the query for the viewer\'s connection.', inputSchema: obj({ session: { type: 'string' }, tunnelid: { type: 'string', pattern: '^[A-Za-z0-9]{6,64}$' } }, ['session', 'tunnelid']) },
   { name: 'desktop_end', description: 'Used by the hub only. Ends a desktop session: by its session, or by the computer (nodeid) and the start time of the session when the hub no longer knows the session, after a restart.', inputSchema: obj({ session: { type: 'string' }, nodeid: { type: 'string', maxLength: 300 }, start: { type: 'number' }, reason: { type: 'string', maxLength: 40 } }) },
-  { name: 'health', description: 'Whether the server runs and its device group exists. Used by the nightly check.', inputSchema: obj() },
+  { name: 'health', description: 'Whether the server runs and its device group exists. Used by the nightly check.', inputSchema: obj({ retry: { type: 'boolean', description: 'Start a failed helper-program download again. Used by the setup page\'s Try again.' } }) },
   { name: 'start', description: 'Starts the server (and makes it ready) if it is not running. Used by the setup only.', inputSchema: obj() },
   { name: 'installer_link', description: 'A one-time link to download the helper for a computer. Used by the setup only.', inputSchema: obj() },
   { name: 'computers_status', description: 'The names, systems and online state of the computers that are set up. Used by the setup only.', inputSchema: obj() },
@@ -297,14 +297,36 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
     return startP;
   }
 
-  async function toolHealth() {
+  // Service mode: the helper-program download runs in the background (one at a time; mesh.bootstrap joins a run that is going).
+  let helperBoot = null;
+  function startHelperBoot() {
+    if (helperBoot) return helperBoot;
+    let p;
+    try { p = Promise.resolve(mesh.bootstrap()); } catch (e) { p = Promise.reject(e); }
+    const mine = { done: false };
+    helperBoot = mine;
+    mine.promise = p.then(() => { if (/^Could not download the MeshCentral agent files/.test(state.lastError || '')) state.lastError = null; }, (e) => { if (e && e.code !== 'ECANCEL' && !/^Waiting for setup/.test(e.message)) state.lastError = clean(e.message || e.code, 400); })
+      .then(() => { mine.done = true; if (helperBoot === mine) helperBoot = null; });
+    return mine;
+  }
+  // Health only looks. It never restarts a failed download by itself: that is asked for with { retry: true } (the page's Try again).
+  async function toolHealth(args) {
     let serviceNow = null;   // service mode: look at the service again on every call
-    // While the helper programs download, health answers at once (it must not wait for the download, or the page could not show how far it is).
-    // After a failed download, a look at the service starts the download again in the background (that is what "Try again" does).
-    const dl = mesh && typeof mesh.helpers === 'function' ? mesh.helpers().state : 'idle';
-    if (mode === 'service' && mesh && supported && !state.waiting && !stopped && dl === 'failed') mesh.checkService().catch(() => {});
-    else if (mode === 'service' && mesh && supported && !state.waiting && !stopped && dl !== 'downloading') {
-      try { serviceNow = await mesh.checkService(); } catch (e) { if (e && e.code !== 'ECANCEL' && !/^Waiting for setup/.test(e.message)) state.lastError = clean(e.message || e.code, 400); }
+    const helperState = () => (mesh && typeof mesh.helpers === 'function' ? mesh.helpers().state : 'idle');
+    if (mode === 'service' && mesh && supported && !state.waiting && !stopped) {
+      let dl = helperState();
+      if (dl === 'failed' && args && args.retry === true) { startHelperBoot(); dl = helperState(); }   // answers at once: 'downloading'
+      else if (dl === 'idle' || dl === 'downloading') {
+        // Start (or join) the background run and answer at once with the progress: the first reader never waits for the download.
+        const run = startHelperBoot();
+        await Promise.race([run.promise, new Promise((r) => setImmediate(r))]);
+        dl = helperState();
+        // Nothing to download (the service is installed with these settings, or the run was refused for another reason): look at the service now.
+        if (dl === 'idle' && run.done) dl = 'done';
+      }
+      if (dl === 'done') {
+        try { serviceNow = await mesh.checkService(); } catch (e) { if (e && e.code !== 'ECANCEL' && !/^Waiting for setup/.test(e.message)) state.lastError = clean(e.message || e.code, 400); }
+      }
     }
     const st = mesh ? mesh.status() : { running: false, restarts: 0, lastError: null };
     const out = {

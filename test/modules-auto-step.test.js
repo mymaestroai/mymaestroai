@@ -357,6 +357,27 @@ test('r3: a run with poll: true does one check and no wait', async () => {
   } finally { r.cleanup(); }
 });
 
+test('r3 round 3: input.tryAgain === true puts tryAgain into the check ctx, for the first look only; nothing else does', async () => {
+  const r = rig(); try {
+    r.auto.prepare = PREPARE_OK;
+    r.auto.check = () => ({ ok: true, summary: 'ok', lines: [] });
+    const seen = () => r.auto.calls.filter(c => c[0] === 'server').map(c => c[1].tryAgain === true);
+    await r.mods.runStep('auto-demo', 'setup', { tryAgain: true });
+    assert.deepStrictEqual(seen(), [true]);
+    await r.mods.runStep('auto-demo', 'setup', {});
+    await r.mods.runStep('auto-demo', 'setup', { poll: true });
+    await r.mods.runStep('auto-demo', 'setup', { tryAgain: 'yes' });   // only exactly true counts
+    assert.deepStrictEqual(seen(), [true, false, false, false]);
+    await r.mods.check('auto-demo', 'server');
+    assert.deepStrictEqual(seen(), [true, false, false, false, false]);
+    // a retry loop inside the step: the first look carries tryAgain, the looks after it do not (a second failure must not restart the download again)
+    const asked = [];
+    r.auto.check = (ctx) => { asked.push(ctx.tryAgain === true); return asked.length < 3 ? { ok: false, retry: true, summary: 'getting ready', lines: [] } : { ok: true, summary: 'ok', lines: [] }; };
+    await r.mods.runStep('auto-demo', 'setup', { tryAgain: true });
+    assert.deepStrictEqual(asked, [true, false, false]);
+  } finally { r.cleanup(); }
+});
+
 test('r3: check() passes tryAgain through like retry; a tryAgain failure is still a plain failure of the step (no waiting)', async () => {
   const r = rig(); try {
     r.auto.prepare = PREPARE_OK;

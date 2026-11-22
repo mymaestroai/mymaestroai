@@ -520,7 +520,7 @@ function autoAreaHtml(s) {
     // still getting ready: a plain box, no red; the page looks again by itself
     h += `<div class="msg show info" id="auto-waiting">${esc((a.check && a.check.summary) || 'It is getting ready.')}</div>`;
   } else if (a.tryAgain) {
-    h += `<div class="msg show info" id="auto-tryagain">${esc((a.check && a.check.summary) || a.error || '')}</div><div class="actions"><button class="primary" id="btn-tryagain" onclick="runAutoStep('${esc(s.id)}', {}, this)">Try again</button></div>`;
+    h += `<div class="msg show info" id="auto-tryagain">${esc((a.check && a.check.summary) || a.error || '')}</div><div class="actions"><button class="primary" id="btn-tryagain" onclick="runAutoStep('${esc(s.id)}', { tryAgain: true }, this)">Try again</button></div>`;
   }
   if (a.done) {
     const idx = current.steps.findIndex(x => x.id === s.id);
@@ -556,7 +556,7 @@ async function autoPoll(stepId, m) {
   try { await autoStepCall(stepId, a.choices || {}, {}, true, m); } finally { autoPollBusy = false; }
 }
 async function autoStepCall(stepId, choices, extra, poll, m) {
-  const input = { ...(Object.keys(choices).length ? { choices } : {}), ...(extra && extra.adminChoice ? { adminChoice: true } : {}), ...(poll ? { poll: true } : {}) };
+  const input = { ...(Object.keys(choices).length ? { choices } : {}), ...(extra && extra.adminChoice ? { adminChoice: true } : {}), ...(extra && extra.tryAgain === true ? { tryAgain: true } : {}), ...(poll ? { poll: true } : {}) };
   try {
     const r = await api('POST', `/api/modules/${m.id}/step`, { step: stepId, input });
     if (current !== m) return;

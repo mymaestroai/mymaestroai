@@ -395,14 +395,27 @@ test('r3: tryAgain shows a plain box and a Try again button that runs the step a
   await t.runAutoStep('setup', {}, null);
   const out = els['step-area'].innerHTML;
   assert.match(out, /class="msg show info" id="auto-tryagain">The helper programs/);
-  assert.match(out, /<button class="primary" id="btn-tryagain" onclick="runAutoStep\('setup', \{\}, this\)">Try again<\/button>/);
+  assert.match(out, /<button class="primary" id="btn-tryagain" onclick="runAutoStep\('setup', \{ tryAgain: true \}, this\)">Try again<\/button>/);
   assert.ok(!/class="msg show err"/.test(out));
   assert.ok(!t.hasPollTimer());
+  assert.deepStrictEqual(calls[0].body, { step: 'setup', input: {} }, 'the ordinary button sends no tryAgain');
   state.responses.push(waitingAnswer());
-  await t.runAutoStep('setup', {}, null);
+  await t.runAutoStep('setup', { tryAgain: true }, null);   // what the Try again button calls
+  assert.deepStrictEqual(calls[1].body, { step: 'setup', input: { tryAgain: true } }, 'Try again asks for the retry');
   assert.strictEqual(calls.length, 2);
   assert.strictEqual(t.getAuto().setup.waiting, true);
   assert.strictEqual(t.getAuto().setup.tryAgain, undefined);
+});
+
+test('r3 round 3: after Try again the page polls with { poll: true } only; the poll never carries tryAgain', async () => {
+  const { t, calls, state } = load(); const m = detail(); t.setCurrent(m); t.setSelected('setup'); t.setPollMs(15);
+  state.responses.push(waitingAnswer(), waitingAnswer());
+  await t.runAutoStep('setup', { tryAgain: true }, null);
+  assert.deepStrictEqual(calls[0].body, { step: 'setup', input: { tryAgain: true } });
+  await wait(60);
+  assert.ok(calls.length >= 2);
+  for (const c of calls.slice(1)) assert.deepStrictEqual(c.body, { step: 'setup', input: { poll: true } });
+  t.setSelected('done');
 });
 
 test('r3: an ordinary failure is still the red error, with no Try again button', async () => {
