@@ -33,41 +33,49 @@ test('settingsOnlyRequested: only ?settings-only=1 asks for it; the page start i
 
 test('the settings-only page starts nothing else: no event stream, re-sync, polling or notifications of its own', () => {
   for (const head of ['function resync(force = false) {', 'function startHubEventMonitor() {', 'async function pollAgentStatus() {', 'function catchUpAll() {',
-    'async function refreshScheduleBadge() {', 'async function refreshSpendToday() {', 'function activeJobsSync() {', 'async function pollWorkerStatus() {',
+    'async function refreshScheduleBadge() {', 'function activeJobsSync() {', 'async function pollWorkerStatus() {',
     'function refreshWorkerList() {', 'async function toggleDesktopPush() {']) {
     const at = app.indexOf('    ' + (head.startsWith('async') ? '' : '') + head);
     assert.ok(at >= 0, head);
     assert.match(app.slice(at, at + head.length + 140), /\n\s+if \(globalThis\.mmSettingsOnly === true\) return;/, head);
   }
+  // review r1: the Spend section reads the ledger once itself (its caps must show): only the background timer is off
+  assert.ok(!/mmSettingsOnly/.test(fnSrc(app, 'async function refreshSpendToday() {')));
+  assert.match(app, /if \(globalThis\.mmSettingsOnly !== true\) setInterval\(refreshSpendToday, SPEND_REFRESH_MS\);/);
+  assert.match(app, /if \(window\.HandOffCard && globalThis\.mmSettingsOnly !== true\) HandOffCard\.track\(/);
+  assert.match(app, /if \(isMobile\(\) && globalThis\.mmSettingsOnly !== true\) \{ setTimeout\(openSidebar, 300\); \}/);
+  assert.match(app, /if \(SETTINGS_ONLY\) document\.documentElement\.classList\.add\('mm-settings-only'\);/);
   assert.match(fnSrc(app, 'async function paintDesktopPush() {'), /if \(globalThis\.mmSettingsOnly === true\) \{[^}]*btn\.disabled = true;/);
   assert.match(app, /const SETTINGS_ONLY = settingsOnlyRequested\(location\.search\);\n\s+globalThis\.mmSettingsOnly = SETTINGS_ONLY;/);
   // the start: who is signed in and the dialog, nothing else (no loadMe: no Simple start-up, no resends, no notices)
   const start = fnSrc(SO, 'async function settingsOnlyStart() {');
-  assert.ok(!/loadMe\(|loadAgents\(|startHub|startNotify|openTargets|simpleBoot/.test(start), start);
+  assert.ok(!/loadMe\(|startHub|startNotify|openTargets|simpleBoot/.test(start), start);   // loadAgents only (review r1): the sections that list agents
 });
 
 function soHarness({ admin = true, parentIsSelf = false } = {}) {
-  const posted = [], calls = [];
+  const posted = [], calls = [], layers = [];
   const listeners = {};
   const docEl = { classList: { added: [], add(c) { this.added.push(c); } } };
   let overlay = null;
   const parent = { postMessage: (m, o) => posted.push([m, o]) };
   const win = { addEventListener: (t, f) => { listeners[t] = f; } };
   win.parent = parentIsSelf ? win : parent;
-  const doc = { documentElement: docEl, body: {}, getElementById: (id) => (id === 'st-overlay' ? overlay : null) };
+  const docListeners = {};
+  const doc = { documentElement: docEl, body: {}, getElementById: (id) => (id === 'st-overlay' ? overlay : null), addEventListener: (t, f, c) => { docListeners[t] = { f, c }; } };
   const env = {
-    window: win, document: doc, location: { origin: 'https://hub.example' },
+    window: win, document: doc, location: { origin: 'https://hub.example', href: 'https://hub.example/?settings-only=1' },
     fetch: async () => ({ ok: true, status: 200, json: async () => ({ isAdmin: admin, user: { id: 'u1' } }) }),
     isHubAdmin: () => admin,
-    openSettings: async () => { calls.push('openSettings'); overlay = { id: 'st-overlay' }; },
+    openSettings: async () => { calls.push('openSettings'); overlay = { id: 'st-overlay' }; layers.length = 0; layers.push({ el: overlay }); },
+    loadAgents: async () => { calls.push('loadAgents'); },
     stModal: (html) => { calls.push(['stModal', html]); overlay = { id: 'st-overlay' }; },
-    dialogGuard: { requestClose: (o, how) => { calls.push(['requestClose', how]); return env.nextClose; } },
+    dialogGuard: { requestClose: (o, how) => { calls.push(['requestClose', how, o]); return env.nextClose; }, layers: () => layers.slice(), isDirty: (el) => !!el.dirty },
     MutationObserver: class { constructor(cb) { env.observe = cb; } observe() {} },
     nextClose: 'closed',
   };
-  const f = new Function(...Object.keys(env).filter(k => k !== 'nextClose' && k !== 'observe'), `${SO}; return { settingsOnlyStart, settingsOnlyMessage, settingsOnlyWatch };`);
+  const f = new Function(...Object.keys(env).filter(k => k !== 'nextClose' && k !== 'observe'), `${SO}; return { settingsOnlyStart, settingsOnlyMessage, settingsOnlyWatch, settingsOnlyLeaveGuard };`);
   const api = f(...Object.keys(env).filter(k => k !== 'nextClose' && k !== 'observe').map(k => env[k]));
-  return { api, env, posted, calls, listeners, parent, win, setOverlay: (o) => { overlay = o; } };
+  return { api, env, posted, calls, listeners, parent, win, layers, docListeners, setOverlay: (o) => { overlay = o; } };
 }
 
 test('settingsOnlyStart: an admin gets the dialog and the parent hears "ready"; a member gets a plain line, never the dialog', async () => {
@@ -75,11 +83,14 @@ test('settingsOnlyStart: an admin gets the dialog and the parent hears "ready"; 
   await h.api.settingsOnlyStart();
   assert.deepStrictEqual(h.env.document.documentElement.classList.added, ['mm-settings-only']);
   assert.ok(h.calls.includes('openSettings'));
+  assert.ok(h.calls.indexOf('loadAgents') >= 0 && h.calls.indexOf('loadAgents') < h.calls.indexOf('openSettings'), 'review r1: the agents first (sandbox, subscriptions)');
+  assert.ok(h.docListeners.click && h.docListeners.click.c === true, 'the leave guard, in the capture phase');
   assert.deepStrictEqual(h.posted, [[{ type: 'mm-settings-ready' }, 'https://hub.example']]);
   assert.strictEqual(typeof h.listeners.message, 'function');
   const m = soHarness({ admin: false });
   await m.api.settingsOnlyStart();
   assert.ok(!m.calls.includes('openSettings'));
+  assert.ok(!m.calls.includes('loadAgents'));
   assert.match(m.calls.find(c => Array.isArray(c) && c[0] === 'stModal')[1], /Settings are kept by the admins of this Maestro\./);
 });
 
@@ -94,11 +105,39 @@ test('settingsOnlyMessage: only a close request from the parent at the same orig
   assert.deepStrictEqual(h.posted.pop(), [{ type: 'mm-settings-kept' }, 'https://hub.example'], 'Discard changes? is asked: the sheet stays');
   h.env.nextClose = 'busy'; msg({});
   assert.deepStrictEqual(h.posted.pop(), [{ type: 'mm-settings-kept' }, 'https://hub.example'], 'a save running: the sheet stays');
-  h.env.nextClose = 'closed'; msg({});
+  h.env.nextClose = 'closed'; h.setOverlay(null); msg({});
   assert.strictEqual(h.posted.length, 0, 'closed is told by the watch when the dialog is gone');
+  h.setOverlay({ id: 'st-overlay' });
   assert.deepStrictEqual(h.calls.filter(c => Array.isArray(c) && c[0] === 'requestClose').map(c => c[1]), ['back', 'back', 'back']);
-  h.setOverlay(null); msg({});
+  // review r1: a box opened over Settings is closed first (its own question), and the sheet stays
+  const inner = { id: 'inner-box' };
+  h.layers.push({ el: inner });
+  h.env.nextClose = 'closed'; msg({});
+  assert.strictEqual(h.calls[h.calls.length - 1][2], inner, 'the innermost layer');
+  assert.deepStrictEqual(h.posted.pop(), [{ type: 'mm-settings-kept' }, 'https://hub.example'], 'Settings is still open: kept');
+  h.layers.length = 0; h.setOverlay(null); msg({});
   assert.deepStrictEqual(h.posted.pop(), [{ type: 'mm-settings-closed' }, 'https://hub.example'], 'no dialog open: closed at once');
+});
+
+test('review r1: a link or button that opens another page asks first when anything in the dialog is not saved', async () => {
+  const h = soHarness();
+  await h.api.settingsOnlyStart();
+  const guard = h.docListeners.click.f;
+  const ev = (t) => ({ target: { closest: () => t }, prevented: false, stopped: false, preventDefault() { this.prevented = true; }, stopImmediatePropagation() { this.stopped = true; } });
+  const link = (href, extra = {}) => ({ tagName: 'A', target: '', getAttribute: () => href, ...extra });
+  const before = h.calls.length;
+  let e = ev(link('/modules')); guard(e);
+  assert.strictEqual(e.prevented, false, 'nothing to lose: the page opens in the sheet');
+  h.layers[0].el.dirty = true;
+  for (const t of [link('/modules'), { tagName: 'BUTTON' }]) {
+    e = ev(t); guard(e);
+    assert.strictEqual(e.prevented, true); assert.strictEqual(e.stopped, true);
+    assert.deepStrictEqual(h.calls[h.calls.length - 1].slice(0, 2), ['requestClose', 'close']);
+  }
+  for (const t of [link('#x'), link('https://other.example/'), link('/modules', { target: '_blank' }), link('')]) { e = ev(t); guard(e); assert.strictEqual(e.prevented, false); }
+  e = ev(null); guard(e); assert.strictEqual(e.prevented, false, 'not a link');
+  assert.strictEqual(h.calls.length - before, 2);
+  assert.match(SO, /closest\('a\[href\], \[onclick\*="location\.href"\]'\)/);
 });
 
 test('settingsOnlyWatch: "closed" once the dialog is gone, once; a re-render (one overlay swapped for another) is not a close', async () => {
@@ -124,12 +163,12 @@ function sheetHarness() {
       querySelector: (sel) => e.parts[sel] };
     return e;
   }
-  const frameWin = { posted: [], postMessage(m, o) { this.posted.push([m, o]); }, location: { pathname: '/' } };
+  const frameWin = { posted: [], postMessage(m, o) { this.posted.push([m, o]); }, location: { pathname: '/', search: '?settings-only=1' } };
   const doc = {
     createElement: (t) => {
       const el = mkEl(t);
       const frame = mkEl('iframe'); frame.contentWindow = frameWin;
-      el.parts = { iframe: frame, '.ssh-msg': mkEl('p'), '.ssh-btns': mkEl('div'), '.ssh-retry': mkEl('button'), '.ssh-close': mkEl('button') };
+      el.parts = { iframe: frame, '.ssh-msg': mkEl('p'), '.ssh-btns': mkEl('div'), '.ssh-retry': mkEl('button'), '.ssh-close': mkEl('button'), '.ssh-bar': mkEl('div'), '.ssh-done': mkEl('button') };
       Object.defineProperty(el, 'innerHTML', { set(v) { el.html = v; } });
       return el;
     },
@@ -138,10 +177,10 @@ function sheetHarness() {
   const env = {
     document: doc, $: (id) => (id === 'menu' ? { classList: { remove() {} } } : null), dialogGuard: guard,
     window: { addEventListener: (t, f) => { listeners[t] = f; }, removeEventListener: (t) => { delete listeners[t]; } },
-    location: { origin: 'https://hub.example' },
+    location: { origin: 'https://hub.example' }, URLSearchParams,
     setTimeout: (f, ms) => { timers.push({ f, ms }); return timers.length; }, clearTimeout: (n) => { if (timers[n - 1]) timers[n - 1].f = null; },
   };
-  const api = new Function(...Object.keys(env), `${SH}; return { settingsSheetOpen, settingsSheetMessage, settingsSheetRequestClose, settingsSheetFailed, get: () => settingsSheet };`)(...Object.values(env));
+  const api = new Function(...Object.keys(env), `${SH}; return { settingsSheetOpen, settingsSheetMessage, settingsSheetRequestClose, settingsSheetFailed, settingsSheetFrameLoaded, get: () => settingsSheet };`)(...Object.values(env));
   return { api, els, guard, timers, listeners, frameWin };
 }
 
@@ -208,4 +247,47 @@ test('layout: the settings-only page hides the rest and fits a phone; the sheet 
   assert.match(idx, /html\.mm-settings-only \.st-row > input:not\(\[type="checkbox"\]\):not\(\[type="radio"\]\):not\(\[type="range"\]\), html\.mm-settings-only \.st-row > select \{ flex: 1 1 200px !important; width: auto !important; max-width: 100% !important; \}/);
   assert.match(mhtml, /#settings-sheet \{ position: fixed; inset: 0; z-index: 40;[^}]*padding: var\(--sat\) 0 var\(--sab\); \}/);
   assert.match(mhtml, /#settings-sheet\.ready \.ssh-wait \{ display: none; \}/);
+});
+
+test('review r1: the frame left Settings (sign-in page, a linked page): a Close bar, Back closes the sheet; a close nobody answers gives up', () => {
+  const h = sheetHarness();
+  h.api.settingsSheetOpen();
+  const s = h.api.get();
+  h.api.settingsSheetMessage({ source: h.frameWin, origin: 'https://hub.example', data: { type: 'mm-settings-ready' } });
+  h.api.settingsSheetFrameLoaded();   // still the Settings page
+  assert.strictEqual(s.ready, true); assert.strictEqual(s.el.parts['.ssh-bar'].hidden, true);
+  // Back once ready, and the frame never answers: the sheet closes by itself after 3 s
+  s.el.__dialogClose();
+  const t = h.timers[h.timers.length - 1];
+  assert.strictEqual(t.ms, 3000);
+  t.f();
+  assert.ok(s.el.removed, 'never stuck');
+  // the frame went to another page
+  const h2 = sheetHarness();
+  h2.api.settingsSheetOpen();
+  const s2 = h2.api.get();
+  h2.api.settingsSheetMessage({ source: h2.frameWin, origin: 'https://hub.example', data: { type: 'mm-settings-ready' } });
+  h2.frameWin.location = { pathname: '/modules', search: '' };
+  h2.api.settingsSheetFrameLoaded();
+  assert.strictEqual(s2.ready, false); assert.strictEqual(s2.away, true);
+  assert.strictEqual(s2.el.parts['.ssh-bar'].hidden, false, 'a Close bar (no Back on some phones)');
+  s2.el.__dialogClose();
+  assert.ok(s2.el.removed, 'Back closes at once: nothing of Settings is left');
+  assert.deepStrictEqual(h2.frameWin.posted, []);
+  // signed in again and back on Settings: the bar goes
+  const h3 = sheetHarness();
+  h3.api.settingsSheetOpen();
+  const s3 = h3.api.get();
+  h3.frameWin.location = { pathname: '/login', search: '?next=%2F' };
+  h3.api.settingsSheetFrameLoaded();
+  assert.strictEqual(s3.el.parts['.ssh-bar'].hidden, false);
+  h3.api.settingsSheetMessage({ source: h3.frameWin, origin: 'https://hub.example', data: { type: 'mm-settings-ready' } });
+  assert.strictEqual(s3.el.parts['.ssh-bar'].hidden, true);
+  assert.strictEqual(s3.ready, true);
+  // a kept answer stops the give-up timer
+  s3.el.__dialogClose();
+  h3.api.settingsSheetMessage({ source: h3.frameWin, origin: 'https://hub.example', data: { type: 'mm-settings-kept' } });
+  const t3 = h3.timers[h3.timers.length - 1];
+  assert.strictEqual(t3.f, null, 'cleared');
+  assert.ok(!s3.el.removed);
 });

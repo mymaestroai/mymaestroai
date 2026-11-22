@@ -14146,7 +14146,7 @@ function settingsSheetOpen() {
   const el = document.createElement('div');
   el.id = 'settings-sheet';
   el.setAttribute('role', 'dialog'); el.setAttribute('aria-label', 'Settings');
-  el.innerHTML = '<iframe title="Settings"></iframe>' +
+  el.innerHTML = '<div class="ssh-bar" hidden><button type="button" class="ssh-done">Close</button></div><iframe title="Settings"></iframe>' +
     '<div class="ssh-wait" role="status"><p class="ssh-msg">Opening Settings…</p>' +
     '<div class="ssh-btns" hidden><button type="button" class="ssh-retry">Try again</button><button type="button" class="ssh-close">Close</button></div></div>';
   document.body.appendChild(el);
@@ -14154,6 +14154,7 @@ function settingsSheetOpen() {
   el.__dialogClose = settingsSheetRequestClose;   // Back: the dialog in the frame decides (unsaved changes, a save running)
   el.querySelector('.ssh-retry').addEventListener('click', settingsSheetLoad);
   el.querySelector('.ssh-close').addEventListener('click', settingsSheetClosed);
+  el.querySelector('.ssh-done').addEventListener('click', settingsSheetClosed);   // shown once the frame left Settings
   settingsSheet.frame.addEventListener('load', settingsSheetFrameLoaded);
   window.addEventListener('message', settingsSheetMessage);
   dialogGuard.open(el);
@@ -14162,8 +14163,9 @@ function settingsSheetOpen() {
 function settingsSheetLoad() {
   const s = settingsSheet;
   if (!s) return;
-  s.ready = false;
+  s.ready = false; s.away = false;
   s.el.classList.remove('ready');
+  s.el.querySelector('.ssh-bar').hidden = true;
   s.el.querySelector('.ssh-msg').textContent = 'Opening Settings…';
   s.el.querySelector('.ssh-btns').hidden = true;
   clearTimeout(s.timer);
@@ -14177,33 +14179,42 @@ function settingsSheetFailed() {
   s.el.querySelector('.ssh-msg').textContent = "Settings didn't open. Check the connection and try again.";
   s.el.querySelector('.ssh-btns').hidden = false;
 }
-// A frame sent to the sign-in page (the session ended) shows that page: there is nothing in it to lose.
+// The frame left the Settings page (the sign-in page after the session ended, Data connectors, another page Settings
+// links to): that page shows as it is, with a Close bar, and Back closes the sheet (nothing of Settings is left to lose).
 function settingsSheetFrameLoaded() {
   const s = settingsSheet;
-  if (!s || s.ready) return;
-  let where = '';
-  try { where = s.frame.contentWindow.location.pathname; } catch { where = ''; }
-  if (where === '/login' || where === '/login.html') { clearTimeout(s.timer); s.el.classList.add('ready'); }
+  if (!s) return;
+  let loc = null;
+  try { loc = s.frame.contentWindow.location; } catch { loc = null; }
+  const onSettings = !!loc && loc.pathname === '/' && new URLSearchParams(loc.search).get('settings-only') === '1';
+  if (onSettings) return;
+  s.ready = false; s.away = true;
+  clearTimeout(s.timer); clearTimeout(s.closeTimer);
+  s.el.classList.add('ready');
+  s.el.querySelector('.ssh-bar').hidden = false;
 }
 function settingsSheetRequestClose() {
   const s = settingsSheet;
   if (!s) return;
-  if (!s.ready) { settingsSheetClosed(); return; }   // nothing opened in the frame: nothing to lose
-  try { s.frame.contentWindow.postMessage({ type: 'mm-settings-close' }, location.origin); } catch { settingsSheetClosed(); }
+  if (!s.ready) { settingsSheetClosed(); return; }   // nothing of Settings in the frame: nothing to lose
+  try { s.frame.contentWindow.postMessage({ type: 'mm-settings-close' }, location.origin); } catch { settingsSheetClosed(); return; }
+  // the dialog answers at once (closed, or kept with its question up); a frame that no longer answers never keeps the sheet
+  clearTimeout(s.closeTimer);
+  s.closeTimer = setTimeout(settingsSheetClosed, 3000);
 }
 function settingsSheetMessage(e) {
   const s = settingsSheet;
   if (!s || !e || e.source !== s.frame.contentWindow || e.origin !== location.origin) return;
   const type = e.data && e.data.type;
-  if (type === 'mm-settings-ready') { s.ready = true; clearTimeout(s.timer); s.el.classList.add('ready'); }
+  if (type === 'mm-settings-ready') { s.ready = true; s.away = false; clearTimeout(s.timer); s.el.classList.add('ready'); s.el.querySelector('.ssh-bar').hidden = true; }   // back on Settings (after signing in again)
   else if (type === 'mm-settings-closed') settingsSheetClosed();
-  else if (type === 'mm-settings-kept') dialogGuard.open(s.el);   // "Discard changes?" or a save running: the sheet stays, Back works again
+  else if (type === 'mm-settings-kept') { clearTimeout(s.closeTimer); dialogGuard.open(s.el); }   // "Discard changes?", a save running or an inner box closed: the sheet stays, Back works again
 }
 function settingsSheetClosed() {
   const s = settingsSheet;
   if (!s) return;
   settingsSheet = null;
-  clearTimeout(s.timer);
+  clearTimeout(s.timer); clearTimeout(s.closeTimer);
   window.removeEventListener('message', settingsSheetMessage);
   dialogGuard.closed(s.el);
   s.el.remove();

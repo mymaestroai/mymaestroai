@@ -2,6 +2,7 @@
     // The parameter only hides the rest of the page and starts nothing else; it grants nothing.
     const SETTINGS_ONLY = settingsOnlyRequested(location.search);
     globalThis.mmSettingsOnly = SETTINGS_ONLY;   // read by the functions that would start something (absent when they run on their own: false)
+    if (SETTINGS_ONLY) document.documentElement.classList.add('mm-settings-only');   // the rest of the page never shows
 
     // ── Session expiry: any same-origin API 401 means the login session is gone ──
     // The password-check endpoints answer 401 for a wrong password, so they keep their own error handling.
@@ -1573,7 +1574,7 @@
       return c && !c.isGroup && c.agent ? String(c.agent) : '';
     }
     // Hand-off cards above the message box (lib/ui-hand-off-card.js): follows the open one-agent chat.
-    if (window.HandOffCard) HandOffCard.track({ getAgent: filesActiveAgent, getContainer: () => document.getElementById('handoff-cards-' + window.__activeChatId), renderMarkdown: (t) => window.formatContentForSheets(t) });
+    if (window.HandOffCard && globalThis.mmSettingsOnly !== true) HandOffCard.track({ getAgent: filesActiveAgent, getContainer: () => document.getElementById('handoff-cards-' + window.__activeChatId), renderMarkdown: (t) => window.formatContentForSheets(t) });
     function filesOwnerParam() {
       const me = window.hubMe;
       if (!me || !me.isAdmin) return '';
@@ -6444,7 +6445,6 @@
     let spendRefreshTimer = null;
     const usd = (n) => `$${(Number(n) || 0).toFixed(2)}`;
     async function refreshSpendToday() {
-      if (globalThis.mmSettingsOnly === true) return;   // the settings-only page starts nothing else
       try {
         const r = await fetch('/api/ledger/today', { credentials: 'include', signal: AbortSignal.timeout(8000) });
         if (!r.ok) return;
@@ -6594,7 +6594,7 @@
       if (btn) { btn.disabled = false; setTimeout(() => { btn.className = 'st-test-btn'; btn.textContent = 'Save'; }, 3000); }
       return result;
     }
-    setInterval(refreshSpendToday, SPEND_REFRESH_MS);
+    if (globalThis.mmSettingsOnly !== true) setInterval(refreshSpendToday, SPEND_REFRESH_MS);   // the settings-only page: the Spend section reads it once itself
 
     // ── Desktop push notifications (optional; the same /sw.js the phone UI uses) ──
     function desktopPushSupported() {
@@ -6943,7 +6943,7 @@
       }
     }
     // Auto-open sidebar on mobile if no chats open
-    if (isMobile()) { setTimeout(openSidebar, 300); }
+    if (isMobile() && globalThis.mmSettingsOnly !== true) { setTimeout(openSidebar, 300); }
 
     // ── Sidebar collapse/expand ──
     function collapseSidebar() {
@@ -22970,7 +22970,11 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       window.addEventListener('message', settingsOnlyMessage);
       // a member has no Settings dialog on the desktop either (the gear is an admin control and the hub refuses its routes)
       if (!isHubAdmin()) stModal(`<h3>&#x2699;&#xFE0F; Settings</h3><p class="st-sub">Settings are kept by the admins of this Maestro.</p><div class="st-actions"><button class="st-btn secondary" onclick="dialogRequestClose(this)">Close</button></div>`);
-      else await openSettings();
+      else {
+        try { await loadAgents(); } catch { /* the sections that list agents say so */ }   // as the full page has them (sandbox, subscriptions)
+        await openSettings();
+      }
+      document.addEventListener('click', settingsOnlyLeaveGuard, true);
       settingsOnlyWatch();
       settingsOnlyPost('mm-settings-ready');
     }
@@ -22990,11 +22994,29 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (!e || e.source !== window.parent || e.origin !== location.origin) return;
       const type = e.data && e.data.type;
       if (type !== 'mm-settings-close') return;
-      const o = document.getElementById('st-overlay');
-      const how = o ? dialogGuard.requestClose(o, 'back') : 'none';
-      // 'confirm' (the "Discard changes?" question) or 'busy' (a save running): the sheet stays; 'closed' arrives through the watch
-      if (how !== 'closed' && how !== 'none') settingsOnlyPost('mm-settings-kept');
-      if (how === 'none') settingsOnlyPost('mm-settings-closed');
+      // Back closes the innermost layer first (a box opened over Settings, then Settings), as everywhere else
+      const ls = dialogGuard.layers();
+      const top = ls.length ? ls[ls.length - 1].el : document.getElementById('st-overlay');
+      if (!top) { settingsOnlyPost('mm-settings-closed'); return; }
+      const how = dialogGuard.requestClose(top, 'back');
+      // the "Discard changes?" question, a save running, or an inner box closed with Settings still open: the sheet stays.
+      // Settings itself closed: the watch says so.
+      if (how !== 'closed' || document.getElementById('st-overlay')) settingsOnlyPost('mm-settings-kept');
+    }
+    // A link or button in the dialog that opens another page of this hub: with changes not saved anywhere in the dialog, it
+    // asks first ("Discard changes?"), as Close does; with nothing to lose the page opens in the sheet.
+    function settingsOnlyLeaveGuard(e) {
+      const t = e.target && e.target.closest ? e.target.closest('a[href], [onclick*="location.href"]') : null;
+      if (!t) return;
+      if (String(t.tagName).toUpperCase() === 'A') {
+        const href = t.getAttribute('href') || '';
+        if (!href || href.startsWith('#') || t.target === '_blank') return;
+        try { if (new URL(href, location.href).origin !== location.origin) return; } catch { return; }
+      }
+      const ls = dialogGuard.layers();
+      if (!ls.some((l) => dialogGuard.isDirty(l.el))) return;
+      e.preventDefault(); e.stopImmediatePropagation();
+      dialogGuard.requestClose(ls[ls.length - 1].el, 'close');
     }
     // ── settings-only page (end) ──
 
