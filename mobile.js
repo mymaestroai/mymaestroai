@@ -3904,6 +3904,8 @@ const VOICE_MIC_LOST_LINE = 'I lost the microphone. Tap the button to try it aga
 // The frame watchdog: while the person is speaking, the detector sends a frame every 32 ms. No frame for VOICE_FRAME_GAP_MS means the audio no longer reaches it
 // (iOS interrupted it); one piece longer than VOICE_PIECE_MAX_MS is cut and sent. The check runs every VOICE_WATCHDOG_TICK_MS.
 const VOICE_FRAME_GAP_MS = 2000, VOICE_PIECE_MAX_MS = 60000, VOICE_WATCHDOG_TICK_MS = 500;
+// Mute mid-speech with a detector that cannot end a piece on request (no endPiece): how long the end that follows the silence is waited for.
+const VOICE_MUTE_END_MS = 5000;
 const VOICE_FRAMES_LOST_LINE = 'The microphone stopped sending sound, so I restarted it.';
 const VOICE_PIECE_LONG_LINE = 'You talked for over a minute, so I sent what I heard.';
 const VOICE_EMPTY_LINE = 'I didn\'t catch that.';   // the recognizer answered with no words at all for a piece of at least 1 s
@@ -4217,8 +4219,9 @@ function voiceCreateCall(deps) {
   // deps.keepAlive ({ start(), stop() }, optional): an inaudible sound that keeps a Bluetooth / car audio route awake. It starts with the call and
   // the first spoken line of the call waits until VOICE_CALL_LEAD_IN_MS after that (the route needs a moment to open, or the first syllable is lost).
   let leadInUntil = 0, keepAliveOn = false, micLost = false;
-  // Mute (setMuted, the call bar's Mute button). sinceUnmute: a piece of speech began after the last unmute (an end or misfire for one that began before is ignored).
-  let muted = false, sinceUnmute = true;
+  // Mute (setMuted, the call bar's Mute button). sinceUnmute: a piece of speech began after the last unmute (an end or misfire for one that began before is ignored,
+  // a stray fragment of the detector). muteEnd: the pieceId of the piece Mute ended at the tap (-1: none): its one end or misfire is taken, muted or not.
+  let muted = false, sinceUnmute = true, muteEnd = -1;
   let linkLost = false, linkWasLost = false, linkDropped = false;   // the connection to the server is lost (setLinkLost): nothing is reported as an error
   // Outage count: each loss adds one. A piece of speech remembers the count when it began (-1 if the link was already lost). The link state NEVER
   // discards a piece whose transcript arrived (the request itself is the test: speech heard during an outage is still sent to d.stt). It only decides
@@ -4718,7 +4721,7 @@ function voiceCreateCall(deps) {
   }
   // The VAD heard no real speech after all (a false start): the person is not speaking, and a reply that was cut by it is read on.
   function onMisfire() {
-    if (ended || muted || !sinceUnmute) return;
+    if (ended || (muteEnd !== pieceId && (muted || !sinceUnmute))) return;
     dropSpeech();
   }
   function dropSpeech() {
@@ -4744,7 +4747,10 @@ function voiceCreateCall(deps) {
     return typeof p === 'number' && Number.isFinite(p) && p < 0.35;
   }
   function onSpeechEnd(audio) {
-    if (ended || muted || !sinceUnmute) return Promise.resolve();   // muted: nothing is heard; just unmuted: a piece begun before it is not sent
+    // Muted: nothing is heard, except the piece Mute ended at the tap (muteEnd), which is sent. Just unmuted: an end with no speech begun since is a stray fragment.
+    const atMute = muteEnd === pieceId;
+    if (ended || (!atMute && (muted || !sinceUnmute))) return Promise.resolve();
+    if (atMute) muteEnd = -1;
     clearBegin(); disarmWatch(); pieceId++;
     // The recorded audio of this speech (null when it was not recorded: standby, paused, no recorder): its transcript is saved below.
     const recHandle = recOn ? quiet(() => recorder.end()) || null : null;
@@ -4811,7 +4817,7 @@ function voiceCreateCall(deps) {
           if (waitTimer !== null) quiet(() => d.clearTimer(waitTimer));
           mine.waiting = false; mine.onJoin = null;
         };
-        if (!mine.hold && !ended && !voiceIsStopCommand(t) && !sleepy && !pendingAsk && mine.ann == null && !pendingAnnounce) {
+        if (!mine.hold && !ended && !atMute && !muted && !voiceIsStopCommand(t) && !sleepy && !pendingAsk && mine.ann == null && !pendingAnnounce) {   // Mute ended it: sent as it is
           ms = continueWait();
           if (ms > 0 && await soundsUnfinished(t, audio)) {
             waited = true; waitStart = now();
@@ -5019,17 +5025,37 @@ function voiceCreateCall(deps) {
     try { return Promise.resolve(vad.reopen()).then((r) => !!r, () => false); } catch { return Promise.resolve(false); }
   }
 
-  // Mute: the agent hears nothing. The microphone tracks are switched off (vad.setMuted: the speech detector, the recognizer and the recorder get digital
-  // silence, also from a microphone opened again while muted) and the speech events are ignored here. Speech under way when Mute is tapped is dropped as a
-  // false start: nothing of it is sent or recorded, and a reply it had cut reads on. After unmute, only speech that begins after it counts. The agent's own
-  // speech, the thinking sound, the keep-alive and the music focus are not touched. Every call starts unmuted; the end of the call clears it. -> muted.
+  // Mute: the agent hears nothing said after the tap. The microphone tracks are switched off (vad.setMuted: the speech detector, the recognizer and the
+  // recorder get digital silence, also from a microphone opened again while muted) and new speech events are ignored here. Speech under way when Mute is
+  // tapped ENDS at the tap and is sent, as if the person had paused (endAtMute): everything said before the tap reaches the agent, and is recorded when the
+  // call is. A piece waiting for more ('Wait for me to go on') is sent at once; pieces being transcribed or in line go on as usual. The agent's reply is
+  // read while muted. After unmute, only speech that begins after it counts. The agent's own speech, the thinking sound, the keep-alive and the music
+  // focus are not touched. Every call starts unmuted; the end of the call clears it. -> muted.
   function setMuted(on) {
     const want = !!on;
     if (ended || want === muted) return muted;
     muted = want;
     quiet(() => { if (typeof vad.setMuted === 'function') vad.setMuted(want); });
-    if (want) { sinceUnmute = false; disarmWatch(); if (personSpeaking || segActive) dropSpeech(); }
+    if (want) {
+      sinceUnmute = false; disarmWatch();
+      if (personSpeaking || segActive) endAtMute();
+      const w = lastSeg;
+      if (w && w.waiting && w.onJoin && !segActive) { const f = w.onJoin; w.onJoin = null; quiet(f); }   // waiting for more that will not come: sent now
+    }
     return muted;
+  }
+  // The piece under way when Mute was tapped: the detector ends it now (vad.endPiece, as the frame watchdog does), so what was heard up to the tap is
+  // transcribed and sent through the normal onSpeechEnd (muteEnd lets that one end through). A detector without endPiece ends it on the silence that
+  // follows (within VOICE_MUTE_END_MS). When no end or misfire came, the piece is let go; a detector that could not listen again is opened again.
+  async function endAtMute() {
+    const id = pieceId;
+    muteEnd = id;
+    let listening = true, asked = false;
+    if (typeof vad.endPiece === 'function') { asked = true; try { listening = (await vad.endPiece()) !== false; } catch { listening = false; } }
+    else await new Promise((r) => { d.setTimer(r, VOICE_MUTE_END_MS); });
+    if (muteEnd === id) muteEnd = -1;
+    if (!ended && personSpeaking && pieceId === id) dropSpeech();
+    if (asked && !listening && !ended) { try { await retryMic(); } catch { /* retryMic never throws */ } }
   }
   // The Interrupt button while muted (the Talk floor asks this instead of taking the floor: nothing is listened for while muted): the reply being read
   // stops and the rest of this turn's reply is not read, as when the person cuts it by speaking. -> true when something was stopped.

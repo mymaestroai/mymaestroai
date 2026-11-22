@@ -115,6 +115,7 @@ test('watchdog: no timer is left after hangUp, nor after the piece ended', async
   assert.deepStrictEqual(h.toasts, []); assert.strictEqual(count(h, 'endPiece'), 0);
 });
 
+// Mute itself ends the piece at the tap (one endPiece, so what was said so far is sent); the watchdog is cleared and adds no toast or endPiece of its own.
 test('watchdog: muting clears it', async () => {
   const h = await started();
   const dogs = () => h.timers.filter(x => x.ms === 500).length;
@@ -123,7 +124,7 @@ test('watchdog: muting clears it', async () => {
   h.call.setMuted(true);
   assert.strictEqual(dogs(), 0);
   await advance(h, 5000);
-  assert.deepStrictEqual(h.toasts, []); assert.strictEqual(count(h, 'endPiece'), 0);
+  assert.deepStrictEqual(h.toasts, []); assert.strictEqual(count(h, 'endPiece'), 1, 'only the one Mute asked for');
 });
 
 test('watchdog: no endPiece on the detector -> the piece is dropped, back to listening, nothing sent; the microphone is still reopened', async () => {
