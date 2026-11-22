@@ -31,14 +31,14 @@ const flush = () => new Promise((r) => setImmediate(r));
 
 test('mic button: hands-free starts a call, tap mode keeps dictation, a call turns the button into Hang up', () => {
   const m = app.slice(app.indexOf('async function voiceMicToggle('), app.indexOf('async function voiceMicStop('));
-  assert.match(m, /if \(voiceCallS\.active \|\| voiceCallS\.starting\) \{ voiceCallHangUp\(\); return; \}/);
+  assert.match(m, /if \(voiceCallS\.active \|\| voiceCallS\.starting\) \{\s*if \(voiceCallS\.press\) return;[^\n]*\n\s*voiceCallHangUp\(\); return;/);   // a Tap to talk call: the button is the press button, not Hang up
   assert.match(m, /if \(voicePrefsNow\(\)\.mode !== 'tap'\) \{ voiceCallStart\(chatId\); return; \}/);
   assert.ok(m.indexOf('voiceReady()') < m.indexOf('voiceCallStart('), 'only when voice is enabled and ready');
   assert.ok(m.indexOf('voiceCallStart(') < m.indexOf('voiceRec.guard.begin()'), 'dictation code is untouched below');
   const w = wiring();
-  assert.match(w, /b\.setAttribute\('aria-label', on \? 'Hang up' : 'Dictate'\)/);
+  assert.match(w, /b\.setAttribute\('aria-label', on \? 'Hang up' : voiceMicIdleLabel\(\)\)/);   // the idle label follows the saved mode (Talk hands-free / Tap to talk / Dictate)
   assert.match(w, /voiceRec\.guard\.cancel\(\); if \(voiceRec\.chatId\) voiceMicStop\(false\);/, 'starting a call ends dictation first');
-  assert.match(w, /voiceStopPlayback\(\);\s*const eff = voiceEffNow\(chat\.agent\);[^\n]*\n\s*const vad = voiceCreateVad\(/);
+  assert.match(w, /voiceStopPlayback\(\);\s*const eff = voiceEffNow\(chat\.agent\);[^\n]*\n\s*const press = voicePrefsNow\(\)\.mode === 'press';[^\n]*\n\s*const vad = voiceCreateVad\(/);
   assert.match(w, /if \(S\.call\) return;/, 'one call at a time');
 });
 
@@ -54,7 +54,7 @@ test('hub events: the call listens to turn, ask and voice events on the one Even
 });
 
 test('settings: Talk mode, Interrupt sensitivity, Room check; the phase-1 hint is replaced', () => {
-  assert.match(app, /id="st-voice-mode"[^`]*Hands-free<\/option><option value="tap"[^`]*Tap to talk/);
+  assert.match(app, /id="st-voice-mode"[^`]*<option value="handsfree"[^`]*>Hands-free<\/option><option value="press"[^`]*>Tap to talk<\/option><option value="tap"[^`]*>Dictation<\/option>/);   // three options: Hands-free, Tap to talk (press), Dictation (tap)
   assert.match(app, /id="st-voice-sens"[^`]*oninput="voiceSettingSensInput\(this\)"/);
   assert.match(app, /id="st-voice-room" type="button" onclick="voiceRoomCheckRun\(\)">Room check</);
   assert.ok(!app.includes('Hands-free conversation comes next'));
@@ -241,7 +241,7 @@ test('start failing (the controller says why) removes the bar and the red button
   assert.strictEqual(fakeCall.started, 1);
   assert.strictEqual(api.voiceCallS.call, null);
   assert.ok(calls.bar.removed);
-  assert.strictEqual(get('mic-c1').attrs['aria-label'], 'Dictate');
+  assert.strictEqual(get('mic-c1').attrs['aria-label'], 'Talk hands-free');   // the saved mode of this harness is hands-free
   assert.ok(!get('mic-c1').classList.contains('call'));
 });
 
@@ -417,7 +417,7 @@ test('hang up: controller hung up once, bar and red button removed, wake lock re
   await api.voiceCallHangUp();
   assert.strictEqual(fakeCall.hung, 1);
   assert.ok(calls.bar.removed);
-  assert.strictEqual(get('mic-c1').attrs['aria-label'], 'Dictate');
+  assert.strictEqual(get('mic-c1').attrs['aria-label'], 'Talk hands-free');   // the saved mode of this harness is hands-free
   assert.ok(calls.wake.includes('release'));
   assert.strictEqual(api.voiceCallS.call, null);
   api.voiceCallHubEvent('turn_delta', { agent: 'alice', turnId: 't1', text: 'x' });

@@ -401,7 +401,7 @@ for (const [name, file] of [['desktop', 'app.js'], ['phone', 'mobile.js']]) {
     assert.match(src, /if \(document\.hidden\) \{ voiceRecFlushOpen\(\); return; \}|try \{ voiceRecFlushOpen\(\); \} catch/, 'hidden: the open segment is sent (inside the one visibility handler)');
     assert.match(src, /flushOpen\(\)/);
     assert.ok(/'pagehide'[^\n]*(voiceRecFlushOpen|voiceLeaveApp)/.test(src), 'pagehide sends it too');
-    const start = src.slice(src.indexOf(name === 'phone' ? 'function voiceCallStart()' : 'const rec = recCfg.keep'), src.indexOf(name === 'phone' ? 'function voiceCallStart()' : 'const rec = recCfg.keep') + 3500);
+    const start = src.slice(src.indexOf(name === 'phone' ? 'function voiceCallStart()' : 'const rec = recCfg.keep'), src.indexOf(name === 'phone' ? 'function voiceCallStart()' : 'const rec = recCfg.keep') + 4500);   // 4500: the Tap to talk lines sit before the resend in the phone's voiceCallStart
     assert.match(start, /voiceRecResendPending\(/, 'again at the start of a call');
     assert.ok(!/visibilityState === 'hidden'\) (voiceCallRelease|voiceCallHangUp)/.test(src), 'a hidden page does not end the call by this');
   });

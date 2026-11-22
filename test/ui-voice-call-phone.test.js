@@ -14,7 +14,7 @@ const callSection = () => sliceBetween('// ── Voice call (phone): the hands-
 
 test('mic button: hands-free tap starts a call synchronously, a second tap hangs up, tap mode keeps dictation', () => {
   const tap = sliceBetween('async function voiceMicTap()', 'async function voiceMicStop()');
-  assert.match(tap, /if \(voiceCall\) \{ voiceCallHangUp\(\); return; \}/);
+  assert.match(tap, /if \(voiceCall\) \{ if \(voiceCall\.press\) return; voiceCallHangUp\(\); return; \}/);   // a Tap to talk call: the mic button is the press button, not Hang up
   assert.match(tap, /if \(voicePrefsNow\(\)\.mode !== 'tap'\) \{ voiceCallStart\(\); return; \}/);
   assert.ok(!tap.slice(0, tap.indexOf('voiceCallStart()')).includes('await'), 'no await before call.start (iOS)');
   assert.ok(tap.indexOf('voiceCallStart()') < tap.indexOf('voiceRec.guard.begin()'), 'dictation code is only reached in tap mode');
@@ -22,7 +22,7 @@ test('mic button: hands-free tap starts a call synchronously, a second tap hangs
   assert.ok(!start.includes('await '), 'voiceCallStart awaits nothing');
   assert.ok(start.indexOf('voiceMicCancel()') < start.indexOf('vc.call.start()'), 'dictation stops first');
   assert.ok(start.indexOf('voiceStopPlayback()') < start.indexOf('vc.call.start()'), 'playback stops first');
-  assert.match(start, /voiceCreateVad\(\{ baseUrl: '\/api\/voice\/web\/', micLevel: prefs\.micLevel, interruptSensitivity: prefs\.interruptSensitivity, endPause: prefs\.endPause, echoHoldMs: prefs\.echoHold, strictTalkOver: voiceIsIOS\(\), micChoice: voiceMicChoiceId, bluetoothFirst: voiceIsAndroidNav\(navigator\) \}\)/);   // + the end-of-turn pause (voice fixes 1); + strict talk-over on iOS; + the microphone chosen in Sound route
+  assert.match(start, /voiceCreateVad\(\{ baseUrl: '\/api\/voice\/web\/', micLevel: prefs\.micLevel, interruptSensitivity: prefs\.interruptSensitivity, endPause: prefs\.endPause, echoHoldMs: prefs\.echoHold, strictTalkOver: voiceIsIOS\(\), micChoice: voiceMicChoiceId, bluetoothFirst: voiceIsAndroidNav\(navigator\), \.\.\.\(press \? \{ manual: true \} : \{\}\) \}\)/);   // + Tap to talk: manual only for a press call   // + the end-of-turn pause (voice fixes 1); + strict talk-over on iOS; + the microphone chosen in Sound route
   assert.match(start, /voiceCreateCall\(voiceCallDeps\(vc\)\)/);
   assert.match(js, /navigator\.wakeLock\.request\('screen'\)/);
 });
@@ -46,8 +46,9 @@ test('call panel sits between the messages and the composer, with every control,
   assert.ok(i < html.indexOf('id="tabbar"'));
   for (const id of ['cp-state', 'cp-meter', 'cp-heard', 'cp-held', 'cp-dnd', 'cp-levels', 'cp-hangup', 'cp-help']) assert.ok(html.includes(`id="${id}"`), id);
   assert.match(html, /Do not disturb/);
-  assert.match(html, /Hands-free works with the app open and the screen on, also through a car's Bluetooth hands-free or a Bluetooth speaker\. Locked-screen use and car apps \(CarPlay, Android Auto\) are not supported\./);
-  assert.match(js, /const VOICE_CALL_HELP = 'Hands-free works with the app open and the screen on, also through a car\\'s Bluetooth hands-free or a Bluetooth speaker\. Locked-screen use and car apps \(CarPlay, Android Auto\) are not supported\.'/);
+  // the Tap to talk sentence was added with the press mode
+  assert.match(html, /Hands-free works with the app open and the screen on, also through a car's Bluetooth hands-free or a Bluetooth speaker\. Locked-screen use and car apps \(CarPlay, Android Auto\) are not supported\. Tap to talk: tap the mic, speak, tap again to send \(or hold it while you speak and let go\)\./);
+  assert.match(js, /const VOICE_CALL_HELP = 'Hands-free works with the app open and the screen on, also through a car\\'s Bluetooth hands-free or a Bluetooth speaker\. Locked-screen use and car apps \(CarPlay, Android Auto\) are not supported\. Tap to talk: tap the mic, speak, tap again to send \(or hold it while you speak and let go\)\.'/);
   assert.match(html, /#call-panel \{[^}]*flex-shrink: 0/);
   assert.ok(!/#call-panel \{[^}]*position: (fixed|absolute)/.test(html), 'in flow, so it cannot cover the composer');
   assert.match(html, /\.cp-item-acts button \{ flex: 1; min-height: 48px/);
@@ -243,7 +244,7 @@ test('hang-up: the controller hangs up, the page lets go at once, the wake lock 
   const log = [];
   const vc = { call: { hangUp: () => { log.push('hangUp'); return Promise.resolve([{ label: 'x' }]); } }, wake: { release: () => { log.push('release'); return Promise.resolve(); } } };
   const state = { voiceCall: vc };
-  const f = new Function('state', 'voiceCallPanel', 'voiceMicPaint', 'voiceMediaSession', 'voiceThinkingClose', src.replace(/\bvoiceCall\b/g, 'state.voiceCall') + '\nreturn { voiceCallHangUp, voiceCallTeardown };')(state, (s) => log.push('panel:' + s), () => log.push('micPaint'), () => log.push('media'), () => log.push('thinkClose'));
+  const f = new Function('state', 'voiceCallPanel', 'voiceMicPaint', 'voiceMediaSession', 'voiceThinkingClose', 'voiceCallPressDetach', src.replace(/\bvoiceCall\b/g, 'state.voiceCall') + '\nreturn { voiceCallHangUp, voiceCallTeardown };')(state, (s) => log.push('panel:' + s), () => log.push('micPaint'), () => log.push('media'), () => log.push('thinkClose'), () => {});   // + voiceCallPressDetach: teardown lets go of a Tap to talk call's press buttons
   const p = f.voiceCallHangUp();
   assert.strictEqual(state.voiceCall, null);
   assert.deepStrictEqual(log, ['hangUp', 'release', 'media', 'thinkClose', 'panel:false', 'micPaint']);   // round 2: the media session and the thinking sound are let go too

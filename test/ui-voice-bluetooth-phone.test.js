@@ -50,7 +50,7 @@ function callEnv(over) {
 }
 
 test('help text: the call help names Bluetooth hands-free in a car or speaker (app, phone page)', () => {
-  const want = 'Hands-free works with the app open and the screen on, also through a car\'s Bluetooth hands-free or a Bluetooth speaker. Locked-screen use and car apps (CarPlay, Android Auto) are not supported.';
+  const want = 'Hands-free works with the app open and the screen on, also through a car\'s Bluetooth hands-free or a Bluetooth speaker. Locked-screen use and car apps (CarPlay, Android Auto) are not supported. Tap to talk: tap the mic, speak, tap again to send (or hold it while you speak and let go).';   // the Tap to talk sentence was added with the press mode
   assert.ok(js.includes("const VOICE_CALL_HELP = '" + want.replace(/'/g, "\\'") + "';"), 'VOICE_CALL_HELP');
   assert.ok(html.includes('<p id="cp-help">' + want.replace(/'/g, '&#39;') + '</p>') || html.includes('<p id="cp-help">' + want + '</p>'), 'cp-help in the html');
 });

@@ -1299,7 +1299,7 @@ html.mm-simple #simple-side { display: none; }
         <button type="button" id="cp-levels" class="cp-levels">Levels</button>
         <button type="button" id="cp-hangup" class="cp-hang ucd-dup" aria-label="Hang up"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 15c2-4 16-4 18 0l-3 2.5-3-1.5v-2c-2-.7-4-.7-6 0v2l-3 1.5z"></path></svg><span>Hang up</span></button>
       </div>
-      <p id="cp-help">Hands-free works with the app open and the screen on, also through a car's Bluetooth hands-free or a Bluetooth speaker. Locked-screen use and car apps (CarPlay, Android Auto) are not supported.</p>
+      <p id="cp-help">Hands-free works with the app open and the screen on, also through a car's Bluetooth hands-free or a Bluetooth speaker. Locked-screen use and car apps (CarPlay, Android Auto) are not supported. Tap to talk: tap the mic, speak, tap again to send (or hold it while you speak and let go).</p>
     </div>
     <div id="composer">
       <div id="handoff-cards" class="handoff-cards" hidden></div>
@@ -1309,8 +1309,10 @@ html.mm-simple #simple-side { display: none; }
       <div id="voice-panel" role="dialog" aria-label="Voice settings" hidden>
         <div class="vp-row vp-modes" role="radiogroup" aria-label="Talk mode">
           <label class="vs-opt"><input type="radio" name="vp-mode" value="handsfree"> <span>Hands-free</span></label>
-          <label class="vs-opt"><input type="radio" name="vp-mode" value="tap"> <span>Tap to talk</span></label>
+          <label class="vs-opt"><input type="radio" name="vp-mode" value="press"> <span>Tap to talk</span></label>
+          <label class="vs-opt"><input type="radio" name="vp-mode" value="tap"> <span>Dictation</span></label>
         </div>
+        <div class="vp-display-note" id="vp-mode-help">Hands-free: tap the mic to start a call; it hears you whenever you speak. Tap to talk: a voice call where the agent answers aloud; tap the mic, speak, tap again to send (or hold it while you speak and let go). Dictation: tap the mic to turn what you say into text in the message box.</div>
         <label class="vp-row" for="vp-speed"><span>Voice speed</span><b class="vp-speed-val"></b></label>
         <input type="range" id="vp-speed" class="vs-level" min="0.75" max="1.5" step="0.05">
         <div class="vp-display-note vp-follow" id="vp-follow-voiceSpeed" hidden></div>

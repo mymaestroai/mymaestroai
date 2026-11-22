@@ -155,7 +155,7 @@ test('desktop: every place the person changes one of the four settings marks it 
 test('desktop: a call, the push-to-talk and VAD paths and the speech use the agent\'s effective prefs', () => {
   assert.match(app, /function voiceEffNow\(agent\) \{ return voiceEffectivePrefs\(voicePrefsNow\(\), voiceAgentDefaultsOf\(agent\)\); \}/);
   assert.match(app, /prefs: \(\) => voiceEffNow\(agent\),/, 'the call controller\'s prefs() dependency');
-  assert.match(app, /const eff = voiceEffNow\(chat\.agent\);[^\n]*\n\s*const vad = voiceCreateVad\(\{[^}]*interruptSensitivity: eff\.interruptSensitivity, endPause: eff\.endPause/, 'the VAD options');
+  assert.match(app, /const eff = voiceEffNow\(chat\.agent\);[^\n]*\n\s*(?:const press = [^\n]*\n\s*)?const vad = voiceCreateVad\(\{[^}]*interruptSensitivity: eff\.interruptSensitivity, endPause: eff\.endPause/, 'the VAD options');
   assert.match(app, /const body = \{ agent, text, speed: voiceSpeedFor\(agent\) \};/, 'the speed sent with /api/voice/tts');
   assert.match(app, /u\.rate = voiceSpeedFor\(agent\)/, 'the device voice');
   assert.match(app, /Following \$\{hubEsc\(name\)\}'s default: \$\{label\}/, 'the plain line under a control');

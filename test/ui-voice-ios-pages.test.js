@@ -211,8 +211,9 @@ test('phone: voiceIsIOS() is voiceIsIOSNav(navigator): one rule', () => {
   assert.strictEqual(f(() => { throw new Error('x'); }, {})(), false);
 });
 test('strictTalkOver is passed to voiceCreateVad: voiceIsIOS() on the phone, voiceIsIOSNav(navigator) on the desktop', () => {
-  assert.match(startBody, /voiceCreateVad\(\{[^}]*strictTalkOver: voiceIsIOS\(\)(, micChoice: voiceMicChoiceId)?(, bluetoothFirst: voiceIsAndroidNav\(navigator\))? \}\)/);
-  assert.match(app, /voiceCreateVad\(\{ baseUrl: '\/api\/voice\/web\/'[^}]*strictTalkOver: voiceIsIOSNav\(navigator\)(, micChoice: voiceMicChoiceId)?(, bluetoothFirst: voiceIsAndroidNav\(navigator\))? \}\)/);
+  // (the optional last part: manual: true is added for a Tap to talk call only)
+  assert.match(startBody, /voiceCreateVad\(\{[^}]*strictTalkOver: voiceIsIOS\(\)(, micChoice: voiceMicChoiceId)?(, bluetoothFirst: voiceIsAndroidNav\(navigator\))?(, \.\.\.\(press \? \{ manual: true \} : \{\}\))? \}\)/);
+  assert.match(app, /voiceCreateVad\(\{ baseUrl: '\/api\/voice\/web\/'[^}]*strictTalkOver: voiceIsIOSNav\(navigator\)(, micChoice: voiceMicChoiceId)?(, bluetoothFirst: voiceIsAndroidNav\(navigator\))?(, \.\.\.\(press \? \{ manual: true \} : \{\}\))? \}\)/);
   assert.match(app, /typeof voiceCreateAudioFocus === 'function' && typeof navigator !== 'undefined' && \/Android\/i\.test/, 'the desktop page still starts focus only on Android');
 });
 

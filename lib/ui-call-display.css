@@ -52,6 +52,9 @@
 /* off = takes no space at all, so Mute and Hang up never move (ui-call-display.js sets data-ucd-off and data-ucd-mode) */
 .ucd-bar .ucd-talk[data-ucd-off] { display: none; }
 .ucd-bar .ucd-talk[data-ucd-mode="mic"] { font-size: 16px; }
+/* a Tap to talk call: the slot is the press button; no text selection or touch scrolling while it is held, and a visible pressed state */
+.ucd-bar .ucd-talk[data-ucd-mode="press"] { touch-action: none; user-select: none; -webkit-user-select: none; }
+.ucd-bar .ucd-talk[data-ucd-mode="press"][aria-pressed="true"] { background: var(--mic-rec, #d93a3a); box-shadow: 0 0 0 3px var(--mic-rec, #d93a3a); }
 .ucd-bar .ucd-disp { display: inline-flex; align-items: center; gap: 6px; min-height: 48px; padding: 0 10px; border: 1px solid var(--border, #2a313b); border-radius: 14px; background: var(--bg-input, #222831); font-size: 15px; }
 .ucd-bar .ucd-display { font: inherit; min-height: 36px; max-width: 12em; color: var(--text, #e8ecf1); background: var(--bg-input, #222831); border: 1px solid var(--border, #2a313b); border-radius: 8px; }
 .ucd-bar .ucd-mute, .ucd-bar .ucd-hang { flex: 1 1 0; min-width: 0; }   /* equal halves of the row (Hang up alone fills it when Mute is hidden) */
