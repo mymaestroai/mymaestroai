@@ -76,7 +76,9 @@ test('checkFigure: found, not found, exact digits', () => {
   assert.strictEqual(T.checkFigure('-3.2 points', SOURCE, ['points']), 'found_as_written');
   assert.strictEqual(T.checkFigure('-3.2 points', SOURCE, []), 'not_found_as_written');
   assert.strictEqual(T.checkFigure('-3.2', SOURCE, ['points']), 'not_found_as_written');
-  assert.strictEqual(T.checkFigure('0.550', SOURCE, []), 'found_as_written');
+  // r9a: "and" is a word of the form now (it is no function word) and "a drop" is a rate ("per drop"): the source's form is "and a drop"
+  assert.strictEqual(T.checkFigure('0.550', SOURCE, []), 'not_found_as_written');
+  assert.strictEqual(T.checkFigure('0.550 and a drop', SOURCE, []), 'found_as_written');
   assert.strictEqual(T.checkFigure('0.55', SOURCE, []), 'not_found_as_written');
   assert.strictEqual(T.checkFigure('43.7', SOURCE, []), 'not_found_as_written');
   const only = 'tickets: 21450 and 156.4 meters';
@@ -186,7 +188,7 @@ test('markProse: marks only the figures not found, counts', () => {
 test('applyCheck: annotates claims and measured_result', () => {
   const claims = [
     { id: 'c1', claim: 'Preferred over the baseline', source_url: 'https://arxiv.org/abs/2401.01234', figures: ['56.4', '43.7'], measured_result: '56.4% against 43.7%' },
-    { id: 'c2', claim: 'Raters', source_url: 'https://arxiv.org/abs/2401.01234', figures: ['1450', '0.550', '30 raters'], measured_result: '1,450 items' }, // r8: "30 raters" as the source writes it
+    { id: 'c2', claim: 'Raters', source_url: 'https://arxiv.org/abs/2401.01234', figures: ['1450', '0.550 and a drop', '30 raters'], measured_result: '1,450 items' }, // r8: "30 raters" as the source writes it; r9a: "and a drop" is the form
     { id: 'c3', claim: 'Other', source_url: 'https://example.org/none', figures: ['9.9'], measured_result: '9.9 points' },
     { id: 'c4', claim: 'Plain statement', source_url: 'https://arxiv.org/abs/2401.01234', figures: [], measured_result: '' },
   ];
@@ -194,7 +196,8 @@ test('applyCheck: annotates claims and measured_result', () => {
   const out = T.applyCheck(claims, res);
   assert.strictEqual(out[0].check, '1 of 2 found as written'); // r4: the bare 43.7 takes the % the claim text shows
   assert.strictEqual(out[0].measured_result, '56.4% against 43.7% [not found in source]');
-  assert.deepStrictEqual(out[0].figure_checks, [{ figure: '56.4%', status: 'found_as_written' }, { figure: '43.7%', status: 'not_found_as_written' }]);
+  // r9b: every figure_check also carries its second mark (here nothing was reviewed: not checked)
+  assert.deepStrictEqual(out[0].figure_checks, [{ figure: '56.4%', status: 'found_as_written', meaning: 'not checked', meaning_quote: '' }, { figure: '43.7%', status: 'not_found_as_written', meaning: 'not checked', meaning_quote: '' }]);
   assert.strictEqual(out[1].check, '3 of 3 found as written');
   // r8: c3 cites a URL that is not among the fetched sources: no source to check
   assert.strictEqual(out[2].check, 'no source to check');
@@ -358,8 +361,9 @@ test('renderDocument: markdown shape and traceability table', () => {
   const { markdown } = T.renderDocument({ question: 'Which ranking method do people prefer?', preparedDate: '2026-11-21', prose: DOC_PROSE, claims: DOC_CLAIMS, sources: DOC_FETCHED });
   assert.match(markdown, /^# Which ranking method do people prefer\n\nPrepared 2026-11-21\n/);
   assert.match(markdown, /## Traceability/);
-  assert.match(markdown, /\| Claim \| Source \| Measured result \| Who judged \| Evidence strength \| Our inference \| Figures checked \|/);
-  assert.match(markdown, /\| yes \| source not opened \|/);
+  // r9b: the "Figures checked" column became two columns, "In the source" and "Means the same"
+  assert.match(markdown, /\| Claim \| Source \| Measured result \| Who judged \| Evidence strength \| Our inference \| In the source \| Means the same \|/);
+  assert.match(markdown, /\| yes \| source not opened \| not checked \|/);
   assert.match(markdown, /pipe/);
   assert.match(markdown, /### Read in full\n\n- \[Ranking paper\]\(https:\/\/arxiv\.org\/abs\/2401\.01234v2\)/);
   assert.match(markdown, /### Opened in part\n\nNone\n\n### Not opened\n\n- \[Closed page\]\(https:\/\/example\.org\/none\)/);
@@ -551,11 +555,13 @@ test('chatReport: counts line, reviewer, files, missing', () => {
   const prose = '## Verdict\nA is preferred.\n\n## Evidence\n- x\n\n## Corrections to the first pass\n- The first pass said 55.4%; the paper says 56.4%.\n- v1 and v2 differ.\n\n## Confidence\nMedium: one study.';
   const claims = [
     { id: 'c1', claim: 'Unverified one', source_url: 'https://a.example/1', check_status: 'not_found_as_written' },
-    { id: 'c2', claim: 'Verified one', source_url: 'https://a.example/2', check_status: 'found_as_written' },
+    { id: 'c2', claim: 'Verified one', source_url: 'https://a.example/2', check_status: 'found_as_written', figure_checks: [{ figure: '5', status: 'found_as_written', meaning: 'matches', meaning_quote: 'five items' }] },
     { id: 'c3', claim: 'Inference', source_url: 'https://a.example/3', check_status: 'no_figures', inference: true },
   ];
   const t = T.chatReport({ question: 'Q', prose, claims, totals: { claims: 3, figures: 10, found: 7, notFound: 2, notOpened: 1, noSource: 0 }, reviewer: 'GPT-5', rounds: 2, files: { md: '/f/r.md', pdf: '/f/r.pdf' }, missing: ['reader notes for 2 sources'], level: 'thorough' });
-  assert.match(t, /Figures checked against the fetched source text: 7 found as written; 2 not found as written \(marked "not found in source"\); 1 from sources that could not be opened \(marked "source not opened"\); 0 with no source to check\./);
+  // r9b: the summary line is now "In the source (checked by code against the fetched text): ..." plus a "Means the same" line
+  assert.match(t, /In the source \(checked by code against the fetched text\): 7 found as written; 2 not found as written \(marked "not found in source"\); 1 from sources that could not be opened \(marked "source not opened"\); 0 with no source to check\./);
+  assert.match(t, /Means the same \(checked by the reviewer against the passage around each figure\): 0 matches; 0 differs \(marked "source says otherwise"\); 10 not checked\. Confirmed by both: 0 of 10 figures\./);
   assert.match(t, /Challenged by: GPT-5 \(2 rounds\)/);
   assert.match(t, /Full document: \/f\/r\.md/);
   assert.match(t, /PDF: \/f\/r\.pdf/);
@@ -563,9 +569,9 @@ test('chatReport: counts line, reviewer, files, missing', () => {
   assert.match(t, /Verdict\nA is preferred\./);
   assert.match(t, /- The first pass said 55\.4%/);
   assert.match(t, /Confidence\nMedium: one study\./);
-  // r2 fix 10: Key evidence lists only claims whose figures were all found as written (r8: no "verified" wording)
+  // r2 fix 10 / r9b: Key evidence lists only claims whose figures were all confirmed (found as written and the meaning matches)
   assert.ok(t.includes('Verified one'));
-  assert.match(t, /Verified one \[https:\/\/a\.example\/2\] \(figures found as written\)/);
+  assert.match(t, /Verified one \[https:\/\/a\.example\/2\] \(figures confirmed by both checks\)/);
   assert.ok(!t.includes('Unverified one'));
   assert.ok(!/\p{Extended_Pictographic}/u.test(t));
 });
@@ -576,7 +582,7 @@ test('chatReport: no missing line, no PDF reason, None corrections, 1 round', ()
   assert.match(t, /No PDF: no Chrome found/);
   assert.match(t, /Corrections to the first pass\nNone/);
   assert.match(t, /\(1 round\)/);
-  const caps = T.chatReport({ prose: '## Verdict\nV.', claims: Array.from({ length: 9 }, (_, i) => ({ id: 'c' + i, claim: 'claim ' + i, check_status: 'verified' })), totals: {}, files: {} });
+  const caps = T.chatReport({ prose: '## Verdict\nV.', claims: Array.from({ length: 9 }, (_, i) => ({ id: 'c' + i, claim: 'claim ' + i, check_status: 'verified', figure_checks: [{ figure: '5', status: 'found_as_written', meaning: 'matches', meaning_quote: 'five items' }] })), totals: {}, files: {} });
   assert.strictEqual((caps.match(/^- claim /gm) || []).length, 5);
 });
 
@@ -706,8 +712,10 @@ test('r2-6 common numbers: integers < 1000 and short decimals need a keyword', (
   // r8: each figure is written with its next word, as the text has it
   assert.strictEqual(T.checkFigure('1.5 points', text, []), 'not_found_as_written');
   assert.strictEqual(T.checkFigure('1.5 points', text, ['points']), 'found_as_written');
-  assert.strictEqual(T.checkFigure('0.05', text, []), 'not_found_as_written');
-  assert.strictEqual(T.checkFigure('0.05', text, ['beta']), 'found_as_written');
+  // r9a: the text's "0.05 and" is written with "and" (no function word any more)
+  assert.strictEqual(T.checkFigure('0.05 and', text, []), 'not_found_as_written');
+  assert.strictEqual(T.checkFigure('0.05 and', text, ['beta']), 'found_as_written');
+  assert.strictEqual(T.checkFigure('0.05', text, ['beta']), 'not_found_as_written');
   assert.strictEqual(T.checkFigure('450 workers', text, []), 'not_found_as_written');
   assert.strictEqual(T.checkFigure('450 workers', text, ['workers']), 'found_as_written');
   assert.strictEqual(T.checkFigure('450', text, ['workers']), 'not_found_as_written'); // a bare 450 is not "450 workers"
@@ -777,12 +785,12 @@ test('r2-10 chatReport: not checked, review lines, doubted, interrupted', () => 
   const prose = '## Verdict\nV.\n\n## Confidence\nMedium.';
   // r8: check_status 'verified' / 'unverified' as an older run saved them still read as found / not found as written
   const claims = [
-    { id: 'c1', claim: 'Good one', source_url: 'https://a.example/1', check_status: 'verified' },
-    { id: 'c2', claim: 'Doubted one', source_url: 'https://a.example/2', check_status: 'found_as_written' },
+    { id: 'c1', claim: 'Good one', source_url: 'https://a.example/1', check_status: 'verified', figure_checks: [{ figure: '5', status: 'found_as_written', meaning: 'matches', meaning_quote: 'five items' }] },
+    { id: 'c2', claim: 'Doubted one', source_url: 'https://a.example/2', check_status: 'found_as_written', figure_checks: [{ figure: '5', status: 'found_as_written', meaning: 'matches', meaning_quote: 'five items' }] },
     { id: 'c3', claim: 'Bad figures', source_url: 'https://a.example/3', check_status: 'unverified' },
   ];
   const t = T.chatReport({ prose, claims, totals: { figures: 3, found: 2, notFound: 1, notOpened: 0 }, doubtedIds: ['c2'], review: { label: 'GPT-5', rounds: 2, counts: { supported: 4, partly: 1, not_supported: 0, cannot_check: 2 }, uncheckedIds: ['c3', 'c7'], failed: false }, files: {} });
-  assert.match(t, /Key evidence\n- Good one \[https:\/\/a\.example\/1\] \(figures found as written\)\n\nDoubted by the review\n- Doubted one/);
+  assert.match(t, /Key evidence\n- Good one \[https:\/\/a\.example\/1\] \(figures confirmed by both checks\)\n\nDoubted by the review\n- Doubted one/);
   assert.ok(t.indexOf('Good one') < t.indexOf('Doubted by the review'));
   assert.ok(!/Key evidence[\s\S]*Doubted one[\s\S]*Doubted by the review/.test(t));
   assert.ok(!t.includes('Bad figures'));
@@ -844,7 +852,8 @@ test('r3-1 scale: 300k is not a bare 300; magnitudes compare; thousand/million/b
   // r8: the next word ("requests") is part of the form, so the figure is written with it
   assert.strictEqual(T.checkFigure('300k requests', 'Served 300,000 requests.', []), 'found_as_written');
   assert.strictEqual(T.checkFigure('300k', 'Served 300,000 requests.', []), 'not_found_as_written');
-  assert.strictEqual(T.checkFigure('300k requests', 'Served 300 k requests.', []), 'found_as_written');
+  // r9a: a one-letter scale counts only when it touches the number; "300 k" is a number and the word "k"
+  assert.strictEqual(T.checkFigure('300k requests', 'Served 300 k requests.', []), 'not_found_as_written');
   assert.strictEqual(T.checkFigure('300k requests', 'Served 300 thousand requests.', []), 'found_as_written');
   assert.strictEqual(T.checkFigure('300', 'Served 300k requests.', []), 'not_found_as_written');
   // r7: "dollars" alone is its own currency word (never "$" and never a bare number), so a bare 4.2B is not backed by it
@@ -855,7 +864,7 @@ test('r3-1 scale: 300k is not a bare 300; magnitudes compare; thousand/million/b
   assert.strictEqual(T.checkFigure('about 1.5M users', 'About 1,500,000 users.', []), 'found_as_written');
   assert.strictEqual(T.checkFigure('1.5M users', 'About 1,500,000 users.', []), 'not_found_as_written');
   assert.strictEqual(T.checkFigure('about 1.5M users', 'About 1.5 million users.', []), 'found_as_written');
-  assert.strictEqual(T.checkFigure('about 1.2m users', 'About 1.2 million users.', []), 'found_as_written');
+  assert.strictEqual(T.checkFigure('about 1.2m users', 'About 1.2 million users.', []), 'not_found_as_written'); // r9a: a lower-case m touching the number is no million
   assert.strictEqual(T.checkFigure('3x', 'a 3 point gain', []), 'not_found_as_written');
   assert.strictEqual(T.checkFigure('3x', 'a 3x speed-up', ['speed']), 'found_as_written');
   assert.strictEqual(T.checkFigure('5pp', 'a 5 pp rise', ['rise']), 'found_as_written');
@@ -864,7 +873,9 @@ test('r3-1 scale: 300k is not a bare 300; magnitudes compare; thousand/million/b
   const r = T.checkReport({ prose: 'Throughput reached 300k requests (https://a.example/a).', claims: [{ id: 'c1', claim: 'Throughput reached 300k requests', source_url: 'https://a.example/a', figures: ['300k'] }], fetched: [{ url: 'https://a.example/a', title: 'T', ok: true, text: 'We saw 300 requests.' }] });
   assert.match(r.prose, /300k \[not found in source\]/);
   assert.strictEqual(r.claims[0].check_status, 'not_found_as_written');
-  assert.strictEqual(T.numbersIn('Got 300k and 4.2B and 1.5 M').map((t) => t.mag).join(','), '300000,4200000000,1500000');
+  // r9a: "1.5 M" (a space) is the number 1.5 and the word "M"; only a touching "1.5M" is a million
+  assert.strictEqual(T.numbersIn('Got 300k and 4.2B and 1.5 M').map((t) => t.mag).join(','), '300000,4200000000,1.5');
+  assert.strictEqual(T.numbersIn('Got 300k and 4.2B and 1.5M').map((t) => t.mag).join(','), '300000,4200000000,1500000');
 });
 
 test('r3-1 units: a figure is value + unit; a counted number needs a source number without %', () => {
@@ -920,7 +931,8 @@ test('r3-3 chatReport: prose figures not tied to a source', () => {
   // r8: claim figures and prose figures are both counted in the summary line
   const totals = { claims: 3, figures: 10, found: 7, notFound: 2, notOpened: 1, noSource: 0, proseFigures: 6, proseFound: 2, proseNotFound: 1, proseNotOpened: 0, proseNoSource: 3 };
   const t = T.chatReport({ prose: '## Verdict\nA.', claims: [], totals, files: {} });
-  assert.match(t, /Figures checked against the fetched source text: 9 found as written; 3 not found as written \(marked "not found in source"\); 1 from sources that could not be opened \(marked "source not opened"\); 3 with no source to check\./);
+  // r9b: the first summary line is now "In the source (checked by code against the fetched text): ..."
+  assert.match(t, /In the source \(checked by code against the fetched text\): 9 found as written; 3 not found as written \(marked "not found in source"\); 1 from sources that could not be opened \(marked "source not opened"\); 3 with no source to check\./);
   const t1 = T.chatReport({ prose: '## Verdict\nA.', claims: [], totals: { ...totals, proseNoSource: 1 }, files: {} });
   assert.match(t1, /; 1 with no source to check\./);
   // totals saved by an older run have proseUnverified (figures not tied to a checked source): counted as no source to check
@@ -944,8 +956,8 @@ test('r3-4 claimKey: content fingerprint, not the id', () => {
 
 test('r3-5 chatReport: unreviewed claims, failed last round, interrupted before the check', () => {
   const claims = [
-    { id: 'c1', claim: 'Kept one', source_url: 'https://a.example/1', check_status: 'verified' },
-    { id: 'c4', claim: 'Edited one', source_url: 'https://a.example/4', check_status: 'verified' },
+    { id: 'c1', claim: 'Kept one', source_url: 'https://a.example/1', check_status: 'verified', figure_checks: [{ figure: '5', status: 'found_as_written', meaning: 'matches', meaning_quote: 'five items' }] },
+    { id: 'c4', claim: 'Edited one', source_url: 'https://a.example/4', check_status: 'verified', figure_checks: [{ figure: '5', status: 'found_as_written', meaning: 'matches', meaning_quote: 'five items' }] },
   ];
   const review = { label: 'GPT-5', rounds: 1, counts: { supported: 3, partly: 1, not_supported: 0, cannot_check: 0 }, lastRoundFailed: true };
   const t = T.chatReport({ prose: '## Verdict\nA.', claims, totals: { figures: 1, found: 1 }, review, unreviewedIds: ['c4', 'c6'], files: {} });
@@ -1051,7 +1063,7 @@ test('r4-5 parseFigure / numbersIn: prefixes, case-insensitive scale words, ×, 
   assert.strictEqual(T.parseFigure('about 56.4%').value, '56.4');
   assert.strictEqual(T.parseFigure('about 56.4%').unit, 'pct');
   assert.strictEqual(T.parseFigure('~300k').value, '300000');
-  assert.strictEqual(T.checkFigure('$300k', 'cost $300,000 in all', []), 'found_as_written');
+  assert.strictEqual(T.checkFigure('$300k', 'cost $300,000.', []), 'found_as_written'); // r9a: "in" is a word of the form now, so no "in all"
   assert.strictEqual(T.checkFigure('300k', 'cost 300,000 dollars', []), 'not_found_as_written'); // r7: "dollars" is a unit of its own
   assert.strictEqual(T.numbersIn('worth 2 BILLION dollars')[0].mag, '2000000000');
   assert.strictEqual(T.numbersIn('worth 2 Billion dollars')[0].mag, '2000000000');
@@ -1115,8 +1127,9 @@ test('r5-1 an explicit citation that resolves to nothing is never borrowed from 
 
 test('r5-2 currency is a unit', () => {
   assert.strictEqual(T.checkFigure('€1,250', 'We paid $1,250 in total.'), 'not_found_as_written');
-  assert.strictEqual(T.checkFigure('€1,250', 'We paid EUR 1,250 in total.'), 'found_as_written');
-  assert.strictEqual(T.checkFigure('EUR 1,250', 'We paid €1,250 in total.'), 'found_as_written');
+  // r9a: "in" is a word of the form now, so the found cases carry no "in total"
+  assert.strictEqual(T.checkFigure('€1,250', 'We paid EUR 1,250.'), 'found_as_written');
+  assert.strictEqual(T.checkFigure('EUR 1,250', 'We paid €1,250.'), 'found_as_written');
   assert.strictEqual(T.checkFigure('$4.2B', 'revenue of $4,200,000,000'), 'found_as_written');
   // r8: the aliases hold within one position: "$" in front is "USD" in front, not "USD" after the number
   assert.strictEqual(T.checkFigure('$4.2B', 'revenue of 4.2 billion USD'), 'not_found_as_written');
@@ -1187,7 +1200,7 @@ test('r6-1 a unit figure does not hide a distinct bare quantity of the same valu
   assert.strictEqual(ok.claims[0].figures.length, 1);
   assert.strictEqual(ok.claims[0].status, 'found_as_written');
   // a currency figures entry does not back a bare number
-  const cur = T.checkClaims([{ id: 'c3', claim: '1,250 respondents', source_url: 'https://a.example/a', figures: ['$1,250'] }], [{ url: 'https://a.example/a', title: 'T', ok: true, text: 'Paid $1,250 only.' }]);
+  const cur = T.checkClaims([{ id: 'c3', claim: '1,250 respondents', source_url: 'https://a.example/a', figures: ['$1,250'] }], [{ url: 'https://a.example/a', title: 'T', ok: true, text: 'Paid $1,250.' }]); // r9a: "only" is a word of the form now
   assert.strictEqual(cur.claims[0].figures.filter((f) => f.status === 'not_found_as_written').map((f) => f.figure).join(), '1,250');
 });
 
@@ -1195,7 +1208,7 @@ test('r6-2 a sign before or after a currency symbol is part of the figure', () =
   const cf = (a, b) => T.checkFigure(a, b);
   assert.strictEqual(cf('-$1,250', 'We paid $1,250 in total.'), 'not_found_as_written');
   assert.strictEqual(cf('$-1,250', 'We paid $1,250 in total.'), 'not_found_as_written');
-  assert.strictEqual(cf('-$1,250', 'We lost −$1,250 in total.'), 'found_as_written');
+  assert.strictEqual(cf('-$1,250', 'We lost −$1,250.'), 'found_as_written'); // r9a: no "in total" ("in" is a word of the form now)
   assert.strictEqual(cf('-$1,250', 'We lost $-1,250 in total.'), 'not_found_as_written'); // r8: the place of the sign is part of the written form
   assert.strictEqual(cf('-€5M', 'We paid €5M in total.'), 'not_found_as_written');
   assert.strictEqual(cf('$1,250', 'We lost -$1,250 in total.'), 'not_found_as_written');
@@ -1254,7 +1267,7 @@ test('r6-5 "No." is an abbreviation only before a number', () => {
     { id: 'c2', claim: 'Study B result', source_url: B, figures: ['60.2%'] },
   ];
   const fetched = [
-    { url: A, title: 'Alpha paper', ok: true, text: 'Result No. 5 in the ranking was 56.4%.' },
+    { url: A, title: 'Alpha paper', ok: true, text: 'Result No. 5 was 56.4% in the ranking.' }, // r9a: "in" is a word of the form now: the 5 is followed by "was", as in the report
     { url: B, title: 'Beta paper', ok: true, text: 'Result was 60.2%.' },
   ];
   const r = T.checkReport({ prose: `Result No. 5 was 56.4% (${A}). No. Study B reached 60.2% (${B}).`, claims, fetched, counts: {} });
@@ -1475,7 +1488,8 @@ function judge(fig, src) {
   const rep = T.checkReport({ prose: `The reported measurement was ${fig} (${R8A}).`, claims, fetched });
   const status = rep.claims[0].check_status;
   const marked = /\[not found in source\]/.test(rep.prose);
-  assert.strictEqual(rep.claims[0].figure_checks.length, 1, fig);
+  // an entry with several numbers ("1250 ± 50") gives one figure per number: each is checked as written
+  assert.ok(rep.claims[0].figure_checks.length >= 1, fig);
   assert.strictEqual(status === 'found_as_written', !marked, `${fig} vs ${src}: status ${status}, text ${rep.prose}`);
   assert.ok(!/\[(?:source not opened|no source to check)\]/.test(rep.prose), rep.prose);
   return status === 'found_as_written' ? 'found' : 'not found';
@@ -1584,7 +1598,7 @@ test('r8-4 aliases hold both ways, each with a near miss', () => {
   // - = − (minus)
   same('-5.5', '−5.5'); diff('-5.5', '5.5'); diff('-5.5', '+5.5');
   // thousands separators, k / thousand, M / million / m, B / bn / billion, tn / trillion, E-notation and × 10^n: equivalent through the magnitude
-  same('1,250,000', '1250000'); same('300k', '300 thousand'); same('1.5M', '1.5 million'); same('1.5m', '1.5 million'); same('2.5B', '2.5 bn'); same('2.5 billion', '2.5bn');
+  same('1,250,000', '1250000'); same('300k', '300 thousand'); same('1.5M', '1.5 million'); diff('1.5m', '1.5 million') /* r9a: a lower-case m touching the number is no million (fail-safe) */; same('2.5B', '2.5 bn'); same('2.5 billion', '2.5bn');
   same('1.25 tn', '1.25 trillion'); same('1.25E6', '1,250,000'); same('1.25 × 10^6', '1,250,000'); diff('1.25 tn', '1.25 billion');
   // nothing else is equivalent
   diff('1,250 participants', '1,250 people'); diff('5 MB', '5 MiB'); diff('5 ton', '5 tonne'); diff('5 kg', '5 kilogram');
@@ -1635,7 +1649,9 @@ test('r8-6 compound figures are one run', () => {
   assert.strictEqual(T.parseFigure('85.2% (±1.3)').value, '85.2');
   assert.strictEqual(T.checkFigure('85.2% (±1.3)', 'the score was 85.2% on test'), 'found_as_written');
   assert.strictEqual(T.checkFigure('$5.2B (2023)', 'revenue of $5.2 billion last year'), 'not_found_as_written'); // "last" is a word of the source's form
-  assert.strictEqual(T.checkFigure('$5.2B (2023)', 'revenue of $5.2 billion.'), 'found_as_written');
+  // r9a: a token in parentheses after a plain number is part of the form (as written, without its brackets)
+  assert.strictEqual(T.checkFigure('$5.2B (2023)', 'revenue of $5.2 billion.'), 'not_found_as_written');
+  assert.strictEqual(T.checkFigure('$5.2B (2023)', 'revenue of $5.2 billion (2023).'), 'found_as_written');
 });
 
 test('r8-7 three states with their labels: summary line, marks, document section', () => {
@@ -1657,8 +1673,8 @@ test('r8-7 three states with their labels: summary line, marks, document section
   assert.deepStrictEqual(r.claims.map((c) => c.check_status), ['found_as_written', 'not_found_as_written', 'source_not_opened', 'no_source']);
   assert.deepStrictEqual(r.claims.map((c) => c.check), ['1 of 1 found as written', '0 of 1 found as written', 'source not opened', 'no source to check']);
   assert.deepStrictEqual([r.totals.found, r.totals.notFound, r.totals.notOpened, r.totals.noSource], [1, 1, 1, 1]);
-  const line = T.chatReport({ prose: r.prose, claims: r.claims, totals: r.totals, files: {} }).split('\n').find((l) => /^Figures checked/.test(l));
-  assert.strictEqual(line, 'Figures checked against the fetched source text: 1 found as written; 1 not found as written (marked "not found in source"); 1 from sources that could not be opened (marked "source not opened"); 1 with no source to check.');
+  const line = T.chatReport({ prose: r.prose, claims: r.claims, totals: r.totals, files: {} }).split('\n').find((l) => /^In the source/.test(l)); // r9b: renamed line
+  assert.strictEqual(line, 'In the source (checked by code against the fetched text): 1 found as written; 1 not found as written (marked "not found in source"); 1 from sources that could not be opened (marked "source not opened"); 1 with no source to check.');
   // prose figures are counted too, with the three marks
   const prose = `Alpha had 1,250 participants (${A}). Beta had 900 participants (${B}). Gamma had 77 widgets (${C}).\n\nDelta had 55 things.`;
   const p = T.checkReport({ prose, claims, fetched });
@@ -1725,8 +1741,11 @@ test('r8-9 saved runs: the old statuses read as the new ones', () => {
   assert.ok(T.verifiedFigures(old).has('56.4'));
   assert.ok(!T.verifiedFigures(old).has('43.7'));
   // a document of an older run: the old column text is shown as saved, the old claim status still counts for Key evidence
-  const t = T.chatReport({ prose: '## Verdict\nA.', claims: [{ id: 'c1', claim: 'Old good', source_url: 'https://a.example/1', check_status: 'verified' }], totals: { claims: 1, figures: 2, found: 1, notFound: 1, notOpened: 0 }, files: {} });
-  assert.match(t, /Key evidence\n- Old good \[https:\/\/a\.example\/1\] \(figures found as written\)/);
+  const t = T.chatReport({ prose: '## Verdict\nA.', claims: [{ id: 'c1', claim: 'Old good', source_url: 'https://a.example/1', check_status: 'verified', figure_checks: [{ figure: '5', status: 'found_as_written', meaning: 'matches', meaning_quote: 'five items' }] }], totals: { claims: 1, figures: 2, found: 1, notFound: 1, notOpened: 0 }, files: {} });
+  // r9b: Key evidence needs both marks; a saved run with no meaning for its figures has no key evidence
+  assert.match(t, /Key evidence\n- Old good \[https:\/\/a\.example\/1\] \(figures confirmed by both checks\)/);
+  const t0 = T.chatReport({ prose: '## Verdict\nA.', claims: [{ id: 'c1', claim: 'Old good', source_url: 'https://a.example/1', check_status: 'verified', figure_checks: [{ figure: '5', status: 'found' }] }], totals: { claims: 1, figures: 1, found: 1 }, files: {} });
+  assert.match(t0, /Key evidence\n- No claim has all its figures confirmed by both checks/);
 });
 
 test('r8-10 the revise brief does not carry the per-figure results', () => {
@@ -1781,4 +1800,657 @@ test('r8-14 claimKey changes with a figure\'s written form', () => {
   assert.notStrictEqual(T.claimKey({ ...base, figures: ['1,250 adults'] }), k);
   assert.strictEqual(T.claimKey({ ...base, id: 'c7' }), k);
   assert.strictEqual(T.claimKey({ ...base, id: 'c7', figures: ['1,250 participants'] }), k);
+});
+
+// ================================================================ r9a: fixes to "found as written"
+// pairs: [figure, source text, 'found' | 'not found']. Each pair runs twice: through checkFigure (the claim figure against the text) and
+// through checkReport (claim status and the mark in the report text, see judge).
+function pairs(list) {
+  for (const [fig, src, want] of list) {
+    assert.strictEqual(judge(fig, src), want, `report: ${fig} vs ${src}`);
+    const direct = T.checkFigure(fig, 'Reported measurement: ' + src, ['reported', 'measurement']) === 'found_as_written' ? 'found' : 'not found';
+    assert.strictEqual(direct, want, `checkFigure: ${fig} vs ${src}`);
+  }
+}
+
+test('r9a-1 an arXiv version at claim level: a v2 claim is not answered by a fetch that landed on v1', () => {
+  const U = 'https://arxiv.org/abs/2401.12345';
+  const text = 'The study enrolled 1,250 participants in total.';
+  const claim = (url) => [{ id: 'c1', claim: 'The study enrolled participants', source_url: url, figures: ['1,250 participants'] }];
+  // fetch url says v2, the finalUrl says v1: the text is v1, so a v2 claim has no source to check (state 'none'), never "found"
+  const landedOnV1 = [{ url: U + 'v2', finalUrl: U + 'v1', ok: true, text }];
+  assert.deepStrictEqual(T.checkClaims(claim(U + 'v2'), landedOnV1).claims.map((c) => [c.status, c.figures[0].status]), [['no_source', 'no_source']]);
+  const r = T.checkReport({ prose: `The study enrolled 1,250 participants (${U}v2).`, claims: claim(U + 'v2'), fetched: landedOnV1, counts: {} });
+  assert.strictEqual(r.claims[0].check, 'no source to check');
+  assert.match(r.prose, /1,250 \[no source to check\] participants/);
+  // the fetch really is v2 (finalUrl, or url with no finalUrl): found
+  for (const f of [{ url: U + 'v2', finalUrl: U + 'v2' }, { url: U + 'v2' }, { url: U, finalUrl: U + 'v2' }]) {
+    assert.strictEqual(T.checkClaims(claim(U + 'v2'), [{ ...f, ok: true, text }]).claims[0].status, 'found_as_written', JSON.stringify(f));
+  }
+  // a finalUrl without a version cannot show which version the text is: no source to check
+  assert.strictEqual(T.checkClaims(claim(U + 'v2'), [{ url: U + 'v2', finalUrl: U, ok: true, text }]).claims[0].status, 'no_source');
+  // a claim without a version may use any fetched version (as before)
+  assert.strictEqual(T.checkClaims(claim(U), landedOnV1).claims[0].status, 'found_as_written');
+  assert.strictEqual(T.checkClaims(claim(U + 'v1'), landedOnV1).claims[0].status, 'found_as_written');
+  // the second fetch of the same paper is the one that counts
+  const both = [{ url: U + 'v2', finalUrl: U + 'v1', ok: true, text: 'The study enrolled 99 participants.' }, { url: U + 'v2', finalUrl: U + 'v2', ok: true, text }];
+  assert.strictEqual(T.checkClaims(claim(U + 'v2'), both).claims[0].status, 'found_as_written');
+});
+
+test('r9a-2 visible text only: comments, tags, reference definitions, link titles, entities', () => {
+  pairs([
+    ['1250', '<!-- benchmark: 1250 -->', 'not found'],
+    ['1250', 'before <!-- a\nmulti-line 1250\ncomment --> after', 'not found'],
+    ['1250', '\n[ref]: /path " 1250 "', 'not found'], // a reference definition is a whole line
+    ['1250', "\n[ref]: <https://example.org/a> '1250'", 'not found'],
+    ['1250', '\n[ref]: /path (1250)', 'not found'],
+    ['1250', '[Foo](https://example.org/a "the 1250 title")', 'not found'],
+    ['1250', '![an image](pic.png "1250 pixels")', 'not found'],
+    ['1250', '[Foo](https://en.example/wiki/Foo_(bar)_1250)', 'not found'],
+    ['1250', '&lt; 1250', 'not found'],
+    ['<1250', '&lt; 1250', 'found'],
+    ['>1250', '&gt; 1250', 'found'],
+    ['1250', '1250 &amp; 300', 'not found'], // "&amp;" reads "&", a symbol after the number: part of the form
+    ['1250 &', '1250 &amp; 300', 'found'],
+    ['−1250', '&minus;1250', 'not found'], // the sign is then a word of its own in front of the digits, not an attached sign (fail-safe)
+    ['1250', '<td>1250</td>', 'found'],
+    ['1250', '<span class="x">1250</span> people', 'not found'], // "people" is the next word
+    ['1250 people', '<span class="x">1250</span> people', 'found'],
+    ['1250', '<p>1250</p>', 'found'],
+    ['1250', '[1250](https://example.org/x)', 'found'], // the link text stays
+  ]);
+  // the text between two tags stays, a footnote line is not a reference definition
+  assert.strictEqual(T.checkFigure('1250', '[^1]: the cost was 1250'), 'found_as_written');
+  // offsets stay valid for the numbers after the removed parts
+  const t = '<!-- c --> [x](http://a.example/p) 4,200 units';
+  assert.strictEqual(T.checkFigure('4,200 units', t), 'found_as_written');
+  // "&nbsp;" is white space of the same length (not one space: "1250&nbsp;mg" is not read as the unit "mg"; fail-safe)
+  assert.strictEqual(T.checkFigure('1250 mg', 'dose 1250&nbsp;mg'), 'not_found_as_written');
+  assert.strictEqual(T.checkFigure('1250', 'dose 1250&nbsp;.'), 'found_as_written');
+});
+
+test('r9a-3 markup between a sign or currency and the digits is not part of the form (sources and report text)', () => {
+  pairs([
+    ['1250', 'Total: **−** 1250', 'not found'],
+    ['-1250', 'Total: **−** 1250', 'found'],
+    ['-1250', 'Total: <b>-</b> 1250', 'found'],
+    ['1250', 'Total: **−1250**', 'not found'],
+    ['-1250', 'Total: **−1250**', 'found'],
+    ['1250', 'USD **1250**', 'not found'],
+    ['USD 1250', 'USD **1250**', 'not found'], // the code is then a word in front, no longer the currency of the number (fail-safe)
+    ['1250', '*1250*', 'found'],
+    ['1250', '`1250`', 'found'],
+    ['1250', '__1250__', 'found'],
+    ['1250', '1250*', 'not found'], // a star that wraps nothing stays a symbol of the form
+    ['1250', '1250 *', 'not found'],
+    ['1250 people', '**1250** people', 'found'],
+    ['1250 people', '**1250 people**', 'found'],
+  ]);
+  // report text: "**5** users" is the figure 5 with the word users (this was a false not found)
+  const claims = [{ id: 'c1', claim: 'Reported measurement', source_url: R8A, figures: ['5 users'] }];
+  const fetched = [{ url: R8A, title: 'Paper', ok: true, text: 'Reported measurement: 5 users.' }];
+  const r = T.checkReport({ prose: `**5** users took part (${R8A}).`, claims, fetched });
+  assert.strictEqual(r.prose, `**5** users took part (${R8A}).`);
+  assert.strictEqual(r.totals.proseFound, 1);
+  const wrong = T.checkReport({ prose: `**6** users took part (${R8A}).`, claims, fetched });
+  assert.match(wrong.prose, /\*\*6 \[not found in source\]\*\* users/); // the mark follows the digits, inside the markers
+  // a sign wrapped in markup in the report text is the sign of the figure
+  const neg = T.checkReport({ prose: `Total: **−** 5 users (${R8A}).`, claims: [{ id: 'c1', claim: 'Reported measurement', source_url: R8A, figures: ['-5 users'] }], fetched: [{ url: R8A, title: 'Paper', ok: true, text: 'Reported measurement: -5 users.' }] });
+  assert.strictEqual(neg.totals.proseFound, 1);
+  // the offsets of the report text do not move: the mark comes right after the figure
+  assert.strictEqual(T.checkReport({ prose: `A **7** rise (${R8A}).`, claims, fetched }).prose, `A **7 [not found in source]** rise (${R8A}).`);
+});
+
+test('r9a-4 case: a word is case-folded only when it has 5+ letters and no capital after the first', () => {
+  pairs([
+    ['1250 mbar', '1250 Mbar', 'not found'],
+    ['1250 Mbar', '1250 Mbar', 'found'],
+    ['1250 MiB', '1250 MiB', 'found'],
+    ['1250 MiB', '1250 mib', 'not found'],
+    ['1250 Participants', '1250 participants', 'found'],
+    ['1250 participants', '1250 PARTICIPANTS', 'not found'], // a capital after the first letter: kept as written
+    ['1250 kids', '1250 Kids', 'not found'], // 4 letters: kept as written
+  ]);
+});
+
+test('r9a-5 words after a number: the shorter function-word list, bounds, rates, symbols and parentheses', () => {
+  pairs([
+    // "in", "a", "an", "each", "or", "and", "more", "less", "over", "under", "than", "all", "most", "only", "still", "so", "then", "also" are words
+    ['1250', 'Length: 1250 in.', 'not found'],
+    ['1250', '1250 in thousands', 'not found'],
+    ['1250', '1250 only', 'not found'],
+    ['1250', '1250 and 300', 'not found'],
+    ['1250 and', '1250 and 300', 'found'],
+    ['1250', '1250 still', 'not found'],
+    ['1250', '1250 then', 'not found'],
+    ['1250 of', '1250 of 3000', 'found'], // "of" is still a function word: no part of the form
+    ['1250', '1250 of 3000', 'found'],
+    // bound and approximation phrases after the number set the qualifier and are not the word
+    ['1250 or fewer', '1250 or fewer', 'found'],
+    ['1250 or fewer', '≤1250', 'found'],
+    ['1250 or fewer', '1250 or more', 'not found'],
+    ['1250', '1250 or fewer', 'not found'],
+    ['1250', '1250 or more', 'not found'],
+    ['1250 or more', '≥1250', 'found'],
+    ['1250 or more', '1250 and above', 'found'],
+    ['1250 or later', '1250 or more', 'found'],
+    ['1250 and below', 'up to 1250', 'found'],
+    ['1250 at most', 'up to 1250', 'found'],
+    ['1250 at most', 'at least 1250', 'not found'],
+    ['1250 or so', 'about 1250', 'found'],
+    ['1250 or thereabouts', 'about 1250', 'found'],
+    ['1250', '1250 or so', 'not found'],
+    ['5 or more users', '≥ 5 users', 'found'],
+    ['5 or more users', '5 users', 'not found'],
+    ['at least 5 or more', 'at least 5', 'found'],
+    ['at most 5 or more', 'at most 5', 'not found'], // two different bounds in one figure never match
+    ['5% or more', '5% and above', 'found'],
+    ['5%', '5% or more', 'not found'],
+    // rates, after any number, all of them in order
+    ['1250%', '1250% annually', 'not found'],
+    ['1250% annually', '1250% annually', 'found'],
+    ['1250% per user', '1250% per user per day', 'not found'],
+    ['1250% per user per day', '1250% per user per day', 'found'],
+    ['1250 mg per kg', '1250 mg per kg per day', 'not found'],
+    ['1250 mg per kg per day', '1250 mg per kg per day', 'found'],
+    ['$1,250 a month', '$1,250 a year', 'not found'],
+    ['$1,250 a month', '$1,250 per month', 'found'],
+    ['$1,250 each month', '$1,250 per month', 'found'],
+    ['$1,250 every month', '$1,250 monthly', 'not found'],
+    ['$1,250 monthly', '$1,250 monthly', 'found'],
+    ['5%', '5% annual growth', 'not found'],
+    ['5% annual', '5% annual growth', 'found'],
+    ['5%', '5% yearly', 'not found'],
+    ['5%', '5% y/y', 'not found'],
+    ['5%', '5% yoy', 'not found'],
+    ['5%', '5% p.a.', 'not found'],
+    ['5%', '5% per annum', 'not found'],
+    ['5x', '5x per day', 'not found'],
+    ['5 pp', '5 pp a year', 'not found'],
+    ['1250ms', '1250ms per call', 'not found'],
+    ['1250', '1250 users daily', 'not found'],
+    ['1250 users', '1250 users hourly', 'not found'],
+    ['1250 m', '1250 m/s', 'not found'],
+    ['1250 MB', '1250 MB s⁻¹', 'not found'],
+    // a symbol or a parenthesised token after the number is part of the form
+    ['1250', '1250 ± 50', 'not found'],
+    ['1250', '1250 / 100', 'not found'],
+    ['1250', '1250 ‰', 'not found'],
+    ['1250', '1250 × 3', 'not found'],
+    ['1250', '1250 = x', 'not found'],
+    ['1250', '1250 (USD)', 'not found'],
+    ['1250', '1250 (million)', 'not found'],
+    ['1250', '1250 (n=20)', 'not found'],
+    ['1250 (USD)', '1250 (USD)', 'found'],
+    ['1250 (n=20)', '1250 (N=20)', 'not found'],
+    ['1250 ±', '1250 ± 50', 'found'],
+    ['1250', '1250 | 300 |', 'found'], // a table bar is no word
+    ['1250', '1250 - 300', 'found'], // a lone dash is no word
+    ['1250', '1250 (https://example.org/x)', 'found'], // a citation is no word (in a source its address is blanked: nothing is left)
+    ['1250', '1250 (see https://example.org/x)', 'not found'], // fail-safe: "see" is left in a source
+    // the word after a currency code is the next word after it
+    ['1250 USD', '1250 USD cents', 'not found'],
+    ['1250 USD cents', '1250 USD cents', 'found'],
+    ['1250 USD', '1250 USD.', 'found'],
+    ['1250 USD', '1250 USD', 'found'],
+    ['1250 USD per month', '1250 USD per month', 'found'],
+    ['1250 USD', '1250 USD per month', 'not found'],
+    ['$1,250 CAD', '$1,250 CAD', 'found'],
+    ['CAD $1,250', '$1,250 CAD', 'not found'],
+  ]);
+  // a rate in prose
+  const claims = [{ id: 'c1', claim: 'Reported measurement', source_url: R8A, figures: ['$1,250 a month'] }];
+  const fetched = [{ url: R8A, title: 'Paper', ok: true, text: 'Reported measurement: $1,250 a year.' }];
+  assert.match(T.checkReport({ prose: `It cost $1,250 a month (${R8A}).`, claims, fetched }).prose, /\$1,250 \[not found in source\] a month/);
+});
+
+test('r9a-6 qualifiers before a number: negations, bounds, approximations, sign words', () => {
+  pairs([
+    // negations reverse or void
+    ['more than 1250', 'no more than 1250', 'not found'],
+    ['no more than 1250', 'at most 1250', 'found'],
+    ['no more than 1250', 'not more than 1250', 'found'],
+    ['not over 1250', 'up to 1250', 'found'],
+    ['not above 1250', 'at most 1250', 'found'],
+    ['not exceeding 1250', 'at most 1250', 'found'],
+    ['no less than 1250', 'at least 1250', 'found'],
+    ['no fewer than 1250', 'at least 1250', 'found'],
+    ['not less than 1250', 'at least 1250', 'found'],
+    ['not under 1250', 'at least 1250', 'found'],
+    ['not below 1250', 'at least 1250', 'found'],
+    ['over 1250', 'not over 1250', 'not found'],
+    ['at most 1250', 'no less than 1250', 'not found'],
+    ['1250', 'not exactly 1250', 'not found'],
+    ['1250', 'never 1250', 'not found'],
+    ['1250', 'not 1250', 'not found'],
+    ['not exactly 1250', 'not exactly 1250', 'found'],
+    ['not 1250', 'not exactly 1250', 'found'],
+    ['not 1250', '1250', 'not found'],
+    ['above 1250', 'never above 1250', 'not found'], // a negation in front of another qualifier voids it
+    ['about 1250', 'not about 1250', 'not found'],
+    // maximum, minimum
+    ['1250', 'a maximum of 1250', 'not found'],
+    ['at most 1250', 'a maximum of 1250', 'found'],
+    ['up to 1250', 'maximum of 1250', 'found'],
+    ['≤1250', 'max. 1250', 'found'],
+    ['up to 1250', 'capped at 1250', 'found'],
+    ['at least 1250', 'a minimum of 1250', 'found'],
+    ['≥1250', 'minimum of 1250', 'found'],
+    ['at least 1250', 'min. 1250', 'found'],
+    ['at least 1250', 'starting at 1250', 'found'],
+    ['at least 1250', 'starting from 1250', 'found'],
+    ['at most 1250', 'a minimum of 1250', 'not found'],
+    // greater, less
+    ['more than 1250', 'exceeds 1250', 'found'],
+    ['more than 1250', 'exceeded 1250', 'found'],
+    ['over 1250', 'exceeding 1250', 'found'],
+    ['over 1250', 'surpassed 1250', 'found'],
+    ['over 1250', 'surpassing 1250', 'found'],
+    ['over 1250', 'beyond 1250', 'found'],
+    ['above 1250', 'greater than 1250', 'found'],
+    ['>1250', 'in excess of 1250', 'found'],
+    ['below 1250', 'less than 1250', 'found'],
+    ['under 1250', 'fewer than 1250', 'found'],
+    ['<1250', 'below 1250', 'found'],
+    ['1250', 'in excess of 1250', 'not found'],
+    ['1250', 'below 1250', 'not found'],
+    ['more than 1250', 'less than 1250', 'not found'],
+    ['over 1250', 'at least 1250', 'not found'],
+    // approximations
+    ['1250', 'an estimated 1250', 'not found'],
+    ['about 1250', 'an estimated 1250', 'found'],
+    ['about 1250', 'estimated 1250', 'found'],
+    ['about 1250', 'close to 1250', 'found'],
+    ['about 1250', 'circa 1250', 'found'],
+    ['about 1250', 'c. 1250', 'found'],
+    ['about 1250', 'ca. 1250', 'found'],
+    ['about 1250', 'est. 1250', 'found'],
+    ['about 1250', 'some 1250', 'found'],
+    ['about 1250', 'on the order of 1250', 'found'],
+    ['roughly 1250', '≈ 1250', 'found'],
+    ['about 1250', '1250', 'found'], // an approximation may match an exact source
+    ['1250', 'on the order of 1250', 'not found'],
+    ['1250', 'some 1250', 'not found'],
+    ['1250', '≈ 1250', 'not found'],
+    ['about 1250', 'at least 1250', 'not found'],
+    // sign words
+    ['5%', 'minus 5%', 'not found'],
+    ['5%', 'negative 5%', 'not found'],
+    ['minus 5', 'minus 5', 'found'],
+    ['minus 5', 'negative 5', 'found'],
+    ['minus 5', '5', 'not found'],
+    ['5', 'plus 5', 'not found'],
+    ['plus 5', 'positive 5', 'found'],
+    ['plus 5', '5', 'not found'],
+    ['5', 'positive 5', 'not found'],
+  ]);
+});
+
+test('r9a-7 scales touch the number; spaced digit groups; a compound keeps a trailing scale', () => {
+  pairs([
+    ['1250 K', '1250000', 'not found'],
+    ['1250000', '1250 K', 'not found'],
+    ['1250 K', '1250 K', 'found'],
+    ['300k', '300,000', 'found'],
+    ['300,000', '300k', 'found'],
+    ['5M', '5 million', 'found'],
+    ['$5M', '$5 million', 'found'],
+    ['$5m', '$5 million', 'not found'], // documented: a lower-case m touching the number is an attached "m", not million (fail-safe)
+    ['5 million', '5M', 'found'],
+    ['7B', '7 billion', 'found'],
+    ['5 M', '5 million', 'not found'],
+    ['5 B', '5 billion', 'not found'],
+    ['5 B', '5 B', 'found'],
+    ['300 K', '300000', 'not found'],
+    // spaced digit groups: the number is never one without the groups
+    ['250', '1  250', 'not found'],
+    ['250', '1 250 000', 'not found'],
+    ['000', '1 250 000', 'not found'],
+    ['1250', '1 250', 'not found'],
+    ['250', 'room 250', 'found'],
+    ['250', 'In 2020 250 people', 'not found'],
+    ['5–10 million', '5–10000000', 'not found'],
+    ['5–10 million', '5–10 million', 'found'],
+    ['5–10 million', '5 million–10 million', 'not found'],
+    ['5–10M', '5–10 million', 'found'],
+    ['5–10 million', '5-10 million', 'found'],
+    ['5–10 K', '5–10000', 'not found'],
+  ]);
+  assert.strictEqual(T.parseFigure('5–10 million').value, '5-10|million');
+  assert.strictEqual(T.parseFigure('5–10%').value, '5-10');
+  assert.strictEqual(T.parseFigure('5 million–10 million').value, '5000000-10000000');
+  assert.deepStrictEqual(T.numbersIn('300 K and 5M and 7 B and 4m').map((t) => [t.mag, t.suffix, t.post]), [['300', '', ''], ['5000000', 'M', ''], ['7', '', ''], ['4', '', 'm']]);
+  assert.deepStrictEqual(T.numbersIn('1  250').map((t) => [t.mag, t.pre]), [['1', ''], ['250', '#']]);
+  assert.deepStrictEqual(T.numbersIn('1\n250').map((t) => [t.mag, t.pre]), [['1', ''], ['250', '']]); // a line break is no digit group
+});
+
+test('r9a-8 a source title names the source only with 3+ words or 20+ characters, on word boundaries', () => {
+  const claims = [{ id: 'c1', claim: 'Reported measurement', source_url: R8A, figures: ['1250 users'] }];
+  const run = (title, prose) => T.checkReport({ prose, claims, fetched: [{ url: R8A, title, ok: true, text: 'Reported measurement: 1250 users.' }], counts: {} });
+  // "Pricing" is one short word: a sentence with "pricing" does not cite the source
+  assert.match(run('Pricing', 'The pricing page lists 1250 users.').prose, /1250 \[no source to check\] users/);
+  assert.match(run('Pricing', 'Pricing lists 1250 users.').prose, /1250 \[no source to check\] users/);
+  // three words, or twenty characters, count
+  assert.strictEqual(run('Pricing of cloud', 'The pricing of cloud lists 1250 users.').prose, 'The pricing of cloud lists 1250 users.');
+  assert.strictEqual(run('Annual pricing report', 'The annual pricing report lists 1250 users.').prose, 'The annual pricing report lists 1250 users.');
+  assert.strictEqual(run('Pricingoverviewdocument', 'The pricingoverviewdocument lists 1250 users.').prose, 'The pricingoverviewdocument lists 1250 users.');
+  // word boundaries: a title inside a longer word does not count
+  assert.match(run('Annual pricing report', 'The annual pricing reports list 1250 users.').prose, /1250 \[no source to check\] users/);
+  assert.match(run('Annual pricing report', 'The nonannual pricing report lists 1250 users.').prose, /1250 \[no source to check\] users/);
+  // an uncited short title of a source that was not opened does not close the block either
+  const closed = T.checkReport({ prose: 'The pricing page lists 1250 users.', claims, fetched: [{ url: R8A, title: 'Pricing', ok: false, text: '' }], counts: {} });
+  assert.match(closed.prose, /1250 \[no source to check\] users/);
+});
+
+test('r9a-9 a hard cap on the check per source: too large to check', () => {
+  const head = 'Reported measurement: 1250 users. ';
+  const claims = [{ id: 'c1', claim: 'Reported measurement', source_url: R8A, figures: ['1250 users'] }];
+  const run = (text) => {
+    const fetched = [{ url: R8A, title: 'Paper', ok: true, text }];
+    return { res: T.checkClaims(claims, fetched), rep: T.checkReport({ prose: `There were 1250 users (${R8A}).`, claims, fetched, counts: {} }) };
+  };
+  // 600,000 characters are checked; 600,001 are too large
+  const ok = run(head + ' '.repeat(600000 - head.length));
+  assert.strictEqual(ok.res.claims[0].status, 'found_as_written');
+  const big = run(head + ' '.repeat(600001 - head.length));
+  assert.strictEqual(big.res.claims[0].status, 'source_not_opened');
+  assert.deepStrictEqual(big.res.claims[0].figures.map((f) => f.status), ['source_not_opened']);
+  assert.strictEqual(big.rep.claims[0].check, 'source too large to check');
+  assert.strictEqual(big.rep.claims[0].check_status, 'source_not_opened');
+  assert.match(big.rep.prose, /1250 \[source not opened\] users/);
+  assert.strictEqual(big.rep.totals.notOpened, 1);
+  assert.strictEqual(big.rep.totals.proseNotOpened, 1);
+  assert.strictEqual(T.checkFigure('1250 users', head + ' '.repeat(600001 - head.length)), 'source_not_opened');
+  // an unreadable source stays "source not opened" (its own check text)
+  assert.strictEqual(T.checkReport({ prose: 'x', claims, fetched: [{ url: R8A, title: 'P', ok: false, text: '' }] }).claims[0].check, 'source not opened');
+  // indexing that takes longer than the time limit is too large too (the limit is lowered here to make it certain)
+  const was = T.INDEX_LIMITS.maxMs;
+  try {
+    T.INDEX_LIMITS.maxMs = -1;
+    const slow = run(head + 'slow variant');
+    assert.strictEqual(slow.rep.claims[0].check, 'source too large to check');
+    assert.match(slow.rep.prose, /1250 \[source not opened\] users/);
+  } finally { T.INDEX_LIMITS.maxMs = was; }
+  assert.strictEqual(run(head + 'a fast variant').res.claims[0].status, 'found_as_written'); // back to normal (the verdict on a text is kept per text)
+  // no regex scans without a bound: "](" repeated 300,000 times (600,000 characters) is checked in well under a second
+  const evil = '](' .repeat(300000) + ' 1250 users';
+  const t0 = Date.now();
+  assert.strictEqual(T.checkFigure('1250 users', evil.slice(-600000)), 'found_as_written');
+  for (const text of ['](' .repeat(300000), '*'.repeat(600000), '*a '.repeat(200000), '<!--'.repeat(150000), '<a '.repeat(200000), '&lt;'.repeat(150000), ']((((((('.repeat(70000)]) {
+    T.checkFigure('1250', text);
+  }
+  assert.ok(Date.now() - t0 < 1000, `took ${Date.now() - t0} ms`);
+  // a link destination with one level of parentheses is blanked whole; its figures are not source text
+  assert.strictEqual(T.checkFigure('1250', '[Foo](https://en.example/wiki/Foo_(bar)_1250)'), 'not_found_as_written');
+  assert.strictEqual(T.checkFigure('1250', '[Foo](https://en.example/wiki/Foo_(bar)_1250) and 1250'), 'found_as_written');
+});
+
+// ---------------------------------------------------------------- r9b: the second mark, "Means the same"
+const MSRC = 'https://s.example/study';
+const MTEXT = 'Table 3. Response rate by arm, adults, 2024. The response rate was 56.4% in the treatment arm and 43.6% in the control arm. Enrolment was 1,250 participants in total.';
+const MFETCHED = [{ url: MSRC, title: 'Trial report', ok: true, text: MTEXT }];
+const mClaims = () => [
+  { id: 'c1', claim: 'Response rate was 56.4% in the treatment arm', source_url: MSRC, figures: ['56.4%', '43.6%', '9.9%'], measured_result: '56.4% treatment, 43.6% control' },
+  { id: 'c2', claim: 'Enrolment was 1,250 participants', source_url: MSRC, figures: ['1,250 participants'], measured_result: '' },
+];
+const jsonReply = (arr) => '```json\n' + JSON.stringify(arr) + '\n```';
+const mCheck = (keys, claims = mClaims(), prose = `## Verdict\nThe rate was 56.4% in the treatment arm (${MSRC}) against 43.6% in the control arm (${MSRC}).`) => T.checkReport({ prose, claims, fetched: MFETCHED, counts: {}, meaningKeys: keys });
+const mFigs = () => T.figureExcerpts(mCheck().claims, MFETCHED);
+// the reviewer's answers, run through the parser and the code validation
+const mValidate = (items, figs = mFigs(), id = 'c1') => {
+  const parsed = T.parseChallenge(jsonReply(['c1', 'c2'].map((x) => ({ id: x, verdict: 'supported', reason: 'r', figures: x === id ? items : [] }))), ['c1', 'c2'], figs);
+  return { parsed, ...T.figureMeanings(figs, parsed), figs };
+};
+const keyOfFid = (figs, fid) => figs.find((f) => f.fid === fid).meaningKey;
+
+test('r9b figureExcerpts: one passage per found figure, ids, keys, not found figures get none', () => {
+  const figs = mFigs();
+  assert.deepStrictEqual(figs.map((f) => f.fid), ['c1.f1', 'c1.f2', 'c2.f1']); // c1.f3 (9.9%) is not in the source: no passage
+  assert.deepStrictEqual(figs.map((f) => f.figure), ['56.4%', '43.6%', '1,250 participants']);
+  assert.ok(figs.every((f) => /^[0-9a-f]{64}$/.test(f.meaningKey)));
+  assert.strictEqual(new Set(figs.map((f) => f.meaningKey)).size, 3);
+  assert.ok(figs[0].excerpt.includes('The response rate was 56.4% in the treatment arm'));
+  assert.deepStrictEqual(figs[0].numbers, ['56.4']); // the digits as the passage writes them, without the %
+  // a source that was not opened, or a claim with no source: no passage
+  const closed = [{ url: MSRC, ok: false, text: '' }];
+  assert.deepStrictEqual(T.figureExcerpts(mCheck().claims, closed), []);
+  assert.deepStrictEqual(T.figureExcerpts(mCheck().claims, []), []);
+});
+
+test('r9b figureExcerpts: 300 characters each side, cut at word boundaries, on the visible text', () => {
+  const text = 'alpha '.repeat(120) + 'The rate was 56.4% overall. ' + 'omega '.repeat(120) + 'see https://x.example/' + 'z'.repeat(50);
+  const fetched = [{ url: MSRC, ok: true, text }];
+  const claims = [{ id: 'c1', claim: 'The rate was 56.4% overall', source_url: MSRC, figures: ['56.4%'] }];
+  const first = T.checkReport({ prose: 'x', claims, fetched });
+  const [f] = T.figureExcerpts(first.claims, fetched);
+  assert.ok(f.excerpt.includes('The rate was 56.4% overall.'));
+  const words = f.excerpt.split(' ');
+  assert.ok(words.every((w) => ['alpha', 'omega', 'The', 'rate', 'was', '56.4%', 'overall.'].includes(w)), 'no word is cut');
+  const before = f.excerpt.indexOf('56.4%'); // characters before the figure
+  assert.ok(before <= 300 && before >= 285, 'about 300 characters before: ' + before);
+  const after = f.excerpt.length - f.excerpt.indexOf('56.4%') - 5;
+  assert.ok(after <= 300 + 20 && after >= 270, 'about 300 characters after: ' + after);
+  // a link address is not visible text: it is not in the passage
+  const near = [{ url: MSRC, ok: true, text: 'The rate was 56.4% overall, see https://x.example/secret-address for more.' }];
+  const [g] = T.figureExcerpts(T.checkReport({ prose: 'x', claims, fetched: near }).claims, near);
+  assert.ok(!g.excerpt.includes('secret-address') && g.excerpt.includes('for more'));
+});
+
+test('r9b figureExcerpts: at most 8 figures per claim and 120 per round', () => {
+  const nums = Array.from({ length: 12 }, (_, i) => String(41001 + i));
+  const fetched = [{ url: MSRC, ok: true, text: 'The values were ' + nums.map((n) => `(${n})`).join(' ') + ' in all.' }];
+  const claims = Array.from({ length: 20 }, (_, i) => ({ id: 'c' + (i + 1), claim: 'Values were reported ' + i, source_url: MSRC, figures: nums }));
+  const first = T.checkReport({ prose: 'x', claims, fetched });
+  const figs = T.figureExcerpts(first.claims, fetched);
+  assert.strictEqual(figs.filter((f) => f.id === 'c1').length, 8);
+  assert.deepStrictEqual(figs.filter((f) => f.id === 'c1').map((f) => f.n), [1, 2, 3, 4, 5, 6, 7, 8]);
+  assert.strictEqual(figs.length, 120);
+  // the figures past the caps are "not checked", never "matches"
+  const keys = Object.fromEntries(figs.map((f) => [f.meaningKey, { meaning: 'matches', quote: 'x' }]));
+  const marked = T.checkReport({ prose: 'x', claims, fetched, meaningKeys: keys });
+  assert.strictEqual(marked.claims[0].figure_checks.filter((f) => f.meaning === 'matches').length, 8);
+  assert.strictEqual(marked.claims[0].figure_checks.filter((f) => f.meaning === 'not checked').length, marked.claims[0].figure_checks.length - 8); // the 4 past the cap, and the claim text's own "0"
+});
+
+test('r9b the brief carries each figure with its passage, and the reply shape', () => {
+  const first = mCheck();
+  const figs = T.figureExcerpts(first.claims, MFETCHED);
+  const b = T.challengeBrief('Q?', first.claims, T.challengeExcerpts(first.claims, MFETCHED), figs);
+  assert.ok(b.includes('Figures to compare (each with the passage the hub cut from the source around it):'));
+  assert.ok(b.includes('[c1.f1] the report writes: 56.4% | passage: "'));
+  assert.ok(b.includes('[c2.f1] the report writes: 1,250 participants | passage: "'));
+  assert.ok(!b.includes('[c1.f3]'));
+  assert.match(b, /Answer "matches" or "differs"/);
+  assert.match(b, /must include the figure's number as the passage writes it/);
+  assert.match(b, /Quotes must be copied exactly from the passage/);
+  assert.ok(b.includes('"figures": [{"fid": "c1.f1", "meaning": "matches", "quote": "..."}]'));
+  const none = T.challengeBrief('Q?', first.claims, T.challengeExcerpts(first.claims, MFETCHED));
+  assert.ok(!none.includes('Figures to compare') && !none.includes('"fid"'));
+});
+
+test('r9b parseChallenge: figures only for the fids that were presented, for their own claim', () => {
+  const figs = mFigs();
+  const items = [
+    { fid: 'c1.f1', meaning: 'matches', quote: 'The response rate was 56.4%' },
+    { fid: 'c1.f3', meaning: 'matches', quote: 'nine point nine' },   // a figure that was not found: never presented
+    { fid: 'c9.f1', meaning: 'matches', quote: 'does not exist' },    // unknown
+    { fid: 'c2.f1', meaning: 'matches', quote: 'Enrolment was 1,250 participants' }, // presented, but for claim c2, not c1
+    { fid: 'c1.f1', meaning: 'differs', quote: 'a second answer' },   // a repeat
+    'junk', null,
+  ];
+  const { parsed } = mValidate(items, figs);
+  assert.deepStrictEqual(parsed.results[0].figures, [{ fid: 'c1.f1', meaning: 'matches', quote: 'The response rate was 56.4%' }]);
+  assert.deepStrictEqual(parsed.results[1].figures, []);
+  assert.deepStrictEqual(T.parseChallenge(jsonReply([{ id: 'c1', verdict: 'supported', reason: '', figures: items }]), ['c1', 'c2'], figs).results[1].figures, []); // a missing claim
+  // without the presented list nothing is kept
+  assert.deepStrictEqual(T.parseChallenge(jsonReply([{ id: 'c1', verdict: 'supported', reason: '', figures: items }]), ['c1']).results[0].figures, []);
+});
+
+test('r9b validation: the quote must be in the passage, long enough, and for "matches" carry the number', () => {
+  const figs = mFigs();
+  const f1 = keyOfFid(figs, 'c1.f1');
+  // matches with a good quote
+  let v = mValidate([{ fid: 'c1.f1', meaning: 'matches', quote: 'The response rate was 56.4% in the treatment arm' }]);
+  assert.deepStrictEqual(v.keys, { [f1]: { meaning: 'matches', quote: 'The response rate was 56.4% in the treatment arm' } });
+  // a quote that is not in the passage
+  v = mValidate([{ fid: 'c1.f1', meaning: 'matches', quote: 'The response rate was 56.4% in the placebo arm' }]);
+  assert.deepStrictEqual(v.keys, {});
+  // a quote from the passage without the figure's number
+  v = mValidate([{ fid: 'c1.f1', meaning: 'matches', quote: 'response rate was' }]);
+  assert.deepStrictEqual(v.keys, {});
+  // a quote with another number does not help either
+  v = mValidate([{ fid: 'c1.f1', meaning: 'matches', quote: 'and 43.6% in the control arm' }]);
+  assert.deepStrictEqual(v.keys, {});
+  // too short (fewer than 8 characters)
+  v = mValidate([{ fid: 'c1.f1', meaning: 'matches', quote: '56.4%' }]);
+  assert.deepStrictEqual(v.keys, {});
+  // differs with a quote from the passage (the number is not needed): differs, with the quote
+  v = mValidate([{ fid: 'c1.f2', meaning: 'differs', quote: 'in the control arm' }]);
+  assert.deepStrictEqual(v.keys, { [keyOfFid(figs, 'c1.f2')]: { meaning: 'differs', quote: 'in the control arm' } });
+  assert.deepStrictEqual(v.differs, [{ id: 'c1', fid: 'c1.f2', figure: '43.6%', quote: 'in the control arm' }]);
+  // differs with a quote that is not in the passage
+  assert.deepStrictEqual(mValidate([{ fid: 'c1.f2', meaning: 'differs', quote: 'in the placebo arm' }]).keys, {});
+  // anything but exactly matches / differs
+  for (const meaning of ['match', 'maybe', '', 'same']) assert.deepStrictEqual(mValidate([{ fid: 'c1.f1', meaning, quote: 'The response rate was 56.4% in the treatment arm' }]).keys, {}, meaning);
+  // the verdict word in any case counts (the quote is what is checked)
+  assert.strictEqual(Object.values(mValidate([{ fid: 'c1.f1', meaning: ' Matches ', quote: 'The response rate was 56.4% in the treatment arm' }]).keys)[0].meaning, 'matches');
+  // white space is collapsed on both sides
+  v = mValidate([{ fid: 'c1.f1', meaning: 'matches', quote: 'rate was   56.4%\n in the treatment' }]);
+  assert.strictEqual(Object.keys(v.keys).length, 1);
+  assert.strictEqual(v.keys[f1].quote, 'rate was 56.4% in the treatment');
+  // a number with a thousands separator: the quote must have it as the passage writes it
+  assert.deepStrictEqual(mValidate([{ fid: 'c2.f1', meaning: 'matches', quote: 'Enrolment was 125 participants' }], mFigs(), 'c2').keys, {});
+  assert.strictEqual(Object.keys(mValidate([{ fid: 'c2.f1', meaning: 'matches', quote: 'Enrolment was 1,250 participants' }], mFigs(), 'c2').keys).length, 1);
+});
+
+test('r9b final marks: matches / differs / not checked, looked up by the current key; "[source says otherwise]" once', () => {
+  const figs = mFigs();
+  const keys = {
+    [keyOfFid(figs, 'c1.f1')]: { meaning: 'matches', quote: 'The response rate was 56.4% in the treatment arm' },
+    [keyOfFid(figs, 'c1.f2')]: { meaning: 'differs', quote: 'in the control arm' },
+  };
+  const r = mCheck(keys);
+  const fc = r.claims[0].figure_checks;
+  assert.deepStrictEqual(fc.map((f) => [f.figure, f.status, f.meaning, f.meaning_quote]), [
+    ['56.4%', 'found_as_written', 'matches', 'The response rate was 56.4% in the treatment arm'],
+    ['43.6%', 'found_as_written', 'differs', 'in the control arm'],
+    ['9.9%', 'not_found_as_written', 'not checked', ''],
+  ]);
+  assert.strictEqual(r.claims[1].figure_checks[0].meaning, 'not checked'); // c2 was not reviewed
+  // the report text: only "differs" is marked, once; a prose figure takes the meaning of the claim figure it was found through
+  assert.strictEqual(r.prose, `## Verdict\nThe rate was 56.4% in the treatment arm (${MSRC}) against 43.6% [source says otherwise] in the control arm (${MSRC}).`);
+  assert.strictEqual(r.claims[0].measured_result, '56.4% treatment, 43.6% [source says otherwise] control');
+  assert.deepStrictEqual([r.totals.meaningMatches, r.totals.meaningDiffers, r.totals.proseMatches, r.totals.proseDiffers], [1, 1, 1, 1]);
+  // checked again (its own output as input, or the same raw text again): the mark is not written twice
+  assert.strictEqual(T.checkReport({ prose: r.prose, claims: mClaims(), fetched: MFETCHED, counts: {}, meaningKeys: keys }).prose, r.prose);
+  assert.strictEqual((mCheck(keys).prose.match(/\[source says otherwise\]/g) || []).length, 1);
+  // a prose figure of a claim that has no stored meaning stays "not checked": no mark, never "matches"
+  const n = mCheck({});
+  assert.ok(!n.prose.includes('[source says otherwise]'));
+  assert.deepStrictEqual([n.totals.meaningMatches, n.totals.proseMatches], [0, 0]);
+  assert.ok(n.claims.every((c) => c.figure_checks.every((f) => f.meaning === 'not checked' && f.meaning_quote === '')));
+});
+
+test('r9b no challenge: every figure "not checked", the summary says so, nothing reads matches', () => {
+  for (const r of [mCheck(), mCheck(undefined), mCheck(null), mCheck({})]) {
+    assert.ok(r.claims.every((c) => c.figure_checks.every((f) => f.meaning === 'not checked')));
+    const t = T.chatReport({ prose: r.prose, claims: r.claims, totals: r.totals, files: {} });
+    assert.match(t, /Means the same \(checked by the reviewer against the passage around each figure\): 0 matches; 0 differs \(marked "source says otherwise"\); 6 not checked\. Confirmed by both: 0 of 6 figures\./);
+    assert.match(t, /Key evidence\n- No claim has all its figures confirmed by both checks/);
+  }
+  // the check itself did not run: the old line stays and the second line says so
+  const none = T.chatReport({ prose: '## Verdict\nA.', claims: [], totals: {}, notChecked: true, files: {} });
+  assert.match(none, /Figures not checked: the report had no list of claims/);
+  assert.match(none, /\nMeans the same: not checked\.\n/);
+  assert.doesNotMatch(none, /matches;/);
+  assert.match(T.chatReport({ prose: '## Verdict\nA.', claims: [], totals: {}, checkError: true, files: {} }), /\nMeans the same: not checked\.\n/);
+  // a stored entry in a wrong shape is no meaning
+  const odd = mCheck({ [keyOfFid(mFigs(), 'c1.f1')]: { meaning: 'matches' }, x: 5 });
+  assert.strictEqual(odd.claims[0].figure_checks[0].meaning, 'not checked');
+});
+
+test('r9b a revision after the review changes a figure\'s wording: its meaning is not checked', () => {
+  const figs = mFigs();
+  const keys = { [keyOfFid(figs, 'c1.f1')]: { meaning: 'matches', quote: 'The response rate was 56.4% in the treatment arm' } };
+  assert.strictEqual(mCheck(keys).claims[0].figure_checks[0].meaning, 'matches');
+  // the claim reworded
+  const reworded = mClaims(); reworded[0].claim = 'Response rate was 56.4% in the treatment arm of adults';
+  assert.strictEqual(mCheck(keys, reworded).claims[0].figure_checks[0].meaning, 'not checked');
+  // only the way the figure is written changed: ~56.4%
+  const rewritten = mClaims(); rewritten[0].figures = ['~56.4%', '43.6%', '9.9%']; rewritten[0].claim = 'Response rate was 56.4% in the treatment arm';
+  const r = mCheck(keys, rewritten);
+  assert.ok(r.claims[0].figure_checks.every((f) => f.meaning === 'not checked'));
+  // a claim that did not change keeps its meaning, also when it is renumbered
+  const renumbered = mClaims(); renumbered[0].id = 'c7';
+  assert.strictEqual(mCheck(keys, renumbered).claims[0].figure_checks[0].meaning, 'matches');
+});
+
+test('r9b the two lines, the counts and Key evidence with a mix', () => {
+  const figs = mFigs();
+  const keys = {
+    [keyOfFid(figs, 'c1.f1')]: { meaning: 'matches', quote: 'The response rate was 56.4% in the treatment arm' },
+    [keyOfFid(figs, 'c1.f2')]: { meaning: 'differs', quote: 'in the control arm' },
+    [keyOfFid(figs, 'c2.f1')]: { meaning: 'matches', quote: 'Enrolment was 1,250 participants' },
+  };
+  const r = T.checkReport({ prose: '## Verdict\nThe treatment arm did better.', claims: mClaims(), fetched: MFETCHED, counts: {}, meaningKeys: keys });
+  const t = T.chatReport({ prose: r.prose, claims: r.claims, totals: r.totals, files: {} });
+  assert.ok(t.includes('In the source (checked by code against the fetched text): 3 found as written; 1 not found as written (marked "not found in source"); 0 from sources that could not be opened (marked "source not opened"); 0 with no source to check.'));
+  assert.ok(t.includes('Means the same (checked by the reviewer against the passage around each figure): 2 matches; 1 differs (marked "source says otherwise"); 1 not checked. Confirmed by both: 2 of 4 figures.'));
+  assert.ok(t.includes(T.SCOPE_SENTENCE));
+  assert.ok(t.indexOf('In the source') < t.indexOf('Means the same') && t.indexOf('Means the same') < t.indexOf(T.SCOPE_SENTENCE));
+  assert.match(T.SCOPE_SENTENCE, /with its sign, currency, unit and the word right after it/);
+  assert.match(T.SCOPE_SENTENCE, /a figure is confirmed only when both agree\.$/);
+  // Key evidence: only the claim whose figures are all confirmed (c2); c1 has a figure that differs and one not found
+  const ev = t.slice(t.indexOf('Key evidence'), t.indexOf('Corrections to the first pass'));
+  assert.ok(ev.includes('Enrolment was 1,250 participants') && !ev.includes('Response rate was'));
+  // a claim whose figures all match is key evidence unless the review doubted it
+  const doubted = T.chatReport({ prose: r.prose, claims: r.claims, totals: r.totals, doubtedIds: ['c2'], files: {} });
+  assert.doesNotMatch(doubted.slice(doubted.indexOf('Key evidence'), doubted.indexOf('Doubted by the review')), /Enrolment/);
+  // found as written alone is no longer enough
+  const nokeys = T.chatReport({ prose: r.prose, claims: mCheck({}).claims, totals: mCheck({}).totals, files: {} });
+  assert.doesNotMatch(nokeys.slice(nokeys.indexOf('Key evidence'), nokeys.indexOf('Corrections')), /Enrolment/);
+});
+
+test('r9b the document: two columns, the section "Figures whose meaning differs", the scope sentence', () => {
+  const figs = mFigs();
+  const keys = {
+    [keyOfFid(figs, 'c1.f1')]: { meaning: 'matches', quote: 'The response rate was 56.4% in the treatment arm' },
+    [keyOfFid(figs, 'c1.f2')]: { meaning: 'differs', quote: 'in the control arm' },
+  };
+  const r = mCheck(keys);
+  const { markdown, html } = T.renderDocument({ question: 'Q?', preparedDate: '2026-11-22', prose: r.prose, claims: r.claims, sources: MFETCHED, proseMissed: r.totals.proseMissed, reviewRounds: 1 });
+  assert.match(markdown, /\| Our inference \| In the source \| Means the same \|\n\| --- \| --- \| --- \| --- \| --- \| --- \| --- \| --- \|/);
+  assert.match(markdown, /\| 2 of 3 found as written \| 1 matches, 1 differs, 1 not checked \|/);
+  assert.match(markdown, /\| 1 of 1 found as written \| 1 not checked \|/);
+  assert.ok(markdown.includes(T.SCOPE_SENTENCE));
+  assert.ok(markdown.indexOf('## Traceability') < markdown.indexOf(T.SCOPE_SENTENCE) && markdown.indexOf(T.SCOPE_SENTENCE) < markdown.indexOf('## Figures not found as written'));
+  const at = markdown.indexOf('## Figures whose meaning differs');
+  assert.ok(at > markdown.indexOf('## Figures not found as written') && at < markdown.indexOf('## Sources'));
+  const sec = markdown.slice(at, markdown.indexOf('## Sources'));
+  assert.ok(sec.includes('| 43.6% | c1: Response rate was 56.4% in the treatment arm | in the control arm | [Trial report](' + MSRC + ') |'));
+  assert.ok(!sec.includes('56.4% | c1')); // the figure that matches is not listed
+  assert.match(html, /<h2[^>]*>Figures whose meaning differs<\/h2>/);
+  // all figures compared match: the section says None.
+  const ok = mCheck({ [keyOfFid(figs, 'c1.f1')]: keys[keyOfFid(figs, 'c1.f1')] });
+  const d2 = T.renderDocument({ question: 'Q?', prose: ok.prose, claims: ok.claims, sources: MFETCHED, reviewRounds: 1 }).markdown;
+  assert.match(d2, /## Figures whose meaning differs\n\n[^\n]+\n\nNone\.\n/);
+  // nothing compared: no section, one line
+  const none = mCheck({});
+  const d3 = T.renderDocument({ question: 'Q?', prose: none.prose, claims: none.claims, sources: MFETCHED, reviewRounds: 0 }).markdown;
+  assert.ok(d3.includes("No figure's meaning was compared: the review did not run.") && !d3.includes('## Figures whose meaning differs'));
+  const d4 = T.renderDocument({ question: 'Q?', prose: none.prose, claims: none.claims, sources: MFETCHED, reviewRounds: 2 }).markdown;
+  assert.ok(d4.includes("No figure's meaning was compared: the reviewer compared none."));
+  assert.match(d4, /\| 3 not checked \|/);
+});
+
+test('r9b reviseBrief: tells the reviser about figures that differ, strips the meaning fields', () => {
+  const r = mCheck({});
+  const claims = r.claims.map((c) => ({ ...c, meaning: 'matches', meaning_quote: 'SECRET-QUOTE' }));
+  const b = T.reviseBrief('Q?', 'prose', claims, { results: [{ id: 'c1', verdict: 'partly', reason: 'r' }] }, [{ id: 'c1', fid: 'c1.f2', figure: '43.6%', quote: 'in the control arm' }]);
+  assert.ok(b.includes('Figures whose passage says something different'));
+  assert.ok(b.includes('- c1: "43.6%" | the source\'s passage says: "in the control arm"'));
+  assert.match(b, /correct what the report says about it/);
+  assert.doesNotMatch(b, /SECRET-QUOTE|meaning|figure_checks/);
+  const plain = T.reviseBrief('Q?', 'prose', claims, { results: [] });
+  assert.doesNotMatch(plain, /Figures whose passage says something different/);
 });

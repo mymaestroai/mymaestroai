@@ -1065,7 +1065,7 @@ test('thorough runner: the stages in order with the right models, progress in or
   assert.ok(msg.startsWith('[Deep research finished]'));
   assert.match(msg, /the figure-check line, which reviewer was used, and the document path/);
   // r8: the claim figure and the figure in the report text are both counted, both found as written in the fetched text
-  assert.match(msg, /Figures checked against the fetched source text: 2 found as written; 0 not found as written \(marked "not found in source"\); 0 from sources that could not be opened \(marked "source not opened"\); 0 with no source to check\./);
+  assert.match(msg, /In the source \(checked by code against the fetched text\): 2 found as written; 0 not found as written \(marked "not found in source"\); 0 from sources that could not be opened \(marked "source not opened"\); 0 with no source to check\./);
   assert.match(msg, /Challenged by: a model from another vendor \(OpenAI\) \(1 round\)/);
   assert.match(msg, /Full document: \/files\/research\/deep-research-.*\.md/);
   assert.doesNotMatch(msg.split('Report:\n')[1], /Not finished/);
@@ -1196,7 +1196,7 @@ test('thorough runner: a deadline after the report was written delivers the save
   const report = m.wakes[0].message.split('Report:\n')[1];
   assert.match(report.split('\n')[0], /^Not finished: checking the report, writing the document \(the time limit/);
   assert.match(report, /Method A wins/);
-  assert.match(report, /Figures checked against the fetched source text: 2 found as written; 0 not found as written/);
+  assert.match(report, /In the source \(checked by code against the fetched text\): 2 found as written; 0 not found as written/);
 });
 
 test('thorough runner: recover() delivers "[Deep research interrupted]" with the saved prose, else the reader notes, else the findings', async () => {
@@ -1695,12 +1695,124 @@ test('r8 2: a saved run keeps reading: old statuses and totals map to the new la
   const msg = b.wakes[0].message;
   // the text is shown as saved; the saved statuses still decide what is key evidence; the totals read in the new wording
   assert.match(msg, /Method A scored 56\.4% \[unverified\] on the test\./);
-  assert.match(msg, /Key evidence\n- Method A won \[https:\/\/example\.org\/paper-a\] \(figures found as written\)/);
+  // r9b: key evidence needs both marks; a saved run has no meaning for its figures, so nothing is key evidence
+  assert.match(msg, /Key evidence\n- No claim has all its figures confirmed by both checks/);
   assert.doesNotMatch(msg, /Key evidence[\s\S]*Method B lost[\s\S]*Doubted/);
-  assert.match(msg, /Figures checked against the fetched source text: 1 found as written; 1 not found as written \(marked "not found in source"\); 0 from sources that could not be opened \(marked "source not opened"\); 1 with no source to check\./);
+  assert.match(msg, /In the source \(checked by code against the fetched text\): 1 found as written; 1 not found as written \(marked "not found in source"\); 0 from sources that could not be opened \(marked "source not opened"\); 1 with no source to check\./);
   assert.equal(E_SAVED('found'), 'found_as_written');
   assert.equal(E_SAVED('not_found'), 'not_found_as_written');
   assert.equal(E_SAVED('common_not_near'), 'not_found_as_written');
   assert.equal(E_SAVED('source_not_opened'), 'source_not_opened');
 });
 const E_SAVED = (s) => T_REAL.savedStatus(s);
+
+// ── r9b: the second mark in a full run ──
+const FIG_QUOTE = 'Method A scored 56.4% on the test';
+const reviewerReply = (verdict, figures) => [{ label: 'Reviewer', ok: true, text: '```json\n' + JSON.stringify([{ id: 'c1', verdict, reason: 'because', ...(figures ? { figures } : {}) }]) + '\n```' }];
+
+test('r9b runner: figure verdicts are validated by code, saved as meaningKeys, and both lines reach the report', async () => {
+  const m = makeThorough({ script: { Reviewer: () => reviewerReply('supported', [{ fid: 'c1.f1', meaning: 'matches', quote: FIG_QUOTE }]) } });
+  const r = startThorough(m);
+  await until(() => m.runner.get(r.id).state === 'delivered');
+  // the brief showed the figure with its passage, and the reply shape
+  const brief = m.calls.find((c) => c.labels[0] === 'Reviewer').tasks[0];
+  assert.match(brief, /Figures to compare \(each with the passage the hub cut from the source around it\):\n  \[c1\.f1\] the report writes: 56\.4% \| passage: "/);
+  // the saved run has the key with the validated answer
+  const run = m.runner.get(r.id);
+  const keys = Object.entries(run.meaningKeys || {});
+  assert.equal(keys.length, 1);
+  assert.match(keys[0][0], /^[0-9a-f]{64}$/);
+  assert.deepEqual(keys[0][1], { meaning: 'matches', quote: FIG_QUOTE });
+  assert.ok(m.saves.some((s) => s.includes('"meaningKeys"')), 'saved with the run');
+  assert.equal(run.claims[0].figure_checks[0].meaning, 'matches');
+  // the delivered report: both lines, the scope sentence, key evidence needs both marks
+  const msg = m.wakes[0].message;
+  assert.match(msg, /In the source \(checked by code against the fetched text\): 2 found as written;/);
+  assert.match(msg, /Means the same \(checked by the reviewer against the passage around each figure\): 2 matches; 0 differs \(marked "source says otherwise"\); 0 not checked\. Confirmed by both: 2 of 2 figures\./);
+  assert.match(msg, /a figure is confirmed only when both agree\./);
+  assert.match(msg, /Key evidence\n- Method A scored 56\.4% on the test \[https:\/\/example\.org\/paper-a\] \(figures confirmed by both checks\)/);
+  // the document: both columns
+  assert.match(m.written[0].doc.markdown, /\| In the source \| Means the same \|/);
+  assert.match(m.written[0].doc.markdown, /\| 1 of 1 found as written \| 1 matches \|/);
+});
+
+test('r9b runner: answers that fail the code validation leave the figures "not checked"; the round still counts', async () => {
+  const bad = [
+    { fid: 'c1.f1', meaning: 'matches', quote: 'Method A scored 99.9% on the test' }, // not in the passage
+    { fid: 'c1.f9', meaning: 'matches', quote: FIG_QUOTE },                            // never presented
+  ];
+  const m = makeThorough({ script: { Reviewer: () => reviewerReply('supported', bad) } });
+  const r = startThorough(m);
+  await until(() => m.runner.get(r.id).state === 'delivered');
+  const run = m.runner.get(r.id);
+  assert.equal(run.rounds, 1);
+  assert.deepEqual(run.meaningKeys || {}, {});
+  const msg = m.wakes[0].message;
+  assert.match(msg, /: 0 matches; 0 differs \(marked "source says otherwise"\); 2 not checked\. Confirmed by both: 0 of 2 figures\./);
+  assert.match(msg, /Key evidence\n- No claim has all its figures confirmed by both checks/);
+  assert.doesNotMatch(msg, /\[source says otherwise\]/);
+});
+
+test('r9b runner: a round with no usable claim verdicts credits no figure answers', async () => {
+  const m = makeThorough({ script: { Reviewer: () => reviewerReply('cannot_check', [{ fid: 'c1.f1', meaning: 'matches', quote: FIG_QUOTE }]) } });
+  const r = startThorough(m);
+  await until(() => m.runner.get(r.id).state === 'delivered');
+  const run = m.runner.get(r.id);
+  assert.equal(run.rounds, 0);
+  assert.deepEqual(run.meaningKeys || {}, {});
+  assert.ok(run.claims.every((c) => c.figure_checks.every((f) => f.meaning === 'not checked')));
+  const msg = m.wakes[0].message;
+  assert.match(msg, /Not challenged: the reviewer gave no usable verdicts\./);
+  assert.match(msg, /: 0 matches; 0 differs[^\n]*; 2 not checked\. Confirmed by both: 0 of 2 figures\./);
+});
+
+test('r9b runner: no review (reviewRounds 0) or a reviewer that fails: every figure "not checked", nothing reads matches', async () => {
+  const off = makeThorough({ deps: { thoroughSettings: () => ({ maxSources: 12, readersAtOnce: 2, reviewRounds: 0, timeLimitMinutes: 60, pdf: true, readerModel: 'own' }) } });
+  const r0 = startThorough(off);
+  await until(() => off.runner.get(r0.id).state === 'delivered');
+  assert.equal(off.calls.filter((c) => c.labels[0] === 'Reviewer').length, 0);
+  assert.match(off.wakes[0].message, /: 0 matches; 0 differs[^\n]*; 2 not checked\. Confirmed by both: 0 of 2 figures\./);
+  assert.match(off.written[0].doc.markdown, /No figure's meaning was compared: the review did not run\./);
+  const fail = makeThorough({ script: { Reviewer: () => { throw new Error('reviewer down'); } } });
+  const r1 = startThorough(fail);
+  await until(() => fail.runner.get(r1.id).state === 'delivered');
+  assert.match(fail.wakes[0].message, /: 0 matches; 0 differs[^\n]*; 2 not checked\./);
+  assert.doesNotMatch(fail.wakes[0].message, /[1-9]\d* matches/);
+  assert.ok(fail.runner.get(r1.id).claims.every((c) => c.figure_checks.every((f) => f.meaning === 'not checked')));
+});
+
+test('r9b runner: a differs answer is marked, told to the reviser, and a revised claim is "not checked" again', async () => {
+  let reviewerCalls = 0;
+  const reworded = () => REPORT('').replace('"claim":"Method A scored 56.4% on the test"', '"claim":"Method A scored 56.4% on the benchmark test"');
+  const m = makeThorough({ script: {
+    Reviewer: () => { reviewerCalls++; return reviewerCalls === 1 ? reviewerReply('partly', [{ fid: 'c1.f1', meaning: 'differs', quote: FIG_QUOTE }]) : reviewerReply('supported'); },
+    Revision: () => [{ label: 'Revision', ok: true, text: reworded() }],
+  } });
+  const r = startThorough(m);
+  await until(() => m.runner.get(r.id).state === 'delivered');
+  const revise = m.calls.find((c) => c.labels[0] === 'Revision').tasks[0];
+  assert.ok(revise.includes('Figures whose passage says something different'));
+  assert.ok(revise.includes(`- c1: "56.4%" | the source's passage says: "${FIG_QUOTE}"`));
+  assert.equal(reviewerCalls, 2);
+  const run = m.runner.get(r.id);
+  // the reviewer's first answer stays stored; the revised claim has a new key, so its meaning is not checked
+  assert.equal(Object.keys(run.meaningKeys).length, 1);
+  assert.ok(run.claims.every((c) => c.figure_checks.every((f) => f.meaning === 'not checked')));
+  const msg = m.wakes[0].message;
+  assert.match(msg, /: 0 matches; 0 differs[^\n]*; 2 not checked\./);
+  assert.doesNotMatch(msg, /\[source says otherwise\]/);
+});
+
+test('r9b runner: the meaning marks are saved with the claims and the report text as soon as a round is credited', async () => {
+  const m = makeThorough({
+    script: { Reviewer: () => reviewerReply('supported', [{ fid: 'c1.f1', meaning: 'differs', quote: FIG_QUOTE }]) },
+    deps: { writeDocument: () => new Promise(() => {}) }, // the run stays in the document stage
+  });
+  const r = startThorough(m);
+  await untilMs(() => m.runner.get(r.id).stage === 'document');
+  const run = m.runner.get(r.id);
+  assert.equal(Object.keys(run.meaningKeys).length, 1);
+  assert.equal(run.claims[0].figure_checks[0].meaning, 'differs');
+  assert.match(run.prose, /56\.4% \[source says otherwise\]/);
+  assert.equal(run.checkTotals.meaningDiffers, 1);
+});
