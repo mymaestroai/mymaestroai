@@ -1275,6 +1275,29 @@
     .message th, .message td { overflow-wrap: normal; }   /* cells wrap and keep whole words; only a table too wide even then scrolls */
     .message :is(th, td) :is(a, code) { overflow-wrap: anywhere; }   /* a long link or path breaks instead of making the table scroll */
     .message pre { max-width: 100%; }
+    /* A code box: the pre plus its own copy button (lib/ui-code-copy.js). The box carries the pre's outer margin so the button sits at the pre's corner. */
+    .code-box { position: relative; max-width: 100%; }   /* also in the hand-off status sheet, which is not a .message */
+    .code-box > pre { padding-right: 44px; }   /* room for the 28px button, so it never sits over the first line */
+    .message .code-box { margin: 12px 0; }
+    .message .code-box > pre { margin: 0; }
+    .code-copy {
+      position: absolute; top: 6px; right: 6px; z-index: 2; width: 28px; height: 28px; padding: 0; box-sizing: border-box;
+      display: flex; align-items: center; justify-content: center; cursor: pointer; user-select: none; -webkit-user-select: none;
+      border: 1px solid var(--border); background: var(--bg-card); color: var(--text-dim); border-radius: 6px; line-height: 1;
+      opacity: 0; transition: opacity 0.15s, color 0.15s, border-color 0.15s;   /* hidden until the box is pointed at or reached by keyboard; still focusable and clickable */
+    }
+    .code-copy .cc-ico { width: 16px; height: 16px; pointer-events: none; }
+    .code-copy .cc-ico-tick { display: none; }
+    .code-box:hover > .code-copy, .code-box:focus-within > .code-copy, .code-copy:focus-visible { opacity: 0.95; }
+    .code-copy:hover { color: var(--text); border-color: var(--accent); }
+    .code-copy:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+    @media (hover: none) { .code-copy { opacity: 0.8; } }
+    .code-copy.copied { opacity: 1; color: var(--success); border-color: var(--success); }
+    .code-copy.copied .cc-ico-copy { display: none; }
+    .code-copy.copied .cc-ico-tick { display: block; }
+    .code-copy.copy-failed { opacity: 1; color: var(--warning); border-color: var(--warning); }
+    .code-copy-live { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; border: 0; }
+    @media print { .code-copy, .code-copy-live { display: none !important; } }
     .message img, .message video, .message svg { max-width: 100%; }
     .message table {
       width: 100%;
@@ -3412,6 +3435,7 @@
   <script src="/ui-call-display.js"></script>
   <script src="/ui-file-card.js"></script>
   <script src="/ui-hand-off-card.js"></script>
+  <script src="/ui-code-copy.js"></script>
   <script src="/ui-team-card.js"></script>
   <script src="/ui-simple.js"></script>
   <script src="/password-eye.js"></script>

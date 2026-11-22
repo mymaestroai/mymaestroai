@@ -12042,7 +12042,7 @@
     function messageOwnText(el) {
       if (!el) return '';
       const scan = el.cloneNode(true);
-      scan.querySelectorAll('.reason-stream, .tool-stream, .inline-thinking, .msg-copy, .msg-speak, .msg-time, .live-activity, .token-usage, .file-cards').forEach((n) => n.remove());
+      scan.querySelectorAll('.reason-stream, .tool-stream, .inline-thinking, .msg-copy, .code-copy, .msg-speak, .msg-time, .live-activity, .token-usage, .file-cards').forEach((n) => n.remove());
       return scan.textContent || '';
     }
     // A thinking block a partial reply left open (a model writing <think>… in its reply) is closed wherever the page adds a
@@ -19429,7 +19429,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         const H = window.hubFileCard;
         if (!H || !el || !el.isConnected || !el.classList.contains('assistant')) return;
         const scan = el.cloneNode(true);   // the reply's own text: not the tool panel or the reasoning panel
-        scan.querySelectorAll('.tool-stream, .reason-stream, .inline-thinking, .msg-copy, .msg-speak').forEach((n) => n.remove());
+        scan.querySelectorAll('.tool-stream, .reason-stream, .inline-thinking, .msg-copy, .code-copy, .msg-speak').forEach((n) => n.remove());
         let agent = null;   // the replying agent (a bare file name is looked up in its folder); none in a group chat
         try {
           const box = el.closest('[id^="messages-"]');
@@ -23237,9 +23237,17 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const MARK = 'm' + ((window.crypto && crypto.getRandomValues) ? Array.from(crypto.getRandomValues(new Uint8Array(16)), b => (b % 36).toString(36)).join('') : Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2));
       const mk = (kind, i) => `${MARK}${kind}${i}~`;
       const visualTokens = [];
+      // Every other closed fence is held out the same way (C tokens): its code is escaped here and built into a
+      // code box with its own copy button (lib/ui-code-copy.js), so the text a reader copies is the source byte for
+      // byte: no bold, no <br>, no inline-code or link passes inside it.
+      const codeTokens = [];
       const withVisualPlaceholders = response.replace(/```(\w*)\n([\s\S]*?)```/g, (match, lang, code) => {
         const kind = visualKind(lang);
-        if (!kind) return match;
+        if (!kind) {
+          const inner = autolinkEscaped(escapeHtml(code), ' style="color: var(--link); text-decoration: underline;"');
+          codeTokens.push(window.CodeCopy ? window.CodeCopy.blockHtml(inner) : `<pre><code>${inner}</code></pre>`);
+          return mk('C', codeTokens.length - 1);
+        }
         visualTokens.push(visualPlaceholder(kind, code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')));
         return mk('V', visualTokens.length - 1);
       });
@@ -23294,7 +23302,6 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       });
 
       let formatted = escapeHtml(withTablePlaceholders)   // all five characters: the autolinker relies on quotes being entities, never raw
-        .replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>')
         .replace(/`([^`]+)`/g, '<code>$1</code>')
         .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
         .replace(/\*([^*]+)\*/g, '<em>$1</em>')
@@ -23308,6 +23315,9 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
 
       for (let i = 0; i < visualTokens.length; i++) {
         formatted = formatted.replace(mk('V', i), () => visualTokens[i]);
+      }
+      for (let i = 0; i < codeTokens.length; i++) {
+        formatted = formatted.replace(mk('C', i), () => codeTokens[i]);   // function replacer: $-sequences in the code stay literal
       }
 
       // Re-insert extracted images: inline when same-origin / data: / blob:, a link for any other host.

@@ -63,7 +63,7 @@ test('cards are attached on history and when a reply is final, never per streami
   for (const per of ['paintReply', 'setReplyText', 'paintReattach', 'readStream']) assert.doesNotMatch(grab(per), /attachFileCards/, `${per} runs per chunk`);
   const a = grab('attachFileCards');
   assert.match(a, /cardHtml\(r, \{ esc, phone: true \}\)/, 'the phone form of the card');
-  assert.match(a, /querySelectorAll\('\.feed, \.tsn, \.rsn, \.reattach, \.copy, \.note'\)\.forEach/, 'tool and reasoning panels are skipped');
+  assert.match(a, /querySelectorAll\('\.feed, \.tsn, \.rsn, \.reattach, \.copy, \.code-copy, \.note'\)\.forEach/, 'tool and reasoning panels are skipped');
   assert.match(a, /catch \(e\) \{/, 'never throws into the chat code');
 });
 

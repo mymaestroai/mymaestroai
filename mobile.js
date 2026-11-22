@@ -1006,9 +1006,16 @@ function formatContent(content) {
   const MARK = 'm' + ((window.crypto && crypto.getRandomValues) ? Array.from(crypto.getRandomValues(new Uint8Array(16)), b => (b % 36).toString(36)).join('') : Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2));
   const mk = (kind, i) => `${MARK}${kind}${i}~`;
   const visuals = [];
+  // Every other closed fence is held out the same way (C tokens): escaped here and built into a code box with its own
+  // copy button (lib/ui-code-copy.js), so the copied text is the source byte for byte (no bold, no <br> inside).
+  const codeBoxes = [];
   const withVisuals = response.replace(/```(\w*)\n([\s\S]*?)```/g, (m, lang, code) => {
     const kind = visualKind(lang);
-    if (!kind) return m;
+    if (!kind) {
+      const inner = autolinkEscaped(esc(code));
+      codeBoxes.push(window.CodeCopy ? window.CodeCopy.blockHtml(inner) : `<pre><code>${inner}</code></pre>`);
+      return mk('C', codeBoxes.length - 1);
+    }
     visuals.push(visualPlaceholder(kind, esc(code)));
     return mk('V', visuals.length - 1);
   });
@@ -1039,7 +1046,6 @@ function formatContent(content) {
   });
 
   let out = escapeHtml(text)   // all five characters: the autolinker below relies on quotes being entities, never raw
-    .replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>')
     .replace(/`([^`]+)`/g, '<code>$1</code>')
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
     .replace(/\*([^*]+)\*/g, '<em>$1</em>')
@@ -1049,6 +1055,7 @@ function formatContent(content) {
   out = autolinkEscaped(out).replace(/\n/g, '<br>');
 
   visuals.forEach((v, i) => { out = out.replace(mk('V', i), () => v); });
+  codeBoxes.forEach((c, i) => { out = out.replace(mk('C', i), () => c); });   // function replacer: $-sequences in the code stay literal
   images.forEach((im, i) => {
     const tag = imageHtml(im.src, im.alt);
     out = out.replace(mk('I', i), () => tag);
@@ -7157,7 +7164,7 @@ async function attachFileCards(el, body) {
     if (!body) body = el.querySelector(':scope > .body');
     if (!H || !body || !el.isConnected) return;
     const scan = body.cloneNode(true);   // the reply's own text: not the tool panel, the reasoning panel or the notes
-    scan.querySelectorAll('.feed, .tsn, .rsn, .reattach, .copy, .note').forEach((n) => n.remove());
+    scan.querySelectorAll('.feed, .tsn, .rsn, .reattach, .copy, .code-copy, .note').forEach((n) => n.remove());
     const agent = (typeof current === 'string' && current) || null;   // the agent whose chat is open: a bare file name is looked up in its folder
     const cands = H.candidatesFrom(scan, { agent });
     if (!cands.length) return;
@@ -8841,7 +8848,9 @@ function wkPaintRun(run, w) {
         body.appendChild(wkEl('div', 'wk-tool', `⚙ ${tool}${text.startsWith(tool) ? ` ${text.slice(tool.length).trim()}` : ` ${text}`}`.slice(0, 600)));
       } else {
         const out = wkEl('details', 'wk-out');
-        out.append(wkEl('summary', null, 'output'), wkEl('pre', null, String(r.text || '').slice(0, 20000)));
+        const pre = wkEl('pre', null, String(r.text || '').slice(0, 20000));
+        out.append(wkEl('summary', null, 'output'), pre);
+        if (window.CodeCopy) window.CodeCopy.wrap(pre);   // a copy button on the worker's output, like a code box in a reply
         body.appendChild(out);
       }
     }

@@ -21,7 +21,7 @@ test('both pages detect the four fence types and emit a placeholder, never raw H
     assert.match(src, /const VISUAL_KINDS = \{ svg: 'svg', mermaid: 'mermaid', chart: 'chart', html: 'html' \}/, `${name}: kinds`);
     assert.match(src, /function visualKind\(lang\)/, `${name}: visualKind`);
     // The fence regex hands the language to visualKind; non-visual fences are left for the usual path.
-    assert.match(src, /response\.replace\(\/```\(\\w\*\)\\n\(\[\\s\\S\]\*\?\)```\/g, \((?:match|m), lang, code\) => \{\s*const kind = visualKind\(lang\);\s*if \(!kind\) return (?:match|m);/, `${name}: fence tokenizer`);
+    assert.match(src, /response\.replace\(\/```\(\\w\*\)\\n\(\[\\s\\S\]\*\?\)```\/g, \((?:match|m), lang, code\) => \{\s*const kind = visualKind\(lang\);\s*if \(!kind\) \{/, `${name}: fence tokenizer (a non-visual fence is held out as a code box, test/ui-code-copy.test.js)`);
     // The placeholder holds the escaped source inside <pre><code>, in a data-kind element.
     assert.match(src, /<div class="visual visual-\$\{kind\}" data-kind="\$\{kind\}"><pre class="visual-src"><code>\$\{escapedSource\}<\/code><\/pre><\/div>/, `${name}: placeholder`);
     assert.match(src, /visualPlaceholder\(kind, (?:esc\(code\)|code\.replace\(\/&\/g, '&amp;'\)\.replace\(\/<\/g, '&lt;'\)\.replace\(\/>\/g, '&gt;'\))\)/, `${name}: source escaped`);
@@ -35,7 +35,9 @@ test('both pages detect the four fence types and emit a placeholder, never raw H
     const images = src.indexOf('.replace(/!\\[([^\\]]*)\\]\\(([^)]+)\\)/g');
     assert.ok(fence > 0 && images > fence, `${name}: fences held out before image/link extraction`);
     // The regular fence path is unchanged for every other language.
-    assert.match(src, /\.replace\(\/```\(\\w\*\)\\n\(\[\\s\\S\]\*\?\)```\/g, '<pre><code>\$2<\/code><\/pre>'\)/, `${name}: plain fences unchanged`);
+    // Other languages: the old late '<pre><code>$2</code></pre>' pass is gone; they are held out as code boxes with a copy button (C tokens, test/ui-code-copy.test.js).
+    assert.ok(!src.includes("'<pre><code>$2</code></pre>'"), `${name}: no late plain-fence pass left`);
+    assert.match(src, /mk\('C', /, `${name}: other fences are held out as code boxes`);
   }
 });
 

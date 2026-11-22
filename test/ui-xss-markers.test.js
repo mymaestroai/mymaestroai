@@ -20,7 +20,7 @@ test('placeholder markers are per-render random and unforgeable in both renderer
     assert.match(src, /const MARK = 'm' \+ \(\(window\.crypto && crypto\.getRandomValues\) \? Array\.from\(crypto\.getRandomValues\(new Uint8Array\(16\)\), b => \(b % 36\)\.toString\(36\)\)\.join\(''\) : Math\.random\(\)/, `${name}: crypto-random marker per render`);
     assert.match(src, /const mk = \(kind, i\) => `\$\{MARK\}\$\{kind\}\$\{i\}~`/, `${name}: marker builder`);
     // Every extraction returns a mk(...) marker, and every re-insertion targets one.
-    for (const kind of ['V', 'I', 'L', 'T']) {
+    for (const kind of ['V', 'I', 'L', 'T', 'C']) {
       assert.ok(src.includes(`mk('${kind}',`), `${name}: marker used for kind ${kind}`);
     }
     // No fixed placeholder strings survive (those were the forgeable ones).
@@ -32,6 +32,7 @@ test('tables are re-inserted with a function replacer so table HTML cannot expan
   for (const [name, src] of Object.entries(pages)) {
     assert.match(src, /replace\(mk\('T', i\), \(\) => /, `${name}: table re-insert uses a function replacer`);
     assert.match(src, /replace\(mk\('I', i\), \(\) => /, `${name}: image re-insert uses a function replacer`);
+    assert.match(src, /replace\(mk\('C', i\), \(\) => /, `${name}: code-box re-insert uses a function replacer`);
   }
 });
 
