@@ -1009,6 +1009,7 @@ function makeThorough(over = {}) {
     return workers.map((w) => {
       let text;
       if (/^Research \d+$/.test(w.label)) text = `Finding for ${w.label}. Method A scored 56.4%.\nSOURCES READ:\n- ${SRC_A}\n- ${SRC_B}\n- ${SRC_C}`;
+      else if (w.label === 'First pass summary') text = `## Verdict\nMethod A wins.\n\n## Evidence\n- Method A scored 56.4% on the test [${SRC_A}]`;
       else if (w.label === 'Choose sources') text = '```json\n' + JSON.stringify([{ url: SRC_A, title: 'Paper A' }, { url: SRC_B, title: 'Paper B' }, { url: SRC_C, title: 'Paper C' }]) + '\n```';
       else if (/^Reader \d+$/.test(w.label)) text = `Notes for ${w.label}: Table 2 gives 56.4% (humans, 200 raters).`;
       else if (w.label === 'Research report') text = REPORT();
@@ -1038,19 +1039,20 @@ test('thorough runner: the stages in order with the right models, progress in or
   const m = makeThorough();
   const r = startThorough(m);
   await until(() => m.runner.get(r.id).state === 'delivered');
-  assert.deepEqual(m.calls.map((c) => c.labels[0]), ['Research 1', 'Choose sources', 'Reader 1', 'Research report', 'Reviewer']);
+  assert.deepEqual(m.calls.map((c) => c.labels[0]), ['Research 1', 'First pass summary', 'Choose sources', 'Reader 1', 'Research report', 'Reviewer']);
   assert.equal(m.calls[0].labels.length, 3);
   assert.equal(m.calls[0].model, FAST, 'helpers: the helper model');
-  assert.equal(m.calls[1].model, BIG, 'selection: the agent\'s own model');
+  assert.equal(m.calls[1].model, BIG, 'first-pass summary: the agent\'s own model');
+  assert.equal(m.calls[2].model, BIG, 'selection: the agent\'s own model');
   // 3 sources -> 2 groups of at most 2; readersAtOnce 2 -> both groups in one spawn call
-  assert.deepEqual(m.calls[2].labels, ['Reader 1', 'Reader 2']);
-  assert.equal(m.calls[2].model, 'claude-sdk/claude-test-reader');
-  assert.equal(m.calls[3].model, BIG);
-  assert.equal(m.calls[4].model, 'openai/test-reviewer');
-  assert.match(m.calls[2].tasks[0], /careful reader/);
+  assert.deepEqual(m.calls[3].labels, ['Reader 1', 'Reader 2']);
+  assert.equal(m.calls[3].model, 'claude-sdk/claude-test-reader');
+  assert.equal(m.calls[4].model, BIG);
+  assert.equal(m.calls[5].model, 'openai/test-reviewer');
+  assert.match(m.calls[3].tasks[0], /careful reader/);
   // the stages the progress line saw, in order, without going back
   const seen = m.progress.map((p) => p.stage).filter((s, i, a) => s && s !== a[i - 1]);
-  assert.deepEqual(seen, ['quick', 'select', 'fetch', 'read', 'synthesis', 'check', 'challenge', 'document']);
+  assert.deepEqual(seen, ['quick', 'summary', 'select', 'fetch', 'read', 'synthesis', 'check', 'challenge', 'document']);
   assert.equal(m.progress[0].state, 'running');
   assert.equal(m.progress[m.progress.length - 1].state, 'delivered');
   assert.ok(m.progress.some((p) => p.stage === 'read' && p.done === 2 && p.total === 2));
@@ -1065,9 +1067,10 @@ test('thorough runner: the stages in order with the right models, progress in or
   assert.ok(msg.startsWith('[Deep research finished]'));
   assert.match(msg, /the figure-check line, which reviewer was used, and the document path/);
   // r8: the claim figure and the figure in the report text are both counted, both found as written in the fetched text
-  assert.match(msg, /In the source \(checked by code against the fetched text\): 2 found as written; 0 not found as written \(marked "not found in source"\); 0 from sources that could not be opened \(marked "source not opened"\); 0 with no source to check\./);
+  // real-eval fix: the counts are plain sentences; each full path stands alone in backticks on its own line
+  assert.match(msg, /Of 2 figures( \(\d+ of them in the claims table\))?, 2 were found in their sources as written and 0 were not; 0 had no source to check\./);
   assert.match(msg, /Challenged by: a model from another vendor \(OpenAI\) \(1 round\)/);
-  assert.match(msg, /Full document: \/files\/research\/deep-research-.*\.md/);
+  assert.match(msg, /\nFull document:\n`\/files\/research\/deep-research-[^`\n]*\.md`\n/);
   assert.doesNotMatch(msg.split('Report:\n')[1], /Not finished/);
   const run = m.runner.get(r.id);
   assert.equal(run.rounds, 1);
@@ -1094,10 +1097,10 @@ test('thorough runner: a claim the reviewer does not support is revised, the fig
   const m = makeThorough({ script: { Reviewer: () => { reviews++; return [{ label: 'Reviewer', ok: true, text: verdicts(reviews === 1 ? 'not_supported' : 'supported') }]; } } });
   const r = startThorough(m);
   await until(() => m.runner.get(r.id).state === 'delivered');
-  assert.deepEqual(m.calls.map((c) => c.labels[0]).slice(3), ['Research report', 'Reviewer', 'Revision', 'Reviewer']);
-  assert.equal(m.calls[5].model, BIG, 'the revision: the agent\'s own model');
-  assert.equal(m.calls[6].model, 'openai/test-reviewer');
-  assert.match(m.calls[5].tasks[0], /\[not_supported\]/);
+  assert.deepEqual(m.calls.map((c) => c.labels[0]).slice(4), ['Research report', 'Reviewer', 'Revision', 'Reviewer']);
+  assert.equal(m.calls[6].model, BIG, 'the revision: the agent\'s own model');
+  assert.equal(m.calls[7].model, 'openai/test-reviewer');
+  assert.match(m.calls[6].tasks[0], /\[not_supported\]/);
   assert.equal(m.runner.get(r.id).rounds, 2);
   assert.match(m.wakes[0].message, /\(2 rounds\)/);
 });
@@ -1196,7 +1199,7 @@ test('thorough runner: a deadline after the report was written delivers the save
   const report = m.wakes[0].message.split('Report:\n')[1];
   assert.match(report.split('\n')[0], /^Not finished: checking the report, writing the document \(the time limit/);
   assert.match(report, /Method A wins/);
-  assert.match(report, /In the source \(checked by code against the fetched text\): 2 found as written; 0 not found as written/);
+  assert.match(report, /Of 2 figures( \(\d+ of them in the claims table\))?, 2 were found in their sources as written and 0 were not/); // real-eval fix: plain sentences
 });
 
 test('thorough runner: recover() delivers "[Deep research interrupted]" with the saved prose, else the reader notes, else the findings', async () => {
@@ -1677,7 +1680,7 @@ test('r8 1: a figure that only a reader wrote down (not in the fetched text) is 
   const md = m.written[0].doc.markdown;
   assert.match(md, /## Figures not found as written/);
   assert.match(md, /\| 777\.7% \| \[Paper A\]/);
-  assert.match(m.wakes[0].message, /0 found as written; 2 not found as written/);
+  assert.match(m.wakes[0].message, /0 were found in their sources as written and 2 were not/); // real-eval fix: plain sentences
   // the figure the fetched page does have is found as written (the fetched text says "56.4%")
   const ok = makeThorough({ deps: rounds(0) });
   const run2 = await doneRun(ok);
@@ -1698,7 +1701,7 @@ test('r8 2: a saved run keeps reading: old statuses and totals map to the new la
   // r9b: key evidence needs both marks; a saved run has no meaning for its figures, so nothing is key evidence
   assert.match(msg, /Key evidence\n- No claim has all its figures confirmed by both checks/);
   assert.doesNotMatch(msg, /Key evidence[\s\S]*Method B lost[\s\S]*Doubted/);
-  assert.match(msg, /In the source \(checked by code against the fetched text\): 1 found as written; 1 not found as written \(marked "not found in source"\); 0 from sources that could not be opened \(marked "source not opened"\); 1 with no source to check\./);
+  assert.match(msg, /Of 3 figures( \(\d+ of them in the claims table\))?, 1 was found in its source as written and 2 were not; 1 had no source to check\./); // real-eval fix: plain sentences
   assert.equal(E_SAVED('found'), 'found_as_written');
   assert.equal(E_SAVED('not_found'), 'not_found_as_written');
   assert.equal(E_SAVED('common_not_near'), 'not_found_as_written');
@@ -1730,8 +1733,8 @@ test('r9b runner: figure verdicts are validated by code, saved as meaningKeys, a
   assert.equal(run.claims[0].figure_checks[0].meaning, 'matches');
   // the delivered report: both lines, the scope sentence, key evidence needs both marks
   const msg = m.wakes[0].message;
-  assert.match(msg, /In the source \(checked by code against the fetched text\): 2 found as written;/);
-  assert.match(msg, /Means the same \(checked by the reviewer against the passage around each figure\): 2 matches; 0 differs \(marked "source says otherwise"\); 0 not checked\. Confirmed by both: 2 of 2 figures\./);
+  assert.match(msg, /2 were found in their sources as written/); // real-eval fix: plain sentences
+  assert.match(msg, /The reviewer confirmed the meaning of 2, found 0 that differ, and did not check 0\./);
   assert.match(msg, /a figure is confirmed only when both agree\./);
   assert.match(msg, /Key evidence\n- Method A scored 56\.4% on the test \[https:\/\/example\.org\/paper-a\] \(figures confirmed by both checks\)/);
   // the document: both columns
@@ -1751,7 +1754,7 @@ test('r9b runner: answers that fail the code validation leave the figures "not c
   assert.equal(run.rounds, 1);
   assert.deepEqual(run.meaningKeys || {}, {});
   const msg = m.wakes[0].message;
-  assert.match(msg, /: 0 matches; 0 differs \(marked "source says otherwise"\); 2 not checked\. Confirmed by both: 0 of 2 figures\./);
+  assert.match(msg, /The reviewer confirmed the meaning of 0, found 0 that differ, and did not check 2\./); // real-eval fix: plain sentences
   assert.match(msg, /Key evidence\n- No claim has all its figures confirmed by both checks/);
   assert.doesNotMatch(msg, /\[source says otherwise\]/);
 });
@@ -1766,7 +1769,7 @@ test('r9b runner: a round with no usable claim verdicts credits no figure answer
   assert.ok(run.claims.every((c) => c.figure_checks.every((f) => f.meaning === 'not checked')));
   const msg = m.wakes[0].message;
   assert.match(msg, /Not challenged: the reviewer gave no usable verdicts\./);
-  assert.match(msg, /: 0 matches; 0 differs[^\n]*; 2 not checked\. Confirmed by both: 0 of 2 figures\./);
+  assert.match(msg, /The reviewer confirmed the meaning of 0, found 0 that differ, and did not check 2\./);
 });
 
 test('r9b runner: no review (reviewRounds 0) or a reviewer that fails: every figure "not checked", nothing reads matches', async () => {
@@ -1774,12 +1777,12 @@ test('r9b runner: no review (reviewRounds 0) or a reviewer that fails: every fig
   const r0 = startThorough(off);
   await until(() => off.runner.get(r0.id).state === 'delivered');
   assert.equal(off.calls.filter((c) => c.labels[0] === 'Reviewer').length, 0);
-  assert.match(off.wakes[0].message, /: 0 matches; 0 differs[^\n]*; 2 not checked\. Confirmed by both: 0 of 2 figures\./);
+  assert.match(off.wakes[0].message, /The reviewer confirmed the meaning of 0, found 0 that differ, and did not check 2\./);
   assert.match(off.written[0].doc.markdown, /No figure's meaning was compared: the review did not run\./);
   const fail = makeThorough({ script: { Reviewer: () => { throw new Error('reviewer down'); } } });
   const r1 = startThorough(fail);
   await until(() => fail.runner.get(r1.id).state === 'delivered');
-  assert.match(fail.wakes[0].message, /: 0 matches; 0 differs[^\n]*; 2 not checked\./);
+  assert.match(fail.wakes[0].message, /The reviewer confirmed the meaning of 0, found 0 that differ, and did not check 2\./);
   assert.doesNotMatch(fail.wakes[0].message, /[1-9]\d* matches/);
   assert.ok(fail.runner.get(r1.id).claims.every((c) => c.figure_checks.every((f) => f.meaning === 'not checked')));
 });
@@ -1802,7 +1805,7 @@ test('r9b runner: a differs answer is marked, told to the reviser, and a revised
   assert.equal(Object.keys(run.meaningKeys).length, 1);
   assert.ok(run.claims.every((c) => c.figure_checks.every((f) => f.meaning === 'not checked')));
   const msg = m.wakes[0].message;
-  assert.match(msg, /: 0 matches; 0 differs[^\n]*; 2 not checked\./);
+  assert.match(msg, /The reviewer confirmed the meaning of 0, found 0 that differ, and did not check 2\./);
   assert.doesNotMatch(msg, /\[source says otherwise\]/);
 });
 
@@ -1841,10 +1844,150 @@ test('r14 runner: a reading source and an unreadable one: the saved checkTotals 
   assert.equal(run.checkTotals.sourcesConverted, 0);
   assert.equal(run.checkTotals.sourcesUnreadable, 1);
   assert.ok(m.saves.some((s) => /"sourcesUnreadable":1/.test(s)), 'saved with the run');
-  // the report shows the plain line right under the "In the source" line
+  // real-eval fix: the report says so in the last plain sentence of the counts
   const lines = m.wakes[0].message.split('\n');
-  const i = lines.findIndex((l) => l.startsWith('In the source'));
-  assert.equal(lines[i + 1], '1 source could not be read in a checkable form; its figures are not checked against it.');
+  const counts = lines.find((l) => l.startsWith('Of '));
+  assert.ok(counts.endsWith(' 1 source could not be read.'), counts);
   // the document marks the source
   assert.match(m.written[0].doc.markdown, /paper-c.*\(could not be read in a checkable form\)/);
+});
+
+test('thorough runner: the sources the first pass rests on are read in full, each reader is told what the first pass said, the synthesis gets the differences', async () => {
+  const SRC_D = 'https://example.org/paper-d';
+  const DIFFS = '### Differences from the first pass\n- First pass: 56.4% overall. Full text (Table 2, v2): 61.2% on one category only.';
+  const m = makeThorough({
+    script: {
+      Research: (workers) => workers.map((w) => ({ label: w.label, ok: true, text: `**Verdict**\nMethod A wins (${SRC_A}).\n**Evidence**\n- Method A scored 56.4% overall (${SRC_B})\n**Where sources disagree**\nNone. ${SRC_C} and ${SRC_D} were also read.` })),
+      'First pass summary': () => [{ label: 'First pass summary', ok: true, text: `## Verdict\nMethod A wins.\n\n## Evidence\n- Method A wins (${SRC_A}).\n- Method A scored 56.4% overall (${SRC_B})` }],
+      // the selector answers with D only: A and B must be kept anyway
+      'Choose sources': () => [{ label: 'Choose sources', ok: true, text: '```json\n' + JSON.stringify([{ url: SRC_D, title: 'Paper D' }]) + '\n```' }],
+      Reader: (workers) => workers.map((w) => ({ label: w.label, ok: true, text: `## Paper (${SRC_A})\n### Results\n- 61.2%\n${DIFFS}\n### Limits\nNothing` })),
+    },
+  });
+  const r = startThorough(m);
+  await until(() => m.runner.get(r.id).state === 'delivered');
+  const selectBrief = m.calls.find((c) => c.labels[0] === 'Choose sources').tasks[0];
+  assert.ok(selectBrief.includes(SRC_A) && selectBrief.includes(SRC_B), 'the selector is told which sources are kept');
+  const readerTasks = m.calls.filter((c) => /^Reader/.test(c.labels[0])).flatMap((c) => c.tasks).join('\n=====\n');
+  // A and B (kept) and D (chosen) are read, in the list of sources of the reader briefs; C was neither kept nor chosen
+  const listed = [...readerTasks.matchAll(/^\d+\. (?:.* - )?(https:\/\/\S+)$/gm)].map((x) => x[1]);
+  assert.deepEqual(listed, [SRC_A, SRC_B, SRC_D]);
+  // the reader of A is told the first pass's line that cites A
+  assert.match(readerTasks, /What the first pass said about it:\n\s+> - Method A wins \(https:\/\/example\.org\/paper-a\)\./);
+  assert.match(readerTasks, /### Differences from the first pass/);
+  const synth = m.calls.find((c) => c.labels[0] === 'Research report').tasks[0];
+  assert.ok(synth.includes('61.2% on one category only'), 'the readers\' differences are passed to the synthesis');
+  assert.match(synth, /"Corrections to the first pass" is required/);
+});
+
+// ---- the first-pass summary (spec C)
+test('thorough runner: the first-pass summary is made on the own model after the helpers, saved on the run, shown as its own stage', async () => {
+  const SUMMARY = `## Verdict\nMethod A wins.\n\n## Evidence\n- Method A scored 56.4% [${SRC_A}]`;
+  const m = makeThorough({ script: { 'First pass summary': () => [{ label: 'First pass summary', ok: true, text: SUMMARY }] } });
+  const r = startThorough(m);
+  await until(() => m.runner.get(r.id).state === 'delivered');
+  const labels = m.calls.map((c) => c.labels[0]);
+  assert.deepEqual(labels.slice(0, 3), ['Research 1', 'First pass summary', 'Choose sources']);
+  const call = m.calls[1];
+  assert.equal(call.model, BIG, 'the agent\'s own model');
+  assert.deepEqual(call.tools, ['none']);
+  assert.deepEqual(call.searchBoth, [false]);
+  assert.match(call.tasks[0], /## Verdict/);
+  assert.ok(call.tasks[0].includes('Finding for Research 1'), 'it is written from the helpers\' findings');
+  assert.equal(m.runner.get(r.id).firstPass, SUMMARY);
+  assert.ok(m.saves.some((s) => s.includes('"firstPass"')));
+  const p = m.progress.find((x) => x.stage === 'summary');
+  assert.equal(p.label, 'summarising the first pass');
+  assert.deepEqual(m.runner.get(r.id).missing, []);
+});
+
+test('thorough runner: the first-pass summary uses the own model and never the second search when the content is kept (strict: anything but false counts)', async () => {
+  for (const keptOnBox of [() => true, () => undefined]) {
+    const m = makeThorough({ deps: { keptOnBox, helperSearchBoth: () => true } });
+    const r = startThorough(m);
+    await until(() => m.runner.get(r.id).state === 'delivered');
+    const c = m.calls.find((x) => x.labels[0] === 'First pass summary');
+    assert.equal(c.model, BIG);
+    assert.deepEqual(c.searchBoth, [false]);
+  }
+});
+
+test('thorough runner: the sources the summary cites are pinned, though the chooser picks others', async () => {
+  const m = makeThorough({
+    script: {
+      Research: (workers) => workers.map((w) => ({ label: w.label, ok: true, text: `Notes ${SRC_A} ${SRC_B} ${SRC_C}` })),
+      'First pass summary': () => [{ label: 'First pass summary', ok: true, text: `## Verdict\nB.\n\n## Evidence\n- B scored 1% [${SRC_B}]` }],
+      'Choose sources': () => [{ label: 'Choose sources', ok: true, text: '```json\n' + JSON.stringify([{ url: SRC_C }]) + '\n```' }],
+    },
+  });
+  const r = startThorough(m);
+  await until(() => m.runner.get(r.id).state === 'delivered');
+  const brief = m.calls.find((c) => c.labels[0] === 'Choose sources').tasks[0];
+  assert.match(brief, /already kept/);
+  assert.ok(brief.includes('- ' + SRC_B));
+  const urls = m.runner.get(r.id).sources.map((s) => s.url);
+  assert.deepEqual(urls, [SRC_B, SRC_C], 'the pinned source first, then the chosen one; A was neither');
+});
+
+test('thorough runner: a summary with no URLs pins the most cited sources, up to half of maxSources', async () => {
+  const m = makeThorough({
+    deps: { thoroughSettings: () => ({ maxSources: 4, readersAtOnce: 2, reviewRounds: 0, timeLimitMinutes: 60, pdf: false, readerModel: 'own' }) },
+    script: {
+      Research: (workers) => workers.map((w, i) => ({ label: w.label, ok: true, text: i === 0 ? `${SRC_A} ${SRC_B}\n${SRC_B}\n${SRC_C}` : `${SRC_B} ${SRC_C}` })),
+      'First pass summary': () => [{ label: 'First pass summary', ok: true, text: '## Verdict\nIt is unclear.\n\n## Evidence\n- nothing linked' }],
+      'Choose sources': () => [{ label: 'Choose sources', ok: true, text: '```json\n' + JSON.stringify([{ url: SRC_A }]) + '\n```' }],
+    },
+  });
+  const r = startThorough(m, ['a', 'b']);
+  await until(() => m.runner.get(r.id).state === 'delivered');
+  // B: 4 mentions, C: 3, A: 1; half of 4 = 2 pinned: B and C, then the chosen A
+  const urls = m.runner.get(r.id).sources.map((s) => s.url);
+  assert.deepEqual(urls, [SRC_B, SRC_C, SRC_A]);
+});
+
+test('thorough runner: each reader is told the summary\'s lines about its sources', async () => {
+  const m = makeThorough({
+    script: {
+      'First pass summary': () => [{ label: 'First pass summary', ok: true, text: `## Verdict\nA.\n\n## Evidence\n- SUMMARY-LINE-A says 56.4% [${SRC_A}]` }],
+    },
+  });
+  const r = startThorough(m);
+  await until(() => m.runner.get(r.id).state === 'delivered');
+  const reads = m.calls.filter((c) => /^Reader/.test(c.labels[0])).flatMap((c) => c.tasks).join('\n=====\n');
+  assert.match(reads, /What the first pass said about it:\n\s+> - SUMMARY-LINE-A says 56\.4% \[https:\/\/example\.org\/paper-a\]/);
+  // the helpers' raw line about A is not shown for A: the summary's line replaces it
+  const forA = reads.split('=====').find((t) => t.includes('SUMMARY-LINE-A'));
+  assert.doesNotMatch(forA.split(/\n2\. /)[0], /Finding for Research/);
+});
+
+test('thorough runner: a failed or timed-out summary call leaves the run going on the findings, and says so', async () => {
+  for (const script of [
+    { 'First pass summary': () => { throw new Error('boom'); } },
+    { 'First pass summary': () => [{ label: 'First pass summary', ok: false, text: 'timed out' }] },
+    { 'First pass summary': () => [{ label: 'First pass summary', ok: true, text: '(no response)' }] },
+  ]) {
+    const m = makeThorough({ script });
+    const r = startThorough(m);
+    await until(() => m.runner.get(r.id).state === 'delivered');
+    const run = m.runner.get(r.id);
+    assert.ok(!run.firstPass, 'nothing saved');
+    assert.equal(run.sources.length, 3, 'the run read its sources as before');
+    assert.deepEqual(m.calls.map((c) => c.labels[0]).filter((l) => !/^Reader/.test(l)), ['Research 1', 'First pass summary', 'Choose sources', 'Research report', 'Reviewer']);
+    assert.ok(run.missing.some((x) => /^first-pass summary/.test(x)));
+    assert.ok(run.stagesDone.includes('document'));
+    assert.match(m.written[0].doc.markdown, /## Traceability/);
+    assert.doesNotMatch(m.written[0].doc.markdown, /What the first pass said/);
+  }
+});
+
+test('thorough runner: the document has the appendix "What the first pass said" with the saved summary', async () => {
+  const m = makeThorough({ script: { 'First pass summary': () => [{ label: 'First pass summary', ok: true, text: `## Verdict\nAPPENDIX-MARK A wins.\n\n## Evidence\n- A scored 50% [${SRC_A}]` }] } });
+  const r = startThorough(m);
+  await until(() => m.runner.get(r.id).state === 'delivered');
+  const md = m.written[0].doc.markdown;
+  assert.match(md, /## Corrections to the first pass/);
+  const i = md.indexOf('## What the first pass said');
+  assert.ok(i > 0);
+  assert.match(md.slice(i), /APPENDIX-MARK A wins\./);
+  assert.match(m.written[0].doc.html, /What the first pass said/);
 });
