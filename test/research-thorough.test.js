@@ -4169,9 +4169,12 @@ test('run-2 E2 a figure inside « » is the first pass\'s value: not checked, no
   const plain = qCheck(qProse(`- The first pass reported 59.4% agreement; the full text gives 56.4% [${Q_SRC}].`));
   assert.ok(!plain.prose.includes('59.4% ['));
   assert.strictEqual(plain.totals.proseFigures, 2);
-  // outside the section the same words are checked
+  // the rule is the attribution right before the figure, not the section: the same words in Evidence are exempt too,
+  // and the same figure without "the first pass reported" in front of it is checked
   const outside = qCheck(`## Verdict\nIt holds.\n\n## Evidence\n- The first pass reported 59.4% agreement; the full text gives 56.4% [${Q_SRC}].\n`);
-  assert.ok(outside.prose.includes('59.4% [not found in source]'));
+  assert.ok(!outside.prose.includes('59.4% ['));
+  const unattributed = qCheck(`## Verdict\nIt holds.\n\n## Evidence\n- An earlier reading had 59.4% agreement; the full text gives 56.4% [${Q_SRC}].\n`);
+  assert.ok(unattributed.prose.includes('59.4% [not found in source]'));
   // « » exempts what it holds when its sentence speaks of the first pass; what is outside is still checked
   const mixed = qCheck(qProse(`- The full text gives 8821 words, not the first pass's «9999 words», in ${Q_SRC}.`));
   assert.ok(mixed.prose.includes('«9999 words»') && !/9999 words»? \[/.test(mixed.prose));
@@ -4249,31 +4252,45 @@ test('F-7 a negated confirmation is no agreement: the first-pass figure stays ex
   assert.strictEqual(is('## Verdict\n\nThe first pass said «59.4%», which the paper does not confirm; it gives 56.4% [S1].\n', /59\.4/), true);
 });
 
-test('F-8 in "Corrections to the first pass" the heading is the cue for « »; agreement is judged per whole sentence', () => {
+test('F-8 neither the section heading nor "first pass" elsewhere in the sentence is a cue; agreement is judged per whole sentence', () => {
   const C = '## Corrections to the first pass\n\n';
   const is = (prose, re) => fWhy(prose).find(([t]) => re.test(t))[1];
-  assert.strictEqual(is(C + '- The claim that chosen responses averaged «1450» words is not supported and is removed.\n', /1450/), true);
+  // review r2 (both reviewers): the report's own figures in « », in the section or beside "first pass", are checked
+  assert.strictEqual(is(C + '- The claim that chosen responses averaged «1450» words is not supported and is removed.\n', /1450/), false);
+  assert.strictEqual(is(C + 'The final analysis found «83%».\n', /83/), false);
+  assert.strictEqual(is('## Verdict\n\nUnlike the first pass, the final analysis found «83%».\n', /83/), false);
+  const two = fWhy(C + 'The first pass said «46 participants», but the registry lists «30 participants».\n');
+  assert.deepStrictEqual(two.filter(([t]) => /^(46|30)\b/.test(t)).map(([t, e]) => [t.split(' ')[0], e]), [['46', true], ['30', false]]);
+  // the first pass named, but the figure is the report's own
+  for (const line of ['The first pass missed 83 participants.', '- The first pass was wrong: the paper used 83 raters [u].',
+    "- The first pass's participant count was corrected to 83 [u].", "- The first pass's figure was replaced by 83% [u].",
+    '- The first pass treated it as significant (p=0.083 per the paper).']) {
+    assert.strictEqual(is(C + line + '\n', /83/), false, line);
+  }
   // a bullet that confirms one thing and retracts another: the retracted «0.31» stays exempt, the confirmed 115 is checked
-  const mixed = C + '- The 115 counts are supported. The τb «0.31» could not be confirmed against the excerpts.\n';
+  const mixed = C + '- The 115 counts are supported. The first pass said «0.31» for τb, which could not be confirmed against the excerpts.\n';
   assert.strictEqual(is(mixed, /0\.31/), true);
   assert.strictEqual(is(mixed, /^115/), false);
-  // the same « » outside the section, with no first-pass words in its sentence, is checked
-  assert.strictEqual(is('## Evidence\n\n- The claim that chosen responses averaged «1450» words is removed.\n', /1450/), false);
+  // "correct" in a plain retraction is no agreement (review r2, Sonnet F2)
+  assert.strictEqual(is('The first pass said «59.4%»; the full text shows the correct value is 56.4%.\n', /59\.4/), true);
+  // up to three filler words between the attribution and the figure
+  assert.strictEqual(is(C + '- The first pass gave a figure of «1,800» pairs; the paper has 2,480.\n', /1,800/), true);
 });
 
 test('run-2 E2 fallback: the same words outside the corrections section are checked', () => {
   const prose = `## Verdict\nIt holds.\n\n## Evidence\n- The 4321 words are not supported by the excerpts and are removed [${Q_SRC}].\n\n## Corrections to the first pass\nNone\n`;
   const r = qCheck(prose);
   assert.ok(r.prose.includes('4321 [not found in source]'));
-  // a "Corrections" heading that ends: the next heading's text is outside
-  const after = qCheck(`## Corrections to the first pass\n- The first pass said 1450 words.\n\n## Confidence\nThe first pass said 4321 words [${Q_SRC}].\n`);
-  assert.ok(!/1450 \[/.test(after.prose) && after.prose.includes('4321 ['));
+  // the attribution decides in every section; without it the figure is checked in every section
+  const after = qCheck(`## Corrections to the first pass\n- The first pass said 1450 words.\n- The full count was 4321 words [${Q_SRC}].\n\n## Confidence\nThe first pass said 5555 words [${Q_SRC}].\n`);
+  assert.ok(!/1450 \[/.test(after.prose) && after.prose.includes('4321 [') && !/5555 \[/.test(after.prose), after.prose);
 });
 
 test('run-2 E2 the synthesis and revision briefs ask for « » around the first pass\'s values', () => {
   const b = T.synthesisBrief('Q?', ['first pass'], ['notes'], []);
   assert.ok(b.includes('«59.4%»'));
-  assert.match(b, /does not check a figure inside « »/);
+  assert.match(b, /skips the check only for a « » figure written right after those words/);
+  assert.match(b, /any other figure, inside « » or not, is checked/);
   const rv = T.reviseBrief('Q?', 'prose', [], []);
   assert.match(rv, /keep the « » as they are/);
 });
