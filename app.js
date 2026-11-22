@@ -1,3 +1,8 @@
+    // Settings-only page (/?settings-only=1): the Settings dialog alone, for the phone app's Settings sheet (settingsOnlyStart).
+    // The parameter only hides the rest of the page and starts nothing else; it grants nothing.
+    const SETTINGS_ONLY = settingsOnlyRequested(location.search);
+    globalThis.mmSettingsOnly = SETTINGS_ONLY;   // read by the functions that would start something (absent when they run on their own: false)
+
     // ── Session expiry: any same-origin API 401 means the login session is gone ──
     // The password-check endpoints answer 401 for a wrong password, so they keep their own error handling.
     (function installSessionGuard() {
@@ -465,6 +470,7 @@
           '<div class="sm-set"><span class="sm-lab">Appearance</span><div class="sm-seg"><button type="button" data-theme="light">Light</button><button type="button" data-theme="dark">Dark</button><button type="button" data-theme="auto">Match device</button></div><div class="sm-follow" hidden></div></div>' +
           '<div class="sm-set"><span class="sm-lab">Interface style</span><div class="sm-style"></div></div>' +
           '<div class="sm-set"><span class="sm-lab">Name</span><div class="sm-name"></div></div>' +
+          (me.isAdmin === false ? '' : '<div class="sm-set"><button type="button" class="sm-plain" data-act="settings"><div><b>All settings</b><span>Provider keys, web search, voice, backups and the rest</span></div><span aria-hidden="true">›</span></button></div>') +   // admins only, as the gear in Advanced
           '<div class="sm-set"><button type="button" class="sm-plain" data-act="advanced"><div><b>Switch to Advanced</b><span>All tools, agents\' work and settings</span></div><span aria-hidden="true">›</span></button></div>' +
           '<div class="sm-set"><button type="button" class="sm-plain sm-out" data-act="signout">Sign out</button></div>' +
         '</div>';
@@ -497,7 +503,8 @@
         }
         const a = e.target.closest('[data-act]');
         if (!a) return;
-        if (a.dataset.act === 'advanced') simpleSwitchMode('advanced');
+        if (a.dataset.act === 'settings') { simpleCloseSettings(); openSettings(); }   // the full Settings dialog, as in Advanced
+        else if (a.dataset.act === 'advanced') simpleSwitchMode('advanced');
         else if (a.dataset.act === 'signout') signOut();
       });
       overlay.addEventListener('keydown', (e) => { if (e.key === 'Escape') simpleCloseSettings(); });
@@ -2518,6 +2525,7 @@
       if (!form.hidden) document.getElementById('sched-when')?.focus();
     }
     async function refreshScheduleBadge() {
+      if (globalThis.mmSettingsOnly === true) return;   // the settings-only page starts nothing else
       const btn = document.getElementById('schedule-btn'); if (!btn) return;
       const [sched, jobs] = await Promise.all([schedApi().catch(() => null), jobsApi().catch(() => null)]);
       const tasks = sched?.tasks || [];
@@ -6436,6 +6444,7 @@
     let spendRefreshTimer = null;
     const usd = (n) => `$${(Number(n) || 0).toFixed(2)}`;
     async function refreshSpendToday() {
+      if (globalThis.mmSettingsOnly === true) return;   // the settings-only page starts nothing else
       try {
         const r = await fetch('/api/ledger/today', { credentials: 'include', signal: AbortSignal.timeout(8000) });
         if (!r.ok) return;
@@ -6604,6 +6613,12 @@
       const btn = document.getElementById('st-push-btn');
       const hint = document.getElementById('st-push-hint');
       if (!btn) return;
+      if (globalThis.mmSettingsOnly === true) {   // the phone app's Settings sheet: the phone's notices are the app's own (its menu), never this page's
+        btn.textContent = 'In the app menu'; btn.disabled = true;
+        if (hint) hint.textContent = "On the phone, notifications are turned on in the app's menu (Notifications).";
+        stSum('notify', 'push', 'phone notifications: in the app menu');
+        return;
+      }
       if (!desktopPushSupported()) { btn.textContent = 'Not supported'; btn.disabled = true; stSum('notify', 'push', 'push not available in this browser'); return; }
       if (Notification.permission === 'denied') { btn.textContent = 'Blocked'; btn.disabled = true; if (hint) hint.textContent = 'Notifications are blocked for this site in the browser settings.'; stSum('notify', 'push', 'push blocked in this browser'); return; }
       const sub = await desktopPushSubscription();
@@ -6613,6 +6628,7 @@
     }
 
     async function toggleDesktopPush() {
+      if (globalThis.mmSettingsOnly === true) return;   // the settings-only page registers no notifications of its own
       const btn = document.getElementById('st-push-btn');
       if (btn) btn.disabled = true;
       try {
@@ -7755,6 +7771,7 @@
     }
 
     document.addEventListener('DOMContentLoaded', async () => {
+      if (SETTINGS_ONLY) { settingsOnlyStart(); return; }   // the Settings dialog alone: no chats, streams or timers
       paintInstalledApp();
       for (const q of ['(display-mode: standalone)', '(display-mode: minimal-ui)', '(display-mode: window-controls-overlay)']) {
         try { if (typeof window.matchMedia === 'function') window.matchMedia(q).addEventListener('change', paintInstalledApp); } catch { /* an old browser: painted once */ }
@@ -9511,6 +9528,7 @@
     // Only a known admin polls (window.hubMe loads asynchronously: unknown = no request; loadMe re-runs the sync).
     function activeJobsWanted() { return !activeJobsStopped && !!(window.hubMe && window.hubMe.isAdmin === true) && document.visibilityState === 'visible'; }
     function activeJobsSync() {
+      if (globalThis.mmSettingsOnly === true) return;   // the settings-only page starts nothing else
       const want = activeJobsWanted();
       if (want && !activeJobsTimer) { activeJobsPoll(); activeJobsTimer = setInterval(activeJobsPoll, ACTIVE_JOBS_MS); }
       else if (!want && activeJobsTimer) { clearInterval(activeJobsTimer); activeJobsTimer = null; }
@@ -9704,6 +9722,7 @@
     }
 
     async function pollAgentStatus() {
+      if (globalThis.mmSettingsOnly === true) return;   // the settings-only page starts nothing else
       try {
         const r = await fetch('/api/agents/status', { credentials: 'include', signal: AbortSignal.timeout(8000) });
         if (!r.ok) return;                       // 404 on an older hub: nothing to show
@@ -9975,6 +9994,7 @@
     // Hub-wide worker freshness: poll the full status feed while the Workers menu is open or a worker / consulted agent is busy.
     let workerPollBusy = false, workerPollSoon = null;
     async function pollWorkerStatus() {
+      if (globalThis.mmSettingsOnly === true) return;   // the settings-only page starts nothing else
       if (workerPollBusy) return;
       workerPollBusy = true;
       try {
@@ -10848,6 +10868,7 @@
 
     // Every chat following a turn without a stream of its own.
     function catchUpAll() {
+      if (globalThis.mmSettingsOnly === true) return;   // the settings-only page starts nothing else
       for (const [chatId, chat] of Object.entries(chats)) {
         if (!chat || chat.isWorker || chat.isGroup || chat.controller) continue;
         if (chat.reattach || Object.values(hubTurns).some(t => t.chatId === chatId)) catchUpTurn(chatId);
@@ -11040,6 +11061,7 @@
     let hubLastEventAt = 0;          // when the last event of any kind (the hub's 15 s ping included) arrived
     let hubLastSeq = 0;              // sequence of the last ring event seen: a deliberate reconnect asks for ?since= it, so nothing is lost
     function startHubEventMonitor() {
+      if (globalThis.mmSettingsOnly === true) return;   // the settings-only page starts nothing else
       if (hubEventSource) { try { hubEventSource.close(); } catch {} }   // one stream alive at a time
       const source = new EventSource('/api/events' + (hubLastSeq > 0 ? `?since=${hubLastSeq}` : ''), { withCredentials: true });
       hubEventSource = source;
@@ -11152,6 +11174,7 @@
     // pageshow all fire together on a wake.
     let resyncAt = Date.now();
     function resync(force = false) {
+      if (globalThis.mmSettingsOnly === true) return;   // the settings-only page starts nothing else
       const now = Date.now();
       if (now - resyncAt < 2000) return false;
       resyncAt = now;
@@ -21600,6 +21623,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       return hubWorkerGroups(agentStatus, { known, skipIds, skipKeys, now });
     }
     function refreshWorkerList() {
+      if (globalThis.mmSettingsOnly === true) return;   // the settings-only page starts nothing else
       const btn = document.getElementById('workers-btn');
       const { items, gone, counts, alert } = workerListOf(chats, Date.now(), activeChat);
       const hubGroups = hubWorkerGroupsNow(Date.now());
@@ -22922,6 +22946,58 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     // One way out of every dialog on this page: Escape, Close / Cancel / ✕, a click on the backdrop (lib/ui-dialog.js).
     // The overlays below are found when they appear; the image viewer registers itself. A dialog's own buttons that
     // dismiss it call dialogRequestClose(this); a successful Save or Create still removes it directly.
+    // ── settings-only page (begin) ──
+    // /?settings-only=1 shows the Settings dialog alone, full screen: the phone app's Settings sheet holds it in a frame
+    // (mobile.js settingsSheetOpen). It reads who is signed in (/api/me, the same permissions as the full page) and opens
+    // the dialog; nothing else starts. Its parent may ask it to close (through dialogGuard, so changes are never lost
+    // silently), and it tells its parent when the dialog closed. Messages carry only their type and are taken only from
+    // the parent window at the same origin.
+    function settingsOnlyRequested(search) {
+      try { return new URLSearchParams(String(search || '')).get('settings-only') === '1'; } catch { return false; }
+    }
+    function settingsOnlyPost(type) {
+      try { if (window.parent && window.parent !== window) window.parent.postMessage({ type }, location.origin); } catch { /* no parent */ }
+    }
+    async function settingsOnlyStart() {
+      document.documentElement.classList.add('mm-settings-only');
+      try {
+        const r = await fetch('/api/me', { credentials: 'include' });
+        if (r.ok) window.hubMe = await r.json();
+        else if (r.status === 401) return;   // the session guard sends the frame to the sign-in page
+        // the person's Simple colours (light or dark), as the page behind the sheet shows them; nothing of Simple starts
+        try { if (window.hubSimple && window.hubMe) window.hubSimple.apply(window.hubMe); } catch { /* the default colours */ }
+      } catch { /* offline: the dialog says it could not load */ }
+      window.addEventListener('message', settingsOnlyMessage);
+      // a member has no Settings dialog on the desktop either (the gear is an admin control and the hub refuses its routes)
+      if (!isHubAdmin()) stModal(`<h3>&#x2699;&#xFE0F; Settings</h3><p class="st-sub">Settings are kept by the admins of this Maestro.</p><div class="st-actions"><button class="st-btn secondary" onclick="dialogRequestClose(this)">Close</button></div>`);
+      else await openSettings();
+      settingsOnlyWatch();
+      settingsOnlyPost('mm-settings-ready');
+    }
+    // The dialog is gone (Close, Escape, Discard): the parent closes its sheet. stModal swaps the overlay in one step,
+    // so a re-render never reads as closed.
+    function settingsOnlyWatch() {
+      let sent = false;
+      const check = () => {
+        if (sent || document.getElementById('st-overlay')) return;
+        sent = true;
+        settingsOnlyPost('mm-settings-closed');
+      };
+      try { new MutationObserver(check).observe(document.body, { childList: true }); } catch { /* old browser: Close still posts */ }
+      check();
+    }
+    function settingsOnlyMessage(e) {
+      if (!e || e.source !== window.parent || e.origin !== location.origin) return;
+      const type = e.data && e.data.type;
+      if (type !== 'mm-settings-close') return;
+      const o = document.getElementById('st-overlay');
+      const how = o ? dialogGuard.requestClose(o, 'back') : 'none';
+      // 'confirm' (the "Discard changes?" question) or 'busy' (a save running): the sheet stays; 'closed' arrives through the watch
+      if (how !== 'closed' && how !== 'none') settingsOnlyPost('mm-settings-kept');
+      if (how === 'none') settingsOnlyPost('mm-settings-closed');
+    }
+    // ── settings-only page (end) ──
+
     const dialogGuard = createDialogGuard({ auto: '.question-overlay, .gs-overlay, .st-overlay, .dream-overlay, #restart-notify-overlay, #resume-popup-overlay' });
     function dialogRequestClose(el, how) { return dialogGuard.requestClose(el, how || 'close'); }
 

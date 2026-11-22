@@ -13489,6 +13489,7 @@ function wire() {
   // Esc, Back or a tap outside the approval sheet is Later: hidden until a new request comes, never answered.
   $('approval-sheet').__dialogClose = () => { approvalsHidden = true; paintApprovals(); };
   $('menu-profile')?.addEventListener('click', openProfileSheet);   // ?.: a page cached before Profile existed has no such item
+  $('menu-settings')?.addEventListener('click', settingsSheetOpen);   // ?.: a page cached before Settings existed has no such item
   $('menu-security').addEventListener('click', openSecuritySheet);
   $('menu-files').addEventListener('click', openFilesSheet);
   $('menu-recall').addEventListener('click', openRecallSheet);
@@ -13736,6 +13737,7 @@ function applyMultiUser() {
     }
     if ($('menu-wallet')) $('menu-wallet').hidden = !hubMe.isAdmin;   // admins only
     if ($('menu-profile')) $('menu-profile').hidden = !hubMe.user;
+    if ($('menu-settings')) $('menu-settings').hidden = !hubMe.isAdmin;   // admins only, as the desktop's Settings (the hub refuses its routes to members)
     $('menu-2fa-note').hidden = !(hubMe.isAdmin && !hubMe.user.totpEnabled && hubMe.admin2faRequired !== false);
     $('menu-signout').textContent = `Sign out (${hubMe.user.name || hubMe.user.login})`;
   }
@@ -14130,6 +14132,84 @@ function lookPickerPaint(host, onChosen) {
 
 // Profile: who you are here (your name and sign-in, set by an admin on the Users page) and the time zone your agents
 // use. Security keeps password, two-factor and sessions.
+// ── settings sheet (begin) ──
+// Settings: the desktop page's Settings dialog alone (/?settings-only=1, app.js settingsOnlyStart) in a frame that fills
+// the screen, so the phone has every section the desktop has, with the same routes, permissions, masking, main Save and
+// "Discard changes?" question. Back and the sheet's Close ask the dialog in the frame to close through its own guard;
+// the frame says when it closed. Messages carry only their type and are taken only from this frame at this origin.
+const SETTINGS_SHEET_URL = '/?settings-only=1&desktop=once';
+const SETTINGS_SHEET_WAIT_MS = 20000;
+let settingsSheet = null;   // { el, frame, ready, timer }
+function settingsSheetOpen() {
+  try { $('menu').classList.remove('open'); } catch { /* no menu */ }
+  if (settingsSheet) return;
+  const el = document.createElement('div');
+  el.id = 'settings-sheet';
+  el.setAttribute('role', 'dialog'); el.setAttribute('aria-label', 'Settings');
+  el.innerHTML = '<iframe title="Settings"></iframe>' +
+    '<div class="ssh-wait" role="status"><p class="ssh-msg">Opening Settings…</p>' +
+    '<div class="ssh-btns" hidden><button type="button" class="ssh-retry">Try again</button><button type="button" class="ssh-close">Close</button></div></div>';
+  document.body.appendChild(el);
+  settingsSheet = { el, frame: el.querySelector('iframe'), ready: false, timer: null };
+  el.__dialogClose = settingsSheetRequestClose;   // Back: the dialog in the frame decides (unsaved changes, a save running)
+  el.querySelector('.ssh-retry').addEventListener('click', settingsSheetLoad);
+  el.querySelector('.ssh-close').addEventListener('click', settingsSheetClosed);
+  settingsSheet.frame.addEventListener('load', settingsSheetFrameLoaded);
+  window.addEventListener('message', settingsSheetMessage);
+  dialogGuard.open(el);
+  settingsSheetLoad();
+}
+function settingsSheetLoad() {
+  const s = settingsSheet;
+  if (!s) return;
+  s.ready = false;
+  s.el.classList.remove('ready');
+  s.el.querySelector('.ssh-msg').textContent = 'Opening Settings…';
+  s.el.querySelector('.ssh-btns').hidden = true;
+  clearTimeout(s.timer);
+  s.timer = setTimeout(settingsSheetFailed, SETTINGS_SHEET_WAIT_MS);
+  s.frame.src = SETTINGS_SHEET_URL;
+}
+// Nothing came back in time (offline, the hub down): a plain message with a retry, never a blank screen.
+function settingsSheetFailed() {
+  const s = settingsSheet;
+  if (!s || s.ready) return;
+  s.el.querySelector('.ssh-msg').textContent = "Settings didn't open. Check the connection and try again.";
+  s.el.querySelector('.ssh-btns').hidden = false;
+}
+// A frame sent to the sign-in page (the session ended) shows that page: there is nothing in it to lose.
+function settingsSheetFrameLoaded() {
+  const s = settingsSheet;
+  if (!s || s.ready) return;
+  let where = '';
+  try { where = s.frame.contentWindow.location.pathname; } catch { where = ''; }
+  if (where === '/login' || where === '/login.html') { clearTimeout(s.timer); s.el.classList.add('ready'); }
+}
+function settingsSheetRequestClose() {
+  const s = settingsSheet;
+  if (!s) return;
+  if (!s.ready) { settingsSheetClosed(); return; }   // nothing opened in the frame: nothing to lose
+  try { s.frame.contentWindow.postMessage({ type: 'mm-settings-close' }, location.origin); } catch { settingsSheetClosed(); }
+}
+function settingsSheetMessage(e) {
+  const s = settingsSheet;
+  if (!s || !e || e.source !== s.frame.contentWindow || e.origin !== location.origin) return;
+  const type = e.data && e.data.type;
+  if (type === 'mm-settings-ready') { s.ready = true; clearTimeout(s.timer); s.el.classList.add('ready'); }
+  else if (type === 'mm-settings-closed') settingsSheetClosed();
+  else if (type === 'mm-settings-kept') dialogGuard.open(s.el);   // "Discard changes?" or a save running: the sheet stays, Back works again
+}
+function settingsSheetClosed() {
+  const s = settingsSheet;
+  if (!s) return;
+  settingsSheet = null;
+  clearTimeout(s.timer);
+  window.removeEventListener('message', settingsSheetMessage);
+  dialogGuard.closed(s.el);
+  s.el.remove();
+}
+// ── settings sheet (end) ──
+
 function openProfileSheet() {
   $('menu').classList.remove('open');
   if (!hubMe || !hubMe.user) return;
@@ -15662,6 +15742,7 @@ function simpleSettingsOpen() {
     '<button type="button" data-theme="light">Light</button><button type="button" data-theme="dark">Dark</button><button type="button" data-theme="auto">Match device</button></div><div class="ss-follow" hidden></div></div>' +
     '<div class="ss-sec" id="ss-style-sec"><div class="ss-title">Interface style</div><div id="ss-style"></div></div>' +
     '<div class="ss-sec"><div class="ss-title">Name</div><div class="ss-val"></div></div>' +
+    (hubMe && hubMe.isAdmin === false ? '' : '<button type="button" class="ss-row" id="ss-all"><b>All settings</b><small>Provider keys, web search, voice, backups and the rest</small></button>') +   // admins only, as on the desktop
     '<button type="button" class="ss-row" id="ss-adv"><b>Switch to Advanced</b><small>All tools, agents’ work and settings</small></button>' +
     '<button type="button" class="ss-row" id="ss-out"><b>Sign out</b></button>' +
     '<button type="button" class="ss-close">Close</button>';
@@ -15697,6 +15778,7 @@ function simpleSettingsOpen() {
   }));
   $('ss-adv').addEventListener('click', async () => { if (await simplePrefsPost({ uiMode: 'advanced' })) simpleReload(); else toast('Could not switch'); });
   $('ss-out').addEventListener('click', () => { signOut(); });
+  $('ss-all')?.addEventListener('click', () => { d.close(); settingsSheetOpen(); });
   d.querySelector('.ss-close').addEventListener('click', () => d.close());
   if (!d.open) d.showModal();
   typeof researchSimplePaint === 'function' && researchSimplePaint(d);   // Deep research, when the hub has it on

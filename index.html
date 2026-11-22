@@ -2889,6 +2889,29 @@
     #st-share-block .sec-btn { padding: 5px 10px; font-size: 0.72rem; background: var(--bg-input); border: 1px solid var(--border); border-radius: 4px; color: var(--text); cursor: pointer; }
     #st-share-block .sec-btn:hover { border-color: var(--accent); }
     #st-share-block .sec-msg { font-size: 0.68rem; color: var(--text-dim); min-height: 1em; }
+    /* Settings-only page (/?settings-only=1, app.js settingsOnlyStart): the Settings dialog alone, filling the screen. The
+       phone app's Settings sheet shows it in a frame, so at phone width it is one column with larger touch targets. */
+    html.mm-settings-only #sidebar-toggle, html.mm-settings-only #sidebar-overlay, html.mm-settings-only #sidebar-expand-btn,
+    html.mm-settings-only #sidebar, html.mm-settings-only body > .main, html.mm-settings-only #image-modal { display: none !important; }
+    html.mm-settings-only, html.mm-settings-only body { height: 100%; overflow: hidden; background: var(--bg-dark); }
+    html.mm-settings-only .st-overlay { background: var(--bg-dark); backdrop-filter: none; align-items: stretch; animation: none; }
+    html.mm-settings-only .st-modal { width: 100%; max-width: 760px; height: 100%; max-height: none; border: 0; border-radius: 0; padding: 16px 14px 0; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; overflow-x: hidden; }
+    /* Close and Save stay in reach at the bottom of the screen */
+    html.mm-settings-only .st-modal > .st-actions { position: sticky; bottom: 0; z-index: 2; margin: 16px -14px 0; padding: 10px 14px calc(10px + env(safe-area-inset-bottom, 0px)); background: var(--bg-card); }
+    @media (max-width: 600px) {
+      html.mm-settings-only .st-modal { padding: 12px 12px 0; }
+      html.mm-settings-only .st-modal > .st-actions { margin: 16px -12px 0; padding-left: 12px; padding-right: 12px; }
+      html.mm-settings-only .st-modal .st-hint { margin-left: 0 !important; }
+      html.mm-settings-only .st-row { flex-wrap: wrap; }
+      html.mm-settings-only .st-row > label { flex: 1 0 100% !important; max-width: 100%; text-align: left; }
+      html.mm-settings-only .st-row > label:has(> input[type="checkbox"]), html.mm-settings-only .st-row > label:has(> input[type="radio"]) { flex: 0 1 auto !important; }
+      html.mm-settings-only .st-modal input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), html.mm-settings-only .st-modal select, html.mm-settings-only .st-modal textarea { font-size: 16px; min-height: 40px; min-width: 0; max-width: 100%; }
+      /* fields take the row (their desktop widths are inline); a hint beside one moves under it */
+      html.mm-settings-only .st-row > input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), html.mm-settings-only .st-row > select { flex: 1 1 200px !important; width: auto !important; max-width: 100% !important; }
+      html.mm-settings-only .st-modal button { min-height: 40px; }
+      html.mm-settings-only details.st-group > summary { min-height: 48px; }
+      html.mm-settings-only .st-modal table { display: block; max-width: 100%; overflow-x: auto; }
+    }
 </style>
   <style id="simple-mode-css">
     /* Simple mode (lib/ui-simple.js sets html.mm-simple, and .mm-light for the light theme). Advanced never matches any rule here. */

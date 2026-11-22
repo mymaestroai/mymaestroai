@@ -681,6 +681,15 @@
   #notify-prefs-sheet .np-row { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
   #notify-prefs-sheet .np-row button { min-height: 36px; padding: 0 12px; flex: none; }
   #security-sheet, #profile-sheet { width: min(94vw, 420px); max-height: 88vh; overflow-y: auto; }
+  /* Settings (mobile.js settingsSheetOpen): the desktop page's Settings dialog alone, in a frame that fills the screen */
+  #settings-sheet { position: fixed; inset: 0; z-index: 40; display: flex; flex-direction: column; background: var(--bg-dark); padding: var(--sat) 0 var(--sab); }
+  #settings-sheet iframe { flex: 1 1 auto; width: 100%; min-height: 0; border: 0; background: var(--bg-dark); }
+  #settings-sheet .ssh-wait { position: absolute; inset: var(--sat) 0 var(--sab); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 24px; background: var(--bg-dark); color: var(--text); text-align: center; font-size: 16px; }
+  #settings-sheet.ready .ssh-wait { display: none; }
+  #settings-sheet .ssh-btns { display: flex; gap: 10px; }
+  #settings-sheet .ssh-btns[hidden] { display: none; }
+  #settings-sheet .ssh-btns button { min-height: 44px; padding: 0 18px; border-radius: 10px; border: 1px solid var(--border-strong); background: var(--bg-card); color: var(--text); font-size: 16px; }
+  #settings-sheet .ssh-btns .ssh-retry { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
   #security-sheet h3, #profile-sheet h3 { margin-bottom: 8px; }
   #security-sheet .sec-section, #profile-sheet .sec-section { padding: 10px 0; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 8px; }
   #security-sheet .sec-title, #profile-sheet .sec-title { font-weight: 600; }
@@ -1376,6 +1385,7 @@ html.mm-simple #simple-side { display: none; }
     <button id="menu-files">&#x1F4C1; Files</button>
     <button id="menu-reload">&#x21BB; Reload app</button>
     <button id="menu-profile">&#x1F464; Profile</button>
+    <button id="menu-settings">&#x2699; Settings</button>
     <!-- The Advanced row starts hidden and its items shown: mobile.js reveals the row and folds them, so a page with an older cached mobile.js still shows every item. -->
     <button id="menu-adv-toggle" aria-expanded="true" aria-controls="menu-adv" hidden><span>Advanced</span><span class="menu-adv-end" aria-hidden="true"><span class="menu-adv-dot" hidden></span><span class="menu-adv-chev">&#x25BE;</span></span></button>
     <div id="menu-adv">
