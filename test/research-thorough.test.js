@@ -1033,7 +1033,8 @@ test('r4-2 units match exactly, both ways', () => {
   assert.strictEqual(T.checkFigure('56.4', 'agreement 56.4% overall', []), 'not_found_as_written');
   assert.strictEqual(T.checkFigure('56.4%', 'agreement 56.4% overall', []), 'found_as_written');
   assert.strictEqual(T.checkFigure('56.4', '| model | 56.4 |', []), 'found_as_written');
-  assert.strictEqual(T.checkFigure('56.4%', '| model | 56.4 |', []), 'not_found_as_written');
+  assert.strictEqual(T.checkFigure('56.4%', '| model | 56.4 |', []), 'found_as_written'); // G3: a percent against a bare table cell
+  assert.strictEqual(T.checkFigure('56.4%', 'model 56.4 score', []), 'not_found_as_written'); // outside a table the unit stays exact
   assert.strictEqual(T.checkFigure('2x', 'a 2 ratio', []), 'not_found_as_written');
   assert.strictEqual(T.checkFigure('2x', 'a 2x speedup', ['speedup']), 'found_as_written');
   assert.strictEqual(T.checkFigure('2', 'a 2x speedup', []), 'not_found_as_written');
@@ -2000,7 +2001,7 @@ test('r9a-5 words after a number: the shorter function-word list, bounds, rates,
     ['1250 m', '1250 m/s', 'not found'],
     ['1250 MB', '1250 MB s⁻¹', 'not found'],
     // a symbol or a parenthesised token after the number is part of the form
-    ['1250', '1250 ± 50', 'not found'],
+    ['1250', '1250 ± 50', 'found'],
     ['1250', '1250 / 100', 'not found'],
     ['1250', '1250 ‰', 'not found'],
     ['1250', '1250 × 3', 'not found'],
@@ -3298,16 +3299,16 @@ test('r15 2 markdown link destinations and titles: nested parentheses, a title o
 
 test('r15 3 a plus-or-minus tail after a number with a unit is part of its form', () => {
   const cases = [
-    ['1250%', '1250% ± 5%', NF],
+    ['1250%', '1250% ± 5%', FD], // G1: a spread in the source is not part of the form compared when the figure names none
     ['1250% ± 5%', '1250% ± 5%', FD],
-    ['1250 ms', '1250 ms ± 5 ms', NF],
+    ['1250 ms', '1250 ms ± 5 ms', FD],
     ['1250 ms ± 5 ms', '1250 ms ± 5 ms', FD],
     ['1250 ms ± 6 ms', '1250 ms ± 5 ms', NF],
-    ['1250%', '1250% +/- 5%', NF],
-    ['1250%', '1250% +- 5%', NF],
-    ['1250%', '1250% plus or minus 5%', NF],
-    ['1250%', '1250% ±5%', NF],
-    ['1250x', '1250x ± 2', NF],
+    ['1250%', '1250% +/- 5%', FD],
+    ['1250%', '1250% +- 5%', FD],
+    ['1250%', '1250% plus or minus 5%', FD],
+    ['1250%', '1250% ±5%', FD],
+    ['1250x', '1250x ± 2', FD],
     ['1250%', '1250% in all', FD],
   ];
   for (const [fig, src, want] of cases) assert.strictEqual(T.checkFigure(fig, src), want, `${fig} vs ${src}`);
@@ -3401,21 +3402,21 @@ test('r16 3 qualifiers after a rate and in brackets: bound and approximation phr
     ['1250% per year', '1250% per year', FD],
     ['1250% per year', '1250% per year or fewer', NF],
     ['1250% per year', '1250% per year or so', NF],
-    ['1250% per month', '1250% per month ± 5%', NF],
+    ['1250% per month', '1250% per month ± 5%', FD],
     ['1250% per month ± 5%', '1250% per month ± 5%', FD],
-    ['1250% per month', '1250% per month +/- 5%', NF],
-    ['1250% per month', '1250% per month plus or minus 5%', NF],
-    ['1250 ms', '1250 ms (± 5 ms)', NF],
+    ['1250% per month', '1250% per month +/- 5%', FD],
+    ['1250% per month', '1250% per month plus or minus 5%', FD],
+    ['1250 ms', '1250 ms (± 5 ms)', FD],
     ['1250 ms (± 5 ms)', '1250 ms (± 5 ms)', FD],
-    ['1250 ms', '1250 ms (+/- 5)', NF],
-    ['1250 ms', '1250 ms (plus or minus 5 ms)', NF],
-    ['1250 ms', '1250 ms (±5 ms)', NF],
-    ['1250%', '1250% (± 5%)', NF],
-    ['1250%', '1250% (±5%)', NF],
+    ['1250 ms', '1250 ms (+/- 5)', FD],
+    ['1250 ms', '1250 ms (plus or minus 5 ms)', FD],
+    ['1250 ms', '1250 ms (±5 ms)', FD],
+    ['1250%', '1250% (± 5%)', FD],
+    ['1250%', '1250% (±5%)', FD],
     ['1250% (±5%)', '1250% (±5%)', FD],
     ['1250 per day or more', '1250 per day or more', FD],
     ['1250 per day', '1250 per day or more', NF],
-    ['1250 per day', '1250 per day ± 3', NF],
+    ['1250 per day', '1250 per day ± 3', FD],
     ['1250 per day', '1250 per day, or more', FD],                   // a clause end stops the form
     ['1250 ms', '1250 ms (n=20)', FD],                                // a bracket that is no plus-or-minus tail is not read after the word (as before)
   ];
@@ -4084,7 +4085,7 @@ test('run-2 E1 a plus-or-minus pair printed twice (arXiv TeX echo) is read once 
   assert.strictEqual(T.checkFigure('3.164 ± 0.094', pm), NF);
   assert.strictEqual(T.checkFigure('3.165±0.093', pm), NF);
   assert.strictEqual(T.checkFigure('3.164±0.093', 'Creativity 3.164±0.0933.165\\pm 0.093'), NF);
-  assert.strictEqual(T.checkFigure('3.164', pm), NF);
+  assert.strictEqual(T.checkFigure('3.164', pm), FD); // G1: the bare mean is found (the spread is not part of the form compared)
   // a 5.00±0.00 pair
   assert.strictEqual(T.checkFigure('5.001±0.003', 'score 5.001±0.0035.001\\pm 0.003 end'), FD);
 });
@@ -4382,4 +4383,83 @@ test('run-2 E3 the chat report gives the count of unread helper sources in one s
 test('run-2 E4 the counts sentence keeps "(N of them in the claims table)"', () => {
   const r = T.chatReport({ prose: '## Verdict\nIt holds.', claims: [], totals: { figures: 9, found: 4, notFound: 1, notOpened: 0, noSource: 0, proseFound: 3, proseNotFound: 1, tableFigures: 5 }, files: {} });
   assert.match(r, /Of 9 figures \(5 of them in the claims table\), 7 were found/);
+});
+
+test('G1 a mean with its spread: the source spread is not part of the form when the figure names none; the reverse stays strict', () => {
+  const row = '| ↪\\hookrightarrow Standard | 28.0±4.5 | 13.7±4.1 | 63.0±8.6 |  |';
+  for (const f of ['63.0', '13.7', '28.0', '63.0±8.6', '63.0 ± 8.6', '63.0 (±8.6)']) assert.strictEqual(T.checkFigure(f, row), FD, f);
+  for (const f of ['63.0±8.7', '63.0±9.6', '63.1', '8.6']) assert.strictEqual(T.checkFigure(f, row), NF, f);
+  for (const src of ['x | 63.0 (±8.6) | y', 'x | 63.0 (± 8.6) | y', 'x | 63.0 ± 8.6 | y', 'The score was 63.0 ± 8.6 overall.', 'The score was 63.0 (±8.6) overall.']) {
+    assert.strictEqual(T.checkFigure('63.0', src), FD, src);
+    assert.strictEqual(T.checkFigure('63.0±8.6', src), FD, src);
+    assert.strictEqual(T.checkFigure('63.0 (±8.6)', src), FD, src);
+    assert.strictEqual(T.checkFigure('63.0±8.7', src), NF, src);
+  }
+  assert.strictEqual(T.checkFigure('63.0 (±8.6)', 'x | 63.0±9.6 | y'), NF);
+  assert.strictEqual(T.checkFigure('63.0 (±8.6)', 'x | 64.0±8.6 | y'), NF);
+  assert.strictEqual(T.checkFigure('63.0±8.6', 'x | 63.0 | y'), NF); // a source without a spread does not carry the figure's
+  assert.strictEqual(T.checkFigure('63.0 (±8.6)', 'x | 63.0 | y'), NF);
+});
+
+test('G2 arXiv doubled rendering: a mean and its spread are read once, in table cells, brackets and next to ±', () => {
+  const row = '| creativity | 3.583.58 (±0.78\\pm 0.78) | 2.332.33 (±0.55\\pm 0.55) | 2.452.45 (±0.77\\pm 0.77) | 3.653.65 (±0.78\\pm 0.78) |';
+  assert.deepStrictEqual(T.numbersIn(row).map((t) => t.raw), ['3.58', '0.78', '2.33', '0.55', '2.45', '0.77', '3.65', '0.78']);
+  for (const f of ['3.58', '2.33', '2.45', '3.58 (±0.78)', '3.58±0.78', '3.58 ± 0.78', '2.33 (±0.55)']) assert.strictEqual(T.checkFigure(f, row), FD, f);
+  for (const f of ['3.58 (±0.79)', '3.58±0.79', '3.59']) assert.strictEqual(T.checkFigure(f, row), NF, f);
+  // the marker printed twice ("±" then "\pm"): one marker
+  const r6 = '| StorySpark | 87.78 ±\\pm 1.40 | 87.45 ±\\pm 4.35 |';
+  for (const f of ['87.78', '87.78 ± 1.40', '87.78±1.40']) assert.strictEqual(T.checkFigure(f, r6), FD, f);
+  assert.strictEqual(T.checkFigure('87.78 ± 1.41', r6), NF);
+  const r2 = '| Authenticity | 3.27±0.073.27\\pm 0.07 | 3.50±0.093.50\\pm 0.09 |';
+  for (const f of ['3.27', '3.27±0.07', '3.50 ± 0.09']) assert.strictEqual(T.checkFigure(f, r2), FD, f);
+  assert.strictEqual(T.checkFigure('3.27±0.08', r2), NF);
+  // two plain integers written together are one number
+  assert.strictEqual(T.checkFigure('1212', '| a | 1212 | b |'), FD);
+  assert.strictEqual(T.checkFigure('12', '| a | 1212 | b |'), NF);
+  assert.strictEqual(T.checkFigure('1212', '| a | 12 (±3) | b |'), NF);
+});
+
+test('G3 a percent in the report against a bare table cell; nowhere else', () => {
+  const row = '| RM-R1-DeepSeek-Qwen-14B | ZH | 59.2 | 45.7 | 57.5 | 71.7 | 66.7 | 90.0 | 54.6 | 69.2 | 62.6 | 13.2 |';
+  assert.strictEqual(T.checkFigure('90.0%', row), FD);
+  assert.strictEqual(T.checkFigure('90.0 percent', row), FD);
+  assert.strictEqual(T.checkFigure('90.0 per cent', row), FD);
+  assert.strictEqual(T.checkFigure('90.0', row), FD);
+  assert.strictEqual(T.checkFigure('90.1%', row), NF);
+  assert.strictEqual(T.checkFigure('90%', row), NF);
+  assert.strictEqual(T.checkFigure('90.0%', '| a | 90.0±1.5 | b |'), FD); // a cell with a spread
+  assert.strictEqual(T.checkFigure('90.0%', '| a | 90.0 (± 1.5) | b |'), FD);
+  assert.strictEqual(T.checkFigure('90.0%', 'The score was 90.0 here.'), NF); // prose
+  assert.strictEqual(T.checkFigure('90.0%', 'The score was 90.0.'), NF);
+  assert.strictEqual(T.checkFigure('90.0%', '| a | 90.0 ms | b |'), NF); // a cell with a unit
+  assert.strictEqual(T.checkFigure('90.0%', '| a | about 90.0 | b |'), NF); // not the whole cell
+  assert.strictEqual(T.checkFigure('90.0%', 'score | 90.0 | b'), NF); // not a table line
+  assert.strictEqual(T.checkFigure('90.0 ms', '| a | 90.0 | b |'), NF); // another unit stays as before
+});
+
+test('H2 a list marker before a number is no sign and no part of its form (run 3: "- 52.7% matches the first pass")', () => {
+  assert.strictEqual(T.checkFigure('52.7%', 'Sequence classifiers achieve only 52.7% mean accuracy.'), 'found_as_written');
+  assert.strictEqual(T.checkFigure('52.7%', '- 52.7% mean accuracy\n'), 'found_as_written');
+  assert.strictEqual(T.checkFigure('52.7%', '  * 52.7% mean accuracy\n'), 'found_as_written');
+  assert.strictEqual(T.checkFigure('-52.7%', '- 52.7% mean accuracy\n'), 'not_found_as_written');
+  const src = 'https://example.org/p';
+  const r = T.checkReport({ prose: `## Evidence\n\n  - 52.7% matches the first pass [${src}].\n`, claims: [{ id: 'c1', claim: 'x', source_url: src, figures: ['52.7%'] }],
+    fetched: [{ url: src, title: 'p', ok: true, text: 'Sequence classifiers achieve only 52.7% mean accuracy.' }], counts: {} });
+  assert.ok(!r.prose.includes('[not found in source]'), r.prose);
+});
+
+test('H3 a times sign printed twice by arXiv ("1.6-2.1×\\times") is read once (run 3 source 07)', () => {
+  const src = 'In creative writing, VS increases diversity by 1.6-2.1×\\times over direct prompting.';
+  assert.strictEqual(T.checkFigure('1.6–2.1×', src, ['diversity']), 'found_as_written');
+  assert.strictEqual(T.checkFigure('1.6-2.1×', src, ['diversity']), 'found_as_written');
+  assert.strictEqual(T.checkFigure('1.6–2.2×', src, ['diversity']), 'not_found_as_written');
+});
+
+test('H1 a prompt template placeholder in doubled brackets is reading text, not markup (run 3 source 09)', () => {
+  const src = "In these writing agents' prompt templates:\n- <<section>> is one of \"Exposition\", \"Rising Action\", \"Climax\".\n- <<identifiers found in the scratchpad>> are extracted.\n\nThe judge agreed on 9,900 of the pairs.\n";
+  assert.strictEqual(T.checkFigure('9,900', src), 'found_as_written');
+  assert.strictEqual(T.checkFigure('1250', '<<section>> is a heading. There were 1250 items.'), 'found_as_written');
+  // real markup stays unreadable: a closing tag, or a tag after a single "<"
+  assert.strictEqual(T.checkFigure('1250', 'Text <<span hidden>1250</span> more'), 'source_not_opened');
+  assert.strictEqual(T.checkFigure('1250', 'Text <section>1250</section> more'), 'source_not_opened');
 });
