@@ -74,9 +74,7 @@ Status and limits (Save permissions).
 - **Control port** (default 9971): used only on My Maestro's computer by the connector.
 - **Computer port** (default 9972): the port on the tailnet address that the PCs connect to.
 - **Run as** (default auto): `service` runs MeshCentral as its own system service (see "Its own service (Linux)").
-  `hub` runs it under My Maestro's own account (see "Under My Maestro's own account (Linux without systemd)"). `auto` uses
-  `service` when My Maestro's computer has systemd, and `hub` when it does not. Both are Linux only: on macOS or Windows
-  the connector does not start in either mode.
+  `hub` runs it under My Maestro's own account. `auto` uses `service` when My Maestro's computer has systemd.
 - **Asking per computer:** You can also choose, for each computer on the Computers box in this connector's page, between asking every session, asking once a day, or not asking chosen agents on that computer.
 - **Approved session length:** how long one yes for Act or Drive lasts (5 to 120 minutes).
 - **Each agent's level and Ask me:** set in the agent list, not as a typed setting, and saved with Save.
@@ -150,30 +148,8 @@ Good to know:
 - Its data is not in My Maestro's backups. If you move to a new computer, install the PC's agent again.
 - To remove it, run `sudo bash <module dir>/service/uninstall.sh`, where `<module dir>` is the folder of this
   connector (the install command shows the full path).
-- `hub` mode runs MeshCentral under My Maestro's own account. Use it only on Linux computers without systemd.
+- `hub` mode runs MeshCentral under My Maestro's own account. Use it only on computers without systemd.
 - Its log is in `journalctl -u mymaestro-remote`.
-
-## Under My Maestro's own account (Linux without systemd)
-
-On a Linux computer without systemd (some containers and small boards), MeshCentral runs inside My Maestro instead
-of as its own service. This mode does not make the connector work on a Mac or on Windows: there it does not start at all.
-
-1. In **Your settings**, leave **Run as** on `auto` (it picks `hub` when there is no systemd) or choose `hub`.
-2. Press **Start the server**. My Maestro starts MeshCentral itself, under its own account. No administrator command
-   is needed in this mode. If you press Ask Maestro, your chat with Maestro opens with a question about this step and
-   the message the page showed. Maestro reads this guide, checks the step's message and the connector's health check,
-   and tells you what they say and what to do next. It has no administrator command to run here and installs nothing.
-   If My Maestro runs on a Mac or on Windows, Maestro tells you that this connector needs My Maestro on Linux.
-3. The page shows a warning that MeshCentral runs under My Maestro's own account. That is expected in this mode: it
-   has no separate locked-down account, so it can read what My Maestro's account can read.
-4. Carry on with **Prepare the PC** and the steps after it, as in "What each step does".
-
-Good to know:
-
-- MeshCentral runs only while My Maestro runs: it starts when My Maestro starts (with the connector on) and stops when
-  My Maestro stops. If it stops by itself, My Maestro starts it again.
-- Its data and keys are in the connector's own folder inside My Maestro's data folder.
-- Switching a setup that started in `hub` mode to `service` later gives MeshCentral new keys: install the PC's agent again.
 
 ## Removing a computer
 
