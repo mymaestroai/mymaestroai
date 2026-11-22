@@ -11141,6 +11141,8 @@
       // Plan warnings and refusals (lib/plan-usage) are shown near the top, never as a pop-up over the input: the usage
       // badge next to each Claude agent's model, the sidebar chip, and the Settings box.
       source.addEventListener('plan_limit', e => { const ev = parse(e); if (!ev) return; refreshPlanChip(); if (document.getElementById('st-plan-section')) loadPlanBox(); });
+      // The usage was re-read (a sign-in change, a faster poll near the limit): only the time is sent, the figures come from the admin route.
+      source.addEventListener('plan_usage', e => { const ev = parse(e); if (!ev || (window.hubMe && !window.hubMe.isAdmin)) return; refreshPlanChip(); if (document.getElementById('st-plan-section')) loadPlanBox(); });
       source.addEventListener('plan_extra_usage', e => { const ev = parse(e); if (!ev) return; refreshPlanChip(); if (document.getElementById('st-plan-section')) loadPlanBox(); });
       source.addEventListener('plan_warning', e => { const ev = parse(e); if (!ev) return; refreshPlanChip(); subsPlanWarning(ev); if (document.getElementById('st-plan-section')) loadPlanBox(); });
       // The ChatGPT plan's usage (lib/codex-usage): the payload is the snapshot; the badges, the chip and the Subscriptions box repaint.
