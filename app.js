@@ -22,7 +22,9 @@
             }
             if (u.origin === location.origin && u.pathname.startsWith('/api/') && !keep) {
               redirecting = true;
-              location.href = '/login?next=' + encodeURIComponent(location.pathname + location.search);
+              // the phone's Settings sheet: the frame's one history entry is replaced, so Back still closes the sheet
+              if (SETTINGS_ONLY) location.replace('/login?next=' + encodeURIComponent(location.pathname + location.search));
+              else location.href = '/login?next=' + encodeURIComponent(location.pathname + location.search);
             }
           } catch (e) { /* unparsable URL: leave the response alone */ }
         }
@@ -22987,7 +22989,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         if (sent || document.getElementById('st-overlay')) return;
         sent = true;
         // the dialog closed on its way to another page (a link, with Discard chosen): that page opens in the sheet
-        if (settingsOnlyGoing) { location.href = settingsOnlyGoing; return; }
+        if (settingsOnlyGoing) { location.replace(settingsOnlyGoing); return; }   // replaced: Back closes the sheet
         settingsOnlyPost('mm-settings-closed');
       };
       try { new MutationObserver(check).observe(document.body, { childList: true }); } catch { /* old browser: Close still posts */ }
@@ -23027,8 +23029,9 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         if (!m) return;
         dest = m[1];
       }
-      if (!dialogGuard.layers().some((l) => dialogGuard.isDirty(l.el))) return;   // nothing to lose: the page opens as it is
       e.preventDefault(); e.stopImmediatePropagation();
+      // nothing to lose: the page opens in the sheet at once, in place of this one (Back then closes the sheet)
+      if (!dialogGuard.layers().some((l) => dialogGuard.isDirty(l.el))) { location.replace(dest); return; }
       settingsOnlyGoing = dest;
       // close from the innermost layer out; the first one with changes asks ("Discard changes?") and the way stops there
       for (let i = 0; i < 20; i++) {

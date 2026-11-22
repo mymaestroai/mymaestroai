@@ -63,7 +63,7 @@ function soHarness({ admin = true, parentIsSelf = false } = {}) {
   const docListeners = {};
   const doc = { documentElement: docEl, body: {}, getElementById: (id) => (id === 'st-overlay' ? overlay : null), addEventListener: (t, f, c) => { docListeners[t] = { f, c }; } };
   const env = {
-    window: win, document: doc, location: { origin: 'https://hub.example', href: 'https://hub.example/?settings-only=1' },
+    window: win, document: doc, location: { origin: 'https://hub.example', href: 'https://hub.example/?settings-only=1', replaced: [], replace(u) { this.replaced.push(u); } },
     fetch: async () => ({ ok: true, status: 200, json: async () => ({ isAdmin: admin, user: { id: 'u1' } }) }),
     isHubAdmin: () => admin,
     openSettings: async () => { calls.push('openSettings'); overlay = { id: 'st-overlay' }; layers.length = 0; layers.push({ el: overlay }); },
@@ -128,7 +128,11 @@ test('review r1/r2: a link or button that opens another page asks first when any
   const button = (onclick) => ({ tagName: 'BUTTON', getAttribute: (k) => (k === 'onclick' ? onclick : null) });
   const before = h.calls.length;
   let e = ev(link('/modules')); guard(e);
-  assert.strictEqual(e.prevented, false, 'nothing to lose: the page opens in the sheet');
+  assert.strictEqual(e.prevented, true);
+  assert.deepStrictEqual(h.env.location.replaced, ['/modules'], 'nothing to lose: the page opens in the sheet in place of this one (Back closes the sheet)');
+  e = ev(button("location.href='/modules'")); guard(e);
+  assert.deepStrictEqual(h.env.location.replaced, ['/modules', '/modules']);
+  h.env.location.replaced.length = 0;
   h.layers[0].el.dirty = true;
   h.env.nextClose = 'confirm';
   for (const t of [link('/modules'), button("location.href='/modules'")]) {
@@ -137,6 +141,7 @@ test('review r1/r2: a link or button that opens another page asks first when any
     assert.deepStrictEqual(h.calls[h.calls.length - 1].slice(0, 2), ['requestClose', 'close']);
   }
   for (const t of [link('#x'), link('https://other.example/'), link('/modules', { target: '_blank' }), link(''), button('saveSettings()'), button("doThing(); location.href='/x'")]) { e = ev(t); guard(e); assert.strictEqual(e.prevented, false); }
+  assert.deepStrictEqual(h.env.location.replaced, [], 'asked, not gone');
   e = ev(null); guard(e); assert.strictEqual(e.prevented, false, 'not a link');
   assert.strictEqual(h.calls.length - before, 2);
   // Discard: the dialog goes and the watch opens the page instead of closing the sheet
@@ -144,7 +149,7 @@ test('review r1/r2: a link or button that opens another page asks first when any
   e = ev(link('/modules')); guard(e);                       // asks again, the destination kept
   guard(ev({ tagName: 'BUTTON', getAttribute: () => null }, true));   // the Discard button's own click keeps it
   h.setOverlay(null); h.env.observe();
-  assert.strictEqual(h.env.location.href, '/modules');
+  assert.deepStrictEqual(h.env.location.replaced, ['/modules']);
   assert.deepStrictEqual(h.posted, [], 'no "closed": the sheet shows that page');
   assert.match(SO, /closest\('a\[href\], \[onclick\^="location\.href="\]'\)/);
 });
@@ -159,7 +164,7 @@ test('review r2: Keep editing, any other click or Back forgets the page a link a
   guard(ev(null));   // Keep editing (or anything else)
   h.posted.length = 0;
   h.setOverlay(null); h.env.observe();
-  assert.notStrictEqual(h.env.location.href, '/modules');
+  assert.deepStrictEqual(h.env.location.replaced, []);
   assert.deepStrictEqual(h.posted, [[{ type: 'mm-settings-closed' }, 'https://hub.example']]);
 });
 
@@ -330,4 +335,12 @@ test('review r1: the frame left Settings (sign-in page, a linked page): a Close 
   const t3 = h3.timers[h3.timers.length - 1];
   assert.strictEqual(t3.f, null, 'cleared');
   assert.ok(!s3.el.removed);
+});
+
+test('review r2: a settings-only page never moves to the phone layout, and the session guard replaces the frame\'s entry', () => {
+  const pl = read('lib/ui-phone-layout.js');
+  assert.match(pl, /const DESKTOP_ONLY_PARAMS = \[[^\]]*'settings-only'\];/);
+  const f = new Function(`${fnSrc(pl, 'function desktopOnlyLink(search) {')}; return desktopOnlyLink;`.replace('DESKTOP_ONLY_PARAMS', "['memory', 'selfcheck', 'connectors', 'backups', 'health', 'websearch', 'settings-only']"))();
+  assert.strictEqual(f('?settings-only=1'), true);
+  assert.match(app, /if \(SETTINGS_ONLY\) location\.replace\('\/login\?next=' \+ encodeURIComponent\(location\.pathname \+ location\.search\)\);\n\s+else location\.href = '\/login\?next='/);
 });

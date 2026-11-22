@@ -260,7 +260,7 @@ test('runner: a location.replace that throws restores the page and does not thro
 });
 
 test('desktopOnlyLink: the computer layout panels the phone page lacks', () => {
-  assert.deepStrictEqual(L.DESKTOP_ONLY_PARAMS, ['memory', 'selfcheck', 'connectors', 'backups', 'health', 'websearch']);
+  assert.deepStrictEqual(L.DESKTOP_ONLY_PARAMS, ['memory', 'selfcheck', 'connectors', 'backups', 'health', 'websearch', 'settings-only']);   // settings-only: the phone app's Settings sheet
   for (const s of ['?memory=1', '?selfcheck=1', '?connectors=1', '?backups=1', '?a=2&memory=1']) assert.strictEqual(L.desktopOnlyLink(s), true, s);
   for (const s of ['', '?memory=0', '?update=1', '?security=1', '?wallet=unlock', '?agent=sam', null, undefined]) assert.strictEqual(L.desktopOnlyLink(s), false, String(s));
 });
