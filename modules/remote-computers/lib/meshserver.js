@@ -107,13 +107,15 @@ function createMeshServer({ runtimeDir, home, settings, spawn = childProcess.spa
   };
   paths.configFile = path.join(paths.dataPath, 'config.json');
   paths.rootCert = path.join(paths.dataPath, 'root-cert-public.crt');
+  // The service's folder: the request for the root script, and what the service shares back. Hub mode only looks at these two files, to see a request that was never run.
+  const serviceRequestFile = path.join(home, 'service', 'request.env'), serviceInstalledFile = path.join(home, 'service', 'installed.json');
   if (service) {
     // In service mode MeshCentral runs as its own system service; the hub only keeps a request for the root script and reads what the service shares back.
     paths.serviceDir = path.join(home, 'service');
     paths.rootCert = path.join(paths.serviceDir, 'root-cert-public.crt');
-    paths.request = path.join(paths.serviceDir, 'request.env');
+    paths.request = serviceRequestFile;
     paths.serviceConfig = path.join(paths.serviceDir, 'config.json');
-    paths.installed = path.join(paths.serviceDir, 'installed.json');
+    paths.installed = serviceInstalledFile;
   }
   const baseEnv = () => ({ PATH: process.env.PATH, HOME: home });
 
@@ -262,6 +264,9 @@ function createMeshServer({ runtimeDir, home, settings, spawn = childProcess.spa
     }
     return `sudo bash '${path.join(moduleDir, 'service', 'install.sh')}' '${paths.request}'`;
   }
+  // The helper-program download as the page says it: no paths, no addresses.
+  let agentFiles = { state: 'idle', bytes: 0, totalBytes: 0, error: null };
+  const helpers = () => ({ ...agentFiles });
   const restartCommand = () => `sudo systemctl restart ${serviceName}`;
   async function bootstrapService() {
     const cfg = configFor(settings, { service: true });
@@ -291,7 +296,19 @@ function createMeshServer({ runtimeDir, home, settings, spawn = childProcess.spa
     if (/[\r\n]/.test(allowed)) throw new Error('The allowed addresses are not valid.');
     const command = installCommand();
     // The service has no internet, so the agent programs are put into the runtime now; the root script copies the runtime into the service.
-    try { await ensureAgents({ runtimeDir, log }); } catch (e) { throw new Error(`Could not download the MeshCentral agent files: ${clean(e && e.message, 300)}`); }
+    agentFiles = { state: 'downloading', bytes: 0, totalBytes: 0, error: null };
+    try {
+      await ensureAgents({ runtimeDir, log, onProgress: (p) => {
+        if (agentFiles.state !== 'downloading') return;
+        agentFiles = { state: 'downloading', bytes: Number(p && p.bytes) || 0, totalBytes: Number(p && p.totalBytes) || 0, error: null };
+      } });
+      agentFiles = { state: 'done', bytes: agentFiles.totalBytes, totalBytes: agentFiles.totalBytes, error: null };
+    } catch (e) {
+      // A short reason with no address and no folder in it (the page shows it to the person).
+      const why = clean(e && e.message, 200).replace(/https?:\/\/\S+/gi, '').replace(/(?:\/[\w.-]+){2,}/g, '').replace(/\s+/g, ' ').trim().slice(0, 120);
+      agentFiles = { state: 'failed', bytes: agentFiles.bytes, totalBytes: agentFiles.totalBytes, error: why || 'unknown reason' };
+      throw new Error(`Could not download the MeshCentral agent files: ${clean(e && e.message, 300)}`);
+    }
     fs.mkdirSync(paths.home, { recursive: true, mode: 0o700 });
     fs.mkdirSync(paths.serviceDir, { recursive: true, mode: 0o700 });
     if (created) {
@@ -323,7 +340,10 @@ function createMeshServer({ runtimeDir, home, settings, spawn = childProcess.spa
     if (service) return bootstrapServiceOnce();
     const my = epoch;
     const alive = () => { if (epoch !== my) throw cancelled(); };
-    if (readAccountsStrict()) return { created: false };
+    // accounts.json left by "Set it up" for the locked-down service (a request nobody ran, no installed.json) does not mean the accounts exist in
+    // MeshCentral's own database: the root script was meant to make them in the service's data folder. Then they are made here, with fresh passwords.
+    const staleRequest = fs.existsSync(serviceRequestFile) && !fs.existsSync(serviceInstalledFile);
+    if (readAccountsStrict() && !staleRequest) return { created: false };
     if (isRunning()) throw new Error('The server is running; the first accounts can only be made while it is stopped.');
     writeConfig();
     try { fs.unlinkSync(paths.pendingFile); } catch { /* none, as it should be */ }
@@ -356,6 +376,8 @@ function createMeshServer({ runtimeDir, home, settings, spawn = childProcess.spa
       agent: { user: 'maestro', pass: accountPass.maestro },
       createdAt: new Date(now()).toISOString(),
     }, null, 2) + '\n');
+    // The request holds the hashes of the old passwords and is stale now.
+    if (staleRequest) { try { fs.unlinkSync(serviceRequestFile); } catch { /* already gone */ } }
     return { created: true };
   }
 
@@ -653,7 +675,7 @@ function createMeshServer({ runtimeDir, home, settings, spawn = childProcess.spa
     };
   }
 
-  return { paths, mode: service ? 'service' : 'hub', configFor, writeConfig, npmGuardArgs, bootstrap, accounts, personAccount, savePersonAccount, state, start, stop, status, isRunning, logTail, checkService };
+  return { paths, mode: service ? 'service' : 'hub', configFor, writeConfig, npmGuardArgs, bootstrap, accounts, personAccount, savePersonAccount, state, start, stop, status, isRunning, logTail, checkService, helpers };
 }
 
 module.exports = {

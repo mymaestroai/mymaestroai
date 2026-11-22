@@ -393,7 +393,7 @@ async function deskOpen(btn) {
     } catch (e) { setMsg('err', e.message); loadDesktopBox(); }
   });
 }
-function selectStep(id) { selected = id; if (id) delete preRes[id]; render(); }
+function selectStep(id) { autoPollStop(); selected = id; if (id) delete preRes[id]; render(); if (id && autoRes[id] && autoRes[id].waiting) autoPollArm(id); }
 function closePanel() { stopSignin(); permPending = null; if (typeof PasswordEye !== 'undefined') PasswordEye.hideAll(document.getElementById('panel')); document.getElementById('panel').classList.remove('open'); current = null; history.replaceState(null, '', '#'); }
 
 function setMsg(kind, text) { const el = document.getElementById('step-msg'); if (!el) return; el.className = `msg show ${kind}`; el.textContent = text; }
@@ -516,12 +516,18 @@ function autoAreaHtml(s) {
       <div class="admin-choice"><div class="dim">Copy the command and run it on that computer as an administrator:</div><pre class="redirect-uri mono" id="admin-cmd" style="white-space:pre-wrap">${esc(ad.command)}</pre><button onclick="copyAdminCmd(this)">Copy the command</button></div>
       ${ad.label ? `<div class="admin-choice"><button onclick="autoAdmin('${esc(s.id)}', this)">${esc(ad.label)}</button>${ad.warning ? `<div class="dim" style="font-size:12px">${esc(ad.warning)}</div>` : ''}</div>` : ''}</div>`;
   }
+  if (a.waiting) {
+    // still getting ready: a plain box, no red; the page looks again by itself
+    h += `<div class="msg show info" id="auto-waiting">${esc((a.check && a.check.summary) || 'It is getting ready.')}</div>`;
+  } else if (a.tryAgain) {
+    h += `<div class="msg show info" id="auto-tryagain">${esc((a.check && a.check.summary) || a.error || '')}</div><div class="actions"><button class="primary" id="btn-tryagain" onclick="runAutoStep('${esc(s.id)}', {}, this)">Try again</button></div>`;
+  }
   if (a.done) {
     const idx = current.steps.findIndex(x => x.id === s.id);
     const next = current.steps.slice(idx + 1).find(x => !x.done);
     const sum = a.check && a.check.summary ? ' ' + esc(a.check.summary) : '';
     h += `<div class="msg show ok">Done.${sum}</div>${next ? `<div class="actions"><button class="primary" onclick="selectStep('${esc(next.id)}')">Next: ${esc(next.title)}</button></div>` : ''}`;
-  } else if (a.error && !a.choose && !a.admin) {
+  } else if (a.error && !a.choose && !a.admin && !a.tryAgain) {
     // the progress lines are already listed above; the error is shown once, with its summary
     h += `<div class="msg show err">${esc((a.check && a.check.summary) || a.error)}</div>`;
   }
@@ -534,28 +540,56 @@ function autoPaint(stepId) {
   const tmp = document.createElement('div'); tmp.innerHTML = autoAreaHtml(s);
   el.innerHTML = tmp.firstChild ? tmp.firstChild.innerHTML : '';
 }
-async function runAutoStep(stepId, extra, btn) {
-  const m = current; const prev = autoRes[stepId] || {};
-  const choices = { ...(prev.choices || {}), ...((extra && extra.choices) || {}) };
-  const input = { ...(Object.keys(choices).length ? { choices } : {}), ...(extra && extra.adminChoice ? { adminChoice: true } : {}) };
-  autoRes[stepId] = { running: true, choices, lines: [] };
-  autoPaint(stepId);
-  if (btn) btn.disabled = true;
+// While a step says "getting ready" the page asks again every 10 seconds (with { poll: true }: one check, no wait on the server), only while that step is on screen.
+let AUTO_POLL_MS = 10000;
+let autoPollTimer = null, autoPollBusy = false;
+function autoPollStop() { if (autoPollTimer) { clearTimeout(autoPollTimer); autoPollTimer = null; } }
+function autoPollArm(stepId) {
+  autoPollStop();
+  const m = current;
+  autoPollTimer = setTimeout(() => { autoPollTimer = null; autoPoll(stepId, m); }, AUTO_POLL_MS);
+}
+async function autoPoll(stepId, m) {
+  const a = autoRes[stepId];
+  if (current !== m || selected !== stepId || !a || !a.waiting || a.running || autoPollBusy) return;   // the step was left: no more asking
+  autoPollBusy = true;
+  try { await autoStepCall(stepId, a.choices || {}, {}, true, m); } finally { autoPollBusy = false; }
+}
+async function autoStepCall(stepId, choices, extra, poll, m) {
+  const input = { ...(Object.keys(choices).length ? { choices } : {}), ...(extra && extra.adminChoice ? { adminChoice: true } : {}), ...(poll ? { poll: true } : {}) };
   try {
     const r = await api('POST', `/api/modules/${m.id}/step`, { step: stepId, input });
     if (current !== m) return;
     current = r.module;
+    if (r.result && r.result.waiting === true) {
+      autoRes[stepId] = { waiting: true, choices, lines: r.result.lines || [], check: r.result.check || null };
+      if (poll) autoPaint(stepId); else { render(); }
+      if (selected === stepId) autoPollArm(stepId);
+      return;
+    }
     autoRes[stepId] = { done: true, choices, lines: (r.result && r.result.lines) || [], check: (r.result && r.result.check) || null };
     render(); loadList();
   } catch (e) {
     if (current !== m) return;
     const d = e.data || {};
+    // A look that could not be answered at all (no check in the answer) is not an error while it is getting ready: look again later.
+    if (poll && !d.check && !d.choose && !d.admin && autoRes[stepId] && autoRes[stepId].waiting) { if (selected === stepId) autoPollArm(stepId); return; }
     // the lines the setup got through, then the error once, in the auto area (the page's step message is not filled; Ask Maestro quotes the auto area)
-    autoRes[stepId] = { error: e.message, check: d.check || null, choose: d.choose || null, admin: d.admin || null, choices, lines: (d.check && d.check.lines) || [] };
+    autoRes[stepId] = { error: e.message, check: d.check || null, choose: d.choose || null, admin: d.admin || null, tryAgain: !!(d.check && d.check.tryAgain === true), choices, lines: (d.check && d.check.lines) || [] };
     if (selected === stepId) {
       const a = document.getElementById('step-area'); if (a) a.innerHTML = stepHtml(current.steps.find(x => x.id === stepId));
     }
-  } finally { const b = document.getElementById('btn-auto'); if (b) b.disabled = false; }
+  }
+}
+async function runAutoStep(stepId, extra, btn) {
+  const m = current; const prev = autoRes[stepId] || {};
+  const choices = { ...(prev.choices || {}), ...((extra && extra.choices) || {}) };
+  autoPollStop();
+  autoRes[stepId] = { running: true, choices, lines: [] };
+  autoPaint(stepId);
+  if (btn) btn.disabled = true;
+  try { await autoStepCall(stepId, choices, extra, false, m); }
+  finally { const b = document.getElementById('btn-auto'); if (b) b.disabled = false; }
 }
 function autoContinue(stepId, btn) {
   const picked = document.querySelector('input[name="auto-choice"]:checked');

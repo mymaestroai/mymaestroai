@@ -33,7 +33,7 @@ function load() {
     return { ok: r.status < 400, status: r.status, json: async () => r.json };
   };
   const ctx = vm.createContext({ document, window: { addEventListener() {} }, fetch, location: { origin: 'http://hub', search: '', hash: '', pathname: '/modules' }, history: { replaceState() {} }, navigator: { clipboard: { writeText: async (t) => { state.copied = t; } } }, setTimeout, clearTimeout, setInterval, clearInterval, Date, console, URLSearchParams });
-  vm.runInContext(script + '\nthis.t = { stepHtml, overviewHtml, settingField, advancedHtml, render, openModule, selectStep, loadSuggestions, checkAgain, runAutoStep, askMaestro, autoContinue, autoAdmin, copyAdminCmd, loadPrecheck, saveAdvanced, setCurrent(m) { current = m; }, getCurrent() { return current; }, setSelected(s) { selected = s; }, setPre(x) { preRes = x; }, getPre() { return preRes; }, setSug(x) { suggestions = x; }, getSug() { return suggestions; }, setAuto(x) { autoRes = x; }, getAuto() { return autoRes; } };', ctx);
+  vm.runInContext(script + '\nthis.t = { stepHtml, overviewHtml, settingField, advancedHtml, render, openModule, selectStep, loadSuggestions, checkAgain, runAutoStep, askMaestro, autoContinue, autoAdmin, copyAdminCmd, loadPrecheck, saveAdvanced, setCurrent(m) { current = m; }, getCurrent() { return current; }, setSelected(s) { selected = s; }, setPre(x) { preRes = x; }, getPre() { return preRes; }, setSug(x) { suggestions = x; }, getSug() { return suggestions; }, setAuto(x) { autoRes = x; }, getAuto() { return autoRes; }, setPollMs(n) { AUTO_POLL_MS = n; }, hasPollTimer() { return autoPollTimer !== null; }, autoAreaHtml };', ctx);
   const fire = (type, target) => (listeners[type] || []).forEach(fn => fn({ target }));
   return { t: ctx.t, calls, state, els, fire };
 }
@@ -344,4 +344,71 @@ test('the overview shows the run mode line from the last server check', () => {
   }
   const none = detail({ finishedAt: '2026-01-01', state: 'ready', enabled: true, runMode: null }); t.setCurrent(none);
   assert.ok(!/class="run-mode"/.test(t.overviewHtml()));
+});
+
+// ── r3: "getting ready" is not a failure ──
+const wait = (ms) => new Promise(r => setTimeout(r, ms));
+const GETTING_READY = 'The server is getting ready. This page shows it when it is ready.';
+const waitingAnswer = (over = {}) => ({ status: 200, json: { ok: true, step: 'setup', result: { lines: ['Found this computer.'], check: { ok: false, retry: true, summary: GETTING_READY, lines: [] }, waiting: true }, module: detail(), ...over } });
+
+test('r3: a waiting answer is a plain box with the check summary, no red error and no Done; it asks again with { poll: true } and stops at ok, then Next appears', async () => {
+  const { t, calls, state, els } = load(); const m = detail(); t.setCurrent(m); t.setSelected('setup'); t.setPollMs(15);
+  state.responses.push(waitingAnswer(), waitingAnswer());
+  await t.runAutoStep('setup', {}, null);
+  const first = t.stepHtml(t.getCurrent().steps[1]);
+  assert.match(first, /class="msg show info" id="auto-waiting">The server is getting ready\. This page shows it when it is ready\./);
+  assert.ok(!/class="msg show err"/.test(first) && !/Done\./.test(first));
+  assert.strictEqual(t.getAuto().setup.waiting, true);
+  assert.deepStrictEqual(calls[0].body, { step: 'setup', input: {} });
+  assert.ok(t.hasPollTimer());
+  await wait(80);   // the second answer is also waiting; the third look gets the default (empty) answer
+  assert.ok(calls.length >= 2);
+  assert.deepStrictEqual(calls[1].body, { step: 'setup', input: { poll: true } });
+  t.setCurrent(m);
+  state.responses.length = 0;
+  const doneMod = detail({ steps: STEPS.map(s => ({ ...s, done: s.id === 'setup' })) });
+  state.responses.push({ status: 200, json: { ok: true, step: 'setup', result: { lines: [], check: { ok: true, summary: 'The server is running.', lines: [] } }, module: doneMod } });
+  await wait(80);
+  assert.strictEqual(t.getAuto().setup.done, true);
+  assert.match(t.autoAreaHtml(t.getCurrent().steps[1]), /Done\..*Next: Finish/);
+  assert.ok(!/auto-waiting/.test(t.autoAreaHtml(t.getCurrent().steps[1])));
+  const n = calls.length; await wait(60);
+  assert.strictEqual(calls.length, n, 'no more asking once it is ok');
+  assert.ok(!t.hasPollTimer());
+});
+
+test('r3: the page stops asking when the step is left (and the poll timer is cleared)', async () => {
+  const { t, calls, state } = load(); const m = detail(); t.setCurrent(m); t.setSelected('setup'); t.setPollMs(15);
+  state.responses.push(waitingAnswer());
+  await t.runAutoStep('setup', {}, null);
+  assert.ok(t.hasPollTimer());
+  t.selectStep('done');
+  assert.ok(!t.hasPollTimer());
+  const n = calls.length; await wait(70);
+  assert.strictEqual(calls.length, n);
+});
+
+test('r3: tryAgain shows a plain box and a Try again button that runs the step again; no red error', async () => {
+  const { t, calls, state, els } = load(); const m = detail(); t.setCurrent(m); t.setSelected('setup');
+  const sentence = 'The helper programs for the other computers could not be downloaded from GitHub (x). Check that the computer your Maestro runs on can reach github.com, then press Try again. What was already downloaded is kept.';
+  state.responses.push({ status: 400, json: { error: sentence, check: { ok: false, tryAgain: true, summary: sentence, lines: ['Found this computer.'] } } });
+  await t.runAutoStep('setup', {}, null);
+  const out = els['step-area'].innerHTML;
+  assert.match(out, /class="msg show info" id="auto-tryagain">The helper programs/);
+  assert.match(out, /<button class="primary" id="btn-tryagain" onclick="runAutoStep\('setup', \{\}, this\)">Try again<\/button>/);
+  assert.ok(!/class="msg show err"/.test(out));
+  assert.ok(!t.hasPollTimer());
+  state.responses.push(waitingAnswer());
+  await t.runAutoStep('setup', {}, null);
+  assert.strictEqual(calls.length, 2);
+  assert.strictEqual(t.getAuto().setup.waiting, true);
+  assert.strictEqual(t.getAuto().setup.tryAgain, undefined);
+});
+
+test('r3: an ordinary failure is still the red error, with no Try again button', async () => {
+  const { t, state, els } = load(); const m = detail(); t.setCurrent(m); t.setSelected('setup');
+  state.responses.push({ status: 400, json: { error: 'Broke.', check: { ok: false, summary: 'Broke.', lines: [] } } });
+  await t.runAutoStep('setup', {}, null);
+  assert.match(els['step-area'].innerHTML, /class="msg show err">Broke\./);
+  assert.ok(!/Try again/.test(els['step-area'].innerHTML));
 });

@@ -299,7 +299,11 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
 
   async function toolHealth() {
     let serviceNow = null;   // service mode: look at the service again on every call
-    if (mode === 'service' && mesh && supported && !state.waiting && !stopped) {
+    // While the helper programs download, health answers at once (it must not wait for the download, or the page could not show how far it is).
+    // After a failed download, a look at the service starts the download again in the background (that is what "Try again" does).
+    const dl = mesh && typeof mesh.helpers === 'function' ? mesh.helpers().state : 'idle';
+    if (mode === 'service' && mesh && supported && !state.waiting && !stopped && dl === 'failed') mesh.checkService().catch(() => {});
+    else if (mode === 'service' && mesh && supported && !state.waiting && !stopped && dl !== 'downloading') {
       try { serviceNow = await mesh.checkService(); } catch (e) { if (e && e.code !== 'ECANCEL' && !/^Waiting for setup/.test(e.message)) state.lastError = clean(e.message || e.code, 400); }
     }
     const st = mesh ? mesh.status() : { running: false, restarts: 0, lastError: null };
@@ -307,6 +311,7 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
       ok: false, mode, running: st.running, version: VERSION, group: state.group || (mesh ? mesh.state.read().meshid || null : null),
       computers: null, online: null, warnings: [...state.warnings], lastError: state.lastError || st.lastError || null,
     };
+    if (mesh && typeof mesh.helpers === 'function') { try { out.helpers = mesh.helpers(); } catch { /* not known */ } }   // the helper-program download, for the setup page
     if (typeof installer.stats === 'function') { try { out.helper = installer.stats(); } catch { /* not known */ } }   // for the setup's "why is no computer here" sentence
     if (!supported) { out.waiting = LINUX_ONLY; out.lastError = null; return out; }
     if (state.waiting) { out.waiting = state.waiting; return out; }

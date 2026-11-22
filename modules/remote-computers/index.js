@@ -11,6 +11,9 @@ const MODE_HUB = 'The server is running under your Maestro\'s own account.';
 const WILL_SERVICE = 'It will run as its own locked-down service.';
 const WILL_HUB = 'It will run under your Maestro\'s own account. The server then has the same access to files as your Maestro.';
 
+const GETTING_READY = 'The server is getting ready. This page shows it when it is ready.';
+const INSTALLER_NOT_READY = 'The server is still getting ready. Come back to this step when Set it up says it is done.';
+const NOT_READY_RE = /server is not ready yet\. Try again in a minute/i;
 const NAMES = { win32: 'Windows', freebsd: 'FreeBSD', openbsd: 'OpenBSD', aix: 'AIX', sunos: 'SunOS', android: 'Android' };
 const empty = (v) => v === undefined || v === null || String(v).trim() === '';
 const ipsOf = (facts) => (facts && facts.tailscale && Array.isArray(facts.tailscale.ips) ? facts.tailscale.ips.filter((x) => typeof x === 'string') : []);
@@ -150,13 +153,23 @@ module.exports = {
         // retry: true = a state that resolves by itself (starting, first start downloading, the device group not ready); the setup looks again.
         // "Reinstall needed" and "Waiting for setup" need a person, so they are not retried.
         if (h.waiting) return { ok: false, ...(/^(Reinstall needed|Waiting for setup)/.test(String(h.waiting)) ? {} : { retry: true }), summary: String(h.waiting).slice(0, 300), warnings, ...mode };
+        // The helper programs for the other computers (downloaded once from GitHub): said plainly while they come, and when they could not.
+        const helpers = h.helpers && typeof h.helpers === 'object' ? h.helpers : null;
+        if (!h.ok && helpers && helpers.state === 'downloading') {
+          const mb = (n) => (Math.round((Number(n) || 0) / 1048576 * 10) / 10).toString();
+          return { ok: false, retry: true, summary: `Getting the helper programs for the other computers: ${mb(helpers.bytes)} of ${mb(helpers.totalBytes)} MB. How long it takes depends on your connection.`, warnings, ...mode };
+        }
+        if (!h.ok && helpers && helpers.state === 'failed') {
+          const why = String(helpers.error || 'unknown reason').replace(/[^\x20-\x7e]+/g, ' ').trim().slice(0, 100) || 'unknown reason';
+          return { ok: false, tryAgain: true, summary: `The helper programs for the other computers could not be downloaded from GitHub (${why}). Check that the computer your Maestro runs on can reach github.com, then press Try again. What was already downloaded is kept.`, warnings, ...mode };
+        }
         if (h.reason && h.message) {   // service mode: the service is not installed, or not answering; it needs a person, so no retry
           const command = typeof h.command === 'string' ? h.command.slice(0, 500) : '';
           return { ok: false, summary: SERVICE_NEEDS_ADMIN, reason: String(h.reason).slice(0, 40), ...(command ? { command } : {}), warnings, ...mode };
         }
-        if (!h.running) return { ok: false, ...(h.lastError ? {} : { retry: true }), summary: h.lastError ? `The server is not running (${String(h.lastError).slice(0, 200)}).` : 'The server is not running.', warnings, ...mode };
-        if (!h.group) return { ok: false, retry: true, summary: 'The server runs, but its device group is not ready yet.', warnings, ...mode };
-        if (h.ok !== true) return { ok: false, ...(h.lastError ? {} : { retry: true }), summary: String(h.lastError || warnings[0] || 'The control connection is not ready.').slice(0, 300), warnings, ...mode };
+        if (!h.running) return { ok: false, ...(h.lastError ? {} : { retry: true }), summary: h.lastError ? `The server is not running (${String(h.lastError).slice(0, 200)}).` : GETTING_READY, warnings, ...mode };
+        if (!h.group) return { ok: false, retry: true, summary: GETTING_READY, warnings, ...mode };
+        if (h.ok !== true) return { ok: false, ...(h.lastError ? {} : { retry: true }), summary: String(h.lastError || warnings[0] || GETTING_READY).slice(0, 300), warnings, ...mode };
         const n = Number(h.computers) || 0, on = Number(h.online) || 0;
         const how = h.mode === 'service' ? MODE_SERVICE : h.mode === 'hub' ? MODE_HUB : 'The server is running.';
         return { ok: true, summary: `${how} ${n ? `${n} computer${n === 1 ? '' : 's'} registered, ${on} online.` : 'No computer has been added yet.'}`, warnings, ...mode };
@@ -170,7 +183,7 @@ module.exports = {
       try {
         const text = await ctx.callTool('installer_link', {});
         const a = ctx.parse(text);
-        if (!a || typeof a.url !== 'string' || !/^https:\/\//.test(a.url)) return { ok: false, summary: String(text || 'The link could not be made.').slice(0, 300) };
+        if (!a || typeof a.url !== 'string' || !/^https:\/\//.test(a.url)) return { ok: false, summary: NOT_READY_RE.test(String(text)) ? INSTALLER_NOT_READY : String(text || 'The link could not be made.').slice(0, 300) };
         return {
           ok: true,
           once: true,
@@ -182,7 +195,7 @@ module.exports = {
           ],
         };
       } catch (e) {
-        return { ok: false, summary: oneLine(e) };
+        return { ok: false, summary: NOT_READY_RE.test(oneLine(e)) ? INSTALLER_NOT_READY : oneLine(e) };
       }
     },
 

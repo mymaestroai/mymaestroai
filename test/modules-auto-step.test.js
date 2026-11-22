@@ -71,7 +71,8 @@ function rig({ facts = FACTS(), saved, finished = false, waitSec, extraSteps = [
   const mods = createModules({
     now: () => clock.t, sleep: async (ms) => { clock.sleeps.push(ms); clock.t += ms; },
     root, dataDir: path.join(dir, 'modules'), stateFile, connectorsFile: path.join(dir, 'connectors.json'), connectors, listAgents: () => [], publish: () => {}, log: () => {}, runNpm,
-    facts: { get: async (opts) => { ev.factsCalls++; ev.factsOpts.push(opts); return JSON.parse(JSON.stringify(holder.facts)); } },
+    // holder.gate (a promise), when set at the time of a look, holds that look until it settles (a slow look at this computer)
+    facts: { get: async (opts) => { ev.factsCalls++; ev.factsOpts.push(opts); const g = holder.gate; if (g) await g; return JSON.parse(JSON.stringify(holder.facts)); } },
     portFree: async (p, h) => { ev.portCalls.push([p, h]); return true; },
   });
   global.__AUTO = { calls: [], precheck: () => ({ ok: true, summary: 'Ready', lines: ['Found this computer: hub.example.ts.net (100.101.102.103).'], blocker: null }), prepare: () => ({ settings: {}, lines: [], choose: null, stop: null }), check: () => ({ ok: true, summary: 'The server is running.', lines: ['up'] }) };
@@ -302,24 +303,73 @@ test('a check that says retry is looked at again every 5 seconds until it passes
   } finally { r.cleanup(); }
 });
 
-test('a retry that never resolves fails after waitSec (default 180 s) with the last answer; waitSec on the step changes it', async () => {
+test('a retry that never resolves is not a failure after waitSec (default 180 s): the step is waiting, not done; waitSec on the step changes the wait', async () => {
   const r = rig(); try {
     r.auto.prepare = PREPARE_OK;
     let n = 0;
     r.auto.check = () => ({ ok: false, retry: true, summary: `Still starting ${++n}.`, lines: [] });
-    const e = await rejects(r.mods.runStep('auto-demo', 'setup', {}));
+    const res = await r.mods.runStep('auto-demo', 'setup', {});
     assert.strictEqual(r.clock.sleeps.length, 36, '180 s in 5 s steps');
     assert.ok(r.clock.sleeps.every(ms => ms === 5000));
-    assert.strictEqual(e.check.summary, `Still starting ${n}.`);
+    assert.strictEqual(res.result.waiting, true);
+    assert.strictEqual(res.result.check.summary, `Still starting ${n}.`);
+    assert.strictEqual(res.result.check.retry, true);
     assert.strictEqual(n, 37);
     assert.strictEqual(r.mods.detail('auto-demo').steps.find(s => s.id === 'setup').done, false);
+    assert.strictEqual(res.module.steps.find(s => s.id === 'setup').done, false);
   } finally { r.cleanup(); }
   const r2 = rig({ waitSec: 20 }); try {
     r2.auto.prepare = PREPARE_OK;
     r2.auto.check = () => ({ ok: false, retry: true, summary: 'Starting.', lines: [] });
-    await rejects(r2.mods.runStep('auto-demo', 'setup', {}));
+    const res2 = await r2.mods.runStep('auto-demo', 'setup', {});
+    assert.strictEqual(res2.result.waiting, true);
     assert.strictEqual(r2.clock.sleeps.length, 4);
   } finally { r2.cleanup(); }
+});
+
+test('r3: waiting returns { lines, check, waiting: true } and never marks the step done; a later ok run does', async () => {
+  const r = rig(); try {
+    r.auto.prepare = (ctx) => ({ ...PREPARE_OK(ctx), lines: ['Found this computer.'] });
+    r.auto.check = () => ({ ok: false, retry: true, summary: 'The server is getting ready. This page shows it when it is ready.', lines: ['x'] });
+    const res = await r.mods.runStep('auto-demo', 'setup', { poll: true });
+    assert.deepStrictEqual(Object.keys(res.result).sort(), ['check', 'lines', 'waiting']);
+    assert.strictEqual(res.result.waiting, true);
+    assert.ok(res.result.lines.includes('Found this computer.'));
+    assert.strictEqual((r.state().steps || {}).setup, undefined, 'markDone was not called');
+    r.auto.check = () => ({ ok: true, summary: 'The server is running.', lines: [] });
+    const ok = await r.mods.runStep('auto-demo', 'setup', { poll: true });
+    assert.ok(!ok.result.waiting);
+    assert.ok(r.state().steps.setup && r.state().steps.setup.doneAt);
+  } finally { r.cleanup(); }
+});
+
+test('r3: a run with poll: true does one check and no wait', async () => {
+  const r = rig(); try {
+    r.auto.prepare = PREPARE_OK;
+    let n = 0;
+    r.auto.check = () => { n++; return { ok: false, retry: true, summary: 'Getting ready.', lines: [] }; };
+    const res = await r.mods.runStep('auto-demo', 'setup', { poll: true });
+    assert.strictEqual(res.result.waiting, true);
+    assert.strictEqual(n, 1);
+    assert.deepStrictEqual(r.clock.sleeps, []);
+    await r.mods.runStep('auto-demo', 'setup', { poll: 'yes' });   // only exactly true counts
+    assert.ok(r.clock.sleeps.length > 0);
+  } finally { r.cleanup(); }
+});
+
+test('r3: check() passes tryAgain through like retry; a tryAgain failure is still a plain failure of the step (no waiting)', async () => {
+  const r = rig(); try {
+    r.auto.prepare = PREPARE_OK;
+    r.auto.check = () => ({ ok: false, tryAgain: true, summary: 'Could not download.', lines: [] });
+    const e = await rejects(r.mods.runStep('auto-demo', 'setup', {}));
+    assert.strictEqual(e.check.tryAgain, true);
+    assert.deepStrictEqual(r.clock.sleeps, []);
+    const c = await r.mods.check('auto-demo', 'server');
+    assert.strictEqual(c.tryAgain, true);
+    assert.ok(!('retry' in c));
+    r.auto.check = () => ({ ok: true, tryAgain: true, summary: 'ok', lines: [] });
+    assert.ok(!('tryAgain' in await r.mods.check('auto-demo', 'server')));
+  } finally { r.cleanup(); }
 });
 
 test('a failure without retry (a person is needed, or an error) is reported at once, with no waiting', async () => {
@@ -464,6 +514,51 @@ test('Advanced / overview save (saveSettings): a LAN address is refused with the
     assert.strictEqual(ok.settings.listen_ip, '100.101.102.103');
     assert.deepStrictEqual([r.state().settings.listen_ip, r.state().settings.address_name, r.state().settings.session_minutes], ['100.101.102.103', 'hub.example.ts.net', 50]);
     assert.ok(r.ev.factsOpts.every(o => o && o.fresh === true), 'it looks at this computer afresh when it matters');
+  } finally { r.cleanup(); }
+});
+
+// review r2: a save that waits for the address check applies only its own changed fields, onto the settings as they are then
+const held = (r) => { let open; r.holder.gate = new Promise((res) => { open = res; }); return () => { r.holder.gate = null; open(); }; };
+const TWO_IPS = () => FACTS({ tailscale: { state: 'running', userspace: false, cli: 'tailscale', host: 'hub.example.ts.net', ips: ['100.101.102.103', '100.101.102.104'], detail: '' } });
+
+test('r2: a port saved by someone else while an address save waits for its check survives', async () => {
+  const r = rig(); try {
+    const release = held(r);
+    const a = Promise.resolve(r.mods.saveSettings('auto-demo', { listen_ip: '100.101.102.103', control_port: 9971 }));   // started now: its changes are decided at once
+    r.holder.gate = null;   // the second save changes no address: it is not held
+    await r.mods.saveSettings('auto-demo', { control_port: 9100 });
+    release();
+    await a;
+    assert.deepStrictEqual([r.state().settings.listen_ip, r.state().settings.control_port], ['100.101.102.103', 9100], 'the first save did not put the old port back');
+  } finally { r.cleanup(); }
+});
+
+test('r2: a stale form never puts back an address it did not change', async () => {
+  const saved = { modules: { 'auto-demo': { steps: {}, settings: { listen_ip: '192.0.2.5', address_name: '' } } } };
+  const r = rig({ saved }); try {
+    const release = held(r);
+    // admin A changes only the name; the form still carries the old (LAN) listen address, unchanged
+    const a = Promise.resolve(r.mods.saveSettings('auto-demo', { address_name: 'hub.example.ts.net', listen_ip: '192.0.2.5' }));   // started now: its changes are decided at once
+    r.holder.gate = null;
+    // admin B corrects the listen address meanwhile
+    await r.mods.saveSettings('auto-demo', { listen_ip: '100.101.102.103' });
+    release();
+    await a;
+    assert.deepStrictEqual([r.state().settings.listen_ip, r.state().settings.address_name], ['100.101.102.103', 'hub.example.ts.net']);
+  } finally { r.cleanup(); }
+});
+
+test('r2: two people changing the same field at once: the later one is refused with a plain sentence, nothing of it is saved', async () => {
+  const r = rig({ facts: TWO_IPS() }); try {
+    const release = held(r);
+    const a = Promise.resolve(r.mods.saveSettings('auto-demo', { listen_ip: '100.101.102.103', session_minutes: 50 }));   // started now: its changes are decided at once
+    r.holder.gate = null;
+    await r.mods.saveSettings('auto-demo', { listen_ip: '100.101.102.104' });
+    release();
+    const e = await rejects(a);
+    assert.match(e.message, /^Address was changed by someone else meanwhile\. Open the page again and check before saving\.$/);
+    assert.strictEqual(r.state().settings.listen_ip, '100.101.102.104');
+    assert.ok(!r.state().settings.session_minutes || r.state().settings.session_minutes !== 50, 'nothing of the refused save');
   } finally { r.cleanup(); }
 });
 

@@ -1327,7 +1327,7 @@ test('the server check is ok only when the control connection works (health.ok =
   const b = await run({ ...base, ok: false, warnings: ['The computer list could not be read (ETIMEDOUT).', 'second'] });
   assert.deepStrictEqual([b.ok, b.summary], [false, 'The computer list could not be read (ETIMEDOUT).']);
   const c = await run({ ...base, ok: false });
-  assert.deepStrictEqual([c.ok, c.summary], [false, 'The control connection is not ready.']);
+  assert.deepStrictEqual([c.ok, c.summary], [false, 'The server is getting ready. This page shows it when it is ready.']);
   const d = await run({ ...base, ok: true, computers: 3, online: 1 });
   assert.deepStrictEqual([d.ok, d.summary], [true, 'The server is running. 3 computers registered, 1 online.']);
   assert.strictEqual((await run({ ...base, ok: true, computers: 1, online: 0 })).summary, 'The server is running. 1 computer registered, 0 online.');
