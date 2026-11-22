@@ -2849,7 +2849,7 @@ async function handleHttpRequest(req, res) {
             const v = patch.researchThorough;
             if (!v || typeof v !== 'object' || Array.isArray(v)) return jsonResponse(res, 400, { error: 'researchThorough must be an object' });
             const ranges = { maxSources: [1, 40], readersAtOnce: [1, 12], reviewRounds: [0, 5], timeLimitMinutes: [10, 240],
-              leadSteps: [5, 300], leadWallMinutes: [10, 1440], leadReaderCalls: [1, 400], leadReviewRounds: [0, 50], leadTopicSearches: [0, 20], leadSourcesPerSub: [0, 20], leadReaderTextMax: [20000, 2000000], leadReaderTopTextMax: [20000, 2000000] };
+              leadSteps: [5, 300], leadWallMinutes: [10, 1440], leadReaderCalls: [1, 400], leadReviewRounds: [0, 50], leadTopicSearches: [0, 20], leadSourcesPerSub: [0, 20], leadTopNewPerSub: [0, 10], leadPdfMaxMB: [4, 64], leadReaderTextMax: [20000, 2000000], leadReaderTopTextMax: [20000, 2000000] };
             const modelKeys = ['leadModel', 'leadReaderModel', 'leadReaderTopModel'];
             const known = [...Object.keys(ranges), 'pdf', 'readerModel', 'engine', ...modelKeys];
             const merged = { ...(hubSettings.getSetting('researchThorough') || {}) };

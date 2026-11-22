@@ -84,6 +84,35 @@ test('settings route: the lead keys pass in range and merge; out of range, a bad
   bad('leadBogus', 1, /is not a setting/);
 });
 
+test('r5-B2 settingsFrom: reader calls default 100, top-new-per-sub 0..10 (default 2), largest PDF 4..64 MB (default 32)', () => {
+  const T = lib('research-thorough');
+  const d = T.settingsFrom({});
+  assert.deepStrictEqual([d.leadReaderCalls, d.leadTopNewPerSub, d.leadPdfMaxMB], [100, 2, 32]);
+  assert.deepStrictEqual([T.DEFAULTS.leadReaderCalls, T.DEFAULTS.leadTopNewPerSub, T.DEFAULTS.leadPdfMaxMB], [100, 2, 32]);
+  for (const [k, lo, hi, dflt] of [['leadTopNewPerSub', 0, 10, 2], ['leadPdfMaxMB', 4, 64, 32]]) {
+    assert.strictEqual(T.settingsFrom({ [k]: lo })[k], lo, k);
+    assert.strictEqual(T.settingsFrom({ [k]: hi })[k], hi, k);
+    assert.strictEqual(T.settingsFrom({ [k]: String(hi) })[k], hi, k);
+    for (const x of [lo - 1, hi + 1, 1.5, 'abc', null]) assert.strictEqual(T.settingsFrom({ [k]: x })[k], dflt, `${k}=${x}`);
+  }
+});
+
+test('r5-B2 settings route: leadTopNewPerSub [0,10] and leadPdfMaxMB [4,64] pass at the edges and are refused outside, naming the key', () => {
+  const v = validator({});
+  const p = { researchThorough: { leadTopNewPerSub: 0, leadPdfMaxMB: '64' } };
+  assert.equal(v(p), null);
+  assert.deepEqual(p.researchThorough, { leadTopNewPerSub: 0, leadPdfMaxMB: 64 });
+  const q = { researchThorough: { leadTopNewPerSub: 10, leadPdfMaxMB: 4 } };
+  assert.equal(v(q), null);
+  const bad = (field, val, re) => {
+    const r = v({ researchThorough: { [field]: val } });
+    assert.ok(r && r.code === 400, `${field}=${JSON.stringify(val)} should be refused`);
+    assert.match(r.body.error, re);
+  };
+  for (const x of [-1, 11, 1.5, 'abc', null]) bad('leadTopNewPerSub', x, /leadTopNewPerSub must be a whole number from 0 to 10/);
+  for (const x of [3, 65, 1.5, 'abc', null]) bad('leadPdfMaxMB', x, /leadPdfMaxMB must be a whole number from 4 to 64/);
+});
+
 test('settings route: admin only (the whole route is an admin route)', () => {
   const access = lib('access');
   assert.equal(access.classifyRoute('/api/settings', 'POST').kind, 'admin');
@@ -146,7 +175,7 @@ test('Settings page: the lead controls show saved values or defaults; the fixed-
   assert.match(d, /id="st-rt-engine" data-saved="lead"[^>]*>\s*<option value="lead" selected>A lead model leads it \(recommended\)<\/option><option value="pipeline">Fixed stages \(the earlier method\)/);
   assert.match(d, /id="st-rt-steps"[^>]*value="60"/);
   assert.match(d, /id="st-rt-leadmin"[^>]*value="360"/);
-  assert.match(d, /id="st-rt-reads"[^>]*value="40"/);
+  assert.match(d, /id="st-rt-reads"[^>]*value="100"/);
   assert.match(d, /id="st-rt-leadrounds"[^>]*value="10"/);
   for (const id of ['st-rt-lead', 'st-rt-reader2', 'st-rt-readertop']) assert.match(d, new RegExp(`id="${id}"[^>]*placeholder="automatic" value=""`));
   assert.match(d, /<div id="st-rt-pipeline" style="display:none">/);
@@ -163,6 +192,25 @@ test('Settings page: the lead controls show saved values or defaults; the fixed-
   assert.match(s, /id="st-rt-readertop"[^>]*value=""/, 'a junk model string is drawn as automatic');
   assert.match(s, /<div id="st-rt-pipeline">/);
   assert.match(ctx.block({ researchThorough: { leadSteps: 4, leadWallMinutes: 'x' } }), /id="st-rt-steps"[^>]*value="60"/);
+});
+
+test('r5-B2 Settings page: the top-new and largest-PDF rows show defaults, saved values and their hints; out of range is drawn as the default', () => {
+  const { ctx } = appFns(async () => ({ ok: true }));
+  const d = ctx.block({});
+  assert.match(d, /id="st-rt-topnew" min="0" max="10"[^>]*value="2"/);
+  assert.match(d, /id="st-rt-pdfmb" min="4" max="64"[^>]*value="32"/);
+  assert.match(d, /id="st-rt-topnew"[^>]*onchange="saveResearchSetting\('leadTopNewPerSub', this\)"/);
+  assert.match(d, /id="st-rt-pdfmb"[^>]*onchange="saveResearchSetting\('leadPdfMaxMB', this\)"/);
+  for (const t of ['Top new results to read per sub-question', 'Largest PDF to read, MB',
+    "Before the first draft the lead reads (or waives with a reason) this many of the newest-found results of each sub-question's topic searches. 0 switches this part off.",
+    'Bigger papers are fetched up to this size; longer texts are read in part.']) assert.ok(d.includes(t), t);
+  const s = ctx.block({ researchThorough: { leadTopNewPerSub: 0, leadPdfMaxMB: 64 } });
+  assert.match(s, /id="st-rt-topnew"[^>]*value="0"/);
+  assert.match(s, /id="st-rt-pdfmb"[^>]*value="64"/);
+  const j = ctx.block({ researchThorough: { leadTopNewPerSub: 11, leadPdfMaxMB: 2 } });
+  assert.match(j, /id="st-rt-topnew"[^>]*value="2"/);
+  assert.match(j, /id="st-rt-pdfmb"[^>]*value="32"/);
+  assert.ok(d.indexOf('st-rt-persub') < d.indexOf('st-rt-topnew') && d.indexOf('st-rt-pdfmb') < d.indexOf('st-rt-lead"'));
 });
 
 test('Settings page: lead controls post numbers and strings; an empty model saves auto; the engine toggles the fixed-stage rows after a good save', async () => {

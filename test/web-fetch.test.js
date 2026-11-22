@@ -38,7 +38,7 @@ function rig(o = {}) {
   const dnsMap = { 'example.com': ['93.184.216.34'], 'docs.github.com': ['140.82.112.3'], 'evil.example': ['10.0.0.5'], 'tail.example': ['100.64.0.10'], ...(o.dns || {}) };
   const lookup = async (h) => { const a = dnsMap[h]; if (!a) { const e = new Error('ENOTFOUND'); e.code = 'ENOTFOUND'; throw e; } return a.map(address => ({ address })); };
   const execCalls = [];
-  const exec = async (file, args) => { execCalls.push([file, ...args]); if (o.exec) return o.exec(file, args); if (file === 'pdftotext') return { stdout: 'PDF TEXT\fpage two' }; const e = new Error('ENOENT'); e.code = 'ENOENT'; throw e; };
+  const exec = async (file, args, opts) => { execCalls.push([file, ...args]); if (opts) execCalls[execCalls.length - 1].opts = opts; if (o.exec) return o.exec(file, args); if (file === 'pdftotext') return { stdout: 'PDF TEXT\fpage two' }; const e = new Error('ENOENT'); e.code = 'ENOENT'; throw e; };
   const settings = { webFetch: o.webFetch || {} };
   let t = 1_000_000;
   const wf = createWebFetch({
@@ -193,6 +193,35 @@ test('oversized bodies and HTTP errors are reported as errors', async () => {
   await assert.rejects(wf.fetchPage('https://example.com/500'), /HTTP 500/);
 });
 
+test('opts.maxBytes raises the size limit for one call: 5 MB refused by default, accepted at 8 MB', async () => {
+  const MB = 1024 * 1024;
+  const pdf = Buffer.concat([Buffer.from('%PDF-1.4 '), Buffer.alloc(5 * MB)]);
+  const { wf, execCalls } = rig({ pages: { 'https://example.com/long.pdf': { body: pdf, type: 'application/pdf', headers: { 'content-length': String(pdf.length) } } } });
+  await assert.rejects(wf.fetchPage('https://example.com/long.pdf'), /too large/);
+  await assert.rejects(wf.fetchPage('https://example.com/long.pdf', { maxBytes: 4 * MB }), /too large/);
+  const p = await wf.fetchPage('https://example.com/long.pdf', { maxBytes: 8 * MB });
+  assert.strictEqual(p.via, 'pdf');
+  assert.strictEqual(execCalls[0].opts.maxBuffer, 16 * MB, 'the PDF-to-text buffer follows the chosen limit');
+});
+
+test('opts.maxBytes is clamped: raised to 4 MB when lower, cut to 64 MB when higher', async () => {
+  const MB = 1024 * 1024;
+  const body = Buffer.alloc(3 * MB, 'a');
+  const low = rig({ pages: { 'https://example.com/t.txt': { body, type: 'text/plain' } } });
+  assert.strictEqual((await low.wf.fetchPage('https://example.com/t.txt', { maxBytes: 1024 })).via, 'text', 'a 3 MB body still passes with maxBytes 1 KB');
+  const mid = rig({ pages: { 'https://example.com/m.txt': { body: Buffer.alloc(5 * MB, 'a'), type: 'text/plain' } } });
+  await assert.rejects(mid.wf.fetchPage('https://example.com/m.txt', { maxBytes: 1024 }), /limit 4194304|too large/);
+  const pdf = Buffer.concat([Buffer.from('%PDF-1.4 '), Buffer.alloc(10)]);
+  const hi = rig({ pages: {
+    'https://example.com/a.pdf': { body: pdf, type: 'application/pdf', headers: { 'content-length': String(65 * MB) } },
+    'https://example.com/b.pdf': { body: pdf, type: 'application/pdf', headers: { 'content-length': String(63 * MB) } },
+  } });
+  await assert.rejects(hi.wf.fetchPage('https://example.com/a.pdf', { maxBytes: 500 * MB }), /limit 67108864/);
+  assert.strictEqual((await hi.wf.fetchPage('https://example.com/b.pdf', { maxBytes: 500 * MB })).via, 'pdf');
+  assert.strictEqual(hi.execCalls[0].opts.maxBuffer, 128 * MB, 'the buffer uses the clamped 64 MB limit');
+  assert.strictEqual(require('../lib/web-fetch').HARD_MAX_BYTES, 64 * MB);
+});
+
 test('the gateway tool definitions use the new modules and expose the new parameters', () => {
   const { BUILTIN_TOOLS } = require('../lib/provider-tools');
   assert.deepStrictEqual(BUILTIN_TOOLS.WebSearch.parameters.properties.backend.enum, ['brave', 'perplexity', 'serper', 'tavily', 'searxng', 'duckduckgo']);
@@ -220,4 +249,20 @@ test('never reachable, whatever the private-address setting: link-local/metadata
   assert.match(r.markdown || r.text || JSON.stringify(r), /engine page/);
   // and a public site is unaffected
   await assert.rejects(wf.fetchPage('https://example.com/nothing', { allowPrivate: false }), /HTTP 404/);
+});
+
+test('pdftotext gets more time for a larger byte limit: 30 s by default, at most 120 s (32 MB)', async () => {
+  const { pdfTimeoutMs, MAX_BYTES } = require('../lib/web-fetch');
+  assert.strictEqual(pdfTimeoutMs(MAX_BYTES), 30000);
+  assert.strictEqual(pdfTimeoutMs(8 * 1024 * 1024), 60000);
+  assert.strictEqual(pdfTimeoutMs(32 * 1024 * 1024), 120000);
+  assert.strictEqual(pdfTimeoutMs(64 * 1024 * 1024), 120000);
+  const pdf = Buffer.concat([Buffer.from('%PDF-1.4 '), Buffer.alloc(100)]);
+  const pages = { 'https://example.com/doc.pdf': { body: pdf, type: 'application/pdf' } };
+  const a = rig({ pages });
+  await a.wf.fetchPage('https://example.com/doc.pdf');
+  assert.strictEqual(a.execCalls[0].opts.timeout, 30000);
+  const b = rig({ pages });
+  await b.wf.fetchPage('https://example.com/doc.pdf', { maxBytes: 32 * 1024 * 1024 });
+  assert.strictEqual(b.execCalls[0].opts.timeout, 120000);
 });

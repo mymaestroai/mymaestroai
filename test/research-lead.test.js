@@ -56,7 +56,7 @@ function env(opts = {}) {
     run: { id: 'r1', agent: 'sam', question: 'Is the new method better than the baseline?\nSecond line.', subQuestions: ['Which result is the main one?'] },
     firstPass: 'Quick summary: the new method seems better.', findingsText: 'Helper 1 found a table.',
     playbook: PLAYBOOK,
-    settings: { topicSearchesMin: 0, sourcesPerSubMin: 0, ...(opts.settings || {}) },   // the discovery gate is off unless a test switches it on
+    settings: { topicSearchesMin: 0, sourcesPerSubMin: 0, topNewPerSub: 0, ...(opts.settings || {}) },   // the discovery gate is off unless a test switches it on
     models: { lead: 'lead-m', reader: 'reader-m', readerTop: 'top-m', reviewers: opts.reviewers || [{ model: 'rev-a', label: 'Alpha' }, { model: 'rev-b', label: 'Beta' }] },
     deps: {
       spawn: e.spawn,
@@ -340,7 +340,7 @@ test('leadCheck: found, not_found with closest wording, no_source, not_opened, b
   assert.strictEqual(check('The new method is preferred 56.4% of the time [S9].').figures[0].status, 'not_opened');
   const block = check('The new method wins. It is preferred 56.4% of the time. More detail follows [S1].\n\nA second block says 56.4% too.');
   assert.deepStrictEqual(block.figures.map((x) => x.status), ['found', 'no_source']);
-  assert.deepStrictEqual(block.totals, { found: 1, not_found: 0, no_source: 1, not_opened: 0, abstract_only: 0 });
+  assert.deepStrictEqual(block.totals, { found: 1, not_found: 0, no_source: 1, not_opened: 0, abstract_only: 0, found_cut: 0 });
   // two tags: found in any
   const two = L.leadCheck('Preferred 56.4% of the time [S2][S1].', sources);
   assert.strictEqual(two.figures[0].status, 'found');
@@ -426,7 +426,7 @@ test('parseReview: fenced, leading text, BLOCK without a quote, unreadable', () 
   assert.strictEqual(r.findings[0].label, 'BLOCK');
   assert.strictEqual(r.findings[0].problem, '(no quote) p');
   assert.strictEqual(r.findings[1].problem, 'q');
-  assert.deepStrictEqual(L.parseReview('no json here'), { verdict: 'UNREADABLE', findings: [] });
+  assert.deepStrictEqual(L.parseReview('no json here'), { verdict: 'UNREADABLE', findings: [], missing: [] });
   assert.strictEqual(L.parseReview('Result: {"verdict":"ACCEPT","findings":[]} ok').verdict, 'ACCEPT');
 });
 
@@ -492,13 +492,17 @@ test('a step whose results pass stepResultMax is cut with a note that says how t
 });
 
 test('exports and defaults', () => {
-  assert.deepStrictEqual(Object.keys(L.LEAD_DEFAULTS).sort(), ['leadSteps', 'maxParallel', 'readerCalls', 'readerTextMax', 'readerTopTextMax', 'reviewRounds', 'sourcesPerSubMin', 'stepPromptMax', 'stepResultMax', 'topicSearchesMin', 'wallMinutes']);
+  assert.deepStrictEqual(Object.keys(L.LEAD_DEFAULTS).sort(), ['leadSteps', 'maxParallel', 'readerCalls', 'readerTextMax', 'readerTopTextMax', 'reviewRounds', 'sourcesPerSubMin', 'stepPromptMax', 'stepResultMax', 'topNewPerSub', 'topicSearchesMin', 'wallMinutes']);
+  // r5: 100 reader calls (was 40) and 6 at once (was 4): a run that reads what it found needs them; two new numbers for the first-draft gate
+  assert.strictEqual(L.LEAD_DEFAULTS.readerCalls, 100);
+  assert.strictEqual(L.LEAD_DEFAULTS.maxParallel, 6);
+  assert.strictEqual(L.LEAD_DEFAULTS.topNewPerSub, 2);
   assert.strictEqual(L.LEAD_DEFAULTS.topicSearchesMin, 3);
   assert.strictEqual(L.LEAD_DEFAULTS.sourcesPerSubMin, 2);
   assert.strictEqual(L.LEAD_DEFAULTS.leadSteps, 60);
   assert.strictEqual(L.LEAD_DEFAULTS.stepPromptMax, 600000);
-  assert.ok(L.ACTION_TYPES.includes('finish') && L.ACTION_TYPES.length === 20 && L.ACTION_TYPES.includes('plan') && L.ACTION_TYPES.includes('unanswerable') && L.ACTION_TYPES.includes('show_sources'));
-  for (const t of ['show_index', 'show_notebook', 'show_quickpass']) assert.ok(L.ACTION_TYPES.includes(t), t);
+  assert.ok(L.ACTION_TYPES.includes('finish') && L.ACTION_TYPES.length === 24 && L.ACTION_TYPES.includes('plan') && L.ACTION_TYPES.includes('unanswerable') && L.ACTION_TYPES.includes('show_sources'));
+  for (const t of ['show_index', 'show_notebook', 'show_quickpass', 'rank', 'waive', 'missing', 'show_required']) assert.ok(L.ACTION_TYPES.includes(t), t);
   assert.ok(Array.isArray(L.READER_RULES) && L.READER_RULES.length >= 6);
 });
 
@@ -923,16 +927,16 @@ test('r1-7: leadCostLine prices every pay-per-use role whatever the lead\'s bill
   const models = { lead: 'L/x', reader: 'R/x', readerTop: 'T/x', reviewers: [{ model: 'V1/x' }, { model: 'V2/x' }] };
   const kinds = (map) => (m) => map[m.split('/')[0]] || 'subscription';
   const all = L.leadCostLine(models, {}, { estimate, kindOf: kinds({ L: 'api', R: 'api', T: 'api', V1: 'api', V2: 'api' }) });
-  // typical: lead 30 steps (35000 in, 2000 out), 16 reads (35000/3000), 4 top (60000/3000), 4 rounds x 2 reviewers (40000/2000); at most: 60 steps of 150000 in,
-  // 40 reader calls of 100000 in, 10 rounds x 2 reviewers of 125000 in
-  const typical = (30 * 37000 + 16 * 38000 + 4 * 63000 + 2 * 4 * 42000) / 1e6;
-  const max = (121 * 152000 + 40 * 103000 + 2 * 10 * 127000) / 1e6;
+  // typical (r5): lead 40 steps (35000 in, 2000 out), 50 reads (35000/3000), 4 top (60000/3000), 5 rounds x 2 reviewers (40000/2000); at most: 60 steps of 150000 in,
+  // 100 reader calls (the new default) of 100000 in, 10 rounds x 2 reviewers of 125000 in
+  const typical = (40 * 37000 + 50 * 38000 + 4 * 63000 + 2 * 5 * 42000) / 1e6;
+  const max = (121 * 152000 + 100 * 103000 + 2 * 10 * 127000) / 1e6;
   const usd = (x) => (x < 10 ? `$${x.toFixed(2)}` : `$${Math.round(x)}`);
   assert.strictEqual(all, `Pay-per-use estimate: a typical Thorough run costs about ${usd(typical * 0.6)} to ${usd(typical * 1.5)} on these models; at its limits it could reach about ${usd(max)}.`);
   // the lead on a subscription, a reviewer pay-per-use: that reviewer is priced, the rest is free
   const rev = L.leadCostLine(models, {}, { estimate, kindOf: kinds({ V1: 'api' }) });
   assert.ok(rev.startsWith('Pay-per-use estimate: a typical Thorough run costs about $0.') || rev.startsWith('Pay-per-use estimate: a typical Thorough run costs about $'));
-  const onlyRev = (4 * 42000) / 1e6;
+  const onlyRev = (5 * 42000) / 1e6;
   assert.ok(rev.includes(`about ${usd(onlyRev * 0.6)} to ${usd(onlyRev * 1.5)}`), rev);
   // no pay-per-use role, or a price that is unknown for a needed role
   assert.strictEqual(L.leadCostLine(models, {}, { estimate, kindOf: kinds({}) }), '');
@@ -965,8 +969,8 @@ test('r2-1: each review round records its draft version and every slot\'s outcom
   assert.ok(e.prompts[3].includes('reviewers unavailable: you may finish without a review; it will be stated.'));
   assert.strictEqual(res.summary, 'without a review');
   assert.deepStrictEqual(res.state.rounds, [
-    { round: 1, version: 1, slots: [{ label: 'Alpha', outcome: 'FAILED' }, { label: 'Beta', outcome: 'FAILED' }] },
-    { round: 2, version: 1, slots: [{ label: 'Alpha', outcome: 'FAILED' }, { label: 'Beta', outcome: 'FAILED' }] },
+    { round: 1, seq: 1, version: 1, slots: [{ label: 'Alpha', outcome: 'FAILED' }, { label: 'Beta', outcome: 'FAILED' }] },
+    { round: 2, seq: 2, version: 1, slots: [{ label: 'Alpha', outcome: 'FAILED' }, { label: 'Beta', outcome: 'FAILED' }] },
   ]);
   assert.deepStrictEqual(res.openPoints, ['mine', 'No reviewer could complete a review of the final draft.', 'The review by Alpha did not complete on the final draft.', 'The review by Beta did not complete on the final draft.']);
   assert.ok(res.markdown.includes('- No reviewer could complete a review of the final draft.'));
@@ -1166,6 +1170,8 @@ const TITLES_R3 = ['WritingBench', 'The Ideation-Execution Gap (Si et al.)', 'Cr
 const R4 = { topicSearchesMin: 3, sourcesPerSubMin: 2 };
 const SR = (n) => ({ actions: Array.from({ length: n }, (_, i) => ({ type: 'search', query: `alpha topic ${i + 1}`, sub: 1, ...(i === n - 1 ? { recent: true } : {}) })) });
 const section = (prompt, head) => prompt.split(head)[1].split('\n\n')[0];
+// r5: the gate wants sources OPENED AND READ per sub-question: open both found sources and read them
+const READ2 = [{ type: 'open', url: URL_A }, { type: 'open', url: URL_B }, { type: 'read', parts: ['S1'], brief: 'b' }, { type: 'read', parts: ['S2'], brief: 'b' }];
 
 test('r4 knownNames + searchKind: the 11 real queries of run 3 are known, the 5 topic queries are not', () => {
   const names = L.knownNames({ quickPass: QP_R3, titles: TITLES_R3, question: 'Which research-proven state of the art is there for judging creative stories?' });
@@ -1184,7 +1190,10 @@ test('r4 knownNames + searchKind: the 11 real queries of run 3 are known, the 5 
     'Creative Preference Optimization Ismayilzada EMNLP 2025 Findings',
     '"Agents\' Room" narrative generation multi-step collaboration',
   ];
-  for (const q of known) { const k = L.searchKind(q, names); assert.strictEqual(k.kind, 'known', q); assert.ok(k.named.length, q); }
+  // r5: a title lead-in or a capitalised phrase counts only with the capitals it is written with; run 3's lower-case "ideation-execution gap ..." query
+  // names no work any more (a plain lower-case phrase), so it is a topic search; the other ten stay known
+  const lowerCase = ['ideation-execution gap LLM research ideas Si Hashimoto Yang'];
+  for (const q of known) { const k = L.searchKind(q, names); if (lowerCase.includes(q)) { assert.strictEqual(k.kind, 'topic', q); continue; } assert.strictEqual(k.kind, 'known', q); assert.ok(k.named.length, q); }
   const topic = [
     'LLM judge for story quality agreement with human preference',
     'reward model creative writing human preference benchmark 2025',
@@ -1215,7 +1224,7 @@ test('r4 gate: the first draft is refused with the table while searches are shor
     reviewers: [], settings: R4,
     lead: [
       { actions: [{ type: 'write_draft', markdown: 'A plain claim.' }] },
-      SR(3),
+      { actions: [...SR(3).actions, ...READ2] },
       { actions: [{ type: 'write_draft', markdown: 'A plain claim.' }] },
       { actions: [{ type: 'show_draft' }] },
     ],
@@ -1224,14 +1233,14 @@ test('r4 gate: the first draft is refused with the table while searches are shor
   o.settings.leadSteps = 3;   // the last scripted reply is the ceiling step
   const res = await L.runLead(o);
   const p2 = e.prompts[1];
-  assert.match(p2, /refused: the first draft waits for discovery\.\n\| Sub-question \| Topic searches \| Recent \| Citing searches \| Sources found \| Opened \| Read in full \| Status \|/);
-  assert.match(p2, /\| 1\. Which result is the main one\? \| 0 \| 0 \| 0 \| 0 \| 0 \| 0 \| short: 3 more topic searches; a topic search for recent work \("recent":true\); 2 more distinct sources found by its topic searches \|/);
+  assert.match(p2, /refused: the first draft waits for discovery\.\n\| Sub-question \| Topic searches \| Recent \| Citing searches \| Sources found \| Opened and read \| Read in full \| Status \|/);
+  assert.match(p2, /\| 1\. Which result is the main one\? \| 0 \| 0 \| 0 \| 0 \| 0 \| 0 \| short: 3 more topic searches; a topic search for recent work \("recent":true\); 2 more distinct sources found by its topic searches; 2 more sources from its topic searches opened and read \|/);
   assert.match(p2, /- sub-question 1: needs 3 more topic searches/);
   assert.ok(e.prompts[0].includes('COVERAGE (topic searches per sub-question; the first draft waits until each row is ok or unanswerable)'));
   assert.ok(e.prompts[0].indexOf('\nDRAFT\n') < e.prompts[0].indexOf('\nCOVERAGE (') && e.prompts[0].indexOf('\nCOVERAGE (') < e.prompts[0].indexOf('FOUND (not opened yet)'));
   const p3 = e.prompts[2];
   assert.ok(p3.includes('counted as a topic search for sub-question 1 (1 of 3)') && p3.includes('(3 of 3)'));
-  assert.match(section(p3, 'COVERAGE (topic searches per sub-question; the first draft waits until each row is ok or unanswerable)\n'), /\| 1\. Which result is the main one\? \| 3 \| 1 \| 0 \| 3 \| 0 \| 0 \| ok \|/);
+  assert.match(section(p3, 'COVERAGE (topic searches per sub-question; the first draft waits until each row is ok or unanswerable)\n'), /\| 1\. Which result is the main one\? \| 3 \| 1 \| 0 \| 3 \| 2 \| 2 \| ok \|/);
   assert.ok(e.prompts[3].includes('draft v1 stored'));
   assert.strictEqual(res.state.draftVersion, 1);
   assert.strictEqual(res.counts.topicSearches, 3);
@@ -1246,7 +1255,7 @@ test('r4 gate: two distinct urls per sub-question are needed; a recent search is
     search: (q) => (urlsOf[q.split(' ').pop()] || []).map((u) => ({ title: u, url: u, snippet: '' })),
     lead: [
       { actions: ['alpha one', 'alpha two', 'alpha one'.replace('one', 'three')].map((query) => ({ type: 'search', query, sub: 1 })) },
-      { actions: [{ type: 'write_draft', markdown: 'Plain.' }] },
+      { actions: [...READ2, { type: 'write_draft', markdown: 'Plain.' }] },
       { actions: [{ type: 'search', query: 'alpha two 2025', sub: 1 }, { type: 'write_draft', markdown: 'Plain.' }] },
       { actions: [{ type: 'show_draft' }] },
     ],
@@ -1306,7 +1315,7 @@ test('r4 search: a title that a topic search found does not make later topic sea
     search: (q) => (q.startsWith('first') ? [{ title: 'Creative Writing: A Survey', url: 'https://example.org/survey' }] : []),
     lead: [
       { actions: [{ type: 'search', query: 'first creative writing search', sub: 1 }] },
-      { actions: [{ type: 'search', query: 'creative writing evaluation by readers', sub: 1 }, { type: 'search', query: 'story premise ideas measured', sub: 1 }] },
+      { actions: [{ type: 'search', query: 'creative writing evaluation by readers', sub: 1 }, { type: 'search', query: 'Story Premise Ideas measured', sub: 1 }] },
       { actions: [{ type: 'show_draft' }] },
     ],
   });
@@ -1316,6 +1325,10 @@ test('r4 search: a title that a topic search found does not make later topic sea
   const res = await L.runLead(o);
   assert.deepStrictEqual(res.state.searchLog.map((l) => l.counted), [true, true, false]);
   assert.deepStrictEqual(res.state.searchLog[2].named, ['story premise ideas']);
+  // r5: the lead-in is a name only with its capitals; the lower-case wording is a topic search
+  const names = L.knownNames({ quickPass: o.firstPass, titles: [], question: 'q' });
+  assert.strictEqual(L.searchKind('story premise ideas measured', names).kind, 'topic');
+  assert.strictEqual(L.searchKind('Story Premise Ideas measured', names).kind, 'known');
 });
 
 test('r4 search: recent:true reaches deps.search as a third argument { freshness: "year" }; without it the call has two arguments', async () => {
@@ -1372,6 +1385,7 @@ test('r4 unanswerable: refused before 3 counted searches (with the count), then 
       { actions: [
         ...[1, 2, 3].map((i) => ({ type: 'search', query: `alpha ${i}`, sub: 1, ...(i === 3 ? { recent: true } : {}) })),
         { type: 'search', query: 'void one', sub: 2 }, { type: 'unanswerable', sub: 2, reason: 'nothing exists' }, { type: 'unanswerable', sub: 3, reason: 'r' }, { type: 'unanswerable', sub: 1 },
+        ...READ2,
       ] },
       { actions: [{ type: 'search', query: 'void two', sub: 2 }, { type: 'search', query: 'void three', sub: 2 }, { type: 'write_draft', markdown: 'Plain.' }, { type: 'unanswerable', sub: 2, reason: 'No source in the world covers this | really' }, { type: 'write_draft', markdown: '## Limits and gaps\nThe second question is open.\n\n## Next\nMore.' }] },
       { actions: [{ type: 'show_draft' }] },
@@ -1391,7 +1405,7 @@ test('r4 unanswerable: refused before 3 counted searches (with the count), then 
   assert.strictEqual(res.state.unanswerable[2], 'No source in the world covers this | really');
   // the document: the table sits inside the draft's own "Limits and gaps" section
   const doc = res.markdown;
-  assert.match(doc, /## Limits and gaps\nThe second question is open\.\n\n\*\*Search coverage\*\*\n\n\| Sub-question \|[^]*unanswerable: No source in the world covers this \/ really \|\n\n## Next\nMore\./);
+  assert.match(doc, /## Limits and gaps\nThe second question is open\.\n\n\*\*Search coverage\*\*\n\n\| Sub-question \|[^]*unanswerable: No source in the world covers this \/ really \|\n\nSources: 2 found, 2 read whole, 0 read in part, 0 waived, 0 not reached because a ceiling was hit\.\n\n## Next\nMore\./);   // r5: the sources counts follow the table
 });
 
 test('r4 gate: off at a ceiling; later drafts are never gated', async () => {
@@ -1401,7 +1415,7 @@ test('r4 gate: off at a ceiling; later drafts are never gated', async () => {
   assert.strictEqual(res.state.draftVersion, 1);
   assert.ok(res.markdown.includes('Plain, at a ceiling.'));
   // a second draft after the first needs nothing more
-  const f = env({ reviewers: [], settings: R4, lead: [SR(3), { actions: [{ type: 'write_draft', markdown: 'One.' }, { type: 'write_draft', markdown: 'Two.' }] }, { actions: [{ type: 'show_draft' }] }] });
+  const f = env({ reviewers: [], settings: R4, lead: [{ actions: [...SR(3).actions, ...READ2] }, { actions: [{ type: 'write_draft', markdown: 'One.' }, { type: 'write_draft', markdown: 'Two.' }] }, { actions: [{ type: 'show_draft' }] }] });
   const o = f.opts(); o.settings.leadSteps = 2;
   assert.strictEqual((await L.runLead(o)).state.draftVersion, 2);
   // no sub-questions at all and the rule switched on: refused; both numbers 0: the rule is off
@@ -1457,10 +1471,10 @@ test('r4 check: a figure whose sources are all abstract-only is abstract_only, w
   const part = { n: 3, sid: 'S3', ok: true, text: TEXT_B, partial: true, reason: 'cut' };
   const c = L.leadCheck('The new method is preferred 56.4% of the time [S1]. The error rate was 12.5% [S2]. Again 12.5% [S1][S2]. And 12.5% [S3].', [abs, full, part]);
   assert.deepStrictEqual(c.figures.map((f) => f.status), ['abstract_only', 'found', 'found', 'found']);
-  assert.deepStrictEqual(c.totals, { found: 3, not_found: 0, no_source: 0, not_opened: 0, abstract_only: 1 });
+  assert.deepStrictEqual(c.totals, { found: 3, not_found: 0, no_source: 0, not_opened: 0, abstract_only: 1, found_cut: 0 });
   const text = L.formatCheck(c);
   assert.match(text, /- abstract_only: "56\.4%" in "The new method is preferred 56\.4% of the time \[S1\]\." \[source: S1\]; the source is an abstract only and cannot carry a figure; open the full text/);
-  assert.match(text, /Totals: 3 found, 0 not found, 0 without a source tag, 0 source not opened, 1 from an abstract only\./);
+  assert.match(text, /Totals: 3 found, 0 not found, 0 without a source tag, 0 source not opened, 1 from an abstract only, 0 in a cut sentence\./);
   // the figure is in the abstract's text, still no figure
   assert.strictEqual(L.leadCheck('Preferred 56.4% [S1].', [abs]).figures[0].status, 'abstract_only');
   assert.strictEqual(L.leadCheck('Preferred 56.4% [S1].', [{ ...abs, reason: 'cut' }]).figures[0].status, 'found');
@@ -1484,9 +1498,9 @@ test('r4 formatCoverage: the columns and the three statuses', () => {
     { n: 3, text: 'Gone', topicSearches: 3, recent: 0, citing: 0, found: 0, opened: 0, readFull: 0, unanswerable: 'no source exists' },
   ];
   const t = L.formatCoverage(rows, { topicSearchesMin: 3, sourcesPerSubMin: 2 }).split('\n');
-  assert.strictEqual(t[0], '| Sub-question | Topic searches | Recent | Citing searches | Sources found | Opened | Read in full | Status |');
+  assert.strictEqual(t[0], '| Sub-question | Topic searches | Recent | Citing searches | Sources found | Opened and read | Read in full | Status |');
   assert.strictEqual(t[2], '| 1. Fine one | 3 | 1 | 2 | 5 | 2 | 1 | ok |');
-  assert.strictEqual(t[3], '| 2. Short / one | 1 | 0 | 0 | 1 | 0 | 0 | short: 2 more topic searches; a topic search for recent work ("recent":true); 1 more distinct source found by its topic searches |');
+  assert.strictEqual(t[3], '| 2. Short / one | 1 | 0 | 0 | 1 | 0 | 0 | short: 2 more topic searches; a topic search for recent work ("recent":true); 1 more distinct source found by its topic searches; 2 more sources from its topic searches opened and read |');
   assert.strictEqual(t[4], '| 3. Gone | 3 | 0 | 0 | 0 | 0 | 0 | unanswerable: no source exists |');
   // 0 switches a part off
   assert.ok(L.formatCoverage(rows, { topicSearchesMin: 0, sourcesPerSubMin: 0 }).split('\n').slice(2).every((l) => l.endsWith('| ok |') || l.includes('unanswerable')));
@@ -1550,7 +1564,7 @@ test('r4 state: the search log, the plan and the unanswerable map survive a resu
   assert.match(p, /\| 2\. Second part \| 3 \| 1 \| 0 \| 3 \| 0 \| 0 \| ok \|/);
 });
 
-test('r4 coverage: opened and read-in-full counts come from the sources the topic searches found; the prompt shows the table after DRAFT and before FOUND', async () => {
+test('r4 coverage: opened-and-read and read-in-full counts come from the sources the topic searches found; the prompt shows the table after DRAFT and before FOUND', async () => {
   const e = env({
     reviewers: [], settings: R4,
     lead: [
@@ -1560,7 +1574,8 @@ test('r4 coverage: opened and read-in-full counts come from the sources the topi
   });
   const o = e.opts(); o.settings.leadSteps = 1;
   await L.runLead(o);
-  assert.match(e.prompts[1], /\| 1\. Which result is the main one\? \| 3 \| 1 \| 0 \| 3 \| 2 \| 1 \| ok \|/);
+  // two sources opened, one read: only the read one counts (r5), and one more is still short
+  assert.match(e.prompts[1], /\| 1\. Which result is the main one\? \| 3 \| 1 \| 0 \| 3 \| 1 \| 1 \| short: 1 more source from its topic searches opened and read \|/);
 });
 
 test('r4 prompt: the action reference names plan, unanswerable and the new search fields', () => {
@@ -1617,4 +1632,619 @@ test('r4r1 plan: fixed once a search was made for one of its sub-questions or on
   assert.ok(e.prompts[2].includes('plan stored:\n1. Cost part again'), 'a plan may be replaced before any search for it');
   assert.ok(e.prompts[3].includes('refused: the plan is fixed once a search or a declaration was made for one of its sub-questions'));
   assert.deepStrictEqual(res.state.plan, ['Cost part again', 'Other part']);
+});
+
+// ---------------------------------------------------------------- r5: required sources, second discovery round, cut sentences, narrow re-checks, names
+const GATE5 = { topicSearchesMin: 0, sourcesPerSubMin: 0, topNewPerSub: 2 };   // only the required sources gate the first draft
+const AX = 'https://arxiv.org/abs/2501.00001';
+const AX_PDF = 'https://arxiv.org/pdf/2501.00001v2';
+const AX_HTML = 'https://arxiv.org/html/2501.00001v1';
+const U1 = 'https://example.org/qp-one';
+const U2 = 'https://example.org/qp-two';
+const U3 = 'https://example.org/qp-three';
+const pageOf = (title, text = TEXT_A) => ({ title, text });
+const lastPrompt = (e) => e.prompts[e.prompts.length - 1];
+
+test('r5 required: quick-pass links are F items, one per work (arXiv abs, pdf and html are one); status is computed; rank comes before the first read; saved in state.json', async () => {
+  const e = env({
+    reviewers: [], settings: GATE5,
+    pages: { [AX_HTML]: pageOf('Paper One'), [U1]: pageOf('Blog One') },
+    lead: [
+      A({ type: 'open', url: AX_HTML }, { type: 'open', url: U1 }, { type: 'read', parts: ['S1'], brief: 'b' }),
+      A({ type: 'rank', order: ['F2'] }, { type: 'read', parts: ['S1'], brief: 'b' }),
+      A({ type: 'write_draft', markdown: 'A plain claim.' }),
+      A({ type: 'waive', items: ['F2'], reason: 'a blog, nothing in it' }, { type: 'write_draft', markdown: 'A plain claim.' }),
+      A({ type: 'show_draft' }),
+    ],
+  });
+  const o = e.opts();
+  o.firstPass = `Quick: see ${AX} and also ${AX_PDF}, and ${U1}.`;
+  o.settings.leadSteps = 4;
+  const res = await L.runLead(o);
+  assert.deepStrictEqual(res.state.required.map((x) => [x.fid, x.url, x.why, x.sub, x.waived]), [['F1', AX, 'named by the quick pass', 0, ''], ['F2', U1, 'named by the quick pass', 0, 'a blog, nothing in it']]);
+  assert.ok(e.prompts[0].includes('REQUIRED SOURCES (read or waive each before the first draft)\nF1 | pending | named by the quick pass | '), 'listed in the first prompt');
+  assert.ok(e.prompts[0].indexOf('\nCOVERAGE (') < e.prompts[0].indexOf('\nREQUIRED SOURCES (') && e.prompts[0].indexOf('\nREQUIRED SOURCES (') < e.prompts[0].indexOf('FOUND (not opened yet)'));
+  assert.ok(e.prompts[1].includes('refused: rank the found items by relevance first (rank), then read them in that order'));
+  assert.strictEqual(res.counts.readerCalls, 1, 'only the read after the rank went through');
+  // rank order F2, F1; F1 is read as S1 (the html copy of the same arXiv work), F2 pending
+  const req2 = section(e.prompts[2], 'REQUIRED SOURCES (read or waive each before the first draft)\n').split('\n');
+  assert.match(req2[0], /^F2 \| pending \| named by the quick pass \|/);
+  assert.match(req2[1], new RegExp(`^F1 \\| read as S1 \\| named by the quick pass \\| .* \\| ${AX.replace(/[./]/g, '\\$&')}$`));
+  // the first draft waits for F2, then a waiver lets it pass
+  assert.ok(e.prompts[3].includes('refused: the first draft waits for discovery.') && e.prompts[3].includes('required sources not read or waived (1)') && /F2 \| /.test(e.prompts[3].split('waits for discovery.')[1]));
+  assert.ok(!/F1 \| Quick/.test(e.prompts[3].split('waits for discovery.')[1]), 'the read one is not listed');
+  assert.ok(e.prompts[4].includes('waived F2: a blog, nothing in it') && e.prompts[4].includes('draft v1 stored'));
+  assert.ok(lastPrompt(e).includes('F2 | waived: a blog, nothing in it |'));
+  assert.strictEqual(readState(o.deps.dir).required.length, 2, 'saved in state.json');
+});
+
+test('r5 required: the gate is on when any of the three numbers is above 0 and off when all are 0; at a ceiling it is off', async () => {
+  const lead = () => [A({ type: 'write_draft', markdown: 'Plain.' }), A({ type: 'show_draft' })];
+  const run = async (settings, extra = {}) => {
+    const e = env({ reviewers: [], settings, lead: lead() });
+    const o = e.opts(); o.firstPass = `Quick: ${U1}`; o.settings.leadSteps = 1; Object.assign(o.settings, extra);
+    return { e, res: await L.runLead(o) };
+  };
+  assert.strictEqual((await run({ topicSearchesMin: 0, sourcesPerSubMin: 0, topNewPerSub: 0 })).res.state.draftVersion, 1, 'all 0: off');
+  const only = await run({ topicSearchesMin: 0, sourcesPerSubMin: 0, topNewPerSub: 2 });
+  assert.ok(only.e.prompts[1].includes('refused: the first draft waits for discovery.') && only.e.prompts[1].includes('F1 | '), 'topNewPerSub alone turns it on');
+  assert.strictEqual(only.res.ceiling, 'steps');
+  assert.strictEqual((await run({ topicSearchesMin: 3, sourcesPerSubMin: 0, topNewPerSub: 0 })).e.prompts[1].includes('F1 | '), true, 'a quick-pass item gates with any number on');
+});
+
+test('r5 required: rank validates ids; waive validates, refuses read items and class waivers of papers unless "duplicate" or "copy of"; a single paper may be waived with its own reason', async () => {
+  const links = [AX, 'https://arxiv.org/abs/2501.00002', U1, U2, 'https://openreview.net/forum?id=abc', 'https://example.org/files/paper.pdf'];
+  const many = Array.from({ length: 61 }, (_, i) => `F${i + 1}`);
+  const e = env({
+    reviewers: [], settings: GATE5, pages: { [U3]: pageOf('Three') },
+    lead: [
+      A({ type: 'rank', order: ['F9', 'x'] }, { type: 'rank', order: ['F1', 'F1'] }, { type: 'rank', order: [] }, { type: 'rank', order: ['f2', 'F1'] },
+        { type: 'waive', items: ['F1', 'F2'], reason: 'not relevant' },
+        { type: 'waive', items: ['F1', 'F2'], reason: 'F2 is a copy of F1' },
+        { type: 'waive', items: ['F3', 'F4'], reason: 'blogs, off topic' },
+        { type: 'waive', items: ['F5'], reason: 'this single paper is outside the question' },
+        { type: 'waive', items: ['F5', 'F6'], reason: 'x' },
+        { type: 'waive', items: [], reason: 'x' }, { type: 'waive', items: many, reason: 'x' }, { type: 'waive', items: ['F7'], reason: 'x' }, { type: 'waive', items: ['F6'], reason: '' }, { type: 'waive', items: ['F6'], reason: 'x'.repeat(501) }),
+      A({ type: 'show_draft' }),
+    ],
+  });
+  const o = e.opts(); o.firstPass = `Quick: ${links.join(' ')}`; o.settings.leadSteps = 1;
+  const res = await L.runLead(o);
+  const r = res.state.required;
+  assert.strictEqual(r.length, 6);
+  const p = e.prompts[1];
+  assert.match(p, /refused: unknown ids: F9, x; the required sources are F1-F6/);
+  assert.match(p, /refused: an id is named twice: F1/);
+  assert.match(p, /refused: rank takes "order": a list of F ids/);
+  assert.match(p, /ranked 2 of 6: F2, F1; the other 4 follow in their own order/);
+  assert.match(p, /refused: a research paper needs a reason of its own: F1, F2\n/);
+  assert.ok(!/waived F1, F2/.test(p), '"copy of F1" does not help while F1 is not read (r5 review F5)');
+  assert.match(p, /waived F3, F4: blogs, off topic/);
+  assert.match(p, /waived F5: this single paper is outside the question/);
+  assert.match(p, /refused: a research paper needs a reason of its own: F5, F6\n/, 'an openreview link and a .pdf link are papers');
+  assert.match(p, /refused: waive takes "items": 1 to 60 F ids/);
+  assert.match(p, /refused: unknown ids: F7/);
+  assert.match(p, /refused: waive needs a "reason" string/);
+  assert.match(p, /refused: reason is longer than 500 characters/);
+  assert.deepStrictEqual(r.map((x) => x.waived.slice(0, 8)), ['', '', 'blogs, o', 'blogs, o', 'this sin', '']);
+  assert.deepStrictEqual(res.state.rankOrder, ['F2', 'F1']);
+  // the prompt shows the ranked ones first, the rest in their own order
+  assert.deepStrictEqual(section(lastPrompt(e), 'REQUIRED SOURCES (read or waive each before the first draft)\n').split('\n').map((l) => l.split(' | ')[0]), ['F2', 'F1', 'F3', 'F4', 'F5', 'F6']);
+});
+
+test('r5 required: a read item cannot be waived; a waived item that is read counts as read; the tag of a waived, unread source is refused as "waived"', async () => {
+  const e = env({
+    reviewers: [], settings: GATE5, pages: { [U1]: pageOf('Blog One'), [U2]: pageOf('Blog Two', TEXT_B) },
+    lead: [
+      A({ type: 'open', url: U1 }, { type: 'open', url: U2 }, { type: 'rank', order: ['F1', 'F2'] }, { type: 'waive', items: ['F2'], reason: 'skip two' }),
+      A({ type: 'read', parts: ['S1'], brief: 'b' }),
+      A({ type: 'waive', items: ['F1'], reason: 'too late' }, { type: 'write_draft', markdown: 'One claim [S1]. Another one [S2].' }, { type: 'write_draft', markdown: 'Plain claim.' }, { type: 'edit_draft', replace: [{ old: 'Plain claim.', new: 'Plain claim [S2].' }] }),
+      A({ type: 'read', parts: ['S2'], brief: 'b' }),
+      A({ type: 'show_draft' }),
+    ],
+  });
+  const o = e.opts(); o.firstPass = `Quick: ${U1} ${U2}`; o.settings.leadSteps = 4;
+  const res = await L.runLead(o);
+  const p = e.prompts[3];
+  assert.ok(e.prompts[2].includes('F1 | read as S1 |'));
+  assert.match(p, /refused: already read: F1 \(read as S1\)/);
+  assert.match(p, /refused: the draft cites sources that were never read: S2 \(waived\)/);
+  assert.ok(p.includes('draft v1 stored; 12 characters') && /refused: the draft cites sources that were never read: S2 \(waived\)[^]*refused: the draft cites sources that were never read: S2 \(waived\)/.test(p), 'the write and the edit are both refused');
+  // F2 is read after its waiver: it counts as read and its tag is allowed
+  assert.ok(lastPrompt(e).includes('F2 | read as S2 |'));
+  assert.strictEqual(res.state.required[1].waived, 'skip two');
+});
+
+test('r5 required: the top 2 new results per sub-question become F items (2 in all, not per search); not quick-pass, opened or known works; topNewPerSub 0 switches it off', async () => {
+  const P = (u) => ({ title: `T ${u.split('/').pop()}`, url: `https://example.org/${u}`, snippet: '' });
+  const lists = {
+    'one a': [P('qp'), P('opened'), P('a1'), P('a2'), P('a3')],
+    'one b': [P('b1'), P('b2')],
+    'two a': [P('a1'), P('c1'), P('c2'), P('c3')],
+    'one known': [P('k1')],
+    'one same': [P('s1')],
+  };
+  const mk = (n) => env({
+    reviewers: [], settings: { ...GATE5, topNewPerSub: n }, pages: { 'https://example.org/opened': pageOf('Opened') }, search: (q) => lists[q] || [],
+    lead: [
+      A({ type: 'open', url: 'https://example.org/opened' }),
+      A({ type: 'search', query: 'one a', sub: 1 }, { type: 'search', query: 'one b', sub: 1 }, { type: 'search', query: 'two a', sub: 2 }, { type: 'search', query: 'one known LitBench', sub: 1 }, { type: 'search', query: 'one nosub' }, { type: 'search', query: 'one a', sub: 1 }),
+      A({ type: 'show_draft' }),
+    ],
+  });
+  const e = mk(2);
+  const o = e.opts(); o.firstPass = 'Quick: https://example.org/qp'; o.run.subQuestions = ['First?', 'Second?']; o.settings.leadSteps = 2;
+  const res = await L.runLead(o);
+  assert.deepStrictEqual(res.state.required.map((x) => [x.fid, x.url.split('/').pop(), x.why, x.sub, x.step]), [
+    ['F1', 'qp', 'named by the quick pass', 0, 0],
+    ['F2', 'a1', 'top new result of sub-question 1', 1, 2], ['F3', 'a2', 'top new result of sub-question 1', 1, 2],
+    ['F4', 'c1', 'top new result of sub-question 2', 2, 2], ['F5', 'c2', 'top new result of sub-question 2', 2, 2],
+  ]);
+  assert.ok(e.prompts[2].includes('added to REQUIRED SOURCES (read or waive): F2, F3'));
+  const o2 = mk(0).opts(); o2.firstPass = 'Quick: https://example.org/qp'; o2.run.subQuestions = ['First?', 'Second?']; o2.settings.leadSteps = 2;
+  assert.deepStrictEqual((await L.runLead(o2)).state.required.map((x) => x.fid), ['F1'], '0 switches the top-new part off; the quick-pass item stays');
+  // a resumed older state is not given quick-pass items
+});
+
+test('r5 required: the same work by arXiv id (abs, pdf, html, any version) is one item and one source status; a different arXiv id is another', async () => {
+  assert.ok(L.sameWork(AX, AX_PDF) && L.sameWork(AX_HTML, AX) && !L.sameWork(AX, 'https://arxiv.org/abs/2501.00002'));
+  assert.ok(L.sameWork('https://example.org/x/', 'https://example.org/x') && !L.sameWork('ftp://example.org/x', 'ftp://example.org/x'));
+  assert.strictEqual(L.workKey('https://arxiv.org/pdf/2501.00001v3.pdf'), 'arxiv:2501.00001');
+  const e = env({
+    reviewers: [], settings: GATE5, pages: { [AX_PDF]: pageOf('The PDF copy') },
+    search: () => [{ title: 'html copy', url: AX_HTML, snippet: '' }, { title: 'Other', url: 'https://arxiv.org/abs/2501.00009', snippet: '' }],
+    lead: [A({ type: 'search', query: 'q', sub: 1 }, { type: 'open', url: AX_PDF }), A({ type: 'show_draft' })],
+  });
+  const o = e.opts(); o.firstPass = `Quick: ${AX}`; o.settings.leadSteps = 1;
+  const res = await L.runLead(o);
+  assert.deepStrictEqual(res.state.required.map((x) => x.url), [AX, 'https://arxiv.org/abs/2501.00009'], 'the html copy is the quick-pass work: no new item');
+});
+
+test('r5 required: the prompt list is cut at 150 lines and show_required pages the rest; an older state resumes with none', async () => {
+  const links = Array.from({ length: 160 }, (_, i) => `https://example.org/w${i}`).join('\n');
+  const e = env({ reviewers: [], settings: GATE5, lead: [A({ type: 'show_required', from: 150 }), A({ type: 'show_required' }), A({ type: 'show_draft' })] });
+  const o = e.opts(); o.firstPass = `Quick:\n${links}`; o.settings.leadSteps = 2;
+  const res = await L.runLead(o);
+  assert.strictEqual(res.state.required.length, 160);
+  const list = e.prompts[0].split('REQUIRED SOURCES (read or waive each before the first draft)\n')[1].split('\n\n')[0].split('\n');
+  assert.strictEqual(list.length, 151);
+  assert.ok(list[150].includes('[10 more lines not listed: show_required from=150]'));
+  assert.ok(e.prompts[1].includes('REQUIRED SOURCES lines 150-160') && e.prompts[1].includes('F160 | pending'));
+  assert.ok(e.prompts[2].includes('REQUIRED SOURCES lines 0-160') && e.prompts[2].includes('F1 | pending'));
+  assert.ok(L.ACTION_TYPES.includes('show_required'));
+  assert.ok(/show_required/.test(e.prompts[0]) && /"type":"rank"/.test(e.prompts[0]) && /"type":"waive"/.test(e.prompts[0]) && /"type":"missing"/.test(e.prompts[0]) && /"narrow":true/.test(e.prompts[0]));
+});
+
+test('r5 resume: an r4 state without required, rank or missing resumes with none, adds no quick-pass items, and needs no rank', async () => {
+  const dir = tmp();
+  const lead = [A({ type: 'open', url: URL_A }), A({ type: 'read', parts: ['S1'], brief: 'b' }), A({ type: 'write_draft', markdown: 'Plain.' }, { type: 'check' }, { type: 'review' }), A({ type: 'review' }), A({ type: 'finish', summary: 'ok' })];
+  const stateSteps = () => { try { return JSON.parse(fs.readFileSync(path.join(dir, 'state.json'), 'utf8')).counts.steps; } catch { return 0; } };
+  const settings = { topicSearchesMin: 0, sourcesPerSubMin: 0, topNewPerSub: 2 };
+  const e1 = env({ dir, lead, settings, isDead: () => stateSteps() >= 1 });
+  const o1 = e1.opts(); o1.firstPass = 'Quick: nothing';
+  await assert.rejects(L.runLead(o1), /stopped/);
+  // make it look like a state of the previous version
+  const st = readState(dir);
+  for (const k of ['required', 'rankOrder', 'ranked', 'missing', 'missingDone', 'roundSeq']) delete st[k];
+  fs.writeFileSync(path.join(dir, 'state.json'), JSON.stringify(st));
+  const e2 = env({ dir, lead, settings });
+  const o2 = e2.opts(); o2.firstPass = `Quick: ${U1} ${U2}`;
+  const res = await L.runLead(o2);
+  assert.deepStrictEqual(res.state.required, []);
+  assert.deepStrictEqual(res.state.missing, []);
+  assert.strictEqual(res.state.draftVersion, 1);
+  assert.strictEqual(res.counts.readerCalls, 1, 'the first read needed no rank');
+  assert.ok(!e2.prompts[0].includes('REQUIRED SOURCES (read or waive') && !e2.prompts[0].includes('MISSING (from review round 1)'));
+  // an r4 state that had review rounds does not ask the reviewers for missing works afterwards
+  const st2 = readState(dir); assert.strictEqual(st2.finished, true);
+});
+
+test('r5 resume: an r4 state with a review round does not start a second discovery round', async () => {
+  const dir = tmp();
+  const lead = [A({ type: 'write_draft', markdown: 'Plain.' }, { type: 'check' }, { type: 'review' }), A({ type: 'review' }), A({ type: 'finish', summary: 'ok' })];
+  const stateSteps = () => { try { return JSON.parse(fs.readFileSync(path.join(dir, 'state.json'), 'utf8')).counts.steps; } catch { return 0; } };
+  const e1 = env({ dir, lead, isDead: () => stateSteps() >= 1 });
+  await assert.rejects(L.runLead(e1.opts()), /stopped/);
+  const st = readState(dir);
+  for (const k of ['required', 'rankOrder', 'ranked', 'missing', 'missingDone', 'roundSeq']) delete st[k];
+  for (const r of st.rounds) delete r.seq;
+  for (const r of st.reviews) { delete r.seq; delete r.idx; }
+  fs.writeFileSync(path.join(dir, 'state.json'), JSON.stringify(st));
+  const e2 = env({ dir, lead, review: () => '{"verdict":"ACCEPT","findings":[],"missing":[{"work":"A key study","why":"w"}]}' });
+  const res = await L.runLead(e2.opts());
+  assert.deepStrictEqual(res.state.missing, [], 'round 2 is not the first round');
+  assert.ok(!e2.calls.find((c) => /^Review/.test(c.label)).task.includes('under "missing"'));
+});
+
+test('r5 document: Sources counts, Waived by reason, Not reached at a ceiling; they sit in Limits and gaps', async () => {
+  const e = env({
+    reviewers: [], settings: GATE5, pages: { [U1]: pageOf('Read One') },
+    lead: [
+      A({ type: 'open', url: U1 }, { type: 'rank', order: ['F1', 'F2', 'F3'] }, { type: 'read', parts: ['S1'], brief: 'b' }, { type: 'waive', items: ['F2'], reason: 'a mirror of the first, not needed' }),
+      A({ type: 'write_draft', markdown: '## Findings\nA claim [S1].\n\n## Limits and gaps\nSome limit.\n' }),
+      A({ type: 'write_draft', markdown: '## Findings\nA claim [S1].\n\n## Limits and gaps\nSome limit.\n' }, { type: 'finish', summary: 'at the ceiling' }),
+    ],
+  });
+  const o = e.opts(); o.firstPass = `Quick: ${U1}\nMore: ${U2} Title Two\nAlso: ${U3}`; o.settings.leadSteps = 2;
+  const res = await L.runLead(o);
+  assert.ok(res.ceiling);
+  assert.match(res.markdown, /## Limits and gaps\nSome limit\.\n\n\*\*Search coverage\*\*\n\n\| Sub-question \|[^]*\|\n\nSources: 3 found, 1 read whole, 0 read in part, 1 waived, 1 not reached because a ceiling was hit\.\n\nWaived:\n- a mirror of the first, not needed: More: Title Two\n\nNot reached:\n- Also:\n/);   // a quick-pass item's title is the line its link stood on
+  // the pure formatter, with a run that did not end at a ceiling
+  assert.strictEqual(L.formatSources({ found: 4, whole: 2, part: 1, waived: 0, pending: 0, ceiling: false }), 'Sources: 4 found, 2 read whole, 1 read in part, 0 waived, 0 not reached because a ceiling was hit.');
+  assert.match(L.formatSources({ found: 4, whole: 2, part: 1, waived: 0, pending: 2, ceiling: false, pendingTitles: ['X'] }), /2 not read\.\n\nNot read:\n- X/);
+  assert.match(L.formatSources({ found: 1, whole: 0, part: 0, waived: 0, pending: 0, rejected: [{ work: 'W', url: 'https://x.org/w', reason: 'off topic' }] }), /Works the reviewers named that were not pursued:\n- W \(https:\/\/x\.org\/w\): off topic/);
+});
+
+// -- the second discovery round (missing works)
+const MISS_REVIEW = (extra = '') => `{"verdict":"ACCEPT","findings":[],"missing":[{"work":"Big Study","url":"https://example.org/big","why":"key"},{"work":"Line of evidence X","why":"w"}${extra}]}`;
+
+test('r5 parseReview: missing works (work 1-300, url http(s) only, why up to 500, at most 15); kind defaults to factual; scoping counts as wording; fix up to 2000', () => {
+  const many = Array.from({ length: 20 }, (_, i) => ({ work: `W${i}` }));
+  const r = L.parseReview(JSON.stringify({ verdict: 'REJECT', missing: [{ work: 'A'.repeat(400), url: 'ftp://x.org/a', why: 'w'.repeat(600) }, { work: '  ' }, { work: 'B', url: 'https://x.org/b' }, 'x', ...many], findings: [
+    { label: 'BLOCK', about: 'a', problem: 'p', quote: 'q', source: 'S1' },
+    { label: 'BLOCK', kind: 'Wording', about: 'a', problem: 'p', quote: 'q', source: 'S1', fix: 'f'.repeat(2500) },
+    { label: 'BLOCK', kind: 'scoping', about: 'a', problem: 'p', quote: 'q', source: 'S1', fix: 'g' },
+    { label: 'BLOCK', kind: 'nonsense', about: 'a', problem: 'p', quote: 'q', source: 'S1' },
+    { label: 'BLOCK', kind: 'SOURCING', about: 'a', problem: 'p', quote: 'q', source: 'S1' },
+    { label: 'FOLLOW-UP', kind: 'coverage', about: 'a', problem: 'p', quote: 'q', source: 'S1' },
+    { label: 'BLOCK', kind: 7, about: 'a', problem: 'p', quote: 'q', source: 'S1' },
+  ] }));
+  assert.deepStrictEqual(r.findings.map((f) => f.kind), ['factual', 'wording', 'wording', 'factual', 'sourcing', 'coverage', 'factual']);
+  assert.strictEqual(r.findings[1].fix.length, 2000);
+  assert.strictEqual(r.findings[0].fix, '');
+  assert.strictEqual(r.missing.length, 15);
+  assert.deepStrictEqual([r.missing[0].work.length, r.missing[0].url, r.missing[0].why.length, r.missing[1]], [300, '', 500, { work: 'B', url: 'https://x.org/b', why: '' }]);
+  assert.deepStrictEqual(L.parseReview('{"verdict":"ACCEPT","findings":[]}').missing, []);
+});
+
+test('r5 missing: round 1 gets the FOUND list and the coverage table and asks for "missing"; M items deduped; review and finish wait; resolved by a read source, by sid or by reject', async () => {
+  const BIG = 'https://example.org/big';
+  const e = env({
+    pages: { [BIG]: pageOf('Big Study', TEXT_B), [URL_A]: pageOf('Survey A') },
+    review: (t) => (/under "missing"/.test(t) ? MISS_REVIEW() : '{"verdict":"ACCEPT","findings":[]}'),
+    lead: [
+      A({ type: 'write_draft', markdown: 'A plain claim.' }, { type: 'check' }, { type: 'review' }),
+      A({ type: 'open', url: BIG }, { type: 'missing', id: 'M1', sid: 'S1' }, { type: 'review' }, { type: 'finish', summary: 'x' }, { type: 'missing', id: 'M9', reject: 'x' }, { type: 'missing', id: 'M2' }, { type: 'missing', id: 'M2', reject: '' }, { type: 'missing', id: 'M2', sid: 'S1', reject: 'r' }, { type: 'missing', id: 'M2', reject: 'out of scope here' }),
+      A({ type: 'read', parts: ['S1'], brief: 'b' }),
+      A({ type: 'missing', id: 'M3', sid: 'S1' }, { type: 'show_draft' }),
+      A({ type: 'review' }),
+      A({ type: 'finish', summary: 'done' }),
+    ],
+  });
+  const o = e.opts();
+  o.firstPass = `Quick: ${URL_A}`; o.run.subQuestions = ['Which result is the main one?'];
+  const res = await L.runLead(o);
+  // the first round's brief (both reviewers) has the FOUND list with the required item's status, the coverage table and the ask
+  const brief = e.calls.find((c) => /^Review R1/.test(c.label)).task;
+  assert.match(brief, /FOUND \(every link the run found[^]*Quick:[^|]*\| https:\/\/example\.org\/a \[F1 pending\]/);
+  assert.ok(brief.includes('SEARCH COVERAGE:') && brief.includes('| Sub-question |') && brief.includes('Also list, under "missing", key works or lines of evidence the draft lacks: [{"work":"...","url":"...","why":"..."}] (url when known)'));
+  assert.ok(brief.includes('"kind":"factual"|"sourcing"|"coverage"|"wording"') && brief.includes('the kind is your own judgement') === false && /own judgement/.test(brief) && /must not hide a factual error/.test(brief));
+  // M1: Big Study (url), M2: Line of evidence X (no url); the second reviewer's copies are not added again
+  assert.deepStrictEqual(res.state.missing.map((m) => [m.mid, m.work, m.url]), [['M1', 'Big Study', BIG], ['M2', 'Line of evidence X', '']]);
+  const p = e.prompts[1];
+  assert.ok(p.includes('second discovery round') && p.includes('MISSING (from review round 1)\nM1 | open | Big Study | https://example.org/big | key'));
+  const q = e.prompts[2];
+  assert.match(q, /refused: S1 was not read/);
+  assert.match(q, /refused: the second discovery round is open: M1, M2/);
+  assert.strictEqual(q.split('RESULTS OF YOUR LAST ACTIONS')[1].split('refused: the second discovery round is open: M1, M2').length, 3, 'review and finish are both refused');
+  assert.match(q, /refused: no missing work M9/);
+  assert.match(q, /refused: missing needs either "sid"/);
+  assert.match(q, /M2 rejected: out of scope here/);
+  // after the read: M1 resolves by itself (a read source is the same work); no M3 exists, so the sid refusal comes from the engine
+  assert.ok(e.prompts[3].includes('M1 | resolved: read as S1 |') && e.prompts[3].includes('M2 | rejected: out of scope here |'));
+  assert.ok(e.prompts[4].includes('refused: no missing work M3'));
+  assert.strictEqual(res.summary, 'done', 'review and finish go through once nothing is open');
+  assert.strictEqual(res.counts.reviewRounds, 2);
+  assert.ok(res.markdown.includes('Works the reviewers named that were not pursued:\n- Line of evidence X: out of scope here'));
+  // round 2 is not the first: no FOUND list and no ask
+  assert.ok(!e.calls.find((c) => /^Review R3/.test(c.label)).task.includes('under "missing"'));
+});
+
+test('r5 missing: resolution by "sid" of a read source; at a ceiling review and finish are not refused', async () => {
+  const e = env({
+    reviewers: [{ model: 'rev-a', label: 'Alpha' }], review: () => MISS_REVIEW(), pages: { [URL_A]: pageOf('Survey A'), 'https://example.org/big': pageOf('Big Study', TEXT_B) },
+    lead: [
+      A({ type: 'open', url: URL_A }, { type: 'open', url: 'https://example.org/big' }),
+      A({ type: 'read', parts: ['S1', 'S2'], brief: 'b' }),
+      A({ type: 'write_draft', markdown: 'A plain claim [S1].' }, { type: 'check' }, { type: 'review' }),
+      A({ type: 'missing', id: 'M1', sid: 'S1' }, { type: 'missing', id: 'M1', sid: 'S2' }, { type: 'missing', id: 'm2', sid: 'S2' }, { type: 'missing', id: 'm2', sid: 'S1' }, { type: 'show_draft' }),
+      A({ type: 'show_draft' }),
+      A({ type: 'finish', summary: 'at the ceiling' }),
+    ],
+  });
+  const o = e.opts(); o.settings.leadSteps = 5;
+  const res = await L.runLead(o);
+  assert.ok(e.prompts[4].includes('refused: S1 is not the work M1 names (https://example.org/big); read that work, or reject it with a reason'), 'a source settles only its own work (r5 review F3)');
+  assert.ok(e.prompts[4].includes('refused: S2 already settles M1'), 'a source settles only one work without a url');
+  assert.ok(e.prompts[4].includes('M1 settled: read as S2') && e.prompts[4].includes('M2 settled: read as S1'));
+  assert.ok(e.prompts[4].includes('M1 | resolved: read as S2 |') && e.prompts[4].includes('M2 | resolved: read as S1 |'));
+  // open at a ceiling: finish is allowed
+  const f = env({ reviewers: [{ model: 'rev-a', label: 'Alpha' }], review: () => MISS_REVIEW(), lead: [A({ type: 'write_draft', markdown: 'A claim.' }, { type: 'check' }, { type: 'review' }), A({ type: 'finish', summary: 'ceiling' })] });
+  const p = f.opts(); p.settings.leadSteps = 1;
+  const r2 = await L.runLead(p);
+  assert.strictEqual(r2.summary, 'ceiling');
+  assert.strictEqual(r2.ceiling, 'steps');
+  assert.strictEqual(r2.state.missing.length, 2);
+  assert.ok(f.prompts[1].includes('CEILING REACHED'));
+});
+
+// -- cut sentences in the figure check
+test('r5 check: found_cut when the number stands right before a cut; not when the line ends in sentence punctuation or the number is followed by text', () => {
+  const mk = (text, extra = {}) => ({ n: 1, sid: 'S1', ok: true, text, ...extra });
+  const c1 = L.leadCheck('The baseline reached 43.6% [S1].', [mk('Table 6. The baseline reached 43.6\n6 Discussion and Limitations')]);
+  assert.strictEqual(c1.figures[0].status, 'found_cut');
+  assert.strictEqual(c1.figures[0].sid, 'S1');
+  assert.strictEqual(c1.totals.found_cut, 1);
+  assert.strictEqual(L.leadCheck('The baseline reached 43.6% [S1].', [mk('The baseline reached 43.6')]).figures[0].status, 'found_cut', 'the end of the text is a cut');
+  assert.strictEqual(L.leadCheck('The baseline reached 43.6% [S1].', [mk('The baseline reached 43.6  \t\n\nmore')]).figures[0].status, 'found_cut', 'spaces and tabs before the newline, then a blank line');
+  // not a cut: more text on the line, or a finished sentence
+  assert.strictEqual(L.leadCheck('The baseline reached 43.6% [S1].', [mk('The baseline reached 43.6 points.\nMore.')]).figures[0].status, 'not_found');
+  assert.strictEqual(L.leadCheck('The baseline reached 43.6% [S1].', [mk('The baseline (reached 43.6)\nMore.')]).figures[0].status, 'not_found');
+  assert.strictEqual(L.leadCheck('The baseline reached 43.6% [S1].', [mk('The baseline reached 143.6\nMore.')]).figures[0].status, 'not_found', 'another number');
+  // a full copy that has it as written wins; an abstract-only source is not looked in; an untagged source is not looked in
+  assert.strictEqual(L.leadCheck('The baseline reached 43.6% [S1][S2].', [mk('reached 43.6\nx'), { n: 2, sid: 'S2', ok: true, text: 'The baseline reached 43.6% overall.' }]).figures[0].status, 'found');
+  assert.strictEqual(L.leadCheck('The baseline reached 43.6% [S1].', [mk('reached 43.6\nx', { partial: true, reason: 'abstract only' })]).figures[0].status, 'abstract_only');
+  assert.strictEqual(L.leadCheck('The baseline reached 43.6% [S1].', [mk('nothing here'), { n: 2, sid: 'S2', ok: true, text: 'reached 43.6\nx' }]).figures[0].status, 'not_found');
+  // the text
+  const text = L.formatCheck(c1);
+  assert.match(text, /- found_cut: "43\.6%" in "The baseline reached 43\.6% \[S1\]\." \[source: S1\]; the number is in the source where the extracted sentence is cut; write it as the source has it, add "the extracted sentence is cut here", and cite another opened copy if one has it/);
+  assert.match(text, /Totals: 0 found, 0 not found, 0 without a source tag, 0 source not opened, 0 from an abstract only, 1 in a cut sentence\./);
+  assert.ok(L.READER_RULES.includes('When a figure stands in a sentence that the text cuts off, report it with its location and the words "the extracted sentence is cut here"; never complete it or guess its unit.'));
+  assert.ok(L.numberAtCut('1,450 comparisons', 'Sam rated a total of 1,450\n\nnext') === true);
+  // r5 review F2: a real cut, not a line wrap
+  const cutOf = (fig, t) => L.numberAtCut(fig, t);
+  assert.strictEqual(cutOf('43.6%', 'The median age was 43.6\nyears at enrollment.'), false, 'a wrap onto a unit word');
+  assert.strictEqual(cutOf('43.6%', 'The median age was 43.6\n% of the sample.'), false, 'a wrap onto a %');
+  assert.strictEqual(cutOf('-5%', 'It fell in the scores by 5\npoints.'), false, 'a one-digit integer and a sign mismatch');
+  assert.strictEqual(cutOf('-5.5%', 'It fell in the scores by 5.5\n\nNext para'), false, 'the figure has a minus, the source number has none');
+  assert.strictEqual(cutOf('5.5%', 'It fell in the scores by -5.5\n\nNext para'), false, 'the source number has a minus, the figure has none');
+  assert.strictEqual(cutOf('−5.5%', 'It fell in the scores by −5.5\n\nNext para'), true, 'both carry a minus sign');
+  assert.strictEqual(cutOf('43.6%', 'It was seen in the share of the time versus 43.6\n6 Discussion and Limitations'), true, 'a numbered heading follows');
+  assert.strictEqual(cutOf('43.6%', 'It was seen in the share of the time versus 43.6\nRESULTS AND DISCUSSION'), true, 'an all-capitals line follows');
+  assert.strictEqual(cutOf('43.6%', 'It was seen in the share of the time versus 43.6\n## Results'), true, 'a # heading follows');
+  assert.strictEqual(cutOf('43.6%', 'It was seen in the share of the time versus 43.6'), true, 'the end of the text');
+  assert.strictEqual(cutOf('43.6%', 'It was seen in the share of the time versus 43.6\n\nNext para'), true, 'a blank line');
+  assert.strictEqual(cutOf('43.6%', 'It was seen in the share of the time versus 43.6\fNext page'), true, 'a form feed');
+  assert.strictEqual(cutOf('43.6%', 'It was seen in the share of the time versus 43.6\nThe next line continues here.'), false, 'a capitalised sentence is no heading');
+  assert.strictEqual(cutOf('43%', 'It was seen in the share of the time versus 43\n\nNext para'), false, 'a 2-digit integer is no cut');
+  assert.strictEqual(cutOf('450 cases', 'It was seen in the share of the time versus 450\n\nNext para'), true, 'three digits are enough');
+  // a table row that ends in the number is not a cut sentence (layout gaps, tabs or | cells)
+  assert.ok(L.numberAtCut('43.6%', 'Baseline model accuracy      61.2      43.6\nNext row') === false);
+  assert.ok(L.numberAtCut('43.6%', 'Baseline model accuracy\t43.6\nNext row') === false);
+  assert.ok(L.numberAtCut('43.6%', '| Baseline model accuracy | 43.6\nNext') === false);
+});
+
+// -- review: kinds and narrow re-checks
+const WORDING = { label: 'BLOCK', kind: 'wording', about: 'overstated', problem: 'too strong', quote: 'preferred', source: 'S1', fix: 'The new method is preferred in 56.4% of the tested comparisons [S1].' };
+const rv = (verdict, ...findings) => JSON.stringify({ verdict, findings });
+const D1 = 'The new method is preferred in 56.4% of comparisons [S1].';
+const narrowLead = (extra = []) => [
+  A({ type: 'open', url: URL_A }),
+  A({ type: 'read', parts: ['S1'], brief: 'b' }),
+  A({ type: 'write_draft', markdown: D1 }, { type: 'check' }, { type: 'review' }),
+  A({ type: 'review', narrow: true }, { type: 'edit_draft', replace: [{ old: 'of comparisons', new: 'of the tested comparisons' }] }, { type: 'check' }, { type: 'review', narrow: true }),
+  ...extra,
+];
+
+test('r5 narrow: allowed only when every reviewer ACCEPTed or is wording-only, one is, and the draft changed; goes only to the wording-only reviewer; free after a full round; its ACCEPT lets finish through', async () => {
+  const e = env({
+    review: (t, model) => (/YOUR BLOCK FINDINGS/.test(t) ? '{"verdict":"ACCEPT","findings":[]}' : (model === 'rev-a' ? rv('REJECT', WORDING) : rv('ACCEPT'))),
+    lead: narrowLead([A({ type: 'finish', summary: 'narrow accepted' })]),
+  });
+  const res = await L.runLead(e.opts());
+  assert.ok(e.prompts[3].includes('narrow re-check allowed: only Alpha found nothing but wording to change'));
+  assert.ok(e.prompts[3].includes('review round 1 of draft v1'));
+  assert.match(e.prompts[4], /refused: a narrow re-check needs a change of the draft since the latest round/);
+  assert.match(e.prompts[4], /narrow re-check 1 of draft v2:\nReviewer Alpha \(R3\): verdict ACCEPT/);
+  const labels = e.calls.filter((c) => /^Review/.test(c.label)).map((c) => c.label);
+  assert.deepStrictEqual(labels, ['Review R1 Alpha', 'Review R2 Beta', 'Review R3 Alpha'], 'the narrow round goes to Alpha only');
+  const brief = e.calls.find((c) => c.label === 'Review R3 Alpha').task;
+  assert.ok(brief.includes(WORDING.fix) && brief.includes('Paragraphs of the current draft that contain it:') && brief.includes('of the tested comparisons'), 'the fix and the paragraph holding it');
+  assert.ok(brief.includes('too strong') && !brief.includes('FIGURE CHECK RESULT'), 'a narrow brief, not the full one');
+  assert.strictEqual(res.counts.reviewRounds, 1, 'a narrow round after a full round is free');
+  assert.deepStrictEqual(res.state.rounds.map((r) => !!r.narrow), [false, true]);
+  assert.strictEqual(res.summary, 'narrow accepted', 'a narrow ACCEPT on the current draft is a review');
+  assert.deepStrictEqual(res.state.reviews.map((r) => [r.rid, r.round, !!r.narrow]), [[1, 1, false], [2, 1, false], [3, 1, true]]);
+});
+
+test('r5 narrow: refused with the reason when a BLOCK is not a wording finding with a fix, when nobody is wording-only, or when a reviewer gave no verdict; a full review is always possible', async () => {
+  const cases = [
+    ['a factual BLOCK', (t, m) => (m === 'rev-a' ? rv('REJECT', { ...WORDING, kind: 'factual' }) : rv('ACCEPT')), /Alpha has a BLOCK finding that is not a wording finding with a fix/],
+    ['a wording BLOCK without a fix', (t, m) => (m === 'rev-a' ? rv('REJECT', { ...WORDING, fix: '' }) : rv('ACCEPT')), /Alpha has a BLOCK finding that is not a wording finding with a fix/],
+    ['a missing kind', (t, m) => (m === 'rev-a' ? rv('REJECT', { ...WORDING, kind: undefined }) : rv('ACCEPT')), /Alpha has a BLOCK/],
+    ['two ACCEPTs', () => rv('ACCEPT'), /no reviewer of the latest round is wording-only/],
+    ['one wording and one factual', (t, m) => (m === 'rev-a' ? rv('REJECT', WORDING) : rv('REJECT', { ...WORDING, kind: 'sourcing' })), /Beta has a BLOCK finding/],
+    ['an unreadable reviewer', (t, m) => (m === 'rev-a' ? rv('REJECT', WORDING) : 'no json'), /Beta gave no readable verdict/],
+    ['a wording and a factual BLOCK of the same reviewer', (t, m) => (m === 'rev-a' ? rv('REJECT', WORDING, { ...WORDING, kind: 'factual' }) : rv('ACCEPT')), /Alpha has a BLOCK/],
+  ];
+  for (const [name, review, why] of cases) {
+    const e = env({ review, lead: narrowLead([A({ type: 'show_draft' })]) });
+    const o = e.opts(); o.settings.leadSteps = 4;
+    await L.runLead(o);
+    assert.ok(!e.prompts[3].includes('narrow re-check allowed: only'), name);
+    assert.match(e.prompts[4], new RegExp(`refused: a narrow re-check is not allowed: ${why.source}`), name);
+    assert.ok(!e.calls.some((c) => c.label === 'Review R3 Alpha'), `${name}: no narrow call`);
+  }
+});
+
+test('r5 narrow: a narrow round right after another narrow round counts against reviewRounds; "scoping" counts as wording; a fix the draft does not hold is said in the brief', async () => {
+  const e = env({
+    reviewers: [{ model: 'rev-a', label: 'Alpha' }],
+    review: () => rv('REJECT', { ...WORDING, kind: 'scoping' }),
+    lead: [
+      A({ type: 'open', url: URL_A }),
+      A({ type: 'read', parts: ['S1'], brief: 'b' }),
+      A({ type: 'write_draft', markdown: D1 }, { type: 'check' }, { type: 'review' }),
+      A({ type: 'edit_draft', replace: [{ old: 'of comparisons', new: 'of the tested comparisons' }] }, { type: 'review', narrow: true }),
+      A({ type: 'edit_draft', replace: [{ old: 'tested comparisons', new: 'tested cases' }] }, { type: 'review', narrow: true }),
+      A({ type: 'show_draft' }),
+    ],
+  });
+  const o = e.opts(); o.settings.leadSteps = 6; o.settings.reviewRounds = 2;
+  const res = await L.runLead(o);
+  assert.strictEqual(res.counts.reviewRounds, 2, 'full (1), narrow free, narrow after narrow counts (2)');
+  assert.deepStrictEqual(res.state.rounds.map((r) => [r.round, !!r.narrow]), [[1, false], [1, true], [2, true]]);
+  const brief = e.calls.find((c) => c.label === 'Review R2 Alpha').task;
+  assert.ok(brief.includes('Paragraphs of the current draft that contain it:') && brief.includes('of the tested comparisons'));
+  // the ceiling: reviewRounds 2 reached: the next step is a ceiling step
+  assert.ok(e.prompts[5].includes('CEILING REACHED: review rounds'));
+  assert.ok(res.state.reviews.every((r) => (r.round === 1) === (r.rid <= 2)));
+});
+
+test('r5 narrow: the matching of the fix is on its first 8 words, case and spacing folded', () => {
+  const draft = 'First paragraph.\n\nThe NEW   method is preferred\nin 56.4% of the tested comparisons, say raters.\n\nThird one.';
+  assert.deepStrictEqual(L.paragraphsWith(draft, 'the new method is preferred in 56.4% of the tested comparisons [S1].'), ['The NEW   method is preferred\nin 56.4% of the tested comparisons, say raters.']);
+  assert.deepStrictEqual(L.paragraphsWith(draft, 'something else entirely'), []);
+  assert.deepStrictEqual(L.paragraphsWith(draft, ''), []);
+  const b = L.reviewBriefNarrow({ question: 'Q?', draft, findings: [{ about: 'a', problem: 'p', fix: 'something else entirely' }] });
+  assert.ok(b.includes('No paragraph of the current draft contains that fix') && b.includes('ACCEPT') && b.includes('Q?'));
+});
+
+// -- known names and citing searches
+test('r5 knownNames: a capitalised phrase or title lead-in counts only with the same capitals; tokens match in any case; plain hyphenated words are no names', () => {
+  const titles = ['Evaluating Large Language Models: A Survey', 'Open-Ended Generation in Practice'];
+  const names = L.knownNames({ quickPass: 'We use DivPO, EQ-Bench and Long-Form tests with Ideation-Execution results.', titles, question: 'Q' });
+  assert.ok(names.includes('evaluating large language models') && names.includes('open-ended generation in practice'));
+  for (const n of ['open-ended', 'long-form', 'ideation-execution']) assert.ok(!names.includes(n), `${n} is no distinctive token`);
+  for (const n of ['divpo', 'eq-bench']) assert.ok(names.includes(n), n);
+  // run 4's misfires: ordinary topic words that match a title written in capitals
+  for (const q of ['automatic story evaluation large language models correlation human ratings benchmark', 'LLM output diversity creativity benchmark open-ended generation human comparison']) {
+    assert.deepStrictEqual(L.searchKind(q, names), { kind: 'topic', named: [] }, q);
+  }
+  // the same words written like the title are the title
+  assert.strictEqual(L.searchKind('Evaluating Large Language Models survey', names).kind, 'known');
+  assert.strictEqual(L.searchKind('Open-Ended Generation in Practice review', names).kind, 'known');
+  assert.strictEqual(L.searchKind('open-ended Generation in Practice review', names).kind, 'topic');
+  // tokens keep matching in any case
+  assert.strictEqual(L.searchKind('what does divpo do', names).kind, 'known');
+  assert.strictEqual(L.searchKind('the eq-bench scores', names).kind, 'known');
+  // hyphenated: an all-caps part (not on the stop list), an inner capital or a capital with digits keep a token distinctive
+  const tok = L.knownNames({ quickPass: 'EQ-Bench, Self-DivPO, Re3-style, GPT-4o, LLM-judge, Open-Ended, Long-Form, State-of-the-Art', titles: [], question: 'Q' });
+  for (const n of ['eq-bench', 'self-divpo', 're3-style']) assert.ok(tok.includes(n), n);
+  for (const n of ['gpt-4o', 'llm-judge', 'open-ended', 'long-form', 'state-of-the-art']) assert.ok(!tok.includes(n), n);
+});
+
+test('r5 search: a citing search that only names the work is refused without searching; one that asks who cites or follows it is carried out', async () => {
+  const good = ['papers citing StoryAlign', 'who cites the Foo method', 'cited by later work', 'follow-up to Foo', 'followups of Foo', 'work that builds on Foo', 'extending Foo', 'a replication of Foo', 'successor to Foo', 'improving on Foo', 'critique of Foo', 'revisiting Foo', 're-evaluation of Foo', 'citations of Foo'];
+  const bad = ['Foo benchmark', 'StoryAlign reward model', 'the Foo paper', 'felicity of Foo'];
+  const e = env({ reviewers: [], lead: [A(...[...good, ...bad].map((query) => ({ type: 'search', query, kind: 'citing', sub: 1 }))), A({ type: 'show_draft' })] });
+  const o = e.opts(); o.settings.leadSteps = 1;
+  const res = await L.runLead(o);
+  assert.deepStrictEqual(e.searches, good, 'only the asking ones reach the search');
+  assert.strictEqual((e.prompts[1].match(/refused: a citing search asks who cites or follows up the work \(for example "papers citing X" or "follow-up to X"\); this one only names it/g) || []).length, bad.length);
+  assert.strictEqual(res.state.searchLog.length, good.length);
+  assert.ok(res.state.searchLog.every((l) => l.kind === 'citing' && !l.counted));
+});
+
+test('r5 defaults: reader calls 100, 6 at once, topNewPerSub 2 (0 allowed, a negative value falls back); the cost estimate uses 50 reads, 4 top, 40 steps, 5 rounds', () => {
+  assert.deepStrictEqual([L.LEAD_DEFAULTS.readerCalls, L.LEAD_DEFAULTS.maxParallel, L.LEAD_DEFAULTS.topNewPerSub], [100, 6, 2]);
+  assert.deepStrictEqual(L.TYPICAL_USE, { leadSteps: 40, leadIn: 35000, leadOut: 2000, reads: 50, readIn: 35000, readOut: 3000, topReads: 4, topIn: 60000, rounds: 5, reviewIn: 40000, reviewOut: 2000 });
+});
+
+test('r5 defaults: topNewPerSub 0 and -1 through runLead settings (0 keeps the part off, -1 is the default 2)', async () => {
+  const run = async (v) => {
+    const e = env({ reviewers: [], settings: { topicSearchesMin: 0, sourcesPerSubMin: 0, topNewPerSub: v }, lead: [A({ type: 'search', query: 'q', sub: 1 }), A({ type: 'show_draft' })] });
+    const o = e.opts(); o.settings.leadSteps = 1;
+    return (await L.runLead(o)).state.required.length;
+  };
+  assert.strictEqual(await run(0), 0);
+  assert.strictEqual(await run(-1), 2);
+  assert.strictEqual(await run(1), 1);
+});
+
+// -- r5 review round 1 fixes
+const D2 = `${D1}\n\nAnother paragraph about other things [S1].`;
+const narrowRun = async ({ draft, edit, review }) => {
+  const e = env({
+    review: review || ((t, model) => (model === 'rev-a' ? rv('REJECT', WORDING) : rv('ACCEPT'))),
+    lead: [
+      A({ type: 'open', url: URL_A }),
+      A({ type: 'read', parts: ['S1'], brief: 'b' }),
+      A({ type: 'write_draft', markdown: draft }, { type: 'check' }, { type: 'review' }),
+      A({ type: 'edit_draft', replace: edit }, { type: 'check' }, { type: 'review', narrow: true }),
+      A({ type: 'finish', summary: 'done' }),
+      A({ type: 'show_draft' }),
+    ],
+  });
+  const o = e.opts(); o.settings.leadSteps = 5;
+  const res = await L.runLead(o);
+  return { e, res, narrowCalls: e.calls.filter((c) => /^Review R\d+ /.test(c.label) && /YOUR BLOCK FINDINGS/.test(c.task)).length };
+};
+
+test('r5 review F1: a narrow re-check only when the change stays inside the passages of the fixes', async () => {
+  const refusal = /refused: a narrow re-check is not allowed: the draft changed outside the passages of the wording fixes; send a full review/;
+  // a paragraph changed that holds no fix: refused, nothing sent, and the paragraph is named
+  const a = await narrowRun({ draft: D2, edit: [{ old: 'of comparisons', new: 'of the tested comparisons' }, { old: 'other things', new: 'something else' }] });
+  assert.match(a.e.prompts[4], refusal);
+  assert.ok(a.e.prompts[4].includes('Another paragraph about something else [S1].'), 'the added paragraph without a fix is listed');
+  assert.strictEqual(a.narrowCalls, 0);
+  // a paragraph removed without being replaced: refused (more removed than added)
+  const b = await narrowRun({ draft: D2, edit: [{ old: 'of comparisons', new: 'of the tested comparisons' }, { old: '\n\nAnother paragraph about other things [S1].', new: '' }] });
+  assert.match(b.e.prompts[4], refusal);
+  assert.strictEqual(b.narrowCalls, 0);
+  // only the fixed paragraph changed: allowed
+  const c = await narrowRun({ draft: D2, edit: [{ old: 'of comparisons', new: 'of the tested comparisons' }] });
+  assert.match(c.e.prompts[4], /narrow re-check 1 of draft v2/);
+  assert.strictEqual(c.narrowCalls, 1);
+});
+
+test('r5 review F1: a narrow round counts as a review of the current draft only when every one of its slots ACCEPTs', async () => {
+  const review = (t, model) => (/YOUR BLOCK FINDINGS/.test(t) ? (model === 'rev-a' ? rv('ACCEPT') : rv('REJECT', WORDING)) : rv('REJECT', WORDING));
+  const r = await narrowRun({ draft: D1, edit: [{ old: 'of comparisons', new: 'of the tested comparisons' }], review });
+  assert.match(r.e.prompts[4], /narrow re-check 1 of draft v2/);
+  assert.match(r.e.prompts[5], /refused: .*no review round completed on the current draft \(v2\)/, 'one ACCEPT and one REJECT is no review of the draft');
+  const ok = await narrowRun({ draft: D1, edit: [{ old: 'of comparisons', new: 'of the tested comparisons' }], review: (t, model) => (/YOUR BLOCK FINDINGS/.test(t) ? rv('ACCEPT') : rv('REJECT', WORDING)) });
+  assert.strictEqual(ok.res.summary, 'done', 'all slots ACCEPT: finish goes through');
+});
+
+test('r5 review F4: the second discovery round survives a first full round without a readable verdict', async () => {
+  let n = 0;
+  const e = env({
+    reviewers: [{ model: 'rev-a', label: 'Alpha' }], review: () => (++n === 1 ? 'no json at all' : MISS_REVIEW()),
+    lead: [
+      A({ type: 'open', url: URL_A }),
+      A({ type: 'read', parts: ['S1'], brief: 'b' }),
+      A({ type: 'write_draft', markdown: 'A plain claim [S1].' }, { type: 'check' }, { type: 'review' }),
+      A({ type: 'review' }),
+      A({ type: 'show_draft' }),
+    ],
+  });
+  const o = e.opts(); o.settings.leadSteps = 4;
+  const res = await L.runLead(o);
+  assert.ok(e.calls.filter((c) => /^Review R/.test(c.label)).length === 2);
+  assert.ok(e.calls.find((c) => c.label === 'Review R2 Alpha').task.includes('"missing"'), 'the second full round asks for missing works again');
+  assert.strictEqual(res.state.missing.length, 2, 'its missing list is used');
+  assert.strictEqual(res.state.missingDone, true);
+});
+
+test('r5 review F5: a waiver class is a class however it is sent; a duplicate needs the retained item named and read', async () => {
+  const AX2 = 'https://arxiv.org/abs/2501.00002';
+  // the same reason (spaces and case folded) already given to another item: the second one, a paper, is refused
+  const e1 = env({
+    reviewers: [], settings: GATE5,
+    lead: [A({ type: 'waive', items: ['F2'], reason: 'off topic' }, { type: 'waive', items: ['F1'], reason: 'Off   TOPIC' }, { type: 'waive', items: ['F1'], reason: 'this paper is outside the question' }), A({ type: 'show_draft' })],
+  });
+  const o1 = e1.opts(); o1.firstPass = `Quick: ${AX} ${U1}`; o1.settings.leadSteps = 1;
+  const r1 = await L.runLead(o1);
+  assert.match(e1.prompts[1], /refused: a research paper needs a reason of its own: F1\n/);
+  assert.match(e1.prompts[1], /waived F1: this paper is outside the question/, 'a reason of its own is accepted');
+  assert.ok(r1.state.required[1].waived.startsWith('off topic'));
+  // the duplicate exception: the retained item named and read
+  const dup = async (reason, expectOk) => {
+    const e = env({
+      reviewers: [], settings: GATE5, pages: { [U3]: pageOf('Three') },
+      lead: [A({ type: 'open', url: U3 }, { type: 'rank', order: ['F1', 'F2'] }), A({ type: 'read', parts: ['S1'], brief: 'b' }), A({ type: 'waive', items: ['F1', 'F2'], reason }), A({ type: 'show_draft' })],
+    });
+    const o = e.opts(); o.firstPass = `Quick: ${AX} ${AX2}`; o.settings.leadSteps = 3;
+    const res = await L.runLead(o);
+    const waived = res.state.required.every((x) => x.waived);
+    assert.strictEqual(waived, expectOk, `${reason}\n${e.prompts[3].split('\n').filter((l) => /refused|waived|read as|failed/i.test(l)).join('\n')}`);
+    if (!expectOk) assert.match(e.prompts[3], /refused: a research paper needs a reason of its own: F1, F2\n/, reason);
+  };
+  await dup('duplicate of S1', true);
+  await dup('copy of S1', true);
+  await dup('not a duplicate', false);
+  await dup('duplicate of S9', false);
+  await dup('duplicate of F3', false);
+  await dup('they are a duplicate', false);
 });

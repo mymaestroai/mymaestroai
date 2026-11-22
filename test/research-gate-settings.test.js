@@ -54,6 +54,35 @@ test('r4-B2 the runner passes the two gate settings to runLead (defaults, saved 
   assert.strictEqual(z.captured.settings.sourcesPerSubMin, 0);
 });
 
+test('r5-B2 the runner passes topNewPerSub to runLead (default 2, saved value, 0 kept)', async () => {
+  assert.strictEqual((await captureRunLead({})).captured.settings.topNewPerSub, 2);
+  assert.strictEqual((await captureRunLead({ leadTopNewPerSub: 5 })).captured.settings.topNewPerSub, 5);
+  assert.strictEqual((await captureRunLead({ leadTopNewPerSub: 0 })).captured.settings.topNewPerSub, 0);
+  assert.strictEqual((await captureRunLead({ leadTopNewPerSub: 11 })).captured.settings.topNewPerSub, 2, 'out of range falls back to the default');
+});
+
+test('r5-B1 the lead\'s source fetch passes leadPdfMaxMB as maxBytes (default 32 MB, saved value, clamped by the setting range)', async () => {
+  const seen = [];
+  const fetchPage = async (url, opts) => { seen.push(opts); return { markdown: 'text of the paper', truncated: false, via: 'pdf', title: 'T' }; };
+  const run = async (settings) => {
+    seen.length = 0;
+    const { captured } = await captureRunLead(settings, { deps: { fetchPage } });
+    await captured.deps.fetchSources([{ url: 'https://example.org/long-paper.pdf', title: 'Long paper' }]);
+    assert.ok(seen.length >= 1);
+    return seen[0];
+  };
+  const d = await run({});
+  assert.strictEqual(d.maxBytes, 32 * 1048576);
+  assert.ok(d.maxLength > 0, 'the other options of the fetch are kept');
+  assert.strictEqual((await run({ leadPdfMaxMB: 12 })).maxBytes, 12 * 1048576);
+  assert.strictEqual((await run({ leadPdfMaxMB: 200 })).maxBytes, 32 * 1048576, 'out of range falls back to the default');
+});
+
+test('r5-B1 the other fetch callers send no maxBytes (the 4 MB default stays)', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'research.js'), 'utf8');
+  assert.strictEqual((src.match(/maxBytes/g) || []).length, 1, 'only the lead wrapper sets maxBytes');
+});
+
 test('r4-B2 the lead search passes the freshness option to the hub search; without it the call has no freshness', async () => {
   const calls = [];
   const search = async (...a) => { calls.push(a); return [{ title: 'A', url: 'https://example.org/a', snippet: 's' }]; };

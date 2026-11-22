@@ -68,7 +68,7 @@ function make(over = {}) {
     leadModels: async () => (over.models || MODELS),
     leadPlaybook: () => 'PLAYBOOK',
     leadDir: (id) => path.join(root, id),
-    thoroughSettings: () => T.settingsFrom({ leadTopicSearches: 0, leadSourcesPerSub: 0, ...(over.settings || {}) }),   // the discovery gate is off unless a test switches it on
+    thoroughSettings: () => T.settingsFrom({ leadTopicSearches: 0, leadSourcesPerSub: 0, leadTopNewPerSub: 0, ...(over.settings || {}) }),   // the discovery gate is off unless a test switches it on
     writeDocument: async (agent, base, doc) => { written.push({ agent, base, doc }); if (over.writeFails) throw new Error('disk full'); return { md: `/files/research/${base}.md`, html: `/files/research/${base}.html`, pdf: '', pdfError: 'no Chrome' }; },
     onProgress: (r) => { progress.push({ stage: r.stage, label: r.stageLabel, done: r.stageDone, total: r.stageTotal, state: r.state }); },
     ...(over.deps || {}),
@@ -236,10 +236,10 @@ test('no leadModels dep: the run fails with a plain error', async () => {
 test('settingsFrom: lead defaults, bounds, model strings and engine values', () => {
   const d = T.settingsFrom({});
   assert.deepStrictEqual([d.engine, d.leadSteps, d.leadWallMinutes, d.leadReaderCalls, d.leadReviewRounds, d.leadReaderTextMax, d.leadReaderTopTextMax, d.leadModel, d.leadReaderModel, d.leadReaderTopModel],
-    ['lead', 60, 360, 40, 10, 120000, 400000, 'auto', 'auto', 'auto']);
+    ['lead', 60, 360, 100, 10, 120000, 400000, 'auto', 'auto', 'auto']);
   assert.strictEqual(T.settingsFrom({ engine: 'pipeline' }).engine, 'pipeline');
   assert.strictEqual(T.settingsFrom({ engine: 'other' }).engine, 'lead');
-  const bounds = [['leadSteps', 5, 300, 60], ['leadWallMinutes', 10, 1440, 360], ['leadReaderCalls', 1, 400, 40], ['leadReviewRounds', 0, 50, 10], ['leadReaderTextMax', 20000, 2000000, 120000], ['leadReaderTopTextMax', 20000, 2000000, 400000]];
+  const bounds = [['leadSteps', 5, 300, 60], ['leadWallMinutes', 10, 1440, 360], ['leadReaderCalls', 1, 400, 100], ['leadReviewRounds', 0, 50, 10], ['leadReaderTextMax', 20000, 2000000, 120000], ['leadReaderTopTextMax', 20000, 2000000, 400000]];
   for (const [k, lo, hi, dflt] of bounds) {
     assert.strictEqual(T.settingsFrom({ [k]: lo })[k], lo, k);
     assert.strictEqual(T.settingsFrom({ [k]: hi })[k], hi, k);
