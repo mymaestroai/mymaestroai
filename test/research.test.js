@@ -986,7 +986,12 @@ const LEGACY = {
     return { decisive: counts.supported + counts.partly + counts.not_supported, counts, uncheckedIds: [], doubtedIds: ((v && v.results) || []).filter((r) => r.verdict === 'not_supported' || r.verdict === 'partly').map((r) => r.id) };
   },
 };
-const ENGINE = typeof T_REAL.checkReport === 'function' && typeof T_REAL.challengeSummary === 'function' ? {} : LEGACY;
+// claimKey / markUnverified come from the engine (lib/research-thorough); stand-ins until it has them
+const STUBS = {
+  ...(typeof T_REAL.claimKey === 'function' ? {} : { claimKey: (c) => String((c && c.claim) || '').toLowerCase().replace(/\s+/g, ' ').trim() + '|' + String((c && c.source_url) || '') }),
+  ...(typeof T_REAL.markUnverified === 'function' ? {} : { markUnverified: (t) => String(t).replace(/\d+(?:\.\d+)?%?/g, (m) => m + ' [unverified]') }),
+};
+const ENGINE = { ...(typeof T_REAL.checkReport === 'function' && typeof T_REAL.challengeSummary === 'function' ? {} : LEGACY), ...STUBS };
 
 function makeThorough(over = {}) {
   const calls = [];       // every spawn call: { labels, model, tasks }
@@ -1352,15 +1357,18 @@ test('r2 1: checkReport runs on every report, with counts; a revision checks aga
   assert.match(m2.wakes[0].message, /Method A scored 56\.4%/);
 });
 
-test('r2 1: a run cut short (deadline, restart) has its saved report checked too', async () => {
+test('r2 1 / r3 4: a run cut short by a restart is not checked against nothing: figures marked unverified, interruptedBeforeCheck', async () => {
   const { engine, seen } = spyEngine();
   const base = { id: 'dr-cut1', agent: 'a1', stamp: null, question: 'Q?', subQuestions: ['a', 'b'], level: 'thorough', state: 'running', stage: 'check', stageLabel: '', stageDone: 0, stageTotal: 0, startedAt: 1, endedAt: null, error: null, stagesDone: ['quick', 'select', 'fetch', 'read', 'synthesis'], missing: [], findings: ['f'], prose: 'Method A scored 56.4% on the test.', claims: [] };
   const b = makeRunner({ store: { load: () => [{ ...base }], save() {} }, engine: { ...ENGINE, ...engine } });
   b.runner.recover();
   await until(() => b.wakes.length === 1);
-  assert.equal(seen.check.length, 1, 'the prose was never checked: it is now');
-  assert.deepEqual(seen.check[0].claims, []);
+  // r3 4: after a restart there are no source texts: nothing is checked against nothing; the figures are marked unverified
+  assert.equal(seen.check.length, 0, 'no check against an empty source list');
   assert.equal(seen.chat[0].interrupted, true);
+  assert.equal(seen.chat[0].interruptedBeforeCheck, true);
+  assert.match(seen.chat[0].prose, /56\.4[^\n]*unverified/i);
+  assert.doesNotMatch(b.wakes[0].message, /unopened|not opened/i);
   // saved after its check (checked: true): not checked a second time, the doubted ids and review counts survive the restart
   const { engine: e2, seen: s2 } = spyEngine();
   const done = { ...base, id: 'dr-cut2', checked: true, rounds: 1, reviewer: 'X', doubtedIds: ['c1'], review: { label: 'X', rounds: 1, counts: { supported: 1, partly: 1, not_supported: 0, cannot_check: 0 }, uncheckedIds: [], failed: '' }, claims: [{ id: 'c1', claim: 'Method A scored 56.4% on the test', source_url: SRC_A, figures: ['56.4'] }] };
@@ -1470,4 +1478,118 @@ test('r2 10: the runner owns the data-leak rule: a kept agent ignores a helper, 
   const m = makeThorough({ deps: { keptOnBox: () => true, pickHelperModel: async () => 'openrouter/openai/x', pickReaderModel: async () => 'openrouter/openai/y', pickReviewer: async () => ({ model: 'google/z', label: 'g', crossVendor: true }) } });
   await doneRun(m);
   assert.ok(m.calls.every((c) => c.models.every((x) => x === BIG)));
+});
+
+// ── review r3-B: verdicts follow a claim's content, a later failed round, a failing check, restart, leak, local own model ──
+const C2 = { id: 'c2', claim: 'Method A reached 56.4% on the benchmark', source_url: SRC_A, figures: ['56.4'], measured_result: '56.4%', judged_by: 'humans', evidence_strength: 'strong', inference: false };
+const REPORT_C2 = () => REPORT('').replace(/```claims[\s\S]*$/, '') + claimsBlock([C2]);
+const verdictsOf = (id, v) => '```json\n' + JSON.stringify([{ id, verdict: v, reason: 'because' }]) + '\n```';
+const one = (label, text, ok = true) => [{ label, ok, text }];
+const rounds = (n) => ({ thoroughSettings: () => ({ maxSources: 12, readersAtOnce: 2, reviewRounds: n, timeLimitMinutes: 60, pdf: true, readerModel: 'own' }) });
+
+test('r3 1: a doubted claim restated under a new id and wording is not reviewed after one round: unreviewed, never key evidence, never doubted by id', async () => {
+  const { engine, seen } = spyEngine();
+  const m = makeThorough({ deps: { engine: { ...ENGINE, ...engine }, ...rounds(1) }, script: { Reviewer: () => one('Reviewer', verdictsOf('c1', 'not_supported')), Revision: () => one('Revision', REPORT_C2()) } });
+  const run = await doneRun(m);
+  assert.equal(run.rounds, 1);
+  const rep = seen.chat[seen.chat.length - 1];
+  assert.deepEqual(rep.unreviewedIds, ['c2']);
+  assert.deepEqual(rep.doubtedIds, [], 'c1 is gone; c2 is a different claim, not a renumbered c1');
+  assert.deepEqual(run.unreviewedIds, ['c2'], 'persisted');
+  assert.equal(m.calls.filter((c) => c.labels[0] === 'Reviewer').length, 1);
+  // persisted by key only, never by text
+  assert.equal(typeof run.reviewedKeys, 'object');
+  assert.ok(!/Method A/.test(JSON.stringify({ r: run.reviewedKeys, d: run.doubtedKeys })));
+});
+
+test('r3 1: with two rounds the second round reviews the restated claim', async () => {
+  const { engine, seen } = spyEngine();
+  let n = 0;
+  const m = makeThorough({ deps: { engine: { ...ENGINE, ...engine }, ...rounds(2) }, script: {
+    Reviewer: () => { n++; return one('Reviewer', n === 1 ? verdictsOf('c1', 'not_supported') : verdictsOf('c2', 'supported')); },
+    Revision: () => one('Revision', REPORT_C2()),
+  } });
+  const run = await doneRun(m);
+  assert.equal(run.rounds, 2);
+  const reviewerCalls = m.calls.filter((c) => c.labels[0] === 'Reviewer');
+  assert.equal(reviewerCalls.length, 2);
+  assert.match(reviewerCalls[1].tasks[0], /reached 56\.4% on the benchmark/, 'the second round was shown the new claim');
+  const rep = seen.chat[seen.chat.length - 1];
+  assert.deepEqual(rep.unreviewedIds, []);
+  assert.deepEqual(rep.doubtedIds, []);
+});
+
+test('r3 1: a doubted claim that a revise renumbers keeps its doubt (by key, not id)', async () => {
+  const { engine, seen } = spyEngine();
+  const same = { id: 'c7', claim: 'Method A scored 56.4% on the test', source_url: SRC_A, figures: ['56.4'], measured_result: '56.4%', judged_by: 'humans', evidence_strength: 'strong', inference: false };
+  const m = makeThorough({ deps: { engine: { ...ENGINE, ...engine }, ...rounds(1) }, script: { Reviewer: () => one('Reviewer', verdicts('partly')), Revision: () => one('Revision', REPORT('').replace(/```claims[\s\S]*$/, '') + claimsBlock([same])) } });
+  await doneRun(m);
+  const rep = seen.chat[seen.chat.length - 1];
+  assert.deepEqual(rep.doubtedIds, ['c7']);
+  assert.deepEqual(rep.unreviewedIds, []);
+});
+
+test('r3 2: a later round that fails keeps the credited rounds; never "Not challenged"', async () => {
+  let n = 0;
+  const m = makeThorough({ deps: rounds(2), script: { Reviewer: () => { n++; return n === 1 ? one('Reviewer', verdicts('not_supported')) : one('Reviewer', '(no response)', false); } } });
+  const run = await doneRun(m);
+  assert.equal(run.rounds, 1);
+  assert.equal(run.review.lastRoundFailed, true);
+  assert.equal(run.review.counts.not_supported, 1);
+  assert.doesNotMatch(m.wakes[0].message, /Not challenged/);
+  assert.match(m.wakes[0].message, /Challenged by/);
+});
+
+test('r3 3: a checkReport that throws: figures marked unverified, notChecked, missing says so', async () => {
+  const { engine, seen } = spyEngine();
+  const boom = { ...engine, checkReport: () => { throw new Error('boom'); } };
+  const m = makeThorough({ deps: { engine: { ...ENGINE, ...boom }, ...rounds(0) } });
+  const run = await doneRun(m);
+  assert.equal(run.state, 'delivered');
+  assert.ok(run.missing.includes('checking figures (error)'), JSON.stringify(run.missing));
+  const rep = seen.chat[seen.chat.length - 1];
+  assert.equal(rep.notChecked, true);
+  assert.match(rep.prose, /56\.4[^\n]*unverified/i);
+  assert.match(m.wakes[0].message, /Figures not checked/);
+});
+
+test('r3 5: the in-memory source texts never outlive the run: after a deadline during the fetch, and after a normal end', async () => {
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const slow = makeThorough({ fetchPage: async (url) => { await gate; return { markdown: 'text ' + url, truncated: false, via: 'plain', title: 'T' }; }, deps: { thoroughSettings: () => ({ maxSources: 12, readersAtOnce: 2, reviewRounds: 1, timeLimitMinutes: 0.01, pdf: true, readerModel: 'own' }) } });
+  const r = startThorough(slow);
+  await untilMs(() => slow.wakes.length === 1);
+  release();
+  await new Promise((x) => setTimeout(x, 60));
+  assert.equal(slow.runner.hasTexts(r.id), false);
+  const ok = makeThorough();
+  const run = await doneRun(ok);
+  assert.equal(ok.runner.hasTexts(run.id), false);
+});
+
+test('r3 6: the "Not settled by the review" section has its figures marked', async () => {
+  const m = makeThorough({ deps: rounds(1), script: { Reviewer: () => one('Reviewer', verdicts('not_supported')), Revision: () => one('Revision', 'no claims block here') } });
+  await doneRun(m);
+  const md = m.written[0].doc.markdown;
+  assert.match(md, /Not settled by the review/);
+  assert.match(md, /Not settled by the review[\s\S]*56\.4[^\n]*unverified/i);
+});
+
+test('r3 7: an own model on this computer: helpers, readers and the reviewer stay local (only a local pick, else the own model)', async () => {
+  const own = 'lmstudio/qwen-own';
+  const cloud = { ownModelOf: async () => own, pickHelperModel: async () => FAST, pickReaderModel: async () => 'claude-sdk/claude-test-reader', pickReviewer: async () => ({ model: 'openai/test-reviewer', label: 'x', crossVendor: true }) };
+  const a = makeThorough({ deps: { ...cloud, ...rounds(1) } });
+  await doneRun(a);
+  assert.ok(a.calls.length >= 5);
+  assert.ok(a.calls.every((c) => c.models.every((x) => x === own)), JSON.stringify(a.calls.map((c) => c.models)));
+  const local = { ...cloud, pickHelperModel: async () => 'ollama/small', pickReaderModel: async () => 'ollama/reader', pickReviewer: async () => ({ model: 'ollama/rev', label: 'x', crossVendor: false }) };
+  const b = makeThorough({ deps: { ...local, ...rounds(1) } });
+  await doneRun(b);
+  assert.deepEqual([...new Set(b.calls[0].models)], ['ollama/small']);
+  assert.deepEqual([...new Set(b.calls.find((c) => /^Reader/.test(c.labels[0])).models)], ['ollama/reader']);
+  assert.equal(b.calls.find((c) => c.labels[0] === 'Reviewer').model, 'ollama/rev');
+  // chooseHelperModel: only local candidates for a local own model
+  const note = () => 'fast and cheap';
+  assert.equal(research.chooseHelperModel({ ownModel: own, allowed: [FAST, 'ollama/small'], noteOf: note }), 'ollama/small');
+  assert.equal(research.chooseHelperModel({ ownModel: own, allowed: [FAST], noteOf: note }), own);
 });

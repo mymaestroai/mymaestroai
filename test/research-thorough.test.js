@@ -655,7 +655,7 @@ test('r2-4 checkReport: no claims -> everything checkable is unverified, totals 
     const r = T.checkReport({ prose, claims, fetched: F2, counts: { sourcesOpened: 12 } });
     assert.strictEqual(r.notChecked, true);
     assert.strictEqual(r.prose, 'Preferred 56.4% [unverified] of 1,450 [unverified] items in 2024 (Table 6) with 12 sources.');
-    assert.deepStrictEqual(r.totals, { claims: 0, figures: 0, found: 0, notFound: 0, notOpened: 0 });
+    assert.deepStrictEqual(r.totals, { claims: 0, figures: 0, found: 0, notFound: 0, notOpened: 0, proseFigures: 2, proseVerified: 0, proseUnverified: 2 });
     assert.strictEqual(r.marks, 2);
   }
 });
@@ -808,4 +808,137 @@ test('r2-12 briefs: figure-with-URL rule; challengeBrief caps claims and excerpt
   const small = T.challengeBrief('Q?', claims.slice(0, 3), ex.slice(0, 3));
   assert.doesNotMatch(small, /left out/);
   assert.ok((small.match(/e{20,}/g) || []).every((x) => x.length === 1500));
+});
+
+// ================================================================ r3-A: engine fixes (review round 2)
+const R3A = { url: 'https://a.example/a', title: 'Study A paper', ok: true, text: 'Study A enrolled 1,250 participants.' };
+const R3B = { url: 'https://b.example/b', title: 'Study B paper', ok: true, text: 'Study B enrolled 800 participants.' };
+
+test('r3-1 scale: 300k is not a bare 300; magnitudes compare; thousand/million/billion', () => {
+  assert.strictEqual(T.checkFigure('300k', 'Served 300 requests.', []), 'not_found');
+  assert.strictEqual(T.checkFigure('300k', 'Served 300,000 requests.', []), 'found');
+  assert.strictEqual(T.checkFigure('300k', 'Served 300 k requests.', []), 'found');
+  assert.strictEqual(T.checkFigure('300k', 'Served 300 thousand requests.', []), 'found');
+  assert.strictEqual(T.checkFigure('300', 'Served 300k requests.', []), 'not_found');
+  assert.strictEqual(T.checkFigure('4.2B', 'Revenue 4,200,000,000 dollars.', []), 'found');
+  assert.strictEqual(T.checkFigure('4.2B', 'Revenue 4.2 billion dollars.', []), 'found');
+  assert.strictEqual(T.checkFigure('1.5M', 'About 1,500,000 users.', []), 'found');
+  assert.strictEqual(T.checkFigure('1.5M', 'About 1.5 million users.', []), 'found');
+  assert.strictEqual(T.checkFigure('1.2m', 'About 1.2 million users.', []), 'found');
+  assert.strictEqual(T.checkFigure('3x', 'a 3 point gain', []), 'not_found');
+  assert.strictEqual(T.checkFigure('3x', 'a 3x speed-up', ['speed']), 'found');
+  assert.strictEqual(T.checkFigure('5pp', 'a 5 pp rise', ['rise']), 'found');
+  assert.strictEqual(T.checkFigure('5pp', 'a 5% rise', []), 'not_found');
+  // the reviewer's probe, through the whole check
+  const r = T.checkReport({ prose: 'Throughput reached 300k requests (https://a.example/a).', claims: [{ id: 'c1', claim: 'Throughput reached 300k requests', source_url: 'https://a.example/a', figures: ['300k'] }], fetched: [{ url: 'https://a.example/a', title: 'T', ok: true, text: 'We saw 300 requests.' }] });
+  assert.match(r.prose, /300k \[unverified\]/);
+  assert.strictEqual(r.claims[0].check_status, 'unverified');
+  assert.strictEqual(T.numbersIn('Got 300k and 4.2B and 1.5 M').map((t) => t.mag).join(','), '300000,4200000000,1500000');
+});
+
+test('r3-1 units: a figure is value + unit; a counted number needs a source number without %', () => {
+  const claims = [{ id: 'c1', claim: 'Enrollment was 125 participants with 125% growth', source_url: 'https://a.example/a', figures: [] }];
+  const fetched = [{ url: 'https://a.example/a', title: 'T', ok: true, text: 'Enrollment grew by 125% over the year.' }];
+  const r = T.checkReport({ prose: 'x', claims, fetched });
+  assert.strictEqual(r.totals.figures, 2);
+  assert.strictEqual(r.totals.found, 1);
+  assert.strictEqual(r.totals.notFound, 1);
+  assert.strictEqual(r.claims[0].check, '1 of 2 found; not found: 125');
+  const one = (claim, text) => T.checkClaims([{ id: 'c', claim, source_url: 'https://a.example/a', figures: ['56.4'] }], [{ url: 'https://a.example/a', ok: true, text }]).claims[0].status;
+  assert.strictEqual(one('Share', 'agreement 56.4% overall'), 'verified');
+  assert.strictEqual(one('It had 56.4 participants', 'agreement 56.4% overall'), 'unverified');
+  assert.strictEqual(T.checkClaims([{ id: 'c', claim: 'Gain of 12.5 and 12.5 again', source_url: 'https://a.example/a', figures: ['12.5'] }], fetched).totals.figures, 1);
+});
+
+test('r3-2 sentence binding: a figure is tied to the claim cited in its own sentence', () => {
+  const claims = [
+    { id: 'c1', claim: 'Study A enrolled 1,250 participants', source_url: 'https://a.example/a', figures: ['1,250'] },
+    { id: 'c2', claim: 'Study B enrolled participants', source_url: 'https://b.example/b', figures: ['800'] },
+  ];
+  const prose = 'Study A enrolled 1,250 participants (https://a.example/a). Study B enrolled 1,250 participants (https://b.example/b).';
+  const r = T.checkReport({ prose, claims, fetched: [R3A, R3B] });
+  assert.strictEqual(r.prose, 'Study A enrolled 1,250 participants (https://a.example/a). Study B enrolled 1,250 [unverified] participants (https://b.example/b).');
+  assert.strictEqual(r.totals.proseFigures, 2);
+  assert.strictEqual(r.totals.proseVerified, 1);
+  assert.strictEqual(r.totals.proseUnverified, 1);
+});
+
+test('r3-2 sentence binding: an uncited sentence uses the block only when the block cites exactly one source', () => {
+  const one = [{ id: 'c1', claim: 'Study A enrolled participants', source_url: 'https://a.example/a', figures: [] }];
+  const r1 = T.checkReport({ prose: 'Study A is described at https://a.example/a. It enrolled 1,250 participants.', claims: one, fetched: [R3A, R3B] });
+  assert.strictEqual(r1.marks, 0);
+  assert.strictEqual(r1.totals.proseVerified, 1);
+  const r1b = T.checkReport({ prose: 'Study A is described at https://a.example/a. It enrolled 1,300 participants.', claims: one, fetched: [R3A, R3B] });
+  assert.strictEqual(r1b.marks, 1);
+  const two = [...one, { id: 'c2', claim: 'Study B enrolled participants', source_url: 'https://b.example/b', figures: [] }];
+  const r2 = T.checkReport({ prose: 'See https://a.example/a and https://b.example/b. It enrolled 1,250 participants.', claims: two, fetched: [R3A, R3B] });
+  assert.strictEqual(r2.marks, 1);
+  assert.strictEqual(r2.totals.proseUnverified, 1);
+  const r3 = T.checkReport({ prose: 'A had 1,250 participants (https://a.example/a); B had 1,250 participants (https://b.example/b).', claims: two, fetched: [R3A, R3B] });
+  assert.strictEqual(r3.totals.proseVerified, 1);
+  assert.match(r3.prose, /B had 1,250 \[unverified\] participants/);
+});
+
+test('r3-3 chatReport: prose figures not tied to a source', () => {
+  const totals = { claims: 3, figures: 10, found: 7, notFound: 2, notOpened: 1, proseFigures: 5, proseVerified: 2, proseUnverified: 3 };
+  const t = T.chatReport({ prose: '## Verdict\nA.', claims: [], totals, files: {} });
+  assert.match(t, /1 from sources that could not be opened, and 3 figures in the text not tied to a checked source \(marked unverified\)\./);
+  const t1 = T.chatReport({ prose: '## Verdict\nA.', claims: [], totals: { ...totals, proseUnverified: 1 }, files: {} });
+  assert.match(t1, /and 1 figure in the text not tied/);
+  const t0 = T.chatReport({ prose: '## Verdict\nA.', claims: [], totals: { ...totals, proseUnverified: 0 }, files: {} });
+  assert.ok(!/not tied/.test(t0));
+  assert.match(t0, /could not be opened\./);
+});
+
+test('r3-4 claimKey: content fingerprint, not the id', () => {
+  const base = { id: 'c1', claim: 'A is preferred', source_url: 'https://a.example/a', figures: ['56.4', '43.6'] };
+  const k = T.claimKey(base);
+  assert.match(k, /^[0-9a-f]{64}$/);
+  assert.strictEqual(T.claimKey({ ...base, id: 'c9' }), k);
+  assert.strictEqual(T.claimKey({ ...base, claim: '  a is   PREFERRED ' }), k);
+  assert.strictEqual(T.claimKey({ ...base, figures: ['43.6', '56.4'] }), k);
+  assert.strictEqual(T.claimKey({ ...base, source_url: 'https://A.example/a/' }), k);
+  assert.notStrictEqual(T.claimKey({ ...base, claim: 'B is preferred' }), k);
+  assert.notStrictEqual(T.claimKey({ ...base, source_url: 'https://a.example/b' }), k);
+  assert.notStrictEqual(T.claimKey({ ...base, figures: ['56.4', '43.7'] }), k);
+  assert.notStrictEqual(T.claimKey({ ...base, figures: ['56.4'] }), k);
+});
+
+test('r3-5 chatReport: unreviewed claims, failed last round, interrupted before the check', () => {
+  const claims = [
+    { id: 'c1', claim: 'Kept one', source_url: 'https://a.example/1', check_status: 'verified' },
+    { id: 'c4', claim: 'Edited one', source_url: 'https://a.example/4', check_status: 'verified' },
+  ];
+  const review = { label: 'GPT-5', rounds: 1, counts: { supported: 3, partly: 1, not_supported: 0, cannot_check: 0 }, lastRoundFailed: true };
+  const t = T.chatReport({ prose: '## Verdict\nA.', claims, totals: { figures: 1, found: 1 }, review, unreviewedIds: ['c4', 'c6'], files: {} });
+  assert.match(t, /Changed after the last review \(not reviewed\): c4, c6\./);
+  assert.ok(t.includes('Kept one'));
+  assert.ok(!t.includes('Edited one'));
+  assert.match(t, /Challenged by: GPT-5 \(1 round\): 3 supported, 1 partly, 0 not supported, 0 could not be checked; the last round gave no usable verdicts/);
+  const ok = T.chatReport({ prose: '## Verdict\nA.', claims, totals: {}, review: { ...review, lastRoundFailed: false }, files: {} });
+  assert.ok(!/last round/.test(ok));
+  assert.ok(!/Changed after/.test(ok));
+  const i = T.chatReport({ prose: '## Verdict\nA.', claims, totals: { figures: 1, found: 1 }, interruptedBeforeCheck: true, files: {} });
+  assert.match(i, /Figures not checked \(the run stopped before the check\); every figure is marked unverified\./);
+  assert.ok(!/Figures checked:/.test(i));
+});
+
+test('r3-6 fetchOne: for an abs URL the longest of html, pdf and abs wins; abstract-only only when abs is longest', async () => {
+  const abs3 = 'a'.repeat(3000);
+  const fp = async (u) => ({ markdown: u.includes('/html/') ? 'h'.repeat(15000) : u.includes('/pdf/') ? '' : abs3, truncated: false });
+  const [a] = await T.fetchSourceTexts([{ url: 'https://arxiv.org/abs/2401.01234' }], { fetchPage: fp });
+  assert.strictEqual(a.chars, 15000);
+  assert.strictEqual(a.partial, false);
+  assert.strictEqual(a.finalUrl, 'https://arxiv.org/html/2401.01234');
+  const fp2 = async (u) => ({ markdown: u.includes('/html/') ? 'short html'.repeat(10) : u.includes('/pdf/') ? '' : abs3, truncated: false });
+  const [b] = await T.fetchSourceTexts([{ url: 'https://arxiv.org/abs/2401.01234' }], { fetchPage: fp2 });
+  assert.strictEqual(b.chars, 3000);
+  assert.strictEqual(b.partial, true);
+  assert.strictEqual(b.partialReason, 'abstract page only');
+});
+
+test('r3-7 markUnverified: marks every checkable figure, leaves years', () => {
+  assert.strictEqual(T.markUnverified('Added 56.4% and 300k users in 2024.'), 'Added 56.4% [unverified] and 300k [unverified] users in 2024.');
+  assert.strictEqual(T.markUnverified('No figures here.'), 'No figures here.');
+  assert.strictEqual(T.markUnverified(T.markUnverified('Got 9.5.')), 'Got 9.5 [unverified].');
 });
