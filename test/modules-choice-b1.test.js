@@ -142,23 +142,25 @@ test('installer check, Linux: the command line, no QR', async () => {
   assert.strictEqual(r.ok, true); assert.strictEqual(r.once, true); assert.strictEqual(r.qr, undefined, 'a command is not scanned');
   assert.deepStrictEqual(r.lines, [
     'On the Linux computer, open a terminal and run this command within 15 minutes. It asks for your password once.',
-    `Command: curl -fsSL '${URL_}' | sudo sh`,
-    'It installs the remote-control agent as a service and connects it. On a computer without systemd it runs in that terminal until you close it.',
+    // review r1: the script is saved first and run only when the download worked (a spent link must not give sh empty input)
+    `Command: f=$(mktemp) && curl -fsSL '${URL_}' -o "$f" && sudo sh "$f"; rm -f "$f"`,
+    'It sets up the remote-control agent: as a service where the computer uses systemd, otherwise in that terminal until you close it. If you are already root, or the computer has no sudo, leave out the word sudo.',
+    'If the download fails, nothing is installed: make a new link.',
     'If the link runs out, make a new one.',
   ]);
 });
 
-test('installer check, Mac: the download, the Terminal command, the Screen Recording note, and a QR', async () => {
+test('installer check, Mac: one Terminal command that downloads this link\'s zip into a fresh folder and installs only that, the Screen Recording note, no QR', async () => {
   asked.length = 0;
   const r = await rcMod.checks.installer(ctxFor('mac', JSON.stringify({ url: URL_, os: 'mac', file: 'MyMaestro-RemoteAgent-Mac.zip' })));
   assert.deepStrictEqual(asked, [['installer_link', { os: 'mac' }]]);
-  assert.strictEqual(r.ok, true); assert.strictEqual(r.once, true); assert.strictEqual(r.qr, URL_);
-  assert.ok(r.lines[0].includes(URL_) && /^On the Mac, open the link in a browser within 15 minutes/.test(r.lines[0]));
-  assert.strictEqual(r.lines[1], 'It downloads MyMaestro-RemoteAgent-Mac.zip.');
-  assert.strictEqual(r.lines[2], 'Then open Terminal and run:');
-  assert.strictEqual(r.lines[3], 'Command: cd ~/Downloads && unzip -o MyMaestro-RemoteAgent-Mac.zip -d MyMaestroAgent && xattr -dr com.apple.quarantine MyMaestroAgent && sudo installer -pkg MyMaestroAgent/MeshAgent.pkg -target /');
-  assert.match(r.lines[4], /Screen Recording: switch on meshagent\. New on a Mac: not yet proven on a real Mac\.$/);
-  assert.strictEqual(r.lines[5], 'If the link runs out, make a new one.');
+  assert.strictEqual(r.ok, true); assert.strictEqual(r.once, true); assert.strictEqual(r.qr, undefined, 'a command is not scanned');
+  assert.strictEqual(r.lines[0], 'On the Mac, open Terminal and run this command within 15 minutes. It asks for your password once.');
+  // review r1: never a fixed name in Downloads (an older download there could be installed instead)
+  assert.strictEqual(r.lines[1], `Command: d=$(mktemp -d) && curl -fsSL '${URL_}' -o "$d/agent.zip" && unzip -q "$d/agent.zip" -d "$d" && sudo installer -pkg "$d/MeshAgent.pkg" -target /; rm -rf "$d"`);
+  assert.ok(!r.lines.join('\n').includes('Downloads'));
+  assert.match(r.lines[3], /Screen Recording: switch on meshagent\. New on a Mac: not yet proven on a real Mac\.$/);
+  assert.strictEqual(r.lines[4], 'If the link runs out, make a new one.');
 });
 
 test('installer check: an older connector that answers the Windows link for Linux or Mac is refused', async () => {

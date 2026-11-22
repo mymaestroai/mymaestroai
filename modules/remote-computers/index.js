@@ -196,8 +196,9 @@ module.exports = {
             summary: 'The install command is ready. It works once.',
             lines: [
               'On the Linux computer, open a terminal and run this command within 15 minutes. It asks for your password once.',
-              `Command: curl -fsSL '${a.url}' | sudo sh`,
-              'It installs the remote-control agent as a service and connects it. On a computer without systemd it runs in that terminal until you close it.',
+              `Command: f=$(mktemp) && curl -fsSL '${a.url}' -o "$f" && sudo sh "$f"; rm -f "$f"`,
+              'It sets up the remote-control agent: as a service where the computer uses systemd, otherwise in that terminal until you close it. If you are already root, or the computer has no sudo, leave out the word sudo.',
+              'If the download fails, nothing is installed: make a new link.',
               last,
             ],
           };
@@ -206,13 +207,11 @@ module.exports = {
           return {
             ok: true,
             once: true,
-            qr: a.url,
-            summary: 'The Mac link is ready. It works once.',
+            summary: 'The Mac install command is ready. It works once.',
             lines: [
-              `On the Mac, open the link in a browser within 15 minutes (the whole address, including the part after the ? mark): ${a.url}`,
-              'It downloads MyMaestro-RemoteAgent-Mac.zip.',
-              'Then open Terminal and run:',
-              'Command: cd ~/Downloads && unzip -o MyMaestro-RemoteAgent-Mac.zip -d MyMaestroAgent && xattr -dr com.apple.quarantine MyMaestroAgent && sudo installer -pkg MyMaestroAgent/MeshAgent.pkg -target /',
+              'On the Mac, open Terminal and run this command within 15 minutes. It asks for your password once.',
+              `Command: d=$(mktemp -d) && curl -fsSL '${a.url}' -o "$d/agent.zip" && unzip -q "$d/agent.zip" -d "$d" && sudo installer -pkg "$d/MeshAgent.pkg" -target /; rm -rf "$d"`,
+              'It downloads the remote-control agent for this link only and installs it. If the download fails, nothing is installed: make a new link.',
               'For agents to see the screen: System Settings, Privacy & Security, Screen Recording: switch on meshagent. New on a Mac: not yet proven on a real Mac.',
               last,
             ],

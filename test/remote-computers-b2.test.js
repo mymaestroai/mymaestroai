@@ -311,3 +311,12 @@ test('the group settings MeshCentral really sends pass the check: a leading empt
   assert.ok(buildLinuxScript({ host: 'hub.example.ts.net', agentToken: 'abcd2345', mshText: raw }).includes('translation={'));
   assert.throws(() => checkMsh(Buffer.from(`A=1\n${'x='.padEnd(70000, 'y')}\n`)), /expected form/, 'over 64 KB is still refused');
 });
+
+// Review r1 of items 3-5: after a service install the script removes its temporary folder (the agent and the group settings),
+// and the agent never reads the script's input.
+test('the Linux script: the service install gets no input and the temporary folder is removed after it; the console branch keeps its folder', () => {
+  const s = buildLinuxScript({ host: 'hub.example.ts.net', agentToken: 'abcd2345', mshText: 'MeshName=x\nMeshType=2\n' });
+  assert.match(s, /\.\/meshagent -fullinstall --copy-msh=1 <\/dev\/null\n  cd \/ && rm -rf "\$DIR"\n/);
+  const consoleBranch = s.slice(s.indexOf('else'));
+  assert.ok(!/rm -rf/.test(consoleBranch), 'the agent runs from that folder until the terminal closes');
+});

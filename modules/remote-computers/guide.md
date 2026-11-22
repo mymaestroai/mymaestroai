@@ -30,11 +30,11 @@ On a Mac, and on Linux without systemd, the server runs under your Maestro's own
 
 ## Add a computer
 
-On the computer you want to control, sign in to Tailscale with the same account. Choose its kind and press Make the link. The link works once and for 15 minutes. A QR code shows the same link for a phone.
+On the computer you want to control, sign in to Tailscale with the same account. Choose its kind and press Make the link. The link works once and for 15 minutes. A Windows link also comes as a QR code.
 
 - **Windows.** Open the link. It downloads `MyMaestro-RemoteAgent.exe`. Run it and choose Install. Windows Defender or SmartScreen may warn, because this is a remote-access tool. Choose "More info", then "Run anyway", on that computer only. For screen pictures, use an account that signs in by itself and never locks or sleeps.
 - **Linux.** Run the one command the page shows in a terminal on that computer. With systemd it installs a service. Without systemd it runs in that terminal until you close it. Screen pictures need someone signed in to an X11 desktop. New: a test Linux computer joined, but the tools there are not yet proven.
-- **Mac.** Open the link to download a zip, then run the Terminal command the page shows. In System Settings, Privacy & Security, Screen Recording, switch on meshagent. New: not yet proven on a real Mac.
+- **Mac.** Run the one Terminal command the page shows. It downloads the agent for that link only and installs it. In System Settings, Privacy & Security, Screen Recording, switch on meshagent. New: not yet proven on a real Mac.
 
 Mouse and keyboard control works on Windows only. Do not sign in to My Maestro on the computer you add.
 
