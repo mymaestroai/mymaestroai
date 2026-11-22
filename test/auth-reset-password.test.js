@@ -486,12 +486,15 @@ test('r2 root: as root a chown that fails, or that does not take (fstat shows an
   assert.throws(() => A.keepFileOwner(5, { ...o, getuid: () => 0, fchown: () => {}, stat, fstat: () => ({ uid: 0, gid: 0 }) }), /owner could not be kept/);
   assert.throws(() => A.keepFileOwner(5, { ...o, getuid: () => 0, fchown: () => {}, stat, fstat: () => ({ uid: 1001, gid: 0 }) }), /owner could not be kept/);
   assert.deepStrictEqual(A.keepFileOwner(5, { ...o, getuid: () => 0, fchown: () => {}, stat, fstat: () => ({ uid: 1001, gid: 1002 }) }), { uid: 1001, gid: 1002 });
+  // a temp file that already has the right owner needs no chown (filesystems that refuse chown keep working)
+  assert.deepStrictEqual(A.keepFileOwner(5, { ...o, getuid: () => 0, fchown: () => { throw new Error('EPERM'); }, stat, fstat: () => ({ uid: 1001, gid: 1002 }) }), { uid: 1001, gid: 1002 });
   assert.strictEqual(A.keepFileOwner(5, { ...o, getuid: () => 1000, fchown: () => { throw new Error('EPERM'); }, stat }), null, 'not root: never chowns');
   const dir = fs.mkdtempSync(path.join(TMP, 'd-'));
   const user = A.createAuth({ dataDir: dir, log: () => {} });
   assert.ok(user.createUser({ login: 'one@example.com' }).ok);
   const before = fs.readFileSync(path.join(dir, 'users.json'), 'utf8');
-  const root = A.createAuth({ dataDir: dir, log: () => {}, getuid: () => 0, fchown: () => { throw new Error('EPERM'); } });
+  // as root the temp file starts root-owned (this test runs as an ordinary user, so fstat says so)
+  const root = A.createAuth({ dataDir: dir, log: () => {}, getuid: () => 0, fchown: () => { throw new Error('EPERM'); }, fstat: () => ({ uid: 0, gid: 0 }) });
   assert.throws(() => root.createUser({ login: 'two@example.com' }), /owner could not be kept/);
   assert.strictEqual(fs.readFileSync(path.join(dir, 'users.json'), 'utf8'), before, 'nothing was saved');
   assert.deepStrictEqual(fs.readdirSync(dir).filter(f => /\.tmp$/.test(f)), [], 'no temp file left');
@@ -500,12 +503,15 @@ test('r2 root: as root a chown that fails, or that does not take (fstat shows an
 test('r1 root: a change made as root chowns the temp file before the rename (injected getuid / fchown); not as root it never does', () => {
   const dir = fs.mkdtempSync(path.join(TMP, 'd-'));
   const calls = [];
-  const root = A.createAuth({ dataDir: dir, log: () => {}, getuid: () => 0, fchown: (fd, uid, gid) => calls.push({ fd, uid, gid, tmpExists: fs.readdirSync(dir).some(f => /^\.users\..*\.tmp$/.test(f)), usersJson: fs.existsSync(path.join(dir, 'users.json')) }) });
+  // as root the temp file starts root-owned and takes the owner fchown gives it (faked: this test runs as an ordinary user)
+  let owner = { uid: 0, gid: 0 };
+  const root = A.createAuth({ dataDir: dir, log: () => {}, getuid: () => 0, fstat: () => owner, fchown: (fd, uid, gid) => { owner = { uid, gid }; calls.push({ fd, uid, gid, tmpExists: fs.readdirSync(dir).some(f => /^\.users\..*\.tmp$/.test(f)), usersJson: fs.existsSync(path.join(dir, 'users.json')) }); } });
   const dirOwner = fs.statSync(dir);
   assert.ok(root.createUser({ login: 'one@example.com' }).ok);
   assert.strictEqual(calls.length, 1);
   assert.deepStrictEqual([calls[0].uid, calls[0].gid, calls[0].tmpExists, calls[0].usersJson], [dirOwner.uid, dirOwner.gid, true, false], 'no users.json yet: the data folder\'s owner');
   const fileOwner = fs.statSync(path.join(dir, 'users.json'));
+  owner = { uid: 0, gid: 0 };
   assert.ok(root.createUser({ login: 'two@example.com' }).ok);
   assert.deepStrictEqual([calls[1].uid, calls[1].gid, calls[1].usersJson], [fileOwner.uid, fileOwner.gid, true], 'the existing file\'s owner');
   const plain = [];
@@ -758,11 +764,18 @@ test('r2 sessions: rows made before this change (cred NULL, also in an auth.db w
   const hub = A.createAuth({ dataDir: dir, now: () => T0, log: () => {} });
   const row = hub.getSession('old-token');
   assert.ok(row, 'the old session works');
-  assert.strictEqual(row.cred, null);
+  assert.strictEqual(row.cred, credOfHash(hub.getUser(u.id).passwordHash), 'a row from before is bound to the password its account has now');
   const cols = dbRows(dir, 'PRAGMA table_info(sessions)').map(c => c.name);
   assert.ok(cols.includes('cred'), 'the column was added');
   assert.ok(hub.setPassword(u.id, NEW, { by: u.id }).ok);
-  assert.ok(hub.getSession('old-token'), 'cred NULL rows are left alone, as before');
+  assert.ok(hub.getSession('old-token'), 'changing your own password keeps your session from before the upgrade');
+  // a reset cut short before its revoke (the new hash written, no revoke): the session from before the upgrade ends by itself
+  const usersFile = path.join(dir, 'users.json');
+  const data = JSON.parse(fs.readFileSync(usersFile, 'utf8'));
+  data.users.find(x => x.id === u.id).passwordHash = A.hashPassword('a third password, set from the terminal');
+  fs.writeFileSync(usersFile, JSON.stringify(data, null, 2));
+  assert.strictEqual(hub.getSession('old-token'), null, 'the old session no longer works');
+  assert.strictEqual(dbRows(dir, 'SELECT id FROM sessions WHERE user_id = ?', [u.id]).length, 0, 'and its row is gone');
   // a new person: the session made after the hash was written carries the new digest
   const n = hub.createUser({ login: 'new@example.com', password: OLD }).user;
   const s = hub.createSession(hub.getUser(n.id));
@@ -785,4 +798,20 @@ test('r2 lock: a stale lock that cannot be removed (EPERM) throws at once with t
   const realUnlink = fs.unlinkSync;
   const ok = mkA((p) => { realUnlink(p); const e = new Error('gone'); e.code = 'ENOENT'; throw e; }).setPrefs(u.id, { theme: 'dark' });
   assert.ok(ok.ok);
+});
+
+test('r3 sessions: a users.json that cannot be read refuses the request but never deletes the session; once readable it works again', { skip: process.getuid && process.getuid() === 0 ? 'root reads any file' : false }, () => {
+  const dir = fs.mkdtempSync(path.join(TMP, 'd-'));
+  const first = A.createAuth({ dataDir: dir, now: () => T0, log: () => {} });
+  const u = first.createUser({ login: 'person@example.com', password: OLD }).user;
+  const s = first.createSession(first.getUser(u.id));
+  const file = path.join(dir, 'users.json');
+  fs.chmodSync(file, 0o000);
+  try {
+    const fresh = A.createAuth({ dataDir: dir, now: () => T0, log: () => {} });   // its first read fails: it holds no accounts
+    assert.strictEqual(fresh.getSession(s.token), null, 'the request is refused');
+    assert.strictEqual(dbRows(dir, 'SELECT id FROM sessions WHERE id = ?', s.id).length, 1, 'the session row is kept');
+  } finally { fs.chmodSync(file, 0o600); }
+  const later = A.createAuth({ dataDir: dir, now: () => T0, log: () => {} });
+  assert.ok(later.getSession(s.token), 'readable again: the session works');
 });
