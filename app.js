@@ -23039,7 +23039,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         return;
       }
       if (u.pathname.startsWith('/api/')) return;
-      dest = u.pathname + u.search + u.hash;
+      dest = u.href;   // the whole URL that passed the check (a path starting with // would read as another host)
       e.preventDefault(); e.stopImmediatePropagation();
       // nothing to lose: the page opens in the sheet at once, in place of this one (Back then closes the sheet)
       if (!dialogGuard.layers().some((l) => dialogGuard.isDirty(l.el))) { location.replace(dest); return; }

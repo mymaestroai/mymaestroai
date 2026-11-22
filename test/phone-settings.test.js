@@ -129,9 +129,13 @@ test('review r1/r2: a link or button that opens another page asks first when any
   const before = h.calls.length;
   let e = ev(link('/modules')); guard(e);
   assert.strictEqual(e.prevented, true);
-  assert.deepStrictEqual(h.env.location.replaced, ['/modules'], 'nothing to lose: the page opens in the sheet in place of this one (Back closes the sheet)');
+  assert.deepStrictEqual(h.env.location.replaced, ['https://hub.example/modules'], 'nothing to lose: the page opens in the sheet in place of this one (Back closes the sheet)');
   e = ev(button("location.href='/modules'")); guard(e);
-  assert.deepStrictEqual(h.env.location.replaced, ['/modules', '/modules']);
+  assert.deepStrictEqual(h.env.location.replaced, ['https://hub.example/modules', 'https://hub.example/modules']);
+  // review r5: a same-origin path that starts with // stays on this origin (the whole checked URL is used)
+  e = ev(link('https://hub.example//evil.example/x')); guard(e);
+  assert.strictEqual(h.env.location.replaced[2], 'https://hub.example//evil.example/x');
+  assert.ok(h.env.location.replaced[2].startsWith('https://hub.example/'));
   h.env.location.replaced.length = 0;
   h.layers[0].el.dirty = true;
   h.env.nextClose = 'confirm';
@@ -161,7 +165,7 @@ test('review r1/r2: a link or button that opens another page asks first when any
   e = ev(link('/modules')); guard(e);                       // asks again, the destination kept
   guard(ev({ tagName: 'BUTTON', getAttribute: () => null }, true));   // the Discard button's own click keeps it
   h.setOverlay(null); h.env.observe();
-  assert.deepStrictEqual(h.env.location.replaced, ['/modules']);
+  assert.deepStrictEqual(h.env.location.replaced, ['https://hub.example/modules']);
   assert.deepStrictEqual(h.posted, [], 'no "closed": the sheet shows that page');
   assert.match(SO, /closest\('a\[href\], \[onclick\^="location\.href="\]'\)/);
 });
