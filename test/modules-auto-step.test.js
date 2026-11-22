@@ -694,3 +694,20 @@ test('an invalid answer is refused by the plan, before anything is downloaded or
     assert.strictEqual(r.ev.stops, 0);
   } finally { r.cleanup(); }
 });
+
+// Bundle 2 review r3: the person's own answer is checked against the settings as they were at the press.
+test('an address the person picked is not written over a different address saved under Advanced during the download: the clash is told, the newer save stays, no restart', async () => {
+  const r = rig(); try {
+    const ips = ['100.101.102.103', '100.101.102.104'];
+    r.holder.facts = { ...r.holder.facts, tailscale: { ...r.holder.facts.tailscale, ips } };
+    r.auto.prepare = (ctx) => ({ settings: ctx.choices.listen_ip ? { listen_ip: ctx.choices.listen_ip } : {}, lines: [], choose: null, stop: null });
+    r.holder.duringInstall = async () => { r.mods.saveSettings('auto-demo', { listen_ip: ips[1] }); };
+    const stopsAtSave = () => r.ev.stops;
+    let stopsAfterAdvanced = null;
+    const orig = r.holder.duringInstall;
+    r.holder.duringInstall = async () => { await orig(); stopsAfterAdvanced = stopsAtSave(); };
+    await assert.rejects(r.mods.runStep('auto-demo', 'setup', { choices: { listen_ip: ips[0] } }), /was changed while the setup ran/);
+    assert.strictEqual(r.state().settings.listen_ip, ips[1], 'the newer save stays');
+    assert.strictEqual(r.ev.stops, stopsAfterAdvanced, 'the setup itself restarted nothing');
+  } finally { r.cleanup(); }
+});
