@@ -1593,3 +1593,60 @@ test('r3 7: an own model on this computer: helpers, readers and the reviewer sta
   assert.equal(research.chooseHelperModel({ ownModel: own, allowed: [FAST, 'ollama/small'], noteOf: note }), 'ollama/small');
   assert.equal(research.chooseHelperModel({ ownModel: own, allowed: [FAST], noteOf: note }), own);
 });
+
+// ── review r4: unreviewed by key after an interrupted run, a failed check says so, the reviewer label follows the model used ──
+test('r4 4: round 1 credited, a revise rewrites c2, round 2 cut by the deadline: the partial report lists c2 as changed after the last review, not key evidence', async () => {
+  const m = makeThorough({
+    deps: { thoroughSettings: () => ({ maxSources: 12, readersAtOnce: 2, reviewRounds: 2, timeLimitMinutes: 0.02, pdf: true, readerModel: 'own' }) },
+    script: { Reviewer: (w, n, signal) => (n === 1 ? one('Reviewer', verdictsOf('c1', 'not_supported')) : hang()(w, n, signal)), Revision: () => one('Revision', REPORT_C2()) },
+  });
+  const r = startThorough(m);
+  await untilMs(() => m.runner.get(r.id).state === 'delivered');
+  const run = m.runner.get(r.id);
+  assert.equal(run.rounds, 1);
+  assert.ok(Array.isArray(run.sentKeys) && run.sentKeys.length === 1, 'the keys a reviewer saw are saved');
+  const report = m.wakes[0].message.split('Report:\n')[1];
+  assert.match(report.split('\n')[0], /^Not finished:/);
+  assert.match(report, /Changed after the last review \(not reviewed\): c2\./);
+  assert.doesNotMatch(report, /Key evidence\n- Method A reached/);
+  assert.deepEqual(run.unreviewedIds, ['c2'], 'saved right after the revise');
+});
+
+test('r4 4: a saved run with sentKeys: unreviewed comes from keys, so a renumbered reviewed claim stays reviewed', async () => {
+  const T2 = require(path.join(ISO.inst, 'lib', 'research-thorough.js'));
+  const seen = { ...C2, id: 'c9' };
+  const rewritten = { ...C2, id: 'c3', measured_result: 'decreased' };
+  const base = { agent: 'a1', stamp: null, question: 'Q?', subQuestions: SUBS, level: 'thorough', state: 'running', startedAt: 1, endedAt: null, error: null, stage: 'challenge', missing: [], stagesDone: ['quick', 'select', 'fetch', 'read', 'synthesis', 'check'], id: 'dr-00000009', prose: '## Verdict\nA.', claims: [seen, rewritten], checked: true, checkTotals: { claims: 2, figures: 2, found: 2, notFound: 0, notOpened: 0 }, notChecked: false, rounds: 1, reviewer: 'x', review: { label: 'x', rounds: 1, counts: { supported: 1, partly: 0, not_supported: 0, cannot_check: 0 } }, unreviewedIds: [], sentKeys: [T2.claimKey(C2)] };
+  let saved = [JSON.parse(JSON.stringify(base))];
+  const store = { load: () => saved, save: (x) => { saved = JSON.parse(JSON.stringify(x)); } };
+  const m = makeRunner({ store, maxRunning: 10, engine: ENGINE });
+  m.runner.recover();
+  await until(() => m.wakes.length === 1);
+  assert.match(m.wakes[0].message, /Changed after the last review \(not reviewed\): c3\./);
+  assert.doesNotMatch(m.wakes[0].message, /not reviewed\): [^\n]*c9/);
+});
+
+test('r4 8: a figure check that throws: chatReport gets checkError and the figures line says the check failed', async () => {
+  const { engine, seen } = spyEngine();
+  const boom = { ...engine, checkReport: () => { throw new Error('boom'); } };
+  const m = makeThorough({ deps: { engine: { ...ENGINE, ...boom }, ...rounds(0) } });
+  const run = await doneRun(m);
+  const rep = seen.chat[seen.chat.length - 1];
+  assert.equal(rep.checkError, true);
+  assert.equal(run.checkError, true, 'saved');
+  assert.match(m.wakes[0].message, /Figures not checked \(the check failed\); every figure is marked unverified\./);
+  assert.doesNotMatch(m.wakes[0].message, /no list of claims/);
+});
+
+test('r4 9: when a local own model replaces the reviewer pick, the label and crossVendor follow the model actually used', async () => {
+  const own = 'lmstudio/qwen-own';
+  const { engine, seen } = spyEngine();
+  const cloud = { ownModelOf: async () => own, pickHelperModel: async () => FAST, pickReaderModel: async () => 'claude-sdk/claude-test-reader', pickReviewer: async () => ({ model: 'openai/test-reviewer', label: 'a model from another vendor (OpenAI)', crossVendor: true }) };
+  const m = makeThorough({ deps: { engine: { ...ENGINE, ...engine }, ...cloud, ...rounds(1) } });
+  await doneRun(m);
+  assert.equal(m.calls.find((c) => c.labels[0] === 'Reviewer').model, own);
+  assert.match(m.wakes[0].message, /Challenged by: a model on this computer \(its content stays here\) \(1 round\)/);
+  assert.doesNotMatch(m.wakes[0].message, /another vendor/);
+  const rep = seen.chat[seen.chat.length - 1];
+  assert.equal(rep.reviewer, 'a model on this computer (its content stays here)');
+});

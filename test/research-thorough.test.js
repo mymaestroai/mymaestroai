@@ -66,7 +66,8 @@ test('numbersIn: never part of a longer number', () => {
 
 // ---------------------------------------------------------------- checkFigure
 test('checkFigure: found, not found, exact digits', () => {
-  assert.strictEqual(T.checkFigure('56.4', SOURCE, []), 'found');
+  // r4: units match exactly; SOURCE prints 56.4% so a bare 56.4 is not found (it used to be)
+  assert.strictEqual(T.checkFigure('56.4', SOURCE, []), 'not_found');
   assert.strictEqual(T.checkFigure('56.4%', SOURCE, []), 'found');
   assert.strictEqual(T.checkFigure('1450', SOURCE, []), 'found');
   // -3.2 has 2 significant digits, so it is now a common number (r2 fix 6) and needs a keyword nearby
@@ -103,7 +104,7 @@ test('keywordsFrom: 5+ letter words, longest first, top 8', () => {
 // ---------------------------------------------------------------- checkClaims
 test('checkClaims: all statuses, totals, arXiv variants', () => {
   const claims = [
-    { id: 'c1', claim: 'The new method is preferred over the baseline', source_url: 'https://arxiv.org/pdf/2401.01234', figures: ['56.4', '43.6'] },
+    { id: 'c1', claim: 'The new method is preferred over the baseline', source_url: 'https://arxiv.org/pdf/2401.01234', figures: ['56.4%', '43.6%'] },
     { id: 'c2', claim: 'Retrieval precision and recall are reported', source_url: 'https://arxiv.org/abs/2401.01234v2', figures: ['0.884', '0.55'] },
     { id: 'c3', claim: 'Invented numbers appear here', source_url: 'https://arxiv.org/html/2401.01234', figures: ['77.7', '88.8'] },
     { id: 'c4', claim: 'Other source claim', source_url: 'https://example.org/other', figures: ['12.5', '9.9'] },
@@ -184,7 +185,7 @@ test('applyCheck: annotates claims and measured_result', () => {
   ];
   const res = T.checkClaims(claims, FETCHED);
   const out = T.applyCheck(claims, res);
-  assert.strictEqual(out[0].check, '1 of 2 found; not found: 43.7');
+  assert.strictEqual(out[0].check, '1 of 2 found; not found: 43.7%'); // r4: the bare 43.7 takes the % the claim text shows
   assert.strictEqual(out[0].measured_result, '56.4% against 43.7% [unverified]');
   assert.strictEqual(out[1].check, '3 of 3 figures found');
   assert.strictEqual(out[2].check, 'source not opened');
@@ -590,7 +591,7 @@ test('end to end: parseClaims -> checkClaims -> applyCheck -> markProse', () => 
   assert.match(marked.prose, /43\.7% \[unverified\]/);
   assert.doesNotMatch(marked.prose, /56\.4% \[unverified\]/);
   const ann = T.applyCheck(p.claims, res);
-  assert.strictEqual(ann[0].check, '2 of 3 found; not found: 43.7');
+  assert.strictEqual(ann[0].check, '2 of 3 found; not found: 43.7%');
 });
 
 // ================================================================ r2 review fixes
@@ -604,7 +605,10 @@ const F2 = [
 test('r2-1 figure units: 125% is not "125 participants"; 56.4 matches 56.4%', () => {
   assert.strictEqual(T.checkFigure('125%', 'We enrolled 125 participants.', ['participants']), 'not_found');
   assert.strictEqual(T.checkFigure('125', 'We enrolled 125 participants.', ['participants']), 'found');
-  assert.strictEqual(T.checkFigure('56.4', 'agreement 56.4% overall', []), 'found');
+  // r4: a bare 56.4 no longer matches 56.4% (it used to); exact units both ways
+  assert.strictEqual(T.checkFigure('56.4', 'agreement 56.4% overall', []), 'not_found');
+  assert.strictEqual(T.checkFigure('56.4%', 'agreement 56.4% overall', []), 'found');
+  assert.strictEqual(T.checkFigure('56.4', '| Method | 56.4 |', []), 'found');
   assert.strictEqual(T.checkFigure('56.4%', 'agreement 56.4 % overall', []), 'found');
   assert.strictEqual(T.checkFigure('56.4%', 'agreement 56.4 percent overall', []), 'found');
   assert.strictEqual(T.checkFigure('56.4 percent', 'agreement 56.4 per cent overall', []), 'found');
@@ -845,7 +849,7 @@ test('r3-1 units: a figure is value + unit; a counted number needs a source numb
   assert.strictEqual(r.totals.notFound, 1);
   assert.strictEqual(r.claims[0].check, '1 of 2 found; not found: 125');
   const one = (claim, text) => T.checkClaims([{ id: 'c', claim, source_url: 'https://a.example/a', figures: ['56.4'] }], [{ url: 'https://a.example/a', ok: true, text }]).claims[0].status;
-  assert.strictEqual(one('Share', 'agreement 56.4% overall'), 'verified');
+  assert.strictEqual(one('Share was 56.4%', 'agreement 56.4% overall'), 'verified');
   assert.strictEqual(one('It had 56.4 participants', 'agreement 56.4% overall'), 'unverified');
   assert.strictEqual(T.checkClaims([{ id: 'c', claim: 'Gain of 12.5 and 12.5 again', source_url: 'https://a.example/a', figures: ['12.5'] }], fetched).totals.figures, 1);
 });
@@ -941,4 +945,105 @@ test('r3-7 markUnverified: marks every checkable figure, leaves years', () => {
   assert.strictEqual(T.markUnverified('Added 56.4% and 300k users in 2024.'), 'Added 56.4% [unverified] and 300k [unverified] users in 2024.');
   assert.strictEqual(T.markUnverified('No figures here.'), 'No figures here.');
   assert.strictEqual(T.markUnverified(T.markUnverified('Got 9.5.')), 'Got 9.5 [unverified].');
+});
+
+// ================================================================ r4: review round 3 fixes
+const R4A = { url: 'https://a.example/a', title: 'Study A paper', ok: true, text: 'Study A enrolled 1,250 participants.' };
+const R4B = { url: 'https://b.example/b', title: 'Study B paper', ok: true, text: 'Study B enrolled 800 participants.' };
+const R4CLAIMS = [
+  { id: 'c1', claim: 'Study A enrolled participants', source_url: 'https://a.example/a', figures: [] },
+  { id: 'c2', claim: 'Study B enrolled participants', source_url: 'https://b.example/b', figures: [] },
+];
+
+test('r4-1 clause binding: a figure goes with the citation in its own clause', () => {
+  const prose = 'Study A enrolled 1,250 participants (https://a.example/a), while study B enrolled 1,250 participants (https://b.example/b).';
+  const r = T.checkReport({ prose, claims: R4CLAIMS, fetched: [R4A, R4B] });
+  assert.strictEqual(r.prose, 'Study A enrolled 1,250 participants (https://a.example/a), while study B enrolled 1,250 [unverified] participants (https://b.example/b).');
+  assert.strictEqual(r.totals.proseUnverified, 1);
+  // a clause with no citation of its own, or with two, is unverified too
+  const none = T.checkReport({ prose: 'Study A (https://a.example/a) enrolled 1,250 participants, and study B (https://b.example/b) enrolled 800 participants versus 1,250 participants.', claims: R4CLAIMS, fetched: [R4A, R4B] });
+  assert.match(none.prose, /versus 1,250 \[unverified\] participants/);
+  assert.match(none.prose, /enrolled 800 participants,? ?/);
+  const two = T.checkReport({ prose: 'Both (https://a.example/a and https://b.example/b) enrolled 1,250 participants.', claims: R4CLAIMS, fetched: [R4A, R4B] });
+  assert.match(two.prose, /1,250 \[unverified\]/);
+  // one source in the sentence keeps today's rule
+  const one = T.checkReport({ prose: 'Study A enrolled 1,250 participants, while others enrolled more (https://a.example/a).', claims: R4CLAIMS, fetched: [R4A, R4B] });
+  assert.ok(!/unverified/.test(one.prose));
+});
+
+test('r4-2 units match exactly, both ways', () => {
+  const r = T.checkClaims([{ id: 'c', claim: '125 eligible participants', source_url: 'https://a.example/a', figures: [] }], [{ url: 'https://a.example/a', ok: true, text: 'Enrollment rose by 125% last year.' }]);
+  assert.strictEqual(r.claims[0].status, 'unverified');
+  assert.strictEqual(T.checkFigure('125', 'Enrollment rose by 125% last year.', ['eligible', 'participants']), 'not_found');
+  assert.strictEqual(T.checkFigure('56.4', 'agreement 56.4% overall', []), 'not_found');
+  assert.strictEqual(T.checkFigure('56.4%', 'agreement 56.4% overall', []), 'found');
+  assert.strictEqual(T.checkFigure('56.4', '| model | 56.4 |', []), 'found');
+  assert.strictEqual(T.checkFigure('56.4%', '| model | 56.4 |', []), 'not_found');
+  assert.strictEqual(T.checkFigure('2x', 'a 2 ratio', []), 'not_found');
+  assert.strictEqual(T.checkFigure('2x', 'a 2x speedup', ['speedup']), 'found');
+  assert.strictEqual(T.checkFigure('2', 'a 2x speedup', []), 'not_found');
+  assert.strictEqual(T.checkFigure('3pp', 'points up 3 pp', ['points']), 'found');
+  assert.strictEqual(T.checkFigure('3pp', 'up 3%', []), 'not_found');
+  assert.match(T.synthesisBrief('Q?', 'f', 'n', []), /write each figure with its unit exactly as the source prints it \(56\.4% if the source prints 56\.4%; 56\.4 if it prints 56\.4 in a table\)/);
+});
+
+test('r4-3 claimKey covers measured_result, judged_by, inference, evidence_strength; not check marks or ids', () => {
+  const base = { id: 'c1', claim: 'A is preferred', source_url: 'https://a.example/a', figures: ['56.4'], measured_result: 'increased', judged_by: 'humans', inference: false, evidence_strength: 'strong' };
+  const k = T.claimKey(base);
+  assert.notStrictEqual(T.claimKey({ ...base, measured_result: 'decreased' }), k);
+  assert.notStrictEqual(T.claimKey({ ...base, judged_by: 'model' }), k);
+  assert.notStrictEqual(T.claimKey({ ...base, inference: true }), k);
+  assert.notStrictEqual(T.claimKey({ ...base, evidence_strength: 'weak' }), k);
+  assert.strictEqual(T.claimKey({ ...base, id: 'c7' }), k, 'renumbering does not change it');
+  const withNum = { ...base, measured_result: '56.4% against 43.7%' };
+  assert.strictEqual(T.claimKey({ ...withNum, measured_result: '56.4% against 43.7% [unverified]', check: 'x', check_status: 'partly' }), T.claimKey(withNum), 'check marks are not content');
+});
+
+test('r4-5 parseFigure / numbersIn: prefixes, case-insensitive scale words, ×, bare figure merges with x and pp', () => {
+  for (const f of ['$1.5 Million', '€1.5 million', '£1.5M', '~1.5 BILLION'.replace('BILLION', 'million'), '≈ 1.5M', 'about 1.5 MILLION']) {
+    assert.deepStrictEqual(T.parseFigure(f), { value: '1500000', unit: '', pct: false }, f);
+  }
+  assert.strictEqual(T.parseFigure('about 56.4%').value, '56.4');
+  assert.strictEqual(T.parseFigure('about 56.4%').unit, 'pct');
+  assert.strictEqual(T.parseFigure('~300k').value, '300000');
+  assert.strictEqual(T.checkFigure('$300k', 'cost 300,000 dollars', []), 'found');
+  assert.strictEqual(T.numbersIn('worth 2 BILLION dollars')[0].mag, '2000000000');
+  assert.strictEqual(T.numbersIn('worth 2 Billion dollars')[0].mag, '2000000000');
+  const x = T.numbersIn('a 3× gain')[0];
+  assert.strictEqual(x.unit, 'x');
+  assert.strictEqual(T.checkFigure('3x', 'a 3× gain', ['gain']), 'found');
+  const merge = (c, texts) => T.checkClaims([c], [{ url: 'https://a.example/a', ok: true, text: texts }]).claims[0];
+  const mx = merge({ id: 'c', claim: 'A 3x faster run', source_url: 'https://a.example/a', figures: ['3'] }, 'it was 3x faster run');
+  assert.strictEqual(mx.figures.length, 1);
+  assert.strictEqual(mx.status, 'verified');
+  const mp = merge({ id: 'c', claim: 'Gained 4.5 pp over base', source_url: 'https://a.example/a', figures: ['4.5'] }, 'the method gained 4.5 pp over base');
+  assert.strictEqual(mp.figures.length, 1);
+  assert.strictEqual(mp.status, 'verified');
+});
+
+test('r4-6 challengeExcerpts finds a 300k / 1.5M figure by magnitude and unit', () => {
+  const text = 'x'.repeat(2000) + ' The service handled 300,000 requests and 1,500,000 users in total. ' + 'y'.repeat(2000);
+  const ex = T.challengeExcerpts([{ id: 'c1', claim: 'Load', source_url: 'https://a.example/a', figures: ['300k', '1.5M'] }], [{ url: 'https://a.example/a', ok: true, text }]);
+  assert.ok(ex[0].excerpts.some((e) => e.includes('300,000 requests')), JSON.stringify(ex[0].excerpts).slice(0, 200));
+  assert.ok(!ex[0].excerpts.includes('no matching passage found in the source'));
+});
+
+test('r4-7 sentence splitting: not after et al., e.g., Fig., ...; a table row is its own sentence', () => {
+  const abbrevs = ['Smith et al.', 'e.g.', 'i.e.', 'vs.', 'Fig.', 'Figs.', 'Eq.', 'No.', 'Inc.', 'Ltd.', 'Dr.', 'approx.', 'cf.'];
+  for (const a of abbrevs) {
+    const prose = `Study A (https://a.example/a) ${a} 7 enrolled 1,250 participants. Study B (https://b.example/b) enrolled 800 participants.`;
+    const r = T.checkReport({ prose, claims: R4CLAIMS, fetched: [R4A, R4B] });
+    assert.ok(!/1,250 \[unverified\]/.test(r.prose), a + ' -> ' + r.prose);
+  }
+  const rows = '| Study | n |\n| --- | --- |\n| Study B (https://b.example/b) | 1,250 |\nStudy A (https://a.example/a) enrolled 1,250 participants.';
+  const t = T.checkReport({ prose: rows, claims: R4CLAIMS, fetched: [R4A, R4B] });
+  assert.match(t.prose, /\| 1,250 \[unverified\] \|/);
+  assert.match(t.prose, /enrolled 1,250 participants\./);
+  assert.ok(!/participants\. \[unverified\]|1,250 \[unverified\] participants/.test(t.prose));
+});
+
+test('r4-8 chatReport: a failed figure check says so', () => {
+  const t = T.chatReport({ prose: '## Verdict\nA.', claims: [{ id: 'c1', claim: 'A' }], notChecked: true, checkError: true, files: {} });
+  assert.match(t, /Figures not checked \(the check failed\); every figure is marked unverified\./);
+  assert.doesNotMatch(t, /no list of claims/);
 });
