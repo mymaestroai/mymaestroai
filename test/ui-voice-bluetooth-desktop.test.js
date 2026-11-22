@@ -34,7 +34,7 @@ function el(id, extra = {}) {
   const e = Object.assign({
     id, style: {}, dataset: {}, value: '', textContent: '', innerHTML: '', hidden: false, disabled: false, isConnected: true, checked: false,
     classList: { toggle(c, on) { if (on) cls.add(c); else cls.delete(c); }, contains: (c) => cls.has(c) },
-    setAttribute(k, v) { attrs[k] = v; }, attrs, listeners: {},
+    setAttribute(k, v) { attrs[k] = v; }, removeAttribute(k) { delete attrs[k]; }, attrs, listeners: {},
     addEventListener(t, f) { e.listeners[t] = f; }, remove() { e.removed = true; e.isConnected = false; },
   }, extra);
   return e;

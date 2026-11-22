@@ -1404,6 +1404,8 @@
     /* Voice call: the red hang-up mic button and the call bar above the message box */
     .input-area .mic-btn.call { background: var(--call-bg); border-color: var(--mic-rec); color: var(--on-color-text); }
     .input-area .mic-btn.call:hover { background: var(--call-bg-hover); }
+    /* a Tap to talk call, idle: the press button (data-press) is the ready ink, not the plain mic surface; listening keeps the green above */
+    .input-area .mic-btn[data-press]:not(.listening), .input-area .mic-btn[data-press]:not(.listening):hover { background: var(--voice-ready); border-color: var(--voice-ready); color: var(--on-voice-ready); }
     .voice-callbar { margin: 0 12px 6px; padding: 8px 12px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; font-size: 0.85rem; color: var(--text); display: flex; flex-direction: column; gap: 6px; }
     .voice-callbar .vcb-top, .voice-callbar .vcb-sliders { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
     .voice-callbar .vcb-state { font-weight: 600; min-width: 5.5em; color: var(--accent); }
@@ -3116,8 +3118,9 @@
     html.mm-simple .input-area .mic-btn.simple-call { width: 44px; height: 44px; background: var(--brand-violet); color: var(--on-color-text); }
     html.mm-simple .input-area .mic-btn.simple-call:hover { background: var(--simple-accent-hover); }
     html.mm-simple .input-area .mic-btn.simple-call.call { background: var(--simple-call-live-bg); box-shadow: 0 0 0 3px var(--simple-call-live-shadow); }
-    /* a Tap to talk call, idle: the press button (voicePressButton names it "Talk" and sets aria-pressed) is the ready ink, not the accent (listening keeps the green above) */
-    html.mm-simple .input-area .mic-btn.simple-call[aria-label="Talk"][aria-pressed="false"], html.mm-simple .input-area .mic-btn.simple-call[aria-label="Talk"][aria-pressed="false"]:hover { background: var(--voice-ready); color: var(--on-voice-ready); }
+    /* a Tap to talk call: the press button carries data-press (set by the page while it is one). Idle it is the ready ink, not the accent; listening is the green. Three classes + an attribute (+ :not / :hover) beat the plain .simple-call and .listening rules above */
+    html.mm-simple .input-area .mic-btn.simple-call[data-press]:not(.listening), html.mm-simple .input-area .mic-btn.simple-call[data-press]:not(.listening):hover { background: var(--voice-ready); border-color: var(--voice-ready); color: var(--on-voice-ready); }
+    html.mm-simple .input-area .mic-btn.simple-call[data-press].listening, html.mm-simple .input-area .mic-btn.simple-call[data-press].listening:hover { background: var(--voice-listening); color: var(--on-voice-listening); }
     html.mm-simple .input-area [id^="send-"] { background: var(--brand-violet); color: var(--on-color-text); border-radius: 20px; padding: 0 18px; height: 40px; font-size: 14px; font-weight: 600; }
     html.mm-simple .input-area [id^="send-"]:hover { background: var(--simple-accent-hover); }
     html.mm-simple .input-area .image-preview-area { background: none; }

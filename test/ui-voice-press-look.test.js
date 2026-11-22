@@ -224,9 +224,90 @@ test('ready 6: every ready pair has 7:1 text contrast, 3:1 against its page, and
   assert.ok(pairs >= 10, 'pairs checked: ' + pairs);
 });
 
-test('ready 7: the desktop Simple call button is the ready look only while a Tap to talk call is idle', () => {
-  const idx = read('index.html');
-  const line = idx.split('\n').find(l => l.includes('.mic-btn.simple-call[aria-label="Talk"][aria-pressed="false"]'));
-  assert.ok(line && /background: var\(--voice-ready\); color: var\(--on-voice-ready\)/.test(line));
-  assert.ok(!/--accent|--brand-violet|--error/.test(line));
+// ── ready 7: the press button is marked data-press (not by its label), on the desktop (Simple and Advanced) and the phone ──
+const vm = require('vm');
+const fnSrc = (src, name) => {
+  const i = src.search(new RegExp('(async )?function ' + name + '\\('));
+  assert.ok(i >= 0, name);
+  let depth = 0, j = src.indexOf('{', i);
+  for (; j < src.length; j++) { if (src[j] === '{') depth++; else if (src[j] === '}') { depth--; if (!depth) break; } }
+  return src.slice(i, j + 1);
+};
+function fakeBtn() {
+  const cls = new Set(), attrs = {};
+  return {
+    classList: { toggle: (c, v) => { if (v === undefined ? !cls.has(c) : v) cls.add(c); else cls.delete(c); }, add: (...c) => c.forEach(x => cls.add(x)), remove: (...c) => c.forEach(x => cls.delete(x)), contains: (c) => cls.has(c) },
+    setAttribute: (k, v) => { attrs[k] = String(v); }, removeAttribute: (k) => { delete attrs[k]; }, hasAttribute: (k) => k in attrs, getAttribute: (k) => (k in attrs ? attrs[k] : null),
+    style: {}, innerHTML: '', title: '', disabled: false, attrs, cls,
+  };
+}
+for (const simple of [true, false]) {
+  test(`ready 7 desktop (${simple ? 'Simple' : 'Advanced'}): a Tap to talk call marks the mic button data-press and keeps its Talk name; a hang-up paint takes the mark off`, () => {
+    const b = fakeBtn();
+    const ctx = {
+      voiceById: () => b, VOICE_MIC_SVG: '<svg id="mic"></svg>', VOICE_HANGUP_SVG: '<svg id="hang"></svg>', VOICE_LEVELS_SVG: '<svg id="levels"></svg>',
+      voiceCallS: { press: true }, simpleOn: () => simple,
+      voiceCallPressAttach: (el) => { el.setAttribute('aria-label', 'Talk'); el.title = 'Talk'; el.setAttribute('aria-pressed', 'false'); },   // what voicePressButton does
+      voiceCallPressDetach() {}, voiceMicIdleLabel: () => 'Tap to talk', voiceMicIdleTitle: () => 'Tap to talk: a voice call you press to speak in',
+    };
+    vm.createContext(ctx);
+    vm.runInContext(fnSrc(read('app.js'), 'simpleCallLook') + '\n' + fnSrc(read('app.js'), 'voiceCallPaintBtn') + '\nthis.paint = voiceCallPaintBtn;', ctx);
+    ctx.paint('c1', true);
+    assert.ok(b.hasAttribute('data-press'), 'the press button is marked');
+    assert.strictEqual(b.getAttribute('aria-label'), 'Talk', 'it keeps the press button name');
+    assert.strictEqual(b.innerHTML, '<svg id="mic"></svg>', 'and the microphone icon');
+    assert.strictEqual(b.cls.has('simple-call'), simple, 'simple-call only in Simple');
+    ctx.voiceCallS.press = false;
+    ctx.paint('c1', false);
+    assert.ok(!b.hasAttribute('data-press'), 'hung up: the mark is gone');
+    assert.notStrictEqual(b.getAttribute('aria-label'), 'Talk');
+    ctx.voiceCallS.press = true; ctx.paint('c1', true); ctx.voiceCallS.press = false; ctx.paint('c1', true);
+    assert.ok(!b.hasAttribute('data-press'), 'a hands-free call: no mark');
+    assert.strictEqual(b.getAttribute('aria-label'), 'Hang up');
+  });
+}
+test('ready 7 phone: #mic-btn is marked data-press while a Tap to talk call is up and loses it on every other path', () => {
+  const mob = read('mobile.js');
+  const b = fakeBtn(); b.innerHTML = '<svg></svg>'; b.querySelector = (q) => (q === 'svg' ? {} : null);
+  const ctx = {
+    voiceStripPaint() {}, $: (id) => (id === 'mic-btn' ? b : { hidden: false, style: {} }), voiceCall: { press: true }, VOICE_MIC_SVG: '<svg></svg>', VOICE_HANGUP_SVG: '<svg class="hang"></svg>',
+    voiceCallPressAttach() {}, voiceRec: { state: 'idle', t0: 0 }, voicePrefsNow: () => ({ mode: 'press' }), voiceBarPaint() {}, Date,
+  };
+  vm.createContext(ctx);
+  vm.runInContext(fnSrc(mob, 'voiceMicPaint') + '\nthis.paint = voiceMicPaint;', ctx);
+  ctx.paint();
+  assert.ok(b.hasAttribute('data-press'), 'a Tap to talk call: marked');
+  ctx.voiceCall = { press: false }; ctx.paint();
+  assert.ok(!b.hasAttribute('data-press'), 'a hands-free call: not marked');
+  ctx.voiceCall = { press: true }; ctx.paint(); assert.ok(b.hasAttribute('data-press'));
+  ctx.voiceCall = null; ctx.paint();
+  assert.ok(!b.hasAttribute('data-press'), 'hang-up (no call): the mark is gone');
+  assert.ok(/voiceCallPressDetach\(vc\);[^\n]*\n\s*voiceCallPanel\(false\);\n\s*voiceMicPaint\(\);/.test(mob), 'the teardown ends with the repaint that removes it');
+});
+test('ready 7 css: the data-press ready and listening rules exist, use the right ink and beat the plain Simple rules', () => {
+  const idx = read('index.html'), mhtml = read('mobile.html');
+  const rules = []; const re = /^\s*([^\n{}\/][^{\n]*)\{([^}\n]*)\}/gm; let m;
+  while ((m = re.exec(idx))) rules.push({ at: m.index, sel: m[1].trim(), body: m[2] });
+  const spec = (sel) => { const c = sel.replace(/:not\(([^)]*)\)/g, ' $1 '); return (c.match(/\.[\w-]+|\[[^\]]*\]|:[\w-]+/g) || []).length; };   // classes + attributes + pseudo-classes
+  const one = (sel) => { const r = rules.find(x => x.sel.split(',').map(t => t.trim()).includes(sel)); assert.ok(r, 'rule for ' + sel); return r; };
+  const S = 'html.mm-simple .input-area .mic-btn.simple-call';
+  const plain = rules.filter(r => r.sel.split(',').some(t => t.trim().startsWith(S) && !t.includes('[data-press]')));
+  const lastPlain = Math.max(...plain.map(r => r.at));
+  const idle = one(S + '[data-press]:not(.listening)'), idleH = one(S + '[data-press]:not(.listening):hover');
+  const lis = one(S + '[data-press].listening'), lisH = one(S + '[data-press].listening:hover');
+  assert.ok(/background: var\(--voice-ready\)/.test(idle.body) && /color: var\(--on-voice-ready\)/.test(idle.body));
+  assert.ok(/background: var\(--voice-listening\)/.test(lis.body) && /color: var\(--on-voice-listening\)/.test(lis.body));
+  for (const r of [idle, lis]) assert.ok(r.at > lastPlain, 'after the last plain simple-call rule');
+  const plainMax = Math.max(...plain.flatMap(r => r.sel.split(',').map(t => t.trim()).filter(t => t.startsWith(S) && !t.includes('[data-press]')).map(spec)), spec('html.mm-simple .input-area .mic-btn.listening:hover'));
+  for (const sel of [S + '[data-press]:not(.listening)', S + '[data-press].listening']) assert.ok(spec(sel) > spec(S + '.call'), sel);
+  assert.ok(spec(S + '[data-press].listening') > spec('html.mm-simple .input-area .mic-btn.listening:hover') - 1 && spec(S + '[data-press]:not(.listening):hover') > spec(S + ':hover'), 'hover too');
+  assert.ok(spec(S + '[data-press]:not(.listening)') > spec(S) && spec(S + '[data-press].listening') > spec(S) && plainMax >= 0);
+  assert.ok(!idx.includes('[aria-label="Talk"][aria-pressed="false"]'), 'the label-keyed rule is gone');
+  for (const sel of ['.input-area .mic-btn[data-press]:not(.listening)', '.input-area .mic-btn[data-press]:not(.listening):hover']) {
+    const r = one(sel); assert.ok(/background: var\(--voice-ready\); border-color: var\(--voice-ready\); color: var\(--on-voice-ready\)/.test(r.body), 'Advanced ' + sel);
+  }
+  assert.ok(idle.body.includes('border-color: var(--voice-ready)') && idleH.body === idle.body);
+  const ph = mhtml.split('\n').find(l => l.includes('#mic-btn[data-press]:not(.listening)'));
+  assert.ok(ph && /background: var\(--voice-ready\); color: var\(--on-voice-ready\); border-color: var\(--voice-ready\)/.test(ph), 'phone');
+  assert.ok(mhtml.indexOf('#mic-btn[data-press]:not(.listening)') > mhtml.indexOf('#mic-btn.listening {'), 'after the phone listening rule');
 });

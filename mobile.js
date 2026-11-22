@@ -9570,10 +9570,12 @@ function voiceBarPaint(pct) { const i = document.querySelector('#voice-level i')
 function voiceMicPaint() {
   if (typeof voiceStripPaint === 'function') voiceStripPaint();   // the mode chip and the settings button follow the mic
   const b = $('mic-btn'); if (!b) return;
+  b.removeAttribute('data-press');   // not a press button on any path but the next one (hands-free call, hang-up, idle)
   if (voiceCall && voiceCall.press) {   // a Tap to talk call: the button stays a mic and is the press button (Hang up is the call panel's and the display's)
     b.classList.remove('call', 'busy');
     if (!b.querySelector('svg') || b.querySelector('svg.hang')) b.innerHTML = VOICE_MIC_SVG;
     voiceCallPressAttach(voiceCall, b, { cls: 'listening' });
+    b.setAttribute('data-press', '');   // the press button's marker: the ready ink keys on it
     const barP = $('voice-level'); if (barP) barP.hidden = true;
     return;
   }

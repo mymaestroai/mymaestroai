@@ -19070,12 +19070,14 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const b = voiceById(`mic-${chatId}`);
       if (!b) return;
       b.disabled = false;
+      if (!(on && voiceCallS.press)) b.removeAttribute('data-press');   // not a press button (hang-up, idle, hands-free): the ready ink goes
       if (on && voiceCallS.press) {   // a Tap to talk call: the mic button stays a mic and is the press button (Hang up is the call bar's and the display's)
         b.classList.toggle('call', false);
         if (!/<svg/.test(b.innerHTML || '')) b.innerHTML = VOICE_MIC_SVG;
         b.style.touchAction = 'none';   // a press that moves a little is not a scroll or a pan: the browser must not cancel it
         voiceCallPressAttach(b, { cls: 'listening' });
-        if (typeof simpleCallLook === 'function') simpleCallLook(b, false);
+        b.setAttribute('data-press', '');   // the page's marker for the press button (the ready and listening inks key on it, not on the label)
+        if (typeof simpleCallLook === 'function') simpleCallLook(b, true);   // Simple: only the simple-call class; the press button keeps its Talk name and microphone
         return;
       }
       b.style.touchAction = '';

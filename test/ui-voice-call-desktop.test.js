@@ -100,7 +100,7 @@ function el(extra = {}) {
   const e = Object.assign({
     style: {}, dataset: {}, value: '', textContent: '', innerHTML: '', disabled: false, isConnected: true,
     classList: { toggle(c, on) { if (on) cls.add(c); else cls.delete(c); }, contains: (c) => cls.has(c) },
-    setAttribute(k, v) { attrs[k] = v; }, attrs, title: '',
+    setAttribute(k, v) { attrs[k] = v; }, removeAttribute(k) { delete attrs[k]; }, attrs, title: '',
     remove() { e.removed = true; e.isConnected = false; delete e.registry[e.id]; },
   }, extra);
   return e;
