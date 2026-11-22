@@ -824,8 +824,10 @@ test('r3-1 scale: 300k is not a bare 300; magnitudes compare; thousand/million/b
   assert.strictEqual(T.checkFigure('300k', 'Served 300 k requests.', []), 'found');
   assert.strictEqual(T.checkFigure('300k', 'Served 300 thousand requests.', []), 'found');
   assert.strictEqual(T.checkFigure('300', 'Served 300k requests.', []), 'not_found');
-  assert.strictEqual(T.checkFigure('4.2B', 'Revenue 4,200,000,000 dollars.', []), 'found');
-  assert.strictEqual(T.checkFigure('4.2B', 'Revenue 4.2 billion dollars.', []), 'found');
+  // r7: "dollars" alone is its own currency word (never "$" and never a bare number), so a bare 4.2B is not backed by it
+  assert.strictEqual(T.checkFigure('4.2B', 'Revenue 4,200,000,000 dollars.', []), 'not_found');
+  assert.strictEqual(T.checkFigure('4.2B', 'Revenue 4.2 billion dollars.', []), 'not_found');
+  assert.strictEqual(T.checkFigure('4.2B dollars', 'Revenue 4.2 billion dollars.', []), 'found');
   assert.strictEqual(T.checkFigure('1.5M', 'About 1,500,000 users.', []), 'found');
   assert.strictEqual(T.checkFigure('1.5M', 'About 1.5 million users.', []), 'found');
   assert.strictEqual(T.checkFigure('1.2m', 'About 1.2 million users.', []), 'found');
@@ -1011,7 +1013,7 @@ test('r4-5 parseFigure / numbersIn: prefixes, case-insensitive scale words, ×, 
   assert.strictEqual(T.parseFigure('about 56.4%').unit, 'pct');
   assert.strictEqual(T.parseFigure('~300k').value, '300000');
   assert.strictEqual(T.checkFigure('$300k', 'cost $300,000 in all', []), 'found');
-  assert.strictEqual(T.checkFigure('300k', 'cost 300,000 dollars', []), 'found');
+  assert.strictEqual(T.checkFigure('300k', 'cost 300,000 dollars', []), 'not_found'); // r7: "dollars" is a unit of its own
   assert.strictEqual(T.numbersIn('worth 2 BILLION dollars')[0].mag, '2000000000');
   assert.strictEqual(T.numbersIn('worth 2 Billion dollars')[0].mag, '2000000000');
   const x = T.numbersIn('a 3× gain')[0];
@@ -1174,7 +1176,7 @@ test('r6-3 letter-prefixed dollar signs and more currency codes', () => {
   assert.strictEqual(cf('$5,000', 'paid 5,000 Canadian dollars today'), 'not_found');
   assert.strictEqual(T.numbersIn('5 euros')[0].unit, 'EUR');
   assert.strictEqual(T.numbersIn('5 US dollars')[0].unit, 'USD');
-  assert.strictEqual(T.numbersIn('5 Canadian dollars')[0].unit, '');
+  assert.strictEqual(T.numbersIn('5 Canadian dollars')[0].unit, 'X$:CANADIAN'); // r7: its own unit, not a bare number
   assert.strictEqual(T.numbersIn('about 1,250 cad and 1,250 chf').map((t) => t.unit).join('|'), '|');
   // a long run of letters before "$" is cut by the lookup window: never read as US dollars
   assert.notStrictEqual(T.numbersIn('xxxxxAUS$5,000').map((t) => t.unit).join(), 'USD');
@@ -1237,4 +1239,162 @@ test('r5-5 units: percentage points, -fold, times; No. only when capitalised', (
   const cap = T.checkReport({ prose: `It enrolled 1,250 participants (${A}) was it No. 5 and more were seen (https://b.example/b).`, claims, fetched, counts: {} });
   // (the 5 itself is a figure too, so check that the 1,250 is the one tainted by B)
   assert.match(cap.prose, /1,250 \[unverified\]/);
+});
+
+// ---------------------------------------------------------------- r7
+const cf7 = (fig, src, kws) => T.checkFigure(fig, src, kws || []);
+
+test('r7-1 a currency symbol together with a currency code', () => {
+  assert.strictEqual(cf7('$1,250 CAD', 'paid $1,250 USD'), 'not_found');
+  assert.strictEqual(cf7('$1,250 CAD', 'paid US$1,250'), 'not_found');
+  assert.strictEqual(cf7('$1,250 CAD', 'paid 1,250 CAD'), 'found');
+  assert.strictEqual(cf7('CAD $1,250', 'paid $1,250 CAD'), 'found');
+  assert.strictEqual(cf7('AUD $5 billion', 'raised $5 billion'), 'not_found');
+  assert.strictEqual(cf7('$5 billion AUD', 'raised AUD $5 billion'), 'found');
+  assert.strictEqual(cf7('USD $5,000', 'paid $5,000'), 'found');
+  assert.strictEqual(cf7('€5,000 USD', 'paid €5,000'), 'not_found');
+  assert.strictEqual(cf7('€5,000 EUR', 'paid €5,000'), 'found');
+  assert.strictEqual(cf7('€5,000 USD', 'paid €5,000 USD'), 'found'); // the identical unknown form
+  const unit = (t) => T.numbersIn(t)[0].unit;
+  assert.strictEqual(unit('$1,250 CAD'), 'CAD');
+  assert.strictEqual(unit('CAD $1,250'), 'CAD');
+  assert.strictEqual(unit('CAD$1,250'), 'CAD');
+  assert.strictEqual(unit('USD $5'), 'USD');
+  assert.strictEqual(unit('$5 billion AUD'), 'AUD');
+  assert.strictEqual(T.numbersIn('$5 billion AUD')[0].mag, '5000000000');
+  assert.strictEqual(unit('€5,000 USD'), 'X?:€ USD');
+  assert.strictEqual(unit('US$5 CAD'), 'X?:US$ CAD');
+});
+
+test('r7-2 number forms: leading-dot decimals, exponents, powers', () => {
+  assert.strictEqual(cf7('.125', 'a value of 125'), 'not_found');
+  assert.strictEqual(cf7('.125', 'a value of 0.125'), 'found');
+  assert.strictEqual(cf7('-.5', 'a change of -0.5', ['change']), 'found');
+  assert.strictEqual(cf7('0.125', 'a value of 0.125e-3'), 'not_found');
+  assert.strictEqual(cf7('0.125e-3', 'a value of 0.000125'), 'found');
+  assert.strictEqual(cf7('1.5E6', 'about 1,500,000 users'), 'found');
+  assert.strictEqual(cf7('2e+3', 'about 2,000 users'), 'found');
+  // a common value (one significant digit) still needs a keyword near it, however it was written
+  assert.strictEqual(cf7('1e−4', 'a rate of 0.0001', ['rate']), 'found');
+  assert.strictEqual(cf7('1e−4', 'a rate of 0.0001'), 'common_not_near');
+  assert.strictEqual(cf7('1e0', 'chapter 1 of the book'), 'common_not_near');
+  assert.strictEqual(cf7('1.25 × 10^-3', 'a value of 0.00125'), 'found');
+  assert.strictEqual(cf7('1.25 × 10⁻³', 'a value of 0.00125'), 'found');
+  assert.strictEqual(cf7('1.25x10^-3', 'a value of 0.00125'), 'found');
+  assert.strictEqual(cf7('1.25 · 10^-3', 'a value of 0.00125'), 'found');
+  assert.strictEqual(cf7('1.25 * 10^-3', 'a value of 0.00125'), 'found');
+  assert.strictEqual(cf7('1.25 ×10³', 'a value of 1,250'), 'found');
+  assert.strictEqual(cf7('10^-3', 'about 10 times'), 'not_found');
+  assert.strictEqual(cf7('10^-3', 'a value of 0.001', ['value']), 'found');
+  assert.strictEqual(cf7('10⁶', 'about 1,000,000 users'), 'found');
+  assert.strictEqual(cf7('2^10', 'about 2 units'), 'not_found');
+  assert.strictEqual(cf7('2^10', 'a size of 2^10'), 'found');
+  assert.strictEqual(cf7('2^10', 'a size of 2^8'), 'not_found');
+  // a letter after the exponent: not E-notation
+  assert.strictEqual(T.numbersIn('1e3x')[0].mag, '1');
+  assert.deepStrictEqual(T.numbersIn('the score was .87 overall').map((t) => t.value), ['0.87']);
+  assert.strictEqual(T.numbersIn('the score was .87 overall').length, 1);
+  assert.strictEqual(T.numbersIn('10^-3').length, 1);
+  assert.strictEqual(T.numbersIn('x 1.25 × 10^-3 y').length, 1);
+  // no dot-decimal after a digit, a letter or a dot: "3.2.1" and "v.5" keep their old tokens
+  assert.deepStrictEqual(T.numbersIn('3.2.1').map((t) => t.value), ['3.2', '1']);
+  assert.deepStrictEqual(T.numbersIn('v.5').map((t) => t.value), ['5']);
+});
+
+test('r7-3 measurement units and currency words', () => {
+  assert.strictEqual(cf7('1250 ms', 'it took 1250 seconds'), 'not_found');
+  assert.strictEqual(cf7('1250 ms', 'it took 1250 milliseconds'), 'found');
+  assert.strictEqual(cf7('1250 ms', 'it took 1.25 seconds'), 'not_found');
+  assert.strictEqual(cf7('1250 ms', 'it took 1250'), 'not_found');
+  assert.strictEqual(cf7('1250', 'it took 1250 ms'), 'not_found');
+  assert.strictEqual(cf7('1250 ms', 'it took 1250 MS'), 'not_found');
+  assert.strictEqual(cf7('1250 ms', 'it took 1250ms'), 'found');
+  assert.strictEqual(cf7('5 GB', 'a size of 5 GiB'), 'not_found');
+  assert.strictEqual(cf7('5 GB', 'a size of 5 gb'), 'not_found');
+  assert.strictEqual(cf7('16 GB', 'a size of 16GB', ['size']), 'found');
+  assert.strictEqual(cf7('3 GHz', 'a clock of 3 GHz', ['clock']), 'found');
+  assert.strictEqual(cf7('3 GHz', 'a clock of 3 MHz'), 'not_found');
+  assert.strictEqual(cf7('5 million tonnes', 'a mass of 5,000,000 tonnes'), 'found');
+  assert.strictEqual(cf7('5 million tonnes', 'a mass of 5,000,000'), 'not_found');
+  assert.strictEqual(cf7('25 °C', 'a temperature of 25°C', ['temperature']), 'found');
+  assert.strictEqual(cf7('25 °C', 'a temperature of 25 °F', ['temperature']), 'not_found');
+  assert.strictEqual(cf7('5 km', 'a speed of 5 km/h'), 'not_found');
+  const one = (t) => T.numbersIn(t)[0];
+  assert.strictEqual(one('in the 1990s').value, '1990');
+  assert.strictEqual(one('in the 1990s').unit, '');
+  assert.strictEqual(one('after 5 s').unit, 'u:s');
+  assert.strictEqual(one('after 5 seconds').unit, 'u:s');
+  assert.strictEqual(one('after 3 mi').unit, 'u:mile');
+  assert.strictEqual(one('after 3mi').unit, '');
+  assert.strictEqual(one('after 5 h').unit, 'u:h');
+  assert.strictEqual(one('after 5h').unit, '');
+  assert.strictEqual(one('5 million tonnes').mag, '5000000');
+  assert.strictEqual(one('5 million tonnes').unit, 'u:tonne');
+  assert.strictEqual(one('5k ms').unit, '');
+  // a count noun stays bare
+  assert.strictEqual(one('1,250 participants').unit, '');
+  assert.strictEqual(cf7('1,250', 'we had 1,250 participants'), 'found');
+  // currency words
+  assert.strictEqual(cf7('$5,000', 'paid 5,000 Canadian dollars'), 'not_found');
+  assert.strictEqual(cf7('5,000 Canadian dollars', 'paid 5,000 participants'), 'not_found');
+  assert.strictEqual(cf7('5,000 Canadian dollars', 'paid CA$5,000'), 'not_found');
+  assert.strictEqual(cf7('5,000 Canadian dollars', 'paid 5,000 Canadian dollars'), 'found');
+  assert.strictEqual(cf7('5,000 dollars', 'paid $5,000'), 'not_found');
+  assert.strictEqual(cf7('5,000 dollars', 'paid 5,000 dollars'), 'found');
+  assert.strictEqual(cf7('¥5,000', 'paid 5,000 yen'), 'found');
+  assert.strictEqual(cf7('₩5,000', 'paid 5,000'), 'not_found');
+  assert.strictEqual(cf7('Rs 5,000', 'paid 5,000 rupees'), 'found');
+  assert.strictEqual(cf7('Rs. 5,000', 'paid 5,000 rupee'), 'found');
+  assert.strictEqual(cf7('5,000 yuan', 'paid 5,000 RMB'), 'found');
+  assert.strictEqual(one('5 Hong Kong dollars').unit, 'X$:KONG');
+  assert.strictEqual(one('5 dollars').unit, 'X$:?');
+  assert.strictEqual(one('5 pounds sterling').unit, 'w:pound');
+  assert.deepStrictEqual(['₩5', '₽5', '₺5', '₪5', '฿5', '₦5'].map((t) => one(t).unit), ['KRW', 'RUB', 'TRY', 'ILS', 'THB', 'NGN']);
+  assert.strictEqual(one('5 million Canadian dollars').mag, '5000000');
+});
+
+test('r7-4 a figure written as more than one number', () => {
+  const kw = ['rate'];
+  assert.strictEqual(cf7('5–10%', 'about 5 people and 10 others'), 'not_found');
+  assert.strictEqual(cf7('5–10%', 'the rate was between 5% and 10%', kw), 'found');
+  assert.strictEqual(cf7('5–10%', 'the rate was 5–10% overall', kw), 'found');
+  assert.strictEqual(cf7('5-10%', 'the rate was 5%–10% overall', kw), 'found');
+  assert.strictEqual(cf7('5 to 10%', 'the rate was 5–10% overall', kw), 'found');
+  assert.strictEqual(cf7('5–10%', 'the rate was 10% then 5%', kw), 'not_found');
+  assert.strictEqual(cf7('5–10%', 'the rate was 5% and 11%', kw), 'not_found');
+  assert.strictEqual(cf7('1/8', 'the rate is 1 of 8', kw), 'found');
+  assert.strictEqual(cf7('1/8', 'the rate is 1 ' + 'x'.repeat(60) + ' of 8', kw), 'not_found');
+  assert.strictEqual(cf7('1/8', 'the rate is 8 of 1', kw), 'not_found');
+  assert.strictEqual(cf7('3:1', 'the rate is 3 runs', kw), 'not_found');
+  assert.strictEqual(cf7('3:1', 'the rate is 3:1', kw), 'found');
+  // the common-number keyword rule applies to the first part
+  assert.strictEqual(cf7('1/8', 'a split of 1 of 8'), 'common_not_near');
+  assert.strictEqual(cf7('1,250/8,400', 'a split of 1,250 of 8,400'), 'found');
+  // parseFigure and the claim list: one figure, its parts are not added again from the claim text
+  const p = T.parseFigure('5–10%');
+  assert.deepStrictEqual(p.parts, [{ value: '5', unit: 'pct' }, { value: '10', unit: 'pct' }]);
+  assert.strictEqual(T.parseFigure('1.25 × 10^-3').parts, undefined); // one token, not compound
+  const claims = [{ id: 'c1', claim: 'The rate was 5–10% in the cohort', source_url: 'https://a.example/a', figures: ['5–10%'], measured_result: 'rate 5–10%' }];
+  const fetched = [{ url: 'https://a.example/a', title: 'T', ok: true, text: 'The rate was 5% to 10% in the cohort.' }];
+  const res = T.checkClaims(claims, fetched);
+  assert.strictEqual(res.claims[0].figures.length, 1);
+  assert.strictEqual(res.claims[0].status, 'verified');
+  const bad = T.checkClaims(claims, [{ url: 'https://a.example/a', title: 'T', ok: true, text: 'The rate was 5 people and 10 others in the cohort.' }]);
+  assert.strictEqual(bad.claims[0].figures.length, 1);
+  assert.strictEqual(bad.claims[0].status, 'unverified');
+  assert.match(T.applyCheck(claims, bad)[0].measured_result, /rate 5–10% \[unverified\]/);
+});
+
+test('r7-5 a currency code glued to the digits is a figure', () => {
+  const A = 'https://a.example/a';
+  const claims = [{ id: 'c1', claim: 'Revenue was reported', source_url: A, figures: ['USD 1,250'] }];
+  const ok = T.checkReport({ prose: `Revenue was USD1,250 (${A}).`, claims, fetched: [{ url: A, title: 'T', ok: true, text: 'revenue was USD 1,250' }], counts: {} });
+  assert.strictEqual(ok.marks, 0);
+  assert.strictEqual(ok.totals.proseVerified, 1);
+  const no = T.checkReport({ prose: `Revenue was USD1,250 (${A}).`, claims, fetched: [{ url: A, title: 'T', ok: true, text: 'revenue was 1,250' }], counts: {} });
+  assert.match(no.prose, /USD1,250 \[unverified\]/);
+  assert.strictEqual(T.markUnverified('It cost EUR5 and CAD5 and eur5.'), 'It cost EUR5 [unverified] and CAD5 [unverified] and eur5 [unverified].');
+  assert.strictEqual(T.markUnverified('It cost A$5.'), 'It cost A$5 [unverified].');
+  // names and versions stay exempt
+  assert.strictEqual(T.markUnverified('Use GPT-4 and Llama3 and v2 and ABCUSD5.'), 'Use GPT-4 and Llama3 and v2 and ABCUSD5.');
 });
