@@ -57,6 +57,33 @@ test('settings route: each bad researchThorough field is a 400 that names it', (
   for (const x of ['', 'all', true, null]) { const r = v({ researchHelperSearch: x }); assert.equal(r.code, 400); assert.match(r.body.error, /researchHelperSearch/); }
 });
 
+test('settings route: the lead keys pass in range and merge; out of range, a bad engine or a bad model string is a 400 that names the key', () => {
+  const v = validator({ maxSources: 20 });
+  const p = { researchThorough: { engine: 'pipeline', leadSteps: 5, leadWallMinutes: '1440', leadReaderCalls: 400, leadReviewRounds: 0, leadReaderTextMax: 20000, leadReaderTopTextMax: 2000000,
+    leadModel: 'auto', leadReaderModel: 'claude-sdk/claude-opus-5-5', leadReaderTopModel: 'a.b_c:d/e@f[1]-g' } };
+  assert.equal(v(p), null);
+  assert.deepEqual(p.researchThorough, { maxSources: 20, engine: 'pipeline', leadSteps: 5, leadWallMinutes: 1440, leadReaderCalls: 400, leadReviewRounds: 0, leadReaderTextMax: 20000, leadReaderTopTextMax: 2000000,
+    leadModel: 'auto', leadReaderModel: 'claude-sdk/claude-opus-5-5', leadReaderTopModel: 'a.b_c:d/e@f[1]-g' });
+  const ok = { researchThorough: { engine: 'lead', leadSteps: 300, leadWallMinutes: 10, leadReaderCalls: 1, leadReviewRounds: 50 } };
+  assert.equal(v(ok), null);
+  const bad = (field, val, re) => {
+    const r = v({ researchThorough: { [field]: val } });
+    assert.ok(r && r.code === 400, `${field}=${JSON.stringify(val)} should be refused`);
+    assert.ok(r.body.error.includes(field), r.body.error);
+    if (re) assert.match(r.body.error, re);
+  };
+  for (const x of [4, 301, 1.5, 'abc', null]) bad('leadSteps', x, /whole number from 5 to 300/);
+  for (const x of [9, 1441]) bad('leadWallMinutes', x, /whole number from 10 to 1440/);
+  for (const x of [0, 401]) bad('leadReaderCalls', x, /whole number from 1 to 400/);
+  for (const x of [-1, 51]) bad('leadReviewRounds', x, /whole number from 0 to 50/);
+  for (const x of [19999, 2000001]) { bad('leadReaderTextMax', x); bad('leadReaderTopTextMax', x); }
+  for (const x of ['fixed', '', null, 1, 'Lead']) bad('engine', x, /'lead' or 'pipeline'/);
+  for (const k of ['leadModel', 'leadReaderModel', 'leadReaderTopModel']) {
+    for (const x of ['', 'a b', 'x;y', 'm'.repeat(121), 5, null, 'é']) bad(k, x, /must be 'auto' or a model id/);
+  }
+  bad('leadBogus', 1, /is not a setting/);
+});
+
 test('settings route: admin only (the whole route is an admin route)', () => {
   const access = lib('access');
   assert.equal(access.classifyRoute('/api/settings', 'POST').kind, 'admin');
@@ -111,6 +138,54 @@ test('Settings page: the block shows the saved values, the defaults when nothing
   assert.match(s, /<option value="both" selected>/);
   // a stored value out of range is drawn as the default, never as junk
   assert.match(ctx.block({ researchThorough: { maxSources: 999, readersAtOnce: 'x' } }), /id="st-rt-sources"[^>]*value="12"/);
+});
+
+test('Settings page: the lead controls show saved values or defaults; the fixed-stage rows are hidden when the engine is lead', () => {
+  const { ctx } = appFns(async () => ({ ok: true }));
+  const d = ctx.block({});
+  assert.match(d, /id="st-rt-engine" data-saved="lead"[^>]*>\s*<option value="lead" selected>A lead model leads it \(recommended\)<\/option><option value="pipeline">Fixed stages \(the earlier method\)/);
+  assert.match(d, /id="st-rt-steps"[^>]*value="60"/);
+  assert.match(d, /id="st-rt-leadmin"[^>]*value="360"/);
+  assert.match(d, /id="st-rt-reads"[^>]*value="40"/);
+  assert.match(d, /id="st-rt-leadrounds"[^>]*value="10"/);
+  for (const id of ['st-rt-lead', 'st-rt-reader2', 'st-rt-readertop']) assert.match(d, new RegExp(`id="${id}"[^>]*placeholder="automatic" value=""`));
+  assert.match(d, /<div id="st-rt-pipeline" style="display:none">/);
+  for (const t of ['How Thorough runs', 'Lead steps', 'Reader calls', 'Fixed stages only', '0 turns the review off', 'Type a model id to choose one.', 'finishes with what it has and says what was left open']) assert.ok(d.includes(t), t);
+  assert.ok(d.indexOf('st-rt-engine') < d.indexOf('st-rt-pdf') && d.indexOf('st-rt-pdf') < d.indexOf('st-rt-pipeline') && d.indexOf('st-rt-pipeline') < d.indexOf('st-rt-search'));
+  const s = ctx.block({ researchThorough: { engine: 'pipeline', leadSteps: 100, leadWallMinutes: 720, leadReaderCalls: 7, leadReviewRounds: 0, leadModel: 'claude-sdk/claude-fable-5-2', leadReaderModel: 'auto', leadReaderTopModel: 'x"y' } });
+  assert.match(s, /id="st-rt-engine" data-saved="pipeline"[^>]*>\s*<option value="lead">[^<]*<\/option><option value="pipeline" selected>/);
+  assert.match(s, /id="st-rt-steps"[^>]*value="100"/);
+  assert.match(s, /id="st-rt-leadmin"[^>]*value="720"/);
+  assert.match(s, /id="st-rt-reads"[^>]*value="7"/);
+  assert.match(s, /id="st-rt-leadrounds"[^>]*value="0"/);
+  assert.match(s, /id="st-rt-lead"[^>]*value="claude-sdk\/claude-fable-5-2"/);
+  assert.match(s, /id="st-rt-reader2"[^>]*value=""/);
+  assert.match(s, /id="st-rt-readertop"[^>]*value=""/, 'a junk model string is drawn as automatic');
+  assert.match(s, /<div id="st-rt-pipeline">/);
+  assert.match(ctx.block({ researchThorough: { leadSteps: 4, leadWallMinutes: 'x' } }), /id="st-rt-steps"[^>]*value="60"/);
+});
+
+test('Settings page: lead controls post numbers and strings; an empty model saves auto; the engine toggles the fixed-stage rows after a good save', async () => {
+  const posts = [];
+  const { ctx } = appFns(async (url, o) => { posts.push(JSON.parse(o.body)); return { ok: true }; });
+  const shown = { style: { display: 'none' } };
+  ctx.document = { getElementById: (id) => (id === 'st-rt-pipeline' ? shown : null) };
+  await ctx.save('leadSteps', fakeEl('number', '90', 60));
+  await ctx.save('leadModel', fakeEl('text', 'claude-sdk/x', ''));
+  const e = fakeEl('text', '  ', 'claude-sdk/x'); await ctx.save('leadReaderModel', e);
+  await ctx.save('leadReaderTopModel', fakeEl('text', '', ''));
+  assert.deepEqual(posts, [{ researchThorough: { leadSteps: 90 } }, { researchThorough: { leadModel: 'claude-sdk/x' } }, { researchThorough: { leadReaderModel: 'auto' } }, { researchThorough: { leadReaderTopModel: 'auto' } }]);
+  assert.equal(e.value, '', 'the box shows empty (automatic), not the word auto'); assert.equal(e.dataset.saved, '');
+  await ctx.save('engine', fakeEl('select-one', 'pipeline', 'lead'));
+  assert.equal(shown.style.display, '');
+  await ctx.save('engine', fakeEl('select-one', 'lead', 'pipeline'));
+  assert.equal(shown.style.display, 'none');
+  assert.deepEqual(posts.slice(-2), [{ researchThorough: { engine: 'pipeline' } }, { researchThorough: { engine: 'lead' } }]);
+  // a refused engine save leaves the rows as they were and puts the select back
+  const bad = appFns(async () => ({ ok: false, status: 400, json: async () => ({ error: 'researchThorough.engine must be' }) }));
+  const keep = { style: { display: 'none' } }; bad.ctx.document = { getElementById: () => keep };
+  const sel = fakeEl('select-one', 'pipeline', 'lead'); await bad.ctx.save('engine', sel);
+  assert.equal(keep.style.display, 'none'); assert.equal(sel.value, 'lead');
 });
 
 test('Settings page: a change posts the right patch, saved at once, with a toast', async () => {

@@ -5535,7 +5535,14 @@
     function researchThoroughBlockHtml(data) {
       const t = (data && data.researchThorough && typeof data.researchThorough === 'object') ? data.researchThorough : {};
       const num = (k, lo, hi, d) => { const n = Number(t[k]); return Number.isInteger(n) && n >= lo && n <= hi ? n : d; };
-      const vals = { maxSources: num('maxSources', 1, 40, 12), readersAtOnce: num('readersAtOnce', 1, 12, 4), reviewRounds: num('reviewRounds', 0, 5, 2), timeLimitMinutes: num('timeLimitMinutes', 10, 240, 60) };
+      const vals = { maxSources: num('maxSources', 1, 40, 12), readersAtOnce: num('readersAtOnce', 1, 12, 4), reviewRounds: num('reviewRounds', 0, 5, 2), timeLimitMinutes: num('timeLimitMinutes', 10, 240, 60),
+        leadSteps: num('leadSteps', 5, 300, 60), leadWallMinutes: num('leadWallMinutes', 10, 1440, 360), leadReaderCalls: num('leadReaderCalls', 1, 400, 40), leadReviewRounds: num('leadReviewRounds', 0, 50, 10) };
+      const engine = t.engine === 'pipeline' ? 'pipeline' : 'lead';
+      const modelVal = (k) => (typeof t[k] === 'string' && t[k] !== 'auto' && t[k].length <= 120 && /^[A-Za-z0-9._:/@[\]-]+$/.test(t[k]) ? t[k] : '');
+      const modelRow = (id, key, label) => { const mv = modelVal(key).replace(/&/g, '&amp;').replace(/"/g, '&quot;'); return `<div class="st-row">
+          <label for="${id}">${label}</label>
+          <input type="text" id="${id}" maxlength="120" placeholder="automatic" value="${mv}" data-saved="${mv}" style="max-width:260px" onchange="saveResearchSetting('${key}', this)">
+        </div>`; };
       const pdf = t.pdf === false;
       const readerModel = t.readerModel === 'helper' ? 'helper' : 'own';
       const both = data && data.researchHelperSearch === 'both';
@@ -5546,19 +5553,35 @@
         <div class="st-hint">${hint}</div>`;
       return `<div id="st-research-thorough">
         <div class="st-row"><label><b>Thorough research</b></label></div>
+        <div class="st-row">
+          <label for="st-rt-engine">How Thorough runs</label>
+          <select id="st-rt-engine" data-saved="${engine}" onchange="saveResearchSetting('engine', this)"><option value="lead"${engine === 'lead' ? ' selected' : ''}>A lead model leads it (recommended)</option><option value="pipeline"${engine === 'pipeline' ? ' selected' : ''}>Fixed stages (the earlier method)</option></select>
+        </div>
+        <div class="st-hint">A lead model chooses and reads the key sources, sends readers back, checks every figure and has the report reviewed until it holds up. The fixed stages are the earlier method, kept for comparison.</div>
+        ${numRow('st-rt-steps', 'leadSteps', 'Lead steps', 5, 300, 'How many turns the lead may take. In each turn it can search, open, send readers, check and revise several things at once (5 to 300).')}
+        ${numRow('st-rt-leadmin', 'leadWallMinutes', 'Time limit, minutes', 10, 1440, 'A lead run still going after this long finishes with what it has and says what was left open (10 to 1440).')}
+        ${numRow('st-rt-reads', 'leadReaderCalls', 'Reader calls', 1, 400, 'How many times the lead may send a reader to a source (1 to 400).')}
+        ${numRow('st-rt-leadrounds', 'leadReviewRounds', 'Review rounds', 0, 50, 'How many times the report goes back to its reviewers. 0 turns the review off (0 to 50).')}
+        ${modelRow('st-rt-lead', 'leadModel', 'Lead model')}
+        ${modelRow('st-rt-reader2', 'leadReaderModel', 'Reader model')}
+        ${modelRow('st-rt-readertop', 'leadReaderTopModel', 'Top-tier reader model')}
+        <div class="st-hint">Automatic: the lead is the strongest model on the asking agent's own service, readers one tier below it, the top-tier reader is the lead, and the reviewers are a model from another vendor plus one on the agent's service. Agents whose content stays on their own service always use their own model. Type a model id to choose one.</div>
+        <div class="st-row">
+          <label class="gs-sub"><input type="checkbox" id="st-rt-pdf" ${pdf ? '' : 'checked'} data-saved="${pdf ? 'false' : 'true'}" onchange="saveResearchSetting('pdf', this)"> Make a PDF</label>
+        </div>
+        <div class="st-hint">Needs Chrome or Chromium on this computer; without one the document is Markdown and HTML.</div>
+        <div id="st-rt-pipeline"${engine === 'lead' ? ' style="display:none"' : ''}>
+        <div class="st-row"><label><b>Fixed stages only</b></label></div>
         ${numRow('st-rt-sources', 'maxSources', 'Sources read in full', 1, 40, 'How many pages the research reads whole, after the quick pass picks the ones the answer depends on most (1 to 40).')}
         ${numRow('st-rt-readers', 'readersAtOnce', 'Readers at once', 1, 12, 'How many readers work at the same time. More is faster but uses more of the AI service at once (1 to 12).')}
         ${numRow('st-rt-rounds', 'reviewRounds', 'Review rounds', 0, 5, 'How many times a second reviewer checks the findings against the sources and sends back what does not hold (0 to 5).')}
         ${numRow('st-rt-minutes', 'timeLimitMinutes', 'Time limit, minutes', 10, 240, 'A thorough run that is still going after this long is stopped and reports what it has (10 to 240).')}
         <div class="st-row">
-          <label class="gs-sub"><input type="checkbox" id="st-rt-pdf" ${pdf ? '' : 'checked'} data-saved="${pdf ? 'false' : 'true'}" onchange="saveResearchSetting('pdf', this)"> Make a PDF</label>
-        </div>
-        <div class="st-hint">Needs Chrome or Chromium on this computer; without one the document is Markdown and HTML.</div>
-        <div class="st-row">
           <label for="st-rt-reader">Readers use</label>
           <select id="st-rt-reader" data-saved="${readerModel}" onchange="saveResearchSetting('readerModel', this)"><option value="own"${readerModel === 'own' ? ' selected' : ''}>the agent's own model</option><option value="helper"${readerModel === 'helper' ? ' selected' : ''}>the fast helper model</option></select>
         </div>
         <div class="st-hint">The fast helper model is cheaper and quicker; the agent's own model reads more carefully.</div>
+        </div>
         <div class="st-row">
           <label for="st-rt-search">Research helpers search with</label>
           <select id="st-rt-search" data-saved="${both ? 'both' : 'default'}" onchange="saveResearchSetting('researchHelperSearch', this)"><option value="default"${both ? '' : ' selected'}>their usual search</option><option value="both"${both ? ' selected' : ''}>their usual search and the hub's search (test)</option></select>
@@ -5571,13 +5594,17 @@
       const saved = el.dataset.saved;
       const back = () => { if (el.type === 'checkbox') el.checked = saved === 'true'; else el.value = saved; };
       if (researchThoroughSaving) { back(); hubToast('Another setting is saving. Try again in a moment.'); return; }
-      const value = el.type === 'checkbox' ? el.checked : el.type === 'number' ? Number(el.value) : el.value;
+      let value = el.type === 'checkbox' ? el.checked : el.type === 'number' ? Number(el.value) : el.value;
+      const isModel = key === 'leadModel' || key === 'leadReaderModel' || key === 'leadReaderTopModel';
+      if (isModel) { value = String(value).trim(); if (!value) value = 'auto'; }
       const patch = key === 'researchHelperSearch' ? { researchHelperSearch: value } : { researchThorough: { [key]: value } };
       researchThoroughSaving = true;
       try {
         const r = await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify(patch) });
         if (!r.ok) { let m = 'HTTP ' + r.status; try { const j = await r.json(); if (j && j.error) m = j.error; } catch {} throw new Error(m); }
-        el.dataset.saved = String(value);
+        el.dataset.saved = isModel && value === 'auto' ? '' : String(value);
+        if (isModel) el.value = value === 'auto' ? '' : value;
+        if (key === 'engine' && typeof document !== 'undefined') { const p = document.getElementById('st-rt-pipeline'); if (p) p.style.display = value === 'pipeline' ? '' : 'none'; }
         hubToast('Saved.');
       } catch (e) {
         back();

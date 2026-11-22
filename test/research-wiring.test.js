@@ -547,7 +547,7 @@ test('strict keptOnBox: a team folder, the keep list, a missing agent, a throwin
 
 test('thorough settings are read from researchThorough and checked; the document goes to <Files>/research with -2, -3 for a used name', async () => {
   const L = load({ settings: { researchThorough: { maxSources: '5', readersAtOnce: 99, pdf: 'false', readerModel: 'helper' } } });
-  assert.deepEqual(JSON.parse(JSON.stringify(L.ctx.settingsNow())), { maxSources: 5, readersAtOnce: 4, reviewRounds: 2, timeLimitMinutes: 60, pdf: false, readerModel: 'helper' });
+  assert.deepEqual(JSON.parse(JSON.stringify(L.ctx.settingsNow())), { maxSources: 5, readersAtOnce: 4, reviewRounds: 2, timeLimitMinutes: 60, pdf: false, readerModel: 'helper', engine: 'lead', leadSteps: 60, leadWallMinutes: 360, leadReaderCalls: 40, leadReviewRounds: 10, leadReaderTextMax: 120000, leadReaderTopTextMax: 400000, leadModel: 'auto', leadReaderModel: 'auto', leadReaderTopModel: 'auto' });
   assert.equal(load().ctx.settingsNow().timeLimitMinutes, 60);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rw-files-'));
   const thorough = require(path.join(ISO.inst, 'lib', 'research-thorough.js'));

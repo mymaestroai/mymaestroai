@@ -93,11 +93,11 @@ test('costLine: by kind', () => {
 test('cardFor: the ask_user arguments', () => {
   const c = research.cardFor('openai/test-mini');
   assert.equal(c.header, 'Deep research');
-  assert.equal(c.question, 'This looks like a research question. Research it? Quick takes a few minutes; Thorough takes up to an hour. Pay-per-use: Quick costs several times a normal answer; Thorough costs much more (it reads whole papers and pages and has them checked).');
+  assert.equal(c.question, 'This looks like a research question. Research it? Quick takes a few minutes; Thorough usually takes one to two hours (at most 6 hours). Pay-per-use: Quick costs several times a normal answer; Thorough costs much more (a lead model reads the key sources in full and has the report reviewed).');
   assert.deepEqual(c.options, ['Yes, quick', 'Yes, thorough', 'No', 'Always yes', 'Never']);
   assert.deepEqual(c.descriptions, [
     'A few minutes: many searches, the results summarised. You can keep talking meanwhile.',
-    'Up to an hour: also reads the key sources in full and checks every figure against them.',
+    'One to two hours in the background: a lead model reads the key sources in full, checks every figure and has the report reviewed until it holds up.',
     'Answer now from what I know and a quick search.',
     'Research questions like this without asking, at the level set in Settings (now: Quick).',
     'Never ask; always answer normally. You can change this in Settings.',
@@ -107,10 +107,10 @@ test('cardFor: the ask_user arguments', () => {
 });
 
 test('cardFor: the cost sentence per billing kind', () => {
-  const q = (m) => research.cardFor(m).question.replace('This looks like a research question. Research it? Quick takes a few minutes; Thorough takes up to an hour. ', '');
+  const q = (m) => research.cardFor(m).question.replace('This looks like a research question. Research it? Quick takes a few minutes; Thorough usually takes one to two hours (at most 6 hours). ', '');
   assert.equal(q(BIG), 'Both use your Claude sign-in plan allowance; Thorough uses several times more than Quick.');
   assert.equal(q('codex-cli/test-x'), 'Both use your ChatGPT plan allowance; Thorough uses several times more than Quick.');
-  assert.equal(q('local/test-model'), "Both run on this computer's own model: no cost, but Thorough can take well over an hour.");
+  assert.equal(q('local/test-model'), "Both run on this computer's own model: no cost, but Thorough can take several hours.");
   assert.equal(q('mystery/thing'), 'Thorough costs several times more than Quick.');
 });
 
@@ -1027,7 +1027,7 @@ function makeThorough(over = {}) {
   const store = { load: () => [], save: (r) => { saves.push(JSON.stringify(r)); } };
   const m = makeRunner({
     store, spawn, fetchPage, engine: ENGINE,
-    thoroughSettings: () => ({ maxSources: 12, readersAtOnce: 2, reviewRounds: 2, timeLimitMinutes: 60, pdf: true, readerModel: 'own' }),
+    thoroughSettings: () => ({ engine: 'pipeline', maxSources: 12, readersAtOnce: 2, reviewRounds: 2, timeLimitMinutes: 60, pdf: true, readerModel: 'own' }),
     pickReviewer: async () => ({ model: 'openai/test-reviewer', label: 'a model from another vendor (OpenAI)', crossVendor: true }),
     pickReaderModel: async () => 'claude-sdk/claude-test-reader',
     writeDocument: async (agent, base, doc) => { written.push({ agent, base, doc }); return { md: `/files/research/${base}.md`, html: `/files/research/${base}.html`, pdf: '', pdfError: 'no Chrome or Chromium on this computer; the document is in Markdown and HTML' }; },
@@ -1113,7 +1113,7 @@ test('run-2 E: the agent is told to pass the figure-check sentences on unchanged
 });
 
 test('thorough runner: readers go in batches of readersAtOnce groups, one spawn call per batch', async () => {
-  const m = makeThorough({ deps: { thoroughSettings: () => ({ maxSources: 12, readersAtOnce: 1, reviewRounds: 0, timeLimitMinutes: 60, pdf: false, readerModel: 'own' }) } });
+  const m = makeThorough({ deps: { thoroughSettings: () => ({ engine: 'pipeline', maxSources: 12, readersAtOnce: 1, reviewRounds: 0, timeLimitMinutes: 60, pdf: false, readerModel: 'own' }) } });
   const r = startThorough(m);
   await until(() => m.runner.get(r.id).state === 'delivered');
   const reads = m.calls.filter((c) => /^Reader/.test(c.labels[0]));
@@ -1200,7 +1200,7 @@ test('thorough runner: the synthesis failing twice falls back to the first-pass 
 
 test('thorough runner: the deadline in the middle of reading delivers a partial report starting "Not finished:"', async () => {
   const m = makeThorough({
-    deps: { thoroughSettings: () => ({ maxSources: 12, readersAtOnce: 2, reviewRounds: 2, timeLimitMinutes: 0.01, pdf: true, readerModel: 'own' }) },
+    deps: { thoroughSettings: () => ({ engine: 'pipeline', maxSources: 12, readersAtOnce: 2, reviewRounds: 2, timeLimitMinutes: 0.01, pdf: true, readerModel: 'own' }) },
     script: { Reader: hang() },
   });
   const r = startThorough(m);
@@ -1221,7 +1221,7 @@ test('thorough runner: the deadline in the middle of reading delivers a partial 
 
 test('thorough runner: a deadline after the report was written delivers the saved report, not the findings', async () => {
   const m = makeThorough({
-    deps: { thoroughSettings: () => ({ maxSources: 12, readersAtOnce: 2, reviewRounds: 2, timeLimitMinutes: 0.01, pdf: true, readerModel: 'own' }) },
+    deps: { thoroughSettings: () => ({ engine: 'pipeline', maxSources: 12, readersAtOnce: 2, reviewRounds: 2, timeLimitMinutes: 0.01, pdf: true, readerModel: 'own' }) },
     script: { Reviewer: hang() },
   });
   const r = startThorough(m);
@@ -1596,7 +1596,7 @@ const C2 = { id: 'c2', claim: 'Method A reached 56.4% on the benchmark', source_
 const REPORT_C2 = () => REPORT('').replace(/```claims[\s\S]*$/, '') + claimsBlock([C2]);
 const verdictsOf = (id, v) => '```json\n' + JSON.stringify([{ id, verdict: v, reason: 'because', ...withQuote(id, v) }]) + '\n```';
 const one = (label, text, ok = true) => [{ label, ok, text }];
-const rounds = (n) => ({ thoroughSettings: () => ({ maxSources: 12, readersAtOnce: 2, reviewRounds: n, timeLimitMinutes: 60, pdf: true, readerModel: 'own' }) });
+const rounds = (n) => ({ thoroughSettings: () => ({ engine: 'pipeline', maxSources: 12, readersAtOnce: 2, reviewRounds: n, timeLimitMinutes: 60, pdf: true, readerModel: 'own' }) });
 
 test('r3 1: a doubted claim restated under a new id and wording is not reviewed after one round: unreviewed, never key evidence, never doubted by id', async () => {
   const { engine, seen } = spyEngine();
@@ -1667,7 +1667,7 @@ test('r3 3: a checkReport that throws: figures marked unverified, notChecked, mi
 test('r3 5: the in-memory source texts never outlive the run: after a deadline during the fetch, and after a normal end', async () => {
   let release;
   const gate = new Promise((r) => { release = r; });
-  const slow = makeThorough({ fetchPage: async (url) => { await gate; return { markdown: 'text ' + url, truncated: false, via: 'plain', title: 'T' }; }, deps: { thoroughSettings: () => ({ maxSources: 12, readersAtOnce: 2, reviewRounds: 1, timeLimitMinutes: 0.01, pdf: true, readerModel: 'own' }) } });
+  const slow = makeThorough({ fetchPage: async (url) => { await gate; return { markdown: 'text ' + url, truncated: false, via: 'plain', title: 'T' }; }, deps: { thoroughSettings: () => ({ engine: 'pipeline', maxSources: 12, readersAtOnce: 2, reviewRounds: 1, timeLimitMinutes: 0.01, pdf: true, readerModel: 'own' }) } });
   const r = startThorough(slow);
   await untilMs(() => slow.wakes.length === 1);
   release();
@@ -1708,7 +1708,7 @@ test('r3 7: an own model on this computer: helpers, readers and the reviewer sta
 // ── review r4: unreviewed by key after an interrupted run, a failed check says so, the reviewer label follows the model used ──
 test('r4 4: round 1 credited, a revise rewrites c2, round 2 cut by the deadline: the partial report lists c2 as changed after the last review, not key evidence', async () => {
   const m = makeThorough({
-    deps: { thoroughSettings: () => ({ maxSources: 12, readersAtOnce: 2, reviewRounds: 2, timeLimitMinutes: 0.02, pdf: true, readerModel: 'own' }) },
+    deps: { thoroughSettings: () => ({ engine: 'pipeline', maxSources: 12, readersAtOnce: 2, reviewRounds: 2, timeLimitMinutes: 0.02, pdf: true, readerModel: 'own' }) },
     script: { Reviewer: (w, n, signal) => (n === 1 ? one('Reviewer', verdictsOf('c1', 'not_supported')) : hang()(w, n, signal)), Revision: () => one('Revision', REPORT_C2()) },
   });
   const r = startThorough(m);
@@ -1880,7 +1880,7 @@ test('r9b runner: a round with no usable claim verdicts credits no figure answer
 });
 
 test('r9b runner: no review (reviewRounds 0) or a reviewer that fails: every figure "not checked", nothing reads matches', async () => {
-  const off = makeThorough({ deps: { thoroughSettings: () => ({ maxSources: 12, readersAtOnce: 2, reviewRounds: 0, timeLimitMinutes: 60, pdf: true, readerModel: 'own' }) } });
+  const off = makeThorough({ deps: { thoroughSettings: () => ({ engine: 'pipeline', maxSources: 12, readersAtOnce: 2, reviewRounds: 0, timeLimitMinutes: 60, pdf: true, readerModel: 'own' }) } });
   const r0 = startThorough(off);
   await until(() => off.runner.get(r0.id).state === 'delivered');
   assert.equal(off.calls.filter((c) => c.labels[0] === 'Reviewer').length, 0);
@@ -2038,7 +2038,7 @@ test('thorough runner: the sources the summary cites are pinned, though the choo
 
 test('thorough runner: a summary with no URLs pins the most cited sources, up to half of maxSources', async () => {
   const m = makeThorough({
-    deps: { thoroughSettings: () => ({ maxSources: 4, readersAtOnce: 2, reviewRounds: 0, timeLimitMinutes: 60, pdf: false, readerModel: 'own' }) },
+    deps: { thoroughSettings: () => ({ engine: 'pipeline', maxSources: 4, readersAtOnce: 2, reviewRounds: 0, timeLimitMinutes: 60, pdf: false, readerModel: 'own' }) },
     script: {
       Research: (workers) => workers.map((w, i) => ({ label: w.label, ok: true, text: i === 0 ? `${SRC_A} ${SRC_B}\n${SRC_B}\n${SRC_C}` : `${SRC_B} ${SRC_C}` })),
       'First pass summary': () => [{ label: 'First pass summary', ok: true, text: '## Verdict\nIt is unclear.\n\n## Evidence\n- nothing linked' }],
@@ -2184,4 +2184,9 @@ test('I7 runner: a group where one source has hub text goes to the reader with t
   assert.ok(!reader.tasks[0].includes('BEGIN TEXT OF SOURCE 2'));
   const report = m.calls.find((c) => c.labels[0] === 'Research report').tasks[0];
   assert.ok(report.includes(`(${SRC_B})\n- Full text opened: no (the hub could not fetch it)`));
+});
+
+test('cardFor: a lead cost line replaces the general cost sentence; the time ceiling follows thoroughHours', () => {
+  const c = research.cardFor('openai/test-mini', { thoroughCost: 'Pay-per-use: a typical Thorough run costs about $1.00 to $2.00 on these models, at most about $5 at its limits.', thoroughHours: 3 });
+  assert.ok(c.question.endsWith('(at most 3 hours). Pay-per-use: a typical Thorough run costs about $1.00 to $2.00 on these models, at most about $5 at its limits.'));
 });

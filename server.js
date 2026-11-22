@@ -2848,8 +2848,10 @@ async function handleHttpRequest(req, res) {
           if (patch && patch.researchThorough !== undefined) {
             const v = patch.researchThorough;
             if (!v || typeof v !== 'object' || Array.isArray(v)) return jsonResponse(res, 400, { error: 'researchThorough must be an object' });
-            const ranges = { maxSources: [1, 40], readersAtOnce: [1, 12], reviewRounds: [0, 5], timeLimitMinutes: [10, 240] };
-            const known = [...Object.keys(ranges), 'pdf', 'readerModel'];
+            const ranges = { maxSources: [1, 40], readersAtOnce: [1, 12], reviewRounds: [0, 5], timeLimitMinutes: [10, 240],
+              leadSteps: [5, 300], leadWallMinutes: [10, 1440], leadReaderCalls: [1, 400], leadReviewRounds: [0, 50], leadReaderTextMax: [20000, 2000000], leadReaderTopTextMax: [20000, 2000000] };
+            const modelKeys = ['leadModel', 'leadReaderModel', 'leadReaderTopModel'];
+            const known = [...Object.keys(ranges), 'pdf', 'readerModel', 'engine', ...modelKeys];
             const merged = { ...(hubSettings.getSetting('researchThorough') || {}) };
             for (const [k, val] of Object.entries(v)) {
               if (!known.includes(k)) return jsonResponse(res, 400, { error: `researchThorough.${k} is not a setting` });
@@ -2860,6 +2862,12 @@ async function handleHttpRequest(req, res) {
                 merged[k] = n;
               } else if (k === 'pdf') {
                 if (typeof val !== 'boolean') return jsonResponse(res, 400, { error: 'researchThorough.pdf must be true or false' });
+                merged[k] = val;
+              } else if (k === 'engine') {
+                if (val !== 'lead' && val !== 'pipeline') return jsonResponse(res, 400, { error: "researchThorough.engine must be 'lead' or 'pipeline'" });
+                merged[k] = val;
+              } else if (modelKeys.includes(k)) {
+                if (typeof val !== 'string' || !(val === 'auto' || (val.length >= 1 && val.length <= 120 && /^[A-Za-z0-9._:/@[\]-]+$/.test(val)))) return jsonResponse(res, 400, { error: `researchThorough.${k} must be 'auto' or a model id` });
                 merged[k] = val;
               } else {
                 if (val !== 'own' && val !== 'helper') return jsonResponse(res, 400, { error: "researchThorough.readerModel must be 'own' or 'helper'" });
