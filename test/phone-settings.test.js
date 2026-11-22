@@ -141,8 +141,18 @@ test('review r1/r2: a link or button that opens another page asks first when any
     assert.deepStrictEqual(h.calls[h.calls.length - 1].slice(0, 2), ['requestClose', 'close']);
   }
   // review r3: a download (a backup), a hub route, another origin by any spelling: not a page change, never asked about
-  for (const t of [link('#x'), link('https://other.example/'), link('/modules', { target: '_blank' }), link(''), button('saveSettings()'), button("doThing(); location.href='/x'"),
-    link('/backup.tar', { attrs: { download: '' } }), link('/api/backups/download?id=1'), button("location.href='//evil.example/x'"), button("location.href='/\\evil.example'"), button("location.href='https://evil.example/'")]) { e = ev(t); guard(e); assert.strictEqual(e.prevented, false, JSON.stringify(t.getAttribute('onclick') || t.getAttribute('href'))); }
+  for (const t of [link('#x'), link('/modules', { target: '_blank' }), link(''), button('saveSettings()'), button("doThing(); location.href='/x'"),
+    link('/backup.tar', { attrs: { download: '' } }), link('/api/backups/download?id=1')]) { e = ev(t); guard(e); assert.strictEqual(e.prevented, false, JSON.stringify(t.getAttribute('onclick') || t.getAttribute('href'))); }
+  // review r4: another origin never replaces Settings: a button is stopped (its own onclick never runs), a link opens in a new window
+  h.env.window.opened = [];
+  h.env.window.open = (u, t, f) => { h.env.window.opened.push([u, t, f]); };
+  for (const t of [button("location.href='//evil.example/x'"), button("location.href='/\\\\evil.example'"), button("location.href='https://evil.example/'"), link('https://other.example/page')]) {
+    e = ev(t); guard(e);
+    assert.strictEqual(e.prevented, true, JSON.stringify(t.getAttribute('onclick') || t.getAttribute('href')));
+    assert.strictEqual(e.stopped, true);
+  }
+  assert.deepStrictEqual(h.env.window.opened, [['https://other.example/page', '_blank', 'noopener']]);
+  assert.deepStrictEqual(h.env.location.replaced, [], 'the frame stays on Settings');
   assert.deepStrictEqual(h.env.location.replaced, [], 'asked, not gone');
   e = ev(null); guard(e); assert.strictEqual(e.prevented, false, 'not a link');
   assert.strictEqual(h.calls.length - before, 2);

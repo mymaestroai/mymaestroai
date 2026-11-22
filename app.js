@@ -23030,7 +23030,16 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         if (!m) return;
         href = m[1];
       }
-      try { const u = new URL(href, location.href); if (u.origin !== location.origin || u.pathname.startsWith('/api/')) return; dest = u.pathname + u.search + u.hash; } catch { return; }
+      let u;
+      try { u = new URL(href, location.href); } catch { return; }
+      if (u.origin !== location.origin) {
+        // another origin never replaces Settings in the sheet: a link opens in a new window, a button does nothing
+        e.preventDefault(); e.stopImmediatePropagation();
+        if (String(t.tagName).toUpperCase() === 'A' && /^https?:$/.test(u.protocol)) { try { window.open(u.href, '_blank', 'noopener'); } catch { /* blocked */ } }
+        return;
+      }
+      if (u.pathname.startsWith('/api/')) return;
+      dest = u.pathname + u.search + u.hash;
       e.preventDefault(); e.stopImmediatePropagation();
       // nothing to lose: the page opens in the sheet at once, in place of this one (Back then closes the sheet)
       if (!dialogGuard.layers().some((l) => dialogGuard.isDirty(l.el))) { location.replace(dest); return; }
