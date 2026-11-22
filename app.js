@@ -15900,6 +15900,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         if (ev.ok === false) {
           if (micLost) return;   // already said: a burst of device events while it is lost is not announced again
           micLost = true; quiet(() => ui.micLost(true));
+          if (press && pressing) talk(false);   // Tap to talk: a press with no microphone hears nothing; it ends (what was heard is sent) and the button is let go
           enqueue(VOICE_MIC_LOST_LINE, 'mic');
           return;
         }
@@ -15962,6 +15963,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         if (!press) return false;
         const want = !!on;
         if (ended || !started || state === 'starting' || want === pressing) return pressing;
+        if (want && micLost) return pressing;   // no press while the microphone is lost: it would show Listening with nothing to hear
         pressing = want;
         if (want) {
           setMuted(false);

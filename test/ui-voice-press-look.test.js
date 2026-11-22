@@ -126,3 +126,23 @@ test('look 10: the state text while pressing is "Listening" everywhere; the idle
     assert.ok(s.includes("'Listening'") && s.includes("'Tap to talk'"), f);
   }
 });
+
+test('look 11: the microphone lost during a press ends the press and lets the listening look go', async () => {
+  const h = await started();
+  h.call.talk(true);
+  assert.deepStrictEqual(h.pressUi, [false, true]);
+  h.handlers.onMicChange({ ok: false, reason: 'ended' }); await tick();
+  assert.deepStrictEqual(h.pressUi, [false, true, false], 'the green look goes with the microphone');
+  h.handlers.onMicChange({ ok: true }); await tick();
+  assert.strictEqual(h.call.talk(true), true, 'not pressing any more: the next tap starts a new press');
+});
+
+test('look 12: no press starts while the microphone is lost; one starts again once it is back', async () => {
+  const h = await started();
+  h.handlers.onMicChange({ ok: false, reason: 'ended' }); await tick();
+  assert.strictEqual(h.call.talk(true), false, 'a tap with no microphone does not start listening');
+  assert.deepStrictEqual(h.pressUi, [false]);
+  h.handlers.onMicChange({ ok: true }); await tick();
+  assert.strictEqual(h.call.talk(true), true);
+  assert.deepStrictEqual(h.pressUi, [false, true]);
+});
