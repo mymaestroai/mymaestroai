@@ -159,20 +159,22 @@ test('click handler: copies exactly the code text, says Copied, returns to Copy 
   const ev = fakeEvent(d.btn);
   await h(ev);
   assert.strictEqual(copied, '$ npm test\nline two <&>\n');
-  assert.ok(ev.prevented && ev.stopped, 'preventDefault and stopPropagation (the message copy never sees it)');
+  assert.ok(ev.prevented, 'preventDefault');
+  assert.ok(!ev.stopped, 'stopPropagation is NOT called (other document listeners close menus on outside clicks)');
   assert.ok(d.btn.classes.has('copied'));
   assert.strictEqual(d.btn.attrs['aria-label'], 'Copied');
   assert.strictEqual(d.btn.title, 'Copied');
-  assert.strictEqual(T.q[0].ms, 1500);
+  assert.ok(T.q.some(x => x.ms === 1500), 'the 1500 ms reset timer');
   assert.strictEqual(d.body.children.filter(c => c.className.includes('code-copy-live')).length, 1, 'one live region');
+  T.fire();   // the 60 ms live-region timer
   assert.strictEqual(d.body.children[0].textContent, 'Copied');
-  T.fire();
+  T.fire();   // the reset timer
   assert.ok(!d.btn.classes.has('copied'));
   assert.strictEqual(d.btn.attrs['aria-label'], 'Copy');
   assert.strictEqual(d.btn.title, 'Copy');
-  // a repeated click restarts the timer; still one live region
+  // a repeated click restarts the timers; still one live region
   await h(fakeEvent(d.btn)); await h(fakeEvent(d.btn));
-  assert.strictEqual(T.q.length, 1, 'the earlier timer was cleared');
+  assert.strictEqual(T.q.length, 2, 'the earlier timers were cleared (one live, one reset)');
   assert.strictEqual(d.body.children.filter(c => c.className.includes('code-copy-live')).length, 1);
 });
 
@@ -191,8 +193,8 @@ test('click handler: both methods failing shows Could not copy for 2000 ms; clic
   await h(fakeEvent(d.btn));
   assert.ok(d.btn.classes.has('copy-failed'));
   assert.strictEqual(d.btn.attrs['aria-label'], 'Could not copy');
-  assert.strictEqual(T.q[0].ms, 2000);
-  T.fire();
+  assert.ok(T.q.some(x => x.ms === 2000));
+  T.fire(); T.fire();
   assert.strictEqual(d.btn.attrs['aria-label'], 'Copy');
   const other = { target: { closest: () => null }, preventDefault() { throw new Error('no'); }, stopPropagation() { throw new Error('no'); } };
   assert.strictEqual(h(other), undefined);
@@ -284,5 +286,138 @@ test('click handler: a box around a DOM-built <pre> with no <code> (phone worker
 test('the page listener is installed once, in the capture phase (before click handlers on the message)', () => {
   const src = read('lib/ui-code-copy.js');
   assert.match(src, /if \(!window\.__codeCopyInstalled\) \{/);
-  assert.match(src, /document\.addEventListener\('click', makeClickHandler\(\), true\)/);
+  assert.match(src, /document\.addEventListener\('click', handler, true\)/);
+  assert.match(src, /document\.addEventListener\('pointerdown', handler\.pointerDown, true\)/);
+  assert.ok(!/stopPropagation\(\)/.test(src.replace(/\/\/.*$/gm, '')), 'the click is never stopped');
+});
+
+// ---- review fixes ----
+
+for (const [name, src] of Object.entries(PAGES)) {
+  test(`${name}: a URL directly before a fence gives one box, no marker text, no box inside an href`, () => {
+    const html = renderer(src)('see https://x.y/```bash\nls\n```');
+    assert.strictEqual(buttons(html), 1);
+    assert.deepStrictEqual(codeTexts(html), ['ls\n']);
+    assert.ok(!/m[a-z0-9]{8,}C\d+~/.test(html), 'no marker left: ' + html);
+    for (const m of html.matchAll(/href="([^"]*)"/g)) assert.ok(!m[1].includes('<div') && !m[1].includes('code-box'), 'href clean: ' + m[1]);
+    assert.match(html, /<a href="https:\/\/x\.y\/"/, 'the URL itself still links');
+  });
+
+  test(`${name}: a fence inside markdown link text or image alt text leaves no marker (and no HTML in an attribute)`, () => {
+    const f = renderer(src);
+    const a = f('[see ```sh\nls\n``` here](https://x.y/p)');
+    assert.ok(!/m[a-z0-9]{8,}C\d+~/.test(a), 'link text: ' + a);
+    assert.strictEqual(buttons(a), 1, 'link text: the box is there');
+    const b = f('![pic ```sh\nls\n``` x](/api/image/abc)');
+    assert.ok(!/m[a-z0-9]{8,}C\d+~/.test(b), 'alt text: ' + b);
+    assert.strictEqual(buttons(b), 1, 'alt text: the box is there');
+    for (const m of b.matchAll(/\balt="([^"]*)"/g)) assert.ok(!m[1].includes('<'), 'alt stays plain text');
+    const c = f('[t](https://x.y/```sh\nls\n```)');
+    assert.ok(!/m[a-z0-9]{8,}C\d+~/.test(c), 'link url: ' + c);
+    for (const m of c.matchAll(/href="([^"]*)"/g)) assert.ok(!m[1].includes('<'), 'href plain');
+  });
+
+  test(`${name}: a CRLF line ending after the opening fence still gives a box with the body as its code`, () => {
+    const html = renderer(src)('a\n```bash\r\n$ ls\r\n```\nb');
+    assert.strictEqual(buttons(html), 1);
+    assert.deepStrictEqual(codeTexts(html), ['$ ls\r\n']);
+    const v = renderer(src)('```chart\r\n{"a":1}\r\n```');
+    assert.ok(v.includes('visual-chart'), 'visual kinds still work with CRLF');
+  });
+}
+
+// A fake page for the press / click-on-rebuilt-node tests.
+function fakeHost(texts) {
+  const host = { isConnected: true, boxes: [] };
+  const mkBtn = (txt) => {
+    const code = { textContent: txt };
+    const box = { querySelector: (s) => (s === 'pre code' ? code : null) };
+    const btn = { classes: new Set(['code-copy']), attrs: {}, title: '', ownerDocument: null, classList: { add() {}, remove() {}, contains: () => true }, setAttribute(k, v) { btn.attrs[k] = v; },
+      closest: (s) => (s === '.code-copy' ? btn : s === '.code-box' ? box : s === '.message, .msg' ? host : null) };
+    return btn;
+  };
+  host.rebuild = () => { host.buttons = texts.map(mkBtn); };
+  host.querySelectorAll = (s) => (s === '.code-copy' ? host.buttons : []);
+  host.rebuild();
+  return host;
+}
+const evOn = (target) => ({ target, prevented: false, stopped: false, preventDefault() { this.prevented = true; }, stopPropagation() { this.stopped = true; } });
+
+test('press on a code button, rebuilt before the click: the click on the host copies the box at the same index', async () => {
+  const d = fakeDom('unused');
+  const host = fakeHost(['one', 'two', 'three']);
+  let clock = 1000;
+  const got = [];
+  const h = CC.makeClickHandler({ document: d.doc, now: () => clock, copy: async (t) => { got.push(t); return true; }, setTimeout: () => 1, clearTimeout() {} });
+  h.pointerDown(evOn({ closest: (s) => (s === '.code-copy' ? host.buttons[1] : null) }));
+  host.rebuild();   // the streamed chunk replaced every node
+  clock += 200;
+  const ev = evOn({ closest: () => null });   // the click lands on the rebuilt, now unrelated target
+  await h(ev);
+  assert.deepStrictEqual(got, ['two']);
+  assert.ok(ev.prevented && !ev.stopped);
+  assert.ok(host.buttons[1].classes.size >= 1);
+  // the record is cleared after use
+  assert.strictEqual(h(evOn({ closest: () => null })), undefined);
+  assert.deepStrictEqual(got, ['two']);
+});
+
+test('an old press record (over 1500 ms) or a disconnected host is ignored; a keyboard click (no press) still works', async () => {
+  const d = fakeDom('unused');
+  const host = fakeHost(['one', 'two']);
+  let clock = 0;
+  const got = [];
+  const h = CC.makeClickHandler({ document: d.doc, now: () => clock, copy: async (t) => { got.push(t); return true; }, setTimeout: () => 1, clearTimeout() {} });
+  h.pointerDown(evOn({ closest: (s) => (s === '.code-copy' ? host.buttons[0] : null) }));
+  clock = 1600;
+  assert.strictEqual(h(evOn({ closest: () => null })), undefined);
+  h.pointerDown(evOn({ closest: (s) => (s === '.code-copy' ? host.buttons[0] : null) }));
+  host.isConnected = false;
+  assert.strictEqual(h(evOn({ closest: () => null })), undefined);
+  assert.deepStrictEqual(got, []);
+  host.isConnected = true;
+  await h(evOn({ closest: (s) => (s === '.code-copy' ? host.buttons[1] : null) }));   // keyboard: target is the button itself
+  assert.deepStrictEqual(got, ['two']);
+});
+
+test('live region: emptied first, the text set 60 ms later (a repeated Copied is announced again); inside the open modal dialog', async () => {
+  const d = fakeDom('x');
+  const T = fakeTimers();
+  const h = CC.makeClickHandler({ document: d.doc, copy: async () => true, setTimeout: T.setTimeout, clearTimeout: T.clearTimeout });
+  await h(fakeEvent(d.btn));
+  const live = d.body.children.find(c => c.className.includes('code-copy-live'));
+  assert.strictEqual(live.textContent, '', 'cleared right away');
+  const t60 = T.q.find(x => x.ms === 60);
+  assert.ok(t60, 'a 60 ms timer');
+  t60.f(); T.q.splice(T.q.indexOf(t60), 1);
+  assert.strictEqual(live.textContent, 'Copied');
+  await h(fakeEvent(d.btn));   // the same words again
+  assert.strictEqual(live.textContent, '', 'cleared again before the new text');
+  T.q.find(x => x.ms === 60).f();
+  assert.strictEqual(live.textContent, 'Copied');
+  // a modal dialog on the page: the region moves into it
+  const dlg = d.doc.createElement('dialog');
+  d.doc.querySelector = (s) => (s === 'dialog:modal' ? dlg : null);
+  await h(fakeEvent(d.btn));
+  assert.strictEqual(live.parentNode, dlg);
+  d.doc.querySelector = () => { throw new Error('no :modal here'); };
+  await h(fakeEvent(d.btn));   // a browser without :modal: falls back to the body, never throws
+  assert.strictEqual(live.parentNode, d.body);
+});
+
+test('textarea fallback: the previous selection ranges and the focused element are put back', async () => {
+  const log = { focus: [], added: [] };
+  const prev = { focus: (o) => log.focus.push(o) };
+  const ranges = ['r1', 'r2'];
+  const sel = { rangeCount: 2, getRangeAt: (i) => ranges[i], removeAllRanges() { log.removed = true; }, addRange: (r) => log.added.push(r) };
+  const ta = { style: {}, setAttribute() {}, select() {}, parentNode: null };
+  const doc = { activeElement: prev, defaultView: { getSelection: () => sel }, querySelector: () => null,
+    body: { appendChild(c) { c.parentNode = this; }, removeChild(c) { c.parentNode = null; } }, createElement: () => ta, execCommand: () => true };
+  assert.strictEqual(await CC.copy('hi', { navigator: {}, document: doc, isSecureContext: true }), true);
+  assert.ok(log.removed);
+  assert.deepStrictEqual(log.added, ['r1', 'r2']);
+  assert.deepStrictEqual(log.focus, [{ preventScroll: true }]);
+  // broken selection / focus APIs never break the copy
+  const bad = { ...doc, activeElement: { focus() { throw new Error('x'); } }, defaultView: { getSelection() { throw new Error('y'); } } };
+  assert.strictEqual(await CC.copy('hi', { navigator: {}, document: bad, isSecureContext: true }), true);
 });

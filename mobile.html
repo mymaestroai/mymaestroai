@@ -282,7 +282,7 @@
     .code-copy {
       position: absolute; top: 2px; right: 2px; z-index: 2; width: 36px; height: 36px; padding: 0; box-sizing: border-box;
       display: flex; align-items: center; justify-content: center; cursor: pointer; user-select: none; -webkit-user-select: none;
-      border: 0; background: transparent; color: var(--text-dim); border-radius: 8px; line-height: 1; opacity: 0.85;   /* always shown on the phone */
+      border: 1px solid var(--border); background: var(--bg-input); color: var(--text-dim); border-radius: 8px; line-height: 1; opacity: 1;   /* always shown on the phone; opaque (the pre's own background, also in Simple mode) so code text that scrolls under it is hidden, not overprinted */
     }
     .code-copy .cc-ico { width: 22px; height: 22px; pointer-events: none; }
     .code-copy .cc-ico-tick { display: none; }

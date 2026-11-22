@@ -107,7 +107,7 @@ test('both pages render links, bare URLs and images through the helpers', () => 
   for (const [name, src] of Object.entries({ 'app.js': app, 'mobile.js': mobile })) {
     assert.ok(!/https\?:\\\/\\\/\[\^\\s<&\]\+/.test(src), `${name}: old autolinker regex is gone`);
     assert.match(src, /autolinkEscaped\((?:formatted|out)/, `${name}: formatContent autolinks through the helper`);
-    assert.match(src, /const u = safeLinkUrl\((?:url|l\.url)\)/, `${name}: markdown links go through safeLinkUrl`);
+    assert.match(src, /const u = safeLinkUrl\((?:url|l\.url|pu\.clean)\)/, `${name}: markdown links go through safeLinkUrl`);
     assert.match(src, /function imageHtml\(src, alt/, `${name}: imageHtml`);
     assert.match(src, /im\.kind === 'external'/, `${name}: external images handled`);
     assert.match(src, /class="external-image"/, `${name}: external image renders as a link`);

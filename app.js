@@ -23241,12 +23241,12 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       // code box with its own copy button (lib/ui-code-copy.js), so the text a reader copies is the source byte for
       // byte: no bold, no <br>, no inline-code or link passes inside it.
       const codeTokens = [];
-      const withVisualPlaceholders = response.replace(/```(\w*)\n([\s\S]*?)```/g, (match, lang, code) => {
+      const withVisualPlaceholders = response.replace(/```(\w*)\r?\n([\s\S]*?)```/g, (match, lang, code) => {
         const kind = visualKind(lang);
         if (!kind) {
           const inner = autolinkEscaped(escapeHtml(code), ' style="color: var(--link); text-decoration: underline;"');
           codeTokens.push(window.CodeCopy ? window.CodeCopy.blockHtml(inner) : `<pre><code>${inner}</code></pre>`);
-          return mk('C', codeTokens.length - 1);
+          return ' ' + mk('C', codeTokens.length - 1) + ' ';   // spaces end a bare URL right before the fence (the autolinker would take the marker into the href); they collapse around the block box
         }
         visualTokens.push(visualPlaceholder(kind, code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')));
         return mk('V', visualTokens.length - 1);
@@ -23316,31 +23316,38 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       for (let i = 0; i < visualTokens.length; i++) {
         formatted = formatted.replace(mk('V', i), () => visualTokens[i]);
       }
-      for (let i = 0; i < codeTokens.length; i++) {
-        formatted = formatted.replace(mk('C', i), () => codeTokens[i]);   // function replacer: $-sequences in the code stay literal
-      }
+      // A code-box marker inside an attribute value (image alt / src, link URL) cannot hold a box: it is pulled out
+      // of the attribute and the box is placed right after the element, so no marker text is left and no HTML lands in an attribute.
+      const codeMarkRe = new RegExp(MARK + 'C\\d+~', 'g');
+      const pullCode = (s) => { const held = []; const clean = String(s).replace(codeMarkRe, (m) => { held.push(m); return ''; }); return { clean, held: held.join('') }; };
 
       // Re-insert extracted images: inline when same-origin / data: / blob:, a link for any other host.
       for (let i = 0; i < imageTokens.length; i++) {
-        const { alt, src } = imageTokens[i];
-        const imgTag = imageHtml(src, alt, 'max-height:300px;');
+        const a = pullCode(imageTokens[i].alt), s = pullCode(imageTokens[i].src);
+        const imgTag = imageHtml(s.clean, a.clean, 'max-height:300px;') + a.held + s.held;
         formatted = formatted.replace(mk('I', i), () => imgTag);
       }
 
       // Re-insert extracted links: only http(s), mailto and same-origin paths; everything escaped.
       for (let i = 0; i < linkTokens.length; i++) {
-        const { text, url } = linkTokens[i];
-        const u = safeLinkUrl(url);
+        const { text } = linkTokens[i];
+        const pu = pullCode(linkTokens[i].url);
+        const u = safeLinkUrl(pu.clean);
         const eText = escapeHtml(text);
-        const linkTag = u
+        const linkTag = (u
           ? `<a href="${escapeHtml(u)}" target="_blank" rel="noopener noreferrer" style="color: var(--link); text-decoration: underline;">${eText}</a>`
-          : `<code>[blocked link: ${eText}]</code>`;
+          : `<code>[blocked link: ${eText}]</code>`) + pu.held;
         formatted = formatted.replace(mk('L', i), () => linkTag);
       }
 
       // Re-insert extracted tables (function replacer so $-sequences in the HTML are literal).
       for (let i = 0; i < tableTokens.length; i++) {
         formatted = formatted.replace(mk('T', i), () => tableTokens[i]);
+      }
+
+      // Code boxes last: a fence inside link text, a table cell or an image's alt text still gets its box.
+      for (let i = 0; i < codeTokens.length; i++) {
+        formatted = formatted.replace(mk('C', i), () => codeTokens[i]);   // function replacer: $-sequences in the code stay literal
       }
 
       return thinkingHtml + formatted;

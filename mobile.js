@@ -1009,12 +1009,12 @@ function formatContent(content) {
   // Every other closed fence is held out the same way (C tokens): escaped here and built into a code box with its own
   // copy button (lib/ui-code-copy.js), so the copied text is the source byte for byte (no bold, no <br> inside).
   const codeBoxes = [];
-  const withVisuals = response.replace(/```(\w*)\n([\s\S]*?)```/g, (m, lang, code) => {
+  const withVisuals = response.replace(/```(\w*)\r?\n([\s\S]*?)```/g, (m, lang, code) => {
     const kind = visualKind(lang);
     if (!kind) {
       const inner = autolinkEscaped(esc(code));
       codeBoxes.push(window.CodeCopy ? window.CodeCopy.blockHtml(inner) : `<pre><code>${inner}</code></pre>`);
-      return mk('C', codeBoxes.length - 1);
+      return ' ' + mk('C', codeBoxes.length - 1) + ' ';   // spaces end a bare URL right before the fence (the autolinker would take the marker into the href); they collapse around the block box
     }
     visuals.push(visualPlaceholder(kind, esc(code)));
     return mk('V', visuals.length - 1);
@@ -1055,17 +1055,24 @@ function formatContent(content) {
   out = autolinkEscaped(out).replace(/\n/g, '<br>');
 
   visuals.forEach((v, i) => { out = out.replace(mk('V', i), () => v); });
-  codeBoxes.forEach((c, i) => { out = out.replace(mk('C', i), () => c); });   // function replacer: $-sequences in the code stay literal
+  // A code-box marker inside an attribute value (image alt / src, link URL) cannot hold a box: it is pulled out of the
+  // attribute and the box is placed right after the element, so no marker text is left and no HTML lands in an attribute.
+  const codeMarkRe = new RegExp(MARK + 'C\\d+~', 'g');
+  const pullCode = (s) => { const held = []; const clean = String(s).replace(codeMarkRe, (mm) => { held.push(mm); return ''; }); return { clean, held: held.join('') }; };
   images.forEach((im, i) => {
-    const tag = imageHtml(im.src, im.alt);
+    const a = pullCode(im.alt), s = im.src == null ? { clean: im.src, held: '' } : pullCode(im.src);
+    const tag = imageHtml(s.clean, a.clean) + a.held + s.held;
     out = out.replace(mk('I', i), () => tag);
   });
   links.forEach((l, i) => {
-    const u = safeLinkUrl(l.url);
-    const tag = u ? `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(l.label)}</a>` : `<code>[blocked link: ${esc(l.label)}]</code>`;
+    const pu = pullCode(l.url);
+    const u = safeLinkUrl(pu.clean);
+    const tag = (u ? `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(l.label)}</a>` : `<code>[blocked link: ${esc(l.label)}]</code>`) + pu.held;
     out = out.replace(mk('L', i), () => tag);
   });
   tables.forEach((t, i) => { out = out.replace(mk('T', i), () => t); });
+  // Code boxes last: a fence inside link text, a table cell or an image's alt text still gets its box.
+  codeBoxes.forEach((c, i) => { out = out.replace(mk('C', i), () => c); });   // function replacer: $-sequences in the code stay literal
   return thinkHtml + out;
 }
 
