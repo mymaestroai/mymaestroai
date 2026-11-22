@@ -23020,24 +23020,30 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const t = tg && tg.closest ? tg.closest('a[href], [onclick^="location.href="]') : null;
       if (!t) return;
       let dest = '';
+      let href = '';
       if (String(t.tagName).toUpperCase() === 'A') {
-        const href = t.getAttribute('href') || '';
-        if (!href || href.startsWith('#') || t.target === '_blank') return;
-        try { const u = new URL(href, location.href); if (u.origin !== location.origin) return; dest = u.pathname + u.search + u.hash; } catch { return; }
+        href = t.getAttribute('href') || '';
+        // a download (a backup file) or a hub route is not a page change: the browser handles it, the dialog stays
+        if (!href || href.startsWith('#') || t.target === '_blank' || t.hasAttribute('download')) return;
       } else {
-        const m = /^location\.href=['"](\/[^'"]*)['"]/.exec(t.getAttribute('onclick') || '');
+        const m = /^location\.href=['"]([^'"]*)['"]/.exec(t.getAttribute('onclick') || '');
         if (!m) return;
-        dest = m[1];
+        href = m[1];
       }
+      try { const u = new URL(href, location.href); if (u.origin !== location.origin || u.pathname.startsWith('/api/')) return; dest = u.pathname + u.search + u.hash; } catch { return; }
       e.preventDefault(); e.stopImmediatePropagation();
       // nothing to lose: the page opens in the sheet at once, in place of this one (Back then closes the sheet)
       if (!dialogGuard.layers().some((l) => dialogGuard.isDirty(l.el))) { location.replace(dest); return; }
       settingsOnlyGoing = dest;
-      // close from the innermost layer out; the first one with changes asks ("Discard changes?") and the way stops there
+      // close from the innermost layer out; the first one with changes asks ("Discard changes?") and the way stops there.
+      // A save still running ('busy') asks nothing: the page is forgotten, never opened later without a question.
       for (let i = 0; i < 20; i++) {
         const ls = dialogGuard.layers();
         if (!ls.length) break;
-        if (dialogGuard.requestClose(ls[ls.length - 1].el, 'close') !== 'closed') return;
+        const how = dialogGuard.requestClose(ls[ls.length - 1].el, 'close');
+        if (how === 'closed') continue;
+        if (how !== 'confirm') settingsOnlyGoing = '';
+        return;
       }
     }
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape') settingsOnlyGoing = ''; }, true);

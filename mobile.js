@@ -14229,7 +14229,7 @@ function settingsSheetMessage(e) {
   const type = e.data && e.data.type;
   if (type === 'mm-settings-ready') { s.ready = true; s.away = false; clearTimeout(s.timer); s.el.classList.add('ready'); s.el.querySelector('.ssh-bar').hidden = true; }   // back on Settings (after signing in again)
   else if (type === 'mm-settings-closed') settingsSheetClosed();
-  else if (type === 'mm-settings-kept') { clearTimeout(s.closeTimer); dialogGuard.open(s.el); }   // "Discard changes?", a save running or an inner box closed: the sheet stays, Back works again
+  else if (type === 'mm-settings-kept') { clearTimeout(s.closeTimer); settingsSheetKeepWaiting(); dialogGuard.open(s.el); }   // a late answer also clears "isn't answering"   // "Discard changes?", a save running or an inner box closed: the sheet stays, Back works again
 }
 function settingsSheetClosed() {
   const s = settingsSheet;

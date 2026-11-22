@@ -124,7 +124,7 @@ test('review r1/r2: a link or button that opens another page asks first when any
   await h.api.settingsOnlyStart();
   const guard = h.docListeners.click.f;
   const ev = (t, closestDiscardGo = false) => ({ target: { closest: (sel) => (sel === '.dlg-discard-go' ? (closestDiscardGo ? {} : null) : t) }, prevented: false, stopped: false, preventDefault() { this.prevented = true; }, stopImmediatePropagation() { this.stopped = true; } });
-  const link = (href, extra = {}) => ({ tagName: 'A', target: '', getAttribute: () => href, ...extra });
+  const link = (href, extra = {}) => ({ tagName: 'A', target: '', getAttribute: () => href, hasAttribute: (k) => !!(extra.attrs && k in extra.attrs), ...extra });
   const button = (onclick) => ({ tagName: 'BUTTON', getAttribute: (k) => (k === 'onclick' ? onclick : null) });
   const before = h.calls.length;
   let e = ev(link('/modules')); guard(e);
@@ -140,7 +140,9 @@ test('review r1/r2: a link or button that opens another page asks first when any
     assert.strictEqual(e.prevented, true); assert.strictEqual(e.stopped, true);
     assert.deepStrictEqual(h.calls[h.calls.length - 1].slice(0, 2), ['requestClose', 'close']);
   }
-  for (const t of [link('#x'), link('https://other.example/'), link('/modules', { target: '_blank' }), link(''), button('saveSettings()'), button("doThing(); location.href='/x'")]) { e = ev(t); guard(e); assert.strictEqual(e.prevented, false); }
+  // review r3: a download (a backup), a hub route, another origin by any spelling: not a page change, never asked about
+  for (const t of [link('#x'), link('https://other.example/'), link('/modules', { target: '_blank' }), link(''), button('saveSettings()'), button("doThing(); location.href='/x'"),
+    link('/backup.tar', { attrs: { download: '' } }), link('/api/backups/download?id=1'), button("location.href='//evil.example/x'"), button("location.href='/\\evil.example'"), button("location.href='https://evil.example/'")]) { e = ev(t); guard(e); assert.strictEqual(e.prevented, false, JSON.stringify(t.getAttribute('onclick') || t.getAttribute('href'))); }
   assert.deepStrictEqual(h.env.location.replaced, [], 'asked, not gone');
   e = ev(null); guard(e); assert.strictEqual(e.prevented, false, 'not a link');
   assert.strictEqual(h.calls.length - before, 2);
@@ -160,7 +162,7 @@ test('review r2: Keep editing, any other click or Back forgets the page a link a
   const guard = h.docListeners.click.f;
   const ev = (t) => ({ target: { closest: (sel) => (sel === '.dlg-discard-go' ? null : t) }, preventDefault() {}, stopImmediatePropagation() {} });
   h.layers[0].el.dirty = true; h.env.nextClose = 'confirm';
-  guard(ev({ tagName: 'A', target: '', getAttribute: () => '/modules' }));
+  guard(ev({ tagName: 'A', target: '', getAttribute: () => '/modules', hasAttribute: () => false }));
   guard(ev(null));   // Keep editing (or anything else)
   h.posted.length = 0;
   h.setOverlay(null); h.env.observe();
@@ -335,6 +337,28 @@ test('review r1: the frame left Settings (sign-in page, a linked page): a Close 
   const t3 = h3.timers[h3.timers.length - 1];
   assert.strictEqual(t3.f, null, 'cleared');
   assert.ok(!s3.el.removed);
+});
+
+test('review r3: a save still running asks nothing, so the page is forgotten; a late "kept" clears the no-answer screen', async () => {
+  const h = soHarness();
+  await h.api.settingsOnlyStart();
+  const guard = h.docListeners.click.f;
+  h.layers[0].el.dirty = true; h.env.nextClose = 'busy';
+  guard({ target: { closest: (sel) => (sel === '.dlg-discard-go' ? null : { tagName: 'A', target: '', getAttribute: () => '/modules', hasAttribute: () => false }) }, preventDefault() {}, stopImmediatePropagation() {} });
+  h.posted.length = 0;
+  h.setOverlay(null); h.env.observe();   // the save ends and the dialog goes another way
+  assert.deepStrictEqual(h.env.location.replaced, [], 'not opened without a question');
+  assert.deepStrictEqual(h.posted, [[{ type: 'mm-settings-closed' }, 'https://hub.example']]);
+  const sh = sheetHarness();
+  sh.api.settingsSheetOpen();
+  const st = sh.api.get();
+  sh.api.settingsSheetMessage({ source: sh.frameWin, origin: 'https://hub.example', data: { type: 'mm-settings-ready' } });
+  st.el.__dialogClose();
+  sh.api.settingsSheetNoAnswer();
+  assert.strictEqual(st.el.parts['.ssh-stuck'].hidden, false);
+  sh.api.settingsSheetMessage({ source: sh.frameWin, origin: 'https://hub.example', data: { type: 'mm-settings-kept' } });
+  assert.strictEqual(st.el.parts['.ssh-stuck'].hidden, true, 'the frame shows again (its question is up)');
+  assert.ok(st.el.classes.has('ready'));
 });
 
 test('review r2: a settings-only page never moves to the phone layout, and the session guard replaces the frame\'s entry', () => {
