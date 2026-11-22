@@ -863,11 +863,21 @@ async function handleHttpRequest(req, res) {
       const prefs = require('./lib/research-prefs').getResearchPrefs();
       let on = false;
       try { on = require('./lib/behaviour-changes').isOn('deep-research'); } catch { on = false; }
-      if (req.method === 'GET') return jsonResponse(res, 200, { on, choice: prefs.choiceOf(key) });
+      if (req.method === 'GET') return jsonResponse(res, 200, { on, choice: prefs.choiceOf(key), alwaysLevel: prefs.alwaysLevelOf(key) });
       if (!on) return jsonResponse(res, 403, { error: 'Deep research is off on this Maestro.' });
       let body = {};
       try { body = JSON.parse(await readBody(req) || '{}') || {}; } catch { return jsonResponse(res, 400, { error: 'Bad request' }); }
-      try { return jsonResponse(res, 200, { ok: true, choice: prefs.setChoice(key, body && body.choice) }); }
+      // each part is checked before anything is saved; choice and alwaysLevel may come together
+      const hasChoice = body && body.choice !== undefined, hasLevel = body && body.alwaysLevel !== undefined;
+      if (!hasChoice && !hasLevel) return jsonResponse(res, 400, { error: 'choice or alwaysLevel is required' });
+      const prefsMod = require('./lib/research-prefs');
+      if (hasChoice && !prefsMod.CHOICES.includes(body.choice)) return jsonResponse(res, 400, { error: `choice must be one of: ${prefsMod.CHOICES.join(', ')}` });
+      if (hasLevel && !prefsMod.LEVELS.includes(body.alwaysLevel)) return jsonResponse(res, 400, { error: `alwaysLevel must be one of: ${prefsMod.LEVELS.join(', ')}` });
+      try {
+        if (hasChoice) prefs.setChoice(key, body.choice);
+        if (hasLevel) prefs.setAlwaysLevel(key, body.alwaysLevel);
+        return jsonResponse(res, 200, { ok: true, choice: prefs.choiceOf(key), alwaysLevel: prefs.alwaysLevelOf(key) });
+      }
       catch (e) { return jsonResponse(res, e && e.code === 'bad_request' ? 400 : 500, { error: e && e.code === 'bad_request' ? e.message : 'Could not save that' }); }
     }
     // This person's time zone (lib/timezone): the page in use reports its own ({tz, auto: true}; the zone follows the
@@ -2522,6 +2532,18 @@ async function handleHttpRequest(req, res) {
       return jsonResponse(res, 200, { ok: true, handOffs });   // no folderLink: the Files panel has no link that opens a folder
     }
 
+    // Deep research progress (lib/sdk-chat researchStatusFor): the active runs of ONE agent, for the line above its chat.
+    // Signed-in only (the gate above); a person who may not see that agent gets the same 404 as an unknown one.
+    if (pathname === '/api/research/status' && req.method === 'GET') {
+      const name = agentFromQuery(req);
+      const allAgents = await getAgents();
+      if (!name || !allAgents.some(a => a.name === name)) return jsonResponse(res, 404, { error: 'unknown agent' });
+      if (!req.hubService && !access.isAdmin(req.hubUser) && !access.canAccessAgent(req.hubUser, name, { agents: allAgents, resolveVirtual: (n) => temporalWorkersLib.getVirtual(n) })) return jsonResponse(res, 404, { error: 'unknown agent' });
+      let runs = [];
+      try { const fn = require('./lib/sdk-chat').researchStatusFor; if (typeof fn === 'function') runs = fn(name); } catch { runs = []; }
+      return jsonResponse(res, 200, { runs: Array.isArray(runs) ? runs : [] });
+    }
+
     // ── Session/History Routes ──────────────────────────────────────
     if (/^\/api\/history\/([^/]+)$/.test(pathname) && req.method === 'GET') {
       const name = pathname.split('/')[3];
@@ -2808,6 +2830,32 @@ async function handleHttpRequest(req, res) {
             if (!Number.isInteger(d) || d < 0 || d > 365) return jsonResponse(res, 400, { error: 'researchReminderDays must be a whole number of days from 0 to 365' });
             patch.researchReminderDays = d;
           }
+          // Thorough deep research caps (admin): known fields only, each in its range (lib/research-thorough); merged onto the stored value.
+          if (patch && patch.researchThorough !== undefined) {
+            const v = patch.researchThorough;
+            if (!v || typeof v !== 'object' || Array.isArray(v)) return jsonResponse(res, 400, { error: 'researchThorough must be an object' });
+            const ranges = { maxSources: [1, 40], readersAtOnce: [1, 12], reviewRounds: [0, 5], timeLimitMinutes: [10, 240] };
+            const known = [...Object.keys(ranges), 'pdf', 'readerModel'];
+            const merged = { ...(hubSettings.getSetting('researchThorough') || {}) };
+            for (const [k, val] of Object.entries(v)) {
+              if (!known.includes(k)) return jsonResponse(res, 400, { error: `researchThorough.${k} is not a setting` });
+              if (ranges[k]) {
+                const [lo, hi] = ranges[k];
+                const n = typeof val === 'string' && /^\s*-?\d+\s*$/.test(val) ? Number(val) : val;
+                if (typeof n !== 'number' || !Number.isInteger(n) || n < lo || n > hi) return jsonResponse(res, 400, { error: `researchThorough.${k} must be a whole number from ${lo} to ${hi}` });
+                merged[k] = n;
+              } else if (k === 'pdf') {
+                if (typeof val !== 'boolean') return jsonResponse(res, 400, { error: 'researchThorough.pdf must be true or false' });
+                merged[k] = val;
+              } else {
+                if (val !== 'own' && val !== 'helper') return jsonResponse(res, 400, { error: "researchThorough.readerModel must be 'own' or 'helper'" });
+                merged[k] = val;
+              }
+            }
+            patch.researchThorough = merged;
+          }
+          // Which search the research helpers use: their usual one (default) or also the hub's (a test option).
+          if (patch && patch.researchHelperSearch !== undefined && patch.researchHelperSearch !== 'default' && patch.researchHelperSearch !== 'both') return jsonResponse(res, 400, { error: "researchHelperSearch must be 'default' or 'both'" });
           // Subscription usage (lib/codex-usage, Settings → Subscriptions): on unless turned off.
           if (patch && patch.subscriptionUsage !== undefined) patch.subscriptionUsage = patch.subscriptionUsage !== false;
           if (patch && patch.componentUpdates !== undefined) patch.componentUpdates = { codex: ['auto', 'notify', 'off'].includes(patch.componentUpdates && patch.componentUpdates.codex) ? patch.componentUpdates.codex : 'auto' };

@@ -3758,6 +3758,7 @@
         </div>
         <div class="st-hint">How often someone who chose Never for deep research is reminded, at the end of a reply, that it is off.</div>`;
         })() : ''}
+        ${isHubAdmin() ? researchThoroughBlockHtml(data) : ''}
       </div>`;
 
       if (isHubAdmin()) {
@@ -5501,6 +5502,62 @@
       }
     }
 
+    // Thorough deep research (admin): settings.researchThorough { maxSources, readersAtOnce, reviewRounds, timeLimitMinutes, pdf,
+    // readerModel } and settings.researchHelperSearch ('default' | 'both'). Each control saves at once, one save at a time;
+    // a failure puts the control back to the last saved value. The phone has no admin settings, so none of this is on the phone.
+    function researchThoroughBlockHtml(data) {
+      const t = (data && data.researchThorough && typeof data.researchThorough === 'object') ? data.researchThorough : {};
+      const num = (k, lo, hi, d) => { const n = Number(t[k]); return Number.isInteger(n) && n >= lo && n <= hi ? n : d; };
+      const vals = { maxSources: num('maxSources', 1, 40, 12), readersAtOnce: num('readersAtOnce', 1, 12, 4), reviewRounds: num('reviewRounds', 0, 5, 2), timeLimitMinutes: num('timeLimitMinutes', 10, 240, 60) };
+      const pdf = t.pdf === false;
+      const readerModel = t.readerModel === 'helper' ? 'helper' : 'own';
+      const both = data && data.researchHelperSearch === 'both';
+      const numRow = (id, key, label, lo, hi, hint) => `<div class="st-row">
+          <label for="${id}">${label}</label>
+          <input type="number" id="${id}" min="${lo}" max="${hi}" step="1" value="${vals[key]}" data-saved="${vals[key]}" style="max-width:90px" onchange="saveResearchSetting('${key}', this)">
+        </div>
+        <div class="st-hint">${hint}</div>`;
+      return `<div id="st-research-thorough">
+        <div class="st-row"><label><b>Thorough research</b></label></div>
+        ${numRow('st-rt-sources', 'maxSources', 'Sources read in full', 1, 40, 'How many pages the research reads whole, after the quick pass picks the ones the answer depends on most (1 to 40).')}
+        ${numRow('st-rt-readers', 'readersAtOnce', 'Readers at once', 1, 12, 'How many readers work at the same time. More is faster but uses more of the AI service at once (1 to 12).')}
+        ${numRow('st-rt-rounds', 'reviewRounds', 'Review rounds', 0, 5, 'How many times a second reviewer checks the findings against the sources and sends back what does not hold (0 to 5).')}
+        ${numRow('st-rt-minutes', 'timeLimitMinutes', 'Time limit, minutes', 10, 240, 'A thorough run that is still going after this long is stopped and reports what it has (10 to 240).')}
+        <div class="st-row">
+          <label class="gs-sub"><input type="checkbox" id="st-rt-pdf" ${pdf ? '' : 'checked'} data-saved="${pdf ? 'false' : 'true'}" onchange="saveResearchSetting('pdf', this)"> Make a PDF</label>
+        </div>
+        <div class="st-hint">Needs Chrome or Chromium on this computer; without one the document is Markdown and HTML.</div>
+        <div class="st-row">
+          <label for="st-rt-reader">Readers use</label>
+          <select id="st-rt-reader" data-saved="${readerModel}" onchange="saveResearchSetting('readerModel', this)"><option value="own"${readerModel === 'own' ? ' selected' : ''}>the agent's own model</option><option value="helper"${readerModel === 'helper' ? ' selected' : ''}>the fast helper model</option></select>
+        </div>
+        <div class="st-hint">The fast helper model is cheaper and quicker; the agent's own model reads more carefully.</div>
+        <div class="st-row">
+          <label for="st-rt-search">Research helpers search with</label>
+          <select id="st-rt-search" data-saved="${both ? 'both' : 'default'}" onchange="saveResearchSetting('researchHelperSearch', this)"><option value="default"${both ? '' : ' selected'}>their usual search</option><option value="both"${both ? ' selected' : ''}>their usual search and the hub's search (test)</option></select>
+        </div>
+        <div class="st-hint">A test: helpers and readers get the hub's own web search as well as the one they have. Leave it on the usual search unless you are comparing results.</div>
+      </div>`;
+    }
+    let researchThoroughSaving = false;
+    async function saveResearchSetting(key, el) {
+      const saved = el.dataset.saved;
+      const back = () => { if (el.type === 'checkbox') el.checked = saved === 'true'; else el.value = saved; };
+      if (researchThoroughSaving) { back(); hubToast('Another setting is saving. Try again in a moment.'); return; }
+      const value = el.type === 'checkbox' ? el.checked : el.type === 'number' ? Number(el.value) : el.value;
+      const patch = key === 'researchHelperSearch' ? { researchHelperSearch: value } : { researchThorough: { [key]: value } };
+      researchThoroughSaving = true;
+      try {
+        const r = await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify(patch) });
+        if (!r.ok) { let m = 'HTTP ' + r.status; try { const j = await r.json(); if (j && j.error) m = j.error; } catch {} throw new Error(m); }
+        el.dataset.saved = String(value);
+        hubToast('Saved.');
+      } catch (e) {
+        back();
+        hubToast('Could not save: ' + e.message);
+      } finally { researchThoroughSaving = false; }
+    }
+
     // Approval cards on/off: saved at once, takes effect on the next tool call of any agent.
     async function saveApprovalsToggle(on) {
       const state = document.getElementById('st-approvals-state');
@@ -5711,6 +5768,8 @@
     function researchChoiceLabel(choice) { const m = RESEARCH_CHOICES.find(c => c[0] === choice); return m ? m[1] : RESEARCH_CHOICES[0][1]; }
     let researchPrefSaving = false;   // one save at a time: a choice made while one is in flight is ignored
     let researchPrefChoice = 'ask';
+    let researchPrefLevel = 'quick';   // what Always yes runs: quick | thorough
+    const RESEARCH_LEVEL_HINT = 'Thorough reads the key sources in full and checks figures; it can take up to an hour.';
     function researchPrefPaint(box) {
       while (box.firstChild) box.removeChild(box.firstChild);
       const row = document.createElement('div');
@@ -5734,11 +5793,42 @@
         researchPrefSaving = false; sel.disabled = false;
         if (err) { researchPrefChoice = before; hubToast(String(err)); } else hubToast(`Deep research: ${researchChoiceLabel(researchPrefChoice)}.`);
         sel.value = researchPrefChoice;
+        levelBox.hidden = researchPrefChoice !== 'always';   // shown only for Always (its value is kept while hidden)
       });
       row.appendChild(lab); row.appendChild(sel);
       const hint = document.createElement('div');
       hint.className = 'st-hint'; hint.textContent = RESEARCH_HINT;
-      box.appendChild(row); box.appendChild(hint);
+      // Always yes runs: Quick | Thorough, only while the choice is Always
+      const levelBox = document.createElement('div');
+      levelBox.id = 'st-research-level-box';
+      levelBox.hidden = researchPrefChoice !== 'always';
+      const lrow = document.createElement('div');
+      lrow.className = 'st-row';
+      const llab = document.createElement('label');
+      llab.htmlFor = 'st-research-level'; llab.textContent = 'Always yes runs';
+      const lsel = document.createElement('select');
+      lsel.id = 'st-research-level';
+      for (const [v, l] of [['quick', 'Quick'], ['thorough', 'Thorough']]) { const o = document.createElement('option'); o.value = v; o.textContent = l; lsel.appendChild(o); }
+      lsel.value = researchPrefLevel;
+      lsel.addEventListener('change', async () => {
+        if (researchPrefSaving) { lsel.value = researchPrefLevel; return; }
+        const want = lsel.value, before = researchPrefLevel;
+        researchPrefSaving = true; lsel.disabled = true; sel.disabled = true;
+        let err = '';
+        try {
+          const r = await fetch('/api/research-pref', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ alwaysLevel: want }) });
+          const d = await r.json().catch(() => ({}));
+          if (r.ok && d && d.ok) researchPrefLevel = ['quick', 'thorough'].includes(d.alwaysLevel) ? d.alwaysLevel : want; else err = (d && d.error) || 'Could not save that';
+        } catch (e) { err = 'Could not save that'; }
+        researchPrefSaving = false; lsel.disabled = false; sel.disabled = false;
+        if (err) { researchPrefLevel = before; hubToast(String(err)); } else hubToast(`Always yes: ${researchPrefLevel === 'thorough' ? 'Thorough' : 'Quick'} research.`);
+        lsel.value = researchPrefLevel;
+      });
+      lrow.appendChild(llab); lrow.appendChild(lsel);
+      const lhint = document.createElement('div');
+      lhint.className = 'st-hint'; lhint.textContent = RESEARCH_LEVEL_HINT;
+      levelBox.appendChild(lrow); levelBox.appendChild(lhint);
+      box.appendChild(row); box.appendChild(hint); box.appendChild(levelBox);
     }
     async function researchPrefLoad() {
       const box = document.getElementById('st-research-pref');
@@ -5747,6 +5837,7 @@
       try { const r = await fetch('/api/research-pref', { credentials: 'include' }); if (r.ok) d = await r.json(); } catch { d = null; }
       if (!d || d.on !== true) { box.hidden = true; return; }   // off, failed or unreadable: nothing shown
       researchPrefChoice = ['ask', 'always', 'never'].includes(d.choice) ? d.choice : 'ask';
+      researchPrefLevel = d.alwaysLevel === 'thorough' ? 'thorough' : 'quick';
       researchPrefPaint(box);
       box.hidden = false;
     }
@@ -8289,6 +8380,55 @@
       });
     }
     
+    // Deep research progress line (the hub's research_progress event, GET /api/research/status): one text line per active run
+    // above the message box, in the style of the hand-off Tasks line. Text only; gone when the run is delivered or failed.
+    const researchRuns = new Map();   // agent -> Map(run id -> { id, level, stage, label, done, total, startedAt })
+    function researchLineText(run, now) {
+      const lv = String((run && run.level) || 'quick');
+      const level = lv.charAt(0).toUpperCase() + lv.slice(1);
+      const label = String((run && (run.label || run.stage)) || 'working');
+      let text = `Deep research (${level}): ${label}`;
+      const t0 = Number(run && run.startedAt);
+      if (t0 > 0) { const mins = Math.floor(Math.max(0, (now === undefined ? Date.now() : now) - t0) / 60000); text += ' · ' + (mins < 1 ? 'just started' : `${mins} min`); }
+      return text;
+    }
+    function researchLineFill(box, agent) {
+      if (!box) return;
+      const runs = agent && researchRuns.has(agent) ? [...researchRuns.get(agent).values()].sort((a, b) => (Number(a.startedAt) || 0) - (Number(b.startedAt) || 0)).slice(0, 3) : [];
+      box.textContent = '';
+      const now = Date.now();
+      for (const r of runs) { const d = document.createElement('div'); d.className = 'ho-strip research-line'; d.setAttribute('role', 'status'); d.textContent = researchLineText(r, now); box.appendChild(d); }
+      box.hidden = runs.length === 0;
+    }
+    function researchLineApply(ev) {
+      if (!ev || !ev.agent || ev.id == null) return;
+      const id = String(ev.id);
+      if (ev.state === 'delivered' || ev.state === 'failed') {
+        const m = researchRuns.get(ev.agent);
+        if (m) { m.delete(id); if (!m.size) researchRuns.delete(ev.agent); }
+      } else {
+        if (!researchRuns.has(ev.agent)) researchRuns.set(ev.agent, new Map());
+        researchRuns.get(ev.agent).set(id, { id, level: ev.level, stage: ev.stage, label: ev.label, done: ev.done, total: ev.total, startedAt: ev.startedAt });
+      }
+      researchLinePaint();
+    }
+    function researchLinePaint() {
+      for (const k of Object.keys(chats)) { const c = chats[k]; if (c && !c.isGroup && !c.isWorker && c.agent) researchLineFill(document.getElementById('research-lines-' + k), c.agent); }
+    }
+    async function researchLineLoad(agent) {
+      if (!agent) return;
+      try {
+        const r = await fetch('/api/research/status?agent=' + encodeURIComponent(agent), { credentials: 'include' });
+        const d = r.ok ? await r.json() : null;
+        if (!d || !Array.isArray(d.runs)) return;
+        const m = new Map();
+        for (const x of d.runs) if (x && x.id != null) m.set(String(x.id), { id: String(x.id), level: x.level, stage: x.stage, label: x.label, done: x.done, total: x.total, startedAt: x.startedAt });
+        if (m.size) researchRuns.set(agent, m); else researchRuns.delete(agent);
+        researchLinePaint();
+      } catch { /* the line stays as it was */ }
+    }
+    setInterval(() => { if (researchRuns.size) researchLinePaint(); }, 60000);   // the minutes move on
+
     function findSoloChat(agentName) {
       return Object.values(chats).find(c => c && !c.isGroup && !c.isWorker && c.agent === agentName) || null;
     }
@@ -10873,6 +11013,7 @@
         notifyArmed[ev.agent] = ev.on ? ev.turnId : null;
         paintNotifyBtns(ev.agent);
       });
+      source.addEventListener('research_progress', e => { const ev = parse(e); if (ev) researchLineApply(ev); });
       source.addEventListener('ask_user', e => {
         const ev = parse(e); if (!ev) return;
         setAgentLive(ev.agent, { busy: true, pendingQuestion: true });
@@ -11118,6 +11259,7 @@
         <div class="compaction-line" id="compaction-line-${chatId}" style="display:none" title="Context compression: the agent writes its own working brief (see the agent's settings page)"></div>
         <div class="messages" id="messages-${chatId}"></div>
         <div class="handoff-cards" id="handoff-cards-${chatId}" hidden></div>
+        <div class="handoff-cards research-lines" id="research-lines-${chatId}" hidden></div>
         <div class="input-area">
           <div class="input-wrapper">
             <div class="image-preview-area" id="image-preview-${chatId}"></div>
@@ -11247,6 +11389,7 @@
       activeChat = chatId;
       window.__activeChatId = chatId;
       if (document.getElementById('files-panel')) filesRefresh(); // the Files panel follows the active chat's agent
+      if (opened && !opened.isGroup && !opened.isWorker && opened.agent) { researchLinePaint(); researchLineLoad(opened.agent); }   // the deep research progress line
       if (document.getElementById('recall-panel') && chats[chatId] && !chats[chatId].isGroup && chats[chatId].agent && String(chats[chatId].agent) !== recallState.agent) openRecallPanel(chatId); // so does Recall
       document.getElementById(`input-${chatId}`)?.focus();
       if (typeof scheduleWorkerListRefresh === 'function') scheduleWorkerListRefresh();

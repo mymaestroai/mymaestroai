@@ -2165,10 +2165,13 @@ async function onNotifyPrefsSheetChange(e) {
 const RESEARCH_CHOICES = [['ask', 'Ask each time'], ['always', 'Always'], ['never', 'Never']];
 const RESEARCH_HINT = 'When a question needs research, your agents can offer a deep research run (a few minutes, many sources).';
 function researchChoiceLabel(choice) { const m = RESEARCH_CHOICES.find(c => c[0] === choice); return m ? m[1] : RESEARCH_CHOICES[0][1]; }
-function researchMenuText(choice) { return 'Deep research: ' + researchChoiceLabel(choice); }
+function researchMenuText(choice, level) { return 'Deep research: ' + researchChoiceLabel(choice) + (choice === 'always' && level === 'thorough' ? ' (Thorough)' : ''); }
+const RESEARCH_LEVELS = [['quick', 'Quick'], ['thorough', 'Thorough']];
+function researchLevelOk(level) { return RESEARCH_LEVELS.some(c => c[0] === level); }
 function researchChoiceOk(choice) { return RESEARCH_CHOICES.some(c => c[0] === choice); }
 let researchPrefOn = false;
 let researchPrefChoice = 'ask';
+let researchPrefLevel = 'quick';   // what Always yes runs
 let researchPrefSaving = false;   // one save at a time: a choice made while one is in flight is ignored
 let researchPrefReadSeq = 0;   // a save starts a new number: a read that began before it never repaints the older choice
 async function researchPrefLoad() {
@@ -2177,13 +2180,13 @@ async function researchPrefLoad() {
   try { const r = await api('/api/research-pref'); if (r.ok) d = await r.json(); } catch { d = null; }
   if (seq !== researchPrefReadSeq) return researchPrefOn;   // a save (or a newer read) came after this read began
   researchPrefOn = !!(d && d.on === true);
-  if (researchPrefOn && !researchPrefSaving) researchPrefChoice = researchChoiceOk(d.choice) ? d.choice : 'ask';
+  if (researchPrefOn && !researchPrefSaving) { researchPrefChoice = researchChoiceOk(d.choice) ? d.choice : 'ask'; researchPrefLevel = d.alwaysLevel === 'thorough' ? 'thorough' : 'quick'; }
   researchPrefPaintAll();
   return researchPrefOn;
 }
 function researchPrefPaintAll() {
   const row = $('menu-research');
-  if (row) { row.hidden = !researchPrefOn; row.textContent = researchMenuText(researchPrefChoice); }
+  if (row) { row.hidden = !researchPrefOn; row.textContent = researchMenuText(researchPrefChoice, researchPrefLevel); }
   typeof menuGroupsSync === 'function' && menuGroupsSync();
   const sh = $('research-sheet');
   if (sh && sh.open) researchSheetPaint();
@@ -2209,6 +2212,37 @@ async function researchPick(choice) {
   toast(err ? String(err) : researchMenuText(researchPrefChoice));
   return !err;
 }
+// Always yes runs Quick or Thorough: saved like a choice (one save at a time; a failure puts the old level back).
+async function researchLevelPick(level) {
+  if (researchPrefSaving || !researchPrefOn || !researchLevelOk(level)) return false;
+  researchPrefSaving = true;
+  researchPrefReadSeq++;
+  const before = researchPrefLevel;
+  researchPrefLevel = level;
+  researchPrefPaintAll();
+  let err = '';
+  try {
+    const r = await api('/api/research-pref', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ alwaysLevel: level }) });
+    const d = await r.json().catch(() => ({}));
+    if (r.ok && d && d.ok) { if (researchLevelOk(d.alwaysLevel)) researchPrefLevel = d.alwaysLevel; } else err = (d && d.error) || 'Could not save that';
+  } catch { err = 'Could not save that'; }
+  researchPrefSaving = false;
+  if (err) researchPrefLevel = before;
+  researchPrefPaintAll();
+  toast(err ? String(err) : 'Always yes: ' + (researchPrefLevel === 'thorough' ? 'Thorough' : 'Quick') + ' research.');
+  return !err;
+}
+// The two buttons "Always yes runs: Quick" / "Always yes runs: Thorough", only while the choice is Always.
+function researchLevelButtons(parent, onPick) {
+  if (researchPrefChoice !== 'always') return;
+  for (const [v, l] of RESEARCH_LEVELS) {
+    const b = document.createElement('button');
+    b.type = 'button'; b.dataset.researchLevel = v; b.textContent = 'Always yes runs: ' + l;
+    b.setAttribute('aria-pressed', String(v === researchPrefLevel));
+    if (onPick) b.addEventListener('click', () => { researchLevelPick(v); });
+    parent.appendChild(b);
+  }
+}
 function researchSheetPaint() {
   const d = $('research-sheet');
   if (!d) return;
@@ -2222,6 +2256,7 @@ function researchSheetPaint() {
     b.setAttribute('aria-pressed', String(v === researchPrefChoice));
     d.appendChild(b);
   }
+  researchLevelButtons(d, false);   // clicks go through onResearchSheetClick
   const c = document.createElement('button');
   c.type = 'button'; c.dataset.research = ''; c.textContent = 'Close';
   d.appendChild(c);
@@ -2236,6 +2271,8 @@ function openResearchSheet() {
 async function onResearchSheetClick(e) {
   const d = $('research-sheet');
   if (e.target === d) { d.close(); return; }   // a tap on the backdrop
+  const lv = e.target.closest && e.target.closest('button[data-research-level]');
+  if (lv) { await researchLevelPick(lv.dataset.researchLevel); return; }   // the sheet stays open
   const b = e.target.closest && e.target.closest('button[data-research]');
   if (!b) return;
   if (!b.dataset.research) { d.close(); return; }
@@ -2261,7 +2298,9 @@ function researchSimplePaint(d) {
     seg.appendChild(b);
   }
   const hint = document.createElement('div'); hint.className = 'ss-rhint'; hint.textContent = RESEARCH_HINT;
-  sec.appendChild(t); sec.appendChild(seg); sec.appendChild(hint);
+  sec.appendChild(t); sec.appendChild(seg);
+  if (researchPrefChoice === 'always') { const lseg = document.createElement('div'); lseg.className = 'ss-rseg'; lseg.setAttribute('role', 'group'); lseg.setAttribute('aria-label', 'Always yes runs'); researchLevelButtons(lseg, true); sec.appendChild(lseg); }
+  sec.appendChild(hint);
   anchor.after(sec);
 }
 
@@ -7343,6 +7382,7 @@ async function openChat(name) {
   current = name;
   localStorage.setItem('hub-mobile-last', name);
   voiceStatusRefresh();   // the mic button shows only while the hub voice is on and ready
+  researchLinePaint(); researchLineLoad(name);   // the deep research progress line
   if (!same && $('files-sheet')?.open) filesRefresh(); // the Files sheet follows the open agent
   $('chat-icon').textContent = a?.icon || '🤖';
   $('chat-name').textContent = a?.display || name;
@@ -12631,6 +12671,8 @@ function connectEvents() {
   on('turn_end', onTurnEnd);
   on('for_owner', onForOwner);
   on('turn_notify', onTurnNotify);
+  on('research_progress', researchLineApply);
+  on('hello', () => { if (screen === 'chat' && current) researchLineLoad(current); });   // after a reconnect: the runs as they are now
   on('ask_user', (ev) => {
     setLive(ev.agent, { busy: true, pendingQuestion: true }); paintStatus();
     // The question itself: shown now if that chat is open, else kept until it is (dedup by request id in showQuestion).
@@ -12724,6 +12766,53 @@ function resyncClick() {
   const busy = current && (streams.has(current) || reattaches.has(current) || isBusy(current));
   toast(busy ? `Re-synced with the hub, following ${displayName(current)}'s turn` : 'Re-synced with the hub');
 }
+
+// Deep research progress line (the hub's research_progress event, GET /api/research/status): one text line per active run
+// above the message box, in the style of the hand-off Tasks line. Text only; gone when the run is delivered or failed.
+const researchRuns = new Map();   // agent -> Map(run id -> { id, level, stage, label, done, total, startedAt })
+function researchLineText(run, now) {
+  const lv = String((run && run.level) || 'quick');
+  const level = lv.charAt(0).toUpperCase() + lv.slice(1);
+  const label = String((run && (run.label || run.stage)) || 'working');
+  let text = `Deep research (${level}): ${label}`;
+  const t0 = Number(run && run.startedAt);
+  if (t0 > 0) { const mins = Math.floor(Math.max(0, (now === undefined ? Date.now() : now) - t0) / 60000); text += ' · ' + (mins < 1 ? 'just started' : `${mins} min`); }
+  return text;
+}
+function researchLineFill(box, agent) {
+  if (!box) return;
+  const runs = agent && researchRuns.has(agent) ? [...researchRuns.get(agent).values()].sort((a, b) => (Number(a.startedAt) || 0) - (Number(b.startedAt) || 0)).slice(0, 3) : [];
+  box.textContent = '';
+  const now = Date.now();
+  for (const r of runs) { const d = document.createElement('div'); d.className = 'ho-strip research-line'; d.setAttribute('role', 'status'); d.textContent = researchLineText(r, now); box.appendChild(d); }
+  box.hidden = runs.length === 0;
+}
+function researchLineApply(ev) {
+  if (!ev || !ev.agent || ev.id == null) return;
+  const id = String(ev.id);
+  if (ev.state === 'delivered' || ev.state === 'failed') {
+    const m = researchRuns.get(ev.agent);
+    if (m) { m.delete(id); if (!m.size) researchRuns.delete(ev.agent); }
+  } else {
+    if (!researchRuns.has(ev.agent)) researchRuns.set(ev.agent, new Map());
+    researchRuns.get(ev.agent).set(id, { id, level: ev.level, stage: ev.stage, label: ev.label, done: ev.done, total: ev.total, startedAt: ev.startedAt });
+  }
+  researchLinePaint();
+}
+function researchLinePaint() { researchLineFill(document.getElementById('research-lines'), screen === 'chat' ? current : null); }
+async function researchLineLoad(agent) {
+  if (!agent) return;
+  try {
+    const r = await api('/api/research/status?agent=' + encodeURIComponent(agent));
+    const d = r.ok ? await r.json() : null;
+    if (!d || !Array.isArray(d.runs)) return;
+    const m = new Map();
+    for (const x of d.runs) if (x && x.id != null) m.set(String(x.id), { id: String(x.id), level: x.level, stage: x.stage, label: x.label, done: x.done, total: x.total, startedAt: x.startedAt });
+    if (m.size) researchRuns.set(agent, m); else researchRuns.delete(agent);
+    researchLinePaint();
+  } catch { /* the line stays as it was */ }
+}
+setInterval(() => { if (researchRuns.size) researchLinePaint(); }, 60000);   // the minutes move on
 
 function chatOpenFor(agent) {
   return screen === 'chat' && current === agent;

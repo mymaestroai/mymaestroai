@@ -10,7 +10,7 @@ const { makeIsolatedInstall } = require('./helpers/isolated-install');
 
 const ISO = makeIsolatedInstall('research-');
 const research = require(path.join(ISO.inst, 'lib', 'research.js'));
-const { createResearchPrefs, CHOICES, MAX_PEOPLE } = require(path.join(ISO.inst, 'lib', 'research-prefs.js'));
+const { createResearchPrefs, CHOICES, LEVELS, MAX_PEOPLE } = require(path.join(ISO.inst, 'lib', 'research-prefs.js'));
 
 const tmpFile = () => path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'rp-')), 'research-prefs.json');
 const BIG = 'claude-sdk/claude-test-big';
@@ -62,7 +62,7 @@ test('prefs: file is 0600, shape is { people: { key: { choice } } }, persists ac
   const a = createResearchPrefs({ file: f });
   a.setChoice('u_sam', 'always');
   assert.equal(fs.statSync(f).mode & 0o777, 0o600);
-  assert.deepEqual(JSON.parse(fs.readFileSync(f, 'utf8')), { people: { u_sam: { choice: 'always', remindedAt: null } } });
+  assert.deepEqual(JSON.parse(fs.readFileSync(f, 'utf8')), { people: { u_sam: { choice: 'always', remindedAt: null, alwaysLevel: 'quick' } } });
   assert.equal(createResearchPrefs({ file: f }).choiceOf('u_sam'), 'always');
   a.setChoice('u_sam', 'never');
   assert.equal(createResearchPrefs({ file: f }).choiceOf('u_sam'), 'never');
@@ -93,11 +93,37 @@ test('costLine: by kind', () => {
 test('cardFor: the ask_user arguments', () => {
   const c = research.cardFor('openai/test-mini');
   assert.equal(c.header, 'Deep research');
-  assert.equal(c.question, 'This looks like a research question. Do a deep research run (a few minutes, many sources)? ' + research.costLine('openai/test-mini'));
-  assert.deepEqual(c.options, ['Yes', 'No', 'Always yes', 'Never']);
-  assert.equal(c.descriptions.length, 4);
+  assert.equal(c.question, 'This looks like a research question. Research it? Quick takes a few minutes; Thorough takes up to an hour. Pay-per-use: Quick costs several times a normal answer; Thorough costs much more (it reads whole papers and pages and has them checked).');
+  assert.deepEqual(c.options, ['Yes, quick', 'Yes, thorough', 'No', 'Always yes', 'Never']);
+  assert.deepEqual(c.descriptions, [
+    'A few minutes: many searches, the results summarised. You can keep talking meanwhile.',
+    'Up to an hour: also reads the key sources in full and checks every figure against them.',
+    'Answer now from what I know and a quick search.',
+    'Research questions like this without asking, at the level set in Settings (now: Quick).',
+    'Never ask; always answer normally. You can change this in Settings.',
+  ]);
   assert.equal(c.allow_skip, true);
   assert.deepEqual(Object.keys(c).sort(), ['allow_skip', 'descriptions', 'header', 'options', 'question']);
+});
+
+test('cardFor: the cost sentence per billing kind', () => {
+  const q = (m) => research.cardFor(m).question.replace('This looks like a research question. Research it? Quick takes a few minutes; Thorough takes up to an hour. ', '');
+  assert.equal(q(BIG), 'Both use your Claude sign-in plan allowance; Thorough uses several times more than Quick.');
+  assert.equal(q('codex-cli/test-x'), 'Both use your ChatGPT plan allowance; Thorough uses several times more than Quick.');
+  assert.equal(q('local/test-model'), "Both run on this computer's own model: no cost, but Thorough can take well over an hour.");
+  assert.equal(q('mystery/thing'), 'Thorough costs several times more than Quick.');
+});
+
+test('cardFor: Recommended marks only the level named; the always wording follows alwaysLevel', () => {
+  const m = 'openai/test-mini';
+  const quick = research.cardFor(m, { recommend: 'quick' }).descriptions;
+  assert.ok(quick[0].endsWith(' Recommended.') && !quick[1].includes('Recommended'));
+  const th = research.cardFor(m, { recommend: 'thorough' }).descriptions;
+  assert.ok(th[1].endsWith(' Recommended.') && !th[0].includes('Recommended'));
+  for (const r of ['both', '', undefined, null, 5]) assert.ok(!research.cardFor(m, { recommend: r }).descriptions.join(' ').includes('Recommended'), String(r));
+  assert.ok(research.cardFor(m, { alwaysLevel: 'thorough' }).descriptions[3].endsWith('(now: Thorough).'));
+  assert.ok(research.cardFor(m, { alwaysLevel: 'quick' }).descriptions[3].endsWith('(now: Quick).'));
+  assert.ok(research.cardFor(m, { alwaysLevel: 'junk' }).descriptions[3].endsWith('(now: Quick).'));
 });
 
 test('TOOL: name, actions and required fields', () => {
@@ -107,6 +133,10 @@ test('TOOL: name, actions and required fields', () => {
   assert.deepEqual(research.TOOL.parameters.required, ['action']);
   assert.match(research.TOOL.description, /action "set"/);
   assert.match(research.TOOL.description, /BEFORE answering/);
+  assert.deepEqual(research.TOOL.parameters.properties.level.enum, ['quick', 'thorough']);
+  assert.deepEqual(research.TOOL.parameters.properties.recommend.enum, ['quick', 'thorough']);
+  assert.deepEqual(research.TOOL.parameters.properties.always_level.enum, ['quick', 'thorough']);
+  assert.match(research.TOOL.description, /Never start thorough unless the person chose it/);
 });
 
 // ── decide ──
@@ -118,9 +148,11 @@ const askOf = (answer) => { const f = async () => { f.n++; return answer; }; f.n
 
 test('decide: always and never never ask', async () => {
   const ask = askOf('yes');
-  assert.deepEqual(await research.decide({ choice: 'always', canAsk: true, ask, store: fakeStore(), personKey: 'sam' }), { run: true, by: 'always' });
+  assert.deepEqual(await research.decide({ choice: 'always', canAsk: true, ask, store: fakeStore(), personKey: 'sam' }), { run: true, by: 'always', level: 'quick' });
   assert.deepEqual(await research.decide({ choice: 'never', canAsk: true, ask, store: fakeStore(), personKey: 'sam' }), { run: false, by: 'never' });
-  assert.deepEqual(await research.decide({ choice: 'always', canAsk: false, ask, store: fakeStore(), personKey: 'sam' }), { run: true, by: 'always' });
+  assert.deepEqual(await research.decide({ choice: 'always', canAsk: false, ask, store: fakeStore(), personKey: 'sam' }), { run: true, by: 'always', level: 'quick' });
+  assert.equal((await research.decide({ choice: 'always', alwaysLevel: 'thorough', canAsk: false, ask, store: fakeStore(), personKey: 'sam' })).level, 'thorough');
+  assert.equal((await research.decide({ choice: 'always', alwaysLevel: 'junk', canAsk: false, ask, store: fakeStore(), personKey: 'sam' })).level, 'quick');
   assert.equal(ask.n, 0);
 });
 
@@ -133,8 +165,12 @@ test('decide: nobody to ask', async () => {
 
 test('decide: every answer', async () => {
   const run = async (answer, store = fakeStore()) => ({ d: await research.decide({ choice: 'ask', canAsk: true, ask: askOf(answer), store, personKey: 'u_sam' }), store });
-  for (const a of ['yes', ' Yes ', 'YES']) { const { d, store } = await run(a); assert.deepEqual(d, { run: true, by: 'yes' }); assert.equal(store.calls.length, 0); }
-  for (const a of ['Always yes', 'always', ' yes always ']) { const { d, store } = await run(a); assert.deepEqual(d, { run: true, by: 'always-now' }); assert.deepEqual(store.calls, [['u_sam', 'always']]); }
+  for (const a of ['yes', ' Yes ', 'YES']) { const { d, store } = await run(a); assert.deepEqual(d, { run: true, by: 'yes', level: 'quick' }); assert.equal(store.calls.length, 0); }
+  for (const a of ['Yes, quick', ' YES, QUICK ']) { const { d, store } = await run(a); assert.deepEqual(d, { run: true, by: 'yes', level: 'quick' }); assert.equal(store.calls.length, 0); }
+  for (const a of ['Yes, thorough', ' yes, THOROUGH ']) { const { d, store } = await run(a); assert.deepEqual(d, { run: true, by: 'yes', level: 'thorough' }); assert.equal(store.calls.length, 0); }
+  { const d = await research.decide({ choice: 'ask', alwaysLevel: 'thorough', canAsk: true, ask: askOf('Always yes'), store: fakeStore(), personKey: 'u_sam' }); assert.deepEqual(d, { run: true, by: 'always-now', level: 'thorough' }); }
+  assert.deepEqual(await research.decide({ choice: 'ask', canAsk: true, ask: askOf('yes, deep'), store: fakeStore(), personKey: 'u_sam' }), { run: false, by: 'typed', text: 'yes, deep' });
+  for (const a of ['Always yes', 'always', ' yes always ']) { const { d, store } = await run(a); assert.deepEqual(d, { run: true, by: 'always-now', level: 'quick' }); assert.deepEqual(store.calls, [['u_sam', 'always']]); }
   for (const a of ['Never', 'no always', 'NEVER ASK']) { const { d, store } = await run(a); assert.deepEqual(d, { run: false, by: 'never-now' }); assert.deepEqual(store.calls, [['u_sam', 'never']]); }
   for (const a of ['No', ' no ']) { const { d, store } = await run(a); assert.deepEqual(d, { run: false, by: 'no' }); assert.equal(store.calls.length, 0); }
   for (const a of ['SKIPPED', 'NO_ANSWER', '', '   ', undefined, null]) { const { d } = await run(a); assert.deepEqual(d, { run: false, by: 'no-answer' }, String(a)); }
@@ -146,7 +182,7 @@ test('decide: every answer', async () => {
 
 test('decide: a failing store keeps the decision and says saved: false', async () => {
   const a = await research.decide({ choice: 'ask', canAsk: true, ask: askOf('Always yes'), store: fakeStore(true), personKey: 'sam' });
-  assert.deepEqual(a, { run: true, by: 'always-now', saved: false });
+  assert.deepEqual(a, { run: true, by: 'always-now', level: 'quick', saved: false });
   const n = await research.decide({ choice: 'ask', canAsk: true, ask: askOf('Never'), store: fakeStore(true), personKey: 'sam' });
   assert.deepEqual(n, { run: false, by: 'never-now', saved: false });
 });
@@ -163,17 +199,21 @@ test('decide: works with the real prefs store end to end', async () => {
   await research.decide({ choice: s.choiceOf('sam'), canAsk: true, ask: askOf('Always yes'), store: s, personKey: 'sam' });
   assert.equal(s.choiceOf('sam'), 'always');
   const ask = askOf('no');
-  assert.deepEqual(await research.decide({ choice: s.choiceOf('sam'), canAsk: true, ask, store: s, personKey: 'sam' }), { run: true, by: 'always' });
+  assert.deepEqual(await research.decide({ choice: s.choiceOf('sam'), canAsk: true, ask, store: s, personKey: 'sam' }), { run: true, by: 'always', level: 'quick' });
   assert.equal(ask.n, 0);
 });
 
 // ── offerText ──
 test('offerText: every outcome', () => {
   const o = research.offerText;
-  assert.match(o({ run: true, by: 'yes' }), /^The person wants a deep research run\. Plan 2 to 8 sub-questions/);
-  assert.match(o({ run: true, by: 'always' }), /^The person wants a deep research run \(they chose always\)\. Plan/);
-  assert.match(o({ run: true, by: 'always-now' }), /^The person wants a deep research run \(and from now on without being asked\)\. Plan/);
-  for (const by of ['yes', 'always', 'always-now']) assert.match(o({ run: true, by }), /action "start", the same question and sub_questions\..*report will appear here/);
+  assert.match(o({ run: true, by: 'yes' }), /^The person wants a quick deep research run\. Plan 2 to 8 sub-questions/);
+  assert.match(o({ run: true, by: 'always' }), /^The person wants a quick deep research run \(they chose always\)\. Plan/);
+  assert.match(o({ run: true, by: 'always-now' }), /^The person wants a quick deep research run \(and from now on without being asked\)\. Plan/);
+  for (const by of ['yes', 'always', 'always-now']) assert.match(o({ run: true, by }), /action "start", the same question, sub_questions and level "quick"\. It runs in the background \(a few minutes\): tell.*report will appear here/);
+  const th = o({ run: true, by: 'yes', level: 'thorough' });
+  assert.match(th, /^The person wants a thorough deep research run\./);
+  assert.match(th, /sub_questions and level "thorough"\. It runs in the background \(up to an hour\)/);
+  assert.match(o({ run: true, by: 'always', level: 'thorough' }), /thorough deep research run \(they chose always\)/);
   // review r1: a choice that could not be saved is said plainly
   assert.match(o({ run: true, by: 'always-now', saved: false }), /could not be saved, so they may be asked again/);
   assert.doesNotMatch(o({ run: true, by: 'always-now', saved: false }), /from now on without being asked/);
@@ -524,7 +564,8 @@ test('runner: runs are saved; one under way at a restart is reported as cut shor
   let t = 5_000_000;
   let release;
   const gate = new Promise((r) => { release = r; });
-  const a = makeRunner({ store, now: () => t, spawn: async () => { await gate; return 'X'; } });
+  // the first runner stays still (it would save its stages over the second runner's, which share this store)
+  const a = makeRunner({ store, now: () => t, pickHelperModel: async () => { await gate; return FAST; }, spawn: async () => 'X' });
   const r = a.runner.start({ agent: 'a1', question: 'Q?', subQuestions: SUBS });
   assert.equal(saved.length, 1);
   assert.equal(saved[0].state, 'running');
@@ -812,4 +853,455 @@ test('review r5: a first-run seed gives every seeded agent a box id of its own',
     const before = first.find((b) => b.name === a.name);
     if (before) assert.notEqual(a.box, before.box);
   }
+});
+
+// ── levels ──
+test('setText: the always_level variant', () => {
+  assert.equal(research.setText(null, true, 'thorough'), 'Done: Always yes now runs Thorough research. Tell them in one line.');
+  assert.equal(research.setText(null, true, 'quick'), 'Done: Always yes now runs Quick research. Tell them in one line.');
+  assert.match(research.setText(null, false, 'thorough'), /only the person can change it/);
+  assert.match(research.setText('always'), /^Done: research questions now get a deep research run/);
+});
+
+test('prefs: alwaysLevel defaults to quick, also for an old file without it', () => {
+  const f = tmpFile();
+  fs.writeFileSync(f, JSON.stringify({ people: { u_sam: { choice: 'always', remindedAt: null } } }));
+  const s = createResearchPrefs({ file: f });
+  assert.deepEqual(LEVELS, ['quick', 'thorough']);
+  assert.equal(s.alwaysLevelOf('u_sam'), 'quick');
+  assert.equal(s.alwaysLevelOf('nobody'), 'quick');
+  assert.equal(s.alwaysLevelOf(undefined), 'quick');
+});
+
+test('prefs: setAlwaysLevel validates, persists, and keeps the choice and the reminder clock', () => {
+  const f = tmpFile();
+  let t = 1000;
+  const s = createResearchPrefs({ file: f, now: () => t });
+  for (const k of ['', 5, null, 'x'.repeat(65)]) assert.throws(() => s.setAlwaysLevel(k, 'thorough'), (e) => e.code === 'bad_request');
+  for (const v of ['both', '', 'Thorough', null, undefined, 1]) assert.throws(() => s.setAlwaysLevel('u_sam', v), (e) => e.code === 'bad_request', String(v));
+  assert.equal(s.choiceOf('u_sam'), 'ask');
+  s.setChoice('u_sam', 'never');   // remindedAt = 1000
+  t = 5000;
+  assert.equal(s.setAlwaysLevel('u_sam', 'thorough'), 'thorough');
+  assert.equal(s.choiceOf('u_sam'), 'never');
+  assert.equal(JSON.parse(fs.readFileSync(f, 'utf8')).people.u_sam.remindedAt, 1000);
+  assert.equal(createResearchPrefs({ file: f }).alwaysLevelOf('u_sam'), 'thorough');
+  // a person with nothing stored yet keeps the default choice
+  assert.equal(s.setAlwaysLevel('u_new', 'thorough'), 'thorough');
+  assert.equal(s.choiceOf('u_new'), 'ask');
+});
+
+test('prefs: setChoice and markReminded keep an existing alwaysLevel', () => {
+  const s = createResearchPrefs({ file: tmpFile() });
+  s.setAlwaysLevel('u_sam', 'thorough');
+  s.setChoice('u_sam', 'always');
+  assert.equal(s.alwaysLevelOf('u_sam'), 'thorough');
+  s.setChoice('u_sam', 'never');
+  assert.equal(s.alwaysLevelOf('u_sam'), 'thorough');
+  assert.equal(s.markReminded('u_sam'), true);
+  assert.equal(s.alwaysLevelOf('u_sam'), 'thorough');
+  s.setChoice('u_sam', 'ask');
+  assert.equal(s.alwaysLevelOf('u_sam'), 'thorough');
+});
+
+test('runner: start() takes level quick (default) or thorough, refuses anything else, and stores run.level', async () => {
+  const { runner } = makeRunner();
+  const a = runner.start({ agent: 'a1', question: 'Q?', subQuestions: SUBS });
+  assert.equal(a.ok, true);
+  assert.equal(runner.get(a.id).level, 'quick');
+  const b = runner.start({ agent: 'a2', question: 'Q?', subQuestions: SUBS, level: 'thorough' });
+  assert.equal(b.ok, true);
+  assert.equal(runner.get(b.id).level, 'thorough');
+  for (const level of ['deep', 'Thorough', '', null, 5]) {
+    const r = runner.start({ agent: 'a3', question: 'Q?', subQuestions: SUBS, level });
+    assert.equal(r.ok, false, String(level));
+    assert.equal(typeof r.error, 'string');
+  }
+  assert.equal(runner.list().length, 2);
+});
+
+// ── vendorOf, chooseHelperModel sameVendor, chooseReviewer ──
+test('vendorOf: the company behind a model id', () => {
+  const table = {
+    'claude-sdk/claude-test-big': 'Anthropic', 'anthropic/test-a': 'Anthropic',
+    'codex-cli/test-b': 'OpenAI', 'codex/test-b': 'OpenAI', 'openai/test-b': 'OpenAI',
+    'google/test-c': 'Google', 'perplexity/test-d': 'Perplexity',
+    'openrouter/x-ai/test-e': 'xAI', 'openrouter/deepseek/test-f': 'DeepSeek', 'openrouter/meta-llama/test-g': 'Meta', 'openrouter/z-ai/test-h': 'Z.ai', 'openrouter/acme/test-i': 'acme',
+    'local/test-j': 'local', 'lmstudio/test-k': 'local', 'ollama/test-l': 'local', 'omlx/test-m': 'local', 'ninfer/test-n': 'local',
+    'weirdhost/test-o': 'weirdhost',
+  };
+  for (const [m, v] of Object.entries(table)) assert.equal(research.vendorOf(m), v, m);
+});
+
+test('chooseHelperModel sameVendor: only models of the agent\'s own vendor; nothing fits -> the agent\'s own model', () => {
+  const noteOf = () => 'fast and cheap';
+  const allowed = ['openai/test-mini', 'google/test-lite', 'claude-sdk/claude-test-fast'];
+  assert.equal(research.chooseHelperModel({ ownModel: 'openai/test-big', allowed, noteOf }), 'openai/test-mini');
+  assert.equal(research.chooseHelperModel({ ownModel: 'anthropic/test-big', allowed: ['openai/test-mini', 'anthropic/test-lite'], noteOf, sameVendor: true }), 'anthropic/test-lite');
+  assert.equal(research.chooseHelperModel({ ownModel: 'anthropic/test-big', allowed: ['openai/test-mini'], noteOf }), 'openai/test-mini', 'not required: as today');
+  assert.equal(research.chooseHelperModel({ ownModel: 'anthropic/test-big', allowed: ['openai/test-mini', 'google/test-lite'], noteOf, sameVendor: true }), 'anthropic/test-big');
+  // the same vendor across two prefixes (claude-sdk and anthropic)
+  assert.equal(research.chooseHelperModel({ ownModel: BIG, allowed: ['openai/test-mini', 'claude-sdk/claude-test-fast'], noteOf, sameVendor: true }), 'claude-sdk/claude-test-fast');
+});
+
+test('chooseReviewer: kept on box -> own; another vendor with the same billing kind first; none -> own', () => {
+  const own = 'claude-sdk/claude-test-big';   // subscription
+  const kept = research.chooseReviewer({ ownModel: own, allowed: ['openai/test-x'], keptOnBox: true });
+  assert.deepEqual(kept, { model: own, label: 'the same service as the agent (its content stays there)', crossVendor: false });
+  // an API model comes first in the list, but the subscription model has the same billing kind as the agent's
+  const r = research.chooseReviewer({ ownModel: own, allowed: [own, 'openai/test-api', 'codex-cli/test-sub', 'google/test-g'] });
+  assert.equal(r.model, 'codex-cli/test-sub');
+  assert.equal(r.label, 'a model from another vendor (OpenAI)');
+  assert.equal(r.crossVendor, true);
+  // no model of the same kind: any other vendor, never a local one
+  const r2 = research.chooseReviewer({ ownModel: own, allowed: [own, 'lmstudio/test-l', 'google/test-g'] });
+  assert.equal(r2.model, 'google/test-g');
+  assert.equal(r2.label, 'a model from another vendor (Google)');
+  assert.ok(!/google\/test-g/.test(r2.label), 'never a model id in the label');
+  const none = research.chooseReviewer({ ownModel: own, allowed: [own, 'anthropic/test-other', 'ollama/test-l'] });
+  assert.deepEqual(none, { model: own, label: 'the same service as the agent (no other vendor is available here)', crossVendor: false });
+  assert.equal(research.chooseReviewer({ ownModel: own, allowed: [] }).model, own);
+});
+
+// ── the Thorough runner ──
+const SRC_A = 'https://example.org/paper-a';
+const SRC_B = 'https://example.org/paper-b';
+const SRC_C = 'https://example.org/paper-c';
+const BODY_MARK = 'SOURCE-BODY-MARKER';
+const claimsBlock = (arr) => '```claims\n' + JSON.stringify(arr) + '\n```';
+const REPORT = (extra = '') => '## Verdict\nMethod A wins.\n\n## Evidence\n- Method A scored 56.4% on the test (Paper A, ' + SRC_A + ', 2025).\n\n## Where sources disagree\nNone.\n\n## Confidence\nMedium: one benchmark.\n\n## Corrections to the first pass\nNone\n\n' + extra
+  + claimsBlock([{ id: 'c1', claim: 'Method A scored 56.4% on the test', source_url: SRC_A, figures: ['56.4'], measured_result: '56.4%', judged_by: 'humans', evidence_strength: 'strong', inference: false }]);
+const verdicts = (v) => '```json\n' + JSON.stringify([{ id: 'c1', verdict: v, reason: 'because' }]) + '\n```';
+async function untilMs(fn, ms = 3000) { const end = Date.now() + ms; while (Date.now() < end) { if (fn()) return; await new Promise((r) => setTimeout(r, 5)); } throw new Error('condition not reached'); }
+const hang = (label) => (w, n, signal) => new Promise((_, rej) => { signal.addEventListener('abort', () => rej(new Error('stopped')), { once: true }); });
+
+function makeThorough(over = {}) {
+  const calls = [];       // every spawn call: { labels, model, tasks }
+  const progress = [];
+  const written = [];
+  const saves = [];
+  const script = over.script || {};   // label (without its number) -> (workers, count, signal) => results | undefined
+  const counts = {};
+  const spawn = async (agent, workers, signal) => {
+    calls.push({ labels: workers.map((w) => w.label), model: workers[0].model, tasks: workers.map((w) => w.task) });
+    const key = workers[0].label.replace(/ \d+$/, '');
+    counts[key] = (counts[key] || 0) + 1;
+    const f = script[key];
+    if (f) { const r = await f(workers, counts[key], signal); if (r !== undefined) return r; }
+    return workers.map((w) => {
+      let text;
+      if (/^Research \d+$/.test(w.label)) text = `Finding for ${w.label}. Method A scored 56.4%.\nSOURCES READ:\n- ${SRC_A}\n- ${SRC_B}\n- ${SRC_C}`;
+      else if (w.label === 'Choose sources') text = '```json\n' + JSON.stringify([{ url: SRC_A, title: 'Paper A' }, { url: SRC_B, title: 'Paper B' }, { url: SRC_C, title: 'Paper C' }]) + '\n```';
+      else if (/^Reader \d+$/.test(w.label)) text = `Notes for ${w.label}: Table 2 gives 56.4% (humans, 200 raters).`;
+      else if (w.label === 'Research report') text = REPORT();
+      else if (w.label === 'Reviewer') text = verdicts('supported');
+      else if (w.label === 'Revision') text = REPORT('');
+      else if (w.label === 'Research summary') text = 'QUICK SUMMARY';
+      else text = 'x';
+      return { label: w.label, ok: true, text };
+    });
+  };
+  const fetchPage = over.fetchPage || (async (url) => ({ markdown: `${BODY_MARK} ${url} Method A scored 56.4% on the test with 200 raters.`, truncated: false, via: 'plain', title: 'T' }));
+  const store = { load: () => [], save: (r) => { saves.push(JSON.stringify(r)); } };
+  const m = makeRunner({
+    store, spawn, fetchPage,
+    thoroughSettings: () => ({ maxSources: 12, readersAtOnce: 2, reviewRounds: 2, timeLimitMinutes: 60, pdf: true, readerModel: 'own' }),
+    pickReviewer: async () => ({ model: 'openai/test-reviewer', label: 'a model from another vendor (OpenAI)', crossVendor: true }),
+    pickReaderModel: async () => 'claude-sdk/claude-test-reader',
+    writeDocument: async (agent, base, doc) => { written.push({ agent, base, doc }); return { md: `/files/research/${base}.md`, html: `/files/research/${base}.html`, pdf: '', pdfError: 'no Chrome or Chromium on this computer; the document is in Markdown and HTML' }; },
+    onProgress: (r) => { progress.push({ stage: r.stage, label: r.stageLabel, done: r.stageDone, total: r.stageTotal, state: r.state }); },
+    ...over.deps,
+  });
+  return { ...m, calls, progress, written, saves };
+}
+const startThorough = (m, subs = SUBS) => m.runner.start({ agent: 'a1', question: 'Which method is best?', subQuestions: subs, level: 'thorough' });
+
+test('thorough runner: the stages in order with the right models, progress in order, document, one wake', async () => {
+  const m = makeThorough();
+  const r = startThorough(m);
+  await until(() => m.runner.get(r.id).state === 'delivered');
+  assert.deepEqual(m.calls.map((c) => c.labels[0]), ['Research 1', 'Choose sources', 'Reader 1', 'Research report', 'Reviewer']);
+  assert.equal(m.calls[0].labels.length, 3);
+  assert.equal(m.calls[0].model, FAST, 'helpers: the helper model');
+  assert.equal(m.calls[1].model, BIG, 'selection: the agent\'s own model');
+  // 3 sources -> 2 groups of at most 2; readersAtOnce 2 -> both groups in one spawn call
+  assert.deepEqual(m.calls[2].labels, ['Reader 1', 'Reader 2']);
+  assert.equal(m.calls[2].model, 'claude-sdk/claude-test-reader');
+  assert.equal(m.calls[3].model, BIG);
+  assert.equal(m.calls[4].model, 'openai/test-reviewer');
+  assert.match(m.calls[2].tasks[0], /careful reader/);
+  // the stages the progress line saw, in order, without going back
+  const seen = m.progress.map((p) => p.stage).filter((s, i, a) => s && s !== a[i - 1]);
+  assert.deepEqual(seen, ['quick', 'select', 'fetch', 'read', 'synthesis', 'check', 'challenge', 'document']);
+  assert.equal(m.progress[0].state, 'running');
+  assert.equal(m.progress[m.progress.length - 1].state, 'delivered');
+  assert.ok(m.progress.some((p) => p.stage === 'read' && p.done === 2 && p.total === 2));
+  assert.match(m.progress.find((p) => p.stage === 'read' && p.done === 0).label, /reading sources in full \(0 of 2\)/);
+  // the document
+  assert.equal(m.written.length, 1);
+  assert.match(m.written[0].base, /^deep-research-\d{4}-\d{2}-\d{2}-which-method-is-best$/);
+  assert.match(m.written[0].doc.markdown, /## Traceability/);
+  // the message
+  assert.equal(m.wakes.length, 1);
+  const msg = m.wakes[0].message;
+  assert.ok(msg.startsWith('[Deep research finished]'));
+  assert.match(msg, /the figure-check line, which reviewer was used, and the document path/);
+  assert.match(msg, /Figures checked: 1 of 1 found in the sources/);
+  assert.match(msg, /Challenged by: a model from another vendor \(OpenAI\) \(1 round\)/);
+  assert.match(msg, /Full document: \/files\/research\/deep-research-.*\.md/);
+  assert.doesNotMatch(msg.split('Report:\n')[1], /Not finished/);
+  const run = m.runner.get(r.id);
+  assert.equal(run.rounds, 1);
+  assert.equal(run.reviewer, 'a model from another vendor (OpenAI)');
+  assert.deepEqual(run.missing, []);
+  assert.equal(run.checkTotals.found, 1);
+  assert.equal(run.sources.length, 3);
+  assert.deepEqual(Object.keys(run.sources[0]).sort(), ['chars', 'error', 'ok', 'title', 'url', 'via']);
+  assert.equal(run.claims[0].check, '1 of 1 figure found');
+});
+
+test('thorough runner: readers go in batches of readersAtOnce groups, one spawn call per batch', async () => {
+  const m = makeThorough({ deps: { thoroughSettings: () => ({ maxSources: 12, readersAtOnce: 1, reviewRounds: 0, timeLimitMinutes: 60, pdf: false, readerModel: 'own' }) } });
+  const r = startThorough(m);
+  await until(() => m.runner.get(r.id).state === 'delivered');
+  const reads = m.calls.filter((c) => /^Reader/.test(c.labels[0]));
+  assert.deepEqual(reads.map((c) => c.labels), [['Reader 1'], ['Reader 2']]);
+  assert.ok(!m.calls.some((c) => c.labels[0] === 'Reviewer'), 'reviewRounds 0: no reviewer');
+  assert.match(m.wakes[0].message, /Challenged by: no one/);
+});
+
+test('thorough runner: a claim the reviewer does not support is revised, the figures are checked again, a second round confirms', async () => {
+  let reviews = 0;
+  const m = makeThorough({ script: { Reviewer: () => { reviews++; return [{ label: 'Reviewer', ok: true, text: verdicts(reviews === 1 ? 'not_supported' : 'supported') }]; } } });
+  const r = startThorough(m);
+  await until(() => m.runner.get(r.id).state === 'delivered');
+  assert.deepEqual(m.calls.map((c) => c.labels[0]).slice(3), ['Research report', 'Reviewer', 'Revision', 'Reviewer']);
+  assert.equal(m.calls[5].model, BIG, 'the revision: the agent\'s own model');
+  assert.equal(m.calls[6].model, 'openai/test-reviewer');
+  assert.match(m.calls[5].tasks[0], /\[not_supported\]/);
+  assert.equal(m.runner.get(r.id).rounds, 2);
+  assert.match(m.wakes[0].message, /\(2 rounds\)/);
+});
+
+test('thorough runner: a revision that cannot be read keeps the previous report and says what stayed in doubt', async () => {
+  const m = makeThorough({ script: { Reviewer: () => [{ label: 'Reviewer', ok: true, text: verdicts('partly') }], Revision: () => [{ label: 'Revision', ok: true, text: 'no block here' }] } });
+  const r = startThorough(m);
+  await until(() => m.runner.get(r.id).state === 'delivered');
+  const run = m.runner.get(r.id);
+  assert.ok(run.missing.some((x) => /report could not be revised/.test(x)));
+  assert.match(m.written[0].doc.markdown, /Not settled by the review/);
+  assert.match(m.wakes[0].message, /Missing: .*could not be revised/);
+});
+
+test('thorough runner: a failing stage goes into missing and the run still delivers (select, fetch, read, document)', async () => {
+  const m = makeThorough({
+    script: { 'Choose sources': () => { throw new Error('the workers refused'); } },
+    deps: { writeDocument: async () => { throw new Error('disk full'); } },
+  });
+  const r = startThorough(m);
+  await until(() => m.runner.get(r.id).state === 'delivered');
+  const run = m.runner.get(r.id);
+  assert.ok(run.missing.some((x) => /^select \(.*refused/.test(x)), JSON.stringify(run.missing));
+  assert.ok(run.missing.some((x) => /^document \(disk full\)/.test(x)));
+  assert.ok(!m.calls.some((c) => /^Reader/.test(c.labels[0])), 'no sources: no readers');
+  assert.ok(m.calls.some((c) => c.labels[0] === 'Research report'), 'synthesis from the first pass');
+  assert.match(m.wakes[0].message, /Missing: select/);
+  assert.match(m.wakes[0].message, /No PDF: /);
+  // fetch failing for every source and every reader failing
+  const m2 = makeThorough({ fetchPage: async () => { throw new Error('blocked'); }, script: { Reader: () => [{ label: 'Reader 1', ok: false, text: 'it failed' }, { label: 'Reader 2', ok: false, text: 'it failed' }] } });
+  const r2 = startThorough(m2);
+  await until(() => m2.runner.get(r2.id).state === 'delivered');
+  const miss = m2.runner.get(r2.id).missing;
+  assert.ok(miss.some((x) => /^fetch \(no source could be opened/.test(x)));
+  assert.ok(miss.some((x) => /^read \(no reader finished\)/.test(x)));
+  assert.ok(m2.calls.some((c) => c.labels[0] === 'Research report'));
+  assert.ok(!m2.calls.some((c) => c.labels[0] === 'Reviewer'), 'no source opened: nothing to check against');
+  assert.ok(miss.some((x) => /^challenge \(no source was opened/.test(x)));
+});
+
+test('thorough runner: a report without a claims block is asked for once more, then delivered without the table', async () => {
+  const m = makeThorough({ script: { 'Research report': () => [{ label: 'Research report', ok: true, text: '## Verdict\nMethod A wins, no claims block.' }] } });
+  const r = startThorough(m);
+  await until(() => m.runner.get(r.id).state === 'delivered');
+  const reports = m.calls.filter((c) => c.labels[0] === 'Research report');
+  assert.equal(reports.length, 2);
+  assert.match(reports[1].tasks[0], /Your reply had no valid claims block; reply again in the same format\.$/);
+  assert.doesNotMatch(reports[0].tasks[0], /Your reply had no valid claims block/);
+  const run = m.runner.get(r.id);
+  assert.ok(run.missing.includes('traceability table (the report had no valid claims list)'));
+  assert.deepEqual(run.claims, []);
+  assert.match(m.wakes[0].message, /Method A wins/);
+  assert.match(m.wakes[0].message, /Missing: traceability table/);
+  assert.ok(m.written.length === 1, 'the document is still written');
+});
+
+test('thorough runner: the synthesis failing twice falls back to the first-pass summary as the report', async () => {
+  const m = makeThorough({ script: { 'Research report': () => [{ label: 'Research report', ok: false, text: 'boom' }] } });
+  const r = startThorough(m);
+  await until(() => m.runner.get(r.id).state === 'delivered');
+  assert.equal(m.calls.filter((c) => c.labels[0] === 'Research report').length, 2);
+  assert.ok(m.calls.some((c) => c.labels[0] === 'Research summary'));
+  assert.match(m.wakes[0].message, /QUICK SUMMARY/);
+  assert.ok(m.runner.get(r.id).missing.some((x) => /^synthesis \(/.test(x)));
+});
+
+test('thorough runner: the deadline in the middle of reading delivers a partial report starting "Not finished:"', async () => {
+  const m = makeThorough({
+    deps: { thoroughSettings: () => ({ maxSources: 12, readersAtOnce: 2, reviewRounds: 2, timeLimitMinutes: 0.01, pdf: true, readerModel: 'own' }) },
+    script: { Reader: hang() },
+  });
+  const r = startThorough(m);
+  await untilMs(() => m.runner.get(r.id).state === 'delivered');
+  assert.equal(m.wakes.length, 1);
+  const msg = m.wakes[0].message;
+  assert.ok(msg.startsWith('[Deep research finished]'));
+  const report = msg.split('Report:\n')[1];
+  assert.match(report.split('\n')[0], /^Not finished: reading sources in full, writing the report, checking figures, checking the report, writing the document \(the time limit of 0\.01 minutes was reached\)\.$/);
+  assert.match(report, /First-pass findings/);
+  assert.match(report, /Finding for Research 1/);
+  assert.doesNotMatch(msg, /\[Deep research failed\]/);
+  // no later stage ran after the deadline
+  await tick(); await tick();
+  assert.ok(!m.calls.some((c) => c.labels[0] === 'Research report'));
+  assert.equal(m.runner.get(r.id).state, 'delivered');
+});
+
+test('thorough runner: a deadline after the report was written delivers the saved report, not the findings', async () => {
+  const m = makeThorough({
+    deps: { thoroughSettings: () => ({ maxSources: 12, readersAtOnce: 2, reviewRounds: 2, timeLimitMinutes: 0.01, pdf: true, readerModel: 'own' }) },
+    script: { Reviewer: hang() },
+  });
+  const r = startThorough(m);
+  await untilMs(() => m.runner.get(r.id).state === 'delivered');
+  const report = m.wakes[0].message.split('Report:\n')[1];
+  assert.match(report.split('\n')[0], /^Not finished: checking the report, writing the document \(the time limit/);
+  assert.match(report, /Method A wins/);
+  assert.match(report, /Figures checked: 1 of 1/);
+});
+
+test('thorough runner: recover() delivers "[Deep research interrupted]" with the saved prose, else the reader notes, else the findings', async () => {
+  const base = { agent: 'a1', stamp: null, question: 'Q?', subQuestions: SUBS, level: 'thorough', state: 'running', startedAt: 1, endedAt: null, error: null, stage: 'read', missing: ['select (x)'], stagesDone: ['quick', 'select'] };
+  const mk = (extra, id) => ({ ...base, id, ...extra });
+  const runs = [
+    mk({ prose: '## Verdict\nSaved verdict.', claims: [] }, 'dr-00000001'),
+    mk({ readerNotes: ['Notes: Table 2 gives 12.5.'], findings: ['F1'] }, 'dr-00000002'),
+    mk({ findings: ['### Research 1\nSaved finding.'] }, 'dr-00000003'),
+    { ...base, id: 'dr-00000004', level: 'quick', subQuestions: SUBS },
+  ];
+  let saved = JSON.parse(JSON.stringify(runs));
+  const store = { load: () => saved, save: (r) => { saved = JSON.parse(JSON.stringify(r)); } };
+  const m = makeRunner({ store, maxRunning: 10 });
+  m.runner.recover();
+  await until(() => m.wakes.length === 4);
+  const by = (id) => m.wakes.map((w) => w.message).find((x) => x.includes(`(id ${id})`));
+  assert.ok(by('dr-00000001').startsWith('[Deep research interrupted]'));
+  assert.match(by('dr-00000001'), /Saved verdict\./);
+  assert.match(by('dr-00000001'), /Not done: fetching the source texts, reading sources in full, writing the report/);
+  assert.match(by('dr-00000001'), /Missing: select \(x\)/);
+  assert.ok(by('dr-00000002').startsWith('[Deep research interrupted]'));
+  assert.match(by('dr-00000002'), /Table 2 gives 12\.5/);
+  assert.match(by('dr-00000003'), /Saved finding\./);
+  assert.ok(by('dr-00000004').startsWith('[Deep research failed]'), 'quick runs keep the cut short message');
+  assert.match(by('dr-00000004'), /restarted while it ran/);
+});
+
+test('quick runner: unchanged result; it reports the stages quick (helpers done of total) and writing', async () => {
+  const progress = [];
+  const { runner, wakes, spawns } = makeRunner({ onProgress: (r) => progress.push({ stage: r.stage, done: r.stageDone, total: r.stageTotal, label: r.stageLabel, state: r.state }) });
+  const r = runner.start({ agent: 'a1', question: 'Q?', subQuestions: SUBS });
+  await until(() => runner.get(r.id).state === 'delivered');
+  assert.equal(spawns.length, 2);
+  assert.ok(wakes[0].message.endsWith('Report:\nTHE REPORT'));
+  assert.match(wakes[0].message, /Present its report to the person now/);
+  const seen = progress.map((p) => p.stage).filter((s, i, a) => s && s !== a[i - 1]);
+  assert.deepEqual(seen, ['quick', 'writing']);
+  assert.ok(progress.some((p) => p.stage === 'quick' && p.done === 0 && p.total === 3));
+  assert.ok(progress.some((p) => p.stage === 'quick' && p.done === 3 && p.total === 3 && /3 of 3 helpers/.test(p.label)));
+  assert.equal(progress[progress.length - 1].state, 'delivered');
+  const run = runner.get(r.id);
+  assert.equal(run.stage, 'writing');
+  assert.equal(run.stageTotal, 1);
+  assert.equal(run.findings.length, 1, 'the stand-in gives one reply');
+  assert.equal(runner.list()[0].level, 'quick');
+});
+
+test('runner: a progress callback that throws never stops a run; a failed run reports state failed', async () => {
+  const m = makeRunner({ onProgress: () => { throw new Error('ui is down'); } });
+  const r = m.runner.start({ agent: 'a1', question: 'Q?', subQuestions: SUBS });
+  await until(() => m.runner.get(r.id).state === 'delivered');
+  assert.equal(m.wakes.length, 1);
+  const seen = [];
+  const bad = makeRunner({ spawn: async () => '[spawn_workers] refused', onProgress: (x) => seen.push(x.state), maxWakeTries: 1, wake: async () => { throw new Error('nobody home'); } });
+  const r2 = bad.runner.start({ agent: 'a1', question: 'Q?', subQuestions: SUBS });
+  await until(() => bad.runner.get(r2.id).state === 'failed');
+  assert.equal(seen[seen.length - 1], 'failed');
+});
+
+test('thorough runner: nothing saved contains a source text; the identity check covers every new spawn', async () => {
+  const m = makeThorough();
+  const r = startThorough(m);
+  await until(() => m.runner.get(r.id).state === 'delivered');
+  assert.ok(m.saves.length > 8, 'saved after each stage');
+  for (const s of m.saves) assert.ok(!s.includes(BODY_MARK), 'no source text in the saved runs');
+  assert.ok(!JSON.stringify(m.runner.get(r.id)).includes(BODY_MARK));
+  // admit is passed with every spawn
+  const seenAdmit = [];
+  const m2 = makeThorough({ deps: { spawn: async (a, w, sig, opts) => { seenAdmit.push(typeof (opts && opts.admit)); return w.map((x) => ({ label: x.label, ok: true, text: 'x' })); } } });
+  const r2 = startThorough(m2);
+  await until(() => m2.runner.get(r2.id).state === 'delivered');
+  assert.ok(seenAdmit.length >= 2 && seenAdmit.every((t) => t === 'function'));
+});
+
+test('thorough runner: an agent replaced during the run gets nothing from the new stages', async () => {
+  let who = 'stamp-1';
+  const m = makeThorough({ deps: { stampOf: () => who } });
+  const r = startThorough(m);
+  who = 'stamp-2';
+  await until(() => m.runner.get(r.id).state === 'failed');
+  assert.equal(m.calls.length, 0, 'not a single worker was started');
+  assert.equal(m.wakes.length, 0);
+});
+
+test('reportMessage: thorough says what to present; interrupted says what was saved', () => {
+  const t = research.reportMessage({ id: 'dr-1', question: 'Q?', report: 'R', level: 'thorough' });
+  assert.match(t, /the figure-check line, which reviewer was used, and the document path\. Keep every link and keep the document path\./);
+  const q = research.reportMessage({ id: 'dr-1', question: 'Q?', report: 'R' });
+  assert.doesNotMatch(q, /figure-check/);
+  const i = research.reportMessage({ id: 'dr-1', question: 'Q?', report: 'SAVED', interrupted: true });
+  assert.ok(i.startsWith('[Deep research interrupted] "Q?" (id dr-1).'));
+  assert.ok(i.endsWith('Saved so far:\nSAVED'));
+});
+
+// ── helpers and readers search with the hub's search too (setting researchHelperSearch = both) ──
+test('runner: helpers and readers carry searchBoth only when helperSearchBoth() is true; never the summary, the choice, the reviewer or the report', async () => {
+  const collect = async (both) => {
+    const jobs = [];
+    const m = makeThorough({ deps: {
+      helperSearchBoth: both === undefined ? undefined : () => both,
+      spawn: async (agent, workers) => {
+        for (const w of workers) jobs.push(w);
+        return workers.map((w) => ({ label: w.label, ok: true, text: (/^Research \d+$/.test(w.label) ? `Finding.\nSOURCES READ:\n- ${SRC_A}\n- ${SRC_B}` : w.label === 'Choose sources' ? '```json\n' + JSON.stringify([{ url: SRC_A, title: 'A' }, { url: SRC_B, title: 'B' }]) + '\n```' : w.label === 'Reviewer' ? verdicts('supported') : w.label === 'Research report' ? REPORT() : 'Notes: 56.4%.') }));
+      },
+    } });
+    const r = startThorough(m);
+    await until(() => m.runner.get(r.id).state === 'delivered');
+    return jobs;
+  };
+  const on = await collect(true);
+  const marked = on.filter((j) => j.searchBoth === true).map((j) => j.label);
+  assert.ok(marked.includes('Research 1') && marked.includes('Reader 1'));
+  assert.deepEqual(on.filter((j) => j.searchBoth !== undefined && !/^(Research \d+|Reader \d+)$/.test(j.label)), [], 'only helpers and readers');
+  assert.ok(on.some((j) => j.label === 'Choose sources') && on.some((j) => j.label === 'Reviewer'));
+  for (const off of [false, undefined]) {
+    const j = await collect(off);
+    assert.ok(j.length >= 4);
+    assert.ok(j.every((x) => !('searchBoth' in x)), 'no job is marked when the setting is not both');
+  }
+  // a quick run: the helpers are marked, the summary is not
+  const jobs = [];
+  const q = makeRunner({ helperSearchBoth: () => true, spawn: async (agent, workers) => { jobs.push(...workers); return workers.length === 1 && workers[0].label === 'Research summary' ? 'THE REPORT' : 'FINDINGS'; } });
+  q.runner.start({ agent: 'a1', question: 'Q?', subQuestions: SUBS });
+  await until(() => q.wakes.length === 1);
+  assert.deepEqual(jobs.filter((j) => j.searchBoth).map((j) => j.label), ['Research 1', 'Research 2', 'Research 3']);
+  assert.ok(!jobs.find((j) => j.label === 'Research summary').searchBoth);
 });

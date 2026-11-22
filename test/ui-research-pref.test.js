@@ -121,13 +121,13 @@ function phone(apiImpl) {
     api: async (p, o) => { calls.push({ p, o }); return apiImpl(p, o); },
   };
   vm.createContext(ctx);
-  const code = [lineOf(mob, 'const RESEARCH_CHOICES'), lineOf(mob, 'function researchChoiceLabel'), lineOf(mob, 'function researchMenuText'), lineOf(mob, 'function researchChoiceOk'),
-    'let researchPrefOn = false; let researchPrefChoice = "ask"; let researchPrefSaving = false; let researchPrefReadSeq = 0;',
+  const code = [lineOf(mob, 'const RESEARCH_CHOICES'), lineOf(mob, 'function researchChoiceLabel'), lineOf(mob, 'function researchMenuText'), lineOf(mob, 'function researchChoiceOk'), lineOf(mob, 'const RESEARCH_LEVELS'), lineOf(mob, 'function researchLevelOk'),
+    'let researchPrefOn = false; let researchPrefChoice = "ask"; let researchPrefLevel = "quick"; let researchPrefSaving = false; let researchPrefReadSeq = 0;',
     'function researchPrefPaintAll() {}',
-    fnSrc(mob, 'researchPrefLoad'), fnSrc(mob, 'researchPick'),
-    'this.h = { load: researchPrefLoad, pick: researchPick, state: () => JSON.stringify({ on: researchPrefOn, choice: researchPrefChoice, saving: researchPrefSaving }) };'].join('\n');
+    fnSrc(mob, 'researchPrefLoad'), fnSrc(mob, 'researchPick'), fnSrc(mob, 'researchLevelPick'),
+    'this.h = { load: researchPrefLoad, pick: researchPick, level: researchLevelPick, menu: researchMenuText, state: () => JSON.stringify({ on: researchPrefOn, choice: researchPrefChoice, level: researchPrefLevel, saving: researchPrefSaving }) };'].join('\n');
   vm.runInContext(code, ctx);
-  const h = { load: ctx.h.load, pick: ctx.h.pick, state: () => JSON.parse(ctx.h.state()) };   // plain objects from this realm
+  const h = { load: ctx.h.load, pick: ctx.h.pick, level: ctx.h.level, menu: ctx.h.menu, state: () => JSON.parse(ctx.h.state()) };   // plain objects from this realm
   return { h, toasts, calls };
 }
 const res = (status, body) => ({ ok: status >= 200 && status < 300, status, json: async () => { if (body === undefined) throw new Error('unreadable'); return body; } });
@@ -135,7 +135,7 @@ const res = (status, body) => ({ ok: status >= 200 && status < 300, status, json
 test('phone: GET on shows the choice; off, failed and unreadable GET show nothing', async () => {
   let p = phone(async () => res(200, { on: true, choice: 'always' }));
   assert.strictEqual(await p.h.load(), true);
-  assert.deepStrictEqual(p.h.state(), { on: true, choice: 'always', saving: false });
+  assert.deepStrictEqual(p.h.state(), { on: true, choice: 'always', level: 'quick', saving: false });
   assert.strictEqual(p.calls[0].p, '/api/research-pref');
   for (const impl of [async () => res(200, { on: false, choice: 'never' }), async () => res(500, { error: 'x' }), async () => res(200, undefined), async () => { throw new Error('offline'); }]) {
     p = phone(impl);
@@ -215,4 +215,161 @@ test('phone (review r1): a read that began before a save never repaints the olde
   releaseGet();
   await slowRead;
   assert.strictEqual(p.h.state().choice, 'never', 'the older read did not put ask back');
+});
+
+// ── levels: Always yes runs Quick or Thorough ──
+test('phone: the menu row text appends (Thorough) only for always + thorough', () => {
+  const p = phone(async () => res(200, { on: true, choice: 'ask' }));
+  assert.strictEqual(p.h.menu('always', 'thorough'), 'Deep research: Always (Thorough)');
+  assert.strictEqual(p.h.menu('always', 'quick'), 'Deep research: Always');
+  assert.strictEqual(p.h.menu('always'), 'Deep research: Always');
+  assert.strictEqual(p.h.menu('ask', 'thorough'), 'Deep research: Ask each time');
+  assert.strictEqual(p.h.menu('never', 'thorough'), 'Deep research: Never');
+});
+
+test('phone: GET reads alwaysLevel; a level pick POSTs { alwaysLevel }, toasts, and a failure puts the old level back', async () => {
+  let p = phone(async (path, o) => (o && o.method === 'POST' ? res(200, { ok: true, choice: 'always', alwaysLevel: JSON.parse(o.body).alwaysLevel }) : res(200, { on: true, choice: 'always', alwaysLevel: 'quick' })));
+  await p.h.load();
+  assert.strictEqual(p.h.state().level, 'quick');
+  assert.strictEqual(await p.h.level('thorough'), true);
+  const post = p.calls.find(c => c.o && c.o.method === 'POST');
+  assert.deepStrictEqual(JSON.parse(post.o.body), { alwaysLevel: 'thorough' });
+  assert.strictEqual(post.p, '/api/research-pref');
+  assert.strictEqual(p.h.state().level, 'thorough');
+  assert.strictEqual(p.toasts.at(-1), 'Always yes: Thorough research.');
+  assert.strictEqual(await p.h.level('bogus'), false);
+  p = phone(async (path, o) => (o && o.method === 'POST' ? res(403, { error: 'Not allowed here' }) : res(200, { on: true, choice: 'always', alwaysLevel: 'thorough' })));
+  await p.h.load();
+  assert.strictEqual(p.h.state().level, 'thorough');
+  assert.strictEqual(await p.h.level('quick'), false);
+  assert.strictEqual(p.h.state().level, 'thorough');
+  assert.strictEqual(p.toasts.at(-1), 'Not allowed here');
+  p = phone(async (path, o) => { if (o && o.method === 'POST') throw new Error('offline'); return res(200, { on: true, choice: 'always' }); });
+  await p.h.load();
+  assert.strictEqual(p.h.state().level, 'quick', 'a missing alwaysLevel reads as quick');
+  assert.strictEqual(await p.h.level('thorough'), false);
+  assert.strictEqual(p.h.state().level, 'quick');
+  assert.strictEqual(p.toasts.at(-1), 'Could not save that');
+});
+
+test('phone: a level pick shares the one-save-at-a-time rule, and an older read never puts the old level back', async () => {
+  let release;
+  const gate = new Promise(r => { release = r; });
+  const p = phone(async (path, o) => { if (o && o.method === 'POST') { await gate; return res(200, { ok: true, alwaysLevel: JSON.parse(o.body).alwaysLevel }); } return res(200, { on: true, choice: 'always', alwaysLevel: 'quick' }); });
+  await p.h.load();
+  const first = p.h.level('thorough');
+  assert.strictEqual(await p.h.level('quick'), false);
+  assert.strictEqual(await p.h.pick('never'), false);
+  release();
+  assert.strictEqual(await first, true);
+  assert.strictEqual(p.calls.filter(c => c.o && c.o.method === 'POST').length, 1);
+  let releaseGet;
+  const getGate = new Promise(r => { releaseGet = r; });
+  let gets = 0;
+  const q = phone(async (path, o) => {
+    if (o && o.method === 'POST') return res(200, { ok: true, alwaysLevel: JSON.parse(o.body).alwaysLevel });
+    gets++;
+    if (gets === 2) { await getGate; return res(200, { on: true, choice: 'always', alwaysLevel: 'quick' }); }
+    return res(200, { on: true, choice: 'always', alwaysLevel: 'quick' });
+  });
+  await q.h.load();
+  const slow = q.h.load();
+  assert.strictEqual(await q.h.level('thorough'), true);
+  releaseGet();
+  await slow;
+  assert.strictEqual(q.h.state().level, 'thorough');
+});
+
+// a tiny DOM: enough for the paint functions (createElement, appendChild, listeners, hidden)
+function fakeDom() {
+  class El {
+    constructor(tag) { this.tag = tag; this.children = []; this.attrs = {}; this.dataset = {}; this.listeners = {}; this.hidden = false; this.disabled = false; this.textContent = ''; this.value = ''; this.id = ''; this.className = ''; }
+    get firstChild() { return this.children[0] || null; }
+    appendChild(c) { this.children.push(c); if (this.tag === 'select' && c.tag === 'option' && !this.value) this.value = c.value; return c; }
+    removeChild(c) { this.children = this.children.filter(x => x !== c); return c; }
+    setAttribute(k, v) { this.attrs[k] = String(v); }
+    addEventListener(t, f) { this.listeners[t] = f; }
+    find(id) { if (this.id === id) return this; for (const c of this.children) { const f = c.find(id); if (f) return f; } return null; }
+  }
+  return { El, document: { createElement: (t) => new El(t) } };
+}
+function desktop(fetchImpl) {
+  const dom = fakeDom();
+  const toasts = [], calls = [];
+  const ctx = { document: dom.document, hubToast: (t) => toasts.push(t), fetch: async (u, o) => { calls.push({ u, o }); return fetchImpl(u, o); } };
+  vm.createContext(ctx);
+  vm.runInContext([lineOf(app, 'const RESEARCH_CHOICES'), lineOf(app, 'const RESEARCH_HINT'), lineOf(app, 'function researchChoiceLabel'),
+    'let researchPrefSaving = false; let researchPrefChoice = "ask"; let researchPrefLevel = "quick";',
+    lineOf(app, 'const RESEARCH_LEVEL_HINT'), fnSrc(app, 'researchPrefPaint'), 'this.paint = (box, choice, level) => { researchPrefChoice = choice; researchPrefLevel = level; researchPrefPaint(box); };',
+    'this.st = () => JSON.stringify({ choice: researchPrefChoice, level: researchPrefLevel, saving: researchPrefSaving });'].join('\n'), ctx);
+  const box = new dom.El('div');
+  return { ctx, box, toasts, calls, st: () => JSON.parse(ctx.st()), paint: (choice, level) => ctx.paint(box, choice, level) };
+}
+const flush = () => new Promise(r => setImmediate(r));
+
+test('desktop: the "Always yes runs" select (Quick / Thorough) shows only while the choice is Always, with its hint', () => {
+  const D = desktop(async () => res(200, {}));
+  D.paint('ask', 'thorough');
+  const lbox = D.box.find('st-research-level-box'), lsel = D.box.find('st-research-level');
+  assert.ok(lbox && lsel);
+  assert.strictEqual(lbox.hidden, true);
+  assert.strictEqual(lsel.value, 'thorough', 'its value is kept while hidden');
+  assert.deepStrictEqual(lsel.children.map(o => [o.value, o.textContent]), [['quick', 'Quick'], ['thorough', 'Thorough']]);
+  assert.ok(lbox.children[0].children.some(c => c.textContent === 'Always yes runs'));
+  assert.ok(lbox.children.some(c => c.textContent === 'Thorough reads the key sources in full and checks figures; it can take up to an hour.'));
+  D.paint('always', 'quick');
+  assert.strictEqual(D.box.find('st-research-level-box').hidden, false);
+});
+
+test('desktop: choosing Always shows the level select, another choice hides it; the level saves at once as { alwaysLevel }', async () => {
+  const D = desktop(async (u, o) => { const b = JSON.parse(o.body); return res(200, { ok: true, choice: b.choice || 'always', alwaysLevel: b.alwaysLevel || 'quick' }); });
+  D.paint('ask', 'quick');
+  const sel = D.box.find('st-research-choice');
+  sel.value = 'always'; await sel.listeners.change(); await flush();
+  assert.strictEqual(D.box.find('st-research-level-box').hidden, false);
+  const lsel = D.box.find('st-research-level');
+  lsel.value = 'thorough'; await lsel.listeners.change(); await flush();
+  assert.deepStrictEqual(JSON.parse(D.calls.at(-1).o.body), { alwaysLevel: 'thorough' });
+  assert.strictEqual(D.calls.at(-1).u, '/api/research-pref');
+  assert.strictEqual(D.st().level, 'thorough');
+  assert.strictEqual(D.toasts.at(-1), 'Always yes: Thorough research.');
+  assert.strictEqual(lsel.disabled, false);
+  sel.value = 'never'; await sel.listeners.change(); await flush();
+  assert.strictEqual(D.box.find('st-research-level-box').hidden, true);
+  assert.strictEqual(D.box.find('st-research-level').value, 'thorough', 'kept');
+});
+
+test('desktop: a failed level save puts the old level back; one save at a time', async () => {
+  const D = desktop(async () => res(500, { error: 'Could not save that one' }));
+  D.paint('always', 'quick');
+  const lsel = D.box.find('st-research-level');
+  lsel.value = 'thorough'; await lsel.listeners.change(); await flush();
+  assert.strictEqual(D.st().level, 'quick');
+  assert.strictEqual(lsel.value, 'quick');
+  assert.strictEqual(D.toasts.at(-1), 'Could not save that one');
+  let release;
+  const gate = new Promise(r => { release = r; });
+  const E = desktop(async (u, o) => { await gate; return res(200, { ok: true, alwaysLevel: JSON.parse(o.body).alwaysLevel }); });
+  E.paint('always', 'quick');
+  const ls = E.box.find('st-research-level');
+  ls.value = 'thorough'; const first = ls.listeners.change();
+  assert.strictEqual(E.st().saving, true);
+  ls.value = 'quick'; await ls.listeners.change();   // ignored
+  assert.strictEqual(E.calls.length, 1);
+  release(); await first;
+  assert.strictEqual(E.st().level, 'thorough');
+  assert.strictEqual(E.st().saving, false);
+});
+
+test('level code: sheet buttons are "Always yes runs: Quick/Thorough" with aria-pressed, only for Always; textContent only; GET reads alwaysLevel', () => {
+  const buttons = fnSrc(mob, 'researchLevelButtons');
+  assert.match(buttons, /if \(researchPrefChoice !== 'always'\) return;/);
+  assert.match(buttons, /'Always yes runs: ' \+ l/);
+  assert.match(buttons, /setAttribute\('aria-pressed', String\(v === researchPrefLevel\)\)/);
+  assert.match(fnSrc(mob, 'researchSheetPaint'), /researchLevelButtons\(d,/);
+  assert.match(fnSrc(mob, 'onResearchSheetClick'), /researchLevelPick\(lv\.dataset\.researchLevel\)/);
+  assert.match(fnSrc(mob, 'researchPrefLoad'), /d\.alwaysLevel === 'thorough'/);
+  assert.match(app, /researchPrefLevel = d\.alwaysLevel === 'thorough' \? 'thorough' : 'quick';/);
+  for (const n of ['researchLevelButtons', 'researchLevelPick']) { assert.ok(!/innerHTML/.test(fnSrc(mob, n)), n); assert.ok(!fnSrc(mob, n).includes('\uFE0F'), n); }
+  assert.ok(!fnSrc(app, 'researchPrefPaint').includes('\uFE0F'));
 });

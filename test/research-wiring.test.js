@@ -17,7 +17,7 @@ const REAL = path.join(__dirname, '..');
 const SRC = fs.readFileSync(path.join(REAL, 'lib', 'sdk-chat.js'), 'utf8');
 const WEEK = 7 * 24 * 3600 * 1000;
 
-function load({ on = true, virtual = false, handOff = null, agents = [], hasUsers = true, admins = [{ id: 'u_owner', createdAt: '2026-01-01' }], reminderDays, askAnswer = 'Yes', model = 'claude-sdk/claude-test-big' } = {}) {
+function load({ on = true, virtual = false, handOff = null, agents = [], hasUsers = true, admins = [{ id: 'u_owner', createdAt: '2026-01-01' }], reminderDays, askAnswer = 'Yes', model = 'claude-sdk/claude-test-big', extraMods = {}, globals = {}, settings = {} } = {}) {
   const a = SRC.indexOf('// ── Deep research (lib/research');
   const b = SRC.indexOf('// behaviour_change: offered by the same rule');
   assert.ok(a > 0 && b > a, 'the deep research block is there');
@@ -29,8 +29,10 @@ function load({ on = true, virtual = false, handOff = null, agents = [], hasUser
   const turnRegistry = new Map();
   const mods = {
     './behaviour-changes': { isOn: (id) => id === 'deep-research' && on },
-    './settings': { getSetting: (k) => (k === 'researchReminderDays' ? reminderDays : undefined) },
+    './settings': { getSetting: (k) => (k === 'researchReminderDays' ? reminderDays : settings[k]) },
     './agents': { getAgentsSync: () => agents },
+    './research-thorough': require(path.join(ISO.inst, 'lib', 'research-thorough.js')),
+    ...extraMods,
   };
   const ctx = vm.createContext({
     require: (m) => { if (!(m in mods)) throw new Error('unexpected require ' + m); return mods[m]; },
@@ -39,15 +41,16 @@ function load({ on = true, virtual = false, handOff = null, agents = [], hasUser
     hubAuthMod: { getAuth: () => ({ hasUsers: () => hasUsers, admins: () => admins }) },
     path, fs, console, Promise,
     researchLib: research,
-    researchPrefsLib: { getResearchPrefs: () => prefs, CHOICES: prefsLib.CHOICES },
+    researchPrefsLib: { getResearchPrefs: () => prefs, CHOICES: prefsLib.CHOICES, LEVELS: prefsLib.LEVELS },
     turnRegistry,
     getAgentModel: async () => model,
     runAskUser: async (agent, res, card) => { asked.push(card); return askAnswer; },
     runSpawnWorkers: async () => 'x', wakeAgent: async () => {}, refreshWorkerCatalog: async () => ({ available: [] }), memberWorkerModels: () => null,
+    ...globals,
   });
   vm.runInContext(SRC.slice(a, b) + `
 this.offered = deepResearchOffered; this.run = runDeepResearch; this.guidance = researchGuidanceFor; this.personOf = researchPersonOf; this.remindMs = researchReminderMs;
-this.setRunner = (r) => { _researchRunner = r; };`, ctx);
+this.setRunner = (r) => { _researchRunner = r; }; this.keptOnBox = researchKeptOnBox; this.reviewer = researchReviewer; this.helperModel = researchHelperModel; this.settingsNow = researchThoroughSettings; this.writeDoc = researchWriteDocument; this.onProgress = researchOnProgress; this.statusFor = researchStatusFor; `, ctx);
   ctx.setRunner({ start: (x) => { started.push(x); return { ok: true, id: 'dr-00000001' }; }, recover() {} });
   const live = { on() {}, writableEnded: false };
   const turn = (agent, over = {}) => { const tr = { origin: { kind: 'user' }, personKey: 'u_sam', ...over }; turnRegistry.set(agent, tr); return tr; };
@@ -77,9 +80,9 @@ test('offer: the person who typed the turn is asked with the card; Always yes is
   L.turn('sam-agent');
   const out = await L.ctx.run('sam-agent', L.live, { action: 'offer', question: 'Which judge is best?' });
   assert.equal(L.asked.length, 1);
-  assert.deepEqual(L.asked[0].options, ['Yes', 'No', 'Always yes', 'Never']);
+  assert.deepEqual(L.asked[0].options, ['Yes, quick', 'Yes, thorough', 'No', 'Always yes', 'Never']);
   assert.match(L.asked[0].question, /Claude sign-in plan allowance/);
-  assert.match(out, /^The person wants a deep research run \(and from now on without being asked\)/);
+  assert.match(out, /^The person wants a quick deep research run \(and from now on without being asked\)/);
   assert.equal(L.prefs.choiceOf('u_sam'), 'always');
   // the next research question runs without a card
   L.turn('sam-agent');
@@ -148,7 +151,7 @@ test('start: only after a yes in this turn (or a stored always); the approval is
   assert.equal(L.started.length, 0);
   await L.ctx.run('sam-agent', L.live, { action: 'offer', question: 'Q?' });
   assert.match(await L.ctx.run('sam-agent', L.live, { action: 'start', question: 'Q?', sub_questions: subs }), /^Started \(id dr-00000001\)/);
-  assert.deepEqual(JSON.parse(JSON.stringify(L.started)), [{ agent: 'sam-agent', question: 'Q?', subQuestions: subs }]);
+  assert.deepEqual(JSON.parse(JSON.stringify(L.started)), [{ agent: 'sam-agent', question: 'Q?', subQuestions: subs, level: 'quick' }]);
   assert.match(await L.ctx.run('sam-agent', L.live, { action: 'start', question: 'Q?', sub_questions: subs }), /^Ask first/, 'once');
   // No: no start
   const N = load({ askAnswer: 'No' });
@@ -299,7 +302,7 @@ test('review r3: two offers started together open exactly one card; the second i
   for (let i = 0; i < 5 && !answer; i++) await new Promise((r) => setImmediate(r));
   assert.equal(opened, 1);
   answer('Yes');
-  assert.match(await a, /wants a deep research run/);
+  assert.match(await a, /wants a quick deep research run/);
 });
 
 test('review r3: a card overtaken by a newer call says its answer counts for nothing', async () => {
@@ -323,4 +326,239 @@ test('review r4: the hub stamps a run with agentIdentityStrict (the raw record\'
 test('review r5: the launcher asks admit right before each worker is dispatched, and the research wiring passes it', () => {
   assert.match(SRC, /runOne: \(job, v\) => \{\n\s+if \(typeof admit === 'function' && !admit\(\)\) throw new Error\(/);
   assert.match(SRC, /spawn: \(agent, workers, signal, opts = \{\}\) => runSpawnWorkers\([^\n]*admit: \(opts && opts\.admit\) \|\| null/);
+});
+
+// ── levels: quick and thorough ──
+const SUBS2 = ['a', 'b'];
+const startReq = (L, over = {}) => L.ctx.run('sam-agent', L.live, { action: 'start', question: 'Q?', sub_questions: SUBS2, ...over });
+
+test('levels: a thorough start after a quick approval is refused; a quick start (also by default) goes through', async () => {
+  const L = load({ askAnswer: 'Yes, quick' });
+  L.turn('sam-agent');
+  const offer = await L.ctx.run('sam-agent', L.live, { action: 'offer', question: 'Q?' });
+  assert.match(offer, /quick deep research run/);
+  assert.equal(L.prefs.choiceOf('u_sam'), 'ask');
+  assert.equal(await startReq(L, { level: 'thorough' }), 'The person chose Quick; start with level "quick", or offer again so they can choose Thorough.');
+  assert.equal(L.started.length, 0);
+  assert.match(await startReq(L), /^Started/, 'no level given: the approved level');
+  assert.equal(L.started[0].level, 'quick');
+  L.turn('sam-agent');
+  await L.ctx.run('sam-agent', L.live, { action: 'offer', question: 'Q?' });
+  assert.match(await startReq(L, { level: 'quick' }), /^Started/);
+});
+
+test('levels: a thorough start after a thorough approval; a quick start after it is refused (exact match)', async () => {
+  const L = load({ askAnswer: 'Yes, thorough' });
+  L.turn('sam-agent');
+  assert.match(await L.ctx.run('sam-agent', L.live, { action: 'offer', question: 'Q?' }), /thorough deep research run.*level "thorough".*up to an hour/);
+  assert.match(await startReq(L, { level: 'quick' }), /^The person chose Thorough; start with level "thorough"/);
+  assert.equal(L.started.length, 0);
+  assert.match(await startReq(L, { level: 'thorough' }), /^Started/);
+  assert.equal(L.started[0].level, 'thorough');
+  // the approval was used once
+  assert.match(await startReq(L, { level: 'thorough' }), /^Ask first/);
+  // an unknown level is refused
+  const M = load({ askAnswer: 'Yes, thorough' });
+  M.turn('sam-agent');
+  await M.ctx.run('sam-agent', M.live, { action: 'offer', question: 'Q?' });
+  assert.match(await startReq(M, { level: 'deep' }), /level must be quick or thorough/);
+  assert.equal(M.started.length, 0);
+});
+
+test('levels: always + thorough starts thorough (and quick) without a card; always + quick refuses thorough', async () => {
+  const T = load();
+  T.prefs.setChoice('u_sam', 'always'); T.prefs.setAlwaysLevel('u_sam', 'thorough');
+  T.turn('sam-agent');
+  assert.match(await T.ctx.run('sam-agent', T.live, { action: 'offer', question: 'Q?' }), /they chose always.*level "thorough"/);
+  assert.equal(T.asked.length, 0);
+  T.turn('sam-agent');
+  assert.match(await startReq(T, { level: 'thorough' }), /^Started/);
+  T.turn('sam-agent');
+  assert.match(await startReq(T, { level: 'quick' }), /^Started/);
+  assert.deepEqual(T.started.map(x => x.level), ['thorough', 'quick']);
+  T.turn('sam-agent');
+  assert.match(await startReq(T), /^Started/, 'no level: the approved level (quick) is allowed');
+  const Q = load();
+  Q.prefs.setChoice('u_sam', 'always');
+  Q.turn('sam-agent');
+  const r = await startReq(Q, { level: 'thorough' });
+  assert.match(r, /Always yes runs Quick/);
+  assert.equal(Q.started.length, 0);
+  assert.match(await startReq(Q, { level: 'quick' }), /^Started/);
+});
+
+test('levels: a stored thorough level does not make a plain Yes thorough; the card carries recommend and alwaysLevel', async () => {
+  const L = load({ askAnswer: 'Yes' });
+  L.prefs.setAlwaysLevel('u_sam', 'thorough');
+  L.turn('sam-agent');
+  await L.ctx.run('sam-agent', L.live, { action: 'offer', question: 'Q?', recommend: 'thorough' });
+  assert.ok(L.asked[0].descriptions[1].endsWith(' Recommended.'));
+  assert.ok(L.asked[0].descriptions[3].endsWith('(now: Thorough).'));
+  assert.match(await startReq(L, { level: 'thorough' }), /^The person chose Quick/);
+  L.turn('sam-agent');
+  await L.ctx.run('sam-agent', L.live, { action: 'offer', question: 'Q?', recommend: 'nonsense' });
+  assert.ok(!L.asked[1].descriptions.join(' ').includes('Recommended'));
+  // the recommendation never changes the decision: a No stays a No
+  const N = load({ askAnswer: 'No' });
+  N.turn('sam-agent');
+  assert.match(await N.ctx.run('sam-agent', N.live, { action: 'offer', question: 'Q?', recommend: 'thorough' }), /said no/);
+});
+
+test('levels: "Always yes" on the card stores always and runs at the stored level', async () => {
+  const L = load({ askAnswer: 'Always yes' });
+  L.prefs.setAlwaysLevel('u_sam', 'thorough');
+  L.turn('sam-agent');
+  assert.match(await L.ctx.run('sam-agent', L.live, { action: 'offer', question: 'Q?' }), /thorough deep research run \(and from now on/);
+  assert.equal(L.prefs.choiceOf('u_sam'), 'always');
+  assert.match(await startReq(L, { level: 'thorough' }), /^Started/);
+});
+
+test('levels: set always_level changes the level only on a turn the person typed', async () => {
+  const L = load();
+  L.turn('sam-agent');
+  assert.equal(await L.ctx.run('sam-agent', L.live, { action: 'set', always_level: 'thorough' }), 'Done: Always yes now runs Thorough research. Tell them in one line.');
+  assert.equal(L.prefs.alwaysLevelOf('u_sam'), 'thorough');
+  assert.equal(L.prefs.choiceOf('u_sam'), 'ask', 'the choice is untouched');
+  assert.match(await L.ctx.run('sam-agent', L.live, { action: 'set', always_level: 'quick' }), /Quick research/);
+  assert.equal(L.prefs.alwaysLevelOf('u_sam'), 'quick');
+  assert.match(await L.ctx.run('sam-agent', L.live, { action: 'set', always_level: 'deep' }), /must be quick or thorough/);
+  assert.equal(L.prefs.alwaysLevelOf('u_sam'), 'quick');
+  // a hub-started turn, or one without a signed-in person: nothing changes
+  L.turn('sam-agent', { origin: { kind: 'job_notice' }, personKey: null });
+  assert.match(await L.ctx.run('sam-agent', L.live, { action: 'set', always_level: 'thorough' }), /only the person can change it/);
+  L.turn('sam-agent', { origin: { kind: 'user' }, personKey: null });
+  assert.match(await L.ctx.run('sam-agent', L.live, { action: 'set', always_level: 'thorough' }), /only the person can change it/);
+  assert.equal(L.prefs.alwaysLevelOf('u_sam'), 'quick');
+  assert.equal(L.prefs.alwaysLevelOf('u_owner'), 'quick');
+});
+
+test('levels: the guidance mentions the recommendation; the route has GET alwaysLevel and POST alwaysLevel', () => {
+  assert.match(load().ctx.guidance('sam-agent', 0), /you may recommend quick or thorough; the person chooses\. Start the level they chose\./);
+  const server = fs.readFileSync(path.join(REAL, 'server.js'), 'utf8');
+  assert.match(server, /alwaysLevel: prefs\.alwaysLevelOf\(key\)/);
+  assert.match(server, /prefs\.setAlwaysLevel\(key, body\.alwaysLevel\)/);
+});
+
+// ── Thorough runs: the level a start takes, the runner's deps, the document, the progress contract ──
+test('start: no level and no approval, but the person\'s choice is always -> their Always yes level (thorough), else quick', async () => {
+  const L = load();
+  L.prefs.setChoice('u_sam', 'always');
+  L.prefs.setAlwaysLevel('u_sam', 'thorough');
+  L.turn('sam-agent');
+  assert.match(await startReq(L), /^Started/);
+  assert.equal(L.started[0].level, 'thorough');
+  L.prefs.setAlwaysLevel('u_sam', 'quick');
+  L.turn('sam-agent');
+  assert.match(await startReq(L), /^Started/);
+  assert.equal(L.started[1].level, 'quick');
+  // an approval still wins over the stored level
+  const L2 = load({ askAnswer: 'Yes, quick' });
+  L2.prefs.setAlwaysLevel('u_sam', 'thorough');
+  L2.turn('sam-agent');
+  await L2.ctx.run('sam-agent', L2.live, { action: 'offer', question: 'Q?' });
+  assert.match(await startReq(L2), /^Started/);
+  assert.equal(L2.started[0].level, 'quick');
+  // no choice and no approval: still refused
+  const L3 = load();
+  L3.turn('sam-agent');
+  assert.match(await startReq(L3), /^Ask first/);
+});
+
+test('the runner is wired for Thorough runs: page fetch (no private addresses), settings, reviewer, reader model, document, progress', () => {
+  assert.match(SRC, /fetchPage: \(url, opts = \{\}\) => require\('\.\/web-fetch'\)\.getWebFetch\(\)\.fetchPage\(url, \{ allowPrivate: false, maxLength: opts\.maxLength, offset: opts\.offset \}\)/);
+  assert.match(SRC, /thoroughSettings: researchThoroughSettings,/);
+  assert.match(SRC, /pickReviewer: researchReviewer,/);
+  assert.match(SRC, /writeDocument: researchWriteDocument,/);
+  assert.match(SRC, /onProgress: researchOnProgress,/);
+  assert.match(SRC, /pickHelperModel: researchHelperModel,/);
+  assert.match(SRC, /settingsFrom\(raw\)/);
+  assert.match(SRC, /getSetting\('researchThorough'\)/);
+  assert.match(SRC, /sameVendor: researchKeptOnBox\(agent\)/);
+  assert.match(SRC, /keptOnBox\(rec\)/);
+  assert.match(SRC, /hubEvents\.events\.publish\('research_progress', \{ agent: run\.agent, id: run\.id, level: run\.level, stage: run\.stage \|\| '', label: run\.stageLabel \|\| '', done: run\.stageDone \|\| 0, total: run\.stageTotal \|\| 0, state: run\.state, startedAt: run\.startedAt \}\)/);
+  assert.match(SRC, /module\.exports = \{\n  researchStatusFor,/);
+});
+
+test('researchStatusFor: only the agent\'s active runs, in the contract shape; research_progress is published and never throws', () => {
+  const published = [];
+  const L = load({ globals: { hubEvents: { events: { publish: (t, p) => published.push({ t, p }) } } } });
+  const mk = (over) => ({ id: 'dr-1', agent: 'sam-agent', level: 'thorough', state: 'running', stage: 'read', stageLabel: 'reading sources in full (1 of 3)', stageDone: 1, stageTotal: 3, startedAt: 111, ...over });
+  const runs = [mk(), mk({ id: 'dr-2', state: 'delivering', stage: 'document', stageLabel: 'writing the document', stageDone: 1, stageTotal: 1 }), mk({ id: 'dr-3', state: 'delivered' }), mk({ id: 'dr-4', state: 'failed' }), mk({ id: 'dr-5', agent: 'other-agent' })];
+  L.ctx.setRunner({ list: () => runs, start() {}, recover() {} });
+  const st = JSON.parse(JSON.stringify(L.ctx.statusFor('sam-agent')));
+  assert.deepEqual(st.map((x) => x.id), ['dr-1', 'dr-2']);
+  assert.deepEqual(st[0], { id: 'dr-1', level: 'thorough', stage: 'read', label: 'reading sources in full (1 of 3)', done: 1, total: 3, startedAt: 111 });
+  assert.equal(L.ctx.statusFor('nobody').length, 0);
+  L.ctx.onProgress(runs[0]);
+  assert.deepEqual(JSON.parse(JSON.stringify(published)), [{ t: 'research_progress', p: { agent: 'sam-agent', id: 'dr-1', level: 'thorough', stage: 'read', label: 'reading sources in full (1 of 3)', done: 1, total: 3, state: 'running', startedAt: 111 } }]);
+  const broken = load({ globals: { hubEvents: { events: { publish: () => { throw new Error('bus down'); } } } } });
+  broken.ctx.onProgress(runs[0]);
+  const noBus = load();
+  noBus.ctx.onProgress(runs[0]);
+  // a runner that cannot be read gives an empty list, never a throw
+  L.ctx.setRunner({ list: () => { throw new Error('x'); }, start() {}, recover() {} });
+  assert.equal(L.ctx.statusFor('sam-agent').length, 0);
+});
+
+test('pickReviewer and the helper model wiring: an agent kept on its own service stays with its own vendor', async () => {
+  const own = 'claude-sdk/claude-test-big';
+  const catalogue = { available: ['claude-sdk/claude-test-fast', 'openai/test-mini', 'google/test-g'], sdkInfo: [] };
+  const cloud = { keptOnBox: (rec) => rec.name === 'ward-agent' };
+  const agents = [{ name: 'sam-agent' }, { name: 'ward-agent' }];
+  const L = load({ agents, extraMods: { './voice/cloud': cloud }, globals: { refreshWorkerCatalog: async () => catalogue, temporalWorkers: { isVirtual: () => false, noteFor: () => 'fast and cheap' } } });
+  assert.equal(L.ctx.keptOnBox('sam-agent'), false);
+  assert.equal(L.ctx.keptOnBox('ward-agent'), true);
+  assert.equal(L.ctx.keptOnBox('ghost-agent'), true, 'a lookup that finds nothing counts as kept: content never leaves on a guess');
+  const free = await L.ctx.reviewer('sam-agent');
+  assert.equal(free.crossVendor, true);
+  assert.match(free.label, /^a model from another vendor \((OpenAI|Google)\)$/);
+  assert.ok(free.model.startsWith('openai/') || free.model.startsWith('google/'));
+  const kept = await L.ctx.reviewer('ward-agent');
+  assert.deepEqual(JSON.parse(JSON.stringify(kept)), { model: own, label: 'the same service as the agent (its content stays there)', crossVendor: false });
+  // helpers: a kept agent only gets a model of its own vendor
+  assert.equal(await L.ctx.helperModel('ward-agent'), 'claude-sdk/claude-test-fast');
+  const L2 = load({ agents, extraMods: { './voice/cloud': cloud }, globals: { refreshWorkerCatalog: async () => ({ available: ['openai/test-mini'], sdkInfo: [] }), temporalWorkers: { isVirtual: () => false, noteFor: () => 'fast and cheap' } } });
+  assert.equal(await L2.ctx.helperModel('ward-agent'), own, 'nothing of its vendor fits: its own model, as today');
+  // a member's agent: only the models the member may use
+  const L3 = load({ agents, extraMods: { './voice/cloud': cloud }, globals: { refreshWorkerCatalog: async () => catalogue, memberWorkerModels: () => [own, 'google/test-g'] } });
+  assert.equal((await L3.ctx.reviewer('sam-agent')).model, 'google/test-g');
+});
+
+test('thorough settings are read from researchThorough and checked; the document goes to <Files>/research with -2, -3 for a used name', async () => {
+  const L = load({ settings: { researchThorough: { maxSources: '5', readersAtOnce: 99, pdf: 'false', readerModel: 'helper' } } });
+  assert.deepEqual(JSON.parse(JSON.stringify(L.ctx.settingsNow())), { maxSources: 5, readersAtOnce: 4, reviewRounds: 2, timeLimitMinutes: 60, pdf: false, readerModel: 'helper' });
+  assert.equal(load().ctx.settingsNow().timeLimitMinutes, 60);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rw-files-'));
+  const thorough = require(path.join(ISO.inst, 'lib', 'research-thorough.js'));
+  const pdfCalls = [];
+  const T = { ...thorough, findPdfRenderer: () => '/fake/chrome', renderPdf: async (o) => { pdfCalls.push(o); fs.writeFileSync(o.pdfPath, 'PDF'); return { ok: true, error: '' }; } };
+  const W = load({ settings: { researchThorough: { pdf: true } }, extraMods: { './research-thorough': T, os }, globals: { filesRootFor: async () => root, process } });
+  const doc = { markdown: '# Title\n\nBody', html: '<html>Body</html>' };
+  const a = await W.ctx.writeDoc('sam-agent', 'deep-research-2026-11-21-q', doc);
+  assert.equal(a.md, path.join(root, 'research', 'deep-research-2026-11-21-q.md'));
+  assert.equal(a.html, path.join(root, 'research', 'deep-research-2026-11-21-q.html'));
+  assert.equal(a.pdf, path.join(root, 'research', 'deep-research-2026-11-21-q.pdf'));
+  assert.equal(fs.readFileSync(a.md, 'utf8'), '# Title\n\nBody');
+  assert.equal(pdfCalls[0].binary, '/fake/chrome');
+  const b = await W.ctx.writeDoc('sam-agent', 'deep-research-2026-11-21-q', doc);
+  assert.equal(path.basename(b.md), 'deep-research-2026-11-21-q-2.md');
+  const c = await W.ctx.writeDoc('sam-agent', 'deep-research-2026-11-21-q', doc);
+  assert.equal(path.basename(c.html), 'deep-research-2026-11-21-q-3.html');
+  assert.equal(fs.readFileSync(a.md, 'utf8'), '# Title\n\nBody', 'the first file is never overwritten');
+  // no Chrome: Markdown and HTML only, with the reason
+  const N = load({ settings: { researchThorough: { pdf: true } }, extraMods: { './research-thorough': { ...thorough, findPdfRenderer: () => null }, os }, globals: { filesRootFor: async () => root, process } });
+  const n = await N.ctx.writeDoc('sam-agent', 'deep-research-2026-11-21-nochrome', doc);
+  assert.equal(n.pdf, '');
+  assert.equal(n.pdfError, 'no Chrome or Chromium on this computer; the document is in Markdown and HTML');
+  assert.ok(fs.existsSync(n.md) && fs.existsSync(n.html));
+  // a renderer that fails: the reason is kept
+  const F = load({ settings: { researchThorough: { pdf: true } }, extraMods: { './research-thorough': { ...thorough, findPdfRenderer: () => '/fake/chrome', renderPdf: async () => ({ ok: false, error: 'the PDF renderer failed: boom' }) }, os }, globals: { filesRootFor: async () => root, process } });
+  const f = await F.ctx.writeDoc('sam-agent', 'deep-research-2026-11-21-fail', doc);
+  assert.equal(f.pdf, '');
+  assert.equal(f.pdfError, 'the PDF renderer failed: boom');
+  // pdf off in Settings: no renderer asked
+  const O = load({ settings: { researchThorough: { pdf: false } }, extraMods: { './research-thorough': { ...thorough, findPdfRenderer: () => { throw new Error('must not be asked'); } }, os }, globals: { filesRootFor: async () => root, process } });
+  const o = await O.ctx.writeDoc('sam-agent', 'deep-research-2026-11-21-off', doc);
+  assert.equal(o.pdf, '');
+  assert.match(o.pdfError, /switched off/);
 });
