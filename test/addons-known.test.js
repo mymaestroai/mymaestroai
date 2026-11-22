@@ -200,6 +200,20 @@ test('review r1: a fixture module declaring "platforms" is unsupported elsewhere
     try {
       assert.deepStrictEqual((await r.mods.addonFacts('maestro', { platform: 'linux' })).unsupported.map((x) => [x.name, x.needs]), [['Windows thing', ['win32']]]);
       assert.ok((await r.mods.addonFacts('maestro', { platform: 'win32' })).notSetUp.some((x) => x.name === 'Windows thing'));
+      await r.mods.runStep('winonly', 'intro', {});   // setup started (also a setup restored from another system): still not offered here
+      assert.deepStrictEqual((await r.mods.addonFacts('maestro', { platform: 'linux' })).unsupported.map((x) => x.name), ['Windows thing']);
+      assert.ok(!(await r.mods.addonFacts('maestro', { platform: 'linux' })).notSetUp.length);
+      await r.mods.runStep('winonly', 'outside', { confirmed: true });
+      await r.mods.runStep('winonly', 'install', {});
+      await r.mods.runStep('winonly', 'key', { values: { FAKEBANK_TOKEN: 'tok-1' } });
+      await r.mods.runStep('winonly', 'verify', {});
+      await r.mods.runStep('winonly', 'limits', { values: { tradingEnabled: true, maxUsd: 10, pairs: 'BTC-USD' } });
+      await r.mods.runStep('winonly', 'agents', { agents: ['maestro'] });
+      await r.mods.runStep('winonly', 'done', {});
+      r.mods.setEnabled('winonly', false);   // set up and switched off, as on an install restored onto another system
+      const f = await r.mods.addonFacts('maestro', { platform: 'linux' });
+      assert.deepStrictEqual([f.unsupported.map((x) => x.name), f.off.length, f.notSetUp.length], [['Windows thing'], 0, 0], 'never "switched off" (offered) on a system it cannot run on');
+      assert.ok((await r.mods.addonFacts('maestro', { platform: 'win32' })).off.some((x) => x.name === 'Windows thing'));
     } finally { r.cleanup(); }
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
