@@ -23236,10 +23236,14 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       // leave them untouched.
       const MARK = 'm' + ((window.crypto && crypto.getRandomValues) ? Array.from(crypto.getRandomValues(new Uint8Array(16)), b => (b % 36).toString(36)).join('') : Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2));
       const mk = (kind, i) => `${MARK}${kind}${i}~`;
+      // A code-box marker inside an attribute value (image alt / src, link URL) cannot hold a box: it is pulled out
+      // of the attribute and the box is placed right after the element, so no marker text is left and no HTML lands in an attribute.
+      const codeMarkRe = new RegExp(MARK + 'C\\d+~', 'g');
+      const pullCode = (s) => { const held = []; const clean = String(s).replace(codeMarkRe, (m) => { held.push(m); return ''; }); return { clean, held: held.join('') }; };
       const visualTokens = [];
       // Every other closed fence is held out the same way (C tokens): its code is escaped here and built into a
       // code box with its own copy button (lib/ui-code-copy.js), so the text a reader copies is the source byte for
-      // byte: no bold, no <br>, no inline-code or link passes inside it.
+      // byte (the browser normalises line endings to LF): no bold, no <br>, no inline-code or link passes inside it.
       const codeTokens = [];
       const withVisualPlaceholders = response.replace(/```(\w*)\r?\n([\s\S]*?)```/g, (match, lang, code) => {
         const kind = visualKind(lang);
@@ -23260,11 +23264,14 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const withImagePlaceholders = withVisualPlaceholders.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (match, alt, src) => {
         const idx = imageTokens.length;
         // Convert absolute file paths to /api/image/ URLs
-        let imgSrc = src;
-        if (src.startsWith('/') && !src.startsWith('/api/')) {
-          imgSrc = '/api/image/' + btoa(src);
+        // Code-box markers are pulled out of src and alt BEFORE the path is encoded (btoa would hide them) and kept with
+        // the image token, so the box is placed right after the image.
+        const pa = pullCode(alt), ps = pullCode(src);
+        let imgSrc = ps.clean;
+        if (imgSrc.startsWith('/') && !imgSrc.startsWith('/api/')) {
+          imgSrc = '/api/image/' + btoa(imgSrc);
         }
-        imageTokens.push({ alt, src: imgSrc });
+        imageTokens.push({ alt: pa.clean, src: imgSrc, held: pa.held + ps.held });
         return mk('I', idx);
       });
 
@@ -23316,15 +23323,16 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       for (let i = 0; i < visualTokens.length; i++) {
         formatted = formatted.replace(mk('V', i), () => visualTokens[i]);
       }
-      // A code-box marker inside an attribute value (image alt / src, link URL) cannot hold a box: it is pulled out
-      // of the attribute and the box is placed right after the element, so no marker text is left and no HTML lands in an attribute.
-      const codeMarkRe = new RegExp(MARK + 'C\\d+~', 'g');
-      const pullCode = (s) => { const held = []; const clean = String(s).replace(codeMarkRe, (m) => { held.push(m); return ''; }); return { clean, held: held.join('') }; };
+
+      // Re-insert extracted tables FIRST (function replacer so $-sequences in the HTML are literal): a table cell holds
+      // image / link / code markers, and those are resolved by the passes below.
+      for (let i = 0; i < tableTokens.length; i++) {
+        formatted = formatted.replace(mk('T', i), () => tableTokens[i]);
+      }
 
       // Re-insert extracted images: inline when same-origin / data: / blob:, a link for any other host.
       for (let i = 0; i < imageTokens.length; i++) {
-        const a = pullCode(imageTokens[i].alt), s = pullCode(imageTokens[i].src);
-        const imgTag = imageHtml(s.clean, a.clean, 'max-height:300px;') + a.held + s.held;
+        const imgTag = imageHtml(imageTokens[i].src, imageTokens[i].alt, 'max-height:300px;') + imageTokens[i].held;
         formatted = formatted.replace(mk('I', i), () => imgTag);
       }
 
@@ -23338,11 +23346,6 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           ? `<a href="${escapeHtml(u)}" target="_blank" rel="noopener noreferrer" style="color: var(--link); text-decoration: underline;">${eText}</a>`
           : `<code>[blocked link: ${eText}]</code>`) + pu.held;
         formatted = formatted.replace(mk('L', i), () => linkTag);
-      }
-
-      // Re-insert extracted tables (function replacer so $-sequences in the HTML are literal).
-      for (let i = 0; i < tableTokens.length; i++) {
-        formatted = formatted.replace(mk('T', i), () => tableTokens[i]);
       }
 
       // Code boxes last: a fence inside link text, a table cell or an image's alt text still gets its box.

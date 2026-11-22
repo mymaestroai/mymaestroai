@@ -1005,9 +1005,13 @@ function formatContent(content) {
   // [a-z0-9~], untouched by escaping and inline formatting.
   const MARK = 'm' + ((window.crypto && crypto.getRandomValues) ? Array.from(crypto.getRandomValues(new Uint8Array(16)), b => (b % 36).toString(36)).join('') : Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2));
   const mk = (kind, i) => `${MARK}${kind}${i}~`;
+  // A code-box marker inside an attribute value (image alt / src, link URL) cannot hold a box: it is pulled out of the
+  // attribute and the box is placed right after the element, so no marker text is left and no HTML lands in an attribute.
+  const codeMarkRe = new RegExp(MARK + 'C\\d+~', 'g');
+  const pullCode = (s) => { const held = []; const clean = String(s).replace(codeMarkRe, (mm) => { held.push(mm); return ''; }); return { clean, held: held.join('') }; };
   const visuals = [];
   // Every other closed fence is held out the same way (C tokens): escaped here and built into a code box with its own
-  // copy button (lib/ui-code-copy.js), so the copied text is the source byte for byte (no bold, no <br> inside).
+  // copy button (lib/ui-code-copy.js), so the copied text is the source byte for byte (the browser normalises line endings to LF; no bold, no <br> inside).
   const codeBoxes = [];
   const withVisuals = response.replace(/```(\w*)\r?\n([\s\S]*?)```/g, (m, lang, code) => {
     const kind = visualKind(lang);
@@ -1022,11 +1026,13 @@ function formatContent(content) {
 
   const images = [];
   let text = withVisuals.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (m, alt, src) => {
-    let imgSrc = src;
-    if (src.startsWith('/') && !src.startsWith('/api/')) {
-      try { imgSrc = '/api/image/' + btoa(src); } catch { imgSrc = null; }
+    // Code-box markers come out of src and alt BEFORE the path is encoded (btoa would hide them); they stay with the image.
+    const pa = pullCode(alt), ps = pullCode(src);
+    let imgSrc = ps.clean;
+    if (imgSrc.startsWith('/') && !imgSrc.startsWith('/api/')) {
+      try { imgSrc = '/api/image/' + btoa(imgSrc); } catch { imgSrc = null; }
     }
-    images.push({ alt, src: imgSrc });
+    images.push({ alt: pa.clean, src: imgSrc, held: pa.held + ps.held });
     return mk('I', images.length - 1);
   });
   const links = [];
@@ -1055,13 +1061,10 @@ function formatContent(content) {
   out = autolinkEscaped(out).replace(/\n/g, '<br>');
 
   visuals.forEach((v, i) => { out = out.replace(mk('V', i), () => v); });
-  // A code-box marker inside an attribute value (image alt / src, link URL) cannot hold a box: it is pulled out of the
-  // attribute and the box is placed right after the element, so no marker text is left and no HTML lands in an attribute.
-  const codeMarkRe = new RegExp(MARK + 'C\\d+~', 'g');
-  const pullCode = (s) => { const held = []; const clean = String(s).replace(codeMarkRe, (mm) => { held.push(mm); return ''; }); return { clean, held: held.join('') }; };
+  // Tables FIRST: a table cell holds image / link / code markers, resolved by the passes below.
+  tables.forEach((t, i) => { out = out.replace(mk('T', i), () => t); });
   images.forEach((im, i) => {
-    const a = pullCode(im.alt), s = im.src == null ? { clean: im.src, held: '' } : pullCode(im.src);
-    const tag = imageHtml(s.clean, a.clean) + a.held + s.held;
+    const tag = imageHtml(im.src, im.alt) + im.held;
     out = out.replace(mk('I', i), () => tag);
   });
   links.forEach((l, i) => {
@@ -1070,7 +1073,6 @@ function formatContent(content) {
     const tag = (u ? `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(l.label)}</a>` : `<code>[blocked link: ${esc(l.label)}]</code>`) + pu.held;
     out = out.replace(mk('L', i), () => tag);
   });
-  tables.forEach((t, i) => { out = out.replace(mk('T', i), () => t); });
   // Code boxes last: a fence inside link text, a table cell or an image's alt text still gets its box.
   codeBoxes.forEach((c, i) => { out = out.replace(mk('C', i), () => c); });   // function replacer: $-sequences in the code stay literal
   return thinkHtml + out;

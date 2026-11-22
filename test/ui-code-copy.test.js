@@ -421,3 +421,143 @@ test('textarea fallback: the previous selection ranges and the focused element a
   const bad = { ...doc, activeElement: { focus() { throw new Error('x'); } }, defaultView: { getSelection() { throw new Error('y'); } } };
   assert.strictEqual(await CC.copy('hi', { navigator: {}, document: bad, isSecureContext: true }), true);
 });
+
+// ---- review round 2 ----
+
+for (const [name, src] of Object.entries(PAGES)) {
+  test(`${name}: a fence inside a local image path gives one box and no marker (the path is not encoded before the marker is pulled out)`, () => {
+    const html = renderer(src)('![photo](/img/```\nx\n```.png)');
+    assert.strictEqual(buttons(html), 1, html);
+    assert.deepStrictEqual(codeTexts(html), ['x\n']);
+    assert.ok(!/m[a-z0-9]{8,}C\d+~/.test(html), 'no marker left: ' + html);
+    assert.ok(html.indexOf('<img') < html.indexOf('code-box'), 'the box follows the image');
+    for (const m of html.matchAll(/\b(?:src|alt|href)="([^"]*)"/g)) assert.ok(!m[1].includes('<') && !m[1].includes('code-box'), 'attribute plain: ' + m[1]);
+  });
+
+  test(`${name}: a link inside a table cell resolves; a fence in a cell's link URL gives one box and no marker`, () => {
+    const f = renderer(src);
+    const plain = f('| Name |\n|---|\n| [go](https://x.y/p) |\n');
+    assert.match(plain, /<td><a href="https:\/\/x\.y\/p"[^>]*>go<\/a><\/td>/, plain);
+    assert.ok(!/m[a-z0-9]{8,}[LIT]\d+~/.test(plain), 'no marker left: ' + plain);
+    const withFence = f('| Name |\n|---|\n| [go](/img/```\nx\n```) |\n');
+    assert.strictEqual(buttons(withFence), 1, withFence);
+    assert.deepStrictEqual(codeTexts(withFence), ['x\n']);
+    assert.ok(!/m[a-z0-9]{8,}[A-Z]\d+~/.test(withFence), 'no marker left: ' + withFence);
+    const img = f('| Pic |\n|---|\n| ![a](/api/image/abc) |\n');
+    assert.match(img, /<td>[\s\S]*<img/, 'an image in a cell resolves');
+    assert.ok(!/m[a-z0-9]{8,}[A-Z]\d+~/.test(img), 'no marker left: ' + img);
+  });
+}
+
+// A page with a message host whose code buttons can be redrawn (replaced), and a fake MutationObserver.
+function redrawHost(texts) {
+  const host = { isConnected: true, buttons: [] };
+  const mkBtn = (txt) => {
+    const code = { textContent: txt };
+    const box = { querySelector: (s) => (s === 'pre code' ? code : null) };
+    const btn = { isConnected: true, classes: new Set(['code-copy']), attrs: { 'aria-label': 'Copy' }, title: 'Copy',
+      classList: { add: (...c) => c.forEach(x => btn.classes.add(x)), remove: (...c) => c.forEach(x => btn.classes.delete(x)), contains: (c) => btn.classes.has(c) },
+      setAttribute(k, v) { btn.attrs[k] = String(v); },
+      closest: (s) => (s === '.code-copy' ? btn : s === '.code-box' ? box : s === '.message, .msg' ? host : null) };
+    return btn;
+  };
+  host.redraw = () => { for (const b of host.buttons) b.isConnected = false; host.buttons = texts.map(mkBtn); };
+  host.querySelectorAll = (s) => (s === '.code-copy' ? host.buttons : []);
+  host.buttons = texts.map(mkBtn);
+  return host;
+}
+function fakeMO() {
+  const list = [];
+  class MO { constructor(cb) { this.cb = cb; this.disconnected = false; this.opts = null; list.push(this); } observe(t, o) { this.target = t; this.opts = o; } disconnect() { this.disconnected = true; } }
+  return { MO, list };
+}
+
+test('a copied tick survives a redraw of the message: the observer paints it on the button at the same index until the timer ends it', async () => {
+  const d = fakeDom('unused');
+  const host = redrawHost(['one', 'two']);
+  const T = fakeTimers();
+  const { MO, list } = fakeMO();
+  let clock = 0;
+  const h = CC.makeClickHandler({ document: d.doc, now: () => clock, MutationObserver: MO, copy: async () => true, setTimeout: T.setTimeout, clearTimeout: T.clearTimeout });
+  const old = host.buttons[1];
+  await h(evOn({ closest: (s) => (s === '.code-copy' ? old : null) }));
+  assert.ok(old.classes.has('copied'));
+  assert.strictEqual(list.length, 1);
+  assert.strictEqual(list[0].target, host);
+  assert.deepStrictEqual(list[0].opts, { childList: true, subtree: true });
+  host.redraw();   // a streamed chunk rebuilt the message
+  const fresh = host.buttons[1];
+  assert.ok(!fresh.classes.has('copied'));
+  clock = 400;
+  list[0].cb([]);
+  assert.ok(fresh.classes.has('copied'), 'the new button shows the tick');
+  assert.strictEqual(fresh.attrs['aria-label'], 'Copied');
+  assert.strictEqual(fresh.title, 'Copied');
+  assert.ok(!host.buttons[0].classes.has('copied'), 'only the clicked index');
+  assert.strictEqual(list[0].disconnected, false);
+  clock = 1500;
+  T.fire();   // the 60 ms live-region timer
+  T.fire();   // the 1500 ms reset
+  assert.strictEqual(list[0].disconnected, true, 'observer disconnected when the state ends');
+  assert.ok(!fresh.classes.has('copied'));
+  assert.strictEqual(fresh.attrs['aria-label'], 'Copy');
+  // a redraw that finishes after the state's time is not painted
+  host.redraw(); list[0].cb([]);
+  assert.ok(!host.buttons[1].classes.has('copied'));
+  // the next click also disconnects the earlier watch
+  clock = 5000;
+  await h(evOn({ closest: (s) => (s === '.code-copy' ? host.buttons[0] : null) }));
+  assert.strictEqual(list.length, 2);
+  assert.strictEqual(list[1].disconnected, false);
+  await h(evOn({ closest: (s) => (s === '.code-copy' ? host.buttons[1] : null) }));
+  assert.strictEqual(list[1].disconnected, true, 'a new click ends the previous watch');
+});
+
+test('a redraw while the copy is still running: the tick lands on the new button at once; no MutationObserver is fine', async () => {
+  const d = fakeDom('unused');
+  const host = redrawHost(['one']);
+  const { MO, list } = fakeMO();
+  let resolve; const gate = new Promise(r => { resolve = r; });
+  const h = CC.makeClickHandler({ document: d.doc, now: () => 0, MutationObserver: MO, copy: () => gate, setTimeout: () => 1, clearTimeout() {} });
+  const p = h(evOn({ closest: (s) => (s === '.code-copy' ? host.buttons[0] : null) }));
+  host.redraw();
+  resolve(true); await p;
+  assert.ok(host.buttons[0].classes.has('copied'));
+  const host2 = redrawHost(['a']);
+  const h2 = CC.makeClickHandler({ document: d.doc, now: () => 0, MutationObserver: null, copy: async () => true, setTimeout: () => 1, clearTimeout() {} });
+  const saved = global.MutationObserver; delete global.MutationObserver;
+  try { await h2(evOn({ closest: (s) => (s === '.code-copy' ? host2.buttons[0] : null) })); } finally { if (saved) global.MutationObserver = saved; }
+  assert.ok(host2.buttons[0].classes.has('copied'), 'still ticks without an observer');
+  assert.strictEqual(list.length, 1);
+});
+
+test('a press that is dragged off its button: the click on the host copies nothing while the pressed button is still there', async () => {
+  const d = fakeDom('unused');
+  const host = redrawHost(['one', 'two']);
+  let clock = 0;
+  const got = [];
+  const h = CC.makeClickHandler({ document: d.doc, now: () => clock, copy: async (t) => { got.push(t); return true; }, setTimeout: () => 1, clearTimeout() {} });
+  const pressOn = (b) => h.pointerDown(evOn({ closest: (s) => (s === '.code-copy' ? b : null) }));
+  pressOn(host.buttons[0]);
+  clock = 100;
+  assert.strictEqual(h(evOn({ closest: () => null })), undefined, 'released on the host, button still connected');
+  assert.deepStrictEqual(got, []);
+  // the pressed button was replaced by a redraw: the click is used
+  pressOn(host.buttons[1]);
+  host.redraw();
+  clock = 200;
+  await h(evOn({ closest: () => null }));
+  assert.deepStrictEqual(got, ['two']);
+  // the record is cleared after the click
+  assert.strictEqual(h(evOn({ closest: () => null })), undefined);
+  // pointercancel clears the record
+  pressOn(host.buttons[0]);
+  host.redraw();
+  h.pointerCancel();
+  assert.strictEqual(h(evOn({ closest: () => null })), undefined);
+  assert.deepStrictEqual(got, ['two']);
+});
+
+test('the pointercancel listener is installed with the others, in the capture phase', () => {
+  assert.match(read('lib/ui-code-copy.js'), /document\.addEventListener\('pointercancel', handler\.pointerCancel, true\)/);
+});
