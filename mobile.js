@@ -5201,6 +5201,7 @@ function voiceCreateCall(deps) {
     if (ev.ok === false) {
       if (micLost) return;   // already said: a burst of device events while it is lost is not announced again
       micLost = true; quiet(() => ui.micLost(true));
+      if (press && pressing) talk(false);   // Tap to talk: a press with no microphone hears nothing; it ends (what was heard is sent) and the button is let go
       enqueue(VOICE_MIC_LOST_LINE, 'mic');
       return;
     }
@@ -5263,6 +5264,7 @@ function voiceCreateCall(deps) {
     if (!press) return false;
     const want = !!on;
     if (ended || !started || state === 'starting' || want === pressing) return pressing;
+    if (want && micLost) return pressing;   // no press while the microphone is lost: it would show Listening with nothing to hear
     pressing = want;
     if (want) {
       setMuted(false);
@@ -5328,6 +5330,7 @@ function voiceCreateCall(deps) {
   // Everything the call holds is let go at once: timers, the thinking sound, the microphone and the speaking.
   function teardown() {
     ended = true; capWake = null;
+    if (press && (pressing || pressShown)) { pressing = false; pressShown = false; quiet(() => { if (typeof ui.press === 'function') ui.press(false); }); }   // a Tap to talk call ends while pressing: the button and the display leave the listening look, once
     const kept = bgWords.join(' '); bgDrop(); cuePending = '';   // words kept for the background work are never sent: they are put in the chat's message box below
     for (const t of [hbTimer, pumpTimer, quietTimer, chimeTimer, pendingAnnounce && pendingAnnounce.timer]) if (t) quiet(() => d.clearTimer(t));
     hbTimer = pumpTimer = quietTimer = chimeTimer = null; pendingAnnounce = null; pendingAsk = null; announceQueue = []; clearBegin(); disarmWatch(); clearStill(); stopThinking();
@@ -9570,18 +9573,18 @@ function voiceMicPaint() {
   if (voiceCall && voiceCall.press) {   // a Tap to talk call: the button stays a mic and is the press button (Hang up is the call panel's and the display's)
     b.classList.remove('call', 'busy');
     if (!b.querySelector('svg') || b.querySelector('svg.hang')) b.innerHTML = VOICE_MIC_SVG;
-    voiceCallPressAttach(voiceCall, b, { cls: 'rec' });
+    voiceCallPressAttach(voiceCall, b, { cls: 'listening' });
     const barP = $('voice-level'); if (barP) barP.hidden = true;
     return;
   }
   if (voiceCall) {   // a call is up: the button is the red hang-up
-    b.classList.remove('rec', 'busy'); b.classList.add('call');
+    b.classList.remove('rec', 'busy', 'listening'); b.classList.add('call');
     b.setAttribute('aria-pressed', 'true'); b.setAttribute('aria-label', 'Hang up'); b.title = 'Hang up';
     if (!b.querySelector('svg.hang')) b.innerHTML = VOICE_HANGUP_SVG;
     const bar0 = $('voice-level'); if (bar0) bar0.hidden = true;
     return;
   }
-  b.classList.remove('call');
+  b.classList.remove('call', 'listening');
   const rec = voiceRec.state === 'recording';
   b.classList.toggle('rec', rec);
   b.classList.toggle('busy', voiceRec.state === 'starting' || voiceRec.state === 'sending');
@@ -10137,7 +10140,7 @@ function voiceDispSetInterrupt(on) {
 // A Tap to talk call's state line: listening and not pressing says what a tap does; pressing says how to send. Other states as in a hands-free call.
 function voiceCallPressText(vc, name) {
   if (!vc || !vc.press) return '';
-  if (vc.pressing && (name === 'listening' || name === 'hearing')) return 'Listening, tap to send';
+  if (vc.pressing && (name === 'listening' || name === 'hearing')) return 'Listening';
   return !vc.pressing && name === 'listening' ? 'Tap to talk' : '';
 }
 // A press button of this call (the mic button, the display's Talk slot): voicePressButton from the voice helpers, painted with the press state, let go at hang-up.

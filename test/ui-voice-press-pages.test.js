@@ -222,8 +222,8 @@ test('desktop: Tap to talk starts a call with press: true and manual: true and c
   ui.state('listening');
   assert.strictEqual(e.get('vcb-state-c1').textContent, 'Tap to talk', 'listening and not pressing');
   ui.press(true);
-  assert.strictEqual(m.attrs['aria-pressed'], 'true'); assert.strictEqual(m.attrs['aria-label'], 'Talk'); assert.strictEqual(m.attrs.title, 'Tap to send'); assert.ok(m.classList.contains('rec'));
-  assert.strictEqual(e.get('vcb-state-c1').textContent, 'Listening, tap to send');
+  assert.strictEqual(m.attrs['aria-pressed'], 'true'); assert.strictEqual(m.attrs['aria-label'], 'Talk'); assert.strictEqual(m.attrs.title, 'Tap to send'); assert.ok(m.classList.contains('listening') && !m.classList.contains('rec'), 'the green listening look, never the red recording one');
+  assert.strictEqual(e.get('vcb-state-c1').textContent, 'Listening');
   ui.state('thinking'); assert.strictEqual(e.get('vcb-state-c1').textContent, 'Thinking', 'other states as in a hands-free call');
   ui.press(false);
   assert.strictEqual(m.attrs['aria-pressed'], 'false'); assert.strictEqual(m.attrs['aria-label'], 'Talk'); assert.strictEqual(m.attrs.title, 'Tap to talk');
@@ -316,14 +316,14 @@ test('phone: the press button, the state line and the display follow ui.press; h
   const f = new Function('voiceCall', ...Object.keys(env), src.replace(/\bvoiceCall\b(?!\w)/g, 'voiceCall.v') + '\nreturn { voiceCallPressText, voiceCallPressAttach, voiceCallPressDetach, voiceCallPressPaint, voiceCallPaintState };')(vcRef, ...Object.values(env));
   const talks = [];
   const vc = { press: true, pressing: false, pressBtns: [], call: { talk: (on) => talks.push(on) } }; vcRef.v = vc;
-  const b = fakeButton(); f.voiceCallPressAttach(vc, b, { cls: 'rec' });
+  const b = fakeButton(); f.voiceCallPressAttach(vc, b, { cls: 'listening' });
   assert.strictEqual(b.attrs['aria-label'], 'Talk'); assert.strictEqual(b.attrs.title, 'Tap to talk');
-  assert.strictEqual(f.voiceCallPressAttach(vc, b, { cls: 'rec' }), vc.pressBtns[0], 'the same button is attached once');
+  assert.strictEqual(f.voiceCallPressAttach(vc, b, { cls: 'listening' }), vc.pressBtns[0], 'the same button is attached once');
   f.voiceCallPaintState('listening', ''); assert.strictEqual(state.s.textContent, 'Tap to talk');
   f.voiceCallPressPaint(vc, true);
   assert.strictEqual(b.attrs['aria-pressed'], 'true'); assert.strictEqual(b.attrs['aria-label'], 'Talk'); assert.strictEqual(b.attrs.title, 'Tap to send');
-  assert.strictEqual(state.s.textContent, 'Listening, tap to send');
-  f.voiceCallPaintState('hearing', ''); assert.strictEqual(state.s.textContent, 'Listening, tap to send');
+  assert.strictEqual(state.s.textContent, 'Listening');
+  f.voiceCallPaintState('hearing', ''); assert.strictEqual(state.s.textContent, 'Listening');
   f.voiceCallPaintState('thinking', ''); assert.strictEqual(state.s.textContent, 'Thinking');
   assert.deepStrictEqual(hooks, [['setPress', true]], 'the display is told');
   f.voiceCallPressPaint(vc, false); assert.strictEqual(b.attrs['aria-label'], 'Talk'); assert.strictEqual(b.attrs.title, 'Tap to talk');
@@ -335,7 +335,7 @@ test('phone: the press button, the state line and the display follow ui.press; h
   f.voiceCallPaintState('listening', ''); assert.strictEqual(state.s.textContent, 'Listening');
   // the mic button of a press call stays a mic; of a hands-free call it is the red hang-up
   const paint = between(mob, 'function voiceMicPaint() {', 'function voiceMicCancel()');
-  assert.ok(/if \(voiceCall && voiceCall\.press\) \{[^}]*voiceCallPressAttach\(voiceCall, b, \{ cls: 'rec' \}\);[^}]*return;\s*\}\s*if \(voiceCall\) \{/.test(paint), 'press call first, then the red hang-up');
+  assert.ok(/if \(voiceCall && voiceCall\.press\) \{[^}]*voiceCallPressAttach\(voiceCall, b, \{ cls: 'listening' \}\);[^}]*return;\s*\}\s*if \(voiceCall\) \{/.test(paint), 'press call first, then the red hang-up');
 });
 test('phone: a press call passes no onMute to the display (the Talk slot is the press button); a hands-free call still does', () => {
   const src = between(mob, 'function voiceDispBegin(vc) {', '// The call is ending');
@@ -374,8 +374,8 @@ test('call display: in a press call the Talk slot is the press button (label, ar
   assert.strictEqual(statusText(w.dom), 'Tap to talk', 'listening and not pressing');
   assert.strictEqual(muteBtn(w.dom).hidden, true, 'no Mute in a press call');
   w.display.setPress(true);
-  assert.strictEqual(s.textContent, 'Tap to send'); assert.strictEqual(s.attrs['aria-pressed'], 'true'); assert.strictEqual(statusText(w.dom), 'Listening, tap to send');
-  w.display.setState('hearing'); assert.strictEqual(statusText(w.dom), 'Listening, tap to send');
+  assert.strictEqual(s.textContent, 'Tap to send'); assert.strictEqual(s.attrs['aria-pressed'], 'true'); assert.strictEqual(statusText(w.dom), 'Listening');
+  w.display.setState('hearing'); assert.strictEqual(statusText(w.dom), 'Listening');
   w.display.setPress(false); w.display.setState('thinking');
   assert.strictEqual(statusText(w.dom), 'Thinking', 'other states as today'); assert.strictEqual(s.attrs['data-ucd-mode'], 'press', 'the slot stays the press button');
   s.click(); assert.strictEqual(w.log.talk, 0, 'the display itself never calls onTalk for a press slot (the page owns the pointer)');
@@ -655,8 +655,8 @@ test('R1.6 attaching a press button lets go of handles whose button is no longer
   assert.deepStrictEqual(p1.listeners.pointerdown, []);
 });
 
-test('the phone service worker is bumped for the new mobile.html and mobile.js (hub-mobile-v74)', () => {
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v74'/);
+test('the phone service worker is bumped for the new mobile.html and mobile.js (hub-mobile-v75)', () => {
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v75'/);
 });
 
 // ═══ review round 3 ═══

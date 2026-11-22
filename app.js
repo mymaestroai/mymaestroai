@@ -15900,6 +15900,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         if (ev.ok === false) {
           if (micLost) return;   // already said: a burst of device events while it is lost is not announced again
           micLost = true; quiet(() => ui.micLost(true));
+          if (press && pressing) talk(false);   // Tap to talk: a press with no microphone hears nothing; it ends (what was heard is sent) and the button is let go
           enqueue(VOICE_MIC_LOST_LINE, 'mic');
           return;
         }
@@ -15962,6 +15963,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         if (!press) return false;
         const want = !!on;
         if (ended || !started || state === 'starting' || want === pressing) return pressing;
+        if (want && micLost) return pressing;   // no press while the microphone is lost: it would show Listening with nothing to hear
         pressing = want;
         if (want) {
           setMuted(false);
@@ -16027,6 +16029,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       // Everything the call holds is let go at once: timers, the thinking sound, the microphone and the speaking.
       function teardown() {
         ended = true; capWake = null;
+        if (press && (pressing || pressShown)) { pressing = false; pressShown = false; quiet(() => { if (typeof ui.press === 'function') ui.press(false); }); }   // a Tap to talk call ends while pressing: the button and the display leave the listening look, once
         const kept = bgWords.join(' '); bgDrop(); cuePending = '';   // words kept for the background work are never sent: they are put in the chat's message box below
         for (const t of [hbTimer, pumpTimer, quietTimer, chimeTimer, pendingAnnounce && pendingAnnounce.timer]) if (t) quiet(() => d.clearTimer(t));
         hbTimer = pumpTimer = quietTimer = chimeTimer = null; pendingAnnounce = null; pendingAsk = null; announceQueue = []; clearBegin(); disarmWatch(); clearStill(); stopThinking();
@@ -18814,7 +18817,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     function voiceCallPressText(name) {
       const S = voiceCallS;
       if (!S.press) return '';
-      if (S.pressing && (name === 'listening' || name === 'hearing')) return 'Listening, tap to send';
+      if (S.pressing && (name === 'listening' || name === 'hearing')) return 'Listening';
       return !S.pressing && name === 'listening' ? 'Tap to talk' : '';
     }
     function voiceCallPaintStateLine(s) { if (s) s.textContent = voiceCallS.linkLost ? VOICE_LINK_LOST_TEXT : (voiceCallPressText(s.dataset.state) || voiceCallStateText(s.dataset.state, s.dataset.phrase || '')); }
@@ -19071,12 +19074,13 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         b.classList.toggle('call', false);
         if (!/<svg/.test(b.innerHTML || '')) b.innerHTML = VOICE_MIC_SVG;
         b.style.touchAction = 'none';   // a press that moves a little is not a scroll or a pan: the browser must not cancel it
-        voiceCallPressAttach(b, { cls: 'rec' });
+        voiceCallPressAttach(b, { cls: 'listening' });
         if (typeof simpleCallLook === 'function') simpleCallLook(b, false);
         return;
       }
       b.style.touchAction = '';
       voiceCallPressDetach(b);
+      b.classList.toggle('listening', false);
       b.classList.toggle('rec', false);
       b.classList.toggle('call', on);
       b.setAttribute('aria-pressed', on ? 'true' : 'false');

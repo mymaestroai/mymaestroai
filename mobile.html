@@ -67,6 +67,8 @@
       --notice-grey: #8a8a85;
       --on-accent: #fff;
       --on-error: #fff;
+      --voice-listening: #15803d;   /* a Tap to talk call while listening ("Tap to send"): green, white text 5.0:1; never the red of Hang up */
+      --on-voice-listening: #fff;
       --on-health-notice: #fff;
       --on-pacing: #fff;
       --on-warning: #000;
@@ -741,6 +743,7 @@
   /* Voice: the mic beside Send, the level bar above the row while recording, the speaker on a reply, the Voice sheet. */
   #mic-btn { flex: none; touch-action: none; font-size: 20px; }
   #mic-btn.rec { background: var(--error); color: var(--on-error); border-radius: 22px; padding: 0 12px; font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; animation: rsn-pulse 1.4s ease-in-out infinite; }
+  #mic-btn.listening { background: var(--voice-listening); color: var(--on-voice-listening); border-color: var(--voice-listening); }   /* a Tap to talk call while listening: green, not the red of recording or Hang up */
   #mic-btn.busy { opacity: .55; pointer-events: none; }
   #voice-level { height: 4px; margin: 0 2px 6px; border-radius: 2px; background: var(--border); overflow: hidden; }
   #voice-level[hidden] { display: none; }
