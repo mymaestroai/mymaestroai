@@ -146,3 +146,87 @@ test('look 12: no press starts while the microphone is lost; one starts again on
   assert.strictEqual(h.call.talk(true), true);
   assert.deepStrictEqual(h.pressUi, [false, true]);
 });
+
+// ── the ready look: idle "Tap to talk" is neutral ink, never the accent ──
+const blocksOf = (file) => [...read(file).replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^{}]*)\}/g)].map(m => ({ sel: m[1].trim(), body: m[2], file }));
+const COLOR_FILES = ['index.html', 'mobile.html', 'looks/broadsheet.css', 'looks/quiet.css'];
+const hexOf = (body, name) => { const m = body.match(new RegExp('(?:^|[\\s;{])' + name + ':\\s*(#[0-9A-Fa-f]{6})\\b')); return m ? m[1] : null; };
+const ratio = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };
+const rgb = (hex) => [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16));
+
+test('ready 1: the idle press slot rule uses --voice-ready and --on-voice-ready; no idle press rule uses --accent', () => {
+  const css = read('lib/ui-call-display.css');
+  const idle = css.split('\n').filter(l => l.includes('.ucd-talk[data-ucd-mode="press"]') && !l.replace(':not([aria-pressed="true"])', '').includes('[aria-pressed="true"]') && /background|color:/.test(l));
+  assert.ok(idle.length >= 1, 'an idle press rule sets the colours');
+  assert.ok(idle.some(l => /background: var\(--voice-ready[,)]/.test(l) && /[^-]color: var\(--on-voice-ready[,)]/.test(l) && /border-color: transparent/.test(l)), 'idle: ready fill, its text, no border');
+  for (const l of idle) assert.ok(!/--accent/.test(l), 'idle press rule must not use the accent: ' + l.slice(0, 80));
+});
+
+test('ready 2: the listening rule takes its text colour from --on-voice-listening', () => {
+  const css = read('lib/ui-call-display.css');
+  const rule = css.split('\n').find(l => l.startsWith('.ucd-bar .ucd-talk[data-ucd-mode="press"][aria-pressed="true"]'));
+  assert.match(rule, /[^-]color: var\(--on-voice-listening, #fff\)/);
+});
+
+test('ready 3: the hands-free slot (no press mode) keeps the accent', () => {
+  const css = read('lib/ui-call-display.css');
+  const base = css.split('\n').find(l => l.startsWith('.ucd-bar .ucd-talk {'));
+  assert.ok(base && /background: var\(--accent, #3d7bff\)/.test(base));
+  assert.ok(!/--voice-ready/.test(base), 'the base slot is not the ready look');
+  assert.ok(!css.split('\n').some(l => /data-ucd-mode="mic"/.test(l) && /--voice-ready/.test(l)), 'the mic-retry slot is not the ready look');
+});
+
+test('ready 4: wherever --voice-listening is defined, --voice-ready and --on-voice-ready are defined beside it', () => {
+  let seen = 0;
+  for (const f of COLOR_FILES) for (const b of blocksOf(f)) {
+    if (!hexOf(b.body, '--voice-listening')) continue;
+    seen++;
+    assert.ok(hexOf(b.body, '--voice-ready'), f + ' [' + b.sel.slice(-60) + '] lacks --voice-ready');
+    assert.ok(hexOf(b.body, '--on-voice-ready'), f + ' [' + b.sel.slice(-60) + '] lacks --on-voice-ready');
+  }
+  assert.ok(seen >= 6, 'index, mobile, both looks (main) and both looks (Simple): ' + seen);
+});
+
+test('ready 5: each look\'s Simple blocks define all four voice colours; so do both pages\' Simple palettes', () => {
+  const four = (body) => ['--voice-listening', '--on-voice-listening', '--voice-ready', '--on-voice-ready'].every(n => hexOf(body, n));
+  for (const look of ['broadsheet', 'quiet']) {
+    const bs = blocksOf('looks/' + look + '.css');
+    for (const tail of ['.mm-simple', '.mm-simple.mm-light']) {
+      const sel = 'html[data-look="' + look + '"]' + tail;
+      const hit = bs.filter(b => b.sel.split(',').map(s => s.trim()).includes(sel));
+      assert.ok(hit.length, look + ' has a block for ' + sel);
+      assert.ok(hit.some(b => four(b.body)), look + ' ' + tail + ' defines all four');
+    }
+  }
+  for (const f of ['index.html', 'mobile.html']) {
+    const bs = blocksOf(f);
+    for (const sel of ['html.mm-simple', 'html.mm-simple.mm-light']) {
+      const hit = bs.filter(b => b.sel.split(',').some(s => s.trim().endsWith(sel)) && /--bg-dark:/.test(b.body));   // endsWith: the first selector of a block in index.html follows a </style><style> tag
+      assert.ok(hit.length === 1, f + ' has the ' + sel + ' palette');
+      assert.ok(hexOf(hit[0].body, '--voice-ready') && hexOf(hit[0].body, '--on-voice-ready'), f + ' ' + sel + ' defines the ready pair');
+    }
+  }
+});
+
+test('ready 6: every ready pair has 7:1 text contrast, 3:1 against its page, and is neither red- nor green-dominant', () => {
+  let pairs = 0;
+  for (const f of COLOR_FILES) for (const b of blocksOf(f)) {
+    const fill = hexOf(b.body, '--voice-ready'); if (!fill) continue;
+    const on = hexOf(b.body, '--on-voice-ready'); assert.ok(on, f + ': a pair');
+    pairs++;
+    const bg = hexOf(b.body, '--bg-dark') || '#1a1a19';   // a block with no page colour of its own sits on the dark Simple page
+    assert.ok(ratio(fill, on) >= 7, f + ' ' + fill + '/' + on + ' text ' + ratio(fill, on).toFixed(2));
+    assert.ok(ratio(fill, bg) >= 3, f + ' ' + fill + ' on ' + bg + ' ' + ratio(fill, bg).toFixed(2));
+    const [r, g, bl] = rgb(fill);
+    assert.ok(!(r > g + 40 && r > bl + 40), f + ' ' + fill + ' is red-dominant');
+    assert.ok(!(g > r + 40 && g > bl + 40), f + ' ' + fill + ' is green-dominant');
+  }
+  assert.ok(pairs >= 10, 'pairs checked: ' + pairs);
+});
+
+test('ready 7: the desktop Simple call button is the ready look only while a Tap to talk call is idle', () => {
+  const idx = read('index.html');
+  const line = idx.split('\n').find(l => l.includes('.mic-btn.simple-call[aria-label="Talk"][aria-pressed="false"]'));
+  assert.ok(line && /background: var\(--voice-ready\); color: var\(--on-voice-ready\)/.test(line));
+  assert.ok(!/--accent|--brand-violet|--error/.test(line));
+});

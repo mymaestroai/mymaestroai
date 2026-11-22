@@ -228,6 +228,8 @@
       --mic-rec: #ef4444;
       --voice-listening: #15803d;   /* a Tap to talk call while listening ("Tap to send"): green, white text 5.0:1; never the red of recording or Hang up */
       --on-voice-listening: #ffffff;
+      --voice-ready: #F3F4F6;   /* a Tap to talk call while idle ("Tap to talk"): solid ink (the light text colour on this dark page), never the accent, red or green */
+      --on-voice-ready: #090B0F;
       --more-btn-more-badge-bg: rgba(61,123,255,0.2);
       --more-btn-more-badge-border: rgba(61,123,255,0.45);
       --plan-warn-border: rgba(201,162,39,0.35);
@@ -2953,6 +2955,7 @@
       --accent: #8b6fd6; --accent-hover: #9d84e0; --purple: #8b6fd6;
       --text: #ffffff; --text-primary: #ffffff; --text-dim: #c3c2b7; --text-secondary: #c3c2b7; --text-tertiary: #8a897f;
       --border: #2f2f2d; --border-strong: #3a3a37;
+      --voice-ready: #ffffff; --on-voice-ready: #1a1a19;   /* Tap to talk idle: white ink on the dark Simple page */
       --chat-pad-x: 24px;   /* the chat column stays full width (--chat-max-width from :root), as in the main view */
       --sm-page: #1a1a19; --sm-side: #161615; --sm-raised: #232322; --sm-border: #2f2f2d; --sm-text: #fff; --sm-sec: #c3c2b7; --sm-muted: #8a897f;
       --sm-bubble: #2a2a28; --sm-sel: rgba(139,111,214,.22); --sm-hover: rgba(255,255,255,.05); --sm-shadow: none;
@@ -2965,6 +2968,7 @@
       --bg-dark: #ffffff; --bg-card: #ffffff; --bg-input: #ffffff; --bg-tertiary: #f6f6f3;
       --text: #1a1a19; --text-primary: #1a1a19; --text-dim: #55544c; --text-secondary: #55544c; --text-tertiary: #8a897f;
       --border: #e4e3dd; --border-strong: #d4d3cb;
+      --voice-ready: #1a1a19; --on-voice-ready: #ffffff;   /* Tap to talk idle: dark ink on the light Simple page */
       --sm-page: #ffffff; --sm-side: #f6f6f3; --sm-raised: #ffffff; --sm-border: #e4e3dd; --sm-text: #1a1a19; --sm-sec: #55544c; --sm-muted: #8a897f;
       --sm-bubble: #f1f0ec; --sm-sel: rgba(139,111,214,.13); --sm-hover: rgba(0,0,0,.04); --sm-shadow: 0 2px 12px rgba(0,0,0,.08);
       --sm-user-bg: #ebe6fb; --sm-user-text: #1d1640; --sm-user-code: rgba(29,22,64,.10);
@@ -3112,6 +3116,8 @@
     html.mm-simple .input-area .mic-btn.simple-call { width: 44px; height: 44px; background: var(--brand-violet); color: var(--on-color-text); }
     html.mm-simple .input-area .mic-btn.simple-call:hover { background: var(--simple-accent-hover); }
     html.mm-simple .input-area .mic-btn.simple-call.call { background: var(--simple-call-live-bg); box-shadow: 0 0 0 3px var(--simple-call-live-shadow); }
+    /* a Tap to talk call, idle: the press button (voicePressButton names it "Talk" and sets aria-pressed) is the ready ink, not the accent (listening keeps the green above) */
+    html.mm-simple .input-area .mic-btn.simple-call[aria-label="Talk"][aria-pressed="false"], html.mm-simple .input-area .mic-btn.simple-call[aria-label="Talk"][aria-pressed="false"]:hover { background: var(--voice-ready); color: var(--on-voice-ready); }
     html.mm-simple .input-area [id^="send-"] { background: var(--brand-violet); color: var(--on-color-text); border-radius: 20px; padding: 0 18px; height: 40px; font-size: 14px; font-weight: 600; }
     html.mm-simple .input-area [id^="send-"]:hover { background: var(--simple-accent-hover); }
     html.mm-simple .input-area .image-preview-area { background: none; }
