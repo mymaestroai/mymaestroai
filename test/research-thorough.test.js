@@ -349,14 +349,16 @@ test('H2/H3 synthesisBrief: not mentioned is not unsupported; every reader resul
 test('H3 missingReaderFacts: result lines whose numbers no claim holds', () => {
   const notes = '## Paper (https://p.example/a)\n- Full text opened: yes\n### Results (location, who judged, sample size)\n- Table 3: 30 annotators per task, 90 pairs\n- GenRM-CoT distilled from GPT-4.1\n- Nothing to add here\n### What mattered most (the source\'s own evidence)\n1. Ablation row 4 gave +2.5 points\n### Limits\n- 77 stories only\n## Other (https://p.example/b)\n### Results\n- Judged by 3 humans\n';
   const m = T.missingReaderFacts(notes, []);
-  assert.deepStrictEqual(m.map((x) => x.line), ['Table 3: 30 annotators per task, 90 pairs', 'GenRM-CoT distilled from GPT-4.1', 'Ablation row 4 gave +2.5 points', 'Judged by 3 humans']);
+  // I6 (changed): "GenRM-CoT distilled from GPT-4.1" is no longer listed: GPT-4.1 is a name with a version, not a result
+  assert.deepStrictEqual(m.map((x) => x.line), ['Table 3: 30 annotators per task, 90 pairs', 'Ablation row 4 gave +2.5 points', 'Judged by 3 humans']);
   assert.equal(m[0].source, 'Paper (https://p.example/a)');
-  assert.equal(m[3].source, 'Other (https://p.example/b)');
+  assert.equal(m[2].source, 'Other (https://p.example/b)');
   const A = 'https://p.example/a';
   const B = 'https://p.example/b';
-  const some = T.missingReaderFacts(notes, [{ id: 'c1', claim: 'Each task had 30 annotators', figures: ['90'], source_url: A }, { id: 'c2', claim: 'judge was GPT-4.1 distilled', figures: ['4.1'], source_url: A }, { claim: 'x', figures: ['2.5'], source_url: A }, { claim: 'y', figures: ['3'], source_url: B }]);
+  const some = T.missingReaderFacts(notes, [{ id: 'c1', claim: 'Each task had 30 annotators', figures: ['90'], source_url: A }, { id: 'c2', claim: 'judge was GPT-4.1 distilled', figures: ['4.1'], source_url: A }, { claim: 'x', figures: ['2.5', '4'], source_url: A }, { claim: 'y', figures: ['3'], source_url: B }]);
   assert.deepStrictEqual(some, []);
-  assert.deepStrictEqual(T.missingReaderFacts(notes, [{ claim: 'c', figures: ['30'], source_url: A }]).map((x) => x.line), ['GenRM-CoT distilled from GPT-4.1', 'Ablation row 4 gave +2.5 points', 'Judged by 3 humans']);   // one number of a line is enough to count it as present: 30 covers line 1
+  // I6 (changed): a line is missing when ANY of its numbers is held by no claim of the paper (30 alone no longer covers "30 ..., 90 ...")
+  assert.deepStrictEqual(T.missingReaderFacts(notes, [{ claim: 'c', figures: ['30'], source_url: A }]).map((x) => x.line), ['Table 3: 30 annotators per task, 90 pairs', 'Ablation row 4 gave +2.5 points', 'Judged by 3 humans']);
   // a number in a claim about ANOTHER source does not cover a reader's line (run 3: "30 annotators" was hidden by another paper's "30")
   assert.deepStrictEqual(T.missingReaderFacts(notes, [{ claim: 'c', figures: ['30'], source_url: B }]).map((x) => x.line)[0], 'Table 3: 30 annotators per task, 90 pairs');
   // locations are no results: "§3.1", "[141]", "Figures 4, 6 and 7"
@@ -1149,7 +1151,9 @@ test('r4-2 units match exactly, both ways', () => {
   assert.strictEqual(T.checkFigure('56.4', 'agreement 56.4% overall', []), 'not_found_as_written');
   assert.strictEqual(T.checkFigure('56.4%', 'agreement 56.4% overall', []), 'found_as_written');
   assert.strictEqual(T.checkFigure('56.4', '| model | 56.4 |', []), 'found_as_written');
-  assert.strictEqual(T.checkFigure('56.4%', '| model | 56.4 |', []), 'found_as_written'); // G3: a percent against a bare table cell
+  // I1 (changed): a percent is found against a bare cell only in a table that says it is in percent
+  assert.strictEqual(T.checkFigure('56.4%', '| model | Acc (%) |\n|---|---|\n| m | 56.4 |', []), 'found_as_written');
+  assert.strictEqual(T.checkFigure('56.4%', '| model | 56.4 |', []), 'not_found_as_written');
   assert.strictEqual(T.checkFigure('56.4%', 'model 56.4 score', []), 'not_found_as_written'); // outside a table the unit stays exact
   assert.strictEqual(T.checkFigure('2x', 'a 2 ratio', []), 'not_found_as_written');
   assert.strictEqual(T.checkFigure('2x', 'a 2x speedup', ['speedup']), 'found_as_written');
@@ -4536,21 +4540,23 @@ test('G2 arXiv doubled rendering: a mean and its spread are read once, in table 
 });
 
 test('G3 a percent in the report against a bare table cell; nowhere else', () => {
-  const row = '| RM-R1-DeepSeek-Qwen-14B | ZH | 59.2 | 45.7 | 57.5 | 71.7 | 66.7 | 90.0 | 54.6 | 69.2 | 62.6 | 13.2 |';
+  // I1 (changed): the table must say it is in percent: its header row has a "%" here
+  const row = '| Model (%) | Lang | A | B | C | D | E | F | G | H | Avg | Std |\n|---|---|---|---|---|---|---|---|---|---|---|---|\n| RM-R1-DeepSeek-Qwen-14B | ZH | 59.2 | 45.7 | 57.5 | 71.7 | 66.7 | 90.0 | 54.6 | 69.2 | 62.6 | 13.2 |';
   assert.strictEqual(T.checkFigure('90.0%', row), FD);
   assert.strictEqual(T.checkFigure('90.0 percent', row), FD);
   assert.strictEqual(T.checkFigure('90.0 per cent', row), FD);
   assert.strictEqual(T.checkFigure('90.0', row), FD);
   assert.strictEqual(T.checkFigure('90.1%', row), NF);
   assert.strictEqual(T.checkFigure('90%', row), NF);
-  assert.strictEqual(T.checkFigure('90.0%', '| a | 90.0±1.5 | b |'), FD); // a cell with a spread
-  assert.strictEqual(T.checkFigure('90.0%', '| a | 90.0 (± 1.5) | b |'), FD);
+  const PT = '| a (%) | b |\n|---|---|\n';
+  assert.strictEqual(T.checkFigure('90.0%', PT + '| a | 90.0±1.5 | b |'), FD); // a cell with a spread
+  assert.strictEqual(T.checkFigure('90.0%', PT + '| a | 90.0 (± 1.5) | b |'), FD);
   assert.strictEqual(T.checkFigure('90.0%', 'The score was 90.0 here.'), NF); // prose
   assert.strictEqual(T.checkFigure('90.0%', 'The score was 90.0.'), NF);
-  assert.strictEqual(T.checkFigure('90.0%', '| a | 90.0 ms | b |'), NF); // a cell with a unit
-  assert.strictEqual(T.checkFigure('90.0%', '| a | about 90.0 | b |'), NF); // not the whole cell
+  assert.strictEqual(T.checkFigure('90.0%', PT + '| a | 90.0 ms | b |'), NF); // a cell with a unit
+  assert.strictEqual(T.checkFigure('90.0%', PT + '| a | about 90.0 | b |'), NF); // not the whole cell
   assert.strictEqual(T.checkFigure('90.0%', 'score | 90.0 | b'), NF); // not a table line
-  assert.strictEqual(T.checkFigure('90.0 ms', '| a | 90.0 | b |'), NF); // another unit stays as before
+  assert.strictEqual(T.checkFigure('90.0 ms', PT + '| a | 90.0 | b |'), NF); // another unit stays as before
 });
 
 test('H2 a list marker before a number is no sign and no part of its form (run 3: "- 52.7% matches the first pass")', () => {
@@ -4578,4 +4584,76 @@ test('H1 a prompt template placeholder in doubled brackets is reading text, not 
   // real markup stays unreadable: a closing tag, or a tag after a single "<"
   assert.strictEqual(T.checkFigure('1250', 'Text <<span hidden>1250</span> more'), 'source_not_opened');
   assert.strictEqual(T.checkFigure('1250', 'Text <section>1250</section> more'), 'source_not_opened');
+});
+
+// ---------------------------------------------------------------- review fixes I1 - I6
+test('I1 a percent against a bare table cell only in a table that says it is in percent (real source 03 caption and row)', () => {
+  const cap = 'Table 1: Reward model accuracy (%) on WritingPreferenceBench by architecture. Colors: >>70%, <<50%. Best overall in bold.';
+  const head = '| Model | Lang | Func. | Rhet. | Style | Tone | Plot | Char. | Dial. | Pace | Avg | Std |\n|---|---|---|---|---|---|---|---|---|---|---|---|\n';
+  const row = '| RM-R1-DeepSeek-Qwen-14B | ZH | 59.2 | 45.7 | 57.5 | 71.7 | 66.7 | 90.0 | 54.6 | 69.2 | 62.6 | 13.2 |';
+  assert.strictEqual(T.checkFigure('90.0%', `${cap}\n\n${head}${row}`), FD); // the caption says percent
+  assert.strictEqual(T.checkFigure('90.0%', `${head}${row}`), NF);            // nothing says percent
+  assert.strictEqual(T.checkFigure('90.0%', `${cap}\n\nsome\nother\nlines\nhere\n\n${head}${row}`), NF); // the caption is farther than 3 non-empty lines
+  assert.strictEqual(T.checkFigure('90.0%', `Note: values in %\n\n${head}${row}`), NF); // a line that does not start with "Table"
+  assert.strictEqual(T.checkFigure('90.0%', '| Model | Acc (%) |\n|---|---|\n| A | 90.0 |'), FD); // the header row says percent
+  assert.strictEqual(T.checkFigure('83%', '| Endpoint | Participants (count) |\n|---|---|\n| Enrollment | 83 |', ['enrollment']), NF);
+  assert.strictEqual(T.checkFigure('83', '| Endpoint | Participants (count) |\n|---|---|\n| Enrollment | 83 |', ['enrollment']), FD);
+  const t3 = '| Model | Params (B) | Latency | Acc |\n|---|---|---|---|\n| A | 70 | 12 | 82.1 |';
+  for (const f of ['70%', '12%', '82.1%']) assert.strictEqual(T.checkFigure(f, t3, ['params', 'latency', 'acc']), NF, f);
+  assert.strictEqual(T.checkFigure('2023%', '| Year | 2023 |\n|---|---|\n| Year | 2023 |', ['year']), NF);
+});
+
+test('I2 a mean keeps the unit written after its spread', () => {
+  assert.strictEqual(T.checkFigure('63', 'Latency was 63±8 ms.', ['latency']), NF);
+  assert.strictEqual(T.checkFigure('63 ms', 'Latency was 63±8 ms.', ['latency']), FD);
+  assert.strictEqual(T.checkFigure('63 ms', 'Latency was 63 ± 8 ms.', ['latency']), FD);
+  assert.strictEqual(T.checkFigure('63%', 'Accuracy was 63±8%.', ['accuracy']), FD);
+  assert.strictEqual(T.checkFigure('63', 'Accuracy was 63±8%.', ['accuracy']), NF);
+  assert.strictEqual(T.checkFigure('63 s', 'Latency was 63±8 ms.', ['latency']), NF);
+  assert.strictEqual(T.checkFigure('63.0', 'Score 63.0±8.6 overall', ['score']), FD); // no unit: as before
+  assert.strictEqual(T.checkFigure('3.58', '| creativity | 3.583.58 (±0.78\\pm 0.78) | x |'), FD);
+});
+
+test('I3 a list marker needs white space and then the number; a glued sign is a sign (as at 2a380f24)', () => {
+  const kw = ['gain', 'average', 'delta'];
+  assert.strictEqual(T.checkFigure('5.2%', 'Gain:\n- 5.2% on average', kw), FD);      // "- 5.2%": a list marker
+  assert.strictEqual(T.checkFigure('-5.2%', 'Gain:\n- 5.2% on average', kw), NF);
+  assert.strictEqual(T.checkFigure('12.3%', 'Gain:\n+ 12.3% on average', kw), FD);
+  assert.strictEqual(T.checkFigure('5.2%', 'Gain:\n-5.2% on average', kw), NF);      // "-5.2%": a sign
+  assert.strictEqual(T.checkFigure('-5.2%', 'Gain:\n-5.2% on average', kw), FD);
+  assert.strictEqual(T.checkFigure('-12.3%', 'Gain:\n-12.3% on average', kw), FD);
+  assert.strictEqual(T.checkFigure('12.3%', 'Gain:\n*12.3% on average', kw), NF);
+  assert.strictEqual(T.checkFigure('12.3%', 'Gain:\n+12.3% on average over baseline', kw), FD); // a glued "+" is no sign at all (2a380f24 and today)
+  assert.strictEqual(T.checkFigure('12.3%', 'Delta of\n+12.3 percent', kw), FD);
+});
+
+test('I4 a contradiction quote that holds only the claim\'s own figures is the claim\'s support', () => {
+  const claims = [{ id: 'c1', claim: 'Method A scored 56.4% on the test', source_url: 'https://a.example/a', figures: ['56.4'] }];
+  const mk = (q) => ({ results: [{ id: 'c1', verdict: 'not_supported', reason: 'r', contradiction: q, figures: [] }], counts: { supported: 0, partly: 0, not_supported: 1, cannot_check: 0 } });
+  const own = 'Method A scored 56.4% on the test with raters';
+  const other = 'Method A scored 56.4% on the test, 61.2% in v2';
+  const none = 'Method A did not beat the baseline on the test';
+  const ex = [{ id: 'c1', excerpts: [own, other, none] }];
+  const a = T.enforceContradictions(mk(own), claims, ex, '');
+  assert.strictEqual(a.results[0].verdict, 'cannot_check');
+  assert.strictEqual(a.results[0].downgraded, 'quote supports');
+  const b = T.enforceContradictions(mk(other), claims, ex, '');
+  assert.strictEqual(b.results[0].verdict, 'not_supported', 'a quote with another number stands');
+  const c = T.enforceContradictions(mk(none), claims, ex, '');
+  assert.strictEqual(c.results[0].verdict, 'not_supported', 'a quote with no number stands');
+  const partly = { ...mk(own), results: [{ ...mk(own).results[0], verdict: 'partly' }] };
+  assert.strictEqual(T.enforceContradictions(partly, claims, ex, '').results[0].downgraded, 'quote supports');
+  assert.match(T.challengeBrief('Q?', claims, ex, [], ''), /same thing as the claim \(the same study, population, version and measurement\)/);
+  assert.ok(T.reviseBrief('Q?', 'prose', claims, a, []).includes('If the quoted passage is about something else (another study, population, version or condition), keep the claim as it is.'));
+});
+
+test('I6 missingReaderFacts: names, versions, years and "Appendix B.2" are no results; a line with ANY unheld number is listed', () => {
+  const A = 'https://p.example/a';
+  const notes = `## P (${A})\n### Results\n- Llama-3 and GPT-4 were compared (v2)\n- Published in 2023, see Appendix B.2\n- 0.85 (n=200, 3 annotators)\n`;
+  assert.deepStrictEqual(T.missingReaderFacts(notes, []).map((x) => x.line), ['0.85 (n=200, 3 annotators)']);
+  const held = T.missingReaderFacts(notes, [{ claim: 'c', figures: ['0.85'], source_url: A }]).map((x) => x.line);
+  assert.deepStrictEqual(held, ['0.85 (n=200, 3 annotators)'], 'only 0.85 is held: the line is still listed');
+  assert.deepStrictEqual(T.missingReaderFacts(notes, [{ claim: 'c', figures: ['0.85', '200', '3'], source_url: A }]), []);
+  const many = `## P (${A})\n### Results\n` + Array.from({ length: 9 }, (_, i) => `- result ${1000 + i} points`).join('\n') + '\n';
+  assert.strictEqual(T.missingReaderFacts(many, []).length, 5);
 });

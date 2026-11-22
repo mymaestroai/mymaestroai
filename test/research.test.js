@@ -1515,7 +1515,8 @@ test('H3 runner: one follow-up synthesis when reader results are missing from th
   assert.match(t.tasks[0], /30 annotators per task, 90 pairs/);
   const run = m.runner.get(r.id);
   assert.equal(run.claims.length, 2, 'the follow-up claims are used');
-  assert.deepEqual(run.readerFacts, { missing: 2, after: 0 }, 'both fake readers (two groups) reported the line');
+  // I5 (changed): readerFacts also says how many claims the follow-up added and whether the old prose was kept
+  assert.deepEqual(run.readerFacts, { missing: 2, after: 0, added: 1, proseKept: false }, 'both fake readers (two groups) reported the line');
   assert.deepEqual(run.missing, [], 'no stage failure');
 });
 
@@ -1528,7 +1529,7 @@ test('H3 runner: the first synthesis stands when the follow-up fails or returns 
     assert.equal(m.calls.filter((c) => c.labels[0] === 'Research report (follow-up)').length, 1);
     const run = m.runner.get(r.id);
     assert.equal(run.claims.length, 1, 'the first synthesis stands');
-    assert.deepEqual(run.readerFacts, { missing: 2, after: 2 });
+    assert.deepEqual(run.readerFacts, { missing: 2, after: 2, added: 0, proseKept: true });   // I5 (changed): the two new fields
     assert.ok(!run.missing.some((x) => /synthesis/.test(x)), 'not a stage failure');
   }
   const n = makeThorough({ deps: rounds(0) });
@@ -2096,4 +2097,91 @@ test('thorough runner: the document has the appendix "What the first pass said" 
   assert.ok(i > 0);
   assert.match(md.slice(i), /APPENDIX-MARK A wins\./);
   assert.match(m.written[0].doc.html, /What the first pass said/);
+});
+
+// ── review fixes I5 / I7 ──
+const I_NOTES = `## Paper A (${SRC_A})\n- Full text opened: yes\n### Results (location, who judged, sample size)\n- Table 2: 30 annotators per task, 90 pairs\n### What mattered most\nNothing\n`;
+const I_C3 = { id: 'c3', claim: 'Each task had 30 annotators and 90 pairs', source_url: SRC_A, figures: ['30', '90'], measured_result: '30 annotators, 90 pairs', judged_by: 'humans', evidence_strength: 'moderate', inference: false };
+const I_C1 = { id: 'c1', claim: 'Method A scored 56.4% on the test', source_url: SRC_A, figures: ['56.4'], measured_result: '56.4%', judged_by: 'humans', evidence_strength: 'strong', inference: false };
+
+test('I5-follow-up: a follow-up that drops or changes an old claim cannot replace it: only the added claim is appended, the old prose stays', async () => {
+  for (const followClaims of [[I_C3], [{ ...I_C1, figures: ['56.5'] }, I_C3], [{ ...I_C1, claim: 'Method A scored 99% on the test' }, I_C3, { ...I_C3, id: 'c9' }]]) {
+    const m = makeThorough({ deps: rounds(0), script: {
+      Reader: (ws) => ws.map((w) => ({ label: w.label, ok: true, text: I_NOTES })),
+      'Research report (follow-up)': () => one('Research report (follow-up)', '## Verdict\nFOLLOW-UP PROSE.\n\n' + claimsBlock(followClaims)),
+    } });
+    const run = await doneRun(m);
+    assert.deepEqual(run.claims.map((c) => c.id), ['c1', 'c3'], JSON.stringify(followClaims.map((c) => c.id)));
+    assert.equal(run.claims[0].claim, 'Method A scored 56.4% on the test');
+    assert.deepEqual(run.claims[0].figures, ['56.4']);
+    assert.doesNotMatch(run.prose, /FOLLOW-UP PROSE/, 'the old prose is kept');
+    assert.deepEqual(run.readerFacts, { missing: 2, after: 0, added: 1, proseKept: true });
+  }
+});
+
+test('I5-follow-up: a follow-up that keeps every old claim as it was and every « » span has its prose used; a repeated claim text is not added', async () => {
+  const m = makeThorough({ deps: rounds(0), script: {
+    Reader: (ws) => ws.map((w) => ({ label: w.label, ok: true, text: I_NOTES })),
+    'Research report (follow-up)': () => one('Research report (follow-up)', '## Verdict\nFOLLOW-UP PROSE.\n\n' + claimsBlock([I_C1, I_C3, { ...I_C3, id: 'c8', claim: 'each task had 30 annotators and 90 pairs' }])),
+  } });
+  const run = await doneRun(m);
+  assert.deepEqual(run.claims.map((c) => c.id), ['c1', 'c3']);
+  assert.match(run.prose, /FOLLOW-UP PROSE/);
+  assert.equal(run.readerFacts.proseKept, false);
+  assert.equal(run.readerFacts.added, 1);
+  // an old « » span missing from the new prose keeps the old prose
+  const span = makeThorough({ deps: rounds(0), script: {
+    Reader: (ws) => ws.map((w) => ({ label: w.label, ok: true, text: I_NOTES })),
+    Research: undefined,
+    'Research report': () => one('Research report', REPORT('').replace('## Verdict\nMethod A wins.', '## Verdict\nMethod A wins; the first pass said «12.5%».')),
+    'Research report (follow-up)': () => one('Research report (follow-up)', '## Verdict\nFOLLOW-UP PROSE.\n\n' + claimsBlock([I_C1, I_C3])),
+  } });
+  const r2 = await doneRun(span);
+  assert.doesNotMatch(r2.prose, /FOLLOW-UP PROSE/);
+  assert.equal(r2.readerFacts.proseKept, true);
+  assert.deepEqual(r2.claims.map((c) => c.id), ['c1', 'c3']);
+});
+
+const I_TWO = () => REPORT('').replace(/```claims[\s\S]*$/, '') + claimsBlock([I_C1, C2]);
+const I_VERDICTS = '```json\n' + JSON.stringify([{ id: 'c1', verdict: 'not_supported', reason: 'because', contradiction: QUOTE }, { id: 'c2', verdict: 'supported', reason: 'ok' }]) + '\n```';
+
+test('I5-revision: a revision that drops a supported claim is discarded whole; the doubted claims go to "Not settled by the review"', async () => {
+  const m = makeThorough({ deps: rounds(1), script: {
+    'Research report': () => one('Research report', I_TWO()),
+    Reviewer: () => one('Reviewer', I_VERDICTS),
+    Revision: () => one('Revision', '## Verdict\nREVISED PROSE.\n\n' + claimsBlock([{ ...I_C1, claim: 'Method A scored somewhat less on the test' }])),
+  } });
+  const run = await doneRun(m);
+  assert.equal(run.review.revisionsDiscarded, 1);
+  assert.deepEqual(run.claims.map((c) => c.id), ['c1', 'c2']);
+  assert.equal(run.claims[0].claim, 'Method A scored 56.4% on the test');
+  assert.doesNotMatch(run.prose, /REVISED PROSE/);
+  assert.match(run.prose, /## Not settled by the review/);
+  assert.match(run.prose, /c1: Method A scored 56\.4/);
+});
+
+test('I5-revision: a revision that changes only the doubted claim is used', async () => {
+  const m = makeThorough({ deps: rounds(1), script: {
+    'Research report': () => one('Research report', I_TWO()),
+    Reviewer: () => one('Reviewer', I_VERDICTS),
+    Revision: () => one('Revision', '## Verdict\nREVISED PROSE.\n\n' + claimsBlock([{ ...I_C1, claim: 'Method A scored somewhat less on the test' }, C2])),
+  } });
+  const run = await doneRun(m);
+  assert.equal(run.review.revisionsDiscarded, undefined);
+  assert.match(run.prose, /REVISED PROSE/);
+  assert.equal(run.claims[0].claim, 'Method A scored somewhat less on the test');
+  assert.equal(run.claims.length, 2);
+});
+
+test('I7 runner: a group where one source has hub text goes to the reader with that source only; the other gets the "not opened" note', async () => {
+  const fetchPage = async (url) => { if (url === SRC_B) throw new Error('HTTP 404'); return { markdown: `${BODY_MARK} ${url} Method A scored 56.4% on the test with 200 raters.`, truncated: false, via: 'plain', title: 'T' }; };
+  const m = makeThorough({ fetchPage, deps: rounds(0) });
+  await doneRun(m);
+  const reader = m.calls.find((c) => /^Reader/.test(c.labels[0]));
+  assert.deepEqual(reader.labels, ['Reader 1', 'Reader 2']);
+  assert.ok(reader.tasks[0].includes(`${BODY_MARK} ${SRC_A}`));
+  assert.ok(!reader.tasks[0].includes(SRC_B), 'the source with no text is not in the brief');
+  assert.ok(!reader.tasks[0].includes('BEGIN TEXT OF SOURCE 2'));
+  const report = m.calls.find((c) => c.labels[0] === 'Research report').tasks[0];
+  assert.ok(report.includes(`(${SRC_B})\n- Full text opened: no (the hub could not fetch it)`));
 });
