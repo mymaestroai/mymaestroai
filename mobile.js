@@ -14148,13 +14148,16 @@ function settingsSheetOpen() {
   el.setAttribute('role', 'dialog'); el.setAttribute('aria-label', 'Settings');
   el.innerHTML = '<div class="ssh-bar" hidden><button type="button" class="ssh-done">Close</button></div><iframe title="Settings"></iframe>' +
     '<div class="ssh-wait" role="status"><p class="ssh-msg">Opening Settings…</p>' +
-    '<div class="ssh-btns" hidden><button type="button" class="ssh-retry">Try again</button><button type="button" class="ssh-close">Close</button></div></div>';
+    '<div class="ssh-btns" hidden><button type="button" class="ssh-retry">Try again</button><button type="button" class="ssh-close">Close</button></div>' +
+    '<div class="ssh-btns ssh-stuck" hidden><button type="button" class="ssh-wait-more">Keep waiting</button><button type="button" class="ssh-force">Close anyway</button></div></div>';
   document.body.appendChild(el);
   settingsSheet = { el, frame: el.querySelector('iframe'), ready: false, timer: null };
   el.__dialogClose = settingsSheetRequestClose;   // Back: the dialog in the frame decides (unsaved changes, a save running)
   el.querySelector('.ssh-retry').addEventListener('click', settingsSheetLoad);
   el.querySelector('.ssh-close').addEventListener('click', settingsSheetClosed);
   el.querySelector('.ssh-done').addEventListener('click', settingsSheetClosed);   // shown once the frame left Settings
+  el.querySelector('.ssh-wait-more').addEventListener('click', settingsSheetKeepWaiting);
+  el.querySelector('.ssh-force').addEventListener('click', settingsSheetClosed);
   settingsSheet.frame.addEventListener('load', settingsSheetFrameLoaded);
   window.addEventListener('message', settingsSheetMessage);
   dialogGuard.open(el);
@@ -14168,6 +14171,7 @@ function settingsSheetLoad() {
   s.el.querySelector('.ssh-bar').hidden = true;
   s.el.querySelector('.ssh-msg').textContent = 'Opening Settings…';
   s.el.querySelector('.ssh-btns').hidden = true;
+  s.el.querySelector('.ssh-stuck').hidden = true;
   clearTimeout(s.timer);
   s.timer = setTimeout(settingsSheetFailed, SETTINGS_SHEET_WAIT_MS);
   s.frame.src = SETTINGS_SHEET_URL;
@@ -14186,7 +14190,8 @@ function settingsSheetFrameLoaded() {
   if (!s) return;
   let loc = null;
   try { loc = s.frame.contentWindow.location; } catch { loc = null; }
-  const onSettings = !!loc && loc.pathname === '/' && new URLSearchParams(loc.search).get('settings-only') === '1';
+  if (!loc) { s.ready = false; clearTimeout(s.timer); s.el.classList.remove('ready'); settingsSheetFailed(); return; }   // the browser's error page (offline): Try again
+  const onSettings = loc.pathname === '/' && new URLSearchParams(loc.search).get('settings-only') === '1';
   if (onSettings) return;
   s.ready = false; s.away = true;
   clearTimeout(s.timer); clearTimeout(s.closeTimer);
@@ -14198,9 +14203,25 @@ function settingsSheetRequestClose() {
   if (!s) return;
   if (!s.ready) { settingsSheetClosed(); return; }   // nothing of Settings in the frame: nothing to lose
   try { s.frame.contentWindow.postMessage({ type: 'mm-settings-close' }, location.origin); } catch { settingsSheetClosed(); return; }
-  // the dialog answers at once (closed, or kept with its question up); a frame that no longer answers never keeps the sheet
+  // the dialog answers at once (closed, or kept with its question up). No answer: the sheet stays and asks, since the frame
+  // may hold changes; it is never closed without the person saying so.
   clearTimeout(s.closeTimer);
-  s.closeTimer = setTimeout(settingsSheetClosed, 3000);
+  s.closeTimer = setTimeout(settingsSheetNoAnswer, 8000);
+}
+function settingsSheetNoAnswer() {
+  const s = settingsSheet;
+  if (!s) return;
+  s.el.querySelector('.ssh-msg').textContent = "Settings isn't answering. Changes not saved there are lost if you close it now.";
+  s.el.querySelector('.ssh-btns').hidden = true;
+  s.el.querySelector('.ssh-stuck').hidden = false;
+  s.el.classList.remove('ready');
+  dialogGuard.open(s.el);   // Back works again (the question took the last one)
+}
+function settingsSheetKeepWaiting() {
+  const s = settingsSheet;
+  if (!s) return;
+  s.el.querySelector('.ssh-stuck').hidden = true;
+  s.el.classList.add('ready');
 }
 function settingsSheetMessage(e) {
   const s = settingsSheet;

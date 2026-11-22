@@ -6594,7 +6594,7 @@
       if (btn) { btn.disabled = false; setTimeout(() => { btn.className = 'st-test-btn'; btn.textContent = 'Save'; }, 3000); }
       return result;
     }
-    if (globalThis.mmSettingsOnly !== true) setInterval(refreshSpendToday, SPEND_REFRESH_MS);   // the settings-only page: the Spend section reads it once itself
+    setInterval(refreshSpendToday, SPEND_REFRESH_MS);   // the Spend section's data too (a read that failed comes again), so also on the settings-only page
 
     // ── Desktop push notifications (optional; the same /sw.js the phone UI uses) ──
     function desktopPushSupported() {
@@ -22971,7 +22971,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       // a member has no Settings dialog on the desktop either (the gear is an admin control and the hub refuses its routes)
       if (!isHubAdmin()) stModal(`<h3>&#x2699;&#xFE0F; Settings</h3><p class="st-sub">Settings are kept by the admins of this Maestro.</p><div class="st-actions"><button class="st-btn secondary" onclick="dialogRequestClose(this)">Close</button></div>`);
       else {
-        try { await loadAgents(); } catch { /* the sections that list agents say so */ }   // as the full page has them (sandbox, subscriptions)
+        // as the full page has them (sandbox, subscriptions); a hub slow to answer never holds the dialog back more than 5 s
+        try { await Promise.race([loadAgents(), new Promise((r) => setTimeout(r, 5000))]); } catch { /* the sections that list agents say so */ }
         await openSettings();
       }
       document.addEventListener('click', settingsOnlyLeaveGuard, true);
@@ -22985,6 +22986,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const check = () => {
         if (sent || document.getElementById('st-overlay')) return;
         sent = true;
+        // the dialog closed on its way to another page (a link, with Discard chosen): that page opens in the sheet
+        if (settingsOnlyGoing) { location.href = settingsOnlyGoing; return; }
         settingsOnlyPost('mm-settings-closed');
       };
       try { new MutationObserver(check).observe(document.body, { childList: true }); } catch { /* old browser: Close still posts */ }
@@ -22994,6 +22997,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (!e || e.source !== window.parent || e.origin !== location.origin) return;
       const type = e.data && e.data.type;
       if (type !== 'mm-settings-close') return;
+      settingsOnlyGoing = '';   // Back is not the way to the page a link asked for
       // Back closes the innermost layer first (a box opened over Settings, then Settings), as everywhere else
       const ls = dialogGuard.layers();
       const top = ls.length ? ls[ls.length - 1].el : document.getElementById('st-overlay');
@@ -23005,19 +23009,35 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     }
     // A link or button in the dialog that opens another page of this hub: with changes not saved anywhere in the dialog, it
     // asks first ("Discard changes?"), as Close does; with nothing to lose the page opens in the sheet.
+    // Discard on that question closes the dialog and opens the page (settingsOnlyWatch); Keep editing, Escape or any other
+    // click forgets it.
+    let settingsOnlyGoing = '';
     function settingsOnlyLeaveGuard(e) {
-      const t = e.target && e.target.closest ? e.target.closest('a[href], [onclick*="location.href"]') : null;
+      const tg = e.target;
+      if (settingsOnlyGoing && !(tg && tg.closest && tg.closest('.dlg-discard-go'))) settingsOnlyGoing = '';
+      const t = tg && tg.closest ? tg.closest('a[href], [onclick^="location.href="]') : null;
       if (!t) return;
+      let dest = '';
       if (String(t.tagName).toUpperCase() === 'A') {
         const href = t.getAttribute('href') || '';
         if (!href || href.startsWith('#') || t.target === '_blank') return;
-        try { if (new URL(href, location.href).origin !== location.origin) return; } catch { return; }
+        try { const u = new URL(href, location.href); if (u.origin !== location.origin) return; dest = u.pathname + u.search + u.hash; } catch { return; }
+      } else {
+        const m = /^location\.href=['"](\/[^'"]*)['"]/.exec(t.getAttribute('onclick') || '');
+        if (!m) return;
+        dest = m[1];
       }
-      const ls = dialogGuard.layers();
-      if (!ls.some((l) => dialogGuard.isDirty(l.el))) return;
+      if (!dialogGuard.layers().some((l) => dialogGuard.isDirty(l.el))) return;   // nothing to lose: the page opens as it is
       e.preventDefault(); e.stopImmediatePropagation();
-      dialogGuard.requestClose(ls[ls.length - 1].el, 'close');
+      settingsOnlyGoing = dest;
+      // close from the innermost layer out; the first one with changes asks ("Discard changes?") and the way stops there
+      for (let i = 0; i < 20; i++) {
+        const ls = dialogGuard.layers();
+        if (!ls.length) break;
+        if (dialogGuard.requestClose(ls[ls.length - 1].el, 'close') !== 'closed') return;
+      }
     }
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') settingsOnlyGoing = ''; }, true);
     // ── settings-only page (end) ──
 
     const dialogGuard = createDialogGuard({ auto: '.question-overlay, .gs-overlay, .st-overlay, .dream-overlay, #restart-notify-overlay, #resume-popup-overlay' });

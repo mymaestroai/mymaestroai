@@ -39,9 +39,9 @@ test('the settings-only page starts nothing else: no event stream, re-sync, poll
     assert.ok(at >= 0, head);
     assert.match(app.slice(at, at + head.length + 140), /\n\s+if \(globalThis\.mmSettingsOnly === true\) return;/, head);
   }
-  // review r1: the Spend section reads the ledger once itself (its caps must show): only the background timer is off
+  // review r1/r2: the Spend section's ledger read and its refresh run as on the full page (its caps must show; a failed read comes again)
   assert.ok(!/mmSettingsOnly/.test(fnSrc(app, 'async function refreshSpendToday() {')));
-  assert.match(app, /if \(globalThis\.mmSettingsOnly !== true\) setInterval\(refreshSpendToday, SPEND_REFRESH_MS\);/);
+  assert.match(app, /\n    setInterval\(refreshSpendToday, SPEND_REFRESH_MS\);/);
   assert.match(app, /if \(window\.HandOffCard && globalThis\.mmSettingsOnly !== true\) HandOffCard\.track\(/);
   assert.match(app, /if \(isMobile\(\) && globalThis\.mmSettingsOnly !== true\) \{ setTimeout\(openSidebar, 300\); \}/);
   assert.match(app, /if \(SETTINGS_ONLY\) document\.documentElement\.classList\.add\('mm-settings-only'\);/);
@@ -119,25 +119,48 @@ test('settingsOnlyMessage: only a close request from the parent at the same orig
   assert.deepStrictEqual(h.posted.pop(), [{ type: 'mm-settings-closed' }, 'https://hub.example'], 'no dialog open: closed at once');
 });
 
-test('review r1: a link or button that opens another page asks first when anything in the dialog is not saved', async () => {
+test('review r1/r2: a link or button that opens another page asks first when anything is unsaved; Discard then opens that page', async () => {
   const h = soHarness();
   await h.api.settingsOnlyStart();
   const guard = h.docListeners.click.f;
-  const ev = (t) => ({ target: { closest: () => t }, prevented: false, stopped: false, preventDefault() { this.prevented = true; }, stopImmediatePropagation() { this.stopped = true; } });
+  const ev = (t, closestDiscardGo = false) => ({ target: { closest: (sel) => (sel === '.dlg-discard-go' ? (closestDiscardGo ? {} : null) : t) }, prevented: false, stopped: false, preventDefault() { this.prevented = true; }, stopImmediatePropagation() { this.stopped = true; } });
   const link = (href, extra = {}) => ({ tagName: 'A', target: '', getAttribute: () => href, ...extra });
+  const button = (onclick) => ({ tagName: 'BUTTON', getAttribute: (k) => (k === 'onclick' ? onclick : null) });
   const before = h.calls.length;
   let e = ev(link('/modules')); guard(e);
   assert.strictEqual(e.prevented, false, 'nothing to lose: the page opens in the sheet');
   h.layers[0].el.dirty = true;
-  for (const t of [link('/modules'), { tagName: 'BUTTON' }]) {
+  h.env.nextClose = 'confirm';
+  for (const t of [link('/modules'), button("location.href='/modules'")]) {
     e = ev(t); guard(e);
     assert.strictEqual(e.prevented, true); assert.strictEqual(e.stopped, true);
     assert.deepStrictEqual(h.calls[h.calls.length - 1].slice(0, 2), ['requestClose', 'close']);
   }
-  for (const t of [link('#x'), link('https://other.example/'), link('/modules', { target: '_blank' }), link('')]) { e = ev(t); guard(e); assert.strictEqual(e.prevented, false); }
+  for (const t of [link('#x'), link('https://other.example/'), link('/modules', { target: '_blank' }), link(''), button('saveSettings()'), button("doThing(); location.href='/x'")]) { e = ev(t); guard(e); assert.strictEqual(e.prevented, false); }
   e = ev(null); guard(e); assert.strictEqual(e.prevented, false, 'not a link');
   assert.strictEqual(h.calls.length - before, 2);
-  assert.match(SO, /closest\('a\[href\], \[onclick\*="location\.href"\]'\)/);
+  // Discard: the dialog goes and the watch opens the page instead of closing the sheet
+  h.posted.length = 0;
+  e = ev(link('/modules')); guard(e);                       // asks again, the destination kept
+  guard(ev({ tagName: 'BUTTON', getAttribute: () => null }, true));   // the Discard button's own click keeps it
+  h.setOverlay(null); h.env.observe();
+  assert.strictEqual(h.env.location.href, '/modules');
+  assert.deepStrictEqual(h.posted, [], 'no "closed": the sheet shows that page');
+  assert.match(SO, /closest\('a\[href\], \[onclick\^="location\.href="\]'\)/);
+});
+
+test('review r2: Keep editing, any other click or Back forgets the page a link asked for', async () => {
+  const h = soHarness();
+  await h.api.settingsOnlyStart();
+  const guard = h.docListeners.click.f;
+  const ev = (t) => ({ target: { closest: (sel) => (sel === '.dlg-discard-go' ? null : t) }, preventDefault() {}, stopImmediatePropagation() {} });
+  h.layers[0].el.dirty = true; h.env.nextClose = 'confirm';
+  guard(ev({ tagName: 'A', target: '', getAttribute: () => '/modules' }));
+  guard(ev(null));   // Keep editing (or anything else)
+  h.posted.length = 0;
+  h.setOverlay(null); h.env.observe();
+  assert.notStrictEqual(h.env.location.href, '/modules');
+  assert.deepStrictEqual(h.posted, [[{ type: 'mm-settings-closed' }, 'https://hub.example']]);
 });
 
 test('settingsOnlyWatch: "closed" once the dialog is gone, once; a re-render (one overlay swapped for another) is not a close', async () => {
@@ -168,7 +191,7 @@ function sheetHarness() {
     createElement: (t) => {
       const el = mkEl(t);
       const frame = mkEl('iframe'); frame.contentWindow = frameWin;
-      el.parts = { iframe: frame, '.ssh-msg': mkEl('p'), '.ssh-btns': mkEl('div'), '.ssh-retry': mkEl('button'), '.ssh-close': mkEl('button'), '.ssh-bar': mkEl('div'), '.ssh-done': mkEl('button') };
+      el.parts = { iframe: frame, '.ssh-msg': mkEl('p'), '.ssh-btns': mkEl('div'), '.ssh-retry': mkEl('button'), '.ssh-close': mkEl('button'), '.ssh-bar': mkEl('div'), '.ssh-done': mkEl('button'), '.ssh-stuck': mkEl('div'), '.ssh-wait-more': mkEl('button'), '.ssh-force': mkEl('button') };
       Object.defineProperty(el, 'innerHTML', { set(v) { el.html = v; } });
       return el;
     },
@@ -180,7 +203,7 @@ function sheetHarness() {
     location: { origin: 'https://hub.example' }, URLSearchParams,
     setTimeout: (f, ms) => { timers.push({ f, ms }); return timers.length; }, clearTimeout: (n) => { if (timers[n - 1]) timers[n - 1].f = null; },
   };
-  const api = new Function(...Object.keys(env), `${SH}; return { settingsSheetOpen, settingsSheetMessage, settingsSheetRequestClose, settingsSheetFailed, settingsSheetFrameLoaded, get: () => settingsSheet };`)(...Object.values(env));
+  const api = new Function(...Object.keys(env), `${SH}; return { settingsSheetOpen, settingsSheetMessage, settingsSheetRequestClose, settingsSheetFailed, settingsSheetFrameLoaded, settingsSheetNoAnswer, get: () => settingsSheet };`)(...Object.values(env));
   return { api, els, guard, timers, listeners, frameWin };
 }
 
@@ -256,12 +279,29 @@ test('review r1: the frame left Settings (sign-in page, a linked page): a Close 
   h.api.settingsSheetMessage({ source: h.frameWin, origin: 'https://hub.example', data: { type: 'mm-settings-ready' } });
   h.api.settingsSheetFrameLoaded();   // still the Settings page
   assert.strictEqual(s.ready, true); assert.strictEqual(s.el.parts['.ssh-bar'].hidden, true);
-  // Back once ready, and the frame never answers: the sheet closes by itself after 3 s
+  // Back once ready, and the frame never answers (review r2): after 8 s the sheet asks, it never closes on its own
   s.el.__dialogClose();
   const t = h.timers[h.timers.length - 1];
-  assert.strictEqual(t.ms, 3000);
+  assert.strictEqual(t.ms, 8000);
+  const opened = h.guard.opened.length;
   t.f();
-  assert.ok(s.el.removed, 'never stuck');
+  assert.ok(!s.el.removed, 'a frame that may hold changes is never dropped silently');
+  assert.match(s.el.parts['.ssh-msg'].textContent, /Settings isn't answering\. Changes not saved there are lost if you close it now\./);
+  assert.strictEqual(s.el.parts['.ssh-stuck'].hidden, false);
+  assert.strictEqual(h.guard.opened.length, opened + 1, 'Back works again');
+  s.el.parts['.ssh-wait-more'].listeners.click();
+  assert.strictEqual(s.el.parts['.ssh-stuck'].hidden, true);
+  assert.ok(s.el.classes.has('ready'), 'the frame shows again');
+  s.el.parts['.ssh-force'].listeners.click();
+  assert.ok(s.el.removed, 'Close anyway closes');
+  // an error page in the frame (offline): Try again
+  const h4 = sheetHarness();
+  h4.api.settingsSheetOpen();
+  const s4 = h4.api.get();
+  Object.defineProperty(h4.frameWin, 'location', { get() { throw new Error('cross-origin'); } });
+  h4.api.settingsSheetFrameLoaded();
+  assert.strictEqual(s4.el.parts['.ssh-btns'].hidden, false);
+  assert.match(s4.el.parts['.ssh-msg'].textContent, /Settings didn't open/);
   // the frame went to another page
   const h2 = sheetHarness();
   h2.api.settingsSheetOpen();
