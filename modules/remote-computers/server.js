@@ -13,13 +13,13 @@ const { createDesktop, DesktopError, hhmm, cleanWho, checkSession, checkTunnel, 
 const { createGate, GateError } = require('./lib/gate');
 const win = require('./lib/windows');
 const { createShotStore } = require('./lib/shots');
-const { createInstaller, defaultFetcher, PlainError } = require('./lib/installer');
+const { createInstaller, defaultFetcher, PlainError, MESH_PATHS, FILES } = require('./lib/installer');
 
 const HUB_TIMEOUT_MS = 10000;
 const APPROVE_MINUTES = 4;                            // the owner has 4 minutes to answer; a module call is cut off at 300 s
 const APPROVE_HUB_TIMEOUT_MS = APPROVE_MINUTES * 60000 + 20000;
 const MAX_CMD_CHARS = 7000;                           // cmd.exe takes about 8191 characters in a line
-const WINDOWS_ONLY = 'Screenshots and mouse/keyboard work on Windows computers for now.';
+const WINDOWS_ONLY = 'Mouse and keyboard control works on Windows computers for now. Look and Act work on Linux and Mac too.';
 const NOT_YET = 'This tool arrives in the next part of the build.';
 const REINSTALL = 'Reinstall needed. Run Set it up again.';
 const WAITING = 'Waiting for setup';
@@ -61,7 +61,7 @@ const TOOLS = [
   { name: 'desktop_end', description: 'Used by the hub only. Ends a desktop session: by its session, or by the computer (nodeid) and the start time of the session when the hub no longer knows the session, after a restart.', inputSchema: obj({ session: { type: 'string' }, nodeid: { type: 'string', maxLength: 300 }, start: { type: 'number' }, reason: { type: 'string', maxLength: 40 } }) },
   { name: 'health', description: 'Whether the server runs and its device group exists. Used by the nightly check.', inputSchema: obj({ retry: { type: 'boolean', description: 'Start a failed helper-program download again. Used by the setup page\'s Try again.' } }) },
   { name: 'start', description: 'Starts the server (and makes it ready) if it is not running. Used by the setup only.', inputSchema: obj() },
-  { name: 'installer_link', description: 'A one-time link to download the helper for a computer. Used by the setup only.', inputSchema: obj() },
+  { name: 'installer_link', description: 'A one-time link to download the helper for a computer (Windows, Linux or Mac). Used by the setup only.', inputSchema: obj({ os: { type: 'string', maxLength: 20, description: 'The kind of computer: windows (default), linux or mac.' } }) },
   { name: 'computers_status', description: 'The names, systems and online state of the computers that are set up. Used by the setup only.', inputSchema: obj() },
 ];
 
@@ -116,9 +116,18 @@ function summarize(pc, sys) {
   const osi = (w.osinfo && typeof w.osinfo === 'object') ? w.osinfo : {};
   const node = (sys && sys.node && typeof sys.node === 'object') ? sys.node : {};
   const osParts = [pc.os || clean(osi.Caption, 80), osi.Version && `version ${clean(osi.Version, 30)}`, osi.OSArchitecture && clean(osi.OSArchitecture, 20)].filter(Boolean);
-  const cpu = clean((Array.isArray(w.cpu) && w.cpu[0] && w.cpu[0].Name) || ident.cpu_name || '', 100);
+  // Linux and Mac computers report what they have under hw.linux / hw.darwin (shape not fixed): read it only when it is there, never throw.
+  const o = [hw.linux, hw.darwin, hw.mac].find((x) => x && typeof x === 'object') || {};
+  const oCpu = (() => { const c = Array.isArray(o.cpu) ? o.cpu[0] : o.cpu; return typeof c === 'string' ? c : c && typeof c === 'object' ? (c.Name || c.name || c.model || c.brand) : ''; })();
+  const cpu = clean((Array.isArray(w.cpu) && w.cpu[0] && w.cpu[0].Name) || ident.cpu_name || oCpu || '', 100);
   let memBytes = 0;
   for (const m of Array.isArray(w.memory) ? w.memory : []) memBytes += num(m && m.Capacity) || 0;
+  if (!memBytes && !hw.windows) {
+    const m = o.memory !== undefined ? o.memory : o.mem;
+    if (Array.isArray(m)) for (const x of m) memBytes += num(x && (x.Capacity !== undefined ? x.Capacity : x.size !== undefined ? x.size : x.Size)) || 0;
+    else if (m && typeof m === 'object') memBytes = num(m.total !== undefined ? m.total : m.Total !== undefined ? m.Total : m.size) || 0;
+    else memBytes = num(m) || 0;
+  }
   let disks = [];
   if (w.volumes && typeof w.volumes === 'object') {
     for (const [drive, v] of Object.entries(w.volumes)) {
@@ -128,6 +137,10 @@ function summarize(pc, sys) {
   }
   if (!disks.length && Array.isArray(ident.storage_devices)) {
     disks = ident.storage_devices.map((d) => ({ name: clean(d && (d.Caption || d.Model || d.Name), 60), sizeGB: num(d && d.Size) ? gb(num(d.Size)) : undefined })).filter((d) => d.name).slice(0, 6);
+  }
+  if (!disks.length && !hw.windows) {
+    const list = [o.volumes, o.disks, o.drives].find((x) => Array.isArray(x)) || [];
+    disks = list.map((d) => ({ name: clean(d && (d.name || d.Name || d.mount || d.Caption || d.Model), 60), sizeGB: num(d && (d.size !== undefined ? d.size : d.Size)) ? gb(num(d.size !== undefined ? d.size : d.Size)) : undefined })).filter((d) => d.name).slice(0, 6);
   }
   const first = (...vals) => vals.find((v) => v !== undefined && v !== null);
   const reboot = first(hw.pendingReboot, w.pendingReboot, sys && sys.pendingReboot, node.pr);
@@ -488,9 +501,13 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
   // The agent drops a user-session command silently when nobody is signed in, so when the list of signed-in users is known (and the computer is online,
   // so the list is current) and empty, refuse at once: nothing is sent, the owner is not asked and the computer is not held busy.
   // Just after the computer connected its list of users is not reported yet (it reads empty): then it counts as unknown and nothing is refused.
-  const needSignedIn = (pc) => {
+  const needSignedIn = (pc, screen = false) => {
     if (!pc.online || !Array.isArray(pc.users) || pc.users.length) return;
     if (pc.connectedAt !== undefined && now() - pc.connectedAt < FRESH_CONNECT_MS) return;
+    if (screen && !isWindows(pc)) {   // Look on Linux or Mac: the system's own words for what is missing
+      if (/mac ?os|os ?x|darwin|apple/i.test(String(pc.os || ''))) throw new ToolError(`No one is signed in on ${pc.name}, or Screen Recording is not switched on for meshagent in System Settings.`);
+      throw new ToolError(`No one is signed in to a desktop on ${pc.name}, or its desktop does not use X11; the screen picture needs both.`);
+    }
     throw new ToolError(`No one is signed in on ${pc.name}. Screen tools and 'as user' commands need a signed-in ${isWindows(pc) ? 'Windows ' : ''}desktop: run as system instead, or sign in on the PC (set it to sign in automatically).`);
   };
 
@@ -661,8 +678,7 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
     let maxWidth = 1600;
     if (a.maxWidth !== undefined) { maxWidth = a.maxWidth; if (!Number.isInteger(maxWidth) || maxWidth < 320 || maxWidth > 1920) throw new ToolError('maxWidth must be a whole number from 320 to 1920.'); }
     const pc = await resolve(a.computer);
-    windowsOnly(pc);
-    needSignedIn(pc);
+    needSignedIn(pc, true);   // Look works on Windows, Linux and Mac
     await gate.require(who, 'look', pc);
     mustBeOnline(pc);
     const limit = deadline === undefined ? now() + CALL_DEADLINE_MS : deadline;
@@ -804,14 +820,26 @@ function createRemote({ env = process.env, write = (line) => process.stdout.writ
       const admin = mesh.accounts().admin;
       return defaultFetcher({ port: cfg.settings.port, servername: cfg.settings.cert, ca: fs.readFileSync(mesh.paths.rootCert), user: admin.user, pass: admin.pass, meshid: groupId(), signal });
     }),
+    // Mac, Linux agents and the group settings: the same login, another MeshCentral path (what: mac, linux-x86_64, linux-aarch64, msh)
+    fetchPath: deps.installerPathFetcher || (async ({ what, signal } = {}) => {
+      if (!MESH_PATHS[what] || what === 'windows') throw new PlainError('This kind of download is not known.');
+      if (!mesh || state.phase !== 'ready') throw new PlainError('The server is not ready.');
+      const cfg = mesh.configFor(settings);
+      const admin = mesh.accounts().admin;
+      return defaultFetcher({ port: cfg.settings.port, servername: cfg.settings.cert, ca: fs.readFileSync(mesh.paths.rootCert), user: admin.user, pass: admin.pass, meshid: groupId(), path: MESH_PATHS[what], signal });
+    }),
   });
   // The helper is fetched and cached before any link is made, so the page behind the link serves a file that is already there.
-  const toolInstallerLink = async () => {
+  const toolInstallerLink = async (args) => {
+    const os = args && args.os !== undefined ? args.os : 'windows';
+    if (typeof os !== 'string' || !FILES[os]) throw new ToolError('os must be windows, linux or mac.');
     if (!settings.address_name) throw new ToolError('Save the tailnet name of My Maestro\'s computer in the settings first.');
     if (typeof installer.prepare === 'function') {
-      try { await installer.prepare(); } catch (e) { throw new ToolError(e && e.plain ? e.message : 'The installer could not be prepared: the server did not give it'); }
+      try { await installer.prepare({ os }); } catch (e) { throw new ToolError(e && e.plain ? e.message : 'The installer could not be prepared: the server did not give it'); }
     }
-    return installer.link();
+    let made;
+    try { made = installer.link({ os }); } catch (e) { if (e instanceof ToolError) throw e; throw new ToolError(e && e.plain ? e.message : 'The link could not be made.'); }
+    return { os, file: FILES[os], ...made };
   };
   const toolComputersStatus = async () => (await listComputers()).map((pc) => ({ nodeid: pc.nodeid, name: pc.name, os: pc.os, online: pc.online }));   // for the setup check and the hub's Computers box: no agent is involved, so no gate
   async function receive(params) {

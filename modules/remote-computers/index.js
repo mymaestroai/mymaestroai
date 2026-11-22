@@ -182,17 +182,51 @@ module.exports = {
     // A one-time download address for the helper. The address is the secret, so it is shown once and never saved.
     async installer(ctx) {
       try {
-        const text = await ctx.callTool('installer_link', {});
+        const os = ctx.choice === 'linux' || ctx.choice === 'mac' ? ctx.choice : 'windows';
+        const text = await ctx.callTool('installer_link', { os });
         const a = ctx.parse(text);
         if (!a || typeof a.url !== 'string' || !/^https:\/\//.test(a.url)) return { ok: false, summary: NOT_READY_RE.test(String(text)) ? INSTALLER_NOT_READY : String(text || 'The link could not be made.').slice(0, 300) };
+        // An older connector ignores the system and always answers the Windows link.
+        if ((typeof a.os === 'string' ? a.os : 'windows') !== os) return { ok: false, summary: 'This version can only make a Windows link.' };
+        const last = 'If the link runs out, make a new one.';
+        if (os === 'linux') {
+          return {
+            ok: true,
+            once: true,
+            summary: 'The install command is ready. It works once.',
+            lines: [
+              'On the Linux computer, open a terminal and run this command within 15 minutes. It asks for your password once.',
+              `Command: curl -fsSL '${a.url}' | sudo sh`,
+              'It installs the remote-control agent as a service and connects it. On a computer without systemd it runs in that terminal until you close it.',
+              last,
+            ],
+          };
+        }
+        if (os === 'mac') {
+          return {
+            ok: true,
+            once: true,
+            qr: a.url,
+            summary: 'The Mac link is ready. It works once.',
+            lines: [
+              `On the Mac, open the link in a browser within 15 minutes (the whole address, including the part after the ? mark): ${a.url}`,
+              'It downloads MyMaestro-RemoteAgent-Mac.zip.',
+              'Then open Terminal and run:',
+              'Command: cd ~/Downloads && unzip -o MyMaestro-RemoteAgent-Mac.zip -d MyMaestroAgent && xattr -dr com.apple.quarantine MyMaestroAgent && sudo installer -pkg MyMaestroAgent/MeshAgent.pkg -target /',
+              'For agents to see the screen: System Settings, Privacy & Security, Screen Recording: switch on meshagent. New on a Mac: not yet proven on a real Mac.',
+              last,
+            ],
+          };
+        }
         return {
           ok: true,
           once: true,
+          qr: a.url,
           summary: 'The installer link is ready. It works once.',
           lines: [
             `On the computer you want to control, open this address in a browser within 15 minutes (the whole address, including the part after the ? mark): ${a.url}`,
             'It downloads MyMaestro-RemoteAgent.exe. Run it and choose Install. Windows Defender or SmartScreen may warn that it is a remote-access tool; that is expected for this kind of software.',
-            'If the link runs out, run this step again for a new one.',
+            last,
           ],
         };
       } catch (e) {
@@ -202,7 +236,7 @@ module.exports = {
 
     // Passes when at least one registered computer is online. When none is, it says why from what the server knows.
     async computer(ctx) {
-      const none = 'No computer has connected yet. Run the installer on the computer you want to control, then check again.';
+      const none = 'No computer has connected yet. Run the link\'s download or command on that computer, then check again.';
       try {
         const text = await ctx.callTool('computers_status', {});
         const list = ctx.parse(text);
@@ -214,9 +248,9 @@ module.exports = {
           let helper = null;
           try { const h = ctx.parse(await ctx.callTool('health', {})); helper = h && typeof h === 'object' && h.helper && typeof h.helper === 'object' ? h.helper : null; } catch { /* not known */ }
           if (!helper) return { ok: false, summary: none };
-          if (!helper.made) return { ok: false, summary: 'No installer link has been made yet. Make one in the step above, then open it in a browser on the computer you want to control.' };
-          if (!helper.used) return { ok: false, summary: 'The last installer link has not been opened yet. Open it in a browser on the computer you want to control within 15 minutes, or make a new one in the step above.' };
-          return { ok: false, summary: 'The helper was downloaded, but no computer has connected yet. Run the downloaded file on that computer and choose Install, then check again.' };
+          if (!helper.made) return { ok: false, summary: 'No link has been made yet. Make one in the step above, then use it on the computer you want to control.' };
+          if (!helper.used) return { ok: false, summary: 'The last link has not been used yet. Use it on the computer you want to control within 15 minutes, or make a new one in the step above.' };
+          return { ok: false, summary: 'The link was used, but no computer has connected yet. Run the link\'s download or command on that computer, then check again.' };
         }
         const first = on[0];
         const os = typeof first.os === 'string' && first.os.trim() ? ` (${first.os.trim().slice(0, 60)})` : '';

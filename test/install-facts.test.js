@@ -29,7 +29,7 @@ test('running: the host loses its trailing dot, only IPv4 tailnet addresses are 
   assert.strictEqual(f.tailscale.cli, 'tailscale');
   const text = JSON.stringify(f);
   assert.ok(!text.includes('sam-laptop') && !text.includes('100.64.0.9'), 'nothing from the peer list leaves it');
-  assert.deepStrictEqual(Object.keys(f).sort(), ['free_disk_mb', 'has_systemd', 'hostname', 'hub_port', 'os', 'supported', 'tailscale']);
+  assert.deepStrictEqual(Object.keys(f).sort(), ['free_disk_mb', 'has_systemd', 'hostname', 'hub_port', 'os', 'supported', 'tailscale', 'time_zone']);
 });
 
 test('only addresses inside 100.64.0.0/10 that Self reports are ever offered', async () => {

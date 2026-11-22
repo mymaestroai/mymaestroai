@@ -282,13 +282,13 @@ test('check server: a Mac is allowed; other systems are not', async () => {
 test('check computer: no link made yet, a link not opened, helper downloaded but nothing registered, registered but offline', async () => {
   const none = (helper) => ctxOf({ computers_status: '[]', health: okHealth({ helper }) });
   const a = await mod.checks.computer(none({ made: false, used: false }));
-  assert.match(a.summary, /^No installer link has been made yet\./);
+  assert.match(a.summary, /^No link has been made yet\./);
   const b = await mod.checks.computer(none({ made: true, used: false }));
-  assert.match(b.summary, /^The last installer link has not been opened yet\./);
+  assert.match(b.summary, /^The last link has not been used yet\./);
   assert.match(b.summary, /within 15 minutes/);
   const c = await mod.checks.computer(none({ made: true, used: true }));
-  assert.match(c.summary, /^The helper was downloaded, but no computer has connected yet\./);
-  assert.match(c.summary, /choose Install/);
+  assert.match(c.summary, /^The link was used, but no computer has connected yet\./);
+  assert.match(c.summary, /download or command/);
   const d = await mod.checks.computer(ctxOf({ computers_status: JSON.stringify([{ name: 'demo-pc', online: false }]), health: okHealth({ helper: { made: true, used: true } }) }));
   assert.match(d.summary, /^demo-pc registered, but it is offline\. Check that the computer is on and signed in to Tailscale with the same account/);
   for (const r of [a, b, c, d]) assert.strictEqual(r.ok, false);
@@ -296,7 +296,7 @@ test('check computer: no link made yet, a link not opened, helper downloaded but
 
 test('check computer: with no record from the server it falls back to the one general sentence', async () => {
   const r = await mod.checks.computer(ctxOf({ computers_status: '[]' }));
-  assert.strictEqual(r.summary, 'No computer has connected yet. Run the installer on the computer you want to control, then check again.');
+  assert.strictEqual(r.summary, 'No computer has connected yet. Run the link\'s download or command on that computer, then check again.');
 });
 
 // ── the link-used record ─────────────────────────────────────────────────────────────────────────
@@ -391,11 +391,9 @@ test('manifest: no step of its own for the session length, and the five steps ca
   const { setup } = loadModule(DIR);
   assert.ok(!setup.steps.some((s) => s.type === 'settings'));
   const by = Object.fromEntries(setup.steps.map((s) => [s.id, s]));
-  assert.match(by.add.body, /^Windows computers for now\./);
-  assert.match(by.add.body, /Sign in to Tailscale on it with the same account/);
-  assert.match(by.add.body, /within 15 minutes/);
-  assert.match(by.add.body, /choose \*\*Install\*\*/);
-  assert.match(by.add.body, /For agents to see the screen:/);
+  assert.match(by.add.body, /^Sign in to Tailscale on that computer with the same account/);
+  assert.match(by.add.body, /for 15 minutes/);
+  assert.match(by.add.body, /For agents to see the screen/);
   assert.ok(!/confirm/.test(JSON.stringify(by.add)), 'the PC advice is not a confirm step');
   assert.ok(!/outside/.test(setup.steps.map((s) => s.type).join()));
 });

@@ -1094,12 +1094,12 @@ test('tools: on Linux and macOS run uses runcommands type 3 with the text and a 
   assert.ok(TOOLS.find((x) => x.name === 'run').inputSchema.properties.shell.enum.includes('sh'));
 });
 
-test('tools: screenshot, click, type, key and scroll say they are Windows only on a Linux or macOS computer, and send nothing', async () => {
+test('tools: click, type, key and scroll say they are Windows only on a Linux or macOS computer, and send nothing', async () => {
   const t = setup({ handlers: { nodes: async () => ({ action: 'nodes', nodes: OTHER_NODES }) } });
   t.handlers.runcommands = async () => { throw new Error('must not run'); };
-  const NOPE = 'Screenshots and mouse/keyboard work on Windows computers for now.';
+  const NOPE = 'Mouse and keyboard control works on Windows computers for now. Look and Act work on Linux and Mac too.';
   for (const computer of ['penguin', 'apple']) {
-    for (const [name, args] of [['screenshot', {}], ['click', { shot: 'abcd1234', x: 1, y: 1 }], ['type', { text: 'a' }], ['key', { keys: 'a' }], ['scroll', { amount: 1 }], ['scroll', { amount: 1, x: 1, y: 1, shot: 'abcd1234' }]]) {
+    for (const [name, args] of [['click', { shot: 'abcd1234', x: 1, y: 1 }], ['type', { text: 'a' }], ['key', { keys: 'a' }], ['scroll', { amount: 1 }], ['scroll', { amount: 1, x: 1, y: 1, shot: 'abcd1234' }]]) {
       assert.strictEqual((await t.call(name, { ...AGENT, computer, ...args })).error, NOPE, `${computer} ${name}`);
     }
   }
@@ -1107,6 +1107,63 @@ test('tools: screenshot, click, type, key and scroll say they are Windows only o
   assert.ok(!t.gateCalls.some((g) => g.need === 'act' || g.need === 'drive'), 'the owner is not asked for what cannot be done');
   t.handlers.getsysinfo = async () => ({ hardware: {} });
   assert.ok(!(await t.call('info', { ...AGENT, computer: 'penguin' })).error, 'info still works');
+});
+
+test('tools: screenshot (Look) is not refused on a Linux or macOS computer by the Windows guard', async () => {
+  const t = setup({ handlers: { nodes: async () => ({ action: 'nodes', nodes: OTHER_NODES }) } });
+  for (const computer of ['penguin', 'apple']) {
+    const r = await t.call('screenshot', { ...AGENT, computer });
+    assert.ok(!r.error, `${computer}: ${r.error}`);
+    assert.strictEqual(r.computer, computer);
+  }
+  assert.ok(t.gateCalls.some((g) => g.need === 'look' && g.pc && g.pc.name === 'penguin'), 'the Look level is still asked for');
+});
+
+test('tools: screenshot on a Linux or macOS computer with no one signed in says so in the words of that system', async () => {
+  const nodes = { 'mesh//g1': OTHER_NODES['mesh//g1'].map((n) => (n.name === 'penguin' || n.name === 'apple' ? { ...n, users: [] } : n)) };
+  const t = setup({ handlers: { nodes: async () => ({ action: 'nodes', nodes }) } });
+  assert.strictEqual((await t.call('screenshot', { ...AGENT, computer: 'penguin' })).error, 'No one is signed in to a desktop on penguin, or its desktop does not use X11; the screen picture needs both.');
+  assert.strictEqual((await t.call('screenshot', { ...AGENT, computer: 'apple' })).error, 'No one is signed in on apple, or Screen Recording is not switched on for meshagent in System Settings.');
+  assert.strictEqual(t.sockets.length, 0, 'no desktop channel was opened');
+});
+
+test('tools: info on a Linux computer shows what the server reports, and never throws on a missing or odd shape', async () => {
+  const t = setup({ handlers: { nodes: async () => ({ action: 'nodes', nodes: OTHER_NODES }) } });
+  t.handlers.getsysinfo = async () => ({ hardware: { linux: { cpu: [{ name: 'Example CPU 3.0GHz' }], memory: { total: 8 * 1073741824 }, volumes: [{ name: '/dev/sda1', size: 100 * 1073741824 }], secretThing: 'must-not-appear' }, identifiers: {} }, node: { name: 'penguin' } });
+  const r = await t.call('info', { ...AGENT, computer: 'penguin' });
+  assert.strictEqual(r.name, 'penguin');
+  assert.match(r.os, /Ubuntu 24\.04/);
+  assert.strictEqual(r.cpu, 'Example CPU 3.0GHz');
+  assert.strictEqual(r.memoryGB, 8);
+  assert.deepStrictEqual(r.disks, [{ name: '/dev/sda1', sizeGB: 100 }]);
+  assert.strictEqual(r.agentVersion, '12');
+  assert.ok(!/must-not-appear/.test(JSON.stringify(r)));
+  for (const odd of [{ hardware: {} }, { hardware: { linux: 'text' } }, { hardware: { darwin: { cpu: 5, memory: [null, 3], volumes: [null, 7] } } }, {}]) {
+    t.handlers.getsysinfo = async () => odd;
+    const x = await t.call('info', { ...AGENT, computer: 'apple' });
+    assert.strictEqual(x.name, 'apple', JSON.stringify(odd));
+    assert.ok(!x.error, JSON.stringify(odd));
+  }
+});
+
+test('tools: installer_link takes os windows (default), linux, mac and refuses anything else with a plain error', async () => {
+  const exe = Buffer.concat([Buffer.from('MZ'), Buffer.from('prog')]);
+  const MSH = 'MeshName=My Maestro computers\nMeshType=2\nMeshID=0xABC\nServerID=0123\nMeshServer=wss://hub.example.ts.net:9972/agent.ashx\n';
+  const asked = [];
+  const t = setup({ settings: { address_name: 'hub.example.ts.net' }, deps: { installerFetcher: async () => exe, installerPathFetcher: async ({ what }) => { asked.push(what); return what === 'msh' ? Buffer.from(MSH) : what === 'mac' ? Buffer.from('PKzip') : Buffer.from('\x7fELFbin', 'latin1'); } } });
+  const w = await t.call('installer_link', {});
+  assert.deepStrictEqual([w.os, w.file], ['windows', 'MyMaestro-RemoteAgent.exe']);
+  assert.match(w.url, /^https:\/\/hub\.example\.ts\.net\/hooks\/remote-computers\/installer\?t=[a-z2-9]{8}$/);
+  const l = await t.call('installer_link', { os: 'linux' });
+  assert.deepStrictEqual([l.os, l.file], ['linux', 'install-mymaestro-agent.sh']);
+  assert.match(l.url, /installer\?t=[a-z2-9]{8}$/);
+  const m = await t.call('installer_link', { os: 'mac' });
+  assert.deepStrictEqual([m.os, m.file], ['mac', 'MyMaestro-RemoteAgent-Mac.zip']);
+  assert.deepStrictEqual(asked, ['msh', 'mac']);
+  for (const bad of ['freebsd', '', 'Linux', 5, null]) {
+    const r = await t.call('installer_link', { os: bad });
+    assert.strictEqual(r.error, 'os must be windows, linux or mac.', String(bad));
+  }
 });
 
 test('tools: with the real gate a run as the system asks again after a run as the user was approved; drive does not cover the system', async () => {

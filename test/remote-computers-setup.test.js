@@ -478,7 +478,7 @@ test('check computer: passes when a computer is online', async () => {
 
 test('check computer: fails with the plain text when none has connected or none is online', async () => {
   const none = await checks.computer(ctxOf({ computers_status: '[]' }));
-  assert.deepStrictEqual([none.ok, none.summary], [false, 'No computer has connected yet. Run the installer on the computer you want to control, then check again.']);
+  assert.deepStrictEqual([none.ok, none.summary], [false, 'No computer has connected yet. Run the link\'s download or command on that computer, then check again.']);
   const off = await checks.computer(ctxOf({ computers_status: JSON.stringify([{ name: 'demo-pc', os: 'Windows 11', online: false }]) }));
   assert.strictEqual(off.ok, false);
   assert.match(off.summary, /demo-pc registered, but it is offline/);
