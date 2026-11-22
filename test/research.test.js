@@ -989,7 +989,7 @@ const LEGACY = {
 // claimKey / markUnverified come from the engine (lib/research-thorough); stand-ins until it has them
 const STUBS = {
   ...(typeof T_REAL.claimKey === 'function' ? {} : { claimKey: (c) => String((c && c.claim) || '').toLowerCase().replace(/\s+/g, ' ').trim() + '|' + String((c && c.source_url) || '') }),
-  ...(typeof T_REAL.markUnverified === 'function' ? {} : { markUnverified: (t) => String(t).replace(/\d+(?:\.\d+)?%?/g, (m) => m + ' [unverified]') }),
+  ...(typeof T_REAL.markUnverified === 'function' ? {} : { markUnverified: (t) => String(t).replace(/\d+(?:\.\d+)?%?/g, (m) => m + ' [no source to check]') }),
 };
 const ENGINE = { ...(typeof T_REAL.checkReport === 'function' && typeof T_REAL.challengeSummary === 'function' ? {} : LEGACY), ...STUBS };
 
@@ -1064,7 +1064,8 @@ test('thorough runner: the stages in order with the right models, progress in or
   const msg = m.wakes[0].message;
   assert.ok(msg.startsWith('[Deep research finished]'));
   assert.match(msg, /the figure-check line, which reviewer was used, and the document path/);
-  assert.match(msg, /Figures checked: 1 of 1 found in the sources/);
+  // r8: the claim figure and the figure in the report text are both counted, both found as written in the fetched text
+  assert.match(msg, /Figures checked against the fetched source text: 2 found as written; 0 not found as written \(marked "not found in source"\); 0 from sources that could not be opened \(marked "source not opened"\); 0 with no source to check\./);
   assert.match(msg, /Challenged by: a model from another vendor \(OpenAI\) \(1 round\)/);
   assert.match(msg, /Full document: \/files\/research\/deep-research-.*\.md/);
   assert.doesNotMatch(msg.split('Report:\n')[1], /Not finished/);
@@ -1075,7 +1076,7 @@ test('thorough runner: the stages in order with the right models, progress in or
   assert.equal(run.checkTotals.found, 1);
   assert.equal(run.sources.length, 3);
   assert.deepEqual(Object.keys(run.sources[0]).sort(), ['chars', 'error', 'ok', 'title', 'url', 'via']);
-  assert.equal(run.claims[0].check, '1 of 1 figure found');
+  assert.equal(run.claims[0].check, '1 of 1 found as written');
 });
 
 test('thorough runner: readers go in batches of readersAtOnce groups, one spawn call per batch', async () => {
@@ -1195,7 +1196,7 @@ test('thorough runner: a deadline after the report was written delivers the save
   const report = m.wakes[0].message.split('Report:\n')[1];
   assert.match(report.split('\n')[0], /^Not finished: checking the report, writing the document \(the time limit/);
   assert.match(report, /Method A wins/);
-  assert.match(report, /Figures checked: 1 of 1/);
+  assert.match(report, /Figures checked against the fetched source text: 2 found as written; 0 not found as written/);
 });
 
 test('thorough runner: recover() delivers "[Deep research interrupted]" with the saved prose, else the reader notes, else the findings', async () => {
@@ -1363,11 +1364,11 @@ test('r2 1 / r3 4: a run cut short by a restart is not checked against nothing: 
   const b = makeRunner({ store: { load: () => [{ ...base }], save() {} }, engine: { ...ENGINE, ...engine } });
   b.runner.recover();
   await until(() => b.wakes.length === 1);
-  // r3 4: after a restart there are no source texts: nothing is checked against nothing; the figures are marked unverified
+  // r3 4: after a restart there are no source texts: nothing is checked against nothing; r8: the check did not run, so the figures say "not checked"
   assert.equal(seen.check.length, 0, 'no check against an empty source list');
   assert.equal(seen.chat[0].interrupted, true);
   assert.equal(seen.chat[0].interruptedBeforeCheck, true);
-  assert.match(seen.chat[0].prose, /56\.4[^\n]*unverified/i);
+  assert.match(seen.chat[0].prose, /56\.4% \[not checked\]/);
   assert.doesNotMatch(b.wakes[0].message, /unopened|not opened/i);
   // saved after its check (checked: true): not checked a second time, the doubted ids and review counts survive the restart
   const { engine: e2, seen: s2 } = spyEngine();
@@ -1549,7 +1550,7 @@ test('r3 3: a checkReport that throws: figures marked unverified, notChecked, mi
   assert.ok(run.missing.includes('checking figures (error)'), JSON.stringify(run.missing));
   const rep = seen.chat[seen.chat.length - 1];
   assert.equal(rep.notChecked, true);
-  assert.match(rep.prose, /56\.4[^\n]*unverified/i);
+  assert.match(rep.prose, /56\.4% \[not checked\]/); // r8: the check failed (did not run), so every figure is "not checked"
   assert.match(m.wakes[0].message, /Figures not checked/);
 });
 
@@ -1572,7 +1573,7 @@ test('r3 6: the "Not settled by the review" section has its figures marked', asy
   await doneRun(m);
   const md = m.written[0].doc.markdown;
   assert.match(md, /Not settled by the review/);
-  assert.match(md, /Not settled by the review[\s\S]*56\.4[^\n]*unverified/i);
+  assert.match(md, /Not settled by the review[\s\S]*56\.4% \[not checked\]/); // r8: the check did not run on a section added after it: "not checked"
 });
 
 test('r3 7: an own model on this computer: helpers, readers and the reviewer stay local (only a local pick, else the own model)', async () => {
@@ -1634,7 +1635,7 @@ test('r4 8: a figure check that throws: chatReport gets checkError and the figur
   const rep = seen.chat[seen.chat.length - 1];
   assert.equal(rep.checkError, true);
   assert.equal(run.checkError, true, 'saved');
-  assert.match(m.wakes[0].message, /Figures not checked \(the check failed\); every figure is marked unverified\./);
+  assert.match(m.wakes[0].message, /Figures not checked \(the check failed\); every figure is marked not checked\./);
   assert.doesNotMatch(m.wakes[0].message, /no list of claims/);
 });
 
@@ -1650,3 +1651,56 @@ test('r4 9: when a local own model replaces the reviewer pick, the label and cro
   const rep = seen.chat[seen.chat.length - 1];
   assert.equal(rep.reviewer, 'a model on this computer (its content stays here)');
 });
+
+// ── r8: the figure check runs on the text the hub fetched, never on text a model returned ──
+test('r8 1: a figure that only a reader wrote down (not in the fetched text) is not found as written', async () => {
+  const claims = [{ id: 'c1', claim: 'Method A scored 777.7% on the test', source_url: SRC_A, figures: ['777.7%'], measured_result: '777.7%', judged_by: 'humans', evidence_strength: 'strong', inference: false }];
+  const report = '## Verdict\nMethod A wins.\n\n## Evidence\n- Method A scored 777.7% on the test (Paper A, ' + SRC_A + ', 2025).\n\n## Where sources disagree\nNone.\n\n## Confidence\nMedium.\n\n## Corrections to the first pass\nNone\n\n' + claimsBlock(claims);
+  const m = makeThorough({
+    deps: rounds(0),
+    script: {
+      // the reader's notes state 777.7%; the page the hub fetched (makeThorough's fetchPage) says 56.4%
+      Reader: (workers) => workers.map((w) => ({ label: w.label, ok: true, text: `Notes for ${w.label}: Table 2 gives 777.7% (humans, 200 raters).` })),
+      'Research report': () => one('Research report', report),
+    },
+  });
+  const run = await doneRun(m);
+  assert.equal(run.state, 'delivered');
+  // the reader did write the figure, and the report brief carried it to the writer ...
+  assert.ok(m.calls.some((c) => c.labels[0] === 'Research report' && c.tasks[0].includes('777.7%')), 'the reader notes reach the report writer');
+  // ... but the check only looks at the fetched text: not found as written, in the claim and in the text
+  assert.equal(run.claims[0].check_status, 'not_found_as_written');
+  assert.equal(run.claims[0].check, '0 of 1 found as written');
+  assert.match(run.prose, /777\.7% \[not found in source\]/);
+  assert.equal(run.claims[0].measured_result, '777.7% [not found in source]');
+  assert.ok(run.checkTotals.notFound >= 1 && run.checkTotals.found === 0, JSON.stringify(run.checkTotals));
+  const md = m.written[0].doc.markdown;
+  assert.match(md, /## Figures not found as written/);
+  assert.match(md, /\| 777\.7% \| \[Paper A\]/);
+  assert.match(m.wakes[0].message, /0 found as written; 2 not found as written/);
+  // the figure the fetched page does have is found as written (the fetched text says "56.4%")
+  const ok = makeThorough({ deps: rounds(0) });
+  const run2 = await doneRun(ok);
+  assert.equal(run2.claims[0].check_status, 'found_as_written');
+});
+
+test('r8 2: a saved run keeps reading: old statuses and totals map to the new labels', async () => {
+  const { engine, seen } = spyEngine();
+  const old = { id: 'dr-old1', agent: 'a1', stamp: null, question: 'Q?', subQuestions: ['a', 'b'], level: 'thorough', state: 'running', stage: 'challenge', stageLabel: '', stageDone: 0, stageTotal: 0, startedAt: 1, endedAt: null, error: null, stagesDone: ['quick', 'select', 'fetch', 'read', 'synthesis', 'check'], missing: [], findings: ['f'], checked: true, rounds: 0,
+    prose: 'Method A scored 56.4% [unverified] on the test.', claims: [{ id: 'c1', claim: 'Method A won', source_url: SRC_A, figures: ['56.4'], check: '1 of 1 figure found', check_status: 'verified' }, { id: 'c2', claim: 'Method B lost', source_url: SRC_B, figures: ['9.9'], check: '0 of 1 found; not found: 9.9', check_status: 'unverified' }],
+    checkTotals: { claims: 2, figures: 2, found: 1, notFound: 1, notOpened: 0, proseFigures: 1, proseVerified: 0, proseUnverified: 1 } };
+  const b = makeRunner({ store: { load: () => [{ ...old }], save() {} }, engine: { ...ENGINE, ...engine } });
+  b.runner.recover();
+  await until(() => b.wakes.length === 1);
+  const msg = b.wakes[0].message;
+  // the text is shown as saved; the saved statuses still decide what is key evidence; the totals read in the new wording
+  assert.match(msg, /Method A scored 56\.4% \[unverified\] on the test\./);
+  assert.match(msg, /Key evidence\n- Method A won \[https:\/\/example\.org\/paper-a\] \(figures found as written\)/);
+  assert.doesNotMatch(msg, /Key evidence[\s\S]*Method B lost[\s\S]*Doubted/);
+  assert.match(msg, /Figures checked against the fetched source text: 1 found as written; 1 not found as written \(marked "not found in source"\); 0 from sources that could not be opened \(marked "source not opened"\); 1 with no source to check\./);
+  assert.equal(E_SAVED('found'), 'found_as_written');
+  assert.equal(E_SAVED('not_found'), 'not_found_as_written');
+  assert.equal(E_SAVED('common_not_near'), 'not_found_as_written');
+  assert.equal(E_SAVED('source_not_opened'), 'source_not_opened');
+});
+const E_SAVED = (s) => T_REAL.savedStatus(s);
