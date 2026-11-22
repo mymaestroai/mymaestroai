@@ -1852,7 +1852,7 @@ test('r9a-2 visible text only: comments, tags, reference definitions, link title
     ['>1250', '&gt; 1250', 'found'],
     ['1250', '1250 &amp; 300', 'not found'], // "&amp;" reads "&", a symbol after the number: part of the form
     ['1250 &', '1250 &amp; 300', 'found'],
-    ['−1250', '&minus;1250', 'not found'], // the sign is then a word of its own in front of the digits, not an attached sign (fail-safe)
+    ['−1250', '&minus;1250', 'found'], // r10: the entity's spaces go before the sign, so it sits right in front of its digits (was: a word of its own, fail-safe)
     ['1250', '<td>1250</td>', 'found'],
     ['1250', '<span class="x">1250</span> people', 'not found'], // "people" is the next word
     ['1250 people', '<span class="x">1250</span> people', 'found'],
@@ -2196,6 +2196,9 @@ const mClaims = () => [
 const jsonReply = (arr) => '```json\n' + JSON.stringify(arr) + '\n```';
 const mCheck = (keys, claims = mClaims(), prose = `## Verdict\nThe rate was 56.4% in the treatment arm (${MSRC}) against 43.6% in the control arm (${MSRC}).`) => T.checkReport({ prose, claims, fetched: MFETCHED, counts: {}, meaningKeys: keys });
 const mFigs = () => T.figureExcerpts(mCheck().claims, MFETCHED);
+const M_PROSE = `## Verdict\nThe rate was 56.4% in the treatment arm (${MSRC}) against 43.6% in the control arm (${MSRC}).`;
+// the entries for the figures of the report text only (fids p1, p2 ...)
+const mProseFigs = (prose = M_PROSE, claims = mCheck().claims, fetched = MFETCHED) => T.figureExcerpts(claims, fetched, undefined, { prose, counts: {} }).filter((f) => f.prose);
 // the reviewer's answers, run through the parser and the code validation
 const mValidate = (items, figs = mFigs(), id = 'c1') => {
   const parsed = T.parseChallenge(jsonReply(['c1', 'c2'].map((x) => ({ id: x, verdict: 'supported', reason: 'r', figures: x === id ? items : [] }))), ['c1', 'c2'], figs);
@@ -2337,13 +2340,20 @@ test('r9b final marks: matches / differs / not checked, looked up by the current
     ['9.9%', 'not_found_as_written', 'not checked', ''],
   ]);
   assert.strictEqual(r.claims[1].figure_checks[0].meaning, 'not checked'); // c2 was not reviewed
-  // the report text: only "differs" is marked, once; a prose figure takes the meaning of the claim figure it was found through
-  assert.strictEqual(r.prose, `## Verdict\nThe rate was 56.4% in the treatment arm (${MSRC}) against 43.6% [source says otherwise] in the control arm (${MSRC}).`);
+  // r10: the report text's figures take nothing from the claim figures they resemble: with only the claim answers, no mark in the text
+  assert.strictEqual(r.prose, `## Verdict\nThe rate was 56.4% in the treatment arm (${MSRC}) against 43.6% in the control arm (${MSRC}).`);
   assert.strictEqual(r.claims[0].measured_result, '56.4% treatment, 43.6% [source says otherwise] control');
-  assert.deepStrictEqual([r.totals.meaningMatches, r.totals.meaningDiffers, r.totals.proseMatches, r.totals.proseDiffers], [1, 1, 1, 1]);
+  assert.deepStrictEqual([r.totals.meaningMatches, r.totals.meaningDiffers, r.totals.proseMatches, r.totals.proseDiffers], [1, 1, 0, 0]);
+  // the figures of the report text answer for themselves (p1 and p2): only "differs" is marked, once
+  const pf = mProseFigs();
+  assert.deepStrictEqual(pf.map((f) => f.fid), ['p1', 'p2']);
+  const withProse = { ...keys, [pf[0].meaningKey]: { meaning: 'matches', quote: 'The response rate was 56.4% in the treatment arm' }, [pf[1].meaningKey]: { meaning: 'differs', quote: 'in the control arm' } };
+  const rp = mCheck(withProse);
+  assert.strictEqual(rp.prose, `## Verdict\nThe rate was 56.4% in the treatment arm (${MSRC}) against 43.6% [source says otherwise] in the control arm (${MSRC}).`);
+  assert.deepStrictEqual([rp.totals.proseMatches, rp.totals.proseDiffers], [1, 1]);
   // checked again (its own output as input, or the same raw text again): the mark is not written twice
-  assert.strictEqual(T.checkReport({ prose: r.prose, claims: mClaims(), fetched: MFETCHED, counts: {}, meaningKeys: keys }).prose, r.prose);
-  assert.strictEqual((mCheck(keys).prose.match(/\[source says otherwise\]/g) || []).length, 1);
+  assert.strictEqual(T.checkReport({ prose: rp.prose, claims: mClaims(), fetched: MFETCHED, counts: {}, meaningKeys: withProse }).prose, rp.prose);
+  assert.strictEqual((mCheck(withProse).prose.match(/\[source says otherwise\]/g) || []).length, 1);
   // a prose figure of a claim that has no stored meaning stays "not checked": no mark, never "matches"
   const n = mCheck({});
   assert.ok(!n.prose.includes('[source says otherwise]'));
@@ -2453,4 +2463,200 @@ test('r9b reviseBrief: tells the reviser about figures that differ, strips the m
   assert.doesNotMatch(b, /SECRET-QUOTE|meaning|figure_checks/);
   const plain = T.reviseBrief('Q?', 'prose', claims, { results: [] });
   assert.doesNotMatch(plain, /Figures whose passage says something different/);
+});
+
+// ---------------------------------------------------------------- r10: round-9 fixes
+const NF = 'not_found_as_written';
+const FD = 'found_as_written';
+
+test('r10 1 visibleText: script, style, hidden elements and attributes with ">" are not source text', () => {
+  for (const html of [
+    '<script>1250</script>', '<style>1250</style>', '<noscript>1250</noscript>', '<template>1250</template>', '<head>1250</head>',
+    '<svg>1250</svg>', '<textarea>1250</textarea>', '<iframe>1250</iframe>', '<object>1250</object>',
+    '<span hidden>1250</span>', '<p aria-hidden="true">1250</p>', '<div style="display: none">1250</div>',
+    '<div style="color:red; VISIBILITY : Hidden">1250</div>', '<DIV HIDDEN>1250</DIV>', '<div title="a>b 1250">x</div>',
+    '<script>1250', // never closed: blanked to the end of the text
+  ]) assert.strictEqual(T.checkFigure('1250', html), NF, html);
+  // visible text stays
+  assert.strictEqual(T.checkFigure('1250 users', '<p>1250 users</p>'), FD);
+  assert.strictEqual(T.checkFigure('1250 users', '<script>9</script> 1250 users'), FD);
+  assert.strictEqual(T.checkFigure('1250', '<p aria-hidden="false">1250</p>'), FD);
+  assert.strictEqual(T.checkFigure('1250', '<div title="hidden">1250</div>'), FD); // "hidden" inside a value is no attribute
+  assert.strictEqual(T.checkFigure('1250 users', '<br hidden> 1250 users'), FD); // a void element has no contents
+  // an element longer than 20,000 characters: blanked from its opening tag to the end of the text
+  assert.strictEqual(T.checkFigure('1250 users', '<div hidden>' + 'x '.repeat(11000) + '</div> 1250 users'), NF);
+  assert.strictEqual(T.checkFigure('1250 users', '<div hidden>' + 'x '.repeat(5000) + '</div> 1250 users'), FD);
+  // the visible text keeps its length (offsets stay valid)
+  const html = 'a <script>var x = "1250";</script> b <p title="a>b">1250 users</p>';
+  assert.strictEqual(T.checkFigure('1250 users', html), FD);
+});
+
+test('r10 1 tags with ">" in a quoted value are blanked in report text too, and the scan stays fast', () => {
+  assert.deepStrictEqual(T.numbersIn('<div title="a>b 1250">x</div> 77').map((t) => t.value), ['77']);
+  const t0 = Date.now();
+  for (const text of ['<a "'.repeat(150000), '<div hidden>'.repeat(40000), '<p title="'.repeat(60000)]) T.checkFigure('1250', text);
+  assert.ok(Date.now() - t0 < 3000, `took ${Date.now() - t0} ms`);
+});
+
+test('r10 2 entities: numeric and the named list are decoded, an unknown name stays', () => {
+  assert.strictEqual(T.checkFigure('1250', '&#x2212; 1250'), NF);
+  assert.strictEqual(T.checkFigure('1250', '&#8722;1250'), NF);
+  assert.strictEqual(T.checkFigure('-1250', '&#x2212;1250'), FD);
+  assert.strictEqual(T.checkFigure('-1250', '&#8722;1250'), FD);
+  assert.strictEqual(T.checkFigure('-1250', '&minus;1250'), FD);
+  assert.strictEqual(T.checkFigure('1250', '&le; 1250'), NF);
+  assert.strictEqual(T.checkFigure('at most 1250', '&le; 1250'), FD);
+  assert.strictEqual(T.checkFigure('1250', '&foo;1250'), NF);
+  assert.strictEqual(T.checkFigure('1250', '&amp;foo;1250'), NF);
+  // other numeric entities and named ones: the character, padded to the length written
+  assert.strictEqual(T.checkFigure('1250', '&#36;1250'), NF);       // "$" : a currency figure, not the bare number
+  assert.strictEqual(T.checkFigure('$1250', '&dollar;1250'), FD);
+  assert.strictEqual(T.checkFigure('1250%', '1250&percnt;'), FD);
+  assert.strictEqual(T.checkFigure('1250 users', '1250&nbsp;users'), FD);
+  assert.strictEqual(T.checkFigure('1250 users', '1250&thinsp;users'), FD);
+  assert.strictEqual(T.checkFigure('1250 users', '&#49;250 users'), FD); // the padding goes before the digit: "1" and "250" are one number
+  // one pass only: "&amp;lt;" is the text "&lt;", not "<"
+  assert.strictEqual(T.checkFigure('<1250', '&amp;lt;1250'), NF);
+  assert.strictEqual(T.checkFigure('<1250', '&lt;1250'), FD);
+});
+
+// r10 3-5: one claim, one source, the figure and a report text
+const R_SRC = 'https://s.example/enrol';
+const rFigs = (text, claim, figure) => {
+  const fetched = [{ url: R_SRC, title: 'Enrolment study', ok: true, text }];
+  const claims = [{ id: 'c1', claim, source_url: R_SRC, figures: [figure] }];
+  return { fetched, claims, figs: T.figureExcerpts(T.checkReport({ prose: 'x', claims, fetched }).claims, fetched) };
+};
+const rAnswer = (figs, quote, meaning = 'matches', fid = 'c1.f1') => T.figureMeanings(figs, { results: [{ id: 'c1', figures: [{ fid, meaning, quote }] }] });
+
+test('r10 3 a "matches" quote must cover the occurrence that matched, not the same digits elsewhere', () => {
+  const text = 'Enrollment totaled 1250 participants. Screening found 12500 candidates.';
+  const { figs } = rFigs(text, 'Enrollment totaled 1250 participants', '1250 participants');
+  const at = figs[0].excerpt.indexOf('1250'); // the span is the number as written (with sign and unit when it has them; "participants" is no unit)
+  assert.deepStrictEqual(figs[0].span, { start: at, end: at + 4 });
+  assert.deepStrictEqual(rAnswer(figs, 'Screening found 12500 candidates.').keys, {});
+  assert.deepStrictEqual(Object.values(rAnswer(figs, 'Enrollment totaled 1250 participants').keys), [{ meaning: 'matches', quote: 'Enrollment totaled 1250 participants' }]);
+  // a "differs" quote only has to be in the passage
+  assert.deepStrictEqual(Object.values(rAnswer(figs, 'Screening found 12500 candidates.', 'differs').keys), [{ meaning: 'differs', quote: 'Screening found 12500 candidates.' }]);
+  // "In 2020, accuracy was 20%": the 20 of 2020 is not the figure
+  const b = rFigs('In 2020, accuracy was 20% for the classifier.', 'The classifier reached 20%', '20%');
+  assert.deepStrictEqual(rAnswer(b.figs, 'In 2020, accuracy').keys, {});
+  assert.strictEqual(Object.keys(rAnswer(b.figs, 'accuracy was 20% for the classifier').keys).length, 1);
+  // the span is right after white space is collapsed (line breaks, several spaces, a sign)
+  const c = rFigs('Net change\n\n   was   −12.5 ms\nin the hard split overall.', 'Net change was -12.5 ms', '-12.5 ms');
+  assert.strictEqual(Object.keys(rAnswer(c.figs, 'change was −12.5 ms in the hard split').keys).length, 1);
+  assert.deepStrictEqual(rAnswer(c.figs, 'was 12.5 ms in the hard').keys, {}); // without the sign
+  assert.deepStrictEqual(rAnswer(c.figs, 'change was −12.5').keys, {});        // stops before the unit
+});
+
+const REPORT_TEXT = (verb = 'killed') => `## Verdict\nThe treatment ${verb} 1250 participants (${R_SRC}).`;
+test('r10 4 a figure of the report text is compared on its own: no meaning inherited from a claim figure', () => {
+  const { fetched, claims, figs } = rFigs('Enrollment totaled 1250 participants. Screening found 12500 candidates.', 'Enrollment totaled 1250 participants', '1250 participants');
+  const keys = Object.fromEntries(Object.values(rAnswer(figs, 'Enrollment totaled 1250 participants').keys).length ? Object.entries(rAnswer(figs, 'Enrollment totaled 1250 participants').keys) : []);
+  const check = (prose, k) => T.checkReport({ prose, claims, fetched, counts: {}, meaningKeys: k });
+  // the claim figure matches; the report text's own figure is not checked
+  const r = check(REPORT_TEXT(), keys);
+  assert.strictEqual(r.claims[0].figure_checks[0].meaning, 'matches');
+  assert.deepStrictEqual([r.totals.proseFound, r.totals.proseMatches, r.totals.proseDiffers], [1, 0, 0]);
+  // the entry: fid p1, the whole sentence (no heading), the passage cut around the source occurrence that matched
+  const all = T.figureExcerpts(T.checkReport({ prose: REPORT_TEXT(), claims, fetched }).claims, fetched, undefined, { prose: REPORT_TEXT(), counts: {} });
+  const p = all.filter((f) => f.prose);
+  assert.strictEqual(p.length, 1);
+  assert.deepStrictEqual([p[0].fid, p[0].id, p[0].n, p[0].figure], ['p1', 'report', 1, '1250']); // the figure as the report text writes it (with its sign and unit, if it has them)
+  assert.strictEqual(p[0].sentence, `The treatment killed 1250 participants (${R_SRC}).`);
+  assert.ok(p[0].excerpt.includes('Enrollment totaled 1250 participants'));
+  assert.ok(all.some((f) => f.fid === 'c1.f1'), 'the claim entries are still there');
+  // the key follows sha256('prose|' + sentence + '|' + value, unit, form, qual + '|' + passage)
+  const fig = T.parseFigure('1250 participants');
+  assert.strictEqual(p[0].meaningKey, require('crypto').createHash('sha256').update(['prose', p[0].sentence, fig.value, fig.unit, fig.form, fig.qual, p[0].excerpt].join('|')).digest('hex'));
+  // the reviewer answers p1 under {"id": "report"}: validated like the others, no verdict, no claim result
+  const reply = jsonReply([{ id: 'c1', verdict: 'supported', reason: 'r', figures: [] }, { id: 'report', figures: [{ fid: 'p1', meaning: 'matches', quote: 'Enrollment totaled 1250 participants' }] }]);
+  const parsed = T.parseChallenge(reply, ['c1'], all);
+  assert.deepStrictEqual(parsed.results.map((x) => x.id), ['c1']);
+  assert.deepStrictEqual([parsed.unknown, parsed.missing, parsed.counts.supported], [[], [], 1]);
+  const fm = T.figureMeanings(all, parsed);
+  assert.deepStrictEqual(Object.values(fm.keys), [{ meaning: 'matches', quote: 'Enrollment totaled 1250 participants' }]);
+  const answered = check(REPORT_TEXT(), { ...keys, ...fm.keys });
+  assert.deepStrictEqual([answered.totals.proseMatches, answered.totals.proseDiffers], [1, 0]);
+  // a revised sentence has a new key: not checked again
+  const revised = check(REPORT_TEXT('harmed'), { ...keys, ...fm.keys });
+  assert.deepStrictEqual([revised.totals.proseFound, revised.totals.proseMatches], [1, 0]);
+  // a "differs" answer for p1 marks the figure in the text
+  const dq = { fid: 'p1', meaning: 'differs', quote: 'Screening found 12500 candidates.' };
+  const dfm = T.figureMeanings(all, T.parseChallenge(jsonReply([{ id: 'report', figures: [dq] }, { id: 'c1', verdict: 'supported' }]), ['c1'], all));
+  assert.strictEqual(check(REPORT_TEXT(), dfm.keys).prose, `## Verdict\nThe treatment killed 1250 [source says otherwise] participants (${R_SRC}).`);
+  // an answer for a fid that was not presented, or for report with a claim's fid, is dropped
+  const stray = T.parseChallenge(jsonReply([{ id: 'report', figures: [{ fid: 'p9', meaning: 'matches', quote: 'whatever it says' }, { fid: 'c1.f1', meaning: 'matches', quote: 'Enrollment totaled 1250 participants' }] }, { id: 'c1', verdict: 'supported' }]), ['c1'], all);
+  assert.deepStrictEqual(stray.report.figures, []);
+});
+
+test('r10 4 the brief lists the figures of the report text in their own block; at most 60, in text order', () => {
+  const { fetched, claims, figs } = rFigs('Enrollment totaled 1250 participants.', 'Enrollment totaled 1250 participants', '1250 participants');
+  const prose = REPORT_TEXT();
+  const all = T.figureExcerpts(T.checkReport({ prose, claims, fetched }).claims, fetched, undefined, prose);
+  const b = T.challengeBrief('Q?', T.checkReport({ prose, claims, fetched }).claims, T.challengeExcerpts(claims, fetched), all);
+  assert.ok(b.includes('Figures in the report text to compare (each with the sentence of the report that holds it and the passage the hub cut from the source around it):'));
+  assert.ok(b.includes(`  [p1] the report writes: "The treatment killed 1250 participants (${R_SRC})." | the figure: 1250 | passage: "`));
+  assert.ok(b.includes('{"id": "report", "figures": [{"fid": "p1"'));
+  assert.match(b, /\{"id": "report", "figures": \[\.\.\.\]\}; it has no verdict/);
+  assert.ok(b.indexOf('[p1]') > b.indexOf('[c1.f1]'), 'the claim figures come first');
+  // none without report figures
+  const none = T.challengeBrief('Q?', T.checkReport({ prose, claims, fetched }).claims, T.challengeExcerpts(claims, fetched), figs);
+  assert.ok(!none.includes('Figures in the report text') && !none.includes('"report"'));
+  // the cap: 70 distinct figures in the text give 60 entries
+  const nums = Array.from({ length: 70 }, (_, i) => String(31001 + i));
+  const text = nums.map((n) => `Value ${n} was seen.`).join(' ');
+  const f2 = [{ url: R_SRC, ok: true, text }];
+  const c2 = [{ id: 'c1', claim: 'Values were seen', source_url: R_SRC, figures: ['31001'] }];
+  const long = nums.map((n) => `Value ${n} was seen (${R_SRC}).`).join('\n\n');
+  const ent = T.figureExcerpts(T.checkReport({ prose: long, claims: c2, fetched: f2 }).claims, f2, undefined, long).filter((f) => f.prose);
+  assert.strictEqual(ent.length, 60);
+  assert.deepStrictEqual(ent.slice(0, 3).map((f) => [f.fid, f.figure]), [['p1', '31001'], ['p2', '31002'], ['p3', '31003']]);
+  // a sentence longer than 400 characters is cut to 400 around the figure
+  const wordy = `${'word '.repeat(150)}had 1250 participants ${'more '.repeat(150)}(${R_SRC}).`;
+  const w = T.figureExcerpts(T.checkReport({ prose: wordy, claims, fetched }).claims, fetched, undefined, wordy).filter((f) => f.prose);
+  assert.ok(w[0].sentence.length <= 400 && w[0].sentence.includes('1250 participants'), String(w[0].sentence.length));
+});
+
+test('r10 5 a "differs" is never overwritten by a "matches" for the same key: within a round and across rounds', () => {
+  const figs = mFigs();
+  const key = keyOfFid(figs, 'c1.f2');
+  const Q = 'The response rate was 56.4% in the treatment arm and 43.6% in the control arm';
+  const reply = (...items) => ({ results: [{ id: 'c1', verdict: 'supported', figures: items }] });
+  const m = { fid: 'c1.f2', meaning: 'matches', quote: Q };
+  const d = { fid: 'c1.f2', meaning: 'differs', quote: 'in the control arm' };
+  const d2 = { fid: 'c1.f2', meaning: 'differs', quote: 'treatment arm and 43.6%' };
+  // within one round (the same key answered twice): both orders
+  assert.deepStrictEqual(T.figureMeanings(figs, reply(m, d)).keys, { [key]: { meaning: 'differs', quote: 'in the control arm' } });
+  assert.deepStrictEqual(T.figureMeanings(figs, reply(d, m)).keys, { [key]: { meaning: 'differs', quote: 'in the control arm' } });
+  assert.deepStrictEqual(T.figureMeanings(figs, reply(d, m)).differs.map((x) => x.quote), ['in the control arm']);
+  // a differs is replaced by a newer differs
+  assert.deepStrictEqual(T.figureMeanings(figs, reply(d, d2)).keys, { [key]: { meaning: 'differs', quote: 'treatment arm and 43.6%' } });
+  assert.deepStrictEqual(T.figureMeanings(figs, reply(d, d2)).differs.map((x) => x.quote), ['treatment arm and 43.6%']);
+  // a matches can be replaced by a differs, and by a newer matches
+  assert.strictEqual(T.figureMeanings(figs, reply(m, d)).keys[key].meaning, 'differs');
+  // across rounds (mergeMeanings, as the runner stores the answers)
+  const matches = { meaning: 'matches', quote: Q };
+  const differs = { meaning: 'differs', quote: 'in the control arm' };
+  assert.deepStrictEqual(T.mergeMeanings({ [key]: differs }, { [key]: matches }), { [key]: differs });
+  assert.deepStrictEqual(T.mergeMeanings({ [key]: matches }, { [key]: differs }), { [key]: differs });
+  assert.deepStrictEqual(T.mergeMeanings({ [key]: differs }, { [key]: { meaning: 'differs', quote: 'a newer quote' } }), { [key]: { meaning: 'differs', quote: 'a newer quote' } });
+  assert.deepStrictEqual(T.mergeMeanings({ [key]: matches }, { [key]: { meaning: 'matches', quote: 'a newer quote' } }), { [key]: { meaning: 'matches', quote: 'a newer quote' } });
+  assert.deepStrictEqual(T.mergeMeanings({ other: matches }, { [key]: differs }), { other: matches, [key]: differs });
+});
+
+test('r10 6 a number inside a compound run is indexed only as the compound', () => {
+  const kw = ['users']; // a common number (below 1000) needs a keyword of the claim near it
+  assert.strictEqual(T.checkFigure('10 users', '5 to 10 users', kw), NF);
+  assert.strictEqual(T.checkFigure('5 to 10 users', '5 to 10 users', kw), FD);
+  assert.strictEqual(T.checkFigure('10%', '5–10% users', kw), NF);
+  assert.strictEqual(T.checkFigure('5–10%', '5–10% users', kw), FD);
+  assert.strictEqual(T.checkFigure('1250', 'a ratio of 3:1250.'), NF);
+  assert.strictEqual(T.checkFigure('1250', 'a 1250. and then 3:4'), FD); // a number outside any run is still itself
+  // the reviewer's excerpt for a compound figure is still cut around the compound
+  const fetched = [{ url: R_SRC, ok: true, text: 'Latency was 5 to 10 ms in the lab trial.' }];
+  const claims = [{ id: 'c1', claim: 'Latency was 5 to 10 ms', source_url: R_SRC, figures: ['5 to 10 ms'] }];
+  const ex = T.challengeExcerpts(claims, fetched);
+  assert.ok(ex[0].excerpts[0].includes('5 to 10 ms'));
+  assert.strictEqual(T.figureExcerpts(T.checkReport({ prose: 'x', claims, fetched }).claims, fetched).length, 1);
 });

@@ -1708,21 +1708,24 @@ const E_SAVED = (s) => T_REAL.savedStatus(s);
 
 // ── r9b: the second mark in a full run ──
 const FIG_QUOTE = 'Method A scored 56.4% on the test';
-const reviewerReply = (verdict, figures) => [{ label: 'Reviewer', ok: true, text: '```json\n' + JSON.stringify([{ id: 'c1', verdict, reason: 'because', ...(figures ? { figures } : {}) }]) + '\n```' }];
+// reportFigures: the answers for the figures of the report text, in the reply's entry {"id": "report", ...}
+const reviewerReply = (verdict, figures, reportFigures) => [{ label: 'Reviewer', ok: true, text: '```json\n' + JSON.stringify([{ id: 'c1', verdict, reason: 'because', ...(figures ? { figures } : {}) }, ...(reportFigures ? [{ id: 'report', figures: reportFigures }] : [])]) + '\n```' }];
 
 test('r9b runner: figure verdicts are validated by code, saved as meaningKeys, and both lines reach the report', async () => {
-  const m = makeThorough({ script: { Reviewer: () => reviewerReply('supported', [{ fid: 'c1.f1', meaning: 'matches', quote: FIG_QUOTE }]) } });
+  // r10: the figure of the report text is compared on its own (p1); it no longer takes the meaning of the claim figure
+  const m = makeThorough({ script: { Reviewer: () => reviewerReply('supported', [{ fid: 'c1.f1', meaning: 'matches', quote: FIG_QUOTE }], [{ fid: 'p1', meaning: 'matches', quote: FIG_QUOTE }]) } });
   const r = startThorough(m);
   await until(() => m.runner.get(r.id).state === 'delivered');
   // the brief showed the figure with its passage, and the reply shape
   const brief = m.calls.find((c) => c.labels[0] === 'Reviewer').tasks[0];
   assert.match(brief, /Figures to compare \(each with the passage the hub cut from the source around it\):\n  \[c1\.f1\] the report writes: 56\.4% \| passage: "/);
-  // the saved run has the key with the validated answer
+  assert.match(brief, /Figures in the report text to compare[^\n]*\n  \[p1\] the report writes: "[^"\n]*56\.4%[^"\n]*" \| the figure: 56\.4% \| passage: "/);
+  // the saved run has the keys with the validated answers: the claim figure and the report-text figure
   const run = m.runner.get(r.id);
   const keys = Object.entries(run.meaningKeys || {});
-  assert.equal(keys.length, 1);
+  assert.equal(keys.length, 2);
   assert.match(keys[0][0], /^[0-9a-f]{64}$/);
-  assert.deepEqual(keys[0][1], { meaning: 'matches', quote: FIG_QUOTE });
+  assert.deepEqual(keys.map((k) => k[1]), [{ meaning: 'matches', quote: FIG_QUOTE }, { meaning: 'matches', quote: FIG_QUOTE }]);
   assert.ok(m.saves.some((s) => s.includes('"meaningKeys"')), 'saved with the run');
   assert.equal(run.claims[0].figure_checks[0].meaning, 'matches');
   // the delivered report: both lines, the scope sentence, key evidence needs both marks
@@ -1805,13 +1808,14 @@ test('r9b runner: a differs answer is marked, told to the reviser, and a revised
 
 test('r9b runner: the meaning marks are saved with the claims and the report text as soon as a round is credited', async () => {
   const m = makeThorough({
-    script: { Reviewer: () => reviewerReply('supported', [{ fid: 'c1.f1', meaning: 'differs', quote: FIG_QUOTE }]) },
+    // r10: the report text's own figure (p1) is answered too; the prose mark comes from its own answer
+    script: { Reviewer: () => reviewerReply('supported', [{ fid: 'c1.f1', meaning: 'differs', quote: FIG_QUOTE }], [{ fid: 'p1', meaning: 'differs', quote: FIG_QUOTE }]) },
     deps: { writeDocument: () => new Promise(() => {}) }, // the run stays in the document stage
   });
   const r = startThorough(m);
   await untilMs(() => m.runner.get(r.id).stage === 'document');
   const run = m.runner.get(r.id);
-  assert.equal(Object.keys(run.meaningKeys).length, 1);
+  assert.equal(Object.keys(run.meaningKeys).length, 2);
   assert.equal(run.claims[0].figure_checks[0].meaning, 'differs');
   assert.match(run.prose, /56\.4% \[source says otherwise\]/);
   assert.equal(run.checkTotals.meaningDiffers, 1);
