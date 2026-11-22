@@ -126,7 +126,12 @@
       if (cs.maxWidth && cs.maxWidth !== 'none') put('max-width', cs.maxWidth);
       if (cs.minWidth && cs.minWidth !== 'auto') put('min-width', cs.minWidth);
       var margin = cs.margin || (cs.marginTop !== undefined ? [cs.marginTop, cs.marginRight, cs.marginBottom, cs.marginLeft].join(' ') : '');
-      if (margin && !/^(0(px)?\s*)+$/.test(margin)) put('margin', margin);
+      if (margin && !/^(0(px)?\s*)+$/.test(margin)) {
+        put('margin', margin);
+        // the wrapper now carries the margin: an inline margin on the input would double the gap
+        var st = input.style;
+        if (st && (st.margin || st.marginTop || st.marginRight || st.marginBottom || st.marginLeft)) st.margin = '0';
+      }
       if (cs.gridColumn && cs.gridColumn !== 'auto' && cs.gridColumn !== 'auto / auto') put('grid-column', cs.gridColumn);
       if (cs.gridRow && cs.gridRow !== 'auto' && cs.gridRow !== 'auto / auto') put('grid-row', cs.gridRow);
     } catch (e) { /* no layout information: the wrapper keeps its stylesheet sizing */ }

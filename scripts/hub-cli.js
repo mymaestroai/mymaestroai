@@ -94,23 +94,24 @@ function readHidden(q) {
   });
 }
 
-// One line for a person running as root (sudo) on an install whose data folder belongs to someone else: users.json keeps that owner.
+// The refusal line for a person running as root (sudo) on an install whose data folder belongs to someone else: root would leave
+// root-owned files (users.json, auth.db-wal, auth.db-shm) the hub cannot use. Null when there is nothing to refuse.
 function rootOwnerNote({ getuid = process.getuid ? process.getuid.bind(process) : null, stat = fs.statSync, dataDir = path.join(DIR, 'data') } = {}) {
   if (typeof getuid !== 'function' || getuid() !== 0) return null;
   let st; try { st = stat(dataDir); } catch { return null; }
   if (st.uid === 0) return null;
-  return `Running as root: users.json keeps its owner (user id ${st.uid}), so the hub can still read it.`;
+  return `Run this without sudo, as the user that runs your Maestro (user id ${st.uid}).`;
 }
 
 // `mymaestro reset-password <email>`: returns the exit code (0 = the password was set). `readHidden` can be injected for tests.
 async function resetPassword(login, { a = null, read = readHidden, interactive = !!(process.stdin.isTTY && process.stdout.isTTY), say = out, sayErr = (s) => process.stderr.write(s + '\n'), policy = null, rootNote = rootOwnerNote } = {}) {
   if (!login) { sayErr('Usage: mymaestro reset-password <email>'); return 1; }
+  const refuse = rootNote(); if (refuse) { sayErr(refuse); return 1; }   // before anything is opened or read
   if (!interactive) { sayErr('reset-password asks for the new password in a terminal; run it in a terminal on the computer that runs your Maestro.'); return 1; }
   a = a || auth();
   const check = policy || require(path.join(DIR, 'lib', 'auth')).passwordPolicy;
   const u = a.findByLogin(login);
   if (!u) { sayErr(`No account "${login}".`); return 1; }
-  const note = rootNote(); if (note) say(note);
   let pw = null;
   try {
     for (let tries = 0; tries < 3 && pw === null; tries++) {
@@ -436,8 +437,8 @@ const commands = {
   },
   'reset-2fa'() {
     const login = argv[1]; if (!login) fail('Usage: mymaestro reset-2fa <email>');
+    const refuse = rootOwnerNote(); if (refuse) fail(refuse);   // before auth.db is opened or users.json read
     const a = auth(); const u = a.findByLogin(login); if (!u) fail(`No account "${login}".`);
-    const note = rootOwnerNote(); if (note) out(note);
     let r; try { r = a.totpDisable(u.id, { by: 'cli' }); } catch (e) { fail(e.message); }   // e.g. users.json cannot be read: nothing was saved
     if (!r.ok) fail(r.error);
     out(`Two-factor is off for ${u.login}. Sign in with the password, then set up two-factor again (account menu → Security).`);

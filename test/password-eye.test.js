@@ -318,6 +318,45 @@ test('the styles that target password inputs also reach a field that is currentl
   for (const sel of ['.st-row input[data-eye]', '.bk-modal input[data-eye]', '.cx-actions input[data-eye]']) assert.ok(idx.includes(sel), sel);
 });
 
+test('r2 layout: a wrapped input that carries an inline margin gets it set to 0 (the wrapper has it now, so the gap is not doubled); no margin: nothing touched', () => {
+  const { doc, PasswordEye } = fresh();
+  recordingSpans(doc);
+  withStyles((styles) => {
+    const col = doc.createElement('div'); doc.body.appendChild(col);
+    const pw = input(doc, col, { 'data-eye': '' });
+    pw.style = { margin: '4px 0px 0px 8px', setProperty() {} };
+    styles.set(col, { display: 'flex', flexDirection: 'column' });
+    styles.set(pw, { display: 'block', margin: '4px 0px 0px 8px' });
+    PasswordEye.attach(doc);
+    assert.strictEqual(pw.parentNode.written.margin, '4px 0px 0px 8px', 'the wrapper carries the margin');
+    assert.strictEqual(pw.style.margin, '0', 'the input does not');
+  });
+  const f2 = fresh(); recordingSpans(f2.doc);
+  withStyles((styles) => {
+    const col = f2.doc.createElement('div'); f2.doc.body.appendChild(col);
+    const pw = input(f2.doc, col, { 'data-eye': '' });
+    pw.style = { margin: '', setProperty() {} };
+    styles.set(col, { display: 'grid' });
+    styles.set(pw, { display: 'block', margin: '0px' });
+    f2.PasswordEye.attach(f2.doc);
+    assert.strictEqual(pw.style.margin, '', 'no margin to move: untouched');
+  });
+});
+
+test('r2 layout: the two-factor code field in the .bk-two rows is still targeted now that the eye sits between the two inputs', () => {
+  const idx = read('index.html');
+  assert.ok(idx.includes('.bk-modal .bk-two > input:last-child { flex: 0 0 130px; }'));
+  assert.ok(!/\.bk-two input:nth-child\(2\)/.test(idx), 'the old selector would hit the eye button');
+  const app = read('app.js');
+  const rows = app.match(/class="bk-two">.*$/gm) || [];
+  assert.ok(rows.length >= 3, `${rows.length} rows`);
+  for (const r of rows) {
+    const html = r.replace(/\$\{totp \? (?:`[^`]*`|'[^']*') : ''\}/, '@@CODE@@');
+    assert.match(html, /^class="bk-two"><input type="password" data-eye /, 'the password input comes first');
+    assert.ok(!/<input type="password"/.test(html.slice(html.indexOf('@@CODE@@') >= 0 ? html.indexOf('@@CODE@@') : html.length)), 'no password input after the code field');
+  }
+});
+
 test('an eye field never feeds spell checkers or the phone keyboard: spellcheck, autocorrect, autocapitalize and grammar add-ons off', () => {
   const { doc, PasswordEye } = fresh();
   const pw = input(doc, doc.body, { 'data-eye': '' });
