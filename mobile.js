@@ -12901,7 +12901,8 @@ function onCompactionProgress(ev) {
 function onCompactionEnd(ev) {
   if (!ev || !chatOpenFor(ev.agent)) return;
   compactionNote = null;
-  if (ev.ok === false || ev.error) addNote(`⚠ compression failed: ${ev.error || 'unknown error'}`);
+  if (ev.busy) addNote(`⏸ compression postponed: ${ev.error || 'the agent stayed busy'}`);   // not a failure: it runs again after a later turn
+  else if (ev.ok === false || ev.error) addNote(`⚠ compression failed: ${ev.error || 'unknown error'}`);
   else addNote(ev.reset ? '✓ brief written, fresh session started' : '✓ brief written');
   scrollChat();
 }

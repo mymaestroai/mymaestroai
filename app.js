@@ -11058,7 +11058,8 @@
       const chat = findSoloChat(ev.agent);
       if (!chat) return;
       chat.compactionNotice = null;
-      if (ev.ok === false || ev.error) appendSystemNotice(chat.id, `⚠ compression failed: ${ev.error || 'unknown error'}`, 'failed');
+      if (ev.busy) appendSystemNotice(chat.id, `⏸ compression postponed: ${ev.error || 'the agent stayed busy'}`, 'working');   // not a failure: it runs again after a later turn
+      else if (ev.ok === false || ev.error) appendSystemNotice(chat.id, `⚠ compression failed: ${ev.error || 'unknown error'}`, 'failed');
       else appendSystemNotice(chat.id, ev.reset ? '✓ brief written, fresh session started' : '✓ brief written', 'complete');
       compactionRefresh(chat.id);
     }
