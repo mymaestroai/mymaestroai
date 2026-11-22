@@ -3835,7 +3835,7 @@
 
       // Tuning (moved from the ⋯ menu): the controls in #st-tuning-body, wired at page load, are placed here (stTuningMount)
       html += `<div class="st-section" id="st-tuning-section"><h4>Tuning</h4>
-        <div class="st-hint" style="margin-left:0">How each agent turn is put together: pre-scan, lazy tools, SDK workers, team guidance, terse replies, reply length and message history. Each one is saved as you change it.</div>
+        <div class="st-hint" style="margin-left:0">How each agent turn is put together: pre-scan, lazy tools, SDK workers, team guidance and terse replies. Each one is saved as you change it. Reply length and message history sent are Max tokens and Context msgs under Agent Defaults.</div>
         <div id="st-tuning-slot"></div>
       </div>`;
 
@@ -5893,7 +5893,7 @@
       box.hidden = false;
     }
     async function notifyAgentReset(agent) {
-      try { await notifyPrefsRequest('PUT', { agent, prefs: null }); hubToast('Back to your default.'); notifySettingsPaint(); } catch (e) { hubToast('Could not save: ' + e.message); }
+      try { await notifyPrefsRequest('PUT', { agent, prefs: null }); hubToast('Back to your default.'); notifySettingsPaint(); if (typeof stNotifyAgentPaint === 'function') stNotifyAgentPaint(false); } catch (e) { hubToast('Could not save: ' + e.message); }
     }
     // Chat header bell: a small menu for this agent.
     function notifyBellClose(refocus) {
@@ -5966,7 +5966,7 @@
       sel.innerHTML = list.map((a) => `<option value="${esc(a.name)}"${a.name === want ? ' selected' : ''}>${esc(a.display || capName(a.name))}</option>`).join('');
       stNotifyAgentPaint();
     }
-    function stNotifyAgentPaint() {
+    function stNotifyAgentPaint(fetchFirst = true) {
       const sel = document.getElementById('st-nb-agent'), box = document.getElementById('st-nb-agent-box');
       if (!sel || !box) return;
       const agent = sel.value;
@@ -5985,12 +5985,13 @@
           try {
             await notifyPrefsRequest('PUT', { agent: who, prefs: { [kind]: s2.value === '' ? null : s2.value } });
             hubToast(`${name}: ${(NOTIFY_AGENT_KINDS.find(k => k[0] === kind) || [0, kind])[1]} ${s2.value === '' ? 'follows your default' : notifyModeLabel(s2.value)}.`);
+            try { notifySettingsPaint(); } catch { /* the list repaints on the next open */ }   // "Agents with their own setting", from the saved answer
           } catch (err) { hubToast('Could not save: ' + err.message); }
           finally { s2.disabled = false; }
-          if (box.dataset.agent === who) stNotifyAgentPaint();
+          if (box.dataset.agent === who) stNotifyAgentPaint(false);
         });
       }
-      notifyPrefsLoad().then(() => { if (box.isConnected && box.dataset.agent === agent && !box.contains(document.activeElement)) box.innerHTML = notifyBellMenuHtml(agent, display).replace(' id="notify-bell-title"', ''); }).catch(() => {});
+      if (fetchFirst) notifyPrefsLoad().then(() => { if (box.isConnected && box.dataset.agent === agent && !box.contains(document.activeElement)) box.innerHTML = notifyBellMenuHtml(agent, display).replace(' id="notify-bell-title"', ''); }).catch(() => {});
     }
     // Settings → Agents → Tuning (moved from the ⋯ menu): the controls keep their page-load wiring; the one block moves in.
     function stTuningMount() {
@@ -7220,43 +7221,9 @@
     // allow / ask / deny per action class, and "ask" shows an approval card; see the
     // Action approvals section below and the Tool policy section in agent settings.)
 
-    // ── Max completion tokens control ──
-    const maxTokensSelect = document.getElementById('max-tokens-select');
-    // Restore from localStorage
-    const savedMaxTokens = localStorage.getItem('maxCompletionTokens') || '32000';
-    maxTokensSelect.value = savedMaxTokens;
-    maxTokensSelect.addEventListener('change', () => {
-      localStorage.setItem('maxCompletionTokens', maxTokensSelect.value);
-      fetch('/api/max_completion_tokens', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ value: parseInt(maxTokensSelect.value, 10) })
-      }).catch(() => {});
-    });
-    // Sync initial state to server on page load
-    fetch('/api/max_completion_tokens', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ value: parseInt(maxTokensSelect.value, 10) })
-    }).catch(() => {});
-
-    // ── Max context messages control ──
-    const maxCtxSelect = document.getElementById('max-context-select');
-    const savedMaxCtx = localStorage.getItem('maxContextMessages') || '40';
-    maxCtxSelect.value = savedMaxCtx;
-    maxCtxSelect.addEventListener('change', () => {
-      localStorage.setItem('maxContextMessages', maxCtxSelect.value);
-      fetch('/api/max_context_messages', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ value: parseInt(maxCtxSelect.value, 10) })
-      }).catch(() => {});
-    });
-    fetch('/api/max_context_messages', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ value: parseInt(maxCtxSelect.value, 10) })
-    }).catch(() => {});
+    // Reply length and message history: one editor each, Settings → Agents → Agent defaults (Max tokens, Context msgs, saved
+    // with the main Save). The ⋯ menu's two selects that also wrote them (and posted this browser's own copy at every page
+    // load, over the hub's value) are gone with the menu split.
 
 
     // ── Action approvals: a card for every tool call the agent's policy marks "ask" ──

@@ -16,9 +16,9 @@ const idAt = (id) => at('id="' + id + '"');
 const TOP = ['menu-simple', 'menu-files', 'menu-reload', 'menu-profile', 'menu-settings'];
 const DEVICE = ['menu-look', 'menu-look-pick', 'menu-notify', 'menu-notify-test', 'menu-fold', 'menu-active-top'];
 const GROUPS = {
-  chat: ['menu-agentwork', 'menu-recall', 'menu-copy', 'menu-notify-agent', 'menu-compact', 'menu-clear'],
+  chat: ['menu-agentwork', 'menu-recall', 'menu-copy', 'menu-compact', 'menu-clear'],
   tools: ['menu-activity', 'menu-workers', 'menu-memory', 'menu-subs', 'menu-recordings', 'menu-tiger', 'menu-voice', 'menu-wallet'],
-  notify: ['menu-notify-prefs'],
+  notify: ['menu-notify-prefs', 'menu-notify-agent'],   // menu split, review r1: the member's per-agent entry sits with their other notification items
   account: ['menu-security', 'menu-help', 'menu-about'],
   admin: ['menu-users', 'menu-connectors', 'menu-remote', 'menu-update', 'menu-restart'],
   views: ['HREF:/?desktop=once', 'use-full-site'],

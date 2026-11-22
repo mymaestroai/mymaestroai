@@ -30,7 +30,8 @@ function divBlock(src, startMarker) {
 
 const ids = (block) => Array.from(block.matchAll(/\bid="([^"]+)"/g)).map((m) => m[1]);
 
-const TUNING = ['prescan-toggle', 'lazy-tools-toggle', 'sdk-workers-select', 'team-guidance-select', 'caveman-toggle', 'max-tokens-select', 'max-context-select'];
+// menu split, review r1: reply length and message history have one editor, Settings → Agent Defaults (Max tokens, Context msgs)
+const TUNING = ['prescan-toggle', 'lazy-tools-toggle', 'sdk-workers-select', 'team-guidance-select', 'caveman-toggle'];
 // menu split (gear = what you set, ⋯ = what you do): comms-btn (Messaging) moved to Settings; the ⋯ menu keeps these four actions
 const MOVED_BUTTONS = ['wallet-btn', 'dream-btn', 'git-sync-btn', 'restart-hub-btn'];
 const LEFT_THE_MENU = ['comms-btn', 'notify-agent-item', 'advanced-toggle', 'more-advanced', 'more-badge'];
@@ -84,12 +85,14 @@ test('tuning holder: seven tuning controls (team guidance after SDK workers), pl
   const adv = divBlock(html, '<div id="st-tuning-body" data-no-dirty hidden>');
   for (const id of TUNING) assert.ok(adv.includes(`id="${id}"`), `tuning holder has #${id}`);
   const order = TUNING.map((id) => adv.indexOf(`id="${id}"`));
-  assert.deepStrictEqual([...order].sort((a, b) => a - b), order, 'the seven controls keep their order, team guidance after SDK workers');
-  // Team guidance now has a hint line like the rest (the more-menu used the row title): 7 rows, 7 hints.
-  assert.strictEqual((adv.match(/<div class="st-row">/g) || []).length, 7);
-  assert.strictEqual((adv.match(/<div class="st-hint">/g) || []).length, 7);
-  assert.ok(adv.includes('>Reply length limit</label>'));
-  assert.ok(adv.includes('>Message history sent</label>'));
+  assert.deepStrictEqual([...order].sort((a, b) => a - b), order, 'the five controls keep their order, team guidance after SDK workers');
+  // Team guidance now has a hint line like the rest (the more-menu used the row title): 5 rows, 5 hints.
+  assert.strictEqual((adv.match(/<div class="st-row">/g) || []).length, 5);
+  assert.strictEqual((adv.match(/<div class="st-hint">/g) || []).length, 5);
+  // review r1: the duplicate reply-length and history selects are gone, and nothing posts a browser's own copy at page load
+  assert.ok(!html.includes('max-tokens-select') && !html.includes('max-context-select'));
+  assert.ok(!app.includes('/api/max_completion_tokens') && !app.includes('/api/max_context_messages'));
+  assert.match(app, /id="st-maxTokens"/); assert.match(app, /id="st-maxContext"/);
   assert.ok(!divBlock(html, '<div id="more-menu"').includes('st-tuning-body'), 'the holder is not inside the ⋯ menu');
   assert.match(app, /<div class="st-section" id="st-tuning-section"><h4>Tuning<\/h4>[\s\S]*?<div id="st-tuning-slot"><\/div>/);
   assert.match(app, /function stTuningMount\(\) \{[\s\S]*?body\.hidden = false;\s*slot\.appendChild\(body\);/);

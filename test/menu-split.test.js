@@ -37,7 +37,7 @@ test('every item that left the ⋯ menu has its one new home in Settings', () =>
   assert.match(app, /\{ id: 'tools',[^}]*'st-voice-section', 'st-comms-section', 'st-cx-section'/);
   // the tuning controls keep their ids and their page-load wiring, and live in Settings' holder (saved at once: never dirty)
   const holder = idx.slice(idx.indexOf('<div id="st-tuning-body" data-no-dirty hidden>'), idx.indexOf('<script src="/ui-voice-thinking.js">'));
-  for (const c of ['prescan-toggle', 'lazy-tools-toggle', 'sdk-workers-select', 'team-guidance-select', 'caveman-toggle', 'max-tokens-select', 'max-context-select']) {
+  for (const c of ['prescan-toggle', 'lazy-tools-toggle', 'sdk-workers-select', 'team-guidance-select', 'caveman-toggle']) {
     assert.ok(holder.includes(`id="${c}"`), c);
     assert.ok(app.includes(`document.getElementById('${c}')`), `${c} still wired`);
   }
@@ -72,9 +72,14 @@ test('Settings → For an agent: the chat on screen first, then the phone\'s ope
   assert.match(app, /stNotifyAgentWanted = new URLSearchParams\(location\.search\)\.get\('agent'\) \|\| ''/);
   assert.match(mob, /s\.frame\.src = SETTINGS_SHEET_URL \+ \(typeof current === 'string' && current \? '&agent=' \+ encodeURIComponent\(current\) : ''\);/);
   // the same rows and the same save as the chat's bell
-  const paint = fnSrc(app, 'function stNotifyAgentPaint() {');
+  const paint = fnSrc(app, 'function stNotifyAgentPaint(fetchFirst = true) {');
   assert.match(paint, /notifyBellMenuHtml\(agent, display\)/);
   assert.match(paint, /await notifyPrefsRequest\('PUT', \{ agent: who, prefs: \{ \[kind\]: s2\.value === '' \? null : s2\.value \} \}\);/);
+  // review r1: one saved answer repaints both views (the list of agents with their own setting, and this editor), no extra fetch
+  assert.match(paint, /notifySettingsPaint\(\);[^\n]*\n[\s\S]*?stNotifyAgentPaint\(false\);/);
+  assert.match(fnSrc(app, 'async function notifyAgentReset(agent) {'), /notifySettingsPaint\(\); if \(typeof stNotifyAgentPaint === 'function'\) stNotifyAgentPaint\(false\);/);
+  // review r1: reply length and message history: one editor (Agent Defaults); the menu's duplicates and their page-load POST are gone
+  assert.ok(!idx.includes('max-tokens-select') && !app.includes('/api/max_completion_tokens'));
 });
 
 test('phone: a "This device" group for everyone; Notification settings, Notifications for this agent and Deep research stay for members only', () => {
@@ -90,7 +95,7 @@ test('phone: a "This device" group for everyone; Notification settings, Notifica
 
 test('words people use find the moved items in Settings search (it matches a section\'s text)', () => {
   const tuning = openSettings.slice(openSettings.indexOf('id="st-tuning-section"'), openSettings.indexOf('id="st-emergency-section"'));
-  for (const w of ['tuning', 'pre-scan', 'lazy tools', 'sdk workers', 'team guidance', 'terse', 'reply length', 'message history']) assert.ok(tuning.toLowerCase().includes(w), w);
+  for (const w of ['tuning', 'pre-scan', 'lazy tools', 'sdk workers', 'team guidance', 'terse', 'reply length', 'message history', 'agent defaults']) assert.ok(tuning.toLowerCase().includes(w), w);
   const comms = openSettings.slice(openSettings.indexOf('id="st-comms-section"'), openSettings.indexOf('id="st-modules-section"'));
   for (const w of ['messaging', 'channels', 'telegram']) assert.ok(comms.toLowerCase().includes(w), w);
   const notify = openSettings.slice(openSettings.indexOf('id="st-notify-agent"'), openSettings.indexOf('st-nb-agent-box'));
