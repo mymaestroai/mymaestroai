@@ -1117,16 +1117,103 @@ test('r5-3 a clause with no citation inherits a neighbour clause that has one ci
   assert.ok(!/60\.2% \[unverified\]/.test(n.prose));
 });
 
-test('r5-4 a figures entry with a unit absorbs the same bare number in the claim text', () => {
+test('r5-4 a figures entry with a unit does not absorb a bare number in the claim text (r6: fail-safe)', () => {
+  // r6: the r5 merge is reverted: a bare 56.4 in the text is its own figure and is not backed by a source "56.4%"
   const claims = [{ id: 'c1', claim: 'Preference', source_url: 'https://a.example/a', figures: ['56.4%', '43.6%'], measured_result: '56.4 vs 43.6' }];
   const fetched = [{ url: 'https://a.example/a', title: 'T', ok: true, text: 'Preferred 56.4% against 43.6%.' }];
   const res = T.checkClaims(claims, fetched);
-  assert.strictEqual(res.claims[0].status, 'verified');
+  assert.strictEqual(res.claims[0].figures.length, 4);
+  assert.deepStrictEqual(res.claims[0].figures.filter((f) => f.status === 'not_found').map((f) => f.figure).sort(), ['43.6', '56.4']);
+  const mr = T.applyCheck(claims, res)[0].measured_result;
+  assert.match(mr, /56\.4 \[unverified\]/);
+  assert.match(mr, /43\.6 \[unverified\]/);
+});
+
+test('r6-1 a unit figure does not hide a distinct bare quantity of the same value', () => {
+  const claims = [{ id: 'c1', claim: 'Enrollment included 125 participants with 125% growth', source_url: 'https://a.example/a', figures: ['125%'] }];
+  const fetched = [{ url: 'https://a.example/a', title: 'T', ok: true, text: 'Enrollment grew by 125%. Growth was 125% overall.' }];
+  const res = T.checkClaims(claims, fetched);
   assert.strictEqual(res.claims[0].figures.length, 2);
-  assert.ok(!/unverified/.test(T.applyCheck(claims, res)[0].measured_result));
-  // a bare number of another value is still its own figure
-  const more = T.checkClaims([{ ...claims[0], measured_result: '56.4 vs 43.6 over 7 runs' }], fetched);
-  assert.strictEqual(more.claims[0].figures.length, 3);
+  assert.strictEqual(res.claims[0].figures.filter((f) => f.status === 'not_found').map((f) => f.figure).join(), '125');
+  assert.strictEqual(res.totals.found, 1);
+  assert.strictEqual(res.totals.notFound, 1);
+  // a bare figures entry still takes the unit the claim text shows
+  const ok = T.checkClaims([{ id: 'c2', claim: 'Growth was 125% overall', source_url: 'https://a.example/a', figures: ['125'] }], fetched);
+  assert.strictEqual(ok.claims[0].figures.length, 1);
+  assert.strictEqual(ok.claims[0].status, 'verified');
+  // a currency figures entry does not back a bare number
+  const cur = T.checkClaims([{ id: 'c3', claim: '1,250 respondents', source_url: 'https://a.example/a', figures: ['$1,250'] }], [{ url: 'https://a.example/a', title: 'T', ok: true, text: 'Paid $1,250 only.' }]);
+  assert.strictEqual(cur.claims[0].figures.filter((f) => f.status === 'not_found').map((f) => f.figure).join(), '1,250');
+});
+
+test('r6-2 a sign before or after a currency symbol is part of the figure', () => {
+  const cf = (a, b) => T.checkFigure(a, b);
+  assert.strictEqual(cf('-$1,250', 'We paid $1,250 in total.'), 'not_found');
+  assert.strictEqual(cf('$-1,250', 'We paid $1,250 in total.'), 'not_found');
+  assert.strictEqual(cf('-$1,250', 'We lost −$1,250 in total.'), 'found');
+  assert.strictEqual(cf('-$1,250', 'We lost $-1,250 in total.'), 'found');
+  assert.strictEqual(cf('-€5M', 'We paid €5M in total.'), 'not_found');
+  assert.strictEqual(cf('$1,250', 'We lost -$1,250 in total.'), 'not_found');
+  assert.strictEqual(T.numbersIn('a -$1,250 b')[0].value, '-1250');
+  assert.strictEqual(T.numbersIn('a $-1,250 b')[0].value, '-1250');
+});
+
+test('r6-3 letter-prefixed dollar signs and more currency codes', () => {
+  const cf = (a, b) => T.checkFigure(a, b);
+  assert.strictEqual(cf('US$1,250', 'paid CA$1,250 total'), 'not_found');
+  assert.strictEqual(cf('$1.2 billion', 'raised A$1.2 billion'), 'not_found');
+  assert.strictEqual(cf('A$1.2 billion', 'raised $1.2 billion'), 'not_found');
+  assert.strictEqual(cf('C$5,000', 'paid C$5,000 today'), 'found');
+  assert.strictEqual(cf('C$5,000', 'paid CA$5,000 today'), 'not_found');
+  assert.strictEqual(cf('US$1,250', 'paid $1,250 total'), 'found');
+  assert.strictEqual(cf('1,250 CAD', 'paid 1,250 CHF total'), 'not_found');
+  assert.strictEqual(cf('CAD 1,250', 'paid 1,250 CAD total'), 'found');
+  assert.strictEqual(cf('1,250 CAD', 'paid 1,250 total'), 'not_found');
+  assert.strictEqual(cf('€5,000', 'paid 5,000 euros today'), 'found');
+  assert.strictEqual(cf('$5,000', 'paid 5,000 US dollars today'), 'found');
+  assert.strictEqual(cf('$5,000', 'paid 5,000 Canadian dollars today'), 'not_found');
+  assert.strictEqual(T.numbersIn('5 euros')[0].unit, 'EUR');
+  assert.strictEqual(T.numbersIn('5 US dollars')[0].unit, 'USD');
+  assert.strictEqual(T.numbersIn('5 Canadian dollars')[0].unit, '');
+  assert.strictEqual(T.numbersIn('about 1,250 cad and 1,250 chf').map((t) => t.unit).join('|'), '|');
+  // a long run of letters before "$" is cut by the lookup window: never read as US dollars
+  assert.notStrictEqual(T.numbersIn('xxxxxAUS$5,000').map((t) => t.unit).join(), 'USD');
+  assert.strictEqual(cf('$5,000', 'paid xxxxxAUS$5,000 today'), 'not_found');
+  assert.strictEqual(T.numbersIn('paid €5,000 today')[0].unit, 'EUR');
+  assert.strictEqual(T.numbersIn('NZ$7').map((t) => t.unit).join(), 'X$:NZ');
+});
+
+test('r6-4 the paragraph fallback does not run when the block holds an unresolved explicit citation', () => {
+  const A = 'https://a.example/a';
+  const B = 'https://b.example/b';
+  const claims = [{ id: 'c1', claim: 'Study A enrolled participants', source_url: A, figures: ['900'] }];
+  const fetched = [{ url: A, title: 'Alpha paper', ok: true, text: 'Study A enrolled 900 participants in a first wave and 1,250 participants in total.' }];
+  const r = T.checkReport({ prose: `Study A enrolled 900 (${A}). Study B (${B}) was larger. It enrolled 1,250 participants.`, claims, fetched, counts: {} });
+  assert.match(r.prose, /enrolled 900 \(/);
+  assert.ok(!/900 \[unverified\]/.test(r.prose));
+  assert.match(r.prose, /1,250 \[unverified\]/);
+  const one = T.checkReport({ prose: `Study A enrolled 900 (${A}). Study B was larger. It enrolled 1,250 participants.`, claims, fetched, counts: {} });
+  assert.strictEqual(one.marks, 0);
+});
+
+test('r6-5 "No." is an abbreviation only before a number', () => {
+  const A = 'https://a.example/a';
+  const B = 'https://b.example/b';
+  const claims = [
+    { id: 'c1', claim: 'Study A ranking result', source_url: A, figures: ['56.4%'] },
+    { id: 'c2', claim: 'Study B result', source_url: B, figures: ['60.2%'] },
+  ];
+  const fetched = [
+    { url: A, title: 'Alpha paper', ok: true, text: 'Result No. 5 in the ranking was 56.4%.' },
+    { url: B, title: 'Beta paper', ok: true, text: 'Result was 60.2%.' },
+  ];
+  const r = T.checkReport({ prose: `Result No. 5 was 56.4% (${A}). No. Study B reached 60.2% (${B}).`, claims, fetched, counts: {} });
+  assert.strictEqual(r.marks, 0);
+  assert.strictEqual(r.totals.proseVerified, 3); // 5, 56.4%, 60.2%
+  // a sentence ending in "No." ends there: the next sentence's figure is judged by its own citation only
+  const C = 'https://c.example/c';
+  const s = T.checkReport({ prose: `Study C (${C}) said No. Study A ranking was 56.4% (${A}).`, claims, fetched, counts: {} });
+  assert.strictEqual(s.marks, 0);
 });
 
 test('r5-5 units: percentage points, -fold, times; No. only when capitalised', () => {
@@ -1146,6 +1233,8 @@ test('r5-5 units: percentage points, -fold, times; No. only when capitalised', (
   // (the second sentence cites an unfetched B; if "no." did not split, B would taint the 1,250)
   const low = T.checkReport({ prose: `It enrolled 1,250 participants (${A}) was it no. And more were seen (https://b.example/b).`, claims, fetched, counts: {} });
   assert.strictEqual(low.marks, 0);
-  const cap = T.checkReport({ prose: `It enrolled 1,250 participants (${A}) was it No. And more were seen (https://b.example/b).`, claims, fetched, counts: {} });
-  assert.strictEqual(cap.marks, 1);
+  // r6: capitalised "No." is an abbreviation only before a number, so "No. 5" is used here
+  const cap = T.checkReport({ prose: `It enrolled 1,250 participants (${A}) was it No. 5 and more were seen (https://b.example/b).`, claims, fetched, counts: {} });
+  // (the 5 itself is a figure too, so check that the 1,250 is the one tainted by B)
+  assert.match(cap.prose, /1,250 \[unverified\]/);
 });
