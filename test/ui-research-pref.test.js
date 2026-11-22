@@ -26,12 +26,16 @@ function fnSrc(src, name) {
 }
 const lineOf = (src, startsWith) => { const l = src.split('\n').find(x => x.trim().startsWith(startsWith)); assert.ok(l, 'missing line ' + startsWith); return l; };
 
-test('phone html: the row starts hidden in the Notifications and view group; the sheet exists', () => {
+test('phone html: the row starts hidden in the Your notifications group; the sheet exists', () => {
   assert.match(html, /<button id="menu-research" hidden>Deep research: Ask each time<\/button>/);
   const g = html.indexOf('data-group="notify"'), next = html.indexOf('data-group="account"');
   const r = html.indexOf('id="menu-research"');
   assert.ok(g > 0 && r > g && r < next, 'inside the notify group');
-  assert.ok(html.indexOf('id="menu-notify-prefs"') < r && r < html.indexOf('id="menu-active-top"'));
+  // menu split (gear = what you set, ⋯ = what you do): the group is "Your notifications" and ends with the row (Active at the top moved to This device)
+  assert.ok(html.includes('id="menu-gt-notify">Your notifications<'));
+  assert.ok(html.indexOf('id="menu-notify-prefs"') > g && html.indexOf('id="menu-notify-prefs"') < r);
+  assert.ok(html.indexOf('id="menu-active-top"') < g && html.indexOf('id="menu-active-top"') > html.indexOf('data-group="device"'), 'Active at the top is in This device');
+  assert.ok(!html.slice(g, next).includes('id="menu-active-top"') && !html.slice(g, next).includes('id="menu-notify-test"'));
   assert.ok(html.includes('<dialog id="research-sheet"'));
   assert.match(html, /#research-sheet button \{[^}]*min-height: 44px/);
   assert.match(html, /html\.mm-simple \.ss-rseg button \{[^}]*min-height: 48px/);
@@ -40,7 +44,8 @@ test('phone html: the row starts hidden in the Notifications and view group; the
 test('phone js: GET shows the row only when on; POST body is { choice }; menu groups are re-counted', () => {
   assert.ok(mob.includes("api('/api/research-pref')"));
   assert.match(mob, /api\('\/api\/research-pref', \{ method: 'POST', headers: \{ 'Content-Type': 'application\/json' \}, body: JSON\.stringify\(\{ choice \}\) \}\)/);
-  assert.match(mob, /row\.hidden = !researchPrefOn;/);
+  // menu split: an admin's Deep research choice is in Settings → Notifications, so the menu row is hidden for admins too
+  assert.match(mob, /row\.hidden = !researchPrefOn \|\| !!\(hubMe && hubMe\.isAdmin\);/);
   assert.match(mob, /researchPrefOn = !!\(d && d\.on === true\);/);
   assert.match(fnSrc(mob, 'researchPrefPaintAll'), /typeof menuGroupsSync === 'function' && menuGroupsSync\(\)/);
   assert.ok(mob.includes("$('menu-research')?.addEventListener('click'"));

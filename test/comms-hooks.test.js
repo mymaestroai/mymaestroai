@@ -49,9 +49,12 @@ test('server.js starts the comms service with attach()/start() and catches start
 
 // ── index.html ───────────────────────────────────────────────────────────
 
-test('index.html has a comms header button and loads comms-panel.js', () => {
+test('Settings has a Messaging channels section whose button opens the comms panel; index.html loads comms-panel.js', () => {
   const src = read('index.html');
-  assert.match(src, /id="comms-btn"/);
+  const app = read('app.js');
+  // menu split (gear = what you set, ⋯ = what you do): the ⋯ menu's #comms-btn moved into Settings → Tools and data → #st-comms-section
+  assert.doesNotMatch(src, /id="comms-btn"/);
+  assert.match(app, /id="st-comms-section"><h4>Messaging channels<\/h4>[\s\S]*?<button class="st-test-btn" onclick="openCommsPanel\(\)">/);
   assert.match(src, /<script src="comms-panel\.js"><\/script>/);
 });
 

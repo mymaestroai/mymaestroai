@@ -11,11 +11,14 @@ const menu = html.slice(html.indexOf('<div id="menu">'), html.indexOf('<div id="
 const at = (needle) => { const i = menu.indexOf(needle); assert.ok(i >= 0, 'missing ' + needle); return i; };
 const idAt = (id) => at('id="' + id + '"');
 
-const TOP = ['menu-look', 'menu-simple', 'menu-notify', 'menu-files', 'menu-reload', 'menu-profile'];
+// menu split (gear = what you set, ⋯ = what you do): Interface style and Notifications left the top list for the "This device" group
+// (right after Settings, before Advanced), which also takes Send a test notification, Fold and Active at the top from their old groups.
+const TOP = ['menu-simple', 'menu-files', 'menu-reload', 'menu-profile', 'menu-settings'];
+const DEVICE = ['menu-look', 'menu-look-pick', 'menu-notify', 'menu-notify-test', 'menu-fold', 'menu-active-top'];
 const GROUPS = {
-  chat: ['menu-agentwork', 'menu-recall', 'menu-copy', 'menu-fold', 'menu-notify-agent', 'menu-compact', 'menu-clear'],
+  chat: ['menu-agentwork', 'menu-recall', 'menu-copy', 'menu-notify-agent', 'menu-compact', 'menu-clear'],
   tools: ['menu-activity', 'menu-workers', 'menu-memory', 'menu-subs', 'menu-recordings', 'menu-tiger', 'menu-voice', 'menu-wallet'],
-  notify: ['menu-notify-prefs', 'menu-notify-test', 'menu-active-top'],
+  notify: ['menu-notify-prefs'],
   account: ['menu-security', 'menu-help', 'menu-about'],
   admin: ['menu-users', 'menu-connectors', 'menu-remote', 'menu-update', 'menu-restart'],
   views: ['HREF:/?desktop=once', 'use-full-site'],
@@ -24,11 +27,18 @@ const pos = (k) => (k.startsWith('HREF:') ? at('href="' + k.slice(5) + '"') : id
 
 test('notices come first, then the top group in order, then Advanced, then Sign out last', () => {
   assert.ok(idAt('menu-credit') < idAt('menu-2fa-note'));
-  assert.ok(idAt('menu-2fa-note') < idAt('menu-look'));
+  assert.ok(idAt('menu-2fa-note') < idAt('menu-simple'));
   let prev = -1;
   for (const id of TOP) { const p = idAt(id); assert.ok(p > prev, id + ' out of order'); prev = p; }
-  assert.ok(idAt('menu-look-pick') > idAt('menu-look') && idAt('menu-look-pick') < idAt('menu-simple'));
-  assert.ok(idAt('menu-adv-toggle') > idAt('menu-profile') && idAt('menu-adv') > idAt('menu-adv-toggle'));
+  // menu split: then the This device group in order, then Advanced
+  const dg = at('data-group="device"');
+  assert.ok(dg > idAt('menu-settings') && dg < idAt('menu-adv-toggle'), 'This device sits after Settings and before Advanced');
+  assert.match(menu, /<div class="menu-group-title" id="menu-gt-device">This device<\/div>/);
+  assert.ok(menu.includes('data-group="device" role="group" aria-labelledby="menu-gt-device"'));
+  prev = dg;
+  for (const id of DEVICE) { const p = idAt(id); assert.ok(p > prev && p < idAt('menu-adv-toggle'), id + ' out of order in This device'); prev = p; }
+  assert.ok(idAt('menu-fold') > 0 && /id="menu-fold" class="chat-only"/.test(menu), 'Fold is still chat-only');
+  assert.ok(idAt('menu-adv-toggle') > idAt('menu-active-top') && idAt('menu-adv') > idAt('menu-adv-toggle'));
   assert.ok(idAt('menu-signout') > at('id="use-full-site"'));
   assert.ok(idAt('menu-signout') > menu.lastIndexOf('menu-group'));
 });
@@ -46,12 +56,12 @@ test('Advanced holds every other item, in its group and order', () => {
     for (const k of GROUPS[g]) { const p = pos(k); assert.ok(p > prev && p < ge, k + ' in ' + g + ' in order'); prev = p; }
     prevGroup = gs;
   }
-  for (const t of ['This chat', 'Tools', 'Notifications and view', 'Account and help', 'Admin', 'Other views']) assert.match(menu, new RegExp('<div class="menu-group-title" id="menu-gt-[a-z]+">' + t + '</div>'), t);
+  for (const t of ['This chat', 'Tools', 'Your notifications', 'Account and help', 'Admin', 'Other views']) assert.match(menu, new RegExp('<div class="menu-group-title" id="menu-gt-[a-z]+">' + t + '</div>'), t);
   for (const g of ['chat', 'tools', 'notify', 'account', 'admin', 'views']) assert.ok(menu.includes(`data-group="${g}" role="group" aria-labelledby="menu-gt-${g}"`), g);   // named groups for screen readers (review r1)
 });
 
 test('all 36 inventory items appear exactly once, plus the new ones', () => {
-  const ids = [...TOP.filter(i => i !== 'menu-look'), 'menu-credit', 'menu-2fa-note', 'menu-signout', ...Object.values(GROUPS).flat().filter(k => !k.startsWith('HREF:'))];
+  const ids = [...TOP.filter(i => i !== 'menu-settings'), ...DEVICE.filter(i => i !== 'menu-look' && i !== 'menu-look-pick'), 'menu-credit', 'menu-2fa-note', 'menu-signout', ...Object.values(GROUPS).flat().filter(k => !k.startsWith('HREF:'))];
   assert.strictEqual(ids.length + 1, 36);   // the "Open full UI" link has no id: counted by its href
   for (const id of ids) assert.strictEqual(menu.split('id="' + id + '"').length - 1, 1, id);
   assert.strictEqual(menu.split('href="/?desktop=once"').length - 1, 1);

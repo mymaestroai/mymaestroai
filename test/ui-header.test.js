@@ -31,7 +31,9 @@ function divBlock(src, startMarker) {
 const ids = (block) => Array.from(block.matchAll(/\bid="([^"]+)"/g)).map((m) => m[1]);
 
 const TUNING = ['prescan-toggle', 'lazy-tools-toggle', 'sdk-workers-select', 'team-guidance-select', 'caveman-toggle', 'max-tokens-select', 'max-context-select'];
-const MOVED_BUTTONS = ['comms-btn', 'wallet-btn', 'dream-btn', 'git-sync-btn', 'restart-hub-btn'];
+// menu split (gear = what you set, ⋯ = what you do): comms-btn (Messaging) moved to Settings; the ⋯ menu keeps these four actions
+const MOVED_BUTTONS = ['wallet-btn', 'dream-btn', 'git-sync-btn', 'restart-hub-btn'];
+const LEFT_THE_MENU = ['comms-btn', 'notify-agent-item', 'advanced-toggle', 'more-advanced', 'more-badge'];
 
 test('header-controls holds only Workers, Files, Scheduler, Settings, Help, Reload (shown in the installed app only) and the ⋯ button (plus the menus they anchor)', () => {
   const header = divBlock(html, '<div class="header-controls">');
@@ -40,58 +42,69 @@ test('header-controls holds only Workers, Files, Scheduler, Settings, Help, Relo
   const outsideMenu = header.replace(menuBlock, '');
   const buttonIds = Array.from(outsideMenu.matchAll(/<button[^>]*\bid="([^"]+)"/g)).map((m) => m[1]);
   assert.deepStrictEqual(buttonIds, ['workers-btn', 'files-btn', 'schedule-btn', 'settings-btn', 'help-btn', 'reload-btn', 'more-btn']);
-  for (const id of [...TUNING, ...MOVED_BUTTONS, 'advanced-toggle']) {
+  for (const id of [...TUNING, ...MOVED_BUTTONS, ...LEFT_THE_MENU]) {
     assert.ok(!ids(outsideMenu).includes(id), `${id} is not in the header proper`);
   }
   assert.strictEqual((html.match(/<div class="header-controls">/g) || []).length, 1);
 });
 
-test('⋯ button: id, aria-label, title, Advanced badge, opens #more-menu', () => {
+test('⋯ button: id, aria-label, title, opens #more-menu; no Advanced badge any more', () => {
   assert.match(html, /<button id="more-btn"[^>]*aria-label="More"[^>]*title="More options"/);
   assert.match(html, /<button id="more-btn"[^>]*aria-haspopup="menu"/);
   assert.match(html, /<button id="more-btn"[^>]*onclick="toggleMoreMenu\(\)"/);
-  assert.match(html, /<span class="more-badge" id="more-badge">Advanced<\/span>/);
-  assert.ok(html.includes('#more-btn.advanced .more-badge { display: inline-block; }'));
+  // menu split (gear = what you set, ⋯ = what you do): the Advanced badge went with the Advanced section; the button is just ⋯
+  assert.match(html, /<button id="more-btn"[^>]*>⋯<\/button>/);
+  assert.ok(!html.includes('id="more-badge"'));
 });
 
-test('#more-menu holds the moved buttons in order, a separator, the advanced section and the checkbox', () => {
+test('#more-menu holds the action items in order, a separator, and the last line that points to Settings', () => {
   const menu = divBlock(html, '<div id="more-menu"');
   const menuIds = ids(menu);
-  for (const id of [...MOVED_BUTTONS, 'advanced-toggle', ...TUNING]) assert.ok(menuIds.includes(id), `menu contains #${id}`);
+  // menu split (gear = what you set, ⋯ = what you do): no Messaging, no Notifications for this agent, no Advanced section or checkbox, no tuning controls
+  for (const id of MOVED_BUTTONS) assert.ok(menuIds.includes(id), `menu contains #${id}`);
+  for (const id of [...LEFT_THE_MENU, ...TUNING]) assert.ok(!menuIds.includes(id), `menu no longer contains #${id}`);
   const order = MOVED_BUTTONS.map((id) => menu.indexOf(`id="${id}"`));
-  assert.deepStrictEqual([...order].sort((a, b) => a - b), order, 'Messaging, Wallets, Dream, Update, Restart in that order');
+  assert.deepStrictEqual([...order].sort((a, b) => a - b), order, 'Wallets, Dream, Update, Restart in that order');
   const sep = menu.indexOf('<div class="more-sep"');
   assert.ok(sep > order[order.length - 1], 'separator after the action items');
-  assert.ok(menu.indexOf('id="more-advanced"') > sep, 'advanced section below the separator');
-  assert.match(menu, /<input type="checkbox" id="advanced-toggle">\s*<span>Advanced controls<\/span>/);
+  const moved = menu.indexOf('id="more-moved-item"');
+  assert.ok(moved > sep, 'the Settings pointer is the last item, below the separator');
+  assert.strictEqual(menuIds[menuIds.length - 1], 'more-moved-item');
+  assert.match(menu, /id="more-moved-item"[^>]*onclick="closeMoreMenu\(\); openSettingsAt\('st-notify-agent'\)">Notifications, channels and tuning are now in Settings<\/button>/);
   // Every moved item still calls its original handler and closes the menu first.
-  for (const [id, fn] of [['comms-btn', 'openCommsPanel'], ['wallet-btn', 'openWalletPanel'], ['dream-btn', 'startDream'], ['git-sync-btn', 'openGitSync'], ['restart-hub-btn', 'restartHub']]) {
+  for (const [id, fn] of [['wallet-btn', 'openWalletPanel'], ['dream-btn', 'startDream'], ['git-sync-btn', 'openGitSync'], ['restart-hub-btn', 'restartHub']]) {
     assert.match(menu, new RegExp(`id="${id}"[^>]*onclick="closeMoreMenu\\(\\); ${fn}\\(\\)"`), `${id} -> ${fn}()`);
   }
   assert.match(html, /<button id="schedule-btn"[^>]*onclick="openSchedulePanel\(\)"/);
   assert.match(html, /<button id="settings-btn"[^>]*onclick="openSettings\(\)"/);
 });
 
-test('advanced section: seven tuning controls (team guidance added after SDK workers), plain-English labels and a hint per row but the team guidance row (its help is the row title); hidden unless the flag is on', () => {
-  const adv = divBlock(html, '<div class="more-advanced" id="more-advanced">');
-  for (const id of TUNING) assert.ok(adv.includes(`id="${id}"`), `advanced section holds #${id}`);
-  // Team guidance: a row beside SDK workers (so 7 rows); it explains itself in the row's title, not in a hint line (so 6 hints).
-  assert.strictEqual((adv.match(/<div class="more-row">/g) || []).length, 7);
-  assert.strictEqual((adv.match(/<div class="more-hint">/g) || []).length, 6);
-  assert.ok(adv.includes('<span>Reply length limit</span>'));
-  assert.ok(adv.includes('<span>Message history sent</span>'));
-  assert.ok(html.includes('.more-menu .more-advanced { display: none;'));
-  assert.ok(html.includes('.more-menu.advanced .more-advanced { display: flex; }'));
+test('tuning holder: seven tuning controls (team guidance after SDK workers), plain-English labels and a hint per row; hidden until Settings mounts it', () => {
+  // menu split (gear = what you set, ⋯ = what you do): the controls moved from the ⋯ Advanced section to #st-tuning-body (Settings → Agents → Tuning)
+  const adv = divBlock(html, '<div id="st-tuning-body" data-no-dirty hidden>');
+  for (const id of TUNING) assert.ok(adv.includes(`id="${id}"`), `tuning holder has #${id}`);
+  const order = TUNING.map((id) => adv.indexOf(`id="${id}"`));
+  assert.deepStrictEqual([...order].sort((a, b) => a - b), order, 'the seven controls keep their order, team guidance after SDK workers');
+  // Team guidance now has a hint line like the rest (the more-menu used the row title): 7 rows, 7 hints.
+  assert.strictEqual((adv.match(/<div class="st-row">/g) || []).length, 7);
+  assert.strictEqual((adv.match(/<div class="st-hint">/g) || []).length, 7);
+  assert.ok(adv.includes('>Reply length limit</label>'));
+  assert.ok(adv.includes('>Message history sent</label>'));
+  assert.ok(!divBlock(html, '<div id="more-menu"').includes('st-tuning-body'), 'the holder is not inside the ⋯ menu');
+  assert.match(app, /<div class="st-section" id="st-tuning-section"><h4>Tuning<\/h4>[\s\S]*?<div id="st-tuning-slot"><\/div>/);
+  assert.match(app, /function stTuningMount\(\) \{[\s\S]*?body\.hidden = false;\s*slot\.appendChild\(body\);/);
   // The restart item keeps its "restarting" look inside the menu.
   assert.ok(html.includes('.more-menu .more-item.restarting { opacity: 0.5; pointer-events: none;'));
 });
 
-test('app.js persists the Advanced flag in localStorage hub-advanced (default off)', () => {
-  assert.ok(app.includes("const ADVANCED_KEY = 'hub-advanced'"));
-  assert.match(app, /applyAdvanced\(localStorage\.getItem\(ADVANCED_KEY\) === '1'\)/);
-  assert.match(app, /localStorage\.setItem\(ADVANCED_KEY, advancedToggle\.checked \? '1' : '0'\)/);
-  assert.match(app, /moreMenu\.classList\.toggle\('advanced', on\)/);
-  assert.match(app, /moreBtn\.classList\.toggle\('advanced', on\)/);
+test('app.js no longer has the Advanced flag (localStorage hub-advanced, applyAdvanced); the tuning controls always show in Settings', () => {
+  // menu split (gear = what you set, ⋯ = what you do): the Advanced controls switch is gone
+  assert.ok(!app.includes('hub-advanced'));
+  assert.ok(!app.includes('ADVANCED_KEY'));
+  assert.ok(!app.includes('applyAdvanced'));
+  assert.ok(!app.includes("getElementById('advanced-toggle')"));
+  assert.doesNotMatch(app, /moreMenu\.classList\.toggle\('advanced'/);
+  assert.match(app, /stModal\(html\);\s*stTuningMount\(\); stNotifyAgentFill\(\);\s*\/\/[^\n]*\n\s*groupSettings\(data\);/);
 });
 
 test('app.js closes the menu on Escape and on a click outside it', () => {
@@ -103,7 +116,8 @@ test('app.js closes the menu on Escape and on a click outside it', () => {
 });
 
 test('app.js still wires every tuning control and the restart button by id', () => {
-  for (const id of [...TUNING, 'restart-hub-btn', 'more-btn', 'more-menu', 'advanced-toggle']) {
+  // menu split (gear = what you set, ⋯ = what you do): 'advanced-toggle' is no longer looked up; the tuning controls keep their wiring
+  for (const id of [...TUNING, 'restart-hub-btn', 'more-btn', 'more-menu']) {
     assert.ok(app.includes(`document.getElementById('${id}')`), `app.js looks up #${id}`);
   }
   // restartHub()/pollForRestart() keep driving the restart item's class and title.

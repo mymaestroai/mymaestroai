@@ -93,7 +93,9 @@ test('mobile.html: the script tag, the Switch to Simple item and one Simple styl
   assert.ok(a > html.indexOf('<script src="/ui-file-card.js"></script>'));
   assert.ok(a < html.indexOf('<script src="mobile.js"></script>'));
   assert.strictEqual(html.split('<style id="simple-css">').length, 2);
-  assert.match(html, /<div id="menu-look-pick" hidden><\/div>\n    <button id="menu-simple">Switch to Simple<\/button>\n/);   // phone-menu reorder: near the top, right after the Look row
+  // menu split (gear = what you set, ⋯ = what you do): the Look row is in the This device group, so Switch to Simple stays near the top (first item) and Look's picker is followed by the device items
+  assert.match(html, /<div id="menu-2fa-note" hidden>[^\n]*<\/div>\n    <button id="menu-simple">Switch to Simple<\/button>\n/);
+  assert.match(html, /<div id="menu-look-pick" hidden><\/div>\n      <button id="menu-notify">[^\n]*<\/button>\n      <button id="menu-notify-test" hidden>[^\n]*<\/button>\n      <button id="menu-fold" class="chat-only">[^\n]*<\/button>\n      <button id="menu-active-top">/);
 });
 
 function simpleCss() {

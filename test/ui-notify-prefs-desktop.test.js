@@ -246,13 +246,20 @@ test('the bell menu closes when the visible chat tab changes', () => {
   assert.ok(body.indexOf('notifyBellClose(false)') < body.indexOf("classList.add('active')"));
 });
 
-test('the ⋯ menu has "Notifications for this agent", which opens the bell menu of the visible chat', () => {
+test('Settings → Notifications has "For an agent" (the bell menu of an agent, the visible chat first); the ⋯ menu points there', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
-  const menu = html.slice(html.indexOf('id="more-menu"'), html.indexOf('id="more-menu"') + 3000);
-  assert.match(menu, /id="notify-agent-item" class="more-item" role="menuitem"[^>]*onclick="closeMoreMenu\(\); notifyBellOpenVisible\(\)">🔔 Notifications for this agent<\/button>/);
-  const f = app.slice(app.indexOf('function notifyBellOpenVisible'), app.indexOf('// Presence: tells the hub'));
-  assert.match(f, /activeChat/);
-  assert.match(f, /notifyBellToggle\(id\)/);
+  // menu split (gear = what you set, ⋯ = what you do): #notify-agent-item left the ⋯ menu; its last line opens Settings at the For an agent row
+  const menu = html.slice(html.indexOf('id="more-menu"'), html.indexOf('id="st-tuning-body"'));
+  assert.ok(!menu.includes('notify-agent-item'));
+  assert.match(menu, /id="more-moved-item" class="more-item more-moved" role="menuitem"[^>]*onclick="closeMoreMenu\(\); openSettingsAt\('st-notify-agent'\)">Notifications, channels and tuning are now in Settings<\/button>\s*<\/div>/);
+  const n = app.slice(app.indexOf('id="st-notify-section"'), app.indexOf('setTimeout(loadNotifySettings'));
+  assert.match(n, /<div class="st-row" id="st-notify-agent" data-no-dirty><label for="st-nb-agent">For an agent<\/label><select id="st-nb-agent" onchange="stNotifyAgentPaint\(\)"><\/select><\/div>/);
+  assert.match(n, /<div id="st-nb-agent-box" class="st-nb-box" data-no-dirty><\/div>/);
+  assert.match(app, /stModal\(html\);\s*stTuningMount\(\); stNotifyAgentFill\(\);/);
+  const f = app.slice(app.indexOf('function stNotifyAgentFill'), app.indexOf('// Presence: tells the hub'));
+  assert.match(f, /activeChat/);   // the chat on screen first
+  assert.match(f, /notifyBellMenuHtml\(agent, display\)/);   // the bell's own choices
+  assert.match(f, /notifyPrefsRequest\('PUT', \{ agent: who, prefs: /);   // and its own save
 });
 
 // Round 4: the Notify me toast follows the "Requests you made" setting.

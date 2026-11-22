@@ -191,7 +191,7 @@ test('help.html: the "Your team" section sits under Agents after "Create an agen
   // Part 5: the Set up your team card sentence is part of the first paragraph, so the count stays 4.
   assert.strictEqual((sec.match(/<p>/g) || []).length, 4);
   assert.ok(sec.includes('shows a one-time Set up your team card; to see it again, open your Maestro with ?team=setup at the end of its address.'));
-  for (const s of ['starter team', 'Challenger', 'Scout', 'Builder', 'Researcher', 'asks the Challenger to check important work', 'A starter you delete is not set up again', 'Full, Light or Off in the More menu (Team guidance)']) assert.ok(sec.includes(s), s);
+  for (const s of ['starter team', 'Challenger', 'Scout', 'Builder', 'Researcher', 'asks the Challenger to check important work', 'A starter you delete is not set up again', 'Full, Light or Off in Settings → Agents → Tuning (Team guidance)']) assert.ok(sec.includes(s), s);   // menu split (gear = what you set, ⋯ = what you do): was "in the More menu (Team guidance)"
   assert.doesNotMatch(welcome + help, /\uFE0F/u);
 });
 

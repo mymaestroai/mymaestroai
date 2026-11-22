@@ -647,7 +647,7 @@
       if (!me || me.isAdmin) return;
       document.body.classList.add('member-view');
       // Every item of the ⋯ menu is an admin control, so the whole menu goes (more-wrap), not just its rows.
-      for (const id of ['more-modules-item', 'more-remote-item', 'comms-btn', 'wallet-btn', 'dream-btn', 'git-sync-btn', 'restart-hub-btn', 'more-advanced', 'advanced-toggle',
+      for (const id of ['more-modules-item', 'more-remote-item', 'wallet-btn', 'dream-btn', 'git-sync-btn', 'restart-hub-btn',
                         'settings-btn', 'schedule-btn', 'credit-meter', 'spend-today', 'plan-warn', 'hub-halt-bar', 'halt-btn', 'more-wrap', 'update-chip']) {
         const el = document.getElementById(id);
         if (!el) continue;
@@ -3340,9 +3340,9 @@
       { id: 'security', title: '🔐 Security', sections: ['st-security-section'] },
       { id: 'backups', title: '💾 Backups', sections: ['st-backups-section'] },
       { id: 'models', title: '🧠 AI models', sections: ['st-prov-section', 'st-or-section', 'st-subs-section', 'st-plan-section', 'st-local-models-section', 'st-classifier-section'] },
-      { id: 'agents', title: '🤖 Agents', sections: ['st-defaults-section', 'st-workers-section', 'st-sb-section', 'st-lb-section', 'st-mp-section', 'st-approvals-section', 'st-chat-section'] },
+      { id: 'agents', title: '🤖 Agents', sections: ['st-defaults-section', 'st-workers-section', 'st-sb-section', 'st-lb-section', 'st-mp-section', 'st-approvals-section', 'st-chat-section', 'st-tuning-section'] },
       { id: 'notify', title: '🔔 Notifications', sections: ['st-notify-section'] },
-      { id: 'tools', title: '🧰 Tools and data', sections: ['st-ws-section', 'st-voice-section', 'st-cx-section', 'st-modules-section'] },
+      { id: 'tools', title: '🧰 Tools and data', sections: ['st-ws-section', 'st-voice-section', 'st-comms-section', 'st-cx-section', 'st-modules-section'] },
       { id: 'money', title: '💰 Money and safety', sections: ['st-spend-section', 'st-emergency-section'] },
     ];
     const stSumParts = {};   // group -> { key: { text, crit } }: the one-line summary on each group's header
@@ -3687,6 +3687,10 @@
       html += voiceSettingsHtml(data);
       setTimeout(voiceSettingsInit, 0);
       // Data connectors (lib/modules): outside services with a guided setup live on their own page.
+      // Messaging channels (moved from the ⋯ menu): the existing panel, opened over Settings with its own saves
+      html += `<div class="st-section" id="st-comms-section"><h4>Messaging channels</h4>
+        <div class="st-hint">Telegram and other messaging apps: which agents use each channel, who may write to them, and a test message. <button class="st-test-btn" onclick="openCommsPanel()">Open messaging channels</button></div>
+      </div>`;
       html += `<div class="st-section" id="st-modules-section"><h4>Data connectors</h4>
         <div class="st-hint">Connect outside services such as Google Drive and Oura, with a guided setup. <button class="st-test-btn" onclick="location.href='/modules'">Open Data connectors</button></div>
       </div>`;
@@ -3808,6 +3812,9 @@
         <div class="st-hint">A notification when an agent's question (or an approval) is still unanswered after this long. Finished replies notify only when you click 🔔 Notify me next to Cancel while the reply is running.</div>
         <div id="st-research-pref" role="group" aria-label="Deep research" hidden></div>
         <div id="st-notify-mine" role="group" aria-label="Your notifications"><div class="st-hint" style="margin-left:0">Loading…</div></div>
+        <div class="st-row" id="st-notify-agent" data-no-dirty><label for="st-nb-agent">For an agent</label><select id="st-nb-agent" onchange="stNotifyAgentPaint()"></select></div>
+        <div class="st-hint">Which notifications one agent may send you; the 🔔 next to its chat does the same. Each choice is saved as you make it.</div>
+        <div id="st-nb-agent-box" class="st-nb-box" data-no-dirty></div>
       </div>`;
         setTimeout(loadNotifySettings, 0);
         setTimeout(() => { typeof researchPrefLoad === 'function' && researchPrefLoad(); }, 0);
@@ -3824,6 +3831,12 @@
         <div class="st-hint">This browser only. Agents that are working right now also appear in an Active section at the top of the list; off shows the list exactly as before.</div>
         ${simpleAccountOk(window.hubMe) ? `<div class="st-row"><button type="button" id="st-switch-simple" onclick="simpleSwitchMode('simple')">Switch to Simple</button></div>
         <div class="st-hint">The calm view: just the conversation, with the tools and settings out of sight. You can switch back here.</div>` : ''}
+      </div>`;
+
+      // Tuning (moved from the ⋯ menu): the controls in #st-tuning-body, wired at page load, are placed here (stTuningMount)
+      html += `<div class="st-section" id="st-tuning-section"><h4>Tuning</h4>
+        <div class="st-hint" style="margin-left:0">How each agent turn is put together: pre-scan, lazy tools, SDK workers, team guidance, terse replies, reply length and message history. Each one is saved as you change it.</div>
+        <div id="st-tuning-slot"></div>
       </div>`;
 
       html += `<div class="st-section" id="st-emergency-section"><h4>Emergency</h4>
@@ -4003,6 +4016,7 @@
       </div>`;
 
       stModal(html);
+      stTuningMount(); stNotifyAgentFill();   // the moved tuning controls and the per-agent notification choices
       groupSettings(data);
       paintDesktopPush();
       paintPacingSettings();
@@ -5940,11 +5954,52 @@
       } catch { /* the cached values stay */ }
     }
 
-    // ⋯ header menu, "Notifications for this agent": opens the bell menu of the chat on screen.
-    function notifyBellOpenVisible() {
-      const id = typeof activeChat !== 'undefined' ? activeChat : null;
-      if (id && document.getElementById(`notify-bell-${id}`)) { notifyBellToggle(id); return; }
-      hubToast('Open a chat with an agent first.');
+    // Settings → Notifications → "For an agent" (moved from the ⋯ menu): the bell's own choices and saves for any agent,
+    // the chat on screen first (on the phone's Settings sheet, the chat the phone has open: ?agent=).
+    let stNotifyAgentWanted = '';
+    function stNotifyAgentFill() {
+      const sel = document.getElementById('st-nb-agent');
+      if (!sel) return;
+      const list = (Array.isArray(AGENTS) ? AGENTS : []).filter((a) => a && a.name);
+      const onScreen = typeof activeChat !== 'undefined' && activeChat && chats[activeChat] ? chats[activeChat].agent : '';
+      const want = [onScreen, stNotifyAgentWanted].find((n) => n && list.some((a) => a.name === n)) || (list[0] && list[0].name) || '';
+      sel.innerHTML = list.map((a) => `<option value="${esc(a.name)}"${a.name === want ? ' selected' : ''}>${esc(a.display || capName(a.name))}</option>`).join('');
+      stNotifyAgentPaint();
+    }
+    function stNotifyAgentPaint() {
+      const sel = document.getElementById('st-nb-agent'), box = document.getElementById('st-nb-agent-box');
+      if (!sel || !box) return;
+      const agent = sel.value;
+      if (!agent) { box.textContent = ''; return; }
+      const a = (AGENTS || []).find((x) => x && x.name === agent);
+      const display = (a && a.display) || capName(agent);
+      box.dataset.agent = agent;
+      box.innerHTML = notifyBellMenuHtml(agent, display).replace(' id="notify-bell-title"', '');
+      if (!box.__nbBound) {   // one listener: the same save as the bell
+        box.__nbBound = true;
+        box.addEventListener('change', async (e) => {
+          const s2 = e.target.closest('select[data-nb-kind]'); if (!s2) return;
+          const who = box.dataset.agent, whoA = (AGENTS || []).find((x) => x && x.name === who), name = (whoA && whoA.display) || capName(who);
+          const kind = s2.dataset.nbKind;
+          s2.disabled = true;
+          try {
+            await notifyPrefsRequest('PUT', { agent: who, prefs: { [kind]: s2.value === '' ? null : s2.value } });
+            hubToast(`${name}: ${(NOTIFY_AGENT_KINDS.find(k => k[0] === kind) || [0, kind])[1]} ${s2.value === '' ? 'follows your default' : notifyModeLabel(s2.value)}.`);
+          } catch (err) { hubToast('Could not save: ' + err.message); }
+          finally { s2.disabled = false; }
+          if (box.dataset.agent === who) stNotifyAgentPaint();
+        });
+      }
+      notifyPrefsLoad().then(() => { if (box.isConnected && box.dataset.agent === agent && !box.contains(document.activeElement)) box.innerHTML = notifyBellMenuHtml(agent, display).replace(' id="notify-bell-title"', ''); }).catch(() => {});
+    }
+    // Settings → Agents → Tuning (moved from the ⋯ menu): the controls keep their page-load wiring; the one block moves in.
+    function stTuningMount() {
+      const body = document.getElementById('st-tuning-body') || stTuningMount.body;
+      const slot = document.getElementById('st-tuning-slot');
+      if (!body || !slot) return;
+      stTuningMount.body = body;   // kept: the block leaves the document with the dialog and comes back on the next open
+      body.hidden = false;
+      slot.appendChild(body);
     }
 
     // Presence: tells the hub whether any page of this person is in front, so "Only when I'm away" can be judged.
@@ -7014,16 +7069,13 @@
     // v5.1: All requests go through multi-provider LLM routing
 
     // ── "⋯" header menu ──
-    // The rarely used header actions (messaging, wallets, dream, update, restart) live in a
-    // dropdown under #more-btn; the tuning controls (pre-scan, lazy tools, SDK workers, terse,
-    // reply length, message history) sit in an "Advanced" section of the same menu that only
-    // shows when the "Advanced controls" checkbox is on (localStorage 'hub-advanced', default off).
-    // The controls stay in the DOM either way so the wiring below keeps working.
+    // Things you do or open right now (About, Reload, Data connectors, Remote computers, Recordings, Wallets, Dream, Update,
+    // Restart) live in a dropdown under #more-btn; what you set is in Settings (gear). The tuning controls wired below sit in
+    // #st-tuning-body, which Settings → Agents → Tuning shows (stTuningMount); notifications for an agent and messaging
+    // channels are in Settings too, and the menu's last line says so.
     const moreBtn = document.getElementById('more-btn');
     const moreMenu = document.getElementById('more-menu');
     const moreWrap = document.getElementById('more-wrap');
-    const advancedToggle = document.getElementById('advanced-toggle');
-    const ADVANCED_KEY = 'hub-advanced';
     function isMoreMenuOpen() { return !!(moreMenu && moreMenu.classList.contains('open')); }
     function openMoreMenu() {
       if (!moreMenu) return;
@@ -7039,22 +7091,7 @@
       if (refocus) moreBtn.focus();
     }
     function toggleMoreMenu() { if (isMoreMenuOpen()) closeMoreMenu(true); else openMoreMenu(); }
-    function applyAdvanced(on) {
-      if (moreMenu) moreMenu.classList.toggle('advanced', on);
-      if (moreBtn) {
-        moreBtn.classList.toggle('advanced', on);
-        moreBtn.title = on ? 'More options (advanced controls on)' : 'More options';
-      }
-      if (advancedToggle) advancedToggle.checked = on;
-    }
     if (moreMenu) {
-      applyAdvanced(localStorage.getItem(ADVANCED_KEY) === '1');
-      if (advancedToggle) {
-        advancedToggle.addEventListener('change', () => {
-          localStorage.setItem(ADVANCED_KEY, advancedToggle.checked ? '1' : '0');
-          applyAdvanced(advancedToggle.checked);
-        });
-      }
       // Clicking anywhere outside the button + menu closes it.
       document.addEventListener('click', (e) => {
         if (isMoreMenuOpen() && moreWrap && !moreWrap.contains(e.target)) closeMoreMenu();
@@ -22969,6 +23006,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         // the person's Simple colours (light or dark), as the page behind the sheet shows them; nothing of Simple starts
         try { if (window.hubSimple && window.hubMe) window.hubSimple.apply(window.hubMe); } catch { /* the default colours */ }
       } catch { /* offline: the dialog says it could not load */ }
+      try { stNotifyAgentWanted = new URLSearchParams(location.search).get('agent') || ''; } catch { /* none */ }   // the phone's open chat
       window.addEventListener('message', settingsOnlyMessage);
       // a member has no Settings dialog on the desktop either (the gear is an admin control and the hub refuses its routes)
       if (!isHubAdmin()) stModal(`<h3>&#x2699;&#xFE0F; Settings</h3><p class="st-sub">Settings are kept by the admins of this Maestro.</p><div class="st-actions"><button class="st-btn secondary" onclick="dialogRequestClose(this)">Close</button></div>`);

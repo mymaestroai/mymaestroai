@@ -70,10 +70,16 @@ test('Security dialog covers 2FA enrol / disable, password change and sign out e
 
 test('members: admin surfaces are hidden and approvals / Resume buttons are not rendered', () => {
   assert.match(app, /function applyMemberView\(\) \{[^]*?if \(!me \|\| me\.isAdmin\) return;/);
-  for (const id of ['comms-btn', 'wallet-btn', 'dream-btn', 'git-sync-btn', 'restart-hub-btn', 'advanced-toggle', 'settings-btn', 'schedule-btn', 'spend-today', 'more-wrap']) {
+  // menu split (gear = what you set, ⋯ = what you do): comms-btn and advanced-toggle left the ⋯ menu; the whole menu (more-wrap) is still hidden for members
+  for (const id of ['wallet-btn', 'dream-btn', 'git-sync-btn', 'restart-hub-btn', 'settings-btn', 'schedule-btn', 'spend-today', 'more-wrap']) {
     assert.ok(app.includes(`'${id}'`), `${id} is hidden for members`);
     assert.ok(html.includes(`id="${id}"`), `${id} exists in index.html`);
   }
+  // their new homes are in Settings, an admin's: a member gets only a plain line instead of the dialog
+  for (const id of ['comms-btn', 'advanced-toggle', 'notify-agent-item']) assert.ok(!html.includes(`id="${id}"`), `${id} is no longer in the ⋯ menu`);
+  assert.ok(html.includes('id="more-moved-item"'), 'the ⋯ menu points to Settings');
+  assert.ok(app.includes('id="st-comms-section"') && app.includes('id="st-tuning-section"') && app.includes('id="st-notify-agent"'), 'the moved items are Settings sections');
+  assert.match(app, /if \(!isHubAdmin\(\)\) stModal\(`<h3>&#x2699;&#xFE0F; Settings<\/h3><p class="st-sub">Settings are kept by the admins of this Maestro\.<\/p>/);
   // The ⋯ menu as a whole, the Tiger Team and Guide tabs and the tab strip are hidden for members.
   assert.match(app, /for \(const t of \['group-chat', 'guide'\]\)/);
   assert.match(app, /document\.querySelector\('\.sidebar \.tabs'\)[^]*?style\.display = 'none'/);

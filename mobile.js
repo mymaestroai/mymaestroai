@@ -2186,7 +2186,7 @@ async function researchPrefLoad() {
 }
 function researchPrefPaintAll() {
   const row = $('menu-research');
-  if (row) { row.hidden = !researchPrefOn; row.textContent = researchMenuText(researchPrefChoice, researchPrefLevel); }
+  if (row) { row.hidden = !researchPrefOn || !!(hubMe && hubMe.isAdmin); row.textContent = researchMenuText(researchPrefChoice, researchPrefLevel); }   // an admin's is in Settings → Notifications
   typeof menuGroupsSync === 'function' && menuGroupsSync();
   const sh = $('research-sheet');
   if (sh && sh.open) researchSheetPaint();
@@ -13738,6 +13738,9 @@ function applyMultiUser() {
     if ($('menu-wallet')) $('menu-wallet').hidden = !hubMe.isAdmin;   // admins only
     if ($('menu-profile')) $('menu-profile').hidden = !hubMe.user;
     if ($('menu-settings')) $('menu-settings').hidden = !hubMe.isAdmin;   // admins only, as the desktop's Settings (the hub refuses its routes to members)
+    // what an admin sets is in Settings (Notifications: yours, for an agent, deep research); a member keeps them here, their only home
+    for (const id of ['menu-notify-prefs', 'menu-notify-agent']) if ($(id)) $(id).hidden = !!hubMe.isAdmin;
+    researchPrefPaintAll();
     $('menu-2fa-note').hidden = !(hubMe.isAdmin && !hubMe.user.totpEnabled && hubMe.admin2faRequired !== false);
     $('menu-signout').textContent = `Sign out (${hubMe.user.name || hubMe.user.login})`;
   }
@@ -14174,7 +14177,8 @@ function settingsSheetLoad() {
   s.el.querySelector('.ssh-stuck').hidden = true;
   clearTimeout(s.timer);
   s.timer = setTimeout(settingsSheetFailed, SETTINGS_SHEET_WAIT_MS);
-  s.frame.src = SETTINGS_SHEET_URL;
+  // the chat this phone has open: Settings → Notifications → "For an agent" starts on it
+  s.frame.src = SETTINGS_SHEET_URL + (typeof current === 'string' && current ? '&agent=' + encodeURIComponent(current) : '');
 }
 // Nothing came back in time (offline, the hub down): a plain message with a retry, never a blank screen.
 function settingsSheetFailed() {

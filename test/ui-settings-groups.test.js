@@ -34,7 +34,9 @@ test('nine groups, and every section openSettings draws belongs to exactly one o
   assert.ok(vAt > 0 && settingsSource(app).includes('html += voiceSettingsHtml(data);'), 'Voices is drawn by openSettings');
   const src = settingsSource(app) + app.slice(vAt, app.indexOf('function voicePaintSettings(', vAt));
   const drawn = [...src.matchAll(/class="st-section" id="(st-[a-z0-9-]+-section)"/g)].map(m => m[1]);
-  assert.strictEqual(drawn.length, 30, 'all 30 sections carry an id');
+  // menu split (gear = what you set, ⋯ = what you do): 30 + st-tuning-section and st-comms-section
+  assert.strictEqual(drawn.length, 32, 'all 32 sections carry an id');
+  assert.ok(drawn.includes('st-tuning-section') && drawn.includes('st-comms-section'));
   assert.doesNotMatch(src, /class="st-section">/, 'no section without an id');
   const grouped = groups.flatMap(g => g.sections);
   assert.strictEqual(new Set(grouped).size, grouped.length, 'no section in two groups');
@@ -47,11 +49,14 @@ test('nine groups, and every section openSettings draws belongs to exactly one o
   assert.ok(byId.models.includes('st-plan-section') && byId.models.includes('st-or-section') && byId.models.includes('st-prov-section'));
   assert.ok(byId.agents.includes('st-sb-section') && byId.agents.includes('st-approvals-section'));
   assert.ok(byId.tools.includes('st-ws-section') && byId.tools.includes('st-cx-section'));
+  assert.deepStrictEqual(byId.agents.slice(-2), ['st-chat-section', 'st-tuning-section'], 'Tuning follows Chat in Agents');
+  assert.deepStrictEqual(byId.tools.slice(1, 3), ['st-voice-section', 'st-comms-section'], 'Messaging channels follows Voice in Tools and data');
 });
 
 test('the panel is grouped right after it is drawn; groups start closed unless this browser left them open', () => {
   const app = read('app.js');
-  assert.match(settingsSource(app), /stModal\(html\);\s*groupSettings\(data\);/);
+  // menu split (gear = what you set, ⋯ = what you do): the moved tuning block and the per-agent notifications are filled in between drawing and grouping
+  assert.match(settingsSource(app), /stModal\(html\);\s*stTuningMount\(\); stNotifyAgentFill\(\);[^\n]*\n\s*groupSettings\(data\);/);
   assert.match(app, /localStorage\.getItem\('hub-settings-open'\)/);
   assert.match(app, /localStorage\.setItem\('hub-settings-open', JSON\.stringify\(open\)\)/);
   assert.match(app, /<details class="st-group" id="st-group-\$\{g\.id\}" data-group="\$\{g\.id\}"\$\{saved\[g\.id\] \? ' open' : ''\}>/);

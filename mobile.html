@@ -1381,14 +1381,21 @@ html.mm-simple #simple-side { display: none; }
   <div id="menu">
     <div id="menu-credit" hidden></div>
     <div id="menu-2fa-note" hidden>Two-factor is required for admins: set it up under Security</div>
-    <button id="menu-look" aria-expanded="false" aria-controls="menu-look-pick" hidden><span>&#x1F3A8; Interface style</span><span id="menu-look-name" class="menu-version" aria-hidden="true"></span></button>
-    <div id="menu-look-pick" hidden></div>
     <button id="menu-simple">Switch to Simple</button>
-    <button id="menu-notify">&#x1F514; Notifications</button>
     <button id="menu-files">&#x1F4C1; Files</button>
     <button id="menu-reload">&#x21BB; Reload app</button>
     <button id="menu-profile">&#x1F464; Profile</button>
     <button id="menu-settings">&#x2699; Settings</button>
+    <!-- This device: how this phone shows things and what it does; what you set for the hub is in Settings (admins) -->
+    <div class="menu-group" data-group="device" role="group" aria-labelledby="menu-gt-device">
+      <div class="menu-group-title" id="menu-gt-device">This device</div>
+      <button id="menu-look" aria-expanded="false" aria-controls="menu-look-pick" hidden><span>&#x1F3A8; Interface style</span><span id="menu-look-name" class="menu-version" aria-hidden="true"></span></button>
+      <div id="menu-look-pick" hidden></div>
+      <button id="menu-notify">&#x1F514; Notifications</button>
+      <button id="menu-notify-test" hidden>&#x1F4E8; Send a test notification</button>
+      <button id="menu-fold" class="chat-only">&#x21C5; Fold automatic turns: On</button>
+      <button id="menu-active-top">⬆ Active agents at the top: On</button>
+    </div>
     <!-- The Advanced row starts hidden and its items shown: mobile.js reveals the row and folds them, so a page with an older cached mobile.js still shows every item. -->
     <button id="menu-adv-toggle" aria-expanded="true" aria-controls="menu-adv" hidden><span>Advanced</span><span class="menu-adv-end" aria-hidden="true"><span class="menu-adv-dot" hidden></span><span class="menu-adv-chev">&#x25BE;</span></span></button>
     <div id="menu-adv">
@@ -1397,7 +1404,6 @@ html.mm-simple #simple-side { display: none; }
       <button id="menu-agentwork" class="chat-only">&#x1F9F0; Show agent work</button>
       <button id="menu-recall" class="chat-only">&#x1F50E; Recall</button>
       <button id="menu-copy" class="chat-only">&#x29C9; Copy whole chat</button>
-      <button id="menu-fold" class="chat-only">&#x21C5; Fold automatic turns: On</button>
       <button id="menu-notify-agent" class="chat-only">&#x1F514; Notifications for this agent</button>
       <button id="menu-compact" class="chat-only">&#x2699; Compress now</button>
       <button id="menu-clear" class="danger chat-only">Clear chat / new session</button>
@@ -1414,11 +1420,9 @@ html.mm-simple #simple-side { display: none; }
       <button id="menu-wallet" hidden>&#x1F45B; Wallet</button>
     </div>
     <div class="menu-group" data-group="notify" role="group" aria-labelledby="menu-gt-notify">
-      <div class="menu-group-title" id="menu-gt-notify">Notifications and view</div>
+      <div class="menu-group-title" id="menu-gt-notify">Your notifications</div>
       <button id="menu-notify-prefs">&#x1F514; Notification settings&hellip;</button>
       <button id="menu-research" hidden>Deep research: Ask each time</button>
-      <button id="menu-notify-test" hidden>&#x1F4E8; Send a test notification</button>
-      <button id="menu-active-top">⬆ Active agents at the top: On</button>
     </div>
     <div class="menu-group" data-group="account" role="group" aria-labelledby="menu-gt-account">
       <div class="menu-group-title" id="menu-gt-account">Account and help</div>

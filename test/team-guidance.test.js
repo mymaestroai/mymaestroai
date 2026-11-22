@@ -292,9 +292,11 @@ test('first-run seeding writes the marker, so a fresh install is never migrated'
 });
 
 // ── pages ──
-test('the pages carry the controls: the more-menu select, and the two agent-settings rows', () => {
+test('the pages carry the controls: the Settings tuning select, and the two agent-settings rows', () => {
   const idx = read('index.html'), app = read('app.js'), as = read('agent-settings.html');
-  assert.match(idx, /id="sdk-workers-select"[\s\S]*?<\/div>\s*<div class="more-row">\s*<label class="toggle-switch"[^>]*title="How agents are told to run a team:[\s\S]*?id="team-guidance-select"[\s\S]*?value="full">Full<[\s\S]*?value="light">Light<[\s\S]*?value="off">Off</);
+  // menu split (gear = what you set, ⋯ = what you do): the select moved from the ⋯ menu into #st-tuning-body, right after SDK workers
+  assert.match(idx, /<div id="st-tuning-body" data-no-dirty hidden>[\s\S]*?id="sdk-workers-select"[\s\S]*?<\/div>\s*<div class="st-hint">[^<]*<\/div>\s*<div class="st-row"><label for="team-guidance-select">Team guidance<\/label><select id="team-guidance-select">[\s\S]*?value="full">Full<[\s\S]*?value="light">Light<[\s\S]*?value="off">Off</);
+  assert.doesNotMatch(idx.slice(idx.indexOf('id="more-menu"'), idx.indexOf('id="st-tuning-body"')), /team-guidance-select/);
   // Review r1: the save moved into bindTeamGuidanceSelect (one save at a time, the stored value put back on failure); its behaviour is tested below.
   assert.match(app, /doFetch\('\/api\/team_guidance', \{ method: 'POST'[^}]*\}[^)]*body: JSON\.stringify\(\{ level: want \}\)/);
   assert.match(app, /if \(teamGuidanceSelect\) bindTeamGuidanceSelect\(teamGuidanceSelect, /);
