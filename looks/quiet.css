@@ -371,6 +371,8 @@ html[data-look="quiet"]:not(.mm-simple) {
   --meter-warn: #C99A1A;
   --meter-ok: #3F8F5C;
   --mic-rec: #C4382F;
+  --voice-listening: #2A724A;   /* the look's own green (--success): white text 5.8:1 */
+  --on-voice-listening: #FFFFFF;
   --more-btn-more-badge-bg: rgba(63,107,77,0.16);
   --more-btn-more-badge-border: rgba(63,107,77,0.45);
   --plan-warn-border: rgba(135,99,0,0.35);

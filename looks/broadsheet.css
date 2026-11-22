@@ -358,6 +358,8 @@ html[data-look="broadsheet"]:not(.mm-simple) {
   --meter-warn: #B58900;
   --meter-ok: #2E7D4F;
   --mic-rec: #B42318;
+  --voice-listening: #1F6B45;   /* the look's own green (--success): white text 6.47:1 */
+  --on-voice-listening: #FFFFFF;
   --more-btn-more-badge-bg: rgba(155,41,40,0.14);
   --more-btn-more-badge-border: rgba(155,41,40,0.5);
   --plan-warn-border: rgba(125,95,0,0.4);
