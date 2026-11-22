@@ -23240,6 +23240,10 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       // of the attribute and the box is placed right after the element, so no marker text is left and no HTML lands in an attribute.
       const codeMarkRe = new RegExp(MARK + 'C\\d+~', 'g');
       const pullCode = (s) => { const held = []; const clean = String(s).replace(codeMarkRe, (m) => { held.push(m); return ''; }); return { clean, held: held.join('') }; };
+      // A link URL: image markers go out with the code markers (the image pass resolves them after the </a>).
+      const attrMarkRe = new RegExp(MARK + '[IC]\\d+~', 'g');
+      const imageMarkRe = new RegExp(MARK + 'I(\\d+)~', 'g');
+      const pullAttrMarks = (s) => { const held = []; const clean = String(s).replace(attrMarkRe, (m) => { held.push(m); return ''; }); return { clean, held: held.join('') }; };
       const visualTokens = [];
       // Every other closed fence is held out the same way (C tokens): its code is escaped here and built into a
       // code box with its own copy button (lib/ui-code-copy.js), so the text a reader copies is the source byte for
@@ -23332,14 +23336,21 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
 
       // Re-insert extracted links BEFORE images: only http(s), mailto and same-origin paths; everything escaped. A link's
       // text can hold an image marker; it is resolved by the image pass below, inside the <a>.
+      // A code box never ends up inside a link: code markers in the link text and image / code markers in the URL are pulled out and
+      // placed after the closing </a>, and so are the boxes held by an image inside the link text (the image stays in the link).
       for (let i = 0; i < linkTokens.length; i++) {
-        const { text } = linkTokens[i];
-        const pu = pullCode(linkTokens[i].url);
+        const pt = pullCode(linkTokens[i].text);
+        const pu = pullAttrMarks(linkTokens[i].url);
         const u = safeLinkUrl(pu.clean);
-        const eText = escapeHtml(text);
+        const eText = escapeHtml(pt.clean);
+        let after = pt.held + pu.held;
+        for (const im of pt.clean.matchAll(imageMarkRe)) {
+          const tok = imageTokens[Number(im[1])];
+          if (tok && tok.held) { after += tok.held; tok.held = ''; }
+        }
         const linkTag = (u
           ? `<a href="${escapeHtml(u)}" target="_blank" rel="noopener noreferrer" style="color: var(--link); text-decoration: underline;">${eText}</a>`
-          : `<code>[blocked link: ${eText}]</code>`) + pu.held;
+          : `<code>[blocked link: ${eText}]</code>`) + after;
         formatted = formatted.replace(mk('L', i), () => linkTag);
       }
 

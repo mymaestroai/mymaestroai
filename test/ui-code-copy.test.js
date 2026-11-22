@@ -658,6 +658,62 @@ for (const [name, src] of Object.entries(PAGES)) {
     assert.strictEqual(buttons(b), 1, b);
     assert.deepStrictEqual(codeTexts(b), ['x\n']);
     assert.ok(!/m[a-z0-9]{8,}[A-Z]\d+~/.test(b), 'no marker left: ' + b);
-    assert.match(b, /<a [^>]*href="\/gallery"[^>]*>[\s\S]*<img[\s\S]*code-copy[\s\S]*<\/a>/, 'img and box inside the link: ' + b);
+    assert.match(b, /<a [^>]*href="\/gallery"[^>]*>[\s\S]*<img[\s\S]*<\/a>/, 'img inside the link: ' + b);
+    assert.ok(!/<a [^>]*>(?:(?!<\/a>)[\s\S])*code-box/.test(b), 'box not inside the link: ' + b);
+    assert.match(b, /<\/a><div class="code-box">/, 'box follows the link: ' + b);
   });
 }
+
+// ---- review round 4 ----
+
+for (const [name, src] of Object.entries(PAGES)) {
+  test(`${name}: a code box is never inside a link (fence in link text, or in an image inside the link text)`, () => {
+    const f = renderer(src);
+    const inLink = (h) => /<a [^>]*>(?:(?!<\/a>)[\s\S])*code-box/.test(h);
+    const a = f('[see ```\nls\n``` here](/x)');
+    assert.strictEqual(buttons(a), 1, a);
+    assert.ok(!inLink(a), a);
+    assert.match(a, /<\/a>\s*<div class="code-box">/, a);
+    assert.deepStrictEqual(codeTexts(a), ['ls\n']);
+    assert.ok(!/m[a-z0-9]{8,}[A-Z]\d+~/.test(a), 'no marker left: ' + a);
+    const b = f('[![photo](/img/```\nx\n```.png)](/gallery)');
+    assert.strictEqual(buttons(b), 1, b);
+    assert.ok(!inLink(b), b);
+    assert.match(b, /<a [^>]*><[^>]*img[^>]*><\/a>(?:<[^>]*>)*\s*<div class="code-box">|<a [^>]*>[\s\S]*<img[\s\S]*<\/a>\s*<div class="code-box">/, b);
+  });
+
+  test(`${name}: an image marker in a link URL is pulled out: no '<' in any href, no marker left, the images render`, () => {
+    const f = renderer(src);
+    for (const md of ['[t](![a](/b.png))', '[![a](/b.png)](![c](/d.png))']) {
+      const h = f(md);
+      for (const m of h.matchAll(/href="([^"]*)"/g)) assert.ok(!m[1].includes('<'), 'no < in href: ' + h);
+      assert.ok(!/m[a-z0-9]{8,}[A-Z]\d+~/.test(h), 'no marker left: ' + h);
+      assert.ok(/<img /.test(h), 'image rendered: ' + h);
+      assert.strictEqual((h.match(/<img /g) || []).length, (md.match(/!\[/g) || []).length, h);
+    }
+  });
+}
+
+test('pointer ids: a release by another pointer on the replacement does not copy; the same pointer does', async () => {
+  const d = fakeDom('unused');
+  const host = redrawHost(['one', 'two', 'three']);
+  let clock = 0;
+  const got = [];
+  const h = CC.makeClickHandler({ document: d.doc, now: () => clock, copy: async (t) => { got.push(t); return true; }, setTimeout: () => 1, clearTimeout() {} });
+  const on = (b, pointerId) => Object.assign(evOn({ closest: (s) => (s === '.code-copy' ? b : null) }), { pointerId });
+  const nowhere = () => evOn({ closest: () => null });
+  h.pointerDown(on(host.buttons[1], 1)); host.redraw(); clock = 100; h.pointerUp(on(host.buttons[1], 2));
+  const e1 = nowhere();
+  assert.strictEqual(h(e1), undefined);
+  assert.ok(!e1.prevented); assert.deepStrictEqual(got, []);
+  // a new press clears the earlier release record: a lone press with no release copies nothing
+  h.pointerDown(on(host.buttons[1], 1)); h.pointerUp(on(host.buttons[1], 1));
+  h.pointerDown(on(host.buttons[1], 3)); host.redraw();
+  assert.strictEqual(h(nowhere()), undefined);
+  assert.deepStrictEqual(got, []);
+  // the same pointer: copies
+  clock = 200;
+  h.pointerDown(on(host.buttons[1], 5)); host.redraw(); clock = 300; h.pointerUp(on(host.buttons[1], 5));
+  const e2 = nowhere(); await h(e2);
+  assert.deepStrictEqual(got, ['two']); assert.ok(e2.prevented);
+});

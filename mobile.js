@@ -1009,6 +1009,10 @@ function formatContent(content) {
   // attribute and the box is placed right after the element, so no marker text is left and no HTML lands in an attribute.
   const codeMarkRe = new RegExp(MARK + 'C\\d+~', 'g');
   const pullCode = (s) => { const held = []; const clean = String(s).replace(codeMarkRe, (mm) => { held.push(mm); return ''; }); return { clean, held: held.join('') }; };
+  // A link URL: image markers go out with the code markers (the image pass resolves them after the </a>).
+  const attrMarkRe = new RegExp(MARK + '[IC]\\d+~', 'g');
+  const imageMarkRe = new RegExp(MARK + 'I(\\d+)~', 'g');
+  const pullAttrMarks = (s) => { const held = []; const clean = String(s).replace(attrMarkRe, (mm) => { held.push(mm); return ''; }); return { clean, held: held.join('') }; };
   const visuals = [];
   // Every other closed fence is held out the same way (C tokens): escaped here and built into a code box with its own
   // copy button (lib/ui-code-copy.js), so the copied text is the source byte for byte (the browser normalises line endings to LF; no bold, no <br> inside).
@@ -1065,9 +1069,17 @@ function formatContent(content) {
   tables.forEach((t, i) => { out = out.replace(mk('T', i), () => t); });
   // Links BEFORE images: a link's text can hold an image marker, resolved by the image pass inside the <a>.
   links.forEach((l, i) => {
-    const pu = pullCode(l.url);
+    // A code box never ends up inside a link: code markers in the text and image / code markers in the URL go after </a>, and so do
+    // the boxes held by an image inside the text (the image stays in the link).
+    const pt = pullCode(l.label);
+    const pu = pullAttrMarks(l.url);
     const u = safeLinkUrl(pu.clean);
-    const tag = (u ? `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(l.label)}</a>` : `<code>[blocked link: ${esc(l.label)}]</code>`) + pu.held;
+    let after = pt.held + pu.held;
+    for (const im of pt.clean.matchAll(imageMarkRe)) {
+      const tok = images[Number(im[1])];
+      if (tok && tok.held) { after += tok.held; tok.held = ''; }
+    }
+    const tag = (u ? `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(pt.clean)}</a>` : `<code>[blocked link: ${esc(pt.clean)}]</code>`) + after;
     out = out.replace(mk('L', i), () => tag);
   });
   images.forEach((im, i) => {
