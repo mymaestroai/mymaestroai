@@ -43,6 +43,7 @@ function make(over = {}) {
       if (over.hook) over.hook(w.label);
       const m = /^Lead step (\d+)/.exec(w.label);
       if (/^Research \d+$/.test(w.label)) text = `Finding for ${w.label}. Method A scored 56.4%.\nSOURCES READ:\n- ${URL_A}`;
+      else if (w.label === 'Lead search') text = typeof over.searchReply === 'function' ? over.searchReply(w) : (over.searchReply === undefined ? '{"results":[]}' : over.searchReply);
       else if (w.label === 'First pass summary') text = over.firstPass === undefined ? `## Verdict\nMethod A wins.` : over.firstPass;
       else if (m) {
         const step = Number(m[1]);
@@ -429,4 +430,71 @@ test('r2-5: kept is read again when the launcher dispatches (admit): a policy sw
   await delivered(m, r.id);
   assert.deepStrictEqual(dispatched, [], 'the reviewer was never dispatched');
   assert.match(seen[0], /refused: this agent's content must stay on its own service/);
+});
+
+// ================================================================ run-1 fixes
+const SEARCH_REPLY = 'Here you go:\n```json\n{"results":[{"title":"Worker One","url":"https://w.example/one","snippet":"s1"},{"title":"No link","url":"ftp://w.example/two","snippet":"s2"},{"title":"Worker Three","url":"https://w.example/three","snippet":"s3"}]}\n```';
+const searchLead = (seen) => [act({ type: 'search', query: 'method comparison' }), (t) => { seen.push(t); return act({ type: 'show_draft' }); }, act({ type: 'finish', summary: 'at the ceiling', open_points: ['x'] })];
+
+test('run1-2: the hub search finds nothing: one search worker (tools read, label Lead search, the helper model); its http(s) links reach FOUND; the line says which search answered', async () => {
+  const seen = [];
+  const m = make({ lead: searchLead(seen), settings: { leadSteps: 2 }, searchReply: SEARCH_REPLY, deps: { search: async () => [] } });
+  const r = startThorough(m);
+  await delivered(m, r.id);
+  const w = m.calls.filter((c) => c.label === 'Lead search');
+  assert.deepStrictEqual(w, [{ label: 'Lead search', model: FAST, tools: 'read' }]);
+  assert.match(seen[0], /FOUND \(not opened yet\)[\s\S]*https:\/\/w\.example\/one \| Worker One\nhttps:\/\/w\.example\/three \| Worker Three/);
+  assert.ok(!seen[0].includes('ftp://'), 'only http(s) links are kept');
+  assert.match(seen[0], /2 results \(2 new in FOUND; answered by the search worker\)/);
+  assert.strictEqual(m.runner.get(r.id).leadCounts.searchWorkers, 1);
+  assert.ok(m.runner.get(r.id).leadCounts.replyChars >= SEARCH_REPLY.length, 'the worker\'s characters are counted');
+});
+
+test('run1-2: the hub search throws: the worker answers; the hub search has results: no worker is called', async () => {
+  const seen = [];
+  const m = make({ lead: searchLead(seen), settings: { leadSteps: 2 }, searchReply: SEARCH_REPLY, deps: { search: async () => { throw new Error('blocked'); } } });
+  const r = startThorough(m);
+  await delivered(m, r.id);
+  assert.strictEqual(m.calls.filter((c) => c.label === 'Lead search').length, 1);
+  assert.match(seen[0], /answered by the search worker/);
+  const seen2 = [];
+  const m2 = make({ lead: searchLead(seen2), settings: { leadSteps: 2 }, searchReply: SEARCH_REPLY });
+  const r2 = startThorough(m2);
+  await delivered(m2, r2.id);
+  assert.strictEqual(m2.calls.filter((c) => c.label === 'Lead search').length, 0);
+  assert.match(seen2[0], /1 results \(0 new in FOUND; answered by the hub search\)|1 results \(1 new in FOUND; answered by the hub search\)/);
+  assert.strictEqual(m2.runner.get(r2.id).leadCounts.searchWorkers, 0);
+});
+
+test('run1-2: a kept agent\'s search worker uses the agent\'s own model; a worker that fails says so in the result', async () => {
+  const own = { ...MODELS, lead: BIG, reader: BIG, readerTop: BIG, reviewers: [{ model: BIG, label: 'Same service' }] };
+  const seen = [];
+  const m = make({ lead: searchLead(seen), settings: { leadSteps: 2 }, searchReply: SEARCH_REPLY, models: own, deps: { keptOnBox: () => true, search: async () => [] } });
+  const r = startThorough(m);
+  await delivered(m, r.id);
+  assert.deepStrictEqual(m.calls.filter((c) => c.label === 'Lead search'), [{ label: 'Lead search', model: BIG, tools: 'read' }]);
+  const seen2 = [];
+  const m2 = make({ lead: searchLead(seen2), settings: { leadSteps: 2 }, searchReply: () => { throw new Error('no web'); }, deps: { search: async () => [] } });
+  const r2 = startThorough(m2);
+  await delivered(m2, r2.id);
+  assert.match(seen2[0], /search failed: the hub search found nothing and the search worker failed: no web/);
+});
+
+test('run1-4: a stopped run keeps its counts, models and stop reason on the record, and the salvaged report has the models line', async () => {
+  const lead = [act({ type: 'write_draft', markdown: 'Early draft [S1].' }), new Error('refused')];
+  const m = make({ lead });
+  const r = startThorough(m);
+  const msg = await delivered(m, r.id);
+  const run = m.runner.get(r.id);
+  assert.strictEqual(run.leadCounts.steps, 1);
+  assert.strictEqual(run.leadCeiling, 'refused');
+  assert.strictEqual(run.leadModels.lead, BIG);
+  assert.deepStrictEqual(run.leadModels.reviewers, [{ model: 'claude-sdk/claude-test-rev', label: 'Reviewer One' }]);
+  assert.match(msg, /Which model did what: lead claude-sdk\/claude-test-big \(the agent's own service\), readers claude-sdk\/claude-test-fast, top-tier reader claude-sdk\/claude-test-big, reviewers Reviewer One\./);
+  assert.match(msg, /Lead steps: 1\./);
+  // a normal finish keeps the models too
+  const ok = make();
+  const r2 = startThorough(ok);
+  await delivered(ok, r2.id);
+  assert.strictEqual(ok.runner.get(r2.id).leadModels.lead, BIG);
 });

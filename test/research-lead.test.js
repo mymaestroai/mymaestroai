@@ -1082,3 +1082,70 @@ test('r2-7: results go to results.md, state.json is compact and has no lastResul
   assert.ok(!('lastResults' in readState(old)));
   assert.ok(fs.readFileSync(path.join(old, 'results.md'), 'utf8').includes('[action 1: show_draft]'), 'results.md is the new step\'s now');
 });
+
+// ---------------------------------------------------------------- run-1 fixes
+test('run1-1: quick-pass links seed FOUND with their line as title; one opened, the other under "Also found"', async () => {
+  const URL_Q1 = 'https://example.org/a';
+  const URL_Q2 = 'https://example.org/b.';
+  const e = env({
+    reviewers: [],
+    lead: [
+      (p) => { e.firstPrompt = p; return { actions: [{ type: 'open', url: URL_Q1 }] }; },
+      { actions: [{ type: 'show_source', sid: 'S1', from: 0, chars: 5000 }, { type: 'write_draft', markdown: 'The new method is preferred [S1].' }, { type: 'check' }] },
+      { actions: [{ type: 'finish', summary: 'Done.' }] },
+    ],
+  });
+  const o = e.opts();
+  o.firstPass = `Quick summary.\n- Survey A says it wins: ${URL_Q1}`;
+  o.findingsText = `Helper 1 notes\nSee also ${URL_Q2} for the baseline ${URL_Q1}`;
+  const res = await L.runLead(o);
+  assert.match(e.firstPrompt, /FOUND \(not opened yet\)\nhttps:\/\/example\.org\/a \| - Survey A says it wins: https:\/\/example\.org\/a\nhttps:\/\/example\.org\/b \| See also/);
+  const state = JSON.parse(fs.readFileSync(path.join(e.dir, 'state.json'), 'utf8'));
+  assert.strictEqual(state.found.filter((f) => f.url.includes('example.org/a')).length, 1, 'deduped by the normalised link');
+  assert.ok(state.found.every((f) => f.title.length <= 150));
+  const [readPart, alsoPart] = res.markdown.split('## Also found, not read in full');
+  assert.ok(readPart.includes(URL_Q1));
+  assert.ok(alsoPart.includes('https://example.org/b'), 'the link never opened is listed');
+  assert.ok(alsoPart.includes('](https://example.org/b)') && !alsoPart.includes('](https://example.org/a)'));
+});
+
+test('run1-2: a search that names its answerer says so in the result line, and a search worker\'s characters are counted', async () => {
+  const e = env({ reviewers: [], lead: [{ actions: [{ type: 'search', query: 'x' }] }, () => { throw new Error('refused'); }] });
+  const o = e.opts();
+  o.deps.search = async (q, meter) => { meter.worker(100, 40); return Object.assign([{ title: 'T', url: URL_A, snippet: 's' }], { via: 'search worker' }); };
+  await assert.rejects(() => L.runLead(o), /refused/);
+  assert.match(fs.readFileSync(path.join(e.dir, 'results.md'), 'utf8'), /1 results \(1 new in FOUND; answered by the search worker\)/);
+  const counts = JSON.parse(fs.readFileSync(path.join(e.dir, 'state.json'), 'utf8')).counts;
+  assert.strictEqual(counts.searchWorkers, 1);
+  assert.ok(counts.promptChars >= 100 && counts.replyChars >= 40);
+});
+
+test('run1-3: doubled numbers from math rendering are found once collapsed (via collapsed); the text itself is not changed; "11" never makes "1111"', () => {
+  const src = (text) => [{ n: 1, sid: 'S1', ok: true, text }];
+  const one = (figure, text) => L.leadCheck(`The survey counted ${figure} owners [S1].`, src(text)).figures[0];
+  for (const [fig, text] of [['1,133', 'The survey counted 1,1331,133 owners.'], ['509', 'The survey counted 509509 owners.'], ['910', 'The survey counted 910910 owners.'], ['30%', 'The survey counted 30%30\\% owners.'], ['30%', 'The survey counted 30%30% owners.']]) {
+    const f = one(fig, text);
+    assert.strictEqual(f.status, 'found', `${fig} in ${text}`);
+    if (!fig.includes('%')) assert.strictEqual(f.via, 'collapsed');   // a first "30%" already stands as written in "30%30%"
+  }
+  const plain = one('509', 'The survey counted 509 owners.');
+  assert.strictEqual(plain.status, 'found');
+  assert.strictEqual(plain.via, undefined, 'found as written: no flag');
+  assert.strictEqual(one('1111', 'The survey counted 11 owners.').status, 'not_found');
+  assert.strictEqual(one('1111', 'The survey counted 1111 owners.').status, 'found');
+  const sources = src('The survey counted 1,1331,133 owners.');
+  L.leadCheck('We count 1,133 cases [S1].', sources);
+  assert.strictEqual(sources[0].text, 'The survey counted 1,1331,133 owners.');
+});
+
+test('run1-4: state.json keeps the models at the start; salvageLead returns counts and models', async () => {
+  const e = env({ reviewers: [], lead: [{ actions: [{ type: 'notebook', append: 'Open: x' }] }, () => { throw new Error('refused'); }] });
+  const o = e.opts();
+  o.models.paths = { lead: 'Claude client' };
+  await assert.rejects(() => L.runLead(o), /refused/);
+  const state = JSON.parse(fs.readFileSync(path.join(e.dir, 'state.json'), 'utf8'));
+  assert.deepStrictEqual(state.models, { lead: 'lead-m', reader: 'reader-m', readerTop: 'top-m', reviewers: [], paths: { lead: 'Claude client' } });
+  const salv = L.salvageLead({ dir: e.dir, question: 'Q?', preparedDate: '2026-11-22', reason: 'it stopped' });
+  assert.deepStrictEqual(salv.models, state.models);
+  assert.strictEqual(salv.counts.steps, 1);
+});
