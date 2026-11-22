@@ -190,14 +190,14 @@ assert.ok(dEnv.includes('const names = Object.keys(stubs);') && dEnv.includes('r
 dEnv = dEnv.replace('const names = Object.keys(stubs);', 'Object.assign(stubs, opts.extra || {});\n  const names = Object.keys(stubs);').replace('const src = wiring() + \'\\nreturn { voiceCallS,', 'const src = wiring() + \'\\nreturn { voiceModeToggle, voiceCtlSet, voiceDisp, voiceCallS,');
 assert.ok(dEnv.includes('voiceModeToggle, voiceCtlSet, voiceDisp, voiceCallS'), 'the desktop harness returns voiceModeToggle, voiceCtlSet and voiceDisp');
 const dMake = new Function('require', '__dirname', dHead + dEnv + '\nreturn makeEnv;')(require, __dirname);
-function desktopCall(mode) {
+function desktopCall(mode, more) {   // more: further stubs for the page (round 3: the real adapter as voiceCreateVad)
   const shown = { displays: [] };
   const CallDisplay = {
     ...CD, loadDisplayPrefs: () => ({ choice: 'follow', captions: false, interrupt: false }), saveDisplayPrefs() {}, fillDisplaySelect() {},
     createCallDisplay: (o) => { const d = { opts: o, press: [], start() {}, setPress(on) { d.press.push(on); }, setState() {}, hangUp() {}, release() {}, setMuted() {} }; shown.displays.push(d); return d; },
     createTalkFloor: () => ({ wrap: (h) => h, cancel() {}, take() {} }),
   };
-  const e = dMake({ extra: { voicePressButton: LIB.voicePressButton, CallDisplay } });
+  const e = dMake({ extra: { voicePressButton: LIB.voicePressButton, CallDisplay, ...(more || {}) } });
   e.stubs.voiceSavePrefs(null, { micLevel: 60, interruptSensitivity: 40, mode });
   const talks = []; e.fakeCall.talk = (on) => { talks.push(on); return on; };
   const m = e.get('mic-c1'); m.listeners = {}; m.addEventListener = (t, f) => { m.listeners[t] = f; }; m.removeEventListener = (t) => { delete m.listeners[t]; };
@@ -656,4 +656,127 @@ test('R1.6 attaching a press button lets go of handles whose button is no longer
 
 test('the phone service worker is bumped for the new mobile.html and mobile.js (hub-mobile-v73)', () => {
   assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v73'/);
+});
+
+// ═══ review round 3 ═══
+// ── item 2: a second finger takes over a sequence only when the owning pointer no longer has capture ──
+for (const name of ['lib', 'app.js', 'mobile.js']) {
+  const C = copies[name];
+  test(`R3.2 voicePressButton (${name}): a long hold that keeps its capture is not taken over by a second finger; its release still ends the press`, () => {
+    const r = pressRig(C);
+    r.el.hasPointerCapture = (id) => id === 1;   // finger 1 holds the capture
+    r.el.fire('pointerdown', { pointerId: 1 }); r.btn.paint(true);
+    r.clock.t += 11000;   // past VOICE_PRESS_STALE_MS
+    r.el.fire('pointerdown', { pointerId: 2 });
+    assert.deepStrictEqual(r.calls, [true], 'finger 2 is ignored: finger 1 still owns the press');
+    r.clock.t += 500; r.el.fire('pointerup', { pointerId: 1 });
+    assert.deepStrictEqual(r.calls, [true, false], 'finger 1\'s release ends the press (the microphone does not stay on)');
+  });
+  test(`R3.2 voicePressButton (${name}): an old sequence whose pointer lost its capture is still taken over; so is the same pointer; a second finger inside 10 s is ignored`, () => {
+    let r = pressRig(C);
+    r.el.hasPointerCapture = () => false;   // the capture was lost, and no pointerup ever came
+    r.el.fire('pointerdown', { pointerId: 1 }); r.clock.t += 11000; r.el.fire('pointerdown', { pointerId: 2 });
+    assert.deepStrictEqual(r.calls, [true, true], 'stale and no capture: starts over');
+    r = pressRig(C);
+    r.el.hasPointerCapture = (id) => id === 1;
+    r.el.fire('pointerdown', { pointerId: 1 }); r.clock.t += 20000; r.el.fire('pointerdown', { pointerId: 1 });
+    assert.deepStrictEqual(r.calls, [true, true], 'the same pointer again starts over, capture or not');
+    r = pressRig(C);
+    r.el.hasPointerCapture = () => false;
+    r.el.fire('pointerdown', { pointerId: 1 }); r.clock.t += 9000; r.el.fire('pointerdown', { pointerId: 2 });
+    assert.deepStrictEqual(r.calls, [true], 'not stale yet: ignored even with no capture');
+    r = pressRig(C);
+    r.el.hasPointerCapture = () => { throw new Error('gone'); };   // a browser that throws: treated as no capture
+    r.el.fire('pointerdown', { pointerId: 1 }); r.clock.t += 11000; r.el.fire('pointerdown', { pointerId: 2 });
+    assert.deepStrictEqual(r.calls, [true, true]);
+  });
+}
+
+// ── item 1: the pages' wrappers between the adapter and the call controller keep `manual` ──
+const CALLLIB = require('../lib/ui-voice-call');
+Object.assign(globalThis, require('../lib/ui-voice-thinking'));
+function fakeBrowser3() {
+  const b = { created: [], track: { enabled: true, stop() {} } };
+  class Gain { constructor() { this.gain = { value: 1 }; } connect() {} }
+  class Ctx {
+    constructor() { this.state = 'suspended'; } async resume() { this.state = 'running'; } async close() {}
+    createMediaStreamSource() { return { connect() {}, disconnect() {} }; } createGain() { return new Gain(); }
+    createMediaStreamDestination() { return { kind: 'dest', stream: { id: 'dest-stream', getTracks: () => [] } }; }
+  }
+  const raw = { id: 'raw', getAudioTracks: () => [b.track], getTracks: () => [b.track] };
+  class MicVAD { static async new(options) { const v = new MicVAD(); v.options = options; b.created.push(v); return v; } async start() {} async destroy() {} setOptions() {} }
+  const win = { AudioContext: Ctx, vad: undefined, navigator: { mediaDevices: { getUserMedia: async () => raw } } };
+  return { b, win, loadScript: async () => { win.vad = { MicVAD }; } };
+}
+function clock3() {
+  const c = { t: 1000, timers: [], id: 1 };
+  c.now = () => c.t;
+  c.setTimer = (fn, ms) => { const id = c.id++; c.timers.push({ id, at: c.t + ms, fn }); return id; };
+  c.clearTimer = (id) => { c.timers = c.timers.filter((x) => x.id !== id); };
+  c.go = (ms) => { const end = c.t + ms; for (;;) { const due = c.timers.filter((x) => x.at <= end).sort((a, b) => a.at - b.at)[0]; if (!due) break; c.timers = c.timers.filter((x) => x !== due); c.t = due.at; due.fn(); } c.t = end; };
+  return c;
+}
+// The real call controller on a page's wrapped adapter (deps.vad as the page builds it); everything else is a fake.
+function pageCall(pageVad, c) {
+  const h = { states: [], pressUi: [], drops: 0, sent: [] };
+  h.call = CALLLIB.voiceCreateCall({
+    agent: 'a1', press: true, now: c.now, setTimer: c.setTimer, clearTimer: c.clearTimer, prefs: () => ({ continueWait: 0, thinkingSound: false }), vad: pageVad,
+    stt: async () => 'words', isTurnRunning: () => false, send: async (t) => { h.sent.push(t); }, interject: async () => {}, stop() {},
+    speak: () => new Promise(() => {}), cancelSpeech() {}, answerAsk() {},
+    server: { start: async () => ({ callId: 'c1', held: [] }), heartbeat: async () => ({ held: [] }), mode: async () => {}, end: async () => ({ held: [] }), decide: async () => {} },
+    ui: { state: (s) => h.states.push(s), heard() {}, held() {}, toast() {}, summary() {}, level() {}, activity() {}, press: (on) => h.pressUi.push(on), reply: (k) => { if (k === 'drop') h.drops++; } },
+  });
+  return h;
+}
+const pf = (o, n, v) => { for (let i = 0; i < n; i++) o.onFrameProcessed({ isSpeech: 0.1 }, new Float32Array(512).fill(v)); };
+// A press queued behind the tail of the one before it: nothing is started or shown before its admission, then exactly one start.
+async function queuedPressThrough(pageVad, b, c) {
+  const h = pageCall(pageVad, c);
+  assert.strictEqual(await h.call.start(), true);
+  const o = b.created[0].options; await o.getStream();
+  h.call.talk(true);                      // A: nothing in its way, admitted at once
+  assert.strictEqual(h.drops, 1, 'A: one start');
+  pf(o, 20, 1);
+  h.call.talk(false); await tick(10);     // A released: in its 200 ms tail
+  const heardBefore = h.states.filter((s) => s === 'hearing').length, dropsBefore = h.drops;
+  h.pressUi.length = 0;
+  assert.strictEqual(h.call.talk(true), true);   // B requested inside A's tail
+  await tick(10);
+  assert.strictEqual(h.drops, dropsBefore, 'B: no start before its admission (the controller does not fake it)');
+  assert.strictEqual(h.states.filter((s) => s === 'hearing').length, heardBefore, 'B: "hearing" is not shown before admission');
+  assert.strictEqual(b.track.enabled, false, 'the tracks stay off until A\'s tail ends');
+  assert.deepStrictEqual(h.pressUi, [], 'and the press is not shown as pressed yet');
+  c.go(200); await tick(40);              // A's tail ends: B is admitted
+  assert.strictEqual(h.drops, dropsBefore + 1, 'B: exactly one start, at admission');
+  assert.strictEqual(b.track.enabled, true);
+  assert.deepStrictEqual(h.pressUi, [true]);
+  c.go(1000); await tick(10);
+  assert.strictEqual(h.drops, dropsBefore + 1, 'nothing starts a second time');
+  await h.call.hangUp();
+}
+test('R3.1 desktop: the page\'s wrapper (voiceCallVadFor, voiceDispVad) hands the call the live adapter\'s manual: a press queued behind a tail starts once, at admission', async () => {
+  const { b, win, loadScript } = fakeBrowser3(), c = clock3();
+  const real = CALLLIB.voiceCreateVad({ manual: true, win, loadScript, echoHoldMs: 0, now: c.now, setTimer: c.setTimer, clearTimer: c.clearTimer });
+  const e = desktopCall('press', { voiceCreateVad: () => real });
+  await e.api.voiceCallStart('c1'); await tick();
+  const wrapped = e.calls.created[0].vad;
+  assert.strictEqual(wrapped.manual, true, 'the object the page gives voiceCreateCall says manual');
+  await queuedPressThrough(wrapped, b, c);
+});
+test('R3.1 phone: voiceCallDeps hands the call the live adapter\'s manual: a press queued behind a tail starts once, at admission', async () => {
+  const src = between(mob, 'function voiceCallDeps(vc) {', '\n}\n') + '\n}';
+  const names = ['voiceThinkingDeps', 'voiceEffNow', 'voiceCallServer', 'voiceCallOnRoute', 'voiceCallOnMicChange'];
+  const voiceCallDeps = new Function(...names, src + '\nreturn voiceCallDeps;')(() => ({}), () => ({}), () => ({}), () => {}, () => {});
+  const { b, win, loadScript } = fakeBrowser3(), c = clock3();
+  const real = CALLLIB.voiceCreateVad({ manual: true, win, loadScript, echoHoldMs: 0, now: c.now, setTimer: c.setTimer, clearTimer: c.clearTimer });
+  const deps = voiceCallDeps({ agent: 'a1', press: true, vad: real });
+  assert.strictEqual(deps.vad.manual, true, 'the object the page gives voiceCreateCall says manual');
+  assert.strictEqual(voiceCallDeps({ agent: 'a1', vad: { manual: false } }).vad.manual, false, 'a hands-free adapter says it is not manual');
+  assert.strictEqual(voiceCallDeps({ agent: 'a1', vad: {} }).vad.manual, false, 'one with no word on it is not manual');
+  await queuedPressThrough(deps.vad, b, c);
+});
+test('R3.1 both pages: the wrapper objects read manual from the adapter live (a getter, not a copied value)', () => {
+  assert.match(between(app, 'function voiceDispVad(vad) {', '\n'), /get manual\(\) \{ return !!\(vad && vad\.manual\); \}/);
+  assert.match(between(app, 'function voiceCallVadFor(vad) {', '\n    }\n'), /get manual\(\) \{ return !!\(vad && vad\.manual\); \}/);
+  assert.match(between(mob, 'function voiceCallDeps(vc) {', '\n}\n'), /get manual\(\) \{ return !!\(vc\.vad && vc\.vad\.manual\); \}/);
 });

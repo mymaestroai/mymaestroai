@@ -448,3 +448,61 @@ test('press 8: the page copies in app.js and mobile.js carry the controller and 
   }
   assert.ok(lib.includes('function talk(on)'));
 });
+
+// ── review round 3 ──
+test('press R3a: ui.press(true) follows the admission of the press, not the request; a press released before its admission never shows pressed', async () => {
+  const { b, win, loadScript } = fakeBrowser();
+  const c = clock();
+  const vad = voiceCreateVad({ manual: true, win, loadScript, echoHoldMs: 0, ...c.opts });
+  const h = await started({ vad, stt: async () => 'words' });
+  const o = b.created[0].options; await o.getStream();
+  assert.deepStrictEqual(h.pressUi, [false], 'the call starts not pressed');
+  h.call.talk(true);
+  assert.deepStrictEqual(h.pressUi, [false, true], 'a press with nothing in its way is admitted at once: pressed');
+  fr(o, 20, 1);
+  h.call.talk(false); await tick(10);
+  assert.deepStrictEqual(h.pressUi, [false, true, false]);
+  assert.strictEqual(h.call.talk(true), true, 'B is requested inside A\'s tail');
+  await tick(10);
+  assert.deepStrictEqual(h.pressUi, [false, true, false], 'B is requested, not admitted: ui.press(true) has not been said');
+  c.go(200); await tick(40);
+  assert.deepStrictEqual(h.pressUi, [false, true, false, true], 'B is admitted: ui.press(true), once');
+  c.go(1000); await tick(10);
+  assert.deepStrictEqual(h.pressUi, [false, true, false, true], 'nothing said again');
+  h.call.talk(false); await tick(10); c.go(200); await tick(40);
+  // a press requested in a tail and released before its admission
+  h.call.talk(true); fr(o, 20, 2); h.call.talk(false); await tick(10);
+  h.pressUi.length = 0;
+  h.call.talk(true); await tick(10);
+  h.call.talk(false); await tick(10); c.go(500); await tick(40);
+  assert.ok(!h.pressUi.includes(true), 'released before admission: ui.press never said true: ' + JSON.stringify(h.pressUi));
+  assert.strictEqual(h.pressUi[h.pressUi.length - 1], false);
+  await h.call.hangUp();
+});
+
+test('press R3b: a detector that does not report the start of a press (not manual) still shows pressed from talk(true)', async () => {
+  const h = await started({}, { setMuted: (on) => { h.log.push('vad.muted ' + on); } });
+  h.call.talk(true);
+  assert.deepStrictEqual(h.pressUi, [false, true]);
+  h.call.talk(false);
+  assert.deepStrictEqual(h.pressUi, [false, true, false]);
+});
+
+test('press R3c: a frame delivered by a detector that has been replaced is not in the press (nor in the meter)', async () => {
+  const { b, win, loadScript } = fakeBrowser(), c = clock(), ev = [], levels = [];
+  const vad = voiceCreateVad({ manual: true, win, loadScript, echoHoldMs: 0, ...c.opts });
+  await vad.start({ onSpeechBegin() {}, onSpeechStart() {}, onSpeechEnd: (a) => ev.push(['end', a.length]), onMisfire: () => ev.push('misfire'), onFrame: () => levels.push('old') });
+  const old = b.created[0].options; await old.getStream();
+  await vad.stop();
+  await vad.start({ onSpeechBegin() {}, onSpeechStart() {}, onSpeechEnd: (a) => ev.push(['end', a.length, a[0], a[a.length - 1]]), onMisfire: () => ev.push('misfire'), onFrame: () => levels.push('new') });
+  const o = b.created[1].options; await o.getStream();
+  vad.setMuted(false);
+  fr(o, 10, 2);
+  fr(old, 3, 9);   // a late callback of the replaced detector, while the new press is open and admitted
+  vad.setMuted(true);
+  fr(old, 2, 9);   // and in the tail
+  assert.strictEqual(await endAfter(vad, c), true);
+  assert.deepStrictEqual(ev, [['end', 10 * 512, 2, 2]], 'only the current detector\'s frames are in the press');
+  assert.deepStrictEqual(levels, ['new', 'new', 'new', 'new', 'new', 'new', 'new', 'new', 'new', 'new'], 'the replaced detector reports no level either');
+  await vad.stop();
+});

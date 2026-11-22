@@ -3930,7 +3930,7 @@ function voiceCreateLoudness(ctx) {
 // handle.paint(on) from the call's ui.press(on): aria-pressed (listening or not), the title and the visible text ("Tap to talk" / "Tap to send") follow it; the aria-label stays "Talk".
 // opts: now(), cls (pressed style, default 'rec'), text (also set textContent), off() (true: the button is doing something else, e.g. the call display's "Try the microphone
 // again": the press handlers do nothing). A pointer sequence that is cancelled or loses its capture ends the press it opened (and sends), whatever its length;
-// a pointerdown that finds a sequence older than VOICE_PRESS_STALE_MS (or of the same pointer) that never ended starts over. handle.el is the button.
+// a pointerdown that finds a sequence of the same pointer that never ended, or one older than VOICE_PRESS_STALE_MS whose pointer no longer has capture, starts over. handle.el is the button.
 const VOICE_PRESS_HOLD_MS = 400;
 const VOICE_PRESS_STALE_MS = 10000;
 const VOICE_PRESS_LABELS = ['Tap to talk', 'Tap to send'];
@@ -3958,8 +3958,9 @@ function voicePressButton(el, getCall, opts) {
     stop(e);
     const id = e ? e.pointerId : undefined;
     const t = now();
-    // a second finger on a press that is under way is ignored; a sequence that never ended (no pointerup, no cancel) and is older than VOICE_PRESS_STALE_MS, or of the same pointer, starts over
-    if (began && t - downAt <= VOICE_PRESS_STALE_MS && !(id !== undefined && downId === id)) return;
+    // a second finger on a press that is under way is ignored; a sequence that never ended (no pointerup, no cancel) starts over when it is of the same pointer, or older than VOICE_PRESS_STALE_MS
+    // and its pointer no longer has capture (a long legitimate hold keeps its capture: a second finger cannot take it over)
+    if (began && !(id !== undefined && downId === id) && !(t - downAt > VOICE_PRESS_STALE_MS && !quiet(() => el.hasPointerCapture && el.hasPointerCapture(downId)))) return;
     began = true;
     downId = id;
     downAt = t;
@@ -4298,7 +4299,7 @@ function voiceCreateCall(deps) {
   // Tap to talk (deps.press === true, fixed for the call): the microphone is heard only while the person presses (talk(true) ... talk(false)). Between presses the
   // call is muted the way Mute does it (tracks off), but ui.press(on) says it, not the muted display. No standby or wake phrase. pressing: a press is on.
   const press = d.press === true;
-  let pressing = false;
+  let pressing = false, pressShown = false;   // pressing: a press is requested; pressShown: ui.press(true) was said (the press was admitted: the detector reported its start)
   const now = () => d.now();
   const quiet = (fn) => { try { return fn(); } catch { return undefined; } };
   let state = '', mode = 'announce', ended = false, started = false, endPromise = null;
@@ -4810,6 +4811,12 @@ function voiceCreateCall(deps) {
     const c = curCand; curCand = null;
     if (c && c.hold) { c.hold.resolve(null); c.hold = null; }
   }
+  // Tap to talk: ui.press(true) follows the admission of the press (the detector's start report for it), not the request (talk(true)). Once per press.
+  function showPress() {
+    if (!press || !pressing || pressShown) return;
+    pressShown = true;
+    quiet(() => { if (typeof ui.press === 'function') ui.press(true); });
+  }
   function onSpeechBegin() {
     if (ended || personSpeaking || muted) return;
     sinceUnmute = true;
@@ -4826,6 +4833,7 @@ function voiceCreateCall(deps) {
   // Real speech began (the VAD adapter calls this from onSpeechRealStart, so a cough or a click does not cut the reading).
   function onSpeechStart() {
     if (ended || muted) return;
+    showPress();
     sinceUnmute = true;
     clearBegin();
     if (watchTimer === null) { pieceStartAt = now(); armWatch(); }   // real speech: the watchdog runs until the piece ends
@@ -5204,9 +5212,11 @@ function voiceCreateCall(deps) {
     pressing = want;
     if (want) {
       setMuted(false);
-      if (!personSpeaking && !vad.manual) { onSpeechBegin(); onSpeechStart(); }   // only a detector that cannot report the start (a manual one reports it itself, up to a press tail later)
-    } else setMuted(true);
-    quiet(() => { if (typeof ui.press === 'function') ui.press(want); });
+      if (!vad.manual) { if (!personSpeaking) { onSpeechBegin(); onSpeechStart(); } else showPress(); }   // only a detector that cannot report the start (a manual one reports it itself, up to a press tail later, and ui.press(true) follows that report)
+    } else {
+      pressShown = false; setMuted(true);
+      quiet(() => { if (typeof ui.press === 'function') ui.press(false); });
+    }
     return pressing;
   }
   // The Interrupt button while muted (the Talk floor asks this instead of taking the floor: nothing is listened for while muted): the reply being read
@@ -6188,11 +6198,12 @@ function voiceCreateVad(opts) {
         onSpeechEnd: (audio) => (!st.manual && live() && handlers.onSpeechEnd ? handlers.onSpeechEnd(audio) : undefined),
         onVADMisfire: () => { if (!st.manual && live() && handlers.onMisfire) handlers.onMisfire(); },
         onFrameProcessed: (probs, frame) => {
+          if (!live()) return;   // a late callback from a detector that has been replaced or released stores nothing and reports nothing
           if (st.manual && frame && frame.length) {   // a frame belongs to the press that is open and admitted, else to the admitted one still in its tail (its copy: the detector may reuse its frame)
             const p = st.open && st.open.admitted ? st.open : tailOwner();
             if (p) { p.frames.push(Float32Array.from(frame)); p.len += frame.length; }
           }
-          if (live() && handlers.onFrame) handlers.onFrame(voiceLevelDb(frame), probs);
+          if (handlers.onFrame) handlers.onFrame(voiceLevelDb(frame), probs);
         },
       });
       if (stale()) throw new Error('stopped');
@@ -10673,7 +10684,8 @@ function voiceCallDeps(vc) {
     // Everything the controller uses passes through: the "now" of setPlaybackActive (a cut by the person drops the echo guard at once),
     // reopen ("Try the microphone again" after a lost microphone), info, setMuted (the call bar's Mute) and endPiece (the frame watchdog ends a piece).
     vad: { start: (h) => { const w = typeof voiceDisp !== 'undefined' && voiceDisp.floor ? voiceDisp.floor.wrap(h) : h; return vc.vad.start({ ...w, onRoute: (r) => voiceCallOnRoute(vc, r), onMicChange: (ev) => { try { voiceCallOnMicChange(vc, ev); } catch { /* the outputs stay as they were */ } return w && w.onMicChange ? w.onMicChange(ev) : undefined; } }); }, stop: () => vc.vad.stop(),
-      setPlaybackActive: (on, now) => vc.vad.setPlaybackActive(on, now), reopen: () => vc.vad.reopen(), info: () => vc.vad.info(), setMuted: (on) => vc.vad.setMuted(on), endPiece: () => vc.vad.endPiece() },
+      setPlaybackActive: (on, now) => vc.vad.setPlaybackActive(on, now), reopen: () => vc.vad.reopen(), info: () => vc.vad.info(), setMuted: (on) => vc.vad.setMuted(on), endPiece: () => vc.vad.endPiece(),
+      get manual() { return !!(vc.vad && vc.vad.manual); } },   // tap to talk: the live adapter's manual (the controller leaves the start of a press to a manual detector)
     stt: (f32) => voiceCallStt(agent, f32),
     isTurnRunning: () => isBusy(agent) || ownTurnFor(agent),
     send: (text) => voiceCallSend(vc, text),
