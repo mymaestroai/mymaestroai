@@ -185,7 +185,7 @@ function makeEnv(opts = {}) {
     voiceSpeechText: (t) => t,
     voiceCleanSpeed: L.voiceCleanSpeed, voiceSpeedLabel: L.voiceSpeedLabel, VOICE_END_PAUSES: L.VOICE_END_PAUSES, VOICE_DETAILS_READ_WORDS: L.VOICE_DETAILS_READ_WORDS,
     voiceEffectivePrefs: L.voiceEffectivePrefs, voiceMarkChosen: L.voiceMarkChosen, voiceIsIOSNav: DEV.voiceIsIOSNav, voiceEchoHoldOk: DEV.voiceEchoHoldOk, voiceEchoHoldLabel: DEV.voiceEchoHoldLabel, VOICE_ECHO_HOLDS: DEV.VOICE_ECHO_HOLDS, voiceEchoChoices: DEV.voiceEchoChoices, VOICE_DEVICE_DEFAULT_KEYS: DEV.VOICE_DEVICE_DEFAULT_KEYS, voiceMarkDeviceSet: DEV.voiceMarkDeviceSet, voiceDevicePrefs: DEV.voiceDevicePrefs, VOICE_ECHO_HOLD_IOS: DEV.VOICE_ECHO_HOLD_IOS, voiceMarkDeviceChanged: DEV.voiceMarkDeviceChanged, VOICE_AGENT_DEFAULT_KEYS: L.VOICE_AGENT_DEFAULT_KEYS, VOICE_DEFAULT_PREFS: L.VOICE_DEFAULT_PREFS, AGENTS: [], capName: (n) => n,   // agent voice defaults (part 6)   // voice fixes 1: speed and end-of-turn pause
-    voiceMicGuard: L.voiceMicGuard, voiceWaitLocalVoice: L.voiceWaitLocalVoice, voicePickLocalVoice: L.voicePickLocalVoice,
+    voiceMicGuard: L.voiceMicGuard, voiceWaitLocalVoice: L.voiceWaitLocalVoice, voicePickLocalVoice: L.voicePickLocalVoice, VOICE_PRESS_HOLD_MS: L.VOICE_PRESS_HOLD_MS,   // (voiceMicToggle tells a tap from a hold of the idle mic)
   };
   if (opts.gum) stubs.navigator.mediaDevices.getUserMedia = opts.gum(calls);
   const names = Object.keys(stubs);

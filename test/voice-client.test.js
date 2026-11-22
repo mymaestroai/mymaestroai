@@ -177,7 +177,17 @@ test('stt resamples a 48 kHz WAV to 16 kHz before sending, and accepts raw Float
 });
 
 // ── WAV limits ──
-test('a tiny WAV declaring 1 Hz is refused before anything is allocated; 3 channels, 8-bit, odd rates and over 120 s are refused too', async () => {
+test('a 15-minute 16 kHz WAV (a long Tap to talk press, about 28.8 MB) is read whole, and goes to the worker in pieces of under 30 s', async () => {
+  const n = 15 * 60 * 16000, b = Buffer.alloc(44 + n * 2);   // silence
+  b.write('RIFF', 0); b.writeUInt32LE(36 + n * 2, 4); b.write('WAVE', 8); b.write('fmt ', 12); b.writeUInt32LE(16, 16);
+  b.writeUInt16LE(1, 20); b.writeUInt16LE(1, 22); b.writeUInt32LE(16000, 24); b.writeUInt32LE(32000, 28); b.writeUInt16LE(2, 32); b.writeUInt16LE(16, 34);
+  b.write('data', 36); b.writeUInt32LE(n * 2, 40);
+  const r = parseWav(b);
+  assert.strictEqual(r.samples.length, n); assert.strictEqual(r.sampleRate, 16000);
+  const parts = splitForWhisper(resample(r.samples, 16000, 16000));
+  assert.ok(parts.length >= 33 && parts.every((p) => p.length <= 28 * 16000), 'pieces of at most 28 s: ' + parts.length);
+});
+test('a tiny WAV declaring 1 Hz is refused before anything is allocated; 3 channels, 8-bit, odd rates and over 16 minutes are refused too', async () => {
   const sp = fakeSpawner((m, c) => c.reply({ id: m.id, ok: true, text: 'x', ms: 1 }));
   const cl = createVoiceClient({ engine, spawnImpl: sp, idleMs: 0 });
   const tiny = wav16(new Array(65000).fill(100), 1);   // ~130 KB, would be 1 billion samples at 16 kHz
@@ -190,12 +200,12 @@ test('a tiny WAV declaring 1 Hz is refused before anything is allocated; 3 chann
   await assert.rejects(() => cl.stt(eight), (e) => e.badAudio === true && /16-bit/.test(e.message));
   await assert.rejects(() => cl.stt(wav16([1, 2, 3, 4], 7999)), (e) => e.badAudio === true);
   await assert.rejects(() => cl.stt(wav16([1, 2, 3, 4], 192001)), (e) => e.badAudio === true);
-  await assert.rejects(() => cl.stt(wav16(new Array(8000 * 121).fill(0), 8000)), (e) => e.badAudio === true && /120 seconds/.test(e.message));
+  await assert.rejects(() => cl.stt(wav16(new Array(8000 * 961).fill(0), 8000)), (e) => e.badAudio === true && /960 seconds/.test(e.message));   // 16 minutes (a Tap to talk press is cut at 15)
   await assert.rejects(() => cl.stt(new Float32Array(10), 1), (e) => e.badAudio === true);
   assert.strictEqual(sp.children.length, 0, 'the worker never started');
   assert.throws(() => parseWav(tiny), /sample rate/);
-  assert.throws(() => resample(new Float32Array(200), 1, 16000), (e) => e.badAudio === true, 'resample refuses an output over 120 s on its own');
-  assert.strictEqual(parseWav(wav16(new Array(8000 * 120).fill(0), 8000)).samples.length, 8000 * 120, 'exactly 120 s is fine');
+  assert.throws(() => resample(new Float32Array(62000), 1, 16000), (e) => e.badAudio === true, 'resample refuses an output over 960 s on its own');
+  assert.strictEqual(parseWav(wav16(new Array(8000 * 960).fill(0), 8000)).samples.length, 8000 * 960, 'exactly 960 s is fine');
   assert.strictEqual(parseWav(wav16([1, 2], 192000)).sampleRate, 192000);
   cl.stop();
 });

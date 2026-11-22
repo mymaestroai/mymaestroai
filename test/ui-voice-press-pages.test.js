@@ -36,28 +36,32 @@ test('voiceCleanPrefs keeps handsfree, press and tap (Dictation) on the library 
 });
 
 // ── 2. the mic: Dictation stays dictation, Tap to talk starts a call ──
-function desktopMic(mode) {
+function desktopMic(mode, over) {
   const src = between(app, 'async function voiceMicToggle(', 'async function voiceMicStop(');
   const log = [];
   const env = {
+    voicePressEndedAt: 0, voiceMicHeldMs: () => 0, VOICE_PRESS_HOLD_MS: 400,   // the idle mic's pointer record, and when a Tap to talk call last ended (round 1, items 4 and 6)
     voiceCallS: { active: false, starting: false }, voiceCallHangUp: () => log.push('hangup'),
     voiceRec: { busy: false, chatId: null, guard: { pending: false, begin: () => 1, fail() {}, settle: () => true, gen: 1 }, chunks: [], samples: 0, level: -100 }, voiceMicStop: async () => {},
     voiceReady: () => true, hubToast: () => {}, voiceRefreshStatus() {}, simpleOn: () => false, voicePrefsNow: () => ({ mode }), voiceCallStart: (id) => log.push('call:' + id),
     voiceTest: { mic: null, guard: { pending: false } }, voiceStopPlayback() {}, voiceOpenMic: async () => { log.push('openMic'); return { close() {} }; }, voiceMicLevelNow: () => 50,
     voiceLevelDb: () => -50, voiceMicError: () => 'x', voiceMicTick() {}, setInterval: () => 0, Date,
   };
+  Object.assign(env, over || {});
   const names = Object.keys(env);
   return { log, env, run: new Function(...names, src + '\nreturn voiceMicToggle;')(...names.map(n => env[n])) };
 }
-function phoneMic(mode, voiceCall) {
+function phoneMic(mode, voiceCall, over) {
   const src = between(mob, 'async function voiceMicTap()', 'async function voiceMicStop()');
   const log = [];
   const env = {
+    voicePressEndedAt: 0, voiceMicHeldMs: () => 0, VOICE_PRESS_HOLD_MS: 400,
     keepKeyboard: null, voiceCall: voiceCall || null, voiceCallHangUp: () => log.push('hangup'),
     voiceRec: { state: 'idle', guard: { pending: false, begin: () => 1, fail() {}, settle: () => true, gen: 1 }, chunks: [], tick: null, t0: 0, handle: null }, voiceTest: { guard: { pending: false }, handle: null }, voiceTestStop() {}, voiceMicStop() {},
     current: 'bob', toast() {}, voicePrefsNow: () => ({ mode, micLevel: 50 }), voiceCallStart: () => log.push('call'), voiceStopPlayback() {}, voiceUnlockAudio() {}, voiceMicPaint() {},
     voiceMicOpen: async () => { log.push('openMic'); return { close() {} }; }, voiceBarPaint() {}, voiceMeterPaint: () => 0, voiceErr: () => 'x', setInterval: () => 0, VOICE_MAX_SECONDS: 60, Date,
   };
+  Object.assign(env, over || {});
   const names = Object.keys(env);
   return { log, run: new Function(...names, src + '\nreturn voiceMicTap;')(...names.map(n => env[n])) };
 }
@@ -79,7 +83,7 @@ test('mic, both pages: a saved Dictation (tap) still records, Tap to talk and Ha
 // ── 3. the press button ──
 function fakeButton() {
   const attrs = {}, cls = new Set(), l = {};
-  const e = { attrs, cls, listeners: l, textContent: '', captured: [], setAttribute(k, v) { attrs[k] = String(v); }, classList: { toggle(c, on) { if (on) cls.add(c); else cls.delete(c); }, contains: (c) => cls.has(c) },
+  const e = { attrs, cls, listeners: l, textContent: '', captured: [], isConnected: true, setAttribute(k, v) { attrs[k] = String(v); }, classList: { toggle(c, on) { if (on) cls.add(c); else cls.delete(c); }, contains: (c) => cls.has(c) },
     addEventListener(t, f) { (l[t] = l[t] || []).push(f); }, removeEventListener(t, f) { l[t] = (l[t] || []).filter(x => x !== f); }, setPointerCapture(id) { e.captured.push(id); } };
   e.fire = (t, ev) => { const x = Object.assign({ prevented: false, preventDefault() { this.prevented = true; }, pointerId: 1, pointerType: 'touch', button: 0 }, ev); for (const f of (l[t] || []).slice()) f(x); return x; };
   return e;
@@ -140,12 +144,15 @@ for (const name of ['lib', 'app.js', 'mobile.js']) {
     k.el.fire('keyup', { key: ' ' });
     k.el.fire('keydown', { key: 'a' }); assert.deepStrictEqual(k.calls, [true, false], 'other keys do nothing');
   });
-  test(`voicePressButton (${name}): the label and aria-pressed follow ui.press; the pressed style is toggled; detach lets go`, () => {
+  test(`voicePressButton (${name}): aria-pressed, the title and the visible text follow ui.press while the aria-label stays "Talk"; the pressed style is toggled; detach lets go`, () => {
     const r = pressRig(C);
+    assert.strictEqual(r.el.attrs['aria-label'], 'Talk', 'the name is set when the button becomes a press button');
     r.btn.paint(false);
-    assert.strictEqual(r.el.attrs['aria-pressed'], 'false'); assert.strictEqual(r.el.attrs['aria-label'], 'Tap to talk'); assert.ok(!r.el.cls.has('rec'));
+    assert.strictEqual(r.el.attrs['aria-pressed'], 'false'); assert.strictEqual(r.el.attrs['aria-label'], 'Talk'); assert.strictEqual(r.el.attrs.title, 'Tap to talk'); assert.ok(!r.el.cls.has('rec'));
     r.btn.paint(true);
-    assert.strictEqual(r.el.attrs['aria-pressed'], 'true'); assert.strictEqual(r.el.attrs['aria-label'], 'Tap to send'); assert.ok(r.el.cls.has('rec'), 'a visible pressed style (the existing red .rec)');
+    assert.strictEqual(r.el.attrs['aria-pressed'], 'true'); assert.strictEqual(r.el.attrs['aria-label'], 'Talk', 'constant: a screen reader hears the same name, and aria-pressed'); assert.strictEqual(r.el.attrs.title, 'Tap to send'); assert.ok(r.el.cls.has('rec'), 'a visible pressed style (the existing red .rec)');
+    const t = fakeButton(), tb = C.voicePressButton(t, () => ({ talk() {} }), { text: true });
+    tb.paint(false); assert.strictEqual(t.textContent, 'Tap to talk'); tb.paint(true); assert.strictEqual(t.textContent, 'Tap to send'); assert.strictEqual(t.attrs['aria-label'], 'Talk');
     assert.strictEqual(r.btn.pressing, true);
     r.btn.detach();
     r.el.fire('pointerdown'); assert.deepStrictEqual(r.calls, [], 'no listener is left after detach');
@@ -157,8 +164,8 @@ const dsrc = read('test/ui-voice-call-desktop.test.js');
 const dHead = dsrc.slice(0, dsrc.indexOf("test('mic button:"));
 let dEnv = dsrc.slice(dsrc.indexOf('function el(extra = {})'), dsrc.indexOf("test('start: deps contract"));
 assert.ok(dEnv.includes('const names = Object.keys(stubs);') && dEnv.includes('return { api, calls'), 'the desktop harness is where this test expects it');
-dEnv = dEnv.replace('const names = Object.keys(stubs);', 'Object.assign(stubs, opts.extra || {});\n  const names = Object.keys(stubs);').replace('const src = wiring() + \'\\nreturn { voiceCallS,', 'const src = wiring() + \'\\nreturn { voiceModeToggle, voiceDisp, voiceCallS,');
-assert.ok(dEnv.includes('voiceModeToggle, voiceDisp, voiceCallS'), 'the desktop harness returns voiceModeToggle and voiceDisp');
+dEnv = dEnv.replace('const names = Object.keys(stubs);', 'Object.assign(stubs, opts.extra || {});\n  const names = Object.keys(stubs);').replace('const src = wiring() + \'\\nreturn { voiceCallS,', 'const src = wiring() + \'\\nreturn { voiceModeToggle, voiceCtlSet, voiceDisp, voiceCallS,');
+assert.ok(dEnv.includes('voiceModeToggle, voiceCtlSet, voiceDisp, voiceCallS'), 'the desktop harness returns voiceModeToggle, voiceCtlSet and voiceDisp');
 const dMake = new Function('require', '__dirname', dHead + dEnv + '\nreturn makeEnv;')(require, __dirname);
 function desktopCall(mode) {
   const shown = { displays: [] };
@@ -184,18 +191,18 @@ test('desktop: Tap to talk starts a call with press: true and manual: true and c
   assert.strictEqual(e.api.voiceCallS.press, true);
   const m = e.get('mic-c1');
   assert.ok(!m.classList.contains('call'), 'not the red Hang up');
-  assert.strictEqual(m.attrs['aria-label'], 'Tap to talk');
+  assert.strictEqual(m.attrs['aria-label'], 'Talk', 'the press button\'s name is constant');
   assert.ok(m.listeners.pointerdown, 'the press button is wired to the mic');
   // ui.press paints the button, the state line and the display
   const ui = e.calls.created[0].ui;
   ui.state('listening');
   assert.strictEqual(e.get('vcb-state-c1').textContent, 'Tap to talk', 'listening and not pressing');
   ui.press(true);
-  assert.strictEqual(m.attrs['aria-pressed'], 'true'); assert.strictEqual(m.attrs['aria-label'], 'Tap to send'); assert.ok(m.classList.contains('rec'));
+  assert.strictEqual(m.attrs['aria-pressed'], 'true'); assert.strictEqual(m.attrs['aria-label'], 'Talk'); assert.strictEqual(m.attrs.title, 'Tap to send'); assert.ok(m.classList.contains('rec'));
   assert.strictEqual(e.get('vcb-state-c1').textContent, 'Listening, tap to send');
   ui.state('thinking'); assert.strictEqual(e.get('vcb-state-c1').textContent, 'Thinking', 'other states as in a hands-free call');
   ui.press(false);
-  assert.strictEqual(m.attrs['aria-pressed'], 'false'); assert.strictEqual(m.attrs['aria-label'], 'Tap to talk');
+  assert.strictEqual(m.attrs['aria-pressed'], 'false'); assert.strictEqual(m.attrs['aria-label'], 'Talk'); assert.strictEqual(m.attrs.title, 'Tap to talk');
   assert.deepStrictEqual(e.shown.displays[0].press, [true, false], 'the display follows ui.press');
   // a press on the mic button reaches the call
   m.listeners.pointerdown({ preventDefault() {}, pointerId: 1, pointerType: 'mouse', button: 0 });
@@ -240,7 +247,7 @@ test('desktop: the mode chip cycles Hands-free -> Tap to talk -> Hands-free (a s
   e.stubs.voiceSavePrefs(null, { ...e.getPrefs(), mode: 'tap' });
   e.api.voiceModeToggle(); assert.strictEqual(saved(), 'handsfree');
   const label = between(app, 'function voiceModeLabel()', 'const VOICE_LEVELS_SVG');
-  assert.ok(/'press' \? 'Tap to talk' : 'Hands-free'/.test(label) && !/Dictation/.test(label));
+  assert.ok(/'Tap to talk' : 'Hands-free'/.test(label) && !/Dictation/.test(label));
 });
 
 // ── 5. a press call from the phone mic ──
@@ -286,16 +293,16 @@ test('phone: the press button, the state line and the display follow ui.press; h
   const talks = [];
   const vc = { press: true, pressing: false, pressBtns: [], call: { talk: (on) => talks.push(on) } }; vcRef.v = vc;
   const b = fakeButton(); f.voiceCallPressAttach(vc, b, { cls: 'rec' });
-  assert.strictEqual(b.attrs['aria-label'], 'Tap to talk');
+  assert.strictEqual(b.attrs['aria-label'], 'Talk'); assert.strictEqual(b.attrs.title, 'Tap to talk');
   assert.strictEqual(f.voiceCallPressAttach(vc, b, { cls: 'rec' }), vc.pressBtns[0], 'the same button is attached once');
   f.voiceCallPaintState('listening', ''); assert.strictEqual(state.s.textContent, 'Tap to talk');
   f.voiceCallPressPaint(vc, true);
-  assert.strictEqual(b.attrs['aria-pressed'], 'true'); assert.strictEqual(b.attrs['aria-label'], 'Tap to send');
+  assert.strictEqual(b.attrs['aria-pressed'], 'true'); assert.strictEqual(b.attrs['aria-label'], 'Talk'); assert.strictEqual(b.attrs.title, 'Tap to send');
   assert.strictEqual(state.s.textContent, 'Listening, tap to send');
   f.voiceCallPaintState('hearing', ''); assert.strictEqual(state.s.textContent, 'Listening, tap to send');
   f.voiceCallPaintState('thinking', ''); assert.strictEqual(state.s.textContent, 'Thinking');
   assert.deepStrictEqual(hooks, [['setPress', true]], 'the display is told');
-  f.voiceCallPressPaint(vc, false); assert.strictEqual(b.attrs['aria-label'], 'Tap to talk');
+  f.voiceCallPressPaint(vc, false); assert.strictEqual(b.attrs['aria-label'], 'Talk'); assert.strictEqual(b.attrs.title, 'Tap to talk');
   b.fire('pointerdown'); assert.deepStrictEqual(talks, [true], 'the press reaches the call');
   f.voiceCallPressDetach(vc); b.fire('pointerdown'); assert.deepStrictEqual(talks, [true], 'let go at hang-up');
   // a hands-free call has no press text and no press button
@@ -339,7 +346,7 @@ test('call display: in a press call the Talk slot is the press button (label, ar
   w.display.setState('listening'); await tick();
   const s = slot(w.dom);
   assert.strictEqual(s.attrs['data-ucd-mode'], 'press'); assert.ok(!('data-ucd-off' in s.attrs), 'visible');
-  assert.strictEqual(s.textContent, 'Tap to talk'); assert.strictEqual(s.attrs['aria-pressed'], 'false'); assert.strictEqual(s.attrs['aria-label'], 'Tap to talk');
+  assert.strictEqual(s.textContent, 'Tap to talk'); assert.strictEqual(s.attrs['aria-pressed'], 'false'); assert.strictEqual(s.attrs['aria-label'], 'Talk', 'the name is constant'); assert.strictEqual(s.attrs.title, 'Tap to talk');
   assert.strictEqual(statusText(w.dom), 'Tap to talk', 'listening and not pressing');
   assert.strictEqual(muteBtn(w.dom).hidden, true, 'no Mute in a press call');
   w.display.setPress(true);
@@ -383,7 +390,7 @@ test('phone pickers: the voice panel radios, the Voice sheet radios and the chip
   for (const t of [HELP_HANDS, HELP_PRESS, HELP_DICT]) assert.ok(mhtml.includes(t), 'panel help: ' + t);
   const help = between(mob, "sh.querySelector('.vs-help').textContent", "sh.querySelector('.vs-read')");
   for (const t of [HELP_HANDS, HELP_PRESS, HELP_DICT]) assert.ok(help.includes(t), 'sheet help: ' + t);
-  assert.match(mob, /\$\('voice-mode-chip'\)\?\.addEventListener\('click', \(\) => save\(\{ mode: voicePrefsNow\(\)\.mode === 'handsfree' \? 'press' : 'handsfree' \}\)\);/);
+  assert.match(mob, /\$\('voice-mode-chip'\)\?\.addEventListener\('click', \(\) => \{ const prev = voicePrefsNow\(\)\.mode, next = prev === 'handsfree' \? 'press' : 'handsfree'; save\(\{ mode: next \}\); voiceModeNextCallToast\(prev, next\); \}\);/);   // (+ the toast of a mode picked during a call)
   const strip = between(mob, 'function voiceStripPaint() {', '// Under each of the four settings');
   assert.ok(/mode === 'press'/.test(strip) && !/chip\.(textContent|setAttribute)[^\n]*Dictation/.test(strip), 'the chip shows Hands-free or Tap to talk, never Dictation');
   const paint = between(mob, 'function voiceMicPaint() {', 'function voiceMicCancel()');
@@ -403,6 +410,227 @@ test('the help texts of both pages name all three modes: Hands-free, Tap to talk
   inOrder(idle, ["'Tap to talk'", "'Dictate'", "'Talk hands-free'"]);
   assert.match(app, /aria-label="\$\{voiceMicIdleLabel\(\)\}" title="\$\{voiceMicIdleTitle\(\)\}"/);
 });
+// ═══ review round 1 ═══
+// ── item 3: a cancelled or lost pointer always ends the press it opened ──
+for (const name of ['lib', 'app.js', 'mobile.js']) {
+  const C = copies[name];
+  test(`R1.3 voicePressButton (${name}): pointercancel and lostpointercapture end a press this pointer opened (talk(false)) whatever its length, and a cancelled second tap sends`, () => {
+    let r = pressRig(C);
+    r.el.fire('pointerdown'); r.btn.paint(true); r.clock.t += 120; r.el.fire('pointercancel');
+    assert.deepStrictEqual(r.calls, [true, false], 'a short tap that the browser cancelled: the press it opened ends (it was never to be left open)');
+    r = pressRig(C);
+    r.el.fire('pointerdown'); r.btn.paint(true); r.clock.t += 120; r.el.fire('lostpointercapture');
+    assert.deepStrictEqual(r.calls, [true, false], 'a lost capture ends it too');
+    r = pressRig(C);
+    r.el.fire('pointerdown'); r.btn.paint(true); r.clock.t += 80; r.el.fire('pointerup');   // the first tap: listening
+    r.clock.t += 3000; r.el.fire('pointerdown'); r.clock.t += 60; r.el.fire('lostpointercapture');
+    assert.deepStrictEqual(r.calls, [true, false], 'a second-tap sequence that loses its pointer sends');
+    r = pressRig(C);
+    r.el.fire('pointerdown'); r.btn.paint(true); r.clock.t += 80; r.el.fire('pointerup'); r.el.fire('lostpointercapture');
+    assert.deepStrictEqual(r.calls, [true], 'the capture released after a normal pointerup changes nothing (the tap keeps listening)');
+    r = pressRig(C);
+    r.el.fire('lostpointercapture'); r.el.fire('pointercancel');
+    assert.deepStrictEqual(r.calls, [], 'no press that began here: nothing to end');
+  });
+  test(`R1.3 voicePressButton (${name}): a pointerdown that finds an old or same-pointer sequence that never ended starts over; a lost pointer never leaves the clicks swallowed`, () => {
+    let r = pressRig(C);
+    r.el.fire('pointerdown', { pointerId: 1 });   // never painted (the call did not take it), no pointerup ever comes
+    r.clock.t += 11000; r.el.fire('pointerdown', { pointerId: 2 });
+    assert.deepStrictEqual(r.calls, [true, true], 'older than 10 s: reset, not ignored');
+    r = pressRig(C);
+    r.el.fire('pointerdown', { pointerId: 7 }); r.clock.t += 500; r.el.fire('pointerdown', { pointerId: 7 });
+    assert.deepStrictEqual(r.calls, [true, true], 'the same pointer again: its earlier sequence is over');
+    r = pressRig(C);
+    r.el.fire('pointerdown', { pointerId: 1 }); r.clock.t += 500; r.el.fire('pointerdown', { pointerId: 2 });
+    assert.deepStrictEqual(r.calls, [true], 'a second finger on a press under way is still ignored');
+    r = pressRig(C);
+    r.el.fire('pointerdown'); r.el.fire('lostpointercapture');   // talk(true), talk(false): swallowUntil is now + 700, not Infinity
+    r.clock.t += 2000; r.el.fire('click');
+    assert.deepStrictEqual(r.calls, [true, false, true], 'a later click is a toggle again: the swallowing ended with the sequence');
+  });
+  test(`R1.6 voicePressButton (${name}): off() (the display's "Try the microphone again") makes the press handlers do nothing; back on, they press`, () => {
+    let off = true;
+    const calls = [], el = fakeButton(), clock = { t: 10000 };
+    C.voicePressButton(el, () => ({ talk: (on) => calls.push(on) }), { now: () => clock.t, off: () => off });
+    clock.t += 5000;
+    const d = el.fire('pointerdown'); el.fire('pointerup'); el.fire('click'); el.fire('keydown', { key: 'Enter' }); el.fire('keyup', { key: 'Enter' });
+    assert.deepStrictEqual(calls, [], 'nothing reaches the call'); assert.ok(!d.prevented, 'and the default action is left alone: the display\'s own click runs');
+    off = false; clock.t += 2000;
+    el.fire('pointerdown'); assert.deepStrictEqual(calls, [true]);
+  });
+}
+
+// ── item 4: holding the idle mic before a call exists ──
+test('R1.4 desktop: how long the idle mic\'s pointer was held (voiceMicHeldMs) is read once; no pointer (keyboard, assistive technology) counts as a tap', () => {
+  const src = between(app, 'const voiceMicPtr', 'async function voiceMicToggle(');
+  const clk = { t: 5000 };
+  const f = new Function('Date', src + '\nreturn { voiceMicPointer, voiceMicHeldMs };')({ now: () => clk.t });
+  f.voiceMicPointer(false); clk.t += 1000; f.voiceMicPointer(true);
+  assert.strictEqual(f.voiceMicHeldMs(), 1000, 'a hold of 1 s');
+  assert.strictEqual(f.voiceMicHeldMs(), 0, 'read once');
+  f.voiceMicPointer(false); clk.t += 120; f.voiceMicPointer(true); assert.strictEqual(f.voiceMicHeldMs(), 120, 'a tap');
+  assert.strictEqual(f.voiceMicHeldMs(), 0, 'a click with no pointer: a tap');
+  f.voiceMicPointer(false); clk.t += 5000; assert.strictEqual(f.voiceMicHeldMs(), 0, 'a pointerdown whose pointerup never came (a cancel) is not the pointer of a later keyboard click');
+  f.voiceMicPointer(false); clk.t += 900; f.voiceMicPointer(true); clk.t += 3000; assert.strictEqual(f.voiceMicHeldMs(), 0, 'a release long before the click is not this click\'s');
+  assert.ok(/onpointerdown="voiceMicPointer\(false\)" onpointerup="voiceMicPointer\(true\)" onclick="voiceMicToggle\('\$\{chatId\}'\)"/.test(app), 'the desktop mic button records its pointer');
+});
+test('R1.4 desktop: a held idle mic starts a Tap to talk call that comes up idle (no talk(true)); a tap or a click with no pointer starts it and listens', async () => {
+  for (const [held, idle] of [[1000, true], [400, true], [399, false], [120, false], [0, false]]) {
+    const S = { active: false, starting: false }, log = [];
+    const m = desktopMic('press', { voiceMicHeldMs: () => held, voiceCallS: S, voiceCallStart: (id) => { log.push('call:' + id); S.call = {}; } });
+    await m.run('c1');
+    assert.deepStrictEqual(log, ['call:c1']);
+    assert.strictEqual(S.idle === true, idle, 'held ' + held + ' ms: idle ' + idle);
+  }
+  const S0 = { active: false, starting: false };
+  const m0 = desktopMic('press', { voiceMicHeldMs: () => 1000, voiceCallS: S0, voiceCallStart: () => {} });   // the start did not make a call (voice off ...): nothing is marked
+  await m0.run('c1'); assert.ok(!S0.idle);
+  // the whole call on the page: the idle mark reaches the end of voiceCallStart, where talk(true) is, only for a press call
+  let e = desktopCall('press');
+  let p = e.api.voiceCallStart('c1'); e.api.voiceCallS.idle = true; await p; await tick();
+  assert.deepStrictEqual(e.talks, [], 'held: the call is up and idle');
+  assert.strictEqual(e.api.voiceCallS.active, true); await e.api.voiceCallHangUp(); await tick();
+  e = desktopCall('press'); await e.api.voiceCallStart('c1'); await tick();
+  assert.deepStrictEqual(e.talks, [true], 'a tap: the call listens at once'); assert.strictEqual(e.api.voiceCallS.idle, false);
+  await e.api.voiceCallHangUp(); await tick();
+});
+test('R1.4 phone: a held idle mic starts a Tap to talk call that comes up idle (no talk(true)); a tap or a click with no pointer starts it and listens', async () => {
+  const ptrs = [];
+  for (const [held, idle] of [[1000, true], [400, true], [399, false], [0, false]]) {
+    const src = between(mob, 'async function voiceMicTap()', 'async function voiceMicStop()').replace(/\bvoiceCall\b(?!\w)/g, 'S.voiceCall');
+    const S = { voiceCall: null }, log = [];
+    const env = { S, voicePressEndedAt: 0, voiceMicHeldMs: () => held, VOICE_PRESS_HOLD_MS: 400, keepKeyboard: null, voiceCallHangUp() {}, voiceRec: { state: 'idle', guard: { pending: false } }, voiceTest: { guard: { pending: false } }, current: 'bob', toast() {},
+      voicePrefsNow: () => ({ mode: 'press' }), voiceCallStart: () => { log.push('call'); S.voiceCall = { press: true }; }, Date };
+    const f = new Function(...Object.keys(env), src + '\nreturn voiceMicTap;')(...Object.values(env));
+    await f(); assert.deepStrictEqual(log, ['call']); assert.strictEqual(S.voiceCall.idle === true, idle, 'held ' + held + ' ms'); ptrs.push(S.voiceCall.idle === true);
+  }
+  assert.deepStrictEqual(ptrs, [true, true, false, false]);
+  // voiceCallStart: talk(true) after call.start() resolves unless the call was marked idle meanwhile
+  let p = phoneStart('press'); p.run(); globalThis.__vcPress.idle = true; await tick(); assert.deepStrictEqual(p.talks, [], 'held: idle'); delete globalThis.__vcPress;
+  p = phoneStart('press'); p.run(); await tick(); assert.deepStrictEqual(p.talks, [true], 'a tap: listens'); delete globalThis.__vcPress;
+  assert.ok(/\$\('mic-btn'\)\.addEventListener\('pointerdown', \(\) => voiceMicPointer\(false\)\);[^\n]*\n\s*\$\('mic-btn'\)\.addEventListener\('pointerup', \(\) => voiceMicPointer\(true\)\);\s*\n\s*onComposerTap\(\$\('mic-btn'\), voiceMicTap\);/.test(mob), 'the pointer is recorded before the tap handler acts on the pointerup');
+  const rec = between(mob, 'const voiceMicPtr', 'async function voiceMicTap()');
+  const clk = { t: 100 }; const g = new Function('Date', rec + '\nreturn { voiceMicPointer, voiceMicHeldMs };')({ now: () => clk.t });
+  g.voiceMicPointer(false); clk.t += 700; g.voiceMicPointer(true); assert.strictEqual(g.voiceMicHeldMs(), 700); assert.strictEqual(g.voiceMicHeldMs(), 0);
+});
+
+// ── item 5: the chip and the pickers during a call show the call's own mode ──
+test('R1.5 desktop: during a call the chip names the running call\'s mode; outside a call the saved one', () => {
+  const src = between(app, 'function voiceModeLabel()', 'const VOICE_LEVELS_SVG');
+  const mk = (S, mode) => new Function('voiceCallS', 'voicePrefsNow', src + '\nreturn voiceModeLabel;')(S, () => ({ mode }));
+  assert.strictEqual(mk({ call: {}, press: false }, 'press')(), 'Hands-free', 'a Hands-free call, Tap to talk saved for the next one');
+  assert.strictEqual(mk({ call: {}, press: true }, 'handsfree')(), 'Tap to talk', 'a Tap to talk call, Hands-free saved for the next one');
+  assert.strictEqual(mk({ call: {}, press: true }, 'tap')(), 'Tap to talk');
+  assert.strictEqual(mk({ call: null, press: true }, 'handsfree')(), 'Hands-free', 'no call: the saved mode');
+  assert.strictEqual(mk({ call: null }, 'press')(), 'Tap to talk');
+  assert.strictEqual(mk({ call: null }, 'tap')(), 'Hands-free', 'Dictation is never named');
+});
+test('R1.5 desktop: the chip, the panel and Settings save the mode for the next call and say so during a call; outside a call they say nothing', async () => {
+  let e = desktopCall('handsfree');
+  e.api.voiceModeToggle(); assert.strictEqual(e.getPrefs().mode, 'press'); assert.deepStrictEqual(e.calls.toasts, [], 'no call: no toast');
+  await e.api.voiceCallStart('c1'); await tick();   // a Tap to talk call (the saved mode is Tap to talk now)
+  assert.strictEqual(e.api.voiceCallS.press, true);
+  e.api.voiceModeToggle();
+  assert.strictEqual(e.getPrefs().mode, 'handsfree', 'saved for the next call');
+  assert.deepStrictEqual(e.calls.toasts, ['From your next call: Hands-free.']);
+  assert.strictEqual(e.api.voiceCallS.press, true, 'the running call keeps its mode');
+  e.api.voiceCtlSet('mode', 'tap', true); assert.deepStrictEqual(e.calls.toasts.slice(1), ['From your next call: Dictation.']);
+  e.api.voiceCtlSet('mode', 'tap', true); assert.strictEqual(e.calls.toasts.length, 2, 'picking what is already saved says nothing');
+  await e.api.voiceCallHangUp(); await tick();
+  e.api.voiceModeToggle(); assert.strictEqual(e.calls.toasts.length, 2, 'after the call: nothing to say');
+  const settings = between(app, 'function voiceSettingsSavePrefs(', 'function voiceTestStop()');
+  assert.ok(/const modeBefore = voicePrefsNow\(\)\.mode;/.test(settings) && /if \(prefs\.mode !== modeBefore\) voiceModeNextCallToast\(prefs\.mode\);/.test(settings), 'the Settings select too');
+});
+test('R1.5 phone: the chip names the running call\'s mode; the chip, the panel radios and the sheet radios save for the next call and say so during a call', () => {
+  const src = between(mob, 'function voiceModeName(m)', 'function voiceStripPaint()');
+  const toasts = [], S = { voiceCall: null };
+  const f = new Function('S', 'toast', src.replace(/\bvoiceCall\b(?!\w)/g, 'S.voiceCall') + '\nreturn voiceModeNextCallToast;')(S, (t) => toasts.push(t));
+  f('handsfree', 'press'); assert.deepStrictEqual(toasts, [], 'no call: nothing to say');
+  S.voiceCall = { press: false };
+  f('handsfree', 'press'); f('press', 'tap'); f('press', 'handsfree'); f('press', 'press');
+  assert.deepStrictEqual(toasts, ['From your next call: Tap to talk.', 'From your next call: Dictation.', 'From your next call: Hands-free.']);
+  assert.match(mob, /\$\('voice-mode-chip'\)\?\.addEventListener\('click', \(\) => \{ const prev = voicePrefsNow\(\)\.mode, next = prev === 'handsfree' \? 'press' : 'handsfree'; save\(\{ mode: next \}\); voiceModeNextCallToast\(prev, next\); \}\);/);
+  assert.match(mob, /r\.addEventListener\('change', \(e\) => \{ if \(e\.target\.checked\) \{ const prev = voicePrefsNow\(\)\.mode; save\(\{ mode: e\.target\.value \}\); voiceModeNextCallToast\(prev, e\.target\.value\); \} \}\);/, 'the panel radios');
+  assert.match(mob, /const prev = voicePrefsNow\(\)\.mode; voicePrefsSave\(\{ mode: e\.target\.value \}\); voiceMicPaint\(\); paintVoiceSheet\(\); voiceModeNextCallToast\(prev, e\.target\.value\);/, 'the sheet radios');
+  const strip = between(mob, 'function voiceStripPaint() {', '// Under each of the four settings');
+  assert.match(strip, /const press = voiceCall \? voiceCall\.press === true : voicePrefsNow\(\)\.mode === 'press'/, 'the chip follows voiceCall.press during a call');
+});
+
+// ── item 6: smaller fixes ──
+test('R1.6 a click on the mic within 1 s of the end of a Tap to talk call does not start a new call (desktop and phone); later it does', async () => {
+  const clk = { t: 100000 };
+  const fake = { now: () => clk.t };
+  for (const name of ['desktop', 'phone']) {
+    const mk = (over) => (name === 'desktop' ? desktopMic('press', over) : phoneMic('press', undefined, over));
+    const go = (m) => (name === 'desktop' ? m.run('c1') : m.run());
+    let m = mk({ voicePressEndedAt: clk.t - 600, Date: fake });
+    await go(m); assert.deepStrictEqual(m.log, [], name + ': 600 ms after the end: the trailing click of the press');
+    m = mk({ voicePressEndedAt: clk.t - 1500, Date: fake });
+    await go(m); assert.ok(m.log.some((x) => x.startsWith('call')), name + ': 1.5 s after: a new call');
+    m = mk({ Date: fake });
+    await go(m); assert.ok(m.log.some((x) => x.startsWith('call')), name + ': no call ended before: a new call');
+  }
+  const dt = between(app, 'function voiceCallTeardown()', 'function voiceCallHangUp()');
+  assert.ok(dt.indexOf('if (S.press) voicePressEndedAt = Date.now();') > 0 && dt.indexOf('if (S.press) voicePressEndedAt') < dt.indexOf('voiceCallPressDetach(); S.press = false;'), 'desktop teardown notes the end of a press call before it lets go of it');
+  const pt = between(mob, 'function voiceCallTeardown(vc)', 'function voiceCallHangUp()');
+  assert.ok(pt.indexOf('if (vc.press) voicePressEndedAt = Date.now();') > 0 && pt.indexOf('if (vc.press) voicePressEndedAt') < pt.indexOf('voiceCallPressDetach(vc);'), 'phone teardown too');
+});
+test('R1.6 desktop: the call display\'s Talk slot does nothing while it reads "Try the microphone again" (the mic button still presses); the mic button gets touch-action: none during a Tap to talk call', async () => {
+  const e = desktopCall('press');
+  await e.api.voiceCallStart('c1'); await tick();
+  const m = e.get('mic-c1');
+  assert.strictEqual(m.style.touchAction, 'none', 'the pressed-by-finger mic button must not be cancelled by a pan');
+  const d = e.shown.displays[0], o = d.opts, slotEl = fakeButton();
+  o.onPressButton(slotEl);
+  const n0 = e.talks.length; slotEl.fire('pointerdown'); assert.strictEqual(e.talks.length, n0 + 1, 'in press mode the slot presses');
+  const before = e.talks.length;
+  d.info = () => ({ talk: 'mic', micLost: true });   // the display's slot now reads "Try the microphone again"
+  const down = slotEl.fire('pointerdown'); slotEl.fire('pointerup'); slotEl.fire('click'); slotEl.fire('keydown', { key: 'Enter' });
+  assert.strictEqual(e.talks.length, before, 'the press handlers do nothing on it (only the display\'s retry runs)'); assert.ok(!down.prevented);
+  m.listeners.pointerdown({ preventDefault() {}, pointerId: 1, pointerType: 'mouse', button: 0 });
+  assert.strictEqual(e.talks.length, before + 1, 'the mic button still presses');
+  await e.api.voiceCallHangUp(); await tick();
+  assert.strictEqual(m.style.touchAction, '', 'back to a plain mic button after the call');
+  const h = desktopCall('handsfree'); await h.api.voiceCallStart('c1'); await tick();
+  assert.ok(h.get('mic-c1').style.touchAction !== 'none', 'a Hands-free call leaves the mic button alone'); await h.api.voiceCallHangUp(); await tick();
+});
+test('R1.6 phone: the display\'s Talk slot gets off() that is true only while it reads "Try the microphone again"', () => {
+  const src = between(mob, 'function voiceDispBegin(vc) {', '// The call is ending');
+  let opts = null, attached = [], info = { talk: 'press' };
+  const disp = { cur: null, last: null, floor: null, turnSeq: new Map(), shared: {} };
+  const env = { CallDisplay: { createCallDisplay: (o) => { opts = o; return { start() {}, info: () => info }; }, createTalkFloor: () => ({}) }, voiceDisp: disp, voiceCall: null, document: {}, window: {}, localStorage: {}, fetch() {},
+    agentByName: () => null, voiceDispRoutesLost() {}, voiceDispAgentDefault: () => 'none', voiceDispAdopt() {}, voiceOutNode() {}, $: () => null, voiceDispTalk() {}, voiceCallHangUp() {}, voiceCallRetryMicTap() {}, voiceDispPaintPanel() {}, voiceCallMuteTap() {},
+    voiceCallPressAttach: (v, el, o) => attached.push(o) };
+  new Function(...Object.keys(env), src + '\nreturn voiceDispBegin;')(...Object.values(env))({ press: true, agent: 'bob' });
+  opts.onPressButton('EL');
+  assert.strictEqual(typeof attached[0].off, 'function');
+  assert.strictEqual(attached[0].off(), false); info = { talk: 'mic' }; assert.strictEqual(attached[0].off(), true); info = { talk: 'press' }; assert.strictEqual(attached[0].off(), false);
+  disp.cur = null; assert.strictEqual(attached[0].off(), false, 'no display: false');
+});
+test('R1.6 attaching a press button lets go of handles whose button is no longer in the document (desktop and phone)', async () => {
+  // desktop
+  const e = desktopCall('press');
+  await e.api.voiceCallStart('c1'); await tick();
+  const o = e.shown.displays[0].opts, a = fakeButton(), b = fakeButton();
+  o.onPressButton(a);
+  assert.ok(e.api.voiceCallS.pressBtns.some((h) => h.el === a));
+  a.isConnected = false;   // the display closed: its slot left the page
+  o.onPressButton(b);
+  assert.ok(!e.api.voiceCallS.pressBtns.some((h) => h.el === a), 'the gone button\'s handle is dropped');
+  assert.ok(e.api.voiceCallS.pressBtns.some((h) => h.el === b));
+  assert.deepStrictEqual(a.listeners.pointerdown, [], 'and its listeners are removed');
+  await e.api.voiceCallHangUp(); await tick();
+  // phone
+  const src = between(mob, 'function voiceCallPressText(', 'function voiceCallPaintMeter(');
+  const vcRef = { v: null };
+  const f = new Function('voiceCall', 'voicePressButton', '$', 'voiceCallStateText', 'voiceDisplayHook', 'VOICE_LINK_LOST_TEXT', src.replace(/\bvoiceCall\b(?!\w)/g, 'voiceCall.v') + '\nreturn { voiceCallPressAttach };')(vcRef, LIB.voicePressButton, () => null, () => '', () => {}, '');
+  const vc = { press: true, pressing: false, pressBtns: [], call: { talk() {} } }; vcRef.v = vc;
+  const p1 = fakeButton(), p2 = fakeButton();
+  f.voiceCallPressAttach(vc, p1, {}); p1.isConnected = false; f.voiceCallPressAttach(vc, p2, {});
+  assert.deepStrictEqual(vc.pressBtns.map((h) => h.el), [p2], 'phone: only the button that is still there');
+  assert.deepStrictEqual(p1.listeners.pointerdown, []);
+});
+
 test('the phone service worker is bumped for the new mobile.html and mobile.js (hub-mobile-v73)', () => {
   assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v73'/);
 });

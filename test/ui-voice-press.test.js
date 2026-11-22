@@ -160,11 +160,23 @@ function fakeBrowser() {
   return { b, win, loadScript };
 }
 const frames = (o, n) => { for (let i = 0; i < n; i++) o.onFrameProcessed({ isSpeech: 0.1 }, new Float32Array(512).fill(i + 1)); };
+// The adapter's own clock and timers (its press tail is waited out through the injected setTimer): c.go(ms) moves time and runs what is due.
+function clock() {
+  const c = { t: 1000, timers: [], id: 1 };
+  c.now = () => c.t;
+  c.setTimer = (fn, ms) => { const id = c.id++; c.timers.push({ id, at: c.t + ms, fn }); return id; };
+  c.clearTimer = (id) => { c.timers = c.timers.filter((x) => x.id !== id); };
+  c.go = (ms) => { const end = c.t + ms; for (;;) { const due = c.timers.filter((x) => x.at <= end).sort((a, b) => a.at - b.at)[0]; if (!due) break; c.timers = c.timers.filter((x) => x !== due); c.t = due.at; due.fn(); } c.t = end; };
+  c.opts = { now: c.now, setTimer: c.setTimer, clearTimer: c.clearTimer };
+  return c;
+}
+// endPiece with the tail waited out: starts it, moves the clock past the 200 ms tail, and answers with what it answered.
+const endAfter = async (vad, c, ms = 200) => { const p = vad.endPiece(); c.go(ms); return p; };
 
 test('press 7: the manual adapter ignores the detector\'s speech events, starts muted, and a press is the frames between unmute and mute', async () => {
   const { b, win, loadScript } = fakeBrowser();
-  const ev = [];
-  const vad = voiceCreateVad({ manual: true, win, loadScript, echoHoldMs: 0 });
+  const ev = [], c = clock();
+  const vad = voiceCreateVad({ manual: true, win, loadScript, echoHoldMs: 0, ...c.opts });
   await vad.start({ onSpeechBegin: () => ev.push('begin'), onSpeechStart: () => ev.push('start'), onSpeechEnd: (a) => ev.push(['end', a.length, a[0], a[a.length - 1]]), onMisfire: () => ev.push('misfire'), onFrame: () => ev.push('frame') });
   const o = b.created[0].options;
   await o.getStream();
@@ -183,7 +195,7 @@ test('press 7: the manual adapter ignores the detector\'s speech events, starts 
   frames(o, 9);
   vad.setMuted(true);
   assert.strictEqual(b.track.enabled, false, 'tracks are off between presses');
-  frames(o, 5);   // after the release: not kept
+  c.go(250); frames(o, 5);   // long after the release (past its 200 ms tail): not kept
   ev.length = 0;
   assert.strictEqual(await vad.endPiece(), true);
   assert.deepStrictEqual(ev, [['end', 9 * 512, 1, 9]], 'one Float32Array of the right length, in order');
@@ -193,19 +205,19 @@ test('press 7: the manual adapter ignores the detector\'s speech events, starts 
 
 test('press 7b: a press under 250 ms is a false start; exactly 250 ms is a piece; a second press starts a clean buffer', async () => {
   const { b, win, loadScript } = fakeBrowser();
-  const ev = [];
-  const vad = voiceCreateVad({ manual: true, win, loadScript, echoHoldMs: 0 });
+  const ev = [], c = clock();
+  const vad = voiceCreateVad({ manual: true, win, loadScript, echoHoldMs: 0, ...c.opts });
   await vad.start({ onSpeechBegin() {}, onSpeechStart() {}, onSpeechEnd: (a) => ev.push('end ' + a.length), onMisfire: () => ev.push('misfire') });
   const o = b.created[0].options; await o.getStream();
   vad.setMuted(false); frames(o, 7); vad.setMuted(true);   // 3584 samples = 224 ms
-  await vad.endPiece(); assert.deepStrictEqual(ev, ['misfire']);
+  await endAfter(vad, c); assert.deepStrictEqual(ev, ['misfire']);
   ev.length = 0;
   vad.setMuted(false); o.onFrameProcessed({}, new Float32Array(4000)); vad.setMuted(true);
-  await vad.endPiece(); assert.deepStrictEqual(ev, ['end 4000']);
+  await endAfter(vad, c); assert.deepStrictEqual(ev, ['end 4000']);
   ev.length = 0;
   vad.setMuted(false); frames(o, 2); vad.setMuted(true);
   vad.setMuted(false); frames(o, 1); vad.setMuted(true);   // a quick second press: only its own frames
-  await vad.endPiece(); assert.deepStrictEqual(ev, ['misfire']);
+  await endAfter(vad, c); assert.deepStrictEqual(ev, ['misfire']);
   await vad.stop();
 });
 
@@ -224,7 +236,8 @@ test('press 7c: a hands-free adapter is unchanged: speech events pass, tracks st
 
 test('press 7d: the controller on a real manual adapter: press, frames, release sends the whole recording', async () => {
   const { b, win, loadScript } = fakeBrowser();
-  const vad = voiceCreateVad({ manual: true, win, loadScript, echoHoldMs: 0 });
+  const c = clock();
+  const vad = voiceCreateVad({ manual: true, win, loadScript, echoHoldMs: 0, ...c.opts });
   const h = await started({ vad, stt: async (audio) => { h.stt.push(audio.length); return 'what I said'; } });
   const o = b.created[0].options; await o.getStream();
   assert.strictEqual(b.track.enabled, false);
@@ -232,13 +245,79 @@ test('press 7d: the controller on a real manual adapter: press, frames, release 
   for (let i = 0; i < 20; i++) { frames(o, 1); await advance(h, 32); }
   for (let s = 0; s < 10; s++) { o.onFrameProcessed({}, new Float32Array(0)); await advance(h, 1000); }   // a pause: frames of silence keep arriving, nothing is kept or sent
   assert.deepStrictEqual(h.sent, []);
-  h.call.talk(false); await tick(40);
+  h.call.talk(false); await tick(10); c.go(200); await tick(40);   // the press's 200 ms tail (frames still in the pipeline) is waited out, then it is sent
   assert.deepStrictEqual(h.stt, [20 * 512]); assert.deepStrictEqual(h.sent, ['what I said']);
   assert.strictEqual(b.track.enabled, false);
   // a tap that is too short sends nothing
-  h.sent.length = 0; h.call.talk(true); frames(o, 2); h.call.talk(false); await tick(40);
+  h.sent.length = 0; h.call.talk(true); frames(o, 2); h.call.talk(false); await tick(10); c.go(200); await tick(40);
   assert.deepStrictEqual(h.sent, []); assert.strictEqual(h.call.state === 'hearing', false);
   await h.call.hangUp();
+});
+
+// ── review round 1, item 1: a frame belongs to the press it was captured in; the tail of a press is kept ──
+const fr = (o, n, v) => { for (let i = 0; i < n; i++) o.onFrameProcessed({ isSpeech: 0.1 }, new Float32Array(512).fill(v)); };
+async function manual(extra) {
+  const { b, win, loadScript } = fakeBrowser(), c = clock(), ev = [];
+  const vad = voiceCreateVad({ manual: true, win, loadScript, echoHoldMs: 0, ...c.opts, ...(extra || {}) });
+  await vad.start({ onSpeechBegin() {}, onSpeechStart() {}, onSpeechEnd: (a) => ev.push(['end', a.length, a[0], a[a.length - 1]]), onMisfire: () => ev.push('misfire') });
+  const o = b.created[0].options; await o.getStream();
+  return { vad, c, ev, o };
+}
+
+test('press R1a: a frame processed after the release but within 200 ms is in the sent audio (the last syllable); one 250 ms after is not', async () => {
+  const { vad, c, ev, o } = await manual();
+  vad.setMuted(false); fr(o, 9, 1); vad.setMuted(true);
+  c.go(120); fr(o, 2, 7);                      // captured before the release, processed 120 ms after it
+  const p = vad.endPiece(); await tick(); assert.deepStrictEqual(ev, [], 'handed over only when the tail is over');
+  c.go(80); await p;
+  assert.deepStrictEqual(ev, [['end', 11 * 512, 1, 7]], 'the late frames are at the end of the piece');
+  ev.length = 0;
+  vad.setMuted(false); fr(o, 9, 1); vad.setMuted(true);
+  c.go(250); fr(o, 3, 7);                      // 250 ms after the release: silence, not the press's
+  await endAfter(vad, c);
+  assert.deepStrictEqual(ev, [['end', 9 * 512, 1, 1]]);
+  await vad.stop();
+});
+
+test('press R1b: a new press started during the tail of the old one does not clear its frames, take them or lose them', async () => {
+  const { vad, c, ev, o } = await manual();
+  vad.setMuted(false); fr(o, 9, 1); vad.setMuted(true);   // press A, released
+  c.go(50); vad.setMuted(false);                           // press B starts inside A's tail, before A's piece has been taken
+  fr(o, 10, 5);                                            // from now on frames are B's (a press that is open takes them)
+  const pa = vad.endPiece();                               // A's piece (the most recently ended press): waits out what is left of A's tail
+  c.go(150); await pa;
+  assert.deepStrictEqual(ev, [['end', 9 * 512, 1, 1]], 'A has only A\'s frames: B\'s start neither cleared them nor took B\'s into A');
+  ev.length = 0;
+  vad.setMuted(true); const pb = vad.endPiece(); c.go(200); await pb;
+  assert.deepStrictEqual(ev, [['end', 10 * 512, 5, 5]], 'B has only B\'s frames');
+  await vad.stop();
+});
+
+test('press R1c: two quick presses make two pieces, each with its own frames (A keeps the frames that arrive in its tail, B starts inside it)', async () => {
+  const { vad, c, ev, o } = await manual();
+  vad.setMuted(false); fr(o, 9, 1); vad.setMuted(true);
+  c.go(60); fr(o, 2, 9);                                                       // A's last syllable, processed 60 ms after the release
+  const pa = vad.endPiece();
+  c.go(40); vad.setMuted(false); fr(o, 12, 2); c.go(30); vad.setMuted(true);   // B opens and closes while A is still in its tail
+  const pb = vad.endPiece();                                                   // takes the most recently ended press (B)
+  c.go(400); await pa; await pb;
+  assert.deepStrictEqual(ev, [['end', 11 * 512, 1, 9], ['end', 12 * 512, 2, 2]]);
+  // a press nobody ended with endPiece is not mixed into the next one, nor sent late with it
+  ev.length = 0;
+  vad.setMuted(false); fr(o, 8, 3); vad.setMuted(true); c.go(300);
+  vad.setMuted(false); fr(o, 9, 4); vad.setMuted(true);
+  await endAfter(vad, c);
+  assert.deepStrictEqual(ev, [['end', 9 * 512, 4, 4]]);
+  assert.deepStrictEqual(await endAfter(vad, c), true); assert.deepStrictEqual(ev.slice(1), ['misfire'], 'the older press was let go, not sent on the next release');
+  await vad.stop();
+});
+
+test('press R1d: a call that ends during the tail of a press hands nothing over (the piece is not sent into a call that is gone)', async () => {
+  const { vad, c, ev, o } = await manual();
+  vad.setMuted(false); fr(o, 40, 1); vad.setMuted(true);
+  const p = vad.endPiece(); c.go(50);
+  await vad.stop(); c.go(300); await p;
+  assert.deepStrictEqual(ev, []);
 });
 
 test('press 8: the page copies in app.js and mobile.js carry the controller and the adapter', () => {

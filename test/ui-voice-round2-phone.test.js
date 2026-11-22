@@ -95,9 +95,11 @@ test('chat controls: the mode chip shows only during a call, names the mode, and
   assert.strictEqual(els['voice-strip'].hidden, false, 'during a call the pill shows');
   f.setCall(null); f.voiceStripPaint();
   assert.strictEqual(els['voice-strip'].hidden, true, 'after the call it goes again');
-  f.setCall({ call: {} }); f.voiceStripPaint();
+  f.setCall({ call: {}, press: true }); f.voiceStripPaint();   // the chip names the RUNNING call's mode (call.press), not the saved one
   assert.strictEqual(els['voice-mode-chip'].textContent, 'Tap to talk');
   prefs = { mode: 'handsfree' }; f.voiceStripPaint();
+  assert.strictEqual(els['voice-mode-chip'].textContent, 'Tap to talk', 'a mode saved during the call counts from the next call: the chip keeps the running call\'s');
+  f.setCall({ call: {} }); f.voiceStripPaint();
   assert.strictEqual(els['voice-mode-chip'].textContent, 'Hands-free');
   assert.match(els['voice-mode-chip'].aria, /Hands-free/);
   prefs = { mode: 'tap' }; f.voiceStripPaint();

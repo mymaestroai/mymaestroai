@@ -19,9 +19,9 @@ function fnSource(src, name) {
 
 test('desktop: in Simple the voice button starts a call whatever the voice mode; Advanced keeps its own line', () => {
   const f = fnSource(app, 'voiceMicToggle');
-  const simple = f.indexOf("if (typeof simpleOn === 'function' && simpleOn()) { voiceCallStart(chatId); return; }");
-  const adv = f.indexOf("if (voicePrefsNow().mode !== 'tap') { voiceCallStart(chatId); return; }");
-  assert.ok(simple > 0 && adv > simple, 'the Simple line comes first and the Advanced line is unchanged');
+  const simple = f.indexOf("if (typeof simpleOn === 'function' && simpleOn()) { voiceCallStart(chatId); if (held && voiceCallS.call) voiceCallS.idle = true; return; }");   // (both lines now also mark a call that comes up idle after a held idle mic: Tap to talk)
+  const adv = f.indexOf("if (voicePrefsNow().mode !== 'tap') { voiceCallStart(chatId); if (held && voiceCallS.call) voiceCallS.idle = true; return; }");
+  assert.ok(simple > 0 && adv > simple, 'the Simple line comes first and the Advanced line is unchanged but for that mark');
   assert.ok(f.indexOf('if (!voiceReady())') < simple, 'voice off still says so first');
   assert.ok(f.indexOf('voiceCallHangUp()') < simple, 'a call that is up is still hung up first');
 });

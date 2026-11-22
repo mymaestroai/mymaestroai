@@ -665,7 +665,7 @@ test('routes: bad cloud audio falls back to the local engine (X-Voice-Fallback: 
   } finally { t.cleanup(); }
 });
 
-test('STT cost: priced by the real audio (a lying header rate cannot inflate it) and capped at the 10 MB maximum duration', async () => {
+test('STT cost: priced by the real audio (a lying header rate cannot inflate it) and capped at the 32 MiB maximum duration', async () => {
   const price = cloudMod.PRICES.openai.stt;
   const lie = wav16(1.5); lie.writeUInt32LE(1, 24);   // claims 1 Hz: the old maths gave about 6.7 hours
   const rows = []; const a = makeCloud({ rows, respond: () => ({ json: { text: 'x' } }) });
@@ -676,9 +676,9 @@ test('STT cost: priced by the real audio (a lying header rate cannot inflate it)
   assert.ok(rows[1].costUsd <= price * (3 / 60) + 1e-12 && rows[1].costUsd > 0, String(rows[1].costUsd));
   const real = await (async () => { await a.cloud.stt('helper', 'openai', wav16(1.5)); return rows[2].costUsd; })();
   assert.ok(Math.abs(real - price * (1.5 / 60)) < 1e-9, 'an honest 16 kHz file is priced by its length');
-  const huge = cloudMod.wavFromPcm16(Buffer.alloc(10 * MB - 44), 8000);   // 10 MB claiming 8 kHz: 655 s
+  const huge = cloudMod.wavFromPcm16(Buffer.alloc(32 * MB - 44), 8000);   // 32 MiB claiming 8 kHz: 2097 s
   await a.cloud.stt('helper', 'openai', huge);
-  assert.ok(rows[3].costUsd <= price * (10 * MB / 32000 / 60) + 1e-9, 'capped at the 10 MB maximum (16 kHz) duration: ' + rows[3].costUsd);
+  assert.ok(rows[3].costUsd <= price * (32 * MB / 32000 / 60) + 1e-9, 'capped at the 32 MiB maximum (16 kHz) duration: ' + rows[3].costUsd);
   const g = makeCloud({ rows, respond: () => ({ json: geminiText('x') }) });
   await g.cloud.stt('helper', 'google', lie);
   assert.ok(rows[4].costUsd <= cloudMod.PRICES.google.stt * (3 / 60) + 1e-12);

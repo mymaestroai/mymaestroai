@@ -15,7 +15,7 @@ const callSection = () => sliceBetween('// ── Voice call (phone): the hands-
 test('mic button: hands-free tap starts a call synchronously, a second tap hangs up, tap mode keeps dictation', () => {
   const tap = sliceBetween('async function voiceMicTap()', 'async function voiceMicStop()');
   assert.match(tap, /if \(voiceCall\) \{ if \(voiceCall\.press\) return; voiceCallHangUp\(\); return; \}/);   // a Tap to talk call: the mic button is the press button, not Hang up
-  assert.match(tap, /if \(voicePrefsNow\(\)\.mode !== 'tap'\) \{ voiceCallStart\(\); return; \}/);
+  assert.match(tap, /if \(voicePrefsNow\(\)\.mode !== 'tap'\) \{ voiceCallStart\(\); if \(held && voiceCall\) voiceCall\.idle = true; return; \}/);   // (+ the mark of a call that comes up idle after a held idle mic)
   assert.ok(!tap.slice(0, tap.indexOf('voiceCallStart()')).includes('await'), 'no await before call.start (iOS)');
   assert.ok(tap.indexOf('voiceCallStart()') < tap.indexOf('voiceRec.guard.begin()'), 'dictation code is only reached in tap mode');
   const start = sliceBetween('function voiceCallStart()', 'function voiceCallWire()');

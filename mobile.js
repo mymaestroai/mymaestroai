@@ -3927,32 +3927,42 @@ function voiceCreateLoudness(ctx) {
 // The press button of a Tap to talk call (el: the mic button, the display's Talk slot). getCall() -> the call controller (talk(on)). Pointer events: a press
 // on the button starts listening (talk(true)); let go after VOICE_PRESS_HOLD_MS or more = hold to talk, release sends (talk(false)); a shorter tap keeps listening;
 // a tap while listening sends on its release. The click after a pointer sequence is swallowed. Enter / Space toggle (no auto-repeat). The page calls
-// handle.paint(on) from the call's ui.press(on): aria-pressed and the label ("Tap to talk" / "Tap to send") follow it. opts: now(), cls (pressed style, default 'rec'), text (also set textContent).
+// handle.paint(on) from the call's ui.press(on): aria-pressed (listening or not), the title and the visible text ("Tap to talk" / "Tap to send") follow it; the aria-label stays "Talk".
+// opts: now(), cls (pressed style, default 'rec'), text (also set textContent), off() (true: the button is doing something else, e.g. the call display's "Try the microphone
+// again": the press handlers do nothing). A pointer sequence that is cancelled or loses its capture ends the press it opened (and sends), whatever its length;
+// a pointerdown that finds a sequence older than VOICE_PRESS_STALE_MS (or of the same pointer) that never ended starts over. handle.el is the button.
 const VOICE_PRESS_HOLD_MS = 400;
+const VOICE_PRESS_STALE_MS = 10000;
 const VOICE_PRESS_LABELS = ['Tap to talk', 'Tap to send'];
 function voicePressButton(el, getCall, opts) {
   const o = opts || {};
   const now = typeof o.now === 'function' ? o.now : () => Date.now();
   const cls = typeof o.cls === 'string' ? o.cls : 'rec';
   const bornAt = now();   // the button is often made inside the very tap that starts the call: that tap's own click is not a press
-  let pressing = false, began = false, wasPressing = false, downAt = 0, swallowUntil = 0, keyDown = false, keyClick = 0;
+  let pressing = false, began = false, wasPressing = false, downAt = 0, downId, swallowUntil = 0, keyDown = false, keyClick = 0;
   const quiet = (fn) => { try { return fn(); } catch { return undefined; } };
+  const off = () => typeof o.off === 'function' && quiet(() => o.off()) === true;
   const talk = (on) => { quiet(() => { const c = getCall(); if (c && typeof c.talk === 'function') c.talk(on); }); };
   const stop = (e) => { if (e && typeof e.preventDefault === 'function') quiet(() => e.preventDefault()); };
+  quiet(() => el.setAttribute('aria-label', 'Talk'));
   function paint(on) {
     pressing = !!on;
     const label = VOICE_PRESS_LABELS[pressing ? 1 : 0];
     quiet(() => el.setAttribute('aria-pressed', pressing ? 'true' : 'false'));
-    quiet(() => el.setAttribute('aria-label', label));
     quiet(() => el.setAttribute('title', label));
     if (o.text) quiet(() => { el.textContent = label; });
     if (cls) quiet(() => { if (el.classList) el.classList.toggle(cls, pressing); });
   }
   function onDown(e) {
     if (e && e.pointerType === 'mouse' && typeof e.button === 'number' && e.button !== 0) return;
+    if (off()) return;
     stop(e);
-    if (began) return;
-    began = true; swallowUntil = Infinity; wasPressing = pressing; downAt = now();
+    if (began) {
+      const id = e ? e.pointerId : undefined;
+      if (now() - downAt <= VOICE_PRESS_STALE_MS && !(id !== undefined && id === downId)) return;   // a second finger on a press that is under way
+      began = false;   // the earlier sequence never ended (no pointerup, no cancel): it is over, this one starts clean
+    }
+    began = true; swallowUntil = Infinity; wasPressing = pressing; downAt = now(); downId = e ? e.pointerId : undefined;
     quiet(() => { if (e && e.pointerId !== undefined && el.setPointerCapture) el.setPointerCapture(e.pointerId); });
     if (!wasPressing) talk(true);
   }
@@ -3962,8 +3972,16 @@ function voicePressButton(el, getCall, opts) {
     stop(e);
     if (wasPressing || now() - downAt >= VOICE_PRESS_HOLD_MS) talk(false);
   }
+  function onCancel(e) {   // pointercancel, lostpointercapture: the press this sequence opened (or the tap that was to send) ends now, whatever its length
+    if (!began) return;
+    began = false; swallowUntil = now() + 700;
+    stop(e);
+    talk(false);
+  }
   function onClick(e) {
     stop(e);
+    if (off()) return;
+    if (!began && swallowUntil === Infinity) swallowUntil = 0;   // never left swallowing for good
     if (now() - bornAt < 700 || now() <= swallowUntil) { swallowUntil = 0; return; }
     if (now() <= keyClick) { keyClick = 0; return; }
     talk(!pressing);   // a click from nothing we saw (assistive technology): a toggle
@@ -3971,6 +3989,7 @@ function voicePressButton(el, getCall, opts) {
   function onKeyDown(e) {
     const k = e && e.key;
     if (k !== 'Enter' && k !== ' ' && k !== 'Spacebar') return;
+    if (off()) return;
     stop(e);
     if (e.repeat || keyDown) return;
     keyDown = true; keyClick = now() + 700;
@@ -3981,9 +4000,9 @@ function voicePressButton(el, getCall, opts) {
     if (k !== 'Enter' && k !== ' ' && k !== 'Spacebar') return;
     stop(e); keyDown = false;
   }
-  const on = [['pointerdown', onDown], ['pointerup', onUp], ['pointercancel', onUp], ['click', onClick], ['keydown', onKeyDown], ['keyup', onKeyUp]];
+  const on = [['pointerdown', onDown], ['pointerup', onUp], ['pointercancel', onCancel], ['lostpointercapture', onCancel], ['click', onClick], ['keydown', onKeyDown], ['keyup', onKeyUp]];
   for (const [n, f] of on) el.addEventListener(n, f);
-  return { paint, get pressing() { return pressing; }, detach() { for (const [n, f] of on) quiet(() => el.removeEventListener(n, f)); } };
+  return { el, paint, get pressing() { return pressing; }, detach() { for (const [n, f] of on) quiet(() => el.removeEventListener(n, f)); } };
 }
 // ── voice helpers (end) ──
 
@@ -3999,7 +4018,8 @@ const VOICE_MUTE_END_MS = 5000;
 const VOICE_FRAMES_LOST_LINE = 'The microphone stopped sending sound, so I restarted it.';
 const VOICE_PIECE_LONG_LINE = 'You talked for over a minute, so I sent what I heard.';
 // Tap to talk (deps.press): a press is cut only at this length, not at VOICE_PIECE_MAX_MS; VOICE_PRESS_MIN_MS: a press with less audio than this is a false start (adapter).
-const VOICE_PRESS_MAX_MS = 15 * 60 * 1000, VOICE_PRESS_MIN_MS = 250;
+// VOICE_PRESS_TAIL_MS: a press goes on accepting frames this long after the release (the pipeline's lag: frames captured before the release are processed after it).
+const VOICE_PRESS_MAX_MS = 15 * 60 * 1000, VOICE_PRESS_MIN_MS = 250, VOICE_PRESS_TAIL_MS = 200;
 const VOICE_PRESS_LONG_LINE = 'You talked for 15 minutes, so I sent what I heard.';
 const VOICE_EMPTY_LINE = 'I didn\'t catch that.';   // the recognizer answered with no words at all for a piece of at least 1 s
 // While a reply plays, a stricter talk-over (iPhone, iPad: the speaker's echo is loud) caps the sensitivity at this value.
@@ -5790,10 +5810,11 @@ function voiceCreateVad(opts) {
     unprocessed: !!o.unprocessed,   // the call's own microphone is opened with echo cancellation, noise suppression and auto gain off (a recorded call, mic 'unprocessed': the fallback)
     recRaw: null, recSrc: null, recTrack: null, recOff: null, srcWatchers: [], openWaiters: [],   // the recording's own second microphone track (openRecordingTap) and who follows the tap
     manual: o.manual === true,   // tap to talk: the detector's speech events decide nothing; a piece is the frames heard between setMuted(false) and setMuted(true)
-    buf: [], bufLen: 0, collecting: false,   // manual: the frames of the press (Float32Array, 16 kHz), their total length, and whether frames are being kept now
+    open: null, ended: [],   // manual: each press is its own { frames (Float32Array, 16 kHz), len, endedAt, taken }; the press that is open now, and the ended ones that are still in their tail or not yet taken by endPiece
     muted: o.manual === true,   // setMuted: every microphone track of the call is switched off (a tap-to-talk call starts switched off)
     paused: false };   // endPiece paused the detector and has not started it again (a failed start): reopen() starts it
   const win = () => o.win || window;
+  const nowMs = typeof o.now === 'function' ? o.now : () => Date.now();
   const setT = o.setTimer || ((fn, ms) => { const w = win(); return (typeof w.setTimeout === 'function' ? w.setTimeout.bind(w) : setTimeout)(fn, ms); });
   const clearT = o.clearTimer || ((id) => { const w = win(); return (typeof w.clearTimeout === 'function' ? w.clearTimeout.bind(w) : clearTimeout)(id); });
   const clearHold = () => { if (st.holdTimer !== null) { try { clearT(st.holdTimer); } catch { /* gone */ } st.holdTimer = null; } };
@@ -6164,7 +6185,11 @@ function voiceCreateVad(opts) {
         onSpeechEnd: (audio) => (!st.manual && live() && handlers.onSpeechEnd ? handlers.onSpeechEnd(audio) : undefined),
         onVADMisfire: () => { if (!st.manual && live() && handlers.onMisfire) handlers.onMisfire(); },
         onFrameProcessed: (probs, frame) => {
-          if (st.manual && st.collecting && frame && frame.length) { st.buf.push(Float32Array.from(frame)); st.bufLen += frame.length; }   // a copy: the detector may reuse its frame
+          if (st.manual && frame && frame.length) {   // a frame belongs to the press that is open, else to the one released within VOICE_PRESS_TAIL_MS (its copy: the detector may reuse its frame)
+            let p = st.open;
+            if (!p) { const e = st.ended[st.ended.length - 1]; if (e && nowMs() - e.endedAt <= VOICE_PRESS_TAIL_MS) p = e; }
+            if (p) { p.frames.push(Float32Array.from(frame)); p.len += frame.length; }
+          }
           if (live() && handlers.onFrame) handlers.onFrame(voiceLevelDb(frame), probs);
         },
       });
@@ -6186,7 +6211,7 @@ function voiceCreateVad(opts) {
     flushOpen(false); dropRecording(); st.srcWatchers = [];
     st.vad = st.raw = st.dest = st.ctx = st.gain = st.src = st.defSnap = null;
     st.paused = false; st.settling = null; st.devPending = false;
-    st.buf = []; st.bufLen = 0; st.collecting = false;
+    st.open = null; st.ended = [];
     st.handlers = {};   // nothing the detector emits while it is destroyed (a last SpeechEnd from its pause) reaches the call
     if (src) { try { src.disconnect(); } catch { /* gone */ } }
     voiceStopStream(raw); voiceStopStream(dest);   // first, so the microphone is free even when the rest is slow
@@ -6236,14 +6261,24 @@ function voiceCreateVad(opts) {
     // segment and delivers it through onSpeechEnd (VADMisfire when too short) because of submitUserSpeechOnPause; start() on the same instance reconnects the
     // stream and listens again. An iOS context left 'interrupted' is resumed first (1 s at most). -> Promise of true when the detector listens again.
     async endPiece() {
-      if (st.manual) {   // tap to talk: the press's frames are the piece; the detector is neither paused nor restarted
-        const frames = st.buf, len = st.bufLen, h = st.handlers;
-        st.buf = []; st.bufLen = 0;
+      if (st.manual) {   // tap to talk: the frames of the most recently ended press are the piece; the detector is neither paused nor restarted
+        let p = null;
+        for (let i = st.ended.length - 1; i >= 0; i--) if (!st.ended[i].taken) { p = st.ended[i]; break; }
+        if (p) {
+          p.taken = true;
+          st.ended = st.ended.filter((e) => e === p || e.taken || e.endedAt > p.endedAt);   // an older press that nobody took is not sent late with the next one
+          const left = p.endedAt + VOICE_PRESS_TAIL_MS - nowMs();   // the press's tail (frames still in the pipeline) is waited out first
+          if (left > 0) await new Promise((r) => { try { setT(r, left); } catch { r(); } });
+        }
+        const h = st.handlers;   // (taken after the wait: a call that ended meanwhile has none)
+        let frames = [], len = 0;
+        if (p) { frames = p.frames; len = p.len; p.frames = []; p.len = 0; const i = st.ended.indexOf(p); if (i >= 0) st.ended.splice(i, 1); }
         if (len >= VOICE_PRESS_MIN_MS * 16) {
           const audio = new Float32Array(len);
           let at = 0;
           for (const f of frames) { audio.set(f, at); at += f.length; }
-          try { if (typeof h.onSpeechEnd === 'function') { const p = h.onSpeechEnd(audio); if (p && typeof p.catch === 'function') p.catch(() => {}); } } catch { /* the call's own problem */ }   // handed over, not awaited (as MicVAD delivers a piece)
+          frames = null;   // joined: the frame list is dropped at once (a long press is big)
+          try { if (typeof h.onSpeechEnd === 'function') { const pr = h.onSpeechEnd(audio); if (pr && typeof pr.catch === 'function') pr.catch(() => {}); } } catch { /* the call's own problem */ }   // handed over, not awaited (as MicVAD delivers a piece)
         } else { try { if (typeof h.onMisfire === 'function') h.onMisfire(); } catch { /* the call's own problem */ } }
         return true;
       }
@@ -6283,9 +6318,16 @@ function voiceCreateVad(opts) {
       const was = st.muted;
       st.muted = !!on; applyMute();
       if (!st.manual) return;
-      if (st.muted) { st.collecting = false; return; }
+      if (st.muted) {   // the press ends: it keeps taking frames for VOICE_PRESS_TAIL_MS (see onFrameProcessed) and waits for endPiece
+        const p = st.open; st.open = null;
+        if (p) {
+          p.endedAt = nowMs(); st.ended.push(p);
+          st.ended = st.ended.filter((e) => e === p || nowMs() - e.endedAt < 2000 || e.taken);   // a press nobody took is let go after a while
+        }
+        return;
+      }
       if (!was) return;   // already on: a piece is under way
-      st.buf = []; st.bufLen = 0; st.collecting = true;
+      st.open = { frames: [], len: 0, endedAt: null, taken: false };
       const h = st.handlers;
       try { if (typeof h.onSpeechBegin === 'function') h.onSpeechBegin(); } catch { /* the call's own problem */ }
       try { if (typeof h.onSpeechStart === 'function') h.onSpeechStart(); } catch { /* the call's own problem */ }
@@ -9471,13 +9513,27 @@ function voiceMicCancel() {
   voiceMicPaint();
 }
 
+// How long the pointer that produced a tap on the idle mic button was held (voiceMicPointer records its down and up, registered before the button's own tap handler);
+// 0 for a click with no pointer (the keyboard, assistive technology), which counts as a tap. Read once: the next tap starts clean.
+const voiceMicPtr = { downAt: 0, upAt: 0 };
+let voicePressEndedAt = 0;   // when a Tap to talk call last ended (a tap on the mic within 1 s of it is the trailing click of a press, not a new call)
+function voiceMicPointer(up) { const t = Date.now(); if (up) voiceMicPtr.upAt = t; else { voiceMicPtr.downAt = t; voiceMicPtr.upAt = 0; } }
+function voiceMicHeldMs() {
+  const p = voiceMicPtr, held = p.downAt && p.upAt >= p.downAt && Date.now() - p.upAt < 1000 ? p.upAt - p.downAt : 0;
+  p.downAt = 0; p.upAt = 0;
+  return held;
+}
 async function voiceMicTap() {
   keepKeyboard && keepKeyboard.elsewhere();   // the mic button took the touch: the keyboard guard must not bring the keyboard back
   if (voiceCall) { if (voiceCall.press) return; voiceCallHangUp(); return; }   // during a call it is the red phone: it hangs up first, whatever else is busy (in a Tap to talk call it is the press button, voicePressButton; Hang up is the panel's)
+  if (voicePressEndedAt && Date.now() - voicePressEndedAt < 1000) return;   // the trailing click of a press that outlived a Tap to talk call
   if (voiceRec.state === 'starting' || voiceRec.state === 'sending' || voiceRec.guard.pending || voiceTest.guard.pending) return;
   if (voiceRec.state === 'recording') { voiceMicStop(); return; }
   if (!current) { toast('Pick an agent first'); return; }
-  if (voicePrefsNow().mode !== 'tap') { voiceCallStart(); return; }   // hands-free and Tap to talk: a tap starts a call (voiceCallStart reads which; nothing awaited before call.start, for iOS)
+  // hands-free and Tap to talk: a tap starts a call (voiceCallStart reads which; it runs synchronously, for iOS). Tap to talk: a pointer held for VOICE_PRESS_HOLD_MS or
+  // more has already been let go, so that call comes up idle (nothing is heard until the next press); a tap starts it and listens.
+  const held = voiceMicHeldMs() >= VOICE_PRESS_HOLD_MS;
+  if (voicePrefsNow().mode !== 'tap') { voiceCallStart(); if (held && voiceCall) voiceCall.idle = true; return; }   // (the call object exists at once; its first talk(true) comes after call.start() resolves)
   if (voiceTest.handle) voiceTestStop();
   voiceStopPlayback();   // the phone's own speaker must not be heard by the mic
   voiceUnlockAudio();
@@ -9886,7 +9942,7 @@ function voiceDispBegin(vc) {
       onTalk: voiceDispTalk, onHangUp: () => voiceCallHangUp(), onRetryMic: voiceCallRetryMicTap, onChange: () => voiceDispPaintPanel(),
       onRecordingToggle: (wantPaused) => (voiceCall && voiceCall.rec ? voiceCall.rec.togglePause(wantPaused) : undefined),   // the Pause / Resume recording button of a recorded call
       ...(vc.press === true
-        ? { press: true, onPressButton: (el) => voiceCallPressAttach(vc, el, { cls: '' }) }   // Tap to talk: the Talk slot is the press button, and there is no Mute (the microphone is off between presses)
+        ? { press: true, onPressButton: (el) => voiceCallPressAttach(vc, el, { cls: '', off: () => { try { const c = voiceDisp.cur; return !!c && c.info().talk === 'mic'; } catch { return false; } } }) }   // Tap to talk: the Talk slot is the press button (it does nothing while it reads "Try the microphone again"), and there is no Mute (the microphone is off between presses)
         : { onMute: voiceCallMuteTap }) });
     voiceDisp.cur = d;
     d.start();   // synchronous: the audio context is made and resumed inside the tap that started the call
@@ -9997,7 +10053,11 @@ function voiceCallPressText(vc, name) {
 // A press button of this call (the mic button, the display's Talk slot): voicePressButton from the voice helpers, painted with the press state, let go at hang-up.
 function voiceCallPressAttach(vc, el, opts) {
   if (!vc || !vc.press || !el) return null;
-  vc.pressBtns = vc.pressBtns || [];
+  vc.pressBtns = (vc.pressBtns || []).filter((h) => {   // a handle whose button left the page (the display closed) is let go
+    const gone = h.el && (h.el.isConnected === false || (h.el.isConnected === undefined && typeof document !== 'undefined' && typeof document.contains === 'function' && !document.contains(h.el)));
+    if (gone && h.el !== el) { try { h.detach(); } catch { /* gone */ } return false; }
+    return true;
+  });
   const old = vc.pressBtns.find(h => h.el === el);
   if (old) return old;
   const h = voicePressButton(el, () => (voiceCall === vc ? vc.call : null), opts); h.el = el; h.paint(vc.pressing === true);
@@ -10081,6 +10141,7 @@ function voiceCallTeardown(vc) {
   if (vc.focus) { try { vc.focus.stop(); } catch {} }
   if (typeof voiceFocusHint === 'function') voiceFocusHint(false);
   voiceThinkingClose(vc);
+  if (vc.press) voicePressEndedAt = Date.now();   // the trailing click of a press that outlived the call must not start a new one (voiceMicTap)
   voiceCallPressDetach(vc);   // the press buttons (a Tap to talk call) are let go
   voiceCallPanel(false);
   voiceMicPaint();
@@ -10742,7 +10803,7 @@ function voiceCallStart() {
   voiceCallPanel(true); voiceCallPaintState('starting'); voiceMicPaint(); if (typeof voiceDispPaintPanel === 'function') voiceDispPaintPanel();   // the Display select is filled at call start
   if (typeof voiceDispBegin === 'function') voiceDispBegin(vc);   // synchronous, still inside the tap
   const bail = () => { if (voiceCall === vc) voiceCallTeardown(vc); };
-  Promise.resolve(vc.call.start()).then((ok) => { if (!ok) bail(); else if (press && voiceCall === vc) { try { vc.call.talk(true); } catch { /* the press button starts it */ } } }, bail);   // Tap to talk: the first tap both starts the call and starts listening
+  Promise.resolve(vc.call.start()).then((ok) => { if (!ok) bail(); else if (press && voiceCall === vc && !vc.idle) { try { vc.call.talk(true); } catch { /* the press button starts it */ } } }, bail);   // Tap to talk: the first tap both starts the call and starts listening (vc.idle: the idle mic was held and let go before the call existed, voiceMicTap: it comes up idle)
   voiceWakeAcquire(vc);
 }
 // The "Try the microphone again" tap (the panel's button and the display's own retry control).
@@ -11321,7 +11382,7 @@ function voiceSheet() {
   sh.querySelector('#vs-loudness-bt').addEventListener('change', (e) => voiceLoudnessSave('loudnessBt', e.target.value));
   sh.querySelector('.vs-activity').addEventListener('change', (e) => voicePrefsSave({ speakActivity: !!e.target.checked }));
   sh.querySelector('#vs-interrupt').addEventListener('change', (e) => voiceDispSetInterrupt(!!e.target.checked));
-  for (const r of sh.querySelectorAll('input[name="vs-mode"]')) r.addEventListener('change', (e) => { if (e.target.checked) { voicePrefsSave({ mode: e.target.value }); voiceMicPaint(); paintVoiceSheet(); } });
+  for (const r of sh.querySelectorAll('input[name="vs-mode"]')) r.addEventListener('change', (e) => { if (e.target.checked) { const prev = voicePrefsNow().mode; voicePrefsSave({ mode: e.target.value }); voiceMicPaint(); paintVoiceSheet(); voiceModeNextCallToast(prev, e.target.value); } });
   sh.querySelector('.vs-room').addEventListener('click', voiceRoomRun);
   sh.querySelector('.vs-car').addEventListener('click', voiceCarRun);
   voiceRouteWire(sh);
@@ -11486,13 +11547,16 @@ function plusSheetWire() {
     Promise.resolve().then(() => { const a = document.activeElement; if (plusSheetOpen() && a && a !== document.body && leftSheet(a)) plusSheetShow(false); });
   });
 }
+function voiceModeName(m) { return m === 'press' ? 'Tap to talk' : m === 'tap' ? 'Dictation' : 'Hands-free'; }
+// A Talk mode picked while a call is up is saved for the next call; the call keeps the mode it started with (the chip keeps naming it).
+function voiceModeNextCallToast(prev, next) { try { if (voiceCall && next !== prev) toast(`From your next call: ${voiceModeName(next)}.`); } catch { /* a toast is a comfort */ } }
 function voiceStripPaint() {
   const on = voiceOn();
   const strip = $('voice-strip'), btn = $('voice-settings-btn'), chip = $('voice-mode-chip');
   if (strip) strip.hidden = !on || !voiceCall;   // the Hands-free pill only while a call is up; the mode stays in Voice settings
   if (btn) btn.hidden = !on;
   if (chip) {
-    const press = voicePrefsNow().mode === 'press', hands = !press;   // the chip shows during a call only: Hands-free or Tap to talk (Dictation is not a call mode)
+    const press = voiceCall ? voiceCall.press === true : voicePrefsNow().mode === 'press', hands = !press;   // the chip shows during a call only: the RUNNING call's mode, Hands-free or Tap to talk (fixed at its start; a mode picked meanwhile counts from the next call; Dictation is not a call mode)
     chip.textContent = hands ? 'Hands-free' : 'Tap to talk';
     chip.classList.toggle('hands', hands);
     chip.setAttribute('aria-label', `Talk mode: ${hands ? 'Hands-free' : 'Tap to talk'}. Tap to switch.`);
@@ -11564,8 +11628,8 @@ function voicePanelWire() {
     voicePanelShow(open);
     if (open) requestAnimationFrame(voicePanelFocusFirst);   // the sheet (and the button that had focus) just closed: land on the panel, not <body>
   });
-  $('voice-mode-chip')?.addEventListener('click', () => save({ mode: voicePrefsNow().mode === 'handsfree' ? 'press' : 'handsfree' }));   // Hands-free -> Tap to talk -> Hands-free; a saved Dictation goes to Hands-free
-  for (const r of p.querySelectorAll('input[name="vp-mode"]')) r.addEventListener('change', (e) => { if (e.target.checked) save({ mode: e.target.value }); });
+  $('voice-mode-chip')?.addEventListener('click', () => { const prev = voicePrefsNow().mode, next = prev === 'handsfree' ? 'press' : 'handsfree'; save({ mode: next }); voiceModeNextCallToast(prev, next); });   // Hands-free -> Tap to talk -> Hands-free; a saved Dictation goes to Hands-free; during a call it is saved for the next one
+  for (const r of p.querySelectorAll('input[name="vp-mode"]')) r.addEventListener('change', (e) => { if (e.target.checked) { const prev = voicePrefsNow().mode; save({ mode: e.target.value }); voiceModeNextCallToast(prev, e.target.value); } });
   const speed = $('vp-speed');
   speed?.addEventListener('input', () => { const l = p.querySelector('.vp-speed-val'); if (l) l.textContent = voiceSpeedLabel(speed.value); });
   speed?.addEventListener('change', () => save({ voiceSpeed: voiceCleanSpeed(speed.value) }));
@@ -13812,7 +13876,11 @@ function wire() {
   $('notify-prefs-sheet').addEventListener('click', onNotifyPrefsSheetClick);
   $('notify-prefs-sheet').addEventListener('change', onNotifyPrefsSheetChange);
   // The mic acts on the touch itself too (the box keeps its state, no keyboard opens). Its status is polled every 60 s while the page is visible.
-  if ($('mic-btn')) onComposerTap($('mic-btn'), voiceMicTap);
+  if ($('mic-btn')) {
+    $('mic-btn').addEventListener('pointerdown', () => voiceMicPointer(false));   // before the tap handler below, which acts on the pointerup: how long the idle mic was held decides if a Tap to talk call listens at once
+    $('mic-btn').addEventListener('pointerup', () => voiceMicPointer(true));
+    onComposerTap($('mic-btn'), voiceMicTap);
+  }
   voiceCallWire();
   setInterval(() => { if (!document.hidden && current) voiceStatusRefresh(); }, 60000);
 

@@ -32,7 +32,7 @@ const flush = () => new Promise((r) => setImmediate(r));
 test('mic button: hands-free starts a call, tap mode keeps dictation, a call turns the button into Hang up', () => {
   const m = app.slice(app.indexOf('async function voiceMicToggle('), app.indexOf('async function voiceMicStop('));
   assert.match(m, /if \(voiceCallS\.active \|\| voiceCallS\.starting\) \{\s*if \(voiceCallS\.press\) return;[^\n]*\n\s*voiceCallHangUp\(\); return;/);   // a Tap to talk call: the button is the press button, not Hang up
-  assert.match(m, /if \(voicePrefsNow\(\)\.mode !== 'tap'\) \{ voiceCallStart\(chatId\); return; \}/);
+  assert.match(m, /if \(voicePrefsNow\(\)\.mode !== 'tap'\) \{ voiceCallStart\(chatId\); if \(held && voiceCallS\.call\) voiceCallS\.idle = true; return; \}/);   // (+ the mark of a call that comes up idle after a held idle mic)
   assert.ok(m.indexOf('voiceReady()') < m.indexOf('voiceCallStart('), 'only when voice is enabled and ready');
   assert.ok(m.indexOf('voiceCallStart(') < m.indexOf('voiceRec.guard.begin()'), 'dictation code is untouched below');
   const w = wiring();
