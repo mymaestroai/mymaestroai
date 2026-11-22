@@ -68,7 +68,7 @@ function make(over = {}) {
     leadModels: async () => (over.models || MODELS),
     leadPlaybook: () => 'PLAYBOOK',
     leadDir: (id) => path.join(root, id),
-    thoroughSettings: () => T.settingsFrom(over.settings || {}),
+    thoroughSettings: () => T.settingsFrom({ leadTopicSearches: 0, leadSourcesPerSub: 0, ...(over.settings || {}) }),   // the discovery gate is off unless a test switches it on
     writeDocument: async (agent, base, doc) => { written.push({ agent, base, doc }); if (over.writeFails) throw new Error('disk full'); return { md: `/files/research/${base}.md`, html: `/files/research/${base}.html`, pdf: '', pdfError: 'no Chrome' }; },
     onProgress: (r) => { progress.push({ stage: r.stage, label: r.stageLabel, done: r.stageDone, total: r.stageTotal, state: r.state }); },
     ...(over.deps || {}),
@@ -171,7 +171,7 @@ test('review off (leadReviewRounds 0): the lead is told and gets no reviewers', 
 });
 
 test("the lead's spawn fails on step 2: delivered with 'The run stopped:' and the draft", async () => {
-  const lead = [act({ type: 'write_draft', markdown: 'Early draft [S1].' }), new Error('refused')];
+  const lead = [act({ type: 'write_draft', markdown: 'Early draft.' }), new Error('refused')];
   const m = make({ lead });
   const r = startThorough(m);
   const msg = await delivered(m, r.id);
@@ -481,7 +481,7 @@ test('run1-2: a kept agent\'s search worker uses the agent\'s own model; a worke
 });
 
 test('run1-4: a stopped run keeps its counts, models and stop reason on the record, and the salvaged report has the models line', async () => {
-  const lead = [act({ type: 'write_draft', markdown: 'Early draft [S1].' }), new Error('refused')];
+  const lead = [act({ type: 'write_draft', markdown: 'Early draft.' }), new Error('refused')];
   const m = make({ lead });
   const r = startThorough(m);
   const msg = await delivered(m, r.id);

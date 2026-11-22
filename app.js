@@ -5536,7 +5536,8 @@
       const t = (data && data.researchThorough && typeof data.researchThorough === 'object') ? data.researchThorough : {};
       const num = (k, lo, hi, d) => { const n = Number(t[k]); return Number.isInteger(n) && n >= lo && n <= hi ? n : d; };
       const vals = { maxSources: num('maxSources', 1, 40, 12), readersAtOnce: num('readersAtOnce', 1, 12, 4), reviewRounds: num('reviewRounds', 0, 5, 2), timeLimitMinutes: num('timeLimitMinutes', 10, 240, 60),
-        leadSteps: num('leadSteps', 5, 300, 60), leadWallMinutes: num('leadWallMinutes', 10, 1440, 360), leadReaderCalls: num('leadReaderCalls', 1, 400, 40), leadReviewRounds: num('leadReviewRounds', 0, 50, 10) };
+        leadSteps: num('leadSteps', 5, 300, 60), leadWallMinutes: num('leadWallMinutes', 10, 1440, 360), leadReaderCalls: num('leadReaderCalls', 1, 400, 40), leadReviewRounds: num('leadReviewRounds', 0, 50, 10),
+        leadTopicSearches: num('leadTopicSearches', 0, 20, 3), leadSourcesPerSub: num('leadSourcesPerSub', 0, 20, 2) };
       const engine = t.engine === 'pipeline' ? 'pipeline' : 'lead';
       const modelVal = (k) => (typeof t[k] === 'string' && t[k] !== 'auto' && t[k].length <= 120 && /^[A-Za-z0-9._:/@[\]-]+$/.test(t[k]) ? t[k] : '');
       const modelRow = (id, key, label) => { const mv = modelVal(key).replace(/&/g, '&amp;').replace(/"/g, '&quot;'); return `<div class="st-row">
@@ -5562,6 +5563,8 @@
         ${numRow('st-rt-leadmin', 'leadWallMinutes', 'Time limit, minutes', 10, 1440, 'A lead run still going after this long finishes with what it has and says what was left open (10 to 1440).')}
         ${numRow('st-rt-reads', 'leadReaderCalls', 'Reader calls', 1, 400, 'How many times the lead may send a reader to a source (1 to 400).')}
         ${numRow('st-rt-leadrounds', 'leadReviewRounds', 'Review rounds', 0, 50, 'How many times the report goes back to its reviewers. 0 turns the review off (0 to 50).')}
+        ${numRow('st-rt-topics', 'leadTopicSearches', 'Topic searches per sub-question', 0, 20, 'Before the first draft the lead must run this many topic searches for each sub-question, one of them limited to recent work. 0 switches the rule off.')}
+        ${numRow('st-rt-persub', 'leadSourcesPerSub', 'Sources per sub-question', 0, 20, 'Distinct sources those searches must find for each sub-question before the first draft.')}
         ${modelRow('st-rt-lead', 'leadModel', 'Lead model')}
         ${modelRow('st-rt-reader2', 'leadReaderModel', 'Reader model')}
         ${modelRow('st-rt-readertop', 'leadReaderTopModel', 'Top-tier reader model')}

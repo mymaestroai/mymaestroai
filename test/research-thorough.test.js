@@ -871,7 +871,7 @@ test('r2-7 fetchSourceTexts arXiv: html first, then pdf, then the cited URL', as
   const [d] = await T.fetchSourceTexts([{ url: 'https://arxiv.org/abs/2401.01234' }], { fetchPage: fp({ 'https://arxiv.org/abs/2401.01234': 'Abstract. We study things.' }) });
   assert.strictEqual(d.ok, true);
   assert.strictEqual(d.partial, true);
-  assert.strictEqual(d.partialReason, 'abstract page only');
+  assert.strictEqual(d.partialReason, 'abstract only');
   assert.strictEqual(d.url, 'https://arxiv.org/abs/2401.01234');
 });
 
@@ -1110,7 +1110,7 @@ test('r3-6 fetchOne: for an abs URL the longest of html, pdf and abs wins; abstr
   const [b] = await T.fetchSourceTexts([{ url: 'https://arxiv.org/abs/2401.01234' }], { fetchPage: fp2 });
   assert.strictEqual(b.chars, 3000);
   assert.strictEqual(b.partial, true);
-  assert.strictEqual(b.partialReason, 'abstract page only');
+  assert.strictEqual(b.partialReason, 'abstract only');
 });
 
 test('r3-7 markUnverified: marks every checkable figure, leaves years', () => {
@@ -4770,4 +4770,145 @@ test('K2-glyph: "p¿0.5" in a fetched text is "p>0.5"; a Spanish "¿" is left al
   assert.strictEqual(T.readGlyphs('Dime: ¿Qué 5 libros?'), 'Dime: ¿Qué 5 libros?');
   assert.strictEqual(T.readGlyphs('p¿0.5 and p¡.05'), 'p>0.5 and p<.05');
   assert.deepStrictEqual(one('He asked about 5 libros', '¿Qué 5 libros?'), [F]);
+});
+
+// ================================================================ r4 B1: the PDF behind a landing page
+const LANDING_PAGE = 'https://aclanthology.example/2026.x-long.1/';
+const PDF_TEXT = 'Full paper body, Table 2 reports 61.5. '.repeat(400);   // about 15,600 characters
+const pdfPages = (map, calls) => async (url) => {
+  if (calls) calls.push(url);
+  const v = map[url];
+  if (v instanceof Error) throw v;
+  const via = /\.pdf$|\/pdf/.test(url) ? 'pdf' : 'fetch';
+  return { markdown: v || '', truncated: false, via, title: 'T' };
+};
+
+test('r4-B1 a landing page with a [PDF] link: the PDF text is the record, the landing page is kept', async () => {
+  const landing = 'Abstract. We study things. [PDF](https://aclanthology.example/2026.x-long.1.pdf) [Bib](https://aclanthology.example/x.bib)';
+  const calls = [];
+  const [r] = await T.fetchSourceTexts([{ url: LANDING_PAGE }], { fetchPage: pdfPages({ [LANDING_PAGE]: landing, 'https://aclanthology.example/2026.x-long.1.pdf': PDF_TEXT }, calls) });
+  assert.strictEqual(r.ok, true);
+  // the landing page stays in front of the paper's text
+  assert.strictEqual(r.text, `${landing}\n\n----- Full text (PDF): https://aclanthology.example/2026.x-long.1.pdf -----\n\n${PDF_TEXT}`);
+  assert.strictEqual(r.finalUrl, 'https://aclanthology.example/2026.x-long.1.pdf');
+  assert.strictEqual(r.landingUrl, LANDING_PAGE);
+  assert.ok(/\+pdf$/.test(r.via));
+  assert.strictEqual(r.pdfFrom, 'landing page');
+  assert.strictEqual(r.partial, false);
+  assert.strictEqual(r.url, LANDING_PAGE);
+  assert.deepStrictEqual(calls, [LANDING_PAGE, 'https://aclanthology.example/2026.x-long.1.pdf']);
+});
+
+test('r4-B1 a relative [Download PDF](/pdf?id=abc) link is resolved against the page and used', async () => {
+  const page = 'https://reviews.example/forum?id=abc';
+  const calls = [];
+  const [r] = await T.fetchSourceTexts([{ url: page }], { fetchPage: pdfPages({ [page]: 'Abstract: short. [Download PDF](/pdf?id=abc)', 'https://reviews.example/pdf?id=abc': PDF_TEXT }, calls) });
+  assert.ok(r.text.startsWith('Abstract: short.') && r.text.endsWith(PDF_TEXT));
+  assert.strictEqual(r.finalUrl, 'https://reviews.example/pdf?id=abc');
+  assert.strictEqual(r.landingUrl, page);
+  assert.strictEqual(r.pdfFrom, 'landing page');
+  assert.ok(/\+pdf$/.test(r.via));
+});
+
+test('r4-B1 a page without an abstract (a rates page, a news story) keeps its own text even when its PDF link works, and is never abstract only', async () => {
+  const page = 'https://utility.example/rates';
+  const own = 'Residential rates from June 1. [PDF](https://utility.example/tariff.pdf) Peak 0.62 per kWh.';
+  const calls = [];
+  const [r] = await T.fetchSourceTexts([{ url: page }], { fetchPage: pdfPages({ [page]: own, 'https://utility.example/tariff.pdf': PDF_TEXT }, calls) });
+  assert.strictEqual(r.text, own);
+  assert.strictEqual(r.partial, false);
+  assert.deepStrictEqual(calls, [page]);
+});
+
+test('r4-B1 a DOI landing page whose PDF cannot be fetched is abstract only; a page with an Abstract and a DOI and no link too', async () => {
+  const landing = 'Abstract. We study things. https://doi.org/10.1234/abcd.5678 [PDF](https://pub.example/paper.pdf)';
+  const calls = [];
+  const [r] = await T.fetchSourceTexts([{ url: 'https://pub.example/paper' }], { fetchPage: pdfPages({ 'https://pub.example/paper': landing, 'https://pub.example/paper.pdf': new Error('403') }, calls) });
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(r.text, landing);
+  assert.strictEqual(r.partial, true);
+  assert.strictEqual(r.partialReason, 'abstract only');
+  assert.strictEqual(r.error, '');
+  assert.strictEqual(calls.length, 2);
+  const [n] = await T.fetchSourceTexts([{ url: 'https://pub.example/p2' }], { fetchPage: pdfPages({ 'https://pub.example/p2': 'Abstract. Short summary. DOI 10.5555/xyz.1' }) });
+  assert.strictEqual(n.partial, true);
+  assert.strictEqual(n.partialReason, 'abstract only');
+  const [plain] = await T.fetchSourceTexts([{ url: 'https://pub.example/blog' }], { fetchPage: pdfPages({ 'https://pub.example/blog': 'A short blog post with no paper in sight.' }) });
+  assert.strictEqual(plain.partial, false);
+  assert.strictEqual(plain.partialReason, null);
+});
+
+test('r4-B1 a page over 20000 characters is left alone: no extra fetch', async () => {
+  const long = 'Body text of a long page. '.repeat(900) + ' [PDF](https://a.example/x.pdf)';
+  assert.ok(long.length > 20000);
+  const calls = [];
+  const [r] = await T.fetchSourceTexts([{ url: 'https://a.example/long' }], { fetchPage: pdfPages({ 'https://a.example/long': long, 'https://a.example/x.pdf': PDF_TEXT }, calls) });
+  assert.deepStrictEqual(calls, ['https://a.example/long']);
+  assert.strictEqual(r.text, long);
+  assert.strictEqual(r.partial, false);
+  assert.strictEqual(r.pdfFrom, undefined);
+});
+
+test('r4-B1 supplementary, appendix, poster and slides links are skipped; at most 2 candidates, same host first', async () => {
+  const landing = 'Abstract. Short. [PDF](https://a.example/supplementary.pdf) [Slides](https://a.example/slides.pdf) [Appendix](https://a.example/app.pdf) [Poster PDF](https://a.example/poster.pdf)';
+  const calls = [];
+  const [r] = await T.fetchSourceTexts([{ url: 'https://a.example/p' }], { fetchPage: pdfPages({ 'https://a.example/p': landing }, calls) });
+  assert.deepStrictEqual(calls, ['https://a.example/p'], 'nothing to fetch but the page');
+  assert.strictEqual(r.ok, true);
+  const many = 'Abstract. [PDF](https://other.example/1.pdf) [PDF](https://a.example/2.pdf) [PDF](https://a.example/3.pdf) https://a.example/4.pdf';
+  const calls2 = [];
+  await T.fetchSourceTexts([{ url: 'https://a.example/q' }], { fetchPage: pdfPages({ 'https://a.example/q': many }, calls2) });
+  assert.deepStrictEqual(calls2, ['https://a.example/q', 'https://a.example/2.pdf', 'https://a.example/3.pdf']);
+});
+
+test('r4-B1 a PDF text not longer than the landing text, or under 5000 characters, is not used', async () => {
+  const landing = 'Abstract. ' + 'Landing words. '.repeat(900) + ' [PDF](https://a.example/p.pdf)';   // about 13,500
+  assert.ok(landing.length < 20000 && landing.length > 6000);
+  const [r] = await T.fetchSourceTexts([{ url: 'https://a.example/l' }], { fetchPage: pdfPages({ 'https://a.example/l': landing, 'https://a.example/p.pdf': 'x'.repeat(9000) }) });
+  assert.strictEqual(r.text, landing);
+  assert.strictEqual(r.pdfFrom, undefined);
+  assert.strictEqual(r.partialReason, 'abstract only');
+  const small = 'Abstract. Tiny. [PDF](https://a.example/s.pdf)';
+  const [t] = await T.fetchSourceTexts([{ url: 'https://a.example/s' }], { fetchPage: pdfPages({ 'https://a.example/s': small, 'https://a.example/s.pdf': 'y'.repeat(4000) }) });
+  assert.strictEqual(t.text, small);
+  assert.strictEqual(t.pdfFrom, undefined);
+});
+
+test('r4-B1 a source that is itself a PDF is not searched for links', async () => {
+  const calls = [];
+  const [r] = await T.fetchSourceTexts([{ url: 'https://a.example/doc.pdf' }], { fetchPage: pdfPages({ 'https://a.example/doc.pdf': 'Short PDF text. [PDF](https://a.example/other.pdf)' }, calls) });
+  assert.deepStrictEqual(calls, ['https://a.example/doc.pdf']);
+  assert.strictEqual(r.ok, true);
+});
+
+test('r4r1-B1 the PDF must be a real PDF of the same paper; "Abstract art" prose is no paper page; a short HTML paper with its body is not abstract only', async () => {
+  const page = 'https://pub.example/paper';
+  const landing = 'Abstract\nWe study story judges. [PDF](https://pub.example/paper.pdf)';
+  // the link answers with a long HTML sign-in page (the fetcher does not say pdf): not used
+  const signIn = async (url) => (url === page ? { markdown: landing, truncated: false, via: 'fetch', title: 'Story judges compared' }
+    : { markdown: 'Sign in to continue. '.repeat(500), truncated: false, via: 'fetch', title: 'Sign in' });
+  const [a] = await T.fetchSourceTexts([{ url: page }], { fetchPage: signIn });
+  assert.strictEqual(a.text, landing);
+  assert.strictEqual(a.partialReason, 'abstract only');
+  // a PDF of another paper (the page title's words are not in it): not used
+  const other = async (url) => (url === page ? { markdown: landing, truncated: false, via: 'fetch', title: 'Story judges compared' }
+    : { markdown: 'Visitor guide to the galleries. '.repeat(400), truncated: false, via: 'pdf', title: 'guide.pdf' });
+  const [b] = await T.fetchSourceTexts([{ url: page }], { fetchPage: other });
+  assert.strictEqual(b.text, landing);
+  // the same paper's PDF is used
+  const same = async (url) => (url === page ? { markdown: landing, truncated: false, via: 'fetch', title: 'Story judges compared' }
+    : { markdown: `Story judges compared. ${'Body text. '.repeat(600)}`, truncated: false, via: 'pdf', title: 'paper.pdf' });
+  const [c] = await T.fetchSourceTexts([{ url: page }], { fetchPage: same });
+  assert.ok(c.text.startsWith(landing) && /Full text \(PDF\)/.test(c.text));
+  // "abstract art" in prose: the page is left alone, no PDF fetched
+  const calls = [];
+  const museum = 'Our museum shows abstract art from 1950. [PDF](https://museum.example/guide.pdf) DOI 10.1234/x.1';
+  const [d] = await T.fetchSourceTexts([{ url: 'https://museum.example/' }], { fetchPage: pdfPages({ 'https://museum.example/': museum, 'https://museum.example/guide.pdf': PDF_TEXT }, calls) });
+  assert.strictEqual(d.text, museum);
+  assert.strictEqual(d.partial, false);
+  assert.deepStrictEqual(calls, ['https://museum.example/']);
+  // a short HTML paper with its own sections and a DOI, no PDF link: whole, not abstract only
+  const html = 'Abstract\nShort paper. DOI 10.1234/y.2\n## 1 Introduction\nText.\n## 2 Results\nWe found 61.5.';
+  const [e] = await T.fetchSourceTexts([{ url: 'https://pub.example/short' }], { fetchPage: pdfPages({ 'https://pub.example/short': html }) });
+  assert.strictEqual(e.partial, false);
 });

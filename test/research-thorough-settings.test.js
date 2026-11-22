@@ -326,3 +326,54 @@ test('Codex turn: a marked worker gets the hub\'s WebSearch and WebFetch through
   assert.equal(sdkChat.searchBothApplies({ toolScope: 'read' }, { hubHands: false }), false);
   assert.equal(sdkChat.searchBothApplies({ toolScope: 'read', searchBoth: true }, { hubHands: true }), false);
 });
+
+// ── r4 B2: the discovery gate settings ──
+test('r4-B2 settingsFrom: leadTopicSearches 3 and leadSourcesPerSub 2 by default; 0 to 20 allowed, anything else is the default', () => {
+  const T = lib('research-thorough.js');
+  const d = T.settingsFrom({});
+  assert.deepEqual([d.leadTopicSearches, d.leadSourcesPerSub], [3, 2]);
+  assert.deepEqual([T.DEFAULTS.leadTopicSearches, T.DEFAULTS.leadSourcesPerSub], [3, 2]);
+  for (const [k, dflt] of [['leadTopicSearches', 3], ['leadSourcesPerSub', 2]]) {
+    assert.equal(T.settingsFrom({ [k]: 0 })[k], 0, k + ' 0 switches the rule off');
+    assert.equal(T.settingsFrom({ [k]: 20 })[k], 20, k);
+    assert.equal(T.settingsFrom({ [k]: '7' })[k], 7, k);
+    for (const bad of [-1, 21, 1.5, 'x', null, undefined]) assert.equal(T.settingsFrom({ [k]: bad })[k], dflt, `${k}=${bad}`);
+  }
+});
+
+test('r4-B2 settings route: the two gate numbers pass from 0 to 20 and are refused outside, naming the key', () => {
+  const v = validator({});
+  const p = { researchThorough: { leadTopicSearches: 0, leadSourcesPerSub: '20' } };
+  assert.equal(v(p), null);
+  assert.deepEqual(p.researchThorough, { leadTopicSearches: 0, leadSourcesPerSub: 20 });
+  for (const k of ['leadTopicSearches', 'leadSourcesPerSub']) {
+    for (const x of [-1, 21, 1.5, 'abc', null]) {
+      const r = v({ researchThorough: { [k]: x } });
+      assert.ok(r && r.code === 400, `${k}=${x}`);
+      assert.ok(r.body.error.includes(k) && /0 to 20/.test(r.body.error), r.body.error);
+    }
+  }
+});
+
+test('r4-B2 Settings page: the two gate rows exist with their ids, defaults, saved values and hints', () => {
+  const { ctx } = appFns(async () => ({ ok: true }));
+  const d = ctx.block({});
+  assert.match(d, /id="st-rt-topics"[^>]*min="0"[^>]*max="20"[^>]*value="3"[^>]*onchange="saveResearchSetting\('leadTopicSearches', this\)"/);
+  assert.match(d, /id="st-rt-persub"[^>]*min="0"[^>]*max="20"[^>]*value="2"[^>]*onchange="saveResearchSetting\('leadSourcesPerSub', this\)"/);
+  for (const t of ['Topic searches per sub-question', 'Sources per sub-question',
+    'Before the first draft the lead must run this many topic searches for each sub-question, one of them limited to recent work. 0 switches the rule off.',
+    'Distinct sources those searches must find for each sub-question before the first draft.']) assert.ok(d.includes(t), t);
+  assert.ok(d.indexOf('st-rt-leadrounds') < d.indexOf('st-rt-topics') && d.indexOf('st-rt-persub') < d.indexOf('st-rt-pipeline'));
+  const s = ctx.block({ researchThorough: { leadTopicSearches: 0, leadSourcesPerSub: 5 } });
+  assert.match(s, /id="st-rt-topics"[^>]*value="0"/);
+  assert.match(s, /id="st-rt-persub"[^>]*value="5"/);
+  assert.match(ctx.block({ researchThorough: { leadTopicSearches: 21, leadSourcesPerSub: 'x' } }), /id="st-rt-topics"[^>]*value="3"[\s\S]*id="st-rt-persub"[^>]*value="2"/);
+});
+
+test('r4-B2 Settings page: the gate rows post a number under researchThorough', async () => {
+  const posts = [];
+  const { ctx } = appFns(async (url, o) => { posts.push(JSON.parse(o.body)); return { ok: true }; });
+  await ctx.save('leadTopicSearches', fakeEl('number', '0', 3));
+  await ctx.save('leadSourcesPerSub', fakeEl('number', '4', 2));
+  assert.deepEqual(posts, [{ researchThorough: { leadTopicSearches: 0 } }, { researchThorough: { leadSourcesPerSub: 4 } }]);
+});
