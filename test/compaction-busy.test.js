@@ -223,6 +223,21 @@ test('review r3: after an overtaken run, a brief the intervening turn wrote (new
   assert.match(String(r2.error), /didn't write its brief/);
 });
 
+test('review r4: after an overtaken run, a brief written just before the retry (inside the old 5 s tolerance) or while the retry waited is not accepted', async () => {
+  for (const when of ['1 s before the retry', 'while the retry waits']) {
+    let busyFrom = Infinity, busyTo = Infinity;
+    const h = make({ busy: (t) => t >= busyFrom && t < busyTo, writeIf: (i) => i === 0,
+      script: (i, m, t) => { if (i === 0) { busyFrom = t; busyTo = t + 45_000; } return null; } });
+    const r1 = await h.c.run('anvil', 'threshold');
+    assert.strictEqual(r1.busy, true);
+    if (when === '1 s before the retry') { h.tick(44_000); h.setBrief(h.now()); h.tick(1_000); }
+    else { h.tick(40_000); h.setBrief(h.now() + 1_000); }   // the retry starts while the other turn still runs; the brief is rewritten during that wait
+    const r2 = await h.c.run('anvil', 'threshold');
+    assert.strictEqual(h.resets.length, 0, when);
+    assert.match(String(r2.error), /didn't write its brief/, when);
+  }
+});
+
 test('review r3: without a brief check (briefStatus omitted) a run overtaken before its reset postpones and releases the agent', async () => {
   let busyFrom = Infinity;
   const c = createCompaction({ now: () => 5_000_000, log: () => {}, persist: false, getAgent: (n) => ({ name: n, compaction: { mode: 'on' } }),
