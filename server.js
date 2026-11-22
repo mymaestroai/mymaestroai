@@ -874,8 +874,10 @@ async function handleHttpRequest(req, res) {
       if (hasChoice && !prefsMod.CHOICES.includes(body.choice)) return jsonResponse(res, 400, { error: `choice must be one of: ${prefsMod.CHOICES.join(', ')}` });
       if (hasLevel && !prefsMod.LEVELS.includes(body.alwaysLevel)) return jsonResponse(res, 400, { error: `alwaysLevel must be one of: ${prefsMod.LEVELS.join(', ')}` });
       try {
-        if (hasChoice) prefs.setChoice(key, body.choice);
-        if (hasLevel) prefs.setAlwaysLevel(key, body.alwaysLevel);
+        // both together: one write, so a failure saves neither
+        if (hasChoice && hasLevel) prefs.setChoiceAndLevel(key, body.choice, body.alwaysLevel);
+        else if (hasChoice) prefs.setChoice(key, body.choice);
+        else prefs.setAlwaysLevel(key, body.alwaysLevel);
         return jsonResponse(res, 200, { ok: true, choice: prefs.choiceOf(key), alwaysLevel: prefs.alwaysLevelOf(key) });
       }
       catch (e) { return jsonResponse(res, e && e.code === 'bad_request' ? 400 : 500, { error: e && e.code === 'bad_request' ? e.message : 'Could not save that' }); }

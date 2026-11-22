@@ -135,7 +135,8 @@ test('TOOL: name, actions and required fields', () => {
   assert.match(research.TOOL.description, /BEFORE answering/);
   assert.deepEqual(research.TOOL.parameters.properties.level.enum, ['quick', 'thorough']);
   assert.deepEqual(research.TOOL.parameters.properties.recommend.enum, ['quick', 'thorough']);
-  assert.deepEqual(research.TOOL.parameters.properties.always_level.enum, ['quick', 'thorough']);
+  assert.equal(research.TOOL.parameters.properties.always_level, undefined, 'the tool cannot change the Always yes level');
+  assert.doesNotMatch(research.TOOL.description, /always_level/);
   assert.match(research.TOOL.description, /Never start thorough unless the person chose it/);
 });
 
@@ -314,6 +315,7 @@ function makeRunner(over = {}) {
     wake: async (agent, message) => { wakes.push({ agent, message }); },
     pickHelperModel: async () => FAST,
     ownModelOf: async () => BIG,
+    keptOnBox: () => false,
     sleep: async (ms) => { sleeps.push(ms); },
     log: () => {},
     ...over,
@@ -856,10 +858,9 @@ test('review r5: a first-run seed gives every seeded agent a box id of its own',
 });
 
 // ── levels ──
-test('setText: the always_level variant', () => {
-  assert.equal(research.setText(null, true, 'thorough'), 'Done: Always yes now runs Thorough research. Tell them in one line.');
-  assert.equal(research.setText(null, true, 'quick'), 'Done: Always yes now runs Quick research. Tell them in one line.');
-  assert.match(research.setText(null, false, 'thorough'), /only the person can change it/);
+test('setText: no always_level variant any more; the refusal names Settings and the phone sheet', () => {
+  assert.match(research.ALWAYS_LEVEL_REFUSED, /^Only the person can choose which level Always yes runs, in Settings \(or the phone's Deep research sheet\)\. Tell them where\.$/);
+  assert.doesNotMatch(research.setText(null, true, 'thorough'), /^Done: Always yes now runs/);
   assert.match(research.setText('always'), /^Done: research questions now get a deep research run/);
 });
 
@@ -975,6 +976,18 @@ const verdicts = (v) => '```json\n' + JSON.stringify([{ id: 'c1', verdict: v, re
 async function untilMs(fn, ms = 3000) { const end = Date.now() + ms; while (Date.now() < end) { if (fn()) return; await new Promise((r) => setTimeout(r, 5)); } throw new Error('condition not reached'); }
 const hang = (label) => (w, n, signal) => new Promise((_, rej) => { signal.addEventListener('abort', () => rej(new Error('stopped')), { once: true }); });
 
+// Until lib/research-thorough exports checkReport / challengeSummary, the runner tests run on a stand-in built from the older functions.
+const T_REAL = require(path.join(ISO.inst, 'lib', 'research-thorough.js'));
+const LEGACY = {
+  checkReport: ({ prose, claims, fetched }) => { const res = T_REAL.checkClaims(claims, fetched); return { prose: T_REAL.markProse(prose, T_REAL.verifiedFigures(res)).prose, claims: T_REAL.applyCheck(claims, res), totals: res.totals, notChecked: [], marks: [] }; },
+  challengeSummary: (v) => {
+    const counts = { supported: 0, partly: 0, not_supported: 0, cannot_check: 0 };
+    for (const r of (v && v.results) || []) if (r.verdict in counts) counts[r.verdict]++;
+    return { decisive: counts.supported + counts.partly + counts.not_supported, counts, uncheckedIds: [], doubtedIds: ((v && v.results) || []).filter((r) => r.verdict === 'not_supported' || r.verdict === 'partly').map((r) => r.id) };
+  },
+};
+const ENGINE = typeof T_REAL.checkReport === 'function' && typeof T_REAL.challengeSummary === 'function' ? {} : LEGACY;
+
 function makeThorough(over = {}) {
   const calls = [];       // every spawn call: { labels, model, tasks }
   const progress = [];
@@ -983,7 +996,7 @@ function makeThorough(over = {}) {
   const script = over.script || {};   // label (without its number) -> (workers, count, signal) => results | undefined
   const counts = {};
   const spawn = async (agent, workers, signal) => {
-    calls.push({ labels: workers.map((w) => w.label), model: workers[0].model, tasks: workers.map((w) => w.task) });
+    calls.push({ labels: workers.map((w) => w.label), model: workers[0].model, tasks: workers.map((w) => w.task), tools: workers.map((w) => w.tools), models: workers.map((w) => w.model), searchBoth: workers.map((w) => w.searchBoth === true) });
     const key = workers[0].label.replace(/ \d+$/, '');
     counts[key] = (counts[key] || 0) + 1;
     const f = script[key];
@@ -1004,7 +1017,7 @@ function makeThorough(over = {}) {
   const fetchPage = over.fetchPage || (async (url) => ({ markdown: `${BODY_MARK} ${url} Method A scored 56.4% on the test with 200 raters.`, truncated: false, via: 'plain', title: 'T' }));
   const store = { load: () => [], save: (r) => { saves.push(JSON.stringify(r)); } };
   const m = makeRunner({
-    store, spawn, fetchPage,
+    store, spawn, fetchPage, engine: ENGINE,
     thoroughSettings: () => ({ maxSources: 12, readersAtOnce: 2, reviewRounds: 2, timeLimitMinutes: 60, pdf: true, readerModel: 'own' }),
     pickReviewer: async () => ({ model: 'openai/test-reviewer', label: 'a model from another vendor (OpenAI)', crossVendor: true }),
     pickReaderModel: async () => 'claude-sdk/claude-test-reader',
@@ -1095,7 +1108,8 @@ test('thorough runner: a revision that cannot be read keeps the previous report 
 
 test('thorough runner: a failing stage goes into missing and the run still delivers (select, fetch, read, document)', async () => {
   const m = makeThorough({
-    script: { 'Choose sources': () => { throw new Error('the workers refused'); } },
+    // the chooser fails AND the helpers named no source: nothing to fall back on
+    script: { 'Choose sources': () => { throw new Error('the workers refused'); }, Research: (workers) => workers.map((w) => ({ label: w.label, ok: true, text: `Finding for ${w.label}, no links given.` })) },
     deps: { writeDocument: async () => { throw new Error('disk full'); } },
   });
   const r = startThorough(m);
@@ -1304,4 +1318,156 @@ test('runner: helpers and readers carry searchBoth only when helperSearchBoth() 
   await until(() => q.wakes.length === 1);
   assert.deepEqual(jobs.filter((j) => j.searchBoth).map((j) => j.label), ['Research 1', 'Research 2', 'Research 3']);
   assert.ok(!jobs.find((j) => j.label === 'Research summary').searchBoth);
+});
+
+// ── review r2-B: figure check everywhere, challenge credit, select fallback, least privilege, kept content, local reviewer ──
+const doneRun = async (m, subs) => { const r = startThorough(m, subs); await until(() => ['delivered', 'failed'].includes(m.runner.get(r.id).state)); return m.runner.get(r.id); };
+const spyEngine = () => {
+  const seen = { check: [], chat: [] };
+  const real = T_REAL;
+  const engine = {
+    checkReport: (a) => { seen.check.push({ ...a, claims: [...(a.claims || [])] }); return real.checkReport ? real.checkReport(a) : LEGACY.checkReport(a); },
+    chatReport: (a) => { seen.chat.push(a); return real.chatReport(a); },
+  };
+  return { engine, seen };
+};
+
+test('r2 1: checkReport runs on every report, with counts; a revision checks again with the round; a report with no claims block is checked with claims []', async () => {
+  const { engine, seen } = spyEngine();
+  let reviews = 0;
+  const m = makeThorough({ deps: { engine: { ...ENGINE, ...engine } }, script: { Reviewer: () => { reviews++; return [{ label: 'Reviewer', ok: true, text: verdicts(reviews === 1 ? 'not_supported' : 'supported') }]; } } });
+  await doneRun(m);
+  assert.ok(seen.check.length >= 2);
+  assert.deepEqual(seen.check[0].counts, { sourcesSelected: 3, sourcesOpened: 3, claims: 1, rounds: 0 });
+  assert.equal(seen.check[seen.check.length - 1].counts.rounds, 1, 'the check after the revision knows a round happened');
+  // no claims block at all: the quick summary of the first pass stands in; every figure goes through the check with no claims
+  const s2 = spyEngine();
+  const m2 = makeThorough({ deps: { engine: { ...ENGINE, ...s2.engine } }, script: { 'Research report': () => [{ label: 'Research report', ok: false, text: '(no response)' }], 'Research summary': () => [{ label: 'Research summary', ok: true, text: 'Summary: Method A scored 56.4% on the test.' }] } });
+  const run2 = await doneRun(m2);
+  assert.equal(run2.state, 'delivered');
+  const last = s2.seen.check[s2.seen.check.length - 1];
+  assert.deepEqual(last.claims, []);
+  assert.match(last.prose, /56\.4/);
+  assert.ok(run2.missing.some((x) => /^synthesis/.test(x)));
+  assert.match(m2.wakes[0].message, /Method A scored 56\.4%/);
+});
+
+test('r2 1: a run cut short (deadline, restart) has its saved report checked too', async () => {
+  const { engine, seen } = spyEngine();
+  const base = { id: 'dr-cut1', agent: 'a1', stamp: null, question: 'Q?', subQuestions: ['a', 'b'], level: 'thorough', state: 'running', stage: 'check', stageLabel: '', stageDone: 0, stageTotal: 0, startedAt: 1, endedAt: null, error: null, stagesDone: ['quick', 'select', 'fetch', 'read', 'synthesis'], missing: [], findings: ['f'], prose: 'Method A scored 56.4% on the test.', claims: [] };
+  const b = makeRunner({ store: { load: () => [{ ...base }], save() {} }, engine: { ...ENGINE, ...engine } });
+  b.runner.recover();
+  await until(() => b.wakes.length === 1);
+  assert.equal(seen.check.length, 1, 'the prose was never checked: it is now');
+  assert.deepEqual(seen.check[0].claims, []);
+  assert.equal(seen.chat[0].interrupted, true);
+  // saved after its check (checked: true): not checked a second time, the doubted ids and review counts survive the restart
+  const { engine: e2, seen: s2 } = spyEngine();
+  const done = { ...base, id: 'dr-cut2', checked: true, rounds: 1, reviewer: 'X', doubtedIds: ['c1'], review: { label: 'X', rounds: 1, counts: { supported: 1, partly: 1, not_supported: 0, cannot_check: 0 }, uncheckedIds: [], failed: '' }, claims: [{ id: 'c1', claim: 'Method A scored 56.4% on the test', source_url: SRC_A, figures: ['56.4'] }] };
+  const c = makeRunner({ store: { load: () => [done], save() {} }, engine: { ...ENGINE, ...e2 } });
+  c.runner.recover();
+  await until(() => c.wakes.length === 1);
+  assert.equal(s2.check.length, 0);
+  assert.deepEqual(s2.chat[0].doubtedIds, ['c1']);
+  assert.equal(s2.chat[0].review.counts.partly, 1);
+});
+
+test('r2 2: a round with no decisive verdict is not credited, goes into missing, and stops the challenge', async () => {
+  const cannot = '```json\n' + JSON.stringify([{ id: 'c1', verdict: 'cannot_check', reason: 'no excerpt' }]) + '\n```';
+  const m = makeThorough({ script: { Reviewer: () => [{ label: 'Reviewer', ok: true, text: cannot }] } });
+  const run = await doneRun(m);
+  assert.equal(run.rounds, 0, 'not credited');
+  assert.equal(m.calls.filter((c) => c.labels[0] === 'Reviewer').length, 1, 'the challenge stopped');
+  assert.ok(!m.calls.some((c) => c.labels[0] === 'Revision'));
+  assert.ok(run.missing.includes('challenge: the reviewer gave no usable verdicts'), JSON.stringify(run.missing));
+  assert.ok(!run.stagesDone.includes('challenge'));
+  assert.match(m.wakes[0].message, /Not challenged: the reviewer gave no usable verdicts/);
+  assert.doesNotMatch(m.wakes[0].message, /Challenged by/);
+});
+
+test('r2 2: a revision that fails keeps the doubted ids; they and the review counts reach the report and the saved run', async () => {
+  const { engine, seen } = spyEngine();
+  const m = makeThorough({
+    deps: { engine: { ...ENGINE, ...engine } },
+    script: { Reviewer: () => [{ label: 'Reviewer', ok: true, text: verdicts('partly') }], Revision: () => [{ label: 'Revision', ok: true, text: 'no claims block here' }] },
+  });
+  const run = await doneRun(m);
+  const rep = seen.chat[seen.chat.length - 1];
+  assert.deepEqual(rep.doubtedIds, ['c1']);
+  assert.equal(rep.review.rounds, 1);
+  assert.equal(rep.review.counts.partly, 1);
+  assert.deepEqual(rep.review.uncheckedIds, []);
+  assert.deepEqual(run.doubtedIds, ['c1'], 'persisted for a restart');
+  assert.equal(run.review.counts.partly, 1);
+  assert.ok(m.saves.some((x) => /"doubtedIds":\["c1"\]/.test(x)));
+  assert.match(m.wakes[0].message, /doubted/i);
+});
+
+test('r2 3: a source choice that fails or is unusable falls back to the sources the helpers listed; only nothing at all is missing', async () => {
+  for (const choose of [() => { throw new Error('refused'); }, () => [{ label: 'Choose sources', ok: true, text: 'I cannot choose.' }]]) {
+    const m = makeThorough({ script: { 'Choose sources': choose } });
+    const run = await doneRun(m);
+    assert.ok(!run.missing.some((x) => /^select/.test(x)), JSON.stringify(run.missing));
+    assert.ok(run.stagesDone.includes('select'));
+    assert.ok(m.calls.some((c) => /^Reader/.test(c.labels[0])), 'the fallback sources were read');
+    assert.equal(run.sources.length, 3);
+  }
+});
+
+test("r2 4: select, synthesis, revision and the quick-summary fallback get tools 'none'; helpers, readers and the reviewer keep 'read'", async () => {
+  let reviews = 0;
+  const m = makeThorough({ script: {
+    Reviewer: () => { reviews++; return [{ label: 'Reviewer', ok: true, text: verdicts(reviews === 1 ? 'not_supported' : 'supported') }]; },
+  } });
+  await doneRun(m);
+  const toolsOf = (label) => m.calls.filter((c) => c.labels[0].startsWith(label)).flatMap((c) => c.tools);
+  assert.deepEqual([...new Set(toolsOf('Choose sources'))], ['none']);
+  assert.deepEqual([...new Set(toolsOf('Research report'))], ['none']);
+  assert.deepEqual([...new Set(toolsOf('Revision'))], ['none']);
+  for (const l of ['Research 1', 'Reader', 'Reviewer']) assert.deepEqual([...new Set(toolsOf(l))], ['read'], l);
+  const f = makeThorough({ script: { 'Research report': () => [{ label: 'Research report', ok: false, text: '(no response)' }] } });
+  await doneRun(f);
+  assert.deepEqual([...new Set(f.calls.filter((c) => c.labels[0] === 'Research summary').flatMap((c) => c.tools))], ['none'], 'the fallback summary');
+  // and the worker launcher accepts it
+  const tw = require(path.join(ISO.inst, 'lib', 'temporal-workers.js'));
+  const norm = tw.normalizeJobs([{ task: 'a task long enough to count', model: BIG, tools: 'none', label: 'x' }], { available: [BIG], callerModel: BIG });
+  assert.equal(norm.error, undefined);
+  assert.equal(norm.jobs[0].toolScope, 'none');
+});
+
+test('r2 5: an agent whose content must stay on its service: every worker uses its own model, no searchBoth, an unknown lookup counts as kept', async () => {
+  for (const keptOnBox of [() => true, () => { throw new Error('lookup failed'); }, () => undefined]) {
+    const m = makeThorough({ deps: { keptOnBox, helperSearchBoth: () => true } });
+    await doneRun(m);
+    assert.ok(m.calls.length >= 5);
+    for (const c of m.calls) {
+      assert.deepEqual([...new Set(c.models)], [BIG], c.labels.join(','));
+      assert.ok(c.searchBoth.every((x) => x === false), 'no second search for ' + c.labels.join(','));
+    }
+  }
+  // an agent that may send content out: the helper, reader and reviewer models are used, and searchBoth marks helpers and readers
+  const open = makeThorough({ deps: { keptOnBox: () => false, helperSearchBoth: () => true } });
+  await doneRun(open);
+  assert.equal(open.calls[0].model, FAST);
+  assert.deepEqual(open.calls[0].searchBoth, [true, true, true]);
+  assert.equal(open.calls.find((c) => c.labels[0] === 'Reviewer').model, 'openai/test-reviewer');
+  assert.ok(open.calls.find((c) => c.labels[0] === 'Reviewer').searchBoth.every((x) => !x));
+});
+
+test('r2 6: chooseReviewer for an agent on a local model: a local reviewer, never a cloud one', () => {
+  const own = 'lmstudio/qwen-own';
+  const cloud = ['claude-sdk/claude-test-big', 'openai/gpt-x'];
+  assert.deepEqual(research.chooseReviewer({ ownModel: own, allowed: [...cloud, 'ollama/llama-other'] }), { model: 'ollama/llama-other', label: 'a model on this computer (its content stays here)', crossVendor: false });
+  const none = research.chooseReviewer({ ownModel: own, allowed: cloud });
+  assert.equal(none.model, own);
+  assert.equal(none.crossVendor, false);
+  assert.equal(research.chooseReviewer({ ownModel: own, allowed: [] }).model, own);
+  // a cloud agent is unchanged
+  assert.equal(research.chooseReviewer({ ownModel: 'claude-sdk/claude-test-big', allowed: cloud }).crossVendor, true);
+});
+
+test('r2 10: the runner owns the data-leak rule: a kept agent ignores a helper, reader or reviewer model the lookups chose', async () => {
+  const m = makeThorough({ deps: { keptOnBox: () => true, pickHelperModel: async () => 'openrouter/openai/x', pickReaderModel: async () => 'openrouter/openai/y', pickReviewer: async () => ({ model: 'google/z', label: 'g', crossVendor: true }) } });
+  await doneRun(m);
+  assert.ok(m.calls.every((c) => c.models.every((x) => x === BIG)));
 });

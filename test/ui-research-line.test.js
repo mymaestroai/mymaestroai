@@ -97,7 +97,7 @@ function load(src, extra) {
   const box = (id) => (boxes[id] ||= (() => { const o = mk('div'); let t = ''; Object.defineProperty(o, 'textContent', { get: () => t, set: (v) => { t = v; o.children.length = 0; } }); return o; })());
   const ctx = vm.createContext({ document: { createElement: mk, getElementById: (id) => (id in boxes ? boxes[id] : null) }, Date, Number, String, Map, Array, Math, console, ...extra });
   ctx.box = box; ctx.boxes = boxes;
-  vm.runInContext(src.slice(a, b) + '\nthis.text = researchLineText; this.apply = researchLineApply; this.runs = researchRuns; this.fill = researchLineFill;', ctx);
+  vm.runInContext(src.slice(a, b) + '\nthis.text = researchLineText; this.apply = researchLineApply; this.runs = researchRuns; this.fill = researchLineFill; this.loadRuns = researchLineLoad;', ctx);
   return ctx;
 }
 const lines = (b) => b.children.map(c => c.textContent);
@@ -148,3 +148,75 @@ test('wiring: both pages read research_progress, load the status route on open, 
   assert.match(read('mobile.html'), /id="handoff-cards" class="handoff-cards" hidden><\/div>\n\s*<div id="research-lines" class="handoff-cards research-lines" hidden>/);
   for (const f of ['index.html', 'mobile.html']) assert.match(read(f), /\.research-lines \.research-line \{[^}]*white-space: normal/);
 });
+
+// ── the status answer and the events race: merged, never replaced ──
+for (const [name, src] of [['desktop', app], ['phone', mob]]) {
+  function race() {
+    let clock = 1000;
+    let release;
+    let answer = { runs: [] };
+    const reply = () => ({ ok: true, json: async () => answer });
+    const gate = () => new Promise((r) => { release = () => r(reply()); });
+    const extra = name === 'desktop'
+      ? { chats: {}, fetch: () => gate() }
+      : { screen: 'list', current: null, api: () => gate() };
+    const c = load(src, { ...extra, Date: { now: () => clock } });
+    return { c, tick: (ms = 10) => { clock += ms; }, answerWith: (runs) => { answer = { runs }; }, release: () => release() };
+  }
+  const run = (o) => ({ id: 'dr-1', level: 'thorough', stage: 'read', label: 'x', done: 1, total: 3, startedAt: 1, ...o });
+  const ev = (o) => ({ agent: 'sam-bot', state: 'running', ...run({}), ...o });
+  const labelOf = (c, id = 'dr-1') => { const m = c.runs.get('sam-bot'); const e = m && m.get(id); return e ? e.label : undefined; };
+
+  test(`${name}: a status answer does not overwrite a newer event that arrived while it was fetched`, async () => {
+    const r = race();
+    const p = r.c.loadRuns('sam-bot');
+    r.tick();
+    r.c.apply(ev({ label: 'newer', seq: 7 }));
+    r.answerWith([run({ label: 'older', seq: 4 })]);
+    r.release(); await p;
+    assert.equal(labelOf(r.c), 'newer');
+  });
+  test(`${name}: a status answer that is newer than what the page had does replace it`, async () => {
+    const r = race();
+    r.c.apply(ev({ label: 'before', seq: 2 }));
+    r.tick();
+    const p = r.c.loadRuns('sam-bot');
+    r.answerWith([run({ label: 'fresh', seq: 9 })]);
+    r.release(); await p;
+    assert.equal(labelOf(r.c), 'fresh');
+  });
+  test(`${name}: a run that got its delivered/failed event during the fetch is not brought back`, async () => {
+    for (const state of ['delivered', 'failed']) {
+      const r = race();
+      r.c.apply(ev({ seq: 1 }));
+      const p = r.c.loadRuns('sam-bot');
+      r.tick();
+      r.c.apply(ev({ state, seq: 5 }));
+      r.answerWith([run({ seq: 3 })]);   // the answer was made while the run still ran
+      r.release(); await p;
+      assert.equal(r.c.runs.has('sam-bot'), false, state);
+      r.c.apply(ev({ label: 'late event', seq: 4 }));
+      assert.equal(r.c.runs.has('sam-bot'), false, 'a late non-terminal event does not bring it back either');
+    }
+  });
+  test(`${name}: the answer is merged into the current runs: one an event added meanwhile stays, one that ended unnoticed goes`, async () => {
+    const r = race();
+    r.c.apply(ev({ id: 'dr-old', seq: 1 }));     // seen before the fetch; the answer no longer lists it
+    r.tick();
+    const p = r.c.loadRuns('sam-bot');
+    r.tick();
+    r.c.apply(ev({ id: 'dr-new', seq: 2, startedAt: 5 }));   // an event that came while fetching, not in the answer
+    r.answerWith([run({ id: 'dr-kept', seq: 1, startedAt: 3 })]);
+    r.release(); await p;
+    const ids = [...r.c.runs.get('sam-bot').keys()].sort();
+    assert.deepEqual(ids, ['dr-kept', 'dr-new']);
+  });
+  test(`${name}: an older event never overwrites a newer one for the same run`, () => {
+    const r = race();
+    r.c.apply(ev({ label: 'seq 6', seq: 6 }));
+    r.c.apply(ev({ label: 'seq 5', seq: 5 }));
+    assert.equal(labelOf(r.c), 'seq 6');
+    r.c.apply(ev({ label: 'seq 7', seq: 7 }));
+    assert.equal(labelOf(r.c), 'seq 7');
+  });
+}

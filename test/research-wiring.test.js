@@ -31,6 +31,7 @@ function load({ on = true, virtual = false, handOff = null, agents = [], hasUser
     './behaviour-changes': { isOn: (id) => id === 'deep-research' && on },
     './settings': { getSetting: (k) => (k === 'researchReminderDays' ? reminderDays : settings[k]) },
     './agents': { getAgentsSync: () => agents },
+    './tool-policy': require(path.join(ISO.inst, 'lib', 'tool-policy.js')),
     './research-thorough': require(path.join(ISO.inst, 'lib', 'research-thorough.js')),
     ...extraMods,
   };
@@ -413,23 +414,24 @@ test('levels: "Always yes" on the card stores always and runs at the stored leve
   assert.match(await startReq(L, { level: 'thorough' }), /^Started/);
 });
 
-test('levels: set always_level changes the level only on a turn the person typed', async () => {
+test('levels: a tool call with always_level changes nothing, on any turn; only the person changes it (Settings, the phone sheet)', async () => {
   const L = load();
+  L.prefs.setAlwaysLevel('u_sam', 'quick');
+  const refusal = 'Only the person can choose which level Always yes runs, in Settings (or the phone\'s Deep research sheet). Tell them where.';
   L.turn('sam-agent');
-  assert.equal(await L.ctx.run('sam-agent', L.live, { action: 'set', always_level: 'thorough' }), 'Done: Always yes now runs Thorough research. Tell them in one line.');
-  assert.equal(L.prefs.alwaysLevelOf('u_sam'), 'thorough');
-  assert.equal(L.prefs.choiceOf('u_sam'), 'ask', 'the choice is untouched');
-  assert.match(await L.ctx.run('sam-agent', L.live, { action: 'set', always_level: 'quick' }), /Quick research/);
+  assert.equal(await L.ctx.run('sam-agent', L.live, { action: 'set', always_level: 'thorough' }), refusal);
+  assert.equal(L.prefs.alwaysLevelOf('u_sam'), 'quick', 'a typed turn cannot change it either');
+  assert.equal(await L.ctx.run('sam-agent', L.live, { action: 'set', choice: 'always', always_level: 'thorough' }), refusal);
   assert.equal(L.prefs.alwaysLevelOf('u_sam'), 'quick');
-  assert.match(await L.ctx.run('sam-agent', L.live, { action: 'set', always_level: 'deep' }), /must be quick or thorough/);
-  assert.equal(L.prefs.alwaysLevelOf('u_sam'), 'quick');
-  // a hub-started turn, or one without a signed-in person: nothing changes
+  assert.equal(L.prefs.choiceOf('u_sam'), 'ask', 'the whole call is refused');
   L.turn('sam-agent', { origin: { kind: 'job_notice' }, personKey: null });
-  assert.match(await L.ctx.run('sam-agent', L.live, { action: 'set', always_level: 'thorough' }), /only the person can change it/);
-  L.turn('sam-agent', { origin: { kind: 'user' }, personKey: null });
-  assert.match(await L.ctx.run('sam-agent', L.live, { action: 'set', always_level: 'thorough' }), /only the person can change it/);
+  assert.equal(await L.ctx.run('sam-agent', L.live, { action: 'set', always_level: 'thorough' }), refusal);
   assert.equal(L.prefs.alwaysLevelOf('u_sam'), 'quick');
   assert.equal(L.prefs.alwaysLevelOf('u_owner'), 'quick');
+  // the choice itself is still the person's to set by typing
+  L.turn('sam-agent');
+  assert.match(await L.ctx.run('sam-agent', L.live, { action: 'set', choice: 'always' }), /without asking/);
+  assert.equal(L.prefs.choiceOf('u_sam'), 'always');
 });
 
 test('levels: the guidance mentions the recommendation; the route has GET alwaysLevel and POST alwaysLevel', () => {
@@ -474,8 +476,9 @@ test('the runner is wired for Thorough runs: page fetch (no private addresses), 
   assert.match(SRC, /settingsFrom\(raw\)/);
   assert.match(SRC, /getSetting\('researchThorough'\)/);
   assert.match(SRC, /sameVendor: researchKeptOnBox\(agent\)/);
-  assert.match(SRC, /keptOnBox\(rec\)/);
-  assert.match(SRC, /hubEvents\.events\.publish\('research_progress', \{ agent: run\.agent, id: run\.id, level: run\.level, stage: run\.stage \|\| '', label: run\.stageLabel \|\| '', done: run\.stageDone \|\| 0, total: run\.stageTotal \|\| 0, state: run\.state, startedAt: run\.startedAt \}\)/);
+  assert.match(SRC, /teamFolderOf\(rec\)/);
+  assert.match(SRC, /keptOnBox: researchKeptOnBox,/);
+  assert.match(SRC, /hubEvents\.events\.publish\('research_progress', \{ agent: run\.agent, id: run\.id, level: run\.level, stage: run\.stage \|\| '', label: run\.stageLabel \|\| '', done: run\.stageDone \|\| 0, total: run\.stageTotal \|\| 0, state: run\.state, startedAt: run\.startedAt, seq: run\.seq \|\| 0 \}\)/);
   assert.match(SRC, /module\.exports = \{\n  researchStatusFor,/);
 });
 
@@ -487,10 +490,10 @@ test('researchStatusFor: only the agent\'s active runs, in the contract shape; r
   L.ctx.setRunner({ list: () => runs, start() {}, recover() {} });
   const st = JSON.parse(JSON.stringify(L.ctx.statusFor('sam-agent')));
   assert.deepEqual(st.map((x) => x.id), ['dr-1', 'dr-2']);
-  assert.deepEqual(st[0], { id: 'dr-1', level: 'thorough', stage: 'read', label: 'reading sources in full (1 of 3)', done: 1, total: 3, startedAt: 111 });
+  assert.deepEqual(st[0], { id: 'dr-1', level: 'thorough', stage: 'read', label: 'reading sources in full (1 of 3)', done: 1, total: 3, startedAt: 111, seq: 0 });
   assert.equal(L.ctx.statusFor('nobody').length, 0);
   L.ctx.onProgress(runs[0]);
-  assert.deepEqual(JSON.parse(JSON.stringify(published)), [{ t: 'research_progress', p: { agent: 'sam-agent', id: 'dr-1', level: 'thorough', stage: 'read', label: 'reading sources in full (1 of 3)', done: 1, total: 3, state: 'running', startedAt: 111 } }]);
+  assert.deepEqual(JSON.parse(JSON.stringify(published)), [{ t: 'research_progress', p: { agent: 'sam-agent', id: 'dr-1', level: 'thorough', stage: 'read', label: 'reading sources in full (1 of 3)', done: 1, total: 3, state: 'running', startedAt: 111, seq: 0 } }]);
   const broken = load({ globals: { hubEvents: { events: { publish: () => { throw new Error('bus down'); } } } } });
   broken.ctx.onProgress(runs[0]);
   const noBus = load();
@@ -500,28 +503,46 @@ test('researchStatusFor: only the agent\'s active runs, in the contract shape; r
   assert.equal(L.ctx.statusFor('sam-agent').length, 0);
 });
 
-test('pickReviewer and the helper model wiring: an agent kept on its own service stays with its own vendor', async () => {
+test('pickReviewer and the helper model wiring: an agent kept on its own service stays on its own model', async () => {
   const own = 'claude-sdk/claude-test-big';
   const catalogue = { available: ['claude-sdk/claude-test-fast', 'openai/test-mini', 'google/test-g'], sdkInfo: [] };
-  const cloud = { keptOnBox: (rec) => rec.name === 'ward-agent' };
+  const settings = { autoClassifier: { keepOnBox: ['ward-agent'] } };
   const agents = [{ name: 'sam-agent' }, { name: 'ward-agent' }];
-  const L = load({ agents, extraMods: { './voice/cloud': cloud }, globals: { refreshWorkerCatalog: async () => catalogue, temporalWorkers: { isVirtual: () => false, noteFor: () => 'fast and cheap' } } });
+  const L = load({ agents, settings, globals: { refreshWorkerCatalog: async () => catalogue, temporalWorkers: { isVirtual: () => false, noteFor: () => 'fast and cheap' } } });
   assert.equal(L.ctx.keptOnBox('sam-agent'), false);
   assert.equal(L.ctx.keptOnBox('ward-agent'), true);
   assert.equal(L.ctx.keptOnBox('ghost-agent'), true, 'a lookup that finds nothing counts as kept: content never leaves on a guess');
   const free = await L.ctx.reviewer('sam-agent');
   assert.equal(free.crossVendor, true);
   assert.match(free.label, /^a model from another vendor \((OpenAI|Google)\)$/);
-  assert.ok(free.model.startsWith('openai/') || free.model.startsWith('google/'));
   const kept = await L.ctx.reviewer('ward-agent');
   assert.deepEqual(JSON.parse(JSON.stringify(kept)), { model: own, label: 'the same service as the agent (its content stays there)', crossVendor: false });
-  // helpers: a kept agent only gets a model of its own vendor
-  assert.equal(await L.ctx.helperModel('ward-agent'), 'claude-sdk/claude-test-fast');
-  const L2 = load({ agents, extraMods: { './voice/cloud': cloud }, globals: { refreshWorkerCatalog: async () => ({ available: ['openai/test-mini'], sdkInfo: [] }), temporalWorkers: { isVirtual: () => false, noteFor: () => 'fast and cheap' } } });
-  assert.equal(await L2.ctx.helperModel('ward-agent'), own, 'nothing of its vendor fits: its own model, as today');
+  // helpers: a kept agent gets its own model, not even another model of its own vendor (another route is another service)
+  assert.equal(await L.ctx.helperModel('ward-agent'), own);
+  assert.equal(await L.ctx.helperModel('sam-agent'), 'claude-sdk/claude-test-fast');
   // a member's agent: only the models the member may use
-  const L3 = load({ agents, extraMods: { './voice/cloud': cloud }, globals: { refreshWorkerCatalog: async () => catalogue, memberWorkerModels: () => [own, 'google/test-g'] } });
+  const L3 = load({ agents, settings, globals: { refreshWorkerCatalog: async () => catalogue, memberWorkerModels: () => [own, 'google/test-g'] } });
   assert.equal((await L3.ctx.reviewer('sam-agent')).model, 'google/test-g');
+});
+
+test('strict keptOnBox: a team folder, the keep list, a missing agent, a throwing settings read or a throwing policy lookup all count as kept', () => {
+  const rec = (name, over = {}) => ({ name, ...over });
+  const L = load({ agents: [rec('a'), rec('b')], settings: { autoClassifier: { keepOnBox: ['b'] } } });
+  assert.equal(L.ctx.keptOnBox(rec('a')), false);
+  assert.equal(L.ctx.keptOnBox(rec('b')), true);
+  assert.equal(L.ctx.keptOnBox(null), true);
+  assert.equal(L.ctx.keptOnBox('nobody'), true);
+  // a team-folder agent (medical/legal), whatever the list says
+  const tp = require(path.join(ISO.inst, 'lib', 'tool-policy.js'));
+  const team = rec('t', { policy: { roots: [path.join(tp.HUB_HOME, tp.TEAM_FOLDERS[0])] } });
+  assert.equal(load({ agents: [team] }).ctx.keptOnBox(team), true);
+  // the classifier setting cannot be read: kept (the old shared helper said "not kept" here)
+  const thrower = load({ agents: [rec('a')], extraMods: { './settings': { getSetting: () => { throw new Error('settings broken'); } } } });
+  assert.equal(thrower.ctx.keptOnBox(rec('a')), true);
+  const noPolicy = load({ agents: [rec('a')], extraMods: { './tool-policy': { teamFolderOf: () => { throw new Error('x'); } } } });
+  assert.equal(noPolicy.ctx.keptOnBox(rec('a')), true);
+  // the runner is given this strict check, not voice/cloud's
+  assert.doesNotMatch(SRC.slice(SRC.indexOf('function researchKeptOnBox'), SRC.indexOf('function researchKeptOnBox') + 900), /voice\/cloud/);
 });
 
 test('thorough settings are read from researchThorough and checked; the document goes to <Files>/research with -2, -3 for a used name', async () => {

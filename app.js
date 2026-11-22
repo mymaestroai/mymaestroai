@@ -8400,15 +8400,21 @@
       for (const r of runs) { const d = document.createElement('div'); d.className = 'ho-strip research-line'; d.setAttribute('role', 'status'); d.textContent = researchLineText(r, now); box.appendChild(d); }
       box.hidden = runs.length === 0;
     }
+    const researchEnded = new Set();   // ids of runs that already got a terminal event (delivered or failed); kept small
+    function researchEndedAdd(id) { researchEnded.add(id); if (researchEnded.size > 200) researchEnded.delete(researchEnded.values().next().value); }
     function researchLineApply(ev) {
       if (!ev || !ev.agent || ev.id == null) return;
       const id = String(ev.id);
       if (ev.state === 'delivered' || ev.state === 'failed') {
+        researchEndedAdd(id);   // a status answer still on its way must not bring this run back
         const m = researchRuns.get(ev.agent);
         if (m) { m.delete(id); if (!m.size) researchRuns.delete(ev.agent); }
       } else {
+        if (researchEnded.has(id)) return;
+        const old = researchRuns.has(ev.agent) ? researchRuns.get(ev.agent).get(id) : null;
+        if (old && Number.isFinite(old.seq) && Number.isFinite(ev.seq) && ev.seq < old.seq) return;   // an older event never overwrites a newer one
         if (!researchRuns.has(ev.agent)) researchRuns.set(ev.agent, new Map());
-        researchRuns.get(ev.agent).set(id, { id, level: ev.level, stage: ev.stage, label: ev.label, done: ev.done, total: ev.total, startedAt: ev.startedAt });
+        researchRuns.get(ev.agent).set(id, { id, level: ev.level, stage: ev.stage, label: ev.label, done: ev.done, total: ev.total, startedAt: ev.startedAt, seq: ev.seq, seenAt: Date.now() });
       }
       researchLinePaint();
     }
@@ -8417,12 +8423,27 @@
     }
     async function researchLineLoad(agent) {
       if (!agent) return;
+      const t0 = Date.now();   // events that arrive from here on are newer than the answer being fetched
       try {
         const r = await fetch('/api/research/status?agent=' + encodeURIComponent(agent), { credentials: 'include' });
         const d = r.ok ? await r.json() : null;
         if (!d || !Array.isArray(d.runs)) return;
-        const m = new Map();
-        for (const x of d.runs) if (x && x.id != null) m.set(String(x.id), { id: String(x.id), level: x.level, stage: x.stage, label: x.label, done: x.done, total: x.total, startedAt: x.startedAt });
+        // merged into what the events built meanwhile: never replaced, an ended run is not brought back, and an older answer
+        // never overwrites a newer event for the same run (by the run's sequence number, else by when the event came)
+        const m = new Map(researchRuns.get(agent) || []);
+        const inAnswer = new Set();
+        for (const x of d.runs) {
+          if (!x || x.id == null) continue;
+          const id = String(x.id);
+          inAnswer.add(id);
+          if (researchEnded.has(id)) continue;
+          const cur = m.get(id);
+          const x_seq = Number(x.seq);
+          if (cur && (Number.isFinite(cur.seq) && Number.isFinite(x_seq) ? cur.seq >= x_seq : (cur.seenAt || 0) >= t0)) continue;
+          m.set(id, { id, level: x.level, stage: x.stage, label: x.label, done: x.done, total: x.total, startedAt: x.startedAt, seq: Number.isFinite(x_seq) ? x_seq : undefined, seenAt: t0 });
+        }
+        // a run the answer does not list and no event touched since the fetch began has ended
+        for (const [id, e] of [...m]) if (!inAnswer.has(id) && (e.seenAt || 0) < t0) m.delete(id);
         if (m.size) researchRuns.set(agent, m); else researchRuns.delete(agent);
         researchLinePaint();
       } catch { /* the line stays as it was */ }

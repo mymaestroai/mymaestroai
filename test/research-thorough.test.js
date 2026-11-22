@@ -69,7 +69,9 @@ test('checkFigure: found, not found, exact digits', () => {
   assert.strictEqual(T.checkFigure('56.4', SOURCE, []), 'found');
   assert.strictEqual(T.checkFigure('56.4%', SOURCE, []), 'found');
   assert.strictEqual(T.checkFigure('1450', SOURCE, []), 'found');
-  assert.strictEqual(T.checkFigure('-3.2', SOURCE, []), 'found');
+  // -3.2 has 2 significant digits, so it is now a common number (r2 fix 6) and needs a keyword nearby
+  assert.strictEqual(T.checkFigure('-3.2', SOURCE, ['points']), 'found');
+  assert.strictEqual(T.checkFigure('-3.2', SOURCE, []), 'common_not_near');
   assert.strictEqual(T.checkFigure('0.550', SOURCE, []), 'found');
   assert.strictEqual(T.checkFigure('0.55', SOURCE, []), 'not_found');
   assert.strictEqual(T.checkFigure('43.7', SOURCE, []), 'not_found');
@@ -83,7 +85,8 @@ test('checkFigure: common numbers need a keyword nearby', () => {
   assert.strictEqual(T.checkFigure('30', SOURCE, ['elephants']), 'common_not_near');
   assert.strictEqual(T.checkFigure('30', SOURCE, []), 'common_not_near');
   assert.strictEqual(T.checkFigure('5', SOURCE, ['groups']), 'found');
-  assert.strictEqual(T.checkFigure('5%', SOURCE, ['groups']), 'found');
+  // r2 fix 1: a percent figure no longer matches a plain "5 groups" in the source
+  assert.strictEqual(T.checkFigure('5%', SOURCE, ['groups']), 'not_found');
   const far = 'The number 30 appears here.' + ' filler'.repeat(100) + ' raters were many.';
   assert.strictEqual(T.checkFigure('30', far, ['raters']), 'common_not_near');
   assert.strictEqual(T.checkFigure('99', SOURCE, ['raters']), 'not_found');
@@ -101,7 +104,7 @@ test('keywordsFrom: 5+ letter words, longest first, top 8', () => {
 test('checkClaims: all statuses, totals, arXiv variants', () => {
   const claims = [
     { id: 'c1', claim: 'The new method is preferred over the baseline', source_url: 'https://arxiv.org/pdf/2401.01234', figures: ['56.4', '43.6'] },
-    { id: 'c2', claim: 'Retrieval precision and recall are reported', source_url: 'https://arxiv.org/abs/2401.01234v1', figures: ['0.884', '0.55'] },
+    { id: 'c2', claim: 'Retrieval precision and recall are reported', source_url: 'https://arxiv.org/abs/2401.01234v2', figures: ['0.884', '0.55'] },
     { id: 'c3', claim: 'Invented numbers appear here', source_url: 'https://arxiv.org/html/2401.01234', figures: ['77.7', '88.8'] },
     { id: 'c4', claim: 'Other source claim', source_url: 'https://example.org/other', figures: ['12.5', '9.9'] },
     { id: 'c5', claim: 'No numbers in this claim', source_url: 'https://arxiv.org/abs/2401.01234', figures: [] },
@@ -153,9 +156,11 @@ test('figuresInProse exempt: counts the report makes about itself', () => {
   assert.deepStrictEqual(pf('12 sources of 40% error'), ['40%']);
 });
 test('figuresInProse exempt: numbers glued to letters (model names and versions)', () => {
-  assert.deepStrictEqual(pf('GPT-4.1 beat Llama-3.1-8B and o4-mini, v2 and 8B, 3x faster.'), []);
+  assert.deepStrictEqual(pf('GPT-4.1 beat Llama-3.1-8B and o4-mini, v2.'), []);
+  // r2 fix 5: a word that starts with a digit is a figure (its numeric part is checked)
+  assert.deepStrictEqual(pf('8B and 3x faster, 300k, 4.2B, 12.5pp'), ['8', '3', '300', '4.2', '12.5']);
   assert.deepStrictEqual(pf('Model-A1 scored 56.4% and Atlas-7 scored 12.5'), ['56.4%', '12.5']);
-  assert.deepStrictEqual(pf('It gained 4.1 points, not v4.1 or 4.1x.'), ['4.1']);
+  assert.deepStrictEqual(pf('It gained 4.1 points, not v4.1 or 4.1x.'), ['4.1', '4.1']);
   const why = T.classifyProseNumbers('Llama-3.1-8B').map((x) => x.exempt);
   assert.deepStrictEqual(why, ['name or version', 'name or version']);
 });
@@ -347,7 +352,7 @@ test('renderDocument: markdown shape and traceability table', () => {
   assert.match(markdown, /\| yes \| source not opened \|/);
   assert.match(markdown, /pipe/);
   assert.match(markdown, /### Read in full\n\n- \[Ranking paper\]\(https:\/\/arxiv\.org\/abs\/2401\.01234v2\)/);
-  assert.match(markdown, /### Not opened in full\n\n- \[Closed page\]\(https:\/\/example\.org\/none\)/);
+  assert.match(markdown, /### Opened in part\n\nNone\n\n### Not opened\n\n- \[Closed page\]\(https:\/\/example\.org\/none\)/);
   assert.ok(!/Heading to drop/.test(markdown));
   assert.strictEqual((markdown.match(/^# /gm) || []).length, 1);
 });
@@ -548,7 +553,9 @@ test('chatReport: counts line, reviewer, files, missing', () => {
   assert.match(t, /Verdict\nA is preferred\./);
   assert.match(t, /- The first pass said 55\.4%/);
   assert.match(t, /Confidence\nMedium: one study\./);
-  assert.ok(t.indexOf('Verified one') < t.indexOf('Unverified one'));
+  // r2 fix 10: Key evidence lists only verified claims
+  assert.ok(t.includes('Verified one'));
+  assert.ok(!t.includes('Unverified one'));
   assert.ok(!/\p{Extended_Pictographic}/u.test(t));
 });
 
@@ -558,7 +565,7 @@ test('chatReport: no missing line, no PDF reason, None corrections, 1 round', ()
   assert.match(t, /No PDF: no Chrome found/);
   assert.match(t, /Corrections to the first pass\nNone/);
   assert.match(t, /\(1 round\)/);
-  const caps = T.chatReport({ prose: '## Verdict\nV.', claims: Array.from({ length: 9 }, (_, i) => ({ id: 'c' + i, claim: 'claim ' + i })), totals: {}, files: {} });
+  const caps = T.chatReport({ prose: '## Verdict\nV.', claims: Array.from({ length: 9 }, (_, i) => ({ id: 'c' + i, claim: 'claim ' + i, check_status: 'verified' })), totals: {}, files: {} });
   assert.strictEqual((caps.match(/^- claim /gm) || []).length, 5);
 });
 
@@ -584,4 +591,221 @@ test('end to end: parseClaims -> checkClaims -> applyCheck -> markProse', () => 
   assert.doesNotMatch(marked.prose, /56\.4% \[unverified\]/);
   const ann = T.applyCheck(p.claims, res);
   assert.strictEqual(ann[0].check, '2 of 3 found; not found: 43.7');
+});
+
+// ================================================================ r2 review fixes
+const SRC_A = 'Study A enrolled 125 participants and reported 56.4 percent agreement. Study A also used 2000 samples in 2048-token windows.';
+const SRC_B = 'Study B enrolled 80 participants and reported 0.884 precision.';
+const F2 = [
+  { url: 'https://a.example/a', title: 'Study A paper', ok: true, text: SRC_A },
+  { url: 'https://b.example/b', title: 'Study B paper', ok: true, text: SRC_B },
+];
+
+test('r2-1 figure units: 125% is not "125 participants"; 56.4 matches 56.4%', () => {
+  assert.strictEqual(T.checkFigure('125%', 'We enrolled 125 participants.', ['participants']), 'not_found');
+  assert.strictEqual(T.checkFigure('125', 'We enrolled 125 participants.', ['participants']), 'found');
+  assert.strictEqual(T.checkFigure('56.4', 'agreement 56.4% overall', []), 'found');
+  assert.strictEqual(T.checkFigure('56.4%', 'agreement 56.4 % overall', []), 'found');
+  assert.strictEqual(T.checkFigure('56.4%', 'agreement 56.4 percent overall', []), 'found');
+  assert.strictEqual(T.checkFigure('56.4 percent', 'agreement 56.4 per cent overall', []), 'found');
+  assert.strictEqual(T.checkFigure('56.4%', 'agreement 56.4 points overall', []), 'not_found');
+  assert.strictEqual(T.numbersIn('a 56.4 % b')[0].pct, true);
+});
+
+test('r2-2 arXiv versions: explicit version matches only that version', () => {
+  const v1 = [{ url: 'https://arxiv.org/abs/2401.01234v1', ok: true, text: 'value 12.5 here', title: 'P' }];
+  const mk = (u) => [{ id: 'c1', claim: 'Value', source_url: u, figures: ['12.5'] }];
+  assert.strictEqual(T.checkClaims(mk('https://arxiv.org/abs/2401.01234v2'), v1).claims[0].status, 'source_not_opened');
+  assert.strictEqual(T.checkClaims(mk('https://arxiv.org/pdf/2401.01234v1'), v1).claims[0].status, 'verified');
+  assert.strictEqual(T.checkClaims(mk('https://arxiv.org/html/2401.01234v1'), v1).claims[0].status, 'verified');
+  assert.strictEqual(T.checkClaims(mk('https://arxiv.org/abs/2401.01234'), v1).claims[0].status, 'verified');
+});
+
+test('r2-3 claim text figures are checked against the claim source', () => {
+  const claims = [{ id: 'c1', claim: '125 participants achieved 83% accuracy', source_url: 'https://a.example/a', figures: ['125'], measured_result: '' }];
+  const r = T.checkClaims(claims, F2);
+  assert.strictEqual(r.claims[0].status, 'partly');
+  assert.deepStrictEqual(r.claims[0].figures.map((f) => [f.figure, f.status]), [['125', 'found'], ['83%', 'not_found']]);
+  assert.strictEqual(r.totals.figures, 2);
+  const m = T.checkClaims([{ id: 'c1', claim: 'Agreement', source_url: 'https://a.example/a', figures: [], measured_result: '56.4% and 71.2%' }], F2);
+  assert.strictEqual(m.claims[0].status, 'partly');
+});
+
+test('r2-4 prose figures need a claim named in their own block', () => {
+  const claims = [{ id: 'c1', claim: 'Study A enrolled participants', source_url: 'https://a.example/a', figures: ['125'] }];
+  const prose = '- Study A (https://a.example/a) enrolled 125 participants.\n- Study B (https://b.example/b) enrolled 125 participants.\n\nElsewhere 125 participants were mentioned with no source.';
+  const r = T.checkReport({ prose, claims, fetched: F2, counts: {} });
+  const lines = r.prose.split('\n');
+  assert.ok(!/unverified/.test(lines[0]));
+  assert.match(lines[1], /125 \[unverified\]/);
+  assert.match(r.prose, /Elsewhere 125 \[unverified\] participants/);
+  assert.strictEqual(r.marks, 2);
+  assert.strictEqual(r.notChecked, false);
+  assert.strictEqual(r.claims[0].check_status, 'verified');
+  // the fetched title also names a claim's source
+  const t = T.checkReport({ prose: 'The Study A paper found 125 participants.', claims, fetched: F2, counts: {} });
+  assert.strictEqual(t.marks, 0);
+  assert.deepStrictEqual(T.proseBlocks('a\nb\n\n- c\n- d\n1. e').map((b) => [b.start, b.end]), [[0, 3], [5, 8], [9, 12], [13, 17]]);
+  assert.strictEqual(T.proseBlocks('a\nb\n\n- c\n- d\n1. e').length, 4);
+});
+
+test('r2-4 checkReport: no claims -> everything checkable is unverified, totals zero', () => {
+  const prose = 'Preferred 56.4% of 1,450 items in 2024 (Table 6) with 12 sources.';
+  for (const claims of [[], undefined]) {
+    const r = T.checkReport({ prose, claims, fetched: F2, counts: { sourcesOpened: 12 } });
+    assert.strictEqual(r.notChecked, true);
+    assert.strictEqual(r.prose, 'Preferred 56.4% [unverified] of 1,450 [unverified] items in 2024 (Table 6) with 12 sources.');
+    assert.deepStrictEqual(r.totals, { claims: 0, figures: 0, found: 0, notFound: 0, notOpened: 0 });
+    assert.strictEqual(r.marks, 2);
+  }
+});
+
+test('r2-5 years: only year-like places are exempt', () => {
+  assert.deepStrictEqual(pf('2000 samples, 2048-token windows, 1024 items, 1850 units'), ['2000', '2048', '1024', '1850']);
+  assert.deepStrictEqual(pf('in 2024, since 2019, from 2020 to 2021, by 2030, of 1999, (2018), June 2020, 2019–2020, ended 2023.'), []);
+  assert.deepStrictEqual(pf('Seen (2018) and 2022; and 2021,'), []);
+});
+
+test('r2-5 names/versions vs digit-first words', () => {
+  assert.deepStrictEqual(pf('GPT-4.1, Llama-3.1-8B, o4-mini and v2 and H100'), []);
+  assert.deepStrictEqual(pf('300k, 4.2B, 3.2x, 12.5pp'), ['300', '4.2', '3.2', '12.5']);
+  const c = T.checkClaims([{ id: 'c1', claim: 'Throughput of 300k tokens', source_url: 'https://x.example/', figures: [] }], [{ url: 'https://x.example/', ok: true, text: 'tokens 300 per s' }]);
+  assert.strictEqual(c.claims[0].figures.length, 1);
+});
+
+test('r2-5 self counts are exempt only when they equal one of the counts', () => {
+  const counts = { sourcesSelected: 12, sourcesOpened: 9, claims: 7, rounds: 2 };
+  assert.deepStrictEqual(figuresWith('We read 9 sources and 7 claims over 2 rounds.', counts), []);
+  assert.deepStrictEqual(figuresWith('We read 40 sources and 7 claims.', counts), ['40']);
+  assert.deepStrictEqual(figuresWith('We read 9 sources.', {}), ['9']);
+  function figuresWith(s, cn) { return T.figuresInProse(s, cn).map((t) => t.raw); }
+});
+
+test('r2-6 common numbers: integers < 1000 and short decimals need a keyword', () => {
+  const text = 'Alpha gained 1.5 points and beta used 0.05 and 450 workers and 0.884 precision and 12.5 units and 1500 rows.';
+  assert.strictEqual(T.checkFigure('1.5', text, []), 'common_not_near');
+  assert.strictEqual(T.checkFigure('0.05', text, []), 'common_not_near');
+  assert.strictEqual(T.checkFigure('450', text, []), 'common_not_near');
+  assert.strictEqual(T.checkFigure('450', text, ['workers']), 'found');
+  assert.strictEqual(T.checkFigure('0.884', text, []), 'found');
+  assert.strictEqual(T.checkFigure('12.5', text, []), 'found');
+  assert.strictEqual(T.checkFigure('1500', text, []), 'found');
+  const k = T.keywordsFrom('accuracy results models performance scores dataset table figure humans study using which their these those between compared higher lower average percent zebra');
+  assert.deepStrictEqual(k, ['zebra']);
+});
+
+test('r2-7 fetchSourceTexts arXiv: html first, then pdf, then the cited URL', async () => {
+  const big = 'full text 12.5 '.repeat(3000);
+  const calls = [];
+  const fp = (map) => async (url) => { calls.push(url); const v = map[url]; if (v instanceof Error) throw v; return { markdown: v || '', truncated: false, via: 'fetch' }; };
+  const [a] = await T.fetchSourceTexts([{ url: 'https://arxiv.org/abs/2401.01234v2' }], { fetchPage: fp({ 'https://arxiv.org/html/2401.01234v2': big, 'https://arxiv.org/abs/2401.01234v2': 'abstract only' }) });
+  assert.deepStrictEqual(calls, ['https://arxiv.org/html/2401.01234v2']);
+  assert.strictEqual(a.ok, true); assert.strictEqual(a.partial, false); assert.strictEqual(a.partialReason, null);
+  assert.strictEqual(a.url, 'https://arxiv.org/abs/2401.01234v2');
+  assert.strictEqual(a.finalUrl, 'https://arxiv.org/html/2401.01234v2');
+  assert.strictEqual(a.chars, big.length);
+  calls.length = 0;
+  const [b] = await T.fetchSourceTexts([{ url: 'https://arxiv.org/abs/2401.01234' }], { fetchPage: fp({ 'https://arxiv.org/html/2401.01234': new Error('404'), 'https://arxiv.org/pdf/2401.01234': big }) });
+  assert.deepStrictEqual(calls, ['https://arxiv.org/html/2401.01234', 'https://arxiv.org/pdf/2401.01234']);
+  assert.strictEqual(b.finalUrl, 'https://arxiv.org/pdf/2401.01234');
+  assert.strictEqual(b.partial, false);
+  calls.length = 0;
+  const [c] = await T.fetchSourceTexts([{ url: 'https://arxiv.org/pdf/2401.01234v1.pdf' }], { fetchPage: fp({ 'https://arxiv.org/html/2401.01234v1.pdf': '', 'https://arxiv.org/abs/x': '' }) });
+  assert.strictEqual(c.ok, false);
+  const [d] = await T.fetchSourceTexts([{ url: 'https://arxiv.org/abs/2401.01234' }], { fetchPage: fp({ 'https://arxiv.org/abs/2401.01234': 'Abstract. We study things.' }) });
+  assert.strictEqual(d.ok, true);
+  assert.strictEqual(d.partial, true);
+  assert.strictEqual(d.partialReason, 'abstract page only');
+  assert.strictEqual(d.url, 'https://arxiv.org/abs/2401.01234');
+});
+
+test('r2-7 fetchSourceTexts: cut at maxChars is partial', async () => {
+  const fetchPage = async (u, { maxLength }) => ({ markdown: 'x'.repeat(maxLength), truncated: true });
+  const [r] = await T.fetchSourceTexts([{ url: 'https://a.example/1' }], { fetchPage, maxChars: 5000 });
+  assert.strictEqual(r.partial, true);
+  assert.strictEqual(r.partialReason, 'cut at 5000 characters');
+  const [ok] = await T.fetchSourceTexts([{ url: 'https://a.example/1' }], { fetchPage: async () => ({ markdown: 'short', truncated: false }) });
+  assert.strictEqual(ok.partial, false);
+  assert.strictEqual(ok.partialReason, null);
+});
+
+test('r2-8 renderDocument: Sources split and the partial note in the table', () => {
+  const fetched = [
+    { url: 'https://a.example/full', title: 'Full', ok: true, text: 'x' },
+    { url: 'https://a.example/part', title: 'Part', ok: true, text: 'x', partial: true, partialReason: 'abstract page only' },
+    { url: 'https://a.example/no', title: 'No', ok: false, text: '' },
+  ];
+  const claims = [{ id: 'c1', claim: 'X', source_url: 'https://a.example/part', figures: [], check: '1 of 1 figure found' }, { id: 'c2', claim: 'Y', source_url: 'https://a.example/full', figures: [], check: '1 of 1 figure found' }];
+  const { markdown } = T.renderDocument({ question: 'Q', preparedDate: 'd', prose: '## Verdict\nX.', claims, sources: fetched });
+  assert.match(markdown, /### Read in full\n\n- \[Full\]\(https:\/\/a\.example\/full\)\n\n### Opened in part\n\n- \[Part\]\(https:\/\/a\.example\/part\) \(abstract page only\)\n\n### Not opened\n\n- \[No\]/);
+  assert.match(markdown, /1 of 1 figure found; source opened in part \|/);
+  assert.strictEqual((markdown.match(/source opened in part/g) || []).length, 1);
+});
+
+test('r2-9 challengeSummary', () => {
+  const parsed = T.parseChallenge('```json\n[{"id":"c1","verdict":"supported"},{"id":"c2","verdict":"partly"},{"id":"c3","verdict":"not_supported"},{"id":"c4","verdict":"cannot_check"}]\n```', ['c1', 'c2', 'c3', 'c4', 'c5']);
+  const s = T.challengeSummary(parsed);
+  assert.deepStrictEqual(s, { decisive: 3, counts: { supported: 1, partly: 1, not_supported: 1, cannot_check: 2 }, uncheckedIds: ['c4', 'c5'], doubtedIds: ['c2', 'c3'] });
+  assert.deepStrictEqual(T.challengeSummary(T.parseChallenge('nothing', ['c1'])).decisive, 0);
+});
+
+test('r2-10 chatReport: not checked, review lines, doubted, interrupted', () => {
+  const prose = '## Verdict\nV.\n\n## Confidence\nMedium.';
+  const claims = [
+    { id: 'c1', claim: 'Good one', source_url: 'https://a.example/1', check_status: 'verified' },
+    { id: 'c2', claim: 'Doubted one', source_url: 'https://a.example/2', check_status: 'verified' },
+    { id: 'c3', claim: 'Bad figures', source_url: 'https://a.example/3', check_status: 'unverified' },
+  ];
+  const t = T.chatReport({ prose, claims, totals: { figures: 3, found: 2, notFound: 1, notOpened: 0 }, doubtedIds: ['c2'], review: { label: 'GPT-5', rounds: 2, counts: { supported: 4, partly: 1, not_supported: 0, cannot_check: 2 }, uncheckedIds: ['c3', 'c7'], failed: false }, files: {} });
+  assert.match(t, /Key evidence\n- Good one \[https:\/\/a\.example\/1\] \(figures verified\)\n\nDoubted by the review\n- Doubted one/);
+  assert.ok(t.indexOf('Good one') < t.indexOf('Doubted by the review'));
+  assert.ok(!/Key evidence[\s\S]*Doubted one[\s\S]*Doubted by the review/.test(t));
+  assert.ok(!t.includes('Bad figures'));
+  assert.match(t, /Challenged by: GPT-5 \(2 rounds\): 4 supported, 1 partly, 0 not supported, 2 could not be checked\nNot checked by the reviewer: c3, c7\./);
+  const f = T.chatReport({ prose, claims, totals: {}, review: { label: 'GPT-5', rounds: 1, counts: { supported: 0, partly: 0, not_supported: 0, cannot_check: 3 }, uncheckedIds: ['c1'] }, files: {} });
+  assert.match(f, /Not challenged: the reviewer gave no usable verdicts\./);
+  assert.doesNotMatch(f, /Challenged by/);
+  const g = T.chatReport({ prose, claims, totals: {}, review: { label: 'X', rounds: 1, counts: { supported: 2 }, failed: true }, files: {} });
+  assert.match(g, /Not challenged: the reviewer gave no usable verdicts\./);
+  const one = T.chatReport({ prose, claims, totals: {}, review: { label: 'X', rounds: 1, counts: { supported: 2 } }, files: {} });
+  assert.match(one, /Challenged by: X \(1 round\): 2 supported, 0 partly, 0 not supported, 0 could not be checked/);
+  assert.doesNotMatch(one, /Not checked by the reviewer/);
+  const n = T.chatReport({ prose, claims: [], notChecked: true, files: {} });
+  assert.match(n, /Figures not checked: the report had no list of claims to check them against; every figure in it is marked unverified\./);
+  assert.doesNotMatch(n, /Figures checked:/);
+  const i = T.chatReport({ prose, claims: [{ id: 'c1', claim: 'A' }], interrupted: true, files: {} });
+  assert.match(i, /Figures not checked \(the run stopped before the check\)\./);
+});
+
+test('r2-11 pdfArgs: file URL and a fresh profile dir; renderPdf makes one', async () => {
+  assert.deepStrictEqual(T.pdfArgs('/tmp/a b.html', '/tmp/a.pdf', '/tmp/prof'), ['--headless=new', '--disable-gpu', '--no-pdf-header-footer', '--user-data-dir=/tmp/prof', '--print-to-pdf=/tmp/a.pdf', 'file:///tmp/a%20b.html']);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rt-pdf2-'));
+  try {
+    const pdf = path.join(dir, 'a.pdf');
+    let seen;
+    const made = [];
+    const r = await T.renderPdf({ binary: '/bin/chrome', htmlPath: '/x/a.html', pdfPath: pdf, mkdtemp: () => { made.push('/tmp/fresh-1'); return '/tmp/fresh-1'; }, execFile: (b, a, o, cb) => { seen = a; fs.writeFileSync(pdf, Buffer.alloc(5000, 1)); cb(null); } });
+    assert.strictEqual(r.ok, true);
+    assert.ok(seen.includes('--user-data-dir=/tmp/fresh-1'));
+    assert.strictEqual(made.length, 1);
+    const bad = await T.renderPdf({ binary: '/bin/chrome', htmlPath: '/x/a.html', pdfPath: pdf, mkdtemp: () => { throw new Error('disk full'); }, execFile: () => { throw new Error('should not run'); } });
+    assert.strictEqual(bad.ok, false);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('r2-12 briefs: figure-with-URL rule; challengeBrief caps claims and excerpt characters', () => {
+  const b = T.synthesisBrief('Q?', 'q', 'n', []);
+  assert.ok(b.includes('Every paragraph or bullet that gives a figure names its source\'s URL in that same paragraph or bullet.'));
+  const claims = Array.from({ length: 100 }, (_, i) => ({ id: 'c' + i, claim: 'Claim text ' + i, source_url: 'https://a.example/' + i, figures: [] }));
+  const ex = claims.map((c) => ({ id: c.id, excerpts: ['e'.repeat(1500), 'f'.repeat(1500)] }));
+  const br = T.challengeBrief('Q?', claims, ex);
+  assert.strictEqual((br.match(/^Claim c\d+:/gm) || []).length, 60);
+  assert.match(br, /40 further claims were left out/);
+  const letters = (br.match(/[ef]/g) || []).length; // excerpts are the only e/f runs of that size
+  const runs = br.match(/e{20,}|f{20,}/g) || [];
+  assert.ok(runs.join('').length <= 60000, 'excerpt chars ' + runs.join('').length);
+  assert.ok(runs.length > 0 && letters > 0);
+  const small = T.challengeBrief('Q?', claims.slice(0, 3), ex.slice(0, 3));
+  assert.doesNotMatch(small, /left out/);
+  assert.ok((small.match(/e{20,}/g) || []).every((x) => x.length === 1500));
 });

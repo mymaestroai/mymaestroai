@@ -373,3 +373,69 @@ test('level code: sheet buttons are "Always yes runs: Quick/Thorough" with aria-
   for (const n of ['researchLevelButtons', 'researchLevelPick']) { assert.ok(!/innerHTML/.test(fnSrc(mob, n)), n); assert.ok(!fnSrc(mob, n).includes('\uFE0F'), n); }
   assert.ok(!fnSrc(app, 'researchPrefPaint').includes('\uFE0F'));
 });
+
+// ── POST /api/research-pref: choice and alwaysLevel together are ONE write; a failure saves neither ──
+{
+  const nodeFs = require('node:fs');
+  const nodeOs = require('node:os');
+  const nodePath = require('node:path');
+  const serverSrc = nodeFs.readFileSync(nodePath.join(__dirname, '..', 'server.js'), 'utf8');
+  const prefsMod = require('../lib/research-prefs');
+  const routeFn = () => {
+    const start = serverSrc.indexOf("if (pathname === '/api/research-pref' && (req.method === 'GET' || req.method === 'POST')) {");
+    assert.ok(start > 0, 'the route is in server.js');
+    const end = serverSrc.indexOf("// This person's time zone", start);
+    const body = serverSrc.slice(start, end);
+    return new Function('pathname', 'req', 'res', 'hubAuth', 'jsonResponse', 'readBody', 'require', `return (async () => { ${body} return 'not handled'; })();`);
+  };
+  async function post(prefs, payload) {
+    const out = {};
+    const req = { method: 'POST', hubUser: { id: 'u1' }, hubIdentKind: 'user' };
+    const fakeRequire = (m) => (m === './lib/research-prefs' ? { getResearchPrefs: () => prefs, CHOICES: prefsMod.CHOICES, LEVELS: prefsMod.LEVELS } : { isOn: () => true });
+    await routeFn()('/api/research-pref', req, out, { hasUsers: () => true }, (res, code, data) => { res.code = code; res.data = data; return 'sent'; }, async () => JSON.stringify(payload), fakeRequire);
+    return out;
+  }
+  const tmpFile = () => nodePath.join(nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'rp-')), 'research-prefs.json');
+
+  test('route: choice and alwaysLevel in one POST are saved in one write', async () => {
+    const file = tmpFile();
+    const prefs = prefsMod.createResearchPrefs({ file });
+    const orig = nodeFs.writeFileSync;
+    let writes = 0;
+    nodeFs.writeFileSync = function (f, ...rest) { if (String(f).startsWith(file)) writes++; return orig.call(this, f, ...rest); };
+    let out;
+    try { out = await post(prefs, { choice: 'always', alwaysLevel: 'thorough' }); } finally { nodeFs.writeFileSync = orig; }
+    assert.equal(out.code, 200);
+    assert.deepEqual(out.data, { ok: true, choice: 'always', alwaysLevel: 'thorough' });
+    assert.equal(writes, 1, 'one write for both');
+    const again = prefsMod.createResearchPrefs({ file });
+    assert.equal(again.choiceOf('u1'), 'always'); assert.equal(again.alwaysLevelOf('u1'), 'thorough');
+  });
+  test('route: a bad part saves neither (400), and a write that fails saves neither (500)', async () => {
+    const file = tmpFile();
+    const prefs = prefsMod.createResearchPrefs({ file });
+    const bad = await post(prefs, { choice: 'always', alwaysLevel: 'deep' });
+    assert.equal(bad.code, 400);
+    assert.equal(prefs.choiceOf('u1'), 'ask'); assert.equal(prefs.alwaysLevelOf('u1'), 'quick');
+    assert.equal(nodeFs.existsSync(file), false);
+    // the file cannot be written (its folder is a regular file): neither value is kept, in memory or on disk
+    const blocker = tmpFile(); nodeFs.writeFileSync(blocker, 'x');
+    const broken = prefsMod.createResearchPrefs({ file: nodePath.join(blocker, 'sub', 'research-prefs.json') });
+    const out = await post(broken, { choice: 'never', alwaysLevel: 'thorough' });
+    assert.equal(out.code, 500);
+    assert.equal(broken.choiceOf('u1'), 'ask'); assert.equal(broken.alwaysLevelOf('u1'), 'quick');
+  });
+  test('prefs.setChoiceAndLevel: validates both first; never starts the reminder clock for a non-never choice; keeps an existing never clock', () => {
+    let t = 5000;
+    const prefs = prefsMod.createResearchPrefs({ file: tmpFile(), now: () => t });
+    assert.throws(() => prefs.setChoiceAndLevel('k', 'maybe', 'quick'), /choice must be/);
+    assert.throws(() => prefs.setChoiceAndLevel('k', 'ask', 'deep'), /level must be/);
+    assert.equal(prefs.choiceOf('k'), 'ask');
+    prefs.setChoiceAndLevel('k', 'never', 'thorough');
+    assert.equal(prefs.choiceOf('k'), 'never'); assert.equal(prefs.alwaysLevelOf('k'), 'thorough');
+    t = 9000;
+    prefs.setChoiceAndLevel('k', 'never', 'quick');
+    assert.equal(prefs.remindDue('k', 4001), false, 'the clock from the first never is kept (5000 + 4001 > 9000)');
+    assert.equal(prefs.remindDue('k', 4000), true);
+  });
+}
