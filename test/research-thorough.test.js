@@ -1990,7 +1990,9 @@ test('r9a-5 words after a number: the shorter function-word list, bounds, rates,
     ['1250', '1250 (n=20)', 'not found'],
     ['1250 (USD)', '1250 (USD)', 'found'],
     ['1250 (n=20)', '1250 (N=20)', 'not found'],
-    ['1250 ±', '1250 ± 50', 'found'],
+    // r15 3: what follows a plus-or-minus sign is part of the form ("1250 ±" no longer matches "1250 ± 50")
+    ['1250 ±', '1250 ± 50', 'not found'],
+    ['1250 ± 50', '1250 ± 50', 'found'],
     ['1250', '1250 | 300 |', 'found'], // a table bar is no word
     ['1250', '1250 - 300', 'found'], // a lone dash is no word
     ['1250', '1250 (https://example.org/x)', 'found'], // a citation is no word (in a source its address is blanked: nothing is left)
@@ -2180,7 +2182,8 @@ test('r9a-9 a hard cap on the check per source: too large to check', () => {
   } finally { T.INDEX_LIMITS.maxMs = was; }
   assert.strictEqual(run(head + 'a fast variant').res.claims[0].status, 'found_as_written'); // back to normal (the verdict on a text is kept per text)
   // no regex scans without a bound: "](" repeated 300,000 times (600,000 characters) is checked in well under a second
-  const evil = '](' .repeat(300000) + ' 1250 users';
+  // (r15 2: a destination that never closes is blanked to the end of its line, so the figure stands on a line of its own)
+  const evil = '](' .repeat(300000) + '\n 1250 users';
   const t0 = Date.now();
   assert.strictEqual(T.checkFigure('1250 users', evil.slice(-600000)), 'found_as_written');
   for (const text of ['](' .repeat(300000), '*'.repeat(600000), '*a '.repeat(200000), '<!--'.repeat(150000), '<a '.repeat(200000), '&lt;'.repeat(150000), ']((((((('.repeat(70000)]) {
@@ -2872,8 +2875,9 @@ test('r12 2 a number split by removed markup or an entity is no plain number on 
   nf('250', 'Enrollment 1,&#50;50', ['enrollment']);
   nf('1250', '1,&#50;50');
   nf('250', 'Total: 1,**250** users', ['total']);        // emphasis markers are removed spans too
-  nf('1250', '1<b>,</b>250');
-  nf('12', 'Total 1<b>2</b> users', ['total']);
+  // r15 5: a digit, an inline tag and a digit with no white space between make the converted source unreadable (was: not found)
+  assert.strictEqual(T.checkFigure('1250', '1<b>,</b>250'), 'source_not_opened');
+  assert.strictEqual(T.checkFigure('12', 'Total 1<b>2</b> users', ['total']), 'source_not_opened');
   // markup that does not split a number leaves it plain
   fd('250 users', 'Total: <b>250</b> users', ['total']);
   fd('1250 users', 'Total: <b>1250</b> users');
@@ -3206,4 +3210,101 @@ test('r14 4 the figure counts by kind, the chat line, and the document\'s Source
   assert.ok(doc.includes('| source could not be read in a checkable form |'));
   // a claim with no claims at all still carries the three counts
   assert.deepStrictEqual([T.checkReport({ prose: 'x', claims: [], fetched }).totals.sourcesUnreadable], [2]);
+});
+
+// ================================================================ r15: round-13 fixes
+const NOT_OPENED = 'source_not_opened';
+test('r15 1 a processing instruction or other markup opener makes the source unreadable', () => {
+  assert.strictEqual(T.checkFigure('987654', 'Note <?php echo 987654 ?> here'), NOT_OPENED);
+  assert.strictEqual(T.checkFigure('1250 users', '<?xml-stylesheet type="text/css" href="a.css" ?>\nEnrollment was 1250 users.'), NOT_OPENED);
+  assert.strictEqual(T.checkFigure('987654', 'Note <?php echo 987654 ?> here', ['note']), NOT_OPENED);
+  // a "<" that starts nothing stays text
+  assert.strictEqual(T.checkFigure('1250 users', 'Enrollment was 1250 users (n<5).'), FD);
+  assert.ok(!T.visibleText('a <?php echo 987654 ?> b').includes('987654')); // the element pass blanks it too
+});
+
+test('r15 2 markdown link destinations and titles: nested parentheses, a title on the next line', () => {
+  assert.strictEqual(T.checkFigure('1250 participants', '[x](a(b(c)) "old 1250 participants")'), NF);
+  assert.strictEqual(T.checkFigure('1250 participants', '[ref]: https://x.org\n  "old 1250 participants"'), NF);
+  assert.strictEqual(T.checkFigure('1250 participants', "[ref]: https://x.org\n  'old 1250 participants'"), NF);
+  assert.strictEqual(T.checkFigure('1250 participants', '[ref]: https://x.org\n  (old 1250 participants)'), NF);
+  assert.strictEqual(T.checkFigure('1250 participants', '[ref]: https://x.org "old 1250 participants"'), NF);
+  // the link text is visible text
+  assert.strictEqual(T.checkFigure('1250 participants', '[1250 participants](https://x.org)'), FD);
+  assert.strictEqual(T.checkFigure('1250 participants', 'Enrolled [1250 participants](https://x.org/a_(b)_c "title") in all.'), FD);
+  // no closing parenthesis: blanked to the end of the line, and no further
+  assert.strictEqual(T.checkFigure('1250 participants', '[x](a(b "old 1250 participants"'), NF);
+  assert.strictEqual(T.checkFigure('1250 participants', '[x](a(b "old\n1250 participants'), FD);
+  // a line after a definition that is no title is text
+  assert.strictEqual(T.checkFigure('1250 participants', '[ref]: https://x.org\n1250 participants'), FD);
+  // bounded: a million "](" is no slower than its length
+  const t0 = Date.now();
+  assert.strictEqual(T.checkFigure('1250', '](('.repeat(190000)), NF);
+  assert.ok(Date.now() - t0 < 1500, `took ${Date.now() - t0} ms`);
+});
+
+test('r15 3 a plus-or-minus tail after a number with a unit is part of its form', () => {
+  const cases = [
+    ['1250%', '1250% ± 5%', NF],
+    ['1250% ± 5%', '1250% ± 5%', FD],
+    ['1250 ms', '1250 ms ± 5 ms', NF],
+    ['1250 ms ± 5 ms', '1250 ms ± 5 ms', FD],
+    ['1250 ms ± 6 ms', '1250 ms ± 5 ms', NF],
+    ['1250%', '1250% +/- 5%', NF],
+    ['1250%', '1250% +- 5%', NF],
+    ['1250%', '1250% plus or minus 5%', NF],
+    ['1250%', '1250% ±5%', NF],
+    ['1250x', '1250x ± 2', NF],
+    ['1250%', '1250% in all', FD],
+  ];
+  for (const [fig, src, want] of cases) assert.strictEqual(T.checkFigure(fig, src), want, `${fig} vs ${src}`);
+});
+
+test('r15 4 a setext heading is a heading in the path of a report figure', () => {
+  const { fetched, claims } = rFigs('Enrollment totaled 1250 participants.', 'Enrollment totaled 1250 participants', '1250 participants');
+  const sentence = `The study enrolled 1250 participants (${R_SRC}).`;
+  const figsOf = (prose) => T.figureExcerpts(T.checkReport({ prose, claims, fetched }).claims, fetched, undefined, prose);
+  const check = (prose, keys) => T.checkReport({ prose, claims, fetched, counts: {}, meaningKeys: keys });
+  const answer = (all) => T.figureMeanings(all, T.parseChallenge(jsonReply([{ id: 'c1', verdict: 'supported' }, { id: 'report', figures: [{ fid: 'p1', meaning: 'matches', quote: 'Enrollment totaled 1250 participants' }] }]), ['c1'], all)).keys;
+  const under = (h, u = '=') => `${h}\n${u.repeat(Math.max(2, h.length))}\n\n${sentence}`;
+  assert.strictEqual(figsOf(under('Enrollment')).find((f) => f.prose).heading, 'Enrollment');
+  assert.strictEqual(figsOf(under('Enrollment', '-')).find((f) => f.prose).heading, 'Enrollment');
+  const keys = answer(figsOf(under('Enrollment')));
+  assert.strictEqual(check(under('Enrollment'), keys).totals.proseMatches, 1);
+  assert.strictEqual(check(under('Deaths'), keys).totals.proseMatches, 0);
+  // levels: "=" is 1, "-" is 2 and sits under it
+  assert.strictEqual(figsOf(`Report\n======\n\nEnrollment\n----------\n\n${sentence}`).find((f) => f.prose).heading, 'Report > Enrollment');
+  // not a heading: a dash line after a blank line, a single dash, a table separator, a line in a code fence
+  assert.strictEqual(figsOf(`Some text\n\n---\n\n${sentence}`).find((f) => f.prose).heading, '');
+  assert.strictEqual(figsOf(`Some text\n-\n\n${sentence}`).find((f) => f.prose).heading, '');
+  assert.strictEqual(figsOf(`| a | b |\n---\n\n${sentence}`).find((f) => f.prose).heading, '');
+  assert.strictEqual(figsOf(`\`\`\`\nCode\n====\n\`\`\`\n\n${sentence}`).find((f) => f.prose).heading, '');
+});
+
+test('r15 5 the converted path: href values, sup / sub, digits split by an inline tag', () => {
+  const nopen = (fig, src) => assert.strictEqual(T.checkFigure(fig, src), NOT_OPENED, src);
+  nopen('5000', '<p>Revenue <a href="https://e.com/a) 5000 (b">report</a> rose.</p>');
+  nopen('5000', '<p>Revenue <a href="https://e.com/a b">report</a> rose 5000 units.</p>');
+  nopen('5000', "<p>Revenue <a href='https://e.com/a\"b'>report</a> rose 5000 units.</p>");
+  nopen('5000', '<p>Revenue <a href="https://e.com/a`b">report</a> rose 5000 units.</p>');
+  nopen('123 million', '<p>Revenue was 12<sup>3</sup> million</p>');
+  nopen('1 million', '<p>Revenue was 1<sub>2</sub> million</p>');
+  nopen('123 users', '<p>12<span>3</span> users</p>');
+  nopen('1250', '<p>1<b>,</b>250</p>');
+  nopen('12', '<p>1</b><b>2</b></p>'.replace('</b><b>', '</i><i>'));
+  nopen('123 users', '<p><b>12</b>3 users</p>');
+  nopen('123 users', '<p>12<a href="https://e.com/x">3</a> users</p>');
+  // a plain link, a tag with white space around it, a tag next to a letter
+  assert.strictEqual(T.checkFigure('5000 units', '<p>Revenue <a href="https://e.com/a">report</a> rose 5000 units.</p>'), FD);
+  assert.strictEqual(T.checkFigure('5000 units', '<p>Revenue <a href=https://e.com/a>report</a> rose 5000 units.</p>'), FD);
+  assert.strictEqual(T.checkFigure('123 users', '<p>12 <span>3</span> users</p>'), NF);
+  assert.strictEqual(T.checkFigure('5000 units', '<p>Q3<b>units</b> were 5000 units.</p>'), FD);
+});
+
+test('r15 6 coversSpan: an entry without a span never matches', () => {
+  const { figs } = rFigs('Enrollment totaled 1250 participants. Screening found 12500 candidates.', 'Enrollment totaled 1250 participants', '1250 participants');
+  assert.strictEqual(Object.keys(rAnswer(figs, 'Enrollment totaled 1250 participants').keys).length, 1);
+  const noSpan = figs.map((f) => { const g = { ...f }; delete g.span; return g; });
+  assert.deepStrictEqual(rAnswer(noSpan, 'Enrollment totaled 1250 participants').keys, {});
+  assert.deepStrictEqual(rAnswer(noSpan, 'Enrollment totaled 1250 participants', 'matches').keys, {});
 });
