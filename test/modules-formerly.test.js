@@ -18,11 +18,12 @@ const OLD_IDS = ['about', 'install', 'prefs', 'server', 'pc', 'installer', 'comp
 const FACTS = { os: 'linux', supported: true, has_systemd: true, hostname: 'box', hub_port: 9970, free_disk_mb: 5000, tailscale: { state: 'running', userspace: false, cli: 'tailscale', host: 'hub.example.ts.net', ips: ['100.101.102.103'], detail: 'Signed in.' } };
 const HEALTH = JSON.stringify({ ok: true, running: true, group: true, mode: 'hub', computers: 0, online: 0, warnings: [] });
 
-function rig({ saved, health = HEALTH, facts = FACTS }) {
+function rig({ saved, health = HEALTH, facts = FACTS, setupPatch = null }) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'formerly-'));
   const root = path.join(dir, 'root'), md = path.join(root, 'remote-computers');
   fs.mkdirSync(root, { recursive: true });
   fs.cpSync(REAL_DIR, md, { recursive: true });
+  if (setupPatch) { const sj = JSON.parse(fs.readFileSync(path.join(md, 'setup.json'), 'utf8')); setupPatch(sj); fs.writeFileSync(path.join(md, 'setup.json'), JSON.stringify(sj)); }
   const mj = JSON.parse(fs.readFileSync(path.join(md, 'module.json'), 'utf8'));
   delete mj.runtime;   // nothing is downloaded here
   fs.writeFileSync(path.join(md, 'module.json'), JSON.stringify(mj));
@@ -177,4 +178,58 @@ test('the administrator question carries the name of the computer Maestro runs o
   assert.strictEqual(a.computer, 'hub.example.ts.net');
   assert.strictEqual((await ask({ ...FACTS, tailscale: { ...FACTS.tailscale, host: '' } })).computer, 'box', 'no Tailscale name: the hostname');
   assert.strictEqual((await ask({ ...FACTS, hostname: '', tailscale: { ...FACTS.tailscale, host: null } })).computer, null, 'no name at all');
+});
+
+test('"Set it up" refused by the plan (a saved address that is no longer this computer\'s) writes nothing, even with the administrator choice pressed (review r1)', async () => {
+  const moved = { ...FACTS, tailscale: { ...FACTS.tailscale, ips: ['100.101.102.200'] } };
+  const r = rig({ facts: moved, saved: { settings: { ...SAVED_SETTINGS, run_as: 'service' }, steps: doneMap(OLD_IDS), installed: 'script', finishedAt: '2026-11-20T11:00:00.000Z', runMode: 'service' } }); try {
+    const before = r.raw();
+    await assert.rejects(r.mods.runStep('remote-computers', 'setup', { adminChoice: true }), /is not this computer's Tailscale address now/);
+    assert.strictEqual(r.raw(), before, 'the saved state is byte for byte the same: run_as is still service');
+    assert.strictEqual(r.state().settings.run_as, 'service');
+    assert.strictEqual(r.ev.stops, 0, 'no restart');
+    assert.strictEqual(r.ev.starts, 0);
+  } finally { r.cleanup(); }
+});
+
+test('"Set it up" on a first setup that must ask which address to use writes nothing before the answer', async () => {
+  const two = { ...FACTS, tailscale: { ...FACTS.tailscale, ips: ['100.101.102.103', '100.101.102.104'] } };
+  const r = rig({ facts: two, saved: { settings: {}, steps: { about: { doneAt: '2026-11-22T09:00:00.000Z' } } } }); try {
+    const before = r.raw();
+    const e = await r.mods.runStep('remote-computers', 'setup', {}).then(() => null, (x) => x);
+    assert.ok(e && e.choose && e.choose.key === 'listen_ip', 'it asks which address');
+    assert.strictEqual(r.raw(), before, 'nothing saved (no install mark, no settings) before the answer');
+    assert.strictEqual(r.ev.stops, 0);
+  } finally { r.cleanup(); }
+});
+
+test('the administrator choice pressed on a working plan is saved once and the plan describes it (lines say it runs under your Maestro)', async () => {
+  const r = rig({ saved: { settings: { ...SAVED_SETTINGS, run_as: 'service' }, steps: doneMap(OLD_IDS), installed: 'script', finishedAt: '2026-11-20T11:00:00.000Z' } }); try {
+    const res = await r.mods.runStep('remote-computers', 'setup', { adminChoice: true });
+    assert.strictEqual(r.state().settings.run_as, 'hub');
+    assert.strictEqual(r.ev.stops, 1, 'one restart for the one change');
+    const lines = (res.result && res.result.lines) || [];
+    assert.ok(lines.includes('It will run under your Maestro\'s own account. The server then has the same access to files as your Maestro.'), `the plan describes the hub way: ${JSON.stringify(lines)}`);
+    assert.ok(!lines.includes('It will run as its own locked-down service.'), 'and not the service way');
+  } finally { r.cleanup(); }
+});
+
+test('a step record is read only as the state\'s own entry: formerly ["constructor"] with no steps is not done', () => {
+  const r = rig({ setupPatch: (sj) => { sj.steps.find(s => s.id === 'add').formerly = ['constructor']; }, saved: { settings: {}, steps: {} } }); try {
+    const d = r.mods.detail('remote-computers');
+    assert.strictEqual(d.steps.find(s => s.id === 'add').done, false);
+  } finally { r.cleanup(); }
+});
+
+test('manifest: the same earlier step id may not be claimed twice', () => {
+  const v = manifestLib.validateManifest(JSON.parse(fs.readFileSync(path.join(REAL_DIR, 'module.json'), 'utf8')), 'remote-computers');
+  const hooks = { prechecks: { prereqs: () => ({}) }, setup: { prepare: () => ({}) } };
+  const probs = (f1, f2) => manifestLib.validateSetup({ steps: [
+    { id: 'a', type: 'explain', title: 'A', formerly: f1 },
+    { id: 'b', type: 'outside', title: 'B', formerly: f2 },
+    { id: 'done', type: 'finish', title: 'F' },
+  ] }, v, { server: () => ({}) }, hooks).join(' | ');
+  assert.strictEqual(probs(['x'], ['y']), '');
+  assert.match(probs(['x', 'x'], ['y']), /step a: formerly "x" is listed more than once/);
+  assert.match(probs(['x'], ['x']), /step b: formerly "x" is listed more than once/);
 });

@@ -225,7 +225,9 @@ test('stop: the step ends with the connector\'s sentence in e.check, and nothing
     r.auto.prepare = () => ({ settings: { control_port: 9999 }, lines: ['partial'], choose: null, stop: 'The saved address 100.101.102.104 is not this computer\'s Tailscale address now.' });
     const e = await rejects(r.mods.runStep('auto-demo', 'setup', {}));
     assert.strictEqual(e.message, "The saved address 100.101.102.104 is not this computer's Tailscale address now.");
-    assert.deepStrictEqual(e.check, { ok: false, summary: e.message, lines: ['Downloaded and installed the server.', 'partial'], blocker: null });
+    // the plan comes before the install, so a stop installs nothing (review r1 of bundle 2)
+    assert.deepStrictEqual(e.check, { ok: false, summary: e.message, lines: ['partial'], blocker: null });
+    assert.strictEqual(r.state().installed, undefined, 'nothing installed');
     assert.ok(!(r.state().settings || {}).control_port);
     assert.strictEqual(r.ev.stops, 0);
   } finally { r.cleanup(); }
@@ -276,12 +278,15 @@ test('a check that fails with a command: e.check and e.admin { command, label, w
   } finally { r.cleanup(); }
 });
 
-test('the administrator choice is saved (and the server restarted) BEFORE prepare, so prepare plans for the chosen way', async () => {
+// Bundle 2 review r1: the plan sees the choice before anything is saved; the choice is saved (and the server restarted) only after the plan went through.
+test('the administrator choice is seen by prepare, so it plans for the chosen way, and is saved (one restart) only after the plan went through', async () => {
   const r = rig(); try {
     const seen = [];
-    r.auto.prepare = (ctx) => { seen.push({ runAs: ctx.saved.run_as, stops: r.ev.stops }); return { settings: {}, lines: [], choose: null, stop: null }; };
+    r.auto.prepare = (ctx) => { seen.push({ runAs: ctx.saved.run_as, choice: ctx.choices.run_as, stored: (r.state().settings || {}).run_as, stops: r.ev.stops }); return { settings: {}, lines: [], choose: null, stop: null }; };
     await r.mods.runStep('auto-demo', 'setup', { adminChoice: true });
-    assert.deepStrictEqual(seen, [{ runAs: 'hub', stops: 1 }]);
+    assert.deepStrictEqual(seen, [{ runAs: 'hub', choice: 'hub', stored: undefined, stops: 0 }]);
+    assert.strictEqual(r.state().settings.run_as, 'hub');
+    assert.strictEqual(r.ev.stops, 1);
     const r2 = rig(); try {
       r2.auto.prepare = (ctx) => { seen.push(ctx.saved.run_as); return { settings: {}, lines: [], choose: null, stop: null }; };
       await r2.mods.runStep('auto-demo', 'setup', {});
