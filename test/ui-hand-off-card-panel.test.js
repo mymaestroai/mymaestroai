@@ -210,13 +210,14 @@ test('renderPanel: quiet is one muted line without a button; hidden empties and 
   H.renderPanel(null, empty);   // no container: nothing happens
 });
 
+let sharedTick = null;   // track's interval callback (track keeps one timer for the whole module)
 test('track: fetches /api/agents/<agent>/working-on, shows the panel, goes quiet then hidden after the last item', async () => {
   const doc = fakeDoc(); const box = doc.createElement('div');
   const realNow = Date.now, realTimeout = global.setTimeout, realInterval = global.setInterval;
   const timeouts = [];
   const t0 = Date.now();
   global.setTimeout = (fn, ms2) => { timeouts.push({ fn, ms: ms2 }); return timeouts.length; };
-  global.setInterval = () => 1;
+  global.setInterval = (fn) => { sharedTick = fn; return 1; };
   try {
     const urls = [];
     let answer = { ok: true, agent: 'sam', count: 1, handOffs: [], jobs: null, jobCount: 0, workers: [{ id: 'w1', label: 'Research', startedAt: new Date(t0).toISOString() }], nextCheck: null };
@@ -245,4 +246,40 @@ test('track: fetches /api/agents/<agent>/working-on, shows the panel, goes quiet
     await seen();
     assert.equal(box.hidden, true, 'quiet for 10 minutes, then hidden');
   } finally { global.setTimeout = realTimeout; global.setInterval = realInterval; Date.now = realNow; }
+});
+
+test('r1 track: switching agent empties the container at once; a late answer for the old agent is dropped; a failed fetch leaves it empty', async () => {
+  const doc = fakeDoc(); const box = doc.createElement('div');
+  const realTimeout = global.setTimeout, realInterval = global.setInterval;
+  global.setTimeout = () => 1;
+  global.setInterval = (fn) => { sharedTick = fn; return 1; };
+  const tickFn = () => sharedTick();
+  try {
+    let agent = 'agent-a';
+    const pending = {};
+    const fetchFn = (u) => new Promise((resolve) => { pending[u] = resolve; });
+    const answerFor = (label) => ({ ok: true, count: 1, handOffs: [], jobs: null, jobCount: 0, workers: [{ id: 'w', label, startedAt: new Date().toISOString() }], nextCheck: null });
+    const seen = () => new Promise((r) => setImmediate(r)).then(() => new Promise((r) => setImmediate(r)));
+    H.track({ getAgent: () => agent, getContainer: () => box, fetchFn, storage: memStorage() });
+    tickFn();
+    pending['/api/agents/agent-a/working-on']({ ok: true, status: 200, json: async () => answerFor('A-row') });
+    await seen();
+    assert.ok(textOf(box).includes('Working on: 1 thing'), 'agent A shown');
+    // switch to B (same element) with B's fetch pending
+    agent = 'agent-b'; tickFn();
+    assert.equal(box.children.length, 0, 'emptied synchronously');
+    assert.equal(box.hidden, true);
+    // switch back to A, then to B again: A's earlier request must not paint under B
+    pending['/api/agents/agent-b/working-on']({ ok: false, status: 500, json: async () => ({}) });
+    await seen();
+    assert.equal(box.children.length, 0, "B's 500 leaves it empty");
+    assert.equal(box.hidden, true);
+    // a late answer of the old agent (A -> B -> A' race): ask A again, switch to B before it answers
+    agent = 'agent-a'; tickFn();
+    const lateA = pending['/api/agents/agent-a/working-on'];
+    agent = 'agent-b'; tickFn();
+    lateA({ ok: true, status: 200, json: async () => answerFor('A-late') });
+    await seen();
+    assert.equal(box.children.length, 0, "A's late answer is not rendered under B");
+  } finally { global.setTimeout = realTimeout; global.setInterval = realInterval; }
 });

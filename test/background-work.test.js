@@ -125,7 +125,7 @@ test('viewFor hand-offs: statusLine and changedAt; a withheld item gets null; a 
   ];
   e.mtimes = { '/f/hand-offs/one': '2026-11-23T11:55:00.000Z' };
   // mtime lookup is by folder (the helper adds STATUS.md); the fake keys by folder
-  const v = await e.work.viewFor('agent-a', { isAdmin: false });
+  const v = await e.work.viewFor('agent-a', { isAdmin: false, canSee: () => true });
   const by = Object.fromEntries(v.handOffs.map((h) => [h.id, h]));
   assert.strictEqual(by['ho-1'].statusLine, 'step two');
   assert.strictEqual(by['ho-1'].changedAt, '2026-11-23T11:55:00.000Z');
@@ -212,7 +212,8 @@ test('route: access as for the agent: admin any, member own or shared only; a me
 test('server.js wires the route with the trusted session for isAdmin', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
   assert.match(src, /\/api\\\/agents\\\/\(\[\^\/\]\+\)\\\/working-on\$/);
-  assert.match(src, /workingOnResponse\(name, \{[^}]*isAdmin: !!req\.hubService \|\| access\.isAdmin\(req\.hubUser\)/);
+  assert.match(src, /const woAdmin = !!req\.hubService \|\| access\.isAdmin\(req\.hubUser\);/);
+  assert.match(src, /workingOnResponse\(name, \{[^\n]*viewer: \{ isAdmin: woAdmin, canSee: \(n\) => woAdmin \|\| access\.canAccessAgent\(req\.hubUser, n,/);
   assert.doesNotMatch(src, /working-on[^\n]*(req\.query|searchParams)[^\n]*isAdmin/);
 });
 
@@ -273,4 +274,82 @@ test('status entries: background only when > 0, never on a worker entry', () => 
   assert.match(src, /background\.get\(name\) > 0\) out\[name\]\.background = background\.get\(name\)/);
   assert.match(src, /!out\[name\]\.worker && !\/\^tw-\/\.test\(name\)/);
   assert.match(src, /try \{ background = require\('\.\/background-work'\)\.getBackgroundWork\(\)\.counts\(\); \} catch \{\}/, 'a failing count never breaks the status feed');
+});
+
+// ── review r1 ──
+test('r1: a member never reads the words of a target they may not see; an admin and a member with access do', async () => {
+  const e = sources();
+  e.hoRows = [ho('ho-1', 'agent-a', 'running', { target: 'private-t' })];
+  e.shown = [{ ...ho('ho-1', 'agent-a', 'running', { target: 'private-t', folder: '/f/private-t/hand-offs/one', createdAt: T0 - 5000, topic: 'T' }), status: '## Next\nsecret words' }];
+  e.mtimes = { '/f/private-t/hand-offs/one': '2026-11-23T11:55:00.000Z' };
+  const row = async (viewer) => (await e.work.viewFor('agent-a', viewer)).handOffs[0];
+  const denied = await row({ isAdmin: false, canSee: (n) => n !== 'private-t' });
+  assert.strictEqual(denied.statusLine, null);
+  assert.strictEqual(denied.changedAt, new Date(T0 - 5000).toISOString(), 'never the STATUS.md mtime');
+  assert.ok(!('folder' in denied));
+  assert.strictEqual(denied.target, 'private-t');
+  assert.strictEqual(denied.topic, 'T');
+  assert.strictEqual(denied.state, 'running');
+  assert.ok(!JSON.stringify(denied).includes('secret words') && !JSON.stringify(denied).includes('hand-offs/one'));
+  const noRule = await row({ isAdmin: false });
+  assert.strictEqual(noRule.statusLine, null);
+  for (const viewer of [{ isAdmin: true }, { isAdmin: false, canSee: () => true }]) {
+    const r = await row(viewer);
+    assert.strictEqual(r.statusLine, 'secret words');
+    assert.strictEqual(r.changedAt, '2026-11-23T11:55:00.000Z');
+    assert.strictEqual(r.folder, '/f/private-t/hand-offs/one');
+  }
+  // through the response helper the route uses
+  const out = await BW.workingOnResponse('agent-a', { agentNames: ['agent-a'], viewer: { isAdmin: false, canSee: () => false }, work: e.work });
+  assert.strictEqual(out.body.handOffs[0].statusLine, null);
+  assert.ok(!('folder' in out.body.handOffs[0]));
+});
+
+test('r1: counts() is cached for 1 s; recheckAll computes fresh and refreshes the cache', () => {
+  let t = T0, reads = 0;
+  const e = sources({ now: () => t });
+  e.hoRows = [ho('ho-1', 'agent-a', 'running')];
+  const base = BW.createBackgroundWork({
+    handOffs: { forCaller: (c) => e.hoRows.filter((r) => r.caller === c), all: () => { reads++; return e.hoRows; }, listShown: async () => [] },
+    jobs: { list: () => [] }, workers: { listVirtual: () => [], getVirtual: () => null }, tasks: { list: () => [] },
+    publish: (type, data) => e.published.push({ type, ...data }), now: () => t,
+  });
+  base.counts(); base.counts();
+  assert.strictEqual(reads, 1, 'two reads within 1 s compute once');
+  e.hoRows = [ho('ho-1', 'agent-a', 'running'), ho('ho-2', 'agent-a', 'running')];
+  assert.strictEqual(base.counts().get('agent-a'), 1, 'still the cached answer');
+  t += 1001;
+  assert.strictEqual(base.counts().get('agent-a'), 2);
+  assert.strictEqual(reads, 2);
+  base.recheckAll();                                            // publishes count 2 (reads fresh)
+  assert.strictEqual(reads, 3);
+  assert.deepStrictEqual(e.published.at(-1), { type: 'background', agent: 'agent-a', count: 2 });
+  e.hoRows = [];
+  base.recheckAll();                                            // always fresh, even inside the window
+  assert.strictEqual(reads, 4);
+  assert.strictEqual(base.counts().has('agent-a'), false, 'the cache was refreshed by recheckAll');
+  assert.strictEqual(reads, 4);
+  assert.deepStrictEqual(e.published.at(-1), { type: 'background', agent: 'agent-a', count: 0 });
+});
+
+test('r1: a burst of recheckSoon calls runs recheckAll once, and a change is published', async () => {
+  let reads = 0;
+  const e = sources();
+  e.hoRows = [ho('ho-1', 'agent-a', 'running')];
+  const w = BW.createBackgroundWork({
+    handOffs: { forCaller: (c) => e.hoRows.filter((r) => r.caller === c), all: () => { reads++; return e.hoRows; }, listShown: async () => [] },
+    jobs: { list: () => [] }, workers: { listVirtual: () => [], getVirtual: () => null }, tasks: { list: () => [] },
+    publish: (type, data) => e.published.push({ type, ...data }), now: () => T0,
+  });
+  for (let i = 0; i < 5; i++) w.recheckSoon();
+  assert.strictEqual(reads, 0, 'nothing runs synchronously');
+  await new Promise((r) => setImmediate(r));
+  assert.strictEqual(reads, 1);
+  assert.deepStrictEqual(e.published, [{ type: 'background', agent: 'agent-a', count: 1 }]);
+  w.recheckSoon();
+  await new Promise((r) => setImmediate(r));
+  assert.strictEqual(reads, 2, 'a later call schedules again');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'sdk-chat.js'), 'utf8');
+  assert.match(src, /function backgroundRecheck\(\) \{ try \{ require\('\.\/background-work'\)\.getBackgroundWork\(\)\.recheckSoon\(\)/);
+  assert.match(src, /temporalWorkers\.setChangeHook\(\(\) => backgroundRecheck\(\)\)/);
 });

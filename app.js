@@ -1586,7 +1586,17 @@
     // The "Working on" panel's Stop buttons (same fetch shape as the Workers menu's cancelWorker and jobsApi).
     function workingOnPost(url, body) {
       return fetch(url, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
-        .then((res) => res.json().catch(() => null)).catch(() => null);
+        .then(async (res) => {
+          const data = await res.json().catch(() => null);
+          // a refused Stop (403, ok/success false, an error) says so in the chat's status line instead of failing silently
+          const refused = res.ok === false || (data && (data.ok === false || data.success === false || data.error));
+          if (refused) {
+            const why = data && (data.error || data.message || data.reason);
+            const text = "Couldn't stop it" + (why ? ': ' + String(why).replace(/_/g, ' ') : (res.status ? ' (' + res.status + ')' : '') + '.');
+            try { if (typeof chatFileStatus === 'function' && window.__activeChatId) chatFileStatus(window.__activeChatId, text, 'error'); } catch {}
+          }
+          return data;
+        }).catch(() => null);
     }
     function filesOwnerParam() {
       const me = window.hubMe;

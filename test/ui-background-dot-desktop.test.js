@@ -224,3 +224,27 @@ test('index.html loads ui-agent-dot.js before ui-hand-off-card.js and styles the
   assert.ok(/html\.mm-simple #agent-list \.agent-btn \.agent-status\.bg-work/.test(css), 'Simple rows');
   assert.ok(/border: 2px solid var\(--bg-work-ring\)/.test(css));
 });
+
+test('r1: a refused Stop (403, ok false, success false) shows the reason in the chat status line; a good one shows nothing', async () => {
+  const shown = [];
+  const run = async (res) => {
+    const post = new Function('fetch', 'chatFileStatus', 'window', `${extract('workingOnPost')}\nreturn workingOnPost;`)(() => Promise.resolve(res), (...a) => shown.push(a), { __activeChatId: 'chat-1' });
+    return post('/api/jobs/cancel', { id: 'j1' });
+  };
+  const r = await run({ ok: false, status: 403, json: async () => ({ error: 'admin_only' }) });
+  assert.deepStrictEqual(r, { error: 'admin_only' });
+  assert.deepStrictEqual(shown, [['chat-1', "Couldn't stop it: admin only", 'error']]);
+  shown.length = 0;
+  await run({ ok: true, status: 200, json: async () => ({ success: false, error: 'not found' }) });
+  assert.equal(shown.length, 1);
+  assert.equal(shown[0][2], 'error');
+  shown.length = 0;
+  await run({ ok: true, status: 200, json: async () => ({ ok: false }) });
+  assert.equal(shown.length, 1);
+  shown.length = 0;
+  await run({ ok: false, status: 500, json: async () => { throw new Error('not json'); } });
+  assert.deepStrictEqual(shown, [['chat-1', "Couldn't stop it (500).", 'error']]);
+  shown.length = 0;
+  await run({ ok: true, status: 200, json: async () => ({ success: true }) });
+  assert.deepStrictEqual(shown, []);
+});

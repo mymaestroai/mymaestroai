@@ -72,3 +72,44 @@ test('the file loads without a DOM and is served as /ui-agent-dot.js', () => {
   assert.equal(real, fs.realpathSync(path.join(__dirname, '..', 'lib', 'ui-agent-dot.js')));
   assert.ok(fs.readFileSync(path.join(__dirname, '..', 'lib', 'static-files.js'), 'utf8').includes("['ui-agent-dot.js', 'lib/ui-agent-dot.js']"));
 });
+
+// ── review r1: labels are never left behind ──
+function fakeEl(attrs = {}) {
+  const a = { ...attrs }; let cls = '';
+  return { attrs: a, setAttribute: (k, v) => { a[k] = String(v); }, getAttribute: (k) => (k in a ? a[k] : null), removeAttribute: (k) => { delete a[k]; },
+    classList: { add: (c) => { cls = c; }, remove: (c) => { if (cls === c) cls = ''; }, has: (c) => cls === c } };
+}
+
+test('applyDot: background then busy restores the earlier title and removes the aria-label', () => {
+  const el = fakeEl({ title: 'Hazel' });
+  D.applyDot(el, 'background', { background: 2 });
+  assert.equal(el.attrs.title, 'Free to talk · 2 things running in the background');
+  assert.ok(el.classList.has('bg-work'));
+  D.applyDot(el, 'busy', {});
+  assert.equal(el.attrs.title, 'Hazel');
+  assert.ok(!('aria-label' in el.attrs));
+  assert.ok(!el.classList.has('bg-work'));
+  assert.deepEqual(Object.keys(el.attrs), ['title'], 'the memory is cleared');
+});
+
+test('applyDot: background then free restores both earlier values, or removes them when there were none', () => {
+  const el = fakeEl({ title: 'Old', 'aria-label': 'Old aria' });
+  D.applyDot(el, 'background', { background: 1 });
+  D.applyDot(el, 'background', { background: 3 });   // a second background call keeps the first memory
+  D.applyDot(el, 'free', {});
+  assert.deepEqual(el.attrs, { title: 'Old', 'aria-label': 'Old aria' });
+  const bare = fakeEl();
+  D.applyDot(bare, 'background', { background: 1 });
+  D.applyDot(bare, 'free', {});
+  assert.deepEqual(bare.attrs, {});
+});
+
+test('applyDot: a caller\'s newer title set while the state stays non-background is not overwritten', () => {
+  const el = fakeEl({ title: 'Hazel' });
+  D.applyDot(el, 'background', { background: 1 });
+  D.applyDot(el, 'busy', {});
+  el.setAttribute('title', 'Hazel · typing');
+  D.applyDot(el, 'busy', {});
+  D.applyDot(el, 'free', {});
+  assert.equal(el.attrs.title, 'Hazel · typing');
+});

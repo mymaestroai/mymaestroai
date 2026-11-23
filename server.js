@@ -2574,7 +2574,10 @@ async function handleHttpRequest(req, res) {
       if (wm && req.method === 'GET') {
         let name = ''; try { name = decodeURIComponent(wm[1]); } catch {}
         // isAdmin from the trusted session (as /api/cancel-worker has it), never from the request
-        const r = await require('./lib/background-work').workingOnResponse(name, { agentNames: (await getAgents()).map(a => a.name), viewer: { isAdmin: !!req.hubService || access.isAdmin(req.hubUser) } });
+        const woAgents = await getAgents();
+        const woAdmin = !!req.hubService || access.isAdmin(req.hubUser);
+        // canSee: the hub's own rule for this person (a member reads only the words of agents they may see)
+        const r = await require('./lib/background-work').workingOnResponse(name, { agentNames: woAgents.map(a => a.name), viewer: { isAdmin: woAdmin, canSee: (n) => woAdmin || access.canAccessAgent(req.hubUser, n, { agents: woAgents, resolveVirtual: (v) => temporalWorkersLib.getVirtual(v) }) } });
         return jsonResponse(res, r.status, r.body);
       }
     }
