@@ -44,8 +44,9 @@ test('mic button: hands-free starts a call, tap mode keeps dictation, a call tur
 
 test('send path: voice: true only for messages that came from a call', () => {
   assert.match(app, /async function sendSoloMessage\(chatId, retryCount = 0, sendOpts = null\)/);
-  assert.match(app, /if \(!retryCount\) chat\.voiceSend = !!\(sendOpts && sendOpts\.voice\);/);
-  assert.match(app, /images: imagesToSend,\s*\.\.\.\(chat\.voiceSend \? \{ voice: true \} : \{\}\)/);
+  // The send keeps its own copy of the flag (a voice send made while a typed message waits for its pictures must not change the typed one).
+  assert.match(app, /const voiceSend = retryCount \? !!chat\.voiceSend : !!\(sendOpts && sendOpts\.voice\);\s*if \(!retryCount\) chat\.voiceSend = voiceSend;/);
+  assert.match(app, /images: imagesToSend,\s*\.\.\.\(voiceSend \? \{ voice: true \} : \{\}\)/);
   assert.match(wiring(), /sendSoloMessage\(chatId, 0, \{ voice: true, onSendResult: accepted \}\)/);
 });
 

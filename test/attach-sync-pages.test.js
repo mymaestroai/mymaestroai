@@ -494,24 +494,27 @@ test('service worker: version bumped to v78', () => {
 
 const SIZE = { width: 10, height: 10, naturalWidth: 10, naturalHeight: 10 };
 
-test('desktop wait timeout: only the pictures preparing when the wait began are abandoned; one attached during the wait survives and is added when it finishes', async () => {
+test('desktop wait timeout: a picture attached during the wait is refused (no job); at the cap the old job is abandoned; a picture attached after it is added', async () => {
   const h = deskPictures();
   const s = deskSend(h, { text: 'here' });
   s.api.addImageToChat('c1', { name: 'old.png' });   // stuck
   const p = s.api.sendInterjection('c1');
   await tick(5);
-  s.api.addImageToChat('c1', { name: 'late.png' });   // attached during the wait
+  s.api.addImageToChat('c1', { name: 'late.png' });   // attached during the wait: refused
+  assert.strictEqual(h.made.length, 1, 'no second picture was started');
+  assert.ok(h.status.some(x => x[2] === 'error' && x[1] === 'A message is waiting for its pictures. Add this picture after it sends.'));
   await p;   // the cap runs out
   eq(s.sent, []);
-  assert.strictEqual(h.chat.imagesPreparing.size, 1, 'the late picture is still preparing');
-  assert.strictEqual([...h.chat.imagesPreparing][0].url, 'blob:late.png');
+  assert.strictEqual(h.chat.imagesPreparing.size, 0);
+  s.api.addImageToChat('c1', { name: 'after.png' });   // after the wait: accepted
+  assert.strictEqual([...h.chat.imagesPreparing][0].url, 'blob:after.png');
   assert.strictEqual([...h.chat.imagesPreparing][0].abandoned, false);
   Object.assign(h.made[1], SIZE);
   h.made[1].onload();
   await tick();
   eq(h.chat.pendingImages, ['data:image/jpeg;base64,AAAA']);
   assert.strictEqual(h.chat.imagesPreparing.size, 0);
-  assert.ok(h.revoked.includes('blob:late.png'));
+  assert.ok(h.revoked.includes('blob:after.png'));
 });
 
 test('desktop wait timeout: an abandoned job\'s object URL is revoked at the timeout, even if its image never loads', async () => {
@@ -615,21 +618,127 @@ test('phone sendMessage: a switch during the wait (draftGen bumped, releaseSendW
   assert.strictEqual(h.btn.disabled, false);
 });
 
-test('phone wait timeout: only the pictures preparing when the wait began are abandoned (one attached during the wait survives) and their URL is revoked', async () => {
+test('phone wait timeout: a picture attached during the wait is refused (no job); at the cap the old job is abandoned and its URL revoked; a picture attached after is added', async () => {
   const h = phonePictures();
   h.ctx.releaseSendWait = null;
   const s = phoneSend(h, 'here');
   s.api.addImageFile({ name: 'old.png' });   // stuck
   const p = s.api.sendMessage();
   await tick(5);
-  s.api.addImageFile({ name: 'late.png' });   // attached during the wait
+  s.api.addImageFile({ name: 'late.png' });   // attached during the wait: refused
+  assert.strictEqual(h.made.length, 1, 'no second picture was started');
+  assert.ok(h.toasts.includes('A message is waiting for its pictures. Add this picture after it sends.'));
   await p;   // the cap runs out
   eq(s.seen, []);
   eq(h.revoked, ['blob:old.png']);
+  assert.strictEqual(h.ctx.imagesPreparing.size, 0);
+  s.api.addImageFile({ name: 'after.png' });   // after the wait: accepted
   assert.strictEqual(h.ctx.imagesPreparing.size, 1);
-  assert.strictEqual([...h.ctx.imagesPreparing][0].url, 'blob:late.png');
+  assert.strictEqual([...h.ctx.imagesPreparing][0].url, 'blob:after.png');
   Object.assign(h.made[1], { width: 10, height: 10 });
   h.made[1].onload();
   await tick();
   eq(s.ctx.pendingImages, ['data:image/jpeg;base64,AAAA']);
+});
+
+// ── round 4: no picture is added while a message waits for its pictures; a switch retires the old draft's jobs; a typed send keeps its own voice flag ──
+
+const WAIT_WORDS = 'A message is waiting for its pictures. Add this picture after it sends.';
+
+test('desktop addImageToChat: while chat.sendWaiting, no job and no picture are added and the waiting message is shown as an error', () => {
+  const h = deskPictures();
+  h.chat.sendWaiting = true;
+  const { api } = load(APP, ['addImageToChat'], h.base);
+  api.addImageToChat('c1', { name: 'a.png' });
+  eq(h.status, [['c1', WAIT_WORDS, 'error']]);
+  assert.ok(!h.chat.imagesPreparing || h.chat.imagesPreparing.size === 0, 'no job');
+  eq(h.chat.pendingImages, []);
+  assert.strictEqual(h.made.length, 0, 'no picture was started');
+  eq(h.revoked, []);
+});
+
+test('phone addImageFile: while sendWaiting, no job and no picture are added and the same words are toasted', () => {
+  const h = phonePictures();
+  h.ctx.sendWaiting = true;
+  const { api, ctx } = load(MOBILE, ['addImageFile'], h.ctx);
+  api.addImageFile({ name: 'a.png' });
+  eq(h.toasts, [WAIT_WORDS]);
+  assert.strictEqual(ctx.imagesPreparing.size, 0);
+  eq(ctx.pendingImages, []);
+  assert.strictEqual(h.made.length, 0);
+});
+
+test('phone openChat retire step: a stuck job of the old draft is abandoned, removed and its URL revoked; then a text-only send does not wait', async () => {
+  const h = phonePictures();
+  h.ctx.releaseSendWait = null;
+  const s = phoneSend(h, 'here');
+  s.api.addImageFile({ name: 'old.png' });   // stuck, from the old draft
+  assert.strictEqual(h.ctx.imagesPreparing.size, 1);
+  const job = [...h.ctx.imagesPreparing][0];
+  // exactly the retire lines of openChat, run in the same context
+  const body = fnSource(MOBILE, 'openChat');
+  const from = body.indexOf('pendingImages = [];');
+  const to = body.indexOf('if (releaseSendWait) releaseSendWait();') + 'if (releaseSendWait) releaseSendWait();'.length;
+  assert.ok(from > 0 && to > from, 'the retire lines are in openChat');
+  assert.match(body.slice(from, to), /draftGen\+\+;[\s\S]*imagesPreparing[\s\S]*abandoned = true/, 'the slice holds draftGen++ and the retire loop');
+  vm.runInContext(body.slice(from, to), s.ctx);
+  assert.strictEqual(h.ctx.imagesPreparing.size, 0, 'the preparing set is empty');
+  assert.strictEqual(job.abandoned, true);
+  eq(h.revoked, ['blob:old.png']);
+  assert.strictEqual(s.ctx.draftGen, 1);
+  h.toasts.length = 0;
+  await s.api.sendMessage();
+  assert.ok(!h.toasts.includes('Adding the picture…'), 'did not wait');
+  eq(s.seen, [{ images: [], text: 'here' }]);
+});
+
+test('phone openChat: the retire loop sits after draftGen++ and before releaseSendWait (source order)', () => {
+  const body = fnSource(MOBILE, 'openChat');
+  const g = body.indexOf('draftGen++;');
+  const r = body.indexOf('for (const job of imagesPreparing)');
+  const w = body.indexOf('if (releaseSendWait) releaseSendWait();');
+  assert.ok(g > 0 && g < r && r < w);
+});
+
+test('desktop sendSoloMessage: a typed send keeps its own voice flag when chat.voiceSend is set to true during its picture wait (request body has no voice)', async () => {
+  const h = deskPictures();
+  const input = { value: 'typed words', style: {}, readOnly: false, placeholder: '' };
+  const btn = { disabled: false };
+  const bodies = [];
+  const el = (id) => (id === 'input-c1' ? input : id === 'send-c1' ? btn : null);
+  const { api } = load(APP, ['addImageToChat', 'waitForPreparingImages', 'sendSoloMessage'], {
+    ...h.base,
+    AbortController, window: {},
+    document: Object.assign(canvasDoc(), { getElementById: el }),
+    clearPendingImages: () => { h.chat.pendingImages = []; }, appendMessageWithImages() {}, setMessageTime() {}, msgTimeLabel: () => 't',
+    appendSystemNotice: () => ({}), skipInterjectOnce: new Set(), agentStatus: {}, tzSentAt: 0, zoneHeader: () => ({}),
+    setStatus() {}, setAgentStatus() {}, startToolTracker() {}, appendMessage: () => 'm1', elapsedLabel: () => '',
+    voiceFacePackBody: () => ({ face: 1 }),
+    fetch: async (url, o) => { bodies.push(JSON.parse(o.body)); throw new Error('stop after the request is built'); },
+  });
+  h.chat.status = 'idle'; h.chat.messages = [];
+  api.addImageToChat('c1', { name: 'a.png' });   // still decoding: the send waits
+  const run = api.sendSoloMessage('c1', 0, null).catch(() => {});
+  await tick(5);
+  assert.strictEqual(h.chat.sendWaiting, true, 'waiting for the picture');
+  h.chat.voiceSend = true;   // a voice send made during the wait
+  Object.assign(h.made[0], SIZE);
+  h.made[0].onload();
+  await run;
+  assert.strictEqual(bodies.length, 1, 'the request was built');
+  assert.strictEqual(bodies[0].message, 'typed words');
+  assert.ok(!('voice' in bodies[0]), 'no voice: true');
+  assert.ok(!('face' in bodies[0]), 'no voice face pack either');
+});
+
+test('desktop sendSoloMessage (source check): the request body and the 409 branch read the local voiceSend, not chat.voiceSend', () => {
+  const body = fnSource(APP, 'sendSoloMessage');
+  assert.match(body, /const voiceSend = retryCount \? !!chat\.voiceSend : !!\(sendOpts && sendOpts\.voice\);/);
+  assert.match(body, /\.\.\.\(voiceSend \? \{ voice: true \} : \{\}\)/);
+  assert.match(body, /\.\.\.\(voiceSend && typeof voiceFacePackBody/);
+  const b409 = body.slice(body.indexOf('response.status === 409'));
+  assert.match(b409.slice(0, b409.indexOf('notify(Object.assign')), /if \(voiceSend\) \{/);
+  assert.match(body, /if \(voiceSend && typeof voiceLinkOwner/);
+  // chat.voiceSend is only written once at the top and read for a retry
+  assert.strictEqual((body.match(/chat\.voiceSend/g) || []).length, 2);
 });

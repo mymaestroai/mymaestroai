@@ -7745,6 +7745,8 @@ async function openChat(name) {
   if (same && ((rec && bubbleLive(rec)) || (ra && bubbleLive(ra)))) { paintChatStatus(); return; }
   pendingImages = [];
   draftGen++;   // a new draft: pictures and sends that started in the old one do not carry over
+  // The old draft's pictures still being prepared are retired: a send in the new draft must not wait for them.
+  for (const job of imagesPreparing) { job.abandoned = true; imagesPreparing.delete(job); if (job.url) URL.revokeObjectURL(job.url); }
   if (releaseSendWait) releaseSendWait();   // a send waiting for pictures in the old draft lets go now, so this chat's box is not locked
   renderPreviews();
   if (!same) restoreDraft(name);   // each chat keeps its own draft; the box no longer carries text from another agent
@@ -9354,6 +9356,9 @@ async function waitForPreparingImages() {
 }
 
 function addImageFile(file) {
+  // A message is waiting for its pictures: a picture added now would go with it or with the next one depending on how fast it
+  // decodes, so it is refused with a word instead.
+  if (sendWaiting) { toast('A message is waiting for its pictures. Add this picture after it sends.'); return; }
   const attachedGen = draftGen;   // the picture belongs to the draft it was attached in (A -> B -> A is another draft)
   let settle;
   const job = { promise: null, abandoned: false, url: null };

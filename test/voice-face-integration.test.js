@@ -122,7 +122,7 @@ test('desktop: facePack goes with the message only while a character with reacti
   d = desktop({ prefs: { choice: 'orb' } }); d.api.voiceDispBegin('c1', 'bob'); await tick(); assert.deepStrictEqual(d.api.voiceFacePackBody(), {});
   d = desktop({ prefs: { choice: 'pack:ghost' } }); d.api.voiceDispBegin('c1', 'bob'); await tick(); assert.deepStrictEqual(d.api.voiceFacePackBody(), {}, 'a missing pack: no tag request');
   assert.strictEqual(JSON.parse(d.storage.m.get(CD.DISPLAY_STORE_KEY)).choice, 'pack:ghost', 'and the saved choice is untouched');
-  assert.ok(/\.\.\.\(chat\.voiceSend && typeof voiceFacePackBody === 'function' \? voiceFacePackBody\(\) : \{\}\)/.test(app), 'the send body carries it only for voice sends');
+  assert.ok(/\.\.\.\(voiceSend && typeof voiceFacePackBody === 'function' \? voiceFacePackBody\(\) : \{\}\)/.test(app), 'the send body carries it only for voice sends');   // the send's own copy of the voice flag
   assert.ok(/\.\.\.\(fallback && fallback\.voice && typeof voiceFacePackBody === 'function' \? voiceFacePackBody\(\) : \{\}\)/.test(mob), 'and on the phone');
 });
 

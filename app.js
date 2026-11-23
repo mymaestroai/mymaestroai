@@ -11984,6 +11984,9 @@
     
     function addImageToChat(chatId, file) {
       const chat = chats[chatId];
+      // A message is waiting for its pictures: a picture added now would go with it or with the next one depending on how fast it
+      // decodes, so it is refused with a word instead.
+      if (chat.sendWaiting) { chatFileStatus(chatId, 'A message is waiting for its pictures. Add this picture after it sends.', 'error'); return; }
       if (!chat.pendingImages) chat.pendingImages = [];
       // Track the decoding: a send waits for pictures still being prepared (waitForPreparingImages).
       if (!chat.imagesPreparing) chat.imagesPreparing = new Set();
@@ -12453,7 +12456,10 @@
     async function sendSoloMessage(chatId, retryCount = 0, sendOpts = null) {
       if (!retryCount) tzSentAt = Date.now();   // the person's own send: its request carries this device's zone (zoneHeader)
       const chat = chats[chatId];
-      if (!retryCount) chat.voiceSend = !!(sendOpts && sendOpts.voice);   // a message that came from a hands-free call goes with voice: true (retries keep it)
+      // A message that came from a hands-free call goes with voice: true (retries keep it). Read from this send's own copy: a voice send
+      // made while a typed message waits for its pictures must not turn that message into a voice send.
+      const voiceSend = retryCount ? !!chat.voiceSend : !!(sendOpts && sendOpts.voice);
+      if (!retryCount) chat.voiceSend = voiceSend;
       // A hands-free call asks to hear whether the hub took the message: notify(null) once it did, notify(error) when it did not.
       let notified = false;
       const notify = (err) => { if (notified || !sendOpts || !sendOpts.onSendResult) return; notified = true; try { sendOpts.onSendResult(err); } catch { /* the caller's problem */ } };
@@ -12554,8 +12560,8 @@
             agent: chat.agent,
             message: content,
             images: imagesToSend,
-            ...(chat.voiceSend ? { voice: true } : {}),
-            ...(chat.voiceSend && typeof voiceFacePackBody === 'function' ? voiceFacePackBody() : {})   // only while a character with reactions is on screen
+            ...(voiceSend ? { voice: true } : {}),
+            ...(voiceSend && typeof voiceFacePackBody === 'function' ? voiceFacePackBody() : {})   // only while a character with reactions is on screen
           })
         });
 
@@ -12571,7 +12577,7 @@
           delete chat.lastMsgId;
           chat.controller = null;
           if (fallback) chat.bounced409 = true;   // a fallback send is not bounced into an interjection again: it goes back to the composer below
-          if (chat.voiceSend) {   // a call's own message is never bounced into an interjection: it is refused at once, and the controller keeps the words for the next idle (as on the phone)
+          if (voiceSend) {   // a call's own message is never bounced into an interjection: it is refused at once, and the controller keeps the words for the next idle (as on the phone)
             chat.bounced409 = false;
             notify(Object.assign(new Error('busy'), { refused: true }));
             return;
@@ -12594,7 +12600,7 @@
           return;
         }
         chat.bounced409 = false;
-        if (chat.voiceSend && typeof voiceLinkOwner === 'function' && typeof voiceLinkAlive === 'function') {   // a call's own message: its answer proves the link, and so does every piece of data after it
+        if (voiceSend && typeof voiceLinkOwner === 'function' && typeof voiceLinkAlive === 'function') {   // a call's own message: its answer proves the link, and so does every piece of data after it
           const owner = voiceLinkOwner();
           if (response.status < 500) voiceLinkAlive(owner);
           chat.onStreamData = () => voiceLinkAlive(owner);
