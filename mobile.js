@@ -9620,11 +9620,16 @@ let voiceHintTimer = null, voiceHintEl = null;
 function voiceHintKey() { return 'mm-voice-hint:' + (hubMe && hubMe.user && hubMe.user.id ? String(hubMe.user.id) : 'anon'); }
 function voiceHintSeen() { try { return localStorage.getItem(voiceHintKey()) === '1'; } catch { return true; } }
 function voiceHintTarget() { return typeof simpleOn === 'function' && simpleOn() ? $('simple-call-btn') : $('mic-btn'); }
-function voiceHintCan() {
+const VOICE_HINT_SHEETS = 'dialog[open], .rsn-sheet.open, #voice-sheet.open, #menu.open, #plus-sheet:not([hidden]), #voice-panel:not([hidden])';
+/** A bottom sheet, dialog or panel open over the chat (Voice, +, menu, Talking to, Workers...): no hint. */
+function voiceHintSheetOpen() { try { return !!document.querySelector(VOICE_HINT_SHEETS); } catch { return false; } }
+function voiceHintCan(showing) {
   const t = voiceHintTarget();
-  return screen === 'chat' && !!current && !!t && !t.hidden && voiceOn() && !voiceCall && voiceRec.state === 'idle' && questionBoxes.size === 0 && !voiceHintSeen();
+  return screen === 'chat' && !!current && !!t && !t.hidden && voiceOn() && !voiceCall && voiceRec.state === 'idle' && questionBoxes.size === 0 && !voiceHintSheetOpen() && (showing === true || !document.hidden);   // a hint already showing is not taken down by the page going hidden
 }
-function voiceHintHide() { clearTimeout(voiceHintTimer); voiceHintTimer = null; if (voiceHintEl) { try { voiceHintEl.remove(); } catch { /* gone */ } voiceHintEl = null; } }
+/** Opening the hint also needs it never seen; a hint that is showing stays through ordinary repaints. */
+function voiceHintCanOpen() { return voiceHintCan() && !voiceHintSeen(); }
+function voiceHintHide() { clearTimeout(voiceHintTimer); voiceHintTimer = null; if (voiceHintEl) { try { voiceHintEl.remove(); } catch { /* gone */ } voiceHintEl = null; } if (typeof voiceHintWatch === 'function') voiceHintWatch(false); }
 function voiceHintDone() { try { localStorage.setItem(voiceHintKey(), '1'); } catch { /* storage blocked */ } voiceHintHide(); }
 function voiceHintPlace() {
   const h = voiceHintEl, c = $('composer'), row = c && c.querySelector('.row'), t = voiceHintTarget();
@@ -9635,7 +9640,7 @@ function voiceHintPlace() {
 }
 function voiceHintShow() {
   voiceHintTimer = null;
-  if (voiceHintEl || !voiceHintCan()) return;
+  if (voiceHintEl || !voiceHintCanOpen()) return;
   try { localStorage.setItem(voiceHintKey(), '1'); } catch { /* storage blocked */ }   // set the moment it is shown: never twice
   const h = document.createElement('div');
   h.id = 'voice-hint'; h.className = 'voice-hint'; h.setAttribute('role', 'status'); h.dataset.agent = current;
@@ -9647,14 +9652,27 @@ function voiceHintShow() {
   $('composer').appendChild(h);
   voiceHintEl = h;
   voiceHintPlace();
+  if (typeof voiceHintWatch === 'function') voiceHintWatch(true);
 }
 // Called whenever something it depends on changes (mic paint, status, chat open or switch, a question, a call).
 function voiceHintSync() {
-  if (voiceHintEl) { if (!voiceHintCan() || voiceHintEl.dataset.agent !== current) voiceHintHide(); else voiceHintPlace(); return; }
-  if (voiceHintCan()) { if (!voiceHintTimer) voiceHintTimer = setTimeout(voiceHintShow, 1500); }
+  if (voiceHintEl) { if (!voiceHintCan(true) || voiceHintEl.dataset.agent !== current) voiceHintHide(); else voiceHintPlace(); return; }
+  if (voiceHintCanOpen()) { if (!voiceHintTimer) voiceHintTimer = setTimeout(voiceHintShow, 1500); }
   else { clearTimeout(voiceHintTimer); voiceHintTimer = null; }
 }
 if (typeof window !== 'undefined' && window.addEventListener) window.addEventListener('resize', () => { if (voiceHintEl) voiceHintPlace(); });
+// A sheet opening (class open, hidden or open attribute) takes a showing hint down; it is not shown again (it was marked seen when shown).
+// The watcher exists only while the hint shows (voiceHintShow starts it, voiceHintHide stops it), so a page without a hint pays nothing.
+let voiceHintObs = null;
+function voiceHintWatch(on) {
+  try {
+    if (voiceHintObs) { voiceHintObs.disconnect(); voiceHintObs = null; }
+    if (on && typeof MutationObserver === 'function' && document.body) {
+      voiceHintObs = new MutationObserver(() => { if (voiceHintEl) voiceHintSync(); });
+      voiceHintObs.observe(document.body, { subtree: true, attributes: true, attributeFilter: ['class', 'hidden', 'open'] });
+    }
+  } catch { /* the hint is a comfort */ }
+}
 // ── end one-time voice hint ──
 // The speaker on a reply is shown only when something can speak: the hub voice, or (when the box is ticked) an offline voice on this phone.
 let voiceLocalOk = false, voiceLocalProbed = false;
@@ -11691,17 +11709,20 @@ function paintVoiceSheet() {
   const note = sh.querySelector('.vs-note');
   const st = voiceStatus || {};
   const admin = !!(hubMe && hubMe.isAdmin === true);
-  const installing = !!st.installing;
+  const installing = !!st.installing && st.enabled !== false;   // off wins: a leftover installing flag must not hide the Enable button
   const adminWho = st.adminName || 'An admin of your Maestro';   // the member text names the admin when the status says who
   const unsupported = st.platformSupported === false;
-  const failed = !!st.failed && !installing;
+  const failed = !!st.failed && !installing && st.enabled !== false;
   const enableBox = sh.querySelector('.vs-enable'), enableText = sh.querySelector('.vs-enable-text'), enableBtn = sh.querySelector('.vs-enable-btn');
   const prog = sh.querySelector('.vs-progress'), progLine = sh.querySelector('.vs-progress-line');
   let noteText, showBox = false, boxText = '', btnText = 'Enable voice', retryBtn = false;
   const mb = Math.round((Number(st.downloadBytes) || Number(st.bytesTotal) || 0) / 1e6);   // 0: size unknown, left out
   if (voiceOn()) noteText = `Voice is on and ready. Tap the mic beside the message box to ${p.mode === 'tap' ? 'dictate' : p.mode === 'press' ? 'start a Tap to talk call' : 'start a hands-free call'}.`;
   else if (unsupported) noteText = VOICE_UNSUPPORTED_TEXT;
-  else if (installing) {
+  else if (st.enabled === false) {   // OFF comes before installing/failed (as desktop voiceKind does): an admin sees "Enable voice", never "Retry now"
+    if (admin) { noteText = 'Voice is off.'; showBox = true; boxText = VOICE_ENABLE_TEXT; }
+    else noteText = `Voice is off. ${adminWho} can turn it on, from the Voice menu on their phone or in Settings, Voice on the computer.`;
+  } else if (installing) {
     const pct = Number.isFinite(st.progress) ? ` (${Math.round(Math.max(0, Math.min(1, st.progress)) * 100)}%)` : '';
     noteText = `Getting voice ready: downloading the speech engines${mb ? `, about ${mb} MB` : ''}${pct}.`;
     showBox = true;

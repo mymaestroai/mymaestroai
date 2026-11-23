@@ -36,7 +36,7 @@ function page({ me = { user: { id: 'u1' }, isAdmin: true }, simple = false } = {
     console, Number, Math, String, Map, Promise, JSON, Date,
     setTimeout: (fn, ms) => { timers.push({ id: ++tid, fn, ms, live: true }); return tid; },
     clearTimeout: (id) => { cleared.push(id); const t = timers.find((x) => x.id === id); if (t) t.live = false; },
-    document: { hidden: false, createElement: mkEl }, window: { addEventListener() {} },
+    document: { hidden: false, createElement: mkEl, querySelector: (sel) => (ctx.openSheet && String(sel).includes(ctx.openSheet) ? { id: 'sheet' } : null) }, window: { addEventListener() {} },
     localStorage: { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)) },
     $: (id) => (id === 'mic-btn' ? mic : id === 'simple-call-btn' ? call : id === 'composer' ? composer : null),
     simpleOn: () => simple,
@@ -202,4 +202,21 @@ test('Voice sheet status lines: installing with size and percent, waiting with s
   assert.match(s.els['.vs-note'].textContent, /^Voice is on and ready\./);
   s = sheet({ enabled: true, ready: false, platformSupported: false }); s.paintVoiceSheet();
   assert.strictEqual(s.els['.vs-note'].textContent, 'Voice is not supported on this computer.');
+});
+
+test('hint: none while a sheet or panel is open (Voice sheet, + sheet, menu, a dialog); a showing hint is taken down when one opens', async () => {
+  for (const sheet of ['#voice-sheet.open', '#plus-sheet:not([hidden])', '#menu.open', 'dialog[open]', '.rsn-sheet.open', '#voice-panel:not([hidden])']) {
+    const p = page(); p.ctx.openSheet = sheet; await p.set(READY);
+    assert.strictEqual(p.live(1500).length, 0, sheet + ': no hint timer');
+    assert.strictEqual(p.store.size, 0, sheet + ': no key');
+    p.ctx.openSheet = null; p.ctx.voiceHintSync();
+    assert.strictEqual(p.live(1500).length, 1, sheet + ': it is allowed again once the sheet is closed');
+  }
+  const p = page(); await p.set(READY); p.fire(p.live(1500)[0]); const h = p.composer.last;
+  assert.ok(h && !h.removed);
+  p.ctx.openSheet = '#voice-sheet.open'; p.ctx.voiceHintSync();
+  assert.strictEqual(h.removed, true, 'a sheet opening takes the showing hint down');
+  // a timer that fires while a sheet is open shows nothing and sets no key
+  const q = page(); await q.set(READY); const t = q.live(1500)[0]; q.ctx.openSheet = '#menu.open'; q.fire(t);
+  assert.strictEqual(q.composer.last, undefined); assert.strictEqual(q.store.size, 0);
 });

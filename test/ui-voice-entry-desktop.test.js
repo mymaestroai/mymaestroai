@@ -42,6 +42,7 @@ function makeEnv(o = {}) {
   const calls = { toasts: [], refresh: 0, opened: [], settingsAt: [], sum: [], timers: [], cleared: 0, focused: [], fetches: [], settingsRefresh: 0 };
   const store = {};
   const mic = btn('mic-c1');
+  mic.closest = (sel) => (o.row && sel === '.input-area' ? { getBoundingClientRect: () => ({ top: o.row }) } : null);   // the whole composer row, taller than the button
   const el = () => ({ style: {}, textContent: '', checked: false, disabled: false, value: 0 });
   const els = { 'mic-c1': mic, 'st-voice-status': el(), 'st-voice-retry': el(), 'st-voice-raw': el() };
   const appended = [];
@@ -50,7 +51,7 @@ function makeEnv(o = {}) {
     documentElement: { clientWidth: 390 },
     getElementById: (id) => els[id] || null,
     querySelectorAll: (sel) => (sel === '.input-area .mic-btn' ? [mic] : []),
-    querySelector: () => null,
+    querySelector: (sel) => (state.overlay && String(sel).includes(state.overlay) ? { id: 'overlay' } : null),
     createElement: () => {
       const e = { style: { setProperty(k, v) { e.style[k] = v; } }, attrs: {}, offsetWidth: 220, removed: false, handlers: {}, setAttribute(k, v) { e.attrs[k] = v; }, remove() { e.removed = true; const i = appended.indexOf(e); if (i >= 0) appended.splice(i, 1); },
         querySelector: (sel) => (sel === '.voice-hint-close' ? (e.close ||= { addEventListener: (t, f) => { e.handlers[t] = f; }, click: () => e.handlers.click() }) : null) };
@@ -58,7 +59,7 @@ function makeEnv(o = {}) {
     },
     body: { classList: { toggle() {} }, appendChild: (e) => { appended.push(e); } },
   };
-  const state = { status: o.status === undefined ? { enabled: true, ready: true } : o.status, admin: o.admin !== false };
+  const state = { status: o.status === undefined ? { enabled: true, ready: true } : o.status, admin: o.admin !== false, overlay: null };
   const stubs = {
     document: doc, window: { hubMe: o.me === undefined ? { user: { id: 'u7' }, isAdmin: true } : o.me, innerWidth: 390, innerHeight: 800 },
     localStorage: { getItem: (k) => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = String(v); } },
@@ -120,7 +121,7 @@ test('Settings: a Voice group right after Appearance, not in Tools; heading "Voi
   assert.match(h, /<h4>Voice<\/h4>/);
   assert.doesNotMatch(h, /<h4>Voices<\/h4>/);
   assert.match(h, /<span class="st-search-words" hidden>voice microphone mic talk speak speech call dictation<\/span>/);
-  assert.match(h, /row\('Voice conversations', admin\s*\?[^\n]*id="st-voice-enabled" onchange="voiceSettingEnable\(this\)"> On for everyone on this Maestro<\/label>/);
+  assert.match(h, /if \(admin\) h \+= row\('Voice conversations', `<label[^\n]*id="st-voice-enabled" onchange="voiceSettingEnable\(this\)"> On for everyone on this Maestro<\/label>`\);/);
   // the search matches the section's textContent, and hidden words are part of it
   assert.match(src('stSearch'), /s\.textContent\.toLowerCase\(\)\.includes\(q\)/);
 });
@@ -400,4 +401,44 @@ test('Guide: a Voice item after Agents; help.html and welcome.html mention talki
   assert.ok(guide.includes('Talk to any agent: tap the microphone by the message box for a hands-free call, or pick Tap to talk or Dictation in its settings. Voice runs on this computer; an admin can switch it off in Settings, Voice.'));
   assert.match(read('help.html'), /Or talk to it:<\/b> tap the microphone by the message box for a hands-free call/);
   assert.match(read('welcome.html'), /You can talk to your agents by voice too\./);
+});
+
+test('Settings, Voice: the switch row holds only the switch; a Status row under it holds the sentence, the bar, Retry now and the raw error, in that order', () => {
+  const h = src('voiceSettingsHtml');
+  const sw = h.slice(h.indexOf("row('Voice conversations'"), h.indexOf("h += row('Status'"));
+  assert.match(sw, /id="st-voice-enabled"/);
+  for (const id of ['st-voice-status', 'st-voice-progress', 'st-voice-retry', 'st-voice-raw']) assert.ok(!sw.includes(id), id + ' is not in the switch row');
+  const st = h.slice(h.indexOf("h += row('Status'"), h.indexOf("row('Engines'"));
+  const pos = ['st-voice-status', 'st-voice-progress', 'st-voice-retry', 'st-voice-raw'].map((id) => st.indexOf(`id="${id}"`));
+  assert.ok(pos.every((x) => x > 0) && pos.every((x, i) => i === 0 || x > pos[i - 1]), 'status, bar, Retry now, raw error in order: ' + pos);
+  assert.match(st, /id="st-voice-retry"[^>]*onclick="voiceRetryNow\(this\)"/);
+  assert.match(st, /id="st-voice-raw"[^>]*font-size:0\.75rem/);
+  assert.match(st, /id="st-voice-status"[^>]*width:100%/, 'the sentence takes the full width');
+  // a member: one Status row with the sentence, no switch row
+  const member = st.slice(st.indexOf(': `<span id="st-voice-status"'));
+  assert.match(member, /id="st-voice-status"/);
+  assert.ok(!/id="st-voice-(progress|retry|raw)"/.test(member));
+  assert.match(h, /if \(admin\) h \+= row\('Voice conversations'/, 'the switch row is the admin\'s only');
+});
+
+test('hint: its bottom edge is 10 px above the top of the whole composer row, not the mic button', () => {
+  const e = makeEnv({ row: 640 });   // the mic top is 700, the row (taller message box) starts at 640
+  tickAll(e, 1000); tickAll(e, 2600);
+  assert.strictEqual(e.appended.length, 1);
+  assert.strictEqual(parseFloat(e.appended[0].style.bottom), 800 - 640 + 10);
+  assert.match(src('voiceHintPlace'), /closest\('\.input-area'\)/);
+});
+
+test('hint: none while the Settings overlay (or another dialog) is open; it goes away when one opens and the key stays unset until shown', () => {
+  for (const sel of ['#st-overlay', '#profile-overlay', 'dialog[open]']) {
+    const e = makeEnv(); e.state.overlay = sel;
+    tickAll(e, 1000); tickAll(e, 3000); tickAll(e, 9000);
+    assert.strictEqual(e.appended.length, 0, sel);
+    assert.strictEqual(Object.keys(e.store).length, 0, sel + ': the key stays unset');
+  }
+  const e = makeEnv();
+  tickAll(e, 1000); tickAll(e, 2600);
+  assert.strictEqual(e.appended.length, 1);
+  e.state.overlay = '#st-overlay'; tickAll(e, 3000);
+  assert.strictEqual(e.appended.length, 0, 'a showing hint is taken down when Settings opens');
 });

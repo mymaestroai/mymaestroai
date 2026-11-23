@@ -11436,7 +11436,7 @@
           </div>
           <input type="file" id="file-input-${chatId}" multiple style="display:none" onchange="handleFileSelect(event, '${chatId}')">
           <button class="attach-btn" onclick="document.getElementById('file-input-${chatId}').click()" title="Attach a file: images are sent with the message, other files are uploaded to your files and their path is added to the message" style="background:var(--bg-input); border:1px solid var(--border); padding:8px 10px; font-size:1rem; cursor:pointer;">📎</button>
-          <button type="button" onpointerdown="voiceMicPointer(false)" onpointerup="voiceMicPointer(true)" onclick="voiceMicToggle('${chatId}')" id="mic-${chatId}" class="mic-btn" style="display:none" aria-pressed="false" aria-label="${voiceMicIdleLabel()}" title="${voiceMicIdleTitle(chatId)}">${VOICE_MIC_SVG}</button><span class="mic-meter" id="mic-meter-${chatId}" style="display:none" aria-hidden="true"><i></i></span><span class="voice-extra" style="display:none"><button type="button" class="voice-mode-chip" id="vmode-${chatId}" onclick="voiceModeToggle()" title="Talk mode: tap to switch" style="display:none">${voiceModeLabel()}</button><button type="button" class="voice-set-btn" id="vset-${chatId}" onclick="voicePopToggle('${chatId}')" aria-label="Voice settings" aria-expanded="false" title="Voice settings">${VOICE_LEVELS_SVG}</button><div class="voice-pop" id="voice-pop-${chatId}" role="dialog" aria-label="Voice settings" hidden></div></span>
+          <button type="button" onpointerdown="voiceMicPointer(false)" onpointerup="voiceMicPointer(true)" onclick="voiceMicToggle('${chatId}')" id="mic-${chatId}" class="mic-btn" style="display:none" aria-pressed="false" aria-label="${voiceMicIdleLabel()}" title="${hubEsc(voiceMicIdleTitle(chatId))}">${VOICE_MIC_SVG}</button><span class="mic-meter" id="mic-meter-${chatId}" style="display:none" aria-hidden="true"><i></i></span><span class="voice-extra" style="display:none"><button type="button" class="voice-mode-chip" id="vmode-${chatId}" onclick="voiceModeToggle()" title="Talk mode: tap to switch" style="display:none">${voiceModeLabel()}</button><button type="button" class="voice-set-btn" id="vset-${chatId}" onclick="voicePopToggle('${chatId}')" aria-label="Voice settings" aria-expanded="false" title="Voice settings">${VOICE_LEVELS_SVG}</button><div class="voice-pop" id="voice-pop-${chatId}" role="dialog" aria-label="Voice settings" hidden></div></span>
           <button onclick="toggleNotifyDone('${chatId}')" id="notify-${chatId}" class="notify-done-btn" style="display:none" aria-pressed="false" title="Get a notification on your phone when this reply is done">🔔 Notify me</button>
           <button onclick="sendSoloMessage('${chatId}')" id="send-${chatId}">Send</button>
         </div>
@@ -17913,9 +17913,10 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     function voiceHintTarget() { const b = activeChat ? voiceById(`mic-${activeChat}`) : null; return b && b.style.display !== 'none' && b.offsetParent !== null ? b : null; }
     function voiceHintBlocked() {
       if (voiceCallS.active || voiceCallS.starting || voiceCallS.call) return true;
-      return Object.keys(questionOverlays).length > 0 || !!document.querySelector('.question-overlay, .question-card');
+      if (Object.keys(questionOverlays).length > 0 || document.querySelector('.question-overlay, .question-card')) return true;
+      return !!document.querySelector('#st-overlay, #gs-overlay:not(.gs-dock), #dream-overlay, #profile-overlay, #security-overlay, #or-pick-overlay, #restart-notify-overlay, #resume-popup-overlay, dialog[open]');   // Settings, the side panels and the other dialogs: no hint over them
     }
-    function voiceHintOk() { return !voiceHintSeen() && !!activeChat && chats[activeChat] && !voiceHintBlocked() && voiceMicState() === 'ready' && !!voiceHintTarget(); }   // seen first: once done, each tick costs one storage read
+    function voiceHintOk() { return !document.hidden && !voiceHintSeen() && !!activeChat && chats[activeChat] && !voiceHintBlocked() && voiceMicState() === 'ready' && !!voiceHintTarget(); }   // seen first: once done, each tick costs one storage read
     function voiceHintHide() { if (voiceHint.el) { voiceHint.el.remove(); voiceHint.el = null; } voiceHint.chatId = null; voiceHint.due = 0; }
     // Closed, or the microphone used: gone, and the key is set so it never comes back.
     function voiceHintDismiss() { voiceHintMark(); voiceHintHide(); }
@@ -17927,7 +17928,9 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       let right = Math.max(8, vw - r.right - 4);
       if (vw && w) right = Math.min(right, Math.max(8, vw - 8 - w));
       el.style.right = `${right}px`;
-      el.style.bottom = `${Math.max(8, vh - r.top + 10)}px`;
+      const row = (t.closest && t.closest('.input-area')) || t;   // the whole composer row: the message box is taller than the button
+      const top = row.getBoundingClientRect().top;
+      el.style.bottom = `${Math.max(8, vh - top + 10)}px`;
       el.style.setProperty('--voice-hint-arrow', `${Math.max(8, Math.round((vw - right) - (r.left + r.width / 2) - 6))}px`);
     }
     function voiceHintShow() {
@@ -18291,9 +18294,11 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const CHK = 'flex:1;min-width:0;display:flex;gap:6px;align-items:flex-start;text-align:left;cursor:pointer';
       let h = `<div class="st-section" id="st-voice-section"><h4>Voice</h4><span class="st-search-words" hidden>voice microphone mic talk speak speech call dictation</span>
         <div class="st-hint">Free local voices run on this computer: what you say and what is read aloud never leaves it, and nothing is sent to the internet. Tap the microphone in a chat to start a hands-free call: talk, interrupt the agent any time by speaking, and say "stop" to stop it; tap the speaker on a reply to hear it.</div>`;
-      h += row('Voice conversations', admin
-        ? `<label style="flex:0 0 auto;display:flex;gap:6px;align-items:center;text-align:left;cursor:pointer;white-space:nowrap"><input type="checkbox" id="st-voice-enabled" onchange="voiceSettingEnable(this)"> On for everyone on this Maestro</label> <progress id="st-voice-progress" max="1" value="0" style="display:none;margin-left:8px"></progress> <span id="st-voice-status" class="st-hint" style="margin:0 0 0 8px">Checking…</span> <button type="button" id="st-voice-retry" class="btn-small" style="display:none;margin-left:8px" onclick="voiceRetryNow(this)">Retry now</button> <span id="st-voice-raw" class="st-hint" style="display:none;margin:0 0 0 8px;font-size:0.75rem"></span>`
-        : `<span id="st-voice-status" class="st-hint" style="margin:0">Checking…</span>`);
+      // The switch is its own row; the Status row under it holds the sentence at full width, then the bar, Retry now and the raw error.
+      if (admin) h += row('Voice conversations', `<label style="flex:0 0 auto;display:flex;gap:6px;align-items:center;text-align:left;cursor:pointer;white-space:nowrap"><input type="checkbox" id="st-voice-enabled" onchange="voiceSettingEnable(this)"> On for everyone on this Maestro</label>`);
+      h += row('Status', admin
+        ? `<div id="st-voice-statusbox" style="flex:1;min-width:0;display:flex;flex-direction:column;align-items:flex-start;gap:6px"><span id="st-voice-status" class="st-hint" style="margin:0;width:100%;white-space:normal;overflow-wrap:anywhere">Checking…</span><progress id="st-voice-progress" max="1" value="0" style="display:none"></progress><button type="button" id="st-voice-retry" class="btn-small" style="display:none" onclick="voiceRetryNow(this)">Retry now</button><span id="st-voice-raw" class="st-hint" style="display:none;margin:0;font-size:0.75rem;white-space:normal;overflow-wrap:anywhere"></span></div>`
+        : `<span id="st-voice-status" class="st-hint" style="margin:0;flex:1;min-width:0;white-space:normal">Checking…</span>`);
       h += row('Engines', `<span id="st-voice-engines" class="st-hint" style="margin:0">…</span>`);
       if (admin) {
         h += row('Default voice', `<select id="st-voice-default" onchange="voiceSettingDefaultVoice()" style="padding:4px"></select> <button class="st-test-btn" id="st-voice-sample" type="button" onclick="voicePlaySample()">Play sample</button><span id="st-voice-state" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px"></span>`);

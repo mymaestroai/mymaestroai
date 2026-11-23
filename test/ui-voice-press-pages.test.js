@@ -432,7 +432,7 @@ test('the help texts of both pages name all three modes: Hands-free, Tap to talk
   // the idle mic of the desktop: label and title by mode
   const idle = between(app, 'function voiceMicIdleLabel()', 'function voiceCallPaintBtn(');
   inOrder(idle, ["'Tap to talk'", "'Dictate'", "'Talk hands-free'"]);
-  assert.match(app, /aria-label="\$\{voiceMicIdleLabel\(\)\}" title="\$\{voiceMicIdleTitle\(chatId\)\}"/);   // voice entry: the title names the chat's agent
+  assert.match(app, /aria-label="\$\{voiceMicIdleLabel\(\)\}" title="\$\{hubEsc\(voiceMicIdleTitle\(chatId\)\)\}"/);   // voice entry (escaped: review r1 item 1): the title names the chat's agent
 });
 // ═══ review round 1 ═══
 // ── item 3: a cancelled or lost pointer always ends the press it opened ──

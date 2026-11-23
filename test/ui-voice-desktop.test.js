@@ -63,7 +63,7 @@ test('settings: Voices section in the tools group, admin controls and per-device
 });
 
 test('composer: mic button next to attach, shown only when voice is enabled and ready', () => {
-  assert.match(app, /id="mic-\$\{chatId\}" class="mic-btn" style="display:none"[^>]*title="\$\{voiceMicIdleTitle\(chatId\)\}"/);   // the title follows the saved mode and names the chat's agent (voice entry)
+  assert.match(app, /id="mic-\$\{chatId\}" class="mic-btn" style="display:none"[^>]*title="\$\{hubEsc\(voiceMicIdleTitle\(chatId\)\)\}"/);   // the title follows the saved mode and names the chat's agent (voice entry)
   assert.match(app, /onclick="voiceMicToggle\('\$\{chatId\}'\)"/);
   const at = app.indexOf('id="mic-${chatId}"');
   assert.ok(app.indexOf('document.getElementById(\'file-input-${chatId}\').click()') < at, 'after the attach button');
