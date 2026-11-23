@@ -50,8 +50,11 @@ test('success: link extracted, code accepted, checking, verify ok -> done; the c
   const orig = { log: console.log, error: console.error, warn: console.warn };
   console.log = (...a) => logged.push(a.join(' ')); console.error = console.log; console.warn = console.log;
   try {
-    assert.deepStrictEqual(await t.si.start(), { ok: true });
+    const first = await t.si.start();
+    assert.strictEqual(first.ok, true);
+    assert.match(first.id, /^[A-Za-z0-9_-]{12}$/);
     const s = await until(() => { const x = t.snap(); return x.state === 'link' && x; }, 'link');
+    assert.strictEqual(s.id, first.id, 'state() carries the attempt id');
     assert.strictEqual(s.link, 'https://claude.example/oauth/authorize?code=true&state=standin');
     assert.deepStrictEqual(t.si.submitCode(GOOD), { ok: true });
     await until(() => t.snap().state === 'done', 'done');
@@ -101,7 +104,11 @@ test('cancel ends the process and the state is cancelled', async () => {
   assert.strictEqual(t.si.state().state, 'cancelled');
   await until(() => !alive(pid), 'process end');
   assert.strictEqual(t.si.state().state, 'cancelled');
-  assert.deepStrictEqual(await t.si.start().then(r => { t.si.cancel(); return r; }), { ok: true }, 'a new attempt may start after cancel');
+  // the slot is held until the client has really exited, then a new attempt may start
+  let again = await t.si.start();
+  for (let i = 0; !again.ok && i < 200; i++) { await sleep(15); again = await t.si.start(); }
+  assert.strictEqual(again.ok, true, 'a new attempt may start once the client is gone');
+  t.si.cancel();
 });
 
 test('a second start while one runs -> busy; the first goes on', async () => {
@@ -187,7 +194,8 @@ test('no client: installClient is called once, then failed missing when still no
   let installs = 0, finds = 0;
   const t = setup({ find: () => { finds++; return null; }, install: async () => { installs++; return true; } });
   const r = await t.si.start();
-  assert.deepStrictEqual(r, { ok: false, reason: 'missing' });
+  assert.strictEqual(r.ok, true, 'start answers at once; the rest goes on in the background');
+  await until(() => t.si.state().state === 'failed', 'failed missing');
   assert.strictEqual(installs, 1);
   assert.strictEqual(finds, 2);
   assert.strictEqual(t.si.state().reason, 'missing');
@@ -198,7 +206,7 @@ test('no client: installClient is called once, then failed missing when still no
 test('no client at first but the install puts one there: sign-in goes on', async () => {
   let installed = false;
   const t = setup({ find: () => (installed ? { bin: BIN } : null), install: async () => { installed = true; return true; } });
-  assert.deepStrictEqual(await t.si.start(), { ok: true });
+  assert.strictEqual((await t.si.start()).ok, true);
   await until(() => t.snap().state === 'link', 'link');
   t.si.cancel();
 });
@@ -246,17 +254,241 @@ test('findClient: the SDK\'s bundled native client next to the SDK package', () 
 
 test('installClient: runs the installer command with bash on linux and darwin only; true on exit 0', async () => {
   const calls = [];
-  const fakeSpawn = (code) => (cmd, args) => {
-    calls.push([cmd, args]);
+  const fakeSpawn = (code) => (cmd, args, opts) => {
+    calls.push([cmd, args, opts]);
     const { EventEmitter } = require('events');
     const c = new EventEmitter(); c.kill = () => {};
     setImmediate(() => c.emit('close', code));
     return c;
   };
   assert.strictEqual(await S.installClient({ spawn: fakeSpawn(0), platform: 'linux' }), true);
-  assert.deepStrictEqual(calls[0], ['bash', ['-c', 'curl -fsSL https://claude.ai/install.sh | bash']]);
+  assert.deepStrictEqual(calls[0].slice(0, 2), ['bash', ['-c', 'set -o pipefail; curl -fsSL https://claude.ai/install.sh | bash']]);
+  assert.strictEqual(calls[0][2] && calls[0][2].detached, true, 'its own process group');
   assert.strictEqual(await S.installClient({ spawn: fakeSpawn(1), platform: 'darwin' }), false);
   const n = calls.length;
   assert.strictEqual(await S.installClient({ spawn: fakeSpawn(0), platform: 'win32' }), false);
   assert.strictEqual(calls.length, n, 'nothing runs on other platforms');
+});
+
+// ── attempt ids, the background start, process groups, wrong codes, the exit hook (fake children and a fake clock) ──
+const { EventEmitter } = require('node:events');
+const flush = async () => { for (let i = 0; i < 5; i++) await new Promise(r => setImmediate(r)); };
+const OVERALL = 777000;
+function fakeKid(pid) {
+  const c = new EventEmitter();
+  c.pid = pid; c.stdout = new EventEmitter(); c.stderr = new EventEmitter();
+  c.stdin = Object.assign(new EventEmitter(), { written: [], write(s) { this.written.push(String(s)); } });
+  c.kill = () => {};
+  return c;
+}
+function fakeEngine(o = {}) {
+  const kills = [], kids = [], timers = [], spawned = [];
+  let pid = 4000;
+  const setTimer = (fn, ms) => { const t = { fn, ms, cleared: false, unref() {} }; timers.push(t); return t; };
+  const clearTimer = (t) => { if (t) t.cleared = true; };
+  const si = S.createSignIn({
+    spawn: (bin, args, opts) => { const k = fakeKid(++pid); kids.push(k); spawned.push({ bin, args, opts }); return k; },
+    kill: (p, sig) => kills.push([p, sig]), setTimer, clearTimer, timeoutMs: OVERALL,
+    env: () => ({}), findClient: o.find || (() => ({ bin: '/nonexistent/claude' })), installClient: o.install,
+    authStatus: async () => ({ loggedIn: true }), verify: async () => ({ ok: true }),
+  });
+  const live = () => timers.filter(t => !t.cleared);
+  const fire = (ms) => { const t = live().find(x => x.ms === ms); if (!t) throw new Error('no timer of ' + ms); t.cleared = true; t.fn(); };
+  const toLink = async () => { const r = await si.start(); await flush(); kids[kids.length - 1].stdout.emit('data', 'visit: https://claude.ai/oauth/authorize?x=1 \n'); return r; };
+  return { si, kills, kids, spawned, timers, live, fire, toLink };
+}
+
+test('each attempt has its own random id; state() carries it; a stale id is refused by submitCode and cancel', async () => {
+  const e = fakeEngine();
+  const a = await e.toLink();
+  assert.strictEqual(e.si.state().id, a.id);
+  assert.strictEqual(e.si.submitCode('ABCDEFGH12345', 'other-id').reason, 'stale');
+  assert.deepStrictEqual(e.si.cancel('other-id'), { ok: false, reason: 'stale' });
+  assert.strictEqual(e.si.state().state, 'link', 'a stale call changes nothing');
+  assert.strictEqual(e.kids[0].stdin.written.length, 0);
+  assert.deepStrictEqual(e.si.submitCode('ABCDEFGH12345', a.id), { ok: true });
+  assert.deepStrictEqual(e.kids[0].stdin.written, ['ABCDEFGH12345\n']);
+  assert.deepStrictEqual(e.si.cancel(a.id), { ok: true });
+  assert.strictEqual(e.si.state().state, 'cancelled');
+  e.kids[0].emit('close', null);
+  const b = await e.si.start();
+  assert.notStrictEqual(b.id, a.id);
+  assert.strictEqual(e.si.submitCode('ABCDEFGH12345', a.id).reason, 'stale', 'the old attempt\'s id no longer fits');
+  e.si.cancel(b.id);
+});
+
+test('only one code is accepted per attempt: a second one is refused with state', async () => {
+  const e = fakeEngine();
+  const a = await e.toLink();
+  assert.strictEqual(e.si.submitCode('ABCDEFGH12345', a.id).ok, true);
+  assert.deepStrictEqual(e.si.submitCode('ZZZZZZZZ99999', a.id), { ok: false, reason: 'state' });
+  assert.deepStrictEqual(e.kids[0].stdin.written, ['ABCDEFGH12345\n']);
+  e.si.cancel();
+});
+
+test('start answers at once, before the client is found; the attempt is busy meanwhile', async () => {
+  let release;
+  const e = fakeEngine({ find: () => new Promise((res) => { release = () => res({ bin: '/nonexistent/claude' }); }) });
+  const r = await e.si.start();
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(e.si.state().state, 'starting');
+  assert.strictEqual(e.kids.length, 0);
+  assert.deepStrictEqual(await e.si.start(), { ok: false, reason: 'busy' });
+  release(); await flush();
+  assert.strictEqual(e.kids.length, 1);
+  e.si.cancel();
+});
+
+test('the client is started in its own process group, and cancel ends it by group: SIGTERM, then SIGKILL after 3 s; the slot stays busy until it exited', async () => {
+  const e = fakeEngine();
+  await e.toLink();
+  assert.deepStrictEqual(e.spawned[0].args, ['auth', 'login', '--claudeai']);
+  assert.strictEqual(e.spawned[0].opts.detached, true);
+  const pid = e.kids[0].pid;
+  e.si.cancel();
+  assert.deepStrictEqual(e.kills, [[-pid, 'SIGTERM']]);
+  assert.strictEqual(e.si.state().state, 'cancelled');
+  assert.deepStrictEqual(await e.si.start(), { ok: false, reason: 'busy' }, 'the children have not exited yet');
+  e.fire(3000);
+  assert.deepStrictEqual(e.kills, [[-pid, 'SIGTERM'], [-pid, 'SIGKILL']]);
+  e.kids[0].emit('close', null);
+  assert.strictEqual((await e.si.start()).ok, true, 'free once it exited');
+  e.si.cancel();
+});
+
+test('the installer belongs to the attempt: installing state, onChild tracked, cancel ends its process group', async () => {
+  let done, gotChild;
+  const e = fakeEngine({ find: () => null, install: (o) => { gotChild = fakeKid(5555); o.onChild(gotChild); return new Promise((res) => { done = res; }); } });
+  const r = await e.si.start();
+  await flush();
+  assert.strictEqual(e.si.state().state, 'installing');
+  assert.strictEqual(e.si.state().id, r.id);
+  assert.deepStrictEqual(await e.si.start(), { ok: false, reason: 'busy' }, 'installing is a busy state');
+  e.si.cancel(r.id);
+  assert.deepStrictEqual(e.kills, [[-5555, 'SIGTERM']]);
+  assert.strictEqual(e.si.state().state, 'cancelled');
+  assert.deepStrictEqual(await e.si.start(), { ok: false, reason: 'busy' }, 'the installer is still alive');
+  e.fire(3000);
+  assert.deepStrictEqual(e.kills[1], [-5555, 'SIGKILL']);
+  gotChild.emit('close', 143); done(false); await flush();
+  assert.strictEqual(e.kids.length, 0, 'no client was started for a cancelled attempt');
+  assert.strictEqual((await e.si.start()).ok, true);
+});
+
+test('the overall timeout ends a running installer by group too, and the state is failed timeout', async () => {
+  let gotChild;
+  const e = fakeEngine({ find: () => null, install: (o) => { gotChild = fakeKid(6001); o.onChild(gotChild); return new Promise(() => {}); } });
+  await e.si.start(); await flush();
+  assert.strictEqual(e.si.state().state, 'installing');
+  e.fire(OVERALL);
+  assert.strictEqual(e.si.state().state, 'failed');
+  assert.strictEqual(e.si.state().reason, 'timeout');
+  assert.deepStrictEqual(e.kills, [[-6001, 'SIGTERM']]);
+  gotChild.emit('close', null);
+});
+
+test('after the install the client is found again and the sign-in goes on from installing to the link', async () => {
+  let installed = false, done;
+  const e = fakeEngine({ find: () => (installed ? { bin: '/nonexistent/claude' } : null), install: () => new Promise((res) => { done = () => { installed = true; res(true); }; }) });
+  await e.si.start(); await flush();
+  assert.strictEqual(e.si.state().state, 'installing');
+  done(); await flush();
+  assert.strictEqual(e.kids.length, 1);
+  e.kids[0].stdout.emit('data', 'visit: https://claude.ai/oauth/authorize?x=1 \n');
+  assert.strictEqual(e.si.state().state, 'link');
+  e.si.cancel();
+});
+
+test('a wrong code while the client stays alive: failed code at once, and the client is ended (real stand-in client)', async () => {
+  const t = setup({ mode: 'stay' });
+  await t.si.start();
+  await until(() => t.snap().state === 'link', 'link');
+  const pid = t.children[0].pid;
+  t.si.submitCode('WRONG-CODE-99999');
+  const s = await until(() => { const x = t.snap(); return x.state === 'failed' && x; }, 'failed code');
+  assert.strictEqual(s.reason, 'code');
+  await until(() => !alive(pid), 'the client ended');
+});
+
+test('a wrong code with a fake client that stays alive: failed code, group kill; output before the code does not count', async () => {
+  const e = fakeEngine();
+  const a = await e.toLink();
+  e.kids[0].stdout.emit('data', 'If the code is invalid or expired you can start again\n');   // before any code: not an answer
+  assert.strictEqual(e.si.state().state, 'link');
+  e.si.submitCode('ABCDEFGH12345', a.id);
+  e.kids[0].stdout.emit('data', 'OAuth error: Invalid code. Please make sure the full code was copied\n');
+  assert.strictEqual(e.si.state().state, 'failed');
+  assert.strictEqual(e.si.state().reason, 'code');
+  assert.deepStrictEqual(e.kills, [[-e.kids[0].pid, 'SIGTERM']]);
+  e.kids[0].emit('close', null);
+});
+
+test('no change within 60 s after a code: failed error; any new output starts the wait over (fake clock)', async () => {
+  const e = fakeEngine();
+  const a = await e.toLink();
+  e.si.submitCode('ABCDEFGH12345', a.id);
+  assert.strictEqual(e.live().filter(t => t.ms === 60000).length, 1);
+  e.kids[0].stdout.emit('data', 'Working...\n');
+  assert.strictEqual(e.live().filter(t => t.ms === 60000).length, 1, 'one wait at a time, restarted');
+  assert.strictEqual(e.si.state().state, 'link');
+  e.fire(60000);
+  assert.strictEqual(e.si.state().state, 'failed');
+  assert.strictEqual(e.si.state().reason, 'error');
+  assert.strictEqual(e.si.state().message, S.WORDS.failed.error);
+  assert.deepStrictEqual(e.kills, [[-e.kids[0].pid, 'SIGTERM']]);
+  e.kids[0].emit('close', null);
+});
+
+test('a code that is accepted and answered in time is not failed by the 60 s wait', async () => {
+  const e = fakeEngine();
+  const a = await e.toLink();
+  e.si.submitCode('ABCDEFGH12345', a.id);
+  e.kids[0].stdout.emit('data', 'Login successful\n');
+  assert.strictEqual(e.live().filter(t => t.ms === 60000).length, 0, 'the wait is cancelled once it is checking');
+  await until(() => e.si.state().state === 'done', 'done');
+  assert.ok(e.kills.length >= 1, 'the finished attempt ends its client');
+  e.kids[0].emit('close', 0);
+});
+
+test('hub exit: a running attempt registers an exit handler that kills its children by group; it is removed when the attempt ends', async () => {
+  const before = new Set(process.listeners('exit'));
+  const mine = () => process.listeners('exit').filter(f => !before.has(f)).length;
+  const e = fakeEngine();
+  await e.toLink();
+  const added = process.listeners('exit').filter(f => !before.has(f));
+  assert.strictEqual(added.length, 1);
+  added[0]();   // what the hub's exit does
+  assert.deepStrictEqual(e.kills, [[-e.kids[0].pid, 'SIGKILL']]);
+  e.si.cancel();
+  assert.strictEqual(mine(), 1, 'still there while the client has not exited');
+  e.kids[0].emit('close', null);
+  assert.strictEqual(mine(), 0, 'removed once the attempt and its children are done');
+  // an attempt that ends with no children left removes it at once
+  const f = fakeEngine({ find: () => null, install: async () => false });
+  await f.si.start(); await flush();
+  assert.strictEqual(f.si.state().reason, 'missing');
+  assert.strictEqual(mine(), 0);
+});
+
+test('installClient: onChild gets the installer; a timeout ends its process group (SIGTERM, then SIGKILL after 3 s)', async () => {
+  const kills = [], timers = [];
+  const kid = fakeKid(7001);
+  let seen = null;
+  const p = S.installClient({
+    spawn: () => kid, platform: 'linux', onChild: (c) => { seen = c; }, kill: (pid, sig) => kills.push([pid, sig]), timeoutMs: 1234,
+    setTimer: (fn, ms) => { const t = { fn, ms, unref() {} }; timers.push(t); return t; }, clearTimer: () => {},
+  });
+  assert.strictEqual(seen, kid);
+  timers.find(t => t.ms === 1234).fn();
+  assert.strictEqual(await p, false);
+  assert.deepStrictEqual(kills, [[-7001, 'SIGTERM']]);
+  timers.find(t => t.ms === 3000).fn();
+  assert.deepStrictEqual(kills, [[-7001, 'SIGTERM'], [-7001, 'SIGKILL']]);
+});
+
+test('killGroup: a child without a pid, or a group that is gone, is signalled directly', () => {
+  const sent = [];
+  S.killGroup({ kill: (s) => sent.push(['child', s]) }, 'SIGTERM', () => { throw new Error('no'); });
+  S.killGroup({ pid: 9, kill: (s) => sent.push(['child', s]) }, 'SIGKILL', () => { throw new Error('ESRCH'); });
+  assert.deepStrictEqual(sent, [['child', 'SIGTERM'], ['child', 'SIGKILL']]);
 });

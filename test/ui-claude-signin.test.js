@@ -84,9 +84,16 @@ global.fetch = async (url, init) => {
   calls.push({ url, method, body: init && init.body ? JSON.parse(init.body) : null });
   if (method === 'GET') return json(200, Object.assign({}, hub.me, hub.me.canSignIn ? { attempt: hub.attempt } : {}));
   if (hub.status === 403) return json(403, { ok: false, error: 'Sign in with an admin account in your browser to do this.' });
-  if (url.endsWith('/start')) { hub.attempt = hub.startAttempt || { state: 'starting' }; return json(200, { ok: true, attempt: hub.attempt }); }
-  if (url.endsWith('/cancel')) { hub.attempt = { state: 'cancelled' }; return json(200, { ok: true, attempt: hub.attempt }); }
+  const sentId = init && init.body ? JSON.parse(init.body).id : undefined;
+  // an attempt that has an id: /code and /cancel with another id are stale (409), like the server
+  const stale = () => hub.attempt && hub.attempt.id && sentId !== hub.attempt.id;
+  if (url.endsWith('/start')) { hub.attempt = hub.startAttempt || { state: 'starting' }; return json(200, { ok: true, id: hub.attempt.id, attempt: hub.attempt }); }
+  if (url.endsWith('/cancel')) {
+    if (stale()) return json(409, { ok: false, reason: 'stale', attempt: hub.attempt });
+    hub.attempt = { state: 'cancelled', id: hub.attempt && hub.attempt.id }; return json(200, { ok: true, attempt: hub.attempt });
+  }
   if (url.endsWith('/code')) {
+    if (stale()) return json(409, { ok: false, reason: 'stale', attempt: hub.attempt });
     if (hub.codeAnswer) return json(200, hub.codeAnswer);
     hub.attempt = { state: 'checking' };
     return json(200, { ok: true, attempt: hub.attempt });
@@ -294,6 +301,68 @@ test('panel: closing while the link shows posts cancel and stops polling; Escape
   doc.key('Escape');
   assert.equal(dialog(), undefined);
   assert.ok(await until(() => calls.some((c) => c.url === '/api/claude-signin/cancel')));
+});
+
+test('panel: the attempt id from the start answer and the polls goes with /code and /cancel', async () => {
+  resetHub({ startAttempt: { state: 'starting', id: 'att-1' } });
+  CS.openPanel({ pollMs: 5 });
+  assert.ok(await until(() => calls.some((c) => c.url === '/api/claude-signin/start')));
+  hub.attempt = { state: 'link', id: 'att-1', link: 'https://claude.ai/oauth/authorize?x=1' };
+  assert.ok(await until(() => byLabel('Open the sign-in page')));
+  const input = all().find((n) => n.tagName === 'INPUT');
+  input.value = 'SECRET-CODE-123#state';
+  byLabel('Continue').click();
+  assert.ok(await until(() => calls.some((c) => c.url === '/api/claude-signin/code')));
+  assert.deepEqual(calls.find((c) => c.url === '/api/claude-signin/code').body, { code: 'SECRET-CODE-123#state', id: 'att-1' });
+  // back to a link state (a fresh poll), then close: the cancel names the attempt
+  hub.attempt = { state: 'link', id: 'att-1', link: 'https://claude.ai/oauth/authorize?x=1' };
+  assert.ok(await until(() => byLabel('Close') && byLabel('Open the sign-in page')));
+  byLabel('Close').click();
+  assert.ok(await until(() => calls.some((c) => c.url === '/api/claude-signin/cancel')));
+  assert.deepEqual(calls.find((c) => c.url === '/api/claude-signin/cancel').body, { id: 'att-1' });
+  assert.equal(hub.attempt.state, 'cancelled', 'the server took the cancel (not stale)');
+});
+
+test('panel: a stale answer re-reads the state and shows the current attempt, which the next calls name', async () => {
+  resetHub({ startAttempt: { state: 'link', id: 'att-1', link: 'https://claude.ai/first' } });
+  CS.openPanel({ pollMs: 100000 });
+  assert.ok(await until(() => byLabel('Open the sign-in page')));
+  assert.equal(byLabel('Open the sign-in page').getAttribute('href'), 'https://claude.ai/first');
+  // another admin started a new attempt meanwhile
+  hub.attempt = { state: 'link', id: 'att-2', link: 'https://claude.ai/second' };
+  all().find((n) => n.tagName === 'INPUT').value = 'SECRET-CODE-123#state';
+  byLabel('Continue').click();
+  assert.ok(await until(() => byLabel('Open the sign-in page') && byLabel('Open the sign-in page').getAttribute('href') === 'https://claude.ai/second'), 'the current attempt is shown');
+  const i = calls.findIndex((c) => c.url === '/api/claude-signin/code');
+  assert.ok(i >= 0 && calls.slice(i + 1).some((c) => c.method === 'GET'), 'the state was read again after the 409');
+  assert.doesNotMatch(bodyText(), /SECRET-CODE-123/);
+  assert.equal(calls.filter((c) => c.url === '/api/claude-signin/start').length, 1, 'no second start');
+  byLabel('Close').click();
+  assert.ok(await until(() => calls.some((c) => c.url === '/api/claude-signin/cancel')));
+  assert.deepEqual(calls.find((c) => c.url === '/api/claude-signin/cancel').body, { id: 'att-2' });
+});
+
+test('panel: installing shows that Claude Code is being installed, keeps polling, and closing cancels it', async () => {
+  resetHub({ startAttempt: { state: 'starting', id: 'att-1' } });
+  CS.openPanel({ pollMs: 5 });
+  assert.ok(await until(() => calls.some((c) => c.url === '/api/claude-signin/start')));
+  hub.attempt = { state: 'installing', id: 'att-1' };
+  assert.ok(await until(() => /Installing Claude Code on that computer…/.test(bodyText())), 'the installing sentence');
+  assert.deepEqual(buttons().map((b) => b.textContent), ['Close']);
+  // it goes on to the link when the install is done
+  hub.attempt = { state: 'link', id: 'att-1', link: 'https://claude.ai/oauth/authorize?x=1' };
+  assert.ok(await until(() => byLabel('Open the sign-in page')));
+  assert.doesNotMatch(bodyText(), /Installing Claude Code/);
+  // an open panel that finds an installing attempt resumes it (no second start)
+  CS._reset();
+  doc.body.all().filter((n) => n.getAttribute && n.getAttribute('role') === 'dialog').forEach((n) => n.parentNode && n.parentNode.removeChild(n));
+  resetHub({ attempt: { state: 'installing', id: 'att-9' } });
+  CS.openPanel({ pollMs: 5 });
+  assert.ok(await until(() => /Installing Claude Code on that computer…/.test(bodyText())));
+  assert.equal(calls.filter((c) => c.url === '/api/claude-signin/start').length, 0);
+  byLabel('Close').click();
+  assert.ok(await until(() => calls.some((c) => c.url === '/api/claude-signin/cancel')), 'closing while installing cancels');
+  assert.deepEqual(calls.find((c) => c.url === '/api/claude-signin/cancel').body, { id: 'att-9' });
 });
 
 test('panel: reopening while an attempt runs resumes it (no second start)', async () => {

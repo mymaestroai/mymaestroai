@@ -116,7 +116,7 @@ test('version ranking ignores dates and snapshot numbers', () => {
 });
 
 test('a failed Claude turn caused by the sign-in gets the fix in plain words; other failures do not', () => {
-  for (const t of ['Invalid API key · Please run /login', 'OAuth token has expired. Please obtain a new token or refresh your existing token.', 'authentication_error', 'Not logged in']) {
+  for (const t of ['Invalid API key · Please run /login', 'Failed to authenticate: OAuth session expired and could not be refreshed', 'Login expired · Please run /login', 'Not logged in · Please run /login']) {
     const fix = claudeAuth.signInFixText(t);
     assert.match(fix, /Claude is signed out on the computer that runs your Maestro/, t);
     assert.match(fix, /mymaestro connect claude/, t);
@@ -124,10 +124,11 @@ test('a failed Claude turn caused by the sign-in gets the fix in plain words; ot
     assert.doesNotMatch(fix, /CLAUDE_CODE_OAUTH_TOKEN|setup-token|`\/exit`|type `claude`/, t);
     assert.strictEqual(fix, claudeAuth.SIGN_IN_HELP, 'one text for every caller');
   }
-  for (const t of ['API Error: 529 overloaded', 'Claude AI usage limit reached', 'context window exceeded', 'Your account is on hold', 'Could not refresh your login because another Claude Code process is refreshing it', '']) assert.strictEqual(claudeAuth.signInFixText(t), '', t);
+  for (const t of ['API Error: 529 overloaded', 'Claude AI usage limit reached', 'context window exceeded', 'Your account is on hold', 'Could not refresh your login because another Claude Code process is refreshing it', '',
+    'Invalid API key', 'Unauthorized', '401 Unauthorized from MCP server x', 'request reached its time limit']) assert.strictEqual(claudeAuth.signInFixText(t), '', t);
   const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'sdk-chat.js'), 'utf8');
   assert.match(src, /if \(resultSignIn\) raiseSignIn\(msg\.result\);/, 'a failed result with the sign-in sentence shows the help once');
-  assert.match(src, /if \(signInRaised \|\| isSignInFailure\(err\.message, sdkErrorSeen\)\) \{\s*raiseSignIn\(err\.message\);/, 'so does a crashed client, without the "stopped unexpectedly" sentence');
+  assert.match(src, /const signedOutCrash = signInRaised \|\| isSignInFailure\(err\.message, sdkErrorSeen\);[\s\S]*?if \(signedOutCrash\) \{\s*raiseSignIn\(err\.message\);/, 'so does a crashed client, without the "stopped unexpectedly" sentence');
   assert.match(src, /\{ type: 'claude_signin', detail: signInDetail \}/, 'the page gets one claude_signin event');
   assert.match(src, /\{ claudeSignin: true, claudeSigninDetail: signInDetail \}/, 'the saved row says so');
 });

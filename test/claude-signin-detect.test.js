@@ -24,19 +24,40 @@ const RELATIVES = [
   'Failed to authenticate: your claude.ai login expired',
 ];
 
-test('the literal sentence and every relative are recognised as a sign-in failure', () => {
-  assert.match(SENTENCE, auth.SIGN_IN_FAILURE_RE);
+test('the literal sentence and every relative are recognised as a sign-in failure (the Claude client\'s own sentences)', () => {
+  assert.match(SENTENCE, auth.CLAUDE_SIGNIN_RE);
   assert.equal(auth.signInFixText(SENTENCE), auth.SIGN_IN_HELP);
-  for (const t of RELATIVES) { assert.match(t, auth.SIGN_IN_FAILURE_RE, t); assert.equal(auth.signInFixText(t), auth.SIGN_IN_HELP, t); }
-  for (const t of ['Invalid API key · Please run /login', 'OAuth token has expired', 'authentication_error', 'Not logged in']) assert.match(t, auth.SIGN_IN_FAILURE_RE, t);
+  assert.equal(auth.isSignInFailure(SENTENCE), true);
+  for (const t of RELATIVES) { assert.match(t, auth.CLAUDE_SIGNIN_RE, t); assert.equal(auth.signInFixText(t), auth.SIGN_IN_HELP, t); assert.equal(auth.isSignInFailure(t), true, t); }
+  for (const t of ['Invalid API key · Please run /login', 'Run claude auth login to sign in', 'OAuth session expired and could not be refreshed']) assert.match(t, auth.CLAUDE_SIGNIN_RE, t);
 });
 
 test('other failures are not sign-in failures', () => {
   for (const t of ['API Error: 529 overloaded', 'Claude AI usage limit reached', 'context window exceeded', 'Your account is on hold',
     'Could not refresh your login because another Claude Code process is refreshing it', '']) {
-    assert.doesNotMatch(t, auth.SIGN_IN_FAILURE_RE, t);
+    assert.doesNotMatch(t, auth.CLAUDE_SIGNIN_RE, t);
     assert.equal(auth.signInFixText(t), '', t);
   }
+});
+
+test('generic words other providers and MCP servers use are NOT a Claude sign-in failure', () => {
+  for (const t of ['Invalid API key', 'invalid api key provided', 'Incorrect API key provided: sk-xxxx', 'Unauthorized', '401 Unauthorized from MCP server notes',
+    'Error: request failed with status 401 Unauthorized', 'request reached its time limit', 'The operation reached its time limit', 'OAuth token has expired', 'token expired',
+    'credentials invalid', 'authentication_error', 'Authentication error', 'Not logged in', 'Please sign in again to the dashboard', 'run setup-token', 'cannot be renewed']) {
+    assert.doesNotMatch(t, auth.CLAUDE_SIGNIN_RE, t);
+    assert.equal(auth.isSignInFailure(t), false, t);
+    assert.equal(auth.signInFixText(t), '', t);
+  }
+  assert.equal(auth.isSignInFailure('Unauthorized', 'authentication_failed'), true, 'the SDK\'s own mark still counts');
+});
+
+test('sanitizeSignInDetail: no link, no address, no long token; whitespace collapsed; at most 300', () => {
+  const raw = 'Failed to authenticate: please visit https://claude.example/oauth/authorize?code=abc&state=xyz or ask sam.example@mail.example about  \n  token sk-ant-oat01-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789 now';
+  const clean = auth.sanitizeSignInDetail(raw);
+  assert.doesNotMatch(clean, /https?:|@|oauth|sk-ant|AbCdEf/);
+  assert.match(clean, /^Failed to authenticate: please visit or ask about token now$/);
+  assert.equal(auth.sanitizeSignInDetail('x '.repeat(400)).length, 300);
+  assert.equal(auth.sanitizeSignInDetail(null), '');
 });
 
 test('isSignInFailure: the SDK mark counts, so does the text, ordinary text does not', () => {
@@ -215,6 +236,39 @@ test('turn: the client crashes after the sign-in sentence: help (saved), no "sto
     assertSignedOutTurn(s, 'crash');
     assert.ok(!/stopped unexpectedly/.test(textOf(s.events)));
   }
+});
+
+test('turn: a sign-in crash sends the claude_signin event and the help only (no turn_error, no session_interrupted)', async () => {
+  const s = sdkRun({ messages: [], throwMessage: SENTENCE });
+  await s.exec();
+  assertSignedOutTurn(s, 'crash only');
+  assert.equal(gw(s.events, 'turn_error').length, 0);
+  assert.equal(gw(s.events, 'session_interrupted').length, 0);
+});
+
+test('turn: the detail in the event and the saved row carries no link, address or long token', async () => {
+  const text = 'Failed to authenticate: sign in at https://claude.example/oauth/authorize?code=true&state=abcdefghijklmnopqrstuvwxyz as sam.example@mail.example';
+  const msg = { type: 'assistant', error: 'authentication_failed', message: { content: [{ type: 'text', text }] } };
+  const s = sdkRun({ messages: [msg] });
+  await s.exec();
+  const ev = gw(s.events, 'claude_signin');
+  assert.equal(ev.length, 1);
+  assert.match(ev[0].detail, /^Failed to authenticate: sign in at as$/);
+  const meta = assistantRows(s).at(-1).meta;
+  assert.equal(meta.claudeSigninDetail, ev[0].detail);
+  assert.doesNotMatch(JSON.stringify([ev, meta]), /https?:|@|oauth|abcdefghijklmnopqrstuvwxyz/);
+});
+
+test('turn: an MCP server\'s 401 in a thrown error is not a Claude sign-in failure', async () => {
+  const s = sdkRun({ messages: [], throwMessage: 'MCP server notes failed: 401 Unauthorized (invalid API key)' });
+  await s.exec();
+  assert.equal(gw(s.events, 'claude_signin').length, 0);
+  assert.match(textOf(s.events), /stopped unexpectedly/);
+  assert.equal(gw(s.events, 'turn_error').length, 1);
+  assert.equal(gw(s.events, 'session_interrupted').length, 1);
+  const r = sdkRun({ messages: [{ type: 'result', subtype: 'success', is_error: true, result: '401 Unauthorized from MCP server notes', usage: {} }] });
+  await r.exec();
+  assert.equal(gw(r.events, 'claude_signin').length, 0);
 });
 
 test('turn: any other failure is unchanged (no help, no event, the usual crash sentence)', async () => {

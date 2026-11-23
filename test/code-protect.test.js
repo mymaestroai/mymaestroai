@@ -249,6 +249,17 @@ test('setting a password or turning off two-factor from an agent\'s shell is ref
   }
 });
 
+test('signing Claude in (`connect`) from an agent\'s shell is refused, plain and quoted; doctor and the other commands are not', () => {
+  for (const cmd of ['mymaestro connect claude', `node ${P('scripts', 'hub-cli.js')} connect claude`, `${P('scripts', 'hub-cli.js')} connect claude`, 'sudo mymaestro connect claude',
+    'cd /tmp && mymaestro connect claude', "sh -c 'mymaestro connect claude'", 'bash -c "mymaestro connect claude"', '`mymaestro connect claude`', '$(mymaestro connect claude)',
+    `bash -c '${P('scripts', 'hub-cli.js')} connect claude'`, 'mymaestro connect', 'echo hi; mymaestro connect claude', `node "${P('scripts', 'hub-cli.js')}" connect claude`, '"mymaestro" connect claude']) {
+    assert.ok(refused(dec(lead, 'Bash', { command: cmd })), cmd);
+  }
+  for (const cmd of ['mymaestro doctor', 'mymaestro status', `node ${P('scripts', 'hub-cli.js')} doctor`, "sh -c 'mymaestro doctor'", 'echo "mymaestro-connect"', 'mymaestro logs']) {
+    assert.ok(!refused(dec(lead, 'Bash', { command: cmd })), cmd);
+  }
+});
+
 test('r2: the same commands inside quotes or backticks (sh -c, bash -c, command substitution) are refused', () => {
   for (const cmd of ["sh -c 'mymaestro reset-password x'", 'bash -c "mymaestro reset-2fa x"', '`mymaestro reset-password x`', '$(mymaestro reset-2fa x)',
     `bash -c '${P('scripts', 'hub-cli.js')} reset-password x'`, "sh -c 'sudo mymaestro reset-password x'", "sh -c 'mymaestro update'"]) {

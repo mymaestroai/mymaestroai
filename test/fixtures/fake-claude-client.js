@@ -8,6 +8,7 @@
 //                        anything else -> "OAuth error: Invalid code. Please make sure the full code was copied", exit 1.
 // FAKE_CLAUDE_MODE=network  login prints "Failed to connect to api: getaddrinfo ENOTFOUND platform.claude.com", exit 1.
 // FAKE_CLAUDE_MODE=hang     login prints nothing and waits.
+// FAKE_CLAUDE_MODE=stay     a wrong code prints the "Invalid code" line but the client stays alive.
 const fs = require('fs');
 const path = require('path');
 
@@ -46,6 +47,7 @@ if (args[0] === 'auth' && args[1] === 'status') {
         process.exit(0);
       }
       process.stdout.write('\nOAuth error: Invalid code. Please make sure the full code was copied\n');
+      if (mode === 'stay') { buf = ''; return; }   // the client stays alive and asks again
       process.exit(1);
     });
     process.stdin.on('end', () => process.exit(1));
