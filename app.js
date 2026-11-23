@@ -11987,20 +11987,23 @@
       if (!chat.pendingImages) chat.pendingImages = [];
       // Track the decoding: a send waits for pictures still being prepared (waitForPreparingImages).
       if (!chat.imagesPreparing) chat.imagesPreparing = new Set();
+      // Each picture being prepared is a job: one that took too long is marked abandoned (waitForPreparingImages) and adds nothing when it ends.
       let settle;
-      const prepared = new Promise(res => { settle = res; });
-      chat.imagesPreparing.add(prepared);
-      prepared.then(() => chat.imagesPreparing.delete(prepared));
+      const job = { promise: null, abandoned: false };
+      job.promise = new Promise(res => { settle = res; });
+      chat.imagesPreparing.add(job);
+      job.promise.then(() => chat.imagesPreparing.delete(job));
       const objectUrl = URL.createObjectURL(file);
       
       // Resize large images to max 1600px on longest side, compress as JPEG
       const img = new Image();
       img.onerror = () => {
         URL.revokeObjectURL(objectUrl);
-        chatFileStatus(chatId, `Could not read that picture (${(file && file.name) || 'picture'}). Try a PNG or JPEG, or a screenshot of it.`, 'error');
+        if (!job.abandoned) chatFileStatus(chatId, `Could not read that picture (${(file && file.name) || 'picture'}). Try a PNG or JPEG, or a screenshot of it.`, 'error');
         settle();
       };
       img.onload = () => {
+        if (job.abandoned) { URL.revokeObjectURL(objectUrl); settle(); return; }
         try {
         const MAX_DIM = 1600;
         let base64;
@@ -12035,6 +12038,7 @@
     async function waitForPreparingImages(chatId) {
       const chat = chats[chatId];
       if (!chat || !chat.imagesPreparing || !chat.imagesPreparing.size) return true;
+      chat.sendWaiting = true;   // one waiting send per composer: a second send returns at once (sendSoloMessage / sendInterjection check this)
       chatFileStatus(chatId, 'Adding the picture…');
       // The composer is locked while waiting: words typed now must not go with the earlier message or be cleared.
       const box = document.getElementById(`input-${chatId}`);
@@ -12047,15 +12051,17 @@
       let done = false;
       const cap = new Promise(res => { timer = setTimeout(res, IMAGE_WAIT_MS); });
       try {
-        done = await Promise.race([Promise.allSettled([...chat.imagesPreparing]).then(() => true), cap.then(() => false)]);
+        done = await Promise.race([Promise.allSettled([...chat.imagesPreparing].map(j => j.promise)).then(() => true), cap.then(() => false)]);
+        if (!done) { for (const j of chat.imagesPreparing) j.abandoned = true; chat.imagesPreparing.clear(); }   // the pictures still pending are left out
       } finally {
         clearTimeout(timer);
+        chat.sendWaiting = false;
         if (box) box.readOnly = boxWas;
         if (btn) btn.disabled = btnWas;
       }
       const st = document.getElementById(`image-preview-${chatId}`)?.querySelector('.chat-file-status');
       if (st && st.textContent === 'Adding the picture…') chatFileStatus(chatId, '');   // a decode error shown meanwhile stays
-      if (!done) { chatFileStatus(chatId, 'The picture is still being prepared. Press Send again in a moment.', 'error'); return false; }
+      if (!done) { chatFileStatus(chatId, 'A picture took too long to prepare and was left out. Attach it again, or press Send to send without it.', 'error'); return false; }
       return true;
     }
     
@@ -12383,10 +12389,12 @@
     // A chat whose interjection found the turn already over sends the text as a normal message
     // once, even if the busy status has not caught up yet.
     const skipInterjectOnce = new Set();
-    async function sendInterjection(chatId) {
+    async function sendInterjection(chatId, sendOpts = null) {
       const chat = chats[chatId];
       const input = document.getElementById(`input-${chatId}`);
-      if (chat.imagesPreparing && chat.imagesPreparing.size) { if (!(await waitForPreparingImages(chatId))) return; }   // (a no-op when sendSoloMessage already waited)
+      const isVoice = !!(sendOpts && sendOpts.voice);   // a voice send never waits: the box is read at once (the caller puts the draft back right after)
+      if (!isVoice && chat.sendWaiting) return;   // one waiting send per composer
+      if (!isVoice && chat.imagesPreparing && chat.imagesPreparing.size) { if (!(await waitForPreparingImages(chatId))) return; }   // (a no-op when sendSoloMessage already waited)
       const content = input.value.trim();
       const imagesToSend = [...(chat.pendingImages || [])];   // the pictures waiting in the input go with the interjection
       if (!content && imagesToSend.length === 0) return;
@@ -12447,7 +12455,9 @@
       // sendOpts.fallback { text, images }: a message that was meant as an interjection but found the turn over. It goes
       // with its own text and pictures; the composer (what is typed or attached now) is neither read nor changed.
       const fallback = sendOpts && sendOpts.fallback ? sendOpts.fallback : null;
-      if (!fallback && !retryCount && chat.imagesPreparing && chat.imagesPreparing.size) { if (!(await waitForPreparingImages(chatId))) { notify(new Error('picture still being prepared')); return; } }   // a picture attached a moment ago is part of this send; on a timeout nothing is sent
+      const isVoice = !!(sendOpts && sendOpts.voice);   // a voice send never waits: voiceCallSend puts the draft back right after this call, so the box is read before any await
+      if (!fallback && !retryCount && !isVoice && chat.sendWaiting) return;   // one waiting send per composer: a second send returns at once
+      if (!fallback && !retryCount && !isVoice && chat.imagesPreparing && chat.imagesPreparing.size) { if (!(await waitForPreparingImages(chatId))) { notify(new Error('picture still being prepared')); return; } }   // a picture attached a moment ago is part of this send; on a timeout nothing is sent
       const content = fallback ? String(fallback.text || '').trim() : input.value.trim();
       const pendingImages = fallback ? [...(fallback.images || [])] : (chat.pendingImages || []);
 
@@ -12459,7 +12469,7 @@
       const agentWorking = chat.status === 'thinking' || !!(liveNow && liveNow.busy);
       if ((content || pendingImages.length > 0) && agentWorking && !skipInterjectOnce.delete(chatId)) {
         notify(null);   // a voice message into a working agent goes as an interjection
-        return sendInterjection(chatId);
+        return sendInterjection(chatId, sendOpts);
       }
       skipInterjectOnce.delete(chatId);   // a fallback send has used its pass (the check above stepped aside for it, or the agent was not busy)
       if (!retryCount) { chat.voiceTurn = !!chat.voiceDictated; chat.voiceDictated = false; }   // this reply follows a mic dictation: read it aloud when it ends (if the device asks for that)

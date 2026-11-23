@@ -23,6 +23,7 @@ let chatOpenSeq = 0;           // bumped by every history load of the open chat:
 const streams = new Map();     // agent -> { controller, agent, text, bubble, userEl, full, tools, startedAt, ... }
 const recentOwn = new Map();   // agent -> time our own stream for it ended (dedupes the hub's turn_end)
 let pendingImages = [];
+let draftGen = 0;              // bumped by openChat where it clears pendingImages: a picture or send that started in an older draft is dropped
 let stick = true;
 const live = {};               // name -> { busy, busySince, activity, pendingQuestion } from the hub
 const turnSteps = {};          // name -> chatViewStepsNew() state: the tool calls the agent is running now, per turn (turn_activity)
@@ -7743,6 +7744,7 @@ async function openChat(name) {
   const ra = reattaches.get(name);
   if (same && ((rec && bubbleLive(rec)) || (ra && bubbleLive(ra)))) { paintChatStatus(); return; }
   pendingImages = [];
+  draftGen++;   // a new draft: pictures and sends that started in the old one do not carry over
   renderPreviews();
   if (!same) restoreDraft(name);   // each chat keeps its own draft; the box no longer carries text from another agent
   chatEl().innerHTML = '';
@@ -9311,10 +9313,13 @@ function renderPreviews() {
 }
 
 // Pictures still being decoded (a send waits for them, up to IMAGE_WAIT_MS, so a picture attached a moment ago is not left behind).
+// Each is a job { promise, abandoned }: one still pending when the wait runs out is marked abandoned and adds nothing when it ends.
 const imagesPreparing = new Set();
 const IMAGE_WAIT_MS = 15000;
+let sendWaiting = false;   // a send is waiting for pictures: a second send returns at once
 async function waitForPreparingImages() {
   if (!imagesPreparing.size) return true;
+  sendWaiting = true;
   toast('Adding the picture…');
   // The composer is locked while waiting: words typed now must not go with the earlier message or be cleared.
   const box = $('msg-input');
@@ -9327,25 +9332,29 @@ async function waitForPreparingImages() {
   let done = false;
   const cap = new Promise(res => { timer = setTimeout(res, IMAGE_WAIT_MS); });
   try {
-    done = await Promise.race([Promise.allSettled([...imagesPreparing]).then(() => true), cap.then(() => false)]);
+    done = await Promise.race([Promise.allSettled([...imagesPreparing].map(j => j.promise)).then(() => true), cap.then(() => false)]);
+    if (!done) { for (const j of imagesPreparing) j.abandoned = true; imagesPreparing.clear(); }   // the pictures still pending are left out
   } finally {
     clearTimeout(timer);
+    sendWaiting = false;
     if (box) box.readOnly = boxWas;
     if (btn) btn.disabled = btnWas;
   }
-  if (!done) { toast('The picture is still being prepared. Press Send again in a moment.'); return false; }
+  if (!done) { toast('A picture took too long to prepare and was left out. Attach it again, or press Send to send without it.'); return false; }
   return true;
 }
 
 function addImageFile(file) {
-  const attachedIn = current;   // the picture belongs to the chat it was attached in
+  const attachedGen = draftGen;   // the picture belongs to the draft it was attached in (A -> B -> A is another draft)
   let settle;
-  const prepared = new Promise(res => { settle = res; });
-  imagesPreparing.add(prepared);
-  prepared.then(() => imagesPreparing.delete(prepared));
+  const job = { promise: null, abandoned: false };
+  job.promise = new Promise(res => { settle = res; });
+  imagesPreparing.add(job);
+  job.promise.then(() => imagesPreparing.delete(job));
   const url = URL.createObjectURL(file);
   const img = new Image();
   img.onload = () => {
+    if (job.abandoned) { URL.revokeObjectURL(url); settle(); return; }   // it took too long and was left out: nothing is added or shown
     try {
     const MAX_DIM = 1600;
     let { width, height } = img;
@@ -9366,14 +9375,14 @@ function addImageFile(file) {
       toast(`Could not read that picture (${(file && file.name) || 'picture'}). Try a PNG or JPEG, or a screenshot of it.`);
       return;
     }
-    if (current !== attachedIn) { toast('The picture was not added because you switched chats.'); return; }
+    if (draftGen !== attachedGen) { toast('The picture was not added because you switched chats.'); return; }
     pendingImages.push(data);
     renderPreviews();
     } finally { URL.revokeObjectURL(url); settle(); }
   };
   img.onerror = () => {
     URL.revokeObjectURL(url);
-    toast(`Could not read that picture (${(file && file.name) || 'picture'}). Try a PNG or JPEG, or a screenshot of it.`);
+    if (!job.abandoned) toast(`Could not read that picture (${(file && file.name) || 'picture'}). Try a PNG or JPEG, or a screenshot of it.`);
     settle();
   };
   img.src = url;
@@ -11892,7 +11901,12 @@ async function sendMessage(fallback) {
   const notify = (err) => { const f = fallback && fallback.onSendResult; if (typeof f !== 'function') return; fallback.onSendResult = null; try { f(err); } catch { /* the caller's problem */ } };
   if (!current) { notify(new Error('no agent')); toast('Pick an agent first'); return; }
   const agent = fallback ? fallback.agent : current;
-  if (!fallback && imagesPreparing.size) { if (!(await waitForPreparingImages())) return; if (current !== agent) { toast('Not sent: you switched chats.'); return; } }   // a picture attached a moment ago is part of this send
+  if (!fallback && sendWaiting) return;   // one waiting send per composer: a second send returns at once, without touching the lock
+  if (!fallback && imagesPreparing.size) {   // a picture attached a moment ago is part of this send
+    const gen = draftGen;   // this send belongs to the draft it started in
+    if (!(await waitForPreparingImages())) return;
+    if (draftGen !== gen) { toast('Not sent: you switched chats.'); return; }
+  }
   // While the agent is busy (a turn this phone is streaming or one started elsewhere) the
   // composer interjects into that turn; Stop is in the header.
   if (!fallback && (isBusy(agent) || ownTurnFor(agent))) { await sendInterjection(agent); return; }

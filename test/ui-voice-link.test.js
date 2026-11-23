@@ -298,6 +298,14 @@ test('pages: a network failure is charged only to the call that was up when the 
   for (const fn of ['voiceFetchTts', 'voiceCallApi', 'voiceCallStt']) assert.match(app.slice(app.indexOf(`function ${fn}(`), app.indexOf(`function ${fn}(`) + 900), /const linkOwner = typeof voiceLinkOwner === 'function' \? voiceLinkOwner\(\) : null;[^]*voiceLinkNetFail\(e, linkOwner\)/, fn);
   assert.match(app, /seq = \+\+S\.sendSeq, linkOwner = S\.call;[^]*voiceLinkNetFail\(err, linkOwner\)/);
   assert.match(mob, /function voiceLinkNetFail\(e, vc, agent\) \{\n\s+if \(!e \|\| e\.name !== 'TypeError'\) return;\n\s+const v = vc;/);
-  for (const fn of ['voiceTtsBlob', 'voiceCallStt', 'sendMessage']) assert.match(mob.slice(mob.indexOf(`function ${fn}(`), mob.indexOf(`function ${fn}(`) + 6500), /const linkOwner = typeof voiceCall !== 'undefined' \? voiceCall : null;[^]*voiceLinkNetFail\(e, linkOwner, agent\)/, fn);
+  // The whole function body: from its `function` line to the next top-level `\n}\n` or the next top-level function, so it does not break when the function grows.
+  const wholeFn = (src, fn) => {
+    const from = src.indexOf(`function ${fn}(`);
+    assert.ok(from >= 0, `${fn} is in the page`);
+    const rest = src.slice(from + 1);
+    const ends = [rest.indexOf('\n}\n'), rest.search(/\n(?:async )?function /)].filter(n => n >= 0);
+    return src.slice(from, from + 1 + Math.min(...ends));
+  };
+  for (const fn of ['voiceTtsBlob', 'voiceCallStt', 'sendMessage']) assert.match(wholeFn(mob, fn), /const linkOwner = typeof voiceCall !== 'undefined' \? voiceCall : null;[^]*voiceLinkNetFail\(e, linkOwner, agent\)/, fn);
   assert.match(app, /S\.focusTry === focusTry/, 'a late focus refusal from an earlier call never shows the hint in a newer one');
 });
