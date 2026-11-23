@@ -196,3 +196,11 @@ test('the phone service worker is v79 and the panel has its CSS', () => {
   for (const c of ['.wo-ring', '.wo-row', '.wo-kind', '.wo-title', '.wo-sub', '.wo-quiet', '.wo-stop']) assert.ok(html.includes(c), c);
   assert.match(html, /\.wo-quiet \{[^}]*dashed/);
 });
+
+test('r2 phone wiring: openChat calls HandOffCard.follow() right after current changes', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const assert = require('node:assert/strict');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'mobile.js'), 'utf8');
+  assert.match(src, /current = name;\s*\n\s*try \{ if \(window\.HandOffCard && typeof HandOffCard\.follow === 'function'\) HandOffCard\.follow\(\)/);
+});

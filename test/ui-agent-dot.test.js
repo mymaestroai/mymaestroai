@@ -113,3 +113,12 @@ test('applyDot: a caller\'s newer title set while the state stays non-background
   D.applyDot(el, 'free', {});
   assert.equal(el.attrs.title, 'Hazel · typing');
 });
+
+test('r2 applyDot: leaving background restores only its own label; a caller\'s newer title stays', () => {
+  const el = fakeEl({ title: 'Hazel' });
+  D.applyDot(el, 'background', { background: 1 });
+  el.setAttribute('title', 'Waiting for your answer');   // the caller wrote its own text meanwhile
+  D.applyDot(el, 'question', {});
+  assert.equal(el.attrs.title, 'Waiting for your answer');
+  assert.ok(!('data-bg-prev-title' in el.attrs) && !('data-bg-set-title' in el.attrs), 'the memory is cleared');
+});

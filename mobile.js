@@ -7771,6 +7771,7 @@ async function openChat(name) {
   if (!same && voiceCall) voiceCallHangUp();   // switching to another agent's chat ends a hands-free call
   if (!same && tsnSheetFor) closeToolsSheet();   // the full screen of another chat's calls
   current = name; if (typeof voiceHintSync === 'function') voiceHintSync();   // a chat switch takes the hint down
+  try { if (window.HandOffCard && typeof HandOffCard.follow === 'function') HandOffCard.follow(); } catch { /* the timer tick follows */ }   // the "Working on" panel follows the chat at once
   localStorage.setItem('hub-mobile-last', name);
   voiceStatusRefresh();   // the mic button shows only while the hub voice is on and ready
   researchLinePaint(); researchLineLoad(name);   // the deep research progress line

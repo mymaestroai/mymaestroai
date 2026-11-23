@@ -283,3 +283,60 @@ test('r1 track: switching agent empties the container at once; a late answer for
     assert.equal(box.children.length, 0, "A's late answer is not rendered under B");
   } finally { global.setTimeout = realTimeout; global.setInterval = realInterval; }
 });
+
+test('r2 follow(): switching agent then calling follow() empties the container synchronously, no timer tick', async () => {
+  const doc = fakeDoc(); const box = doc.createElement('div');
+  const realTimeout = global.setTimeout, realInterval = global.setInterval;
+  global.setTimeout = () => 1;
+  global.setInterval = (fn) => { sharedTick = fn; return 1; };
+  try {
+    let agent = 'agent-a';
+    const pending = {};
+    const fetchFn = (u) => new Promise((resolve) => { pending[u] = resolve; });
+    const seen = () => new Promise((r) => setImmediate(r)).then(() => new Promise((r) => setImmediate(r)));
+    H.track({ getAgent: () => agent, getContainer: () => box, fetchFn, storage: memStorage() });
+    H.follow();
+    pending['/api/agents/agent-a/working-on']({ ok: true, status: 200, json: async () => ({ ok: true, count: 1, handOffs: [], jobs: null, jobCount: 0, workers: [{ id: 'w', label: 'A-row', startedAt: new Date().toISOString() }], nextCheck: null }) });
+    await seen();
+    assert.ok(textOf(box).includes('Working on: 1 thing'));
+    agent = 'agent-b';
+    H.follow();
+    assert.equal(box.children.length, 0, 'emptied synchronously by follow()');
+    assert.equal(box.hidden, true);
+  } finally { global.setTimeout = realTimeout; global.setInterval = realInterval; }
+});
+
+test('r2 an answer for A arriving after the live agent became B is not painted, even if no tick ran', async () => {
+  const doc = fakeDoc(); const box = doc.createElement('div');
+  const realTimeout = global.setTimeout, realInterval = global.setInterval;
+  global.setTimeout = () => 1;
+  global.setInterval = (fn) => { sharedTick = fn; return 1; };
+  try {
+    let agent = 'agent-a';
+    const pending = {};
+    const fetchFn = (u) => new Promise((resolve) => { pending[u] = resolve; });
+    const seen = () => new Promise((r) => setImmediate(r)).then(() => new Promise((r) => setImmediate(r)));
+    H.track({ getAgent: () => agent, getContainer: () => box, fetchFn, storage: memStorage() });
+    H.follow();
+    agent = 'agent-b';   // the chat changed; no tick, no follow
+    pending['/api/agents/agent-a/working-on']({ ok: true, status: 200, json: async () => ({ ok: true, count: 1, handOffs: [], jobs: null, jobCount: 0, workers: [{ id: 'w', label: 'A-row', startedAt: new Date().toISOString() }], nextCheck: null }) });
+    await seen();
+    assert.equal(box.children.length, 0, "A's rows are not painted into B's chat");
+  } finally { global.setTimeout = realTimeout; global.setInterval = realInterval; }
+});
+
+test('r2 a Stop on a row whose agent is no longer current calls neither stopJob nor stopWorker', async () => {
+  const doc = fakeDoc(); const box = doc.createElement('div');
+  const calls = [];
+  let live = 'sam';
+  H.renderPanel(box, FULL(), {
+    now: NOW, fmt, storage: memStorage(), expanded: true, agent: 'sam', liveAgent: () => live,
+    stopJob: async (id) => { calls.push(['job', id]); }, stopWorker: async (id) => { calls.push(['worker', id]); },
+  });
+  live = 'other';
+  const rows = find(box, 'wo-row');
+  find(rows[1], 'wo-stop')[0].click();
+  find(rows[2], 'wo-stop')[0].click();
+  for (let i = 0; i < 3; i++) await new Promise((r) => setImmediate(r));
+  assert.deepEqual(calls, []);
+});

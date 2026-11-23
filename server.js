@@ -2544,7 +2544,7 @@ async function handleHttpRequest(req, res) {
       const allAgents = await getAgents();
       const isAdmin = access.isAdmin(req.hubUser);
       const visible = (name) => isAdmin || access.canAccessAgent(req.hubUser, name, { agents: allAgents, resolveVirtual: (n) => temporalWorkersLib.getVirtual(n) });
-      return require('./lib/hub-events').events.subscribe(req, res, { isAdmin, visibleAgent: visible, statusView: (m) => isAdmin ? m : access.statusForViewer(req.hubUser, m, { agents: allAgents, resolveVirtual: (n) => temporalWorkersLib.getVirtual(n) }), filter: (ev) => visible(ev.agent) });
+      return require('./lib/hub-events').events.subscribe(req, res, { isAdmin, visibleAgent: visible, statusView: (m) => isAdmin ? m : access.statusForViewer(req.hubUser, m, { agents: allAgents, resolveVirtual: (n) => temporalWorkersLib.getVirtual(n) }), filter: (ev) => ev.type === 'background' ? require('./lib/background-work').backgroundEventVisible(req.hubUser, ev, { agents: require('./lib/agents').getAgentsSync(), resolveVirtual: (n) => temporalWorkersLib.getVirtual(n), access }) : visible(ev.agent) });
     }
 
     // ── Worker Routes ───────────────────────────────────────────────

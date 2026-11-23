@@ -1581,10 +1581,12 @@
     // Hand-off cards above the message box (lib/ui-hand-off-card.js): follows the open one-agent chat.
     if (window.HandOffCard && globalThis.mmSettingsOnly !== true) HandOffCard.track({ getAgent: filesActiveAgent, getContainer: () => document.getElementById('handoff-cards-' + window.__activeChatId), renderMarkdown: (t) => window.formatContentForSheets(t),
       isAdmin: () => isHubAdmin(),   // the page's own rule (an install with no accounts is its admin's)
-      stopJob: (id) => workingOnPost('/api/jobs/cancel', { id }),
-      stopWorker: (id, agent) => workingOnPost('/api/cancel-worker', { worker_id: id, agent }) });
+      stopJob: (id) => workingOnPost('/api/jobs/cancel', { id }, window.__activeChatId),   // the chat id is read at the click
+      stopWorker: (id, agent) => workingOnPost('/api/cancel-worker', { worker_id: id, agent }, window.__activeChatId) });
     // The "Working on" panel's Stop buttons (same fetch shape as the Workers menu's cancelWorker and jobsApi).
-    function workingOnPost(url, body) {
+    // chatId: the chat the Stop was pressed in; every failure (refused or no answer) is reported there, not in whichever chat is open later.
+    function workingOnPost(url, body, chatId = window.__activeChatId) {
+      const say = (text) => { try { if (typeof chatFileStatus === 'function' && chatId) chatFileStatus(chatId, text, 'error'); } catch {} };
       return fetch(url, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
         .then(async (res) => {
           const data = await res.json().catch(() => null);
@@ -1593,10 +1595,10 @@
           if (refused) {
             const why = data && (data.error || data.message || data.reason);
             const text = "Couldn't stop it" + (why ? ': ' + String(why).replace(/_/g, ' ') : (res.status ? ' (' + res.status + ')' : '') + '.');
-            try { if (typeof chatFileStatus === 'function' && window.__activeChatId) chatFileStatus(window.__activeChatId, text, 'error'); } catch {}
+            say(text);
           }
           return data;
-        }).catch(() => null);
+        }).catch(() => { say("Couldn't stop it: the hub did not answer"); return null; });
     }
     function filesOwnerParam() {
       const me = window.hubMe;
@@ -11666,6 +11668,7 @@
       if (opened && !opened.isGroup && !opened.isWorker && !opened.isHistory && opened.agent) { try { busyCardRefresh(opened); } catch {} }   // the status line and card follow the hub's feed on arrival
       activeChat = chatId;
       window.__activeChatId = chatId;
+      try { if (window.HandOffCard && typeof HandOffCard.follow === 'function') HandOffCard.follow(); } catch { /* the panel follows at once; a failure leaves the timer tick */ }
       if (document.getElementById('files-panel')) filesRefresh(); // the Files panel follows the active chat's agent
       if (opened && !opened.isGroup && !opened.isWorker && opened.agent) { researchLinePaint(); researchLineLoad(opened.agent); }   // the deep research progress line
       if (document.getElementById('recall-panel') && chats[chatId] && !chats[chatId].isGroup && chats[chatId].agent && String(chats[chatId].agent) !== recallState.agent) openRecallPanel(chatId); // so does Recall
@@ -11706,6 +11709,7 @@
         document.querySelectorAll('.chat-container.active, .chat-tab.active').forEach(el => el.classList.remove('active'));
         activeChat = null;
         window.__activeChatId = null;
+        try { if (window.HandOffCard && typeof HandOffCard.follow === 'function') HandOffCard.follow(); } catch { /* the timer tick follows */ }
         document.getElementById('empty-state').style.display = 'flex';
         if (document.getElementById('files-panel')) filesRefresh();
       }

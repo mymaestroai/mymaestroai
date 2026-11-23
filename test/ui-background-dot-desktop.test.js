@@ -197,11 +197,11 @@ test('HandOffCard.track gets isAdmin, stopJob and stopWorker; they post the usua
   const m = /HandOffCard\.track\(\{ getAgent: filesActiveAgent[\s\S]*?\}\);/.exec(src);
   assert.ok(m, 'track call');
   assert.ok(/isAdmin: \(\) => isHubAdmin\(\)/.test(m[0]), 'the page\'s own admin rule (an install without accounts counts as admin)');
-  assert.ok(/stopJob: \(id\) => workingOnPost\('\/api\/jobs\/cancel', \{ id \}\)/.test(m[0]));
-  assert.ok(/stopWorker: \(id, agent\) => workingOnPost\('\/api\/cancel-worker', \{ worker_id: id, agent \}\)/.test(m[0]));
+  assert.ok(/stopJob: \(id\) => workingOnPost\('\/api\/jobs\/cancel', \{ id \}, window\.__activeChatId\)/.test(m[0]));
+  assert.ok(/stopWorker: \(id, agent\) => workingOnPost\('\/api\/cancel-worker', \{ worker_id: id, agent \}, window\.__activeChatId\)/.test(m[0]));
   const sent = [];
   const fetchFn = (url, opts) => { sent.push({ url, opts }); return Promise.resolve({ json: async () => ({ success: true }) }); };
-  const post = new Function('fetch', `${extract('workingOnPost')}\nreturn workingOnPost;`)(fetchFn);
+  const post = new Function('fetch', 'window', `${extract('workingOnPost')}\nreturn workingOnPost;`)(fetchFn, {});
   const r = await post('/api/jobs/cancel', { id: 'j1' });
   assert.deepStrictEqual(r, { success: true });
   await post('/api/cancel-worker', { worker_id: 'tw-hazel-1-ab', agent: 'hazel' });
@@ -247,4 +247,31 @@ test('r1: a refused Stop (403, ok false, success false) shows the reason in the 
   shown.length = 0;
   await run({ ok: true, status: 200, json: async () => ({ success: true }) });
   assert.deepStrictEqual(shown, []);
+});
+
+test('r2 desktop wiring: the panel follows the chat switch at once, and Stop reports in the chat it was pressed in', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
+  assert.match(src, /window\.__activeChatId = chatId;\s*\n\s*try \{ if \(window\.HandOffCard && typeof HandOffCard\.follow === 'function'\) HandOffCard\.follow\(\)/);
+  assert.match(src, /stopJob: \(id\) => workingOnPost\('\/api\/jobs\/cancel', \{ id \}, window\.__activeChatId\)/);
+  assert.match(src, /function workingOnPost\(url, body, chatId = window\.__activeChatId\)/);
+  assert.match(src, /Couldn't stop it: the hub did not answer/);
+});
+
+test('r2 desktop: a rejected fetch shows the message in the chat captured at the click, not the one active when it fails', async () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
+  const a = src.indexOf('function workingOnPost(');
+  const b = src.indexOf('function filesOwnerParam()');
+  assert.ok(a > 0 && b > a);
+  const shown = [];
+  let rejectFetch;
+  const win = { __activeChatId: 'chat-1' };
+  const make = new Function('window', 'fetch', 'chatFileStatus', src.slice(a, b) + '\nreturn workingOnPost;');
+  const post = make(win, () => new Promise((_, rej) => { rejectFetch = rej; }), (id, text, kind) => shown.push([id, text, kind]));
+  const p = post('/api/jobs/cancel', { id: 'j1' }, win.__activeChatId);   // the page passes the id read at the click
+  win.__activeChatId = 'chat-2';   // the person moved on before the failure
+  rejectFetch(new Error('offline'));
+  await p;
+  assert.deepStrictEqual(shown, [['chat-1', "Couldn't stop it: the hub did not answer", 'error']]);
 });

@@ -353,3 +353,43 @@ test('r1: a burst of recheckSoon calls runs recheckAll once, and a change is pub
   assert.match(src, /function backgroundRecheck\(\) \{ try \{ require\('\.\/background-work'\)\.getBackgroundWork\(\)\.recheckSoon\(\)/);
   assert.match(src, /temporalWorkers\.setChangeHook\(\(\) => backgroundRecheck\(\)\)/);
 });
+
+// ── review r2 ──
+test('r2: a row for a hidden target is built from an allowlist: no lastReply, error, folder, notes, turns', async () => {
+  const e = sources();
+  e.hoRows = [ho('ho-1', 'agent-a', 'running', { target: 'private-t' })];
+  e.shown = [{ ...ho('ho-1', 'agent-a', 'running', { target: 'private-t', folder: '/f/private-t/hand-offs/one', createdAt: T0 - 5000, topic: 'T' }),
+    status: '## Next\nsecret words', lastReply: 'DISTINCT-LAST-REPLY', error: 'DISTINCT-ERROR', notes: 'DISTINCT-NOTES', turns: ['DISTINCT-TURN'] }];
+  const view = await e.work.viewFor('agent-a', { isAdmin: false, canSee: () => false });
+  const s = JSON.stringify(view);
+  for (const bad of ['DISTINCT-LAST-REPLY', 'DISTINCT-ERROR', 'DISTINCT-NOTES', 'DISTINCT-TURN', 'secret words', 'hand-offs/one']) assert.ok(!s.includes(bad), bad);
+  const row = view.handOffs[0];
+  assert.strictEqual(row.withheld, true);
+  assert.strictEqual(row.statusLine, null);
+  assert.deepStrictEqual(Object.keys(row).sort(), ['caller', 'changedAt', 'createdAt', 'id', 'state', 'statusLine', 'target', 'topic', 'withheld']);
+  const admin = JSON.stringify(await e.work.viewFor('agent-a', { isAdmin: true }));
+  assert.ok(admin.includes('DISTINCT-LAST-REPLY') && admin.includes('DISTINCT-ERROR'));
+});
+
+test('r2: a background event is checked against the CURRENT agents at delivery', () => {
+  const { createHubEvents } = require('../lib/hub-events');
+  const ev = createHubEvents();
+  const user = { id: 'u_sam', role: 'member' };
+  let agents = [{ name: 'sam-agent', owner: 'u_sam' }];
+  const mkRes = (into) => ({ writeHead() {}, write(t) { into.push(t); return true; }, on() {}, writableLength: 0, destroy() {} });
+  const got = [];
+  const visibleAtConnect = () => true;   // true when the stream connected
+  ev.subscribe({ url: '/', headers: {} }, mkRes(got), { isAdmin: false, visibleAgent: visibleAtConnect,
+    filter: (x) => x.type === 'background' ? BW.backgroundEventVisible(user, x, { agents }) : visibleAtConnect(x.agent) });
+  const bg = () => got.filter((t) => t.includes('event: background')).length;
+  const before = bg();
+  ev.publish('background', { agent: 'sam-agent', count: 1 }, { keep: false });
+  const withAccess = bg() - before;
+  agents = [{ name: 'sam-agent', owner: 'someone-else' }];   // access gone since the connect
+  ev.publish('background', { agent: 'sam-agent', count: 2 }, { keep: false });
+  assert.strictEqual(withAccess, 1, 'with access the event arrives');
+  assert.strictEqual(bg() - before, 1, 'after access is gone the event is not delivered');
+  assert.strictEqual(BW.backgroundEventVisible({ id: 'a', role: 'admin' }, { agent: 'sam-agent' }, { agents }), true);
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  assert.match(src, /ev\.type === 'background' \? require\('\.\/lib\/background-work'\)\.backgroundEventVisible\(req\.hubUser, ev, \{ agents: require\('\.\/lib\/agents'\)\.getAgentsSync\(\)/);
+});
