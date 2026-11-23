@@ -1789,7 +1789,7 @@ async function handleHttpRequest(req, res) {
     // ── Call recordings (lib/recordings): uploads from the person on the call, and list/play/download/delete for the allowed users only ──
     if (pathname === '/api/recordings' || pathname.startsWith('/api/recordings/')) return require('./lib/recordings/routes').handle(pathname, req, res, { readBody, jsonResponse, getAgents });
     // ── Voice: local speech-to-text and text-to-speech (lib/voice) ─────────────────────────
-    if (pathname.startsWith('/api/voice/')) return require('./lib/voice/routes').handle(pathname, req, res, { readBody, jsonResponse, getAgents, getSetting: hubSettings.getSetting, updateSettings: hubSettings.updateSettings });
+    if (pathname.startsWith('/api/voice/')) return require('./lib/voice/routes').handle(pathname, req, res, { readBody, jsonResponse, getAgents, getSetting: hubSettings.getSetting, updateSettings: hubSettings.updateSettings, adminName: () => require('./lib/claude-signin-routes').adminDisplayName(hubAuth) });
     // ── Character packs for the call face view (lib/faces; packs live in <hub home>/faces) ──
     if (pathname === '/api/faces' || pathname.startsWith('/api/faces/')) return require('./lib/faces/routes').handle(pathname, req, res, { readBody, jsonResponse });
 
@@ -2912,8 +2912,8 @@ async function handleHttpRequest(req, res) {
           // only through /api/voice/enable and /disable, which also install the engines and stop or resume the worker.
           if (patch && patch.voice !== undefined) {
             const storedVoice = hubSettings.getSetting('voice');
-            patch.voice = require('./lib/voice/manifest').cleanVoiceSettings(patch.voice, storedVoice);
-            patch.voice.enabled = !!(storedVoice && storedVoice.enabled === true);
+            // updateSettings replaces the whole voice object, so an unset switch must stay absent from it (cleanVoicePatch).
+            patch.voice = require('./lib/voice/manifest').cleanVoicePatch(patch.voice, storedVoice);
           }
           const providersChanged = !!(patch && patch.providers);
           hubSettings.updateSettings(patch);
@@ -3968,7 +3968,15 @@ server.listen(PORT, HOST, () => {
   // write (lib/transcript splitCombined; the old file is kept as transcript.db.pre-split).
   try { require('./lib/transcript').getTranscript().migrate(); } catch (e) { console.error('[transcript] split not run:', e.message); }
   // A hub restart during the voice download leaves the setting on and nothing installing: pick the install up again.
-  setTimeout(() => { try { require('./lib/voice/routes').resumeIfNeeded({ getSetting: hubSettings.getSetting, log: (m) => console.log(m) }); } catch (e) { console.error('[voice] resume:', e.message); } }, 10000).unref();
+  setTimeout(() => { try { if (process.env.NODE_TEST_CONTEXT || process.env.MM_TEST_NO_REAL_CLAUDE === '1' || process.env.MM_VOICE_NO_AUTO_INSTALL === '1') return; require('./lib/voice/routes').resumeIfNeeded({ getSetting: hubSettings.getSetting, log: (m) => console.log(m) }); } catch (e) { console.error('[voice] resume:', e.message); } }, 10000).unref();
+  // Voice is on by default: about 20 s after the start, fetch the speech engines when they are missing (never under tests; never when voice was turned off).
+  setTimeout(() => {
+    try {
+      if (process.env.NODE_TEST_CONTEXT || process.env.MM_TEST_NO_REAL_CLAUDE === '1' || process.env.MM_VOICE_NO_AUTO_INSTALL === '1') return;
+      const vr = require('./lib/voice/routes');
+      vr.ensureEngines({ engine: vr.getVoice().engine, getSetting: hubSettings.getSetting, now: Date.now, log: (m) => console.log(m) });
+    } catch (e) { console.error('[voice] auto install:', e.message); }
+  }, 20000).unref();
   // After a restart the Remote computers module may still hold desktop sessions this hub no longer knows; they block agent input until ended.
   // Once, 30 s after the start (the module is up by then), only while the module is on; never throws.
   setTimeout(() => {

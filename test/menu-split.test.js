@@ -34,7 +34,7 @@ test('every item that left the ⋯ menu has its one new home in Settings', () =>
   assert.ok(!idx.includes('id="more-badge"'), 'the Advanced badge went with the switch');
   // the Settings groups hold the new sections
   assert.match(app, /\{ id: 'agents',[^}]*'st-chat-section', 'st-tuning-section'\] \}/);
-  assert.match(app, /\{ id: 'tools',[^}]*'st-voice-section', 'st-comms-section', 'st-cx-section'/);
+  assert.match(app, /\{ id: 'tools',[^}]*'st-comms-section', 'st-cx-section'/);   // voice entry: st-voice-section moved to its own Voice group
   // the tuning controls keep their ids and their page-load wiring, and live in Settings' holder (saved at once: never dirty)
   const holder = idx.slice(idx.indexOf('<div id="st-tuning-body" data-no-dirty hidden>'), idx.indexOf('<script src="/ui-voice-thinking.js">'));
   for (const c of ['prescan-toggle', 'lazy-tools-toggle', 'sdk-workers-select', 'team-guidance-select', 'caveman-toggle']) {

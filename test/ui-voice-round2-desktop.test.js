@@ -27,7 +27,8 @@ test('composer: Talk mode chip and a "Voice settings" button sit next to the mic
   assert.match(c, /id="vset-\$\{chatId\}" onclick="voicePopToggle\('\$\{chatId\}'\)" aria-label="Voice settings" aria-expanded="false"/);
   assert.match(c, /id="voice-pop-\$\{chatId\}" role="dialog" aria-label="Voice settings" hidden/);
   assert.match(app, /querySelectorAll\('\.input-area \.voice-extra'\)\) b\.style\.display = voiceReady\(\)/);
-  assert.ok(!/admin/i.test(between('function voicePopHtml(', 'function voicePopClose(')), 'no admin gate: members get the panel');
+  // voice entry: the panel has two admin-aware lines (the admin's "All voice settings" link, the member's "looked after by" line); every control is for everyone
+  assert.ok(!/admin/i.test(between('function voicePopHtml(', 'function voicePopClose(').split('\n').filter((l) => !/isHubAdmin/.test(l)).join('\n')), 'no admin gate: members get the panel');
 });
 
 test('panel: every control of the spec is there and writes the per-device prefs', () => {
@@ -103,7 +104,7 @@ function makeEnv(opts = {}) {
     voiceThinkingOnNow: () => prefs.thinkingSound !== false, voiceModeLabel: () => (prefs.mode === 'tap' ? 'Tap to talk' : 'Hands-free'),
     VOICE_CONTINUE_WAITS: [1500, 3000, 5000],
     voiceSavePrefs: (s, p) => { prefs = { ...p }; log.saved.push({ ...p }); return { ...p }; },
-    voiceById: get, voiceReady: () => true,
+    voiceById: get, voiceReady: () => true, isHubAdmin: () => false, voiceAdminName: () => 'Sam', voiceAgentName: () => 'your agent', voiceOffText: () => 'Voice is off. Turn it on in Settings, Voice', voiceHintDismiss() {}, voiceHintHide() {},
     voiceRec: { guard: { cancel() {}, pending: false }, chatId: null, busy: false }, voiceTest: { mic: null, guard: { pending: false } },
     voiceMicStop() {}, voiceStopPlayback() { log.stopPlayback = (log.stopPlayback || 0) + 1; }, voicePlay: { token: 0, source: null },
     VOICE_MIC_SVG: '<svg>mic</svg>', voiceSentences: (t) => [t], voiceSpeechText: (t) => t, voiceSpeakText: async () => {}, voiceEncodeWav: () => new ArrayBuffer(1),

@@ -2711,6 +2711,7 @@ function updateDots() {
 function show(name) {
   if (name !== 'chat' && typeof voiceCall !== 'undefined' && voiceCall) voiceCallHangUp();   // leaving the chat view ends a hands-free call
   screen = name;
+  if (typeof voiceHintSync === 'function') voiceHintSync();
   for (const s of ['agents', 'chat', 'activity']) {
     $(`screen-${s}`).classList.toggle('active', s === name);
     $(`tab-${s}`)?.classList.toggle('active', s === name);   // Activity has no tab: it opens from the ⋮ menu
@@ -7727,7 +7728,7 @@ async function openChat(name) {
   if (typeof plusSheetShow === 'function') plusSheetShow(false);   // opening a chat closes the + sheet
   if (!same && voiceCall) voiceCallHangUp();   // switching to another agent's chat ends a hands-free call
   if (!same && tsnSheetFor) closeToolsSheet();   // the full screen of another chat's calls
-  current = name;
+  current = name; if (typeof voiceHintSync === 'function') voiceHintSync();   // a chat switch takes the hint down
   localStorage.setItem('hub-mobile-last', name);
   voiceStatusRefresh();   // the mic button shows only while the hub voice is on and ready
   researchLinePaint(); researchLineLoad(name);   // the deep research progress line
@@ -9594,6 +9595,67 @@ function voiceSpeedFor(agent) { const v = voiceEffNow(agent).voiceSpeed; return 
 function voiceEndPauseFor(agent) { const v = Number(voiceEffNow(agent).endPause); return VOICE_END_PAUSES.includes(v) ? v : 1200; }
 function voiceTakeDictated(agent) { const d = voiceDictatedFor === agent; voiceDictatedFor = null; return d; }
 function voiceOn() { return !!(voiceStatus && voiceStatus.enabled && voiceStatus.ready); }
+// ── The microphone appears only when voice is ready (on and everything downloaded); until then it is hidden, as before ──
+function voiceAgentLabel() { try { return (current && typeof displayName === 'function' && displayName(current)) || 'your agent'; } catch { return 'your agent'; } }
+function voiceAdminLabel() { return (voiceStatus && voiceStatus.adminName) || 'an admin'; }
+function voiceReadyTitle(mode) {
+  const a = voiceAgentLabel();
+  return mode === 'press' ? `Talk to ${a}: tap to talk` : mode === 'tap' ? `Dictate a message to ${a}` : `Talk to ${a}: hands-free call`;
+}
+// While voice is on, supported and not ready yet, and the page is visible, the status is read every 20 s so the microphone
+// appears by itself when the download ends (one timer at most; it stops when voice is ready or off).
+let voiceReadyPollTimer = null;
+function voiceReadyPollSync() {
+  const st = voiceStatus;
+  const need = !!(st && st.enabled && st.platformSupported !== false && !st.ready);
+  if (!need) { clearTimeout(voiceReadyPollTimer); voiceReadyPollTimer = null; return; }
+  if (voiceReadyPollTimer) return;
+  voiceReadyPollTimer = setTimeout(() => { voiceReadyPollTimer = null; if (!document.hidden) voiceStatusRefresh(); else voiceReadyPollSync(); }, 20000);
+}
+// ── One-time voice hint (phone): "New: talk to your agents. Tap the microphone." ──
+// Once per person per device (localStorage mm-voice-hint:<user id>, set the moment it is shown, when it is closed and when the mic is used).
+// Shown ~1.5 s after: a chat is open, the mic (in Simple: the call button) is shown and ready, no call is up or starting, no question box is open.
+// A small callout above the composer's row (never over the message box or Send), pointing down at the button.
+let voiceHintTimer = null, voiceHintEl = null;
+function voiceHintKey() { return 'mm-voice-hint:' + (hubMe && hubMe.user && hubMe.user.id ? String(hubMe.user.id) : 'anon'); }
+function voiceHintSeen() { try { return localStorage.getItem(voiceHintKey()) === '1'; } catch { return true; } }
+function voiceHintTarget() { return typeof simpleOn === 'function' && simpleOn() ? $('simple-call-btn') : $('mic-btn'); }
+function voiceHintCan() {
+  const t = voiceHintTarget();
+  return screen === 'chat' && !!current && !!t && !t.hidden && voiceOn() && !voiceCall && voiceRec.state === 'idle' && questionBoxes.size === 0 && !voiceHintSeen();
+}
+function voiceHintHide() { clearTimeout(voiceHintTimer); voiceHintTimer = null; if (voiceHintEl) { try { voiceHintEl.remove(); } catch { /* gone */ } voiceHintEl = null; } }
+function voiceHintDone() { try { localStorage.setItem(voiceHintKey(), '1'); } catch { /* storage blocked */ } voiceHintHide(); }
+function voiceHintPlace() {
+  const h = voiceHintEl, c = $('composer'), row = c && c.querySelector('.row'), t = voiceHintTarget();
+  if (!h || !c || !row || !t) return;
+  h.style.bottom = (c.clientHeight - row.offsetTop + 10) + 'px';
+  const hr = h.getBoundingClientRect(), tr = t.getBoundingClientRect();
+  h.style.setProperty('--arrow-x', Math.max(10, Math.min(hr.width - 22, tr.left + tr.width / 2 - hr.left - 6)) + 'px');
+}
+function voiceHintShow() {
+  voiceHintTimer = null;
+  if (voiceHintEl || !voiceHintCan()) return;
+  try { localStorage.setItem(voiceHintKey(), '1'); } catch { /* storage blocked */ }   // set the moment it is shown: never twice
+  const h = document.createElement('div');
+  h.id = 'voice-hint'; h.className = 'voice-hint'; h.setAttribute('role', 'status'); h.dataset.agent = current;
+  const txt = document.createElement('span'); txt.textContent = 'New: talk to your agents. Tap the microphone.';
+  const x = document.createElement('button');
+  x.type = 'button'; x.className = 'voice-hint-x'; x.setAttribute('aria-label', 'Close'); x.textContent = '×';
+  x.addEventListener('click', (e) => { e.stopPropagation(); voiceHintDone(); });
+  h.append(txt, x);
+  $('composer').appendChild(h);
+  voiceHintEl = h;
+  voiceHintPlace();
+}
+// Called whenever something it depends on changes (mic paint, status, chat open or switch, a question, a call).
+function voiceHintSync() {
+  if (voiceHintEl) { if (!voiceHintCan() || voiceHintEl.dataset.agent !== current) voiceHintHide(); else voiceHintPlace(); return; }
+  if (voiceHintCan()) { if (!voiceHintTimer) voiceHintTimer = setTimeout(voiceHintShow, 1500); }
+  else { clearTimeout(voiceHintTimer); voiceHintTimer = null; }
+}
+if (typeof window !== 'undefined' && window.addEventListener) window.addEventListener('resize', () => { if (voiceHintEl) voiceHintPlace(); });
+// ── end one-time voice hint ──
 // The speaker on a reply is shown only when something can speak: the hub voice, or (when the box is ticked) an offline voice on this phone.
 let voiceLocalOk = false, voiceLocalProbed = false;
 function voiceSpeakPaint() {
@@ -9618,6 +9680,7 @@ async function voiceStatusRefresh() {
   if (b) { b.hidden = !voiceOn(); if (!voiceOn() && voiceRec.state === 'recording') voiceMicCancel(); }
   if (!voiceOn() && voiceCall) { toast('Voice was turned off, the call ended'); voiceCallHangUp(); }
   voiceMicPaint();
+  if (typeof voiceReadyPollSync === 'function') voiceReadyPollSync();
   voiceLocalProbe();
   voiceSpeakPaint();
   paintVoiceSheet();
@@ -9667,6 +9730,7 @@ function voiceBarPaint(pct) { const i = document.querySelector('#voice-level i')
 
 function voiceMicPaint() {
   if (typeof voiceStripPaint === 'function') voiceStripPaint();   // the mode chip and the settings button follow the mic
+  if (typeof voiceHintSync === 'function') voiceHintSync();
   const b = $('mic-btn'); if (!b) return;
   b.removeAttribute('data-press');   // not a press button on any path but the next one (hands-free call, hang-up, idle)
   if (voiceCall && voiceCall.press) {   // a Tap to talk call: the button stays a mic and is the press button (Hang up is the call panel's and the display's)
@@ -9691,7 +9755,7 @@ function voiceMicPaint() {
   b.setAttribute('aria-pressed', rec ? 'true' : 'false');
   const mode = voicePrefsNow().mode, hands = mode !== 'tap';
   b.setAttribute('aria-label', rec ? 'Stop and transcribe' : mode === 'press' ? 'Tap to talk' : hands ? 'Talk hands-free' : 'Dictate');
-  b.title = rec ? 'Tap to stop' : mode === 'press' ? 'Tap to talk: a voice call you press to speak in' : hands ? 'Tap to start a hands-free call' : 'Tap to dictate, tap again to stop';
+  b.title = rec ? 'Tap to stop' : voiceReadyTitle(mode);   // the tooltip names the agent of the open chat
   if (rec) b.textContent = `● ${Math.floor((Date.now() - voiceRec.t0) / 1000)}s`;
   else if (voiceRec.state === 'sending') b.textContent = '…';
   else if (!b.querySelector('svg') || b.querySelector('svg.hang')) b.innerHTML = VOICE_MIC_SVG;
@@ -9719,6 +9783,7 @@ function voiceMicHeldMs() {
 async function voiceMicTap() {
   keepKeyboard && keepKeyboard.elsewhere();   // the mic button took the touch: the keyboard guard must not bring the keyboard back
   if (voiceCall) { if (voiceCall.press) return; voiceCallHangUp(); return; }   // during a call it is the red phone: it hangs up first, whatever else is busy (in a Tap to talk call it is the press button, voicePressButton; Hang up is the panel's)
+  if (typeof voiceHintDone === 'function') voiceHintDone();   // the microphone is used: the one-time hint is over
   if (voicePressEndedAt && Date.now() - voicePressEndedAt < 1000) return;   // the trailing click of a press that outlived a Tap to talk call
   if (voiceRec.state === 'starting' || voiceRec.state === 'sending' || voiceRec.guard.pending || voiceTest.guard.pending) return;
   if (voiceRec.state === 'recording') { voiceMicStop(); return; }
@@ -10958,6 +11023,7 @@ function voiceLinkMake(vc) {
 function voiceCallStart() {
   if (typeof voiceAutoReadReset === 'function') voiceAutoReadReset();   // a reply to an earlier dictation is not read aloud over the call
   if (voiceCall) return;
+  if (typeof voiceHintHide === 'function') voiceHintHide();   // a call is starting: the one-time hint goes
   // A call starts with nothing over its controls: the voice panel sits right above the composer, where Hang up is.
   if (typeof voicePanelOpen === 'function' && voicePanelOpen() && typeof voicePanelShow === 'function') voicePanelShow(false);
   if (typeof plusSheetShow === 'function') plusSheetShow(false);
@@ -11626,27 +11692,34 @@ function paintVoiceSheet() {
   const st = voiceStatus || {};
   const admin = !!(hubMe && hubMe.isAdmin === true);
   const installing = !!st.installing;
+  const adminWho = st.adminName || 'An admin of your Maestro';   // the member text names the admin when the status says who
   const unsupported = st.platformSupported === false;
   const failed = !!st.failed && !installing;
   const enableBox = sh.querySelector('.vs-enable'), enableText = sh.querySelector('.vs-enable-text'), enableBtn = sh.querySelector('.vs-enable-btn');
   const prog = sh.querySelector('.vs-progress'), progLine = sh.querySelector('.vs-progress-line');
-  let noteText, showBox = false, boxText = '', btnText = 'Enable voice';
-  if (voiceOn()) noteText = `Voice is on${st.stt && st.stt.engine ? ` (${st.stt.engine})` : ''}. Tap the mic beside the message box to ${p.mode === 'tap' ? 'dictate' : p.mode === 'press' ? 'start a Tap to talk call' : 'start a hands-free call'}.`;
+  let noteText, showBox = false, boxText = '', btnText = 'Enable voice', retryBtn = false;
+  const mb = Math.round((Number(st.downloadBytes) || Number(st.bytesTotal) || 0) / 1e6);   // 0: size unknown, left out
+  if (voiceOn()) noteText = `Voice is on and ready. Tap the mic beside the message box to ${p.mode === 'tap' ? 'dictate' : p.mode === 'press' ? 'start a Tap to talk call' : 'start a hands-free call'}.`;
   else if (unsupported) noteText = VOICE_UNSUPPORTED_TEXT;
-  else if (installing) { noteText = 'Voice is installing on your Maestro.'; showBox = true; }
-  else if (failed) {
-    noteText = admin ? `Voice setup failed: ${st.error || 'unknown error'}` : 'Voice setup failed. An admin of your Maestro can see the details in Settings, Voices on the computer.';
-    if (admin) { showBox = true; btnText = 'Try again'; }
-  } else if (st.enabled) {   // on but not installed (the install stopped, e.g. a restart during it): enabling again finishes it
-    noteText = 'Voice is on, but not ready on your Maestro yet.';
-    if (admin) { showBox = true; btnText = 'Try again'; }
-  }
+  else if (installing) {
+    const pct = Number.isFinite(st.progress) ? ` (${Math.round(Math.max(0, Math.min(1, st.progress)) * 100)}%)` : '';
+    noteText = `Getting voice ready: downloading the speech engines${mb ? `, about ${mb} MB` : ''}${pct}.`;
+    showBox = true;
+  } else if (failed) {
+    const why = st.failReason === 'network' ? "this computer couldn't reach the internet to download the speech engines."
+      : st.failReason === 'disk' ? `not enough free disk space for the speech engines${mb ? ` (about ${mb} MB)` : ''}.`
+      : st.failReason === 'damaged' ? 'a download was damaged.' : "the speech engines didn't install.";
+    noteText = `Voice isn't ready: ${why} It tries again by itself.`;
+    if (admin) { showBox = true; btnText = 'Retry now'; retryBtn = true; boxText = st.error || ''; }   // the raw error is for admins only, in small text
+  } else if (st.enabled) noteText = `Getting voice ready:${mb ? ` about ${mb} MB to download.` : ' the speech engines are to be downloaded.'} It starts by itself.`;
   else if (admin) { noteText = 'Voice is off.'; showBox = true; boxText = VOICE_ENABLE_TEXT; }
-  else noteText = 'Voice is off. An admin of your Maestro can turn it on, from the Voice menu on their phone or in Settings, Voices on the computer.';
+  else noteText = `Voice is off. ${adminWho} can turn it on, from the Voice menu on their phone or in Settings, Voice on the computer.`;
   note.textContent = noteText;
   note.classList.toggle('off', !voiceOn());
   enableBox.hidden = !showBox;
   enableText.textContent = boxText; enableText.hidden = !boxText;
+  enableText.classList.toggle('vs-raw', retryBtn);
+  voiceSheetRetry = retryBtn;   // what the button does when tapped: "Retry now" (POST /api/voice/retry) or "Enable voice"
   enableBtn.textContent = btnText;
   enableBtn.hidden = installing || !admin || unsupported;
   if (!voiceSheetEnableBusy) enableBtn.disabled = false;
@@ -11658,10 +11731,10 @@ function paintVoiceSheet() {
   } else progLine.textContent = '';
   voiceSheetPollSync();
 }
-const VOICE_UNSUPPORTED_TEXT = "Voice can't run on the computer your Maestro is on yet. It works on Linux (x64) and Mac computers.";
+const VOICE_UNSUPPORTED_TEXT = 'Voice is not supported on this computer.';
 const VOICE_ENABLE_TEXT = 'Enable voice downloads the speech recognition and the voices to the computer your Maestro runs on and installs them there. It takes a few minutes, and you can keep chatting meanwhile.';
 // While the sheet is open and the engine is installing (or on but not ready, not failed) the status is read every 2 s: one timer at most.
-let voiceSheetPollTimer = null, voiceSheetEnableBusy = false;
+let voiceSheetPollTimer = null, voiceSheetEnableBusy = false, voiceSheetRetry = false;
 function voiceSheetPollStop() { clearTimeout(voiceSheetPollTimer); voiceSheetPollTimer = null; }
 function voiceSheetPollSync() {
   const sh = $('voice-sheet'), st = voiceStatus || {};
@@ -11675,14 +11748,15 @@ async function voiceSheetEnable() {
   if (voiceSheetEnableBusy) return;
   voiceSheetEnableBusy = true;
   if (btn) btn.disabled = true;
+  const retry = voiceSheetRetry;   // "Retry now" after a failed setup: the server tries again at once
   try {
-    const r = await api('/api/voice/enable', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    const r = await api(retry ? '/api/voice/retry' : '/api/voice/enable', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
     let j = {};
     try { j = await r.json(); } catch { /* no body */ }
-    if (r.status === 403) toast('Only an admin can turn voice on.');
+    if (r.status === 403) toast(retry ? 'Only an admin can retry voice.' : 'Only an admin can turn voice on.');
     else if (r.status === 400 && j.error === 'platform_unsupported') { voiceStatus = { ...voiceStatus, platformSupported: false }; }
     else if (!r.ok || j.error) throw new Error(j.error || `HTTP ${r.status}`);
-  } catch (e) { toast(`Could not turn voice on: ${e && e.message ? e.message : 'unknown error'}`); }
+  } catch (e) { toast(`${retry ? 'Could not retry voice' : 'Could not turn voice on'}: ${e && e.message ? e.message : 'unknown error'}`); }
   voiceSheetEnableBusy = false;
   if (btn) btn.disabled = false;
   paintVoiceSheet();
@@ -12402,6 +12476,7 @@ function showQuestion(data, onAnswered) {
   const box = document.createElement('div');
   box.className = 'question';
   questionBoxes.set(request_id, box);
+  if (typeof voiceHintSync === 'function') voiceHintSync();   // a question appearing takes the hint down
   const submit = (answers, label) => {
     if (onAnswered) onAnswered();
     api('/api/ask_response', {
@@ -16337,7 +16412,7 @@ function simpleComposerEnsure() {
   sheet.id = 'simple-effort-sheet'; sheet.setAttribute('role', 'menu'); sheet.setAttribute('aria-label', 'Reasoning level'); sheet.hidden = true;
   $('composer').appendChild(sheet);
   onComposerTap(eb, () => simpleEffortSheet(sheet.hidden));   // acts on the touch like the other composer buttons (the keyboard stays)
-  onComposerTap(cb, () => { if (typeof voiceCall !== 'undefined' && voiceCall) voiceCallHangUp(); else voiceCallStart(); simpleCallPaint(); });
+  onComposerTap(cb, () => { if (typeof voiceCall !== 'undefined' && voiceCall) voiceCallHangUp(); else { if (typeof voiceHintDone === 'function') voiceHintDone(); voiceCallStart(); } simpleCallPaint(); });
   sheet.addEventListener('click', (e) => {
     const b = e.target.closest('button[data-level]'); if (!b || !current) return;
     window.hubSimple.setEffort(current, b.dataset.level);
@@ -16383,7 +16458,8 @@ function simpleCallPaint() {
   const up = typeof voiceCall !== 'undefined' && !!voiceCall;
   cb.classList.toggle('in-call', up);
   cb.setAttribute('aria-pressed', String(up));
-  cb.setAttribute('aria-label', up ? 'Hang up' : 'Voice call'); cb.title = up ? 'End the voice call' : 'Start a voice call';
+  cb.setAttribute('aria-label', up ? 'Hang up' : 'Voice call');
+  cb.title = up ? 'End the voice call' : typeof voiceReadyTitle === 'function' ? voiceReadyTitle(voicePrefsNow().mode === 'press' ? 'press' : 'hands') : 'Start a voice call';   // names the agent; the button itself follows #mic-btn[hidden] (CSS), so it exists only when voice is ready
 }
 function simpleRoute(route) {
   if (!simpleOn() || !route) return;

@@ -162,7 +162,7 @@ function makeEnv(opts = {}) {
     voicePauseSelectHtml: (id, attrs) => `<select id="${id}" ${attrs}></select>`, VOICE_SPEED_HINT: 'Google voices ignore this setting.',
     voiceSavePrefs: (s, p) => { prefs = p; calls.saved.push(p); },
     voicePrefsCacheSet: null,
-    voiceById: (id) => get(id), voiceReady: () => opts.ready !== false,
+    voiceById: (id) => get(id), voiceReady: () => opts.ready !== false, voiceAgentName: () => 'your agent', voiceOffText: () => 'Voice is off. Turn it on in Settings, Voice', voiceHintDismiss() {}, voiceHintHide() {},
     voiceRec: { guard: { cancel() { calls.recCancel = true; }, pending: false }, chatId: null, busy: false },
     voiceTest: { mic: null, guard: { pending: false } },
     voiceMicStop() {},

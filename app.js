@@ -3337,12 +3337,13 @@
     const ST_GROUPS = [
       { id: 'status', title: '🩺 Status', sections: ['st-ready-section', 'st-health-section', 'st-sec-section', 'st-memory-section', 'st-selfcheck-section', 'st-components-section', 'st-updates-section'] },
       { id: 'looks', title: '🎨 Appearance', sections: ['st-looks-section'] },
+      { id: 'voice', title: '🎙 Voice', sections: ['st-voice-section'] },
       { id: 'security', title: '🔐 Security', sections: ['st-security-section'] },
       { id: 'backups', title: '💾 Backups', sections: ['st-backups-section'] },
       { id: 'models', title: '🧠 AI models', sections: ['st-prov-section', 'st-or-section', 'st-subs-section', 'st-plan-section', 'st-local-models-section', 'st-classifier-section'] },
       { id: 'agents', title: '🤖 Agents', sections: ['st-defaults-section', 'st-workers-section', 'st-sb-section', 'st-lb-section', 'st-mp-section', 'st-approvals-section', 'st-chat-section', 'st-tuning-section'] },
       { id: 'notify', title: '🔔 Notifications', sections: ['st-notify-section'] },
-      { id: 'tools', title: '🧰 Tools and data', sections: ['st-ws-section', 'st-voice-section', 'st-comms-section', 'st-cx-section', 'st-modules-section'] },
+      { id: 'tools', title: '🧰 Tools and data', sections: ['st-ws-section', 'st-comms-section', 'st-cx-section', 'st-modules-section'] },
       { id: 'money', title: '💰 Money and safety', sections: ['st-spend-section', 'st-emergency-section'] },
     ];
     const stSumParts = {};   // group -> { key: { text, crit } }: the one-line summary on each group's header
@@ -3571,6 +3572,17 @@
       if (!s) return;
       stSetOpen(s.closest('details.st-group'), true);
       setTimeout(() => s.scrollIntoView({ behavior: 'smooth', block: 'start' }), 150);
+    }
+
+    // The ⋯ menu's Voice item, the Voice panel's "All voice settings" and a tap on the microphone while voice is off or unfinished (admin):
+    // Settings, at the Voice group; an admin lands on the On switch, anyone else on the section heading.
+    async function openVoiceSettings() {
+      await openSettingsAt('st-voice-section');
+      const en = document.getElementById('st-voice-enabled');
+      const target = isHubAdmin() && en ? en : document.querySelector('#st-voice-section h4');
+      if (!target) return;
+      if (target.tagName === 'H4') target.tabIndex = -1;
+      try { target.focus(); } catch { /* not focusable here */ }
     }
 
     async function openSettings() {
@@ -11424,7 +11436,7 @@
           </div>
           <input type="file" id="file-input-${chatId}" multiple style="display:none" onchange="handleFileSelect(event, '${chatId}')">
           <button class="attach-btn" onclick="document.getElementById('file-input-${chatId}').click()" title="Attach a file: images are sent with the message, other files are uploaded to your files and their path is added to the message" style="background:var(--bg-input); border:1px solid var(--border); padding:8px 10px; font-size:1rem; cursor:pointer;">📎</button>
-          <button type="button" onpointerdown="voiceMicPointer(false)" onpointerup="voiceMicPointer(true)" onclick="voiceMicToggle('${chatId}')" id="mic-${chatId}" class="mic-btn" style="display:none" aria-pressed="false" aria-label="${voiceMicIdleLabel()}" title="${voiceMicIdleTitle()}">${VOICE_MIC_SVG}</button><span class="mic-meter" id="mic-meter-${chatId}" style="display:none" aria-hidden="true"><i></i></span><span class="voice-extra" style="display:none"><button type="button" class="voice-mode-chip" id="vmode-${chatId}" onclick="voiceModeToggle()" title="Talk mode: tap to switch" style="display:none">${voiceModeLabel()}</button><button type="button" class="voice-set-btn" id="vset-${chatId}" onclick="voicePopToggle('${chatId}')" aria-label="Voice settings" aria-expanded="false" title="Voice settings">${VOICE_LEVELS_SVG}</button><div class="voice-pop" id="voice-pop-${chatId}" role="dialog" aria-label="Voice settings" hidden></div></span>
+          <button type="button" onpointerdown="voiceMicPointer(false)" onpointerup="voiceMicPointer(true)" onclick="voiceMicToggle('${chatId}')" id="mic-${chatId}" class="mic-btn" style="display:none" aria-pressed="false" aria-label="${voiceMicIdleLabel()}" title="${voiceMicIdleTitle(chatId)}">${VOICE_MIC_SVG}</button><span class="mic-meter" id="mic-meter-${chatId}" style="display:none" aria-hidden="true"><i></i></span><span class="voice-extra" style="display:none"><button type="button" class="voice-mode-chip" id="vmode-${chatId}" onclick="voiceModeToggle()" title="Talk mode: tap to switch" style="display:none">${voiceModeLabel()}</button><button type="button" class="voice-set-btn" id="vset-${chatId}" onclick="voicePopToggle('${chatId}')" aria-label="Voice settings" aria-expanded="false" title="Voice settings">${VOICE_LEVELS_SVG}</button><div class="voice-pop" id="voice-pop-${chatId}" role="dialog" aria-label="Voice settings" hidden></div></span>
           <button onclick="toggleNotifyDone('${chatId}')" id="notify-${chatId}" class="notify-done-btn" style="display:none" aria-pressed="false" title="Get a notification on your phone when this reply is done">🔔 Notify me</button>
           <button onclick="sendSoloMessage('${chatId}')" id="send-${chatId}">Send</button>
         </div>
@@ -17811,6 +17823,73 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     }
     const VOICE_LEVELS_SVG = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 6h10"></path><path d="M18 6h2"></path><circle cx="16" cy="6" r="2"></circle><path d="M4 12h2"></path><path d="M10 12h10"></path><circle cx="8" cy="12" r="2"></circle><path d="M4 18h10"></path><path d="M18 18h2"></path><circle cx="16" cy="18" r="2"></circle></svg>';
     const voiceReady = () => !!(voiceStatus && voiceStatus.enabled && voiceStatus.ready);
+    // The microphone is shown ONLY when voice is ready (everything downloaded and the working check passed): 'ready' or 'hidden'.
+    function voiceMicState() { return voiceReady() ? 'ready' : 'hidden'; }
+    // What voice is doing, for Settings: 'unsupported', 'off', 'ready', 'installing', 'failed' (an error, tries again by itself),
+    // 'waiting' (on, not ready, nothing running yet: it starts by itself) or '' (the status was never read).
+    function voiceKind(st) {
+      st = st === undefined ? voiceStatus : st;
+      if (!st) return '';
+      if (st.platformSupported === false) return 'unsupported';
+      if (st.enabled === false) return 'off';
+      if (st.enabled && st.ready) return 'ready';
+      if (st.installing) return 'installing';
+      if (st.failed || st.error) return 'failed';
+      return st.enabled ? 'waiting' : '';
+    }
+    const voiceAdminName = () => (voiceStatus && voiceStatus.adminName) || 'an admin';
+    // About N MB still to download (downloadBytes, else bytesTotal); '' when unknown.
+    function voiceMbText(st) {
+      const n = Math.round((Number(st && (st.downloadBytes || st.bytesTotal)) || 0) / 1e6);
+      return n > 0 ? n : 0;
+    }
+    function voicePctText(st) { return st && st.installing && st.progress !== null && st.progress !== undefined && Number.isFinite(Number(st.progress)) ? Math.round(Number(st.progress) * 100) : null; }
+    // The one status line of Settings, Voice (both pages use these words).
+    function voiceSettingsLine(st, admin) {
+      const k = voiceKind(st), mb = voiceMbText(st);
+      if (k === 'unsupported') return 'Voice is not supported on this computer.';
+      if (k === 'ready') return 'Voice is on and ready.';
+      if (k === 'off') return admin ? 'Voice is off.' : `Voice is off. ${(st && st.adminName) || 'An admin'} can turn it on.`;
+      if (k === 'installing') { const p = voicePctText(st); return `Getting voice ready: downloading the speech engines${mb ? `, about ${mb} MB` : ''}${p === null ? '' : ` (${p}%)`}.`; }
+      if (k === 'failed') {
+        const r = st.failReason, again = ' It tries again by itself.';
+        if (r === 'network') return `Voice isn't ready: this computer couldn't reach the internet to download the speech engines.${again}`;
+        if (r === 'disk') return `Voice isn't ready: not enough free disk space for the speech engines${mb ? ` (about ${mb} MB)` : ''}.${again}`;
+        if (r === 'damaged') return `Voice isn't ready: a download was damaged.${again}`;
+        return `Voice isn't ready: the speech engines didn't install.${again}`;
+      }
+      if (k === 'waiting') return `Getting voice ready:${mb ? ` about ${mb} MB to download.` : ' the speech engines are not downloaded yet.'} It starts by itself.`;
+      return '';
+    }
+    // The open chat's agent, the way the person reads it (or the chat the button is in).
+    function voiceAgentName(chatId) {
+      const c = chats[chatId || activeChat] || null;
+      return (c && (c.display || (c.agent && capName(c.agent)))) || 'your agent';
+    }
+    // The guard texts of a voice start that finds voice not ready (the microphone is hidden then, so these are rarely seen).
+    function voiceOffText() { return isHubAdmin() ? 'Voice is off. Turn it on in Settings, Voice' : `Voice is off on this Maestro. Ask ${voiceAdminName()} to turn it on.`; }
+    // While voice is on, supported and not ready (and the page is showing) the status is read again every 20 s, so the microphone
+    // appears by itself; it stops when ready or off.
+    const VOICE_POLL_MS = 20000;
+    let voiceWaitTimer = null;
+    function voicePollWanted() { const st = voiceStatus; return !!(st && st.enabled && st.platformSupported !== false && !st.ready && !document.hidden); }
+    function voiceWaitSchedule() {
+      if (!voicePollWanted()) { clearTimeout(voiceWaitTimer); voiceWaitTimer = null; return; }
+      if (voiceWaitTimer) return;
+      voiceWaitTimer = setTimeout(() => { voiceWaitTimer = null; if (voicePollWanted()) voiceRefreshStatus(); }, VOICE_POLL_MS);
+    }
+    // The summary line of Settings, Voice.
+    function voiceSummaryPaint() {
+      const st = voiceStatus, k = voiceKind(st);
+      let text = '';
+      if (k === 'unsupported') text = 'Not supported';
+      else if (k === 'ready') text = 'On, ready';
+      else if (k === 'installing') { const p = voicePctText(st); text = `Getting ready${p === null ? '' : ` ${p}%`}`; }
+      else if (k === 'waiting') text = 'Getting ready';
+      else if (k === 'failed') text = 'Not ready: will retry';
+      else if (k === 'off') text = 'Off';
+      stSum('voice', 'state', text);
+    }
     const voiceDeviceFallback = () => !!(voicePrefsNow().deviceVoiceFallback && window.speechSynthesis && typeof SpeechSynthesisUtterance !== 'undefined');
     // Mic buttons show only while the hub voice is on and ready; speaker buttons while a voice is available.
     function voicePaint() {
@@ -17819,6 +17898,58 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (typeof voiceModeChipPaint === 'function') voiceModeChipPaint();   // a chat bar drawn during a call gets its pill
       try { if (voiceCallS.call && voiceCallS.press && voiceCallS.chatId) voiceCallPaintBtn(voiceCallS.chatId, true); } catch { /* the press button is put on a redrawn mic button */ }
       document.body.classList.toggle('voice-on', voiceReady() || voiceDeviceFallback());
+      try { voiceSummaryPaint(); voiceWaitSchedule(); voiceHintTick(); if (voiceStatus && voiceById('st-voice-status')) voicePaintSettings(voiceStatus); } catch { /* the summary, the poll, the hint and the Settings line are comforts */ }
+    }
+    // The one-time hint: "New: talk to your agents. Tap the microphone." as a small callout above the microphone (the Simple call button in Simple mode,
+    // which is the same button). Shown at most once per person per device (localStorage mm-voice-hint:<user id>, set the moment it is shown), about 1.5 s
+    // after a chat is open, the microphone is shown and ready, no call is starting or running and no question is up. Gone on close, a tap on the
+    // microphone, a chat switch, a call start or a question. voiceHintTick runs every 0.4 s (and after each status paint) and does all of it.
+    const VOICE_HINT_TEXT = 'New: talk to your agents. Tap the microphone.';
+    const VOICE_HINT_DELAY_MS = 1500;
+    const voiceHint = { el: null, chatId: null, due: 0 };
+    function voiceHintKey() { const me = window.hubMe; return 'mm-voice-hint:' + ((me && me.user && me.user.id) || 'anon'); }
+    function voiceHintSeen() { try { return localStorage.getItem(voiceHintKey()) === '1'; } catch { return true; } }   // no storage: never nag
+    function voiceHintMark() { try { localStorage.setItem(voiceHintKey(), '1'); } catch { /* no storage */ } }
+    function voiceHintTarget() { const b = activeChat ? voiceById(`mic-${activeChat}`) : null; return b && b.style.display !== 'none' && b.offsetParent !== null ? b : null; }
+    function voiceHintBlocked() {
+      if (voiceCallS.active || voiceCallS.starting || voiceCallS.call) return true;
+      return Object.keys(questionOverlays).length > 0 || !!document.querySelector('.question-overlay, .question-card');
+    }
+    function voiceHintOk() { return !voiceHintSeen() && !!activeChat && chats[activeChat] && !voiceHintBlocked() && voiceMicState() === 'ready' && !!voiceHintTarget(); }   // seen first: once done, each tick costs one storage read
+    function voiceHintHide() { if (voiceHint.el) { voiceHint.el.remove(); voiceHint.el = null; } voiceHint.chatId = null; voiceHint.due = 0; }
+    // Closed, or the microphone used: gone, and the key is set so it never comes back.
+    function voiceHintDismiss() { voiceHintMark(); voiceHintHide(); }
+    function voiceHintPlace() {
+      const el = voiceHint.el, t = voiceHintTarget();
+      if (!el || !t) return;
+      const r = t.getBoundingClientRect(), vw = document.documentElement.clientWidth || window.innerWidth || 0, vh = window.innerHeight || 0;
+      const w = el.offsetWidth || 0;
+      let right = Math.max(8, vw - r.right - 4);
+      if (vw && w) right = Math.min(right, Math.max(8, vw - 8 - w));
+      el.style.right = `${right}px`;
+      el.style.bottom = `${Math.max(8, vh - r.top + 10)}px`;
+      el.style.setProperty('--voice-hint-arrow', `${Math.max(8, Math.round((vw - right) - (r.left + r.width / 2) - 6))}px`);
+    }
+    function voiceHintShow() {
+      voiceHintMark();   // the moment it is shown
+      const el = document.createElement('div');
+      el.className = 'voice-hint'; el.id = 'voice-hint'; el.setAttribute('role', 'status');
+      el.innerHTML = `<span class="voice-hint-text">${VOICE_HINT_TEXT}</span><button type="button" class="voice-hint-close" aria-label="Close">×</button>`;
+      el.querySelector('.voice-hint-close').addEventListener('click', () => voiceHintDismiss());
+      document.body.appendChild(el);
+      voiceHint.el = el; voiceHint.chatId = activeChat; voiceHint.due = 0;
+      voiceHintPlace();
+    }
+    function voiceHintTick(now) {
+      now = now === undefined ? Date.now() : now;
+      if (voiceHint.el) {   // showing: it stays only in the chat it was shown in, while nothing blocks it
+        if (voiceHint.chatId !== activeChat || voiceHintBlocked() || voiceMicState() !== 'ready' || !voiceHintTarget()) voiceHintHide();
+        else voiceHintPlace();
+        return;
+      }
+      if (!voiceHintOk()) { voiceHint.due = 0; return; }
+      if (!voiceHint.due) { voiceHint.due = now + VOICE_HINT_DELAY_MS; return; }
+      if (now >= voiceHint.due) voiceHintShow();
     }
     async function voiceRefreshStatus() {
       try {
@@ -17873,7 +18004,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       b.setAttribute('aria-pressed', state === 'rec' ? 'true' : 'false');
       b.disabled = state === 'wait';
       b.setAttribute('aria-label', state === 'rec' ? 'Stop dictation' : voiceMicIdleLabel());
-      if (state !== 'rec') b.title = voiceMicIdleTitle();
+      if (state !== 'rec') b.title = voiceMicIdleTitle(chatId);
       if (state === 'rec') b.textContent = `■ ${label || '0:00'}`;
       else if (state === 'wait') b.textContent = '…';
       else if (!b.querySelector('svg')) b.innerHTML = VOICE_MIC_SVG;
@@ -17900,6 +18031,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       return held;
     }
     async function voiceMicToggle(chatId) {
+      voiceHintDismiss();   // the microphone is being used: the one-time hint is done
       if (voiceCallS.active || voiceCallS.starting) {
         if (voiceCallS.press) return;   // a Tap to talk call: the button is the press button (voicePressButton); Hang up is the call bar's and the display's
         voiceCallHangUp(); return;   // the red hang-up button
@@ -17907,7 +18039,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (voicePressEndedAt && Date.now() - voicePressEndedAt < 1000) return;   // the trailing click of a press that outlived a Tap to talk call
       if (voiceRec.busy || voiceRec.guard.pending) return;   // a second tap while the microphone is still being asked for is ignored
       if (voiceRec.chatId) { await voiceMicStop(true); return; }   // a second tap, or a tap in another chat: end this recording
-      if (!voiceReady()) { hubToast('Voice is off. An admin can turn it on in Settings, Voices.'); voiceRefreshStatus(); return; }
+      if (!voiceReady()) { hubToast(voiceOffText()); voiceRefreshStatus(); return; }   // the microphone is hidden until voice is ready, so this is a guard; never records
       // Tap to talk: a tap starts the call and listens; a pointer held for VOICE_PRESS_HOLD_MS or more starts it idle (the person has already let go: nothing is heard until the next press).
       // (the call object exists at once, before voiceCallStart's first await; its first talk(true) comes after call.start() resolves)
       const held = voiceMicHeldMs() >= VOICE_PRESS_HOLD_MS;
@@ -18124,7 +18256,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
             from = e.at || 0; useDevice = true;
           }
         } else if (voiceDeviceFallback()) useDevice = true;
-        else { hubToast('Voice is off. An admin can turn it on in Settings, Voices.'); return; }
+        else { hubToast(voiceOffText()); return; }
         if (useDevice) { const rep = {}; await voicePlayDevice(sentences, from, my, agent, rep); if (opts.out) opts.out.played = rep.spoke === true && voicePlay.token === my; }
       } finally {
         voicePlay.busy = Math.max(0, voicePlay.busy - 1);
@@ -18157,10 +18289,10 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       // A checkbox row the way the OpenRouter privacy row is laid out: a short label column, the box and its text in the
       // value column (a long text wraps there, inside the dialog).
       const CHK = 'flex:1;min-width:0;display:flex;gap:6px;align-items:flex-start;text-align:left;cursor:pointer';
-      let h = `<div class="st-section" id="st-voice-section"><h4>Voices</h4>
+      let h = `<div class="st-section" id="st-voice-section"><h4>Voice</h4><span class="st-search-words" hidden>voice microphone mic talk speak speech call dictation</span>
         <div class="st-hint">Free local voices run on this computer: what you say and what is read aloud never leaves it, and nothing is sent to the internet. Tap the microphone in a chat to start a hands-free call: talk, interrupt the agent any time by speaking, and say "stop" to stop it; tap the speaker on a reply to hear it.</div>`;
-      h += row('Voice', admin
-        ? `<label style="flex:0 0 auto;display:flex;gap:6px;align-items:center;text-align:left;cursor:pointer;white-space:nowrap"><input type="checkbox" id="st-voice-enabled" onchange="voiceSettingEnable(this)"> Enable voice</label> <progress id="st-voice-progress" max="1" value="0" style="display:none;margin-left:8px"></progress> <span id="st-voice-status" class="st-hint" style="margin:0 0 0 8px">Checking…</span>`
+      h += row('Voice conversations', admin
+        ? `<label style="flex:0 0 auto;display:flex;gap:6px;align-items:center;text-align:left;cursor:pointer;white-space:nowrap"><input type="checkbox" id="st-voice-enabled" onchange="voiceSettingEnable(this)"> On for everyone on this Maestro</label> <progress id="st-voice-progress" max="1" value="0" style="display:none;margin-left:8px"></progress> <span id="st-voice-status" class="st-hint" style="margin:0 0 0 8px">Checking…</span> <button type="button" id="st-voice-retry" class="btn-small" style="display:none;margin-left:8px" onclick="voiceRetryNow(this)">Retry now</button> <span id="st-voice-raw" class="st-hint" style="display:none;margin:0 0 0 8px;font-size:0.75rem"></span>`
         : `<span id="st-voice-status" class="st-hint" style="margin:0">Checking…</span>`);
       h += row('Engines', `<span id="st-voice-engines" class="st-hint" style="margin:0">…</span>`);
       if (admin) {
@@ -18192,16 +18324,13 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     function voicePaintSettings(st) {
       const status = voiceById('st-voice-status');
       if (!status) return;
-      let text;
-      if (!st) text = 'Could not read the voice status.';
-      else if (st.platformSupported === false) text = 'Voice is not supported on this computer.';
-      else if (st.installing) text = `Installing voice: ${st.step || 'working'} ${Math.round((Number(st.progress) || 0) * 100)}%`;
-      else if (st.error) text = `Voice error: ${st.error}`;
-      else if (st.failed) text = 'Voice setup failed. An admin can see the details in Settings, Voices.';
-      else if (st.enabled && st.ready) text = 'Voice is on and ready.';
-      else if (st.enabled) text = 'Voice is on, getting ready…';
-      else text = 'Voice is off.';
-      status.textContent = text;
+      const admin = isHubAdmin();
+      status.textContent = st ? voiceSettingsLine(st, admin) : 'Could not read the voice status.';
+      const failed = voiceKind(st) === 'failed';
+      const raw = voiceById('st-voice-raw');   // the raw error, small, admins only (the status carries it for admins only)
+      if (raw) { raw.textContent = failed && admin && st.error ? st.error : ''; raw.style.display = raw.textContent ? '' : 'none'; }
+      const retry = voiceById('st-voice-retry');
+      if (retry) retry.style.display = failed && admin ? '' : 'none';
       const en = voiceById('st-voice-enabled');
       if (en) en.checked = !!(st && (st.enabled || st.installing));
       const pr = voiceById('st-voice-progress');
@@ -18231,6 +18360,18 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (st && st.installing) voiceSettingsTimer = setTimeout(voiceSettingsRefresh, 2000);   // poll while it installs
     }
     function voiceSettingsInit() { voiceSettingsRefresh(); }
+    // "Retry now" (admin, after a failed setup): starts the download again at once, then reads the status.
+    async function voiceRetryNow(btn) {
+      if (btn) btn.disabled = true;
+      try {
+        const r = await fetch('/api/voice/retry', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+        let j = {};
+        try { j = await r.json(); } catch {}
+        if (!r.ok || j.error) throw new Error(j.error || `HTTP ${r.status}`);
+      } catch (e) { hubToast(`Could not retry: ${e.message}`); }
+      finally { if (btn) btn.disabled = false; }
+      voiceSettingsRefresh();
+    }
     async function voiceSettingEnable(cb) {
       const on = cb.checked;
       cb.disabled = true;
@@ -19163,7 +19304,11 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     }
     // The idle mic button (no call, no recording): what a tap does in the saved mode.
     function voiceMicIdleLabel() { const m = voicePrefsNow().mode; return m === 'press' ? 'Tap to talk' : m === 'tap' ? 'Dictate' : 'Talk hands-free'; }
-    function voiceMicIdleTitle() { const m = voicePrefsNow().mode; return m === 'press' ? 'Tap to talk: a voice call you press to speak in' : m === 'tap' ? 'Dictation: tap to speak, tap again to stop' : 'Hands-free: tap to start a call'; }
+    // The title of the idle mic: it names the agent of the chat (chatId, else the open chat).
+    function voiceMicIdleTitle(chatId) {
+      const m = voicePrefsNow().mode, a = voiceAgentName(chatId);
+      return m === 'press' ? `Talk to ${a}: tap to talk` : m === 'tap' ? `Dictate a message to ${a}` : `Talk to ${a}: hands-free call`;
+    }
     // The mic button is the call's hang-up button while a call is up (in a Tap to talk call it is the press button).
     function voiceCallPaintBtn(chatId, on) {
       const b = voiceById(`mic-${chatId}`);
@@ -19186,7 +19331,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       b.classList.toggle('call', on);
       b.setAttribute('aria-pressed', on ? 'true' : 'false');
       b.setAttribute('aria-label', on ? 'Hang up' : voiceMicIdleLabel());
-      b.title = on ? 'Hang up' : voiceMicIdleTitle();
+      b.title = on ? 'Hang up' : voiceMicIdleTitle(chatId);
       b.innerHTML = on ? VOICE_HANGUP_SVG : VOICE_MIC_SVG;
       if (typeof simpleCallLook === 'function') simpleCallLook(b, on);   // Simple: a voice-call button, not a dictation mic
     }
@@ -19348,7 +19493,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const S = voiceCallS, chat = chats[chatId];
       if (S.call) return;
       if (!chat || chat.isGroup || chat.isWorker || !chat.agent) { hubToast('A call works in a chat with one agent.'); return; }
-      if (!voiceReady()) { hubToast('Voice is off. An admin can turn it on in Settings, Voices.'); return; }
+      if (!voiceReady()) { hubToast(voiceOffText()); return; }
       if (voiceTest.mic || voiceTest.guard.pending || voiceRoom.active) { hubToast('The microphone is in use in Settings.'); return; }
       voiceRec.guard.cancel(); if (voiceRec.chatId) voiceMicStop(false);   // dictation ends, nothing uploaded
       voiceStopPlayback();
@@ -19524,11 +19669,18 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     // ── In-chat voice controls (next to the mic): a Talk mode chip and a small "Voice settings" panel for every signed-in user ──
     // They write the same per-device prefs as Settings, Voices, and act on a running call at once.
     const VOICE_POP_KEYS = { mic: 'micLevel', sens: 'interruptSensitivity', speed: 'voiceSpeed', pause: 'endPause', wait: 'continueWait', think: 'thinkingSound', thinkvol: 'thinkingVolume', mode: 'mode', echo: 'echoHold', keep: 'keepAlive', loudness: 'loudness', loudnessBt: 'loudnessBt' };
+    // The panel's one role-dependent part, kept outside voicePopHtml (every option in the panel is for everyone): an admin gets
+    // "All voice settings" at the top, anyone else a line at the bottom saying who looks after voice for everyone.
+    function voicePopLinks() {
+      if (isHubAdmin()) return { top: `<div class="vp-row"><button type="button" class="vp-all-link" data-vp="all-settings" style="background:none;border:0;padding:0;color:var(--accent);text-decoration:underline;cursor:pointer;font:inherit">All voice settings</button></div>`, bottom: '' };
+      return { top: '', bottom: `<div class="vp-display-note vp-admin-note">Voice for everyone on this Maestro is looked after by ${hubEsc(voiceAdminName())}.</div>` };
+    }
     function voicePopHtml(chatId) {
       const id = (n) => `vp-${n}-${chatId}`, curMode = voicePrefsNow().mode;
       const waits = VOICE_CONTINUE_WAITS.map((ms) => `<option value="${ms}"${ms === voiceContinueWaitNow() ? ' selected' : ''}>${ms === 8000 ? 'Very long (8 s)' : ms / 1000 + ' s'}</option>`).join('');
       const agent = (chats[chatId] && chats[chatId].agent) || '';
-      return `<div class="vp-row"><span class="vp-label">Talk mode</span><span class="vp-seg" role="group" aria-label="Talk mode">
+      const links = voicePopLinks();
+      return links.top + `<div class="vp-row"><span class="vp-label">Talk mode</span><span class="vp-seg" role="group" aria-label="Talk mode">
           <button type="button" data-vp="mode" data-val="handsfree" aria-pressed="${curMode !== 'tap' && curMode !== 'press' ? 'true' : 'false'}">Hands-free</button><button type="button" data-vp="mode" data-val="press" aria-pressed="${curMode === 'press' ? 'true' : 'false'}">Tap to talk</button><button type="button" data-vp="mode" data-val="tap" aria-pressed="${curMode === 'tap' ? 'true' : 'false'}">Dictation</button></span></div>
         <div class="vp-display-note">Hands-free: tap the mic to start a call; it hears you whenever you speak. Tap to talk: a voice call where the agent answers aloud; tap the mic, speak, tap again to send (or hold it while you speak and let go). Dictation: tap the mic to turn what you say into text in the message box.</div>
         <label class="vp-row"><span class="vp-label">Voice speed</span><input type="range" min="0.75" max="1.5" step="0.05" id="${id('speed')}" data-vp="speed" value="${voiceSpeedNow()}"> <span id="${id('speed-val')}">${voiceSpeedLabel(voiceSpeedNow())}</span></label>${voiceFollowLine(agent, 'voiceSpeed')}
@@ -19553,7 +19705,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         <div class="vp-display-note">${VOICE_KEEP_HINT}</div>
         <div class="vp-row"><button type="button" class="st-test-btn" data-vp="car" id="${id('car')}">Car or Bluetooth check</button> <span class="st-hint vp-car-out" id="${id('car-out')}" aria-live="polite" style="margin:0"></span></div>
         <div class="vp-row" style="display:block"><div class="vp-label">Sound route</div>${voiceRouteBlockHtml()}</div>
-        ${voiceWakeRowsHtml(chatId)}`;
+        ${voiceWakeRowsHtml(chatId)}${links.bottom}`;
     }
     function voicePopClose() {
       for (const p of document.querySelectorAll('.voice-pop:not([hidden])')) p.hidden = true;
@@ -19574,7 +19726,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         pop.addEventListener('click', (e) => {
           const t = e.target.closest && e.target.closest('[data-vp]');
           if (!t) return;
-          if (t.dataset.vp === 'mode') voiceCtlSet('mode', t.dataset.val, true);
+          if (t.dataset.vp === 'all-settings') { voicePopClose(); openVoiceSettings(); }
+          else if (t.dataset.vp === 'mode') voiceCtlSet('mode', t.dataset.val, true);
           else if (t.dataset.vp === 'room') voiceRoomCheckRun();
           else if (t.dataset.vp === 'car') voiceCarCheckRun();
         });
@@ -19602,7 +19755,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const cur = voicePrefsNow().mode;
       for (const c of document.querySelectorAll('.voice-mode-chip')) c.textContent = voiceModeLabel();
       for (const b of document.querySelectorAll('.voice-pop [data-vp="mode"]')) b.setAttribute('aria-pressed', b.dataset.val === cur ? 'true' : 'false');
-      if (!voiceCallS.call && !voiceRec.chatId) for (const b of document.querySelectorAll('.input-area .mic-btn:not(.call):not(.rec):not(.wait)')) { b.setAttribute('aria-label', voiceMicIdleLabel()); b.title = voiceMicIdleTitle(); }   // what a tap on the idle mic does in the saved mode
+      if (!voiceCallS.call && !voiceRec.chatId) for (const b of document.querySelectorAll('.input-area .mic-btn:not(.call):not(.rec):not(.wait)')) { b.setAttribute('aria-label', voiceMicIdleLabel()); b.title = voiceMicIdleTitle(b.id.replace(/^mic-/, '')); }   // what a tap on the idle mic does in the saved mode
     }
     // One setting changed in the panel: shown everywhere it is shown, live on a running call, saved when `save` (on release / pick).
     function voiceCtlSet(which, v, save) {
@@ -19852,6 +20005,10 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     });
 
     // Message rendering
+    // The voice block's two page-level hooks (kept outside the block so its tests can run the block alone): the one-time hint is looked at every 0.4 s,
+    // and coming back to the page reads the voice status again while it is getting ready.
+    setInterval(() => { try { voiceHintTick(); } catch { /* a hint is a comfort */ } }, 400);
+    document.addEventListener('visibilitychange', () => { try { if (!document.hidden && voicePollWanted()) voiceRefreshStatus(); else voiceWaitSchedule(); } catch { /* the poll is a comfort */ } });
     // Copy button on every message bubble: copies the original text/markdown, not the rendered HTML.
     const rawMessageText = new WeakMap();
     const messageTime = new WeakMap();   // the line under a message (setMessageTime)

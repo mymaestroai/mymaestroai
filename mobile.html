@@ -748,6 +748,12 @@
   #mic-btn.listening { background: var(--voice-listening); color: var(--on-voice-listening); border-color: var(--voice-listening); }   /* a Tap to talk call while listening: green, not the red of recording or Hang up */
   #mic-btn[data-press]:not(.listening) { background: var(--voice-ready); color: var(--on-voice-ready); border-color: var(--voice-ready); }   /* a Tap to talk call, idle: the ready ink (hands-free never sets data-press, so .call stays red) */
   #mic-btn.busy { opacity: .55; pointer-events: none; }
+  /* The one-time hint: a callout above the composer's row, an arrow down at the mic; inside a 390 px screen, never over the box or Send. */
+  .voice-hint { --arrow-x: 60%; position: absolute; right: 8px; z-index: 32; box-sizing: border-box; width: min(250px, calc(100vw - 16px)); display: flex; align-items: flex-start; gap: 6px; padding: 9px 6px 9px 12px; border-radius: 12px;
+    background: var(--bg-card); color: var(--text); border: 1px solid var(--border-strong, var(--border)); box-shadow: 0 -4px 18px var(--shadow-color); font-size: 14px; line-height: 1.35; }
+  .voice-hint > span { flex: 1; }
+  .voice-hint::after { content: ''; position: absolute; top: 100%; left: var(--arrow-x, 60%); width: 10px; height: 10px; margin-top: -6px; background: var(--bg-card); border-right: 1px solid var(--border-strong, var(--border)); border-bottom: 1px solid var(--border-strong, var(--border)); transform: rotate(45deg); }
+  .voice-hint-x { flex: none; min-width: 32px; min-height: 32px; margin: -6px -2px -6px 0; border: 0; background: none; color: var(--text-dim); font-size: 20px; line-height: 1; cursor: pointer; }
   #voice-level { height: 4px; margin: 0 2px 6px; border-radius: 2px; background: var(--border); overflow: hidden; }
   #voice-level[hidden] { display: none; }
   #voice-level i { display: block; height: 100%; width: 0; background: var(--error); transition: width .08s linear; }
@@ -856,6 +862,7 @@
   .vs-enable[hidden], .vs-enable [hidden] { display: none; }
   .vs-enable-text, .vs-progress-line { margin: 0; padding: 10px 12px; border-radius: 10px; background: var(--bg-card); border: 1px solid var(--border); font-size: 14px; }
   .vs-progress { width: 100%; }
+  .vs-enable-text.vs-raw { font-size: 12px; color: var(--text-dim); word-break: break-word; }   /* the raw error for an admin: small text */
   .vs-row { display: flex; justify-content: space-between; align-items: center; }
   .vs-level { width: 100%; min-height: 32px; accent-color: var(--accent); }
   .vs-meter { height: 10px; border-radius: 5px; background: var(--border); overflow: hidden; }

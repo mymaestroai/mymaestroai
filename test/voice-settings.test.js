@@ -23,7 +23,7 @@ test('a settings patch with only { voice: { defaultVoice } } keeps enabled and s
 });
 
 test('settings sanitiser: known keys only, values checked, merged onto what is stored', () => {
-  assert.deepStrictEqual(cleanVoiceSettings({}, undefined), { enabled: false, defaultVoice: '', sttModel: '' });
+  assert.deepStrictEqual(cleanVoiceSettings({}, undefined), { defaultVoice: '', sttModel: '' });
   assert.deepStrictEqual(cleanVoiceSettings({ enabled: true, defaultVoice: 'bf_emma', sttModel: 'small.en' }, {}), { enabled: true, defaultVoice: 'bf_emma', sttModel: 'small.en' });
   // a partial patch keeps the rest
   const cur = { enabled: true, defaultVoice: 'alba', sttModel: 'tiny.en' };
@@ -41,9 +41,8 @@ test('settings sanitiser: known keys only, values checked, merged onto what is s
 
 test('server.js feeds POST /api/settings through the sanitiser and routes /api/voice/* to lib/voice/routes', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
-  assert.match(src, /if \(patch && patch\.voice !== undefined\) \{\s*const storedVoice = hubSettings\.getSetting\('voice'\);\s*patch\.voice = require\('\.\/lib\/voice\/manifest'\)\.cleanVoiceSettings\(patch\.voice, storedVoice\);/);
-  // "enabled" is never taken from the patch: it is put back from the stored value (only /api/voice/enable and /disable change it)
-  assert.match(src, /patch\.voice\.enabled = !!\(storedVoice && storedVoice\.enabled === true\);/);
+  // "enabled" is never taken from the patch: cleanVoicePatch keeps the stored value, or leaves it unset (only /api/voice/enable and /disable change it)
+  assert.match(src, /if \(patch && patch\.voice !== undefined\) \{\s*const storedVoice = hubSettings\.getSetting\('voice'\);[^]*?patch\.voice = require\('\.\/lib\/voice\/manifest'\)\.cleanVoicePatch\(patch\.voice, storedVoice\);/);
   assert.match(src, /pathname\.startsWith\('\/api\/voice\/'\)\) return require\('\.\/lib\/voice\/routes'\)\.handle\(/);
   assert.match(src, /route\.from === 'query'/);
 });
