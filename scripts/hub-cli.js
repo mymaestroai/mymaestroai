@@ -220,6 +220,7 @@ async function connectClaude({ say = out, sayErr = (s) => process.stderr.write(s
     engine = si.createSignIn({
       env: () => cenv,
       findClient: find,
+      existingClient: typeof si.existingClient === 'function' ? () => si.existingClient() : undefined,   // the same "usable client" rule as the page's engine
       verify: check
     });
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -434,7 +435,11 @@ const commands = {
   // installer replaces), where the hub looks for it, then runs Codex's own sign-in in this terminal. The hub never sees
   // the sign-in.
   async connect() {
-    if (argv[1] === 'claude') { process.exitCode = await connectClaude(); return; }
+    if (argv[1] === 'claude') {
+      require(path.join(DIR, 'lib', 'claude-signin-guard')).allowRealEffects();   // the command run by a person: the one place besides server.js
+      process.exitCode = await connectClaude();
+      return;
+    }
     if (argv[1] !== 'chatgpt') fail('Usage: mymaestro connect chatgpt [--device-auth]\n       mymaestro connect claude');
     const codex = require(path.join(DIR, 'lib', 'codex-cli'));
     const setup = require(path.join(DIR, 'lib', 'codex-cli', 'setup'));

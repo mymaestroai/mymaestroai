@@ -1,4 +1,5 @@
 'use strict';
+delete process.env.CLAUDE_CONFIG_DIR;   // these tests build their own home; the runner's sealed Claude folder (scripts/run-tests.js) must not replace <home>/.claude
 // Restoring, step two (lib/backup/apply.js): the journaled swap at start-up. A full restore and its undo; a crash
 // (the process killed) after every single move, each finished at the next start; two failed starts rolled back;
 // moves across disks; old set-aside copies pruned after the undo window.

@@ -2,7 +2,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
-const { supervise } = require('../lib/claude-signin-supervisor');
+const { supervise: superviseRaw, MARKER } = require('../lib/claude-signin-supervisor');
+const supervise = (o) => superviseRaw({ argv: ['node', 'supervisor', MARKER], ...o });   // started the way startGroup starts it
 const { createSignIn, authStatus } = require('../lib/claude-signin');
 const turn = () => new Promise(resolve => setImmediate(resolve));
 
@@ -55,6 +56,7 @@ function rig(kind, verify) {
     });
     return leader;
   }
+  spawn.__fakeSpawn = true;   // it stands in for the installer too
   const engine = createSignIn({
     ...c, spawn, platform: 'linux', env: () => ({}),
     findClient: () => kind === 'installer' ? null : { bin: 'fake' },
@@ -132,7 +134,7 @@ test('aborted status is bounded even without exit or close', async () => {
   const signals = [];
   child.stdout = new EventEmitter();
   child.kill = s => signals.push(s);
-  const answer = authStatus({ ...c, signal: ctl.signal, spawn: () => child });
+  const answer = authStatus({ ...c, bin: 'fake', signal: ctl.signal, spawn: () => child });
   ctl.abort();
   c.advance(500);
   assert.deepEqual(await answer, { loggedIn: null, method: null });

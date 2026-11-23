@@ -161,13 +161,18 @@ test('the sign-in succeeds but the status says signed out -> error', async () =>
 });
 
 test('the person finished in a browser on this computer: a client that exits 0 before any code goes straight to checking', async () => {
-  const script = path.join(TMP, 'quick.js');
-  fs.writeFileSync(script, '#!/usr/bin/env node\nprocess.stdout.write("Login successful\\n");\n', { mode: 0o755 });
+  // The client is a fake group leader that prints "Login successful" and reports exit 0 (no real program).
+  const script = '/nonexistent/quick-claude';
+  const quickSpawn = () => {
+    const k = fakeKid(9300);
+    setImmediate(() => { k.stdout.emit('data', 'Login successful\n'); k.emit('message', { op: 'result', code: 0 }); });
+    return k;
+  };
   let verified = 0;
   const cfg = fs.mkdtempSync(path.join(TMP, 'cfg-'));
   fs.writeFileSync(path.join(cfg, '.credentials.json'), '{}');
   const real = fs.copyFileSync;
-  const si = S.createSignIn({ env: () => ({ PATH: process.env.PATH, CLAUDE_CONFIG_DIR: cfg }), findClient: () => ({ bin: script }), authStatus: async () => ({ loggedIn: true, method: 'claude.ai' }), verify: async () => { verified++; return { ok: true }; } });
+  const si = S.createSignIn({ spawn: quickSpawn, kill: () => { throw ESRCH(); }, env: () => ({ PATH: process.env.PATH, CLAUDE_CONFIG_DIR: cfg }), findClient: () => ({ bin: script }), authStatus: async () => ({ loggedIn: true, method: 'claude.ai' }), verify: async () => { verified++; return { ok: true }; } });
   assert.ok(real);
   await si.start();
   await until(() => si.state().state === 'done', 'done');
@@ -222,9 +227,14 @@ test('authStatus: signed in, signed out (exit 1, no JSON), and an unusable answe
   assert.deepStrictEqual(await S.authStatus({ bin: BIN, env: t.env }), { loggedIn: true, method: 'claude.ai' });
   const o = setup();
   assert.strictEqual((await S.authStatus({ bin: BIN, env: o.env })).loggedIn, false);
-  const junk = path.join(TMP, 'junk.js');
-  fs.writeFileSync(junk, '#!/usr/bin/env node\nprocess.stdout.write("hello");process.exit(3);\n', { mode: 0o755 });
-  assert.strictEqual((await S.authStatus({ bin: junk, env: o.env })).loggedIn, null);
+  // An unusable answer: a fake client that prints "hello" and exits 3 (no real program).
+  const junkSpawn = () => {
+    const c = new (require('events').EventEmitter)();
+    c.stdout = new (require('events').EventEmitter)();
+    setImmediate(() => { c.stdout.emit('data', 'hello'); c.emit('exit', 3); c.emit('close', 3); });
+    return c;
+  };
+  assert.strictEqual((await S.authStatus({ bin: 'junk', env: o.env, spawn: junkSpawn })).loggedIn, null);
   assert.strictEqual((await S.authStatus({ bin: path.join(TMP, 'nope'), env: o.env })).loggedIn, null);
 });
 
@@ -256,7 +266,7 @@ test('installClient: runs the installer command with bash on linux and darwin on
   const calls = [];
   // The spawn gets the group leader (the supervisor); the installer command reaches it as its `start` message, and the leader
   // answers with its result.
-  const fakeSpawn = (code) => (cmd, args, opts) => {
+  const fakeSpawn = (code) => Object.assign((cmd, args, opts) => {
     const { EventEmitter } = require('events');
     const c = new EventEmitter();
     c.pid = 9100; c.connected = true;
@@ -268,7 +278,7 @@ test('installClient: runs the installer command with bash on linux and darwin on
     };
     c.disconnect = () => {};
     return c;
-  };
+  }, { __fakeSpawn: true });
   const gone = () => { throw Object.assign(new Error('gone'), { code: 'ESRCH' }); };
   assert.strictEqual(await S.installClient({ spawn: fakeSpawn(0), platform: 'linux', kill: gone }), true);
   assert.deepStrictEqual(calls[0].slice(0, 2), ['bash', ['-c', 'set -o pipefail; curl -fsSL https://claude.ai/install.sh | bash']]);
@@ -370,7 +380,7 @@ test('start answers at once, before the client is found; the attempt is busy mea
 test('the client is started in its own process group, and cancel asks the group leader to stop (the leader does SIGTERM, then SIGKILL after 3 s, see the drain tests); the slot stays busy until the group is gone', async () => {
   const e = fakeEngine();
   await e.toLink();
-  assert.deepStrictEqual(e.kids[0].sent[0], { op: 'start', bin: '/nonexistent/claude', args: ['auth', 'login', '--claudeai'] });
+  assert.deepStrictEqual(e.kids[0].sent[0], { op: 'start', bin: '/nonexistent/claude', args: ['auth', 'login', '--claudeai'], allowReal: false });
   assert.strictEqual(e.spawned[0].opts.detached, true);
   const pid = e.kids[0].pid;
   e.si.cancel();
@@ -504,7 +514,7 @@ test('installClient: onChild gets the installer job; a timeout tells it to stop 
   const kid = fakeKid(7001);
   let seen = null;
   const p = S.installClient({
-    spawn: () => kid, platform: 'linux', onChild: (c) => { seen = c; },
+    spawn: Object.assign(() => kid, { __fakeSpawn: true }), platform: 'linux', onChild: (c) => { seen = c; },
     kill: (pid, sig) => { kills.push([pid, sig]); throw ESRCH(); }, timeoutMs: 1234,
     setTimer: (fn, ms) => { const t = { fn, ms, unref() {} }; timers.push(t); return t; }, clearTimer: () => {},
   });

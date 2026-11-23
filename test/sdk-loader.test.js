@@ -1,12 +1,51 @@
 'use strict';
 
-const { describe, it } = require('node:test');
+const { describe, it, before, after } = require('node:test');
 const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const cp = require('child_process');
 
-const { resolveSdk, resolveCli, cliOptions, compareVersions, PKG, CLI_PKG } = require('../lib/sdk-loader');
+const { globalNpmRoot, resolveSdk, resolveCli, cliOptions, compareVersions, PKG, CLI_PKG } = require('../lib/sdk-loader');
+
+// Every test here runs with npm_config_prefix pointing at a temp folder (never the real one), so no test ends up asking npm.
+const testPrefix = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'sdk-loader-prefix-'));
+let savedPrefix;
+before(() => { savedPrefix = process.env.npm_config_prefix; process.env.npm_config_prefix = testPrefix; });
+after(() => {
+  if (savedPrefix === undefined) delete process.env.npm_config_prefix; else process.env.npm_config_prefix = savedPrefix;
+  fs.rmSync(testPrefix, { recursive: true, force: true });
+});
+
+describe('globalNpmRoot never runs the real npm under test', () => {
+  it('with no prefix, under test and with no opt-in: null, and execSync is never called', () => {
+    const saved = { p: process.env.npm_config_prefix, P: process.env.NPM_CONFIG_PREFIX, home: process.env.HOME, exec: cp.execSync };
+    const calls = [];
+    delete process.env.npm_config_prefix; delete process.env.NPM_CONFIG_PREFIX;
+    process.env.HOME = fs.mkdtempSync(path.join(testPrefix, 'home-'));   // no ~/.npmrc either
+    cp.execSync = (...a) => { calls.push(a); throw new Error('npm must not run'); };
+    try {
+      assert.ok(process.env.NODE_TEST_CONTEXT, 'this process is a node --test child');
+      assert.strictEqual(globalNpmRoot(), null);
+      assert.deepStrictEqual(calls, []);
+    } finally {
+      cp.execSync = saved.exec;
+      process.env.HOME = saved.home;
+      if (saved.p === undefined) delete process.env.npm_config_prefix; else process.env.npm_config_prefix = saved.p;
+      if (saved.P !== undefined) process.env.NPM_CONFIG_PREFIX = saved.P;
+    }
+  });
+  it('with a prefix: <prefix>/lib/node_modules, no npm', () => {
+    const saved = cp.execSync;
+    const calls = [];
+    cp.execSync = (...a) => { calls.push(a); throw new Error('npm must not run'); };
+    try {
+      assert.strictEqual(globalNpmRoot(), path.join(testPrefix, 'lib', 'node_modules'));
+      assert.deepStrictEqual(calls, []);
+    } finally { cp.execSync = saved; }
+  });
+});
 
 // A fake global npm prefix holding @anthropic-ai/claude-code at `version`.
 function fakeCliPrefix(version) {

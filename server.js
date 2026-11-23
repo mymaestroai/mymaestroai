@@ -20,6 +20,9 @@ let restoredAtBoot = { state: 'none' };
 try { restoredAtBoot = require('./lib/backup/apply').applyAtBoot({ root: __dirname, log: (m) => console.log(m) }); }
 catch (e) { console.error(`[restore] the restore could not be finished or rolled back, so My Maestro AI stops here to keep your data safe: ${e.message}`); process.exit(1); }
 
+// The hub is the one process that may run the real Claude client, its installer and its supervised worker (lib/claude-signin-guard).
+require('./lib/claude-signin-guard').allowRealEffects();
+
 // Load .env BEFORE any other requires — skill-manager reads env at import time
 // Secret values (keys, tokens, passwords) go to a private in-memory store (lib/hub-secrets), not process.env, so no
 // child process the hub starts carries them in its start environment.

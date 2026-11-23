@@ -27,6 +27,14 @@ const files = find('test');
 if (!files.length) { console.error('run-tests: no test files found under test/'); process.exit(1); }
 // No test reaches this computer's real Docker (its agent boxes): DOCKER_HOST points nowhere unless a run opts in.
 const env = { ...process.env, DOCKER_HOST: process.env.MM_TEST_REAL_DOCKER === '1' ? (process.env.DOCKER_HOST || '') : 'unix:///nonexistent/docker-for-tests.sock' };
+// No test reaches this computer's real Claude folder, npm folders or npm's update check: they point at fresh folders under a temp root
+// made for this run. HOME is deliberately NOT changed: 12 tool-policy tests judge paths against the real home.
+const sealRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mm-tests-'));
+env.CLAUDE_CONFIG_DIR = path.join(sealRoot, 'claude-config');
+env.npm_config_prefix = path.join(sealRoot, 'npm-global');
+env.npm_config_cache = path.join(sealRoot, 'npm-cache');
+env.NPM_CONFIG_UPDATE_NOTIFIER = 'false';
+for (const d of [env.CLAUDE_CONFIG_DIR, env.npm_config_prefix, env.npm_config_cache]) fs.mkdirSync(d, { recursive: true });
 // No test touches this install's own data/ (in the live install: the owner's accounts, memory and transcripts). The guard is
 // loaded into every Node process of the run, test files and what they start, and refuses a read or write there
 // (test/helpers/data-guard.js; tests use a throwaway install, test/helpers/isolated-install.js). Every refusal is also written
@@ -41,6 +49,7 @@ let refused = [];
 try { refused = fs.readFileSync(env.MM_DATA_GUARD_REPORT, 'utf8').split('\n').filter(Boolean); }
 catch (e) { refused = [JSON.stringify({ test: 'run-tests', path: `the guard's report could not be read (${e.code || e.message})`, how: 'report' })]; }
 try { fs.rmSync(reportDir, { recursive: true, force: true }); } catch { /* best effort */ }
+try { fs.rmSync(sealRoot, { recursive: true, force: true }); } catch { /* best effort */ }
 if (refused.length) {
   const seen = new Set();
   console.error(`\nrun-tests: FAILED, tests touched the install's own data/ (${refused.length} refused):`);
