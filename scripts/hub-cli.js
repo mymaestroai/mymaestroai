@@ -104,14 +104,44 @@ function rootOwnerNote({ getuid = process.getuid ? process.getuid.bind(process) 
   return `Run this without sudo, as the user that runs your Maestro (user id ${st.uid}).`;
 }
 
-// `mymaestro connect claude`: signs the Claude client in on this computer with its own `auth login --claudeai` (the client
-// prints the link and reads the code itself, in this terminal), then proves Claude answers. Returns the exit code (0 = done).
+// One line from a piped (non-terminal) stdin, for tests. Resolves '' at the end of the input.
+function pipeLineReader(stream = process.stdin) {
+  let buf = '', ended = false, waiter = null;
+  const flush = () => {
+    if (!waiter) return;
+    const i = buf.indexOf('\n');
+    if (i >= 0) { const w = waiter; waiter = null; const line = buf.slice(0, i); buf = buf.slice(i + 1); w(line); }
+    else if (ended) { const w = waiter; waiter = null; const line = buf; buf = ''; w(line); }
+  };
+  stream.setEncoding('utf8');
+  stream.on('data', (d) => { buf += d; flush(); });
+  stream.on('end', () => { ended = true; flush(); });
+  const read = () => new Promise((resolve) => { waiter = resolve; flush(); });
+  read.close = () => { try { stream.pause(); } catch { /* closed */ } };
+  return read;
+}
+
+// `mymaestro connect claude`: signs the Claude client in on this computer through the same engine as the page
+// (lib/claude-signin.js): the engine runs the client's `auth login --claudeai` with its output captured, this command prints the
+// link, reads the code with the hidden reader (readHidden: echo off, never written anywhere, never on a command line) and hands
+// it to the engine, then proves Claude answers. Returns the exit code (0 = done, 1 = failed, 130 = Ctrl-C).
+// The code is read from a terminal only; a piped stdin is refused, EXCEPT when NODE_ENV is "test" (tests pipe the code in).
+// The client runs with the install's CLAUDE_CONFIG_DIR: when the environment lacks it, it is read from the install's .env
+// (that one key only), because a terminal does not have the .env the hub loaded.
 // Never prints or logs a code or token. The check can be stubbed for tests only: MM_SIGNIN_VERIFY_STUB (ok | signed-out |
 // limit | network) is read ONLY when NODE_ENV is "test", and only by this script (the hub's routes never read it).
-async function connectClaude({ say = out, sayErr = (s) => process.stderr.write(s + '\n'), rootNote = rootOwnerNote, env = process.env, signin = null, verify = null } = {}) {
+async function connectClaude({ say = out, sayErr = (s) => process.stderr.write(s + '\n'), rootNote = rootOwnerNote, env: env0 = process.env, signin = null, verify = null, read = null, isTTY = !!process.stdin.isTTY, envFile = path.join(DIR, '.env'), pollMs = 200 } = {}) {
   const refuse = rootNote(); if (refuse) { sayErr(refuse); return 1; }   // the sign-in must belong to the user that runs the hub
   const si = signin || require(path.join(DIR, 'lib', 'claude-signin'));
   const W = si.WORDS;
+  const env = { ...env0 };
+  if (!env.CLAUDE_CONFIG_DIR && typeof si.configDirFromEnvFile === 'function') {
+    const d = si.configDirFromEnvFile(envFile);
+    if (d) {
+      env.CLAUDE_CONFIG_DIR = d;
+      if (env0 === process.env) process.env.CLAUDE_CONFIG_DIR = d;   // the check turn (welcome.checkClaude) reads process.env: same folder as the sign-in
+    }
+  }
   const stub = env.NODE_ENV === 'test' ? env.MM_SIGNIN_VERIFY_STUB : null;
   const check = verify || (stub
     ? async () => (stub === 'ok' ? { ok: true, state: 'ready' } : { ok: false, state: stub })
@@ -126,14 +156,54 @@ async function connectClaude({ say = out, sayErr = (s) => process.stderr.write(s
   const cenv = si.clientEnv(env);
   let s = await si.authStatus({ bin: found.bin, env: cenv });
   if (s.loggedIn !== true) {
-    say(W.signedOut);
-    say(W.openLink);
-    say(W.pasteCode + '\n');
-    const r = spawnSync(found.bin, ['auth', 'login', '--claudeai'], { stdio: 'inherit', env: cenv });
-    say('');
-    if (r.error) { sayErr(W.failed.missing); return 1; }
-    s = await si.authStatus({ bin: found.bin, env: cenv });
-    if (r.status !== 0 || s.loggedIn !== true) { sayErr(r.status !== 0 ? W.failed.code : W.failed.error); return 1; }
+    if (!isTTY && env.NODE_ENV !== 'test') { sayErr('connect claude asks for the code in a terminal; run it in a terminal on the computer that runs your Maestro.'); return 1; }
+    const rd = read || (isTTY ? readHidden : pipeLineReader());
+    const engine = si.createSignIn({ env: () => cenv, findClient: () => found, verify: check });
+    const onExit = () => { try { engine.cancel(); } catch { /* nothing running */ } };
+    const onSignal = () => { onExit(); endHidden(); process.stdout.write('\n'); process.exit(130); };
+    process.on('exit', onExit);   // Ctrl-C in raw mode ends the process from readHidden: the client is stopped here
+    process.on('SIGINT', onSignal);
+    process.on('SIGTERM', onSignal);
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const failedLine = (st) => (st && st.message) || W.failed.error;
+    try {
+      say(W.signedOut);
+      const started = await engine.start();
+      if (!started || !started.ok) { sayErr(W.failed[started && started.reason] || W.failed.error); return 1; }
+      let st = engine.state();
+      while (st.state === 'starting') { await sleep(pollMs); st = engine.state(); }   // the engine's own timeout ends this
+      if (st.state !== 'link') { sayErr(failedLine(st)); return 1; }
+      say(W.openLink);
+      say('  ' + st.link);
+      say('Paste the code below and press Enter. It is not shown as you paste it.');
+      let submitted = false;
+      for (let tries = 0; tries < 3 && !submitted; tries++) {
+        let code = await rd('> ');
+        const res = engine.submitCode(code);
+        code = null;   // the code is not kept
+        if (res.ok) { submitted = true; break; }
+        if (res.reason === 'format') { say("That doesn't look like the whole code. Copy all of it and paste it again."); continue; }
+        sayErr(failedLine(engine.state()));
+        return 1;
+      }
+      if (!submitted) { engine.cancel(); sayErr('Too many tries. The sign-in was stopped.'); return 1; }
+      let saidChecking = false;
+      st = engine.state();
+      while (st.state === 'link' || st.state === 'checking') {
+        if (st.state === 'checking' && !saidChecking) { say(W.checking); saidChecking = true; }
+        await sleep(pollMs);
+        st = engine.state();
+      }
+      if (st.state === 'done') { if (!saidChecking) say(W.checking); say(W.done); return 0; }
+      sayErr(failedLine(st));
+      return 1;
+    } finally {
+      process.removeListener('exit', onExit);
+      process.removeListener('SIGINT', onSignal);
+      process.removeListener('SIGTERM', onSignal);
+      if (!read) { if (isTTY) endHidden(); else if (rd.close) rd.close(); }   // the terminal is back to normal
+      onExit();
+    }
   }
   say(W.checking);
   let v;
