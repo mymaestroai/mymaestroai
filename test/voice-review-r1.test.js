@@ -80,19 +80,19 @@ function engineWith(over = {}) {
 }
 
 // ── 2. verifyPending ──
-test('2. a new install is not ready until its working check passed; a failed run (an optional item too) leaves it pending', async () => {
-  // Fails on ebb3500a: the optional silero-vad download fails, the run stops before the check, and the old status said ready: true
-  // (all required items done, no check error, not checking).
+test('an optional download failure preserves verified voice and requests a retry', async () => {
   let checks = 0; let failOn = true;
   const { e, w } = engineWith({
     opts: { isEnabled: () => true, check: async () => { checks++; } },
     fetch: (world) => fakeFetch(world.blobs, { failWhen: (url) => failOn && url === world.manifest.MODELS['silero-vad'].url }),
   });
   await assert.rejects(e.install());
-  assert.strictEqual(checks, 0, 'the run failed before its check');
-  assert.strictEqual(e.status().ready, false, 'everything required is there but voice was never shown to work');
+  assert.strictEqual(checks, 1);
+  assert.strictEqual(e.status().ready, true);
+  assert.strictEqual(e.status().optionalRetry, true);
   failOn = false;
-  await e.install();   // the retry: the check runs after this successful run
+  await e.install();
+  assert.strictEqual(e.status().optionalRetry, false);
   assert.strictEqual(checks, 1);
   assert.strictEqual(e.status().ready, true);
   assert.strictEqual(w.manifest.MODELS['silero-vad'].optional, true);

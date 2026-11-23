@@ -18337,7 +18337,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const retry = voiceById('st-voice-retry');
       if (retry) retry.style.display = failed && admin ? '' : 'none';
       const en = voiceById('st-voice-enabled');
-      if (en) en.checked = !!(st && (st.enabled || st.installing));
+      if (en) en.checked = !!(st && st.enabled);
       const pr = voiceById('st-voice-progress');
       if (pr) { pr.style.display = st && st.installing ? '' : 'none'; pr.value = Number(st && st.progress) || 0; }
       const eng = voiceById('st-voice-engines');
