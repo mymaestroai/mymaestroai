@@ -61,7 +61,7 @@ test('Docker present but no image: a one-click build action; sign-in missing for
   assert.strictEqual(byId(r, 'sandbox-image').level, 'critical');
   assert.deepStrictEqual(byId(r, 'sandbox-image').action, { label: 'Build the sandbox image', api: '/api/sandbox/build', method: 'POST' });
   assert.strictEqual(byId(r, 'claude-signin').level, 'critical');
-  assert.match(byId(r, 'claude-signin').fix, /claude login/);
+  assert.match(byId(r, 'claude-signin').fix, /`mymaestro connect claude`/);
   assert.strictEqual(byId(r, 'totp').level, 'warn');
   assert.match(byId(r, 'supervisor').title, /Supervised by systemd/);
   assert.strictEqual(r.critical, 2);

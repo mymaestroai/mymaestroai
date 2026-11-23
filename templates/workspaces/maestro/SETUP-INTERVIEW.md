@@ -80,7 +80,7 @@ Summarize in a short list: each agent (name, model, one line), how to reach them
 
 ## If something fails
 
-- **Claude agents say "not signed in", "authentication" or "expired".** The Claude sign-in on this computer is missing or has expired. The owner opens a terminal, types `claude`, signs in, then types `/exit`, and tries again. No restart is needed.
+- **Claude agents say "not signed in", "authentication" or "expired", or a person says Claude stopped answering or shows "Claude is signed out".** The Claude sign-in on the computer that runs this Maestro is missing or has expired. An admin presses **Sign in again** (in the reply's notice, in the health banner, or in Settings → Status), opens the link it shows, signs in with the Claude account that has the plan, and pastes the code the page then shows. Or the admin types `mymaestro connect claude` in a terminal on that computer and follows the same steps. Members ask an admin. No restart is needed; after it says "Signed in", send the message again. You can explain this even when you run on another provider.
 - **"Usage limit reached".** Their plan's limit is used up until it resets. Meanwhile, switch the agent's model from the chat header.
 - **An API key is refused.** Settings → LLM Providers: paste a fresh key.
 - **A local model doesn't answer.** Start LM Studio or Ollama with the model loaded, or open the Local models page.

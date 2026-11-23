@@ -4177,6 +4177,7 @@
       if (!crit.length) { if (bar) bar.remove(); layoutBanners(); return; }
       if (!bar) { bar = document.createElement('div'); bar.id = 'hub-health-notice'; bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9995;background:var(--banner-critical-bg);color:var(--on-color-text);padding:6px 14px;font-weight:700;box-sizing:border-box'; document.body.prepend(bar); }
       bar.innerHTML = `Health: ${crit.map(i => esc(i.title)).join('; ')}. <a href="#" onclick="openSettingsAt('st-health-section'); return false" style="color:var(--on-color-text);text-decoration:underline">Open Settings → Status</a>`;
+      for (const i of crit) { const b = typeof ClaudeSignin !== 'undefined' && ClaudeSignin.healthButton(i); if (b) bar.appendChild(b); }
       layoutBanners();
     }
     // The notices fixed at the top stack in this order, whichever painted first: the phone-layout bar
@@ -4537,6 +4538,12 @@
       }
       if (run && !items.length) html += '<div class="sc-note">Nothing to report.</div>';
       el.innerHTML = html;
+      if (items.some(i => i && i.action === 'claude-signin')) {   // a "Sign in again" button in the row of a signed-out Claude
+        Array.from(el.querySelectorAll(':scope > .sc-row')).forEach((row, idx) => {
+          const b = typeof ClaudeSignin !== 'undefined' && ClaudeSignin.healthButton(items[idx]);
+          if (b) row.appendChild(b);
+        });
+      }
       const unknown = items.filter(i => i.level === 'unknown').length;   // a check that couldn't run is never "all fine"
       stSum('status', 'health', !run ? 'Health: not checked yet' : v.critical ? 'Health: problem found' : v.warnings ? 'Health: warnings' : unknown ? "Health: some checks couldn't run" : 'Health: all fine', !!v.critical);
     }
@@ -9160,6 +9167,13 @@
               if (msg.role === 'assistant' && Array.isArray(msg.activity) && msg.activity.length) paintSavedActivity(hid, msg);
               if (msg.role === 'assistant' && typeof msg.reasoning === 'string' && msg.reasoning) setReasoning(hid, msg.reasoning, { total: Number(msg.reasoningChars) });
               setMessageTime(document.getElementById(hid), times[i]);
+              if (msg.role === 'assistant' && msg.claudeSignin === true) {   // "Claude is signed out": the same notice as the live one; "Send my message again" only on the chat's newest reply
+                let again = null;
+                if (history.findLastIndex(m => m && m.role === 'assistant' && !m.ask && !m.inProgress) === i) {
+                  for (let k = i - 1; k >= 0; k--) { const u = history[k]; if (u && u.role === 'user' && !u.ask && !u.interjection) { again = typeof u.content === 'string' ? u.content : null; break; } }
+                }
+                paintClaudeSigninNotice(chatId, document.getElementById(hid), msg.claudeSigninDetail, again);
+              }
               if (msg.role === 'assistant') attachFileCards(document.getElementById(hid));   // a saved reply's download cards
               // An archived entry is text only (the hub saved no tool calls or reasoning for it) and says where it comes from.
               if (msg.archived) {
@@ -13259,6 +13273,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
               if (oc.type === 'context_health') { updateContextHealth(chatId, oc); continue; }
               if (oc.type === 'context_exhausted') { showContextExhausted(chatId, oc); continue; }
               if (oc.type === 'session_interrupted') { showSessionInterrupted(chatId, oc); continue; }
+              if (oc.type === 'claude_signin') { showClaudeSignin(chatId, oc, false); continue; }
               // Tiger Team launch — open war room in new tab
               if (oc.type === 'open_tiger_team') {
                 const params = new URLSearchParams({
@@ -13507,6 +13522,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
               }
               // Context exhausted — session died
               if (oc2.type === 'session_interrupted') { showSessionInterrupted(chatId, oc2); continue; }
+              if (oc2.type === 'claude_signin') { showClaudeSignin(chatId, oc2, true); continue; }
               if (oc2.type === 'context_exhausted') {
                 showContextExhausted(chatId, oc2);
                 continue;
@@ -13779,6 +13795,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
               if (oc3.type === 'context_health') { updateContextHealth(chatId, oc3); continue; }
               if (oc3.type === 'context_exhausted') { showContextExhausted(chatId, oc3); continue; }
               if (oc3.type === 'session_interrupted') { showSessionInterrupted(chatId, oc3); continue; }
+              if (oc3.type === 'claude_signin') { showClaudeSignin(chatId, oc3, false); continue; }
               // Tiger Team launch — open war room in new tab
               if (oc3.type === 'open_tiger_team') {
                 const params = new URLSearchParams({
@@ -19921,6 +19938,32 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     function _clearContextFooter() {
       const footer = document.getElementById('context-footer');
       if (footer) footer.remove();
+    }
+
+    // "Claude is signed out" (lib/ui-claude-signin.js): the notice goes right under the reply bubble, once per bubble.
+    // again: the text of the message this reply answered; "Send my message again" sends it as a new message in the same chat.
+    function paintClaudeSigninNotice(chatId, bubble, detail, again) {
+      if (!window.ClaudeSignin || !bubble || !bubble.parentNode || bubble.dataset.claudeSignin) return;
+      bubble.dataset.claudeSignin = '1';
+      const wrap = document.createElement('div');
+      bubble.after(wrap);
+      const onResend = again ? () => { sendSoloMessage(chatId, 0, { fallback: { text: again } }); } : null;
+      ClaudeSignin.notice(wrap, { detail, onResend });
+      const container = document.getElementById(`messages-${chatId}`);
+      if (container) autoScroll(container);
+    }
+    // The live event { type: 'claude_signin', detail }: the notice under this chat's newest reply. canResend: a one-to-one chat.
+    function showClaudeSignin(chatId, data, canResend) {
+      const container = document.getElementById(`messages-${chatId}`);
+      if (!container) return;
+      const bubbles = container.querySelectorAll(':scope > .message.assistant');
+      const bubble = bubbles[bubbles.length - 1];
+      let again = null;
+      if (canResend) {
+        const msgs = (chats[chatId] && chats[chatId].messages) || [];
+        for (let k = msgs.length - 1; k >= 0; k--) if (msgs[k] && msgs[k].role === 'user') { again = typeof msgs[k].content === 'string' ? msgs[k].content : null; break; }
+      }
+      paintClaudeSigninNotice(chatId, bubble, data && data.detail, again);
     }
 
     // A crash, not a full window: the session resumes on the next message, so say so, calmly.

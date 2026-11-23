@@ -7426,7 +7426,34 @@ function renderEntry(m, time = '') {
     if (typeof m.reasoning === 'string' && m.reasoning) reasoningSet({ agent: current, bubble: b }, m.reasoning, { total: Number(m.reasoningChars) });
     setBubbleTime(b.el, time);
     attachFileCards(b.el, b.body);   // a saved reply: download cards for the files it names
+    if (m.claudeSignin === true) {   // "Claude is signed out": the same notice as the live one; "Send my message again" only on the chat's newest reply
+      let again = null;
+      const at = chatHistory.indexOf(m);
+      if (at >= 0 && chatHistory.findLastIndex(x => x && x.role === 'assistant' && !x.ask && !x.inProgress) === at) {
+        for (let k = at - 1; k >= 0; k--) { const u = chatHistory[k]; if (u && u.role === 'user' && !u.ask && !u.interjection) { again = typeof u.content === 'string' ? u.content : null; break; } }
+      }
+      paintClaudeSigninNotice(b.el, m.claudeSigninDetail, again);
+    }
   }
+}
+
+// "Claude is signed out" (lib/ui-claude-signin.js): the notice goes right under the reply bubble, once per bubble.
+// again: the text of the message this reply answered; "Send my message again" sends it as a new message to the same agent.
+function paintClaudeSigninNotice(bubbleEl, detail, again) {
+  if (!window.ClaudeSignin || !bubbleEl || !bubbleEl.parentNode || bubbleEl.dataset.claudeSignin) return;
+  bubbleEl.dataset.claudeSignin = '1';
+  const wrap = document.createElement('div');
+  bubbleEl.after(wrap);
+  const agent = current;
+  const onResend = (again && agent) ? () => {
+    if (current !== agent) { toast('Open that chat to send the message again'); return; }
+    stick = true;
+    const userEl = addUserBubble(again, []);
+    setBubbleTime(userEl, msgTimeLabel(Date.now()));
+    sendMessage({ agent, text: again, userEl });
+  } : null;
+  ClaudeSignin.notice(wrap, { detail, onResend });
+  scrollChat();
 }
 
 // Download cards: after a reply is final (the turn ended, or a saved reply drawn from history) the files it names
@@ -7790,6 +7817,7 @@ function attachStreamBubble(rec) {
   catchUpOwnInterjections(rec, b);   // the ones sent from another device, which only the hub's turn view has
   if (!rec.gotAny) { b.body.innerHTML = '<span style="opacity:.6">⏳ Thinking…</span>'; return; }
   paintReply(rec, rec.full);   // text and activity rows in the order they happened
+  if (rec.claudeSignin) paintClaudeSigninNotice(b.el, rec.claudeSignin.detail, rec.text);   // the signed-out notice, on this new bubble (once per bubble)
   if (rec.question) showQuestion(rec.question, () => { rec.question = null; });
   const pq = pendingQuestionsByAgent.get(rec.agent);
   if (pq) { pendingQuestionsByAgent.delete(rec.agent); showQuestion(pq); }
@@ -12206,6 +12234,10 @@ async function readStream(response, rec) {
       case 'interjection_deferred': interjectionDeferredNotes(rec, g); break;   // the turn could not take it in: its note says when it will reach the agent
       case 'reasoning': reasoningAdd(rec, g.text); break;   // the panel above the reply (painted only while the chat is open)
       case 'session_interrupted': if (visible()) addNote('⚠ Session interrupted'); break;
+      case 'claude_signin':   // Claude is signed out on the computer: the notice under this reply (kept on the record for a redraw after a chat switch)
+        rec.claudeSignin = { detail: g.detail };
+        if (visible()) paintClaudeSigninNotice(rec.bubble.el, g.detail, rec.text);
+        break;
       case 'context_exhausted': if (visible()) addNote('⚠ Context is full; use Clear chat / new session'); break;
       default: break;   // session_id, context_health, token_usage, expression_change, auto_model, progress, ...
     }
@@ -14047,6 +14079,7 @@ async function paintHealthNotice() {
   const crit = healthNoticeItems(view);
   if (!crit.length) { bar.hidden = true; bar.textContent = ''; return; }
   bar.innerHTML = `Health: ${crit.map(i => esc(i.title)).join('; ')}. <a href="/?health=1">Open Settings → Status</a>`;
+  for (const i of crit) { const b = typeof ClaudeSignin !== 'undefined' && ClaudeSignin.healthButton(i); if (b) bar.appendChild(b); }
   bar.hidden = false;
 }
 document.addEventListener('visibilitychange', () => { if (!document.hidden) paintHealthNotice().catch(() => {}); });

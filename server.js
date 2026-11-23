@@ -2212,6 +2212,23 @@ async function handleHttpRequest(req, res) {
       const r = await securityCheck().latest({ maxAgeMs: 60 * 60 * 1000 });
       return jsonResponse(res, 200, { ok: true, ...r });
     }
+    // ── Claude sign-in (lib/claude-signin-routes): GET is for any signed-in person (members only learn who to ask); the three
+    // POSTs are admin routes and refuse anything but an admin's own browser session first (no token, service identity, half-signed-in 2FA). ──
+    if (pathname === '/api/claude-signin' || pathname.startsWith('/api/claude-signin/')) {
+      const csi = require('./lib/claude-signin');
+      const r = await require('./lib/claude-signin-routes').handle({
+        method: req.method, pathname, req,
+        isAdminSession: (q) => require('./lib/access').isAdminSession(q),
+        readBody, auth: hubAuth, signIn: () => csi.getSignIn(), words: csi.WORDS,
+        hasSignIn: () => require('./lib/claude-auth').hasSignIn(),
+        // after a sign-in, the hub's own health view catches up now (claude-auth's token cache is cleared by the engine)
+        onDone: () => {
+          const sh = require('./lib/system-health/wire').getSystemHealth();
+          if (!sh.isRunning() && sh.settings().enabled) Promise.resolve().then(() => sh.run({ trigger: 'manual' })).catch(() => {});
+        },
+      });
+      if (r) return jsonResponse(res, r.status, r.body);
+    }
     // ── Health check (lib/system-health): admin-only (the route class above, checked again in the handler). GET the last
     // result, POST /run checks now in the background, PUT /settings saves the systemHealth settings. ──
     if (pathname === '/api/system-health' || pathname.startsWith('/api/system-health/')) {
