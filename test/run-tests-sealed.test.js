@@ -17,9 +17,19 @@ test('run-tests.js points the Claude folder and npm folders at fresh folders und
   assert.match(src, /docker-for-tests\.sock/, 'DOCKER_HOST points at a socket that does not exist');
 });
 
-test('run-tests.js leaves HOME alone (12 tool-policy tests judge paths against the real home)', () => {
-  assert.doesNotMatch(src, /env\.HOME\s*=/);
-  assert.match(src, /HOME is deliberately NOT changed/);
+test('run-tests.js runs the suite with a private HOME, and only the three home-sensitive policy files with the real one', () => {
+  assert.match(src, /const privateHome = path\.join\(sealRoot, 'home'\)/);
+  assert.match(src, /\[files\.filter\(file => !homePolicy\.has\(file\)\), privateHome\]/, 'the main batch gets the private HOME');
+  assert.match(src, /\[files\.filter\(file => homePolicy\.has\(file\)\), env\.HOME \|\| os\.homedir\(\)\]/, 'the policy batch gets the real HOME');
+  const list = src.match(/const homePolicy = new Set\(\[([^\]]*)\]\)/);
+  assert.ok(list, 'the policy files are listed');
+  assert.deepStrictEqual([...list[1].matchAll(/'([^']+)'/g)].map(m => m[1]),
+    ['test/lockbox-wire.test.js', 'test/tool-policy.test.js', 'test/tool-policy-heredoc.test.js']);
+  for (const f of ['lockbox-wire', 'tool-policy', 'tool-policy-heredoc']) assert.ok(fs.existsSync(path.join(__dirname, f + '.test.js')), f);
+});
+
+test('run-tests.js marks the run as sealed for the Claude guard', () => {
+  assert.match(src, /env\.MM_TEST_NO_REAL_CLAUDE = '1'/);
 });
 
 test('the keys are set before the node --test child is started', () => {

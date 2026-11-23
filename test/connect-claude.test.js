@@ -333,7 +333,9 @@ test('the .env has no CLAUDE_CONFIG_DIR: the terminal\'s is removed from the sig
   const saved = {};
   for (const k of ['HOME', 'CLAUDE_CONFIG_DIR', 'CLAUDE_CLI_PATH']) saved[k] = process.env[k];
   let seen = null, atCheck = 'unset';
-  const signin = { ...real, createSignIn: (deps) => { seen = deps.env(); return real.createSignIn(deps); } };
+  // The sealed stand-in only writes under an explicit CLAUDE_CONFIG_DIR inside the temp folder, so the client is given HOME/.claude
+  // (what the real client would use as its default) after the engine's env has been recorded as it is, without the variable.
+  const signin = { ...real, createSignIn: (deps) => { seen = deps.env(); return real.createSignIn({ ...deps, env: () => ({ ...seen, CLAUDE_CONFIG_DIR: path.join(t.cfg, '.claude') }) }); } };
   try {
     Object.assign(process.env, { HOME: t.cfg, CLAUDE_CONFIG_DIR: terminalDir, CLAUDE_CLI_PATH: BIN });
     const code = await CLI_MOD().connectClaude({

@@ -8,6 +8,16 @@ const path = require('path');
 const cp = require('child_process');
 
 const { globalNpmRoot, resolveSdk, resolveCli, cliOptions, compareVersions, PKG, CLI_PKG } = require('../lib/sdk-loader');
+const guard = require('../lib/claude-signin-guard');
+
+// The sealed guard makes globalNpmRoot() null. Tests of the npm-global candidate show the prefix to the loader by answering
+// realAllowed() true on the guard's exports object for the duration of fn. Only the loader's own check reads it (the spawn guards use
+// the module's internal state), and npm_config_prefix is always a temp folder, so npm is never asked.
+function withPrefixVisible(fn) {
+  const saved = guard.realAllowed;
+  guard.realAllowed = () => true;
+  try { return fn(); } finally { guard.realAllowed = saved; }
+}
 
 // Every test here runs with npm_config_prefix pointing at a temp folder (never the real one), so no test ends up asking npm.
 const testPrefix = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'sdk-loader-prefix-'));
@@ -26,7 +36,8 @@ describe('globalNpmRoot never runs the real npm under test', () => {
     process.env.HOME = fs.mkdtempSync(path.join(testPrefix, 'home-'));   // no ~/.npmrc either
     cp.execSync = (...a) => { calls.push(a); throw new Error('npm must not run'); };
     try {
-      assert.ok(process.env.NODE_TEST_CONTEXT, 'this process is a node --test child');
+      assert.strictEqual(guard.underTest(), true, 'sealed: test mode was captured when the guard loaded');
+      assert.strictEqual(guard.realAllowed(), false);
       assert.strictEqual(globalNpmRoot(), null);
       assert.deepStrictEqual(calls, []);
     } finally {
@@ -36,12 +47,21 @@ describe('globalNpmRoot never runs the real npm under test', () => {
       if (saved.P !== undefined) process.env.NPM_CONFIG_PREFIX = saved.P;
     }
   });
-  it('with a prefix: <prefix>/lib/node_modules, no npm', () => {
+  it('with a configured prefix and no opt-in: still null (sealed), and execSync is never called', () => {
     const saved = cp.execSync;
     const calls = [];
     cp.execSync = (...a) => { calls.push(a); throw new Error('npm must not run'); };
     try {
-      assert.strictEqual(globalNpmRoot(), path.join(testPrefix, 'lib', 'node_modules'));
+      assert.strictEqual(globalNpmRoot(), null);
+      assert.deepStrictEqual(calls, []);
+    } finally { cp.execSync = saved; }
+  });
+  it('with real effects shown to the loader (see withPrefixVisible) and a prefix: <prefix>/lib/node_modules, no npm', () => {
+    const saved = cp.execSync;
+    const calls = [];
+    cp.execSync = (...a) => { calls.push(a); throw new Error('npm must not run'); };
+    try {
+      assert.strictEqual(withPrefixVisible(() => globalNpmRoot()), path.join(testPrefix, 'lib', 'node_modules'));
       assert.deepStrictEqual(calls, []);
     } finally { cp.execSync = saved; }
   });
@@ -63,7 +83,7 @@ function withCliPrefix(version, fn) {
   const saved = process.env.npm_config_prefix;
   process.env.npm_config_prefix = fake.prefix;
   try {
-    return fn(fake);
+    return withPrefixVisible(() => fn(fake));
   } finally {
     if (saved === undefined) delete process.env.npm_config_prefix; else process.env.npm_config_prefix = saved;
     fs.rmSync(fake.prefix, { recursive: true, force: true });
@@ -111,7 +131,9 @@ describe('SDK loader', () => {
     process.env.npm_config_prefix = prefix;
     delete process.env.CLAUDE_SDK_PATH;
     try {
-      const r = resolveSdk({ force: true });
+      const sealed = resolveSdk({ force: true });
+      assert.ok(!sealed.candidates.some(c => c.source === 'npm-global'), 'sealed: the npm prefix is not even looked at');
+      const r = withPrefixVisible(() => resolveSdk({ force: true }));
       const global = r.candidates.find(c => c.source === 'npm-global');
       assert.ok(global && global.version === '99.0.0' && global.dir === pkgDir, 'the newer global copy is seen as a candidate');
       assert.strictEqual(r.source, 'hub-local');

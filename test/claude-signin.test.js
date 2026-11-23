@@ -162,7 +162,7 @@ test('the sign-in succeeds but the status says signed out -> error', async () =>
 
 test('the person finished in a browser on this computer: a client that exits 0 before any code goes straight to checking', async () => {
   // The client is a fake group leader that prints "Login successful" and reports exit 0 (no real program).
-  const script = '/nonexistent/quick-claude';
+  const script = BIN;
   const quickSpawn = () => {
     const k = fakeKid(9300);
     setImmediate(() => { k.stdout.emit('data', 'Login successful\n'); k.emit('message', { op: 'result', code: 0 }); });
@@ -234,8 +234,9 @@ test('authStatus: signed in, signed out (exit 1, no JSON), and an unusable answe
     setImmediate(() => { c.stdout.emit('data', 'hello'); c.emit('exit', 3); c.emit('close', 3); });
     return c;
   };
-  assert.strictEqual((await S.authStatus({ bin: 'junk', env: o.env, spawn: junkSpawn })).loggedIn, null);
-  assert.strictEqual((await S.authStatus({ bin: path.join(TMP, 'nope'), env: o.env })).loggedIn, null);
+  assert.strictEqual((await S.authStatus({ bin: BIN, env: o.env, spawn: junkSpawn })).loggedIn, null);
+  // A program that is not the stand-in (here: one that does not exist) is refused at the boundary, before any spawn.
+  assert.throws(() => S.authStatus({ bin: path.join(TMP, 'nope'), env: o.env }), /refused to run a real program/);
 });
 
 test('findClient: CLAUDE_CLI_PATH as an executable file wins; a directory or a non-executable file is skipped', () => {
@@ -325,7 +326,7 @@ function fakeEngine(o = {}) {
     spawn: (bin, args, opts) => { const k = fakeKid(++pid); kids.push(k); spawned.push({ bin, args, opts }); return k; },
     // The parent only probes (signal 0); the group is "gone" once the test says so.
     kill: (p, sig) => { kills.push([p, sig]); if (gone.has(p)) throw ESRCH(); }, setTimer, clearTimer, timeoutMs: OVERALL,
-    env: () => ({}), findClient: o.find || (() => ({ bin: '/nonexistent/claude' })), installClient: o.install || (async () => false),
+    env: () => ({}), findClient: o.find || (() => ({ bin: BIN })), installClient: o.install || (async () => false),
     authStatus: async () => ({ loggedIn: true }), verify: async () => ({ ok: true }), resetCli: o.resetCli, existingClient: o.existing,
   });
   const live = () => timers.filter(t => !t.cleared);
@@ -366,7 +367,7 @@ test('only one code is accepted per attempt: a second one is refused with state'
 
 test('start answers at once, before the client is found; the attempt is busy meanwhile', async () => {
   let release;
-  const e = fakeEngine({ find: () => new Promise((res) => { release = () => res({ bin: '/nonexistent/claude' }); }) });
+  const e = fakeEngine({ find: () => new Promise((res) => { release = () => res({ bin: BIN }); }) });
   const r = await e.si.start();
   assert.strictEqual(r.ok, true);
   assert.strictEqual(e.si.state().state, 'starting');
@@ -380,7 +381,7 @@ test('start answers at once, before the client is found; the attempt is busy mea
 test('the client is started in its own process group, and cancel asks the group leader to stop (the leader does SIGTERM, then SIGKILL after 3 s, see the drain tests); the slot stays busy until the group is gone', async () => {
   const e = fakeEngine();
   await e.toLink();
-  assert.deepStrictEqual(e.kids[0].sent[0], { op: 'start', bin: '/nonexistent/claude', args: ['auth', 'login', '--claudeai'], allowReal: false });
+  assert.deepStrictEqual(e.kids[0].sent[0], { op: 'start', bin: BIN, args: ['auth', 'login', '--claudeai'], allowReal: false });
   assert.strictEqual(e.spawned[0].opts.detached, true);
   const pid = e.kids[0].pid;
   e.si.cancel();
@@ -427,7 +428,7 @@ test('the overall timeout ends a running installer by group too, and the state i
 
 test('after the install the client is found again and the sign-in goes on from installing to the link', async () => {
   let installed = false, done;
-  const e = fakeEngine({ find: () => (installed ? { bin: '/nonexistent/claude' } : null), install: () => new Promise((res) => { done = () => { installed = true; res(true); }; }) });
+  const e = fakeEngine({ find: () => (installed ? { bin: BIN } : null), install: () => new Promise((res) => { done = () => { installed = true; res(true); }; }) });
   await e.si.start(); await flush();
   assert.strictEqual(e.si.state().state, 'installing');
   done(); await flush();
@@ -533,12 +534,12 @@ test('a group leader without a pid (the spawn failed) drains at once and is neve
   const { startGroup } = require(path.join(ISO.inst, 'lib', 'claude-signin-group'));
   const probes = [], timers = [];
   const noPid = new EventEmitter(); noPid.connected = false;
-  const j1 = startGroup('x', [], { spawn: () => noPid, kill: (p, s) => probes.push([p, s]), stdio: ['ignore', 'ignore', 'ignore'] });
+  const j1 = startGroup(BIN, [], { spawn: () => noPid, kill: (p, s) => probes.push([p, s]), stdio: ['ignore', 'ignore', 'ignore'] });
   noPid.emit('exit', 1);
   await j1.drained;
   assert.deepStrictEqual(probes, []);
   const there = fakeKid(9);
-  const j2 = startGroup('x', [], { spawn: () => there, kill: (p, s) => { probes.push([p, s]); }, setTimer: (fn, ms) => timers.push([fn, ms]), stdio: ['ignore', 'ignore', 'ignore'] });
+  const j2 = startGroup(BIN, [], { spawn: () => there, kill: (p, s) => { probes.push([p, s]); }, setTimer: (fn, ms) => timers.push([fn, ms]), stdio: ['ignore', 'ignore', 'ignore'] });
   let drained = false; j2.drained.then(() => { drained = true; });
   there.emit('exit', 1);
   await flush();
@@ -564,7 +565,7 @@ for (const phase of ['status', 'verify']) {
       return new Promise(resolve => { finish = resolve; });
     };
     const engine = S.createSignIn({
-      findClient: () => ({ bin: 'stand-in' }),
+      findClient: () => ({ bin: BIN }),
       env: () => ({}),
       spawn: () => child,
       authStatus: phase === 'status' ? deferred : async () => ({ loggedIn: true }),
@@ -601,7 +602,7 @@ test('the overall timeout still ends an attempt that is checking: failed timeout
   const observed = {};
   const verifyEntered = new Promise(r => { observed.resolve = r; });
   const engine = S.createSignIn({
-    findClient: () => ({ bin: 'stand-in' }), env: () => ({}), spawn: () => child, kill: () => { throw ESRCH(); }, setTimer, clearTimer: (t) => { if (t) t.cleared = true; },
+    findClient: () => ({ bin: BIN }), env: () => ({}), spawn: () => child, kill: () => { throw ESRCH(); }, setTimer, clearTimer: (t) => { if (t) t.cleared = true; },
     timeoutMs: OVERALL, authStatus: async () => ({ loggedIn: true }),
     verify: ({ signal }) => { observed.signal = signal; observed.resolve(); return new Promise(r => { finish = r; }); },
   });
@@ -634,7 +635,7 @@ test('authStatus: an abort kills the child and answers unknown only after it clo
   const c = mk();
   const ac = new AbortController();
   let answer;
-  const p = S.authStatus({ bin: 'x', signal: ac.signal, spawn: () => c, ...deps }).then(v => { answer = v; return v; });
+  const p = S.authStatus({ bin: BIN, signal: ac.signal, spawn: () => c, ...deps }).then(v => { answer = v; return v; });
   ac.abort();
   await flush();
   assert.deepStrictEqual(c.signals, ['SIGKILL']);
@@ -645,29 +646,29 @@ test('authStatus: an abort kills the child and answers unknown only after it clo
   assert.ok(timers.every(t => t.cleared), 'its timer is cleared');
   // already aborted
   let spawned = 0;
-  assert.deepStrictEqual(await S.authStatus({ bin: 'x', signal: AbortSignal.abort(), spawn: () => { spawned++; return mk(); }, ...deps }), { loggedIn: null, method: null });
+  assert.deepStrictEqual(await S.authStatus({ bin: BIN, signal: AbortSignal.abort(), spawn: () => { spawned++; return mk(); }, ...deps }), { loggedIn: null, method: null });
   assert.equal(spawned, 0);
   // the timeout kills it, and the answer comes at close
   const c2 = mk();
-  const p2 = S.authStatus({ bin: 'x', spawn: () => c2, ...deps });
+  const p2 = S.authStatus({ bin: BIN, spawn: () => c2, ...deps });
   timers[timers.length - 1].fn();
   assert.deepStrictEqual(c2.signals, ['SIGKILL']);
   c2.emit('close', null);
   assert.deepStrictEqual(await p2, { loggedIn: null, method: null });
   // a spawn error then close (as Node does): unknown, no hang
   const c3 = mk();
-  const p3 = S.authStatus({ bin: 'x', spawn: () => c3, ...deps });
+  const p3 = S.authStatus({ bin: BIN, spawn: () => c3, ...deps });
   c3.emit('error', new Error('ENOENT'));
   c3.emit('close', -2);
   assert.deepStrictEqual(await p3, { loggedIn: null, method: null });
   // the ordinary answers still work with a fake child
   const c4 = mk();
-  const p4 = S.authStatus({ bin: 'x', spawn: () => c4, ...deps });
+  const p4 = S.authStatus({ bin: BIN, spawn: () => c4, ...deps });
   c4.stdout.emit('data', JSON.stringify({ loggedIn: true, authMethod: 'claude.ai' }));
   c4.emit('close', 0);
   assert.deepStrictEqual(await p4, { loggedIn: true, method: 'claude.ai' });
   const c5 = mk();
-  const p5 = S.authStatus({ bin: 'x', spawn: () => c5, ...deps });
+  const p5 = S.authStatus({ bin: BIN, spawn: () => c5, ...deps });
   c5.emit('close', 1);
   assert.deepStrictEqual(await p5, { loggedIn: false, method: null });
 });
@@ -711,7 +712,7 @@ test('after any install the hub\'s client resolution is reset before the client 
   const order = [];
   let installed = false;
   const e = fakeEngine({
-    find: () => { order.push(installed ? 'find-after' : 'find-before'); return installed ? { bin: '/nonexistent/claude' } : null; },
+    find: () => { order.push(installed ? 'find-after' : 'find-before'); return installed ? { bin: BIN } : null; },
     install: async () => { order.push('install'); installed = true; return true; },
     resetCli: () => order.push('resetCli'),
   });

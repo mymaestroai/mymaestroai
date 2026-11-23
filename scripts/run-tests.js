@@ -28,8 +28,9 @@ if (!files.length) { console.error('run-tests: no test files found under test/')
 // No test reaches this computer's real Docker (its agent boxes): DOCKER_HOST points nowhere unless a run opts in.
 const env = { ...process.env, DOCKER_HOST: process.env.MM_TEST_REAL_DOCKER === '1' ? (process.env.DOCKER_HOST || '') : 'unix:///nonexistent/docker-for-tests.sock' };
 // No test reaches this computer's real Claude folder, npm folders or npm's update check: they point at fresh folders under a temp root
-// made for this run. HOME is deliberately NOT changed: 12 tool-policy tests judge paths against the real home.
+// made for this run. Only the policy-test batch below retains the operator’s HOME.
 const sealRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mm-tests-'));
+env.MM_TEST_NO_REAL_CLAUDE = '1';
 env.CLAUDE_CONFIG_DIR = path.join(sealRoot, 'claude-config');
 env.npm_config_prefix = path.join(sealRoot, 'npm-global');
 env.npm_config_cache = path.join(sealRoot, 'npm-cache');
@@ -44,7 +45,21 @@ env.NODE_OPTIONS = `${env.NODE_OPTIONS ? env.NODE_OPTIONS + ' ' : ''}--require $
 const reportDir = fs.mkdtempSync(path.join(os.tmpdir(), 'data-guard-run-'));
 env.MM_DATA_GUARD_REPORT = path.join(reportDir, 'refused.jsonl');
 fs.writeFileSync(env.MM_DATA_GUARD_REPORT, '', { mode: 0o600 });   // made before the run: a report that cannot be read back fails it
-const r = spawnSync(process.execPath, ['--test', ...process.argv.slice(2), ...files], { cwd: ROOT, stdio: 'inherit', env });
+// Only these policy tests need the operator's home pathname.
+const homePolicy = new Set(['test/lockbox-wire.test.js', 'test/tool-policy.test.js',
+  'test/tool-policy-heredoc.test.js']);
+const privateHome = path.join(sealRoot, 'home');
+fs.mkdirSync(privateHome, { mode: 0o700 });
+let r = { status: 0 };
+for (const [selected, home] of [
+  [files.filter(file => !homePolicy.has(file)), privateHome],
+  [files.filter(file => homePolicy.has(file)), env.HOME || os.homedir()]
+]) {
+  if (!selected.length) continue;
+  const result = spawnSync(process.execPath, ['--test', ...process.argv.slice(2), ...selected],
+    { cwd: ROOT, stdio: 'inherit', env: { ...env, HOME: home } });
+  if (result.error || result.status !== 0) r = result;
+}
 let refused = [];
 try { refused = fs.readFileSync(env.MM_DATA_GUARD_REPORT, 'utf8').split('\n').filter(Boolean); }
 catch (e) { refused = [JSON.stringify({ test: 'run-tests', path: `the guard's report could not be read (${e.code || e.message})`, how: 'report' })]; }

@@ -57,6 +57,12 @@ test('a resolved client that is deleted: cliOptions() no longer returns its path
 
 test('a resolved client that is deleted: the next candidate in the same order is used', (t) => {
   const lines = isolate(t);
+  // The sealed guard makes the npm prefix invisible to the loader; this test is about the npm-global candidate, so the loader's own
+  // check is answered true here (only the loader reads it; the prefix is a temp folder, so npm is never asked).
+  const guard = require('../lib/claude-signin-guard');
+  const savedReal = guard.realAllowed;
+  guard.realAllowed = () => true;
+  t.after(() => { guard.realAllowed = savedReal; });
   const pinned = fakeClient('pinned-b');
   const npm = path.join(ROOT, 'empty-prefix', 'lib', 'node_modules', L.CLI_PKG);
   fs.mkdirSync(path.join(npm, 'bin'), { recursive: true });

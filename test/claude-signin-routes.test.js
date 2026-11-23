@@ -53,7 +53,7 @@ function fakeEngine() {
     return c;
   };
   const si = S.createSignIn({
-    spawn, env: () => ({}), findClient: () => ({ bin: '/nonexistent/fake-claude', source: 'test' }), installClient: async () => false,
+    spawn, env: () => ({}), findClient: () => ({ bin: path.join(__dirname, 'fixtures', 'fake-claude-client.js'), source: 'test' }), installClient: async () => false,
     authStatus: async () => ({ loggedIn: true }), verify: async () => ({ ok: true, state: 'ready' }),
   });
   return { si, kids };

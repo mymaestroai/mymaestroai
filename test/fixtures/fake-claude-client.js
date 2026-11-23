@@ -12,47 +12,81 @@
 const fs = require('fs');
 const path = require('path');
 
-const dir = process.env.CLAUDE_CONFIG_DIR || path.join(process.env.HOME || '.', '.claude');
-const creds = path.join(dir, '.credentials.json');
-const args = process.argv.slice(2);
-
-if (args[0] === 'auth' && args[1] === 'status') {
-  const loggedIn = fs.existsSync(creds);
-  process.stdout.write(JSON.stringify({ loggedIn, authMethod: 'claude.ai' }) + '\n');
-  process.exit(loggedIn ? 0 : 1);
-} else if (args[0] === 'auth' && args[1] === 'login') {
-  const mode = process.env.FAKE_CLAUDE_MODE || '';
-  if (mode === 'network') {
-    process.stdout.write('Failed to connect to api: getaddrinfo ENOTFOUND platform.claude.com\n');
-    process.exit(1);
+// Resolve the nearest existing parent before creating missing directories.
+function fixtureDir(raw, temp = require('node:os').tmpdir()) {
+  if (!raw || !path.isAbsolute(raw)) throw new Error('private CLAUDE_CONFIG_DIR required');
+  const root = fs.realpathSync(temp);
+  let parent = path.resolve(raw);
+  const missing = [];
+  for (;;) {
+    try { fs.lstatSync(parent); break; }
+    catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+      missing.unshift(path.basename(parent));
+      parent = path.dirname(parent);
+    }
   }
-  if (mode === 'hang') {
-    setInterval(() => {}, 1000);
-  } else {
-    process.stdout.write('Opening browser to sign in…\n');
-    process.stdout.write("If the browser didn't open, visit:\n");
-    process.stdout.write('https://claude.example/oauth/authorize?code=true&state=standin\n');
-    process.stdout.write('Paste code here if prompted > ');
-    let buf = '';
-    process.stdin.setEncoding('utf8');
-    process.stdin.on('data', (d) => {
-      buf += d;
-      const i = buf.indexOf('\n');
-      if (i < 0) return;
-      const line = buf.slice(0, i).trim();
-      if (line === 'GOOD-CODE-12345') {
-        fs.mkdirSync(dir, { recursive: true });
-        fs.writeFileSync(creds, JSON.stringify({ token: 'dummy-token' }), { mode: 0o600 });
-        process.stdout.write('\nLogin successful\n');
-        process.exit(0);
-      }
-      process.stdout.write('\nOAuth error: Invalid code. Please make sure the full code was copied\n');
-      if (mode === 'stay') { buf = ''; return; }   // the client stays alive and asks again
-      process.exit(1);
-    });
-    process.stdin.on('end', () => process.exit(1));
-  }
-} else {
-  process.stderr.write('fake claude client: unsupported arguments\n');
-  process.exit(2);
+  const target = path.join(fs.realpathSync(parent), ...missing);
+  const rel = path.relative(root, target);
+  if (!rel || rel === '..' || rel.startsWith('..' + path.sep) || path.isAbsolute(rel))
+    throw new Error('private CLAUDE_CONFIG_DIR required');
+  fs.mkdirSync(target, { recursive: true, mode: 0o700 });
+  return target;
 }
+
+function writeDummy(dir) {
+  const stage = fs.mkdtempSync(path.join(dir, '.fake-auth-'));
+  try {
+    const file = path.join(stage, 'credentials');
+    fs.writeFileSync(file, JSON.stringify({ token: 'dummy-token' }), { flag: 'wx', mode: 0o600 });
+    fs.renameSync(file, path.join(dir, '.credentials.json'));
+  } finally { fs.rmSync(stage, { recursive: true, force: true }); }
+}
+
+function main() {
+  const dir = fixtureDir(process.env.CLAUDE_CONFIG_DIR);
+  const creds = path.join(dir, '.credentials.json');
+  const args = process.argv.slice(2);
+
+  if (args[0] === 'auth' && args[1] === 'status') {
+    const loggedIn = fs.existsSync(creds);
+    process.stdout.write(JSON.stringify({ loggedIn, authMethod: 'claude.ai' }) + '\n');
+    process.exit(loggedIn ? 0 : 1);
+  } else if (args[0] === 'auth' && args[1] === 'login') {
+    const mode = process.env.FAKE_CLAUDE_MODE || '';
+    if (mode === 'network') {
+      process.stdout.write('Failed to connect to api: getaddrinfo ENOTFOUND platform.claude.com\n');
+      process.exit(1);
+    }
+    if (mode === 'hang') {
+      setInterval(() => {}, 1000);
+    } else {
+      process.stdout.write('Opening browser to sign in…\n');
+      process.stdout.write("If the browser didn't open, visit:\n");
+      process.stdout.write('https://claude.example/oauth/authorize?code=true&state=standin\n');
+      process.stdout.write('Paste code here if prompted > ');
+      let buf = '';
+      process.stdin.setEncoding('utf8');
+      process.stdin.on('data', (d) => {
+        buf += d;
+        const i = buf.indexOf('\n');
+        if (i < 0) return;
+        const line = buf.slice(0, i).trim();
+        if (line === 'GOOD-CODE-12345') {
+          writeDummy(dir);
+          process.stdout.write('\nLogin successful\n');
+          process.exit(0);
+        }
+        process.stdout.write('\nOAuth error: Invalid code. Please make sure the full code was copied\n');
+        if (mode === 'stay') { buf = ''; return; }   // the client stays alive and asks again
+        process.exit(1);
+      });
+      process.stdin.on('end', () => process.exit(1));
+    }
+  } else {
+    process.stderr.write('fake claude client: unsupported arguments\n');
+    process.exit(2);
+  }
+}
+if (require.main === module) main();
+module.exports = { fixtureDir, writeDummy };

@@ -25,6 +25,7 @@ function makeIsolatedInstall(prefix = 'isolated-install-', { copy = [] } = {}) {
   fs.cpSync(path.join(REAL, 'lib'), path.join(inst, 'lib'), { recursive: true, dereference: true });
   fs.symlinkSync(path.join(REAL, 'node_modules'), path.join(inst, 'node_modules'));
   // Files at the top of the install that lib/ modules read (never write): copied so their paths stay inside the throwaway install.
+  fs.writeFileSync(path.join(inst, '.mm-test-install'), '1\n', { flag: 'wx', mode: 0o600 });
   for (const f of ['package.json']) { try { fs.copyFileSync(path.join(REAL, f), path.join(inst, f)); } catch { /* not there */ } }
   // The example agents list is shipped in git (not install data); lib/ falls back to it when data/agents.json is missing.
   try { fs.copyFileSync(path.join(REAL, 'data', 'agents.example.json'), path.join(data, 'agents.example.json')); } catch { /* not there */ }

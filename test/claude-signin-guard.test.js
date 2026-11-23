@@ -59,14 +59,16 @@ test('allowedProgram: bash never; missing paths yes; existing only when byte-ide
   assert.strictEqual(G.allowedProgram(NOT_STAND_IN), false, 'an existing executable in os.tmpdir() that is not the stand-in');
   assert.strictEqual(G.allowedProgram(SCRIPT), false, 'a small script in os.tmpdir() that is not the stand-in');
   assert.strictEqual(G.allowedProgram(OUTSIDE), false);
-  assert.strictEqual(G.allowedProgram('/nonexistent/claude'), true, 'a path that does not exist: only a fake spawn can run it');
-  assert.strictEqual(G.allowedProgram(path.join(TMP, 'not-there')), true);
+  assert.strictEqual(G.allowedProgram('/nonexistent/claude'), false, 'a path that does not exist is refused too: only the stand-in itself passes');
+  assert.strictEqual(G.allowedProgram(path.join(TMP, 'not-there')), false);
   assert.strictEqual(G.allowedProgram(''), false);
   assert.strictEqual(G.allowedProgram('bash'), false);
   assert.strictEqual(G.allowedProgram('/nonexistent/bash'), false, 'bash is refused even where it does not exist');
   const bash = path.join(TMP, 'bash');
   fs.copyFileSync(FIXTURE, bash);
-  assert.strictEqual(G.allowedProgram(bash), false, 'bash is never allowed, whatever the content');
+  assert.strictEqual(G.allowedProgram(bash), true, 'the name does not matter: byte-identical to the stand-in is the stand-in');
+  fs.writeFileSync(bash, '#!/bin/sh\n', { mode: 0o755 });
+  assert.strictEqual(G.allowedProgram(bash), false, 'a file called bash with other content');
   const toOutside = path.join(TMP, 'link-to-outside');
   fs.symlinkSync(OUTSIDE, toOutside);
   assert.strictEqual(G.allowedProgram(toOutside), false, 'a link to a program that is not the stand-in is resolved');
@@ -78,35 +80,37 @@ test('allowedProgram: bash never; missing paths yes; existing only when byte-ide
   assert.strictEqual(G.allowedProgram(dangling), false, 'a dangling link is not "nothing there"');
 });
 
-test('allowedProgram: a bare name is refused when it resolves on PATH, allowed when it does not exist', () => {
+test('allowedProgram: a bare name is refused, whether it resolves on PATH or not', () => {
   const bin = fs.mkdtempSync(path.join(TMP, 'bin-'));
   fs.writeFileSync(path.join(bin, 'mm-guard-prog'), '#!/bin/sh\n', { mode: 0o755 });
   try {
     process.env.PATH = bin + path.delimiter + '/usr/bin';
     assert.strictEqual(G.allowedProgram('mm-guard-prog'), false);
-    assert.strictEqual(G.allowedProgram('mm-guard-no-such-prog'), true);
+    assert.strictEqual(G.allowedProgram('mm-guard-no-such-prog'), false);
     assert.strictEqual(G.allowedProgram('ls'), false);
   } finally { process.env.PATH = savedPath; }
 });
 
-test('the opt-in is an in-process flag: a fresh copy of the guard that opts in allows everything, this one still refuses', () => {
+test('test mode is captured at load: the opt-in cannot enable real effects, even in a fresh copy of the guard, and with the context variables gone', () => {
+  assert.strictEqual(G.underTest(), true, 'sealed (MM_TEST_NO_REAL_CLAUDE or the install marker), NODE_TEST_CONTEXT or not');
   const key = require.resolve(GUARD_PATH);
   const cached = require.cache[key];
   delete require.cache[key];
   try {
     const fresh = require(GUARD_PATH);
     assert.notStrictEqual(fresh, G);
+    assert.strictEqual(fresh.underTest(), true);
     assert.throws(() => fresh.guardProgram(OUTSIDE), REFUSED);
     fresh.allowRealEffects();
-    assert.strictEqual(fresh.realAllowed(), true);
-    assert.doesNotThrow(() => fresh.guardProgram(OUTSIDE));
-    assert.doesNotThrow(() => fresh.guardProgram('bash'));
-    assert.doesNotThrow(() => fresh.guardProgram());
+    assert.strictEqual(fresh.realAllowed(), false, 'a test-mode process cannot opt in');
+    assert.throws(() => fresh.guardProgram(OUTSIDE), REFUSED);
+    assert.throws(() => fresh.guardProgram('bash'), REFUSED);
+    assert.throws(() => fresh.guardProgram(), REFUSED);
   } finally { require.cache[key] = cached; }
   assert.strictEqual(G.realAllowed(), false);
   assert.throws(() => G.guardProgram(OUTSIDE), REFUSED);
   assert.throws(() => G.guardProgram(), REFUSED, 'the check turn: no program given');
-  assert.strictEqual(G.guardProgramWith(true, OUTSIDE), undefined, 'the supervisor with the parent\'s opt-in');
+  assert.throws(() => G.guardProgramWith(true, OUTSIDE), REFUSED, 'a sealed supervisor ignores the parent\'s opt-in');
   assert.throws(() => G.guardProgramWith(false, OUTSIDE), REFUSED);
   assert.throws(() => G.guardProgramWith(undefined, OUTSIDE), REFUSED);
 });
@@ -151,12 +155,13 @@ test('the engine with a real-machine bin and no injected spawn: refused, failed 
   assert.deepStrictEqual([si.state().state, si.state().reason], ['failed', 'missing']);
 });
 
-test('a fake spawn still handles programs that do not exist (the installer through a marked fake, a missing client path)', async () => {
+test('a fake spawn still handles the installer (through a marked fake) and a stand-in client; a missing client path is refused', async () => {
   const seen = [];
   const gone = () => { throw Object.assign(new Error('gone'), { code: 'ESRCH' }); };
   const fake = Object.assign((bin, args) => { seen.push([bin, args]); const k = new EventEmitter(); k.pid = 9001; k.connected = false; return k; }, { __fakeSpawn: true });
   S.installClient({ spawn: fake, platform: 'linux', kill: gone, timeoutMs: 5 });
-  startGroup('/nonexistent/claude', ['x'], { spawn: fake, stdio: ['ignore', 'ignore', 'ignore'], kill: gone });
+  startGroup(STAND_IN, ['x'], { spawn: fake, stdio: ['ignore', 'ignore', 'ignore'], kill: gone });
+  assert.throws(() => startGroup('/nonexistent/claude', ['x'], { spawn: fake, stdio: ['ignore', 'ignore', 'ignore'], kill: gone }), REFUSED, 'a missing path is refused now');
   assert.strictEqual(seen.length, 2);
   assert.ok(seen.every(([, a]) => a[1] === SUPERVISOR_MARKER), 'the supervisor is started with the marker');
 });
@@ -213,7 +218,7 @@ function channelOf(connected = true) {
 test('the supervisor\'s own default spawn refuses too (no opt-in in the message): result 1, nothing spawned', () => {
   for (const msg of [{ op: 'start', bin: OUTSIDE, args: ['auth', 'status'] }, { op: 'start', bin: NOT_STAND_IN, args: [], allowReal: false }, { op: 'start', bin: 'bash', args: ['-c', 'true'], allowReal: false }]) {
     const { channel, sent } = channelOf();
-    supervise({ channel, argv: ['node', 'sup', MARKER], kill: () => {}, setTimer: () => {} });
+    supervise({ channel, argv: ['node', 'sup', MARKER], ownsProcessGroup: () => true, kill: () => {}, setTimer: () => {} });
     channel.emit('message', msg);
     assert.strictEqual(sent[0].op, 'result');
     assert.strictEqual(sent[0].code, 1);
@@ -222,7 +227,7 @@ test('the supervisor\'s own default spawn refuses too (no opt-in in the message)
 
 test('the supervisor applies the boundary to an injected child_process.spawn too, unless the message carries the opt-in', () => {
   const { channel, sent } = channelOf();
-  supervise({ channel, argv: ['node', 'sup', MARKER], kill: () => {}, setTimer: () => {}, spawn: cp.spawn });
+  supervise({ channel, argv: ['node', 'sup', MARKER], ownsProcessGroup: () => true, kill: () => {}, setTimer: () => {}, spawn: cp.spawn });
   channel.emit('message', { op: 'start', bin: NOT_STAND_IN, args: [], allowReal: false });
   assert.strictEqual(sent[0].code, 1);
 });
@@ -230,7 +235,7 @@ test('the supervisor applies the boundary to an injected child_process.spawn too
 test('the supervisor with a stand-in path and an injected fake spawn still starts it', () => {
   const { channel } = channelOf();
   const seen = [];
-  supervise({ channel, argv: ['node', 'sup', MARKER], kill: () => {}, setTimer: () => {}, spawn: (bin, args) => { seen.push([bin, args]); return new EventEmitter(); } });
+  supervise({ channel, argv: ['node', 'sup', MARKER], ownsProcessGroup: () => true, kill: () => {}, setTimer: () => {}, spawn: (bin, args) => { seen.push([bin, args]); return new EventEmitter(); } });
   channel.emit('message', { op: 'start', bin: STAND_IN, args: ['x'] });
   assert.deepStrictEqual(seen, [[STAND_IN, ['x']]]);
 });
@@ -252,10 +257,10 @@ test('the supervisor without IPC or without the marker exits 1 and never calls k
 test('startGroup passes the marker and the parent\'s opt-in to the supervisor', () => {
   const spawnArgs = [], sent = [];
   const fake = (bin, args, opts) => { spawnArgs.push(args); const k = new EventEmitter(); k.pid = 9002; k.connected = true; k.send = (m, cb) => { sent.push(m); cb && cb(); }; k.disconnect = () => {}; return k; };
-  startGroup('/nonexistent/claude', ['x'], { spawn: fake, stdio: ['ignore', 'ignore', 'ignore'], kill: () => { throw Object.assign(new Error('gone'), { code: 'ESRCH' }); } });
+  startGroup(STAND_IN, ['x'], { spawn: fake, stdio: ['ignore', 'ignore', 'ignore'], kill: () => { throw Object.assign(new Error('gone'), { code: 'ESRCH' }); } });
   assert.strictEqual(spawnArgs[0][spawnArgs[0].length - 1], '--mm-claude-supervisor');
   assert.strictEqual(SUPERVISOR_MARKER, MARKER);
-  assert.deepStrictEqual(sent[0], { op: 'start', bin: '/nonexistent/claude', args: ['x'], allowReal: false });
+  assert.deepStrictEqual(sent[0], { op: 'start', bin: STAND_IN, args: ['x'], allowReal: false });
 });
 
 test('the default verify (the check turn) refuses without the opt-in, in the engine\'s lib and in the command', () => {
@@ -305,13 +310,13 @@ function walk(dir, out = []) {
   return out;
 }
 
-test('allowRealEffects( appears only in server.js and the one hub-cli.js place (and the guard module and its test)', () => {
+test('allowRealEffects( appears only in server.js and the one hub-cli.js place (and the guard module and its two tests)', () => {
   const hits = {};
   for (const f of walk(REAL)) {
     const n = fs.readFileSync(f, 'utf8').split('allowRealEffects(').length - 1;
     if (n) hits[path.relative(REAL, f)] = n;
   }
-  assert.deepStrictEqual(Object.keys(hits).sort(), ['lib/claude-signin-guard.js', 'scripts/hub-cli.js', 'server.js', 'test/claude-signin-guard.test.js']);
+  assert.deepStrictEqual(Object.keys(hits).sort(), ['lib/claude-signin-guard.js', 'scripts/hub-cli.js', 'server.js', 'test/claude-signin-boundaries.test.js', 'test/claude-signin-guard.test.js']);
   assert.strictEqual(hits['server.js'], 1);
   assert.strictEqual(hits['scripts/hub-cli.js'], 1);
   // In hub-cli.js: inside the `connect claude` command path, before connectClaude() runs; not at module load, not in connectClaude.
