@@ -163,7 +163,8 @@ test('the sheet remembers open/closed per device and repaints its dots when stat
   assert.match(block, /localStorage\.setItem\(window\.hubSimple\.MORE_KEY, open \? '1' : '0'\)/);
   assert.match(block, /function simpleAgentsDots\(\) \{\n  if \(!simpleOn\(\)\) return;/);
   assert.match(js, /paintChatStatus\(\);\n  if \(typeof simpleAgentsDots === 'function'\) simpleAgentsDots\(\);/);
-  assert.match(fnSource('simpleAgentRow'), /simpleDotClass\(a\.name\)/);   // the row builder is shared with the wide sidebar
+  assert.match(fnSource('simpleAgentRow'), /simpleDotPaint\(b\.querySelector\('\.sa-dot'\), a\.name\)/);
+  assert.match(fnSource('simpleDotPaint'), /simpleDotClass\(name\)/);   // the row builder is shared with the wide sidebar
   assert.match(fnSource('simpleDotClass'), /pendingQuestion \? 'question' : isBusy\(name\) \? 'busy'/);
 });
 

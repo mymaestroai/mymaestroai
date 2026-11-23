@@ -585,7 +585,7 @@ test('phone activeJobsRelabel rewrites the drawn labels in place and stops its t
 // agentRowHtml with the page's own esc
 function phoneRow(over) {
   const env = Object.assign({
-    unread: {}, live: {}, isBusy: () => false, statusKnown: true, busyText: () => 'busy', shortModel: (m) => 'm:' + m,
+    AgentDot: require('../lib/ui-agent-dot.js'), bgCountOf: () => 0, bgStateOf: () => 'free', unread: {}, live: {}, isBusy: () => false, statusKnown: true, busyText: () => 'busy', shortModel: (m) => 'm:' + m,
     activeJobLead: L.activeJobLead, activeJobLabel: L.activeJobLabel, activeJobTail: L.activeJobTail, activeJobTitle: L.activeJobTitle,
   }, over || {});
   const names = Object.keys(env);
@@ -795,7 +795,7 @@ function phoneFilter(o) {
     agents: [{ name: 'sam', category: 'worker' }, { name: 'robin', category: 'worker' }, { name: 'kim', category: 'lead' }],
     GROUPS: [{ key: 'lead', title: 'Leads' }, { key: 'worker', title: 'Workers' }], collapsed: {},
     live: o.live || {}, streams: new Map(), unread: {}, statusKnown: true, isBusy: (n) => !!(o.live && o.live[n] && o.live[n].busy),
-    busyText: () => 'busy', shortModel: (m) => m, displayName: (n) => n,
+    busyText: () => 'busy', shortModel: (m) => m, displayName: (n) => n, AgentDot: require('../lib/ui-agent-dot.js'),
     localStorage: { getItem: () => null }, matchMedia: () => ({ matches: true }), screen: 'agents',
     document: { visibilityState: 'visible', addEventListener() {} }, isAdmin: () => true, api: async () => ({}), setInterval: () => 0, clearInterval() {},
     activeBusyFrom: L.activeBusyFrom, activeJobsFrom: L.activeJobsFrom, activeJobLead: L.activeJobLead, activeJobLabel: L.activeJobLabel, activeJobTail: L.activeJobTail, activeJobTitle: L.activeJobTitle,

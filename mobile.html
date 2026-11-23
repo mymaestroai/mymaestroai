@@ -126,6 +126,7 @@
       --wk-stop-border: rgba(212,88,139,.6);
       --wk-tool-text: #9ec5ff;
       --worker-busy: #3987e5;
+      --bg-work-ring: #3987e5;   /* the hollow ring and blue line: free, with work running in the background */
       --worker-busy-glow: rgba(57,135,229,.25);
       --worker-done: #199e70;
       --working-chip-bg: rgba(245, 166, 35, 0.14);
@@ -209,6 +210,13 @@
     .agent-model.working.question { color: var(--accent-hover); }
     #working-chip { display: none; margin: 8px 14px 0; padding: 6px 12px; border-radius: 16px; font-size: 13px; color: var(--warning); background: var(--working-chip-bg); width: fit-content; max-width: calc(100% - 28px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     #working-chip.on { display: block; }
+    /* the second chip: free agents with work in the background (blue, never pulsing); sits beside the working chip */
+    #chip-row { display: flex; flex-wrap: wrap; align-items: flex-start; }
+    #bg-chip { display: none; margin: 8px 14px 0; padding: 6px 12px; border: 0; border-radius: 16px; font: inherit; font-size: 13px; color: var(--blue); background: color-mix(in srgb, var(--blue) 14%, transparent); width: fit-content; max-width: calc(100% - 28px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #bg-chip.on { display: block; }
+    /* the ring: free with work in the background. Hollow, var(--bg-work-ring), 7px + 2px line = 11px, no fill, no pulse; busy and question win */
+    .dot.bg-work:not(.busy):not(.question) { width: 7px; height: 7px; border: 2px solid var(--bg-work-ring); border-radius: 50%; background: transparent; animation: none; box-sizing: content-box; }
+    .agent-bg-line { font-size: 11px; color: var(--bg-work-ring); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
     #working-chip.filtering { background: var(--warning); color: var(--on-warning); }
     .reattach { font-size: 12px; color: var(--warning); margin-top: 6px; }
     /* Provider pacing: slim amber bar under the header of every screen (tap to resume full parallel) */
@@ -935,6 +943,16 @@
   .handoff-cards .ho-list .ho-card:not(.ho-ended) { padding: 6px 10px; }
   .handoff-cards .ho-strip.ho-flash { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 15%, var(--bg-input)); }
   @media (prefers-reduced-motion: reduce) { .handoff-cards .ho-strip, .handoff-cards .ho-chev { transition: none; } }
+  /* The "Working on" panel (lib/ui-hand-off-card.js renderPanel): the strip header keeps its look, plus the ring and one row per item */
+  .handoff-cards .ho-strip .wo-ring { flex: none; width: 7px; height: 7px; border: 2px solid var(--bg-work-ring); border-radius: 50%; background: transparent; box-sizing: content-box; }
+  .handoff-cards .wo-row { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; align-items: start; min-width: 0; padding: 6px 10px; font-size: 13px; color: var(--text); background: var(--bg-input); border: 1px solid var(--border); border-radius: 10px; box-sizing: border-box; }
+  .handoff-cards .wo-kind { grid-column: 1 / -1; font-size: 11px; color: var(--text-dim); }
+  .handoff-cards .wo-title { grid-column: 1; min-width: 0; font-weight: 600; overflow-wrap: anywhere; }
+  .handoff-cards .wo-sub { grid-column: 1; min-width: 0; font-size: 12px; color: var(--text-dim); overflow-wrap: anywhere; }
+  .handoff-cards .wo-row .ho-status, .handoff-cards .wo-row .wo-stop { grid-column: 2; grid-row: 2 / span 2; align-self: center; min-height: 32px; padding: 0 12px; font: inherit; font-size: 13px; border-radius: 8px; cursor: pointer; background: transparent; }
+  .handoff-cards .wo-row .ho-status { color: var(--text); border: 1px solid var(--border-strong, var(--border)); text-decoration: none; }
+  .handoff-cards .wo-row .wo-stop { color: var(--pill-failed); border: 1px solid var(--pill-failed); }
+  .handoff-cards .wo-quiet { padding: 6px 10px; font-size: 13px; color: var(--text-dim); border: 1px dashed var(--border); border-radius: 10px; }
   .research-lines .research-line { cursor: default; white-space: normal; overflow-wrap: anywhere; overflow: visible; min-height: 0; }
   /* The hand-off Status sheet (lib/ui-hand-off-card.js openStatus): a bottom sheet at normal reading size */
   .ho-sheet { position: fixed; inset: auto 0 0 0; margin: 0; padding: 0; border: 0; border-top: 1px solid var(--border); border-radius: 14px 14px 0 0; background: var(--bg-secondary, var(--bg-input)); color: var(--text); width: 100%; max-width: 100%; max-height: 85vh; overflow: hidden; box-sizing: border-box; }
@@ -1082,7 +1100,7 @@ html.mm-simple [hidden] { display: none !important; }
 
 /* Hidden in Simple: the page's own bars and menus, tool rows, worker cards, reasoning panels, badges, chips */
 html.mm-simple .topbar, html.mm-simple #chat-meta, html.mm-simple #tabbar, html.mm-simple #tab-activity, html.mm-simple #menu,
-html.mm-simple .pacing-bar, html.mm-simple #working-chip, html.mm-simple #update-card, html.mm-simple #screen-activity,
+html.mm-simple .pacing-bar, html.mm-simple #working-chip, html.mm-simple #bg-chip, html.mm-simple #update-card, html.mm-simple #screen-activity,
 html.mm-simple .tsn, html.mm-simple .feed, html.mm-simple .frow, html.mm-simple .rsn, html.mm-simple .rsn-sheet, html.mm-simple .tsn-sheet,
 html.mm-simple #chat-workers-btn, html.mm-simple .wk-chip, html.mm-simple #chat-model, html.mm-simple #chat-model-pick, html.mm-simple #chat-effort-wrap,
 html.mm-simple #chat-plan, html.mm-simple #chat-ctx, html.mm-simple #menu-credit, html.mm-simple #menu-version, html.mm-simple #agents-approvals,
@@ -1221,6 +1239,7 @@ html.mm-simple .sa-txt small { display: block; color: var(--text-tertiary); font
 html.mm-simple .sa-tick { color: var(--accent); font-weight: 700; flex: none; }
 html.mm-simple .sa-dot { width: 12px; height: 12px; border-radius: 50%; flex: none; background: transparent; }
 html.mm-simple .sa-dot.busy { background: var(--warning); animation: simple-pulse 1.2s ease-in-out infinite; }
+html.mm-simple .sa-dot.bg-work:not(.busy):not(.question) { width: 7px; height: 7px; border: 2px solid var(--bg-work-ring); background: transparent; animation: none; box-sizing: content-box; }
 html.mm-simple .sa-dot.question { background: var(--blue); animation: simple-pulse 1.6s ease-in-out infinite; }
 html.mm-simple .sa-head { margin: 12px 12px 2px; color: var(--text-tertiary); font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
 html.mm-simple .sa-more .sa-chev { color: var(--text-tertiary); flex: none; font-size: 15px; }
@@ -1278,7 +1297,7 @@ html.mm-simple #simple-side { display: none; }
     <div class="topbar" id="agents-head"><h1>My Maestro AI</h1><select id="owner-view" hidden aria-label="Whose agents to show"></select><a class="iconbtn" href="/?desktop=once" title="Full UI" style="text-decoration:none">&#x1F5A5;</a><button type="button" class="mode-toggle" role="switch" aria-checked="false" title="Simple view on/off" hidden><span class="mt-lab">Simple</span><span class="mt-track"><span class="mt-knob"></span></span></button><button class="iconbtn" id="agents-refresh" aria-label="Refresh">&#x21BB;</button><button class="iconbtn" id="agents-menu-btn" aria-label="Menu">&#x22EE;</button></div>
     <div id="update-card" hidden></div>
     <button class="pacing-bar" title="Tap to resume full parallel"></button>
-    <button id="working-chip" title="Tap to show only the agents that are working"></button>
+    <div id="chip-row"><button id="working-chip" title="Tap to show only the agents that are working"></button><button id="bg-chip" title="Tap to open the first of these agents with its background work"></button></div>
     <div class="scroll" id="agents-list"></div>
   </section>
 
@@ -1506,6 +1525,7 @@ html.mm-simple #simple-side { display: none; }
   <script src="/ui-face-player.js"></script>
   <script src="/ui-call-display.js"></script>
   <script src="/ui-file-card.js"></script>
+  <script src="/ui-agent-dot.js"></script>
   <script src="/ui-hand-off-card.js"></script>
   <script src="/ui-claude-signin.js"></script>
   <script src="/ui-code-copy.js"></script>

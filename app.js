@@ -342,6 +342,9 @@
       } else if (btn.previousElementSibling !== prim) prim.after(btn);
       if (btn.classList.contains('open') !== st.open) btn.classList.toggle('open', st.open);
       if (btn.classList.contains('has-busy') !== st.dot) btn.classList.toggle('has-busy', st.dot);
+      // a hidden agent with background work and none busy: the ring (busy wins; shown by CSS only without has-busy)
+      const bgDot = typeof AgentDot !== 'undefined' && st.hidden.some(n => AgentDot.dotState({ busy: busy.has(n), background: bgCountOf(n) }) === 'background');
+      if (btn.classList.contains('has-bg') !== bgDot) btn.classList.toggle('has-bg', bgDot);
       if (btn.getAttribute('aria-expanded') !== String(st.open)) btn.setAttribute('aria-expanded', String(st.open));
       const hidden = new Set(st.hidden);
       for (const g of st.groups) {
@@ -1576,7 +1579,15 @@
       return c && !c.isGroup && c.agent ? String(c.agent) : '';
     }
     // Hand-off cards above the message box (lib/ui-hand-off-card.js): follows the open one-agent chat.
-    if (window.HandOffCard && globalThis.mmSettingsOnly !== true) HandOffCard.track({ getAgent: filesActiveAgent, getContainer: () => document.getElementById('handoff-cards-' + window.__activeChatId), renderMarkdown: (t) => window.formatContentForSheets(t) });
+    if (window.HandOffCard && globalThis.mmSettingsOnly !== true) HandOffCard.track({ getAgent: filesActiveAgent, getContainer: () => document.getElementById('handoff-cards-' + window.__activeChatId), renderMarkdown: (t) => window.formatContentForSheets(t),
+      isAdmin: () => isHubAdmin(),   // the page's own rule (an install with no accounts is its admin's)
+      stopJob: (id) => workingOnPost('/api/jobs/cancel', { id }),
+      stopWorker: (id, agent) => workingOnPost('/api/cancel-worker', { worker_id: id, agent }) });
+    // The "Working on" panel's Stop buttons (same fetch shape as the Workers menu's cancelWorker and jobsApi).
+    function workingOnPost(url, body) {
+      return fetch(url, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+        .then((res) => res.json().catch(() => null)).catch(() => null);
+    }
     function filesOwnerParam() {
       const me = window.hubMe;
       if (!me || !me.isAdmin) return '';
@@ -9416,6 +9427,7 @@
       if (!chat) return false;
       let header = false;
       try { header = headerBusyPaint(chat); } catch {}
+      try { bgPaintChat(chat); } catch {}   // the background ring on the tab and status-bar dots (never on a busy one)
       const keep = (v) => { if (v && !busyCardTimer) busyCardTimer = setInterval(busyCardRefreshAll, 5000); return v; };   // the elapsed time moves while shown
       keep(header);
       const panel = document.getElementById(`messages-${chat.id}`);
@@ -9479,11 +9491,15 @@
         return line;
       };
       const dd = copy.querySelector('.agent-status');
+      copy.querySelectorAll('.agent-bg-line').forEach(x => x.remove());   // an Active copy says done or working, never the blue background line
       // a row in Active is always busy-looking (yellow dot and status line) or done; the job line sits below it
       copy.classList.toggle('active-done', row.doneAt != null);
       if (row.doneAt != null) {
         copy.classList.remove('is-busy'); ensureLine().className = 'agent-busy-line'; line.textContent = '\u2713 done';
-        if (dd) { dd.className = 'agent-status live-idle'; dd.textContent = ''; dd.title = 'Done'; }
+        if (dd) {
+          dd.className = 'agent-status live-idle'; dd.textContent = ''; dd.title = 'Done';
+          if (typeof AgentDot !== 'undefined') { const q = bgCountOf(row.name); AgentDot.applyDot(dd, AgentDot.dotState({ busy: false, question: false, background: q }), { background: q, name: row.name }); }   // done and free, with background work: the ring
+        }
         return;
       }
       const src = orig && orig.querySelector('.agent-busy-line');
@@ -9704,7 +9720,40 @@
     function statusPatchOf(s, keepMissing) {
       const patch = { busy: !!s.busy, busySince: s.busySince || null, activity: s.activity || null, pendingQuestion: !!s.pendingQuestion };
       for (const k of ['worker', 'parent', 'label', 'model', 'consultedBy']) if (k in s) patch[k] = s[k]; else if (!keepMissing) patch[k] = null;
+      if ('background' in s) patch.background = Math.max(0, Math.floor(Number(s.background)) || 0); else if (!keepMissing) patch.background = 0;   // work in the background; the full feed sends it only when above 0
       return patch;
+    }
+    // How many things an agent has running in the background (work handed to another agent, jobs, temporary workers); 0 when none or unknown.
+    function bgCountOf(name) {
+      const s = agentStatus[name];
+      const n = s ? Math.floor(Number(s.background)) : 0;
+      return n > 0 ? n : 0;
+    }
+    // The hub's `background` event { agent, count }: keep the count, repaint every dot/line/header of that agent, tell the panel.
+    function onHubBackground(ev) {
+      if (!ev || !ev.agent) return;
+      const n = Math.max(0, Math.floor(Number(ev.count)) || 0);
+      setAgentLive(ev.agent, { background: n });
+      try { bgPaintChat(findSoloChat(ev.agent)); } catch { /* cosmetic */ }
+      if (typeof HandOffCard !== 'undefined' && typeof HandOffCard.onBackground === 'function') HandOffCard.onBackground(ev.agent);
+    }
+    // Paint the ring on one chat's tab dot and status-bar dot (the CSS shows it only on an idle dot).
+    function bgPaintChat(chat) {
+      if (!chat || chat.isGroup || chat.isWorker || chat.isHistory || !chat.agent || typeof AgentDot === 'undefined') return;
+      const id = chat.chatId || chat.id;
+      const st = agentStatus[chat.agent];
+      const busy = chat.status === 'thinking' || !!(st && st.busy);
+      const question = !!(st && st.pendingQuestion);
+      const state = AgentDot.dotState({ busy, question, background: bgCountOf(chat.agent) });
+      const opts = { background: bgCountOf(chat.agent), name: chat.agent };
+      AgentDot.applyDot(document.querySelector(`#tab-${id} .status`), state, opts);
+      AgentDot.applyDot(document.getElementById(`status-dot-${id}`), state, opts);
+    }
+    // The ring on a ring or blue line was clicked: that agent's chat, with its "Working on" panel open.
+    function bgOpenChat(name) {
+      if (typeof HandOffCard !== 'undefined' && typeof HandOffCard.open === 'function') HandOffCard.open(name);
+      const btn = document.getElementById('agent-btn-' + name);
+      startSoloChat(name, btn && btn.dataset ? btn.dataset.model : undefined);
     }
 
     // Second argument (optional) { namedOnly }: leave workers missing from the map alone (the /api/agents list has none).
@@ -9972,6 +10021,36 @@
       for (const n of names) { try { paintAgentStatus(n); } catch {} }
       if (!names.length && agentRowTicker) { clearInterval(agentRowTicker); agentRowTicker = null; }
     }
+    // The ring (class bg-work, from AgentDot.applyDot) on a list row's dot, and the blue line "Free · 2 things in the background"
+    // under the name; both only in the background state (not replying, not asking). Existing classes stay as they are.
+    function bgPaintRow(name, dot, btn, busy, question) {
+      if (typeof AgentDot === 'undefined' || !dot || !btn) return;
+      const n = bgCountOf(name);
+      const state = AgentDot.dotState({ busy, question, background: n });
+      AgentDot.applyDot(dot, state, { background: n, name });
+      let bl = btn.querySelector('.agent-bg-line');
+      if (state === 'background') {
+        if (!bl) {
+          bl = document.createElement('span'); bl.className = 'agent-bg-line';
+          const info = btn.querySelector('.agent-info') || btn;
+          const job = info.querySelector('.agent-job-line');
+          if (job) info.insertBefore(bl, job); else info.appendChild(bl);
+        }
+        const t = AgentDot.bgLine(n);
+        if (bl.textContent !== t) bl.textContent = t;
+        bl.title = AgentDot.dotLabel(state, { background: n, name });
+      } else if (bl) bl.remove();
+    }
+    // A click on a ring or on the blue line opens that agent's chat with the panel open (before the row's own click).
+    document.addEventListener('click', (e) => {
+      const t = e.target && e.target.closest ? e.target.closest('.agent-btn .agent-status.bg-work, .agent-btn .agent-bg-line') : null;
+      if (!t) return;
+      const row = t.closest('.agent-btn');
+      const name = row && row.dataset ? row.dataset.agent : '';
+      if (!name) return;
+      e.stopPropagation(); e.preventDefault();
+      bgOpenChat(name);
+    }, true);
     function paintAgentStatus(name) {
       const dot = document.getElementById(`agent-status-${name}`);
       const btn = document.getElementById(`agent-btn-${name}`);
@@ -9994,6 +10073,7 @@
       dot.textContent = text;
       dot.title = tip;
       btn.classList.toggle('is-busy', busy || question);
+      bgPaintRow(name, dot, btn, busy, question);   // the hollow ring and the blue line, only when neither replying nor asking
       if (typeof simpleAgentsSoon === 'function') simpleAgentsSoon();   // Simple: the "More agents" dot follows
       // A turn started elsewhere (phone, scheduler, another window) can be stopped from here too:
       // surface the chat's Cancel button while the agent is busy and this window is not streaming it.
@@ -10036,6 +10116,15 @@
       return [...names];
     }
 
+    // How many named agents are free (not replying, not asking) with work running in the background: the header's "with background work".
+    function bgAgentCount() {
+      let n = 0;
+      for (const [name, s] of Object.entries(agentStatus)) {
+        if (!s || busyIsWorker(name, s) || localBusy.has(name) || s.busy || s.pendingQuestion) continue;
+        if (bgCountOf(name) > 0) n++;
+      }
+      return n;
+    }
     function paintAgentsWorking() {
       const el = document.getElementById('agents-working');
       const list = document.getElementById('agent-list');
@@ -10045,7 +10134,16 @@
       const any = split.agents.length > 0 || split.workers.length > 0;
       el.classList.toggle('on', any);
       el.classList.toggle('filtering', busyFilterOn);
-      el.textContent = busyChipLabel(split, busyFilterOn);
+      const busyPart = busyChipLabel(split, busyFilterOn);
+      const hc = typeof AgentDot !== 'undefined' ? AgentDot.headerCount({ working: busyPart, background: bgAgentCount() }) : { busyPart, bgPart: '' };
+      el.classList.toggle('bg-on', !any && !!hc.bgPart);   // only background work: the blue part alone, never the orange .on look
+      if (!hc.bgPart) el.textContent = busyPart;   // nobody in the background: exactly today's text
+      else {
+        el.textContent = '';
+        if (hc.busyPart) el.appendChild(document.createTextNode(hc.busyPart + ' · '));
+        const bg = document.createElement('span'); bg.className = 'aw-bg'; bg.textContent = hc.bgPart;
+        el.appendChild(bg);
+      }
       list?.classList.toggle('busy-filter', busyFilterOn);
       activePaintSoon();
     }
@@ -11165,6 +11263,7 @@
       source.addEventListener('provider_paced', e => { const ev = parse(e); if (ev) upsertPacing(ev, 'paced'); });
       source.addEventListener('provider_ramp', e => { const ev = parse(e); if (ev) upsertPacing(ev, 'ramping'); });
       source.addEventListener('provider_recovered', e => { const ev = parse(e); if (ev && ev.provider) clearPacing(ev.provider); });
+      source.addEventListener('background', e => { const ev = parse(e); if (ev) onHubBackground(ev); });
       source.addEventListener('turn_start', e => { const ev = parse(e); if (ev) onHubTurnStart(ev).catch(err => console.error('[hub-events]', err)); });
       source.addEventListener('turn_delta', e => { const ev = parse(e); if (ev) onHubTurnDelta(ev); });
       source.addEventListener('turn_activity', e => { const ev = parse(e); if (ev) { try { if (ev.agent && chatViewStepsOn(agentSteps[ev.agent] ||= chatViewStepsNew(), ev.turnId, ev.item)) turnStepRepaint(ev.agent); } catch {} onHubTurnActivity(ev); if (ev.item && ev.item.kind === 'worker') scheduleWorkerStatusPoll(); } });
@@ -11790,6 +11889,7 @@
       const statusDot = document.getElementById(`status-dot-${chatId}`);
       const statusTextEl = document.getElementById(`status-text-${chatId}`);
       if (statusDot) statusDot.className = `status-dot ${status}`;
+      try { bgPaintChat(chats[chatId]); } catch { /* cosmetic */ }   // the className above dropped the ring: put it back when it applies
       if (statusTextEl) {
         statusTextEl.textContent = statusText || (status === 'thinking' ? 'Processing...' : status === 'paused' ? 'Paused' : status === 'error' ? 'Error' : 'Idle');
         delete statusTextEl.dataset.hubBusy; delete statusTextEl.dataset.hubPrev;   // this text is the chat's own; headerBusyPaint (below) saves it again before a hub turn covers it

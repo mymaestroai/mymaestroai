@@ -2567,6 +2567,18 @@ async function handleHttpRequest(req, res) {
       return jsonResponse(res, 200, { ok: true, handOffs });   // no folderLink: the Files panel has no link that opens a folder
     }
 
+    // Background work of one agent (lib/background-work): hand-offs it gave, its jobs (named for admins only), its temporary
+    // workers, and the next check. Access is the route's (lib/access AGENT_PATH): an admin any agent, a member their own or shared.
+    {
+      const wm = pathname.match(/^\/api\/agents\/([^/]+)\/working-on$/);
+      if (wm && req.method === 'GET') {
+        let name = ''; try { name = decodeURIComponent(wm[1]); } catch {}
+        // isAdmin from the trusted session (as /api/cancel-worker has it), never from the request
+        const r = await require('./lib/background-work').workingOnResponse(name, { agentNames: (await getAgents()).map(a => a.name), viewer: { isAdmin: !!req.hubService || access.isAdmin(req.hubUser) } });
+        return jsonResponse(res, r.status, r.body);
+      }
+    }
+
     // Deep research progress (lib/sdk-chat researchStatusFor): the active runs of ONE agent, for the line above its chat.
     // Signed-in only (the gate above); a person who may not see that agent gets the same 404 as an unknown one.
     if (pathname === '/api/research/status' && req.method === 'GET') {

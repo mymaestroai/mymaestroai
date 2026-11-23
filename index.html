@@ -36,6 +36,7 @@
       --border-strong: #333846;
       --purple: #a855f7;
       --blue: #3b82f6;
+      --bg-work-ring: #3987e5;   /* the hollow ring and blue line: free, with work running in the background */
       --radius: 4px;
       /* The chat column fills the window. To cap it later (a "limit to 1200px" setting), set this one variable: the
          messages and the composer both follow it, so they always line up. */
@@ -2749,6 +2750,36 @@
     .handoff-cards .ho-list .ho-card:not(.ho-ended) { padding: 6px 10px; }
     .handoff-cards .ho-strip.ho-flash { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 15%, var(--bg-input)); }
     @media (prefers-reduced-motion: reduce) { .handoff-cards .ho-strip, .handoff-cards .ho-chev { transition: none; } }
+    /* The "Working on" panel (lib/ui-hand-off-card.js renderPanel): the strip header kept, a ring in front, rows below, a quiet line when nothing runs */
+    .handoff-cards .wo-ring { flex: none; box-sizing: content-box; width: 7px; height: 7px; border: 2px solid var(--bg-work-ring); border-radius: 50%; background: transparent; }
+    .handoff-cards .ho-list:has(.wo-row) { gap: 0; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-input); overflow: hidden; }
+    .handoff-cards .wo-row { display: grid; grid-template-columns: 104px minmax(0, 1fr) auto; grid-template-areas: "kind title btn" "kind sub btn"; align-items: center; column-gap: 12px; row-gap: 2px; padding: 8px 12px; font-size: 13px; color: var(--text); min-width: 0; }
+    .handoff-cards .wo-row + .wo-row { border-top: 1px solid var(--border); }
+    .handoff-cards .wo-kind { grid-area: kind; align-self: start; font-size: 12px; color: var(--text-dim); }
+    .handoff-cards .wo-title { grid-area: title; font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
+    .handoff-cards .wo-sub { grid-area: sub; min-width: 0; color: var(--text-dim); overflow-wrap: anywhere; }
+    .handoff-cards .wo-row .ho-status, .handoff-cards .wo-row .wo-stop { grid-area: btn; align-self: center; font: inherit; font-size: 13px; line-height: 1.2; padding: 4px 12px; border-radius: 6px; background: transparent; cursor: pointer; text-decoration: none; }
+    .handoff-cards .wo-row .ho-status { color: var(--text); border: 1px solid var(--border-strong, var(--border)); }
+    .handoff-cards .wo-row .wo-stop { color: var(--danger, var(--accent)); border: 1px solid var(--danger, var(--accent)); }
+    .handoff-cards .wo-row .ho-status:hover, .handoff-cards .wo-row .wo-stop:hover { background: color-mix(in srgb, currentColor 12%, transparent); }
+    .handoff-cards .wo-quiet { padding: 6px 10px; font-size: 13px; color: var(--text-dim); border: 1px dashed var(--border-strong, var(--border)); border-radius: 8px; box-sizing: border-box; }
+    @media (max-width: 480px) {
+      .handoff-cards .wo-row { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "kind btn" "title title" "sub sub"; }
+    }
+    /* The ring: free, with work in the background. Hollow, blue, 11 px outside (7 + 2 + 2), still. Only on a dot that is not replying, asking or thinking. */
+    .agent-btn .agent-status.bg-work:not(.live-busy):not(.live-question):not(.thinking),
+    .chat-tab .status.idle.bg-work,
+    .status-bar .status-dot.idle.bg-work {
+      box-sizing: content-box; width: 7px; height: 7px; border: 2px solid var(--bg-work-ring); border-radius: 50%;
+      background: transparent; animation: none; box-shadow: none;
+    }
+    .agent-btn .agent-status.bg-work:not(.live-busy):not(.live-question):not(.thinking) { top: 6px; left: 6px; cursor: pointer; }
+    .agent-btn .agent-bg-line { display: block; font-size: 0.65rem; color: var(--bg-work-ring); cursor: pointer; white-space: normal; overflow-wrap: anywhere; }   /* wraps: it is the line that explains the ring, never cut */
+    .agent-btn .agent-bg-line:hover { text-decoration: underline; }
+    /* header count: the background part is its own blue span; with only background work the chip is shown without the orange .on look */
+    #agents-working .aw-bg { color: var(--bg-work-ring); }
+    #agents-working.bg-on { display: inline-block; background: color-mix(in srgb, var(--bg-work-ring) 14%, transparent); color: var(--bg-work-ring); }
+    #agents-working.filtering .aw-bg { color: inherit; }
     .research-lines .research-line { cursor: default; white-space: normal; overflow-wrap: anywhere; overflow: visible; min-height: 0; }
     /* The hand-off Status sheet (lib/ui-hand-off-card.js openStatus): a centred panel; its body reads like a chat message */
     .ho-sheet { padding: 0; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-secondary, var(--bg-input)); color: var(--text); width: min(720px, calc(100vw - 32px)); max-width: 720px; max-height: 80vh; overflow: hidden; box-sizing: border-box; }
@@ -2995,7 +3026,7 @@
     html.mm-simple #agent-list .agent-group-title, html.mm-simple #agent-list .group-action-btn, html.mm-simple #agent-list > div:not([class]),
     html.mm-simple #agent-active-group,
     html.mm-simple .agent-btn .agent-status, html.mm-simple .agent-btn .model, html.mm-simple .agent-btn .actions, html.mm-simple .agent-btn .action-btn,
-    html.mm-simple .agent-btn .lead-badge, html.mm-simple .agent-btn .agent-busy-line, html.mm-simple .agent-btn .agent-job-line,
+    html.mm-simple .agent-btn .lead-badge, html.mm-simple .agent-btn .agent-busy-line, html.mm-simple .agent-btn .agent-job-line, html.mm-simple .agent-btn .agent-bg-line,
     html.mm-simple .chat-container .status-bar, html.mm-simple .chat-container .thinking-panel,
     html.mm-simple .chat-container .compaction-line,
     html.mm-simple .chat-actions > :not([id^="cancel-"]):not(.agent-name),
@@ -3203,6 +3234,9 @@
     html.mm-simple #agent-list .simple-more.open .sm-chev { transform: rotate(90deg); }
     html.mm-simple #agent-list .simple-more .sm-dot { display: none; position: absolute; top: 50%; right: 14px; width: 9px; height: 9px; margin-top: -4px; border-radius: 50%; background: var(--warning, var(--warning)); animation: pulse 1s infinite; }
     html.mm-simple #agent-list .simple-more.has-busy .sm-dot { display: block; }
+    /* Simple: the ring (free, work in the background) on a row, and on the "More agents" fold when a hidden agent has it and none is busy */
+    html.mm-simple #agent-list .agent-btn .agent-status.bg-work:not(.live-busy):not(.live-question) { display: block !important; position: absolute; top: 50%; right: 14px; left: auto; box-sizing: content-box; width: 7px; height: 7px; margin: -6px 0 0; padding: 0; border: 2px solid var(--bg-work-ring); border-radius: 50%; background: transparent; font-size: 0; line-height: 0; box-shadow: none; animation: none; }
+    html.mm-simple #agent-list .simple-more.has-bg:not(.has-busy) .sm-dot { display: block; box-sizing: content-box; width: 7px; height: 7px; margin-top: -6px; border: 2px solid var(--bg-work-ring); background: transparent; animation: none; }
     html.mm-simple #agent-list .simple-more-h { padding: 12px 12px 4px; font-size: 12px; font-weight: 500; color: var(--sm-muted); }
 
     /* Top right of the chat area: appearance button and the Simple view switch */
@@ -3457,6 +3491,7 @@
   <script src="/ui-face-player.js"></script>
   <script src="/ui-call-display.js"></script>
   <script src="/ui-file-card.js"></script>
+  <script src="/ui-agent-dot.js"></script>
   <script src="/ui-hand-off-card.js"></script>
   <script src="/ui-claude-signin.js"></script>
   <script src="/ui-code-copy.js"></script>

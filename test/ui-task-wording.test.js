@@ -109,5 +109,5 @@ test('a running hand_off step reads "handing over a task"', () => {
 
 test('the tool, ids, API fields and the hub\'s own words keep their names', () => {
   assert.ok(read('lib/hub-events.js').includes("case 'hand_off': return 'hand-off';"), 'the hub\'s status word is unchanged (the pages show it as "task")');
-  assert.ok(read('lib/ui-hand-off-card.js').includes("'/api/hand-offs?agent='"), 'the API path');
+  assert.ok(read('lib/ui-hand-off-card.js').includes("'/api/agents/' + encodeURIComponent(agent) + '/working-on'"), 'the API path');
 });

@@ -1798,6 +1798,7 @@ function applySnapshot(map, repaint = true, opts = {}) {
   const namedOnly = !!(opts && opts.namedOnly);
   for (const [name, s] of Object.entries(map)) {
     const patch = { busy: !!s.busy, busySince: s.busySince || null, activity: s.activity || null, pendingQuestion: !!s.pendingQuestion };
+    if (!namedOnly || 'background' in s) patch.background = Number(s.background) > 0 ? Math.floor(Number(s.background)) : 0;   // work it runs in the background (the hub leaves the key out at 0)
     for (const k of ['worker', 'parent', 'label', 'model', 'consultedBy']) {
       if (namedOnly && !(k in s)) continue;
       patch[k] = k === 'worker' ? busyIsWorker(name, s) : (s[k] || null);
@@ -1873,6 +1874,15 @@ function busyText(name) {
   if (s && s.busy && !streams.has(name) && !currentTurnOrigin(name)) turnOriginFetch(name);   // once per turn: who started it
   const detail = chatBusyDetail(name);
   return `⏳ ${words}${e ? ` · ${e}` : ''}${detail ? ` · ${detail}` : ''}`;
+}
+
+// The hub's `background` event { agent, count }: keep the count, repaint the dots, lines and chip, and let the panel look again.
+function onBackgroundEvent(ev) {
+  if (!ev || !ev.agent) return;
+  const n = Number(ev.count);
+  setLive(ev.agent, { background: n > 0 ? Math.floor(n) : 0 });
+  paintStatus();
+  if (window.HandOffCard && typeof HandOffCard.onBackground === 'function') HandOffCard.onBackground(ev.agent);
 }
 
 function paintStatus() {
@@ -2475,6 +2485,32 @@ function workingNames() {
   return agents.map(a => a.name).filter(n => isBusy(n));
 }
 
+// Background work (hand-offs, jobs, helpers it started) of an agent: the hub's `background` count kept in live[name].
+function bgCountOf(name) {
+  const n = Number(live[name] && live[name].background);
+  return n > 0 ? Math.floor(n) : 0;
+}
+// The ring shows only when the agent is neither replying nor asking (AgentDot.dotState decides).
+function bgStateOf(name, busy, question) {
+  return AgentDot.dotState({ busy: !!busy, question: !!question, background: bgCountOf(name) });
+}
+// Tapping a ring or the blue line (or the blue chip): that agent's chat with the "Working on" panel opened.
+function bgOpenChat(name) {
+  if (!name) return;
+  if (window.HandOffCard && typeof HandOffCard.open === 'function') HandOffCard.open(name);
+  navigate('chat', name);
+}
+// The second chip (blue): agents that are free but have background work. Hidden in Simple (CSS) and when there is none.
+function renderBgChip() {
+  const chip = $('bg-chip');
+  if (!chip) return;
+  const names = agents.map(a => a.name).filter(n => !isBusy(n) && bgCountOf(n) > 0);
+  const text = AgentDot.phoneChip(names.map(displayName));
+  chip.textContent = text;
+  chip.dataset.agent = names[0] || '';
+  chip.classList.toggle('on', !!text);
+}
+
 function renderWorkingChip() {
   const chip = $('working-chip');
   if (!chip) return;
@@ -2498,6 +2534,9 @@ function agentRowHtml(a, opts) {
   const question = !done && !!(s && s.pendingQuestion);
   const working = !done && (isBusy(a.name) || viaWorkers);
   const dotCls = question ? ' question' : working ? ' busy' : statusKnown ? ' idle' : '';
+  const bgState = done || viaWorkers ? 'free' : bgStateOf(a.name, working, question);
+  const bgN = bgState === 'background' ? bgCountOf(a.name) : 0;
+  const bgLabel = bgN ? AgentDot.dotLabel(bgState, { background: bgN, name: a.name }) : '';
   const job = !done && opts && opts.job ? opts.job : null;
   // the name may be cut short (ellipsis); the tail (' + N more · 4 min') never shrinks, so the time always shows
   const jobHtml = job ? `<div class="agent-job" title="${esc(activeJobTitle(job))}"><span class="ajl-name">${esc(activeJobLead(job))}</span><span class="ajl-tail">${esc(activeJobTail(job, Date.now()))}</span></div>` : '';
@@ -2507,11 +2546,13 @@ function agentRowHtml(a, opts) {
       ? '<div class="agent-model working">⏳ working</div>'
       : working
         ? `<div class="agent-model working${question ? ' question' : ''}">${esc(busyText(a.name))}</div>`
-        : `<div class="agent-model" title="${esc(a.blurb || '')}">${esc(a.blurb || shortModel(a.model))}</div>`) + jobHtml;
+        : bgN
+          ? `<div class="agent-bg-line" role="button" title="${esc(bgLabel)}">${esc(AgentDot.bgLine(bgN))}</div>`
+          : `<div class="agent-model" title="${esc(a.blurb || '')}">${esc(a.blurb || shortModel(a.model))}</div>`) + jobHtml;
   return `<button class="agent-row${working ? ' is-busy' : ''}${done ? ' active-done' : ''}" data-agent="${esc(a.name)}">` +
     `<span class="agent-icon">${esc(a.icon || '🤖')}</span>` +
     `<span class="agent-meta"><div class="agent-name">${esc(a.display || a.name)}${a.lead ? ' <span class="lead-badge" title="Lead agent">👑</span>' : ''}</div>${sub}</span>` +
-    `<span class="dot${dotCls}" title="${esc(working && !viaWorkers ? busyText(a.name) : '')}">${question ? '?' : ''}</span>` +
+    `<span class="dot${dotCls}${bgN ? ' ' + AgentDot.CLASS.background : ''}" title="${esc(bgN ? bgLabel : working && !viaWorkers ? busyText(a.name) : '')}"${bgN ? ` aria-label="${esc(bgLabel)}"` : ''}>${question ? '?' : ''}</span>` +
     (n ? `<span class="badge">${n > 99 ? '99+' : n}</span>` : '') +
     '</button>';
 }
@@ -2643,6 +2684,7 @@ function renderAgents() {
   if (activeHeld && list && list.firstChild) { activeMissed = true; return; }
   activeMissed = false;
   renderWorkingChip();
+  renderBgChip();
   if (!agents.length) { list.innerHTML = '<div class="empty">No agents found.</div>'; return; }
   activeWireHold(list);
   activeJobs = activeJobsNow();
@@ -8922,6 +8964,22 @@ function wkOpenHub(parent, item) {
   };
   setTimeout(look, 300);
 }
+// The "Working on" panel's Stop buttons. A job: POST /api/jobs/cancel { id } (admins only; the panel shows the button to them only).
+// A worker: POST /api/cancel-worker { worker_id, agent }, the call the Workers sheet makes (wkStop).
+async function handOffStopJob(id) {
+  try {
+    const res = await api('/api/jobs/cancel', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) });
+    const r = await res.json().catch(() => null);
+    if (!res.ok || (r && r.ok === false)) toast((r && (r.error || r.message)) || 'Could not stop that job');
+  } catch { toast('Could not reach the hub'); }
+}
+async function handOffStopWorker(id, agent) {
+  try {
+    const res = await api('/api/cancel-worker', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ worker_id: id, agent: agent || undefined }) });
+    const r = await res.json().catch(() => null);
+    if (!r || !r.success) toast((r && (r.error || r.message)) || 'Could not stop that worker');
+  } catch { toast('Could not reach the hub'); }
+}
 async function wkStop(e) {
   try {
     const res = await api('/api/cancel-worker', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ worker_id: e.id, agent: e.agent || undefined }) });
@@ -13253,6 +13311,7 @@ function connectEvents() {
   on('provider_ramp', (ev) => upsertPacing(ev, 'ramping'));
   on('provider_recovered', (ev) => { if (ev && ev.provider) clearPacing(ev.provider); });
   on('turn_start', onTurnStart);
+  on('background', onBackgroundEvent);
   on('turn_delta', onTurnDelta);
   on('turn_reasoning', onTurnReasoning);
   on('turn_activity', onTurnActivity);
@@ -14066,8 +14125,10 @@ function wire() {
     const g = e.target.closest('.group-title');
     if (g) { collapsed[g.dataset.group] = !collapsed[g.dataset.group]; saveJson('hub-mobile-collapsed', collapsed); renderAgents(); return; }
     const r = e.target.closest('.agent-row');
+    if (r && e.target.closest('.dot.bg-work, .agent-bg-line')) { bgOpenChat(r.dataset.agent); return; }   // the ring or the blue line: the chat with the panel open
     if (r) navigate('chat', r.dataset.agent);
   });
+  $('bg-chip')?.addEventListener('click', () => bgOpenChat($('bg-chip').dataset.agent));
   $('activity-list').addEventListener('click', (e) => {
     const r = e.target.closest('.act-row');
     if (r) navigate('chat', r.dataset.agent);
@@ -16175,7 +16236,7 @@ function simpleDialog(id) {
 }
 // The agent sheet's rows: Primary first; the rest sit under "More agents" (hubSimple.agentGroups: Specialists, Helpers, Experimental).
 // Closed (the default): the open chat's agent still shows, after the Primary rows; hiddenBusy says a hidden agent is working.
-function simpleAgentSheetModel(list, cur, open, busyOf) {
+function simpleAgentSheetModel(list, cur, open, busyOf, bgOf) {
   const g = window.hubSimple.agentGroups(list, (a) => a.category || 'worker');
   const rows = g.primary.slice();
   const hidden = [];
@@ -16188,6 +16249,7 @@ function simpleAgentSheetModel(list, cur, open, busyOf) {
     hasMore: total > 0 && (isOpen || hidden.length > 0),
     open: isOpen,
     hiddenBusy: !isOpen && hidden.some((a) => !!busyOf(a.name)),
+    hiddenBg: !isOpen && typeof bgOf === 'function' ? hidden.reduce((n, a) => n + (busyOf(a.name) ? 0 : (Number(bgOf(a.name)) || 0)), 0) : 0,   // work in the background of hidden agents that are not replying
   };
 }
 let simpleMoreMem = null;   // the choice made on this page, kept even when localStorage refuses it
@@ -16197,6 +16259,18 @@ function simpleMoreSet(open) { simpleMoreMem = !!open; try { localStorage.setIte
 function simpleDotClass(name) {
   const s = live[name];
   return s && s.pendingQuestion ? 'question' : isBusy(name) ? 'busy' : '';
+}
+// Paint one Simple dot: the busy/question class as before, plus the ring (bg-work) for a free agent with background work.
+function simpleDotPaint(el, name) {
+  if (!el) return;
+  el.className = 'sa-dot ' + simpleDotClass(name);
+  const n = bgCountOf(name);
+  AgentDot.applyDot(el, AgentDot.dotState({ busy: isBusy(name), question: !!(live[name] && live[name].pendingQuestion), background: n }), { background: n, name });
+}
+function simpleMoreDotPaint(el, m) {
+  if (!el) return;
+  el.className = 'sa-dot ' + (m.hiddenBusy ? 'busy' : '');
+  AgentDot.applyDot(el, AgentDot.dotState({ busy: m.hiddenBusy, background: m.hiddenBg }), { background: m.hiddenBg });
 }
 // One agent row, shared by the sheet and the wide sidebar: icon, name, (blurb and tick in the sheet), the busy/question dot.
 // opts.blurb adds the agent's blurb and the tick; opts.onPick runs on a tap (the chat opens after it).
@@ -16209,21 +16283,21 @@ function simpleAgentRow(a, opts) {
   b.querySelector('b').textContent = a.display || a.name;
   b.querySelector('small').textContent = opts.blurb ? (a.blurb || '') : '';
   b.querySelector('.sa-tick').textContent = opts.blurb && a.name === current ? '✓' : '';
-  b.querySelector('.sa-dot').className = 'sa-dot ' + simpleDotClass(a.name);
-  b.addEventListener('click', () => { if (typeof opts.onPick === 'function') opts.onPick(); if (a.name !== current || screen !== 'chat') navigate('chat', a.name); });
+  simpleDotPaint(b.querySelector('.sa-dot'), a.name);
+  b.addEventListener('click', (e) => { if (e && e.target && e.target.closest && e.target.closest('.sa-dot.bg-work') && window.HandOffCard) HandOffCard.open(a.name); if (typeof opts.onPick === 'function') opts.onPick(); if (a.name !== current || screen !== 'chat') navigate('chat', a.name); });
   return b;
 }
 // Fill a container with the agent rows from the one model: Primary first, the "More agents" row, then the open groups.
 function simpleAgentListFill(list, opts) {
   list.textContent = '';
   if (!agents.length) { list.textContent = 'No agents yet.'; return; }
-  const m = simpleAgentSheetModel(agents, current, simpleMoreGet(), isBusy);
+  const m = simpleAgentSheetModel(agents, current, simpleMoreGet(), isBusy, bgCountOf);
   for (const a of m.primary) list.appendChild(simpleAgentRow(a, opts));
   if (m.hasMore) {
     const mb = document.createElement('button'); mb.type = 'button'; mb.className = 'sa-row sa-more'; mb.setAttribute('aria-expanded', String(m.open));
     mb.innerHTML = '<span class="sa-txt"><b>More agents</b></span><span class="sa-chev" aria-hidden="true"></span><span class="sa-dot"></span>';
     mb.querySelector('.sa-chev').textContent = m.open ? '⌃' : '⌄';
-    mb.querySelector('.sa-dot').className = 'sa-dot ' + (m.hiddenBusy ? 'busy' : '');
+    simpleMoreDotPaint(mb.querySelector('.sa-dot'), m);
     mb.addEventListener('click', () => { simpleMoreSet(!m.open); simpleAgentListsRepaint(); });
     list.appendChild(mb);
   }
@@ -16251,9 +16325,9 @@ function simpleAgentsOpen() {
 }
 // Live status changed: repaint the dots in place (no rebuild, so a tap in progress is not lost): the open sheet and the sidebar.
 function simpleDotsIn(box) {
-  box.querySelectorAll('.sa-row[data-agent]').forEach((b) => { const dot = b.querySelector('.sa-dot'); if (dot) dot.className = 'sa-dot ' + simpleDotClass(b.dataset.agent); });
+  box.querySelectorAll('.sa-row[data-agent]').forEach((b) => simpleDotPaint(b.querySelector('.sa-dot'), b.dataset.agent));
   const mb = box.querySelector('.sa-more .sa-dot');
-  if (mb) mb.className = 'sa-dot ' + (simpleAgentSheetModel(agents, current, simpleMoreGet(), isBusy).hiddenBusy ? 'busy' : '');
+  if (mb) simpleMoreDotPaint(mb, simpleAgentSheetModel(agents, current, simpleMoreGet(), isBusy, bgCountOf));
 }
 function simpleAgentsDots() {
   if (!simpleOn()) return;
@@ -16280,7 +16354,7 @@ function simpleSidePaint() {
   if (!simpleOn()) return;
   const s = simpleSideEnsure();
   const listEl = s.querySelector('.ssd-list');
-  const m = simpleAgentSheetModel(agents, current, simpleMoreGet(), isBusy);
+  const m = simpleAgentSheetModel(agents, current, simpleMoreGet(), isBusy, bgCountOf);
   const rowSig = (a) => [a.name, a.display || '', a.icon || ''];
   const sig = JSON.stringify([m.primary.map(rowSig), m.groups.map((g) => [g.key, g.items.map(rowSig)]), m.hasMore, m.open, current, agents.length]);
   if (listEl.dataset.sig !== sig) {
@@ -16529,6 +16603,9 @@ if (typeof document.addEventListener === 'function') document.addEventListener('
 // ── end Simple mode: phone ──
 
 // Hand-off cards above the message box (lib/ui-hand-off-card.js): follow the open chat; none while another screen is shown.
-if (window.HandOffCard) HandOffCard.track({ getAgent: () => (screen === 'chat' ? current : null), getContainer: () => $('handoff-cards'), renderMarkdown: (t) => formatContent(t) });
+if (window.HandOffCard) HandOffCard.track({ getAgent: () => (screen === 'chat' ? current : null), getContainer: () => $('handoff-cards'), renderMarkdown: (t) => formatContent(t),
+  isAdmin: () => isAdmin(),
+  stopJob: (id) => handOffStopJob(id),
+  stopWorker: (id, agent) => handOffStopWorker(id, agent) });
 
 init();

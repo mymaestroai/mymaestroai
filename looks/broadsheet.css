@@ -273,6 +273,7 @@ html[data-look="broadsheet"]:not(.mm-simple) {
   --wk-hitem-open-bg: rgba(155,41,40,0.06);
   --wk-stop-border: rgba(158,42,85,0.6);
   --worker-busy: #2A5C9A;
+  --bg-work-ring: #2A5C9A;   /* the hollow ring and blue line: free, with work running in the background */
   --worker-busy-glow: rgba(42,92,154,0.25);
   --worker-done: #1F6B45;
 

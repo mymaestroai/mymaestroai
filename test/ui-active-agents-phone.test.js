@@ -36,7 +36,7 @@ function oldRow(a, env) {
 function rowEnv(over) {
   const env = {
     unread: { carol: 120, dave: 3 }, live: { bob: { busy: true }, erin: { busy: true, pendingQuestion: true } },
-    isBusy: (n) => n === 'bob' || n === 'erin', statusKnown: true, busyText: (n) => n + ' is working', shortModel: (m) => 'm:' + m, esc,
+    AgentDot: require('../lib/ui-agent-dot.js'), bgCountOf: () => 0, bgStateOf: () => 'free', isBusy: (n) => n === 'bob' || n === 'erin', statusKnown: true, busyText: (n) => n + ' is working', shortModel: (m) => 'm:' + m, esc,
   };
   Object.assign(env, over || {});
   const names = Object.keys(env);
@@ -97,7 +97,7 @@ function renderEnv(over) {
   const o = over || {};
   const list = { innerHTML: '', querySelector: () => null, addEventListener() {} };
   const env = {
-    $: (id) => (id === 'agents-list' ? list : null), renderWorkingChip() {}, agents: o.agents || [], GROUPS: [{ key: 'worker', title: 'Workers' }],
+    $: (id) => (id === 'agents-list' ? list : null), renderWorkingChip() {}, renderBgChip() {}, AgentDot: require('../lib/ui-agent-dot.js'), bgCountOf: () => 0, bgStateOf: () => 'free', agents: o.agents || [], GROUPS: [{ key: 'worker', title: 'Workers' }],
     esc, collapsed: o.collapsed || {}, workingFilter: !!o.workingFilter, isBusy: (n) => !!(o.busy || []).includes(n),
     live: o.live || {}, streams: new Map(), unread: {}, statusKnown: true, busyText: () => 'busy', shortModel: (m) => m,
     activeInitial: () => ({ rows: [] }), activeBusyFrom: (l, s, v) => { env.calls.push(['busyFrom', l, s, v]); return {}; },
