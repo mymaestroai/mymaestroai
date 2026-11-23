@@ -109,7 +109,7 @@ test('wiring: chat handler taps hub-initiated turns and every hub caller tags it
   const chat = read('lib/sdk-chat.js');
   assert.match(chat, /const hubEvents = require\('\.\/hub-events'\)/);
   assert.match(chat, /consulted_by, origin, turn_link(, owner_turn)?(, voice)? \} = body;/);
-  assert.match(chat, /hubEvents\.events\.tapTurn\(res, \{ agent, origin: turnOrigin, message, turnId, startedAt \}\)/);
+  assert.match(chat, /hubEvents\.events\.tapTurn\(res, \{ agent, origin: turnOrigin, message, turnId, startedAt, images: uploadedPaths \}\)/);
   assert.match(chat, /tap\.finish\(!turnError && !stopped, turnError \? turnError\.message : stopped \? 'stopped' : null\)/);
   // member origin (test/member-origin.test.js): what a member's turn starts carries member
   assert.match(chat, /origin: \{ kind: opts\.temporal \? 'task' : 'consultation', from: coordinatorName \|\| null, \.\.\.\(consultMember \? \{ member: true \} : \{\}\) \}/);

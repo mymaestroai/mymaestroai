@@ -10612,7 +10612,13 @@
         const um = { role: 'user', content: ev.message };
         if (card && card.hiddenMsgs) { um.hidden = true; card.hiddenMsgs.push(um); }   // not shown: not saved either (saveChat)
         chat.messages.push(um);
-        setMessageTime(document.getElementById(appendMessage(chat.id, 'user', ev.message, card && card.body)), msgTimeLabel(Date.parse(ev.startedAt) || Date.now()));
+        const umId = appendMessage(chat.id, 'user', ev.message, card && card.body);
+        setMessageTime(document.getElementById(umId), msgTimeLabel(Date.parse(ev.startedAt) || Date.now()));
+        // The pictures the line was sent with (another device): drawn under it as the history redraw does.
+        if (Array.isArray(ev.images) && ev.images.length) {
+          const umEl = document.getElementById(umId);
+          if (umEl) umEl.insertAdjacentHTML('beforeend', imageGalleryHtml(savedImageUrls(ev.images), 'max-height:200px;'));
+        }
       }
       if (!card) appendSystemNotice(chat.id, `⚡ ${hubOriginLabel(ev.origin)} — ${hubTurnTime()}`);
       const msgId = appendMessage(chat.id, 'assistant', '…', card && card.body);
@@ -11979,10 +11985,23 @@
     function addImageToChat(chatId, file) {
       const chat = chats[chatId];
       if (!chat.pendingImages) chat.pendingImages = [];
+      // Track the decoding: a send waits for pictures still being prepared (waitForPreparingImages).
+      if (!chat.imagesPreparing) chat.imagesPreparing = new Set();
+      let settle;
+      const prepared = new Promise(res => { settle = res; });
+      chat.imagesPreparing.add(prepared);
+      prepared.then(() => chat.imagesPreparing.delete(prepared));
+      const objectUrl = URL.createObjectURL(file);
       
       // Resize large images to max 1600px on longest side, compress as JPEG
       const img = new Image();
+      img.onerror = () => {
+        URL.revokeObjectURL(objectUrl);
+        chatFileStatus(chatId, `Could not read that picture (${(file && file.name) || 'picture'}). Try a PNG or JPEG, or a screenshot of it.`, 'error');
+        settle();
+      };
       img.onload = () => {
+        try {
         const MAX_DIM = 1600;
         let { width, height } = img;
         if (width > MAX_DIM || height > MAX_DIM) {
@@ -12000,8 +12019,21 @@
         console.log(`[image] Resized ${img.naturalWidth}x${img.naturalHeight} → ${width}x${height}, size=${(base64.length / 1024).toFixed(0)}KB`);
         chat.pendingImages.push(base64);
         renderImagePreviews(chatId);
+        } finally { URL.revokeObjectURL(objectUrl); settle(); }
       };
-      img.src = URL.createObjectURL(file);
+      img.src = objectUrl;
+    }
+    // A send right after attaching or pasting: the picture may still be decoding. Wait for it (at most IMAGE_WAIT_MS).
+    const IMAGE_WAIT_MS = 15000;
+    async function waitForPreparingImages(chatId) {
+      const chat = chats[chatId];
+      if (!chat || !chat.imagesPreparing || !chat.imagesPreparing.size) return;
+      chatFileStatus(chatId, 'Adding the picture…');
+      let timer;
+      const cap = new Promise(res => { timer = setTimeout(res, IMAGE_WAIT_MS); });
+      try { await Promise.race([Promise.allSettled([...chat.imagesPreparing]), cap]); } finally { clearTimeout(timer); }
+      const st = document.getElementById(`image-preview-${chatId}`)?.querySelector('.chat-file-status');
+      if (st && st.textContent === 'Adding the picture…') chatFileStatus(chatId, '');   // a decode error shown meanwhile stays
     }
     
     function removeImageFromChat(chatId, index) {
@@ -12331,6 +12363,7 @@
     async function sendInterjection(chatId) {
       const chat = chats[chatId];
       const input = document.getElementById(`input-${chatId}`);
+      if (chat.imagesPreparing && chat.imagesPreparing.size) await waitForPreparingImages(chatId);   // (a no-op when sendSoloMessage already waited)
       const content = input.value.trim();
       const imagesToSend = [...(chat.pendingImages || [])];   // the pictures waiting in the input go with the interjection
       if (!content && imagesToSend.length === 0) return;
@@ -12391,6 +12424,7 @@
       // sendOpts.fallback { text, images }: a message that was meant as an interjection but found the turn over. It goes
       // with its own text and pictures; the composer (what is typed or attached now) is neither read nor changed.
       const fallback = sendOpts && sendOpts.fallback ? sendOpts.fallback : null;
+      if (!fallback && !retryCount && chat.imagesPreparing && chat.imagesPreparing.size) await waitForPreparingImages(chatId);   // a picture attached a moment ago is part of this send
       const content = fallback ? String(fallback.text || '').trim() : input.value.trim();
       const pendingImages = fallback ? [...(fallback.images || [])] : (chat.pendingImages || []);
 

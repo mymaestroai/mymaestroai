@@ -511,8 +511,8 @@ test('both pages load /ui-claude-signin.js before their own script, and the file
   assert.match(read('lib/static-files.js'), /\['ui-claude-signin\.js', 'lib\/ui-claude-signin\.js'\]/);
 });
 
-test('the phone service worker is v77', () => {
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v77';/);
+test('the phone service worker is v78', () => {
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v78';/);
 });
 
 test('the script keeps server text out of markup and has no variation selector', () => {

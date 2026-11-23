@@ -9229,7 +9229,7 @@ async function catchUpReattach(ra) {
     const last = chatHistory[chatHistory.length - 1];
     if (!(last && last.role === 'user' && last.content === turn.message)) {
       const note = addNote(`⚡ ${turn.origin?.kind === 'user' ? 'sent from another device' : originLabel(turn.origin)} — ${timeLabel(turn.startedAt)}`);
-      const u = addUserBubble(turn.message, null);
+      const u = addUserBubble(turn.message, savedImageUrls(turn.images));   // with the pictures it was sent with
       setBubbleTime(u, msgTimeLabel(turn.startedAt));
       ra.bubble.el.before(note, u);
     }
@@ -9310,10 +9310,26 @@ function renderPreviews() {
   });
 }
 
+// Pictures still being decoded (a send waits for them, up to IMAGE_WAIT_MS, so a picture attached a moment ago is not left behind).
+const imagesPreparing = new Set();
+const IMAGE_WAIT_MS = 15000;
+async function waitForPreparingImages() {
+  if (!imagesPreparing.size) return;
+  toast('Adding the picture…');
+  let timer;
+  const cap = new Promise(res => { timer = setTimeout(res, IMAGE_WAIT_MS); });
+  try { await Promise.race([Promise.allSettled([...imagesPreparing]), cap]); } finally { clearTimeout(timer); }
+}
+
 function addImageFile(file) {
+  let settle;
+  const prepared = new Promise(res => { settle = res; });
+  imagesPreparing.add(prepared);
+  prepared.then(() => imagesPreparing.delete(prepared));
   const url = URL.createObjectURL(file);
   const img = new Image();
   img.onload = () => {
+    try {
     const MAX_DIM = 1600;
     let { width, height } = img;
     if (width > MAX_DIM || height > MAX_DIM) {
@@ -9326,10 +9342,14 @@ function addImageFile(file) {
     canvas.height = height;
     canvas.getContext('2d').drawImage(img, 0, 0, width, height);
     pendingImages.push(canvas.toDataURL('image/jpeg', 0.85));
-    URL.revokeObjectURL(url);
     renderPreviews();
+    } finally { URL.revokeObjectURL(url); settle(); }
   };
-  img.onerror = () => { URL.revokeObjectURL(url); toast('Could not read that image'); };
+  img.onerror = () => {
+    URL.revokeObjectURL(url);
+    toast(`Could not read that picture (${(file && file.name) || 'picture'}). Try a PNG or JPEG, or a screenshot of it.`);
+    settle();
+  };
   img.src = url;
 }
 
@@ -11846,6 +11866,7 @@ async function sendMessage(fallback) {
   const notify = (err) => { const f = fallback && fallback.onSendResult; if (typeof f !== 'function') return; fallback.onSendResult = null; try { f(err); } catch { /* the caller's problem */ } };
   if (!current) { notify(new Error('no agent')); toast('Pick an agent first'); return; }
   const agent = fallback ? fallback.agent : current;
+  if (!fallback && imagesPreparing.size) { await waitForPreparingImages(); if (current !== agent) return; }   // a picture attached a moment ago is part of this send
   // While the agent is busy (a turn this phone is streaming or one started elsewhere) the
   // composer interjects into that turn; Stop is in the header.
   if (!fallback && (isBusy(agent) || ownTurnFor(agent))) { await sendInterjection(agent); return; }
@@ -13494,7 +13515,7 @@ function onTurnStart(ev) {
     const paint = () => {
       if (typeof ev.message === 'string' && !dup) {
         if (!card) addNote(`⚡ ${ev.origin?.kind === 'user' ? 'sent from another device' : originLabel(ev.origin)} — ${timeLabel()}`);
-        setBubbleTime(addUserBubble(ev.message, null), msgTimeLabel(Date.parse(ev.startedAt) || Date.now()));
+        setBubbleTime(addUserBubble(ev.message, savedImageUrls(ev.images)), msgTimeLabel(Date.parse(ev.startedAt) || Date.now()));   // the pictures the line was sent with
       }
       return addAssistantBubble('…');
     };

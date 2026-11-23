@@ -197,13 +197,13 @@ function turnHarness({ view = 'main', fold = true, forOwnerPending = {} } = {}) 
   const f = new Function('activeTurnStart', 'openTurns', 'hubTurns', 'setLive', 'noteTurnOrigin', 'ownTurnFor', 'chatOpenFor', 'streams', 'chatHistory', 'samePrompt', 'foldAutoOn',
     'autoKindOfOrigin', 'autoInfoOf', 'reattaches', 'promptRecent', 'cardIsLast', 'makeFoldHeader', 'chatEl', 'timeLabel', 'addNote', 'addUserBubble', 'setBubbleTime', 'msgTimeLabel',
     'addAssistantBubble', 'withRenderTarget', 'originLabel', 'forOwnerPending', 'moveReplyOut', 'catchUpOpenAgent', 'scrollChat', 'paintStatus', 'viewNow', 'chatViewIsHubOrigin',
-    'autoCardKind', 'reasoningEnd', 'paintChatStatus', 'busyCardEl',
+    'autoCardKind', 'reasoningEnd', 'paintChatStatus', 'busyCardEl', 'savedImageUrls',
     `let lastHistoryCard = null; ${unhide}; ${src}; return { onTurnStart, unhideHubTurn };`)(
     () => {}, {}, hubTurns, () => {}, () => {}, () => false, () => true, new Map(), [], () => false, () => fold,
     () => 'consultation', () => ({ kind: 'consultation', label: 'Consultation from Forge', firstLine: 'hi' }), new Map(), () => true, () => false,
     () => mkCard(), () => box, () => 't', () => mkEl(box), () => mkEl(box), () => {}, () => 't', () => { const el = mkEl(box); return { el, body: mkEl() }; },
     (el, fn) => fn(), () => 'x', forOwnerPending, (t) => { moved.push(t); f2.unhideHubTurn(t); }, () => {}, () => {}, () => {}, () => view, V.chatViewIsHubOrigin,
-    () => 'consultation', () => {}, () => {}, null);
+    () => 'consultation', () => {}, () => {}, null, () => []);
   const f2 = f;
   return { f, box, hubTurns, moved };
 }
