@@ -18337,7 +18337,9 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const retry = voiceById('st-voice-retry');
       if (retry) retry.style.display = failed && admin ? '' : 'none';
       const en = voiceById('st-voice-enabled');
-      if (en) en.checked = !!(st && st.enabled);
+      // The page sets the switch from the status (after Settings opened): content the page put in, not a change by the person, so
+      // Close does not ask "Discard changes?" (the switch saves on its own through /api/voice/enable and /disable).
+      if (en) { en.checked = !!(st && st.enabled); try { dialogGuard.markLoaded(en); } catch { /* no guard on this page */ } }
       const pr = voiceById('st-voice-progress');
       if (pr) { pr.style.display = st && st.installing ? '' : 'none'; pr.value = Number(st && st.progress) || 0; }
       const eng = voiceById('st-voice-engines');

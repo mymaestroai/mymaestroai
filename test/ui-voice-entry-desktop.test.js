@@ -442,3 +442,12 @@ test('hint: none while the Settings overlay (or another dialog) is open; it goes
   e.state.overlay = '#st-overlay'; tickAll(e, 3000);
   assert.strictEqual(e.appended.length, 0, 'a showing hint is taken down when Settings opens');
 });
+
+// ── Settings, Voice: the switch the page ticks from the status is not a change by the person ──
+test('voicePaintSettings marks the voice switch as put in by the page, so Close asks no "Discard changes?"', () => {
+  // Fails on 046bca91: the switch was set from the status after Settings opened without dialogGuard.markLoaded, so the hub's
+  // dialog guard saw a changed checkbox and Close asked "Discard changes?" although nothing was changed (seen in proof p3).
+  const s = app.slice(app.indexOf('function voicePaintSettings('), app.indexOf('function voiceSettingsInit('));
+  assert.ok(s.length > 0);
+  assert.match(s, /en\.checked = !!\(st && st\.enabled\);\s*try \{ dialogGuard\.markLoaded\(en\); \}/);
+});
