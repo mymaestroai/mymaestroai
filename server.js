@@ -2220,7 +2220,7 @@ async function handleHttpRequest(req, res) {
     if (pathname === '/api/claude-signin' || pathname.startsWith('/api/claude-signin/')) {
       const csi = require('./lib/claude-signin');
       const r = await require('./lib/claude-signin-routes').handle({
-        method: req.method, pathname, req,
+        method: req.method, pathname, req, res,
         isAdminSession: (q) => require('./lib/access').isAdminSession(q),
         readBody, auth: hubAuth, signIn: () => csi.getSignIn(), words: csi.WORDS,
         hasSignIn: () => require('./lib/claude-auth').hasSignIn(),
@@ -2230,6 +2230,7 @@ async function handleHttpRequest(req, res) {
           if (!sh.isRunning() && sh.settings().enabled) Promise.resolve().then(() => sh.run({ trigger: 'manual' })).catch(() => {});
         },
       });
+      if (res.destroyed) return;
       if (r) return jsonResponse(res, r.status, r.body);
     }
     // ── Health check (lib/system-health): admin-only (the route class above, checked again in the handler). GET the last

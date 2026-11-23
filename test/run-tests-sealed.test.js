@@ -49,3 +49,47 @@ test('a test file named on the command line runs once, in the private-HOME batch
   assert.match(homes[0], /mm-tests-[^/]+\/home$/, 'with the private HOME the runner made');
   assert.notStrictEqual(homes[0], process.env.HOME);
 });
+
+test('selectors must be in the inventory and run only once after normalization', t => {
+  const vm = require('node:vm');
+  const os = require('node:os');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'runner-selection-'));
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  function invoke(args) {
+    const calls = [], errors = [];
+    const stop = new Error('exit');
+    let status;
+    const mockProcess = {
+      argv: ['node', 'run-tests.js', ...args], execPath: 'node', env: { HOME: tmp },
+      exit(code) { status = code; throw stop; }
+    };
+    try {
+      vm.runInNewContext(src, {
+        __dirname: path.resolve(__dirname, '../scripts'), process: mockProcess,
+        console: { error: msg => errors.push(String(msg)) },
+        require(name) {
+          if (name === 'child_process') return {
+            spawnSync(_bin, argv, opts) { calls.push({ argv, home: opts.env.HOME }); return { status: 0 }; }
+          };
+          if (name === 'os') return { tmpdir: () => tmp, homedir: () => tmp };
+          return require(name);
+        }
+      });
+    } catch (err) { if (err !== stop) throw err; }
+    return { calls, errors, status };
+  }
+  const probe = 'test/run-tests-argv-probe.test.js';
+  for (const bad of ['test/integration.test.js', 'test/no-such-selector.test.js']) {
+    const r = invoke([probe, bad]);
+    assert.strictEqual(r.status, 1);
+    assert.ok(r.errors.some(msg => msg.includes('unknown or excluded test file: ' + bad)));
+    assert.strictEqual(r.calls.length, 0);
+  }
+  const r = invoke([probe, './' + probe, 'test/tool-policy.test.js']);
+  assert.strictEqual(r.status, 0);
+  assert.strictEqual(r.calls.length, 2);
+  assert.deepStrictEqual(Array.from(r.calls[0].argv), ['--test', probe]);
+  assert.notStrictEqual(r.calls[0].home, tmp);
+  assert.deepStrictEqual(Array.from(r.calls[1].argv), ['--test', 'test/tool-policy.test.js']);
+  assert.strictEqual(r.calls[1].home, tmp);
+});

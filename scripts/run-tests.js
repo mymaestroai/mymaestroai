@@ -35,6 +35,15 @@ function splitArgs(argv) {
   return { options, chosen };
 }
 if (!files.length) { console.error('run-tests: no test files found under test/'); process.exit(1); }
+const { options, chosen } = splitArgs(process.argv.slice(2));
+const inventory = new Set(files);
+for (const file of chosen) {
+  if (!inventory.has(file)) {
+    console.error(`run-tests: unknown or excluded test file: ${file}`);
+    process.exit(1);
+  }
+}
+const run = chosen.length ? [...new Set(chosen)] : files;
 // No test reaches this computer's real Docker (its agent boxes): DOCKER_HOST points nowhere unless a run opts in.
 const env = { ...process.env, DOCKER_HOST: process.env.MM_TEST_REAL_DOCKER === '1' ? (process.env.DOCKER_HOST || '') : 'unix:///nonexistent/docker-for-tests.sock' };
 // No test reaches this computer's real Claude folder, npm folders or npm's update check: they point at fresh folders under a temp root
@@ -62,8 +71,6 @@ const privateHome = path.join(sealRoot, 'home');
 fs.mkdirSync(privateHome, { mode: 0o700 });
 // Arguments: options (starting with '-', given as --name=value) go to both batches; anything else names test files,
 // which replace the full list and are sorted into their batch, so a chosen file runs once, with the right HOME.
-const { options, chosen } = splitArgs(process.argv.slice(2));
-const run = chosen.length ? chosen : files;
 let r = { status: 0 };
 for (const [selected, home] of [
   [run.filter(file => !homePolicy.has(file)), privateHome],

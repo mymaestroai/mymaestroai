@@ -801,3 +801,52 @@ test('the 10 s drain bound passes while the group is still there: busy', async (
   assert.strictEqual(e.kids.length, 1, 'nothing new was started');
   await e.exit(0);
 });
+
+test('closing the waiting HTTP response cancels only its queued start', async () => {
+  const routes = require(path.join(ISO.inst, 'lib', 'claude-signin-routes'));
+  const e = fakeEngine({ drainWaitMs: 10000 });
+  await e.toLink();
+  e.fire(OVERALL);
+  const failedId = e.si.state().id;
+  const res = new EventEmitter();
+  const answer = routes.handle({
+    method: 'POST', pathname: '/api/claude-signin/start', req: {}, res,
+    isAdminSession: () => true, signIn: () => e.si
+  });
+  assert.strictEqual(res.listenerCount('close'), 1);
+  res.emit('close');
+  assert.strictEqual((await answer).body.reason, 'cancelled');
+  assert.strictEqual(res.listenerCount('close'), 0);
+  assert.strictEqual(e.si.state().id, failedId);
+  assert.ok(!e.live().some(t => t.ms === 10000));
+  await e.exit(0);
+  await flush();
+  assert.strictEqual(e.kids.length, 1, 'the disconnected request never launched a client');
+  assert.strictEqual(e.si.state().id, failedId);
+  const next = await e.si.start();
+  assert.strictEqual(next.ok, true);
+  e.si.cancel(next.id);
+});
+
+test('timeout releases the sole waiter even while the old group is still alive', async () => {
+  const { getEventListeners } = require('node:events');
+  const e = fakeEngine({ drainWaitMs: 10000 });
+  await e.toLink();
+  e.fire(OVERALL);
+  const first = new AbortController();
+  const pending = e.si.start({ signal: first.signal });
+  assert.strictEqual(getEventListeners(first.signal, 'abort').length, 1);
+  e.fire(10000);
+  assert.deepStrictEqual(await pending, { ok: false, reason: 'busy' });
+  assert.strictEqual(getEventListeners(first.signal, 'abort').length, 0);
+  assert.ok(!e.live().some(t => t.ms === 10000));
+  const second = e.si.start();
+  assert.ok(e.live().some(t => t.ms === 10000), 'a fresh waiter took the slot before drain');
+  first.abort();
+  await e.exit(0);
+  const result = await second;
+  assert.strictEqual(result.ok, true);
+  await flush();
+  assert.strictEqual(e.kids.length, 2);
+  e.si.cancel(result.id);
+});

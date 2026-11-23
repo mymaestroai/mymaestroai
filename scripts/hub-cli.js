@@ -226,7 +226,8 @@ async function connectClaude({ say = out, sayErr = (s) => process.stderr.write(s
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     const failedLine = (st) => (st && st.message) || W.failed.error;
     say(W.signedOut);
-    const started = await engine.start();
+    const started = await engine.start({ signal: cliAbort.signal });
+    if (cliAbort.signal.aborted) return 130;
     if (!started || !started.ok) return fail(W.failed[started && started.reason] || W.failed.error);
     attempt = started.id;
     let st = engine.state();
