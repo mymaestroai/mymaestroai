@@ -106,17 +106,25 @@ function rootOwnerNote({ getuid = process.getuid ? process.getuid.bind(process) 
 
 // While the terminal is in the hidden (raw) mode and nobody is reading yet, Ctrl-C is only a typed character. This watches for it
 // (and Ctrl-\) and calls onCtrlC; everything else typed is kept and handed back to the next reader when the returned release() runs.
-function watchCtrlC(onCtrlC) {
+function watchCtrlC(onCtrlC, { keepInput = true } = {}) {
   const stdin = process.stdin;
   const kept = [];
-  const onData = (c) => { const t = String(c); if (t.includes('\u0003') || t.includes('\u001c')) { onCtrlC(); return; } kept.push(t); };
+  const onData = (chunk) => {
+    const text = String(chunk);
+    if (text.includes('\u0003') || text.includes('\u001c')) {
+      onCtrlC();
+      return;
+    }
+    if (keepInput) kept.push(text);
+  };
   stdin.on('data', onData);
   stdin.resume();
   return () => {
     stdin.removeListener('data', onData);
     try { stdin.pause(); } catch { /* closed */ }
-    const t = kept.join(''); kept.length = 0;
-    if (t) { try { stdin.unshift(t); } catch { /* closed */ } }
+    const text = kept.join('');
+    kept.length = 0;
+    if (text) { try { stdin.unshift(text); } catch { /* closed */ } }
   };
 }
 const realHidden = { begin: beginHidden, end: endHidden, watch: watchCtrlC };
@@ -139,7 +147,14 @@ async function connectClaude({ say = out, sayErr = (s) => process.stderr.write(s
   let engine = null, attempt = null, release = null, ended = false;
   const stopEngine = () => { try { if (engine) engine.cancel(attempt); } catch { /* nothing running */ } };
   const endTerminal = () => { if (ended) return; ended = true; if (release) { try { release(); } catch { /* closed */ } release = null; } try { hid.end(); } catch { /* not a terminal any more */ } };
-  const onSignal = () => { stopEngine(); endTerminal(); say(''); exit(130); };
+  const cliAbort = new AbortController();
+  const onSignal = () => {
+    cliAbort.abort();
+    stopEngine();
+    endTerminal();
+    say('');
+    exit(130);
+  };
   process.on('exit', stopEngine);   // Ctrl-C in raw mode ends the process from readHidden: the client is stopped here
   process.on('SIGINT', onSignal);
   process.on('SIGTERM', onSignal);
@@ -148,6 +163,10 @@ async function connectClaude({ say = out, sayErr = (s) => process.stderr.write(s
     if (hid.watch) release = hid.watch(onSignal);   // Ctrl-C is a typed character in this mode: watch for it until the reader takes over
     const si = signin || require(path.join(DIR, 'lib', 'claude-signin'));
     const W = si.WORDS;
+    const cliDone =
+      'Signed in. Claude answered using this installation\'s CLI settings. ' +
+      'If your Maestro service uses a custom account or Claude folder, ' +
+      'use Sign in again on its page to check that service. Otherwise, send your message again.';
     const env = { ...env0 };
     const fileDir = typeof si.configDirFromEnvFile === 'function' ? si.configDirFromEnvFile(envFile) : null;
     const termDir = env.CLAUDE_CONFIG_DIR || null;
@@ -160,32 +179,44 @@ async function connectClaude({ say = out, sayErr = (s) => process.stderr.write(s
       delete env.CLAUDE_CONFIG_DIR;
       if (env0 === process.env) delete process.env.CLAUDE_CONFIG_DIR;
     }
-    const check = verify || (() => require(path.join(DIR, 'lib', 'welcome')).getWelcome().checkClaude({ timeoutMs: 90000 }));
+    const check = verify || (({ signal } = {}) =>
+      require(path.join(DIR, 'lib', 'welcome')).getWelcome().checkClaude({
+        timeoutMs: 90000, signal, probeOnly: true
+      }));
     const macSsh = platform === 'darwin' && !!env0.SSH_CONNECTION;
     const fail = (line) => {
       sayErr(line);
       if (macSsh) sayErr("Over SSH a Mac's keychain can be locked. Run this in Terminal on the Mac itself, or press Sign in again on your Maestro's page.");
       return 1;
     };
-    let found = si.findClient({ env });
-    if (!found) {
-      say('Claude Code is not on this computer. Installing it…');
-      await si.installClient({});
-      found = si.findClient({ env });
-    }
-    if (!found) { sayErr(W.failed.missing); return 1; }
+    const find = () => si.findClient({ env });
+    const found = find();
     const cenv = si.clientEnv(env);
-    const s = await si.authStatus({ bin: found.bin, env: cenv });
-    if (s.loggedIn === true) {
-      say(W.checking);
-      let v;
-      try { v = await check(); } catch { v = { ok: false, state: 'error' }; }
-      if (v && v.ok) { say(W.done); return 0; }
-      const reason = si.reasonFromVerify(v);
-      if (reason !== 'account') return fail(W.failed[reason] || W.failed.error);
-      // signed in for the client, but the login does not work (expired): sign in once more, then the check decides
+
+    if (found) {
+      const status = await si.authStatus({
+        bin: found.bin, env: cenv, signal: cliAbort.signal
+      });
+      if (cliAbort.signal.aborted) return 130;
+      if (status.loggedIn === true) {
+        say(W.checking);
+        let v;
+        try { v = await check({ signal: cliAbort.signal }); }
+        catch { v = { ok: false, state: 'error' }; }
+        if (cliAbort.signal.aborted) return 130;
+        if (v && v.ok) { say(cliDone); return 0; }
+        const reason = si.reasonFromVerify(v);
+        if (reason !== 'account') return fail(W.failed[reason] || W.failed.error);
+        // signed in for the client, but the login does not work (expired): sign in once more, then the check decides
+      }
     }
-    engine = si.createSignIn({ env: () => cenv, findClient: () => found, verify: check });
+
+    // A missing client is installed by the engine itself (its findClient returns null), under its cancellation.
+    engine = si.createSignIn({
+      env: () => cenv,
+      findClient: find,
+      verify: check
+    });
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     const failedLine = (st) => (st && st.message) || W.failed.error;
     say(W.signedOut);
@@ -214,6 +245,8 @@ async function connectClaude({ say = out, sayErr = (s) => process.stderr.write(s
       return fail(failedLine(engine.state()));
     }
     if (!submitted) { engine.cancel(attempt); return fail('Too many tries. The sign-in was stopped.'); }
+    // The code reader is done: Ctrl-C is a typed character again, so watch for it while the check runs. Nothing typed is kept.
+    if (hid.watch) release = hid.watch(onSignal, { keepInput: false });
     let saidChecking = false;
     st = engine.state();
     while (st.state === 'link' || st.state === 'checking') {
@@ -221,7 +254,7 @@ async function connectClaude({ say = out, sayErr = (s) => process.stderr.write(s
       await sleep(pollMs);
       st = engine.state();
     }
-    if (st.state === 'done') { if (!saidChecking) say(W.checking); say(W.done); return 0; }
+    if (st.state === 'done') { if (!saidChecking) say(W.checking); say(cliDone); return 0; }
     return fail(failedLine(st));
   } finally {
     process.removeListener('exit', stopEngine);

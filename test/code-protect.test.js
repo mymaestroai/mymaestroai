@@ -260,6 +260,16 @@ test('signing Claude in (`connect`) from an agent\'s shell is refused, plain and
   }
 });
 
+test('`hub-cli connect` without the .js (node resolves it) is refused too; hub-cli with another command, or another name, is not', () => {
+  for (const cmd of [`node ${P('scripts', 'hub-cli')} connect claude`, 'node scripts/hub-cli connect claude', 'cd scripts && node hub-cli connect claude',
+    `bash -c 'node ${P('scripts', 'hub-cli')} connect claude'`, `node "${P('scripts', 'hub-cli')}" connect claude`, `node ${P('scripts', 'hub-cli')} update`]) {
+    assert.ok(refused(dec(lead, 'Bash', { command: cmd })), cmd);
+  }
+  for (const cmd of [`node ${P('scripts', 'hub-cli')} doctor`, 'node scripts/hub-cli status', 'echo hub-cli-connect', 'node scripts/hub-clix connect claude']) {
+    assert.ok(!refused(dec(lead, 'Bash', { command: cmd })), cmd);
+  }
+});
+
 test('r2: the same commands inside quotes or backticks (sh -c, bash -c, command substitution) are refused', () => {
   for (const cmd of ["sh -c 'mymaestro reset-password x'", 'bash -c "mymaestro reset-2fa x"', '`mymaestro reset-password x`', '$(mymaestro reset-2fa x)',
     `bash -c '${P('scripts', 'hub-cli.js')} reset-password x'`, "sh -c 'sudo mymaestro reset-password x'", "sh -c 'mymaestro update'"]) {

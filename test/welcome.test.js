@@ -127,7 +127,7 @@ test('a failed Claude turn caused by the sign-in gets the fix in plain words; ot
   for (const t of ['API Error: 529 overloaded', 'Claude AI usage limit reached', 'context window exceeded', 'Your account is on hold', 'Could not refresh your login because another Claude Code process is refreshing it', '',
     'Invalid API key', 'Unauthorized', '401 Unauthorized from MCP server x', 'request reached its time limit']) assert.strictEqual(claudeAuth.signInFixText(t), '', t);
   const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'sdk-chat.js'), 'utf8');
-  assert.match(src, /if \(resultSignIn\) raiseSignIn\(msg\.result\);/, 'a failed result with the sign-in sentence shows the help once');
+  assert.match(src, /if \(resultSignIn \|\| signInRaised\) \{\s*raiseSignIn\(msg\.result \|\| sdkErrorSeen \|\| ''\);[^\n]*\n\s*\} else \{\s*const cls = providerPacing\.classify/, 'a failed result with the sign-in sentence shows the help once, and no raw error event');
   assert.match(src, /const signedOutCrash = signInRaised \|\| isSignInFailure\(err\.message, sdkErrorSeen\);[\s\S]*?if \(signedOutCrash\) \{\s*raiseSignIn\(err\.message\);/, 'so does a crashed client, without the "stopped unexpectedly" sentence');
   assert.match(src, /\{ type: 'claude_signin', detail: signInDetail \}/, 'the page gets one claude_signin event');
   assert.match(src, /\{ claudeSignin: true, claudeSigninDetail: signInDetail \}/, 'the saved row says so');
@@ -330,4 +330,55 @@ test('Claude check: a failed check refreshes nothing and offers no models', asyn
   assert.strictEqual(r.ok, false);
   assert.strictEqual(r.models, undefined);
   assert.deepStrictEqual([discovered, asked], [0, 0]);
+});
+
+test('Claude check, probeOnly: answers ready with no bookkeeping (no remembered check, no model list, no discovery)', async () => {
+  let discovered = 0, asked = 0;
+  const w = claudeWelcome({ deps: { sdkModels: async () => { asked++; return []; }, runDiscovery: () => { discovered++; } } });
+  const r = await w.checkClaude({ timeoutMs: 5000, probeOnly: true });
+  assert.deepStrictEqual(r, { ok: true, state: 'ready', model: 'claude-sdk/default' });
+  assert.deepStrictEqual([discovered, asked], [0, 0]);
+  assert.strictEqual(w.progress().claudeOkAt, undefined, 'nothing remembered');
+  // a failed probe is classified as before
+  const bad = claudeWelcome({ fail: true });
+  const f = await bad.checkClaude({ timeoutMs: 5000, probeOnly: true });
+  assert.strictEqual(f.ok, false);
+  assert.strictEqual(f.state, 'signed-out');
+});
+
+test('Claude check: an abort signal stops the query; the answer is cancelled and neither the remembered check nor discovery nor the model list runs', async () => {
+  let discovered = 0, asked = 0, entered, seenSignal, inside;
+  // an iterator that waits for its own abort controller, then throws like a killed client would
+  const sdk = { query: ({ options }) => (async function* () {
+    seenSignal = options.abortController.signal;
+    entered();
+    await new Promise((resolve, reject) => { seenSignal.addEventListener('abort', () => reject(new Error('aborted')), { once: true }); });
+    yield { type: 'result', is_error: false, result: 'OK' };
+  })() };
+  for (const probeOnly of [false, true]) {
+    discovered = 0; asked = 0; seenSignal = null;
+    inside = new Promise((r) => { entered = r; });
+    const w = createWelcome({ dataDir: tmp(), env: {}, settings: fakeSettings(), claudeAuth: noClaude, sdkLoader: { loadSdk: async () => sdk, cliOptions: () => ({}) }, clientEnv: (e) => e, sdkModels: async () => { asked++; return []; }, runDiscovery: () => { discovered++; } });
+    const ac = new AbortController();
+    const p = w.checkClaude({ timeoutMs: 5000, signal: ac.signal, probeOnly });
+    await inside;
+    ac.abort();
+    assert.deepStrictEqual(await p, { ok: false, state: 'cancelled' });
+    assert.strictEqual(seenSignal.aborted, true, 'the client\'s own controller was aborted');
+    assert.deepStrictEqual([discovered, asked], [0, 0]);
+    assert.strictEqual(w.progress().claudeOkAt, undefined);
+  }
+  // already aborted: the query is never made
+  let queried = 0;
+  const w2 = createWelcome({ dataDir: tmp(), env: {}, settings: fakeSettings(), claudeAuth: noClaude, sdkLoader: { loadSdk: async () => ({ query: () => { queried++; return (async function* () {})(); } }), cliOptions: () => ({}) }, clientEnv: (e) => e });
+  assert.deepStrictEqual(await w2.checkClaude({ signal: AbortSignal.abort() }), { ok: false, state: 'cancelled' });
+  assert.strictEqual(queried, 0);
+  // a result that arrives after the abort is not trusted
+  const ac3 = new AbortController();
+  const late = { query: () => (async function* () { ac3.abort(); yield { type: 'result', is_error: false, result: 'OK' }; })() };
+  let disc3 = 0;
+  const w3 = createWelcome({ dataDir: tmp(), env: {}, settings: fakeSettings(), claudeAuth: noClaude, sdkLoader: { loadSdk: async () => late, cliOptions: () => ({}) }, clientEnv: (e) => e, sdkModels: async () => [], runDiscovery: () => { disc3++; } });
+  assert.deepStrictEqual(await w3.checkClaude({ signal: ac3.signal }), { ok: false, state: 'cancelled' });
+  assert.strictEqual(disc3, 0);
+  assert.strictEqual(w3.progress().claudeOkAt, undefined);
 });

@@ -42,13 +42,20 @@ test('other failures are not sign-in failures', () => {
 
 test('generic words other providers and MCP servers use are NOT a Claude sign-in failure', () => {
   for (const t of ['Invalid API key', 'invalid api key provided', 'Incorrect API key provided: sk-xxxx', 'Unauthorized', '401 Unauthorized from MCP server notes',
-    'Error: request failed with status 401 Unauthorized', 'request reached its time limit', 'The operation reached its time limit', 'OAuth token has expired', 'token expired',
-    'credentials invalid', 'authentication_error', 'Authentication error', 'Not logged in', 'Please sign in again to the dashboard', 'run setup-token', 'cannot be renewed']) {
+    'Error: request failed with status 401 Unauthorized', 'request reached its time limit', 'The operation reached its time limit', 'token expired',
+    'credentials invalid', 'Not logged in', 'Please sign in again to the dashboard', 'run setup-token', 'cannot be renewed']) {
     assert.doesNotMatch(t, auth.CLAUDE_SIGNIN_RE, t);
     assert.equal(auth.isSignInFailure(t), false, t);
     assert.equal(auth.signInFixText(t), '', t);
   }
   assert.equal(auth.isSignInFailure('Unauthorized', 'authentication_failed'), true, 'the SDK\'s own mark still counts');
+});
+
+test('the client\'s expired-token and authentication-error wordings are sign-in failures', () => {
+  for (const t of ['OAuth token has expired', 'oauth token expired', 'authentication_error', 'Authentication error']) {
+    assert.match(t, auth.CLAUDE_SIGNIN_RE, t);
+    assert.equal(auth.isSignInFailure(t), true, t);
+  }
 });
 
 test('sanitizeSignInDetail: no link, no address, no long token; whitespace collapsed; at most 300', () => {
@@ -214,7 +221,32 @@ test('turn: a synthetic authentication_failed message then an error result: help
   await s.exec();
   assertSignedOutTurn(s, 'assistant+result');
   assert.match(gw(s.events, 'claude_signin')[0].detail, /^Failed to authenticate/);
-  assert.equal(gw(s.events, 'turn_error').length, 1, 'the typed turn_error is unchanged');
+  assert.equal(gw(s.events, 'turn_error').length, 0, 'no generic error event (it would carry the raw diagnostic)');
+});
+
+// The raw diagnostic (an address, a link) must reach neither the page nor the saved row: one claude_signin, no turn_error.
+const RAW = 'Please run /login. Contact test@example.invalid at https://example.invalid/private';
+function assertNoRaw(s, label) {
+  const everything = JSON.stringify([s.events, s.logs]);
+  assert.ok(!everything.includes('test@example.invalid'), `${label}: no address anywhere`);
+  assert.ok(!everything.includes('https://example.invalid/private'), `${label}: no link anywhere`);
+  assert.equal(gw(s.events, 'claude_signin').length, 1, `${label}: one claude_signin`);
+  assert.equal(gw(s.events, 'turn_error').length, 0, `${label}: no turn_error`);
+  const rows = assistantRows(s);
+  assert.equal(rows.at(-1).meta.claudeSignin, true, label);
+}
+
+test('turn: a result-only sign-in error with an address and a link in it: one claude_signin, no turn_error, the sentinels nowhere', async () => {
+  const s = sdkRun({ messages: [{ type: 'result', subtype: 'success', is_error: true, result: RAW, usage: {}, total_cost_usd: 0 }] });
+  await s.exec();
+  assertNoRaw(s, 'result only');
+});
+
+test('turn: an authentication_failed message then an error result holding the sentinels but no sign-in wording (signInRaised path)', async () => {
+  const quiet = { type: 'assistant', error: 'authentication_failed', message: { content: [{ type: 'text', text: 'Failed to authenticate' }] } };
+  const s = sdkRun({ messages: [quiet, { type: 'result', subtype: 'success', is_error: true, result: 'boom test@example.invalid https://example.invalid/private', usage: {}, total_cost_usd: 0 }] });
+  await s.exec();
+  assertNoRaw(s, 'signInRaised');
 });
 
 test('turn: only the error result (no marked assistant message, the case of the sentence reaching the page): help, not the sentence', async () => {

@@ -22,6 +22,10 @@ const TERMINAL_SENTENCE = 'connect claude asks for the code in a terminal; run i
 const SSH_LINE = "Over SSH a Mac's keychain can be locked. Run this in Terminal on the Mac itself, or press Sign in again on your Maestro's page.";
 const S = () => require(path.join(ISO.inst, 'lib', 'claude-signin'));
 const CLI_MOD = () => require(CLI);
+// What the command says on success: it qualifies what was verified (this installation's CLI settings), unlike the page's sentence.
+const CLI_DONE_A = "Claude answered using this installation's CLI settings";
+const CLI_DONE_B = 'custom account or Claude folder';
+const saidDone = (said) => said.some(s => s.includes(CLI_DONE_A) && s.includes(CLI_DONE_B));
 
 // In-process setup: the stand-in client, a temp config folder, an injected check, and a log of the order of calls.
 function inproc({ extraEnv = {}, signedIn = false } = {}) {
@@ -112,7 +116,8 @@ test('signed out, good code: the steps, the done sentence, exit 0, credentials c
   assert.ok(t.said.includes(S().WORDS.openLink));
   assert.ok(t.said.includes('  https://claude.example/oauth/authorize?code=true&state=standin'));
   assert.ok(t.said.includes('Paste the code below and press Enter. It is not shown as you paste it.'));
-  assert.ok(t.said.includes(S().WORDS.checking) && t.said.includes(S().WORDS.done));
+  assert.ok(t.said.includes(S().WORDS.checking) && saidDone(t.said));
+  assert.ok(!t.said.includes(S().WORDS.done), 'the page\'s sentence is not used by the command');
   assert.ok(fs.existsSync(t.creds));
   assert.ok(!transcript(t).includes(GOOD));
   assert.ok(!prompts.join('').includes(GOOD));
@@ -200,7 +205,7 @@ test('already signed in: no sign-in step, just the check, exit 0', async () => {
   const t = inproc({ signedIn: true });
   const code = await CLI_MOD().connectClaude({ ...t.opts, read: async () => { throw new Error('no code is asked'); } });
   assert.strictEqual(code, 0, t.err.join('\n'));
-  assert.ok(t.said.includes(S().WORDS.done));
+  assert.ok(saidDone(t.said));
   assert.ok(!t.said.includes(S().WORDS.signedOut));
   assert.ok(!t.said.some(s => /oauth/.test(s)));
 });
@@ -228,7 +233,7 @@ test('an expired login that "auth status" still reports as signed in: goes to th
   assert.ok(t.said.includes(S().WORDS.signedOut), 'the signed-out sentence is printed first');
   assert.ok(t.said.indexOf(S().WORDS.signedOut) < t.said.findIndex(s => /oauth/.test(s)));
   assert.deepStrictEqual(t.err, []);
-  assert.ok(t.said.includes(S().WORDS.done));
+  assert.ok(saidDone(t.said));
   // a second failure after the fresh sign-in reports the account sentence, and only then
   const t2 = inproc({ signedIn: true });
   let c2n = 0;
@@ -372,10 +377,14 @@ test('a Mac over SSH: a failed sign-in or check adds the keychain line; other sy
   assert.deepStrictEqual(r.t.err, []);
 });
 
-test('no client anywhere: installs once (stand-in), then the missing sentence, exit 1', async () => {
+test('no client anywhere: the engine installs once (stand-in, under its own cancellation), then the missing sentence, exit 1', async () => {
   const real = S();
   let installs = 0;
-  const signin = { ...real, findClient: () => null, installClient: async () => { installs++; return false; } };
+  const signin = {
+    ...real, findClient: () => null,
+    installClient: async () => assert.fail('untracked install'),   // the command itself never installs
+    createSignIn: (d) => real.createSignIn({ ...d, installClient: async () => { installs++; return false; } }),
+  };
   const t = inproc();
   const code = await CLI_MOD().connectClaude({ ...t.opts, signin, env: {} });
   assert.strictEqual(code, 1);
@@ -401,4 +410,72 @@ test('configDirFromEnvFile returns only the CLAUDE_CONFIG_DIR value', () => {
   fs.writeFileSync(f, 'CLAUDE_CONFIG_DIR=\n');
   assert.strictEqual(configDirFromEnvFile(f), null);
   assert.strictEqual(configDirFromEnvFile(path.join(TMP, 'no-such-env')), null);
+});
+
+// A hidden-mode stand-in that records the Ctrl-C watchers: each watch() call keeps its callback and options, and counts its release.
+function recordingHidden(log) {
+  const h = { watchers: [], releases: 0, ends: 0 };
+  h.begin = () => log.push('begin');
+  h.end = () => { h.ends++; log.push('end'); };
+  h.watch = (cb, opts) => { h.watchers.push({ cb, opts }); return () => { h.releases++; }; };
+  return h;
+}
+const untilTrue = async (fn, ms = 3000) => { const end = Date.now() + ms; while (!fn()) { if (Date.now() > end) throw new Error('timed out'); await new Promise(r => setTimeout(r, 10)); } };
+
+test('Ctrl-C while the engine installs the client: the engine gets the cancel for the started attempt, the terminal is restored, nothing is installed outside the engine', async () => {
+  const real = S();
+  const t = inproc();
+  const h = recordingHidden(t.log);
+  const exits = [], cancels = [];
+  let st = { state: 'starting', id: 'att-9' };
+  const engine = {
+    start: async () => { st = { state: 'installing', id: 'att-9' }; return { ok: true, id: 'att-9' }; },
+    state: () => st,
+    submitCode: () => assert.fail('no code is asked while installing'),
+    cancel: (id) => { cancels.push(id); st = { state: 'cancelled', id: 'att-9' }; return { ok: true }; },
+  };
+  const signin = {
+    ...real, findClient: () => null,
+    installClient: async () => assert.fail('untracked install'),
+    createSignIn: () => engine,
+  };
+  const p = CLI_MOD().connectClaude({ ...t.opts, signin, hidden: h, exit: (c) => exits.push(c), read: async () => assert.fail('no reader') });
+  await untilTrue(() => t.said.some(s => /Installing it/.test(s)));
+  assert.strictEqual(h.watchers.length, 1, 'the first watcher is on');
+  h.watchers[0].cb();   // Ctrl-C typed in the raw mode
+  const code = await p;
+  assert.deepStrictEqual(exits, [130]);
+  assert.ok(cancels.length >= 1 && cancels.every(id => id === 'att-9'), 'the cancel names the started attempt: ' + cancels);
+  assert.strictEqual(h.ends, 1, 'the terminal is restored once');
+  assert.strictEqual(h.releases, 1);
+  assert.strictEqual(code, 1, 'the sign-in loop ended after the cancel');
+  assert.ok(!saidDone(t.said));
+});
+
+test('Ctrl-C while the check runs after the code was accepted: a second watcher (keepInput false) cancels the bound attempt, exit 130, one restore, no success message', async () => {
+  const real = S();
+  const t = inproc();
+  const h = recordingHidden(t.log);
+  const exits = [], cancels = [], submits = [];
+  let st = { state: 'starting', id: 'att-5' };
+  const engine = {
+    start: async () => { st = { state: 'link', id: 'att-5', link: 'https://claude.example/oauth/x' }; return { ok: true, id: 'att-5' }; },
+    state: () => st,
+    submitCode: (c, id) => { submits.push(id); st = { state: 'checking', id: 'att-5' }; return { ok: true }; },   // held in checking
+    cancel: (id) => { cancels.push(id); st = { state: 'cancelled', id: 'att-5' }; return { ok: true }; },
+  };
+  const signin = { ...real, createSignIn: () => engine };
+  const p = CLI_MOD().connectClaude({ ...t.opts, signin, hidden: h, exit: (c) => exits.push(c), read: async () => GOOD });
+  await untilTrue(() => h.watchers.length === 2);
+  assert.strictEqual(h.releases, 1, 'the first watcher was released before the reader took over');
+  assert.strictEqual(h.watchers[1].opts.keepInput, false);
+  assert.deepStrictEqual(submits, ['att-5']);
+  h.watchers[1].cb();
+  const code = await p;
+  assert.deepStrictEqual(exits, [130]);
+  assert.ok(cancels.length >= 1 && cancels.every(id => id === 'att-5'), 'the bound attempt is cancelled: ' + cancels);
+  assert.strictEqual(h.ends, 1);
+  assert.strictEqual(h.releases, 2, 'both watchers released, once each');
+  assert.strictEqual(code, 1);
+  assert.ok(!saidDone(t.said) && !t.said.includes(S().WORDS.done), 'no success message');
 });

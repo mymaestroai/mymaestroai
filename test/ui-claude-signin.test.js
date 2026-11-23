@@ -75,27 +75,34 @@ function resetHub(over) {
     attempt: { state: 'idle' },
     status: 200,
     codeAnswer: null,
+    id: 'att-1',   // the id the fake server gives an attempt that does not name one
   }, over || {});
   calls = [];
 }
 const json = (status, body) => ({ status, ok: status >= 200 && status < 300, json: async () => body });
+// Every attempt the server shows carries its id (the page binds to it): one that a test wrote without an id gets hub.id.
+const stamp = (a) => (a && typeof a === 'object' && !a.id ? { ...a, id: hub.id } : a);
 global.fetch = async (url, init) => {
   const method = (init && init.method) || 'GET';
   calls.push({ url, method, body: init && init.body ? JSON.parse(init.body) : null });
-  if (method === 'GET') return json(200, Object.assign({}, hub.me, hub.me.canSignIn ? { attempt: hub.attempt } : {}));
+  if (method === 'GET') return json(200, Object.assign({}, hub.me, hub.me.canSignIn ? { attempt: stamp(hub.attempt) } : {}));
   if (hub.status === 403) return json(403, { ok: false, error: 'Sign in with an admin account in your browser to do this.' });
   const sentId = init && init.body ? JSON.parse(init.body).id : undefined;
-  // an attempt that has an id: /code and /cancel with another id are stale (409), like the server
-  const stale = () => hub.attempt && hub.attempt.id && sentId !== hub.attempt.id;
-  if (url.endsWith('/start')) { hub.attempt = hub.startAttempt || { state: 'starting' }; return json(200, { ok: true, id: hub.attempt.id, attempt: hub.attempt }); }
+  // /code and /cancel with another id are stale (409 with no attempt), like the server
+  const stale = () => stamp(hub.attempt) && sentId !== stamp(hub.attempt).id;
+  if (url.endsWith('/start')) {
+    if (hub.startGate) await hub.startGate;   // a test can hold the answer back
+    hub.attempt = stamp(hub.startAttempt || { state: 'starting' });
+    return json(200, { ok: true, id: hub.attempt.id, attempt: hub.attempt });
+  }
   if (url.endsWith('/cancel')) {
-    if (stale()) return json(409, { ok: false, reason: 'stale', attempt: hub.attempt });
-    hub.attempt = { state: 'cancelled', id: hub.attempt && hub.attempt.id }; return json(200, { ok: true, attempt: hub.attempt });
+    if (stale()) return json(409, { ok: false, reason: 'stale' });
+    hub.attempt = { state: 'cancelled', id: stamp(hub.attempt).id }; return json(200, { ok: true, attempt: hub.attempt });
   }
   if (url.endsWith('/code')) {
-    if (stale()) return json(409, { ok: false, reason: 'stale', attempt: hub.attempt });
-    if (hub.codeAnswer) return json(200, hub.codeAnswer);
-    hub.attempt = { state: 'checking' };
+    if (stale()) return json(409, { ok: false, reason: 'stale' });
+    if (hub.codeAnswer) return json(200, Object.assign({}, hub.codeAnswer, hub.codeAnswer.attempt ? { attempt: stamp(hub.codeAnswer.attempt) } : {}));
+    hub.attempt = stamp({ state: 'checking' });
     return json(200, { ok: true, attempt: hub.attempt });
   }
   return json(404, {});
@@ -223,7 +230,7 @@ test('panel: starts, shows the link, takes the code, checks, is done, and sends 
   assert.equal(input.value, '', 'cleared at once');
   assert.ok(await until(() => calls.some((c) => c.url === '/api/claude-signin/code')));
   const sent = calls.find((c) => c.url === '/api/claude-signin/code');
-  assert.deepEqual(sent.body, { code: 'SECRET-CODE-123#state' });
+  assert.deepEqual(sent.body, { code: 'SECRET-CODE-123#state', id: 'att-1' });
   await sleep(20);
   for (const n of all()) assert.ok(!String(n.textContent).includes('SECRET-CODE-123'), 'the code is in no text');
   assert.ok(await until(() => /Checking that Claude answers/.test(bodyText())), 'checking');
@@ -323,7 +330,7 @@ test('panel: the attempt id from the start answer and the polls goes with /code 
   assert.equal(hub.attempt.state, 'cancelled', 'the server took the cancel (not stale)');
 });
 
-test('panel: a stale answer re-reads the state and shows the current attempt, which the next calls name', async () => {
+test('panel: a stale answer (409) does not adopt the other attempt: the panel says so, offers Start again, and a close cancels nothing', async () => {
   resetHub({ startAttempt: { state: 'link', id: 'att-1', link: 'https://claude.ai/first' } });
   CS.openPanel({ pollMs: 100000 });
   assert.ok(await until(() => byLabel('Open the sign-in page')));
@@ -332,14 +339,72 @@ test('panel: a stale answer re-reads the state and shows the current attempt, wh
   hub.attempt = { state: 'link', id: 'att-2', link: 'https://claude.ai/second' };
   all().find((n) => n.tagName === 'INPUT').value = 'SECRET-CODE-123#state';
   byLabel('Continue').click();
-  assert.ok(await until(() => byLabel('Open the sign-in page') && byLabel('Open the sign-in page').getAttribute('href') === 'https://claude.ai/second'), 'the current attempt is shown');
-  const i = calls.findIndex((c) => c.url === '/api/claude-signin/code');
-  assert.ok(i >= 0 && calls.slice(i + 1).some((c) => c.method === 'GET'), 'the state was read again after the 409');
+  assert.ok(await until(() => /ended or was replaced/.test(bodyText())), 'the lost attempt is said');
+  assert.ok(byLabel('Start again'));
+  assert.equal(all().filter((n) => n.tagName === 'INPUT').length, 0, 'no code box any more');
+  assert.equal(byLabel('Open the sign-in page'), undefined, 'the other attempt\'s link is not shown');
   assert.doesNotMatch(bodyText(), /SECRET-CODE-123/);
   assert.equal(calls.filter((c) => c.url === '/api/claude-signin/start').length, 1, 'no second start');
+  assert.equal(calls.filter((c) => c.method === 'GET').length, 1, 'no re-read that would adopt the other attempt (only the opening read)');
   byLabel('Close').click();
+  await sleep(20);
+  assert.equal(calls.filter((c) => c.url === '/api/claude-signin/cancel').length, 0, 'the other attempt is not cancelled');
+});
+
+test('panel: closed while /start is in flight, the late answer is cancelled once, with that attempt\'s id', async () => {
+  let release;
+  resetHub({ startGate: new Promise((r) => { release = r; }), startAttempt: { state: 'starting', id: 'att-A' } });
+  CS.openPanel({ pollMs: 5 });
+  assert.ok(await until(() => calls.some((c) => c.url === '/api/claude-signin/start')));
+  doc.key('Escape');   // closed before the start answered: the panel has no id to cancel yet
+  assert.equal(dialog(), undefined);
+  assert.equal(calls.filter((c) => c.url === '/api/claude-signin/cancel').length, 0);
+  release();
   assert.ok(await until(() => calls.some((c) => c.url === '/api/claude-signin/cancel')));
-  assert.deepEqual(calls.find((c) => c.url === '/api/claude-signin/cancel').body, { id: 'att-2' });
+  await sleep(30);
+  const cancels = calls.filter((c) => c.url === '/api/claude-signin/cancel');
+  assert.equal(cancels.length, 1, 'exactly one cancel');
+  assert.deepEqual(cancels[0].body, { id: 'att-A' });
+  assert.equal(calls.filter((c) => c.method === 'GET').length, 1, 'and no polling for it');
+});
+
+test('panel: a poll that returns another attempt while a code is typed: the box goes, no code reaches the other attempt, no cancel of it on close', async () => {
+  resetHub({ startAttempt: { state: 'link', id: 'att-A', link: 'https://claude.ai/a' } });
+  CS.openPanel({ pollMs: 5 });
+  assert.ok(await until(() => all().some((n) => n.tagName === 'INPUT')));
+  all().find((n) => n.tagName === 'INPUT').value = 'SECRET-CODE-123#state';   // typed, not sent
+  hub.attempt = { state: 'link', id: 'att-B', link: 'https://claude.ai/b' };   // somebody else's attempt B replaced A
+  assert.ok(await until(() => /ended or was replaced/.test(bodyText())));
+  assert.equal(all().filter((n) => n.tagName === 'INPUT').length, 0, 'the box disappeared');
+  assert.equal(byLabel('Open the sign-in page'), undefined);
+  const nGets = calls.filter((c) => c.method === 'GET').length;
+  await sleep(40);
+  assert.equal(calls.filter((c) => c.method === 'GET').length, nGets, 'polling stopped');
+  byLabel('Close').click();
+  await sleep(20);
+  assert.equal(calls.filter((c) => c.url === '/api/claude-signin/code').length, 0, 'no code went anywhere');
+  assert.equal(calls.filter((c) => c.url === '/api/claude-signin/cancel').length, 0, 'B was not cancelled');
+  assert.equal(hub.attempt.state, 'link', 'B is untouched');
+});
+
+test('panel: a /start answer that is busy or has no id binds nothing and cancels nothing', async () => {
+  const realFetch = global.fetch;
+  resetHub({});
+  global.fetch = async (url, init) => {
+    const method = (init && init.method) || 'GET';
+    calls.push({ url, method, body: init && init.body ? JSON.parse(init.body) : null });
+    if (method === 'GET') return json(200, Object.assign({}, hub.me, { attempt: { state: 'idle' } }));
+    if (url.endsWith('/start')) return json(200, { ok: false, reason: 'busy', attempt: { state: 'link', id: 'att-B', link: 'https://claude.ai/b' } });
+    return json(404, {});
+  };
+  try {
+    CS.openPanel({ pollMs: 5 });
+    assert.ok(await until(() => /Another sign-in is in progress/.test(bodyText())));
+    assert.equal(all().filter((n) => n.tagName === 'INPUT').length, 0, 'the other attempt is not adopted');
+    byLabel('Close').click();
+    await sleep(20);
+    assert.equal(calls.filter((c) => c.url.endsWith('/cancel')).length, 0);
+  } finally { global.fetch = realFetch; }
 });
 
 test('panel: installing shows that Claude Code is being installed, keeps polling, and closing cancels it', async () => {

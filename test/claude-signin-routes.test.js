@@ -100,12 +100,13 @@ test('an admin session starts, submits a code, and cancels; the code never comes
   try {
     let r = await t.call('admin', 'POST', '/api/claude-signin/start'); bodies.push(r.body);
     assert.strictEqual(r.status, 200); assert.strictEqual(r.body.ok, true);
+    const id = r.body.id;
     await until(() => t.kids.length === 1);
     t.kids[0].stdout.emit('data', 'Opening browser. If it does not open, visit: https://claude.ai/oauth/authorize?x=1 \n');
     await until(() => t.si.state().state === 'link');
-    r = await t.call('admin', 'POST', '/api/claude-signin/code', { code: 'short' }); bodies.push(r.body);
+    r = await t.call('admin', 'POST', '/api/claude-signin/code', { code: 'short', id }); bodies.push(r.body);
     assert.deepStrictEqual([r.body.ok, r.body.reason], [false, 'format']);
-    r = await t.call('admin', 'POST', '/api/claude-signin/code', { code: CODE }); bodies.push(r.body);
+    r = await t.call('admin', 'POST', '/api/claude-signin/code', { code: CODE, id }); bodies.push(r.body);
     assert.strictEqual(r.status, 200); assert.strictEqual(r.body.ok, true);
     assert.deepStrictEqual(t.kids[0].stdin.written, [CODE + '\n'], 'the code went to the client and nowhere else');
     r = await t.call('admin', 'POST', '/api/claude-signin/code', '{not json'); bodies.push(r.body);
@@ -114,7 +115,7 @@ test('an admin session starts, submits a code, and cancels; the code never comes
     await until(() => t.si.state().state === 'done');
     r = await t.call('admin', 'GET', '/api/claude-signin'); bodies.push(r.body);
     assert.strictEqual(r.body.attempt.state, 'done');
-    r = await t.call('admin', 'POST', '/api/claude-signin/cancel'); bodies.push(r.body);
+    r = await t.call('admin', 'POST', '/api/claude-signin/cancel', { id }); bodies.push(r.body);
     assert.strictEqual(r.body.ok, true);
   } finally {
     for (const k of Object.keys(orig)) console[k] = orig[k];
@@ -226,8 +227,7 @@ test('the attempt id: start answers with it, /code and /cancel pass it through, 
   r = await t.call('admin', 'POST', '/api/claude-signin/code', { code: 'ABCDEFGH12345', id: 'old-attempt' });
   assert.strictEqual(r.status, 409);
   assert.deepStrictEqual([r.body.ok, r.body.reason], [false, 'stale']);
-  assert.strictEqual(r.body.attempt.state, 'link');
-  assert.strictEqual(r.body.attempt.id, id);
+  assert.deepStrictEqual(r.body, { ok: false, reason: 'stale' }, 'no attempt in a stale answer');
   assert.deepStrictEqual(t.kids[0].stdin.written, []);
   r = await t.call('admin', 'POST', '/api/claude-signin/cancel', { id: 'old-attempt' });
   assert.strictEqual(r.status, 409);
@@ -244,16 +244,38 @@ test('the attempt id: start answers with it, /code and /cancel pass it through, 
   assert.strictEqual(t.si.state().state, 'cancelled');
 });
 
-test('/code and /cancel without an id still work (the id is optional), and a cancel with an unreadable body cancels the current attempt', async () => {
+test('/code and /cancel need the attempt id: an empty body, malformed JSON, or a code without an id is a 400 with no side effect on the active attempt', async () => {
   const t = setup();
-  await t.call('admin', 'POST', '/api/claude-signin/start');
+  const started = await t.call('admin', 'POST', '/api/claude-signin/start');
   await until(() => t.kids.length === 1);
   t.kids[0].stdout.emit('data', 'visit: https://claude.ai/oauth/authorize?x=1 \n');
   await until(() => t.si.state().state === 'link');
-  assert.strictEqual((await t.call('admin', 'POST', '/api/claude-signin/code', { code: 'ABCDEFGH12345' })).body.ok, true);
-  const r = await t.call('admin', 'POST', '/api/claude-signin/cancel', '{not json');
+  const bad = [
+    ['/api/claude-signin/code', {}], ['/api/claude-signin/code', '{not json'], ['/api/claude-signin/code', { code: 'ABCDEFGH12345' }],
+    ['/api/claude-signin/code', { id: started.body.id }], ['/api/claude-signin/code', { code: 'ABCDEFGH12345', id: '' }],
+    ['/api/claude-signin/cancel', {}], ['/api/claude-signin/cancel', '{not json'], ['/api/claude-signin/cancel', { id: 5 }], ['/api/claude-signin/cancel', ''],
+  ];
+  for (const [p, body] of bad) {
+    const r = await t.call('admin', 'POST', p, body);
+    assert.strictEqual(r.status, 400, `${p} ${JSON.stringify(body)}`);
+    assert.deepStrictEqual(r.body, { ok: false, reason: 'format' });
+    assert.strictEqual(t.si.state().state, 'link', 'the attempt is still active');
+    assert.strictEqual(t.si.state().id, started.body.id);
+    assert.deepStrictEqual(t.kids[0].stdin.written, [], 'nothing reached the client');
+    assert.strictEqual(t.kids[0].killed, false, 'the client was not stopped');
+  }
+  // a code with the right id still goes through, and a cancel with it stops the attempt
+  assert.strictEqual((await t.call('admin', 'POST', '/api/claude-signin/code', { code: 'ABCDEFGH12345', id: started.body.id })).body.ok, true);
+  const r = await t.call('admin', 'POST', '/api/claude-signin/cancel', { id: started.body.id });
   assert.strictEqual(r.status, 200);
   assert.strictEqual(t.si.state().state, 'cancelled');
+});
+
+test('the admin check runs before the body of /cancel is read', async () => {
+  const t = setup();
+  const r = await t.call('member', 'POST', '/api/claude-signin/cancel', { id: 'x' });
+  assert.strictEqual(r.status, 403);
+  assert.strictEqual(t.readBodies.length, 0);
 });
 
 test('wiring: GET is a session route, the POSTs are admin routes, and server.js calls the handler', () => {
@@ -277,11 +299,13 @@ function health({ sc, signIns } = {}) {
   if (signIns) o.signIns = signIns;
   return createSystemHealth(o);
 }
-const run = (id, classes) => ({ id, finishedAt: new Date(T0).toISOString(), classes: Object.fromEntries(Object.entries(classes).map(([k, note]) => [k, { status: 'error', threw: true, note: `Couldn't run: ${note}`, actions: {} }])) });
+// model: the run's model (the self-check state's own field); without one only a sentence no other provider uses counts
+const CLAUDE_MODEL = 'claude-sdk/claude-sonnet-5-5';
+const run = (id, classes, model) => ({ id, ...(model ? { model } : {}), finishedAt: new Date(T0).toISOString(), classes: Object.fromEntries(Object.entries(classes).map(([k, note]) => [k, { status: 'error', threw: true, note: `Couldn't run: ${note}`, actions: {} }])) });
 const EXPIRED = 'Failed to authenticate: this login reached its time limit and cannot be renewed. Please run /login.';
 
 test('health: a sign-in failure in the self-check is the signed-out item with the action, not the self-check item', async () => {
-  const h = health({ sc: run('sc-1', { lead: EXPIRED }) });
+  const h = health({ sc: run('sc-1', { lead: EXPIRED }, CLAUDE_MODEL) });
   await h.run({ trigger: 'manual', full: false });
   const b = h.bannerItems();
   const it = b.find(i => i.id === 'health-claude-signedout');
@@ -324,12 +348,37 @@ test('health: when the self-check says which model ran, the signed-out item need
   b = await check(withModel('claude-sdk/claude-sonnet-5-5', 'openai/gpt-5'));
   assert.ok(!b.some(i => i.id === 'health-claude-signedout'));
   b = await check(withModel(null));
-  assert.ok(b.some(i => i.id === 'health-claude-signedout'), 'no model known: the strict sentence alone decides');
+  assert.ok(!b.some(i => i.id === 'health-claude-signedout'), 'no model known: a Claude-like sentence alone is not enough');
+  assert.ok(b.some(i => i.id === 'health-selfcheck'));
+});
+
+// Provenance matrix: [class model, run model, note, expected signed-out item]; a false case keeps the failed self-check visible.
+test('health: provider provenance decides the signed-out item', async () => {
+  const cases = [
+    ['openai/gpt', 'claude-sdk/default', 'Failed to authenticate', false],
+    ['auto', 'auto', 'Failed to authenticate to OpenAI', false],
+    [undefined, 'auto', 'OAuth token has expired', false],
+    [undefined, undefined, 'authentication_error', false],
+    ['claude-sdk/default', 'auto', 'OAuth token has expired', true],
+    [undefined, 'claude-sdk/default', 'authentication_error', true],
+    ['auto', 'auto', 'This login reached its time limit. Run claude auth login.', true],
+  ];
+  for (const [classModel, runModel, note, expected] of cases) {
+    const sc = run('sc-p', { lead: note });
+    if (runModel) sc.model = runModel;
+    if (classModel) sc.classes.lead.model = classModel;
+    const h = health({ sc });
+    await h.run({ trigger: 'manual', full: false });
+    const b = h.bannerItems();
+    const label = JSON.stringify([classModel, runModel, note]);
+    assert.strictEqual(b.some(i => i.id === 'health-claude-signedout'), expected, label);
+    if (!expected) assert.ok(b.some(i => i.id === 'health-selfcheck' && i.title.includes(note)), `${label}: the failed self-check stays visible`);
+  }
 });
 
 test('health: the signed-out item\'s detail carries no link, address or long token', async () => {
   const note = 'Failed to authenticate: open https://claude.example/oauth/authorize?code=true&state=abcdefghijklmnopqrstuvwxyz and ask sam.example@mail.example';
-  const h = health({ sc: run('sc-d', { lead: note }) });
+  const h = health({ sc: run('sc-d', { lead: note }, CLAUDE_MODEL) });
   await h.run({ trigger: 'manual', full: false });
   const it = h.bannerItems().find(i => i.id === 'health-claude-signedout');
   assert.ok(it);
@@ -342,7 +391,7 @@ test('health: an ordinary failure still gives the self-check item; mixed failure
   await h.run({ trigger: 'manual', full: false });
   assert.strictEqual(h.bannerItems().find(i => i.id === 'health-selfcheck').title, "Agents couldn't run in the self-check: model unreachable");
   assert.ok(!h.bannerItems().some(i => i.id === 'health-claude-signedout'));
-  h = health({ sc: run('sc-3', { lead: EXPIRED, host: 'disk full' }) });
+  h = health({ sc: run('sc-3', { lead: EXPIRED, host: 'disk full' }, CLAUDE_MODEL) });
   await h.run({ trigger: 'manual', full: false });
   const b = h.bannerItems();
   assert.ok(b.some(i => i.id === 'health-claude-signedout'));
@@ -352,7 +401,7 @@ test('health: an ordinary failure still gives the self-check item; mixed failure
 });
 
 test('health: the sign-in probe saying Claude is signed out also puts the banner item up, once', async () => {
-  const h = health({ sc: run('sc-4', { lead: EXPIRED }), signIns: async () => [{ id: 'claude', name: 'Claude', agents: 2, signedIn: false }] });
+  const h = health({ sc: run('sc-4', { lead: EXPIRED }, CLAUDE_MODEL), signIns: async () => [{ id: 'claude', name: 'Claude', agents: 2, signedIn: false }] });
   await h.run({ trigger: 'manual', full: false });
   assert.strictEqual(h.bannerItems().filter(i => i.id === 'health-claude-signedout').length, 1);
   assert.ok(!h.bannerItems().some(i => i.id === 'health-signin-claude'), 'the old item stays out of banners');

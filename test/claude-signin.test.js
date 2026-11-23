@@ -492,3 +492,157 @@ test('killGroup: a child without a pid, or a group that is gone, is signalled di
   S.killGroup({ pid: 9, kill: (s) => sent.push(['child', s]) }, 'SIGKILL', () => { throw new Error('ESRCH'); });
   assert.deepStrictEqual(sent, [['child', 'SIGTERM'], ['child', 'SIGKILL']]);
 });
+
+// ── round 2: cancellation reaches the status and the verification; the slot is held until they settle ──
+for (const phase of ['status', 'verify']) {
+  test(`cancel during ${phase} holds the slot through settlement`, async () => {
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.stdin = new EventEmitter();
+    child.kill = () => true;
+
+    let entered, finish, observed;
+    const ready = new Promise(resolve => { entered = resolve; });
+    const deferred = ({ signal }) => {
+      observed = signal;
+      entered();
+      return new Promise(resolve => { finish = resolve; });
+    };
+    const engine = S.createSignIn({
+      findClient: () => ({ bin: 'stand-in' }),
+      env: () => ({}),
+      spawn: () => child,
+      authStatus: phase === 'status' ? deferred : async () => ({ loggedIn: true }),
+      verify: phase === 'verify' ? deferred : async () => assert.fail('late verify')
+    });
+    const a = await engine.start();
+    await new Promise(resolve => setImmediate(resolve));
+    child.emit('close', 0);
+    await ready;
+    try {
+      engine.cancel(a.id);
+      assert.equal(observed.aborted, true);
+      assert.equal((await engine.start()).reason, 'busy');
+      finish({ ok: true, loggedIn: true });
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(engine.state().state, 'cancelled');
+      const b = await engine.start();
+      assert.equal(b.ok, true);
+      await new Promise(resolve => setImmediate(resolve));
+      engine.cancel(b.id);
+      child.emit('close', 1);
+    } finally {
+      finish?.({ ok: false });
+    }
+  });
+}
+
+test('the overall timeout still ends an attempt that is checking: failed timeout, the check is aborted, the slot is held until it settles', async () => {
+  const timers = [];
+  const setTimer = (fn, ms) => { const t = { fn, ms, cleared: false, unref() {} }; timers.push(t); return t; };
+  const child = fakeKid(5150);
+  let finish;
+  const observed = {};
+  const verifyEntered = new Promise(r => { observed.resolve = r; });
+  const engine = S.createSignIn({
+    findClient: () => ({ bin: 'stand-in' }), env: () => ({}), spawn: () => child, kill: () => {}, setTimer, clearTimer: (t) => { if (t) t.cleared = true; },
+    timeoutMs: OVERALL, authStatus: async () => ({ loggedIn: true }),
+    verify: ({ signal }) => { observed.signal = signal; observed.resolve(); return new Promise(r => { finish = r; }); },
+  });
+  const a = await engine.start();
+  await flush();
+  child.stdout.emit('data', 'Login successful.\n');
+  await verifyEntered;
+  assert.equal(engine.state().state, 'checking');
+  const overall = timers.find(t => t.ms === OVERALL && !t.cleared);
+  assert.ok(overall, 'the overall timer is still armed while checking');
+  overall.fn();
+  assert.deepStrictEqual([engine.state().state, engine.state().reason], ['failed', 'timeout']);
+  assert.equal(observed.signal.aborted, true);
+  assert.equal((await engine.start()).reason, 'busy', 'the check and the client have not settled');
+  finish({ ok: true });
+  child.emit('close', null);
+  await flush();
+  const b = await engine.start();
+  assert.equal(b.ok, true);
+  assert.notEqual(b.id, a.id);
+  engine.cancel(b.id);
+  child.emit('close', null);
+});
+
+test('authStatus: an abort kills the child and answers unknown only after it closed; an already-aborted signal spawns nothing', async () => {
+  const mk = () => { const c = new EventEmitter(); c.stdout = new EventEmitter(); c.signals = []; c.kill = (s) => { c.signals.push(s); return true; }; return c; };
+  const timers = [];
+  const deps = { setTimer: (fn, ms) => { const t = { fn, ms, cleared: false }; timers.push(t); return t; }, clearTimer: (t) => { if (t) t.cleared = true; } };
+  // abort in flight
+  const c = mk();
+  const ac = new AbortController();
+  let answer;
+  const p = S.authStatus({ bin: 'x', signal: ac.signal, spawn: () => c, ...deps }).then(v => { answer = v; return v; });
+  ac.abort();
+  await flush();
+  assert.deepStrictEqual(c.signals, ['SIGKILL']);
+  assert.equal(answer, undefined, 'not settled before the child closed');
+  c.stdout.emit('data', JSON.stringify({ loggedIn: true }));   // late output is ignored once stopped
+  c.emit('close', 0);
+  assert.deepStrictEqual(await p, { loggedIn: null, method: null });
+  assert.ok(timers.every(t => t.cleared), 'its timer is cleared');
+  // already aborted
+  let spawned = 0;
+  assert.deepStrictEqual(await S.authStatus({ bin: 'x', signal: AbortSignal.abort(), spawn: () => { spawned++; return mk(); }, ...deps }), { loggedIn: null, method: null });
+  assert.equal(spawned, 0);
+  // the timeout kills it, and the answer comes at close
+  const c2 = mk();
+  const p2 = S.authStatus({ bin: 'x', spawn: () => c2, ...deps });
+  timers[timers.length - 1].fn();
+  assert.deepStrictEqual(c2.signals, ['SIGKILL']);
+  c2.emit('close', null);
+  assert.deepStrictEqual(await p2, { loggedIn: null, method: null });
+  // a spawn error then close (as Node does): unknown, no hang
+  const c3 = mk();
+  const p3 = S.authStatus({ bin: 'x', spawn: () => c3, ...deps });
+  c3.emit('error', new Error('ENOENT'));
+  c3.emit('close', -2);
+  assert.deepStrictEqual(await p3, { loggedIn: null, method: null });
+  // the ordinary answers still work with a fake child
+  const c4 = mk();
+  const p4 = S.authStatus({ bin: 'x', spawn: () => c4, ...deps });
+  c4.stdout.emit('data', JSON.stringify({ loggedIn: true, authMethod: 'claude.ai' }));
+  c4.emit('close', 0);
+  assert.deepStrictEqual(await p4, { loggedIn: true, method: 'claude.ai' });
+  const c5 = mk();
+  const p5 = S.authStatus({ bin: 'x', spawn: () => c5, ...deps });
+  c5.emit('close', 1);
+  assert.deepStrictEqual(await p5, { loggedIn: false, method: null });
+});
+
+test('a child that exited (its \'exit\' event) frees the slot even when a grandchild keeps the pipes open, and its group is never signalled again', async () => {
+  const e = fakeEngine();
+  await e.toLink();
+  const pid = e.kids[0].pid;
+  e.si.cancel();
+  assert.deepStrictEqual(e.kills, [[-pid, 'SIGTERM']]);
+  assert.deepStrictEqual(await e.si.start(), { ok: false, reason: 'busy' });
+  e.kids[0].emit('exit', null, 'SIGTERM');   // no 'close': a grandchild still holds the pipes
+  assert.ok(e.live().every(t => t.ms !== 3000), 'the kill timer is cleared');
+  assert.deepStrictEqual(e.kills, [[-pid, 'SIGTERM']], 'no signal after the exit');
+  const b = await e.si.start();
+  assert.equal(b.ok, true, 'the slot is free');
+  e.si.cancel();
+  // the exit hook of the finished attempt is gone: only the new attempt's hook is left
+  e.kids[e.kids.length - 1].emit('exit', null, 'SIGTERM');
+});
+
+test('a rejected code is "invalid code" or "code (has) expired"; other sentences that merely mention a code do not end the attempt', async () => {
+  for (const [line, ends] of [['Invalid code', true], ['Error: invalid code', true], ['The code has expired', true], ['this code expired', true],
+    ['Your code is almost there, valid for 5 more minutes', false], ['Paste code here if prompted', false], ['code is invalid', false]]) {
+    const e = fakeEngine();
+    await e.toLink();
+    assert.deepStrictEqual(e.si.submitCode(GOOD), { ok: true });
+    e.kids[0].stdout.emit('data', line + '\n');
+    assert.equal(e.si.state().state, ends ? 'failed' : 'link', line);
+    if (ends) assert.equal(e.si.state().reason, 'code', line);
+    e.si.cancel();
+  }
+});
