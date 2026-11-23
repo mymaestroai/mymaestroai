@@ -323,6 +323,7 @@ function fakeEngine(o = {}) {
   const setTimer = (fn, ms) => { const t = { fn, ms, cleared: false, unref() {} }; timers.push(t); return t; };
   const clearTimer = (t) => { if (t) t.cleared = true; };
   const si = S.createSignIn({
+    drainWaitMs: o.drainWaitMs ?? 0,   // 0: the old tests see 'busy' at once; the drain-wait tests pass 10000 and use the fake timers
     spawn: (bin, args, opts) => { const k = fakeKid(++pid); kids.push(k); spawned.push({ bin, args, opts }); return k; },
     // The parent only probes (signal 0); the group is "gone" once the test says so.
     kill: (p, sig) => { kills.push([p, sig]); if (gone.has(p)) throw ESRCH(); }, setTimer, clearTimer, timeoutMs: OVERALL,
@@ -565,6 +566,7 @@ for (const phase of ['status', 'verify']) {
       return new Promise(resolve => { finish = resolve; });
     };
     const engine = S.createSignIn({
+      drainWaitMs: 0,
       findClient: () => ({ bin: BIN }),
       env: () => ({}),
       spawn: () => child,
@@ -602,6 +604,7 @@ test('the overall timeout still ends an attempt that is checking: failed timeout
   const observed = {};
   const verifyEntered = new Promise(r => { observed.resolve = r; });
   const engine = S.createSignIn({
+    drainWaitMs: 0,
     findClient: () => ({ bin: BIN }), env: () => ({}), spawn: () => child, kill: () => { throw ESRCH(); }, setTimer, clearTimer: (t) => { if (t) t.cleared = true; },
     timeoutMs: OVERALL, authStatus: async () => ({ loggedIn: true }),
     verify: ({ signal }) => { observed.signal = signal; observed.resolve(); return new Promise(r => { finish = r; }); },
@@ -738,4 +741,63 @@ test('a rejected code is "invalid code" or "code (has) expired"; other sentences
     if (ends) assert.equal(e.si.state().reason, 'code', line);
     e.si.cancel();
   }
+});
+
+// "Start again" right after a failed or cancelled attempt: its group is still draining (3 s grace, 500 ms probes). The engine
+// waits for the drain (bounded by 10 s, the injected setTimer) instead of answering 'busy'.
+test('Start again after a failed attempt waits for the group to drain and then starts', async () => {
+  const e = fakeEngine({ drainWaitMs: 10000 });
+  await e.toLink();
+  e.fire(OVERALL);   // the attempt fails (timeout) and its group is being ended
+  assert.strictEqual(e.si.state().state, 'failed');
+  let answer = null;
+  const p = e.si.start().then((a) => { answer = a; });
+  await flush();
+  assert.strictEqual(answer, null, 'waiting for the drain, not busy');
+  assert.ok(e.live().some(t => t.ms === 10000), 'the wait is bounded by 10 s');
+  await e.exit(0);   // the group is gone
+  await p;
+  assert.strictEqual(answer.ok, true);
+  assert.ok(!e.live().some(t => t.ms === 10000), 'the bound timer is cleared');
+  assert.strictEqual(e.si.state().state, 'starting');
+  await flush();
+  assert.strictEqual(e.kids.length, 2, 'a new client was started');
+  e.si.cancel();
+});
+
+test('Start again after a cancelled attempt waits for the drain too; a second Start while waiting is busy', async () => {
+  const e = fakeEngine({ drainWaitMs: 10000 });
+  await e.toLink();
+  e.si.cancel();
+  let answer = null;
+  const p = e.si.start().then((a) => { answer = a; });
+  await flush();
+  assert.deepStrictEqual(await e.si.start(), { ok: false, reason: 'busy' }, 'only one waiting start');
+  await e.exit(0);
+  await p;
+  assert.strictEqual(answer.ok, true);
+  e.si.cancel();
+});
+
+test('a running attempt still gives busy at once (no waiting)', async () => {
+  const e = fakeEngine({ drainWaitMs: 10000 });
+  await e.toLink();
+  assert.deepStrictEqual(await e.si.start(), { ok: false, reason: 'busy' });
+  assert.ok(!e.live().some(t => t.ms === 10000), 'no drain wait was armed');
+  e.si.cancel();
+});
+
+test('the 10 s drain bound passes while the group is still there: busy', async () => {
+  const e = fakeEngine({ drainWaitMs: 10000 });
+  await e.toLink();
+  e.fire(OVERALL);
+  let answer = null;
+  const p = e.si.start().then((a) => { answer = a; });
+  await flush();
+  assert.strictEqual(answer, null);
+  e.fire(10000);
+  await p;
+  assert.deepStrictEqual(answer, { ok: false, reason: 'busy' });
+  assert.strictEqual(e.kids.length, 1, 'nothing new was started');
+  await e.exit(0);
 });

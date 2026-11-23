@@ -59,7 +59,7 @@ function rig(kind, verify) {
   }
   spawn.__fakeSpawn = true;   // it stands in for the installer too
   const engine = createSignIn({
-    ...c, spawn, platform: 'linux', env: () => ({}),
+    ...c, spawn, platform: 'linux', env: () => ({}), drainWaitMs: 0,   // these tests look at the busy answer itself (the wait is tested in claude-signin.test.js)
     findClient: () => kind === 'installer' ? null : { bin: FAKE },
     authStatus: async () => ({ loggedIn: true }), verify,
     kill(pid, sig) {

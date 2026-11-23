@@ -24,6 +24,16 @@ function find(dir) {
 }
 
 const files = find('test');
+// npm test -- [options] [test files]: options start with '-'; a test file is named relative to the project (test/x.test.js).
+function splitArgs(argv) {
+  const options = [], chosen = [];
+  for (const a of argv) {
+    if (a.startsWith('-')) { options.push(a); continue; }
+    const rel = path.relative(ROOT, path.resolve(ROOT, a)).split(path.sep).join('/');
+    chosen.push(rel);
+  }
+  return { options, chosen };
+}
 if (!files.length) { console.error('run-tests: no test files found under test/'); process.exit(1); }
 // No test reaches this computer's real Docker (its agent boxes): DOCKER_HOST points nowhere unless a run opts in.
 const env = { ...process.env, DOCKER_HOST: process.env.MM_TEST_REAL_DOCKER === '1' ? (process.env.DOCKER_HOST || '') : 'unix:///nonexistent/docker-for-tests.sock' };
@@ -50,13 +60,17 @@ const homePolicy = new Set(['test/lockbox-wire.test.js', 'test/tool-policy.test.
   'test/tool-policy-heredoc.test.js']);
 const privateHome = path.join(sealRoot, 'home');
 fs.mkdirSync(privateHome, { mode: 0o700 });
+// Arguments: options (starting with '-', given as --name=value) go to both batches; anything else names test files,
+// which replace the full list and are sorted into their batch, so a chosen file runs once, with the right HOME.
+const { options, chosen } = splitArgs(process.argv.slice(2));
+const run = chosen.length ? chosen : files;
 let r = { status: 0 };
 for (const [selected, home] of [
-  [files.filter(file => !homePolicy.has(file)), privateHome],
-  [files.filter(file => homePolicy.has(file)), env.HOME || os.homedir()]
+  [run.filter(file => !homePolicy.has(file)), privateHome],
+  [run.filter(file => homePolicy.has(file)), env.HOME || os.homedir()]
 ]) {
   if (!selected.length) continue;
-  const result = spawnSync(process.execPath, ['--test', ...process.argv.slice(2), ...selected],
+  const result = spawnSync(process.execPath, ['--test', ...options, ...selected],
     { cwd: ROOT, stdio: 'inherit', env: { ...env, HOME: home } });
   if (result.error || result.status !== 0) r = result;
 }
