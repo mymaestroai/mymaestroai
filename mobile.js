@@ -7745,6 +7745,7 @@ async function openChat(name) {
   if (same && ((rec && bubbleLive(rec)) || (ra && bubbleLive(ra)))) { paintChatStatus(); return; }
   pendingImages = [];
   draftGen++;   // a new draft: pictures and sends that started in the old one do not carry over
+  if (releaseSendWait) releaseSendWait();   // a send waiting for pictures in the old draft lets go now, so this chat's box is not locked
   renderPreviews();
   if (!same) restoreDraft(name);   // each chat keeps its own draft; the box no longer carries text from another agent
   chatEl().innerHTML = '';
@@ -9317,29 +9318,37 @@ function renderPreviews() {
 const imagesPreparing = new Set();
 const IMAGE_WAIT_MS = 15000;
 let sendWaiting = false;   // a send is waiting for pictures: a second send returns at once
+let releaseSendWait = null;   // openChat calls it on a switch: the waiting send of the old draft lets go at once (its caller sees draftGen changed)
 async function waitForPreparingImages() {
   if (!imagesPreparing.size) return true;
-  sendWaiting = true;
-  toast('Adding the picture…');
+  const waitingFor = [...imagesPreparing];   // the pictures this send waits for (one attached later is not this send's)
   // The composer is locked while waiting: words typed now must not go with the earlier message or be cleared.
   const box = $('msg-input');
   const btn = $('send-btn');
   const boxWas = box ? box.readOnly : false;
   const btnWas = btn ? btn.disabled : false;
-  if (box) box.readOnly = true;
-  if (btn) btn.disabled = true;
   let timer;
   let done = false;
-  const cap = new Promise(res => { timer = setTimeout(res, IMAGE_WAIT_MS); });
+  let switched = false;
   try {
-    done = await Promise.race([Promise.allSettled([...imagesPreparing].map(j => j.promise)).then(() => true), cap.then(() => false)]);
-    if (!done) { for (const j of imagesPreparing) j.abandoned = true; imagesPreparing.clear(); }   // the pictures still pending are left out
+    sendWaiting = true;
+    toast('Adding the picture…');
+    if (box) box.readOnly = true;
+    if (btn) btn.disabled = true;
+    const cap = new Promise(res => { timer = setTimeout(res, IMAGE_WAIT_MS); });
+    const away = new Promise(res => { releaseSendWait = () => { switched = true; res(); }; });
+    done = await Promise.race([Promise.allSettled(waitingFor.map(j => j.promise)).then(() => true), cap.then(() => false), away.then(() => false)]);
+    if (!done && !switched) {   // the pictures of this send still pending are left out (a finished one has already left the set)
+      for (const j of waitingFor) if (imagesPreparing.has(j)) { j.abandoned = true; imagesPreparing.delete(j); if (j.url) URL.revokeObjectURL(j.url); }
+    }
   } finally {
     clearTimeout(timer);
+    releaseSendWait = null;
     sendWaiting = false;
     if (box) box.readOnly = boxWas;
     if (btn) btn.disabled = btnWas;
   }
+  if (switched) return false;   // the caller says "Not sent: you switched chats."
   if (!done) { toast('A picture took too long to prepare and was left out. Attach it again, or press Send to send without it.'); return false; }
   return true;
 }
@@ -9347,11 +9356,12 @@ async function waitForPreparingImages() {
 function addImageFile(file) {
   const attachedGen = draftGen;   // the picture belongs to the draft it was attached in (A -> B -> A is another draft)
   let settle;
-  const job = { promise: null, abandoned: false };
+  const job = { promise: null, abandoned: false, url: null };
   job.promise = new Promise(res => { settle = res; });
   imagesPreparing.add(job);
   job.promise.then(() => imagesPreparing.delete(job));
   const url = URL.createObjectURL(file);
+  job.url = url;   // revoked when the job is abandoned, so a picture that never finishes does not hold its memory
   const img = new Image();
   img.onload = () => {
     if (job.abandoned) { URL.revokeObjectURL(url); settle(); return; }   // it took too long and was left out: nothing is added or shown
@@ -11904,8 +11914,9 @@ async function sendMessage(fallback) {
   if (!fallback && sendWaiting) return;   // one waiting send per composer: a second send returns at once, without touching the lock
   if (!fallback && imagesPreparing.size) {   // a picture attached a moment ago is part of this send
     const gen = draftGen;   // this send belongs to the draft it started in
-    if (!(await waitForPreparingImages())) return;
-    if (draftGen !== gen) { toast('Not sent: you switched chats.'); return; }
+    const ready = await waitForPreparingImages();
+    if (draftGen !== gen) { toast('Not sent: you switched chats.'); return; }   // checked first: a switch also ends the wait early
+    if (!ready) return;
   }
   // While the agent is busy (a turn this phone is streaming or one started elsewhere) the
   // composer interjects into that turn; Stop is in the header.

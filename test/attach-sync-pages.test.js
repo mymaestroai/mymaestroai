@@ -227,7 +227,7 @@ test('desktop: after the cap a stuck picture is abandoned: the next send does no
   await tick();
   eq(h.chat.pendingImages, [], 'nothing added');
   assert.strictEqual(h.status.length, nStatus, 'nothing shown');
-  eq(h.revoked, ['blob:huge.png']);
+  eq(h.revoked, ['blob:huge.png', 'blob:huge.png'], 'released at the cap, and again (harmless) when it ends');
 });
 
 test('desktop send: the box is readOnly and the button disabled during the wait, restored after (a button disabled before stays so)', async () => {
@@ -268,7 +268,7 @@ test('desktop addImageToChat: a canvas that throws in toDataURL gives the error 
 });
 
 test('desktop: sendSoloMessage and sendInterjection wait before they read the pictures', () => {
-  for (const [name, reads] of [['sendSoloMessage', 'const pendingImages = fallback'], ['sendInterjection', 'const imagesToSend = [...(chat.pendingImages']]) {
+  for (const [name, reads] of [['sendSoloMessage', 'const pendingImages = fallback'], ['sendInterjection', 'const imagesToSend = textOnly']]) {
     const body = fnSource(APP, name);
     const w = body.indexOf('await waitForPreparingImages(chatId)');
     assert.ok(w > 0, `${name} waits`);
@@ -483,9 +483,153 @@ test('phone addImageFile: a canvas that throws in toDataURL gives the error mess
 });
 
 test('phone: a send with nothing preparing does not wait (no await before the composer is read)', () => {
-  assert.match(fnSource(MOBILE, 'sendMessage'), /if \(!fallback && imagesPreparing\.size\) \{[^}]*await waitForPreparingImages\(\)\)\) return;/);
+  assert.match(fnSource(MOBILE, 'sendMessage'), /if \(!fallback && imagesPreparing\.size\) \{[^}]*await waitForPreparingImages\(\);/);
 });
 
 test('service worker: version bumped to v78', () => {
   assert.match(SW, /const VERSION = 'hub-mobile-v78';/);
+});
+
+// ── round 3: a wait abandons only what it waited for; a voice send never takes the waiting message's pictures; the flag is set in the try ──
+
+const SIZE = { width: 10, height: 10, naturalWidth: 10, naturalHeight: 10 };
+
+test('desktop wait timeout: only the pictures preparing when the wait began are abandoned; one attached during the wait survives and is added when it finishes', async () => {
+  const h = deskPictures();
+  const s = deskSend(h, { text: 'here' });
+  s.api.addImageToChat('c1', { name: 'old.png' });   // stuck
+  const p = s.api.sendInterjection('c1');
+  await tick(5);
+  s.api.addImageToChat('c1', { name: 'late.png' });   // attached during the wait
+  await p;   // the cap runs out
+  eq(s.sent, []);
+  assert.strictEqual(h.chat.imagesPreparing.size, 1, 'the late picture is still preparing');
+  assert.strictEqual([...h.chat.imagesPreparing][0].url, 'blob:late.png');
+  assert.strictEqual([...h.chat.imagesPreparing][0].abandoned, false);
+  Object.assign(h.made[1], SIZE);
+  h.made[1].onload();
+  await tick();
+  eq(h.chat.pendingImages, ['data:image/jpeg;base64,AAAA']);
+  assert.strictEqual(h.chat.imagesPreparing.size, 0);
+  assert.ok(h.revoked.includes('blob:late.png'));
+});
+
+test('desktop wait timeout: an abandoned job\'s object URL is revoked at the timeout, even if its image never loads', async () => {
+  const h = deskPictures();
+  const s = deskSend(h, { text: 'here' });
+  s.api.addImageToChat('c1', { name: 'huge.png' });   // never loads or errors
+  await s.api.sendInterjection('c1');
+  eq(h.revoked, ['blob:huge.png']);
+});
+
+function deskVoice(h) {
+  const input = { value: '', style: {}, readOnly: false };
+  const btn = { disabled: false };
+  const sent = [];
+  const { api } = load(APP, ['addImageToChat', 'waitForPreparingImages', 'sendInterjection', 'sendSoloMessage'], {
+    ...h.base,
+    document: Object.assign(canvasDoc(), { getElementById: (id) => (id === 'input-c1' ? input : id === 'send-c1' ? btn : null) }),
+    clearPendingImages: () => { h.chat.pendingImages = []; }, appendMessageWithImages() { return 'x'; }, setMessageTime() {}, msgTimeLabel: () => 't',
+    appendSystemNotice: () => ({}), skipInterjectOnce: new Set(), agentStatus: {},
+    fetch: async (url, o) => { sent.push(JSON.parse(o.body)); return { json: async () => ({ success: true }) }; },
+  });
+  return { api, input, sent };
+}
+
+test('desktop: while chat.sendWaiting, a voice sendSoloMessage sends only the box text and leaves pendingImages unchanged', async () => {
+  const h = deskPictures();
+  const v = deskVoice(h);
+  h.chat.status = 'thinking';   // goes through sendSoloMessage into sendInterjection (the request body is what is asserted)
+  h.chat.pendingImages = ['data:image/jpeg;base64,WAITING'];
+  h.chat.sendWaiting = true;   // a typed message is waiting for its pictures
+  v.input.value = 'spoken words';
+  await v.api.sendSoloMessage('c1', 0, { voice: true, onSendResult() {} });
+  eq(v.sent, [{ agent: 'agent-a', message: 'spoken words' }], 'no images key');
+  eq(h.chat.pendingImages, ['data:image/jpeg;base64,WAITING']);
+  assert.strictEqual(h.chat.sendWaiting, true, 'the waiting send keeps its lock');
+});
+
+test('desktop: while chat.sendWaiting, a voice sendInterjection sends only the box text and does not clear the pending pictures', async () => {
+  const h = deskPictures();
+  const v = deskVoice(h);
+  h.chat.pendingImages = ['data:image/jpeg;base64,WAITING'];
+  h.chat.sendWaiting = true;
+  v.input.value = 'spoken words';
+  await v.api.sendInterjection('c1', { voice: true });
+  eq(v.sent, [{ agent: 'agent-a', message: 'spoken words' }]);
+  eq(h.chat.pendingImages, ['data:image/jpeg;base64,WAITING']);
+});
+
+test('desktop: sendWaiting is set inside the try: if chatFileStatus throws at the start of the wait, the flag is false and the box/button are restored', async () => {
+  const h = deskPictures();
+  const s = deskSend(h, { text: 'here' });
+  s.api.addImageToChat('c1', { name: 'a.png' });
+  const { api } = load(APP, ['waitForPreparingImages'], {
+    ...h.base,
+    document: Object.assign(canvasDoc(), { getElementById: (id) => (id === 'input-c1' ? s.input : id === 'send-c1' ? s.btn : null) }),
+    chatFileStatus: () => { throw new Error('boom'); },
+  });
+  await assert.rejects(() => api.waitForPreparingImages('c1'), /boom/);
+  assert.strictEqual(h.chat.sendWaiting, false);
+  assert.strictEqual(s.input.readOnly, false);
+  assert.strictEqual(s.btn.disabled, false);
+});
+
+test('phone: releaseSendWait() (openChat on a switch) ends the wait at once: false, no "took too long" toast, box/button restored, no job abandoned', async () => {
+  const h = phonePictures();
+  h.ctx.releaseSendWait = null;
+  const s = phoneSend(h, 'here');
+  s.api.addImageFile({ name: 'a.png' });   // stuck
+  const t0 = Date.now();
+  const p = s.api.waitForPreparingImages();
+  await tick(5);
+  assert.strictEqual(h.input.readOnly, true);
+  assert.strictEqual(typeof s.ctx.releaseSendWait, 'function');
+  s.ctx.releaseSendWait();
+  assert.strictEqual(await p, false);
+  assert.ok(Date.now() - t0 < 50, 'ended before the cap');
+  assert.ok(!h.toasts.some(t => /took too long/.test(t)));
+  assert.strictEqual(h.input.readOnly, false);
+  assert.strictEqual(h.btn.disabled, false);
+  assert.strictEqual(s.ctx.sendWaiting, false);
+  assert.strictEqual(s.ctx.releaseSendWait, null);
+  assert.strictEqual(h.ctx.imagesPreparing.size, 1, 'the job is still preparing');
+  assert.strictEqual([...h.ctx.imagesPreparing][0].abandoned, false);
+  eq(h.revoked, []);
+});
+
+test('phone sendMessage: a switch during the wait (draftGen bumped, releaseSendWait) toasts "Not sent: you switched chats." and sends nothing', async () => {
+  const h = phonePictures();
+  h.ctx.releaseSendWait = null;
+  const s = phoneSend(h, 'here');
+  s.api.addImageFile({ name: 'a.png' });
+  const p = s.api.sendMessage();
+  await tick(5);
+  s.ctx.draftGen++;   // openChat: draftGen++ then releaseSendWait()
+  s.ctx.releaseSendWait();
+  await p;
+  eq(s.seen, []);
+  assert.ok(h.toasts.includes('Not sent: you switched chats.'));
+  assert.ok(!h.toasts.some(t => /took too long/.test(t)));
+  assert.strictEqual(h.input.readOnly, false);
+  assert.strictEqual(h.btn.disabled, false);
+});
+
+test('phone wait timeout: only the pictures preparing when the wait began are abandoned (one attached during the wait survives) and their URL is revoked', async () => {
+  const h = phonePictures();
+  h.ctx.releaseSendWait = null;
+  const s = phoneSend(h, 'here');
+  s.api.addImageFile({ name: 'old.png' });   // stuck
+  const p = s.api.sendMessage();
+  await tick(5);
+  s.api.addImageFile({ name: 'late.png' });   // attached during the wait
+  await p;   // the cap runs out
+  eq(s.seen, []);
+  eq(h.revoked, ['blob:old.png']);
+  assert.strictEqual(h.ctx.imagesPreparing.size, 1);
+  assert.strictEqual([...h.ctx.imagesPreparing][0].url, 'blob:late.png');
+  Object.assign(h.made[1], { width: 10, height: 10 });
+  h.made[1].onload();
+  await tick();
+  eq(s.ctx.pendingImages, ['data:image/jpeg;base64,AAAA']);
 });

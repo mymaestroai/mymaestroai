@@ -11989,11 +11989,12 @@
       if (!chat.imagesPreparing) chat.imagesPreparing = new Set();
       // Each picture being prepared is a job: one that took too long is marked abandoned (waitForPreparingImages) and adds nothing when it ends.
       let settle;
-      const job = { promise: null, abandoned: false };
+      const job = { promise: null, abandoned: false, url: null };
       job.promise = new Promise(res => { settle = res; });
       chat.imagesPreparing.add(job);
       job.promise.then(() => chat.imagesPreparing.delete(job));
       const objectUrl = URL.createObjectURL(file);
+      job.url = objectUrl;   // revoked when the job is abandoned, so a picture that never finishes does not hold its memory
       
       // Resize large images to max 1600px on longest side, compress as JPEG
       const img = new Image();
@@ -12038,21 +12039,24 @@
     async function waitForPreparingImages(chatId) {
       const chat = chats[chatId];
       if (!chat || !chat.imagesPreparing || !chat.imagesPreparing.size) return true;
-      chat.sendWaiting = true;   // one waiting send per composer: a second send returns at once (sendSoloMessage / sendInterjection check this)
-      chatFileStatus(chatId, 'Adding the picture…');
+      const waitingFor = [...chat.imagesPreparing];   // the pictures this send waits for (one attached later is not this send's)
       // The composer is locked while waiting: words typed now must not go with the earlier message or be cleared.
       const box = document.getElementById(`input-${chatId}`);
       const btn = document.getElementById(`send-${chatId}`);
       const boxWas = box ? box.readOnly : false;
       const btnWas = btn ? btn.disabled : false;
-      if (box) box.readOnly = true;
-      if (btn) btn.disabled = true;
       let timer;
       let done = false;
-      const cap = new Promise(res => { timer = setTimeout(res, IMAGE_WAIT_MS); });
       try {
-        done = await Promise.race([Promise.allSettled([...chat.imagesPreparing].map(j => j.promise)).then(() => true), cap.then(() => false)]);
-        if (!done) { for (const j of chat.imagesPreparing) j.abandoned = true; chat.imagesPreparing.clear(); }   // the pictures still pending are left out
+        chat.sendWaiting = true;   // one waiting send per composer: a second send returns at once (sendSoloMessage / sendInterjection check this)
+        chatFileStatus(chatId, 'Adding the picture…');
+        if (box) box.readOnly = true;
+        if (btn) btn.disabled = true;
+        const cap = new Promise(res => { timer = setTimeout(res, IMAGE_WAIT_MS); });
+        done = await Promise.race([Promise.allSettled(waitingFor.map(j => j.promise)).then(() => true), cap.then(() => false)]);
+        if (!done) {   // the pictures of this send still pending are left out (a finished one has already left the set)
+          for (const j of waitingFor) if (chat.imagesPreparing.has(j)) { j.abandoned = true; chat.imagesPreparing.delete(j); if (j.url) URL.revokeObjectURL(j.url); }
+        }
       } finally {
         clearTimeout(timer);
         chat.sendWaiting = false;
@@ -12396,12 +12400,14 @@
       if (!isVoice && chat.sendWaiting) return;   // one waiting send per composer
       if (!isVoice && chat.imagesPreparing && chat.imagesPreparing.size) { if (!(await waitForPreparingImages(chatId))) return; }   // (a no-op when sendSoloMessage already waited)
       const content = input.value.trim();
-      const imagesToSend = [...(chat.pendingImages || [])];   // the pictures waiting in the input go with the interjection
+      // A voice interjection while a typed message waits for its pictures takes only the spoken words; the pictures stay with that message.
+      const textOnly = isVoice && !!chat.sendWaiting;
+      const imagesToSend = textOnly ? [] : [...(chat.pendingImages || [])];   // the pictures waiting in the input go with the interjection
       if (!content && imagesToSend.length === 0) return;
 
       input.value = '';
       input.style.height = 'auto';
-      clearPendingImages(chatId);
+      if (!textOnly) clearPendingImages(chatId);
 
       // Show the interjection in the chat as a user message with a distinct style (with its pictures)
       setMessageTime(document.getElementById(appendMessageWithImages(chatId, 'user', `⚡ [Interjection] ${content}`.trim(), imagesToSend)), msgTimeLabel(Date.now()));
@@ -12452,6 +12458,9 @@
       let notified = false;
       const notify = (err) => { if (notified || !sendOpts || !sendOpts.onSendResult) return; notified = true; try { sendOpts.onSendResult(err); } catch { /* the caller's problem */ } };
       const input = document.getElementById(`input-${chatId}`);
+      // A voice send while a typed message waits for its pictures: only the spoken words go (as a fallback send, which
+      // neither reads nor changes the composer's pictures); the waiting message keeps its pictures.
+      if (sendOpts && sendOpts.voice && !sendOpts.fallback && chat.sendWaiting) sendOpts = { ...sendOpts, fallback: { text: input.value, images: [] } };
       // sendOpts.fallback { text, images }: a message that was meant as an interjection but found the turn over. It goes
       // with its own text and pictures; the composer (what is typed or attached now) is neither read nor changed.
       const fallback = sendOpts && sendOpts.fallback ? sendOpts.fallback : null;
