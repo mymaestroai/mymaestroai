@@ -9,6 +9,7 @@
  *   mymaestro open                   open it in the browser, or print the address
  *   mymaestro setup-link             the first-run Welcome link (until the first account exists)
  *   mymaestro connect chatgpt        use your ChatGPT subscription: installs Codex and signs it in (--device-auth: sign in with a code)
+ *   mymaestro connect claude         sign Claude in on this computer (its own sign-in: a link, then paste the code) and check it answers
  *   mymaestro codex-check [--repair] is Codex where this install needs it? --repair reinstalls it (the installer runs this)
  *   mymaestro update [--channel stable|experimental] [--put-aside]   newest version of the channel, then restart (the Update button); --put-aside: first put changed files aside (git stash, never put back)
  *   mymaestro doctor                 security and setup checks (scripts/security-check.js)
@@ -101,6 +102,45 @@ function rootOwnerNote({ getuid = process.getuid ? process.getuid.bind(process) 
   let st; try { st = stat(dataDir); } catch { return null; }
   if (st.uid === 0) return null;
   return `Run this without sudo, as the user that runs your Maestro (user id ${st.uid}).`;
+}
+
+// `mymaestro connect claude`: signs the Claude client in on this computer with its own `auth login --claudeai` (the client
+// prints the link and reads the code itself, in this terminal), then proves Claude answers. Returns the exit code (0 = done).
+// Never prints or logs a code or token. The check can be stubbed for tests only: MM_SIGNIN_VERIFY_STUB (ok | signed-out |
+// limit | network) is read ONLY when NODE_ENV is "test", and only by this script (the hub's routes never read it).
+async function connectClaude({ say = out, sayErr = (s) => process.stderr.write(s + '\n'), rootNote = rootOwnerNote, env = process.env, signin = null, verify = null } = {}) {
+  const refuse = rootNote(); if (refuse) { sayErr(refuse); return 1; }   // the sign-in must belong to the user that runs the hub
+  const si = signin || require(path.join(DIR, 'lib', 'claude-signin'));
+  const W = si.WORDS;
+  const stub = env.NODE_ENV === 'test' ? env.MM_SIGNIN_VERIFY_STUB : null;
+  const check = verify || (stub
+    ? async () => (stub === 'ok' ? { ok: true, state: 'ready' } : { ok: false, state: stub })
+    : () => require(path.join(DIR, 'lib', 'welcome')).getWelcome().checkClaude({ timeoutMs: 90000 }));
+  let found = si.findClient({ env });
+  if (!found) {
+    say('Claude Code is not on this computer. Installing it…');
+    await si.installClient({});
+    found = si.findClient({ env });
+  }
+  if (!found) { sayErr(W.failed.missing); return 1; }
+  const cenv = si.clientEnv(env);
+  let s = await si.authStatus({ bin: found.bin, env: cenv });
+  if (s.loggedIn !== true) {
+    say(W.signedOut);
+    say(W.openLink);
+    say(W.pasteCode + '\n');
+    const r = spawnSync(found.bin, ['auth', 'login', '--claudeai'], { stdio: 'inherit', env: cenv });
+    say('');
+    if (r.error) { sayErr(W.failed.missing); return 1; }
+    s = await si.authStatus({ bin: found.bin, env: cenv });
+    if (r.status !== 0 || s.loggedIn !== true) { sayErr(r.status !== 0 ? W.failed.code : W.failed.error); return 1; }
+  }
+  say(W.checking);
+  let v;
+  try { v = await check(); } catch { v = { ok: false, state: 'error' }; }
+  if (v && v.ok) { say(W.done); return 0; }
+  sayErr(W.failed[si.reasonFromVerify(v)] || W.failed.error);
+  return 1;
 }
 
 // `mymaestro reset-password <email>`: returns the exit code (0 = the password was set). `readHidden` can be injected for tests.
@@ -267,7 +307,8 @@ const commands = {
   // installer replaces), where the hub looks for it, then runs Codex's own sign-in in this terminal. The hub never sees
   // the sign-in.
   async connect() {
-    if (argv[1] !== 'chatgpt') fail('Usage: mymaestro connect chatgpt [--device-auth]');
+    if (argv[1] === 'claude') { process.exitCode = await connectClaude(); return; }
+    if (argv[1] !== 'chatgpt') fail('Usage: mymaestro connect chatgpt [--device-auth]\n       mymaestro connect claude');
     const codex = require(path.join(DIR, 'lib', 'codex-cli'));
     const setup = require(path.join(DIR, 'lib', 'codex-cli', 'setup'));
     const env = codex.withNode(process.env);
@@ -612,11 +653,11 @@ const commands = {
     out(unfinished ? `To create the missing ones, open ${URL_BASE}/welcome on this computer.` : `To add them, open ${URL_BASE}/?team=setup on this computer and choose Set up your team.`);
   },
   version() { const { v, commit, channel } = version(); out(`${PRODUCT} ${v} (${commit}, ${channel} channel)`); },
-  // The help is the comment block at the top of this file: lines 4 to 27 (one more than before `reset-password` was listed).
-  help() { out(fs.readFileSync(__filename, 'utf8').split('\n').slice(3, 27).map(l => l.replace(/^ \* ?/, '')).join('\n')); },
+  // The help is the comment block at the top of this file: lines 4 to 28 (one more than before `connect claude` was listed).
+  help() { out(fs.readFileSync(__filename, 'utf8').split('\n').slice(3, 28).map(l => l.replace(/^ \* ?/, '')).join('\n')); },
 };
 
-module.exports = { resetPassword, readHidden, endHidden, rootOwnerNote };   // for tests: the command's logic with an injectable password reader
+module.exports = { resetPassword, connectClaude, readHidden, endHidden, rootOwnerNote };   // for tests: the command's logic with an injectable password reader
 
 if (require.main === module) (async () => {
   const fn = commands[cmd] || (cmd === '--help' || cmd === '-h' ? commands.help : null);
