@@ -9314,14 +9314,31 @@ function renderPreviews() {
 const imagesPreparing = new Set();
 const IMAGE_WAIT_MS = 15000;
 async function waitForPreparingImages() {
-  if (!imagesPreparing.size) return;
+  if (!imagesPreparing.size) return true;
   toast('Adding the picture…');
+  // The composer is locked while waiting: words typed now must not go with the earlier message or be cleared.
+  const box = $('msg-input');
+  const btn = $('send-btn');
+  const boxWas = box ? box.readOnly : false;
+  const btnWas = btn ? btn.disabled : false;
+  if (box) box.readOnly = true;
+  if (btn) btn.disabled = true;
   let timer;
+  let done = false;
   const cap = new Promise(res => { timer = setTimeout(res, IMAGE_WAIT_MS); });
-  try { await Promise.race([Promise.allSettled([...imagesPreparing]), cap]); } finally { clearTimeout(timer); }
+  try {
+    done = await Promise.race([Promise.allSettled([...imagesPreparing]).then(() => true), cap.then(() => false)]);
+  } finally {
+    clearTimeout(timer);
+    if (box) box.readOnly = boxWas;
+    if (btn) btn.disabled = btnWas;
+  }
+  if (!done) { toast('The picture is still being prepared. Press Send again in a moment.'); return false; }
+  return true;
 }
 
 function addImageFile(file) {
+  const attachedIn = current;   // the picture belongs to the chat it was attached in
   let settle;
   const prepared = new Promise(res => { settle = res; });
   imagesPreparing.add(prepared);
@@ -9340,8 +9357,17 @@ function addImageFile(file) {
     const canvas = document.createElement('canvas');
     canvas.width = width;
     canvas.height = height;
-    canvas.getContext('2d').drawImage(img, 0, 0, width, height);
-    pendingImages.push(canvas.toDataURL('image/jpeg', 0.85));
+    let data;
+    try {
+      canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+      data = canvas.toDataURL('image/jpeg', 0.85);
+      if (typeof data !== 'string' || !data.startsWith('data:image/')) throw new Error('not an image');
+    } catch (e) {
+      toast(`Could not read that picture (${(file && file.name) || 'picture'}). Try a PNG or JPEG, or a screenshot of it.`);
+      return;
+    }
+    if (current !== attachedIn) { toast('The picture was not added because you switched chats.'); return; }
+    pendingImages.push(data);
     renderPreviews();
     } finally { URL.revokeObjectURL(url); settle(); }
   };
@@ -11866,7 +11892,7 @@ async function sendMessage(fallback) {
   const notify = (err) => { const f = fallback && fallback.onSendResult; if (typeof f !== 'function') return; fallback.onSendResult = null; try { f(err); } catch { /* the caller's problem */ } };
   if (!current) { notify(new Error('no agent')); toast('Pick an agent first'); return; }
   const agent = fallback ? fallback.agent : current;
-  if (!fallback && imagesPreparing.size) { await waitForPreparingImages(); if (current !== agent) return; }   // a picture attached a moment ago is part of this send
+  if (!fallback && imagesPreparing.size) { if (!(await waitForPreparingImages())) return; if (current !== agent) { toast('Not sent: you switched chats.'); return; } }   // a picture attached a moment ago is part of this send
   // While the agent is busy (a turn this phone is streaming or one started elsewhere) the
   // composer interjects into that turn; Stop is in the header.
   if (!fallback && (isBusy(agent) || ownTurnFor(agent))) { await sendInterjection(agent); return; }

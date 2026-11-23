@@ -12003,7 +12003,9 @@
       img.onload = () => {
         try {
         const MAX_DIM = 1600;
+        let base64;
         let { width, height } = img;
+        try {
         if (width > MAX_DIM || height > MAX_DIM) {
           const scale = MAX_DIM / Math.max(width, height);
           width = Math.round(width * scale);
@@ -12015,7 +12017,12 @@
         const ctx = canvas.getContext('2d');
         ctx.drawImage(img, 0, 0, width, height);
         // Use JPEG at 85% quality for screenshots (much smaller than PNG)
-        const base64 = canvas.toDataURL('image/jpeg', 0.85);
+        base64 = canvas.toDataURL('image/jpeg', 0.85);
+        if (typeof base64 !== 'string' || !base64.startsWith('data:image/')) throw new Error('not an image');
+        } catch (e) {
+          chatFileStatus(chatId, `Could not read that picture (${(file && file.name) || 'picture'}). Try a PNG or JPEG, or a screenshot of it.`, 'error');
+          return;
+        }
         console.log(`[image] Resized ${img.naturalWidth}x${img.naturalHeight} → ${width}x${height}, size=${(base64.length / 1024).toFixed(0)}KB`);
         chat.pendingImages.push(base64);
         renderImagePreviews(chatId);
@@ -12027,13 +12034,29 @@
     const IMAGE_WAIT_MS = 15000;
     async function waitForPreparingImages(chatId) {
       const chat = chats[chatId];
-      if (!chat || !chat.imagesPreparing || !chat.imagesPreparing.size) return;
+      if (!chat || !chat.imagesPreparing || !chat.imagesPreparing.size) return true;
       chatFileStatus(chatId, 'Adding the picture…');
+      // The composer is locked while waiting: words typed now must not go with the earlier message or be cleared.
+      const box = document.getElementById(`input-${chatId}`);
+      const btn = document.getElementById(`send-${chatId}`);
+      const boxWas = box ? box.readOnly : false;
+      const btnWas = btn ? btn.disabled : false;
+      if (box) box.readOnly = true;
+      if (btn) btn.disabled = true;
       let timer;
+      let done = false;
       const cap = new Promise(res => { timer = setTimeout(res, IMAGE_WAIT_MS); });
-      try { await Promise.race([Promise.allSettled([...chat.imagesPreparing]), cap]); } finally { clearTimeout(timer); }
+      try {
+        done = await Promise.race([Promise.allSettled([...chat.imagesPreparing]).then(() => true), cap.then(() => false)]);
+      } finally {
+        clearTimeout(timer);
+        if (box) box.readOnly = boxWas;
+        if (btn) btn.disabled = btnWas;
+      }
       const st = document.getElementById(`image-preview-${chatId}`)?.querySelector('.chat-file-status');
       if (st && st.textContent === 'Adding the picture…') chatFileStatus(chatId, '');   // a decode error shown meanwhile stays
+      if (!done) { chatFileStatus(chatId, 'The picture is still being prepared. Press Send again in a moment.', 'error'); return false; }
+      return true;
     }
     
     function removeImageFromChat(chatId, index) {
@@ -12363,7 +12386,7 @@
     async function sendInterjection(chatId) {
       const chat = chats[chatId];
       const input = document.getElementById(`input-${chatId}`);
-      if (chat.imagesPreparing && chat.imagesPreparing.size) await waitForPreparingImages(chatId);   // (a no-op when sendSoloMessage already waited)
+      if (chat.imagesPreparing && chat.imagesPreparing.size) { if (!(await waitForPreparingImages(chatId))) return; }   // (a no-op when sendSoloMessage already waited)
       const content = input.value.trim();
       const imagesToSend = [...(chat.pendingImages || [])];   // the pictures waiting in the input go with the interjection
       if (!content && imagesToSend.length === 0) return;
@@ -12424,7 +12447,7 @@
       // sendOpts.fallback { text, images }: a message that was meant as an interjection but found the turn over. It goes
       // with its own text and pictures; the composer (what is typed or attached now) is neither read nor changed.
       const fallback = sendOpts && sendOpts.fallback ? sendOpts.fallback : null;
-      if (!fallback && !retryCount && chat.imagesPreparing && chat.imagesPreparing.size) await waitForPreparingImages(chatId);   // a picture attached a moment ago is part of this send
+      if (!fallback && !retryCount && chat.imagesPreparing && chat.imagesPreparing.size) { if (!(await waitForPreparingImages(chatId))) { notify(new Error('picture still being prepared')); return; } }   // a picture attached a moment ago is part of this send; on a timeout nothing is sent
       const content = fallback ? String(fallback.text || '').trim() : input.value.trim();
       const pendingImages = fallback ? [...(fallback.images || [])] : (chat.pendingImages || []);
 

@@ -117,16 +117,17 @@ test('desktop addImageToChat: a picture that loads is added and its link is rele
 });
 
 function deskSend(h, { text = '' } = {}) {
-  const input = { value: text, style: {} };
+  const input = { value: text, style: {}, readOnly: false };
+  const btn = { disabled: false };
   const sent = [];
   const { api } = load(APP, ['addImageToChat', 'waitForPreparingImages', 'sendInterjection'], {
     ...h.base,
-    document: Object.assign(canvasDoc(), { getElementById: (id) => (id === 'input-c1' ? input : null) }),
+    document: Object.assign(canvasDoc(), { getElementById: (id) => (id === 'input-c1' ? input : id === 'send-c1' ? btn : null) }),
     clearPendingImages: () => { h.chat.pendingImages = []; }, appendMessageWithImages() { return 'x'; }, setMessageTime() {}, msgTimeLabel: () => 't',
     appendSystemNotice: () => ({}),
     fetch: async (url, o) => { sent.push(JSON.parse(o.body)); return { json: async () => ({ success: true }) }; },
   });
-  return { api, input, sent };
+  return { api, input, btn, sent };
 }
 
 test('desktop send right after attaching: waits for the picture, shows "Adding the picture…", and sends it', async () => {
@@ -155,14 +156,55 @@ test('desktop send while a picture fails to decode: the message is shown, the pi
   eq(s.sent, [{ agent: 'agent-a', message: 'here' }], 'text only, no images key');
 });
 
-test('desktop send gives up waiting for a stuck picture after the cap', async () => {
+test('desktop send gives up waiting for a stuck picture after the cap: nothing is sent, the draft stays, the message is shown', async () => {
   const h = deskPictures();
   const s = deskSend(h, { text: 'here' });
   s.api.addImageToChat('c1', { name: 'huge.png' });   // never settles
   const t0 = Date.now();
   await s.api.sendInterjection('c1');
   assert.ok(Date.now() - t0 >= 50 && Date.now() - t0 < 1000, 'waited about the cap, not forever');
-  eq(s.sent, [{ agent: 'agent-a', message: 'here' }]);
+  eq(s.sent, []);
+  assert.strictEqual(s.input.value, 'here');
+  assert.ok(h.status.some(x => x[2] === 'error' && x[1] === 'The picture is still being prepared. Press Send again in a moment.'));
+  assert.strictEqual(s.input.readOnly, false, 'restored after the timeout');
+  assert.strictEqual(s.btn.disabled, false);
+});
+
+test('desktop send: the box is readOnly and the button disabled during the wait, restored after (a button disabled before stays so)', async () => {
+  const h = deskPictures();
+  const s = deskSend(h, { text: 'here' });
+  s.api.addImageToChat('c1', { name: 'a.png' });
+  const p = s.api.sendInterjection('c1');
+  await tick(5);
+  assert.strictEqual(s.input.readOnly, true);
+  assert.strictEqual(s.btn.disabled, true);
+  Object.assign(h.made[0], { width: 10, height: 10, naturalWidth: 10, naturalHeight: 10 });
+  h.made[0].onload();
+  await p;
+  assert.strictEqual(s.input.readOnly, false);
+  assert.strictEqual(s.btn.disabled, false);
+  const h2 = deskPictures();
+  const s2 = deskSend(h2, { text: 'x' });
+  s2.btn.disabled = true;
+  s2.api.addImageToChat('c1', { name: 'b.png' });
+  const p2 = s2.api.sendInterjection('c1');
+  await tick(5);
+  h2.made[0].onerror();
+  await p2;
+  assert.strictEqual(s2.btn.disabled, true, 'was disabled for another reason');
+});
+
+test('desktop addImageToChat: a canvas that throws in toDataURL gives the error message and adds no picture', async () => {
+  const h = deskPictures();
+  h.base.document = { createElement: () => ({ getContext: () => ({ drawImage() {} }), toDataURL: () => { throw new Error('tainted'); } }), getElementById: () => null };
+  const { api } = load(APP, ['addImageToChat'], h.base);
+  api.addImageToChat('c1', { name: 'c.png' });
+  Object.assign(h.made[0], { width: 10, height: 10, naturalWidth: 10, naturalHeight: 10 });
+  h.made[0].onload();
+  await tick();
+  eq(h.chat.pendingImages, []);
+  eq(h.status, [['c1', 'Could not read that picture (c.png). Try a PNG or JPEG, or a screenshot of it.', 'error']]);
+  assert.strictEqual(h.chat.imagesPreparing.size, 0, 'the promise settled');
 });
 
 test('desktop: sendSoloMessage and sendInterjection wait before they read the pictures', () => {
@@ -205,12 +247,15 @@ function phonePictures() {
   const toasts = [];
   const revoked = [];
   const { FakeImage, made } = fakeImages();
+  const input = { value: '', style: {}, blur() {}, readOnly: false };
+  const btn = { disabled: false };
   const ctx = {
     pendingImages: [], imagesPreparing: new Set(), IMAGE_WAIT_MS: 60, Image: FakeImage,
     URL: { createObjectURL: (f) => `blob:${f.name}`, revokeObjectURL: (u) => revoked.push(u) },
     document: canvasDoc(), toast: (m) => toasts.push(m), renderPreviews() {},
+    $: (id) => (id === 'msg-input' ? input : id === 'send-btn' ? btn : null), current: 'agent-a',
   };
-  return { ctx, toasts, revoked, made };
+  return { ctx, toasts, revoked, made, input, btn };
 }
 
 test('phone addImageFile: a picture that cannot be read shows the same words as the desktop and is not added', async () => {
@@ -229,9 +274,10 @@ test('phone addImageFile: a picture that cannot be read shows the same words as 
 // sendMessage is cut out whole; the agent is made busy so it ends in a recorded sendInterjection, which sees what is in pendingImages by then.
 function phoneSend(h, text) {
   const seen = [];
-  const input = { value: text, style: {}, blur() {} };
+  const input = h.input;
+  input.value = text;
   const { api, ctx } = load(MOBILE, ['addImageFile', 'waitForPreparingImages', 'sendMessage'], {
-    ...h.ctx, current: 'agent-a', isBusy: () => true, ownTurnFor: () => false, plusSheetShow() {},
+    ...h.ctx, isBusy: () => true, ownTurnFor: () => false, plusSheetShow() {},
     sendInterjection: async () => { seen.push({ images: [...ctx.pendingImages], text: input.value }); },
   });
   return { api, ctx, seen };
@@ -263,18 +309,85 @@ test('phone send while a picture fails to decode: the message is shown and nothi
   eq(s.seen, [{ images: [], text: 'here' }]);
 });
 
-test('phone send gives up waiting for a stuck picture after the cap', async () => {
+test('phone send gives up waiting for a stuck picture after the cap: nothing is sent, the draft stays, the message is shown', async () => {
   const h = phonePictures();
   const s = phoneSend(h, 'here');
   s.api.addImageFile({ name: 'huge.png' });   // never settles
   const t0 = Date.now();
   await s.api.sendMessage();
   assert.ok(Date.now() - t0 >= 50 && Date.now() - t0 < 1000, 'waited about the cap, not forever');
-  eq(s.seen, [{ images: [], text: 'here' }]);
+  eq(s.seen, []);
+  assert.strictEqual(h.input.value, 'here');
+  assert.ok(h.toasts.includes('The picture is still being prepared. Press Send again in a moment.'));
+  assert.strictEqual(h.input.readOnly, false, 'restored after the timeout');
+  assert.strictEqual(h.btn.disabled, false);
+});
+
+test('phone send: the box is readOnly and the button disabled during the wait, restored after (a button disabled before stays so)', async () => {
+  const h = phonePictures();
+  const s = phoneSend(h, 'here');
+  s.api.addImageFile({ name: 'a.png' });
+  const p = s.api.sendMessage();
+  await tick(5);
+  assert.strictEqual(h.input.readOnly, true);
+  assert.strictEqual(h.btn.disabled, true);
+  Object.assign(h.made[0], { width: 10, height: 10 });
+  h.made[0].onload();
+  await p;
+  assert.strictEqual(h.input.readOnly, false);
+  assert.strictEqual(h.btn.disabled, false);
+  const h2 = phonePictures();
+  h2.btn.disabled = true;
+  const s2 = phoneSend(h2, 'x');
+  s2.api.addImageFile({ name: 'b.png' });
+  const p2 = s2.api.sendMessage();
+  await tick(5);
+  h2.made[0].onerror();
+  await p2;
+  assert.strictEqual(h2.btn.disabled, true, 'was disabled for another reason');
+});
+
+test('phone addImageFile: a decode that finishes after a chat switch is not added and toasts', async () => {
+  const h = phonePictures();
+  const { api, ctx } = load(MOBILE, ['addImageFile'], h.ctx);
+  api.addImageFile({ name: 'a.png' });
+  ctx.current = 'agent-b';
+  Object.assign(h.made[0], { width: 10, height: 10 });
+  h.made[0].onload();
+  await tick();
+  eq(ctx.pendingImages, []);
+  assert.ok(h.toasts.includes('The picture was not added because you switched chats.'));
+  assert.strictEqual(ctx.imagesPreparing.size, 0);
+});
+
+test('phone send that waited and finds the chat switched: not sent, toast', async () => {
+  const h = phonePictures();
+  const s = phoneSend(h, 'here');
+  s.api.addImageFile({ name: 'a.png' });
+  const p = s.api.sendMessage();
+  await tick(5);
+  s.ctx.current = 'agent-b';
+  h.made[0].onerror();
+  await p;
+  eq(s.seen, []);
+  assert.ok(h.toasts.includes('Not sent: you switched chats.'));
+});
+
+test('phone addImageFile: a canvas that throws in toDataURL gives the error message and adds no picture', async () => {
+  const h = phonePictures();
+  h.ctx.document = { createElement: () => ({ getContext: () => ({ drawImage() {} }), toDataURL: () => { throw new Error('tainted'); } }) };
+  const { api, ctx } = load(MOBILE, ['addImageFile'], h.ctx);
+  api.addImageFile({ name: 'c.png' });
+  Object.assign(h.made[0], { width: 10, height: 10 });
+  h.made[0].onload();
+  await tick();
+  eq(ctx.pendingImages, []);
+  assert.ok(h.toasts.includes('Could not read that picture (c.png). Try a PNG or JPEG, or a screenshot of it.'));
+  assert.strictEqual(ctx.imagesPreparing.size, 0, 'the promise settled');
 });
 
 test('phone: a send with nothing preparing does not wait (no await before the composer is read)', () => {
-  assert.match(fnSource(MOBILE, 'sendMessage'), /if \(!fallback && imagesPreparing\.size\) \{ await waitForPreparingImages\(\);/);
+  assert.match(fnSource(MOBILE, 'sendMessage'), /if \(!fallback && imagesPreparing\.size\) \{ if \(!\(await waitForPreparingImages\(\)\)\) return;/);
 });
 
 test('service worker: version bumped to v78', () => {

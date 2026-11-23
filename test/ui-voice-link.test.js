@@ -298,6 +298,6 @@ test('pages: a network failure is charged only to the call that was up when the 
   for (const fn of ['voiceFetchTts', 'voiceCallApi', 'voiceCallStt']) assert.match(app.slice(app.indexOf(`function ${fn}(`), app.indexOf(`function ${fn}(`) + 900), /const linkOwner = typeof voiceLinkOwner === 'function' \? voiceLinkOwner\(\) : null;[^]*voiceLinkNetFail\(e, linkOwner\)/, fn);
   assert.match(app, /seq = \+\+S\.sendSeq, linkOwner = S\.call;[^]*voiceLinkNetFail\(err, linkOwner\)/);
   assert.match(mob, /function voiceLinkNetFail\(e, vc, agent\) \{\n\s+if \(!e \|\| e\.name !== 'TypeError'\) return;\n\s+const v = vc;/);
-  for (const fn of ['voiceTtsBlob', 'voiceCallStt', 'sendMessage']) assert.match(mob.slice(mob.indexOf(`function ${fn}(`), mob.indexOf(`function ${fn}(`) + 6000), /const linkOwner = typeof voiceCall !== 'undefined' \? voiceCall : null;[^]*voiceLinkNetFail\(e, linkOwner, agent\)/, fn);
+  for (const fn of ['voiceTtsBlob', 'voiceCallStt', 'sendMessage']) assert.match(mob.slice(mob.indexOf(`function ${fn}(`), mob.indexOf(`function ${fn}(`) + 6500), /const linkOwner = typeof voiceCall !== 'undefined' \? voiceCall : null;[^]*voiceLinkNetFail\(e, linkOwner, agent\)/, fn);
   assert.match(app, /S\.focusTry === focusTry/, 'a late focus refusal from an earlier call never shows the hint in a newer one');
 });
