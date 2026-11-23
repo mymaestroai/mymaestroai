@@ -383,7 +383,7 @@ test('no client anywhere: the engine installs once (stand-in, under its own canc
   const signin = {
     ...real, findClient: () => null,
     installClient: async () => assert.fail('untracked install'),   // the command itself never installs
-    createSignIn: (d) => real.createSignIn({ ...d, installClient: async () => { installs++; return false; } }),
+    createSignIn: (d) => real.createSignIn({ ...d, installClient: async () => { installs++; await new Promise((r) => setTimeout(r, 80)); return false; } }),   // takes a moment, like a real install: the command's poll sees "installing"
   };
   const t = inproc();
   const code = await CLI_MOD().connectClaude({ ...t.opts, signin, env: {} });

@@ -129,6 +129,14 @@ function watchCtrlC(onCtrlC, { keepInput = true } = {}) {
 }
 const realHidden = { begin: beginHidden, end: endHidden, watch: watchCtrlC };
 
+// The default check of `connect claude`: a check turn through the real client (it reaches the network). Refused under node --test.
+function defaultCheck({ signal } = {}) {
+  require(path.join(DIR, 'lib', 'claude-signin-guard')).guardProgram();
+  return require(path.join(DIR, 'lib', 'welcome')).getWelcome().checkClaude({
+    timeoutMs: 90000, signal, probeOnly: true
+  });
+}
+
 // `mymaestro connect claude`: signs the Claude client in on this computer through the same engine as the page
 // (lib/claude-signin.js): the engine runs the client's `auth login --claudeai` with its output captured, this command prints the
 // link, reads the code with the hidden reader (readHidden: echo off, never written anywhere, never on a command line) and hands
@@ -179,10 +187,7 @@ async function connectClaude({ say = out, sayErr = (s) => process.stderr.write(s
       delete env.CLAUDE_CONFIG_DIR;
       if (env0 === process.env) delete process.env.CLAUDE_CONFIG_DIR;
     }
-    const check = verify || (({ signal } = {}) =>
-      require(path.join(DIR, 'lib', 'welcome')).getWelcome().checkClaude({
-        timeoutMs: 90000, signal, probeOnly: true
-      }));
+    const check = verify || defaultCheck;
     const macSsh = platform === 'darwin' && !!env0.SSH_CONNECTION;
     const fail = (line) => {
       sayErr(line);
@@ -779,7 +784,7 @@ const commands = {
   help() { out(fs.readFileSync(__filename, 'utf8').split('\n').slice(3, 28).map(l => l.replace(/^ \* ?/, '')).join('\n')); },
 };
 
-module.exports = { resetPassword, connectClaude, readHidden, endHidden, rootOwnerNote };   // for tests: the command's logic with an injectable password reader
+module.exports = { resetPassword, connectClaude, defaultCheck, readHidden, endHidden, rootOwnerNote };   // for tests: the command's logic with an injectable password reader
 
 if (require.main === module) (async () => {
   const fn = commands[cmd] || (cmd === '--help' || cmd === '-h' ? commands.help : null);

@@ -45,7 +45,10 @@ function fakeEngine() {
     const c = new EventEmitter();
     c.stdout = new EventEmitter(); c.stderr = new EventEmitter();
     c.stdin = Object.assign(new EventEmitter(), { written: [], write(s) { this.written.push(String(s)); } });
-    c.killed = false; c.kill = () => { c.killed = true; };
+    // The engine talks to a group leader over IPC: a `stop` message is "the client was stopped".
+    c.killed = false; c.connected = true;
+    c.send = (m, cb) => { if (m && m.op === 'stop') c.killed = true; if (cb) cb(); return true; };
+    c.disconnect = () => { c.connected = false; };
     kids.push(c);
     return c;
   };

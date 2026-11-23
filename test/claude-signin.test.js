@@ -254,19 +254,28 @@ test('findClient: the SDK\'s bundled native client next to the SDK package', () 
 
 test('installClient: runs the installer command with bash on linux and darwin only; true on exit 0', async () => {
   const calls = [];
+  // The spawn gets the group leader (the supervisor); the installer command reaches it as its `start` message, and the leader
+  // answers with its result.
   const fakeSpawn = (code) => (cmd, args, opts) => {
-    calls.push([cmd, args, opts]);
     const { EventEmitter } = require('events');
-    const c = new EventEmitter(); c.kill = () => {};
-    setImmediate(() => c.emit('close', code));
+    const c = new EventEmitter();
+    c.pid = 9100; c.connected = true;
+    c.send = (m, cb) => {
+      calls.push([m.bin, m.args, opts]);
+      if (cb) cb();
+      setImmediate(() => { c.emit('message', { op: 'result', code }); });
+      return true;
+    };
+    c.disconnect = () => {};
     return c;
   };
-  assert.strictEqual(await S.installClient({ spawn: fakeSpawn(0), platform: 'linux' }), true);
+  const gone = () => { throw Object.assign(new Error('gone'), { code: 'ESRCH' }); };
+  assert.strictEqual(await S.installClient({ spawn: fakeSpawn(0), platform: 'linux', kill: gone }), true);
   assert.deepStrictEqual(calls[0].slice(0, 2), ['bash', ['-c', 'set -o pipefail; curl -fsSL https://claude.ai/install.sh | bash']]);
   assert.strictEqual(calls[0][2] && calls[0][2].detached, true, 'its own process group');
-  assert.strictEqual(await S.installClient({ spawn: fakeSpawn(1), platform: 'darwin' }), false);
+  assert.strictEqual(await S.installClient({ spawn: fakeSpawn(1), platform: 'darwin', kill: gone }), false);
   const n = calls.length;
-  assert.strictEqual(await S.installClient({ spawn: fakeSpawn(0), platform: 'win32' }), false);
+  assert.strictEqual(await S.installClient({ spawn: fakeSpawn(0), platform: 'win32', kill: gone }), false);
   assert.strictEqual(calls.length, n, 'nothing runs on other platforms');
 });
 
@@ -274,28 +283,47 @@ test('installClient: runs the installer command with bash on linux and darwin on
 const { EventEmitter } = require('node:events');
 const flush = async () => { for (let i = 0; i < 5; i++) await new Promise(r => setImmediate(r)); };
 const OVERALL = 777000;
+// The client and the installer run in a process group led by a supervisor (lib/claude-signin-group.js): the engine's spawn gets
+// the LEADER, the engine talks to it over IPC (start / stop messages), and a leader's exit is followed by probes of its group
+// (kill(-pid, 0), never a destructive signal from the parent). The slot is free only when the group is gone (job.drained).
+// fakeKid is such a leader: `sent` are the IPC messages it got, `disconnected` is set by job.disconnect().
 function fakeKid(pid) {
   const c = new EventEmitter();
-  c.pid = pid; c.stdout = new EventEmitter(); c.stderr = new EventEmitter();
+  c.pid = pid; c.connected = true; c.sent = []; c.disconnected = false;
+  c.stdout = new EventEmitter(); c.stderr = new EventEmitter();
   c.stdin = Object.assign(new EventEmitter(), { written: [], write(s) { this.written.push(String(s)); } });
-  c.kill = () => {};
+  c.send = (m, cb) => { c.sent.push(m); if (cb) cb(); return true; };
+  c.disconnect = () => { c.connected = false; c.disconnected = true; };
+  c.stops = () => c.sent.filter(m => m.op === 'stop').length;
   return c;
 }
+// What bootstrap installers and the like are handed through onChild: a job (stop, disconnect, drained).
+function fakeJob() {
+  let drain;
+  const j = { stops: 0, disconnects: 0, drained: new Promise((r) => { drain = r; }), drain };
+  j.stop = () => { j.stops++; };
+  j.disconnect = () => { j.disconnects++; };
+  return j;
+}
+const ESRCH = () => Object.assign(new Error('gone'), { code: 'ESRCH' });
 function fakeEngine(o = {}) {
-  const kills = [], kids = [], timers = [], spawned = [];
+  const kills = [], kids = [], timers = [], spawned = [], gone = new Set();
   let pid = 4000;
   const setTimer = (fn, ms) => { const t = { fn, ms, cleared: false, unref() {} }; timers.push(t); return t; };
   const clearTimer = (t) => { if (t) t.cleared = true; };
   const si = S.createSignIn({
     spawn: (bin, args, opts) => { const k = fakeKid(++pid); kids.push(k); spawned.push({ bin, args, opts }); return k; },
-    kill: (p, sig) => kills.push([p, sig]), setTimer, clearTimer, timeoutMs: OVERALL,
-    env: () => ({}), findClient: o.find || (() => ({ bin: '/nonexistent/claude' })), installClient: o.install,
-    authStatus: async () => ({ loggedIn: true }), verify: async () => ({ ok: true }),
+    // The parent only probes (signal 0); the group is "gone" once the test says so.
+    kill: (p, sig) => { kills.push([p, sig]); if (gone.has(p)) throw ESRCH(); }, setTimer, clearTimer, timeoutMs: OVERALL,
+    env: () => ({}), findClient: o.find || (() => ({ bin: '/nonexistent/claude' })), installClient: o.install || (async () => false),
+    authStatus: async () => ({ loggedIn: true }), verify: async () => ({ ok: true }), resetCli: o.resetCli, existingClient: o.existing,
   });
   const live = () => timers.filter(t => !t.cleared);
   const fire = (ms) => { const t = live().find(x => x.ms === ms); if (!t) throw new Error('no timer of ' + ms); t.cleared = true; t.fn(); };
+  // The leader exits and its whole group is gone: the job drains and the slot is released.
+  const exit = async (i = 0) => { gone.add(-kids[i].pid); kids[i].emit('exit', null, 'SIGTERM'); await flush(); };
   const toLink = async () => { const r = await si.start(); await flush(); kids[kids.length - 1].stdout.emit('data', 'visit: https://claude.ai/oauth/authorize?x=1 \n'); return r; };
-  return { si, kills, kids, spawned, timers, live, fire, toLink };
+  return { si, kills, kids, spawned, timers, live, fire, toLink, exit, gone };
 }
 
 test('each attempt has its own random id; state() carries it; a stale id is refused by submitCode and cancel', async () => {
@@ -310,7 +338,7 @@ test('each attempt has its own random id; state() carries it; a stale id is refu
   assert.deepStrictEqual(e.kids[0].stdin.written, ['ABCDEFGH12345\n']);
   assert.deepStrictEqual(e.si.cancel(a.id), { ok: true });
   assert.strictEqual(e.si.state().state, 'cancelled');
-  e.kids[0].emit('close', null);
+  await e.exit();
   const b = await e.si.start();
   assert.notStrictEqual(b.id, a.id);
   assert.strictEqual(e.si.submitCode('ABCDEFGH12345', a.id).reason, 'stale', 'the old attempt\'s id no longer fits');
@@ -339,52 +367,52 @@ test('start answers at once, before the client is found; the attempt is busy mea
   e.si.cancel();
 });
 
-test('the client is started in its own process group, and cancel ends it by group: SIGTERM, then SIGKILL after 3 s; the slot stays busy until it exited', async () => {
+test('the client is started in its own process group, and cancel asks the group leader to stop (the leader does SIGTERM, then SIGKILL after 3 s, see the drain tests); the slot stays busy until the group is gone', async () => {
   const e = fakeEngine();
   await e.toLink();
-  assert.deepStrictEqual(e.spawned[0].args, ['auth', 'login', '--claudeai']);
+  assert.deepStrictEqual(e.kids[0].sent[0], { op: 'start', bin: '/nonexistent/claude', args: ['auth', 'login', '--claudeai'] });
   assert.strictEqual(e.spawned[0].opts.detached, true);
   const pid = e.kids[0].pid;
   e.si.cancel();
-  assert.deepStrictEqual(e.kills, [[-pid, 'SIGTERM']]);
+  assert.strictEqual(e.kids[0].stops(), 1);
+  assert.ok(e.kills.every(([, sig]) => sig === 0), 'the parent never sends a destructive signal');
   assert.strictEqual(e.si.state().state, 'cancelled');
-  assert.deepStrictEqual(await e.si.start(), { ok: false, reason: 'busy' }, 'the children have not exited yet');
-  e.fire(3000);
-  assert.deepStrictEqual(e.kills, [[-pid, 'SIGTERM'], [-pid, 'SIGKILL']]);
-  e.kids[0].emit('close', null);
-  assert.strictEqual((await e.si.start()).ok, true, 'free once it exited');
+  assert.deepStrictEqual(await e.si.start(), { ok: false, reason: 'busy' }, 'the group has not drained yet');
+  await e.exit();
+  assert.ok(e.kills.some(([p, sig]) => p === -pid && sig === 0), 'the group is probed');
+  assert.strictEqual((await e.si.start()).ok, true, 'free once the group is gone');
   e.si.cancel();
 });
 
 test('the installer belongs to the attempt: installing state, onChild tracked, cancel ends its process group', async () => {
   let done, gotChild;
-  const e = fakeEngine({ find: () => null, install: (o) => { gotChild = fakeKid(5555); o.onChild(gotChild); return new Promise((res) => { done = res; }); } });
+  const e = fakeEngine({ find: () => null, install: (o) => { gotChild = fakeJob(); o.onChild(gotChild); return new Promise((res) => { done = res; }); } });
   const r = await e.si.start();
   await flush();
   assert.strictEqual(e.si.state().state, 'installing');
   assert.strictEqual(e.si.state().id, r.id);
   assert.deepStrictEqual(await e.si.start(), { ok: false, reason: 'busy' }, 'installing is a busy state');
   e.si.cancel(r.id);
-  assert.deepStrictEqual(e.kills, [[-5555, 'SIGTERM']]);
+  assert.strictEqual(gotChild.stops, 1, 'the installer job is told to stop');
   assert.strictEqual(e.si.state().state, 'cancelled');
-  assert.deepStrictEqual(await e.si.start(), { ok: false, reason: 'busy' }, 'the installer is still alive');
-  e.fire(3000);
-  assert.deepStrictEqual(e.kills[1], [-5555, 'SIGKILL']);
-  gotChild.emit('close', 143); done(false); await flush();
+  assert.deepStrictEqual(await e.si.start(), { ok: false, reason: 'busy' }, 'the installer group has not drained');
+  gotChild.drain(); done(false); await flush();
   assert.strictEqual(e.kids.length, 0, 'no client was started for a cancelled attempt');
   assert.strictEqual((await e.si.start()).ok, true);
 });
 
 test('the overall timeout ends a running installer by group too, and the state is failed timeout', async () => {
   let gotChild;
-  const e = fakeEngine({ find: () => null, install: (o) => { gotChild = fakeKid(6001); o.onChild(gotChild); return new Promise(() => {}); } });
+  const e = fakeEngine({ find: () => null, install: (o) => { gotChild = fakeJob(); o.onChild(gotChild); return new Promise(() => {}); } });
   await e.si.start(); await flush();
   assert.strictEqual(e.si.state().state, 'installing');
   e.fire(OVERALL);
   assert.strictEqual(e.si.state().state, 'failed');
   assert.strictEqual(e.si.state().reason, 'timeout');
-  assert.deepStrictEqual(e.kills, [[-6001, 'SIGTERM']]);
-  gotChild.emit('close', null);
+  assert.strictEqual(gotChild.stops, 1);
+  gotChild.drain(); await flush();
+  assert.strictEqual((await e.si.start()).ok, true, 'free once the installer group drained');
+  e.si.cancel();
 });
 
 test('after the install the client is found again and the sign-in goes on from installing to the link', async () => {
@@ -419,8 +447,8 @@ test('a wrong code with a fake client that stays alive: failed code, group kill;
   e.kids[0].stdout.emit('data', 'OAuth error: Invalid code. Please make sure the full code was copied\n');
   assert.strictEqual(e.si.state().state, 'failed');
   assert.strictEqual(e.si.state().reason, 'code');
-  assert.deepStrictEqual(e.kills, [[-e.kids[0].pid, 'SIGTERM']]);
-  e.kids[0].emit('close', null);
+  assert.strictEqual(e.kids[0].stops(), 1, 'the client\'s group is told to stop');
+  await e.exit();
 });
 
 test('no change within 60 s after a code: failed error; any new output starts the wait over (fake clock)', async () => {
@@ -435,8 +463,8 @@ test('no change within 60 s after a code: failed error; any new output starts th
   assert.strictEqual(e.si.state().state, 'failed');
   assert.strictEqual(e.si.state().reason, 'error');
   assert.strictEqual(e.si.state().message, S.WORDS.failed.error);
-  assert.deepStrictEqual(e.kills, [[-e.kids[0].pid, 'SIGTERM']]);
-  e.kids[0].emit('close', null);
+  assert.strictEqual(e.kids[0].stops(), 1, 'the client\'s group is told to stop');
+  await e.exit();
 });
 
 test('a code that is accepted and answered in time is not failed by the 60 s wait', async () => {
@@ -446,11 +474,11 @@ test('a code that is accepted and answered in time is not failed by the 60 s wai
   e.kids[0].stdout.emit('data', 'Login successful\n');
   assert.strictEqual(e.live().filter(t => t.ms === 60000).length, 0, 'the wait is cancelled once it is checking');
   await until(() => e.si.state().state === 'done', 'done');
-  assert.ok(e.kills.length >= 1, 'the finished attempt ends its client');
-  e.kids[0].emit('close', 0);
+  assert.ok(e.kids[0].stops() >= 1, 'the finished attempt ends its client');
+  await e.exit();
 });
 
-test('hub exit: a running attempt registers an exit handler that kills its children by group; it is removed when the attempt ends', async () => {
+test('hub exit: a running attempt registers an exit handler that disconnects its group leaders (which then kill their groups); it is removed when the attempt ends', async () => {
   const before = new Set(process.listeners('exit'));
   const mine = () => process.listeners('exit').filter(f => !before.has(f)).length;
   const e = fakeEngine();
@@ -458,10 +486,11 @@ test('hub exit: a running attempt registers an exit handler that kills its child
   const added = process.listeners('exit').filter(f => !before.has(f));
   assert.strictEqual(added.length, 1);
   added[0]();   // what the hub's exit does
-  assert.deepStrictEqual(e.kills, [[-e.kids[0].pid, 'SIGKILL']]);
+  assert.strictEqual(e.kids[0].disconnected, true);
+  assert.ok(e.kills.every(([, sig]) => sig === 0), 'the parent sends no signal itself');
   e.si.cancel();
-  assert.strictEqual(mine(), 1, 'still there while the client has not exited');
-  e.kids[0].emit('close', null);
+  assert.strictEqual(mine(), 1, 'still there while the client group has not drained');
+  await e.exit();
   assert.strictEqual(mine(), 0, 'removed once the attempt and its children are done');
   // an attempt that ends with no children left removes it at once
   const f = fakeEngine({ find: () => null, install: async () => false });
@@ -470,27 +499,42 @@ test('hub exit: a running attempt registers an exit handler that kills its child
   assert.strictEqual(mine(), 0);
 });
 
-test('installClient: onChild gets the installer; a timeout ends its process group (SIGTERM, then SIGKILL after 3 s)', async () => {
+test('installClient: onChild gets the installer job; a timeout tells it to stop (the leader ends the group: SIGTERM, then SIGKILL after 3 s, see the drain tests), and the answer is false', async () => {
   const kills = [], timers = [];
   const kid = fakeKid(7001);
   let seen = null;
   const p = S.installClient({
-    spawn: () => kid, platform: 'linux', onChild: (c) => { seen = c; }, kill: (pid, sig) => kills.push([pid, sig]), timeoutMs: 1234,
+    spawn: () => kid, platform: 'linux', onChild: (c) => { seen = c; },
+    kill: (pid, sig) => { kills.push([pid, sig]); throw ESRCH(); }, timeoutMs: 1234,
     setTimer: (fn, ms) => { const t = { fn, ms, unref() {} }; timers.push(t); return t; }, clearTimer: () => {},
   });
-  assert.strictEqual(seen, kid);
+  assert.strictEqual(typeof seen.stop, 'function');
+  assert.strictEqual(typeof seen.disconnect, 'function');
+  assert.ok(seen.drained instanceof Promise);
   timers.find(t => t.ms === 1234).fn();
+  assert.strictEqual(kid.stops(), 1);
+  kid.emit('exit', null, 'SIGTERM');   // the leader ends with its group
   assert.strictEqual(await p, false);
-  assert.deepStrictEqual(kills, [[-7001, 'SIGTERM']]);
-  timers.find(t => t.ms === 3000).fn();
-  assert.deepStrictEqual(kills, [[-7001, 'SIGTERM'], [-7001, 'SIGKILL']]);
+  await seen.drained;
+  assert.deepStrictEqual(kills, [[-7001, 0]], 'the parent only probes the group, never signals it');
 });
 
-test('killGroup: a child without a pid, or a group that is gone, is signalled directly', () => {
-  const sent = [];
-  S.killGroup({ kill: (s) => sent.push(['child', s]) }, 'SIGTERM', () => { throw new Error('no'); });
-  S.killGroup({ pid: 9, kill: (s) => sent.push(['child', s]) }, 'SIGKILL', () => { throw new Error('ESRCH'); });
-  assert.deepStrictEqual(sent, [['child', 'SIGTERM'], ['child', 'SIGKILL']]);
+test('a group leader without a pid (the spawn failed) drains at once and is never signalled; a group that is still there keeps the job undrained (probe, no signal)', async () => {
+  const { startGroup } = require(path.join(ISO.inst, 'lib', 'claude-signin-group'));
+  const probes = [], timers = [];
+  const noPid = new EventEmitter(); noPid.connected = false;
+  const j1 = startGroup('x', [], { spawn: () => noPid, kill: (p, s) => probes.push([p, s]), stdio: ['ignore', 'ignore', 'ignore'] });
+  noPid.emit('exit', 1);
+  await j1.drained;
+  assert.deepStrictEqual(probes, []);
+  const there = fakeKid(9);
+  const j2 = startGroup('x', [], { spawn: () => there, kill: (p, s) => { probes.push([p, s]); }, setTimer: (fn, ms) => timers.push([fn, ms]), stdio: ['ignore', 'ignore', 'ignore'] });
+  let drained = false; j2.drained.then(() => { drained = true; });
+  there.emit('exit', 1);
+  await flush();
+  assert.strictEqual(drained, false, 'a member of the group is still there');
+  assert.deepStrictEqual(probes, [[-9, 0]]);
+  assert.strictEqual(timers[0][1], 500, 'the probe is repeated');
 });
 
 // ── round 2: cancellation reaches the status and the verification; the slot is held until they settle ──
@@ -518,7 +562,8 @@ for (const phase of ['status', 'verify']) {
     });
     const a = await engine.start();
     await new Promise(resolve => setImmediate(resolve));
-    child.emit('close', 0);
+    child.emit('message', { op: 'result', code: 0 });   // the client finished (the group leader reports its exit code)
+    child.emit('close', 0);                              // and the group is gone (no pid: nothing to probe)
     await ready;
     try {
       engine.cancel(a.id);
@@ -546,7 +591,7 @@ test('the overall timeout still ends an attempt that is checking: failed timeout
   const observed = {};
   const verifyEntered = new Promise(r => { observed.resolve = r; });
   const engine = S.createSignIn({
-    findClient: () => ({ bin: 'stand-in' }), env: () => ({}), spawn: () => child, kill: () => {}, setTimer, clearTimer: (t) => { if (t) t.cleared = true; },
+    findClient: () => ({ bin: 'stand-in' }), env: () => ({}), spawn: () => child, kill: () => { throw ESRCH(); }, setTimer, clearTimer: (t) => { if (t) t.cleared = true; },
     timeoutMs: OVERALL, authStatus: async () => ({ loggedIn: true }),
     verify: ({ signal }) => { observed.signal = signal; observed.resolve(); return new Promise(r => { finish = r; }); },
   });
@@ -617,21 +662,58 @@ test('authStatus: an abort kills the child and answers unknown only after it clo
   assert.deepStrictEqual(await p5, { loggedIn: false, method: null });
 });
 
-test('a child that exited (its \'exit\' event) frees the slot even when a grandchild keeps the pipes open, and its group is never signalled again', async () => {
+test('a leader that exited (its \'exit\' event) frees the slot once its group is gone, even when a grandchild keeps the pipes open; the parent never signals the group', async () => {
   const e = fakeEngine();
   await e.toLink();
   const pid = e.kids[0].pid;
   e.si.cancel();
-  assert.deepStrictEqual(e.kills, [[-pid, 'SIGTERM']]);
+  assert.strictEqual(e.kids[0].stops(), 1);
   assert.deepStrictEqual(await e.si.start(), { ok: false, reason: 'busy' });
-  e.kids[0].emit('exit', null, 'SIGTERM');   // no 'close': a grandchild still holds the pipes
-  assert.ok(e.live().every(t => t.ms !== 3000), 'the kill timer is cleared');
-  assert.deepStrictEqual(e.kills, [[-pid, 'SIGTERM']], 'no signal after the exit');
+  e.kids[0].emit('exit', null, 'SIGTERM');   // no 'close': a grandchild still holds the pipes; the group is still there
+  await flush();
+  assert.deepStrictEqual(await e.si.start(), { ok: false, reason: 'busy' }, 'the group is not gone: still busy');
+  e.gone.add(-pid);
+  e.fire(500);   // the next probe finds the group gone
+  await flush();
+  assert.ok(e.kills.every(([p, sig]) => p === -pid && sig === 0), 'only probes, never a signal');
   const b = await e.si.start();
   assert.equal(b.ok, true, 'the slot is free');
   e.si.cancel();
   // the exit hook of the finished attempt is gone: only the new attempt's hook is left
-  e.kids[e.kids.length - 1].emit('exit', null, 'SIGTERM');
+  await e.exit(e.kids.length - 1);
+});
+
+test('install only when no usable client exists: a client the hub already resolves (the SDK loader\'s or the SDK\'s own) is never replaced by an install', async () => {
+  let installs = 0;
+  const e = fakeEngine({ find: () => null, install: async () => { installs++; return true; }, existing: () => ({ bin: '/somewhere/claude.exe', source: 'npm-global' }) });
+  await e.si.start(); await flush();
+  assert.strictEqual(installs, 0, 'nothing is installed');
+  assert.deepStrictEqual([e.si.state().state, e.si.state().reason], ['failed', 'error'], 'it exists but cannot run: error, not missing');
+  assert.strictEqual(e.kids.length, 0);
+  // and with no such client the install does run
+  const f = fakeEngine({ find: () => null, install: async () => { installs++; return false; }, existing: () => null });
+  await f.si.start(); await flush();
+  assert.strictEqual(installs, 1);
+  assert.strictEqual(f.si.state().reason, 'missing');
+});
+
+test('after any install the hub\'s client resolution is reset before the client is looked up again (the installer may have moved the client)', async () => {
+  const order = [];
+  let installed = false;
+  const e = fakeEngine({
+    find: () => { order.push(installed ? 'find-after' : 'find-before'); return installed ? { bin: '/nonexistent/claude' } : null; },
+    install: async () => { order.push('install'); installed = true; return true; },
+    resetCli: () => order.push('resetCli'),
+  });
+  await e.si.start(); await flush();
+  assert.deepStrictEqual(order, ['find-before', 'install', 'resetCli', 'find-after']);
+  assert.strictEqual(e.kids.length, 1, 'the sign-in goes on with the found client');
+  e.si.cancel();
+  // a failed (or timed out) install resets too: it may have moved the client before it failed
+  const order2 = [];
+  const f = fakeEngine({ find: () => null, install: async () => false, resetCli: () => order2.push('resetCli') });
+  await f.si.start(); await flush();
+  assert.deepStrictEqual(order2, ['resetCli']);
 });
 
 test('a rejected code is "invalid code" or "code (has) expired"; other sentences that merely mention a code do not end the attempt', async () => {
