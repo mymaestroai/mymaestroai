@@ -69,6 +69,8 @@
       --on-error: #fff;
       --voice-listening: #15803d;   /* a Tap to talk call while listening ("Tap to send"): green, white text 5.0:1; never the red of Hang up */
       --on-voice-listening: #fff;
+      --voice-ready: #F3F4F6;   /* a Tap to talk call while idle ("Tap to talk"): solid ink (the light text colour on this dark page), never the accent, red or green */
+      --on-voice-ready: #090B0F;
       --on-health-notice: #fff;
       --on-pacing: #fff;
       --on-warning: #000;
@@ -744,6 +746,7 @@
   #mic-btn { flex: none; touch-action: none; font-size: 20px; }
   #mic-btn.rec { background: var(--error); color: var(--on-error); border-radius: 22px; padding: 0 12px; font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; animation: rsn-pulse 1.4s ease-in-out infinite; }
   #mic-btn.listening { background: var(--voice-listening); color: var(--on-voice-listening); border-color: var(--voice-listening); }   /* a Tap to talk call while listening: green, not the red of recording or Hang up */
+  #mic-btn[data-press]:not(.listening) { background: var(--voice-ready); color: var(--on-voice-ready); border-color: var(--voice-ready); }   /* a Tap to talk call, idle: the ready ink (hands-free never sets data-press, so .call stays red) */
   #mic-btn.busy { opacity: .55; pointer-events: none; }
   #voice-level { height: 4px; margin: 0 2px 6px; border-radius: 2px; background: var(--border); overflow: hidden; }
   #voice-level[hidden] { display: none; }
@@ -1053,6 +1056,7 @@
 html.mm-simple {
   --bg-dark: #1a1a19; --bg-card: #232322; --bg-input: #1a1a19; --accent: #8b6fd6; --accent-hover: #a48be6;
   --text: #fff; --text-dim: #c3c2b7; --text-tertiary: #8a897f; --border: #2f2f2d; --border-strong: #3d3d3a;
+  --voice-ready: #ffffff; --on-voice-ready: #1a1a19;   /* Tap to talk idle: white ink on the dark Simple page */
   --sp-bubble: #2a2a28; --sp-soft: #232322; --sp-shadow: none;
   --sp-me-bg: #5b46a8; --sp-me-text: #ffffff; --sp-me-code: rgba(255,255,255,.18);
   color-scheme: dark;
@@ -1060,6 +1064,7 @@ html.mm-simple {
 html.mm-simple.mm-light {
   --bg-dark: #ffffff; --bg-card: #ffffff; --bg-input: #f6f6f3; --accent-hover: #7a5cc8;
   --text: #1a1a19; --text-dim: #55544c; --text-tertiary: #8a897f; --border: #e4e3dd; --border-strong: #d4d3cc;
+  --voice-ready: #1a1a19; --on-voice-ready: #ffffff;   /* Tap to talk idle: dark ink on the light Simple page */
   --sp-bubble: #f1efe9; --sp-soft: #f6f6f3; --sp-shadow: 0 2px 12px rgba(0,0,0,.08);
   --sp-me-bg: #ebe6fb; --sp-me-text: #1d1640; --sp-me-code: rgba(29,22,64,.10);
   color-scheme: light;

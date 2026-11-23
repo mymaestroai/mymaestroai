@@ -83,7 +83,7 @@ test('mic, both pages: a saved Dictation (tap) still records, Tap to talk and Ha
 // ── 3. the press button ──
 function fakeButton() {
   const attrs = {}, cls = new Set(), l = {};
-  const e = { attrs, cls, listeners: l, textContent: '', captured: [], isConnected: true, setAttribute(k, v) { attrs[k] = String(v); }, classList: { toggle(c, on) { if (on) cls.add(c); else cls.delete(c); }, contains: (c) => cls.has(c) },
+  const e = { attrs, cls, listeners: l, textContent: '', captured: [], isConnected: true, setAttribute(k, v) { attrs[k] = String(v); }, removeAttribute(k) { delete attrs[k]; }, classList: { toggle(c, on) { if (on) cls.add(c); else cls.delete(c); }, contains: (c) => cls.has(c) },
     addEventListener(t, f) { (l[t] = l[t] || []).push(f); }, removeEventListener(t, f) { l[t] = (l[t] || []).filter(x => x !== f); }, setPointerCapture(id) { e.captured.push(id); } };
   e.fire = (t, ev) => { const x = Object.assign({ prevented: false, preventDefault() { this.prevented = true; }, pointerId: 1, pointerType: 'touch', button: 0 }, ev); for (const f of (l[t] || []).slice()) f(x); return x; };
   return e;
@@ -655,8 +655,8 @@ test('R1.6 attaching a press button lets go of handles whose button is no longer
   assert.deepStrictEqual(p1.listeners.pointerdown, []);
 });
 
-test('the phone service worker is bumped for the new mobile.html and mobile.js (hub-mobile-v75)', () => {
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v75'/);
+test('the phone service worker is bumped for the new mobile.html and mobile.js (hub-mobile-v76)', () => {
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v76'/);
 });
 
 // ═══ review round 3 ═══

@@ -373,6 +373,8 @@ html[data-look="quiet"]:not(.mm-simple) {
   --mic-rec: #C4382F;
   --voice-listening: #2A724A;   /* the look's own green (--success): white text 5.8:1 */
   --on-voice-listening: #FFFFFF;
+  --voice-ready: #2A2620;   /* a Tap to talk call while idle: the look's ink on paper, not the accent green */
+  --on-voice-ready: #FAF7F0;
   --more-btn-more-badge-bg: rgba(63,107,77,0.16);
   --more-btn-more-badge-border: rgba(63,107,77,0.45);
   --plan-warn-border: rgba(135,99,0,0.35);
@@ -556,6 +558,8 @@ html[data-look="quiet"].mm-simple.mm-light {
   color-scheme: light;
   --bg-dark: #FAF7F0; --bg-card: #FFFDF6; --bg-input: #F6F1E6; --bg-tertiary: #FFFDF6;
   --accent: #3F6B4D; --accent-hover: #2F5A3E; --purple: #6B4FA8;
+  --voice-listening: #2A724A; --on-voice-listening: #FFFFFF;   /* the look's own green in Simple mode too */
+  --voice-ready: #2A2620; --on-voice-ready: #FAF7F0;   /* Tap to talk idle: the look's ink on paper, not the accent green */
   --text: #2A2620; --text-primary: #2A2620; --text-dim: #6E6558; --text-secondary: #6E6558; --text-tertiary: #756A5A;
   --border: #E6DCCA; --border-strong: #8F8470;
   --sm-page: #FAF7F0; --sm-side: #FFFDF6; --sm-raised: #F6F1E6; --sm-border: #E6DCCA;
