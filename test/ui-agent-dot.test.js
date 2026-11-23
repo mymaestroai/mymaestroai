@@ -114,6 +114,18 @@ test('applyDot: a caller\'s newer title set while the state stays non-background
   assert.equal(el.attrs.title, 'Hazel · typing');
 });
 
+test('r3 applyDot: a painter that resets only the title never leaves the background aria-label behind', () => {
+  // the desktop row painter writes title on every paint but never aria-label
+  const el = fakeEl({});
+  D.applyDot(el, 'background', { background: 1 });   // ring + both labels
+  el.setAttribute('title', 'Idle');                    // routine repaint: only the title
+  D.applyDot(el, 'background', { background: 1 });   // ring again
+  el.setAttribute('title', 'Waiting for your answer'); // the agent asks
+  D.applyDot(el, 'question', {});
+  assert.equal(el.attrs.title, 'Waiting for your answer');
+  assert.ok(!('aria-label' in el.attrs), 'no background aria-label left: ' + el.attrs['aria-label']);
+});
+
 test('r2 applyDot: leaving background restores only its own label; a caller\'s newer title stays', () => {
   const el = fakeEl({ title: 'Hazel' });
   D.applyDot(el, 'background', { background: 1 });
