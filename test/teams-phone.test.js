@@ -596,3 +596,23 @@ test('old server (no alone in GET /api/team-setup): the phone rows show the norm
   const m = load(e, TEAMS() + '\n' + ROW() + "\nteamSetup = { offer: null, lead: null, setups: [] };", 'worksAlone');
   assert.strictEqual(m('bea'), false);
 });
+
+// ── phone All Agents: the Build line for an admin's no-team main agent that is NOT marked works alone (the page's real worksAlone / teamSetup state) ──
+test('All Agents (phone): an admin sees "No team yet · Build team" under every no-team main not marked works alone, whatever the number of mains; a works-alone one and a member see none', () => {
+  const many = [];
+  for (let i = 1; i <= 20; i++) many.push({ name: 'main' + i, display: 'Main ' + i, category: 'primary' });
+  many.push({ name: 'w1', display: 'W1', category: 'worker', reportsTo: 'main1' });   // main1 has a team
+  const e = env({ env: { agents: many } });
+  const api = load(e, BUILD(), '{ agentRowHtml, buildNoTeam, teamSetup }');
+  const noTeam = api.buildNoTeam();
+  assert.strictEqual(noTeam.size, 19);
+  const line = (a, set = noTeam) => /<div class="build-line">No team yet · <button type="button" class="build-team-link" data-build-team="main17">Build team<\/button><\/div>$/.test(api.agentRowHtml(a, { build: set.has(a.name) }));
+  const m17 = many.find((a) => a.name === 'main17');
+  assert.ok(line(m17), 'not marked works alone: the line shows (the real worksAlone state, no stub)');
+  assert.ok(!/build-line/.test(api.agentRowHtml(many[0], { build: noTeam.has('main1') })), 'main1 has a team');
+  api.teamSetup.alone = { main17: { at: null, reason: 'r' } };
+  assert.ok(!/build-line/.test(api.agentRowHtml(m17, { build: noTeam.has('main17') })), 'marked works alone: no line');
+  assert.ok(/build-line/.test(api.agentRowHtml(many.find((a) => a.name === 'main16'), { build: noTeam.has('main16') })), 'the others still show it');
+  const mem = load(env({ env: { agents: many, isAdmin: () => false } }), BUILD(), '{ agentRowHtml, buildNoTeam }');
+  assert.ok(!/build-line/.test(mem.agentRowHtml(m17, { build: mem.buildNoTeam().has('main17') })));
+});

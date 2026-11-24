@@ -32,6 +32,7 @@ function make(o = {}) {
   const dir = tmp(), list = o.roster || roster(), writes = [], events = [];
   const adm = new Set(['u-admin']);
   const plan = TP.createTeamPlan({
+    pruneAlone: () => {},   // never the install's own works-alone record from a test
     agents: () => list, adminIds: adm, isVirtual: (n) => /^tw-/.test(n), identitiesOf: identities(list),
     availableModels: async () => ['m-top'], resolveModel: (m) => ({ model: m }), validName: (n) => /^[a-z][a-z0-9_]*$/.test(n),
     updateField: async (name, fields) => {

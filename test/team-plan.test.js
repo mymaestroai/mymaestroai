@@ -36,6 +36,7 @@ function make(o = {}) {
   const calls = { update: [], model: [], notify: [], pub: [], push: [], records: [] };
   const files = new Map();   // the Records the fake writer holds: `${agent}/${name}` -> content (a write replaces)
   const svc = TP.createTeamPlan({
+    pruneAlone: () => {},   // the default prunes the install's own works-alone record: never from a test
     agents: () => list,
     adminIds: new Set(['u-admin']),
     isVirtual: (n) => /^tw-/.test(n),
