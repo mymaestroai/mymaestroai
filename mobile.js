@@ -2582,7 +2582,8 @@ function teamsNodeHtml(node, parent) {
   let sub = teamsSub(node, parent);
   // a busy (or asking) leader / worker shows its busy text instead of its role
   if (!isMain && d >= 1 && (isBusy(a.name) || (live[a.name] && live[a.name].pendingQuestion))) sub = null;
-  let html = `<div class="tm-line tm-d${d}" style="--d:${d}">` +
+  const dd = teamsIsWorker(node) ? Math.max(d, 2) : d;   // a direct worker gets the worker indent, as on the desktop
+  let html = `<div class="tm-line tm-d${dd}" style="--d:${dd}">` +
     (kids ? `<button type="button" class="tm-fold" data-fold="${esc(a.name)}" aria-expanded="${open}" aria-label="${open ? 'Fold' : 'Unfold'} ${esc(a.display || a.name)}">${open ? '&#x25BE;' : '&#x25B8;'}</button>` : '<span class="tm-fold-sp"></span>') +
     agentRowHtml(a, sub != null ? { sub } : {}) + '</div>';
   if (d === 0 && !node.size && window.hubTeams.isMain(a) && isAdmin()) html += `<div class="tm-build" style="--d:${d}">${buildTeamBtnHtml(a.name, 'build-team-btn', 'Build Team')}</div>`;
@@ -16638,13 +16639,13 @@ function simpleAgentRow(a, opts) {
   return b;
 }
 // Fill a container with the agent rows from the one model: Primary first, the "More agents" row, then the open groups.
-// Simple's Teams view: main agents with their team leaders under them (no workers), then folded groups of the rest.
+// Simple's Teams view: main agents with every direct report under them (leaders and direct workers; nothing deeper), then folded groups of the rest.
 function simpleTeamsModel() {
   const t = window.hubTeams.tree(agents, live);
   const rows = [];
   for (const m of t.mains) {
     rows.push({ a: m.agent, depth: 0, sub: teamsSub(m) });
-    for (const c of m.children.filter(teamsIsLeader)) rows.push({ a: c.agent, depth: 1, sub: 'Team leader' });
+    for (const c of m.children) rows.push({ a: c.agent, depth: 1, sub: teamsIsLeader(c) ? 'Team leader' : `Reports to ${m.agent.display || m.agent.name}` });   // every direct report; only the third level is left out
   }
   const flat = (n) => [n.agent, ...n.children.flatMap(flat)];   // anyone under a shared or Other agent stays reachable
   return { rows, groups: [{ key: '@shared', label: 'Shared specialists', items: t.shared.flatMap(flat) }, { key: '@other', label: 'Other', items: t.other.flatMap(flat) }].filter((g) => g.items.length) };

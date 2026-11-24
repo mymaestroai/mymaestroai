@@ -487,7 +487,7 @@ test('phone: a send with nothing preparing does not wait (no await before the co
 });
 
 test('service worker: version bumped to v78', () => {
-  assert.match(SW, /const VERSION = 'hub-mobile-v83';/);
+  assert.match(SW, /const VERSION = 'hub-mobile-v84';/);
 });
 
 // ── round 3: a wait abandons only what it waited for; a voice send never takes the waiting message's pictures; the flag is set in the try ──

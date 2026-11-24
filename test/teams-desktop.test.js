@@ -145,7 +145,7 @@ test('Simple: two-part switch is hidden in Advanced, shown in Simple; Teams view
   assert.match(html, /<div class="simple-view-switch"[^>]*>\s*<button type="button" data-view="agents" aria-pressed="true">All Agents<\/button>\s*<button type="button" data-view="teams" aria-pressed="false">Teams<\/button>/);
   assert.match(html, /html\.mm-simple #teams-list \.teams-line\.deep,/, 'the wrapper of a hidden deep row goes too, so no gap is left');
   assert.match(fnSrc('teamsRowHtml'), /class="teams-line rank-\$\{rank\}\$\{deep \? ' deep' : ''\}"/);
-  assert.match(fnSrc('teamsRowHtml'), /const deep = worker;/, 'a direct report with nobody under it is a worker, hidden in Simple like one');
+  assert.match(fnSrc('teamsRowHtml'), /const deep = n\.depth >= 2;/, 'only the third level is deep (hidden in Simple); a direct worker is shown there');
   assert.match(html, /\n\s*\.simple-view-switch \{ display: none; \}/);
   assert.match(html, /html\.mm-simple \.simple-view-switch \{ display: flex;/);
   assert.match(html, /html\.mm-simple #teams-list \.teams-row\.deep, html\.mm-simple #teams-list \.teams-kids, html\.mm-simple #teams-list \.teams-helpers \{ display: none !important; \}/);
@@ -369,9 +369,9 @@ test('renderTeams: a main with three direct reports who lead nobody: no Team lea
   assert.doesNotMatch(h, /teams?\b[^<]*· 3 agents/);
   assert.doesNotMatch(h, /Team leader|rank-leader|sub-narrow|Leads /);
   for (const n of ['editor', 'scout', 'writer']) {
-    assert.match(h, new RegExp(`<div class="teams-row rank-worker deep"[^>]*data-agent="${n}"`));
+    assert.match(h, new RegExp(`<div class="teams-row rank-worker"[^>]*data-agent="${n}"`));
   }
-  assert.strictEqual((h.match(/Reports to Atlas</g) || []).length, 3);
+  assert.strictEqual((h.match(/Reports to Atlas</g) || []).length, 6, 'each direct worker: the Advanced line and the Simple line');
 });
 test('renderTeams: two real leaders and one direct report with nobody under it: "2 teams · 5 agents"', () => {
   const w = world({ stored: [['hub-teams-open', JSON.stringify({ atlas: true })]] });
@@ -383,9 +383,20 @@ test('renderTeams: two real leaders and one direct report with nobody under it: 
   assert.strictEqual((h.match(/Team leader · leads 1</g) || []).length, 2);
   assert.match(h, /<div class="teams-row rank-leader"[^>]*data-agent="editor"/);
   assert.match(h, /<div class="teams-row rank-leader"[^>]*data-agent="builder"/);
-  assert.match(h, /<div class="teams-row rank-worker deep"[^>]*data-agent="scout"/);
+  assert.match(h, /<div class="teams-row rank-worker"[^>]*data-agent="scout"/);
   assert.match(h, /data-agent="scout"[\s\S]*?Reports to Atlas</);
-  assert.strictEqual((h.match(/Team leader</g) || []).length, 2, 'the Simple subline appears on the two leaders only');
+  assert.strictEqual((h.match(/Team leader</g) || []).length, 2, 'the Simple "Team leader" subline appears on the two leaders only');   // a direct worker's Simple line reads 'Reports to', not 'Team leader'
+});
+test('Teams (Simple): a direct worker is not deep and carries a Simple-visible Reports to line; a depth-2 worker is still deep', () => {
+  const w = world({ stored: [['hub-teams-open', JSON.stringify({ atlas: true, editor: true })]] });
+  w.ctx.AGENTS = [A('atlas', { category: 'primary' }), A('editor', { reportsTo: 'atlas' }), A('scout', { reportsTo: 'atlas' }), A('writer', { reportsTo: 'editor' })];
+  w.api.renderTeams();
+  const h = w.list.innerHTML;
+  assert.match(h, /<div class="teams-line rank-worker" style="--d:2">(?:(?!teams-line)[\s\S])*?<div class="teams-row rank-worker" [^>]*style="--d:2"[^>]*data-agent="scout"[^>]*data-depth="1"/, 'worker look and indent, but not deep');
+  const scout = h.slice(h.indexOf('data-agent="scout"'));
+  assert.match(scout, /teams-sub teams-sub-adv has-simple">Reports to Atlas</);
+  assert.match(scout, /<span class="teams-sub teams-sub-simple">Reports to Atlas<\/span>/);
+  assert.match(h, /<div class="teams-row rank-worker deep"[^>]*data-agent="writer"[^>]*data-depth="2"/, 'a worker under a leader stays deep');
 });
 test('Teams CSS: connector border on the workers wrapper, 8px between leader blocks, three ranks, variables only', () => {
   assert.match(html, /\.teams-kids \{[^}]*border-left: 1px solid var\(--border-strong\)/);

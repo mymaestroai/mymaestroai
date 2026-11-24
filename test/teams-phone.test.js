@@ -184,7 +184,7 @@ test('Teams: two real leaders and one direct report with nobody under it: "2 tea
   assert.match(h, /title="2 teams · 5 agents">2 teams · 5 agents</);
   assert.strictEqual((h.match(/Team leader · leads 1</g) || []).length, 2);
   assert.match(h, /<div class="tm-block tm-r-leader"><div class="tm-line tm-d1"[^>]*>[\s\S]*?data-agent="editor"/);
-  assert.match(h, /<div class="tm-block tm-r-worker"><div class="tm-line tm-d1"[^>]*><span class="tm-fold-sp"><\/span><button class="agent-row" data-agent="scout"/);
+  assert.match(h, /<div class="tm-block tm-r-worker"><div class="tm-line tm-d2" style="--d:2"><span class="tm-fold-sp"><\/span><button class="agent-row" data-agent="scout"/);
   assert.match(h, /Scout<\/div><div class="agent-model" title="Reports to Atlas">/);
 });
 test('Teams CSS (phone): connector border on the workers wrapper, spaced blocks, 36px worker rows, no .tm-lab, variables only', () => {
@@ -288,9 +288,29 @@ test('Simple Teams: a direct report with nobody under it is not shown as a leade
   const e2 = env({ store: { 'hub-sidebar-view': 'teams' } });
   e2.agents = [{ name: 'atlas', display: 'Atlas', category: 'primary' }, S('editor', 'atlas'), S('scout', 'atlas'), S('writer', 'editor')];
   const model = load(e2, TEAMS() + fnSource('simpleTeamsModel'), 'simpleTeamsModel')();
-  assert.deepStrictEqual(model.rows.map((r) => [r.a.name, r.depth, r.sub]), [['atlas', 0, 'team of 3'], ['editor', 1, 'Team leader']]);
+  // Simple lists every direct report of a main (the direct worker as 'Reports to ...'); only the third level (writer) is left out.
+  assert.deepStrictEqual(model.rows.map((r) => [r.a.name, r.depth, r.sub]), [['atlas', 0, 'team of 3'], ['editor', 1, 'Team leader'], ['scout', 1, 'Reports to Atlas']]);
 });
 
+test('Teams: a phone direct worker line uses the worker indent (--d:2, tm-d2), like the desktop; a leader keeps d1', () => {
+  const e = env({ store: { 'hub-teams-open': JSON.stringify({ atlas: true }) } });
+  const S = (n, r) => ({ name: n, display: n[0].toUpperCase() + n.slice(1), category: 'specialist', reportsTo: r });
+  e.agents = [{ name: 'atlas', display: 'Atlas', category: 'primary' }, S('editor', 'atlas'), S('scout', 'atlas'), S('writer', 'editor')];
+  const h = teamsApi(e).teamsListHtml();
+  assert.match(h, /<div class="tm-line tm-d2" style="--d:2"><span class="tm-fold-sp"><\/span><button class="agent-row" data-agent="scout"/);
+  assert.match(h, /<div class="tm-line tm-d1" style="--d:1">[\s\S]*?data-agent="editor"/);
+});
+test('Simple Teams: a main with a leader (and its worker) and a direct worker lists both direct reports, not the third level', () => {
+  const S = (n, r) => ({ name: n, display: n[0].toUpperCase() + n.slice(1), category: 'specialist', reportsTo: r });
+  const e2 = env({ store: { 'hub-sidebar-view': 'teams' } });
+  e2.agents = [{ name: 'atlas', display: 'Atlas', category: 'primary' }, S('editor', 'atlas'), S('writer', 'editor'), S('scout', 'atlas')];
+  const model = load(e2, TEAMS() + fnSource('simpleTeamsModel'), 'simpleTeamsModel')();
+  const names = model.rows.map((r) => r.a.name);
+  assert.deepStrictEqual(names, ['atlas', 'editor', 'scout']);
+  assert.strictEqual(model.rows[1].sub, 'Team leader');
+  assert.strictEqual(model.rows[2].sub, 'Reports to Atlas');
+  assert.ok(!names.includes('writer'));
+});
 test('Simple Teams: main agents with their leaders, no workers, shared specialists folded', () => {
   const { box } = simpleRun('teams', ['wes']);
   const rows = box.children.filter((c) => c.dataset && c.dataset.agent);

@@ -8795,7 +8795,8 @@
       // A direct report of a main agent leads a team only when somebody reports to it; otherwise it is drawn as a worker.
       const leader = n.depth === 1 && n.children.length > 0, worker = n.depth >= 2 || (n.depth === 1 && n.children.length === 0);
       const rank = worker ? 'worker' : leader ? 'leader' : 'main';
-      const deep = worker;   // worker rows are the ones Simple hides
+      const deep = n.depth >= 2;   // only the third level is hidden in Simple; a direct worker (depth 1) stays visible there
+      const direct = worker && n.depth === 1 && !!parent;   // a direct worker: worker look, but Simple shows it with 'Reports to <main>'
       let sub = '';
       if (isMain) { const k = n.children.filter(c => c.children.length > 0).length; sub = n.children.length ? (k > 1 ? `${k} teams · ${n.size} agents${working}` : `team of ${n.size}${working}`) : 'No team yet'; }
       else if (leader) sub = `Team leader · leads ${n.size}${working}`;
@@ -8814,9 +8815,9 @@
       const subText = leader && n.children.length && sub
         ? `<span class="sub-wide">${hubEsc(sub)}</span><span class="sub-narrow">${hubEsc(`Leads ${n.size}`)}</span>`
         : hubEsc(sub);
-      const subHtml = (sub ? `<span class="teams-sub teams-sub-adv${leader ? ' has-simple' : ''}">${subText}</span>` : busyText ? `<span class="teams-sub teams-sub-adv busy${leader ? ' has-simple' : ''}">${hubEsc(busyText)}</span>` : '')
+      const subHtml = (sub ? `<span class="teams-sub teams-sub-adv${leader || direct ? ' has-simple' : ''}">${subText}</span>` : busyText ? `<span class="teams-sub teams-sub-adv busy${leader || direct ? ' has-simple' : ''}">${hubEsc(busyText)}</span>` : '')
         + (bgText ? `<span class="teams-sub teams-bg-line" title="${hubEsc(dotTip)}">${hubEsc(bgText)}</span>` : '')
-        + (leader ? '<span class="teams-sub teams-sub-simple">Team leader</span>' : '');
+        + (leader ? '<span class="teams-sub teams-sub-simple">Team leader</span>' : direct ? `<span class="teams-sub teams-sub-simple">Reports to ${hubEsc(parent.agent.display || capName(parent.agent.name))}</span>` : '');
       const dd = worker ? Math.max(n.depth, 2) : n.depth;   // a direct worker gets the worker indent
       return `<div class="teams-line rank-${rank}${deep ? ' deep' : ''}" style="--d:${dd}">${arrow}<div class="teams-row rank-${rank}${deep ? ' deep' : ''}" role="button" tabindex="0" style="--d:${dd}" data-agent="${name}" data-model="${hubEsc(a.model || '')}" data-depth="${n.depth}" title="${hubEsc(a.blurb || a.specialty || '')}">
         <span class="teams-dot ${dot}" title="${hubEsc(dotTip)}">${hubEsc(st.text)}</span>
