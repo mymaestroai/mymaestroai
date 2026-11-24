@@ -731,6 +731,102 @@ test('the offer under concurrency: a slow "show" reserves it so a "never" meanwh
   assert.equal(m2.reload().offerState(roster()), 'never');
 });
 
+// ── review round 2 ──
+test('setupRefusal follows the Teams tree: a build partner shown under a main counts as its boss, for both the current boss and the team root', async (t) => {
+  const r = () => { const l = roster(); l.find(x => x.name === 'studio').buildPartner = 'builder'; l.push({ name: 'builder', display: 'Builder', category: 'worker', model: 'm-cheap' }); return l; };
+  const m = make({ roster: r() }); t.after(m.cleanup);
+  const ok = setupCtx(m, { answers: [{ choice: 'Do it', checked: ['l1'] }] });
+  const res = await m.plan.runPlan({ for: 'studio', summary: 'x', lines: [{ agent: 'writer', reports_to: 'builder', why: 'works with it' }] }, ok.ctx);
+  assert.doesNotMatch(String(res), /^The plan was not shown/, 'writer -> builder is inside Studio\'s team');
+  assert.equal(ok.asked.length, 1);
+  const m2 = make({ roster: r() }); t.after(m2.cleanup);
+  const bad = setupCtx(m2, { answers: [{ choice: 'Do it', checked: ['l1'] }] });
+  const refused = await m2.plan.runPlan({ for: 'press', summary: 'x', lines: [{ agent: 'builder', reports_to: 'press', why: 'x' }] }, bad.ctx);
+  assert.match(String(refused), /already in a team/);
+  assert.match(String(refused), /studio/i);
+  assert.equal(bad.asked.length, 0);
+  assert.equal(boss(m2, 'builder'), undefined);
+});
+
+test('readSetups validates the whole list: a damaged setup or line makes the record unreadable and record leaves the file unchanged', async (t) => {
+  for (const text of [
+    '{"setups":[{"id":"old","lines":"damaged"}]}',
+    '{"setups":[{"id":"a","lines":[{"agent":"writer","from":null}]}]}',
+    '{"setups":[{"id":"a","lines":[{"agent":"writer","from":3,"to":"studio"}]},{"id":"b","lines":[]}]}',
+    '{"setups":[{"id":"","lines":[]}]}',
+  ]) {
+    const m = make(); t.after(m.cleanup);
+    const f = path.join(m.dir, 'team-setups.json');
+    fs.writeFileSync(f, text);
+    await assert.rejects(() => m.svc.record('studio', [{ agent: 'writer', from: null, to: 'studio' }], 'u-admin'), /could not be read/);
+    assert.equal(fs.readFileSync(f, 'utf8'), text, 'the file is unchanged');
+    assert.equal(m.svc.readable(), false);
+    assert.deepEqual(m.svc.list(), []);
+  }
+  const m = make(); t.after(m.cleanup);
+  fs.writeFileSync(path.join(m.dir, 'team-setups.json'), '{"setups":[{"id":"ok","lines":[{"agent":"writer","from":null,"to":"studio"}]}]}');
+  assert.equal(m.svc.readable(), true);
+});
+
+test('redactCaller shows a member "working" instead of the team activity words', () => {
+  assert.equal(access.redactCaller({ busy: true, activity: 'setting up teams' }, () => true).activity, 'working');
+  assert.equal(access.redactCaller({ busy: true, activity: 'building a team' }, () => true).activity, 'working');
+  assert.equal(access.redactCaller({ busy: true, activity: 'reading' }, () => true).activity, 'reading');
+});
+
+test('a set-up card is refused, and nothing is applied, when the setups record cannot be read', async (t) => {
+  const m = make(); t.after(m.cleanup);
+  fs.writeFileSync(path.join(m.dir, 'team-setups.json'), '{"setups":[{"id":"old","lines":"damaged"}]}');
+  const s = setupCtx(m, { answers: [{ choice: 'Do it', checked: ['l1', 'l2'] }] });
+  s.ctx.setup.check = () => m.svc.readable();
+  const res = await m.plan.runPlan(LINES(), s.ctx);
+  assert.match(String(res), /the team setup record could not be read; nothing was changed/i);
+  assert.deepEqual(m.writes, []);
+  assert.equal(boss(m, 'writer'), undefined);
+  assert.equal(boss(m, 'editor'), undefined);
+});
+
+test('the Teams-tab button commits a pending or reserved offer: concurrent show + start -> one turn, stored accepted, even when the show\'s own start fails', async (t) => {
+  const m = make(); t.after(m.cleanup);
+  let fail; const gate = new Promise(r => { fail = r; });
+  let turns = 0, running = false;
+  const showDeps = routeDeps(m, { body: { choice: 'show' }, running: () => running, start: async () => { await gate; const e = new Error('busy'); e.status = 409; throw e; } });
+  const p = TS.routeTeamSetup('offer', showDeps.d);
+  await tick(); await tick();
+  assert.equal(m.svc.offerState(m.list), 'accepted', 'reserved by the show');
+  const btn = routeDeps(m, { running: () => running, start: async () => { turns++; running = true; return { turnId: 't9' }; } });
+  const r = await TS.routeTeamSetup('start', btn.d);
+  assert.equal(r.status, 202);
+  fail();
+  assert.equal((await p).status, 409);
+  assert.equal(turns, 1, 'one turn');
+  assert.equal(m.svc.offerState(m.list), 'accepted');
+  assert.equal(m.reload().offerState(roster()), 'accepted', 'stored, so the card does not come back');
+  // a plain pending offer is answered by the button too
+  const m2 = make(); t.after(m2.cleanup);
+  assert.equal(m2.svc.offerState(m2.list), 'pending');
+  assert.equal((await TS.routeTeamSetup('start', routeDeps(m2).d)).status, 202);
+  assert.equal(m2.reload().offerState(roster()), 'accepted');
+});
+
+test('the offer write fails after the turn started: 200 with the turn, the failure is logged, and the offer stays accepted in this process', async (t) => {
+  const m = make(); t.after(m.cleanup);
+  const blocker = path.join(m.dir, 'blocker'); fs.writeFileSync(blocker, 'x');
+  const svc = TS.createTeamSetup({ setupsFile: path.join(m.dir, 's.json'), offerFile: path.join(blocker, 'offer.json'), agents: () => m.list, publish() {}, now: () => 1 });
+  const logged = [];
+  const { d, started } = routeDeps(m, { svc, body: { choice: 'show' }, log: (x) => logged.push(x) });
+  const r = await TS.routeTeamSetup('offer', d);
+  assert.equal(r.status, 200);
+  assert.equal(r.body.turnId, 't1');
+  assert.equal(r.body.offer, 'accepted');
+  assert.equal(started.length, 1);
+  assert.equal(logged.length, 1);
+  assert.equal(svc.offerState(m.list), 'accepted', 'not shown again in this process');
+  const b = routeDeps(m, { svc, log: (x) => logged.push(x) });
+  assert.equal((await TS.routeTeamSetup('offer', { ...b.d, body: { choice: 'show' } })).body.offer, 'accepted');
+  assert.equal(b.started.length, 0, 'no second turn');
+});
+
 test('redactCaller drops settingUpTeams (and offerPending) for members', () => {
   const e = access.redactCaller({ busy: true, settingUpTeams: true, offerPending: true }, () => true);
   assert.equal(e.settingUpTeams, undefined); assert.equal(e.offerPending, undefined); assert.equal(e.busy, true);

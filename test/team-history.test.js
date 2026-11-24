@@ -120,6 +120,17 @@ test('suggestions: a setup signal is not enough when another main agent clearly 
   assert.equal(suggest({ starterNames: new Set(['sam']) }).sam, 'too_little', 'both must be in the starter team');
 });
 
+test('suggestions: a 5-5 split between two mains with a shared folder is shared; 7-3 is a member for the 7 side; a folder alone is a member', () => {
+  const l = roster(); l[1].policy = { roots: ['/work/proj-a'] };   // press has the folder too
+  const split = [...ho('studio', 'scribe', 1, 5), ...ho('press', 'scribe', 1, 5)];
+  assert.equal(suggest({ agentsList: l, main: l[0], handOffs: split }).scribe, 'shared');
+  assert.equal(suggest({ agentsList: l, main: l[1], handOffs: split }).scribe, 'shared');
+  const seven = [...ho('studio', 'scribe', 1, 7), ...ho('press', 'scribe', 1, 3)];
+  assert.equal(suggest({ agentsList: l, main: l[0], handOffs: seven }).scribe, 'member');
+  assert.equal(suggest({ agentsList: l, main: l[1], handOffs: seven }).scribe, 'shared');
+  assert.equal(suggest({ handOffs: [] }).scribe, 'member', 'the folder of one main only');
+});
+
 test('starterTeamNames reads the ledger roles', () => {
   const n = TP.starterTeamNames({ roles: { scout: { name: 'scout', status: 'created' }, builder: { name: 'builder', status: 'reserved' } } });
   assert.deepEqual([...n], ['scout']);

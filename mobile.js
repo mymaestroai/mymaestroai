@@ -3377,6 +3377,11 @@ function autoKindOfOrigin(origin) {
   if (k === 'user' || k === 'comms') return null;
   return 'notice';
 }
+// Build Team and Set up teams: the person pressed it, so the turn's replies show open under its card (never folded away).
+function autoOwnOrigin(origin) {
+  const k = origin && typeof origin === 'object' ? origin.kind : '';
+  return k === 'build_team' || k === 'team_setup';
+}
 function autoQuoted(s) {
   const m = /"([^"\n]*)"/.exec(s || '');
   return m ? m[1] : null;
@@ -3448,7 +3453,8 @@ function autoSummaryOf(cards) {
 function autoCardLine(history, indexes, kindsInfoLabel) {
   const isAsst = (i) => history[i].role === 'assistant';
   const asst = indexes.filter(isAsst);
-  const pick = [...asst].reverse().find((i) => !history[i].for_owner);   // a reply shown open below the card is not repeated in it
+  const own = indexes.some((i) => autoOwnOrigin(history[i].origin));
+  const pick = own ? undefined : [...asst].reverse().find((i) => !history[i].for_owner);   // a reply shown open below the card is not repeated in it
   if (pick !== undefined) return autoFirstLine(history[pick].content);
   for (const i of [...indexes].reverse()) {
     if (isAsst(i)) continue;
@@ -3483,7 +3489,8 @@ function autoGroupHistory(history, from = 0, { stackMin = AUTO_STACK_MIN } = {})
       if (!xi) break;
       last = xi; indexes.push(j);
     }
-    const open = indexes.filter((k) => history[k].role === 'assistant' && history[k].for_owner === true);
+    const own = indexes.some((k) => autoOwnOrigin(history[k].origin));
+    const open = indexes.filter((k) => history[k].role === 'assistant' && (history[k].for_owner === true || own));
     items.push({ type: 'card', kind: last.kind, from: last.from, label: last.label, ts: firstTs, indexes, open, firstLine: autoCardLine(history, indexes, last.label) });
     i = j;
   }
@@ -14046,6 +14053,8 @@ function onTurnStart(ev) {
         }
       }
     }
+    // Build Team and Set up teams are the person's own: the reply leaves the card at once, as if marked for the owner.
+    if (card && ev.origin && (ev.origin.kind === 'build_team' || ev.origin.kind === 'team_setup')) forOwnerPending[ev.turnId] = { reason: '', at: Date.now() };
     const t = { turnId: ev.turnId, agent: ev.agent, bubble: b, el: b.el, body: b.body, feed: null, startedAt: ev.startedAt || null, prompt: ev.message, card: card ? { ...card, label: info.label } : null, hiddenEls };
     hubTurns[ev.turnId] = t;
     // A for_owner that arrived before this card existed: apply it now.

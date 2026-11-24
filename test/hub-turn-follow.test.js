@@ -55,3 +55,34 @@ test('a Build Team prompt that stopped before replying lends nothing: the next h
   ]);
   assert.deepEqual(keep, [true, false, false]);
 });
+
+// Build Team / Set up teams: the person pressed it, so the card does not fold the reply away (live and saved history).
+const { autoGroupHistory, autoOwnOrigin } = require('../lib/ui-auto-turns');
+for (const kind of ['build_team', 'team_setup']) {
+  test(`a ${kind} turn's replies open under its card, not folded (autoGroupHistory)`, () => {
+    const h = [
+      { role: 'user', content: 'Follow the playbook', origin: { kind } },
+      { role: 'assistant', content: 'plan note and the reply' },
+    ];
+    const items = autoGroupHistory(h);
+    assert.equal(items.length, 1);
+    assert.equal(items[0].type, 'card');
+    assert.deepStrictEqual(items[0].open, [1]);
+    assert.equal(items[0].firstLine, 'Follow the playbook');
+    // another hub turn's reply stays folded
+    const other = autoGroupHistory([{ role: 'user', content: 'x', origin: { kind: 'task' } }, { role: 'assistant', content: 'y' }]);
+    assert.deepStrictEqual(other[0].open, []);
+  });
+}
+test('autoOwnOrigin: only build_team and team_setup', () => {
+  assert.equal(autoOwnOrigin({ kind: 'build_team' }), true);
+  assert.equal(autoOwnOrigin({ kind: 'team_setup' }), true);
+  assert.equal(autoOwnOrigin({ kind: 'schedule' }), false);
+  assert.equal(autoOwnOrigin(null), false);
+});
+test('the pages move a build_team / team_setup reply out of its live card at once', () => {
+  const d = require('fs').readFileSync(require('path').join(__dirname, '..', 'app.js'), 'utf8');
+  const m = require('fs').readFileSync(require('path').join(__dirname, '..', 'mobile.js'), 'utf8');
+  assert.match(d, /if \(ev\.origin && \(ev\.origin\.kind === 'build_team' \|\| ev\.origin\.kind === 'team_setup'\)\) hubForOwnerPending\[ev\.turnId\] = /);
+  assert.match(m, /if \(card && ev\.origin && \(ev\.origin\.kind === 'build_team' \|\| ev\.origin\.kind === 'team_setup'\)\) forOwnerPending\[ev\.turnId\] = /);
+});

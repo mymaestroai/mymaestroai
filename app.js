@@ -10935,6 +10935,11 @@
       if (k === 'user' || k === 'comms') return null;
       return 'notice';
     }
+    // Build Team and Set up teams: the person pressed it, so the turn's replies show open under its card (never folded away).
+    function autoOwnOrigin(origin) {
+      const k = origin && typeof origin === 'object' ? origin.kind : '';
+      return k === 'build_team' || k === 'team_setup';
+    }
     function autoQuoted(s) {
       const m = /"([^"\n]*)"/.exec(s || '');
       return m ? m[1] : null;
@@ -11006,7 +11011,8 @@
     function autoCardLine(history, indexes, kindsInfoLabel) {
       const isAsst = (i) => history[i].role === 'assistant';
       const asst = indexes.filter(isAsst);
-      const pick = [...asst].reverse().find((i) => !history[i].for_owner);   // a reply shown open below the card is not repeated in it
+      const own = indexes.some((i) => autoOwnOrigin(history[i].origin));
+      const pick = own ? undefined : [...asst].reverse().find((i) => !history[i].for_owner);   // a reply shown open below the card is not repeated in it
       if (pick !== undefined) return autoFirstLine(history[pick].content);
       for (const i of [...indexes].reverse()) {
         if (isAsst(i)) continue;
@@ -11041,7 +11047,8 @@
           if (!xi) break;
           last = xi; indexes.push(j);
         }
-        const open = indexes.filter((k) => history[k].role === 'assistant' && history[k].for_owner === true);
+        const own = indexes.some((k) => autoOwnOrigin(history[k].origin));
+        const open = indexes.filter((k) => history[k].role === 'assistant' && (history[k].for_owner === true || own));
         items.push({ type: 'card', kind: last.kind, from: last.from, label: last.label, ts: firstTs, indexes, open, firstLine: autoCardLine(history, indexes, last.label) });
         i = j;
       }
@@ -11286,6 +11293,8 @@
         const ids = Object.keys(hubTurnCards);
         for (const id of ids.slice(0, Math.max(0, ids.length - 50))) delete hubTurnCards[id];
         // A for_owner that arrived while the history loaded: apply it now that the card exists.
+        // Build Team and Set up teams are the person's own: the reply leaves the card at once, as if marked for the owner.
+        if (ev.origin && (ev.origin.kind === 'build_team' || ev.origin.kind === 'team_setup')) hubForOwnerPending[ev.turnId] = { reason: '', at: Date.now() };
         if (hubForOwnerPending[ev.turnId]) { delete hubForOwnerPending[ev.turnId]; hubMoveReplyOut(card); }
       }
       busyCardKeepLast(document.getElementById(`messages-${chat.id}`));
