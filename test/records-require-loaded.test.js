@@ -46,6 +46,17 @@ test('requireLoaded: a Record that is a link to another Record is refused; the l
   assert.strictEqual(fs.readlinkSync(path.join(dir, 'team-practice.md')), 'a-notes.md');
 });
 
+test('requireLoaded: another Record that is a link to this one is refused too; both stay as they were', () => {
+  const { rec, hub } = load(1000);
+  const dir = path.join(hub, 'workspaces', 'boss', 'records');
+  rec.write('boss', 'team-practice.md', 'n'.repeat(100));
+  fs.symlinkSync('team-practice.md', path.join(dir, 'a-notes.md'));
+  const r = rec.write('boss', 'team-practice.md', 'p'.repeat(600), { requireLoaded: true });
+  assert.match(r, /^not written: another Record is a link to team-practice\.md/);
+  assert.strictEqual(fs.readFileSync(path.join(dir, 'team-practice.md'), 'utf8'), 'n'.repeat(100), 'the original 100 characters stay');
+  assert.strictEqual(fs.readlinkSync(path.join(dir, 'a-notes.md')), 'team-practice.md', 'the link is untouched');
+});
+
 test('requireLoaded: a replacement that fits is written; other Records count; a new file works too', () => {
   const { rec, hub } = load(300);
   const dir = path.join(hub, 'workspaces', 'boss', 'records');
