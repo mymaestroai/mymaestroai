@@ -239,3 +239,11 @@ test('a team-turn snapshot for a member carries no step detail and no error text
   assert.deepEqual(done.ended, { ok: false, endedAt: 5 });
   assert.ok(!JSON.stringify(done).includes('secretagent'));
 });
+
+test("a member's status entry never says a team is being built or reviewed, nor for which agent", () => {
+  const access = require('../lib/access');
+  const out = access.redactCaller({ busy: true, activity: 'building a team', buildingTeamFor: 'secretagent', reviewingTeamFor: 'secretagent' }, () => true);
+  assert.ok(!('buildingTeamFor' in out) && !('reviewingTeamFor' in out));
+  assert.equal(out.activity, 'working');
+  assert.equal(access.redactCaller({ activity: 'reviewing a team' }, () => true).activity, 'working');
+});
