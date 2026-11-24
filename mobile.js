@@ -3556,7 +3556,7 @@ function chatViewElapsed(sinceMs, nowMs) {
 }
 function chatViewMergeOlder(older, current) {
   const cur = Array.isArray(current) ? current : [];
-  const key = (e) => (e && e.role === 'hidden_run' ? `run|${e.ts}|${e.last_ts}` : `${e && e.ts}|${e && e.role}|${e && typeof e.content === 'string' ? e.content : ''}`);
+  const key = (e) => (e && e.role === 'hidden_run' ? `run|${chatViewRunKey(e)}` : `${e && e.ts}|${e && e.role}|${e && typeof e.content === 'string' ? e.content : ''}`);
   const have = new Set(cur.slice(0, 50).map(key));
   return (Array.isArray(older) ? older : []).filter((e) => e && !have.has(key(e))).concat(cur);
 }
@@ -8347,12 +8347,12 @@ function renderRunLine(run, host = bubbleHost()) {
         else for (const c of it.cards) renderAutoCard(c, times, body, list);   // each turn its own card, never a stack
       }
     });
-    if (st.more) { const n = list.filter(e => e.role === 'user').length, all = Number(wrap._run.turns) || 0; const d = document.createElement('div'); d.className = 'run-more'; d.textContent = `Showing ${n} of ${all > n ? all : n} turns. Switch on Agent work to see them all.`; body.appendChild(d); }
+    if (st.more) { const n = list.filter(e => e.role === 'user').length, all = Number(wrap._run.turns) || 0; const d = document.createElement('div'); d.className = 'run-more'; d.textContent = st.partial ? 'Showing part of 1 turn. Switch on Agent work to see it all.' : `Showing ${n} of ${all > n ? all : n} turns. Switch on Agent work to see them all.`; body.appendChild(d); }
   };
   st.ui = { words, setOpen, fill };
   words();
   // st.gen counts the changes of the run: an answer that arrives after the run grew is for the old run and is dropped
-  wrap._runReset = () => { st.gen = (st.gen || 0) + 1; st.entries = null; st.more = false; setOpen(false); body.textContent = ''; words(); };
+  wrap._runReset = () => { st.gen = (st.gen || 0) + 1; st.entries = null; st.more = false; st.partial = false; setOpen(false); body.textContent = ''; words(); };
   const clearErr = () => wrap.querySelectorAll(':scope > .run-error').forEach(n => n.remove());
   head.addEventListener('click', async () => {
     if (st.loading) return;
@@ -8363,15 +8363,14 @@ function renderRunLine(run, host = bubbleHost()) {
       const gen = st.gen || 0;
       const showErr = (msg) => { const err = document.createElement('div'); err.className = 'run-error'; err.setAttribute('role', 'status'); err.textContent = msg; wrap.appendChild(err); };
       try {
-        // a live line is named by its first turn's id; it reads up to now (the turns it counted have grown since)
-        const r = wrap._run, q = r.live ? { ...r, last_ts: new Date().toISOString() } : r;
-        const res = await api(chatViewRunUrl(agent, q));
+        // a live line is named by its first turn's id and sends the hub's times it counted (never this device's clock)
+        const res = await api(chatViewRunUrl(agent, wrap._run));
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const d = await res.json();
         if ((st.gen || 0) !== gen) { st.loading = false; head.removeAttribute('aria-busy'); words(); return; }   // the run grew meanwhile: this answer is for the old one
         if (d && d.incomplete) { st.loading = false; head.removeAttribute('aria-busy'); words(); showErr("Couldn't load these turns. Switch on Agent work to see them."); return; }
         st.entries = Array.isArray(d && d.history) ? d.history : [];
-        st.more = !!(d && d.more);
+        st.more = !!(d && d.more); st.partial = !!(d && d.partial);
       } catch {
         st.loading = false; head.removeAttribute('aria-busy'); words();
         if ((st.gen || 0) === gen) showErr("Couldn't load these turns. Try again.");

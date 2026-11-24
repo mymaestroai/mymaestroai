@@ -9960,12 +9960,12 @@
             else for (const c of item.cards) foldRenderHistoryCard(draw, c, body);
           }
         }
-        if (st.more) { const n = list.filter(e => e.role === 'user').length, all = Number(wrap._run.turns) || 0; body.appendChild(foldPart('div', 'run-more', `Showing ${n} of ${all > n ? all : n} turns. Switch on Agent work to see them all.`)); }
+        if (st.more) { const n = list.filter(e => e.role === 'user').length, all = Number(wrap._run.turns) || 0; body.appendChild(foldPart('div', 'run-more', st.partial ? 'Showing part of 1 turn. Switch on Agent work to see it all.' : `Showing ${n} of ${all > n ? all : n} turns. Switch on Agent work to see them all.`)); }
       };
       st.ui = { words, setOpen, fill };
       words();
       // st.gen counts the changes of the run: an answer that arrives after the run grew is for the old run and is dropped
-      wrap._runReset = () => { st.gen = (st.gen || 0) + 1; st.entries = null; st.more = false; setOpen(false); body.textContent = ''; words(); };
+      wrap._runReset = () => { st.gen = (st.gen || 0) + 1; st.entries = null; st.more = false; st.partial = false; setOpen(false); body.textContent = ''; words(); };
       const fail = (msg) => {
         wrap.querySelectorAll(':scope > .run-error').forEach(n => n.remove());
         const err = foldPart('div', 'run-error', msg || "Couldn't load these turns. Try again.");
@@ -9980,15 +9980,14 @@
           st.loading = true; kindsEl.textContent = 'Loading…'; whenEl.textContent = ''; head.setAttribute('aria-busy', 'true');
           const gen = st.gen || 0;
           try {
-            // a live line is named by its first turn's id; it reads up to now (the turns it counted have grown since)
-            const r = wrap._run, q = r.live ? { ...r, last_ts: new Date().toISOString() } : r;
-            const res = await fetch(chatViewRunUrl(chat.agent, q), { credentials: 'include' });
+            // a live line is named by its first turn's id and sends the hub's times it counted (never this device's clock)
+            const res = await fetch(chatViewRunUrl(chat.agent, wrap._run), { credentials: 'include' });
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const d = await res.json();
             if ((st.gen || 0) !== gen) { st.loading = false; head.removeAttribute('aria-busy'); words(); return; }   // the run grew meanwhile: this answer is for the old one
             if (d && d.incomplete) { st.loading = false; head.removeAttribute('aria-busy'); words(); fail("Couldn't load these turns. Switch on Agent work to see them."); return; }
             st.entries = Array.isArray(d && d.history) ? d.history : [];
-            st.more = !!(d && d.more);
+            st.more = !!(d && d.more); st.partial = !!(d && d.partial);
           } catch (e) {
             st.loading = false; head.removeAttribute('aria-busy'); words(); if ((st.gen || 0) === gen) fail();
             return;
@@ -11182,7 +11181,7 @@
     }
     function chatViewMergeOlder(older, current) {
       const cur = Array.isArray(current) ? current : [];
-      const key = (e) => (e && e.role === 'hidden_run' ? `run|${e.ts}|${e.last_ts}` : `${e && e.ts}|${e && e.role}|${e && typeof e.content === 'string' ? e.content : ''}`);
+      const key = (e) => (e && e.role === 'hidden_run' ? `run|${chatViewRunKey(e)}` : `${e && e.ts}|${e && e.role}|${e && typeof e.content === 'string' ? e.content : ''}`);
       const have = new Set(cur.slice(0, 50).map(key));
       return (Array.isArray(older) ? older : []).filter((e) => e && !have.has(key(e))).concat(cur);
     }

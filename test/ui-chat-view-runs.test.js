@@ -55,11 +55,12 @@ test('mergeRuns: adjacent runs become one (turns and kinds added by kind and fro
   assert.strictEqual(V.chatViewMergeRuns([a, b, c]).length, 1, 'three in a row');
 });
 
-test('mergeOlder: a hidden_run is keyed by run|ts|last_ts at the seam', () => {
+test('mergeOlder: a hidden_run is keyed by its run key (turn id, else ts|rank) at the seam', () => {
   const r = run();
   const cur = [{ ...r }, { ts: '2026-11-24T09:00:00Z', role: 'user', content: 'x' }];
   assert.strictEqual(V.chatViewMergeOlder([{ ...r }], cur).length, 2, 'the same run is not drawn twice');
-  assert.strictEqual(V.chatViewMergeOlder([run({ last_ts: '2026-11-24T08:18:00Z' })], cur).length, 3, 'a different range is another entry');
+  assert.strictEqual(V.chatViewMergeOlder([run({ rank: 1 })], cur).length, 3, 'another rank at the same time is another entry');
+  assert.strictEqual(V.chatViewMergeOlder([run({ turn: 'tOther' })], [{ ...r, turn: 'tMine' }]).length, 2, 'another turn id is another entry');
   assert.strictEqual(V.chatViewMergeOlder([{ ts: '2026-11-24T08:09:00Z', role: 'user', content: '' }], cur).length, 3, 'a message with the same ts is not the run');
 });
 

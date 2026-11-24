@@ -472,3 +472,47 @@ test('r2 R1 pages: a run with a turn id is fetched by it (no rank); a live line 
   assert.match(cutMob('function onTurnStart(ev) {', 'function onTurnDelta(ev) {'), /runLive\(ev\)/);
   assert.ok(!/- 2000/.test(cutApp('function soloRunLine(', 'function soloRunLive(') + cutMob('function renderRunLine(', 'function runLive(')), 'no 2 s widening');
 });
+
+// ── review r3 ──
+test('r3 F1: Load earlier keeps two different runs with the same times apart (keyed by turn id), each fetching its own turn', () => {
+  const mk = (turn) => ({ ...RUN, turn });
+  const owner = { ts: '2026-11-24T08:30:00.000Z', role: 'user', content: 'owner says hi' };
+  const older = [mk('turnA'), owner];
+  const current = [mk('turnB'), { ts: '2026-11-24T09:00:00.000Z', role: 'assistant', content: 'later' }];
+  const merged = V.chatViewMergeRuns(V.chatViewMergeOlder(older, current));
+  const lines = merged.filter((e) => e.role === 'hidden_run');
+  assert.deepStrictEqual(lines.map((e) => e.turn), ['turnA', 'turnB'], 'both lines survive, a shown entry keeps them apart');
+  assert.match(V.chatViewRunUrl('scout', lines[0]), /&turn=turnA$/);
+  assert.match(V.chatViewRunUrl('scout', lines[1]), /&turn=turnB$/);
+  // the same run on both pages (the cursor repeats it) is still one
+  assert.strictEqual(V.chatViewMergeOlder([mk('turnA')], [mk('turnA')]).length, 1);
+  // old runs without a turn id: the same ts and rank is one, another rank is another
+  assert.strictEqual(V.chatViewMergeOlder([{ ...RUN, rank: 0 }], [{ ...RUN, rank: 1 }]).length, 2);
+  assert.strictEqual(V.chatViewMergeOlder([{ ...RUN, rank: 1 }], [{ ...RUN, rank: 1 }]).length, 1);
+});
+
+test('r3 F3 pages: a live line sends from = its first turn\'s hub time and to = its last counted hub time, never the device clock', async () => {
+  const d = deskHarness({ fetchImpl: answer({ history: TURNS }) });
+  const a = d.f.soloRunLive(d.chat, { kind: 'consultation', from: 'Beacon' }, '2026-11-24T08:21:00.000Z', 'scout-first-1');
+  d.f.soloRunLive(d.chat, { kind: 'consultation', from: 'Beacon' }, '2026-11-24T08:25:00.000Z', 'scout-second-2');
+  await a.children[0].click();
+  assert.match(d.fetched[0], /from=2026-11-24T08%3A21%3A00\.000Z&to=2026-11-24T08%3A25%3A00\.000Z&turn=scout-first-1$/);
+  const m = phoneHarness({ fetchImpl: answer({ history: TURNS }) });
+  const pw = m.f.runLive({ startedAt: '2026-11-24T08:21:00.000Z', origin: { kind: 'consultation', from: 'Beacon' }, turnId: 'scout-first-1' });
+  m.f.runLive({ startedAt: '2026-11-24T08:25:00.000Z', origin: { kind: 'consultation', from: 'Beacon' }, turnId: 'scout-second-2' });
+  await pw.children[0].click();
+  assert.match(m.urls[0], /from=2026-11-24T08%3A21%3A00\.000Z&to=2026-11-24T08%3A25%3A00\.000Z&turn=scout-first-1$/);
+  assert.ok(!/new Date\(\)\.toISOString\(\)/.test(cutApp('function soloRunLine(', 'function soloRunLive(') + cutMob('function renderRunLine(', 'function runLive(')), 'the fetch never reads the device clock');
+});
+
+test('r3 F4 pages: a first turn alone over the cap says "Showing part of 1 turn. Switch on Agent work to see it all." on desktop and phone', async () => {
+  const body = { history: FOUR, more: true, partial: true };
+  const d = deskHarness({ fetchImpl: answer(body) });
+  const w = d.f.soloRunLine('c1', { ...RUN, turns: 5 }, null);
+  await w.children[0].click();
+  assert.strictEqual(w.children[1].all('run-more')[0].textContent, 'Showing part of 1 turn. Switch on Agent work to see it all.');
+  const m = phoneHarness({ fetchImpl: answer(body) });
+  const p = m.f.renderRunLine({ ...RUN, turns: 5 }, m.box);
+  await p.children[0].click();
+  assert.strictEqual(p.children[1].all('run-more')[0].textContent, 'Showing part of 1 turn. Switch on Agent work to see it all.');
+});

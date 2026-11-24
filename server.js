@@ -2711,7 +2711,7 @@ async function handleHttpRequest(req, res) {
               from: hq.get('from'), to: hq.get('to'), rank: hq.get('rank'), turn: hq.has('turn') ? hq.get('turn') : null,
               inProgressMark: (entries) => hubEvR.markInProgress(entries, hubEvR.events.turnFor(name)),
             });
-            return jsonResponse(res, 200, run.incomplete ? { history: [], more: false, incomplete: true } : { history: run.history, more: run.more });
+            return jsonResponse(res, 200, run.incomplete ? { history: [], more: false, incomplete: true } : { history: run.history, more: run.more, ...(run.partial ? { partial: true } : {}) });
           } catch (e) {
             if (e && e.message === 'bad_range') return jsonResponse(res, 400, { error: 'bad_range' });
             if (e && e.message === 'bad_turn') return jsonResponse(res, 400, { error: 'bad_turn' });
