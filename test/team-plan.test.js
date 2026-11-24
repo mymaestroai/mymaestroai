@@ -1139,6 +1139,7 @@ test('card sentence: abbreviations, initials, decimals and closing quotes do not
   assert.match(await q('Move J. Smith under Studio. More later.'), /Studio\. Move J\. Smith under Studio\. Untick/);
   assert.match(await q('Rename the team “Studio.” Keep its reviewer.'), /Studio\. Rename the team “Studio\.” Untick/);
   assert.match(await q('Run 1.5 times more checks. Then stop.'), /Studio\. Run 1\.5 times more checks\. Untick/);
+  assert.match(await q('Add a reviewer. Élodie will lead it.'), /Studio\. Add a reviewer\. Untick/);
   const long = 'Use e.g. Critic for reviews and keep Builder on long jobs. ' + 'Words go on and on '.repeat(15);
   const v = await m.svc.validate({ ...PLAN(), summary: long }, 'lead');
   assert.equal(v.plan.summary, 'Use e.g. Critic for reviews and keep Builder on long jobs.');
