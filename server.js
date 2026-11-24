@@ -2700,6 +2700,23 @@ async function handleHttpRequest(req, res) {
       const hq = new URL(req.url, 'http://x').searchParams;
       if (hq.has('view') || hq.has('limit') || hq.has('before')) {
         // Paged, filtered history (lib/chat-history): the whole chat log, then the transcript archive behind it.
+        if (hq.get('view') === 'run') {
+          // One run of hub-started turns (the summary line's body): the same entries the all view shows for that time.
+          const hubEvR = require('./lib/hub-events');
+          const trR = require('./lib/transcript').getTranscript();
+          try {
+            const run = require('./lib/chat-history').runPage({
+              logEntries: loadConversationLog(name, 0),
+              archive: { rowsBefore: (o) => trR.rowsBefore(name, o), forOwnerTurns: (ids) => trR.forOwnerTurns(name, ids), lastMarkTs: (tool) => trR.lastMarkTs(name, tool) },
+              from: hq.get('from'), to: hq.get('to'),
+              inProgressMark: (entries) => hubEvR.markInProgress(entries, hubEvR.events.turnFor(name)),
+            });
+            return jsonResponse(res, 200, { history: run.history, more: run.more });
+          } catch (e) {
+            if (e && e.message === 'bad_range') return jsonResponse(res, 400, { error: 'bad_range' });
+            throw e;
+          }
+        }
         const view = hq.get('view') === 'all' ? 'all' : 'main';
         const before = hq.get('before') || null;
         if (before !== null && !require('./lib/chat-history').parseCursor(before)) return jsonResponse(res, 400, { error: 'bad_cursor' });

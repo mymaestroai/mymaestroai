@@ -22,7 +22,7 @@ function extract(name) {
   return src.slice(at, i + 1);
 }
 const storage = (v) => ({ v, getItem() { return this.v; }, setItem(k, x) { this.v = x; } });
-const chatViewLib = { chatViewGet: V.chatViewGet, chatViewSet: V.chatViewSet, chatViewHistoryUrl: V.chatViewHistoryUrl, chatViewIsHubOrigin: V.chatViewIsHubOrigin, chatViewBusyText: V.chatViewBusyText, chatViewElapsed: V.chatViewElapsed, chatViewMergeOlder: V.chatViewMergeOlder };
+const chatViewLib = { chatViewGet: V.chatViewGet, chatViewSet: V.chatViewSet, chatViewHistoryUrl: V.chatViewHistoryUrl, chatViewIsHubOrigin: V.chatViewIsHubOrigin, chatViewBusyText: V.chatViewBusyText, chatViewElapsed: V.chatViewElapsed, chatViewMergeOlder: V.chatViewMergeOlder, chatViewMergeRuns: V.chatViewMergeRuns };
 
 // a tiny DOM: elements with children, className, textContent, :scope > .class lookups
 function el(cls) {
@@ -89,14 +89,14 @@ function earlierPage(pages, { controller = null, raw = null, fresh = null, hubTu
   const chats = { c1: chat };
   const painted = [];
   const body = `${extract('soloHistoryCurrent')}\n${extract('soloHistoryEarlier')}\nreturn soloHistoryEarlier;`;
-  const fn = new Function('chats', 'hubToast', 'chatViewGet', 'localStorage', 'soloEarlierPaint', 'soloHistoryFetch', 'chatViewMergeOlder', 'soloHistoryDraw', 'document', 'userScrolledUp', 'hubTurns', body)(
+  const fn = new Function('chats', 'hubToast', 'chatViewGet', 'localStorage', 'soloEarlierPaint', 'soloHistoryFetch', 'chatViewMergeOlder', 'chatViewMergeRuns', 'soloHistoryDraw', 'document', 'userScrolledUp', 'hubTurns', body)(
     chats, (m) => toasts.push(m), V.chatViewGet, storage(null), (id) => painted.push(chat.histBusy), async (agent, view, before) => {
       if (before === null) { freshFetches.push(view); if (onFresh) onFresh(chat); return { history: (fresh || rawHistory).slice(), next: 'ignored' }; }
       fetched.push(before);
       const p = pages.shift();
       if (p instanceof Error) throw p;
       return p;
-    }, V.chatViewMergeOlder, (id, list, next, view, o) => { draws.push({ list, next, view, o }); panel.scrollHeight = 1500; chat.rawHistory = list; chat.histNext = next; },
+    }, V.chatViewMergeOlder, V.chatViewMergeRuns, (id, list, next, view, o) => { draws.push({ list, next, view, o }); panel.scrollHeight = 1500; chat.rawHistory = list; chat.histNext = next; },
     { getElementById: () => panel }, new WeakMap(), hubTurns);
   return { fn, fetched, draws, toasts, panel, chat, painted, freshFetches };
 }

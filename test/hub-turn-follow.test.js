@@ -25,7 +25,8 @@ test('main view: a build_team turn stays, another hub-started turn without a for
 test('main view history page of a chat holding only a build_team turn is not empty', () => {
   const page = historyPage({ logEntries: turn('build_team'), archive: null, view: 'main' });
   assert.strictEqual(page.history.length, 2);
-  assert.strictEqual(historyPage({ logEntries: turn('task'), archive: null, view: 'main' }).history.length, 0);
+  // changed (agent work line): the hidden turn shows as ONE summary entry, never as its own messages
+  assert.deepStrictEqual(historyPage({ logEntries: turn('task'), archive: null, view: 'main' }).history.map(e => e.role), ['hidden_run']);
 });
 
 test('the pages do not hide a followed build_team turn in the main view', () => {

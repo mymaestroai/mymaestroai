@@ -41,12 +41,12 @@ test('cards: header button with kind class, closed body, open entries after it u
   assert.match(js, /setAttribute\('aria-expanded', 'false'\)/);
   assert.match(js, /body\.hidden = true/);
   assert.match(js, /`from \$\{label\}`/);
-  assert.match(js, /addFromLine\(it\.label\); renderEntry\(chatHistory\[i\], times\[i\]\)/);
+  assert.match(js, /addFromLine\(it\.label\); renderEntry\(list\[i\], times\[i\]\)/);
   assert.match(js, /withRenderTarget\(card\.body,/);
   assert.match(js, /function bubbleHost\(\) \{ return renderTarget \|\| chatEl\(\); \}/);
   assert.match(js, /it\.summary/, 'stack summary shown');
   assert.match(js, /'auto-stack'/);
-  assert.match(js, /for \(const c of it\.cards\) renderAutoCard\(c, times, st\.body\)/);
+  assert.match(js, /for \(const c of it\.cards\) renderAutoCard\(c, times, st\.body, list\)/);
 });
 
 test('live automatic turns draw into a closed card; for_owner moves the reply out of it', () => {
@@ -75,7 +75,8 @@ test('a for_owner that comes before the live card exists is kept and applied whe
 test('opening a chat during an automatic turn: the live turn adopts the history card of the same prompt', () => {
   const rh = js.slice(js.indexOf('function renderHistory()'), js.indexOf('function loadEarlier()'));
   assert.match(rh, /lastHistoryCard = null;/, 'reset at the start of renderHistory');
-  assert.match(js, /lastHistoryCard = lastUser === undefined \? null : \{ wrap: card\.wrap, body: card\.body, line: card\.line, label: it\.label, prompt: chatHistory\[lastUser\]\.content, ts: chatHistory\[lastUser\]\.ts \|\| null, agent: current \}/);
+  // (only a card of the chat's own history is remembered for adoption: a run line's fetched turns are another list)
+  assert.match(js, /if \(list === chatHistory\) lastHistoryCard = lastUser === undefined \? null : \{ wrap: card\.wrap, body: card\.body, line: card\.line, label: it\.label, prompt: list\[lastUser\]\.content, ts: list\[lastUser\]\.ts \|\| null, agent: current \}/);
   const ts = js.slice(js.indexOf('function onTurnStart('), js.indexOf('function onTurnDelta('));
   assert.match(ts, /samePrompt\(last\.content, ev\.message\)/, 'only on a duplicate of the history prompt');
   assert.match(ts, /samePrompt\(mem\.prompt, ev\.message\) && promptRecent\(mem\.ts, ev\.startedAt\) && cardIsLast\(mem\.wrap, raEl\)/);

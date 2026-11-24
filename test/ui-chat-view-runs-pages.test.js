@@ -1,0 +1,301 @@
+'use strict';
+// The run line on the pages: a hidden_run entry of a main-view page is ONE quiet line (a button) in place, not a bubble;
+// a click fetches view=run and draws the turns as the Agent work view does; Load earlier counts a page of summaries as
+// loaded; a live hub-started turn bumps a line at the end of the chat. Functions are cut out of app.js / mobile.js.
+const { test } = require('node:test');
+const assert = require('node:assert');
+const fs = require('fs');
+const path = require('path');
+const V = require('../lib/ui-chat-view');
+const A = require('../lib/ui-auto-turns');
+const T = require('../lib/ui-msg-time');
+
+const app = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
+const mob = fs.readFileSync(path.join(__dirname, '..', 'mobile.js'), 'utf8');
+const cutOf = (src) => (from, to) => { const a = src.indexOf(from); assert.ok(a >= 0, from); const b = src.indexOf(to, a + from.length); assert.ok(b > a, to); return src.slice(a, b); };
+const cutApp = cutOf(app), cutMob = cutOf(mob);
+
+// ── a small DOM ──
+class El {
+  constructor(tag) { this.tag = tag; this.children = []; this.parentNode = null; this.attrs = {}; this.className = ''; this._text = ''; this.hidden = false; this.handlers = {}; this.dataset = {}; this.title = ''; }
+  get classList() { const s = this; return { contains: (c) => s.className.split(/\s+/).includes(c), add: (c) => { if (!s.classList.contains(c)) s.className = `${s.className} ${c}`.trim(); } }; }
+  setAttribute(k, v) { this.attrs[k] = String(v); }
+  getAttribute(k) { return k in this.attrs ? this.attrs[k] : null; }
+  removeAttribute(k) { delete this.attrs[k]; }
+  appendChild(c) { if (c.parentNode) c.remove(); c.parentNode = this; this.children.push(c); return c; }
+  append(...n) { n.forEach((x) => this.appendChild(x)); }
+  remove() { if (this.parentNode) { const c = this.parentNode.children; c.splice(c.indexOf(this), 1); this.parentNode = null; } }
+  set textContent(v) { this.children.forEach((c) => { c.parentNode = null; }); this.children = []; this._text = String(v); }
+  get textContent() { return this._text + this.children.map((c) => c.textContent).join(''); }
+  addEventListener(t, f) { (this.handlers[t] = this.handlers[t] || []).push(f); }
+  async click() { for (const h of this.handlers.click || []) await h(); }
+  get lastElementChild() { return this.children[this.children.length - 1] || null; }
+  get previousElementSibling() { const c = this.parentNode && this.parentNode.children; return c ? c[c.indexOf(this) - 1] || null : null; }
+  all(cls) { const out = []; const walk = (e) => { for (const c of e.children) { if (c.classList.contains(cls)) out.push(c); walk(c); } }; walk(this); return out; }
+  querySelectorAll(sel) { const m = /^:scope > \.(\S+)$/.exec(sel); if (m) return this.children.filter((c) => c.classList.contains(m[1])); return this.all(sel.replace(/^\./, '')); }
+}
+const doc = () => ({ createElement: (t) => new El(t) });
+
+const RUN = { role: 'hidden_run', ts: '2026-11-24T08:09:00.000Z', last_ts: '2026-11-24T08:17:00.000Z', turns: 2, kinds: [{ kind: 'consultation', from: 'Beacon', n: 2 }], content: '' };
+const TURNS = [
+  { ts: '2026-11-24T08:09:00.000Z', role: 'user', content: '[Consultation from agent "Beacon"] question one', origin: { kind: 'consultation', from: 'Beacon' } },
+  { ts: '2026-11-24T08:09:30.000Z', role: 'assistant', content: 'answer one' },
+  { ts: '2026-11-24T08:17:00.000Z', role: 'user', content: '[Consultation from agent "Beacon"] question two', origin: { kind: 'consultation', from: 'Beacon' } },
+  { ts: '2026-11-24T08:17:30.000Z', role: 'assistant', content: 'answer two' },
+];
+const answer = (body, ok = true) => async () => ({ ok, status: ok ? 200 : 500, json: async () => body });
+
+// ── desktop ──
+function deskHarness({ fetchImpl, simple = false } = {}) {
+  const src = [cutApp('function foldCardTime(', 'function foldFromLine('), cutApp('function foldFromLine(', '// A history card (draw:'),
+    cutApp('function foldRenderHistoryCard(', '// The card\'s line once its reply left it'), cutApp('function foldRenderHistoryStack(', 'const hubTurns = {}'),
+    cutApp('function soloRunTime(', '// "Load earlier": a button at the top')].join('\n');
+  const panel = new El('div'); panel.className = 'messages';
+  const doc2 = { createElement: (t) => new El(t), getElementById: () => panel };
+  const pushed = [], fetched = [];
+  const chat = { id: 'c1', agent: 'scout', messages: [{ role: 'system' }] };
+  chat.makeDraw = (list, times, pushDefault) => (i, o = {}) => {
+    const m = new El('div'); m.className = `message ${list[i].role}`; m.textContent = list[i].content;
+    ((o && o.into) || panel).appendChild(m); pushed.push(pushDefault);
+    return `m${i}`;
+  };
+  const chats = { c1: chat };
+  const f = new Function('document', 'chats', 'fetch', 'chatViewRunText', 'chatViewRunUrl', 'chatViewRunKindOf', 'chatViewRunAdd', 'autoGroupHistory', 'autoCardKind', 'msgTimeLines', 'simpleOn',
+    `${src}; return { soloRunLine, soloRunLive, soloRunTime };`)(
+    doc2, chats, (url, o) => { fetched.push(url); return fetchImpl(url, o); }, V.chatViewRunText, V.chatViewRunUrl, V.chatViewRunKindOf, V.chatViewRunAdd, A.autoGroupHistory, A.autoCardKind, T.msgTimeLines, () => simple);
+  return { f, panel, chat, fetched, pushed };
+}
+
+test('desktop: a hidden_run entry is one quiet line, a real button with aria-expanded, text from chatViewRunText, no bubble and nothing in chat.messages', () => {
+  const h = deskHarness({ fetchImpl: answer({ history: [] }) });
+  const wrap = h.f.soloRunLine('c1', RUN, null);
+  assert.strictEqual(h.panel.children.length, 1);
+  const line = wrap.children[0];
+  assert.strictEqual(line.tag, 'button'); assert.strictEqual(line.type, 'button'); assert.ok(line.classList.contains('run-line'));
+  assert.strictEqual(line.getAttribute('aria-expanded'), 'false');
+  assert.strictEqual(wrap.children[1].hidden, true, 'the body is closed');
+  assert.match(line.textContent, /^▸2 consultations from Beacon · /);
+  assert.strictEqual(line.title, V.chatViewRunText(RUN, h.f.soloRunTime), 'the full text is in the title');
+  assert.ok(!wrap.classList.contains('message'));
+  assert.deepStrictEqual(h.chat.messages, [{ role: 'system' }]);
+});
+
+test('desktop: the line is a one-row line with an ellipsis (CSS) and the draw skips it in messages and times', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.match(html, /\.run-text \{[^}]*text-overflow: ellipsis;[^}]*white-space: nowrap/);
+  assert.match(html, /\.run-line \{[^}]*display: flex/);
+  assert.match(html, /html\.mm-simple \.run-line/);
+  const draw = cutApp('const makeDraw = (history, times, pushDefault) =>', 'const draw = makeDraw(history, times, true)');
+  assert.ok(draw.indexOf("msg.role === 'hidden_run'") > 0 && draw.indexOf("msg.role === 'hidden_run'") < draw.indexOf('messages.push('), 'the run line returns before anything is pushed');
+  assert.match(cutApp('function soloHistoryDraw(', 'function soloRunTime('), /m\.role === 'hidden_run'\)\)\.length/, 'a line is not one of the "Restored N messages"');
+});
+
+test('desktop: Enter/Space/click fetches view=run for the run, says Loading… meanwhile, then draws the turns as cards; closing keeps them', async () => {
+  let release; const gate = new Promise((r) => { release = r; });
+  const h = deskHarness({ fetchImpl: async () => { await gate; return { ok: true, json: async () => ({ history: TURNS }) }; } });
+  const wrap = h.f.soloRunLine('c1', RUN, null);
+  const line = wrap.children[0], body = wrap.children[1];
+  const p = line.click();
+  assert.match(line.textContent, /Loading…/);
+  assert.strictEqual(line.getAttribute('aria-busy'), 'true');
+  release(); await p;
+  assert.deepStrictEqual(h.fetched, ['/api/history/scout?view=run&from=2026-11-24T08%3A09%3A00.000Z&to=2026-11-24T08%3A17%3A00.000Z']);
+  assert.strictEqual(line.getAttribute('aria-expanded'), 'true'); assert.strictEqual(body.hidden, false);
+  assert.match(line.textContent, /^▾2 consultations from Beacon/);
+  const cards = body.all('auto-card');
+  assert.strictEqual(cards.length, 2, 'two consultations: two cards of the Agent work view (a stack only from three)');
+  assert.ok(cards[0].classList.contains('auto-card-consult'));
+  assert.strictEqual(cards[0].children[0].tag, 'button', 'a card head is a button that opens the full exchange');
+  assert.strictEqual(cards[0].children[1].all('message').length, 2, 'the whole exchange (question and answer) is in the card body');
+  assert.ok(h.pushed.every((x) => x === false), 'nothing fetched is pushed into chat.messages');
+  await line.click();   // close: hides, keeps the entries
+  assert.strictEqual(body.hidden, true); assert.strictEqual(line.getAttribute('aria-expanded'), 'false');
+  await line.click();   // open again: no second fetch
+  assert.strictEqual(h.fetched.length, 1); assert.strictEqual(body.hidden, false);
+});
+
+test('desktop: three or more consecutive turns in a run open as the same stack the Agent work view draws', async () => {
+  const many = [];
+  for (let i = 0; i < 3; i++) many.push({ ts: `2026-11-24T08:0${i}:00.000Z`, role: 'user', content: `[Consultation from agent "Beacon"] q${i}`, origin: { kind: 'consultation', from: 'Beacon' } }, { ts: `2026-11-24T08:0${i}:30.000Z`, role: 'assistant', content: `a${i}` });
+  const h = deskHarness({ fetchImpl: answer({ history: many }) });
+  const wrap = h.f.soloRunLine('c1', RUN, null);
+  await wrap.children[0].click();
+  assert.strictEqual(wrap.children[1].all('auto-stack').length, 1);
+  assert.strictEqual(wrap.children[1].all('auto-card').length, 3);
+});
+
+test('desktop: more:true ends the body with the cap line; a failed fetch says so, stays collapsed and can be tried again', async () => {
+  const h = deskHarness({ fetchImpl: answer({ history: TURNS, more: true }) });
+  const w = h.f.soloRunLine('c1', RUN, null);
+  await w.children[0].click();
+  assert.strictEqual(w.children[1].all('run-more')[0].textContent, 'Showing the first 200 entries. Switch on Agent work to see them all.');
+  let n = 0;
+  const g = deskHarness({ fetchImpl: async () => (++n === 1 ? { ok: false, status: 500, json: async () => ({}) } : { ok: true, json: async () => ({ history: TURNS }) }) });
+  const w2 = g.f.soloRunLine('c1', RUN, null);
+  const line = w2.children[0];
+  await line.click();
+  assert.strictEqual(line.getAttribute('aria-expanded'), 'false'); assert.strictEqual(w2.children[1].hidden, true);
+  assert.strictEqual(w2.all('run-error')[0].textContent, "Couldn't load these turns. Try again.");
+  assert.match(line.textContent, /2 consultations from Beacon/, 'the line words come back');
+  await line.click();
+  assert.strictEqual(w2.all('run-error').length, 0); assert.strictEqual(line.getAttribute('aria-expanded'), 'true');
+});
+
+test('desktop: the open state and the fetched turns are kept per chat by the run\'s ts: a redraw draws the line open, with no new fetch', async () => {
+  const h = deskHarness({ fetchImpl: answer({ history: TURNS }) });
+  const first = h.f.soloRunLine('c1', RUN, null);
+  await first.children[0].click();
+  h.panel.textContent = '';   // Load earlier redraws the whole panel
+  const again = h.f.soloRunLine('c1', { ...RUN }, null);
+  assert.strictEqual(again.children[0].getAttribute('aria-expanded'), 'true');
+  assert.strictEqual(again.children[1].hidden, false);
+  assert.strictEqual(again.children[1].all('auto-card').length, 2);
+  assert.strictEqual(h.fetched.length, 1);
+  assert.ok(!/localStorage|sessionStorage/.test(cutApp('function soloRunTime(', '// "Load earlier": a button at the top')), 'never stored');
+});
+
+test('desktop: a live hub-started turn makes a line at the end of the chat, and a second one extends it (a hidden card and the busy card do not count)', () => {
+  const h = deskHarness({ fetchImpl: answer({ history: [] }) });
+  const a = h.f.soloRunLive(h.chat, { kind: 'consultation', from: 'Beacon' }, '2026-11-24T08:21:00.000Z');
+  assert.match(a.children[0].textContent, /^▸1 consultation from Beacon · /);
+  const card = new El('div'); card.className = 'auto-card chat-view-hidden'; h.panel.appendChild(card);
+  const busy = new El('div'); busy.className = 'chat-busy-card'; h.panel.appendChild(busy);
+  const b = h.f.soloRunLive(h.chat, { kind: 'consultation', from: 'Beacon' }, '2026-11-24T08:25:00.000Z');
+  assert.strictEqual(b, a, 'the same line');
+  assert.match(a.children[0].textContent, /^▸2 consultations from Beacon · /);
+  assert.strictEqual(h.panel.all('run-wrap').length, 1);
+  const msg = new El('div'); msg.className = 'message assistant'; h.panel.appendChild(msg);
+  const c = h.f.soloRunLive(h.chat, { kind: 'schedule' }, '2026-11-24T08:40:00.000Z');
+  assert.notStrictEqual(c, a, 'something else is last: a new line');
+  assert.match(c.children[0].textContent, /^▸1 check-in · /);
+});
+
+test('desktop: onHubTurnStart counts the turn in a live line only in the main view and only when history did not already hold it', () => {
+  const start = cutApp('async function onHubTurnStart(', 'function onHubTurnDelta(');
+  assert.match(start, /if \(hubMain && !dup\) soloRunLive\(chat, ev\.origin, ev\.startedAt\);/);
+  assert.match(start, /card\.wrap\.classList\.add\('chat-view-hidden'\)/, 'the card stays hidden as before');
+  assert.match(start, /um\.hidden = true/);
+});
+
+test('desktop: Load earlier merges runs, and a page of only summaries counts as loaded (one fetch, no looping)', async () => {
+  const body = `${cutApp('async function soloHistoryCurrent(', '// After a hub-started turn this page did not follow')}\n${cutApp('async function soloHistoryEarlier(', '// The toolbar toggle')}\nreturn soloHistoryEarlier;`;
+  const olderRun = { ...RUN, ts: '2026-11-24T06:00:00.000Z', last_ts: '2026-11-24T06:30:00.000Z', turns: 1, kinds: [{ kind: 'consultation', from: 'Beacon', n: 1 }] };
+  const newRun = { ...RUN, ts: '2026-11-24T06:40:00.000Z', last_ts: '2026-11-24T07:00:00.000Z', turns: 3, kinds: [{ kind: 'consultation', from: 'Beacon', n: 3 }] };
+  const own = { ts: '2026-11-24T09:00:00.000Z', role: 'user', content: 'hello' };
+  const panel = { scrollHeight: 1000, scrollTop: 100 };
+  const chat = { id: 'c1', agent: 'scout', histNext: 'log:40', viewLoaded: 'main', histSeq: 1, rawHistory: [newRun, own] };
+  const fetched = [], draws = [];
+  const fn = new Function('chats', 'hubToast', 'chatViewGet', 'localStorage', 'soloEarlierPaint', 'soloHistoryFetch', 'chatViewMergeOlder', 'chatViewMergeRuns', 'soloHistoryDraw', 'document', 'userScrolledUp', 'hubTurns', body)(
+    { c1: chat }, () => {}, V.chatViewGet, { getItem: () => null }, () => {}, async (agent, view, before) => {
+      if (before === null) return { history: [newRun, own], next: 'x' };
+      fetched.push(before); return { history: [olderRun], next: 'log:20' };   // a page of only a summary, with more behind it
+    }, V.chatViewMergeOlder, V.chatViewMergeRuns, (id, list, next) => { draws.push({ list, next }); }, { getElementById: () => panel }, new WeakMap(), {});
+  await fn('c1');
+  assert.strictEqual(fetched.length, 1, 'a summary-only page is a loaded page: no second fetch');
+  assert.strictEqual(draws.length, 1);
+  assert.deepStrictEqual(draws[0].list.map((e) => e.role), ['hidden_run', 'user'], 'two adjacent runs are one line');
+  assert.strictEqual(draws[0].list[0].turns, 4); assert.strictEqual(draws[0].list[0].ts, olderRun.ts); assert.strictEqual(draws[0].list[0].last_ts, newRun.last_ts);
+  assert.strictEqual(draws[0].next, 'log:20');
+});
+
+// ── phone ──
+function phoneHarness({ fetchImpl, simple = false } = {}) {
+  const src = [cutMob('let renderTarget = null;', 'function scrollChat('), cutMob('function makeFoldHeader(', 'function addFromLine('), cutMob('function addFromLine(', '// The card\'s line once its reply left it'),
+    cutMob('// One automatic turn as a closed card;', '// The page before what is loaded')].join('\n');
+  const box = new El('div');
+  const doc2 = { createElement: (t) => new El(t) };
+  const urls = [];
+  const f = new Function('document', 'chatEl', 'api', 'chatViewRunText', 'chatViewRunUrl', 'chatViewRunKindOf', 'chatViewRunAdd', 'autoGroupHistory', 'autoCardKind', 'msgTimeLines', 'simpleOn', 'timeLabel', 'renderEntryImpl', 'busyCard',
+    `let current = 'scout', lastHistoryCard = null, chatHistory = []; const busyCardEl = busyCard; function renderEntry(m, t) { renderEntryImpl(m, t, bubbleHost()); }
+     ${src}; return { renderRunLine, runLive, renderAutoCard, renderAutoStack, get: () => ({ lastHistoryCard }) };`)(
+    doc2, () => box, (url) => { urls.push(url); return fetchImpl(url); }, V.chatViewRunText, V.chatViewRunUrl, V.chatViewRunKindOf, V.chatViewRunAdd, A.autoGroupHistory, A.autoCardKind, T.msgTimeLines, () => simple, () => 't',
+    (m, t, host) => { if (m.role === 'hidden_run') throw new Error('nested'); const e = new El('div'); e.className = `msg ${m.role}`; e.textContent = m.content; host.appendChild(e); }, null);
+  return { f, box, urls };
+}
+
+test('phone: a hidden_run entry is one quiet line, a real button with aria-expanded, a 36 px tap area, no bubble', () => {
+  const h = phoneHarness({ fetchImpl: answer({ history: [] }) });
+  const wrap = h.f.renderRunLine(RUN, h.box);
+  const line = wrap.children[0];
+  assert.strictEqual(line.tag, 'button'); assert.ok(line.classList.contains('run-line')); assert.strictEqual(line.getAttribute('aria-expanded'), 'false');
+  assert.match(line.textContent, /^▸2 consultations from Beacon · /);
+  assert.strictEqual(line.title, line.children[1].textContent);
+  assert.ok(!wrap.classList.contains('msg'));
+  const html = fs.readFileSync(path.join(__dirname, '..', 'mobile.html'), 'utf8');
+  assert.match(html, /\.run-line \{[^}]*min-height: 36px/);
+  assert.match(html, /\.run-text \{[^}]*text-overflow: ellipsis/);
+  assert.match(html, /html\.mm-simple \.run-line/);
+  assert.match(cutMob('function renderEntry(m, time', 'if (m.archived === true)'), /m\.role === 'hidden_run'\) \{ renderRunLine\(m\); return; \}/, 'renderEntry paints a run in place');
+});
+
+test('phone: tapping fetches view=run, says Loading… meanwhile, then draws the same cards the Agent work view draws; the cap line; a failure stays collapsed', async () => {
+  let release; const gate = new Promise((r) => { release = r; });
+  const h = phoneHarness({ fetchImpl: async () => { await gate; return { ok: true, json: async () => ({ history: TURNS, more: true }) }; } });
+  const wrap = h.f.renderRunLine(RUN, h.box);
+  const line = wrap.children[0], body = wrap.children[1];
+  const p = line.click();
+  assert.match(line.textContent, /Loading…/);
+  release(); await p;
+  assert.deepStrictEqual(h.urls, ['/api/history/scout?view=run&from=2026-11-24T08%3A09%3A00.000Z&to=2026-11-24T08%3A17%3A00.000Z']);
+  assert.strictEqual(line.getAttribute('aria-expanded'), 'true'); assert.strictEqual(body.hidden, false);
+  const cards = body.all('auto-card');
+  assert.strictEqual(cards.length, 2); assert.ok(cards[0].classList.contains('auto-card-consult'));
+  assert.strictEqual(cards[0].tag, 'button', 'the card head is a button that opens the exchange');
+  assert.strictEqual(cards[0].parentNode.children[1].all('msg').length, 2, 'the whole exchange is in the card body');
+  assert.strictEqual(h.f.get().lastHistoryCard, null, 'a run\'s cards are never adopted as the chat\'s last card');
+  assert.strictEqual(body.all('run-more')[0].textContent, 'Showing the first 200 entries. Switch on Agent work to see them all.');
+  await line.click(); assert.strictEqual(body.hidden, true);
+  await line.click(); assert.strictEqual(h.urls.length, 1, 'closed and opened again: the entries were kept');
+  let n = 0;
+  const g = phoneHarness({ fetchImpl: async () => (++n === 1 ? { ok: false, status: 500, json: async () => ({}) } : { ok: true, json: async () => ({ history: TURNS }) }) });
+  const w2 = g.f.renderRunLine({ ...RUN, ts: '2026-11-24T05:00:00.000Z' }, g.box);
+  await w2.children[0].click();
+  assert.strictEqual(w2.children[0].getAttribute('aria-expanded'), 'false');
+  assert.strictEqual(w2.all('run-error')[0].textContent, "Couldn't load these turns. Try again.");
+  await w2.children[0].click();
+  assert.strictEqual(w2.children[0].getAttribute('aria-expanded'), 'true');
+});
+
+test('phone: a live hub-started turn makes a line at the end of the chat and a second one extends it', () => {
+  const h = phoneHarness({ fetchImpl: answer({ history: [] }) });
+  const a = h.f.runLive({ origin: { kind: 'hand_off', from: 'Maestro' }, startedAt: '2026-11-24T08:21:00.000Z' });
+  assert.match(a.children[0].textContent, /^▸1 task from Maestro · /);
+  const hidden = new El('div'); hidden.className = 'auto-wrap chat-view-hidden'; h.box.appendChild(hidden);
+  const b = h.f.runLive({ origin: { kind: 'hand_off', from: 'Maestro' }, startedAt: '2026-11-24T08:30:00.000Z' });
+  assert.strictEqual(b, a);
+  assert.match(a.children[0].textContent, /^▸2 tasks from Maestro · /);
+  const t = cutMob('function onTurnStart(ev) {', 'function onTurnDelta(ev) {');
+  assert.match(t, /if \(hiddenFromMain && !dup\) runLive\(ev\);/);
+});
+
+test('phone: renderHistory draws a run in its place and Load earlier takes a summary-only page as loaded', async () => {
+  const rh = cutMob('function renderHistory()', 'function foldAutoOn()');
+  const box = new El('div'); const drawn = [];
+  const run = (history, fold) => new Function('chatEl', 'chatNext', 'chatHistory', 'msgTimeLines', 'foldAutoOn', 'autoGroupHistory', 'renderEntry', 'renderAutoCard', 'renderAutoStack', 'addNote', 'simpleEmptyPaint', 'paintBusyCard', 'loadEarlier', 'lastHistoryCard',
+    `${rh}; renderHistory();`)(() => box, null, history, T.msgTimeLines, () => fold, A.autoGroupHistory, (m) => drawn.push(m.role), () => {}, () => {}, () => {}, undefined, () => {}, () => {}, null);
+  run([RUN, { ts: '2026-11-24T09:00:00.000Z', role: 'user', content: 'hi' }], true);
+  assert.deepStrictEqual(drawn, ['hidden_run', 'user'], 'in its place, in the fold loop');
+  drawn.length = 0; run([RUN, { ts: '2026-11-24T09:00:00.000Z', role: 'user', content: 'hi' }], false);
+  assert.deepStrictEqual(drawn, ['hidden_run', 'user'], 'and in the flat loop');
+  // loadEarlier: a page that holds only a summary is a loaded page (one request), and it merges with the run next to it
+  const src = cutMob('async function loadEarlier()', '// A stream or re-attach paints only while');
+  const urls = []; let rendered = 0;
+  const older = { ...RUN, ts: '2026-11-24T06:00:00.000Z', last_ts: '2026-11-24T06:30:00.000Z', turns: 1, kinds: [{ kind: 'consultation', from: 'Beacon', n: 1 }] };
+  const mod = new Function('api', 'viewNow', 'chatEl', '$', 'chatViewHistoryUrl', 'chatViewMergeOlder', 'chatViewMergeRuns', 'renderHistory', 'toast', 'streams', 'reattaches', 'followedHubTurn',
+    `let current = 'scout', chatNext = 'log:100', chatHistory = ${JSON.stringify([{ ...RUN, ts: '2026-11-24T06:40:00.000Z', last_ts: '2026-11-24T07:00:00.000Z', turns: 3, kinds: [{ kind: 'consultation', from: 'Beacon', n: 3 }] }, { ts: '2026-11-24T09:00:00.000Z', role: 'user', content: 'hi' }])}, chatLoadingOlder = false, chatOpenSeq = 1, histGen = 0, stick = true;
+     ${src}; return { loadEarlier, get: () => ({ chatNext, chatHistory }) };`)(
+    async (u) => { urls.push(u); return { ok: true, json: async () => ({ history: [older], next: 'log:20' }) }; }, () => 'main', () => ({ querySelector: () => ({ disabled: false, textContent: '', isConnected: true }) }), () => ({ scrollHeight: 1, scrollTop: 0 }),
+    V.chatViewHistoryUrl, V.chatViewMergeOlder, V.chatViewMergeRuns, () => { rendered++; }, () => {}, new Map(), new Map(), () => false);
+  await mod.loadEarlier();
+  assert.strictEqual(urls.length, 1); assert.strictEqual(rendered, 1);
+  const st = mod.get();
+  assert.deepStrictEqual(st.chatHistory.map((e) => e.role), ['hidden_run', 'user']);
+  assert.strictEqual(st.chatHistory[0].turns, 4); assert.strictEqual(st.chatNext, 'log:20');
+});
+
+test('phone: simple mode draws the same words in its own muted style (CSS), and the phone service worker moved on', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'mobile.html'), 'utf8');
+  assert.match(html, /html\.mm-simple \.run-line \{[^}]*font-size: 12\.5px/);
+  assert.ok(!/html\.mm-simple[^{]*\.run-(line|wrap|body)[^{]*\{[^}]*display: none/.test(html), 'not hidden in Simple');
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'sw.js'), 'utf8'), /const VERSION = 'hub-mobile-v91';/);
+});
