@@ -52,7 +52,7 @@ function deskHarness({ fetchImpl, simple = false } = {}) {
     cutApp('function soloRunTime(', '// "Load earlier": a button at the top')].join('\n');
   const panel = new El('div'); panel.className = 'messages';
   const doc2 = { createElement: (t) => new El(t), getElementById: () => panel };
-  const pushed = [], fetched = [];
+  const pushed = [], fetched = [], toggled = { n: 0 };
   const chat = { id: 'c1', agent: 'scout', messages: [{ role: 'system' }] };
   chat.makeDraw = (list, times, pushDefault) => (i, o = {}) => {
     const m = new El('div'); m.className = `message ${list[i].role}`; m.textContent = list[i].content;
@@ -60,10 +60,10 @@ function deskHarness({ fetchImpl, simple = false } = {}) {
     return `m${i}`;
   };
   const chats = { c1: chat };
-  const f = new Function('document', 'chats', 'fetch', 'chatViewRunText', 'chatViewRunParts', 'chatViewRunUrl', 'chatViewRunKey', 'chatViewRunOpenKey', 'chatViewRunKindOf', 'chatViewRunAdd', 'autoGroupHistory', 'autoCardKind', 'msgTimeLines', 'simpleOn',
+  const f = new Function('document', 'chats', 'fetch', 'chatViewRunText', 'chatViewRunParts', 'chatViewRunUrl', 'chatViewRunKey', 'chatViewRunOpenKey', 'chatViewRunKindOf', 'chatViewRunAdd', 'autoGroupHistory', 'autoCardKind', 'msgTimeLines', 'simpleOn', 'soloViewToggle',
     `${src}; return { soloRunLine, soloRunLive, soloRunTime };`)(
-    doc2, chats, (url, o) => { fetched.push(url); return fetchImpl(url, o); }, V.chatViewRunText, V.chatViewRunParts, V.chatViewRunUrl, V.chatViewRunKey, V.chatViewRunOpenKey, V.chatViewRunKindOf, V.chatViewRunAdd, A.autoGroupHistory, A.autoCardKind, T.msgTimeLines, () => simple);
-  return { f, panel, chat, fetched, pushed };
+    doc2, chats, (url, o) => { fetched.push(url); return fetchImpl(url, o); }, V.chatViewRunText, V.chatViewRunParts, V.chatViewRunUrl, V.chatViewRunKey, V.chatViewRunOpenKey, V.chatViewRunKindOf, V.chatViewRunAdd, A.autoGroupHistory, A.autoCardKind, T.msgTimeLines, () => simple, () => { toggled.n++; });
+  return { f, panel, chat, fetched, pushed, toggled };
 }
 
 test('desktop: a hidden_run entry is one quiet line, a real button with aria-expanded, text from chatViewRunText, no bubble and nothing in chat.messages', () => {
@@ -204,13 +204,13 @@ function phoneHarness({ fetchImpl, simple = false } = {}) {
     cutMob('// One automatic turn as a closed card;', '// The page before what is loaded')].join('\n');
   const box = new El('div');
   const doc2 = { createElement: (t) => new El(t) };
-  const urls = [];
-  const f = new Function('document', 'chatEl', 'api', 'chatViewRunText', 'chatViewRunParts', 'chatViewRunUrl', 'chatViewRunKey', 'chatViewRunOpenKey', 'chatViewRunKindOf', 'chatViewRunAdd', 'autoGroupHistory', 'autoCardKind', 'msgTimeLines', 'simpleOn', 'timeLabel', 'renderEntryImpl', 'busyCard',
+  const urls = [], toggled = { n: 0 };
+  const f = new Function('document', 'chatEl', 'api', 'chatViewRunText', 'chatViewRunParts', 'chatViewRunUrl', 'chatViewRunKey', 'chatViewRunOpenKey', 'chatViewRunKindOf', 'chatViewRunAdd', 'autoGroupHistory', 'autoCardKind', 'msgTimeLines', 'simpleOn', 'timeLabel', 'renderEntryImpl', 'busyCard', 'toggleAgentWork',
     `let current = 'scout', lastHistoryCard = null, chatHistory = []; const busyCardEl = busyCard; function renderEntry(m, t) { renderEntryImpl(m, t, bubbleHost()); }
      ${src}; return { renderRunLine, runLive, renderAutoCard, renderAutoStack, get: () => ({ lastHistoryCard }) };`)(
     doc2, () => box, (url) => { urls.push(url); return fetchImpl(url); }, V.chatViewRunText, V.chatViewRunParts, V.chatViewRunUrl, V.chatViewRunKey, V.chatViewRunOpenKey, V.chatViewRunKindOf, V.chatViewRunAdd, A.autoGroupHistory, A.autoCardKind, T.msgTimeLines, () => simple, () => 't',
-    (m, t, host) => { if (m.role === 'hidden_run') throw new Error('nested'); const e = new El('div'); e.className = `msg ${m.role}`; e.textContent = m.content; host.appendChild(e); }, null);
-  return { f, box, urls };
+    (m, t, host) => { if (m.role === 'hidden_run') throw new Error('nested'); const e = new El('div'); e.className = `msg ${m.role}`; e.textContent = m.content; host.appendChild(e); }, null, () => { toggled.n++; });
+  return { f, box, urls, toggled };
 }
 
 test('phone: a hidden_run entry is one quiet line, a real button with aria-expanded, a 36 px tap area, no bubble', () => {
@@ -541,4 +541,61 @@ test('r3 F4 pages: a first turn alone over the cap says "Showing part of 1 turn.
   const p = m.f.renderRunLine({ ...RUN, turns: 5 }, m.box);
   await p.children[0].click();
   assert.strictEqual(p.children[1].all('run-more')[0].textContent, 'Showing part of 1 turn. Switch on Agent work to see it all.');
+});
+
+// ── r4 (Easel's must-fix items) ──
+const timeOf = (card) => card.all('auto-card-time')[0] || card.all('auto-time')[0];
+const htmlOf = (f) => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
+
+test('r4 E1: a card inside an opened run shows only the time, on desktop and phone, formatted as the run line formats it', async () => {
+  const d = deskHarness({ fetchImpl: answer({ history: TURNS }) });
+  const w = d.f.soloRunLine('c1', RUN, null);
+  await w.children[0].click();
+  const dt = timeOf(w.children[1].all('auto-card')[0].children[0]);
+  assert.strictEqual(dt.textContent, d.f.soloRunTime(TURNS[0].ts), 'the run line\'s own formatter');
+  assert.ok(!/[A-Za-z]{3} \d/.test(dt.textContent), 'no date');
+  const p = phoneHarness({ fetchImpl: answer({ history: TURNS }) });
+  const pw = p.f.renderRunLine(RUN, p.box);
+  await pw.children[0].click();
+  const pt = timeOf(pw.children[1].all('auto-card')[0]);
+  assert.strictEqual(pt.textContent, d.f.soloRunTime(TURNS[0].ts), 'the same words on both pages');
+  assert.notStrictEqual(pt.textContent, 't');
+  assert.match(cutApp('function foldBuildCard(', 'function foldFromLine('), /timeFn \? timeFn\(c\.ts\) : foldCardTime\(c\.ts\)/, 'outside a run the card keeps its date');
+  assert.match(cutMob('function renderAutoCard(', 'function renderAutoStack('), /timeFn \? timeFn\(it\.ts\) : timeLabel\(it\.ts\)/);
+});
+
+test('r4 E1: inside a run the title shrinks before the reply line, which keeps about 15 characters (CSS)', () => {
+  assert.match(htmlOf('index.html'), /\.run-body \.auto-card-label \{[^}]*flex: 0 1 auto;[^}]*min-width: 0/);
+  assert.match(htmlOf('index.html'), /\.run-body \.auto-card-line \{[^}]*min-width: 15ch/);
+  assert.match(htmlOf('mobile.html'), /\.run-body \.auto-label \{[^}]*flex: 0 1 auto;[^}]*min-width: 0/);
+  assert.match(htmlOf('mobile.html'), /\.run-body \.auto-line \{[^}]*min-width: 15ch/);
+});
+
+test('r4 E3: the phone line may wrap its kinds to two lines and keeps the time whole; the desktop line stays one row', () => {
+  const m = htmlOf('mobile.html');
+  assert.match(m, /\.run-line \{[^}]*flex-wrap: wrap[^}]*width: 100%[^}]*min-height: 36px/, 'the whole width is the button, at least 36 px high');
+  assert.match(m, /\.run-kinds \{[^}]*-webkit-line-clamp: 2[^}]*text-overflow: ellipsis/);
+  assert.match(m, /\.run-when \{[^}]*flex: 0 0 auto;[^}]*white-space: pre/);
+  const d = htmlOf('index.html');
+  assert.ok(!/\.run-line \{[^}]*flex-wrap/.test(d) && /\.run-kinds \{[^}]*white-space: nowrap/.test(d));
+});
+
+test('r4 nice: the cap line\'s "Agent work" is a button that switches the Agent work view on (desktop toolbar toggle, phone menu toggle); the chevron is brighter', async () => {
+  const body = { history: TURNS, more: true };
+  const d = deskHarness({ fetchImpl: answer(body) });
+  const w = d.f.soloRunLine('c1', { ...RUN, turns: 111 }, null);
+  await w.children[0].click();
+  const more = w.children[1].all('run-more')[0];
+  assert.strictEqual(more.textContent, 'Showing 2 of 111 turns. Switch on Agent work to see them all.');
+  const b = more.all('run-more-btn')[0];
+  assert.strictEqual(b.tag, 'button'); assert.strictEqual(b.textContent, 'Agent work');
+  await b.click(); assert.strictEqual(d.toggled.n, 1);
+  const p = phoneHarness({ fetchImpl: answer(body) });
+  const pw = p.f.renderRunLine({ ...RUN, turns: 111 }, p.box);
+  await pw.children[0].click();
+  const pb = pw.children[1].all('run-more')[0].all('run-more-btn')[0];
+  assert.strictEqual(pb.tag, 'button'); assert.strictEqual(pb.textContent, 'Agent work');
+  await pb.click(); assert.strictEqual(p.toggled.n, 1);
+  assert.match(htmlOf('index.html'), /\.run-chev \{[^}]*color: var\(--auto-head-text\)/);
+  assert.match(htmlOf('mobile.html'), /\.run-chev \{[^}]*color: var\(--text-dim\)/);
 });

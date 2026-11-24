@@ -612,10 +612,15 @@
     .tsn-sheet .rsn-sheet-title { color: var(--tool-text); }
     /* A run of hub-started turns the main view leaves out: ONE quiet line (a button, 36 px or more) in its place; opens to cards */
     .run-wrap { align-self: stretch; min-width: 0; }
-    .run-line { display: flex; align-items: center; gap: 0; width: 100%; min-height: 36px; box-sizing: border-box; padding: 4px 8px; border: 0; background: transparent; color: var(--text-tertiary); font: inherit; font-size: 12px; text-align: left; cursor: pointer; -webkit-tap-highlight-color: transparent; }
-    .run-chev { flex: 0 0 auto; width: 1em; margin-right: 8px; text-align: center; }
-    .run-kinds { flex: 0 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .run-line { display: flex; flex-wrap: wrap; align-items: center; gap: 0; width: 100%; min-height: 36px; box-sizing: border-box; padding: 4px 8px; border: 0; background: transparent; color: var(--text-tertiary); font: inherit; font-size: 12px; text-align: left; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+    .run-chev { flex: 0 0 auto; width: 1em; margin-right: 8px; text-align: center; color: var(--text-dim); }
+    /* the kinds may take two lines (then an ellipsis); the time span is never cut: it sits whole after them or on the second line */
+    .run-kinds { flex: 0 1 auto; min-width: 0; max-width: calc(100% - 1em - 8px); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; text-overflow: ellipsis; }
     .run-when { flex: 0 0 auto; white-space: pre; }
+    /* a card inside a run: the title shrinks (ellipsis) before the reply's first line does, which keeps about 15 characters */
+    .run-body .auto-label { flex: 0 1 auto; min-width: 0; }
+    .run-body .auto-line { flex: 1 1 0; min-width: 15ch; }
+    .run-more-btn { font: inherit; color: var(--text-dim); background: none; border: 0; padding: 0; text-decoration: underline; cursor: pointer; }
     .run-body { display: flex; flex-direction: column; gap: 8px; margin: 4px 0 2px 10px; padding-left: 8px; border-left: 1px solid var(--auto-divider); }
     .run-body[hidden] { display: none; }
     .run-more, .run-error { padding: 2px 8px; font-size: 12px; color: var(--text-tertiary); }

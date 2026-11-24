@@ -9956,11 +9956,19 @@
           if (typeof simpleOn === 'function' && simpleOn()) list.forEach((e, i) => draw(i, { into: body, notice: false }));
           else for (const item of autoGroupHistory(list)) {
             if (item.type === 'entry') draw(item.index, { into: body, notice: false });
-            else if (item.type === 'card') foldRenderHistoryCard(draw, item, body);
-            else for (const c of item.cards) foldRenderHistoryCard(draw, c, body);
+            else if (item.type === 'card') foldRenderHistoryCard(draw, item, body, null, soloRunTime);
+            else for (const c of item.cards) foldRenderHistoryCard(draw, c, body, null, soloRunTime);
           }
         }
-        if (st.more) { const n = list.filter(e => e.role === 'user').length, all = Number(wrap._run.turns) || 0; body.appendChild(foldPart('div', 'run-more', st.partial ? 'Showing part of 1 turn. Switch on Agent work to see it all.' : `Showing ${n} of ${all > n ? all : n} turns. Switch on Agent work to see them all.`)); }
+        if (st.more) {
+          const n = list.filter(e => e.role === 'user').length, all = Number(wrap._run.turns) || 0;
+          const more = document.createElement('div'); more.className = 'run-more';
+          // "Agent work" is a button that switches the Agent work view on (the same as the toolbar's button)
+          const sw = document.createElement('button'); sw.type = 'button'; sw.className = 'run-more-btn'; sw.textContent = 'Agent work';
+          sw.addEventListener('click', () => { if (typeof soloViewToggle === 'function') soloViewToggle(); });
+          more.append(foldPart('span', '', `${st.partial ? 'Showing part of 1 turn.' : `Showing ${n} of ${all > n ? all : n} turns.`} Switch on `), sw, foldPart('span', '', st.partial ? ' to see it all.' : ' to see them all.'));
+          body.appendChild(more);
+        }
       };
       st.ui = { words, setOpen, fill };
       words();
@@ -11188,10 +11196,10 @@
     // A run of hub-started turns the main view leaves out is ONE entry { role: 'hidden_run', ts, last_ts, turns, kinds: [{ kind, from, n }] }.
     const CHAT_VIEW_RUN_WORDS = {
       consultation: ['consultation', 'consultations', true],
-      hand_off: ['task', 'tasks', true],   // the words of the cards: "Consultation from X", "Task from X", "Scheduled task", "Job finished", hub notice
+      hand_off: ['task', 'tasks', true],   // the words of the cards: "Consultation from X", "Task from X", "Scheduled task", "Job finished", update
       schedule: ['scheduled task', 'scheduled tasks', false],
       job_notice: ['job finished', 'jobs finished', false],
-      other: ['hub notice', 'hub notices', false],
+      other: ['update', 'updates', false],
     };
     // The kind and sender of a turn the hub started, as a run counts it (origin from turn_start or a saved entry).
     function chatViewRunKindOf(origin) {
@@ -11224,7 +11232,7 @@
         return `${x.n} ${x.n === 1 ? w[0] : w[1]}${who}`;
       });
       const total = Number(r.turns) || 0;
-      const what = parts.length ? parts.join(', ') : `${total} ${total === 1 ? 'hub notice' : 'hub notices'}`;
+      const what = parts.length ? parts.join(', ') : `${total} ${total === 1 ? 'update' : 'updates'}`;
       const fmt = typeof timeFmt === 'function' ? timeFmt : (t) => String(t);
       const a = r.ts, b = r.last_ts || r.ts;
       if (!a) return { kinds: what, when: '' };
@@ -11365,14 +11373,27 @@
     function autoCardKind(kind) {
       return kind === 'consultation' ? 'consult' : kind === 'schedule' ? 'schedule' : 'notice';
     }
+    // The run line's word for a hub-started prompt: consultation | task | schedule | job | update (from its origin kind, else its marker text).
+    function autoWorkOf(entry) {
+      const info = autoInfoOf(entry);
+      if (!info) return 'update';
+      if (info.kind === 'consultation') return 'consultation';
+      if (info.kind === 'schedule') return 'schedule';
+      const ok = entry.origin && typeof entry.origin === 'object' ? entry.origin.kind : '';
+      const text = typeof entry.content === 'string' ? entry.content.trimStart() : '';
+      if (ok === 'hand_off' || ok === 'hand_off_report') return 'task';
+      if (ok === 'job_notice' || ok === 'job_report' || (!ok && (text.startsWith('[Job finished]') || text.startsWith('[Job ended]')))) return 'job';
+      return 'update';
+    }
     function autoSummaryOf(cards) {
       const n = (cards || []).length;
-      const count = (k) => cards.filter((c) => c.kind === k).length;
+      const workOf = (c) => c.work || (c.kind === 'consultation' ? 'consultation' : c.kind === 'schedule' ? 'schedule' : 'update');
+      const words = [['consultation', 'consultation', 'consultations'], ['task', 'task', 'tasks'], ['schedule', 'scheduled task', 'scheduled tasks'], ['job', 'job finished', 'jobs finished'], ['update', 'update', 'updates']];
       const parts = [];
-      const c = count('consultation'), s = count('schedule'), h = n - c - s;
-      if (c) parts.push(`${c} ${c === 1 ? 'consultation' : 'consultations'}`);
-      if (s) parts.push(`${s} ${s === 1 ? 'scheduled task' : 'scheduled tasks'}`);
-      if (h) parts.push(`${h} ${h === 1 ? 'hub notice' : 'hub notices'}`);
+      for (const [w, one, many] of words) {
+        const c = cards.filter((x) => workOf(x) === w).length;
+        if (c) parts.push(`${c} ${c === 1 ? one : many}`);
+      }
       return `${n} automatic ${n === 1 ? 'turn' : 'turns'}: ${parts.join(', ')}`;
     }
     function autoCardLine(history, indexes, kindsInfoLabel) {
@@ -11400,7 +11421,7 @@
         if (!e || e.inProgress) { i++; continue; }
         const info = autoInfoOf(e);
         if (!info) { items.push({ type: 'entry', index: i }); i++; continue; }
-        let last = info, firstTs = e.ts, hasAsst = false;
+        let last = info, lastWork = autoWorkOf(e), firstTs = e.ts, hasAsst = false;
         const indexes = [i];
         let j = i + 1;
         for (; j < n; j++) {
@@ -11412,11 +11433,11 @@
           if (x.role !== 'user' || hasAsst) break;
           const xi = autoInfoOf(x);
           if (!xi || autoOwnOrigin(e.origin) || autoOwnOrigin(x.origin)) break;
-          last = xi; indexes.push(j);
+          last = xi; lastWork = autoWorkOf(x); indexes.push(j);
         }
         const own = indexes.some((k) => autoOwnOrigin(history[k].origin));
         const open = indexes.filter((k) => history[k].role === 'assistant' && (history[k].for_owner === true || own));
-        items.push({ type: 'card', kind: last.kind, from: last.from, label: last.label, ts: firstTs, indexes, open, firstLine: autoCardLine(history, indexes, last.label) });
+        items.push({ type: 'card', kind: last.kind, from: last.from, label: last.label, work: lastWork, ts: firstTs, indexes, open, firstLine: autoCardLine(history, indexes, last.label) });
         i = j;
       }
       const out = [];
@@ -11469,12 +11490,13 @@
       wrap.appendChild(head); wrap.appendChild(body);
       return { head, body };
     }
-    function foldBuildCard(parent, c) {
+    // timeFn: a card inside a run line shows only the time (the line above gives the date range); elsewhere the date and time
+    function foldBuildCard(parent, c, timeFn = null) {
       const wrap = document.createElement('div');
       wrap.className = `auto-card auto-card-${autoCardKind(c.kind)}`;
       const { head, body } = foldHead('auto-card-head', 'auto-card-body', wrap);
       const line = foldPart('span', 'auto-card-line', c.firstLine || c.label);
-      head.append(foldPart('span', 'auto-card-label', c.label), foldPart('span', 'auto-card-time', foldCardTime(c.ts)), line, foldPart('span', 'auto-card-chev', '▸'));
+      head.append(foldPart('span', 'auto-card-label', c.label), foldPart('span', 'auto-card-time', timeFn ? timeFn(c.ts) : foldCardTime(c.ts)), line, foldPart('span', 'auto-card-chev', '▸'));
       parent.appendChild(wrap);
       return { wrap, head, body, setLine: (text) => { line.textContent = text || c.label; } };
     }
@@ -11485,8 +11507,8 @@
     // A history card (draw: the history loader's entry painter, see startSoloChat): its entries that are not marked
     // for the owner go into the closed body; the marked replies follow the card as ordinary messages, each under a
     // small "from <label>" line. Every entry reaches chat.messages in order.
-    function foldRenderHistoryCard(draw, c, parent, remember = null) {
-      const built = foldBuildCard(parent, c);
+    function foldRenderHistoryCard(draw, c, parent, remember = null, timeFn = null) {
+      const built = foldBuildCard(parent, c, timeFn);
       if (remember) remember(built, c);
       for (const k of c.indexes) {
         if (c.open.includes(k)) draw(k, { notice: false, show: false });

@@ -3563,10 +3563,10 @@ function chatViewMergeOlder(older, current) {
 // A run of hub-started turns the main view leaves out is ONE entry { role: 'hidden_run', ts, last_ts, turns, kinds: [{ kind, from, n }] }.
 const CHAT_VIEW_RUN_WORDS = {
   consultation: ['consultation', 'consultations', true],
-  hand_off: ['task', 'tasks', true],   // the words of the cards: "Consultation from X", "Task from X", "Scheduled task", "Job finished", hub notice
+  hand_off: ['task', 'tasks', true],   // the words of the cards: "Consultation from X", "Task from X", "Scheduled task", "Job finished", update
   schedule: ['scheduled task', 'scheduled tasks', false],
   job_notice: ['job finished', 'jobs finished', false],
-  other: ['hub notice', 'hub notices', false],
+  other: ['update', 'updates', false],
 };
 // The kind and sender of a turn the hub started, as a run counts it (origin from turn_start or a saved entry).
 function chatViewRunKindOf(origin) {
@@ -3599,7 +3599,7 @@ function chatViewRunParts(run, timeFmt) {
     return `${x.n} ${x.n === 1 ? w[0] : w[1]}${who}`;
   });
   const total = Number(r.turns) || 0;
-  const what = parts.length ? parts.join(', ') : `${total} ${total === 1 ? 'hub notice' : 'hub notices'}`;
+  const what = parts.length ? parts.join(', ') : `${total} ${total === 1 ? 'update' : 'updates'}`;
   const fmt = typeof timeFmt === 'function' ? timeFmt : (t) => String(t);
   const a = r.ts, b = r.last_ts || r.ts;
   if (!a) return { kinds: what, when: '' };
@@ -3740,14 +3740,27 @@ function autoFirstLine(text, max = 140) {
 function autoCardKind(kind) {
   return kind === 'consultation' ? 'consult' : kind === 'schedule' ? 'schedule' : 'notice';
 }
+// The run line's word for a hub-started prompt: consultation | task | schedule | job | update (from its origin kind, else its marker text).
+function autoWorkOf(entry) {
+  const info = autoInfoOf(entry);
+  if (!info) return 'update';
+  if (info.kind === 'consultation') return 'consultation';
+  if (info.kind === 'schedule') return 'schedule';
+  const ok = entry.origin && typeof entry.origin === 'object' ? entry.origin.kind : '';
+  const text = typeof entry.content === 'string' ? entry.content.trimStart() : '';
+  if (ok === 'hand_off' || ok === 'hand_off_report') return 'task';
+  if (ok === 'job_notice' || ok === 'job_report' || (!ok && (text.startsWith('[Job finished]') || text.startsWith('[Job ended]')))) return 'job';
+  return 'update';
+}
 function autoSummaryOf(cards) {
   const n = (cards || []).length;
-  const count = (k) => cards.filter((c) => c.kind === k).length;
+  const workOf = (c) => c.work || (c.kind === 'consultation' ? 'consultation' : c.kind === 'schedule' ? 'schedule' : 'update');
+  const words = [['consultation', 'consultation', 'consultations'], ['task', 'task', 'tasks'], ['schedule', 'scheduled task', 'scheduled tasks'], ['job', 'job finished', 'jobs finished'], ['update', 'update', 'updates']];
   const parts = [];
-  const c = count('consultation'), s = count('schedule'), h = n - c - s;
-  if (c) parts.push(`${c} ${c === 1 ? 'consultation' : 'consultations'}`);
-  if (s) parts.push(`${s} ${s === 1 ? 'scheduled task' : 'scheduled tasks'}`);
-  if (h) parts.push(`${h} ${h === 1 ? 'hub notice' : 'hub notices'}`);
+  for (const [w, one, many] of words) {
+    const c = cards.filter((x) => workOf(x) === w).length;
+    if (c) parts.push(`${c} ${c === 1 ? one : many}`);
+  }
   return `${n} automatic ${n === 1 ? 'turn' : 'turns'}: ${parts.join(', ')}`;
 }
 function autoCardLine(history, indexes, kindsInfoLabel) {
@@ -3775,7 +3788,7 @@ function autoGroupHistory(history, from = 0, { stackMin = AUTO_STACK_MIN } = {})
     if (!e || e.inProgress) { i++; continue; }
     const info = autoInfoOf(e);
     if (!info) { items.push({ type: 'entry', index: i }); i++; continue; }
-    let last = info, firstTs = e.ts, hasAsst = false;
+    let last = info, lastWork = autoWorkOf(e), firstTs = e.ts, hasAsst = false;
     const indexes = [i];
     let j = i + 1;
     for (; j < n; j++) {
@@ -3787,11 +3800,11 @@ function autoGroupHistory(history, from = 0, { stackMin = AUTO_STACK_MIN } = {})
       if (x.role !== 'user' || hasAsst) break;
       const xi = autoInfoOf(x);
       if (!xi || autoOwnOrigin(e.origin) || autoOwnOrigin(x.origin)) break;
-      last = xi; indexes.push(j);
+      last = xi; lastWork = autoWorkOf(x); indexes.push(j);
     }
     const own = indexes.some((k) => autoOwnOrigin(history[k].origin));
     const open = indexes.filter((k) => history[k].role === 'assistant' && (history[k].for_owner === true || own));
-    items.push({ type: 'card', kind: last.kind, from: last.from, label: last.label, ts: firstTs, indexes, open, firstLine: autoCardLine(history, indexes, last.label) });
+    items.push({ type: 'card', kind: last.kind, from: last.from, label: last.label, work: lastWork, ts: firstTs, indexes, open, firstLine: autoCardLine(history, indexes, last.label) });
     i = j;
   }
   const out = [];
@@ -8287,8 +8300,9 @@ function promptRecent(ts, startedAt) {
 
 // One automatic turn as a closed card; the entries the agent marked for the owner follow it, open.
 // list: the entries the card's indexes point into (the chat's history; a run line's fetched turns).
-function renderAutoCard(it, times, host = chatEl(), list = chatHistory) {
-  const card = makeFoldHeader(`auto-card auto-card-${autoCardKind(it.kind)}`, it.label, timeLabel(it.ts), it.firstLine);
+// timeFn: a card inside a run line shows only the time (the line above gives the date range); elsewhere timeLabel's date and time.
+function renderAutoCard(it, times, host = chatEl(), list = chatHistory, timeFn = null) {
+  const card = makeFoldHeader(`auto-card auto-card-${autoCardKind(it.kind)}`, it.label, timeFn ? timeFn(it.ts) : timeLabel(it.ts), it.firstLine);
   host.appendChild(card.wrap);
   const users = it.indexes.filter(k => list[k] && list[k].role === 'user');
   const lastUser = users[users.length - 1];
@@ -8347,11 +8361,20 @@ function renderRunLine(run, host = bubbleHost()) {
       if (typeof simpleOn === 'function' && simpleOn()) { list.forEach((e, i) => renderEntry(e, times[i])); return; }
       for (const it of autoGroupHistory(list, 0)) {
         if (it.type === 'entry') renderEntry(list[it.index], times[it.index]);
-        else if (it.type === 'card') renderAutoCard(it, times, body, list);
-        else for (const c of it.cards) renderAutoCard(c, times, body, list);   // each turn its own card, never a stack
+        else if (it.type === 'card') renderAutoCard(it, times, body, list, runTime);
+        else for (const c of it.cards) renderAutoCard(c, times, body, list, runTime);   // each turn its own card, never a stack
       }
     });
-    if (st.more) { const n = list.filter(e => e.role === 'user').length, all = Number(wrap._run.turns) || 0; const d = document.createElement('div'); d.className = 'run-more'; d.textContent = st.partial ? 'Showing part of 1 turn. Switch on Agent work to see it all.' : `Showing ${n} of ${all > n ? all : n} turns. Switch on Agent work to see them all.`; body.appendChild(d); }
+    if (st.more) {
+      const n = list.filter(e => e.role === 'user').length, all = Number(wrap._run.turns) || 0;
+      const d = document.createElement('div'); d.className = 'run-more';
+      // "Agent work" is a button that switches the Agent work view on (the same as the menu's Show agent work)
+      const sw = document.createElement('button'); sw.type = 'button'; sw.className = 'run-more-btn'; sw.textContent = 'Agent work';
+      sw.addEventListener('click', () => { if (typeof toggleAgentWork === 'function') toggleAgentWork(); });
+      const part = (t) => { const s = document.createElement('span'); s.textContent = t; return s; };
+      d.append(part(`${st.partial ? 'Showing part of 1 turn.' : `Showing ${n} of ${all > n ? all : n} turns.`} Switch on `), sw, part(st.partial ? ' to see it all.' : ' to see them all.'));
+      body.appendChild(d);
+    }
   };
   st.ui = { words, setOpen, fill };
   words();
