@@ -106,6 +106,57 @@ test('hub-events: a subscriber with redact gets the redacted turn_start, live an
   assert.ok(at.includes('secret playbook') && at.includes('team_setup'));
 });
 
+test('hub-events: a team turn reaches a member only as a generic start and end, live and on replay; an admin gets all', () => {
+  const { createHubEvents } = require('../lib/hub-events');
+  const mk = () => { const w = []; return { w, res: { writeHead() {}, write(s) { w.push(s); return true; }, on() {}, writableLength: 0, destroy() {} } }; };
+  const hub = createHubEvents();
+  let team = false;
+  hub.setTeamTurnCheck(() => team);
+  const member = { isAdmin: false, filter: () => true, redact: (ev) => X.redactTeamTurn(ev) };
+  const live = mk(), liveAdmin = mk();
+  hub.subscribe({ url: '/', headers: {} }, live.res, member);
+  hub.subscribe({ url: '/', headers: {} }, liveAdmin.res, { isAdmin: true, filter: () => true });
+  const before = hub.publish('turn_start', { turnId: 't0', agent: 'lead', origin: { kind: 'user' } }).seq;
+  live.w.length = 0; liveAdmin.w.length = 0;
+  team = true;
+  hub.publish('turn_start', { turnId: 't9', agent: 'lead', origin: { kind: 'build_team', for: 'x' }, message: 'plan', buildingTeamFor: 'x' });
+  hub.publish('ask_user', { agent: 'lead', request_id: 'r1', adminOnly: true, question: 'Create these?', questions: [{ question: 'Create these?', checklist: [{ id: 'c1', label: 'secretagent' }] }] });
+  hub.publish('turn_delta', { turnId: 't9', agent: 'lead', text: 'secretagent' });
+  hub.publish('turn_end', { turnId: 't9', agent: 'lead', origin: { kind: 'build_team' }, ok: true, error: null, reply: 'secretagent', endedAt: 'z' });
+  team = false;
+  const rep = mk(), repAdmin = mk();
+  hub.subscribe({ url: `/?since=${before}`, headers: {} }, rep.res, member);
+  hub.subscribe({ url: `/?since=${before}`, headers: {} }, repAdmin.res, { isAdmin: true, filter: () => true });
+  for (const m of [live, rep]) {
+    const t = m.w.join('');
+    assert.ok(!t.includes('secretagent') && !t.includes('checklist') && !t.includes('build_team') && !t.includes('buildingTeamFor') && !t.includes('"plan"'));
+    assert.ok(t.includes('event: turn_start') && t.includes('event: turn_end'));
+    assert.ok(!t.includes('event: ask_user') && !t.includes('event: turn_delta'));
+    assert.ok(t.includes('"kind":"task"'));
+  }
+  for (const a of [liveAdmin, repAdmin]) {
+    const t = a.w.join('');
+    assert.ok(t.includes('event: ask_user') && t.includes('event: turn_delta') && t.includes('"reply":"secretagent"') && t.includes('build_team') && t.includes('checklist'));
+  }
+});
+
+test('pending question: a member never gets an admin-only or team-turn question; an admin does', () => {
+  const q = { request_id: 'r1', adminOnly: true, questions: [{ question: 'Create these?', checklist: [{ id: 'c1', label: 'secretagent' }] }] };
+  const turn = { active: true, origin: { kind: 'user' }, question: q, text: 'hi' };
+  const r = X.redactTurnForViewer(turn, () => true);
+  assert.strictEqual(r.question, null);
+  assert.strictEqual(r.text, 'hi');
+  assert.strictEqual(turn.question, q, 'input untouched');
+  const teamSnap = X.redactTurnForViewer({ active: true, origin: { kind: 'team_setup' }, question: q, text: 'secretagent', activity: [{ kind: 'tool' }], workers: [{}], reasoning: 'secretagent' }, () => true);
+  assert.ok(!JSON.stringify(teamSnap).includes('secretagent'));
+  assert.strictEqual(teamSnap.question, null);
+  const plain = { active: true, origin: { kind: 'user' }, question: { request_id: 'r2', questions: [] } };
+  assert.strictEqual(X.redactTurnForViewer(plain, () => true), plain);
+  assert.strictEqual(X.redactCaller({ busy: true, pendingQuestion: true, adminQuestion: true }, () => true).pendingQuestion, false);
+  assert.ok(!('adminQuestion' in X.redactCaller({ busy: true, adminQuestion: true }, () => true)));
+  assert.strictEqual(X.redactCaller({ busy: true, pendingQuestion: true }, () => true).pendingQuestion, true);
+});
+
 test('canAccessAgent: a worker of a worker follows the chain to the named agent', () => {
   const v = { 'tw-a': { parent: 'tw-b' }, 'tw-b': { parent: 'sam-agent' }, 'tw-c': { parent: 'tw-d' }, 'tw-d': { parent: 'owner-agent' } };
   const o = { agents, resolveVirtual: (n) => v[n] || null };

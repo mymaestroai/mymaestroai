@@ -120,7 +120,8 @@ test('ask_user dialogs: a click only highlights the choice and a Submit button s
 test('a pending ask_user question is re-shown from the hub event stream and on turn catch-up, on both pages (dedup by request id)', () => {
   const app = read('app.js'), m = read('mobile.js');
   const sdk = fs.readFileSync(path.join(root, 'lib', 'sdk-chat.js'), 'utf8');
-  assert.ok(sdk.includes("hubEvents.events.setQuestion(agentName, { request_id: requestId, questions: event.questions })"), 'server remembers the question');
+  // changed: the remembered question now also carries adminOnly (spread after questions) so the turn/catch-up view can hide an admin-only question from members.
+  assert.ok(sdk.includes("hubEvents.events.setQuestion(agentName, { request_id: requestId, questions: event.questions, ...(args.adminOnly === true ? { adminOnly: true } : {}) })"), 'server remembers the question');
   assert.ok(sdk.includes("questions: event.questions });") && sdk.includes("hubEvents.events.setQuestion(agentName, null)"), 'full question on the event stream; cleared when done');
   assert.ok(app.includes("source.addEventListener('ask_user_done'") && app.includes("showQuestionModal({ request_id: ev.request_id, questions: ev.questions, agent: ev.agent }"), 'desktop shows it from the event stream');
   assert.ok(app.includes("if (turn.question && turn.question.request_id && !turn.ended) showQuestionModal(turn.question, chatId)"), 'desktop shows it on catch-up');
