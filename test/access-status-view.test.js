@@ -140,6 +140,46 @@ test('hub-events: a team turn reaches a member only as a generic start and end, 
   }
 });
 
+test('redactTeamTurn: a team-turn snapshot (GET .../turn) carries no message for a member', () => {
+  const snap = { active: true, origin: { kind: 'team_setup' }, message: 'secretagent', prompt: 'secretagent', question: null, text: 'x' };
+  const r = X.redactTurnForViewer(snap, () => true);
+  const s = JSON.stringify(r);
+  assert.ok(!s.includes('"message"') && !s.includes('secretagent'));
+  assert.equal(snap.message, 'secretagent', 'input untouched');
+});
+
+test('hub-events: during a team turn an unrelated event of the agent still reaches a member; the turn\'s own are generic or dropped', () => {
+  const { createHubEvents } = require('../lib/hub-events');
+  const mk = () => { const w = []; return { w, res: { writeHead() {}, write(s) { w.push(s); return true; }, on() {}, writableLength: 0, destroy() {} } }; };
+  const hub = createHubEvents();
+  let team = false;
+  hub.setTeamTurnCheck(() => team);
+  const member = { isAdmin: false, filter: () => true, redact: (ev) => X.redactTeamTurn(ev) };
+  const live = mk(), liveAdmin = mk();
+  hub.subscribe({ url: '/', headers: {} }, live.res, member);
+  hub.subscribe({ url: '/', headers: {} }, liveAdmin.res, { isAdmin: true, filter: () => true });
+  const before = hub.publish('turn_start', { turnId: 't0', agent: 'lead', origin: { kind: 'user' } }).seq;
+  live.w.length = 0; liveAdmin.w.length = 0;
+  team = true;
+  hub.publish('turn_start', { turnId: 't9', agent: 'lead', origin: { kind: 'team_setup' } });
+  hub.publish('ask_user', { agent: 'lead', request_id: 'r1', question: 'Create these?', questions: [{ question: 'Create these?', checklist: [{ id: 'c1', label: 'secretagent' }] }] });
+  hub.publish('agent_updated', { agent: 'lead', display: 'Renamed', changed: ['display'] });
+  hub.publish('turn_end', { turnId: 't9', agent: 'lead', origin: { kind: 'team_setup' }, ok: true, error: null, reply: 'secretagent', endedAt: 'z' });
+  team = false;
+  const rep = mk(), repAdmin = mk();
+  hub.subscribe({ url: `/?since=${before}`, headers: {} }, rep.res, member);
+  hub.subscribe({ url: `/?since=${before}`, headers: {} }, repAdmin.res, { isAdmin: true, filter: () => true });
+  for (const m of [live, rep]) {
+    const t = m.w.join('');
+    assert.ok(t.includes('event: agent_updated') && t.includes('event: turn_start') && t.includes('event: turn_end'));
+    assert.ok(!t.includes('secretagent') && !t.includes('event: ask_user'));
+  }
+  for (const a of [liveAdmin, repAdmin]) {
+    const t = a.w.join('');
+    assert.ok(t.includes('event: ask_user') && t.includes('secretagent') && t.includes('event: agent_updated'));
+  }
+});
+
 test('pending question: a member never gets an admin-only or team-turn question; an admin does', () => {
   const q = { request_id: 'r1', adminOnly: true, questions: [{ question: 'Create these?', checklist: [{ id: 'c1', label: 'secretagent' }] }] };
   const turn = { active: true, origin: { kind: 'user' }, question: q, text: 'hi' };
