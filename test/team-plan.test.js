@@ -1033,7 +1033,8 @@ test('practice notes: the turn ending before the write stops it; the default wri
   const out = await m.svc.runPlan(NOTES(), { ...ctx(m, { header: 'Team review' }), stillAllowed: () => allowed, ask: async () => { allowed = false; return { choice: 'Do it', checked: ['p1'] }; } });
   assert.match(out, /turn ended/);
   assert.deepEqual(m.calls.records, []);
-  assert.match(read('lib/team-plan.js'), /writeRecord = \(agent, name, content\) => require\('\.\/records'\)\.write\(agent, name, content\)/);
+  assert.match(read('lib/team-plan.js'), /writeRecord = \(agent, name, content, opts\) => require\('\.\/records'\)\.write\(agent, name, content, opts\)/);
+  assert.match(read('lib/team-plan.js'), /writeRecord\(boss, PRACTICE_FILE, content, \{ requireLoaded: true \}\)/, 'the practice write is refused rather than replacing the file when it would not load');
   assert.match(read('lib/sdk-chat.js'), /records\.write\(agentName, name, content, \{ append: !!append \}\)/, 'record_write calls the same function');
   assert.ok(TP.PLAN_TOOL.parameters.properties.practice_notes, 'the tool schema carries practice_notes');
 });
@@ -1082,4 +1083,14 @@ test('keep-on-box review: a model change to another service is refused; the same
   assert.deepEqual(m.calls.model, []);
   const src = read('lib/sdk-chat.js');
   assert.match(src, /keepOnBox: \(\(\) => \{ const t = turnRegistry\.get\(agentName\); return !!\(t && t\.optimizeTeamTrusted === true && t\.origin && t\.origin\.kind === 'optimize_team' && t\.origin\.for === agentName\)/);
+});
+
+test('practice apply passes requireLoaded to the writer and treats its refusal as not fitting', async () => {
+  const seen = [];
+  const f = make({ writeRecord: (a, n, c, o) => { seen.push(o); return "not written: team-practice.md would not fit in studio's Records (9 of 5 characters)."; } }); 
+  try {
+    const out = await f.svc.runPlan(NOTES(), { ...ctx(f, { header: 'Team review' }), ask: async () => ({ choice: 'Do it', checked: ['p1'] }) });
+    assert.ok(seen.length >= 1 && seen.every(o => o && o.requireLoaded === true), 'requireLoaded passed through the injected writer');
+    assert.match(String(out), /do not fit|not fit/i);
+  } finally { f.cleanup(); }
 });
