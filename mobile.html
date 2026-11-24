@@ -142,7 +142,7 @@
       font-size: 15px;
       background: var(--bg-dark);
       color: var(--text);
-      height: 100vh; height: 100dvh;
+      height: 100vh; height: 100dvh; height: var(--vvh, 100dvh);   /* --vvh: the visual viewport's height, set by the page: the layout fits the visible area above the keyboard */
       display: flex; flex-direction: column;
       overflow: hidden;
       padding: var(--sat) var(--sar) 0 var(--sal);
@@ -229,16 +229,20 @@
     .tm-line > .agent-row { flex: 1; min-width: 0; width: auto; }
     .tm-fold, .tm-fold-sp { flex: none; width: 40px; min-height: 40px; text-align: center; color: var(--text-dim); font-size: 14px; }
     /* One leader = one block (.tm-block): its row, then its own workers in .tm-kids, joined by a line down the left of them. */
-    .tm-leaders { padding-left: 12px; }
+    /* Indent model (px, phone 390 wide): main row = fold 40 + padding 14 + icon 36 + gap 12 -> its NAME starts at 102.
+       Every deeper row starts right of its boss's name: --tm-bar sits under the boss's icon centre, --tm-gap is the room between line and rows. */
+    html { --vvh: 100dvh; --tm-bar: 71px; --tm-gap: 21px; --tm-kid-bar: 60px; --tm-kid-gap: 11px; --tm-deep-bar: 62px; }
+    .tm-leaders { margin-left: var(--tm-bar); padding-left: var(--tm-gap); border-left: 1px solid var(--border-strong); }
     .tm-block.tm-r-leader { margin-bottom: 10px; }
-    .tm-kids { margin-left: 50px; border-left: 1px solid var(--border-strong); }
-    .tm-block .tm-block > .tm-kids { margin-left: 20px; }
+    .tm-kids { margin-left: var(--tm-kid-bar); padding-left: var(--tm-kid-gap); border-left: 1px solid var(--border-strong); }
+    .tm-block .tm-block > .tm-kids { margin-left: var(--tm-deep-bar); padding-left: 0; }
+    .tm-r-leader > .tm-line > .tm-fold, .tm-r-leader > .tm-line > .tm-fold-sp { width: 36px; }
     /* Three ranks: main (the normal row), leader (0.92), worker (two thirds of a leader row, quiet, no divider; still a 36px tap target) */
-    .tm-r-leader > .tm-line > .agent-row { min-height: 48px; padding: 4px 14px; }
+    .tm-r-leader > .tm-line > .agent-row { min-height: 48px; padding: 4px 14px 4px 10px; }
     .tm-r-leader .agent-icon { font-size: 19px; width: 28px; }
     .tm-r-leader > .tm-line .agent-name { font-size: 14px; }
     .tm-r-leader > .tm-line .agent-model { font-size: 11.5px; }
-    .tm-r-worker > .tm-line > .agent-row { min-height: 36px; padding: 2px 12px 2px 10px; gap: 8px; border-bottom: 0; }
+    .tm-r-worker > .tm-line > .agent-row { min-height: 36px; padding: 2px 12px 2px 14px; gap: 8px; border-bottom: 0; }
     .tm-r-worker > .tm-line > .tm-fold-sp { display: none; }
     .tm-r-worker > .tm-line > .tm-fold { min-height: 36px; width: 32px; }
     .tm-r-worker > .tm-line .agent-icon { font-size: 16px; width: 22px; }
@@ -253,7 +257,13 @@
     .tm-setup-btn:disabled { opacity: 0.6; }
     .tm-setup-line { margin: 12px 14px 0; padding: 10px 14px; border-radius: 12px; border: 1px solid var(--border); font-size: 13px; color: var(--text-dim); }
     .tm-setup-undo, .team-undo-btn { min-height: 44px; padding: 0 6px; font: inherit; font-weight: 600; color: var(--accent-hover); text-decoration: underline; background: transparent; }
-    .team-offer-slot { padding: 8px 10px 0; max-height: 50vh; overflow-y: auto; }
+    .team-offer-slot { padding: 8px 10px 0; max-height: 25vh; max-height: calc(var(--vvh, 100dvh) * 0.25); overflow-y: auto; }   /* never more than a quarter of the visible height */
+    .team-offer-collapsed { padding: 0; }
+    .team-offer-expand { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; min-height: 36px; padding: 0 10px; font-size: 13px; line-height: 1.4; text-align: left; white-space: nowrap; overflow: hidden; }
+    .team-offer-expand b { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+    .team-offer-more { flex: none; color: var(--accent-hover); text-decoration: underline; }
+    /* Tight (the box has focus or the visible height is short): the "Working on" bar may not push the box */
+    #composer.composer-tight .handoff-cards { max-height: calc(var(--vvh, 100dvh) * 0.2); overflow-y: auto; }
     .team-offer-slot .question { margin-bottom: 8px; }
     /* The Undo line: one text line above the "Working on" cards (own row in the same flow), ellipsis when narrow; the list opens below it */
     .team-undo-line { display: flex; align-items: center; gap: 6px; min-width: 0; margin-bottom: 4px; font-size: 13px; line-height: 1.4; color: var(--text-dim); white-space: nowrap; }
@@ -268,7 +278,10 @@
     .build-line { padding: 0 14px 6px 54px; font-size: 12px; color: var(--text-dim); display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
     .build-team-link { min-height: 44px; padding: 0 8px; margin-left: -8px; font-size: 13px; font-weight: 600; color: var(--accent-hover); text-decoration: underline; background: transparent; }
     .build-team-link:disabled, .build-team-btn:disabled { color: var(--text-tertiary); text-decoration: none; opacity: .7; }
-    .tm-build { padding: 0 14px 8px; padding-left: calc(54px + var(--d, 0) * 20px); }
+    /* a main agent with no team: "No team yet · Build team" is the row's own second line (same height as 'team of 3'); the link's tap area grows to 37px by padding that the negative margin takes back */
+    .agent-build-sub { overflow: visible; }
+    .agent-build-sub .build-team-link { display: inline-block; min-height: 0; padding: 10px 8px; margin: -10px -8px -10px -2px; font-size: inherit; line-height: inherit; cursor: pointer; }
+    .agent-build-sub .build-team-link[aria-disabled="true"] { color: var(--text-tertiary); text-decoration: none; opacity: .7; }
     .build-team-btn { min-height: 44px; padding: 0 16px; border-radius: 10px; font-size: 14px; font-weight: 600; background: var(--accent); color: var(--on-accent); }
     .question .qchecks { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
     .question .qcheck { display: flex; align-items: flex-start; gap: 12px; min-height: 48px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-card); }
@@ -627,7 +640,7 @@
       font-size: 16px; font-family: inherit; color: var(--text); background: var(--bg-input);
       border: 1px solid var(--border-strong); border-radius: 12px; padding: 10px 12px; min-height: 44px; outline: none;
     }
-    #msg-input { flex: 1; min-width: 0; max-height: 140px; resize: none; line-height: 1.3; }
+    #msg-input { flex: 1; min-width: 0; max-height: 140px; max-height: min(140px, calc(var(--vvh, 100dvh) * 0.4)); overflow-y: auto; resize: none; line-height: 1.3; }
     #msg-input:focus { border-color: var(--accent); }
     #send-btn { min-width: 44px; min-height: 44px; border-radius: 22px; background: var(--accent); color: var(--on-accent); font-size: 18px; }
     #send-btn.stop { background: var(--error); }
@@ -1188,7 +1201,11 @@ html.mm-simple #simple-top .st-mark { margin-right: 2px; }
 
 /* Agent list screen (only reached when there is no chat to open) */
 html.mm-simple #screen-agents .view-switch { display: none; }
-html.mm-simple .sa-row { padding-left: calc(12px + var(--d, 0) * 20px); }
+/* Simple Teams: a direct report starts right of its boss's name. Main row: padding 12 + icon 34 + gap 14 -> name at 60; --sa-step 50 puts a depth-1 icon at 62. The line hangs under the boss's icon centre (29). The wide side list sets its own (40 / 25): padding 12 + icon 26 + gap 10 -> name at 48; depth-1 icon at 52. */
+html.mm-simple { --sa-step: 50px; --sa-bar: 29px; }
+html.mm-simple .sa-row { padding-left: calc(12px + var(--d, 0) * var(--sa-step)); }
+html.mm-simple .sa-row.sa-kid { position: relative; }
+html.mm-simple .sa-row.sa-kid::before { content: ""; position: absolute; left: var(--sa-bar); top: 0; bottom: 0; width: 1px; background: var(--border-strong); }
 html.mm-simple .sa-row .sa-txt small.sa-sub { display: block; }
 html.mm-simple #simple-side .sa-txt small.sa-sub { display: block; font-size: 12px; }
 html.mm-simple .sa-fold b { font-weight: 600; font-size: 17px; color: var(--text-dim); }
@@ -1302,10 +1319,15 @@ html.mm-simple .sa-txt { min-width: 0; flex: 1; }
 html.mm-simple .sa-txt b { display: block; font-weight: 600; font-size: 17px; }
 html.mm-simple .sa-txt small { display: block; color: var(--text-tertiary); font-size: 14px; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 html.mm-simple .sa-tick { color: var(--accent); font-weight: 700; flex: none; }
-html.mm-simple .sa-leader { min-height: 54px; }   /* Teams in Simple: a team leader, one step smaller than a main agent (0.92) */
-html.mm-simple .sa-leader .sa-ic { font-size: 23px; width: 30px; }
-html.mm-simple .sa-leader .sa-txt b { font-size: 15.5px; }
-html.mm-simple .sa-leader .sa-txt small { font-size: 13px; }
+html.mm-simple .sa-rank-main .sa-txt small { font-size: 0.85rem; }   /* Teams in Simple: three ranks as in the regular Teams view; main is the base row above */
+html.mm-simple .sa-rank-leader { min-height: 54px; }   /* a team leader, one step smaller than a main agent (0.92) */
+html.mm-simple .sa-rank-leader .sa-ic { font-size: 23px; width: 30px; }
+html.mm-simple .sa-rank-leader .sa-txt b { font-size: 15.5px; }
+html.mm-simple .sa-rank-leader .sa-txt small { font-size: 0.8rem; }
+html.mm-simple .sa-rank-worker { min-height: 44px; padding-top: 4px; padding-bottom: 4px; }   /* a worker or a direct report with nobody under it: clearly smaller and quieter */
+html.mm-simple .sa-rank-worker .sa-ic { font-size: 18px; width: 26px; }
+html.mm-simple .sa-rank-worker .sa-txt b { font-size: 14px; font-weight: 500; color: var(--text-dim); }
+html.mm-simple .sa-rank-worker .sa-txt small { font-size: 0.72rem; }
 html.mm-simple .tm-r-leader > .tm-line > .agent-row { min-height: 58px; font-size: 16.5px; }
 html.mm-simple .sa-dot { width: 12px; height: 12px; border-radius: 50%; flex: none; background: transparent; }
 html.mm-simple .sa-dot.busy { background: var(--warning); animation: simple-pulse 1.2s ease-in-out infinite; }
@@ -1346,10 +1368,17 @@ html.mm-simple #simple-side { display: none; }
   html.mm-simple #simple-side .sa-txt { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   html.mm-simple #simple-side .sa-txt b { font-weight: 500; font-size: 16px; }
   html.mm-simple #simple-side .sa-txt small, html.mm-simple #simple-side .sa-tick { display: none; }
+  html.mm-simple #simple-side .sa-row.sa-rank-leader { min-height: 40px; }
+  html.mm-simple #simple-side .sa-rank-leader .sa-ic { font-size: 18px; width: 24px; }
+  html.mm-simple #simple-side .sa-rank-leader .sa-txt b { font-size: 14.5px; }
+  html.mm-simple #simple-side .sa-row.sa-rank-worker { min-height: 36px; padding-top: 3px; padding-bottom: 3px; }
+  html.mm-simple #simple-side .sa-rank-worker .sa-ic { font-size: 16px; width: 22px; }
+  html.mm-simple #simple-side .sa-rank-worker .sa-txt b { font-size: 13px; }
   html.mm-simple #simple-side .sa-dot { width: 10px; height: 10px; }
   html.mm-simple #simple-side .sa-more b { font-size: 15px; }
   html.mm-simple #simple-side .sa-head { margin: 10px 12px 2px; }
-  html.mm-simple #simple-side .sa-row { padding-left: calc(12px + var(--d, 0) * 20px); }
+  html.mm-simple #simple-side { --sa-step: 40px; --sa-bar: 25px; }
+  html.mm-simple #simple-side .sa-row { padding-left: calc(12px + var(--d, 0) * var(--sa-step)); }
   html.mm-simple .ssd-me { flex: none; display: flex; align-items: center; gap: 10px; width: 100%; min-height: 52px; padding: 4px 8px; margin-top: 6px; border-top: 1px solid var(--border); border-radius: 12px; text-align: left; color: var(--text); }
   html.mm-simple .ssd-me .st-avatar { width: 36px; height: 36px; font-size: 15px; }
   html.mm-simple .ssd-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 16px; }
@@ -1365,7 +1394,7 @@ html.mm-simple #simple-side { display: none; }
 <body>
   <section id="screen-agents" class="screen active">
     <div id="health-notice" role="status" hidden></div>
-    <div class="topbar" id="agents-head"><h1>My Maestro AI</h1><select id="owner-view" hidden aria-label="Whose agents to show"></select><a class="iconbtn" href="/?desktop=once" title="Full UI" style="text-decoration:none">&#x1F5A5;</a><button type="button" class="mode-toggle" role="switch" aria-checked="false" title="Simple view on/off" hidden><span class="mt-lab">Simple</span><span class="mt-track"><span class="mt-knob"></span></span></button><button class="iconbtn" id="agents-refresh" aria-label="Refresh">&#x21BB;</button><button class="iconbtn" id="agents-menu-btn" aria-label="Menu">&#x22EE;</button></div>
+    <div class="topbar" id="agents-head"><h1>My Maestro AI</h1><select id="owner-view" hidden aria-label="Whose agents to show"></select><a class="iconbtn" href="/?desktop=once" title="Full UI" style="text-decoration:none">&#x1F5A5;</a><button type="button" class="mode-toggle" role="switch" aria-checked="false" title="Simple view on/off" hidden><span class="mt-lab">Simple</span><span class="mt-track"><span class="mt-knob"></span></span></button><button class="iconbtn" id="agents-refresh" aria-label="Reload" title="Reload">&#x21BB;</button><button class="iconbtn" id="agents-menu-btn" aria-label="Menu">&#x22EE;</button></div>
     <div id="update-card" hidden></div>
     <button class="pacing-bar" title="Tap to resume full parallel"></button>
     <div id="chip-row"><button id="working-chip" title="Tap to show only the agents that are working"></button><button id="bg-chip" title="Tap to open the first of these agents with its background work"></button></div>
@@ -1378,7 +1407,7 @@ html.mm-simple #simple-side { display: none; }
       <button class="iconbtn" id="chat-back" aria-label="Back">&#x2190;</button>
       <span class="agent-icon" id="chat-icon"></span>
       <div id="chat-title"><b id="chat-name">Chat</b><span class="sub-row"><button type="button" class="sub" id="chat-busy" hidden></button></span></div>
-      <button class="iconbtn" id="chat-resync" aria-label="Re-sync" title="Re-sync with the hub">&#x21BB;</button>
+      <button class="iconbtn" id="chat-resync" aria-label="Reload" title="Reload">&#x21BB;</button>
       <button class="iconbtn notify-chip" id="chat-notify-btn" type="button" aria-haspopup="dialog" aria-label="Notifications for this agent" title="Notifications for this agent"><span class="bicon">&#x1F514;</span><span class="nlabel"> Notify</span></button>
       <button class="iconbtn stop-remote" id="chat-stop-btn" aria-label="Stop this agent" title="Stop this agent's current turn" hidden>&#x25A0;<span class="stop-label"> Stop</span></button>
       <button type="button" class="mode-toggle" role="switch" aria-checked="false" title="Simple view on/off" hidden><span class="mt-lab">Simple</span><span class="mt-track"><span class="mt-knob"></span></span></button>

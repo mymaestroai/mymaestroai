@@ -119,7 +119,8 @@ test('Teams: every agent exactly once, with the right sections, sublines, labels
   assert.deepStrictEqual(names(h).sort(), AGENTS.map((a) => a.name).sort());
   assert.strictEqual(h.indexOf('Your agents') < h.indexOf('Shared specialists') && h.indexOf('Shared specialists') < h.indexOf('Other (1)'), true);
   assert.match(h, /<div class="agent-model" title="2 teams · 5 agents · 2 working">2 teams · 5 agents · 2 working</);
-  assert.match(h, /Bea &lt;b&gt;<\/div><div class="agent-model" title="No team yet">No team yet</);
+  assert.match(h, /No team yet · <span role="button" class="build-team-link" data-build-team="bea">/, 'an admin reads "No team yet" on the row\'s own second line');
+  assert.match(teamsApi(env({ env: { isAdmin: () => false }, store: { 'hub-teams-open': '{}' } })).teamsListHtml(), /Bea &lt;b&gt;<\/div><div class="agent-model" title="No team yet">No team yet</);
   assert.match(h, /Lia<\/div><div class="agent-model" title="Team leader · leads 2 · 1 working">Team leader · leads 2 · 1 working</);
   assert.match(h, /Lou<\/div><div class="agent-model" title="Team leader · leads 1 · 1 working">/);
   assert.match(h, /Wil<\/div><div class="agent-model" title="Worker">Worker</);
@@ -187,8 +188,29 @@ test('Teams: two real leaders and one direct report with nobody under it: "2 tea
   assert.match(h, /<div class="tm-block tm-r-worker"><div class="tm-line tm-d2" style="--d:2"><span class="tm-fold-sp"><\/span><button class="agent-row" data-agent="scout"/);
   assert.match(h, /Scout<\/div><div class="agent-model" title="Reports to Atlas">/);
 });
+test('Simple CSS (phone): worker < leader < main in name, icon and row height; sublines >= 0.7rem or 12px; tap targets >= 36px', () => {
+  const rule = (sel, prop) => {   // the last rule for this exact selector that sets prop (the sheet and the wide sidebar both restyle .sa-row)
+    const re = new RegExp('^\\s*' + sel.replace(/[.#]/g, '\\$&').replace(/ /g, '\\s+') + ' \\{([^}]*)\\}', 'gm');
+    const all = [...html.matchAll(re)].map((m) => m[1]).filter((d) => !prop || d.includes(prop + ':'));
+    assert.ok(all.length, sel); return all[all.length - 1];
+  };
+  const num = (decl, prop) => { const m = decl.match(new RegExp(prop + ': ([\\d.]+)(px|rem)')); assert.ok(m, prop + ' in ' + decl); return m[2] === 'rem' ? parseFloat(m[1]) * 16 : parseFloat(m[1]); };
+  const sheet = {
+    main: [num(rule('html.mm-simple .sa-txt b', 'font-size'), 'font-size'), num(rule('html.mm-simple .sa-ic', 'font-size'), 'font-size'), num(rule('html.mm-simple .sa-row', 'min-height'), 'min-height'), num(rule('html.mm-simple .sa-rank-main .sa-txt small', 'font-size'), 'font-size')],
+    leader: [num(rule('html.mm-simple .sa-rank-leader .sa-txt b', 'font-size'), 'font-size'), num(rule('html.mm-simple .sa-rank-leader .sa-ic', 'font-size'), 'font-size'), num(rule('html.mm-simple .sa-rank-leader', 'min-height'), 'min-height'), num(rule('html.mm-simple .sa-rank-leader .sa-txt small', 'font-size'), 'font-size')],
+    worker: [num(rule('html.mm-simple .sa-rank-worker .sa-txt b', 'font-size'), 'font-size'), num(rule('html.mm-simple .sa-rank-worker .sa-ic', 'font-size'), 'font-size'), num(rule('html.mm-simple .sa-rank-worker', 'min-height'), 'min-height'), num(rule('html.mm-simple .sa-rank-worker .sa-txt small', 'font-size'), 'font-size')],
+  };
+  for (let i = 0; i < 3; i++) assert.ok(sheet.worker[i] < sheet.leader[i] && sheet.leader[i] < sheet.main[i], 'sheet column ' + i + ' ' + JSON.stringify(sheet));
+  assert.ok(sheet.worker[3] >= 11.2 && sheet.worker[2] >= 36);
+  assert.match(rule('html.mm-simple .sa-rank-worker .sa-txt b'), /color: var\(--text-dim\)/);
+  const side = (r) => [num(rule('html.mm-simple #simple-side .sa-rank-' + r + ' .sa-txt b', 'font-size'), 'font-size'), num(rule('html.mm-simple #simple-side .sa-rank-' + r + ' .sa-ic', 'font-size'), 'font-size'), num(rule('html.mm-simple #simple-side .sa-row.sa-rank-' + r, 'min-height'), 'min-height')];
+  const sl = side('leader'), sw = side('worker');
+  const sm = [num(rule('html.mm-simple #simple-side .sa-txt b', 'font-size'), 'font-size'), num(rule('html.mm-simple #simple-side .sa-ic', 'font-size'), 'font-size'), num(rule('html.mm-simple #simple-side .sa-row', 'min-height'), 'min-height')];
+  for (let i = 0; i < 3; i++) assert.ok(sw[i] < sl[i] && sl[i] < sm[i], 'side column ' + i);
+  assert.ok(sw[2] >= 36);
+});
 test('Teams CSS (phone): connector border on the workers wrapper, spaced blocks, 36px worker rows, no .tm-lab, variables only', () => {
-  const css = html.split('\n').filter((l) => /\.tm-|sa-leader/.test(l)).join('\n');
+  const css = html.split('\n').filter((l) => /\.tm-|sa-rank/.test(l)).join('\n');
   assert.doesNotMatch(css, /tm-lab/);
   assert.match(css, /\.tm-kids \{[^}]*border-left: 1px solid var\(--border-strong\)/);
   assert.match(css, /\.tm-block\.tm-r-leader \{ margin-bottom: 10px; \}/);
@@ -290,6 +312,7 @@ test('Simple Teams: a direct report with nobody under it is not shown as a leade
   const model = load(e2, TEAMS() + fnSource('simpleTeamsModel'), 'simpleTeamsModel')();
   // Simple lists every direct report of a main (the direct worker as 'Reports to ...'); only the third level (writer) is left out.
   assert.deepStrictEqual(model.rows.map((r) => [r.a.name, r.depth, r.sub]), [['atlas', 0, 'team of 3'], ['editor', 1, 'Team leader'], ['scout', 1, 'Reports to Atlas']]);
+  assert.deepStrictEqual(model.rows.map((r) => r.rank), ['main', 'leader', 'worker'], 'a direct report with nobody under it is a worker, not a leader');
 });
 
 test('Teams: a phone direct worker line uses the worker indent (--d:2, tm-d2), like the desktop; a leader keeps d1', () => {
@@ -317,7 +340,9 @@ test('Simple Teams: main agents with their leaders, no workers, shared specialis
   assert.deepStrictEqual(rows.map((r) => r.dataset.agent), ['ann', 'lia', 'lou', 'bea']);
   const sub = (r) => r.parts['small'].textContent;
   assert.deepStrictEqual(rows.map(sub), ['2 teams · 5 agents · 1 working', 'Team leader', 'Team leader', 'No team yet']);
-  assert.deepStrictEqual(rows.map((r) => / sa-leader/.test(r.className)), [false, true, true, false], 'leaders get the leader rank class');
+  const rank = (r) => (r.className.match(/sa-rank-(\w+)/) || [])[1];
+  assert.deepStrictEqual(rows.map(rank), ['main', 'leader', 'leader', 'main'], 'every Simple Teams row carries its rank class');
+  assert.ok(!rows.some((r) => /sa-leader/.test(r.className)), 'the old sa-leader class is gone');
   assert.deepStrictEqual(rows.map((r) => r.style.props['--d'] || ''), ['', '1', '1', '']);
   const folds = box.children.filter((c) => /sa-fold/.test(c.className));
   assert.deepStrictEqual(folds.map((f) => f.dataset.grp), ['@shared', '@other']);
@@ -354,14 +379,15 @@ test('Build line: renderAgents passes build only for the group rows (the source)
 test('Teams: Build Team button under "No team yet" for admins only; Building… disabled while a live entry says so', () => {
   const e = env({ store: { 'hub-teams-open': JSON.stringify({ ann: true }) } });
   const h = teamsApi(e).teamsListHtml();
-  assert.strictEqual((h.match(/class="build-team-btn"/g) || []).length, 1);
-  assert.match(h, /<div class="tm-build" style="--d:0"><button type="button" class="build-team-btn" data-build-team="bea">Build Team<\/button><\/div>/);
-  assert.ok(h.indexOf('data-agent="bea"') < h.indexOf('build-team-btn'), 'under bea');
+  assert.strictEqual((h.match(/class="build-team-link"/g) || []).length, 1);
+  assert.ok(!/build-team-btn|class="tm-build"/.test(h), 'no separate full-width button');
+  assert.ok(!/tm-build-line|class="build-line/.test(h), 'no line outside the row');
+  assert.match(h, /<button class="agent-row" data-agent="bea">(?:(?!<\/button>)[\s\S])*<div class="agent-model agent-build-sub">No team yet · <span role="button" class="build-team-link" data-build-team="bea">Build team<\/span><\/div>(?:(?!<\/button>)[\s\S])*<\/button>/, 'inside the agent-row of bea');
   e.live = { ann: { busy: true, buildingTeamFor: 'bea' } };
   const h2 = teamsApi(e).teamsListHtml();
-  assert.match(h2, /<button type="button" class="build-team-btn" data-build-team="bea" disabled aria-disabled="true">Building…<\/button>/);
+  assert.match(h2, /<span role="button" class="build-team-link" data-build-team="bea" aria-disabled="true">Building…<\/span>/);
   const m = teamsApi(env({ env: { isAdmin: () => false } })).teamsListHtml();
-  assert.ok(!/build-team/.test(m), 'a member sees none');
+  assert.ok(!/build-team|build-line/.test(m), 'a member sees none');
   const row = load(e, BUILD(), 'agentRowHtml')(AGENTS[1], { build: true });
   assert.match(row, /class="build-team-link" data-build-team="bea" disabled aria-disabled="true">Building…</);
 });
@@ -432,7 +458,7 @@ test('applySnapshot keeps buildingTeamFor in live entries, setLive clears it whe
   // changed (Set up teams): the same key list also carries offerPending and settingUpTeams
   assert.match(slice('function applySnapshot(', 'let wkGoneState'), /'consultedBy', 'buildingTeamFor', 'reviewingTeamFor', 'offerPending', 'settingUpTeams'\]/);
   assert.match(slice('function setLive(', 'function paintStatus'), /next\.consultedBy = null; next\.buildingTeamFor = null; next\.reviewingTeamFor = null;/);
-  assert.match(js, /const bt = e\.target\.closest\('\[data-build-team\]'\);\n\s+if \(bt\) \{ if \(!bt\.disabled\) buildTeamStart\(bt\.dataset\.buildTeam\); return; \}/);
+  assert.match(js, /const bt = e\.target\.closest\('\[data-build-team\]'\);\n\s+if \(bt\) \{ if \(!bt\.disabled && bt\.getAttribute\('aria-disabled'\) !== 'true'\) buildTeamStart\(bt\.dataset\.buildTeam\); return; \}/);
 });
 
 // ── the plan card ──

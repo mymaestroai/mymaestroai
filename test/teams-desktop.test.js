@@ -296,8 +296,9 @@ test('renderTeams: nobody has a team: the empty-state box says how to start', ()
   assert.doesNotMatch(h.slice(0, h.indexOf('</div>')), /data-build-team/, 'the empty-state box has no Build Team button (those sit on the rows)');
   assert.strictEqual((h.slice(0, h.indexOf('</div>')).match(/<button/g) || []).length, 1, 'the box has one button: Set up teams');
   assert.strictEqual((h.match(/No team yet/g) || []).length, 2);
-  assert.strictEqual((h.match(/<button type="button" class="build-team-btn"/g) || []).length, 2, 'one Build Team button per main agent without a team');
-  assert.strictEqual((h.match(/<button/g) || []).length, 6, 'Set up teams, two Build Team buttons and a ⋯ on each of the three rows');
+  // changed (tonight): the Build team control is a small link inside the row's own sub-line, not a separate button
+  assert.strictEqual((h.match(/No team yet · <span role="button"[^>]*class="build-team-link"/g) || []).length, 2, 'one Build team link per main agent without a team, inside its sub-line');
+  assert.strictEqual((h.match(/<button/g) || []).length, 4, 'Set up teams and a ⋯ on each of the three rows (no Build Team buttons)');
 });
 test('renderTeams: names are escaped, the dot follows idle / busy / question, leaders get the Simple subline', () => {
   const w = world({ stored: [['hub-teams-open', JSON.stringify({ lead: true })]] });
@@ -399,6 +400,29 @@ test('Teams (Simple): a direct worker is not deep and carries a Simple-visible R
   assert.match(scout, /teams-sub teams-sub-adv has-simple">Reports to Atlas</);
   assert.match(scout, /<span class="teams-sub teams-sub-simple">Reports to Atlas<\/span>/);
   assert.match(h, /<div class="teams-row rank-worker deep"[^>]*data-agent="writer"[^>]*data-depth="2"/, 'a worker under a leader stays deep');
+});
+test('Teams (Simple): rows carry the three rank classes, and Simple CSS sizes worker < leader < main with readable sublines', () => {
+  const w = world({ stored: [['hub-teams-open', JSON.stringify({ atlas: true })]] });
+  w.ctx.AGENTS = [A('atlas', { category: 'primary' }), A('editor', { reportsTo: 'atlas' }), A('scout', { reportsTo: 'atlas' }), A('writer', { reportsTo: 'editor' })];
+  w.api.renderTeams();
+  const h = w.list.innerHTML;
+  assert.match(h, /<div class="teams-row rank-main"[^>]*data-agent="atlas"/);
+  assert.match(h, /<div class="teams-row rank-leader"[^>]*data-agent="editor"/);
+  assert.match(h, /<div class="teams-row rank-worker"[^>]*data-agent="scout"/);
+  const simple = html.split('\n').filter((l) => /html\.mm-simple #teams-list/.test(l)).join('\n');
+  const px = (re) => { const m = simple.match(re); assert.ok(m, String(re)); return parseFloat(m[1]); };
+  const main = px(/\.teams-row \.name \{ font-size: ([\d.]+)px/);
+  const leader = px(/\.teams-row\.rank-leader \.name \{ font-size: ([\d.]+)px/);
+  const worker = px(/\.teams-row\.rank-worker \.name \{ font-size: ([\d.]+)px/);
+  assert.ok(worker < leader && leader < main, `name sizes ${worker} < ${leader} < ${main}`);
+  assert.match(simple, /\.teams-row\.rank-worker \.name \{[^}]*color: var\(--text-dim\)/);
+  const icon = (r) => px(new RegExp(`\\.teams-row\\.${r} \\.agent-icon \\{ font-size: ([\\d.]+)px`));
+  assert.ok(icon('rank-worker') < icon('rank-leader'));
+  const sub = (r) => px(new RegExp(`\\.teams-row\\.${r} \\.teams-sub \\{ font-size: ([\\d.]+)rem`));
+  assert.ok(sub('rank-worker') < sub('rank-leader') && sub('rank-leader') < sub('rank-main'));
+  // no Teams sub-line below 0.7rem in Simple: every rule setting a .teams-sub size that applies in Simple is >= 0.7rem
+  for (const m of simple.matchAll(/\.teams-sub \{ font-size: ([\d.]+)rem/g)) assert.ok(parseFloat(m[1]) >= 0.7);
+  for (const r of ['rank-main', 'rank-leader', 'rank-worker']) assert.ok(sub(r) >= 0.7, r);
 });
 test('Teams CSS: connector border on the workers wrapper, 8px between leader blocks, three ranks, variables only', () => {
   assert.match(html, /\.teams-kids \{[^}]*border-left: 1px solid var\(--border-strong\)/);
@@ -568,27 +592,30 @@ test('Build line: admins see "No team yet · Build team" on a main agent with no
   m.ctx.AGENTS = [MAIN('solo')];
   assert.strictEqual(m.api.buildLineHtml(m.ctx.AGENTS[0]), '', 'members never see it');
 });
-test('Teams tab: a labelled Build Team button under "No team yet" for admins only; a ⋯ on every row', () => {
+test('Teams tab: a labelled Build team link in the "No team yet" sub-line for admins only; a ⋯ on every row', () => {
   const w = world();
   w.ctx.AGENTS = [MAIN('boss'), MAIN('solo'), A('sam', { reportsTo: 'boss' })];
   w.api.renderTeams();
   const h = w.list.innerHTML;
-  assert.match(h, /No team yet<\/span><button type="button" class="build-team-btn" data-build-team="solo"[^>]*>Build Team<\/button>/);
-  assert.strictEqual((h.match(/build-team-btn"/g) || []).length, 1, 'only the main agent without a team');
+  // changed (tonight): a small link ends the sub-line inside the row; no separate button
+  assert.match(h, /No team yet · <span role="button"[^>]*class="build-team-link" data-build-team="solo"[^>]*>Build team<\/span><\/span>/);
+  assert.strictEqual((h.match(/data-build-team="/g) || []).length, 1, 'only the main agent without a team');
+  assert.doesNotMatch(h, /build-team-btn/, 'no separate button');
   assert.ok((h.match(/class="agent-menu-btn"/g) || []).length >= 2, 'the ⋯ is on the Teams rows');
   const m = world({ member: true });
   m.ctx.AGENTS = [MAIN('solo')];
   m.api.renderTeams();
-  assert.doesNotMatch(m.list.innerHTML, /build-team-btn|agent-menu-btn/);
+  assert.doesNotMatch(m.list.innerHTML, /build-team-btn|build-team-link|agent-menu-btn/);
 });
-test('Building…: any status entry with buildingTeamFor === name disables all three controls and the menu entry', () => {
+test('Building…: any status entry with buildingTeamFor === name disables the Build team link, the line and the menu entry', () => {
   const w = world();
   w.ctx.AGENTS = [MAIN('solo'), MAIN('lead')];
   w.ctx.agentStatus = { lead: { busy: true, buildingTeamFor: 'solo' } };
   assert.match(w.api.buildLineHtml(w.ctx.AGENTS[0]), /class="build-team-link is-building"[^>]*aria-disabled="true"[^>]*>Building…</);
   assert.strictEqual(JSON.stringify(w.api.agentMenuEntries(w.ctx.AGENTS[0]).map((x) => [x.label, !!x.disabled])), '[["Settings",false],["Building…",true]]');
   w.api.renderTeams();
-  assert.match(w.list.innerHTML, /<button type="button" class="build-team-btn is-building"[^>]*aria-disabled="true"[^>]*disabled>Building…<\/button>/);
+  // changed (tonight): the Teams row's control is the in-row link (a span), disabled through aria-disabled
+  assert.match(w.list.innerHTML, /No team yet · <span role="button"[^>]*class="build-team-link is-building"[^>]*aria-disabled="true"[^>]*>Building…<\/span>/);
   assert.match(w.api.buildLineHtml(w.ctx.AGENTS[1]), />Build team</, 'another agent is not building');
   // paintBuildControls retitles live controls when the field arrives or goes
   const el = fakeEl({ tagName: 'SPAN', dataset: { buildTeam: 'solo', idle: 'Build team' }, textContent: 'Build team' });

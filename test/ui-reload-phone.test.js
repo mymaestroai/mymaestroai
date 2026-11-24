@@ -186,5 +186,6 @@ test('it never unregisters the service worker and never touches push or localSto
   assert.strictEqual(log.unregister, 0);
   assert.strictEqual(log.sub, 0);
   assert.deepStrictEqual(log.storageWrites, []);
-  assert.doesNotMatch(pageSrc, /unregister|getSubscription|unsubscribe|localStorage|removeItem|\.clear\(/);
+  // changed (tonight): reloadResume consumes its own sessionStorage stash with sessionStorage.removeItem; that is allowed, any other removeItem is not
+  assert.doesNotMatch(pageSrc.replace(/sessionStorage\.removeItem\(/g, ''), /unregister|getSubscription|unsubscribe|localStorage|removeItem|\.clear\(/);
 });

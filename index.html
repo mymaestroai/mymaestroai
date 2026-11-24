@@ -488,10 +488,15 @@
     .teams-glyph.open { transform: rotate(90deg); }
     .teams-title:focus-visible, .teams-fold:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 4px; }
     /* One leader = one block (.teams-block): its row, then its own workers in .teams-kids, joined by a line down the left. */
-    .teams-leaders { margin-left: 26px; }   /* the step from main agent to leader reads as clearly as the one from leader to worker */
+    /* Indent model (px): main row box starts at 22 (fold 18 + gap 4), its icon at 53, so every deeper row's ICON sits at least --tm-step (18) right of its boss's icon:
+       direct reports at 71 (leaders' content starts at --tm-bar 40 + border 1 + --tm-gap 9 = 50, then box border 1 + padding 8 + dot 6 + gap 6 + 0 -> 71 for a worker, 79 for a leader),
+       a leader's workers at 97+. The line hangs down the left of each group. */
+    html { --tm-step: 18px; --tm-bar: 40px; --tm-gap: 9px; --tm-kid-bar: 17px; --tm-deep-bar: 14px; }
+    .teams-leaders { margin-left: var(--tm-bar); padding-left: var(--tm-gap); border-left: 1px solid var(--border-strong); }
+    .teams-line.rank-leader > .teams-fold.none { display: none; }
     .teams-block.rank-leader { margin-bottom: 8px; }
-    .teams-kids { margin-left: 34px; padding-left: 8px; border-left: 1px solid var(--border-strong); }
-    .teams-block .teams-block > .teams-kids { margin-left: 14px; }
+    .teams-kids { margin-left: var(--tm-kid-bar); padding-left: 8px; border-left: 1px solid var(--border-strong); }
+    .teams-block .teams-block > .teams-kids { margin-left: var(--tm-deep-bar); }
     .teams-row {
       width: 100%; margin-bottom: 4px; padding: 8px 10px 8px 14px; position: relative;
       background: var(--bg-card); border: 1px solid var(--border); color: var(--text-dim); cursor: pointer;
@@ -3375,6 +3380,12 @@
     html.mm-simple #teams-list .teams-row.rank-leader { min-height: 38px; padding: 0 12px; font-size: 14px; }
     html.mm-simple #teams-list .teams-row.rank-leader .name { font-size: 14px; }
     html.mm-simple #teams-list .teams-row.rank-leader .agent-icon { font-size: 15px; width: 22px; }
+    html.mm-simple #teams-list .teams-row.rank-worker { min-height: 30px; padding: 0 12px; font-size: 12.5px; gap: 10px; }   /* Simple ranks: main 15px name / 17px icon / 42px row / .85rem sub; leader 14 / 15 / 38 / .8rem; worker 12.5 / 13 / 30 / .72rem */
+    html.mm-simple #teams-list .teams-row.rank-worker .name { font-size: 12.5px; font-weight: 400; color: var(--text-dim); }
+    html.mm-simple #teams-list .teams-row.rank-worker .agent-icon { font-size: 13px; width: 20px; }
+    html.mm-simple #teams-list .teams-row.rank-main .teams-sub { font-size: 0.85rem; }
+    html.mm-simple #teams-list .teams-row.rank-leader .teams-sub { font-size: 0.8rem; }
+    html.mm-simple #teams-list .teams-row.rank-worker .teams-sub { font-size: 0.72rem; }
     html.mm-simple #teams-list .teams-row { min-height: 42px; margin-bottom: 2px; padding: 0 12px; border: 0; border-radius: 12px; background: none; color: var(--sm-text); font-size: 15px; gap: 12px; }
     html.mm-simple #teams-list .teams-row:hover { background: var(--sm-hover); }
     html.mm-simple #teams-list .teams-row .name { font-size: 15px; font-weight: 400; color: var(--sm-text); }

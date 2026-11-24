@@ -314,7 +314,7 @@ function phone(over = {}) {
   const block = mjs.slice(mjs.indexOf('// ── Set up teams and Undo team setup'), mjs.indexOf('// The Active section at the top of the agent list'));
   assert.ok(block.length > 500);
   const names = Object.keys(env);
-  const api = new Function(...names, block + '\nreturn { teamSetupApply, teamSetupLoad, teamSetupAnswer, teamSetupStart, teamSetupUndo, teamSetupLineHtml, teamSetupEmptyHtml, teamSetupBusy, teamSetupRecent, teamSetupSlotPaint, teamSetupWire, teamSetupUndoAll, teamSetupDismiss, teamSetupToggleList, get state() { return teamSetup; } };')(...names.map((n) => env[n]));
+  const api = new Function(...names, block + '\nreturn { teamSetupApply, teamSetupLoad, teamSetupAnswer, teamSetupStart, teamSetupUndo, teamSetupLineHtml, teamSetupEmptyHtml, teamSetupBusy, teamSetupRecent, teamSetupSlotPaint, teamSetupWire, teamSetupUndoAll, teamSetupDismiss, teamSetupToggleList, teamSetupTight, get state() { return teamSetup; } };')(...names.map((n) => env[n]));
   return { env, api, calls, slot };
 }
 test('phone: the offer card shows in the lead\'s chat for an admin, with the lead\'s display name, the sentence and the three answers', () => {
@@ -529,4 +529,46 @@ test('the line and list styles: one line (nowrap, ellipsis), no hover rules, no 
   assert.match(app, /t\.closest\('\[data-team-undo-dismiss\]'\)\) \{ e\.preventDefault\(\); teamSetupDismiss\(\); return; \}/);
   assert.match(mjs, /t\.closest\('\[data-team-undo-all\]'\)\) \{ e\.preventDefault\(\); teamSetupUndoAll\(\); return; \}/);
   assert.match(app, /t\.closest\('\[data-team-undo-toggle\]'\)\) \{ e\.preventDefault\(\); teamSetupToggleList\(\); \}/);
+});
+
+// Owner, 2026-11-24: the offer card and the Undo line pushed the message box under the keyboard. Tight mode (box focused / short screen): one line.
+test('phone tight mode: the offer card is its one-line title with a tap to open; opening shows the card and the answers still work; leaving tight closes it again', async () => {
+  const w = phone({ routes: { 'POST /api/team-setup/offer': res(200, { offer: 'not_now', lead: LEAD }) } });
+  w.api.teamSetupApply({ offer: 'pending', lead: LEAD, setups: [] });
+  assert.ok(w.slot.innerHTML.includes('Nothing changes in how your agents work'), 'normal: the full card');
+  w.api.teamSetupTight(true);
+  let h = w.slot.innerHTML;
+  assert.ok(h.includes('Lead has a suggestion') && h.includes('data-team-offer-expand'), 'tight: the title and the tap target');
+  assert.ok(!h.includes('data-team-offer="') && !h.includes('Nothing changes'), 'tight: no answers, no sentence');
+  assert.strictEqual(h.split('<div class="question').length - 1, 1, 'one card');
+  // wire the real click handler on the phone's slot and open the card
+  let handler; w.slot.addEventListener = (ev, f) => { handler = f; }; w.api.teamSetupWire();
+  handler({ preventDefault() {}, target: { closest: (q) => (q === '[data-team-offer-expand]' ? {} : null) } });
+  h = w.slot.innerHTML;
+  assert.ok(h.includes('data-team-offer="show"') && h.includes('Nothing changes'), 'opened: the card and its answers');
+  handler({ preventDefault() {}, target: { closest: (q) => (q === '[data-team-offer]' ? { dataset: { teamOffer: 'not_now' } } : null) } });
+  await settle();
+  assert.strictEqual(w.calls.filter((c) => c.method === 'POST' && c.url === '/api/team-setup/offer').length, 1, 'an answer works in tight mode');
+  const w2 = phone();
+  w2.api.teamSetupApply({ offer: 'pending', lead: LEAD, setups: [] });
+  w2.api.teamSetupTight(true); w2.api.teamSetupTight(false);
+  assert.ok(w2.slot.innerHTML.includes('Nothing changes'), 'leaving tight mode brings the full card back');
+});
+test('phone tight mode: the Undo line stays one line and its list stays closed', () => {
+  const w = phone();
+  w.api.teamSetupApply({ offer: 'accepted', lead: LEAD, setups: [{ ...SETUPS[0], at: new Date().toISOString() }, { ...SETUPS[1], at: new Date().toISOString() }] });
+  w.api.teamSetupToggleList();
+  assert.ok(w.slot.innerHTML.includes('team-undo-list'), 'normal: the list is open');
+  w.api.teamSetupTight(true);
+  assert.ok(w.slot.innerHTML.includes('team-undo-line') && !w.slot.innerHTML.includes('team-undo-list'), 'tight: the line only');
+});
+test('phone: #team-offer-slot is capped to a quarter of the visible height (--vvh) and scrolls inside; the msg box has a max-height and scrolls', () => {
+  const rule = mhtml.match(/\.team-offer-slot \{([^}]*)\}/)[1];
+  assert.match(rule, /max-height: calc\(var\(--vvh, 100dvh\) \* 0\.25\)/);
+  assert.match(rule, /overflow-y: auto/);
+  const box = mhtml.match(/#msg-input \{ flex: 1;([^}]*)\}/)[1];
+  assert.match(box, /max-height: min\(140px, calc\(var\(--vvh, 100dvh\) \* 0\.4\)\)/);
+  assert.match(box, /overflow-y: auto/);
+  assert.match(mhtml, /#composer\.composer-tight \.handoff-cards \{[^}]*max-height: calc\(var\(--vvh, 100dvh\) \* 0\.2\); overflow-y: auto/);
+  assert.match(mhtml, /body \{[^}]*height: var\(--vvh, 100dvh\)/);
 });

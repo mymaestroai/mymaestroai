@@ -2583,10 +2583,11 @@ function teamsNodeHtml(node, parent) {
   // a busy (or asking) leader / worker shows its busy text instead of its role
   if (!isMain && d >= 1 && (isBusy(a.name) || (live[a.name] && live[a.name].pendingQuestion))) sub = null;
   const dd = teamsIsWorker(node) ? Math.max(d, 2) : d;   // a direct worker gets the worker indent, as on the desktop
+  const noTeamAdmin = d === 0 && !node.size && isMain && isAdmin();
+  if (noTeamAdmin) sub = null;   // the row's own second line says "No team yet · Build team"
   let html = `<div class="tm-line tm-d${dd}" style="--d:${dd}">` +
     (kids ? `<button type="button" class="tm-fold" data-fold="${esc(a.name)}" aria-expanded="${open}" aria-label="${open ? 'Fold' : 'Unfold'} ${esc(a.display || a.name)}">${open ? '&#x25BE;' : '&#x25B8;'}</button>` : '<span class="tm-fold-sp"></span>') +
-    agentRowHtml(a, sub != null ? { sub } : {}) + '</div>';
-  if (d === 0 && !node.size && window.hubTeams.isMain(a) && isAdmin()) html += `<div class="tm-build" style="--d:${d}">${buildTeamBtnHtml(a.name, 'build-team-btn', 'Build Team')}</div>`;
+    agentRowHtml(a, noTeamAdmin ? { buildSub: true } : sub != null ? { sub } : {}) + '</div>';
   // One leader = one block: its row, then only its own people in a wrapper with the connector line (.tm-kids).
   // Under a main agent the blocks sit in .tm-leaders (no connector).
   if (kids && open) html += `<div class="${d === 0 ? 'tm-leaders' : 'tm-kids'}">${node.children.map(c => teamsNodeHtml(c, node)).join('')}</div>`;
@@ -2632,6 +2633,8 @@ function agentRowHtml(a, opts) {
   // opts.sub: a line of the Teams view ('team of 3 · 1 working') that stands in for the blurb / busy text
   const sub = (done
     ? '<div class="agent-model working">✓ done</div>'
+    : opts && opts.buildSub
+      ? buildSubHtml(a.name)   // Teams: a main agent with no team (admins): "No team yet · Build team" is the row's own second line
     : opts && typeof opts.sub === 'string'
       ? `<div class="agent-model" title="${esc(opts.sub)}">${esc(opts.sub)}</div>`
     : viaWorkers
@@ -2661,9 +2664,13 @@ function buildNoTeam() {
 // A Build Team turn runs for this agent while any live entry (the lead's) says so.
 function buildingTeam(name) { return Object.values(live).some((s) => s && s.buildingTeamFor === name); }
 const buildTeamPending = new Set();   // requests on their way from this page (a second tap does nothing)
-function buildTeamBtnHtml(name, cls, label) {
+function buildTeamBtnHtml(name, cls, label, asSpan) {
   const on = buildingTeam(name) || buildTeamPending.has(name);
+  if (asSpan) return `<span role="button" class="${cls}" data-build-team="${esc(name)}"${on ? ' aria-disabled="true"' : ''}>${on ? 'Building…' : label}</span>`;   // a row is a button: no button inside it
   return `<button type="button" class="${cls}" data-build-team="${esc(name)}"${on ? ' disabled aria-disabled="true"' : ''}>${on ? 'Building…' : label}</button>`;
+}
+function buildSubHtml(name) {
+  return `<div class="agent-model agent-build-sub">No team yet · ${buildTeamBtnHtml(name, 'build-team-link', 'Build team', true)}</div>`;
 }
 function buildLineHtml(name) {
   return `<div class="build-line">No team yet · ${buildTeamBtnHtml(name, 'build-team-link', 'Build team')}</div>`;
@@ -2761,6 +2768,9 @@ function teamSetupEmptyHtml() {
 }
 function teamSetupOfferHtml() {
   const lead = esc(teamSetupLeadDisplay());
+  if (composerTight && !teamOfferOpen) {
+    return `<div class="question team-offer-card team-offer-collapsed" role="group" aria-label="${lead} has a suggestion"><button type="button" class="team-offer-expand" data-team-offer-expand aria-expanded="false"><b>${lead} has a suggestion</b><span class="team-offer-more">Tap to open</span></button></div>`;
+  }
   const btn = (choice, label) => `<button type="button" class="opt" data-team-offer="${choice}"><strong>${label}</strong></button>`;
   return `<div class="question team-offer-card" role="group" aria-label="${lead} has a suggestion"><div class="qh"><b>${lead} has a suggestion</b></div>` +
     `<div class="qt">${lead} can look at how your agents already work together and suggest teams for the Teams tab. Nothing changes in how your agents work unless you approve a team.</div>` +
@@ -2774,6 +2784,17 @@ function teamSetupUndoRows() {
 // ONE compact line above the message box however many setups: "6 teams recorded · Undo ×" (one setup: "<Display> team recorded (3 reporting lines) · Undo ×").
 // With several, Undo (or the line) opens a list below it: one row per team with its own Undo, and Undo all. × hides the line until a newer setup is recorded.
 let teamSetupListOpen = false;
+// Tight mode (the message box has focus, or the visible height is short): the slot above the box shows ONE line. The offer card is its title
+// line until tapped (teamOfferOpen), the Undo line stays one line and its list stays closed. composerTightPaint (below) flips teamSetupTight.
+let composerTight = false;
+let teamOfferOpen = false;
+function teamSetupTight(on) {
+  on = !!on;
+  if (composerTight === on) return;
+  composerTight = on;
+  if (!on) teamOfferOpen = false;
+  teamSetupSlotPaint();
+}
 const TEAM_UNDO_DISMISS_KEY = 'hub-team-undo-dismissed';
 function teamSetupDismissedId() { try { return localStorage.getItem(TEAM_UNDO_DISMISS_KEY) || ''; } catch { return ''; } }
 function teamSetupDismiss() {
@@ -2795,7 +2816,7 @@ function teamSetupUndoHtml() {
     return `<div class="team-undo-line"><span class="team-undo-text">${whoOf(s)} team recorded (${n} reporting line${n === 1 ? '' : 's'})</span> <span class="team-undo-sep">·</span> <button type="button" class="team-undo-btn" data-team-undo-id="${esc(String(s.id))}">Undo</button> ${x}</div>`;
   }
   let html = `<div class="team-undo-line" data-team-undo-toggle><span class="team-undo-text">${rows.length} teams recorded</span> <span class="team-undo-sep">·</span> <button type="button" class="team-undo-btn" data-team-undo-toggle aria-expanded="${teamSetupListOpen ? 'true' : 'false'}">Undo</button> ${x}</div>`;
-  if (teamSetupListOpen) {
+  if (teamSetupListOpen && !composerTight) {
     html += '<div class="team-undo-list" role="group" aria-label="Teams recorded">';
     for (const s of rows) { const n = lines(s); html += `<div class="team-undo-item"><span class="team-undo-text">${whoOf(s)} team (${n} line${n === 1 ? '' : 's'})</span> <button type="button" class="team-undo-btn" data-team-undo-id="${esc(String(s.id))}">Undo</button></div>`; }
     html += '<div class="team-undo-item"><span class="team-undo-text"></span> <button type="button" class="team-undo-btn" data-team-undo-all>Undo all</button></div></div>';
@@ -2908,6 +2929,7 @@ function teamSetupWire() {
   slot.addEventListener('click', (e) => {
     const t = e.target && e.target.closest ? e.target : null;
     if (!t) return;
+    if (t.closest('[data-team-offer-expand]')) { e.preventDefault(); teamOfferOpen = true; teamSetupSlotPaint(); return; }
     const ans = t.closest('[data-team-offer]');
     if (ans) { e.preventDefault(); teamSetupAnswer(ans.dataset.teamOffer); return; }
     if (t.closest('[data-team-undo-dismiss]')) { e.preventDefault(); teamSetupDismiss(); return; }
@@ -3155,7 +3177,7 @@ function applyRoute(state) {
   if (state.screen === 'chat' && state.agent) {
     if (screen === 'chat' && current === state.agent) return;
     show('chat');
-    openChat(state.agent);
+    return openChat(state.agent);
   }
   else show(state.screen === 'activity' ? 'activity' : 'agents');
 }
@@ -12431,6 +12453,30 @@ function callPanelCompactPaint() {
   const inDrawer = !!(p.closest && p.closest('.ucd-drawer'));
   p.classList.toggle('compact', !inDrawer && ((!!i && document.activeElement === i) || h < 600));
 }
+// Tight mode and the visible height. --vvh (on <html>) is the visual viewport's height, so the CSS fits the page, the slot's cap and the box's cap to
+// the visible area when the keyboard is up; tight = the box has focus or the visible height is under 560 px (the class composer-tight on #composer).
+function composerTightPaint() {
+  const c = $('composer'), i = $('msg-input'); if (!c) return;
+  const vv = window.visualViewport;
+  const h = vv && vv.height ? vv.height : window.innerHeight;
+  const root = document.documentElement;
+  if (root && root.style) {
+    if (h > 0 && (!vv || !vv.scale || vv.scale < 1.01)) root.style.setProperty('--vvh', `${Math.round(h)}px`);   // a pinch-zoomed page keeps the CSS fallback
+    else root.style.removeProperty('--vvh');
+  }
+  const tight = (!!i && document.activeElement === i) || h < 560;
+  c.classList.toggle('composer-tight', tight);
+  teamSetupTight(tight);
+  if (i && i.value !== undefined && typeof composerInputFit === 'function') composerInputFit(i);
+}
+// The message box grows with what is typed up to 140 px, or 40% of the visible height when that is less; past it the box scrolls inside itself.
+function composerInputFit(input) {
+  const vv = window.visualViewport;
+  const h = vv && vv.height ? vv.height : window.innerHeight;
+  const cap = Math.max(44, Math.min(140, Math.floor((h || 9999) * 0.4)));
+  input.style.height = 'auto';
+  input.style.height = `${Math.min(input.scrollHeight, cap)}px`;
+}
 function composerPaintAll() { composerTypingPaint(); callPanelCompactPaint(); }
 
 // `fallback` is set when an interjection found the turn already over: the text and its user
@@ -14511,7 +14557,7 @@ function wire() {
   $('menu-activity')?.addEventListener('click', (e) => { e.preventDefault(); navigate('activity'); });   // a #activity link: one history entry
   $('tab-activity')?.addEventListener('click', () => navigate('activity'));   // a page cached before the move still has the tab
   $('chat-back').addEventListener('click', goBackFromChat);
-  $('agents-refresh').addEventListener('click', loadAgents);
+  $('agents-refresh').addEventListener('click', reloadArrowClick);   // ↻ = Reload app (the ⋮ menu's handler), back in the same chat
   $('activity-refresh').addEventListener('click', loadActivityExtras);
 
   document.querySelector('#screen-agents .view-switch')?.addEventListener('click', (e) => {
@@ -14524,7 +14570,7 @@ function wire() {
     if (e.target.closest('[data-team-setup]')) { if (!e.target.closest('[data-team-setup]').disabled) teamSetupStart(); return; }   // empty state: Set up teams
     if (e.target.closest('[data-team-undo]')) { teamSetupUndo({ all: true }); return; }   // bottom line: Undo
     const bt = e.target.closest('[data-build-team]');
-    if (bt) { if (!bt.disabled) buildTeamStart(bt.dataset.buildTeam); return; }   // before the row: a Build button never opens the chat itself
+    if (bt) { if (!bt.disabled && bt.getAttribute('aria-disabled') !== 'true') buildTeamStart(bt.dataset.buildTeam); return; }   // before the row: a Build button never opens the chat itself
     const f = e.target.closest('.tm-fold, [data-tm-sec]');
     if (f) { teamsToggle(f.dataset.fold || '@' + f.dataset.tmSec); renderAgents(); return; }   // Teams view: folds only fold
     const g = e.target.closest('.group-title[data-group]');
@@ -14563,7 +14609,7 @@ function wire() {
   $('files-upload-input').addEventListener('change', (e) => { filesUpload(e.target.files); e.target.value = ''; });
   $('menu-signout').addEventListener('click', signOut);
   $('chat-stop-btn')?.addEventListener('click', stopRemoteTurn);
-  $('chat-resync')?.addEventListener('click', resyncClick);
+  $('chat-resync')?.addEventListener('click', reloadArrowClick);
   document.addEventListener('click', () => $('menu').classList.remove('open'));
   $('menu-clear').addEventListener('click', confirmClear);
   $('menu-copy').addEventListener('click', copyWholeChat);
@@ -14613,7 +14659,7 @@ function wire() {
   $('pacing-yes').addEventListener('click', resetPacing);
 
   const input = $('msg-input');
-  input.addEventListener('input', () => { input.style.height = 'auto'; input.style.height = `${Math.min(input.scrollHeight, 140)}px`; saveDraft(current, input.value); });
+  input.addEventListener('input', () => { composerInputFit(input); saveDraft(current, input.value); });
   input.addEventListener('focus', () => document.body.classList.add('kbd'));
   input.addEventListener('blur', () => document.body.classList.remove('kbd'));
   for (const ev of ['focus', 'input']) input.addEventListener(ev, composerPaintAll);
@@ -14622,6 +14668,12 @@ function wire() {
   if (vvPaint) vvPaint.addEventListener('resize', callPanelCompactPaint);
   window.addEventListener('resize', callPanelCompactPaint);
   composerPaintAll();
+  // Tight mode: the slot above the box shows one line while the box has focus or the visible height is short; --vvh follows the visual viewport.
+  input.addEventListener('focus', composerTightPaint);
+  input.addEventListener('blur', () => { composerTightPaint(); setTimeout(composerTightPaint, 300); });
+  if (vvPaint) vvPaint.addEventListener('resize', composerTightPaint);
+  window.addEventListener('resize', composerTightPaint);
+  composerTightPaint();
   // Chrome's spell-check menu (a tap on an underlined word, Backspace with the menu open) hides the soft keyboard
   // while the box keeps focus, and Android only reopens it on a new focus. So a keyboard that goes away right after
   // a tap on the box or an edit in it, with the box still focused, is brought back by blurring and refocusing the box.
@@ -14833,11 +14885,48 @@ function reloadApp() {
         swUpdate: () => ('serviceWorker' in navigator ? navigator.serviceWorker.getRegistration('/mobile').then(r => r && r.update()) : null),
       }),
       // the draft as it is now, right before the reload (typing goes on while the files are fetched)
-      go: () => { if (current && $('msg-input')) saveDraft(current, $('msg-input').value); location.reload(); },
+      go: () => { if (current && $('msg-input')) saveDraft(current, $('msg-input').value); if (reloadKeepChat) reloadStash(); location.reload(); },
       onBusy: paintReloadBusy,
     });
   }
   return appReloaderInst.reload();
+}
+
+// The ↻ arrows (chat header, agent list header) = Reload app, and the app comes back in the same chat scrolled to the bottom.
+// Right before the reload the open screen and agent go to sessionStorage, with the half-typed message of that agent (its own key);
+// start-up reads both once and clears them. A turn that is running is not touched: openChat re-attaches to it as after any reload.
+const RELOAD_STATE_KEY = 'hub-mobile-reload';
+const RELOAD_DRAFT_KEY = 'hub-mobile-reload-draft:';
+let reloadKeepChat = false;
+function reloadStash() {
+  try {
+    sessionStorage.setItem(RELOAD_STATE_KEY, JSON.stringify({ screen, agent: screen === 'chat' ? current : null }));
+    const box = $('msg-input');
+    if (screen === 'chat' && current && box && box.value.trim()) sessionStorage.setItem(RELOAD_DRAFT_KEY + current, box.value);
+  } catch { /* no session storage: the address still holds the chat and the saved draft stays */ }
+}
+// Start-up: the route to open and the draft to put back (fromArrow false when this is not a reload from an arrow). Only a chat whose agent still exists in the list this user sees is reopened.
+function reloadResume(route) {
+  let st = null, draft = null;
+  try {
+    st = JSON.parse(sessionStorage.getItem(RELOAD_STATE_KEY) || 'null');
+    sessionStorage.removeItem(RELOAD_STATE_KEY);
+    if (st && st.screen === 'chat' && st.agent) { draft = sessionStorage.getItem(RELOAD_DRAFT_KEY + st.agent); sessionStorage.removeItem(RELOAD_DRAFT_KEY + st.agent); }
+  } catch { st = null; }
+  if (st && st.screen === 'chat' && typeof st.agent === 'string' && agentByName(st.agent)) return { route: { screen: 'chat', agent: st.agent }, draft, fromArrow: true };
+  return { route, draft: null, fromArrow: false };
+}
+// After the chat is open again: the saved half-typed message goes back only into an empty box, then the view sits at the bottom.
+function reloadResumeFinish(agent, draft) {
+  const box = $('msg-input');
+  if (draft && box && !box.value) { box.value = draft; saveDraft(agent, draft); composerTypingPaint(); box.style.height = 'auto'; box.style.height = `${Math.min(box.scrollHeight, 140)}px`; }
+  stick = true;
+  scrollChat(true);
+}
+function reloadArrowClick() {
+  for (const id of ['chat-resync', 'agents-refresh']) { const b = $(id); if (b) b.classList.add('spinning'); }
+  reloadKeepChat = true;
+  return Promise.resolve(reloadApp()).finally(() => { reloadKeepChat = false; });
 }
 
 
@@ -16432,10 +16521,12 @@ async function init() {
   if (new URLSearchParams(location.search).get('security') === '1') openSecuritySheet();
   await loadAgents();
   activeJobsSync();
-  const route = routeFromHash();
+  const resumed = reloadResume(routeFromHash());   // the ↻ arrows: back in the same chat
+  const route = resumed.route;
   if (typeof simpleRoute === 'function') simpleRoute(route);   // Simple: open a chat at start instead of the agent list
   window.history.replaceState({ screen: route.screen, agent: route.agent }, '');
-  applyRoute(route);
+  const opened = applyRoute(route);
+  if (resumed.fromArrow) Promise.resolve(opened).then(() => { if (route.screen === 'chat' && route.agent === current) reloadResumeFinish(route.agent, resumed.draft); });
   updateDots();
   connectEvents();
   paintPush();
@@ -16721,7 +16812,8 @@ function simpleAgentRow(a, opts) {
   b.querySelector('small').textContent = opts.blurb ? (a.blurb || '') : '';
   if (typeof opts.sub === 'string') { const sm = b.querySelector('small'); sm.textContent = opts.sub; sm.className = 'sa-sub'; }   // Teams view: its own second line
   if (opts.depth) b.style.setProperty('--d', String(opts.depth));
-  if (opts.depth === 1) b.classList.add('sa-leader');   // Teams view in Simple: a team leader, one step smaller than a main agent
+  if (opts.depth >= 1) b.classList.add('sa-kid');   // the connector line down the left, under the boss's icon
+  if (opts.rank === 'main' || opts.rank === 'leader' || opts.rank === 'worker') b.classList.add('sa-rank-' + opts.rank);   // Teams view in Simple: the same three ranks as the regular Teams view
   b.querySelector('.sa-tick').textContent = opts.blurb && a.name === current ? '✓' : '';
   simpleDotPaint(b.querySelector('.sa-dot'), a.name);
   b.addEventListener('click', (e) => { if (e && e.target && e.target.closest && e.target.closest('.sa-dot.bg-work') && window.HandOffCard) HandOffCard.open(a.name); if (typeof opts.onPick === 'function') opts.onPick(); if (a.name !== current || screen !== 'chat') navigate('chat', a.name); });
@@ -16733,8 +16825,8 @@ function simpleTeamsModel() {
   const t = window.hubTeams.tree(agents, live);
   const rows = [];
   for (const m of t.mains) {
-    rows.push({ a: m.agent, depth: 0, sub: teamsSub(m) });
-    for (const c of m.children) rows.push({ a: c.agent, depth: 1, sub: teamsIsLeader(c) ? 'Team leader' : `Reports to ${m.agent.display || m.agent.name}` });   // every direct report; only the third level is left out
+    rows.push({ a: m.agent, depth: 0, rank: 'main', sub: teamsSub(m) });
+    for (const c of m.children) rows.push({ a: c.agent, depth: 1, rank: teamsIsLeader(c) ? 'leader' : 'worker', sub: teamsIsLeader(c) ? 'Team leader' : `Reports to ${m.agent.display || m.agent.name}` });   // every direct report; only the third level is left out
   }
   const flat = (n) => [n.agent, ...n.children.flatMap(flat)];   // anyone under a shared or Other agent stays reachable
   return { rows, groups: [{ key: '@shared', label: 'Shared specialists', items: t.shared.flatMap(flat) }, { key: '@other', label: 'Other', items: t.other.flatMap(flat) }].filter((g) => g.items.length) };
@@ -16742,7 +16834,7 @@ function simpleTeamsModel() {
 // What the Teams rows show apart from their sublines and dots (those are repainted in place).
 function simpleTeamsSig() {
   const m = simpleTeamsModel();
-  return JSON.stringify([m.rows.map((r) => [r.a.name, r.a.display || '', r.a.icon || '', r.depth]), m.groups.map((g) => [g.key, g.items.map((a) => [a.name, a.display || '', a.icon || ''])]), teamsOpen]);
+  return JSON.stringify([m.rows.map((r) => [r.a.name, r.a.display || '', r.a.icon || '', r.depth, r.rank]), m.groups.map((g) => [g.key, g.items.map((a) => [a.name, a.display || '', a.icon || ''])]), teamsOpen]);
 }
 function simpleSwitch(list) {
   const sw = document.createElement('div'); sw.className = 'sa-switch'; sw.setAttribute('role', 'tablist');
@@ -16753,7 +16845,7 @@ function simpleSwitch(list) {
 }
 function simpleTeamsFill(list, opts) {
   const m = simpleTeamsModel();
-  for (const r of m.rows) list.appendChild(simpleAgentRow(r.a, { ...opts, sub: r.sub, depth: r.depth }));
+  for (const r of m.rows) list.appendChild(simpleAgentRow(r.a, { ...opts, sub: r.sub, depth: r.depth, rank: r.rank }));
   for (const g of m.groups) {
     const open = !!teamsOpen[g.key];
     const fb = document.createElement('button'); fb.type = 'button'; fb.className = 'sa-row sa-fold'; fb.dataset.grp = g.key; fb.setAttribute('aria-expanded', String(open));

@@ -8864,19 +8864,19 @@
       const arrow = foldable
         ? `<button type="button" class="teams-fold${open ? ' open' : ''}" data-fold="${name}" aria-expanded="${open ? 'true' : 'false'}" aria-label="${open ? 'Fold' : 'Open'} ${label}'s team"><span aria-hidden="true">▶</span></button>`
         : '<span class="teams-fold none" aria-hidden="true"></span>';
-      const buildBtn = isMain && !n.children.length && agentCanBuildTeam(a) ? buildTeamCtlHtml(a, 'btn', 'button') : '';   // admins: under "No team yet"
+      const buildBtn = isMain && !n.children.length && agentCanBuildTeam(a) ? buildTeamCtlHtml(a, 'link', 'span') : '';   // admins: the small link ends the "No team yet" sub-line, inside the row
       // A leader's role line has a short form for a narrow sidebar ("Leads 2"), shown instead of the long one when it would be cut.
       const subText = leader && n.children.length && sub
         ? `<span class="sub-wide">${hubEsc(sub)}</span><span class="sub-narrow">${hubEsc(`Leads ${n.size}`)}</span>`
         : hubEsc(sub);
-      const subHtml = (sub ? `<span class="teams-sub teams-sub-adv${leader || direct ? ' has-simple' : ''}">${subText}</span>` : busyText ? `<span class="teams-sub teams-sub-adv busy${leader || direct ? ' has-simple' : ''}">${hubEsc(busyText)}</span>` : '')
+      const subHtml = (sub ? `<span class="teams-sub teams-sub-adv${leader || direct ? ' has-simple' : ''}">${subText}${buildBtn && sub === 'No team yet' ? ' · ' + buildBtn : ''}</span>` : busyText ? `<span class="teams-sub teams-sub-adv busy${leader || direct ? ' has-simple' : ''}">${hubEsc(busyText)}</span>` : '')
         + (bgText ? `<span class="teams-sub teams-bg-line" title="${hubEsc(dotTip)}">${hubEsc(bgText)}</span>` : '')
         + (leader ? '<span class="teams-sub teams-sub-simple">Team leader</span>' : direct ? `<span class="teams-sub teams-sub-simple">Reports to ${hubEsc(parent.agent.display || capName(parent.agent.name))}</span>` : '');
       const dd = worker ? Math.max(n.depth, 2) : n.depth;   // a direct worker gets the worker indent
       return `<div class="teams-line rank-${rank}${deep ? ' deep' : ''}" style="--d:${dd}">${arrow}<div class="teams-row rank-${rank}${deep ? ' deep' : ''}" role="button" tabindex="0" style="--d:${dd}" data-agent="${name}" data-model="${hubEsc(a.model || '')}" data-depth="${n.depth}" title="${hubEsc(a.blurb || a.specialty || '')}">
         <span class="teams-dot ${dot}" title="${hubEsc(dotTip)}">${hubEsc(st.text)}</span>
         <span class="agent-icon">${hubEsc(a.icon || '🤖')}</span>
-        <span class="teams-info"><span class="name"><span class="name-text">${label}</span>${a.lead ? '<span class="lead-badge" title="Lead agent">👑</span>' : ''}</span>${subHtml}${buildBtn}</span>
+        <span class="teams-info"><span class="name"><span class="name-text">${label}</span>${a.lead ? '<span class="lead-badge" title="Lead agent">👑</span>' : ''}</span>${subHtml}${buildBtn && sub !== 'No team yet' ? buildBtn : ''}</span>
         ${agentMenuBtnHtml(a, 'button')}
       </div></div>`;
     }
