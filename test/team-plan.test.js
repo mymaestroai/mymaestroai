@@ -153,7 +153,7 @@ test('the plan card: checklist (one item per change), options, adminOnly for the
   assert.ok(card.checklist.every(c => c.label && typeof c.detail === 'string'));
   assert.match(card.checklist[0].label, /^Create Helper \(helper\): worker under Builder$/);
   assert.match(card.checklist[3].label, /Coder: change model to m-strong/);
-  assert.match(card.question, /^Lead proposes for Studio: A builder and a coder help the studio \(1 new agent, 2 reporting lines, 1 model change, 1 specialist note\)/);
+  assert.equal(card.question, 'Lead proposes 5 changes for Studio. A builder and a coder help the studio. Untick anything you do not want, then choose.');
 });
 
 test('the plan card: the lead by its display name, long text ends at a word with an ellipsis, specialists without a Note label', async (t) => {
@@ -163,9 +163,9 @@ test('the plan card: the lead by its display name, long text ends at a word with
   p.new_agents[0].why = 'reason '.repeat(60).trim();
   let card;
   await m.svc.runPlan(p, { ...ctx(m), ask: async (a) => { card = a; return { choice: 'Not now', checked: [] }; } });
-  assert.match(card.question, /^Lead proposes for Studio: word word/);
-  assert.ok(card.question.length <= 900);
-  assert.match(card.question, /word\u2026 \(1 new agent, /, 'the summary ends at a word, then the counts');
+  assert.match(card.question, /^Lead proposes 5 changes for Studio\. word word/);
+  assert.ok(card.question.length <= TP.SUMMARY_MAX + 120);
+  assert.match(card.question, /word\u2026 Untick anything you do not want, then choose\.$/, 'the summary ends at a word with an ellipsis, then the untick line');
   const d = card.checklist[0].detail;
   assert.match(d, /^cost-effective tier, m-cheap\. reason reason/);
   assert.match(d, /reason\u2026$/, 'cut at a whole word');
@@ -173,7 +173,8 @@ test('the plan card: the lead by its display name, long text ends at a word with
   assert.equal(card.checklist[4].label, 'Critic works with this team as a shared specialist');
   assert.ok(card.checklist.every(c => !/^Note:/.test(c.label)));
   const params = JSON.stringify(TP.PLAN_TOOL);
-  assert.match(params, /at most 600 characters/);
+  assert.doesNotMatch(params, /at most 600 characters/);
+  assert.match(params, /One short sentence for the card \(at most 200 characters\)/);
   assert.match(params, /at most 200 characters/);
 });
 
@@ -471,7 +472,7 @@ test('TEAM-PLAYBOOK.md ships in the lead\'s workspace templates and is listed in
   assert.match(fs.readFileSync(file, 'utf8'), /^# TEAM-PLAYBOOK\.md: building a team for a main agent/);
   const m = JSON.parse(read('templates/workspace-updates.json'))[rel];
   assert.equal(m.current, crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex'), 'current is the template (when it changes, move the old current into previous)');
-  assert.deepEqual(m.previous, ['758602a0772948e76162f5c4ed102e5f13dd3918200cb9ac27707be69534fed3', '59ec7edc513a3435897aa8a8e63cbfc45b732680c99fa6a0be74205b56550f45'], 'the versions shipped with the Teams view and with Set up teams');
+  assert.deepEqual(m.previous, ['758602a0772948e76162f5c4ed102e5f13dd3918200cb9ac27707be69534fed3', '59ec7edc513a3435897aa8a8e63cbfc45b732680c99fa6a0be74205b56550f45', '69d03c6b4614fd13985f0cf67872d9c097b14f5ae8eb3067adb46ad5951d1f22'], 'the versions shipped with the Teams view and with Set up teams');
 });
 
 // ── review round 1 fixes ──
@@ -969,7 +970,7 @@ test('practice notes: the card has one line per note, "Practice note for <Displa
     { id: 'p1', label: 'Practice note for Studio', detail: 'Hand writing jobs over 20 minutes to Writer; short work stays with you.' },
     { id: 'p2', label: 'Practice note for Studio', detail: 'Send every draft to Critic before it goes out.' },
   ]);
-  assert.match(card.question, /2 practice notes/);
+  assert.match(card.question, /^Lead proposes 2 changes for Studio\. /);
   assert.deepEqual(m.calls.records, [], 'nothing is written before Do it');
   let plain = null;
   await m.svc.runPlan(PLAN(), { ...ctx(m), ask: async (a) => { plain = a; return { choice: 'Not now', checked: [] }; } });
@@ -1093,4 +1094,68 @@ test('practice apply passes requireLoaded to the writer and treats its refusal a
     assert.ok(seen.length >= 1 && seen.every(o => o && o.requireLoaded === true), 'requireLoaded passed through the injected writer');
     assert.match(String(out), /do not fit|not fit/i);
   } finally { f.cleanup(); }
+});
+
+// ── the card's summary is one short sentence ──
+const LONG_REVIEW = '**What works** - Builder takes the long jobs.\n- Coder handles code well and quickly.\n* Critic reviews before work goes out and catches the odd mistake.\n1. What does not: the studio keeps long writing jobs itself and never hands them over, which costs hours every week. ' + 'More words follow here without end. '.repeat(12);
+
+test('SUMMARY_MAX is 200 and a long multi-line summary becomes one short line ending at a sentence end', async (t) => {
+  const m = make(); t.after(m.cleanup);
+  assert.equal(TP.SUMMARY_MAX, 200);
+  assert.ok(LONG_REVIEW.length >= 700);
+  const v = await m.svc.validate({ ...PLAN(), summary: LONG_REVIEW }, 'lead');
+  const s = v.plan.summary;
+  assert.ok(s.length <= TP.SUMMARY_MAX, String(s.length));
+  assert.ok(!/[\r\n]/.test(s));
+  assert.ok(!/^[-*•]\s/.test(s) && !/\*\*|__|`/.test(s));
+  assert.match(s, /[.!?]$/);
+  assert.ok(!/…/.test(s));
+  assert.match(s, /^What works - Builder takes the long jobs\./);
+});
+
+test('a summary with no sentence end in range ends at a word boundary with an ellipsis', async (t) => {
+  const m = make(); t.after(m.cleanup);
+  const raw = 'alpha beta gamma '.repeat(40) + 'and so on';
+  const v = await m.svc.validate({ ...PLAN(), summary: raw }, 'lead');
+  const s = v.plan.summary;
+  assert.ok(s.length <= TP.SUMMARY_MAX);
+  assert.match(s, /…$/);
+  assert.ok(raw.startsWith(s.slice(0, -1)));
+  assert.match(s.slice(0, -1), /(alpha|beta|gamma)$/, 'never mid-word');
+  const none = await m.svc.validate({ ...PLAN(), summary: ' - \n ' }, 'lead');
+  assert.match(none.error, /summary/);
+  assert.equal((await m.svc.validate({ ...PLAN(), summary: 'Short one' }, 'lead')).plan.summary, 'Short one');
+});
+
+test('the Build Team card question: who proposes how many changes for whom, one sentence, then the untick line', async (t) => {
+  const m = make(); t.after(m.cleanup);
+  const p = PLAN(); delete p.specialists; p.summary = LONG_REVIEW;
+  let card;
+  await m.svc.runPlan(p, { ...ctx(m), ask: async (a) => { card = a; return { choice: 'Not now', checked: [] }; } });
+  assert.equal(card.checklist.length, 4);
+  assert.match(card.question, /^Lead proposes 4 changes for Studio\. What works - Builder takes the long jobs\. Untick anything you do not want, then choose\.$/);
+  assert.ok(!card.question.includes('...'));
+  assert.ok(card.question.length <= TP.SUMMARY_MAX + 120, String(card.question.length));
+  const one = PLAN(); one.new_agents = []; one.lines = [one.lines[0]]; one.model_changes = []; one.specialists = []; one.summary = 'Put Builder under Studio';
+  await m.svc.runPlan(one, { ...ctx(m), ask: async (a) => { card = a; return { choice: 'Not now', checked: [] }; } });
+  assert.equal(card.question, 'Lead proposes 1 change for Studio. Put Builder under Studio. Untick anything you do not want, then choose.');
+});
+
+test('the Set up teams card and the Optimize (Team review) card keep the same short question', async (t) => {
+  const m = make(); t.after(m.cleanup);
+  const lines = { for: 'studio', summary: LONG_REVIEW, lines: [{ agent: 'builder', reports_to: 'studio', why: 'long work' }, { agent: 'coder', reports_to: 'builder', why: 'code' }] };
+  let card;
+  const ask = async (a) => { card = a; return { choice: 'Not now', checked: [] }; };
+  await m.svc.runPlan(lines, { ...ctx(m, { header: 'Team review' }), ask });
+  assert.equal(card.header, 'Team review');
+  assert.match(card.question, /^Lead proposes 2 changes for Studio\. What works - Builder takes the long jobs\. Untick anything/);
+  assert.ok(!card.question.includes('...') && card.question.length <= TP.SUMMARY_MAX + 120);
+  const four = { ...PLAN(), summary: LONG_REVIEW }; delete four.specialists;
+  await m.svc.runPlan(four, { ...ctx(m, { header: 'Team review' }), ask });
+  assert.match(card.question, /proposes 4 changes for Studio\./);
+  const setup = { state: {}, record: async () => 'su1', check: async () => true };
+  await m.svc.runPlan(lines, { ...ctx(m), setup, ask });
+  assert.equal(card.header, 'Team setup');
+  assert.match(card.question, /^Lead proposes 2 changes for Studio\. What works - Builder takes the long jobs\. Untick anything you do not want, then choose\.$/);
+  assert.ok(!card.question.includes('...') && card.question.length <= TP.SUMMARY_MAX + 120);
 });
