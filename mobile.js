@@ -2570,9 +2570,9 @@ function teamsOpenOf(name) { return workingFilter || !!teamsOpen[name]; }
 function teamsSecKey(key) { return key === 'other' ? '@other' : '@sec:' + key; }
 function teamsSecOpen(key, plain) { return (!plain && workingFilter) || (key === 'other' ? !!teamsOpen['@other'] : !teamsOpen['@sec:' + key]); }
 // The size pill after a boss's name: '12 agents ▾' (a leader: 'leads 4 ▾'). The words sit in .tm-pw so a narrow list can show the number alone.
-function teamsPillInner(r) {
+function teamsPillInner(r, noArrow) {
   const n = r.n, arrow = r.open ? '&#x25BE;' : '&#x25B8;';
-  return (r.word === 'leads' ? '<span class="tm-pw">leads </span>' : '') + n + (r.word === 'agents' ? `<span class="tm-pw"> agent${n === 1 ? '' : 's'}</span>` : '') + ' ' + arrow;
+  return (r.word === 'leads' ? '<span class="tm-pw">leads </span>' : '') + n + (r.word === 'agents' ? `<span class="tm-pw"> agent${n === 1 ? '' : 's'}</span>` : '') + (noArrow ? '' : ' ' + arrow);
 }
 function teamsPillLabel(r) {
   const a = r.node.agent;
@@ -2586,7 +2586,7 @@ function teamsRows(node, openOf) {
   const kids = node.children;
   const note = (n, level, last, parentLast) => { if (n.helpers > 0) rows.push({ note: true, node: n, level, last, parentLast }); };
   const open = kids.length > 0 && openOf(node.agent.name);
-  rows.push({ node, rank: window.hubTeams.isMain(node.agent) ? 'main' : 'spec', level: 0, open, pill: kids.length > 0, word: 'agents', n: node.size, from1: open });
+  rows.push({ node, rank: window.hubTeams.isMain(node.agent) ? 'main' : 'spec', level: 0, open, pill: node.size > 0, word: 'agents', n: node.size, from1: open });
   const below = (n) => n.children.flatMap((x) => [x, ...below(x)]);
   if (open) {
     kids.forEach((c, i) => {
@@ -2617,9 +2617,10 @@ function teamsRowHtml(r, secKey) {
   const a = r.node.agent;
   const lines = teamsLinesHtml(r);
   if (r.note) return `<div class="tm-line tm-nl tm-lv${r.level}">${lines}<div class="tm-note">⚡ ${esc(teamsHelpers(r.node.helpers))} under ${esc(a.display || a.name)}</div></div>`;
-  const pill = r.pill ? `<button type="button" class="tm-pill-btn" data-fold="${esc(a.name)}" aria-expanded="${r.open}" aria-label="${esc(teamsPillLabel(r))}"><span class="tm-pill">${teamsPillInner(r)}</span></button>` : '';
+  // the working filter shows everything open: the size is then plain text (no button, no arrow), like the section headers
+  const pill = r.pill && workingFilter ? `<span class="tm-pill">${teamsPillInner(r, true)}</span>` : r.pill ? `<button type="button" class="tm-pill-btn" data-fold="${esc(a.name)}" aria-expanded="${r.open}" aria-label="${esc(teamsPillLabel(r))}"><span class="tm-pill">${teamsPillInner(r)}</span></button>` : '';
   const build = secKey === 'none' && r.level === 0 && r.rank === 'main' && isAdmin() && !r.node.size;
-  return `<div class="tm-line tm-r-${r.rank} tm-lv${r.level}">${lines}${agentRowHtml(a, { tm: { rank: r.rank, pill, hasPill: r.pill, build } })}</div>`;
+  return `<div class="tm-line tm-r-${r.rank} tm-lv${r.level}">${lines}${agentRowHtml(a, { tm: { rank: r.rank, pill, hasPill: r.pill && !workingFilter, build } })}</div>`;
 }
 function teamsSecHeadHtml(s) {
   const open = teamsSecOpen(s.key), title = `${s.title} · ${s.count}`;
@@ -2629,11 +2630,14 @@ function teamsSecHeadHtml(s) {
 function teamsListHtml() {
   const t = window.hubTeams.tree(agents, live);
   const keep = (n) => workingFilter ? teamsPrune(n) : n;
-  const pruned = { mains: t.mains.map(keep).filter(Boolean), shared: t.shared.map(keep).filter(Boolean), other: t.other.map(keep).filter(Boolean), anyTeam: t.anyTeam };
   // Admins: the lead can propose teams from how the agents already work together (Set up teams); members keep the old text.
   let html = t.anyTeam || workingFilter ? '' : '<div class="tm-empty"><b>Agents can work as teams.</b> Your main agents plan, decide and review. Short or personal tasks they usually do themselves; long work they can hand to team leaders, who run workers. ' + (isAdmin() ? teamSetupEmptyHtml() : 'An admin can set who reports to whom.') + '</div>';
   // Headers with counts (hubTeams.sections: Teams, No team yet, Working alone, Shared specialists, Other; empty ones left out).
-  for (const s of window.hubTeams.sections(pruned, worksAlone)) {
+  // The sections come from the whole tree (a busy boss whose team is idle stays under Teams); the filter then prunes the rows inside each.
+  for (const sec of window.hubTeams.sections(t, worksAlone)) {
+    const rows = workingFilter ? sec.rows.map(keep).filter(Boolean) : sec.rows;
+    if (!rows.length) continue;
+    const s = { ...sec, rows, count: rows.length };
     html += teamsSecHeadHtml(s);
     if (!teamsSecOpen(s.key)) continue;
     for (const n of s.rows) html += teamsRows(n, teamsOpenOf).map((r) => teamsRowHtml(r, s.key)).join('');
@@ -2666,7 +2670,7 @@ function agentRowHtml(a, opts) {
   const tm = opts && opts.tm ? opts.tm : null;
   const tmMain = !!tm && tm.rank === 'main';
   const tmSub = tmMain
-    ? (working ? `<div class="agent-model working${question ? ' question' : ''}">${esc(busyText(a.name))}</div>`
+    ? (working ? `<div class="agent-model working${question ? ' question' : ''}">${esc(busyText(a.name).replace(/^⏳\s*/, ''))}</div>`
       : bgN ? `<div class="agent-bg-line" role="button" title="${esc(bgLabel)}">${esc(AgentDot.bgLine(bgN))}</div>`
       : tm.build ? `<div class="agent-model agent-build-sub agent-build-only">${buildTeamBtnHtml(a.name, 'build-team-link', 'Build team', true)}</div>` : '')
     : '';
@@ -16957,7 +16961,7 @@ function simpleAgentRow(a, opts) {
       const pb = document.createElement('button'); pb.type = 'button'; pb.className = 'tm-pill-btn'; pb.dataset.fold = a.name;
       pb.setAttribute('aria-expanded', String(!!tm.open)); pb.setAttribute('aria-label', teamsPillLabel(tm));
       pb.innerHTML = '<span class="tm-pill">' + teamsPillInner(tm) + '</span>';
-      pb.addEventListener('click', (e) => { if (e && e.stopPropagation) e.stopPropagation(); teamsToggle(a.name); simpleAgentListsRepaint(); });
+      pb.addEventListener('click', (e) => { if (e && e.stopPropagation) e.stopPropagation(); teamsToggle(a.name); simpleAgentListsRepaint(); simpleFoldFocus(a.name); });
       l1.appendChild(pb);
     }
     const lv = document.createElement('span'); lv.className = 'sa-live'; l1.appendChild(lv);
@@ -17000,7 +17004,8 @@ function simpleTeamsFill(list, opts) {
     h.innerHTML = '<span class="sa-sec-t"></span><span class="sa-sec-g" aria-hidden="true"></span>';
     h.querySelector('.sa-sec-t').textContent = s.title + ' · ' + s.count;
     h.querySelector('.sa-sec-g').textContent = s.open ? '▾' : '▸';
-    h.addEventListener('click', () => { teamsToggle(teamsSecKey(s.key)); simpleAgentListsRepaint(); });
+    h.dataset.fold = teamsSecKey(s.key);
+    h.addEventListener('click', () => { teamsToggle(teamsSecKey(s.key)); simpleAgentListsRepaint(); simpleFoldFocus(teamsSecKey(s.key)); });
     list.appendChild(h);
     if (s.open) for (const r of s.rows) list.appendChild(simpleAgentRow(r.a, { ...opts, tm: r.tm, depth: r.tm.level, rank: r.tm.rank, build: r.build }));
   }
@@ -17023,6 +17028,14 @@ function simpleAgentListFill(list, opts) {
   for (const grp of m.groups) {
     const h = document.createElement('div'); h.className = 'sa-head'; h.textContent = grp.label; list.appendChild(h);
     for (const a of grp.items) list.appendChild(simpleAgentRow(a, opts));
+  }
+}
+// After a fold the repaint replaces the control: the one with the same data-fold (agent name or section key) gets the focus back, in the sheet and in the sidebar.
+function simpleFoldFocus(key) {
+  for (const id of ['simple-agents-sheet', 'simple-side']) {
+    const box = document.getElementById(id);
+    const again = box && (id !== 'simple-agents-sheet' || box.open) ? [...box.querySelectorAll('[data-fold]')].find((x) => x.dataset.fold === key) : null;
+    if (again && again.focus) { again.focus({ preventScroll: true }); return; }
   }
 }
 // "More agents" toggled (or the list changed): repaint the open sheet and the sidebar.

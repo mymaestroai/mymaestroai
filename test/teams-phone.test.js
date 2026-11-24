@@ -169,7 +169,7 @@ function simpleRun(view, busy, open, alone, extra) {
       set innerHTML(v) { x._h = v; }, get innerHTML() { return x._h; } };
     return x;
   };
-  e.document = { createElement: mk, querySelectorAll: () => [] };
+  e.document = { createElement: mk, querySelectorAll: () => [], getElementById: () => null };
   e.agents = AGENTS; e.current = 'ann'; e.navigate = () => {}; e.simpleAgentListsRepaint = () => {};
   e.buildTeamStart = () => {}; e.buildTeamPending = new Set(); e.simpleMoreGet = () => false; e.simpleMoreSet = () => {}; e.simpleDotClass = () => '';
   e.simpleDotPaint = (el, n) => { if (el) el.className = 'sa-dot ' + e.simpleDotClass(n); };   // the "Working on" change paints Simple dots through this
@@ -177,7 +177,7 @@ function simpleRun(view, busy, open, alone, extra) {
   e.simpleAgentSheetModel = () => ({ primary: [], groups: [], hasMore: false, open: false });
   Object.assign(e, extra || {});
   const names2 = Object.keys(e);
-  const src = TEAMS() + ['simpleTmLine', 'simpleTmPaint', 'simpleTeamsModel', 'buildingTeam', 'buildTeamBtnHtml', 'buildTeamActivate', 'simpleSwitch', 'simpleTeamsFill', 'simpleAgentRow', 'simpleAgentListFill'].map(fnSource).join('\n');
+  const src = TEAMS() + ['simpleTmLine', 'simpleTmPaint', 'simpleTeamsModel', 'buildingTeam', 'buildTeamBtnHtml', 'buildTeamActivate', 'simpleSwitch', 'simpleTeamsFill', 'simpleFoldFocus', 'simpleAgentRow', 'simpleAgentListFill'].map(fnSource).join('\n');
   const fill = new Function(...names2, src + '\nreturn { simpleAgentListFill, simpleTeamsModel };')(...names2.map((n) => e[n]));
   const box = mk('div');
   fill.simpleAgentListFill(box, { blurb: true });
@@ -739,7 +739,7 @@ test('Simple Teams: the pill is a button with aria-expanded and a label; a tap o
   const ev = pill.click();
   assert.ok(ev.stopped, 'stopPropagation');
   assert.deepStrictEqual(nav, [], 'the chat did not open');
-  assert.match(fnSource('simpleAgentRow'), /pb\.addEventListener\('click', \(e\) => \{ if \(e && e\.stopPropagation\) e\.stopPropagation\(\); teamsToggle\(a\.name\); simpleAgentListsRepaint\(\); \}\);/);
+  assert.match(fnSource('simpleAgentRow'), /pb\.addEventListener\('click', \(e\) => \{ if \(e && e\.stopPropagation\) e\.stopPropagation\(\); teamsToggle\(a\.name\); simpleAgentListsRepaint\(\); simpleFoldFocus\(a\.name\); \}\);/);
   // the row itself opens the chat
   ann.click({ target: { closest: () => null } });
   assert.deepStrictEqual(nav, [['chat', 'ann']]);
@@ -836,4 +836,59 @@ test('Simple sheet: the lead\'s crown shows on its row (the general Simple rule 
   const hide = html.match(/html\.mm-simple \.group-title, html\.mm-simple \.agent-job, html\.mm-simple \.lead-badge,/);
   assert.ok(hide, 'the general hiding rule is still there (All Agents in Simple shows no crown)');
   assert.match(js, /if \(a\.lead\) \{ const k = document\.createElement\('span'\); k\.className = 'lead-badge'; k\.textContent = '👑'/);
+});
+
+// ── review round 1: the working filter keeps the real team; its pill is plain text; Simple gives the focus back; a main agent's words ──
+test('Teams (working filter): a busy boss whose whole team is idle stays under Teams with its pill; the header counts the visible rows', () => {
+  const f = env(); f.workingFilter = true; f.live = { ann: { busy: true } };
+  const h = teamsApi(f).teamsListHtml();
+  assert.deepStrictEqual(names(h), ['ann'], 'only the busy boss; its idle people are cut');
+  assert.match(h, /<span>Teams · 1<\/span>/);
+  assert.doesNotMatch(h, /No team yet/);
+  assert.match(rowOf(h, 'ann'), /<span class="tm-pill">5<span class="tm-pw"> agents<\/span><\/span>/, 'the pill shows the real team size');
+  // a busy worker keeps its boss: the header count is the visible rows (1 of the 2 mains with a team... here only ann)
+  const g = env(); g.workingFilter = true; g.live = { wyn: { busy: true }, bea: { busy: true } };
+  const hg = teamsApi(g).teamsListHtml();
+  assert.match(hg, /<span>Teams · 1<\/span>/);
+  assert.match(hg, /<span>No team yet · 1<\/span>/);
+  assert.deepStrictEqual(names(hg), ['ann', 'lou', 'wyn', 'bea']);
+  // a section with nothing busy is dropped
+  const s = env(); s.workingFilter = true; s.live = { sam: { busy: true } };
+  const hs = teamsApi(s).teamsListHtml();
+  assert.match(hs, /Shared specialists · 1/);
+  assert.doesNotMatch(hs, /Teams · |No team yet/);
+});
+test('Teams (working filter): everything is open, so the size is a plain pill (no button, no data-fold); off, the pill is the fold button again', () => {
+  const f = env(); f.workingFilter = true; f.live = { wyn: { busy: true } };
+  const h = teamsApi(f).teamsListHtml();
+  assert.doesNotMatch(h, /data-fold|tm-pill-btn|type="button"/, 'no fold control anywhere');
+  assert.match(rowOf(h, 'lou'), /<span class="tm-pill">/);
+  assert.match(h, /^<div class="group-title tm-sec-h">/);
+  const o = env(); o.live = { wyn: { busy: true } };
+  assert.match(teamsApi(o).teamsListHtml(), /<button type="button" class="tm-pill-btn" data-fold="ann"/);
+});
+test('Teams: a main agent\'s replying line has no leading hourglass (as on desktop and in Simple)', () => {
+  const e = env(); e.live = { bea: { busy: true } }; e.busyText = (n) => '⏳ ' + n + ' is working';
+  const h = teamsApi(e).teamsListHtml();
+  assert.match(h, />bea is working</);
+  assert.doesNotMatch(h.match(/<div class="agent-model working[^>]*>[^<]*<\/div>/)[0], /⏳/);
+});
+test('Simple: after a fold the repaint replaced the control, so the one with the same data-fold gets the focus back (sheet and sidebar)', () => {
+  const mkBtn = (k) => ({ dataset: { fold: k }, focused: 0, focus() { this.focused++; } });
+  const sheetBtns = [mkBtn('ann'), mkBtn('@sec:teams')], sideBtns = [mkBtn('ann'), mkBtn('@sec:teams')];
+  const els = { 'simple-agents-sheet': { open: false, querySelectorAll: () => sheetBtns }, 'simple-side': { querySelectorAll: () => sideBtns } };
+  const doc = { getElementById: (id) => els[id] || null };
+  const run = (key) => new Function('document', fnSource('simpleFoldFocus') + '\nreturn simpleFoldFocus;')(doc)(key);
+  run('@sec:teams');
+  assert.strictEqual(sideBtns[1].focused, 1, 'a closed sheet is skipped: the sidebar control');
+  assert.strictEqual(sheetBtns[1].focused, 0);
+  els['simple-agents-sheet'].open = true; run('ann');
+  assert.strictEqual(sheetBtns[0].focused, 1);
+  run('nobody'); assert.strictEqual(sheetBtns[0].focused + sideBtns[0].focused, 1, 'no match: nothing');
+  // the pill and the section header call it after the repaint (source pin: the fake DOM of simpleRun repaints nothing)
+  assert.match(fnSource('simpleAgentRow'), /simpleAgentListsRepaint\(\); simpleFoldFocus\(a\.name\);/);
+  assert.match(fnSource('simpleTeamsFill'), /simpleAgentListsRepaint\(\); simpleFoldFocus\(teamsSecKey\(s\.key\)\);/);
+  assert.match(fnSource('simpleTeamsFill'), /h\.dataset\.fold = teamsSecKey\(s\.key\);/);
+  // Simple has no working filter: its Teams model never reads it
+  assert.doesNotMatch(fnSource('simpleTeamsModel') + fnSource('simpleTeamsFill'), /workingFilter/);
 });

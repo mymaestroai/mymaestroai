@@ -1022,3 +1022,24 @@ test('section headers are fold buttons: aria-expanded, arrow, key @sec:<key> (st
   // Other is the other way round: stored = open
   assert.match(w.list.innerHTML, /data-fold="@other" aria-expanded="false"/);
 });
+
+// ---- keyboard: Enter and Space on the row itself open the chat; the pill and the menu inside the row keep their own keys
+test('Teams list keydown: Enter and Space on the row open the chat (Space does not scroll); the pill or the menu button inside does not', () => {
+  const w = world();
+  w.api.setupTabs();
+  const kd = w.list.listeners.keydown;
+  assert.ok(kd, 'the list listens for keydown');
+  const row = { classList: { contains: (c) => c === 'teams-row' }, dataset: { agent: 'ann', model: 'm/ann' }, closest: (s) => (s === '.teams-row' ? row : null) };
+  const ev = (key, target) => ({ key, target, prevented: false, preventDefault() { this.prevented = true; }, stopPropagation() {} });
+  const enter = ev('Enter', row); kd(enter);
+  assert.deepStrictEqual(w.started, [['ann', 'm/ann']]);
+  assert.strictEqual(enter.prevented, false, 'Enter was never prevented');
+  const space = ev(' ', row); kd(space);
+  assert.deepStrictEqual(w.started, [['ann', 'm/ann'], ['ann', 'm/ann']]);
+  assert.strictEqual(space.prevented, true, 'Space does not scroll the list');
+  const pill = { classList: { contains: () => false }, dataset: { fold: 'ann' }, closest: (s) => (s === '.teams-row' ? row : null) };
+  const sp = ev(' ', pill); kd(sp); kd(ev('Enter', pill));
+  assert.strictEqual(w.started.length, 2, 'a key on the pill or the menu button is not the row');
+  assert.strictEqual(sp.prevented, false);
+  kd(ev('a', row)); assert.strictEqual(w.started.length, 2);
+});

@@ -8799,7 +8799,7 @@
       const list = document.getElementById('teams-list');
       if (list) {
         list.addEventListener('click', teamsClick);
-        list.addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target.classList && e.target.classList.contains('teams-row')) teamsClick(e); });
+        list.addEventListener('keydown', (e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target.classList && e.target.classList.contains('teams-row')) { if (e.key === ' ') e.preventDefault(); teamsClick(e); } });   // Enter / Space on the row itself opens the chat (not on the pill or the menu inside it); Space does not scroll the list
       }
       sidebarViewSet(sidebarViewStored(), false);
       sidebarTabsLoad();
