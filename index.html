@@ -490,8 +490,8 @@
     .teams-section { margin-bottom: 6px; }
     .teams-title { display: flex; align-items: center; gap: 6px; height: 30px; padding: 0 4px; font-size: 0.7rem; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.04em; white-space: nowrap; user-select: none; }
     button.teams-title-fold { width: 100%; border: 0; background: none; font-family: inherit; text-align: left; cursor: pointer; }
-    .teams-glyph { flex: none; width: 14px; text-align: center; font-size: 0.5rem; color: var(--text-dim); transition: transform 0.15s; }
-    .teams-glyph.open { transform: rotate(90deg); }
+    .teams-title-fold { justify-content: space-between; }   /* label left, the fold arrow (▾ open / ▸ folded) at the RIGHT: the phone's header (the owner 2026-11-24 07:48: "Everything should alwasy be consistent.") */
+    .teams-glyph { flex: none; margin-left: auto; text-align: right; font-size: inherit; letter-spacing: 0; color: var(--text-dim); }
     .teams-title:focus-visible, .teams-pill-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 4px; }
     /* One leader = one block (.teams-block): its row, then its own workers in .teams-kids. The joining line runs down the left of every group (.teams-block::before) with a short tick to each row (.teams-line::before). */
     html { --tm-line: var(--border-strong); }
@@ -532,7 +532,7 @@
     .teams-pill-btn::before { content: ''; position: absolute; left: 50%; top: 50%; width: max(calc(100% + 6px), var(--tms-fold)); height: var(--tms-fold); transform: translate(-50%, -50%); }   /* the invisible tap area: --tms-fold tall and wide, centred on the small pill, without pushing the name */
     .teams-info:has(.teams-pill-btn) { padding-right: var(--tms-pill-gap); }   /* the name truncates first: always --tms-pill-gap between the pill's right edge and the row's menu button (or the row's right padding), so the pill's tap area never reaches the ⋯ */
     html { --tms-pill-gap: 10px; }
-    .teams-pill { display: flex; align-items: center; height: 18px; padding: 0 6px; border: 1px solid var(--border-strong); border-radius: 9px; font-size: 10.5px; font-weight: 400; color: var(--text-dim); white-space: nowrap; }
+    .teams-pill { display: block; height: 18px; padding: 0 6px; border: 1px solid var(--border-strong); border-radius: 9px; font-size: 10.5px; line-height: 16px; font-weight: 400; color: var(--text-dim); white-space: nowrap; }   /* a block, not a flex box: the space inside ('12 agents ▾') stays; the words are never hidden at any width */
     .teams-pill-btn:hover .teams-pill, .teams-pill-btn:focus-visible .teams-pill { border-color: var(--accent); color: var(--text); }
     .teams-live { flex: 1 1 0; min-width: 0; margin-left: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; font-weight: 400; color: var(--warning); }   /* what a replying member is doing, after its name */
     .teams-sub { font-size: 0.65rem; line-height: 14px; height: 14px; color: var(--text-tertiary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -579,10 +579,42 @@
       /* 160px sidebar: the name gets the room. The pill sits 4px after the name and 4px before the ⋯; the tap box stays 36 tall and as wide as fits: it grows towards the name, never over the ⋯ */
       .teams-row, .teams-row.rank-leader { --tms-pill-gap: 4px; }
       .teams-pill-btn { margin-left: 4px; }
-      .teams-pill { padding: 0 4px; }   /* a two-digit pill ("12 ▸") leaves the name its full width at this size */
+      .teams-pill { padding: 0 4px; }   /* the pill keeps its words ('12 agents ▸') at every width (the owner 2026-11-24 07:48: "Everything should alwasy be consistent."): the NAME gives way (.name-text: ellipsis) */
       .teams-pill-btn::before { left: auto; right: calc(var(--tms-pill-gap) * -1); transform: translateY(-50%); width: max(calc(100% + var(--tms-pill-gap) + 4px), var(--tms-fold)); }
     }
-    /* 'No team yet · Build team' needs about 218px of list on its one line (measured: 216 overflows by 1px, 218 fits). Below that the words before the link go and the link stays whole: the default 240px sidebar (list about 216px) shows just 'Build team'. */
+    /* The pill drops to the row's SECOND line when the name would get fewer than about 6 characters (~40px) beside it (the owner 2026-11-24). Measured: the name gets
+       list - 122px on a main row (list <= 186px: icon hidden) and list - 183px on a leader row next to '24 agents ▸' (the widest pill), so: leader: 183 + 40 = 223 -> 225px.
+       A main row shows its icon from 187px up and its name gets list - 163px there: main: 163 + 40 = 203 -> 205px.
+       #teams-list is the container (list = sidebar - 25px): main rows drop it at a 190px sidebar or narrower, leader rows at 250px or narrower (the default 240px sidebar included).
+       One element, moved by CSS only (no second control): the pill comes FIRST on line 2, then the busy / background words. A main row keeps its 46px; a leader WITH a pill becomes 42px
+       (name 16 + 1 + pill 18 = 35 inside 40; the main's rhythm: 18 + 1 + 18 = 37 inside 44), a leader without a pill stays 34px. */
+    html { --tms-below: 3px; }   /* how far the pill's tap area reaches below the pill: the row's inner padding under line 2 (rounded down), so it never leaves the row */
+    @container (max-width: 205px) {
+      .teams-row.rank-main:has(.teams-pill-btn) .teams-info { flex-direction: row; flex-wrap: wrap; justify-content: flex-start; align-content: center; align-items: center; gap: 0; }
+      .teams-row.rank-main:has(.teams-pill-btn) .teams-info::before { content: ''; order: 1; flex: 0 0 100%; height: 1px; }   /* the line break (and the 1px between the lines) */
+      .teams-row.rank-main:has(.teams-pill-btn) .name { display: contents; }   /* name, crown, pill and the busy words become the info's own items: name and crown stay on line 1, the pill and what follows go to line 2 */
+      .teams-row.rank-main:has(.teams-pill-btn) .name-text { max-width: 100%; }
+      .teams-row.rank-main:has(.teams-pill-btn) .name-text:has(+ .lead-badge) { max-width: calc(100% - 17px); }   /* room for the crown on the same line */
+      .teams-row.rank-main:has(.teams-pill-btn) .teams-pill-btn { order: 2; margin-left: 0; }
+      .teams-row.rank-main:has(.teams-pill-btn) .teams-live { order: 2; margin-left: 6px; }
+      .teams-row.rank-main:has(.teams-pill-btn) .teams-sub { order: 2; flex: 1 1 0; min-width: 0; margin-left: 6px; }   /* busy / background words after the pill; they truncate with an ellipsis, the pill never does */
+      .teams-row.rank-main:has(.teams-pill-btn) .teams-pill-btn::before { left: -3px; right: -3px; top: -1px; bottom: calc(var(--tms-below) * -1); width: auto; height: auto; transform: none; }   /* the tap area stays inside the row: from the bottom of line 1 to the row's inner bottom, a few px wider than the pill */
+    }
+    @container (max-width: 225px) {
+      .teams-row.rank-leader:has(.teams-pill-btn) { height: 42px; --tms-below: 2px; }
+      .teams-line.rank-leader.has-kids::after { top: 30px; }
+      .teams-block.rank-leader:last-child:has(> .teams-line [data-fold])::before { height: 21px; }
+      .teams-row.rank-leader:has(.teams-pill-btn) .teams-info { flex-direction: row; flex-wrap: wrap; justify-content: flex-start; align-content: center; align-items: center; gap: 0; }
+      .teams-row.rank-leader:has(.teams-pill-btn) .teams-info::before { content: ''; order: 1; flex: 0 0 100%; height: 1px; }   /* the line break (and the 1px between the lines) */
+      .teams-row.rank-leader:has(.teams-pill-btn) .name { display: contents; }   /* name, crown, pill and the busy words become the info's own items: name and crown stay on line 1, the pill and what follows go to line 2 */
+      .teams-row.rank-leader:has(.teams-pill-btn) .name-text { max-width: 100%; }
+      .teams-row.rank-leader:has(.teams-pill-btn) .name-text:has(+ .lead-badge) { max-width: calc(100% - 17px); }   /* room for the crown on the same line */
+      .teams-row.rank-leader:has(.teams-pill-btn) .teams-pill-btn { order: 2; margin-left: 0; }
+      .teams-row.rank-leader:has(.teams-pill-btn) .teams-live { order: 2; margin-left: 6px; }
+      .teams-row.rank-leader:has(.teams-pill-btn) .teams-sub { order: 2; flex: 1 1 0; min-width: 0; margin-left: 6px; }   /* busy / background words after the pill; they truncate with an ellipsis, the pill never does */
+      .teams-row.rank-leader:has(.teams-pill-btn) .teams-pill-btn::before { left: -3px; right: -3px; top: -1px; bottom: calc(var(--tms-below) * -1); width: auto; height: auto; transform: none; }   /* the tap area stays inside the row: from the bottom of line 1 to the row's inner bottom, a few px wider than the pill */
+    }
+    /* 'Solo · Build team' is shorter than the old 'No team yet · Build team' (which needed about 218px of list on its one line: 216 overflows by 1px, 218 fits); the thresholds are kept. Below that the words before the link go and the link stays whole: the default 240px sidebar (list about 216px) shows just 'Build team'. */
     @container (max-width: 219px) { .tbs-prefix { display: none; } }
     .teams-bg-line { color: var(--bg-work-ring); }
 
@@ -743,7 +775,7 @@
       opacity: 0; transition: opacity 0.15s;
     }
     .agent-btn:hover .action-btn { opacity: 1; }
-    /* The always-visible row menu button (⋯) replaces the hover gear; "No team yet · Build team" is the line under the model name.
+    /* The always-visible row menu button (⋯) replaces the hover gear; "Solo · Build team" is the line under the model name.
        Long names truncate (the crown stays); the ⋯ sits bottom right so the hover + and S (top right) never cover it. */
     .agent-btn .name { display: flex; align-items: center; min-width: 0; }
     .agent-btn .name-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
@@ -760,7 +792,7 @@
     .agent-build-line { display: block; font-size: 0.65rem; line-height: 1.3; color: var(--text-tertiary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .agent-btn .model { line-height: 1.3; }   /* the build line takes the model line's place on a no-team main: the same line height keeps every All Agents row one height */
     .agent-btn .agent-build-line .build-team-link { white-space: nowrap; }
-    /* All Agents: 'No team yet · Build team' (114px) fits when the list is about 200px or wider; below that only the whole link stays (the rule above for the Teams list hides the words at 219px: this shows them again from 200px, here, where the row has more room than its list) */
+    /* All Agents: 'Solo · Build team' fits when the list is about 200px or wider; below that only the whole link stays (the rule above for the Teams list hides the words at 219px: this shows them again from 200px, here, where the row has more room than its list) */
     #agent-list { container-type: inline-size; }
     @container (min-width: 200px) { #agent-list .agent-build-line .tbs-prefix { display: inline; } }
     .build-team-link { display: inline; padding: 0; border: 0; background: none; font: inherit; color: var(--accent); text-decoration: underline; cursor: pointer; }
@@ -3446,8 +3478,13 @@
     html.mm-simple #teams-list .teams-row.rank-worker .name { height: 16px; font-size: 12.5px; font-weight: 400; line-height: 16px; color: var(--text-dim); }
     html.mm-simple #teams-list .teams-kids .teams-row.rank-worker { padding-left: 6px; }
     html.mm-simple #teams-list .teams-live { font-size: 11px; }
-    html.mm-simple #teams-list .teams-pill { height: 20px; border-color: var(--sm-border); border-radius: 10px; padding: 0 7px; font-size: 12px; color: var(--sm-sec); }
+    html.mm-simple #teams-list .teams-pill { height: 20px; line-height: 18px; border-color: var(--sm-border); border-radius: 10px; padding: 0 7px; font-size: 12px; color: var(--sm-sec); }
     html.mm-simple #teams-list .teams-pill-btn:hover .teams-pill, html.mm-simple #teams-list .teams-pill-btn:focus-visible .teams-pill { border-color: var(--sm-sec); color: var(--sm-text); }
+    @container (max-width: 225px) {   /* Simple's leader with its pill on line 2: the main row's 48px (name 18 + 1 + pill 20 = 39); its sidebar is 260px (list about 236px) or 240px in a narrow window (list about 216px) */
+      html.mm-simple #teams-list .teams-row.rank-leader:has(.teams-pill-btn) { height: 48px; --tms-below: 3px; }
+      html.mm-simple #teams-list .teams-line.rank-leader.has-kids::after { top: 35px; }
+      html.mm-simple #teams-list .teams-block.rank-leader:last-child:has(> .teams-line [data-fold])::before { height: 24px; }
+    }
     html.mm-simple #teams-list .teams-title, html.mm-simple #teams-list .teams-empty { color: var(--sm-muted); border-color: var(--sm-border); }
     html.mm-simple #teams-list .teams-title { height: 32px; font-size: 11px; letter-spacing: 0.06em; padding: 0 2px; }
     html.mm-simple #teams-list .teams-empty strong { color: var(--sm-text); }

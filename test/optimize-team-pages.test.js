@@ -220,5 +220,5 @@ test('TEAM-PLAYBOOK.md has an Optimize team section with the method, and the man
   assert.ok(!/[\u{1F300}-\u{1FAFF}☀-➿]/u.test(sec), 'no emoji in the playbook section');
   const m = JSON.parse(read('templates/workspace-updates.json'))['maestro/TEAM-PLAYBOOK.md'];
   assert.strictEqual(m.current, crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex'));
-  assert.deepStrictEqual(m.previous, ['758602a0772948e76162f5c4ed102e5f13dd3918200cb9ac27707be69534fed3', '59ec7edc513a3435897aa8a8e63cbfc45b732680c99fa6a0be74205b56550f45', '69d03c6b4614fd13985f0cf67872d9c097b14f5ae8eb3067adb46ad5951d1f22', '150e38b4c8c1480f75c8b3bef484e8e324b5fa72a198e10b93a2e5bd4c81629a'], 'the Teams view, Set up teams and Optimize team versions have shipped');
+  assert.deepStrictEqual(m.previous, ['758602a0772948e76162f5c4ed102e5f13dd3918200cb9ac27707be69534fed3', '59ec7edc513a3435897aa8a8e63cbfc45b732680c99fa6a0be74205b56550f45', '69d03c6b4614fd13985f0cf67872d9c097b14f5ae8eb3067adb46ad5951d1f22', '150e38b4c8c1480f75c8b3bef484e8e324b5fa72a198e10b93a2e5bd4c81629a', '9129e4765d0d6f2d156c5c550a022bc0b63b44454bbe0625cc5e0f7603581067'], 'the Teams view, Set up teams and Optimize team versions have shipped');
 });

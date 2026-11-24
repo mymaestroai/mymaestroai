@@ -112,19 +112,19 @@ test('phone: main with three direct reports, and a main with a leader that has t
   assert.match(bb.slice(bb.indexOf('<div class="tm-line tm-r-leader'), at(bb, 'lead1')), /tm-lv1[\s\S]*tm-v tm-x2 tm-from/, 'the leader\'s own line starts under its icon');
   assert.strictEqual((bb.match(/tm-line tm-r-worker tm-lv2/g) || []).length, 2, 'the leader\'s workers are one level deeper');
   for (const n of ['w1', 'w2']) assert.match(bb.slice(bb.lastIndexOf('<div class="tm-line', at(bb, n)), at(bb, n)), /tm-v tm-x2[\s\S]*tm-tk tm-x2/, n + ' hangs on the x2 line');
-  assert.ok(/data-fold="lead1"/.test(bb), 'the leader keeps its own fold control (its pill)');
+  assert.ok(/data-fold="@fold:lead1"/.test(bb), 'the leader keeps its own fold control (its pill; the key is @fold:<name>)');   // changed (the owner's request 2026-11-24 07:30: opening a team shows the whole team): leader opens with the team
 });
 
-// Changed (redesign: sections, size pill, one-line members): the line is now just "Build team" (the "No team yet" section header says the rest), as the second .agent-model line inside a main's agent-meta, only in the No team yet section.
-test('phone: Build team sits in the main agent\'s row (its second line) in the No team yet section, not a button of its own', () => {
+// Changed (redesign: sections, size pill, one-line members): the line is now just "Build team" (the section header says the rest), as the second .agent-model line inside a main's agent-meta, only in the Solo agents section and only for a main not recorded as working alone (changed Owner 2026-11-24 07:32: "Create a classification of solo agents" / "Instead of 'no team'": "No team yet" is now "Solo agents").
+test('phone: Build team sits in the main agent\'s row (its second line) in the Solo agents section, not a button of its own', () => {
   const h = phoneHtml([A('solo', { category: 'primary' }), A('b', { category: 'primary' }), A('c', { reportsTo: 'b' })], {});
   assert.doesNotMatch(h, /tm-build"|build-team-btn/);
   assert.doesNotMatch(h, /tm-build-line|class="build-line/, 'no line of its own below the row');
   assert.match(h, /<button class="agent-row" data-agent="solo">(?:(?!<\/button>)[\s\S])*<div class="tm-l1">(?:(?!<\/button>)[\s\S])*<\/div><div class="agent-model agent-build-sub agent-build-only"><span role="button" tabindex="0" class="build-team-link" data-build-team="solo">Build team<\/span><\/div>(?:(?!<\/button>)[\s\S])*<\/button><\/div>/, 'the link is the second line (after the name line) inside the agent-row of that agent');
   assert.strictEqual((h.match(/data-build-team=/g) || []).length, 1, 'only the main without a team');
-  // it sits under the "No team yet" header, not under Teams
-  const none = h.indexOf('data-tm-sec="none"'), teams = h.indexOf('data-tm-sec="teams"');
-  assert.ok(teams >= 0 && none > teams && h.indexOf('data-build-team="solo"') > none, 'Build team only in the No team yet section');
+  // it sits under the "Solo agents" header, not under Teams
+  const none = h.indexOf('data-tm-sec="solo"'), teams = h.indexOf('data-tm-sec="teams"');
+  assert.ok(teams >= 0 && none > teams && h.indexOf('data-build-team="solo"') > none, 'Build team only in the Solo agents section');
   assert.ok(!/\.tm-build-line/.test(mhtml));
   const lk = body(mhtml, '.agent-build-sub .build-team-link');
   assert.match(lk, /padding: 10px 8px; margin: -10px -8px -10px -2px/, '17px line + 2 x 10px = 37px tap area, margin takes it back so the row keeps its height');
@@ -192,7 +192,7 @@ test('desktop: markup order (direct reports inside .teams-leaders after the main
   const rowSrc = fn('teamsRowHtml');
   assert.match(rowSrc, /buildTeamCtlHtml\(a, 'link', 'span'\)/, 'a small link, not the bordered button');
   assert.ok(rowSrc.indexOf('class="teams-row') < rowSrc.indexOf('<span class="teams-info">') && rowSrc.indexOf('<span class="teams-info">') < rowSrc.indexOf('${l2}'), 'the second line (the Build team link) sits inside the row (teams-info)');
-  assert.ok(rowSrc.indexOf("sec === 'none'") > 0, 'the link is only for the No team yet section');
+  assert.ok(rowSrc.indexOf("sec === 'solo'") > 0 && /agentWorksAlone/.test(rowSrc), 'the link is only for the Solo agents section, and not for a works-alone main');
 });
 // ── page fixes after the design review: Simple indent, leaders' folds, the 160px sidebar ──
 test('Simple desktop: dot / icon / name x of every rank are the spec numbers; every icon starts at or right of its boss\'s name', () => {

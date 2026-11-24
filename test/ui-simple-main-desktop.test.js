@@ -107,7 +107,7 @@ test('the Simple style block: every rule stays under html.mm-simple', () => {
   const body = cssBlock.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^<style[^>]*>/, '');
   const sels = []; let depth = 0, cur = '';
   for (const ch of body) {
-    if (ch === '{') { if (!/^\s*@(media|keyframes)/.test(cur) && depth <= 1) sels.push(cur); depth++; cur = ''; }
+    if (ch === '{') { if (!/^\s*@(media|keyframes|container)/.test(cur) && depth <= 1) sels.push(cur); depth++; cur = ''; }
     else if (ch === '}') { depth--; cur = ''; } else cur += ch;
   }
   const bad = sels.flatMap(s => s.split(',')).map(s => s.trim()).filter(s => s && !s.startsWith('html.mm-simple') && !/^(\d+%|from|to)/.test(s));

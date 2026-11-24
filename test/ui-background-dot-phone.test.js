@@ -89,7 +89,7 @@ test('a free row with background work gets the ring class, the label and the blu
   assert.match(h, /class="dot idle bg-work"/);
   assert.match(h, /title="Free to talk · 2 things running in the background"/);
   assert.match(h, /aria-label="Free to talk · 2 things running in the background"/);
-  assert.match(h, /<div class="agent-bg-line"[^>]*>Free · 2 things in the background<\/div>/);
+  assert.match(h, /<div class="agent-bg-line"[^>]*>Free · 2 in background<\/div>/);
   assert.strictEqual(row(ctx, ctx.agents[0]).includes('class="agent-model"'), false);
 });
 
@@ -108,7 +108,7 @@ test('busy or a question wins over background; background 0 shows no ring and no
   assert.ok(!/bg-work|agent-bg-line/.test(h));
   assert.match(h, /class="dot idle"/);
   ctx.live.hazel = { busy: false, background: 1 };
-  assert.match(row(ctx, ctx.agents[0]), /Free · 1 thing in the background/);
+  assert.match(row(ctx, ctx.agents[0]), /Free · 1 in background/);
   ctx.live.hazel = { busy: false, background: 4 };   // a finished Active-section row keeps its tick and no ring
   assert.ok(!/bg-work/.test(row(ctx, ctx.agents[0], { done: true, active: true })));
 });
@@ -192,7 +192,7 @@ test('track gets isAdmin, stopJob and stopWorker; stopJob posts /api/jobs/cancel
 });
 
 test('the phone service worker is v79 and the panel has its CSS', () => {
-  assert.match(fs.readFileSync(path.join(__dirname, '..', 'sw.js'), 'utf8'), /const VERSION = 'hub-mobile-v90'/);
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'sw.js'), 'utf8'), /const VERSION = 'hub-mobile-v91'/);
   for (const c of ['.wo-ring', '.wo-row', '.wo-kind', '.wo-title', '.wo-sub', '.wo-quiet', '.wo-stop']) assert.ok(html.includes(c), c);
   assert.match(html, /\.wo-quiet \{[^}]*dashed/);
 });

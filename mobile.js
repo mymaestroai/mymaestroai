@@ -2538,7 +2538,15 @@ function teamsViewSet(v) {
 }
 let teamsOpen = loadJson('hub-teams-open', {});   // name -> true: folded nodes that are open ('@other': the Other section, folded at start); '@sec:<key>' -> true: a section header the person folded (sections start open)
 if (!teamsOpen || typeof teamsOpen !== 'object' || Array.isArray(teamsOpen)) teamsOpen = {};
-function teamsToggle(key) { if (teamsOpen[key]) delete teamsOpen[key]; else teamsOpen[key] = true; saveJson('hub-teams-open', teamsOpen); }
+// The Solo agents section replaced 'No team yet' ('@sec:none') and 'Working alone' ('@sec:alone'): it is folded when any of the three keys is stored true;
+// folding stores '@sec:solo'; unfolding deletes all three (an old fold carries over and one tap still opens it).
+const TEAMS_SOLO_KEYS = ['@sec:solo', '@sec:none', '@sec:alone'];
+function teamsSoloFolded() { return TEAMS_SOLO_KEYS.some((k) => teamsOpen[k] === true); }
+function teamsToggle(key) {
+  if (key === '@sec:solo') { if (teamsSoloFolded()) TEAMS_SOLO_KEYS.forEach((k) => { delete teamsOpen[k]; }); else teamsOpen[key] = true; }
+  else if (teamsOpen[key]) delete teamsOpen[key]; else teamsOpen[key] = true;
+  saveJson('hub-teams-open', teamsOpen);
+}
 // The page's switch (and the Simple sheet's) show the chosen view.
 function teamsPaintSwitch() {
   const v = teamsView();
@@ -2563,35 +2571,41 @@ function teamsPrune(node) {
   const children = node.children.map(teamsPrune).filter(Boolean);
   return isBusy(node.agent.name) || node.helpers > 0 || children.length ? { ...node, children } : null;
 }
-// Fold memory of the Teams list ('hub-teams-open', as before). A team / leader is open when its name is stored (folded at start).
+// Fold memory of the Teams list ('hub-teams-open', as before). A main agent's team is open when its name is stored (folded at start).
 // A section header is the other way round: it starts open and is FOLDED when '@sec:<key>' is stored; 'other' keeps its '@other' key
 // and its old meaning (stored = open, folded at start). The working filter shows everything open.
 function teamsOpenOf(name) { return workingFilter || !!teamsOpen[name]; }
+// A leader is the other way round (the owner's request 2026-11-24 07:30: opening a team shows the whole team): its workers are open unless '@fold:<leader>' is stored
+// (true = folded by hand). An old stored <leader name> -> true from the earlier build (meant open) does nothing. The working filter shows everything open.
+function teamsFoldKey(name) { return '@fold:' + name; }
+function teamsFoldedOf(name) { return !workingFilter && teamsOpen[teamsFoldKey(name)] === true; }
 function teamsSecKey(key) { return key === 'other' ? '@other' : '@sec:' + key; }
-function teamsSecOpen(key, plain) { return (!plain && workingFilter) || (key === 'other' ? !!teamsOpen['@other'] : !teamsOpen['@sec:' + key]); }
-// The size pill after a boss's name: '12 agents ▾' (a leader: 'leads 4 ▾'). The words sit in .tm-pw so a narrow list can show the number alone.
+function teamsSecOpen(key, plain) { return (!plain && workingFilter) || (key === 'other' ? !!teamsOpen['@other'] : key === 'solo' ? !teamsSoloFolded() : !teamsOpen['@sec:' + key]); }
+// The size pill after a boss's name, a main agent's and a leader's alike: '12 agents ▾', in EVERY layout (phone, Simple sheet, Simple sidebar) and the same words as the desktop sidebar
+// (the owner 2026-11-24 07:48: "On the mobile I see \"3 agents\". desktop website I see \"3\". Everything should alwasy be consistent."). A short row cuts the NAME, never the pill.
 function teamsPillInner(r, noArrow) {
   const n = r.n, arrow = r.open ? '&#x25BE;' : '&#x25B8;';
-  return (r.word === 'leads' ? '<span class="tm-pw">leads </span>' : '') + n + (r.word === 'agents' ? `<span class="tm-pw"> agent${n === 1 ? '' : 's'}</span>` : '') + (noArrow ? '' : ' ' + arrow);
+  return `${n} agent${n === 1 ? '' : 's'}` + (noArrow ? '' : ' ' + arrow);
 }
 function teamsPillLabel(r) {
   const a = r.node.agent;
-  return `${r.open ? 'Fold' : 'Unfold'} ${a.display || a.name}: ${r.word === 'leads' ? 'leads ' + r.n : r.n + ' agent' + (r.n === 1 ? '' : 's')}`;
+  return `${r.open ? 'Fold' : 'Unfold'} ${a.display || a.name}: ${r.n} agent${r.n === 1 ? '' : 's'}`;
 }
 // One section's node as flat rows in screen order: the boss (level 0, 'main' or 'spec'), then its people (level 1: 'leader' or 'worker'),
-// then an open leader's workers (level 2). A row says what it needs for its joining lines (last, parentLast) and its pill (pill, open, n, word).
-// Pure: the caller decides what is open.
-function teamsRows(node, openOf) {
+// then a leader's workers (level 2; open unless foldedOf says the leader is folded). A row says what it needs for its joining lines (last, parentLast) and its pill (pill, open, n, fold = the data-fold key).
+// Pure: the caller decides what is open (openOf: a main agent's team) and what is folded (foldedOf: a leader's workers).
+function teamsRows(node, openOf, foldedOf) {
+  foldedOf = foldedOf || (() => false);
   const rows = [];
   const kids = node.children;
   const note = (n, level, last, parentLast) => { if (n.helpers > 0) rows.push({ note: true, node: n, level, last, parentLast }); };
   const open = kids.length > 0 && openOf(node.agent.name);
-  rows.push({ node, rank: window.hubTeams.isMain(node.agent) ? 'main' : 'spec', level: 0, open, pill: node.size > 0, word: 'agents', n: node.size, from1: open });
+  rows.push({ node, rank: window.hubTeams.isMain(node.agent) ? 'main' : 'spec', level: 0, open, pill: node.size > 0, n: node.size, fold: node.agent.name, from1: open });
   const below = (n) => n.children.flatMap((x) => [x, ...below(x)]);
   if (open) {
     kids.forEach((c, i) => {
-      const last = i === kids.length - 1, lead = teamsIsLeader(c), cOpen = lead && openOf(c.agent.name);
-      rows.push({ node: c, rank: lead ? 'leader' : 'worker', level: 1, last, open: cOpen, pill: lead, word: 'leads', n: c.size, from2: cOpen });
+      const last = i === kids.length - 1, lead = teamsIsLeader(c), cOpen = lead && !foldedOf(c.agent.name);
+      rows.push({ node: c, rank: lead ? 'leader' : 'worker', level: 1, last, open: cOpen, pill: lead, n: c.size, fold: teamsFoldKey(c.agent.name), from2: cOpen });
       if (cOpen) {
         const ws = below(c);
         ws.forEach((w, j) => { rows.push({ node: w, rank: 'worker', level: 2, last: j === ws.length - 1, parentLast: last }); note(w, 2, j === ws.length - 1, last); });
@@ -2618,8 +2632,8 @@ function teamsRowHtml(r, secKey) {
   const lines = teamsLinesHtml(r);
   if (r.note) return `<div class="tm-line tm-nl tm-lv${r.level}">${lines}<div class="tm-note">⚡ ${esc(teamsHelpers(r.node.helpers))} under ${esc(a.display || a.name)}</div></div>`;
   // the working filter shows everything open: the size is then plain text (no button, no arrow), like the section headers
-  const pill = r.pill && workingFilter ? `<span class="tm-pill">${teamsPillInner(r, true)}</span>` : r.pill ? `<button type="button" class="tm-pill-btn" data-fold="${esc(a.name)}" aria-expanded="${r.open}" aria-label="${esc(teamsPillLabel(r))}"><span class="tm-pill">${teamsPillInner(r)}</span></button>` : '';
-  const build = secKey === 'none' && r.level === 0 && r.rank === 'main' && isAdmin() && !r.node.size;
+  const pill = r.pill && workingFilter ? `<span class="tm-pill">${teamsPillInner(r, true)}</span>` : r.pill ? `<button type="button" class="tm-pill-btn" data-fold="${esc(r.fold)}" aria-expanded="${r.open}" aria-label="${esc(teamsPillLabel(r))}" title="${esc(teamsPillLabel(r))}"><span class="tm-pill">${teamsPillInner(r)}</span></button>` : '';
+  const build = secKey === 'solo' && r.level === 0 && r.rank === 'main' && isAdmin() && !r.node.size && !worksAlone(a.name);   // a works-alone main (same section) has no second line
   return `<div class="tm-line tm-r-${r.rank} tm-lv${r.level}">${lines}${agentRowHtml(a, { tm: { rank: r.rank, pill, hasPill: r.pill && !workingFilter, build } })}</div>`;
 }
 function teamsSecHeadHtml(s) {
@@ -2632,7 +2646,7 @@ function teamsListHtml() {
   const keep = (n) => workingFilter ? teamsPrune(n) : n;
   // Admins: the lead can propose teams from how the agents already work together (Set up teams); members keep the old text.
   let html = t.anyTeam || workingFilter ? '' : '<div class="tm-empty"><b>Agents can work as teams.</b> Your main agents plan, decide and review. Short or personal tasks they usually do themselves; long work they can hand to team leaders, who run workers. ' + (isAdmin() ? teamSetupEmptyHtml() : 'An admin can set who reports to whom.') + '</div>';
-  // Headers with counts (hubTeams.sections: Teams, No team yet, Working alone, Shared specialists, Other; empty ones left out).
+  // Headers with counts (hubTeams.sections: Teams, Solo agents, Shared specialists, Other; empty ones left out).
   // The sections come from the whole tree (a busy boss whose team is idle stays under Teams); the filter then prunes the rows inside each.
   for (const sec of window.hubTeams.sections(t, worksAlone)) {
     const rows = workingFilter ? sec.rows.map(keep).filter(Boolean) : sec.rows;
@@ -2640,7 +2654,7 @@ function teamsListHtml() {
     const s = { ...sec, rows, count: rows.length };
     html += teamsSecHeadHtml(s);
     if (!teamsSecOpen(s.key)) continue;
-    for (const n of s.rows) html += teamsRows(n, teamsOpenOf).map((r) => teamsRowHtml(r, s.key)).join('');
+    for (const n of s.rows) html += teamsRows(n, teamsOpenOf, teamsFoldedOf).map((r) => teamsRowHtml(r, s.key)).join('');
   }
   if (!workingFilter) html += teamSetupLineHtml();   // admins, when setups are recorded: "Team setup: N teams recorded <date> · Undo"
   return html || '<div class="empty">No agent is working right now.</div>';
@@ -2666,7 +2680,7 @@ function agentRowHtml(a, opts) {
   const jobHtml = job ? `<div class="agent-job" title="${esc(activeJobTitle(job))}"><span class="ajl-name">${esc(activeJobLead(job))}</span><span class="ajl-tail">${esc(activeJobTail(job, Date.now()))}</span></div>` : '';
   // opts.sub: a line of the Teams view ('team of 3 · 1 working') that stands in for the blurb / busy text
   // opts.tm: a row of the Teams list ({ rank, pill, hasPill, build }): one line for a member, a second line for a main agent only when
-  // there is something to show (replying, else background work, else Build team in the No team yet section), the pill after the name.
+  // there is something to show (replying, else background work, else Build team in the Solo agents section), the pill after the name.
   const tm = opts && opts.tm ? opts.tm : null;
   const tmMain = !!tm && tm.rank === 'main';
   const tmSub = tmMain
@@ -2677,7 +2691,7 @@ function agentRowHtml(a, opts) {
   const sub = tm ? tmSub : (done
     ? '<div class="agent-model working">✓ done</div>'
     : opts && (opts.buildSub || (opts.build && !worksAlone(a.name) && !working && !bgN))
-      ? buildSubHtml(a.name)   // Teams and All Agents: a main agent with no team (admins): "No team yet · Build team" is the row's own second line (small words, no line of its own)
+      ? buildSubHtml(a.name)   // Teams and All Agents: a main agent with no team (admins): "Solo · Build team" is the row's own second line (small words, no line of its own)
     : opts && typeof opts.sub === 'string'
       ? `<div class="agent-model" title="${esc(opts.sub)}">${esc(opts.sub)}</div>`
     : viaWorkers
@@ -2701,8 +2715,8 @@ function agentRowHtml(a, opts) {
     `</${tag}>`;
 }
 
-// ── Build Team (admins): the "No team yet · Build team" line, the Teams button, the ⋮ menu entry ──
-// The main agents that have nobody under them (what the Teams view calls "No team yet"); only admins see Build controls.
+// ── Build Team (admins): the "Solo · Build team" line, the Teams button, the ⋮ menu entry ──
+// The main agents that have nobody under them (what the Teams view calls "Solo agents"); only admins see Build controls.
 function buildNoTeam() {
   const s = new Set();
   if (!isAdmin() || !window.hubTeams) return s;
@@ -2719,7 +2733,7 @@ function buildTeamBtnHtml(name, cls, label, asSpan) {
 }
 function buildTeamActivate(bt) { if (!bt.disabled && bt.getAttribute('aria-disabled') !== 'true') buildTeamStart(bt.dataset.buildTeam); }
 function buildSubHtml(name) {
-  return `<div class="agent-model agent-build-sub">No team yet · ${buildTeamBtnHtml(name, 'build-team-link', 'Build team', true)}</div>`;
+  return `<div class="agent-model agent-build-sub">Solo · ${buildTeamBtnHtml(name, 'build-team-link', 'Build team', true)}</div>`;
 }
 // ── Optimize team (admins): a main agent WITH a team; the chat ⋮ menu entry, sublabel from the estimate ──
 function reviewingTeam(name) { return Object.values(live).some((s) => s && s.reviewingTeamFor === name); }
@@ -2785,7 +2799,7 @@ async function buildTeamStart(name) {
 // message box in the lead's chat (#team-offer-slot) while offer is 'pending'; it goes when any device answers (the lead's offerPending
 // status changes, or the page loads again). Nothing here has a timeout. "Show the Teams tab" off (settings sidebarTeams) hides the Teams switch.
 let teamSetup = { offer: null, lead: null, setups: [], alone: {} };   // alone: { name: { at, reason } } main agents the lead found need no team (admins only)
-// A main agent with no team that the lead recorded as working alone: its row says 'Works alone' and no longer advertises Build team (the ⋮ menu entry stays).
+// A main agent with no team that the lead recorded as working alone: its Solo agents row has no second line and no Build team link (the ⋮ menu entry stays).
 function worksAlone(name) {
   return isAdmin() && !!(teamSetup.alone && Object.prototype.hasOwnProperty.call(teamSetup.alone, name)) && !!window.hubTeams && !window.hubTeams.hasTeam(name, agents);
 }
@@ -16915,14 +16929,14 @@ function simpleMoreDotPaint(el, m) {
 // member's words after its name. Read from the live status, so a status change repaints it in place (simpleTmPaint).
 function simpleTmLine(name, rank, build) {
   const st = live[name], busy = isBusy(name) || !!(st && st.pendingQuestion);
-  const words = busy ? busyText(name) : '';
+  const words = busy ? busyText(name).replace(/^⏳\s*/, '') : '';   // no hourglass anywhere in Teams (the regular phone list and the desktop strip it too)
   if (rank === 'main') {
     if (busy) return { sub: words, cls: 'busy' };
     const n = bgCountOf(name);
     if (n) return { sub: AgentDot.bgLine(n), cls: 'bg' };
     return build ? { sub: '', build: name } : { sub: '' };
   }
-  return { sub: '', live: words ? '· ' + words.replace(/^⏳\s*/, '') : '' };
+  return { sub: '', live: words ? '· ' + words : '' };
 }
 function simpleTmPaint(b, line) {
   const sm = b.querySelector('small'), lv = b.querySelector('.sa-live');
@@ -16958,10 +16972,10 @@ function simpleAgentRow(a, opts) {
     const l1 = b.querySelector('.sa-l1');
     if (a.lead) { const k = document.createElement('span'); k.className = 'lead-badge'; k.textContent = '👑'; k.title = 'Lead agent'; l1.appendChild(k); }
     if (tm.pill) {   // the size pill: the fold control of this team / leader; a tap on it only folds, never opens the chat
-      const pb = document.createElement('button'); pb.type = 'button'; pb.className = 'tm-pill-btn'; pb.dataset.fold = a.name;
-      pb.setAttribute('aria-expanded', String(!!tm.open)); pb.setAttribute('aria-label', teamsPillLabel(tm));
+      const pb = document.createElement('button'); pb.type = 'button'; pb.className = 'tm-pill-btn'; pb.dataset.fold = tm.fold;
+      pb.setAttribute('aria-expanded', String(!!tm.open)); pb.setAttribute('aria-label', teamsPillLabel(tm)); pb.title = teamsPillLabel(tm);
       pb.innerHTML = '<span class="tm-pill">' + teamsPillInner(tm) + '</span>';
-      pb.addEventListener('click', (e) => { if (e && e.stopPropagation) e.stopPropagation(); teamsToggle(a.name); simpleAgentListsRepaint(); simpleFoldFocus(a.name); });
+      pb.addEventListener('click', (e) => { if (e && e.stopPropagation) e.stopPropagation(); teamsToggle(tm.fold); simpleAgentListsRepaint(); simpleFoldFocus(tm.fold); });
       l1.appendChild(pb);
     }
     const lv = document.createElement('span'); lv.className = 'sa-live'; l1.appendChild(lv);
@@ -16975,13 +16989,13 @@ function simpleAgentRow(a, opts) {
     if (e && e.target && e.target.closest && e.target.closest('.sa-dot.bg-work, .sa-sub-bg') && window.HandOffCard) HandOffCard.open(a.name); if (typeof opts.onPick === 'function') opts.onPick(); if (a.name !== current || screen !== 'chat') navigate('chat', a.name); });
   return b;
 }
-// Simple's Teams view: the same sections and rows as the phone's Teams tab (hubTeams.sections; leaders folded at start, a leader's workers under it).
+// Simple's Teams view: the same sections and rows as the phone's Teams tab (hubTeams.sections; a leader's workers open unless folded by hand).
 function simpleTeamsModel() {
   const t = window.hubTeams.tree(agents, live);
   const secs = window.hubTeams.sections(t, worksAlone).map((sec) => ({
     key: sec.key, title: sec.title, count: sec.count, open: teamsSecOpen(sec.key, true),
-    rows: sec.rows.flatMap((n) => teamsRows(n, (name) => teamsOpen[name] === true)).filter((r) => !r.note)
-      .map((r) => ({ a: r.node.agent, tm: r, build: sec.key === 'none' && r.level === 0 && r.rank === 'main' && isAdmin() && !r.node.size })),   // build: the Build team link (Simple has no ⋯ menu)
+    rows: sec.rows.flatMap((n) => teamsRows(n, (name) => teamsOpen[name] === true, (name) => teamsOpen[teamsFoldKey(name)] === true)).filter((r) => !r.note)
+      .map((r) => ({ a: r.node.agent, tm: r, build: sec.key === 'solo' && r.level === 0 && r.rank === 'main' && isAdmin() && !r.node.size && !worksAlone(r.node.agent.name) })),   // build: the Build team link (Simple has no ⋯ menu)
   }));
   return { secs };
 }

@@ -83,10 +83,11 @@ test('a free row with background work gets bg-work, the label and the blue line'
   assert.ok(p.dot.classList.contains('live-idle'), 'the existing class stays');
   assert.strictEqual(p.dot.attrs.title, 'Free to talk · 2 things running in the background');
   const line = p.info.querySelector('agent-bg-line');
+  // changed (the owner 2026-11-24 07:48: "Everything should alwasy be consistent."): the short line on every list, the full sentence is the tooltip
   assert.ok(line, 'the blue line');
-  assert.strictEqual(line.textContent, 'Free · 2 things in the background');
+  assert.strictEqual(line.textContent, 'Free · 2 in background');
   const one = paint({ hazel: { background: 1 } });
-  assert.strictEqual(one.info.querySelector('agent-bg-line').textContent, 'Free · 1 thing in the background');
+  assert.strictEqual(one.info.querySelector('agent-bg-line').textContent, 'Free · 1 in background');
 });
 
 test('replying or asking wins over background; background 0 shows no ring and no line', () => {

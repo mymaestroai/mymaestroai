@@ -269,7 +269,7 @@
     .tm-note { padding: 2px 14px 8px 62px; font-size: 12px; color: var(--warning); }
     .tm-nl.tm-lv1 .tm-note { padding-left: 94px; }
     .tm-nl.tm-lv2 .tm-note { padding-left: 134px; }
-    /* Section headers (Teams · 5, No team yet · 6, ...): 44px, pinned to the top of the list while it scrolls; a tap folds the section. */
+    /* Section headers (Teams · 5, Solo agents · 6, ...): 44px, pinned to the top of the list while it scrolls; a tap folds the section. */
     .tm-sec-h { position: sticky; top: 0; z-index: 5; height: 44px; min-height: 44px; padding: 0 14px; background: var(--bg-dark); border-bottom: 1px solid var(--border); }
     .tm-sec-h:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
     .tm-empty { margin: 12px 14px 0; padding: 12px 14px; border-radius: 12px; background: var(--bg-card); border: 1px solid var(--border); font-size: 14px; line-height: 1.4; color: var(--text-dim); }
@@ -296,10 +296,10 @@
     .team-undo-x { flex: none; margin-left: auto; min-width: 32px; min-height: 32px; padding: 0; font: inherit; font-size: 18px; line-height: 1; color: var(--text-dim); background: transparent; }
     .team-undo-list { margin-bottom: 4px; padding: 2px 12px; border: 1px solid var(--border); border-radius: 12px; font-size: 13px; color: var(--text-dim); }
     .team-undo-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-    /* Build Team (admins): the "No team yet" line under a row, the Teams button, the menu entry; 44px touch targets */
+    /* Build Team (admins): the "Solo · Build team" line under a row, the Teams button, the menu entry; 44px touch targets */
     .build-team-link { min-height: 44px; padding: 0 8px; margin-left: -8px; font-size: 13px; font-weight: 600; color: var(--accent-hover); text-decoration: underline; background: transparent; }
     .build-team-link:disabled, .build-team-btn:disabled { color: var(--text-tertiary); text-decoration: none; opacity: .7; }
-    /* a main agent with no team: "No team yet · Build team" is the row's own second line (same height as 'team of 3'); the link's tap area grows to 37px by padding that the negative margin takes back */
+    /* a main agent with no team: "Solo · Build team" is the row's own second line (same height as 'team of 3'); the link's tap area grows to 37px by padding that the negative margin takes back */
     .agent-build-sub { overflow: visible; white-space: nowrap; text-overflow: clip; line-height: 1.25; }   /* one line, as tall as every other row (All Agents and Teams); Build team stays whole */
     .agent-build-sub .build-team-link { display: inline-block; min-height: 0; padding: 10px 8px; margin: -10px -8px -10px -2px; font-size: inherit; line-height: inherit; cursor: pointer; }
     .agent-build-sub .build-team-link[aria-disabled="true"] { color: var(--text-tertiary); text-decoration: none; opacity: .7; }
@@ -1229,7 +1229,7 @@ html.mm-simple .sa-row.sa-kid { position: relative; }
 html.mm-simple .sa-row.sa-kid2::after { content: ""; position: absolute; left: var(--sa-bar2); top: 0; bottom: 0; width: 1px; background: var(--border-strong); }   /* a leader's worker: a second line, under the leader's icon centre (sheet: icon 62 + 15 = 77; side list below: 52 + 12 = 64) */
 html.mm-simple .sa-row.sa-kid::before { content: ""; position: absolute; left: var(--sa-bar); top: 0; bottom: 0; width: 1px; background: var(--border-strong); }
 html.mm-simple .sa-row .sa-txt small.sa-sub { display: block; }
-/* Simple: 'No team yet · Build team' on a main agent's own second line (no ⋯ menu here). The link's tap area is 37px tall by padding that the negative margin takes back; the small words may not clip it. */
+/* Simple: 'Solo · Build team' on a main agent's own second line (no ⋯ menu here). The link's tap area is 37px tall by padding that the negative margin takes back; the small words may not clip it. */
 html.mm-simple .sa-txt small.sa-sub.sa-build-sub { overflow: visible; }
 html.mm-simple .sa-sub .build-team-link { display: inline-block; min-height: 0; padding: 10px 8px; margin: -10px -8px -10px -2px; font-size: inherit; font-weight: 600; line-height: inherit; color: var(--accent-hover); text-decoration: underline; background: transparent; cursor: pointer; }
 html.mm-simple .sa-sub .build-team-link[aria-disabled="true"] { color: var(--text-tertiary); text-decoration: none; opacity: .7; }
@@ -1452,7 +1452,7 @@ html.mm-simple .sa-sub-busy { color: var(--warning); }
 html.mm-simple .sa-sub-bg { color: var(--bg-work-ring); cursor: pointer; }
 html.mm-simple .sa-tm .tm-pill-btn { margin-left: 3px; color: var(--text-dim); }
 html.mm-simple .sa-tm .tm-pill { font-size: 12px; border-color: var(--border-strong); }
-html.mm-simple #simple-side .tm-pw { display: none; }   /* the narrow sidebar: the number alone ('12 ▾', '4 ▾'), the names keep their room */
+/* The size pill keeps its words ('12 agents ▾') in the wide sidebar too (the owner 2026-11-24 07:48: "Everything should alwasy be consistent."): the NAME is what gives way (.sa-l1 b: ellipsis). */
 html.mm-simple .sa-sec-h { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; justify-content: space-between; width: 100%; height: 44px; padding: 0 14px 0 18px; background: var(--bg-card); color: var(--text-tertiary); font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; text-align: left; }
 html.mm-simple #simple-side .sa-sec-h { padding-left: 12px; background: var(--bg-dark); }
 html.mm-simple .sa-sec-g { letter-spacing: 0; }

@@ -576,7 +576,7 @@ test('the playbook has the Set up teams section and the update list holds the ne
   assert.equal(/Maestro/.test(pb.split('# Set up teams')[1]), false, 'the lead is not named');
   const upd = JSON.parse(fs.readFileSync(path.join(dir, 'workspace-updates.json'), 'utf8'))['maestro/TEAM-PLAYBOOK.md'];
   assert.equal(upd.current, require('crypto').createHash('sha256').update(pb).digest('hex'));
-  assert.deepEqual(upd.previous, ['758602a0772948e76162f5c4ed102e5f13dd3918200cb9ac27707be69534fed3', '59ec7edc513a3435897aa8a8e63cbfc45b732680c99fa6a0be74205b56550f45', '69d03c6b4614fd13985f0cf67872d9c097b14f5ae8eb3067adb46ad5951d1f22', '150e38b4c8c1480f75c8b3bef484e8e324b5fa72a198e10b93a2e5bd4c81629a']);   // the Teams view version, then the Set up teams version
+  assert.deepEqual(upd.previous, ['758602a0772948e76162f5c4ed102e5f13dd3918200cb9ac27707be69534fed3', '59ec7edc513a3435897aa8a8e63cbfc45b732680c99fa6a0be74205b56550f45', '69d03c6b4614fd13985f0cf67872d9c097b14f5ae8eb3067adb46ad5951d1f22', '150e38b4c8c1480f75c8b3bef484e8e324b5fa72a198e10b93a2e5bd4c81629a', '9129e4765d0d6f2d156c5c550a022bc0b63b44454bbe0625cc5e0f7603581067']);   // the Teams view version, then the Set up teams version
 });
 
 // ── review fixes ──

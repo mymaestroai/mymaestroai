@@ -33,7 +33,7 @@ test('index.html: ONE Simple style block, after the existing styles, every rule 
   const sels = [];
   let depth = 0, cur = '';
   for (const ch of body) {
-    if (ch === '{') { if (!/^\s*@(media|keyframes)/.test(cur) && depth <= 1) sels.push(cur); depth++; cur = ''; }
+    if (ch === '{') { if (!/^\s*@(media|keyframes|container)/.test(cur) && depth <= 1) sels.push(cur); depth++; cur = ''; }
     else if (ch === '}') { depth--; cur = ''; }
     else cur += ch;
   }

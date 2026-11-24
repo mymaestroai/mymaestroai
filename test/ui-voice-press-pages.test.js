@@ -655,8 +655,8 @@ test('R1.6 attaching a press button lets go of handles whose button is no longer
   assert.deepStrictEqual(p1.listeners.pointerdown, []);
 });
 
-test('the phone service worker is bumped for the new mobile.html and mobile.js (hub-mobile-v90)', () => {
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v90'/);
+test('the phone service worker is bumped for the new mobile.html and mobile.js (hub-mobile-v91)', () => {
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v91'/);
 });
 
 // ═══ review round 3 ═══

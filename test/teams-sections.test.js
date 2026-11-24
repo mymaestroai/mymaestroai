@@ -105,16 +105,16 @@ function world({ stored, storageThrows, simple, member } = {}) {
     selectedGroupAgents: [], selectedSummarizer: null,
   };
   const src = [hubEscLine, "const SIDEBAR_VIEW_KEY = 'hub-sidebar-view'; let sidebarViewTouched = false; let sidebarTabsCfg = {};",
-    "const TEAMS_OPEN_KEY = 'hub-teams-open'; let teamsLastHtml = null; let teamsTimer = 0; let teamsOpenMem = null;",
+    "const TEAMS_OPEN_KEY = 'hub-teams-open'; let teamsLastHtml = null; let teamsTimer = 0; let teamsOpenMem = null; const TEAMS_SOLO_KEYS = ['@sec:solo', '@sec:none', '@sec:alone'];",
     fnSrc('capName'), fnSrc('sidebarViewStored'), fnSrc('sidebarViewOk'), fnSrc('sidebarViewSet'), fnSrc('sidebarTabsApply'),
-    'async ' + fnSrc('sidebarTabsLoad'), fnSrc('setupTabs'), fnSrc('teamsOpenGet'), fnSrc('teamsOpenToggle'), fnSrc('teamsClick'),
+    'async ' + fnSrc('sidebarTabsLoad'), fnSrc('setupTabs'), fnSrc('teamsOpenGet'), fnSrc('teamsSecFolded'), fnSrc('teamsOpenToggle'), fnSrc('teamsClick'),
     fnSrc('agentLiveState'), fnSrc('bgCountOf'), "const buildTeamPending = new Set(); let agentMenuEl = null, agentMenuOpener = null, agentMenuOff = null;",
     "const optimizeTeamPending = new Set(); const optimizeEstimates = {};",
     fnSrc('teamBuilding'), fnSrc('agentCanBuildTeam'), fnSrc('teamReviewing'), fnSrc('agentCanOptimizeTeam'), fnSrc('optimizeSubText'), fnSrc('agentMenuEntries'),
     'async ' + fnSrc('optimizeTeamStart'), fnSrc('optimizeEstimateLoad'), fnSrc('agentMenuBtnHtml'), fnSrc('buildTeamCtlHtml'), fnSrc('buildLineHtml'),
     fnSrc('paintBuildControls'), 'async ' + fnSrc('buildTeamStart'), fnSrc('agentMenuClose'), fnSrc('agentMenuOpenAt'), fnSrc('agentMenuToggle'), fnSrc('agentButton'),
     fnSrc('questionChecklistOf'), fnSrc('questionChecklistHtml'), fnSrc('questionCheckedIds'), fnSrc('askResponseBody'),
-    fnSrc('teamsPillHtml'), fnSrc('teamsRowHtml'), fnSrc('teamsBlockHtml'), fnSrc('teamsSubtreeHtml'), fnSrc('renderTeams'), fnSrc('teamsRepaintSoon'),
+    fnSrc('teamsPillText'), fnSrc('teamsPillLabel'), fnSrc('teamsPillHtml'), fnSrc('teamsRowHtml'), fnSrc('teamsBlockHtml'), fnSrc('teamsSubtreeHtml'), fnSrc('renderTeams'), fnSrc('teamsRepaintSoon'),
     // Set up teams (renderTeams, setupTabs and teamsClick call these): the harness carries them so the pinned Teams tests keep running as before.
     "let teamSetup = { offer: null, lead: null, setups: [], alone: {} }; let teamSetupStarting = false; const teamSetupRecent = new Set(); let teamSetupLoadTimer = 0; const chats = {};",
     fnSrc('agentWorksAlone'), fnSrc('teamSetupLeadDisplay'), fnSrc('teamSetupBusy'), fnSrc('teamSetupLines'), fnSrc('teamSetupDate'), fnSrc('teamSetupLineHtml'), fnSrc('teamSetupApply'),
@@ -131,8 +131,8 @@ const active = (w) => w.tabs.filter((t) => t.classList.contains('active')).map((
 
 const MAIN = (n, over) => A(n, Object.assign({ category: 'primary' }, over));
 const rowOf = (h, n) => { const i = h.indexOf(`data-agent="${n}"`); return i < 0 ? '' : h.slice(i, h.indexOf('</div></div>', i)); };
-const titles = (h) => [...h.matchAll(/class="teams-title[^"]*"[^>]*>(?:<span[^>]*>[^<]*<\/span>)?([^<]*)</g)].map((m) => m[1]);
-// teams, no team yet, working alone, shared specialists and one other, in the made-up install's spirit
+const titles = (h) => [...h.matchAll(/class="teams-title[^"]*"[^>]*><span>([^<]*)<\/span>/g)].map((m) => m[1]);   // changed (the owner 2026-11-24 07:48): the label is its own span at the left, the arrow at the right
+// teams, solo agents (no team yet, or recorded as working alone), shared specialists and one other, in the made-up install's spirit
 function company() {
   return [
     MAIN('owner', { lead: true, icon: '🎼' }),
@@ -145,45 +145,48 @@ function company() {
 const alone = (w, names) => vm.runInContext('teamSetup = { offer: null, lead: null, setups: [], alone: ' + JSON.stringify(Object.fromEntries(names.map((n) => [n, { at: 'x' }]))) + ' }', w.ctx);
 
 // ---- hubTeams.sections (the shared module; the desktop and the phone list both draw from it)
-test('hubTeams.sections: Teams, No team yet, Working alone, Shared specialists, Other, in that order, empty ones left out, counts = rows', () => {
+// Owner 2026-11-24 07:32: "Create a classification of solo agents" / "Instead of 'no team'": ONE section 'Solo agents' (key 'solo') holds every main agent with no team, decided (works alone) or not; 'No team yet' and 'Working alone' are gone.
+test('hubTeams.sections: Teams, Solo agents, Shared specialists, Other, in that order, empty ones left out, counts = rows', () => {
   const t = hubTeams.tree(company(), {});
   const s = hubTeams.sections(t, (n) => n === 'cedar');
-  assert.deepStrictEqual(s.map((x) => [x.key, x.title, x.count]), [['teams', 'Teams', 2], ['none', 'No team yet', 3], ['alone', 'Working alone', 1], ['shared', 'Shared specialists', 2], ['other', 'Other', 1]]);
+  assert.deepStrictEqual(s.map((x) => [x.key, x.title, x.count]), [['teams', 'Teams', 2], ['solo', 'Solo agents', 4], ['shared', 'Shared specialists', 2], ['other', 'Other', 1]]);
   assert.strictEqual(s[1].rows[0].agent.name, 'owner', 'the lead stays first inside its section');
+  assert.deepStrictEqual(s[1].rows.map((r) => r.agent.name), ['owner', 'cedar', 'maple', 'sam'], 'works-alone and undecided together, in tree order (the lead first, then by shown name)');
+  assert.strictEqual(hubTeams.sections(t).find((x) => x.key === 'solo').count, 4, 'with no isAlone every main without a team is there');
   const none = hubTeams.sections(hubTeams.tree([MAIN('a'), MAIN('b')], {}), () => false);
-  assert.deepStrictEqual(none.map((x) => x.key), ['none'], 'empty sections are not returned');
+  assert.deepStrictEqual(none.map((x) => x.key), ['solo'], 'empty sections are not returned');
   assert.deepStrictEqual(hubTeams.sections(hubTeams.tree([], {})), []);
 });
 
 // ---- headers with counts
-test('renderTeams: five headers with counts, each once, in order; no "Your agents"', () => {
+test('renderTeams: four headers with counts, each once, in order; no "Your agents"', () => {
   const w = world();
   w.ctx.AGENTS = company();
   alone(w, ['cedar']);
   w.api.renderTeams();
   const h = w.list.innerHTML;
-  assert.deepStrictEqual(titles(h), ['Teams · 2', 'No team yet · 3', 'Working alone · 1', 'Shared specialists · 2', 'Other · 1']);
-  assert.doesNotMatch(h, /Your agents/);
-  assert.match(h, /<div class="teams-section" data-section="alone"><button type="button" class="teams-title teams-title-fold" data-fold="@sec:alone" aria-expanded="true"><span class="teams-glyph open" aria-hidden="true">▶<\/span>Working alone · 1<\/button>/);
-  for (const [n, key] of [['harbor', 'teams'], ['sam', 'none'], ['cedar', 'alone'], ['scout', 'shared']]) {
+  assert.deepStrictEqual(titles(h), ['Teams · 2', 'Solo agents · 4', 'Shared specialists · 2', 'Other · 1']);
+  assert.doesNotMatch(h, /Your agents|No team yet|Working alone/);
+  assert.match(h, /<div class="teams-section" data-section="solo"><button type="button" class="teams-title teams-title-fold" data-fold="@sec:solo" aria-expanded="true"><span>Solo agents · 4<\/span><span class="teams-glyph" aria-hidden="true">&#x25BE;<\/span><\/button>/);
+  for (const [n, key] of [['harbor', 'teams'], ['sam', 'solo'], ['cedar', 'solo'], ['scout', 'shared']]) {
     const sec = h.indexOf(`data-section="${key}"`), end = h.indexOf('<div class="teams-section"', sec + 10);
     const at = h.indexOf(`data-agent="${n}"`);
     assert.ok(at > sec && (end < 0 || at < end), `${n} sits under its own header`);
   }
 });
-test('renderTeams: an empty section has no header (no alone agents, no specialists, no Other)', () => {
+test('renderTeams: an empty section has no header (no specialists, no Other)', () => {
   const w = world();
   w.ctx.AGENTS = [MAIN('harbor'), A('tide', { reportsTo: 'harbor' }), MAIN('sam')];
   w.api.renderTeams();
-  assert.deepStrictEqual(titles(w.list.innerHTML), ['Teams · 1', 'No team yet · 1']);
-  assert.doesNotMatch(w.list.innerHTML, /Working alone|Shared specialists|Other/);
+  assert.deepStrictEqual(titles(w.list.innerHTML), ['Teams · 1', 'Solo agents · 1']);
+  assert.doesNotMatch(w.list.innerHTML, /No team yet|Working alone|Shared specialists|Other/);
 });
 test('renderTeams: the lead is first in its own section, with its crown', () => {
   const w = world();
   w.ctx.AGENTS = company();
   w.api.renderTeams();
   const h = w.list.innerHTML;
-  const none = h.slice(h.indexOf('data-section="none"'));
+  const none = h.slice(h.indexOf('data-section="solo"'));
   assert.ok(none.indexOf('data-agent="owner"') < none.indexOf('data-agent="cedar"') && none.indexOf('data-agent="owner"') < none.indexOf('data-agent="maple"'));
   assert.match(rowOf(h, 'owner'), /<span class="lead-badge" title="Lead agent">👑<\/span>/);
   assert.doesNotMatch(html, /lead-badge \{ display: none/, 'the crown shows in Simple too (the mock-up has it)');
@@ -193,10 +196,10 @@ test('renderTeams: Other keeps its fold on the header ("Other · N", stored = op
   w.ctx.AGENTS = company();
   w.api.renderTeams();
   const h = w.list.innerHTML;
-  assert.match(h, /<button type="button" class="teams-title teams-title-fold" data-fold="@other" aria-expanded="false"><span class="teams-glyph" aria-hidden="true">▶<\/span>Other · 1<\/button>/);
+  assert.match(h, /<button type="button" class="teams-title teams-title-fold" data-fold="@other" aria-expanded="false"><span>Other · 1<\/span><span class="teams-glyph" aria-hidden="true">&#x25B8;<\/span><\/button>/);
   assert.doesNotMatch(h, /data-agent="lab"/);
   assert.strictEqual((h.match(/class="teams-title"/g) || []).length, 0, 'no header is plain text any more (changed: design review, they fold like the phone\'s)');
-  assert.deepStrictEqual([...h.matchAll(/data-fold="(@sec:[a-z]+)" aria-expanded="true"/g)].map((m) => m[1]), ['@sec:teams', '@sec:none', '@sec:shared'], 'the sections start open (this company has no Working alone entry)');
+  assert.deepStrictEqual([...h.matchAll(/data-fold="(@sec:[a-z]+)" aria-expanded="true"/g)].map((m) => m[1]), ['@sec:teams', '@sec:solo', '@sec:shared'], 'the sections start open (changed 2026-11-24 07:32, "Solo agents" replaces No team yet and Working alone)');
   w.api.teamsClick({ stopPropagation() {}, target: { closest: (s) => (s === '[data-fold]' ? { dataset: { fold: '@other' } } : null) } });
   assert.match(w.list.innerHTML, /data-agent="lab"/);
 });
@@ -208,7 +211,7 @@ test('pill: a button after the boss\'s name (and crown) with aria-expanded and a
   w.api.renderTeams();
   const h = w.list.innerHTML;
   const r = rowOf(h, 'harbor');
-  assert.match(r, /<span class="name-text">Harbor<\/span><button type="button" class="teams-pill-btn" data-fold="harbor" aria-expanded="false" aria-label="2 agents, show team"[^>]*><span class="teams-pill">2&#x2009;<span aria-hidden="true">▸<\/span><\/span><\/button><\/span>/);
+  assert.match(r, /<span class="name-text">Harbor<\/span><button type="button" class="teams-pill-btn" data-fold="harbor" aria-expanded="false" aria-label="Unfold [^"]*: 2 agents"[^>]*><span class="teams-pill">2 agents &#x25B8;<\/span><\/button><\/span>/);
   assert.strictEqual((h.match(/class="teams-pill-btn/g) || []).length, 2, 'one pill per team (folded: no leader rows drawn)');
   assert.doesNotMatch(h, /teams-fold/);
   const l = world();
@@ -228,7 +231,7 @@ test('pill: the native button click folds, keeps the fold memory and does NOT op
   assert.deepStrictEqual(w.started, [], 'the chat did not open');
   assert.deepStrictEqual(JSON.parse(w.store.get('hub-teams-open')), { harbor: true });
   const h = w.list.innerHTML;
-  assert.match(h, /data-fold="harbor" aria-expanded="true" aria-label="2 agents, hide team"/);
+  assert.match(h, /data-fold="harbor" aria-expanded="true" aria-label="Fold [^"]*: 2 agents"/);
   assert.match(h, /data-agent="tide"/, 'the team shows');
   w.api.teamsClick({ stopPropagation() {}, target: { closest: (s) => (s === '.teams-row' ? row : null) } });   // elsewhere on the row
   assert.deepStrictEqual(w.started, [['harbor', 'm/harbor']]);
@@ -246,17 +249,18 @@ test('pill: the tap area is >= 36 x 36 (CSS), the pill looks small, never shrink
   assert.match(html, /\.teams-row \.name-text \{ flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; \}/);
   assert.match(html, /\.teams-title:focus-visible, \.teams-pill-btn:focus-visible \{ outline: 2px solid var\(--accent\)/);
 });
-test('pill: a leader folds its workers with its own pill; workers start folded and follow hub-teams-open', () => {
+test('pill: a leader folds its workers with its own pill; workers start open and follow @fold:<leader> in hub-teams-open', () => {
   const w = world({ stored: [['hub-teams-open', JSON.stringify({ studio: true })]] });
   w.ctx.AGENTS = company();
   w.api.renderTeams();
   let h = w.list.innerHTML;
-  assert.match(rowOf(h, 'foreman'), /aria-expanded="false" aria-label="2 workers, show workers"/);
-  assert.doesNotMatch(h, /data-agent="draft"/);
-  w.api.teamsClick({ stopPropagation() {}, target: { closest: (s) => (s === '[data-fold]' ? { dataset: { fold: 'foreman' } } : null) } });
-  h = w.list.innerHTML;
+  // changed (the owner's request 2026-11-24 07:30: opening a team shows the whole team): leaders start open, the pill folds under '@fold:<name>'
+  assert.match(rowOf(h, 'foreman'), /aria-expanded="true" aria-label="Fold [^"]*: 2 agents"/);
   assert.match(h, /data-agent="draft"/);
-  assert.deepStrictEqual(JSON.parse(w.store.get('hub-teams-open')), { studio: true, foreman: true });
+  w.api.teamsClick({ stopPropagation() {}, target: { closest: (s) => (s === '[data-fold]' ? { dataset: { fold: '@fold:foreman' } } : null) } });
+  h = w.list.innerHTML;
+  assert.doesNotMatch(h, /data-agent="draft"/);
+  assert.deepStrictEqual(JSON.parse(w.store.get('hub-teams-open')), { studio: true, '@fold:foreman': true });
 });
 
 // ---- one-line members
@@ -300,7 +304,7 @@ test('main rows keep one height with or without a second line (fixed height, nam
 });
 
 // ---- Simple
-test('Simple: shows a leader\'s workers (no "Simple: no workers" rule), folded at start, opened by the leader\'s pill', () => {
+test('Simple: shows a leader\'s workers (no "Simple: no workers" rule), open at start, folded by the leader\'s pill', () => {
   assert.doesNotMatch(html, /Simple: no workers/);
   const w = world({ simple: true, stored: [['hub-teams-open', JSON.stringify({ studio: true })]] });
   w.ctx.AGENTS = company();
@@ -308,12 +312,12 @@ test('Simple: shows a leader\'s workers (no "Simple: no workers" rule), folded a
   let h = w.list.innerHTML;
   assert.match(h, /data-agent="foreman"/);
   assert.match(h, /data-agent="archive"/);
-  assert.doesNotMatch(h, /data-agent="draft"/, 'folded at start');
-  assert.match(rowOf(h, 'foreman'), /class="teams-pill-btn"[^>]*aria-expanded="false" aria-label="2 workers, show workers"/);
-  w.api.teamsClick({ stopPropagation() {}, target: { closest: (s) => (s === '[data-fold]' ? { dataset: { fold: 'foreman' } } : null) } });
+  // changed (the owner's request 2026-11-24 07:30: opening a team shows the whole team): open at start, folded by hand
+  assert.match(h, /data-agent="draft"/, 'open at start');
+  assert.match(rowOf(h, 'foreman'), /class="teams-pill-btn open"[^>]*aria-expanded="true" aria-label="Fold [^"]*: 2 agents"/);
+  w.api.teamsClick({ stopPropagation() {}, target: { closest: (s) => (s === '[data-fold]' ? { dataset: { fold: '@fold:foreman' } } : null) } });
   h = w.list.innerHTML;
-  assert.match(h, /data-agent="draft"/);
-  assert.match(h, /data-agent="layout"/);
+  assert.doesNotMatch(h, /data-agent="draft"|data-agent="layout"/);
   assert.match(html, /html\.mm-simple #teams-list \.teams-helpers \{ display: none !important; \}/);
 });
 test('Simple: every fold control keeps the 36 px tap area (--tms-fold is no longer 16 px) and member names are one line with an ellipsis', () => {
@@ -325,7 +329,7 @@ test('Simple: every fold control keeps the 36 px tap area (--tms-fold is no long
 });
 
 // ---- Build team and Working alone
-test('Build team: the link is on the second line of a main in "No team yet" for admins; not in Teams, Working alone, Shared or Other; the menu still has it', () => {
+test('Build team: the link is on the second line of an undecided main in "Solo agents" for admins; not for a works-alone one, not in Teams, Shared or Other; the menu still has it', () => {
   const w = world();
   w.ctx.AGENTS = company();
   alone(w, ['cedar']);
@@ -334,15 +338,15 @@ test('Build team: the link is on the second line of a main in "No team yet" for 
   const links = [...h.matchAll(/data-build-team="([^"]+)"/g)].map((m) => m[1]);
   assert.deepStrictEqual(links.sort(), ['maple', 'owner', 'sam']);
   assert.strictEqual((h.match(/Build team</g) || []).length, 3);
-  assert.doesNotMatch(rowOf(h, 'cedar'), /build-team|teams-sub/, 'Working alone: no Build team prompt and no "Works alone" words');
-  assert.doesNotMatch(h, /Works alone/);
+  assert.doesNotMatch(rowOf(h, 'cedar'), /build-team|teams-sub/, 'a works-alone solo agent: no second line, no Build team prompt and no "Works alone" words');
+  assert.doesNotMatch(h, /Works alone|Working alone|No team yet/);
   assert.ok(w.api.agentMenuEntries(w.ctx.AGENTS.find((a) => a.name === 'cedar')).some((e) => e.key === 'build'), 'Build team stays in the ⋯ menu');
   assert.match(rowOf(h, 'cedar'), /class="agent-menu-btn"/, 'and the ⋯ is on the row');
   const m = world({ member: true });
   m.ctx.AGENTS = company();
   m.api.renderTeams();
   assert.doesNotMatch(m.list.innerHTML, /build-team|agent-menu-btn/, 'members never see Build team');
-  assert.match(m.list.innerHTML, /No team yet · 4</, 'and for a member nothing is recorded as working alone');
+  assert.match(m.list.innerHTML, /Solo agents · 4</, 'and for a member nothing is recorded as working alone');
 });
 test('second line priority on a main: replying (orange), else the blue background line (clickable), else Build team, else nothing', () => {
   const w = world();
@@ -376,9 +380,9 @@ test('the empty state and the Undo line still show with the sections; Simple hid
   w.api.renderTeams();
   const h = w.list.innerHTML;
   assert.match(h, /<strong>Agents can work as teams\.<\/strong>/);
-  assert.match(h, /No team yet · 2/);
+  assert.match(h, /Solo agents · 2/);
   assert.match(h, /Team setup: 1 team recorded[^<]*· <button type="button" class="teams-setup-undo" data-team-undo>Undo<\/button>/);
-  assert.ok(h.indexOf('No team yet · 2') > h.indexOf('Agents can work as teams') && h.indexOf('Team setup:') > h.indexOf('data-agent="maple"'), 'box first, sections, Undo line last');
+  assert.ok(h.indexOf('Solo agents · 2') > h.indexOf('Agents can work as teams') && h.indexOf('Team setup:') > h.indexOf('data-agent="maple"'), 'box first, sections, Undo line last');
   assert.match(html, /html\.mm-simple #teams-list \.teams-setup-line:empty/);
 });
 test('the All Agents tab is untouched by the redesign: its list code and CSS still use #agent-list rules', () => {

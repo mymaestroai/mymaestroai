@@ -25,8 +25,9 @@ test('dotLabel and bgLine: the exact words', () => {
   assert.equal(D.dotLabel('free', {}), 'Free to talk');
   assert.equal(D.dotLabel('background', { background: 1 }), 'Free to talk · 1 thing running in the background');
   assert.equal(D.dotLabel('background', { background: 2 }), 'Free to talk · 2 things running in the background');
-  assert.equal(D.bgLine(1), 'Free · 1 thing in the background');
-  assert.equal(D.bgLine(5), 'Free · 5 things in the background');
+  // changed (the owner 2026-11-24 07:48: "Everything should alwasy be consistent."): one short line on every list; the full sentence stays in dotLabel
+  assert.equal(D.bgLine(1), 'Free · 1 in background');
+  assert.equal(D.bgLine(5), 'Free · 5 in background');
 });
 
 test('applyDot: sets bg-work, title and aria-label for background; removes bg-work otherwise; leaves other classes alone', () => {

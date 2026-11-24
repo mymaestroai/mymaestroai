@@ -51,8 +51,9 @@ const stored = (m) => JSON.parse(fs.readFileSync(m.file, 'utf8')).alone;
 test('no_team in a Build Team turn: stored with the stable id, the person and the reason; no card; the reply says Recorded', async (t) => {
   const m = make(); t.after(m.cleanup);
   const a = asked();
+  // changed (owner 2026-11-24 07:32: "Create a classification of solo agents" / "Instead of 'no team'"): the lead is told "is a solo agent", not "works alone"
   const r = await m.plan.runPlan(NO(), buildCtx(m, 'studio', { ask: a.ask }));
-  assert.equal(r, 'Recorded: Studio works alone. Say why in your reply.');
+  assert.equal(r, 'Recorded: Studio is a solo agent. Say why in your reply.');
   assert.equal(a.a.length, 0, 'no card');
   const e = stored(m).studio;
   assert.equal(e.id, 'box:b-studio');
@@ -82,7 +83,7 @@ test('no_team is refused with lines, new agents, model changes, specialists or p
   }
   assert.equal(fs.existsSync(m.file), false);
   // empty lists are fine
-  assert.match(await m.plan.runPlan(NO({ lines: [], new_agents: [] }), buildCtx(m)), /^Recorded: Studio works alone/);
+  assert.match(await m.plan.runPlan(NO({ lines: [], new_agents: [] }), buildCtx(m)), /^Recorded: Studio is a solo agent/);
 });
 test('no_team is refused for a member\'s agent, for an agent that already has a team, and without a reason', async (t) => {
   const m = make(); t.after(m.cleanup);
@@ -104,8 +105,8 @@ test('no_team is refused in an Optimize turn, in an untrusted turn, and for anot
 });
 test('no_team in a Set up teams turn: any admin-owned main agent named, one call each; a member\'s agent is refused', async (t) => {
   const m = make(); t.after(m.cleanup);
-  assert.match(await m.plan.runPlan(NO({ for: 'studio' }), setupCtx(m)), /^Recorded: Studio works alone/);
-  assert.match(await m.plan.runPlan(NO({ for: 'press' }), setupCtx(m)), /^Recorded: Press works alone/);
+  assert.match(await m.plan.runPlan(NO({ for: 'studio' }), setupCtx(m)), /^Recorded: Studio is a solo agent/);
+  assert.match(await m.plan.runPlan(NO({ for: 'press' }), setupCtx(m)), /^Recorded: Press is a solo agent/);
   assert.match(await m.plan.runPlan(NO({ for: 'sam' }), setupCtx(m)), /belongs to a member/);
   assert.deepEqual(Object.keys(stored(m)).sort(), ['press', 'studio']);
   // other fields are still refused there

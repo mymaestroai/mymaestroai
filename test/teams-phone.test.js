@@ -198,13 +198,14 @@ test('Simple: the sheet and the sidebar fill start with the same two-part switch
 
 // ── Build Team (phone) ──
 const BUILD = () => ROW() + '\n' + fnSource('menuTeamSync');
-test('Build line: an admin sees "No team yet · Build team" under a main agent with no team in All Agents; rows with a team and non-admins do not', () => {
+// changed (Owner 2026-11-24 07:32: "Create a classification of solo agents" / "Instead of 'no team'"): the All Agents second line reads "Solo · Build team"
+test('Build line: an admin sees "Solo · Build team" under a main agent with no team in All Agents; rows with a team and non-admins do not', () => {
   const e = env();
   const api = load(e, BUILD(), '{ agentRowHtml, buildNoTeam }');
   assert.deepStrictEqual([...api.buildNoTeam()], ['bea'], 'ann has a team, the rest are not main agents');
   const row = api.agentRowHtml(AGENTS[1], { build: true });
   // item 1: the words are the row's own second line (replacing the model name), never a line under the row
-  assert.match(row, /<div class="agent-name">Bea &lt;b&gt;<\/div><div class="agent-model agent-build-sub">No team yet · <span role="button" tabindex="0" class="build-team-link" data-build-team="bea">Build team<\/span><\/div><\/span>/);
+  assert.match(row, /<div class="agent-name">Bea &lt;b&gt;<\/div><div class="agent-model agent-build-sub">Solo · <span role="button" tabindex="0" class="build-team-link" data-build-team="bea">Build team<\/span><\/div><\/span>/);
   assert.ok(row.endsWith('</button>') && !/build-line/.test(row), 'nothing after the row button: no separate build-line');
   assert.strictEqual((row.match(/class="agent-model/g) || []).length, 1, 'one second line: the model name is replaced');
   assert.ok(!/build-line/.test(api.agentRowHtml(AGENTS[1])) && !/agent-build-sub/.test(api.agentRowHtml(AGENTS[1])), 'no option: the row is as before');
@@ -388,7 +389,7 @@ test('Build team sub-line (phone): one line, never wrapped (the row keeps its he
 // ── an old server: GET /api/team-setup has no 'alone' ──
 
 // ── phone All Agents: the Build line for an admin's no-team main agent that is NOT marked works alone (the page's real worksAlone / teamSetup state) ──
-test('All Agents (phone): an admin sees "No team yet · Build team" under every no-team main not marked works alone, whatever the number of mains; a works-alone one and a member see none', () => {
+test('All Agents (phone): an admin sees "Solo · Build team" under every no-team main not marked works alone, whatever the number of mains; a works-alone one and a member see none', () => {
   const many = [];
   for (let i = 1; i <= 20; i++) many.push({ name: 'main' + i, display: 'Main ' + i, category: 'primary' });
   many.push({ name: 'w1', display: 'W1', category: 'worker', reportsTo: 'main1' });   // main1 has a team
@@ -396,7 +397,7 @@ test('All Agents (phone): an admin sees "No team yet · Build team" under every 
   const api = load(e, BUILD(), '{ agentRowHtml, buildNoTeam, teamSetup }');
   const noTeam = api.buildNoTeam();
   assert.strictEqual(noTeam.size, 19);
-  const line = (a, set = noTeam) => /<div class="agent-model agent-build-sub">No team yet · <span role="button" tabindex="0" class="build-team-link" data-build-team="main17">Build team<\/span><\/div>/.test(api.agentRowHtml(a, { build: set.has(a.name) }));
+  const line = (a, set = noTeam) => /<div class="agent-model agent-build-sub">Solo · <span role="button" tabindex="0" class="build-team-link" data-build-team="main17">Build team<\/span><\/div>/.test(api.agentRowHtml(a, { build: set.has(a.name) }));
   const m17 = many.find((a) => a.name === 'main17');
   assert.ok(line(m17), 'not marked works alone: the line shows (the real worksAlone state, no stub)');
   assert.ok(!/agent-build-sub/.test(api.agentRowHtml(many[0], { build: noTeam.has('main1') })), 'main1 has a team');
@@ -431,7 +432,7 @@ test('item 3 (phone Simple): the build link is styled with a 37px tap area and t
 
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 // The Teams list redesign (teams-list-design.md): section headers with counts, the size pill as the fold control, one-line members,
-// Build team only in "No team yet", Simple shows the whole tree. (Replaces the tests of the fold-arrow column, the 'Reports to'
+// Build team only in "Solo agents" (changed Owner 2026-11-24 07:32: "Create a classification of solo agents" / "Instead of 'no team'"), Simple shows the whole tree. (Replaces the tests of the fold-arrow column, the 'Reports to'
 // lines, 'Works alone' words and Simple's hidden workers; what they guarded is kept below under the new markup.)
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 const OPEN_ALL = JSON.stringify({ ann: true, lia: true, lou: true, '@other': true });
@@ -442,20 +443,21 @@ const px = (decl, prop) => { const m = decl.match(new RegExp('(?:^|[ ;])' + prop
 test('Teams: headers with counts in order, empty sections left out, every agent exactly once', () => {
   const e = env({ store: { 'hub-teams-open': OPEN_ALL } });
   const h = teamsApi(e).teamsListHtml();
-  assert.deepStrictEqual([...h.matchAll(/class="group-title tm-sec-h"[^>]*><span>([^<]+)</g)].map((m) => m[1]), ['Teams · 1', 'No team yet · 1', 'Shared specialists · 1', 'Other · 1']);
+  assert.deepStrictEqual([...h.matchAll(/class="group-title tm-sec-h"[^>]*><span>([^<]+)</g)].map((m) => m[1]), ['Teams · 1', 'Solo agents · 1', 'Shared specialists · 1', 'Other · 1']);   // changed (Owner 2026-11-24 07:32: "Create a classification of solo agents" / "Instead of 'no team'"): "Solo agents" replaces "No team yet"
   assert.deepStrictEqual(names(h).sort(), AGENTS.map((a) => a.name).sort());
-  assert.ok(h.indexOf('Teams · 1') < h.indexOf('data-agent="ann"') && h.indexOf('data-agent="wyn"') < h.indexOf('No team yet · 1') && h.indexOf('data-agent="bea"') < h.indexOf('Shared specialists · 1'));
-  assert.doesNotMatch(h, /Your agents|Working alone/, 'old heading gone; an empty section is not shown');
-  // only mains with nobody under them: two no-team mains, one recorded as working alone
+  assert.ok(h.indexOf('Teams · 1') < h.indexOf('data-agent="ann"') && h.indexOf('data-agent="wyn"') < h.indexOf('Solo agents · 1') && h.indexOf('data-agent="bea"') < h.indexOf('Shared specialists · 1'));
+  assert.doesNotMatch(h, /Your agents|Working alone|No team yet/, 'old headings gone; an empty section is not shown');
+  // only mains with nobody under them: two no-team mains, one recorded as working alone: ONE section holds both (changed Owner 2026-11-24 07:32: "Create a classification of solo agents" / "Instead of 'no team'")
   const e2 = env({ alone: ['bea'] }); e2.agents = [...AGENTS, { name: 'cy', display: 'Cy', category: 'primary' }];
   const h2 = teamsApi(e2).teamsListHtml();
-  assert.deepStrictEqual([...h2.matchAll(/class="group-title tm-sec-h"[^>]*><span>([^<]+)</g)].map((m) => m[1]), ['Teams · 1', 'No team yet · 1', 'Working alone · 1', 'Shared specialists · 1', 'Other · 1']);
+  assert.deepStrictEqual([...h2.matchAll(/class="group-title tm-sec-h"[^>]*><span>([^<]+)</g)].map((m) => m[1]), ['Teams · 1', 'Solo agents · 2', 'Shared specialists · 1', 'Other · 1']);
+  assert.doesNotMatch(h2, /Working alone|No team yet/);
   // the lead stays first in its own section, with its crown
   assert.ok(h.indexOf('data-agent="ann"') < h.indexOf('data-agent="bea"') && /Ann<\/span> <span class="lead-badge"/.test(h));
   const lone = env(); lone.agents = [AGENTS[0]];
   const hl = teamsApi(lone).teamsListHtml();
-  assert.doesNotMatch(hl, /Teams · |Shared|Other · /, 'no team, no shared, no other: only "No team yet"');
-  assert.match(hl, /No team yet · 1/);
+  assert.doesNotMatch(hl, /Teams · |Shared|Other · /, 'no team, no shared, no other: only "Solo agents"');
+  assert.match(hl, /Solo agents · 1/);
 });
 
 test('Teams: section headers are 44px buttons pinned to the top of the list (sticky), with aria-expanded', () => {
@@ -494,21 +496,23 @@ test('Teams: a header folds its section and remembers it in hub-teams-open under
   assert.deepStrictEqual(names(h), ['ann', 'lou', 'wyn']);
 });
 
-test('Teams: the size pill is a button (aria-expanded, aria-label) after the boss\'s name; the left fold arrow column is gone; mains and leaders start folded', () => {
+test('Teams: the size pill is a button (aria-expanded, aria-label) after the boss\'s name; the left fold arrow column is gone; mains start folded, leaders start open', () => {
   const e = env();
   let h = teamsApi(e).teamsListHtml();
-  assert.match(h, /Ann<\/span> <span class="lead-badge" title="Lead agent">👑<\/span><button type="button" class="tm-pill-btn" data-fold="ann" aria-expanded="false" aria-label="Unfold Ann: 5 agents"><span class="tm-pill">5<span class="tm-pw"> agents<\/span> &#x25B8;<\/span><\/button>/);
+  assert.match(h, /Ann<\/span> <span class="lead-badge" title="Lead agent">👑<\/span><button type="button" class="tm-pill-btn" data-fold="ann" aria-expanded="false" aria-label="Unfold Ann: 5 agents" title="Unfold Ann: 5 agents"><span class="tm-pill">5 agents &#x25B8;<\/span><\/button>/);
   assert.doesNotMatch(h, /tm-fold|tm-block|tm-kids|tm-leaders/);
   assert.deepStrictEqual(names(h).sort(), ['ann', 'bea', 'sam'], 'mains and shared only: folded at start, Other folded');
   e.store['hub-teams-open'] = JSON.stringify({ ann: true });
   h = teamsApi(e).teamsListHtml();
-  assert.match(h, /data-fold="ann" aria-expanded="true" aria-label="Fold Ann: 5 agents"><span class="tm-pill">5<span class="tm-pw"> agents<\/span> &#x25BE;/);
-  assert.match(h, /data-fold="lia" aria-expanded="false" aria-label="Unfold Lia: leads 2"><span class="tm-pill"><span class="tm-pw">leads <\/span>2 &#x25B8;/);
-  assert.ok(h.includes('data-agent="lia"') && h.includes('data-agent="lou"') && !h.includes('data-agent="wes"'), 'a leader folded: its workers hidden');
+  assert.match(h, /data-fold="ann" aria-expanded="true" aria-label="Fold Ann: 5 agents" title="Fold Ann: 5 agents"><span class="tm-pill">5 agents &#x25BE;/);
+  // changed (the owner's request 2026-11-24 07:30: opening a team shows the whole team): a leader's pill reads like a main's ('2 agents'), its workers are open at start, its key is '@fold:<name>'
+  assert.match(h, /data-fold="@fold:lia" aria-expanded="true" aria-label="Fold Lia: 2 agents" title="Fold Lia: 2 agents"><span class="tm-pill">2 agents &#x25BE;/);
+  assert.doesNotMatch(h, /leads/);
+  assert.ok(h.includes('data-agent="lia"') && h.includes('data-agent="lou"') && h.includes('data-agent="wes"') && h.includes('data-agent="wyn"'), 'a leader open: its workers shown');
   assert.ok(!/data-fold="wes"|data-fold="sam"|data-fold="bea"/.test(h), 'rows with nobody under them have no pill');
-  assert.match(teamsApi(env({ store: { 'hub-teams-open': '{"lou":true,"ann":true}' } })).teamsListHtml(), /Unfold Lia[^>]*>[\s\S]*Fold Lou: leads 1/);
+  assert.match(teamsApi(env({ store: { 'hub-teams-open': '{"@fold:lou":true,"ann":true}' } })).teamsListHtml(), /Fold Lia: 2 agents[^>]*>[\s\S]*Unfold Lou: 1 agent"/);
   const one = env({ store: { 'hub-teams-open': '{}' } }); one.agents = [{ name: 'a', display: 'A', category: 'primary' }, { name: 'b', display: 'B', category: 'worker', reportsTo: 'a' }];
-  assert.match(teamsApi(one).teamsListHtml(), /1<span class="tm-pw"> agent<\/span> &#x25B8;/, 'one agent, not "1 agents"');
+  assert.match(teamsApi(one).teamsListHtml(), /1 agent &#x25B8;/, 'one agent, not "1 agents"');
 });
 
 test('Teams: rows with a pill are divs (a button may not hold a button) with role=button and tabindex; rows without stay buttons', () => {
@@ -546,8 +550,8 @@ test('Teams click: the pill folds, stops the click and never opens the chat; the
   fire({ '.agent-row': row });
   assert.deepStrictEqual(calls, [['navigate', 'chat', 'ann']]);
   calls.length = 0;
-  fire({ '[data-fold]': { dataset: { fold: '@sec:alone' }, focus() {} } });
-  assert.deepStrictEqual(calls, [['toggle', '@sec:alone'], ['render']]);
+  fire({ '[data-fold]': { dataset: { fold: '@sec:solo' }, focus() {} } });
+  assert.deepStrictEqual(calls, [['toggle', '@sec:solo'], ['render']]);
   calls.length = 0;
   fire({ '.dot.bg-work, .agent-bg-line': {}, '.agent-row': row });   // the ring / blue line: the chat with Working on open (as before)
   assert.deepStrictEqual(calls, [['bg', 'ann']]);
@@ -616,7 +620,7 @@ test('Teams rows: members one line each, no "Reports to", no "Team leader" or "t
   assert.ok(64 >= 62 && 104 >= 102 && 104 >= 94);
 });
 
-test('Teams rows: second line only when there is something (replying, else Free with background work, else Build team in No team yet); the row keeps 60px', () => {
+test('Teams rows: second line only when there is something (replying, else Free with background work, else Build team in Solo agents); the row keeps 60px', () => {
   const bg = { bgStateOf: (n) => (n === 'bea' ? 'background' : 'free'), bgCountOf: (n) => (n === 'bea' ? 2 : 0) };
   const hb = teamsApi(env({ env: bg })).teamsListHtml();
   assert.match(rowOf(hb, 'bea'), /<div class="agent-bg-line" role="button"[^>]*>[^<]*<\/div>/);
@@ -638,19 +642,19 @@ test('Teams rows: second line only when there is something (replying, else Free 
   assert.match(cssRule('.tm-live'), /color: var\(--warning\)/);
 });
 
-test('Teams: Build team only in No team yet, for admins; no Build team and no "Works alone" words in Working alone; Building… disabled; the handler is unchanged', () => {
+test('Teams: Build team only for an undecided main in Solo agents, for admins; none and no "Works alone" words on a works-alone one (same section, same row height); Building… disabled; the handler is unchanged', () => {
   const h = teamsApi(env({ store: { 'hub-teams-open': OPEN_ALL } })).teamsListHtml();
   assert.strictEqual((h.match(/data-build-team=/g) || []).length, 1);
-  assert.match(rowOf(h, 'bea'), /<div class="agent-model agent-build-sub agent-build-only"><span role="button" tabindex="0" class="build-team-link" data-build-team="bea">Build team<\/span><\/div>/, 'just "Build team", the header already says No team yet');
-  assert.doesNotMatch(h, /No team yet ·\s*<span|No team yet<\//, 'the words "No team yet" are not repeated on the row');
+  assert.match(rowOf(h, 'bea'), /<div class="agent-model agent-build-sub agent-build-only"><span role="button" tabindex="0" class="build-team-link" data-build-team="bea">Build team<\/span><\/div>/, 'just "Build team", the header already says Solo agents');
+  assert.doesNotMatch(h, /Solo ·\s*<span|No team yet|Solo<\//, 'the words are not repeated on the row');
   assert.ok(!/build-team-btn|class="tm-build"|build-line/.test(h));
   const alone = teamsApi(env({ alone: ['bea'] })).teamsListHtml();
-  assert.match(alone, /Working alone · 1/);
-  assert.doesNotMatch(alone, /Works alone|build-team|No team yet/);
+  assert.match(alone, /Solo agents · 1/);
+  assert.doesNotMatch(alone, /Works alone|Working alone|build-team|No team yet/);
   assert.ok(!/agent-model/.test(rowOf(alone, 'bea')), 'a working-alone row is one name, nothing under it');
   const member = teamsApi(env({ alone: ['bea'], env: { isAdmin: () => false } })).teamsListHtml();
-  assert.match(member, /No team yet · 1/, 'a member has no works-alone record: bea is under No team yet');
-  assert.doesNotMatch(member, /build-team|Working alone/);
+  assert.match(member, /Solo agents · 1/, 'a member has no works-alone record: bea is under Solo agents');
+  assert.doesNotMatch(member, /build-team|Working alone|No team yet/);
   const e = env({ store: { 'hub-teams-open': OPEN_ALL } }); e.live = { ann: { busy: true, buildingTeamFor: 'bea' } };
   assert.match(teamsApi(e).teamsListHtml(), /<span role="button" tabindex="0" class="build-team-link" data-build-team="bea" aria-disabled="true">Building…<\/span>/);
   // an old server (no alone in GET /api/team-setup): the normal Build team line, nothing throws
@@ -677,7 +681,7 @@ test('Teams: the helpers line, the working filter and the empty state keep worki
   const lone = env(); lone.agents = [AGENTS[0], AGENTS[1], AGENTS[7]];
   const hl = teamsApi(lone).teamsListHtml();
   assert.ok(hl.startsWith('<div class="tm-empty"><b>Agents can work as teams.</b> Your main agents plan, decide and review. Short or personal tasks they usually do themselves; long work they can hand to team leaders, who run workers. Ann can look at how your agents already work together and propose teams. Nothing changes until you approve a team. <button type="button" class="tm-setup-btn" data-team-setup>Set up teams</button></div>'));
-  assert.match(hl, /No team yet · 2/);
+  assert.match(hl, /Solo agents · 2/);
   assert.match(teamsApi(Object.assign(env({ env: { isAdmin: () => false } }), { agents: lone.agents })).teamsListHtml(), /An admin can set who reports to whom\./);
   // the Undo line closes the list
   const u = env({ store: { 'hub-teams-open': '{}' } });
@@ -706,18 +710,24 @@ test('Simple: the sheet and the sidebar fill start with the two-part switch; All
   assert.match(fnSource('simpleAgentsFill'), /simpleAgentListFill\(d\.querySelector\('\.sa-list'\)/);
   assert.match(fnSource('simpleSideEnsure'), /ssd-list sa-list/);
 });
-test('Simple Teams: headers with counts; a leader\'s workers are in the tree but folded at start; one open shows its workers under it', () => {
+test('Simple Teams: headers with counts; a leader\'s workers are in the tree and open at start; \'@fold:<leader>\' folds them', () => {
   const { box } = simpleRun('teams');
-  assert.deepStrictEqual(simpleHeads(box).map((h) => h.parts['.sa-sec-t'].textContent), ['Teams · 1', 'No team yet · 1', 'Shared specialists · 1', 'Other · 1']);
+  assert.deepStrictEqual(simpleHeads(box).map((h) => h.parts['.sa-sec-t'].textContent), ['Teams · 1', 'Solo agents · 1', 'Shared specialists · 1', 'Other · 1']);
   assert.deepStrictEqual(simpleHeads(box).map((h) => h.attrs['aria-expanded']), ['true', 'true', 'true', 'false']);
   assert.deepStrictEqual(simpleRows(box).map((r) => r.dataset.agent), ['ann', 'bea', 'sam'], 'the main with a pill, folded; shared; Other folded');
   const open = simpleRun('teams', [], { ann: true }).box;
-  assert.deepStrictEqual(simpleRows(open).map((r) => r.dataset.agent), ['ann', 'lia', 'lou', 'bea', 'sam'], 'the leaders folded: their workers are not listed yet');
-  const both = simpleRun('teams', [], { ann: true, lia: true }).box;
-  assert.deepStrictEqual(simpleRows(both).map((r) => r.dataset.agent), ['ann', 'lia', 'wes', 'wil', 'lou', 'bea', 'sam']);
+  // changed (the owner's request 2026-11-24 07:30: opening a team shows the whole team): the whole team shows, each leader's workers under it
+  assert.deepStrictEqual(simpleRows(open).map((r) => r.dataset.agent), ['ann', 'lia', 'wes', 'wil', 'lou', 'wyn', 'bea', 'sam']);
+  const folded = simpleRun('teams', [], { ann: true, '@fold:lia': true }).box;
+  assert.deepStrictEqual(simpleRows(folded).map((r) => r.dataset.agent), ['ann', 'lia', 'lou', 'wyn', 'bea', 'sam'], 'lia folded by hand: its workers are not listed');
+  const both = simpleRun('teams', [], { ann: true, lia: true }).box;   // an old stored lia -> true (meant open) does not fold
+  assert.deepStrictEqual(simpleRows(both).map((r) => r.dataset.agent), ['ann', 'lia', 'wes', 'wil', 'lou', 'wyn', 'bea', 'sam']);
   const rows = simpleRows(both);
   assert.deepStrictEqual(rows.slice(0, 5).map((r) => (r.className.match(/sa-rank-(\w+)/) || [])[1]), ['main', 'leader', 'worker', 'worker', 'leader']);
   assert.deepStrictEqual(rows.slice(0, 5).map((r) => r.style.props['--d'] || ''), ['', '1', '2', '2', '1']);
+  const lia = rows[1].parts['.sa-l1'].children.find((c) => c.className === 'tm-pill-btn');
+  assert.strictEqual(lia.dataset.fold, '@fold:lia'); assert.strictEqual(lia.attrs['aria-expanded'], 'true'); assert.strictEqual(lia.attrs['aria-label'], 'Fold Lia: 2 agents');
+  assert.match(lia.innerHTML, /^<span class="tm-pill">2 agents &#x25BE;<\/span>$/);
   assert.match(rows[2].className, /sa-kid2/);
   assert.ok(rows.every((r) => /sa-tm/.test(r.className)));
   const other = simpleRun('teams', [], { '@other': true }).box;
@@ -735,11 +745,11 @@ test('Simple Teams: the pill is a button with aria-expanded and a label; a tap o
   assert.strictEqual(pill.tag, 'button'); assert.strictEqual(pill.attrs.type === undefined ? pill.type : pill.attrs.type, 'button');
   assert.strictEqual(pill.attrs['aria-expanded'], 'true');
   assert.strictEqual(pill.attrs['aria-label'], 'Fold Ann: 5 agents');
-  assert.match(pill.innerHTML, /^<span class="tm-pill">5<span class="tm-pw"> agents<\/span> &#x25BE;<\/span>$/);
+  assert.match(pill.innerHTML, /^<span class="tm-pill">5 agents &#x25BE;<\/span>$/);
   const ev = pill.click();
   assert.ok(ev.stopped, 'stopPropagation');
   assert.deepStrictEqual(nav, [], 'the chat did not open');
-  assert.match(fnSource('simpleAgentRow'), /pb\.addEventListener\('click', \(e\) => \{ if \(e && e\.stopPropagation\) e\.stopPropagation\(\); teamsToggle\(a\.name\); simpleAgentListsRepaint\(\); simpleFoldFocus\(a\.name\); \}\);/);
+  assert.match(fnSource('simpleAgentRow'), /pb\.addEventListener\('click', \(e\) => \{ if \(e && e\.stopPropagation\) e\.stopPropagation\(\); teamsToggle\(tm\.fold\); simpleAgentListsRepaint\(\); simpleFoldFocus\(tm\.fold\); \}\);/);
   // the row itself opens the chat
   ann.click({ target: { closest: () => null } });
   assert.deepStrictEqual(nav, [['chat', 'ann']]);
@@ -762,7 +772,7 @@ test('Simple Teams: a header folds its section under @sec:<key> (Other keeps @ot
   assert.deepStrictEqual(simpleRows(folded).map((r) => r.dataset.agent), ['bea']);
   assert.strictEqual(simpleHeads(folded)[0].attrs['aria-expanded'], 'false');
 });
-test('Simple Teams: Build team only in No team yet for admins (the link; the row does not open the chat); Working alone has none; members see none', () => {
+test('Simple Teams: Build team only for an undecided main in Solo agents for admins (the link; the row does not open the chat); a works-alone one has none; members see none', () => {
   const nav = [], built = [];
   const { box } = simpleRun('teams', [], {}, [], { navigate: (...a) => nav.push(a), buildTeamStart: (n) => built.push(n) });
   const bea = box.children.find((c) => c.dataset && c.dataset.agent === 'bea');
@@ -774,13 +784,13 @@ test('Simple Teams: Build team only in No team yet for admins (the link; the row
   const ann = box.children.find((c) => c.dataset && c.dataset.agent === 'ann');
   assert.ok(!/build-team/.test(ann.parts['small'].innerHTML || ''));
   const alone = simpleRun('teams', [], {}, ['bea']).box;
-  assert.deepStrictEqual(simpleHeads(alone).map((h) => h.parts['.sa-sec-t'].textContent).slice(0, 3), ['Teams · 1', 'Working alone · 1', 'Shared specialists · 1']);
+  assert.deepStrictEqual(simpleHeads(alone).map((h) => h.parts['.sa-sec-t'].textContent).slice(0, 3), ['Teams · 1', 'Solo agents · 1', 'Shared specialists · 1']);
   const ab = alone.children.find((c) => c.dataset && c.dataset.agent === 'bea');
   assert.ok(!/build-team|Works alone/.test((ab.parts['small'].innerHTML || '') + (ab.parts['small'].textContent || '')));
   const mem = simpleRun('teams', [], {}, [], { isAdmin: () => false }).box;
   const mb = mem.children.find((c) => c.dataset && c.dataset.agent === 'bea');
-  assert.ok(!/build-team/.test(mb.parts['small'].innerHTML || '') && !/No team yet/.test(mb.parts['small'].textContent || ''));
-  assert.match(fnSource('simpleTeamsModel'), /build: sec\.key === 'none' && r\.level === 0 && r\.rank === 'main' && isAdmin\(\) && !r\.node\.size/);
+  assert.ok(!/build-team/.test(mb.parts['small'].innerHTML || '') && !/No team yet|Solo/.test(mb.parts['small'].textContent || ''));
+  assert.match(fnSource('simpleTeamsModel'), /build: sec\.key === 'solo' && r\.level === 0 && r\.rank === 'main' && isAdmin\(\) && !r\.node\.size && !worksAlone\(r\.node\.agent\.name\)/);
 });
 test('Simple Teams: the status lines: replying (orange) beats background work beats Build team; a member\'s words follow its name; repainted in place', () => {
   const run = (busy, extra) => simpleRun('teams', busy, { ann: true, lia: true }, [], extra).box;
@@ -811,7 +821,8 @@ test('Simple CSS (phone sheet): ranks 60/50/40px, sheet x positions (page 54/101
   assert.match(head, /position: sticky/); assert.match(head, /top: 0/); assert.strictEqual(px(head, 'height'), 44);
   const pill = html.match(/\.tm-pill-btn \{([^}]*)\}/)[1];
   assert.ok(px(pill, 'height') >= 36 && px(pill, 'min-width') >= 36);
-  assert.match(html, /html\.mm-simple #simple-side \.tm-pw \{ display: none; \}/, 'the narrow sidebar shows the number alone');
+  // changed (the owner 2026-11-24 07:48: "On the mobile I see \"3 agents\". desktop website I see \"3\". Everything should alwasy be consistent."): the sidebar keeps the words; the NAME gives way
+  assert.doesNotMatch(html, /\.tm-pw/, 'no rule hides or even names the pill words (the narrow sidebar keeps "N agents")');
   assert.match(html, /\.sa-row\.sa-tm\.sa-kid::before/, 'the old pseudo lines are switched off for these rows');
 });
 
@@ -824,10 +835,10 @@ test('Build team link alone on a main row\'s second line starts at the name\'s x
   assert.ok(html.indexOf('html.mm-simple .sa-build-sub .build-team-link {') > html.indexOf('html.mm-simple .sa-sub .build-team-link {'));
   // the tap box keeps its height (10px padding top and bottom, taken back by the margins) and its 8px left padding
   assert.match(html, /html\.mm-simple \.sa-sub \.build-team-link \{[^}]*padding: 10px 8px;/);
-  // only where the link is alone on the line: the phone's own markup carries the class; the All Agents 'No team yet · Build team' line does not
+  // only where the link is alone on the line: the phone's own markup carries the class; the All Agents 'Solo · Build team' line does not (changed Owner 2026-11-24 07:32: "Create a classification of solo agents" / "Instead of 'no team'")
   const h = teamsApi(env({ store: { 'hub-teams-open': OPEN_ALL } })).teamsListHtml();
   assert.match(rowOf(h, 'bea'), /agent-build-sub agent-build-only"><span role="button"[^>]*class="build-team-link"/);
-  assert.match(js, /No team yet · \$\{buildTeamBtnHtml\(name, 'build-team-link', 'Build team', true\)\}<\/div>/);
+  assert.match(js, /Solo · \$\{buildTeamBtnHtml\(name, 'build-team-link', 'Build team', true\)\}<\/div>/);
 });
 test('Simple sheet: the lead\'s crown shows on its row (the general Simple rule that hides .lead-badge does not win in .sa-l1)', () => {
   // Fails before: html.mm-simple .lead-badge { display: none } hid the crown the code adds to the lead's .sa-l1.
@@ -844,19 +855,19 @@ test('Teams (working filter): a busy boss whose whole team is idle stays under T
   const h = teamsApi(f).teamsListHtml();
   assert.deepStrictEqual(names(h), ['ann'], 'only the busy boss; its idle people are cut');
   assert.match(h, /<span>Teams · 1<\/span>/);
-  assert.doesNotMatch(h, /No team yet/);
-  assert.match(rowOf(h, 'ann'), /<span class="tm-pill">5<span class="tm-pw"> agents<\/span><\/span>/, 'the pill shows the real team size');
+  assert.doesNotMatch(h, /No team yet|Solo agents/);
+  assert.match(rowOf(h, 'ann'), /<span class="tm-pill">5 agents<\/span>/, 'the pill shows the real team size');
   // a busy worker keeps its boss: the header count is the visible rows (1 of the 2 mains with a team... here only ann)
   const g = env(); g.workingFilter = true; g.live = { wyn: { busy: true }, bea: { busy: true } };
   const hg = teamsApi(g).teamsListHtml();
   assert.match(hg, /<span>Teams · 1<\/span>/);
-  assert.match(hg, /<span>No team yet · 1<\/span>/);
+  assert.match(hg, /<span>Solo agents · 1<\/span>/);
   assert.deepStrictEqual(names(hg), ['ann', 'lou', 'wyn', 'bea']);
   // a section with nothing busy is dropped
   const s = env(); s.workingFilter = true; s.live = { sam: { busy: true } };
   const hs = teamsApi(s).teamsListHtml();
   assert.match(hs, /Shared specialists · 1/);
-  assert.doesNotMatch(hs, /Teams · |No team yet/);
+  assert.doesNotMatch(hs, /Teams · |No team yet|Solo agents/);
 });
 test('Teams (working filter): everything is open, so the size is a plain pill (no button, no data-fold); off, the pill is the fold button again', () => {
   const f = env(); f.workingFilter = true; f.live = { wyn: { busy: true } };
@@ -886,9 +897,91 @@ test('Simple: after a fold the repaint replaced the control, so the one with the
   assert.strictEqual(sheetBtns[0].focused, 1);
   run('nobody'); assert.strictEqual(sheetBtns[0].focused + sideBtns[0].focused, 1, 'no match: nothing');
   // the pill and the section header call it after the repaint (source pin: the fake DOM of simpleRun repaints nothing)
-  assert.match(fnSource('simpleAgentRow'), /simpleAgentListsRepaint\(\); simpleFoldFocus\(a\.name\);/);
+  assert.match(fnSource('simpleAgentRow'), /simpleAgentListsRepaint\(\); simpleFoldFocus\(tm\.fold\);/);
   assert.match(fnSource('simpleTeamsFill'), /simpleAgentListsRepaint\(\); simpleFoldFocus\(teamsSecKey\(s\.key\)\);/);
   assert.match(fnSource('simpleTeamsFill'), /h\.dataset\.fold = teamsSecKey\(s\.key\);/);
   // Simple has no working filter: its Teams model never reads it
   assert.doesNotMatch(fnSource('simpleTeamsModel') + fnSource('simpleTeamsFill'), /workingFilter/);
+});
+
+// ── the whole team shows on opening (the owner's request 2026-11-24 07:30) ──
+const CNC = [
+  { name: 'cnc', display: 'Cnc', category: 'primary' },
+  { name: 'gantry', display: 'Gantry', category: 'specialist', reportsTo: 'cnc' },
+  { name: 'toolpath', display: 'Toolpath', category: 'worker', reportsTo: 'gantry' },
+  { name: 'feeds', display: 'Feeds', category: 'worker', reportsTo: 'gantry' },
+];
+const cncEnv = (open) => { const e = env({ store: { 'hub-teams-open': JSON.stringify(open) } }); e.agents = CNC; return e; };
+test('whole team (phone): opening cnc shows leader gantry and both workers; the leader pill reads "2 agents ▾"; no "leads"', () => {
+  const h = teamsApi(cncEnv({ cnc: true })).teamsListHtml();
+  assert.deepStrictEqual(names(h), ['cnc', 'gantry', 'feeds', 'toolpath'], 'all three member rows (workers by shown name)');
+  assert.match(h, /data-fold="@fold:gantry" aria-expanded="true" aria-label="Fold Gantry: 2 agents" title="Fold Gantry: 2 agents"><span class="tm-pill">2 agents &#x25BE;<\/span>/);
+  assert.match(h, /data-fold="cnc" aria-expanded="true" aria-label="Fold Cnc: 3 agents" title="Fold Cnc: 3 agents"><span class="tm-pill">3 agents &#x25BE;/);
+  assert.doesNotMatch(h, /leads/i);
+  assert.strictEqual(names(h).length - 1, 3, 'the main pill count equals the member rows under it');
+  assert.match(rowOf(h, 'toolpath'), /tm-lv2/, 'the workers sit one step deeper, under the leader');
+});
+test('whole team (phone): "@fold:gantry" hides the two workers and shows ▸; an old stored gantry:true does not fold; the pill toggles @fold:<name>', () => {
+  const folded = teamsApi(cncEnv({ cnc: true, '@fold:gantry': true })).teamsListHtml();
+  assert.deepStrictEqual(names(folded), ['cnc', 'gantry']);
+  assert.match(folded, /data-fold="@fold:gantry" aria-expanded="false" aria-label="Unfold Gantry: 2 agents" title="Unfold Gantry: 2 agents"><span class="tm-pill">2 agents &#x25B8;/);
+  assert.deepStrictEqual(names(teamsApi(cncEnv({ cnc: true, gantry: true })).teamsListHtml()), ['cnc', 'gantry', 'feeds', 'toolpath'], 'an old name -> true is harmless');
+  const e = cncEnv({ cnc: true }); const api = teamsApi(e);
+  api.teamsToggle('@fold:gantry');
+  assert.strictEqual(e.store['hub-teams-open'], '{"cnc":true,"@fold:gantry":true}');
+  assert.deepStrictEqual(names(api.teamsListHtml()), ['cnc', 'gantry']);
+  api.teamsToggle('@fold:gantry');
+  assert.strictEqual(e.store['hub-teams-open'], '{"cnc":true}');
+  // the Working filter shows everything open with plain-text sizes, even with a leader folded by hand
+  const f = cncEnv({ cnc: true, '@fold:gantry': true }); f.workingFilter = true; f.live = { toolpath: { busy: true } };
+  const hf = teamsApi(f).teamsListHtml();
+  assert.deepStrictEqual(names(hf), ['cnc', 'gantry', 'toolpath']);
+  assert.doesNotMatch(hf, /tm-pill-btn|data-fold="@fold:gantry"/);
+  assert.match(hf, /<span class="tm-pill">2 agents<\/span>/);
+});
+test('whole team (Simple sheet and sidebar): cnc open lists gantry and both workers; the leader pill folds under @fold:gantry; the main count equals the rows under it', () => {
+  const run = (open) => simpleRun('teams', [], open, [], { agents: CNC });
+  const r = run({ cnc: true });
+  const rows = simpleRows(r.box);
+  assert.deepStrictEqual(rows.map((x) => x.dataset.agent), ['cnc', 'gantry', 'feeds', 'toolpath']);
+  const pillOf = (row) => row.parts['.sa-l1'].children.find((c) => c.className === 'tm-pill-btn');
+  assert.strictEqual(pillOf(rows[0]).attrs['aria-label'], 'Fold Cnc: 3 agents');
+  assert.strictEqual(rows.length - 1, 3);
+  const gp = pillOf(rows[1]);
+  assert.strictEqual(gp.dataset.fold, '@fold:gantry'); assert.strictEqual(gp.attrs['aria-label'], 'Fold Gantry: 2 agents');
+  assert.match(gp.innerHTML, /^<span class="tm-pill">2 agents &#x25BE;<\/span>$/, 'the sidebar shows the words too: "2 agents ▾"');
+  assert.doesNotMatch(r.box.children.map((c) => c.innerHTML).join(''), /leads/);
+  assert.deepStrictEqual(simpleRows(run({ cnc: true, '@fold:gantry': true }).box).map((x) => x.dataset.agent), ['cnc', 'gantry']);
+  assert.deepStrictEqual(simpleRows(run({ cnc: true, gantry: true }).box).map((x) => x.dataset.agent), ['cnc', 'gantry', 'feeds', 'toolpath'], 'an old gantry -> true does not fold');
+  gp.click();
+  assert.strictEqual(r.e.store['hub-teams-open'], '{"cnc":true,"@fold:gantry":true}', 'a tap on the leader pill stores @fold:gantry');
+  assert.doesNotMatch(html, /\.tm-pw/, 'narrow sidebar: the words stay');
+});
+
+// ── the fold of the old sections carries over to "Solo agents" (owner 2026-11-24 07:32: "Create a classification of solo agents" / "Instead of 'no team'") ──
+test('Solo agents fold (phone): an old stored @sec:none or @sec:alone keeps the section folded; unfolding deletes all three keys; folding stores @sec:solo', () => {
+  for (const old of ['@sec:none', '@sec:alone', '@sec:solo']) {
+    const e = env({ store: { 'hub-teams-open': JSON.stringify({ [old]: true, '@sec:shared': true }) } });
+    const api = teamsApi(e);
+    let h = api.teamsListHtml();
+    assert.match(h, /data-fold="@sec:solo" data-tm-sec="solo" aria-expanded="false"/, `${old}: folded at start`);
+    assert.ok(!h.includes('data-agent="bea"'), `${old}: its rows are hidden`);
+    api.teamsToggle('@sec:solo');
+    h = api.teamsListHtml();
+    assert.match(h, /data-fold="@sec:solo" data-tm-sec="solo" aria-expanded="true"/, `${old}: one tap opens it`);
+    assert.ok(h.includes('data-agent="bea"'));
+    assert.deepStrictEqual(Object.keys(JSON.parse(e.store['hub-teams-open'])), ['@sec:shared'], `${old}: all three Solo keys are gone, other folds stay`);
+    api.teamsToggle('@sec:solo');
+    assert.strictEqual(JSON.parse(e.store['hub-teams-open'])['@sec:solo'], true, 'folding stores @sec:solo');
+    assert.match(api.teamsListHtml(), /data-fold="@sec:solo" data-tm-sec="solo" aria-expanded="false"/);
+  }
+});
+test('Solo agents fold (Simple sheet): the same keys; the header tap folds and unfolds through the same helper', () => {
+  const { box } = simpleRun('teams', [], { '@sec:none': true });
+  const solo = simpleHeads(box).find((h) => /^Solo agents/.test(h.parts['.sa-sec-t'].textContent));
+  assert.strictEqual(solo.attrs['aria-expanded'], 'false', 'an old @sec:none keeps it folded in Simple too');
+  const r = simpleRun('teams', [], { '@sec:none': true }, [], {});
+  const s2 = simpleHeads(r.box).find((h) => /^Solo agents/.test(h.parts['.sa-sec-t'].textContent));
+  s2.click();
+  assert.deepStrictEqual(JSON.parse(r.e.store['hub-teams-open']), {}, 'unfolding deletes the old key');
 });
