@@ -55,11 +55,11 @@ function make(o = {}) {
 const boss = (m, n) => (m.list.find(x => x.name === n) || {}).reportsTo;
 
 // ── recorded setups and Undo ──
-test('record keeps the lines of one Do it (from and to) and publishes team_setup_recorded; no line, no setup', (t) => {
+test('record keeps the lines of one Do it (from and to) and publishes team_setup_recorded; no line, no setup', async (t) => {
   const m = make(); t.after(m.cleanup);
-  assert.equal(m.svc.record('studio', [], 'u-admin'), null);
-  assert.equal(m.svc.record('studio', [{ agent: 'writer', from: null, to: '' }], 'u-admin'), null, 'a line with no boss is not a recorded line');
-  const id = m.svc.record('studio', [{ agent: 'writer', from: null, to: 'studio' }, { agent: 'editor', from: 'press', to: 'studio' }], 'u-admin', { lead: 'lead' });
+  assert.equal(await m.svc.record('studio', [], 'u-admin'), null);
+  assert.equal(await m.svc.record('studio', [{ agent: 'writer', from: null, to: '' }], 'u-admin'), null, 'a line with no boss is not a recorded line');
+  const id = await m.svc.record('studio', [{ agent: 'writer', from: null, to: 'studio' }, { agent: 'editor', from: 'press', to: 'studio' }], 'u-admin', { lead: 'lead' });
   assert.match(id, /^ts_/);
   const file = JSON.parse(fs.readFileSync(path.join(m.dir, 'team-setups.json'), 'utf8'));
   assert.deepEqual(Object.keys(file), ['setups']);
@@ -79,9 +79,9 @@ test('undo puts back exactly the lines of that setup (from, or no boss) and leav
   m.list.find(x => x.name === 'critic').reportsTo = 'press';       // set by hand, never part of a setup
   m.list.find(x => x.name === 'writer').reportsTo = 'studio';
   m.list.find(x => x.name === 'editor').reportsTo = 'studio';
-  const a = m.svc.record('studio', [{ agent: 'writer', from: null, to: 'studio' }, { agent: 'editor', from: 'press', to: 'studio' }], 'u-admin');
+  const a = await m.svc.record('studio', [{ agent: 'writer', from: null, to: 'studio' }, { agent: 'editor', from: 'press', to: 'studio' }], 'u-admin');
   m.list.find(x => x.name === 'samhelp').reportsTo = 'sam';
-  const b = m.svc.record('sam', [{ agent: 'samhelp', from: null, to: 'sam' }], 'u-admin');
+  const b = await m.svc.record('sam', [{ agent: 'samhelp', from: null, to: 'sam' }], 'u-admin');
   const r = await m.svc.undo(a, 'u-admin');
   assert.deepEqual(r, { removed: 2, keptChanged: [], failed: [] });
   assert.equal(boss(m, 'writer'), undefined, 'no boss before: no boss again');
@@ -96,7 +96,7 @@ test('a line changed by hand since the setup is kept and reported; the rest of t
   const m = make(); t.after(m.cleanup);
   m.list.find(x => x.name === 'writer').reportsTo = 'press';   // was set to studio by the setup, then moved by hand
   m.list.find(x => x.name === 'editor').reportsTo = 'studio';
-  const id = m.svc.record('studio', [{ agent: 'writer', from: null, to: 'studio' }, { agent: 'editor', from: null, to: 'studio' }, { agent: 'critic', from: null, to: 'studio' }], 'u-admin');
+  const id = await m.svc.record('studio', [{ agent: 'writer', from: null, to: 'studio' }, { agent: 'editor', from: null, to: 'studio' }, { agent: 'critic', from: null, to: 'studio' }], 'u-admin');
   const r = await m.svc.undo(id, 'u-admin');
   assert.equal(r.removed, 1);
   assert.deepEqual(r.keptChanged, [{ agent: 'writer', to: 'studio', now: 'press' }, { agent: 'critic', to: 'studio', now: null }]);
@@ -111,7 +111,7 @@ test('a line the rules refuse stays in its setup so Undo can be tried again; the
   const m = make({ refuse: (name) => refuse && name === 'writer' }); t.after(m.cleanup);
   m.list.find(x => x.name === 'writer').reportsTo = 'studio';
   m.list.find(x => x.name === 'editor').reportsTo = 'studio';
-  const id = m.svc.record('studio', [{ agent: 'writer', from: null, to: 'studio' }, { agent: 'editor', from: null, to: 'studio' }], 'u-admin');
+  const id = await m.svc.record('studio', [{ agent: 'writer', from: null, to: 'studio' }, { agent: 'editor', from: null, to: 'studio' }], 'u-admin');
   const r = await m.svc.undo(id, 'u-admin');
   assert.equal(r.removed, 1);
   assert.deepEqual(r.failed, [{ agent: 'writer', error: 'refused by the rules' }]);
@@ -125,7 +125,7 @@ test('undo never cascades: a leader is undone only after the agents under it', a
   const m = make(); t.after(m.cleanup);
   m.list.find(x => x.name === 'writer').reportsTo = 'studio';
   m.list.find(x => x.name === 'editor').reportsTo = 'writer';
-  const id = m.svc.record('studio', [{ agent: 'writer', from: null, to: 'studio' }, { agent: 'editor', from: null, to: 'writer' }], 'u-admin');
+  const id = await m.svc.record('studio', [{ agent: 'writer', from: null, to: 'studio' }, { agent: 'editor', from: null, to: 'writer' }], 'u-admin');
   // the real rules: an agent with a boss that is not a main agent or a leader is a broken line, so clearing writer first would cascade
   const real = m.plan;
   const r = await real.applyPasses('u-admin', [{ agent: 'writer', reports_to: null }, { agent: 'editor', reports_to: null }], () => false);
@@ -140,8 +140,8 @@ test('undoAll takes back every setup and empties the record', async (t) => {
   const m = make(); t.after(m.cleanup);
   m.list.find(x => x.name === 'writer').reportsTo = 'studio';
   m.list.find(x => x.name === 'editor').reportsTo = 'press';
-  m.svc.record('studio', [{ agent: 'writer', from: null, to: 'studio' }], 'u-admin');
-  m.svc.record('press', [{ agent: 'editor', from: null, to: 'press' }], 'u-admin');
+  await m.svc.record('studio', [{ agent: 'writer', from: null, to: 'studio' }], 'u-admin');
+  await m.svc.record('press', [{ agent: 'editor', from: null, to: 'press' }], 'u-admin');
   const r = await m.svc.undoAll('u-admin');
   assert.deepEqual(r, { removed: 2, keptChanged: [], failed: [] });
   assert.equal(boss(m, 'writer'), undefined); assert.equal(boss(m, 'editor'), undefined);
@@ -211,7 +211,7 @@ test('GET /api/team-setup: the offer state, the lead by display name, the record
   assert.equal(r.status, 200);
   assert.deepEqual(r.body, { offer: 'pending', lead: { name: 'lead', display: 'Atlas Lead' }, setups: [], anyTeam: false });
   m.list.find(x => x.name === 'writer').reportsTo = 'studio';
-  const id = m.svc.record('studio', [{ agent: 'writer', from: null, to: 'studio' }], 'u-admin');
+  const id = await m.svc.record('studio', [{ agent: 'writer', from: null, to: 'studio' }], 'u-admin');
   r = await TS.routeTeamSetup('get', routeDeps(m).d);
   assert.deepEqual(r.body, { offer: null, lead: { name: 'lead', display: 'Atlas Lead' }, setups: [{ id, at: m.svc.list()[0].at, main: 'studio', count: 1 }], anyTeam: true });
   r = await TS.routeTeamSetup('get', routeDeps(m, { ownerLeadNames: () => [] }).d);
@@ -259,13 +259,13 @@ test('show with the lead busy, halted or a run going is refused and the card is 
 test('POST /api/team-setup/undo: { id } or { all: true } -> { removed, keptChanged, failed }; 400 and 404 otherwise', async (t) => {
   const m = make(); t.after(m.cleanup);
   m.list.find(x => x.name === 'writer').reportsTo = 'studio';
-  const id = m.svc.record('studio', [{ agent: 'writer', from: null, to: 'studio' }], 'u-admin');
+  const id = await m.svc.record('studio', [{ agent: 'writer', from: null, to: 'studio' }], 'u-admin');
   assert.equal((await TS.routeTeamSetup('undo', routeDeps(m, { body: {} }).d)).status, 400);
   assert.equal((await TS.routeTeamSetup('undo', routeDeps(m, { body: { id: 'nope' } }).d)).status, 404);
   const r = await TS.routeTeamSetup('undo', routeDeps(m, { body: { id } }).d);
   assert.deepEqual([r.status, r.body], [200, { removed: 1, keptChanged: [], failed: [] }]);
   m.list.find(x => x.name === 'editor').reportsTo = 'press';
-  m.svc.record('press', [{ agent: 'editor', from: null, to: 'press' }], 'u-admin');
+  await m.svc.record('press', [{ agent: 'editor', from: null, to: 'press' }], 'u-admin');
   const all = await TS.routeTeamSetup('undo', routeDeps(m, { body: { all: true } }).d);
   assert.deepEqual([all.status, all.body], [200, { removed: 1, keptChanged: [], failed: [] }]);
 });
@@ -350,7 +350,6 @@ test('"for" must be a main agent of an admin; no line for a main agent, a cleari
 
 test('the card of one team: header Team setup, four options, every line ticked; Do it writes the lines and records one setup with from and to', async (t) => {
   const m = make(); t.after(m.cleanup);
-  m.list.find(x => x.name === 'editor').reportsTo = 'press';
   const s = setupCtx(m, { answers: [{ choice: 'Do it', checked: ['l1', 'l2'] }] });
   const r = await m.plan.runPlan(LINES(), s.ctx);
   assert.equal(s.asked.length, 1);
@@ -361,7 +360,7 @@ test('the card of one team: header Team setup, four options, every line ticked; 
   assert.equal(s.asked[0].allow_skip, false);
   assert.deepEqual(m.writes, [['writer', 'studio'], ['editor', 'studio']]);
   const [setup] = m.svc._readSetups();
-  assert.deepEqual(setup.lines, [{ agent: 'writer', from: null, to: 'studio' }, { agent: 'editor', from: 'press', to: 'studio' }]);
+  assert.deepEqual(setup.lines, [{ agent: 'writer', from: null, to: 'studio' }, { agent: 'editor', from: null, to: 'studio' }]);
   assert.equal(setup.main, 'studio'); assert.equal(setup.by, 'u-admin');
   assert.match(r, new RegExp(`Recorded as team setup ${setup.id}`));
   assert.deepEqual(m.events.map(e => [e[0], e[1].id, e[1].main, e[1].count, e[1].lead]), [['team_setup_recorded', setup.id, 'studio', 2, 'lead']]);
@@ -407,7 +406,7 @@ test('Approve all remaining teams applies this card, then later team_plan calls 
   assert.equal(m.svc.list().length, 2);
   // and it is this turn only: a new turn's state asks again
   const fresh = setupCtx(m, { answers: [{ choice: 'Not now', checked: [] }] });
-  await m.plan.runPlan({ for: 'press', summary: 'x', lines: [{ agent: 'writer', reports_to: 'press' }] }, fresh.ctx);
+  await m.plan.runPlan({ for: 'press', summary: 'x', lines: [{ agent: 'critic', reports_to: 'press' }] }, fresh.ctx);
   assert.equal(fresh.asked.length, 1);
   assert.equal(boss(m, 'writer'), 'studio', 'not moved: the card was declined');
 });
@@ -577,4 +576,162 @@ test('the playbook has the Set up teams section and the update list holds the ne
   const upd = JSON.parse(fs.readFileSync(path.join(dir, 'workspace-updates.json'), 'utf8'))['maestro/TEAM-PLAYBOOK.md'];
   assert.equal(upd.current, require('crypto').createHash('sha256').update(pb).digest('hex'));
   assert.deepEqual(upd.previous, ['758602a0772948e76162f5c4ed102e5f13dd3918200cb9ac27707be69534fed3']);
+});
+
+// ── review fixes ──
+const gated = (m) => {
+  let release; const gate = new Promise(r => { release = r; });
+  const svc = TS.createTeamSetup({
+    setupsFile: path.join(m.dir, 'team-setups.json'), offerFile: path.join(m.dir, 'team-setup.json'), agents: () => m.list,
+    applyLines: async (by, items, ended) => { await gate; return m.plan.applyPasses(by, items, ended); }, publish() {}, now: () => 1700000000000,
+  });
+  return { svc, release };
+};
+const setupsOnDisk = (m) => JSON.parse(fs.readFileSync(path.join(m.dir, 'team-setups.json'), 'utf8')).setups;
+
+test('undo all goes newest first: setup A (none -> studio) then B (studio -> press) undone together ends with no boss', async (t) => {
+  const m = make(); t.after(m.cleanup);
+  m.list.find(x => x.name === 'writer').reportsTo = 'press';
+  await m.svc.record('studio', [{ agent: 'writer', from: null, to: 'studio' }], 'u-admin');
+  await m.svc.record('press', [{ agent: 'writer', from: 'studio', to: 'press' }], 'u-admin');
+  const r = await m.svc.undoAll('u-admin');
+  assert.deepEqual(r, { removed: 2, keptChanged: [], failed: [] });
+  assert.equal(boss(m, 'writer'), undefined);
+  assert.deepEqual(m.writes, [['writer', 'studio'], ['writer', null]], 'B back to studio first, then A back to no boss');
+  assert.deepEqual(m.svc.list(), []);
+});
+
+test('ledger changes run one at a time: a record made while an undo is running is kept; two undos at once both succeed', async (t) => {
+  const m = make(); t.after(m.cleanup);
+  const g = gated(m);
+  m.list.find(x => x.name === 'writer').reportsTo = 'studio';
+  m.list.find(x => x.name === 'editor').reportsTo = 'press';
+  const a = await g.svc.record('studio', [{ agent: 'writer', from: null, to: 'studio' }], 'u-admin');
+  const b = await g.svc.record('press', [{ agent: 'editor', from: null, to: 'press' }], 'u-admin');
+  const undoA = g.svc.undo(a, 'u-admin');
+  const recC = g.svc.record('press', [{ agent: 'critic', from: null, to: 'press' }], 'u-admin');
+  g.release();
+  const [ra, c] = await Promise.all([undoA, recC]);
+  assert.equal(ra.removed, 1);
+  assert.deepEqual(setupsOnDisk(m).map(s => s.id), [b, c], 'C was kept');
+  const [rb1, rb2] = await Promise.all([g.svc.undo(b, 'u-admin'), g.svc.undo(c, 'u-admin')]);
+  assert.equal(rb1.removed, 1);
+  assert.equal(rb2.keptChanged.length, 1, 'critic was never given the boss: kept and reported, not failed');
+  assert.deepEqual(setupsOnDisk(m), [], 'the record ends empty');
+});
+
+test('a malformed, unreadable or wrongly shaped record is never replaced: record and undo refuse and write nothing', async (t) => {
+  const m = make(); t.after(m.cleanup);
+  const file = path.join(m.dir, 'team-setups.json');
+  assert.deepEqual(m.svc.list(), [], 'no file yet is an empty record');
+  for (const bad of ['{not json', '{}', '{"setups":"x"}', '']) {
+    fs.writeFileSync(file, bad);
+    await assert.rejects(m.svc.record('studio', [{ agent: 'writer', from: null, to: 'studio' }], 'u-admin'), /the team setup record could not be read; nothing was changed/);
+    assert.deepEqual(await m.svc.undoAll('u-admin'), { error: 'the team setup record could not be read; nothing was changed' });
+    assert.deepEqual(await m.svc.undo('ts_x', 'u-admin'), { error: 'the team setup record could not be read; nothing was changed' });
+    assert.equal(fs.readFileSync(file, 'utf8'), bad, 'the file is untouched');
+  }
+  fs.writeFileSync(file, '{not json');
+  const r = await TS.routeTeamSetup('undo', routeDeps(m, { body: { all: true } }).d);
+  assert.equal(r.status, 409);
+  assert.deepEqual(m.writes, []);
+});
+
+test('an undo whose old boss is gone puts the agent at no boss and says so (clearedInstead); the line is not stuck', async (t) => {
+  const m = make(); t.after(m.cleanup);
+  m.list.find(x => x.name === 'editor').reportsTo = 'studio';
+  await m.svc.record('studio', [{ agent: 'editor', from: 'gone_boss', to: 'studio' }], 'u-admin');
+  const r = await m.svc.undo(m.svc.list()[0].id, 'u-admin');
+  assert.deepEqual(r, { removed: 1, keptChanged: [], failed: [], clearedInstead: [{ agent: 'editor', wanted: 'gone_boss' }] });
+  assert.equal(boss(m, 'editor'), undefined);
+  assert.deepEqual(m.svc.list(), []);
+});
+
+test('set-up turn: the lines are judged again at Do it on the agents as they are now (transferred to a member, or given a boss meanwhile): nothing applied', async (t) => {
+  const m = make(); t.after(m.cleanup);
+  let s = setupCtx(m);
+  s.ctx.ask = async () => { for (const n of ['writer', 'editor', 'studio']) m.list.find(x => x.name === n).owner = 'u-member'; return { choice: 'Do it', checked: ['l1', 'l2'] }; };
+  let r = await m.plan.runPlan(LINES(), s.ctx);
+  assert.match(r, /nothing was applied.*belongs to a member/);
+  assert.deepEqual(m.writes, []); assert.deepEqual(m.svc.list(), []);
+  for (const n of ['writer', 'editor', 'studio']) delete m.list.find(x => x.name === n).owner;
+  s = setupCtx(m);
+  s.ctx.ask = async () => { m.list.find(x => x.name === 'writer').reportsTo = 'press'; return { choice: 'Do it', checked: ['l1', 'l2'] }; };
+  r = await m.plan.runPlan(LINES(), s.ctx);
+  assert.match(r, /nothing was applied.*already in a team: left as is/);
+  assert.deepEqual(m.writes, []); assert.deepEqual(m.svc.list(), []);
+});
+
+test('set-up turn: a line whose chain ends at another main agent is refused (also under Approve all)', async (t) => {
+  const m = make(); t.after(m.cleanup);
+  const s = setupCtx(m);
+  assert.match(await m.plan.runPlan(LINES({ lines: [{ agent: 'writer', reports_to: 'lead' }] }), s.ctx), /^The plan was not shown\..*not in studio's team/);
+  assert.equal(s.asked.length, 0);
+  s.state.approveAll = true;
+  assert.match(await m.plan.runPlan(LINES({ lines: [{ agent: 'writer', reports_to: 'lead' }, { agent: 'editor', reports_to: 'writer' }] }), s.ctx), /^The plan was not shown\..*not in studio's team/);
+  assert.deepEqual(m.writes, []); assert.deepEqual(m.svc.list(), []);
+  // under the card's own main agent it is fine, with the two levels
+  const ok = await m.plan.runPlan(LINES({ lines: [{ agent: 'writer', reports_to: 'studio' }, { agent: 'editor', reports_to: 'writer' }] }), s.ctx);
+  assert.match(ok, /Applied without a card/);
+  assert.equal(boss(m, 'editor'), 'writer');
+});
+
+test('set-up turn: an agent that already has a different boss is left as is', async (t) => {
+  const m = make(); t.after(m.cleanup);
+  m.list.find(x => x.name === 'writer').reportsTo = 'press';
+  const s = setupCtx(m);
+  assert.match(await m.plan.runPlan(LINES(), s.ctx), /^The plan was not shown\..*line for writer: already in a team: left as is/);
+  assert.equal(s.asked.length, 0);
+  assert.deepEqual(m.writes, []);
+});
+
+test('in a set-up turn the lead cannot change models, behaviour or connector access or create agents (refused at call time, like team_set)', () => {
+  const { runModelOffer, runBehaviourSwitch, runConnectorAccess, inTeamSetupTurn } = SDK_TP;
+  turnRegistry.set('zz_lead', { turnId: 'tx', teamSetupTrusted: true });
+  SDK_TP.ownerTurnAgents.add('zz_lead');
+  try {
+    assert.equal(inTeamSetupTurn('zz_lead'), true);
+    return Promise.all([runModelOffer('zz_lead', null, { action: 'list' }, 0, null), runBehaviourSwitch('zz_lead', null, { action: 'list' }, 0, null), runConnectorAccess('zz_lead', null, { action: 'list' }, 0, null)])
+      .then((rs) => { for (const r of rs) assert.match(r, /not available in a team set-up turn/); })
+      .finally(() => { turnRegistry.delete('zz_lead'); SDK_TP.ownerTurnAgents.delete('zz_lead'); });
+  } catch (e) { turnRegistry.delete('zz_lead'); SDK_TP.ownerTurnAgents.delete('zz_lead'); throw e; }
+});
+test('create_agent checks the set-up turn first (source)', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'sdk-chat.js'), 'utf8');
+  assert.match(src, /async \(\{ name, model, personality[^\n]*\n\s*if \(inTeamSetupTurn\(agentName\)\) return text\(NOT_IN_SETUP_TURN\);/);
+  for (const fn of ['runConnectorAccess', 'runBehaviourSwitch', 'runModelOffer']) {
+    assert.match(src, new RegExp(`async function ${fn}\\([^\\n]*\\n[^\\n]*\\n\\s*if \\(inTeamSetupTurn\\(agentName\\)\\) return NOT_IN_SETUP_TURN;`), fn);
+  }
+  assert.equal(SDK_TP.inTeamSetupTurn('zz_studio'), false, 'any other turn is untouched');
+});
+
+test('the offer under concurrency: a slow "show" reserves it so a "never" meanwhile gets accepted; a failed start releases it and the offer stays pending', async (t) => {
+  const m = make(); t.after(m.cleanup);
+  let release; const gate = new Promise(r => { release = r; });
+  const slow = routeDeps(m, { body: { choice: 'show' }, start: async () => { await gate; return { turnId: 't9' }; } });
+  const p = TS.routeTeamSetup('offer', slow.d);
+  await tick(); await tick();
+  const never = await TS.routeTeamSetup('offer', routeDeps(m, { body: { choice: 'never' } }).d);
+  assert.deepEqual(never.body, { offer: 'accepted' });
+  assert.equal(m.svc.answerOffer('never', 'u-admin').offer, 'accepted');
+  release();
+  assert.equal((await p).body.offer, 'accepted');
+  assert.equal(m.reload().offerState(roster()), 'accepted', 'stored accepted');
+
+  const m2 = make(); t.after(m2.cleanup);
+  let boom; const gate2 = new Promise(r => { boom = r; });
+  const failing = routeDeps(m2, { body: { choice: 'show' }, start: async () => { await gate2; throw new Error('could not start'); } });
+  const p2 = TS.routeTeamSetup('offer', failing.d);
+  await tick(); await tick();
+  assert.deepEqual((await TS.routeTeamSetup('offer', routeDeps(m2, { body: { choice: 'never' } }).d)).body, { offer: 'accepted' });
+  boom();
+  assert.equal((await p2).status, 500);
+  assert.equal(m2.svc.offerState(m2.list), 'pending', 'released: still pending');
+  assert.deepEqual((await TS.routeTeamSetup('offer', routeDeps(m2, { body: { choice: 'never' } }).d)).body, { offer: 'never' });
+  assert.equal(m2.reload().offerState(roster()), 'never');
+});
+
+test('redactCaller drops settingUpTeams (and offerPending) for members', () => {
+  const e = access.redactCaller({ busy: true, settingUpTeams: true, offerPending: true }, () => true);
+  assert.equal(e.settingUpTeams, undefined); assert.equal(e.offerPending, undefined); assert.equal(e.busy, true);
 });
