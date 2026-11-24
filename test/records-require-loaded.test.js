@@ -34,6 +34,18 @@ test('requireLoaded: an oversize replacement leaves the file byte for byte and r
   assert.strictEqual(fs.readFileSync(file, 'utf8'), big, 'without the option the file is replaced as before');
 });
 
+test('requireLoaded: a Record that is a link to another Record is refused; the link and its target stay byte for byte', () => {
+  const { rec, hub } = load(1000);
+  const dir = path.join(hub, 'workspaces', 'boss', 'records');
+  rec.write('boss', 'a-notes.md', 'n'.repeat(100));
+  fs.symlinkSync('a-notes.md', path.join(dir, 'team-practice.md'));
+  const r = rec.write('boss', 'team-practice.md', 'p'.repeat(600), { requireLoaded: true });
+  assert.match(r, /^not written: team-practice\.md is a link to another file/);
+  assert.strictEqual(fs.readFileSync(path.join(dir, 'a-notes.md'), 'utf8'), 'n'.repeat(100), 'the target is untouched');
+  assert.ok(fs.lstatSync(path.join(dir, 'team-practice.md')).isSymbolicLink(), 'the link is still a link');
+  assert.strictEqual(fs.readlinkSync(path.join(dir, 'team-practice.md')), 'a-notes.md');
+});
+
 test('requireLoaded: a replacement that fits is written; other Records count; a new file works too', () => {
   const { rec, hub } = load(300);
   const dir = path.join(hub, 'workspaces', 'boss', 'records');
