@@ -31,7 +31,7 @@ function page({ session = store(), agents = ['ann', 'bea'], screen = 'chat', cur
     agentByName: (n) => (agents.includes(n) ? { name: n } : undefined),
     saveDraft: (a, t) => calls.push('saveDraft:' + a + ':' + t),
     composerTypingPaint: () => {}, scrollChat: (f) => calls.push('scroll:' + f),
-    reloadApp: () => { calls.push('reloadApp'); ctx.reloadKeepChatSeen = ctx.api.keep; return Promise.resolve(); },
+    reloadApp: () => { calls.push('reloadApp'); ctx.reloadKeepChatSeen = ctx.api.keep; return false; },   // false = the attempt never started
   };
   vm.createContext(ctx);
   const src = js.slice(js.indexOf('const RELOAD_STATE_KEY'), js.indexOf('function toggleMenu('));
@@ -48,8 +48,78 @@ test('both arrows call the reload path (Reload app), not the old refresh / re-sy
   return t.api.reloadArrowClick().then(() => {
     assert.ok(t.calls.includes('reloadApp'), 'the same reloader as the menu');
     assert.strictEqual(t.ctx.reloadKeepChatSeen, true, 'asked to keep the chat');
-    assert.strictEqual(t.api.keep, false, 'the flag is reset afterwards');
+    assert.strictEqual(t.api.keep, false, 'the flag is reset when the attempt did not start');
   });
+});
+
+// The REAL reloadApp / createAppReloader / reloadArrowClick against fakes, with the preparation held open by the test.
+function realPage({ typed = 'half a thought', answers = [] } = {}) {
+  const session = store(), reloads = [], asked = [], timers = [];
+  const box = { value: typed, style: {}, scrollHeight: 30 };
+  const els = { 'msg-input': box, 'chat-resync': { classList: { add() {} } }, 'agents-refresh': { classList: { add() {} } } };
+  let release; const gate = new Promise((r) => { release = r; });
+  const ctx = {
+    sessionStorage: session, screen: 'chat', current: 'bea', JSON, Promise, Math, Set, Array,
+    $: (id) => els[id] || null,
+    saveDraft: () => {}, toast: () => {}, voiceCall: false, APP_RELOAD_CALL_QUESTION: 'call?',
+    pendingImages: [], imagesPreparing: new Set(),
+    appReloadUrls: () => [], appFreshFetch: () => gate, fetch: () => null, document: {},
+    navigator: {}, setTimeout: (f) => { timers.push(f); return 0; },
+    window: { confirm: (q) => { asked.push(q); return answers.length ? answers.shift() : true; } },
+    location: { origin: 'http://x', reload: () => reloads.push('reload') },
+  };
+  vm.createContext(ctx);
+  const src = js.slice(js.indexOf('function createAppReloader('), js.indexOf('// ── app reload (end)')) + '\n' + js.slice(js.indexOf('function paintReloadBusy('), js.indexOf('function toggleMenu('));
+  vm.runInContext(src + '\nthis.api = { reloadArrowClick, get keep() { return reloadKeepChat; } };', ctx);
+  return { ctx, box, session, reloads, asked, timers, release, api: ctx.api };
+}
+const settle = () => new Promise((r) => setImmediate(r));
+
+test('arrow: a photo attached during the wait is asked about at the final check; Cancel = no reload, photo kept, flag cleared', async () => {
+  const t = realPage({ answers: [false] });   // the only question is the final one: Cancel
+  const first = t.api.reloadArrowClick();
+  assert.strictEqual(await first, true);
+  assert.strictEqual(t.api.keep, true, 'the flag stays set while the files are being prepared');
+  t.ctx.pendingImages.push({ name: 'p.jpg' });   // attached during the wait
+  t.release();
+  await settle();
+  assert.deepStrictEqual(t.asked, ['Reload and remove the attached photo(s)? The text stays.'], 'asked once, at the final check');
+  assert.deepStrictEqual(t.reloads, [], 'Cancel: no reload');
+  assert.strictEqual(t.ctx.pendingImages.length, 1, 'the photo is still there');
+  assert.strictEqual(t.session.m.size, 0, 'nothing stashed');
+  assert.strictEqual(t.api.keep, false, 'the flag is cleared when the attempt ends');
+});
+
+test('arrow: no photo, preparation completes, go stashes the chat and the draft and reloads', async () => {
+  const t = realPage({ typed: 'half a thought' });
+  await t.api.reloadArrowClick();
+  assert.strictEqual(t.api.keep, true);
+  t.release();
+  await settle();
+  assert.deepStrictEqual(t.asked, []);
+  assert.deepStrictEqual(JSON.parse(t.session.m.get('hub-mobile-reload')), { screen: 'chat', agent: 'bea' });
+  assert.strictEqual(t.session.m.get('hub-mobile-reload-draft:bea'), 'half a thought');
+  assert.deepStrictEqual(t.reloads, ['reload']);
+  assert.strictEqual(t.api.keep, false);
+});
+
+test('arrow: a second tap during preparation is ignored (does not clear or restart the first)', async () => {
+  const t = realPage();
+  assert.strictEqual(await t.api.reloadArrowClick(), true);
+  assert.strictEqual(await t.api.reloadArrowClick(), false, 'ignored');
+  assert.strictEqual(t.api.keep, true, 'the first attempt keeps its flag');
+  t.release();
+  await settle();
+  assert.deepStrictEqual(t.reloads, ['reload'], 'one reload');
+  assert.ok(t.session.m.has('hub-mobile-reload'), 'the first attempt still stashed the chat');
+});
+
+test('arrow: Cancel at the first question (photo already attached) clears the flag', async () => {
+  const t = realPage({ answers: [false] });
+  t.ctx.pendingImages.push({ name: 'p.jpg' });
+  assert.strictEqual(await t.api.reloadArrowClick(), false);
+  assert.strictEqual(t.api.keep, false);
+  assert.deepStrictEqual(t.reloads, []);
 });
 
 test('aria-label and tooltip of both arrows are "Reload"', () => {

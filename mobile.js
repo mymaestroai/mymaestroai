@@ -14903,8 +14903,9 @@ function reloadApp() {
         swUpdate: () => ('serviceWorker' in navigator ? navigator.serviceWorker.getRegistration('/mobile').then(r => r && r.update()) : null),
       }),
       // the draft as it is now, right before the reload (typing goes on while the files are fetched)
-      go: () => { if (current && $('msg-input')) saveDraft(current, $('msg-input').value); if (reloadKeepChat) reloadStash(); location.reload(); },
-      onBusy: paintReloadBusy,
+      go: () => { if (current && $('msg-input')) saveDraft(current, $('msg-input').value); if (reloadKeepChat) reloadStash(); reloadKeepChat = false; location.reload(); },
+      // the attempt ended without a reload (Cancel at the final question, or the wait after go ran out): the arrow flag ends with it
+      onBusy: (b) => { paintReloadBusy(b); if (!b) reloadKeepChat = false; },
     });
   }
   return appReloaderInst.reload();
@@ -14947,10 +14948,15 @@ const RELOAD_PHOTO_QUESTION = 'Reload and remove the attached photo(s)? The text
 function reloadPhotoQuestions() {
   return reloadKeepChat && (pendingImages.length > 0 || imagesPreparing.size > 0) ? [RELOAD_PHOTO_QUESTION] : [];
 }
+// The flag stays set for the whole attempt (the reloader's preparation runs on after reload() returned true): it is cleared by
+// the reloader's onBusy(false) (Cancel after preparation), by go (right after the stash), or here when the attempt never started.
 function reloadArrowClick() {
+  if (reloadKeepChat) return Promise.resolve(false);   // a second tap while an attempt is going on changes nothing
   for (const id of ['chat-resync', 'agents-refresh']) { const b = $(id); if (b) b.classList.add('spinning'); }
   reloadKeepChat = true;
-  return Promise.resolve(reloadApp()).finally(() => { reloadKeepChat = false; });
+  let started = false;
+  try { started = reloadApp(); } finally { if (!started) reloadKeepChat = false; }
+  return Promise.resolve(started);
 }
 
 
