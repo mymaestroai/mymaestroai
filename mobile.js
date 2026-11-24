@@ -3634,6 +3634,12 @@ function chatViewMergeRuns(history) {
       }
       if (Date.parse(e.ts) < Date.parse(m.ts)) { m.ts = e.ts; m.rank = e.rank || 0; if (e.turn) m.turn = e.turn; else delete m.turn; }
       if (Date.parse(e.last_ts) > Date.parse(m.last_ts)) m.last_ts = e.last_ts;
+      m.mergedRunKeys = [...new Set([
+        chatViewRunKey(last),
+        ...(last.mergedRunKeys || []),
+        chatViewRunKey(e),
+        ...(e.mergedRunKeys || []),
+      ])];
       out[out.length - 1] = m;
     } else out.push(e);
   }
@@ -3653,14 +3659,12 @@ function chatViewRunKey(run) {
   return `${run && run.ts}|${Math.floor(Number(run && run.rank)) || 0}`;
 }
 // After Load earlier merged runs into one (the merged run starts earlier, so its key is new): the key of an open line
-// of the page's states (key -> { open }) that lies inside the merged run's time range, or null.
+// of the page's states (key -> { open }) that is one of the pieces merged into this run (mergedRunKeys), or null.
 function chatViewRunOpenKey(states, run) {
-  const own = chatViewRunKey(run), a = Date.parse(run && run.ts), b = Date.parse((run && run.last_ts) || (run && run.ts));
-  for (const k of Object.keys(states || {})) {
-    const t = Date.parse(states[k] && states[k].ts ? states[k].ts : k.split('|')[0]);
-    if (k !== own && states[k] && states[k].open && t >= a && t <= b) return k;
-  }
-  return null;
+  const own = chatViewRunKey(run);
+  return (run.mergedRunKeys || []).find(
+    key => key !== own && states?.[key]?.open
+  ) || null;
 }
 // ── chat view helpers (end) ──
 // ── auto-turn helpers (begin) ──

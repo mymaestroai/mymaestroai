@@ -386,6 +386,32 @@ test('r1 FOLLOW-UP: Load earlier merges an older run into an open line: the merg
   assert.strictEqual(m.urls.length, 2);
 });
 
+test('r4 Load earlier: an open run B is not taken for part of an older run A at the same ts (separated by a shown entry)', async () => {
+  const a = { ...RUN, rank: 0 }, b = { ...RUN, rank: 1 };
+  const page = V.chatViewMergeRuns([a, { role: 'user', content: 'hi' }, b]);
+  assert.strictEqual(page.length, 3);
+  assert.strictEqual(V.chatViewRunOpenKey({ [V.chatViewRunKey(b)]: { open: true } }, page[0]), null);
+  const d = deskHarness({ fetchImpl: answer({ history: TURNS }) });
+  const wb0 = d.f.soloRunLine('c1', b, null);
+  await wb0.children[0].click();
+  assert.strictEqual(d.fetched.length, 1);
+  d.panel.textContent = '';
+  const wa = d.f.soloRunLine('c1', a, null), wb = d.f.soloRunLine('c1', b, null);
+  await new Promise((r) => setImmediate(r));
+  assert.strictEqual(wa.children[0].getAttribute('aria-expanded'), 'false');
+  assert.strictEqual(wb.children[0].getAttribute('aria-expanded'), 'true');
+  assert.strictEqual(d.fetched.length, 1);
+  const m = phoneHarness({ fetchImpl: answer({ history: TURNS }) });
+  await m.f.renderRunLine(b, m.box).children[0].click();
+  assert.strictEqual(m.urls.length, 1);
+  m.box.textContent = '';
+  const pa = m.f.renderRunLine(a, m.box), pb = m.f.renderRunLine(b, m.box);
+  await new Promise((r) => setImmediate(r));
+  assert.strictEqual(pa.children[0].getAttribute('aria-expanded'), 'false');
+  assert.strictEqual(pb.children[0].getAttribute('aria-expanded'), 'true');
+  assert.strictEqual(m.urls.length, 1);
+});
+
 test('r1 B1 pages: an incomplete answer says to switch on Agent work, not an empty body', async () => {
   const d = deskHarness({ fetchImpl: answer({ history: [], more: false, incomplete: true }) });
   const w = d.f.soloRunLine('c1', RUN, null);

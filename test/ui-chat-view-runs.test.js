@@ -48,7 +48,8 @@ test('mergeRuns: adjacent runs become one (turns and kinds added by kind and fro
   const copyA = JSON.stringify(a);
   const out = V.chatViewMergeRuns([own, a, b, own, c]);
   assert.strictEqual(out.length, 4);
-  assert.deepStrictEqual(out[1], run({ ts: '2026-11-24T07:00:00Z', last_ts: '2026-11-24T07:40:00Z', turns: 5, kinds: [{ kind: 'consultation', from: 'Beacon', n: 3 }, { kind: 'schedule', from: null, n: 2 }] }));
+  assert.deepStrictEqual(out[1], { ...run({ ts: '2026-11-24T07:00:00Z', last_ts: '2026-11-24T07:40:00Z', turns: 5, kinds: [{ kind: 'consultation', from: 'Beacon', n: 3 }, { kind: 'schedule', from: null, n: 2 }] }), mergedRunKeys: [V.chatViewRunKey(a), V.chatViewRunKey(b)] });
+  assert.strictEqual(V.chatViewMergeRuns([a, b, c])[0].mergedRunKeys.length, 3, 'the pieces of a three-way merge are all listed');
   assert.strictEqual(out[2], own); assert.strictEqual(out[3], c);
   assert.strictEqual(JSON.stringify(a), copyA, 'the inputs are not changed');
   assert.deepStrictEqual(V.chatViewMergeRuns(null), []);
