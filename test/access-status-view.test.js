@@ -229,3 +229,13 @@ test('isAdminSession: only a signed-in admin browser session, never a token, the
   assert.strictEqual(X.isAdminSession(null), false);
 });
 
+
+test('a team-turn snapshot for a member carries no step detail and no error text (active and finished)', () => {
+  const access = require('../lib/access');
+  const active = access.redactTeamTurn({ origin: { kind: 'team_setup' }, progress: { detail: 'team_plan secretagent' }, text: 'x' });
+  assert.equal(active.progress, null);
+  assert.ok(!JSON.stringify(active).includes('secretagent'));
+  const done = access.redactTeamTurn({ origin: { kind: 'build_team' }, ended: { ok: false, endedAt: 5, error: 'failed on secretagent' } });
+  assert.deepEqual(done.ended, { ok: false, endedAt: 5 });
+  assert.ok(!JSON.stringify(done).includes('secretagent'));
+});
