@@ -98,5 +98,5 @@ test('phone: the bell sits in the chat header before Stop, shows exactly while a
   assert.ok(m.includes("onComposerTap($('chat-notify-btn'), onNotifyBellTap);") && m.includes('function onComposerTap(btn, act)'), 'the bell shares the Send button\'s tap handling');
   assert.ok(m.includes("if (b.dataset.nk === 'done') { d.close(); toggleNotifyDone(); }"), 'the sheet\'s Notify me item runs the same toggle');
   assert.ok(m.includes('Notifications are off on this phone: turn them on in the ⋮ menu first'), 'says when no device would hear it');
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v87'/);
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v88'/);
 });

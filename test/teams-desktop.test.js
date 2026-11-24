@@ -115,8 +115,8 @@ function world({ stored, storageThrows, simple, member } = {}) {
     fnSrc('questionChecklistOf'), fnSrc('questionChecklistHtml'), fnSrc('questionCheckedIds'), fnSrc('askResponseBody'),
     fnSrc('teamsRowHtml'), fnSrc('teamsBlockHtml'), fnSrc('teamsSubtreeHtml'), fnSrc('renderTeams'), fnSrc('teamsRepaintSoon'),
     // Set up teams (renderTeams, setupTabs and teamsClick call these): the harness carries them so the pinned Teams tests keep running as before.
-    "let teamSetup = { offer: null, lead: null, setups: [] }; let teamSetupStarting = false; const teamSetupRecent = new Set(); let teamSetupLoadTimer = 0; const chats = {};",
-    fnSrc('teamSetupLeadDisplay'), fnSrc('teamSetupBusy'), fnSrc('teamSetupLines'), fnSrc('teamSetupDate'), fnSrc('teamSetupLineHtml'), fnSrc('teamSetupApply'),
+    "let teamSetup = { offer: null, lead: null, setups: [], alone: {} }; let teamSetupStarting = false; const teamSetupRecent = new Set(); let teamSetupLoadTimer = 0; const chats = {};",
+    fnSrc('agentWorksAlone'), fnSrc('teamSetupLeadDisplay'), fnSrc('teamSetupBusy'), fnSrc('teamSetupLines'), fnSrc('teamSetupDate'), fnSrc('teamSetupLineHtml'), fnSrc('teamSetupApply'),
     'async ' + fnSrc('teamSetupLoad'), fnSrc('teamSetupLoadSoon'), fnSrc('teamSetupPaint'), fnSrc('teamSetupOfferHtml'), fnSrc('teamSetupUndoRows'), fnSrc('teamSetupChatPaint'),
     'async ' + fnSrc('teamSetupStart'), 'async ' + fnSrc('teamSetupUndo'), 'function setAgentLive() {} function loadAgents() { return Promise.resolve(); }',
     'this.api = { setupTabs, sidebarViewSet, sidebarTabsApply, renderTeams, teamsClick, teamsRepaintSoon, teamsOpenToggle, agentMenuEntries, agentMenuBtnHtml, buildLineHtml, agentButton, buildTeamStart, optimizeTeamStart, agentMenuOpenAt, agentMenuClose, paintBuildControls, questionChecklistOf, questionChecklistHtml, askResponseBody };'].join('\n');
@@ -725,4 +725,93 @@ test('Teams rows show the background-work ring and line (lib/ui-agent-dot.js), o
   assert.match(row('builder'), /Free · 2 things in the background/);
   assert.doesNotMatch(row('writer'), /bg-work|in the background/, 'replying: no ring');
   assert.match(html, /\.teams-dot\.bg-work:not\(\.live-busy\):not\(\.live-question\)/);
+});
+
+// ---- Works alone: the lead recorded that a main agent with no team needs none
+const aloneWorld = (aloneNames, o) => {
+  const w = world(o);
+  w.ctx.AGENTS = sample();
+  const alone = {}; for (const n of aloneNames) alone[n] = { at: '2026-01-01T00:00:00.000Z', reason: 'short personal tasks' };
+  w.set = (a) => vm.runInContext('teamSetup = { offer: null, lead: null, setups: [], alone: ' + JSON.stringify(a) + ' }', w.ctx);
+  w.set(alone);
+  return w;
+};
+test('works alone: the All Agents line "No team yet · Build team" is gone for that agent and stays for another', () => {
+  const sam = A('sam', { category: 'primary' });
+  const w = aloneWorld(['sam']);
+  assert.strictEqual(w.api.buildLineHtml(sam), '');
+  w.set({});
+  assert.match(w.api.buildLineHtml(sam), /No team yet · .*Build team/);
+});
+test('works alone: Teams reads "Works alone" in the quiet sub-line, with no Build team link; another main agent still says No team yet', () => {
+  const w = aloneWorld(['sam']);
+  w.ctx.AGENTS.push(A('solo', { category: 'primary' }));
+  w.api.renderTeams();
+  const h = w.list.innerHTML;
+  const row = (n) => h.slice(h.indexOf('data-agent="' + n + '"'), h.indexOf('</div></div>', h.indexOf('data-agent="' + n + '"')));
+  assert.match(row('sam'), /<span class="teams-sub teams-sub-adv">Works alone<\/span>/);
+  assert.doesNotMatch(row('sam'), /No team yet|data-build-team/);
+  assert.match(row('solo'), /No team yet · <span[^>]*data-build-team="solo"/);
+});
+test('works alone: Simple Teams says "Works alone" too (the same sub-line), and a member never sees it', () => {
+  const w = aloneWorld(['sam'], { simple: true });
+  w.api.renderTeams();
+  assert.match(w.list.innerHTML, /Works alone/);
+  const m = aloneWorld(['sam'], { member: true });
+  m.api.renderTeams();
+  assert.doesNotMatch(m.list.innerHTML, /Works alone/);
+  assert.match(m.list.innerHTML, /No team yet/);
+});
+test('works alone: the row menu still offers Build team, so it can be asked again', () => {
+  const w = aloneWorld(['sam']);
+  const entries = w.api.agentMenuEntries(A('sam', { category: 'primary' }));
+  assert.ok(entries.some((e) => e.key === 'build' && e.label === 'Build team'));
+});
+test('works alone: once somebody reports to the agent the entry no longer counts', () => {
+  const w = aloneWorld(['sam']);
+  w.ctx.AGENTS.find((a) => a.name === 'scout').reportsTo = 'sam';
+  w.api.renderTeams();
+  assert.doesNotMatch(w.list.innerHTML, /Works alone/);
+  assert.match(w.list.innerHTML, /team of 1/);
+});
+test('works alone: GET /api/team-setup carries it to teamSetup (source)', () => {
+  assert.match(app, /alone: d\.alone && typeof d\.alone === 'object' && !Array\.isArray\(d\.alone\) \? d\.alone : \{\}/);
+  assert.match(app, /if \(Object\.keys\(teamSetup\.alone\)\.sort\(\)\.join\('\\n'\) !== aloneWas\) \{ try \{ renderAgents\(\)/);
+});
+
+// ── Simple says what is shown and what exists ──
+test('Simple Teams (desktop): a main with a leader has a Simple sub-line "1 leader · 3 agents"; with only direct reports there is none and "team of N" stays', () => {
+  const w = world({ stored: [['hub-teams-open', JSON.stringify({ atlas: true })]] });
+  w.ctx.AGENTS = [A('atlas', { category: 'primary' }), A('editor', { reportsTo: 'atlas' }), A('writer', { reportsTo: 'editor' }), A('scout', { reportsTo: 'atlas' })];
+  w.api.renderTeams();
+  const h = w.list.innerHTML;
+  const atlas = h.slice(h.indexOf('data-agent="atlas"'), h.indexOf('data-agent="editor"'));
+  assert.match(atlas, /teams-sub teams-sub-adv has-simple">team of 3</, 'the normal line is unchanged');
+  assert.match(atlas, /<span class="teams-sub teams-sub-simple">1 leader · 3 agents<\/span>/);
+  w.ctx.AGENTS = [A('atlas', { category: 'primary' }), A('a1', { reportsTo: 'atlas' }), A('a2', { reportsTo: 'atlas' }), A('a3', { reportsTo: 'atlas' })];
+  w.api.renderTeams();
+  const h2 = w.list.innerHTML;
+  const at2 = h2.slice(h2.indexOf('data-agent="atlas"'), h2.indexOf('data-agent="a1"'));
+  assert.match(at2, /teams-sub teams-sub-adv">team of 3</);
+  assert.doesNotMatch(at2, /teams-sub-simple/);
+});
+test('Build team sub-line is never cut: it wraps instead of ellipsis (240px and 160px), a class only on the No team yet line', () => {
+  assert.match(html, /\.teams-sub\.teams-sub-build \{[^}]*white-space: normal;[^}]*overflow: visible;[^}]*text-overflow: clip;/);
+  const w = world();
+  w.ctx.AGENTS = [A('solo', { category: 'primary' }), A('boss', { category: 'primary' }), A('sam', { reportsTo: 'boss' })];
+  w.api.renderTeams();
+  const h = w.list.innerHTML;
+  assert.match(h, /<span class="teams-sub teams-sub-adv teams-sub-build">No team yet · <span[^>]*data-build-team="solo"/);
+  assert.doesNotMatch(h.slice(h.indexOf('data-agent="boss"'), h.indexOf('data-agent="boss"') + 900), /teams-sub-build/);
+});
+
+// ── an old server: GET /api/team-setup has no 'alone' ──
+test('old server (no alone in GET /api/team-setup): the desktop rows show the normal build line, nothing throws', () => {
+  const w = aloneWorld([]);
+  vm.runInContext('teamSetup = { offer: null, lead: null, setups: [] }', w.ctx);
+  const sam = A('sam', { category: 'primary' });
+  assert.match(w.api.buildLineHtml(sam), /No team yet · .*Build team/);
+  w.api.renderTeams();
+  assert.match(w.list.innerHTML, /No team yet · <span[^>]*data-build-team="sam"/);
+  assert.strictEqual(vm.runInContext("agentWorksAlone('sam')", w.ctx), false);
 });

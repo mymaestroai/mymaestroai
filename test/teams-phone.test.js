@@ -49,14 +49,18 @@ function env(over) {
     saveJson: (k, v) => { store[k] = JSON.stringify(v); },
     localStorage: { getItem: (k) => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = String(v); } },
     store,
+    // the Works alone record (mobile.js worksAlone): names the lead recorded, admins only
+    aloneNames: (over && over.alone) || [],
   };
+  e.worksAlone = (n) => !!e.isAdmin() && e.aloneNames.includes(n);
   return Object.assign(e, (over && over.env) || {});
 }
 function load(e, src, ret) {
   const names = Object.keys(e);
   return new Function(...names, src + '\nreturn ' + ret + ';')(...names.map((n) => e[n]));
 }
-const teamsApi = (e) => load(e, TEAMS() + '\n' + ROW(), '{ teamsView, teamsViewSet, teamsListHtml, agentRowHtml, teamsToggle, teamsSub }');
+// ROW() runs on to the page's own Works alone state (let teamSetup, worksAlone), so the record is set on that state
+const teamsApi = (e) => load(e, TEAMS() + '\n' + ROW() + '\nteamSetup.alone = ' + JSON.stringify(Object.fromEntries((e.aloneNames || []).map((n) => [n, {}]))) + ';', '{ teamsView, teamsViewSet, teamsListHtml, agentRowHtml, teamsToggle, teamsSub }');
 const names = (h) => (h.match(/data-agent="([^"]+)"/g) || []).map((s) => s.slice(12, -1));
 
 test('mobile.html: the two-part switch above the list, its script tag, the stylesheet uses variables only', () => {
@@ -271,8 +275,8 @@ test('renderAgents: the Teams branch and the repaint wiring are in the source', 
 });
 
 // ── Simple mode ──
-function simpleRun(view, busy, open) {
-  const e = env({ store: { 'hub-sidebar-view': view, 'hub-teams-open': JSON.stringify(open || {}) } });
+function simpleRun(view, busy, open, alone) {
+  const e = env({ alone, store: { 'hub-sidebar-view': view, 'hub-teams-open': JSON.stringify(open || {}) } });
   e.live = {}; for (const n of busy || []) e.live[n] = { busy: true };
   const mk = (tag) => {
     const x = { tag, children: [], dataset: {}, className: '', style: { props: {}, setProperty(k, v) { this.props[k] = v; } }, attrs: {}, _h: '', _t: '',
@@ -311,7 +315,7 @@ test('Simple Teams: a direct report with nobody under it is not shown as a leade
   e2.agents = [{ name: 'atlas', display: 'Atlas', category: 'primary' }, S('editor', 'atlas'), S('scout', 'atlas'), S('writer', 'editor')];
   const model = load(e2, TEAMS() + fnSource('simpleTeamsModel'), 'simpleTeamsModel')();
   // Simple lists every direct report of a main (the direct worker as 'Reports to ...'); only the third level (writer) is left out.
-  assert.deepStrictEqual(model.rows.map((r) => [r.a.name, r.depth, r.sub]), [['atlas', 0, 'team of 3'], ['editor', 1, 'Team leader'], ['scout', 1, 'Reports to Atlas']]);
+  assert.deepStrictEqual(model.rows.map((r) => [r.a.name, r.depth, r.sub]), [['atlas', 0, '1 leader · 3 agents'], ['editor', 1, 'Team leader'], ['scout', 1, 'Reports to Atlas']]);
   assert.deepStrictEqual(model.rows.map((r) => r.rank), ['main', 'leader', 'worker'], 'a direct report with nobody under it is a worker, not a leader');
 });
 
@@ -339,7 +343,7 @@ test('Simple Teams: main agents with their leaders, no workers, shared specialis
   const rows = box.children.filter((c) => c.dataset && c.dataset.agent);
   assert.deepStrictEqual(rows.map((r) => r.dataset.agent), ['ann', 'lia', 'lou', 'bea']);
   const sub = (r) => r.parts['small'].textContent;
-  assert.deepStrictEqual(rows.map(sub), ['2 teams · 5 agents · 1 working', 'Team leader', 'Team leader', 'No team yet']);
+  assert.deepStrictEqual(rows.map(sub), ['2 leaders · 5 agents · 1 working', 'Team leader', 'Team leader', 'No team yet']);
   const rank = (r) => (r.className.match(/sa-rank-(\w+)/) || [])[1];
   assert.deepStrictEqual(rows.map(rank), ['main', 'leader', 'leader', 'main'], 'every Simple Teams row carries its rank class');
   assert.ok(!rows.some((r) => /sa-leader/.test(r.className)), 'the old sa-leader class is gone');
@@ -373,7 +377,7 @@ test('Build line: an admin sees "No team yet · Build team" under a main agent w
 });
 test('Build line: renderAgents passes build only for the group rows (the source)', () => {
   assert.match(RENDER(), /const noTeam = buildNoTeam\(\);/);
-  assert.match(RENDER(), /agentRowHtml\(a, \{ job: activeJobs\[a\.name\], build: noTeam\.has\(a\.name\) \}\)/);
+  assert.match(RENDER(), /agentRowHtml\(a, \{ job: activeJobs\[a\.name\], build: noTeam\.has\(a\.name\) \}\)/);   // the loop only calls agentRowHtml; the works-alone decision is inside it
   assert.ok(!/active: true, job: activeJobs\[a\.name\], build/.test(RENDER()), 'not in the Active section: no duplicate line');
 });
 test('Teams: Build Team button under "No team yet" for admins only; Building… disabled while a live entry says so', () => {
@@ -393,9 +397,9 @@ test('Teams: Build Team button under "No team yet" for admins only; Building… 
 });
 
 function fakeEl(over) { return Object.assign({ hidden: false, disabled: false, href: '', textContent: '' }, over); }
-function menuRun({ admin = true, simple = false, cur = 'bea', live = {}, pending = [] } = {}) {
+function menuRun({ admin = true, simple = false, cur = 'bea', live = {}, pending = [], alone = [] } = {}) {
   const els = { 'menu-agent-settings': fakeEl(), 'menu-build-team': fakeEl() };
-  const e = env({ env: { $: (id) => els[id], current: cur, live, isAdmin: () => admin, simpleOn: () => simple, agentByName: (n) => AGENTS.find((a) => a.name === n) } });
+  const e = env({ alone, env: { $: (id) => els[id], current: cur, live, isAdmin: () => admin, simpleOn: () => simple, agentByName: (n) => AGENTS.find((a) => a.name === n) } });
   const api = load(e, BUILD() + '\nfor (const p of ' + JSON.stringify(pending) + ') buildTeamPending.add(p);', '{ menuTeamSync }');
   api.menuTeamSync();
   return els;
@@ -530,4 +534,65 @@ test('mobile.html: Build/plan-card CSS uses variables only and gives 44px+ touch
   assert.match(css, /\.build-team-btn \{[^}]*min-height: 44px/);
   assert.match(css, /\.build-team-link \{[^}]*min-height: 44px/);
   assert.match(css, /\.question \.qcheck input \{[^}]*width: 24px/);
+});
+
+// ── Works alone: the lead recorded that a main agent with no team needs none ──
+test('works alone (phone Teams): the row says "Works alone", no Build team link; a main agent without the record still offers it', () => {
+  const h = teamsApi(env({ alone: ['bea'] })).teamsListHtml();
+  const row = h.slice(h.indexOf('data-agent="bea"'), h.indexOf('</button>', h.indexOf('data-agent="bea"')));
+  assert.match(row, /<div class="agent-model" title="Works alone">Works alone<\/div>/);
+  assert.ok(!/build-team|No team yet/.test(row));
+  assert.ok(!/build-team-link/.test(h), 'no Build team link anywhere');
+  const e = env({ alone: [] });
+  assert.match(teamsApi(e).teamsListHtml(), /agent-build-sub">No team yet · <span[^>]*data-build-team="bea"/);
+  assert.ok(!/Works alone/.test(teamsApi(env({ alone: ['bea'], env: { isAdmin: () => false } })).teamsListHtml()), 'a member never sees it');
+  assert.match(teamsApi(env({ alone: ['bea'], env: { isAdmin: () => false } })).teamsListHtml(), /No team yet/);
+});
+test('works alone (phone All Agents): the group row passes build only without the record, so the line is gone (source)', () => {
+  assert.ok(!/build: noTeam\.has\(a\.name\) && /.test(RENDER()), 'the loop stays plain');
+  assert.match(js, /opts && opts\.build && !worksAlone\(a\.name\) \? buildLineHtml/);
+  assert.match(js, /function worksAlone\(name\) \{\n  return isAdmin\(\) && !!\(teamSetup\.alone && Object\.prototype\.hasOwnProperty\.call\(teamSetup\.alone, name\)\) && !!window\.hubTeams && !window\.hubTeams\.hasTeam\(name, agents\);/);
+  assert.match(js, /alone: d\.alone && typeof d\.alone === 'object' && !Array\.isArray\(d\.alone\) \? d\.alone : \{\}/);
+});
+test('works alone (phone Simple Teams): the main agent says "Works alone"', () => {
+  const { box } = simpleRun('teams', [], {}, ['bea']);
+  const rows = box.children.filter((c) => c.dataset && c.dataset.agent);
+  assert.deepStrictEqual(rows.map((r) => r.parts['small'].textContent).slice(-1), ['Works alone']);
+});
+test('works alone (phone ⋮ menu): Build team stays in the chat menu so it can be asked again', () => {
+  const m = menuRun({ alone: ['bea'] });
+  assert.strictEqual(m['menu-build-team'].hidden, false);
+  assert.strictEqual(m['menu-build-team'].disabled, false);
+});
+test('works alone (phone): a team under the agent ends it at once (the record no longer counts)', () => {
+  const real = fs.readFileSync(path.join(__dirname, '..', 'mobile.js'), 'utf8');
+  assert.match(real, /!window\.hubTeams\.hasTeam\(name, agents\)/);
+});
+
+// ── Simple says what is shown and what exists ──
+test('Simple Teams: a main with leaders says "1 leader · 3 agents" (third level hidden); with only direct reports it keeps "team of N"; the advanced Teams line is unchanged', () => {
+  const S = (n, r) => ({ name: n, display: n, category: 'specialist', reportsTo: r });
+  const e2 = env({ store: { 'hub-sidebar-view': 'teams' } });
+  e2.agents = [{ name: 'atlas', display: 'Atlas', category: 'primary' }, S('editor', 'atlas'), S('writer', 'editor'), S('scout', 'atlas')];
+  const model = load(e2, TEAMS() + fnSource('simpleTeamsModel'), 'simpleTeamsModel')();
+  assert.strictEqual(model.rows[0].sub, '1 leader · 3 agents');
+  assert.match(teamsApi(e2).teamsListHtml(), /team of 3/, 'the Teams (advanced) line still says team of N');
+  const e3 = env({ store: { 'hub-sidebar-view': 'teams' } });
+  e3.agents = [{ name: 'atlas', display: 'Atlas', category: 'primary' }, S('a1', 'atlas'), S('a2', 'atlas'), S('a3', 'atlas')];
+  assert.strictEqual(load(e3, TEAMS() + fnSource('simpleTeamsModel'), 'simpleTeamsModel')().rows[0].sub, 'team of 3');
+});
+
+test('Build team sub-line (phone): wraps instead of being cut', () => {
+  const css = fs.readFileSync(path.join(__dirname, '..', 'mobile.html'), 'utf8');
+  assert.match(css, /\.agent-build-sub \{[^}]*overflow: visible;[^}]*white-space: normal;[^}]*text-overflow: clip;/);
+});
+
+// ── an old server: GET /api/team-setup has no 'alone' ──
+test('old server (no alone in GET /api/team-setup): the phone rows show the normal build line, nothing throws', () => {
+  const e = env({ store: { 'hub-teams-open': '{}' } });
+  const api = load(e, TEAMS() + '\n' + ROW() + "\nteamSetup = { offer: null, lead: null, setups: [] };", '{ teamsListHtml, agentRowHtml }');
+  assert.match(api.teamsListHtml(), /agent-build-sub">No team yet · <span[^>]*data-build-team="bea"/);
+  assert.match(api.agentRowHtml({ name: 'bea', display: 'Bea' }, { build: true }), /No team yet · /);
+  const m = load(e, TEAMS() + '\n' + ROW() + "\nteamSetup = { offer: null, lead: null, setups: [] };", 'worksAlone');
+  assert.strictEqual(m('bea'), false);
 });

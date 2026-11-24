@@ -178,7 +178,7 @@ test('the playbook carries the method, and the manifest has its sha', () => {
   assert.ok(!/claude-|opus-|sonnet-|haiku-/i.test(text.split('## Start from')[1].split('## The proposal')[0]), 'tiers, not model ids');
   const m = JSON.parse(fs.readFileSync(path.join(ROOT, 'templates', 'workspace-updates.json'), 'utf8'))[rel];
   assert.equal(m.current, crypto.createHash('sha256').update(fs.readFileSync(path.join(ROOT, 'templates', 'workspaces', rel))).digest('hex'));
-  assert.deepEqual(m.previous, ['758602a0772948e76162f5c4ed102e5f13dd3918200cb9ac27707be69534fed3', '59ec7edc513a3435897aa8a8e63cbfc45b732680c99fa6a0be74205b56550f45', '69d03c6b4614fd13985f0cf67872d9c097b14f5ae8eb3067adb46ad5951d1f22'], 'the versions (the Teams view, then Set up teams) shipped before this one; the first is the version shipped with the Teams view, so installs that copied it get this one');
+  assert.deepEqual(m.previous, ['758602a0772948e76162f5c4ed102e5f13dd3918200cb9ac27707be69534fed3', '59ec7edc513a3435897aa8a8e63cbfc45b732680c99fa6a0be74205b56550f45', '69d03c6b4614fd13985f0cf67872d9c097b14f5ae8eb3067adb46ad5951d1f22', '150e38b4c8c1480f75c8b3bef484e8e324b5fa72a198e10b93a2e5bd4c81629a'], 'the versions (the Teams view, then Set up teams) shipped before this one; the first is the version shipped with the Teams view, so installs that copied it get this one');
 });
 
 // ── Build Team facts: only real history, no strangers, belongs_to, relevance order ──

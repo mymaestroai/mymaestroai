@@ -46,11 +46,11 @@ function make(o = {}) {
   });
   let n = 0;
   const svc = TS.createTeamSetup({
-    setupsFile: path.join(dir, 'team-setups.json'), offerFile: path.join(dir, 'team-setup.json'), agents: () => list,
+    setupsFile: path.join(dir, 'team-setups.json'), offerFile: path.join(dir, 'team-setup.json'), aloneFile: path.join(dir, 'team-alone.json'), identitiesOf: identities(list), agents: () => list,
     applyLines: (by, items, ended) => plan.applyPasses(by, items, ended), publish: (t, p) => events.push([t, p]), now: () => 1700000000000 + (n++) * 1000,
   });
   return { dir, list, plan, svc, writes, events, cleanup: () => fs.rmSync(dir, { recursive: true, force: true }), reload: () => TS.createTeamSetup({
-    setupsFile: path.join(dir, 'team-setups.json'), offerFile: path.join(dir, 'team-setup.json'), agents: () => list, publish() {}, now: () => 1 }) };
+    setupsFile: path.join(dir, 'team-setups.json'), offerFile: path.join(dir, 'team-setup.json'), aloneFile: path.join(dir, 'team-alone.json'), identitiesOf: identities(list), agents: () => list, publish() {}, now: () => 1 }) };
 }
 const boss = (m, n) => (m.list.find(x => x.name === n) || {}).reportsTo;
 
@@ -209,11 +209,11 @@ test('GET /api/team-setup: the offer state, the lead by display name, the record
   const m = make(); t.after(m.cleanup);
   let r = await TS.routeTeamSetup('get', routeDeps(m).d);
   assert.equal(r.status, 200);
-  assert.deepEqual(r.body, { offer: 'pending', lead: { name: 'lead', display: 'Atlas Lead' }, setups: [], anyTeam: false });
+  assert.deepEqual(r.body, { offer: 'pending', lead: { name: 'lead', display: 'Atlas Lead' }, setups: [], anyTeam: false, alone: {} });
   m.list.find(x => x.name === 'writer').reportsTo = 'studio';
   const id = await m.svc.record('studio', [{ agent: 'writer', from: null, to: 'studio' }], 'u-admin');
   r = await TS.routeTeamSetup('get', routeDeps(m).d);
-  assert.deepEqual(r.body, { offer: null, lead: { name: 'lead', display: 'Atlas Lead' }, setups: [{ id, at: m.svc.list()[0].at, main: 'studio', count: 1 }], anyTeam: true });
+  assert.deepEqual(r.body, { offer: null, lead: { name: 'lead', display: 'Atlas Lead' }, setups: [{ id, at: m.svc.list()[0].at, main: 'studio', count: 1 }], anyTeam: true, alone: {} });
   r = await TS.routeTeamSetup('get', routeDeps(m, { ownerLeadNames: () => [] }).d);
   assert.equal(r.body.lead, null);
 });
@@ -575,7 +575,7 @@ test('the playbook has the Set up teams section and the update list holds the ne
   assert.equal(/Maestro/.test(pb.split('# Set up teams')[1]), false, 'the lead is not named');
   const upd = JSON.parse(fs.readFileSync(path.join(dir, 'workspace-updates.json'), 'utf8'))['maestro/TEAM-PLAYBOOK.md'];
   assert.equal(upd.current, require('crypto').createHash('sha256').update(pb).digest('hex'));
-  assert.deepEqual(upd.previous, ['758602a0772948e76162f5c4ed102e5f13dd3918200cb9ac27707be69534fed3', '59ec7edc513a3435897aa8a8e63cbfc45b732680c99fa6a0be74205b56550f45', '69d03c6b4614fd13985f0cf67872d9c097b14f5ae8eb3067adb46ad5951d1f22']);   // the Teams view version, then the Set up teams version
+  assert.deepEqual(upd.previous, ['758602a0772948e76162f5c4ed102e5f13dd3918200cb9ac27707be69534fed3', '59ec7edc513a3435897aa8a8e63cbfc45b732680c99fa6a0be74205b56550f45', '69d03c6b4614fd13985f0cf67872d9c097b14f5ae8eb3067adb46ad5951d1f22', '150e38b4c8c1480f75c8b3bef484e8e324b5fa72a198e10b93a2e5bd4c81629a']);   // the Teams view version, then the Set up teams version
 });
 
 // ── review fixes ──
@@ -830,4 +830,41 @@ test('the offer write fails after the turn started: 200 with the turn, the failu
 test('redactCaller drops settingUpTeams (and offerPending) for members', () => {
   const e = access.redactCaller({ busy: true, settingUpTeams: true, offerPending: true }, () => true);
   assert.equal(e.settingUpTeams, undefined); assert.equal(e.offerPending, undefined); assert.equal(e.busy, true);
+});
+
+// ── Undo all in ONE request: { ids: [...] } ──
+test('POST undo { ids }: the listed setups are undone in one call, newest first whatever the order given; the same shape comes back', async (t) => {
+  const m = make(); t.after(m.cleanup);
+  m.list.find(x => x.name === 'writer').reportsTo = 'press';
+  const a = await m.svc.record('studio', [{ agent: 'writer', from: null, to: 'studio' }], 'u-admin');
+  const b = await m.svc.record('press', [{ agent: 'writer', from: 'studio', to: 'press' }], 'u-admin');
+  const r = await TS.routeTeamSetup('undo', routeDeps(m, { body: { ids: [a, b] } }).d);
+  assert.deepEqual([r.status, r.body], [200, { removed: 2, keptChanged: [], failed: [] }]);
+  assert.deepEqual(m.writes, [['writer', 'studio'], ['writer', null]], 'B back first, then A, though ids came oldest first');
+  assert.deepEqual(m.svc.list(), []);
+});
+test('POST undo { ids }: a failure on the newer setup blocks the older line of the same agent across the ids; both stay for the next try', async (t) => {
+  let refuse = true;
+  const m = make({ refuse: (name) => refuse && name === 'writer' }); t.after(m.cleanup);
+  m.list.find(x => x.name === 'writer').reportsTo = 'press';
+  const a = await m.svc.record('studio', [{ agent: 'writer', from: null, to: 'studio' }], 'u-admin');
+  const b = await m.svc.record('press', [{ agent: 'writer', from: 'studio', to: 'press' }], 'u-admin');
+  const r = await TS.routeTeamSetup('undo', routeDeps(m, { body: { ids: [b, a] } }).d);
+  assert.equal(r.status, 200);
+  assert.equal(r.body.removed, 0);
+  assert.deepEqual(r.body.failed, [{ agent: 'writer', error: 'refused by the rules' }]);
+  assert.deepEqual(m.writes, [], 'the older line was not applied past the failed newer one');
+  assert.equal(m.svc.list().length, 2);
+});
+test('POST undo { ids }: ids already undone are skipped, none left is 404; a bad list is 400; a non-admin session is 403', async (t) => {
+  const m = make(); t.after(m.cleanup);
+  m.list.find(x => x.name === 'writer').reportsTo = 'studio';
+  const a = await m.svc.record('studio', [{ agent: 'writer', from: null, to: 'studio' }], 'u-admin');
+  const run = (body, over) => TS.routeTeamSetup('undo', routeDeps(m, { body, ...(over || {}) }).d);
+  for (const bad of [[], 'x', [1], [''], Array.from({ length: 51 }, (_, i) => 'ts_' + i), null]) assert.equal((await run({ ids: bad })).status, 400, JSON.stringify(bad).slice(0, 30));
+  assert.equal((await run({ ids: [a], ...{} }, { adminSession: false })).status, 403);
+  assert.equal((await run({ ids: ['nope', a] })).status, 200, 'an unknown id beside a real one is skipped');
+  assert.equal((await run({ ids: [a] })).status, 404, 'nothing left');
+  assert.equal((await run({ id: a })).status, 404, '{ id } still works the old way');
+  assert.equal((await run({})).status, 400);
 });

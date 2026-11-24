@@ -525,6 +525,7 @@
     .teams-row .lead-badge { margin-left: 5px; font-size: 0.8rem; filter: drop-shadow(0 0 2px var(--agent-btn-lead-badge-filter)); }
     .teams-sub { font-size: 0.65rem; color: var(--text-tertiary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .teams-sub.busy { color: var(--warning); }
+    .teams-sub.teams-sub-build { white-space: normal; overflow: visible; text-overflow: clip; line-height: 1.25; }   /* 'No team yet · Build team' wraps to a second line instead of being cut at 240px or 160px: Build team stays whole */
     .teams-helpers { margin: 0 0 4px 0; padding: 2px 10px; font-size: 0.65rem; color: var(--warning); }
     /* Three ranks: main (above), leader (0.92 of main), worker (about two thirds of a leader row, quiet, no card) */
     .teams-row.rank-leader { padding: 6px 8px 6px 12px; }

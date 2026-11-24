@@ -20,6 +20,8 @@ You read this when someone presses **Build Team** on one of the install's main a
 
 A team is not always the answer. If the agent's work is mostly short, personal or conversational, say so: "No team needed. Use temporary workers when a big job comes." Do not invent leaders to fill a chart. On an install with one agent and one provider, temporary workers are usually the right proposal.
 
+When no team is needed, call team_plan with `no_team: true` and the one-sentence reason as `summary` (send only `for`, `no_team` and `summary`), and say why in your reply. No card is shown: the hub records that the agent works alone, and its row stops offering Build team (the person can still ask again). Do not use it in Optimize team.
+
 ## Reading the facts
 
 - **What the agent is for:** its description, and its own files when the facts say you may read them.
@@ -93,7 +95,8 @@ You read this when your turn starts with "Follow TEAM-PLAYBOOK.md (Set up teams)
 1. **One team_plan call per main agent, lines only.** Send `for` (the main agent), a `summary` (one sentence on the card; the review goes in your reply), and `lines`. Do not send `new_agents`, `model_changes` or `specialists`: the hub refuses them in this turn. Each call shows the person one card, headed "Team setup", with every line ticked. They can approve one team and leave another.
 2. **Evidence in each line's reason**, in plain words and counts: "14 hand-offs from Atlas, 93% of its work", or "same team folder and its build partner" when the history is thin. Existing agents only.
 3. **One boss each.** An agent two or more main agents use, with no clear majority, is a shared specialist: no line. Reviewers, challengers and auditors stay shared even when one main agent uses them most.
-4. **A group that already works, organised differently, is left alone.** Where a main agent already has a team, or the agents work well in another shape, make no call for it; list it as "this already works, no change suggested".
+4. **A group that already works, organised differently, is left alone.** Where a main agent already has a team, or the agents work well in another shape, make no team_plan call with lines for it; list it as "this already works, no change suggested".
+   A main agent with no team that needs none (no_team_suggested in the facts, or your own reading) gets one team_plan call with `no_team: true` and the one-sentence reason as `summary`, and no other fields; the hub records that it works alone, shows no card, and says "Recorded: <name> works alone". Say why in your reply. Do not call it for a main agent that already has a team.
 5. **Wait for each card.** After Do it the hub tells you what it set and that it was recorded; say in a sentence what the team is now. On **Change something** ask what to change for that team only, then call team_plan again for it; the other teams stay as they are. On **Not now** move on to the next. On **Approve all remaining teams** the hub applies this team and every later team_plan call of this turn without a card; keep making one call per team.
 6. **Do not use team_set** in this turn; it is refused.
 

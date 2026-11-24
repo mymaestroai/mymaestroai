@@ -1632,6 +1632,21 @@ async function handleHttpRequest(req, res) {
       return jsonResponse(res, out.status, out.body);
     }
 
+    // Works alone (lib/team-setup): GET /api/team-alone -> { alone: { name: { at, reason } } }, POST /api/team-alone { agent, reason }, DELETE /api/team-alone/:agent.
+    // The Set up teams gate: only an admin's own signed-in browser session; any other caller (a member, a token, a service) gets 403 and never an entry.
+    if (/^\/api\/team-alone(\/[^/]+)?$/.test(pathname) && ((req.method === 'GET' || req.method === 'POST') ? pathname === '/api/team-alone' : req.method === 'DELETE' && pathname !== '/api/team-alone')) {
+      const teamSetupLib = require('./lib/team-setup');
+      const action = req.method === 'GET' ? 'get' : req.method === 'POST' ? 'set' : 'clear';
+      let body = {}; if (req.method === 'POST') { try { body = JSON.parse((await readBody(req)) || '{}'); } catch { return jsonResponse(res, 400, { error: 'bad JSON' }); } }
+      let agent = ''; if (req.method === 'DELETE') { try { agent = decodeURIComponent(pathname.split('/')[3]); } catch { return jsonResponse(res, 400, { error: 'bad agent name' }); } }
+      const out = await teamSetupLib.routeTeamAlone(action, {
+        adminSession: req.hubIdentKind === 'user' && !req.hubPendingTotp && !req.hubToken && !req.hubService && access.isAdmin(req.hubUser),
+        svc: teamSetupLib.getTeamSetup(), agents: await getAgents(), adminIds: new Set(hubAuth.admins().map(u => String(u.id))), body, agent,
+        userId: req.hubUser && req.hubUser.id != null ? String(req.hubUser.id) : null,
+      });
+      return jsonResponse(res, out.status, out.body);
+    }
+
     // POST /api/agents/:name/optimize-team: start the review of a main agent's team (lib/team-review, lib/sdk-chat startOptimizeTeam).
     // The same gate as build-team: only an admin's own signed-in browser session. The lead runs it, or the boss itself when its content stays on its own service.
     // GET /api/agents/:name/optimize-team/estimate: the counts the menu entry shows ({ days, turns, handOffs }), same gate.

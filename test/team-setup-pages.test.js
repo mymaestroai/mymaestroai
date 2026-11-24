@@ -492,7 +492,8 @@ for (const [label, mk] of pages) {
     q.apply(recentSetups(6));
     await q.w.api.teamSetupUndoAll();
     assert.deepStrictEqual(q.confirms(), ['Remove all 18 reporting lines from these 6 teams?']);
-    assert.deepStrictEqual(q.w.calls.filter((c) => c.method === 'POST').map((c) => JSON.parse(c.body).id), ['u6', 'u5', 'u4', 'u3', 'u2', 'u1']);
+    // changed: one request carries every listed setup, newest first (the server undoes them in that order)
+    assert.deepStrictEqual(q.w.calls.filter((c) => c.method === 'POST').map((c) => JSON.parse(c.body)), [{ ids: ['u6', 'u5', 'u4', 'u3', 'u2', 'u1'] }]);
   });
   test(`${label}: × hides the line and it stays hidden on re-render until a newer setup id appears; the Teams tab line is unchanged`, () => {
     const p = mk();
@@ -591,7 +592,8 @@ test('phone tight mode: an explicit tap on Undo opens the list (aria-expanded tr
   assert.ok(!v.slot.innerHTML.includes('team-undo-list') && /aria-expanded="false"/.test(v.slot.innerHTML), 'tight turning on closes an open list');
   assert.doesNotMatch(app.slice(app.indexOf('function teamSetupUndoHtml()'), app.indexOf('function teamSetupChatPaint')), /composerTight/, 'desktop has no tight condition');
 });
-const undoRoutes = (byId) => ({ 'POST /api/team-setup/undo': (init) => { const id = JSON.parse(init.body).id; return byId[id] || res(200, { removed: 3 }); } });
+// an old server: it knows { id } and { all } only and answers 400 to { ids }, so the pages fall back to one request per team
+const undoRoutes = (byId) => ({ 'POST /api/team-setup/undo': (init) => { const b = JSON.parse(init.body); if (b.ids) return res(400, { error: 'give { id } or { all: true }' }); return byId[b.id] || res(200, { removed: 3 }); } });
 for (const [label, mk] of [
   ['desktop', (routes) => { const w = desk({ routes }); return { w, msgs: () => w.ctx.alerts, apply: (s) => w.api.teamSetupApply({ offer: 'accepted', lead: LEAD, setups: s }) }; }],
   ['phone', (routes) => { const w = phone({ routes }); return { w, msgs: () => w.env.toasts, apply: (s) => w.api.teamSetupApply({ offer: 'accepted', lead: LEAD, setups: s }) }; }],
@@ -600,7 +602,7 @@ for (const [label, mk] of [
     const p = mk(undoRoutes({ u5: res(200, { removed: 1, failed: [{ agent: 'wes', error: 'refused' }, { agent: 'wil', error: 'busy' }] }) }));
     p.apply(recentSetups(6));
     await p.w.api.teamSetupUndoAll();
-    assert.deepStrictEqual(p.w.calls.filter((c) => c.method === 'POST').map((c) => JSON.parse(c.body).id), ['u6', 'u5'], 'u4..u1 not tried');
+    assert.deepStrictEqual(p.w.calls.filter((c) => c.method === 'POST' && !JSON.parse(c.body).ids).map((c) => JSON.parse(c.body).id), ['u6', 'u5'], 'u4..u1 not tried');
     const m = p.msgs().find((x) => /Could not undo/.test(x));
     assert.ok(m, 'reported: ' + JSON.stringify(p.msgs()));
     assert.match(m, /^Could not undo \w+: /);
@@ -610,12 +612,43 @@ for (const [label, mk] of [
     const a = mk(undoRoutes({ u4: res(500, { error: 'disk full' }) }));
     a.apply(recentSetups(6));
     await a.w.api.teamSetupUndoAll();
-    assert.deepStrictEqual(a.w.calls.filter((c) => c.method === 'POST').map((c) => JSON.parse(c.body).id), ['u6', 'u5', 'u4']);
+    assert.deepStrictEqual(a.w.calls.filter((c) => c.method === 'POST' && !JSON.parse(c.body).ids).map((c) => JSON.parse(c.body).id), ['u6', 'u5', 'u4']);
     assert.ok(a.msgs().some((x) => /^Could not undo \w+: disk full$/.test(x)), JSON.stringify(a.msgs()));
     const b = mk(undoRoutes({ u5: res(404, { error: 'No such setup' }), u3: res(404, {}) }));
     b.apply(recentSetups(6));
     await b.w.api.teamSetupUndoAll();
-    assert.deepStrictEqual(b.w.calls.filter((c) => c.method === 'POST').map((c) => JSON.parse(c.body).id), ['u6', 'u5', 'u4', 'u3', 'u2', 'u1'], 'all six tried');
+    assert.deepStrictEqual(b.w.calls.filter((c) => c.method === 'POST' && !JSON.parse(c.body).ids).map((c) => JSON.parse(c.body).id), ['u6', 'u5', 'u4', 'u3', 'u2', 'u1'], 'all six tried');
     assert.ok(!b.msgs().some((x) => /Could not undo/.test(x)), JSON.stringify(b.msgs()));
   });
 }
+
+// ── Undo all in one request ──
+for (const [label, mk] of [
+  ['desktop', (routes) => { const w = desk({ routes }); return { w, msgs: () => w.ctx.alerts, apply: (s) => w.api.teamSetupApply({ offer: 'accepted', lead: LEAD, setups: s }) }; }],
+  ['phone', (routes) => { const w = phone({ routes }); return { w, msgs: () => w.env.toasts, apply: (s) => w.api.teamSetupApply({ offer: 'accepted', lead: LEAD, setups: s }) }; }],
+]) {
+  test(`${label}: Undo all in the chat is ONE POST { ids } (newest first, as listed); failed[] and kept lines are reported as before`, async () => {
+    const p = mk({ 'POST /api/team-setup/undo': res(200, { removed: 4, keptChanged: [{ agent: 'x' }], failed: [{ agent: 'wes', error: 'refused' }] }) });
+    p.apply(recentSetups(6));
+    await p.w.api.teamSetupUndoAll();
+    const posts = p.w.calls.filter((c) => c.method === 'POST');
+    assert.strictEqual(posts.length, 1, 'one request');
+    assert.deepStrictEqual(JSON.parse(posts[0].body), { ids: ['u6', 'u5', 'u4', 'u3', 'u2', 'u1'] });
+    assert.ok(p.msgs().some((x) => /^Could not undo these teams: could not restore wes \(refused\)$/.test(x)), JSON.stringify(p.msgs()));
+    assert.ok(p.msgs().some((x) => /1 reporting line was changed by hand/.test(x)));
+  });
+  test(`${label}: Undo all falls back to one request per team when the server answers 400 to { ids } (an old server)`, async () => {
+    const p = mk({ 'POST /api/team-setup/undo': (init) => (JSON.parse(init.body).ids ? res(400, { error: 'give { id } or { all: true }' }) : res(200, { removed: 3 })) });
+    p.apply(recentSetups(3));
+    await p.w.api.teamSetupUndoAll();
+    assert.deepStrictEqual(p.w.calls.filter((c) => c.method === 'POST').map((c) => JSON.parse(c.body)), [{ ids: ['u3', 'u2', 'u1'] }, { id: 'u3' }, { id: 'u2' }, { id: 'u1' }]);
+    assert.ok(!p.msgs().some((x) => /Could not undo/.test(x)), JSON.stringify(p.msgs()));
+  });
+}
+
+test('old server: a GET /api/team-setup without alone leaves state.alone an empty object on both pages', () => {
+  const d = desk(); d.api.teamSetupApply({ offer: 'never', lead: LEAD, setups: [] });
+  assert.strictEqual(JSON.stringify(d.api.state.alone), '{}');
+  const p = phone(); p.api.teamSetupApply({ offer: 'never', lead: LEAD, setups: [] });
+  assert.strictEqual(JSON.stringify(p.api.state.alone), '{}');
+});

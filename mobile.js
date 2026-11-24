@@ -2562,12 +2562,18 @@ function teamsSub(node, parent) {
   const w = node.working ? ` · ${node.working} working` : '';
   if (node.depth === 0 && window.hubTeams.isMain(node.agent)) {
     const k = node.children.filter(teamsIsLeader).length;
-    if (!node.size) return 'No team yet';
+    if (!node.size) return worksAlone(node.agent.name) ? 'Works alone' : 'No team yet';
     return k > 1 ? `${k} teams · ${node.size} agents${w}` : `team of ${node.size}${w}`;
   }
   if (teamsIsLeader(node)) return `Team leader · leads ${node.size}${w}`;
   if (teamsIsWorker(node)) return node.depth === 1 && parent ? `Reports to ${parent.agent.display || parent.agent.name}` : 'Worker';
   return node.children.length ? `leads ${node.size}${w}` : null;
+}
+// Simple hides the third level: a main agent with leaders says what is shown and what exists ('1 leader · 3 agents'); with only direct reports 'team of N' is all shown.
+function teamsSimpleMainSub(m) {
+  const k = m.children.filter(teamsIsLeader).length;
+  if (!k || !m.size) return teamsSub(m);
+  return `${k} ${k === 1 ? 'leader' : 'leaders'} · ${m.size} agents${m.working ? ` · ${m.working} working` : ''}`;
 }
 // Keep busy nodes and their ancestors (the working filter).
 function teamsPrune(node) {
@@ -2583,7 +2589,7 @@ function teamsNodeHtml(node, parent) {
   // a busy (or asking) leader / worker shows its busy text instead of its role
   if (!isMain && d >= 1 && (isBusy(a.name) || (live[a.name] && live[a.name].pendingQuestion))) sub = null;
   const dd = teamsIsWorker(node) ? Math.max(d, 2) : d;   // a direct worker gets the worker indent, as on the desktop
-  const noTeamAdmin = d === 0 && !node.size && isMain && isAdmin();
+  const noTeamAdmin = d === 0 && !node.size && isMain && isAdmin() && !worksAlone(a.name);
   if (noTeamAdmin) sub = null;   // the row's own second line says "No team yet · Build team"
   let html = `<div class="tm-line tm-d${dd}" style="--d:${dd}">` +
     (kids ? `<button type="button" class="tm-fold" data-fold="${esc(a.name)}" aria-expanded="${open}" aria-label="${open ? 'Fold' : 'Unfold'} ${esc(a.display || a.name)}">${open ? '&#x25BE;' : '&#x25B8;'}</button>` : '<span class="tm-fold-sp"></span>') +
@@ -2650,7 +2656,7 @@ function agentRowHtml(a, opts) {
     `<span class="dot${dotCls}${bgN ? ' ' + AgentDot.CLASS.background : ''}" title="${esc(bgN ? bgLabel : working && !viaWorkers ? busyText(a.name) : '')}"${bgN ? ` aria-label="${esc(bgLabel)}"` : ''}>${question ? '?' : ''}</span>` +
     (n ? `<span class="badge">${n > 99 ? '99+' : n}</span>` : '') +
     '</button>' +
-    (opts && opts.build ? buildLineHtml(a.name) : '');   // beside the row, not inside it (a button cannot hold a button)
+    (opts && opts.build && !worksAlone(a.name) ? buildLineHtml(a.name) : '');   // beside the row, not inside it (a button cannot hold a button)
 }
 
 // ── Build Team (admins): the "No team yet · Build team" line, the Teams button, the ⋮ menu entry ──
@@ -2739,7 +2745,11 @@ async function buildTeamStart(name) {
 // GET /api/team-setup: { offer, lead: { name, display }, setups: [{ id, at, main, count }], anyTeam }. The one-time offer is a card above the
 // message box in the lead's chat (#team-offer-slot) while offer is 'pending'; it goes when any device answers (the lead's offerPending
 // status changes, or the page loads again). Nothing here has a timeout. "Show the Teams tab" off (settings sidebarTeams) hides the Teams switch.
-let teamSetup = { offer: null, lead: null, setups: [] };
+let teamSetup = { offer: null, lead: null, setups: [], alone: {} };   // alone: { name: { at, reason } } main agents the lead found need no team (admins only)
+// A main agent with no team that the lead recorded as working alone: its row says 'Works alone' and no longer advertises Build team (the ⋮ menu entry stays).
+function worksAlone(name) {
+  return isAdmin() && !!(teamSetup.alone && Object.prototype.hasOwnProperty.call(teamSetup.alone, name)) && !!window.hubTeams && !window.hubTeams.hasTeam(name, agents);
+}
 let teamSetupStarting = false;
 const teamSetupRecent = new Set();   // setup ids recorded while this page was open (team_setup_recorded)
 let teamSetupLoadTimer = 0;
@@ -2847,10 +2857,12 @@ function teamSetupPaint() {
 }
 function teamSetupApply(d) {
   if (!d || typeof d !== 'object') return;
-  teamSetup = { offer: d.offer || null, lead: d.lead && typeof d.lead === 'object' ? d.lead : null, setups: Array.isArray(d.setups) ? d.setups : [] };
+  const aloneWas = Object.keys(teamSetup.alone || {}).sort().join('\n');
+  teamSetup = { offer: d.offer || null, lead: d.lead && typeof d.lead === 'object' ? d.lead : null, setups: Array.isArray(d.setups) ? d.setups : [], alone: d.alone && typeof d.alone === 'object' && !Array.isArray(d.alone) ? d.alone : {} };
   const ls = teamSetup.lead && live[teamSetup.lead.name];
   if (teamSetup.offer !== 'pending' && ls && ls.offerPending) setLive(teamSetup.lead.name, { offerPending: false });   // answered: the row's marker goes with the card
   teamSetupPaint();
+  if (Object.keys(teamSetup.alone).sort().join('\n') !== aloneWas) { if (screen === 'agents') renderAgents(); else if (typeof simpleAgentListsRepaint === 'function') simpleAgentListsRepaint(); }   // the rows say 'Works alone' (or Build team again)
 }
 async function teamSetupLoad() {
   if (!isAdmin()) return;
@@ -2913,8 +2925,14 @@ async function teamSetupUndo(which) {
   if (!confirm(picked ? `Remove all ${n} reporting lines from these ${picked.length} teams?` : `Remove these ${n} reporting lines?`)) return;
   try {
     let kept = 0, problem = '';
-    for (const body of (ids ? ids.map((id) => ({ id })) : [all ? { all: true } : { id: which.id }])) {
+    // "Undo all" in the chat's list is ONE request { ids } (the server undoes them newest first, so a failure protects the older lines); a server that answers 400 (does not know ids) gets the one-by-one loop
+    const have = picked ? ids.filter(id => picked.some(s => String(s.id) === id)) : null;   // the listed setups still on this page, in the order given (newest first)
+    const one = have ? have.map(id => ({ id })) : null;
+    const queue = ids ? (have.length <= 50 ? [{ ids: have }] : one) : [all ? { all: true } : { id: which.id }];
+    while (queue.length) {
+      const body = queue.shift();
       const r = await api('/api/team-setup/undo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      if (r.status === 400 && body.ids) { queue.push(...one); continue; }   // an old server: the current one-by-one way
       let d = null;
       try { d = await r.json(); } catch { d = null; }
       kept += Array.isArray(d && d.keptChanged) ? d.keptChanged.length : Math.max(0, Math.floor(Number(d && d.keptChanged)) || 0);
@@ -2922,7 +2940,7 @@ async function teamSetupUndo(which) {
       const failed = Array.isArray(d && d.failed) ? d.failed : [];
       if (failed.length || !r.ok) {   // stop at the first team that did not come undone and say what failed
         const s = body.id !== undefined ? teamSetup.setups.find((x) => String(x.id) === String(body.id)) : null;
-        const who = s && s.main ? displayName(s.main) : body.all ? 'all teams' : 'this team';
+        const who = s && s.main ? displayName(s.main) : body.all ? 'all teams' : body.ids ? 'these teams' : 'this team';
         const parts = [];
         if (!r.ok) parts.push((d && d.error) || `HTTP ${r.status}`);
         if (failed.length) parts.push('could not restore ' + failed.map((f) => (f && f.agent ? (f.error ? `${f.agent} (${f.error})` : f.agent) : String(f))).join(', '));
@@ -16855,7 +16873,7 @@ function simpleTeamsModel() {
   const t = window.hubTeams.tree(agents, live);
   const rows = [];
   for (const m of t.mains) {
-    rows.push({ a: m.agent, depth: 0, rank: 'main', sub: teamsSub(m) });
+    rows.push({ a: m.agent, depth: 0, rank: 'main', sub: teamsSimpleMainSub(m) });
     for (const c of m.children) rows.push({ a: c.agent, depth: 1, rank: teamsIsLeader(c) ? 'leader' : 'worker', sub: teamsIsLeader(c) ? 'Team leader' : `Reports to ${m.agent.display || m.agent.name}` });   // every direct report; only the third level is left out
   }
   const flat = (n) => [n.agent, ...n.children.flatMap(flat)];   // anyone under a shared or Other agent stays reachable

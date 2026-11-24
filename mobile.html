@@ -280,7 +280,7 @@
     .build-team-link { min-height: 44px; padding: 0 8px; margin-left: -8px; font-size: 13px; font-weight: 600; color: var(--accent-hover); text-decoration: underline; background: transparent; }
     .build-team-link:disabled, .build-team-btn:disabled { color: var(--text-tertiary); text-decoration: none; opacity: .7; }
     /* a main agent with no team: "No team yet · Build team" is the row's own second line (same height as 'team of 3'); the link's tap area grows to 37px by padding that the negative margin takes back */
-    .agent-build-sub { overflow: visible; }
+    .agent-build-sub { overflow: visible; white-space: normal; text-overflow: clip; line-height: 1.25; }   /* wraps on a narrow phone; Build team stays whole */
     .agent-build-sub .build-team-link { display: inline-block; min-height: 0; padding: 10px 8px; margin: -10px -8px -10px -2px; font-size: inherit; line-height: inherit; cursor: pointer; }
     .agent-build-sub .build-team-link[aria-disabled="true"] { color: var(--text-tertiary); text-decoration: none; opacity: .7; }
     .build-team-btn { min-height: 44px; padding: 0 16px; border-radius: 10px; font-size: 14px; font-weight: 600; background: var(--accent); color: var(--on-accent); }
