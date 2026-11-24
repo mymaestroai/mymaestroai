@@ -467,7 +467,7 @@ test('TEAM-PLAYBOOK.md ships in the lead\'s workspace templates and is listed in
   assert.match(fs.readFileSync(file, 'utf8'), /^# TEAM-PLAYBOOK\.md: building a team for a main agent/);
   const m = JSON.parse(read('templates/workspace-updates.json'))[rel];
   assert.equal(m.current, crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex'), 'current is the template (when it changes, move the old current into previous)');
-  assert.deepEqual(m.previous, [], 'a new file has no earlier version');
+  assert.deepEqual(m.previous, ['758602a0772948e76162f5c4ed102e5f13dd3918200cb9ac27707be69534fed3'], 'the version shipped with the Teams view');
 });
 
 // ── review round 1 fixes ──

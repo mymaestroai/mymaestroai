@@ -26,6 +26,17 @@ A team is not always the answer. If the agent's work is mostly short, personal o
 - **What it has been doing:** turn counts by kind (the person, hand-offs, consultations, jobs, schedules), hand-offs and helpers it started. A main agent that spends hours on long jobs itself is a sign a leader would help. Many short turns with the person are a sign it is working as it should.
 - **Who exists already:** prefer existing agents over new ones. An agent with no boss that fits the work can become a leader or a worker. Ones that serve everyone stay shared specialists.
 - **A member's agent:** counts only. Never read a member's conversations.
+- **Working history (`working_history`):** for each other agent, the last 30 days: hand-offs and consults from this main agent, that agent's total from everyone, and this main agent's share of it. Counts only. `setup` lists how the agents were set up together (the same team folder, a build partner, the starter team). `suggestion` is the hub's reading: `member`, `shared` or `too_little`; `unused_30_days` names agents nobody called. Treat a suggestion as evidence, not an order.
+
+## Start from the agents that already exist
+
+Most installs already have a working group. Build the team from it first.
+1. **Existing agents first.** Propose the agents marked `member` as this main agent's team. Each line's reason carries its evidence in plain words, for example "14 hand-offs from Atlas, 93% of its work", or "same team folder and its build partner" when the history is thin.
+2. **New agents only for a gap.** Propose a new agent only when no existing agent fits a kind of work, and mark it clearly as new in the reason.
+3. **One boss each.** Never give an agent a second boss. An agent that several main agents use, with no clear majority (the hub marks it `shared`), stays a shared specialist: no line.
+4. **Reviewers stay shared.** A reviewer, challenger or auditor stays a shared specialist even when one main agent uses it most. No line.
+5. **Too little history.** Agents marked `too_little`, and those in `unused_30_days`, get no line. Say so in a few words and leave the choice to the person.
+6. **Leave what works alone.** If the group already works and is organised differently from the pattern above, say "this already works, no change suggested", and propose nothing for it.
 
 ## The proposal
 

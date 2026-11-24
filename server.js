@@ -1608,7 +1608,7 @@ async function handleHttpRequest(req, res) {
         name, agents: await getAgents(), ownerLeadNames: agentsLib.ownerLeadNames, defaultLeadAgent: agentsLib.defaultLeadAgent,
         runs: buildTeamRuns, halted: () => require('./lib/hub-halt').getHubHalt().isHalted(), isBusy: isAgentActive,
         makeMessage: async (primary, all) => teamPlanLib.buildMessage({ primary, agentsList: all, adminIds: new Set(hubAuth.admins().map(u => String(u.id))),
-          counts: teamPlanLib.transcriptCounts(30), models: await teamModelFacts(), tierOf: require('./lib/model-tiers').tierOf }),
+          counts: teamPlanLib.transcriptCounts(30), models: await teamModelFacts(), tierOf: require('./lib/model-tiers').tierOf, ...teamPlanLib.historySources() }),
         start: startBuildTeam, userId: req.hubUser && req.hubUser.id != null ? String(req.hubUser.id) : null,
       });
       return jsonResponse(res, out.status, out.body);
