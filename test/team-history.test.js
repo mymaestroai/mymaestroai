@@ -180,3 +180,56 @@ test('the playbook carries the method, and the manifest has its sha', () => {
   assert.equal(m.current, crypto.createHash('sha256').update(fs.readFileSync(path.join(ROOT, 'templates', 'workspaces', rel))).digest('hex'));
   assert.deepEqual(m.previous, ['758602a0772948e76162f5c4ed102e5f13dd3918200cb9ac27707be69534fed3', '59ec7edc513a3435897aa8a8e63cbfc45b732680c99fa6a0be74205b56550f45', '69d03c6b4614fd13985f0cf67872d9c097b14f5ae8eb3067adb46ad5951d1f22'], 'the versions (the Teams view, then Set up teams) shipped before this one; the first is the version shipped with the Teams view, so installs that copied it get this one');
 });
+
+// ── Build Team facts: only real history, no strangers, belongs_to, relevance order ──
+const mainFacts = (primary, list, hs, extra = {}) => TP.buildFacts({ primary, agentsList: list, adminIds: new Set(), counts: () => ({ turns: {}, tools: { spawn_workers: 4 } }), handOffs: hs, consultsOf: () => ({}), now: NOW, ...extra });
+
+test('a lone main (only spawn_workers) has no working_history rows, just the note, even when other mains call the agents', () => {
+  const hs = [...ho('press', 'writer', 1, 5), ...ho('press', 'atlas', 1, 2), ...ho('press', 'critic', 1, 4)];
+  const f = mainFacts(roster()[0], roster().map(a => (a.name === 'scribe' ? { ...a, policy: undefined } : a)), hs);
+  assert.deepEqual(f.working_history, []);
+  assert.equal(f.working_history_note, 'no working history with other agents');
+  assert.ok(!JSON.stringify(f.working_history).match(/shared|too_little/));
+  assert.equal(f.activity_30_days.spawn_workers, 4);
+  assert.equal(mainFacts(roster()[0], roster(), handOffs()).working_history_note, undefined, 'a main with history has no note');
+});
+
+test('agents that already report to another boss carry belongs_to and no suggestion', () => {
+  const l = roster(); l.find(a => a.name === 'writer').reportsTo = 'press'; l.find(a => a.name === 'editor').reportsTo = 'studio';
+  const f = mainFacts(l[0], l, handOffs());
+  const w = f.working_history.find(r => r.name === 'writer'), e = f.working_history.find(r => r.name === 'editor');
+  assert.equal(w.belongs_to, 'press');
+  assert.ok(!('suggestion' in w));
+  assert.equal(e.belongs_to, undefined, 'its own team member keeps its suggestion');
+  assert.equal(e.suggestion, 'member');
+});
+
+test('other main agents and the lead are never rows in a main history', () => {
+  const l = roster().concat([{ name: 'chief', category: 'worker', lead: true }]);
+  const hs = [...handOffs(), ...ho('studio', 'press', 1, 6), ...ho('studio', 'chief', 1, 6)];
+  const f = mainFacts(l[0], l, hs);
+  assert.ok(!f.working_history.some(r => r.name === 'press' || r.name === 'chief'));
+  assert.ok(TP.historyFacts({ primary: l[0], agentsList: l, handOffs: hs, consultsOf: () => ({}), now: NOW }).history.every(r => r.name !== 'press' && r.name !== 'chief'));
+});
+
+test('the agents list is ordered by relevance: team, history, specialists, the rest, unused last (a count when short)', () => {
+  const l = [
+    { name: 'studio', category: 'primary' },
+    { name: 'aaa-unused', category: 'worker' }, { name: 'bbb-other', category: 'worker' }, { name: 'ccc-spec', category: 'specialist' },
+    { name: 'ddd-hist', category: 'worker' }, { name: 'eee-team', category: 'worker', reportsTo: 'studio' }, { name: 'fff-used', category: 'worker' },
+    { name: 'ggg-unused', category: 'worker' }, { name: 'press', category: 'primary' },
+  ];
+  const hs = [...ho('studio', 'ddd-hist', 1, 4), ...ho('press', 'ccc-spec', 1, 3), ...ho('press', 'fff-used', 1, 2), ...ho('press', 'bbb-other', 1, 1)];
+  const f = mainFacts(l[0], l, hs);
+  const names = f.agents.map(a => a.name);
+  assert.deepEqual(names.slice(0, 3), ['eee-team', 'ddd-hist', 'ccc-spec']);
+  assert.deepEqual(names.slice(3, 5), ['fff-used', 'bbb-other']);
+  assert.ok(names.indexOf('aaa-unused') > names.indexOf('bbb-other') && names.indexOf('ggg-unused') > names.indexOf('bbb-other'));
+  // when space is short the unused agents are the ones cut, as a count
+  const many = l.concat(Array.from({ length: 60 }, (_, i) => ({ name: `zz${i}`, category: 'worker' })));
+  const g = mainFacts(many[0], many, hs, { level: 2 });
+  assert.equal(g.agents.length, 15);
+  assert.deepEqual(g.agents.slice(0, 5).map(a => a.name), ['eee-team', 'ddd-hist', 'ccc-spec', 'fff-used', 'bbb-other']);
+  assert.equal(g.unused_omitted, many.length - 1 - 15);
+  assert.equal(g.agents_omitted, undefined, 'nothing used was cut');
+});
