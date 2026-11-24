@@ -119,7 +119,7 @@ test('Teams: every agent exactly once, with the right sections, sublines, labels
   assert.deepStrictEqual(names(h).sort(), AGENTS.map((a) => a.name).sort());
   assert.strictEqual(h.indexOf('Your agents') < h.indexOf('Shared specialists') && h.indexOf('Shared specialists') < h.indexOf('Other (1)'), true);
   assert.match(h, /<div class="agent-model" title="2 teams · 5 agents · 2 working">2 teams · 5 agents · 2 working</);
-  assert.match(h, /No team yet · <span role="button" class="build-team-link" data-build-team="bea">/, 'an admin reads "No team yet" on the row\'s own second line');
+  assert.match(h, /No team yet · <span role="button" tabindex="0" class="build-team-link" data-build-team="bea">/, 'an admin reads "No team yet" on the row\'s own second line');
   assert.match(teamsApi(env({ env: { isAdmin: () => false }, store: { 'hub-teams-open': '{}' } })).teamsListHtml(), /Bea &lt;b&gt;<\/div><div class="agent-model" title="No team yet">No team yet</);
   assert.match(h, /Lia<\/div><div class="agent-model" title="Team leader · leads 2 · 1 working">Team leader · leads 2 · 1 working</);
   assert.match(h, /Lou<\/div><div class="agent-model" title="Team leader · leads 1 · 1 working">/);
@@ -382,10 +382,10 @@ test('Teams: Build Team button under "No team yet" for admins only; Building… 
   assert.strictEqual((h.match(/class="build-team-link"/g) || []).length, 1);
   assert.ok(!/build-team-btn|class="tm-build"/.test(h), 'no separate full-width button');
   assert.ok(!/tm-build-line|class="build-line/.test(h), 'no line outside the row');
-  assert.match(h, /<button class="agent-row" data-agent="bea">(?:(?!<\/button>)[\s\S])*<div class="agent-model agent-build-sub">No team yet · <span role="button" class="build-team-link" data-build-team="bea">Build team<\/span><\/div>(?:(?!<\/button>)[\s\S])*<\/button>/, 'inside the agent-row of bea');
+  assert.match(h, /<button class="agent-row" data-agent="bea">(?:(?!<\/button>)[\s\S])*<div class="agent-model agent-build-sub">No team yet · <span role="button" tabindex="0" class="build-team-link" data-build-team="bea">Build team<\/span><\/div>(?:(?!<\/button>)[\s\S])*<\/button>/, 'inside the agent-row of bea');
   e.live = { ann: { busy: true, buildingTeamFor: 'bea' } };
   const h2 = teamsApi(e).teamsListHtml();
-  assert.match(h2, /<span role="button" class="build-team-link" data-build-team="bea" aria-disabled="true">Building…<\/span>/);
+  assert.match(h2, /<span role="button" tabindex="0" class="build-team-link" data-build-team="bea" aria-disabled="true">Building…<\/span>/);
   const m = teamsApi(env({ env: { isAdmin: () => false } })).teamsListHtml();
   assert.ok(!/build-team|build-line/.test(m), 'a member sees none');
   const row = load(e, BUILD(), 'agentRowHtml')(AGENTS[1], { build: true });
@@ -458,7 +458,8 @@ test('applySnapshot keeps buildingTeamFor in live entries, setLive clears it whe
   // changed (Set up teams): the same key list also carries offerPending and settingUpTeams
   assert.match(slice('function applySnapshot(', 'let wkGoneState'), /'consultedBy', 'buildingTeamFor', 'reviewingTeamFor', 'offerPending', 'settingUpTeams'\]/);
   assert.match(slice('function setLive(', 'function paintStatus'), /next\.consultedBy = null; next\.buildingTeamFor = null; next\.reviewingTeamFor = null;/);
-  assert.match(js, /const bt = e\.target\.closest\('\[data-build-team\]'\);\n\s+if \(bt\) \{ if \(!bt\.disabled && bt\.getAttribute\('aria-disabled'\) !== 'true'\) buildTeamStart\(bt\.dataset\.buildTeam\); return; \}/);
+  assert.match(js, /const bt = e\.target\.closest\('\[data-build-team\]'\);\n\s+if \(bt\) \{ buildTeamActivate\(bt\); return; \}/);
+  assert.match(js, /function buildTeamActivate\(bt\) \{ if \(!bt\.disabled && bt\.getAttribute\('aria-disabled'\) !== 'true'\) buildTeamStart\(bt\.dataset\.buildTeam\); \}/);
 });
 
 // ── the plan card ──

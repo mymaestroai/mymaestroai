@@ -58,7 +58,7 @@ const A = (name, extra) => Object.assign({ name, display: name[0].toUpperCase() 
 
 // ── PHONE ──
 test('phone: the indent numbers come out so every row is right of its boss (390px)', () => {
-  const V = vars(mhtml.slice(mhtml.indexOf('html { --vvh: 100dvh; --tm-bar')));
+  const V = vars(mhtml.slice(mhtml.indexOf('html { --vvh: 100vh; --tm-bar')));
   for (const k of ['--tm-bar', '--tm-gap', '--tm-kid-bar', '--tm-kid-gap', '--tm-deep-bar']) assert.ok(k in V, k);
   const fold = prop(body(mhtml, '.tm-fold, .tm-fold-sp'), 'width', V);
   const rowPad = padL(body(mhtml, '.agent-row')), rowGap = prop(body(mhtml, '.agent-row'), 'gap', V);
@@ -122,7 +122,7 @@ test('phone: Build team sits in the main agent\'s row area as the compact "No te
   const h = phoneHtml([A('solo', { category: 'primary' }), A('b', { category: 'primary' }), A('c', { reportsTo: 'b' })], {});
   assert.doesNotMatch(h, /tm-build"|build-team-btn/);
   assert.doesNotMatch(h, /tm-build-line|class="build-line/, 'no line of its own below the row');
-  assert.match(h, /<button class="agent-row" data-agent="solo">(?:(?!<\/button>)[\s\S])*<div class="agent-model agent-build-sub">No team yet · <span role="button" class="build-team-link" data-build-team="solo">Build team<\/span><\/div>(?:(?!<\/button>)[\s\S])*<\/button><\/div>/, 'the link is the second line inside the agent-row of that agent');
+  assert.match(h, /<button class="agent-row" data-agent="solo">(?:(?!<\/button>)[\s\S])*<div class="agent-model agent-build-sub">No team yet · <span role="button" tabindex="0" class="build-team-link" data-build-team="solo">Build team<\/span><\/div>(?:(?!<\/button>)[\s\S])*<\/button><\/div>/, 'the link is the second line inside the agent-row of that agent');
   assert.strictEqual((h.match(/data-build-team=/g) || []).length, 1, 'only the main without a team');
   const V = {};
   assert.ok(!/\.tm-build-line/.test(mhtml));

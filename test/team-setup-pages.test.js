@@ -308,7 +308,7 @@ function phone(over = {}) {
       const method = (init && init.method) || 'GET';
       calls.push({ url, method, body: init && init.body });
       const r = (over.routes || {})[`${method} ${url}`];
-      return r || res(200, {});
+      return typeof r === 'function' ? r(init) : (r || res(200, {}));
     },
   };
   const block = mjs.slice(mjs.indexOf('// ── Set up teams and Undo team setup'), mjs.indexOf('// The Active section at the top of the agent list'));
@@ -572,3 +572,50 @@ test('phone: #team-offer-slot is capped to a quarter of the visible height (--vv
   assert.match(mhtml, /#composer\.composer-tight \.handoff-cards \{[^}]*max-height: calc\(var\(--vvh, 100dvh\) \* 0\.2\); overflow-y: auto/);
   assert.match(mhtml, /body \{[^}]*height: var\(--vvh, 100dvh\)/);
 });
+
+// ───────────────────────── setup fixes r1 ─────────────────────────
+test('phone tight mode: an explicit tap on Undo opens the list (aria-expanded true and the list shown); gaining focus (tight turns on) closes it again', () => {
+  const w = phone();
+  w.api.teamSetupApply({ offer: 'accepted', lead: LEAD, setups: recentSetups(3) });
+  w.api.teamSetupTight(true);
+  assert.ok(!w.slot.innerHTML.includes('team-undo-list') && /aria-expanded="false"/.test(w.slot.innerHTML));
+  w.api.teamSetupToggleList();
+  assert.ok(w.slot.innerHTML.includes('team-undo-list'), 'tight: the tap opens the list');
+  assert.match(w.slot.innerHTML, /aria-expanded="true"/);
+  assert.ok(w.slot.innerHTML.includes('data-team-undo-all'));
+  w.api.teamSetupToggleList();
+  assert.ok(!w.slot.innerHTML.includes('team-undo-list') && /aria-expanded="false"/.test(w.slot.innerHTML), 'tapping again closes it');
+  const v = phone();
+  v.api.teamSetupApply({ offer: 'accepted', lead: LEAD, setups: recentSetups(3) });
+  v.api.teamSetupToggleList(); v.api.teamSetupTight(true);
+  assert.ok(!v.slot.innerHTML.includes('team-undo-list') && /aria-expanded="false"/.test(v.slot.innerHTML), 'tight turning on closes an open list');
+  assert.doesNotMatch(app.slice(app.indexOf('function teamSetupUndoHtml()'), app.indexOf('function teamSetupChatPaint')), /composerTight/, 'desktop has no tight condition');
+});
+const undoRoutes = (byId) => ({ 'POST /api/team-setup/undo': (init) => { const id = JSON.parse(init.body).id; return byId[id] || res(200, { removed: 3 }); } });
+for (const [label, mk] of [
+  ['desktop', (routes) => { const w = desk({ routes }); return { w, msgs: () => w.ctx.alerts, apply: (s) => w.api.teamSetupApply({ offer: 'accepted', lead: LEAD, setups: s }) }; }],
+  ['phone', (routes) => { const w = phone({ routes }); return { w, msgs: () => w.env.toasts, apply: (s) => w.api.teamSetupApply({ offer: 'accepted', lead: LEAD, setups: s }) }; }],
+]) {
+  test(`${label}: Undo all stops at the first team whose response has failed[] and says what failed`, async () => {
+    const p = mk(undoRoutes({ u5: res(200, { removed: 1, failed: [{ agent: 'wes', error: 'refused' }, { agent: 'wil', error: 'busy' }] }) }));
+    p.apply(recentSetups(6));
+    await p.w.api.teamSetupUndoAll();
+    assert.deepStrictEqual(p.w.calls.filter((c) => c.method === 'POST').map((c) => JSON.parse(c.body).id), ['u6', 'u5'], 'u4..u1 not tried');
+    const m = p.msgs().find((x) => /Could not undo/.test(x));
+    assert.ok(m, 'reported: ' + JSON.stringify(p.msgs()));
+    assert.match(m, /^Could not undo \w+: /);
+    assert.ok(m.includes('wes (refused)') && m.includes('wil (busy)'), m);
+  });
+  test(`${label}: Undo all stops at a non-2xx with its error; a 404 (already undone) counts as done and goes on`, async () => {
+    const a = mk(undoRoutes({ u4: res(500, { error: 'disk full' }) }));
+    a.apply(recentSetups(6));
+    await a.w.api.teamSetupUndoAll();
+    assert.deepStrictEqual(a.w.calls.filter((c) => c.method === 'POST').map((c) => JSON.parse(c.body).id), ['u6', 'u5', 'u4']);
+    assert.ok(a.msgs().some((x) => /^Could not undo \w+: disk full$/.test(x)), JSON.stringify(a.msgs()));
+    const b = mk(undoRoutes({ u5: res(404, { error: 'No such setup' }), u3: res(404, {}) }));
+    b.apply(recentSetups(6));
+    await b.w.api.teamSetupUndoAll();
+    assert.deepStrictEqual(b.w.calls.filter((c) => c.method === 'POST').map((c) => JSON.parse(c.body).id), ['u6', 'u5', 'u4', 'u3', 'u2', 'u1'], 'all six tried');
+    assert.ok(!b.msgs().some((x) => /Could not undo/.test(x)), JSON.stringify(b.msgs()));
+  });
+}

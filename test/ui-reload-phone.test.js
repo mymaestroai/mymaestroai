@@ -146,7 +146,7 @@ test('a call already answered at the press is not asked again after the wait', a
 });
 
 test('the page asks only the call question: no offline or group question on the phone', () => {
-  assert.match(pageSrc, /questions: \(\) => \(voiceCall \? \[APP_RELOAD_CALL_QUESTION\] : \[\]\)/);
+  assert.match(pageSrc, /questions: \(\) => \[\.\.\.\(voiceCall \? \[APP_RELOAD_CALL_QUESTION\] : \[\]\), \.\.\.reloadPhotoQuestions\(\)\]/);
   assert.doesNotMatch(pageSrc, /APP_RELOAD_OFFLINE_QUESTION|APP_RELOAD_GROUP_QUESTION|inCall|before:/);
 });
 

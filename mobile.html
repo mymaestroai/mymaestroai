@@ -231,7 +231,8 @@
     /* One leader = one block (.tm-block): its row, then its own workers in .tm-kids, joined by a line down the left of them. */
     /* Indent model (px, phone 390 wide): main row = fold 40 + padding 14 + icon 36 + gap 12 -> its NAME starts at 102.
        Every deeper row starts right of its boss's name: --tm-bar sits under the boss's icon centre, --tm-gap is the room between line and rows. */
-    html { --vvh: 100dvh; --tm-bar: 71px; --tm-gap: 21px; --tm-kid-bar: 60px; --tm-kid-gap: 11px; --tm-deep-bar: 62px; }
+    html { --vvh: 100vh; --tm-bar: 71px; --tm-gap: 21px; --tm-kid-bar: 60px; --tm-kid-gap: 11px; --tm-deep-bar: 62px; }
+    @supports (height: 100dvh) { html { --vvh: 100dvh; } }   /* JS sets --vvh inline; without dvh the fallback is vh, never an invalid height */
     .tm-leaders { margin-left: var(--tm-bar); padding-left: var(--tm-gap); border-left: 1px solid var(--border-strong); }
     .tm-block.tm-r-leader { margin-bottom: 10px; }
     .tm-kids { margin-left: var(--tm-kid-bar); padding-left: var(--tm-kid-gap); border-left: 1px solid var(--border-strong); }

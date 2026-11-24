@@ -68,7 +68,7 @@ test('a huge install: no main with member rows has an empty working_history; the
   for (const m of f.mains) assert.ok(m.working_history.length >= Math.min(TS.MEMBER_ROWS_MAX, 5), `${m.name} keeps its rows`);
   const names = new Set(f.mains.map(m => m.name));
   assert.ok(f.not_covered_this_pass && f.not_covered_this_pass.length > 0);
-  assert.match(f.not_covered_note, /Press Set up teams again/);
+  assert.match(f.not_covered_note, /Next press of Set up teams covers these once the teams above are set; mains that already have a team are skipped/);
   assert.equal(f.mains.length + f.not_covered_this_pass.length, 60);
   assert.equal(f.not_covered_this_pass.some(n => names.has(n)), false);
 });

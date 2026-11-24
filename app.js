@@ -9101,14 +9101,26 @@
       if (picked && !picked.length) return;
       if (!confirm(picked ? `Remove all ${n} reporting lines from these ${picked.length} teams?` : `Remove these ${n} reporting lines?`)) return;
       try {
-        let kept = 0;
+        let kept = 0, problem = '';
         for (const body of (ids ? ids.map(id => ({ id })) : [all ? { all: true } : { id: which.id }])) {
           const r = await fetch('/api/team-setup/undo', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
           const d = await r.json().catch(() => ({}));
-          if (!r.ok) throw new Error((d && d.error) || `HTTP ${r.status}`);
           kept += Array.isArray(d && d.keptChanged) ? d.keptChanged.length : Math.max(0, Math.floor(Number(d && d.keptChanged)) || 0);
+          if (r.status === 404) continue;   // already undone (another device): done, go on with the next team
+          const failed = Array.isArray(d && d.failed) ? d.failed : [];
+          if (failed.length || !r.ok) {   // stop at the first team that did not come undone and say what failed
+            const s = body.id !== undefined ? teamSetup.setups.find(x => String(x.id) === String(body.id)) : null;
+            const main = s && s.main ? AGENTS.find(a => a.name === s.main) : null;
+            const who = s && s.main ? ((main && main.display) || capName(s.main)) : body.all ? 'all teams' : 'this team';
+            const parts = [];
+            if (!r.ok) parts.push((d && d.error) || `HTTP ${r.status}`);
+            if (failed.length) parts.push('could not restore ' + failed.map(f => (f && f.agent ? (f.error ? `${f.agent} (${f.error})` : f.agent) : String(f))).join(', '));
+            problem = `Could not undo ${who}: ${parts.join('; ')}`;
+            break;
+          }
         }
         if (kept > 0) alert(`${kept} reporting line${kept === 1 ? ' was' : 's were'} changed by hand since and stayed as set.`);
+        if (problem) alert(problem);
       } catch (e) { alert('Could not undo: ' + (e && e.message ? e.message : 'no connection')); }
       try { await loadAgents(); } catch { /* the list refreshes on its next tick */ }   // the reporting lines changed
       await teamSetupLoad();   // the line leaves; with no lines left the tab shows the empty state again

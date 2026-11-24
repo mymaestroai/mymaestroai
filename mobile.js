@@ -2666,9 +2666,10 @@ function buildingTeam(name) { return Object.values(live).some((s) => s && s.buil
 const buildTeamPending = new Set();   // requests on their way from this page (a second tap does nothing)
 function buildTeamBtnHtml(name, cls, label, asSpan) {
   const on = buildingTeam(name) || buildTeamPending.has(name);
-  if (asSpan) return `<span role="button" class="${cls}" data-build-team="${esc(name)}"${on ? ' aria-disabled="true"' : ''}>${on ? 'Building…' : label}</span>`;   // a row is a button: no button inside it
+  if (asSpan) return `<span role="button" tabindex="0" class="${cls}" data-build-team="${esc(name)}"${on ? ' aria-disabled="true"' : ''}>${on ? 'Building…' : label}</span>`;   // a row is a button: no button inside it
   return `<button type="button" class="${cls}" data-build-team="${esc(name)}"${on ? ' disabled aria-disabled="true"' : ''}>${on ? 'Building…' : label}</button>`;
 }
+function buildTeamActivate(bt) { if (!bt.disabled && bt.getAttribute('aria-disabled') !== 'true') buildTeamStart(bt.dataset.buildTeam); }
 function buildSubHtml(name) {
   return `<div class="agent-model agent-build-sub">No team yet · ${buildTeamBtnHtml(name, 'build-team-link', 'Build team', true)}</div>`;
 }
@@ -2793,6 +2794,7 @@ function teamSetupTight(on) {
   if (composerTight === on) return;
   composerTight = on;
   if (!on) teamOfferOpen = false;
+  else teamSetupListOpen = false;   // the box gained focus / the view got short: the list closes by itself; a tap opens it again
   teamSetupSlotPaint();
 }
 const TEAM_UNDO_DISMISS_KEY = 'hub-team-undo-dismissed';
@@ -2815,8 +2817,9 @@ function teamSetupUndoHtml() {
     const s = rows[0], n = lines(s);
     return `<div class="team-undo-line"><span class="team-undo-text">${whoOf(s)} team recorded (${n} reporting line${n === 1 ? '' : 's'})</span> <span class="team-undo-sep">·</span> <button type="button" class="team-undo-btn" data-team-undo-id="${esc(String(s.id))}">Undo</button> ${x}</div>`;
   }
-  let html = `<div class="team-undo-line" data-team-undo-toggle><span class="team-undo-text">${rows.length} teams recorded</span> <span class="team-undo-sep">·</span> <button type="button" class="team-undo-btn" data-team-undo-toggle aria-expanded="${teamSetupListOpen ? 'true' : 'false'}">Undo</button> ${x}</div>`;
-  if (teamSetupListOpen && !composerTight) {
+  const listShown = teamSetupListOpen;   // an explicit tap opens the list in tight mode too (it sits in the capped, scrollable slot); aria-expanded follows what is shown
+  let html = `<div class="team-undo-line" data-team-undo-toggle><span class="team-undo-text">${rows.length} teams recorded</span> <span class="team-undo-sep">·</span> <button type="button" class="team-undo-btn" data-team-undo-toggle aria-expanded="${listShown ? 'true' : 'false'}">Undo</button> ${x}</div>`;
+  if (listShown) {
     html += '<div class="team-undo-list" role="group" aria-label="Teams recorded">';
     for (const s of rows) { const n = lines(s); html += `<div class="team-undo-item"><span class="team-undo-text">${whoOf(s)} team (${n} line${n === 1 ? '' : 's'})</span> <button type="button" class="team-undo-btn" data-team-undo-id="${esc(String(s.id))}">Undo</button></div>`; }
     html += '<div class="team-undo-item"><span class="team-undo-text"></span> <button type="button" class="team-undo-btn" data-team-undo-all>Undo all</button></div></div>';
@@ -2909,15 +2912,26 @@ async function teamSetupUndo(which) {
   if (picked && !picked.length) return;
   if (!confirm(picked ? `Remove all ${n} reporting lines from these ${picked.length} teams?` : `Remove these ${n} reporting lines?`)) return;
   try {
-    let kept = 0;
+    let kept = 0, problem = '';
     for (const body of (ids ? ids.map((id) => ({ id })) : [all ? { all: true } : { id: which.id }])) {
       const r = await api('/api/team-setup/undo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       let d = null;
       try { d = await r.json(); } catch { d = null; }
-      if (!r.ok) throw new Error((d && d.error) || `HTTP ${r.status}`);
       kept += Array.isArray(d && d.keptChanged) ? d.keptChanged.length : Math.max(0, Math.floor(Number(d && d.keptChanged)) || 0);
+      if (r.status === 404) continue;   // already undone (another device): done, go on with the next team
+      const failed = Array.isArray(d && d.failed) ? d.failed : [];
+      if (failed.length || !r.ok) {   // stop at the first team that did not come undone and say what failed
+        const s = body.id !== undefined ? teamSetup.setups.find((x) => String(x.id) === String(body.id)) : null;
+        const who = s && s.main ? displayName(s.main) : body.all ? 'all teams' : 'this team';
+        const parts = [];
+        if (!r.ok) parts.push((d && d.error) || `HTTP ${r.status}`);
+        if (failed.length) parts.push('could not restore ' + failed.map((f) => (f && f.agent ? (f.error ? `${f.agent} (${f.error})` : f.agent) : String(f))).join(', '));
+        problem = `Could not undo ${who}: ${parts.join('; ')}`;
+        break;
+      }
     }
     if (kept > 0) toast(`${kept} reporting line${kept === 1 ? ' was' : 's were'} changed by hand since and stayed as set.`, 6000);
+    if (problem) toast(problem, 5000);
   } catch (err) { toast(`Could not undo: ${err.message}`, 5000); }
   try { await loadAgents(); } catch { /* the list refreshes on its next tick */ }   // the reporting lines changed
   await teamSetupLoad();   // the line leaves; with no lines left the list shows the empty state again
@@ -14566,11 +14580,15 @@ function wire() {
   });
   teamsPaintSwitch();
   teamSetupWire();
+  $('agents-list').addEventListener('keydown', (e) => {   // the span link inside a row is focusable: Enter / Space press it, and never the row around it
+    const bt = e.target && e.target.closest ? e.target.closest('span[data-build-team]') : null;
+    if (bt && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); e.stopPropagation(); buildTeamActivate(bt); }
+  });
   $('agents-list').addEventListener('click', (e) => {
     if (e.target.closest('[data-team-setup]')) { if (!e.target.closest('[data-team-setup]').disabled) teamSetupStart(); return; }   // empty state: Set up teams
     if (e.target.closest('[data-team-undo]')) { teamSetupUndo({ all: true }); return; }   // bottom line: Undo
     const bt = e.target.closest('[data-build-team]');
-    if (bt) { if (!bt.disabled && bt.getAttribute('aria-disabled') !== 'true') buildTeamStart(bt.dataset.buildTeam); return; }   // before the row: a Build button never opens the chat itself
+    if (bt) { buildTeamActivate(bt); return; }   // before the row: a Build button never opens the chat itself
     const f = e.target.closest('.tm-fold, [data-tm-sec]');
     if (f) { teamsToggle(f.dataset.fold || '@' + f.dataset.tmSec); renderAgents(); return; }   // Teams view: folds only fold
     const g = e.target.closest('.group-title[data-group]');
@@ -14877,7 +14895,7 @@ let appReloaderInst = null;
 function reloadApp() {
   if (!appReloaderInst) {
     appReloaderInst = createAppReloader({
-      questions: () => (voiceCall ? [APP_RELOAD_CALL_QUESTION] : []),   // offline is fine here: the service worker keeps /mobile
+      questions: () => [...(voiceCall ? [APP_RELOAD_CALL_QUESTION] : []), ...reloadPhotoQuestions()],   // offline is fine here: the service worker keeps /mobile
       confirm: (q) => window.confirm(q),
       prepare: () => appFreshFetch({
         urls: appReloadUrls(document, location.origin),
@@ -14922,6 +14940,12 @@ function reloadResumeFinish(agent, draft) {
   if (draft && box && !box.value) { box.value = draft; saveDraft(agent, draft); composerTypingPaint(); box.style.height = 'auto'; box.style.height = `${Math.min(box.scrollHeight, 140)}px`; }
   stick = true;
   scrollChat(true);
+}
+// The ↻ arrow keeps the typed text but not attached photos (or photos still converting): ask first, and the reloader asks again right
+// before the page reloads when a photo was added while it waited. Only for the arrows (reloadKeepChat); Cancel = no reload.
+const RELOAD_PHOTO_QUESTION = 'Reload and remove the attached photo(s)? The text stays.';
+function reloadPhotoQuestions() {
+  return reloadKeepChat && (pendingImages.length > 0 || imagesPreparing.size > 0) ? [RELOAD_PHOTO_QUESTION] : [];
 }
 function reloadArrowClick() {
   for (const id of ['chat-resync', 'agents-refresh']) { const b = $(id); if (b) b.classList.add('spinning'); }
