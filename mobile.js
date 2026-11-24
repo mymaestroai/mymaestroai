@@ -2555,15 +2555,18 @@ function teamsPick(v) {
   if (screen === 'agents') renderAgents(); else if (typeof simpleAgentListsRepaint === 'function') simpleAgentListsRepaint();
 }
 function teamsHelpers(n) { return `${n} helper${n === 1 ? '' : 's'}`; }
-function teamsSub(node) {
+// A direct report of a main agent leads a team only when somebody reports to it; otherwise it is drawn as a worker.
+function teamsIsLeader(node) { return node.depth === 1 && (node.children.length > 0 || node.size > 0); }
+function teamsIsWorker(node) { return node.depth >= 2 || (node.depth === 1 && !node.children.length && !node.size); }
+function teamsSub(node, parent) {
   const w = node.working ? ` · ${node.working} working` : '';
   if (node.depth === 0 && window.hubTeams.isMain(node.agent)) {
-    const k = node.children.length;
+    const k = node.children.filter(teamsIsLeader).length;
     if (!node.size) return 'No team yet';
     return k > 1 ? `${k} teams · ${node.size} agents${w}` : `team of ${node.size}${w}`;
   }
-  if (node.depth === 1) return node.children.length ? `Team leader · leads ${node.size}${w}` : 'Team leader';
-  if (node.depth >= 2) return 'Worker';
+  if (teamsIsLeader(node)) return `Team leader · leads ${node.size}${w}`;
+  if (teamsIsWorker(node)) return node.depth === 1 && parent ? `Reports to ${parent.agent.display || parent.agent.name}` : 'Worker';
   return node.children.length ? `leads ${node.size}${w}` : null;
 }
 // Keep busy nodes and their ancestors (the working filter).
@@ -2571,12 +2574,12 @@ function teamsPrune(node) {
   const children = node.children.map(teamsPrune).filter(Boolean);
   return isBusy(node.agent.name) || node.helpers > 0 || children.length ? { ...node, children } : null;
 }
-function teamsNodeHtml(node) {
+function teamsNodeHtml(node, parent) {
   const a = node.agent, d = node.depth, kids = node.children.length;
   const open = workingFilter || !!teamsOpen[a.name];
   const isMain = d === 0 && window.hubTeams.isMain(a);
-  const rank = d >= 2 ? 'worker' : d === 1 ? 'leader' : 'main';
-  let sub = teamsSub(node);
+  const rank = teamsIsWorker(node) ? 'worker' : d === 1 ? 'leader' : 'main';
+  let sub = teamsSub(node, parent);
   // a busy (or asking) leader / worker shows its busy text instead of its role
   if (!isMain && d >= 1 && (isBusy(a.name) || (live[a.name] && live[a.name].pendingQuestion))) sub = null;
   let html = `<div class="tm-line tm-d${d}" style="--d:${d}">` +
@@ -2585,7 +2588,7 @@ function teamsNodeHtml(node) {
   if (d === 0 && !node.size && window.hubTeams.isMain(a) && isAdmin()) html += `<div class="tm-build" style="--d:${d}">${buildTeamBtnHtml(a.name, 'build-team-btn', 'Build Team')}</div>`;
   // One leader = one block: its row, then only its own people in a wrapper with the connector line (.tm-kids).
   // Under a main agent the blocks sit in .tm-leaders (no connector).
-  if (kids && open) html += `<div class="${d === 0 ? 'tm-leaders' : 'tm-kids'}">${node.children.map(teamsNodeHtml).join('')}</div>`;
+  if (kids && open) html += `<div class="${d === 0 ? 'tm-leaders' : 'tm-kids'}">${node.children.map(c => teamsNodeHtml(c, node)).join('')}</div>`;
   if (node.helpers > 0 && (open || !kids)) html += `<div class="tm-note" style="--d:${d}">⚡ ${esc(teamsHelpers(node.helpers))} under ${esc(a.display || a.name)}</div>`;
   return d >= 1 ? `<div class="tm-block tm-r-${rank}">${html}</div>` : html;
 }
@@ -16641,7 +16644,7 @@ function simpleTeamsModel() {
   const rows = [];
   for (const m of t.mains) {
     rows.push({ a: m.agent, depth: 0, sub: teamsSub(m) });
-    for (const c of m.children) rows.push({ a: c.agent, depth: 1, sub: 'Team leader' });
+    for (const c of m.children.filter(teamsIsLeader)) rows.push({ a: c.agent, depth: 1, sub: 'Team leader' });
   }
   const flat = (n) => [n.agent, ...n.children.flatMap(flat)];   // anyone under a shared or Other agent stays reachable
   return { rows, groups: [{ key: '@shared', label: 'Shared specialists', items: t.shared.flatMap(flat) }, { key: '@other', label: 'Other', items: t.other.flatMap(flat) }].filter((g) => g.items.length) };

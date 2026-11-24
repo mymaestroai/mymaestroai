@@ -8781,7 +8781,7 @@
       const row = t.closest('.teams-row');
       if (row) startSoloChat(row.dataset.agent, row.dataset.model);
     }
-    function teamsRowHtml(n, open) {
+    function teamsRowHtml(n, open, parent) {
       const a = n.agent, name = hubEsc(a.name);
       const st = agentLiveState(a.name);   // the same state All Agents paints from
       const busy = st.busy, question = st.question;
@@ -8792,12 +8792,14 @@
       const dotTip = bgState === 'background' ? AgentDot.dotLabel(bgState, { background: bgN }) : st.tip;
       const isMain = n.depth === 0 && hubTeams.isMain(a);
       const working = n.working > 0 ? ` · ${n.working} working` : '';
-      const leader = n.depth === 1, worker = n.depth >= 2;
+      // A direct report of a main agent leads a team only when somebody reports to it; otherwise it is drawn as a worker.
+      const leader = n.depth === 1 && n.children.length > 0, worker = n.depth >= 2 || (n.depth === 1 && n.children.length === 0);
       const rank = worker ? 'worker' : leader ? 'leader' : 'main';
+      const deep = worker;   // worker rows are the ones Simple hides
       let sub = '';
-      if (isMain) sub = n.children.length ? (n.children.length === 1 ? `team of ${n.size}${working}` : `${n.children.length} teams · ${n.size} agents${working}`) : 'No team yet';
-      else if (leader) sub = n.children.length ? `Team leader · leads ${n.size}${working}` : 'Team leader';
-      else if (worker) sub = 'Worker';
+      if (isMain) { const k = n.children.filter(c => c.children.length > 0).length; sub = n.children.length ? (k > 1 ? `${k} teams · ${n.size} agents${working}` : `team of ${n.size}${working}`) : 'No team yet'; }
+      else if (leader) sub = `Team leader · leads ${n.size}${working}`;
+      else if (worker) sub = n.depth === 1 && parent ? `Reports to ${parent.agent.display || capName(parent.agent.name)}` : 'Worker';
       else if (n.children.length) sub = `leads ${n.size}${working}`;
       let busyText = '', bgText = '';
       if ((busy || question) && (!sub || leader || worker)) { busyText = st.line; sub = ''; }   // a busy leader / worker shows what it is doing instead of its role
@@ -8815,7 +8817,8 @@
       const subHtml = (sub ? `<span class="teams-sub teams-sub-adv${leader ? ' has-simple' : ''}">${subText}</span>` : busyText ? `<span class="teams-sub teams-sub-adv busy${leader ? ' has-simple' : ''}">${hubEsc(busyText)}</span>` : '')
         + (bgText ? `<span class="teams-sub teams-bg-line" title="${hubEsc(dotTip)}">${hubEsc(bgText)}</span>` : '')
         + (leader ? '<span class="teams-sub teams-sub-simple">Team leader</span>' : '');
-      return `<div class="teams-line rank-${rank}${n.depth >= 2 ? ' deep' : ''}" style="--d:${n.depth}">${arrow}<div class="teams-row rank-${rank}${n.depth >= 2 ? ' deep' : ''}" role="button" tabindex="0" style="--d:${n.depth}" data-agent="${name}" data-model="${hubEsc(a.model || '')}" data-depth="${n.depth}" title="${hubEsc(a.blurb || a.specialty || '')}">
+      const dd = worker ? Math.max(n.depth, 2) : n.depth;   // a direct worker gets the worker indent
+      return `<div class="teams-line rank-${rank}${deep ? ' deep' : ''}" style="--d:${dd}">${arrow}<div class="teams-row rank-${rank}${deep ? ' deep' : ''}" role="button" tabindex="0" style="--d:${dd}" data-agent="${name}" data-model="${hubEsc(a.model || '')}" data-depth="${n.depth}" title="${hubEsc(a.blurb || a.specialty || '')}">
         <span class="teams-dot ${dot}" title="${hubEsc(dotTip)}">${hubEsc(st.text)}</span>
         <span class="agent-icon">${hubEsc(a.icon || '🤖')}</span>
         <span class="teams-info"><span class="name"><span class="name-text">${label}</span>${a.lead ? '<span class="lead-badge" title="Lead agent">👑</span>' : ''}</span>${subHtml}${buildBtn}</span>
@@ -8824,13 +8827,13 @@
     }
     // One leader (or worker, or deeper node) = ONE block: its row, then only its own people in a wrapper with the connector line.
     // Under a main agent the blocks sit in .teams-leaders (no connector); under a leader or worker they sit in .teams-kids (left border).
-    function teamsBlockHtml(n) {
-      const rank = n.depth >= 2 ? 'worker' : 'leader';
-      return `<div class="teams-block rank-${rank}">${teamsRowHtml(n, false)}${teamsSubtreeHtml(n)}</div>`;
+    function teamsBlockHtml(n, parent) {
+      const rank = n.depth >= 2 || !n.children.length ? 'worker' : 'leader';
+      return `<div class="teams-block rank-${rank}">${teamsRowHtml(n, false, parent)}${teamsSubtreeHtml(n)}</div>`;
     }
     function teamsSubtreeHtml(n) {
       let h = '';
-      if (n.children.length) h += `<div class="${n.depth === 0 ? 'teams-leaders' : 'teams-kids'}">${n.children.map(teamsBlockHtml).join('')}</div>`;
+      if (n.children.length) h += `<div class="${n.depth === 0 ? 'teams-leaders' : 'teams-kids'}">${n.children.map(c => teamsBlockHtml(c, n)).join('')}</div>`;
       if (n.helpers > 0) h += `<div class="teams-helpers" style="--d:${n.depth + 1}">⚡ ${n.helpers} helper${n.helpers === 1 ? '' : 's'} under ${hubEsc(n.agent.display || capName(n.agent.name))}</div>`;
       return h;
     }

@@ -144,7 +144,8 @@ test('the ui-teams.js script tag sits before app.js, next to ui-simple.js', () =
 test('Simple: two-part switch is hidden in Advanced, shown in Simple; Teams view hides workers (deep rows and the workers wrapper) and helper lines', () => {
   assert.match(html, /<div class="simple-view-switch"[^>]*>\s*<button type="button" data-view="agents" aria-pressed="true">All Agents<\/button>\s*<button type="button" data-view="teams" aria-pressed="false">Teams<\/button>/);
   assert.match(html, /html\.mm-simple #teams-list \.teams-line\.deep,/, 'the wrapper of a hidden deep row goes too, so no gap is left');
-  assert.match(fnSrc('teamsRowHtml'), /class="teams-line rank-\$\{rank\}\$\{n\.depth >= 2 \? ' deep' : ''\}"/);
+  assert.match(fnSrc('teamsRowHtml'), /class="teams-line rank-\$\{rank\}\$\{deep \? ' deep' : ''\}"/);
+  assert.match(fnSrc('teamsRowHtml'), /const deep = worker;/, 'a direct report with nobody under it is a worker, hidden in Simple like one');
   assert.match(html, /\n\s*\.simple-view-switch \{ display: none; \}/);
   assert.match(html, /html\.mm-simple \.simple-view-switch \{ display: flex;/);
   assert.match(html, /html\.mm-simple #teams-list \.teams-row\.deep, html\.mm-simple #teams-list \.teams-kids, html\.mm-simple #teams-list \.teams-helpers \{ display: none !important; \}/);
@@ -298,7 +299,7 @@ test('renderTeams: nobody has a team: the empty-state box says how to start', ()
 });
 test('renderTeams: names are escaped, the dot follows idle / busy / question, leaders get the Simple subline', () => {
   const w = world({ stored: [['hub-teams-open', JSON.stringify({ lead: true })]] });
-  w.ctx.AGENTS = [A('lead', { category: 'primary', display: '<img src=x onerror=1>' }), A('builder', { reportsTo: 'lead', display: 'B"><b>' })];
+  w.ctx.AGENTS = [A('lead', { category: 'primary', display: '<img src=x onerror=1>' }), A('builder', { reportsTo: 'lead', display: 'B"><b>' }), A('coder', { reportsTo: 'builder' })];
   w.ctx.agentStatus = { lead: { busy: false, pendingQuestion: true } };
   w.api.renderTeams();
   const h = w.list.innerHTML;
@@ -326,8 +327,9 @@ test('renderTeams: each leader is one block; a worker sits only in its own leade
   w.api.renderTeams();
   const h = w.list.innerHTML;
   assert.doesNotMatch(h, /Team leaders|Workers|teams-label/);
-  assert.match(h, /3 teams · 5 agents/);
-  const [b1, b2, b3] = ['l1', 'l2', 'l3'].map((n) => blockOf(h, 'teams-block rank-leader', n));
+  assert.match(h, /team of 5/, 'one real leader: team of N');
+  const b2 = blockOf(h, 'teams-block rank-leader', 'l2');
+  const [b1, b3] = ['l1', 'l3'].map((n) => blockOf(h, 'teams-block rank-worker', n));   // direct reports with nobody under them are workers
   assert.ok(b1 && b2 && b3);
   assert.ok(!/w1|w2|teams-kids/.test(b1) && !/w1|w2|teams-kids/.test(b3), 'a leader with no workers is one row, no connector');
   const kids = blockOf(b2, 'teams-kids', 'w1');
@@ -340,7 +342,7 @@ test('renderTeams: each leader is one block; a worker sits only in its own leade
 test('renderTeams: ranks and sublines: main row, leader row, worker row; busy shows its line; K teams · N agents', () => {
   const w = world({ stored: [['hub-teams-open', JSON.stringify({ boss: true, one: true })]] });
   const P = (n) => A(n, { category: 'primary' });
-  w.ctx.AGENTS = [P('boss'), P('one'), A('l1', { reportsTo: 'boss' }), A('l2', { reportsTo: 'boss' }), A('w1', { reportsTo: 'l1' }), A('w2', { reportsTo: 'l1' }), A('l9', { reportsTo: 'one' })];
+  w.ctx.AGENTS = [P('boss'), P('one'), A('l1', { reportsTo: 'boss' }), A('l2', { reportsTo: 'boss' }), A('w1', { reportsTo: 'l1' }), A('w2', { reportsTo: 'l1' }), A('w3', { reportsTo: 'l2' }), A('l9', { reportsTo: 'one' })];
   w.ctx.agentStatus = { w2: { busy: true, busySince: 'x', activity: 'working' } };
   w.api.renderTeams();
   const h = w.list.innerHTML;
@@ -348,14 +350,42 @@ test('renderTeams: ranks and sublines: main row, leader row, worker row; busy sh
   assert.match(h, /<div class="teams-line rank-main"[^>]*>[\s\S]*?<div class="teams-row rank-main"[^>]*data-agent="boss"/);
   assert.match(h, /<div class="teams-line rank-leader"[^>]*>[\s\S]*?<div class="teams-row rank-leader"[^>]*data-agent="l1"/);
   assert.match(h, /<div class="teams-line rank-worker deep"[^>]*>[\s\S]*?<div class="teams-row rank-worker deep"[^>]*data-agent="w1"/);
-  assert.match(row('boss'), /2 teams · 4 agents · 1 working</);
-  assert.match(row('one'), />team of 1</, 'one leader: team of N');
+  assert.match(row('boss'), /2 teams · 5 agents · 1 working</);
+  assert.match(row('one'), />team of 1</, 'one direct report with nobody under it: team of N');
+  assert.match(row('l9'), />Reports to One</);
+  assert.doesNotMatch(row('l9'), /Team leader/);
   assert.match(row('l1'), /Team leader · leads 2 · 1 working</);
-  assert.match(row('l2'), />Team leader</);
-  assert.doesNotMatch(row('l2'), /leads/);
+  assert.match(row('l2'), /Team leader · leads 1</);
   assert.match(row('w1'), />Worker</);
   assert.doesNotMatch(row('w2'), />Worker</, 'a busy worker shows its busy line instead');
   assert.match(row('w2'), /teams-sub teams-sub-adv busy/);
+});
+test('renderTeams: a main with three direct reports who lead nobody: no Team leader, worker look, "team of 3"', () => {
+  const w = world({ stored: [['hub-teams-open', JSON.stringify({ atlas: true })]] });
+  w.ctx.AGENTS = [A('atlas', { category: 'primary' }), A('editor', { reportsTo: 'atlas' }), A('scout', { reportsTo: 'atlas' }), A('writer', { reportsTo: 'atlas' })];
+  w.api.renderTeams();
+  const h = w.list.innerHTML;
+  assert.match(h, /team of 3</);
+  assert.doesNotMatch(h, /teams?\b[^<]*· 3 agents/);
+  assert.doesNotMatch(h, /Team leader|rank-leader|sub-narrow|Leads /);
+  for (const n of ['editor', 'scout', 'writer']) {
+    assert.match(h, new RegExp(`<div class="teams-row rank-worker deep"[^>]*data-agent="${n}"`));
+  }
+  assert.strictEqual((h.match(/Reports to Atlas</g) || []).length, 3);
+});
+test('renderTeams: two real leaders and one direct report with nobody under it: "2 teams · 5 agents"', () => {
+  const w = world({ stored: [['hub-teams-open', JSON.stringify({ atlas: true })]] });
+  w.ctx.AGENTS = [A('atlas', { category: 'primary' }), A('editor', { reportsTo: 'atlas' }), A('builder', { reportsTo: 'atlas' }), A('scout', { reportsTo: 'atlas' }),
+    A('writer', { reportsTo: 'editor' }), A('coder', { reportsTo: 'builder' })];
+  w.api.renderTeams();
+  const h = w.list.innerHTML;
+  assert.match(h, /2 teams · 5 agents</);
+  assert.strictEqual((h.match(/Team leader · leads 1</g) || []).length, 2);
+  assert.match(h, /<div class="teams-row rank-leader"[^>]*data-agent="editor"/);
+  assert.match(h, /<div class="teams-row rank-leader"[^>]*data-agent="builder"/);
+  assert.match(h, /<div class="teams-row rank-worker deep"[^>]*data-agent="scout"/);
+  assert.match(h, /data-agent="scout"[\s\S]*?Reports to Atlas</);
+  assert.strictEqual((h.match(/Team leader</g) || []).length, 2, 'the Simple subline appears on the two leaders only');
 });
 test('Teams CSS: connector border on the workers wrapper, 8px between leader blocks, three ranks, variables only', () => {
   assert.match(html, /\.teams-kids \{[^}]*border-left: 1px solid var\(--border-strong\)/);
