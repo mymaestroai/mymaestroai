@@ -584,12 +584,12 @@
     }
     /* The pill drops to the row's SECOND line when the name would get fewer than about 6 characters (~40px) beside it (the owner 2026-11-24). Measured: the name gets
        list - 122px on a main row (list <= 186px: icon hidden) and list - 183px on a leader row next to '24 agents ▸' (the widest pill), so: leader: 183 + 40 = 223 -> 225px.
-       A main row shows its icon from 187px up and its name gets list - 163px there: main: 163 + 40 = 203 -> 205px.
+       A main row shows its icon from 187px up and its name gets list - 163px there; its bold 13px name needs about 60px for six characters next to '24 agents ▸' (measured on the copy: 'Dock…' at list 219px), so main: 163 + 60 = 223 -> 225px, the same as leaders.
        #teams-list is the container (list = sidebar - 25px): main rows drop it at a 190px sidebar or narrower, leader rows at 250px or narrower (the default 240px sidebar included).
        One element, moved by CSS only (no second control): the pill comes FIRST on line 2, then the busy / background words. A main row keeps its 46px; a leader WITH a pill becomes 42px
        (name 16 + 1 + pill 18 = 35 inside 40; the main's rhythm: 18 + 1 + 18 = 37 inside 44), a leader without a pill stays 34px. */
     html { --tms-below: 3px; }   /* how far the pill's tap area reaches below the pill: the row's inner padding under line 2 (rounded down), so it never leaves the row */
-    @container (max-width: 205px) {
+    @container (max-width: 225px) {
       .teams-row.rank-main:has(.teams-pill-btn) .teams-info { flex-direction: row; flex-wrap: wrap; justify-content: flex-start; align-content: center; align-items: center; gap: 0; }
       .teams-row.rank-main:has(.teams-pill-btn) .teams-info::before { content: ''; order: 1; flex: 0 0 100%; height: 1px; }   /* the line break (and the 1px between the lines) */
       .teams-row.rank-main:has(.teams-pill-btn) .name { display: contents; }   /* name, crown, pill and the busy words become the info's own items: name and crown stay on line 1, the pill and what follows go to line 2 */
@@ -617,6 +617,24 @@
     /* 'Solo · Build team' is shorter than the old 'No team yet · Build team' (which needed about 218px of list on its one line: 216 overflows by 1px, 218 fits); the thresholds are kept. Below that the words before the link go and the link stays whole: the default 240px sidebar (list about 216px) shows just 'Build team'. */
     @container (max-width: 219px) { .tbs-prefix { display: none; } }
     .teams-bg-line { color: var(--bg-work-ring); }
+    /* NEVER A STUB OF STATUS (design lead + Maestro): when fewer than about six letters (45px at the 10-10.4px status font) of the status words would show, they show NOT AT ALL: the dot or ring speaks alone,
+       the row's title / aria-label carry the full words. Measured in headless Chrome on the real CSS and row markup (Harbor: "checking tomorrow's berth list", a member: "comparing fuel prices"),
+       visible width of the words in px, list (container) widths 135 / 160 / 186 / 200 / 210 / 219 / 225 / 231 / 260:
+         main row, pill '12 agents' or '24 agents' on line 2 (the pill sets the width: both pills measure the same):  10 / 35 / 61 / 37 / 47 / 56 / 62 / 136 / 136   -> list - 125 up to 186px (icon hidden), list - 163 from 187px
+         leader row (pill on line 2 up to 225px, then inline after name and pill):                                    5.8 / 30.8 / 56.8 / 21.8 / 31.8 / 40.8 / 46.8 / 0 / 7.3 -> list - 129 up to 186, list - 178 from 187 to 225, list - 253 from 226
+         worker under a main ('Lonely Worker', the longest name measured; 'Hb Member 0' shows 4px more):                2.5 / 27.5 / 53.5 / 26.3 / 36.3 / 45.3 / 51.3 / 57.3 / 86.3 -> list - 133 up to 186, list - 174 from 187
+         a leader's worker (.deep, indented one step more):                                                            0 / 7.9 / 33.9 / 0 / 0 / 7.3 / 13.3 / 19.3 / 48.3 -> list - 152 up to 186, list - 212 from 187
+       The words go where the width is under 45px; the thresholds are the first width that gives 45px or more: main: 170 (up to 186) and 208 (from 187); leader: 175 and, from 187, 298 (the 224-225px sliver of 46px is hidden with it, one rule);
+       worker: 178 and 219; leader's worker: 197 (so every width up to 186) and 257. Hence the rules below. Names longer than these measure shorter: the row's title / aria-label still say everything.
+       Simple (list about 231px, its own bigger font; measured at 160 / 231 / 260: main 36 / 67 / 96, leader 8.6 / 48.6 / 77.6, worker 6.6 / 51.6 / 80.6, leader's worker 0 / 12.6 / 41.6) has its own block with Simple's thresholds. */
+    @container (max-width: 169px) { html:not(.mm-simple) #teams-list .teams-row.rank-main:has(.teams-pill-btn) .teams-sub { display: none; } }
+    @container (min-width: 187px) and (max-width: 207px) { html:not(.mm-simple) #teams-list .teams-row.rank-main:has(.teams-pill-btn) .teams-sub { display: none; } }
+    @container (max-width: 174px) { html:not(.mm-simple) #teams-list .teams-row.rank-leader .teams-live { display: none; } }
+    @container (min-width: 187px) and (max-width: 297px) { html:not(.mm-simple) #teams-list .teams-row.rank-leader .teams-live { display: none; } }
+    @container (max-width: 177px) { html:not(.mm-simple) #teams-list .teams-row.rank-worker:not(.deep) .teams-live { display: none; } }
+    @container (min-width: 187px) and (max-width: 218px) { html:not(.mm-simple) #teams-list .teams-row.rank-worker:not(.deep) .teams-live { display: none; } }
+    @container (max-width: 256px) { html:not(.mm-simple) #teams-list .teams-row.rank-worker.deep .teams-live { display: none; } }
+    @container (max-width: 171px) { html:not(.mm-simple) #teams-list .teams-row.is-spec .teams-live { display: none; } }   /* a shared specialist (one line, no pill): 8.3 / 33.3 / 59.3 / 50.3 / 60.3 / 69.3 / 75.3 at 135 / 160 / 186 / 200 / 210 / 219 / 225 = list - 127 (icon hidden up to 186), 45px from 172; from 187 the icon shows and 200 still gives 50 */
 
     /* Multi-user: owner switcher, signed-in chip, account menu, security dialog */
     #owner-view { width: 100%; margin-bottom: 8px; padding: 5px 8px; background: var(--bg-input); color: var(--text); border: 1px solid var(--border); border-radius: 5px; font-size: 0.75rem; }
@@ -3480,14 +3498,39 @@
     html.mm-simple #teams-list .teams-live { font-size: 11px; }
     html.mm-simple #teams-list .teams-pill { height: 20px; line-height: 18px; border-color: var(--sm-border); border-radius: 10px; padding: 0 7px; font-size: 12px; color: var(--sm-sec); }
     html.mm-simple #teams-list .teams-pill-btn:hover .teams-pill, html.mm-simple #teams-list .teams-pill-btn:focus-visible .teams-pill { border-color: var(--sm-sec); color: var(--sm-text); }
-    @container (max-width: 225px) {   /* Simple's leader with its pill on line 2: the main row's 48px (name 18 + 1 + pill 20 = 39); its sidebar is 260px (list about 236px) or 240px in a narrow window (list about 216px) */
-      html.mm-simple #teams-list .teams-row.rank-leader:has(.teams-pill-btn) { height: 48px; --tms-below: 3px; }
-      html.mm-simple #teams-list .teams-line.rank-leader.has-kids::after { top: 35px; }
-      html.mm-simple #teams-list .teams-block.rank-leader:last-child:has(> .teams-line [data-fold])::before { height: 24px; }
-    }
+    /* Simple: the pill is ALWAYS on the row's second line (no container condition: Simple's sidebar is 260px, list about 231px, which left 'Studi...' beside '4 agents'), the same mechanism as the narrow sidebar blocks:
+       one element moved by CSS. Pill first on line 2, then the busy / background words (ellipsis). A main row keeps its 48px (name 20 + 1 + pill 20 = 41); a leader WITH a pill is 48px too (name 18 + 1 + pill 20 = 39). */
+    html.mm-simple #teams-list .teams-row.rank-leader:has(.teams-pill-btn) { height: 48px; --tms-below: 3px; }
+    html.mm-simple #teams-list .teams-line.rank-leader.has-kids::after { top: 35px; }
+    html.mm-simple #teams-list .teams-block.rank-leader:last-child:has(> .teams-line [data-fold])::before { height: 24px; }
+    html.mm-simple #teams-list .teams-row.rank-main:has(.teams-pill-btn) .teams-info,
+    html.mm-simple #teams-list .teams-row.rank-leader:has(.teams-pill-btn) .teams-info { flex-direction: row; flex-wrap: wrap; justify-content: flex-start; align-content: center; align-items: center; gap: 0; }
+    html.mm-simple #teams-list .teams-row.rank-main:has(.teams-pill-btn) .teams-info::before,
+    html.mm-simple #teams-list .teams-row.rank-leader:has(.teams-pill-btn) .teams-info::before { content: ''; order: 1; flex: 0 0 100%; height: 1px; }   /* the line break (and the 1px between the lines) */
+    html.mm-simple #teams-list .teams-row.rank-main:has(.teams-pill-btn) .name,
+    html.mm-simple #teams-list .teams-row.rank-leader:has(.teams-pill-btn) .name { display: contents; }
+    html.mm-simple #teams-list .teams-row.rank-main:has(.teams-pill-btn) .name-text,
+    html.mm-simple #teams-list .teams-row.rank-leader:has(.teams-pill-btn) .name-text { max-width: 100%; }
+    html.mm-simple #teams-list .teams-row.rank-main:has(.teams-pill-btn) .name-text:has(+ .lead-badge),
+    html.mm-simple #teams-list .teams-row.rank-leader:has(.teams-pill-btn) .name-text:has(+ .lead-badge) { max-width: calc(100% - 17px); }
+    html.mm-simple #teams-list .teams-row.rank-main:has(.teams-pill-btn) .teams-pill-btn,
+    html.mm-simple #teams-list .teams-row.rank-leader:has(.teams-pill-btn) .teams-pill-btn { order: 2; margin-left: 0; }
+    html.mm-simple #teams-list .teams-row.rank-main:has(.teams-pill-btn) .teams-live,
+    html.mm-simple #teams-list .teams-row.rank-leader:has(.teams-pill-btn) .teams-live { order: 2; margin-left: 6px; }
+    html.mm-simple #teams-list .teams-row.rank-main:has(.teams-pill-btn) .teams-sub,
+    html.mm-simple #teams-list .teams-row.rank-leader:has(.teams-pill-btn) .teams-sub { order: 2; flex: 1 1 0; min-width: 0; margin-left: 6px; }
+    html.mm-simple #teams-list .teams-row.rank-main:has(.teams-pill-btn) .teams-pill-btn::before,
+    html.mm-simple #teams-list .teams-row.rank-leader:has(.teams-pill-btn) .teams-pill-btn::before { left: -3px; right: -3px; top: -1px; bottom: calc(var(--tms-below) * -1); width: auto; height: auto; transform: none; }   /* the tap area stays inside the row, off the dots and the ⋯ */
     html.mm-simple #teams-list .teams-title, html.mm-simple #teams-list .teams-empty { color: var(--sm-muted); border-color: var(--sm-border); }
     html.mm-simple #teams-list .teams-title { height: 32px; font-size: 11px; letter-spacing: 0.06em; padding: 0 2px; }
     html.mm-simple #teams-list .teams-empty strong { color: var(--sm-text); }
+    /* Simple: NEVER A STUB OF STATUS too (see the block after .teams-bg-line above). Measured at list 160 / 231 / 260 (Simple's sidebar is 260px: list about 231): main 36 / 67 / 96 (list - 164), leader 8.6 / 48.6 / 77.6 (list - 182),
+       worker 6.6 / 51.6 / 80.6 (list - 179), a leader's worker 0 / 12.6 / 41.6 (list - 218). First width with 45px: main 209, leader 228, worker 225, leader's worker 264; below that the words are hidden (the dot / ring and the row's title speak). */
+    @container (max-width: 208px) { html.mm-simple #teams-list .teams-row.rank-main:has(.teams-pill-btn) .teams-sub { display: none; } }
+    @container (max-width: 227px) { html.mm-simple #teams-list .teams-row.rank-leader .teams-live { display: none; } }
+    @container (max-width: 224px) { html.mm-simple #teams-list .teams-row.rank-worker:not(.deep) .teams-live { display: none; } }
+    @container (max-width: 263px) { html.mm-simple #teams-list .teams-row.rank-worker.deep .teams-live { display: none; } }
+    @container (max-width: 164px) { html.mm-simple #teams-list .teams-row.is-spec .teams-live { display: none; } }   /* a shared specialist: 40px at 160 (list - 120), so 45px from 165 */
 
     /* Top right of the chat area: appearance button and the Simple view switch */
     html.mm-simple .main { position: relative; }

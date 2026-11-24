@@ -170,6 +170,7 @@ function simpleRun(view, busy, open, alone, extra) {
     return x;
   };
   e.document = { createElement: mk, querySelectorAll: () => [], getElementById: () => null };
+  e.displayName = (n) => ((AGENTS.find((a) => a.name === n) || {}).display || n);
   e.agents = AGENTS; e.current = 'ann'; e.navigate = () => {}; e.simpleAgentListsRepaint = () => {};
   e.buildTeamStart = () => {}; e.buildTeamPending = new Set(); e.simpleMoreGet = () => false; e.simpleMoreSet = () => {}; e.simpleDotClass = () => '';
   e.simpleDotPaint = (el, n) => { if (el) el.className = 'sa-dot ' + e.simpleDotClass(n); };   // the "Working on" change paints Simple dots through this
@@ -365,6 +366,7 @@ test('mobile.html: Build/plan-card CSS uses variables only and gives 44px+ touch
 test('works alone (phone All Agents): the group row passes build only without the record, so the line is gone (source)', () => {
   assert.ok(!/build: noTeam\.has\(a\.name\) && /.test(RENDER()), 'the loop stays plain');
   assert.match(js, /opts\.buildSub \|\| \(opts\.build && !worksAlone\(a\.name\) && !working && !bgN\)/);
+  assert.match(js, /opts && opts\.build && worksAlone\(a\.name\) && !working && !bgN\n\s+\? '<div class="agent-model agent-build-sub agent-solo-sub">Solo<\/div>'/, 'a works-alone solo agent reads just Solo');
   assert.ok(!/buildLineHtml|class="build-line/.test(js), 'no build-line element any more');
   assert.match(js, /function worksAlone\(name\) \{\n  return isAdmin\(\) && !!\(teamSetup\.alone && Object\.prototype\.hasOwnProperty\.call\(teamSetup\.alone, name\)\) && !!window\.hubTeams && !window\.hubTeams\.hasTeam\(name, agents\);/);
   assert.match(js, /alone: d\.alone && typeof d\.alone === 'object' && !Array\.isArray\(d\.alone\) \? d\.alone : \{\}/);
@@ -402,7 +404,9 @@ test('All Agents (phone): an admin sees "Solo · Build team" under every no-team
   assert.ok(line(m17), 'not marked works alone: the line shows (the real worksAlone state, no stub)');
   assert.ok(!/agent-build-sub/.test(api.agentRowHtml(many[0], { build: noTeam.has('main1') })), 'main1 has a team');
   api.teamSetup.alone = { main17: { at: null, reason: 'r' } };
-  assert.ok(!/agent-build-sub/.test(api.agentRowHtml(m17, { build: noTeam.has('main17') })), 'marked works alone: no line');
+  // changed (design lead + Maestro): every solo agent's second line starts with 'Solo'; a works-alone one reads just 'Solo', with no Build team link
+  assert.match(api.agentRowHtml(m17, { build: noTeam.has('main17') }), /<div class="agent-model agent-build-sub agent-solo-sub">Solo<\/div>/, 'marked works alone: just Solo');
+  assert.ok(!/build-team-link/.test(api.agentRowHtml(m17, { build: noTeam.has('main17') })), 'works alone: no link');
   assert.ok(/agent-build-sub/.test(api.agentRowHtml(many.find((a) => a.name === 'main16'), { build: noTeam.has('main16') })), 'the others still show it');
   const mem = load(env({ env: { agents: many, isAdmin: () => false } }), BUILD(), '{ agentRowHtml, buildNoTeam }');
   assert.ok(!/agent-build-sub/.test(mem.agentRowHtml(m17, { build: mem.buildNoTeam().has('main17') })));
@@ -984,4 +988,45 @@ test('Solo agents fold (Simple sheet): the same keys; the header tap folds and u
   const s2 = simpleHeads(r.box).find((h) => /^Solo agents/.test(h.parts['.sa-sec-t'].textContent));
   s2.click();
   assert.deepStrictEqual(JSON.parse(r.e.store['hub-teams-open']), {}, 'unfolding deletes the old key');
+});
+
+// ── Never a stub of status (design lead + Maestro): the row's title and aria-label carry the full words; a recorded works-alone agent reads 'Solo' in All Agents ──
+test('phone Teams rows: title and aria-label carry the full status words when replying or with background work; idle rows and All Agents rows have none', () => {
+  const e = env({ env: { bgCountOf: (n) => (n === 'bea' ? 2 : 0), bgStateOf: (n, working) => (!working && n === 'bea' ? 'background' : 'free') } });
+  e.live = { ann: { busy: true } };
+  const api = teamsApi(e);
+  const head = (h) => h.slice(0, h.indexOf('>'));
+  assert.doesNotMatch(head(api.agentRowHtml(AGENTS[0])), /title=|aria-label=/, 'All Agents rows are unchanged');
+  const t = (a, rank) => api.agentRowHtml(a, { tm: { rank, pill: '', hasPill: false, build: false } });
+  assert.match(head(t(AGENTS[0], 'main')), /data-agent="ann" title="Ann: ann is working" aria-label="Ann: ann is working"/);
+  assert.match(head(t(AGENTS[1], 'main')), /data-agent="bea" title="Bea &lt;b&gt;: Free · 2 things in the background" aria-label="Bea &lt;b&gt;: Free · 2 things in the background"/);
+  assert.doesNotMatch(head(t(AGENTS[7], 'main')), /title=|aria-label=/, 'idle: unchanged');
+  assert.match(api.teamsListHtml(), /data-agent="ann" title="Ann: ann is working" aria-label="Ann: ann is working"/);
+});
+test('Simple phone rows: simpleTmLine carries the full words as tip and simpleTmPaint keeps the row title / aria-label current', () => {
+  const fns = ['simpleTmLine', 'simpleTmPaint'].map(fnSource).join('\n');
+  assert.match(fnSource('simpleTmLine'), /const tip = full \? displayName\(name\) \+ ': ' \+ full : ''/);
+  const live = { ann: { busy: true } };
+  const api = new Function('live', 'isBusy', 'busyText', 'bgCountOf', 'AgentDot', 'displayName', 'buildTeamBtnHtml', fns + '\nreturn { simpleTmLine, simpleTmPaint };')(
+    live, (n) => !!(live[n] && live[n].busy), (n) => '⏳ checking the berth list', (n) => (n === 'bea' ? 2 : 0), require('../lib/ui-agent-dot.js'), (n) => n[0].toUpperCase() + n.slice(1), () => '');
+  assert.strictEqual(api.simpleTmLine('ann', 'main', false).tip, 'Ann: checking the berth list');
+  assert.strictEqual(api.simpleTmLine('wes', 'worker', false).tip, '');
+  assert.strictEqual(api.simpleTmLine('bea', 'main', false).tip, 'Bea: Free · 2 things in the background');
+  const attrs = {};
+  const b = { title: '', setAttribute: (k, v) => { attrs[k] = v; }, removeAttribute: (k) => { delete attrs[k]; if (k === 'title') b.title = ''; },
+    querySelector: () => null };
+  api.simpleTmPaint(b, api.simpleTmLine('ann', 'main', false));
+  assert.strictEqual(b.title, 'Ann: checking the berth list');
+  assert.strictEqual(attrs['aria-label'], 'Ann: checking the berth list');
+  live.ann.busy = false;
+  api.simpleTmPaint(b, api.simpleTmLine('ann', 'main', false));
+  assert.strictEqual(b.title, '', 'back to idle: the words go from the title');
+  assert.strictEqual(attrs['aria-label'], undefined);
+});
+test('All Agents (phone): a recorded works-alone main agent reads Solo, an undecided one Solo · Build team', () => {
+  const e = env({ alone: ['bea'] });
+  const api = teamsApi(e);
+  assert.match(api.agentRowHtml(AGENTS[1], { build: true }), /<div class="agent-model agent-build-sub agent-solo-sub">Solo<\/div>/);
+  const open = env({ alone: [] });
+  assert.match(teamsApi(open).agentRowHtml(AGENTS[1], { build: true }), /<div class="agent-model agent-build-sub">Solo · <span role="button"/);
 });

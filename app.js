@@ -8429,8 +8429,10 @@
         ? `<span role="button" tabindex="0" ${attrs} onkeydown="if (event.key === 'Enter' || event.key === ' ') buildTeamStart('${hubEsc(a.name)}', event)">${on ? 'Building…' : idle}</span>`
         : `<button type="button" ${attrs}${on ? ' disabled' : ''}>${on ? 'Building…' : idle}</button>`;
     }
+    // Every solo main agent (admins, no team) reads 'Solo' on its All Agents second line: 'Solo · Build team' while undecided, just 'Solo' once the lead recorded that it works alone.
     function buildLineHtml(a) {
-      return agentCanBuildTeam(a) && !agentWorksAlone(a.name) ? `<span class="agent-build-line"><span class="tbs-prefix">Solo · </span>${buildTeamCtlHtml(a, 'link', 'span')}</span>` : '';
+      if (!agentCanBuildTeam(a)) return '';
+      return agentWorksAlone(a.name) ? '<span class="agent-build-line agent-solo-line">Solo</span>' : `<span class="agent-build-line"><span class="tbs-prefix">Solo · </span>${buildTeamCtlHtml(a, 'link', 'span')}</span>`;
     }
     function paintBuildControls() {
       if (typeof document === 'undefined' || !document.querySelectorAll) return;
@@ -8885,7 +8887,11 @@
       }
       const live = !isMain && busyLine ? `<span class="teams-live" title="${hubEsc(busyLine)}">· ${hubEsc(busyLine)}</span>` : '';
       const kids = foldable && open;
-      return `<div class="teams-line rank-${rank}${deep ? ' deep' : ''}${kids ? ' has-kids' : ''}${spec ? ' is-spec' : ''}"><div class="teams-row rank-${rank}${deep ? ' deep' : ''}${spec ? ' is-spec' : ''}${l2 ? ' has-l2' : ''}" role="button" tabindex="0" data-agent="${name}" data-model="${hubEsc(a.model || '')}" data-depth="${n.depth}" title="${hubEsc(a.blurb || a.specialty || '')}">
+      // Never a stub of status: the narrow CSS hides the status words where under about six letters would fit, so the row's title AND aria-label carry them in full
+      // ('Harbor: checking tomorrow's berth list', 'Atlas: Free · 2 things in the background') whenever the agent is replying or has background work; idle keeps the blurb as the title.
+      const words = busyLine || (bgState === 'background' ? `Free · ${bgN === 1 ? '1 thing' : bgN + ' things'} in the background` : '');   // the blue line's full words
+      const rowTip = words ? ` title="${hubEsc(`${a.display || capName(a.name)}: ${words}`)}" aria-label="${hubEsc(`${a.display || capName(a.name)}: ${words}`)}"` : ` title="${hubEsc(a.blurb || a.specialty || '')}"`;
+      return `<div class="teams-line rank-${rank}${deep ? ' deep' : ''}${kids ? ' has-kids' : ''}${spec ? ' is-spec' : ''}"><div class="teams-row rank-${rank}${deep ? ' deep' : ''}${spec ? ' is-spec' : ''}${l2 ? ' has-l2' : ''}" role="button" tabindex="0" data-agent="${name}" data-model="${hubEsc(a.model || '')}" data-depth="${n.depth}"${rowTip}>
         <span class="teams-dot ${dot}" title="${hubEsc(dotTip)}">${hubEsc(st.text)}</span>
         <span class="agent-icon">${hubEsc(a.icon || '🤖')}</span>
         <span class="teams-info"><span class="name"><span class="name-text">${label}</span>${a.lead ? '<span class="lead-badge" title="Lead agent">👑</span>' : ''}${pill}${live}</span>${l2}</span>

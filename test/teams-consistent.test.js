@@ -68,7 +68,7 @@ test('desktop: the pill markup holds the words at every width; no CSS hides them
   for (const line of blk.split('\n')) {
     if (/teams-pill/.test(line)) assert.doesNotMatch(line, /display:\s*none|font-size:\s*0|visibility:\s*hidden|width:\s*0|overflow:\s*hidden/, `the narrow query does not hide pill words: ${line.trim()}`);
   }
-  assert.doesNotMatch(html, /\.teams-pill-w|\.teams-pw|teams-pill[^{]*\{[^}]*display:\s*none/, 'no rule anywhere hides the pill or its words');
+  assert.doesNotMatch(html, /\.teams-pill-w|\.teams-pw|teams-pill(?!-btn\))[^{]*\{[^}]*display:\s*none/, 'no rule anywhere hides the pill or its words (the never-a-stub rules hide the STATUS words after the pill, selected by :has(.teams-pill-btn))');
   // the name gives way: ellipsis; the pill keeps its words and never shrinks or wraps
   assert.match(html, /\.teams-row \.name-text \{[^}]*min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;/);
   assert.match(html, /\.teams-pill-btn \{[^}]*flex: none;/);
@@ -117,8 +117,8 @@ test('busy text in Teams has no hourglass anywhere: desktop strips it, the phone
   assert.match(fnSrc(mobile, 'agentRowHtml'), /busyText\(a\.name\)\.replace\(\/\^⏳\\s\*\/, ''\)/);
   const s = fnSrc(mobile, 'simpleTmLine');
   assert.match(s, /const words = busy \? busyText\(name\)\.replace\(\/\^⏳\\s\*\/, ''\) : '';/);
-  assert.match(s, /return \{ sub: words, cls: 'busy' \};/);
-  assert.match(s, /live: words \? '· ' \+ words : ''/);
+  assert.match(s, /return \{ sub: words, cls: 'busy', tip \};/);
+  assert.match(s, /live: words \? '· ' \+ words : '', tip/);
 });
 
 test('the same words on both pages: Build team, the crown, the helpers line, the Undo line and the section names', () => {

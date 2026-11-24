@@ -2692,6 +2692,8 @@ function agentRowHtml(a, opts) {
     ? '<div class="agent-model working">✓ done</div>'
     : opts && (opts.buildSub || (opts.build && !worksAlone(a.name) && !working && !bgN))
       ? buildSubHtml(a.name)   // Teams and All Agents: a main agent with no team (admins): "Solo · Build team" is the row's own second line (small words, no line of its own)
+    : opts && opts.build && worksAlone(a.name) && !working && !bgN
+      ? '<div class="agent-model agent-build-sub agent-solo-sub">Solo</div>'   // every solo agent starts its second line with 'Solo': a recorded works-alone one reads just 'Solo' (no link, the lead decided)
     : opts && typeof opts.sub === 'string'
       ? `<div class="agent-model" title="${esc(opts.sub)}">${esc(opts.sub)}</div>`
     : viaWorkers
@@ -2707,7 +2709,10 @@ function agentRowHtml(a, opts) {
     ? `<div class="tm-l1"><span class="agent-name">${esc(a.display || a.name)}</span>${a.lead ? ' <span class="lead-badge" title="Lead agent">👑</span>' : ''}${tm.pill || ''}${tmLive}</div>`
     : `<div class="agent-name">${esc(a.display || a.name)}${a.lead ? ' <span class="lead-badge" title="Lead agent">👑</span>' : ''}</div>`;
   const tag = tm && tm.hasPill ? 'div' : 'button';   // the pill is a button: it may not sit inside one
-  return `<${tag} ${tag === 'div' ? 'role="button" tabindex="0" ' : ''}class="agent-row${working ? ' is-busy' : ''}${done ? ' active-done' : ''}" data-agent="${esc(a.name)}">` +
+  // A Teams row's title and aria-label carry the full status words when it is replying or has background work (nothing is cut short, even where the words are not drawn); idle rows, and the All Agents / Active rows, are as before.
+  const statusWords = done || !tm ? '' : working ? (viaWorkers ? 'working' : busyText(a.name).replace(/^⏳\s*/, '')) : bgN ? `Free · ${bgN === 1 ? '1 thing' : bgN + ' things'} in the background` : '';
+  const rowTip = statusWords ? ` title="${esc((a.display || a.name) + ': ' + statusWords)}" aria-label="${esc((a.display || a.name) + ': ' + statusWords)}"` : '';
+  return `<${tag} ${tag === 'div' ? 'role="button" tabindex="0" ' : ''}class="agent-row${working ? ' is-busy' : ''}${done ? ' active-done' : ''}" data-agent="${esc(a.name)}"${rowTip}>` +
     `<span class="agent-icon">${esc(a.icon || '🤖')}</span>` +
     `<span class="agent-meta">${nameHtml}${sub}</span>` +
     `<span class="dot${dotCls}${bgN ? ' ' + AgentDot.CLASS.background : ''}" title="${esc(bgN ? bgLabel : working && !viaWorkers ? busyText(a.name) : '')}"${bgN ? ` aria-label="${esc(bgLabel)}"` : ''}>${question ? '?' : ''}</span>` +
@@ -16930,13 +16935,15 @@ function simpleMoreDotPaint(el, m) {
 function simpleTmLine(name, rank, build) {
   const st = live[name], busy = isBusy(name) || !!(st && st.pendingQuestion);
   const words = busy ? busyText(name).replace(/^⏳\s*/, '') : '';   // no hourglass anywhere in Teams (the regular phone list and the desktop strip it too)
+  const n = busy ? 0 : bgCountOf(name);
+  const full = words || (n ? `Free · ${n === 1 ? '1 thing' : n + ' things'} in the background` : '');   // the row's title / aria-label (the dot or ring alone shows where the words do not fit)
+  const tip = full ? displayName(name) + ': ' + full : '';
   if (rank === 'main') {
-    if (busy) return { sub: words, cls: 'busy' };
-    const n = bgCountOf(name);
-    if (n) return { sub: AgentDot.bgLine(n), cls: 'bg' };
+    if (busy) return { sub: words, cls: 'busy', tip };
+    if (n) return { sub: AgentDot.bgLine(n), cls: 'bg', tip };
     return build ? { sub: '', build: name } : { sub: '' };
   }
-  return { sub: '', live: words ? '· ' + words : '' };
+  return { sub: '', live: words ? '· ' + words : '', tip };
 }
 function simpleTmPaint(b, line) {
   const sm = b.querySelector('small'), lv = b.querySelector('.sa-live');
@@ -16946,6 +16953,8 @@ function simpleTmPaint(b, line) {
     sm.className = 'sa-sub' + (line.cls ? ' sa-sub-' + line.cls : '') + (line.build ? ' sa-build-sub' : '');
   }
   if (lv && lv.textContent !== (line.live || '')) lv.textContent = line.live || '';
+  if (line.tip) { if (b.title !== line.tip) { b.title = line.tip; b.setAttribute('aria-label', line.tip); } }   // the full status words, kept current by every repaint
+  else if (b.title) { b.removeAttribute('title'); b.removeAttribute('aria-label'); }
 }
 // One agent row, shared by the sheet and the wide sidebar: icon, name, (blurb and tick in the sheet), the busy/question dot.
 // opts.blurb adds the agent's blurb and the tick; opts.onPick runs on a tap (the chat opens after it).

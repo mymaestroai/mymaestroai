@@ -751,10 +751,10 @@ const aloneWorld = (aloneNames, o) => {
   w.set(alone);
   return w;
 };
-test('works alone: the All Agents line "Solo · Build team" is gone for that agent and stays for another', () => {
+test('works alone: the All Agents line reads just "Solo" for that agent (no link) and "Solo · Build team" for an undecided one', () => {
   const sam = A('sam', { category: 'primary' });
   const w = aloneWorld(['sam']);
-  assert.strictEqual(w.api.buildLineHtml(sam), '');
+  assert.strictEqual(w.api.buildLineHtml(sam), '<span class="agent-build-line agent-solo-line">Solo</span>');   // changed (design lead + Maestro): every solo agent's second line starts with 'Solo'
   w.set({});
   assert.match(w.api.buildLineHtml(sam), /Solo · .*Build team/);
 });
@@ -956,8 +956,9 @@ test('item 2 (desktop All Agents): "Solo · Build team" REPLACES the model line 
   assert.match(boss, /class="model"/);
   assert.doesNotMatch(boss, /agent-build-line/);
   vm.runInContext("teamSetup = { offer: null, lead: null, setups: [], alone: { solo: { at: 'x' } } }", w.ctx);
-  assert.match(w.api.agentButton(w.ctx.AGENTS[0]), /class="model"/, 'Works alone keeps the model line and shows no link');
-  assert.doesNotMatch(w.api.agentButton(w.ctx.AGENTS[0]), /agent-build-line/);
+  // changed (design lead + Maestro): a works-alone solo agent reads just 'Solo' where the model line was (no link)
+  assert.match(w.api.agentButton(w.ctx.AGENTS[0]), /<span class="agent-build-line agent-solo-line">Solo<\/span>/, 'Works alone: just Solo');
+  assert.doesNotMatch(w.api.agentButton(w.ctx.AGENTS[0]), /class="model"|data-build-team/);
   // CSS: the same line height for both lines, the link whole, the words before it hidden below the width where the line does not fit
   const lh = (sel) => new RegExp('(?:^|\\n)\\s*' + sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ' \\{[^}]*?line-height: ([\\d.]+)').exec(html);
   assert.strictEqual(lh('.agent-build-line')[1], lh('.agent-btn .model')[1], 'one line height: one row height');
@@ -1122,14 +1123,17 @@ test('Solo agents fold: an old stored @sec:none or @sec:alone keeps the new sect
 });
 
 // ---- the pill drops to the row's second line in a narrow list (container queries on #teams-list)
+// The main-row and the leader-row blocks share the 225px threshold: 'main' is the first one after the 186px block, 'leader' the second.
 const cqBlock = (px) => {
-  const a = html.indexOf(`@container (max-width: ${px}px) {\n`, html.indexOf('@container (max-width: 186px)'));
+  const which = px === 'main' ? 0 : 1; px = 225;
+  let a = html.indexOf(`@container (max-width: ${px}px) {\n`, html.indexOf('@container (max-width: 186px)'));
+  if (which) a = html.indexOf(`@container (max-width: ${px}px) {\n`, a + 1);
   assert.ok(a > 0, `a @container (max-width: ${px}px) block follows the 186px one`);
   return html.slice(a, html.indexOf('\n    }\n', a));
 };
-test('narrow list: main rows drop the pill to line 2 at 205px, leader rows at 225px (thresholds and the formula are in a CSS comment)', () => {
-  const main = cqBlock(205), lead = cqBlock(225);
-  assert.match(html, /leader: 183 \+ 40 = 223 -> 225px/); assert.match(html, /main: 163 \+ 40 = 203 -> 205px/);   // a main row's name is list - 163px once its icon shows (above 186px)
+test('narrow list: main rows drop the pill to line 2 at 225px, leader rows at 225px (thresholds and the formula are in a CSS comment)', () => {
+  const main = cqBlock('main'), lead = cqBlock('leader');
+  assert.match(html, /leader: 183 \+ 40 = 223 -> 225px/); assert.match(html, /main: 163 \+ 60 = 223 -> 225px/);   // a main row's name is list - 163px once its icon shows (above 186px)
   for (const [b, sel] of [[main, '.teams-row.rank-main:has(.teams-pill-btn)'], [lead, '.teams-row.rank-leader:has(.teams-pill-btn)']]) {
     assert.ok(b.includes(`${sel} .name { display: contents; }`), `${sel}: the name's items join the info`);
     assert.ok(b.includes(`${sel} .teams-info { flex-direction: row; flex-wrap: wrap;`), `${sel}: the info wraps`);
@@ -1137,14 +1141,14 @@ test('narrow list: main rows drop the pill to line 2 at 205px, leader rows at 22
     assert.ok(b.includes(`${sel} .teams-pill-btn { order: 2; margin-left: 0; }`), `${sel}: the pill is first on line 2`);
     assert.ok(b.includes(`${sel} .teams-live { order: 2;`) && b.includes(`${sel} .teams-sub { order: 2; flex: 1 1 0; min-width: 0;`), `${sel}: busy words after the pill`);
   }
-  assert.ok(!main.includes('rank-leader'), 'the 205px block is for main rows only');
+  assert.ok(!main.includes('rank-leader'), 'the main-row 225px block holds no leader rule');
   assert.ok(!lead.includes('.rank-main'), 'the 225px block is for leader rows only');
-  assert.ok(html.indexOf('@container (max-width: 205px)') > html.indexOf('@container (max-width: 186px)'), 'after the 186px block, so its tap-area rule wins');
+  assert.ok(html.indexOf('@container (max-width: 225px)') > html.indexOf('@container (max-width: 186px)'), 'after the 186px block, so its tap-area rule wins');
 });
-test('narrow list: a main row keeps its 46px (no height rule in the 205px block); a leader gets 42px only when it holds a pill; Simple 48px', () => {
+test('narrow list: a main row keeps its 46px (no height rule in the main-row 225px block); a leader gets 42px only when it holds a pill; Simple 48px', () => {
   assert.match(html, /\.teams-row \{\n\s+flex: 1 1 auto; min-width: 0; position: relative; display: flex; flex-direction: row; align-items: center; gap: 0; height: 46px;/);
-  assert.doesNotMatch(cqBlock(205), /\bheight: \d+px; --|\.teams-row[^{]*\{[^}]*\bheight: 4/);
-  const lead = cqBlock(225);
+  assert.doesNotMatch(cqBlock('main'), /\bheight: \d+px; --|\.teams-row[^{]*\{[^}]*\bheight: 4/);
+  const lead = cqBlock('leader');
   assert.ok(lead.includes('.teams-row.rank-leader:has(.teams-pill-btn) { height: 42px; --tms-below: 2px; }'), 'a leader with a pill: 42px');
   assert.match(html, /\.teams-row\.rank-leader \{ height: 34px;/, 'the base leader row stays 34px (a leader without workers has no pill and keeps it)');
   assert.match(html, /html\.mm-simple #teams-list \.teams-row\.rank-leader:has\(\.teams-pill-btn\) \{ height: 48px; --tms-below: 3px; \}/, "Simple's leader with a pill: the main row's 48px");
@@ -1157,7 +1161,7 @@ test('narrow list: the pill stays ONE control (in .name), and its tap area stays
   assert.strictEqual((h.match(/data-fold="atlas"/g) || []).length, 1, 'one pill per main row');
   assert.strictEqual((h.match(/<button[^>]*teams-pill-btn/g) || []).length, (h.match(/data-fold="(?!@sec)/g) || []).length, 'no second focusable pill');
   assert.match(h, /<span class="name"><span class="name-text">[^<]*<\/span>(?:<span class="lead-badge"[^>]*>[^<]*<\/span>)?<button type="button" class="teams-pill-btn/, 'the pill is still inside .name in the markup');
-  for (const b of [cqBlock(205), cqBlock(225)]) {
+  for (const b of [cqBlock('main'), cqBlock('leader')]) {
     assert.match(b, /\.teams-pill-btn::before \{ left: -3px; right: -3px; top: -1px; bottom: calc\(var\(--tms-below\) \* -1\); width: auto; height: auto; transform: none; \}/);
   }
   assert.match(html, /html \{ --tms-below: 3px; \}/);
@@ -1170,3 +1174,88 @@ function renderRows() {
   w.api.renderTeams();
   return w.list.innerHTML;
 }
+
+test('Simple desktop: the pill is ALWAYS on line 2 for main and leader rows with a pill (no container condition), same mechanism, 48px rows', () => {
+  const lines = html.split('\n');
+  const start = lines.findIndex((l) => l.includes('the pill is ALWAYS on the row') && l.includes('Simple'));
+  assert.ok(start > 0, 'the Simple always-line-2 comment');
+  const end = lines.findIndex((l, i) => i > start && /html\.mm-simple #teams-list \.teams-title,/.test(l));
+  const blk = lines.slice(start + 2, end).join('\n');
+  assert.ok(!/@container/.test(blk), 'no container condition');
+  for (const l of lines.slice(start + 2, end)) assert.ok(/^\s*html\.mm-simple /.test(l), `every Simple rule starts with html.mm-simple: ${l.slice(0, 60)}`);
+  const pair = (tail, decl) => blk.includes(`html.mm-simple #teams-list .teams-row.rank-main:has(.teams-pill-btn)${tail},\nhtml.mm-simple #teams-list .teams-row.rank-leader:has(.teams-pill-btn)${tail} ${decl}`.replace(/\nhtml/, '\n    html'));
+  assert.ok(pair(' .name', '{ display: contents; }'), '.name display: contents for main and leader');
+  assert.ok(pair(' .teams-info', '{ flex-direction: row; flex-wrap: wrap;'), 'the info wraps');
+  assert.ok(pair(' .teams-pill-btn', '{ order: 2; margin-left: 0; }'), 'pill first on line 2');
+  assert.ok(pair(' .teams-sub', '{ order: 2; flex: 1 1 0; min-width: 0; margin-left: 6px; }'), 'busy words after the pill, truncating');
+  assert.ok(pair(' .teams-pill-btn::before', '{ left: -3px; right: -3px; top: -1px; bottom: calc(var(--tms-below) * -1); width: auto; height: auto; transform: none; }'), 'tap area inside the row');
+  assert.ok(blk.includes('html.mm-simple #teams-list .teams-row.rank-leader:has(.teams-pill-btn) { height: 48px; --tms-below: 3px; }'));
+  assert.ok(!/\.teams-row\.rank-main:has\(\.teams-pill-btn\) \{[^}]*\bheight: \d/.test(blk), 'a Simple main row keeps its 48px (no height rule for it here)');
+  assert.match(html, /html\.mm-simple #teams-list \.teams-row \{ height: 48px;/);
+});
+
+// ── Never a stub of status (design lead + Maestro) ──
+test('renderTeams: the row title and aria-label carry the full status words when replying or with background work (idle keeps the blurb)', () => {
+  const w = world({ stored: [['hub-teams-open', JSON.stringify({ lead: true, builder: true })]] });
+  w.ctx.AGENTS = sample().map((a) => (a.name === 'sam' ? { ...a, blurb: 'Keeps the books' } : a));
+  w.ctx.agentStatus = { writer: { busy: true, busySince: 'x', activity: 'working' }, lead: { busy: false, background: 2 }, sam: { busy: false, background: 1 } };
+  w.api.renderTeams();
+  const h = w.list.innerHTML;
+  const tag = (n) => { const i = h.indexOf(`data-agent="${n}"`); return h.slice(i, h.indexOf('>', i)); };
+  assert.match(tag('writer'), /title="Writer: working · 3m" aria-label="Writer: working · 3m"/);
+  assert.match(tag('lead'), /title="Lead: Free · 2 things in the background" aria-label="Lead: Free · 2 things in the background"/);
+  assert.match(tag('sam'), /title="Sam: Free · 1 thing in the background" aria-label="Sam: Free · 1 thing in the background"/);
+  assert.doesNotMatch(tag('scout'), /aria-label/);
+  assert.match(tag('scout'), /title="[^"]*"/);
+  // a repaint with a changed status changes the row (renderTeams compares the markup)
+  w.ctx.agentStatus = { lead: { busy: true, busySince: 'x', activity: 'working' } };
+  w.api.renderTeams();
+  const g = w.list.innerHTML;
+  assert.match(g.slice(g.indexOf('data-agent="lead"'), g.indexOf('>', g.indexOf('data-agent="lead"'))), /title="Lead: working · 3m" aria-label="Lead: working · 3m"/);
+  assert.doesNotMatch(g.slice(g.indexOf('data-agent="writer"'), g.indexOf('>', g.indexOf('data-agent="writer"'))), /aria-label/);
+});
+// The measurement (headless Chrome, /tmp/beacon-measure/meas3.py on the real CSS and row markup): list width -> visible px of the status words
+const NEVER_STUB = {
+  main:    { 135: 10, 160: 35, 186: 61, 200: 37, 210: 47, 219: 56, 225: 62, 231: 136.5, 260: 136.5 },
+  leader:  { 135: 5.8, 160: 30.8, 186: 56.8, 200: 21.8, 210: 31.8, 219: 40.8, 225: 46.8, 231: 0, 260: 7.3 },
+  worker:  { 135: 2.5, 160: 27.5, 186: 53.5, 200: 26.3, 210: 36.3, 219: 45.3, 225: 51.3, 231: 57.3, 260: 86.3 },
+  deep:    { 135: 0, 160: 7.9, 186: 33.9, 200: 0, 210: 0, 219: 7.3, 225: 13.3, 231: 19.3, 260: 48.3 },
+};
+const NEVER_STUB_SIMPLE = {
+  main: { 160: 36, 231: 67, 260: 96 }, leader: { 160: 8.6, 231: 48.6, 260: 77.6 }, worker: { 160: 6.6, 231: 51.6, 260: 80.6 }, deep: { 160: 0, 231: 12.6, 260: 41.6 },
+};
+// which (container width, class) the stylesheet hides: parse every `@container (...) { html... #teams-list .teams-row.<rank> ... { display: none; } }`
+function neverStubHidden(css, simple) {
+  const rules = [...css.matchAll(/@container ([^{]+)\{ (html[^{]*) \{ display: none; \} \}/g)].map((m) => ({ q: m[1].trim(), sel: m[2] })).filter((r) => r.sel.startsWith('html.mm-simple') === simple);
+  const within = (q, w) => { const mn = /min-width: (\d+)px/.exec(q), mx = /max-width: (\d+)px/.exec(q); return (!mn || w >= +mn[1]) && (!mx || w <= +mx[1]); };
+  const pick = { main: '.rank-main:has(.teams-pill-btn) .teams-sub', leader: '.rank-leader .teams-live', worker: '.rank-worker:not(.deep) .teams-live', deep: '.rank-worker.deep .teams-live' };
+  return (cls, w) => rules.some((r) => r.sel.endsWith(pick[cls]) && within(r.q, w));
+}
+test('never a stub of status: CSS hides the words wherever the measured visible width is under 45px, with the measurement in a comment', () => {
+  const comment = html.slice(html.indexOf('NEVER A STUB OF STATUS (design lead'), html.indexOf('@container (max-width: 169px)'));
+  assert.match(comment, /Measured in headless Chrome/);
+  assert.match(comment, /45px/);
+  assert.match(comment, /list - 125/);   // the formulas
+  assert.match(comment, /leader's worker/);
+  const hidden = neverStubHidden(html, false);
+  for (const [cls, row] of Object.entries(NEVER_STUB)) {
+    for (const [w, vis] of Object.entries(row)) {
+      if (vis < 45) assert.ok(hidden(cls, +w), `${cls} at list ${w}px shows ${vis}px of words: they must be hidden`);
+      else if (cls !== 'leader') assert.ok(!hidden(cls, +w), `${cls} at list ${w}px shows ${vis}px (6+ letters): they stay`);
+    }
+  }
+  // the exact thresholds (first widths with 45px or more) and nothing hides the roomy default list of a main row
+  assert.ok(hidden('main', 169) && !hidden('main', 170) && !hidden('main', 186) && hidden('main', 187) && hidden('main', 207) && !hidden('main', 208) && !hidden('main', 231));
+  assert.ok(hidden('worker', 177) && !hidden('worker', 178) && hidden('worker', 218) && !hidden('worker', 219));
+  assert.ok(hidden('deep', 186) && hidden('deep', 256) && !hidden('deep', 257));
+  assert.ok(hidden('leader', 174) && !hidden('leader', 175) && hidden('leader', 297) && !hidden('leader', 298));
+  const specHidden = (css, simple) => new RegExp('@container \\(max-width: (\\d+)px\\) \\{ ' + (simple ? 'html\\.mm-simple' : 'html:not\\(\\.mm-simple\\)') + ' #teams-list \\.teams-row\\.is-spec \\.teams-live \\{ display: none; \\}').exec(css);
+  assert.strictEqual(+specHidden(html, false)[1], 171, 'a shared specialist: 33.3px at 160 hidden, 59.3px at 186 shown');
+  assert.strictEqual(+specHidden(html, true)[1], 164, 'Simple: 40px at 160 hidden');
+  // Simple (list about 231px) has its own thresholds and the same guarantee
+  const sh = neverStubHidden(html, true);
+  for (const [cls, row] of Object.entries(NEVER_STUB_SIMPLE)) for (const [w, vis] of Object.entries(row)) {
+    if (vis < 45) assert.ok(sh(cls, +w), `Simple ${cls} at ${w}px shows ${vis}px: hidden`); else assert.ok(!sh(cls, +w), `Simple ${cls} at ${w}px shows ${vis}px: stays`);
+  }
+  assert.ok(sh('deep', 231) && !sh('main', 231) && !sh('leader', 231) && !sh('worker', 231));
+});
