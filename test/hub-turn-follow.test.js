@@ -74,6 +74,22 @@ for (const kind of ['build_team', 'team_setup']) {
     assert.deepStrictEqual(other[0].open, []);
   });
 }
+for (const kind of ['build_team', 'team_setup']) {
+  test(`a ${kind} prompt with no reply does not swallow the next schedule turn`, () => {
+    const h = [
+      { role: 'user', content: 'Follow the playbook', origin: { kind } },
+      { role: 'user', content: 'Nightly run', origin: { kind: 'schedule' } },
+      { role: 'assistant', content: 'the nightly reply' },
+    ];
+    const items = autoGroupHistory(h);
+    assert.equal(items.length, 2);
+    assert.deepStrictEqual(items.map((c) => c.indexes), [[0], [1, 2]]);
+    assert.deepStrictEqual(items.map((c) => c.open), [[], []]);
+    const solo = autoGroupHistory([h[0], { role: 'assistant', content: 'reply' }]);
+    assert.equal(solo.length, 1);
+    assert.deepStrictEqual(solo[0].open, [1]);
+  });
+}
 test('autoOwnOrigin: only build_team and team_setup', () => {
   assert.equal(autoOwnOrigin({ kind: 'build_team' }), true);
   assert.equal(autoOwnOrigin({ kind: 'team_setup' }), true);

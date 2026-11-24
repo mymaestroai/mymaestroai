@@ -3486,7 +3486,7 @@ function autoGroupHistory(history, from = 0, { stackMin = AUTO_STACK_MIN } = {})
       if (x.role === 'assistant') { hasAsst = true; indexes.push(j); continue; }
       if (x.role !== 'user' || hasAsst) break;
       const xi = autoInfoOf(x);
-      if (!xi) break;
+      if (!xi || autoOwnOrigin(e.origin) || autoOwnOrigin(x.origin)) break;
       last = xi; indexes.push(j);
     }
     const own = indexes.some((k) => autoOwnOrigin(history[k].origin));

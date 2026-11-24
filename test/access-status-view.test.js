@@ -75,6 +75,37 @@ test('redactTurnForViewer: hides a consultation caller the viewer cannot use', (
   assert.strictEqual(X.redactTurnForViewer(null, () => false), null);
 });
 
+test('redactTeamTurn: a member sees a team turn as a plain working turn', () => {
+  for (const kind of ['build_team', 'team_setup', 'optimize_team']) {
+    const ev = { type: 'turn_start', agent: 'a', origin: { kind, for: 'x' }, message: 'secret playbook', settingUpTeams: true, buildingTeamFor: 'x', reviewingTeamFor: 'x', activity: 'building a team', turnId: 't' };
+    const r = X.redactTeamTurn(ev);
+    assert.deepStrictEqual(r.origin, { kind: 'task' });
+    for (const k of ['message', 'settingUpTeams', 'buildingTeamFor', 'reviewingTeamFor']) assert.ok(!(k in r), k);
+    assert.equal(r.activity, 'working');
+    assert.equal(r.turnId, 't');
+    assert.equal(ev.message, 'secret playbook', 'input untouched');
+    assert.deepStrictEqual(X.redactTurnForViewer(ev, () => true).origin, { kind: 'task' });
+  }
+  const plain = { type: 'turn_start', origin: { kind: 'schedule' }, message: 'm' };
+  assert.strictEqual(X.redactTeamTurn(plain), plain);
+  const server = require('fs').readFileSync(require('path').join(__dirname, '..', 'server.js'), 'utf8');
+  assert.ok(server.includes('redact: isAdmin ? null : (ev) => access.redactTeamTurn(ev)'), 'admins unchanged, members redacted on the stream');
+});
+
+test('hub-events: a subscriber with redact gets the redacted turn_start, live and on replay', () => {
+  const { createHubEvents } = require('../lib/hub-events');
+  const mk = () => { const w = []; return { w, res: { writeHead() {}, write(s) { w.push(s); return true; }, on() {}, writableLength: 0, destroy() {} } }; };
+  const hub = (createHubEvents || (() => null))();
+  if (!hub) return;
+  const m = mk(), a = mk();
+  hub.subscribe({ url: '/', headers: {} }, m.res, { isAdmin: false, filter: () => true, redact: (ev) => X.redactTeamTurn(ev) });
+  hub.subscribe({ url: '/', headers: {} }, a.res, { isAdmin: true, filter: () => true });
+  hub.publish('turn_start', { turnId: 't1', agent: 'a', origin: { kind: 'team_setup' }, message: 'secret playbook', settingUpTeams: true });
+  const mt = m.w.join(''), at = a.w.join('');
+  assert.ok(!mt.includes('secret playbook') && !mt.includes('settingUpTeams') && !mt.includes('team_setup'));
+  assert.ok(at.includes('secret playbook') && at.includes('team_setup'));
+});
+
 test('canAccessAgent: a worker of a worker follows the chain to the named agent', () => {
   const v = { 'tw-a': { parent: 'tw-b' }, 'tw-b': { parent: 'sam-agent' }, 'tw-c': { parent: 'tw-d' }, 'tw-d': { parent: 'owner-agent' } };
   const o = { agents, resolveVirtual: (n) => v[n] || null };
