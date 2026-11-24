@@ -248,6 +248,14 @@
     .tm-note { padding: 4px 14px 8px; padding-left: calc(54px + var(--d, 0) * 20px); font-size: 12px; color: var(--warning); }
     .tm-empty { margin: 12px 14px 0; padding: 12px 14px; border-radius: 12px; background: var(--bg-card); border: 1px solid var(--border); font-size: 14px; line-height: 1.4; color: var(--text-dim); }
     .tm-empty b { color: var(--text); }
+    /* Set up teams: the empty state's button, the line under the Teams list, and the offer / Undo slot above the message box. Text and a real border: visible without a hover. */
+    .tm-setup-btn { display: block; margin-top: 10px; min-height: 44px; padding: 0 16px; border-radius: 10px; border: 1px solid var(--accent); font-size: 14px; font-weight: 600; background: transparent; color: var(--accent-hover); }
+    .tm-setup-btn:disabled { opacity: 0.6; }
+    .tm-setup-line { margin: 12px 14px 0; padding: 10px 14px; border-radius: 12px; border: 1px solid var(--border); font-size: 13px; color: var(--text-dim); }
+    .tm-setup-undo, .team-undo-btn { min-height: 44px; padding: 0 6px; font: inherit; font-weight: 600; color: var(--accent-hover); text-decoration: underline; background: transparent; }
+    .team-offer-slot { padding: 8px 10px 0; max-height: 50vh; overflow-y: auto; }
+    .team-offer-slot .question { margin-bottom: 8px; }
+    .team-undo-row { margin-bottom: 8px; padding: 6px 12px; border: 1px solid var(--border); border-radius: 12px; font-size: 13px; color: var(--text-dim); }
     /* Build Team (admins): the "No team yet" line under a row, the Teams button, the menu entry; 44px touch targets */
     .build-line { padding: 0 14px 6px 54px; font-size: 12px; color: var(--text-dim); display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
     .build-team-link { min-height: 44px; padding: 0 8px; margin-left: -8px; font-size: 13px; font-weight: 600; color: var(--accent-hover); text-decoration: underline; background: transparent; }
@@ -1390,6 +1398,7 @@ html.mm-simple #simple-side { display: none; }
       <p id="cp-help">Hands-free works with the app open and the screen on, also through a car's Bluetooth hands-free or a Bluetooth speaker. Locked-screen use and car apps (CarPlay, Android Auto) are not supported. Tap to talk: tap the mic, speak, tap again to send (or hold it while you speak and let go).</p>
     </div>
     <div id="composer">
+      <div id="team-offer-slot" class="team-offer-slot" hidden></div>
       <div id="handoff-cards" class="handoff-cards" hidden></div>
       <div id="research-lines" class="handoff-cards research-lines" hidden></div>
       <div id="previews"></div>

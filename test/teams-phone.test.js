@@ -216,7 +216,8 @@ test('Teams: the helpers line, the working filter, and the empty state', () => {
   // empty state: no main agent has anyone under it
   const lone = env(); lone.agents = [AGENTS[0], AGENTS[1], AGENTS[7]];
   h = teamsApi(lone).teamsListHtml();
-  assert.ok(h.startsWith('<div class="tm-empty"><b>Agents can work as teams.</b> Your main agents plan, decide and review. Short or personal tasks they usually do themselves; long work they can hand to team leaders, who run workers. Use Build Team on a main agent to have your lead propose one, or set who an agent reports to on its settings page.</div>'));
+  // changed (Set up teams): an admin's box names the lead and offers "Set up teams" in place of the Build Team sentence
+  assert.ok(h.startsWith('<div class="tm-empty"><b>Agents can work as teams.</b> Your main agents plan, decide and review. Short or personal tasks they usually do themselves; long work they can hand to team leaders, who run workers. Ann can look at how your agents already work together and propose teams. Nothing changes until you approve a team. <button type="button" class="tm-setup-btn" data-team-setup>Set up teams</button></div>'));
   assert.match(h, /No team yet/);
 });
 
@@ -379,7 +380,8 @@ test('buildTeamStart: POST the route, 202 opens the lead chat, an error shows th
 });
 
 test('applySnapshot keeps buildingTeamFor in live entries, setLive clears it when idle, the list click starts a build', () => {
-  assert.match(slice('function applySnapshot(', 'let wkGoneState'), /'consultedBy', 'buildingTeamFor'\]/);
+  // changed (Set up teams): the same key list also carries offerPending and settingUpTeams
+  assert.match(slice('function applySnapshot(', 'let wkGoneState'), /'consultedBy', 'buildingTeamFor', 'offerPending', 'settingUpTeams'\]/);
   assert.match(slice('function setLive(', 'function paintStatus'), /next\.consultedBy = null; next\.buildingTeamFor = null;/);
   assert.match(js, /const bt = e\.target\.closest\('\[data-build-team\]'\);\n\s+if \(bt\) \{ if \(!bt\.disabled\) buildTeamStart\(bt\.dataset\.buildTeam\); return; \}/);
 });

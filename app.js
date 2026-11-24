@@ -7717,7 +7717,7 @@
         // Newer hubs report busy/busySince/activity/pendingQuestion per agent; older ones do not (then no dots are drawn).
         if (AGENTS.some(a => 'busy' in a)) {
           const map = {};
-          for (const a of AGENTS) map[a.name] = { busy: a.busy, busySince: a.busySince, activity: a.activity, pendingQuestion: a.pendingQuestion, buildingTeamFor: a.buildingTeamFor || null };
+          for (const a of AGENTS) map[a.name] = { busy: a.busy, busySince: a.busySince, activity: a.activity, pendingQuestion: a.pendingQuestion, buildingTeamFor: a.buildingTeamFor || null, ...('offerPending' in a ? { offerPending: a.offerPending === true } : {}), ...('settingUpTeams' in a ? { settingUpTeams: a.settingUpTeams === true } : {}) };
           applyStatusSnapshot(map, { namedOnly: true });
         }
         console.log(`Loaded ${AGENTS.length} agents with SOUL data`);
@@ -8696,6 +8696,12 @@
         const tab = document.querySelector(`.tab[data-tab="${view}"]`);
         if (tab) tab.hidden = !(admin && sidebarTabsCfg[key] === true);
       }
+      {   // "Show the Teams tab" (sidebarTeams, on unless an admin switches it off): off hides the tab and its Simple-mode button
+        const hideTeams = admin && sidebarTabsCfg.sidebarTeams === false;
+        const tab = document.querySelector('.tab[data-tab="teams"]');
+        if (tab) tab.hidden = hideTeams;
+        document.querySelectorAll('#simple-view-switch button').forEach(b => { if (b.dataset && b.dataset.view === 'teams') b.hidden = hideTeams; });
+      }
       const active = document.querySelector('.tab.active');
       if (active && active.hidden) sidebarViewSet('agents', false);
       else if (!sidebarViewTouched && sidebarViewOk(sidebarViewStored())) sidebarViewSet(sidebarViewStored(), false);
@@ -8706,11 +8712,11 @@
         const r = await fetch('/api/settings', { credentials: 'include' });
         if (!r.ok) return;
         const d = await r.json();
-        sidebarTabsApply({ sidebarTigerTeam: d.sidebarTigerTeam === true, sidebarGuide: d.sidebarGuide === true });
+        sidebarTabsApply({ sidebarTigerTeam: d.sidebarTigerTeam === true, sidebarGuide: d.sidebarGuide === true, sidebarTeams: d.sidebarTeams !== false });
       } catch { /* the tabs stay hidden */ }
     }
     async function saveSidebarTabToggle(key, on) {
-      const state = document.getElementById(key === 'sidebarGuide' ? 'st-sidebar-guide-state' : 'st-sidebar-tiger-state');
+      const state = document.getElementById(key === 'sidebarGuide' ? 'st-sidebar-guide-state' : key === 'sidebarTeams' ? 'st-sidebar-teams-state' : 'st-sidebar-tiger-state');
       try {
         const r = await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ [key]: !!on }) });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -8725,7 +8731,8 @@
           <span id="st-${id}-state" style="font-size:0.8rem;color:var(--text-dim)">${on ? 'Shown in the sidebar.' : 'Hidden.'}</span>
         </div>`;
       return row('sidebar-tiger', 'sidebarTigerTeam', 'Show the Tiger Team tab', data.sidebarTigerTeam === true)
-        + row('sidebar-guide', 'sidebarGuide', 'Show the Guide tab', data.sidebarGuide === true);
+        + row('sidebar-guide', 'sidebarGuide', 'Show the Guide tab', data.sidebarGuide === true)
+        + row('sidebar-teams', 'sidebarTeams', 'Show the Teams tab', data.sidebarTeams !== false);   // on unless switched off
     }
     function setupTabs() {
       document.querySelectorAll('.tab').forEach(tab => {
@@ -8741,6 +8748,7 @@
       }
       sidebarViewSet(sidebarViewStored(), false);
       sidebarTabsLoad();
+      teamSetupLoad();   // admins: the one-time offer, the setups that can be undone
     }
 
     // Teams view (#teams-list): who reports to whom, from hubTeams.tree(AGENTS, agentStatus). Fold state is kept in localStorage
@@ -8768,6 +8776,8 @@
         teamsOpenToggle(key); renderTeams();   // renderTeams gives keyboard focus back to the same fold control
         return;
       }
+      if (t.closest('[data-team-setup]')) { e.stopPropagation(); teamSetupStart(); return; }   // empty state: Set up teams
+      if (t.closest('[data-team-undo]')) { e.stopPropagation(); teamSetupUndo({ all: true }); return; }   // bottom line: Undo
       const row = t.closest('.teams-row');
       if (row) startSoloChat(row.dataset.agent, row.dataset.model);
     }
@@ -8830,7 +8840,15 @@
       const t = hubTeams.tree(AGENTS, agentStatus);
       const open = teamsOpenGet();
       let h = '';
-      if (!t.anyTeam) h += '<div class="teams-empty"><strong>Agents can work as teams.</strong>Your main agents plan, decide and review. Short or personal tasks they usually do themselves; long work they can hand to team leaders, who run workers. ' + (isHubAdmin() ? 'Use Build Team on a main agent to have your lead propose one, or set who an agent reports to on its settings page.' : 'An admin can set who reports to whom.') + '</div>';
+      if (!t.anyTeam) {
+        // Admins: the lead can propose teams from how the agents already work together (Set up teams); members keep the old text.
+        const settingUp = teamSetupBusy();
+        h += '<div class="teams-empty"><strong>Agents can work as teams.</strong>Your main agents plan, decide and review. Short or personal tasks they usually do themselves; long work they can hand to team leaders, who run workers. '
+          + (isHubAdmin()
+            ? hubEsc(`${teamSetupLeadDisplay()} can look at how your agents already work together and propose teams. Nothing changes until you approve a team.`)
+              + `<button type="button" class="teams-setup-btn${settingUp ? ' is-building' : ''}" data-team-setup${settingUp ? ' disabled aria-disabled="true"' : ''}>${settingUp ? 'Setting up…' : 'Set up teams'}</button>`
+            : 'An admin can set who reports to whom.') + '</div>';
+      }
       if (t.mains.length) {
         h += '<div class="teams-section"><div class="teams-title">Your agents</div>';
         for (const m of t.mains) { const o = open[m.agent.name] === true; h += teamsRowHtml(m, o); if (o) h += teamsSubtreeHtml(m); }
@@ -8847,6 +8865,7 @@
         if (o) for (const n of t.other) h += teamsRowHtml(n, false) + teamsSubtreeHtml(n);
         h += '</div>';
       }
+      h += teamSetupLineHtml();   // admins, when setups are recorded: "Team setup: N teams recorded <date> · Undo"
       if (teamsLastHtml !== h || !box.firstChild) {   // a status tick that changes nothing leaves the DOM alone
         // Keyboard focus on a fold button or a row survives the redraw: note it first, give it back to the matching element after.
         let keep = null;
@@ -8867,6 +8886,152 @@
       }
     }
     let teamsLastHtml = null;
+
+    // ── Set up teams and Undo team setup (admins) ──
+    // GET /api/team-setup: { offer: 'pending'|'not_now'|'never'|'accepted'|null, lead: { name, display }, setups: [{ id, at, main, count }], anyTeam }.
+    // The one-time offer is a card in the lead's chat (#team-offer-slot-<chat>); it shows while offer is 'pending' and goes when any device answers:
+    // the lead's status entry carries offerPending, and a change of it (setAgentLive) reloads this state. Nothing here has a timeout.
+    let teamSetup = { offer: null, lead: null, setups: [] };
+    let teamSetupStarting = false;           // the Set up teams request is in flight from this page
+    const teamSetupRecent = new Set();       // setup ids recorded while this page was open (team_setup_recorded): their chat Undo shows at once
+    let teamSetupLoadTimer = 0;
+    function teamSetupLeadDisplay() {
+      const l = teamSetup.lead;
+      if (l && (l.display || l.name)) return l.display || capName(l.name);
+      const a = Array.isArray(AGENTS) ? AGENTS.find(x => x && x.lead) : null;
+      return a ? (a.display || capName(a.name)) : 'Your lead';
+    }
+    function teamSetupBusy() {
+      if (teamSetupStarting) return true;
+      for (const s of Object.values(agentStatus)) if (s && s.settingUpTeams) return true;   // the lead's status carries it while the turn runs
+      return false;
+    }
+    function teamSetupLines(list) { return (list || []).reduce((n, s) => n + (Math.max(0, Math.floor(Number(s && s.count)) || 0)), 0); }
+    function teamSetupDate(at) {
+      const d = new Date(at);
+      return Number.isNaN(d.getTime()) ? '' : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    }
+    function teamSetupLineHtml() {
+      if (!isHubAdmin() || !teamSetup.setups.length) return '';
+      const n = teamSetup.setups.length;
+      const latest = teamSetup.setups.reduce((m, s) => (Date.parse(s.at) > Date.parse(m.at) ? s : m), teamSetup.setups[0]);
+      const date = teamSetupDate(latest.at);
+      return `<div class="teams-setup-line">Team setup: ${n} team${n === 1 ? '' : 's'} recorded${date ? ' ' + hubEsc(date) : ''} · <button type="button" class="teams-setup-undo" data-team-undo>Undo</button></div>`;
+    }
+    function teamSetupApply(d) {
+      if (!d || typeof d !== 'object') return;
+      teamSetup = { offer: d.offer || null, lead: d.lead && typeof d.lead === 'object' ? d.lead : null, setups: Array.isArray(d.setups) ? d.setups : [] };
+      const ls = teamSetup.lead && agentStatus[teamSetup.lead.name];
+      if (teamSetup.offer !== 'pending' && ls && ls.offerPending) setAgentLive(teamSetup.lead.name, { offerPending: false });   // answered: the row's marker goes with the card
+      teamSetupPaint();
+    }
+    async function teamSetupLoad() {
+      if (!isHubAdmin()) { teamSetup = { offer: null, lead: null, setups: [] }; teamSetupPaint(); return; }
+      try {
+        const r = await fetch('/api/team-setup', { credentials: 'include' });
+        if (!r.ok) return;
+        teamSetupApply(await r.json());
+      } catch { /* the offer and the Undo line wait for the next refresh */ }
+    }
+    function teamSetupLoadSoon() {
+      if (teamSetupLoadTimer) return;
+      teamSetupLoadTimer = setTimeout(() => { teamSetupLoadTimer = 0; teamSetupLoad(); }, 300);
+    }
+    // The offer card and the per-team Undo rows, in every open chat of the lead; the Teams tab redraws too.
+    function teamSetupPaint() {
+      if (typeof teamsRepaintSoon === 'function') teamsRepaintSoon();
+      try { for (const c of Object.values(chats)) if (c && c.agent && !c.isGroup && !c.isWorker && !c.isHistory) teamSetupChatPaint(c); } catch { /* cosmetic */ }
+    }
+    function teamSetupOfferHtml() {
+      const lead = hubEsc(teamSetupLeadDisplay());
+      const btn = (choice, label) => `<button type="button" class="question-option" data-team-offer="${choice}"><strong>${label}</strong></button>`;
+      return `<div class="question-modal team-offer-card" role="group" aria-label="${lead} has a suggestion"><h3>${lead} has a suggestion</h3>`
+        + `<div class="question-header">Teams</div>`
+        + `<p class="question-text">${lead} can look at how your agents already work together and suggest teams for the Teams tab. Nothing changes in how your agents work unless you approve a team.</p>`
+        + `<div class="question-options">${btn('show', 'Show me the proposal')}${btn('not_now', 'Not now')}${btn('never', "Don't ask again")}</div></div>`;
+    }
+    // Setups recorded this session (the lead's confirmation just came), or within the last half hour on a fresh page: "Undo this team".
+    function teamSetupUndoRows() {
+      const now = Date.now();
+      return teamSetup.setups.filter(s => s && s.id && (teamSetupRecent.has(s.id) || now - Date.parse(s.at) < 30 * 60 * 1000));
+    }
+    function teamSetupChatPaint(chat) {
+      const slot = chat && document.getElementById(`team-offer-slot-${chat.id}`);
+      if (!slot) return;
+      const lead = teamSetup.lead && teamSetup.lead.name;
+      let html = '';
+      if (isHubAdmin() && lead && chat.agent === lead) {
+        if (teamSetup.offer === 'pending') html += teamSetupOfferHtml();
+        for (const s of teamSetupUndoRows()) {
+          const main = AGENTS.find(a => a.name === s.main);
+          const who = hubEsc((main && main.display) || (s.main ? capName(s.main) : 'This'));
+          const n = Math.max(0, Math.floor(Number(s.count)) || 0);
+          html += `<div class="team-undo-row">${who} team recorded (${n} reporting line${n === 1 ? '' : 's'}) <button type="button" class="team-undo-btn" data-team-undo-id="${hubEsc(String(s.id))}">Undo this team</button></div>`;
+        }
+      }
+      if (slot.dataset.shown === html) return;   // unchanged: no flicker, no lost focus
+      slot.dataset.shown = html;
+      slot.innerHTML = html;
+      slot.hidden = !html;
+    }
+    async function teamSetupAnswer(choice) {
+      try {
+        const r = await fetch('/api/team-setup/offer', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ choice }) });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error((d && d.error) || `HTTP ${r.status}`);
+        teamSetup = { ...teamSetup, offer: (d && d.offer) || (choice === 'show' ? 'accepted' : choice), lead: (d && d.lead && typeof d.lead === 'object') ? d.lead : teamSetup.lead };
+        teamSetupPaint();   // the card goes now; the other devices lose it on their next status refresh
+        if (choice === 'show') {
+          const lead = teamSetup.lead && teamSetup.lead.name;
+          if (lead) { const la = AGENTS.find(a => a.name === lead); startSoloChat(lead, (la && la.model) || ''); }
+        }
+      } catch (e) { alert('Could not send your answer: ' + (e && e.message ? e.message : 'no connection')); }
+      teamSetupLoadSoon();
+    }
+    async function teamSetupStart() {
+      if (teamSetupBusy()) return;
+      teamSetupStarting = true;
+      if (typeof teamsRepaintSoon === 'function') teamsRepaintSoon();
+      try {
+        const r = await fetch('/api/team-setup/start', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+        let d = {};
+        try { d = await r.json(); } catch { d = {}; }
+        if (r.status === 202 || (r.ok && d && d.lead)) {
+          const lead = d && d.lead && (d.lead.name || d.lead);
+          if (lead) { const la = AGENTS.find(a => a.name === lead); startSoloChat(String(lead), (la && la.model) || ''); }   // the lead's chat, so the proposal is in view
+        } else alert((d && d.error) || `Could not start setting up teams (${r.status}).`);
+      } catch (e) {
+        alert('Could not start setting up teams: ' + (e && e.message ? e.message : 'no connection'));
+      } finally {
+        teamSetupStarting = false;
+        if (typeof teamsRepaintSoon === 'function') teamsRepaintSoon();
+      }
+    }
+    // { all: true } (the line at the bottom of the Teams tab) or { id } (one team, from the lead's confirmation): ask first, then undo.
+    async function teamSetupUndo(which) {
+      const all = !!(which && which.all);
+      const n = all ? teamSetupLines(teamSetup.setups) : teamSetupLines(teamSetup.setups.filter(s => s.id === (which && which.id)));
+      if (!confirm(`Remove these ${n} reporting lines?`)) return;
+      try {
+        const r = await fetch('/api/team-setup/undo', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(all ? { all: true } : { id: which.id }) });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error((d && d.error) || `HTTP ${r.status}`);
+        const kept = Array.isArray(d && d.keptChanged) ? d.keptChanged.length : Math.max(0, Math.floor(Number(d && d.keptChanged)) || 0);
+        if (kept > 0) alert(`${kept} reporting line${kept === 1 ? ' was' : 's were'} changed by hand since and stayed as set.`);
+      } catch (e) { alert('Could not undo: ' + (e && e.message ? e.message : 'no connection')); }
+      try { await loadAgents(); } catch { /* the list refreshes on its next tick */ }   // the reporting lines changed
+      await teamSetupLoad();   // the line leaves; with no lines left the tab shows the empty state again
+      if (typeof teamsRepaintSoon === 'function') teamsRepaintSoon();
+    }
+    // Clicks inside an offer slot (answers, per-team Undo): delegated from the document so every chat's slot works.
+    document.addEventListener('click', (e) => {
+      const t = e.target && e.target.closest ? e.target : null;
+      if (!t) return;
+      const ans = t.closest('[data-team-offer]');
+      if (ans) { e.preventDefault(); teamSetupAnswer(ans.dataset.teamOffer); return; }
+      const un = t.closest('[data-team-undo-id]');
+      if (un) { e.preventDefault(); teamSetupUndo({ id: un.dataset.teamUndoId }); }
+    });
     // Repaint after the list or a status changed; only while the Teams view is the one showing.
     let teamsTimer = 0;
     function teamsRepaintSoon() {
@@ -9427,6 +9592,7 @@
       compactionRefresh(chatId);   // context % and compression mode under the toolbar (cheap GET)
       paintPlanBadges();           // plan usage next to the model (Claude subscription agents)
       soloViewPaint();             // the "Agent work" toggle shows the device's choice
+      try { teamSetupChatPaint(chats[chatId]); } catch { /* cosmetic */ }   // the lead's chat: the Set up teams offer, the Undo for a team just set up
 
       // Load conversation history from server (the newest page of the chosen view; "Load earlier" fetches the rest)
       chats[chatId].historyLoaded = soloHistoryLoad(chatId);
@@ -10053,10 +10219,11 @@
       if (!name) return;
       const cur = agentStatus[name] || { busy: false, busySince: null, activity: null, pendingQuestion: false };
       const next = { ...cur, ...patch };
-      if (!next.busy) { next.busySince = null; next.activity = null; next.pendingQuestion = false; next.consultedBy = null; next.buildingTeamFor = null; }
+      if (!next.busy) { next.busySince = null; next.activity = null; next.pendingQuestion = false; next.consultedBy = null; next.buildingTeamFor = null; next.settingUpTeams = false; }   // offerPending is not a turn: it stays while the lead is idle
       else if (!next.busySince) next.busySince = cur.busySince || new Date().toISOString();
       agentStatus[name] = next;
       if ((cur.buildingTeamFor || null) !== (next.buildingTeamFor || null)) paintBuildControls();   // "Building…" on that main agent's Build team controls
+      if (!!cur.offerPending !== !!next.offerPending) teamSetupLoadSoon();   // the offer was answered (here or on another device) or came up: the card follows
       if (!next.busy) { delete agentSteps[name]; delete busyRun[name]; }   // idle: no step or turn origin survives into the next turn (a turn_end may have been missed)
       if (!next.busy && typeof voiceCallHubIdle === 'function') { try { voiceCallHubIdle(name); } catch { /* the call carries on */ } }   // a call waiting for a hub-started turn learns it is over
       paintAgentStatus(name);
@@ -10082,7 +10249,7 @@
     // is the whole truth: a key it lacks is cleared (an agent no longer consulted loses its consultedBy).
     function statusPatchOf(s, keepMissing) {
       const patch = { busy: !!s.busy, busySince: s.busySince || null, activity: s.activity || null, pendingQuestion: !!s.pendingQuestion };
-      for (const k of ['worker', 'parent', 'label', 'model', 'consultedBy', 'buildingTeamFor']) if (k in s) patch[k] = s[k]; else if (!keepMissing) patch[k] = null;
+      for (const k of ['worker', 'parent', 'label', 'model', 'consultedBy', 'buildingTeamFor', 'offerPending', 'settingUpTeams']) if (k in s) patch[k] = s[k]; else if (!keepMissing) patch[k] = null;
       if ('background' in s) patch.background = Math.max(0, Math.floor(Number(s.background)) || 0); else if (!keepMissing) patch.background = 0;   // work in the background; the full feed sends it only when above 0
       return patch;
     }
@@ -10423,13 +10590,14 @@
       const s = agentStatus[name];
       const mine = localBusy.get(name);
       const busy = !!(s && s.busy) || !!mine;
-      const question = !!(s && s.pendingQuestion);
+      const offer = !!(s && s.offerPending && isHubAdmin());   // the one-time Set up teams offer waits in the lead's chat: the same "waiting for your answer" marker
+      const question = !!(s && s.pendingQuestion) || offer;
       const activity = chatViewActivityWord(s && s.activity) || (mine ? 'replying to you' : 'working');
       const since = (s && s.busySince) || mine || null;
       const elapsed = elapsedLabel(since, false);
       const elapsedShort = elapsedLabel(since, true);
       let dotCls = '', tip = '', text = '', line = '', lineTitle = '';
-      if (question) { dotCls = 'live-question'; tip = `Waiting for your answer${activity ? ` · ${activity}` : ''}${elapsed ? ` · ${elapsed}` : ''}`; text = '?'; }
+      if (question) { dotCls = 'live-question'; tip = offer && !(s && s.pendingQuestion) ? 'Waiting for your answer' : `Waiting for your answer${activity ? ` · ${activity}` : ''}${elapsed ? ` · ${elapsed}` : ''}`; text = '?'; }
       else if (busy) { dotCls = 'live-busy'; tip = `${activity}${elapsed ? ` · ${elapsed}` : ''}`; }
       else if (statusKnown) { dotCls = 'live-idle'; tip = 'Idle'; }
       const named = !question && !(s && s.worker);
@@ -10442,7 +10610,7 @@
         tip = lineTitle;
       } else if (busy) line = `⏳ ${activity}${elapsedShort ? ` · ${elapsedShort}` : ''}`;
       const needsOrigin = named && busy && !!(s && s.busy) && !busyRun[name] && !mine;
-      return { busy, question, dotCls, tip, text, line, lineTitle, activity, needsOrigin };
+      return { busy, question, offer, dotCls, tip, text, line, lineTitle, activity, needsOrigin };
     }
     function paintAgentStatus(name) {
       const dot = document.getElementById(`agent-status-${name}`);
@@ -10464,6 +10632,7 @@
           const cancelBtn = document.getElementById(`cancel-${solo.chatId || solo.id}`);
           if (cancelBtn) { cancelBtn.style.display = (busy || question) ? '' : 'none'; cancelBtn.title = (busy || question) ? `Stop ${name}'s current turn (${activity})` : ''; }
           showNotifyBtn(solo.chatId || solo.id, busy || question);
+          if (st.offer && !busy) { if (cancelBtn) { cancelBtn.style.display = 'none'; cancelBtn.title = ''; } showNotifyBtn(solo.chatId || solo.id, false); }   // the Set up teams offer is not a turn: nothing to stop
         }
       } catch {}
       let line = btn.querySelector('.agent-busy-line');
@@ -11039,7 +11208,8 @@
       if (ev && ev.agent) busyRun[ev.agent] = { turnId: ev.turnId, origin: ev.origin, since: Date.parse(ev.startedAt) || Date.now(), own: !chatViewIsHubOrigin(ev.origin) };
       if (ev.turnId && hubTurns[ev.turnId]) return;   // replayed after a reconnect (?since=): the turn is already followed
       setAgentLive(ev.agent, { busy: true, busySince: ev.startedAt || null, activity: ev.activity || hubOriginLabel(ev.origin),
-        ...(ev.buildingTeamFor || (ev.origin && ev.origin.kind === 'build_team' && ev.origin.for) ? { buildingTeamFor: ev.buildingTeamFor || ev.origin.for } : {}) });
+        ...(ev.buildingTeamFor || (ev.origin && ev.origin.kind === 'build_team' && ev.origin.for) ? { buildingTeamFor: ev.buildingTeamFor || ev.origin.for } : {}),
+        ...(ev.settingUpTeams || (ev.origin && ev.origin.kind === 'team_setup') ? { settingUpTeams: true } : {}) });
       let chat = findSoloChat(ev.agent);
       if (ev.origin?.kind === 'user') {
         // Our own send is already streaming in this window (or re-attaching to it).
@@ -11061,8 +11231,8 @@
       let card = null;
       let retiredReattach = false;   // a re-attach of this turn was followed before turn_start came; its bubble gave way to the card
       // Main view: a hub-started turn is still followed (its card), but hidden unless its reply is marked for the owner.
-      // (Build Team is the exception: the person pressed it, so its card and reply stay in view.)
-      const hubMain = chatViewGet(localStorage) === 'main' && chatViewIsHubOrigin(ev.origin) && ev.origin.kind !== 'build_team';
+      // (Build Team and Set up teams are the exception: the person pressed them, so their card and reply stay in view.)
+      const hubMain = chatViewGet(localStorage) === 'main' && chatViewIsHubOrigin(ev.origin) && ev.origin.kind !== 'build_team' && ev.origin.kind !== 'team_setup';
       const autoKind = foldAutoOn() || hubMain ? autoKindOfOrigin(ev.origin) : null;
       if (autoKind) {
         const info = autoInfoOf({ role: 'user', origin: ev.origin, content: ev.message || '' });
@@ -11666,6 +11836,13 @@
           showQuestionModal({ request_id: ev.request_id, questions: ev.questions, agent: ev.agent }, chatId || null).catch(() => {});
         }
       });
+      // A Do it on a set-up card wrote reporting lines: the lead's chat shows "Undo this team" at once; the Teams tab and list follow.
+      source.addEventListener('team_setup_recorded', e => {
+        const ev = parse(e); if (!ev) return;
+        if (ev.id) teamSetupRecent.add(String(ev.id));
+        loadAgents().catch(() => {});
+        teamSetupLoadSoon();
+      });
       source.addEventListener('ask_user_done', e => { const ev = parse(e); if (ev && ev.request_id) closeQuestion(ev.request_id); });
       source.addEventListener('ask_user_done', e => { const ev = parse(e); if (ev) setAgentLive(ev.agent, { pendingQuestion: false }); });
       // A hands-free call (voice phase 2) follows the events of its agent: replies, tool activity, questions, held items.
@@ -11903,6 +12080,7 @@
         </div>
         <div class="compaction-line" id="compaction-line-${chatId}" style="display:none" title="Context compression: the agent writes its own working brief (see the agent's settings page)"></div>
         <div class="messages" id="messages-${chatId}"></div>
+        <div class="team-offer-slot" id="team-offer-slot-${chatId}" hidden></div>
         <div class="handoff-cards" id="handoff-cards-${chatId}" hidden></div>
         <div class="handoff-cards research-lines" id="research-lines-${chatId}" hidden></div>
         <div class="input-area">

@@ -30,7 +30,8 @@ test('main view history page of a chat holding only a build_team turn is not emp
 
 test('the pages do not hide a followed build_team turn in the main view', () => {
   const d = app.slice(app.indexOf('async function onHubTurnStart('), app.indexOf('function onHubTurnDelta('));
-  assert.match(d, /const hubMain = chatViewGet\(localStorage\) === 'main' && chatViewIsHubOrigin\(ev\.origin\) && ev\.origin\.kind !== 'build_team';/);
+  // changed (Set up teams): a set-up turn stays in view like build_team
+  assert.match(d, /const hubMain = chatViewGet\(localStorage\) === 'main' && chatViewIsHubOrigin\(ev\.origin\) && ev\.origin\.kind !== 'build_team' && ev\.origin\.kind !== 'team_setup';/);
   const m = mobile.slice(mobile.indexOf('function onTurnStart('), mobile.indexOf('function onTurnDelta('));
   assert.match(m, /viewNow\(\) === 'main' && chatViewIsHubOrigin\(ev\.origin\) && ev\.origin\.kind !== 'build_team'/);
 });

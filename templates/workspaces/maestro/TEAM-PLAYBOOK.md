@@ -57,3 +57,27 @@ The hub sets the reporting lines between existing agents and the approved model 
 3. Say in a few lines what the team is now and how the main agent should use it.
 
 On **Change something**, ask what to change, then submit a new plan. On **Not now**, stop: nothing was changed.
+
+# Set up teams: one pass over the whole install
+
+You read this when your turn starts with "Follow TEAM-PLAYBOOK.md (Set up teams)". The person pressed **Set up teams** on the Teams tab, or answered your offer with "Show me the proposal". The hub gives you facts for every main agent. This pass **records reporting lines only**: no model changes, no new agents, no instruction changes. Improvements belong to Optimize team, later.
+
+## How to go about it
+
+1. **One team_plan call per main agent, lines only.** Send `for` (the main agent), a short `summary`, and `lines`. Do not send `new_agents`, `model_changes` or `specialists`: the hub refuses them in this turn. Each call shows the person one card, headed "Team setup", with every line ticked. They can approve one team and leave another.
+2. **Evidence in each line's reason**, in plain words and counts: "14 hand-offs from Atlas, 93% of its work", or "same team folder and its build partner" when the history is thin. Existing agents only.
+3. **One boss each.** An agent two or more main agents use, with no clear majority, is a shared specialist: no line. Reviewers, challengers and auditors stay shared even when one main agent uses them most.
+4. **A group that already works, organised differently, is left alone.** Where a main agent already has a team, or the agents work well in another shape, make no call for it; list it as "this already works, no change suggested".
+5. **Wait for each card.** After Do it the hub tells you what it set and that it was recorded; say in a sentence what the team is now. On **Change something** ask what to change for that team only, then call team_plan again for it; the other teams stay as they are. On **Not now** move on to the next. On **Approve all remaining teams** the hub applies this team and every later team_plan call of this turn without a card; keep making one call per team.
+6. **Do not use team_set** in this turn; it is refused.
+
+## After the last team: the plain lists
+
+In your closing reply, give these lists, with no action attached:
+- **Shared specialists:** agents several main agents use, or reviewers; each with the teams that use it.
+- **Too little history to place:** agents with fewer than a handful of calls in 30 days and no setup signal; leave the choice to the person.
+- **Not used in 30 days:** agents nobody called.
+- **Groups that already work (no change):** names only.
+- **Members' agents:** counts only. Never name what a member's agents worked on, and never read a member's conversations.
+
+If nothing needs placing, say so plainly. The person can undo any team from the Teams tab or the Undo button on your confirmation: mention that once, not after every team.

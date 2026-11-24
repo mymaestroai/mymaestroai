@@ -512,7 +512,7 @@ test('both pages load /ui-claude-signin.js before their own script, and the file
 });
 
 test('the phone service worker is v78', () => {
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v81';/);
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v82';/);
 });
 
 test('the script keeps server text out of markup and has no variation selector', () => {

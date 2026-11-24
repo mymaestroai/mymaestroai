@@ -112,6 +112,11 @@ function world({ stored, storageThrows, simple, member } = {}) {
     fnSrc('paintBuildControls'), 'async ' + fnSrc('buildTeamStart'), fnSrc('agentMenuClose'), fnSrc('agentMenuOpenAt'), fnSrc('agentMenuToggle'), fnSrc('agentButton'),
     fnSrc('questionChecklistOf'), fnSrc('questionChecklistHtml'), fnSrc('questionCheckedIds'), fnSrc('askResponseBody'),
     fnSrc('teamsRowHtml'), fnSrc('teamsBlockHtml'), fnSrc('teamsSubtreeHtml'), fnSrc('renderTeams'), fnSrc('teamsRepaintSoon'),
+    // Set up teams (renderTeams, setupTabs and teamsClick call these): the harness carries them so the pinned Teams tests keep running as before.
+    "let teamSetup = { offer: null, lead: null, setups: [] }; let teamSetupStarting = false; const teamSetupRecent = new Set(); let teamSetupLoadTimer = 0; const chats = {};",
+    fnSrc('teamSetupLeadDisplay'), fnSrc('teamSetupBusy'), fnSrc('teamSetupLines'), fnSrc('teamSetupDate'), fnSrc('teamSetupLineHtml'), fnSrc('teamSetupApply'),
+    'async ' + fnSrc('teamSetupLoad'), fnSrc('teamSetupLoadSoon'), fnSrc('teamSetupPaint'), fnSrc('teamSetupOfferHtml'), fnSrc('teamSetupUndoRows'), fnSrc('teamSetupChatPaint'),
+    'async ' + fnSrc('teamSetupStart'), 'async ' + fnSrc('teamSetupUndo'), 'function setAgentLive() {} function loadAgents() { return Promise.resolve(); }',
     'this.api = { setupTabs, sidebarViewSet, sidebarTabsApply, renderTeams, teamsClick, teamsRepaintSoon, teamsOpenToggle, agentMenuEntries, agentMenuBtnHtml, buildLineHtml, agentButton, buildTeamStart, agentMenuOpenAt, agentMenuClose, paintBuildControls, questionChecklistOf, questionChecklistHtml, askResponseBody };'].join('\n');
   ctx.window = ctx;
   vm.createContext(ctx);
@@ -282,12 +287,14 @@ test('renderTeams: nobody has a team: the empty-state box says how to start', ()
   w.api.renderTeams();
   const h = w.list.innerHTML;
   assert.match(h, /<strong>Agents can work as teams\.<\/strong>/);
-  assert.ok(h.includes('Your main agents plan, decide and review. Short or personal tasks they usually do themselves; long work they can hand to team leaders, who run workers. Use Build Team on a main agent to have your lead propose one, or set who an agent reports to on its settings page.'));
-  // changed: the Build Team button now sits under each "No team yet" row (admins), so the pin checks the empty-state box and the row buttons instead of the whole page
-  assert.doesNotMatch(h.slice(0, h.indexOf('</div>')), /<button|data-build-team/, 'the empty-state box itself offers no button (its text names Build Team; the buttons sit on the rows)');
+  // changed (Set up teams): an admin's box now names the lead and offers "Set up teams" in place of the Build Team sentence
+  assert.ok(h.includes('Your main agents plan, decide and review. Short or personal tasks they usually do themselves; long work they can hand to team leaders, who run workers. Lead can look at how your agents already work together and propose teams. Nothing changes until you approve a team.'));
+  // changed: the Build Team button sits under each "No team yet" row (admins); the empty-state box itself has only the Set up teams button
+  assert.doesNotMatch(h.slice(0, h.indexOf('</div>')), /data-build-team/, 'the empty-state box has no Build Team button (those sit on the rows)');
+  assert.strictEqual((h.slice(0, h.indexOf('</div>')).match(/<button/g) || []).length, 1, 'the box has one button: Set up teams');
   assert.strictEqual((h.match(/No team yet/g) || []).length, 2);
   assert.strictEqual((h.match(/<button type="button" class="build-team-btn"/g) || []).length, 2, 'one Build Team button per main agent without a team');
-  assert.strictEqual((h.match(/<button/g) || []).length, 5, 'two Build Team buttons and a ⋯ on each of the three rows');
+  assert.strictEqual((h.match(/<button/g) || []).length, 6, 'Set up teams, two Build Team buttons and a ⋯ on each of the three rows');
 });
 test('renderTeams: names are escaped, the dot follows idle / busy / question, leaders get the Simple subline', () => {
   const w = world({ stored: [['hub-teams-open', JSON.stringify({ lead: true })]] });
@@ -597,7 +604,8 @@ test('the shared menu: right-click path opens it, Escape closes it, a row with n
 });
 test('app.js wiring: right-click on a row, keyboard, status copy points carry buildingTeamFor, Simple and CSS pins', () => {
   assert.match(app, /document\.addEventListener\('contextmenu'[\s\S]{0,300}#agent-list \.agent-btn\[data-agent\], #teams-list \.teams-row\[data-agent\]/);
-  assert.match(app, /for \(const k of \['worker', 'parent', 'label', 'model', 'consultedBy', 'buildingTeamFor'\]\)/, 'applyStatusSnapshot copies it');
+  // changed (Set up teams): the same key list also carries offerPending and settingUpTeams
+  assert.match(app, /for \(const k of \['worker', 'parent', 'label', 'model', 'consultedBy', 'buildingTeamFor', 'offerPending', 'settingUpTeams'\]\)/, 'applyStatusSnapshot copies it');
   assert.match(app, /pendingQuestion: a\.pendingQuestion, buildingTeamFor: a\.buildingTeamFor \|\| null/, 'loadAgents copies it');
   assert.match(app, /next\.consultedBy = null; next\.buildingTeamFor = null;/, 'idle clears it');
   assert.match(html, /\.agent-btn:has\(\.agent-menu-btn\) \.agent-info \{ padding-right: 18px; \}/);

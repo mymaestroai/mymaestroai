@@ -52,7 +52,7 @@ const {
   cancelWorker, loadConversationLog, clearConversationLog,
   clearConversation, flushActiveResponses, runTigerTeam, runRoundtable,
   continueTigerTeam, resumeTigerTeam, getTigerTeamState, reconstituteTigerTeam, stopTigerTeam, listTigerTeams,
-  activeTigerTeams, isAgentActive, wakeAgent, startBuildTeam, teamModelFacts, buildTeamRuns,
+  activeTigerTeams, isAgentActive, wakeAgent, startBuildTeam, teamModelFacts, buildTeamRuns, startTeamSetup, teamSetupRuns,
 } = require('./lib/sdk-chat');
 const { serveImage } = require('./lib/images');
 // Tell open pages that an agent's settings changed (model, name, icon, category...) so their open chats follow
@@ -1614,6 +1614,24 @@ async function handleHttpRequest(req, res) {
       return jsonResponse(res, out.status, out.body);
     }
 
+    // Set up teams (lib/team-setup): GET /api/team-setup, POST /api/team-setup/offer | start | undo. Only an admin's own signed-in browser
+    // session (the build-team gate); the cross-origin refusal applies to every /api route.
+    if (/^\/api\/team-setup(\/(offer|start|undo))?$/.test(pathname) && (req.method === 'POST' || (req.method === 'GET' && pathname === '/api/team-setup'))) {
+      const teamSetupLib = require('./lib/team-setup'), teamPlanLib = require('./lib/team-plan'), agentsLib = require('./lib/agents');
+      const action = req.method === 'GET' ? 'get' : pathname.split('/')[3];
+      let body = {}; if (req.method === 'POST') { try { body = JSON.parse((await readBody(req)) || '{}'); } catch { return jsonResponse(res, 400, { error: 'bad JSON' }); } }
+      const out = await teamSetupLib.routeTeamSetup(action, {
+        adminSession: req.hubIdentKind === 'user' && !req.hubPendingTotp && !req.hubToken && !req.hubService && access.isAdmin(req.hubUser),
+        svc: teamSetupLib.getTeamSetup(), agents: await getAgents(), body,
+        ownerLeadNames: agentsLib.ownerLeadNames, defaultLeadAgent: agentsLib.defaultLeadAgent,
+        running: () => teamSetupRuns.size > 0, halted: () => require('./lib/hub-halt').getHubHalt().isHalted(), isBusy: isAgentActive,
+        makeMessage: async (all) => teamSetupLib.setupMessage({ agentsList: all, adminIds: new Set(hubAuth.admins().map(u => String(u.id))),
+          tierOf: require('./lib/model-tiers').tierOf, ...teamPlanLib.historySources() }),
+        start: startTeamSetup, userId: req.hubUser && req.hubUser.id != null ? String(req.hubUser.id) : null,
+      });
+      return jsonResponse(res, out.status, out.body);
+    }
+
     // PATCH /api/agents/:name — update agent fields (category, etc.)
     if (/^\/api\/agents\/([^/]+)$/.test(pathname) && req.method === 'PATCH') {
       const name = decodeURIComponent(pathname.split('/')[3]);
@@ -2954,6 +2972,7 @@ async function handleHttpRequest(req, res) {
           // Sidebar sections that are off until switched on: true only for a real true.
           if (patch && patch.sidebarTigerTeam !== undefined) patch.sidebarTigerTeam = patch.sidebarTigerTeam === true;
           if (patch && patch.sidebarGuide !== undefined) patch.sidebarGuide = patch.sidebarGuide === true;
+          if (patch && patch.sidebarTeams !== undefined) patch.sidebarTeams = patch.sidebarTeams !== false;   // the Teams tab is on unless switched off
           // Voice: known keys only, merged onto the stored value (lib/voice/manifest cleanVoiceSettings). "enabled" changes
           // only through /api/voice/enable and /disable, which also install the engines and stop or resume the worker.
           if (patch && patch.voice !== undefined) {

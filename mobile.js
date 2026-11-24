@@ -1754,7 +1754,7 @@ async function loadAgents() {
     { const ri = $('menu-recordings'); if (ri) ri.hidden = !agents.some(a => a && a.recordings && a.recordings.canDownload === true); typeof menuGroupsSync === 'function' && menuGroupsSync(); }   // ⋮ menu: Recordings only for a person on at least one agent's download list
     if (agents.some(a => 'busy' in a)) {
       const map = {};
-      for (const a of agents) map[a.name] = { busy: a.busy, busySince: a.busySince, activity: a.activity, pendingQuestion: a.pendingQuestion };
+      for (const a of agents) map[a.name] = { busy: a.busy, busySince: a.busySince, activity: a.activity, pendingQuestion: a.pendingQuestion, ...('offerPending' in a ? { offerPending: a.offerPending } : {}), ...('settingUpTeams' in a ? { settingUpTeams: a.settingUpTeams } : {}) };
       applySnapshot(map, false, { namedOnly: true });
     }
   } catch (e) {
@@ -1779,9 +1779,10 @@ function setLive(name, patch) {
   if (!name) return;
   const cur = live[name] || { busy: false, busySince: null, activity: null, pendingQuestion: false };
   const next = { ...cur, ...patch };
-  if (!next.busy) { next.busySince = null; next.activity = null; next.pendingQuestion = false; next.consultedBy = null; next.buildingTeamFor = null; }
+  if (!next.busy) { next.busySince = null; next.activity = null; next.pendingQuestion = false; next.consultedBy = null; next.buildingTeamFor = null; next.settingUpTeams = null; }   // offerPending is not a turn: it stays while the lead is idle
   else if (!next.busySince) next.busySince = cur.busySince || new Date().toISOString();
   live[name] = next;
+  if (!!cur.offerPending !== !!next.offerPending && typeof teamSetupLoadSoon === 'function') teamSetupLoadSoon();   // the offer was answered (here or on another device) or came up: the card follows
   if (!next.busy) { delete turnSteps[name]; if (typeof turnOrigins !== 'undefined') delete turnOrigins[name]; }   // idle: no tool call runs, and the old turn's origin must not name the next turn's caller
   // A helper (temporary worker) or a consulted agent changed: every agent waiting on it (before or after) says so (its header and list line).
   if (typeof repaintAgentStatus === 'function') {
@@ -1799,7 +1800,7 @@ function applySnapshot(map, repaint = true, opts = {}) {
   for (const [name, s] of Object.entries(map)) {
     const patch = { busy: !!s.busy, busySince: s.busySince || null, activity: s.activity || null, pendingQuestion: !!s.pendingQuestion };
     if (!namedOnly || 'background' in s) patch.background = Number(s.background) > 0 ? Math.floor(Number(s.background)) : 0;   // work it runs in the background (the hub leaves the key out at 0)
-    for (const k of ['worker', 'parent', 'label', 'model', 'consultedBy', 'buildingTeamFor']) {   // buildingTeamFor: the lead's Build Team turn names the main agent it builds for
+    for (const k of ['worker', 'parent', 'label', 'model', 'consultedBy', 'buildingTeamFor', 'offerPending', 'settingUpTeams']) {   // buildingTeamFor: the lead's Build Team turn names the main agent it builds for; offerPending / settingUpTeams: the Set up teams offer and turn on the lead
       if (namedOnly && !(k in s)) continue;
       patch[k] = k === 'worker' ? busyIsWorker(name, s) : (s[k] || null);
     }
@@ -2525,7 +2526,9 @@ function renderWorkingChip() {
 
 // ── Teams view of the agent list (same storage keys and values as the desktop page) ──
 let teamsViewMem = null;   // the choice made on this page, kept even when localStorage refuses it
+let teamsTabOn = true;     // false: an admin switched "Show the Teams tab" off (settings sidebarTeams, read by teamsTabLoad)
 function teamsView() {
+  if (!teamsTabOn) return 'agents';   // an admin switched "Show the Teams tab" off
   if (teamsViewMem !== null) return teamsViewMem;
   try { return localStorage.getItem('hub-sidebar-view') === 'teams' ? 'teams' : 'agents'; } catch { return 'agents'; }
 }
@@ -2542,6 +2545,7 @@ function teamsPaintSwitch() {
   document.querySelectorAll('.view-switch button, .sa-switch button').forEach((b) => {
     const on = (b.dataset.view === 'teams') === (v === 'teams');
     b.classList.toggle('on', on); b.setAttribute('aria-selected', String(on));
+    if (b.parentElement && b.parentElement.style) b.parentElement.style.display = teamsTabOn ? '' : 'none';   // no Teams tab: the one-choice switch goes too
   });
 }
 function teamsPick(v) {
@@ -2591,13 +2595,15 @@ function teamsListHtml() {
   const t = window.hubTeams.tree(agents, live);
   const keep = (n) => workingFilter ? teamsPrune(n) : n;
   const mains = t.mains.map(keep).filter(Boolean), shared = t.shared.map(keep).filter(Boolean), other = t.other.map(keep).filter(Boolean);
-  let html = t.anyTeam || workingFilter ? '' : '<div class="tm-empty"><b>Agents can work as teams.</b> Your main agents plan, decide and review. Short or personal tasks they usually do themselves; long work they can hand to team leaders, who run workers. ' + (isAdmin() ? 'Use Build Team on a main agent to have your lead propose one, or set who an agent reports to on its settings page.' : 'An admin can set who reports to whom.') + '</div>';
+  // Admins: the lead can propose teams from how the agents already work together (Set up teams); members keep the old text.
+  let html = t.anyTeam || workingFilter ? '' : '<div class="tm-empty"><b>Agents can work as teams.</b> Your main agents plan, decide and review. Short or personal tasks they usually do themselves; long work they can hand to team leaders, who run workers. ' + (isAdmin() ? teamSetupEmptyHtml() : 'An admin can set who reports to whom.') + '</div>';
   const head = (title, key) => key
     ? `<button type="button" class="group-title" data-tm-sec="${key}"><span>${esc(title)}</span><span>${workingFilter || teamsOpen['@' + key] ? '&#x25BE;' : '&#x25B8;'}</span></button>`
     : `<div class="group-title"><span>${esc(title)}</span></div>`;
   if (mains.length) html += head('Your agents') + mains.map(teamsNodeHtml).join('');
   if (shared.length) html += head('Shared specialists') + shared.map(teamsNodeHtml).join('');
   if (other.length) html += head(`Other (${other.reduce((s, n) => s + 1 + teamsCount(n), 0)})`, 'other') + (workingFilter || teamsOpen['@other'] ? other.map(teamsNodeHtml).join('') : '');
+  if (!workingFilter) html += teamSetupLineHtml();   // admins, when setups are recorded: "Team setup: N teams recorded <date> · Undo"
   return html || '<div class="empty">No agent is working right now.</div>';
 }
 
@@ -2610,7 +2616,7 @@ function agentRowHtml(a, opts) {
   const viaWorkers = !!(opts && opts.active) && !done && !isBusy(a.name);
   const n = unread[a.name] || 0;
   const s = live[a.name];
-  const question = !done && !!(s && s.pendingQuestion);
+  const question = !done && !!(s && (s.pendingQuestion || (s.offerPending && isAdmin())));   // the Set up teams offer waiting in the lead's chat: the same "waiting for your answer" marker
   const working = !done && (isBusy(a.name) || viaWorkers);
   const dotCls = question ? ' question' : working ? ' busy' : statusKnown ? ' idle' : '';
   const bgState = done || viaWorkers ? 'free' : bgStateOf(a.name, working, question);
@@ -2674,6 +2680,160 @@ async function buildTeamStart(name) {
     buildTeamPending.delete(name);
     paintStatus();
   }
+}
+
+// ── Set up teams and Undo team setup (admins), as on the desktop page ──
+// GET /api/team-setup: { offer, lead: { name, display }, setups: [{ id, at, main, count }], anyTeam }. The one-time offer is a card above the
+// message box in the lead's chat (#team-offer-slot) while offer is 'pending'; it goes when any device answers (the lead's offerPending
+// status changes, or the page loads again). Nothing here has a timeout. "Show the Teams tab" off (settings sidebarTeams) hides the Teams switch.
+let teamSetup = { offer: null, lead: null, setups: [] };
+let teamSetupStarting = false;
+const teamSetupRecent = new Set();   // setup ids recorded while this page was open (team_setup_recorded)
+let teamSetupLoadTimer = 0;
+function teamSetupLeadDisplay() {
+  const l = teamSetup.lead;
+  if (l && (l.display || l.name)) return l.display || displayName(l.name);
+  const a = agents.find((x) => x && x.lead);
+  return a ? (a.display || a.name) : 'Your lead';
+}
+function teamSetupBusy() { return teamSetupStarting || Object.values(live).some((s) => s && s.settingUpTeams); }
+function teamSetupLines(list) { return (list || []).reduce((n, s) => n + (Math.max(0, Math.floor(Number(s && s.count)) || 0)), 0); }
+function teamSetupDate(at) {
+  const d = new Date(at);
+  return Number.isNaN(d.getTime()) ? '' : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+function teamSetupLineHtml() {
+  if (!isAdmin() || !teamSetup.setups.length) return '';
+  const n = teamSetup.setups.length;
+  const latest = teamSetup.setups.reduce((m, s) => (Date.parse(s.at) > Date.parse(m.at) ? s : m), teamSetup.setups[0]);
+  const date = teamSetupDate(latest.at);
+  return `<div class="tm-setup-line">Team setup: ${n} team${n === 1 ? '' : 's'} recorded${date ? ' ' + esc(date) : ''} · <button type="button" class="tm-setup-undo" data-team-undo>Undo</button></div>`;
+}
+function teamSetupEmptyHtml() {
+  const on = teamSetupBusy();
+  return `${esc(teamSetupLeadDisplay())} can look at how your agents already work together and propose teams. Nothing changes until you approve a team. ` +
+    `<button type="button" class="tm-setup-btn" data-team-setup${on ? ' disabled aria-disabled="true"' : ''}>${on ? 'Setting up…' : 'Set up teams'}</button>`;
+}
+function teamSetupOfferHtml() {
+  const lead = esc(teamSetupLeadDisplay());
+  const btn = (choice, label) => `<button type="button" class="opt" data-team-offer="${choice}"><strong>${label}</strong></button>`;
+  return `<div class="question team-offer-card" role="group" aria-label="${lead} has a suggestion"><div class="qh"><b>${lead} has a suggestion</b></div>` +
+    `<div class="qt">${lead} can look at how your agents already work together and suggest teams for the Teams tab. Nothing changes in how your agents work unless you approve a team.</div>` +
+    `${btn('show', 'Show me the proposal')}${btn('not_now', 'Not now')}${btn('never', "Don't ask again")}</div>`;
+}
+function teamSetupUndoRows() {
+  const now = Date.now();
+  return teamSetup.setups.filter((s) => s && s.id && (teamSetupRecent.has(s.id) || now - Date.parse(s.at) < 30 * 60 * 1000));
+}
+// The slot above the message box: the offer card and "Undo this team" rows, only in the lead's chat and only for admins.
+function teamSetupSlotPaint() {
+  const slot = $('team-offer-slot');
+  if (!slot) return;
+  const lead = teamSetup.lead && teamSetup.lead.name;
+  let html = '';
+  if (isAdmin() && lead && current === lead && screen === 'chat') {
+    if (teamSetup.offer === 'pending') html += teamSetupOfferHtml();
+    for (const s of teamSetupUndoRows()) {
+      const who = esc(s.main ? displayName(s.main) : 'This');
+      const n = Math.max(0, Math.floor(Number(s.count)) || 0);
+      html += `<div class="team-undo-row">${who} team recorded (${n} reporting line${n === 1 ? '' : 's'}) <button type="button" class="team-undo-btn" data-team-undo-id="${esc(String(s.id))}">Undo this team</button></div>`;
+    }
+  }
+  if (slot.dataset.shown === html) return;
+  slot.dataset.shown = html;
+  slot.innerHTML = html;
+  slot.hidden = !html;
+}
+function teamSetupPaint() {
+  teamSetupSlotPaint();
+  if (screen === 'agents' && teamsView() === 'teams') renderAgents();
+}
+function teamSetupApply(d) {
+  if (!d || typeof d !== 'object') return;
+  teamSetup = { offer: d.offer || null, lead: d.lead && typeof d.lead === 'object' ? d.lead : null, setups: Array.isArray(d.setups) ? d.setups : [] };
+  const ls = teamSetup.lead && live[teamSetup.lead.name];
+  if (teamSetup.offer !== 'pending' && ls && ls.offerPending) setLive(teamSetup.lead.name, { offerPending: false });   // answered: the row's marker goes with the card
+  teamSetupPaint();
+}
+async function teamSetupLoad() {
+  if (!isAdmin()) return;
+  try {
+    const r = await api('/api/team-setup');
+    if (r.ok) teamSetupApply(await r.json());
+  } catch { /* the offer and the Undo line wait for the next refresh */ }
+}
+function teamSetupLoadSoon() {
+  if (teamSetupLoadTimer) return;
+  teamSetupLoadTimer = setTimeout(() => { teamSetupLoadTimer = 0; teamSetupLoad(); }, 300);
+}
+// "Show the Teams tab" (settings sidebarTeams, on unless an admin switched it off; set on the desktop page): off hides the Teams switch.
+async function teamsTabLoad() {
+  if (!isAdmin()) return;
+  try {
+    const r = await api('/api/settings');
+    if (!r.ok) return;
+    const d = await r.json();
+    teamsTabOn = d.sidebarTeams !== false;
+    teamsPaintSwitch();
+    if (!teamsTabOn && screen === 'agents') renderAgents();
+  } catch { /* the tab stays as it was */ }
+}
+async function teamSetupAnswer(choice) {
+  try {
+    const r = await api('/api/team-setup/offer', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ choice }) });
+    let d = null;
+    try { d = await r.json(); } catch { d = null; }
+    if (!r.ok) throw new Error((d && d.error) || `HTTP ${r.status}`);
+    teamSetup = { ...teamSetup, offer: (d && d.offer) || (choice === 'show' ? 'accepted' : choice), lead: (d && d.lead && typeof d.lead === 'object') ? d.lead : teamSetup.lead };
+    teamSetupPaint();   // the card goes now; the other devices lose it on their next status refresh
+  } catch (err) { toast(`Could not send your answer: ${err.message}`, 5000); }
+  teamSetupLoadSoon();
+}
+async function teamSetupStart() {
+  if (teamSetupBusy()) return;
+  teamSetupStarting = true;
+  teamSetupPaint();
+  try {
+    const r = await api('/api/team-setup/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    let d = null;
+    try { d = await r.json(); } catch { d = null; }
+    if (r.status === 202 && d) { const lead = d.lead && (d.lead.name || d.lead); navigate('chat', lead || (teamSetup.lead && teamSetup.lead.name)); return; }   // the proposal arrives in the lead's chat
+    toast((d && d.error) || `Could not start setting up teams (${r.status})`, 5000);
+  } catch (err) {
+    toast(`Could not start setting up teams: ${err.message}`, 5000);
+  } finally {
+    teamSetupStarting = false;
+    teamSetupPaint();
+  }
+}
+// { all: true } (the line at the bottom of the Teams list) or { id } (one team, from the lead's confirmation): ask first, then undo.
+async function teamSetupUndo(which) {
+  const all = !!(which && which.all);
+  const n = all ? teamSetupLines(teamSetup.setups) : teamSetupLines(teamSetup.setups.filter((s) => s.id === (which && which.id)));
+  if (!confirm(`Remove these ${n} reporting lines?`)) return;
+  try {
+    const r = await api('/api/team-setup/undo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(all ? { all: true } : { id: which.id }) });
+    let d = null;
+    try { d = await r.json(); } catch { d = null; }
+    if (!r.ok) throw new Error((d && d.error) || `HTTP ${r.status}`);
+    const kept = Array.isArray(d && d.keptChanged) ? d.keptChanged.length : Math.max(0, Math.floor(Number(d && d.keptChanged)) || 0);
+    if (kept > 0) toast(`${kept} reporting line${kept === 1 ? ' was' : 's were'} changed by hand since and stayed as set.`, 6000);
+  } catch (err) { toast(`Could not undo: ${err.message}`, 5000); }
+  try { await loadAgents(); } catch { /* the list refreshes on its next tick */ }   // the reporting lines changed
+  await teamSetupLoad();   // the line leaves; with no lines left the list shows the empty state again
+}
+// Taps in the slot (the offer's answers, "Undo this team"): one listener on the slot, wired at start-up.
+function teamSetupWire() {
+  const slot = $('team-offer-slot');
+  if (!slot) return;
+  slot.addEventListener('click', (e) => {
+    const t = e.target && e.target.closest ? e.target : null;
+    if (!t) return;
+    const ans = t.closest('[data-team-offer]');
+    if (ans) { e.preventDefault(); teamSetupAnswer(ans.dataset.teamOffer); return; }
+    const un = t.closest('[data-team-undo-id]');
+    if (un) { e.preventDefault(); teamSetupUndo({ id: un.dataset.teamUndoId }); }
+  });
 }
 
 // The Active section at the top of the agent list: state, the setting, the hold while a finger is on the list.
@@ -7894,6 +8054,7 @@ async function openChat(name) {
   if (!same && tsnSheetFor) closeToolsSheet();   // the full screen of another chat's calls
   current = name; if (typeof voiceHintSync === 'function') voiceHintSync();   // a chat switch takes the hint down
   try { if (window.HandOffCard && typeof HandOffCard.follow === 'function') HandOffCard.follow(); } catch { /* the timer tick follows */ }   // the "Working on" panel follows the chat at once
+  teamSetupSlotPaint();   // the lead's chat: the Set up teams offer, the Undo for a team just set up
   localStorage.setItem('hub-mobile-last', name);
   voiceStatusRefresh();   // the mic button shows only while the hub voice is on and ready
   researchLinePaint(); researchLineLoad(name);   // the deep research progress line
@@ -13476,6 +13637,8 @@ function connectEvents() {
   });
   on('ask_user_done', (ev) => { if (!ev) return; pendingQuestionsByAgent.delete(ev.agent); if (ev.request_id) closeQuestion(ev.request_id, ev.result); });
   on('ask_user_done', (ev) => { setLive(ev.agent, { pendingQuestion: false }); paintStatus(); });
+  // A Do it on a set-up card wrote reporting lines: the lead's chat shows "Undo this team" at once; the lists follow.
+  on('team_setup_recorded', (ev) => { if (!ev) return; if (ev.id) teamSetupRecent.add(String(ev.id)); loadAgents(); teamSetupLoadSoon(); });
   // The hands-free call listens to the same stream (each handler ignores everything unless a call is up for that agent).
   on('turn_start', voiceCallTurnStart);
   on('turn_delta', voiceCallTurnDelta);
@@ -13832,7 +13995,7 @@ function unhideHubTurn(t) {
 function onTurnStart(ev) {
   if (ev && ev.agent) activeTurnStart(openTurns, ev.agent, ev.turnId);
   if (ev.turnId && hubTurns[ev.turnId]) return;   // replayed after a reconnect (?since=): the turn is already followed
-  setLive(ev.agent, { busy: true, busySince: ev.startedAt || null, activity: ev.activity || originLabel(ev.origin) });
+  setLive(ev.agent, { busy: true, busySince: ev.startedAt || null, activity: ev.activity || originLabel(ev.origin), ...(ev.settingUpTeams || (ev.origin && ev.origin.kind === 'team_setup') ? { settingUpTeams: true } : {}) });
   noteTurnOrigin(ev.agent, ev.turnId, ev.origin, ev.startedAt);
   const own = ev.origin?.kind === 'user' && ownTurnFor(ev.agent);
   if (chatOpenFor(ev.agent) && !streams.has(ev.agent) && !own) {
@@ -13873,7 +14036,7 @@ function onTurnStart(ev) {
     const b = card ? withRenderTarget(card.body, paint) : paint();
     // Main view: a hub-started turn is followed as ever but not shown (until its reply is marked for the owner).
     let hiddenEls = null;
-    if (viewNow() === 'main' && chatViewIsHubOrigin(ev.origin) && ev.origin.kind !== 'build_team') {   // Build Team: the person pressed it, so it stays in view
+    if (viewNow() === 'main' && chatViewIsHubOrigin(ev.origin) && ev.origin.kind !== 'build_team' && ev.origin.kind !== 'team_setup') {   // Build Team and Set up teams: the person pressed it, so it stays in view
       if (card) card.wrap.classList.add('chat-view-hidden');
       else {
         hiddenEls = [];
@@ -14265,7 +14428,10 @@ function wire() {
     if (b) teamsPick(b.dataset.view === 'teams' ? 'teams' : 'agents');
   });
   teamsPaintSwitch();
+  teamSetupWire();
   $('agents-list').addEventListener('click', (e) => {
+    if (e.target.closest('[data-team-setup]')) { if (!e.target.closest('[data-team-setup]').disabled) teamSetupStart(); return; }   // empty state: Set up teams
+    if (e.target.closest('[data-team-undo]')) { teamSetupUndo({ all: true }); return; }   // bottom line: Undo
     const bt = e.target.closest('[data-build-team]');
     if (bt) { if (!bt.disabled) buildTeamStart(bt.dataset.buildTeam); return; }   // before the row: a Build button never opens the chat itself
     const f = e.target.closest('.tm-fold, [data-tm-sec]');
@@ -14480,6 +14646,7 @@ async function loadMe() {
       { const ti = $('menu-tiger'); if (ti) ti.hidden = !(hubMe && hubMe.isAdmin === true); }
       // (the Tiger Teams link above: admins only, the page and its API are admin-only; likewise the Subscriptions entry)
       { const su = $('menu-subs'); if (su) su.hidden = !(hubMe && hubMe.isAdmin === true); }
+      if (isAdmin()) { teamsTabLoad(); teamSetupLoad(); }   // "Show the Teams tab", the Set up teams offer and the setups that can be undone (admins only)
       if (typeof simpleMenuHide === 'function') simpleMenuHide();   // "Switch to Simple" only for a real account (not the legacy single-password login)
       if (typeof simpleToggleSync === 'function') simpleToggleSync();   // the Simple view switch (and Simple's theme button) only for a real account
       typeof menuGroupsSync === 'function' && menuGroupsSync();
