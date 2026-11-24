@@ -6,6 +6,8 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
+- **The Teams list is easier to read: counted sections, a size pill and one line per member.** On the computer, on the phone and in Simple, the list now has headers with counts, such as "Teams · 3", "No team yet · 2", "Working alone · 1" and "Shared specialists · 4", and each header folds (on the phone the headers stay at the top while you scroll, and your Maestro remembers what you folded on each device). A small pill right after a boss's name, such as "12 agents ▸" on the phone, shows the team's size and opens or folds the team, and tapping anywhere else on the row opens the chat. Team members take one line each, and a main agent gets a second line only when it is replying, has work going on in the background or offers Build team; a leader's workers start folded, and Simple now shows them too.
+- **Phone: the voice tip steps aside while you type.** The small tip about talking to your agent is hidden while the message box has text or the keyboard is up, and comes back when the box is empty again.
 - **Works alone.** When your lead finds that a main agent needs no team, your Maestro remembers it: that agent's row says "Works alone" instead of offering Build team, and Build team stays in its menu to ask again. The note clears when the agent gets a team.
 - **Undo all after Set up teams undoes every listed team in one step.** One press takes back all the teams in the list together instead of one at a time.
 - **Simple mode says how many leaders and agents a main agent has.** The count on each main agent now shows both its team leaders and its agents.

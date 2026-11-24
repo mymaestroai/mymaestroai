@@ -481,87 +481,109 @@
     .team-undo-x { flex: none; margin-left: auto; background: none; border: 0; padding: 0 6px; font: inherit; line-height: 1.4; color: var(--text-dim); cursor: pointer; }
     .team-undo-list { margin: 0 0 4px; padding: 2px 12px; border: 1px solid var(--border); border-radius: 8px; font-size: 0.8rem; color: var(--text-dim); }
     .team-undo-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 2px 0; }
-    .teams-section { margin-bottom: 10px; }
-    .teams-title { display: flex; align-items: center; gap: 6px; padding: 4px 2px; font-size: 0.7rem; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.04em; cursor: pointer; user-select: none; }
-    button.teams-title-fold { width: 100%; border: 0; background: none; font-family: inherit; text-align: left; }
+    /* Teams list (redesign). Offsets are px from the left edge of #teams-list's content box (the mock-ups' x minus 12), sidebar 240 / narrow container (sidebar 160) / Simple:
+       main card 46 high: dot 10, icon 26, name 54 (narrow: dot 10, name 26); member 26: dot 44, icon 54, name 76 (narrow 26 / - / 38); leader card 34 from 40: dot 49, icon 60, name 84 (narrow card 26, dot 30, name 40);
+       a leader's workers 26: dot 74, icon 84, name 106 (narrow 40 / - / 50). Joining lines at 36 and 69 (narrow 14 and 33). Simple: main 48: dot 12, icon 30, name 64; member 30: dot 52, icon 64, name 90; leader 40: dot 52, icon 64, name 94;
+       a leader's workers 30: dot 82, icon 94, name 120; lines at 42 and 75. Every member's icon starts at or right of its boss's name x. */
+    html { --tms-fold: 36px; }   /* the tap area of every fold control (the pill): at least 36 x 36 while the pill looks small */
+    #teams-list { padding: 0 2px; }
+    .teams-section { margin-bottom: 6px; }
+    .teams-title { display: flex; align-items: center; gap: 6px; height: 30px; padding: 0 4px; font-size: 0.7rem; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.04em; white-space: nowrap; user-select: none; }
+    button.teams-title-fold { width: 100%; border: 0; background: none; font-family: inherit; text-align: left; cursor: pointer; }
     .teams-glyph { flex: none; width: 14px; text-align: center; font-size: 0.5rem; color: var(--text-dim); transition: transform 0.15s; }
     .teams-glyph.open { transform: rotate(90deg); }
-    .teams-title:focus-visible, .teams-fold:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 4px; }
-    /* One leader = one block (.teams-block): its row, then its own workers in .teams-kids, joined by a line down the left. */
-    /* Indent model (px): main row box starts at 22 (fold 18 + gap 4), its icon at 53, so every deeper row's ICON sits at least --tm-step (18) right of its boss's icon:
-       direct reports at 71 (leaders' content starts at --tm-bar 40 + border 1 + --tm-gap 9 = 50, then box border 1 + padding 8 + dot 6 + gap 6 + 0 -> 71 for a worker, 79 for a leader),
-       a leader's workers at 97+. The line hangs down the left of each group. */
-    html { --tm-step: 18px; --tm-bar: 40px; --tm-gap: 9px; --tm-kid-bar: 17px; --tm-deep-bar: 14px; --tms-bar: 52px; --tms-kid-bar: 37px; --tms-fold: 16px; }   /* --tms-*: Simple's Teams indent (see the Simple block): a direct report's icon starts at or right of the main's name, a leader's workers at or right of the leader's name */
-    .teams-leaders { margin-left: var(--tm-bar); padding-left: var(--tm-gap); border-left: 1px solid var(--border-strong); }
-    .teams-line.rank-leader > .teams-fold.none { display: none; }
-    .teams-fold-leader { display: none; }   /* a leader's fold arrow belongs to Simple (it opens the leader's workers there); Advanced shows every worker */
-    .teams-block.rank-leader { margin-bottom: 8px; }
-    .teams-kids { margin-left: var(--tm-kid-bar); padding-left: 8px; border-left: 1px solid var(--border-strong); }
-    .teams-block .teams-block > .teams-kids { margin-left: var(--tm-deep-bar); }
+    .teams-title:focus-visible, .teams-pill-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 4px; }
+    /* One leader = one block (.teams-block): its row, then its own workers in .teams-kids. The joining line runs down the left of every group (.teams-block::before) with a short tick to each row (.teams-line::before). */
+    html { --tm-line: var(--border-strong); }
+    .teams-leaders { margin-left: 36px; padding-left: 1px; }
+    .teams-kids { margin-left: 32px; padding-left: 1px; }
+    .teams-block .teams-block > .teams-kids { margin-left: 20px; }
+    .teams-block { position: relative; }
+    .teams-block::before { content: ''; position: absolute; left: -1px; top: 0; bottom: 0; width: 1px; background: var(--tm-line); }
+    .teams-block:last-child::before { bottom: auto; height: 13px; }   /* the last row of a group ends the line at its own middle */
+    .teams-block.rank-leader:last-child::before { height: 17px; }
+    .teams-block.rank-leader { padding-bottom: 2px; }
+    .teams-block > .teams-line::before { content: ''; position: absolute; left: -1px; top: 50%; width: 6px; height: 1px; background: var(--tm-line); }
+    .teams-leaders > .teams-block.rank-leader > .teams-line::before { width: 2px; }
+    .teams-kids > .teams-block > .teams-line::before { width: 3px; }
+    .teams-line { position: relative; display: flex; align-items: center; }
+    .teams-line.rank-main { margin-bottom: 4px; }
+    .teams-line.has-kids::after { content: ''; position: absolute; left: 36px; top: 34px; bottom: -4px; width: 1px; background: var(--tm-line); }   /* from under the main's icon down to the first row of its team */
+    .teams-line.rank-leader.has-kids::after { left: 32px; top: 26px; bottom: 0; }
     .teams-row {
-      width: 100%; margin-bottom: 4px; padding: 8px 10px 8px 14px; position: relative;
+      flex: 1 1 auto; min-width: 0; position: relative; display: flex; flex-direction: row; align-items: center; gap: 0; height: 46px; margin: 0; padding: 0 7px 0 9px;
       background: var(--bg-card); border: 1px solid var(--border); color: var(--text-dim); cursor: pointer;
-      text-align: left; transition: all 0.15s; display: flex; flex-direction: row; align-items: center; gap: 8px;
-      border-radius: 8px; font: inherit;
+      text-align: left; transition: all 0.15s; border-radius: 8px; font: inherit; --dot: 8px;
     }
     .teams-row:hover { color: var(--text); border-color: var(--accent); background: var(--agent-btn-hover-bg); }
-    .teams-row, .teams-helpers { --d: 0; }   /* --d = depth, set on each row: 1 -> 18px, 2 -> 36px, then +18px each */
-    .teams-row { margin-left: calc(var(--d) * 18px); width: calc(100% - var(--d) * 18px); }
-    .teams-line { display: flex; align-items: center; gap: 4px; margin-bottom: 4px; }
-    .teams-line > .teams-row { flex: 1 1 auto; min-width: 0; width: auto; margin: 0; }
-    .teams-fold { flex: none; width: 18px; height: 18px; padding: 0; border: 0; background: none; font: inherit; line-height: 1; text-align: center; font-size: 0.55rem; color: var(--text-dim); transition: transform 0.15s; }
-    button.teams-fold { cursor: pointer; }
-    .teams-fold.open { transform: rotate(90deg); }
-    .teams-fold.none { visibility: hidden; }
-    .teams-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: transparent; }
+    .teams-row, .teams-helpers { --d: 0; }
+    .teams-dot { flex: none; width: var(--dot); height: var(--dot); margin-right: 8px; border-radius: 50%; background: transparent; }
     .teams-dot.live-idle { background: var(--border-strong); }
     .teams-dot.live-busy { background: var(--warning); animation: pulse 1s infinite; }
     .teams-dot.live-question { background: var(--blue); animation: pulse 1.6s infinite; }
-    .teams-row .agent-icon { font-size: 1.1rem; flex-shrink: 0; }
-    .teams-info { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
-    .teams-row .name { font-weight: 600; font-size: 0.85rem; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .teams-row .name { display: flex; align-items: center; }
-    .teams-row .name-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-    .teams-row .name .lead-badge { flex: none; }
-    .teams-row .lead-badge { margin-left: 5px; font-size: 0.8rem; filter: drop-shadow(0 0 2px var(--agent-btn-lead-badge-filter)); }
-    .teams-sub { font-size: 0.65rem; color: var(--text-tertiary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #teams-list .teams-dot.bg-work:not(.live-busy):not(.live-question) { box-sizing: border-box; width: var(--dot); height: var(--dot); border-width: 2px; }   /* the ring keeps the dot's own footprint: no row shifts when the state changes */
+    .teams-row .agent-icon { flex: none; width: 20px; margin-right: 8px; text-align: center; font-size: 18px; line-height: 1; }
+    .teams-info { display: flex; flex-direction: column; justify-content: center; gap: 1px; flex: 1 1 auto; min-width: 0; }
+    .teams-row .name { display: flex; align-items: center; min-width: 0; height: 18px; font-size: 13.5px; font-weight: 600; line-height: 18px; color: var(--text); white-space: nowrap; }
+    .teams-row .name-text { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }   /* the name truncates first; the pill never shrinks */
+    .teams-row .name .lead-badge { flex: none; margin-left: 3px; font-size: 10px; filter: drop-shadow(0 0 2px var(--agent-btn-lead-badge-filter)); }
+    /* The team-size pill: a small button ("12 ▾") that folds the team (or a leader's workers). The tap area is --tms-fold (36 px) tall and wide, the pill itself looks 18 px. */
+    .teams-pill-btn { position: relative; z-index: 1; flex: none; display: flex; align-items: center; margin: 0 0 0 6px; padding: 0; border: 0; background: none; font: inherit; color: inherit; cursor: pointer; }
+    .teams-pill-btn::before { content: ''; position: absolute; left: 50%; top: 50%; width: max(calc(100% + 6px), var(--tms-fold)); height: var(--tms-fold); transform: translate(-50%, -50%); }   /* the invisible tap area: --tms-fold tall and wide, centred on the small pill, without pushing the name */
+    .teams-info:has(.teams-pill-btn) { padding-right: var(--tms-pill-gap); }   /* the name truncates first: always --tms-pill-gap between the pill's right edge and the row's menu button (or the row's right padding), so the pill's tap area never reaches the ⋯ */
+    html { --tms-pill-gap: 10px; }
+    .teams-pill { display: flex; align-items: center; height: 18px; padding: 0 6px; border: 1px solid var(--border-strong); border-radius: 9px; font-size: 10.5px; font-weight: 400; color: var(--text-dim); white-space: nowrap; }
+    .teams-pill-btn:hover .teams-pill, .teams-pill-btn:focus-visible .teams-pill { border-color: var(--accent); color: var(--text); }
+    .teams-live { flex: 1 1 0; min-width: 0; margin-left: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; font-weight: 400; color: var(--warning); }   /* what a replying member is doing, after its name */
+    .teams-sub { font-size: 0.65rem; line-height: 14px; height: 14px; color: var(--text-tertiary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .teams-sub.busy { color: var(--warning); }
-    .teams-sub.teams-sub-build { overflow: visible; text-overflow: clip; }   /* 'No team yet · Build team' is ONE line, never wrapped (the row keeps its height); the link is never split or cut: where the whole line does not fit, the container query below keeps just 'Build team' */
+    .teams-sub.teams-sub-build { overflow: visible; text-overflow: clip; }   /* the Build team link is never cut or wrapped (the row keeps its height) */
     .teams-sub.teams-sub-build .build-team-link { white-space: nowrap; }
     .teams-helpers { margin: 0 0 4px 0; padding: 2px 10px; font-size: 0.65rem; color: var(--warning); }
-    /* Three ranks: main (above), leader (0.92 of main), worker (about two thirds of a leader row, quiet, no card) */
-    .teams-row.rank-leader { padding: 6px 8px 6px 12px; }
-    .teams-row.rank-leader .agent-icon { font-size: 1rem; }
-    .teams-row.rank-leader .name { font-size: 0.78rem; }
-    .teams-row.rank-leader .teams-sub { font-size: 0.6rem; }
-    /* A leader's role line and the background line wrap rather than end in "…" (the leader indent leaves the default sidebar short of room). */
-    .teams-row.rank-leader .teams-sub:not(.busy), .teams-bg-line { white-space: normal; overflow: visible; text-overflow: clip; line-height: 1.25; }
-    .teams-line.rank-worker { margin-bottom: 2px; }
-    .teams-line.rank-worker > .teams-fold.none { display: none; }
-    .teams-row.rank-worker { padding: 3px 6px 3px 8px; gap: 6px; background: none; border-color: transparent; }
+    /* A shared specialist (or Other agent): a one-line card */
+    .teams-row.is-spec { height: 34px; --dot: 7px; }
+    .teams-row.is-spec .teams-dot { margin-right: 6px; }
+    .teams-row.is-spec .agent-icon { width: 18px; margin-right: 6px; font-size: 16px; }
+    .teams-row.is-spec .name { height: 16px; font-size: 12.5px; line-height: 16px; }
+    /* Three ranks: main (above), leader (a card one step smaller), worker / member (a quiet line, no card) */
+    .teams-row.rank-leader { height: 34px; margin-left: 3px; padding: 0 3px 0 8px; --dot: 7px; --tms-pill-gap: 5px; }   /* a leader's name needs the room ('Studio Lead' at 12.5px is about 72px): 5px from the pill to the ⋯ instead of 10, and a 3px right padding */
+    .teams-row.rank-leader .teams-dot { margin-right: 4px; }
+    .teams-row.rank-leader .agent-icon { width: 18px; margin-right: 6px; font-size: 16px; }
+    .teams-row.rank-leader .name { height: 16px; font-size: 12.5px; line-height: 16px; }
+    .teams-row.rank-worker { height: 26px; padding: 0 7px 0 6px; background: none; border-color: transparent; --dot: 6px; }
     .teams-row.rank-worker:hover { background: var(--agent-btn-hover-bg); border-color: var(--border); }
-    .teams-row.rank-worker .agent-icon { font-size: 0.85rem; }
-    .teams-row.rank-worker .teams-info { gap: 0; }
-    .teams-row.rank-worker .name { font-size: 0.62rem; font-weight: 500; color: var(--text-dim); }
-    .teams-row.rank-worker .teams-sub { font-size: 0.55rem; }
-    .teams-row.rank-worker .teams-dot { width: 6px; height: 6px; }
-    /* A narrow sidebar (dragged down towards its 160px minimum): names get the room, the nesting stays readable. */
+    .teams-row.rank-worker .teams-dot { margin-right: 4px; border-width: 1.5px; }
+    .teams-row.rank-worker .agent-icon { width: 16px; margin-right: 6px; font-size: 13.5px; }
+    .teams-row.rank-worker .name { height: 14px; font-size: 11px; line-height: 14px; font-weight: 500; color: var(--text-dim); }
+    .teams-kids .teams-row.rank-worker { padding-left: 3px; }   /* a leader's workers: icon 84, name 106 */
+    #teams-list .teams-row.rank-worker .teams-dot.bg-work:not(.live-busy):not(.live-question) { border-width: 1.5px; }
+    .teams-row .agent-menu-btn { width: 16px; margin-left: auto; margin-right: 0; }
+    /* A narrow sidebar (dragged down towards its 160px minimum): names get the room, icons go, the nesting stays readable. The container is the list's content box (sidebar - 25px). */
     #teams-list { container-type: inline-size; }
-    .teams-sub .sub-narrow { display: none; }
-    @container (max-width: 190px) {   /* the default 240px sidebar gives the list about 216px: full rows; only a sidebar dragged narrower gets this */
-      .teams-sub .sub-wide { display: none; }
-      .teams-sub .sub-narrow { display: inline; }
-      .teams-leaders { margin-left: 10px; --tms-bar: 10px; }
-      .teams-kids { margin-left: 10px; padding-left: 4px; --tms-kid-bar: 10px; }
-      .teams-block .teams-block > .teams-kids { margin-left: 6px; }
-      .teams-row .agent-icon, .teams-row.rank-leader .agent-icon, .teams-row.rank-worker .agent-icon, html.mm-simple #teams-list .teams-row .agent-icon { display: none !important; }   /* ONE rule for every rank (and Simple's sized icons): no row keeps its icon at this width */
-      .teams-row { gap: 5px; }
-      .teams-row.rank-leader { padding-left: 6px; }
-      .teams-row .agent-menu-btn { width: 16px; min-width: 16px; padding: 0; }
+    @container (max-width: 186px) {   /* the default 240px sidebar gives the list about 215px: full rows; only a sidebar dragged narrower gets this */
+      .teams-row .agent-icon, .teams-row.rank-leader .agent-icon, .teams-row.rank-worker .agent-icon, .teams-row.is-spec .agent-icon { display: none !important; }   /* ONE rule for every rank: no row keeps its icon at this width */
+      .teams-leaders { margin-left: 14px; }
+      .teams-kids { margin-left: 18px; }
+      .teams-line.has-kids::after { left: 14px; }
+      .teams-line.rank-leader.has-kids::after { left: 18px; }
+      .teams-leaders > .teams-block > .teams-line::before { width: 10px; }
+      .teams-leaders > .teams-block.rank-leader > .teams-line::before { width: 10px; }
+      .teams-kids > .teams-block > .teams-line::before { width: 5px; }
+      .teams-row.rank-leader { margin-left: 11px; padding-left: 3px; --dot: 6px; }
+      .teams-row.rank-worker { padding-left: 10px; }
+      .teams-row.rank-worker .teams-dot { margin-right: 6px; }
+      .teams-row.rank-worker .name { font-size: 10.5px; }
+      .teams-kids .teams-row.rank-worker { padding-left: 5px; }
+      .teams-kids .teams-row.rank-worker .teams-dot { margin-right: 4px; }
+      .teams-row.is-spec .teams-dot { margin-right: 7px; }
+      /* 160px sidebar: the name gets the room. The pill sits 4px after the name and 4px before the ⋯; the tap box stays 36 tall and as wide as fits: it grows towards the name, never over the ⋯ */
+      .teams-row, .teams-row.rank-leader { --tms-pill-gap: 4px; }
+      .teams-pill-btn { margin-left: 4px; }
+      .teams-pill { padding: 0 4px; }   /* a two-digit pill ("12 ▸") leaves the name its full width at this size */
+      .teams-pill-btn::before { left: auto; right: calc(var(--tms-pill-gap) * -1); transform: translateY(-50%); width: max(calc(100% + var(--tms-pill-gap) + 4px), var(--tms-fold)); }
     }
     /* 'No team yet · Build team' needs about 218px of list on its one line (measured: 216 overflows by 1px, 218 fits). Below that the words before the link go and the link stays whole: the default 240px sidebar (list about 216px) shows just 'Build team'. */
     @container (max-width: 219px) { .tbs-prefix { display: none; } }
-    .teams-sub-simple { display: none; }
     .teams-bg-line { color: var(--bg-work-ring); }
 
     /* Multi-user: owner switcher, signed-in chip, account menu, security dialog */
@@ -746,7 +768,6 @@
     .build-team-btn { align-self: flex-start; margin-top: 4px; padding: 3px 10px; border: 1px solid var(--accent); border-radius: 6px; background: transparent; color: var(--accent); font: inherit; font-size: 0.7rem; font-weight: 600; cursor: pointer; }
     .build-team-btn:hover:not(:disabled) { background: var(--accent); color: var(--on-color-text); }
     .build-team-btn:disabled { border-color: var(--border-strong); opacity: 0.7; cursor: default; }
-    .teams-row .agent-menu-btn { margin-left: auto; margin-right: -4px; }
     .agent-row-menu {
       position: fixed; z-index: 10000; min-width: 150px; max-width: calc(100vw - 8px); display: flex; flex-direction: column; gap: 2px; padding: 4px;
       background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 10px 30px var(--shadow-color-pop); color: var(--text);
@@ -3386,35 +3407,49 @@
     html.mm-simple .simple-view-switch button { flex: 1; height: 30px; border: 0; border-radius: 9px; background: none; color: var(--sm-sec); font: inherit; font-size: 13px; cursor: pointer; }
     html.mm-simple .simple-view-switch button[aria-pressed="true"] { background: var(--sm-sel); color: var(--sm-text); }
     html.mm-simple #teams-panel { padding: 10px 0 8px; }
-    html.mm-simple #teams-list .teams-line.deep, html.mm-simple #teams-list .teams-row.deep, html.mm-simple #teams-list .teams-kids, html.mm-simple #teams-list .teams-helpers { display: none !important; }   /* Simple: no workers */
-    html.mm-simple #teams-list .teams-row.rank-leader { min-height: 38px; padding: 0 10px; gap: 8px; font-size: 14px; }
-    html.mm-simple #teams-list .teams-row.rank-leader .name { font-size: 14px; }
-    html.mm-simple #teams-list .teams-row.rank-leader .agent-icon { font-size: 15px; width: 22px; }
-    html.mm-simple #teams-list .teams-row.rank-worker { min-height: 30px; padding: 0 12px; font-size: 12.5px; gap: 10px; }   /* Simple ranks: main 15px name / 17px icon / 42px row / .85rem sub; leader 14 / 15 / 38 / .8rem; worker 12.5 / 13 / 30 / .72rem */
-    html.mm-simple #teams-list .teams-row.rank-worker .name { font-size: 12.5px; font-weight: 400; color: var(--text-dim); }
-    html.mm-simple #teams-list .teams-row.rank-worker .agent-icon { font-size: 13px; width: 20px; }
-    html.mm-simple #teams-list .teams-row.rank-main .teams-sub { font-size: 0.85rem; }
-    html.mm-simple #teams-list .teams-row.rank-leader .teams-sub { font-size: 0.8rem; }
-    html.mm-simple #teams-list .teams-row.rank-worker .teams-sub { font-size: 0.72rem; }
-    html.mm-simple #teams-list .teams-row { min-height: 42px; margin-bottom: 2px; padding: 0 12px; border: 0; border-radius: 12px; background: none; color: var(--sm-text); font-size: 15px; gap: 12px; }
+    html.mm-simple #teams-list { padding: 0; }
+    html.mm-simple #teams-list .teams-helpers { display: none !important; }   /* Simple draws no helper lines (it shows every member of a team, a leader's workers behind the leader's pill) */
+    /* Simple, Teams: the same list as the sidebar, one size up (main 48 / leader 40 / member 30 high; names 15 / 14 / 12.5 px). Every number is the mock-up's x minus 12 (see the Teams CSS above). */
+    html.mm-simple #teams-list .teams-leaders { margin-left: 42px; }
+    html.mm-simple #teams-list .teams-kids { margin-left: 32px; }
+    html.mm-simple #teams-list .teams-block .teams-block > .teams-kids { margin-left: 20px; }
+    html.mm-simple #teams-list .teams-block:last-child::before { height: 15px; }
+    html.mm-simple #teams-list .teams-block.rank-leader:last-child::before { height: 20px; }
+    html.mm-simple #teams-list .teams-block.rank-leader { padding-bottom: 0; }
+    html.mm-simple #teams-list .teams-line.rank-main { margin-bottom: 0; }
+    html.mm-simple #teams-list .teams-block > .teams-line::before { width: 8px; }
+    html.mm-simple #teams-list .teams-leaders > .teams-block.rank-leader > .teams-line::before { width: 8px; }
+    html.mm-simple #teams-list .teams-kids > .teams-block > .teams-line::before { width: 5px; }
+    html.mm-simple #teams-list .teams-line.has-kids::after { left: 42px; top: 36px; bottom: 0; }
+    html.mm-simple #teams-list .teams-line.rank-leader.has-kids::after { left: 32px; top: 31px; bottom: 0; }
+    html.mm-simple #teams-list .teams-row { height: 48px; margin: 0; padding: 0 6px 0 12px; border: 0; border-radius: 12px; background: none; color: var(--sm-text); font-size: 15px; --dot: 8px; }
     html.mm-simple #teams-list .teams-row:hover { background: var(--sm-hover); }
-    html.mm-simple #teams-list .teams-row .name { font-size: 15px; font-weight: 400; color: var(--sm-text); }
-    html.mm-simple #teams-list .teams-row .agent-icon { width: 24px; text-align: center; font-size: 17px; }
-    html.mm-simple #teams-list .teams-row .lead-badge { display: none; }
-    html.mm-simple #teams-list .teams-sub { color: var(--sm-muted); }
-    html.mm-simple #teams-list .teams-sub-adv.has-simple { display: none; }
-    html.mm-simple #teams-list .teams-sub-simple { display: block; }
-    html.mm-simple #teams-list .tbs-prefix { display: none; }   /* Simple's sub-lines use a larger font: a no-team main shows just the 'Build team' link, never cut */
-    /* Simple, Teams: a leader's workers hide behind the leader's own fold arrow (a leader with workers always has one); it opens them nested inside the leader's block, one size smaller, under the connector line.
-       Indent (see --tms-* in html { }): a direct report's icon starts at or right of the main's name, a leader's worker's icon at or right of the leader's name; member names wrap to two lines. */
-    html.mm-simple #teams-list .teams-leaders { margin-left: var(--tms-bar); }
-    html.mm-simple #teams-list .teams-fold-leader { display: block; width: var(--tms-fold); height: 18px; }
-    html.mm-simple #teams-list .teams-line.rank-leader { gap: 2px; }
-    html.mm-simple #teams-list .teams-block.leader-open > .teams-kids { display: block !important; margin-left: var(--tms-kid-bar); }
-    html.mm-simple #teams-list .teams-block.leader-open > .teams-kids > .teams-block > .teams-line.deep, html.mm-simple #teams-list .teams-block.leader-open > .teams-kids > .teams-block > .teams-line > .teams-row.deep { display: flex !important; }
-    html.mm-simple #teams-list .teams-row.rank-leader .name, html.mm-simple #teams-list .teams-row.rank-worker .name { white-space: normal; overflow: visible; }
-    html.mm-simple #teams-list .teams-row.rank-leader .name-text, html.mm-simple #teams-list .teams-row.rank-worker .name-text { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; white-space: normal; overflow-wrap: anywhere; line-height: 1.2; }
+    html.mm-simple #teams-list .teams-dot { margin-right: 10px; }
+    html.mm-simple #teams-list .teams-row .agent-icon { width: 24px; margin-right: 10px; font-size: 17px; }
+    html.mm-simple #teams-list .teams-row .name { height: 20px; font-size: 15px; font-weight: 400; line-height: 20px; color: var(--sm-text); }
+    html.mm-simple #teams-list .teams-row .lead-badge { margin-left: 5px; font-size: 12px; }
+    html.mm-simple #teams-list .teams-sub { height: 16px; font-size: 12.5px; line-height: 16px; color: var(--sm-muted); }
+    html.mm-simple #teams-list .teams-sub.busy { color: var(--warning); }
+    html.mm-simple #teams-list .teams-sub.teams-bg-line { color: var(--bg-work-ring); }
+    html.mm-simple #teams-list .teams-row.is-spec { height: 40px; --dot: 7px; }
+    html.mm-simple #teams-list .teams-row.is-spec .teams-dot { margin-right: 11px; }
+    html.mm-simple #teams-list .teams-row.is-spec .agent-icon { width: 22px; margin-right: 8px; font-size: 15px; }
+    html.mm-simple #teams-list .teams-row.is-spec .name { height: 18px; font-size: 14px; font-weight: 500; line-height: 18px; }
+    html.mm-simple #teams-list .teams-row.rank-leader { height: 40px; margin-left: 0; padding: 0 6px 0 9px; --dot: 7px; }
+    html.mm-simple #teams-list .teams-row.rank-leader .teams-dot { margin-right: 5px; }
+    html.mm-simple #teams-list .teams-row.rank-leader .agent-icon { width: 22px; margin-right: 8px; font-size: 15px; }
+    html.mm-simple #teams-list .teams-row.rank-leader .name { height: 18px; font-size: 14px; font-weight: 500; line-height: 18px; }
+    html.mm-simple #teams-list .teams-row.rank-worker { height: 30px; padding: 0 6px 0 9px; background: none; --dot: 6px; }
+    html.mm-simple #teams-list .teams-row.rank-worker:hover { background: var(--sm-hover); }
+    html.mm-simple #teams-list .teams-row.rank-worker .teams-dot { margin-right: 6px; }
+    html.mm-simple #teams-list .teams-row.rank-worker .agent-icon { width: 20px; margin-right: 6px; font-size: 13px; }
+    html.mm-simple #teams-list .teams-row.rank-worker .name { height: 16px; font-size: 12.5px; font-weight: 400; line-height: 16px; color: var(--text-dim); }
+    html.mm-simple #teams-list .teams-kids .teams-row.rank-worker { padding-left: 6px; }
+    html.mm-simple #teams-list .teams-live { font-size: 11px; }
+    html.mm-simple #teams-list .teams-pill { height: 20px; border-color: var(--sm-border); border-radius: 10px; padding: 0 7px; font-size: 12px; color: var(--sm-sec); }
+    html.mm-simple #teams-list .teams-pill-btn:hover .teams-pill, html.mm-simple #teams-list .teams-pill-btn:focus-visible .teams-pill { border-color: var(--sm-sec); color: var(--sm-text); }
     html.mm-simple #teams-list .teams-title, html.mm-simple #teams-list .teams-empty { color: var(--sm-muted); border-color: var(--sm-border); }
+    html.mm-simple #teams-list .teams-title { height: 32px; font-size: 11px; letter-spacing: 0.06em; padding: 0 2px; }
     html.mm-simple #teams-list .teams-empty strong { color: var(--sm-text); }
 
     /* Top right of the chat area: appearance button and the Simple view switch */

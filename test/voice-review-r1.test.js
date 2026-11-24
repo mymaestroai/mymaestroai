@@ -242,6 +242,7 @@ function page({ me = { user: { id: 'u1' }, isAdmin: true } } = {}) {
   const mic = mkBtn('mic-btn'), call = mkBtn('simple-call-btn');
   const appended = [];
   const row = { offsetTop: 10 };
+  const msg = { id: 'msg-input', value: '' };   // the message box: text in .value, focus = document.activeElement
   const composer = { clientHeight: 60, querySelector: (s) => (s === '.row' ? row : null), appendChild: (el) => { appended.push(el); } };
   const mkEl = (tag) => { const e = { tag, children: [], style: { setProperty() {} }, dataset: {}, attrs: {}, listeners: {}, className: '', id: '', textContent: '',
     setAttribute(k, v) { e.attrs[k] = v; }, addEventListener(t, f) { e.listeners[t] = f; }, append(...c) { e.children.push(...c); }, remove() { e.removed = true; },
@@ -250,9 +251,9 @@ function page({ me = { user: { id: 'u1' }, isAdmin: true } } = {}) {
     console, Number, Math, String, Map, Promise, JSON, Date,
     setTimeout: (fn, ms) => { timers.push({ id: ++tid, fn, ms, live: true }); return tid; },
     clearTimeout: (id) => { const t = timers.find((x) => x.id === id); if (t) t.live = false; },
-    document: { hidden: false, createElement: mkEl }, window: { addEventListener() {} },
+    document: { hidden: false, activeElement: null, createElement: mkEl }, window: { addEventListener() {} },
     localStorage: { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)) },
-    $: (id) => (id === 'mic-btn' ? mic : id === 'simple-call-btn' ? call : id === 'composer' ? composer : null),
+    $: (id) => (id === 'mic-btn' ? mic : id === 'simple-call-btn' ? call : id === 'composer' ? composer : id === 'msg-input' ? msg : null),
     simpleOn: () => false,
     api: async () => ({ ok: true, json: async () => ctx.nextStatus }),
     voiceLocalProbe() {}, voiceSpeakPaint() {}, paintVoiceSheet() {}, voiceCallHangUp() {}, voiceMicCancel() {}, toast() {}, voiceStripPaint() {},
@@ -263,12 +264,13 @@ function page({ me = { user: { id: 'u1' }, isAdmin: true } } = {}) {
   ctx.hubMe = me;
   vm.runInContext(fnSrc(mob, 'voiceOn') + '\n' + pollAndHint + '\n' + fnSrc(mob, 'voiceStatusRefresh'), ctx);
   const set = async (st) => { ctx.nextStatus = st; await ctx.voiceStatusRefresh(); };
-  return { ctx, mic, timers, store, appended, set, live: (ms) => timers.filter((t) => t.live && (ms === undefined || t.ms === ms)), fire: (t) => { t.live = false; t.fn(); } };
+  return { ctx, mic, msg, timers, store, appended, set, live: (ms) => timers.filter((t) => t.live && (ms === undefined || t.ms === ms)), fire: (t) => { t.live = false; t.fn(); } };
 }
 const READY = { enabled: true, ready: true, platformSupported: true };
 
 test('7. phone hint: once showing (key set) it stays through ordinary repaints; close, mic use, chat switch, call, a question, mic not ready still take it away', async () => {
   // Fails on ebb3500a: showing the hint set the seen key, and the next voiceHintSync() found it "seen" and took it down at once.
+  // Typing / focus in the message box is one more reason it goes away: it is put aside (display none) and returns when the box is empty and unfocused: see 7b.
   const p = page(); p.mic.hidden = false;
   await p.set(READY);
   p.fire(p.live(1500)[0]);
@@ -289,6 +291,35 @@ test('7. phone hint: once showing (key set) it stays through ordinary repaints; 
   }
   const d = page(); d.mic.hidden = false; await d.set(READY); d.fire(d.live(1500)[0]);
   d.ctx.voiceHintDone(); assert.ok(d.appended[0].removed, 'mic use / close');
+});
+
+test('7b. phone hint: typing or focus in the message box puts it aside (it sat over the typed lines); it returns once the box is empty and unfocused, and never opens while typing', async () => {
+  // Fails before: nothing watched the message box, so the tip stayed (at its old place) over the first typed lines when the box grew.
+  const p = page(); p.mic.hidden = false;
+  await p.set(READY);
+  p.fire(p.live(1500)[0]);
+  const el = p.appended[0];
+  assert.ok(!el.removed && el.style.display !== 'none', 'showing, box empty and unfocused');
+  p.msg.value = 'first line\nsecond line'; p.ctx.voiceHintSync();
+  assert.strictEqual(el.style.display, 'none', 'text in the box: the tip is out of the way');
+  assert.ok(!el.removed, 'put aside, not destroyed (it was marked seen when shown, so a hide would end it for good)');
+  p.ctx.voiceHintSync(); assert.strictEqual(el.style.display, 'none', 'ordinary repaints keep it aside');
+  p.msg.value = ''; p.ctx.voiceHintSync();
+  assert.strictEqual(el.style.display, '', 'box emptied (and unfocused): the tip is back');
+  p.ctx.document.activeElement = p.msg; p.ctx.voiceHintSync();
+  assert.strictEqual(el.style.display, 'none', 'focus (the keyboard is open): out of the way even with an empty box');
+  p.ctx.document.activeElement = null; p.ctx.voiceHintSync();
+  assert.strictEqual(el.style.display, '', 'focus gone: back');
+  p.ctx.current = 'other'; p.ctx.voiceHintSync();
+  assert.ok(el.removed, 'the old reasons still take it away (chat switch)');
+  // not yet shown: no timer while typing / focused, a timer once the box is empty and unfocused
+  const q = page(); q.mic.hidden = false; q.msg.value = 'typing';
+  await q.set(READY);
+  assert.strictEqual(q.live(1500).length, 0, 'no hint timer while the box has text');
+  q.msg.value = ''; q.ctx.document.activeElement = q.msg; q.ctx.voiceHintSync();
+  assert.strictEqual(q.live(1500).length, 0, 'none while focused either');
+  q.ctx.document.activeElement = null; q.ctx.voiceHintSync();
+  assert.strictEqual(q.live(1500).length, 1, 'empty and unfocused: it opens by today\'s rules');
 });
 
 test('8. phone hint: never opened while the page is hidden', async () => {

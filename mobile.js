@@ -2536,7 +2536,7 @@ function teamsViewSet(v) {
   teamsViewMem = v === 'teams' ? 'teams' : 'agents';
   try { localStorage.setItem('hub-sidebar-view', teamsViewMem); } catch { /* kept for this page only */ }
 }
-let teamsOpen = loadJson('hub-teams-open', {});   // name -> true: folded nodes that are open ('@other' / '@shared': the folded groups)
+let teamsOpen = loadJson('hub-teams-open', {});   // name -> true: folded nodes that are open ('@other': the Other section, folded at start); '@sec:<key>' -> true: a section header the person folded (sections start open)
 if (!teamsOpen || typeof teamsOpen !== 'object' || Array.isArray(teamsOpen)) teamsOpen = {};
 function teamsToggle(key) { if (teamsOpen[key]) delete teamsOpen[key]; else teamsOpen[key] = true; saveJson('hub-teams-open', teamsOpen); }
 // The page's switch (and the Simple sheet's) show the chosen view.
@@ -2558,62 +2558,86 @@ function teamsHelpers(n) { return `${n} helper${n === 1 ? '' : 's'}`; }
 // A direct report of a main agent leads a team only when somebody reports to it; otherwise it is drawn as a worker.
 function teamsIsLeader(node) { return node.depth === 1 && (node.children.length > 0 || node.size > 0); }
 function teamsIsWorker(node) { return node.depth >= 2 || (node.depth === 1 && !node.children.length && !node.size); }
-function teamsSub(node, parent) {
-  const w = node.working ? ` · ${node.working} working` : '';
-  if (node.depth === 0 && window.hubTeams.isMain(node.agent)) {
-    const k = node.children.filter(teamsIsLeader).length;
-    if (!node.size) return worksAlone(node.agent.name) ? 'Works alone' : 'No team yet';
-    return k > 1 ? `${k} teams · ${node.size} agents${w}` : `team of ${node.size}${w}`;
-  }
-  if (teamsIsLeader(node)) return `Team leader · leads ${node.size}${w}`;
-  if (teamsIsWorker(node)) return node.depth === 1 && parent ? `Reports to ${parent.agent.display || parent.agent.name}` : 'Worker';
-  return node.children.length ? `leads ${node.size}${w}` : null;
-}
-// Simple hides the third level: a main agent with leaders says the team and how many leaders are shown ('team of 4 · 1 leader'; one wording for team size: 'team of N'); with only direct reports 'team of N' is all shown.
-function teamsSimpleMainSub(m) {
-  const k = m.children.filter(teamsIsLeader).length;
-  if (!k || !m.size) return teamsSub(m);
-  return `team of ${m.size} · ${k} ${k === 1 ? 'leader' : 'leaders'}${m.working ? ` · ${m.working} working` : ''}`;
-}
 // Keep busy nodes and their ancestors (the working filter).
 function teamsPrune(node) {
   const children = node.children.map(teamsPrune).filter(Boolean);
   return isBusy(node.agent.name) || node.helpers > 0 || children.length ? { ...node, children } : null;
 }
-function teamsNodeHtml(node, parent) {
-  const a = node.agent, d = node.depth, kids = node.children.length;
-  const open = workingFilter || !!teamsOpen[a.name];
-  const isMain = d === 0 && window.hubTeams.isMain(a);
-  const rank = teamsIsWorker(node) ? 'worker' : d === 1 ? 'leader' : 'main';
-  let sub = teamsSub(node, parent);
-  // a busy (or asking) leader / worker shows its busy text instead of its role
-  if (!isMain && d >= 1 && (isBusy(a.name) || (live[a.name] && live[a.name].pendingQuestion))) sub = null;
-  const dd = teamsIsWorker(node) ? Math.max(d, 2) : d;   // a direct worker gets the worker indent, as on the desktop
-  const noTeamAdmin = d === 0 && !node.size && isMain && isAdmin() && !worksAlone(a.name);
-  if (noTeamAdmin) sub = null;   // the row's own second line says "No team yet · Build team"
-  let html = `<div class="tm-line tm-d${dd}" style="--d:${dd}">` +
-    (kids ? `<button type="button" class="tm-fold" data-fold="${esc(a.name)}" aria-expanded="${open}" aria-label="${open ? 'Fold' : 'Unfold'} ${esc(a.display || a.name)}">${open ? '&#x25BE;' : '&#x25B8;'}</button>` : '<span class="tm-fold-sp"></span>') +
-    agentRowHtml(a, noTeamAdmin ? { buildSub: true } : sub != null ? { sub } : {}) + '</div>';
-  // One leader = one block: its row, then only its own people in a wrapper with the connector line (.tm-kids).
-  // Under a main agent the blocks sit in .tm-leaders (no connector).
-  if (kids && open) html += `<div class="${d === 0 ? 'tm-leaders' : 'tm-kids'}">${node.children.map(c => teamsNodeHtml(c, node)).join('')}</div>`;
-  if (node.helpers > 0 && (open || !kids)) html += `<div class="tm-note" style="--d:${d}">⚡ ${esc(teamsHelpers(node.helpers))} under ${esc(a.display || a.name)}</div>`;
-  return d >= 1 ? `<div class="tm-block tm-r-${rank}">${html}</div>` : html;
+// Fold memory of the Teams list ('hub-teams-open', as before). A team / leader is open when its name is stored (folded at start).
+// A section header is the other way round: it starts open and is FOLDED when '@sec:<key>' is stored; 'other' keeps its '@other' key
+// and its old meaning (stored = open, folded at start). The working filter shows everything open.
+function teamsOpenOf(name) { return workingFilter || !!teamsOpen[name]; }
+function teamsSecKey(key) { return key === 'other' ? '@other' : '@sec:' + key; }
+function teamsSecOpen(key, plain) { return (!plain && workingFilter) || (key === 'other' ? !!teamsOpen['@other'] : !teamsOpen['@sec:' + key]); }
+// The size pill after a boss's name: '12 agents ▾' (a leader: 'leads 4 ▾'). The words sit in .tm-pw so a narrow list can show the number alone.
+function teamsPillInner(r) {
+  const n = r.n, arrow = r.open ? '&#x25BE;' : '&#x25B8;';
+  return (r.word === 'leads' ? '<span class="tm-pw">leads </span>' : '') + n + (r.word === 'agents' ? `<span class="tm-pw"> agent${n === 1 ? '' : 's'}</span>` : '') + ' ' + arrow;
 }
-// Everybody below a node (after the working filter, the ones that are left), like the desktop's count.
-function teamsCount(n) { return n.children.reduce((s, c) => s + 1 + teamsCount(c), 0); }
+function teamsPillLabel(r) {
+  const a = r.node.agent;
+  return `${r.open ? 'Fold' : 'Unfold'} ${a.display || a.name}: ${r.word === 'leads' ? 'leads ' + r.n : r.n + ' agent' + (r.n === 1 ? '' : 's')}`;
+}
+// One section's node as flat rows in screen order: the boss (level 0, 'main' or 'spec'), then its people (level 1: 'leader' or 'worker'),
+// then an open leader's workers (level 2). A row says what it needs for its joining lines (last, parentLast) and its pill (pill, open, n, word).
+// Pure: the caller decides what is open.
+function teamsRows(node, openOf) {
+  const rows = [];
+  const kids = node.children;
+  const note = (n, level, last, parentLast) => { if (n.helpers > 0) rows.push({ note: true, node: n, level, last, parentLast }); };
+  const open = kids.length > 0 && openOf(node.agent.name);
+  rows.push({ node, rank: window.hubTeams.isMain(node.agent) ? 'main' : 'spec', level: 0, open, pill: kids.length > 0, word: 'agents', n: node.size, from1: open });
+  const below = (n) => n.children.flatMap((x) => [x, ...below(x)]);
+  if (open) {
+    kids.forEach((c, i) => {
+      const last = i === kids.length - 1, lead = teamsIsLeader(c), cOpen = lead && openOf(c.agent.name);
+      rows.push({ node: c, rank: lead ? 'leader' : 'worker', level: 1, last, open: cOpen, pill: lead, word: 'leads', n: c.size, from2: cOpen });
+      if (cOpen) {
+        const ws = below(c);
+        ws.forEach((w, j) => { rows.push({ node: w, rank: 'worker', level: 2, last: j === ws.length - 1, parentLast: last }); note(w, 2, j === ws.length - 1, last); });
+      }
+      if (!lead || cOpen) note(c, 1, last, last);
+    });
+  }
+  if (!kids.length || open) note(node, 0, true, true);
+  return rows;
+}
+// The joining lines of a row: a vertical line at x1 (under the main agent's icon) and x2 (under a leader's icon), a short tick into the row.
+// Lines run the whole height of a row and stop at the middle of the last one (.tm-end); the first one starts under the boss's icon (.tm-from).
+function teamsLinesHtml(r) {
+  const v = (x, cls) => `<i class="tm-v tm-x${x}${cls ? ' ' + cls : ''}" aria-hidden="true"></i>`;
+  const t = (x) => `<i class="tm-tk tm-x${x}" aria-hidden="true"></i>`;
+  if (r.note) return (r.level === 1 && !r.last ? v(1) : '') + (r.level === 2 ? (r.parentLast ? '' : v(1)) + (r.last ? '' : v(2)) : '');
+  if (r.level === 0) return r.from1 ? v(1, 'tm-from') : '';
+  if (r.level === 1) return v(1, r.last ? 'tm-end' : '') + t(1) + (r.from2 ? v(2, 'tm-from') : '');
+  return (r.parentLast ? '' : v(1)) + v(2, r.last ? 'tm-end' : '') + t(2);
+}
+// One row of the phone Teams list: the lines, the row (a button; a div when it holds the pill button, which may not sit inside a button).
+function teamsRowHtml(r, secKey) {
+  const a = r.node.agent;
+  const lines = teamsLinesHtml(r);
+  if (r.note) return `<div class="tm-line tm-nl tm-lv${r.level}">${lines}<div class="tm-note">⚡ ${esc(teamsHelpers(r.node.helpers))} under ${esc(a.display || a.name)}</div></div>`;
+  const pill = r.pill ? `<button type="button" class="tm-pill-btn" data-fold="${esc(a.name)}" aria-expanded="${r.open}" aria-label="${esc(teamsPillLabel(r))}"><span class="tm-pill">${teamsPillInner(r)}</span></button>` : '';
+  const build = secKey === 'none' && r.level === 0 && r.rank === 'main' && isAdmin() && !r.node.size;
+  return `<div class="tm-line tm-r-${r.rank} tm-lv${r.level}">${lines}${agentRowHtml(a, { tm: { rank: r.rank, pill, hasPill: r.pill, build } })}</div>`;
+}
+function teamsSecHeadHtml(s) {
+  const open = teamsSecOpen(s.key), title = `${s.title} · ${s.count}`;
+  if (workingFilter) return `<div class="group-title tm-sec-h"><span>${esc(title)}</span></div>`;   // the filter shows everything: nothing to fold
+  return `<button type="button" class="group-title tm-sec-h" data-fold="${teamsSecKey(s.key)}" data-tm-sec="${s.key}" aria-expanded="${open}"><span>${esc(title)}</span><span aria-hidden="true">${open ? '&#x25BE;' : '&#x25B8;'}</span></button>`;
+}
 function teamsListHtml() {
   const t = window.hubTeams.tree(agents, live);
   const keep = (n) => workingFilter ? teamsPrune(n) : n;
-  const mains = t.mains.map(keep).filter(Boolean), shared = t.shared.map(keep).filter(Boolean), other = t.other.map(keep).filter(Boolean);
+  const pruned = { mains: t.mains.map(keep).filter(Boolean), shared: t.shared.map(keep).filter(Boolean), other: t.other.map(keep).filter(Boolean), anyTeam: t.anyTeam };
   // Admins: the lead can propose teams from how the agents already work together (Set up teams); members keep the old text.
   let html = t.anyTeam || workingFilter ? '' : '<div class="tm-empty"><b>Agents can work as teams.</b> Your main agents plan, decide and review. Short or personal tasks they usually do themselves; long work they can hand to team leaders, who run workers. ' + (isAdmin() ? teamSetupEmptyHtml() : 'An admin can set who reports to whom.') + '</div>';
-  const head = (title, key) => key
-    ? `<button type="button" class="group-title" data-tm-sec="${key}"><span>${esc(title)}</span><span>${workingFilter || teamsOpen['@' + key] ? '&#x25BE;' : '&#x25B8;'}</span></button>`
-    : `<div class="group-title"><span>${esc(title)}</span></div>`;
-  if (mains.length) html += head('Your agents') + mains.map(teamsNodeHtml).join('');
-  if (shared.length) html += head('Shared specialists') + shared.map(teamsNodeHtml).join('');
-  if (other.length) html += head(`Other (${other.reduce((s, n) => s + 1 + teamsCount(n), 0)})`, 'other') + (workingFilter || teamsOpen['@other'] ? other.map(teamsNodeHtml).join('') : '');
+  // Headers with counts (hubTeams.sections: Teams, No team yet, Working alone, Shared specialists, Other; empty ones left out).
+  for (const s of window.hubTeams.sections(pruned, worksAlone)) {
+    html += teamsSecHeadHtml(s);
+    if (!teamsSecOpen(s.key)) continue;
+    for (const n of s.rows) html += teamsRows(n, teamsOpenOf).map((r) => teamsRowHtml(r, s.key)).join('');
+  }
   if (!workingFilter) html += teamSetupLineHtml();   // admins, when setups are recorded: "Team setup: N teams recorded <date> · Undo"
   return html || '<div class="empty">No agent is working right now.</div>';
 }
@@ -2637,7 +2661,16 @@ function agentRowHtml(a, opts) {
   // the name may be cut short (ellipsis); the tail (' + N more · 4 min') never shrinks, so the time always shows
   const jobHtml = job ? `<div class="agent-job" title="${esc(activeJobTitle(job))}"><span class="ajl-name">${esc(activeJobLead(job))}</span><span class="ajl-tail">${esc(activeJobTail(job, Date.now()))}</span></div>` : '';
   // opts.sub: a line of the Teams view ('team of 3 · 1 working') that stands in for the blurb / busy text
-  const sub = (done
+  // opts.tm: a row of the Teams list ({ rank, pill, hasPill, build }): one line for a member, a second line for a main agent only when
+  // there is something to show (replying, else background work, else Build team in the No team yet section), the pill after the name.
+  const tm = opts && opts.tm ? opts.tm : null;
+  const tmMain = !!tm && tm.rank === 'main';
+  const tmSub = tmMain
+    ? (working ? `<div class="agent-model working${question ? ' question' : ''}">${esc(busyText(a.name))}</div>`
+      : bgN ? `<div class="agent-bg-line" role="button" title="${esc(bgLabel)}">${esc(AgentDot.bgLine(bgN))}</div>`
+      : tm.build ? `<div class="agent-model agent-build-sub agent-build-only">${buildTeamBtnHtml(a.name, 'build-team-link', 'Build team', true)}</div>` : '')
+    : '';
+  const sub = tm ? tmSub : (done
     ? '<div class="agent-model working">✓ done</div>'
     : opts && (opts.buildSub || (opts.build && !worksAlone(a.name) && !working && !bgN))
       ? buildSubHtml(a.name)   // Teams and All Agents: a main agent with no team (admins): "No team yet · Build team" is the row's own second line (small words, no line of its own)
@@ -2650,12 +2683,18 @@ function agentRowHtml(a, opts) {
         : bgN
           ? `<div class="agent-bg-line" role="button" title="${esc(bgLabel)}">${esc(AgentDot.bgLine(bgN))}</div>`
           : `<div class="agent-model" title="${esc(a.blurb || '')}">${esc(a.blurb || shortModel(a.model))}</div>`) + jobHtml;
-  return `<button class="agent-row${working ? ' is-busy' : ''}${done ? ' active-done' : ''}" data-agent="${esc(a.name)}">` +
+  // a member that is replying says what it does after its name, on the same line
+  const tmLive = tm && !tmMain && working && !viaWorkers ? `<span class="tm-live">· ${esc(busyText(a.name).replace(/^⏳\s*/, ''))}</span>` : '';
+  const nameHtml = tm
+    ? `<div class="tm-l1"><span class="agent-name">${esc(a.display || a.name)}</span>${a.lead ? ' <span class="lead-badge" title="Lead agent">👑</span>' : ''}${tm.pill || ''}${tmLive}</div>`
+    : `<div class="agent-name">${esc(a.display || a.name)}${a.lead ? ' <span class="lead-badge" title="Lead agent">👑</span>' : ''}</div>`;
+  const tag = tm && tm.hasPill ? 'div' : 'button';   // the pill is a button: it may not sit inside one
+  return `<${tag} ${tag === 'div' ? 'role="button" tabindex="0" ' : ''}class="agent-row${working ? ' is-busy' : ''}${done ? ' active-done' : ''}" data-agent="${esc(a.name)}">` +
     `<span class="agent-icon">${esc(a.icon || '🤖')}</span>` +
-    `<span class="agent-meta"><div class="agent-name">${esc(a.display || a.name)}${a.lead ? ' <span class="lead-badge" title="Lead agent">👑</span>' : ''}</div>${sub}</span>` +
+    `<span class="agent-meta">${nameHtml}${sub}</span>` +
     `<span class="dot${dotCls}${bgN ? ' ' + AgentDot.CLASS.background : ''}" title="${esc(bgN ? bgLabel : working && !viaWorkers ? busyText(a.name) : '')}"${bgN ? ` aria-label="${esc(bgLabel)}"` : ''}>${question ? '?' : ''}</span>` +
     (n ? `<span class="badge">${n > 99 ? '99+' : n}</span>` : '') +
-    '</button>';
+    `</${tag}>`;
 }
 
 // ── Build Team (admins): the "No team yet · Build team" line, the Teams button, the ⋮ menu entry ──
@@ -10109,7 +10148,12 @@ function voiceHintCan(showing) {
   return screen === 'chat' && !!current && !!t && !t.hidden && voiceOn() && !voiceCall && voiceRec.state === 'idle' && questionBoxes.size === 0 && !voiceHintSheetOpen() && (showing === true || !document.hidden);   // a hint already showing is not taken down by the page going hidden
 }
 /** Opening the hint also needs it never seen; a hint that is showing stays through ordinary repaints. */
-function voiceHintCanOpen() { return voiceHintCan() && !voiceHintSeen(); }
+/** The message box has text or has focus (the keyboard is up): the tip stays out of the way (it would sit over the typed lines). */
+function voiceHintTyping() {
+  try { const m = $('msg-input'); return !!m && ((m.value || '').length > 0 || document.activeElement === m); } catch { return false; }
+}
+/** Opening also needs the message box empty and unfocused. */
+function voiceHintCanOpen() { return voiceHintCan() && !voiceHintSeen() && !voiceHintTyping(); }
 function voiceHintHide() { clearTimeout(voiceHintTimer); voiceHintTimer = null; if (voiceHintEl) { try { voiceHintEl.remove(); } catch { /* gone */ } voiceHintEl = null; } if (typeof voiceHintWatch === 'function') voiceHintWatch(false); }
 function voiceHintDone() { try { localStorage.setItem(voiceHintKey(), '1'); } catch { /* storage blocked */ } voiceHintHide(); }
 function voiceHintPlace() {
@@ -10142,11 +10186,22 @@ function voiceHintShow() {
 }
 // Called whenever something it depends on changes (mic paint, status, chat open or switch, a question, a call).
 function voiceHintSync() {
-  if (voiceHintEl) { if (!voiceHintCan(true) || voiceHintEl.dataset.agent !== current) voiceHintHide(); else voiceHintPlace(); return; }
+  if (voiceHintEl) {
+    if (!voiceHintCan(true) || voiceHintEl.dataset.agent !== current) { voiceHintHide(); return; }
+    // typing / focus only puts it aside (it was marked seen when shown, so it could never come back after a hide): it returns once the box is empty and unfocused
+    if (voiceHintTyping()) voiceHintEl.style.display = 'none'; else { voiceHintEl.style.display = ''; voiceHintPlace(); }
+    return;
+  }
   if (voiceHintCanOpen()) { if (!voiceHintTimer) voiceHintTimer = setTimeout(voiceHintShow, 1500); }
   else { clearTimeout(voiceHintTimer); voiceHintTimer = null; }
 }
 if (typeof window !== 'undefined' && window.addEventListener) window.addEventListener('resize', () => { if (voiceHintEl) voiceHintPlace(); });
+// The message box getting text, focus or losing them moves the tip (hidden while typing or focused, back when empty and unfocused; blur is read after the focus has moved).
+if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+  const voiceHintInputEvt = (e) => { if (e && e.target && e.target.id === 'msg-input') voiceHintSync(); };
+  document.addEventListener('input', voiceHintInputEvt); document.addEventListener('focusin', voiceHintInputEvt);
+  document.addEventListener('focusout', (e) => { if (e && e.target && e.target.id === 'msg-input') setTimeout(voiceHintSync, 0); });
+}
 // A sheet opening (class open, hidden or open attribute) takes a showing hint down; it is not shown again (it was marked seen when shown).
 // The watcher exists only while the hint shows (voiceHintShow starts it, voiceHintHide stops it), so a page without a hint pays nothing.
 let voiceHintObs = null;
@@ -14601,15 +14656,18 @@ function wire() {
   teamSetupWire();
   $('agents-list').addEventListener('keydown', (e) => {   // the span link inside a row is focusable: Enter / Space press it, and never the row around it
     const bt = e.target && e.target.closest ? e.target.closest('span[data-build-team]') : null;
-    if (bt && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); e.stopPropagation(); buildTeamActivate(bt); }
+    if (bt && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); e.stopPropagation(); buildTeamActivate(bt); return; }
+    // a Teams row that holds the pill button is a div (a button may not hold a button): Enter / Space on the row itself opens the chat
+    const dr = e.target && e.target.matches && e.target.matches('div.agent-row[role="button"]') ? e.target : null;
+    if (dr && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); navigate('chat', dr.dataset.agent); }
   });
   $('agents-list').addEventListener('click', (e) => {
     if (e.target.closest('[data-team-setup]')) { if (!e.target.closest('[data-team-setup]').disabled) teamSetupStart(); return; }   // empty state: Set up teams
     if (e.target.closest('[data-team-undo]')) { teamSetupUndo({ all: true }); return; }   // bottom line: Undo
     const bt = e.target.closest('[data-build-team]');
     if (bt) { buildTeamActivate(bt); return; }   // before the row: a Build button never opens the chat itself
-    const f = e.target.closest('.tm-fold, [data-tm-sec]');
-    if (f) { teamsToggle(f.dataset.fold || '@' + f.dataset.tmSec); renderAgents(); return; }   // Teams view: folds only fold
+    const f = e.target.closest('[data-fold]');   // the size pill and the section headers
+    if (f) { if (e.stopPropagation) e.stopPropagation(); teamsToggle(f.dataset.fold); renderAgents(); const again = [...$('agents-list').querySelectorAll('[data-fold]')].find((x) => x.dataset.fold === f.dataset.fold); if (again && again.focus) again.focus({ preventScroll: true }); return; }   // Teams view: folds only fold, they never open the chat; the control keeps the keyboard focus
     const g = e.target.closest('.group-title[data-group]');
     if (g) { collapsed[g.dataset.group] = !collapsed[g.dataset.group]; saveJson('hub-mobile-collapsed', collapsed); renderAgents(); return; }
     const r = e.target.closest('.agent-row');
@@ -16849,58 +16907,84 @@ function simpleMoreDotPaint(el, m) {
   el.className = 'sa-dot ' + (m.hiddenBusy ? 'busy' : '');
   AgentDot.applyDot(el, AgentDot.dotState({ busy: m.hiddenBusy, background: m.hiddenBg }), { background: m.hiddenBg });
 }
-// A Simple row's second line: the words, and for an admin's main agent with no team 'No team yet · Build team' (the link is a span: the row is a button).
-function simpleSubSet(sm, sub, buildName) {
-  if (buildName) { const h = esc(sub) + ' · ' + buildTeamBtnHtml(buildName, 'build-team-link', 'Build team', true); if (sm.innerHTML !== h) sm.innerHTML = h; }
-  else if (sm.textContent !== sub || sm.querySelector('[data-build-team]')) sm.textContent = sub;
+// What a Teams row says besides its name (Simple): a main agent's second line (replying, else background work, else Build team) or a
+// member's words after its name. Read from the live status, so a status change repaints it in place (simpleTmPaint).
+function simpleTmLine(name, rank, build) {
+  const st = live[name], busy = isBusy(name) || !!(st && st.pendingQuestion);
+  const words = busy ? busyText(name) : '';
+  if (rank === 'main') {
+    if (busy) return { sub: words, cls: 'busy' };
+    const n = bgCountOf(name);
+    if (n) return { sub: AgentDot.bgLine(n), cls: 'bg' };
+    return build ? { sub: '', build: name } : { sub: '' };
+  }
+  return { sub: '', live: words ? '· ' + words.replace(/^⏳\s*/, '') : '' };
+}
+function simpleTmPaint(b, line) {
+  const sm = b.querySelector('small'), lv = b.querySelector('.sa-live');
+  if (sm) {
+    if (line.build) { const h = buildTeamBtnHtml(line.build, 'build-team-link', 'Build team', true); if (sm.innerHTML !== h) sm.innerHTML = h; }
+    else if (sm.textContent !== line.sub || sm.querySelector('[data-build-team]')) sm.textContent = line.sub || '';
+    sm.className = 'sa-sub' + (line.cls ? ' sa-sub-' + line.cls : '') + (line.build ? ' sa-build-sub' : '');
+  }
+  if (lv && lv.textContent !== (line.live || '')) lv.textContent = line.live || '';
 }
 // One agent row, shared by the sheet and the wide sidebar: icon, name, (blurb and tick in the sheet), the busy/question dot.
 // opts.blurb adds the agent's blurb and the tick; opts.onPick runs on a tap (the chat opens after it).
+// opts.tm: a row of the Teams list (teamsRows): name, crown, the size pill (a button; the row is then a div), the busy words, the joining lines.
 function simpleAgentRow(a, opts) {
   opts = opts || {};
-  const b = document.createElement('button'); b.type = 'button'; b.className = 'sa-row'; if (a.name === current) b.classList.add('sel');
+  const tm = opts.tm || null;
+  const b = document.createElement(tm && tm.pill ? 'div' : 'button');
+  if (tm && tm.pill) { b.setAttribute('role', 'button'); b.setAttribute('tabindex', '0'); } else b.type = 'button';
+  b.className = 'sa-row'; if (a.name === current) b.classList.add('sel');
   b.dataset.agent = a.name;
-  b.innerHTML = '<span class="sa-ic"></span><span class="sa-txt"><b></b><small></small></span>' + (opts.fold ? '<span class="sa-fold-arrow" role="button" tabindex="0"></span>' : '') + '<span class="sa-tick"></span><span class="sa-dot"></span>';
+  b.innerHTML = tm
+    ? teamsLinesHtml(tm) + '<span class="sa-ic"></span><span class="sa-txt"><span class="sa-l1"><b></b></span><small class="sa-sub"></small></span><span class="sa-tick"></span><span class="sa-dot"></span>'
+    : '<span class="sa-ic"></span><span class="sa-txt"><b></b><small></small></span><span class="sa-tick"></span><span class="sa-dot"></span>';
   b.querySelector('.sa-ic').textContent = a.icon || '🤖';
   b.querySelector('b').textContent = a.display || a.name;
-  b.querySelector('small').textContent = opts.blurb ? (a.blurb || '') : '';
-  if (typeof opts.sub === 'string') { const sm = b.querySelector('small'); simpleSubSet(sm, opts.sub, opts.build ? a.name : ''); sm.className = 'sa-sub' + (opts.build ? ' sa-build-sub' : ''); }   // Teams view: its own second line
+  b.querySelector('small').textContent = opts.blurb && !tm ? (a.blurb || '') : '';
   if (opts.depth) b.style.setProperty('--d', String(opts.depth));
   if (opts.depth >= 1) b.classList.add('sa-kid');   // the connector line down the left, under the boss's icon
   if (opts.depth >= 2) b.classList.add('sa-kid2');   // a leader's worker: a second line under the leader's icon
-  if (opts.fold) {   // a leader with workers: the fold arrow (▸ closed, ▾ open) opens them nested under it; a tap on it only folds, never opens the chat
-    const fa = b.querySelector('.sa-fold-arrow');
-    fa.setAttribute('aria-expanded', String(opts.fold === 'open')); fa.setAttribute('aria-label', (opts.fold === 'open' ? 'Fold ' : 'Open ') + (a.display || a.name) + "'s workers"); fa.textContent = opts.fold === 'open' ? '▾' : '▸';
-    fa.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); teamsToggle(a.name); simpleAgentListsRepaint(); } });
+  if (opts.rank === 'main' || opts.rank === 'leader' || opts.rank === 'worker' || opts.rank === 'spec') b.classList.add('sa-rank-' + opts.rank);   // Teams view in Simple: the same ranks as the regular Teams view
+  if (tm) {
+    b.classList.add('sa-tm'); b.dataset.tmRank = tm.rank; b.dataset.tmBuild = opts.build ? '1' : '';
+    const l1 = b.querySelector('.sa-l1');
+    if (a.lead) { const k = document.createElement('span'); k.className = 'lead-badge'; k.textContent = '👑'; k.title = 'Lead agent'; l1.appendChild(k); }
+    if (tm.pill) {   // the size pill: the fold control of this team / leader; a tap on it only folds, never opens the chat
+      const pb = document.createElement('button'); pb.type = 'button'; pb.className = 'tm-pill-btn'; pb.dataset.fold = a.name;
+      pb.setAttribute('aria-expanded', String(!!tm.open)); pb.setAttribute('aria-label', teamsPillLabel(tm));
+      pb.innerHTML = '<span class="tm-pill">' + teamsPillInner(tm) + '</span>';
+      pb.addEventListener('click', (e) => { if (e && e.stopPropagation) e.stopPropagation(); teamsToggle(a.name); simpleAgentListsRepaint(); });
+      l1.appendChild(pb);
+    }
+    const lv = document.createElement('span'); lv.className = 'sa-live'; l1.appendChild(lv);
+    simpleTmPaint(b, simpleTmLine(a.name, tm.rank, !!opts.build));
+    b.addEventListener('keydown', (e) => { if (e.target === b && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); b.click(); } });   // a div row: Enter / Space press it like a button
   }
-  if (opts.rank === 'main' || opts.rank === 'leader' || opts.rank === 'worker') b.classList.add('sa-rank-' + opts.rank);   // Teams view in Simple: the same three ranks as the regular Teams view
   b.querySelector('.sa-tick').textContent = opts.blurb && a.name === current ? '✓' : '';
   simpleDotPaint(b.querySelector('.sa-dot'), a.name);
-  b.addEventListener('click', (e) => { if (opts.fold && e && e.target && e.target.closest && e.target.closest('.sa-fold-arrow')) { if (e.stopPropagation) e.stopPropagation(); teamsToggle(a.name); simpleAgentListsRepaint(); return; }
+  b.addEventListener('click', (e) => {
     const bt = e && e.target && e.target.closest ? e.target.closest('[data-build-team]') : null; if (bt) { if (e.stopPropagation) e.stopPropagation(); if (typeof opts.onPick === 'function') opts.onPick(); buildTeamActivate(bt); return; }   // the small Build team link starts the same Build team as the Teams link; the row does not open the chat
-    if (e && e.target && e.target.closest && e.target.closest('.sa-dot.bg-work') && window.HandOffCard) HandOffCard.open(a.name); if (typeof opts.onPick === 'function') opts.onPick(); if (a.name !== current || screen !== 'chat') navigate('chat', a.name); });
+    if (e && e.target && e.target.closest && e.target.closest('.sa-dot.bg-work, .sa-sub-bg') && window.HandOffCard) HandOffCard.open(a.name); if (typeof opts.onPick === 'function') opts.onPick(); if (a.name !== current || screen !== 'chat') navigate('chat', a.name); });
   return b;
 }
-// Fill a container with the agent rows from the one model: Primary first, the "More agents" row, then the open groups.
-// Simple's Teams view: main agents with every direct report under them (leaders and direct workers; nothing deeper), then folded groups of the rest.
+// Simple's Teams view: the same sections and rows as the phone's Teams tab (hubTeams.sections; leaders folded at start, a leader's workers under it).
 function simpleTeamsModel() {
   const t = window.hubTeams.tree(agents, live);
-  const rows = [];
-  for (const m of t.mains) {
-    rows.push({ a: m.agent, depth: 0, rank: 'main', sub: teamsSimpleMainSub(m), build: !m.size && isAdmin() && !worksAlone(m.agent.name) });   // build: 'No team yet · Build team' (Simple has no ⋯ menu)
-    for (const c of m.children) {
-      const lead = teamsIsLeader(c), open = lead && teamsOpen[c.agent.name] === true;   // a leader's workers stay hidden until its fold arrow opens them (the same 'hub-teams-open' key as the regular Teams view)
-      rows.push({ a: c.agent, depth: 1, rank: lead ? 'leader' : 'worker', sub: lead ? 'Team leader' : `Reports to ${m.agent.display || m.agent.name}`, fold: lead ? (open ? 'open' : 'closed') : '' });   // every direct report
-      if (open) for (const w of c.children) rows.push({ a: w.agent, depth: 2, rank: 'worker', sub: 'Worker' });   // nested inside the leader's block; nothing deeper than the workers
-    }
-  }
-  const flat = (n) => [n.agent, ...n.children.flatMap(flat)];   // anyone under a shared or Other agent stays reachable
-  return { rows, groups: [{ key: '@shared', label: 'Shared specialists', items: t.shared.flatMap(flat) }, { key: '@other', label: 'Other', items: t.other.flatMap(flat) }].filter((g) => g.items.length) };
+  const secs = window.hubTeams.sections(t, worksAlone).map((sec) => ({
+    key: sec.key, title: sec.title, count: sec.count, open: teamsSecOpen(sec.key, true),
+    rows: sec.rows.flatMap((n) => teamsRows(n, (name) => teamsOpen[name] === true)).filter((r) => !r.note)
+      .map((r) => ({ a: r.node.agent, tm: r, build: sec.key === 'none' && r.level === 0 && r.rank === 'main' && isAdmin() && !r.node.size })),   // build: the Build team link (Simple has no ⋯ menu)
+  }));
+  return { secs };
 }
-// What the Teams rows show apart from their sublines and dots (those are repainted in place).
+// What the Teams rows show apart from their status lines and dots (those are repainted in place).
 function simpleTeamsSig() {
   const m = simpleTeamsModel();
-  return JSON.stringify([m.rows.map((r) => [r.a.name, r.a.display || '', r.a.icon || '', r.depth, r.rank, !!r.build, r.fold || '']), m.groups.map((g) => [g.key, g.items.map((a) => [a.name, a.display || '', a.icon || ''])]), teamsOpen]);
+  return JSON.stringify([m.secs.map((s) => [s.key, s.count, s.open, s.rows.map((r) => [r.a.name, r.a.display || '', r.a.icon || '', !!r.a.lead, r.tm.level, r.tm.rank, !!r.build, !!r.tm.pill, !!r.tm.open, r.tm.n, !!r.tm.last, !!r.tm.parentLast])]), teamsOpen]);
 }
 function simpleSwitch(list) {
   const sw = document.createElement('div'); sw.className = 'sa-switch'; sw.setAttribute('role', 'tablist');
@@ -16911,17 +16995,14 @@ function simpleSwitch(list) {
 }
 function simpleTeamsFill(list, opts) {
   const m = simpleTeamsModel();
-  for (const r of m.rows) list.appendChild(simpleAgentRow(r.a, { ...opts, sub: r.sub, depth: r.depth, rank: r.rank, build: r.build, fold: r.fold }));
-  for (const g of m.groups) {
-    const open = !!teamsOpen[g.key];
-    const fb = document.createElement('button'); fb.type = 'button'; fb.className = 'sa-row sa-fold'; fb.dataset.grp = g.key; fb.setAttribute('aria-expanded', String(open));
-    fb.innerHTML = '<span class="sa-txt"><b></b></span><span class="sa-chev" aria-hidden="true"></span><span class="sa-dot"></span>';
-    fb.querySelector('b').textContent = g.label;
-    fb.querySelector('.sa-chev').textContent = open ? '⌃' : '⌄';
-    fb.querySelector('.sa-dot').className = 'sa-dot ' + (!open && g.items.some((a) => isBusy(a.name)) ? 'busy' : '');
-    fb.addEventListener('click', () => { teamsToggle(g.key); simpleAgentListsRepaint(); });
-    list.appendChild(fb);
-    if (open) for (const a of g.items) list.appendChild(simpleAgentRow(a, opts));
+  for (const s of m.secs) {
+    const h = document.createElement('button'); h.type = 'button'; h.className = 'sa-sec-h'; h.dataset.sec = s.key; h.setAttribute('aria-expanded', String(s.open));
+    h.innerHTML = '<span class="sa-sec-t"></span><span class="sa-sec-g" aria-hidden="true"></span>';
+    h.querySelector('.sa-sec-t').textContent = s.title + ' · ' + s.count;
+    h.querySelector('.sa-sec-g').textContent = s.open ? '▾' : '▸';
+    h.addEventListener('click', () => { teamsToggle(teamsSecKey(s.key)); simpleAgentListsRepaint(); });
+    list.appendChild(h);
+    if (s.open) for (const r of s.rows) list.appendChild(simpleAgentRow(r.a, { ...opts, tm: r.tm, depth: r.tm.level, rank: r.tm.rank, build: r.build }));
   }
 }
 function simpleAgentListFill(list, opts) {
@@ -16964,11 +17045,8 @@ function simpleAgentsOpen() {
 // Live status changed: repaint the dots in place (no rebuild, so a tap in progress is not lost): the open sheet and the sidebar.
 function simpleDotsIn(box) {
   box.querySelectorAll('.sa-row[data-agent]').forEach((b) => simpleDotPaint(b.querySelector('.sa-dot'), b.dataset.agent));
-  if (window.hubTeams && teamsView() === 'teams') {
-    const m = simpleTeamsModel();
-    const subs = new Map(m.rows.map((r) => [r.a.name, r]));
-    box.querySelectorAll('.sa-row[data-agent]').forEach((b) => { const sm = b.querySelector('small.sa-sub'), r = subs.get(b.dataset.agent); if (sm && r) simpleSubSet(sm, r.sub || '', r.build ? b.dataset.agent : ''); });
-    for (const g of m.groups) { const d = box.querySelector('.sa-fold[data-grp="' + g.key + '"] .sa-dot'); if (d) d.className = 'sa-dot ' + (!teamsOpen[g.key] && g.items.some((a) => isBusy(a.name)) ? 'busy' : ''); }
+  if (window.hubTeams && teamsView() === 'teams') {   // the status lines and the busy words follow the live status, rows stay
+    box.querySelectorAll('.sa-row[data-tm-rank]').forEach((b) => simpleTmPaint(b, simpleTmLine(b.dataset.agent, b.dataset.tmRank, b.dataset.tmBuild === '1')));
   }
   const mb = box.querySelector('.sa-more .sa-dot');
   if (mb) simpleMoreDotPaint(mb, simpleAgentSheetModel(agents, current, simpleMoreGet(), isBusy, bgCountOf));

@@ -224,33 +224,54 @@
     .view-switch button.on, .sa-switch button.on { background: var(--accent); color: var(--on-accent); }
     .sa-switch { flex: none; margin: 0 0 8px; }
     /* Teams view: indent by depth, fold button, small labels, notes */
-    .tm-line, .tm-note { --d: 0; }   /* Teams view: a row's depth, set per row (indent comes from the wrappers) */
-    .tm-line { display: flex; align-items: center; }
-    .tm-line > .agent-row { flex: 1; min-width: 0; width: auto; }
-    .tm-fold, .tm-fold-sp { flex: none; width: 40px; min-height: 40px; text-align: center; color: var(--text-dim); font-size: 14px; }
-    /* One leader = one block (.tm-block): its row, then its own workers in .tm-kids, joined by a line down the left of them. */
-    /* Indent model (px, phone 390 wide): main row = fold 40 + padding 14 + icon 36 + gap 12 -> its NAME starts at 102.
-       Every deeper row starts right of its boss's name: --tm-bar sits under the boss's icon centre, --tm-gap is the room between line and rows. */
-    html { --vvh: 100vh; --tm-bar: 71px; --tm-gap: 21px; --tm-kid-bar: 60px; --tm-kid-gap: 11px; --tm-deep-bar: 62px; --sa-bar2: 77px; }
+    /* Teams list (phone), as designed in teams-list-design.md. Rows are flat: a boss (main 60px / 16px name; a shared or Other agent 48px / 14px), its
+       people one step in (leader 48px / 14px, worker 36px / 13px grey), a leader's workers one more step. Page x at 390px: main icon 14-50, name 62, dot centre 366;
+       member icon 64-86 name 94; leader icon 64-92 name 102; leader's workers icon 104-126 name 134; joining lines at 32 and 78. The dot stays at the right. */
+    html { --vvh: 100vh; }
     @supports (height: 100dvh) { html { --vvh: 100dvh; } }   /* JS sets --vvh inline; without dvh the fallback is vh, never an invalid height */
-    .tm-leaders { margin-left: var(--tm-bar); padding-left: var(--tm-gap); border-left: 1px solid var(--border-strong); }
-    .tm-block.tm-r-leader { margin-bottom: 10px; }
-    .tm-kids { margin-left: var(--tm-kid-bar); padding-left: var(--tm-kid-gap); border-left: 1px solid var(--border-strong); }
-    .tm-block .tm-block > .tm-kids { margin-left: var(--tm-deep-bar); padding-left: 0; }
-    .tm-r-leader > .tm-line > .tm-fold, .tm-r-leader > .tm-line > .tm-fold-sp { width: 36px; }
-    /* Three ranks: main (the normal row), leader (0.92), worker (two thirds of a leader row, quiet, no divider; still a 36px tap target) */
-    .tm-r-leader > .tm-line > .agent-row { min-height: 48px; padding: 4px 14px 4px 10px; }
-    .tm-r-leader .agent-icon { font-size: 19px; width: 28px; }
-    .tm-r-leader > .tm-line .agent-name { font-size: 14px; }
-    .tm-r-leader > .tm-line .agent-model { font-size: 11.5px; }
-    .tm-r-worker > .tm-line > .agent-row { min-height: 36px; padding: 2px 12px 2px 14px; gap: 8px; border-bottom: 0; }
-    .tm-r-worker > .tm-line > .tm-fold-sp { display: none; }
-    .tm-r-worker > .tm-line > .tm-fold { min-height: 36px; width: 32px; }
-    .tm-r-worker > .tm-line .agent-icon { font-size: 16px; width: 22px; }
-    .tm-r-worker > .tm-line .agent-name { font-size: 12.5px; font-weight: 400; color: var(--text-dim); }
-    .tm-r-worker > .tm-line .agent-model { font-size: 10.5px; }
-    .tm-r-worker > .tm-line .dot { width: 8px; height: 8px; }
-    .tm-note { padding: 4px 14px 8px; padding-left: calc(54px + var(--d, 0) * 20px); font-size: 12px; color: var(--warning); }
+    .sa-row { --d: 0; }   /* Simple's rows read their depth from --d (set per row inline) */
+    .tm-line { position: relative; --tm-h: 60px; --tm-from: 48px; --tm-x1: 32px; --tm-x2: 78px; }
+    .tm-line.tm-r-leader, .tm-line.tm-r-spec { --tm-h: 48px; --tm-from: 38px; }
+    .tm-line.tm-r-worker { --tm-h: 36px; }
+    .tm-line > .agent-row { width: 100%; text-align: left; cursor: pointer; color: inherit; }   /* a div (role=button) when the row holds the pill button */
+    .tm-line > .agent-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+    .tm-line.tm-r-main > .agent-row { height: 60px; min-height: 60px; padding: 0 19px 0 14px; gap: 12px; }
+    .tm-line.tm-r-main .agent-name { font-size: 16px; line-height: 20px; }
+    .tm-line.tm-r-spec > .agent-row { height: 48px; min-height: 48px; padding: 0 19.5px 0 14px; gap: 12px; }
+    .tm-line.tm-r-spec .agent-icon, .tm-line.tm-r-leader .agent-icon { font-size: 19px; width: 28px; }
+    .tm-line.tm-r-spec .agent-name, .tm-line.tm-r-leader .agent-name { font-size: 14px; }
+    .tm-line.tm-r-leader > .agent-row { height: 48px; min-height: 48px; padding: 0 19.5px 0 64px; gap: 10px; border-bottom: 0; }
+    .tm-line.tm-r-worker > .agent-row { height: 36px; min-height: 36px; padding: 0 20px 0 64px; gap: 8px; border-bottom: 0; }
+    .tm-line.tm-r-worker.tm-lv2 > .agent-row { padding-left: 104px; }
+    .tm-line.tm-r-worker .agent-icon { font-size: 16px; width: 22px; }
+    .tm-line.tm-r-worker .agent-name { font-size: 13px; font-weight: 400; color: var(--text-dim); }
+    .tm-line.tm-r-main .dot { width: 10px; height: 10px; }
+    .tm-line.tm-r-leader .dot, .tm-line.tm-r-spec .dot { width: 9px; height: 9px; }
+    .tm-line.tm-r-worker .dot { width: 8px; height: 8px; }
+    .tm-line .agent-meta { display: flex; flex-direction: column; justify-content: center; }
+    .tm-l1 { display: flex; align-items: center; min-width: 0; white-space: nowrap; }
+    .tm-l1 .agent-name { flex: 0 1 auto; min-width: 0; }   /* the name truncates first; the pill never shrinks */
+    .tm-l1 .lead-badge { flex: none; margin-left: 4px; font-size: 12px; }
+    .tm-live { flex: 0 1000 auto; min-width: 0; margin-left: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; color: var(--warning); }
+    .tm-line.tm-r-main .agent-model, .tm-line.tm-r-main .agent-bg-line { font-size: 12px; line-height: 16px; }
+    .tm-line.tm-r-main .agent-model.working { display: block; white-space: nowrap; }   /* one line: the row keeps its 60px */
+    /* The size pill: 20px tall to look at, a 36px-tall button (at least 36px wide) to hit. The negative margin takes the extra height back, so no row grows. */
+    .tm-pill-btn { flex: none; display: flex; align-items: center; justify-content: flex-start; height: 36px; min-width: 36px; margin: -8px 0 -8px 6px; padding: 0 8px 0 0; background: transparent; color: var(--text-dim); font: inherit; cursor: pointer; }
+    .tm-pill { display: block; height: 20px; padding: 0 7px; border: 1px solid var(--border-strong); border-radius: 10px; font-size: 11.5px; line-height: 18px; white-space: nowrap; }   /* a block, not a flex box: the spaces inside ('12 agents ▾') stay */
+    .tm-pill-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 10px; }
+    /* Joining lines: a line down at --tm-x1 / --tm-x2 and a short tick into each row; they run the full row and stop at the middle of the last one */
+    .tm-v { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--border-strong); pointer-events: none; z-index: 1; }
+    .tm-v.tm-from { top: var(--tm-from); }
+    .tm-v.tm-end { bottom: auto; height: calc(var(--tm-h) / 2); }
+    .tm-tk { position: absolute; top: calc(var(--tm-h) / 2); width: 8px; height: 1px; background: var(--border-strong); pointer-events: none; z-index: 1; }
+    .tm-x1 { left: var(--tm-x1); }
+    .tm-x2 { left: var(--tm-x2); }
+    .tm-note { padding: 2px 14px 8px 62px; font-size: 12px; color: var(--warning); }
+    .tm-nl.tm-lv1 .tm-note { padding-left: 94px; }
+    .tm-nl.tm-lv2 .tm-note { padding-left: 134px; }
+    /* Section headers (Teams · 5, No team yet · 6, ...): 44px, pinned to the top of the list while it scrolls; a tap folds the section. */
+    .tm-sec-h { position: sticky; top: 0; z-index: 5; height: 44px; min-height: 44px; padding: 0 14px; background: var(--bg-dark); border-bottom: 1px solid var(--border); }
+    .tm-sec-h:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
     .tm-empty { margin: 12px 14px 0; padding: 12px 14px; border-radius: 12px; background: var(--bg-card); border: 1px solid var(--border); font-size: 14px; line-height: 1.4; color: var(--text-dim); }
     .tm-empty b { color: var(--text); }
     /* Set up teams: the empty state's button, the line under the Teams list, and the offer / Undo slot above the message box. Text and a real border: visible without a hover. */
@@ -282,6 +303,7 @@
     .agent-build-sub { overflow: visible; white-space: nowrap; text-overflow: clip; line-height: 1.25; }   /* one line, as tall as every other row (All Agents and Teams); Build team stays whole */
     .agent-build-sub .build-team-link { display: inline-block; min-height: 0; padding: 10px 8px; margin: -10px -8px -10px -2px; font-size: inherit; line-height: inherit; cursor: pointer; }
     .agent-build-sub .build-team-link[aria-disabled="true"] { color: var(--text-tertiary); text-decoration: none; opacity: .7; }
+    .agent-build-only .build-team-link { margin-left: -8px; }   /* the link alone on a main row's second line: its visible text starts at the name's x (the 8px padding is the tap area, taken back by the margin) */
     .build-team-btn { min-height: 44px; padding: 0 16px; border-radius: 10px; font-size: 14px; font-weight: 600; background: var(--accent); color: var(--on-accent); }
     .question .qchecks { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
     .question .qcheck { display: flex; align-items: flex-start; gap: 12px; min-height: 48px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-card); }
@@ -1211,6 +1233,7 @@ html.mm-simple .sa-row .sa-txt small.sa-sub { display: block; }
 html.mm-simple .sa-txt small.sa-sub.sa-build-sub { overflow: visible; }
 html.mm-simple .sa-sub .build-team-link { display: inline-block; min-height: 0; padding: 10px 8px; margin: -10px -8px -10px -2px; font-size: inherit; font-weight: 600; line-height: inherit; color: var(--accent-hover); text-decoration: underline; background: transparent; cursor: pointer; }
 html.mm-simple .sa-sub .build-team-link[aria-disabled="true"] { color: var(--text-tertiary); text-decoration: none; opacity: .7; }
+html.mm-simple .sa-build-sub .build-team-link { margin-left: -8px; }   /* alone on the line: the text starts at the name's x */
 html.mm-simple #simple-side .sa-txt small.sa-sub { display: block; font-size: 12px; }
 html.mm-simple .sa-fold b { font-weight: 600; font-size: 17px; color: var(--text-dim); }
 html.mm-simple #simple-side .sa-fold b { font-size: 15px; }
@@ -1334,7 +1357,6 @@ html.mm-simple .sa-rank-worker { min-height: 44px; padding-top: 4px; padding-bot
 html.mm-simple .sa-rank-worker .sa-ic { font-size: 18px; width: 26px; }
 html.mm-simple .sa-rank-worker .sa-txt b { font-size: 14px; font-weight: 500; color: var(--text-dim); }
 html.mm-simple .sa-rank-worker .sa-txt small { font-size: 0.72rem; }
-html.mm-simple .tm-r-leader > .tm-line > .agent-row { min-height: 58px; font-size: 16.5px; }
 html.mm-simple .sa-dot { width: 12px; height: 12px; border-radius: 50%; flex: none; background: transparent; }
 html.mm-simple .sa-dot.busy { background: var(--warning); animation: simple-pulse 1.2s ease-in-out infinite; }
 html.mm-simple .sa-dot.bg-work:not(.busy):not(.question) { width: 7px; height: 7px; border: 2px solid var(--bg-work-ring); background: transparent; animation: none; box-sizing: content-box; }
@@ -1396,6 +1418,45 @@ html.mm-simple #simple-side { display: none; }
   html.mm-simple #approval-sheet { left: 268px; }
   html.mm-simple #toast { left: calc(50% + 130px); }
 }
+/* Simple Teams (phone sheet and wide sidebar), as designed in teams-list-design.md: flat rows, the size pill after the boss's name, one-line members,
+   joining lines. Sheet (page x at 390px, list starts at 36): main icon 54-86 name 101, leader icon 103 name 137, leader's workers icon 139 name 169,
+   member icon 103 name 133, dot centre 346; lines at 70 and 116. The sidebar keeps its own, smaller steps. */
+html.mm-simple { --sa-pl0: 18px; --sa-pl1: 67px; --sa-pl2: 103px; --sa-x1: 34px; --sa-x2: 80px; --sa-hm: 60px; --sa-hl: 50px; --sa-hw: 40px; --sa-fm: 46px; --sa-fl: 38px; --sa-pr: 3px; }
+html.mm-simple #simple-side { --sa-pl0: 12px; --sa-pl1: 52px; --sa-pl2: 92px; --sa-x1: 25px; --sa-x2: 64px; --sa-hm: 48px; --sa-hl: 40px; --sa-hw: 34px; --sa-fm: 37px; --sa-fl: 32px; --sa-pr: 12px; }
+html.mm-simple :is(#simple-agents-sheet, #simple-side) .sa-row.sa-tm { position: relative; --tm-x1: var(--sa-x1); --tm-x2: var(--sa-x2); --tm-h: var(--sa-hm); --tm-from: var(--sa-fm); padding: 0 var(--sa-pr) 0 var(--sa-pl0); height: var(--sa-hm); min-height: var(--sa-hm); cursor: pointer; text-align: left; color: var(--text); }
+html.mm-simple :is(#simple-agents-sheet, #simple-side) .sa-row.sa-tm.sa-kid { padding-left: var(--sa-pl1); }
+html.mm-simple :is(#simple-agents-sheet, #simple-side) .sa-row.sa-tm.sa-kid2 { padding-left: var(--sa-pl2); }
+html.mm-simple :is(#simple-agents-sheet, #simple-side) .sa-row.sa-tm.sa-kid::before, html.mm-simple :is(#simple-agents-sheet, #simple-side) .sa-row.sa-tm.sa-kid2::after { content: none; }   /* the old pseudo lines: the .tm-v spans draw them now */
+html.mm-simple :is(#simple-agents-sheet, #simple-side) .sa-row.sa-tm.sa-rank-leader, html.mm-simple :is(#simple-agents-sheet, #simple-side) .sa-row.sa-tm.sa-rank-spec { --tm-h: var(--sa-hl); --tm-from: var(--sa-fl); height: var(--sa-hl); min-height: var(--sa-hl); }
+html.mm-simple :is(#simple-agents-sheet, #simple-side) .sa-row.sa-tm.sa-rank-worker { --tm-h: var(--sa-hw); height: var(--sa-hw); min-height: var(--sa-hw); padding-top: 0; padding-bottom: 0; }
+html.mm-simple #simple-agents-sheet .sa-row.sa-tm { gap: 15px; }
+html.mm-simple #simple-agents-sheet .sa-row.sa-tm:is(.sa-rank-leader, .sa-rank-worker) { gap: 8px; }
+html.mm-simple #simple-agents-sheet .sa-row.sa-tm.sa-rank-spec { gap: 12px; }
+html.mm-simple #simple-agents-sheet .sa-rank-main .sa-ic { width: 32px; font-size: 26px; }
+html.mm-simple #simple-agents-sheet .sa-rank-spec .sa-ic, html.mm-simple #simple-agents-sheet .sa-rank-leader .sa-ic { width: 26px; font-size: 20px; }
+html.mm-simple #simple-agents-sheet .sa-rank-worker .sa-ic { width: 22px; font-size: 16px; }
+html.mm-simple #simple-agents-sheet .sa-rank-spec .sa-txt b { font-size: 15.5px; font-weight: 500; }
+html.mm-simple .sa-tm .sa-dot { width: 10px; height: 10px; }
+html.mm-simple .sa-tm.sa-rank-leader .sa-dot, html.mm-simple .sa-tm.sa-rank-spec .sa-dot { width: 9px; height: 9px; }
+html.mm-simple .sa-tm.sa-rank-worker .sa-dot { width: 8px; height: 8px; }
+html.mm-simple .sa-tm .sa-txt { display: flex; flex-direction: column; justify-content: center; }
+html.mm-simple .sa-l1 { display: flex; align-items: center; min-width: 0; white-space: nowrap; }
+html.mm-simple .sa-l1 b { display: block; flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }   /* the name truncates first; the pill never shrinks */
+html.mm-simple .sa-l1 .lead-badge { display: inline-block !important; flex: none; margin-left: 5px; font-size: 13px; }   /* the lead's crown shows on the Maestro row in the Simple sheet too (the general Simple rule hides it elsewhere) */
+html.mm-simple .sa-live { flex: 0 1000 auto; min-width: 0; margin-left: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--warning); }
+html.mm-simple .sa-live:empty { display: none; }
+html.mm-simple .sa-tm .sa-tick:empty { display: none; }
+html.mm-simple .sa-tm .sa-txt small.sa-sub { font-size: 14px; line-height: 18px; }
+html.mm-simple .sa-tm .sa-txt small.sa-sub:empty { display: none; }
+html.mm-simple .sa-sub-busy { color: var(--warning); }
+html.mm-simple .sa-sub-bg { color: var(--bg-work-ring); cursor: pointer; }
+html.mm-simple .sa-tm .tm-pill-btn { margin-left: 3px; color: var(--text-dim); }
+html.mm-simple .sa-tm .tm-pill { font-size: 12px; border-color: var(--border-strong); }
+html.mm-simple #simple-side .tm-pw { display: none; }   /* the narrow sidebar: the number alone ('12 ▾', '4 ▾'), the names keep their room */
+html.mm-simple .sa-sec-h { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; justify-content: space-between; width: 100%; height: 44px; padding: 0 14px 0 18px; background: var(--bg-card); color: var(--text-tertiary); font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; text-align: left; }
+html.mm-simple #simple-side .sa-sec-h { padding-left: 12px; background: var(--bg-dark); }
+html.mm-simple .sa-sec-g { letter-spacing: 0; }
+html.mm-simple .sa-tm:focus-visible, html.mm-simple .sa-sec-h:focus-visible, html.mm-simple .tm-pill-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 /* (above: toasts centred on the chat column, not under the sidebar) */
 </style>
 </head>

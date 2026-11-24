@@ -8807,7 +8807,8 @@
     }
 
     // Teams view (#teams-list): who reports to whom, from hubTeams.tree(AGENTS, agentStatus). Fold state is kept in localStorage
-    // 'hub-teams-open' (name -> true; main agents start folded, '@other' is the Other section).
+    // 'hub-teams-open' (name -> true; main agents start folded, a leader's workers start folded, '@other' is the Other section). The fold controls are the
+    // team-size pills and the section headers (data-fold; '@sec:<key>' = FOLDED, sections start open); the list is cut into counted sections by hubTeams.sections (Teams, No team yet, Working alone, Shared specialists, Other).
     const TEAMS_OPEN_KEY = 'hub-teams-open';
     let teamsOpenMem = null;   // the folds as this page knows them, loaded once; kept even when localStorage refuses
     function teamsOpenGet() {
@@ -8836,7 +8837,15 @@
       const row = t.closest('.teams-row');
       if (row) startSoloChat(row.dataset.agent, row.dataset.model);
     }
-    function teamsRowHtml(n, open, parent) {
+    // One row of the Teams list (redesign): a main agent is a card with the name, its team-size pill right after it and, only when there is something, a second line
+    // (replying, else the blue background work line, else the Build team link in the "No team yet" section); a leader or worker is ONE line (no 'Reports to'), what it is doing
+    // follows its name in orange. The pill (a button, data-fold) is the fold control for the team (main) or the workers (leader); the rest of the row opens the chat.
+    function teamsPillHtml(key, count, isOpen, kind, label) {
+      const words = kind === 'leader' ? (count === 1 ? 'worker' : 'workers') : (count === 1 ? 'agent' : 'agents');
+      const what = kind === 'leader' ? 'workers' : 'team';
+      return `<button type="button" class="teams-pill-btn${isOpen ? ' open' : ''}" data-fold="${key}" aria-expanded="${isOpen ? 'true' : 'false'}" aria-label="${count} ${words}, ${isOpen ? 'hide' : 'show'} ${what}" title="${isOpen ? 'Hide' : 'Show'} ${label}'s ${what}"><span class="teams-pill">${count}&#x2009;<span aria-hidden="true">${isOpen ? '▾' : '▸'}</span></span></button>`;
+    }
+    function teamsRowHtml(n, open, sec) {
       const a = n.agent, name = hubEsc(a.name);
       const st = agentLiveState(a.name);   // the same state All Agents paints from
       const busy = st.busy, question = st.question;
@@ -8846,57 +8855,43 @@
       const dot = st.dotCls + (bgState === 'background' ? ` ${AgentDot.CLASS.background}` : '');
       const dotTip = bgState === 'background' ? AgentDot.dotLabel(bgState, { background: bgN }) : st.tip;
       const isMain = n.depth === 0 && hubTeams.isMain(a);
-      const working = n.working > 0 ? ` · ${n.working} working` : '';
+      const spec = n.depth === 0 && !isMain;   // a shared specialist or an Other agent: a one-line card, no second line
       // A direct report of a main agent leads a team only when somebody reports to it; otherwise it is drawn as a worker.
       const leader = n.depth === 1 && n.children.length > 0, worker = n.depth >= 2 || (n.depth === 1 && n.children.length === 0);
       const rank = worker ? 'worker' : leader ? 'leader' : 'main';
-      const deep = n.depth >= 2;   // only the third level is hidden in Simple; a direct worker (depth 1) stays visible there
-      const direct = worker && n.depth === 1 && !!parent;   // a direct worker: worker look, but Simple shows it with 'Reports to <main>'
-      let sub = '';
-      if (isMain) { const k = n.children.filter(c => c.children.length > 0).length; sub = n.children.length ? (k > 1 ? `${k} teams · ${n.size} agents${working}` : `team of ${n.size}${working}`) : (agentWorksAlone(a.name) ? 'Works alone' : 'No team yet'); }
-      else if (leader) sub = `Team leader · leads ${n.size}${working}`;
-      else if (worker) sub = n.depth === 1 && parent ? `Reports to ${parent.agent.display || capName(parent.agent.name)}` : 'Worker';
-      else if (n.children.length) sub = `leads ${n.size}${working}`;
-      let busyText = '', bgText = '';
-      if ((busy || question) && (!sub || leader || worker)) { busyText = st.line; sub = ''; }   // a busy leader / worker shows what it is doing instead of its role
-      else if (bgState === 'background') bgText = AgentDot.bgLine(bgN);   // under the role line, as All Agents puts it under the model
-      const foldable = isMain && n.children.length > 0;
+      const deep = n.depth >= 2;
       const label = hubEsc(a.display || capName(a.name));
-      // A leader's own fold: Simple starts with the third level hidden, and this arrow opens the leader's workers (same key store as the mains' folds). Only Simple shows it.
-      const leaderOpen = leader && teamsOpenGet()[a.name] === true;
-      const arrow = foldable
-        ? `<button type="button" class="teams-fold${open ? ' open' : ''}" data-fold="${name}" aria-expanded="${open ? 'true' : 'false'}" aria-label="${open ? 'Fold' : 'Open'} ${label}'s team"><span aria-hidden="true">▶</span></button>`
-        : leader
-          ? `<button type="button" class="teams-fold teams-fold-leader${leaderOpen ? ' open' : ''}" data-fold="${name}" aria-expanded="${leaderOpen ? 'true' : 'false'}" aria-label="${leaderOpen ? 'Fold' : 'Open'} ${label}'s workers"><span aria-hidden="true">▶</span></button>`
-          : '<span class="teams-fold none" aria-hidden="true"></span>';
-      const buildBtn = isMain && !n.children.length && agentCanBuildTeam(a, true) && !agentWorksAlone(a.name) ? buildTeamCtlHtml(a, 'link', 'span') : '';   // admins: the small link ends the "No team yet" sub-line, inside the row
-      // A leader's role line has a short form for a narrow sidebar ("Leads 2"), shown instead of the long one when it would be cut.
-      const subText = leader && n.children.length && sub
-        ? `<span class="sub-wide">${hubEsc(sub)}</span><span class="sub-narrow">${hubEsc(`Leads ${n.size}`)}</span>`
-        : hubEsc(sub);
-      // Simple hides the third level, so a main agent with leaders says the team and how many leaders are shown ('team of 4 · 1 leader': one wording for team size); with only direct reports 'team of N' is true there too.
-      const simpleMainSub = isMain && n.children.length ? (() => { const k = n.children.filter(c => c.children.length > 0).length; return k ? `team of ${n.size} · ${k} ${k === 1 ? 'leader' : 'leaders'}${working}` : ''; })() : '';
-      const subHtml = (sub ? `<span class="teams-sub teams-sub-adv${leader || direct || simpleMainSub ? ' has-simple' : ''}${buildBtn && sub === 'No team yet' ? ' teams-sub-build' : ''}">${buildBtn && sub === 'No team yet' ? '<span class="tbs-prefix">No team yet · </span>' + buildBtn : subText}</span>` : busyText ? `<span class="teams-sub teams-sub-adv busy${leader || direct ? ' has-simple' : ''}">${hubEsc(busyText)}</span>` : '')
-        + (bgText ? `<span class="teams-sub teams-bg-line" title="${hubEsc(dotTip)}">${hubEsc(bgText)}</span>` : '')
-        + (simpleMainSub ? `<span class="teams-sub teams-sub-simple">${hubEsc(simpleMainSub)}</span>` : leader ? '<span class="teams-sub teams-sub-simple">Team leader</span>' : direct ? `<span class="teams-sub teams-sub-simple">Reports to ${hubEsc(parent.agent.display || capName(parent.agent.name))}</span>` : '');
-      const dd = worker ? Math.max(n.depth, 2) : n.depth;   // a direct worker gets the worker indent
-      return `<div class="teams-line rank-${rank}${deep ? ' deep' : ''}" style="--d:${dd}">${arrow}<div class="teams-row rank-${rank}${deep ? ' deep' : ''}" role="button" tabindex="0" style="--d:${dd}" data-agent="${name}" data-model="${hubEsc(a.model || '')}" data-depth="${n.depth}" title="${hubEsc(a.blurb || a.specialty || '')}">
+      const busyLine = (busy || question) ? String(st.line || '').replace(/^⏳\s*/, '') : '';
+      // The fold pill: a main agent with a team (open = its team shows) or a leader (open = its workers show; same store, folded at start).
+      const foldable = (isMain || leader) && n.children.length > 0;
+      const pill = foldable ? teamsPillHtml(name, n.size, open, leader ? 'leader' : 'main', label) : '';
+      // Second line, main rows only, in this order: replying (orange), the blue background work line, Build team (the No team yet section, admins). Else none: the name is centred.
+      let l2 = '';
+      if (isMain) {
+        if (busyLine) l2 = `<span class="teams-sub busy">${hubEsc(busyLine)}</span>`;
+        else if (bgState === 'background') l2 = `<span class="teams-sub teams-bg-line" title="${hubEsc(dotTip)}">${hubEsc(`Free · ${bgN} in background`)}</span>`;   // the short wording fits the sidebar; the full sentence is in the tooltip
+        else if (sec === 'none' && !n.children.length && agentCanBuildTeam(a, true) && !agentWorksAlone(a.name)) l2 = `<span class="teams-sub teams-sub-build">${buildTeamCtlHtml(a, 'link', 'span')}</span>`;
+      }
+      const live = !isMain && busyLine ? `<span class="teams-live" title="${hubEsc(busyLine)}">· ${hubEsc(busyLine)}</span>` : '';
+      const kids = foldable && open;
+      return `<div class="teams-line rank-${rank}${deep ? ' deep' : ''}${kids ? ' has-kids' : ''}${spec ? ' is-spec' : ''}"><div class="teams-row rank-${rank}${deep ? ' deep' : ''}${spec ? ' is-spec' : ''}${l2 ? ' has-l2' : ''}" role="button" tabindex="0" data-agent="${name}" data-model="${hubEsc(a.model || '')}" data-depth="${n.depth}" title="${hubEsc(a.blurb || a.specialty || '')}">
         <span class="teams-dot ${dot}" title="${hubEsc(dotTip)}">${hubEsc(st.text)}</span>
         <span class="agent-icon">${hubEsc(a.icon || '🤖')}</span>
-        <span class="teams-info"><span class="name"><span class="name-text">${label}</span>${a.lead ? '<span class="lead-badge" title="Lead agent">👑</span>' : ''}</span>${subHtml}${buildBtn && sub !== 'No team yet' ? buildBtn : ''}</span>
+        <span class="teams-info"><span class="name"><span class="name-text">${label}</span>${a.lead ? '<span class="lead-badge" title="Lead agent">👑</span>' : ''}${pill}${live}</span>${l2}</span>
         ${agentMenuBtnHtml(a, 'button')}
       </div></div>`;
     }
     // One leader (or worker, or deeper node) = ONE block: its row, then only its own people in a wrapper with the connector line.
-    // Under a main agent the blocks sit in .teams-leaders (no connector); under a leader or worker they sit in .teams-kids (left border).
-    function teamsBlockHtml(n, parent) {
+    // Under a main agent the blocks sit in .teams-leaders; under a leader or worker they sit in .teams-kids. A leader's workers show only while its pill is open.
+    function teamsBlockHtml(n) {
       const rank = n.depth >= 2 || !n.children.length ? 'worker' : 'leader';
-      const lo = rank === 'leader' && teamsOpenGet()[n.agent.name] === true ? ' leader-open' : '';   // Simple shows this leader's workers
-      return `<div class="teams-block rank-${rank}${lo}">${teamsRowHtml(n, false, parent)}${teamsSubtreeHtml(n)}</div>`;
+      const open = rank === 'leader' && teamsOpenGet()[n.agent.name] === true;   // Advanced and Simple alike: folded at start
+      return `<div class="teams-block rank-${rank}">${teamsRowHtml(n, open)}${teamsSubtreeHtml(n, rank === 'leader' ? open : true)}</div>`;
     }
-    function teamsSubtreeHtml(n) {
+    function teamsSubtreeHtml(n, show) {
       let h = '';
-      if (n.children.length) h += `<div class="${n.depth === 0 ? 'teams-leaders' : 'teams-kids'}">${n.children.map(c => teamsBlockHtml(c, n)).join('')}</div>`;
+      if (show === false) return h;
+      if (n.children.length) h += `<div class="${n.depth === 0 ? 'teams-leaders' : 'teams-kids'}">${n.children.map(c => teamsBlockHtml(c)).join('')}</div>`;
       if (n.helpers > 0) h += `<div class="teams-helpers" style="--d:${n.depth + 1}">⚡ ${n.helpers} helper${n.helpers === 1 ? '' : 's'} under ${hubEsc(n.agent.display || capName(n.agent.name))}</div>`;
       return h;
     }
@@ -8915,20 +8910,23 @@
               + `<button type="button" class="teams-setup-btn${settingUp ? ' is-building' : ''}" data-team-setup${settingUp ? ' disabled aria-disabled="true"' : ''}>${settingUp ? 'Setting up…' : 'Set up teams'}</button>`
             : 'An admin can set who reports to whom.') + '</div>';
       }
-      if (t.mains.length) {
-        h += '<div class="teams-section"><div class="teams-title">Your agents</div>';
-        for (const m of t.mains) { const o = open[m.agent.name] === true; h += teamsRowHtml(m, o); if (o) h += teamsSubtreeHtml(m); }
-        h += '</div>';
-      }
-      if (t.shared.length) {
-        h += '<div class="teams-section"><div class="teams-title">Shared specialists</div>';
-        for (const n of t.shared) h += teamsRowHtml(n, false) + teamsSubtreeHtml(n);
-        h += '</div>';
-      }
-      if (t.other.length) {
-        const o = open['@other'] === true, count = t.other.reduce((s, n) => s + 1 + n.size, 0);
-        h += `<div class="teams-section"><button type="button" class="teams-title teams-title-fold" data-fold="@other" aria-expanded="${o ? 'true' : 'false'}"><span class="teams-glyph${o ? ' open' : ''}" aria-hidden="true">▶</span>Other (${count})</button>`;
-        if (o) for (const n of t.other) h += teamsRowHtml(n, false) + teamsSubtreeHtml(n);
+      // The sections, each with its count (hubTeams.sections; empty ones are left out): Teams, No team yet, Working alone, Shared specialists, Other.
+      for (const s of hubTeams.sections(t, (nm) => agentWorksAlone(nm))) {
+        const title = hubEsc(`${s.title} · ${s.count}`);
+        if (s.key === 'other') {
+          const o = open['@other'] === true;
+          h += `<div class="teams-section" data-section="other"><button type="button" class="teams-title teams-title-fold" data-fold="@other" aria-expanded="${o ? 'true' : 'false'}"><span class="teams-glyph${o ? ' open' : ''}" aria-hidden="true">▶</span>${title}</button>`;
+          if (o) for (const n of s.rows) h += teamsRowHtml(n, false, s.key) + teamsSubtreeHtml(n);
+          h += '</div>';
+          continue;
+        }
+        // Every section folds like the phone's: the header is a button (data-fold '@sec:<key>', stored = FOLDED, sections start open; 'Other' keeps '@other', stored = open).
+        const secOpen = open['@sec:' + s.key] !== true;
+        h += `<div class="teams-section" data-section="${s.key}"><button type="button" class="teams-title teams-title-fold" data-fold="@sec:${s.key}" aria-expanded="${secOpen ? 'true' : 'false'}"><span class="teams-glyph${secOpen ? ' open' : ''}" aria-hidden="true">▶</span>${title}</button>`;
+        if (secOpen) for (const n of s.rows) {
+          if (s.key === 'teams') { const o = open[n.agent.name] === true; h += teamsRowHtml(n, o, s.key); if (o) h += teamsSubtreeHtml(n); }
+          else h += teamsRowHtml(n, false, s.key) + teamsSubtreeHtml(n);
+        }
         h += '</div>';
       }
       h += teamSetupLineHtml();   // admins, when setups are recorded: "Team setup: N teams recorded <date> · Undo"
