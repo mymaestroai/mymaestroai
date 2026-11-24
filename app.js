@@ -9011,7 +9011,39 @@
     // Setups recorded this session (the lead's confirmation just came), or within the last half hour on a fresh page: "Undo this team".
     function teamSetupUndoRows() {
       const now = Date.now();
-      return teamSetup.setups.filter(s => s && s.id && (teamSetupRecent.has(s.id) || now - Date.parse(s.at) < 30 * 60 * 1000));
+      return teamSetup.setups.filter(s => s && s.id && (teamSetupRecent.has(s.id) || now - Date.parse(s.at) < 30 * 60 * 1000))
+        .sort((a, b) => (Date.parse(b.at) || 0) - (Date.parse(a.at) || 0));   // newest first
+    }
+    // ONE compact line above the message box however many setups: "6 teams recorded · Undo ×" (one setup: "<Display> team recorded (3 reporting lines) · Undo ×").
+    // With several, Undo (or the line) opens a list below it: one row per team with its own Undo, and Undo all. × hides the line until a newer setup is recorded.
+    let teamSetupListOpen = false;
+    const TEAM_UNDO_DISMISS_KEY = 'hub-team-undo-dismissed';
+    function teamSetupDismissedId() { try { return localStorage.getItem(TEAM_UNDO_DISMISS_KEY) || ''; } catch { return ''; } }
+    function teamSetupDismiss() {
+      const rows = teamSetupUndoRows();
+      if (rows.length) { try { localStorage.setItem(TEAM_UNDO_DISMISS_KEY, String(rows[0].id)); } catch { /* storage refused: hidden until the page reloads */ } }
+      teamSetupListOpen = false;
+      teamSetupPaint();
+    }
+    function teamSetupToggleList() { teamSetupListOpen = !teamSetupListOpen; teamSetupPaint(); }
+    function teamSetupUndoAll() { return teamSetupUndo({ ids: teamSetupUndoRows().map(s => s.id) }); }
+    function teamSetupUndoHtml() {
+      const rows = teamSetupUndoRows();
+      if (!rows.length || teamSetupDismissedId() === String(rows[0].id)) return '';
+      const lines = (s) => Math.max(0, Math.floor(Number(s.count)) || 0);
+      const whoOf = (s) => { const main = AGENTS.find(a => a.name === s.main); return hubEsc((main && main.display) || (s.main ? capName(s.main) : 'This')); };
+      const x = '<button type="button" class="team-undo-x" data-team-undo-dismiss aria-label="Dismiss" title="Dismiss (the Teams tab keeps Undo)">×</button>';
+      if (rows.length === 1) {
+        const s = rows[0], n = lines(s);
+        return `<div class="team-undo-line"><span class="team-undo-text">${whoOf(s)} team recorded (${n} reporting line${n === 1 ? '' : 's'})</span> <span class="team-undo-sep">·</span> <button type="button" class="team-undo-btn" data-team-undo-id="${hubEsc(String(s.id))}">Undo</button> ${x}</div>`;
+      }
+      let html = `<div class="team-undo-line" data-team-undo-toggle><span class="team-undo-text">${rows.length} teams recorded</span> <span class="team-undo-sep">·</span> <button type="button" class="team-undo-btn" data-team-undo-toggle aria-expanded="${teamSetupListOpen ? 'true' : 'false'}">Undo</button> ${x}</div>`;
+      if (teamSetupListOpen) {
+        html += '<div class="team-undo-list" role="group" aria-label="Teams recorded">';
+        for (const s of rows) { const n = lines(s); html += `<div class="team-undo-item"><span class="team-undo-text">${whoOf(s)} team (${n} line${n === 1 ? '' : 's'})</span> <button type="button" class="team-undo-btn" data-team-undo-id="${hubEsc(String(s.id))}">Undo</button></div>`; }
+        html += '<div class="team-undo-item"><span class="team-undo-text"></span> <button type="button" class="team-undo-btn" data-team-undo-all>Undo all</button></div></div>';
+      }
+      return html;
     }
     function teamSetupChatPaint(chat) {
       const slot = chat && document.getElementById(`team-offer-slot-${chat.id}`);
@@ -9020,12 +9052,7 @@
       let html = '';
       if (isHubAdmin() && lead && chat.agent === lead) {
         if (teamSetup.offer === 'pending') html += teamSetupOfferHtml();
-        for (const s of teamSetupUndoRows()) {
-          const main = AGENTS.find(a => a.name === s.main);
-          const who = hubEsc((main && main.display) || (s.main ? capName(s.main) : 'This'));
-          const n = Math.max(0, Math.floor(Number(s.count)) || 0);
-          html += `<div class="team-undo-row">${who} team recorded (${n} reporting line${n === 1 ? '' : 's'}) <button type="button" class="team-undo-btn" data-team-undo-id="${hubEsc(String(s.id))}">Undo this team</button></div>`;
-        }
+        html += teamSetupUndoHtml();
       }
       if (slot.dataset.shown === html) return;   // unchanged: no flicker, no lost focus
       slot.dataset.shown = html;
@@ -9068,13 +9095,19 @@
     // { all: true } (the line at the bottom of the Teams tab) or { id } (one team, from the lead's confirmation): ask first, then undo.
     async function teamSetupUndo(which) {
       const all = !!(which && which.all);
-      const n = all ? teamSetupLines(teamSetup.setups) : teamSetupLines(teamSetup.setups.filter(s => s.id === (which && which.id)));
-      if (!confirm(`Remove these ${n} reporting lines?`)) return;
+      const ids = which && Array.isArray(which.ids) ? which.ids.map(String) : null;   // "Undo all" in the chat's list: these setups, newest first
+      const picked = ids ? teamSetup.setups.filter(s => ids.includes(String(s.id))) : null;
+      const n = all ? teamSetupLines(teamSetup.setups) : picked ? teamSetupLines(picked) : teamSetupLines(teamSetup.setups.filter(s => s.id === (which && which.id)));
+      if (picked && !picked.length) return;
+      if (!confirm(picked ? `Remove all ${n} reporting lines from these ${picked.length} teams?` : `Remove these ${n} reporting lines?`)) return;
       try {
-        const r = await fetch('/api/team-setup/undo', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(all ? { all: true } : { id: which.id }) });
-        const d = await r.json().catch(() => ({}));
-        if (!r.ok) throw new Error((d && d.error) || `HTTP ${r.status}`);
-        const kept = Array.isArray(d && d.keptChanged) ? d.keptChanged.length : Math.max(0, Math.floor(Number(d && d.keptChanged)) || 0);
+        let kept = 0;
+        for (const body of (ids ? ids.map(id => ({ id })) : [all ? { all: true } : { id: which.id }])) {
+          const r = await fetch('/api/team-setup/undo', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok) throw new Error((d && d.error) || `HTTP ${r.status}`);
+          kept += Array.isArray(d && d.keptChanged) ? d.keptChanged.length : Math.max(0, Math.floor(Number(d && d.keptChanged)) || 0);
+        }
         if (kept > 0) alert(`${kept} reporting line${kept === 1 ? ' was' : 's were'} changed by hand since and stayed as set.`);
       } catch (e) { alert('Could not undo: ' + (e && e.message ? e.message : 'no connection')); }
       try { await loadAgents(); } catch { /* the list refreshes on its next tick */ }   // the reporting lines changed
@@ -9087,8 +9120,11 @@
       if (!t) return;
       const ans = t.closest('[data-team-offer]');
       if (ans) { e.preventDefault(); teamSetupAnswer(ans.dataset.teamOffer); return; }
+      if (t.closest('[data-team-undo-dismiss]')) { e.preventDefault(); teamSetupDismiss(); return; }
+      if (t.closest('[data-team-undo-all]')) { e.preventDefault(); teamSetupUndoAll(); return; }
       const un = t.closest('[data-team-undo-id]');
-      if (un) { e.preventDefault(); teamSetupUndo({ id: un.dataset.teamUndoId }); }
+      if (un) { e.preventDefault(); teamSetupUndo({ id: un.dataset.teamUndoId }); return; }
+      if (t.closest('[data-team-undo-toggle]')) { e.preventDefault(); teamSetupToggleList(); }
     });
     // Repaint after the list or a status changed; only while the Teams view is the one showing.
     let teamsTimer = 0;

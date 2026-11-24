@@ -255,7 +255,15 @@
     .tm-setup-undo, .team-undo-btn { min-height: 44px; padding: 0 6px; font: inherit; font-weight: 600; color: var(--accent-hover); text-decoration: underline; background: transparent; }
     .team-offer-slot { padding: 8px 10px 0; max-height: 50vh; overflow-y: auto; }
     .team-offer-slot .question { margin-bottom: 8px; }
-    .team-undo-row { margin-bottom: 8px; padding: 6px 12px; border: 1px solid var(--border); border-radius: 12px; font-size: 13px; color: var(--text-dim); }
+    /* The Undo line: one text line above the "Working on" cards (own row in the same flow), ellipsis when narrow; the list opens below it */
+    .team-undo-line { display: flex; align-items: center; gap: 6px; min-width: 0; margin-bottom: 4px; font-size: 13px; line-height: 1.4; color: var(--text-dim); white-space: nowrap; }
+    .team-undo-line[data-team-undo-toggle] { cursor: pointer; }
+    .team-undo-text { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .team-undo-line .team-undo-btn { flex: none; min-height: 32px; }
+    .team-undo-sep { flex: none; }
+    .team-undo-x { flex: none; margin-left: auto; min-width: 32px; min-height: 32px; padding: 0; font: inherit; font-size: 18px; line-height: 1; color: var(--text-dim); background: transparent; }
+    .team-undo-list { margin-bottom: 4px; padding: 2px 12px; border: 1px solid var(--border); border-radius: 12px; font-size: 13px; color: var(--text-dim); }
+    .team-undo-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
     /* Build Team (admins): the "No team yet" line under a row, the Teams button, the menu entry; 44px touch targets */
     .build-line { padding: 0 14px 6px 54px; font-size: 12px; color: var(--text-dim); display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
     .build-team-link { min-height: 44px; padding: 0 8px; margin-left: -8px; font-size: 13px; font-weight: 600; color: var(--accent-hover); text-decoration: underline; background: transparent; }

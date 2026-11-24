@@ -46,6 +46,7 @@ function desk(over = {}) {
   const routes = over.routes || {};
   const ctx = {
     console, timers: [], started: [], alerts: [], confirms: [], statusSets: [], repaints: 0, agentLoads: 0,
+    store: {}, localStorage: { getItem: (k) => (k in ctx.store ? ctx.store[k] : null), setItem: (k, v) => { ctx.store[k] = String(v); } },
     setTimeout: (f) => { ctx.timers.push(f); return ctx.timers.length; },
     document: { getElementById: (id) => { const m = /^team-offer-slot-(.+)$/.exec(id); return m ? slots[m[1]] || null : null; } },
     isHubAdmin: () => over.member !== true,
@@ -67,11 +68,11 @@ function desk(over = {}) {
     setAgentLive: (n, p) => { ctx.statusSets.push([n, p]); if (ctx.agentStatus[n]) Object.assign(ctx.agentStatus[n], p); },
   };
   const src = [hubEscLine, fnFrom(app, 'capName'),
-    "let teamSetup = { offer: null, lead: null, setups: [] }; let teamSetupStarting = false; const teamSetupRecent = new Set(); let teamSetupLoadTimer = 0;",
+    "let teamSetup = { offer: null, lead: null, setups: [] }; let teamSetupStarting = false; const teamSetupRecent = new Set(); let teamSetupLoadTimer = 0; let teamSetupListOpen = false; const TEAM_UNDO_DISMISS_KEY = 'hub-team-undo-dismissed';",
     ...['teamSetupLeadDisplay', 'teamSetupBusy', 'teamSetupLines', 'teamSetupDate', 'teamSetupLineHtml', 'teamSetupApply', 'teamSetupPaint',
-      'teamSetupOfferHtml', 'teamSetupUndoRows', 'teamSetupChatPaint', 'teamSetupLoadSoon'].map((n) => fnFrom(app, n)),
-    ...['teamSetupLoad', 'teamSetupAnswer', 'teamSetupStart', 'teamSetupUndo'].map((n) => 'async ' + fnFrom(app, n)),
-    'this.api = { teamSetupApply, teamSetupLoad, teamSetupAnswer, teamSetupStart, teamSetupUndo, teamSetupLineHtml, teamSetupBusy, teamSetupRecent, get state() { return teamSetup; } };'].join('\n');
+      'teamSetupOfferHtml', 'teamSetupUndoRows', 'teamSetupDismissedId', 'teamSetupDismiss', 'teamSetupToggleList', 'teamSetupUndoHtml', 'teamSetupChatPaint', 'teamSetupLoadSoon'].map((n) => fnFrom(app, n)),
+    ...['teamSetupLoad', 'teamSetupAnswer', 'teamSetupStart', 'teamSetupUndo', 'teamSetupUndoAll'].map((n) => 'async ' + fnFrom(app, n)),
+    'this.api = { teamSetupApply, teamSetupLoad, teamSetupAnswer, teamSetupStart, teamSetupUndo, teamSetupUndoAll, teamSetupDismiss, teamSetupToggleList, teamSetupLineHtml, teamSetupBusy, teamSetupRecent, get state() { return teamSetup; } };'].join('\n');
   vm.createContext(ctx);
   vm.runInContext(src, ctx);
   return { ctx, api: ctx.api, calls, slots };
@@ -205,7 +206,8 @@ test('per-setup Undo: "Undo this team" under the lead\'s confirmation (event or 
   w.api.teamSetupApply({ offer: 'accepted', lead: LEAD, setups: SETUPS });
   const h = w.slots.c1.innerHTML;
   assert.match(h, /Studio|studio/i);
-  assert.ok(h.includes('(2 reporting lines)') && h.includes('data-team-undo-id="s2"') && h.includes('Undo this team'));
+  assert.ok(h.includes('(2 reporting lines)') && h.includes('data-team-undo-id="s2"') && h.includes('>Undo</button>'));
+  assert.ok(!h.includes('Undo this team'));
   assert.ok(!h.includes('data-team-undo-id="s1"'));
   assert.strictEqual(w.slots.c2.innerHTML, '', 'only in the lead\'s chat');
   await w.api.teamSetupUndo({ id: 's2' });
@@ -295,6 +297,7 @@ function phone(over = {}) {
   const env = {
     esc: (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'),
     isAdmin: () => over.member !== true, agents: [{ name: 'atlas', display: 'Atlas' }, { name: 'lead', display: over.leadDisplay || 'Lead', lead: true }],
+    store: {}, localStorage: { getItem: (k) => (k in env.store ? env.store[k] : null), setItem: (k, v) => { env.store[k] = String(v); } },
     live: over.live || {}, current: over.current === undefined ? 'lead' : over.current, screen: over.screen || 'chat',
     $: (id) => (id === 'team-offer-slot' ? slot : null), displayName: (n) => (n === 'atlas' ? 'Atlas' : n === 'studio' ? 'Studio' : n),
     toasts: [], toast: (m) => env.toasts.push(m), confirms: [], confirm: (m) => { env.confirms.push(m); return over.confirm !== false; },
@@ -311,7 +314,7 @@ function phone(over = {}) {
   const block = mjs.slice(mjs.indexOf('// ── Set up teams and Undo team setup'), mjs.indexOf('// The Active section at the top of the agent list'));
   assert.ok(block.length > 500);
   const names = Object.keys(env);
-  const api = new Function(...names, block + '\nreturn { teamSetupApply, teamSetupLoad, teamSetupAnswer, teamSetupStart, teamSetupUndo, teamSetupLineHtml, teamSetupEmptyHtml, teamSetupBusy, teamSetupRecent, teamSetupSlotPaint, teamSetupWire, get state() { return teamSetup; } };')(...names.map((n) => env[n]));
+  const api = new Function(...names, block + '\nreturn { teamSetupApply, teamSetupLoad, teamSetupAnswer, teamSetupStart, teamSetupUndo, teamSetupLineHtml, teamSetupEmptyHtml, teamSetupBusy, teamSetupRecent, teamSetupSlotPaint, teamSetupWire, teamSetupUndoAll, teamSetupDismiss, teamSetupToggleList, get state() { return teamSetup; } };')(...names.map((n) => env[n]));
   return { env, api, calls, slot };
 }
 test('phone: the offer card shows in the lead\'s chat for an admin, with the lead\'s display name, the sentence and the three answers', () => {
@@ -388,7 +391,7 @@ test('phone: Undo line text, the confirm with N, POST { all: true }, redraw; and
   const t = phone({ routes: { 'POST /api/team-setup/undo': res(200, { removed: 2, keptChanged: 0 }) } });
   t.api.teamSetupRecent.add('s2');
   t.api.teamSetupApply({ offer: 'accepted', lead: LEAD, setups: SETUPS });
-  assert.ok(t.slot.innerHTML.includes('data-team-undo-id="s2"') && t.slot.innerHTML.includes('Undo this team') && t.slot.innerHTML.includes('(2 reporting lines)'));
+  assert.ok(t.slot.innerHTML.includes('data-team-undo-id="s2"') && !t.slot.innerHTML.includes('Undo this team') && t.slot.innerHTML.includes('(2 reporting lines)'));
   assert.ok(!t.slot.innerHTML.includes('data-team-undo-id="s1"'));
   await t.api.teamSetupUndo({ id: 's2' });
   assert.deepStrictEqual(t.env.confirms, ['Remove these 2 reporting lines?']);
@@ -440,4 +443,90 @@ test('phone: the plan card draws every option the server sends (four for a set-u
   const body = mjs.slice(mjs.indexOf('function showQuestion('), mjs.indexOf('function showQuestion(') + 12000);
   assert.doesNotMatch(body, /\.slice\(0, [0-9]\)|opts?\.length > [0-9]|options\.length > [0-9]/);
   assert.match(body, /isSkip/);
+});
+
+// ───────────────────────── the one compact Undo line (desktop and phone) ─────────────────────────
+const MAINS = ['atlas', 'studio', 'ember', 'north', 'maestro', 'quill'];
+const recentSetups = (k) => MAINS.slice(0, k).map((main, i) => ({ id: `u${i + 1}`, at: new Date(Date.now() - (k - i) * 60 * 1000).toISOString(), main, count: 3 }));
+const textOf = (h) => h.replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
+const pages = [
+  ['desktop', () => { const w = desk(); return { w, html: () => w.slots.c1.innerHTML, apply: (setups) => w.api.teamSetupApply({ offer: 'accepted', lead: LEAD, setups }), confirms: () => w.ctx.confirms, store: () => w.ctx.store }; }],
+  ['phone', () => { const w = phone(); return { w, html: () => w.slot.innerHTML, apply: (setups) => w.api.teamSetupApply({ offer: 'accepted', lead: LEAD, setups }), confirms: () => w.env.confirms, store: () => w.env.store }; }],
+];
+for (const [label, mk] of pages) {
+  test(`${label}: one recent setup is one line with the single wording and Undo, no stacked cards`, () => {
+    const p = mk();
+    p.apply(recentSetups(1));
+    const h = p.html();
+    assert.strictEqual((h.match(/class="team-undo-line"/g) || []).length, 1);
+    assert.doesNotMatch(h, /Undo this team|team-undo-row|team-undo-list/);
+    assert.match(textOf(h), /^Atlas team recorded \(3 reporting lines\) · Undo ×$/);
+    assert.ok(h.includes('data-team-undo-id="u1"') && h.includes('data-team-undo-dismiss'));
+  });
+  test(`${label}: six recent setups are exactly one line "6 teams recorded · Undo"; the list opens with 6 rows and Undo all`, async () => {
+    const p = mk();
+    p.apply(recentSetups(6));
+    let h = p.html();
+    assert.strictEqual((h.match(/team-undo-line/g) || []).length, 1, 'one line element');
+    assert.strictEqual((h.match(/team recorded \(/g) || []).length, 0, 'no per-team cards');
+    assert.strictEqual(textOf(h), '6 teams recorded · Undo ×');
+    assert.doesNotMatch(h, /team-undo-list/);
+    p.w.api.teamSetupToggleList();
+    h = p.html();
+    assert.strictEqual((h.match(/class="team-undo-item"/g) || []).length, 7, '6 team rows + the Undo all row');
+    assert.strictEqual((h.match(/data-team-undo-id="/g) || []).length, 6);
+    assert.strictEqual((h.match(/data-team-undo-all/g) || []).length, 1);
+    assert.ok(/Atlas team \(3 lines\)/i.test(h) && /Quill team \(3 lines\)/i.test(h));
+    assert.ok(h.indexOf('data-team-undo-id="u6"') < h.indexOf('data-team-undo-id="u1"'), 'newest first');
+    assert.strictEqual((h.match(/team-undo-line/g) || []).length, 1, 'still one line above the list');
+    p.w.api.teamSetupToggleList();
+    assert.doesNotMatch(p.html(), /team-undo-list/, 'the line toggles the list closed');
+  });
+  test(`${label}: a row's Undo asks "Remove these N reporting lines?" and POSTs its id; Undo all asks once and undoes each, newest first`, async () => {
+    const p = mk();
+    p.apply(recentSetups(6));
+    await p.w.api.teamSetupUndo({ id: 'u3' });
+    assert.deepStrictEqual(p.confirms(), ['Remove these 3 reporting lines?']);
+    assert.deepStrictEqual(p.w.calls.filter((c) => c.method === 'POST').map((c) => JSON.parse(c.body)), [{ id: 'u3' }]);
+    const q = mk();
+    q.apply(recentSetups(6));
+    await q.w.api.teamSetupUndoAll();
+    assert.deepStrictEqual(q.confirms(), ['Remove all 18 reporting lines from these 6 teams?']);
+    assert.deepStrictEqual(q.w.calls.filter((c) => c.method === 'POST').map((c) => JSON.parse(c.body).id), ['u6', 'u5', 'u4', 'u3', 'u2', 'u1']);
+  });
+  test(`${label}: × hides the line and it stays hidden on re-render until a newer setup id appears; the Teams tab line is unchanged`, () => {
+    const p = mk();
+    const six = recentSetups(6);
+    p.apply(six);
+    assert.ok(p.html());
+    p.w.api.teamSetupDismiss();
+    assert.strictEqual(p.html(), '');
+    assert.strictEqual(p.store()['hub-team-undo-dismissed'], 'u6');
+    p.apply(six);                                   // re-render with the same data
+    assert.strictEqual(p.html(), '');
+    p.apply([...six].reverse());                    // another order, same newest
+    assert.strictEqual(p.html(), '');
+    p.apply([...six, { id: 'u7', at: new Date().toISOString(), main: 'atlas', count: 2 }]);
+    assert.strictEqual(textOf(p.html()), '7 teams recorded · Undo ×', 'a NEW setup brings it back');
+    // dismissing loses nothing: the Teams tab line still offers Undo for every setup
+    assert.match(p.w.api.teamSetupLineHtml(), /Team setup: 7 teams recorded [^<]+ · <button type="button" class="(teams-setup-undo|tm-setup-undo)" data-team-undo>Undo<\/button>/);
+  });
+  test(`${label}: setups older than 30 minutes show no chat line (existing limit), controls are plain buttons without hover`, () => {
+    const p = mk();
+    p.apply(recentSetups(6).map((s) => ({ ...s, at: new Date(Date.now() - 31 * 60 * 1000).toISOString() })));
+    assert.strictEqual(p.html(), '');
+    assert.match(label === 'desktop' ? app : mjs, /\.sort\(\(a, b\) => \(Date\.parse\(b\.at\) \|\| 0\) - \(Date\.parse\(a\.at\) \|\| 0\)\)/);
+  });
+}
+test('the line and list styles: one line (nowrap, ellipsis), no hover rules, no colour literals, the slot stays above the Working on cards', () => {
+  for (const [name, html] of [['index.html', idx], ['mobile.html', mhtml]]) {
+    const css = html.split('\n').filter((l) => /\.team-undo-(line|text|x|list|item|sep)/.test(l)).join('\n');
+    assert.match(css, /\.team-undo-line \{[^}]*white-space: nowrap/, name);
+    assert.match(css, /\.team-undo-text \{[^}]*text-overflow: ellipsis/, name);
+    assert.doesNotMatch(css, /:hover/, name);
+    assert.ok(!/#[0-9a-fA-F]{3,8}\b|rgba?\(/.test(css), name);
+  }
+  assert.match(app, /t\.closest\('\[data-team-undo-dismiss\]'\)\) \{ e\.preventDefault\(\); teamSetupDismiss\(\); return; \}/);
+  assert.match(mjs, /t\.closest\('\[data-team-undo-all\]'\)\) \{ e\.preventDefault\(\); teamSetupUndoAll\(\); return; \}/);
+  assert.match(app, /t\.closest\('\[data-team-undo-toggle\]'\)\) \{ e\.preventDefault\(\); teamSetupToggleList\(\); \}/);
 });
