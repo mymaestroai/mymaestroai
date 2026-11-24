@@ -277,14 +277,14 @@ test('setupMessage: the instruction, facts for every admin main agent, a member\
   const msg = TS.setupMessage({ agentsList: list, adminIds: new Set(['u-admin']), handOffs, consultsOf: () => ({}), starterNames: new Set(), tierOf: () => 'top' });
   assert.ok(msg.startsWith('Follow TEAM-PLAYBOOK.md (Set up teams). For each main agent, propose its team from the facts with team_plan (one call per team, lines only)'));
   assert.match(msg, /members' agents as counts only/);
-  assert.ok(msg.length <= TP.FACTS_MAX + TS.SETUP_HEAD.length, `fits: ${msg.length}`);
+  assert.ok(msg.length <= TS.SETUP_FACTS_MAX + TS.SETUP_HEAD.length, `fits: ${msg.length}`);  // set-up has its own limit (SETUP_FACTS_MAX), not Build Team's
   const f = JSON.parse(msg.match(/```json\n([\s\S]*)\n```$/)[1]);
   assert.deepEqual(f.mains.map(x => x.name), ['lead', 'studio', 'press']);
   assert.equal(f.members_agents.count, 2); assert.equal(f.members_agents.mains, 1);
   assert.equal(JSON.stringify(f).includes('samhelp'), false, 'a member\'s agent is never named');
   assert.equal(JSON.stringify(f).includes('"sam"'), false);
   const studio = f.mains.find(x => x.name === 'studio');
-  assert.equal(studio.working_history.find(r => r.name === 'writer').from_main.hand_offs, 6);
+  assert.equal(studio.working_history.find(r => r.name === 'writer').calls, 6)  // compact row shape: calls (this main's), total, share;
   assert.equal(studio.working_history.find(r => r.name === 'writer').suggestion, 'member');
 });
 test('setupMessage keeps a large install within the facts limit by trimming each main agent\'s rows', () => {
@@ -295,7 +295,7 @@ test('setupMessage keeps a large install within the facts limit by trimming each
     for (let j = 0; j < 8; j++) { list.push({ name: `w${i}_${j}`, category: 'worker', blurb: 'x' }); for (let k = 0; k < 5; k++) handOffs.push({ caller: `main${i}`, target: `w${i}_${j}`, createdAt: Date.now() - 1000 }); }
   }
   const msg = TS.setupMessage({ agentsList: list, adminIds: new Set(), handOffs, consultsOf: () => ({}), starterNames: new Set() });
-  assert.ok(msg.length <= TP.FACTS_MAX + TS.SETUP_HEAD.length, `fits: ${msg.length}`);
+  assert.ok(msg.length <= TS.SETUP_FACTS_MAX + TS.SETUP_HEAD.length, `fits: ${msg.length}`);  // set-up has its own limit (SETUP_FACTS_MAX), not Build Team's
   const f = JSON.parse(msg.match(/```json\n([\s\S]*)\n```$/)[1]);
   assert.ok(f.mains.length >= 20, 'every main agent is still there');
 });
