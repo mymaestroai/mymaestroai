@@ -206,7 +206,7 @@ test('per-setup Undo: "Undo this team" under the lead\'s confirmation (event or 
   w.api.teamSetupApply({ offer: 'accepted', lead: LEAD, setups: SETUPS });
   const h = w.slots.c1.innerHTML;
   assert.match(h, /Studio|studio/i);
-  assert.ok(h.includes('(2 reporting lines)') && h.includes('data-team-undo-id="s2"') && h.includes('>Undo</button>'));
+  assert.ok(h.includes('data-team-undo-id="s2"') && h.includes('>Undo</button>'));
   assert.ok(!h.includes('Undo this team'));
   assert.ok(!h.includes('data-team-undo-id="s1"'));
   assert.strictEqual(w.slots.c2.innerHTML, '', 'only in the lead\'s chat');
@@ -216,7 +216,7 @@ test('per-setup Undo: "Undo this team" under the lead\'s confirmation (event or 
   // a setup written within the last half hour shows after a page load as well (GET /api/team-setup)
   const fresh = desk();
   fresh.api.teamSetupApply({ offer: 'accepted', lead: LEAD, setups: [{ id: 'f1', at: new Date().toISOString(), main: 'atlas', count: 1 }] });
-  assert.match(fresh.slots.c1.innerHTML, /\(1 reporting line\)[^]*data-team-undo-id="f1"/);
+  assert.match(fresh.slots.c1.innerHTML, /team recorded<[^]*data-team-undo-id="f1"/);
 });
 test('the hub event team_setup_recorded is wired (remembers the id, reloads the agent list and the state)', () => {
   assert.match(app, /source\.addEventListener\('team_setup_recorded', e => \{[\s\S]{0,80}teamSetupRecent\.add\(String\(ev\.id\)\);[\s\S]{0,120}loadAgents\(\)[\s\S]{0,60}teamSetupLoadSoon\(\);/);
@@ -391,7 +391,7 @@ test('phone: Undo line text, the confirm with N, POST { all: true }, redraw; and
   const t = phone({ routes: { 'POST /api/team-setup/undo': res(200, { removed: 2, keptChanged: 0 }) } });
   t.api.teamSetupRecent.add('s2');
   t.api.teamSetupApply({ offer: 'accepted', lead: LEAD, setups: SETUPS });
-  assert.ok(t.slot.innerHTML.includes('data-team-undo-id="s2"') && !t.slot.innerHTML.includes('Undo this team') && t.slot.innerHTML.includes('(2 reporting lines)'));
+  assert.ok(t.slot.innerHTML.includes('data-team-undo-id="s2"') && !t.slot.innerHTML.includes('Undo this team'));
   assert.ok(!t.slot.innerHTML.includes('data-team-undo-id="s1"'));
   await t.api.teamSetupUndo({ id: 's2' });
   assert.deepStrictEqual(t.env.confirms, ['Remove these 2 reporting lines?']);
@@ -460,7 +460,7 @@ for (const [label, mk] of pages) {
     const h = p.html();
     assert.strictEqual((h.match(/class="team-undo-line"/g) || []).length, 1);
     assert.doesNotMatch(h, /Undo this team|team-undo-row|team-undo-list/);
-    assert.match(textOf(h), /^Atlas team recorded \(3 reporting lines\) · Undo ×$/);
+    assert.match(textOf(h), /^Atlas team recorded · Undo ×$/);
     assert.ok(h.includes('data-team-undo-id="u1"') && h.includes('data-team-undo-dismiss'));
   });
   test(`${label}: six recent setups are exactly one line "6 teams recorded · Undo"; the list opens with 6 rows and Undo all`, async () => {

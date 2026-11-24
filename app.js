@@ -8383,8 +8383,9 @@
       for (const s of Object.values(agentStatus)) if (s && s.buildingTeamFor === name) return true;   // the lead's status carries it while the turn runs
       return false;
     }
-    function agentCanBuildTeam(a) {
-      return !!a && isHubAdmin() && !simpleOn() && hubTeams.isMain(a) && !hubTeams.hasTeam(a.name, AGENTS);
+    // inSimple: the Teams rows of Simple mode also carry the small 'No team yet · Build team' words (Simple has no ⋯ menu to find it in); the menu and the All Agents line stay out of Simple.
+    function agentCanBuildTeam(a, inSimple) {
+      return !!a && isHubAdmin() && (!!inSimple || !simpleOn()) && hubTeams.isMain(a) && !hubTeams.hasTeam(a.name, AGENTS);
     }
     // Optimize team (admins): a main agent WITH a team shows this instead of Build team. Its sublabel is the size of what the review reads,
     // fetched once per menu opening from GET /api/agents/:name/optimize-team/estimate.
@@ -8429,7 +8430,7 @@
         : `<button type="button" ${attrs}${on ? ' disabled' : ''}>${on ? 'Building…' : idle}</button>`;
     }
     function buildLineHtml(a) {
-      return agentCanBuildTeam(a) && !agentWorksAlone(a.name) ? `<span class="agent-build-line">No team yet · ${buildTeamCtlHtml(a, 'link', 'span')}</span>` : '';
+      return agentCanBuildTeam(a) && !agentWorksAlone(a.name) ? `<span class="agent-build-line"><span class="tbs-prefix">No team yet · </span>${buildTeamCtlHtml(a, 'link', 'span')}</span>` : '';
     }
     function paintBuildControls() {
       if (typeof document === 'undefined' || !document.querySelectorAll) return;
@@ -8606,14 +8607,14 @@
           : '');
 
       const tip = hubEsc(agent.blurb || `${capName(agent.category || 'specialist')} agent · ${shortModel}`);
+      const buildLine = buildLineHtml(agent);   // a main with no team: 'No team yet · Build team' takes the model line's place, so every row has one height
       return `<button class="agent-btn ${hubEsc(agent.type || '')} ${inGroup ? 'in-group' : ''} ${isSummarizer ? 'is-summarizer' : ''}"
                       data-agent="${safeName}" data-model="${safeModel}" id="agent-btn-${safeName}" title="${tip}">
         <span class="agent-status" id="agent-status-${safeName}"></span>
         <span class="agent-icon">${hubEsc(agent.icon || '🤖')}</span>
         <span class="agent-info">
           <span class="name"><span class="name-text">${displayName}</span>${agent.lead ? '<span class="lead-badge" title="Lead agent: may schedule tasks for other agents and see, edit or cancel their tasks. Change in this agent\'s settings.">👑</span>' : ''}</span>
-          <span class="model">${cyberBadge}${subtitle}${statusBadge || sizeLabel}</span>
-          ${buildLineHtml(agent)}
+          ${buildLine || `<span class="model">${cyberBadge}${subtitle}${statusBadge || sizeLabel}</span>`}
         </span>
         ${agentMenuBtnHtml(agent, 'span')}
         <span class="actions">
@@ -8861,17 +8862,21 @@
       else if (bgState === 'background') bgText = AgentDot.bgLine(bgN);   // under the role line, as All Agents puts it under the model
       const foldable = isMain && n.children.length > 0;
       const label = hubEsc(a.display || capName(a.name));
+      // A leader's own fold: Simple starts with the third level hidden, and this arrow opens the leader's workers (same key store as the mains' folds). Only Simple shows it.
+      const leaderOpen = leader && teamsOpenGet()[a.name] === true;
       const arrow = foldable
         ? `<button type="button" class="teams-fold${open ? ' open' : ''}" data-fold="${name}" aria-expanded="${open ? 'true' : 'false'}" aria-label="${open ? 'Fold' : 'Open'} ${label}'s team"><span aria-hidden="true">▶</span></button>`
-        : '<span class="teams-fold none" aria-hidden="true"></span>';
-      const buildBtn = isMain && !n.children.length && agentCanBuildTeam(a) && !agentWorksAlone(a.name) ? buildTeamCtlHtml(a, 'link', 'span') : '';   // admins: the small link ends the "No team yet" sub-line, inside the row
+        : leader
+          ? `<button type="button" class="teams-fold teams-fold-leader${leaderOpen ? ' open' : ''}" data-fold="${name}" aria-expanded="${leaderOpen ? 'true' : 'false'}" aria-label="${leaderOpen ? 'Fold' : 'Open'} ${label}'s workers"><span aria-hidden="true">▶</span></button>`
+          : '<span class="teams-fold none" aria-hidden="true"></span>';
+      const buildBtn = isMain && !n.children.length && agentCanBuildTeam(a, true) && !agentWorksAlone(a.name) ? buildTeamCtlHtml(a, 'link', 'span') : '';   // admins: the small link ends the "No team yet" sub-line, inside the row
       // A leader's role line has a short form for a narrow sidebar ("Leads 2"), shown instead of the long one when it would be cut.
       const subText = leader && n.children.length && sub
         ? `<span class="sub-wide">${hubEsc(sub)}</span><span class="sub-narrow">${hubEsc(`Leads ${n.size}`)}</span>`
         : hubEsc(sub);
-      // Simple hides the third level, so a main agent with leaders says what is shown and what exists ('1 leader · 3 agents'); with only direct reports 'team of N' is true there too.
-      const simpleMainSub = isMain && n.children.length ? (() => { const k = n.children.filter(c => c.children.length > 0).length; return k ? `${k} ${k === 1 ? 'leader' : 'leaders'} · ${n.size} agents${working}` : ''; })() : '';
-      const subHtml = (sub ? `<span class="teams-sub teams-sub-adv${leader || direct || simpleMainSub ? ' has-simple' : ''}${buildBtn && sub === 'No team yet' ? ' teams-sub-build' : ''}">${subText}${buildBtn && sub === 'No team yet' ? ' · ' + buildBtn : ''}</span>` : busyText ? `<span class="teams-sub teams-sub-adv busy${leader || direct ? ' has-simple' : ''}">${hubEsc(busyText)}</span>` : '')
+      // Simple hides the third level, so a main agent with leaders says the team and how many leaders are shown ('team of 4 · 1 leader': one wording for team size); with only direct reports 'team of N' is true there too.
+      const simpleMainSub = isMain && n.children.length ? (() => { const k = n.children.filter(c => c.children.length > 0).length; return k ? `team of ${n.size} · ${k} ${k === 1 ? 'leader' : 'leaders'}${working}` : ''; })() : '';
+      const subHtml = (sub ? `<span class="teams-sub teams-sub-adv${leader || direct || simpleMainSub ? ' has-simple' : ''}${buildBtn && sub === 'No team yet' ? ' teams-sub-build' : ''}">${buildBtn && sub === 'No team yet' ? '<span class="tbs-prefix">No team yet · </span>' + buildBtn : subText}</span>` : busyText ? `<span class="teams-sub teams-sub-adv busy${leader || direct ? ' has-simple' : ''}">${hubEsc(busyText)}</span>` : '')
         + (bgText ? `<span class="teams-sub teams-bg-line" title="${hubEsc(dotTip)}">${hubEsc(bgText)}</span>` : '')
         + (simpleMainSub ? `<span class="teams-sub teams-sub-simple">${hubEsc(simpleMainSub)}</span>` : leader ? '<span class="teams-sub teams-sub-simple">Team leader</span>' : direct ? `<span class="teams-sub teams-sub-simple">Reports to ${hubEsc(parent.agent.display || capName(parent.agent.name))}</span>` : '');
       const dd = worker ? Math.max(n.depth, 2) : n.depth;   // a direct worker gets the worker indent
@@ -8886,7 +8891,8 @@
     // Under a main agent the blocks sit in .teams-leaders (no connector); under a leader or worker they sit in .teams-kids (left border).
     function teamsBlockHtml(n, parent) {
       const rank = n.depth >= 2 || !n.children.length ? 'worker' : 'leader';
-      return `<div class="teams-block rank-${rank}">${teamsRowHtml(n, false, parent)}${teamsSubtreeHtml(n)}</div>`;
+      const lo = rank === 'leader' && teamsOpenGet()[n.agent.name] === true ? ' leader-open' : '';   // Simple shows this leader's workers
+      return `<div class="teams-block rank-${rank}${lo}">${teamsRowHtml(n, false, parent)}${teamsSubtreeHtml(n)}</div>`;
     }
     function teamsSubtreeHtml(n) {
       let h = '';
@@ -9043,7 +9049,7 @@
       const x = '<button type="button" class="team-undo-x" data-team-undo-dismiss aria-label="Dismiss" title="Dismiss (the Teams tab keeps Undo)">×</button>';
       if (rows.length === 1) {
         const s = rows[0], n = lines(s);
-        return `<div class="team-undo-line"><span class="team-undo-text">${whoOf(s)} team recorded (${n} reporting line${n === 1 ? '' : 's'})</span> <span class="team-undo-sep">·</span> <button type="button" class="team-undo-btn" data-team-undo-id="${hubEsc(String(s.id))}">Undo</button> ${x}</div>`;
+        return `<div class="team-undo-line"><span class="team-undo-text">${whoOf(s)} team recorded</span> <span class="team-undo-sep">·</span> <button type="button" class="team-undo-btn" data-team-undo-id="${hubEsc(String(s.id))}">Undo</button> ${x}</div>`;
       }
       let html = `<div class="team-undo-line" data-team-undo-toggle><span class="team-undo-text">${rows.length} teams recorded</span> <span class="team-undo-sep">·</span> <button type="button" class="team-undo-btn" data-team-undo-toggle aria-expanded="${teamSetupListOpen ? 'true' : 'false'}">Undo</button> ${x}</div>`;
       if (teamSetupListOpen) {
@@ -18740,7 +18746,11 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (vw && w) right = Math.min(right, Math.max(8, vw - 8 - w));
       el.style.right = `${right}px`;
       const row = (t.closest && t.closest('.input-area')) || t;   // the whole composer row: the message box is taller than the button
-      const top = row.getBoundingClientRect().top;
+      let top = row.getBoundingClientRect().top;
+      // The slots stacked directly above the composer (the Undo line / offer card, the Working on and research lines) are part of what the tip must clear: it sits above the topmost one that shows.
+      for (let sib = row.previousElementSibling; sib && sib.classList && (sib.classList.contains('team-offer-slot') || sib.classList.contains('handoff-cards')); sib = sib.previousElementSibling) {
+        if (!sib.hidden && sib.offsetHeight > 0) top = Math.min(top, sib.getBoundingClientRect().top);
+      }
       el.style.bottom = `${Math.max(8, vh - top + 10)}px`;
       el.style.setProperty('--voice-hint-arrow', `${Math.max(8, Math.round((vw - right) - (r.left + r.width / 2) - 6))}px`);
     }

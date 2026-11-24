@@ -297,7 +297,7 @@ test('renderTeams: nobody has a team: the empty-state box says how to start', ()
   assert.strictEqual((h.slice(0, h.indexOf('</div>')).match(/<button/g) || []).length, 1, 'the box has one button: Set up teams');
   assert.strictEqual((h.match(/No team yet/g) || []).length, 2);
   // changed (tonight): the Build team control is a small link inside the row's own sub-line, not a separate button
-  assert.strictEqual((h.match(/No team yet · <span role="button"[^>]*class="build-team-link"/g) || []).length, 2, 'one Build team link per main agent without a team, inside its sub-line');
+  assert.strictEqual((h.match(/No team yet · <\/span><span role="button"[^>]*class="build-team-link"/g) || []).length, 2, 'one Build team link per main agent without a team, inside its sub-line');
   assert.strictEqual((h.match(/<button/g) || []).length, 4, 'Set up teams and a ⋯ on each of the three rows (no Build Team buttons)');
 });
 test('renderTeams: names are escaped, the dot follows idle / busy / question, leaders get the Simple subline', () => {
@@ -583,7 +583,7 @@ test('Build line: admins see "No team yet · Build team" on a main agent with no
   const w = world();
   w.ctx.AGENTS = [MAIN('boss'), MAIN('solo'), A('sam', { reportsTo: 'boss' }), A('spec')];
   const line = (n) => w.api.buildLineHtml(w.ctx.AGENTS.find((a) => a.name === n));
-  assert.match(line('solo'), /^<span class="agent-build-line">No team yet · <span role="button" tabindex="0" class="build-team-link" data-build-team="solo"[^>]*>Build team<\/span><\/span>$/);
+  assert.match(line('solo'), /^<span class="agent-build-line"><span class="tbs-prefix">No team yet · <\/span><span role="button" tabindex="0" class="build-team-link" data-build-team="solo"[^>]*>Build team<\/span><\/span>$/);
   assert.strictEqual(line('boss'), '', 'a row with a team keeps today\'s height');
   assert.strictEqual(line('spec'), '');
   assert.match(w.api.agentButton(w.ctx.AGENTS[1]), /agent-build-line/);
@@ -598,7 +598,7 @@ test('Teams tab: a labelled Build team link in the "No team yet" sub-line for ad
   w.api.renderTeams();
   const h = w.list.innerHTML;
   // changed (tonight): a small link ends the sub-line inside the row; no separate button
-  assert.match(h, /No team yet · <span role="button"[^>]*class="build-team-link" data-build-team="solo"[^>]*>Build team<\/span><\/span>/);
+  assert.match(h, /No team yet · <\/span><span role="button"[^>]*class="build-team-link" data-build-team="solo"[^>]*>Build team<\/span><\/span>/);
   assert.strictEqual((h.match(/data-build-team="/g) || []).length, 1, 'only the main agent without a team');
   assert.doesNotMatch(h, /build-team-btn/, 'no separate button');
   assert.ok((h.match(/class="agent-menu-btn"/g) || []).length >= 2, 'the ⋯ is on the Teams rows');
@@ -615,7 +615,7 @@ test('Building…: any status entry with buildingTeamFor === name disables the B
   assert.strictEqual(JSON.stringify(w.api.agentMenuEntries(w.ctx.AGENTS[0]).map((x) => [x.label, !!x.disabled])), '[["Settings",false],["Building…",true]]');
   w.api.renderTeams();
   // changed (tonight): the Teams row's control is the in-row link (a span), disabled through aria-disabled
-  assert.match(w.list.innerHTML, /No team yet · <span role="button"[^>]*class="build-team-link is-building"[^>]*aria-disabled="true"[^>]*>Building…<\/span>/);
+  assert.match(w.list.innerHTML, /No team yet · <\/span><span role="button"[^>]*class="build-team-link is-building"[^>]*aria-disabled="true"[^>]*>Building…<\/span>/);
   assert.match(w.api.buildLineHtml(w.ctx.AGENTS[1]), />Build team</, 'another agent is not building');
   // paintBuildControls retitles live controls when the field arrives or goes
   const el = fakeEl({ tagName: 'SPAN', dataset: { buildTeam: 'solo', idle: 'Build team' }, textContent: 'Build team' });
@@ -751,7 +751,7 @@ test('works alone: Teams reads "Works alone" in the quiet sub-line, with no Buil
   const row = (n) => h.slice(h.indexOf('data-agent="' + n + '"'), h.indexOf('</div></div>', h.indexOf('data-agent="' + n + '"')));
   assert.match(row('sam'), /<span class="teams-sub teams-sub-adv">Works alone<\/span>/);
   assert.doesNotMatch(row('sam'), /No team yet|data-build-team/);
-  assert.match(row('solo'), /No team yet · <span[^>]*data-build-team="solo"/);
+  assert.match(row('solo'), /No team yet · <\/span><span[^>]*data-build-team="solo"/);
 });
 test('works alone: Simple Teams says "Works alone" too (the same sub-line), and a member never sees it', () => {
   const w = aloneWorld(['sam'], { simple: true });
@@ -780,14 +780,14 @@ test('works alone: GET /api/team-setup carries it to teamSetup (source)', () => 
 });
 
 // ── Simple says what is shown and what exists ──
-test('Simple Teams (desktop): a main with a leader has a Simple sub-line "1 leader · 3 agents"; with only direct reports there is none and "team of N" stays', () => {
+test('Simple Teams (desktop): a main with a leader has a Simple sub-line "team of 3 · 1 leader"; with only direct reports there is none and "team of N" stays', () => {
   const w = world({ stored: [['hub-teams-open', JSON.stringify({ atlas: true })]] });
   w.ctx.AGENTS = [A('atlas', { category: 'primary' }), A('editor', { reportsTo: 'atlas' }), A('writer', { reportsTo: 'editor' }), A('scout', { reportsTo: 'atlas' })];
   w.api.renderTeams();
   const h = w.list.innerHTML;
   const atlas = h.slice(h.indexOf('data-agent="atlas"'), h.indexOf('data-agent="editor"'));
   assert.match(atlas, /teams-sub teams-sub-adv has-simple">team of 3</, 'the normal line is unchanged');
-  assert.match(atlas, /<span class="teams-sub teams-sub-simple">1 leader · 3 agents<\/span>/);
+  assert.match(atlas, /<span class="teams-sub teams-sub-simple">team of 3 · 1 leader<\/span>/);
   w.ctx.AGENTS = [A('atlas', { category: 'primary' }), A('a1', { reportsTo: 'atlas' }), A('a2', { reportsTo: 'atlas' }), A('a3', { reportsTo: 'atlas' })];
   w.api.renderTeams();
   const h2 = w.list.innerHTML;
@@ -795,13 +795,14 @@ test('Simple Teams (desktop): a main with a leader has a Simple sub-line "1 lead
   assert.match(at2, /teams-sub teams-sub-adv">team of 3</);
   assert.doesNotMatch(at2, /teams-sub-simple/);
 });
-test('Build team sub-line is never cut: it wraps instead of ellipsis (240px and 160px), a class only on the No team yet line', () => {
-  assert.match(html, /\.teams-sub\.teams-sub-build \{[^}]*white-space: normal;[^}]*overflow: visible;[^}]*text-overflow: clip;/);
+test('Build team sub-line is ONE line, never wrapped or split (item 4); a class only on the No team yet line', () => {
+  assert.doesNotMatch(html, /\.teams-sub\.teams-sub-build \{[^}]*white-space: normal/);
+  assert.match(html, /\.teams-sub\.teams-sub-build \.build-team-link \{ white-space: nowrap; \}/);
   const w = world();
   w.ctx.AGENTS = [A('solo', { category: 'primary' }), A('boss', { category: 'primary' }), A('sam', { reportsTo: 'boss' })];
   w.api.renderTeams();
   const h = w.list.innerHTML;
-  assert.match(h, /<span class="teams-sub teams-sub-adv teams-sub-build">No team yet · <span[^>]*data-build-team="solo"/);
+  assert.match(h, /<span class="teams-sub teams-sub-adv teams-sub-build"><span class="tbs-prefix">No team yet · <\/span><span[^>]*data-build-team="solo"/);
   assert.doesNotMatch(h.slice(h.indexOf('data-agent="boss"'), h.indexOf('data-agent="boss"') + 900), /teams-sub-build/);
 });
 
@@ -812,6 +813,141 @@ test('old server (no alone in GET /api/team-setup): the desktop rows show the no
   const sam = A('sam', { category: 'primary' });
   assert.match(w.api.buildLineHtml(sam), /No team yet · .*Build team/);
   w.api.renderTeams();
-  assert.match(w.list.innerHTML, /No team yet · <span[^>]*data-build-team="sam"/);
+  assert.match(w.list.innerHTML, /No team yet · <\/span><span[^>]*data-build-team="sam"/);
   assert.strictEqual(vm.runInContext("agentWorksAlone('sam')", w.ctx), false);
+});
+
+// ── design review items 3-6, 8 (desktop) ──
+test('item 3 (Simple, desktop): an admin\'s main agent with no team carries the small "No team yet · Build team" words in Simple; members and works-alone do not get the link', () => {
+  const w = world({ simple: true });
+  w.ctx.AGENTS = [A('solo', { category: 'primary' }), A('boss', { category: 'primary' }), A('sam', { reportsTo: 'boss' })];
+  w.api.renderTeams();
+  assert.match(w.list.innerHTML, /<span class="tbs-prefix">No team yet · <\/span><span role="button"[^>]*class="build-team-link"[^>]*data-build-team="solo"[^>]*onclick="buildTeamStart\('solo', event\)"/, 'the same handler and data attribute as the Teams link');
+  const m = world({ simple: true, member: true });
+  m.ctx.AGENTS = [A('solo', { category: 'primary' })];
+  m.api.renderTeams();
+  assert.match(m.list.innerHTML, /No team yet</);
+  assert.doesNotMatch(m.list.innerHTML, /build-team-link|data-build-team/);
+  const a = aloneWorld(['sam'], { simple: true });
+  a.api.renderTeams();
+  const h = a.list.innerHTML, i = h.indexOf('data-agent="sam"');
+  assert.match(h.slice(i, h.indexOf('</div></div>', i)), /Works alone/);
+  assert.doesNotMatch(h.slice(i, h.indexOf('</div></div>', i)), /data-build-team/);
+  // the menu and the All Agents line still stay out of Simple
+  assert.strictEqual(w.api.buildLineHtml(w.ctx.AGENTS[0]), '');
+  assert.doesNotMatch(html, /html\.mm-simple #teams-list[^{]*\.build-team-link[^{]*\{[^}]*display: none/);
+});
+test('item 4: the link is never split; the words before it hide in a container query below the width where the whole line fits; no wrapping', () => {
+  const w = world();
+  w.ctx.AGENTS = [A('solo', { category: 'primary' })];
+  w.api.renderTeams();
+  assert.match(w.list.innerHTML, /teams-sub-build"><span class="tbs-prefix">No team yet · <\/span><span role="button"[^>]*>Build team<\/span><\/span>/);
+  assert.doesNotMatch(html, /teams-sub-build \{[^}]*white-space: normal/);
+  assert.match(html, /\.teams-sub\.teams-sub-build \.build-team-link \{ white-space: nowrap; \}/);
+  // measured in Chrome with the real rules: the whole line needs a list of 218px (216 overflows by 1px); the default 240px sidebar gives the list about 216px, so it shows just "Build team"
+  const m = html.match(/@container \(max-width: (\d+)px\) \{ \.tbs-prefix \{ display: none; \} \}/);
+  assert.ok(m, 'the prefix hides in a container query on #teams-list');
+  assert.ok(Number(m[1]) >= 217 && Number(m[1]) <= 224, 'threshold ' + m[1]);
+  assert.match(html, /#teams-list \{ container-type: inline-size; \}/);
+});
+test('item 5: at the narrow width one rule hides the icon of every rank (and Simple\'s sized icons), nothing shows it again', () => {
+  const a = html.indexOf('@container (max-width: 190px)'), blk = html.slice(a, html.indexOf('\n    }\n', a));
+  assert.match(blk, /\.teams-row \.agent-icon, \.teams-row\.rank-leader \.agent-icon, \.teams-row\.rank-worker \.agent-icon, html\.mm-simple #teams-list \.teams-row \.agent-icon \{ display: none !important; \}/);
+  assert.ok(!/\.agent-icon \{[^}]*display: (?!none)/.test(blk));
+});
+test('item 6 (desktop Simple): "team of N · K leader(s)", never "N agents"', () => {
+  const w = world({ stored: [['hub-teams-open', JSON.stringify({ atlas: true })]] });
+  w.ctx.AGENTS = [A('atlas', { category: 'primary' }), A('e1', { reportsTo: 'atlas' }), A('e2', { reportsTo: 'atlas' }), A('w1', { reportsTo: 'e1' }), A('w2', { reportsTo: 'e2' }), A('w3', { reportsTo: 'e2' })];
+  w.api.renderTeams();
+  assert.match(w.list.innerHTML, /<span class="teams-sub teams-sub-simple">team of 5 · 2 leaders<\/span>/);
+  assert.match(w.list.innerHTML, /teams-sub-adv has-simple">2 teams · 5 agents</, 'Advanced keeps its line');
+  assert.doesNotMatch(w.list.innerHTML, /1 leader · \d+ agents|2 leaders · \d+ agents/);
+});
+test('item 7 (desktop): one Undo wording, "<Agent> team recorded" / "N teams recorded", no reporting-line count', () => {
+  assert.doesNotMatch(app, /team recorded \(\$\{n\} reporting line/);
+  assert.match(app, /\$\{whoOf\(s\)\} team recorded<\/span>/);
+});
+test('item 8 (desktop Simple): the voice tip sits above the stacked slots over the composer (Undo line, Working on), not on them', () => {
+  const src = fnSrc('voiceHintPlace');
+  assert.match(src, /team-offer-slot[^]*handoff-cards/);
+  const mk = (top, over) => Object.assign({ hidden: false, offsetHeight: 20, classList: { contains: () => false }, getBoundingClientRect: () => ({ top, left: 0, right: 0, width: 0 }) }, over);
+  const run = (slots) => {
+    const style = { props: {}, setProperty(k, v) { this.props[k] = v; } };
+    const row = mk(800, { previousElementSibling: null });
+    let prev = row;
+    // slots: [class, top, hidden] listed from the one nearest the composer upward
+    const els = slots.map(([cls, top, hidden]) => mk(top, { hidden: !!hidden, classList: { contains: (c) => c === cls }, previousElementSibling: null }));
+    row.previousElementSibling = els[0] || null; els.forEach((e, i) => { e.previousElementSibling = els[i + 1] || null; });
+    const mic = { getBoundingClientRect: () => ({ top: 800, left: 900, right: 940, width: 40 }), closest: () => row };
+    const el = { style, offsetWidth: 200 };
+    style.setProperty = (k, v) => { style.props[k] = v; };
+    new Function('voiceHint', 'voiceHintTarget', 'document', 'window', src + '\nvoiceHintPlace();')({ el }, () => mic, { documentElement: { clientWidth: 1543 } }, { innerHeight: 900 });
+    return style.bottom;
+  };
+  assert.strictEqual(run([]), '110px', 'nothing above the composer: 10px over it as before');
+  assert.strictEqual(run([['handoff-cards', 770], ['team-offer-slot', 740]]), '170px', 'above the Undo line (top 740: 900 - 740 + 10)');
+  assert.strictEqual(run([['handoff-cards', 770, true], ['team-offer-slot', 740, true]]), '110px', 'hidden slots do not count');
+});
+test('item 8 (Simple): a no-team main shows just the whole "Build team" link: the prefix is hidden in Simple, the sub-line stays one line', () => {
+  assert.match(html, /html\.mm-simple #teams-list \.tbs-prefix \{ display: none; \}/);
+  assert.match(app, /<span class="tbs-prefix">No team yet · <\/span>' \+ buildBtn/, 'the prefix span exists for the CSS to hide');
+  assert.match(html, /\.teams-sub\.teams-sub-build \.build-team-link \{ white-space: nowrap; \}/);
+});
+test('item 8 (Simple): a group box with no agent in it and an empty setup line are not drawn', () => {
+  assert.match(html, /html\.mm-simple #agent-list \.agent-group:not\(:has\(\.agent-btn\)\), html\.mm-simple #teams-list \.teams-setup-line:empty, html\.mm-simple #teams-list:empty \{ display: none; \}/);
+});
+
+// ── Page fixes after the design review (works-alone branch) ──
+const AGS = () => [A('boss', { category: 'primary' }), A('lead', { reportsTo: 'boss' }), A('w1', { reportsTo: 'lead' }), A('w2', { reportsTo: 'lead' }), A('other', { category: 'primary' }), A('o1', { reportsTo: 'other' }), A('o2', { reportsTo: 'o1' })];
+test('item 1 (desktop Simple): a leader has its own fold arrow (hidden outside Simple); its block is marked open from hub-teams-open', () => {
+  const w = world({ stored: [['hub-teams-open', JSON.stringify({ boss: true })]] });
+  w.ctx.AGENTS = AGS(); w.api.renderTeams();
+  const h = w.list.innerHTML;
+  assert.match(h, /<button type="button" class="teams-fold teams-fold-leader" data-fold="lead" aria-expanded="false" aria-label="Open Lead's workers"><span aria-hidden="true">▶<\/span><\/button>/);
+  assert.match(h, /class="teams-block rank-leader"><div class="teams-line rank-leader"/, 'folded: no leader-open marker');
+  assert.ok(!/data-fold="w1"|data-fold="o1"/.test(h), 'a worker has no arrow; nor does a direct worker');
+  assert.match(html, /\.teams-fold-leader \{ display: none; \}/, 'Advanced never shows it');
+  assert.match(html, /html\.mm-simple #teams-list \.teams-fold-leader \{ display: block;/, 'Simple does');
+  // the click: the same handler, the same key store as the mains
+  w.api.teamsOpenToggle('lead'); w.api.renderTeams();
+  const h2 = w.list.innerHTML;
+  assert.match(h2, /class="teams-block rank-leader leader-open"/);
+  assert.match(h2, /class="teams-fold teams-fold-leader open" data-fold="lead" aria-expanded="true" aria-label="Fold Lead's workers"/);
+  assert.strictEqual(w.store.get('hub-teams-open'), JSON.stringify({ boss: true, lead: true }));
+  assert.ok(h2.indexOf('data-agent="lead"') < h2.indexOf('data-agent="w1"') && h2.indexOf('data-agent="w2"') < h2.indexOf('</div></div>', h2.indexOf('data-agent="w2"')), 'the workers stay inside the leader\'s block, in .teams-kids');
+});
+test('item 1 (desktop Simple): the rule that hides the third level is kept, and an open leader shows its own workers (and not theirs)', () => {
+  assert.match(html, /html\.mm-simple #teams-list \.teams-row\.deep, html\.mm-simple #teams-list \.teams-kids, html\.mm-simple #teams-list \.teams-helpers \{ display: none !important; \}/);
+  assert.match(html, /html\.mm-simple #teams-list \.teams-block\.leader-open > \.teams-kids \{ display: block !important;/);
+  assert.match(html, /html\.mm-simple #teams-list \.teams-block\.leader-open > \.teams-kids > \.teams-block > \.teams-line\.deep, html\.mm-simple #teams-list \.teams-block\.leader-open > \.teams-kids > \.teams-block > \.teams-line > \.teams-row\.deep \{ display: flex !important; \}/);
+  assert.ok(!/leader-open [^{]*\.teams-kids [^{>]*\.teams-kids/.test(html), 'a worker\'s own people stay hidden');
+});
+test('item 2 (desktop All Agents): "No team yet · Build team" REPLACES the model line on that row (one height for every row); other rows keep the model line', () => {
+  const w = world();
+  w.ctx.AGENTS = [A('solo', { category: 'primary' }), A('boss', { category: 'primary' }), A('sam', { reportsTo: 'boss' })];
+  const solo = w.api.agentButton(w.ctx.AGENTS[0]), boss = w.api.agentButton(w.ctx.AGENTS[1]);
+  assert.doesNotMatch(solo, /class="model"/, 'no model line: the link took its place');
+  assert.match(solo, /<span class="agent-build-line"><span class="tbs-prefix">No team yet · <\/span><span role="button"[^>]*data-build-team="solo"/);
+  assert.match(solo, /<\/span><\/span>\s*<\/span>\s*<span role="button"[^>]*class="agent-menu-btn"/, 'two lines in the info block: the name, then the link');
+  assert.match(boss, /class="model"/);
+  assert.doesNotMatch(boss, /agent-build-line/);
+  vm.runInContext("teamSetup = { offer: null, lead: null, setups: [], alone: { solo: { at: 'x' } } }", w.ctx);
+  assert.match(w.api.agentButton(w.ctx.AGENTS[0]), /class="model"/, 'Works alone keeps the model line and shows no link');
+  assert.doesNotMatch(w.api.agentButton(w.ctx.AGENTS[0]), /agent-build-line/);
+  // CSS: the same line height for both lines, the link whole, the words before it hidden below the width where the line does not fit
+  const lh = (sel) => new RegExp('(?:^|\\n)\\s*' + sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ' \\{[^}]*?line-height: ([\\d.]+)').exec(html);
+  assert.strictEqual(lh('.agent-build-line')[1], lh('.agent-btn .model')[1], 'one line height: one row height');
+  assert.match(html, /\.agent-btn \.agent-build-line \.build-team-link \{ white-space: nowrap; \}/);
+  assert.match(html, /#agent-list \{ container-type: inline-size; \}/);
+  assert.match(html, /@container \(min-width: 200px\) \{ #agent-list \.agent-build-line \.tbs-prefix \{ display: inline; \} \}/);
+  assert.match(html, /html\.mm-simple \.agent-menu-btn, html\.mm-simple \.agent-build-line,/, 'Simple still shows no build line');
+});
+test('item 3 (desktop Simple): leader and worker names wrap to two lines instead of ending in "…"', () => {
+  const simple = html.split('\n').filter((l) => /^\s*html\.mm-simple #teams-list/.test(l)).join('\n');
+  const m = /html\.mm-simple #teams-list \.teams-row\.rank-leader \.name-text, html\.mm-simple #teams-list \.teams-row\.rank-worker \.name-text \{([^}]*)\}/.exec(simple);
+  assert.ok(m, 'rule');
+  assert.match(m[1], /-webkit-line-clamp: 2/);
+  assert.match(m[1], /white-space: normal/);
+  assert.match(m[1], /overflow-wrap: anywhere/);
+  assert.match(simple, /html\.mm-simple #teams-list \.teams-row\.rank-leader \.name, html\.mm-simple #teams-list \.teams-row\.rank-worker \.name \{ white-space: normal; overflow: visible; \}/);
 });

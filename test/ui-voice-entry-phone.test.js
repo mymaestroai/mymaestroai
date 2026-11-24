@@ -27,7 +27,7 @@ function page({ me = { user: { id: 'u1' }, isAdmin: true }, simple = false } = {
   const mic = mkBtn('mic-btn'), call = mkBtn('simple-call-btn');
   const appended = [];
   const row = { offsetTop: 10 };
-  const composer = { clientHeight: 60, querySelector: (s) => (s === '.row' ? row : null), appendChild: (el) => { appended.push(el); composer.last = el; } };
+  const composer = { clientHeight: 60, querySelector: (s) => (s === '.row' ? row : null), querySelectorAll: () => [], appendChild: (el) => { appended.push(el); composer.last = el; } };
   const mkEl = (tag) => { const e = { tag, children: [], style: { setProperty() {} }, dataset: {}, attrs: {}, listeners: {}, className: '', id: '', textContent: '',
     setAttribute(k, v) { e.attrs[k] = v; }, addEventListener(t, f) { e.listeners[t] = f; }, append(...c) { e.children.push(...c); }, remove() { e.removed = true; },
     getBoundingClientRect: () => ({ left: 100, width: 250 }) }; Object.defineProperty(e, 'clientWidth', { value: 250 }); return e; };
@@ -161,7 +161,24 @@ test('hint: a callout above the composer row, never over the message box or Send
   const css = html.match(/\.voice-hint \{[^}]*\}/)[0];
   assert.match(css, /position: absolute/); assert.match(css, /right: 8px/); assert.match(css, /width: min\(250px, calc\(100vw - 16px\)\)/);
   const place = fnSrc(mob, 'voiceHintPlace');
-  assert.match(place, /h\.style\.bottom = \(c\.clientHeight - row\.offsetTop \+ 10\) \+ 'px'/, 'its bottom edge sits above the row of the box, mic and Send');
+  assert.match(place, /h\.style\.bottom = \(c\.clientHeight - topY \+ 10\) \+ 'px'/, 'its bottom edge sits above the row of the box, mic and Send (and the slots above it)');
+});
+
+test('hint (phone): the tip sits above the visible Undo/offer slot and the Working on bar, not on them', () => {
+  const place = fnSrc(mob, 'voiceHintPlace');
+  assert.match(place, /team-offer-slot, \.handoff-cards/);
+  const run = (slots) => {
+    const style = { props: {}, setProperty(k, v) { this.props[k] = v; } };
+    const row = { offsetTop: 100 };
+    const composer = { clientHeight: 160, querySelector: () => row, querySelectorAll: () => slots };
+    const h = { style, getBoundingClientRect: () => ({ left: 0, width: 250 }) };
+    new Function('voiceHintEl', '$', 'voiceHintTarget', place + '\nvoiceHintPlace();')(h, () => composer, () => ({ getBoundingClientRect: () => ({ left: 300, width: 40 }) }));
+    return style.bottom;
+  };
+  assert.strictEqual(run([]), '70px', 'nothing above the row: 10px over it as before (160 - 100 + 10)');
+  assert.strictEqual(run([{ hidden: false, offsetHeight: 32, offsetTop: 62 }]), '108px', 'above the Undo line (160 - 62 + 10)');
+  assert.strictEqual(run([{ hidden: false, offsetHeight: 20, offsetTop: 80 }, { hidden: false, offsetHeight: 32, offsetTop: 40 }]), '130px', 'above the topmost of both slots');
+  assert.strictEqual(run([{ hidden: true, offsetHeight: 32, offsetTop: 62 }, { hidden: false, offsetHeight: 0, offsetTop: 30 }]), '70px', 'hidden or empty slots do not count');
 });
 
 // ── the Voice sheet tells the truth until ready ──

@@ -2569,11 +2569,11 @@ function teamsSub(node, parent) {
   if (teamsIsWorker(node)) return node.depth === 1 && parent ? `Reports to ${parent.agent.display || parent.agent.name}` : 'Worker';
   return node.children.length ? `leads ${node.size}${w}` : null;
 }
-// Simple hides the third level: a main agent with leaders says what is shown and what exists ('1 leader · 3 agents'); with only direct reports 'team of N' is all shown.
+// Simple hides the third level: a main agent with leaders says the team and how many leaders are shown ('team of 4 · 1 leader'; one wording for team size: 'team of N'); with only direct reports 'team of N' is all shown.
 function teamsSimpleMainSub(m) {
   const k = m.children.filter(teamsIsLeader).length;
   if (!k || !m.size) return teamsSub(m);
-  return `${k} ${k === 1 ? 'leader' : 'leaders'} · ${m.size} agents${m.working ? ` · ${m.working} working` : ''}`;
+  return `team of ${m.size} · ${k} ${k === 1 ? 'leader' : 'leaders'}${m.working ? ` · ${m.working} working` : ''}`;
 }
 // Keep busy nodes and their ancestors (the working filter).
 function teamsPrune(node) {
@@ -2639,8 +2639,8 @@ function agentRowHtml(a, opts) {
   // opts.sub: a line of the Teams view ('team of 3 · 1 working') that stands in for the blurb / busy text
   const sub = (done
     ? '<div class="agent-model working">✓ done</div>'
-    : opts && opts.buildSub
-      ? buildSubHtml(a.name)   // Teams: a main agent with no team (admins): "No team yet · Build team" is the row's own second line
+    : opts && (opts.buildSub || (opts.build && !worksAlone(a.name) && !working && !bgN))
+      ? buildSubHtml(a.name)   // Teams and All Agents: a main agent with no team (admins): "No team yet · Build team" is the row's own second line (small words, no line of its own)
     : opts && typeof opts.sub === 'string'
       ? `<div class="agent-model" title="${esc(opts.sub)}">${esc(opts.sub)}</div>`
     : viaWorkers
@@ -2655,8 +2655,7 @@ function agentRowHtml(a, opts) {
     `<span class="agent-meta"><div class="agent-name">${esc(a.display || a.name)}${a.lead ? ' <span class="lead-badge" title="Lead agent">👑</span>' : ''}</div>${sub}</span>` +
     `<span class="dot${dotCls}${bgN ? ' ' + AgentDot.CLASS.background : ''}" title="${esc(bgN ? bgLabel : working && !viaWorkers ? busyText(a.name) : '')}"${bgN ? ` aria-label="${esc(bgLabel)}"` : ''}>${question ? '?' : ''}</span>` +
     (n ? `<span class="badge">${n > 99 ? '99+' : n}</span>` : '') +
-    '</button>' +
-    (opts && opts.build && !worksAlone(a.name) ? buildLineHtml(a.name) : '');   // beside the row, not inside it (a button cannot hold a button)
+    '</button>';
 }
 
 // ── Build Team (admins): the "No team yet · Build team" line, the Teams button, the ⋮ menu entry ──
@@ -2678,9 +2677,6 @@ function buildTeamBtnHtml(name, cls, label, asSpan) {
 function buildTeamActivate(bt) { if (!bt.disabled && bt.getAttribute('aria-disabled') !== 'true') buildTeamStart(bt.dataset.buildTeam); }
 function buildSubHtml(name) {
   return `<div class="agent-model agent-build-sub">No team yet · ${buildTeamBtnHtml(name, 'build-team-link', 'Build team', true)}</div>`;
-}
-function buildLineHtml(name) {
-  return `<div class="build-line">No team yet · ${buildTeamBtnHtml(name, 'build-team-link', 'Build team')}</div>`;
 }
 // ── Optimize team (admins): a main agent WITH a team; the chat ⋮ menu entry, sublabel from the estimate ──
 function reviewingTeam(name) { return Object.values(live).some((s) => s && s.reviewingTeamFor === name); }
@@ -2825,7 +2821,7 @@ function teamSetupUndoHtml() {
   const x = '<button type="button" class="team-undo-x" data-team-undo-dismiss aria-label="Dismiss">×</button>';
   if (rows.length === 1) {
     const s = rows[0], n = lines(s);
-    return `<div class="team-undo-line"><span class="team-undo-text">${whoOf(s)} team recorded (${n} reporting line${n === 1 ? '' : 's'})</span> <span class="team-undo-sep">·</span> <button type="button" class="team-undo-btn" data-team-undo-id="${esc(String(s.id))}">Undo</button> ${x}</div>`;
+    return `<div class="team-undo-line"><span class="team-undo-text">${whoOf(s)} team recorded</span> <span class="team-undo-sep">·</span> <button type="button" class="team-undo-btn" data-team-undo-id="${esc(String(s.id))}">Undo</button> ${x}</div>`;
   }
   const listShown = teamSetupListOpen;   // an explicit tap opens the list in tight mode too (it sits in the capped, scrollable slot); aria-expanded follows what is shown
   let html = `<div class="team-undo-line" data-team-undo-toggle><span class="team-undo-text">${rows.length} teams recorded</span> <span class="team-undo-sep">·</span> <button type="button" class="team-undo-btn" data-team-undo-toggle aria-expanded="${listShown ? 'true' : 'false'}">Undo</button> ${x}</div>`;
@@ -10119,7 +10115,12 @@ function voiceHintDone() { try { localStorage.setItem(voiceHintKey(), '1'); } ca
 function voiceHintPlace() {
   const h = voiceHintEl, c = $('composer'), row = c && c.querySelector('.row'), t = voiceHintTarget();
   if (!h || !c || !row || !t) return;
-  h.style.bottom = (c.clientHeight - row.offsetTop + 10) + 'px';
+  // The tip sits above everything stacked over the message box inside the composer (the Undo line / offer card slot, the Working on bar): above the topmost visible one.
+  let topY = row.offsetTop;
+  for (const s of (typeof c.querySelectorAll === 'function' ? c.querySelectorAll('.team-offer-slot, .handoff-cards') : [])) {
+    if (!s.hidden && s.offsetHeight > 0 && s.offsetTop < topY) topY = s.offsetTop;
+  }
+  h.style.bottom = (c.clientHeight - topY + 10) + 'px';
   const hr = h.getBoundingClientRect(), tr = t.getBoundingClientRect();
   h.style.setProperty('--arrow-x', Math.max(10, Math.min(hr.width - 22, tr.left + tr.width / 2 - hr.left - 6)) + 'px');
 }
@@ -16848,23 +16849,36 @@ function simpleMoreDotPaint(el, m) {
   el.className = 'sa-dot ' + (m.hiddenBusy ? 'busy' : '');
   AgentDot.applyDot(el, AgentDot.dotState({ busy: m.hiddenBusy, background: m.hiddenBg }), { background: m.hiddenBg });
 }
+// A Simple row's second line: the words, and for an admin's main agent with no team 'No team yet · Build team' (the link is a span: the row is a button).
+function simpleSubSet(sm, sub, buildName) {
+  if (buildName) { const h = esc(sub) + ' · ' + buildTeamBtnHtml(buildName, 'build-team-link', 'Build team', true); if (sm.innerHTML !== h) sm.innerHTML = h; }
+  else if (sm.textContent !== sub || sm.querySelector('[data-build-team]')) sm.textContent = sub;
+}
 // One agent row, shared by the sheet and the wide sidebar: icon, name, (blurb and tick in the sheet), the busy/question dot.
 // opts.blurb adds the agent's blurb and the tick; opts.onPick runs on a tap (the chat opens after it).
 function simpleAgentRow(a, opts) {
   opts = opts || {};
   const b = document.createElement('button'); b.type = 'button'; b.className = 'sa-row'; if (a.name === current) b.classList.add('sel');
   b.dataset.agent = a.name;
-  b.innerHTML = '<span class="sa-ic"></span><span class="sa-txt"><b></b><small></small></span><span class="sa-tick"></span><span class="sa-dot"></span>';
+  b.innerHTML = '<span class="sa-ic"></span><span class="sa-txt"><b></b><small></small></span>' + (opts.fold ? '<span class="sa-fold-arrow" role="button" tabindex="0"></span>' : '') + '<span class="sa-tick"></span><span class="sa-dot"></span>';
   b.querySelector('.sa-ic').textContent = a.icon || '🤖';
   b.querySelector('b').textContent = a.display || a.name;
   b.querySelector('small').textContent = opts.blurb ? (a.blurb || '') : '';
-  if (typeof opts.sub === 'string') { const sm = b.querySelector('small'); sm.textContent = opts.sub; sm.className = 'sa-sub'; }   // Teams view: its own second line
+  if (typeof opts.sub === 'string') { const sm = b.querySelector('small'); simpleSubSet(sm, opts.sub, opts.build ? a.name : ''); sm.className = 'sa-sub' + (opts.build ? ' sa-build-sub' : ''); }   // Teams view: its own second line
   if (opts.depth) b.style.setProperty('--d', String(opts.depth));
   if (opts.depth >= 1) b.classList.add('sa-kid');   // the connector line down the left, under the boss's icon
+  if (opts.depth >= 2) b.classList.add('sa-kid2');   // a leader's worker: a second line under the leader's icon
+  if (opts.fold) {   // a leader with workers: the fold arrow (▸ closed, ▾ open) opens them nested under it; a tap on it only folds, never opens the chat
+    const fa = b.querySelector('.sa-fold-arrow');
+    fa.setAttribute('aria-expanded', String(opts.fold === 'open')); fa.setAttribute('aria-label', (opts.fold === 'open' ? 'Fold ' : 'Open ') + (a.display || a.name) + "'s workers"); fa.textContent = opts.fold === 'open' ? '▾' : '▸';
+    fa.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); teamsToggle(a.name); simpleAgentListsRepaint(); } });
+  }
   if (opts.rank === 'main' || opts.rank === 'leader' || opts.rank === 'worker') b.classList.add('sa-rank-' + opts.rank);   // Teams view in Simple: the same three ranks as the regular Teams view
   b.querySelector('.sa-tick').textContent = opts.blurb && a.name === current ? '✓' : '';
   simpleDotPaint(b.querySelector('.sa-dot'), a.name);
-  b.addEventListener('click', (e) => { if (e && e.target && e.target.closest && e.target.closest('.sa-dot.bg-work') && window.HandOffCard) HandOffCard.open(a.name); if (typeof opts.onPick === 'function') opts.onPick(); if (a.name !== current || screen !== 'chat') navigate('chat', a.name); });
+  b.addEventListener('click', (e) => { if (opts.fold && e && e.target && e.target.closest && e.target.closest('.sa-fold-arrow')) { if (e.stopPropagation) e.stopPropagation(); teamsToggle(a.name); simpleAgentListsRepaint(); return; }
+    const bt = e && e.target && e.target.closest ? e.target.closest('[data-build-team]') : null; if (bt) { if (e.stopPropagation) e.stopPropagation(); if (typeof opts.onPick === 'function') opts.onPick(); buildTeamActivate(bt); return; }   // the small Build team link starts the same Build team as the Teams link; the row does not open the chat
+    if (e && e.target && e.target.closest && e.target.closest('.sa-dot.bg-work') && window.HandOffCard) HandOffCard.open(a.name); if (typeof opts.onPick === 'function') opts.onPick(); if (a.name !== current || screen !== 'chat') navigate('chat', a.name); });
   return b;
 }
 // Fill a container with the agent rows from the one model: Primary first, the "More agents" row, then the open groups.
@@ -16873,8 +16887,12 @@ function simpleTeamsModel() {
   const t = window.hubTeams.tree(agents, live);
   const rows = [];
   for (const m of t.mains) {
-    rows.push({ a: m.agent, depth: 0, rank: 'main', sub: teamsSimpleMainSub(m) });
-    for (const c of m.children) rows.push({ a: c.agent, depth: 1, rank: teamsIsLeader(c) ? 'leader' : 'worker', sub: teamsIsLeader(c) ? 'Team leader' : `Reports to ${m.agent.display || m.agent.name}` });   // every direct report; only the third level is left out
+    rows.push({ a: m.agent, depth: 0, rank: 'main', sub: teamsSimpleMainSub(m), build: !m.size && isAdmin() && !worksAlone(m.agent.name) });   // build: 'No team yet · Build team' (Simple has no ⋯ menu)
+    for (const c of m.children) {
+      const lead = teamsIsLeader(c), open = lead && teamsOpen[c.agent.name] === true;   // a leader's workers stay hidden until its fold arrow opens them (the same 'hub-teams-open' key as the regular Teams view)
+      rows.push({ a: c.agent, depth: 1, rank: lead ? 'leader' : 'worker', sub: lead ? 'Team leader' : `Reports to ${m.agent.display || m.agent.name}`, fold: lead ? (open ? 'open' : 'closed') : '' });   // every direct report
+      if (open) for (const w of c.children) rows.push({ a: w.agent, depth: 2, rank: 'worker', sub: 'Worker' });   // nested inside the leader's block; nothing deeper than the workers
+    }
   }
   const flat = (n) => [n.agent, ...n.children.flatMap(flat)];   // anyone under a shared or Other agent stays reachable
   return { rows, groups: [{ key: '@shared', label: 'Shared specialists', items: t.shared.flatMap(flat) }, { key: '@other', label: 'Other', items: t.other.flatMap(flat) }].filter((g) => g.items.length) };
@@ -16882,7 +16900,7 @@ function simpleTeamsModel() {
 // What the Teams rows show apart from their sublines and dots (those are repainted in place).
 function simpleTeamsSig() {
   const m = simpleTeamsModel();
-  return JSON.stringify([m.rows.map((r) => [r.a.name, r.a.display || '', r.a.icon || '', r.depth, r.rank]), m.groups.map((g) => [g.key, g.items.map((a) => [a.name, a.display || '', a.icon || ''])]), teamsOpen]);
+  return JSON.stringify([m.rows.map((r) => [r.a.name, r.a.display || '', r.a.icon || '', r.depth, r.rank, !!r.build, r.fold || '']), m.groups.map((g) => [g.key, g.items.map((a) => [a.name, a.display || '', a.icon || ''])]), teamsOpen]);
 }
 function simpleSwitch(list) {
   const sw = document.createElement('div'); sw.className = 'sa-switch'; sw.setAttribute('role', 'tablist');
@@ -16893,7 +16911,7 @@ function simpleSwitch(list) {
 }
 function simpleTeamsFill(list, opts) {
   const m = simpleTeamsModel();
-  for (const r of m.rows) list.appendChild(simpleAgentRow(r.a, { ...opts, sub: r.sub, depth: r.depth, rank: r.rank }));
+  for (const r of m.rows) list.appendChild(simpleAgentRow(r.a, { ...opts, sub: r.sub, depth: r.depth, rank: r.rank, build: r.build, fold: r.fold }));
   for (const g of m.groups) {
     const open = !!teamsOpen[g.key];
     const fb = document.createElement('button'); fb.type = 'button'; fb.className = 'sa-row sa-fold'; fb.dataset.grp = g.key; fb.setAttribute('aria-expanded', String(open));
@@ -16948,8 +16966,8 @@ function simpleDotsIn(box) {
   box.querySelectorAll('.sa-row[data-agent]').forEach((b) => simpleDotPaint(b.querySelector('.sa-dot'), b.dataset.agent));
   if (window.hubTeams && teamsView() === 'teams') {
     const m = simpleTeamsModel();
-    const subs = new Map(m.rows.map((r) => [r.a.name, r.sub || '']));
-    box.querySelectorAll('.sa-row[data-agent]').forEach((b) => { const sm = b.querySelector('small.sa-sub'); if (sm && subs.has(b.dataset.agent)) sm.textContent = subs.get(b.dataset.agent); });
+    const subs = new Map(m.rows.map((r) => [r.a.name, r]));
+    box.querySelectorAll('.sa-row[data-agent]').forEach((b) => { const sm = b.querySelector('small.sa-sub'), r = subs.get(b.dataset.agent); if (sm && r) simpleSubSet(sm, r.sub || '', r.build ? b.dataset.agent : ''); });
     for (const g of m.groups) { const d = box.querySelector('.sa-fold[data-grp="' + g.key + '"] .sa-dot'); if (d) d.className = 'sa-dot ' + (!teamsOpen[g.key] && g.items.some((a) => isBusy(a.name)) ? 'busy' : ''); }
   }
   const mb = box.querySelector('.sa-more .sa-dot');

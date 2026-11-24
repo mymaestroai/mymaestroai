@@ -491,9 +491,10 @@
     /* Indent model (px): main row box starts at 22 (fold 18 + gap 4), its icon at 53, so every deeper row's ICON sits at least --tm-step (18) right of its boss's icon:
        direct reports at 71 (leaders' content starts at --tm-bar 40 + border 1 + --tm-gap 9 = 50, then box border 1 + padding 8 + dot 6 + gap 6 + 0 -> 71 for a worker, 79 for a leader),
        a leader's workers at 97+. The line hangs down the left of each group. */
-    html { --tm-step: 18px; --tm-bar: 40px; --tm-gap: 9px; --tm-kid-bar: 17px; --tm-deep-bar: 14px; }
+    html { --tm-step: 18px; --tm-bar: 40px; --tm-gap: 9px; --tm-kid-bar: 17px; --tm-deep-bar: 14px; --tms-bar: 52px; --tms-kid-bar: 37px; --tms-fold: 16px; }   /* --tms-*: Simple's Teams indent (see the Simple block): a direct report's icon starts at or right of the main's name, a leader's workers at or right of the leader's name */
     .teams-leaders { margin-left: var(--tm-bar); padding-left: var(--tm-gap); border-left: 1px solid var(--border-strong); }
     .teams-line.rank-leader > .teams-fold.none { display: none; }
+    .teams-fold-leader { display: none; }   /* a leader's fold arrow belongs to Simple (it opens the leader's workers there); Advanced shows every worker */
     .teams-block.rank-leader { margin-bottom: 8px; }
     .teams-kids { margin-left: var(--tm-kid-bar); padding-left: 8px; border-left: 1px solid var(--border-strong); }
     .teams-block .teams-block > .teams-kids { margin-left: var(--tm-deep-bar); }
@@ -525,8 +526,8 @@
     .teams-row .lead-badge { margin-left: 5px; font-size: 0.8rem; filter: drop-shadow(0 0 2px var(--agent-btn-lead-badge-filter)); }
     .teams-sub { font-size: 0.65rem; color: var(--text-tertiary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .teams-sub.busy { color: var(--warning); }
-    .teams-sub.teams-sub-build { white-space: normal; overflow: visible; text-overflow: clip; line-height: 1.25; }   /* 'No team yet · Build team' wraps to a second line instead of being cut at 240px or 160px: Build team stays whole */
-    .teams-sub.teams-sub-build .build-team-link { white-space: nowrap; }   /* the line breaks before the link, never inside it */
+    .teams-sub.teams-sub-build { overflow: visible; text-overflow: clip; }   /* 'No team yet · Build team' is ONE line, never wrapped (the row keeps its height); the link is never split or cut: where the whole line does not fit, the container query below keeps just 'Build team' */
+    .teams-sub.teams-sub-build .build-team-link { white-space: nowrap; }
     .teams-helpers { margin: 0 0 4px 0; padding: 2px 10px; font-size: 0.65rem; color: var(--warning); }
     /* Three ranks: main (above), leader (0.92 of main), worker (about two thirds of a leader row, quiet, no card) */
     .teams-row.rank-leader { padding: 6px 8px 6px 12px; }
@@ -550,15 +551,16 @@
     @container (max-width: 190px) {   /* the default 240px sidebar gives the list about 216px: full rows; only a sidebar dragged narrower gets this */
       .teams-sub .sub-wide { display: none; }
       .teams-sub .sub-narrow { display: inline; }
-      .teams-leaders { margin-left: 10px; }
-      .teams-kids { margin-left: 10px; padding-left: 4px; }
+      .teams-leaders { margin-left: 10px; --tms-bar: 10px; }
+      .teams-kids { margin-left: 10px; padding-left: 4px; --tms-kid-bar: 10px; }
       .teams-block .teams-block > .teams-kids { margin-left: 6px; }
-      .teams-row .agent-icon { display: none; }
+      .teams-row .agent-icon, .teams-row.rank-leader .agent-icon, .teams-row.rank-worker .agent-icon, html.mm-simple #teams-list .teams-row .agent-icon { display: none !important; }   /* ONE rule for every rank (and Simple's sized icons): no row keeps its icon at this width */
       .teams-row { gap: 5px; }
       .teams-row.rank-leader { padding-left: 6px; }
       .teams-row .agent-menu-btn { width: 16px; min-width: 16px; padding: 0; }
-      .teams-line > .teams-fold.none { width: 6px; min-width: 6px; }
     }
+    /* 'No team yet · Build team' needs about 218px of list on its one line (measured: 216 overflows by 1px, 218 fits). Below that the words before the link go and the link stays whole: the default 240px sidebar (list about 216px) shows just 'Build team'. */
+    @container (max-width: 219px) { .tbs-prefix { display: none; } }
     .teams-sub-simple { display: none; }
     .teams-bg-line { color: var(--bg-work-ring); }
 
@@ -733,7 +735,12 @@
     .agent-menu-btn:hover, .agent-menu-btn[aria-expanded="true"] { color: var(--text); background: var(--border-strong); }
     .agent-menu-btn:focus-visible, .build-team-link:focus-visible, .build-team-btn:focus-visible, .agent-menu-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
     .agent-btn .agent-menu-btn { position: absolute; bottom: 6px; right: 6px; }
-    .agent-build-line { display: block; font-size: 0.65rem; color: var(--text-tertiary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .agent-build-line { display: block; font-size: 0.65rem; line-height: 1.3; color: var(--text-tertiary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .agent-btn .model { line-height: 1.3; }   /* the build line takes the model line's place on a no-team main: the same line height keeps every All Agents row one height */
+    .agent-btn .agent-build-line .build-team-link { white-space: nowrap; }
+    /* All Agents: 'No team yet · Build team' (114px) fits when the list is about 200px or wider; below that only the whole link stays (the rule above for the Teams list hides the words at 219px: this shows them again from 200px, here, where the row has more room than its list) */
+    #agent-list { container-type: inline-size; }
+    @container (min-width: 200px) { #agent-list .agent-build-line .tbs-prefix { display: inline; } }
     .build-team-link { display: inline; padding: 0; border: 0; background: none; font: inherit; color: var(--accent); text-decoration: underline; cursor: pointer; }
     .build-team-link.is-building, .build-team-btn.is-building { color: var(--text-dim); text-decoration: none; cursor: default; }
     .build-team-btn { align-self: flex-start; margin-top: 4px; padding: 3px 10px; border: 1px solid var(--accent); border-radius: 6px; background: transparent; color: var(--accent); font: inherit; font-size: 0.7rem; font-weight: 600; cursor: pointer; }
@@ -3186,6 +3193,7 @@
     html.mm-simple #agents-panel { padding: 18px 0 8px; }
     html.mm-simple #agents-panel::before { content: "Chats"; display: block; font-size: 12.5px; font-weight: 500; color: var(--sm-muted); padding: 8px 12px; }
     html.mm-simple #agent-list .agent-group { margin: 0; }
+    html.mm-simple #agent-list .agent-group:not(:has(.agent-btn)), html.mm-simple #teams-list .teams-setup-line:empty, html.mm-simple #teams-list:empty { display: none; }   /* nothing empty is drawn at the foot of the list (a bordered box with nothing in it) */
     html.mm-simple #agent-list .agent-group-items { display: flex !important; flex-direction: column; gap: 2px; padding: 0; }
     html.mm-simple .agent-btn { height: 42px; margin: 0; padding: 0 12px; border: 0; border-radius: 12px; background: none; color: var(--sm-text); font-size: 15px; gap: 12px; }
     html.mm-simple .agent-btn:hover { background: var(--sm-hover); border: 0; color: var(--sm-text); }
@@ -3379,7 +3387,7 @@
     html.mm-simple .simple-view-switch button[aria-pressed="true"] { background: var(--sm-sel); color: var(--sm-text); }
     html.mm-simple #teams-panel { padding: 10px 0 8px; }
     html.mm-simple #teams-list .teams-line.deep, html.mm-simple #teams-list .teams-row.deep, html.mm-simple #teams-list .teams-kids, html.mm-simple #teams-list .teams-helpers { display: none !important; }   /* Simple: no workers */
-    html.mm-simple #teams-list .teams-row.rank-leader { min-height: 38px; padding: 0 12px; font-size: 14px; }
+    html.mm-simple #teams-list .teams-row.rank-leader { min-height: 38px; padding: 0 10px; gap: 8px; font-size: 14px; }
     html.mm-simple #teams-list .teams-row.rank-leader .name { font-size: 14px; }
     html.mm-simple #teams-list .teams-row.rank-leader .agent-icon { font-size: 15px; width: 22px; }
     html.mm-simple #teams-list .teams-row.rank-worker { min-height: 30px; padding: 0 12px; font-size: 12.5px; gap: 10px; }   /* Simple ranks: main 15px name / 17px icon / 42px row / .85rem sub; leader 14 / 15 / 38 / .8rem; worker 12.5 / 13 / 30 / .72rem */
@@ -3396,6 +3404,16 @@
     html.mm-simple #teams-list .teams-sub { color: var(--sm-muted); }
     html.mm-simple #teams-list .teams-sub-adv.has-simple { display: none; }
     html.mm-simple #teams-list .teams-sub-simple { display: block; }
+    html.mm-simple #teams-list .tbs-prefix { display: none; }   /* Simple's sub-lines use a larger font: a no-team main shows just the 'Build team' link, never cut */
+    /* Simple, Teams: a leader's workers hide behind the leader's own fold arrow (a leader with workers always has one); it opens them nested inside the leader's block, one size smaller, under the connector line.
+       Indent (see --tms-* in html { }): a direct report's icon starts at or right of the main's name, a leader's worker's icon at or right of the leader's name; member names wrap to two lines. */
+    html.mm-simple #teams-list .teams-leaders { margin-left: var(--tms-bar); }
+    html.mm-simple #teams-list .teams-fold-leader { display: block; width: var(--tms-fold); height: 18px; }
+    html.mm-simple #teams-list .teams-line.rank-leader { gap: 2px; }
+    html.mm-simple #teams-list .teams-block.leader-open > .teams-kids { display: block !important; margin-left: var(--tms-kid-bar); }
+    html.mm-simple #teams-list .teams-block.leader-open > .teams-kids > .teams-block > .teams-line.deep, html.mm-simple #teams-list .teams-block.leader-open > .teams-kids > .teams-block > .teams-line > .teams-row.deep { display: flex !important; }
+    html.mm-simple #teams-list .teams-row.rank-leader .name, html.mm-simple #teams-list .teams-row.rank-worker .name { white-space: normal; overflow: visible; }
+    html.mm-simple #teams-list .teams-row.rank-leader .name-text, html.mm-simple #teams-list .teams-row.rank-worker .name-text { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; white-space: normal; overflow-wrap: anywhere; line-height: 1.2; }
     html.mm-simple #teams-list .teams-title, html.mm-simple #teams-list .teams-empty { color: var(--sm-muted); border-color: var(--sm-border); }
     html.mm-simple #teams-list .teams-empty strong { color: var(--sm-text); }
 

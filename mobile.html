@@ -231,7 +231,7 @@
     /* One leader = one block (.tm-block): its row, then its own workers in .tm-kids, joined by a line down the left of them. */
     /* Indent model (px, phone 390 wide): main row = fold 40 + padding 14 + icon 36 + gap 12 -> its NAME starts at 102.
        Every deeper row starts right of its boss's name: --tm-bar sits under the boss's icon centre, --tm-gap is the room between line and rows. */
-    html { --vvh: 100vh; --tm-bar: 71px; --tm-gap: 21px; --tm-kid-bar: 60px; --tm-kid-gap: 11px; --tm-deep-bar: 62px; }
+    html { --vvh: 100vh; --tm-bar: 71px; --tm-gap: 21px; --tm-kid-bar: 60px; --tm-kid-gap: 11px; --tm-deep-bar: 62px; --sa-bar2: 77px; }
     @supports (height: 100dvh) { html { --vvh: 100dvh; } }   /* JS sets --vvh inline; without dvh the fallback is vh, never an invalid height */
     .tm-leaders { margin-left: var(--tm-bar); padding-left: var(--tm-gap); border-left: 1px solid var(--border-strong); }
     .tm-block.tm-r-leader { margin-bottom: 10px; }
@@ -276,11 +276,10 @@
     .team-undo-list { margin-bottom: 4px; padding: 2px 12px; border: 1px solid var(--border); border-radius: 12px; font-size: 13px; color: var(--text-dim); }
     .team-undo-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
     /* Build Team (admins): the "No team yet" line under a row, the Teams button, the menu entry; 44px touch targets */
-    .build-line { padding: 0 14px 6px 54px; font-size: 12px; color: var(--text-dim); display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
     .build-team-link { min-height: 44px; padding: 0 8px; margin-left: -8px; font-size: 13px; font-weight: 600; color: var(--accent-hover); text-decoration: underline; background: transparent; }
     .build-team-link:disabled, .build-team-btn:disabled { color: var(--text-tertiary); text-decoration: none; opacity: .7; }
     /* a main agent with no team: "No team yet · Build team" is the row's own second line (same height as 'team of 3'); the link's tap area grows to 37px by padding that the negative margin takes back */
-    .agent-build-sub { overflow: visible; white-space: normal; text-overflow: clip; line-height: 1.25; }   /* wraps on a narrow phone; Build team stays whole */
+    .agent-build-sub { overflow: visible; white-space: nowrap; text-overflow: clip; line-height: 1.25; }   /* one line, as tall as every other row (All Agents and Teams); Build team stays whole */
     .agent-build-sub .build-team-link { display: inline-block; min-height: 0; padding: 10px 8px; margin: -10px -8px -10px -2px; font-size: inherit; line-height: inherit; cursor: pointer; }
     .agent-build-sub .build-team-link[aria-disabled="true"] { color: var(--text-tertiary); text-decoration: none; opacity: .7; }
     .build-team-btn { min-height: 44px; padding: 0 16px; border-radius: 10px; font-size: 14px; font-weight: 600; background: var(--accent); color: var(--on-accent); }
@@ -1204,10 +1203,14 @@ html.mm-simple #simple-top .st-mark { margin-right: 2px; }
 html.mm-simple #screen-agents .view-switch { display: none; }
 /* Simple Teams: a direct report starts right of its boss's name. Main row: padding 12 + icon 34 + gap 14 -> name at 60; --sa-step 50 puts a depth-1 icon at 62. The line hangs under the boss's icon centre (29). The wide side list sets its own (40 / 25): padding 12 + icon 26 + gap 10 -> name at 48; depth-1 icon at 52. */
 html.mm-simple { --sa-step: 50px; --sa-bar: 29px; }
-html.mm-simple .sa-row { padding-left: calc(12px + var(--d, 0) * var(--sa-step)); }
 html.mm-simple .sa-row.sa-kid { position: relative; }
+html.mm-simple .sa-row.sa-kid2::after { content: ""; position: absolute; left: var(--sa-bar2); top: 0; bottom: 0; width: 1px; background: var(--border-strong); }   /* a leader's worker: a second line, under the leader's icon centre (sheet: icon 62 + 15 = 77; side list below: 52 + 12 = 64) */
 html.mm-simple .sa-row.sa-kid::before { content: ""; position: absolute; left: var(--sa-bar); top: 0; bottom: 0; width: 1px; background: var(--border-strong); }
 html.mm-simple .sa-row .sa-txt small.sa-sub { display: block; }
+/* Simple: 'No team yet · Build team' on a main agent's own second line (no ⋯ menu here). The link's tap area is 37px tall by padding that the negative margin takes back; the small words may not clip it. */
+html.mm-simple .sa-txt small.sa-sub.sa-build-sub { overflow: visible; }
+html.mm-simple .sa-sub .build-team-link { display: inline-block; min-height: 0; padding: 10px 8px; margin: -10px -8px -10px -2px; font-size: inherit; font-weight: 600; line-height: inherit; color: var(--accent-hover); text-decoration: underline; background: transparent; cursor: pointer; }
+html.mm-simple .sa-sub .build-team-link[aria-disabled="true"] { color: var(--text-tertiary); text-decoration: none; opacity: .7; }
 html.mm-simple #simple-side .sa-txt small.sa-sub { display: block; font-size: 12px; }
 html.mm-simple .sa-fold b { font-weight: 600; font-size: 17px; color: var(--text-dim); }
 html.mm-simple #simple-side .sa-fold b { font-size: 15px; }
@@ -1315,6 +1318,8 @@ html.mm-simple dialog .btns button { min-height: 48px; border-radius: 24px; }
 html.mm-simple #simple-agents-sheet, html.mm-simple #simple-settings-sheet { margin: auto auto 0; margin-bottom: max(12px, var(--sab)); max-height: 80dvh; overflow-y: auto; }
 html.mm-simple .sa-row { display: flex; align-items: center; gap: 14px; width: 100%; min-height: 60px; padding: 8px 12px; border-radius: 16px; text-align: left; color: var(--text); }
 html.mm-simple .sa-row.sel { background: var(--sp-soft); }
+/* AFTER the base .sa-row padding shorthand above (it used to come before and was overridden: members were drawn left of their boss). A member's icon starts no further left than its boss's NAME (sheet: 12 + 50 = 62 vs name at 12 + 34 + 14 = 60). */
+html.mm-simple .sa-row { padding-left: calc(12px + var(--d, 0) * var(--sa-step)); }
 html.mm-simple .sa-ic { font-size: 26px; width: 34px; text-align: center; flex: none; }
 html.mm-simple .sa-txt { min-width: 0; flex: 1; }
 html.mm-simple .sa-txt b { display: block; font-weight: 600; font-size: 17px; }
@@ -1335,6 +1340,7 @@ html.mm-simple .sa-dot.busy { background: var(--warning); animation: simple-puls
 html.mm-simple .sa-dot.bg-work:not(.busy):not(.question) { width: 7px; height: 7px; border: 2px solid var(--bg-work-ring); background: transparent; animation: none; box-sizing: content-box; }
 html.mm-simple .sa-dot.question { background: var(--blue); animation: simple-pulse 1.6s ease-in-out infinite; }
 html.mm-simple .sa-head { margin: 12px 12px 2px; color: var(--text-tertiary); font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+html.mm-simple .sa-fold-arrow { flex: none; display: flex; align-items: center; justify-content: center; min-width: 36px; min-height: 36px; margin: -8px -4px -8px 0; color: var(--text-tertiary); font-size: 16px; cursor: pointer; }   /* a leader's fold arrow (▸ / ▾), a 36px tap target that does not add height to the row */
 html.mm-simple .sa-more .sa-chev { color: var(--text-tertiary); flex: none; font-size: 15px; }
 html.mm-simple .sa-more b { font-weight: 600; font-size: 17px; color: var(--text-dim); }
 @media (prefers-reduced-motion: reduce) { html.mm-simple .sa-dot { animation: none !important; } }
@@ -1380,6 +1386,7 @@ html.mm-simple #simple-side { display: none; }
   html.mm-simple #simple-side .sa-head { margin: 10px 12px 2px; }
   html.mm-simple #simple-side { --sa-step: 40px; --sa-bar: 25px; }
   html.mm-simple #simple-side .sa-row { padding-left: calc(12px + var(--d, 0) * var(--sa-step)); }
+  html.mm-simple #simple-side { --sa-bar2: 64px; }
   html.mm-simple .ssd-me { flex: none; display: flex; align-items: center; gap: 10px; width: 100%; min-height: 52px; padding: 4px 8px; margin-top: 6px; border-top: 1px solid var(--border); border-radius: 12px; text-align: left; color: var(--text); }
   html.mm-simple .ssd-me .st-avatar { width: 36px; height: 36px; font-size: 15px; }
   html.mm-simple .ssd-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 16px; }
