@@ -335,3 +335,81 @@ test('reviewFacts: a team built 5 days ago is read for 5 days (since, built_rece
   assert.equal(c.window_days, 30);
   assert.equal(c.built_recently, undefined);
 });
+
+// ---- review fixes (round 1)
+test('a team\'s OWN reviewer counts: auditor under the boss, the boss consults it once -> consults_to_challengers 1; the shown challengers are outside reviewers only', () => {
+  const list = roster().concat([{ name: 'auditor', display: 'Auditor', category: 'worker', model: 'm-top', reportsTo: 'studio', blurb: 'Audits work' }]);
+  const { f } = facts({ list, consults: { studio: { auditor: 1 } }, counts: { studio: { turns: { user: 3 }, tools: {} }, auditor: { turns: {}, tools: {} } } });
+  assert.equal(f.team.find(m => m.name === 'studio').unchallenged.consults_to_challengers, 1);
+  assert.deepEqual(f.challengers, ['critic'], 'the member auditor is not an outside reviewer');
+});
+
+function bigConsultFacts() {
+  const list = roster().filter(a => !['sam', 'samhelp'].includes(a.name));
+  for (let i = 0; i < 5; i++) list.push({ name: `w${i}`, display: `Worker ${i}`, category: 'worker', model: 'm-cheap', reportsTo: 'studio', blurb: 'role '.repeat(20) });
+  for (let i = 0; i < 40; i++) list.push({ name: `spec${i}`, display: `Spec ${i}`, category: 'specialist', model: 'm-strong', blurb: 'x' });
+  const names = ['studio', 'w0', 'w1', 'w2', 'w3', 'w4'];
+  const consults = Object.fromEntries(names.map(n => [n, Object.fromEntries(Array.from({ length: 35 }, (_, i) => [`spec${i}`, 100 - i]).concat([['not an agent', 7], ['{"x":1}', 3]]))]));
+  const counts = Object.fromEntries(names.map(n => [n, { turns: { user: 9, hand_off: 9 }, tools: { consult_agent: 99 } }]));
+  const tel = names.map(n => ({ agent: n, model: 'm-top', requests: 5, failed: 0 }));
+  const { f } = facts({ list, consults, counts, tel });
+  return f;
+}
+test('consults are capped, only real agents, with consults_omitted and consults_total; six agents with 35 targets each still fit FACTS_MAX', () => {
+  const { FACTS_MAX } = require('../lib/team-plan');
+  const f = bigConsultFacts();
+  assert.ok(R.reviewMessage(f).length <= FACTS_MAX, `message ${R.reviewMessage(f).length}`);
+  for (const m of f.team) {
+    assert.ok(Object.keys(m.activity.consults).every(k => /^spec\d+$/.test(k)), 'no key that is not an agent name');
+    assert.ok(m.activity.consults_total >= 0 && m.activity.consults_total === [...Array(35).keys()].reduce((s, i) => s + 100 - i, 0) + 10, 'the total stays');
+  }
+});
+
+test('consults of one member: the biggest 10 real agents at the first level, the rest counted (consults_omitted), the total kept', () => {
+  const list = roster();
+  for (let i = 0; i < 35; i++) list.push({ name: `spec${i}`, display: `Spec ${i}`, category: 'specialist', model: 'm-strong' });
+  const consults = { studio: Object.fromEntries(Array.from({ length: 35 }, (_, i) => [`spec${i}`, 100 - i]).concat([['not an agent', 7]])) };
+  const { f } = facts({ list, consults });
+  const a = f.team[0].activity;
+  assert.deepEqual(Object.keys(a.consults), Array.from({ length: 10 }, (_, i) => `spec${i}`));
+  assert.equal(a.consults.spec0, 100);
+  assert.equal(a.consults_omitted, 26);
+  assert.equal(a.consults_total, [...Array(35).keys()].reduce((s, i) => s + 100 - i, 0) + 7);
+});
+
+test('estimate takes the same window as the facts (built 5 days ago -> 5 days) and the same helper', () => {
+  const list = roster(), boss = list.find(a => a.name === 'studio'), tr = fakeTranscript();
+  const e = R.estimate({ boss, agentsList: list, transcript: tr, handOffs: HO, now: NOW, builtAt: NOW - 5 * DAY });
+  assert.equal(e.days, 5);
+  assert.equal(tr.calls.find(c => c[0] === 'countsSince')[2], ISO(NOW - 5 * DAY));
+  assert.equal(R.estimate({ boss, agentsList: list, transcript: tr, handOffs: HO, now: NOW, builtAt: NOW - 90 * DAY }).days, 30);
+  const server = fs.readFileSync(path.join(ROOT, 'server.js'), 'utf8');
+  assert.equal((server.match(/teamBuiltAtFor\(boss, all\)/g) || []).length, 2, 'both routes compute builtAt with the one function');
+  assert.doesNotMatch(server, /builtAt: \(\(\) =>/);
+});
+
+test('teamBuiltAt ignores reporting-line entries written by an Optimize review (via: optimize)', () => {
+  const list = roster(), boss = list.find(a => a.name === 'studio');
+  const audit = [
+    { at: ISO(NOW - 10 * DAY), action: 'reports_to', agent: 'writer', to: 'studio' },
+    { at: ISO(NOW - 1 * DAY), action: 'reports_to', agent: 'editor', to: 'writer', via: 'optimize' },
+  ];
+  assert.equal(R.teamBuiltAt({ boss, agentsList: list, setups: [], audit }), NOW - 10 * DAY);
+});
+
+test('keep-on-box: facts.models lists only the boss\'s own service', () => {
+  const list = roster(); list.find(a => a.name === 'studio').model = 'acme/top';
+  const models = [{ id: 'acme/top', provider: 'acme' }, { id: 'other/big', provider: 'other' }, { id: 'acme/small', provider: 'acme' }];
+  const run = (keepOnBox) => R.reviewFacts({ boss: list.find(a => a.name === 'studio'), agentsList: list, adminIds: ADMINS, transcript: fakeTranscript(), handOffs: HO, telemetryRows: [], models, tierOf, now: NOW, keepOnBox });
+  assert.deepEqual(run(true).models.map(m => m.id), ['acme/top', 'acme/small']);
+  assert.equal(run(false).models.length, 3);
+});
+
+test('a member\'s boss: no challengers listed, shared specialists only those the member owns, the rest a count', () => {
+  const list = roster().concat([{ name: 'samspec', display: 'Sam Spec', category: 'specialist', owner: 'u-member', model: 'm-cheap' }]);
+  const { f } = facts({ list, boss: 'sam', keepOnBox: true, consults: { sam: { samspec: 2, atlas: 1, critic: 1 }, samhelp: {} } });
+  assert.deepEqual(f.challengers, []);
+  assert.deepEqual(f.shared_specialists_used.map(s => s.name), ['samspec']);
+  assert.equal(f.other_specialists, 2);
+  assert.doesNotMatch(JSON.stringify(f), /"atlas"|"critic"/);
+});

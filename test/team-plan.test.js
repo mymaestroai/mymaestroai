@@ -40,6 +40,7 @@ function make(o = {}) {
     adminIds: new Set(['u-admin']),
     isVirtual: (n) => /^tw-/.test(n),
     availableModels: o.availableModels || (async () => ['m-top', 'm-strong', 'm-cheap', 'm-new']),
+    providerOf: (m) => { const i = String(m).indexOf("/"); return i > 0 ? String(m).slice(0, i) : "anthropic"; },
     // like lib/agents.js agentIdentity: the box id, or the name for an agent from before box ids
     identitiesOf: o.identitiesOf || ((names) => new Map(names.map(n => { const r = list.find(x => x && x.name === n); return [n, r ? (r.box ? `box:${r.box}` : `name:${r.name}`) : null]; }))),
     // the defaults load lib/temporal-workers and lib/agents, which read the install's own data/ (the suite refuses that)
@@ -938,7 +939,7 @@ const NOTES = () => ({ for: 'studio', summary: 'Hand long writing jobs to the wr
 
 test('practice notes: validation (the boss only, 1 to 300 characters, at most 5, a list) and the checklist items', async (t) => {
   const m = make(); t.after(m.cleanup);
-  const err = async (mut) => { const p = NOTES(); mut(p); return (await m.svc.validate(p, 'lead')).error; };
+  const err = async (mut) => { const p = NOTES(); mut(p); return (await m.svc.validate(p, 'lead', { optimize: true })).error; };
   assert.match(await err((p) => { p.practice_notes[0].agent = 'builder'; }), /practice_notes\[0\]: a practice note is for studio only/);
   assert.match(await err((p) => { p.practice_notes[1].agent = 'sam'; }), /practice_notes\[1\]: a practice note is for studio only/);
   assert.match(await err((p) => { p.practice_notes[0].text = '   '; }), /text is needed/);
@@ -947,22 +948,22 @@ test('practice notes: validation (the boss only, 1 to 300 characters, at most 5,
   assert.match(await err((p) => { p.practice_notes = new Array(6).fill({ agent: 'studio', text: 'ok' }); }), /practice_notes: at most 5/);
   assert.match(await err((p) => { p.practice_notes = 'one habit'; }), /practice_notes must be a list/);
   assert.match(await err((p) => { p.practice_notes = [null]; }), /practice_notes\[0\] must be an object/);
-  const ok = await m.svc.validate({ ...NOTES(), practice_notes: [{ agent: 'studio', text: 'x'.repeat(300) }] }, 'lead');
+  const ok = await m.svc.validate({ ...NOTES(), practice_notes: [{ agent: 'studio', text: 'x'.repeat(300) }] }, 'lead', { optimize: true });
   assert.ok(ok.plan, '300 characters pass');
-  const v = await m.svc.validate(NOTES(), 'lead');
+  const v = await m.svc.validate(NOTES(), 'lead', { optimize: true });
   assert.deepEqual(v.plan.items.map(i => [i.id, i.kind]), [['p1', 'practice'], ['p2', 'practice']]);
   // a boss that belongs to a member is not written to by an admin's review
-  const mem = await m.svc.validate({ for: 'sam', summary: 's', practice_notes: [{ agent: 'sam', text: 'a habit' }] }, 'lead');
+  const mem = await m.svc.validate({ for: 'sam', summary: 's', practice_notes: [{ agent: 'sam', text: 'a habit' }] }, 'lead', { optimize: true });
   assert.match(mem.error, /belongs to a member/);
   // plain: no markup characters survive into the text that will be written
-  const clean = await m.svc.validate({ for: 'studio', summary: 's', practice_notes: [{ agent: 'studio', text: 'Use `tools` <b>only</b> when needed\nand tidy.' }] }, 'lead');
+  const clean = await m.svc.validate({ for: 'studio', summary: 's', practice_notes: [{ agent: 'studio', text: 'Use `tools` <b>only</b> when needed\nand tidy.' }] }, 'lead', { optimize: true });
   assert.equal(clean.plan.practiceNotes[0].text, 'Use tools b only /b when needed and tidy.');
 });
 
 test('practice notes: the card has one line per note, "Practice note for <Display>", its detail the exact text; the header is passed through', async (t) => {
   const m = make(); t.after(m.cleanup);
   let card = null;
-  await m.svc.runPlan(NOTES(), { ...ctx(m), header: 'Team review', ask: async (a) => { card = a; return { choice: 'Not now', checked: [] }; } });
+  await m.svc.runPlan(NOTES(), { ...ctx(m, { header: 'Team review' }), ask: async (a) => { card = a; return { choice: 'Not now', checked: [] }; } });
   assert.equal(card.header, 'Team review');
   assert.deepEqual(card.checklist, [
     { id: 'p1', label: 'Practice note for Studio', detail: 'Hand writing jobs over 20 minutes to Writer; short work stays with you.' },
@@ -977,7 +978,7 @@ test('practice notes: the card has one line per note, "Practice note for <Displa
 
 test('practice notes: Do it writes ONE Record on the boss, team-practice.md, a heading and one bullet per ticked note; the audit logs each', async (t) => {
   const m = make(); t.after(m.cleanup);
-  const out = await m.svc.runPlan(NOTES(), { ...ctx(m), ask: doIt(['p1', 'p2']) });
+  const out = await m.svc.runPlan(NOTES(), { ...ctx(m, { header: 'Team review' }), ask: doIt(['p1', 'p2']) });
   assert.equal(m.calls.records.length, 1);
   const [agent, name, content] = m.calls.records[0];
   assert.deepEqual([agent, name], ['studio', 'team-practice.md']);
@@ -991,48 +992,94 @@ test('practice notes: Do it writes ONE Record on the boss, team-practice.md, a h
 
 test('practice notes: unticked notes are not written; with none ticked (or Not now) the file is left as it is', async (t) => {
   const m = make(); t.after(m.cleanup);
-  const out = await m.svc.runPlan(NOTES(), { ...ctx(m), ask: doIt(['p2']) });
+  const out = await m.svc.runPlan(NOTES(), { ...ctx(m, { header: 'Team review' }), ask: doIt(['p2']) });
   assert.equal(m.calls.records.length, 1);
   assert.equal(m.calls.records[0][2], "# Team practice (from the lead's review, 1970-01-01)\n\n- Send every draft to Critic before it goes out.\n");
   assert.match(out, /Left unticked \(not to be done\):\n- Practice note for Studio/);
   assert.doesNotMatch(m.calls.records[0][2], /20 minutes/);
   // Do it with only a line ticked (a plan that has a note too): no write
   const both = { ...PLAN(), practice_notes: NOTES().practice_notes };
-  await m.svc.runPlan(both, { ...ctx(m), ask: doIt(['l1']) });
+  await m.svc.runPlan(both, { ...ctx(m, { header: 'Team review' }), ask: doIt(['l1']) });
   assert.equal(m.calls.records.length, 1, 'no ticked note: the Record is left as it is');
-  await m.svc.runPlan(NOTES(), { ...ctx(m), ask: async () => ({ choice: 'Not now', checked: ['p1'] }) });
-  await m.svc.runPlan(NOTES(), { ...ctx(m), ask: doIt([]) });
+  await m.svc.runPlan(NOTES(), { ...ctx(m, { header: 'Team review' }), ask: async () => ({ choice: 'Not now', checked: ['p1'] }) });
+  await m.svc.runPlan(NOTES(), { ...ctx(m, { header: 'Team review' }), ask: doIt([]) });
   assert.equal(m.calls.records.length, 1);
 });
 
 test('practice notes: a later review REPLACES the Record (its earlier notes go)', async (t) => {
   const m = make(); t.after(m.cleanup);
-  await m.svc.runPlan(NOTES(), { ...ctx(m), ask: doIt(['p1', 'p2']) });
-  await m.svc.runPlan({ for: 'studio', summary: 'Second look', practice_notes: [{ agent: 'studio', text: 'Check the numbers twice.' }] }, { ...ctx(m), ask: doIt(['p1']) });
+  await m.svc.runPlan(NOTES(), { ...ctx(m, { header: 'Team review' }), ask: doIt(['p1', 'p2']) });
+  await m.svc.runPlan({ for: 'studio', summary: 'Second look', practice_notes: [{ agent: 'studio', text: 'Check the numbers twice.' }] }, { ...ctx(m, { header: 'Team review' }), ask: doIt(['p1']) });
   assert.equal(m.calls.records.length, 2);
   assert.equal(m.files.get('studio/team-practice.md'), "# Team practice (from the lead's review, 1970-01-01)\n\n- Check the numbers twice.\n", 'written without append: the file holds only the latest review');
 });
 
 test('practice notes: the boss must still be the agent shown; a failed write is reported and not logged', async (t) => {
   const m = make(); t.after(m.cleanup);
-  const out = await m.svc.runPlan(NOTES(), { ...ctx(m), ask: async () => { m.list.find(a => a.name === 'studio').box = 'b-new'; return { choice: 'Do it', checked: ['p1'] }; } });
+  const out = await m.svc.runPlan(NOTES(), { ...ctx(m, { header: 'Team review' }), ask: async () => { m.list.find(a => a.name === 'studio').box = 'b-new'; return { choice: 'Do it', checked: ['p1'] }; } });
   assert.match(out, /Nothing was changed: studio was renamed, removed or made again/);
   assert.deepEqual(m.calls.records, []);
   const f = make({ writeRecord: () => 'Could not write record team-practice.md: disk full' }); t.after(f.cleanup);
-  const out2 = await f.svc.runPlan(NOTES(), { ...ctx(f), ask: doIt(['p1']) });
+  const out2 = await f.svc.runPlan(NOTES(), { ...ctx(f, { header: 'Team review' }), ask: doIt(['p1']) });
   assert.match(out2, /Could not apply:\n- Practice notes: Could not write record team-practice\.md: disk full/);
   assert.deepEqual(f.log(), []);
   const g = make({ writeRecord: () => { throw new Error('boom'); } }); t.after(g.cleanup);
-  assert.match(await g.svc.runPlan(NOTES(), { ...ctx(g), ask: doIt(['p1']) }), /Practice notes: boom/);
+  assert.match(await g.svc.runPlan(NOTES(), { ...ctx(g, { header: 'Team review' }), ask: doIt(['p1']) }), /Practice notes: boom/);
 });
 
 test('practice notes: the turn ending before the write stops it; the default writer is the one record_write uses', async (t) => {
   const m = make(); t.after(m.cleanup);
   let allowed = true;
-  const out = await m.svc.runPlan(NOTES(), { ...ctx(m), stillAllowed: () => allowed, ask: async () => { allowed = false; return { choice: 'Do it', checked: ['p1'] }; } });
+  const out = await m.svc.runPlan(NOTES(), { ...ctx(m, { header: 'Team review' }), stillAllowed: () => allowed, ask: async () => { allowed = false; return { choice: 'Do it', checked: ['p1'] }; } });
   assert.match(out, /turn ended/);
   assert.deepEqual(m.calls.records, []);
   assert.match(read('lib/team-plan.js'), /writeRecord = \(agent, name, content\) => require\('\.\/records'\)\.write\(agent, name, content\)/);
   assert.match(read('lib/sdk-chat.js'), /records\.write\(agentName, name, content, \{ append: !!append \}\)/, 'record_write calls the same function');
   assert.ok(TP.PLAN_TOOL.parameters.properties.practice_notes, 'the tool schema carries practice_notes');
+});
+
+// ── review fixes (round 1) ──
+const RV = (m, over = {}) => ctx(m, { header: 'Team review', ...over });
+
+test('practice_notes are refused outside an Optimize team review (a Build Team turn, and validate with no review flag)', async (t) => {
+  const m = make(); t.after(m.cleanup);
+  assert.equal((await m.svc.validate(NOTES(), 'lead')).error, 'practice_notes: only an Optimize team review can write practice notes.');
+  assert.ok((await m.svc.validate(NOTES(), 'lead', { optimize: true })).plan);
+  const out = await m.svc.runPlan(NOTES(), { ...ctx(m), ask: doIt(['p1']) });   // header 'Team plan'
+  assert.match(out, /^The plan was not shown\. practice_notes: only an Optimize team review can write practice notes\./);
+  assert.deepEqual(m.calls.records, []);
+});
+
+test('a write that does not fit the Records cap ("will NOT be loaded") is a failure, not a success', async (t) => {
+  const f = make({ writeRecord: (a, n) => `Record ${n} written (900 bytes), but it doesn't fit in your Records cap, so it will NOT be loaded on your next turn.` }); t.after(f.cleanup);
+  const out = await f.svc.runPlan(NOTES(), { ...RV(f), ask: doIt(['p1']) });
+  assert.match(out, /Could not apply:\n- Practice notes: the notes do not fit in studio's Records/);
+  assert.doesNotMatch(out, /written to studio's Records/);
+  assert.deepEqual(f.log(), [], 'nothing logged');
+});
+
+test('audit entries written while applying an Optimize review carry via: optimize; a Build Team plan carries none', async (t) => {
+  const m = make({ availableModels: async () => ['m-top', 'm-strong', 'm-cheap'] }); t.after(m.cleanup);
+  const plan = { for: 'studio', summary: 'move', lines: [{ agent: 'builder', reports_to: 'studio' }], model_changes: [{ agent: 'coder', model: 'm-strong' }], practice_notes: [{ agent: 'studio', text: 'Be brief.' }] };
+  await m.svc.runPlan(plan, { ...RV(m), ask: doIt(['l1', 'm1', 'p1']) });
+  const log = m.log();
+  assert.deepEqual(log.map(l => [l.action, l.via]), [['reports_to', 'optimize'], ['model', 'optimize'], ['practice_note', 'optimize']]);
+  const b = make({ availableModels: async () => ['m-top', 'm-strong', 'm-cheap'] }); t.after(b.cleanup);
+  await b.svc.runPlan({ for: 'studio', summary: 'move', lines: [{ agent: 'builder', reports_to: 'studio' }] }, { ...ctx(b), ask: doIt(['l1']) });
+  assert.equal(b.log()[0].via, undefined);
+});
+
+test('keep-on-box review: a model change to another service is refused; the same service passes; other turns are not limited', async (t) => {
+  const m = make({ availableModels: async () => ['acme/big', 'acme/small', 'other/x', 'm-top'] }); t.after(m.cleanup);
+  m.list.find(a => a.name === 'coder').model = 'acme/small';
+  const plan = (model) => ({ for: 'studio', summary: 's', model_changes: [{ agent: 'coder', model }] });
+  const v = (model, o) => m.svc.validate(plan(model), 'lead', o);
+  assert.equal((await v('other/x', { optimize: true, keepOnBox: true })).error, 'model change for coder: this team keeps its content on acme; choose a model from the same service.');
+  assert.ok((await v('acme/big', { optimize: true, keepOnBox: true })).plan);
+  assert.ok((await v('other/x', { optimize: true })).plan, 'not keep-on-box: any service');
+  const out = await m.svc.runPlan(plan('other/x'), { ...RV(m, { keepOnBox: true }), ask: doIt(['m1']) });
+  assert.match(out, /model change for coder: this team keeps its content on acme; choose a model from the same service\./);
+  assert.deepEqual(m.calls.model, []);
+  const src = read('lib/sdk-chat.js');
+  assert.match(src, /keepOnBox: \(\(\) => \{ const t = turnRegistry\.get\(agentName\); return !!\(t && t\.optimizeTeamTrusted === true && t\.origin && t\.origin\.kind === 'optimize_team' && t\.origin\.for === agentName\)/);
 });

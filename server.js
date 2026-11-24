@@ -1642,10 +1642,17 @@ async function handleHttpRequest(req, res) {
       const reviewLib = require('./lib/team-review'), agentsLib = require('./lib/agents'), sdkChatLib = require('./lib/sdk-chat');
       const adminSession = req.hubIdentKind === 'user' && !req.hubPendingTotp && !req.hubToken && !req.hubService && access.isAdmin(req.hubUser);
       const adminIdSet = () => new Set(hubAuth.admins().map(u => String(u.id)));
+      // When the team was built: the same for the review and its menu estimate.
+      const teamBuiltAtFor = (boss, all) => {
+        let setups = [], audit = [];
+        try { setups = require('./lib/team-setup').getTeamSetup().list(); } catch { /* no setups */ }
+        try { audit = reviewLib.readReportsToAudit(); } catch { /* no audit */ }
+        return reviewLib.teamBuiltAt({ boss, agentsList: all, setups, audit });
+      };
       if (isEstimate) {
         const out = reviewLib.routeOptimizeEstimate({
           adminSession, name, agents: await getAgents(),
-          makeEstimate: (boss, all) => reviewLib.estimate({ boss, agentsList: all, transcript: require('./lib/transcript').getTranscript(), handOffs: sdkChatLib.handOffRecordsNow }),
+          makeEstimate: (boss, all) => reviewLib.estimate({ builtAt: teamBuiltAtFor(boss, all), boss, agentsList: all, transcript: require('./lib/transcript').getTranscript(), handOffs: sdkChatLib.handOffRecordsNow }),
         });
         return jsonResponse(res, out.status, out.body);
       }
@@ -1654,12 +1661,7 @@ async function handleHttpRequest(req, res) {
         runs: sdkChatLib.optimizeTeamRuns, halted: () => require('./lib/hub-halt').getHubHalt().isHalted(), isBusy: isAgentActive,
         keepOnBox: (rec) => sdkChatLib.researchKeptOnBox(rec),
         makeMessage: async (boss, all, own) => reviewLib.reviewMessage(reviewLib.reviewFacts({
-          builtAt: (() => {
-            let setups = [], audit = [];
-            try { setups = require('./lib/team-setup').getTeamSetup().list(); } catch { /* no setups */ }
-            try { audit = reviewLib.readReportsToAudit(); } catch { /* no audit */ }
-            return reviewLib.teamBuiltAt({ boss, agentsList: all, setups, audit });
-          })(),
+          builtAt: teamBuiltAtFor(boss, all),
           boss, agentsList: all, adminIds: adminIdSet(), transcript: require('./lib/transcript').getTranscript(), handOffs: sdkChatLib.handOffRecordsNow,
           telemetryRows: require('./lib/team-usage').readRows(reviewLib.REVIEW_DAYS * 24), models: await teamModelFacts(), tierOf: require('./lib/model-tiers').tierOf,
           now: Date.now(), keepOnBox: own === true,
