@@ -156,7 +156,7 @@ test('aloneRenamed moves the entry to the new name (keyed by name: the simpler c
   assert.deepEqual(Object.keys(m.svc.aloneList(old)), ['atelier']);
   assert.equal(stored(m).atelier.id, 'box:b-new');
   assert.equal(stored(m).studio, undefined);
-  assert.match(src('lib/agents.js'), /getTeamSetup\(\)\.aloneRenamed\(oldName, newName\)/, 'agents.js renameAgent calls it');
+  assert.match(src('lib/agents.js'), /getTeamSetup\(\)\.aloneRenamed\(oldName, newName, \{ oldId: identityOf\(before\), newId: identityOf\(agent\) \}\)/, 'agents.js renameAgent calls it with both identities from the record');
   assert.match(src('lib/agents.js'), /getTeamSetup\(\)\.alonePrune\(\)/, 'a reporting-line change prunes');
   assert.ok((src('lib/agents.js').match(/getTeamSetup\(\)\.alonePrune\(\)/g) || []).length >= 2, 'and so does a delete');
 });
@@ -310,6 +310,46 @@ test('aloneRenamed with the new identity unavailable keeps the record unchanged 
   assert.equal((await m.svc.aloneRenamed('studio', 'atelier')).moved, true);
   assert.equal(raw(m).atelier.id, 'box:b-new');
   assert.equal(raw(m).atelier.owner, '');
+});
+test('aloneRenamed with ids: a stale entry of a replaced agent (stored box:A, roster box:B) is not moved or revived', async (t) => {
+  const old = [{ name: 'atelier', display: 'Studio', category: 'primary', box: 'B' }];   // studio (box:B) renamed to atelier
+  const m = make({ roster: old }); t.after(m.cleanup);
+  writeRaw(m, { studio: { ...ENTRY, id: 'box:A' } });
+  assert.deepEqual(await m.svc.aloneRenamed('studio', 'atelier', { oldId: 'box:B', newId: 'box:B' }), { ok: true, moved: false });
+  assert.equal(raw(m).atelier, undefined, 'nothing stamped for atelier');
+  assert.deepEqual(m.svc.aloneList(old), {}, 'not counted for atelier');
+  await m.svc.alonePrune(old);
+  assert.deepEqual(raw(m), {}, 'the stale entry is pruned later (keepMissing off)');
+});
+test('aloneRenamed with ids needs no identity lookup: it moves even when the lookup throws, and the entry survives a prune', async (t) => {
+  const old = [{ name: 'atelier', display: 'Studio', category: 'primary', box: 'b-new' }];
+  const m = make({ roster: old }); t.after(m.cleanup);
+  writeRaw(m, { studio: { ...ENTRY, id: 'name:studio' } });
+  m.state.ids = () => { throw new Error('disk'); };
+  assert.deepEqual(await m.svc.aloneRenamed('studio', 'atelier', { oldId: 'name:studio', newId: 'box:b-new' }), { ok: true, moved: true });
+  assert.equal(raw(m).studio, undefined);
+  assert.equal(raw(m).atelier.id, 'box:b-new');
+  m.state.ids = idOf(old);
+  assert.equal((await m.svc.alonePrune(old)).dropped, 0);
+  assert.deepEqual(Object.keys(m.svc.aloneList(old)), ['atelier']);
+});
+test('renameAgent passes the identities of the record it renamed; after rename and prune the decision still counts for the new name', async (t) => {
+  const a = src('lib/agents.js');
+  assert.match(a, /const before = \{ \.\.\.agent \};/);
+  assert.match(a, /aloneRenamed\(oldName, newName, \{ oldId: identityOf\(before\), newId: identityOf\(agent\) \}\)/);
+  assert.ok(a.indexOf('agent.box = newBoxId()') < a.indexOf('aloneRenamed(oldName, newName, {'), 'newId is taken from the record after the rename');
+  // what renameAgent computes for an agent from before box ids: name:<old> before, box:<new box> after
+  const rec = [{ name: 'studio', display: 'Studio', category: 'primary' }];
+  const m = make({ roster: rec }); t.after(m.cleanup);
+  await m.svc.aloneSet('studio', { by: 'u1', reason: 'r' });
+  const oldId = 'name:studio';
+  rec[0].name = 'atelier'; rec[0].box = 'b-new';
+  m.state.ids = () => { throw new Error('disk'); };
+  await m.svc.aloneRenamed('studio', 'atelier', { oldId, newId: 'box:b-new' });
+  m.state.ids = idOf(rec);
+  await m.svc.alonePrune(rec);
+  assert.deepEqual(Object.keys(m.svc.aloneList(rec)), ['atelier']);
+  assert.equal(raw(m).atelier.id, 'box:b-new');
 });
 test('the owner is stored at record time; a transfer to a member ends the entry (read hides it, prune drops it for good)', async (t) => {
   const m = make(); t.after(m.cleanup);
