@@ -6,6 +6,10 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
+- **Works alone.** When your lead finds that a main agent needs no team, your Maestro remembers it: that agent's row says "Works alone" instead of offering Build team, and Build team stays in its menu to ask again. The note clears when the agent gets a team.
+- **Undo all after Set up teams undoes every listed team in one step.** One press takes back all the teams in the list together instead of one at a time.
+- **Simple mode says how many leaders and agents a main agent has.** The count on each main agent now shows both its team leaders and its agents.
+- **The desktop "No team yet · Build team" line wraps.** It no longer gets cut off when the list is narrow.
 - **Set up teams works on large installs.** Your Maestro now keeps the evidence of each main agent's work even when you have many agents, and says which main agents it did not get to so the next press covers them. An agent that one main agent clearly owns is never called shared, and Build Team lists only agents a main agent really works with.
 - **One short Undo line after Set up teams.** Your lead's chat shows a single line, such as "3 teams recorded · Undo", however many teams were set up. Undo opens a small list with each team's Undo and Undo all, and the Teams tab keeps Undo for every setup.
 - **Phone: the message box stays above the keyboard.** While you type, the message box stays visible and grows with your text, and the area above it shrinks to one line.
