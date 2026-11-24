@@ -592,6 +592,8 @@ html[data-look="quiet"].mm-simple #toast { background: var(--text); color: var(-
 @keyframes quiet-simple-dot-shrink { 50% { opacity: .8; transform: scale(.7); } }
 html[data-look="quiet"].mm-simple #agent-list .agent-btn .agent-status.live-busy,
 html[data-look="quiet"].mm-simple #agent-list .agent-btn .agent-status.live-question,
+html[data-look="quiet"].mm-simple #teams-list .teams-dot.live-busy,
+html[data-look="quiet"].mm-simple #teams-list .teams-dot.live-question,
 html[data-look="quiet"].mm-simple #agent-list .simple-more .sm-dot { animation-name: quiet-simple-dot; }
 html[data-look="quiet"].mm-simple .sa-dot.busy,
 html[data-look="quiet"].mm-simple .sa-dot.question { animation-name: quiet-simple-dot-shrink; }

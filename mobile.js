@@ -1779,7 +1779,7 @@ function setLive(name, patch) {
   if (!name) return;
   const cur = live[name] || { busy: false, busySince: null, activity: null, pendingQuestion: false };
   const next = { ...cur, ...patch };
-  if (!next.busy) { next.busySince = null; next.activity = null; next.pendingQuestion = false; next.consultedBy = null; }
+  if (!next.busy) { next.busySince = null; next.activity = null; next.pendingQuestion = false; next.consultedBy = null; next.buildingTeamFor = null; }
   else if (!next.busySince) next.busySince = cur.busySince || new Date().toISOString();
   live[name] = next;
   if (!next.busy) { delete turnSteps[name]; if (typeof turnOrigins !== 'undefined') delete turnOrigins[name]; }   // idle: no tool call runs, and the old turn's origin must not name the next turn's caller
@@ -1799,7 +1799,7 @@ function applySnapshot(map, repaint = true, opts = {}) {
   for (const [name, s] of Object.entries(map)) {
     const patch = { busy: !!s.busy, busySince: s.busySince || null, activity: s.activity || null, pendingQuestion: !!s.pendingQuestion };
     if (!namedOnly || 'background' in s) patch.background = Number(s.background) > 0 ? Math.floor(Number(s.background)) : 0;   // work it runs in the background (the hub leaves the key out at 0)
-    for (const k of ['worker', 'parent', 'label', 'model', 'consultedBy']) {
+    for (const k of ['worker', 'parent', 'label', 'model', 'consultedBy', 'buildingTeamFor']) {   // buildingTeamFor: the lead's Build Team turn names the main agent it builds for
       if (namedOnly && !(k in s)) continue;
       patch[k] = k === 'worker' ? busyIsWorker(name, s) : (s[k] || null);
     }
@@ -1887,6 +1887,7 @@ function onBackgroundEvent(ev) {
 
 function paintStatus() {
   if (screen === 'agents') renderAgents();
+  if (typeof menuTeamSync === 'function') menuTeamSync();
   paintChatStatus();
   if (typeof simpleAgentsDots === 'function') simpleAgentsDots();   // Simple: the open agent sheet's busy dots
 }
@@ -2522,6 +2523,84 @@ function renderWorkingChip() {
   chip.classList.toggle('filtering', workingFilter);
 }
 
+// ── Teams view of the agent list (same storage keys and values as the desktop page) ──
+let teamsViewMem = null;   // the choice made on this page, kept even when localStorage refuses it
+function teamsView() {
+  if (teamsViewMem !== null) return teamsViewMem;
+  try { return localStorage.getItem('hub-sidebar-view') === 'teams' ? 'teams' : 'agents'; } catch { return 'agents'; }
+}
+function teamsViewSet(v) {
+  teamsViewMem = v === 'teams' ? 'teams' : 'agents';
+  try { localStorage.setItem('hub-sidebar-view', teamsViewMem); } catch { /* kept for this page only */ }
+}
+let teamsOpen = loadJson('hub-teams-open', {});   // name -> true: folded nodes that are open ('@other' / '@shared': the folded groups)
+if (!teamsOpen || typeof teamsOpen !== 'object' || Array.isArray(teamsOpen)) teamsOpen = {};
+function teamsToggle(key) { if (teamsOpen[key]) delete teamsOpen[key]; else teamsOpen[key] = true; saveJson('hub-teams-open', teamsOpen); }
+// The page's switch (and the Simple sheet's) show the chosen view.
+function teamsPaintSwitch() {
+  const v = teamsView();
+  document.querySelectorAll('.view-switch button, .sa-switch button').forEach((b) => {
+    const on = (b.dataset.view === 'teams') === (v === 'teams');
+    b.classList.toggle('on', on); b.setAttribute('aria-selected', String(on));
+  });
+}
+function teamsPick(v) {
+  if (teamsView() === v) return;
+  teamsViewSet(v);
+  teamsPaintSwitch();
+  if (screen === 'agents') renderAgents(); else if (typeof simpleAgentListsRepaint === 'function') simpleAgentListsRepaint();
+}
+function teamsHelpers(n) { return `${n} helper${n === 1 ? '' : 's'}`; }
+function teamsSub(node) {
+  const w = node.working ? ` · ${node.working} working` : '';
+  if (node.depth === 0 && window.hubTeams.isMain(node.agent)) {
+    const k = node.children.length;
+    if (!node.size) return 'No team yet';
+    return k > 1 ? `${k} teams · ${node.size} agents${w}` : `team of ${node.size}${w}`;
+  }
+  if (node.depth === 1) return node.children.length ? `Team leader · leads ${node.size}${w}` : 'Team leader';
+  if (node.depth >= 2) return 'Worker';
+  return node.children.length ? `leads ${node.size}${w}` : null;
+}
+// Keep busy nodes and their ancestors (the working filter).
+function teamsPrune(node) {
+  const children = node.children.map(teamsPrune).filter(Boolean);
+  return isBusy(node.agent.name) || node.helpers > 0 || children.length ? { ...node, children } : null;
+}
+function teamsNodeHtml(node) {
+  const a = node.agent, d = node.depth, kids = node.children.length;
+  const open = workingFilter || !!teamsOpen[a.name];
+  const isMain = d === 0 && window.hubTeams.isMain(a);
+  const rank = d >= 2 ? 'worker' : d === 1 ? 'leader' : 'main';
+  let sub = teamsSub(node);
+  // a busy (or asking) leader / worker shows its busy text instead of its role
+  if (!isMain && d >= 1 && (isBusy(a.name) || (live[a.name] && live[a.name].pendingQuestion))) sub = null;
+  let html = `<div class="tm-line tm-d${d}" style="--d:${d}">` +
+    (kids ? `<button type="button" class="tm-fold" data-fold="${esc(a.name)}" aria-expanded="${open}" aria-label="${open ? 'Fold' : 'Unfold'} ${esc(a.display || a.name)}">${open ? '&#x25BE;' : '&#x25B8;'}</button>` : '<span class="tm-fold-sp"></span>') +
+    agentRowHtml(a, sub != null ? { sub } : {}) + '</div>';
+  if (d === 0 && !node.size && window.hubTeams.isMain(a) && isAdmin()) html += `<div class="tm-build" style="--d:${d}">${buildTeamBtnHtml(a.name, 'build-team-btn', 'Build Team')}</div>`;
+  // One leader = one block: its row, then only its own people in a wrapper with the connector line (.tm-kids).
+  // Under a main agent the blocks sit in .tm-leaders (no connector).
+  if (kids && open) html += `<div class="${d === 0 ? 'tm-leaders' : 'tm-kids'}">${node.children.map(teamsNodeHtml).join('')}</div>`;
+  if (node.helpers > 0 && (open || !kids)) html += `<div class="tm-note" style="--d:${d}">⚡ ${esc(teamsHelpers(node.helpers))} under ${esc(a.display || a.name)}</div>`;
+  return d >= 1 ? `<div class="tm-block tm-r-${rank}">${html}</div>` : html;
+}
+// Everybody below a node (after the working filter, the ones that are left), like the desktop's count.
+function teamsCount(n) { return n.children.reduce((s, c) => s + 1 + teamsCount(c), 0); }
+function teamsListHtml() {
+  const t = window.hubTeams.tree(agents, live);
+  const keep = (n) => workingFilter ? teamsPrune(n) : n;
+  const mains = t.mains.map(keep).filter(Boolean), shared = t.shared.map(keep).filter(Boolean), other = t.other.map(keep).filter(Boolean);
+  let html = t.anyTeam || workingFilter ? '' : '<div class="tm-empty"><b>Agents can work as teams.</b> Your main agents plan, decide and review. Short or personal tasks they usually do themselves; long work they can hand to team leaders, who run workers. ' + (isAdmin() ? 'Use Build Team on a main agent to have your lead propose one, or set who an agent reports to on its settings page.' : 'An admin can set who reports to whom.') + '</div>';
+  const head = (title, key) => key
+    ? `<button type="button" class="group-title" data-tm-sec="${key}"><span>${esc(title)}</span><span>${workingFilter || teamsOpen['@' + key] ? '&#x25BE;' : '&#x25B8;'}</span></button>`
+    : `<div class="group-title"><span>${esc(title)}</span></div>`;
+  if (mains.length) html += head('Your agents') + mains.map(teamsNodeHtml).join('');
+  if (shared.length) html += head('Shared specialists') + shared.map(teamsNodeHtml).join('');
+  if (other.length) html += head(`Other (${other.reduce((s, n) => s + 1 + teamsCount(n), 0)})`, 'other') + (workingFilter || teamsOpen['@other'] ? other.map(teamsNodeHtml).join('') : '');
+  return html || '<div class="empty">No agent is working right now.</div>';
+}
+
 // One row of the agent list. opts.done: a row of the Active section whose agent just finished (shows "✓ done", idle dot).
 // opts.active: a row of the Active section; when only the agent's temporary workers run it still reads as working.
 function agentRowHtml(a, opts) {
@@ -2540,8 +2619,11 @@ function agentRowHtml(a, opts) {
   const job = !done && opts && opts.job ? opts.job : null;
   // the name may be cut short (ellipsis); the tail (' + N more · 4 min') never shrinks, so the time always shows
   const jobHtml = job ? `<div class="agent-job" title="${esc(activeJobTitle(job))}"><span class="ajl-name">${esc(activeJobLead(job))}</span><span class="ajl-tail">${esc(activeJobTail(job, Date.now()))}</span></div>` : '';
+  // opts.sub: a line of the Teams view ('team of 3 · 1 working') that stands in for the blurb / busy text
   const sub = (done
     ? '<div class="agent-model working">✓ done</div>'
+    : opts && typeof opts.sub === 'string'
+      ? `<div class="agent-model" title="${esc(opts.sub)}">${esc(opts.sub)}</div>`
     : viaWorkers
       ? '<div class="agent-model working">⏳ working</div>'
       : working
@@ -2554,7 +2636,44 @@ function agentRowHtml(a, opts) {
     `<span class="agent-meta"><div class="agent-name">${esc(a.display || a.name)}${a.lead ? ' <span class="lead-badge" title="Lead agent">👑</span>' : ''}</div>${sub}</span>` +
     `<span class="dot${dotCls}${bgN ? ' ' + AgentDot.CLASS.background : ''}" title="${esc(bgN ? bgLabel : working && !viaWorkers ? busyText(a.name) : '')}"${bgN ? ` aria-label="${esc(bgLabel)}"` : ''}>${question ? '?' : ''}</span>` +
     (n ? `<span class="badge">${n > 99 ? '99+' : n}</span>` : '') +
-    '</button>';
+    '</button>' +
+    (opts && opts.build ? buildLineHtml(a.name) : '');   // beside the row, not inside it (a button cannot hold a button)
+}
+
+// ── Build Team (admins): the "No team yet · Build team" line, the Teams button, the ⋮ menu entry ──
+// The main agents that have nobody under them (what the Teams view calls "No team yet"); only admins see Build controls.
+function buildNoTeam() {
+  const s = new Set();
+  if (!isAdmin() || !window.hubTeams) return s;
+  for (const m of window.hubTeams.tree(agents, live).mains) if (!m.size) s.add(m.agent.name);
+  return s;
+}
+// A Build Team turn runs for this agent while any live entry (the lead's) says so.
+function buildingTeam(name) { return Object.values(live).some((s) => s && s.buildingTeamFor === name); }
+const buildTeamPending = new Set();   // requests on their way from this page (a second tap does nothing)
+function buildTeamBtnHtml(name, cls, label) {
+  const on = buildingTeam(name) || buildTeamPending.has(name);
+  return `<button type="button" class="${cls}" data-build-team="${esc(name)}"${on ? ' disabled aria-disabled="true"' : ''}>${on ? 'Building…' : label}</button>`;
+}
+function buildLineHtml(name) {
+  return `<div class="build-line">No team yet · ${buildTeamBtnHtml(name, 'build-team-link', 'Build team')}</div>`;
+}
+async function buildTeamStart(name) {
+  if (!name || buildingTeam(name) || buildTeamPending.has(name)) return;
+  buildTeamPending.add(name);
+  paintStatus();
+  try {
+    const r = await api('/api/agents/' + encodeURIComponent(name) + '/build-team', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    let d = null;
+    try { d = await r.json(); } catch { d = null; }
+    if (r.status === 202 && d && d.ok) { navigate('chat', d.lead || name); return; }   // the proposal arrives in the lead's chat
+    toast((d && d.error) || `Could not build a team (${r.status})`, 5000);
+  } catch (err) {
+    toast(`Could not build a team: ${err.message}`, 5000);
+  } finally {
+    buildTeamPending.delete(name);
+    paintStatus();
+  }
 }
 
 // The Active section at the top of the agent list: state, the setting, the hold while a finger is on the list.
@@ -2687,6 +2806,8 @@ function renderAgents() {
   renderBgChip();
   if (!agents.length) { list.innerHTML = '<div class="empty">No agents found.</div>'; return; }
   activeWireHold(list);
+  teamsPaintSwitch();
+  if (teamsView() === 'teams' && window.hubTeams) { list.innerHTML = teamsListHtml(); return; }
   activeJobs = activeJobsNow();
   activeState = activeStep(activeState, { busy: activeBusyNow(), now: Date.now(), held: activeHeld, enabled: activeTopOn() });
   let activeHtml = '';
@@ -2701,6 +2822,7 @@ function renderAgents() {
   const groups = GROUPS.map(g => ({ ...g, items: agents.filter(a => (a.category || 'worker') === g.key) }));
   const extra = [...new Set(agents.map(a => a.category || 'worker'))].filter(c => !known.has(c));
   for (const c of extra) groups.push({ key: c, title: c, items: agents.filter(a => a.category === c) });
+  const noTeam = buildNoTeam();
   let html = '';
   for (const g of groups) {
     if (workingFilter) g.items = g.items.filter(a => isBusy(a.name));
@@ -2709,7 +2831,7 @@ function renderAgents() {
     html += `<button class="group-title" data-group="${esc(g.key)}"><span>${esc(g.title)} (${g.items.length})</span><span>${isCollapsed ? '&#x25B8;' : '&#x25BE;'}</span></button>`;
     if (isCollapsed) continue;
     for (const a of g.items.slice().sort((x, y) => (!!x.lead !== !!y.lead) ? (x.lead ? -1 : 1) : (x.display || x.name).localeCompare(y.display || y.name))) {
-      html += agentRowHtml(a, { job: activeJobs[a.name] });
+      html += agentRowHtml(a, { job: activeJobs[a.name], build: noTeam.has(a.name) });
     }
   }
   if (!html) html = '<div class="empty">No agent is working right now.</div>';
@@ -12557,14 +12679,14 @@ function showQuestion(data, onAnswered) {
   box.className = 'question';
   questionBoxes.set(request_id, box);
   if (typeof voiceHintSync === 'function') voiceHintSync();   // a question appearing takes the hint down
-  const submit = (answers, label) => {
+  const submit = (answers, label, checked) => {
     if (onAnswered) onAnswered();
     api('/api/ask_response', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       // The asking agent goes with the answer: the route's access check needs it to let a member answer (it was refused).
       // A question rebuilt without its agent (a reconnect) falls back to the open chat's agent; the hub refuses one that did not ask.
-      body: JSON.stringify({ request_id, answers, ...((data.agent || (typeof current === 'string' && current)) ? { agent: data.agent || current } : {}) }),
+      body: JSON.stringify({ request_id, answers, ...(checked ? { checked } : {}), ...((data.agent || (typeof current === 'string' && current)) ? { agent: data.agent || current } : {}) }),
     }).then(r => { if (r.ok) { questionBoxes.delete(request_id); retireSoon(box); } })   // the hub has the answer: the box can go
       .catch(err => toast(`Could not send answer: ${err.message}`));
     box.innerHTML = `<div class="done">Answered: ${esc(label)}</div>`;   // kept in questionBoxes until the hub confirms or closes it
@@ -12572,9 +12694,14 @@ function showQuestion(data, onAnswered) {
   // The hub's "Skip" choice (ask_user allow_skip) is a Skip button beside Submit that answers at once; with several
   // questions each keeps its own Skip choice and the button skips them all (as on the desktop page).
   const isSkip = (o) => o && String(o.label || '').trim().toLowerCase() === 'skip';
-  const canSkip = questions.every(q => (q.options || []).some(isSkip));
+  // A plan card (hub-built q.checklist on the first question): checkbox rows, all ticked; the answer carries the ids still
+  // ticked (checked) with the chosen option. Such a card has no Skip and no typed answer.
+  const checklist = Array.isArray(questions[0] && questions[0].checklist) ? questions[0].checklist.filter(c => c && c.id != null) : null;
+  const hasChecklist = !!(checklist && checklist.length);
+  const checkIds = () => [...box.querySelectorAll('.qcheck input')].filter(x => x.checked).map(x => x.value);
+  const canSkip = !hasChecklist && questions.every(q => (q.options || []).some(isSkip));
   const shownOptions = (q) => (q.options || []).filter(o => !(isSkip(o) && questions.length === 1));
-  const textOnly = questions.every(q => !shownOptions(q).length && !(Array.isArray(q.models) && q.models.length));
+  const textOnly = !hasChecklist && questions.every(q => !shownOptions(q).length && !(Array.isArray(q.models) && q.models.length));
   // A tap only selects (highlighted); nothing is sent until Submit, so a mis-tap cannot answer the agent.
   const selected = {};
   const groups = {};
@@ -12586,6 +12713,17 @@ function showQuestion(data, onAnswered) {
     t.textContent = q.question || '';
     box.appendChild(t);
     groups[i] = [];
+    if (i === 0 && hasChecklist) {
+      const list = document.createElement('div');
+      list.className = 'qchecks';
+      for (const c of checklist) {
+        const row = document.createElement('label');
+        row.className = 'qcheck';
+        row.innerHTML = `<input type="checkbox" value="${esc(c.id)}" checked><span><strong>${esc(c.label || c.id)}</strong>${c.detail ? `<small>${esc(c.detail)}</small>` : ''}</span>`;
+        list.appendChild(row);
+      }
+      box.appendChild(list);
+    }
     for (const opt of shownOptions(q)) {
       const b = document.createElement('button');
       b.className = 'opt';
@@ -12637,20 +12775,20 @@ function showQuestion(data, onAnswered) {
   const submitBtn = actions.querySelector('.qsubmit');
   const hint = actions.querySelector('.qhint');
   const refresh = () => {
-    const typed = input.value.trim();
+    const typed = hasChecklist ? '' : input.value.trim();
     const complete = typed || questions.every((q, i) => selected[i] !== undefined);
     submitBtn.disabled = !complete;
     hint.textContent = typed ? 'Your typed answer will be sent.' : complete ? 'Press Submit to send.' : textOnly ? 'Type your answer, then press Submit.' : (questions.length > 1 ? 'Pick an answer for each question.' : 'Pick an answer, then press Submit.');
   };
   const grow = () => { if (input.scrollHeight > input.clientHeight && input.clientHeight < 240) input.style.height = Math.min(input.scrollHeight + 2, 240) + 'px'; };
   const send = () => {
-    const v = input.value.trim();
+    const v = hasChecklist ? '' : input.value.trim();
     const answers = {};
     if (v) { questions.forEach((q, i) => { answers[String(i)] = v; }); submit(answers, v); return; }
     if (!questions.every((q, i) => selected[i] !== undefined)) return;
     questions.forEach((q, i) => { answers[String(i)] = selected[i]; });
     // A pick from the model list is sent as its id and shown as it reads in the list.
-    submit(answers, questions.map((q, i) => (picks[i] && picks[i].value ? picks[i].options[picks[i].selectedIndex].text : selected[i])).join(' / '));
+    submit(answers, questions.map((q, i) => (picks[i] && picks[i].value ? picks[i].options[picks[i].selectedIndex].text : selected[i])).join(' / '), hasChecklist ? checkIds() : undefined);
   };
   submitBtn.addEventListener('click', send);
   const skipBtn = actions.querySelector('.qskip');
@@ -12663,7 +12801,7 @@ function showQuestion(data, onAnswered) {
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && input.value.trim()) { e.preventDefault(); send(); }
   });
-  box.appendChild(custom);
+  if (!hasChecklist) box.appendChild(custom);
   box.appendChild(actions);
   refresh();
   chatEl().appendChild(box);
@@ -13735,7 +13873,7 @@ function onTurnStart(ev) {
     const b = card ? withRenderTarget(card.body, paint) : paint();
     // Main view: a hub-started turn is followed as ever but not shown (until its reply is marked for the owner).
     let hiddenEls = null;
-    if (viewNow() === 'main' && chatViewIsHubOrigin(ev.origin)) {
+    if (viewNow() === 'main' && chatViewIsHubOrigin(ev.origin) && ev.origin.kind !== 'build_team') {   // Build Team: the person pressed it, so it stays in view
       if (card) card.wrap.classList.add('chat-view-hidden');
       else {
         hiddenEls = [];
@@ -14122,8 +14260,17 @@ function wire() {
   $('agents-refresh').addEventListener('click', loadAgents);
   $('activity-refresh').addEventListener('click', loadActivityExtras);
 
+  document.querySelector('#screen-agents .view-switch')?.addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-view]');
+    if (b) teamsPick(b.dataset.view === 'teams' ? 'teams' : 'agents');
+  });
+  teamsPaintSwitch();
   $('agents-list').addEventListener('click', (e) => {
-    const g = e.target.closest('.group-title');
+    const bt = e.target.closest('[data-build-team]');
+    if (bt) { if (!bt.disabled) buildTeamStart(bt.dataset.buildTeam); return; }   // before the row: a Build button never opens the chat itself
+    const f = e.target.closest('.tm-fold, [data-tm-sec]');
+    if (f) { teamsToggle(f.dataset.fold || '@' + f.dataset.tmSec); renderAgents(); return; }   // Teams view: folds only fold
+    const g = e.target.closest('.group-title[data-group]');
     if (g) { collapsed[g.dataset.group] = !collapsed[g.dataset.group]; saveJson('hub-mobile-collapsed', collapsed); renderAgents(); return; }
     const r = e.target.closest('.agent-row');
     if (r && e.target.closest('.dot.bg-work, .agent-bg-line')) { bgOpenChat(r.dataset.agent); return; }   // the ring or the blue line: the chat with the panel open
@@ -14143,7 +14290,8 @@ function wire() {
   // Esc, Back or a tap outside the approval sheet is Later: hidden until a new request comes, never answered.
   $('approval-sheet').__dialogClose = () => { approvalsHidden = true; paintApprovals(); };
   $('menu-profile')?.addEventListener('click', openProfileSheet);   // ?.: a page cached before Profile existed has no such item
-  $('menu-settings')?.addEventListener('click', settingsSheetOpen);   // ?.: a page cached before Settings existed has no such item
+  $('menu-settings')?.addEventListener('click', settingsSheetOpen);
+  $('menu-build-team')?.addEventListener('click', (e) => { e.stopPropagation(); $('menu').classList.remove('open'); if (current && !$('menu-build-team').disabled) buildTeamStart(current); });   // ?.: a page cached before Settings existed has no such item
   $('menu-security').addEventListener('click', openSecuritySheet);
   $('menu-files').addEventListener('click', openFilesSheet);
   $('menu-recall').addEventListener('click', openRecallSheet);
@@ -14494,7 +14642,26 @@ function menuLookName() {
   try { const cur = L.applied(document); const m = (L.LOOKS || []).find(l => l.id === cur); label = m ? m.label : ''; } catch { /* no label */ }
   el.textContent = label ? label + ' ›' : '›';
 }
+// The chat's ⋮ menu: "Agent settings" (admins; the settings page of the open agent) and "Build team" (admins; a main
+// agent with no team). Simple mode shows neither. Run on open and on every status change.
+function menuTeamSync() {
+  const st = $('menu-agent-settings'), bt = $('menu-build-team');
+  if (!st && !bt) return;
+  const admin = isAdmin() && !(typeof simpleOn === 'function' && simpleOn());
+  const a = current ? agentByName(current) : null;
+  if (st) {
+    st.hidden = !(admin && a);
+    if (a) st.href = '/agent-settings.html?agent=' + encodeURIComponent(a.name);
+  }
+  if (bt) {
+    bt.hidden = !(admin && a && buildNoTeam().has(a.name));
+    const on = !!a && (buildingTeam(a.name) || buildTeamPending.has(a.name));
+    bt.disabled = on;
+    bt.textContent = on ? 'Building…' : '🏗 Build team';
+  }
+}
 function menuOnOpen() {
+  menuTeamSync();
   menuGroupsSync();
   menuAdvDotSync();
   menuLookName();
@@ -16283,15 +16450,58 @@ function simpleAgentRow(a, opts) {
   b.querySelector('.sa-ic').textContent = a.icon || '🤖';
   b.querySelector('b').textContent = a.display || a.name;
   b.querySelector('small').textContent = opts.blurb ? (a.blurb || '') : '';
+  if (typeof opts.sub === 'string') { const sm = b.querySelector('small'); sm.textContent = opts.sub; sm.className = 'sa-sub'; }   // Teams view: its own second line
+  if (opts.depth) b.style.setProperty('--d', String(opts.depth));
+  if (opts.depth === 1) b.classList.add('sa-leader');   // Teams view in Simple: a team leader, one step smaller than a main agent
   b.querySelector('.sa-tick').textContent = opts.blurb && a.name === current ? '✓' : '';
   simpleDotPaint(b.querySelector('.sa-dot'), a.name);
   b.addEventListener('click', (e) => { if (e && e.target && e.target.closest && e.target.closest('.sa-dot.bg-work') && window.HandOffCard) HandOffCard.open(a.name); if (typeof opts.onPick === 'function') opts.onPick(); if (a.name !== current || screen !== 'chat') navigate('chat', a.name); });
   return b;
 }
 // Fill a container with the agent rows from the one model: Primary first, the "More agents" row, then the open groups.
+// Simple's Teams view: main agents with their team leaders under them (no workers), then folded groups of the rest.
+function simpleTeamsModel() {
+  const t = window.hubTeams.tree(agents, live);
+  const rows = [];
+  for (const m of t.mains) {
+    rows.push({ a: m.agent, depth: 0, sub: teamsSub(m) });
+    for (const c of m.children) rows.push({ a: c.agent, depth: 1, sub: 'Team leader' });
+  }
+  const flat = (n) => [n.agent, ...n.children.flatMap(flat)];   // anyone under a shared or Other agent stays reachable
+  return { rows, groups: [{ key: '@shared', label: 'Shared specialists', items: t.shared.flatMap(flat) }, { key: '@other', label: 'Other', items: t.other.flatMap(flat) }].filter((g) => g.items.length) };
+}
+// What the Teams rows show apart from their sublines and dots (those are repainted in place).
+function simpleTeamsSig() {
+  const m = simpleTeamsModel();
+  return JSON.stringify([m.rows.map((r) => [r.a.name, r.a.display || '', r.a.icon || '', r.depth]), m.groups.map((g) => [g.key, g.items.map((a) => [a.name, a.display || '', a.icon || ''])]), teamsOpen]);
+}
+function simpleSwitch(list) {
+  const sw = document.createElement('div'); sw.className = 'sa-switch'; sw.setAttribute('role', 'tablist');
+  sw.innerHTML = '<button type="button" data-view="all" role="tab">All Agents</button><button type="button" data-view="teams" role="tab">Teams</button>';
+  sw.addEventListener('click', (e) => { const b = e.target.closest('button[data-view]'); if (b) teamsPick(b.dataset.view === 'teams' ? 'teams' : 'agents'); });
+  list.appendChild(sw);
+  teamsPaintSwitch();
+}
+function simpleTeamsFill(list, opts) {
+  const m = simpleTeamsModel();
+  for (const r of m.rows) list.appendChild(simpleAgentRow(r.a, { ...opts, sub: r.sub, depth: r.depth }));
+  for (const g of m.groups) {
+    const open = !!teamsOpen[g.key];
+    const fb = document.createElement('button'); fb.type = 'button'; fb.className = 'sa-row sa-fold'; fb.dataset.grp = g.key; fb.setAttribute('aria-expanded', String(open));
+    fb.innerHTML = '<span class="sa-txt"><b></b></span><span class="sa-chev" aria-hidden="true"></span><span class="sa-dot"></span>';
+    fb.querySelector('b').textContent = g.label;
+    fb.querySelector('.sa-chev').textContent = open ? '⌃' : '⌄';
+    fb.querySelector('.sa-dot').className = 'sa-dot ' + (!open && g.items.some((a) => isBusy(a.name)) ? 'busy' : '');
+    fb.addEventListener('click', () => { teamsToggle(g.key); simpleAgentListsRepaint(); });
+    list.appendChild(fb);
+    if (open) for (const a of g.items) list.appendChild(simpleAgentRow(a, opts));
+  }
+}
 function simpleAgentListFill(list, opts) {
   list.textContent = '';
   if (!agents.length) { list.textContent = 'No agents yet.'; return; }
+  if (window.hubTeams) simpleSwitch(list);
+  if (window.hubTeams && teamsView() === 'teams') { simpleTeamsFill(list, opts); return; }
   const m = simpleAgentSheetModel(agents, current, simpleMoreGet(), isBusy, bgCountOf);
   for (const a of m.primary) list.appendChild(simpleAgentRow(a, opts));
   if (m.hasMore) {
@@ -16327,6 +16537,12 @@ function simpleAgentsOpen() {
 // Live status changed: repaint the dots in place (no rebuild, so a tap in progress is not lost): the open sheet and the sidebar.
 function simpleDotsIn(box) {
   box.querySelectorAll('.sa-row[data-agent]').forEach((b) => simpleDotPaint(b.querySelector('.sa-dot'), b.dataset.agent));
+  if (window.hubTeams && teamsView() === 'teams') {
+    const m = simpleTeamsModel();
+    const subs = new Map(m.rows.map((r) => [r.a.name, r.sub || '']));
+    box.querySelectorAll('.sa-row[data-agent]').forEach((b) => { const sm = b.querySelector('small.sa-sub'); if (sm && subs.has(b.dataset.agent)) sm.textContent = subs.get(b.dataset.agent); });
+    for (const g of m.groups) { const d = box.querySelector('.sa-fold[data-grp="' + g.key + '"] .sa-dot'); if (d) d.className = 'sa-dot ' + (!teamsOpen[g.key] && g.items.some((a) => isBusy(a.name)) ? 'busy' : ''); }
+  }
   const mb = box.querySelector('.sa-more .sa-dot');
   if (mb) simpleMoreDotPaint(mb, simpleAgentSheetModel(agents, current, simpleMoreGet(), isBusy, bgCountOf));
 }
@@ -16357,7 +16573,7 @@ function simpleSidePaint() {
   const listEl = s.querySelector('.ssd-list');
   const m = simpleAgentSheetModel(agents, current, simpleMoreGet(), isBusy, bgCountOf);
   const rowSig = (a) => [a.name, a.display || '', a.icon || ''];
-  const sig = JSON.stringify([m.primary.map(rowSig), m.groups.map((g) => [g.key, g.items.map(rowSig)]), m.hasMore, m.open, current, agents.length]);
+  const sig = JSON.stringify([m.primary.map(rowSig), m.groups.map((g) => [g.key, g.items.map(rowSig)]), m.hasMore, m.open, current, agents.length, teamsView(), teamsView() === 'teams' && window.hubTeams ? simpleTeamsSig() : '']);
   if (listEl.dataset.sig !== sig) {
     const top = listEl.scrollTop;
     simpleAgentListFill(listEl, {});

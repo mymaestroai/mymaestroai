@@ -33,7 +33,8 @@ function page({ status = {}, run = {}, chat = {}, fetchImpl = null } = {}) {
     querySelector: (sel) => (sel === '#tab-c1 .status' ? tab : null),
   };
   const fetchFn = (url, opts) => { fetches.push({ url, opts }); return fetchImpl ? fetchImpl(url, opts) : Promise.reject(new Error('no fetch')); };
-  const body = `${V.chatViewActivityWord}\nconst busyOriginMemo = new Set(); const busyOriginFlight = new Set(); const agentSteps = {}; const turnStepLast = {}; let agentRowTicker = null; let busyCardTimer = null;\n${['busyOriginFetch', 'headerBusyPaint', 'busyCardState', 'busyCardRefresh', 'busyCardRefreshAll', 'agentDoingNow', 'turnStepRepaintNow', 'turnStepRepaint', 'paintAgentStatus', 'agentRowTick', 'busyAgentNames', 'elapsedLabel', 'bgCountOf', 'bgPaintRow'].map(extract).join('\n')}\nreturn { headerBusyPaint, busyOriginFetch, busyCardRefresh, agentDoingNow, turnStepRepaint, paintAgentStatus, agentSteps, agentRowTick, tickerOn: () => !!agentRowTicker };`;
+  // agentLiveState: paintAgentStatus's state, shared with the Teams view rows since the Teams view was added
+  const body = `${V.chatViewActivityWord}\nconst busyOriginMemo = new Set(); const busyOriginFlight = new Set(); const agentSteps = {}; const turnStepLast = {}; let agentRowTicker = null; let busyCardTimer = null;\n${['busyOriginFetch', 'headerBusyPaint', 'busyCardState', 'busyCardRefresh', 'busyCardRefreshAll', 'agentDoingNow', 'turnStepRepaintNow', 'turnStepRepaint', 'agentLiveState', 'paintAgentStatus', 'agentRowTick', 'busyAgentNames', 'elapsedLabel', 'bgCountOf', 'bgPaintRow'].map(extract).join('\n')}\nreturn { headerBusyPaint, busyOriginFetch, busyCardRefresh, agentDoingNow, turnStepRepaint, paintAgentStatus, agentSteps, agentRowTick, tickerOn: () => !!agentRowTicker };`;
   class FakeDate extends Date { static now() { return NOW; } }
   const timers = [];
   const fakeSetTimeout = (f, ms) => { timers.push({ f, ms }); return timers.length; };

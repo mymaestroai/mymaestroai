@@ -462,6 +462,83 @@
     .tab-content { flex: 1; overflow-y: auto; padding: 10px; }
     .tab-panel { display: none; }
     .tab-panel.active { display: block; }
+    /* Teams view (renderTeams in app.js): who reports to whom. Rows match .agent-btn spacing; depth 1 indents 18px, depth 2 36px, deeper +18px each. */
+    .simple-view-switch { display: none; }
+    .teams-empty { margin: 0 0 10px; padding: 10px 12px; border: 1px dashed var(--border-strong); border-radius: 8px; font-size: 0.75rem; line-height: 1.4; color: var(--text-dim); }
+    .teams-empty strong { display: block; margin-bottom: 4px; color: var(--text); font-size: 0.8rem; }
+    .teams-section { margin-bottom: 10px; }
+    .teams-title { display: flex; align-items: center; gap: 6px; padding: 4px 2px; font-size: 0.7rem; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.04em; cursor: pointer; user-select: none; }
+    button.teams-title-fold { width: 100%; border: 0; background: none; font-family: inherit; text-align: left; }
+    .teams-glyph { flex: none; width: 14px; text-align: center; font-size: 0.5rem; color: var(--text-dim); transition: transform 0.15s; }
+    .teams-glyph.open { transform: rotate(90deg); }
+    .teams-title:focus-visible, .teams-fold:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 4px; }
+    /* One leader = one block (.teams-block): its row, then its own workers in .teams-kids, joined by a line down the left. */
+    .teams-leaders { margin-left: 26px; }   /* the step from main agent to leader reads as clearly as the one from leader to worker */
+    .teams-block.rank-leader { margin-bottom: 8px; }
+    .teams-kids { margin-left: 34px; padding-left: 8px; border-left: 1px solid var(--border-strong); }
+    .teams-block .teams-block > .teams-kids { margin-left: 14px; }
+    .teams-row {
+      width: 100%; margin-bottom: 4px; padding: 8px 10px 8px 14px; position: relative;
+      background: var(--bg-card); border: 1px solid var(--border); color: var(--text-dim); cursor: pointer;
+      text-align: left; transition: all 0.15s; display: flex; flex-direction: row; align-items: center; gap: 8px;
+      border-radius: 8px; font: inherit;
+    }
+    .teams-row:hover { color: var(--text); border-color: var(--accent); background: var(--agent-btn-hover-bg); }
+    .teams-row, .teams-helpers { --d: 0; }   /* --d = depth, set on each row: 1 -> 18px, 2 -> 36px, then +18px each */
+    .teams-row { margin-left: calc(var(--d) * 18px); width: calc(100% - var(--d) * 18px); }
+    .teams-line { display: flex; align-items: center; gap: 4px; margin-bottom: 4px; }
+    .teams-line > .teams-row { flex: 1 1 auto; min-width: 0; width: auto; margin: 0; }
+    .teams-fold { flex: none; width: 18px; height: 18px; padding: 0; border: 0; background: none; font: inherit; line-height: 1; text-align: center; font-size: 0.55rem; color: var(--text-dim); transition: transform 0.15s; }
+    button.teams-fold { cursor: pointer; }
+    .teams-fold.open { transform: rotate(90deg); }
+    .teams-fold.none { visibility: hidden; }
+    .teams-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: transparent; }
+    .teams-dot.live-idle { background: var(--border-strong); }
+    .teams-dot.live-busy { background: var(--warning); animation: pulse 1s infinite; }
+    .teams-dot.live-question { background: var(--blue); animation: pulse 1.6s infinite; }
+    .teams-row .agent-icon { font-size: 1.1rem; flex-shrink: 0; }
+    .teams-info { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+    .teams-row .name { font-weight: 600; font-size: 0.85rem; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .teams-row .name { display: flex; align-items: center; }
+    .teams-row .name-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+    .teams-row .name .lead-badge { flex: none; }
+    .teams-row .lead-badge { margin-left: 5px; font-size: 0.8rem; filter: drop-shadow(0 0 2px var(--agent-btn-lead-badge-filter)); }
+    .teams-sub { font-size: 0.65rem; color: var(--text-tertiary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .teams-sub.busy { color: var(--warning); }
+    .teams-helpers { margin: 0 0 4px 0; padding: 2px 10px; font-size: 0.65rem; color: var(--warning); }
+    /* Three ranks: main (above), leader (0.92 of main), worker (about two thirds of a leader row, quiet, no card) */
+    .teams-row.rank-leader { padding: 6px 8px 6px 12px; }
+    .teams-row.rank-leader .agent-icon { font-size: 1rem; }
+    .teams-row.rank-leader .name { font-size: 0.78rem; }
+    .teams-row.rank-leader .teams-sub { font-size: 0.6rem; }
+    /* A leader's role line and the background line wrap rather than end in "…" (the leader indent leaves the default sidebar short of room). */
+    .teams-row.rank-leader .teams-sub:not(.busy), .teams-bg-line { white-space: normal; overflow: visible; text-overflow: clip; line-height: 1.25; }
+    .teams-line.rank-worker { margin-bottom: 2px; }
+    .teams-line.rank-worker > .teams-fold.none { display: none; }
+    .teams-row.rank-worker { padding: 3px 6px 3px 8px; gap: 6px; background: none; border-color: transparent; }
+    .teams-row.rank-worker:hover { background: var(--agent-btn-hover-bg); border-color: var(--border); }
+    .teams-row.rank-worker .agent-icon { font-size: 0.85rem; }
+    .teams-row.rank-worker .teams-info { gap: 0; }
+    .teams-row.rank-worker .name { font-size: 0.62rem; font-weight: 500; color: var(--text-dim); }
+    .teams-row.rank-worker .teams-sub { font-size: 0.55rem; }
+    .teams-row.rank-worker .teams-dot { width: 6px; height: 6px; }
+    /* A narrow sidebar (dragged down towards its 160px minimum): names get the room, the nesting stays readable. */
+    #teams-list { container-type: inline-size; }
+    .teams-sub .sub-narrow { display: none; }
+    @container (max-width: 190px) {   /* the default 240px sidebar gives the list about 216px: full rows; only a sidebar dragged narrower gets this */
+      .teams-sub .sub-wide { display: none; }
+      .teams-sub .sub-narrow { display: inline; }
+      .teams-leaders { margin-left: 10px; }
+      .teams-kids { margin-left: 10px; padding-left: 4px; }
+      .teams-block .teams-block > .teams-kids { margin-left: 6px; }
+      .teams-row .agent-icon { display: none; }
+      .teams-row { gap: 5px; }
+      .teams-row.rank-leader { padding-left: 6px; }
+      .teams-row .agent-menu-btn { width: 16px; min-width: 16px; padding: 0; }
+      .teams-line > .teams-fold.none { width: 6px; min-width: 6px; }
+    }
+    .teams-sub-simple { display: none; }
+    .teams-bg-line { color: var(--bg-work-ring); }
 
     /* Multi-user: owner switcher, signed-in chip, account menu, security dialog */
     #owner-view { width: 100%; margin-bottom: 8px; padding: 5px 8px; background: var(--bg-input); color: var(--text); border: 1px solid var(--border); border-radius: 5px; font-size: 0.75rem; }
@@ -493,7 +570,7 @@
     .security-modal .sec-secret { word-break: break-all; padding: 6px 8px; background: var(--bg-input); border-radius: 5px; font-size: 0.78rem; user-select: all; }
     .security-modal .sec-codes { margin: 0; padding: 8px 10px; background: var(--bg-input); border-radius: 5px; font-size: 0.85rem; columns: 2; user-select: all; }
     /* Members never see admin surfaces (the server refuses them too) */
-    body.member-view .more-menu .more-advanced, body.member-view #more-badge, body.member-view .agent-btn .actions, body.member-view .gear-btn { display: none !important; }
+    body.member-view .more-menu .more-advanced, body.member-view #more-badge, body.member-view .agent-btn .actions, body.member-view .agent-menu-btn, body.member-view .agent-build-line, body.member-view .build-team-btn { display: none !important; }
 
     /* (Hardware toggle CSS removed) */
 
@@ -620,9 +697,36 @@
       opacity: 0; transition: opacity 0.15s;
     }
     .agent-btn:hover .action-btn { opacity: 1; }
-    .agent-btn .gear-btn { background: var(--border-strong); font-size: 0.6rem; position: absolute; top: 6px; left: 6px; opacity: 0; }
-    .agent-btn:hover .gear-btn { opacity: 1; }
-    .agent-btn .gear-btn:hover { background: var(--accent); }
+    /* The always-visible row menu button (⋯) replaces the hover gear; "No team yet · Build team" is the line under the model name.
+       Long names truncate (the crown stays); the ⋯ sits bottom right so the hover + and S (top right) never cover it. */
+    .agent-btn .name { display: flex; align-items: center; min-width: 0; }
+    .agent-btn .name-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+    .agent-btn .name .lead-badge { flex: none; }
+    .agent-btn:has(.agent-menu-btn) .agent-info { padding-right: 18px; }
+    .agent-menu-btn {
+      flex: none; display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box;
+      width: 24px; height: 24px; padding: 0; border: 1px solid transparent; border-radius: 6px; background: none;
+      color: var(--text-dim); font: inherit; font-size: 1rem; line-height: 1; cursor: pointer;
+    }
+    .agent-menu-btn:hover, .agent-menu-btn[aria-expanded="true"] { color: var(--text); background: var(--border-strong); }
+    .agent-menu-btn:focus-visible, .build-team-link:focus-visible, .build-team-btn:focus-visible, .agent-menu-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+    .agent-btn .agent-menu-btn { position: absolute; bottom: 6px; right: 6px; }
+    .agent-build-line { display: block; font-size: 0.65rem; color: var(--text-tertiary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .build-team-link { display: inline; padding: 0; border: 0; background: none; font: inherit; color: var(--accent); text-decoration: underline; cursor: pointer; }
+    .build-team-link.is-building, .build-team-btn.is-building { color: var(--text-dim); text-decoration: none; cursor: default; }
+    .build-team-btn { align-self: flex-start; margin-top: 4px; padding: 3px 10px; border: 1px solid var(--accent); border-radius: 6px; background: transparent; color: var(--accent); font: inherit; font-size: 0.7rem; font-weight: 600; cursor: pointer; }
+    .build-team-btn:hover:not(:disabled) { background: var(--accent); color: var(--on-color-text); }
+    .build-team-btn:disabled { border-color: var(--border-strong); opacity: 0.7; cursor: default; }
+    .teams-row .agent-menu-btn { margin-left: auto; margin-right: -4px; }
+    .agent-row-menu {
+      position: fixed; z-index: 10000; min-width: 150px; max-width: calc(100vw - 8px); display: flex; flex-direction: column; gap: 2px; padding: 4px;
+      background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 10px 30px var(--shadow-color-pop); color: var(--text);
+    }
+    .agent-menu-item { padding: 7px 12px; border: 0; border-radius: 6px; background: none; color: var(--text); font: inherit; font-size: 0.8rem; text-align: left; cursor: pointer; white-space: nowrap; }
+    .agent-menu-item:hover:not(:disabled), .agent-menu-item:focus-visible { background: var(--agent-btn-hover-bg); }
+    .agent-menu-item:disabled { color: var(--text-dim); cursor: default; }
+    #agent-active-group .agent-build-line { display: none; }
+    html.mm-simple .agent-menu-btn, html.mm-simple .agent-build-line, html.mm-simple .build-team-btn { display: none !important; }   /* Simple shows no controls */
     .agent-btn .add-btn { background: var(--purple); }
     .agent-btn .sum-btn { background: var(--blue); }
     .agent-btn .agent-status {
@@ -2299,6 +2403,13 @@
     .question-hint { font-size: 0.8rem; color: var(--text-dim); }
     #question-submit { padding: 9px 18px; border-radius: 8px; border: none; background: var(--accent); color: var(--on-color-text); font-weight: 600; cursor: pointer; }
     #question-submit:disabled { opacity: 0.45; cursor: not-allowed; }
+    /* Build team plan card: one tick row per plan item (label bold, detail small), above the buttons */
+    .question-checklist { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; max-height: 40vh; overflow-y: auto; }
+    .question-check { display: flex; align-items: flex-start; gap: 10px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-input); cursor: pointer; }
+    .question-check input { flex: none; margin-top: 3px; accent-color: var(--accent); }
+    .question-check-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+    .question-check-text strong { font-size: 0.85rem; color: var(--text); }
+    .question-check-text small { font-size: 0.75rem; color: var(--text-dim); }
     .question-option strong { font-size: 0.9rem; }
     .question-option span { font-size: 0.8rem; color: var(--text-dim); }
     /* ask_user with choose_model: every model the hub can use, one drop-down under the buttons */
@@ -2768,6 +2879,7 @@
     }
     /* The ring: free, with work in the background. Hollow, blue, 11 px outside (7 + 2 + 2), still. Only on a dot that is not replying, asking or thinking. */
     .agent-btn .agent-status.bg-work:not(.live-busy):not(.live-question):not(.thinking),
+    .teams-dot.bg-work:not(.live-busy):not(.live-question),
     .chat-tab .status.idle.bg-work,
     .status-bar .status-dot.idle.bg-work {
       box-sizing: content-box; width: 7px; height: 7px; border: 2px solid var(--bg-work-ring); border-radius: 50%;
@@ -3238,6 +3350,25 @@
     html.mm-simple #agent-list .agent-btn .agent-status.bg-work:not(.live-busy):not(.live-question) { display: block !important; position: absolute; top: 50%; right: 14px; left: auto; box-sizing: content-box; width: 7px; height: 7px; margin: -6px 0 0; padding: 0; border: 2px solid var(--bg-work-ring); border-radius: 50%; background: transparent; font-size: 0; line-height: 0; box-shadow: none; animation: none; }
     html.mm-simple #agent-list .simple-more.has-bg:not(.has-busy) .sm-dot { display: block; box-sizing: content-box; width: 7px; height: 7px; margin-top: -6px; border: 2px solid var(--bg-work-ring); background: transparent; animation: none; }
     html.mm-simple #agent-list .simple-more-h { padding: 12px 12px 4px; font-size: 12px; font-weight: 500; color: var(--sm-muted); }
+    /* Simple: the All Agents | Teams switch (the tab strip is hidden), and the Teams view as a flat, larger list: leaders only, no labels or helper lines */
+    html.mm-simple .simple-view-switch { display: flex; gap: 2px; margin: 14px 4px 0; padding: 3px; border-radius: 12px; background: var(--sm-raised); border: 1px solid var(--sm-border); }
+    html.mm-simple .simple-view-switch button { flex: 1; height: 30px; border: 0; border-radius: 9px; background: none; color: var(--sm-sec); font: inherit; font-size: 13px; cursor: pointer; }
+    html.mm-simple .simple-view-switch button[aria-pressed="true"] { background: var(--sm-sel); color: var(--sm-text); }
+    html.mm-simple #teams-panel { padding: 10px 0 8px; }
+    html.mm-simple #teams-list .teams-line.deep, html.mm-simple #teams-list .teams-row.deep, html.mm-simple #teams-list .teams-kids, html.mm-simple #teams-list .teams-helpers { display: none !important; }   /* Simple: no workers */
+    html.mm-simple #teams-list .teams-row.rank-leader { min-height: 38px; padding: 0 12px; font-size: 14px; }
+    html.mm-simple #teams-list .teams-row.rank-leader .name { font-size: 14px; }
+    html.mm-simple #teams-list .teams-row.rank-leader .agent-icon { font-size: 15px; width: 22px; }
+    html.mm-simple #teams-list .teams-row { min-height: 42px; margin-bottom: 2px; padding: 0 12px; border: 0; border-radius: 12px; background: none; color: var(--sm-text); font-size: 15px; gap: 12px; }
+    html.mm-simple #teams-list .teams-row:hover { background: var(--sm-hover); }
+    html.mm-simple #teams-list .teams-row .name { font-size: 15px; font-weight: 400; color: var(--sm-text); }
+    html.mm-simple #teams-list .teams-row .agent-icon { width: 24px; text-align: center; font-size: 17px; }
+    html.mm-simple #teams-list .teams-row .lead-badge { display: none; }
+    html.mm-simple #teams-list .teams-sub { color: var(--sm-muted); }
+    html.mm-simple #teams-list .teams-sub-adv.has-simple { display: none; }
+    html.mm-simple #teams-list .teams-sub-simple { display: block; }
+    html.mm-simple #teams-list .teams-title, html.mm-simple #teams-list .teams-empty { color: var(--sm-muted); border-color: var(--sm-border); }
+    html.mm-simple #teams-list .teams-empty strong { color: var(--sm-text); }
 
     /* Top right of the chat area: appearance button and the Simple view switch */
     html.mm-simple .main { position: relative; }
@@ -3269,9 +3400,14 @@
     <div class="sidebar-resize-handle" id="sidebar-resize-handle"></div>
     
     <div class="tabs">
-      <button class="tab active" data-tab="agents">Agents</button>
-      <button class="tab" data-tab="group-chat">Tiger Team</button>
-      <button class="tab" data-tab="guide">Guide</button>
+      <button class="tab active" data-tab="agents">All Agents</button>
+      <button class="tab" data-tab="teams">Teams</button>
+      <button class="tab" data-tab="group-chat" hidden>Tiger Team</button>
+      <button class="tab" data-tab="guide" hidden>Guide</button>
+    </div>
+    <div class="simple-view-switch" id="simple-view-switch" role="group" aria-label="Sidebar view">
+      <button type="button" data-view="agents" aria-pressed="true">All Agents</button>
+      <button type="button" data-view="teams" aria-pressed="false">Teams</button>
     </div>
     
     <div class="tab-content">
@@ -3279,6 +3415,8 @@
         <select id="owner-view" style="display:none" aria-label="Whose agents to show" title="Whose agents to show"></select>
         <div id="agent-list"></div>
       </div>
+
+      <div class="tab-panel" id="teams-panel"><div id="teams-list"></div></div>
       
       <div class="tab-panel" id="group-chat-panel">
         <div class="group-builder">
@@ -3497,6 +3635,7 @@
   <script src="/ui-code-copy.js"></script>
   <script src="/ui-team-card.js"></script>
   <script src="/ui-simple.js"></script>
+  <script src="/ui-teams.js"></script>
   <script src="/password-eye.js"></script>
   <script>document.addEventListener('DOMContentLoaded', function () { PasswordEye.watch(); });</script>
   <script src="app.js"></script>

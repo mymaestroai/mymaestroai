@@ -78,7 +78,7 @@ test('done rows carry active-done, "✓ done", no is-busy and an idle dot', () =
 
 test('the old inline row code is gone from the loop; it calls agentRowHtml', () => {
   const body = RENDER();
-  assert.ok(body.includes('html += agentRowHtml(a, { job: activeJobs[a.name] });'), 'changed: normal group rows pass the agent\'s job (none: the same markup as before)');
+  assert.ok(body.includes('html += agentRowHtml(a, { job: activeJobs[a.name], build: noTeam.has(a.name) });'), 'changed: normal group rows pass the agent\'s job (none: the same markup as before)');
   assert.ok(!body.includes('class="agent-row'));
 });
 
@@ -107,6 +107,10 @@ function renderEnv(over) {
     // changed: renderAgents and agentRowHtml now also read the jobs helpers and state (stubbed: no jobs)
     activeJobsFrom: () => ({}), activeJobLabel: () => '', activeJobTitle: () => '', activeJobsSync() {}, activeJobsNow: () => ({}),
     activeJobsRelabel() {}, activeJobs: {}, activeJobsTick: null,
+    // changed: renderAgents now asks which list view is chosen (All Agents here; the Teams view has its own test file)
+    teamsView: () => 'agents', teamsPaintSwitch() {},
+    // changed: renderAgents now asks which main agents lack a team (Build line); stubbed as not an admin, so no Build line and the markup is as before
+    isAdmin: () => false, window: {},
   };
   const names = Object.keys(env).filter((n) => n !== 'calls');
   const src = ROW() + '\nlet activeState = activeInitial();\nfunction activeWireHold() {}\n' + slice('function activeBusyNow()', '// The finger left') + RENDER();

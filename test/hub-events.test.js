@@ -116,7 +116,8 @@ test('wiring: chat handler taps hub-initiated turns and every hub caller tags it
   assert.match(chat, /function wakeAgent\(agentName, message, onReply, meta = null\)/);
   // hand-offs (lib/hand-offs): a wake-up in a hand-off runs at consult depth; the hand-off's own turns add body fields
   assert.match(chat, /handleChatStream\(\{ agent: agentName, message, origin, exclude_tools: meta\?\.exclude_tools, \.\.\.\(handOff \? \{ consultation_depth: 1 \} : \{\}\) \}, sink\)/);
-  assert.match(chat, /handleChatStream\(\{ agent: agentName, message, origin, \.\.\.\(extraBody \|\| \{\}\) \}, sink\)/);
+  // startHubTurn also hands on an optional trusted context (Build Team: ctx.buildTeam, set only by lib/sdk-chat startBuildTeam; test/build-team-turn.test.js)
+  assert.match(chat, /handleChatStream\(\{ agent: agentName, message, origin, \.\.\.\(extraBody \|\| \{\}\) \}, sink, ctx\)/);
   const jobs = read('lib/jobs.js');
   assert.match(jobs, /kind: p\.kind === 'report' \? 'job_report' : 'job_notice'/);
   const sched = read('lib/scheduler.js');

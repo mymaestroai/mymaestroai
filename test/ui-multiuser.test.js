@@ -82,9 +82,12 @@ test('members: admin surfaces are hidden and approvals / Resume buttons are not 
   assert.match(app, /if \(!isHubAdmin\(\)\) stModal\(`<h3>&#x2699;&#xFE0F; Settings<\/h3><p class="st-sub">Settings are kept by the admins of this Maestro\.<\/p>/);
   // The ⋯ menu as a whole, the Tiger Team and Guide tabs and the tab strip are hidden for members.
   assert.match(app, /for \(const t of \['group-chat', 'guide'\]\)/);
-  assert.match(app, /document\.querySelector\('\.sidebar \.tabs'\)[^]*?style\.display = 'none'/);
+  // changed: members keep the tab strip for All Agents and Teams (Teams view); only the Tiger Team and Guide tabs stay hidden
+  assert.doesNotMatch(app, /document\.querySelector\('\.sidebar \.tabs'\);\s*if \(tabs\) tabs\.style\.display = 'none'/);
   assert.match(app, /const groupActions = !isHubAdmin\(\) \? ''/);
-  assert.match(app, /\$\{isHubAdmin\(\) \? `<span class="action-btn gear-btn"/);
+  // changed: the hover gear is replaced by the always-visible ⋯ row menu; its entries (Settings, Build team) are admin-only and an empty menu draws no button
+  assert.match(app, /function agentMenuEntries\(a\) \{\s*if \(!a \|\| !isHubAdmin\(\) \|\| simpleOn\(\)\) return \[\];/);
+  assert.match(app, /if \(!agentMenuEntries\(a\)\.length\) return '';/);
   assert.match(app, /function upsertApproval\(ev\) \{\s*if \(!ev \|\| !ev\.id\) return;\s*if \(!isHubAdmin\(\)\) return;/);
   assert.match(app, /if \(!isHubAdmin\(\)\) return;\s*\/\/ approvals are an admin surface/);
   assert.match(app, /if \(!isHubAdmin\(\)\) btn\.style\.display = 'none'/);
@@ -110,5 +113,5 @@ test('mobile: owner query, Security sheet, sign out, member gating, 401 redirect
 });
 
 test('service worker version bumped so phones pick up the new mobile.js', () => {
-  assert.match(sw, /const VERSION = 'hub-mobile-v80';/);
+  assert.match(sw, /const VERSION = 'hub-mobile-v81';/);
 });

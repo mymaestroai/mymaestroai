@@ -587,6 +587,8 @@ html[data-look="broadsheet"].mm-simple #toast { background: var(--text); color: 
 @keyframes broadsheet-simple-dot-shrink { 50% { opacity: .8; transform: scale(.7); } }
 html[data-look="broadsheet"].mm-simple #agent-list .agent-btn .agent-status.live-busy,
 html[data-look="broadsheet"].mm-simple #agent-list .agent-btn .agent-status.live-question,
+html[data-look="broadsheet"].mm-simple #teams-list .teams-dot.live-busy,
+html[data-look="broadsheet"].mm-simple #teams-list .teams-dot.live-question,
 html[data-look="broadsheet"].mm-simple #agent-list .simple-more .sm-dot { animation-name: broadsheet-simple-dot; }
 html[data-look="broadsheet"].mm-simple .sa-dot.busy,
 html[data-look="broadsheet"].mm-simple .sa-dot.question { animation-name: broadsheet-simple-dot-shrink; }

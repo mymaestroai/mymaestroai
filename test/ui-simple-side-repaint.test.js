@@ -24,6 +24,7 @@ function setup() {
     calls, listEl,
     agents: [{ name: 'guide', display: 'Trip Guide', category: 'primary', lead: true }, { name: 'helper', display: 'Health Helper', category: 'specialist' }],
     current: 'guide', hubMe: { user: { name: 'Owner' } }, more: false,
+    teamsView: () => 'agents',   // changed: the sidebar's signature now includes the chosen list view (All Agents here)
     simpleOn: () => true, simpleSideEnsure: () => side, simpleMoreGet: () => ctx.more, isBusy: () => false, bgCountOf: () => 0, simpleInitial: () => 'O',
     simpleAgentListFill: () => { calls.fill++; listEl.scrollTop = 0; },
     simpleDotsIn: () => { calls.dots++; },

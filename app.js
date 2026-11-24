@@ -314,7 +314,7 @@
       simpleMoreMem = !simpleMoreOpen();
       try { localStorage.setItem(window.hubSimple.MORE_KEY, simpleMoreMem ? '1' : '0'); } catch { /* kept for this page only */ }
     }
-    function simpleAgentsSync() {
+    function simpleAgentsSync() {   // All Agents only (#agent-list); the Teams view (#teams-list) is drawn by renderTeams and left alone here
       if (!simpleOn() || typeof window.hubSimple.agentGroups !== 'function') return;
       const list = document.getElementById('agent-list');
       if (!list || typeof AGENTS === 'undefined' || !Array.isArray(AGENTS)) return;
@@ -658,13 +658,11 @@
         row.style.display = 'none';
       }
       // Tiger Team is admin-only and the Guide describes admin features (gear, New/Clone, Tiger Team modes);
-      // with only Agents left the tab strip itself is noise.
+      // members keep the strip for All Agents and Teams (their own agents' teams).
       for (const t of ['group-chat', 'guide']) {
         const tab = document.querySelector(`.tab[data-tab="${t}"]`);
         if (tab) tab.style.display = 'none';
       }
-      const tabs = document.querySelector('.sidebar .tabs');
-      if (tabs) tabs.style.display = 'none';
       const menu = document.getElementById('more-menu');
       if (menu) menu.classList.remove('advanced');
     }
@@ -3623,7 +3621,7 @@
       let html = `<h3>⚙️ Settings</h3><p class="st-sub">Open a group, or search for a setting. Provider keys and agent defaults are kept with Save at the bottom; every other box saves on its own.</p>`;
 
       // Appearance: the look of this device (lib/ui-looks); admins also choose the look new members start with.
-      html += `<div class="st-section" id="st-looks-section"><h4>Appearance</h4><div id="st-looks-body"></div></div>`;
+      html += `<div class="st-section" id="st-looks-section"><h4>Appearance</h4><div id="st-looks-body"></div>${isHubAdmin() ? sidebarTabsToggleHtml(data) : ''}</div>`;
       setTimeout(() => lookSectionPaint(data), 0);
       // Setup checklist (lib/readiness): what this machine is missing and what to do about it, in its own words.
       html += `<div class="st-section" id="st-ready-section"><h4>Setup checklist</h4>
@@ -7719,7 +7717,7 @@
         // Newer hubs report busy/busySince/activity/pendingQuestion per agent; older ones do not (then no dots are drawn).
         if (AGENTS.some(a => 'busy' in a)) {
           const map = {};
-          for (const a of AGENTS) map[a.name] = { busy: a.busy, busySince: a.busySince, activity: a.activity, pendingQuestion: a.pendingQuestion };
+          for (const a of AGENTS) map[a.name] = { busy: a.busy, busySince: a.busySince, activity: a.activity, pendingQuestion: a.pendingQuestion, buildingTeamFor: a.buildingTeamFor || null };
           applyStatusSnapshot(map, { namedOnly: true });
         }
         console.log(`Loaded ${AGENTS.length} agents with SOUL data`);
@@ -8329,6 +8327,7 @@
       paintAllAgentStatus();
       paintActiveSection(true);
       if (typeof simpleAgentsSoon === 'function') simpleAgentsSoon();   // Simple: Primary agents and "More agents"
+      if (typeof teamsRepaintSoon === 'function') teamsRepaintSoon();
       renderAgentPicker();
     }
 
@@ -8374,6 +8373,155 @@
       } catch (e) { console.warn('loadCyberModels failed', e.message); }
     }
 
+    // ── Row menu (⋯) and Build team (All Agents and Teams rows) ──
+    // One always-visible ⋯ per row opens ONE shared menu: Settings, and Build team for a main agent with no team (admins).
+    // No entries (a member, Simple mode) means no button. In All Agents the row is itself a <button>, so the ⋯ and the
+    // Build team link there are <span role="button"> (a button cannot sit inside a button); Teams rows use real buttons.
+    const buildTeamPending = new Set();   // main agents whose Build team request is in flight from this page
+    function teamBuilding(name) {
+      if (buildTeamPending.has(name)) return true;
+      for (const s of Object.values(agentStatus)) if (s && s.buildingTeamFor === name) return true;   // the lead's status carries it while the turn runs
+      return false;
+    }
+    function agentCanBuildTeam(a) {
+      return !!a && isHubAdmin() && !simpleOn() && hubTeams.isMain(a) && !hubTeams.hasTeam(a.name, AGENTS);
+    }
+    function agentMenuEntries(a) {
+      if (!a || !isHubAdmin() || simpleOn()) return [];
+      const out = [{ key: 'settings', label: 'Settings' }];
+      if (agentCanBuildTeam(a)) out.push(teamBuilding(a.name) ? { key: 'build', label: 'Building…', disabled: true } : { key: 'build', label: 'Build team' });
+      return out;
+    }
+    function agentMenuBtnHtml(a, tag) {
+      if (!agentMenuEntries(a).length) return '';
+      const label = hubEsc(a.display || capName(a.name));
+      const attrs = `class="agent-menu-btn" data-menu-agent="${hubEsc(a.name)}" aria-haspopup="menu" aria-expanded="false" aria-label="More for ${label}" title="More for ${label}" onclick="agentMenuToggle(this, event)"`;
+      return tag === 'span'
+        ? `<span role="button" tabindex="0" ${attrs} onkeydown="if (event.key === 'Enter' || event.key === ' ') agentMenuToggle(this, event)">⋯</span>`
+        : `<button type="button" ${attrs}>⋯</button>`;
+    }
+    // The Build team control: kind 'link' (All Agents line) or 'btn' (Teams tab). data-build-team lets paintBuildControls retitle it.
+    function buildTeamCtlHtml(a, kind, tag) {
+      const on = teamBuilding(a.name);
+      const idle = kind === 'btn' ? 'Build Team' : 'Build team';
+      const cls = kind === 'btn' ? 'build-team-btn' : 'build-team-link';
+      const attrs = `class="${cls}${on ? ' is-building' : ''}" data-build-team="${hubEsc(a.name)}" data-idle="${idle}" aria-disabled="${on ? 'true' : 'false'}" onclick="buildTeamStart('${hubEsc(a.name)}', event)"`;
+      return tag === 'span'
+        ? `<span role="button" tabindex="0" ${attrs} onkeydown="if (event.key === 'Enter' || event.key === ' ') buildTeamStart('${hubEsc(a.name)}', event)">${on ? 'Building…' : idle}</span>`
+        : `<button type="button" ${attrs}${on ? ' disabled' : ''}>${on ? 'Building…' : idle}</button>`;
+    }
+    function buildLineHtml(a) {
+      return agentCanBuildTeam(a) ? `<span class="agent-build-line">No team yet · ${buildTeamCtlHtml(a, 'link', 'span')}</span>` : '';
+    }
+    function paintBuildControls() {
+      if (typeof document === 'undefined' || !document.querySelectorAll) return;
+      document.querySelectorAll('[data-build-team]').forEach(el => {
+        const on = teamBuilding(el.dataset.buildTeam);
+        el.classList.toggle('is-building', on);
+        el.setAttribute('aria-disabled', on ? 'true' : 'false');
+        if (el.tagName === 'BUTTON') el.disabled = on;
+        el.textContent = on ? 'Building…' : el.dataset.idle;
+      });
+    }
+    async function buildTeamStart(name, event) {
+      if (event) { event.stopPropagation(); if (event.preventDefault) event.preventDefault(); }
+      if (!name || teamBuilding(name)) return;
+      buildTeamPending.add(name); paintBuildControls();
+      if (typeof teamsRepaintSoon === 'function') teamsRepaintSoon();
+      try {
+        const r = await fetch(`/api/agents/${encodeURIComponent(name)}/build-team`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+        let d = {};
+        try { d = await r.json(); } catch { d = {}; }
+        if (r.status === 202 || (r.ok && d && d.ok)) {
+          const lead = d && d.lead;
+          if (lead) { const la = AGENTS.find(a => a.name === lead); startSoloChat(lead, (la && la.model) || ''); }   // the lead's chat, so the proposal is in view
+        } else alert((d && d.error) || `Could not start building a team (${r.status}).`);
+      } catch (e) {
+        alert('Could not start building a team: ' + (e && e.message ? e.message : 'no connection'));
+      } finally {
+        buildTeamPending.delete(name); paintBuildControls();
+        if (typeof teamsRepaintSoon === 'function') teamsRepaintSoon();
+      }
+    }
+    let agentMenuEl = null, agentMenuOpener = null, agentMenuOff = null;
+    function agentMenuClose(refocus) {
+      if (agentMenuOff) { agentMenuOff(); agentMenuOff = null; }
+      if (agentMenuEl && agentMenuEl.remove) agentMenuEl.remove();
+      const op = agentMenuOpener;
+      agentMenuEl = null; agentMenuOpener = null;
+      if (op && op.setAttribute) { op.setAttribute('aria-expanded', 'false'); if (refocus && op.focus && op.isConnected !== false) op.focus({ preventScroll: true }); }
+    }
+    // Opens the shared menu for agent `name` at (x, y). Returns false (nothing opened) when the agent has no entries.
+    function agentMenuOpenAt(name, x, y, opener) {
+      const a = AGENTS.find(z => z.name === name);
+      const entries = agentMenuEntries(a);
+      agentMenuClose(false);
+      if (!entries.length) return false;
+      const el = document.createElement('div');
+      el.id = 'agent-row-menu'; el.className = 'agent-row-menu';
+      el.setAttribute('role', 'menu');
+      el.setAttribute('aria-label', `More for ${a.display || capName(a.name)}`);
+      el.innerHTML = entries.map(e => `<button type="button" role="menuitem" class="agent-menu-item" data-act="${e.key}"${e.disabled ? ' disabled' : ''}>${hubEsc(e.label)}</button>`).join('');
+      el.addEventListener('click', ev => {
+        const b = ev.target && ev.target.closest ? ev.target.closest('.agent-menu-item') : null;
+        if (!b || b.disabled) return;
+        const act = b.dataset.act;
+        agentMenuClose(act === 'settings' ? false : true);
+        if (act === 'settings') openAgentSettings(name, ev);
+        else if (act === 'build') buildTeamStart(name);
+      });
+      el.addEventListener('keydown', ev => {
+        const items = Array.from(el.querySelectorAll('.agent-menu-item:not([disabled])'));
+        const i = items.indexOf(document.activeElement);
+        if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); agentMenuClose(true); }
+        else if (ev.key === 'Tab') { ev.preventDefault(); agentMenuClose(true); }   // leaving the menu closes it; focus goes back to the ⋯
+        else if (ev.key === 'ArrowDown' && items.length) { ev.preventDefault(); items[(i + 1) % items.length].focus(); }
+        else if (ev.key === 'ArrowUp' && items.length) { ev.preventDefault(); items[(i <= 0 ? items.length : i) - 1].focus(); }
+      });
+      document.body.appendChild(el);
+      // Placed at the pointer or under the ⋯, kept inside the window.
+      const vw = window.innerWidth || 0, vh = window.innerHeight || 0;
+      const w = el.offsetWidth || 160, h = el.offsetHeight || 60;
+      el.style.left = Math.max(4, Math.min(x, (vw || x + w + 4) - w - 4)) + 'px';
+      el.style.top = Math.max(4, Math.min(y, (vh || y + h + 4) - h - 4)) + 'px';
+      agentMenuEl = el; agentMenuOpener = opener || null;
+      if (opener && opener.setAttribute) opener.setAttribute('aria-expanded', 'true');
+      const away = ev => {
+        if (el.contains(ev.target)) return;
+        if (opener && opener.contains && opener.contains(ev.target)) return;   // the ⋯ itself toggles
+        agentMenuClose(false);
+      };
+      const gone = () => agentMenuClose(false);
+      const escKey = ev => { if (ev.key === 'Escape') { agentMenuClose(true); } };
+      document.addEventListener('mousedown', away, true);
+      document.addEventListener('keydown', escKey, true);
+      window.addEventListener('resize', gone);
+      window.addEventListener('blur', gone);
+      document.addEventListener('scroll', gone, true);
+      agentMenuOff = () => {
+        document.removeEventListener('mousedown', away, true); document.removeEventListener('keydown', escKey, true);
+        window.removeEventListener('resize', gone); window.removeEventListener('blur', gone); document.removeEventListener('scroll', gone, true);
+      };
+      const first = el.querySelector('.agent-menu-item:not([disabled])');
+      if (first && first.focus) first.focus({ preventScroll: true });
+      return true;
+    }
+    function agentMenuToggle(btn, event) {
+      if (event) { event.stopPropagation(); event.preventDefault(); }
+      if (!btn) return;
+      if (agentMenuEl && agentMenuOpener === btn) { agentMenuClose(true); return; }
+      const r = btn.getBoundingClientRect();
+      agentMenuOpenAt(btn.dataset.menuAgent, r.left, r.bottom + 2, btn);
+    }
+    // Right-click on a row opens the same menu at the pointer (nothing happens, and the browser's own menu stays, when the row has no entries).
+    if (typeof document !== 'undefined' && document.addEventListener) {
+      document.addEventListener('contextmenu', e => {
+        const row = e.target && e.target.closest ? e.target.closest('#agent-list .agent-btn[data-agent], #teams-list .teams-row[data-agent]') : null;
+        if (!row) return;
+        if (agentMenuOpenAt(row.dataset.agent, e.clientX, e.clientY, row.querySelector('.agent-menu-btn'))) e.preventDefault();
+      });
+    }
+
     function agentButton(agent) {
       const shortModel = agent.autoModel ? 'Auto' : agent.model.split('/').pop().substring(0, 24);
       const inGroup = selectedGroupAgents.some(a => a.name === agent.name);
@@ -8407,12 +8555,13 @@
       return `<button class="agent-btn ${hubEsc(agent.type || '')} ${inGroup ? 'in-group' : ''} ${isSummarizer ? 'is-summarizer' : ''}"
                       data-agent="${safeName}" data-model="${safeModel}" id="agent-btn-${safeName}" title="${tip}">
         <span class="agent-status" id="agent-status-${safeName}"></span>
-        ${isHubAdmin() ? `<span class="action-btn gear-btn" onclick="openAgentSettings('${safeName}', event)" title="Agent settings">&#9881;</span>` : ''}
         <span class="agent-icon">${hubEsc(agent.icon || '🤖')}</span>
         <span class="agent-info">
-          <span class="name">${displayName}${agent.lead ? '<span class="lead-badge" title="Lead agent: may schedule tasks for other agents and see, edit or cancel their tasks. Change in this agent\'s settings.">👑</span>' : ''}</span>
+          <span class="name"><span class="name-text">${displayName}</span>${agent.lead ? '<span class="lead-badge" title="Lead agent: may schedule tasks for other agents and see, edit or cancel their tasks. Change in this agent\'s settings.">👑</span>' : ''}</span>
           <span class="model">${cyberBadge}${subtitle}${statusBadge || sizeLabel}</span>
+          ${buildLineHtml(agent)}
         </span>
+        ${agentMenuBtnHtml(agent, 'span')}
         <span class="actions">
           <span class="action-btn add-btn" onclick="toggleGroupAgent('${safeName}', '${safeModel}', event)">${inGroup ? '−' : '+'}</span>
           <span class="action-btn sum-btn" onclick="setSummarizer('${safeName}', '${safeModel}', event)">S</span>
@@ -8518,15 +8667,215 @@
       updateGroupBuilder();
     }
     
+    // Sidebar views: All Agents (agents), Teams (teams) and, when an admin turns them on in Settings, Tiger Team (group-chat) and Guide.
+    // The chosen view is kept per device in localStorage 'hub-sidebar-view'; a stored view that is hidden falls back to All Agents.
+    const SIDEBAR_VIEW_KEY = 'hub-sidebar-view';
+    let sidebarViewTouched = false;   // the person chose a view on this page: a late settings answer must not move them
+    function sidebarViewStored() { try { return localStorage.getItem(SIDEBAR_VIEW_KEY) || 'agents'; } catch { return 'agents'; } }
+    function sidebarViewOk(view) {
+      if (view === 'agents') return true;
+      if (simpleOn() && view !== 'teams') return false;   // Simple has only the two views
+      const tab = document.querySelector(`.tab[data-tab="${view}"]`);
+      if (!tab || tab.hidden || tab.style.display === 'none') return false;
+      return !(document.body.classList.contains('member-view') && view !== 'teams');   // members: All Agents and Teams only
+    }
+    function sidebarViewSet(view, remember) {
+      if (!sidebarViewOk(view)) view = 'agents';
+      document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === view));
+      document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === `${view}-panel`));
+      document.querySelectorAll('#simple-view-switch button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.view === view)));
+      if (remember) { try { localStorage.setItem(SIDEBAR_VIEW_KEY, view); } catch { /* kept for this page only */ } }
+      if (view === 'teams') renderTeams();
+    }
+    // Admins choose in Settings → Appearance whether the Tiger Team and Guide tabs show (sidebarTigerTeam, sidebarGuide); members never see them.
+    let sidebarTabsCfg = {};
+    function sidebarTabsApply(cfg) {
+      sidebarTabsCfg = Object.assign(sidebarTabsCfg, cfg || {});
+      const admin = isHubAdmin();
+      for (const [view, key] of [['group-chat', 'sidebarTigerTeam'], ['guide', 'sidebarGuide']]) {
+        const tab = document.querySelector(`.tab[data-tab="${view}"]`);
+        if (tab) tab.hidden = !(admin && sidebarTabsCfg[key] === true);
+      }
+      const active = document.querySelector('.tab.active');
+      if (active && active.hidden) sidebarViewSet('agents', false);
+      else if (!sidebarViewTouched && sidebarViewOk(sidebarViewStored())) sidebarViewSet(sidebarViewStored(), false);
+    }
+    async function sidebarTabsLoad() {
+      if (!isHubAdmin()) return;
+      try {
+        const r = await fetch('/api/settings', { credentials: 'include' });
+        if (!r.ok) return;
+        const d = await r.json();
+        sidebarTabsApply({ sidebarTigerTeam: d.sidebarTigerTeam === true, sidebarGuide: d.sidebarGuide === true });
+      } catch { /* the tabs stay hidden */ }
+    }
+    async function saveSidebarTabToggle(key, on) {
+      const state = document.getElementById(key === 'sidebarGuide' ? 'st-sidebar-guide-state' : 'st-sidebar-tiger-state');
+      try {
+        const r = await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ [key]: !!on }) });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        sidebarTabsApply({ [key]: !!on });
+        if (state) state.textContent = on ? 'Shown in the sidebar.' : 'Hidden.';
+      } catch (e) { alert('Could not save: ' + e.message); }
+    }
+    function sidebarTabsToggleHtml(data) {
+      const row = (id, key, label, on) => `<div class="st-row" data-no-dirty>
+          <label>${label}</label>
+          <label class="toggle-switch"><input type="checkbox" id="st-${id}" data-no-dirty ${on ? 'checked' : ''} onchange="saveSidebarTabToggle('${key}', this.checked)"><span class="toggle-slider"></span></label>
+          <span id="st-${id}-state" style="font-size:0.8rem;color:var(--text-dim)">${on ? 'Shown in the sidebar.' : 'Hidden.'}</span>
+        </div>`;
+      return row('sidebar-tiger', 'sidebarTigerTeam', 'Show the Tiger Team tab', data.sidebarTigerTeam === true)
+        + row('sidebar-guide', 'sidebarGuide', 'Show the Guide tab', data.sidebarGuide === true);
+    }
     function setupTabs() {
       document.querySelectorAll('.tab').forEach(tab => {
-        tab.addEventListener('click', () => {
-          document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-          document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
-          tab.classList.add('active');
-          document.getElementById(`${tab.dataset.tab}-panel`).classList.add('active');
-        });
+        tab.addEventListener('click', () => { sidebarViewTouched = true; sidebarViewSet(tab.dataset.tab, true); });
       });
+      document.querySelectorAll('#simple-view-switch button').forEach(b => {
+        b.addEventListener('click', () => { sidebarViewTouched = true; sidebarViewSet(b.dataset.view, true); });
+      });
+      const list = document.getElementById('teams-list');
+      if (list) {
+        list.addEventListener('click', teamsClick);
+        list.addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target.classList && e.target.classList.contains('teams-row')) teamsClick(e); });
+      }
+      sidebarViewSet(sidebarViewStored(), false);
+      sidebarTabsLoad();
+    }
+
+    // Teams view (#teams-list): who reports to whom, from hubTeams.tree(AGENTS, agentStatus). Fold state is kept in localStorage
+    // 'hub-teams-open' (name -> true; main agents start folded, '@other' is the Other section).
+    const TEAMS_OPEN_KEY = 'hub-teams-open';
+    let teamsOpenMem = null;   // the folds as this page knows them, loaded once; kept even when localStorage refuses
+    function teamsOpenGet() {
+      if (teamsOpenMem === null) {
+        try { const o = JSON.parse(localStorage.getItem(TEAMS_OPEN_KEY) || '{}'); teamsOpenMem = o && typeof o === 'object' && !Array.isArray(o) ? o : {}; } catch { teamsOpenMem = {}; }
+      }
+      return teamsOpenMem;
+    }
+    function teamsOpenToggle(key) {
+      const o = teamsOpenGet();
+      if (o[key] === true) delete o[key]; else o[key] = true;
+      try { localStorage.setItem(TEAMS_OPEN_KEY, JSON.stringify(o)); } catch { /* kept for this page only */ }
+    }
+    function teamsClick(e) {
+      const t = e.target && e.target.closest ? e.target : null;
+      if (!t) return;
+      const fold = t.closest('[data-fold]');
+      if (fold) {
+        e.stopPropagation();
+        const key = fold.dataset.fold;
+        teamsOpenToggle(key); renderTeams();   // renderTeams gives keyboard focus back to the same fold control
+        return;
+      }
+      const row = t.closest('.teams-row');
+      if (row) startSoloChat(row.dataset.agent, row.dataset.model);
+    }
+    function teamsRowHtml(n, open) {
+      const a = n.agent, name = hubEsc(a.name);
+      const st = agentLiveState(a.name);   // the same state All Agents paints from
+      const busy = st.busy, question = st.question;
+      // Free to talk with work running in the background (lib/ui-agent-dot.js, as in All Agents): the hollow ring and the blue line.
+      const bgN = typeof AgentDot !== 'undefined' && typeof bgCountOf === 'function' ? bgCountOf(a.name) : 0;
+      const bgState = typeof AgentDot !== 'undefined' ? AgentDot.dotState({ busy, question, background: bgN }) : 'free';
+      const dot = st.dotCls + (bgState === 'background' ? ` ${AgentDot.CLASS.background}` : '');
+      const dotTip = bgState === 'background' ? AgentDot.dotLabel(bgState, { background: bgN }) : st.tip;
+      const isMain = n.depth === 0 && hubTeams.isMain(a);
+      const working = n.working > 0 ? ` · ${n.working} working` : '';
+      const leader = n.depth === 1, worker = n.depth >= 2;
+      const rank = worker ? 'worker' : leader ? 'leader' : 'main';
+      let sub = '';
+      if (isMain) sub = n.children.length ? (n.children.length === 1 ? `team of ${n.size}${working}` : `${n.children.length} teams · ${n.size} agents${working}`) : 'No team yet';
+      else if (leader) sub = n.children.length ? `Team leader · leads ${n.size}${working}` : 'Team leader';
+      else if (worker) sub = 'Worker';
+      else if (n.children.length) sub = `leads ${n.size}${working}`;
+      let busyText = '', bgText = '';
+      if ((busy || question) && (!sub || leader || worker)) { busyText = st.line; sub = ''; }   // a busy leader / worker shows what it is doing instead of its role
+      else if (bgState === 'background') bgText = AgentDot.bgLine(bgN);   // under the role line, as All Agents puts it under the model
+      const foldable = isMain && n.children.length > 0;
+      const label = hubEsc(a.display || capName(a.name));
+      const arrow = foldable
+        ? `<button type="button" class="teams-fold${open ? ' open' : ''}" data-fold="${name}" aria-expanded="${open ? 'true' : 'false'}" aria-label="${open ? 'Fold' : 'Open'} ${label}'s team"><span aria-hidden="true">▶</span></button>`
+        : '<span class="teams-fold none" aria-hidden="true"></span>';
+      const buildBtn = isMain && !n.children.length && agentCanBuildTeam(a) ? buildTeamCtlHtml(a, 'btn', 'button') : '';   // admins: under "No team yet"
+      // A leader's role line has a short form for a narrow sidebar ("Leads 2"), shown instead of the long one when it would be cut.
+      const subText = leader && n.children.length && sub
+        ? `<span class="sub-wide">${hubEsc(sub)}</span><span class="sub-narrow">${hubEsc(`Leads ${n.size}`)}</span>`
+        : hubEsc(sub);
+      const subHtml = (sub ? `<span class="teams-sub teams-sub-adv${leader ? ' has-simple' : ''}">${subText}</span>` : busyText ? `<span class="teams-sub teams-sub-adv busy${leader ? ' has-simple' : ''}">${hubEsc(busyText)}</span>` : '')
+        + (bgText ? `<span class="teams-sub teams-bg-line" title="${hubEsc(dotTip)}">${hubEsc(bgText)}</span>` : '')
+        + (leader ? '<span class="teams-sub teams-sub-simple">Team leader</span>' : '');
+      return `<div class="teams-line rank-${rank}${n.depth >= 2 ? ' deep' : ''}" style="--d:${n.depth}">${arrow}<div class="teams-row rank-${rank}${n.depth >= 2 ? ' deep' : ''}" role="button" tabindex="0" style="--d:${n.depth}" data-agent="${name}" data-model="${hubEsc(a.model || '')}" data-depth="${n.depth}" title="${hubEsc(a.blurb || a.specialty || '')}">
+        <span class="teams-dot ${dot}" title="${hubEsc(dotTip)}">${hubEsc(st.text)}</span>
+        <span class="agent-icon">${hubEsc(a.icon || '🤖')}</span>
+        <span class="teams-info"><span class="name"><span class="name-text">${label}</span>${a.lead ? '<span class="lead-badge" title="Lead agent">👑</span>' : ''}</span>${subHtml}${buildBtn}</span>
+        ${agentMenuBtnHtml(a, 'button')}
+      </div></div>`;
+    }
+    // One leader (or worker, or deeper node) = ONE block: its row, then only its own people in a wrapper with the connector line.
+    // Under a main agent the blocks sit in .teams-leaders (no connector); under a leader or worker they sit in .teams-kids (left border).
+    function teamsBlockHtml(n) {
+      const rank = n.depth >= 2 ? 'worker' : 'leader';
+      return `<div class="teams-block rank-${rank}">${teamsRowHtml(n, false)}${teamsSubtreeHtml(n)}</div>`;
+    }
+    function teamsSubtreeHtml(n) {
+      let h = '';
+      if (n.children.length) h += `<div class="${n.depth === 0 ? 'teams-leaders' : 'teams-kids'}">${n.children.map(teamsBlockHtml).join('')}</div>`;
+      if (n.helpers > 0) h += `<div class="teams-helpers" style="--d:${n.depth + 1}">⚡ ${n.helpers} helper${n.helpers === 1 ? '' : 's'} under ${hubEsc(n.agent.display || capName(n.agent.name))}</div>`;
+      return h;
+    }
+    function renderTeams() {
+      const box = document.getElementById('teams-list');
+      if (!box || typeof AGENTS === 'undefined' || !Array.isArray(AGENTS) || !window.hubTeams) return;
+      const t = hubTeams.tree(AGENTS, agentStatus);
+      const open = teamsOpenGet();
+      let h = '';
+      if (!t.anyTeam) h += '<div class="teams-empty"><strong>Agents can work as teams.</strong>Your main agents plan, decide and review. Short or personal tasks they usually do themselves; long work they can hand to team leaders, who run workers. ' + (isHubAdmin() ? 'Use Build Team on a main agent to have your lead propose one, or set who an agent reports to on its settings page.' : 'An admin can set who reports to whom.') + '</div>';
+      if (t.mains.length) {
+        h += '<div class="teams-section"><div class="teams-title">Your agents</div>';
+        for (const m of t.mains) { const o = open[m.agent.name] === true; h += teamsRowHtml(m, o); if (o) h += teamsSubtreeHtml(m); }
+        h += '</div>';
+      }
+      if (t.shared.length) {
+        h += '<div class="teams-section"><div class="teams-title">Shared specialists</div>';
+        for (const n of t.shared) h += teamsRowHtml(n, false) + teamsSubtreeHtml(n);
+        h += '</div>';
+      }
+      if (t.other.length) {
+        const o = open['@other'] === true, count = t.other.reduce((s, n) => s + 1 + n.size, 0);
+        h += `<div class="teams-section"><button type="button" class="teams-title teams-title-fold" data-fold="@other" aria-expanded="${o ? 'true' : 'false'}"><span class="teams-glyph${o ? ' open' : ''}" aria-hidden="true">▶</span>Other (${count})</button>`;
+        if (o) for (const n of t.other) h += teamsRowHtml(n, false) + teamsSubtreeHtml(n);
+        h += '</div>';
+      }
+      if (teamsLastHtml !== h || !box.firstChild) {   // a status tick that changes nothing leaves the DOM alone
+        // Keyboard focus on a fold button or a row survives the redraw: note it first, give it back to the matching element after.
+        let keep = null;
+        try {
+          const f = document.activeElement;
+          if (f && f !== box && box.contains && box.contains(f) && f.dataset) {
+            if (f.dataset.fold !== undefined) keep = { sel: 'fold', key: f.dataset.fold };
+            else if (f.dataset.agent !== undefined) keep = { sel: 'agent', key: f.dataset.agent };
+          }
+        } catch { keep = null; }
+        teamsLastHtml = h; box.innerHTML = h;
+        if (keep) {
+          try {
+            const again = Array.from(box.querySelectorAll(keep.sel === 'fold' ? '[data-fold]' : '.teams-row')).find(el => (keep.sel === 'fold' ? el.dataset.fold : el.dataset.agent) === keep.key);
+            if (again && again.focus) again.focus({ preventScroll: true });
+          } catch { /* cosmetic */ }
+        }
+      }
+    }
+    let teamsLastHtml = null;
+    // Repaint after the list or a status changed; only while the Teams view is the one showing.
+    let teamsTimer = 0;
+    function teamsRepaintSoon() {
+      if (teamsTimer) return;
+      teamsTimer = setTimeout(() => {
+        teamsTimer = 0;
+        const p = document.getElementById('teams-panel');
+        if (p && p.classList.contains('active')) { try { renderTeams(); } catch { /* cosmetic */ } }
+      }, 250);
     }
     
     // Deep research progress line (the hub's research_progress event, GET /api/research/status): one text line per active run
@@ -9704,13 +10053,15 @@
       if (!name) return;
       const cur = agentStatus[name] || { busy: false, busySince: null, activity: null, pendingQuestion: false };
       const next = { ...cur, ...patch };
-      if (!next.busy) { next.busySince = null; next.activity = null; next.pendingQuestion = false; next.consultedBy = null; }
+      if (!next.busy) { next.busySince = null; next.activity = null; next.pendingQuestion = false; next.consultedBy = null; next.buildingTeamFor = null; }
       else if (!next.busySince) next.busySince = cur.busySince || new Date().toISOString();
       agentStatus[name] = next;
+      if ((cur.buildingTeamFor || null) !== (next.buildingTeamFor || null)) paintBuildControls();   // "Building…" on that main agent's Build team controls
       if (!next.busy) { delete agentSteps[name]; delete busyRun[name]; }   // idle: no step or turn origin survives into the next turn (a turn_end may have been missed)
       if (!next.busy && typeof voiceCallHubIdle === 'function') { try { voiceCallHubIdle(name); } catch { /* the call carries on */ } }   // a call waiting for a hub-started turn learns it is over
       paintAgentStatus(name);
       paintAgentsWorking();
+      if (typeof teamsRepaintSoon === 'function') teamsRepaintSoon();
       { const c = findSoloChat(name); if (c) busyCardRefresh(c); }   // the busy card follows the status feed
       repaintWaiters(name, cur, next);   // a helper or a consulted agent changed: the agent waiting on it says so now
     }
@@ -9731,7 +10082,7 @@
     // is the whole truth: a key it lacks is cleared (an agent no longer consulted loses its consultedBy).
     function statusPatchOf(s, keepMissing) {
       const patch = { busy: !!s.busy, busySince: s.busySince || null, activity: s.activity || null, pendingQuestion: !!s.pendingQuestion };
-      for (const k of ['worker', 'parent', 'label', 'model', 'consultedBy']) if (k in s) patch[k] = s[k]; else if (!keepMissing) patch[k] = null;
+      for (const k of ['worker', 'parent', 'label', 'model', 'consultedBy', 'buildingTeamFor']) if (k in s) patch[k] = s[k]; else if (!keepMissing) patch[k] = null;
       if ('background' in s) patch.background = Math.max(0, Math.floor(Number(s.background)) || 0); else if (!keepMissing) patch.background = 0;   // work in the background; the full feed sends it only when above 0
       return patch;
     }
@@ -9782,6 +10133,7 @@
       paintAllAgentStatus();
       // A window opened mid-turn has no stream to it: attach and show the reply when it lands.
       for (const [name, s] of Object.entries(map)) if (s.busy) reattachIfIdle(name, s.busySince || null);
+      if (typeof teamsRepaintSoon === 'function') teamsRepaintSoon();   // the Teams view follows the snapshot
       // the hub says idle (or a gone worker): a turn whose end this page missed is not open any more
       for (const n of Object.keys(openTurns)) if (map[n] ? !map[n].busy : !(namedOnly && busyIsWorker(n, agentStatus[n]))) delete openTurns[n];
       // A full feed that no longer lists a running temporary worker: its end never reached this page.
@@ -10031,6 +10383,7 @@
     function agentRowTick() {
       const names = busyAgentNames();
       for (const n of names) { try { paintAgentStatus(n); } catch {} }
+      if (typeof teamsRepaintSoon === 'function') teamsRepaintSoon();   // the elapsed time in the Teams rows keeps moving
       if (!names.length && agentRowTicker) { clearInterval(agentRowTicker); agentRowTicker = null; }
     }
     // The ring (class bg-work, from AgentDot.applyDot) on a list row's dot, and the blue line "Free · 2 things in the background"
@@ -10063,10 +10416,9 @@
       e.stopPropagation(); e.preventDefault();
       bgOpenChat(name);
     }, true);
-    function paintAgentStatus(name) {
-      const dot = document.getElementById(`agent-status-${name}`);
-      const btn = document.getElementById(`agent-btn-${name}`);
-      if (!dot || !btn) return;
+    // One agent's live state for every row that shows it (All Agents, Teams): the dot's class, its tooltip and text, and the
+    // busy line. Rows paint from this, so a new state added here shows everywhere.
+    function agentLiveState(name) {
       const s = agentStatus[name];
       const mine = localBusy.get(name);
       const busy = !!(s && s.busy) || !!mine;
@@ -10075,15 +10427,31 @@
       const since = (s && s.busySince) || mine || null;
       const elapsed = elapsedLabel(since, false);
       const elapsedShort = elapsedLabel(since, true);
-      let cls = 'agent-status';
-      let tip = '';
-      let text = '';
-      if (question) { cls += ' live-question'; tip = `Waiting for your answer${activity ? ` · ${activity}` : ''}${elapsed ? ` · ${elapsed}` : ''}`; text = '?'; }
-      else if (busy) { cls += ' live-busy'; tip = `${activity}${elapsed ? ` · ${elapsed}` : ''}`; }
-      else if (statusKnown) { cls += ' live-idle'; tip = 'Idle'; }
-      dot.className = cls;
-      dot.textContent = text;
-      dot.title = tip;
+      let dotCls = '', tip = '', text = '', line = '', lineTitle = '';
+      if (question) { dotCls = 'live-question'; tip = `Waiting for your answer${activity ? ` · ${activity}` : ''}${elapsed ? ` · ${elapsed}` : ''}`; text = '?'; }
+      else if (busy) { dotCls = 'live-busy'; tip = `${activity}${elapsed ? ` · ${elapsed}` : ''}`; }
+      else if (statusKnown) { dotCls = 'live-idle'; tip = 'Idle'; }
+      const named = !question && !(s && s.worker);
+      if (question) line = `❓ waiting for your answer${elapsedShort ? ` · ${elapsedShort}` : ''}`;
+      else if (busy && named) {
+        const d = agentDoingNow(name);
+        const det = d.detail ? ` · ${d.detail}` : '';
+        line = `⏳ ${d.words}${elapsedShort ? ` · ${elapsedShort}` : ''}${det}`;
+        lineTitle = `${d.words}${elapsed ? ` · ${elapsed}` : ''}${det}`;
+        tip = lineTitle;
+      } else if (busy) line = `⏳ ${activity}${elapsedShort ? ` · ${elapsedShort}` : ''}`;
+      const needsOrigin = named && busy && !!(s && s.busy) && !busyRun[name] && !mine;
+      return { busy, question, dotCls, tip, text, line, lineTitle, activity, needsOrigin };
+    }
+    function paintAgentStatus(name) {
+      const dot = document.getElementById(`agent-status-${name}`);
+      const btn = document.getElementById(`agent-btn-${name}`);
+      if (!dot || !btn) return;
+      const st = agentLiveState(name);
+      const { busy, question, activity } = st;
+      dot.className = st.dotCls ? `agent-status ${st.dotCls}` : 'agent-status';
+      dot.textContent = st.text;
+      dot.title = st.tip;
       btn.classList.toggle('is-busy', busy || question);
       bgPaintRow(name, dot, btn, busy, question);   // the hollow ring and the blue line, only when neither replying nor asking
       if (typeof simpleAgentsSoon === 'function') simpleAgentsSoon();   // Simple: the "More agents" dot follows
@@ -10101,16 +10469,10 @@
       if (busy || question) {
         if (!line) { line = document.createElement('span'); line.className = 'agent-busy-line'; btn.querySelector('.agent-info')?.appendChild(line); }
         line.classList.toggle('question', question);
-        line.textContent = question ? `❓ waiting for your answer${elapsedShort ? ` · ${elapsedShort}` : ''}` : `⏳ ${activity}${elapsedShort ? ` · ${elapsedShort}` : ''}`;
         // A named agent (not a temporary worker) says what it does NOW: the turn, how long, what it waits on or its step.
-        if (!question && !(s && s.worker)) {
-          if (s && s.busy && !busyRun[name] && !mine) busyOriginFetch(name);   // once per turn: who started it (a page opened mid-turn)
-          const d = agentDoingNow(name);
-          const det = d.detail ? ` · ${d.detail}` : '';
-          line.textContent = `⏳ ${d.words}${elapsedShort ? ` · ${elapsedShort}` : ''}${det}`;
-          line.title = `${d.words}${elapsed ? ` · ${elapsed}` : ''}${det}`;
-          dot.title = line.title;
-        } else line.removeAttribute('title');
+        if (st.needsOrigin) busyOriginFetch(name);   // once per turn: who started it (a page opened mid-turn)
+        line.textContent = st.line;
+        if (st.lineTitle) line.title = st.lineTitle; else line.removeAttribute('title');
         if (!agentRowTicker) agentRowTicker = setInterval(agentRowTick, 15000);   // elapsed and detail keep moving
       } else if (line) {
         line.remove();
@@ -10675,7 +11037,8 @@
       if (ev && ev.agent) activeTurnStart(openTurns, ev.agent, ev.turnId);
       if (ev && ev.agent) busyRun[ev.agent] = { turnId: ev.turnId, origin: ev.origin, since: Date.parse(ev.startedAt) || Date.now(), own: !chatViewIsHubOrigin(ev.origin) };
       if (ev.turnId && hubTurns[ev.turnId]) return;   // replayed after a reconnect (?since=): the turn is already followed
-      setAgentLive(ev.agent, { busy: true, busySince: ev.startedAt || null, activity: ev.activity || hubOriginLabel(ev.origin) });
+      setAgentLive(ev.agent, { busy: true, busySince: ev.startedAt || null, activity: ev.activity || hubOriginLabel(ev.origin),
+        ...(ev.buildingTeamFor || (ev.origin && ev.origin.kind === 'build_team' && ev.origin.for) ? { buildingTeamFor: ev.buildingTeamFor || ev.origin.for } : {}) });
       let chat = findSoloChat(ev.agent);
       if (ev.origin?.kind === 'user') {
         // Our own send is already streaming in this window (or re-attaching to it).
@@ -10697,7 +11060,8 @@
       let card = null;
       let retiredReattach = false;   // a re-attach of this turn was followed before turn_start came; its bubble gave way to the card
       // Main view: a hub-started turn is still followed (its card), but hidden unless its reply is marked for the owner.
-      const hubMain = chatViewGet(localStorage) === 'main' && chatViewIsHubOrigin(ev.origin);
+      // (Build Team is the exception: the person pressed it, so its card and reply stay in view.)
+      const hubMain = chatViewGet(localStorage) === 'main' && chatViewIsHubOrigin(ev.origin) && ev.origin.kind !== 'build_team';
       const autoKind = foldAutoOn() || hubMain ? autoKindOfOrigin(ev.origin) : null;
       if (autoKind) {
         const info = autoInfoOf({ role: 'user', origin: ev.origin, content: ev.message || '' });
@@ -13259,6 +13623,24 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (o) { o.remove(); delete questionOverlays[requestId]; }
       retireQuestionNotices(requestId);
     }
+    // Plan card helpers (pure). The checklist is on questions[0]; an empty or malformed one is no checklist (a plain card).
+    function questionChecklistOf(questions) {
+      const c = questions && questions[0] && questions[0].checklist;
+      const list = Array.isArray(c) ? c.filter(x => x && typeof x.id === 'string' && x.id) : [];
+      return list.length ? list : null;
+    }
+    function questionChecklistHtml(list, esc) {
+      return '<div class="question-checklist" role="group" aria-label="Plan items">' + list.map(it =>
+        `<label class="question-check"><input type="checkbox" checked data-id="${esc(it.id).replace(/"/g, '&quot;')}">`
+        + `<span class="question-check-text"><strong>${esc(it.label || it.id)}</strong>${it.detail ? `<small>${esc(it.detail)}</small>` : ''}</span></label>`).join('') + '</div>';
+    }
+    function questionCheckedIds(root) {
+      return Array.from(root.querySelectorAll('.question-check input')).filter(i => i.checked).map(i => i.dataset.id);
+    }
+    // The body of POST /api/ask_response; checked (array of ids still ticked) only for a plan card.
+    function askResponseBody(request_id, answers, agent, checked) {
+      return JSON.stringify({ request_id, answers, ...(agent ? { agent } : {}), ...(Array.isArray(checked) ? { checked } : {}) });
+    }
     function showQuestionModal(data, chatId) {
       return new Promise((resolve) => {
         const { request_id, questions } = data;
@@ -13277,7 +13659,10 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         // beside Submit that answers at once, not as one more choice to pick and then submit. With several questions in
         // one card, each keeps its own Skip choice (to skip one of them) and the button skips them all.
         const isSkip = (o) => o && String(o.label || '').trim().toLowerCase() === 'skip';
-        const canSkip = questions.every(q => (q.options || []).some(isSkip));
+        // Plan card (Build team): questions[0].checklist = [{id, label, detail}], all ticked at first. The answer carries
+        // the ids still ticked (checked) with the chosen button; the card has no Skip and no typed answer.
+        const checklist = questionChecklistOf(questions);
+        const canSkip = !checklist && questions.every(q => (q.options || []).some(isSkip));
         const shownOptions = (q) => (q.options || []).filter(o => !(isSkip(o) && questions.length === 1));
         // Nothing to pick (no choices but Skip, no model list): the question is answered in words, the text box leads.
         const textOnly = questions.every(q => !shownOptions(q).length && !(Array.isArray(q.models) && q.models.length));
@@ -13291,6 +13676,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
             html += `<div class="question-header">${esc(q.header)}</div>`;
           }
           html += `<p class="question-text">${esc(q.question)}</p>`;
+          if (i === 0 && checklist) html += questionChecklistHtml(checklist, esc);
           html += `<div class="question-options">`;
           for (const opt of shownOptions(q)) {
             const safeLabel = esc(opt.label).replace(/"/g, '&quot;');
@@ -13304,12 +13690,12 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           if (Array.isArray(q.models) && q.models.length) html += `<label class="question-model-pick" data-qi="${i}"><span>Or pick any model this hub can use</span></label>`;
         }
 
-        if (!textOnly) html += '<div class="question-divider">or type a custom answer</div>';
-        html += '<div class="question-custom">';
+        if (!textOnly && !checklist) html += '<div class="question-divider">or type a custom answer</div>';
+        if (!checklist) html += '<div class="question-custom">';
         // A text box, not a one-line field: answers can run to a paragraph. It grows with the text (up to about ten
         // lines, then scrolls) and its corner drags to any size. Return makes a new line; ⌘Return / Ctrl+Enter sends.
-        html += `<textarea rows="3" placeholder="${textOnly ? 'Type your answer…' : 'Type your own answer…'}" id="question-custom-input"></textarea>`;
-        html += '</div>';
+        if (!checklist) html += `<textarea rows="3" placeholder="${textOnly ? 'Type your answer…' : 'Type your own answer…'}" id="question-custom-input"></textarea>`;
+        if (!checklist) html += '</div>';
         html += '<div class="question-actions"><span class="question-hint" id="question-hint">Pick an answer, then press Submit.</span>'
           + '<span class="question-buttons">' + (canSkip ? '<button id="question-skip" type="button">Skip</button>' : '') + '<button id="question-submit" disabled>Submit</button></span></div>';
         html += '</div>';
@@ -13323,7 +13709,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
             // The asking agent goes with the answer: the route's access check needs it to let a member answer a question
             // from an agent they own or that is shared with them (without it every member's answer was refused).
             // A question rebuilt without its agent (a reconnect) falls back to the chat's agent; the hub refuses one that did not ask.
-            body: JSON.stringify({ request_id, answers, ...(((data && data.agent) || (chatId && chats[chatId] && !chats[chatId].isGroup && chats[chatId].agent)) ? { agent: String((data && data.agent) || chats[chatId].agent) } : {}) })
+            body: askResponseBody(request_id, answers, ((data && data.agent) || (chatId && chats[chatId] && !chats[chatId].isGroup && chats[chatId].agent)) ? String((data && data.agent) || chats[chatId].agent) : '', checklist ? questionCheckedIds(overlay) : null)
           }).then(r => { if (r.ok) retireQuestionNotices(request_id); })   // the hub has the answer: its line can go
             .catch(err => console.error('Failed to submit question answer:', err));
           overlay.remove();
@@ -13355,7 +13741,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           modelPicks[qi] = sel;
           holder.appendChild(sel);
         });
-        const customInput = overlay.querySelector('#question-custom-input');
+        // A checklist card has no typed answer: the field stays out of the page (a detached one keeps the code below simple).
+        const customInput = overlay.querySelector('#question-custom-input') || document.createElement('textarea');
         const submitBtn = overlay.querySelector('#question-submit');
         const hint = overlay.querySelector('#question-hint');
         const sendKeys = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || '') ? '⌘Return' : 'Ctrl+Enter';
@@ -13404,7 +13791,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         refresh();
 
         document.body.appendChild(overlay);
-        setTimeout(() => customInput.focus(), 100);
+        setTimeout(() => { const f = checklist ? overlay.querySelector('.question-option') : customInput; if (f && f.focus) f.focus(); }, 100);
       });
     }
 

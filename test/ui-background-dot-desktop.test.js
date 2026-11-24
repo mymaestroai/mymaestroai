@@ -108,7 +108,8 @@ test('replying or asking wins over background; background 0 shows no ring and no
 });
 
 test('the painters call bgPaintRow / bgPaintChat after their own class logic', () => {
-  assert.ok(/dot\.className = cls;[\s\S]{0,200}bgPaintRow\(name, dot, btn, busy, question\)/.test(extract('paintAgentStatus')), 'agent rows');
+  // changed with the Teams view: paintAgentStatus sets the class from agentLiveState (shared with the Teams rows), then the ring
+  assert.ok(/dot\.className = [^;]+;[\s\S]{0,400}bgPaintRow\(name, dot, btn, busy, question\)/.test(extract('paintAgentStatus')), 'agent rows');
   assert.ok(/statusDot\.className = `status-dot \$\{status\}`;\s*\n\s*try \{ bgPaintChat\(chats\[chatId\]\)/.test(extract('setStatus')), 'chat tab and status bar');
   assert.ok(/headerBusyPaint\(chat\); \} catch \{\}\s*\n\s*try \{ bgPaintChat\(chat\)/.test(extract('busyCardRefresh')), 'the hub-driven header paint');
   assert.ok(/AgentDot\.applyDot\(dd,/.test(extract('activeDress')), 'Active section copies');

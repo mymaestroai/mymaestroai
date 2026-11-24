@@ -52,7 +52,7 @@ const {
   cancelWorker, loadConversationLog, clearConversationLog,
   clearConversation, flushActiveResponses, runTigerTeam, runRoundtable,
   continueTigerTeam, resumeTigerTeam, getTigerTeamState, reconstituteTigerTeam, stopTigerTeam, listTigerTeams,
-  activeTigerTeams, isAgentActive, wakeAgent,
+  activeTigerTeams, isAgentActive, wakeAgent, startBuildTeam, teamModelFacts, buildTeamRuns,
 } = require('./lib/sdk-chat');
 const { serveImage } = require('./lib/images');
 // Tell open pages that an agent's settings changed (model, name, icon, category...) so their open chats follow
@@ -1259,10 +1259,17 @@ async function handleHttpRequest(req, res) {
       // Who confirmed a cloud engine, and when, is for admins only.
       const isAdm = !!req.hubService || access.isAdmin(req.hubUser);
       const stripVoice = (a) => require('./lib/voice/cloud').publicAgentVoice(a, isAdm);
+      // reportsTo / buildPartner naming an agent this viewer cannot see are left out (a signed-in admin and the hub's own service see all).
+      const seeAll = !!req.hubService || (access.isAdmin(req.hubUser) && !req.hubPendingTotp);
+      const visibleNames = new Set(agents.map(x => x && x.name));
+      const hideUnseen = (a) => seeAll ? {} : {
+        ...(a.reportsTo && !visibleNames.has(a.reportsTo) ? { reportsTo: undefined } : {}),
+        ...(a.buildPartner && !visibleNames.has(a.buildPartner) ? { buildPartner: undefined } : {}),
+      };
       // Call recordings: a signed-in admin sees the whole setting; everybody else (members, the hub's own service calls that agents' tools use) gets it without the allowed list. canDownload: is this caller on the list.
       const recView = { admin: access.isAdmin(req.hubUser) && !req.hubPendingTotp, userId: req.hubUser && !req.hubPendingTotp ? String(req.hubUser.id) : '' };
       const recordingsFor = require('./lib/recordings/settings').recordingsForViewer;
-      return jsonResponse(res, 200, { agents: agents.map(a => ({ ...stripVoice(a), ...(recView.admin ? {} : { envKeep: undefined }), recordings: recordingsFor(a, recView), keptOnBox: kept(a, hubSettings.getSetting), effortUltra: require('./lib/effort').ultraFor(a.model), tierOptions: require('./lib/tier').tiersFor(a.model), tierLabels: require('./lib/tier').labelsFor(a.model), ...(status[a.name] || idle) })) });
+      return jsonResponse(res, 200, { agents: agents.map(a => ({ ...stripVoice(a), ...hideUnseen(a), ...(recView.admin ? {} : { envKeep: undefined }), recordings: recordingsFor(a, recView), keptOnBox: kept(a, hubSettings.getSetting), effortUltra: require('./lib/effort').ultraFor(a.model), tierOptions: require('./lib/tier').tiersFor(a.model), tierLabels: require('./lib/tier').labelsFor(a.model), ...(status[a.name] || idle) })) });
     }
 
     if (pathname === '/api/agents/status' && req.method === 'GET') {
@@ -1516,7 +1523,8 @@ async function handleHttpRequest(req, res) {
     if (pathname === '/api/agents/create' && req.method === 'POST') {
       const body = JSON.parse(await readBody(req));
       const result = await createAgent(body.name, body.model, body.personality, body.skills, body.category, body.owner || null);
-      return jsonResponse(res, result.success ? 200 : 400, result);
+      const { identity: _identity, ...shown } = result;   // the box id stays on the server (lib/team-plan uses it)
+      return jsonResponse(res, result.success ? 200 : 400, shown);
     }
 
     if (pathname === '/api/agents/clone' && req.method === 'POST') {
@@ -1590,6 +1598,22 @@ async function handleHttpRequest(req, res) {
       return jsonResponse(res, result.success ? 200 : 400, result);
     }
 
+    // POST /api/agents/:name/build-team: start the lead's Build Team turn for a main agent (lib/team-plan, lib/sdk-chat startBuildTeam).
+    // Only an admin's own signed-in browser session (the same test as owner_turn in /api/chat); the cross-origin refusal applies to every /api route.
+    if (/^\/api\/agents\/([^/]+)\/build-team$/.test(pathname) && req.method === 'POST') {
+      let name; try { name = decodeURIComponent(pathname.split('/')[3]); } catch { return jsonResponse(res, 400, { error: 'bad agent name' }); }
+      const teamPlanLib = require('./lib/team-plan'), agentsLib = require('./lib/agents');
+      const out = await teamPlanLib.routeBuildTeam({
+        adminSession: req.hubIdentKind === 'user' && !req.hubPendingTotp && !req.hubToken && !req.hubService && access.isAdmin(req.hubUser),
+        name, agents: await getAgents(), ownerLeadNames: agentsLib.ownerLeadNames, defaultLeadAgent: agentsLib.defaultLeadAgent,
+        runs: buildTeamRuns, halted: () => require('./lib/hub-halt').getHubHalt().isHalted(), isBusy: isAgentActive,
+        makeMessage: async (primary, all) => teamPlanLib.buildMessage({ primary, agentsList: all, adminIds: new Set(hubAuth.admins().map(u => String(u.id))),
+          counts: teamPlanLib.transcriptCounts(30), models: await teamModelFacts(), tierOf: require('./lib/model-tiers').tierOf }),
+        start: startBuildTeam, userId: req.hubUser && req.hubUser.id != null ? String(req.hubUser.id) : null,
+      });
+      return jsonResponse(res, out.status, out.body);
+    }
+
     // PATCH /api/agents/:name — update agent fields (category, etc.)
     if (/^\/api\/agents\/([^/]+)$/.test(pathname) && req.method === 'PATCH') {
       const name = decodeURIComponent(pathname.split('/')[3]);
@@ -1602,6 +1626,8 @@ async function handleHttpRequest(req, res) {
       if (recordingsChange && (req.hubService || req.hubToken || !req.hubUser || !hubAuth.isOwner(req.hubUser) || req.hubPendingTotp)) return jsonResponse(res, 403, { error: 'only the owner can change: recordings' });
       // Which environment variables an agent's commands keep is a signed-in admin's call: never a member, and never the hub's own service calls (an agent could widen itself).
       if (body && typeof body === 'object' && 'envKeep' in body && (req.hubService || req.hubToken || !req.hubUser || !access.isAdmin(req.hubUser) || req.hubPendingTotp)) return jsonResponse(res, 403, { error: 'only an admin can change: envKeep' });
+      // Who an agent reports to is an admin's call (or the lead's team tool): never the hub's own service calls (an agent's tools).
+      if (body && typeof body === 'object' && 'reportsTo' in body && (req.hubService || req.hubToken || !req.hubUser || !access.isAdmin(req.hubUser) || req.hubPendingTotp)) return jsonResponse(res, 403, { error: 'reportsTo is set by an admin or through the team tool' });
       // The command lockbox changes what an agent's commands may touch: a signed-in admin's own browser session only (never a member, a token, the hub's own service or an agent).
       if (!!body && typeof body === 'object' && ('lockbox' in body || 'lockboxEnv' in body) && !require('./lib/lockbox/settings').isAdminSession(req)) return jsonResponse(res, 403, { error: 'Sign in with an admin account in your browser to change the command lockbox.' });
       const recSettings = require('./lib/recordings/settings');
@@ -1618,7 +1644,9 @@ async function handleHttpRequest(req, res) {
         audit: (action, detail) => hubAuth.audit(req.hubUser ? String(req.hubUser.id) : null, action, detail, hubAuth.clientIp(req)),
         // A lockbox change is told to the admins in plain words (a security notice), like the admin 2-factor rule.
         userName: req.hubUser ? String(req.hubUser.name || req.hubUser.login || req.hubUser.id || '') : '',
-        notifyAdmins: (text) => require('./lib/push').getPush().notify({ title: 'Command lockbox changed', body: text, tag: 'lockbox-change' }, { adminsOnly: true, kind: 'security' }) });
+        notifyAdmins: (text) => require('./lib/push').getPush().notify({ title: 'Command lockbox changed', body: text, tag: 'lockbox-change' }, { adminsOnly: true, kind: 'security' }),
+        // Reporting lines cleared because the team no longer fits are a team notice, not a security one (own title and tag).
+        notifyTeam: (text) => require('./lib/push').getPush().notify({ title: 'Team changed', body: text, tag: 'team-change' }, { adminsOnly: true, kind: 'other' }) });
       if (!result.success && result.status) return jsonResponse(res, result.status, { error: result.error });
       // Handing a head agent to a member: it introduces itself in its (still empty) chat.
       if (result.success && body && body.owner) { const u = hubAuth.getUser(String(body.owner)); if (u && u.role === 'member') require('./lib/teams').greetIfFresh(name, u).catch(() => {}); }
@@ -2923,6 +2951,9 @@ async function handleHttpRequest(req, res) {
           // Long waits on workers (lib/long-waits): minutes 0..240 (0 = off, junk = the default 10); the lead notice is on unless false.
           if (patch && patch.handOffWaitMinutes !== undefined) patch.handOffWaitMinutes = require('./lib/long-waits').cleanMinutes(patch.handOffWaitMinutes);
           if (patch && patch.buildPartnerNotice !== undefined) patch.buildPartnerNotice = patch.buildPartnerNotice !== false;
+          // Sidebar sections that are off until switched on: true only for a real true.
+          if (patch && patch.sidebarTigerTeam !== undefined) patch.sidebarTigerTeam = patch.sidebarTigerTeam === true;
+          if (patch && patch.sidebarGuide !== undefined) patch.sidebarGuide = patch.sidebarGuide === true;
           // Voice: known keys only, merged onto the stored value (lib/voice/manifest cleanVoiceSettings). "enabled" changes
           // only through /api/voice/enable and /disable, which also install the engines and stop or resume the worker.
           if (patch && patch.voice !== undefined) {

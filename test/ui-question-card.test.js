@@ -23,7 +23,8 @@ test('desktop: Skip is a button beside Submit that answers at once; a single que
   assert.match(app, /const shownOptions = \(q\) => \(q\.options \|\| \[\]\)\.filter\(o => !\(isSkip\(o\) && questions\.length === 1\)\);/);
   assert.match(app, /'<span class="question-buttons">' \+ \(canSkip \? '<button id="question-skip" type="button">Skip<\/button>' : ''\) \+ '<button id="question-submit" disabled>Submit<\/button><\/span><\/div>';/);
   assert.match(app, /questions\.forEach\(\(q, i\) => \{ answers\[i\.toString\(\)\] = \(q\.options \|\| \[\]\)\.find\(isSkip\)\.label; \}\);\n\s+submitAnswers\(answers\);/, 'the agent still receives the "Skip" answer it offered');
-  assert.match(app, /if \(!textOnly\) html \+= '<div class="question-divider">or type a custom answer<\/div>';/);
+  // changed (Build Team): a plan card (checklist) has no typed answer, so the divider is drawn only without a checklist
+  assert.match(app, /if \(!textOnly && !checklist\) html \+= '<div class="question-divider">or type a custom answer<\/div>';/);
   assert.match(html, /#question-skip \{/);
 });
 
