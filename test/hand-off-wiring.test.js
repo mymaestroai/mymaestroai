@@ -62,11 +62,10 @@ test('hand_off_list, hand_off_note, hand_off_cancel: plain text from the runner,
   assert.deepEqual(tools.jsonSchema(tools.TOOL_SPECS[1]).required, []);
 });
 
-test('who gets the tools: a primary agent or a lead on its own turn (depth 0), never a temporary worker; both tool paths; a refusal re-checks it', () => {
+test('hand-off authorization is checked when any of the registered tool handlers is called', () => {
   const fn = SDK.match(/function handOffOffered\(agentName, consultationDepth\) \{[\s\S]*?\n\}/)[0];
   assert.match(fn, /if \(consultationDepth !== 0 \|\| temporalWorkers\.isVirtual\(agentName\)\) return false;/);
   assert.match(fn, /return rec\.category === 'primary' \|\| require\('\.\/agents'\)\.isLeadAgent\(agentName, /);
-  assert.equal((SDK.match(/\.\.\.\(handOffOffered\(agentName, consultationDepth\)/g) || []).length, 2, 'gateway list and SDK/Codex MCP list');
   assert.match(SDK, /function runHandOffTool\(name, args, agentName, consultationDepth\) \{\n  if \(!handOffOffered\(agentName, consultationDepth\)\) return Promise\.resolve\('Hand-offs can only be started from your own turn\.'\);/);
   assert.match(SDK, /mayTarget: \(caller, target\) => consultAllowed\(caller, target\),/, 'the consult_agent rule, unchanged');
   assert.match(SDK, /member: isMemberTurn\(agentName\),\n  \}\);/);

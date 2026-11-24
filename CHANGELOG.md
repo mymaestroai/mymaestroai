@@ -6,6 +6,8 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
+- **Clearer guidance when a helper cannot use a tool.** Your Maestro now tells read-only helpers to use file tools instead of a shell, explains when owner notifications and hand-offs do not apply, and gives clearer guidance for file paths and background commands.
+
 - **Solo agents.** Your Maestro now lists every main agent that has no team under one "Solo agents" header, instead of "No team yet" and "Working alone": an agent you have not decided about offers a small Build team link, one your lead found needs no team shows nothing under its name, and the All Agents line reads "Solo · Build team".
 - **Opening a team shows its leaders and their workers.** When you open a main agent's team in your Maestro, every leader and the workers under each leader show at once, and a leader's own size pill folds just its workers.
 - **The Teams list is easier to read: counted sections, a size pill and one line per member.** On the computer, on the phone and in Simple, the list now has headers with counts, such as "Teams · 3", "Solo agents · 3" and "Shared specialists · 4", and each header folds (on the phone the headers stay at the top while you scroll, and your Maestro remembers what you folded on each device). A small pill right after a boss's name, such as "12 agents ▸" on the phone, shows the team's size and opens or folds the team, and tapping anywhere else on the row opens the chat. Team members take one line each, and a main agent gets a second line only when it is replying, has work going on in the background or offers Build team; a leader's workers start folded, and Simple now shows them too.
