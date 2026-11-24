@@ -2708,12 +2708,13 @@ async function handleHttpRequest(req, res) {
             const run = require('./lib/chat-history').runPage({
               logEntries: loadConversationLog(name, 0),
               archive: { rowsBefore: (o) => trR.rowsBefore(name, o), forOwnerTurns: (ids) => trR.forOwnerTurns(name, ids), lastMarkTs: (tool) => trR.lastMarkTs(name, tool) },
-              from: hq.get('from'), to: hq.get('to'), rank: hq.get('rank'),
+              from: hq.get('from'), to: hq.get('to'), rank: hq.get('rank'), turn: hq.has('turn') ? hq.get('turn') : null,
               inProgressMark: (entries) => hubEvR.markInProgress(entries, hubEvR.events.turnFor(name)),
             });
             return jsonResponse(res, 200, run.incomplete ? { history: [], more: false, incomplete: true } : { history: run.history, more: run.more });
           } catch (e) {
             if (e && e.message === 'bad_range') return jsonResponse(res, 400, { error: 'bad_range' });
+            if (e && e.message === 'bad_turn') return jsonResponse(res, 400, { error: 'bad_turn' });
             throw e;
           }
         }

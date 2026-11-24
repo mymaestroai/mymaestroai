@@ -3563,10 +3563,10 @@ function chatViewMergeOlder(older, current) {
 // A run of hub-started turns the main view leaves out is ONE entry { role: 'hidden_run', ts, last_ts, turns, kinds: [{ kind, from, n }] }.
 const CHAT_VIEW_RUN_WORDS = {
   consultation: ['consultation', 'consultations', true],
-  hand_off: ['task', 'tasks', true],   // on screen a hand-off is called a task ("Task from Maestro")
-  schedule: ['check-in', 'check-ins', false],
-  job_notice: ['job notice', 'job notices', false],
-  other: ['hub turn', 'hub turns', false],
+  hand_off: ['task', 'tasks', true],   // the words of the cards: "Consultation from X", "Task from X", "Scheduled task", "Job finished", hub notice
+  schedule: ['scheduled task', 'scheduled tasks', false],
+  job_notice: ['job finished', 'jobs finished', false],
+  other: ['hub notice', 'hub notices', false],
 };
 // The kind and sender of a turn the hub started, as a run counts it (origin from turn_start or a saved entry).
 function chatViewRunKindOf(origin) {
@@ -3577,10 +3577,11 @@ function chatViewRunKindOf(origin) {
   return { kind, from };
 }
 // Count one more turn (kind, from) into a run, widening its time range; returns the run.
-function chatViewRunAdd(run, kind, from, ts) {
+function chatViewRunAdd(run, kind, from, ts, turn) {
   const k = CHAT_VIEW_RUN_WORDS[kind] ? kind : 'other';
   const f = from || null;
   if (!Array.isArray(run.kinds)) run.kinds = [];
+  if (turn && !(Number(run.turns) > 0) && !run.turn) run.turn = String(turn);   // the run is named by its FIRST turn
   const hit = run.kinds.find((x) => x.kind === k && (x.from || null) === f);
   if (hit) hit.n += 1; else run.kinds.push({ kind: k, from: f, n: 1 });
   run.turns = (Number(run.turns) || 0) + 1;
@@ -3588,8 +3589,9 @@ function chatViewRunAdd(run, kind, from, ts) {
   if (ts && (!run.last_ts || Date.parse(ts) > Date.parse(run.last_ts))) run.last_ts = ts;
   return run;
 }
-// "4 consultations from Beacon · 8:09–8:17 AM"; timeFmt(ts) is the page's own local time formatter ("8:09 AM").
-function chatViewRunText(run, timeFmt) {
+// The line's two parts: { kinds: "4 consultations from Beacon", when: "8:09–8:17 AM" } (when is '' for a run with no time).
+// timeFmt(ts) is the page's own local time formatter ("8:09 AM"; asked with a second argument true it gives the date too).
+function chatViewRunParts(run, timeFmt) {
   const r = run || {};
   const parts = (Array.isArray(r.kinds) ? r.kinds : []).filter((x) => x && x.n > 0).map((x) => {
     const w = CHAT_VIEW_RUN_WORDS[x.kind] || CHAT_VIEW_RUN_WORDS.other;
@@ -3597,10 +3599,10 @@ function chatViewRunText(run, timeFmt) {
     return `${x.n} ${x.n === 1 ? w[0] : w[1]}${who}`;
   });
   const total = Number(r.turns) || 0;
-  const what = parts.length ? parts.join(', ') : `${total} ${total === 1 ? 'hub turn' : 'hub turns'}`;
+  const what = parts.length ? parts.join(', ') : `${total} ${total === 1 ? 'hub notice' : 'hub notices'}`;
   const fmt = typeof timeFmt === 'function' ? timeFmt : (t) => String(t);
   const a = r.ts, b = r.last_ts || r.ts;
-  if (!a) return what;
+  if (!a) return { kinds: what, when: '' };
   const da = new Date(a), db = new Date(b);
   const sameDay = da.getFullYear() === db.getFullYear() && da.getMonth() === db.getMonth() && da.getDate() === db.getDate();
   let when;
@@ -3612,7 +3614,12 @@ function chatViewRunText(run, timeFmt) {
       when = ux && uy && ux[2] === uy[2] ? `${ux[1]}\u2013${y}` : `${x}\u2013${y}`;
     }
   } else when = `${fmt(a, true)} \u2013 ${fmt(b, true)}`;
-  return `${what} \u00b7 ${when}`;
+  return { kinds: what, when };
+}
+// "4 consultations from Beacon · 8:09–8:17 AM" (the title and the tests; the line draws the two parts apart)
+function chatViewRunText(run, timeFmt) {
+  const p = chatViewRunParts(run, timeFmt);
+  return p.when ? `${p.kinds} \u00b7 ${p.when}` : p.kinds;
 }
 // The list with adjacent hidden_run entries merged into one (turns and kinds added, widest time range).
 function chatViewMergeRuns(history) {
@@ -3625,21 +3632,24 @@ function chatViewMergeRuns(history) {
         const hit = m.kinds.find((y) => y.kind === x.kind && (y.from || null) === (x.from || null));
         if (hit) hit.n += x.n; else m.kinds.push({ kind: x.kind, from: x.from || null, n: x.n });
       }
-      if (Date.parse(e.ts) < Date.parse(m.ts)) { m.ts = e.ts; m.rank = e.rank || 0; }
+      if (Date.parse(e.ts) < Date.parse(m.ts)) { m.ts = e.ts; m.rank = e.rank || 0; if (e.turn) m.turn = e.turn; else delete m.turn; }
       if (Date.parse(e.last_ts) > Date.parse(m.last_ts)) m.last_ts = e.last_ts;
       out[out.length - 1] = m;
     } else out.push(e);
   }
   return out;
 }
-// Fetch one run's turns: GET /api/history/<agent>?view=run&from=<ts>&to=<last_ts>[&rank=<n>] (rank: how many hub-started
-// prompts saved at exactly ts come before this run's; a live line, whose start is widened, has none)
+// Fetch one run's turns: GET /api/history/<agent>?view=run&from=<ts>&to=<last_ts>&turn=<id> (the run is named by the turn id of
+// its first prompt); a run without one (an old entry) sends rank: how many hub-started prompts saved at exactly ts come before it.
+const CHAT_VIEW_TURN_RE = /^[A-Za-z0-9_-]{1,100}$/;
 function chatViewRunUrl(agent, run) {
-  const rank = run && !run.live ? Math.floor(Number(run.rank)) || 0 : 0;
-  return `/api/history/${encodeURIComponent(agent)}?view=run&from=${encodeURIComponent(String(run && run.ts))}&to=${encodeURIComponent(String((run && run.last_ts) || (run && run.ts)))}${rank > 0 ? `&rank=${rank}` : ''}`;
+  const turn = run && typeof run.turn === 'string' && CHAT_VIEW_TURN_RE.test(run.turn) ? run.turn : '';
+  const rank = !turn && run ? Math.floor(Number(run.rank)) || 0 : 0;
+  return `/api/history/${encodeURIComponent(agent)}?view=run&from=${encodeURIComponent(String(run && run.ts))}&to=${encodeURIComponent(String((run && run.last_ts) || (run && run.ts)))}${turn ? `&turn=${turn}` : rank > 0 ? `&rank=${rank}` : ''}`;
 }
-// A run's key for the page's open state and fetched turns: its first time and rank (two runs can start in the same ms).
+// A run's key for the page's open state and fetched turns: its turn id, else its first time and rank (two runs can start in the same ms).
 function chatViewRunKey(run) {
+  if (run && typeof run.turn === 'string' && CHAT_VIEW_TURN_RE.test(run.turn)) return `turn|${run.turn}`;
   return `${run && run.ts}|${Math.floor(Number(run && run.rank)) || 0}`;
 }
 // After Load earlier merged runs into one (the merged run starts earlier, so its key is new): the key of an open line
@@ -3647,7 +3657,7 @@ function chatViewRunKey(run) {
 function chatViewRunOpenKey(states, run) {
   const own = chatViewRunKey(run), a = Date.parse(run && run.ts), b = Date.parse((run && run.last_ts) || (run && run.ts));
   for (const k of Object.keys(states || {})) {
-    const t = Date.parse(k.split('|')[0]);
+    const t = Date.parse(states[k] && states[k].ts ? states[k].ts : k.split('|')[0]);
     if (k !== own && states[k] && states[k].open && t >= a && t <= b) return k;
   }
   return null;
@@ -8308,7 +8318,7 @@ function renderRunLine(run, host = bubbleHost()) {
   if (!st) {
     // Load earlier merged an older run into an open line: the merged line starts earlier, so it stays open (its turns are fetched again)
     const was = chatViewRunOpenKey(chatRuns, run);
-    st = chatRuns[key] = { open: false, entries: null, more: false, loading: false, gen: 0 };
+    st = chatRuns[key] = { open: false, entries: null, more: false, loading: false, gen: 0, ts: run.ts };
     if (was) { reopen = true; delete chatRuns[was]; }
   }
   const wrap = document.createElement('div');
@@ -8316,13 +8326,14 @@ function renderRunLine(run, host = bubbleHost()) {
   const head = document.createElement('button');
   head.type = 'button'; head.className = 'run-line'; head.setAttribute('aria-expanded', 'false');
   const chev = document.createElement('span'); chev.className = 'run-chev'; chev.textContent = '▸';
-  const text = document.createElement('span'); text.className = 'run-text';
-  head.append(chev, text);
+  const kindsEl = document.createElement('span'); kindsEl.className = 'run-kinds';
+  const whenEl = document.createElement('span'); whenEl.className = 'run-when';
+  head.append(chev, kindsEl, whenEl);   // the time range never shrinks; only the kinds part is cut with an ellipsis
   const body = document.createElement('div');
   body.className = 'run-body'; body.hidden = true;
   wrap.append(head, body);
   host.appendChild(wrap);
-  const words = () => { const t = chatViewRunText(wrap._run, runTime); text.textContent = t; head.title = t; };
+  const words = () => { const p = chatViewRunParts(wrap._run, runTime); kindsEl.textContent = p.kinds; whenEl.textContent = p.when ? ` \u00b7 ${p.when}` : ''; head.title = chatViewRunText(wrap._run, runTime); };
   const setOpen = (on) => { st.open = on; head.setAttribute('aria-expanded', on ? 'true' : 'false'); body.hidden = !on; chev.textContent = on ? '▾' : '▸'; };
   const fill = () => {
     body.textContent = '';
@@ -8333,10 +8344,10 @@ function renderRunLine(run, host = bubbleHost()) {
       for (const it of autoGroupHistory(list, 0)) {
         if (it.type === 'entry') renderEntry(list[it.index], times[it.index]);
         else if (it.type === 'card') renderAutoCard(it, times, body, list);
-        else renderAutoStack(it, times, list, body);
+        else for (const c of it.cards) renderAutoCard(c, times, body, list);   // each turn its own card, never a stack
       }
     });
-    if (st.more) { const d = document.createElement('div'); d.className = 'run-more'; d.textContent = 'Showing the first 200 entries. Switch on Agent work to see them all.'; body.appendChild(d); }
+    if (st.more) { const n = list.filter(e => e.role === 'user').length, all = Number(wrap._run.turns) || 0; const d = document.createElement('div'); d.className = 'run-more'; d.textContent = `Showing ${n} of ${all > n ? all : n} turns. Switch on Agent work to see them all.`; body.appendChild(d); }
   };
   st.ui = { words, setOpen, fill };
   words();
@@ -8348,12 +8359,12 @@ function renderRunLine(run, host = bubbleHost()) {
     clearErr();
     if (st.open) { setOpen(false); return; }
     if (!st.entries) {
-      st.loading = true; text.textContent = 'Loading…'; head.setAttribute('aria-busy', 'true');
+      st.loading = true; kindsEl.textContent = 'Loading…'; whenEl.textContent = ''; head.setAttribute('aria-busy', 'true');
       const gen = st.gen || 0;
       const showErr = (msg) => { const err = document.createElement('div'); err.className = 'run-error'; err.setAttribute('role', 'status'); err.textContent = msg; wrap.appendChild(err); };
       try {
-        // a line made live on this phone starts a moment before the hub saved the turn: a little room at both ends
-        const r = wrap._run, q = r.live ? { ...r, ts: new Date(Date.parse(r.ts) - 2000).toISOString(), last_ts: new Date(Date.parse(r.last_ts) + 2000).toISOString() } : r;
+        // a live line is named by its first turn's id; it reads up to now (the turns it counted have grown since)
+        const r = wrap._run, q = r.live ? { ...r, last_ts: new Date().toISOString() } : r;
         const res = await api(chatViewRunUrl(agent, q));
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const d = await res.json();
@@ -8385,13 +8396,13 @@ function runLive(ev) {
   while (last && (last.classList.contains('chat-view-hidden') || last === busyCardEl)) last = last.previousElementSibling;
   if (last && last.classList.contains('run-wrap') && last._run) {
     const grown = { ...last._run, live: true, kinds: last._run.kinds.map(x => ({ ...x })) };
-    chatViewRunAdd(grown, k.kind, k.from, ts);
+    chatViewRunAdd(grown, k.kind, k.from, ts, ev.turnId);   // the line keeps its FIRST turn id
     last._run = grown;
     last._runReset();   // the turns fetched before no longer match: closed, fetched again when opened
     return last;
   }
   const run = { role: 'hidden_run', ts, last_ts: ts, turns: 0, kinds: [], content: '', live: true };
-  chatViewRunAdd(run, k.kind, k.from, ts);
+  chatViewRunAdd(run, k.kind, k.from, ts, ev.turnId);
   delete chatRuns[chatViewRunKey(run)];
   return renderRunLine(run, box);
 }

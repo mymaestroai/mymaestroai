@@ -60,9 +60,9 @@ function deskHarness({ fetchImpl, simple = false } = {}) {
     return `m${i}`;
   };
   const chats = { c1: chat };
-  const f = new Function('document', 'chats', 'fetch', 'chatViewRunText', 'chatViewRunUrl', 'chatViewRunKey', 'chatViewRunOpenKey', 'chatViewRunKindOf', 'chatViewRunAdd', 'autoGroupHistory', 'autoCardKind', 'msgTimeLines', 'simpleOn',
+  const f = new Function('document', 'chats', 'fetch', 'chatViewRunText', 'chatViewRunParts', 'chatViewRunUrl', 'chatViewRunKey', 'chatViewRunOpenKey', 'chatViewRunKindOf', 'chatViewRunAdd', 'autoGroupHistory', 'autoCardKind', 'msgTimeLines', 'simpleOn',
     `${src}; return { soloRunLine, soloRunLive, soloRunTime };`)(
-    doc2, chats, (url, o) => { fetched.push(url); return fetchImpl(url, o); }, V.chatViewRunText, V.chatViewRunUrl, V.chatViewRunKey, V.chatViewRunOpenKey, V.chatViewRunKindOf, V.chatViewRunAdd, A.autoGroupHistory, A.autoCardKind, T.msgTimeLines, () => simple);
+    doc2, chats, (url, o) => { fetched.push(url); return fetchImpl(url, o); }, V.chatViewRunText, V.chatViewRunParts, V.chatViewRunUrl, V.chatViewRunKey, V.chatViewRunOpenKey, V.chatViewRunKindOf, V.chatViewRunAdd, A.autoGroupHistory, A.autoCardKind, T.msgTimeLines, () => simple);
   return { f, panel, chat, fetched, pushed };
 }
 
@@ -82,7 +82,7 @@ test('desktop: a hidden_run entry is one quiet line, a real button with aria-exp
 
 test('desktop: the line is a one-row line with an ellipsis (CSS) and the draw skips it in messages and times', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
-  assert.match(html, /\.run-text \{[^}]*text-overflow: ellipsis;[^}]*white-space: nowrap/);
+  assert.match(html, /\.run-kinds \{[^}]*text-overflow: ellipsis;[^}]*white-space: nowrap/);
   assert.match(html, /\.run-line \{[^}]*display: flex/);
   assert.match(html, /html\.mm-simple \.run-line/);
   const draw = cutApp('const makeDraw = (history, times, pushDefault) =>', 'const draw = makeDraw(history, times, true)');
@@ -114,21 +114,21 @@ test('desktop: Enter/Space/click fetches view=run for the run, says Loading… m
   assert.strictEqual(h.fetched.length, 1); assert.strictEqual(body.hidden, false);
 });
 
-test('desktop: three or more consecutive turns in a run open as the same stack the Agent work view draws', async () => {
+test('desktop: three or more consecutive turns in a run open as separate cards, never one stack (r2 R4)', async () => {
   const many = [];
   for (let i = 0; i < 3; i++) many.push({ ts: `2026-11-24T08:0${i}:00.000Z`, role: 'user', content: `[Consultation from agent "Beacon"] q${i}`, origin: { kind: 'consultation', from: 'Beacon' } }, { ts: `2026-11-24T08:0${i}:30.000Z`, role: 'assistant', content: `a${i}` });
   const h = deskHarness({ fetchImpl: answer({ history: many }) });
   const wrap = h.f.soloRunLine('c1', RUN, null);
   await wrap.children[0].click();
-  assert.strictEqual(wrap.children[1].all('auto-stack').length, 1);
+  assert.strictEqual(wrap.children[1].all('auto-stack').length, 0);
   assert.strictEqual(wrap.children[1].all('auto-card').length, 3);
 });
 
 test('desktop: more:true ends the body with the cap line; a failed fetch says so, stays collapsed and can be tried again', async () => {
   const h = deskHarness({ fetchImpl: answer({ history: TURNS, more: true }) });
-  const w = h.f.soloRunLine('c1', RUN, null);
+  const w = h.f.soloRunLine('c1', { ...RUN, turns: 111 }, null);
   await w.children[0].click();
-  assert.strictEqual(w.children[1].all('run-more')[0].textContent, 'Showing the first 200 entries. Switch on Agent work to see them all.');
+  assert.strictEqual(w.children[1].all('run-more')[0].textContent, 'Showing 2 of 111 turns. Switch on Agent work to see them all.');
   let n = 0;
   const g = deskHarness({ fetchImpl: async () => (++n === 1 ? { ok: false, status: 500, json: async () => ({}) } : { ok: true, json: async () => ({ history: TURNS }) }) });
   const w2 = g.f.soloRunLine('c1', RUN, null);
@@ -167,12 +167,12 @@ test('desktop: a live hub-started turn makes a line at the end of the chat, and 
   const msg = new El('div'); msg.className = 'message assistant'; h.panel.appendChild(msg);
   const c = h.f.soloRunLive(h.chat, { kind: 'schedule' }, '2026-11-24T08:40:00.000Z');
   assert.notStrictEqual(c, a, 'something else is last: a new line');
-  assert.match(c.children[0].textContent, /^▸1 check-in · /);
+  assert.match(c.children[0].textContent, /^▸1 scheduled task · /);
 });
 
 test('desktop: onHubTurnStart counts the turn in a live line only in the main view and only when history did not already hold it', () => {
   const start = cutApp('async function onHubTurnStart(', 'function onHubTurnDelta(');
-  assert.match(start, /if \(hubMain && !dup\) soloRunLive\(chat, ev\.origin, ev\.startedAt\);/);
+  assert.match(start, /if \(hubMain && !dup\) soloRunLive\(chat, ev\.origin, ev\.startedAt, ev\.turnId\);/);
   assert.match(start, /card\.wrap\.classList\.add\('chat-view-hidden'\)/, 'the card stays hidden as before');
   assert.match(start, /um\.hidden = true/);
 });
@@ -205,10 +205,10 @@ function phoneHarness({ fetchImpl, simple = false } = {}) {
   const box = new El('div');
   const doc2 = { createElement: (t) => new El(t) };
   const urls = [];
-  const f = new Function('document', 'chatEl', 'api', 'chatViewRunText', 'chatViewRunUrl', 'chatViewRunKey', 'chatViewRunOpenKey', 'chatViewRunKindOf', 'chatViewRunAdd', 'autoGroupHistory', 'autoCardKind', 'msgTimeLines', 'simpleOn', 'timeLabel', 'renderEntryImpl', 'busyCard',
+  const f = new Function('document', 'chatEl', 'api', 'chatViewRunText', 'chatViewRunParts', 'chatViewRunUrl', 'chatViewRunKey', 'chatViewRunOpenKey', 'chatViewRunKindOf', 'chatViewRunAdd', 'autoGroupHistory', 'autoCardKind', 'msgTimeLines', 'simpleOn', 'timeLabel', 'renderEntryImpl', 'busyCard',
     `let current = 'scout', lastHistoryCard = null, chatHistory = []; const busyCardEl = busyCard; function renderEntry(m, t) { renderEntryImpl(m, t, bubbleHost()); }
      ${src}; return { renderRunLine, runLive, renderAutoCard, renderAutoStack, get: () => ({ lastHistoryCard }) };`)(
-    doc2, () => box, (url) => { urls.push(url); return fetchImpl(url); }, V.chatViewRunText, V.chatViewRunUrl, V.chatViewRunKey, V.chatViewRunOpenKey, V.chatViewRunKindOf, V.chatViewRunAdd, A.autoGroupHistory, A.autoCardKind, T.msgTimeLines, () => simple, () => 't',
+    doc2, () => box, (url) => { urls.push(url); return fetchImpl(url); }, V.chatViewRunText, V.chatViewRunParts, V.chatViewRunUrl, V.chatViewRunKey, V.chatViewRunOpenKey, V.chatViewRunKindOf, V.chatViewRunAdd, A.autoGroupHistory, A.autoCardKind, T.msgTimeLines, () => simple, () => 't',
     (m, t, host) => { if (m.role === 'hidden_run') throw new Error('nested'); const e = new El('div'); e.className = `msg ${m.role}`; e.textContent = m.content; host.appendChild(e); }, null);
   return { f, box, urls };
 }
@@ -219,11 +219,11 @@ test('phone: a hidden_run entry is one quiet line, a real button with aria-expan
   const line = wrap.children[0];
   assert.strictEqual(line.tag, 'button'); assert.ok(line.classList.contains('run-line')); assert.strictEqual(line.getAttribute('aria-expanded'), 'false');
   assert.match(line.textContent, /^▸2 consultations from Beacon · /);
-  assert.strictEqual(line.title, line.children[1].textContent);
+  assert.strictEqual(line.title, line.children[1].textContent + line.children[2].textContent);
   assert.ok(!wrap.classList.contains('msg'));
   const html = fs.readFileSync(path.join(__dirname, '..', 'mobile.html'), 'utf8');
   assert.match(html, /\.run-line \{[^}]*min-height: 36px/);
-  assert.match(html, /\.run-text \{[^}]*text-overflow: ellipsis/);
+  assert.match(html, /\.run-kinds \{[^}]*text-overflow: ellipsis/);
   assert.match(html, /html\.mm-simple \.run-line/);
   assert.match(cutMob('function renderEntry(m, time', 'if (m.archived === true)'), /m\.role === 'hidden_run'\) \{ renderRunLine\(m\); return; \}/, 'renderEntry paints a run in place');
 });
@@ -231,7 +231,7 @@ test('phone: a hidden_run entry is one quiet line, a real button with aria-expan
 test('phone: tapping fetches view=run, says Loading… meanwhile, then draws the same cards the Agent work view draws; the cap line; a failure stays collapsed', async () => {
   let release; const gate = new Promise((r) => { release = r; });
   const h = phoneHarness({ fetchImpl: async () => { await gate; return { ok: true, json: async () => ({ history: TURNS, more: true }) }; } });
-  const wrap = h.f.renderRunLine(RUN, h.box);
+  const wrap = h.f.renderRunLine({ ...RUN, turns: 111 }, h.box);
   const line = wrap.children[0], body = wrap.children[1];
   const p = line.click();
   assert.match(line.textContent, /Loading…/);
@@ -243,7 +243,7 @@ test('phone: tapping fetches view=run, says Loading… meanwhile, then draws the
   assert.strictEqual(cards[0].tag, 'button', 'the card head is a button that opens the exchange');
   assert.strictEqual(cards[0].parentNode.children[1].all('msg').length, 2, 'the whole exchange is in the card body');
   assert.strictEqual(h.f.get().lastHistoryCard, null, 'a run\'s cards are never adopted as the chat\'s last card');
-  assert.strictEqual(body.all('run-more')[0].textContent, 'Showing the first 200 entries. Switch on Agent work to see them all.');
+  assert.strictEqual(body.all('run-more')[0].textContent, 'Showing 2 of 111 turns. Switch on Agent work to see them all.');
   await line.click(); assert.strictEqual(body.hidden, true);
   await line.click(); assert.strictEqual(h.urls.length, 1, 'closed and opened again: the entries were kept');
   let n = 0;
@@ -344,7 +344,6 @@ test('r1 B2 helper: rank goes in the URL only when above 0 (never for a live lin
   assert.ok(!/rank/.test(V.chatViewRunUrl('scout', RUN)));
   assert.ok(!/rank/.test(V.chatViewRunUrl('scout', { ...RUN, rank: 0 })));
   assert.match(V.chatViewRunUrl('scout', { ...RUN, rank: 2 }), /&rank=2$/);
-  assert.ok(!/rank/.test(V.chatViewRunUrl('scout', { ...RUN, rank: 2, live: true })));
   assert.strictEqual(V.chatViewRunKey({ ...RUN, rank: 1 }), RUN.ts + '|1');
   assert.strictEqual(V.chatViewRunKey(RUN), RUN.ts + '|0');
 });
@@ -397,4 +396,79 @@ test('r1 B1 pages: an incomplete answer says to switch on Agent work, not an emp
   const p = m.f.renderRunLine(RUN, m.box);
   await p.children[0].click();
   assert.strictEqual(p.all('run-error')[0].textContent, "Couldn't load these turns. Switch on Agent work to see them.");
+});
+
+// ── review r2 ──
+const FOUR = [];
+for (let i = 0; i < 4; i++) FOUR.push({ ts: `2026-11-24T08:0${i}:00.000Z`, role: 'user', content: `[Consultation from agent "Beacon"] q${i}`, origin: { kind: 'consultation', from: 'Beacon' } }, { ts: `2026-11-24T08:0${i}:30.000Z`, role: 'assistant', content: `a${i}` });
+
+test('r2 R4 desktop and phone: a 4-turn run opens to 4 cards at once, no stack', async () => {
+  const d = deskHarness({ fetchImpl: answer({ history: FOUR }) });
+  const w = d.f.soloRunLine('c1', { ...RUN, turns: 4 }, null);
+  await w.children[0].click();
+  assert.strictEqual(w.children[1].all('auto-card').length, 4);
+  assert.strictEqual(w.children[1].all('auto-stack').length, 0);
+  const m = phoneHarness({ fetchImpl: answer({ history: FOUR }) });
+  const p = m.f.renderRunLine({ ...RUN, turns: 4 }, m.box);
+  await p.children[0].click();
+  assert.strictEqual(p.children[1].all('auto-card').length, 4);
+  assert.strictEqual(p.children[1].all('auto-stack').length, 0);
+  assert.ok(!/foldRenderHistoryStack|renderAutoStack/.test(cutApp('function soloRunLine(', 'function soloRunLive(') + cutMob('function renderRunLine(', 'function runLive(')), 'a run body never calls the stack renderers');
+});
+
+test('r2 R6 desktop and phone: the line is a chevron, a kinds span and a when span holding the time range; the range never shrinks (CSS)', () => {
+  const d = deskHarness({ fetchImpl: answer({ history: [] }) });
+  const dl = d.f.soloRunLine('c1', RUN, null).children[0];
+  assert.deepStrictEqual(dl.children.map((c) => c.className), ['run-chev', 'run-kinds', 'run-when']);
+  assert.strictEqual(dl.children[1].textContent, '2 consultations from Beacon');
+  assert.strictEqual(dl.children[2].textContent, ' \u00b7 ' + V.chatViewRunParts(RUN, d.f.soloRunTime).when);
+  assert.match(dl.children[2].textContent, /^ · .*[–-]/);
+  const m = phoneHarness({ fetchImpl: answer({ history: [] }) });
+  const pl = m.f.renderRunLine(RUN, m.box).children[0];
+  assert.deepStrictEqual(pl.children.map((c) => c.className), ['run-chev', 'run-kinds', 'run-when']);
+  assert.match(pl.children[2].textContent, /^ · /);
+  assert.strictEqual(pl.title, pl.children[1].textContent + pl.children[2].textContent, 'the title is the whole line');
+  for (const f of ['index.html', 'mobile.html']) {
+    const html = fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
+    assert.match(html, /\.run-when \{[^}]*flex: 0 0 auto/, f);
+    assert.match(html, /\.run-kinds \{[^}]*flex: 0 1 auto;[^}]*overflow: hidden;[^}]*text-overflow: ellipsis/, f);
+  }
+});
+
+test('r2 R7 desktop and phone: a run over the cap says "Showing N of M turns" with the line\'s turns', async () => {
+  const d = deskHarness({ fetchImpl: answer({ history: FOUR, more: true }) });
+  const w = d.f.soloRunLine('c1', { ...RUN, turns: 111 }, null);
+  await w.children[0].click();
+  assert.strictEqual(w.children[1].all('run-more')[0].textContent, 'Showing 4 of 111 turns. Switch on Agent work to see them all.');
+  const m = phoneHarness({ fetchImpl: answer({ history: FOUR, more: true }) });
+  const p = m.f.renderRunLine({ ...RUN, turns: 111 }, m.box);
+  await p.children[0].click();
+  assert.strictEqual(p.children[1].all('run-more')[0].textContent, 'Showing 4 of 111 turns. Switch on Agent work to see them all.');
+});
+
+test('r2 R1 pages: a run with a turn id is fetched by it (no rank); a live line is named by its first turn and fetched with no 2 s allowance', async () => {
+  const d = deskHarness({ fetchImpl: answer({ history: TURNS }) });
+  const w = d.f.soloRunLine('c1', { ...RUN, rank: 1, turn: 'scout-a1-b2' }, null);
+  await w.children[0].click();
+  assert.match(d.fetched[0], /&turn=scout-a1-b2$/); assert.ok(!/rank/.test(d.fetched[0]));
+  // two runs at the same ts with their own turns keep separate state
+  const x = d.f.soloRunLine('c1', { ...RUN, turn: 'tX' }, null), y = d.f.soloRunLine('c1', { ...RUN, turn: 'tY' }, null);
+  await x.children[0].click();
+  assert.strictEqual(x.children[0].getAttribute('aria-expanded'), 'true'); assert.strictEqual(y.children[0].getAttribute('aria-expanded'), 'false');
+  // live: first turn id kept, from = the turn's start
+  const h = deskHarness({ fetchImpl: answer({ history: TURNS }) });
+  const a = h.f.soloRunLive(h.chat, { kind: 'consultation', from: 'Beacon' }, '2026-11-24T08:21:00.000Z', 'scout-first-1');
+  h.f.soloRunLive(h.chat, { kind: 'consultation', from: 'Beacon' }, '2026-11-24T08:25:00.000Z', 'scout-second-2');
+  assert.strictEqual(a._run.turn, 'scout-first-1');
+  await a.children[0].click();
+  assert.match(h.fetched[0], /from=2026-11-24T08%3A21%3A00\.000Z&/, 'from is the first turn\'s own start');
+  assert.match(h.fetched[0], /&turn=scout-first-1$/);
+  const m = phoneHarness({ fetchImpl: answer({ history: TURNS }) });
+  const pw = m.f.runLive({ startedAt: '2026-11-24T08:21:00.000Z', origin: { kind: 'consultation', from: 'Beacon' }, turnId: 'scout-first-1' });
+  m.f.runLive({ startedAt: '2026-11-24T08:25:00.000Z', origin: { kind: 'consultation', from: 'Beacon' }, turnId: 'scout-second-2' });
+  await pw.children[0].click();
+  assert.match(m.urls[0], /from=2026-11-24T08%3A21%3A00\.000Z&/);
+  assert.match(m.urls[0], /&turn=scout-first-1$/);
+  assert.match(cutMob('function onTurnStart(ev) {', 'function onTurnDelta(ev) {'), /runLive\(ev\)/);
+  assert.ok(!/- 2000/.test(cutApp('function soloRunLine(', 'function soloRunLive(') + cutMob('function renderRunLine(', 'function runLive(')), 'no 2 s widening');
 });

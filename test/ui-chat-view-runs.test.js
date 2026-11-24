@@ -23,21 +23,21 @@ test('run text: one kind, plural and singular, with the from-name and the time r
 
 test('run text: mixed kinds in order, words per kind, no from where none is known', () => {
   const r = run({ ts: '2026-11-24T07:02:00Z', turns: 6, kinds: [{ kind: 'consultation', from: 'Beacon', n: 2 }, { kind: 'hand_off', from: 'Maestro', n: 1 }, { kind: 'schedule', from: null, n: 3 }] });
-  assert.strictEqual(V.chatViewRunText(r, fmt), '2 consultations from Beacon, 1 task from Maestro, 3 check-ins · 7:02–8:17 AM');
+  assert.strictEqual(V.chatViewRunText(r, fmt), '2 consultations from Beacon, 1 task from Maestro, 3 scheduled tasks · 7:02–8:17 AM');
   const j = run({ turns: 3, kinds: [{ kind: 'job_notice', from: null, n: 1 }, { kind: 'other', from: null, n: 2 }, { kind: 'consultation', from: null, n: 1 }] });
-  assert.match(V.chatViewRunText(j, fmt), /^1 job notice, 2 hub turns, 1 consultation · /);
+  assert.match(V.chatViewRunText(j, fmt), /^1 job finished, 2 hub notices, 1 consultation · /);
   // a hand-off's report and a job report count as the server counts them
   assert.deepStrictEqual(V.chatViewRunKindOf({ kind: 'hand_off_report', from: 'Maestro' }), { kind: 'hand_off', from: 'Maestro' });
   assert.deepStrictEqual(V.chatViewRunKindOf({ kind: 'job_report' }), { kind: 'job_notice', from: null });
-  assert.match(V.chatViewRunText(run({ turns: 3, kinds: [{ kind: 'job_notice', from: null, n: 3 }] }), fmt), /^3 job notices · /);
-  assert.match(V.chatViewRunText(run({ turns: 1, kinds: [{ kind: 'schedule', from: null, n: 1 }] }), fmt), /^1 check-in · /);
-  assert.match(V.chatViewRunText(run({ turns: 1, kinds: [{ kind: 'weird', from: 'x', n: 1 }] }), fmt), /^1 hub turn · /, 'an unknown kind reads as a hub turn');
+  assert.match(V.chatViewRunText(run({ turns: 3, kinds: [{ kind: 'job_notice', from: null, n: 3 }] }), fmt), /^3 jobs finished · /);
+  assert.match(V.chatViewRunText(run({ turns: 1, kinds: [{ kind: 'schedule', from: null, n: 1 }] }), fmt), /^1 scheduled task · /);
+  assert.match(V.chatViewRunText(run({ turns: 1, kinds: [{ kind: 'weird', from: 'x', n: 1 }] }), fmt), /^1 hub notice · /, 'an unknown kind reads as a hub notice');
 });
 
 test('run text: the am/pm is said once on one day; a range over two days shows the date on both ends', () => {
   assert.strictEqual(V.chatViewRunText(run({ ts: '2026-11-24T11:50:00Z', last_ts: '2026-11-24T13:05:00Z' }), fmt), '4 consultations from Beacon · 11:50 AM–1:05 PM');
   assert.strictEqual(V.chatViewRunText(run({ ts: '2026-11-23T22:30:00Z', last_ts: '2026-11-24T08:17:00Z' }), fmt), '4 consultations from Beacon · Nov 23, 10:30 PM – Nov 24, 8:17 AM');
-  assert.strictEqual(V.chatViewRunText(run({ kinds: [] }), fmt).startsWith('4 hub turns'), true, 'no kinds: the total');
+  assert.strictEqual(V.chatViewRunText(run({ kinds: [] }), fmt).startsWith('4 hub notices'), true, 'no kinds: the total');
 });
 
 test('mergeRuns: adjacent runs become one (turns and kinds added by kind and from, widest range); other entries are untouched', () => {
@@ -73,7 +73,7 @@ test('runAdd and runKindOf count a live hub turn into a run', () => {
   assert.strictEqual(V.chatViewRunText(r, fmt), '1 consultation from Beacon · 8:21 AM');
   V.chatViewRunAdd(r, 'consultation', 'Beacon', '2026-11-24T08:25:00Z');
   V.chatViewRunAdd(r, 'schedule', null, '2026-11-24T08:26:00Z');
-  assert.strictEqual(V.chatViewRunText(r, fmt), '2 consultations from Beacon, 1 check-in · 8:21–8:26 AM');
+  assert.strictEqual(V.chatViewRunText(r, fmt), '2 consultations from Beacon, 1 scheduled task · 8:21–8:26 AM');
 });
 
 test('runUrl: view=run with the run\'s first and last time, encoded', () => {
@@ -88,4 +88,43 @@ test('the helper block, with the run helpers, is byte-identical in lib, app.js a
   const app = fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8');
   const a = app.indexOf('    ' + BEGIN);
   assert.strictEqual(strip(app.slice(a, app.indexOf(END) + END.length), '    '), lib, 'app.js');
+});
+
+test('r2 R5: the line says what the cards say: consultation(s) from X, task(s) from X, scheduled task(s), job(s) finished, hub notice(s)', () => {
+  assert.strictEqual(V.chatViewRunText(run({ ts: '2026-11-24T08:09:00Z', last_ts: '2026-11-24T08:17:00Z', turns: 4, kinds: [{ kind: 'consultation', from: 'scout', n: 4 }] }), fmt), '4 consultations from scout · 8:09–8:17 AM');
+  assert.strictEqual(V.chatViewRunText(run({ ts: '2026-11-24T08:55:00Z', last_ts: '2026-11-24T08:59:00Z', turns: 6, kinds: [{ kind: 'consultation', from: 'scout', n: 2 }, { kind: 'schedule', from: null, n: 3 }, { kind: 'job_notice', from: null, n: 1 }] }), fmt),
+    '2 consultations from scout, 3 scheduled tasks, 1 job finished · 8:55–8:59 AM');
+  assert.strictEqual(V.chatViewRunText(run({ ts: '2026-11-24T09:01:00Z', last_ts: '2026-11-24T09:01:00Z', turns: 1, kinds: [{ kind: 'hand_off', from: 'maestro', n: 1 }] }), fmt), '1 task from maestro · 9:01 AM');
+  assert.match(V.chatViewRunText(run({ turns: 2, kinds: [{ kind: 'hand_off', from: 'maestro', n: 2 }, { kind: 'schedule', from: null, n: 1 }, { kind: 'job_notice', from: null, n: 2 }, { kind: 'other', from: null, n: 1 }] }), fmt), /^2 tasks from maestro, 1 scheduled task, 2 jobs finished, 1 hub notice · /);
+});
+
+test('r2 R6: chatViewRunParts gives the kinds and the time range apart; chatViewRunText is both joined', () => {
+  assert.strictEqual(typeof V.chatViewRunParts, 'function');
+  const r = run({ ts: '2026-11-24T08:55:00Z', last_ts: '2026-11-24T08:59:00Z' });
+  assert.deepStrictEqual(V.chatViewRunParts(r, fmt), { kinds: '4 consultations from Beacon', when: '8:55–8:59 AM' });
+  assert.strictEqual(V.chatViewRunText(r, fmt), '4 consultations from Beacon · 8:55–8:59 AM');
+  assert.deepStrictEqual(V.chatViewRunParts({ turns: 2, kinds: [] }, fmt), { kinds: '2 hub notices', when: '' });
+  assert.strictEqual(V.chatViewRunText({ turns: 2, kinds: [] }, fmt), '2 hub notices');
+});
+
+test('r2 R1 helper: a run with a turn id is fetched and keyed by it (no rank); without one, ts and rank as before', () => {
+  const r = run({ turn: 'scout-abc1-x9', rank: 3 });
+  assert.strictEqual(V.chatViewRunUrl('forge', r), '/api/history/forge?view=run&from=2026-11-24T08%3A09%3A00Z&to=2026-11-24T08%3A17%3A00Z&turn=scout-abc1-x9');
+  assert.ok(!/rank/.test(V.chatViewRunUrl('forge', r)));
+  assert.ok(/&rank=3$/.test(V.chatViewRunUrl('forge', run({ rank: 3 }))));
+  assert.ok(!/turn=/.test(V.chatViewRunUrl('forge', run({ turn: 'bad id!' }))), 'a turn id the server would refuse is not sent');
+  assert.notStrictEqual(V.chatViewRunKey(r), V.chatViewRunKey(run({ rank: 3 })));
+  assert.notStrictEqual(V.chatViewRunKey(run({ turn: 'a1' })), V.chatViewRunKey(run({ turn: 'b2' })), 'two runs at the same ts with their own turns are two keys');
+  assert.strictEqual(V.chatViewRunKey(run({ rank: 1 })), '2026-11-24T08:09:00Z|1');
+});
+
+test('r2 R1 helper: runAdd keeps the FIRST turn id; mergeRuns keeps the older run\'s turn', () => {
+  const r = { role: 'hidden_run', ts: '2026-11-24T08:21:00Z', last_ts: '2026-11-24T08:21:00Z', turns: 0, kinds: [], content: '' };
+  V.chatViewRunAdd(r, 'consultation', 'Beacon', '2026-11-24T08:21:00Z', 'tFirst');
+  V.chatViewRunAdd(r, 'consultation', 'Beacon', '2026-11-24T08:22:00Z', 'tSecond');
+  assert.strictEqual(r.turn, 'tFirst');
+  const a = run({ ts: '2026-11-24T07:00:00Z', last_ts: '2026-11-24T07:10:00Z', turn: 'tA' });
+  const b = run({ ts: '2026-11-24T07:20:00Z', last_ts: '2026-11-24T07:40:00Z', turn: 'tB' });
+  assert.strictEqual(V.chatViewMergeRuns([a, b])[0].turn, 'tA');
+  assert.strictEqual(V.chatViewMergeRuns([b, a])[0].turn, 'tA', 'the older one wins in either order');
 });

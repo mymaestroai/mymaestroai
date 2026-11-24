@@ -22,9 +22,9 @@ const runs = (h) => h.filter(e => e.role === 'hidden_run');
 
 function fakeArchive(rows, owner = [], { cleared = null } = {}) {
   return {
-    rowsBefore({ beforeId = null, beforeTs = null, afterTs = null, kinds = ['user', 'assistant'], limit }) {
-      return rows.filter(r => (beforeId == null || r.id < beforeId) && (!beforeTs || r.ts < beforeTs) && (!afterTs || r.ts > afterTs) && kinds.includes(r.kind))
-        .sort((a, b) => b.id - a.id).slice(0, limit);
+    rowsBefore({ beforeId = null, beforeTs = null, afterTs = null, afterId = null, oldestFirst = false, kinds = ['user', 'assistant'], limit }) {
+      return rows.filter(r => (beforeId == null || r.id < beforeId) && (afterId == null || r.id > afterId) && (!beforeTs || r.ts < beforeTs) && (!afterTs || r.ts > afterTs) && kinds.includes(r.kind))
+        .sort((a, b) => (oldestFirst ? a.id - b.id : b.id - a.id)).slice(0, limit);
     },
     forOwnerTurns: (ids) => new Set(ids.filter(i => owner.includes(i))),
     lastMarkTs: (tool) => (tool === 'chat_cleared' ? cleared : null),
