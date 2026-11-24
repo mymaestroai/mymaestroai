@@ -191,7 +191,8 @@ test('a click on the ring or the blue line opens that agent\'s chat with the pan
   const body = `${extract('bgOpenChat')}\nreturn bgOpenChat;`;
   new Function('HandOffCard', 'document', 'startSoloChat', body)({ open: (n) => calls.push(['open', n]) }, { getElementById: (id) => (id === 'agent-btn-hazel' ? btn : null) }, (n, m) => calls.push(['chat', n, m]))('hazel');
   assert.deepStrictEqual(calls, [['open', 'hazel'], ['chat', 'hazel', 'sonnet']]);
-  assert.ok(/closest\('\.agent-btn \.agent-status\.bg-work, \.agent-btn \.agent-bg-line'\)[\s\S]{0,400}bgOpenChat\(name\);\s*\}, true\);/.test(src), 'one capturing listener for the ring and the line');
+  // changed with the Teams view: the same listener also takes the Teams rows' ring and line, and finds the row of either kind
+  assert.ok(/closest\('\.agent-btn \.agent-status\.bg-work, \.agent-btn \.agent-bg-line, \.teams-row \.teams-dot\.bg-work, \.teams-row \.teams-bg-line'\)[\s\S]{0,200}closest\('\.agent-btn, \.teams-row'\)[\s\S]{0,300}bgOpenChat\(name\);\s*\}, true\);/.test(src), 'one capturing listener for the ring and the line, in All Agents and in Teams');
 });
 
 test('HandOffCard.track gets isAdmin, stopJob and stopWorker; they post the usual requests', async () => {
