@@ -1127,6 +1127,23 @@ test('a summary with no sentence end in range ends at a word boundary with an el
   assert.equal((await m.svc.validate({ ...PLAN(), summary: 'Short one' }, 'lead')).plan.summary, 'Short one');
 });
 
+test('card sentence: abbreviations, initials, decimals and closing quotes do not end it early, and a quote closes with its sentence', async (t) => {
+  const m = make(); t.after(m.cleanup);
+  const q = async (summary) => {
+    const p = PLAN(); delete p.specialists; p.summary = summary;
+    let card; await m.svc.runPlan(p, { ...ctx(m), ask: async (a) => { card = a; return { choice: 'Not now', checked: [] }; } });
+    return card.question;
+  };
+  assert.match(await q('Give Dr. Chen a reviewer. Keep the team small.'), /Studio\. Give Dr\. Chen a reviewer\. Untick/);
+  assert.match(await q('Add a reviewer, e.g. Critic, to Studio. Then keep going.'), /Studio\. Add a reviewer, e\.g\. Critic, to Studio\. Untick/);
+  assert.match(await q('Move J. Smith under Studio. More later.'), /Studio\. Move J\. Smith under Studio\. Untick/);
+  assert.match(await q('Rename the team “Studio.” Keep its reviewer.'), /Studio\. Rename the team “Studio\.” Untick/);
+  assert.match(await q('Run 1.5 times more checks. Then stop.'), /Studio\. Run 1\.5 times more checks\. Untick/);
+  const long = 'Use e.g. Critic for reviews and keep Builder on long jobs. ' + 'Words go on and on '.repeat(15);
+  const v = await m.svc.validate({ ...PLAN(), summary: long }, 'lead');
+  assert.equal(v.plan.summary, 'Use e.g. Critic for reviews and keep Builder on long jobs.');
+});
+
 test('the Build Team card question: who proposes how many changes for whom, one sentence, then the untick line', async (t) => {
   const m = make(); t.after(m.cleanup);
   const p = PLAN(); delete p.specialists; p.summary = LONG_REVIEW;
