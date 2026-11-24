@@ -1654,6 +1654,12 @@ async function handleHttpRequest(req, res) {
         runs: sdkChatLib.optimizeTeamRuns, halted: () => require('./lib/hub-halt').getHubHalt().isHalted(), isBusy: isAgentActive,
         keepOnBox: (rec) => sdkChatLib.researchKeptOnBox(rec),
         makeMessage: async (boss, all, own) => reviewLib.reviewMessage(reviewLib.reviewFacts({
+          builtAt: (() => {
+            let setups = [], audit = [];
+            try { setups = require('./lib/team-setup').getTeamSetup().list(); } catch { /* no setups */ }
+            try { audit = reviewLib.readReportsToAudit(); } catch { /* no audit */ }
+            return reviewLib.teamBuiltAt({ boss, agentsList: all, setups, audit });
+          })(),
           boss, agentsList: all, adminIds: adminIdSet(), transcript: require('./lib/transcript').getTranscript(), handOffs: sdkChatLib.handOffRecordsNow,
           telemetryRows: require('./lib/team-usage').readRows(reviewLib.REVIEW_DAYS * 24), models: await teamModelFacts(), tierOf: require('./lib/model-tiers').tierOf,
           now: Date.now(), keepOnBox: own === true,

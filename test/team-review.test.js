@@ -283,3 +283,55 @@ test('server.js: the optimize-team routes use the exact admin-session gate of bu
   assert.match(server, /\^\\\/api\\\/agents\\\/\(\[\^\/\]\+\)\\\/optimize-team\(\\\/estimate\)\?\$/);
   assert.equal((server.match(/optimizeTeam: true/g) || []).length, 0, 'only lib/sdk-chat sets the trusted flag');
 });
+
+// ---- when the team was built
+const ISO = (ms) => new Date(ms).toISOString();
+test('teamBuiltAt: the newest of this boss\'s setups and the reporting-line entries under the boss or a member; not another boss\'s', () => {
+  const list = roster(), boss = list.find(a => a.name === 'studio');
+  const setups = [
+    { id: 's1', at: ISO(NOW - 20 * DAY), main: 'studio', count: 2 },
+    { id: 's2', at: ISO(NOW - 1 * DAY), main: 'sam', count: 1 },       // another boss's, newer: ignored
+  ];
+  const audit = [
+    { at: ISO(NOW - 10 * DAY), action: 'reports_to', agent: 'writer', from: null, to: 'studio' },
+    { at: ISO(NOW - 6 * DAY), action: 'reports_to', agent: 'editor', from: null, to: 'writer' },   // under a current member
+    { at: ISO(NOW - 2 * DAY), action: 'reports_to', agent: 'samhelp', from: null, to: 'sam' },     // another team
+    { at: ISO(NOW - 1 * DAY), action: 'model', agent: 'writer', to: 'studio' },                    // not a line change
+  ];
+  assert.equal(R.teamBuiltAt({ boss, agentsList: list, setups, audit }), NOW - 6 * DAY);
+  assert.equal(R.teamBuiltAt({ boss, agentsList: list, setups, audit: [] }), NOW - 20 * DAY);
+  assert.equal(R.teamBuiltAt({ boss, agentsList: list, setups: [], audit: [] }), null);
+  assert.equal(R.teamBuiltAt({ boss, agentsList: list, setups: [{ at: ISO(NOW - 3 * DAY), main: 'studio' }], audit }), NOW - 3 * DAY, 'a newer setup wins');
+});
+
+test('teamBuiltAt: bad dates are ignored, and a reader that fails gives no audit entries (null when nothing else)', () => {
+  const list = roster(), boss = list.find(a => a.name === 'studio');
+  const bad = [{ at: 'nope', action: 'reports_to', agent: 'writer', to: 'studio' }, { action: 'reports_to', agent: 'writer', to: 'studio' }, { at: 12345, action: 'reports_to', agent: 'writer', to: 'studio' }];
+  assert.equal(R.teamBuiltAt({ boss, agentsList: list, setups: [{ at: 'x', main: 'studio' }], audit: bad }), null);
+  assert.equal(R.teamBuiltAt({ boss, agentsList: list, setups: [], audit: () => { throw new Error('unreadable'); } }), null);
+  assert.equal(R.teamBuiltAt({ boss, agentsList: list, setups: [{ at: ISO(NOW - 4 * DAY), main: 'studio' }], audit: () => { throw new Error('unreadable'); } }), NOW - 4 * DAY);
+  assert.equal(R.teamBuiltAt({ boss: null, agentsList: list, setups: [], audit: [] }), null);
+  assert.equal(R.teamBuiltAt({}), null);
+});
+
+test('readReportsToAudit: reads only reports_to lines, skips bad lines, and never throws', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'review-audit-'));
+  const file = path.join(dir, 'log.jsonl');
+  fs.writeFileSync(file, [JSON.stringify({ at: ISO(NOW), action: 'reports_to', agent: 'a', to: 'b' }), 'not json', JSON.stringify({ at: ISO(NOW), action: 'model' })].join('\n') + '\n');
+  assert.deepEqual(R.readReportsToAudit(file).map(e => e.agent), ['a']);
+  assert.deepEqual(R.readReportsToAudit(path.join(dir, 'missing.jsonl')), []);
+});
+
+test('reviewFacts: a team built 5 days ago is read for 5 days (since, built_recently); otherwise 30 days', () => {
+  const a = facts({ builtAt: NOW - 5 * DAY }).f;
+  assert.equal(a.window_days, 5);
+  assert.equal(a.built_recently, true);
+  assert.equal(a.since, ISO(NOW - 5 * DAY));
+  const b = facts().f;
+  assert.equal(b.window_days, 30);
+  assert.equal(b.built_recently, undefined);
+  assert.equal(b.since, ISO(NOW - 30 * DAY));
+  const c = facts({ builtAt: NOW - 90 * DAY }).f;
+  assert.equal(c.window_days, 30);
+  assert.equal(c.built_recently, undefined);
+});
