@@ -34,13 +34,15 @@ const A = (name, display, extra = {}) => ({ name, display, ...extra });
 const names = (list) => [...list].map(a => a.name);
 
 // ── Ranking and recents: the pure functions ──
-function ctx(extra = {}) {
-  const c = { localStorage: storage(), window: { hubMe: { user: { id: 'u1' } } }, ...extra };
+function tab(extra = {}) {   // one browser tab: its own sessionStorage, the origin's localStorage (shared across tabs)
+  const c = { localStorage: storage(), window: { hubMe: { user: { id: 'u1' } }, sessionStorage: storage() }, ...extra };
   vm.runInNewContext(
-    [fn('qsRecentStore'), fn('qsRecent'), fn('qsNoteOpened'), fn('qsForgetRecents'), fn('qsScore'), fn('qsRank')].join('')
+    [fn('qsRecentStore'), one('qsRecentBox'), fn('qsRecent'), fn('qsNoteOpened'), fn('qsRecentKeys'), fn('qsForgetRecents'), fn('qsScore'), fn('qsRank')].join('')
     + '\nthis.qsRecent = qsRecent; this.qsNoteOpened = qsNoteOpened; this.qsForgetRecents = qsForgetRecents; this.qsRecentStore = qsRecentStore; this.qsScore = qsScore; this.qsRank = qsRank;', c);
   return c;
 }
+const ctx = tab;
+const loadCleanup = () => { const m = app.match(/\n    try \{ for \(const k of qsRecentKeys\(localStorage\)\) localStorage\.removeItem\(k\); \}[^\n]*\n/); assert.ok(m, 'app.js empties localStorage of recents on load'); return m[0]; };
 
 test('an empty search: unread first, then the agents opened last, then the rest by name', () => {
   const c = ctx();
@@ -67,33 +69,48 @@ test('among equal matches the recent one comes first, and unread does not reorde
   assert.deepStrictEqual(names(c.qsRank(agents, 's', { recent: ['scribe'], unread: new Set(['sage']) })), ['scribe', 'sage', 'scout']);
 });
 
-test('recents belong to the signed-in person: their own key, none before /api/me, other people\'s and the old shared key dropped, all gone on sign-out', () => {
-  const ls = storage({ 'hub-qs-recent': JSON.stringify(['old-shared']), 'other-key': 'x' });
-  const c = ctx({ localStorage: ls });
+test('recents live in the tab (sessionStorage), per person: nothing in localStorage, none before /api/me, others dropped, all gone on sign-out', () => {
+  const c = tab();
+  const ss = c.window.sessionStorage, ls = c.localStorage;
   c.qsNoteOpened('aide'); c.qsNoteOpened('forge'); c.qsNoteOpened('aide');
   assert.deepStrictEqual([...c.qsRecent()], ['aide', 'forge']);
-  assert.strictEqual(ls._s['hub-qs-recent:u1'], JSON.stringify(['aide', 'forge']));
+  assert.deepStrictEqual(Object.keys(ss._s), ['hub-qs-recent:u1']);
+  assert.deepStrictEqual(Object.keys(ls._s), [], 'nothing written to localStorage');
   for (let i = 0; i < 40; i++) c.qsNoteOpened(`a${i}`);
   assert.strictEqual(c.qsRecent().length, 30);
-  c.window.hubMe = { user: { id: 'u2' } };   // another account on the same browser
+  c.window.hubMe = { user: { id: 'u2' } };
   assert.deepStrictEqual([...c.qsRecent()], [], 'u2 never sees u1\'s list');
   c.qsNoteOpened('scout');
+  ls.setItem('hub-qs-recent', '["legacy"]'); ls.setItem('hub-qs-recent:u1', '["legacy-owner"]'); ls.setItem('other-key', 'x');
   c.qsForgetRecents(c.qsRecentStore().key);   // what the page does when /api/me answers
-  assert.deepStrictEqual(Object.keys(ls._s).sort(), ['hub-qs-recent:u2', 'other-key'], 'old shared key and u1\'s list removed, other keys untouched');
+  assert.deepStrictEqual(Object.keys(ss._s), ['hub-qs-recent:u2']);
+  assert.deepStrictEqual(Object.keys(ls._s), ['other-key'], 'every recents key an earlier build left in localStorage is gone');
   c.qsForgetRecents(null);                    // sign-out
-  assert.deepStrictEqual(Object.keys(ls._s), ['other-key']);
-  c.window.hubMe = null;                      // not known yet
+  assert.deepStrictEqual(Object.keys(ss._s), []);
+  c.window.hubMe = null;
   c.qsNoteOpened('aide');
-  assert.deepStrictEqual([...c.qsRecent()], []);
-  assert.deepStrictEqual(Object.keys(ls._s), ['other-key'], 'nothing stored before the hub says who is signed in');
-  const broken = ctx({ localStorage: storage({ 'hub-qs-recent:u1': '{not json' }) });
-  assert.deepStrictEqual([...broken.qsRecent()], []);
+  assert.deepStrictEqual(Object.keys(ss._s), [], 'nothing stored before the hub says who is signed in');
+});
+
+test('a stale tab can no longer leave recents another account\'s tab could read', () => {
+  const shared = storage({ 'hub-qs-recent:owner': '["old-build"]' });   // origin storage, shared by every tab
+  const owner = tab({ localStorage: shared, window: { hubMe: { user: { id: 'owner' } }, sessionStorage: storage() } });
+  const member = tab({ localStorage: shared, window: { hubMe: { user: { id: 'member' } }, sessionStorage: storage() } });
+  vm.runInNewContext(loadCleanup(), owner);   // the owner's page loads: localStorage emptied of recents
+  owner.qsNoteOpened('private-agent');
+  member.qsForgetRecents(member.qsRecentStore().key);   // another tab signs out and in as the member
+  owner.qsNoteOpened('private-agent-2');                 // the stale owner tab picks another chat
+  assert.deepStrictEqual(Object.keys(shared._s), [], 'nothing in the storage both tabs share');
+  assert.deepStrictEqual(Object.keys(member.window.sessionStorage._s), [], 'the member\'s tab holds no owner list');
+  assert.deepStrictEqual([...member.qsRecent()], []);
 });
 
 test('recents are tidied when /api/me answers and cleared on sign-out (page wiring)', () => {
   assert.match(fn('loadMe'), /window\.hubMe = await r\.json\(\);[^\n]*\n[^\n]*hubSimple\.apply[^\n]*\n\s*try \{ qsForgetRecents\(qsRecentStore\(\)\.key\); \}/);
   assert.match(fn('signOut'), /^\s*async function signOut\(\) \{\s*\n\s*try \{ qsForgetRecents\(null\); \}[^\n]*\n\s*try \{ await fetch\('\/api\/auth\/logout'/m);
   assert.match(fn('switchToChat'), /if \(opened && !opened\.isGroup && !opened\.isWorker && !opened\.isHistory && opened\.agent\) qsNoteOpened\(opened\.agent\);/);
+  assert.ok(loadCleanup());
+  assert.doesNotMatch(app, /localStorage\.setItem\([^)]*qs-recent/, 'no recents write to localStorage anywhere');
 });
 
 test('a Mac is recognised however the browser names it ("macOS" in Chrome, "MacIntel", the user agent)', () => {
@@ -107,6 +124,24 @@ test('a Mac is recognised however the browser names it ("macOS" in Chrome, "MacI
   assert.strictEqual(c.isMac(undefined), false);
 });
 
+// The dialog layer discovers overlays with a MutationObserver (records delivered after the current task, as in a
+// browser). This one watches the fake DOM below; the layer finds it as the global MutationObserver.
+class FakeMutationObserver {
+  constructor(cb) { this.cb = cb; this.queue = []; this.target = null; FakeMutationObserver.all.push(this); }
+  observe(target) { this.target = target; }
+  disconnect() { this.target = null; }
+  static record(node, rec) {
+    for (const mo of FakeMutationObserver.all) {
+      if (!mo.target || !mo.target.contains(node)) continue;
+      mo.queue.push(rec);
+      if (!mo.scheduled) { mo.scheduled = true; queueMicrotask(() => { mo.scheduled = false; const r = mo.queue; mo.queue = []; mo.cb(r); }); }
+    }
+  }
+}
+FakeMutationObserver.all = [];
+globalThis.MutationObserver = FakeMutationObserver;
+const tick = () => new Promise(r => setTimeout(r, 0));
+
 // ── A small DOM: elements, text, a little markup (for the dialog layer's own question), focus with focusin, the
 // active element falling back to <body> when it is removed, events with capture and bubble, <dialog> showModal. ──
 function makeDom() {
@@ -116,7 +151,7 @@ function makeDom() {
   class El {
     constructor(tag) {
       this.nodeType = 1; this.tagName = String(tag).toUpperCase(); this.children = []; this.childNodes = []; this.parent = null;
-      this.attrs = {}; this.listeners = {}; this.cls = new Set(); this.value = ''; this.selectionStart = 0; this.selectionEnd = 0; this.open = false;
+      this.attrs = {}; this.listeners = {}; this.cls = new Set(); this.value = ''; this.selectionStart = 0; this.selectionEnd = 0; this.open = false; this.hidden = false; this.style = {};
       const self = this;
       this.classList = {
         contains: (c) => self.cls.has(c), add: (c) => { self.cls.add(c); }, remove: (c) => { self.cls.delete(c); },
@@ -128,11 +163,13 @@ function makeDom() {
     get id() { return this.attrs.id || ''; } set id(v) { this.attrs.id = String(v); }
     get type() { return this.attrs.type || (this.tagName === 'INPUT' ? 'text' : ''); } set type(v) { this.attrs.type = String(v); }
     get name() { return this.attrs.name || ''; }
-    getAttribute(k) { return k in this.attrs ? this.attrs[k] : null; } setAttribute(k, v) { this.attrs[k] = String(v); }
+    getAttribute(k) { return k in this.attrs ? this.attrs[k] : null; } setAttribute(k, v) { this.attrs[k] = String(v); if (k === 'open') FakeMutationObserver.record(this, { type: 'attributes', target: this, attributeName: k }); }
+    get parentElement() { return this.parent; }
     removeAttribute(k) { delete this.attrs[k]; } hasAttribute(k) { return k in this.attrs; }
-    appendChild(n) { if (n.parent) n.remove(); n.parent = this; this.childNodes.push(n); if (n.nodeType === 1) this.children.push(n); return n; }
+    appendChild(n) { if (n.parent) n.remove(); n.parent = this; this.childNodes.push(n); if (n.nodeType === 1) { this.children.push(n); FakeMutationObserver.record(n, { type: 'childList', addedNodes: [n], removedNodes: [] }); } return n; }
     remove() {
       const p = this.parent; if (!p) return;
+      FakeMutationObserver.record(p, { type: 'childList', addedNodes: [], removedNodes: [this] });
       p.childNodes = p.childNodes.filter(x => x !== this); p.children = p.children.filter(x => x !== this); this.parent = null;
       if (doc.activeElement && this.contains(doc.activeElement)) doc.activeElement = doc.body;   // as browsers do
       if (doc.modal && this.contains(doc.modal)) doc.modal = null;
@@ -154,7 +191,15 @@ function makeDom() {
     }
     *walk() { for (const c of this.children) { yield c; yield* c.walk(); } }
     matchOne(sel) { sel = sel.trim(); if (sel === ':modal') return this === doc.modal; return sel.split(/(?=[.#])/).every(p => (p[0] === '#' ? this.id === p.slice(1) : p[0] === '.' ? this.cls.has(p.slice(1)) : this.tagName === p.toUpperCase())); }
-    matches(sel) { return sel.split(',').some(s => this.matchOne(s)); }
+    matches(sel) {
+      return sel.split(',').some(s => {
+        const parts = s.trim().split(/\s+/);
+        if (!this.matchOne(parts.pop())) return false;
+        let n = this.parent;
+        for (let i = parts.length - 1; i >= 0; i--) { while (n && n.nodeType === 1 && !n.matchOne(parts[i])) n = n.parent; if (!n || n.nodeType !== 1) return false; n = n.parent; }
+        return true;
+      });
+    }
     querySelectorAll(sel) { return [...this.walk()].filter(e => e.matches(sel)); }
     querySelector(sel) { return this.querySelectorAll(sel)[0] || null; }
     closest(sel) { let n = this; while (n && n.nodeType === 1) { if (n.matches(sel)) return n; n = n.parent; } return null; }
@@ -164,8 +209,8 @@ function makeDom() {
     getClientRects() { return [1]; }
     getBoundingClientRect() { return { left: 0, right: 0, top: 0, bottom: 0 }; }
     scrollIntoView() {}
-    showModal() { this.open = true; doc.modal = this; }
-    close() { this.open = false; if (doc.modal === this) doc.modal = null; }
+    showModal() { this.open = true; doc.modal = this; this.setAttribute('open', ''); }
+    close() { this.open = false; if (doc.modal === this) doc.modal = null; this.removeAttribute('open'); FakeMutationObserver.record(this, { type: 'attributes', target: this, attributeName: 'open' }); }
   }
   function dispatch(target, type, props = {}) {
     const e = {
@@ -188,30 +233,44 @@ function makeDom() {
   doc.getElementById = (id) => [doc.body, doc.head].flatMap(r => [...r.walk()]).find(e => e.id === id) || null;
   doc.querySelectorAll = (sel) => [...doc.body.walk()].filter(e => e.matches(sel));
   doc.querySelector = (sel) => (sel === ':modal' ? doc.modal : doc.querySelectorAll(sel)[0] || null);
+  doc.removeEventListener = (t, f) => { for (const ph of ['capture', 'bubble']) if (doc.listeners[ph][t]) doc.listeners[ph][t] = doc.listeners[ph][t].filter(l => l.f !== f); };
   doc.addEventListener = (t, f, cap) => { const ph = cap === true || (cap && cap.capture) ? 'capture' : 'bubble'; (doc.listeners[ph][t] = doc.listeners[ph][t] || []).push({ f, cap: ph === 'capture' }); };
   doc.activeElement = doc.body;
   return { doc, El, dispatch };
 }
 
-// The page: a message draft, the dialog layer, the switcher's real functions, and the agents.
+// The page: a message draft, the dialog layer with app.js's own overlay list and automatic discovery, the switcher's
+// real functions, the real open paths of Simple Settings and the expanded Reasoning and Tool calls views, the Workers
+// menu's real Escape listener, and loadAgents. Stand-ins: the hub (fetch), chat opening (startSoloChat records the
+// name), and the views' painting (paint* only fill text in). Real timers.
+const AUTO = (app.match(/const dialogGuard = createDialogGuard\(\{ auto: '([^']+)' \}\);/) || [])[1];
+const WORKERS_ESC = (app.match(/\n    document\.addEventListener\('keydown', \(e\) => \{\n      if \(e\.key === 'Escape' && document\.getElementById\('workers-menu'\)[^\n]*\n    \}\);\n/) || [])[0];
 function page({ agents = [A('aide', 'Aide'), A('researcher', 'Researcher'), A('reporter', 'Reporter'), A('scout', 'Scout')], roster = 'ready', user = 'u1' } = {}) {
+  assert.ok(AUTO && WORKERS_ESC, 'app.js wiring found');
   const { doc, dispatch } = makeDom();
   const win = { addEventListener() {}, history: { state: null, pushState() {}, back() {} } };
-  const guard = ui.createDialogGuard({ doc, win, auto: '', trackSaves: false });
+  const guard = ui.createDialogGuard({ doc, win, auto: AUTO, trackSaves: false });
   const draft = doc.createElement('textarea'); draft.id = 'input-chat-1'; doc.body.appendChild(draft);
   draft.value = 'Hello there, half a message'; draft.selectionStart = draft.selectionEnd = 5;
-  const opened = [];
+  const workers = doc.createElement('div'); workers.id = 'workers-menu'; workers.hidden = true; doc.body.appendChild(workers);
+  const opened = [], workersClosed = [];
   const c = {
-    document: doc, window: { hubMe: user ? { user: { id: user } } : null, __qsRoster: roster }, localStorage: storage(), navigator: {},
-    AGENTS: agents, chats: {}, dialogGuard: guard, dialogIsModal: ui.dialogIsModal, capName: (s) => s[0].toUpperCase() + s.slice(1),
+    document: doc, window: { hubMe: user ? { user: { id: user } } : null, __qsRoster: roster, sessionStorage: storage() }, localStorage: storage(), navigator: {},
+    AGENTS: agents, chats: {}, dialogGuard: guard, dialogIsModal: ui.dialogIsModal, capName: (x) => x[0].toUpperCase() + x.slice(1),
     dialogRequestClose: (el, how) => guard.requestClose(el, how || 'close'),
-    startSoloChat: (name) => { opened.push(name); return 'chat-2'; }, setTimeout: (f) => f(),
+    startSoloChat: (name) => { opened.push(name); return 'chat-2'; }, setTimeout, console: { log() {}, error() {} },
+    reasonState: new Map([['msg-1', { text: 'thinking', live: false, v: 1 }]]), rsnWords: () => 1, rsnShown: (st) => st.text,
+    simpleStyleLabel: () => null, toggleWorkersMenu: (on) => { workersClosed.push(on); workers.hidden = true; },
+    ownerView: () => 'mine', agentOwnerCache: new Map(), CYBER_MODELS: new Set(['x']), applyStatusSnapshot() {}, renderAgents() {},
   };
-  vm.runInNewContext('let qsList = [], qsSel = 0; const QS_MAC = true;\n'
-    + ['qsRecentStore', 'qsRecent', 'qsNoteOpened', 'qsForgetRecents', 'qsScore', 'qsRank', 'qsUnread', 'qsBlocked', 'closeQuickSwitcher',
-      'openQuickSwitcher', 'renderQuickSwitcher', 'qsPaintSel', 'qsKey', 'qsOpen', 'qsShortcut'].map(fn).join('')
-    + one('qsIsOpen') + one('qsRosterChanged')
-    + '\nthis.api = { open: openQuickSwitcher, close: closeQuickSwitcher, isOpen: qsIsOpen, roster: qsRosterChanged, shortcut: qsShortcut };', c);
+  vm.runInNewContext('let qsList = [], qsSel = 0; const QS_MAC = true; let simpleLookOff = null, simpleThemeSaving = false; let rsnFullFor = null, rsnFullReturn = null, toolsFullFor = null, toolsFullReturn = null;\n'
+    + ['qsRecentStore', 'qsRecent', 'qsNoteOpened', 'qsRecentKeys', 'qsForgetRecents', 'qsScore', 'qsRank', 'qsUnread', 'qsBlocked', 'closeQuickSwitcher',
+      'openQuickSwitcher', 'renderQuickSwitcher', 'qsPaintSel', 'qsKey', 'qsOpen', 'qsShortcut',
+      'simpleCloseSettings', 'openSimpleSettings', 'openReasoningFull', 'paintReasoningFull', 'closeReasoningFull', 'openToolsFull', 'closeToolsFull', 'loadAgents'].map(fn).join('')
+    + one('qsIsOpen') + one('qsRosterChanged') + one('qsRecentBox')
+    + 'function paintToolsFull() {}\n'   // its painting reads the reply's tool model; opening and closing are real
+    + WORKERS_ESC
+    + '\nthis.api = { open: openQuickSwitcher, close: closeQuickSwitcher, isOpen: qsIsOpen, roster: qsRosterChanged, shortcut: qsShortcut, openSimpleSettings, simpleCloseSettings, openReasoningFull, closeReasoningFull, openToolsFull, closeToolsFull, loadAgents };', c);
   doc.addEventListener('keydown', c.api.shortcut, true);   // as app.js wires it
   const key = (target, key, props = {}) => dispatch(target, 'keydown', { key, ...props });
   const cmdK = (props = {}) => key(doc.activeElement, 'k', { metaKey: true, ...props });
@@ -220,25 +279,41 @@ function page({ agents = [A('aide', 'Aide'), A('researcher', 'Researcher'), A('r
   const status = () => (doc.getElementById('qs-status') ? doc.getElementById('qs-status').textContent : null);
   const type = (text) => { q().value = text; dispatch(q(), 'input'); };
   draft.focus();
-  return { doc, dispatch, guard, draft, c, opened, key, cmdK, q, rows, status, type };
+  return { doc, dispatch, guard, draft, workers, workersClosed, c, opened, key, cmdK, q, rows, status, type };
 }
 
-test('⌘K from a message draft: the search box gets the focus; Esc, a click outside and ⌘K again put the focus and the caret back in the draft', () => {
+// What stays with the browser check: a fake element keeps its caret when it loses and regains the focus, as browsers do
+// for a textarea; that the real browser does so (and that focus lands in the draft) was checked in Chrome.
+test('⌘K from a message draft: the search box gets the focus; Esc, a click outside and ⌘K again put the focus back in the draft', async () => {
   for (const how of ['escape', 'backdrop', 'shortcut']) {
     const p = page();
     const e = p.cmdK();
     assert.ok(e.defaultPrevented, 'the browser\'s own ⌘K is suppressed');
     assert.ok(p.c.api.isOpen(), how);
     assert.strictEqual(p.doc.activeElement, p.q(), 'focus in the search box');
+    await tick();   // the dialog layer's automatic discovery has run too
     if (how === 'escape') p.key(p.q(), 'Escape');
     if (how === 'backdrop') p.dispatch(p.doc.getElementById('qs-overlay'), 'click');
     if (how === 'shortcut') p.cmdK();
     assert.strictEqual(p.c.api.isOpen(), false, `${how} closes it`);
     assert.strictEqual(p.doc.activeElement, p.draft, `${how}: the focus is back in the draft`);
     assert.strictEqual(p.draft.selectionStart, 5, `${how}: the caret is where it was`);
-    assert.strictEqual(p.draft.value, 'Hello there, half a message');
+    await tick();
     assert.strictEqual(p.guard.layers().length, 0, `${how}: the dialog layer let go of it`);
   }
+});
+
+test('Esc closes only the switcher: an open Workers menu stays open', () => {
+  const p = page();
+  p.workers.hidden = false;
+  p.key(p.draft, 'Escape');
+  assert.deepStrictEqual(p.workersClosed, [false], 'control: Esc elsewhere closes the Workers menu (the real listener)');
+  p.workers.hidden = false; p.workersClosed.length = 0;
+  p.cmdK();
+  p.key(p.q(), 'Escape');
+  assert.strictEqual(p.c.api.isOpen(), false);
+  assert.deepStrictEqual(p.workersClosed, [], 'the Workers menu did not see that Esc');
+  assert.strictEqual(p.workers.hidden, false);
 });
 
 test('typing filters, ↓ moves, Enter opens that agent\'s chat and closes the switcher', () => {
@@ -254,20 +329,39 @@ test('typing filters, ↓ moves, Enter opens that agent\'s chat and closes the s
   assert.strictEqual(p.c.api.isOpen(), false);
 });
 
-test('it never opens over another dialog: not over a settings overlay, not over "Discard changes?", not over a native modal; ⌘K still closes an open switcher', () => {
-  // A settings overlay (a modal layer of the dialog layer)
-  let p = page();
-  const settings = p.doc.createElement('div'); settings.className = 'st-overlay'; p.doc.body.appendChild(settings); p.guard.open(settings);
-  const e = p.cmdK();
-  assert.strictEqual(p.c.api.isOpen(), false, 'over settings');
-  assert.ok(e.defaultPrevented, 'the key is still swallowed');
-  p.c.api.open();   // the Mac app's menu item goes through openQuickSwitcher() too
-  assert.strictEqual(p.c.api.isOpen(), false, 'menu item over settings');
+test('it never opens over another view: Simple Settings, expanded Reasoning, expanded Tool calls (their real open paths), an Advanced settings overlay, "Discard changes?", a modal <dialog>', async () => {
+  const views = [
+    ['Simple Settings', (p) => p.c.api.openSimpleSettings(), (p) => p.c.api.simpleCloseSettings()],
+    ['expanded Reasoning', (p) => p.c.api.openReasoningFull('msg-1'), (p) => p.c.api.closeReasoningFull()],
+    ['expanded Tool calls', (p) => p.c.api.openToolsFull('msg-1'), (p) => p.c.api.closeToolsFull()],
+  ];
+  for (const [label, open, close] of views) {
+    const p = page();
+    open(p);
+    await tick();
+    const e = p.cmdK();
+    assert.strictEqual(p.c.api.isOpen(), false, `nothing over ${label}`);
+    assert.ok(e.defaultPrevented, 'the key is still swallowed');
+    p.c.api.open();   // the Mac app's menu item goes through openQuickSwitcher() too
+    assert.strictEqual(p.c.api.isOpen(), false, `menu item over ${label}`);
+    close(p);
+    await tick();
+    p.cmdK();
+    assert.ok(p.c.api.isOpen(), `once ${label} is closed it opens`);
+  }
 
-  // The dialog layer's "Discard changes?" question (a real one: a changed field in an overlay, then Escape)
+  // Advanced settings (.st-overlay): found by the dialog layer on its own, no hand registration
+  let p = page();
+  const st = p.doc.createElement('div'); st.className = 'st-overlay'; p.doc.body.appendChild(st);
+  await tick();
+  p.cmdK();
+  assert.strictEqual(p.c.api.isOpen(), false, 'over Advanced settings');
+
+  // The dialog layer's "Discard changes?" question (a changed field in an overlay, then Escape)
   p = page();
-  const ov = p.doc.createElement('div'); ov.className = 'gs-overlay'; p.doc.body.appendChild(ov); p.guard.open(ov);
+  const ov = p.doc.createElement('div'); ov.className = 'gs-overlay'; p.doc.body.appendChild(ov);
   const field = p.doc.createElement('input'); ov.appendChild(field);
+  await tick();
   field.focus(); field.value = 'changed'; p.dispatch(field, 'input');
   p.key(field, 'Escape');
   assert.ok(p.guard._confirm(), 'the question is up');
@@ -278,12 +372,14 @@ test('it never opens over another dialog: not over a settings overlay, not over 
   // A native <dialog> opened with showModal()
   p = page();
   const d = p.doc.createElement('dialog'); p.doc.body.appendChild(d); d.showModal();
+  await tick();
   p.cmdK();
   assert.strictEqual(p.c.api.isOpen(), false, 'over a modal <dialog>');
 
   // A docked panel leaves the page usable: the switcher opens; and its own toggle still closes it
   p = page();
-  const dock = p.doc.createElement('div'); dock.className = 'gs-overlay gs-dock'; p.doc.body.appendChild(dock); p.guard.open(dock);
+  const dock = p.doc.createElement('div'); dock.className = 'gs-overlay gs-dock'; p.doc.body.appendChild(dock);
+  await tick();
   p.cmdK();
   assert.ok(p.c.api.isOpen(), 'beside a docked panel');
   p.cmdK();
@@ -303,26 +399,38 @@ test('a held ⌘K (auto-repeat) neither toggles nor reaches the browser', () => 
   assert.strictEqual(p.c.api.isOpen(), false, 'a second deliberate press closes it');
 });
 
-test('before the agent list arrives it says so; when it arrives the open switcher shows it, keeping what was typed', () => {
-  const p = page({ agents: [], roster: null });   // loadAgents has not answered yet
+test('the agent list: loading, then arriving into an open switcher; a failed answer from the hub reads as a failure, not "No agents yet."', async () => {
+  const p = page({ agents: [], roster: null });
   p.cmdK();
   assert.strictEqual(p.status(), 'Loading agents…');
   p.key(p.q(), 'Enter');
   assert.deepStrictEqual(p.opened, [], 'Enter does nothing while loading');
   p.type('sc');
-  p.c.AGENTS.push(A('scout', 'Scout'), A('aide', 'Aide'));
-  p.c.window.__qsRoster = 'ready';
-  p.c.api.roster();   // loadAgents calls it
+  p.c.fetch = async () => ({ ok: true, status: 200, json: async () => ({ agents: [A('scout', 'Scout'), A('aide', 'Aide')] }) });
+  await p.c.api.loadAgents();
   assert.deepStrictEqual(p.rows(), ['scout']);
   assert.strictEqual(p.q().value, 'sc');
   assert.strictEqual(p.status(), '');
   p.key(p.q(), 'Enter');
   assert.deepStrictEqual(p.opened, ['scout']);
 
-  const empty = page({ agents: [], roster: 'ready' }); empty.cmdK();
-  assert.strictEqual(empty.status(), 'No agents yet.');
-  const failed = page({ agents: [], roster: 'failed' }); failed.cmdK();
-  assert.match(failed.status(), /^Could not load your agents/);
+  const answers = {
+    '503 with a JSON body': { ok: false, status: 503, json: async () => ({ error: 'busy' }) },
+    'OK without a list': { ok: true, status: 200, json: async () => ({ agents: 'nope' }) },
+    'an unreadable body': { ok: true, status: 200, json: async () => { throw new Error('bad json'); } },
+  };
+  for (const [label, res] of Object.entries(answers)) {
+    const f = page({ agents: [], roster: null });
+    f.cmdK();
+    f.c.fetch = async () => res;
+    await f.c.api.loadAgents();
+    assert.match(f.status(), /^Could not load your agents/, label);
+  }
+  const empty = page({ agents: [], roster: null });
+  empty.cmdK();
+  empty.c.fetch = async () => ({ ok: true, status: 200, json: async () => ({ agents: [] }) });
+  await empty.c.api.loadAgents();
+  assert.strictEqual(empty.status(), 'No agents yet.', 'a real empty list');
   const none = page(); none.cmdK(); none.type('zzz');
   assert.strictEqual(none.status(), 'No agent matches “zzz”.');
 });
@@ -368,7 +476,7 @@ test('the shortcut: ⌘K on a Mac and Ctrl+K elsewhere; other combinations are l
   assert.strictEqual(run(false, {}).opened, 0, 'a plain k is typing');
 });
 
-test('keys in the search box: ↓/↑ and Ctrl+N/P wrap, Enter opens, an input method composing is left alone', () => {
+test('keys in the search box: ↓/↑ and Ctrl+N/P wrap, an input method composing is left alone', () => {
   const p = page();
   p.cmdK();
   const sel = () => p.q().getAttribute('aria-activedescendant');

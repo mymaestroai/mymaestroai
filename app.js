@@ -7672,6 +7672,7 @@
         const response = await fetch('/api/agents' + ownerQuery, { credentials: 'include' });
         const data = await response.json();
         AGENTS = data.agents || [];
+        window.__qsRoster = response.ok && data && Array.isArray(data.agents) ? 'ready' : 'failed';   // ⌘K switcher: "No agents yet." only for a real empty list
         if (typeof voiceWakeRecheck === 'function') voiceWakeRecheck();   // an agent's recognizer can have changed
         { const ri = document.getElementById('recordings-item'); if (ri) ri.style.display = AGENTS.some(a => a && a.recordings && a.recordings.canDownload === true) ? '' : 'none'; }   // ⋯ menu: Recordings only for a person on at least one agent's download list
         for (const a of AGENTS) { if (a.owner) agentOwnerCache.set(a.name, a.owner); else agentOwnerCache.delete(a.name); }
@@ -7682,7 +7683,6 @@
           for (const a of AGENTS) map[a.name] = { busy: a.busy, busySince: a.busySince, activity: a.activity, pendingQuestion: a.pendingQuestion };
           applyStatusSnapshot(map, { namedOnly: true });
         }
-        window.__qsRoster = 'ready';
         console.log(`Loaded ${AGENTS.length} agents with SOUL data`);
         AGENTS.forEach(a => {
           if (a.soul) console.log(`  ${a.name}: ${a.soul.length} chars of SOUL`);
@@ -23503,35 +23503,44 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     // caret go back to the field that had them (a message draft). It never opens over another dialog or over the
     // "Discard changes?" question. The Mac app's Go ▸ Jump to Agent… menu item calls openQuickSwitcher() too.
     //
-    // Recents are per signed-in person: localStorage 'hub-qs-recent:<user id>', agent names, most recently opened first
-    // (at most 30), none before /api/me answers. When the page learns who is signed in it drops the old shared key and
-    // other people's lists; signing out drops them all. Only agents in the person's own list (AGENTS, filtered by the
-    // hub) are ever shown, so a recent name never appears unless that person can see the agent. Plain functions, not
-    // consts: switchToChat records an open while the page script is still loading.
+    // Recents live in this tab only (sessionStorage 'hub-qs-recent:<user id>': agent names, most recently opened first, at
+    // most 30), never in storage other tabs or accounts share: a tab left open by one person cannot leave a list another
+    // person's tab could read. They survive a reload; a new tab starts in name order. None before /api/me answers; when
+    // the page learns who is signed in it drops this tab's lists for anyone else, and signing out drops them all. Any
+    // 'hub-qs-recent*' key an earlier build left in localStorage is removed on load. Only agents in the person's own list
+    // (AGENTS, filtered by the hub) are ever shown. Plain functions, not consts: switchToChat records an open while the
+    // page script is still loading.
     function qsRecentStore() {
       const me = window.hubMe, id = me && me.user && me.user.id;
       return { key: id ? `hub-qs-recent:${id}` : null, prefix: 'hub-qs-recent', max: 30 };
     }
     let qsList = [], qsSel = 0;
+    function qsRecentBox() { try { return window.sessionStorage || null; } catch { return null; } }
     function qsRecent() {
       const { key, max } = qsRecentStore();
-      if (!key) return [];
-      try { const v = JSON.parse(localStorage.getItem(key) || '[]'); return Array.isArray(v) ? v.filter(x => typeof x === 'string' && x).slice(0, max) : []; } catch { return []; }
+      const box = qsRecentBox();
+      if (!key || !box) return [];
+      try { const v = JSON.parse(box.getItem(key) || '[]'); return Array.isArray(v) ? v.filter(x => typeof x === 'string' && x).slice(0, max) : []; } catch { return []; }
     }
     function qsNoteOpened(name) {
       const { key, max } = qsRecentStore();
-      if (!name || !key) return;
-      try { localStorage.setItem(key, JSON.stringify([name, ...qsRecent().filter(x => x !== name)].slice(0, max))); } catch { /* private mode: no recents */ }
+      const box = qsRecentBox();
+      if (!name || !key || !box) return;
+      try { box.setItem(key, JSON.stringify([name, ...qsRecent().filter(x => x !== name)].slice(0, max))); } catch { /* storage off: no recents */ }
     }
-    // Every recents list but `keep` (null: all of them), including the shared key older builds wrote.
+    // Recents keys in a store: 'hub-qs-recent' (earlier builds) and 'hub-qs-recent:<user id>'.
+    function qsRecentKeys(store) {
+      const { prefix } = qsRecentStore(), out = [];
+      try { for (let i = 0; i < store.length; i++) { const k = store.key(i); if (k && (k === prefix || k.startsWith(prefix + ':'))) out.push(k); } } catch { /* no storage */ }
+      return out;
+    }
+    // Every recents list in this tab but `keep` (null: all of them), and every one an earlier build left in localStorage.
     function qsForgetRecents(keep) {
-      const { prefix } = qsRecentStore();
-      try {
-        const drop = [];
-        for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k && (k === prefix || k.startsWith(prefix + ':')) && k !== keep) drop.push(k); }
-        for (const k of drop) localStorage.removeItem(k);
-      } catch { /* no storage */ }
+      try { for (const k of qsRecentKeys(localStorage)) localStorage.removeItem(k); } catch { /* no storage */ }
+      const box = qsRecentBox();
+      if (box) try { for (const k of qsRecentKeys(box)) if (k !== keep) box.removeItem(k); } catch { /* no storage */ }
     }
+    try { for (const k of qsRecentKeys(localStorage)) localStorage.removeItem(k); } catch { /* no storage */ }   // on load: nothing of this feature stays in localStorage
     // 0 = the name starts with the query, 1 = a word in it does, 2 = it contains it, 3 = its letters appear in order,
     // Infinity = no match. An empty query matches everything (0).
     function qsScore(agent, q) {
@@ -23566,11 +23575,15 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       return s;
     }
     function qsIsOpen() { return !!document.getElementById('qs-overlay'); }
-    // Another dialog has the screen: the "Discard changes?" question, a native modal <dialog>, or any other open layer
-    // that covers the page (settings, an agent's question...). Docked side panels leave the page usable, so they don't count.
+    // Another dialog has the screen: the "Discard changes?" question, a native modal <dialog>, Simple's Settings sheet, the
+    // expanded Reasoning or Tool calls view, or any other open layer of the dialog layer that covers the page (settings, an
+    // agent's question...). Docked side panels leave the page usable, so they don't count.
     function qsBlocked() {
       try { if (dialogGuard._confirm()) return true; } catch { /* no guard */ }
       try { if (document.querySelector(':modal')) return true; } catch { /* :modal unsupported */ }
+      // Views that cover the page without the dialog layer: Simple's Settings sheet (openSimpleSettings, present only while
+      // open) and the expanded Reasoning and Tool calls views (openReasoningFull / openToolsFull: shown while .open).
+      if (document.querySelector('#simple-settings, .rsn-full-overlay.open')) return true;
       try {
         return dialogGuard.layers().some(l => l.el && l.el.id !== 'qs-overlay' && l.el.isConnected !== false && (l.isDialog ? !!l.el.open && dialogIsModal(l.el) : l.modal));
       } catch { return false; }
@@ -23665,7 +23678,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     }
     function qsKey(e) {
       if (e.isComposing || e.keyCode === 229) return;   // an input method is still composing the text
-      if (e.key === 'Escape' || e.key === 'Esc') { e.preventDefault(); closeQuickSwitcher(); return; }
+      if (e.key === 'Escape' || e.key === 'Esc') { e.preventDefault(); e.stopPropagation(); closeQuickSwitcher(); return; }   // this Esc is the switcher's only (not the Workers menu's too)
       const n = qsList.length;
       const down = e.key === 'ArrowDown' || (e.ctrlKey && !e.metaKey && (e.key === 'n' || e.key === 'N'));
       const up = e.key === 'ArrowUp' || (e.ctrlKey && !e.metaKey && (e.key === 'p' || e.key === 'P'));
