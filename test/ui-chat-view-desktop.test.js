@@ -166,7 +166,7 @@ test('the Load earlier button: shown at the top while next is not null (Loadingâ
 test('a hub-started live turn in the main view: its card wrapper gets chat-view-hidden; the all view is as before', () => {
   const start = src.slice(src.indexOf('async function onHubTurnStart('), src.indexOf('function onHubTurnDelta('));
   // changed (Set up teams): a set-up turn stays in the main view like build_team
-  assert.match(start, /const hubMain = chatViewGet\(localStorage\) === 'main' && chatViewIsHubOrigin\(ev\.origin\) && ev\.origin\.kind !== 'build_team' && ev\.origin\.kind !== 'team_setup';/);
+  assert.match(start, /const hubMain = chatViewGet\(localStorage\) === 'main' && chatViewIsHubOrigin\(ev\.origin\) && ev\.origin\.kind !== 'build_team' && ev\.origin\.kind !== 'team_setup' && ev\.origin\.kind !== 'optimize_team';/);
   assert.match(start, /card = foldBuildCard\(panel, \{[^}]*\}\);\s*if \(hubMain\) \{ card\.wrap\.classList\.add\('chat-view-hidden'\); card\.hiddenMsgs = \[\]; \}/);
   assert.match(start, /foldAutoOn\(\) \|\| hubMain \? autoKindOfOrigin\(ev\.origin\)/, 'the card is built even with folding off: it is how the turn stays hideable');
   assert.ok(!/chat-view-hidden/.test(start.replace(/if \(hubMain\) \{ card\.wrap\.classList\.add\('chat-view-hidden'\)/, '')), 'only the hubMain branch hides');

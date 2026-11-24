@@ -430,8 +430,8 @@ test('buildTeamStart: POST the route, 202 opens the lead chat, an error shows th
 
 test('applySnapshot keeps buildingTeamFor in live entries, setLive clears it when idle, the list click starts a build', () => {
   // changed (Set up teams): the same key list also carries offerPending and settingUpTeams
-  assert.match(slice('function applySnapshot(', 'let wkGoneState'), /'consultedBy', 'buildingTeamFor', 'offerPending', 'settingUpTeams'\]/);
-  assert.match(slice('function setLive(', 'function paintStatus'), /next\.consultedBy = null; next\.buildingTeamFor = null;/);
+  assert.match(slice('function applySnapshot(', 'let wkGoneState'), /'consultedBy', 'buildingTeamFor', 'reviewingTeamFor', 'offerPending', 'settingUpTeams'\]/);
+  assert.match(slice('function setLive(', 'function paintStatus'), /next\.consultedBy = null; next\.buildingTeamFor = null; next\.reviewingTeamFor = null;/);
   assert.match(js, /const bt = e\.target\.closest\('\[data-build-team\]'\);\n\s+if \(bt\) \{ if \(!bt\.disabled\) buildTeamStart\(bt\.dataset\.buildTeam\); return; \}/);
 });
 

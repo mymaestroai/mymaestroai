@@ -108,7 +108,9 @@ function world({ stored, storageThrows, simple, member } = {}) {
     fnSrc('capName'), fnSrc('sidebarViewStored'), fnSrc('sidebarViewOk'), fnSrc('sidebarViewSet'), fnSrc('sidebarTabsApply'),
     'async ' + fnSrc('sidebarTabsLoad'), fnSrc('setupTabs'), fnSrc('teamsOpenGet'), fnSrc('teamsOpenToggle'), fnSrc('teamsClick'),
     fnSrc('agentLiveState'), fnSrc('bgCountOf'), "const buildTeamPending = new Set(); let agentMenuEl = null, agentMenuOpener = null, agentMenuOff = null;",
-    fnSrc('teamBuilding'), fnSrc('agentCanBuildTeam'), fnSrc('agentMenuEntries'), fnSrc('agentMenuBtnHtml'), fnSrc('buildTeamCtlHtml'), fnSrc('buildLineHtml'),
+    "const optimizeTeamPending = new Set(); const optimizeEstimates = {};",
+    fnSrc('teamBuilding'), fnSrc('agentCanBuildTeam'), fnSrc('teamReviewing'), fnSrc('agentCanOptimizeTeam'), fnSrc('optimizeSubText'), fnSrc('agentMenuEntries'),
+    'async ' + fnSrc('optimizeTeamStart'), fnSrc('optimizeEstimateLoad'), fnSrc('agentMenuBtnHtml'), fnSrc('buildTeamCtlHtml'), fnSrc('buildLineHtml'),
     fnSrc('paintBuildControls'), 'async ' + fnSrc('buildTeamStart'), fnSrc('agentMenuClose'), fnSrc('agentMenuOpenAt'), fnSrc('agentMenuToggle'), fnSrc('agentButton'),
     fnSrc('questionChecklistOf'), fnSrc('questionChecklistHtml'), fnSrc('questionCheckedIds'), fnSrc('askResponseBody'),
     fnSrc('teamsRowHtml'), fnSrc('teamsBlockHtml'), fnSrc('teamsSubtreeHtml'), fnSrc('renderTeams'), fnSrc('teamsRepaintSoon'),
@@ -117,7 +119,7 @@ function world({ stored, storageThrows, simple, member } = {}) {
     fnSrc('teamSetupLeadDisplay'), fnSrc('teamSetupBusy'), fnSrc('teamSetupLines'), fnSrc('teamSetupDate'), fnSrc('teamSetupLineHtml'), fnSrc('teamSetupApply'),
     'async ' + fnSrc('teamSetupLoad'), fnSrc('teamSetupLoadSoon'), fnSrc('teamSetupPaint'), fnSrc('teamSetupOfferHtml'), fnSrc('teamSetupUndoRows'), fnSrc('teamSetupChatPaint'),
     'async ' + fnSrc('teamSetupStart'), 'async ' + fnSrc('teamSetupUndo'), 'function setAgentLive() {} function loadAgents() { return Promise.resolve(); }',
-    'this.api = { setupTabs, sidebarViewSet, sidebarTabsApply, renderTeams, teamsClick, teamsRepaintSoon, teamsOpenToggle, agentMenuEntries, agentMenuBtnHtml, buildLineHtml, agentButton, buildTeamStart, agentMenuOpenAt, agentMenuClose, paintBuildControls, questionChecklistOf, questionChecklistHtml, askResponseBody };'].join('\n');
+    'this.api = { setupTabs, sidebarViewSet, sidebarTabsApply, renderTeams, teamsClick, teamsRepaintSoon, teamsOpenToggle, agentMenuEntries, agentMenuBtnHtml, buildLineHtml, agentButton, buildTeamStart, optimizeTeamStart, agentMenuOpenAt, agentMenuClose, paintBuildControls, questionChecklistOf, questionChecklistHtml, askResponseBody };'].join('\n');
   ctx.window = ctx;
   vm.createContext(ctx);
   vm.runInContext(src, ctx);
@@ -531,7 +533,7 @@ test('row menu entries: admin gets Settings, a main agent with no team also Buil
   w.ctx.AGENTS = [MAIN('boss'), MAIN('solo'), A('sam', { reportsTo: 'boss' })];
   const e = (n) => w.api.agentMenuEntries(w.ctx.AGENTS.find((a) => a.name === n)).map((x) => x.label);
   assert.deepStrictEqual([...e('solo')], ['Settings', 'Build team']);
-  assert.deepStrictEqual([...e('boss')], ['Settings'], 'a main agent with a team has no Build team entry');
+  assert.deepStrictEqual([...e('boss')], ['Settings', 'Optimize team'], 'a main agent with a team has Optimize team, never Build team');
   assert.deepStrictEqual([...e('sam')], ['Settings'], 'a worker is not a main agent');
   const m = world({ member: true });
   m.ctx.AGENTS = [MAIN('solo')];
@@ -646,9 +648,9 @@ test('the shared menu: right-click path opens it, Escape closes it, a row with n
 test('app.js wiring: right-click on a row, keyboard, status copy points carry buildingTeamFor, Simple and CSS pins', () => {
   assert.match(app, /document\.addEventListener\('contextmenu'[\s\S]{0,300}#agent-list \.agent-btn\[data-agent\], #teams-list \.teams-row\[data-agent\]/);
   // changed (Set up teams): the same key list also carries offerPending and settingUpTeams
-  assert.match(app, /for \(const k of \['worker', 'parent', 'label', 'model', 'consultedBy', 'buildingTeamFor', 'offerPending', 'settingUpTeams'\]\)/, 'applyStatusSnapshot copies it');
+  assert.match(app, /for \(const k of \['worker', 'parent', 'label', 'model', 'consultedBy', 'buildingTeamFor', 'reviewingTeamFor', 'offerPending', 'settingUpTeams'\]\)/, 'applyStatusSnapshot copies it');
   assert.match(app, /pendingQuestion: a\.pendingQuestion, buildingTeamFor: a\.buildingTeamFor \|\| null/, 'loadAgents copies it');
-  assert.match(app, /next\.consultedBy = null; next\.buildingTeamFor = null;/, 'idle clears it');
+  assert.match(app, /next\.consultedBy = null; next\.buildingTeamFor = null; next\.reviewingTeamFor = null;/, 'idle clears it');
   assert.match(html, /\.agent-btn:has\(\.agent-menu-btn\) \.agent-info \{ padding-right: 18px; \}/);
   assert.match(html, /\.agent-btn \.name-text \{ overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; \}/, 'long names truncate (160px and 240px sidebars)');
   assert.match(html, /html\.mm-simple \.agent-menu-btn, html\.mm-simple \.agent-build-line, html\.mm-simple \.build-team-btn \{ display: none !important; \}/);

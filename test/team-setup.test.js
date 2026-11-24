@@ -575,7 +575,7 @@ test('the playbook has the Set up teams section and the update list holds the ne
   assert.equal(/Maestro/.test(pb.split('# Set up teams')[1]), false, 'the lead is not named');
   const upd = JSON.parse(fs.readFileSync(path.join(dir, 'workspace-updates.json'), 'utf8'))['maestro/TEAM-PLAYBOOK.md'];
   assert.equal(upd.current, require('crypto').createHash('sha256').update(pb).digest('hex'));
-  assert.deepEqual(upd.previous, ['758602a0772948e76162f5c4ed102e5f13dd3918200cb9ac27707be69534fed3']);
+  assert.deepEqual(upd.previous, ['758602a0772948e76162f5c4ed102e5f13dd3918200cb9ac27707be69534fed3', '59ec7edc513a3435897aa8a8e63cbfc45b732680c99fa6a0be74205b56550f45']);   // the Teams view version, then the Set up teams version
 });
 
 // ── review fixes ──

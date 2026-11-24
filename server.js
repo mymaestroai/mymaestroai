@@ -1632,6 +1632,37 @@ async function handleHttpRequest(req, res) {
       return jsonResponse(res, out.status, out.body);
     }
 
+    // POST /api/agents/:name/optimize-team: start the review of a main agent's team (lib/team-review, lib/sdk-chat startOptimizeTeam).
+    // The same gate as build-team: only an admin's own signed-in browser session. The lead runs it, or the boss itself when its content stays on its own service.
+    // GET /api/agents/:name/optimize-team/estimate: the counts the menu entry shows ({ days, turns, handOffs }), same gate.
+    if (/^\/api\/agents\/([^/]+)\/optimize-team(\/estimate)?$/.test(pathname) && (req.method === 'POST' || req.method === 'GET')) {
+      const isEstimate = pathname.endsWith('/estimate');
+      if (isEstimate !== (req.method === 'GET')) return jsonResponse(res, 405, { error: 'method not allowed' });
+      let name; try { name = decodeURIComponent(pathname.split('/')[3]); } catch { return jsonResponse(res, 400, { error: 'bad agent name' }); }
+      const reviewLib = require('./lib/team-review'), agentsLib = require('./lib/agents'), sdkChatLib = require('./lib/sdk-chat');
+      const adminSession = req.hubIdentKind === 'user' && !req.hubPendingTotp && !req.hubToken && !req.hubService && access.isAdmin(req.hubUser);
+      const adminIdSet = () => new Set(hubAuth.admins().map(u => String(u.id)));
+      if (isEstimate) {
+        const out = reviewLib.routeOptimizeEstimate({
+          adminSession, name, agents: await getAgents(),
+          makeEstimate: (boss, all) => reviewLib.estimate({ boss, agentsList: all, transcript: require('./lib/transcript').getTranscript(), handOffs: sdkChatLib.handOffRecordsNow }),
+        });
+        return jsonResponse(res, out.status, out.body);
+      }
+      const out = await reviewLib.routeOptimizeTeam({
+        adminSession, name, agents: await getAgents(), ownerLeadNames: agentsLib.ownerLeadNames, defaultLeadAgent: agentsLib.defaultLeadAgent,
+        runs: sdkChatLib.optimizeTeamRuns, halted: () => require('./lib/hub-halt').getHubHalt().isHalted(), isBusy: isAgentActive,
+        keepOnBox: (rec) => sdkChatLib.researchKeptOnBox(rec),
+        makeMessage: async (boss, all, own) => reviewLib.reviewMessage(reviewLib.reviewFacts({
+          boss, agentsList: all, adminIds: adminIdSet(), transcript: require('./lib/transcript').getTranscript(), handOffs: sdkChatLib.handOffRecordsNow,
+          telemetryRows: require('./lib/team-usage').readRows(reviewLib.REVIEW_DAYS * 24), models: await teamModelFacts(), tierOf: require('./lib/model-tiers').tierOf,
+          now: Date.now(), keepOnBox: own === true,
+        })),
+        start: sdkChatLib.startOptimizeTeam, userId: req.hubUser && req.hubUser.id != null ? String(req.hubUser.id) : null,
+      });
+      return jsonResponse(res, out.status, out.body);
+    }
+
     // PATCH /api/agents/:name — update agent fields (category, etc.)
     if (/^\/api\/agents\/([^/]+)$/.test(pathname) && req.method === 'PATCH') {
       const name = decodeURIComponent(pathname.split('/')[3]);

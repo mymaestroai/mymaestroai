@@ -7717,7 +7717,7 @@
         // Newer hubs report busy/busySince/activity/pendingQuestion per agent; older ones do not (then no dots are drawn).
         if (AGENTS.some(a => 'busy' in a)) {
           const map = {};
-          for (const a of AGENTS) map[a.name] = { busy: a.busy, busySince: a.busySince, activity: a.activity, pendingQuestion: a.pendingQuestion, buildingTeamFor: a.buildingTeamFor || null, ...('offerPending' in a ? { offerPending: a.offerPending === true } : {}), ...('settingUpTeams' in a ? { settingUpTeams: a.settingUpTeams === true } : {}) };
+          for (const a of AGENTS) map[a.name] = { busy: a.busy, busySince: a.busySince, activity: a.activity, pendingQuestion: a.pendingQuestion, buildingTeamFor: a.buildingTeamFor || null, reviewingTeamFor: a.reviewingTeamFor || null, ...('offerPending' in a ? { offerPending: a.offerPending === true } : {}), ...('settingUpTeams' in a ? { settingUpTeams: a.settingUpTeams === true } : {}) };
           applyStatusSnapshot(map, { namedOnly: true });
         }
         console.log(`Loaded ${AGENTS.length} agents with SOUL data`);
@@ -8386,10 +8386,28 @@
     function agentCanBuildTeam(a) {
       return !!a && isHubAdmin() && !simpleOn() && hubTeams.isMain(a) && !hubTeams.hasTeam(a.name, AGENTS);
     }
+    // Optimize team (admins): a main agent WITH a team shows this instead of Build team. Its sublabel is the size of what the review reads,
+    // fetched once per menu opening from GET /api/agents/:name/optimize-team/estimate.
+    const optimizeTeamPending = new Set();   // main agents whose Optimize team request is in flight from this page
+    const optimizeEstimates = {};            // name -> { days, turns, handOffs } once fetched (kept until the next menu opening refreshes it)
+    function teamReviewing(name) {
+      if (optimizeTeamPending.has(name)) return true;
+      for (const s of Object.values(agentStatus)) if (s && s.reviewingTeamFor === name) return true;   // the reviewer's status carries it while the turn runs
+      return false;
+    }
+    function agentCanOptimizeTeam(a) {
+      return !!a && isHubAdmin() && !simpleOn() && hubTeams.isMain(a) && hubTeams.hasTeam(a.name, AGENTS);
+    }
+    function optimizeSubText(name) {
+      const e = optimizeEstimates[name];
+      if (!e) return 'reads the last 30 days';
+      return `reads ${Number(e.days) || 30} days: ${Number(e.turns) || 0} turns, ${Number(e.handOffs) || 0} hand-offs`;
+    }
     function agentMenuEntries(a) {
       if (!a || !isHubAdmin() || simpleOn()) return [];
       const out = [{ key: 'settings', label: 'Settings' }];
       if (agentCanBuildTeam(a)) out.push(teamBuilding(a.name) ? { key: 'build', label: 'Building…', disabled: true } : { key: 'build', label: 'Build team' });
+      if (agentCanOptimizeTeam(a)) out.push(teamReviewing(a.name) ? { key: 'optimize', label: 'Reviewing…', disabled: true } : { key: 'optimize', label: 'Optimize team', sub: optimizeSubText(a.name) });
       return out;
     }
     function agentMenuBtnHtml(a, tag) {
@@ -8443,6 +8461,39 @@
         if (typeof teamsRepaintSoon === 'function') teamsRepaintSoon();
       }
     }
+    async function optimizeTeamStart(name, event) {
+      if (event) { event.stopPropagation(); if (event.preventDefault) event.preventDefault(); }
+      if (!name || teamReviewing(name)) return;
+      optimizeTeamPending.add(name);
+      if (typeof teamsRepaintSoon === 'function') teamsRepaintSoon();
+      try {
+        const r = await fetch(`/api/agents/${encodeURIComponent(name)}/optimize-team`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+        let d = {};
+        try { d = await r.json(); } catch { d = {}; }
+        if (r.status === 202 || (r.ok && d && d.ok)) {
+          const rv = d && d.reviewer;
+          if (rv) { const ra = AGENTS.find(a => a.name === rv); startSoloChat(rv, (ra && ra.model) || ''); }   // the reviewer's chat, so the summary and plan are in view
+        } else alert((d && d.error) || `Could not start the review (${r.status}).`);
+      } catch (e) {
+        alert('Could not start the review: ' + (e && e.message ? e.message : 'no connection'));
+      } finally {
+        optimizeTeamPending.delete(name);
+        if (typeof teamsRepaintSoon === 'function') teamsRepaintSoon();
+      }
+    }
+    // Reads the size of the review once per menu opening and writes it into the open menu's sublabel.
+    function optimizeEstimateLoad(name, menuEl) {
+      if (typeof fetch !== 'function') return;
+      fetch(`/api/agents/${encodeURIComponent(name)}/optimize-team/estimate`, { credentials: 'include' })
+        .then(r => (r && r.ok ? r.json() : null))
+        .then(d => {
+          if (!d || typeof d !== 'object') return;
+          optimizeEstimates[name] = { days: d.days, turns: d.turns, handOffs: d.handOffs };
+          const sub = menuEl && menuEl.querySelector ? menuEl.querySelector('[data-act="optimize"] .agent-menu-sub') : null;
+          if (sub) sub.textContent = optimizeSubText(name);
+        })
+        .catch(() => { /* the sublabel stays "reads the last 30 days" */ });
+    }
     let agentMenuEl = null, agentMenuOpener = null, agentMenuOff = null;
     function agentMenuClose(refocus) {
       if (agentMenuOff) { agentMenuOff(); agentMenuOff = null; }
@@ -8461,7 +8512,9 @@
       el.id = 'agent-row-menu'; el.className = 'agent-row-menu';
       el.setAttribute('role', 'menu');
       el.setAttribute('aria-label', `More for ${a.display || capName(a.name)}`);
-      el.innerHTML = entries.map(e => `<button type="button" role="menuitem" class="agent-menu-item" data-act="${e.key}"${e.disabled ? ' disabled' : ''}>${hubEsc(e.label)}</button>`).join('');
+      el.innerHTML = entries.map(e => `<button type="button" role="menuitem" class="agent-menu-item" data-act="${e.key}"${e.disabled ? ' disabled' : ''}>${hubEsc(e.label)}${e.sub ? `<small class="agent-menu-sub">${hubEsc(e.sub)}</small>` : ''}</button>`).join('');
+      delete optimizeEstimates[name];   // read afresh at each opening
+      if (entries.some(e => e.key === 'optimize' && !e.disabled)) optimizeEstimateLoad(name, el);
       el.addEventListener('click', ev => {
         const b = ev.target && ev.target.closest ? ev.target.closest('.agent-menu-item') : null;
         if (!b || b.disabled) return;
@@ -8469,6 +8522,7 @@
         agentMenuClose(act === 'settings' ? false : true);
         if (act === 'settings') openAgentSettings(name, ev);
         else if (act === 'build') buildTeamStart(name);
+        else if (act === 'optimize') optimizeTeamStart(name);
       });
       el.addEventListener('keydown', ev => {
         const items = Array.from(el.querySelectorAll('.agent-menu-item:not([disabled])'));
@@ -10223,9 +10277,10 @@
       if (!name) return;
       const cur = agentStatus[name] || { busy: false, busySince: null, activity: null, pendingQuestion: false };
       const next = { ...cur, ...patch };
-      if (!next.busy) { next.busySince = null; next.activity = null; next.pendingQuestion = false; next.consultedBy = null; next.buildingTeamFor = null; next.settingUpTeams = false; }   // offerPending is not a turn: it stays while the lead is idle
+      if (!next.busy) { next.busySince = null; next.activity = null; next.pendingQuestion = false; next.consultedBy = null; next.buildingTeamFor = null; next.reviewingTeamFor = null; next.settingUpTeams = false; }   // offerPending is not a turn: it stays while the lead is idle
       else if (!next.busySince) next.busySince = cur.busySince || new Date().toISOString();
       agentStatus[name] = next;
+      if ((cur.reviewingTeamFor || null) !== (next.reviewingTeamFor || null) && typeof teamsRepaintSoon === 'function') teamsRepaintSoon();   // the menu's "Reviewing…" is read when it opens; rows repaint
       if ((cur.buildingTeamFor || null) !== (next.buildingTeamFor || null)) paintBuildControls();   // "Building…" on that main agent's Build team controls
       if (!!cur.offerPending !== !!next.offerPending) teamSetupLoadSoon();   // the offer was answered (here or on another device) or came up: the card follows
       if (!next.busy) { delete agentSteps[name]; delete busyRun[name]; }   // idle: no step or turn origin survives into the next turn (a turn_end may have been missed)
@@ -10253,7 +10308,7 @@
     // is the whole truth: a key it lacks is cleared (an agent no longer consulted loses its consultedBy).
     function statusPatchOf(s, keepMissing) {
       const patch = { busy: !!s.busy, busySince: s.busySince || null, activity: s.activity || null, pendingQuestion: !!s.pendingQuestion };
-      for (const k of ['worker', 'parent', 'label', 'model', 'consultedBy', 'buildingTeamFor', 'offerPending', 'settingUpTeams']) if (k in s) patch[k] = s[k]; else if (!keepMissing) patch[k] = null;
+      for (const k of ['worker', 'parent', 'label', 'model', 'consultedBy', 'buildingTeamFor', 'reviewingTeamFor', 'offerPending', 'settingUpTeams']) if (k in s) patch[k] = s[k]; else if (!keepMissing) patch[k] = null;
       if ('background' in s) patch.background = Math.max(0, Math.floor(Number(s.background)) || 0); else if (!keepMissing) patch.background = 0;   // work in the background; the full feed sends it only when above 0
       return patch;
     }
@@ -10939,10 +10994,10 @@
       if (k === 'user' || k === 'comms') return null;
       return 'notice';
     }
-    // Build Team and Set up teams: the person pressed it, so the turn's replies show open under its card (never folded away).
+    // Build Team, Set up teams and Optimize team: the person pressed it, so the turn's replies show open under its card (never folded away).
     function autoOwnOrigin(origin) {
       const k = origin && typeof origin === 'object' ? origin.kind : '';
-      return k === 'build_team' || k === 'team_setup';
+      return k === 'build_team' || k === 'team_setup' || k === 'optimize_team';
     }
     function autoQuoted(s) {
       const m = /"([^"\n]*)"/.exec(s || '');
@@ -11220,6 +11275,7 @@
       if (ev.turnId && hubTurns[ev.turnId]) return;   // replayed after a reconnect (?since=): the turn is already followed
       setAgentLive(ev.agent, { busy: true, busySince: ev.startedAt || null, activity: ev.activity || hubOriginLabel(ev.origin),
         ...(ev.buildingTeamFor || (ev.origin && ev.origin.kind === 'build_team' && ev.origin.for) ? { buildingTeamFor: ev.buildingTeamFor || ev.origin.for } : {}),
+        ...(ev.reviewingTeamFor || (ev.origin && ev.origin.kind === 'optimize_team' && ev.origin.for) ? { reviewingTeamFor: ev.reviewingTeamFor || ev.origin.for } : {}),
         ...(ev.settingUpTeams || (ev.origin && ev.origin.kind === 'team_setup') ? { settingUpTeams: true } : {}) });
       let chat = findSoloChat(ev.agent);
       if (ev.origin?.kind === 'user') {
@@ -11242,8 +11298,8 @@
       let card = null;
       let retiredReattach = false;   // a re-attach of this turn was followed before turn_start came; its bubble gave way to the card
       // Main view: a hub-started turn is still followed (its card), but hidden unless its reply is marked for the owner.
-      // (Build Team and Set up teams are the exception: the person pressed them, so their card and reply stay in view.)
-      const hubMain = chatViewGet(localStorage) === 'main' && chatViewIsHubOrigin(ev.origin) && ev.origin.kind !== 'build_team' && ev.origin.kind !== 'team_setup';
+      // (Build Team, Set up teams and Optimize team are the exception: the person pressed them, so their card and reply stay in view.)
+      const hubMain = chatViewGet(localStorage) === 'main' && chatViewIsHubOrigin(ev.origin) && ev.origin.kind !== 'build_team' && ev.origin.kind !== 'team_setup' && ev.origin.kind !== 'optimize_team';
       const autoKind = foldAutoOn() || hubMain ? autoKindOfOrigin(ev.origin) : null;
       if (autoKind) {
         const info = autoInfoOf({ role: 'user', origin: ev.origin, content: ev.message || '' });
@@ -11298,7 +11354,7 @@
         for (const id of ids.slice(0, Math.max(0, ids.length - 50))) delete hubTurnCards[id];
         // A for_owner that arrived while the history loaded: apply it now that the card exists.
         // Build Team and Set up teams are the person's own: the reply leaves the card at once, as if marked for the owner.
-        if (ev.origin && (ev.origin.kind === 'build_team' || ev.origin.kind === 'team_setup')) hubForOwnerPending[ev.turnId] = { reason: '', at: Date.now() };
+        if (ev.origin && (ev.origin.kind === 'build_team' || ev.origin.kind === 'team_setup' || ev.origin.kind === 'optimize_team')) hubForOwnerPending[ev.turnId] = { reason: '', at: Date.now() };
         if (hubForOwnerPending[ev.turnId]) { delete hubForOwnerPending[ev.turnId]; hubMoveReplyOut(card); }
       }
       busyCardKeepLast(document.getElementById(`messages-${chat.id}`));

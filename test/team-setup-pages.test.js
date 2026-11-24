@@ -136,10 +136,10 @@ test('the lead row shows the existing waiting marker while offerPending (admins 
   const live = app.slice(app.indexOf('function agentLiveState('), app.indexOf('function paintAgentStatus('));
   assert.match(live, /const offer = !!\(s && s\.offerPending && isHubAdmin\(\)\);/);
   assert.match(live, /const question = !!\(s && s\.pendingQuestion\) \|\| offer;/, 'the same question path (live-question dot, "waiting for your answer" line)');
-  assert.match(app, /next\.buildingTeamFor = null; next\.settingUpTeams = false; \}/, 'idle clears settingUpTeams only');
+  assert.match(app, /next\.buildingTeamFor = null; next\.reviewingTeamFor = null; next\.settingUpTeams = false; \}/, 'idle clears settingUpTeams only (and the review key beside buildingTeamFor)');
   const idleLine = app.slice(app.indexOf('function setAgentLive('), app.indexOf('function dropGoneWorker(')).split('\n').find((l) => /if \(!next\.busy\) \{ next\.busySince/.test(l));
   assert.doesNotMatch(idleLine.replace(/\/\/.*$/, ''), /offerPending/, 'the idle reset (code, not its comment) leaves offerPending alone');
-  assert.match(app, /'buildingTeamFor', 'offerPending', 'settingUpTeams'\]\) if \(k in s\)/, 'both keys ride the status patch');
+  assert.match(app, /'buildingTeamFor', 'reviewingTeamFor', 'offerPending', 'settingUpTeams'\]\) if \(k in s\)/, 'both keys ride the status patch');
 });
 test('empty state (admins): the lead named, a "Set up teams" button, "Setting up…" while the turn runs; members keep the old text', () => {
   const r = fnFrom(app, 'renderTeams');
@@ -352,9 +352,9 @@ test('phone: an answer POSTs the choice and the card goes; an answer elsewhere c
 });
 test('phone: the lead row gets the existing question marker while offerPending (admins only); the status keys ride the snapshot', () => {
   assert.match(mjs, /const question = !done && !!\(s && \(s\.pendingQuestion \|\| \(s\.offerPending && isAdmin\(\)\)\)\);/);
-  assert.match(mjs, /'consultedBy', 'buildingTeamFor', 'offerPending', 'settingUpTeams'\]\) \{/);
-  assert.match(mjs, /next\.buildingTeamFor = null; next\.settingUpTeams = null; \}/);
-  assert.match(mjs, /ev\.origin\.kind !== 'build_team' && ev\.origin\.kind !== 'team_setup'\) \{/, 'a set-up turn stays in the main view');
+  assert.match(mjs, /'consultedBy', 'buildingTeamFor', 'reviewingTeamFor', 'offerPending', 'settingUpTeams'\]\) \{/);
+  assert.match(mjs, /next\.buildingTeamFor = null; next\.reviewingTeamFor = null; next\.settingUpTeams = null; \}/);
+  assert.match(mjs, /ev\.origin\.kind !== 'build_team' && ev\.origin\.kind !== 'team_setup' && ev\.origin\.kind !== 'optimize_team'\) \{/, 'a set-up turn stays in the main view');
 });
 test('phone: Teams list empty state has the lead named and a "Set up teams" button (admins); Setting up… while the turn runs; start POSTs and opens the lead\'s chat', async () => {
   const w = phone();

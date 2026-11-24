@@ -1779,7 +1779,7 @@ function setLive(name, patch) {
   if (!name) return;
   const cur = live[name] || { busy: false, busySince: null, activity: null, pendingQuestion: false };
   const next = { ...cur, ...patch };
-  if (!next.busy) { next.busySince = null; next.activity = null; next.pendingQuestion = false; next.consultedBy = null; next.buildingTeamFor = null; next.settingUpTeams = null; }   // offerPending is not a turn: it stays while the lead is idle
+  if (!next.busy) { next.busySince = null; next.activity = null; next.pendingQuestion = false; next.consultedBy = null; next.buildingTeamFor = null; next.reviewingTeamFor = null; next.settingUpTeams = null; }   // offerPending is not a turn: it stays while the lead is idle
   else if (!next.busySince) next.busySince = cur.busySince || new Date().toISOString();
   live[name] = next;
   if (!!cur.offerPending !== !!next.offerPending && typeof teamSetupLoadSoon === 'function') teamSetupLoadSoon();   // the offer was answered (here or on another device) or came up: the card follows
@@ -1800,7 +1800,7 @@ function applySnapshot(map, repaint = true, opts = {}) {
   for (const [name, s] of Object.entries(map)) {
     const patch = { busy: !!s.busy, busySince: s.busySince || null, activity: s.activity || null, pendingQuestion: !!s.pendingQuestion };
     if (!namedOnly || 'background' in s) patch.background = Number(s.background) > 0 ? Math.floor(Number(s.background)) : 0;   // work it runs in the background (the hub leaves the key out at 0)
-    for (const k of ['worker', 'parent', 'label', 'model', 'consultedBy', 'buildingTeamFor', 'offerPending', 'settingUpTeams']) {   // buildingTeamFor: the lead's Build Team turn names the main agent it builds for; offerPending / settingUpTeams: the Set up teams offer and turn on the lead
+    for (const k of ['worker', 'parent', 'label', 'model', 'consultedBy', 'buildingTeamFor', 'reviewingTeamFor', 'offerPending', 'settingUpTeams']) {   // buildingTeamFor / reviewingTeamFor: the lead's Build Team / Optimize team turn names the main agent it builds for; offerPending / settingUpTeams: the Set up teams offer and turn on the lead
       if (namedOnly && !(k in s)) continue;
       patch[k] = k === 'worker' ? busyIsWorker(name, s) : (s[k] || null);
     }
@@ -2668,6 +2668,47 @@ function buildTeamBtnHtml(name, cls, label) {
 function buildLineHtml(name) {
   return `<div class="build-line">No team yet · ${buildTeamBtnHtml(name, 'build-team-link', 'Build team')}</div>`;
 }
+// ── Optimize team (admins): a main agent WITH a team; the chat ⋮ menu entry, sublabel from the estimate ──
+function reviewingTeam(name) { return Object.values(live).some((s) => s && s.reviewingTeamFor === name); }
+const optimizeTeamPending = new Set();   // requests on their way from this page
+const optimizeEstimates = {};            // name -> { days, turns, handOffs }, read once per menu opening
+function optimizeHasTeam() {
+  const s = new Set();
+  if (!isAdmin() || !window.hubTeams) return s;
+  for (const m of window.hubTeams.tree(agents, live).mains) if (m.size) s.add(m.agent.name);
+  return s;
+}
+function optimizeSubText(name) {
+  const e = optimizeEstimates[name];
+  if (!e) return 'reads the last 30 days';
+  return 'reads ' + (Number(e.days) || 30) + ' days: ' + (Number(e.turns) || 0) + ' turns, ' + (Number(e.handOffs) || 0) + ' hand-offs';
+}
+async function optimizeEstimateLoad(name) {
+  delete optimizeEstimates[name];
+  menuTeamSync();
+  try {
+    const r = await api('/api/agents/' + encodeURIComponent(name) + '/optimize-team/estimate');
+    const d = r && r.ok ? await r.json() : null;
+    if (d && typeof d === 'object') { optimizeEstimates[name] = { days: d.days, turns: d.turns, handOffs: d.handOffs }; menuTeamSync(); }
+  } catch { /* the sublabel stays "reads the last 30 days" */ }
+}
+async function optimizeTeamStart(name) {
+  if (!name || reviewingTeam(name) || optimizeTeamPending.has(name)) return;
+  optimizeTeamPending.add(name);
+  menuTeamSync();
+  try {
+    const r = await api('/api/agents/' + encodeURIComponent(name) + '/optimize-team', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    let d = null;
+    try { d = await r.json(); } catch { d = null; }
+    if (r.status === 202 && d && d.ok) { navigate('chat', d.reviewer || name); return; }   // the summary and plan arrive in the reviewer's chat
+    toast((d && d.error) || `Could not start the review (${r.status})`, 5000);
+  } catch (err) {
+    toast(`Could not start the review: ${err.message}`, 5000);
+  } finally {
+    optimizeTeamPending.delete(name);
+    menuTeamSync();
+  }
+}
 async function buildTeamStart(name) {
   if (!name || buildingTeam(name) || buildTeamPending.has(name)) return;
   buildTeamPending.add(name);
@@ -3381,10 +3422,10 @@ function autoKindOfOrigin(origin) {
   if (k === 'user' || k === 'comms') return null;
   return 'notice';
 }
-// Build Team and Set up teams: the person pressed it, so the turn's replies show open under its card (never folded away).
+// Build Team, Set up teams and Optimize team: the person pressed it, so the turn's replies show open under its card (never folded away).
 function autoOwnOrigin(origin) {
   const k = origin && typeof origin === 'object' ? origin.kind : '';
-  return k === 'build_team' || k === 'team_setup';
+  return k === 'build_team' || k === 'team_setup' || k === 'optimize_team';
 }
 function autoQuoted(s) {
   const m = /"([^"\n]*)"/.exec(s || '');
@@ -14006,7 +14047,7 @@ function unhideHubTurn(t) {
 function onTurnStart(ev) {
   if (ev && ev.agent) activeTurnStart(openTurns, ev.agent, ev.turnId);
   if (ev.turnId && hubTurns[ev.turnId]) return;   // replayed after a reconnect (?since=): the turn is already followed
-  setLive(ev.agent, { busy: true, busySince: ev.startedAt || null, activity: ev.activity || originLabel(ev.origin), ...(ev.settingUpTeams || (ev.origin && ev.origin.kind === 'team_setup') ? { settingUpTeams: true } : {}) });
+  setLive(ev.agent, { busy: true, busySince: ev.startedAt || null, activity: ev.activity || originLabel(ev.origin), ...(ev.reviewingTeamFor || (ev.origin && ev.origin.kind === 'optimize_team' && ev.origin.for) ? { reviewingTeamFor: ev.reviewingTeamFor || ev.origin.for } : {}), ...(ev.settingUpTeams || (ev.origin && ev.origin.kind === 'team_setup') ? { settingUpTeams: true } : {}) });
   noteTurnOrigin(ev.agent, ev.turnId, ev.origin, ev.startedAt);
   const own = ev.origin?.kind === 'user' && ownTurnFor(ev.agent);
   if (chatOpenFor(ev.agent) && !streams.has(ev.agent) && !own) {
@@ -14047,7 +14088,7 @@ function onTurnStart(ev) {
     const b = card ? withRenderTarget(card.body, paint) : paint();
     // Main view: a hub-started turn is followed as ever but not shown (until its reply is marked for the owner).
     let hiddenEls = null;
-    if (viewNow() === 'main' && chatViewIsHubOrigin(ev.origin) && ev.origin.kind !== 'build_team' && ev.origin.kind !== 'team_setup') {   // Build Team and Set up teams: the person pressed it, so it stays in view
+    if (viewNow() === 'main' && chatViewIsHubOrigin(ev.origin) && ev.origin.kind !== 'build_team' && ev.origin.kind !== 'team_setup' && ev.origin.kind !== 'optimize_team') {   // Build Team, Set up teams and Optimize team: the person pressed it, so it stays in view
       if (card) card.wrap.classList.add('chat-view-hidden');
       else {
         hiddenEls = [];
@@ -14058,7 +14099,7 @@ function onTurnStart(ev) {
       }
     }
     // Build Team and Set up teams are the person's own: the reply leaves the card at once, as if marked for the owner.
-    if (card && ev.origin && (ev.origin.kind === 'build_team' || ev.origin.kind === 'team_setup')) forOwnerPending[ev.turnId] = { reason: '', at: Date.now() };
+    if (card && ev.origin && (ev.origin.kind === 'build_team' || ev.origin.kind === 'team_setup' || ev.origin.kind === 'optimize_team')) forOwnerPending[ev.turnId] = { reason: '', at: Date.now() };
     const t = { turnId: ev.turnId, agent: ev.agent, bubble: b, el: b.el, body: b.body, feed: null, startedAt: ev.startedAt || null, prompt: ev.message, card: card ? { ...card, label: info.label } : null, hiddenEls };
     hubTurns[ev.turnId] = t;
     // A for_owner that arrived before this card existed: apply it now.
@@ -14471,6 +14512,7 @@ function wire() {
   $('menu-profile')?.addEventListener('click', openProfileSheet);   // ?.: a page cached before Profile existed has no such item
   $('menu-settings')?.addEventListener('click', settingsSheetOpen);
   $('menu-build-team')?.addEventListener('click', (e) => { e.stopPropagation(); $('menu').classList.remove('open'); if (current && !$('menu-build-team').disabled) buildTeamStart(current); });   // ?.: a page cached before Settings existed has no such item
+  $('menu-optimize-team')?.addEventListener('click', (e) => { e.stopPropagation(); $('menu').classList.remove('open'); if (current && !$('menu-optimize-team').disabled) optimizeTeamStart(current); });
   $('menu-security').addEventListener('click', openSecuritySheet);
   $('menu-files').addEventListener('click', openFilesSheet);
   $('menu-recall').addEventListener('click', openRecallSheet);
@@ -14825,8 +14867,8 @@ function menuLookName() {
 // The chat's ⋮ menu: "Agent settings" (admins; the settings page of the open agent) and "Build team" (admins; a main
 // agent with no team). Simple mode shows neither. Run on open and on every status change.
 function menuTeamSync() {
-  const st = $('menu-agent-settings'), bt = $('menu-build-team');
-  if (!st && !bt) return;
+  const st = $('menu-agent-settings'), bt = $('menu-build-team'), ot = $('menu-optimize-team');
+  if (!st && !bt && !ot) return;
   const admin = isAdmin() && !(typeof simpleOn === 'function' && simpleOn());
   const a = current ? agentByName(current) : null;
   if (st) {
@@ -14839,9 +14881,19 @@ function menuTeamSync() {
     bt.disabled = on;
     bt.textContent = on ? 'Building…' : '🏗 Build team';
   }
+  if (ot) {   // a main agent WITH a team, never together with Build team
+    ot.hidden = !(admin && a && optimizeHasTeam().has(a.name));
+    const on = !!a && (reviewingTeam(a.name) || optimizeTeamPending.has(a.name));
+    ot.disabled = on;
+    const label = on ? 'Reviewing…' : '🔍 Optimize team';
+    const lab = $('menu-optimize-label'), sub = $('menu-optimize-sub');
+    if (lab) lab.textContent = label; else ot.textContent = label;
+    if (sub) { sub.textContent = !on && a ? optimizeSubText(a.name) : ''; sub.hidden = on; }
+  }
 }
 function menuOnOpen() {
   menuTeamSync();
+  if (current && typeof optimizeHasTeam === 'function' && optimizeHasTeam().has(current) && isAdmin() && !(typeof simpleOn === 'function' && simpleOn())) optimizeEstimateLoad(current);   // the size of the review, once per opening
   menuGroupsSync();
   menuAdvDotSync();
   menuLookName();

@@ -31,7 +31,7 @@ test('main view history page of a chat holding only a build_team turn is not emp
 test('the pages do not hide a followed build_team turn in the main view', () => {
   const d = app.slice(app.indexOf('async function onHubTurnStart('), app.indexOf('function onHubTurnDelta('));
   // changed (Set up teams): a set-up turn stays in view like build_team
-  assert.match(d, /const hubMain = chatViewGet\(localStorage\) === 'main' && chatViewIsHubOrigin\(ev\.origin\) && ev\.origin\.kind !== 'build_team' && ev\.origin\.kind !== 'team_setup';/);
+  assert.match(d, /const hubMain = chatViewGet\(localStorage\) === 'main' && chatViewIsHubOrigin\(ev\.origin\) && ev\.origin\.kind !== 'build_team' && ev\.origin\.kind !== 'team_setup' && ev\.origin\.kind !== 'optimize_team';/);
   const m = mobile.slice(mobile.indexOf('function onTurnStart('), mobile.indexOf('function onTurnDelta('));
   assert.match(m, /viewNow\(\) === 'main' && chatViewIsHubOrigin\(ev\.origin\) && ev\.origin\.kind !== 'build_team'/);
 });
@@ -99,6 +99,6 @@ test('autoOwnOrigin: only build_team and team_setup', () => {
 test('the pages move a build_team / team_setup reply out of its live card at once', () => {
   const d = require('fs').readFileSync(require('path').join(__dirname, '..', 'app.js'), 'utf8');
   const m = require('fs').readFileSync(require('path').join(__dirname, '..', 'mobile.js'), 'utf8');
-  assert.match(d, /if \(ev\.origin && \(ev\.origin\.kind === 'build_team' \|\| ev\.origin\.kind === 'team_setup'\)\) hubForOwnerPending\[ev\.turnId\] = /);
-  assert.match(m, /if \(card && ev\.origin && \(ev\.origin\.kind === 'build_team' \|\| ev\.origin\.kind === 'team_setup'\)\) forOwnerPending\[ev\.turnId\] = /);
+  assert.match(d, /if \(ev\.origin && \(ev\.origin\.kind === 'build_team' \|\| ev\.origin\.kind === 'team_setup' \|\| ev\.origin\.kind === 'optimize_team'\)\) hubForOwnerPending\[ev\.turnId\] = /);
+  assert.match(m, /if \(card && ev\.origin && \(ev\.origin\.kind === 'build_team' \|\| ev\.origin\.kind === 'team_setup' \|\| ev\.origin\.kind === 'optimize_team'\)\) forOwnerPending\[ev\.turnId\] = /);
 });
