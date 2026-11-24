@@ -9927,7 +9927,14 @@
       const host = parent || document.getElementById(`messages-${chatId}`);
       if (!chat || !host) return null;
       if (!chat.runs) chat.runs = {};
-      const st = chat.runs[run.ts] || (chat.runs[run.ts] = { open: false, entries: null, more: false, loading: false });
+      const key = chatViewRunKey(run);
+      let st = chat.runs[key], reopen = false;
+      if (!st) {
+        // Load earlier merged an older run into an open line: the merged line starts earlier, so it stays open (its turns are fetched again)
+        const was = chatViewRunOpenKey(chat.runs, run);
+        st = chat.runs[key] = { open: false, entries: null, more: false, loading: false, gen: 0 };
+        if (was) { reopen = true; delete chat.runs[was]; }
+      }
       const wrap = document.createElement('div');
       wrap.className = 'run-wrap'; wrap._run = run;
       const head = document.createElement('button');
@@ -9957,10 +9964,11 @@
       };
       st.ui = { words, setOpen, fill };
       words();
-      wrap._runReset = () => { st.entries = null; st.more = false; setOpen(false); body.textContent = ''; words(); };
-      const fail = () => {
+      // st.gen counts the changes of the run: an answer that arrives after the run grew is for the old run and is dropped
+      wrap._runReset = () => { st.gen = (st.gen || 0) + 1; st.entries = null; st.more = false; setOpen(false); body.textContent = ''; words(); };
+      const fail = (msg) => {
         wrap.querySelectorAll(':scope > .run-error').forEach(n => n.remove());
-        const err = foldPart('div', 'run-error', "Couldn't load these turns. Try again.");
+        const err = foldPart('div', 'run-error', msg || "Couldn't load these turns. Try again.");
         err.setAttribute('role', 'status');
         wrap.appendChild(err);
       };
@@ -9970,16 +9978,19 @@
         if (st.open) { setOpen(false); return; }
         if (!st.entries) {
           st.loading = true; text.textContent = 'Loading…'; head.setAttribute('aria-busy', 'true');
+          const gen = st.gen || 0;
           try {
             // a line made live in this page starts a moment before the hub saved the turn: a little room at the start
             const r = wrap._run, q = r.live ? { ...r, ts: new Date(Date.parse(r.ts) - 2000).toISOString(), last_ts: new Date(Date.parse(r.last_ts) + 2000).toISOString() } : r;
             const res = await fetch(chatViewRunUrl(chat.agent, q), { credentials: 'include' });
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const d = await res.json();
+            if ((st.gen || 0) !== gen) { st.loading = false; head.removeAttribute('aria-busy'); words(); return; }   // the run grew meanwhile: this answer is for the old one
+            if (d && d.incomplete) { st.loading = false; head.removeAttribute('aria-busy'); words(); fail("Couldn't load these turns. Switch on Agent work to see them."); return; }
             st.entries = Array.isArray(d && d.history) ? d.history : [];
             st.more = !!(d && d.more);
           } catch (e) {
-            st.loading = false; head.removeAttribute('aria-busy'); words(); fail();
+            st.loading = false; head.removeAttribute('aria-busy'); words(); if ((st.gen || 0) === gen) fail();
             return;
           }
           st.loading = false; head.removeAttribute('aria-busy');
@@ -9989,6 +10000,7 @@
         ui.fill(); ui.setOpen(true); ui.words();
       });
       if (st.open && st.entries) { fill(); setOpen(true); }
+      else if (reopen) head.click();
       return wrap;
     }
     // A hub-started turn begins while the chat is open in the main view: its card stays hidden as ever, and the run line
@@ -10009,7 +10021,7 @@
       }
       const run = { role: 'hidden_run', ts, last_ts: ts, turns: 0, kinds: [], content: '', live: true };
       chatViewRunAdd(run, k.kind, k.from, ts);
-      if (chat.runs) delete chat.runs[ts];
+      if (chat.runs) delete chat.runs[chatViewRunKey(run)];
       return soloRunLine(chat.id, run, panel);
     }
 
@@ -11239,16 +11251,32 @@
             const hit = m.kinds.find((y) => y.kind === x.kind && (y.from || null) === (x.from || null));
             if (hit) hit.n += x.n; else m.kinds.push({ kind: x.kind, from: x.from || null, n: x.n });
           }
-          if (Date.parse(e.ts) < Date.parse(m.ts)) m.ts = e.ts;
+          if (Date.parse(e.ts) < Date.parse(m.ts)) { m.ts = e.ts; m.rank = e.rank || 0; }
           if (Date.parse(e.last_ts) > Date.parse(m.last_ts)) m.last_ts = e.last_ts;
           out[out.length - 1] = m;
         } else out.push(e);
       }
       return out;
     }
-    // Fetch one run's turns: GET /api/history/<agent>?view=run&from=<ts>&to=<last_ts>
+    // Fetch one run's turns: GET /api/history/<agent>?view=run&from=<ts>&to=<last_ts>[&rank=<n>] (rank: how many hub-started
+    // prompts saved at exactly ts come before this run's; a live line, whose start is widened, has none)
     function chatViewRunUrl(agent, run) {
-      return `/api/history/${encodeURIComponent(agent)}?view=run&from=${encodeURIComponent(String(run && run.ts))}&to=${encodeURIComponent(String((run && run.last_ts) || (run && run.ts)))}`;
+      const rank = run && !run.live ? Math.floor(Number(run.rank)) || 0 : 0;
+      return `/api/history/${encodeURIComponent(agent)}?view=run&from=${encodeURIComponent(String(run && run.ts))}&to=${encodeURIComponent(String((run && run.last_ts) || (run && run.ts)))}${rank > 0 ? `&rank=${rank}` : ''}`;
+    }
+    // A run's key for the page's open state and fetched turns: its first time and rank (two runs can start in the same ms).
+    function chatViewRunKey(run) {
+      return `${run && run.ts}|${Math.floor(Number(run && run.rank)) || 0}`;
+    }
+    // After Load earlier merged runs into one (the merged run starts earlier, so its key is new): the key of an open line
+    // of the page's states (key -> { open }) that lies inside the merged run's time range, or null.
+    function chatViewRunOpenKey(states, run) {
+      const own = chatViewRunKey(run), a = Date.parse(run && run.ts), b = Date.parse((run && run.last_ts) || (run && run.ts));
+      for (const k of Object.keys(states || {})) {
+        const t = Date.parse(k.split('|')[0]);
+        if (k !== own && states[k] && states[k].open && t >= a && t <= b) return k;
+      }
+      return null;
     }
     // ── chat view helpers (end) ──
     // ── auto-turn helpers (begin) ──

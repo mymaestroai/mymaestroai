@@ -204,3 +204,72 @@ test('route: view=run is answered inside the query branch with bad_range 400, an
   const gate = server.indexOf('canAccessAgent(');
   assert.ok(gate > 0 && gate < at, 'the agent access check runs before the history route');
 });
+
+// ── review r1 ──
+const hubU = (ts, from, content = `[Consultation from agent "${from}"] q`) => ({ ts, role: 'user', content, origin: { kind: 'consultation', from } });
+const plain = (ts, role, content) => ({ ts, role, content });
+
+test('r1 B1: a two-turn run behind more than SCAN_MAX newer archive rows opens with both turns', () => {
+  const rows = [row(t(1), 'user', 'owner', 'o'), row(t(2), 'assistant', 'reply', 'o'),
+    row(t(3), 'user', '[Consultation from agent "beacon"] q1', 'c1', 'consultation'), row(t(4), 'assistant', 'a1', 'c1'),
+    row(t(5), 'user', '[Consultation from agent "beacon"] q2', 'c2', 'consultation'), row(t(6), 'assistant', 'a2', 'c2')];
+  for (let i = 0; i < 4600; i++) { rows.push(row(t(100 + i * 2), 'user', `owner ${i}`, `n${i}`)); rows.push(row(t(101 + i * 2), 'assistant', `r${i}`, `n${i}`)); }
+  const log = [plain(t(20000), 'user', 'owner now')];
+  const p = runPage({ logEntries: log, archive: fakeArchive(rows), from: t(3), to: t(5) });
+  assert.deepStrictEqual(p.history.map(e => e.content), ['[Consultation from agent "beacon"] q1', 'a1', '[Consultation from agent "beacon"] q2', 'a2']);
+  assert.notStrictEqual(p.incomplete, true);
+});
+
+test('r1 B1: the reply of the last turn saved after `to` comes along (archive read forward)', () => {
+  const rows = [row(t(3), 'user', '[Consultation from agent "beacon"] q1', 'c1', 'consultation'), row(t(9), 'assistant', 'late answer', 'c1'),
+    row(t(12), 'user', 'owner', 'o'), row(t(13), 'assistant', 'reply', 'o')];
+  const log = [plain(t(50), 'user', 'owner now')];
+  const p = runPage({ logEntries: log, archive: fakeArchive(rows), from: t(3), to: t(3) });
+  assert.deepStrictEqual(p.history.map(e => e.content), ['[Consultation from agent "beacon"] q1', 'late answer']);
+});
+
+test('r1 B1: a read that gives up before reaching `from` says incomplete, not an empty run', () => {
+  const rows = [row(t(3), 'user', '[Consultation from agent "beacon"] q1', 'c1', 'consultation'), row(t(4), 'assistant', 'a1', 'c1')];
+  for (let i = 0; i < 4600; i++) rows.push(row(t(10 + i), 'assistant', `x${i}`, 'z'));   // 4600 rows (no user row) between the run and `to`
+  const p = runPage({ logEntries: [plain(t(9000), 'user', 'owner now')], archive: fakeArchive(rows), from: t(3), to: t(5000) });
+  assert.strictEqual(p.incomplete, true);
+  assert.deepStrictEqual(p.history, []);
+  assert.strictEqual(p.more, false);
+});
+
+test('r1 B2: two hidden turns at the same ms split by a kept owner message are two lines; each fetches only its own turn', () => {
+  const X = t(10);
+  const log = [hubU(X, 'beacon', '[Consultation from agent "beacon"] first'), plain(t(11), 'assistant', 'first answer'),
+    plain(t(12), 'user', 'owner says'), plain(t(13), 'assistant', 'owner reply'),
+    hubU(X, 'sam', '[Consultation from agent "sam"] second'), plain(t(14), 'assistant', 'second answer')];
+  const h = historyPage({ logEntries: log, archive: none, view: 'main', limit: 20 }).history;
+  const rs = runs(h);
+  assert.strictEqual(rs.length, 2);
+  assert.strictEqual(rs[0].ts, X); assert.strictEqual(rs[1].ts, X);
+  assert.strictEqual(rs[0].rank, 0);
+  assert.strictEqual(rs[1].rank, 1);
+  const a = runPage({ logEntries: log, archive: none, from: rs[0].ts, to: rs[0].last_ts, rank: rs[0].rank });
+  assert.deepStrictEqual(a.history.map(e => e.content), ['[Consultation from agent "beacon"] first', 'first answer']);
+  const b = runPage({ logEntries: log, archive: none, from: rs[1].ts, to: rs[1].last_ts, rank: rs[1].rank });
+  assert.deepStrictEqual(b.history.map(e => e.content), ['[Consultation from agent "sam"] second', 'second answer']);
+  // a request without rank is rank 0
+  assert.deepStrictEqual(runPage({ logEntries: log, archive: none, from: X, to: t(14) }).history.map(e => e.content), a.history.map(e => e.content));
+});
+
+test('r1 B2: a kept owner message inside [from, to] stops the block; a neighbouring block is never mixed in', () => {
+  const log = [hubU(t(10), 'beacon'), plain(t(11), 'assistant', 'a1'), plain(t(12), 'user', 'owner'), plain(t(13), 'assistant', 'ok'),
+    hubU(t(14), 'sam'), plain(t(15), 'assistant', 'a2')];
+  const p = runPage({ logEntries: log, archive: none, from: t(10), to: t(15) });
+  assert.deepStrictEqual(p.history, log.slice(0, 2));
+  // the live path's widened range (start 2 s early) still gets one block
+  const q = runPage({ logEntries: log, archive: none, from: t(8), to: t(17) });
+  assert.deepStrictEqual(q.history, log.slice(0, 2));
+});
+
+test('r1 B2: a hidden prompt later than `to` ends the block; the rank parameter skips earlier prompts at exactly `from`', () => {
+  const log = [hubU(t(10), 'beacon'), plain(t(11), 'assistant', 'a1'), hubU(t(20), 'sam'), plain(t(21), 'assistant', 'a2')];
+  assert.deepStrictEqual(runPage({ logEntries: log, archive: none, from: t(10), to: t(11) }).history, log.slice(0, 2));
+  const same = [hubU(t(10), 'beacon'), hubU(t(10), 'sam'), plain(t(11), 'assistant', 'a')];
+  assert.deepStrictEqual(runPage({ logEntries: same, archive: none, from: t(10), to: t(11), rank: 1 }).history, same.slice(1));
+  assert.deepStrictEqual(runPage({ logEntries: same, archive: none, from: t(10), to: t(11), rank: 0 }).history, same);
+});
