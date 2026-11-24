@@ -158,10 +158,10 @@ test('renderPanel: collapsed header with the ring, the summary and the chevron; 
   assert.equal(textOf(find(rows[2], 'wo-sub')[0]), 'Research · Draft · since 11:30');
   const tags = new Set(); (function walk(n) { if (n.tag) tags.add(n.tag); (n.children || []).forEach(walk); })(box);
   assert.deepEqual([...tags].sort(), ['button', 'div', 'span'], 'no element came from the data');
-  // the header click opens the list and keeps the choice per device
+  // the header click opens the list; nothing is kept in storage (owner, 11-23: always collapsed when a chat opens)
   head.click();
   assert.equal(find(box, 'ho-list')[0].hidden, false);
-  assert.equal(storage.d['handoffStrip.expanded'], '1');
+  assert.equal(storage.d['handoffStrip.expanded'], undefined);
 });
 
 test('renderPanel: a hand-off row has Status and no Stop; a job and the helpers have Stop', () => {
@@ -339,4 +339,135 @@ test('r2 a Stop on a row whose agent is no longer current calls neither stopJob 
   find(rows[2], 'wo-stop')[0].click();
   for (let i = 0; i < 3; i++) await new Promise((r) => setImmediate(r));
   assert.deepEqual(calls, []);
+});
+
+// ── Always collapsed when a chat opens (owner, 11-23: "I would rather have it be collapsed and expand on a touch") ──
+// Each test loads a fresh copy of the library, the way a page load does; timers are captured and run by hand.
+function freshPanel() {
+  const p = require.resolve('../lib/ui-hand-off-card');
+  delete require.cache[p];
+  const M = require(p);
+  delete require.cache[p];
+  return M;
+}
+const ROWS = (label) => ({ ok: true, count: 1, handOffs: [], jobs: null, jobCount: 0, workers: [{ id: 'w', label, startedAt: new Date().toISOString() }], nextCheck: null });
+const NONE = () => ({ ok: true, count: 0, handOffs: [], jobs: null, jobCount: 0, workers: [], nextCheck: null });
+async function withPanel(storage, body) {
+  const realTimeout = global.setTimeout, realInterval = global.setInterval;
+  const soon = [];
+  global.setTimeout = (fn) => { soon.push(fn); return soon.length; };
+  global.setInterval = () => 1;
+  try {
+    const M = freshPanel();
+    const doc = fakeDoc(); const box = doc.createElement('div');
+    const ctx = { agent: 'agent-a', answers: {} };
+    const fetchFn = async (u) => { const a = u.split('/')[3]; const body = ctx.answers[a] || NONE(); return { ok: true, status: 200, json: async () => body }; };
+    const seen = () => new Promise((r) => setImmediate(r)).then(() => new Promise((r) => setImmediate(r)));
+    const expanded = () => { const h = find(box, 'ho-strip')[0]; return h ? h.attrs['aria-expanded'] : null; };
+    const switchTo = async (a) => { ctx.agent = a; M.follow(); await seen(); };
+    const refresh = async () => { M.refreshSoon(); const fns = soon.splice(0); fns.forEach((f) => { try { f(); } catch { /* an age timer */ } }); await seen(); };
+    M.track({ getAgent: () => ctx.agent, getContainer: () => box, fetchFn, storage });
+    await seen();
+    await body({ M, box, ctx, expanded, switchTo, refresh, seen });
+  } finally { global.setTimeout = realTimeout; global.setInterval = realInterval; }
+}
+
+test('collapsed: a chat opens collapsed even when the old strip stored "expanded"; nothing is written to storage', async () => {
+  const storage = memStorage({ 'handoffStrip.expanded': '1' });
+  await withPanel(storage, async ({ ctx, expanded, switchTo, box }) => {
+    ctx.answers['agent-a'] = ROWS('A-row'); ctx.answers['agent-b'] = ROWS('B-row');
+    await switchTo('agent-b');
+    assert.ok(textOf(box).includes('Working on: 1 thing'));
+    assert.equal(expanded(), 'false');
+    find(box, 'ho-strip')[0].click();
+    assert.equal(expanded(), 'true');
+    find(box, 'ho-strip')[0].click();
+    assert.equal(expanded(), 'false');
+  });
+  assert.deepEqual(storage.d, { 'handoffStrip.expanded': '1' }, 'the old key is left as it was and nothing new is stored');
+});
+
+test('collapsed: an expansion survives the panel refreshing in the same chat, and goes on a chat switch (both ways)', async () => {
+  await withPanel(memStorage(), async ({ ctx, expanded, switchTo, refresh, box }) => {
+    ctx.answers['agent-a'] = ROWS('A-row'); ctx.answers['agent-b'] = ROWS('B-row');
+    await switchTo('agent-b'); await switchTo('agent-a');
+    find(box, 'ho-strip')[0].click();
+    assert.equal(expanded(), 'true');
+    ctx.answers['agent-a'] = ROWS('A-row-2');
+    await refresh();
+    assert.ok(textOf(box).includes('A-row-2'), 'the refresh repainted the rows');
+    assert.equal(expanded(), 'true', 'still expanded after the refresh');
+    await switchTo('agent-b');
+    assert.equal(expanded(), 'false', 'another chat opens collapsed');
+    await switchTo('agent-a');
+    assert.equal(expanded(), 'false', 'and coming back starts collapsed too');
+  });
+});
+
+test('collapsed: a reload (a fresh page) starts collapsed after an expansion', async () => {
+  const storage = memStorage();
+  await withPanel(storage, async ({ ctx, switchTo, box, expanded }) => {
+    ctx.answers['agent-b'] = ROWS('B-row');
+    await switchTo('agent-b');
+    find(box, 'ho-strip')[0].click();
+    assert.equal(expanded(), 'true');
+  });
+  await withPanel(storage, async ({ ctx, switchTo, expanded }) => {
+    ctx.answers['agent-b'] = ROWS('B-row');
+    await switchTo('agent-b');
+    assert.equal(expanded(), 'false');
+  });
+  assert.deepEqual(storage.d, {});
+});
+
+test('collapsed: when the panel empties, rows that come back start collapsed', async () => {
+  await withPanel(memStorage(), async ({ ctx, switchTo, refresh, box, expanded }) => {
+    ctx.answers['agent-b'] = ROWS('B-row');
+    await switchTo('agent-b');
+    find(box, 'ho-strip')[0].click();
+    assert.equal(expanded(), 'true');
+    ctx.answers['agent-b'] = NONE();
+    await refresh();
+    assert.equal(find(box, 'ho-strip').length, 0, 'no rows shown');
+    ctx.answers['agent-b'] = ROWS('B-row-2');
+    await refresh();
+    assert.ok(textOf(box).includes('Working on: 1 thing'));
+    assert.equal(expanded(), 'false');
+  });
+});
+
+test('collapsed: a ring clicked in the list opens that chat expanded once; the next visit starts collapsed', async () => {
+  await withPanel(memStorage(), async ({ M, ctx, switchTo, box, expanded }) => {
+    ctx.answers['agent-a'] = ROWS('A-row'); ctx.answers['agent-b'] = ROWS('B-row');
+    await switchTo('agent-b'); await switchTo('agent-a');
+    M.open('agent-b');
+    assert.equal(expanded(), 'false', "the open chat (A) is not expanded by B's ring");
+    await switchTo('agent-b');
+    assert.equal(expanded(), 'true');
+    await switchTo('agent-a'); await switchTo('agent-b');
+    assert.equal(expanded(), 'false');
+    M.open('agent-b');
+    assert.equal(expanded(), 'true', 'the ring of the open chat expands it at once');
+    assert.ok(box);
+  });
+});
+
+test('collapsed: only a ring or blue line (All Agents, Teams, the phone chip) asks for the panel open; both pages mark it before the chat opens', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const read = (f) => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
+  const app = read('app.js'), mobile = read('mobile.js');
+  const body = (src, head) => { const i = src.indexOf(head); assert.ok(i >= 0, head); return src.slice(i, i + 400); };
+  // desktop: bgOpenChat marks the agent, then opens its chat; the one click handler for rings and blue lines covers Teams rows
+  const dBg = body(app, 'function bgOpenChat(name)');
+  assert.ok(dBg.includes('HandOffCard.open(name)') && dBg.indexOf('HandOffCard.open(name)') < dBg.indexOf('startSoloChat('), 'desktop: open() before the chat opens');
+  assert.ok(app.includes('.teams-row .teams-dot.bg-work, .teams-row .teams-bg-line'), 'desktop: a Teams row ring and blue line are handled');
+  assert.equal((app.match(/HandOffCard\.open\(/g) || []).length, 1, 'desktop: open() only in bgOpenChat');
+  // phone: bgOpenChat marks the agent, then navigates; the list handler sends the ring and the blue line there
+  const pBg = body(mobile, 'function bgOpenChat(name)');
+  assert.ok(pBg.includes('HandOffCard.open(name)') && pBg.indexOf('HandOffCard.open(name)') < pBg.indexOf("navigate('chat', name)"), 'phone: open() before the chat opens');
+  assert.ok(mobile.includes("e.target.closest('.dot.bg-work, .agent-bg-line')) { bgOpenChat(r.dataset.agent)"), 'phone: the list ring and blue line');
+  // every other open() call on the phone sits in a ring handler (the Simple list's .sa-dot.bg-work)
+  const others = mobile.split('\n').filter((l) => l.includes('HandOffCard.open(') && !pBg.includes(l.trim()));
+  assert.ok(others.length > 0 && others.every((l) => l.includes('.sa-dot.bg-work')), 'phone: no other caller: ' + others.join(' | '));
 });
