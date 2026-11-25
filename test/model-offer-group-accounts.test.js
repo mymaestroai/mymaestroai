@@ -1,0 +1,39 @@
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const path = require('node:path');
+const fs = require('node:fs');
+const { makeIsolatedInstall } = require('./helpers/isolated-install');
+
+test('subscription inventory follows the account, plan and sign-in used for discovery', async t => {
+  const inst = makeIsolatedInstall();
+  const mod = name => require(path.join(inst.lib, name));
+  const cache = { discoveredAt: new Date().toISOString(), 'codex-cli': ['gpt-6-astra'] };
+  const save = () => fs.writeFileSync(path.join(inst.data, 'discovered-models.json'), JSON.stringify(cache));
+  save();
+  let identity = 'account-and-plan-a', stamp = null, calls = 0;
+  const accounts = mod('model-offer-accounts');
+  t.mock.method(accounts, 'account', async () => { calls++; return identity; });
+  t.mock.method(accounts, 'stamp', () => stamp);
+  t.mock.method(mod('gateway-client'), 'cachedModels', () => null);
+  const inv = mod('model-offer-groups').createInventory();
+  const prepare = async force => { await inv.prepare(force); return inv.models(); };
+  assert.deepEqual(await prepare(), []);
+  stamp = '100:20:30';
+  const ids = ['codex-cli/gpt-6-astra'];
+  assert.deepEqual(await prepare(), ids);
+  const before = calls;
+  assert.deepEqual(await prepare(), ids);
+  assert.equal(calls, before);
+  identity = 'account-and-plan-b';
+  assert.deepEqual(await prepare(true), []);
+  cache.offerAccounts = { 'codex-cli': identity };
+  save();
+  assert.deepEqual(await prepare(), ids);
+  stamp = '200:20:31';
+  assert.deepEqual(inv.models(), []);
+  assert.deepEqual(await prepare(), ids);
+  identity = null;
+  assert.deepEqual(await prepare(true), []);
+});

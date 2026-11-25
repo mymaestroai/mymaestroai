@@ -6,6 +6,8 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
+- **Approve a model upgrade for several agents at once.** When your Maestro discovers a newer version on the same provider and billing route, it lists each eligible agent and its proposed change. You can approve the group or dismiss the offer, and see which agents switched or were busy.
+
 - **Clearer guidance when a helper cannot use a tool.** Your Maestro now tells read-only helpers to use file tools instead of a shell, explains when owner notifications and hand-offs do not apply, and gives clearer guidance for file paths and background commands.
 
 - **Solo agents.** Your Maestro now lists every main agent that has no team under one "Solo agents" header, instead of "No team yet" and "Working alone": an agent you have not decided about offers a small Build team link, one your lead found needs no team shows nothing under its name, and the All Agents line reads "Solo · Build team".

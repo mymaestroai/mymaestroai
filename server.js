@@ -1558,6 +1558,15 @@ async function handleHttpRequest(req, res) {
       return jsonResponse(res, result.success ? 200 : 400, result);
     }
 
+    if (pathname === '/api/model-offer-groups' || pathname === '/api/model-offer-groups/answer') {
+      const out = await require('./lib/model-offer-group-routes').routeModelOfferGroups({
+        req, pathname, readBody, identify: (request) => hubAuth.identify(request), isBusy: isAgentActive,
+        getService: () => require('./lib/model-offer-groups').getModelOfferGroups(),
+      });
+      res.setHeader('Cache-Control', 'no-store');
+      return jsonResponse(res, out.status, out.body);
+    }
+
     // /api/agents/:name/model-offer: the newer (or stronger) model on offer for this agent, or null (lib/model-offers-service)
     // Admins only, like the settings page itself (the access gate classifies both model-offer routes as admin routes).
     if (/^\/api\/agents\/([^/]+)\/model-offer$/.test(pathname) && req.method === 'GET') {
@@ -4274,6 +4283,10 @@ server.listen(PORT, HOST, () => {
       console.error('[task-queue] Failed to start:', e.message);
     }
     try {
+      require('./lib/model-offer-group-discovery').startGroupDiscovery({
+        file: path.join(__dirname, 'data', 'discovered-models.json'),
+        scan: () => require('./lib/model-offer-groups').getModelOfferGroups().list(),
+      });
       startDiscovery();
       // Subscription usage windows (5-hour, 7-day, per-model weekly) polled through the Claude client; drives the plan-limit fallback.
       try { require('./lib/plan-usage').getPlanUsage().start(); } catch (e) { console.error('[plan-usage] not started:', e.message); }
