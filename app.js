@@ -23576,14 +23576,25 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     }
     function qsIsOpen() { return !!document.getElementById('qs-overlay'); }
     // Another dialog has the screen: the "Discard changes?" question, a native modal <dialog>, Simple's Settings sheet, the
-    // expanded Reasoning or Tool calls view, or any other open layer of the dialog layer that covers the page (settings, an
-    // agent's question...). Docked side panels leave the page usable, so they don't count.
+    // expanded Reasoning or Tool calls view, anything shown with aria-modal="true" (the voice call's full-screen display),
+    // or any other open layer of the dialog layer that covers the page (settings, an agent's question...). Docked side
+    // panels and the docked call bar leave the page usable, so they don't count.
     function qsBlocked() {
       try { if (dialogGuard._confirm()) return true; } catch { /* no guard */ }
       try { if (document.querySelector(':modal')) return true; } catch { /* :modal unsupported */ }
       // Views that cover the page without the dialog layer: Simple's Settings sheet (openSimpleSettings, present only while
       // open) and the expanded Reasoning and Tool calls views (openReasoningFull / openToolsFull: shown while .open).
       if (document.querySelector('#simple-settings, .rsn-full-overlay.open')) return true;
+      // Anything else on screen that declares itself modal (aria-modal="true"): the voice call's full-screen display
+      // (lib/ui-call-display.js; its docked bar in the chat drops aria-modal, so it doesn't count), About, the backup and
+      // share-link dialogs, and whatever comes later. Only what is shown counts: the expanded Reasoning and Tool calls
+      // views keep their aria-modal box in the page while closed (display: none), and a hidden call display stays put too.
+      try {
+        for (const m of document.querySelectorAll('[aria-modal="true"]')) {
+          if (!m.isConnected || (m.closest && (m.closest('#qs-overlay') || m.closest('[hidden]')))) continue;
+          if (typeof m.checkVisibility === 'function' ? m.checkVisibility() : m.getClientRects().length > 0) return true;
+        }
+      } catch { /* no query: the named cases above still hold */ }
       try {
         return dialogGuard.layers().some(l => l.el && l.el.id !== 'qs-overlay' && l.el.isConnected !== false && (l.isDialog ? !!l.el.open && dialogIsModal(l.el) : l.modal));
       } catch { return false; }

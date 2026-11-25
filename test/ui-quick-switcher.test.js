@@ -151,7 +151,7 @@ function makeDom() {
   class El {
     constructor(tag) {
       this.nodeType = 1; this.tagName = String(tag).toUpperCase(); this.children = []; this.childNodes = []; this.parent = null;
-      this.attrs = {}; this.listeners = {}; this.cls = new Set(); this.value = ''; this.selectionStart = 0; this.selectionEnd = 0; this.open = false; this.hidden = false; this.style = {};
+      this.attrs = {}; this.listeners = {}; this.cls = new Set(); this.value = ''; this.selectionStart = 0; this.selectionEnd = 0; this.open = false; this.style = { setProperty: (k, v) => { this.style[k] = v; }, removeProperty: (k) => { delete this.style[k]; } };
       const self = this;
       this.classList = {
         contains: (c) => self.cls.has(c), add: (c) => { self.cls.add(c); }, remove: (c) => { self.cls.delete(c); },
@@ -165,6 +165,21 @@ function makeDom() {
     get name() { return this.attrs.name || ''; }
     getAttribute(k) { return k in this.attrs ? this.attrs[k] : null; } setAttribute(k, v) { this.attrs[k] = String(v); if (k === 'open') FakeMutationObserver.record(this, { type: 'attributes', target: this, attributeName: k }); }
     get parentElement() { return this.parent; }
+    get parentNode() { return this.parent; }
+    get hidden() { return 'hidden' in this.attrs; } set hidden(v) { if (v) this.attrs.hidden = ''; else delete this.attrs.hidden; }
+    get firstChild() { return this.childNodes[0] || null; }
+    get lastChild() { return this.childNodes[this.childNodes.length - 1] || null; }
+    insertBefore(n, ref) {
+      if (!ref) return this.appendChild(n);
+      if (n.parent) n.remove();
+      n.parent = this; this.childNodes.splice(this.childNodes.indexOf(ref), 0, n);
+      if (n.nodeType === 1) { this.children.splice(this.children.indexOf(ref) < 0 ? this.children.length : this.children.indexOf(ref), 0, n); FakeMutationObserver.record(n, { type: 'childList', addedNodes: [n], removedNodes: [] }); }
+      return n;
+    }
+    removeChild(n) { if (n.parent === this) n.remove(); return n; }
+    // What a browser would lay out: nothing for [hidden] or display:none on it or above it, nor for the one stylesheet rule
+    // these tests rely on (.rsn-full-overlay is display:none until .open, as in index.html).
+    getClientRects() { for (let n = this; n && n.nodeType === 1; n = n.parent) { if (n.hidden || n.style.display === 'none' || (n.cls.has('rsn-full-overlay') && !n.cls.has('open'))) return []; } return this.isConnected ? [1] : []; }
     removeAttribute(k) { delete this.attrs[k]; } hasAttribute(k) { return k in this.attrs; }
     appendChild(n) { if (n.parent) n.remove(); n.parent = this; this.childNodes.push(n); if (n.nodeType === 1) { this.children.push(n); FakeMutationObserver.record(n, { type: 'childList', addedNodes: [n], removedNodes: [] }); } return n; }
     remove() {
@@ -190,7 +205,16 @@ function makeDom() {
       }
     }
     *walk() { for (const c of this.children) { yield c; yield* c.walk(); } }
-    matchOne(sel) { sel = sel.trim(); if (sel === ':modal') return this === doc.modal; return sel.split(/(?=[.#])/).every(p => (p[0] === '#' ? this.id === p.slice(1) : p[0] === '.' ? this.cls.has(p.slice(1)) : this.tagName === p.toUpperCase())); }
+    matchOne(sel) {
+      sel = sel.trim(); if (sel === ':modal') return this === doc.modal;
+      const parts = sel.match(/[.#][\w-]+|\[[^\]]+\]|[a-z][\w-]*/gi) || [];
+      return parts.every(p => {
+        if (p[0] === '#') return this.id === p.slice(1);
+        if (p[0] === '.') return this.cls.has(p.slice(1));
+        if (p[0] === '[') { const a = p.slice(1, -1).match(/^([\w-]+)(?:="([^"]*)")?$/); return a[1] in this.attrs && (a[2] === undefined || this.attrs[a[1]] === a[2]); }
+        return this.tagName === p.toUpperCase();
+      });
+    }
     matches(sel) {
       return sel.split(',').some(s => {
         const parts = s.trim().split(/\s+/);
@@ -206,7 +230,6 @@ function makeDom() {
     addEventListener(t, f, cap) { (this.listeners[t] = this.listeners[t] || []).push({ f, cap: cap === true || !!(cap && cap.capture) }); }
     removeEventListener() {}
     focus() { if (doc.activeElement === this) return; doc.activeElement = this; dispatch(this, 'focusin'); }
-    getClientRects() { return [1]; }
     getBoundingClientRect() { return { left: 0, right: 0, top: 0, bottom: 0 }; }
     scrollIntoView() {}
     showModal() { this.open = true; doc.modal = this; this.setAttribute('open', ''); }
@@ -494,4 +517,69 @@ test('styles and the CHANGELOG entry', () => {
   assert.match(index, /\.gs-overlay\.qs-overlay \{/);
   assert.match(index, /\.qs-status:empty \{ display: none; \}/);
   assert.match(fs.readFileSync(path.join(__dirname, '..', 'CHANGELOG.md'), 'utf8'), /\*\*⌘K jumps to any agent\.\*\*/);
+});
+
+// ── The voice call's display (lib/ui-call-display.js, the real code) and anything else shown with aria-modal ──
+const CD = require('../lib/ui-call-display');
+function callDisplay(p, choice) {
+  const player = () => new Proxy({}, { get: (t, k) => (k === 'ready' || k === 'pictureReady' ? Promise.resolve(t) : k === 'then' ? undefined : () => true) });
+  const composer = p.doc.createElement('div'); composer.id = 'composer'; p.doc.body.appendChild(composer);
+  const mem = new Map([[CD.DISPLAY_STORE_KEY, JSON.stringify({ choice, captions: false })]]);
+  const display = CD.createCallDisplay({
+    window: { document: p.doc }, document: p.doc, storage: { getItem: (k) => (mem.has(k) ? mem.get(k) : null), setItem: (k, v) => mem.set(k, String(v)) },
+    fetch: async () => ({ ok: true, status: 200, json: async () => ({ packs: [] }) }), setTimeout, clearTimeout,
+    agentDefault: () => 'none', dock: () => composer, adopt: () => [], onTalk() {}, onHangUp() {}, onChange() {},
+    createVoiceOrb: player, createFacePlayer: player,
+  });
+  display.start();
+  return display;
+}
+const settle = async () => { for (let i = 0; i < 5; i++) await tick(); };
+
+test('a voice call: the full-screen display (Orb) blocks ⌘K and keeps the focus; the docked call bar in the chat does not', async () => {
+  let p = page();
+  const full = callDisplay(p, 'orb');
+  await settle();
+  const root = p.doc.querySelector('.ucd-overlay');
+  assert.ok(root && root.getAttribute('aria-modal') === 'true' && !root.cls.has('ucd-docked'), 'the real full-screen display is up (aria-modal)');
+  const before = p.doc.activeElement;
+  p.cmdK();
+  assert.strictEqual(p.c.api.isOpen(), false, 'nothing opens over the call');
+  assert.strictEqual(p.doc.activeElement, before, 'the focus stays where the call put it');
+  p.c.api.open();
+  assert.strictEqual(p.c.api.isOpen(), false, 'nor from the Mac app\'s menu item');
+  full.release();
+
+  p = page();
+  const docked = callDisplay(p, 'none');
+  await settle();
+  const bar = p.doc.querySelector('.ucd-overlay');
+  assert.ok(bar && bar.cls.has('ucd-docked') && !bar.hasAttribute('aria-modal'), 'the real docked bar is in the chat, without aria-modal');
+  p.cmdK();
+  assert.ok(p.c.api.isOpen(), 'beside the docked call bar the switcher opens');
+  docked.release();
+});
+
+test('anything shown with aria-modal="true" blocks; the same thing hidden, under display:none or out of the page does not', async () => {
+  const cases = [
+    ['visible', () => {}, true],
+    ['hidden attribute', (el) => { el.hidden = true; }, false],
+    ['parent display:none', (el, wrap) => { wrap.style.display = 'none'; }, false],
+    ['removed from the page', (el, wrap) => { wrap.remove(); }, false],
+  ];
+  for (const [label, change, blocks] of cases) {
+    const p = page();
+    const wrap = p.doc.createElement('div'); const el = p.doc.createElement('div');
+    el.setAttribute('role', 'dialog'); el.setAttribute('aria-modal', 'true');
+    wrap.appendChild(el); p.doc.body.appendChild(wrap);
+    change(el, wrap);
+    p.cmdK();
+    assert.strictEqual(p.c.api.isOpen(), !blocks, `${label}: ${blocks ? 'blocks' : 'does not block'}`);
+  }
+  // The expanded Reasoning view closed: its aria-modal box stays in the page (display:none from its overlay), and must not block
+  const p = page();
+  p.c.api.openReasoningFull('msg-1'); p.c.api.closeReasoningFull();
+  assert.ok(p.doc.querySelector('.rsn-full-box[aria-modal="true"]'), 'the closed view keeps its aria-modal box');
+  p.cmdK();
+  assert.ok(p.c.api.isOpen(), 'a closed expanded view never blocks the switcher');
 });
