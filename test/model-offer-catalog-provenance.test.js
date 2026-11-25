@@ -62,7 +62,7 @@ test('subscription discovery pins each client and drops ambiguous or changed pro
   const local = name => require.resolve(path.join(inst.lib, name));
   const stub = (name, exports) => { require.cache[local(name)] = { exports, loaded: true }; };
   const env = { HOME: inst.home, CLAUDE_CODE_OAUTH_TOKEN: 'synthetic-token' };
-  const ctx = { env, bin: '/synthetic/client' };
+  const ctx = { env, bin: '/synthetic/client', options: {} };
   let codexId = 'plan-a', changePlan = false, listed = true, locked = false;
   stub('settings', { getProviderKey: () => null, getProviderUrl: () => null });
   stub('gateway-client', { invalidateModelsCache() {} });
@@ -73,7 +73,7 @@ test('subscription discovery pins each client and drops ambiguous or changed pro
     query: ({ options }) => {
       assert.equal(options.env, env);
       if (!listed) return { supportedModels: async () => [] };
-      assert.equal(options.pathToClaudeCodeExecutable, ctx.bin);
+      assert.equal(options.pathToClaudeCodeExecutable, undefined);
       return { supportedModels: async () => [{ value: 'sonnet' }] };
     },
   }) });
@@ -109,4 +109,104 @@ test('subscription discovery pins each client and drops ambiguous or changed pro
   locked = false;
   changePlan = true;
   assert.equal((await discovery.runDiscovery()).offerSources['codex-cli'], undefined);
+});
+
+test('outdated external Claude client is rejected for both discovery and account status', t => {
+  const fs = require('node:fs');
+  const inst = makeIsolatedInstall();
+  const modules = path.join(inst.inst, 'node_modules');
+  fs.unlinkSync(modules); // replace the fixture dependency link with synthetic packages
+  const pkg = (name, version, entry, field) => {
+    const dir = path.join(modules, '@anthropic-ai', name);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: '@anthropic-ai/' + name, version, [field]: entry }));
+    const bin = path.join(dir, entry);
+    fs.writeFileSync(bin, '', { mode: 0o700 });
+    return bin;
+  };
+  pkg('claude-agent-sdk', '0.3.300', 'sdk.mjs', 'main');
+  const external = pkg('claude-code', '2.1.270', 'claude', 'bin');
+  const bundled = pkg('claude-agent-sdk-' + process.platform + '-' + process.arch, '0.3.300', 'claude', 'bin');
+  const env = { HOME: inst.home, PATH: path.dirname(external), CLAUDE_CLI_PATH: external };
+  const local = name => require.resolve(path.join(inst.lib, name));
+  require.cache[local('billing')] = { exports: { claudeClientEnv: () => env } };
+  require.cache[local('claude-signin-guard')] = { loaded: true, exports: { realAllowed: () => false } };
+  const accounts = require(local('model-offer-accounts'));
+  assert.deepEqual(accounts.context('claude-sdk'), { bin: bundled, env, options: {} });
+  fs.unlinkSync(bundled);
+  assert.deepEqual(accounts.context('claude-sdk'), { bin: null, env, options: {} });
+});
+
+test('OpenRouter separates chosen models from key-scoped six-hour offer proof', async t => {
+  const inst = makeIsolatedInstall();
+  const local = name => require.resolve(path.join(inst.lib, name));
+  const stub = (name, exports) => { require.cache[local(name)] = { exports, loaded: true }; };
+  let key = 'fixture-key-a', status = 200, catalogStatus = 200, entitled = true, rotate = false;
+  const model = 'example/model';
+  let now = Date.UTC(2026, 1, 1), catalogs = 0, checks = 0;
+  t.mock.method(Date, 'now', () => now);
+  stub('settings', {
+    getProviderKey: p => p === 'openrouter' ? key : null,
+    getProviderUrl: p => p === 'openrouter' ? 'fixture' : null,
+    PROVIDER_DEFAULTS: { openrouter: { url: 'fixture' } }, get: () => ({ openrouter: { models: [model] } }),
+  });
+  stub('claude-auth', { hasSdkCredentials: () => false });
+  stub('codex-cli/update-lock', { active: () => true });
+  stub('gateway-client', { invalidateModelsCache() {} });
+  t.mock.method(global, 'fetch', async (url, opts) => {
+    let data = {}, code = 404;
+    if (url === 'https://openrouter.ai/api/v1/models') {
+      catalogs++;
+      assert.equal(opts.headers.Authorization, undefined);
+      code = catalogStatus;
+      data = [{ id: model }];
+    } else if (url === 'https://openrouter.ai/api/v1/key') {
+      checks++;
+      assert.equal(opts.headers.Authorization, 'Bearer ' + key);
+      code = status;
+    } else if (url === 'https://openrouter.ai/api/v1/models/user') {
+      assert.equal(opts.headers.Authorization, 'Bearer ' + key);
+      if (rotate) key = 'fixture-key-c';
+      code = 200;
+      data = entitled ? [{ id: model }] : [];
+    }
+    return { ok: code === 200, status: code, json: async () => ({ data }) };
+  });
+  const discovery = require(local('model-discovery'));
+  const run = async () => {
+    const before = checks;
+    const result = await discovery.runDiscovery();
+    assert.equal(checks, before + 1);
+    assert.deepEqual(result.openrouter, [model]);
+    assert.doesNotMatch(JSON.stringify(result), /fixture-key-/);
+    return result.offerSources.openrouter;
+  };
+  const first = await run();
+  assert.equal(first.at, new Date(now).toISOString());
+  now += 5 * 3600000;
+  assert.deepEqual(await run(), first);
+  assert.equal(catalogs, 1);
+  now += 3600000;
+  catalogStatus = 503;
+  assert.deepEqual(await run(), first);
+  assert.equal(catalogs, 2);
+  catalogStatus = 200;
+  status = 503;
+  assert.deepEqual(await run(), first);
+  status = 200;
+  const renewed = await run();
+  assert.equal(renewed.at, new Date(now).toISOString());
+  status = 401;
+  assert.equal(await run(), undefined);
+  status = 200;
+  entitled = false;
+  assert.equal(await run(), undefined);
+  entitled = true;
+  assert.ok(await run());
+  key = 'fixture-key-b';
+  status = 503;
+  assert.equal(await run(), undefined);
+  status = 200;
+  rotate = true;
+  assert.equal(await run(), undefined);
 });
