@@ -19,7 +19,7 @@ function fixture(t) {
   const records = ['alpha', 'beta', 'declined', 'member', 'pinned'].map(row);
   records[3].owner = 'member';
   records[4].modelPinned = true;
-  const state = { enabled: true, available: [from, to], writes: [], beforeWrite() {} };
+  const state = { source: 'account-a', enabled: true, available: [from, to], writes: [], beforeWrite() {} };
   const store = createOffersStore({ file: path.join(dir, 'individual.json') });
   store.decline('declined', to);
   const offers = createModelOffers({
@@ -27,7 +27,7 @@ function fixture(t) {
     isVirtual: () => false, isSensitive: () => false, isLead: () => false, teamOfferNames: () => new Set(), store,
   });
   const open = () => createModelOfferGroups({
-    file, store, offers: () => offers, records: () => records, enabled: () => state.enabled,
+    file, store, source: () => state.source, offers: () => offers, records: () => records, enabled: () => state.enabled,
     ownerAllowed: a => !a.owner || a.owner === 'admin', stamp: a => a.box,
     setModel(name, model, check) {
       const a = records.find(r => r.name === name);
@@ -140,10 +140,12 @@ test('production discovery returns prefixed ids and grouped inventory filters by
   const model = 'openai/gpt-6.1-astra';
   const cache = { discoveredAt: new Date().toISOString(), openai: ['gpt-6.1-astra', 'gpt-audio'],
     anthropic: ['claude-opus-5'], 'codex-cli-info': [{ id: 'metadata' }] };
+  cache.offerSources = { openai: { id: 'key-a', at: cache.discoveredAt } };
   fs.writeFileSync(file, JSON.stringify(cache));
   assert.deepEqual(mod('model-discovery').getDiscoveredModels(), ['anthropic/claude-opus-5', model, 'openai/gpt-audio']);
   let connected = true;
-  t.mock.method(mod('settings'), 'getProviderKey', p => connected && p === 'openai' ? 'fixture' : '');
+  mod('model-offer-accounts').source = p => p === 'openai' ? connected : null;
+  connected = 'key-a';
   let warm = null;
   t.mock.method(mod('gateway-client'), 'cachedModels', () => warm);
   const inventory = mod('model-offer-groups').cachedOfferModels;
@@ -153,8 +155,11 @@ test('production discovery returns prefixed ids and grouped inventory filters by
   warm = [model];
   connected = false;
   assert.deepEqual(inventory(), []);
-  connected = true;
-  fs.writeFileSync(file, JSON.stringify({ ...cache, discoveredAt: '2000-01-01' }));
+  connected = 'rotated-key-or-endpoint';
+  assert.deepEqual(inventory(), []);
+  connected = 'key-a';
+  cache.offerSources.openai.at = '2000-01-01';
+  fs.writeFileSync(file, JSON.stringify(cache));
   assert.deepEqual(inventory(), []);
 });
 
@@ -188,4 +193,79 @@ test('retry through the route recovers a committed registry write and distinguis
   assert.deepEqual(response, { status: 200, body: { results: [
     { name: 'alpha', status: 'switched' }, { name: 'beta', status: 'changed' },
   ] } });
+});
+
+test('rediscovery with identical models and label invalidates the old approval', async t => {
+  const { open, state } = fixture(t);
+  const svc = open();
+  const [old] = await svc.list();
+  state.source = 'account-b';
+  const [fresh] = await svc.list();
+  assert.deepEqual(fresh.rows, old.rows);
+  assert.notEqual(fresh.id, old.id);
+  assert.deepEqual((await svc.answer(old.id, 'dismiss', ctx)).results.map(r => r.status), ['changed', 'changed']);
+  state.beforeWrite = () => { state.source = 'account-c'; };
+  assert.deepEqual((await svc.answer(fresh.id, 'apply', ctx)).results.map(r => r.status), ['changed', 'changed']);
+  assert.deepEqual(state.writes, []);
+});
+
+test('assignment rollback between scan and registry commit invalidates approval', async t => {
+  const { open, state } = fixture(t);
+  const svc = open();
+  const [group] = await svc.list();
+  state.beforeWrite = a => { a.modelAssignmentRevision = 'revision-after-rollback'; };
+  assert.deepEqual((await svc.answer(group.id, 'apply', ctx)).results.map(r => r.status), ['changed', 'changed']);
+  assert.deepEqual(state.writes, []);
+});
+
+test('group dismissal recovers its own receipt after ledger failure', async t => {
+  const { open, offers, file } = fixture(t);
+  const svc = open();
+  const [group] = await svc.list();
+  offers.decline('beta', to);
+  const rename = fs.renameSync;
+  const fault = t.mock.method(fs, 'renameSync', (source, dest) => {
+    if (dest === file) throw new Error('ledger unavailable');
+    return rename(source, dest);
+  });
+  await assert.rejects(svc.answer(group.id, 'dismiss', ctx), /ledger unavailable/);
+  fault.mock.restore();
+  assert.equal(await offers.offerFor('alpha'), null);
+  assert.deepEqual((await open().answer(group.id, 'apply', ctx)).results.map(r => r.status), ['dismissed', 'changed']);
+});
+
+test('failed decline commit rolls back both dismissal and receipt, forget clears a committed receipt', async t => {
+  const { open, offers, file } = fixture(t);
+  const svc = open();
+  const [group] = await svc.list();
+  const target = path.join(path.dirname(file), 'individual.json');
+  const before = fs.readFileSync(target, 'utf8');
+  const rename = fs.renameSync;
+  const fault = t.mock.method(fs, 'renameSync', (source, dest) => {
+    if (dest === target) throw new Error('store unavailable');
+    return rename(source, dest);
+  });
+  assert.deepEqual((await svc.answer(group.id, 'dismiss', ctx)).results.map(r => r.status), ['failed', 'failed']);
+  assert.equal(fs.readFileSync(target, 'utf8'), before);
+  fault.mock.restore();
+  const crash = t.mock.method(fs, 'renameSync', (source, dest) => {
+    if (dest === file) throw new Error('ledger unavailable');
+    return rename(source, dest);
+  });
+  await assert.rejects(svc.answer(group.id, 'dismiss', ctx), /ledger unavailable/);
+  crash.mock.restore();
+  assert.equal(offers.forget('alpha').ok, true);
+  assert.deepEqual((await open().answer(group.id, 'apply', ctx)).results.map(r => r.status), ['switched', 'switched']);
+});
+
+test('pending legacy snapshot without provider identity fails closed', async t => {
+  const { open, state, file } = fixture(t);
+  const [group] = await open().list();
+  const ledger = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const rows = ledger.groups[group.id].map(({ source, modelAssignmentRevision, ...legacy }) => legacy);
+  const id = require('node:crypto').createHash('sha256').update(JSON.stringify(rows)).digest('hex');
+  ledger.groups = { [id]: rows };
+  fs.writeFileSync(file, JSON.stringify(ledger));
+  assert.deepEqual((await open().answer(id, 'apply', ctx)).results.map(r => r.status), ['changed', 'changed']);
+  assert.deepEqual(state.writes, []);
 });

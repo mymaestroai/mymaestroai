@@ -44,7 +44,7 @@ if (restoredAtBoot.state === 'applied') {
 }
 
 const {
-  getAgents, getAgentFiles, saveAgentFile, createAgent, cloneAgent,
+  getAgents, getAgentFiles, saveAgentFile, createAgent, cloneAgent, agentBusy,
   deleteAgent, renameAgent, getAvailableModels, setAgentModel, setAgentDisplay, setAgentIcon, EDITABLE_FILES,
 } = require('./lib/agents');
 const {
@@ -64,6 +64,13 @@ async function publishAgentUpdate(name, changed = []) {
     if (!a) return;
     require('./lib/hub-events').events.publish('agent_updated', { agent: name, model: a.model || null, display: a.display || null, icon: a.icon || null, category: a.category || null, autoModel: !!a.autoModel, effort: a.effort || 'default', changed: Array.isArray(changed) ? changed : [] });
   } catch { /* events are best effort */ }
+}
+
+let modelOfferGroups;
+function groupedModelOffers() {
+  return modelOfferGroups ||= require('./lib/model-offer-groups').createModelOfferGroups({
+    setModel: (name, model, guard, token) => setAgentModel(name, model, guard, token, publishAgentUpdate),
+  });
 }
 const { chatCompletion } = require('./lib/gateway-client');
 const { isMythosModel, mythosCompletion } = require('./lib/mythos-client');
@@ -1517,7 +1524,9 @@ async function handleHttpRequest(req, res) {
     // Return the current discovery cache (no network calls)
     if (pathname === '/api/models/discovered' && req.method === 'GET') {
       const cache = loadDiscoveryCache();
-      return jsonResponse(res, 200, cache || { status: 'no_cache' });
+      if (!cache) return jsonResponse(res, 200, { status: 'no_cache' });
+      const { offerSources, ...models } = cache;
+      return jsonResponse(res, 200, models);
     }
 
     if (pathname === '/api/agents/create' && req.method === 'POST') {
@@ -1560,8 +1569,8 @@ async function handleHttpRequest(req, res) {
 
     if (pathname === '/api/model-offer-groups' || pathname === '/api/model-offer-groups/answer') {
       const out = await require('./lib/model-offer-group-routes').routeModelOfferGroups({
-        req, pathname, readBody, identify: (request) => hubAuth.identify(request), isBusy: isAgentActive,
-        getService: () => require('./lib/model-offer-groups').getModelOfferGroups(),
+        req, pathname, readBody, identify: (request) => hubAuth.identify(request), isBusy: name => agentBusy(name, true),
+        getService: groupedModelOffers,
       });
       res.setHeader('Cache-Control', 'no-store');
       return jsonResponse(res, out.status, out.body);
@@ -4285,7 +4294,7 @@ server.listen(PORT, HOST, () => {
     try {
       require('./lib/model-offer-group-discovery').startGroupDiscovery({
         file: path.join(__dirname, 'data', 'discovered-models.json'),
-        scan: () => require('./lib/model-offer-groups').getModelOfferGroups().list(),
+        scan: () => groupedModelOffers().list(),
       });
       startDiscovery();
       // Subscription usage windows (5-hour, 7-day, per-model weekly) polled through the Claude client; drives the plan-limit fallback.
