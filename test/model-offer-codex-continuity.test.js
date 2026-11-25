@@ -32,6 +32,7 @@ test('Codex group approvals bind the turn binary, credential generation and effe
   fs.writeFileSync(auth, 'fixture A');
   const agent = { name: 'alpha', model: 'codex-cli/gpt-5-astra' };
   const target = 'codex-cli/gpt-6-astra';
+  let selectedProfile;
   const configFile = path.join(home, 'config.toml');
   const projectFile = path.join(workspace, '.codex', 'config.toml');
   stub('codex-cli/app-server', { AppServerClient: class {
@@ -50,7 +51,8 @@ test('Codex group approvals bind the turn binary, credential generation and effe
       }
       assert.equal(method, 'config/read');
       assert.equal(params.cwd, this.cwd);
-      const config = { model_reasoning_effort: 'high', model_provider: 'openai' };
+      const config = { model_reasoning_effort: 'high', model_provider: 'openai',
+        profiles: { alternate: { model_provider: 'custom' } }, profile: selectedProfile };
       if (fs.existsSync(configFile)) config.chatgpt_base_url = fs.readFileSync(configFile, 'utf8');
       if (this.cwd === workspace && fs.existsSync(projectFile)) config.model_provider = 'custom';
       return { config, layers: [{ name: { type: 'user', file: configFile } }] };
@@ -61,6 +63,9 @@ test('Codex group approvals bind the turn binary, credential generation and effe
   assert.equal(accounts.context(provider).bin, bin);
   const first = await accounts.account(provider);
   assert.match(first, /^[0-9a-f]{64}$/);
+  selectedProfile = 'alternate';
+  assert.equal(await accounts.account(provider), null);
+  selectedProfile = undefined;
   fs.writeFileSync(auth, 'fixture generation B');
   const second = await accounts.account(provider);
   assert.match(second, /^[0-9a-f]{64}$/);
