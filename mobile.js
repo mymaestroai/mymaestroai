@@ -10417,15 +10417,11 @@ function voiceHintDone() { try { localStorage.setItem(voiceHintKey(), '1'); } ca
 function voiceHintPlace() {
   const h = voiceHintEl, c = $('composer'), row = c && c.querySelector('.row'), t = voiceHintTarget();
   if (!h || !c || !row || !t) return;
-  // The tip sits above everything stacked over the message box inside the composer (the Undo line / offer card slot, the Working on bar): above the topmost visible one.
-  let topY = row.offsetTop;
-  for (const s of (typeof c.querySelectorAll === 'function' ? c.querySelectorAll('.team-offer-slot, .handoff-cards') : [])) {
-    if (!s.hidden && s.offsetHeight > 0 && s.offsetTop < topY) topY = s.offsetTop;
-  }
   // Anchored to the composer's TOP edge (not its bottom): the composer's height changes after the tip is placed (safe-area inset, Simple's padding, a wrapping
   // box, the keyboard), and a bottom offset then slides the tip down over the message box. The tip's box, with its arrow (about 7px below the box), ends at
-  // least 6px above the composer's top edge (1px more for the border), and never lower than 10px above the topmost slot.
-  const y = Math.min(topY - 10, -14);
+  // least 6px above the composer's top edge (1px more for the border). The offer / Undo slot and the Working on bar live inside #composer, below its top edge,
+  // so this one anchor is above them too.
+  const y = -14;
   h.style.top = y + 'px'; h.style.bottom = 'auto'; h.style.transform = 'translateY(-100%)';
   const hr = h.getBoundingClientRect(), tr = t.getBoundingClientRect();
   h.style.setProperty('--arrow-x', Math.max(10, Math.min(hr.width - 22, tr.left + tr.width / 2 - hr.left - 6)) + 'px');
@@ -12819,6 +12815,20 @@ function composerTightPaint() {
   teamSetupTight(tight);
   if (i && i.value !== undefined && typeof composerInputFit === 'function') composerInputFit(i);
 }
+// body.kbd-up = the ON-SCREEN keyboard is really up: the box has focus AND the visible height is keyboard-sized (120 px or more) shorter than the page was when the box was not focused.
+// Focus alone is not enough: a hardware / Bluetooth keyboard focuses the box with no soft keyboard, and the home-indicator inset must stay then (Simple's padding rule keys on this class).
+// The baseline is the larger of the layout viewport (iOS: innerHeight stays while the visual viewport shrinks) and the height seen while the box was unfocused (browsers whose
+// layout viewport shrinks too); a width change (rotation) restarts it. A pinch-zoomed page also shrinks the visual viewport, so a scale above 1 never counts.
+// Re-run on focus, blur and visualViewport resize / scroll.
+function composerKbdUpPaint() {
+  const i = $('msg-input'), vv = window.visualViewport, st = composerKbdUpPaint;
+  const h = vv && vv.height > 0 ? vv.height : 0, w = vv && vv.width ? vv.width : window.innerWidth;
+  const focused = !!i && document.activeElement === i;
+  if (!st.base || st.w !== w || !focused) { st.base = Math.max(h, window.innerHeight); st.w = w; }
+  const zoomed = !!(vv && vv.scale && vv.scale >= 1.01);
+  const up = focused && h > 0 && !zoomed && h < Math.max(st.base, window.innerHeight) - 120;
+  document.body.classList.toggle('kbd-up', up);
+}
 // The message box grows with what is typed up to 140 px, or 40% of the visible height when that is less; past it the box scrolls inside itself.
 function composerInputFit(input) {
   const vv = window.visualViewport;
@@ -15022,6 +15032,10 @@ function wire() {
   input.addEventListener('input', () => { composerInputFit(input); saveDraft(current, input.value); });
   input.addEventListener('focus', () => document.body.classList.add('kbd'));
   input.addEventListener('blur', () => document.body.classList.remove('kbd'));
+  input.addEventListener('focus', composerKbdUpPaint);
+  input.addEventListener('blur', composerKbdUpPaint);   // the box lost focus: the inset is back at once
+  if (window.visualViewport) { window.visualViewport.addEventListener('resize', composerKbdUpPaint); window.visualViewport.addEventListener('scroll', composerKbdUpPaint); }
+  window.addEventListener('resize', composerKbdUpPaint);
   for (const ev of ['focus', 'input']) input.addEventListener(ev, composerPaintAll);
   input.addEventListener('blur', () => setTimeout(composerPaintAll, 300));   // a tap on a call-panel button lands before the panel grows back
   const vvPaint = window.visualViewport;

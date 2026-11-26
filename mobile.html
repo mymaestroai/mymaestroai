@@ -1232,10 +1232,10 @@ html.mm-simple .simple-theme-btn[hidden], .mode-toggle[hidden] { display: none !
 html.mm-simple .simple-theme-btn { flex: none; min-height: 44px; display: inline-flex; align-items: center; gap: 6px; padding: 0 10px; border-radius: 22px; border: 1px solid var(--border); background: var(--bg-card); color: var(--text-dim); font-size: 14px; white-space: nowrap; }
 html.mm-simple .simple-theme-btn .stb-ic { font-size: 18px; line-height: 1; }
 html.mm-simple .mode-toggle { font-size: 14px; color: var(--text-dim); }
-html.mm-simple #simple-top .st-mark { margin-right: 2px; }
+html.mm-simple #simple-top .st-mark { margin-inline-end: 2px; }
 /* A phone (under 700px): two rows, whatever the width. Row 1: brand mark, then Simple switch, theme button (icon and words), avatar. Row 2: the 'Talking to: icon name' pill, full width; the name truncates with an ellipsis and never disappears. No word is cut to a bare dot or icon on one screen only. */
 @media (max-width: 699px) {
-  html.mm-simple #simple-top .st-mark { order: 1; margin-right: auto; }
+  html.mm-simple #simple-top .st-mark { order: 1; margin-inline-end: auto; }
   html.mm-simple #simple-top .mode-toggle { order: 2; }
   html.mm-simple #simple-top .simple-theme-btn { order: 3; }
   html.mm-simple #simple-top .st-avatar { order: 4; }
@@ -1310,7 +1310,7 @@ html.mm-simple .st-consult { color: var(--text-dim); font-size: 14px; padding-le
 
 /* Composer: text on top; + / reasoning level on the left, mic / voice call / send on the right */
 html.mm-simple #composer { position: relative; background: var(--bg-dark); border-top: 0; padding: 8px 12px calc(6px + var(--sab)); }   /* under the box: the safe-area inset plus 6px, nothing more (it was 12px: the box rode ~25pt too high in a home-screen app) */
-html.mm-simple body.kbd #composer { padding-bottom: 6px; }   /* keyboard open: the home indicator is under it, so the inset buys nothing (normal mode hides the tab bar and its inset the same way) */
+html.mm-simple body.kbd-up #composer { padding-bottom: 6px; }   /* the ON-SCREEN keyboard is up (box focused and the visible height keyboard-sized shorter): the home indicator is under it, so the inset buys nothing. A hardware keyboard focuses the box with no soft keyboard and keeps the inset (body.kbd alone follows focus) */
 html.mm-simple #composer .row { flex-wrap: wrap; align-items: center; gap: 4px 6px; border: 1px solid var(--border); background: var(--bg-card); border-radius: 28px; padding: 8px 10px 10px; box-shadow: var(--sp-shadow); margin: 0 auto; }
 html.mm-simple #composer .row::after { content: ''; flex: 1 1 0; order: 3; }
 html.mm-simple #msg-input { order: -1; flex: 0 0 100%; min-height: 48px; padding: 10px; font-size: 18px; line-height: 1.4; background: transparent; border: 0; color: var(--text); }
