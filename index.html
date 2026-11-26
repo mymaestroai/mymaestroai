@@ -2355,7 +2355,8 @@
     .st-info { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 18px; height: 18px; margin-left: 6px; padding: 0; border: 1px solid var(--border-strong); border-radius: 50%; background: transparent; color: var(--text-dim); font: inherit; font-size: 0.78rem; line-height: 1; cursor: pointer; vertical-align: middle; }
     .st-info:hover { color: var(--text); border-color: var(--text-dim); }
     .st-info:focus-visible, .st-help-x:focus-visible, .st-help-ask:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
-    html.mm-settings-only .st-info { width: 32px; height: 32px; margin-left: 2px; font-size: 1.05rem; }
+    html.mm-settings-only .st-info { width: 32px; height: 32px; box-sizing: border-box; margin: -9px 0 -9px 4px; font-size: 1.05rem; }
+    :not(.st-row) > label.st-has-info { display: inline-block; }   /* a label followed by its ⓘ shares its line (the script adds the class only then) */
     html.mm-settings-only .st-row > label:has(+ .st-info) { flex: 1 1 calc(100% - 44px) !important; }
     .st-help-panel { position: fixed; z-index: 10050; width: 360px; max-width: calc(100vw - 16px); max-height: calc(100vh - 16px); overflow-y: auto; box-sizing: border-box; padding: 14px 16px; background: var(--bg-card); color: var(--text); border: 1px solid var(--border-strong); border-radius: 10px; box-shadow: 0 8px 28px var(--shadow-color-pop); font-size: 0.82rem; line-height: 1.45; }
     .st-help-panel:focus { outline: none; }

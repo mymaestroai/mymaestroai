@@ -939,3 +939,103 @@ test('watching: bursts cost at most one pass per 250 ms, and only elements that 
   await wait(250); assert.strictEqual(passes, first + 1, 'one pass for the whole burst, once the gap has passed');
   loaded();
 });
+
+// ---- the ⓘ sits on its label's line (spec V) --------------------------------------------------------------------------------
+const recFor = (id, anchors) => ({ id, kind: 'setting', name: 'N ' + id, labels: [], what: 'w', when: 'w', risk: 'r', def: 'd', restart: false, danger: 'everyday', who: 'both', lead: 'none', words: [], scope: 'install', anchors });
+
+test('a text-block label (div.sec-title) gets its ⓘ as its last child; the words stay the same', () => {
+  const doc = makeDoc(), win = makeWin(doc);
+  const ov = el(doc, 'div'); doc.body.appendChild(ov);
+  const sec = el(doc, 'div', { class: 'sec-section' }); ov.appendChild(sec);
+  const t = el(doc, 'div', { class: 'sec-title' }, 'Questions'); sec.appendChild(t);
+  sec.appendChild(el(doc, 'div', { class: 'sec-hint' }, 'When an agent asks you something'));
+  H.setRecords({ records: [recFor('OPT-1', [{ surface: 'phone', label: 'Questions' }])] });
+  assert.strictEqual(H.attach(ov, 'phone', { doc, win }), 1);
+  const kids = t.children;
+  assert.strictEqual(kids[kids.length - 1].tagName, 'BUTTON');
+  assert.strictEqual(kids[kids.length - 1].getAttribute('class'), 'st-info');
+  assert.strictEqual(sec.children[1].getAttribute('class'), 'sec-hint', 'nothing between the title and its hint');
+  assert.strictEqual(infos(sec).length, 1);
+  assert.strictEqual(H.attach(ov, 'phone', { doc, win }), 0, 'idempotent: not a second one, inside or after');
+  assert.strictEqual(infos(sec).length, 1);
+  loaded();
+});
+
+test('a LABEL gets its ⓘ right after it and the class st-has-info; a label holding a control is never entered', () => {
+  const doc = makeDoc(), win = makeWin(doc);
+  const ov = el(doc, 'div'); doc.body.appendChild(ov);
+  const col = el(doc, 'div', { class: 'col' }); ov.appendChild(col);
+  const lab = el(doc, 'label', { for: 'x1' }, 'Voice'); col.appendChild(lab);
+  col.appendChild(el(doc, 'input', { id: 'x1', type: 'checkbox' }));
+  const wrap = el(doc, 'label', {}, ' Wrapped'); col.appendChild(wrap);
+  wrap.appendChild(el(doc, 'input', { id: 'x2', type: 'checkbox' }));
+  H.setRecords({ records: [recFor('OPT-1', [{ surface: 'phone', selector: '#x1' }]), recFor('OPT-2', [{ surface: 'phone', selector: '#x2' }])] });
+  assert.strictEqual(H.attach(ov, 'phone', { doc, win }), 2);
+  assert.strictEqual(lab.nextSibling.getAttribute('data-rec'), 'OPT-1');
+  assert.ok(/\bst-has-info\b/.test(lab.getAttribute('class')), 'the label carries the class');
+  assert.strictEqual(infos(lab).length, 0, 'never inside a label');
+  assert.strictEqual(infos(wrap).length, 0, 'never inside a label holding a control');
+  assert.strictEqual(wrap.nextSibling.getAttribute('data-rec'), 'OPT-2');
+  for (const f of ['mobile.html', 'index.html', 'users.html', 'agent-settings.html']) assert.match(read(f), /label\.st-has-info/, f + ' styles the class');
+  loaded();
+});
+
+test('a flex row of the desktop Settings keeps its ⓘ after the label, and a text block holding a control is not entered', () => {
+  const doc = makeDoc(), win = makeWin(doc);
+  const ov = el(doc, 'div'); doc.body.appendChild(ov);
+  const row = el(doc, 'div', { class: 'st-row' }); ov.appendChild(row);
+  const sp = el(doc, 'span', {}, 'Theme'); row.appendChild(sp);
+  row.appendChild(el(doc, 'select', { id: 'th' }));
+  const box = el(doc, 'div', { class: 'ss-title' }, 'Name'); ov.appendChild(box);
+  box.appendChild(el(doc, 'input', { id: 'nm' }));
+  H.setRecords({ records: [recFor('OPT-1', [{ surface: 'phone', selector: '#th' }]), recFor('OPT-2', [{ surface: 'phone', label: 'Name' }])] });
+  H.attach(ov, 'phone', { doc, win });
+  assert.strictEqual(row.children[1].getAttribute('data-rec'), 'OPT-1', 'after the span, as today');
+  assert.strictEqual(infos(sp).length, 0);
+  assert.strictEqual(infos(box).length, 0, 'a block holding a control is not entered');
+  assert.strictEqual(box.nextSibling.getAttribute('data-rec'), 'OPT-2');
+  loaded();
+});
+
+test('reading a title for a toast or a lookup does not include the ⓘ', () => {
+  const doc = makeDoc(), win = makeWin(doc);
+  const ov = el(doc, 'div'); doc.body.appendChild(ov);
+  const t = el(doc, 'div', { class: 'sec-title' }, 'Questions'); ov.appendChild(t);
+  H.setRecords({ records: [recFor('OPT-1', [{ surface: 'phone', label: 'Questions' }])] });
+  H.attach(ov, 'phone', { doc, win });
+  assert.strictEqual(infos(t).length, 1);
+  assert.strictEqual(H.ownText(t).trim(), 'Questions');
+  assert.strictEqual(H.normLabel(H.ownText(t)), 'Questions');
+  const b = infos(t)[0];
+  assert.strictEqual(b.getAttribute('aria-label'), 'About N OPT-1');
+  // the label found again (a second record on the same title) still reads "Questions"
+  H.setRecords({ records: [recFor('OPT-2', [{ surface: 'phone', label: 'Questions' }])] });
+  assert.strictEqual(H.attach(ov, 'phone', { doc, win }), 0, 'found again by its own words, already has its ⓘ');
+  loaded();
+});
+
+test('Simple on the phone: the records anchored on simple-phone get their ⓘ in the Simple settings sheet and the agent sheet', () => {
+  const json = JSON.parse(read('templates/settings-records.json'));
+  H.setRecords(json);
+  const doc = makeDoc(), win = makeWin(doc);
+  // the sheet as simpleSettingsOpen() draws it (mobile.js), with Deep research as researchSimplePaint() adds it
+  const d = el(doc, 'dialog'); doc.body.appendChild(d);
+  const sec = (title, id) => { const s = el(doc, 'div', { class: 'ss-sec', ...(id ? { id } : {}) }); d.appendChild(s); s.appendChild(el(doc, 'div', { class: 'ss-title' }, title)); return s; };
+  sec('Appearance'); sec('Interface style', 'ss-style-sec'); sec('Name');
+  const rs = sec('Deep research', 'ss-research-sec');
+  rs.appendChild(el(doc, 'div', { class: 'ss-rseg', id: 'ss-research-level', role: 'group' }));
+  const sheet = el(doc, 'dialog'); doc.body.appendChild(sheet);
+  const list = el(doc, 'div', { class: 'sa-list' }); sheet.appendChild(list);
+  list.appendChild(el(doc, 'div', { class: 'sa-switch', id: 'simple-agent-switch' }));
+  list.appendChild(el(doc, 'button', { class: 'sa-row sa-more', id: 'simple-more-agents' }, 'More agents'));
+  const n1 = H.attach(d, 'simple-phone', { doc, win }), n2 = H.attach(sheet, 'simple-phone', { doc, win });
+  const have = new Set([...infos(d), ...infos(sheet)].map((b) => b.getAttribute('data-rec')));
+  for (const id of ['OPT-1022', 'OPT-0284', 'OPT-0613', 'OPT-1036', 'OPT-1037', 'OPT-0128', 'OPT-1023']) assert.ok(have.has(id), id + ' has its ⓘ');
+  assert.ok(n1 >= 5 && n2 >= 2);
+  // the markup the anchors rely on is in the page code, and both sheets are mounted for the surface
+  const mob = read('mobile.js');
+  for (const id of ['simple-agent-switch', 'simple-more-agents', 'ss-research-level']) assert.ok(mob.includes(`.id = '${id}'`), id);
+  assert.match(mob, /function simpleAgentsOpen\(\)[\s\S]*?mount\(d, 'simple-phone'\)[\s\S]*?\n\}/);
+  assert.match(mob, /function simpleSettingsOpen\(\)[\s\S]*?mount\(d, 'simple-phone'\)/);
+  loaded();
+});

@@ -1,5 +1,5 @@
 {
-  "version": "b2bd725e2bf552b90f658d8e3590edbf8a5c6e3b",
+  "version": "3ceb040f878871a60275e7817c8c406773df1826",
   "records": [
     {
       "id": "OPT-0001",
@@ -4102,7 +4102,7 @@
         },
         {
           "surface": "simple-phone",
-          "label": "All Agents | Teams"
+          "selector": "#simple-agent-switch"
         },
         {
           "surface": "desktop",
@@ -9317,6 +9317,10 @@
         },
         {
           "surface": "simple-desktop",
+          "label": "Interface style"
+        },
+        {
+          "surface": "simple-phone",
           "label": "Interface style"
         }
       ],
@@ -19695,6 +19699,10 @@
         },
         {
           "surface": "simple-desktop",
+          "label": "Name"
+        },
+        {
+          "surface": "simple-phone",
           "label": "Name"
         }
       ],
@@ -30742,6 +30750,10 @@
         {
           "surface": "simple-desktop",
           "label": "Appearance"
+        },
+        {
+          "surface": "simple-phone",
+          "label": "Appearance"
         }
       ],
       "mergedInto": "OPT-0237"
@@ -30781,7 +30793,7 @@
         },
         {
           "surface": "simple-phone",
-          "label": "More agents"
+          "selector": "#simple-more-agents"
         }
       ],
       "facts": "button 'More agents' app.js:338-343 and mobile.js:17761; open or closed is kept per device in localStorage hub-simple-more ('1' open) lib/ui-simple.js:337, app.js:316-318; only in Simple mode (hubSimple); a busy hidden agent shows a dot on the button app.js:345-347."
@@ -31118,7 +31130,7 @@
       "anchors": [
         {
           "surface": "simple-phone",
-          "label": "Always yes runs: Quick | Thorough"
+          "selector": "#ss-research-level"
         }
       ],
       "mergedInto": "OPT-0468"

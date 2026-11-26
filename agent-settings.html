@@ -126,7 +126,7 @@
   .lb-path, .lb-cmd { font-family: monospace; font-size: 11px; color: var(--as-dim-bbb); }
   .lb-empty { color: var(--as-dim-888); }
   /* The ⓘ help beside a setting (lib/ui-settings-help.js): after the label, a panel beside it (a bottom sheet in a narrow window) */
-  label:has(+ .st-info) { display: inline-block; }
+  label:has(+ .st-info), label.st-has-info { display: inline-block; }
   .st-info { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 20px; height: 20px; margin: 0 0 4px 6px; padding: 0; border: 1px solid var(--as-border-2); border-radius: 50%; background: transparent; color: var(--as-dim-999); font: inherit; font-size: 13px; line-height: 1; cursor: pointer; vertical-align: middle; }
   .st-info:hover { color: var(--as-text); border-color: var(--as-dim-999); }
   .st-info:focus-visible, .st-help-x:focus-visible, .st-help-ask:focus-visible { outline: 2px solid var(--as-accent); outline-offset: 2px; }

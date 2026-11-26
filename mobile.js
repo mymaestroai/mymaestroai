@@ -2534,7 +2534,7 @@ function researchSimplePaint(d) {
   }
   const hint = document.createElement('div'); hint.className = 'ss-rhint'; hint.textContent = RESEARCH_HINT;
   sec.appendChild(t); sec.appendChild(seg);
-  if (researchPrefChoice === 'always') { const lseg = document.createElement('div'); lseg.className = 'ss-rseg'; lseg.setAttribute('role', 'group'); lseg.setAttribute('aria-label', 'Always yes runs'); researchLevelButtons(lseg, true); sec.appendChild(lseg); }
+  if (researchPrefChoice === 'always') { const lseg = document.createElement('div'); lseg.className = 'ss-rseg'; lseg.setAttribute('role', 'group'); lseg.setAttribute('aria-label', 'Always yes runs'); lseg.id = 'ss-research-level'; researchLevelButtons(lseg, true); sec.appendChild(lseg); }
   sec.appendChild(hint);
   anchor.after(sec);
 }
@@ -17790,7 +17790,7 @@ function simpleTeamsSig() {
   return JSON.stringify([m.secs.map((s) => [s.key, s.count, s.open, s.rows.map((r) => [r.a.name, r.a.display || '', r.a.icon || '', !!r.a.lead, r.tm.level, r.tm.rank, !!r.build, !!r.tm.pill, !!r.tm.open, r.tm.n, !!r.tm.last, !!r.tm.parentLast])]), teamsOpen]);
 }
 function simpleSwitch(list) {
-  const sw = document.createElement('div'); sw.className = 'sa-switch'; sw.setAttribute('role', 'tablist');
+  const sw = document.createElement('div'); sw.className = 'sa-switch'; sw.setAttribute('role', 'tablist'); sw.id = 'simple-agent-switch';
   sw.innerHTML = '<button type="button" data-view="all" role="tab">All Agents</button><button type="button" data-view="teams" role="tab">Teams</button>';
   sw.addEventListener('click', (e) => { const b = e.target.closest('button[data-view]'); if (b) teamsPick(b.dataset.view === 'teams' ? 'teams' : 'agents'); });
   list.appendChild(sw);
@@ -17817,7 +17817,7 @@ function simpleAgentListFill(list, opts) {
   const m = simpleAgentSheetModel(agents, current, simpleMoreGet(), isBusy, bgCountOf);
   for (const a of m.primary) list.appendChild(simpleAgentRow(a, opts));
   if (m.hasMore) {
-    const mb = document.createElement('button'); mb.type = 'button'; mb.className = 'sa-row sa-more'; mb.setAttribute('aria-expanded', String(m.open));
+    const mb = document.createElement('button'); mb.type = 'button'; mb.className = 'sa-row sa-more'; mb.id = 'simple-more-agents'; mb.setAttribute('aria-expanded', String(m.open));
     mb.innerHTML = '<span class="sa-txt"><b>More agents</b></span><span class="sa-chev" aria-hidden="true"></span><span class="sa-dot"></span>';
     mb.querySelector('.sa-chev').textContent = m.open ? '⌃' : '⌄';
     simpleMoreDotPaint(mb.querySelector('.sa-dot'), m);
@@ -17853,6 +17853,7 @@ function simpleAgentsOpen() {
   d.innerHTML = '<h3>Talking to</h3><div class="sa-list"></div>';
   simpleAgentsFill(d);
   if (!d.open) d.showModal();
+  if (window.hubSettingsHelp) window.hubSettingsHelp.mount(d, 'simple-phone').catch(() => {});   // the ⓘ help beside All Agents | Teams and More agents (rows drawn later are watched)
 }
 // Live status changed: repaint the dots in place (no rebuild, so a tap in progress is not lost): the open sheet and the sidebar.
 function simpleDotsIn(box) {
