@@ -111,6 +111,7 @@ function setup(over = {}) {
     if (url === '/api/openrouter') return resp(200, { models: [] });
     if (url === '/api/notify/prefs' && method === 'GET') return resp(200, { ok: true, prefs: state.notify });
     if (url === '/api/notify/prefs' && method === 'PUT') {
+      if (state.stallPutBody) return { ok: true, status: 200, json: () => new Promise(() => {}) };   // headers arrive, the body never does
       if (body.prefs === null) delete state.notify.agents[body.agent];
       else { const cur = { ...(state.notify.agents[body.agent] || {}) }; for (const [k, v] of Object.entries(body.prefs)) { if (v === null) delete cur[k]; else cur[k] = v; } state.notify.agents[body.agent] = cur; }
       return resp(200, { ok: true, prefs: state.notify });
@@ -145,7 +146,7 @@ function setup(over = {}) {
   const stale = JSON.parse(JSON.stringify(state.agents));
   const card = C.createCard({
     doc, win, fetch, records: () => RECORDS, me: () => ('me' in over ? over.me : ADMIN), agentsList: () => stale, subscribe: () => () => {},
-    help: null, setTimeout: () => {}, phone: false, simple: !!over.simple,
+    help: null, setTimeout: () => {}, phone: false, simple: !!over.simple, requestMs: over.requestMs,
   });
   return { card, doc, win, state, calls, confirms };
 }
@@ -698,6 +699,42 @@ test('Short name: a rename answered after the person opened another card leaves 
   const b = await start();
   b.release(); await flush();
   assert.strictEqual(b.t.card.state().name, 'harbor2', 'nobody navigated: the card is on the new name');
+});
+
+// ---- 8b. phase 3 round 4 ---------------------------------------------------------------------------------------------------
+test('R4-1: a notifications save whose body never arrives is given up after the limit and the row unlocks with a message', async () => {
+  const t = await opened({ requestMs: 40 });
+  t.state.stallPutBody = true;
+  const row = rowOf(t.card.el(), 'OPT-0168');
+  await pick(all(row, 'select')[0], 'asks');
+  assert.strictEqual(t.card.state().saving.size, 1, 'locked while waiting');
+  await new Promise((r) => setTimeout(r, 150)); await flush();
+  assert.strictEqual(t.card.state().saving.size, 0, 'unlocked after the deadline');
+  assert.match(rowOf(t.card.el(), 'OPT-0168').textContent, /did not answer in time/);
+});
+
+test('R4-1: no row code calls fetch directly (every request goes through the card\'s bounded helper)', () => {
+  for (const f of ['ui-agent-card-basics.js', 'ui-agent-card-more.js']) {
+    const src = fs.readFileSync(path.join(root, 'lib', f), 'utf8');
+    assert.ok(!/\.fetch\s*\(|\bfetch\s*\(/.test(src), f + ' has no raw fetch call');
+  }
+});
+
+test('R4-4: the voice speed row is 0.75 to 1.5 in steps of 0.05, and 2.0 is refused before anything is sent; sensitivity is 0 to 100', async () => {
+  const t = await opened({ tweak: (a) => { a[1].voiceDefaults = { endPause: 1200, continueWait: 3000, interruptSensitivity: 50, voiceSpeed: 1 }; } });
+  all(t.card.el(), '.ac-more-head')[0].click();
+  const input = all(rowOf(t.card.el(), 'OPT-0032'), 'input')[0];
+  assert.deepStrictEqual(['min', 'max', 'step'].map((k) => input.getAttribute(k)), ['0.75', '1.5', '0.05']);
+  t.calls.length = 0;
+  input.value = '2'; input.dispatch('change'); await flush();
+  assert.strictEqual(writes(t).length, 0, 'nothing saved');
+  assert.match(rowOf(t.card.el(), 'OPT-0032').textContent, /Enter a number from 0\.75 to 1\.5/);
+  const sens = all(rowOf(t.card.el(), 'OPT-0031'), 'input')[0];
+  sens.value = '101'; sens.dispatch('change'); await flush();
+  assert.strictEqual(writes(t).length, 0, 'sensitivity above 100 is refused too');
+  const ok = all(rowOf(t.card.el(), 'OPT-0032'), 'input')[0];
+  ok.value = '1.25'; ok.dispatch('change'); await flush();
+  assert.deepStrictEqual(writes(t).map((c) => c.body), [{ voiceDefaults: { voiceSpeed: 1.25 } }]);
 });
 
 // ---- 9. source checks ------------------------------------------------------------------------------------------------------

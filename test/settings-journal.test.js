@@ -662,6 +662,39 @@ test('S5: restoring an agent field goes through updateAgentField with the guards
   } finally { events.publish = realPublish; apply._setSandboxRemover(null); }
 });
 
+test('R4-5: restoring a key that was absent before (compaction.at, voiceDefaults.voiceSpeed, voice.cloudVoice) removes that key alone, read back; a restore that changes nothing is refused', async () => {
+  const apply = L('settings-apply');
+  const who = { isAdmin: true, user: 'u_owner', isAdminSession: true };
+  const cur = (dotted) => agents.readAgentValue('hazel', dotted);
+  apply._setSandboxRemover(() => {});
+  try {
+    assert.equal((await agents.updateAgentField('hazel', { compaction: { mode: 'on', at: 0.5 } })).success, true);
+    const a = apply.restoreAgentField('hazel', 'compaction.at', undefined, who);
+    assert.equal(a.ok, true, JSON.stringify(a));
+    assert.equal(cur('compaction.at'), undefined, 'at is gone');
+    assert.equal(cur('compaction.mode'), 'on', 'the mode stays');
+    assert.equal((await agents.updateAgentField('hazel', { voiceDefaults: { endPause: 2000, voiceSpeed: 1.2 } })).success, true);
+    const b = apply.restoreAgentField('hazel', 'voiceDefaults.voiceSpeed', undefined, who);
+    assert.equal(b.ok, true, JSON.stringify(b));
+    assert.equal(cur('voiceDefaults.voiceSpeed'), undefined, 'voiceSpeed is gone');
+    assert.equal(cur('voiceDefaults.endPause'), 2000, 'the other timing stays');
+    const v = await agents.updateAgentField('hazel', { voice: { voice: '', stt: 'local', tts: 'openai', cloudVoice: 'nova', cloudConfirm: true } }, { isOwner: true, userId: 'u_owner' });
+    assert.equal(v.success, true, JSON.stringify(v));
+    {
+      const c = apply.restoreAgentField('hazel', 'voice.cloudVoice', undefined, who);
+      assert.equal(c.ok, true, JSON.stringify(c));
+      assert.equal(cur('voice.cloudVoice'), 'coral', 'the chosen voice is gone; the engine default (stored for openai) is what is left');
+      assert.equal(cur('voice.tts'), 'openai', 'the engine stays');
+    }
+    // a restore the server reshapes (0.333 is stored as 0.33) did not put the value back: refused, naming what it is now
+    assert.equal((await agents.updateAgentField('hazel', { compaction: { at: 0.5 } })).success, true);
+    const d = apply.restoreAgentField('hazel', 'compaction.at', 0.333, who);
+    assert.equal(d.ok, false);
+    assert.match(d.error, /was not put back/);
+    assert.match(d.error, /0\.33/);
+  } finally { apply._setSandboxRemover(null); }
+});
+
 test('S5: the PATCH route, the lead\'s tool path and Restore all call the one shared after-change function', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
   assert.match(src, /settingsApply\.afterAgentChange\(name, body,/);

@@ -215,6 +215,11 @@ test('the journal records exactly the changed keys of a partial update', async (
   assert.deepStrictEqual(await changedKeys(() => upd({ voiceDefaults: { preset: null } })), ['agents.biographer.voiceDefaults.preset']);
 });
 
+test('R4 FU: agent-settings.html Custom call timing sends preset:null with the four numbers (the preset name goes)', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'agent-settings.html'), 'utf8');
+  assert.match(src, /mode === 'custom' \? \{ preset: null, endPause: val\('vd-pause'\), continueWait: val\('vd-wait'\), interruptSensitivity: val\('vd-sens'\), voiceSpeed: val\('vd-speed'\) \}/);
+});
+
 test('mobile.js passes the page\'s dialogGuard to hubAgentCard.configure', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'mobile.js'), 'utf8');
   const line = src.split('\n').find(l => l.includes('hubAgentCard.configure('));

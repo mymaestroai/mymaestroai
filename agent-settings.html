@@ -1432,7 +1432,7 @@
     const mode = document.getElementById('voice-defaults').value;
     const val = (id) => Number(document.getElementById(id).value);
     const body = mode === 'patient' ? { preset: 'patient' }
-      : mode === 'custom' ? { endPause: val('vd-pause'), continueWait: val('vd-wait'), interruptSensitivity: val('vd-sens'), voiceSpeed: val('vd-speed') }
+      : mode === 'custom' ? { preset: null, endPause: val('vd-pause'), continueWait: val('vd-wait'), interruptSensitivity: val('vd-sens'), voiceSpeed: val('vd-speed') }
       : null;
     try {
       const result = await apiFetch(`/api/agents/${encodeURIComponent(agentName)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ voiceDefaults: body }) });

@@ -956,6 +956,39 @@ test('R3-6: a post-save refresh that never answers (headers or body) unlocks aft
   }
 });
 
+test('R4-2: Escape joining a save that is running and fails keeps the submitted text in the row, under the error', async () => {
+  const saved = [];
+  const t = setup({ rows: TEXT_ROW(saved), firstRows: { role: ['OPT-0005'] } });
+  await t.card.open('harbor', { section: 'role' });
+  let release; t.state.gate = new Promise((r) => { release = r; });
+  t.state.fail = 'That is too long.';
+  const input = all(rowOf(t.card.el(), 'OPT-0005'), 'input')[0];
+  input.value = 'the submitted text'; input.dispatch('change'); await flush();
+  assert.strictEqual(t.card.state().saving.size, 1, 'the save is running');
+  t.card.el().dispatch('keydown', { key: 'Escape' });   // joins it
+  await flush();
+  release(); await wait(30);
+  assert.strictEqual(t.card.isOpen(), true, 'the card stays open');
+  const row = rowOf(t.card.el(), 'OPT-0005');
+  assert.strictEqual(all(row, '.ac-err')[0].textContent, 'That is too long.');
+  assert.strictEqual(all(row, 'input')[0].value, 'the submitted text', 'the text is still there');
+  assert.strictEqual(t.state.agents[1].blurb, 'Keeps notes');
+});
+
+test('R4-3: a PATCH that timed out whose recovery read also times out says the change could not be confirmed', async () => {
+  const saved = [];
+  const t = setup({ requestMs: 40, rows: TEXT_ROW(saved), firstRows: { role: ['OPT-0005'] } });
+  await t.card.open('harbor', { section: 'role' });
+  t.state.hang = true; t.state.hangGet = true;
+  const input = all(rowOf(t.card.el(), 'OPT-0005'), 'input')[0];
+  input.value = 'x'; input.dispatch('change'); await flush();
+  await wait(200);
+  assert.strictEqual(t.card.state().saving.size, 0, 'unlocked');
+  const text = all(rowOf(t.card.el(), 'OPT-0005'), '.ac-err')[0].textContent;
+  assert.strictEqual(text, 'The change could not be confirmed; reopen the card to see what the hub has.');
+  assert.ok(!/shows what the hub has now/.test(text));
+});
+
 test('R3-5: a superseded open() resolves "superseded", a denial false; app.js and mobile.js do nothing on it', async () => {
   const fs = require('node:fs'); const path = require('node:path');
   for (const f of ['app.js', 'mobile.js']) {
