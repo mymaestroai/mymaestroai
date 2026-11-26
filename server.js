@@ -3390,6 +3390,8 @@ async function handleHttpRequest(req, res) {
       // systemd installs: the process exits with code 75 and systemd restarts it; others: safe-restart.sh with a visible log.
       const r = require('./lib/restart').requestRestart({ projectDir: __dirname, port: PORT, reason: 'UI button', by: 'owner' });
       if (r.error) { getJobRunner().allowNewJobs(); return jsonResponse(res, 500, { error: r.error }); }
+      // A restart that never exits must not refuse jobs for good.
+      const t = setTimeout(() => getJobRunner().allowNewJobs(), 120000); t.unref();
       return jsonResponse(res, 200, { status: 'restarting', bootId: require('./lib/hub-events').BOOT_ID, pid: process.pid, ...r });
     }
     // The page shows this when a restart left the same process running (boot id unchanged): what the relauncher

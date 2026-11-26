@@ -69,7 +69,7 @@ test('G1: a second fresh instance cannot use a sign-in a first one already used'
   assert.equal(n, 0);
 });
 
-test('G1: used in the file is refused and the file is emptied', async () => {
+test('G1: used in the file is refused (the file is left alone, see G3)', async () => {
   const A = fresh();
   A._test.setOpener(async () => false);
   const r = await A.beginSignIn({ listener: false });
@@ -80,7 +80,7 @@ test('G1: used in the file is refused and the file is emptied', async () => {
   assert.equal(out.ok, false);
   assert.equal(out.reason, 'used');
   assert.equal(n, 0);
-  assert.deepEqual(readFile(B), {});
+  assert.equal(readFile(B).id, f.id);
 });
 
 test('G1: expired in the file is refused and the file is emptied', async () => {
@@ -183,4 +183,132 @@ test('beginSignIn with a browser that opened returns the paste-back steps at onc
   assert.ok(A.pendingView(), 'still waiting');
   A._test.setPostForm(okExchange('bg'));
   assert.equal((await A.finishWithPastedAddress(cb(stateOf(r.url)))).ok, true);
+});
+
+// ── Round 2 ──────────────────────────────────────────────────────────────
+const lockFile = (G) => path.join(path.dirname(G.TOKEN_PATH), 'gmail-signin.lock');
+const tokenText = (G) => (fs.existsSync(G.TOKEN_PATH) ? fs.readFileSync(G.TOKEN_PATH, 'utf8') : null);
+const tick = (ms = 20) => new Promise((r) => setTimeout(r, ms));
+
+test('G3: the same address submitted twice while the exchange answers: one token saved, the second is "already used"', async () => {
+  const A = fresh();
+  A._test.setOpener(async () => false);
+  const a = await A.beginSignIn({ listener: false });
+  let release; let calls = 0;
+  A._test.setPostForm(() => { calls++; return new Promise((res) => { release = () => res({ status: 200, json: { access_token: 'AT-G3', refresh_token: 'RT-G3', expires_in: 3600 } }); }); });
+  const first = A.finishWithPastedAddress(cb(stateOf(a.url), 'ONE'));
+  await tick();
+  const second = await A.finishWithPastedAddress(cb(stateOf(a.url), 'ONE'));
+  assert.equal(second.ok, false);
+  assert.equal(second.reason, 'used');
+  assert.match(second.message, /already used/);
+  assert.equal(readFile(A).id !== undefined, true, 'the duplicate did not empty the file');
+  release();
+  const out = await first;
+  assert.equal(out.ok, true, 'the first exchange still saves its token');
+  assert.equal(calls, 1);
+  assert.equal(JSON.parse(tokenText(A)).refresh_token, 'RT-G3');
+});
+
+test('G3: a used sign-in read from the file by finishWithCode is refused without emptying the file', async () => {
+  const A = fresh();
+  A._test.setOpener(async () => false);
+  const r = await A.beginSignIn({ listener: false });
+  const f = readFile(A); f.used = true;
+  fs.writeFileSync(pendingFile(A), JSON.stringify(f), { mode: 0o600 });
+  const B = fresh(); let n = 0; B._test.setPostForm(async () => { n++; return okExchange('x')(); });
+  const out = await B.finishWithPastedAddress(cb(stateOf(r.url)));
+  assert.equal(out.reason, 'used');
+  assert.equal(n, 0);
+  assert.equal(readFile(B).id, f.id, 'a duplicate is read-only');
+});
+
+test('G4: two module instances claim the same sign-in at once: exactly one wins', async () => {
+  const A = fresh();
+  A._test.setOpener(async () => false);
+  const a = await A.beginSignIn({ listener: false });
+  const B = fresh(); const C = fresh();
+  let n = 0; const rel = [];
+  for (const G of [B, C]) G._test.setPostForm(() => { n++; return new Promise((res) => { rel.push(() => res({ status: 200, json: { access_token: 'AT-W', refresh_token: 'RT-W', expires_in: 3600 } })); }); });
+  const pb = B.finishWithPastedAddress(cb(stateOf(a.url), 'K'));
+  const pc = C.finishWithPastedAddress(cb(stateOf(a.url), 'K'));
+  await tick(150);
+  rel.forEach((f) => f());
+  const outs = await Promise.all([pb, pc]);
+  assert.equal(n, 1, 'one exchange only');
+  assert.equal(outs.filter((o) => o.ok).length, 1);
+  assert.equal(outs.filter((o) => !o.ok)[0].reason, 'used');
+  assert.ok(!fs.existsSync(lockFile(A)), 'the lock is released');
+});
+
+test('G4: a lock older than 30 seconds is taken over', async () => {
+  const A = fresh();
+  A._test.setOpener(async () => false);
+  fs.writeFileSync(lockFile(A), JSON.stringify({ pid: 1, at: Date.now() - 60000 }), { mode: 0o600 });
+  const old = new Date(Date.now() - 60000);
+  fs.utimesSync(lockFile(A), old, old);
+  const r = await A.beginSignIn({ listener: false });
+  assert.equal(r.mode, 'paste');
+  assert.ok(readFile(A).state === stateOf(r.url));
+  assert.ok(!fs.existsSync(lockFile(A)), 'the lock is released after the start');
+});
+
+test('G4: a fresh lock held by someone else gives a plain retryable sentence', async () => {
+  const A = fresh();
+  A._test.setOpener(async () => false);
+  const a = await A.beginSignIn({ listener: false });
+  fs.writeFileSync(lockFile(A), JSON.stringify({ pid: 2, at: Date.now() }), { mode: 0o600 });
+  try {
+    const out = await A.finishWithPastedAddress(cb(stateOf(a.url)));
+    assert.equal(out.ok, false);
+    assert.equal(out.message, 'Your Maestro is busy finishing another Gmail sign-in; try again in a moment.');
+    assert.equal(readFile(A).used, false, 'nothing was claimed');
+  } finally { fs.unlinkSync(lockFile(A)); }
+});
+
+test('G4: saving under the lock refuses an attempt that was replaced during the exchange', async () => {
+  const A = fresh();
+  A._test.setOpener(async () => false);
+  const a = await A.beginSignIn({ listener: false });
+  const before = tokenText(A);
+  A._test.setPostForm(async () => {
+    fs.writeFileSync(pendingFile(A), JSON.stringify({ id: 'other', state: 'ss', verifier: 'vv', expiresAt: Date.now() + 60000, used: false }), { mode: 0o600 });
+    return { status: 200, json: { access_token: 'AT-R', refresh_token: 'RT-R', expires_in: 3600 } };
+  });
+  const out = await A.finishWithPastedAddress(cb(stateOf(a.url)));
+  assert.equal(out.ok, false);
+  assert.equal(out.reason, 'replaced');
+  assert.equal(tokenText(A), before);
+  assert.ok(!fs.existsSync(lockFile(A)));
+});
+
+test('G5: no link and no browser when the sign-in cannot be saved', async () => {
+  const A = fresh();
+  let opened = 0;
+  A._test.setOpener(async () => { opened++; return true; });
+  const real = fs.writeFileSync;
+  fs.writeFileSync = function (p, ...rest) {
+    if (/gmail-signin-pending/.test(String(p))) { const e = new Error('EACCES: permission denied'); e.code = 'EACCES'; throw e; }
+    return real.call(this, p, ...rest);
+  };
+  try {
+    await assert.rejects(() => A.beginSignIn({ listener: false }), (e) => e.message === 'Could not save the Gmail sign-in. Check the data folder and try again.');
+  } finally { fs.writeFileSync = real; }
+  assert.equal(opened, 0);
+  assert.equal(A.pendingView(), null);
+  assert.equal(A.getAuthUrl(), null);
+});
+
+test('follow-up: a newer sign-in found in the file ends the old in-memory attempt', async () => {
+  const A = fresh();
+  A._test.setOpener(async () => false);
+  const s = await A.startSignIn({ listener: false, open: false });
+  let settled = null;
+  s.promise.then(() => { settled = 'resolved'; }, (e) => { settled = e.message; });
+  const P = fresh(); P._test.setOpener(async () => false);
+  await P.beginSignIn({ listener: false });   // another process starts a newer one
+  const out = await A.submitPastedAddress('http://localhost:19877/callback?state=zz&code=Q');
+  assert.equal(out.ok, false);
+  await tick();
+  assert.equal(settled, 'replaced', 'the old attempt was rejected');
 });
