@@ -427,30 +427,74 @@ for (const kind of KINDS) {
     p.paint();
     return { p, resolvers };
   };
-  test(`${kind}: two picks, the answers arrive in reverse order: the newest pick is the person's value and the shown choice`, async () => {
+  const OK = { ok: true, status: 200, json: async () => ({}) }, BAD = { ok: false, status: 400, json: async () => ({}) };
+  // the fake server: stores what each POST says, in the order the POSTs reach it
+  const serve = (p, resolvers, answer) => { const stored = { v: 'plan' }; return { stored, settle: async (i, r) => { stored.v = resolvers[i].post.body.planBadge; resolvers[i].res(r || OK); await tick(); await tick(); } }; };
+  test(`${kind}: pick family then five while the first is in flight: exactly two POSTs in order family, five; the stored value and the shown choice are five`, async () => {
     const { p, resolvers } = held();
-    const a = vm.runInContext("planBadgePick('family')", p.ctx);
-    const b = vm.runInContext("planBadgePick('five')", p.ctx);
-    assert.strictEqual(resolvers.length, 2);
-    resolvers[1].res({ ok: true, status: 200, json: async () => ({}) }); await b; await tick();
+    const s = serve(p, resolvers);
+    vm.runInContext("planBadgePick('family')", p.ctx);
+    vm.runInContext("planBadgePick('five')", p.ctx);
+    await tick();
+    assert.deepStrictEqual(resolvers.map(r => r.post.body.planBadge), ['family'], 'only one save in flight');
+    assert.strictEqual(p.store.m['mm-plan-badge'], 'five', 'the device copy is the newest pick at once');
+    assert.ok(p.badge.textContent.startsWith('5h '), 'repainted at once: ' + p.badge.textContent);
+    await s.settle(0);
+    assert.strictEqual(p.win.hubMe.planBadge, 'plan', 'an older value does not become the person value');
+    assert.deepStrictEqual(resolvers.map(r => r.post.body.planBadge), ['family', 'five']);
+    await s.settle(1);
+    assert.deepStrictEqual(resolvers.map(r => r.post.body.planBadge), ['family', 'five'], 'nothing more to send');
+    assert.strictEqual(s.stored.v, 'five');
     assert.strictEqual(p.win.hubMe.planBadge, 'five');
-    resolvers[0].res({ ok: true, status: 200, json: async () => ({}) }); await a; await tick();
-    assert.strictEqual(p.win.hubMe.planBadge, 'five', 'the older answer is ignored');
     assert.strictEqual(p.choice(), 'five');
     p.paint();
     assert.ok(p.badge.textContent.startsWith('5h '), p.badge.textContent);
   });
-  test(`${kind}: the newest pick's save failing keeps the device copy of the newest pick, even when an older save succeeds later`, async () => {
+  test(`${kind}: three quick picks family, five, plan while the first is in flight: two POSTs, family then plan; the final value is plan`, async () => {
+    const { p, resolvers } = held({ me: { planBadge: 'five' } });
+    const s = serve(p, resolvers);
+    vm.runInContext("planBadgePick('family')", p.ctx);
+    vm.runInContext("planBadgePick('five')", p.ctx);
+    vm.runInContext("planBadgePick('plan')", p.ctx);
+    await s.settle(0);
+    await s.settle(1);
+    assert.deepStrictEqual(resolvers.map(r => r.post.body.planBadge), ['family', 'plan']);
+    assert.strictEqual(s.stored.v, 'plan');
+    assert.strictEqual(p.win.hubMe.planBadge, 'plan');
+    assert.strictEqual(p.choice(), 'plan');
+  });
+  test(`${kind}: a pick equal to the value just sent is not sent again`, async () => {
     const { p, resolvers } = held();
-    const a = vm.runInContext("planBadgePick('family')", p.ctx);
-    const b = vm.runInContext("planBadgePick('five')", p.ctx);
-    resolvers[1].res({ ok: false, status: 400, json: async () => ({}) }); await b; await tick();
-    resolvers[0].res({ ok: true, status: 200, json: async () => ({}) }); await a; await tick();
+    const s = serve(p, resolvers);
+    vm.runInContext("planBadgePick('family')", p.ctx);
+    vm.runInContext("planBadgePick('five')", p.ctx);
+    vm.runInContext("planBadgePick('family')", p.ctx);
+    await s.settle(0);
+    assert.strictEqual(resolvers.length, 1);
+    assert.strictEqual(p.win.hubMe.planBadge, 'family');
+    assert.strictEqual(p.choice(), 'family');
+  });
+  test(`${kind}: the newest pick's save failing keeps the device copy of the newest pick; the older save's success does not become the person value`, async () => {
+    const { p, resolvers } = held();
+    vm.runInContext("planBadgePick('family')", p.ctx);
+    vm.runInContext("planBadgePick('five')", p.ctx);
+    resolvers[0].res(OK); await tick(); await tick();
+    assert.strictEqual(resolvers.length, 2);
+    resolvers[1].res(BAD); await tick(); await tick();
     assert.strictEqual(p.win.hubMe.planBadge, 'plan', 'the older answer did not touch the person value');
     assert.strictEqual(p.store.m['mm-plan-badge'], 'five');
     assert.strictEqual(p.choice(), 'five');
     p.paint();
     assert.ok(p.badge.textContent.startsWith('5h '), p.badge.textContent);
+  });
+  test(`${kind}: an open chooser follows a repaint to another model family: the row says Opus, not Fable`, () => {
+    const p = makePage(kind, { data: D([W(null, 0), W('fable', 0)]) });
+    p.paint(); p.badge.dispatch('click');
+    assert.ok(stripCheck(p.rows()[1].textContent).startsWith('Fable · 0% this week'), p.rows()[1].textContent);
+    if (kind === 'desktop') p.ctx.chatModelOf = () => 'claude-sdk/claude-opus-5'; else p.ctx.agentByName = () => ({ model: 'claude-sdk/claude-opus-5' });
+    p.data = D([W(null, 0), W('opus', 0)]); p.paint();
+    assert.ok(p.chooser(), 'still open');
+    assert.ok(stripCheck(p.rows()[1].textContent).startsWith('Opus · 0% this week'), p.rows()[1].textContent);
   });
   test(`${kind}: an open chooser follows a repaint: rows rebuilt, focus on the same kind, still open; no view closes it`, () => {
     const p = makePage(kind, { data: D([W(null, 40), W('fable', 22)], 70) });

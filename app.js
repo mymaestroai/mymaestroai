@@ -6531,17 +6531,25 @@
       }
       return planBadgeOk(dev) ? dev : null;
     }
-    let planBadgeSeq = 0;      // each pick takes the next number; only the newest pick's answer is applied
+    // At most one save in flight: a pick shows and is kept on this device at once, and planBadgeMem is the newest pick.
+    // When a save settles and the newest pick is a different value, that one is sent next, so the server hears the picks in order.
+    let planBadgeSaving = false;
     async function planBadgePick(v) {
       if (!planBadgeOk(v)) return;
-      const seq = ++planBadgeSeq;
       planBadgeMem = v;
       try { localStorage.setItem(PLAN_BADGE_KEY, v); } catch { /* storage blocked */ }
       paintPlanBadges();
-      try {
-        const r = await fetch('/api/me/prefs', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ planBadge: v }) });
-        if (r && r.ok && seq === planBadgeSeq) { if (window.hubMe) window.hubMe.planBadge = v; if (planBadgeMem === v) planBadgeMem = null; }
-      } catch { /* an older hub answers 400 until it restarts: the device copy stays */ }
+      if (planBadgeSaving) return;
+      planBadgeSaving = true;
+      let sent = v;
+      while (sent) {
+        try {
+          const r = await fetch('/api/me/prefs', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ planBadge: sent }) });
+          if (r && r.ok && planBadgeMem === sent) { if (window.hubMe) window.hubMe.planBadge = sent; planBadgeMem = null; }
+        } catch { /* an older hub answers 400 until it restarts: the device copy stays */ }
+        sent = planBadgeMem && planBadgeMem !== sent ? planBadgeMem : null;
+      }
+      planBadgeSaving = false;
     }
     function planFamilyOf(model) {
       const id = String(model || '').replace(/^claude-sdk\//, '').replace(/\[1m\]$/i, '').replace(/^claude-/, '').toLowerCase();
@@ -6587,6 +6595,7 @@
       c.badge.setAttribute('aria-expanded', 'false');
       if (returnFocus) c.badge.focus();
     }
+    const planChooserLabel = (k, w) => (k === 'plan' ? 'Plan (all models)' : k === 'family' ? (w.label || 'Model family') : '5-hour window');
     // The rows of the chooser, built from a badge view: used when it opens and again when the badge repaints under it.
     function planChooserFill(c, view, levels) {
       c.list.textContent = '';
@@ -6605,7 +6614,7 @@
         check.className = 'pc-check';
         check.setAttribute('aria-hidden', 'true');
         check.textContent = current ? '✓' : '';
-        const label = k === 'plan' ? 'Plan (all models)' : k === 'family' ? (w.label || 'Model family') : '5-hour window';
+        const label = planChooserLabel(k, w);
         const hasWhen = Number.isFinite(Date.parse(w.resetsAt || ''));
         const text = document.createElement('span');
         text.className = 'pc-text';
@@ -6622,7 +6631,7 @@
       const c = planChooser;
       if (!c) return;
       // nothing the rows show has changed: leave them (a pointer pressed on a row keeps its row)
-      const sig = (v) => v.avail.map(k => `${k}:${badgeAmount(v.wins[k], levels)}:${v.wins[k].resetsAt || ''}`).join('|') + '#' + v.main.kind;
+      const sig = (v) => v.avail.map(k => `${k}:${planChooserLabel(k, v.wins[k])}:${badgeAmount(v.wins[k], levels)}:${v.wins[k].resetsAt || ''}`).join('|') + '#' + v.main.kind;
       if (c.view && sig(c.view) === sig(view)) { c.view = view; return; }
       const was = c.rows.find(r => r.el === document.activeElement);
       planChooserFill(c, view, levels);
