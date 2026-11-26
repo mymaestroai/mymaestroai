@@ -355,6 +355,17 @@
     #chat-meta .sub-wrap.pickable::after { content: '\25BE'; flex: none; margin-left: 4px; font-size: 12px; line-height: 1.4; color: var(--accent); }
     #chat-ctx, #chat-plan { flex: 0 0 auto; white-space: nowrap; }
     #chat-plan.warn { color: var(--caution); } #chat-plan.hot { color: var(--chat-plan-hot-text); } #chat-plan.refused { color: var(--alert); }
+    #chat-meta #chat-plan { background: none; border: 0; padding: 0; margin: 0; font: inherit; font-size: 12px; color: inherit; cursor: pointer; text-align: left; }
+    #chat-meta #chat-plan:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+    /* the popup under the Claude usage badge: what the badge shows */
+    .plan-chooser { position: fixed; z-index: 1000; background: var(--bg-card); color: var(--text); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 8px 24px var(--shadow-menu); padding: 4px; font-size: 14px; }
+    .plan-chooser .pc-list { display: flex; flex-direction: column; }
+    .plan-chooser .pc-row { display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 6px 10px; border-radius: 8px; color: var(--text-dim); cursor: pointer; }
+    .plan-chooser .pc-row.current { color: var(--text); }
+    .plan-chooser .pc-row:active { background: var(--hover-tint); color: var(--text); border-color: var(--accent); }
+    .plan-chooser .pc-row:focus-visible, .plan-chooser .pc-subs:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+    .plan-chooser .pc-check { flex: none; width: 1em; color: var(--accent); }
+    .plan-chooser .pc-subs { display: block; width: 100%; min-height: 36px; margin-top: 4px; padding: 6px 10px; background: none; color: var(--accent); border: 0; border-top: 1px solid var(--border); border-radius: 0 0 8px 8px; font: inherit; text-align: left; cursor: pointer; }
     #chat-ctx.hot { color: var(--warning); }
     #chat-meta .effort-wrap { flex: none; }
     #chat-meta .effort-wrap[hidden] { display: none; }
@@ -1534,7 +1545,7 @@ html.mm-simple .sa-tm:focus-visible, html.mm-simple .sa-sec-h:focus-visible, htm
     <!-- The model, effort, plan usage and context size get their own thin row, which wraps rather than cutting anything
          off: the model stays in view busy or idle (the bell and Stop buttons leave the name a 46 px column on a 360 px
          phone). Under the name, only what the agent is doing right now, while it works; a tap tells it in full. -->
-    <div id="chat-meta"><span class="sub-wrap"><span class="sub" id="chat-model"></span><select id="chat-model-pick" aria-label="Change this agent's model" hidden></select></span><span class="sub-wrap effort-wrap" id="chat-effort-wrap" hidden><span class="sub" id="chat-effort"></span><select id="chat-effort-pick" aria-label="Reasoning effort"></select></span><span class="sub" id="chat-plan" hidden></span><span class="sub" id="chat-ctx" hidden></span><button type="button" class="wk-chip" id="chat-workers-btn" aria-haspopup="dialog" title="Workers: what is working now, and the history of past workers" hidden><span class="wb-dot" aria-hidden="true"></span><span class="wb-label">Workers</span></button></div>
+    <div id="chat-meta"><span class="sub-wrap"><span class="sub" id="chat-model"></span><select id="chat-model-pick" aria-label="Change this agent's model" hidden></select></span><span class="sub-wrap effort-wrap" id="chat-effort-wrap" hidden><span class="sub" id="chat-effort"></span><select id="chat-effort-pick" aria-label="Reasoning effort"></select></span><button type="button" class="sub" id="chat-plan" hidden></button><span class="sub" id="chat-ctx" hidden></span><button type="button" class="wk-chip" id="chat-workers-btn" aria-haspopup="dialog" title="Workers: what is working now, and the history of past workers" hidden><span class="wb-dot" aria-hidden="true"></span><span class="wb-label">Workers</span></button></div>
     <button class="pacing-bar" title="Tap to resume full parallel"></button>
     <div class="scroll" id="chat-scroll"><div id="messages"></div></div>
     <div id="call-ended-bar" role="status" hidden><span class="ceb-text">The call ended when you left the app</span><button type="button" id="call-again" class="ceb-again">Call again</button><button type="button" id="call-ended-x" class="ceb-x" aria-label="Dismiss">&#x2715;</button></div>

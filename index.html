@@ -2318,23 +2318,37 @@
     }
     .chat-actions .agent-name {
       margin-left: auto; color: var(--accent); font-weight: 500; display: inline-flex; align-items: center; gap: 6px;
+      /* No room: the group wraps inside itself (badge drops to a second line) instead of pushing the bar past the window */
+      flex-wrap: wrap; min-width: 0; max-width: 100%;
     }
+    .chat-actions .agent-name-text { min-width: 8ch; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .cyber-tag.billing-api { background: var(--cyber-tag-billing-api-bg); color: var(--status-high); border-color: var(--status-high); }
     .chat-actions .model-pick {
       background: transparent; color: var(--accent); border: 1px solid var(--border); border-radius: 5px;
       padding: 5px 6px; font-size: 0.85rem; max-width: 320px; cursor: pointer;
+      min-width: 7rem; flex: 0 1 auto; text-overflow: ellipsis;
     }
     .chat-actions .model-pick:hover { border-color: var(--accent); }
-    .chat-actions .effort-pick { max-width: 150px; margin-left: 4px; }
+    .chat-actions .effort-pick { max-width: 150px; margin-left: 4px; min-width: 0; }
     .chat-actions .effort-pick:disabled { cursor: default; opacity: .75; }
     .chat-actions .effort-pick[hidden] { display: none; }
     /* Claude plan usage next to the model (lib/plan-usage), for agents on the Claude subscription */
-    .chat-actions .plan-badge { font-size: 0.78rem; color: var(--text-dim); border: 1px solid var(--border); border-radius: 5px; padding: 5px 7px; margin-left: 4px; cursor: pointer; white-space: nowrap; font-family: var(--font-mono); }
+    .chat-actions .plan-badge { background: transparent; line-height: inherit; font-size: 0.78rem; color: var(--text-dim); border: 1px solid var(--border); border-radius: 5px; padding: 5px 7px; margin-left: 4px; cursor: pointer; white-space: nowrap; font-family: var(--font-mono); }
+    .chat-actions .plan-badge:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
     .chat-actions .plan-badge[hidden] { display: none; }
     .chat-actions .plan-badge:hover { border-color: var(--accent); }
     .chat-actions .plan-badge.warn { color: var(--status-warn); border-color: var(--chat-actions-plan-badge-warn-border); }
     .chat-actions .plan-badge.hot { color: var(--status-high); border-color: var(--chat-actions-plan-badge-hot-border); }
     .chat-actions .plan-badge.refused { color: var(--status-hot); border-color: var(--wm-stop-border); }
+    /* the popup under the Claude usage badge: what the badge shows */
+    .plan-chooser { position: fixed; z-index: 1000; min-width: 260px; max-width: calc(100vw - 16px); background: var(--bg-card); color: var(--text); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 6px 20px var(--shadow-color-pop); padding: 4px; font-size: 0.82rem; }
+    .plan-chooser .pc-list { display: flex; flex-direction: column; }
+    .plan-chooser .pc-row { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border-radius: 5px; color: var(--text-dim); cursor: pointer; white-space: nowrap; }
+    .plan-chooser .pc-row.current { color: var(--text); }
+    .plan-chooser .pc-row:hover { border-color: var(--accent); color: var(--text); background: var(--bg-input); }
+    .plan-chooser .pc-row:focus-visible, .plan-chooser .pc-subs:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+    .plan-chooser .pc-check { flex: none; width: 1em; color: var(--accent); }
+    .plan-chooser .pc-subs { display: block; width: 100%; margin-top: 4px; padding: 7px 8px; background: transparent; color: var(--accent); border: 0; border-top: 1px solid var(--border); border-radius: 0 0 5px 5px; font: inherit; text-align: left; cursor: pointer; }
     /* Settings -> Subscriptions: one bar per usage window */
     #st-subs-body .subs-block { margin: 10px 0 4px; }
     #st-subs-body .subs-head { font-weight: 600; margin-bottom: 4px; }

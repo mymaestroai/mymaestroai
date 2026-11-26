@@ -98,3 +98,55 @@ test('chat route: the body\'s effort reaches the Claude, Codex and gateway sites
   // the stored agent setting is only read, never written, from the request
   assert.ok(!/updateAgent\([^)]*turnEffortAsked/.test(c));
 });
+
+test('planBadge: auth stores only plan, family or five, on the person\'s own record', () => {
+  const { dir, auth, owner, sam } = mkAuth();
+  assert.strictEqual(auth.getUser(sam.id).planBadge, undefined, 'nothing stored by default');
+  for (const v of ['plan', 'family', 'five']) {
+    const r = auth.setPrefs(sam.id, { planBadge: v });
+    assert.strictEqual(r.ok, true, v);
+    assert.strictEqual(auth.getUser(sam.id).planBadge, v);
+  }
+  const saved = JSON.parse(fs.readFileSync(path.join(dir, 'users.json'), 'utf8')).users;
+  assert.strictEqual(saved.find(u => u.id === sam.id).planBadge, 'five');
+  assert.strictEqual(saved.find(u => u.id === owner.id).planBadge, undefined, 'another person is untouched');
+  auth.setPrefs(owner.id, { planBadge: 'family' });
+  assert.deepStrictEqual([auth.getUser(sam.id).planBadge, auth.getUser(owner.id).planBadge], ['five', 'family'], 'two people keep their own');
+});
+
+test('planBadge: a bad value is refused with a plain sentence and nothing is stored', () => {
+  const { auth, sam } = mkAuth();
+  auth.setPrefs(sam.id, { uiMode: 'simple', theme: 'dark', planBadge: 'plan' });
+  for (const bad of ['week', '', 'Plan', null, 1, { a: 1 }]) {
+    const r = auth.setPrefs(sam.id, { planBadge: bad });
+    assert.deepStrictEqual(r, { ok: false, error: 'planBadge must be plan, family or five.' }, JSON.stringify(bad));
+  }
+  const r = auth.setPrefs(sam.id, { uiMode: 'advanced', planBadge: 'nope' });
+  assert.strictEqual(r.ok, false);
+  const u = auth.getUser(sam.id);
+  assert.deepStrictEqual([u.uiMode, u.theme, u.planBadge], ['simple', 'dark', 'plan'], 'nothing changed on a refusal');
+});
+
+test('planBadge: a body with only planBadge is accepted; an empty body still is not; uiMode and theme behave as before', () => {
+  const { auth, sam } = mkAuth();
+  assert.strictEqual(auth.setPrefs(sam.id, { planBadge: 'family' }).ok, true);
+  const e = auth.setPrefs(sam.id, {});
+  assert.strictEqual(e.ok, false);
+  assert.ok(/planBadge/.test(e.error) && /uiMode/.test(e.error) && /theme/.test(e.error), e.error);
+  const r = auth.setPrefs(sam.id, { uiMode: 'advanced', theme: 'light' });
+  assert.deepStrictEqual([r.ok, r.user.uiMode, r.user.theme], [true, 'advanced', 'light']);
+  assert.strictEqual(auth.getUser(sam.id).planBadge, 'family', 'a uiMode/theme change keeps planBadge');
+  assert.strictEqual(auth.setPrefs(sam.id, { theme: 'blue' }).ok, false);
+});
+
+test('planBadge: the server passes it through, replies with it, and /api/me returns it only when stored', () => {
+  const s = read('server.js');
+  const i = s.indexOf("pathname === '/api/me/prefs'");
+  const block = s.slice(i, s.indexOf("// This person's deep research choice", i));
+  assert.match(block, /hubAuth\.setPrefs\(req\.hubUser\.id, \{ uiMode: body\.uiMode, theme: body\.theme, planBadge: body\.planBadge \}\)/);
+  assert.match(block, /planBadge: \(hubAuth\.getUser\(req\.hubUser\.id\) \|\| \{\}\)\.planBadge \|\| null/);
+  const j = s.indexOf("pathname === '/api/me' && req.method === 'GET'");
+  const me = s.slice(j, s.indexOf("// This person's page mode and theme", j));
+  assert.match(me, /if \(rec && rec\.planBadge\) out\.planBadge = rec\.planBadge;/);
+  assert.match(me, /if \(rec && rec\.look\) out\.look = rec\.look;/, 'look unchanged');
+});

@@ -853,7 +853,7 @@ async function handleHttpRequest(req, res) {
       // This person's look (Simple mode): the saved choice, else by role (a member starts in Simple, an admin in Advanced).
       out.uiMode = (u && u.uiMode) || (isAdmin ? 'advanced' : 'simple');
       out.theme = (u && u.theme) || 'auto';
-      { const rec = req.hubUser ? hubAuth.getUser(req.hubUser.id) : null; if (rec && rec.look) out.look = rec.look; }   // this person's default look (the pages call HubLooks.rememberDefault); absent for accounts made before looks existed
+      { const rec = req.hubUser ? hubAuth.getUser(req.hubUser.id) : null; if (rec && rec.look) out.look = rec.look; if (rec && rec.planBadge) out.planBadge = rec.planBadge; }   // this person's default look (the pages call HubLooks.rememberDefault); absent for accounts made before looks existed
       return jsonResponse(res, 200, out);
     }
     // This person's page mode and theme: { uiMode?: 'simple'|'advanced', theme?: 'light'|'dark'|'auto' }. A signed-in
@@ -862,9 +862,9 @@ async function handleHttpRequest(req, res) {
       if (!req.hubUser || req.hubService || req.hubToken || req.hubPendingTotp) return jsonResponse(res, 401, { error: 'Sign in first' });
       let body = {};
       try { body = JSON.parse(await readBody(req) || '{}') || {}; } catch { return jsonResponse(res, 400, { error: 'Bad request' }); }
-      const r = hubAuth.setPrefs(req.hubUser.id, { uiMode: body.uiMode, theme: body.theme });
+      const r = hubAuth.setPrefs(req.hubUser.id, { uiMode: body.uiMode, theme: body.theme, planBadge: body.planBadge });
       if (!r.ok) return jsonResponse(res, 400, { error: r.error });
-      return jsonResponse(res, 200, { ok: true, uiMode: r.user.uiMode || (access.isAdmin(req.hubUser) ? 'advanced' : 'simple'), theme: r.user.theme || 'auto' });
+      return jsonResponse(res, 200, { ok: true, uiMode: r.user.uiMode || (access.isAdmin(req.hubUser) ? 'advanced' : 'simple'), theme: r.user.theme || 'auto', planBadge: (hubAuth.getUser(req.hubUser.id) || {}).planBadge || null });
     }
     // This person's deep research choice (lib/research-prefs): ask | always | never, theirs only. on: the behaviour change
     // 'deep-research' is on. A signed-in person's own session ('owner' on an install with no accounts); never a token or the hub.

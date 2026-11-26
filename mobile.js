@@ -1493,17 +1493,28 @@ function planPctText(w, levels) {
   const s = planState(w, levels);
   return s.extra ? `${s.pct}% · extra usage` : `${s.pct}%`;
 }
-function planBadgeWindows(weekly, family, levels) {
+function planBadgeView(d, family, choice, subsOn, levels) {
   const rank = (c) => (c === 'refused' ? 3 : c === 'hot' ? 2 : c === 'warn' ? 1 : 0);
-  const read = (weekly || []).filter(w => w && w.utilization != null);
-  const all = read.find(w => w.family == null) || null;
-  const fam = family ? read.find(w => w.family === family) || null : null;
-  if (!all && !fam) return null;
-  if (!all || !fam) { const w = all || fam; return { lead: w, second: null, cls: planState(w, levels).cls }; }
-  const a = planState(all, levels), f = planState(fam, levels);
-  const bad = (w) => (planUsedUp(w) ? 2 : planState(w, levels).extra ? 1 : 0);
-  const second = f.pct > a.pct || bad(fam) > bad(all) ? fam : null;
-  return { lead: all, second, cls: rank(f.cls) > rank(a.cls) ? f.cls : a.cls };
+  const read = ((d && d.weekly) || []).filter(w => w && w.utilization != null);
+  const f5 = d && d.windows && d.windows.five_hour;
+  const wins = {
+    plan: read.find(w => w.family == null) || null,
+    family: family ? read.find(w => w.family === family) || null : null,
+    five: f5 && f5.utilization != null ? Object.assign({}, f5, { resetsAt: f5.resetsAt || f5.resets_at }) : null,
+  };
+  const avail = ['plan', 'family', 'five'].filter(k => wins[k]);
+  if (!wins.plan && !wins.family) return null;
+  const mk = (kind) => ({ kind, w: wins[kind] });
+  const mainKind = avail.includes(choice) ? choice : wins.plan ? 'plan' : 'family';
+  const main = mk(mainKind);
+  const mainPct = planState(main.w, levels).pct;
+  const extras = avail.filter(k => k !== mainKind).filter((k) => {
+    const w = wins[k], s = planState(w, levels);
+    if (k === 'five') return planUsedUp(w) || s.cls !== '' || (!!subsOn && Number(w.utilization) > 50);
+    return planUsedUp(w) || s.extra || s.cls !== '' || (mainKind !== 'five' && s.pct > mainPct);
+  }).map(mk);
+  const cls = avail.reduce((c, k) => { const x = planState(wins[k], levels).cls; return rank(x) > rank(c) ? x : c; }, '');
+  return { main, extras, cls, avail, wins };
 }
 function planUsedUp(w) { return !!w.rejected || (Number(w.utilization) >= 100 && !w.extraUsage); }
 // ── plan state helpers (end) ──
@@ -1521,6 +1532,137 @@ function planFamilyOf(model) {
   if (/^haiku/.test(id)) return 'haiku';
   return null;
 }
+// ── the Claude usage badge in the chat header: what it shows (the plan, the agent's model family, or the 5-hour window)
+// is the person's choice, made in a small popup under the badge. Kept per person (/api/me/prefs planBadge), with a copy on
+// this device (localStorage 'mm-plan-badge') for when the hub has none or is an older version.
+const PLAN_BADGE_KEY = 'mm-plan-badge';
+const planBadgeOk = (v) => v === 'plan' || v === 'family' || v === 'five';
+let planBadgeMem = null;   // a choice made on this page and not yet saved for the person
+function planBadgeChoice() {
+  if (planBadgeOk(planBadgeMem)) return planBadgeMem;
+  let dev = null;
+  try { dev = localStorage.getItem(PLAN_BADGE_KEY); } catch { /* storage blocked */ }
+  const mine = hubMe && hubMe.planBadge;
+  if (planBadgeOk(mine)) {
+    if (dev !== mine) { try { localStorage.setItem(PLAN_BADGE_KEY, mine); } catch { /* storage blocked */ } }
+    return mine;
+  }
+  return planBadgeOk(dev) ? dev : null;
+}
+async function planBadgePick(v) {
+  if (!planBadgeOk(v)) return;
+  planBadgeMem = v;
+  try { localStorage.setItem(PLAN_BADGE_KEY, v); } catch { /* storage blocked */ }
+  paintPlan();
+  try {
+    const r = await api('/api/me/prefs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ planBadge: v }) });
+    if (r && r.ok) { if (hubMe) hubMe.planBadge = v; if (planBadgeMem === v) planBadgeMem = null; }
+  } catch { /* an older hub answers 400 until it restarts: the device copy stays */ }
+}
+const planLevels = (d) => (d && d.warn && Array.isArray(d.warn.at) ? d.warn.at : []);
+const planWhenText = (w) => (Number.isFinite(Date.parse(w.resetsAt || '')) ? new Date(w.resetsAt).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : 'the reset');
+// The badge words: the main window ("Plan 18% this week", "Fable 19% this week", "5h 70%"), then the extras. Same on both pages.
+function planBadgeText(view, levels) {
+  return [view.main, ...view.extras].map((x, i) => (x.kind === 'five' ? `5h ${badgeAmount(x.w, levels)}` : `${x.kind === 'plan' ? 'Plan' : x.w.label} ${badgeAmount(x.w, levels)}` + (i === 0 ? ' this week' : ''))).join(' · ');
+}
+// The hover: one sentence per window shown, main first. Each describes only its own window: used up -> used up; extra usage
+// paying -> the extra-usage sentence.
+function planBadgeHover(view, levels) {
+  const part = (x, main) => {
+    const w = x.w, s = planState(w, levels);
+    if (x.kind === 'five') return planUsedUp(w) ? `5-hour window: used up until ${planWhenText(w)}` : `5-hour window ${s.pct}%`;
+    const who = x.kind === 'plan' ? 'All models' : w.label;
+    if (planUsedUp(w)) return `${who}: used up until ${planWhenText(w)}`;
+    return s.extra
+      ? `${who}: the weekly Claude plan is used up until ${planWhenText(w)}; extra usage is paying`
+      : `${who}: ${s.pct}%${main ? " of this week's Claude plan allowance" : ''}`;
+  };
+  return [view.main, ...view.extras].map((x, i) => part(x, i === 0)).join('; ');
+}
+let planChooser = null;   // { box, badge, onDoc, onResize } while the popup is open
+function planChooserClose(returnFocus) {
+  const c = planChooser;
+  if (!c) return;
+  planChooser = null;
+  document.removeEventListener('pointerdown', c.onDoc, true);
+  window.removeEventListener('resize', c.onResize);
+  c.box.remove();
+  c.badge.setAttribute('aria-expanded', 'false');
+  if (returnFocus) c.badge.focus();
+}
+function planViewNow() {
+  const d = planUsageLast; const a = agentByName(current); const model = String((a && a.model) || '');
+  return d && /^claude-sdk\//.test(model) ? planBadgeView(d, planFamilyOf(model), planBadgeChoice(), subsEnabled(), planLevels(d)) : null;
+}
+function planChooserOpen(badge) {
+  if (planChooser) { const same = planChooser.badge === badge; planChooserClose(true); if (same) return; }
+  const view = planViewNow();
+  if (!view) return;
+  const levels = planLevels(planUsageLast);
+  const box = document.createElement('div');
+  box.id = 'plan-badge-chooser';
+  box.className = 'plan-chooser';
+  const list = document.createElement('div');
+  list.className = 'pc-list';
+  list.setAttribute('role', 'listbox');
+  list.setAttribute('aria-label', 'What the Claude usage badge shows');
+  const rows = [];
+  for (const k of view.avail) {
+    const w = view.wins[k];
+    const row = document.createElement('div');
+    const current = k === view.main.kind;
+    row.className = 'pc-row' + (current ? ' current' : '');
+    row.setAttribute('role', 'option');
+    row.setAttribute('aria-selected', current ? 'true' : 'false');
+    row.setAttribute('tabindex', '-1');
+    const check = document.createElement('span');
+    check.className = 'pc-check';
+    check.setAttribute('aria-hidden', 'true');
+    check.textContent = current ? '✓' : '';
+    const label = k === 'plan' ? 'Plan (all models)' : k === 'family' ? (w.label || 'Model family') : '5-hour window';
+    const hasWhen = Number.isFinite(Date.parse(w.resetsAt || ''));
+    const text = document.createElement('span');
+    text.className = 'pc-text';
+    text.textContent = [label, k === 'five' ? badgeAmount(w, levels) : `${badgeAmount(w, levels)} this week`, hasWhen ? `resets ${planWhenText(w)}` : ''].filter(Boolean).join(' · ');
+    row.append(check, text);
+    row.addEventListener('click', () => { planChooserClose(true); planBadgePick(k); });
+    list.appendChild(row);
+    rows.push({ el: row, kind: k });
+  }
+  const subs = document.createElement('button');
+  subs.type = 'button';
+  subs.className = 'pc-subs';
+  subs.textContent = 'All subscriptions…';
+  subs.addEventListener('click', () => { planChooserClose(false); openSubsSheet(); });
+  box.append(list, subs);
+  box.addEventListener('keydown', (e) => {
+    const at = document.activeElement, i = rows.findIndex(r => r.el === at), n = rows.length;
+    if (e.key === 'Escape') { e.preventDefault(); planChooserClose(true); }
+    else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const step = e.key === 'ArrowDown' ? 1 : -1;
+      rows[i >= 0 ? (i + step + n) % n : (step > 0 ? 0 : n - 1)].el.focus();
+    } else if ((e.key === 'Enter' || e.key === ' ') && i >= 0) { e.preventDefault(); planChooserClose(true); planBadgePick(rows[i].kind); }
+    else if (e.key === 'Tab') {
+      if (at === subs && !e.shiftKey) planChooserClose(true);
+      else if (at === subs) { e.preventDefault(); (rows.find(r => r.kind === view.main.kind) || rows[0]).el.focus(); }
+      else if (e.shiftKey) planChooserClose(true);
+      else { e.preventDefault(); subs.focus(); }
+    }
+  });
+  document.body.appendChild(box);
+  const host = $('chat-meta') || badge;
+  box.style.left = '8px';
+  box.style.right = '8px';
+  box.style.top = `${Math.round(Math.max(host.getBoundingClientRect().bottom, badge.getBoundingClientRect().bottom) + 4)}px`;
+  const onDoc = (e) => { if (!box.contains(e.target) && !badge.contains(e.target)) planChooserClose(false); };
+  const onResize = () => planChooserClose(false);
+  planChooser = { box, badge, onDoc, onResize };
+  document.addEventListener('pointerdown', onDoc, true);
+  window.addEventListener('resize', onResize);
+  badge.setAttribute('aria-expanded', 'true');
+  (rows.find(x => x.kind === view.main.kind) || rows[0]).el.focus();
+}
 function paintPlan() {
   const el = $('chat-plan'); if (!el) return;
   const d = planUsageLast; const a = agentByName(current); const model = String((a && a.model) || '');
@@ -1532,6 +1674,8 @@ function paintPlan() {
       if (codexShouldRead(codexUsageLast, Date.now(), codexAskAt)) codexAskRead();
       if (!b) b = codexPendingBadge(codexUsageLast);
     }
+    el.removeAttribute('aria-haspopup'); el.removeAttribute('aria-expanded'); el.removeAttribute('aria-label'); el.onclick = () => openSubsSheet();   // as the desktop's ChatGPT badge: the subscriptions
+    if (planChooser && planChooser.badge === el) planChooserClose(false);
     if (!b) { el.hidden = true; el.textContent = ''; return; }
     el.textContent = b.text;
     el.className = 'sub' + (b.cls ? ' ' + b.cls : '');
@@ -1539,28 +1683,16 @@ function paintPlan() {
     el.hidden = false;
     return;
   }
-  const fam = planFamilyOf(model);
-  const levels = d && d.warn && Array.isArray(d.warn.at) ? d.warn.at : [];
-  const bw = d && /^claude-sdk\//.test(model) ? planBadgeWindows(d.weekly, fam, levels) : null;
-  if (!bw) { el.hidden = true; el.textContent = ''; return; }
-  const { lead, second, cls } = bw;
-  el.textContent = `${lead.family ? lead.label : 'Plan'} ${badgeAmount(lead, levels)}` + (second ? ` · ${second.label} ${badgeAmount(second, levels)}` : '');
-  const f5 = d.windows && d.windows.five_hour;
-  const five = subsEnabled() && f5 && f5.utilization != null && Number(f5.utilization) > 50 ? Math.round(Number(f5.utilization)) : null;
-  if (five != null) el.textContent += ` · 5h ${five}%`;
-  el.className = 'sub' + (cls ? ' ' + cls : '');
-  const when = (w) => Number.isFinite(Date.parse(w.resetsAt || '')) ? new Date(w.resetsAt).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : 'the reset';
-  // Each sentence describes only its own window: refused -> used up; extra usage paying -> the extra-usage sentence.
-  const part = (w, who) => {
-    const s = planState(w, levels);
-    if (planUsedUp(w)) return `${who}: used up until ${when(w)}`;
-    return s.extra
-      ? `${who}: the weekly Claude plan is used up until ${when(w)}; extra usage is paying`
-      : `${who}: ${s.pct}%${w === lead ? " of this week's Claude plan allowance" : ''}`;
-  };
-  // The hover shows the raw 5-hour reading whenever there is one; only the visible suffix needs subscriptions on and over 50.
-  const fiveRaw = f5 && f5.utilization != null ? Math.round(Number(f5.utilization)) : null;
-  el.title = part(lead, lead.family ? lead.label : 'All models') + (second ? '; ' + part(second, second.label) : '') + (fiveRaw != null ? `; 5-hour window ${fiveRaw}%` : '');
+  const levels = planLevels(d);
+  const view = planViewNow();
+  if (!view) { if (planChooser && planChooser.badge === el) planChooserClose(false); el.hidden = true; el.textContent = ''; el.removeAttribute('aria-label'); return; }
+  el.textContent = planBadgeText(view, levels);
+  el.className = 'sub' + (view.cls ? ' ' + view.cls : '');
+  el.title = planBadgeHover(view, levels);
+  el.setAttribute('aria-haspopup', 'listbox');
+  el.setAttribute('aria-expanded', planChooser && planChooser.badge === el ? 'true' : 'false');
+  el.setAttribute('aria-label', `Claude usage: ${el.textContent}. Press to choose what this shows.`);
+  el.onclick = () => planChooserOpen(el);
   el.hidden = false;
 }
 

@@ -6485,23 +6485,61 @@
       const s = planState(w, levels);
       return s.extra ? `${s.pct}% · extra usage` : `${s.pct}%`;
     }
-    function planBadgeWindows(weekly, family, levels) {
+    function planBadgeView(d, family, choice, subsOn, levels) {
       const rank = (c) => (c === 'refused' ? 3 : c === 'hot' ? 2 : c === 'warn' ? 1 : 0);
-      const read = (weekly || []).filter(w => w && w.utilization != null);
-      const all = read.find(w => w.family == null) || null;
-      const fam = family ? read.find(w => w.family === family) || null : null;
-      if (!all && !fam) return null;
-      if (!all || !fam) { const w = all || fam; return { lead: w, second: null, cls: planState(w, levels).cls }; }
-      const a = planState(all, levels), f = planState(fam, levels);
-      const bad = (w) => (planUsedUp(w) ? 2 : planState(w, levels).extra ? 1 : 0);
-      const second = f.pct > a.pct || bad(fam) > bad(all) ? fam : null;
-      return { lead: all, second, cls: rank(f.cls) > rank(a.cls) ? f.cls : a.cls };
+      const read = ((d && d.weekly) || []).filter(w => w && w.utilization != null);
+      const f5 = d && d.windows && d.windows.five_hour;
+      const wins = {
+        plan: read.find(w => w.family == null) || null,
+        family: family ? read.find(w => w.family === family) || null : null,
+        five: f5 && f5.utilization != null ? Object.assign({}, f5, { resetsAt: f5.resetsAt || f5.resets_at }) : null,
+      };
+      const avail = ['plan', 'family', 'five'].filter(k => wins[k]);
+      if (!wins.plan && !wins.family) return null;
+      const mk = (kind) => ({ kind, w: wins[kind] });
+      const mainKind = avail.includes(choice) ? choice : wins.plan ? 'plan' : 'family';
+      const main = mk(mainKind);
+      const mainPct = planState(main.w, levels).pct;
+      const extras = avail.filter(k => k !== mainKind).filter((k) => {
+        const w = wins[k], s = planState(w, levels);
+        if (k === 'five') return planUsedUp(w) || s.cls !== '' || (!!subsOn && Number(w.utilization) > 50);
+        return planUsedUp(w) || s.extra || s.cls !== '' || (mainKind !== 'five' && s.pct > mainPct);
+      }).map(mk);
+      const cls = avail.reduce((c, k) => { const x = planState(wins[k], levels).cls; return rank(x) > rank(c) ? x : c; }, '');
+      return { main, extras, cls, avail, wins };
     }
     function planUsedUp(w) { return !!w.rejected || (Number(w.utilization) >= 100 && !w.extraUsage); }
     // ── plan state helpers (end) ──
     // What a badge says for one window: "used up" when the plan refuses it, else its percent (with the extra-usage words).
     function badgeAmount(w, levels) {
       return planUsedUp(w) ? 'used up' : planPctText(w, levels);
+    }
+    // ── the Claude usage badge in the chat header: what it shows (the plan, the agent's model family, or the 5-hour
+    // window) is the person's choice, made in a small popup under the badge. Kept per person (/api/me/prefs planBadge),
+    // with a copy on this device (localStorage 'mm-plan-badge') for when the hub has none or is an older version.
+    const PLAN_BADGE_KEY = 'mm-plan-badge';
+    const planBadgeOk = (v) => v === 'plan' || v === 'family' || v === 'five';
+    let planBadgeMem = null;   // a choice made on this page and not yet saved for the person
+    function planBadgeChoice() {
+      if (planBadgeOk(planBadgeMem)) return planBadgeMem;
+      let dev = null;
+      try { dev = localStorage.getItem(PLAN_BADGE_KEY); } catch { /* storage blocked */ }
+      const mine = window.hubMe && window.hubMe.planBadge;
+      if (planBadgeOk(mine)) {
+        if (dev !== mine) { try { localStorage.setItem(PLAN_BADGE_KEY, mine); } catch { /* storage blocked */ } }
+        return mine;
+      }
+      return planBadgeOk(dev) ? dev : null;
+    }
+    async function planBadgePick(v) {
+      if (!planBadgeOk(v)) return;
+      planBadgeMem = v;
+      try { localStorage.setItem(PLAN_BADGE_KEY, v); } catch { /* storage blocked */ }
+      paintPlanBadges();
+      try {
+        const r = await fetch('/api/me/prefs', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ planBadge: v }) });
+        if (r && r.ok) { if (window.hubMe) window.hubMe.planBadge = v; if (planBadgeMem === v) planBadgeMem = null; }
+      } catch { /* an older hub answers 400 until it restarts: the device copy stays */ }
     }
     function planFamilyOf(model) {
       const id = String(model || '').replace(/^claude-sdk\//, '').replace(/\[1m\]$/i, '').replace(/^claude-/, '').toLowerCase();
@@ -6513,18 +6551,116 @@
       if (/^haiku/.test(id)) return 'haiku';
       return null;
     }
-    function planWindowFor(model, d = planLast) {
+    function planLevels(d) { return d && d.warn && Array.isArray(d.warn.at) ? d.warn.at : []; }
+    function planViewFor(model, d = planLast) {
       if (!d || !/^claude-sdk\//.test(String(model || ''))) return null;
-      const fam = planFamilyOf(model);
-      const levels = d.warn && Array.isArray(d.warn.at) ? d.warn.at : [];
-      return planBadgeWindows(d.weekly, fam, levels);
+      return planBadgeView(d, planFamilyOf(model), planBadgeChoice(), subsEnabled(), planLevels(d));
+    }
+    // The badge words: the main window ("Plan 18% this week", "Fable 19% this week", "5h 70%"), then the extras.
+    function planBadgeText(view, levels) {
+      return [view.main, ...view.extras].map((x, i) => (x.kind === 'five' ? `5h ${badgeAmount(x.w, levels)}` : `${x.kind === 'plan' ? 'Plan' : x.w.label} ${badgeAmount(x.w, levels)}` + (i === 0 ? ' this week' : ''))).join(' · ');
+    }
+    // The hover: one sentence per window shown, main first. Each describes only its own window: used up -> used up;
+    // extra usage paying -> the extra-usage sentence.
+    function planBadgeHover(view, levels) {
+      const part = (x, main) => {
+        const w = x.w, s = planState(w, levels);
+        if (x.kind === 'five') return planUsedUp(w) ? `5-hour window is used up until ${planWhen(w.resetsAt)}` : `5-hour window ${s.pct}%`;
+        const who = x.kind === 'plan' ? 'Your Claude plan' : w.label;
+        if (planUsedUp(w)) return `${who} is used up for this week until ${planWhen(w.resetsAt)}`;
+        return s.extra
+          ? `${who} is used up for this week until ${planWhen(w.resetsAt)}; extra usage is paying for Claude replies until then`
+          : `${who} has used ${s.pct}%${main ? " of this week's allowance" : ''} (resets ${planWhen(w.resetsAt)})`;
+      };
+      return [view.main, ...view.extras].map((x, i) => part(x, i === 0)).join('; ') + '. Click to choose what this shows.';
+    }
+    let planChooser = null;   // { box, badge, onDoc, onResize } while the popup is open
+    function planChooserClose(returnFocus) {
+      const c = planChooser;
+      if (!c) return;
+      planChooser = null;
+      document.removeEventListener('pointerdown', c.onDoc, true);
+      window.removeEventListener('resize', c.onResize);
+      c.box.remove();
+      c.badge.setAttribute('aria-expanded', 'false');
+      if (returnFocus) c.badge.focus();
+    }
+    function planChooserOpen(badge, chatId) {
+      if (planChooser) { const same = planChooser.badge === badge; planChooserClose(true); if (same) return; }
+      const chat = chats[chatId];
+      const view = chat && planViewFor(chatModelOf(chat));
+      if (!view) return;
+      const levels = planLevels(planLast);
+      const box = document.createElement('div');
+      box.id = 'plan-badge-chooser';
+      box.className = 'plan-chooser';
+      const list = document.createElement('div');
+      list.className = 'pc-list';
+      list.setAttribute('role', 'listbox');
+      list.setAttribute('aria-label', 'What the Claude usage badge shows');
+      const rows = [];
+      for (const k of view.avail) {
+        const w = view.wins[k];
+        const row = document.createElement('div');
+        const current = k === view.main.kind;
+        row.className = 'pc-row' + (current ? ' current' : '');
+        row.setAttribute('role', 'option');
+        row.setAttribute('aria-selected', current ? 'true' : 'false');
+        row.setAttribute('tabindex', '-1');
+        const check = document.createElement('span');
+        check.className = 'pc-check';
+        check.setAttribute('aria-hidden', 'true');
+        check.textContent = current ? '✓' : '';
+        const label = k === 'plan' ? 'Plan (all models)' : k === 'family' ? (w.label || 'Model family') : '5-hour window';
+        const hasWhen = Number.isFinite(Date.parse(w.resetsAt || ''));
+        const text = document.createElement('span');
+        text.className = 'pc-text';
+        text.textContent = [label, k === 'five' ? badgeAmount(w, levels) : `${badgeAmount(w, levels)} this week`, hasWhen ? `resets ${planWhen(w.resetsAt)}` : ''].filter(Boolean).join(' · ');
+        row.append(check, text);
+        row.addEventListener('click', () => { planChooserClose(true); planBadgePick(k); });
+        list.appendChild(row);
+        rows.push({ el: row, kind: k });
+      }
+      const subs = document.createElement('button');
+      subs.type = 'button';
+      subs.className = 'pc-subs';
+      subs.textContent = 'All subscriptions…';
+      subs.addEventListener('click', () => { planChooserClose(false); openSubsSettings(); });
+      box.append(list, subs);
+      box.addEventListener('keydown', (e) => {
+        const at = document.activeElement, i = rows.findIndex(r => r.el === at), n = rows.length;
+        if (e.key === 'Escape') { e.preventDefault(); planChooserClose(true); }
+        else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+          e.preventDefault();
+          const step = e.key === 'ArrowDown' ? 1 : -1;
+          rows[i >= 0 ? (i + step + n) % n : (step > 0 ? 0 : n - 1)].el.focus();
+        } else if ((e.key === 'Enter' || e.key === ' ') && i >= 0) { e.preventDefault(); planChooserClose(true); planBadgePick(rows[i].kind); }
+        else if (e.key === 'Tab') {
+          if (at === subs && !e.shiftKey) planChooserClose(true);
+          else if (at === subs) { e.preventDefault(); (rows.find(r => r.kind === view.main.kind) || rows[0]).el.focus(); }
+          else if (e.shiftKey) planChooserClose(true);
+          else { e.preventDefault(); subs.focus(); }
+        }
+      });
+      document.body.appendChild(box);
+      const r = badge.getBoundingClientRect(), bw = box.offsetWidth || 300, bh = box.offsetHeight || 0;
+      const left = Math.max(8, Math.min(r.right - bw, window.innerWidth - bw - 8));
+      const below = r.bottom + 4;
+      box.style.left = `${Math.round(left)}px`;
+      box.style.top = `${Math.round(below + bh > window.innerHeight - 8 && r.top - bh - 4 >= 8 ? r.top - bh - 4 : below)}px`;
+      const onDoc = (e) => { if (!box.contains(e.target) && !badge.contains(e.target)) planChooserClose(false); };
+      const onResize = () => planChooserClose(false);
+      planChooser = { box, badge, onDoc, onResize };
+      document.addEventListener('pointerdown', onDoc, true);
+      window.addEventListener('resize', onResize);
+      badge.setAttribute('aria-expanded', 'true');
+      (rows.find(x => x.kind === view.main.kind) || rows[0]).el.focus();
     }
     function paintPlanBadges() {
-      const levels = (planLast && planLast.warn && Array.isArray(planLast.warn.at)) ? planLast.warn.at : [];
+      const levels = planLevels(planLast);
       for (const [id, chat] of Object.entries(chats)) {
         const el = document.getElementById(`plan-badge-${id}`);
         if (!el) continue;
-        el.onclick = () => openPlanSettings();
         if (chat && !chat.isGroup && chat.agent && subsIsCodex(chatModelOf(chat))) {
           let b = subsEnabled() ? codexBadge(codexLast, null, Date.now()) : null;
           // An admin with a Codex chat open: a missing or old reading is asked for (no turn spent), and until one
@@ -6533,6 +6669,8 @@
             if (codexShouldRead(codexLast, Date.now(), codexAskAt)) codexAskRead();
             if (!b) b = codexPendingBadge(codexLast);
           }
+          if (planChooser && planChooser.badge === el) planChooserClose(false);
+          el.removeAttribute('aria-haspopup'); el.removeAttribute('aria-expanded'); el.removeAttribute('aria-label');
           if (!b) { el.hidden = true; el.textContent = ''; continue; }
           el.textContent = b.text;
           el.className = 'plan-badge' + (b.cls ? ' ' + b.cls : '');
@@ -6541,26 +6679,18 @@
           el.hidden = false;
           continue;
         }
-        const bw = chat && !chat.isGroup && chat.agent ? planWindowFor(chatModelOf(chat)) : null;
-        if (!bw) { el.hidden = true; el.textContent = ''; continue; }
-        const { lead, second, cls } = bw;
-        el.textContent = `${lead.family ? lead.label : 'Plan'} ${badgeAmount(lead, levels)} this week` + (second ? ` · ${second.label} ${badgeAmount(second, levels)}` : '');
-        const fiveW = planLast.windows && planLast.windows.five_hour;
-        const five5 = subsEnabled() && fiveW && fiveW.utilization != null && Number(fiveW.utilization) > 50 ? Math.round(Number(fiveW.utilization)) : null;
-        if (five5 != null) el.textContent += ` · 5h ${five5}%`;
-        el.className = 'plan-badge' + (cls ? ' ' + cls : '');
-        const five = planLast.windows && planLast.windows.five_hour;
-        // Hover text: the plan, then the family window (when it is shown), then the 5-hour window.
-        // Each sentence describes only its own window: refused -> used up; extra usage paying -> the extra-usage sentence.
-        const part = (w, who, short) => {
-          const s = planState(w, levels);
-          if (planUsedUp(w)) return `${who} is used up for this week until ${planWhen(w.resetsAt)}`;
-          return s.extra
-            ? `${who} is used up for this week until ${planWhen(w.resetsAt)}; extra usage is paying for Claude replies until then`
-            : `${who} has used ${s.pct}%${short ? "" : " of this week's allowance"} (resets ${planWhen(w.resetsAt)})`;
-        };
-        el.title = part(lead, lead.family ? lead.label : 'Your Claude plan') + (second ? '; ' + part(second, second.label, true) : '') +
-          (five && five.utilization != null ? `; 5-hour window ${Math.round(Number(five.utilization))}%` : '') + '. Click to choose models (Settings → Claude plan).';
+        const view = chat && !chat.isGroup && chat.agent ? planViewFor(chatModelOf(chat)) : null;
+        if (!view) {
+          if (planChooser && planChooser.badge === el) planChooserClose(false);
+          el.hidden = true; el.textContent = ''; el.removeAttribute('aria-label'); continue;
+        }
+        el.textContent = planBadgeText(view, levels);
+        el.className = 'plan-badge' + (view.cls ? ' ' + view.cls : '');
+        el.title = planBadgeHover(view, levels);
+        el.setAttribute('aria-haspopup', 'listbox');
+        el.setAttribute('aria-expanded', planChooser && planChooser.badge === el ? 'true' : 'false');
+        el.setAttribute('aria-label', `Claude usage: ${el.textContent}. Press to choose what this shows.`);
+        el.onclick = () => planChooserOpen(el, id);
         el.hidden = false;
       }
     }
@@ -12782,7 +12912,7 @@
           <button onclick="pauseRequest('${chatId}')" id="pause-${chatId}" style="display:none;" title="Pause to provide input, then continue">⏸️ Pause</button>
           <button onclick="cancelRequest('${chatId}')" id="cancel-${chatId}" style="display:none;">⏹️ Cancel</button>
 
-          <span class="agent-name"><span class="agent-name-text">${hubEsc(chat.display || capName(chat.agent))}</span> <select class="model-pick" id="model-pick-${chatId}" data-tip="Change this agent's model from here. Claude to Claude keeps the session; another provider continues from the conversation history. A change made while the agent is busy applies after this turn." title="${chat.autoModel ? AUTO_TIP : "Change this agent's model from here. Claude to Claude keeps the session; another provider continues from the conversation history. A change made while the agent is busy applies after this turn."}" aria-label="Model" onfocus="fillModelPick('${chatId}')" onmousedown="return modelPickDown(event, '${chatId}')" onchange="changeChatModel('${chatId}', this.value)"><option value="${chat.autoModel ? AUTO_PICK : esc(chat.model || '')}" selected>${chat.autoModel ? 'Auto' : esc(billingDisplay(chat.model, true))}</option></select> ${effortPickHtml(chat, chatId)}<span class="plan-badge" id="plan-badge-${chatId}" hidden onclick="openPlanSettings()"></span></span>${cyberHeaderTag(chat.model)}
+          <span class="agent-name"><span class="agent-name-text">${hubEsc(chat.display || capName(chat.agent))}</span> <select class="model-pick" id="model-pick-${chatId}" data-tip="Change this agent's model from here. Claude to Claude keeps the session; another provider continues from the conversation history. A change made while the agent is busy applies after this turn." title="${chat.autoModel ? AUTO_TIP : "Change this agent's model from here. Claude to Claude keeps the session; another provider continues from the conversation history. A change made while the agent is busy applies after this turn."}" aria-label="Model" onfocus="fillModelPick('${chatId}')" onmousedown="return modelPickDown(event, '${chatId}')" onchange="changeChatModel('${chatId}', this.value)"><option value="${chat.autoModel ? AUTO_PICK : esc(chat.model || '')}" selected>${chat.autoModel ? 'Auto' : esc(billingDisplay(chat.model, true))}</option></select> ${effortPickHtml(chat, chatId)}<button type="button" class="plan-badge" id="plan-badge-${chatId}" hidden></button></span>${cyberHeaderTag(chat.model)}
         </div>
         <div class="compaction-line" id="compaction-line-${chatId}" style="display:none" title="Context compression: the agent writes its own working brief (see the agent's settings page)"></div>
         <div class="messages" id="messages-${chatId}"></div>
