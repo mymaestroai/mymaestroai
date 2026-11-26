@@ -1106,6 +1106,7 @@ function originLabel(origin) {
     case 'hand_off': return `task from ${origin.from || 'another agent'}`;
     case 'hand_off_report': return `task finished: ${origin.from || 'another agent'}`;
     case 'comms': return 'message from a messaging channel';
+    case 'research_report': return 'research finished';
     default: return 'hub turn';
   }
 }
@@ -3705,6 +3706,7 @@ function autoInfoOf(entry) {
     else if (o.kind === 'hand_off') label = o.label ? o.label.replace(/^Hand-off\b/, 'Task') : `Task from ${from || 'another agent'}`;
     else if (o.kind === 'hand_off_report') label = o.label ? o.label.replace(/^Hand-off\b/, 'Task') : 'Task finished';
     else if (o.kind === 'alert') label = 'Monitor alert';
+    else if (o.kind === 'research_report') label = 'Research finished';
     else label = 'Hub turn';
     return { kind, from, label };
   }
@@ -13314,9 +13316,26 @@ function retireSoon(el, ms = RETIRE_AFTER_MS) {
 // ── retire helpers (end) ──
 
 // An answered or closed question box says how it ended, then leaves a few seconds later (lib/ui-retire.js).
-function closeQuestion(requestId, how) {
+const questionTexts = new Map();   // request_id -> the question texts of that box (for the line that says nobody answered)
+// What a question says once nobody answered (the same words on the desktop page). A deep research card ("{Agent} asks: research this? “{Q}” …")
+// says what was asked and how long nobody answered; any other card keeps its first sentence and adds that nobody answered.
+function questionNoAnswerLine(text, waitedSeconds) {
+  const t = String(text == null ? '' : text).replace(/\s+/g, ' ').trim();
+  const m = /^(.+?) asks: research this\? “([\s\S]*?)”(?= This looks like a research question\.)/.exec(t);
+  if (m) return `${m[1]} asked whether to research “${m[2]}”. ` + (Number(waitedSeconds) > 0 ? `Nobody answered within ${researchWaitWords(waitedSeconds)}.` : 'Nobody answered in time.');
+  const first = (/^[\s\S]*?[.!?](?=\s|$)/.exec(t) || [t + '.'])[0];
+  return first + ' Nobody answered in time.';
+}
+function closeQuestion(requestId, how, waitedSeconds) {
   const box = questionBoxes.get(requestId);
+  const texts = questionTexts.get(requestId);
+  questionTexts.delete(requestId);
   if (!box) return;
+  if (how === 'no_answer' && texts && texts.length) {
+    // nobody answered: each question line says what happened (one muted line per question)
+    box.textContent = '';
+    for (const t of texts) { const d = document.createElement('div'); d.className = 'done'; d.textContent = questionNoAnswerLine(t, waitedSeconds); box.appendChild(d); }
+  } else
   // The hub's outcome, unless it confirms the answer this box already shows ("Answered: …", sent from here)
   if (how !== 'answered' || !box.querySelector('.done')) box.innerHTML = `<div class="done">${how === 'no_answer' ? 'No answer in time; the agent carried on' : how === 'skipped' ? 'Skipped' : 'Answered elsewhere'}</div>`;
   questionBoxes.delete(requestId);
@@ -13335,6 +13354,7 @@ function showQuestion(data, onAnswered) {
   const box = document.createElement('div');
   box.className = 'question';
   questionBoxes.set(request_id, box);
+  questionTexts.set(request_id, questions.map(q => String((q && q.question) == null ? '' : q.question)));
   if (typeof voiceHintSync === 'function') voiceHintSync();   // a question appearing takes the hint down
   const submit = (answers, label, checked) => {
     if (onAnswered) onAnswered();
@@ -14139,7 +14159,7 @@ function connectEvents() {
       }
     }
   });
-  on('ask_user_done', (ev) => { if (!ev) return; pendingQuestionsByAgent.delete(ev.agent); if (ev.request_id) closeQuestion(ev.request_id, ev.result); });
+  on('ask_user_done', (ev) => { if (!ev) return; pendingQuestionsByAgent.delete(ev.agent); if (ev.request_id) closeQuestion(ev.request_id, ev.result, ev.waitedSeconds); });
   on('ask_user_done', (ev) => { setLive(ev.agent, { pendingQuestion: false }); paintStatus(); });
   // A Do it on a set-up card wrote reporting lines: the lead's chat shows "Undo this team" at once; the lists follow.
   on('team_setup_recorded', (ev) => { if (!ev) return; if (ev.id) teamSetupRecent.add(String(ev.id)); loadAgents(); teamSetupLoadSoon(); });
@@ -14248,32 +14268,63 @@ function researchWaitWords(sec) {
   return s === 1 ? '1 second' : `${s} seconds`;
 }
 function researchNoticeOn(run) { return !!run && (run.startedBy === 'agent' || run.startedBy === 'no-answer' || run.startedBy === 'always'); }
+// A notice is one line until it is opened (▾): the title, Stop, ▾ and ×. Opened, it adds the question in full, why, the cost, the progress and
+// Make it thorough. Which notices are open, and which were dismissed with ×, is kept by run id (so a redraw never closes or brings back one).
+const researchOpen = new Set();        // run ids whose notice is opened
+const researchGroupOpen = new Set();   // agents whose "N research runs started by agents" line is opened
+const researchDismissed = new Set();   // run ids hidden with × on this page (kept for the page's life; a reload may show them again)
 function researchNoticeTitle(run, agent) {
   const who = researchAgentName(agent);
-  if (run.startedBy === 'always') return `${who} started a ${run.level === 'thorough' ? 'thorough' : 'quick'} research run under your Always yes.`;
-  if (run.startedBy === 'no-answer' && !(Number(run.waitSeconds) > 0)) return `${who} started a quick research run without asking (the wait for an answer is set to 0).`;   // a wait of 0 asks nobody
+  if (run.startedBy === 'always') return `${who} started a ${run.level === 'thorough' ? 'thorough' : 'quick'} research run because you chose Always yes.`;
+  if (run.startedBy === 'no-answer' && !(Number(run.waitSeconds) > 0)) return `${who} started a quick research run without asking, as your settings allow.`;   // a wait of 0 asks nobody
   return run.startedBy === 'no-answer' ? `Nobody answered within ${researchWaitWords(run.waitSeconds)}, so ${who} started a quick research run.` : `${who} started a quick research run for its work.`;
 }
+function researchToggleSet(set, key) { if (set.has(key)) set.delete(key); else set.add(key); researchLinePaint(); }
+function researchSmallButton(cls, text, label, onclick) {
+  const b = document.createElement('button'); b.type = 'button'; b.className = cls; b.textContent = text; b.onclick = onclick;
+  if (label) b.setAttribute('aria-label', label);
+  return b;
+}
+function researchToggleButton(open, onclick) {
+  const b = researchSmallButton('research-toggle', open ? '▴' : '▾', open ? 'Hide details' : 'Show details', onclick);
+  b.setAttribute('aria-expanded', open ? 'true' : 'false');
+  return b;
+}
+function researchGroupEl(count, agent) {
+  const d = document.createElement('div');
+  d.className = 'ho-card research-notice research-group';
+  d.setAttribute('role', 'status');
+  const head = document.createElement('div'); head.className = 'research-head'; d.appendChild(head);
+  const t = document.createElement('div'); t.className = 'ho-title'; t.textContent = `${count} research runs started by agents`; head.appendChild(t);
+  head.appendChild(researchToggleButton(researchGroupOpen.has(agent), () => researchToggleSet(researchGroupOpen, agent)));
+  return d;
+}
 function researchNoticeEl(run, now, agent) {
+  const id = String(run.id);
+  const closed = !!run.outcome;   // after Stop or Make it thorough: one line and ×
+  const open = !closed && researchOpen.has(id);
   const d = document.createElement('div');
   d.className = 'ho-card research-notice';
   d.setAttribute('role', 'status');
+  const head = document.createElement('div'); head.className = 'research-head'; d.appendChild(head);
   const add = (cls, text) => { const p = document.createElement('div'); p.className = cls; p.textContent = text; d.appendChild(p); return p; };
-  add('ho-title', researchNoticeTitle(run, agent));
+  const btns = [];
+  const act = (to, label, cls, what) => { const b = document.createElement('button'); b.type = 'button'; b.className = cls; b.textContent = label; b.disabled = !!run.busy; b.onclick = () => researchNoticeAct(run, agent, what, btns); btns.push(b); to.appendChild(b); };
+  const title = document.createElement('div'); title.className = 'ho-title'; title.textContent = closed ? run.outcome : researchNoticeTitle(run, agent); head.appendChild(title);
+  if (!closed && run.active !== false) act(head, 'Stop', 'wo-stop', 'stop');
+  if (!closed) head.appendChild(researchToggleButton(open, () => researchToggleSet(researchOpen, id)));
+  head.appendChild(researchSmallButton('research-x', '×', 'Dismiss', () => { researchDismissed.add(id); researchOpen.delete(id); researchLinePaint(); }));
+  if (!open) return d;
   const q = String(run.question || '').replace(/\s+/g, ' ').trim();
-  if (q) add('research-q', '“' + (q.length > 300 ? q.slice(0, 299) + '…' : q) + '”');
+  if (q) add('research-q', '“' + q + '”');
   const why = String(run.reason || '').replace(/\s+/g, ' ').trim();
   if (run.startedBy === 'agent' && why) add('research-why', 'Why: ' + why);
   if (run.costLine) add('research-cost', String(run.costLine));
-  if (run.outcome) { add('ho-time research-after', run.outcome); return d; }
   add('ho-time', researchLineText(run, now));
-  if (run.active !== false) {
+  if (run.active !== false && run.upgradable === true) {
     const row = document.createElement('div');
     row.className = 'research-actions';
-    const btns = [];
-    const mk = (label, cls, what) => { const b = document.createElement('button'); b.type = 'button'; b.className = cls; b.textContent = label; b.disabled = !!run.busy; b.onclick = () => researchNoticeAct(run, agent, what, btns); btns.push(b); row.appendChild(b); };
-    mk('Stop', 'wo-stop', 'stop');
-    if (run.upgradable === true) mk('Make it thorough', 'ho-status', 'upgrade');
+    act(row, 'Make it thorough', 'ho-status', 'upgrade');
     d.appendChild(row);
   }
   return d;
@@ -14292,7 +14343,7 @@ async function researchNoticeAct(run, agent, what, btns) {
     if (!researchRuns.has(agent)) researchRuns.set(agent, new Map());
     const m = researchRuns.get(agent);
     const cur = m.get(id) || run;
-    cur.outcome = what === 'stop' ? `Stopped. ${researchAgentName(agent)} was told.` : 'Thorough research started. Its report will come here.';
+    cur.outcome = what === 'stop' ? `Research stopped. ${researchAgentName(agent)} was told.` : 'Thorough research started. Its report will come here.';
     cur.outcomeAt = Date.now(); cur.active = false; cur.upgradable = false; cur.busy = false;
     m.set(id, cur);
     researchLinePaint();
@@ -14316,10 +14367,16 @@ function researchLineFill(box, agent) {
     for (const [id, r] of [...all]) if (r.outcome && now - (r.outcomeAt || 0) > RESEARCH_NOTICE_SHOW_MS) all.delete(id);
     if (!all.size) researchRuns.delete(agent);
   }
-  const runs = all && all.size ? [...all.values()].sort((a, b) => (Number(a.startedAt) || 0) - (Number(b.startedAt) || 0)).slice(0, 3) : [];
+  const runs = all && all.size ? [...all.values()].filter(r => !researchDismissed.has(String(r.id))).sort((a, b) => (Number(a.startedAt) || 0) - (Number(b.startedAt) || 0)).slice(0, 3) : [];
+  const grouped = runs.filter(researchNoticeOn).length >= 2;   // two or more notices: one line, each run inside it
+  let groupDrawn = false;
   box.textContent = '';
   for (const r of runs) {
-    if (researchNoticeOn(r)) { box.appendChild(researchNoticeEl(r, now, agent)); continue; }
+    if (researchNoticeOn(r)) {
+      if (grouped && !groupDrawn) { box.appendChild(researchGroupEl(runs.filter(researchNoticeOn).length, agent)); groupDrawn = true; }
+      if (!grouped || researchGroupOpen.has(agent)) box.appendChild(researchNoticeEl(r, now, agent));
+      continue;
+    }
     const d = document.createElement('div'); d.className = 'ho-strip research-line'; d.setAttribute('role', 'status'); d.textContent = researchLineText(r, now); box.appendChild(d);
   }
   box.hidden = runs.length === 0;

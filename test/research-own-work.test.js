@@ -1049,7 +1049,7 @@ test('S4: Always (thorough) in a scheduled turn starts a thorough run, uncounted
   assert.equal(L.started[0].startedBy, 'always');
   assert.deepEqual(JSON.parse(JSON.stringify(L.ctx.capsToday().today)), { install: 0, agents: {} }, 'not counted');
   assert.equal(L.pushes.length, 1);
-  assert.equal(L.pushes[0].p.title, 'Sam-agent started thorough research under your Always yes');
+  assert.equal(L.pushes[0].p.title, 'Sam-agent started thorough research because you chose Always yes');
   // quick Always: the same, and without an offer first
   const Q = load();
   Q.prefs.setChoice('u_owner', 'always');
@@ -1316,4 +1316,60 @@ test('T3: an Always offer, the choice and level unchanged: the run starts; a tho
   T.prefs.setAlwaysLevel('u_owner', 'quick');
   assert.equal(await startQ(T, { level: 'thorough' }), CHANGED_TEXT);
   assert.equal(T.started.length, 0);
+});
+
+// ── E (design fixes): the card says what happens if nobody answers; the push title; the done event carries the wait ──
+const NOBODY = / No answer in ([^:]+): Sam-agent starts a quick run\.$/;
+test('E7: with the change on and a wait above 0 the card ends with "No answer in {N}: {Agent} starts a quick run."', async () => {
+  for (const [secs, words] of [[undefined, '2 minutes'], [30, '30 seconds'], [60, '1 minute'], [600, '10 minutes']]) {
+    const L = load({ askAnswer: 'No', settings: secs === undefined ? {} : { researchOfferWaitSeconds: secs } });
+    L.turn('sam-agent');
+    await L.call('sam-agent', { action: 'offer', question: 'Which judge is best?' });
+    const m = NOBODY.exec(L.asked[0].card.question);
+    assert.ok(m, 'the sentence is last: ' + L.asked[0].card.question.slice(-120));
+    assert.equal(m[1], words);
+  }
+});
+test('E7: not added when the change is off; no card at all when the wait is 0', async () => {
+  const off = load({ ons: ['deep-research'], askAnswer: 'No' });
+  off.turn('sam-agent');
+  await off.call('sam-agent', { action: 'offer', question: 'Which judge is best?' });
+  assert.equal(off.asked.length, 1);
+  assert.doesNotMatch(off.asked[0].card.question, /No answer in/);
+  const zero = load({ askAnswer: 'No', settings: { researchOfferWaitSeconds: 0 } });
+  zero.turn('sam-agent');
+  await zero.call('sam-agent', { action: 'offer', question: 'Which judge is best?' });
+  assert.equal(zero.asked.length, 0);
+  // cardFor itself: the sentence only for a wait above 0
+  assert.match(research.cardFor('claude-sdk/claude-test-big', { asker: 'Sam-agent', topic: 'Q?', noAnswerWait: 90 }).question, / No answer in 90 seconds: Sam-agent starts a quick run\.$/);
+  assert.doesNotMatch(research.cardFor('claude-sdk/claude-test-big', { asker: 'Sam-agent', topic: 'Q?' }).question, /No answer in/);
+  assert.doesNotMatch(research.cardFor('claude-sdk/claude-test-big', { asker: 'Sam-agent', topic: 'Q?', noAnswerWait: 0 }).question, /No answer in/);
+});
+test('E4: the ask_user_done event carries waitedSeconds only when the wait\'s own timer ended the question', async () => {
+  const ask = realAskUser();
+  const bus = require(path.join(ISO.inst, 'lib', 'hub-events.js')).events;
+  const seen = [];
+  const off = bus.onPublish((ev) => { if (ev && ev.type === 'ask_user_done') seen.push(ev.data || ev); });
+  try {
+    const q = { question: 'Q?', options: ['A'] };
+    assert.equal(await ask('sam-agent', writableRes(), q, { timeoutMs: 1500 }), 'NO_ANSWER');
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0].result, 'no_answer');
+    assert.equal(seen[0].waitedSeconds, 2, 'Math.round(1500 / 1000)');
+    const ac = new AbortController();
+    const p = ask('sam-agent', writableRes(), q, { timeoutMs: 60000, signal: ac.signal });
+    ac.abort();
+    await p;
+    assert.equal(seen.length, 2);
+    assert.equal(seen[1].result, 'no_answer');
+    assert.equal('waitedSeconds' in seen[1], false, 'a stopped turn is not a wait that ran out');
+  } finally { off(); }
+});
+test('E8: the push title for Always yes reads "started {quick|thorough} research because you chose Always yes"', async () => {
+  const Q = load();
+  Q.prefs.setChoice('u_owner', 'always');
+  Q.hubTurn('sam-agent');
+  await Q.call('sam-agent', { action: 'offer', question: 'Which judge is best?' });
+  await startQ(Q);
+  assert.equal(Q.pushes[0].p.title, 'Sam-agent started quick research because you chose Always yes');
 });

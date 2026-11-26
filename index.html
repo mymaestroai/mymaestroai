@@ -1410,6 +1410,12 @@
       border: 1px solid var(--system-notice-notice-failed-border);
       color: var(--system-notice-notice-failed-text);
     }
+    .system-notice.notice-past {
+      background: transparent;
+      border-color: var(--border);
+      color: var(--auto-time-text);
+      font-weight: 400;
+    }
     /* A line that has done its job folds away, then leaves (lib/ui-retire.js retireSoon) */
     .retiring {
       opacity: 0;
@@ -3033,14 +3039,16 @@
     .research-lines .research-line { cursor: default; white-space: normal; overflow-wrap: anywhere; overflow: visible; min-height: 0; }
     /* The notice for research an agent started on its own: a card with the words and two real buttons (Stop, Make it thorough) */
     .research-lines .research-notice { display: flex; flex-direction: column; gap: 2px; }
-    .research-lines .research-q { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+    .research-lines .research-head { display: flex; align-items: flex-start; gap: 8px; }
+    .research-lines .research-head .ho-title { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+    .research-lines .research-q { white-space: normal; overflow-wrap: anywhere; color: var(--text); }
     .research-lines .research-why, .research-lines .research-cost { color: var(--text-dim); font-size: 13px; overflow-wrap: anywhere; }
-    .research-lines .research-after { color: var(--text); font-size: 13px; }
     .research-lines .research-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
-    .research-lines .research-actions button { font: inherit; font-size: 13px; line-height: 1.2; padding: 6px 14px; border-radius: 6px; background: transparent; cursor: pointer; text-decoration: none; color: var(--text); border: 1px solid var(--border-strong, var(--border)); }
-    .research-lines .research-actions button.wo-stop { color: var(--danger, var(--accent)); border-color: var(--danger, var(--accent)); }
-    .research-lines .research-actions button:hover:not(:disabled) { background: color-mix(in srgb, currentColor 12%, transparent); }
-    .research-lines .research-actions button:disabled { opacity: .5; cursor: default; }
+    .research-lines .research-notice button { font: inherit; font-size: 13px; line-height: 1.2; padding: 6px 14px; border-radius: 6px; background: transparent; cursor: pointer; text-decoration: none; color: var(--text); border: 1px solid var(--border-strong, var(--border)); }
+    .research-lines .research-notice .research-toggle, .research-lines .research-notice .research-x { flex: none; padding: 6px 9px; border-color: transparent; color: var(--text-dim); }
+    .research-lines .research-notice button.wo-stop { flex: none; color: var(--handoff-cards-ho-pill-ho-failed-border); border-color: var(--handoff-cards-ho-pill-ho-failed-border); }
+    .research-lines .research-notice button:hover:not(:disabled) { background: color-mix(in srgb, currentColor 12%, transparent); }
+    .research-lines .research-notice button:disabled { opacity: .5; cursor: default; }
     /* The hand-off Status sheet (lib/ui-hand-off-card.js openStatus): a centred panel; its body reads like a chat message */
     .ho-sheet { padding: 0; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-secondary, var(--bg-input)); color: var(--text); width: min(720px, calc(100vw - 32px)); max-width: 720px; max-height: 80vh; overflow: hidden; box-sizing: border-box; }
     .ho-sheet[open] { display: flex; flex-direction: column; }

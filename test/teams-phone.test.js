@@ -319,7 +319,7 @@ class El {
 function questionRun(data) {
   const root = new El('div'); const calls = [];
   const e = {
-    esc, shownQuestions: new Set(), questionBoxes: new Map(), chatEl: () => root, scrollChat() {}, retireSoon() {}, toast() {}, current: 'ann',
+    esc, shownQuestions: new Set(), questionBoxes: new Map(), questionTexts: new Map(), chatEl: () => root, scrollChat() {}, retireSoon() {}, toast() {}, current: 'ann',
     api: (url, o) => { calls.push([url, JSON.parse(o.body)]); return Promise.resolve({ ok: true }); },
     document: { createElement: (t) => new El(t) },
   };
