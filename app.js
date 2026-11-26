@@ -4038,7 +4038,7 @@
         ${keyRow('serper', 'Serper key', 'serper.dev; Google results')}
         ${keyRow('tavily', 'Tavily key', 'tavily.com; LLM-ready results')}
         <div class="st-row"><label style="flex-basis:150px">Perplexity</label><span class="st-hint" style="margin:0">uses the Perplexity provider key above. <span id="st-ws-pplx"></span></span></div>
-        <div class="st-row" style="flex-wrap:wrap;row-gap:6px"><label style="flex-basis:150px">SearXNG URL</label><input type="text" id="st-ws-searxng" value="${esc((wsc.searxng && wsc.searxng.url) || '')}" placeholder="http://127.0.0.1:8888" style="flex:1 1 180px;min-width:0;max-width:260px"> <button class="st-test-btn" onclick="searxngStart()">Run SearXNG here (Docker)</button><button class="st-test-btn" onclick="searxngStop()">Stop it</button></div>
+        <div class="st-row" style="flex-wrap:wrap;row-gap:6px"><label style="flex-basis:150px">SearXNG URL</label><input type="text" id="st-ws-searxng" value="${esc((wsc.searxng && wsc.searxng.url) || '')}" placeholder="http://127.0.0.1:8888" style="flex:1 1 180px;min-width:0;max-width:260px"> <button class="st-test-btn" data-setting="OPT-0487" onclick="searxngStart()">Run SearXNG here (Docker)</button><button class="st-test-btn" onclick="searxngStop()">Stop it</button></div>
         <div class="st-row"><label style="flex-basis:150px">Private addresses</label>${selWs('st-wf-private', [['admin', 'admin-side agents may fetch them (default)'], ['none', 'nobody'], ['all', 'every agent']], wfc.allowPrivate || 'admin')}</div>
         <div class="st-row"><label style="flex-basis:150px" for="st-wf-render">Browser rendering</label>${selWs('st-wf-render', [['auto', 'auto (when the plain fetch is empty)'], ['off', 'off'], ['always', 'always']], wfc.render || 'auto')}</div>
         <div class="st-row"><label style="flex-basis:150px">Jina Reader</label><label style="flex:1;min-width:0;display:flex;gap:6px;align-items:center;text-align:left;cursor:pointer"><input type="checkbox" id="st-wf-jina" ${wfc.jina ? 'checked' : ''}> Fallback reader (sends the URL to r.jina.ai)</label></div>
@@ -8247,7 +8247,13 @@
     function askLeadEnv() {
       return {
         findLead: () => (Array.isArray(AGENTS) ? AGENTS.find((a) => a && a.lead) : null) || null,
-        beforeOpen: () => { const o = document.getElementById('st-overlay'); if (o) dialogRequestClose(o); simpleCloseSettings(); },   // Settings goes through its own guard (unsaved changes are asked about)
+        // Settings goes through its own guard (unsaved changes are asked about); the chat opens only once it has really closed (false = Keep editing)
+        beforeOpen: async () => {
+          const o = document.getElementById('st-overlay');
+          if (o && !(await window.hubSettingsHelp.closeGuarded(o, (el) => dialogRequestClose(el), { doc: document }))) return false;
+          simpleCloseSettings();
+          return true;
+        },
         openChat: (name) => { const a = AGENTS.find((x) => x.name === name); return startSoloChat(name, (a && a.model) || ''); },
         getBox: (name) => { const c = findSoloChat(name); return c ? document.getElementById('input-' + c.id) : null; },
         clearHash: () => history.replaceState(history.state, '', location.pathname + location.search),

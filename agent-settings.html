@@ -833,6 +833,8 @@
   const ROLE_LABELS = { member: 'member-owned: nothing beyond its own folders unless an admin grants it (Settings, Users page, or here)', worker: 'worker: nothing leaves the box, nothing outside its own folders', head: 'team head: asks before sending or writing outside, never destroys', lead: 'lead: asks for everything decided, including destructive actions', wallet: 'wallet agent: the wallet firewall governs money, otherwise a worker' };
   const DECISION_COLORS = { allow: 'var(--as-success)', ask: 'var(--as-warning)', deny: 'var(--as-error)', firewall: 'var(--as-accent)' };
 
+  // The settings record each permission row is described by (templates/settings-records.json), so every row has its own help.
+  const POLICY_RECORD_IDS = { web: 'OPT-0008', read_outside: 'OPT-0009', write_outside: 'OPT-0010', send: 'OPT-0011', admin: 'OPT-0012', destroy: 'OPT-0013', money: 'OPT-0014' };
   async function loadPolicy() {
     const rows = document.getElementById('policy-rows');
     try {
@@ -848,6 +850,7 @@
       for (const [cls, label] of POLICY_CLASSES) {
         const effective = (p.rules && p.rules[cls]) || defaults[cls];
         const tr = document.createElement('tr');
+        if (POLICY_RECORD_IDS[cls]) tr.setAttribute('data-setting', POLICY_RECORD_IDS[cls]);
         tr.style.borderTop = '1px solid var(--as-line-1)';
         const overridable = role === 'member' ? MEMBER_GRANTABLE.includes(cls) : POLICY_OVERRIDABLE.includes(cls);
         const srcNote = p.source && p.source[cls] && p.source[cls] !== 'role' ? `<br><small style="color:var(--as-dim-777);">from ${escapeHtml(SOURCE_LABELS[p.source[cls]] || p.source[cls])}</small>` : '';
@@ -2115,6 +2118,8 @@
   }
 
   // ── Load Files ──────────────────────────────────────────────────────
+  // The settings record each file tab is described by (templates/settings-records.json).
+  const FILE_TAB_RECORD_IDS = { 'SOUL.md': 'OPT-0068', 'IDENTITY.md': 'OPT-0069', 'MEMORY.md': 'OPT-0070', 'TOOLS.md': 'OPT-0071', 'USER.md': 'OPT-0072', 'TASKS.md': 'OPT-0073' };
   async function loadFiles() {
     try {
       const data = await apiFetch(`/api/agents/${encodeURIComponent(agentName)}/files`);
@@ -2132,6 +2137,7 @@
         const tab = document.createElement('button');
         tab.className = 'tab' + (first ? ' active' : '');
         tab.textContent = fname.replace('.md', '');
+        if (FILE_TAB_RECORD_IDS[fname]) tab.setAttribute('data-setting', FILE_TAB_RECORD_IDS[fname]);
         tab.onclick = () => switchTab(fname);
         tabsEl.appendChild(tab);
 

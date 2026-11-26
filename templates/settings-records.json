@@ -1,5 +1,5 @@
 {
-  "version": "c68d3a2ee5402f4b34e941dc37833523e8a0bf6a",
+  "version": "b2bd725e2bf552b90f658d8e3590edbf8a5c6e3b",
   "records": [
     {
       "id": "OPT-0001",
@@ -56,7 +56,7 @@
       "def": "Default: the agent's short name with a capital letter, such as Maestro. We recommend a name you will recognize at a glance.",
       "restart": false,
       "danger": "everyday",
-      "who": "both",
+      "who": "admin",
       "lead": "none",
       "words": [
         "display name",
@@ -208,7 +208,7 @@
       "risk": "The new owner can see and use the agent and its chats, and the old owner may lose access.",
       "def": "Default: the person who made the agent, or no owner for household agents. We recommend one owner per personal agent.",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
       "lead": "screen",
       "words": [
@@ -300,7 +300,7 @@
       "anchors": [
         {
           "surface": "agent-settings",
-          "selector": "#policy-rows"
+          "selector": "[data-setting=\"OPT-0008\"]"
         }
       ],
       "facts": "Role defaults lib/tool-policy.js:54-64 (web allow for worker/head/lead/wallet, deny for member). Overrides at agents[].policy.overrides.web. Under 'ask' with approval cards off, ask is simply allowed lib/policy-gate.js:188-192; approvalsEnabled default false lib/sdk-chat.js:362. Applied per tool call, no restart."
@@ -336,7 +336,7 @@
       "anchors": [
         {
           "surface": "agent-settings",
-          "selector": "#policy-rows"
+          "selector": "[data-setting=\"OPT-0009\"]"
         }
       ],
       "facts": "Role defaults lib/tool-policy.js:54-64 (read_outside allow, member deny). Override agents[].policy.overrides.read_outside. Ask without approval cards = allow lib/policy-gate.js:188-192. No restart."
@@ -372,7 +372,7 @@
       "anchors": [
         {
           "surface": "agent-settings",
-          "selector": "#policy-rows"
+          "selector": "[data-setting=\"OPT-0010\"]"
         }
       ],
       "facts": "Role defaults lib/tool-policy.js:54-64 (write_outside deny worker/member, ask head/lead). Override agents[].policy.overrides.write_outside. Ask without approval cards = allow lib/policy-gate.js:188-192. No restart."
@@ -409,7 +409,7 @@
       "anchors": [
         {
           "surface": "agent-settings",
-          "selector": "#policy-rows"
+          "selector": "[data-setting=\"OPT-0011\"]"
         }
       ],
       "facts": "Role defaults lib/tool-policy.js:54-64 (send deny worker/member, ask head/lead). Override agents[].policy.overrides.send. Ask without approval cards = allow lib/policy-gate.js:188-192. No restart."
@@ -445,7 +445,7 @@
       "anchors": [
         {
           "surface": "agent-settings",
-          "selector": "#policy-rows"
+          "selector": "[data-setting=\"OPT-0012\"]"
         }
       ],
       "facts": "Role defaults lib/tool-policy.js:54-64 (admin deny worker/member, ask head/lead). Members' agents can never be granted admin: lib/tool-policy.js:108-109 MEMBER_NEVER; whether a per-agent override on a member's agent is honoured is not confirmed. Ask without approval cards = allow lib/policy-gate.js:188-192. No restart."
@@ -482,7 +482,7 @@
       "anchors": [
         {
           "surface": "agent-settings",
-          "selector": "#policy-rows"
+          "selector": "[data-setting=\"OPT-0013\"]"
         }
       ],
       "facts": "Role defaults lib/tool-policy.js:54-64 (destroy deny worker/head/member, ask lead). Members never granted: lib/tool-policy.js:108-109; per-agent override on a member's agent not confirmed. Ask without approval cards = allow lib/policy-gate.js:188-192. No restart."
@@ -518,7 +518,7 @@
       "anchors": [
         {
           "surface": "agent-settings",
-          "selector": "#policy-rows"
+          "selector": "[data-setting=\"OPT-0014\"]"
         }
       ],
       "facts": "Indicator only (agent-settings.html:198); no stored value. Wallet tools reach only agents named in settings.walletAgents, default none: lib/wallet/tools.js:6, 16. Policy class 'money' lib/policy-gate.js:180."
@@ -1149,10 +1149,6 @@
         },
         {
           "surface": "desktop",
-          "selector": "#st-voice-bgcue"
-        },
-        {
-          "surface": "desktop",
           "selector": "#st-voice-speed"
         },
         {
@@ -1659,7 +1655,7 @@
       "def": "Default: new agents start on the standard Claude choice. We recommend leaving it unless an agent needs more or less power.",
       "restart": false,
       "danger": "care",
-      "who": "both",
+      "who": "admin",
       "lead": "confirm",
       "words": [
         "AI",
@@ -2019,7 +2015,7 @@
       "def": "Default: the model's own level. We recommend leaving it.",
       "restart": false,
       "danger": "care",
-      "who": "both",
+      "who": "admin",
       "lead": "none",
       "words": [
         "reasoning",
@@ -2444,7 +2440,7 @@
       "anchors": [
         {
           "surface": "agent-settings",
-          "selector": "#file-tabs"
+          "selector": "[data-setting=\"OPT-0068\"]"
         }
       ],
       "facts": "file workspaces/<agent>/SOUL.md, tab at agent-settings.html:556; read when the agent's instructions are built (lib/agents.js:443 notes minimalContext agents load IDENTITY + SOUL only); when edits take effect (next turn vs next session) not confirmed; no restart"
@@ -2480,7 +2476,7 @@
       "anchors": [
         {
           "surface": "agent-settings",
-          "selector": "#file-tabs"
+          "selector": "[data-setting=\"OPT-0069\"]"
         }
       ],
       "facts": "file workspaces/<agent>/IDENTITY.md, tab at agent-settings.html:556; loaded with SOUL even for minimal-context agents lib/agents.js:443; when edits take effect not confirmed; no restart"
@@ -2516,7 +2512,7 @@
       "anchors": [
         {
           "surface": "agent-settings",
-          "selector": "#file-tabs"
+          "selector": "[data-setting=\"OPT-0070\"]"
         }
       ],
       "facts": "file workspaces/<agent>/MEMORY.md, tab at agent-settings.html:556; skipped for minimal-context agents lib/agents.js:541-542 (as read, section guarded by !opts.minimalContext); when edits take effect not confirmed; no restart"
@@ -2551,7 +2547,7 @@
       "anchors": [
         {
           "surface": "agent-settings",
-          "selector": "#file-tabs"
+          "selector": "[data-setting=\"OPT-0071\"]"
         }
       ],
       "facts": "file workspaces/<agent>/TOOLS.md, tab at agent-settings.html:556; that it grants no permissions is inferred (permissions live in the policy, lib/policy-gate.js), not confirmed from the file loader; no restart"
@@ -2587,7 +2583,7 @@
       "anchors": [
         {
           "surface": "agent-settings",
-          "selector": "#file-tabs"
+          "selector": "[data-setting=\"OPT-0072\"]"
         }
       ],
       "facts": "file workspaces/<agent>/USER.md, tab at agent-settings.html:556; skipped for minimal-context agents lib/agents.js:541-542 (not re-confirmed for USER specifically); no restart"
@@ -2623,7 +2619,7 @@
       "anchors": [
         {
           "surface": "agent-settings",
-          "selector": "#file-tabs"
+          "selector": "[data-setting=\"OPT-0073\"]"
         }
       ],
       "facts": "file workspaces/<agent>/TASKS.md, tab at agent-settings.html:556; the scheduler page also lists enabled TASKS.md tasks (app.js:2518 SCHED_SECTIONS md), so entries can run on their own; exact parse rules not read; no restart"
@@ -2917,7 +2913,7 @@
       "risk": "",
       "def": "",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "both",
       "lead": "none",
       "words": [],
@@ -2973,7 +2969,7 @@
       "risk": "None. Some tools and settings are only in the full view.",
       "def": "Default: Simple for members, Advanced for administrators. We recommend whichever feels easier for you.",
       "restart": false,
-      "danger": "dangerous",
+      "danger": "everyday",
       "who": "both",
       "lead": "apply",
       "words": [
@@ -3159,7 +3155,7 @@
       "def": "Default: Active (only what is running, waiting or paused). We recommend leaving it.",
       "restart": false,
       "danger": "everyday",
-      "who": "both",
+      "who": "admin",
       "lead": "none",
       "words": [
         "show",
@@ -3350,7 +3346,7 @@
       "risk": "",
       "def": "",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
       "lead": "none",
       "words": [],
@@ -3550,7 +3546,7 @@
       "lead": "none",
       "words": [],
       "scope": "per-device",
-      "home": "Settings > Needs you",
+      "home": "Settings > For your review",
       "storedAs": "none",
       "anchors": []
     },
@@ -3571,7 +3567,7 @@
       "lead": "none",
       "words": [],
       "scope": "per-device",
-      "home": "Settings > Needs you",
+      "home": "Settings > For your review",
       "storedAs": "none",
       "anchors": []
     },
@@ -3592,7 +3588,7 @@
       "lead": "none",
       "words": [],
       "scope": "per-device",
-      "home": "Settings > Needs you",
+      "home": "Settings > For your review",
       "storedAs": "none",
       "anchors": []
     },
@@ -3613,7 +3609,7 @@
       "lead": "none",
       "words": [],
       "scope": "per-device",
-      "home": "Settings > Needs you",
+      "home": "Settings > For your review",
       "storedAs": "none",
       "anchors": []
     },
@@ -3644,7 +3640,7 @@
         "security check"
       ],
       "scope": "per-device",
-      "home": "Settings > Needs you",
+      "home": "Settings > For your review",
       "storedAs": "localStorage:hub-security-warn-dismissed",
       "anchors": [
         {
@@ -3671,7 +3667,7 @@
       "lead": "none",
       "words": [],
       "scope": "per-device",
-      "home": "Settings > Needs you",
+      "home": "Settings > For your review",
       "storedAs": "none",
       "anchors": [
         {
@@ -3707,7 +3703,7 @@
         "agents stopped"
       ],
       "scope": "per-device",
-      "home": "Settings > Needs you",
+      "home": "Settings > For your review",
       "storedAs": "none",
       "anchors": [
         {
@@ -3743,7 +3739,7 @@
         "orange bar"
       ],
       "scope": "per-device",
-      "home": "Settings > Needs you",
+      "home": "Settings > For your review",
       "storedAs": "none",
       "anchors": [],
       "facts": "app.js:11152-11154 bar text '⚠ Pacing: <service> one at a time (<reason>)' and a ramping-back-up text; logic in lib/provider-pacing.js, not read, so the exact trigger and the exact effect of the button are not confirmed; indicator, no stored value; admin only per audit"
@@ -3786,7 +3782,7 @@
       "lead": "none",
       "words": [],
       "scope": "per-device",
-      "home": "Settings > Needs you",
+      "home": "Settings > For your review",
       "storedAs": "server: update-check snooze (laterUntil)",
       "anchors": []
     },
@@ -4019,7 +4015,7 @@
       "lead": "none",
       "words": [],
       "scope": "per-device",
-      "home": "Settings > Needs you",
+      "home": "Settings > For your review",
       "storedAs": "none",
       "anchors": [
         {
@@ -4212,7 +4208,7 @@
       "def": "Default: Mine. We recommend leaving it on Mine.",
       "restart": false,
       "danger": "everyday",
-      "who": "both",
+      "who": "admin",
       "lead": "none",
       "words": [
         "my agents",
@@ -4691,12 +4687,12 @@
       "risk": "",
       "def": "",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
       "lead": "none",
       "words": [],
       "scope": "per-device",
-      "home": "Settings > Needs you",
+      "home": "Settings > For your review",
       "storedAs": "none",
       "anchors": []
     },
@@ -4712,7 +4708,7 @@
       "risk": "A wrong zone makes agents show and schedule things at the wrong time. It is set for you only.",
       "def": "Default: follow this device. We recommend leaving it there unless you travel.",
       "restart": false,
-      "danger": "dangerous",
+      "danger": "everyday",
       "who": "both",
       "lead": "apply",
       "words": [
@@ -4751,7 +4747,7 @@
       "risk": "If you lose the phone and the recovery codes you cannot sign in without help. Turning it off makes your account easier to break into.",
       "def": "Default: off for members; required for owners (admins). We recommend turning it on.",
       "restart": false,
-      "danger": "dangerous",
+      "danger": "care",
       "who": "both",
       "lead": "screen",
       "words": [
@@ -4795,7 +4791,7 @@
       "risk": "If you forget the new one you will need an owner or your recovery option to get back in. Use a long phrase you can remember.",
       "def": "Nothing is set for you; the password is yours. We recommend a long, unique one.",
       "restart": false,
-      "danger": "dangerous",
+      "danger": "care",
       "who": "both",
       "lead": "screen",
       "words": [
@@ -4831,7 +4827,7 @@
       "risk": "You will have to sign in again on each device. Nothing else is deleted.",
       "def": "Nothing to set. It is a button you press when you need it.",
       "restart": false,
-      "danger": "dangerous",
+      "danger": "care",
       "who": "both",
       "lead": "screen",
       "words": [
@@ -4882,7 +4878,7 @@
         "own code"
       ],
       "scope": "install | per-person",
-      "home": "Settings > Needs you while undecided (then Settings > Agents and teams > More)",
+      "home": "Settings > For your review while undecided (then Settings > Agents and teams > More)",
       "storedAs": "behaviour:protect-own-code",
       "anchors": [
         {
@@ -4912,7 +4908,7 @@
       "risk": "",
       "def": "",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
       "lead": "none",
       "words": [],
@@ -4966,7 +4962,7 @@
       "risk": "None. Your agents and files stay as they are.",
       "def": "Nothing to set. It is a button.",
       "restart": false,
-      "danger": "dangerous",
+      "danger": "everyday",
       "who": "both",
       "lead": "none",
       "words": [
@@ -5603,7 +5599,7 @@
       "def": "Default: the whole plan when a reading exists, otherwise the model's memory use. We recommend leaving it.",
       "restart": false,
       "danger": "care",
-      "who": "both",
+      "who": "admin",
       "lead": "none",
       "words": [
         "plan",
@@ -5644,7 +5640,7 @@
       "def": "Default: whole plan. We recommend leaving it.",
       "restart": false,
       "danger": "care",
-      "who": "both",
+      "who": "admin",
       "lead": "apply",
       "words": [
         "badge choice",
@@ -5680,7 +5676,7 @@
       "def": "",
       "restart": false,
       "danger": "care",
-      "who": "both",
+      "who": "admin",
       "lead": "apply",
       "words": [],
       "scope": "per-person",
@@ -5706,8 +5702,8 @@
       "risk": "",
       "def": "",
       "restart": false,
-      "danger": "everyday",
-      "who": "both",
+      "danger": "care",
+      "who": "admin",
       "lead": "apply",
       "words": [],
       "scope": "per-person",
@@ -5734,7 +5730,7 @@
       "def": "",
       "restart": false,
       "danger": "everyday",
-      "who": "both",
+      "who": "admin",
       "lead": "none",
       "words": [],
       "scope": "per-device",
@@ -6101,10 +6097,6 @@
         },
         {
           "surface": "desktop",
-          "selector": "#st-voice-bgcue"
-        },
-        {
-          "surface": "desktop",
           "selector": "#st-voice-mode"
         },
         {
@@ -6360,7 +6352,7 @@
         },
         {
           "surface": "desktop",
-          "selector": "#st-voice-bgcue"
+          "selector": "#st-voice-loudness"
         },
         {
           "surface": "phone",
@@ -6403,7 +6395,7 @@
         },
         {
           "surface": "desktop",
-          "selector": "#st-voice-bgcue"
+          "selector": "#st-voice-loudness-bt"
         },
         {
           "surface": "phone",
@@ -6452,7 +6444,7 @@
         },
         {
           "surface": "desktop",
-          "selector": "#st-voice-bgcue"
+          "selector": "#st-voice-pause"
         },
         {
           "surface": "phone",
@@ -6539,10 +6531,6 @@
         },
         {
           "surface": "desktop",
-          "selector": "#st-voice-bgcue"
-        },
-        {
-          "surface": "desktop",
           "selector": "#st-voice-mic"
         },
         {
@@ -6622,10 +6610,6 @@
         {
           "surface": "desktop",
           "label": "Interrupt sensitivity (call bar)"
-        },
-        {
-          "surface": "desktop",
-          "selector": "#st-voice-bgcue"
         },
         {
           "surface": "desktop",
@@ -6839,7 +6823,7 @@
         },
         {
           "surface": "desktop",
-          "selector": "#st-voice-bgcue"
+          "selector": "#st-voice-interrupt"
         },
         {
           "surface": "phone",
@@ -6875,10 +6859,6 @@
         {
           "surface": "desktop",
           "label": "Room check"
-        },
-        {
-          "surface": "desktop",
-          "selector": "#st-voice-room"
         }
       ],
       "mergedInto": "OPT-0236"
@@ -6919,15 +6899,7 @@
         },
         {
           "surface": "desktop",
-          "label": "Car or Bluetooth check"
-        },
-        {
-          "surface": "desktop",
-          "selector": "#st-voice-bgcue"
-        },
-        {
-          "surface": "desktop",
-          "selector": "#st-voice-car"
+          "selector": "#st-voice-echo"
         },
         {
           "surface": "phone",
@@ -6969,10 +6941,6 @@
         {
           "surface": "desktop",
           "label": "Keep Bluetooth awake during calls"
-        },
-        {
-          "surface": "desktop",
-          "selector": "#st-voice-bgcue"
         },
         {
           "surface": "desktop",
@@ -7433,7 +7401,7 @@
       "def": "Default: shown in the voice settings. Nothing to set.",
       "restart": false,
       "danger": "everyday",
-      "who": "both",
+      "who": "admin",
       "lead": "none",
       "words": [
         "status",
@@ -7485,10 +7453,6 @@
       "anchors": [
         {
           "surface": "desktop",
-          "selector": "#st-voice-mode"
-        },
-        {
-          "surface": "desktop",
           "selector": "#st-voice-default"
         }
       ],
@@ -7521,10 +7485,6 @@
       "home": "Settings > Voice and calls",
       "storedAs": "localStorage:hub-voice.detailsReadWords",
       "anchors": [
-        {
-          "surface": "desktop",
-          "selector": "#st-voice-bgcue"
-        },
         {
           "surface": "desktop",
           "selector": "#st-voice-details"
@@ -7564,10 +7524,6 @@
       "home": "Settings > Voice and calls",
       "storedAs": "localStorage:hub-voice.hubCue",
       "anchors": [
-        {
-          "surface": "desktop",
-          "selector": "#st-voice-bgcue"
-        },
         {
           "surface": "desktop",
           "selector": "#st-voice-hubcue"
@@ -7649,10 +7605,6 @@
       "anchors": [
         {
           "surface": "desktop",
-          "selector": "#st-voice-bgcue"
-        },
-        {
-          "surface": "desktop",
           "selector": "#st-voice-speakactivity"
         },
         {
@@ -7693,10 +7645,6 @@
       "anchors": [
         {
           "surface": "desktop",
-          "selector": "#st-voice-bgcue"
-        },
-        {
-          "surface": "desktop",
           "selector": "#st-voice-readaloud"
         },
         {
@@ -7721,7 +7669,7 @@
       "def": "Default: on. We recommend leaving it on.",
       "restart": false,
       "danger": "everyday",
-      "who": "both",
+      "who": "admin",
       "lead": "none",
       "words": [
         "fallback",
@@ -7735,10 +7683,6 @@
       "home": "Settings > Voice and calls",
       "storedAs": "localStorage:hub-voice.deviceVoiceFallback",
       "anchors": [
-        {
-          "surface": "desktop",
-          "selector": "#st-voice-bgcue"
-        },
         {
           "surface": "desktop",
           "selector": "#st-voice-fallback"
@@ -7778,6 +7722,10 @@
         {
           "surface": "desktop",
           "selector": "#st-voice-room"
+        },
+        {
+          "surface": "desktop",
+          "selector": "#st-voice-car"
         }
       ],
       "facts": "Room check suggests micLevel and interruptSensitivity lib/ui-voice-call.js:36, 143-147; car check suggests echoHold and interruptSensitivity lib/ui-voice.js:41 (buttons app.js:19892 per audit; not re-read). No restart."
@@ -7796,7 +7744,7 @@
       "risk": "None. Some looks, such as Engineering, are always dark and keep their own colors.",
       "def": "Default: match device. We recommend leaving it there.",
       "restart": false,
-      "danger": "dangerous",
+      "danger": "everyday",
       "who": "both",
       "lead": "apply",
       "words": [
@@ -7840,8 +7788,8 @@
       "risk": "None. It only filters the list and changes nothing.",
       "def": "Default: empty, everything shown. Nothing to set.",
       "restart": false,
-      "danger": "dangerous",
-      "who": "both",
+      "danger": "everyday",
+      "who": "admin",
       "lead": "none",
       "words": [
         "search",
@@ -7875,9 +7823,9 @@
       "risk": "",
       "def": "",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [],
       "scope": "install",
       "home": "Settings > Tools and connections",
@@ -7885,7 +7833,7 @@
       "anchors": [
         {
           "surface": "desktop",
-          "selector": "#st-quick-links"
+          "selector": "#st-connectors-link"
         }
       ],
       "mergedInto": "OPT-0507"
@@ -7912,7 +7860,7 @@
       "anchors": [
         {
           "surface": "desktop",
-          "selector": "#st-quick-links"
+          "selector": "#st-remote-link"
         }
       ],
       "mergedInto": "OPT-0576"
@@ -7934,7 +7882,7 @@
       "lead": "none",
       "words": [],
       "scope": "install",
-      "home": "Settings > Needs you",
+      "home": "Settings > For your review",
       "storedAs": "none",
       "anchors": []
     },
@@ -7951,7 +7899,7 @@
       "def": "Not a setting; it updates by itself.",
       "restart": false,
       "danger": "everyday",
-      "who": "both",
+      "who": "admin",
       "lead": "none",
       "words": [
         "setup",
@@ -7965,7 +7913,7 @@
         "docker"
       ],
       "scope": "install",
-      "home": "Settings > Needs you",
+      "home": "Settings > For your review",
       "storedAs": "none",
       "anchors": [
         {
@@ -7988,7 +7936,7 @@
       "def": "Not a setting. It updates each time you press Check again.",
       "restart": false,
       "danger": "everyday",
-      "who": "both",
+      "who": "admin",
       "lead": "none",
       "words": [
         "setup check",
@@ -8001,7 +7949,7 @@
         "last checked"
       ],
       "scope": "install",
-      "home": "Settings > Needs you",
+      "home": "Settings > For your review",
       "storedAs": "none",
       "anchors": [
         {
@@ -8024,7 +7972,7 @@
       "def": "Not a setting; buttons appear only on lines that can be fixed.",
       "restart": false,
       "danger": "everyday",
-      "who": "both",
+      "who": "admin",
       "lead": "apply",
       "words": [
         "fix",
@@ -8037,7 +7985,7 @@
         "resolve"
       ],
       "scope": "install",
-      "home": "Settings > Needs you",
+      "home": "Settings > For your review",
       "storedAs": "none",
       "anchors": [],
       "facts": "app.js:4181; the labels and effects come from the server per line, so what each button does is not confirmed here."
@@ -8069,7 +8017,7 @@
         "diagnostics"
       ],
       "scope": "install",
-      "home": "Settings > Needs you",
+      "home": "Settings > For your review",
       "storedAs": "none",
       "anchors": [
         {
@@ -8558,7 +8506,7 @@
       "def": "Default: runs every night. We recommend reading anything marked critical.",
       "restart": false,
       "danger": "everyday",
-      "who": "both",
+      "who": "admin",
       "lead": "none",
       "words": [
         "security",
@@ -8594,7 +8542,7 @@
       "def": "Nothing to set. It updates after each check.",
       "restart": false,
       "danger": "everyday",
-      "who": "both",
+      "who": "admin",
       "lead": "none",
       "words": [
         "status",
@@ -8630,7 +8578,7 @@
       "def": "Nothing to set. Buttons appear only on findings that can be fixed.",
       "restart": false,
       "danger": "everyday",
-      "who": "both",
+      "who": "admin",
       "lead": "apply",
       "words": [
         "fix",
@@ -8666,7 +8614,7 @@
       "def": "Not a setting. It runs every night and when you ask.",
       "restart": false,
       "danger": "everyday",
-      "who": "both",
+      "who": "admin",
       "lead": "none",
       "words": [
         "memory",
@@ -8702,7 +8650,7 @@
       "def": "",
       "restart": false,
       "danger": "everyday",
-      "who": "both",
+      "who": "admin",
       "lead": "none",
       "words": [],
       "scope": "install",
@@ -8729,7 +8677,7 @@
       "def": "Not a setting; buttons appear only when there is something to fix.",
       "restart": false,
       "danger": "everyday",
-      "who": "both",
+      "who": "admin",
       "lead": "apply",
       "words": [
         "fix",
@@ -9260,7 +9208,7 @@
       "def": "Default: on. We recommend leaving it on.",
       "restart": false,
       "danger": "everyday",
-      "who": "both",
+      "who": "admin",
       "lead": "apply",
       "words": [
         "update",
@@ -9296,7 +9244,7 @@
       "def": "Nothing to set.",
       "restart": false,
       "danger": "everyday",
-      "who": "both",
+      "who": "admin",
       "lead": "none",
       "words": [
         "update",
@@ -9460,7 +9408,7 @@
       "def": "",
       "restart": false,
       "danger": "everyday",
-      "who": "both",
+      "who": "admin",
       "lead": "none",
       "words": [],
       "scope": "install",
@@ -9493,12 +9441,7 @@
       "scope": "install",
       "home": "Settings > Voice and calls",
       "storedAs": "none",
-      "anchors": [
-        {
-          "surface": "desktop",
-          "selector": "#st-voice-statusbox"
-        }
-      ],
+      "anchors": [],
       "mergedInto": "OPT-0228"
     },
     {
@@ -9557,7 +9500,7 @@
       "anchors": [
         {
           "surface": "desktop",
-          "selector": "#st-voice-statusbox"
+          "selector": "#st-voice-retry"
         }
       ],
       "facts": "Button app.js:19873 per audit. install is repeatable; a second call while one runs returns the same one lib/voice/engine.js:336. No restart."
@@ -9575,7 +9518,7 @@
       "def": "",
       "restart": false,
       "danger": "everyday",
-      "who": "both",
+      "who": "admin",
       "lead": "none",
       "words": [],
       "scope": "install",
@@ -9608,12 +9551,7 @@
       "scope": "per-device",
       "home": "Settings > Voice and calls",
       "storedAs": "localStorage:hub-call-display.interrupt",
-      "anchors": [
-        {
-          "surface": "desktop",
-          "selector": "#st-voice-interrupt"
-        }
-      ],
+      "anchors": [],
       "mergedInto": "OPT-0211"
     },
     {
@@ -9750,7 +9688,7 @@
       "risk": "Anyone who gets a link can open that file until the link runs out. Turning it off blocks new links.",
       "def": "Default: on. We recommend leaving it on unless you never share files.",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
       "lead": "confirm",
       "words": [
@@ -9870,9 +9808,9 @@
       "risk": "",
       "def": "",
       "restart": false,
-      "danger": "everyday",
-      "who": "admin",
-      "lead": "apply",
+      "danger": "care",
+      "who": "both",
+      "lead": "confirm",
       "words": [],
       "scope": "install",
       "home": "Settings > People and safety",
@@ -9892,7 +9830,7 @@
       "def": "Default: none until you set it. We recommend a long password in a password manager.",
       "restart": false,
       "danger": "dangerous",
-      "who": "both",
+      "who": "admin",
       "lead": "screen",
       "words": [
         "backup",
@@ -9927,8 +9865,8 @@
       "risk": "",
       "def": "",
       "restart": false,
-      "danger": "care",
-      "who": "both",
+      "danger": "dangerous",
+      "who": "admin",
       "lead": "screen",
       "words": [],
       "scope": "install",
@@ -9955,7 +9893,7 @@
       "def": "",
       "restart": false,
       "danger": "dangerous",
-      "who": "both",
+      "who": "admin",
       "lead": "screen",
       "words": [],
       "scope": "install",
@@ -9982,7 +9920,7 @@
       "def": "Nothing to set.",
       "restart": false,
       "danger": "care",
-      "who": "both",
+      "who": "admin",
       "lead": "none",
       "words": [
         "backup",
@@ -10017,7 +9955,7 @@
       "def": "",
       "restart": false,
       "danger": "care",
-      "who": "both",
+      "who": "admin",
       "lead": "none",
       "words": [],
       "scope": "install",
@@ -10044,7 +9982,7 @@
       "def": "",
       "restart": false,
       "danger": "care",
-      "who": "both",
+      "who": "admin",
       "lead": "confirm",
       "words": [],
       "scope": "install",
@@ -10065,7 +10003,7 @@
       "def": "Default: on. We recommend leaving it on.",
       "restart": false,
       "danger": "care",
-      "who": "both",
+      "who": "admin",
       "lead": "confirm",
       "words": [
         "backup",
@@ -10100,7 +10038,7 @@
       "def": "Default: 03:30. We recommend leaving it.",
       "restart": false,
       "danger": "care",
-      "who": "both",
+      "who": "admin",
       "lead": "confirm",
       "words": [
         "backup",
@@ -10135,7 +10073,7 @@
       "def": "Default: 7. We recommend 7 or more.",
       "restart": false,
       "danger": "care",
-      "who": "both",
+      "who": "admin",
       "lead": "confirm",
       "words": [
         "keep",
@@ -10171,7 +10109,7 @@
       "def": "Default: 4 weeks. We recommend leaving it.",
       "restart": false,
       "danger": "care",
-      "who": "both",
+      "who": "admin",
       "lead": "confirm",
       "words": [
         "weekly",
@@ -10206,7 +10144,7 @@
       "def": "",
       "restart": false,
       "danger": "dangerous",
-      "who": "both",
+      "who": "admin",
       "lead": "none",
       "words": [],
       "scope": "per-device",
@@ -10233,7 +10171,7 @@
       "def": "Nothing to set. It shows only when there is a problem.",
       "restart": false,
       "danger": "care",
-      "who": "both",
+      "who": "admin",
       "lead": "none",
       "words": [
         "backup",
@@ -10246,7 +10184,7 @@
         "alert"
       ],
       "scope": "install",
-      "home": "Settings > Needs you",
+      "home": "Settings > For your review",
       "storedAs": "none",
       "anchors": [
         {
@@ -10269,7 +10207,7 @@
       "def": "Nothing to set.",
       "restart": false,
       "danger": "care",
-      "who": "both",
+      "who": "admin",
       "lead": "none",
       "words": [
         "backup",
@@ -10304,7 +10242,7 @@
       "def": "Default: none, so backups stay on this computer. We recommend adding one more place.",
       "restart": false,
       "danger": "care",
-      "who": "both",
+      "who": "admin",
       "lead": "confirm",
       "words": [
         "backup",
@@ -10340,7 +10278,7 @@
       "def": "",
       "restart": false,
       "danger": "care",
-      "who": "both",
+      "who": "admin",
       "lead": "confirm",
       "words": [],
       "scope": "install",
@@ -10367,7 +10305,7 @@
       "def": "",
       "restart": false,
       "danger": "care",
-      "who": "both",
+      "who": "admin",
       "lead": "none",
       "words": [],
       "scope": "install",
@@ -10394,7 +10332,7 @@
       "def": "",
       "restart": false,
       "danger": "care",
-      "who": "both",
+      "who": "admin",
       "lead": "confirm",
       "words": [],
       "scope": "install",
@@ -10421,7 +10359,7 @@
       "def": "",
       "restart": false,
       "danger": "dangerous",
-      "who": "both",
+      "who": "admin",
       "lead": "screen",
       "words": [],
       "scope": "install",
@@ -10442,7 +10380,7 @@
       "def": "",
       "restart": false,
       "danger": "care",
-      "who": "both",
+      "who": "admin",
       "lead": "screen",
       "words": [],
       "scope": "install",
@@ -10463,7 +10401,7 @@
       "def": "",
       "restart": false,
       "danger": "care",
-      "who": "both",
+      "who": "admin",
       "lead": "confirm",
       "words": [],
       "scope": "install",
@@ -10484,7 +10422,7 @@
       "def": "Nothing to set.",
       "restart": false,
       "danger": "care",
-      "who": "both",
+      "who": "admin",
       "lead": "none",
       "words": [
         "backups",
@@ -10520,7 +10458,7 @@
       "def": "",
       "restart": true,
       "danger": "care",
-      "who": "both",
+      "who": "admin",
       "lead": "confirm",
       "words": [],
       "scope": "install",
@@ -10541,7 +10479,7 @@
       "def": "",
       "restart": true,
       "danger": "care",
-      "who": "both",
+      "who": "admin",
       "lead": "confirm",
       "words": [],
       "scope": "install",
@@ -10568,7 +10506,7 @@
       "def": "Nothing to set. It shows only after a restore.",
       "restart": false,
       "danger": "care",
-      "who": "both",
+      "who": "admin",
       "lead": "none",
       "words": [
         "restore",
@@ -10603,7 +10541,7 @@
       "def": "Nothing to set; it is a button, shown only after a restore.",
       "restart": true,
       "danger": "care",
-      "who": "both",
+      "who": "admin",
       "lead": "confirm",
       "words": [
         "undo",
@@ -10637,7 +10575,7 @@
       "def": "Nothing to set; it shows only while paused after a restore.",
       "restart": false,
       "danger": "care",
-      "who": "both",
+      "who": "admin",
       "lead": "confirm",
       "words": [
         "resume",
@@ -10649,7 +10587,7 @@
         "continue"
       ],
       "scope": "install",
-      "home": "Settings > Needs you",
+      "home": "Settings > For your review",
       "storedAs": "none",
       "anchors": [
         {
@@ -10672,7 +10610,7 @@
       "def": "Default: no choice made; we recommend skipping.",
       "restart": false,
       "danger": "care",
-      "who": "both",
+      "who": "admin",
       "lead": "confirm",
       "words": [
         "run",
@@ -10685,7 +10623,7 @@
         "backup"
       ],
       "scope": "install",
-      "home": "Settings > Needs you",
+      "home": "Settings > For your review",
       "storedAs": "none",
       "anchors": [
         {
@@ -10708,7 +10646,7 @@
       "def": "Nothing to set; it shows only when a restore is half done.",
       "restart": false,
       "danger": "care",
-      "who": "both",
+      "who": "admin",
       "lead": "confirm",
       "words": [
         "restore",
@@ -10720,7 +10658,7 @@
         "open backup"
       ],
       "scope": "install",
-      "home": "Settings > Needs you",
+      "home": "Settings > For your review",
       "storedAs": "none",
       "anchors": [
         {
@@ -10743,7 +10681,7 @@
       "def": "Nothing to set; it shows only after the backup key changed.",
       "restart": false,
       "danger": "care",
-      "who": "both",
+      "who": "admin",
       "lead": "confirm",
       "words": [
         "backup key",
@@ -10755,7 +10693,7 @@
         "recovery key"
       ],
       "scope": "install",
-      "home": "Settings > Needs you",
+      "home": "Settings > For your review",
       "storedAs": "none",
       "anchors": [
         {
@@ -10778,7 +10716,7 @@
       "def": "",
       "restart": false,
       "danger": "dangerous",
-      "who": "both",
+      "who": "admin",
       "lead": "screen",
       "words": [],
       "scope": "install",
@@ -10805,7 +10743,7 @@
       "def": "Default: no key set. We recommend adding one only if you want pay-per-use.",
       "restart": false,
       "danger": "dangerous",
-      "who": "both",
+      "who": "admin",
       "lead": "screen",
       "words": [
         "api key",
@@ -10841,7 +10779,7 @@
       "def": "Default: no key set. We recommend adding one only if you want to use OpenAI.",
       "restart": false,
       "danger": "dangerous",
-      "who": "both",
+      "who": "admin",
       "lead": "screen",
       "words": [
         "api key",
@@ -10877,7 +10815,7 @@
       "def": "Default: no key set. We recommend adding one only if you want to use Gemini.",
       "restart": false,
       "danger": "dangerous",
-      "who": "both",
+      "who": "admin",
       "lead": "screen",
       "words": [
         "api key",
@@ -10913,7 +10851,7 @@
       "def": "Default: no key set. We recommend leaving it empty unless you want Perplexity.",
       "restart": false,
       "danger": "dangerous",
-      "who": "both",
+      "who": "admin",
       "lead": "screen",
       "words": [
         "api key",
@@ -10949,7 +10887,7 @@
       "def": "Default: no key set. We recommend adding one only if you want OpenRouter.",
       "restart": false,
       "danger": "dangerous",
-      "who": "both",
+      "who": "admin",
       "lead": "screen",
       "words": [
         "api key",
@@ -10985,7 +10923,7 @@
       "def": "Default: no key set. We recommend leaving it empty unless you want cloud voices.",
       "restart": false,
       "danger": "dangerous",
-      "who": "both",
+      "who": "admin",
       "lead": "screen",
       "words": [
         "api key",
@@ -11021,7 +10959,7 @@
       "def": "Default: http://localhost:1234/v1 on this computer. We recommend leaving it blank.",
       "restart": false,
       "danger": "everyday",
-      "who": "both",
+      "who": "admin",
       "lead": "apply",
       "words": [
         "LM Studio",
@@ -11057,7 +10995,7 @@
       "def": "Default: http://localhost:11434/v1 on this computer. We recommend leaving it blank.",
       "restart": false,
       "danger": "everyday",
-      "who": "both",
+      "who": "admin",
       "lead": "apply",
       "words": [
         "Ollama",
@@ -11093,7 +11031,7 @@
       "def": "Default: http://localhost:8000/v1 on this computer. We recommend leaving it blank.",
       "restart": false,
       "danger": "everyday",
-      "who": "both",
+      "who": "admin",
       "lead": "apply",
       "words": [
         "oMLX",
@@ -11130,7 +11068,7 @@
       "def": "Default: not connected. We recommend connecting it only if you already pay for the plan.",
       "restart": false,
       "danger": "everyday",
-      "who": "both",
+      "who": "admin",
       "lead": "none",
       "words": [
         "ChatGPT",
@@ -11166,7 +11104,7 @@
       "def": "Default: no key set. We recommend adding a key only if you want these models.",
       "restart": false,
       "danger": "everyday",
-      "who": "both",
+      "who": "admin",
       "lead": "apply",
       "words": [
         "OpenRouter",
@@ -11204,7 +11142,7 @@
       "def": "Default: on (the audit said off; the code says on). We recommend leaving it on.",
       "restart": false,
       "danger": "everyday",
-      "who": "both",
+      "who": "admin",
       "lead": "apply",
       "words": [
         "privacy",
@@ -11240,7 +11178,7 @@
       "def": "Nothing to set; it is a reading.",
       "restart": false,
       "danger": "everyday",
-      "who": "both",
+      "who": "admin",
       "lead": "none",
       "words": [
         "offered",
@@ -11274,8 +11212,8 @@
       "risk": "",
       "def": "",
       "restart": false,
-      "danger": "everyday",
-      "who": "both",
+      "danger": "care",
+      "who": "admin",
       "lead": "none",
       "words": [],
       "scope": "per-device",
@@ -11302,7 +11240,7 @@
       "def": "",
       "restart": false,
       "danger": "care",
-      "who": "both",
+      "who": "admin",
       "lead": "none",
       "words": [],
       "scope": "per-device",
@@ -11329,7 +11267,7 @@
       "def": "Default: the standard offer, the newest tool-capable model of each company without its own key. We recommend leaving it unless you want a specific model.",
       "restart": false,
       "danger": "care",
-      "who": "both",
+      "who": "admin",
       "lead": "confirm",
       "words": [
         "OpenRouter models",
@@ -11366,7 +11304,7 @@
       "def": "",
       "restart": false,
       "danger": "care",
-      "who": "both",
+      "who": "admin",
       "lead": "confirm",
       "words": [],
       "scope": "install",
@@ -11393,7 +11331,7 @@
       "def": "",
       "restart": false,
       "danger": "everyday",
-      "who": "both",
+      "who": "admin",
       "lead": "apply",
       "words": [],
       "scope": "install",
@@ -11414,7 +11352,7 @@
       "def": "Default: on. We recommend leaving it on.",
       "restart": false,
       "danger": "everyday",
-      "who": "both",
+      "who": "admin",
       "lead": "apply",
       "words": [
         "subscription",
@@ -11455,7 +11393,7 @@
       "def": "",
       "restart": false,
       "danger": "care",
-      "who": "both",
+      "who": "admin",
       "lead": "none",
       "words": [],
       "scope": "install",
@@ -11482,7 +11420,7 @@
       "def": "Nothing to set; it shows whenever a ChatGPT plan is connected.",
       "restart": false,
       "danger": "everyday",
-      "who": "both",
+      "who": "admin",
       "lead": "none",
       "words": [
         "ChatGPT",
@@ -11519,7 +11457,7 @@
       "def": "",
       "restart": false,
       "danger": "everyday",
-      "who": "both",
+      "who": "admin",
       "lead": "apply",
       "words": [],
       "scope": "install",
@@ -11540,7 +11478,7 @@
       "def": "",
       "restart": false,
       "danger": "everyday",
-      "who": "both",
+      "who": "admin",
       "lead": "apply",
       "words": [],
       "scope": "install",
@@ -11567,7 +11505,7 @@
       "def": "Nothing to set here; the warnings are in the box below.",
       "restart": false,
       "danger": "everyday",
-      "who": "both",
+      "who": "admin",
       "lead": "apply",
       "words": [
         "Claude plan",
@@ -11603,7 +11541,7 @@
       "def": "Nothing to set; they are readings.",
       "restart": false,
       "danger": "care",
-      "who": "both",
+      "who": "admin",
       "lead": "none",
       "words": [
         "usage bars",
@@ -11635,7 +11573,7 @@
       "def": "Default: 75 and 90. We recommend leaving it.",
       "restart": false,
       "danger": "everyday",
-      "who": "both",
+      "who": "admin",
       "lead": "apply",
       "words": [
         "warn",
@@ -11671,7 +11609,7 @@
       "def": "Default: off, switching at 90% when on (Fable goes to Opus, Opus to Sonnet, Sonnet to Haiku). We recommend turning it on.",
       "restart": false,
       "danger": "everyday",
-      "who": "both",
+      "who": "admin",
       "lead": "apply",
       "words": [
         "fallback",
@@ -11707,7 +11645,7 @@
       "def": "",
       "restart": false,
       "danger": "everyday",
-      "who": "both",
+      "who": "admin",
       "lead": "apply",
       "words": [],
       "scope": "install",
@@ -11734,7 +11672,7 @@
       "def": "",
       "restart": false,
       "danger": "care",
-      "who": "both",
+      "who": "admin",
       "lead": "none",
       "words": [],
       "scope": "install",
@@ -11755,7 +11693,7 @@
       "def": "Default: off. We recommend leaving it off unless you use models on this computer.",
       "restart": false,
       "danger": "care",
-      "who": "both",
+      "who": "admin",
       "lead": "none",
       "words": [
         "local models",
@@ -11791,7 +11729,7 @@
       "def": "Default: off (the built-in keyword rules are used). We recommend trying shadow mode first.",
       "restart": false,
       "danger": "care",
-      "who": "both",
+      "who": "admin",
       "lead": "confirm",
       "words": [
         "auto model",
@@ -11827,7 +11765,7 @@
       "def": "Default: built-in rules. We recommend leaving it unless you have tried shadow mode.",
       "restart": false,
       "danger": "care",
-      "who": "both",
+      "who": "admin",
       "lead": "confirm",
       "words": [
         "classifier",
@@ -11863,7 +11801,7 @@
       "def": "Default: the first reachable one. We recommend leaving it.",
       "restart": false,
       "danger": "care",
-      "who": "both",
+      "who": "admin",
       "lead": "confirm",
       "words": [
         "local server",
@@ -11881,7 +11819,7 @@
       "anchors": [
         {
           "surface": "desktop",
-          "selector": "#st-cl-model"
+          "selector": "#st-cl-provider"
         }
       ],
       "facts": "settings.autoClassifier.localProvider ninfer | lmstudio | ollama | auto, default auto lib/classifier.js:6,26,65; unreachable falls through lib/classifier.js:14; no restart"
@@ -11899,7 +11837,7 @@
       "def": "Default: blank (the server's first model). We recommend leaving it blank.",
       "restart": false,
       "danger": "care",
-      "who": "both",
+      "who": "admin",
       "lead": "confirm",
       "words": [
         "model name",
@@ -11934,7 +11872,7 @@
       "def": "Default: on. We recommend leaving it on.",
       "restart": false,
       "danger": "care",
-      "who": "both",
+      "who": "admin",
       "lead": "confirm",
       "words": [
         "think",
@@ -11952,7 +11890,7 @@
       "anchors": [
         {
           "surface": "desktop",
-          "selector": "#st-cl-model"
+          "selector": "#st-cl-think"
         }
       ],
       "facts": "settings.autoClassifier.localThinking default true lib/classifier.js:8, 26; on is about 0.5 s, off about 0.15 s lib/classifier.js:8; saved by server.js:1784; read at each use, so no restart (not tested)"
@@ -11970,7 +11908,7 @@
       "def": "Default: 0.6. We recommend leaving it.",
       "restart": false,
       "danger": "care",
-      "who": "both",
+      "who": "admin",
       "lead": "confirm",
       "words": [
         "confidence",
@@ -12006,7 +11944,7 @@
       "def": "Default: off. We recommend turning it on first, then off once you trust the picks.",
       "restart": false,
       "danger": "care",
-      "who": "both",
+      "who": "admin",
       "lead": "confirm",
       "words": [
         "shadow",
@@ -12024,7 +11962,7 @@
       "anchors": [
         {
           "surface": "desktop",
-          "selector": "#st-cl-floor"
+          "selector": "#st-cl-shadow"
         }
       ],
       "facts": "settings.autoClassifier.shadow default false lib/classifier.js:10,26,61,163; shadowAll watches every agent when a non-builtin backend is on lib/classifier.js:59-61; no restart"
@@ -12042,7 +11980,7 @@
       "def": "Default: empty. We recommend listing every agent that handles private material.",
       "restart": false,
       "danger": "care",
-      "who": "both",
+      "who": "admin",
       "lead": "confirm",
       "words": [
         "keep on box",
@@ -12079,7 +12017,7 @@
       "def": "Nothing to set; it starts empty.",
       "restart": false,
       "danger": "care",
-      "who": "both",
+      "who": "admin",
       "lead": "none",
       "words": [
         "try it",
@@ -12114,7 +12052,7 @@
       "def": "Nothing to set; it is a reading.",
       "restart": false,
       "danger": "care",
-      "who": "both",
+      "who": "admin",
       "lead": "none",
       "words": [
         "tallies",
@@ -12150,7 +12088,7 @@
       "def": "Default: 32000 tokens (roughly 24000 words). We recommend leaving it.",
       "restart": false,
       "danger": "care",
-      "who": "both",
+      "who": "admin",
       "lead": "confirm",
       "words": [
         "max tokens",
@@ -12189,7 +12127,7 @@
       "def": "Default: 40. We recommend leaving it.",
       "restart": false,
       "danger": "everyday",
-      "who": "both",
+      "who": "admin",
       "lead": "apply",
       "words": [
         "context messages",
@@ -12228,7 +12166,7 @@
       "def": "Default: on. We recommend leaving it on.",
       "restart": false,
       "danger": "everyday",
-      "who": "both",
+      "who": "admin",
       "lead": "apply",
       "words": [
         "reasoning",
@@ -13289,7 +13227,7 @@
       "restart": false,
       "danger": "everyday",
       "who": "admin",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [],
       "scope": "install",
       "home": "Settings > Agents and teams > More",
@@ -13711,8 +13649,8 @@
       "def": "",
       "restart": false,
       "danger": "dangerous",
-      "who": "both",
-      "lead": "apply",
+      "who": "admin",
+      "lead": "screen",
       "words": [],
       "scope": "install",
       "home": "Settings > People and safety",
@@ -13738,7 +13676,7 @@
       "def": "Default: in a box. We recommend leaving it in a box.",
       "restart": false,
       "danger": "dangerous",
-      "who": "both",
+      "who": "admin",
       "lead": "screen",
       "words": [
         "sandbox",
@@ -13774,7 +13712,7 @@
       "def": "Default: off (you choose for each agent). We recommend a box for any agent you do not fully trust.",
       "restart": false,
       "danger": "dangerous",
-      "who": "both",
+      "who": "admin",
       "lead": "screen",
       "words": [
         "sandbox",
@@ -13810,7 +13748,7 @@
       "def": "Default: the AI program's own tools. We recommend Maestro's own tools if you share your Maestro with others.",
       "restart": false,
       "danger": "dangerous",
-      "who": "both",
+      "who": "admin",
       "lead": "confirm",
       "words": [
         "tools",
@@ -13846,7 +13784,7 @@
       "def": "Nothing to set; it updates itself.",
       "restart": false,
       "danger": "dangerous",
-      "who": "both",
+      "who": "admin",
       "lead": "none",
       "words": [
         "sandbox status",
@@ -13881,7 +13819,7 @@
       "def": "",
       "restart": false,
       "danger": "dangerous",
-      "who": "both",
+      "who": "admin",
       "lead": "confirm",
       "words": [],
       "scope": "install",
@@ -13902,7 +13840,7 @@
       "def": "Nothing to set; it shows the current state.",
       "restart": false,
       "danger": "dangerous",
-      "who": "both",
+      "who": "admin",
       "lead": "none",
       "words": [
         "docker",
@@ -13938,8 +13876,8 @@
       "def": "",
       "restart": false,
       "danger": "dangerous",
-      "who": "both",
-      "lead": "confirm",
+      "who": "admin",
+      "lead": "screen",
       "words": [],
       "scope": "install",
       "home": "Settings > People and safety",
@@ -13965,7 +13903,7 @@
       "def": "Default: off. We recommend \"only report\" first, then \"block\".",
       "restart": false,
       "danger": "dangerous",
-      "who": "both",
+      "who": "admin",
       "lead": "screen",
       "words": [
         "lockbox",
@@ -14001,7 +13939,7 @@
       "def": "Nothing to set; it checks this computer.",
       "restart": false,
       "danger": "dangerous",
-      "who": "both",
+      "who": "admin",
       "lead": "none",
       "words": [
         "lockbox status",
@@ -14036,8 +13974,8 @@
       "def": "",
       "restart": false,
       "danger": "care",
-      "who": "both",
-      "lead": "confirm",
+      "who": "admin",
+      "lead": "screen",
       "words": [],
       "scope": "install",
       "home": "Settings > People and safety",
@@ -14063,7 +14001,7 @@
       "def": "Default: refused. We recommend leaving it refused unless members need the web.",
       "restart": false,
       "danger": "care",
-      "who": "both",
+      "who": "admin",
       "lead": "screen",
       "words": [
         "members",
@@ -14082,10 +14020,6 @@
         {
           "surface": "desktop",
           "label": "Web search and fetch"
-        },
-        {
-          "surface": "desktop",
-          "selector": "#st-mp-section"
         }
       ],
       "facts": "settings.memberPolicy.web; member role default deny lib/tool-policy.js:54-64; layers hub default, per member grant, per agent override lib/tool-policy.js:100-106; grantable classes web, read_outside, write_outside, send only lib/tool-policy.js:108-109, saved through sanitizeGrants server.js:3030. Ask without cards = allow lib/policy-gate.js:188-192. Audit lists 'deny' twice among choices; code values allow/ask/deny. No restart."
@@ -14103,7 +14037,7 @@
       "def": "Default: refused. We recommend leaving it refused.",
       "restart": false,
       "danger": "care",
-      "who": "both",
+      "who": "admin",
       "lead": "screen",
       "words": [
         "members",
@@ -14122,10 +14056,6 @@
         {
           "surface": "desktop",
           "label": "Read outside its folders"
-        },
-        {
-          "surface": "desktop",
-          "selector": "#st-mp-section"
         }
       ],
       "facts": "settings.memberPolicy.read_outside; member role deny lib/tool-policy.js:54-64; grantable lib/tool-policy.js:108. Ask without cards = allow lib/policy-gate.js:188-192. No restart."
@@ -14143,7 +14073,7 @@
       "def": "Default: refused. We recommend leaving it refused.",
       "restart": false,
       "danger": "care",
-      "who": "both",
+      "who": "admin",
       "lead": "screen",
       "words": [
         "members",
@@ -14162,10 +14092,6 @@
         {
           "surface": "desktop",
           "label": "Write outside its folders"
-        },
-        {
-          "surface": "desktop",
-          "selector": "#st-mp-section"
         }
       ],
       "facts": "settings.memberPolicy.write_outside; member role deny lib/tool-policy.js:54-64; grantable lib/tool-policy.js:108. Ask without cards = allow lib/policy-gate.js:188-192. No restart."
@@ -14183,7 +14109,7 @@
       "def": "Default: refused. We recommend leaving it refused.",
       "restart": false,
       "danger": "care",
-      "who": "both",
+      "who": "admin",
       "lead": "screen",
       "words": [
         "members",
@@ -14202,10 +14128,6 @@
         {
           "surface": "desktop",
           "label": "Send off this machine"
-        },
-        {
-          "surface": "desktop",
-          "selector": "#st-mp-section"
         }
       ],
       "facts": "settings.memberPolicy.send; member role deny lib/tool-policy.js:54-64; grantable lib/tool-policy.js:108. Ask without cards = allow lib/policy-gate.js:188-192. No restart."
@@ -14223,7 +14145,7 @@
       "def": "Default: off. We recommend turning it on if you have agents that can send or delete.",
       "restart": false,
       "danger": "care",
-      "who": "both",
+      "who": "admin",
       "lead": "confirm",
       "words": [
         "approval",
@@ -14264,7 +14186,7 @@
       "def": "Default: 60 minutes. We recommend leaving it.",
       "restart": false,
       "danger": "care",
-      "who": "both",
+      "who": "admin",
       "lead": "none",
       "words": [
         "approval timeout",
@@ -14300,7 +14222,7 @@
       "def": "Default: not ticked. We recommend ticking it.",
       "restart": false,
       "danger": "care",
-      "who": "both",
+      "who": "admin",
       "lead": "confirm",
       "words": [
         "sudo",
@@ -14336,7 +14258,7 @@
       "def": "Default: off, nothing ticked. We recommend turning it on if you use wallets.",
       "restart": false,
       "danger": "dangerous",
-      "who": "both",
+      "who": "admin",
       "lead": "screen",
       "words": [
         "approve",
@@ -14372,7 +14294,7 @@
       "def": "Default: not ticked. We recommend ticking it.",
       "restart": false,
       "danger": "care",
-      "who": "both",
+      "who": "admin",
       "lead": "confirm",
       "words": [
         "delete",
@@ -14408,7 +14330,7 @@
       "def": "Default: not ticked. We recommend ticking it.",
       "restart": false,
       "danger": "care",
-      "who": "both",
+      "who": "admin",
       "lead": "confirm",
       "words": [
         "admin",
@@ -14444,7 +14366,7 @@
       "def": "Default: not ticked. We recommend ticking it.",
       "restart": false,
       "danger": "care",
-      "who": "both",
+      "who": "admin",
       "lead": "confirm",
       "words": [
         "send",
@@ -14480,7 +14402,7 @@
       "def": "Default: none active. We recommend keeping it empty.",
       "restart": false,
       "danger": "care",
-      "who": "both",
+      "who": "admin",
       "lead": "screen",
       "words": [
         "root",
@@ -14605,12 +14527,7 @@
       "scope": "per-person",
       "home": "Top bar",
       "storedAs": "per-person layout mode (via simpleSwitchMode)",
-      "anchors": [
-        {
-          "surface": "desktop",
-          "selector": "#st-switch-simple"
-        }
-      ],
+      "anchors": [],
       "mergedInto": "OPT-0085"
     },
     {
@@ -14626,7 +14543,7 @@
       "def": "Default: off. We recommend leaving it off.",
       "restart": false,
       "danger": "care",
-      "who": "both",
+      "who": "admin",
       "lead": "none",
       "words": [
         "prescan",
@@ -14662,7 +14579,7 @@
       "def": "Default: on. We recommend leaving it on.",
       "restart": false,
       "danger": "care",
-      "who": "both",
+      "who": "admin",
       "lead": "confirm",
       "words": [
         "lazy tools",
@@ -14698,7 +14615,7 @@
       "def": "Default: Fallback. We recommend leaving it.",
       "restart": false,
       "danger": "everyday",
-      "who": "both",
+      "who": "admin",
       "lead": "apply",
       "words": [
         "sdk workers",
@@ -14735,11 +14652,11 @@
       "def": "",
       "restart": false,
       "danger": "everyday",
-      "who": "both",
-      "lead": "apply",
+      "who": "admin",
+      "lead": "confirm",
       "words": [],
       "scope": "install",
-      "home": "Settings > Needs you while undecided (then Settings > Agents and teams > More)",
+      "home": "Settings > For your review while undecided (then Settings > Agents and teams > More)",
       "storedAs": "settings.teamGuidance",
       "anchors": [
         {
@@ -14762,7 +14679,7 @@
       "def": "Default: off. We recommend leaving it off unless you like terse replies.",
       "restart": false,
       "danger": "everyday",
-      "who": "both",
+      "who": "admin",
       "lead": "none",
       "words": [
         "terse",
@@ -14867,12 +14784,7 @@
       "scope": "per-device",
       "home": "Settings (top of page)",
       "storedAs": "none (typing is not stored)",
-      "anchors": [
-        {
-          "surface": "desktop",
-          "selector": "#st-search"
-        }
-      ],
+      "anchors": [],
       "mergedInto": "OPT-0238"
     },
     {
@@ -14887,19 +14799,14 @@
       "risk": "",
       "def": "",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [],
       "scope": "install",
       "home": "Settings > Tools and connections",
       "storedAs": "none",
-      "anchors": [
-        {
-          "surface": "desktop",
-          "selector": "#st-quick-links"
-        }
-      ],
+      "anchors": [],
       "mergedInto": "OPT-0507"
     },
     {
@@ -14921,12 +14828,7 @@
       "scope": "install",
       "home": "Settings > Tools and connections",
       "storedAs": "none",
-      "anchors": [
-        {
-          "surface": "desktop",
-          "selector": "#st-quick-links"
-        }
-      ],
+      "anchors": [],
       "mergedInto": "OPT-0576"
     },
     {
@@ -14946,12 +14848,12 @@
       "lead": "apply",
       "words": [],
       "scope": "install",
-      "home": "Settings > Needs you",
+      "home": "Settings > For your review",
       "storedAs": "none",
       "anchors": [
         {
           "surface": "desktop",
-          "selector": "#st-quick-links"
+          "selector": "#st-changes-link"
         }
       ],
       "mergedInto": "OPT-0241"
@@ -14969,7 +14871,7 @@
       "def": "Default: off. We recommend turning it on for your main computer.",
       "restart": false,
       "danger": "everyday",
-      "who": "admin",
+      "who": "both",
       "lead": "none",
       "words": [
         "push",
@@ -15005,7 +14907,7 @@
       "def": "Default: after 3 minutes. We recommend leaving it.",
       "restart": false,
       "danger": "everyday",
-      "who": "both",
+      "who": "admin",
       "lead": "apply",
       "words": [
         "reminder",
@@ -15041,7 +14943,7 @@
       "def": "Default: ask each time. We recommend leaving it.",
       "restart": false,
       "danger": "care",
-      "who": "admin",
+      "who": "both",
       "lead": "confirm",
       "words": [
         "research",
@@ -15077,7 +14979,7 @@
       "def": "Default: Quick. We recommend leaving it.",
       "restart": false,
       "danger": "care",
-      "who": "admin",
+      "who": "both",
       "lead": "confirm",
       "words": [
         "always",
@@ -15112,8 +15014,8 @@
       "risk": "If you turn it off, you may miss an agent that is waiting for you.",
       "def": "Default: on. We recommend leaving it on.",
       "restart": false,
-      "danger": "dangerous",
-      "who": "admin",
+      "danger": "everyday",
+      "who": "both",
       "lead": "apply",
       "words": [
         "notifications",
@@ -15148,8 +15050,8 @@
       "risk": "If you turn it off, you may miss something you asked to be told about.",
       "def": "Default: on. We recommend leaving it on.",
       "restart": false,
-      "danger": "dangerous",
-      "who": "admin",
+      "danger": "everyday",
+      "who": "both",
       "lead": "apply",
       "words": [
         "notifications",
@@ -15184,8 +15086,8 @@
       "risk": "If you turn it off, you will not be told when reports and other notices arrive until you open the page.",
       "def": "Default: on. We recommend leaving it on, or \"only when I'm away\" if it is too much.",
       "restart": false,
-      "danger": "dangerous",
-      "who": "admin",
+      "danger": "everyday",
+      "who": "both",
       "lead": "apply",
       "words": [
         "notifications",
@@ -15220,8 +15122,8 @@
       "risk": "If you turn it off, you may not hear about a failed backup, a break-in attempt or a full disk until it is too late.",
       "def": "Default: on. We recommend leaving it on.",
       "restart": false,
-      "danger": "dangerous",
-      "who": "admin",
+      "danger": "everyday",
+      "who": "both",
       "lead": "apply",
       "words": [
         "security alerts",
@@ -15256,8 +15158,8 @@
       "risk": "None. Reset only changes your own notification choices for that agent.",
       "def": "Default: the list is empty. We recommend resetting any agent you no longer want special treatment for.",
       "restart": false,
-      "danger": "dangerous",
-      "who": "admin",
+      "danger": "everyday",
+      "who": "both",
       "lead": "none",
       "words": [
         "notifications",
@@ -15292,8 +15194,8 @@
       "risk": "If you turn it off for an agent, you may miss that agent waiting for your answer.",
       "def": "Default: use my default (shown beside it). We recommend leaving it.",
       "restart": false,
-      "danger": "dangerous",
-      "who": "admin",
+      "danger": "everyday",
+      "who": "both",
       "lead": "apply",
       "words": [
         "notifications",
@@ -15328,8 +15230,8 @@
       "risk": "If you turn it off for an agent, you may miss something you asked it to tell you about.",
       "def": "Default: use my default (shown beside it). We recommend leaving it.",
       "restart": false,
-      "danger": "dangerous",
-      "who": "admin",
+      "danger": "everyday",
+      "who": "both",
       "lead": "apply",
       "words": [
         "notifications",
@@ -15364,8 +15266,8 @@
       "risk": "If you turn it off for an agent, you will not be told when it has a report until you open the page.",
       "def": "Default: use my default (shown beside it). We recommend leaving it.",
       "restart": false,
-      "danger": "dangerous",
-      "who": "admin",
+      "danger": "everyday",
+      "who": "both",
       "lead": "apply",
       "words": [
         "notifications",
@@ -15725,7 +15627,7 @@
       "anchors": [
         {
           "surface": "desktop",
-          "selector": "#st-ws-searxng"
+          "selector": "[data-setting=\"OPT-0487\"]"
         }
       ],
       "facts": "app.js:4024; lib/web-search.js:19 header comment: the hub can run SearXNG as a Docker container named hub-searxng from the Settings page; start fills settings.webSearch.searxng.url per audit; not re-traced beyond that"
@@ -16005,7 +15907,7 @@
       "risk": "Anyone with this key can use your bot, so keep it private. It is checked with Telegram when you save it.",
       "def": "Default: no key set. Nothing works until you add one.",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
       "lead": "screen",
       "words": [
@@ -17615,7 +17517,7 @@
       "lead": "confirm",
       "words": [],
       "scope": "install",
-      "home": "Settings > Needs you",
+      "home": "Settings > For your review",
       "storedAs": "data/behaviour-reviews.json",
       "anchors": []
     },
@@ -17645,7 +17547,7 @@
         "model choice"
       ],
       "scope": "install",
-      "home": "Settings > Needs you while undecided (then Settings > Agents and teams > More)",
+      "home": "Settings > For your review while undecided (then Settings > Agents and teams > More)",
       "storedAs": "behaviour:team-guidance",
       "anchors": [],
       "facts": "templates/behaviour-changes.json:5 (id team-guidance, costs text); on for a fresh install, pending for an existing one lib/behaviour-changes.js:3, 83, 101-114; applies without restart is not confirmed beyond the instructions being built per turn."
@@ -17677,7 +17579,7 @@
         "new agents"
       ],
       "scope": "install",
-      "home": "Settings > Needs you while undecided (then Settings > Agents and teams > More)",
+      "home": "Settings > For your review while undecided (then Settings > Agents and teams > More)",
       "storedAs": "behaviour:starter-team",
       "anchors": [],
       "facts": "templates/behaviour-changes.json id starter-team (line 16): 'Turning it on shows a Set up your team card; nothing is created until the owner presses Create'; on-versus-pending default per audit (default_on for new installs); not checked in lib/behaviour-changes.js. Not confirmed: the exact default for existing installs. Class corrected to needs care by the audit."
@@ -17709,7 +17611,7 @@
         "cost"
       ],
       "scope": "install",
-      "home": "Settings > Needs you while undecided (then Settings > Agents and teams > More)",
+      "home": "Settings > For your review while undecided (then Settings > Agents and teams > More)",
       "storedAs": "behaviour:member-worker-models",
       "anchors": [],
       "facts": "behaviour id member-worker-models templates/behaviour-changes.json:27; on for fresh install, 'pending' off for install with agents lib/behaviour-changes.js:3, 101; page-only, the lead may not switch it lib/behaviour-switch.js:5, 17; enforced per helper start lib/sdk-chat.js:4163-4166. Restart not needed (read per turn); not tested."
@@ -17740,7 +17642,7 @@
         "savings"
       ],
       "scope": "install",
-      "home": "Settings > Needs you while undecided (then Settings > Agents and teams > More)",
+      "home": "Settings > For your review while undecided (then Settings > Agents and teams > More)",
       "storedAs": "behaviour:worker-proposals",
       "anchors": [],
       "facts": "templates/behaviour-changes.json:38 (id worker-proposals, costs 'one short lead turn a week'); weekly task kept by lib/behaviour-review.js:143-153; defaults lib/behaviour-changes.js:3, 83, 101-114."
@@ -17771,7 +17673,7 @@
         "gaps"
       ],
       "scope": "install",
-      "home": "Settings > Needs you while undecided (then Settings > Agents and teams > More)",
+      "home": "Settings > For your review while undecided (then Settings > Agents and teams > More)",
       "storedAs": "behaviour:ask-lead-for-workers",
       "anchors": [],
       "facts": "templates/behaviour-changes.json:49 (id ask-lead-for-workers); defaults lib/behaviour-changes.js:3, 83, 101-114."
@@ -17803,7 +17705,7 @@
         "background job"
       ],
       "scope": "install",
-      "home": "Settings > Needs you while undecided (then Settings > Agents and teams > More)",
+      "home": "Settings > For your review while undecided (then Settings > Agents and teams > More)",
       "storedAs": "behaviour:work-check-ins",
       "anchors": [],
       "facts": "templates/behaviour-changes.json:60 (id work-check-ins, costs text); defaults lib/behaviour-changes.js:3, 83, 101-114."
@@ -17835,7 +17737,7 @@
         "advice"
       ],
       "scope": "install",
-      "home": "Settings > Needs you while undecided (then Settings > Agents and teams > More)",
+      "home": "Settings > For your review while undecided (then Settings > Agents and teams > More)",
       "storedAs": "behaviour:work-suggestions",
       "anchors": [],
       "facts": "templates/behaviour-changes.json:71 (id work-suggestions, costs text); defaults lib/behaviour-changes.js:3, 83, 101-114."
@@ -17865,7 +17767,7 @@
         "status file"
       ],
       "scope": "install",
-      "home": "Settings > Needs you while undecided (then Settings > Agents and teams > More)",
+      "home": "Settings > For your review while undecided (then Settings > Agents and teams > More)",
       "storedAs": "behaviour:hand-off-guidance",
       "anchors": [],
       "facts": "Behaviour change id hand-off-guidance templates/behaviour-changes.json:82; on a new install it starts on, on an install with agents it starts pending lib/behaviour-changes.js:3, 101-114; read per turn lib/sdk-chat.js:277. Costs text from the manifest (about 150 words). No restart."
@@ -17897,7 +17799,7 @@
         "pull request"
       ],
       "scope": "install",
-      "home": "Settings > Needs you while undecided (then Settings > Agents and teams > More)",
+      "home": "Settings > For your review while undecided (then Settings > Agents and teams > More)",
       "storedAs": "behaviour:own-code-guidance",
       "anchors": [],
       "facts": "behaviour id own-code-guidance templates/behaviour-changes.json:104-115; read per lead turn lib/sdk-chat.js:277; fresh install on, install with agents 'pending' off lib/behaviour-changes.js:3, 101; the separate 'Protect your Maestro's own code' change can still refuse edits (same file)."
@@ -17928,7 +17830,7 @@
         "reports"
       ],
       "scope": "install",
-      "home": "Settings > Needs you while undecided (then Settings > Agents and teams > More)",
+      "home": "Settings > For your review while undecided (then Settings > Agents and teams > More)",
       "storedAs": "behaviour:deep-research",
       "anchors": [],
       "facts": "templates/behaviour-changes.json id deep-research (line 115): about 80 words added to agent instructions; nothing runs without a yes or an Always the person chose; read with isOn('deep-research') per turn lib/sdk-chat.js:489; no restart (the audit says no). Not confirmed: the exact default for existing installs."
@@ -17959,7 +17861,7 @@
         "scheduled"
       ],
       "scope": "install",
-      "home": "Settings > Needs you while undecided (then Settings > Agents and teams > More)",
+      "home": "Settings > For your review while undecided (then Settings > Agents and teams > More)",
       "storedAs": "behaviour:research-own-work",
       "anchors": [],
       "facts": "templates/behaviour-changes.json id research-own-work (line 126); depends on 'deep-research' being on; quick runs only, never thorough; a person who chose Never is never overridden; limits in OPT-0386..0388; no restart. Not confirmed: the exact default for existing installs."
@@ -17991,7 +17893,7 @@
         "off"
       ],
       "scope": "install",
-      "home": "Settings > Needs you",
+      "home": "Settings > For your review",
       "storedAs": "settings.workerProposals (weekly task) | settings.workerProposals",
       "anchors": [
         {
@@ -19765,7 +19667,7 @@
       "def": "Default: the name given when the account was made. We recommend a name your family or team will recognize.",
       "restart": false,
       "danger": "dangerous",
-      "who": "both",
+      "who": "admin",
       "lead": "none",
       "words": [
         "rename",
@@ -19878,7 +19780,7 @@
       "def": "Default: set when the account was made. We recommend a long, unique password.",
       "restart": false,
       "danger": "dangerous",
-      "who": "both",
+      "who": "admin",
       "lead": "screen",
       "words": [
         "password",
@@ -19927,7 +19829,7 @@
       "def": "Not applicable: it is a button, not a setting. We recommend resetting only after you have checked who is asking.",
       "restart": false,
       "danger": "dangerous",
-      "who": "both",
+      "who": "admin",
       "lead": "screen",
       "words": [
         "2fa",
@@ -20184,7 +20086,7 @@
       "def": "Not applicable: it is a button, not a setting. We recommend Disable first if you might want them back.",
       "restart": false,
       "danger": "dangerous",
-      "who": "both",
+      "who": "admin",
       "lead": "screen",
       "words": [
         "delete user",
@@ -20319,9 +20221,9 @@
       "risk": "",
       "def": "",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
-      "lead": "apply",
+      "lead": "screen",
       "words": [],
       "scope": "install",
       "home": "Settings > People and safety",
@@ -20630,7 +20532,7 @@
       "risk": "A token works like a password for a program. Revoking one stops every program that uses it right away.",
       "def": "Default: no tokens. We recommend making one only when a program needs it, and revoking it when it is retired.",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
       "lead": "screen",
       "words": [
@@ -20662,7 +20564,7 @@
       "risk": "None. The name is only a label. The token itself is shown once, right after you create it; copy it then, because it cannot be shown again.",
       "def": "Default: empty. A name is required; we recommend the name of the program that will use it.",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
       "lead": "screen",
       "words": [
@@ -20697,7 +20599,7 @@
       "risk": "Leaving it empty on a token that can chat is not allowed. A long list gives the program wide reach.",
       "def": "Default: empty. A token with the chat or interject right must name at least one agent.",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
       "lead": "screen",
       "words": [
@@ -20732,7 +20634,7 @@
       "risk": "A token with no end date works until someone revokes it. A token that expires stops its program without warning.",
       "def": "Default: blank, so the token never expires. We recommend setting an expiry on any token you do not need for long.",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
       "lead": "screen",
       "words": [
@@ -20768,7 +20670,7 @@
       "risk": "Every box you tick gives that program more power over your Maestro. A token that can chat can make your agents work, and that can cost plan use or money.",
       "def": "Default: nothing ticked. We recommend ticking only what the program really needs.",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
       "lead": "screen",
       "words": [
@@ -22015,9 +21917,9 @@
       "risk": "",
       "def": "",
       "restart": false,
-      "danger": "dangerous",
+      "danger": "care",
       "who": "both",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [],
       "scope": "per-agent",
       "home": "Settings > Voice and calls",
@@ -22036,9 +21938,9 @@
       "risk": "None. It only shows numbers and changes nothing.",
       "def": "Default: shown only when the agent has recordings. Nothing to set.",
       "restart": false,
-      "danger": "dangerous",
+      "danger": "care",
       "who": "both",
-      "lead": "apply",
+      "lead": "none",
       "words": [
         "recordings",
         "disk space",
@@ -22087,9 +21989,9 @@
       "risk": "None. A session that cannot be opened is shown with its id and a delete button.",
       "def": "Always shown for the recordings you are allowed to see.",
       "restart": false,
-      "danger": "dangerous",
+      "danger": "care",
       "who": "both",
-      "lead": "apply",
+      "lead": "none",
       "words": [
         "recordings",
         "calls",
@@ -22117,9 +22019,9 @@
       "risk": "",
       "def": "",
       "restart": false,
-      "danger": "dangerous",
+      "danger": "care",
       "who": "both",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [],
       "scope": "per-agent",
       "home": "Settings > Voice and calls",
@@ -22138,9 +22040,9 @@
       "risk": "",
       "def": "",
       "restart": false,
-      "danger": "dangerous",
+      "danger": "care",
       "who": "both",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [],
       "scope": "per-agent",
       "home": "Settings > Voice and calls",
@@ -22159,7 +22061,7 @@
       "risk": "It cannot be undone. Backups made before today still hold the recording. A call still going on cannot be deleted.",
       "def": "Not applicable: it is a button. We recommend keeping recordings you may need later.",
       "restart": false,
-      "danger": "dangerous",
+      "danger": "care",
       "who": "both",
       "lead": "confirm",
       "words": [
@@ -22203,7 +22105,7 @@
         "setup"
       ],
       "scope": "install",
-      "home": "Settings > Needs you",
+      "home": "Settings > For your review",
       "storedAs": "none (one-time code)",
       "anchors": [],
       "facts": "welcome.html:106-111 (command and code box); one-time code, nothing stored (audit); not checked in server code."
@@ -22234,7 +22136,7 @@
         "install"
       ],
       "scope": "install",
-      "home": "Settings > Needs you",
+      "home": "Settings > For your review",
       "storedAs": "none",
       "anchors": [
         {
@@ -22320,7 +22222,7 @@
         "backup"
       ],
       "scope": "install",
-      "home": "Settings > Needs you",
+      "home": "Settings > For your review",
       "storedAs": "none",
       "anchors": [],
       "facts": "welcome.html:144-150 (audit; not re-read). Not confirmed beyond audit text."
@@ -22351,7 +22253,7 @@
         "welcome"
       ],
       "scope": "install",
-      "home": "Settings > Needs you",
+      "home": "Settings > For your review",
       "storedAs": "none",
       "anchors": [
         {
@@ -22447,7 +22349,7 @@
       "risk": "",
       "def": "",
       "restart": false,
-      "danger": "everyday",
+      "danger": "dangerous",
       "who": "admin",
       "lead": "screen",
       "words": [],
@@ -22528,7 +22430,7 @@
       "lead": "apply",
       "words": [],
       "scope": "install",
-      "home": "Settings > Needs you",
+      "home": "Settings > For your review",
       "storedAs": "none",
       "anchors": []
     },
@@ -22607,7 +22509,7 @@
       "lead": "apply",
       "words": [],
       "scope": "install",
-      "home": "Settings > Needs you",
+      "home": "Settings > For your review",
       "storedAs": "none",
       "anchors": []
     },
@@ -22637,7 +22539,7 @@
         "checklist"
       ],
       "scope": "install",
-      "home": "Settings > Needs you",
+      "home": "Settings > For your review",
       "storedAs": "none",
       "anchors": [],
       "facts": "page section s-done welcome.html:280-295; texts: phone help, Settings -> LLM providers, Users in the account menu, 'mymaestro status' in a terminal; shows an interview resume box when one is unfinished welcome.html:283-287."
@@ -22659,7 +22561,7 @@
       "lead": "apply",
       "words": [],
       "scope": "install",
-      "home": "Settings > Needs you",
+      "home": "Settings > For your review",
       "storedAs": "none",
       "anchors": [
         {
@@ -23114,12 +23016,7 @@
       "scope": "per-chat",
       "home": "Chat",
       "storedAs": "none",
-      "anchors": [
-        {
-          "surface": "desktop",
-          "selector": "#led-leader"
-        }
-      ],
+      "anchors": [],
       "mergedInto": "OPT-0161"
     },
     {
@@ -23141,12 +23038,7 @@
       "scope": "per-chat",
       "home": "Chat",
       "storedAs": "none",
-      "anchors": [
-        {
-          "surface": "desktop",
-          "selector": "#led-max-rounds"
-        }
-      ],
+      "anchors": [],
       "mergedInto": "OPT-0162"
     },
     {
@@ -23168,12 +23060,7 @@
       "scope": "per-chat",
       "home": "Chat",
       "storedAs": "none",
-      "anchors": [
-        {
-          "surface": "desktop",
-          "selector": "#led-challenger"
-        }
-      ],
+      "anchors": [],
       "mergedInto": "OPT-0163"
     },
     {
@@ -23266,12 +23153,7 @@
       "scope": "per-chat",
       "home": "Chat",
       "storedAs": "none",
-      "anchors": [
-        {
-          "surface": "desktop",
-          "selector": "#discussion-type"
-        }
-      ],
+      "anchors": [],
       "mergedInto": "OPT-0164"
     },
     {
@@ -23293,12 +23175,7 @@
       "scope": "per-chat",
       "home": "Chat",
       "storedAs": "none",
-      "anchors": [
-        {
-          "surface": "desktop",
-          "selector": "#context-mode"
-        }
-      ],
+      "anchors": [],
       "mergedInto": "OPT-0165"
     },
     {
@@ -23374,12 +23251,7 @@
       "scope": "per-chat",
       "home": "Chat",
       "storedAs": "none",
-      "anchors": [
-        {
-          "surface": "desktop",
-          "selector": "#pause-for-user"
-        }
-      ],
+      "anchors": [],
       "mergedInto": "OPT-0166"
     },
     {
@@ -23437,7 +23309,7 @@
       "def": "",
       "restart": false,
       "danger": "everyday",
-      "who": "both",
+      "who": "admin",
       "lead": "none",
       "words": [],
       "scope": "per-person",
@@ -23458,7 +23330,7 @@
       "def": "Default: the first agent in the list. We recommend choosing one on purpose.",
       "restart": false,
       "danger": "everyday",
-      "who": "both",
+      "who": "admin",
       "lead": "apply",
       "words": [
         "schedule",
@@ -23494,7 +23366,7 @@
       "def": "Default: empty. Examples: tomorrow at 9am, every day at 8:15 PM, weekdays at 9am, every 4 hours.",
       "restart": false,
       "danger": "everyday",
-      "who": "both",
+      "who": "admin",
       "lead": "apply",
       "words": [
         "schedule",
@@ -23532,7 +23404,7 @@
       "def": "Default: empty. We recommend giving it a name.",
       "restart": false,
       "danger": "everyday",
-      "who": "both",
+      "who": "admin",
       "lead": "apply",
       "words": [
         "label",
@@ -23568,7 +23440,7 @@
       "def": "Default: empty.",
       "restart": false,
       "danger": "everyday",
-      "who": "both",
+      "who": "admin",
       "lead": "apply",
       "words": [
         "prompt",
@@ -23604,7 +23476,7 @@
       "def": "",
       "restart": false,
       "danger": "care",
-      "who": "both",
+      "who": "admin",
       "lead": "confirm",
       "words": [],
       "scope": "per-person",
@@ -23625,7 +23497,7 @@
       "def": "Not a setting.",
       "restart": false,
       "danger": "everyday",
-      "who": "both",
+      "who": "admin",
       "lead": "apply",
       "words": [
         "jobs",
@@ -23781,9 +23653,9 @@
       "risk": "",
       "def": "",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "both",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [],
       "scope": "per-agent",
       "home": "Settings > People and safety",
@@ -24058,7 +23930,7 @@
       "anchors": [
         {
           "surface": "desktop",
-          "selector": "#x-pass"
+          "selector": "#x-enabled"
         }
       ],
       "facts": "executor.enabled default false lib/wallet/executor.js:85, refuses with 403 when off lib/wallet/executor.js:154; audit class corrected to dangerous (moves money); screen only."
@@ -24093,7 +23965,7 @@
       "anchors": [
         {
           "surface": "desktop",
-          "selector": "#x-pass"
+          "selector": "#x-wallet"
         }
       ],
       "facts": "executor.wallet, default null lib/wallet/executor.js:85; screen only."
@@ -24384,7 +24256,7 @@
       "risk": "An address that is added can receive or handle your wallet's money; a wrong or hostile address can lose funds. The list is a signed record that only grows.",
       "def": "Default: empty. We recommend keeping it short and checked.",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
       "lead": "screen",
       "words": [
@@ -24528,7 +24400,7 @@
       "risk": "",
       "def": "",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
       "lead": "screen",
       "words": [],
@@ -24557,12 +24429,7 @@
       "scope": "install",
       "home": "Settings > Tools and connections",
       "storedAs": "telegram.enabled",
-      "anchors": [
-        {
-          "surface": "desktop",
-          "selector": "#comms-enabled"
-        }
-      ],
+      "anchors": [],
       "mergedInto": "OPT-0498"
     },
     {
@@ -24584,12 +24451,7 @@
       "scope": "install",
       "home": "Settings > Tools and connections",
       "storedAs": "telegram.paused",
-      "anchors": [
-        {
-          "surface": "desktop",
-          "selector": "#comms-paused"
-        }
-      ],
+      "anchors": [],
       "mergedInto": "OPT-0499"
     },
     {
@@ -24611,12 +24473,7 @@
       "scope": "install",
       "home": "Settings > Tools and connections",
       "storedAs": "telegram.defaultAgent",
-      "anchors": [
-        {
-          "surface": "desktop",
-          "selector": "#comms-default-agent"
-        }
-      ],
+      "anchors": [],
       "mergedInto": "OPT-0500"
     },
     {
@@ -24735,7 +24592,7 @@
       "risk": "",
       "def": "",
       "restart": false,
-      "danger": "dangerous",
+      "danger": "everyday",
       "who": "both",
       "lead": "apply",
       "words": [],
@@ -24762,7 +24619,7 @@
       "risk": "",
       "def": "",
       "restart": false,
-      "danger": "dangerous",
+      "danger": "care",
       "who": "both",
       "lead": "screen",
       "words": [],
@@ -24969,8 +24826,8 @@
       "risk": "None. Too many wrong tries in a row make the sign-in wait before it lets you try again.",
       "def": "Default: empty. Your browser may fill it in for you.",
       "restart": false,
-      "danger": "dangerous",
-      "who": "both",
+      "danger": "care",
+      "who": "admin",
       "lead": "none",
       "words": [
         "login",
@@ -25108,7 +24965,7 @@
       "risk": "",
       "def": "",
       "restart": false,
-      "danger": "dangerous",
+      "danger": "everyday",
       "who": "both",
       "lead": "none",
       "words": [],
@@ -25136,12 +24993,7 @@
       "scope": "none",
       "home": "Chat",
       "storedAs": "none",
-      "anchors": [
-        {
-          "surface": "desktop",
-          "selector": "#workers-btn"
-        }
-      ],
+      "anchors": [],
       "mergedInto": "OPT-0186"
     },
     {
@@ -25277,10 +25129,10 @@
       "restart": false,
       "danger": "everyday",
       "who": "admin",
-      "lead": "apply",
+      "lead": "screen",
       "words": [],
       "scope": "install",
-      "home": "Settings > Needs you",
+      "home": "Settings > For your review",
       "storedAs": "none",
       "anchors": [],
       "mergedInto": "OPT-0689"
@@ -25339,12 +25191,7 @@
       "scope": "",
       "home": "Settings > You and this device",
       "storedAs": "none",
-      "anchors": [
-        {
-          "surface": "phone",
-          "selector": "#agents-head"
-        }
-      ],
+      "anchors": [],
       "mergedInto": "OPT-0117"
     },
     {
@@ -25391,7 +25238,7 @@
       "lead": "apply",
       "words": [],
       "scope": "install",
-      "home": "Settings > Needs you",
+      "home": "Settings > For your review",
       "storedAs": "none (GET /api/update-check)",
       "anchors": [
         {
@@ -25414,11 +25261,11 @@
       "def": "",
       "restart": false,
       "danger": "everyday",
-      "who": "both",
+      "who": "admin",
       "lead": "apply",
       "words": [],
       "scope": "install",
-      "home": "Settings > Needs you",
+      "home": "Settings > For your review",
       "storedAs": "none",
       "anchors": [
         {
@@ -25441,11 +25288,11 @@
       "def": "",
       "restart": false,
       "danger": "everyday",
-      "who": "both",
+      "who": "admin",
       "lead": "apply",
       "words": [],
       "scope": "install",
-      "home": "Settings > Needs you",
+      "home": "Settings > For your review",
       "storedAs": "none (POST resetPacing)",
       "anchors": [
         {
@@ -25639,7 +25486,7 @@
       "def": "",
       "restart": false,
       "danger": "care",
-      "who": "both",
+      "who": "admin",
       "lead": "none",
       "words": [],
       "scope": "install",
@@ -25665,12 +25512,12 @@
       "risk": "",
       "def": "",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
       "lead": "none",
       "words": [],
       "scope": "per-person",
-      "home": "Settings > Needs you",
+      "home": "Settings > For your review",
       "storedAs": "none",
       "anchors": [
         {
@@ -26257,9 +26104,9 @@
       "risk": "",
       "def": "",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [],
       "scope": "",
       "home": "Settings > Tools and connections",
@@ -26419,7 +26266,7 @@
       "risk": "",
       "def": "",
       "restart": false,
-      "danger": "dangerous",
+      "danger": "everyday",
       "who": "both",
       "lead": "apply",
       "words": [],
@@ -26446,7 +26293,7 @@
       "risk": "",
       "def": "",
       "restart": false,
-      "danger": "dangerous",
+      "danger": "everyday",
       "who": "both",
       "lead": "none",
       "words": [],
@@ -26495,7 +26342,7 @@
       "risk": "",
       "def": "",
       "restart": false,
-      "danger": "dangerous",
+      "danger": "care",
       "who": "both",
       "lead": "screen",
       "words": [],
@@ -26522,9 +26369,9 @@
       "risk": "",
       "def": "",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [],
       "scope": "",
       "home": "Settings > People and safety",
@@ -27048,8 +26895,8 @@
       "risk": "",
       "def": "",
       "restart": false,
-      "danger": "everyday",
-      "who": "both",
+      "danger": "care",
+      "who": "admin",
       "lead": "apply",
       "words": [],
       "scope": "per-person",
@@ -27076,7 +26923,7 @@
       "def": "",
       "restart": true,
       "danger": "care",
-      "who": "both",
+      "who": "admin",
       "lead": "none",
       "words": [],
       "scope": "per-person",
@@ -27301,11 +27148,11 @@
       "def": "",
       "restart": false,
       "danger": "everyday",
-      "who": "both",
+      "who": "admin",
       "lead": "apply",
       "words": [],
       "scope": "install",
-      "home": "Settings > Needs you",
+      "home": "Settings > For your review",
       "storedAs": "none",
       "anchors": [
         {
@@ -28333,11 +28180,11 @@
       "def": "",
       "restart": false,
       "danger": "care",
-      "who": "both",
+      "who": "admin",
       "lead": "confirm",
       "words": [],
       "scope": "",
-      "home": "Settings > Needs you",
+      "home": "Settings > For your review",
       "storedAs": "none (POST approval decision)",
       "anchors": []
     },
@@ -28442,9 +28289,9 @@
       "risk": "A wrong address stops Claude calls that use a key.",
       "def": "Default: https://api.anthropic.com. We recommend leaving it.",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [
         "anthropic",
         "claude",
@@ -28473,9 +28320,9 @@
       "risk": "A wrong address stops OpenAI calls.",
       "def": "Default: https://api.openai.com/v1. We recommend leaving it.",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [
         "openai",
         "gpt",
@@ -28504,9 +28351,9 @@
       "risk": "A wrong address stops Google calls, including picture making with Google.",
       "def": "Default: https://generativelanguage.googleapis.com/v1beta/openai. We recommend leaving it.",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [
         "google",
         "gemini",
@@ -28535,9 +28382,9 @@
       "risk": "A wrong address stops Perplexity calls and Perplexity search.",
       "def": "Default: https://api.perplexity.ai. We recommend leaving it.",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [
         "perplexity",
         "url",
@@ -28566,9 +28413,9 @@
       "risk": "A wrong address stops OpenRouter models from working.",
       "def": "Default: https://openrouter.ai/api/v1. We recommend leaving it.",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [
         "openrouter",
         "url",
@@ -28597,9 +28444,9 @@
       "risk": "A wrong address stops cloud voices from working.",
       "def": "Default: https://api.elevenlabs.io/v1. We recommend leaving it.",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [
         "elevenlabs",
         "voice",
@@ -28657,7 +28504,7 @@
       "restart": false,
       "danger": "everyday",
       "who": "admin",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [],
       "scope": "install",
       "home": "Settings > Agents and teams > More",
@@ -28689,12 +28536,7 @@
       "scope": "install",
       "home": "Settings > Upkeep",
       "storedAs": "settings.systemHealth",
-      "anchors": [
-        {
-          "surface": "desktop",
-          "selector": "#st-hl-at"
-        }
-      ],
+      "anchors": [],
       "mergedInto": "OPT-0247"
     },
     {
@@ -28716,12 +28558,7 @@
       "scope": "install",
       "home": "Settings > Upkeep",
       "storedAs": "settings.selfCheck",
-      "anchors": [
-        {
-          "surface": "desktop",
-          "selector": "#st-sc-at"
-        }
-      ],
+      "anchors": [],
       "mergedInto": "OPT-0270"
     },
     {
@@ -29500,7 +29337,7 @@
       "risk": "These addresses work for anyone on the internet who can reach your Maestro, without a password. Each request is checked and limited, but every address you add is another door. It is not a wallet setting; it is edited by hand in the data file.",
       "def": "Default: none. We recommend leaving it empty unless a connector needs it.",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
       "lead": "screen",
       "words": [
@@ -29531,7 +29368,7 @@
       "risk": "",
       "def": "",
       "restart": false,
-      "danger": "care",
+      "danger": "dangerous",
       "who": "admin",
       "lead": "screen",
       "words": [],
@@ -30804,7 +30641,7 @@
       "risk": "",
       "def": "",
       "restart": true,
-      "danger": "care",
+      "danger": "dangerous",
       "who": "admin",
       "lead": "screen",
       "words": [],
@@ -30858,7 +30695,7 @@
       "risk": "",
       "def": "",
       "restart": false,
-      "danger": "dangerous",
+      "danger": "everyday",
       "who": "both",
       "lead": "apply",
       "words": [],
@@ -30873,10 +30710,6 @@
         {
           "surface": "simple-desktop",
           "label": "Switch to Advanced"
-        },
-        {
-          "surface": "desktop",
-          "selector": "#account-simple"
         }
       ],
       "mergedInto": "OPT-0085"
@@ -30894,7 +30727,7 @@
       "risk": "",
       "def": "",
       "restart": false,
-      "danger": "dangerous",
+      "danger": "everyday",
       "who": "both",
       "lead": "apply",
       "words": [],
@@ -31125,7 +30958,7 @@
       "risk": "",
       "def": "",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "both",
       "lead": "none",
       "words": [],
@@ -31217,7 +31050,7 @@
       "risk": "",
       "def": "",
       "restart": false,
-      "danger": "dangerous",
+      "danger": "everyday",
       "who": "both",
       "lead": "none",
       "words": [],
@@ -31352,7 +31185,7 @@
       "def": "",
       "restart": false,
       "danger": "care",
-      "who": "both",
+      "who": "admin",
       "lead": "none",
       "words": [],
       "scope": "per-agent",
@@ -31988,7 +31821,7 @@
       "def": "",
       "restart": false,
       "danger": "everyday",
-      "who": "both",
+      "who": "admin",
       "lead": "none",
       "words": [],
       "scope": "per-device",
@@ -32021,12 +31854,7 @@
       "scope": "per-person",
       "home": "Chat",
       "storedAs": "none",
-      "anchors": [
-        {
-          "surface": "desktop",
-          "selector": "#workers-btn"
-        }
-      ],
+      "anchors": [],
       "mergedInto": "OPT-0186"
     },
     {
@@ -32048,12 +31876,7 @@
       "scope": "per-person",
       "home": "Top bar",
       "storedAs": "none",
-      "anchors": [
-        {
-          "surface": "desktop",
-          "selector": "#files-btn"
-        }
-      ],
+      "anchors": [],
       "mergedInto": "OPT-0086"
     },
     {
@@ -32102,12 +31925,7 @@
       "scope": "per-device",
       "home": "Top bar",
       "storedAs": "none",
-      "anchors": [
-        {
-          "surface": "desktop",
-          "selector": "#reload-btn"
-        }
-      ],
+      "anchors": [],
       "mergedInto": "OPT-0094"
     },
     {
@@ -32149,7 +31967,7 @@
       "risk": "",
       "def": "",
       "restart": false,
-      "danger": "dangerous",
+      "danger": "everyday",
       "who": "both",
       "lead": "apply",
       "words": [],
@@ -32176,7 +31994,7 @@
       "risk": "",
       "def": "",
       "restart": false,
-      "danger": "dangerous",
+      "danger": "care",
       "who": "both",
       "lead": "screen",
       "words": [],
@@ -32393,7 +32211,7 @@
       "def": "",
       "restart": false,
       "danger": "everyday",
-      "who": "both",
+      "who": "admin",
       "lead": "none",
       "words": [],
       "scope": "per-device",

@@ -698,3 +698,244 @@ test('the ⓘ is at least 32x32 on the phone page and in the phone frame', () =>
 test('the phone service worker is bumped for the new mobile.html and mobile.js (hub-mobile-v98)', () => {
   assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v98'/);
 });
+
+// ---- review round 1 fixes (spec U) -------------------------------------------------------------------------------------
+const r1rec = (id, selector, extra = {}) => ({ id, kind: 'setting', name: 'Name ' + id, labels: [], what: 'w', when: 'w', risk: 'r', def: 'd', restart: false, danger: 'everyday', who: 'admin', lead: 'apply', words: [], scope: 'install', anchors: [{ surface: 'desktop', selector }], ...extra });
+function stage() {
+  const doc = makeDoc(), win = makeWin(doc);
+  const ov = el(doc, 'div', { class: 'st-overlay' }); doc.body.appendChild(ov);
+  const row = (cls = 'st-row') => { const r = el(doc, 'div', { class: cls }); ov.appendChild(r); return r; };
+  return { doc, win, ov, row, opts: { doc, win } };
+}
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Ask Maestro: a draft is never lost; Settings must really close first
+function askEnv2(over = {}) {
+  const box = { value: '', inputEvents: 0, focus() {}, dispatchEvent() { this.inputEvents++; } };
+  const calls = { opened: [] };
+  return { box, calls, env: { findLead: () => ({ name: 'maestro' }), openChat: (n) => { calls.opened.push(n); }, getBox: () => box, ...over } };
+}
+test('Ask keeps a draft already in the lead\'s box and adds the question after it on a new line; the same question twice is not added', async () => {
+  const q = H.askText('Records');
+  const a = askEnv2(); a.box.value = 'my unsent draft';
+  assert.strictEqual(await H.askFill(q, a.env), true);
+  assert.strictEqual(a.box.value, 'my unsent draft\n' + q);
+  assert.strictEqual(a.box.inputEvents, 1, 'the box is told, so the draft is saved with the question');
+  const b = askEnv2(); b.box.value = q;
+  assert.strictEqual(await H.askFill(q, b.env), true);
+  assert.strictEqual(b.box.value, q); assert.strictEqual(b.box.inputEvents, 0, 'nothing changed, nothing sent to the box');
+  const c = askEnv2(); c.box.value = 'draft\n' + q;
+  await H.askFill(q, c.env); assert.strictEqual(c.box.value, 'draft\n' + q, 'the question is not added again after a draft');
+  const d = askEnv2();
+  await H.askFill(q, d.env); assert.strictEqual(d.box.value, q, 'an empty box simply gets the question');
+});
+
+test('Keep editing at the discard question: the chat is not opened and the box is left alone', async () => {
+  const k = askEnv2({ beforeOpen: async () => false });
+  k.box.value = 'draft';
+  assert.strictEqual(await H.askFill('hello', k.env), false);
+  assert.deepStrictEqual(k.calls.opened, []);
+  assert.strictEqual(k.box.value, 'draft'); assert.strictEqual(k.box.inputEvents, 0);
+  const t = askEnv2({ beforeOpen: () => { throw new Error('guard broke'); } });
+  assert.strictEqual(await H.askFill('hello', t.env), false); assert.deepStrictEqual(t.calls.opened, []);
+  const ok = askEnv2({ beforeOpen: async () => true });
+  assert.strictEqual(await H.askFill('hello', ok.env), true); assert.deepStrictEqual(ok.calls.opened, ['maestro']);
+});
+
+test('closeGuarded reads the guard\'s outcome: closed at once = true; the question answered Keep editing = false, Discard = true; busy or kept = false', async () => {
+  const mk = () => { const s = stage(); const dlg = el(s.doc, 'div', { id: 'st-overlay' }); s.doc.body.appendChild(dlg); return { ...s, dlg }; };
+  let s = mk();
+  assert.strictEqual(await H.closeGuarded(s.dlg, (e) => { e.parentNode.removeChild(e); return 'closed'; }, s.opts), true);
+  s = mk();
+  const asked = el(s.doc, 'dialog', { class: 'dlg-discard' });
+  const keep = H.closeGuarded(s.dlg, () => { s.doc.body.appendChild(asked); return 'confirm'; }, s.opts);
+  await wait(80); assert.strictEqual(asked.isConnected, true);
+  s.doc.body.removeChild(asked);   // Keep editing: the question goes, the dialog stays
+  assert.strictEqual(await keep, false);
+  s = mk();
+  const asked2 = el(s.doc, 'dialog', { class: 'dlg-discard' });
+  const go = H.closeGuarded(s.dlg, () => { s.doc.body.appendChild(asked2); return 'confirm'; }, s.opts);
+  await wait(80); s.doc.body.removeChild(asked2); s.doc.body.removeChild(s.dlg);   // Discard: both go
+  assert.strictEqual(await go, true);
+  s = mk(); assert.strictEqual(await H.closeGuarded(s.dlg, () => 'busy', s.opts), false);
+  s = mk(); assert.strictEqual(await H.closeGuarded(s.dlg, () => 'kept', s.opts), false);
+});
+
+test('the pages hand the guard\'s outcome to askFill: app.js waits on the overlay, mobile.js on the Settings sheet and every open dialog', () => {
+  const app = read('app.js'), mob = read('mobile.js');
+  const a = app.slice(app.indexOf('function askLeadEnv()'), app.indexOf('function askLeadStart()'));
+  assert.match(a, /beforeOpen: async \(\) =>/); assert.match(a, /closeGuarded\(o, \(el\) => dialogRequestClose\(el\)/); assert.match(a, /return false;/);
+  const m = mob.slice(mob.indexOf('function askCloseSettingsSheet()'), mob.indexOf('function askLeadStart()'));
+  assert.match(m, /beforeOpen: async \(\) =>/); assert.match(m, /await askCloseSettingsSheet\(\)\)\) return false/); assert.match(m, /mm-settings-kept/); assert.match(m, /closeGuarded\(d,/);
+  assert.ok(!/send/i.test(m), 'still never sends');
+});
+
+// labels
+test('a label for another control is never used: the ⓘ goes after the control instead', () => {
+  const s = stage(); const row = s.row();
+  const lab = el(s.doc, 'label', { for: 'other' }, 'Other'); const other = el(s.doc, 'input', { id: 'other' }); const mine = el(s.doc, 'select', { id: 'mine' });
+  for (const c of [lab, other, mine]) row.appendChild(c);
+  H.setRecords({ records: [r1rec('OPT-1', '#mine')] });
+  assert.strictEqual(H.attach(s.ov, 'desktop', s.opts), 1);
+  assert.strictEqual(infos(row).length, 1);
+  assert.strictEqual(mine.nextSibling.getAttribute('data-rec'), 'OPT-1', 'right after the control');
+  assert.strictEqual(lab.nextSibling, other, 'not after the other control\'s label');
+  loaded();
+});
+
+test('a label that is the nearest label of a different control in the row is not taken', () => {
+  const s = stage(); const row = s.row();
+  const lab = el(s.doc, 'label', {}, 'First'); const a = el(s.doc, 'select', { id: 'a' }); const b = el(s.doc, 'select', { id: 'b' });
+  for (const c of [lab, a, b]) row.appendChild(c);
+  H.setRecords({ records: [r1rec('OPT-1', '#b')] });   // only the second control has a record
+  H.attach(s.ov, 'desktop', s.opts);
+  assert.strictEqual(lab.nextSibling, a, 'the label stays with the first control');
+  assert.strictEqual(b.nextSibling.getAttribute('data-rec'), 'OPT-1');
+  loaded();
+});
+
+test('an empty or whitespace-only label is never used: the ⓘ goes after the control', () => {
+  const s = stage(); const row = s.row();
+  const lab = el(s.doc, 'label', {}, '  \n '); const btn = el(s.doc, 'button', { id: 'go' }, 'Go');
+  row.appendChild(lab); row.appendChild(btn);
+  H.setRecords({ records: [r1rec('OPT-1', '#go')] });
+  assert.strictEqual(H.attach(s.ov, 'desktop', s.opts), 1);
+  assert.strictEqual(btn.nextSibling.getAttribute('data-rec'), 'OPT-1');
+  assert.strictEqual(lab.nextSibling, btn, 'nothing beside the blank label');
+  const t = stage(); const r2 = t.row();
+  const l2 = el(t.doc, 'label', { for: 'x' }, ' '); const x = el(t.doc, 'input', { id: 'x' }); r2.appendChild(l2); r2.appendChild(x);
+  H.setRecords({ records: [r1rec('OPT-2', '#x')] });
+  H.attach(t.ov, 'desktop', t.opts);
+  assert.strictEqual(x.nextSibling.getAttribute('data-rec'), 'OPT-2', 'even its own label, when blank');
+  loaded();
+});
+
+test('two records in one row get two ⓘ in two places, never stacked after one label', () => {
+  const s = stage(); const row = s.row();
+  const lab = el(s.doc, 'label', {}, 'Both'); const a = el(s.doc, 'select', { id: 'a' }); const b = el(s.doc, 'select', { id: 'b' });
+  for (const c of [lab, a, b]) row.appendChild(c);
+  H.setRecords({ records: [r1rec('OPT-1', '#a'), r1rec('OPT-2', '#b')] });
+  assert.strictEqual(H.attach(s.ov, 'desktop', s.opts), 2);
+  assert.strictEqual(infos(row).length, 2);
+  assert.strictEqual(lab.nextSibling.getAttribute('data-rec'), 'OPT-1');
+  assert.strictEqual(a.nextSibling, b, 'the first ⓘ sits after the label only');
+  assert.strictEqual(b.nextSibling.getAttribute('data-rec'), 'OPT-2');
+  loaded();
+});
+
+test('on the agent page a section\'s heading label is not taken for a control deep inside the section', () => {
+  const s = stage(); const sec = s.row('section');
+  const head = el(s.doc, 'label', {}, 'Tool policy'); const wrap = el(s.doc, 'div', {}); const sel = el(s.doc, 'select', { id: 'deep' });
+  sec.appendChild(head); sec.appendChild(wrap); wrap.appendChild(sel);
+  H.setRecords({ records: [r1rec('OPT-1', '#deep', { anchors: [{ surface: 'agent-settings', selector: '#deep' }] })] });
+  assert.strictEqual(H.attach(s.ov, 'agent-settings', s.opts), 1);
+  assert.strictEqual(head.nextSibling, wrap, 'nothing after the heading');
+  assert.strictEqual(sel.nextSibling.getAttribute('data-rec'), 'OPT-1');
+  // a control that is a direct child of the section still takes the label before it
+  const t = stage(); const sec2 = t.row('section'); const h2 = el(t.doc, 'label', {}, 'Root'); const inp = el(t.doc, 'input', { id: 'root' });
+  sec2.appendChild(h2); sec2.appendChild(inp);
+  H.setRecords({ records: [r1rec('OPT-2', '#root', { anchors: [{ surface: 'agent-settings', selector: '#root' }] })] });
+  H.attach(t.ov, 'agent-settings', t.opts);
+  assert.strictEqual(h2.nextSibling.getAttribute('data-rec'), 'OPT-2');
+  loaded();
+});
+
+// search uses the label anchors
+test('search: a record anchored by label text is found by its search words and its row is highlighted', () => {
+  const s = stage();
+  const sec = el(s.doc, 'div', { class: 'st-section' }); s.ov.appendChild(sec);
+  const row = el(s.doc, 'div', { class: 'st-row' }); sec.appendChild(row);
+  row.appendChild(el(s.doc, 'span', {}, 'OpenAI key')); row.appendChild(el(s.doc, 'input', { type: 'password' }));
+  H.setRecords({ records: [r1rec('OPT-9', null, { name: 'OpenAI key', words: ['pay per use'], anchors: [{ surface: 'desktop', label: 'OpenAI key' }] })] });
+  const m = H.sectionWords(s.ov, 'desktop', 'st-section');
+  assert.ok(m.get(sec) && m.get(sec).some((e) => e.row === row && e.text.includes('pay per use')));
+  // the real stSearch from app.js
+  const src = read('app.js');
+  const a = src.indexOf('function stSearch(q) {'), b = src.indexOf('// Links into Settings (the plan badge', a);
+  const make = new Function('document', 'stSetOpen', `let stSearchSnap = null; let stWordsIdx = null; ${src.slice(a, b)}; return { stSearch, setIdx: (v) => { stWordsIdx = v; } };`);
+  const grp = el(s.doc, 'details', { class: 'st-group' }); grp.dataset.group = 'keys'; grp.appendChild(el(s.doc, 'span', { class: 'st-group-title' }, 'Keys'));
+  s.ov.removeChild(sec); grp.appendChild(sec); s.ov.appendChild(grp);
+  const none = el(s.doc, 'span', { id: 'st-search-none' });
+  const rig = make({ querySelectorAll: (x) => s.ov.querySelectorAll(x.replace('#st-groups ', '')), getElementById: (id) => (id === 'st-search-none' ? none : null) }, (g, open) => { g.open = !!open; });
+  rig.setIdx(H.sectionWords(s.ov, 'desktop', 'st-section'));
+  rig.stSearch('pay per use');
+  assert.strictEqual(sec.style.display, '', 'the section is shown');
+  assert.ok(row.classList.contains('st-word-hit'), 'and the row is highlighted');
+  loaded();
+});
+
+// the panel
+function openedR1(opts = {}) {
+  const s = stage(); const row = s.row();
+  row.appendChild(el(s.doc, 'label', { for: 'c' }, 'Compress at')); row.appendChild(el(s.doc, 'select', { id: 'c' }));
+  H.setRecords({ leadTool: false, records: [r1rec('OPT-1', '#c')] });
+  const o = { ...s.opts, ...opts };
+  H.attach(s.ov, 'desktop', o);
+  const b = s.ov.querySelector('button.st-info'); b.click();
+  return { ...s, row, b };
+}
+test('tapping the sheet\'s scrim closes it and returns focus to the ⓘ, like Escape', () => {
+  const s = openedR1({ sheet: true });
+  const scrim = s.doc.querySelector('.st-help-scrim'); assert.ok(scrim);
+  scrim.dispatch('pointerdown'); scrim.click();
+  assert.strictEqual(panelOf(s.doc), null);
+  assert.strictEqual(s.doc.activeElement, s.b);
+  assert.strictEqual(s.b.getAttribute('aria-expanded'), 'false');
+  loaded();
+});
+
+test('when the ⓘ that opened the panel leaves the page (a redraw), the panel closes', () => {
+  const seen = []; class MO { constructor(cb) { this.cb = cb; this.disconnected = false; seen.push(this); } observe() {} disconnect() { this.disconnected = true; } }
+  const s = openedR1({ sheet: false, MutationObserver: MO });
+  assert.ok(panelOf(s.doc));
+  seen[0].cb([]); assert.ok(panelOf(s.doc), 'still there while the ⓘ is');
+  s.row.removeChild(s.b);
+  seen[0].cb([{}]);
+  assert.strictEqual(panelOf(s.doc), null);
+  assert.strictEqual(seen[0].disconnected, true, 'the observer goes with it');
+  loaded();
+});
+
+test('a resize closes the panel on a width change only, not on a height change; the sheet is aria-modal, the popover is not', () => {
+  const s = openedR1({ sheet: false });
+  assert.strictEqual(panelOf(s.doc).getAttribute('aria-modal'), null);
+  s.win.innerHeight = 500; s.win.dispatch('resize');
+  assert.ok(panelOf(s.doc), 'address bar: height only');
+  s.win.innerWidth = 900; s.win.dispatch('resize');
+  assert.strictEqual(panelOf(s.doc), null, 'width changed');
+  const t = openedR1({ sheet: true });
+  assert.strictEqual(panelOf(t.doc).getAttribute('aria-modal'), 'true');
+  t.win.innerWidth = 400; t.win.dispatch('resize');
+  loaded();
+});
+
+test('the "who can change it" line follows the record\'s who', () => {
+  const r = (o) => ({ danger: 'everyday', who: 'both', scope: 'install', ...o });
+  const only = /^Only an admin/;
+  for (const who of ['both', 'member']) for (const danger of ['everyday', 'care', 'dangerous']) assert.ok(!only.test(H.whoLines(r({ who, danger }), false)[0]), who + '/' + danger);
+  assert.ok(only.test(H.whoLines(r({ who: 'admin', danger: 'dangerous' }), false)[0]));
+  assert.strictEqual(H.whoLines(r({ who: 'both' }), false)[0], 'Anyone who can open this screen.');
+  assert.match(H.whoLines(r({ who: 'member' }), false)[0], /^Any member/);
+  assert.strictEqual(H.whoLines(r({ who: 'admin' }), false)[0], 'An admin, on this screen.');
+  assert.strictEqual(H.whoLines(r({ who: 'both', danger: 'dangerous', scope: 'per-person' }), false)[0], 'Each person sets their own.');
+});
+
+// the cost of watching
+test('watching: bursts cost at most one pass per 250 ms, and only elements that could hold an anchor start one', async () => {
+  const s = stage(); const row = s.row();
+  row.appendChild(el(s.doc, 'label', { for: 'c' }, 'Compress at')); row.appendChild(el(s.doc, 'select', { id: 'c' }));
+  H.setRecords({ records: [r1rec('OPT-1', '#c')] });
+  let passes = 0; const qsa = s.ov.querySelectorAll.bind(s.ov);
+  s.ov.querySelectorAll = (sel) => { if (sel === '#c') passes++; return qsa(sel); };   // one look for the record's selector = one pass
+  const seen = []; class MO { constructor(cb) { this.cb = cb; seen.push(this); } observe() {} disconnect() {} }
+  H.watch(s.ov, 'desktop', { ...s.opts, MutationObserver: MO });
+  const node = (cls) => el(s.doc, 'div', { class: cls });
+  seen[0].cb([{ addedNodes: [el(s.doc, 'button', { class: 'st-info' }), node('st-help-panel')] }, { addedNodes: [] }]);
+  await wait(120); assert.strictEqual(passes, 0, 'our own ⓘ and panel, removals and text: no pass');
+  seen[0].cb([{ addedNodes: [node('st-section')] }]);
+  await wait(120); const first = passes; assert.ok(first >= 1, 'a section drawn later is attached');
+  for (let i = 0; i < 5; i++) seen[0].cb([{ addedNodes: [node('st-section')] }]);
+  await wait(100); assert.strictEqual(passes, first, 'within 250 ms of the last pass: no second pass yet');
+  await wait(250); assert.strictEqual(passes, first + 1, 'one pass for the whole burst, once the gap has passed');
+  loaded();
+});

@@ -3468,13 +3468,37 @@ function applyRoute(state) {
 // "Ask Maestro about this" (the ⓘ sheet, lib/ui-settings-help.js): open the lead agent's chat and put the question in its message
 // box, WITHOUT sending. The sheet calls window.mmAskLead; the Settings frame (a separate page) opens /mobile#ask-lead=<text>,
 // which askLeadStart handles on load and on hashchange, then drops the hash.
+// Closes the Settings frame's sheet through its own guard and says whether it really closed: true once the frame reports
+// closed (or the sheet had nothing of Settings in it); false when the frame keeps Settings open ("Discard changes?", a save
+// running) or does not answer. Nothing is navigated before that.
+function askCloseSettingsSheet() {
+  return new Promise((resolve) => {
+    const s = settingsSheet;
+    if (!s) { resolve(true); return; }
+    let t = null;
+    const t0 = Date.now();
+    const fin = (v) => { clearInterval(t); window.removeEventListener('message', on); resolve(v); };
+    const on = (e) => {
+      if (!settingsSheet || e.source !== s.frame.contentWindow || e.origin !== location.origin) return;
+      if (e.data && e.data.type === 'mm-settings-kept') fin(false);
+    };
+    window.addEventListener('message', on);
+    settingsSheetRequestClose();
+    if (!settingsSheet) { fin(true); return; }
+    t = setInterval(() => { if (!settingsSheet) fin(true); else if (Date.now() - t0 > 9000) fin(false); }, 50);
+  });
+}
 function askLeadEnv() {
   return {
     tries: 60,   // the chat may fetch its history before the box is there
     findLead: () => agents.find((a) => a && a.lead) || null,
-    beforeOpen: () => {   // the Settings frame and any open sheet go through their own guards (unsaved changes are asked about)
-      if (settingsSheet) settingsSheetRequestClose();
-      for (const d of document.querySelectorAll('dialog[open]')) { try { dialogGuard.requestClose(d, 'close'); } catch { /* stays open */ } }
+    beforeOpen: async () => {   // the Settings frame and any open sheet go through their own guards (unsaved changes are asked about); the chat opens only once they have really closed
+      if (settingsSheet && !(await askCloseSettingsSheet())) return false;
+      for (const d of [...document.querySelectorAll('dialog[open]')]) {
+        if (d.classList.contains('dlg-discard')) continue;
+        if (!(await window.hubSettingsHelp.closeGuarded(d, (el) => dialogGuard.requestClose(el, 'close'), { doc: document }))) return false;
+      }
+      return true;
     },
     openChat: (name) => { navigate('chat', name); },
     getBox: (name) => (current === name ? $('msg-input') : null),
