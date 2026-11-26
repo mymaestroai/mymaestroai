@@ -1207,12 +1207,21 @@ test('T1: researchEventVisible drops an event of a replaced agent\'s run and kee
   stamp = 'stamp-2';   // the name now belongs to a new agent
   assert.equal(L.ctx.eventVisible(ev, sam, false), false, 'a replaced agent: the old run\'s event is dropped');
   assert.equal(L.ctx.eventVisible(ev, sam, true), false, 'also for an admin');
+  // review r9: a research report turn's turn_start / turn_end (the question in origin.label) need access NOW, not only at connection
+  const end = { type: 'turn_end', agent: 'sam-agent', origin: { kind: 'research_report', from: 'hub', label: 'A private question?' }, ok: true, reply: '' };
+  assert.equal(L.ctx.eventVisible(end, sam, false), true, 'the agent\'s member, still allowed');
+  assert.equal(L.ctx.eventVisible(end, other, false), false, 'a member who may not see the agent (now) gets no report turn event');
+  assert.equal(L.ctx.eventVisible({ ...end, type: 'turn_start' }, other, false), false, 'nor its start');
+  assert.equal(L.ctx.eventVisible(end, other, true), true, 'an admin');
+  assert.equal(L.ctx.eventVisible({ ...end, agent: undefined }, sam, false), false, 'a report turn event without an agent is dropped');
+  assert.equal(L.ctx.eventVisible({ type: 'turn_end', agent: 'sam-agent', origin: { kind: 'job_notice' } }, other, false), true, 'other turns are not this filter\'s');
 });
 
 test('T1: server.js passes researchEventVisible as the /api/events eventFilter for people only', () => {
   const m = SERVER.match(/events\.subscribe\(req, res, \{[^\n]*\}\);/);
   assert.ok(m, 'the people subscribe call');
-  assert.match(m[0], /eventFilter: \(ev\) => ev\.type !== 'research_progress' \|\| require\('\.\/lib\/sdk-chat'\)\.researchEventVisible\(ev, req\.hubUser, isAdmin\)/);
+  // changed (review r9): every event goes through it, so research report turns are checked too; it passes other events at once
+  assert.match(m[0], /eventFilter: \(ev\) => require\('\.\/lib\/sdk-chat'\)\.researchEventVisible\(ev, req\.hubUser, isAdmin\)/);
   assert.match(SERVER, /if \(req\.hubService\) return require\('\.\/lib\/hub-events'\)\.events\.subscribe\(req, res\);/);
 });
 
