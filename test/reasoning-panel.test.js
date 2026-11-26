@@ -169,7 +169,11 @@ test('Codex: reasoning summaries stream as reasoning actions; a summary only see
 
 test('settings: showReasoning is a plain on/off, on unless turned off', () => {
   const server = read('server.js');
-  assert.match(server, /if \(patch && patch\.showReasoning !== undefined\) patch\.showReasoning = patch\.showReasoning !== false;/);
+  // the cleaner moved to lib/settings-apply cleanSettingsPatch (POST /api/settings calls it): test the real function
+  assert.match(server, /require\('\.\/lib\/settings-apply'\)\.cleanSettingsPatch\(patch,/);
+  assert.match(read('lib/settings-apply.js'), /if \(patch\.showReasoning !== undefined\) patch\.showReasoning = patch\.showReasoning !== false;/);
+  const clean = (v) => require('./helpers/isolated-settings-apply').callSettingsApply('cleanSettingsPatch', [{ showReasoning: v }, {}]).patch.showReasoning;   // in a throwaway install
+  assert.strictEqual(clean(false), false); assert.strictEqual(clean(true), true); assert.strictEqual(clean('no'), true); assert.strictEqual(clean(null), true);
   const app = read('app.js');
   assert.match(app, /id="st-reasoning" \$\{data\.showReasoning !== false \? 'checked' : ''\} onchange="saveReasoningToggle\(this\.checked\)"/);
   assert.match(app, /body: JSON\.stringify\(\{ showReasoning: !!on \}\)/);

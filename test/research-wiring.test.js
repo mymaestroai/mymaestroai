@@ -182,7 +182,9 @@ test('the tool is on both tool lists, the guidance on every route, the person on
   const server = fs.readFileSync(path.join(REAL, 'server.js'), 'utf8');
   assert.match(server, /require\('\.\/lib\/sdk-chat'\)\.startResearch\(\)/);
   assert.match(server, /pathname === '\/api\/research-pref'/);
-  assert.match(server, /patch\.researchReminderDays/);
+  // the cleaner moved to lib/settings-apply cleanSettingsPatch (POST /api/settings calls it)
+  assert.match(server, /require\('\.\/lib\/settings-apply'\)\.cleanSettingsPatch\(patch,/);
+  assert.match(fs.readFileSync(path.join(REAL, 'lib', 'settings-apply.js'), 'utf8'), /patch\.researchReminderDays/);
   const access = require(path.join(ISO.inst, 'lib', 'access.js'));
   assert.equal(access.classifyRoute('/api/research-pref', 'GET').kind, 'session');
   const tp = require(path.join(ISO.inst, 'lib', 'tool-policy.js'));

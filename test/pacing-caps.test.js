@@ -164,8 +164,10 @@ test('Settings page: admin-only Workers at once block in the Agents group, saved
 
 test('wiring: settings POST validates and applies live; boot starts from the saved value; hub status lists caps', () => {
   const server = read('server.js'), sdk = read('lib/sdk-chat.js');
-  assert.ok(server.includes("patch.workersAtOnce = require('./lib/provider-pacing').cleanWorkersAtOnce(patch.workersAtOnce)"));
-  assert.ok(server.includes("getPacing().setCaps(hubSettings.getSetting('workersAtOnce'))"));
+  const applySrc = read('lib/settings-apply.js');   // the cleaner and the live apply moved from server.js into lib/settings-apply
+  assert.ok(applySrc.includes("patch.workersAtOnce = require('./provider-pacing').cleanWorkersAtOnce(patch.workersAtOnce)"));
+  assert.ok(applySrc.includes(".setCaps(hubSettings.getSetting('workersAtOnce'))"));
+  assert.ok(server.includes("require('./lib/settings-apply').afterSettingsWrite(patch, { providersChanged, getPacing, runDiscovery })"));
   assert.ok(server.includes("capsView(hubSettings.getSetting('workersAtOnce'), capList)"));
   assert.ok(sdk.includes("getSetting('workersAtOnce')") && sdk.includes('providerPacing.resolveCaps(savedCaps)'));
   assert.ok(!/PROVIDER_LIMITS|ProviderLimiter/.test(read('lib/temporal-workers.js')), 'one source of truth for caps');

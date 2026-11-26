@@ -152,18 +152,13 @@ test('teamRole: challenger and worker are stored, null and empty delete it, anyt
 // ── the server boundary ──
 test('a member cannot PATCH teamGuidance or teamRole: the server guard, run on the real source, refuses both', () => {
   const src = read('server.js');
-  const start = src.indexOf("if (!req.hubService && !access.isAdmin(req.hubUser)) {\n        const MEMBER_EDITABLE");
-  assert.ok(start > 0, 'the member guard is in server.js');
-  const open = src.indexOf('{', start);
-  let depth = 0, end = open;
-  for (let i = open; i < src.length; i++) { if (src[i] === '{') depth++; else if (src[i] === '}') { depth--; if (!depth) { end = i; break; } } }
-  const guard = src.slice(start, end + 1);
-  assert.doesNotMatch(guard, /teamGuidance|teamRole/, 'neither is in the member allowlist');
+  // The member guard moved from server.js into lib/settings-apply agentFieldAllowed (the lead's settings tool uses it too): run the real function.
+  const sa = L('settings-apply.js');
+  assert.ok(!sa.MEMBER_EDITABLE_AGENT_FIELDS.has('teamGuidance') && !sa.MEMBER_EDITABLE_AGENT_FIELDS.has('teamRole'), 'neither is in the member allowlist');
+  assert.match(src, /settingsApply\.agentFieldAllowed\(body,/, 'the PATCH route asks agentFieldAllowed');
   const run = (user, body, hubService = false) => {
-    let sent = null;
-    const jsonResponse = (res, code, obj) => { sent = { code, obj }; return 'sent'; };
-    const fn = vm.runInNewContext(`(function (req, body, access, jsonResponse, res) { ${guard}\n return 'continued'; })`, {});
-    return { out: fn({ hubService, hubUser: user }, body, access, jsonResponse, {}), sent };
+    const g = sa.agentFieldAllowed(body, { service: hubService, token: false, user, isAdmin: access.isAdmin(user), isOwner: false, pendingTotp: false, ownSession: false });
+    return g.ok ? { out: 'continued', sent: null } : { out: 'sent', sent: { code: g.status, obj: { error: g.error } } };
   };
   const member = { id: 'u2', role: 'member' }, admin = { id: 'u1', role: 'admin' };
   for (const body of [{ teamGuidance: 'on' }, { teamRole: 'challenger' }, { teamGuidance: null }, { blurb: 'x', teamRole: null }]) {

@@ -97,8 +97,11 @@ test('r4: waitIdle ends at once when the turn is stopped', async () => {
 });
 
 test('server.js /api/settings: componentUpdates is cleaned to one of auto, notify, off', () => {
-  assert.ok(server.includes("if (patch && patch.componentUpdates !== undefined) patch.componentUpdates = { codex: ['auto', 'notify', 'off'].includes(patch.componentUpdates && patch.componentUpdates.codex) ? patch.componentUpdates.codex : 'auto' };"));
-  assert.ok(server.indexOf('patch.componentUpdates !== undefined') > server.indexOf('patch.modelOffers !== undefined'));
+  // the route's cleaners moved from server.js into lib/settings-apply cleanSettingsPatch (the lead's settings tool uses them too)
+  const applySrc = read('lib/settings-apply.js');
+  assert.ok(applySrc.includes("if (patch.componentUpdates !== undefined) patch.componentUpdates = { codex: ['auto', 'notify', 'off'].includes(patch.componentUpdates && patch.componentUpdates.codex) ? patch.componentUpdates.codex : 'auto' };"));
+  assert.ok(applySrc.indexOf('patch.componentUpdates !== undefined') > applySrc.indexOf('patch.modelOffers !== undefined'));
+  assert.ok(server.includes("require('./lib/settings-apply').cleanSettingsPatch(patch,"), 'the route calls it');
 });
 
 test('app.js: the section is in the Status group before st-updates-section, admin-gated', () => {

@@ -191,7 +191,16 @@ test('sdk-chat: hands, the Claude client, the Codex client and jobs use childEnv
 
 test('server.js: envKeep changes are refused for members and service calls', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
-  assert.match(src, /'envKeep' in body && \(req\.hubService \|\| req\.hubToken \|\| !req\.hubUser \|\| !access\.isAdmin\(req\.hubUser\)/);
+  // the guard moved to lib/settings-apply agentFieldAllowed (PATCH /api/agents/:name calls it): test the real function
+  assert.match(src, /settingsApply\.agentFieldAllowed\(body, \{ service: !!req\.hubService, token: !!req\.hubToken, user: req\.hubUser, isAdmin: access\.isAdmin\(req\.hubUser\)/);
+  const { callSettingsApply } = require('./helpers/isolated-settings-apply');   // the real function, run in a throwaway install
+  const agentFieldAllowed = (...a) => callSettingsApply('agentFieldAllowed', a);
+  const admin = { id: 'a1' };
+  assert.strictEqual(agentFieldAllowed({ envKeep: ['X'] }, { user: admin, isAdmin: true }).ok, true, 'a signed-in admin may');
+  for (const ctx of [{ service: true, user: admin, isAdmin: true }, { token: true, user: admin, isAdmin: true }, { user: null, isAdmin: false }, { user: admin, isAdmin: false }, { user: admin, isAdmin: true, pendingTotp: true }]) {
+    const r = agentFieldAllowed({ envKeep: ['X'] }, ctx);
+    assert.strictEqual(r.ok, false); assert.strictEqual(r.status, 403); assert.match(r.error, /only an admin can change: envKeep/);
+  }
 });
 
 // ── Round 5 fixes ────────────────────────────────────────────────────────────────────────────────────────────

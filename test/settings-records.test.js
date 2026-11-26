@@ -254,12 +254,13 @@ test('access, spending, credentials and recording consent are never everyday + a
     assert.notEqual(r.lead, 'apply', `${id} ${name}: lead`);
   }
   // the risk text of any record that is applied at once must not say it grants access, sends data out or costs money, unless the override says applyOk
-  const RISKY = /costs? money|per use|are sent|sent there|can (see|read|hear|download|use)|who can|recipients|address/i;
-  const applyOk = ['OPT-0227', 'OPT-0645'];
+  // (phase 2 widened the words: cost more, plan or money, more runs, spend, download, install, build, update the software)
+  const RISKY = /costs? money|per use|are sent|sent there|can (see|read|hear|download|use)|who can|recipients|address|cost more|costs more|plan or money|more runs|spend|download|install|build|update the software/i;
+  const applyOk = ['OPT-0645', 'OPT-0129', 'OPT-0160'];
   for (const r of records.all()) if (r.lead === 'apply' && RISKY.test(r.risk || '')) assert.ok(applyOk.includes(r.id), `${r.id} ${r.name}: lead apply with risk "${r.risk}"`);
   // the generator refuses it too
   const gen = fs.readFileSync(path.join(ROOT, 'scripts', 'build-settings-records.js'), 'utf8');
-  assert.match(gen, /const APPLY_RISK_RE = \/costs\? money\|per use\|are sent\|sent there\|can \(see\|read\|hear\|download\|use\)\|who can\|recipients\|address\/i/);
+  assert.match(gen, /const APPLY_RISK_RE = \/costs\? money\|per use\|are sent\|sent there\|can \(see\|read\|hear\|download\|use\)\|who can\|recipients\|address\|cost more\|costs more\|plan or money\|more runs\|spend\|download\|install\|build\|update the software\/i/);
   assert.match(gen, /r\.lead === 'apply' && APPLY_RISK_RE\.test\(r\.risk \|\| ''\) && !applyOk\.has\(r\.id\)/);
   assert.match(gen, /'applyOk'/);
 });
@@ -323,4 +324,70 @@ test('the route is a session route, served by server.js for signed-in people onl
   const server = fs.readFileSync(path.join(ROOT, 'server.js'), 'utf8');
   assert.match(server, /pathname === '\/api\/settings-records' && req\.method === 'GET'/);
   assert.match(server, /require\('\.\/lib\/settings-records'\)\.routeBody\(req\.hubUser \|\| null, \{ isAdmin \}\)/);
+});
+
+// ── Phase 2: what the lead may apply, what it never touches ───────────────
+const gen = require('../scripts/build-settings-records.js');
+
+test('records that raise recurring spending or download/build/install software are confirm or screen, never apply (and care or more)', () => {
+  // [id, name it must still have]: the carried items and the ones found by risk text or by name
+  const named = [
+    ['OPT-0164', 'Discussion type'], ['OPT-0729', 'Discussion Type'], ['OPT-0162', 'Most rounds'], ['OPT-0247', 'Run health checks'],
+    ['OPT-0270', 'Run the self-check'], ['OPT-0271', 'After every start'], ['OPT-0272', 'Nightly check time'], ['OPT-0273', 'Self-check: lead agents'],
+    ['OPT-0274', 'Self-check: ordinary agents'], ['OPT-0275', 'Self-check: agents in a box'], ['OPT-0276', 'Self-check: shared agents'],
+    ['OPT-0626', 'Requests table'], ['OPT-0651', 'Install llama-swap'], ['OPT-0652', 'Build llama.cpp'], ['OPT-0684', 'Download everything'],
+    ['OPT-0281', 'Update Codex now'], ['OPT-0280', 'Codex updates'], ['OPT-0105', 'Update channel'], ['OPT-0767', 'Which channel?'],
+    ['OPT-0227', 'Voice for everyone'], ['OPT-0292', 'Retry voice set-up'], ['OPT-0245', 'Checklist fix button'],
+    ['OPT-0081', 'Records limit for this agent'], ['OPT-0381', 'Past messages (all agents)'], ['OPT-0954', 'Records limit for all agents'],
+    ['OPT-0159', 'Discussion style'], ['OPT-0161', 'Leader agent'], ['OPT-0163', 'Challenger'], ['OPT-0728', 'Agents in the group'],
+    ['OPT-0719', 'Tell the team something'], ['OPT-0452', "Claude's built-in helpers"], ['OPT-0963', 'Reuse earlier text'],
+  ];
+  for (const [id, name] of named) {
+    const r = records.byId(id);
+    assert.ok(r, id);
+    assert.equal(r.name, name, `${id} is ${name}`);
+    assert.ok(['confirm', 'screen'].includes(r.lead), `${id} ${name}: lead ${r.lead}`);
+    assert.ok(['care', 'dangerous'].includes(r.danger), `${id} ${name}: danger ${r.danger}`);
+  }
+  // paid-per-use limits and behaviour changes that start more runs: at least care
+  for (const id of ['OPT-0414', 'OPT-0415', 'OPT-0416', 'OPT-0417', 'OPT-0418', 'OPT-0545', 'OPT-0546', 'OPT-0552']) assert.notEqual(records.byId(id).danger, 'everyday', id);
+});
+
+test('the generator refuses an apply record whose risk text says it costs more, spends, downloads, builds or installs; the shipped records pass', () => {
+  for (const w of ['it will cost more', 'it costs more', 'uses plan or money', 'more runs', 'you spend', 'a download', 'to install it', 'a build', 'costs money', 'per use']) assert.match(w, gen.APPLY_RISK_RE, w);
+  const applyOk = ['OPT-0129', 'OPT-0160', 'OPT-0645'];   // each has an applyOk override with a reason (overrides.json)
+  for (const r of records.all()) {
+    if (r.lead !== 'apply' || !gen.APPLY_RISK_RE.test(r.risk || '')) continue;
+    assert.ok(applyOk.includes(r.id), `${r.id} ${r.name}: lead apply but its risk text matches the apply-risk check (${gen.APPLY_RISK_RE.exec(r.risk)[0]})`);
+  }
+});
+
+test('no record tells people to edit a settings or data file by hand', () => {
+  const stale = /edit(ed|ing)? (the |a )?(settings|data) file|edited by hand|by hand in the data file|hand[- ]edit|edit data\/settings\.json|edit(ed|ing)? (it |them )?by hand|changed by editing|edited in the settings file|edit the settings file|edit(ed|ing)? the file|agents\.json by hand/i;
+  for (const r of records.all()) for (const f of ['what', 'when', 'risk', 'def', 'facts']) {
+    const v = r[f] || '';
+    assert.ok(!stale.test(v), `${r.id} ${r.name} ${f}: "${(stale.exec(v) || [''])[0]}"`);
+  }
+  // the people are pointed to the screen or to Maestro instead
+  assert.match(records.byId('OPT-0966').when, /ask Maestro/);
+  assert.match(records.byId('OPT-0943').what, /ask Maestro/);
+});
+
+test('secret records are screen and dangerous; device records are never apply or confirm', () => {
+  let secrets = 0, devices = 0;
+  for (const r of records.all()) {
+    if (gen.isSecretRecord(r) && !gen.SECRET_OK[r.id]) {
+      secrets++;
+      assert.equal(r.lead, 'screen', `${r.id} ${r.name}: a secret, lead ${r.lead}`);
+      if (!gen.SECRET_DANGER_OK[r.id]) assert.equal(r.danger, 'dangerous', `${r.id} ${r.name}: a secret, danger ${r.danger}`);
+    }
+    if (gen.isDeviceRecord(r)) {
+      devices++;
+      assert.ok(r.lead === 'none' || r.lead === 'screen', `${r.id} ${r.name}: on the device, lead ${r.lead}`);
+    }
+  }
+  assert.ok(secrets >= 20 && devices >= 40, `found ${secrets} secret and ${devices} device records`);
+  for (const id of ['OPT-0340', 'OPT-0482', 'OPT-0497', 'OPT-0639', 'OPT-0771', 'OPT-0322']) { assert.equal(records.byId(id).lead, 'screen', id); assert.equal(records.byId(id).danger, 'dangerous', id); }
+  assert.equal(records.byId('OPT-0752').lead, 'screen');
+  assert.equal(records.byId('OPT-0151').lead, 'screen');   // a member's own password: care, still screen
 });

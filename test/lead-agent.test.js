@@ -61,7 +61,7 @@ test('agents expose a one-line blurb and the settings PATCH accepts it (UI shows
   const fs = require('fs'); const path = require('path');
   const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'agents.js'), 'utf8');
   assert.match(src, /blurb: typeof a\.blurb === 'string'/);
-  assert.match(src, /allowedFields = \[[^\]]*'blurb'/);
+  assert.match(src, /(?:allowedFields|AGENT_PATCH_FIELDS) = \[[^\]]*'blurb'/);
   const app = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
   assert.match(app, /id="agent-btn-\$\{safeName\}" title="\$\{tip\}"/);   // name and tip are escaped (2026-10-16 XSS review)
   assert.match(fs.readFileSync(path.join(__dirname, '..', 'mobile.js'), 'utf8'), /a\.blurb \|\| shortModel/);

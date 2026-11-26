@@ -173,7 +173,14 @@ test('static files: /ui-looks.js and the registry look stylesheets only; reachab
 
 test('the new-member default: the setting is validated, a new member gets it, an existing user is unchanged, the me-record carries it', () => {
   const server = read('server.js');
-  assert.match(server, /patch\.lookDefaultForNewMembers !== undefined && !require\('\.\/lib\/ui-looks'\)\.byId\(patch\.lookDefaultForNewMembers\)\) return jsonResponse\(res, 400/);
+  // the check moved to lib/settings-apply cleanSettingsPatch (POST /api/settings answers its status 400 with its error): test the real function
+  assert.match(server, /require\('\.\/lib\/settings-apply'\)\.cleanSettingsPatch\(patch,/);
+  { const { callSettingsApply } = require('./helpers/isolated-settings-apply');   // the real function, run in a throwaway install
+    const cleanSettingsPatch = (...a) => callSettingsApply('cleanSettingsPatch', a);
+    const bad = cleanSettingsPatch({ lookDefaultForNewMembers: 'no-such-look' }, {});
+    assert.strictEqual(bad.status, 400); assert.match(bad.errors[0], /lookDefaultForNewMembers must be one of/);
+    const good = cleanSettingsPatch({ lookDefaultForNewMembers: require('../lib/ui-looks').LOOKS[0].id }, {});
+    assert.deepStrictEqual(good.errors, []); }
   assert.match(server, /const rec = req\.hubUser \? hubAuth\.getUser\(req\.hubUser\.id\) : null; if \(rec && rec\.look\) out\.look = rec\.look;/);
   const { makeIsolatedInstall } = require('./helpers/isolated-install');
   const ISO = makeIsolatedInstall('ui-looks-iso-');

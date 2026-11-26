@@ -74,10 +74,11 @@ test('consultGrantsFor reads the owner grant; admin-side or unowned agents have 
 
 test('wiring: member edits limited, grants sanitised and audited, consult widened, three admin surfaces', () => {
   const server = read('server.js');
-  assert.match(server, /const MEMBER_EDITABLE = new Set\(\['blurb', 'maxContextMessages', 'maxOutputTokens', 'contextBudget', 'compaction', 'minimalContext'\]\);/);
-  assert.match(server, /if \(refused\.length\) return jsonResponse\(res, 403, \{ error: `only an admin can change: \$\{refused\.join\(', '\)\}` \}\);/);
+  const applySrc = read('lib/settings-apply.js');   // the member guard and the memberPolicy cleaner moved from server.js into lib/settings-apply
+  assert.match(applySrc, /const MEMBER_EDITABLE_AGENT_FIELDS = new Set\(\['blurb', 'maxContextMessages', 'maxOutputTokens', 'contextBudget', 'compaction', 'minimalContext'\]\);/);
+  assert.match(applySrc, /if \(refused\.length\) return \{ ok: false, status: 403, error: `only an admin can change: \$\{refused\.join\(', '\)\}` \};/);
   assert.match(server, /if \(b\.grants !== undefined\) b\.grants = require\('\.\/lib\/tool-policy'\)\.sanitizeGrants\(b\.grants\);/);
-  assert.match(server, /patch\.memberPolicy = require\('\.\/lib\/tool-policy'\)\.sanitizeGrants\(\{ policy: patch\.memberPolicy \}\)\.policy \|\| \{\};/);
+  assert.match(applySrc, /patch\.memberPolicy = require\('\.\/tool-policy'\)\.sanitizeGrants\(\{ policy: patch\.memberPolicy \}\)\.policy \|\| \{\};/);
   assert.match(read('lib/auth.js'), /audit\(by \|\| id, 'user\.grants'/);
   const sdk = read('lib/sdk-chat.js');
   assert.match(sdk, /return \(await consultGrantsOf\(coordinatorName\)\)\.includes\(String\(target\)\.toLowerCase\(\)\);/);

@@ -465,7 +465,11 @@ test('server.js wires the passkey routes, status, setting and start-up notice', 
   assert.match(src, /pathname\.startsWith\('\/api\/wallet\/passkey\/'\)/);
   assert.match(src, /passkeyRoutes\(\)\.handle\(\{[^\n]*ownerBrowser: req\.hubIdentKind === 'user' && !req\.hubPendingTotp && !req\.hubToken && !req\.hubService && access\.isAdmin\(req\.hubUser\)/);
   assert.match(src, /pathname === '\/api\/wallet\/status' && req\.method === 'GET'\) \{\s*return jsonResponse\(res, 200, passkeyRoutes\(\)\.status\(\)\)/);
-  assert.match(src, /patch\.walletLockedNotice !== undefined\) patch\.walletLockedNotice = patch\.walletLockedNotice !== false/);
+  // the cleaner moved to lib/settings-apply cleanSettingsPatch (POST /api/settings calls it): test the real function
+  assert.match(src, /require\('\.\/lib\/settings-apply'\)\.cleanSettingsPatch\(patch,/);
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'lib', 'settings-apply.js'), 'utf8'), /patch\.walletLockedNotice !== undefined\) patch\.walletLockedNotice = patch\.walletLockedNotice !== false/);
+  { const c = (v) => require('./helpers/isolated-settings-apply').callSettingsApply('cleanSettingsPatch', [{ walletLockedNotice: v }, {}]).patch.walletLockedNotice;   // in a throwaway install
+    assert.strictEqual(c(false), false); assert.strictEqual(c(true), true); assert.strictEqual(c('x'), true); }
   assert.match(src, /require\('\.\/lib\/wallet\/locked-notice'\)\.walletLockedNotice\(/);
   assert.match(src, /LOCKED_NOTICE_DELAY_MS\)\.unref\(\)/);
   assert.match(src, /createPasskeyRoutes\(\{ svc: require\('\.\/lib\/wallet\/service'\)\.getWalletService\(\)/);

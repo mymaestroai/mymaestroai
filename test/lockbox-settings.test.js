@@ -157,10 +157,13 @@ test('lockboxDefault: a patch without it passes untouched; a change yields the p
 
 test('server.js wires the default check, its audit line, the notice, the PATCH guard and the routes', () => {
   const s = read('server.js');
-  assert.match(s, /require\('\.\/lib\/lockbox\/settings'\)\.checkDefaultPatch\(patch, req,/);
+  const a = read('lib/settings-apply.js');   // the guards and the notice builders moved from server.js into lib/settings-apply
+  assert.match(a, /require\('\.\/lockbox\/settings'\)\.checkDefaultPatchFor\(patch, \{ ownSession: !!ctx\.ownSession/);
+  assert.match(s, /require\('\.\/lib\/settings-apply'\)\.cleanSettingsPatch\(patch, \{ ownSession: access\.isAdminSession\(req\)/);
   assert.match(s, /hubAuth\.audit\(String\(req\.hubUser\.id\), 'settings\.lockboxDefault', lockboxChange/);
-  assert.match(s, /'lockbox' in body \|\| 'lockboxEnv' in body\) && !require\('\.\/lib\/lockbox\/settings'\)\.isAdminSession\(req\)\) return jsonResponse\(res, 403/);
-  assert.match(s, /notifyAdmins: \(text\) => require\('\.\/lib\/push'\)\.getPush\(\)\.notify\(\{[^}]*\}, \{ adminsOnly: true, kind: 'security' \}\)/);
+  assert.match(a, /\('lockbox' in body \|\| 'lockboxEnv' in body\) && !ctx\.ownSession\) return \{ ok: false, status: 403/);
+  assert.match(s, /ownSession: require\('\.\/lib\/lockbox\/settings'\)\.isAdminSession\(req\)/);
+  assert.match(a, /notifyAdmins: \(text\) => require\('\.\/push'\)\.getPush\(\)\.notify\(\{[^}]*\}, \{ adminsOnly: true, kind: 'security' \}\)/);
   assert.match(s, /pathname\.startsWith\('\/api\/lockbox\/'\)/);
 });
 

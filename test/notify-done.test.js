@@ -43,7 +43,7 @@ test('server: POST /api/agents/<name>/notify is for a person on a page, checks a
   assert.ok(s.includes("events.setTurnNotify(agentName, { on: b.on !== false, user, turnId:"), 'arms the running turn');
   assert.ok(s.includes("return jsonResponse(res, 409, { error: 'not_running'"), 'idle: 409');
   assert.ok(s.includes("devices = require('./lib/push').getPush().devicesFor(user);"), 'tells the page whether any device will hear it');
-  assert.ok(s.includes("if (patch && patch.notify !== undefined) patch.notify = require('./lib/push').cleanNotifySettings(patch.notify);"), 'settings.notify cleaned');
+  assert.ok(read('lib/settings-apply.js').includes("if (patch.notify !== undefined) patch.notify = require('./push').cleanNotifySettings(patch.notify);"), 'settings.notify cleaned (the cleaners moved from server.js to lib/settings-apply)');
   assert.deepStrictEqual(access.classifyRoute('/api/agents/kids/notify', 'POST'), { kind: 'agent', from: 'path', agent: 'kids' }, 'members may use it on their own agents');
   assert.deepStrictEqual(access.classifyRoute('/api/agents/kids/turn', 'GET'), { kind: 'agent', from: 'path', agent: 'kids' }, 'and read their own agents\' turn view');
 });

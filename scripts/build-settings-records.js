@@ -7,7 +7,9 @@
 //
 // --overrides names a JSON file of corrections the audit got wrong: { "OPT-0341": { "who": "admin", "reason": "…file:line…" } };
 // allowed keys who, danger, lead, anchors (replaces the list), home, scope, applyOk (true: a record with lead "apply" may keep risk
-// words the apply check would refuse) and a required one-line reason. An unknown id or key fails. A key "+OPT-1082" ADDS a record the
+// words the apply check would refuse), what, when, risk, def, facts (a corrected sentence: say what the person does instead of
+// "edit the file") and a required one-line reason. The build also fails when a secret record (isSecretKey) is not lead screen and
+// dangerous, or a device record (localStorage) has lead apply or confirm. An unknown id or key fails. A key "+OPT-1082" ADDS a record the
 // audit does not have: it needs every field of a record (ADD_FIELDS) and a reason; a missing field or an id that already exists fails.
 // After the corrections: "Needs you" becomes "For your review" in every home, an alias takes the strictest who, danger and lead of
 // itself and its target, and the build fails on a selector used by two records on a surface, on an install-wide record that
@@ -35,12 +37,37 @@ const ID_RE = /(?<![\w-])id=(["'])([A-Za-z][\w:.-]*)\1/;
 const HOME_RENAMES = [[/Needs you/g, 'For your review']];
 const DANGER_RANK = { everyday: 0, care: 1, dangerous: 2 };
 const LEAD_RANK = { apply: 0, confirm: 1, screen: 2, none: 3 };
-const OVERRIDE_KEYS = ['who', 'danger', 'lead', 'anchors', 'home', 'scope', 'applyOk', 'reason'];
+const OVERRIDE_KEYS = ['who', 'danger', 'lead', 'anchors', 'home', 'scope', 'applyOk', 'what', 'when', 'risk', 'def', 'facts', 'reason'];
+const TEXT_KEYS = ['what', 'when', 'risk', 'def', 'facts'];   // corrected help text (a stale sentence); a non-empty string
 // Every field a record added by an override must carry (facts and mergedInto are optional).
 const ADD_FIELDS = ['kind', 'name', 'labels', 'what', 'when', 'risk', 'def', 'restart', 'danger', 'who', 'lead', 'words', 'scope', 'home', 'storedAs', 'anchors'];
 // A record whose lead applies the change at once (and offers an undo) may not carry risk words that say it grants access, sends data
-// out or costs money: those need a confirm card. An override { "applyOk": true, "reason": … } states that the match is harmless.
-const APPLY_RISK_RE = /costs? money|per use|are sent|sent there|can (see|read|hear|download|use)|who can|recipients|address/i;
+// out, costs money (or more plan or money) or downloads, builds or installs software: those need a confirm card. An override
+// { "applyOk": true, "reason": … } states that the match is harmless.
+const APPLY_RISK_RE = /costs? money|per use|are sent|sent there|can (see|read|hear|download|use)|who can|recipients|address|cost more|costs more|plan or money|more runs|spend|download|install|build|update the software/i;
+
+const journal = require('../lib/settings-journal.js');
+// A record that holds a secret (by the journal's isSecretKey, on any of its storedAs keys) is screen-only and dangerous: the lead
+// never handles keys. A record on this list matches the secret words by name only; the reason says why it is not one.
+const SECRET_OK = {
+  'OPT-0999': 'a yes/no environment switch whose name says "keys" (HUB_KEEP_ENV_KEYS, lib/settings.js:149); it holds no secret',
+};
+// A secret record that a member meets cannot be "dangerous" (the loader refuses dangerous unless who is admin): lead screen still holds.
+const SECRET_DANGER_OK = {
+  'OPT-0151': 'a member changes their own password (app.js:760); dangerous needs who admin, so it stays care with lead screen',
+};
+
+/** The keys a record is stored under: each part of storedAs without its trailing note, and without a leading "settings.". */
+function storedKeys(r) {
+  return String(r.storedAs || '').split('|').map((p) => p.trim().replace(/\s*\(.*$/, '').replace(/^settings\./, '')).filter(Boolean);
+}
+/** A device record keeps its value in the browser (the first storedAs part is localStorage): the lead cannot reach it. */
+function isDeviceRecord(r) { return /^localStorage\b/.test(String(r.storedAs || '').trim()); }
+/** True when the record holds a secret by the journal's rule (a device record is judged by what the browser keeps, not by key names). */
+function isSecretRecord(r) {
+  if (isDeviceRecord(r)) return false;
+  return storedKeys(r).some((k) => journal.isSecretKey(k, r));
+}
 
 // Install-wide records that stay visible to members, with the reason each one is. An install-wide record that is
 // not "admin" and not in this list fails the build: a member must really meet that control or indicator.
@@ -201,6 +228,7 @@ function applyOverrides(records, overrides, applyOk = new Set()) {
     if (o.who !== undefined) { if (!['admin', 'member', 'both'].includes(o.who)) throw new Error(`overrides: ${id} who ${JSON.stringify(o.who)}`); r.who = o.who; }
     if (o.danger !== undefined) { if (!(o.danger in DANGER_RANK)) throw new Error(`overrides: ${id} danger ${JSON.stringify(o.danger)}`); r.danger = o.danger; }
     if (o.lead !== undefined) { if (!(o.lead in LEAD_RANK)) throw new Error(`overrides: ${id} lead ${JSON.stringify(o.lead)}`); r.lead = o.lead; }
+    for (const k of TEXT_KEYS) if (o[k] !== undefined) { if (typeof o[k] !== 'string' || !o[k].trim()) throw new Error(`overrides: ${id} ${k} must be a non-empty string`); r[k] = o[k]; }
     if (o.home !== undefined) { if (typeof o.home !== 'string' || !o.home.trim()) throw new Error(`overrides: ${id} home`); r.home = o.home; }
     if (o.scope !== undefined) { if (typeof o.scope !== 'string' || !o.scope.trim()) throw new Error(`overrides: ${id} scope`); r.scope = o.scope; }
     if (o.applyOk !== undefined) { if (o.applyOk !== true) throw new Error(`overrides: ${id} applyOk must be true`); applyOk.add(id); }
@@ -264,6 +292,11 @@ function checkRecords(records, conflicts, applyOk = new Set()) {
   const byId = new Map(records.map((r) => [r.id, r]));
   for (const r of records) {
     if (r.lead === 'apply' && APPLY_RISK_RE.test(r.risk || '') && !applyOk.has(r.id)) bad.push(`${r.id}: lead apply, but its risk text says it grants access, sends data out or costs money (${APPLY_RISK_RE.exec(r.risk)[0]}); use confirm, or an override with applyOk and a reason`);
+    if (isSecretRecord(r) && !SECRET_OK[r.id]) {
+      if (r.lead !== 'screen') bad.push(`${r.id}: holds a secret (${storedKeys(r).join(' | ')}) but lead is ${r.lead}; the lead never handles keys: screen`);
+      if (r.danger !== 'dangerous' && !SECRET_DANGER_OK[r.id]) bad.push(`${r.id}: holds a secret (${storedKeys(r).join(' | ')}) but danger is ${r.danger}; use dangerous`);
+    }
+    if (isDeviceRecord(r) && r.lead !== 'none' && r.lead !== 'screen') bad.push(`${r.id}: stored on the device (${r.storedAs.slice(0, 40)}) but lead is ${r.lead}; the lead cannot reach a device's storage: none`);
     if (/Needs you/.test(r.home)) bad.push(`${r.id}: home "${r.home}" still says "Needs you"`);
     if (r.danger === 'dangerous' && r.who !== 'admin') bad.push(`${r.id}: dangerous but who is ${r.who}`);
     if (r.danger === 'dangerous' && r.lead === 'apply') bad.push(`${r.id}: dangerous with lead apply`);
@@ -401,4 +434,4 @@ function main() {
 if (require.main === module) {
   try { main(); } catch (e) { console.error(`build-settings-records: ${e.message}`); process.exit(1); }
 }
-module.exports = { parseCsv, kindOf, anchorFor, build, MEMBER_INSTALL };
+module.exports = { parseCsv, kindOf, anchorFor, build, MEMBER_INSTALL, APPLY_RISK_RE, SECRET_OK, SECRET_DANGER_OK, isSecretRecord, isDeviceRecord };

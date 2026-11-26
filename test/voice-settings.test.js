@@ -42,7 +42,10 @@ test('settings sanitiser: known keys only, values checked, merged onto what is s
 test('server.js feeds POST /api/settings through the sanitiser and routes /api/voice/* to lib/voice/routes', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
   // "enabled" is never taken from the patch: cleanVoicePatch keeps the stored value, or leaves it unset (only /api/voice/enable and /disable change it)
-  assert.match(src, /if \(patch && patch\.voice !== undefined\) \{\s*const storedVoice = hubSettings\.getSetting\('voice'\);[^]*?patch\.voice = require\('\.\/lib\/voice\/manifest'\)\.cleanVoicePatch\(patch\.voice, storedVoice\);/);
+  // (the route's cleaners moved from server.js into lib/settings-apply cleanSettingsPatch, which the route calls)
+  const applySrc = fs.readFileSync(path.join(__dirname, '..', 'lib', 'settings-apply.js'), 'utf8');
+  assert.match(applySrc, /if \(patch\.voice !== undefined\) \{\s*const storedVoice = getSetting\('voice'\);[^]*?patch\.voice = require\('\.\/voice\/manifest'\)\.cleanVoicePatch\(patch\.voice, storedVoice\);/);
+  assert.match(src, /require\('\.\/lib\/settings-apply'\)\.cleanSettingsPatch\(patch,/);
   assert.match(src, /pathname\.startsWith\('\/api\/voice\/'\)\) return require\('\.\/lib\/voice\/routes'\)\.handle\(/);
   assert.match(src, /route\.from === 'query'/);
 });
@@ -104,8 +107,8 @@ test('updateAgentField: `voice` is an allowed field, validated, stored on the ag
 });
 
 test('members may NOT change an agent\'s voice (conservative): it is not in server.js MEMBER_EDITABLE', () => {
-  const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
-  const m = src.match(/const MEMBER_EDITABLE = new Set\(\[([^\]]*)\]\)/);
-  assert.ok(m, 'MEMBER_EDITABLE found');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'settings-apply.js'), 'utf8');   // the member guard moved from server.js into lib/settings-apply
+  const m = src.match(/const MEMBER_EDITABLE_AGENT_FIELDS = new Set\(\[([^\]]*)\]\)/);
+  assert.ok(m, 'MEMBER_EDITABLE_AGENT_FIELDS found');
   assert.ok(!/voice/.test(m[1]), 'voice stays an admin decision (agent settings page is admin-only today)');
 });

@@ -683,13 +683,11 @@ test('routes: the classes (stop and upgrade are for any signed-in person, caps a
 
 // ── settings ──
 function patchHarness(patch, stored = {}) {
-  const a = SERVER.indexOf('// Deep research, how long a question waits for the person');
-  const b = SERVER.indexOf('// Thorough deep research caps (admin)');
-  assert.ok(a > 0 && b > a, 'the settings cleaning is there');
-  let out = null;
-  const ctx = vm.createContext({ patch, hubSettings: { getSetting: (k) => stored[k] }, jsonResponse: (r, c, o) => { out = { c, o }; return 'ret'; }, res: {}, Number, Array, Object, Number });
-  const ret = vm.runInContext('(() => {' + SERVER.slice(a, b) + '\nreturn "ok";})()', ctx);
-  return { ret, out, patch: JSON.parse(JSON.stringify(ctx.patch)) };
+  // The route's cleaners moved from server.js into lib/settings-apply cleanSettingsPatch (the lead's settings tool uses them too): run the real function.
+  assert.ok(SERVER.includes("require('./lib/settings-apply').cleanSettingsPatch(patch,"), 'the settings route calls it');
+  const r = require(path.join(ISO.inst, 'lib', 'settings-apply.js')).cleanSettingsPatch(patch, { ownSession: false, getSetting: (k) => stored[k] });
+  const out = r.errors.length ? { c: r.status, o: { error: r.errors[0] } } : null;
+  return { ret: out ? 'ret' : 'ok', out, patch: JSON.parse(JSON.stringify(patch)) };
 }
 
 test('settings: researchOfferWaitSeconds is a whole number 0..600; researchAgentCaps takes perAgent 0..100 and install 0..1000, merged onto the stored value; anything else is refused', () => {

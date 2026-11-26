@@ -124,17 +124,20 @@ test('a failing audit never stops the save', async () => {
 // ── admin-only ──
 const server = fs.readFileSync(path.join(REAL, 'server.js'), 'utf8');
 test('server.js: recordings is not member-editable, and a member or the hub\'s own service calls are refused', () => {
-  const m = server.match(/const MEMBER_EDITABLE = new Set\((\[[^\]]*\])\)/);
-  assert.ok(m, 'MEMBER_EDITABLE is still there');
+  // The guard moved from server.js into lib/settings-apply agentFieldAllowed (the lead's settings tool uses it too); the route passes it the facts.
+  const apply = fs.readFileSync(path.join(REAL, 'lib', 'settings-apply.js'), 'utf8');
+  const m = apply.match(/const MEMBER_EDITABLE_AGENT_FIELDS = new Set\((\[[^\]]*\])\)/);
+  assert.ok(m, 'MEMBER_EDITABLE_AGENT_FIELDS is there');
   const set = vm.runInNewContext(m[1]);
   assert.ok(!set.includes('recordings'));
-  const i = server.indexOf("'recordings' in body");
+  const i = apply.indexOf("'recordings' in body");
   assert.ok(i > 0, 'an explicit guard for the field');
-  const guard = server.slice(i - 120, i + 520);
-  assert.ok(/req\.hubService/.test(guard) && /hubAuth\.isOwner\(req\.hubUser\)/.test(guard) && /req\.hubPendingTotp/.test(guard) && /req\.hubToken/.test(guard) && /403/.test(guard), 'only the owner, never a service call or an API token');
+  const guard = apply.slice(i - 120, i + 320);
+  assert.ok(/ctx\.service/.test(apply) && /!ctx\.isOwner/.test(guard) && /ctx\.pendingTotp/.test(apply) && /ctx\.token/.test(apply) && /403/.test(guard), 'only the owner, never a service call or an API token');
   assert.ok(/only the owner can change: recordings/.test(guard), 'the refusal says so');
-  assert.ok(!/only an admin can change: recordings/.test(server), 'no longer "any admin"');
-  assert.ok(i < server.indexOf('const { updateAgentField } = require'), 'the guard runs before the update');
+  assert.ok(!/only an admin can change: recordings/.test(apply + server), 'no longer "any admin"');
+  assert.ok(/service: !!req\.hubService, token: !!req\.hubToken, user: req\.hubUser/.test(server) && /isOwner: !!req\.hubUser && hubAuth\.isOwner\(req\.hubUser\)/.test(server), 'the route hands over who is asking');
+  assert.ok(server.indexOf('settingsApply.agentFieldAllowed(') > 0 && server.indexOf('settingsApply.agentFieldAllowed(') < server.indexOf('const { updateAgentField } = require'), 'the guard runs before the update');
 });
 
 test('server.js: a change of the allowed list sends "Recording access changed" to everyone on the old and the new list', () => {
@@ -178,7 +181,8 @@ test('server.js: the PATCH route passes an audit callback that writes agent.reco
   const i = server.indexOf("const result = await updateAgentField(name, body");
   assert.ok(i > 0);
   const call = server.slice(i, i + 700);
-  assert.ok(/audit: \(action, detail\) => hubAuth\.audit\(/.test(call));
+  assert.ok(/settingsApply\.agentWriteContext\(/.test(call));   // the audit callback is built in lib/settings-apply agentWriteContext
+  assert.ok(/audit: \(action, detail\) => auth\(\)\.audit\(/.test(fs.readFileSync(path.join(REAL, 'lib', 'settings-apply.js'), 'utf8')));
 });
 
 // ── GET /api/agents shaping ──

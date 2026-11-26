@@ -105,7 +105,10 @@ const between = (s, a, b) => { const i = s.indexOf(a); assert.ok(i >= 0, a); con
 
 test('server: POST /api/settings can never change requireAdmin2fa', () => {
   const route = between(server, "pathname === '/api/settings' && req.method === 'POST'", 'hubSettings.updateSettings(patch)');
-  assert.ok(route.includes("'requireAdmin2fa' in patch") && route.includes('delete patch.requireAdmin2fa'));
+  // the dropped-keys list moved from the route into lib/settings-apply (cleanSettingsPatch, which the route calls before it saves)
+  assert.ok(route.includes("require('./lib/settings-apply').cleanSettingsPatch(patch,"));
+  const apply = fs.readFileSync(path.join(__dirname, '..', 'lib', 'settings-apply.js'), 'utf8');
+  assert.ok(/DROPPED_KEYS = \{[^}]*\brequireAdmin2fa: '\[settings\] ignored requireAdmin2fa in \/api\/settings patch/.test(apply) && apply.includes('delete patch[key]'));
 });
 
 test('server: /api/security/admin-2fa is for a signed-in admin only, checked before setRequired', () => {

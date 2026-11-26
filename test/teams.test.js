@@ -233,13 +233,15 @@ test('settings: sidebarTigerTeam and sidebarGuide are off by default and always 
 // ── Wiring that needs a running server: checked in the source ───────────────
 test('server.js: reportsTo is refused for the hub service and the two settings are normalized to booleans', () => {
   const src = read('server.js');
-  assert.match(src, /'reportsTo' in body && \(req\.hubService \|\| req\.hubToken \|\| !req\.hubUser \|\| !access\.isAdmin\(req\.hubUser\) \|\| req\.hubPendingTotp\)\) return jsonResponse\(res, 403, \{ error: 'reportsTo is set by an admin or through the team tool' \}\)/);
+  const apply = read('lib/settings-apply.js');   // the PATCH guards and the settings cleaners moved from server.js into lib/settings-apply
+  assert.match(apply, /'reportsTo' in body && \(notPerson \|\| !ctx\.isAdmin\)\) return \{ ok: false, status: 403, error: 'reportsTo is set by an admin or through the team tool' \}/);
+  assert.match(apply, /const notPerson = !!ctx\.service \|\| !!ctx\.token \|\| !ctx\.user \|\| !!ctx\.pendingTotp;/);
   assert.match(src, /const hideUnseen = \(a\) => seeAll \? \{\} : \{[\s\S]*?reportsTo: undefined[\s\S]*?buildPartner: undefined/);
   assert.match(src, /\.\.\.stripVoice\(a\), \.\.\.hideUnseen\(a\)/);
   assert.match(src, /const seeAll = !!req\.hubService \|\| \(access\.isAdmin\(req\.hubUser\) && !req\.hubPendingTotp\);/);
-  assert.match(src, /patch\.sidebarTigerTeam = patch\.sidebarTigerTeam === true/);
-  assert.match(src, /patch\.sidebarGuide = patch\.sidebarGuide === true/);
-  const memberEditable = src.match(/const MEMBER_EDITABLE = new Set\(\[([^\]]*)\]/);
+  assert.match(apply, /patch\.sidebarTigerTeam = patch\.sidebarTigerTeam === true/);
+  assert.match(apply, /patch\.sidebarGuide = patch\.sidebarGuide === true/);
+  const memberEditable = apply.match(/const MEMBER_EDITABLE_AGENT_FIELDS = new Set\(\[([^\]]*)\]/);
   assert.ok(memberEditable && !/reportsTo/.test(memberEditable[1]), 'a member cannot set it');
   assert.match(src, /const result = await updateAgentField\(name, body/);
 });
@@ -411,8 +413,8 @@ test('updateAgentField: a leader never loses its boss while workers still report
 });
 
 test('server.js: team notices go out as "Team changed" with their own tag, not as lockbox security notices', () => {
-  const s = read('server.js');
-  assert.match(s, /notifyTeam: \(text\) => require\('\.\/lib\/push'\)\.getPush\(\)\.notify\(\{ title: 'Team changed', body: text, tag: 'team-change' \}/);
+  const s = read('lib/settings-apply.js');   // the context the PATCH route hands updateAgentField is built in lib/settings-apply agentWriteContext
+  assert.match(s, /notifyTeam: \(text\) => require\('\.\/push'\)\.getPush\(\)\.notify\(\{ title: 'Team changed', body: text, tag: 'team-change' \}/);
   const l = read('lib/agents.js');
   assert.match(l, /ctx\.notifyTeam\(text\)/);
   assert.doesNotMatch(l.slice(l.indexOf('teamNotices.push')), /notices\.push\(`\$\{n\} no longer/);

@@ -46,7 +46,11 @@ test('settings toggle, setting patch and routes exist', () => {
   assert.match(app, /id="st-model-offers"[^>]*saveModelOffersToggle\(this\.checked\)/);
   assert.match(app, /Your Maestro suggests newer models for your agents\./);
   assert.match(app, /modelOffers: !!on/);
-  assert.match(server, /patch\.modelOffers = patch\.modelOffers !== false/);
+  // the cleaner moved to lib/settings-apply cleanSettingsPatch (POST /api/settings calls it): test the real function
+  const clean = (v) => require('./helpers/isolated-settings-apply').callSettingsApply('cleanSettingsPatch', [{ modelOffers: v }, {}]).patch.modelOffers;   // in a throwaway install
+  assert.strictEqual(clean(undefined) === undefined || clean(true), true);
+  assert.strictEqual(clean(false), false); assert.strictEqual(clean('x'), true); assert.strictEqual(clean(0), true);
+  assert.match(server, /require\('\.\/lib\/settings-apply'\)\.cleanSettingsPatch\(patch,/);
   assert.match(server, /model-offer\$\/\.test\(pathname\) && req\.method === 'GET'/);
   assert.match(server, /model-offer\\\/decline\$\/\.test\(pathname\) && req\.method === 'POST'/);
   assert.match(server, /That suggestion is no longer current\./);

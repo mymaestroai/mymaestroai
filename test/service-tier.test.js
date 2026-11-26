@@ -102,8 +102,8 @@ test('tierFallback: only a refusal because of the tier, before output, once', ()
 // ── the agent setting ──
 test('agents: tier is accepted (validated), standard removes it, a bad value is refused, the order of allowedFields keeps its tail', async () => {
   const src = read('lib/agents.js');
-  const m = src.match(/const allowedFields = \[([^\]]*)\]/);
-  assert.ok(m, 'allowedFields found');
+  const m = src.match(/const (?:allowedFields|AGENT_PATCH_FIELDS) = \[([^\]]*)\]/);
+  assert.ok(m, 'the allowed fields list found');
   const list = m[1].split(',').map((x) => x.trim().replace(/'/g, ''));
   assert.strictEqual(list[list.indexOf('effort') + 1], 'tier', 'right after effort');
   assert.deepStrictEqual(list.slice(-3), ['voice', 'callDisplay', 'voiceDefaults'], 'the tail stays');
@@ -127,7 +127,7 @@ test('agents: tier is accepted (validated), standard removes it, a bad value is 
 
 test('members cannot change the tier: not in MEMBER_EDITABLE; the list API and the page carry the options', () => {
   const server = read('server.js');
-  const m = server.match(/const MEMBER_EDITABLE = new Set\(\[([^\]]*)\]\)/);
+  const m = read('lib/settings-apply.js').match(/const MEMBER_EDITABLE_AGENT_FIELDS = new Set\(\[([^\]]*)\]\)/);   // the member guard moved from server.js into lib/settings-apply
   assert.ok(m);
   assert.ok(!/tier/.test(m[1]), 'tier is not member-editable');
   assert.match(server, /tierOptions: require\('\.\/lib\/tier'\)\.tiersFor\(a\.model\), tierLabels: require\('\.\/lib\/tier'\)\.labelsFor\(a\.model\)/);

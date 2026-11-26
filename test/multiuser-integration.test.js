@@ -120,7 +120,10 @@ test('server: 2026-10-16 review fixes are wired (static allow-list, hub-only bod
   assert.ok(server.includes("!(access.isAdmin(req.hubUser) && !req.hubPendingTotp)"));
   assert.ok(server.includes("if (req.hubToken && req.hubToken.agents && !req.hubToken.agents.includes(agentName)) return jsonResponse(res, 403, { error: 'token_scope'"));
   assert.ok(server.includes("handleHttpRequest(req, res).catch((err) => {"));
-  assert.ok(server.includes("'walletOwner' in patch"));
+  // the strip moved to lib/settings-apply cleanSettingsPatch (POST /api/settings calls it): test the real function
+  assert.ok(server.includes("require('./lib/settings-apply').cleanSettingsPatch(patch,"));
+  { const r = require('./helpers/isolated-settings-apply').callSettingsApply('cleanSettingsPatch', [{ walletOwner: '0xabc', walletAgents: ['x'], theme: 'a' }, {}]);   // in a throwaway install
+    assert.ok(!('walletOwner' in r.patch) && !('walletAgents' in r.patch) && r.patch.theme === 'a', 'walletOwner and walletAgents are stripped from a settings patch'); }
   assert.ok(sdk.includes("handlers.__cwd = hands.tools.cwd;"), 'gateway gate and hands share a working directory');
   assert.ok(sdk.includes("cwd: (handlers && handlers.__cwd) || process.cwd()"));
   assert.ok(sdk.includes("const v = temporalWorkers.getVirtual(agentName); if (v && v.parent) agent = all.find(a => a.name === v.parent) || null;"), 'temporary workers use their parent\'s hands');

@@ -159,8 +159,11 @@ test('noticeLine: empty, one agent, and at most three agents', () => {
 test('settings: the two keys are cleaned in the settings route and have a row in the Settings page', () => {
   const server = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
   const app = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
-  assert.match(server, /patch\.handOffWaitMinutes !== undefined\) patch\.handOffWaitMinutes = require\('\.\/lib\/long-waits'\)\.cleanMinutes\(patch\.handOffWaitMinutes\)/);
-  assert.match(server, /patch\.buildPartnerNotice !== undefined\) patch\.buildPartnerNotice = patch\.buildPartnerNotice !== false/);
+  // the route's cleaners moved from server.js into lib/settings-apply cleanSettingsPatch, which the route calls
+  const applySrc = fs.readFileSync(path.join(__dirname, '..', 'lib', 'settings-apply.js'), 'utf8');
+  assert.match(server, /require\('\.\/lib\/settings-apply'\)\.cleanSettingsPatch\(patch,/);
+  assert.match(applySrc, /patch\.handOffWaitMinutes !== undefined\) patch\.handOffWaitMinutes = require\('\.\/long-waits'\)\.cleanMinutes\(patch\.handOffWaitMinutes\)/);
+  assert.match(applySrc, /patch\.buildPartnerNotice !== undefined\) patch\.buildPartnerNotice = patch\.buildPartnerNotice !== false/);
   assert.match(app, /<label>Notice long waits on workers<\/label>/);
   assert.match(app, /id="st-hw-minutes"[^>]*min="0" max="240"/);
   assert.match(app, /id="st-hw-notice" \$\{data\.buildPartnerNotice !== false \? 'checked' : ''\}> Tell the lead when an agent has no build partner/);

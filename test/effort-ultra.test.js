@@ -89,9 +89,9 @@ test('agent field: ultra is accepted, the error text names it, members cannot ch
   const agents = read('lib/agents.js');
   assert.match(agents, /require\('\.\/effort'\)\.LEVELS\.includes\(v\)/);
   assert.match(agents, /effort must be default, low, medium, high, xhigh, max or ultra/);
-  const server = read('server.js');
-  const m = server.match(/const MEMBER_EDITABLE = new Set\(\[([^\]]*)\]\)/);
-  assert.ok(m, 'MEMBER_EDITABLE found');
+  const server = read('lib/settings-apply.js');   // the member guard moved from server.js into lib/settings-apply
+  const m = server.match(/const MEMBER_EDITABLE_AGENT_FIELDS = new Set\(\[([^\]]*)\]\)/);
+  assert.ok(m, 'MEMBER_EDITABLE_AGENT_FIELDS found');
   assert.ok(!/effort/.test(m[1]), 'effort is not member-editable');
 });
 

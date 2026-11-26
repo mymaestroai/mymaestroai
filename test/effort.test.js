@@ -61,7 +61,7 @@ test('wired: Claude client query option, gateway option, Codex; agent field vali
   assert.match(agents, /'tools', 'effort'(, 'tier')?(, 'teamGuidance', 'teamRole')?(, 'modelPinned')?(, 'voice')?(, 'callDisplay')?(, 'voiceDefaults')?\];/);   // tier (speed and price), the team-guidance fields, the voice build and the call display add fields after effort
   assert.match(agents, /effort must be default, low, medium, high, xhigh, max or ultra/);
   const server = read('server.js');
-  assert.match(server, /const MEMBER_EDITABLE = new Set\(\['blurb', 'maxContextMessages', 'maxOutputTokens', 'contextBudget', 'compaction', 'minimalContext'\]\);/, 'effort is not member-editable');
+  assert.match(read('lib/settings-apply.js'), /const MEMBER_EDITABLE_AGENT_FIELDS = new Set\(\['blurb', 'maxContextMessages', 'maxOutputTokens', 'contextBudget', 'compaction', 'minimalContext'\]\);/, 'effort is not member-editable (the guard moved from server.js to lib/settings-apply)');
   assert.match(server, /autoModel: !!a\.autoModel, effort: a\.effort \|\| 'default', changed:/);
 });
 

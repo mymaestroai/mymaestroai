@@ -527,7 +527,8 @@ test('wiring: the gate classes, server.js hooks, the settings cleaner and the lo
   const server = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
   assert.ok(server.includes("require('./lib/share-links-routes').createShareLinkRoutes"));
   assert.ok(/pathname\.startsWith\('\/s\/'\)[\s\S]{0,200}shareLinkRoutes\(\)\.handle\(req, res, pathname\)/.test(server));
-  assert.ok(server.includes("patch.shareLinks = require('./lib/share-links').cleanSettings(patch.shareLinks, hubSettings.getSetting('shareLinks'))"));
+  // the route's cleaners moved from server.js into lib/settings-apply cleanSettingsPatch
+  assert.ok(fs.readFileSync(path.join(__dirname, '..', 'lib', 'settings-apply.js'), 'utf8').includes("patch.shareLinks = require('./share-links').cleanSettings(patch.shareLinks, getSetting('shareLinks'))"));
   assert.ok(/pathname === '\/login' \|\| pathname === '\/invite'\) headers\['Referrer-Policy'\] = 'no-referrer'/.test(server));
   // the handler sits inside the gate: it comes after the classification and before the other routes
   assert.ok(server.indexOf('shareLinkRoutes().handle') > server.indexOf('access.classifyRoute(pathname'));
