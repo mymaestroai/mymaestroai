@@ -83,6 +83,7 @@ this.waitSeconds = researchOfferWaitSeconds; this.agentCaps = researchAgentCaps;
   ctx.setRunner({
     start: (x) => { if (!startOk) return { ok: false, error: 'engine said no' }; started.push(x); n += 1; return { ok: true, id: 'dr-0000000' + n }; },
     recover() {},
+    isCurrentAgent: () => true,
     agentStartsToday: () => store.agentStartsToday(),
     countAgentStart: (g) => store.countAgentStart(g),
     uncountAgentStart: (g, d) => store.uncountAgentStart(g, d),
@@ -571,7 +572,7 @@ test('status and the research_progress event carry startedBy, reason, waitSecond
   L.ctx.hubEvents = { events: { publish: (t, p) => published.push({ t, p }) } };
   const mk = (over) => ({ id: 'dr-1', agent: 'sam-agent', level: 'quick', state: 'running', stage: '', stageLabel: '', stageDone: 0, stageTotal: 0, startedAt: 1, seq: 2, startedBy: 'agent', reason: 'Why.', waitSeconds: null, costLine: 'Cost.', ...over });
   const runs = [mk(), mk({ id: 'dr-2', startedBy: 'no-answer', waitSeconds: 120 }), mk({ id: 'dr-3', startedBy: 'person' }), mk({ id: 'dr-4', level: 'thorough', startedBy: 'upgrade' }), mk({ id: 'dr-5', state: 'delivering' }), mk({ id: 'dr-6', state: 'stopped' })];
-  L.ctx.setRunner({ list: () => runs, start() {}, recover() {} });
+  L.ctx.setRunner({ list: () => runs, start() {}, recover() {}, isCurrentAgent: () => true });
   const st = JSON.parse(JSON.stringify(L.ctx.statusFor('sam-agent')));
   assert.deepEqual(st.map((x) => x.id), ['dr-1', 'dr-2', 'dr-3', 'dr-4', 'dr-5']);
   assert.deepEqual(st.map((x) => x.upgradable), [true, true, false, false, false], 'only a running quick run by an agent or no answer');
@@ -862,17 +863,178 @@ test('S3: a malformed runs file: counting and reading the count throw, an auto s
   assert.match(await ownWork(L), /^Could not record today's count/, 'and no grant is given');
 });
 
-test('S3: a runs file already unreadable at start-up is kept beside it before the first save replaces it', () => {
+// R2 (review round 2): a file already damaged at start-up never resets the day's count
+const COUNT_FAILED_RE = /^Could not record today's count of research started by agents/;
+const copiesOf = (file) => fs.readdirSync(path.dirname(file)).filter((n) => n.startsWith(path.basename(file) + '.unreadable-')).sort();
+const COPY_RE = /^r\.json\.unreadable-\d{8}-\d{6}-[0-9a-f]{4}$/;
+
+test('R2: a runs file damaged at start-up: a uniquely named copy holds the damaged text, the new file is valid, today\'s count is unknown (refused) and tomorrow counts again', async () => {
   const dir = tmpDir();
   const file = path.join(dir, 'r.json');
-  const now = () => new Date(2026, 10, 25, 12).getTime();
+  let clock = new Date(2026, 10, 25, 12).getTime();
   fs.writeFileSync(file, '{ "runs": [ damaged');
-  const s = research.createRunStore({ file, now });
+  const s = research.createRunStore({ file, now: () => clock });
   assert.deepEqual(s.load(), [], 'the damaged file loads as no runs');
   s.save([{ id: 'dr-1', agent: 'a', subQuestions: ['x', 'y'] }]);
-  assert.equal(fs.readFileSync(`${file}.unreadable`, 'utf8'), '{ "runs": [ damaged', 'the damaged file is kept as it was');
-  s.save([]);
-  assert.equal(fs.readFileSync(`${file}.unreadable`, 'utf8'), '{ "runs": [ damaged', 'kept once, never overwritten');
+  const copies = copiesOf(file);
+  assert.equal(copies.length, 1);
+  assert.match(copies[0], COPY_RE);
+  assert.equal(fs.readFileSync(path.join(dir, copies[0]), 'utf8'), '{ "runs": [ damaged', 'the damaged file is kept as it was');
+  assert.equal(fs.existsSync(`${file}.unreadable`), false, 'the old fixed name is not used');
+  const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.deepEqual(saved.agentStarts, { '2026-11-25': { install: 0, agents: {}, unknown: true } });
+  assert.equal(saved.runs.length, 1);
+  assert.throws(() => s.agentStartsToday(), /today's count was lost/);
+  assert.throws(() => s.countAgentStart('a'), /today's count was lost/);
+  s.uncountAgentStart('a', '2026-11-25');
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).agentStarts['2026-11-25'].unknown, true, 'uncount leaves it unknown');
+  s.save([]);   // later saves keep it unknown and make no second copy
+  assert.equal(copiesOf(file).length, 1);
+  assert.throws(() => s.agentStartsToday());
+  // the next day is a fresh entry
+  clock += 24 * 3600 * 1000;
+  assert.deepEqual(s.agentStartsToday(), { date: '2026-11-26', install: 0, agents: {} });
+  assert.equal(s.countAgentStart('a').install, 1);
+  // the handler: an agent-started run is refused with the count text, a person's run still starts
+  // (the hub starts with the file already damaged: a store that has never read a good count)
+  let fresh = null;
+  const L = load({ runnerExtra: { agentStartsToday: () => (fresh || L.store).agentStartsToday(), countAgentStart: (g) => (fresh || L.store).countAgentStart(g), uncountAgentStart: (g, d) => (fresh || L.store).uncountAgentStart(g, d) } });
+  L.hubTurn('sam-agent'); await ownWork(L);
+  fs.writeFileSync(L.file, '{ damaged');
+  fresh = research.createRunStore({ file: L.file, now: () => new Date(2026, 10, 25, 12).getTime() });
+  fresh.save([]);   // the first save after the damage: today becomes unknown
+  assert.match(await startQ(L), COUNT_FAILED_RE);
+  assert.equal(L.started.length, 0);
+  L.turn('sam-agent');
+  L.prefs.setChoice('u_sam', 'always');
+  assert.match(await startQ(L), /^Started/, 'a person\'s own run still works');
+});
+
+test('R2: two incidents make two copies; a copy that cannot be made leaves the damaged file as it is and save throws', () => {
+  const now = () => new Date(2026, 10, 25, 12).getTime();
+  const dir = tmpDir();
+  const file = path.join(dir, 'r.json');
+  fs.writeFileSync(file, 'first damage');
+  research.createRunStore({ file, now }).save([]);
+  fs.writeFileSync(file, 'second damage');
+  research.createRunStore({ file, now }).save([]);   // a fresh process, damaged again (same second)
+  const copies = copiesOf(file);
+  assert.equal(copies.length, 2, 'never overwritten, never merged');
+  assert.deepEqual(copies.map((c) => fs.readFileSync(path.join(dir, c), 'utf8')).sort(), ['first damage', 'second damage']);
+  // the copy cannot be made: the directory is read-only (or the copy is injected to fail)
+  const d2 = tmpDir();
+  const f2 = path.join(d2, 'r.json');
+  fs.writeFileSync(f2, 'damaged and kept');
+  const s2 = research.createRunStore({ file: f2, now });
+  const real = fs.copyFileSync;
+  fs.copyFileSync = () => { const e = new Error('EACCES: permission denied'); e.code = 'EACCES'; throw e; };
+  try { assert.throws(() => s2.save([{ id: 'dr-1', agent: 'a', subQuestions: ['x', 'y'] }]), /EACCES/); } finally { fs.copyFileSync = real; }
+  assert.equal(fs.readFileSync(f2, 'utf8'), 'damaged and kept', 'nothing written over it');
+  assert.deepEqual(fs.readdirSync(d2), ['r.json']);
+  // a later save, with copying working again, goes through
+  s2.save([]);
+  assert.equal(copiesOf(f2).length, 1);
+});
+
+// R1 (review round 2): a run belongs to the agent that started it, not to whoever has its name now
+test('R1: a replaced agent (the stamp for the name changed): stop answers 404 and the run keeps running; isCurrentAgent says no', async () => {
+  let stamp = 'stamp-1';
+  const { runner, wakes } = makeRunner({ stampOf: () => stamp });
+  const r = startAuto(runner);
+  await tick();
+  assert.equal(runner.isCurrentAgent(r.id), true);
+  assert.equal(runner.isCurrentAgent(runner.get(r.id)), true);
+  assert.equal(runner.isCurrentAgent('dr-ffffffff'), false);
+  stamp = 'stamp-2';
+  assert.equal(runner.isCurrentAgent(r.id), false);
+  assert.equal(runner.isCurrentAgent(runner.get(r.id)), false);
+  const out = runner.stop(r.id, { by: 'u_new' });
+  assert.deepEqual(out, { ok: false, status: 404, error: 'No such research run.' });
+  assert.equal(runner.get(r.id).state, 'running');
+  assert.equal(runner.get(r.id).stoppedBy, undefined);
+  await tick();
+  assert.equal(wakes.length, 0, 'the new agent is not told');
+});
+
+test('R1: the handler side: status lists nothing, researchRunAgent is null, no progress event is published, for a run of a replaced agent', async () => {
+  let stamp = 'stamp-1';
+  const { runner } = makeRunner({ stampOf: () => stamp });
+  const r = startAuto(runner, { question: 'A private question?' });
+  await tick();
+  const L = load();
+  const published = [];
+  L.ctx.hubEvents = { events: { publish: (t, p) => published.push({ t, p }) } };
+  L.ctx.setRunner(runner);
+  assert.equal(L.ctx.statusFor('sam-agent').length, 1, 'the same agent sees its run');
+  assert.equal(L.ctx.runAgent(r.id), 'sam-agent');
+  L.ctx.onProgress(runner.get(r.id));
+  assert.equal(published.length, 1);
+  stamp = 'stamp-2';
+  assert.deepEqual(JSON.parse(JSON.stringify(L.ctx.statusFor('sam-agent'))), []);
+  assert.equal(L.ctx.runAgent(r.id), null);
+  L.ctx.onProgress(runner.get(r.id));
+  assert.equal(published.length, 1, 'nothing published for it');
+  const st = L.ctx.stopRun(r.id, 'u_new');
+  assert.equal(st.ok, false);
+  assert.equal(st.status, 404);
+  assert.equal(runner.get(r.id).state, 'running');
+});
+
+// R3 (review round 2): nothing stale starts a paid run after the model lookup
+const CHANGED_TEXT = 'The turn or its research choice changed while this run was being set up, so no run was started.';
+
+test('R3a: the turn\'s signal aborts while the model lookup is slow: no run, nothing counted', async () => {
+  const M = load();
+  M.hubTurn('sam-agent');
+  assert.match(await ownWork(M), GRANT);
+  // the lookup for the start waits on a gate
+  let open; const gate2 = new Promise((res) => { open = res; });
+  M.ctx.getAgentModel = async () => { await gate2; return 'claude-sdk/claude-test-big'; };
+  const ac = new AbortController();
+  const p = M.ctx.run('sam-agent', { on() {}, writableEnded: false }, { action: 'start', question: 'Which judge is best?', sub_questions: SUBS }, { signal: ac.signal });
+  await tick(); ac.abort(); open();
+  assert.equal(await p, CHANGED_TEXT);
+  assert.equal(M.started.length, 0);
+  assert.equal(M.ctx.capsToday().today.install, 0, 'nothing counted');
+});
+
+test('R3b: a newer offer supersedes the approval during the lookup: no run, and the newer approval is not cleared', async () => {
+  const L = load();
+  const tr = L.hubTurn('sam-agent');
+  await ownWork(L);
+  assert.ok(tr.researchApproved);
+  let open; const gate = new Promise((res) => { open = res; });
+  L.ctx.getAgentModel = async () => { await gate; return 'claude-sdk/claude-test-big'; };
+  const p = startQ(L);
+  await tick();
+  L.ctx.getAgentModel = async () => 'claude-sdk/claude-test-big';
+  assert.match(await ownWork(L, { question: 'A newer question?' }), GRANT);   // supersedes: new approval, new generation
+  const newer = tr.researchApproved;
+  assert.equal(newer.question, 'A newer question?');
+  open();
+  assert.equal(await p, CHANGED_TEXT);
+  assert.equal(L.started.length, 0);
+  assert.equal(L.ctx.capsToday().today.install, 0);
+  assert.equal(tr.researchApproved, newer, 'the newer approval stands');
+});
+
+test('R3c: the person\'s choice changes from always to ask during the lookup: no run', async () => {
+  const L = load();
+  L.prefs.setChoice('u_owner', 'always');
+  L.hubTurn('sam-agent');
+  let open; const gate = new Promise((res) => { open = res; });
+  L.ctx.getAgentModel = async () => { await gate; return 'claude-sdk/claude-test-big'; };
+  const p = startQ(L);
+  await tick();
+  L.prefs.setChoice('u_owner', 'ask');
+  open();
+  assert.equal(await p, CHANGED_TEXT);
+  assert.equal(L.started.length, 0);
+  // and with the choice kept, the same start goes through
+  const K = load();
+  K.prefs.setChoice('u_owner', 'always');
+  K.hubTurn('sam-agent');
+  assert.match(await startQ(K), /^Started/);
 });
 
 // S4: Always yes in a turn the person did not type

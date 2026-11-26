@@ -490,7 +490,7 @@ test('researchStatusFor: only the agent\'s active runs, in the contract shape; r
   const L = load({ globals: { hubEvents: { events: { publish: (t, p) => published.push({ t, p }) } } } });
   const mk = (over) => ({ id: 'dr-1', agent: 'sam-agent', level: 'thorough', state: 'running', stage: 'read', stageLabel: 'reading sources in full (1 of 3)', stageDone: 1, stageTotal: 3, startedAt: 111, ...over });
   const runs = [mk(), mk({ id: 'dr-2', state: 'delivering', stage: 'document', stageLabel: 'writing the document', stageDone: 1, stageTotal: 1 }), mk({ id: 'dr-3', state: 'delivered' }), mk({ id: 'dr-4', state: 'failed' }), mk({ id: 'dr-5', agent: 'other-agent' })];
-  L.ctx.setRunner({ list: () => runs, start() {}, recover() {} });
+  L.ctx.setRunner({ list: () => runs, start() {}, recover() {}, isCurrentAgent: () => true });   // changed: only runs of the agent now holding the name are listed
   const st = JSON.parse(JSON.stringify(L.ctx.statusFor('sam-agent')));
   assert.deepEqual(st.map((x) => x.id), ['dr-1', 'dr-2']);
   // changed: each run also says who decided it and what the notice may offer (a run with no startedBy is the person's)
