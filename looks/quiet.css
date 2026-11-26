@@ -3,6 +3,7 @@
  * clay for the small marks (tool steps, the lead tag), user messages in a soft green-tinted box,
  * agent replies as plain writing across the full width of the chat (a white card on the phone).
  * Loaded when <html data-look="quiet">. Every rule starts with html[data-look="quiet"].
+ * Two colour sets: light (today) and dark (html[data-look="quiet"].mm-dark, the blocks after the light ones).
  *
  * The colours, tints and layout below apply to html[data-look="quiet"]:not(.mm-simple); Simple mode (html.mm-simple)
  * keeps its own layout and takes this palette and the fonts (the Simple block at the end of the file).
@@ -57,6 +58,144 @@
  *   #FFFFFF on #A31D1D  7.63  halt banner
  *   #8F8470 on #FFFDF6  3.62  (UI input and dialog borders on a card)
  *   #8F8470 on #FAF7F0  3.44  (UI input borders on the page)
+ *
+ * Dark colour set (html.mm-dark: the page sets it when the account theme is dark; neither class, or html.mm-light,
+ * keeps the light set above exactly). Page #1B1814, card #24201A, input and code #131110, your message #263023.
+ * Text needs 4.5:1, a "(UI" mark needs 3:1. Colour fills are light tones carrying page-colour text (#1B1814).
+ *   #ECE5D8 on #1B1814  14.12  main text (`--text`) on the page
+ *   #ECE5D8 on #24201A  12.93  main text (`--text`) on a card or the sidebar
+ *   #ECE5D8 on #131110  15.03  main text (`--text`) on an input or code block
+ *   #ECE5D8 on #263023  10.96  main text (`--text`) on your message
+ *   #B8AD9B on #1B1814  7.99  secondary text (`--text-dim`) on the page
+ *   #B8AD9B on #24201A  7.32  secondary text (`--text-dim`) on a card or the sidebar
+ *   #B8AD9B on #131110  8.51  secondary text (`--text-dim`) on an input or code block
+ *   #B8AD9B on #263023  6.20  secondary text (`--text-dim`) on your message
+ *   #A69B88 on #1B1814  6.46  hints, labels, placeholders (`--text-tertiary`) on the page
+ *   #A69B88 on #24201A  5.91  hints, labels, placeholders (`--text-tertiary`) on a card or the sidebar
+ *   #A69B88 on #131110  6.87  hints, labels, placeholders (`--text-tertiary`) on an input or code block
+ *   #A69B88 on #263023  5.01  hints, labels, placeholders (`--text-tertiary`) on your message
+ *   #D2C9B8 on #1B1814  10.77  tool step text (`--step-text`) on the page
+ *   #D2C9B8 on #24201A  9.86  tool step text (`--step-text`) on a card or the sidebar
+ *   #D2C9B8 on #131110  11.46  tool step text (`--step-text`) on an input or code block
+ *   #D2C9B8 on #263023  8.36  tool step text (`--step-text`) on your message
+ *   #C5BBA9 on #1B1814  9.31  tool detail text (`--tool-text`) on the page
+ *   #C5BBA9 on #24201A  8.53  tool detail text (`--tool-text`) on a card or the sidebar
+ *   #C5BBA9 on #131110  9.91  tool detail text (`--tool-text`) on an input or code block
+ *   #C5BBA9 on #263023  7.23  tool detail text (`--tool-text`) on your message
+ *   #8FBC93 on #1B1814  8.24  accent text, unread mark (`--accent`) on the page
+ *   #8FBC93 on #24201A  7.55  accent text, unread mark (`--accent`) on a card or the sidebar
+ *   #A6CDA9 on #1B1814  10.04  accent hover, phone links (`--accent-hover`) on the page
+ *   #A6CDA9 on #24201A  9.20  accent hover, phone links (`--accent-hover`) on a card or the sidebar
+ *   #8CBDE6 on #1B1814  8.87  links to the outside (`--link`) on the page
+ *   #8CBDE6 on #24201A  8.13  links to the outside (`--link`) on a card or the sidebar
+ *   #56BA80 on #1B1814  7.35  OK text (`--success`) on the page
+ *   #56BA80 on #24201A  6.73  OK text (`--success`) on a card or the sidebar
+ *   #E2AC55 on #1B1814  8.65  warning text, working line (`--warning`) on the page
+ *   #E2AC55 on #24201A  7.92  warning text, working line (`--warning`) on a card or the sidebar
+ *   #EF7F72 on #1B1814  6.69  error text (`--error`) on the page
+ *   #EF7F72 on #24201A  6.13  error text (`--error`) on a card or the sidebar
+ *   #DC9A76 on #1B1814  7.52  tool-step labels (clay) (`--tool-accent`) on the page
+ *   #DC9A76 on #24201A  6.89  tool-step labels (clay) (`--tool-accent`) on a card or the sidebar
+ *   #BCA2DD on #1B1814  7.88  reasoning accent (plum) (`--reasoning`) on the page
+ *   #BCA2DD on #24201A  7.21  reasoning accent (plum) (`--reasoning`) on a card or the sidebar
+ *   #AC97EA on #1B1814  7.05  orchestration, consult (`--purple`) on the page
+ *   #AC97EA on #24201A  6.45  orchestration, consult (`--purple`) on a card or the sidebar
+ *   #88ABEB on #1B1814  7.64  waiting-for-answer line (`--blue`) on the page
+ *   #88ABEB on #24201A  7.00  waiting-for-answer line (`--blue`) on a card or the sidebar
+ *   #6DB1DD on #1B1814  7.57  background-work line, busy worker (`--status-info`) on the page
+ *   #6DB1DD on #24201A  6.93  background-work line, busy worker (`--status-info`) on a card or the sidebar
+ *   #EA9860 on #1B1814  7.71  slow tool timing (`--tool-slow-text`) on the page
+ *   #EA9860 on #24201A  7.06  slow tool timing (`--tool-slow-text`) on a card or the sidebar
+ *   #EE9058 on #1B1814  7.38  plan usage high (`--status-high`) on the page
+ *   #EE9058 on #24201A  6.76  plan usage high (`--status-high`) on a card or the sidebar
+ *   #D8B450 on #1B1814  8.90  plan usage caution (`--caution`) on the page
+ *   #D8B450 on #24201A  8.15  plan usage caution (`--caution`) on a card or the sidebar
+ *   #EE8DB6 on #1B1814  7.68  pink agent names, plan limit (`--alert`) on the page
+ *   #EE8DB6 on #24201A  7.03  pink agent names, plan limit (`--alert`) on a card or the sidebar
+ *   #F4A9C8 on #1B1814  9.56  alert chips (`--alert-text`) on the page
+ *   #F4A9C8 on #24201A  8.76  alert chips (`--alert-text`) on a card or the sidebar
+ *   #D49AE8 on #1B1814  8.07  violet agent names (`--agent-color-7-text`) on the page
+ *   #D49AE8 on #24201A  7.39  violet agent names (`--agent-color-7-text`) on a card or the sidebar
+ *   #8CBDE6 on #1B1814  8.87  job done (`--job-status-done`) on the page
+ *   #8CBDE6 on #24201A  8.13  job done (`--job-status-done`) on a card or the sidebar
+ *   #8FBC93 on #263023  6.40  accent text (`--accent`) on your message
+ *   #56BA80 on #263023  5.71  OK text (`--success`) on your message
+ *   #E6A583 on #342921  6.78  inline code (`--code-text`) on code tint on the page
+ *   #E6A583 on #3C3026  6.13  inline code (`--code-text`) on code tint on a card
+ *   #1B1814 on #8FBC93  8.24  send button, filled accent (`--on-accent`) on `--accent`
+ *   #1B1814 on #A6CDA9  10.04  filled accent, hover (`--on-accent`) on `--accent-hover`
+ *   #1B1814 on #56BA80  7.35  approve button (`--approval-actions-approve-text`) on `--success`
+ *   #1B1814 on #E2AC55  8.65  warning badge, interject (`--on-warning`) on `--warning`
+ *   #1B1814 on #EF7F72  6.69  error fill (`--on-error`) on `--error`
+ *   #1B1814 on #EF7F72  6.69  call and danger buttons (`--on-color-text`) on `--call-bg`
+ *   #1B1814 on #F59A8F  8.34  call button, hover (`--on-color-text`) on `--call-bg-hover`
+ *   #1B1814 on #88ABEB  7.64  question dot '?' (`--on-color-text`) on `--blue`
+ *   #1B1814 on #AC97EA  7.05  purple fill (`--on-color-text`) on `--purple`
+ *   #1B1814 on #6DB1DD  7.57  busy worker fill (`--on-accent`) on `--worker-busy`
+ *   #1B1814 on #56BA80  7.35  voice: listening (`--on-voice-listening`) on `--voice-listening`
+ *   #1B1814 on #ECE5D8  14.12  voice: ready (`--on-voice-ready`) on `--voice-ready`
+ *   #1B1814 on #5C9FC2  6.06  info banner (`--on-color-text`) on `--banner-info-bg`
+ *   #1B1814 on #B99B58  6.65  backup banner (`--on-color-text`) on `--banner-backup-bg`
+ *   #1B1814 on #D4675B  4.96  critical banner (`--on-color-text`) on `--banner-critical-bg`
+ *   #1B1814 on #D4675B  4.96  health notice (`--on-health-notice`) on `--health-notice-bg`
+ *   #1B1814 on #CB9242  6.51  pending banner (`--on-color-text`) on `--banner-pending-bg`
+ *   #1B1814 on #CB9242  6.51  pacing bar (`--on-pacing`) on `--pacing-bar-bg`
+ *   #1B1814 on #C08737  5.70  pacing bar, second stop (`--on-pacing`) on `--pacing-bar-bg-2`
+ *   #1B1814 on #C5804F  5.54  setup banner (`--on-color-text`) on `--banner-setup-bg`
+ *   #1B1814 on #BFA646  7.38  warning banner (`--on-color-text`) on `--banner-warn-bg`
+ *   #1B1814 on #DB5F54  4.87  halt banner (`--on-color-text`) on `--halt-banner-bg`
+ *   #2A2620 on #F0A04B  7.04  orange tag (`--agent-btn-cyber-tag-text`) on `--agent-btn-cyber-tag-bg`
+ *   #1B1814 on #ECE5D8  14.12  toast (page colour on ink) (`--bg-dark`) on `--text`
+ *   #ECE5D8 on #20251D  12.48  system message (`--text`) on msg-system-bg on the page
+ *   #ECE5D8 on #29211B  12.63  tool step body (`--text`) on tool-bg on the page
+ *   #DC9A76 on #29211B  6.72  tool-step label on its wash (`--tool-accent`) on tool-bg on the page
+ *   #BCA2DD on #282324  6.90  reasoning label on its wash (`--reasoning`) on rsn-bg on the page
+ *   #E2AC55 on #463925  5.48  working chip (`--warning`) on working-chip-bg on the card
+ *   #E2AC55 on #423623  5.76  agents-working chip (`--warning`) on agents-working-bg on the card
+ *   #F4A9C8 on #3E2E2E  6.95  alert chip (`--alert-text`) on workers-btn-alert-bg on the card
+ *   #ECE5D8 on #5F4D1A  6.54  highlighted text (`--text`) on mark-bg on the page
+ *   #ECE5D8 on #32342A  10.10  selected agent row (`--text`) on agent-btn-active-bg on the card
+ *   #B8AD9B on #32342A  5.72  selected agent row, second line (`--text-dim`) on agent-btn-active-bg on the card
+ *   #A6CDA9 on #35392D  6.72  update chip (`--update-chip-text`) on update-chip-bg on the card
+ *   #ECE5D8 on #38342D  9.88  hovered row (`--text`) on hover-tint-strong on the card
+ *   #EF7F72 on #30221D  5.79  failed notice (`--system-notice-notice-failed-text`) on system-notice-notice-failed-bg on the page
+ *   #F28C80 on #442F28  5.25  mic, recording (`--input-area-mic-btn-rec-text`) on input-area-mic-btn-rec-bg on the card
+ *   #ECE5D8 on #373C30  9.06  selected answer option (`--text`) on question-option-selected-bg on the card
+ *   #56BA80 on #20251D  6.50  token usage label (`--token-usage-tu-label-text`) on token-usage-bg on the page
+ *   #8C8270 on #1B1814  4.67  input and dialog borders, the free dot (`--border-strong`) on the page  (UI, needs 3)
+ *   #8C8270 on #24201A  4.27  input and dialog borders, the free dot (`--border-strong`) on a card or the sidebar  (UI, needs 3)
+ *   #8C8270 on #131110  4.97  input and dialog borders, the free dot (`--border-strong`) on an input or code block  (UI, needs 3)
+ *   #948A78 on #1B1814  5.19  form field edge (`--field-border`) on the page  (UI, needs 3)
+ *   #948A78 on #24201A  4.76  form field edge (`--field-border`) on a card or the sidebar  (UI, needs 3)
+ *   #948A78 on #131110  5.53  form field edge (`--field-border`) on an input or code block  (UI, needs 3)
+ *   #E2AC55 on #1B1814  8.65  working dot (`--warning`) on the page  (UI, needs 3)
+ *   #E2AC55 on #24201A  7.92  working dot (`--warning`) on a card or the sidebar  (UI, needs 3)
+ *   #88ABEB on #1B1814  7.64  waiting-for-answer dot (`--blue`) on the page  (UI, needs 3)
+ *   #88ABEB on #24201A  7.00  waiting-for-answer dot (`--blue`) on a card or the sidebar  (UI, needs 3)
+ *   #6DB1DD on #1B1814  7.57  background-work ring (`--bg-work-ring`) on the page  (UI, needs 3)
+ *   #6DB1DD on #24201A  6.93  background-work ring (`--bg-work-ring`) on a card or the sidebar  (UI, needs 3)
+ *   #8FBC93 on #1B1814  8.24  unread mark (`--accent`) on the page  (UI, needs 3)
+ *   #8FBC93 on #24201A  7.55  unread mark (`--accent`) on a card or the sidebar  (UI, needs 3)
+ *   #56BA80 on #1B1814  7.35  free dot on an open tab (`--success`) on the page  (UI, needs 3)
+ *   #56BA80 on #24201A  6.73  free dot on an open tab (`--success`) on a card or the sidebar  (UI, needs 3)
+ *   #EF7F72 on #1B1814  6.69  error mark (`--error`) on the page  (UI, needs 3)
+ *   #EF7F72 on #24201A  6.13  error mark (`--error`) on a card or the sidebar  (UI, needs 3)
+ *   #7D7362 on #1B1814  3.79  switch, off track (`--toggle-slider-bg`) on the page  (UI, needs 3)
+ *   #7D7362 on #24201A  3.47  switch, off track (`--toggle-slider-bg`) on a card or the sidebar  (UI, needs 3)
+ *   #8FBC93 on #1B1814  8.24  switch, on track (`--toggle-on-bg`) on the page  (UI, needs 3)
+ *   #8FBC93 on #24201A  7.55  switch, on track (`--toggle-on-bg`) on a card or the sidebar  (UI, needs 3)
+ *   #E8675B on #1B1814  5.49  recording dot (`--mic-rec`) on the page  (UI, needs 3)
+ *   #E8675B on #24201A  5.03  recording dot (`--mic-rec`) on a card or the sidebar  (UI, needs 3)
+ *   #5BAF78 on #1B1814  6.61  meter, OK (`--meter-ok`) on the page  (UI, needs 3)
+ *   #5BAF78 on #24201A  6.05  meter, OK (`--meter-ok`) on a card or the sidebar  (UI, needs 3)
+ *   #D9AA2A on #1B1814  8.20  meter, warning (`--meter-warn`) on the page  (UI, needs 3)
+ *   #D9AA2A on #24201A  7.51  meter, warning (`--meter-warn`) on a card or the sidebar  (UI, needs 3)
+ *   #7FA6DA on #1B1814  7.05  paused tab dot (`--chat-tab-status-paused-bg`) on the page  (UI, needs 3)
+ *   #7FA6DA on #24201A  6.46  paused tab dot (`--chat-tab-status-paused-bg`) on a card or the sidebar  (UI, needs 3)
+ *   #1B1814 on #7D7362  3.79  switch knob (`--toggle-knob`) on off track  (UI, needs 3)
+ *   #1B1814 on #8FBC93  8.24  switch knob (`--toggle-knob`) on on track  (UI, needs 3)
+ *   #729373 on #1B1814  5.17  focus ring (`--focus-ring`) on the page  (UI, needs 3)
+ *   #749575 on #24201A  4.86  focus ring (`--focus-ring`) on a card or the sidebar  (UI, needs 3)
  */
 
 /* ---------- Fonts: the same in the normal view and in Simple mode ---------- */
@@ -469,6 +608,383 @@ html[data-look="quiet"]:not(.mm-simple) {
   --tiger: #A0480F;
 }
 
+/* ---------- Dark colour set (normal view): html.mm-dark, set by the page when the account theme is dark ---------- */
+html[data-look="quiet"].mm-dark:not(.mm-simple) {
+  color-scheme: dark;
+  /* surfaces */
+  --bg-dark: #1B1814;
+  --bg-card: #24201A;
+  --bg-input: #131110;
+  --radius: 8px;
+  --chat-max-width: none;
+  --chat-pad-x: clamp(16px, 3vw, 40px);
+  --sidebar-bg: var(--bg-card);
+  --active-group-active-count-bg: #263023;
+  --agent-btn-active-bg: rgba(143,188,147,0.13);
+  --agent-btn-hover-bg: rgba(143,188,147,0.08);
+  --agent-btn-in-group-bg: rgba(188,162,221,0.09);
+  --agent-btn-is-summarizer-bg: rgba(109,177,221,0.09);
+  --agent-btn-no-model-bg: rgba(239,127,114,0.12);
+  --agents-working-bg: rgba(226,172,85,0.16);
+  --chat-actions-button-active-bg: rgba(239,127,114,0.16);
+  --chat-tab-active-bg: rgba(143,188,147,0.13);
+  --chat-tab-orchestration-active-bg: rgba(188,162,221,0.21);
+  --hub-toast-bg: rgba(36,32,26,0.98);
+  --input-area-autonomous-bg: rgba(188,162,221,0.07);
+  --mode-toggle-mt-track-bg: #7D7362;
+  --orch-msg-error-bg: rgba(239,127,114,0.09);
+  --orch-msg-instruction-bg: rgba(226,172,85,0.09);
+  --panel-bg: #24201A;
+  --question-option-selected-bg: rgba(143,188,147,0.18);
+  --toggle-slider-bg: #7D7362;
+  --brand-violet: #8FBC93;
+  --simple-accent-hover: #A6CDA9;
+  --simple-raised-bg: #24201A;
+  --simple-side-bg: #131110;
+  --simple-surface: #24201A;
+  --context-bar-bg: #131110;
+  --dialog-bg: #24201A;
+  --qr-bg: #FFFFFF;
+  --toggle-knob: #1B1814;
+  --visual-bg: #24201A;
+  /* text */
+  --text: #ECE5D8;
+  --text-dim: #B8AD9B;
+  --text-tertiary: #A69B88;
+  --agent-color-2-text: #EE8DB6;
+  --agent-color-7-text: #D49AE8;
+  --agent-group-title-hover-text: #B5D8B8;
+  --model-accent-text: #8FBC93;
+  --approval-actions-approve-text: #1B1814;
+  --auto-head-text: #C5BBA9;
+  --auto-time-text: #A69B88;
+  --on-color-text: #1B1814;
+  --on-light-text: #1B1814;
+  --simple-modal-sm-out-text: #EF7F72;
+  --simple-modal-sm-out-text-2: #EF7F72;
+  --simple-muted-text: #A69B88;
+  --ok-text: #56BA80;
+  --danger-text-fallback: #EF7F72;
+  --dialog-text: #ECE5D8;
+  --model-offline-text: #E2AC55;
+  --text-muted-alt: #B8AD9B;
+  --alert-soft-text: #F4A9C8;
+  --alert-text: #F4A9C8;
+  --chat-plan-hot-text: #EE9058;
+  --feed-head-text: #8FBC93;
+  --iconbtn-stop-remote-text: #EF7F72;
+  --on-accent: #1B1814;
+  --on-error: #1B1814;
+  --on-health-notice: #1B1814;
+  --on-pacing: #1B1814;
+  --on-warning: #1B1814;
+  /* accents and status */
+  --accent: #8FBC93;
+  --accent-hover: #A6CDA9;
+  --success: #56BA80;
+  --warning: #E2AC55;
+  --error: #EF7F72;
+  --purple: #AC97EA;
+  --blue: #88ABEB;
+  --accent-edge: rgba(220,154,118,0.75);
+  --accent-tint-10: rgba(143,188,147,0.10);
+  --accent-tint-14: rgba(143,188,147,0.18);
+  --alert: #EE8DB6;
+  --button-opt-selected-bg: rgba(143,188,147,0.21);
+  --caution: #D8B450;
+  --consult: #AC97EA;
+  --error-strong: #EF7F72;
+  --iconbtn-stop-remote-border: rgba(239,127,114,0.55);
+  --notice-grey: #A69B88;
+  --simple-interject-bg: #E2AC55;
+  --toggle-on-bg: #8FBC93;
+  /* borders, separators and tints */
+  --border: #353026;
+  --border-strong: #8C8270;
+  --agent-btn-model-offline-bg: rgba(226,172,85,0.12);
+  --chat-view-btn-border: #C98560;
+  --hover-tint: rgba(236,229,216,0.07);
+  --hover-tint-strong: rgba(236,229,216,0.10);
+  --line-tint: rgba(184,173,155,0.33);
+  --line-tint-mid: rgba(184,173,155,0.31);
+  --line-tint-soft: rgba(184,173,155,0.25);
+  --line-tint-strong: rgba(184,173,155,0.37);
+  --separator-tint: rgba(184,173,155,0.21);
+  --simple-border: #353026;
+  --tint-faint: rgba(236,229,216,0.05);
+  --tint-faintest: rgba(236,229,216,0.04);
+  --dialog-border: #8C8270;
+  --dialog-row-border: #353026;
+  --field-border: #948A78;
+  --uc-btn-border: rgba(184,173,155,0.40);
+  --auto-divider: rgba(184,173,155,0.30);
+  --ij-seg-bg: rgba(184,173,155,0.16);
+  /* chat messages */
+  --msg-agent-text: var(--text);
+  --msg-agent-bg: transparent;
+  --msg-agent-border: transparent;
+  --msg-synthesis-bg: rgba(109,177,221,0.07);
+  --msg-system-bg: rgba(86,186,128,0.08);
+  --msg-user-bg: #263023;
+  --msg-user-text: #ECE5D8;
+  --feed-bg: rgba(220,154,118,0.09);
+  --mark-bg: rgba(240,190,40,0.32);
+  --working-chip-bg: rgba(226,172,85,0.18);
+  /* tool steps, reasoning and activity (clay for tools, plum for reasoning) */
+  --tr-hover-bg: rgba(143,188,147,0.07);
+  --compaction-line-bg: rgba(226,172,85,0.08);
+  --focus-ring: rgba(143,188,147,0.75);
+  --kf-thinking-glow-bg: rgba(188,162,221,0.20);
+  --kf-thinking-glow-bg-2: rgba(226,172,85,0.20);
+  --kf-thinking-glow-bg-3: rgba(188,162,221,0.26);
+  --kf-thinking-glow-bg-4: rgba(226,172,85,0.26);
+  --live-activity-bg: rgba(143,188,147,0.09);
+  --live-activity-border: rgba(143,188,147,0.30);
+  --live-activity-phase-reasoning-bg: rgba(188,162,221,0.10);
+  --live-activity-phase-reasoning-border: rgba(188,162,221,0.33);
+  --reason-stream-bg: rgba(188,162,221,0.07);
+  --reason-stream-bg-2: rgba(188,162,221,0.04);
+  --reason-stream-border: rgba(188,162,221,0.30);
+  --reason-stream-border-2: rgba(188,162,221,0.60);
+  --reason-stream-border-3: rgba(188,162,221,0.35);
+  --reason-stream-rs-full-hover-border: rgba(188,162,221,0.50);
+  --reason-stream-rs-grip-after-bg: rgba(188,162,221,0.40);
+  --reason-stream-rs-grip-border: rgba(188,162,221,0.18);
+  --reason-stream-rs-head-focus-visibl-ring: rgba(188,162,221,0.65);
+  --reason-stream-rs-head-hover-bg: rgba(188,162,221,0.10);
+  --reasoning-accent: #BCA2DD;
+  --reasoning: #BCA2DD;
+  --rs-grip-hover-after-bg: rgba(188,162,221,0.75);
+  --step-text: #D2C9B8;
+  --thinking-panel-bg: rgba(226,172,85,0.09);
+  --thinking-panel-border: rgba(226,172,85,0.35);
+  --token-usage-bg: rgba(86,186,128,0.08);
+  --token-usage-border: rgba(86,186,128,0.23);
+  --token-usage-text: #B8AD9B;
+  --token-usage-tu-label-text: #56BA80;
+  --tool-accent: #DC9A76;
+  --tool-bg: rgba(220,154,118,0.07);
+  --tool-bg-done: rgba(220,154,118,0.04);
+  --tool-border: rgba(220,154,118,0.30);
+  --tool-border-accent: rgba(220,154,118,0.80);
+  --tool-border-accent-done: rgba(220,154,118,0.45);
+  --tool-call-result-bg: rgba(184,173,155,0.09);
+  --tool-call-result-border: rgba(184,173,155,0.30);
+  --tool-call-spinner-border: rgba(184,173,155,0.35);
+  --tool-calls-container-step-text-border: rgba(184,173,155,0.23);
+  --tool-done-text: #56BA80;
+  --tool-elapsed-text: #E2AC55;
+  --tool-error-text: #EF7F72;
+  --tool-result-bg: rgba(188,162,221,0.05);
+  --tool-result-border: rgba(188,162,221,0.35);
+  --tool-slow-text: #EA9860;
+  --tool-stream-ts-fail-border: rgba(239,127,114,0.50);
+  --tool-stream-ts-grip-after-bg: rgba(220,154,118,0.40);
+  --tool-stream-ts-head-hover-bg: rgba(220,154,118,0.09);
+  --ts-grip-hover-after-bg: rgba(220,154,118,0.75);
+  --ts-sep-bg: rgba(220,154,118,0.18);
+  --ts-state-run-before-border: rgba(184,173,155,0.40);
+  --workers-btn-alert-bg: rgba(238,141,182,0.13);
+  --workers-btn-alert-text: #F4A9C8;
+  --workers-btn-busy-border: rgba(109,177,221,0.65);
+  --tool-name-text: #DC9A76;
+  --tool-text: #C5BBA9;
+  --tsn-bg: rgba(220,154,118,0.07);
+  --tsn-bg-2: rgba(220,154,118,0.04);
+  --tsn-border: rgba(220,154,118,0.33);
+  --tsn-border-2: rgba(220,154,118,0.35);
+  --tsn-fail-border: rgba(239,127,114,0.50);
+  --tsn-fail-text: #EF7F72;
+  --tsn-full-bg: rgba(220,154,118,0.21);
+  --tsn-grip-bg: rgba(220,154,118,0.45);
+  --tsn-sep-bg: rgba(220,154,118,0.21);
+  --tsn-state-text: #56BA80;
+  --tsn-time-text: #E2AC55;
+  --wk-tool-text: #C5BBA9;
+  --rsn-bg: rgba(188,162,221,0.08);
+  --rsn-bg-2: rgba(188,162,221,0.05);
+  --rsn-border: rgba(188,162,221,0.33);
+  --rsn-border-2: rgba(188,162,221,0.65);
+  --rsn-border-3: rgba(188,162,221,0.37);
+  --rsn-full-bg: rgba(188,162,221,0.21);
+  --rsn-grip-bg: rgba(188,162,221,0.45);
+  --rsn-grip-border: rgba(188,162,221,0.18);
+  /* code and links */
+  --code-bg: rgba(220,154,118,0.13);
+  --code-text: #E6A583;
+  --link: #8CBDE6;
+  /* overlays and shadows */
+  --keyframes-mic-pulse-shadow: rgba(239,127,114,0.35);
+  --simple-call-live-shadow: rgba(239,127,114,0.40);
+  --overlay-bg: rgba(0,0,0,0.65);
+  --overlay-bg-dim: rgba(0,0,0,0.50);
+  --overlay-bg-image: rgba(0,0,0,0.90);
+  --overlay-bg-question: rgba(0,0,0,0.65);
+  --overlay-bg-reasoning: rgba(0,0,0,0.60);
+  --overlay-bg-discard: rgba(0,0,0,0.65);
+  --overlay-bg-soft: rgba(0,0,0,0.50);
+  --shadow-color: rgba(0,0,0,0.35);
+  --shadow-color-heavy: rgba(0,0,0,0.62);
+  --shadow-color-menu: rgba(0,0,0,0.44);
+  --shadow-color-pop: rgba(0,0,0,0.48);
+  --shadow-color-simple: rgba(0,0,0,0.31);
+  --shadow-color-simple-soft: rgba(0,0,0,0.22);
+  --shadow-color-soft: rgba(0,0,0,0.11);
+  --shadow-menu: rgba(0,0,0,0.48);
+  --shadow-sheet: rgba(0,0,0,0.62);
+  --workers-btn-busy-wb-dot-shadow: rgba(109,177,221,0.35);
+  --workers-btn-flash-shadow: rgba(109,177,221,0.50);
+  --mt-knob-shadow: rgba(0,0,0,0.66);
+  --simple-call-btn-in-call-shadow: rgba(239,127,114,0.40);
+  --simple-effort-sheet-shadow: rgba(0,0,0,0.33);
+  --wk-detail-bg: rgba(236,229,216,0.07);
+  /* pills, badges, notices and status */
+  --bk-modal-bk-info-bg: rgba(109,177,221,0.09);
+  --gs-ok-bg: rgba(86,186,128,0.12);
+  --st-btn-bk-danger-bg: #EF7F72;
+  --st-btn-bk-danger-hover-bg: #F59A8F;
+  --wh-item-open-bg: rgba(143,188,147,0.08);
+  --worker-tabs-bar-chat-tab-active-bg: rgba(143,188,147,0.18);
+  --worker-tabs-bar-chat-tab-bg: rgba(143,188,147,0.07);
+  --bk-modal-bk-danger-title-text: #F28C80;
+  --wh-text-wh-error-text: #F4A9C8;
+  --status-info: #6DB1DD;
+  --bk-modal-bk-info-border: rgba(109,177,221,0.40);
+  --bk-modal-bk-restore-border: rgba(239,127,114,0.55);
+  --dream-modal-border: rgba(188,162,221,0.35);
+  --gs-blocker-border: rgba(239,127,114,0.35);
+  --gs-ok-border: rgba(86,186,128,0.35);
+  --hub-update-card-border: rgba(143,188,147,0.60);
+  --hub-update-card-sec-border: rgba(216,180,80,0.80);
+  --hub-update-card-uc-primary-border: #8FBC93;
+  --wm-stop-border: rgba(238,141,182,0.60);
+  --worker-tabs-bar-chat-tab-border: rgba(143,188,147,0.35);
+  --agent-btn-cyber-tag-bg: #F0A04B;
+  --agent-btn-cyber-tag-text: #2A2620;
+  --agent-btn-lead-badge-filter: rgba(220,154,118,0.45);
+  --lead-badge-filter: rgba(220,154,118,0.45);
+  --auto-notice-text: #A69B88;
+  --bk-strip-bk-bad-bg: rgba(239,127,114,0.10);
+  --bk-strip-bk-bad-border: rgba(239,127,114,0.55);
+  --bk-strip-bk-ok-bg: rgba(86,186,128,0.09);
+  --bk-strip-bk-ok-border: rgba(86,186,128,0.45);
+  --bk-strip-bk-warn-bg: rgba(226,172,85,0.10);
+  --bk-strip-bk-warn-border: rgba(226,172,85,0.50);
+  --bk-tag-bk-tag-warn-border: rgba(226,172,85,0.60);
+  --call-bg: #EF7F72;
+  --call-bg-hover: #F59A8F;
+  --chat-actions-plan-badge-hot-border: rgba(238,144,88,0.60);
+  --chat-actions-plan-badge-warn-border: rgba(216,180,80,0.55);
+  --chat-tab-status-paused-bg: #7FA6DA;
+  --credit-meter-hot-bg: rgba(238,141,182,0.13);
+  --credit-meter-warn-bg: rgba(216,180,80,0.13);
+  --cyber-tag-billing-api-bg: rgba(238,144,88,0.18);
+  --status-high: #EE9058;
+  --handoff-cards-ho-pill-ho-done-border: #56BA80;
+  --handoff-cards-ho-pill-ho-failed-border: #EF7F72;
+  --input-area-mic-btn-rec-bg: rgba(239,127,114,0.16);
+  --input-area-mic-btn-rec-text: #F28C80;
+  --mic-btn-rec-hover-bg: rgba(239,127,114,0.25);
+  --simple-call-live-bg: #EF7F72;
+  --meter-warn: #D9AA2A;
+  --meter-ok: #5BAF78;
+  --mic-rec: #E8675B;
+  --voice-listening: #56BA80;
+  --on-voice-listening: #1B1814;
+  --voice-ready: #ECE5D8;
+  --on-voice-ready: #1B1814;
+  --more-btn-more-badge-bg: rgba(143,188,147,0.21);
+  --more-btn-more-badge-border: rgba(143,188,147,0.50);
+  --plan-warn-border: rgba(216,180,80,0.40);
+  --plan-warn-hot-border: rgba(238,141,182,0.45);
+  --recall-panel-mark-bg: rgba(240,190,40,0.32);
+  --security-modal-sec-badge-on-bg: rgba(86,186,128,0.18);
+  --status-hot: #EE8DB6;
+  --status-ok: #56BA80;
+  --status-warn: #D8B450;
+  --system-notice-bg: rgba(226,172,85,0.08);
+  --system-notice-border: rgba(226,172,85,0.27);
+  --system-notice-notice-complete-bg: rgba(86,186,128,0.10);
+  --system-notice-notice-complete-border: rgba(86,186,128,0.40);
+  --system-notice-notice-failed-bg: rgba(239,127,114,0.10);
+  --system-notice-notice-failed-border: rgba(239,127,114,0.40);
+  --system-notice-notice-failed-text: #EF7F72;
+  --system-notice-notice-round-bg: rgba(172,151,234,0.09);
+  --system-notice-notice-round-border: rgba(172,151,234,0.35);
+  --system-notice-notice-round-text: #AC97EA;
+  --system-notice-notice-tiger-team-bg: rgba(238,144,88,0.13);
+  --system-notice-notice-tiger-team-border: rgba(238,144,88,0.45);
+  --system-notice-notice-tiger-team-text: #EA9860;
+  --system-notice-notice-tiger-working-bg: rgba(226,172,85,0.09);
+  --system-notice-notice-tiger-working-border: rgba(226,172,85,0.35);
+  --system-notice-notice-tiger-working-text: #E2AC55;
+  --system-notice-notice-working-border: rgba(226,172,85,0.40);
+  --update-chip-bg: rgba(143,188,147,0.16);
+  --update-chip-sec-bg: rgba(216,180,80,0.16);
+  --update-chip-text: #A6CDA9;
+  --wh-chip-on-bg: rgba(143,188,147,0.18);
+  --update-card-sec-bg: rgba(216,180,80,0.10);
+  --update-card-border: rgba(143,188,147,0.60);
+  --update-card-sec-border: rgba(216,180,80,0.80);
+  --wk-chip-alert-bg: rgba(238,141,182,0.13);
+  --wk-chip-f-on-bg: rgba(109,177,221,0.18);
+  --wk-end-bad-border: rgba(238,141,182,0.50);
+  --wk-end-border: rgba(86,186,128,0.45);
+  --wk-end-text: #56BA80;
+  --wk-hitem-open-bg: rgba(109,177,221,0.09);
+  --wk-stop-border: rgba(238,141,182,0.65);
+  --worker-busy: #6DB1DD;
+  --bg-work-ring: #6DB1DD;
+  --worker-busy-glow: rgba(109,177,221,0.35);
+  --worker-done: #56BA80;
+  --health-notice-bg: #D4675B;
+  --pacing-bar-bg: #CB9242;
+  --pacing-bar-bg-2: #C08737;
+  --pill-failed: #EF7F72;
+  /* banners and dialogs (mid-tone fills carrying page-colour text) */
+  --banner-backup-bg: #B99B58;
+  --banner-critical-bg: #D4675B;
+  --banner-info-bg: #5C9FC2;
+  --banner-pending-bg: #CB9242;
+  --banner-setup-bg: #C5804F;
+  --banner-warn-bg: #BFA646;
+  --halt-banner-bg: #DB5F54;
+  --health-critical: #EF7F72;
+  --health-ok: #56BA80;
+  --health-unknown: #A69B88;
+  --health-warn: #E2AC55;
+  --interject-bg: rgba(184,173,155,0.16);
+  --interject-emergency: #EF7F72;
+  --interject-normal: #E2AC55;
+  --job-status-bad: #EF7F72;
+  --job-status-done: #8CBDE6;
+  --job-status-idle: #B8AD9B;
+  --job-status-run: #56BA80;
+  --job-status-warn: #E2AC55;
+  --notice-bar-bg: #131110;
+  --notice-bar-border: #353026;
+  --notice-bar-close: #B8AD9B;
+  --notice-bar-link: #A6CDA9;
+  --notice-bar-text: #ECE5D8;
+  --orch-banner-bg-1: #263023;
+  --orch-banner-bg-2: #131110;
+  --orch-banner-border: #44513D;
+  --orch-banner-title: #EE8DB6;
+  --usage-critical: #EF7F72;
+  --usage-critical-tint: #EF7F7233;
+  --usage-warn: #E2AC55;
+  --usage-warn-tint: #E2AC5533;
+  /* the small pages (help, welcome, tiger team) */
+  --bg: #1B1814;
+  --card: #24201A;
+  --soft: #131110;
+  --input: #131110;
+  --dim: #B8AD9B;
+  --warn: #E2AC55;
+  --bg-soft: #131110;
+  --tiger: #EA9860;
+}
+
 /* ---------- Layout (normal view) ---------- */
 
 /* Desktop: a calm page at the chat's full width. Your message is a soft tinted box; replies are plain writing, no bubble. */
@@ -578,6 +1094,94 @@ html[data-look="quiet"].mm-simple.mm-light {
   --hover-tint-strong: rgba(42,38,32,0.08); --line-tint: rgba(110,101,88,0.28);
 }
 
+/* ---- Dark: the two raw colours in the layout rules (your message's edge, desktop and phone); everything else there uses variables ---- */
+html[data-look="quiet"].mm-dark:not(.mm-simple) .message.user { border-color: #3D4A36; }
+html[data-look="quiet"].mm-dark:not(.mm-simple) .msg.user { border-color: #3D4A36; }
+
+/* ---- Simple mode, dark: the Simple block above is light for both of Simple's variants; this one takes the dark values ---- */
+/* ---------- Dark colour set (Simple mode) ---------- */
+html[data-look="quiet"].mm-simple.mm-dark {
+  color-scheme: dark;
+  --bg-dark: #1B1814;
+  --bg-card: #24201A;
+  --bg-input: #131110;
+  --bg-tertiary: #24201A;
+  --accent: #8FBC93;
+  --accent-hover: #A6CDA9;
+  --purple: #AC97EA;
+  --voice-listening: #56BA80;
+  --on-voice-listening: #1B1814;
+  --voice-ready: #ECE5D8;
+  --on-voice-ready: #1B1814;
+  --text: #ECE5D8;
+  --text-primary: #ECE5D8;
+  --text-dim: #B8AD9B;
+  --text-secondary: #B8AD9B;
+  --text-tertiary: #A69B88;
+  --border: #353026;
+  --border-strong: #8C8270;
+  --sm-page: #1B1814;
+  --sm-side: #24201A;
+  --sm-raised: #2C2720;
+  --sm-border: #353026;
+  --sm-text: #ECE5D8;
+  --sm-sec: #B8AD9B;
+  --sm-muted: #A69B88;
+  --sm-bubble: #24201A;
+  --sm-sel: color-mix(in srgb, #8FBC93 13%, transparent);
+  --sm-hover: color-mix(in srgb, #ECE5D8 5%, transparent);
+  --sm-shadow: 0 2px 12px rgba(0,0,0,.40);
+  --sm-user-bg: color-mix(in srgb, #8FBC93 12%, #131110);
+  --sm-user-text: #ECE5D8;
+  --sm-user-code: color-mix(in srgb, #ECE5D8 10%, transparent);
+  --sp-bubble: #24201A;
+  --sp-soft: #24201A;
+  --sp-shadow: 0 2px 12px rgba(0,0,0,.40);
+  --sp-me-bg: color-mix(in srgb, #8FBC93 12%, #131110);
+  --sp-me-text: #ECE5D8;
+  --sp-me-code: color-mix(in srgb, #ECE5D8 10%, transparent);
+  --brand-violet: #8FBC93;
+  --simple-interject-bg: #8FBC93;
+  --simple-accent-hover: #A6CDA9;
+  --simple-surface: #1B1814;
+  --simple-side-bg: #24201A;
+  --simple-raised-bg: #2C2720;
+  --simple-border: #353026;
+  --simple-muted-text: #A69B88;
+  --simple-modal-sm-out-text: #EF7F72;
+  --simple-modal-sm-out-text-2: #EF7F72;
+  --error: #EF7F72;
+  --field-border: #948A78;
+  --warning: #E2AC55;
+  --on-warning: #1B1814;
+  --success: #56BA80;
+  --blue: #88ABEB;
+  --consult: #AC97EA;
+  --toggle-on-bg: #8FBC93;
+  --hover-tint-strong: rgba(236,229,216,0.10);
+  --line-tint: rgba(184,173,155,0.33);
+  /* ink on filled controls: page-colour text on the sage accent (the light Simple block's white would be 2.15:1) */
+  --on-accent: #1B1814;
+  --on-color-text: #1B1814;
+  --on-light-text: #1B1814;
+  --on-error: #1B1814;
+  --on-health-notice: #1B1814;
+  --on-pacing: #1B1814;
+  --toggle-knob: #1B1814;
+  --approval-actions-approve-text: #1B1814;
+  /* banners: the same mid-tones as the main dark set, with page-colour text */
+  --banner-critical-bg: #D4675B;
+  --health-notice-bg: #D4675B;
+  --halt-banner-bg: #DB5F54;
+  --banner-info-bg: #5C9FC2;
+  --banner-setup-bg: #C5804F;
+  --banner-pending-bg: #CB9242;
+  --pacing-bar-bg: #CB9242;
+  --pacing-bar-bg-2: #C08737;
+  --banner-warn-bg: #BFA646;
+  --banner-backup-bg: #B99B58;
+}
+
 /* ---- a chat tab's close button reads on the light tab (Engineering fades it to 50%) ---- */
 html[data-look="quiet"]:not(.mm-simple) .chat-tab .close-tab { opacity: .8; }
 
@@ -597,3 +1201,10 @@ html[data-look="quiet"].mm-simple #teams-list .teams-dot.live-question,
 html[data-look="quiet"].mm-simple #agent-list .simple-more .sm-dot { animation-name: quiet-simple-dot; }
 html[data-look="quiet"].mm-simple .sa-dot.busy,
 html[data-look="quiet"].mm-simple .sa-dot.question { animation-name: quiet-simple-dot-shrink; }
+
+/* ---- Dark: the browser's own focus frame (a near-white 2 px ring) on the Settings dialog and the phone time-zone field takes the strong border colour; the admin's "Interface style for new members" select is styled like the other fields ---- */
+html[data-look="quiet"].mm-dark:not(.mm-simple) .st-modal,
+html[data-look="quiet"].mm-dark:not(.mm-simple) #prof-tz { outline-color: var(--border-strong); }
+html[data-look="quiet"].mm-dark:not(.mm-simple) #st-look-new {
+  background: var(--bg-input); color: var(--text); border: 1px solid var(--field-border); border-radius: 5px; padding: 5px 8px; font-size: 0.8rem;
+}

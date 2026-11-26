@@ -22,7 +22,7 @@
   .brand h1 { font-size: 15px; font-weight: 600; letter-spacing: .2px; }
   .steps { display: flex; gap: 6px; margin: 0 0 22px; font-size: 12px; color: var(--text-dim); }
   .steps span { flex: 1; padding: 6px 8px; border-radius: 6px; background: var(--bg-soft); text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .steps span.now { background: var(--accent); color: #fff; font-weight: 600; }
+  .steps span.now { background: var(--accent); color: var(--on-accent, #fff); font-weight: 600; }
   .steps span.done { color: var(--success); }
   h2 { font-size: 21px; font-weight: 600; margin-bottom: 6px; }
   h3 { font-size: 15px; font-weight: 600; margin: 0 0 4px; }
@@ -35,7 +35,7 @@
   input.code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 4px; text-align: center; font-size: 20px; }
   .hint { font-size: 12px; color: var(--text-dim); margin-top: 6px; }
   button { font: inherit; }
-  .primary { width: 100%; margin-top: 18px; padding: 12px; border: none; border-radius: 8px; background: var(--accent); color: #fff; font-size: 15px; font-weight: 600; cursor: pointer; }
+  .primary { width: 100%; margin-top: 18px; padding: 12px; border: none; border-radius: 8px; background: var(--accent); color: var(--on-accent, #fff); font-size: 15px; font-weight: 600; cursor: pointer; }
   .primary:hover { background: var(--accent-hover); } .primary:disabled { opacity: .5; cursor: default; }
   .secondary { padding: 9px 14px; border: 1px solid var(--border-strong); border-radius: 8px; background: transparent; color: var(--text); font-size: 14px; cursor: pointer; }
   .secondary:hover { border-color: var(--text-dim); } .secondary:disabled { opacity: .5; cursor: default; }

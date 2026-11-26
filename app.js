@@ -55,10 +55,12 @@
           try { if (window.hubSimple) { window.hubSimple.apply(window.hubMe); simpleBoot(); } } catch { /* Simple mode is optional: the page runs as before without it */ }
           try { if (typeof simpleTopSync === 'function') simpleTopSync(); } catch { /* the view switch is optional */ }
           try { if (window.HubLooks && window.hubMe) window.HubLooks.rememberDefault(window.hubMe.look, window.HubLooks.storageOf(window)); } catch { /* looks are optional: the page keeps the look it has */ }   // every load: no default clears the last person's
+          try { themeNoticeShow(); } catch { /* the one-time line is optional */ }
           // Signed in: recorded-call pieces the hub never acknowledged (a closed tab, a reload, a dead network) are sent now, one at a time (lib/ui-voice-call.js).
           if (window.hubMe && window.hubMe.user) setTimeout(() => { try { voiceRecResendPending((u, i) => fetch(u, i), { userId: window.hubMe.user.id }); } catch { /* the call page's code is not up yet */ } }, 0);
         }
         else if (r.status === 401) {
+          try { if (window.HubLooks) window.HubLooks.forgetTheme(window.HubLooks.storageOf(window)); } catch { /* blocked storage */ }   // no session: the last person's theme must not stay on this browser
           // No session. On a hub with no accounts at all (updated from before multi-user) /api/me is refused too, so
           // ask the public auth status; hubMe stays undefined so the rest of the page behaves as before.
           try { const a = await (await fetch('/api/auth/status', { credentials: 'include' })).json(); window.hubNoAccounts = a && a.setupNeeded === true && !a.signedIn; } catch {}
@@ -483,6 +485,8 @@
       overlay.querySelector('.sm-name').textContent = name;
       const paintSeg = () => { const cur = me.theme === 'light' || me.theme === 'dark' ? me.theme : 'auto'; overlay.querySelectorAll('.sm-seg button').forEach(b => b.classList.toggle('on', b.dataset.theme === cur)); };
       paintSeg();
+      const onTheme = () => { if (!overlay.isConnected) { document.removeEventListener('mm-theme-change', onTheme); return; } paintSeg(); };
+      document.addEventListener('mm-theme-change', onTheme);
       // Under a light style its own palette decides the colours: the buttons give way to one line (the stored theme is untouched).
       const paintFollow = () => {
         const label = simpleStyleLabel();
@@ -713,6 +717,7 @@
       menu.classList.toggle('open', open);
     }
     async function signOut() {
+      try { if (window.HubLooks) window.HubLooks.forgetTheme(window.HubLooks.storageOf(window)); } catch { /* blocked storage */ }
       try { await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' }); } catch (e) { /* go to login anyway */ }
       location.href = '/login';
     }
@@ -3347,6 +3352,12 @@
       const picker = document.createElement('div');
       host.appendChild(picker);
       lookPickerBuild(picker);
+      if (window.hubSimple && typeof window.hubSimple.themeControl === 'function' && window.hubMe && !document.documentElement.classList.contains('mm-simple')) {
+        // Appearance: Light / Dark / Match device, one theme for the account in both modes; right before Interface style.
+        const ap = window.hubSimple.themeControl(document, { me: () => window.hubMe, save: (v) => simplePrefs({ theme: v }), onError: (err) => hubToast(`Could not save: ${err.message}`), onChosen: () => { const n = document.getElementById('hub-theme-notice'); if (n) { n.remove(); layoutBanners(); } } });
+        ap.el.style.marginBottom = '12px';
+        host.insertBefore(ap.el, picker);   // right before Interface style
+      }
       if (!isHubAdmin()) return;
       const row = document.createElement('div');
       row.className = 'st-row';
@@ -4232,9 +4243,22 @@
     // (showMobileBanner), no AI provider yet, the setup checklist, health, security. Each one sits below the ones above it, so
     // none covers another (or its X), and the page moves down by their height (--banner-h), so they never cover the
     // header and its Settings button.
+    // The one-time Quiet Page line (lib/ui-simple.js themeNotice): normal mode, Quiet Page, a dark theme, not yet seen by this account.
+    // Seen is kept per account in localStorage (mm-theme-notice:<id>), like the voice hint. It sits in the banner stack, never near the composer.
+    function themeNoticeShow() {
+      const hs = window.hubSimple;
+      const old = document.getElementById('hub-theme-notice'); if (old) old.remove();
+      if (!hs || typeof hs.themeNotice !== 'function' || !window.hubMe) return;
+      const el = hs.themeNotice(document, { me: () => window.hubMe, save: (v) => simplePrefs({ theme: v }), onError: (err) => hubToast(`Could not save: ${err.message}`), onGone: () => layoutBanners() });
+      if (!el) return;
+      el.id = 'hub-theme-notice';
+      el.style.position = 'fixed'; el.style.left = '0'; el.style.right = '0'; el.style.top = '0'; el.style.zIndex = '9994';
+      document.body.prepend(el);
+      layoutBanners();
+    }
     function layoutBanners() {
       let top = 0;
-      for (const id of ['hub-phone-layout-notice', 'hub-no-accounts-notice', 'hub-recovery-notice', 'hub-setup-notice', 'hub-readiness-notice', 'hub-health-notice', 'hub-security-notice']) {
+      for (const id of ['hub-phone-layout-notice', 'hub-no-accounts-notice', 'hub-recovery-notice', 'hub-setup-notice', 'hub-theme-notice', 'hub-readiness-notice', 'hub-health-notice', 'hub-security-notice']) {
         const n = document.getElementById(id);
         if (!n) continue;
         n.style.top = `${top}px`;
@@ -24685,7 +24709,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         s.textContent = '.dlg-discard{margin:auto;max-width:min(92vw,380px);padding:20px;border:1px solid var(--border-strong,#333846);border-radius:12px;background:var(--bg-card,#14171F);color:var(--text,#F3F4F6);font:inherit}'
           + '.dlg-discard::backdrop{background:rgba(0,0,0,.55)}.dlg-discard h3{margin:0 0 8px;font-size:1.05rem}.dlg-discard p{margin:0 0 16px;color:var(--text-dim,#9CA3AF);line-height:1.4}'
           + '.dlg-discard-btns{display:flex;gap:8px;justify-content:flex-end}.dlg-discard-btns button{min-height:36px;padding:0 16px;border-radius:8px;border:1px solid var(--border-strong,#333846);background:var(--bg-input,#040507);color:var(--text,#F3F4F6);font:inherit;cursor:pointer}'
-          + '.dlg-discard-btns .dlg-discard-go{color:var(--error,#FF4C4C)}.dlg-discard-btns .dlg-discard-keep{background:var(--accent,#3D7BFF);border-color:var(--accent,#3D7BFF);color:#fff}'
+          + '.dlg-discard-btns .dlg-discard-go{color:var(--error,#FF4C4C)}.dlg-discard-btns .dlg-discard-keep{background:var(--accent,#3D7BFF);border-color:var(--accent,#3D7BFF);color:var(--on-accent,#fff)}'
           + '.dlg-discard-btns button:focus-visible{outline:2px solid var(--accent-hover,#5A93FF);outline-offset:2px}'
           + '.dlg-saving{margin-top:10px;font-size:.8rem;color:var(--warning,#F5A623)}';
         doc.head.appendChild(s);
