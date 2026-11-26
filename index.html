@@ -2337,13 +2337,15 @@
     .chat-actions .plan-badge:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
     .chat-actions .plan-badge[hidden] { display: none; }
     .chat-actions .plan-badge:hover { border-color: var(--accent); }
+    /* it can be pressed: a ▾ like the model and effort pickers beside it */
+    .chat-actions .plan-badge[aria-haspopup]::after { content: '\25BE'; margin-left: 5px; color: var(--accent); }
     .chat-actions .plan-badge.warn { color: var(--status-warn); border-color: var(--chat-actions-plan-badge-warn-border); }
     .chat-actions .plan-badge.hot { color: var(--status-high); border-color: var(--chat-actions-plan-badge-hot-border); }
     .chat-actions .plan-badge.refused { color: var(--status-hot); border-color: var(--wm-stop-border); }
     /* the popup under the Claude usage badge: what the badge shows */
     .plan-chooser { position: fixed; z-index: 1000; min-width: 260px; max-width: calc(100vw - 16px); background: var(--bg-card); color: var(--text); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 6px 20px var(--shadow-color-pop); padding: 4px; font-size: 0.82rem; }
     .plan-chooser .pc-list { display: flex; flex-direction: column; }
-    .plan-chooser .pc-row { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border-radius: 5px; color: var(--text-dim); cursor: pointer; white-space: nowrap; }
+    .plan-chooser .pc-row { display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 7px 8px; border-radius: 5px; color: var(--text); cursor: pointer; white-space: nowrap; box-sizing: border-box; }
     .plan-chooser .pc-row.current { color: var(--text); }
     .plan-chooser .pc-row:hover { border-color: var(--accent); color: var(--text); background: var(--bg-input); }
     .plan-chooser .pc-row:focus-visible, .plan-chooser .pc-subs:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }

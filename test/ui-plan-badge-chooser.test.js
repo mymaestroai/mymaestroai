@@ -395,9 +395,22 @@ test('CSS: the chooser uses the pages\' variables only (no raw colours) and has 
     const joined = lines.join('\n');
     assert.ok(!/#[0-9a-fA-F]{3,8}\b|rgba?\(|hsla?\(/.test(joined), f + ': no raw colours in the chooser rules: ' + joined);
     assert.ok(/focus-visible|\.pc-row:focus/.test(joined) && /outline/.test(joined), f + ': focus ring');
-    assert.ok(/var\(--bg-card\)/.test(joined) && /var\(--border\)/.test(joined) && /var\(--text-dim\)/.test(joined) && /var\(--accent\)/.test(joined), f + ': surface, border, text-dim, accent');
+    // every row is drawn in the text colour (the tick marks the choice, no dimmed rows that look switched off)
+    assert.ok(/var\(--bg-card\)/.test(joined) && /var\(--border\)/.test(joined) && /var\(--text\)/.test(joined) && /var\(--accent\)/.test(joined), f + ': surface, border, text, accent');
+    assert.ok(!/\.pc-row\s*\{[^}]*var\(--text-dim\)/.test(joined), f + ': rows are not dimmed');
   }
   assert.ok(/\.plan-chooser \.pc-row[^{]*\{[^}]*min-height:\s*36px/.test(read('mobile.html')), 'phone row min-height 36px');
+  // the phone badge's button reset (#chat-meta #chat-plan { color: inherit }) must not undo its warning colours: the
+  // coloured states carry the same weight and come after it; the badge shows a picker arrow and is 36 px tall to tap
+  const m = read('mobile.html');
+  const resetAt = m.indexOf('#chat-meta #chat-plan {');
+  for (const c of ['warn', 'hot', 'refused']) {
+    const at = m.indexOf('#chat-meta #chat-plan.' + c);
+    assert.ok(resetAt >= 0 && at > resetAt, 'phone ' + c + ' colour comes after the reset with the same weight');
+  }
+  assert.ok(/#chat-meta #chat-plan \{[^}]*min-height:\s*36px/.test(m), 'phone badge tap height 36px');
+  assert.ok(/#chat-plan\[aria-haspopup\]::after\s*\{[^}]*content:\s*'\\25BE'/.test(m), 'phone badge arrow');
+  assert.ok(/\.plan-badge\[aria-haspopup\]::after\s*\{[^}]*content:\s*'\\25BE'/.test(read('index.html')), 'desktop badge arrow');
   assert.ok(/#chat-plan\s*\{[^}]*background:\s*none/.test(read('mobile.html')) || /#chat-plan[^{]*\{[^}]*background:\s*none/.test(read('mobile.html')), 'phone button reset');
   assert.ok(/\.chat-actions \.plan-badge \{[^}]*background:\s*(none|transparent)/.test(read('index.html')), 'desktop button reset');
 });
