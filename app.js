@@ -7869,7 +7869,9 @@
       if (!agentName || !card || typeof card.open !== 'function') return false;
       try {
         const p = card.open(agentName, row ? { row } : {});
-        if (p && typeof p.then === 'function') p.then(ok => { if (ok === false) openAgentSettingsPopup(agentName); }, () => openAgentSettingsPopup(agentName));
+        // The old popup page is for admins; a member whose card will not open is told so, as on the phone.
+        const fallback = () => { if (isHubAdmin()) openAgentSettingsPopup(agentName); else hubToast('This agent\'s settings are not open to you.'); };
+        if (p && typeof p.then === 'function') p.then(ok => { if (ok === false) fallback(); }, fallback);
         return true;
       } catch { return false; }
     }
@@ -7881,42 +7883,54 @@
       const chat = pick && /^model-pick-/.test(pick.id || '') ? chats[pick.id.slice('model-pick-'.length)] : null;
       if (chat && chat.agent && !chat.isGroup) openAgentCard(chat.agent);
     });
-    // The desktop voice chip (shown only while voice is on for the install and the person is an admin): press switches this agent
-    // between its own voice and the same voice as all agents, the field the card's Voice row uses (agents[].voice, PATCH {voice}).
-    // The dots beside it are the last line, "All settings for <agent>…", opening the card at its Voice row.
-    const VOICE_CHIP_OWN = { voice: '', stt: 'local', tts: 'local' };
-    function voiceAgentOwn(agentName) { const a = (typeof AGENTS !== 'undefined' ? AGENTS : []).find(x => x && x.name === agentName); return !!(a && a.voice && typeof a.voice === 'object'); }
-    function voiceAgentChipPaint() {
+    // The desktop voice chip (shown only while voice is on for the install and the person is an admin) is an indicator of this agent's
+    // voice setting: "Voice: same as all" or "Voice: its own". "Its own" is the card's definition (hasOwnVoice in
+    // lib/ui-agent-card-basics.js, one place); pressing the chip opens the card at its Voice row, where the setting is changed.
+    // The dots beside it are the last line, "All settings for <agent>…", opening the card at the same row.
+    function voiceAgentOwn(agentName) {
+      const a = (typeof AGENTS !== 'undefined' ? AGENTS : []).find(x => x && x.name === agentName);
+      const basics = window.hubAgentCardBasics;
+      return !!(a && basics && typeof basics.hasOwnVoice === 'function' && basics.hasOwnVoice(a));
+    }
+    function voiceAgentChipPaint(onlyAgent) {
       let ready = false;
       try { ready = typeof voiceReady === 'function' && !!voiceReady(); } catch { ready = false; }
       for (const [chatId, chat] of Object.entries(chats)) {
         if (!chat || !chat.agent) continue;
+        if (onlyAgent && chat.agent !== onlyAgent) continue;
         const wrap = document.getElementById(`vagent-wrap-${chatId}`), btn = document.getElementById(`vagent-${chatId}`), dots = document.getElementById(`vagent-card-${chatId}`);
         if (!wrap || !btn) continue;
         const show = ready && isHubAdmin() && !!window.hubAgentCard;
         wrap.hidden = !show;
         const own = voiceAgentOwn(chat.agent);
-        btn.textContent = own ? 'Its own voice' : 'Same voice as all';
-        btn.setAttribute('aria-pressed', own ? 'true' : 'false');
-        btn.title = own ? 'This agent uses its own voice. Press to use the same voice as all agents.' : 'This agent uses the same voice as all agents. Press to give it its own voice.';
+        btn.textContent = own ? 'Voice: its own' : 'Voice: same as all';
+        btn.title = own ? 'This agent has its own voice. Press to change it on the agent card.' : 'This agent uses the same voice as all agents. Press to change it on the agent card.';
         if (dots) { dots.setAttribute('aria-label', agentCardLastLine(chat.agent)); dots.title = agentCardLastLine(chat.agent); }
       }
     }
-    async function voiceAgentChipToggle(chatId) {
-      const chat = chats[chatId];
-      if (!chat || !chat.agent) return;
-      const own = voiceAgentOwn(chat.agent);
-      try {
-        const r = await fetch(`/api/agents/${encodeURIComponent(chat.agent)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ voice: own ? null : { ...VOICE_CHIP_OWN } }) });
-        const d = await r.json().catch(() => ({}));
-        if (!r.ok || d.success === false) { hubToast(`Could not change the voice: ${d.error || d.detail || r.status}`); return; }
-        const a = (AGENTS || []).find(x => x && x.name === chat.agent);
-        if (a) { if (own) delete a.voice; else a.voice = { ...VOICE_CHIP_OWN }; }
-        voiceAgentChipPaint();
-      } catch (e) { hubToast(`Could not change the voice: ${e.message}`); }
+    function voiceAgentCardOpen(chatId) { const chat = chats[chatId]; if (chat && chat.agent) openAgentCard(chat.agent, 'OPT-0023'); }
+    // The model picker's last line says "All settings for <agent>…": put the agent's current name in it again.
+    function modelPickCardLineRefill(agentName) {
+      for (const [chatId, chat] of Object.entries(chats)) {
+        if (!chat || chat.agent !== agentName) continue;
+        const sel = document.getElementById(`model-pick-${chatId}`);
+        const opt = sel && sel.options ? [...sel.options].find(o => o.value === CARD_PICK) : null;
+        if (opt) opt.textContent = agentCardLastLine(chat.agent);
+      }
     }
-    function voiceAgentCardOpen(chatId) { const chat = chats[chatId]; if (chat && chat.agent) openAgentCard(chat.agent, 'OPT-0022'); }
-    agentCardSubscribe('agent_updated', () => { setTimeout(voiceAgentChipPaint, 600); });
+    // An agent_updated event repaints the chip and the picker's line for that agent only, once for a burst of events.
+    const voiceChipPending = new Set();
+    let voiceChipTimer = null;
+    agentCardSubscribe('agent_updated', (ev) => {
+      if (!ev || !ev.agent) return;
+      voiceChipPending.add(ev.agent);
+      if (voiceChipTimer) clearTimeout(voiceChipTimer);
+      voiceChipTimer = setTimeout(() => {
+        voiceChipTimer = null;
+        const names = [...voiceChipPending]; voiceChipPending.clear();
+        for (const n of names) { voiceAgentChipPaint(n); modelPickCardLineRefill(n); }
+      }, 600);
+    });
     // The agent row's "Settings", a new agent and a clone open the card; the old popup page only when the card is not there.
     function openAgentSettings(agentName, event, row) {
       if (event && event.stopPropagation) event.stopPropagation();
@@ -13167,7 +13181,7 @@
           </div>
           <input type="file" id="file-input-${chatId}" multiple style="display:none" onchange="handleFileSelect(event, '${chatId}')">
           <button class="attach-btn" onclick="document.getElementById('file-input-${chatId}').click()" title="Attach a file: images are sent with the message, other files are uploaded to your files and their path is added to the message" style="background:var(--bg-input); border:1px solid var(--border); padding:8px 10px; font-size:1rem; cursor:pointer;">📎</button>
-          <button type="button" onpointerdown="voiceMicPointer(false)" onpointerup="voiceMicPointer(true)" onclick="voiceMicToggle('${chatId}')" id="mic-${chatId}" class="mic-btn" style="display:none" aria-pressed="false" aria-label="${voiceMicIdleLabel()}" title="${hubEsc(voiceMicIdleTitle(chatId))}">${VOICE_MIC_SVG}</button><span class="mic-meter" id="mic-meter-${chatId}" style="display:none" aria-hidden="true"><i></i></span><span class="voice-extra" style="display:none"><span class="voice-agent-chip-wrap" id="vagent-wrap-${chatId}" hidden><button type="button" class="voice-agent-chip" id="vagent-${chatId}" onclick="voiceAgentChipToggle('${chatId}')" aria-pressed="false"></button><button type="button" class="voice-agent-card" id="vagent-card-${chatId}" onclick="voiceAgentCardOpen('${chatId}')">…</button></span><button type="button" class="voice-mode-chip" id="vmode-${chatId}" onclick="voiceModeToggle()" title="Talk mode: tap to switch" style="display:none">${voiceModeLabel()}</button><button type="button" class="voice-set-btn" id="vset-${chatId}" onclick="voicePopToggle('${chatId}')" aria-label="Voice settings" aria-expanded="false" title="Voice settings">${VOICE_LEVELS_SVG}</button><div class="voice-pop" id="voice-pop-${chatId}" role="dialog" aria-label="Voice settings" hidden></div></span>
+          <button type="button" onpointerdown="voiceMicPointer(false)" onpointerup="voiceMicPointer(true)" onclick="voiceMicToggle('${chatId}')" id="mic-${chatId}" class="mic-btn" style="display:none" aria-pressed="false" aria-label="${voiceMicIdleLabel()}" title="${hubEsc(voiceMicIdleTitle(chatId))}">${VOICE_MIC_SVG}</button><span class="mic-meter" id="mic-meter-${chatId}" style="display:none" aria-hidden="true"><i></i></span><span class="voice-extra" style="display:none"><span class="voice-agent-chip-wrap" id="vagent-wrap-${chatId}" hidden><button type="button" class="voice-agent-chip" id="vagent-${chatId}" onclick="voiceAgentCardOpen('${chatId}')"></button><button type="button" class="voice-agent-card" id="vagent-card-${chatId}" onclick="voiceAgentCardOpen('${chatId}')">…</button></span><button type="button" class="voice-mode-chip" id="vmode-${chatId}" onclick="voiceModeToggle()" title="Talk mode: tap to switch" style="display:none">${voiceModeLabel()}</button><button type="button" class="voice-set-btn" id="vset-${chatId}" onclick="voicePopToggle('${chatId}')" aria-label="Voice settings" aria-expanded="false" title="Voice settings">${VOICE_LEVELS_SVG}</button><div class="voice-pop" id="voice-pop-${chatId}" role="dialog" aria-label="Voice settings" hidden></div></span>
           <button onclick="toggleNotifyDone('${chatId}')" id="notify-${chatId}" class="notify-done-btn" style="display:none" aria-pressed="false" title="Get a notification on your phone when this reply is done">🔔 Notify me</button>
           <button onclick="sendSoloMessage('${chatId}')" id="send-${chatId}">Send</button>
         </div>

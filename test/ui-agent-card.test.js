@@ -116,6 +116,7 @@ function setup(over = {}) {
     if (url === '/api/agents' && method === 'GET') return resp(200, JSON.parse(JSON.stringify(state.agents)));
     const m = /^\/api\/agents\/([^/]+)$/.exec(url);
     if (m && method === 'PATCH') {
+      if (state.gate) await state.gate;   // a test holds a save in flight
       if (state.fail) return resp(400, { error: state.fail });
       const a = state.agents.find((x) => x.name === decodeURIComponent(m[1]));
       for (const [k, v] of Object.entries(body)) { if (v && typeof v === 'object' && !Array.isArray(v) && !Object.keys(v).length) delete a[k]; else a[k] = v; }
@@ -129,7 +130,7 @@ function setup(over = {}) {
   const helpCalls = [];
   const help = { open: (id, btn) => helpCalls.push({ id, btn }), isOpen: () => false };
   const timers = [];
-  const guard = { opened: [], closed_: [], open(el, o) { this.opened.push({ el, o }); }, closed(el) { this.closed_.push(el); } };
+  const guard = { opened: [], closed_: [], requests: [], open(el, o) { this.opened.push({ el, o }); }, closed(el) { this.closed_.push(el); }, requestClose(el, how) { this.requests.push({ el, how }); return 'confirm'; } };   // the real guard asks "Discard?" and the person may keep editing
   const stale = JSON.parse(JSON.stringify(state.agents));   // the page's own list is older than the hub's
   const card = C.createCard({
     doc, win, fetch, records: () => RECORDS, me: () => ('me' in over ? over.me : ADMIN), agentsList: () => stale, subscribe, help: over.noHelp ? null : help,
@@ -523,6 +524,129 @@ test('on the phone the card is a full-screen sheet registered with the page\'s d
   await d.card.open('harbor');
   assert.ok(!d.card.el().classList.contains('ac-sheet'));
   assert.strictEqual(d.guard.opened.length, 0, 'the desktop panel does not use the guard');
+});
+
+// ---- 7b. phase 3 round 1: instance-bound saves, one save at a time, drafts, phone Escape, focus -------------------------------
+test('a save started on one agent and a card switched to another meanwhile: every request and the completion go to the first agent only', async () => {
+  let release; const gate = new Promise((r) => { release = r; });
+  const rows = new Map([['OPT-0005', {
+    get: (a) => ({ value: a.blurb || '', display: a.blurb || '' }), control: { type: 'text' },
+    save: async (agent, value, ctx) => {
+      const a = await ctx.patch({ blurb: value });
+      await gate;
+      const b = await ctx.patch({ display: value + ' (2)' });   // a later request of the same save
+      await ctx.refresh();
+      return b.ok && a.ok ? { ok: true } : { ok: false, error: 'x' };
+    },
+  }]]);
+  const t = setup({ rows, firstRows: { role: ['OPT-0005'] } });
+  await t.card.open('harbor', { section: 'role' });
+  const input = all(rowOf(t.card.el(), 'OPT-0005'), 'input')[0];
+  input.value = 'New'; input.dispatch('change');
+  await flush();
+  const before = t.fetchCount();
+  assert.strictEqual(await t.card.open('tally', { section: 'role' }), true);   // the card moves to another agent
+  assert.strictEqual(t.card.state().name, 'tally');
+  release(); await flush();
+  const patches = t.calls.filter((c) => c.method === 'PATCH');
+  assert.deepStrictEqual(patches.map((c) => c.url), ['/api/agents/harbor', '/api/agents/harbor'], 'all requests of the save went to harbor');
+  assert.strictEqual(t.fetchCount(), before, 'the second card was not re-read for the first card\'s save');
+  assert.strictEqual(t.card.state().saving.size, 0);
+  assert.strictEqual(t.card.state().errors.size, 0, 'nothing was applied to the second card');
+  assert.strictEqual(all(t.card.el(), '.ac-err').length, 0);
+});
+
+test('a refresh while a text input has focus and typed text keeps the text and the focus; the row catches up after the save', async () => {
+  const saved = [];
+  const t = setup({ rows: TEXT_ROW(saved), firstRows: { role: ['OPT-0005'] } });
+  await t.card.open('harbor', { section: 'role' });
+  const input = all(rowOf(t.card.el(), 'OPT-0005'), 'input')[0];
+  input.focus(); input.value = 'half typed';
+  await t.card.refresh(); await flush();
+  const again = all(rowOf(t.card.el(), 'OPT-0005'), 'input')[0];
+  assert.strictEqual(again.value, 'half typed', 'the typed text stays');
+  assert.strictEqual(t.doc.activeElement, again, 'and so does the focus');
+  // typed but no longer focused: still kept until it is saved
+  t.doc.activeElement = null;
+  t.emit('agent_updated', { agent: 'harbor' }); await flush();
+  assert.strictEqual(all(rowOf(t.card.el(), 'OPT-0005'), 'input')[0].value, 'half typed');
+  // saving it shows the stored value again
+  all(rowOf(t.card.el(), 'OPT-0005'), 'input')[0].dispatch('change'); await flush();
+  assert.deepStrictEqual(saved, ['half typed']);
+  assert.strictEqual(all(rowOf(t.card.el(), 'OPT-0005'), 'input')[0].value, 'half typed', 'the stored value (the same here)');
+  assert.ok(!all(rowOf(t.card.el(), 'OPT-0005'), 'input')[0].disabled);
+  // an untouched row is redrawn from the hub as before
+  t.state.agents[1].blurb = 'From elsewhere';
+  await t.card.refresh(); await flush();
+  assert.strictEqual(all(rowOf(t.card.el(), 'OPT-0005'), 'input')[0].value, 'From elsewhere');
+});
+
+test('one save at a time per card: every control is disabled while it runs, a second change is blocked, and a whole-object body comes from a fresh read', async () => {
+  const t = setup({ firstRows: { memory: ['OPT-0040'], role: ['OPT-0005'] } });
+  await t.card.open('harbor', { section: 'memory' });
+  all(t.card.el(), '.ac-sec-head').find((h) => h.parentNode.getAttribute('data-sec') === 'role').click();
+  let release; t.state.gate = new Promise((r) => { release = r; });
+  const sel = all(rowOf(t.card.el(), 'OPT-0040'), 'select')[0];
+  sel.value = 'on'; sel.dispatch('change'); await flush();
+  const p = t.card.el();
+  const live = all(p, 'select').concat(all(p, 'input'));
+  assert.ok(live.length >= 2 && live.every((e) => e.disabled === true), 'every control is disabled');
+  const blurb = all(rowOf(p, 'OPT-0005'), 'input')[0];
+  blurb.value = 'second'; blurb.dispatch('change'); await flush();
+  assert.strictEqual(t.calls.filter((c) => c.method === 'PATCH').length, 1, 'no second save started');
+  t.state.gate = null; release(); await flush();
+  assert.ok(all(t.card.el(), 'select').concat(all(t.card.el(), 'input')).every((e) => !e.disabled), 'controls are back');
+  t.state.agents[1].compaction = { mode: 'off', at: 0.6 };   // changed elsewhere; the card has not heard yet
+  t.calls.length = 0;
+  const sel2 = all(rowOf(t.card.el(), 'OPT-0040'), 'select')[0];
+  sel2.value = 'assisted'; sel2.dispatch('change'); await flush();
+  assert.ok(t.calls.some((c) => c.method === 'GET' && c.url === '/api/agents'), 'a fresh read first');
+  assert.deepStrictEqual(t.calls.filter((c) => c.method === 'PATCH').map((c) => c.body), [{ compaction: { at: 0.6, mode: 'assisted' } }]);
+});
+
+test('phone: ×, Escape and Back belong to the dialog guard (its discard question); keeping the edit keeps the card; the card has no Escape listener of its own', async () => {
+  const t = setup({ phone: true });
+  await t.card.open('harbor');
+  const p = t.card.el();
+  all(p, '.ac-x')[0].click();
+  assert.deepStrictEqual(t.guard.requests.map((r) => [r.el, r.how]), [[p, 'close']], '× goes through requestClose');
+  assert.strictEqual(t.card.isOpen(), true, 'Keep editing: the card stays');
+  t.doc.dispatch('keydown', { key: 'Escape' });
+  p.dispatch('keydown', { key: 'Escape' });
+  assert.strictEqual(t.card.isOpen(), true, 'the card\'s own listener does not close it while the question is up');
+  assert.strictEqual(t.guard.requests.length, 1);
+  t.guard.opened[0].o.close();   // Discard
+  assert.strictEqual(t.card.isOpen(), false);
+});
+
+test('desktop: the card\'s own Escape ignores an event that was already handled and one that comes while another dialog is open', async () => {
+  const t = setup();
+  await t.card.open('harbor');
+  t.card.el().dispatch('keydown', { key: 'Escape', defaultPrevented: true });
+  assert.strictEqual(t.card.isOpen(), true, 'already handled');
+  const dlg = t.doc.createElement('dialog'); dlg.setAttribute('open', ''); t.doc.body.appendChild(dlg);
+  t.card.el().dispatch('keydown', { key: 'Escape' });
+  assert.strictEqual(t.card.isOpen(), true, 'another overlay is open');
+  t.doc.body.removeChild(dlg);
+  t.card.el().dispatch('keydown', { key: 'Escape' });
+  assert.strictEqual(t.card.isOpen(), false);
+});
+
+test('toggling a section or More puts the focus back on its header; the dead agent_renamed listener is gone', async () => {
+  const t = setup();
+  await t.card.open('harbor');
+  assert.strictEqual(t.handlers.agent_renamed, undefined, 'no agent_renamed listener');
+  assert.strictEqual(t.handlers.agent_updated.length, 1);
+  const head = () => all(t.card.el(), '.ac-sec-head').find((h) => h.parentNode.getAttribute('data-sec') === 'basics');
+  head().click();   // closes Basics
+  assert.ok(t.doc.activeElement === head(), 'the section header has the focus again');
+  assert.ok(t.doc.activeElement.isConnected);
+  head().click();
+  assert.ok(t.doc.activeElement === head(), 'opened again: the header has the focus');
+  const more = () => all(t.card.el(), '.ac-more-head')[0];
+  more().click();
+  assert.ok(t.doc.activeElement === more(), 'More keeps the focus');
+  assert.strictEqual(more().getAttribute('aria-expanded'), 'true');
 });
 
 // ---- 8. the two sample rows ---------------------------------------------------------------------------------------------

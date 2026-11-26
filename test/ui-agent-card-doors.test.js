@@ -52,7 +52,7 @@ function desktop(extra = {}) {
   const fetches = [];
   const chats = extra.chats || { 'chat-1': { id: 'chat-1', agent: 'sam', display: 'Sam' } };
   const sandbox = {
-    window: { hubAgentCard: card, open: (...a) => { popups.push(a); return null; }, hubMe: extra.me || { isAdmin: true } },
+    window: { hubAgentCard: card, hubAgentCardBasics: require('../lib/ui-agent-card-basics.js'), open: (...a) => { popups.push(a); return null; }, hubMe: extra.me || { isAdmin: true } },
     document: {
       addEventListener: (t, fn) => { (listeners[t] = listeners[t] || []).push(fn); },
       getElementById: (id) => (extra.els || {})[id] || null,
@@ -65,13 +65,14 @@ function desktop(extra = {}) {
     hubToast: (t) => toasts.push(t),
     esc: (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;'),
     fetch: async (url, opt) => { fetches.push({ url, opt }); return { ok: extra.patchOk !== false, status: 200, json: async () => (extra.patchOk === false ? { error: 'no' } : { success: true }) }; },
-    setTimeout: (fn) => { fn(); return 0; },
+    setTimeout: extra.timers ? (fn) => { extra.timers.push(fn); return extra.timers.length; } : (fn) => { fn(); return 0; },
+    clearTimeout: extra.timers ? (id) => { extra.timers[id - 1] = null; } : () => {},
     URLSearchParams,
   };
   vm.createContext(sandbox);
   const code = between(app, 'const agentCardSubs = {};', '    function openAgentSettingsPopup(')
     + '\n' + fnText(app, 'function openAgentSettingsPopup(').replace(/window\.open\(/, 'window.open(');
-  vm.runInContext(code + '\nthis.__api = { agentCardSubscribe, agentCardEmit, agentCardLastLine, openAgentCard, openAgentSettings, voiceAgentChipPaint, voiceAgentChipToggle, voiceAgentCardOpen, CARD_PICK };', sandbox);
+  vm.runInContext(code + '\nthis.__api = { agentCardSubscribe, agentCardEmit, agentCardLastLine, openAgentCard, openAgentSettings, voiceAgentChipPaint, voiceAgentCardOpen, modelPickCardLineRefill, CARD_PICK };', sandbox);
   return { api: sandbox.__api, card, listeners, popups, toasts, fetches, sandbox };
 }
 
@@ -130,6 +131,23 @@ test('desktop: the card says no (no such agent, not yours): the old page opens a
   d.api.openAgentCard('sam');
   await new Promise((r) => setImmediate(r));
   assert.strictEqual(d.popups.length, 1);
+  assert.deepStrictEqual(d.toasts, []);
+});
+
+test('desktop: when the card says no, a member gets a toast (like the phone), only an admin gets the old popup', async () => {
+  for (const refuse of [false, 'reject']) {
+    const card = refuse === false ? fakeCard(false) : Object.assign(fakeCard(), { open: () => Promise.reject(new Error('x')) });
+    const member = desktop({ card, me: { isAdmin: false } });
+    member.api.openAgentCard('sam');
+    await new Promise((r) => setImmediate(r));
+    assert.strictEqual(member.popups.length, 0, 'no popup for a member');
+    assert.deepStrictEqual(Array.from(member.toasts), ['This agent\'s settings are not open to you.']);
+    const admin = desktop({ card: refuse === false ? fakeCard(false) : card });
+    admin.api.openAgentCard('sam');
+    await new Promise((r) => setImmediate(r));
+    assert.strictEqual(admin.popups.length, 1);
+    assert.strictEqual(admin.toasts.length, 0);
+  }
 });
 
 test('desktop: the last line says "All settings for <agent>…" with the agent\'s display name', () => {
@@ -220,27 +238,31 @@ test('desktop: the usage badge keeps its chooser and gets a last line to the Mod
   assert.ok(open.indexOf('box.append(lastBtn)') > open.indexOf('box.append(list, subs)'));
 });
 
-test('desktop: the voice chip shows only when voice is on and for admins; press switches its own voice on and off through PATCH {voice}', async () => {
+test('desktop: the voice chip is an indicator by the card\'s own definition (hasOwnVoice); pressing it opens the card at the Voice row (OPT-0023); no toggle', () => {
   const mk = (id) => ({ id, hidden: true, textContent: '', attrs: {}, title: '', setAttribute(k, v) { this.attrs[k] = v; } });
   const els = { 'vagent-wrap-chat-1': mk('w'), 'vagent-chat-1': mk('b'), 'vagent-card-chat-1': mk('c') };
   const d = desktop({ els });
   d.api.voiceAgentChipPaint();
   assert.strictEqual(els['vagent-wrap-chat-1'].hidden, false);
-  assert.strictEqual(els['vagent-chat-1'].textContent, 'Same voice as all');
-  assert.strictEqual(els['vagent-chat-1'].attrs['aria-pressed'], 'false');
+  assert.strictEqual(els['vagent-chat-1'].textContent, 'Voice: same as all');
   assert.strictEqual(els['vagent-card-chat-1'].attrs['aria-label'], 'All settings for Sam…');
-  await d.api.voiceAgentChipToggle('chat-1');
-  assert.strictEqual(d.fetches.length, 1);
-  assert.strictEqual(d.fetches[0].url, '/api/agents/sam');
-  assert.strictEqual(d.fetches[0].opt.method, 'PATCH');
-  assert.deepStrictEqual(JSON.parse(d.fetches[0].opt.body), { voice: { voice: '', stt: 'local', tts: 'local' } });
-  assert.strictEqual(els['vagent-chat-1'].textContent, 'Its own voice');
-  assert.strictEqual(els['vagent-chat-1'].attrs['aria-pressed'], 'true');
-  await d.api.voiceAgentChipToggle('chat-1');   // press again: back to the shared voice
-  assert.deepStrictEqual(JSON.parse(d.fetches[1].opt.body), { voice: null });
-  assert.strictEqual(els['vagent-chat-1'].textContent, 'Same voice as all');
+  // the old chip's "own voice" ({voice:'', stt:'local', tts:'local'}) is NOT own for the card, so not for the chip
+  d.sandbox.AGENTS[0].voice = { voice: '', stt: 'local', tts: 'local' };
+  d.api.voiceAgentChipPaint();
+  assert.strictEqual(els['vagent-chat-1'].textContent, 'Voice: same as all');
+  // any one of the card's four fields makes it its own
+  d.sandbox.AGENTS[0].voice = { voice: 'nova', stt: 'local', tts: 'local' };
+  d.api.voiceAgentChipPaint();
+  assert.strictEqual(els['vagent-chat-1'].textContent, 'Voice: its own');
+  d.sandbox.AGENTS[0].voice = { cloudVoice: 'x' };
+  d.api.voiceAgentChipPaint();
+  assert.strictEqual(els['vagent-chat-1'].textContent, 'Voice: its own');
+  assert.strictEqual(d.fetches.length, 0, 'painting saves nothing');
+  // pressing it opens the card at the Voice row
   d.api.voiceAgentCardOpen('chat-1');
-  assert.deepStrictEqual(d.card.calls.open.at(-1), { name: 'sam', where: { row: 'OPT-0022' } });
+  assert.deepStrictEqual(d.card.calls.open.at(-1), { name: 'sam', where: { row: 'OPT-0023' } });
+  assert.match(app, /id="vagent-\$\{chatId\}" onclick="voiceAgentCardOpen\('\$\{chatId\}'\)"/);
+  assert.ok(!/voiceAgentChipToggle|VOICE_CHIP_OWN/.test(app), 'no toggle, no second definition of own');
   // voice off for the install: hidden; a member: hidden
   const off = desktop({ els: { 'vagent-wrap-chat-1': mk('w'), 'vagent-chat-1': mk('b') }, voiceReady: false });
   off.api.voiceAgentChipPaint();
@@ -248,16 +270,34 @@ test('desktop: the voice chip shows only when voice is on and for admins; press 
   const mem = desktop({ els: { 'vagent-wrap-chat-1': mk('w'), 'vagent-chat-1': mk('b') }, me: { isAdmin: false } });
   mem.api.voiceAgentChipPaint();
   assert.strictEqual(mem.sandbox.document.getElementById('vagent-wrap-chat-1').hidden, true);
-  // a refused save changes nothing and says so
-  const bad = desktop({ els: { 'vagent-wrap-chat-1': mk('w'), 'vagent-chat-1': mk('b') }, patchOk: false });
-  await bad.api.voiceAgentChipToggle('chat-1');
-  assert.match(bad.toasts[0], /Could not change the voice: no/);
-  assert.strictEqual(bad.sandbox.AGENTS[0].voice, undefined);
   // the chip is part of the chat bar, repainted with the voice controls, and kept out of the talk-mode chip's show/hide
-  assert.match(app, /id="vagent-\$\{chatId\}" onclick="voiceAgentChipToggle\('\$\{chatId\}'\)"/);
   assert.match(fnText(app, 'function voicePaint('), /voiceAgentChipPaint\(\)/);
   assert.ok(!/class="voice-mode-chip voice-agent/.test(app), 'the talk-mode chip class would hide it outside a call');
   assert.match(read('index.html'), /\.input-area \.voice-agent-chip-wrap/);
+});
+
+test('desktop: an agent_updated event repaints the chip only for that agent, once for a burst; the model picker\'s last line follows the agent\'s name', () => {
+  const mk = (id) => ({ id, hidden: true, textContent: 'old', attrs: {}, title: '', setAttribute(k, v) { this.attrs[k] = v; } });
+  const sel = { options: [{ value: 'm', textContent: 'M' }, { value: '__card__', textContent: 'All settings for Sam…' }] };
+  const els = { 'vagent-wrap-c1': mk('w1'), 'vagent-c1': mk('b1'), 'vagent-wrap-c2': mk('w2'), 'vagent-c2': mk('b2'), 'model-pick-c1': sel };
+  const timers = [];
+  const d = desktop({ els, timers, chats: { c1: { id: 'c1', agent: 'sam' }, c2: { id: 'c2', agent: 'hazel' } } });
+  d.api.agentCardEmit('agent_updated', { agent: 'sam' });
+  d.api.agentCardEmit('agent_updated', { agent: 'sam' });
+  d.api.agentCardEmit('agent_updated', { agent: 'sam' });
+  assert.strictEqual(timers.filter(Boolean).length, 1, 'a burst leaves one pending repaint');
+  assert.strictEqual(els['vagent-c1'].textContent, 'old', 'nothing is repainted before the delay');
+  d.sandbox.AGENTS[0].display = 'Samuel';
+  timers.filter(Boolean)[0]();
+  assert.strictEqual(els['vagent-c1'].textContent, 'Voice: same as all');
+  assert.strictEqual(els['vagent-c2'].textContent, 'old', 'another agent\'s chip is left alone');
+  assert.strictEqual(sel.options[1].textContent, 'All settings for Samuel…');
+  assert.strictEqual(sel.options[0].textContent, 'M');
+  // events for two agents in one burst repaint both, each once
+  d.api.agentCardEmit('agent_updated', { agent: 'hazel' });
+  d.api.agentCardEmit('agent_updated', { agent: 'nobody' });
+  timers.filter(Boolean).at(-1)();
+  assert.strictEqual(els['vagent-c2'].textContent, 'Voice: same as all');
 });
 
 test('desktop: no stray invisible characters or new colours in the parts added here', () => {
@@ -453,7 +493,7 @@ test('the card\'s own door accepts the link the door line makes', () => {
   assert.deepStrictEqual(C.parseCardHash('#agent-card=sam&row=OPT-0047'), { name: 'sam', row: 'OPT-0047', section: null });
 });
 
-test('server: a rename publishes agent_updated with the old name and renamedTo (and nothing when the rename failed)', () => {
+test('server: a rename publishes agent_updated with the old name and renamed:true, never the new name (and nothing when the rename failed)', () => {
   const src = read('server.js');
   const at = src.indexOf("pathname === '/api/agents/rename'");
   assert.ok(at > 0);
@@ -473,7 +513,8 @@ test('server: a rename publishes agent_updated with the old name and renamedTo (
   };
   return run(true).then(({ out, published }) => {
     assert.strictEqual(out.status, 200);
-    assert.deepStrictEqual(JSON.parse(JSON.stringify(published)), [['agent_updated', { agent: 'sam', oldName: 'sam', renamedTo: 'sam2', changed: ['name'] }]]);
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(published)), [['agent_updated', { agent: 'sam', oldName: 'sam', renamed: true, changed: ['name'] }]]);
+    assert.ok(!JSON.stringify(published).includes('sam2'), 'the new name is not in the event');
     return run(false);
   }).then(({ out, published }) => {
     assert.strictEqual(out.status, 400);
@@ -481,11 +522,13 @@ test('server: a rename publishes agent_updated with the old name and renamedTo (
   });
 });
 
-test('the rename event closes an open card (the card\'s own rule: agent_updated with renamedTo for the open agent)', () => {
+test('the rename event closes an open card (the card\'s own rule: agent_updated for the open agent with renamed === true); the renamer reopens from the response', () => {
   const C = require('../lib/ui-agent-card.js');
   assert.ok(typeof C.createCard === 'function');
-  // the event the server sends matches what the card tests for: ev.agent is the old name, ev.renamedTo the new one
-  const ev = { agent: 'sam', oldName: 'sam', renamedTo: 'sam2', changed: ['name'] };
-  assert.ok(ev.renamedTo && ev.agent === 'sam');
-  assert.match(read('lib/ui-agent-card.js'), /const renamed = ev\.renamedTo \|\| ev\.newName/);
+  // the event the server sends matches what the card tests for: ev.agent is the old name, ev.renamed true; no new name anywhere
+  const ev = { agent: 'sam', oldName: 'sam', renamed: true, changed: ['name'] };
+  assert.match(read('lib/ui-agent-card.js'), /ev\.renamed === true/);
+  assert.ok(ev.renamed === true && ev.agent === 'sam');
+  // the person who renamed reopens the card on the new name after their own request succeeded
+  assert.match(read('lib/ui-agent-card-basics.js'), /const r = await send\(ctx, 'POST', '\/api\/agents\/rename'[\s\S]*?ctx\.open\(next, \{ row: 'OPT-0001' \}\)/);
 });

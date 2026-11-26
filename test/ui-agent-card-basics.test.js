@@ -118,6 +118,7 @@ function setup(over = {}) {
       const a = state.agents.find((x) => x.name === body.oldName); a.name = body.newName;
       return resp(200, { success: true });
     }
+    if (state.gate && method === 'PATCH') await state.gate;   // a test holds a save in flight
     let m = /^\/api\/agents\/([^/]+)\/(model|display|icon)$/.exec(url);
     if (m && method === 'POST') {
       const a = state.agents.find((x) => x.name === decodeURIComponent(m[1]));
@@ -421,12 +422,12 @@ test('Call timing: Patient saves the preset, Custom the four numbers; the number
   assert.deepStrictEqual(writes(t).map((c) => c.body), [{ voiceDefaults: { endPause: 2500, continueWait: 3000, interruptSensitivity: 50, voiceSpeed: 1 } }]);
 });
 
-test('Recordings: only the owner of the Maestro may change them (the route\'s rule); the body keeps the other recording fields', async () => {
+test('Recordings: only the owner of the Maestro may change them (the route\'s rule); the body carries only the changed key (the server merges)', async () => {
   const t = await opened({ tweak: (l) => { l[1].recordings = { keep: false, allowed: ['u1'], keepReplies: false, consentLine: 'Hi', mic: 'processed', announce: 'first' }; } });
   all(t.card.el(), '.ac-more-head')[0].click();
   const keep = all(rowOf(t.card.el(), 'OPT-0033'), 'input')[0];
   keep.checked = true; keep.dispatch('change'); await flush();
-  assert.deepStrictEqual(writes(t).map((c) => [c.method, c.url, c.body]), [['PATCH', '/api/agents/harbor', { recordings: { keep: true, allowed: ['u1'], keepReplies: false, consentLine: 'Hi', mic: 'processed', announce: 'first' } }]]);
+  assert.deepStrictEqual(writes(t).map((c) => [c.method, c.url, c.body]), [['PATCH', '/api/agents/harbor', { recordings: { keep: true } }]]);
   const notOwner = await opened({ me: { isAdmin: true, isOwner: false, user: { id: 'u9' } } });
   all(notOwner.card.el(), '.ac-more-head')[0].click();
   const row = rowOf(notOwner.card.el(), 'OPT-0033');
@@ -573,6 +574,51 @@ test('Remove this agent: a declined confirm sends nothing; a refusal is shown un
 test('a member sees Basics only: no Role and team section, so no rename, owner, sharing or Remove', async () => {
   const t = await opened({ me: MEMBER });
   assert.deepStrictEqual(all(t.card.el(), '.ac-sec').map((s) => s.getAttribute('data-sec')), ['basics']);
+});
+
+// ---- 8b. phase 3 round 1: one save at a time, whole objects from a fresh read, lazy lists retry ---------------------------------
+test('Voice: the whole voice object is built from a fresh read of the agent, not from what the card showed', async () => {
+  const t = await opened({ tweak: (l) => { l[1].voice = { voice: 'amber', stt: 'local', tts: 'local' }; } });
+  all(t.card.el(), '.ac-more-head')[0].click();
+  t.state.agents[1].voice = { voice: 'amber', stt: 'google', tts: 'local' };   // changed elsewhere; the card has not heard yet
+  t.calls.length = 0;
+  await pick(all(rowOf(t.card.el(), 'OPT-0026'), 'select')[0], '');
+  assert.deepStrictEqual(t.calls.filter((c) => c.method === 'GET' && c.url === '/api/agents').length >= 1, true, 'a fresh GET came first');
+  assert.deepStrictEqual(writes(t).map((c) => c.body), [{ voice: { voice: '', stt: 'google', tts: 'local' } }]);
+});
+
+test('a second change while a save is in flight is blocked (every control disabled); the next whole-object body comes from a fresh read', async () => {
+  const t = await opened();
+  all(t.card.el(), '.ac-more-head')[0].click();
+  let release; t.state.gate = new Promise((r) => { release = r; });
+  await pick(all(rowOf(t.card.el(), 'OPT-0063'), 'select')[0], 'pack:fox');
+  const p = t.card.el();
+  const live = all(p, 'select').concat(all(p, 'input'));
+  assert.ok(live.length > 3 && live.every((e) => e.disabled === true), 'all controls disabled while the save runs');
+  const other = all(rowOf(p, 'OPT-0028'), 'select')[0];
+  other.value = 'custom'; other.dispatch('change'); await flush();
+  assert.deepStrictEqual(writes(t).length, 1, 'the second change did not start a save');
+  t.state.gate = null; release(); await flush();
+  assert.ok(all(t.card.el(), 'select').every((e) => !e.disabled), 'controls are back');
+  t.state.agents[1].voiceDefaults = { endPause: 900, continueWait: 3000, interruptSensitivity: 50, voiceSpeed: 1 };   // changed elsewhere
+  t.calls.length = 0;
+  await pick(all(rowOf(t.card.el(), 'OPT-0028'), 'select')[0], 'custom');
+  assert.deepStrictEqual(writes(t).map((c) => c.body), [{ voiceDefaults: { endPause: 900, continueWait: 3000, interruptSensitivity: 50, voiceSpeed: 1 } }]);
+});
+
+test('a list that failed to load is asked for again after a while (not forever blank)', async () => {
+  B.reset();
+  const t = setup(); t.state.fail['GET /api/models'] = { status: 500, error: 'down' };
+  await t.card.open('harbor', {}); await flush();
+  const gets = () => t.calls.filter((c) => c.url === '/api/models').length;
+  assert.strictEqual(gets(), 1);
+  await t.card.refresh(); await flush();
+  assert.strictEqual(gets(), 1, 'not at once');
+  delete t.state.fail['GET /api/models'];
+  const realNow = Date.now; Date.now = () => realNow() + 60000;
+  try { await t.card.refresh(); await flush(); } finally { Date.now = realNow; }
+  assert.strictEqual(gets(), 2, 'asked again');
+  assert.ok(all(rowOf(t.card.el(), 'OPT-0047'), 'option').length > 1, 'the list is there now');
 });
 
 // ---- 9. source checks ------------------------------------------------------------------------------------------------------
