@@ -93,7 +93,13 @@ function setup(over = {}) {
     if (pm && method === 'PATCH') {
       if (state.fail) return resp(400, { error: state.fail });
       const a = state.agents.find((x) => x.name === pm[1]);
-      for (const [k, v] of Object.entries(body)) { if (v === null) delete a[k]; else a[k] = v; }
+      for (const [k, v] of Object.entries(body)) {
+        if (v === null) delete a[k];
+        else if (k === 'compaction' && v && typeof v === 'object') {   // the server merges it (null removes a key)
+          const next = { ...(a[k] || {}) }; for (const [k2, v2] of Object.entries(v)) { if (v2 === null) delete next[k2]; else next[k2] = v2; }
+          if (Object.keys(next).length) a[k] = next; else delete a[k];
+        } else a[k] = v;
+      }
       return resp(200, { ok: true });
     }
     if (/^\/api\/agents\/harbor\/records$/.test(url)) return resp(200, { ok: true, ...state.records });
@@ -183,23 +189,24 @@ test('Memory: "How full before it acts" saves the threshold and keeps the mode; 
   assert.deepStrictEqual(all(sel(row), 'option').map((o) => o.textContent), ['Same as all agents', '50%', '55%', '60%', '65%', '70%', '75%', '80%', '85%', '90%']);
   change(sel(row), '0.85');
   await flush();
-  assert.deepStrictEqual(t.patches().map((c) => c.body), [{ compaction: { mode: 'on', at: 0.85 } }]);
+  assert.deepStrictEqual(t.patches().map((c) => c.body), [{ compaction: { at: 0.85 } }], 'only the threshold is sent');
   change(sel(rowOf(t.card.el(), 'OPT-0041')), '');
   await flush();
-  assert.deepStrictEqual(t.patches()[1].body, { compaction: { mode: 'on' } });
+  assert.deepStrictEqual(t.patches()[1].body, { compaction: { at: null } }, 'null drops only the threshold');
+  assert.deepStrictEqual(t.state.agents[1].compaction, { mode: 'on' });
   assert.match(rowOf(t.card.el(), 'OPT-0041').textContent, /Using the default for all agents/);
   assert.ok(!t.writes().some((c) => c.method === 'PUT'), 'never the admin-only PUT route');
 });
 
-test('Memory: the compaction {mode, at} body is built from a fresh read, so a mode changed elsewhere is not overwritten', async () => {
+test('Memory: the threshold save sends only {at}, so a mode changed elsewhere is not overwritten', async () => {
   const t = setup();
   const row = await openAt(t, 'OPT-0041');
   t.state.agents[1].compaction = { mode: 'off', at: 0.7 };   // changed elsewhere; the card still shows "on"
   t.calls.length = 0;
   change(sel(row), '0.85');
   await flush();
-  assert.ok(t.calls.some((c) => c.method === 'GET' && c.url === '/api/agents'), 'a fresh GET before the save');
-  assert.deepStrictEqual(t.patches().map((c) => c.body), [{ compaction: { mode: 'off', at: 0.85 } }]);
+  assert.deepStrictEqual(t.patches().map((c) => c.body), [{ compaction: { at: 0.85 } }]);
+  assert.deepStrictEqual(t.state.agents[1].compaction, { mode: 'off', at: 0.85 });
 });
 
 test('Memory: the shortest-background switch saves {minimalContext}; Compress now posts to the run route and says so plainly when it is already running', async () => {

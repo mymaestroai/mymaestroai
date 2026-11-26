@@ -116,10 +116,16 @@ function setup(over = {}) {
     if (url === '/api/agents' && method === 'GET') return resp(200, JSON.parse(JSON.stringify(state.agents)));
     const m = /^\/api\/agents\/([^/]+)$/.exec(url);
     if (m && method === 'PATCH') {
+      if (state.hang) return new Promise(() => {});   // a request the hub never answers (and that ignores the abort signal)
       if (state.gate) await state.gate;   // a test holds a save in flight
       if (state.fail) return resp(400, { error: state.fail });
       const a = state.agents.find((x) => x.name === decodeURIComponent(m[1]));
-      for (const [k, v] of Object.entries(body)) { if (v && typeof v === 'object' && !Array.isArray(v) && !Object.keys(v).length) delete a[k]; else a[k] = v; }
+      for (const [k, v] of Object.entries(body)) {
+        if (['voice', 'voiceDefaults', 'compaction'].includes(k) && v && typeof v === 'object') {   // the server merges these (null removes a key)
+          const next = { ...(a[k] || {}) }; for (const [k2, v2] of Object.entries(v)) { if (v2 === null) delete next[k2]; else next[k2] = v2; }
+          if (Object.keys(next).length) a[k] = next; else delete a[k];
+        } else if (v && typeof v === 'object' && !Array.isArray(v) && !Object.keys(v).length) delete a[k]; else a[k] = v;
+      }
       return resp(200, { ok: true });
     }
     return resp(404, {});
@@ -135,6 +141,7 @@ function setup(over = {}) {
   const card = C.createCard({
     doc, win, fetch, records: () => RECORDS, me: () => ('me' in over ? over.me : ADMIN), agentsList: () => stale, subscribe, help: over.noHelp ? null : help,
     guard, rows: over.rows || undefined, firstRows: over.firstRows || FIRST, setTimeout: (fn, ms) => timers.push({ fn, ms }), phone: !!over.phone, simple: !!over.simple,
+    requestMs: over.requestMs,
   });
   return { card, doc, win, state, calls, handlers, emit, helpCalls, timers, guard, fetchCount: () => calls.filter((c) => c.url === '/api/agents' && c.method === 'GET').length };
 }
@@ -272,7 +279,8 @@ test('a row using the default shows "Using the default for all agents"; when it 
   await flush();
   const patch = t.calls.find((c) => c.method === 'PATCH');
   assert.strictEqual(patch.url, '/api/agents/harbor');
-  assert.deepStrictEqual(patch.body, { compaction: { at: 0.8 } }, 'the mode goes, the other half stays');
+  assert.deepStrictEqual(patch.body, { compaction: { mode: null } }, 'only the mode is sent (null = the default again); the at half stays on the server');
+  assert.deepStrictEqual(t.state.agents[1].compaction, { at: 0.8 });
   assert.ok(t.fetchCount() >= 1, 'the card re-read the agent');
   row = rowOf(t.card.el(), 'OPT-0040');
   assert.match(row.textContent, /Using the default for all agents/, 'after the reset and the re-read the row is back on the default');
@@ -581,7 +589,7 @@ test('a refresh while a text input has focus and typed text keeps the text and t
   assert.strictEqual(all(rowOf(t.card.el(), 'OPT-0005'), 'input')[0].value, 'From elsewhere');
 });
 
-test('one save at a time per card: every control is disabled while it runs, a second change is blocked, and a whole-object body comes from a fresh read', async () => {
+test('one save at a time per card: every control is disabled while it runs, a second change is blocked, and a changed object sends only its changed key', async () => {
   const t = setup({ firstRows: { memory: ['OPT-0040'], role: ['OPT-0005'] } });
   await t.card.open('harbor', { section: 'memory' });
   all(t.card.el(), '.ac-sec-head').find((h) => h.parentNode.getAttribute('data-sec') === 'role').click();
@@ -600,8 +608,8 @@ test('one save at a time per card: every control is disabled while it runs, a se
   t.calls.length = 0;
   const sel2 = all(rowOf(t.card.el(), 'OPT-0040'), 'select')[0];
   sel2.value = 'assisted'; sel2.dispatch('change'); await flush();
-  assert.ok(t.calls.some((c) => c.method === 'GET' && c.url === '/api/agents'), 'a fresh read first');
-  assert.deepStrictEqual(t.calls.filter((c) => c.method === 'PATCH').map((c) => c.body), [{ compaction: { at: 0.6, mode: 'assisted' } }]);
+  assert.deepStrictEqual(t.calls.filter((c) => c.method === 'PATCH').map((c) => c.body), [{ compaction: { mode: 'assisted' } }], 'only the changed key');
+  assert.deepStrictEqual(t.state.agents[1].compaction, { mode: 'assisted', at: 0.6 }, 'the half another device set is kept');
 });
 
 test('phone: ×, Escape and Back belong to the dialog guard (its discard question); keeping the edit keeps the card; the card has no Escape listener of its own', async () => {
@@ -676,7 +684,7 @@ test('sample row: compaction mode saves PATCH {compaction} (not the admin-only P
   await flush();
   const patch = t.calls.find((c) => c.method === 'PATCH');
   assert.strictEqual(patch.url, '/api/agents/harbor');
-  assert.deepStrictEqual(patch.body, { compaction: { at: 0.7, mode: 'assisted' } });
+  assert.deepStrictEqual(patch.body, { compaction: { mode: 'assisted' } });
   assert.ok(!t.calls.some((c) => c.method === 'PUT'));
   assert.match(all(t.card.el(), '.ac-sec-sum')[2].textContent, /compression assisted/);
 });
@@ -729,4 +737,172 @@ test('the script has no invisible characters, sets text with textContent only an
   assert.ok(!/innerHTML|insertAdjacentHTML|document\.write/.test(src));
   assert.ok(!/Applies to/.test(src));
   assert.strictEqual(C.TEXT.footer, 'You can also ask Maestro to change any of these.');
+});
+
+// ---- 10. phase 3 round 2: navigation token, Escape, timeout, drafts, focus, configure -------------------------------------------
+const GATED_ROW = (gate, after) => new Map([['OPT-0005', {
+  get: (a) => ({ value: a.blurb || '', display: a.blurb || '' }), control: { type: 'text' },
+  save: async (agent, value, ctx) => { await ctx.patch({ blurb: value }); await gate; await after(ctx); return { ok: true }; },
+}]]);
+
+test('a rename started on one card does not reopen it once the person moved to another card (the navigation token)', async () => {
+  let release; const gate = new Promise((r) => { release = r; });
+  const reopened = [];
+  const t = setup({ rows: GATED_ROW(gate, async (ctx) => { reopened.push(await ctx.open('quill', { section: 'role' })); }), firstRows: { role: ['OPT-0005'] } });
+  await t.card.open('harbor', { section: 'role' });
+  const input = all(rowOf(t.card.el(), 'OPT-0005'), 'input')[0];
+  input.value = 'New'; input.dispatch('change'); await flush();
+  assert.strictEqual(await t.card.open('tally', { section: 'role' }), true);   // the person goes to B before the rename answers
+  release(); await flush();
+  assert.deepStrictEqual(reopened, [false], 'the late reopen was refused');
+  assert.strictEqual(t.card.state().name, 'tally', 'B stays');
+});
+
+test('a rename whose own card was closed by the agent_updated rename event still reopens on the new name (nobody navigated)', async () => {
+  let release; const gate = new Promise((r) => { release = r; });
+  const reopened = [];
+  const t = setup({ rows: GATED_ROW(gate, async (ctx) => { reopened.push(await ctx.open('quill', { section: 'role' })); }), firstRows: { role: ['OPT-0005'] } });
+  await t.card.open('harbor', { section: 'role' });
+  const input = all(rowOf(t.card.el(), 'OPT-0005'), 'input')[0];
+  input.value = 'New'; input.dispatch('change'); await flush();
+  t.emit('agent_updated', { agent: 'harbor', renamedTo: 'quill' });   // the card closes itself
+  assert.strictEqual(t.card.isOpen(), false);
+  release(); await flush();
+  assert.deepStrictEqual(reopened, [true]);
+  assert.strictEqual(t.card.state().name, 'quill');
+});
+
+test('a slower earlier open() does not replace a later one', async () => {
+  let release; const gate = new Promise((r) => { release = r; });
+  let n = 0;
+  const doc = makeDoc();
+  const win = { innerWidth: 1200, location: { pathname: '/', hash: '', search: '' }, addEventListener() {}, removeEventListener() {} };
+  const help = { open() {}, isOpen: () => false, load: async () => { if (++n === 1) await gate; }, records: () => RECORDS };
+  const card = C.createCard({ doc, win, fetch: async () => resp(404, {}), me: ADMIN, agentsList: () => agentsFix(), subscribe: () => () => {}, help, firstRows: FIRST, setTimeout: () => {} });
+  const first = card.open('harbor');   // waits on the slow read
+  assert.strictEqual(await card.open('tally'), true);
+  release();
+  assert.strictEqual(await first, false, 'the older open gave way');
+  assert.strictEqual(card.state().name, 'tally');
+  assert.strictEqual(doc.body.children.length, 1, 'one panel only');
+  // and a close() while an open() is still loading wins too
+  n = 0; card.close();
+  let release2; const gate2 = new Promise((r) => { release2 = r; }); n = 0; help.load = async () => { await gate2; };
+  const slow = card.open('harbor'); card.close(); release2();
+  assert.strictEqual(await slow, false);
+  assert.strictEqual(card.isOpen(), false);
+});
+
+test('desktop Escape: a hidden aria-modal box in the page (the closed Reasoning view) does not stop it, a visible one does', async () => {
+  const t = setup();
+  await t.card.open('harbor');
+  const box = t.doc.createElement('div'); box.setAttribute('aria-modal', 'true'); box.checkVisibility = () => false; t.doc.body.appendChild(box);
+  t.card.el().dispatch('keydown', { key: 'Escape' });
+  assert.strictEqual(t.card.isOpen(), false, 'closed with a hidden modal box present');
+  await t.card.open('harbor');
+  box.checkVisibility = () => true;
+  t.card.el().dispatch('keydown', { key: 'Escape' });
+  assert.strictEqual(t.card.isOpen(), true, 'a shown modal box owns Escape');
+  box.checkVisibility = () => false;
+  const hid = t.doc.createElement('div'); hid.setAttribute('hidden', ''); const inner = t.doc.createElement('div'); inner.setAttribute('aria-modal', 'true'); hid.appendChild(inner); t.doc.body.appendChild(hid);
+  inner.closest = (s) => (s === '[hidden]' ? hid : null);
+  t.card.el().dispatch('keydown', { key: 'Escape' });
+  assert.strictEqual(t.card.isOpen(), false, 'inside a [hidden] parent does not count');
+});
+
+test('a PATCH the hub never answers is given up after the time limit: the card unlocks with an error', async () => {
+  const t = setup({ requestMs: 40, firstRows: { role: ['OPT-0005'] } });
+  await t.card.open('harbor', { section: 'role' });
+  t.state.hang = true;
+  const input = all(rowOf(t.card.el(), 'OPT-0005'), 'input')[0];
+  input.value = 'x'; input.dispatch('change'); await flush();
+  assert.ok(all(t.card.el(), 'input').every((e) => e.disabled === true), 'locked while waiting');
+  await new Promise((r) => setTimeout(r, 120)); await flush();
+  assert.strictEqual(t.card.state().saving.size, 0, 'unlocked');
+  assert.ok(all(t.card.el(), 'input').every((e) => !e.disabled));
+  assert.match(rowOf(t.card.el(), 'OPT-0005').textContent, /did not answer in time/);
+  t.state.hang = false;
+  const again = all(rowOf(t.card.el(), 'OPT-0005'), 'input')[0];
+  again.value = 'y'; again.dispatch('change'); await flush();
+  assert.strictEqual(t.state.agents[1].blurb, 'y', 'a new save works');
+});
+
+test('a fresh read that never answers also gives up (the save says it could not read the settings)', async () => {
+  const doc = makeDoc();
+  const win = { innerWidth: 1200, location: { pathname: '/', hash: '', search: '' }, addEventListener() {}, removeEventListener() {} };
+  const fetch = async () => new Promise(() => {});
+  const card = C.createCard({ doc, win, fetch, records: () => RECORDS, me: ADMIN, agentsList: () => agentsFix(), subscribe: () => () => {}, help: null, firstRows: { role: ['OPT-0005'] }, setTimeout: () => {}, requestMs: 30,
+    rows: new Map([['OPT-0005', { get: () => ({ value: '', display: '' }), control: { type: 'text' }, save: async (a, v, ctx) => { const f = await ctx.fresh(); return f ? { ok: true } : { ok: false, error: 'no fresh' }; } }]]) });
+  await card.open('harbor', { section: 'role' });
+  const input = all(rowOf(card.el(), 'OPT-0005'), 'input')[0];
+  input.value = 'x'; input.dispatch('change');
+  await new Promise((r) => setTimeout(r, 100)); await flush();
+  assert.strictEqual(card.state().saving.size, 0);
+  assert.match(rowOf(card.el(), 'OPT-0005').textContent, /no fresh/);
+});
+
+test('an invalid number clears its draft: the stored value shows again, with the error', async () => {
+  const rows = new Map([['OPT-0066', { get: (a) => ({ value: 5, display: '5' }), control: { type: 'number' }, save: async () => ({ ok: true }) }]]);
+  const t = setup({ rows, firstRows: { basics: ['OPT-0066'] } });
+  await t.card.open('harbor', { section: 'basics' });
+  const input = all(rowOf(t.card.el(), 'OPT-0066'), 'input')[0];
+  input.focus(); input.value = 'abc'; input.dispatch('change'); await flush();
+  const now = all(rowOf(t.card.el(), 'OPT-0066'), 'input')[0];
+  assert.strictEqual(now.value, '5', 'the bad draft is gone');
+  assert.match(rowOf(t.card.el(), 'OPT-0066').textContent, /Enter a number\./);
+  assert.strictEqual(t.calls.filter((c) => c.method === 'PATCH').length, 0);
+});
+
+test('desktop Escape with typed, unsaved text commits it first, then closes', async () => {
+  const saved = [];
+  const t = setup({ rows: TEXT_ROW(saved), firstRows: { role: ['OPT-0005'] } });
+  await t.card.open('harbor', { section: 'role' });
+  const input = all(rowOf(t.card.el(), 'OPT-0005'), 'input')[0];
+  input.focus(); input.value = 'typed then escape';
+  t.card.el().dispatch('keydown', { key: 'Escape' });
+  assert.strictEqual(t.card.isOpen(), false, 'closed');
+  await flush();
+  assert.deepStrictEqual(saved, ['typed then escape'], 'the row save ran with the typed text');
+  assert.strictEqual(t.state.agents[1].blurb, 'typed then escape', 'and the request went to the agent');
+  // untouched text: Escape just closes, nothing is saved
+  const t2 = setup({ rows: TEXT_ROW(saved), firstRows: { role: ['OPT-0005'] } });
+  await t2.card.open('harbor', { section: 'role' });
+  saved.length = 0;
+  t2.card.el().dispatch('keydown', { key: 'Escape' });
+  assert.deepStrictEqual(saved, []);
+});
+
+test('after a keyboard save the focus is back on the row\'s control (disabling it had dropped the focus)', async () => {
+  const rows = new Map([['OPT-0040', {
+    get: (a) => ({ value: (a.compaction && a.compaction.mode) || '', display: '' }), control: { type: 'select', options: () => [{ value: '', label: 'a' }, { value: 'on', label: 'On' }] },
+    save: async (agent, value, ctx) => { ctx.doc.activeElement = ctx.doc.body; return ctx.patch({ compaction: { mode: value } }); },   // the browser drops the focus of a control that gets disabled
+  }]]);
+  const t = setup({ rows, firstRows: { memory: ['OPT-0040'] } });
+  await t.card.open('harbor', { section: 'memory' });
+  const sel = all(rowOf(t.card.el(), 'OPT-0040'), 'select')[0];
+  sel.focus(); sel.value = 'on'; sel.dispatch('change'); await flush();
+  const now = all(rowOf(t.card.el(), 'OPT-0040'), 'select')[0];
+  assert.strictEqual(t.doc.activeElement, now, 'the focus is on the redrawn control');
+  assert.ok(!now.disabled);
+});
+
+test('configure({guard}) reaches the page\'s card: on a phone the sheet opens through that guard, and a later configure does not orphan an open card', async () => {
+  const doc = makeDoc();
+  const saved = global.document;
+  global.document = doc;
+  const guard = { opened: [], closed_: [], open(el, o) { this.opened.push({ el, o }); }, closed(el) { this.closed_.push(el); }, requestClose() { return 'confirm'; } };
+  try {
+    C.configure({ guard, phone: true, records: () => RECORDS, me: ADMIN, agentsList: () => agentsFix(), subscribe: () => () => {}, help: null, firstRows: FIRST, fetch: async () => resp(404, {}), simple: false });
+    assert.strictEqual(await C.open('harbor'), true);
+    assert.strictEqual(guard.opened.length, 1, 'the sheet is registered with the configured guard');
+    assert.strictEqual(C.isOpen(), true);
+    const guard2 = { opened: [], closed_: [], open() {}, closed() {}, requestClose() { return 'closed'; } };
+    C.configure({ guard: guard2 });   // while open: the open card is not dropped
+    assert.strictEqual(C.isOpen(), true);
+    assert.strictEqual(C.requestClose('close'), 'confirm', 'the open sheet keeps the guard it was registered with');
+    assert.strictEqual(guard2.opened.length, 0);
+  } finally {
+    C.close(false); C.configure({ guard: null, phone: undefined, records: undefined, me: undefined, agentsList: undefined, subscribe: undefined, help: undefined, firstRows: undefined, fetch: undefined, simple: undefined });
+    if (saved === undefined) delete global.document; else global.document = saved;
+  }
 });

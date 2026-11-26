@@ -103,6 +103,7 @@ function setup(over = {}) {
     const failKey = method + ' ' + url;
     if (state.fail[failKey]) return resp(state.fail[failKey].status || 400, { error: state.fail[failKey].error });
     if (url === '/api/agents' && method === 'GET') return resp(200, JSON.parse(JSON.stringify(state.agents)));
+    if (url === '/api/models' && state.modelGate) await state.modelGate;   // a test holds the model list back
     if (url === '/api/models') return resp(200, { models: state.models, billing: {}, health: { 'ninfer/qwen3': { state: 'warn', short: 'slow lately' } } });
     if (url === '/api/faces') return resp(200, { packs: [{ id: 'fox', name: 'Fox' }], available: [{ id: 'owl', name: 'Owl', size: 4000000 }] });
     if (url === '/api/voice/status') return resp(200, { enabled: true, voices: [{ id: 'amber', label: 'Amber' }] });
@@ -115,6 +116,7 @@ function setup(over = {}) {
       return resp(200, { ok: true, prefs: state.notify });
     }
     if (url === '/api/agents/rename' && method === 'POST') {
+      if (state.renameHold) await state.renameHold;
       const a = state.agents.find((x) => x.name === body.oldName); a.name = body.newName;
       return resp(200, { success: true });
     }
@@ -128,7 +130,13 @@ function setup(over = {}) {
     m = /^\/api\/agents\/([^/]+)$/.exec(url);
     if (m && method === 'PATCH') {
       const a = state.agents.find((x) => x.name === decodeURIComponent(m[1]));
-      for (const [k, v] of Object.entries(body)) { if (v === null) delete a[k]; else a[k] = v; }
+      for (const [k, v] of Object.entries(body)) {
+        if (v === null) delete a[k];
+        else if (['voice', 'voiceDefaults', 'compaction'].includes(k) && v && typeof v === 'object') {   // the server merges these (null removes a key)
+          const next = { ...(a[k] || {}) }; for (const [k2, v2] of Object.entries(v)) { if (v2 === null) delete next[k2]; else next[k2] = v2; }
+          if (Object.keys(next).length) a[k] = next; else delete a[k];
+        } else a[k] = v;
+      }
       return resp(200, { success: true });
     }
     if (m && method === 'DELETE') { state.agents = state.agents.filter((x) => x.name !== decodeURIComponent(m[1])); return resp(200, { success: true }); }
@@ -343,7 +351,7 @@ test('Voice: "Same as all agents" while none of the four voice fields is set, wi
   for (const v of [{ voice: 'amber' }, { stt: 'openai' }, { tts: 'google' }, { tts: 'openai', cloudVoice: 'coral' }]) assert.strictEqual(B.hasOwnVoice({ voice: v }), true, JSON.stringify(v));
 });
 
-test('Voice: "Its own voice" opens the voice options under More; each saves PATCH {voice} with the four fields', async () => {
+test('Voice: "Its own voice" opens the voice options under More; each saves PATCH {voice} with only the changed keys', async () => {
   const t = await opened();
   await pick(all(rowOf(t.card.el(), 'OPT-0023'), 'select')[0], 'own');
   assert.strictEqual(writes(t).length, 0, 'choosing it changes nothing stored until a field is picked');
@@ -351,13 +359,13 @@ test('Voice: "Its own voice" opens the voice options under More; each saves PATC
   const ids = rowIds(t.card.el());
   for (const id of ['OPT-0022', 'OPT-0024', 'OPT-0025', 'OPT-0026']) assert.ok(ids.includes(id), id + ' shown under More');
   await pick(all(rowOf(t.card.el(), 'OPT-0022'), 'select')[0], 'openai');
-  assert.deepStrictEqual(writes(t).map((c) => [c.method, c.url, c.body]), [['PATCH', '/api/agents/harbor', { voice: { voice: '', stt: 'openai', tts: 'local' } }]]);
+  assert.deepStrictEqual(writes(t).map((c) => [c.method, c.url, c.body]), [['PATCH', '/api/agents/harbor', { voice: { stt: 'openai' } }]]);
   t.calls.length = 0;
   await pick(all(rowOf(t.card.el(), 'OPT-0024'), 'select')[0], 'openai:nova');
-  assert.deepStrictEqual(writes(t).map((c) => c.body), [{ voice: { voice: '', stt: 'openai', tts: 'openai', cloudVoice: 'nova' } }]);
+  assert.deepStrictEqual(writes(t).map((c) => c.body), [{ voice: { tts: 'openai', cloudVoice: 'nova' } }]);
   t.calls.length = 0;
   await pick(all(rowOf(t.card.el(), 'OPT-0026'), 'select')[0], 'amber');
-  assert.deepStrictEqual(writes(t).map((c) => c.body), [{ voice: { voice: 'amber', stt: 'openai', tts: 'openai', cloudVoice: 'nova' } }]);
+  assert.deepStrictEqual(writes(t).map((c) => c.body), [{ voice: { voice: 'amber' } }]);
   const row = rowOf(t.card.el(), 'OPT-0023');
   assert.strictEqual(all(row, 'select')[0].value, 'own');
   assert.ok(all(row, '.ac-reset').length === 1, 'Use default again is offered');
@@ -386,7 +394,7 @@ test('Voice: an ElevenLabs voice needs its ID; a cloud engine for an agent kept 
   all(ok.card.el(), '.ac-more-head')[0].click();
   ok.state.fail['PATCH /api/agents/harbor'] = { status: 403, error: 'owner_confirmation_required' };
   await pick(all(rowOf(ok.card.el(), 'OPT-0022'), 'select')[0], 'google');
-  assert.deepStrictEqual(ok.calls.filter((c) => c.method === 'PATCH').map((c) => c.body), [{ voice: { voice: 'amber', stt: 'google', tts: 'local', cloudConfirm: true } }]);
+  assert.deepStrictEqual(ok.calls.filter((c) => c.method === 'PATCH').map((c) => c.body), [{ voice: { stt: 'google', cloudConfirm: true } }]);
   assert.match(rowOf(ok.card.el(), 'OPT-0022').textContent, /Only the owner of this Maestro can choose a cloud engine for this agent\./);
 });
 
@@ -408,7 +416,7 @@ test('Call display: None, Orb, the installed and the downloadable characters; a 
   assert.deepStrictEqual(writes(t).map((c) => [c.method, c.url, c.body]), [['PATCH', '/api/agents/harbor', { callDisplay: 'pack:fox' }]]);
 });
 
-test('Call timing: Patient saves the preset, Custom the four numbers; the numbers show only for Custom', async () => {
+test('Call timing: Patient saves the preset, Custom the four numbers (and drops the preset); one number sends only itself', async () => {
   const t = await opened();
   all(t.card.el(), '.ac-more-head')[0].click();
   assert.ok(!rowIds(t.card.el()).includes('OPT-0029'));
@@ -416,10 +424,11 @@ test('Call timing: Patient saves the preset, Custom the four numbers; the number
   assert.deepStrictEqual(writes(t).map((c) => c.body), [{ voiceDefaults: { preset: 'patient' } }]);
   t.calls.length = 0;
   await pick(all(rowOf(t.card.el(), 'OPT-0028'), 'select')[0], 'custom');
-  assert.deepStrictEqual(writes(t).map((c) => c.body), [{ voiceDefaults: { endPause: 1200, continueWait: 3000, interruptSensitivity: 50, voiceSpeed: 1 } }]);
+  assert.deepStrictEqual(writes(t).map((c) => c.body), [{ voiceDefaults: { preset: null, endPause: 1200, continueWait: 3000, interruptSensitivity: 50, voiceSpeed: 1 } }]);
   t.calls.length = 0;
   const pause = all(rowOf(t.card.el(), 'OPT-0029'), 'input')[0]; pause.value = '2500'; pause.dispatch('change'); await flush();
-  assert.deepStrictEqual(writes(t).map((c) => c.body), [{ voiceDefaults: { endPause: 2500, continueWait: 3000, interruptSensitivity: 50, voiceSpeed: 1 } }]);
+  assert.deepStrictEqual(writes(t).map((c) => c.body), [{ voiceDefaults: { endPause: 2500 } }]);
+  assert.deepStrictEqual(t.state.agents[1].voiceDefaults, { endPause: 2500, continueWait: 3000, interruptSensitivity: 50, voiceSpeed: 1 });
 });
 
 test('Recordings: only the owner of the Maestro may change them (the route\'s rule); the body carries only the changed key (the server merges)', async () => {
@@ -577,17 +586,35 @@ test('a member sees Basics only: no Role and team section, so no rename, owner, 
 });
 
 // ---- 8b. phase 3 round 1: one save at a time, whole objects from a fresh read, lazy lists retry ---------------------------------
-test('Voice: the whole voice object is built from a fresh read of the agent, not from what the card showed', async () => {
+test('Voice: only the changed key is sent (the server merges); what is checked (cloud confirmation) is read fresh', async () => {
   const t = await opened({ tweak: (l) => { l[1].voice = { voice: 'amber', stt: 'local', tts: 'local' }; } });
   all(t.card.el(), '.ac-more-head')[0].click();
   t.state.agents[1].voice = { voice: 'amber', stt: 'google', tts: 'local' };   // changed elsewhere; the card has not heard yet
   t.calls.length = 0;
   await pick(all(rowOf(t.card.el(), 'OPT-0026'), 'select')[0], '');
   assert.deepStrictEqual(t.calls.filter((c) => c.method === 'GET' && c.url === '/api/agents').length >= 1, true, 'a fresh GET came first');
-  assert.deepStrictEqual(writes(t).map((c) => c.body), [{ voice: { voice: '', stt: 'google', tts: 'local' } }]);
+  assert.deepStrictEqual(writes(t).map((c) => c.body), [{ voice: { voice: '' } }], 'the stt another device set is not in the body');
+  assert.strictEqual(t.state.agents[1].voice.stt, 'google', 'the other device\'s change is still there');
 });
 
-test('a second change while a save is in flight is blocked (every control disabled); the next whole-object body comes from a fresh read', async () => {
+test('Voice: going back to this computer for speech sends tts and removes the stored cloud voice with null', async () => {
+  const t = await opened({ tweak: (l) => { l[1].voice = { voice: '', stt: 'local', tts: 'openai', cloudVoice: 'nova' }; } });
+  all(t.card.el(), '.ac-more-head')[0].click();
+  await pick(all(rowOf(t.card.el(), 'OPT-0024'), 'select')[0], 'local');
+  assert.deepStrictEqual(writes(t).map((c) => c.body), [{ voice: { tts: 'local', cloudVoice: null } }]);
+});
+
+test('Voice: "Its own voice" with nothing saved yet reads "(choose below)"; once a detail is stored it reads "Its own voice"', async () => {
+  const t = await opened();
+  await pick(all(rowOf(t.card.el(), 'OPT-0023'), 'select')[0], 'own');
+  const row = rowOf(t.card.el(), 'OPT-0023');
+  assert.deepStrictEqual(all(row, 'option').map((o) => o.textContent), ['Same as all agents', 'Its own voice (choose below)']);
+  await pick(all(rowOf(t.card.el(), 'OPT-0022'), 'select')[0], 'openai');
+  assert.deepStrictEqual(all(rowOf(t.card.el(), 'OPT-0023'), 'option').map((o) => o.textContent), ['Same as all agents', 'Its own voice']);
+  B.reset();
+});
+
+test('a second change while a save is in flight is blocked (every control disabled); the next timing body is the Custom switch with the numbers read fresh', async () => {
   const t = await opened();
   all(t.card.el(), '.ac-more-head')[0].click();
   let release; t.state.gate = new Promise((r) => { release = r; });
@@ -603,7 +630,7 @@ test('a second change while a save is in flight is blocked (every control disabl
   t.state.agents[1].voiceDefaults = { endPause: 900, continueWait: 3000, interruptSensitivity: 50, voiceSpeed: 1 };   // changed elsewhere
   t.calls.length = 0;
   await pick(all(rowOf(t.card.el(), 'OPT-0028'), 'select')[0], 'custom');
-  assert.deepStrictEqual(writes(t).map((c) => c.body), [{ voiceDefaults: { endPause: 900, continueWait: 3000, interruptSensitivity: 50, voiceSpeed: 1 } }]);
+  assert.deepStrictEqual(writes(t).map((c) => c.body), [{ voiceDefaults: { preset: null, endPause: 900, continueWait: 3000, interruptSensitivity: 50, voiceSpeed: 1 } }]);
 });
 
 test('a list that failed to load is asked for again after a while (not forever blank)', async () => {
@@ -619,6 +646,38 @@ test('a list that failed to load is asked for again after a while (not forever b
   try { await t.card.refresh(); await flush(); } finally { Date.now = realNow; }
   assert.strictEqual(gets(), 2, 'asked again');
   assert.ok(all(rowOf(t.card.el(), 'OPT-0047'), 'option').length > 1, 'the list is there now');
+});
+
+test('a lazy list that lands after the person switched cards fills the card that is open now', async () => {
+  B.reset();
+  const t = setup();
+  let release; t.state.modelGate = new Promise((r) => { release = r; });
+  await t.card.open('harbor', {}); await flush();   // starts the model list read, held back
+  await t.card.open('quill', {}); await flush();
+  const before = all(rowOf(t.card.el(), 'OPT-0047'), 'option').length;
+  release(); await flush();
+  assert.strictEqual(t.card.state().name, 'quill');
+  assert.ok(all(rowOf(t.card.el(), 'OPT-0047'), 'option').length > before, 'the list is in the open card, not lost with the first');
+});
+
+test('Short name: a rename answered after the person opened another card leaves that card open; with nobody navigating it reopens on the new name', async () => {
+  const start = async () => {
+    const t = setup();
+    await t.card.open('harbor', { section: 'role' }); await flush();
+    for (const h of all(t.card.el(), '.ac-more-head')) if (h.getAttribute('aria-expanded') === 'false') h.click();
+    let release; t.state.renameHold = new Promise((r) => { release = r; });
+    const input = all(rowOf(t.card.el(), 'OPT-0001'), 'input')[0];
+    input.value = 'harbor2'; input.dispatch('change'); await flush();
+    return { t, release };
+  };
+  const a = await start();
+  await a.t.card.open('quill', { section: 'role' });   // moved on while the rename is still being answered
+  a.release(); await flush();
+  assert.ok(a.t.calls.some((c) => c.url === '/api/agents/rename'), 'the rename went through');
+  assert.strictEqual(a.t.card.state().name, 'quill', 'quill stays; harbor2 does not take over');
+  const b = await start();
+  b.release(); await flush();
+  assert.strictEqual(b.t.card.state().name, 'harbor2', 'nobody navigated: the card is on the new name');
 });
 
 // ---- 9. source checks ------------------------------------------------------------------------------------------------------

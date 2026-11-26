@@ -1203,7 +1203,7 @@ function agentCardEmit(type, ev) {
   const set = agentCardSubs[type];
   if (set) for (const fn of [...set]) { try { fn(ev); } catch { /* one listener must not stop the others */ } }
 }
-try { if (window.hubAgentCard && typeof window.hubAgentCard.configure === 'function') window.hubAgentCard.configure({ subscribe: agentCardSubscribe, agentsList: () => agents, simple: () => (typeof simpleOn === 'function' && simpleOn()) }); } catch { /* the card is optional */ }
+try { if (window.hubAgentCard && typeof window.hubAgentCard.configure === 'function') window.hubAgentCard.configure({ subscribe: agentCardSubscribe, agentsList: () => agents, simple: () => (typeof simpleOn === 'function' && simpleOn()), guard: (typeof dialogGuard !== 'undefined' ? dialogGuard : undefined) }); } catch { /* the card is optional */ }
 const CARD_PICK = '__card__';   // the value of the last line in a picker; never sent anywhere
 function agentCardLastLine(name) { const a = agentByName(name); return `All settings for ${(a && a.display) || name}…`; }
 // Opens the card on an agent at a row (a record id such as OPT-0047) or at its top; true when the card is there to open.
