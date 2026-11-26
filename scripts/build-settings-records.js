@@ -6,7 +6,9 @@
 //   node scripts/build-settings-records.js --audit <config-audit dir> --help <help out dir> --repo <repo root> --out templates/settings-records.json [--overrides <file>]
 //
 // --overrides names a JSON file of corrections the audit got wrong: { "OPT-0341": { "who": "admin", "reason": "…file:line…" } };
-// allowed keys who, danger, lead, anchors (replaces the list), home, and a required one-line reason. An unknown id or key fails.
+// allowed keys who, danger, lead, anchors (replaces the list), home, scope, applyOk (true: a record with lead "apply" may keep risk
+// words the apply check would refuse) and a required one-line reason. An unknown id or key fails. A key "+OPT-1082" ADDS a record the
+// audit does not have: it needs every field of a record (ADD_FIELDS) and a reason; a missing field or an id that already exists fails.
 // After the corrections: "Needs you" becomes "For your review" in every home, an alias takes the strictest who, danger and lead of
 // itself and its target, and the build fails on a selector used by two records on a surface, on an install-wide record that
 // members keep without being in MEMBER_INSTALL, and on danger/lead combinations the loader refuses.
@@ -33,12 +35,18 @@ const ID_RE = /(?<![\w-])id=(["'])([A-Za-z][\w:.-]*)\1/;
 const HOME_RENAMES = [[/Needs you/g, 'For your review']];
 const DANGER_RANK = { everyday: 0, care: 1, dangerous: 2 };
 const LEAD_RANK = { apply: 0, confirm: 1, screen: 2, none: 3 };
-const OVERRIDE_KEYS = ['who', 'danger', 'lead', 'anchors', 'home', 'reason'];
+const OVERRIDE_KEYS = ['who', 'danger', 'lead', 'anchors', 'home', 'scope', 'applyOk', 'reason'];
+// Every field a record added by an override must carry (facts and mergedInto are optional).
+const ADD_FIELDS = ['kind', 'name', 'labels', 'what', 'when', 'risk', 'def', 'restart', 'danger', 'who', 'lead', 'words', 'scope', 'home', 'storedAs', 'anchors'];
+// A record whose lead applies the change at once (and offers an undo) may not carry risk words that say it grants access, sends data
+// out or costs money: those need a confirm card. An override { "applyOk": true, "reason": … } states that the match is harmless.
+const APPLY_RISK_RE = /costs? money|per use|are sent|sent there|can (see|read|hear|download|use)|who can|recipients|address/i;
 
 // Install-wide records that stay visible to members, with the reason each one is. An install-wide record that is
 // not "admin" and not in this list fails the build: a member must really meet that control or indicator.
 const MEMBER_INSTALL = {
   'OPT-0306': 'Shared links: a member lists and revokes the share links of their own files (files-shared-btn, app.js:1677; /api/share-links is a session route, lib/access.js:52)',
+  'OPT-0749': 'the upload limit text sits beside Shared links in the Files panel every signed-in person opens (files-limit, app.js:1678); it shows the install-wide limit and nothing can be changed there',
   'OPT-0790': 'the Help page is open to every signed-in person (lib/access.js:82 classifies every page not in ADMIN_PAGES as a session page)',
   'OPT-0804': 'the Recordings link (menu-recordings, mobile.html:1722) is shown to anyone on a recording list; /api/recordings is a session route (lib/access.js:50)',
   'OPT-1067': 'the "?" Help button in the desktop header (index.html:3839) is not in the member-view hide list (app.js:659-661)',
@@ -161,10 +169,29 @@ function readOverrides(file) {
 const SELECTOR_OK = /^(#[A-Za-z][\w:.-]*|\[data-setting="OPT-\d{4,}"\])$/;
 
 /** Applies the corrections to the built records (by id); an unknown id or key, a missing reason or a bad value fails the build. */
-function applyOverrides(records, overrides) {
+function applyOverrides(records, overrides, applyOk = new Set()) {
   const byId = new Map(records.map((r) => [r.id, r]));
   const used = [];
+  // Records the audit does not have: "+OPT-1082": { every field, reason }
+  for (const [key, o] of Object.entries(overrides)) {
+    if (!key.startsWith('+')) continue;
+    const id = key.slice(1);
+    if (!/^OPT-\d{4,}$/.test(id)) throw new Error(`overrides: ${key} is not a record id with a leading +`);
+    if (byId.has(id)) throw new Error(`overrides: ${key} adds a record, but ${id} already exists`);
+    if (!o || typeof o !== 'object' || Array.isArray(o)) throw new Error(`overrides: ${key} must be an object`);
+    if (typeof o.reason !== 'string' || !o.reason.trim() || /\n/.test(o.reason)) throw new Error(`overrides: ${key} needs a one-line reason`);
+    const missing = ADD_FIELDS.filter((f) => o[f] === undefined);
+    if (missing.length) throw new Error(`overrides: ${key} is missing ${missing.join(', ')}`);
+    for (const k of Object.keys(o)) if (k !== 'reason' && k !== 'facts' && !ADD_FIELDS.includes(k)) throw new Error(`overrides: ${key} has an unknown key "${k}"`);
+    const { reason: _reason, ...fields } = o;
+    const rec = { id, ...fields };
+    records.push(rec);
+    byId.set(id, rec);
+    used.push(id);
+  }
+  records.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   for (const [id, o] of Object.entries(overrides)) {
+    if (id.startsWith('+')) continue;
     const r = byId.get(id);
     if (!r) throw new Error(`overrides: ${id} is not a record`);
     if (!o || typeof o !== 'object' || Array.isArray(o)) throw new Error(`overrides: ${id} must be an object`);
@@ -175,6 +202,8 @@ function applyOverrides(records, overrides) {
     if (o.danger !== undefined) { if (!(o.danger in DANGER_RANK)) throw new Error(`overrides: ${id} danger ${JSON.stringify(o.danger)}`); r.danger = o.danger; }
     if (o.lead !== undefined) { if (!(o.lead in LEAD_RANK)) throw new Error(`overrides: ${id} lead ${JSON.stringify(o.lead)}`); r.lead = o.lead; }
     if (o.home !== undefined) { if (typeof o.home !== 'string' || !o.home.trim()) throw new Error(`overrides: ${id} home`); r.home = o.home; }
+    if (o.scope !== undefined) { if (typeof o.scope !== 'string' || !o.scope.trim()) throw new Error(`overrides: ${id} scope`); r.scope = o.scope; }
+    if (o.applyOk !== undefined) { if (o.applyOk !== true) throw new Error(`overrides: ${id} applyOk must be true`); applyOk.add(id); }
     if (o.anchors !== undefined) {
       if (!Array.isArray(o.anchors)) throw new Error(`overrides: ${id} anchors must be a list`);
       for (const a of o.anchors) {
@@ -230,10 +259,11 @@ function dedupeSelectors(records, rootOf) {
 }
 
 /** The checks every build must pass; throws one error naming everything wrong. */
-function checkRecords(records, conflicts) {
+function checkRecords(records, conflicts, applyOk = new Set()) {
   const bad = [...conflicts.map((c) => `selector used by two records: ${c}`)];
   const byId = new Map(records.map((r) => [r.id, r]));
   for (const r of records) {
+    if (r.lead === 'apply' && APPLY_RISK_RE.test(r.risk || '') && !applyOk.has(r.id)) bad.push(`${r.id}: lead apply, but its risk text says it grants access, sends data out or costs money (${APPLY_RISK_RE.exec(r.risk)[0]}); use confirm, or an override with applyOk and a reason`);
     if (/Needs you/.test(r.home)) bad.push(`${r.id}: home "${r.home}" still says "Needs you"`);
     if (r.danger === 'dangerous' && r.who !== 'admin') bad.push(`${r.id}: dangerous but who is ${r.who}`);
     if (r.danger === 'dangerous' && r.lead === 'apply') bad.push(`${r.id}: dangerous with lead apply`);
@@ -321,11 +351,12 @@ function build(args) {
     records.push(rec);
   }
   records.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-  const overridden = applyOverrides(records, readOverrides(args.overrides));
+  const applyOk = new Set();
+  const overridden = applyOverrides(records, readOverrides(args.overrides), applyOk);
   for (const r of records) for (const [re, to] of HOME_RENAMES) r.home = r.home.replace(re, to);
   const rootOf = harmoniseAliases(records);
   const conflicts = dedupeSelectors(records, rootOf);
-  checkRecords(records, conflicts);
+  checkRecords(records, conflicts, applyOk);
   stats.overridden = overridden.length;
   // no invisible characters in the shipped words: emoji variation selectors and zero-width characters are dropped
   const INVIS = new RegExp('[' + String.fromCharCode(0xFE0E, 0xFE0F, 0x200B, 0x200C, 0x200D, 0x2060, 0xFEFF) + ']', 'g'); const clean = (v) => (typeof v === 'string' ? v.replace(INVIS, '')

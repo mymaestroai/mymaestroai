@@ -25373,7 +25373,22 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const how = dialogGuard.requestClose(top, 'back');
       // the "Discard changes?" question, a save running, or an inner box closed with Settings still open: the sheet stays.
       // Settings itself closed: the watch says so.
+      // The parent hears the FINAL outcome: "kept" at once for a save running or an inner box; for "Discard changes?" first
+      // "asking" (the question is up: the parent stops its give-up timer), then "kept" only when it is answered Keep editing
+      // (Discard closes Settings, which the watch reports as closed).
+      if (how === 'confirm') { settingsOnlyAsk(); return; }
       if (how !== 'closed' || document.getElementById('st-overlay')) settingsOnlyPost('mm-settings-kept');
+    }
+    let settingsOnlyAsking = false;
+    function settingsOnlyAsk() {
+      settingsOnlyPost('mm-settings-asking');
+      if (settingsOnlyAsking) return;
+      settingsOnlyAsking = true;
+      const t = setInterval(() => {
+        if (document.querySelector('.dlg-discard')) return;   // the question is still up
+        clearInterval(t); settingsOnlyAsking = false;
+        if (document.getElementById('st-overlay')) settingsOnlyPost('mm-settings-kept');   // Keep editing: Settings is still open
+      }, 50);
     }
     // A link or button in the dialog that opens another page of this hub: with changes not saved anywhere in the dialog, it
     // asks first ("Discard changes?"), as Close does; with nothing to lose the page opens in the sheet.

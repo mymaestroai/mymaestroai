@@ -1,5 +1,5 @@
 {
-  "version": "3ceb040f878871a60275e7817c8c406773df1826",
+  "version": "d5e55971104f7f1f7f801504bbcfc018e9ae4990",
   "records": [
     {
       "id": "OPT-0001",
@@ -34,10 +34,6 @@
         {
           "surface": "agent-settings",
           "selector": "#agent-slug"
-        },
-        {
-          "surface": "users",
-          "selector": "#p-prefix"
         }
       ],
       "facts": "Rename route POST /api/agents/rename (inventory); help today says it renames workspace folder, chat file and config key and needs a page reload; a renamed agent's box is made with new folders on its next turn lib/agents.js:1324; blocked while the agent has call recordings lib/agents.js:1089-1093. The team prefix variant (users.html:370) was not re-read. No restart found."
@@ -95,9 +91,9 @@
       "risk": "A team head is allowed more than a worker (it asks before sending things out instead of being refused), so give the role only to agents you trust. Lead powers are a separate box.",
       "def": "Default: specialist. We recommend leaving it unless the agent leads a team.",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [
         "category",
         "primary",
@@ -773,9 +769,9 @@
       "risk": "A cloud engine sends the recorded speech to that company and costs money for each use. If it fails, the free local engine is used instead. For an agent whose data must stay on this computer, only the owner can allow a cloud engine.",
       "def": "Default: the free local engine. We recommend leaving it.",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [
         "speech recognition",
         "speech to text",
@@ -809,9 +805,9 @@
       "risk": "A cloud voice sends the reply text to that company and costs money per use. If it fails, the free local voice speaks instead. For an agent whose data must stay on this computer, only the owner can allow a cloud voice.",
       "def": "Default: the free local voice. We recommend leaving it.",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [
         "voice engine",
         "text to speech",
@@ -845,9 +841,9 @@
       "risk": "None beyond the cloud voice's own cost.",
       "def": "Default: Coral for OpenAI and Kore for Google. We recommend leaving it unless you want a different sound.",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [
         "voice choice",
         "cloud voice",
@@ -881,9 +877,9 @@
       "risk": "",
       "def": "",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [],
       "scope": "per-agent",
       "home": "Agent card > Basics",
@@ -1170,9 +1166,9 @@
       "risk": "Recordings take disk space and hold private conversations. Anyone you allow to download them can hear every call. Tell callers they are being recorded.",
       "def": "Default: off. We recommend leaving it off unless you need the recordings.",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [
         "record calls",
         "recording",
@@ -1205,9 +1201,9 @@
       "risk": "Everyone you tick can hear every recorded call with this agent.",
       "def": "Default: nobody. We recommend ticking as few people as possible.",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [
         "access",
         "who can listen",
@@ -1240,9 +1236,9 @@
       "risk": "A vague sentence may not tell people they are recorded. Many places have rules about telling people.",
       "def": "Default: This conversation is being recorded. We recommend keeping it or making it clearer.",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [
         "consent",
         "recording notice",
@@ -1275,9 +1271,9 @@
       "risk": "Never means callers see only the badge and hear nothing. Check what the rules are where you live.",
       "def": "Default: the first call with each person. We recommend that, or every call.",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [
         "announce",
         "consent",
@@ -1310,9 +1306,9 @@
       "risk": "Uses more disk space. It only works while Keep call recordings is on.",
       "def": "Default: off. We recommend leaving it off unless you need both sides.",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [
         "agent audio",
         "both sides",
@@ -4102,7 +4098,7 @@
         },
         {
           "surface": "simple-phone",
-          "selector": "#simple-agent-switch"
+          "selector": "[data-setting=\"OPT-0128\"]"
         },
         {
           "surface": "desktop",
@@ -4864,9 +4860,9 @@
       "risk": "A change an agent makes to the program files can break updates or stop every agent from answering. Turned on, an agent that maintains the code cannot do that work.",
       "def": "Default: undecided on an install that already has agents, and agents may still change the code until you choose. We recommend turning it on.",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [
         "protect code",
         "program files",
@@ -9732,9 +9728,9 @@
       "risk": "A longer time leaves the link open longer. Anyone with the link can open the file until it ends.",
       "def": "Default: 24 hours. We recommend leaving it.",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [
         "share link",
         "expire",
@@ -9772,9 +9768,9 @@
       "risk": "A higher limit lets links stay open longer.",
       "def": "Default: 7 days (the highest allowed). We recommend 24 hours or 7 days.",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [
         "share link",
         "maximum",
@@ -10765,7 +10761,7 @@
       "anchors": [
         {
           "surface": "desktop",
-          "label": "Anthropic"
+          "selector": "#st-key-anthropic"
         }
       ],
       "facts": "settings.providers.anthropic.apiKey; stored in data/settings.json, readable only by the computer's account; a key typed into .env is moved there at start-up (audit help text, not opened). Keys are dangerous, screen-only settings (design.md, help sample 8). No restart (audit); not tested here."
@@ -10801,7 +10797,7 @@
       "anchors": [
         {
           "surface": "desktop",
-          "label": "OpenAI"
+          "selector": "#st-key-openai"
         }
       ],
       "facts": "settings.providers.openai.apiKey; same storage and screen-only rule as OPT-0340. No restart (audit); not tested here."
@@ -10837,7 +10833,7 @@
       "anchors": [
         {
           "surface": "desktop",
-          "label": "Google (Gemini)"
+          "selector": "#st-key-google"
         }
       ],
       "facts": "settings.providers.google.apiKey; same storage and screen-only rule as OPT-0340. No restart (audit); not tested here."
@@ -10873,7 +10869,7 @@
       "anchors": [
         {
           "surface": "desktop",
-          "label": "Perplexity"
+          "selector": "#st-key-perplexity"
         }
       ],
       "facts": "settings.providers.perplexity.apiKey; Perplexity is one of the web search backends lib/web-search.js:3-18. Same storage and screen-only rule as OPT-0340. No restart (audit); not tested here."
@@ -10909,7 +10905,7 @@
       "anchors": [
         {
           "surface": "desktop",
-          "label": "OpenRouter"
+          "selector": "#st-key-openrouter"
         }
       ],
       "facts": "settings.providers.openrouter.apiKey; same storage and screen-only rule as OPT-0340. No restart (audit); not tested here."
@@ -10945,7 +10941,7 @@
       "anchors": [
         {
           "surface": "desktop",
-          "label": "ElevenLabs (voice)"
+          "selector": "#st-key-elevenlabs"
         }
       ],
       "facts": "settings.providers.elevenlabs.apiKey; ElevenLabs is pay per use, local voice is free (help sample 3, OPT-0345). Same storage and screen-only rule as OPT-0340. No restart (audit); not tested here."
@@ -10962,9 +10958,9 @@
       "risk": "A wrong address means no models from LM Studio. Only point it at a computer you trust, because your messages are sent there.",
       "def": "Default: http://localhost:1234/v1 on this computer. We recommend leaving it blank.",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [
         "LM Studio",
         "local models",
@@ -10981,7 +10977,7 @@
       "anchors": [
         {
           "surface": "desktop",
-          "label": "LM Studio"
+          "selector": "#st-url-lmstudio"
         }
       ],
       "facts": "settings.providers.lmstudio.url, read each time by getProviderUrl lib/settings.js:121-128 (saved value, else environment value, else built-in default); built-in default http://localhost:1234/v1 shown by the page (app.js:3784), PROVIDER_DEFAULTS not read; no restart found, since the URL is read per call (not confirmed for already-open connections)"
@@ -10998,9 +10994,9 @@
       "risk": "A wrong address means no models from Ollama. Only point it at a computer you trust, because your messages are sent there.",
       "def": "Default: http://localhost:11434/v1 on this computer. We recommend leaving it blank.",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [
         "Ollama",
         "local models",
@@ -11017,7 +11013,7 @@
       "anchors": [
         {
           "surface": "desktop",
-          "label": "Ollama"
+          "selector": "#st-url-ollama"
         }
       ],
       "facts": "settings.providers.ollama.url via getProviderUrl lib/settings.js:121-128; default shown by the page app.js:3784 as http://localhost:11434/v1 (PROVIDER_DEFAULTS not read); read per call, no restart found (not confirmed for open connections)"
@@ -11034,9 +11030,9 @@
       "risk": "A wrong address means no models from oMLX. Only point it at a computer you trust, because your messages are sent there.",
       "def": "Default: http://localhost:8000/v1 on this computer. We recommend leaving it blank.",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [
         "oMLX",
         "MLX",
@@ -11054,7 +11050,7 @@
       "anchors": [
         {
           "surface": "desktop",
-          "label": "oMLX (Apple Silicon)"
+          "selector": "#st-url-omlx"
         }
       ],
       "facts": "settings.providers.omlx.url via getProviderUrl lib/settings.js:121-128; default shown by the page app.js:3784 as http://localhost:8000/v1 (PROVIDER_DEFAULTS not read); read per call, no restart found (not confirmed for open connections)"
@@ -11107,9 +11103,9 @@
       "risk": "Every model costs money per use. Your messages go to OpenRouter and the company behind the model.",
       "def": "Default: no key set. We recommend adding a key only if you want these models.",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
-      "lead": "apply",
+      "lead": "screen",
       "words": [
         "OpenRouter",
         "key",
@@ -11128,7 +11124,7 @@
       "anchors": [
         {
           "surface": "desktop",
-          "label": "OpenRouter"
+          "selector": "#st-or-section"
         }
       ],
       "facts": "intro text app.js:3801; model list from /api/openrouter; cost goes into daily spend per page text (not read in the ledger); saving a key does not need a restart per the settings module (not confirmed)"
@@ -11145,9 +11141,9 @@
       "risk": "With it on, some models are not available because their provider keeps data. With it off, your messages may be stored or used for training.",
       "def": "Default: on (the audit said off; the code says on). We recommend leaving it on.",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [
         "privacy",
         "OpenRouter",
@@ -14023,7 +14019,7 @@
       "anchors": [
         {
           "surface": "desktop",
-          "label": "Web search and fetch"
+          "selector": "#st-mp-web"
         }
       ],
       "facts": "settings.memberPolicy.web; member role default deny lib/tool-policy.js:54-64; layers hub default, per member grant, per agent override lib/tool-policy.js:100-106; grantable classes web, read_outside, write_outside, send only lib/tool-policy.js:108-109, saved through sanitizeGrants server.js:3030. Ask without cards = allow lib/policy-gate.js:188-192. Audit lists 'deny' twice among choices; code values allow/ask/deny. No restart."
@@ -15325,7 +15321,7 @@
       "anchors": [
         {
           "surface": "desktop",
-          "label": "Web search and fetch"
+          "selector": "#st-ws-section"
         }
       ],
       "facts": "app.js:4015 explanatory text; lib/web-search.js:3-18 chain, DuckDuckGo is the zero-key floor; lib/web-fetch.js:11 fetch, Jina off by default; private and local addresses refused unless allowed (not re-traced)"
@@ -15947,9 +15943,9 @@
       "risk": "While it is on, people you have allowed can message your agents from Telegram.",
       "def": "Default: off. We recommend turning it on only once the key and senders are set.",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [
         "telegram",
         "enable",
@@ -15983,9 +15979,9 @@
       "risk": "Messages sent to the bot while it is paused are not answered or kept.",
       "def": "Default: off, so Telegram runs normally. We recommend leaving it off.",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [
         "pause",
         "telegram",
@@ -16019,9 +16015,9 @@
       "risk": "The chosen agent answers everyone you have allowed, so pick one you are happy for them to use.",
       "def": "Default: your main agent. We recommend leaving it.",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [
         "default agent",
         "telegram",
@@ -16055,9 +16051,9 @@
       "risk": "Each ticked agent can be reached by the people allowed to message your Telegram connection. Those messages cost plan use or money like any chat.",
       "def": "Default: only the lead agent. We recommend adding agents one at a time.",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [
         "telegram",
         "bot",
@@ -16164,9 +16160,9 @@
       "risk": "Agents can send messages to every recipient on the list, so add only chats you want to hear from them.",
       "def": "Default: empty. We recommend adding only your own chat.",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [
         "recipients",
         "send to",
@@ -16200,9 +16196,9 @@
       "risk": "The recipient gets a real message. Check the name and text first.",
       "def": "Not a setting; it only sends when you press Send.",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [
         "test",
         "test message",
@@ -18037,9 +18033,9 @@
       "risk": "Ticking means you accept the access it explains. Do not tick it if something looks wrong.",
       "def": "Default: not ticked. You must tick it to go on.",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [
         "consent",
         "agree",
@@ -18073,9 +18069,9 @@
       "risk": "While it is on, agents can use that service's data.",
       "def": "Default: off until setup is finished. We recommend leaving unused ones off.",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [
         "enable",
         "disable",
@@ -18179,9 +18175,9 @@
       "risk": "Every ticked agent can use what the module reaches. Tick only agents you trust with it.",
       "def": "Default: none ticked, so only the lead agents. We recommend ticking as few as possible.",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [
         "module",
         "agents",
@@ -18215,9 +18211,9 @@
       "risk": "The chosen agent sees the notices, and any pictures that come with them.",
       "def": "Default: your main agent. We recommend leaving it.",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [
         "notice agent",
         "notices",
@@ -18251,9 +18247,9 @@
       "risk": "Your backups are locked, but a copy leaves this computer and uses your Drive space.",
       "def": "Default: off, Not set up until you finish the guided set-up. We recommend setting it up.",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [
         "Google Drive",
         "backup",
@@ -18373,9 +18369,9 @@
       "risk": "Your lead agent can read your health data once it is on. The data is fetched only when an agent asks.",
       "def": "Default: off until the guided setup is finished. We recommend leaving it off if you do not use an Oura Ring.",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [
         "oura",
         "ring",
@@ -18494,9 +18490,9 @@
       "risk": "Each agent you tick can read your health data.",
       "def": "Default: only your main agent. We recommend ticking no more than you need.",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [
         "oura",
         "who can read",
@@ -19107,9 +19103,9 @@
       "risk": "Pictures and clips are kept on this computer, and agents you allow can see them. Setting it up needs your Maestro to be reachable from the internet.",
       "def": "Default: off until the guided setup is finished. We recommend leaving it off if you have no Ring cameras.",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [
         "ring",
         "cameras",
@@ -19228,9 +19224,9 @@
       "risk": "Each agent you tick can see your camera pictures and clips.",
       "def": "Default: only your main agent. We recommend ticking no more than you need.",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [
         "cameras",
         "who can look",
@@ -19383,9 +19379,9 @@
       "risk": "Pictures older than this are removed and cannot be brought back.",
       "def": "Default: 30 days. We recommend leaving it.",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [
         "keep pictures",
         "days",
@@ -19445,9 +19441,9 @@
       "risk": "Clips older than this are removed and cannot be brought back.",
       "def": "Default: 30 days. We recommend leaving it.",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [
         "keep clips",
         "days",
@@ -19538,9 +19534,9 @@
       "risk": "A wrong address means faces are not recognized.",
       "def": "Default: http://127.0.0.1:9795. We recommend leaving it.",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [
         "face recognizer",
         "address",
@@ -19872,9 +19868,9 @@
       "risk": "It creates several agents, which may use plan or money when they work. They hold private folders, so choose who owns them carefully.",
       "def": "Default: medical. We recommend choosing the team the member needs.",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [
         "create team",
         "template",
@@ -20194,9 +20190,9 @@
       "risk": "It creates several agents, which may use plan or money when they work.",
       "def": "Default: the template that was asked for, otherwise medical. We recommend checking the request first.",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [
         "team request",
         "template",
@@ -22130,9 +22126,9 @@
       "risk": "Restoring replaces everything with the backup.",
       "def": "Default: no choice yet. We recommend Set up new unless you have a backup.",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [
         "welcome",
         "first run",
@@ -22476,9 +22472,9 @@
       "risk": "The helpers use their models when given work. Any that is paid per use is marked before anything is created.",
       "def": "Default: ticked. We recommend leaving it ticked.",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [
         "starter team",
         "challenger",
@@ -23337,9 +23333,9 @@
       "risk": "The task uses that agent's AI and permissions each time it runs, so it costs plan use or money.",
       "def": "Default: the first agent in the list. We recommend choosing one on purpose.",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [
         "schedule",
         "scheduled task",
@@ -23373,9 +23369,9 @@
       "risk": "A repeating task keeps using your plan or money every time it runs. There is a limit on tasks per agent and on how often one may run.",
       "def": "Default: empty. Examples: tomorrow at 9am, every day at 8:15 PM, weekdays at 9am, every 4 hours.",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [
         "schedule",
         "time",
@@ -23447,9 +23443,9 @@
       "risk": "The agent follows it by itself each time, so vague or risky instructions can cause unwanted actions.",
       "def": "Default: empty.",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [
         "prompt",
         "instructions",
@@ -23688,9 +23684,9 @@
       "risk": "None. It only shows information.",
       "def": "Shows the install's upload limit, 512 MB unless changed.",
       "restart": false,
-      "danger": "care",
+      "danger": "everyday",
       "who": "both",
-      "lead": "confirm",
+      "lead": "none",
       "words": [
         "upload limit",
         "max size",
@@ -23700,7 +23696,7 @@
         "megabytes",
         "how large"
       ],
-      "scope": "per-agent",
+      "scope": "install",
       "home": "Top bar",
       "storedAs": "none",
       "anchors": [
@@ -24430,9 +24426,9 @@
       "risk": "",
       "def": "",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [],
       "scope": "install",
       "home": "Settings > Tools and connections",
@@ -24452,9 +24448,9 @@
       "risk": "",
       "def": "",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [],
       "scope": "install",
       "home": "Settings > Tools and connections",
@@ -24474,9 +24470,9 @@
       "risk": "",
       "def": "",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [],
       "scope": "install",
       "home": "Settings > Tools and connections",
@@ -24496,9 +24492,9 @@
       "risk": "",
       "def": "",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [],
       "scope": "install",
       "home": "Settings > Tools and connections",
@@ -24545,9 +24541,9 @@
       "risk": "",
       "def": "",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [],
       "scope": "install",
       "home": "Settings > Tools and connections",
@@ -24572,9 +24568,9 @@
       "risk": "",
       "def": "",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [],
       "scope": "install",
       "home": "Settings > Tools and connections",
@@ -28237,9 +28233,9 @@
       "risk": "A wrong address means models from that server cannot be reached.",
       "def": "Default: http://127.0.0.1:8080/v1. We recommend leaving it unless your server is somewhere else.",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [
         "ninfer",
         "url",
@@ -29131,9 +29127,9 @@
       "risk": "Pictures cost money per use on the service you choose. If its key is missing, no picture is made.",
       "def": "Default: Google. We recommend using whichever service you already have a key for.",
       "restart": false,
-      "danger": "everyday",
+      "danger": "care",
       "who": "admin",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [
         "image",
         "picture",
@@ -30793,7 +30789,7 @@
         },
         {
           "surface": "simple-phone",
-          "selector": "#simple-more-agents"
+          "selector": "[data-setting=\"OPT-1023\"]"
         }
       ],
       "facts": "button 'More agents' app.js:338-343 and mobile.js:17761; open or closed is kept per device in localStorage hub-simple-more ('1' open) lib/ui-simple.js:337, app.js:316-318; only in Simple mode (hubSimple); a busy hidden agent shows a dot on the button app.js:345-347."
@@ -31130,7 +31126,7 @@
       "anchors": [
         {
           "surface": "simple-phone",
-          "selector": "#ss-research-level"
+          "selector": "[data-setting=\"OPT-1037\"]"
         }
       ],
       "mergedInto": "OPT-0468"
@@ -32236,6 +32232,41 @@
         }
       ],
       "mergedInto": "OPT-0199"
+    },
+    {
+      "id": "OPT-1082",
+      "kind": "setting",
+      "name": "Team prefix",
+      "labels": [
+        "Create team > prefix (optional, e.g. jane)"
+      ],
+      "what": "The short word that goes in front of the names of the agents the team template creates for this person. With the prefix jane, a template agent called gp becomes jane_gp, and the rest of the team is named the same way.",
+      "when": "Change it when the default would clash with agents that already exist, or would be unclear, for example when two people share a first name.",
+      "risk": "None: it only names the new agents. Agents that already exist keep their names. If one of the new names is already taken, nothing is created and you are asked to choose another prefix.",
+      "def": "Default: empty, which makes a prefix from the person's name: the part of their sign-in before the @, in lower case, with only letters and digits, up to 16 characters (jane for jane@example.com). A prefix that would start with a digit gets an m in front.",
+      "restart": false,
+      "danger": "everyday",
+      "who": "admin",
+      "lead": "screen",
+      "words": [
+        "prefix",
+        "team prefix",
+        "agent names",
+        "name of the new agents",
+        "create team",
+        "member",
+        "clash",
+        "already exist"
+      ],
+      "scope": "per-person",
+      "home": "Settings > People and safety",
+      "storedAs": "agents[].name (the new agents are named <prefix>_<template agent>)",
+      "anchors": [
+        {
+          "surface": "users",
+          "selector": "#p-prefix"
+        }
+      ]
     }
   ]
 }

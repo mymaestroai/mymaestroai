@@ -61,7 +61,9 @@ function soHarness({ admin = true, parentIsSelf = false } = {}) {
   const win = { addEventListener: (t, f) => { listeners[t] = f; } };
   win.parent = parentIsSelf ? win : parent;
   const docListeners = {};
-  const doc = { documentElement: docEl, body: {}, getElementById: (id) => (id === 'st-overlay' ? overlay : null), addEventListener: (t, f, c) => { docListeners[t] = { f, c }; } };
+  let question = null;   // the "Discard changes?" dialog while it is up
+  const intervals = [];  // the page's setInterval, ticked by hand: tick() runs every live one once
+  const doc = { documentElement: docEl, body: {}, getElementById: (id) => (id === 'st-overlay' ? overlay : null), querySelector: (s) => (s === '.dlg-discard' ? question : null), addEventListener: (t, f, c) => { docListeners[t] = { f, c }; } };
   const env = {
     window: win, document: doc, location: { origin: 'https://hub.example', href: 'https://hub.example/?settings-only=1', replaced: [], replace(u) { this.replaced.push(u); } },
     fetch: async () => ({ ok: true, status: 200, json: async () => ({ isAdmin: admin, user: { id: 'u1' } }) }),
@@ -71,11 +73,12 @@ function soHarness({ admin = true, parentIsSelf = false } = {}) {
     stModal: (html) => { calls.push(['stModal', html]); overlay = { id: 'st-overlay' }; },
     dialogGuard: { requestClose: (o, how) => { calls.push(['requestClose', how, o]); return env.nextClose; }, layers: () => layers.slice(), isDirty: (el) => !!el.dirty },
     MutationObserver: class { constructor(cb) { env.observe = cb; } observe() {} },
+    setInterval: (f) => { intervals.push({ f, on: true }); return intervals.length; }, clearInterval: (n) => { if (intervals[n - 1]) intervals[n - 1].on = false; },
     nextClose: 'closed',
   };
   const f = new Function(...Object.keys(env).filter(k => k !== 'nextClose' && k !== 'observe'), `${SO}; return { settingsOnlyStart, settingsOnlyMessage, settingsOnlyWatch, settingsOnlyLeaveGuard };`);
   const api = f(...Object.keys(env).filter(k => k !== 'nextClose' && k !== 'observe').map(k => env[k]));
-  return { api, env, posted, calls, listeners, parent, win, layers, docListeners, setOverlay: (o) => { overlay = o; } };
+  return { api, env, posted, calls, listeners, parent, win, layers, docListeners, setOverlay: (o) => { overlay = o; }, setQuestion: (q) => { question = q; }, tick: () => { for (const i of intervals.slice()) if (i.on) i.f(); }, live: () => intervals.filter((i) => i.on).length };
 }
 
 test('settingsOnlyStart: an admin gets the dialog and the parent hears "ready"; a member gets a plain line, never the dialog', async () => {
@@ -101,14 +104,25 @@ test('settingsOnlyMessage: only a close request from the parent at the same orig
   const msg = (over) => h.api.settingsOnlyMessage({ source: h.parent, origin: 'https://hub.example', data: { type: 'mm-settings-close' }, ...over });
   msg({ source: {} }); msg({ origin: 'https://evil.example' }); msg({ data: { type: 'other' } }); msg({ data: null });
   assert.deepStrictEqual(h.calls.filter(c => Array.isArray(c) && c[0] === 'requestClose'), [], 'nothing from elsewhere');
-  h.env.nextClose = 'confirm'; msg({});
-  assert.deepStrictEqual(h.posted.pop(), [{ type: 'mm-settings-kept' }, 'https://hub.example'], 'Discard changes? is asked: the sheet stays');
+  // U2: "Discard changes?" posts "asking" (not the final outcome); the answer decides: Keep editing = kept, Discard = the watch's closed
+  h.env.nextClose = 'confirm'; h.setQuestion({ cls: 'dlg-discard' }); msg({});
+  assert.deepStrictEqual(h.posted.splice(0), [[{ type: 'mm-settings-asking' }, 'https://hub.example']], 'the question is up: asking, never kept yet');
+  h.tick(); assert.strictEqual(h.posted.length, 0, 'still up: nothing more is said');
+  msg({}); assert.deepStrictEqual(h.posted.splice(0), [[{ type: 'mm-settings-asking' }, 'https://hub.example']]);
+  assert.strictEqual(h.live(), 1, 'one watcher however many times it is asked');
+  h.setQuestion(null); h.tick();   // Keep editing: the question is gone and Settings is still there
+  assert.deepStrictEqual(h.posted.splice(0), [[{ type: 'mm-settings-kept' }, 'https://hub.example']], 'answered Keep editing: kept');
+  assert.strictEqual(h.live(), 0);
+  h.setQuestion({ cls: 'dlg-discard' }); msg({}); h.posted.length = 0;
+  h.setOverlay(null); h.setQuestion(null); h.tick();   // Discard: Settings is gone too
+  assert.strictEqual(h.posted.length, 0, 'answered Discard: no kept (the watch reports closed)');
+  h.setOverlay({ id: 'st-overlay' });
   h.env.nextClose = 'busy'; msg({});
   assert.deepStrictEqual(h.posted.pop(), [{ type: 'mm-settings-kept' }, 'https://hub.example'], 'a save running: the sheet stays');
   h.env.nextClose = 'closed'; h.setOverlay(null); msg({});
   assert.strictEqual(h.posted.length, 0, 'closed is told by the watch when the dialog is gone');
   h.setOverlay({ id: 'st-overlay' });
-  assert.deepStrictEqual(h.calls.filter(c => Array.isArray(c) && c[0] === 'requestClose').map(c => c[1]), ['back', 'back', 'back']);
+  assert.deepStrictEqual(h.calls.filter(c => Array.isArray(c) && c[0] === 'requestClose').map(c => c[1]), ['back', 'back', 'back', 'back', 'back']);
   // review r1: a box opened over Settings is closed first (its own question), and the sheet stays
   const inner = { id: 'inner-box' };
   h.layers.push({ el: inner });

@@ -962,7 +962,7 @@ test('a text-block label (div.sec-title) gets its ⓘ as its last child; the wor
 });
 
 test('a LABEL gets its ⓘ right after it and the class st-has-info; a label holding a control is never entered', () => {
-  const doc = makeDoc(), win = makeWin(doc);
+  const doc = makeDoc(), win = makeWin(doc, { getComputedStyle: () => ({ display: 'block' }) });
   const ov = el(doc, 'div'); doc.body.appendChild(ov);
   const col = el(doc, 'div', { class: 'col' }); ov.appendChild(col);
   const lab = el(doc, 'label', { for: 'x1' }, 'Voice'); col.appendChild(lab);
@@ -1023,19 +1023,179 @@ test('Simple on the phone: the records anchored on simple-phone get their ⓘ in
   const sec = (title, id) => { const s = el(doc, 'div', { class: 'ss-sec', ...(id ? { id } : {}) }); d.appendChild(s); s.appendChild(el(doc, 'div', { class: 'ss-title' }, title)); return s; };
   sec('Appearance'); sec('Interface style', 'ss-style-sec'); sec('Name');
   const rs = sec('Deep research', 'ss-research-sec');
-  rs.appendChild(el(doc, 'div', { class: 'ss-rseg', id: 'ss-research-level', role: 'group' }));
+  rs.appendChild(el(doc, 'div', { class: 'ss-rseg', 'data-setting': 'OPT-1037', role: 'group' }));
   const sheet = el(doc, 'dialog'); doc.body.appendChild(sheet);
   const list = el(doc, 'div', { class: 'sa-list' }); sheet.appendChild(list);
-  list.appendChild(el(doc, 'div', { class: 'sa-switch', id: 'simple-agent-switch' }));
-  list.appendChild(el(doc, 'button', { class: 'sa-row sa-more', id: 'simple-more-agents' }, 'More agents'));
+  list.appendChild(el(doc, 'div', { class: 'sa-switch', 'data-setting': 'OPT-0128' }));
+  list.appendChild(el(doc, 'button', { class: 'sa-row sa-more', 'data-setting': 'OPT-1023' }, 'More agents'));
   const n1 = H.attach(d, 'simple-phone', { doc, win }), n2 = H.attach(sheet, 'simple-phone', { doc, win });
   const have = new Set([...infos(d), ...infos(sheet)].map((b) => b.getAttribute('data-rec')));
   for (const id of ['OPT-1022', 'OPT-0284', 'OPT-0613', 'OPT-1036', 'OPT-1037', 'OPT-0128', 'OPT-1023']) assert.ok(have.has(id), id + ' has its ⓘ');
   assert.ok(n1 >= 5 && n2 >= 2);
   // the markup the anchors rely on is in the page code, and both sheets are mounted for the surface
   const mob = read('mobile.js');
-  for (const id of ['simple-agent-switch', 'simple-more-agents', 'ss-research-level']) assert.ok(mob.includes(`.id = '${id}'`), id);
+  // data-setting, not an id: simpleAgentListFill also fills the sidebar, so an id could appear twice
+  for (const id of ['OPT-0128', 'OPT-1023', 'OPT-1037']) assert.ok(mob.includes(`'data-setting', '${id}'`), id);
   assert.match(mob, /function simpleAgentsOpen\(\)[\s\S]*?mount\(d, 'simple-phone'\)[\s\S]*?\n\}/);
   assert.match(mob, /function simpleSettingsOpen\(\)[\s\S]*?mount\(d, 'simple-phone'\)/);
   loaded();
+});
+
+// ---- U2 (review round 2) ---------------------------------------------------------------------------------------------
+test('U2.1: st-has-info only goes on a label whose computed display is exactly block (flex, inline-flex or no way to tell: no class)', () => {
+  for (const [display, want] of [['block', true], ['flex', false], ['inline-flex', false], ['inline-block', false], [undefined, false]]) {
+    const doc = makeDoc();
+    const win = display === undefined ? makeWin(doc) : makeWin(doc, { getComputedStyle: () => ({ display }) });
+    const ov = el(doc, 'div'); doc.body.appendChild(ov);
+    const lab = el(doc, 'label', { for: 'u1', class: 'cx-lab' }, 'Voice'); ov.appendChild(lab);
+    ov.appendChild(el(doc, 'input', { id: 'u1', type: 'checkbox' }));
+    H.setRecords({ records: [recFor('OPT-9', [{ surface: 'phone', selector: '#u1' }])] });
+    assert.strictEqual(H.attach(ov, 'phone', { doc, win }), 1);
+    assert.strictEqual(lab.nextSibling.getAttribute('data-rec'), 'OPT-9', 'the ⓘ is still right after the label: ' + display);
+    assert.strictEqual(/\bst-has-info\b/.test(lab.getAttribute('class')), want, 'display ' + display);
+  }
+  for (const f of ['mobile.html', 'index.html', 'users.html', 'agent-settings.html']) assert.match(read(f), /label\.st-has-info/, f + ' keeps the class rule');
+  assert.ok(!/label:has\(\+ \.st-info\)/.test(read('agent-settings.html')), 'no rule that restyles every label followed by an ⓘ');
+  loaded();
+});
+
+test('U2.3: the ⓘ character sits in an aria-hidden span inside the button; the button keeps its aria-label; the block still reads as its words', () => {
+  const doc = makeDoc(), win = makeWin(doc);
+  const ov = el(doc, 'div'); doc.body.appendChild(ov);
+  const t = el(doc, 'div', { class: 'sec-title' }, 'Voice'); ov.appendChild(t);
+  H.setRecords({ records: [recFor('OPT-8', [{ surface: 'phone', label: 'Voice' }])] });
+  assert.strictEqual(H.attach(ov, 'phone', { doc, win }), 1);
+  const b = infos(t)[0];
+  assert.strictEqual(b.getAttribute('aria-label'), 'About N OPT-8');
+  assert.strictEqual(b.children.length, 1);
+  assert.strictEqual(b.children[0].tagName, 'SPAN');
+  assert.strictEqual(b.children[0].getAttribute('aria-hidden'), 'true');
+  assert.strictEqual(b.children[0].textContent, 'ⓘ');
+  assert.strictEqual(H.ownText(t).trim(), 'Voice', 'the words only');
+  assert.strictEqual(H.normLabel(H.ownText(t)), 'Voice');
+  // the pages only ever WRITE an anchored heading's text (prof-name, .ss-title); the one reader is stSearch over a section's text, which a lone glyph does not change
+  const pages = read('app.js') + read('mobile.js');
+  assert.ok(!/(sec-title|prof-name|ss-title|sm-lab)[^\n]{0,80}\.(textContent|innerText)(?!\s*=[^=])/.test(pages), 'no page reads those headings\' text');
+  loaded();
+});
+
+test('U2.4a: a section anchored as a whole gets its ⓘ inside its heading, after the words; every desktop record anchored on a st-section id', () => {
+  const doc = makeDoc(), win = makeWin(doc, { getComputedStyle: () => ({ display: 'block' }) });
+  const ov = el(doc, 'div'); doc.body.appendChild(ov);
+  const ids = [];
+  for (const r of JSON.parse(read('templates/settings-records.json')).records) for (const a of r.anchors || []) if (a.surface === 'desktop' && /^#st-[a-z-]+-section$/.test(a.selector || '')) ids.push([r.id, a.selector.slice(1)]);
+  assert.ok(ids.length >= 6, 'the six sections of the browser proof');
+  H.setRecords(JSON.parse(read('templates/settings-records.json')));
+  const secs = {};
+  for (const [, id] of ids) {   // the markup app.js draws: <div class="st-section" id=...><h4>Title</h4> rows...
+    const s = el(doc, 'div', { class: 'st-section', id }); ov.appendChild(s);
+    s.appendChild(el(doc, 'h4', {}, 'Title of ' + id));
+    const row = el(doc, 'div', { class: 'st-row' }); s.appendChild(row);
+    row.appendChild(el(doc, 'span', {}, 'A thing')); secs[id] = s;
+  }
+  H.attach(ov, 'desktop', { doc, win });
+  for (const [rid, id] of ids) {
+    const s = secs[id], h4 = s.children[0];
+    const mine = infos(h4).filter((b) => b.getAttribute('data-rec') === rid);
+    assert.strictEqual(mine.length, 1, rid + ' on ' + id + ': the ⓘ is in the heading');
+    assert.strictEqual(h4.children[h4.children.length - 1], mine[0], 'after the words');
+    assert.ok(!(s.nextSibling && s.nextSibling.tagName === 'BUTTON'), 'not after the section');
+    assert.strictEqual(H.ownText(h4).trim(), 'Title of ' + id);
+  }
+  loaded();
+});
+
+test('U2.4b: a label wrapping a checkbox and a text span gets the ⓘ at the end of the span; clicking it leaves the checkbox as it was', () => {
+  const doc = makeDoc(), win = makeWin(doc, { getComputedStyle: () => ({ display: 'flex' }) });
+  const ov = el(doc, 'div'); doc.body.appendChild(ov);
+  const lab = el(doc, 'label', {}); ov.appendChild(lab);
+  const cb = el(doc, 'input', { id: 'agent-lead', type: 'checkbox' }); cb.checked = false; lab.appendChild(cb);
+  const sp = el(doc, 'span', {}, '👑 '); lab.appendChild(sp);
+  sp.appendChild(el(doc, 'strong', {}, 'Lead agent')); const tail = el(doc, 'em', {}, ' other agents'); sp.appendChild(tail);
+  // the browser's label activation, as HTML says it: a click inside a label toggles its control unless it came from interactive content
+  lab.addEventListener('click', (ev) => { if (ev.defaultPrevented || ev.target.tagName === 'BUTTON') return; cb.checked = !cb.checked; });
+  H.setRecords({ records: [recFor('OPT-4', [{ surface: 'agent', selector: '#agent-lead' }])] });
+  assert.strictEqual(H.attach(ov, 'agent', { doc, win }), 1);
+  const b = infos(lab)[0];
+  assert.ok(b, 'the ⓘ is inside the label');
+  assert.strictEqual(b.parentNode, sp, 'at the end of the text span');
+  assert.strictEqual(sp.children[sp.children.length - 1], b);
+  assert.strictEqual(lab.nextSibling, null, 'nothing alone after the label');
+  assert.ok(!/st-has-info/.test(lab.getAttribute('class') || ''));
+  const ev = b.click();
+  assert.strictEqual(cb.checked, false, 'the checkbox did not change');
+  assert.ok(ev.defaultPrevented && ev.stopped, 'the click is stopped at the ⓘ');
+  H.close(false);
+  sp.click(); assert.strictEqual(cb.checked, true, 'a click on the words still toggles it (the harness is faithful)');
+  // the real browser proof confirms this on the page: a button inside a label never activates the label's control
+  loaded();
+});
+
+// the phone's Ask over unsaved changes: the harness runs the real askCloseSettingsSheet / askLeadEnv from mobile.js
+function askHarness() {
+  const mob = read('mobile.js');
+  const src = mob.slice(mob.indexOf('function askCloseSettingsSheet()'), mob.indexOf('function askLeadStart()'));
+  const listeners = new Set(), ticks = []; let clock = 0, requested = 0;
+  const frameWin = {};
+  const sheet = { frame: { contentWindow: frameWin } };
+  const win = { addEventListener: (t, f) => { if (t === 'message') listeners.add(f); }, removeEventListener: (t, f) => { listeners.delete(f); } };
+  const env = {
+    window: win, location: { origin: 'https://hub.example' }, document: { querySelectorAll: () => [] }, agents: [{ name: 'maestro', lead: true }],
+    Date: { now: () => clock }, setInterval: (f) => { ticks.push({ f, on: true }); return ticks.length; }, clearInterval: (n) => { if (ticks[n - 1]) ticks[n - 1].on = false; },
+    settingsSheetRequestClose: () => { requested++; },
+    navigate: (s, n) => { h.opened.push(n); }, $: () => null,
+  };
+  const h = { opened: [], listeners, say: (type) => { for (const f of [...listeners]) f({ source: frameWin, origin: 'https://hub.example', data: { type } }); },
+    advance: (ms) => { clock += ms; for (const t of ticks.slice()) if (t.on) t.f(); }, requested: () => requested };
+  const body = `let settingsSheet = ${'null'}; let current = null;\n${src}\nreturn { env: askLeadEnv(), ask: askCloseSettingsSheet, open: () => { settingsSheet = SHEET; }, shut: () => { settingsSheet = null; } };`;
+  const api = new Function(...Object.keys(env), 'SHEET', body)(...Object.values(env), sheet);
+  h.api = api; h.env = api.env; h.api.open();
+  return h;
+}
+
+test('U2.2: Ask with unsaved changes: question up then Discard = Ask goes on to the lead\'s chat, however long the question stays up', async () => {
+  const h = askHarness();
+  const run = H.askFill('hello', { ...h.env, getBox: () => ({ value: '', focus() {}, dispatchEvent() {} }) });
+  await wait(10);
+  assert.strictEqual(h.requested(), 1, 'Settings is asked to close through its guard');
+  h.say('mm-settings-asking');
+  h.advance(60000);   // far past the 9 s limit: the question is still up
+  assert.deepStrictEqual(h.opened, [], 'nothing opened while the question is up');
+  h.api.shut();   // Discard: the sheet closed
+  h.advance(50);
+  assert.strictEqual(await run, true);
+  assert.deepStrictEqual(h.opened, ['maestro']);
+  assert.strictEqual(h.listeners.size, 0, 'the waiting listener is gone');
+});
+
+test('U2.2: question up then Keep editing = Ask does nothing else', async () => {
+  const h = askHarness();
+  const run = H.askFill('hello', { ...h.env, getBox: () => ({ value: '', focus() {}, dispatchEvent() {} }) });
+  await wait(10);
+  h.say('mm-settings-asking'); h.advance(30000);
+  h.say('mm-settings-kept');   // the frame's final answer
+  assert.strictEqual(await run, false);
+  assert.deepStrictEqual(h.opened, []);
+  assert.strictEqual(h.listeners.size, 0);
+});
+
+test('U2.2: a frame that never answers = Ask stops after the limit', async () => {
+  const h = askHarness();
+  const run = H.askFill('hello', { ...h.env, getBox: () => ({ value: '', focus() {}, dispatchEvent() {} }) });
+  await wait(10);
+  h.advance(8000);
+  let done = false; run.then(() => { done = true; }); await wait(5);
+  assert.strictEqual(done, false, 'still within the limit');
+  h.advance(1500);
+  assert.strictEqual(await run, false);
+  assert.deepStrictEqual(h.opened, []);
+});
+
+test('U2.2: the users of mm-settings-kept / mm-settings-asking: the frame posts them, the sheet treats both as "the frame answered", Ask waits for the final one', () => {
+  const app = read('app.js'), mob = read('mobile.js');
+  assert.match(app, /if \(how === 'confirm'\) \{ settingsOnlyAsk\(\); return; \}/);
+  assert.match(app, /settingsOnlyPost\('mm-settings-asking'\)/);
+  assert.match(mob, /type === 'mm-settings-kept' \|\| type === 'mm-settings-asking'\) \{ clearTimeout\(s\.closeTimer\)/);
+  assert.match(mob, /!asking && Date\.now\(\) - t0 > 9000/);
+  assert.ok(!/mm-settings-kept/.test(read('lib/ui-settings-help.js')));
 });

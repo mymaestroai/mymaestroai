@@ -102,6 +102,9 @@ test('every anchor selector id appears literally in its surface\'s files', () =>
         const id = a.selector.slice(1);
         // id="x" in the markup, or the id as a quoted word where a helper writes the id (sel('st-cl-provider', ...))
         found = files.some((f) => read(f).includes(`id="${id}"`) || read(f).includes(`id='${id}'`) || read(f).includes(`'${id}'`));
+        // the provider inputs are drawn in a loop: id="st-key-${p.id}" for each provider of PROVIDERS ({ id: 'perplexity', … })
+        const prov = /^st-(key|url)-([a-z]+)$/.exec(id);
+        if (!found && prov) found = files.some((f) => read(f).includes('id="st-' + prov[1] + '-${p.id}"') && read(f).includes(`{ id: '${prov[2]}',`));
       }
       assert.ok(found, `${r.id}: ${a.selector} is not in ${files.join(' / ')} (renamed?)`);
       n++;
@@ -231,9 +234,87 @@ test('anchors: no selector belongs to two records on one surface (an alias share
 
 test('the agent page puts data-setting on every permission row and file tab', () => {
   const page = fs.readFileSync(path.join(ROOT, 'agent-settings.html'), 'utf8');
-  assert.match(page, /tr\.setAttribute\('data-setting', POLICY_RECORD_IDS\[cls\]/);
+  // the permission's ⓘ sits in the row's first cell, on the element holding the permission's name, never on the <tr>
+  assert.doesNotMatch(page, /tr\.setAttribute\('data-setting'/);
+  assert.match(page, /<td style="padding:6px;"><b\$\{nameAttr\}[^>]*>\$\{escapeHtml\(cls\)\}<\/b>/);
+  assert.match(page, /const nameAttr = POLICY_RECORD_IDS\[cls\] \? ` data-setting="\$\{POLICY_RECORD_IDS\[cls\]\}"` : ''/);
   assert.match(page, /tab\.setAttribute\('data-setting', FILE_TAB_RECORD_IDS\[fname\]\)/);
   for (const id of ['OPT-0008', 'OPT-0014', 'OPT-0068', 'OPT-0073']) assert.ok(page.includes(`'${id}'`), id);
+});
+
+test('access, spending, credentials and recording consent are never everyday + apply; the apply risk check exists and the records pass it', () => {
+  const named = { 'OPT-0034': 'Who can download recordings', 'OPT-0598': 'Who can look at cameras', 'OPT-0575': 'Who can read Oura data', 'OPT-0565': 'Which agents may use the module',
+    'OPT-0504': 'Telegram recipients', 'OPT-0347': 'Ollama address', 'OPT-0346': 'LM Studio address', 'OPT-0348': 'oMLX address', 'OPT-0608': 'Face recognizer address',
+    'OPT-0350': 'OpenRouter', 'OPT-0567': 'Google Drive backup copy', 'OPT-0153': "Protect Maestro's own code", 'OPT-0562': 'Switch on / Switch off',
+    'OPT-0036': 'Announce the recording', 'OPT-0033': 'Keep call recordings' };
+  for (const [id, name] of Object.entries(named)) {
+    const r = records.byId(id);
+    assert.ok(r, id);
+    assert.notEqual(r.danger, 'everyday', `${id} ${name}: danger`);
+    assert.notEqual(r.lead, 'apply', `${id} ${name}: lead`);
+  }
+  // the risk text of any record that is applied at once must not say it grants access, sends data out or costs money, unless the override says applyOk
+  const RISKY = /costs? money|per use|are sent|sent there|can (see|read|hear|download|use)|who can|recipients|address/i;
+  const applyOk = ['OPT-0227', 'OPT-0645'];
+  for (const r of records.all()) if (r.lead === 'apply' && RISKY.test(r.risk || '')) assert.ok(applyOk.includes(r.id), `${r.id} ${r.name}: lead apply with risk "${r.risk}"`);
+  // the generator refuses it too
+  const gen = fs.readFileSync(path.join(ROOT, 'scripts', 'build-settings-records.js'), 'utf8');
+  assert.match(gen, /const APPLY_RISK_RE = \/costs\? money\|per use\|are sent\|sent there\|can \(see\|read\|hear\|download\|use\)\|who can\|recipients\|address\/i/);
+  assert.match(gen, /r\.lead === 'apply' && APPLY_RISK_RE\.test\(r\.risk \|\| ''\) && !applyOk\.has\(r\.id\)/);
+  assert.match(gen, /'applyOk'/);
+});
+
+test('OPT-0749 File size limit is an install-wide indicator without a confirm step', () => {
+  const r = records.byId('OPT-0749');
+  assert.equal(r.scope, 'install');
+  assert.equal(r.danger, 'everyday');
+  assert.equal(r.lead, 'none');
+});
+
+test('provider keys and addresses anchor to their input ids; no desktop label anchor occurs twice among the Settings dialog labels', () => {
+  assert.deepEqual(records.byId('OPT-0343').anchors, [{ surface: 'desktop', selector: '#st-key-perplexity' }]);
+  const keys = { 'OPT-0340': 'anthropic', 'OPT-0341': 'openai', 'OPT-0342': 'google', 'OPT-0344': 'openrouter', 'OPT-0345': 'elevenlabs' };
+  for (const [id, p] of Object.entries(keys)) assert.deepEqual(records.byId(id).anchors, [{ surface: 'desktop', selector: `#st-key-${p}` }], id);
+  for (const [id, p] of Object.entries({ 'OPT-0346': 'lmstudio', 'OPT-0347': 'ollama', 'OPT-0348': 'omlx' })) assert.deepEqual(records.byId(id).anchors, [{ surface: 'desktop', selector: `#st-url-${p}` }], id);
+  const app = fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8');
+  assert.ok(app.includes('id="st-key-${p.id}"') && app.includes('id="st-url-${p.id}"'), 'the provider inputs are drawn with these ids');
+  // the labels (<label> and <h4> text) the Settings dialog draws in openSettings(); a label anchor whose words occur twice there is ambiguous
+  const from = app.indexOf('async function openSettings()');
+  assert.ok(from > 0);
+  const end = app.indexOf('\n    async function saveClassifier', from);
+  assert.ok(end > from, 'end of openSettings');
+  const body = app.slice(from, end);
+  const { normLabel } = require('../lib/ui-settings-help.js');
+  const seen = new Map();
+  for (const m of body.matchAll(/<(label|h4)\b[^>]*>([^<>`$]{1,80})<\/\1>/g)) { const t = normLabel(m[2]).toLowerCase(); if (t) seen.set(t, (seen.get(t) || 0) + 1); }
+  assert.ok(seen.size > 20, 'the labels were read');
+  for (const r of records.all()) for (const a of r.anchors) {
+    if (a.surface !== 'desktop' || a.label === undefined) continue;
+    assert.ok((seen.get(normLabel(a.label).toLowerCase()) || 0) <= 1, `${r.id}: label anchor ${JSON.stringify(a.label)} occurs twice in the Settings dialog`);
+  }
+});
+
+test('the team prefix has its own record, and the agent slug no longer shows the users page anchor', () => {
+  const slug = records.byId('OPT-0001');
+  assert.ok(!slug.anchors.some((a) => a.surface === 'users'), 'OPT-0001 has no users anchor');
+  const p = records.byId('OPT-1082');
+  assert.ok(p, 'OPT-1082 exists');
+  assert.deepEqual(p.anchors, [{ surface: 'users', selector: '#p-prefix' }]);
+  for (const f of ['kind', 'name', 'labels', 'what', 'when', 'risk', 'def', 'restart', 'danger', 'who', 'lead', 'words', 'scope', 'home', 'storedAs']) assert.ok(p[f] !== undefined && p[f] !== '', `OPT-1082 ${f}`);
+  assert.equal(p.danger, 'everyday'); assert.equal(p.who, 'admin'); assert.equal(p.lead, 'screen'); assert.equal(p.restart, false); assert.equal(p.scope, 'per-person');
+  assert.equal(p.home, records.byId('OPT-0618').home);
+  assert.match(p.what, /jane_/);
+  // no other record is anchored on #p-prefix on the users page
+  for (const r of records.all()) if (r.id !== 'OPT-1082') assert.ok(!r.anchors.some((a) => a.surface === 'users' && a.selector === '#p-prefix'), `${r.id} shares #p-prefix`);
+});
+
+test('mobile.js creates no element with id simple-agent-switch, simple-more-agents or ss-research-level (the Simple sheets carry data-setting instead)', () => {
+  const mob = fs.readFileSync(path.join(ROOT, 'mobile.js'), 'utf8');
+  for (const id of ['simple-agent-switch', 'simple-more-agents', 'ss-research-level']) assert.ok(!mob.includes(id), `${id} is still in mobile.js`);
+  for (const [id, rec] of [['OPT-0128', 'simple-phone'], ['OPT-1023', 'simple-phone'], ['OPT-1037', 'simple-phone']]) {
+    assert.ok(mob.includes(`setAttribute('data-setting', '${id}')`), id);
+    assert.ok(records.byId(id).anchors.some((a) => a.surface === rec && a.selector === `[data-setting="${id}"]`), `${id} anchor`);
+  }
 });
 
 test('the route is a session route, served by server.js for signed-in people only (members filtered)', () => {

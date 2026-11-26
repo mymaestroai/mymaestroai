@@ -2534,7 +2534,7 @@ function researchSimplePaint(d) {
   }
   const hint = document.createElement('div'); hint.className = 'ss-rhint'; hint.textContent = RESEARCH_HINT;
   sec.appendChild(t); sec.appendChild(seg);
-  if (researchPrefChoice === 'always') { const lseg = document.createElement('div'); lseg.className = 'ss-rseg'; lseg.setAttribute('role', 'group'); lseg.setAttribute('aria-label', 'Always yes runs'); lseg.id = 'ss-research-level'; researchLevelButtons(lseg, true); sec.appendChild(lseg); }
+  if (researchPrefChoice === 'always') { const lseg = document.createElement('div'); lseg.className = 'ss-rseg'; lseg.setAttribute('role', 'group'); lseg.setAttribute('aria-label', 'Always yes runs'); lseg.setAttribute('data-setting', 'OPT-1037'); researchLevelButtons(lseg, true); sec.appendChild(lseg); }
   sec.appendChild(hint);
   anchor.after(sec);
 }
@@ -3475,17 +3475,20 @@ function askCloseSettingsSheet() {
   return new Promise((resolve) => {
     const s = settingsSheet;
     if (!s) { resolve(true); return; }
-    let t = null;
+    let t = null, asking = false;
     const t0 = Date.now();
     const fin = (v) => { clearInterval(t); window.removeEventListener('message', on); resolve(v); };
     const on = (e) => {
       if (!settingsSheet || e.source !== s.frame.contentWindow || e.origin !== location.origin) return;
-      if (e.data && e.data.type === 'mm-settings-kept') fin(false);
+      const type = e.data && e.data.type;
+      if (type === 'mm-settings-asking') asking = true;   // "Discard changes?" is up: wait for the answer, with no limit
+      else if (type === 'mm-settings-kept') fin(false);   // the final outcome: Keep editing, a save running, an inner box closed
     };
     window.addEventListener('message', on);
     settingsSheetRequestClose();
     if (!settingsSheet) { fin(true); return; }
-    t = setInterval(() => { if (!settingsSheet) fin(true); else if (Date.now() - t0 > 9000) fin(false); }, 50);
+    // Discard closes the sheet (the frame says closed); a frame that says nothing at all is given up on after 9 s
+    t = setInterval(() => { if (!settingsSheet) fin(true); else if (!asking && Date.now() - t0 > 9000) fin(false); }, 50);
   });
 }
 function askLeadEnv() {
@@ -16277,7 +16280,7 @@ function settingsSheetMessage(e) {
   const type = e.data && e.data.type;
   if (type === 'mm-settings-ready') { s.ready = true; s.away = false; clearTimeout(s.timer); s.el.classList.add('ready'); s.el.querySelector('.ssh-bar').hidden = true; }   // back on Settings (after signing in again)
   else if (type === 'mm-settings-closed') settingsSheetClosed();
-  else if (type === 'mm-settings-kept') { clearTimeout(s.closeTimer); settingsSheetKeepWaiting(); dialogGuard.open(s.el); }   // a late answer also clears "isn't answering"   // "Discard changes?", a save running or an inner box closed: the sheet stays, Back works again
+  else if (type === 'mm-settings-kept' || type === 'mm-settings-asking') { clearTimeout(s.closeTimer); settingsSheetKeepWaiting(); dialogGuard.open(s.el); }   // a late answer also clears "isn't answering"   // "Discard changes?", a save running or an inner box closed: the sheet stays, Back works again
 }
 function settingsSheetClosed() {
   const s = settingsSheet;
@@ -17790,7 +17793,7 @@ function simpleTeamsSig() {
   return JSON.stringify([m.secs.map((s) => [s.key, s.count, s.open, s.rows.map((r) => [r.a.name, r.a.display || '', r.a.icon || '', !!r.a.lead, r.tm.level, r.tm.rank, !!r.build, !!r.tm.pill, !!r.tm.open, r.tm.n, !!r.tm.last, !!r.tm.parentLast])]), teamsOpen]);
 }
 function simpleSwitch(list) {
-  const sw = document.createElement('div'); sw.className = 'sa-switch'; sw.setAttribute('role', 'tablist'); sw.id = 'simple-agent-switch';
+  const sw = document.createElement('div'); sw.className = 'sa-switch'; sw.setAttribute('role', 'tablist'); sw.setAttribute('data-setting', 'OPT-0128');
   sw.innerHTML = '<button type="button" data-view="all" role="tab">All Agents</button><button type="button" data-view="teams" role="tab">Teams</button>';
   sw.addEventListener('click', (e) => { const b = e.target.closest('button[data-view]'); if (b) teamsPick(b.dataset.view === 'teams' ? 'teams' : 'agents'); });
   list.appendChild(sw);
@@ -17817,7 +17820,7 @@ function simpleAgentListFill(list, opts) {
   const m = simpleAgentSheetModel(agents, current, simpleMoreGet(), isBusy, bgCountOf);
   for (const a of m.primary) list.appendChild(simpleAgentRow(a, opts));
   if (m.hasMore) {
-    const mb = document.createElement('button'); mb.type = 'button'; mb.className = 'sa-row sa-more'; mb.id = 'simple-more-agents'; mb.setAttribute('aria-expanded', String(m.open));
+    const mb = document.createElement('button'); mb.type = 'button'; mb.className = 'sa-row sa-more'; mb.setAttribute('data-setting', 'OPT-1023'); mb.setAttribute('aria-expanded', String(m.open));
     mb.innerHTML = '<span class="sa-txt"><b>More agents</b></span><span class="sa-chev" aria-hidden="true"></span><span class="sa-dot"></span>';
     mb.querySelector('.sa-chev').textContent = m.open ? '⌃' : '⌄';
     simpleMoreDotPaint(mb.querySelector('.sa-dot'), m);
