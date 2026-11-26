@@ -297,7 +297,7 @@ test('phone: simple mode draws the same words in its own muted style (CSS), and 
   const html = fs.readFileSync(path.join(__dirname, '..', 'mobile.html'), 'utf8');
   assert.match(html, /html\.mm-simple \.run-line \{[^}]*font-size: 12\.5px/);
   assert.ok(!/html\.mm-simple[^{]*\.run-(line|wrap|body)[^{]*\{[^}]*display: none/.test(html), 'not hidden in Simple');
-  assert.match(fs.readFileSync(path.join(__dirname, '..', 'sw.js'), 'utf8'), /const VERSION = 'hub-mobile-v99';/);
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'sw.js'), 'utf8'), /const VERSION = 'hub-mobile-v100';/);
 });
 
 // ── review r1 ──

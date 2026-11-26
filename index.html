@@ -2589,6 +2589,44 @@
     html.mm-simple #question-cancel { background: transparent; color: var(--sm-text); border: 1px solid var(--sm-border); border-radius: 18px; }
     /* Door into a setting (#settings-for=): the row is lit for 2 seconds; Recent changes in Settings */
     .st-door-hit { background: var(--hover-tint-strong); border-radius: 6px; }
+    /* The agent card (lib/ui-agent-card.js): a panel on the right over the chat; a full-screen sheet in a narrow window */
+    .ac-panel { position: fixed; top: var(--banner-h, 0px); right: 0; bottom: 0; z-index: 1100; width: min(560px, calc(100vw - 240px)); box-sizing: border-box; overflow-y: auto; padding: 0 16px 24px; background: var(--bg-dark); color: var(--text); border-left: 1px solid var(--border-strong); box-shadow: 0 0 28px var(--shadow-color-pop); font-size: 0.86rem; line-height: 1.45; }
+    .ac-panel:focus { outline: none; }
+    .ac-panel.ac-sheet { left: 0; width: auto; z-index: 1500; border-left: 0; }
+    .ac-header { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 12px; padding: 16px 0 12px; background: var(--bg-dark); }
+    .ac-icon { flex: none; width: 34px; height: 34px; display: flex; align-items: center; justify-content: center; font-size: 1.5rem; }
+    .ac-dot { border-radius: 50%; background: var(--accent); }
+    .ac-titles { flex: 1; min-width: 0; }
+    .ac-title { margin: 0; font-size: 1.1rem; font-weight: 700; overflow-wrap: anywhere; }
+    .ac-role { color: var(--text-dim); font-size: 0.8rem; }
+    .ac-x { flex: none; width: 36px; height: 36px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--bg-card); color: var(--text); font-size: 1.3rem; line-height: 1; cursor: pointer; }
+    .ac-x:focus-visible, .ac-sec-head:focus-visible, .ac-more-head:focus-visible, .ac-reset:focus-visible, .ac-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .ac-sec { margin-bottom: 10px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; }
+    .ac-sec-head { display: flex; align-items: baseline; gap: 10px; width: 100%; min-height: 44px; box-sizing: border-box; padding: 12px 14px; border: 0; background: transparent; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+    .ac-sec-title { font-weight: 700; flex: none; }
+    .ac-sec-sum { margin-left: auto; min-width: 0; color: var(--text-dim); font-size: 0.78rem; text-align: right; overflow-wrap: anywhere; }
+    .ac-shield { margin-left: 6px; color: var(--accent); }
+    .ac-sec-body { border-top: 1px solid var(--border); padding: 4px 14px 10px; }
+    .ac-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+    .ac-row:last-child { border-bottom: 0; }
+    .ac-main { flex: 1 1 auto; min-width: 0; }
+    .ac-label { font-weight: 600; overflow-wrap: anywhere; }
+    .ac-desc, .ac-note, .ac-default { color: var(--text-dim); font-size: 0.8rem; margin-top: 2px; }
+    .ac-note .ac-link { color: var(--accent); }
+    .ac-err { color: var(--error); font-size: 0.8rem; margin-top: 4px; }
+    .ac-ctl { flex: none; max-width: 55%; }
+    .ac-select, .ac-input { max-width: 100%; box-sizing: border-box; padding: 6px 8px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--bg-input); color: var(--text); font: inherit; }
+    .ac-select:disabled, .ac-input:disabled, .ac-action:disabled, .ac-reset:disabled, .ac-seg-b:disabled { opacity: 0.55; cursor: default; }
+    .ac-value { color: var(--text-dim); }
+    .ac-seg { display: inline-flex; border: 1px solid var(--border-strong); border-radius: 6px; overflow: hidden; }
+    .ac-seg-b { padding: 6px 12px; border: 0; background: var(--bg-input); color: var(--text); font: inherit; cursor: pointer; }
+    .ac-seg-b.on { background: var(--accent); color: var(--on-accent); }
+    .ac-action, .ac-reset, .ac-more-head { border: 1px solid var(--border-strong); border-radius: 6px; background: transparent; color: var(--text); font: inherit; cursor: pointer; }
+    .ac-action { padding: 6px 12px; }
+    .ac-reset { margin-top: 6px; padding: 4px 10px; font-size: 0.8rem; }
+    .ac-more-head { display: block; width: 100%; margin-top: 8px; padding: 8px 10px; border-style: dashed; color: var(--text-dim); font-size: 0.8rem; text-align: left; overflow-wrap: anywhere; }
+    .ac-row.st-door-hit { background: var(--hover-tint-strong); }
+    .ac-foot { margin: 12px 0 0; color: var(--text-dim); font-size: 0.8rem; }
     .st-recent-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 0.85rem; }
     .st-recent-what { font-weight: 600; color: var(--text); flex: 1 1 100%; overflow-wrap: anywhere; }
     .st-recent-change { color: var(--text); overflow-wrap: anywhere; flex: 1 1 auto; min-width: 0; }
@@ -3929,12 +3967,14 @@
   <script src="/ui-team-card.js"></script>
   <script src="/ui-simple.js"></script>
   <script src="/ui-settings-help.js"></script>
+  <script src="/ui-agent-card.js"></script>
   <script defer src="/ui-model-offer-groups.js"></script>
   <script src="/ui-teams.js"></script>
   <script src="/password-eye.js"></script>
   <script>document.addEventListener('DOMContentLoaded', function () { PasswordEye.watch(); });</script>
   <script src="app.js"></script>
   <script src="comms-panel.js"></script>
+  <script>try { window.hubAgentCard.cardDoorStart(); } catch (e) { /* the card is optional: the page runs without it */ }</script>
   <!-- Image Modal -->
   <div id="image-modal" class="image-modal" onclick="closeImageModal()">
     <span class="close-modal">&times;</span>
