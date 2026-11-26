@@ -151,6 +151,53 @@ for (const name of ['desktop', 'phone']) {
     const q = textsOf(cards(p.box)[0])[1];
     assert.ok(q.length <= 302 && q.endsWith('…”'));
   });
+  test(`${name}: a 'stopped' event removes the notice on a page that did not press Stop; a stopped status entry is not shown`, async () => {
+    const p = load(name);
+    p.c.apply(ev({}));
+    assert.equal(cards(p.box).length, 1);
+    p.c.apply(ev({ seq: 2, state: 'stopped', active: false, upgradable: false }));
+    assert.equal(cards(p.box).length, 0);
+    assert.equal(p.box.hidden, true);
+    p.c.apply(ev({ seq: 3 }));   // a late older-looking running event does not bring it back
+    assert.equal(cards(p.box).length, 0);
+    const q = load(name);
+    q.setReply(() => ({ ok: true, status: 200, json: async () => ({ runs: [{ id: 'dr-9', level: 'quick', state: 'stopped', active: false, startedAt: Date.now(), seq: 1, startedBy: 'agent', question: 'Q?' }] }) }));
+    await q.c.loadRuns('sam-bot');
+    assert.equal(cards(q.box).length, 0);
+  });
+  test(`${name}: an upgrade seen from another device: old quick run stopped, the new thorough run (startedBy upgrade) is a plain line`, () => {
+    const p = load(name);
+    p.c.apply(ev({}));
+    p.c.apply(ev({ seq: 2, state: 'stopped', active: false, upgradable: false }));
+    p.c.apply(ev({ id: 'dr-2', startedBy: 'upgrade', level: 'thorough', upgradable: false, label: 'planning' }));
+    assert.equal(cards(p.box).length, 0);
+    assert.equal(p.box.children.length, 1);
+    assert.match(p.box.children[0].className, /research-line/);
+  });
+  test(`${name}: a 'stopped' event after pressing Stop here keeps "Stopped. Sam was told."`, async () => {
+    const p = load(name);
+    p.c.apply(ev({}));
+    await buttonsOf(cards(p.box)[0])[0].onclick();
+    p.c.apply(ev({ seq: 2, state: 'stopped', active: false, upgradable: false }));
+    assert.ok(textsOf(cards(p.box)[0]).includes('Stopped. Sam was told.'));
+  });
+  test(`${name}: an Always-yes run shows the notice: title by level, no Why, question and cost; Stop; Make it thorough only while upgradable`, () => {
+    const p = load(name);
+    p.c.apply(ev({ startedBy: 'always', level: 'quick', reason: 'ignored' }));
+    let card = cards(p.box)[0];
+    assert.ok(card, 'a card');
+    assert.deepEqual(textsOf(card).slice(0, 3), ['Sam started a quick research run under your Always yes.', '“How big is the market for sleep trackers?”', 'About $0.40 on this model.']);
+    assert.ok(!textsOf(card).some((x) => /^Why:/.test(x)));
+    assert.deepEqual(buttonsOf(card).map((b) => b.textContent), ['Stop', 'Make it thorough']);
+    const t = load(name);
+    t.c.apply(ev({ startedBy: 'always', level: 'thorough', upgradable: false }));
+    card = cards(t.box)[0];
+    assert.equal(textsOf(card)[0], 'Sam started a thorough research run under your Always yes.');
+    assert.deepEqual(buttonsOf(card).map((b) => b.textContent), ['Stop']);
+    const n = load(name);
+    n.c.apply(ev({ startedBy: 'always', costLine: undefined }));
+    assert.ok(!textsOf(cards(n.box)[0]).some((x) => /\$/.test(x)));
+  });
   test(`${name}: status entries carry the new fields to the card (the status route, not only the event)`, async () => {
     const p = load(name);
     p.setReply(() => ({ ok: true, status: 200, json: async () => ({ runs: [{ id: 'dr-5', level: 'quick', label: 'x', startedAt: Date.now(), seq: 1, startedBy: 'no-answer', waitSeconds: 30, question: 'Q?', costLine: 'C.', active: true, upgradable: true }] }) }));
@@ -168,7 +215,7 @@ test('phone and desktop use the same words and the same notice code', () => {
       .replace(/function researchAgentName[^\n]*\n/, '').replace(/function researchToast[^\n]*\n/, '').replace(/function researchNoticePost[^\n]*\n/, '');
   };
   assert.equal(grab(app, 4).trim(), grab(mob, 0).trim());
-  for (const s of ['started a quick research run for its work.', 'Nobody answered within ', 'so ${who} started a quick research run.', "'Why: '", "'Stop'", "'Make it thorough'",
+  for (const s of ['started a quick research run for its work.', 'Nobody answered within ', 'research run under your Always yes.', "run.startedBy === 'always'", 'so ${who} started a quick research run.', "'Why: '", "'Stop'", "'Make it thorough'",
     'Stopped. ${researchAgentName(agent)} was told.', 'Thorough research started. Its report will come here.', "'/api/research/' + what"]) {
     assert.ok(app.includes(s), 'desktop: ' + s);
     assert.ok(mob.includes(s), 'phone: ' + s);

@@ -2712,9 +2712,11 @@ async function handleHttpRequest(req, res) {
       return jsonResponse(res, 200, { runs: Array.isArray(runs) ? runs : [] });
     }
     // Stop a deep research run, or make an agent-started quick run thorough (lib/sdk-chat researchStop / researchUpgrade). Signed-in
-    // only; the person must be allowed to use the run's agent (the status route's check) or they get 403. { ok, run } / { ok, run, newId }.
+    // by a person (the hub's own service calls are refused: 403); a run that does not exist and a run on an agent the person may
+    // not use both answer the same 404. { ok, run } / { ok, run, newId }.
     if ((pathname === '/api/research/stop' || pathname === '/api/research/upgrade') && req.method === 'POST') {
       if (req.hubPendingTotp) return jsonResponse(res, 401, { error: 'Sign in first' });
+      if (!req.hubUser) return jsonResponse(res, 403, { error: 'Sign in first.' });
       let body = {};
       try { body = JSON.parse(await readBody(req) || '{}') || {}; } catch { return jsonResponse(res, 400, { error: 'Bad request' }); }
       const id = typeof body.id === 'string' ? body.id.trim() : '';
@@ -2723,16 +2725,22 @@ async function handleHttpRequest(req, res) {
       const runAgent = sdkChat.researchRunAgent(id);
       if (!runAgent) return jsonResponse(res, 404, { error: 'No such research run.' });
       const allAgents = await getAgents();
-      if (!req.hubService && !access.isAdmin(req.hubUser) && !access.canAccessAgent(req.hubUser, runAgent, { agents: allAgents, resolveVirtual: (n) => temporalWorkersLib.getVirtual(n) })) return jsonResponse(res, 403, { error: 'You may not use this agent.' });
-      const by = req.hubUser && req.hubUser.id != null ? String(req.hubUser.id).slice(0, 64) : 'person';
+      if (!access.isAdmin(req.hubUser) && !access.canAccessAgent(req.hubUser, runAgent, { agents: allAgents, resolveVirtual: (n) => temporalWorkersLib.getVirtual(n) })) return jsonResponse(res, 404, { error: 'No such research run.' });
+      const by = req.hubUser.id != null ? String(req.hubUser.id).slice(0, 64) : 'person';
       const out = pathname === '/api/research/stop' ? sdkChat.researchStop(id, by) : sdkChat.researchUpgrade(id, by);
       if (!out.ok) return jsonResponse(res, out.status === 404 ? 404 : out.status === 409 ? 409 : 500, { error: out.error });
       return jsonResponse(res, 200, pathname === '/api/research/stop' ? { ok: true, run: out.run } : { ok: true, run: out.run, newId: out.newId });
     }
     // The daily limits on runs agents start without a person's yes, and today's count (admin only: the default class of this path).
     if (pathname === '/api/research/caps' && req.method === 'GET') {
-      let out = { caps: { perAgent: 3, install: 10 }, today: { install: 0, agents: {} } };
-      try { out = require('./lib/sdk-chat').researchCapsToday(); } catch { /* the defaults */ }
+      const sdkChat = require('./lib/sdk-chat');
+      let out;
+      try { out = sdkChat.researchCapsToday(); } catch {
+        // the day's count can't be read: say so, never zeros
+        let caps = { perAgent: 3, install: 10 };
+        try { caps = sdkChat.researchAgentCaps(); } catch { /* the defaults */ }
+        out = { caps, today: null, error: 'Could not read today\'s count.' };
+      }
       return jsonResponse(res, 200, out);
     }
 

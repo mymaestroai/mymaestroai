@@ -14224,7 +14224,7 @@ function resyncClick() {
 }
 
 // Deep research progress line (the hub's research_progress event, GET /api/research/status): one text line per active run
-// above the message box, in the style of the hand-off Tasks line. Text only; gone when the run is delivered or failed.
+// above the message box, in the style of the hand-off Tasks line. Text only; gone when the run is delivered, failed or stopped.
 const researchRuns = new Map();   // agent -> Map(run id -> { id, level, stage, label, done, total, startedAt })
 function researchLineText(run, now) {
   const lv = String((run && run.level) || 'quick');
@@ -14235,7 +14235,7 @@ function researchLineText(run, now) {
   if (t0 > 0) { const mins = Math.floor(Math.max(0, (now === undefined ? Date.now() : now) - t0) / 60000); text += ' · ' + (mins < 1 ? 'just started' : `${mins} min`); }
   return text;
 }
-// The notice for a run an agent started without asking (startedBy 'agent' or 'no-answer'): a small card with who, the question, why, the cost,
+// The notice for a run an agent started without asking (startedBy 'agent', 'no-answer' or 'always'): a small card with who, the question, why, the cost,
 // the progress text and, while it runs, the buttons Stop and Make it thorough. The same words on the desktop page, the phone and Simple.
 // Names, questions and reasons are set with textContent only. A run the person started (or made thorough) keeps the plain line.
 const RESEARCH_NOTICE_SHOW_MS = 20000;   // how long "Stopped. ..." / "Thorough research started. ..." stays after the click
@@ -14247,9 +14247,10 @@ function researchWaitWords(sec) {
   if (s >= 60 && s % 60 === 0) { const m = s / 60; return m === 1 ? '1 minute' : `${m} minutes`; }
   return s === 1 ? '1 second' : `${s} seconds`;
 }
-function researchNoticeOn(run) { return !!run && (run.startedBy === 'agent' || run.startedBy === 'no-answer'); }
+function researchNoticeOn(run) { return !!run && (run.startedBy === 'agent' || run.startedBy === 'no-answer' || run.startedBy === 'always'); }
 function researchNoticeTitle(run, agent) {
   const who = researchAgentName(agent);
+  if (run.startedBy === 'always') return `${who} started a ${run.level === 'thorough' ? 'thorough' : 'quick'} research run under your Always yes.`;
   if (run.startedBy === 'no-answer' && !(Number(run.waitSeconds) > 0)) return `${who} started a quick research run without asking (the wait for an answer is set to 0).`;   // a wait of 0 asks nobody
   return run.startedBy === 'no-answer' ? `Nobody answered within ${researchWaitWords(run.waitSeconds)}, so ${who} started a quick research run.` : `${who} started a quick research run for its work.`;
 }
@@ -14323,12 +14324,12 @@ function researchLineFill(box, agent) {
   }
   box.hidden = runs.length === 0;
 }
-const researchEnded = new Set();   // ids of runs that already got a terminal event (delivered or failed); kept small
+const researchEnded = new Set();   // ids of runs that already got a terminal event (delivered, failed or stopped); kept small
 function researchEndedAdd(id) { researchEnded.add(id); if (researchEnded.size > 200) researchEnded.delete(researchEnded.values().next().value); }
 function researchLineApply(ev) {
   if (!ev || !ev.agent || ev.id == null) return;
   const id = String(ev.id);
-  if (ev.state === 'delivered' || ev.state === 'failed') {
+  if (ev.state === 'delivered' || ev.state === 'failed' || ev.state === 'stopped') {
     researchEndedAdd(id);   // a status answer still on its way must not bring this run back
     const m = researchRuns.get(ev.agent);
     if (m) { if (!(m.get(id) && m.get(id).outcome)) m.delete(id); if (!m.size) researchRuns.delete(ev.agent); }   // a closed notice keeps its "Stopped. ..." line a while
@@ -14359,6 +14360,7 @@ async function researchLineLoad(agent) {
       const id = String(x.id);
       inAnswer.add(id);
       if (researchEnded.has(id)) continue;
+      if (x.state === 'stopped') { researchEndedAdd(id); continue; }
       const cur = m.get(id);
       const x_seq = Number(x.seq);
       if (cur && cur.outcome) continue;

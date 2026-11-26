@@ -28,7 +28,7 @@ const CAP_TEXT = 'The daily limit for research started by agents is reached; go 
 const GRANT = /^Go ahead at the quick level: plan 2 to 8 sub-questions that together answer it, then call deep_research with action "start", the same question, sub_questions and level "quick"\. It runs in the background and its report comes back to you here; carry on with your work meanwhile\.$/;
 
 // ── the handler on stand-ins ──
-function load({ ons = ['deep-research', 'research-own-work'], settings = {}, agents = [], askAnswer = 'Yes', model = 'claude-sdk/claude-test-big', startOk = true, pushBreaks = '' } = {}) {
+function load({ ons = ['deep-research', 'research-own-work'], settings = {}, agents = [], askAnswer = 'Yes', model = 'claude-sdk/claude-test-big', startOk = true, pushBreaks = '', modelFn = null, realAsk = null, runnerExtra = null } = {}) {
   const a = SRC.indexOf('// ── Deep research (lib/research');
   const b = SRC.indexOf('// behaviour_change: offered by the same rule');
   assert.ok(a > 0 && b > a, 'the deep research block is there');
@@ -66,8 +66,14 @@ function load({ ons = ['deep-research', 'research-own-work'], settings = {}, age
     researchLib: research,
     researchPrefsLib: { getResearchPrefs: () => prefs, CHOICES: prefsLib.CHOICES, LEVELS: prefsLib.LEVELS },
     turnRegistry,
-    getAgentModel: async () => model,
-    runAskUser: async (agent, res, card, opts) => { asked.push({ card, opts }); return typeof askAnswer === 'function' ? askAnswer() : askAnswer; },
+    getAgentModel: modelFn || (async () => model),
+    // 'TIMEOUT' stands for the wait's own timer ending the card (the real runAskUser then calls opts.onTimeout); a typed NO_ANSWER does not
+    runAskUser: realAsk ? async (agent, res, card, opts) => { asked.push({ card, opts }); return realAsk(agent, res, card, opts); } : async (agent, res, card, opts) => {
+      asked.push({ card, opts });
+      const v = typeof askAnswer === 'function' ? askAnswer() : askAnswer;
+      if (v === 'TIMEOUT') { if (opts && typeof opts.onTimeout === 'function') opts.onTimeout(); return 'NO_ANSWER'; }
+      return v;
+    },
     runSpawnWorkers: async () => 'x', wakeAgent: async () => {}, refreshWorkerCatalog: async () => ({ available: [] }), memberWorkerModels: () => null,
   });
   vm.runInContext(SRC.slice(a, b) + `
@@ -79,12 +85,14 @@ this.waitSeconds = researchOfferWaitSeconds; this.agentCaps = researchAgentCaps;
     recover() {},
     agentStartsToday: () => store.agentStartsToday(),
     countAgentStart: (g) => store.countAgentStart(g),
+    uncountAgentStart: (g, d) => store.uncountAgentStart(g, d),
+    ...(runnerExtra || {}),
   });
   const liveRes = { on() {}, writableEnded: false };
   const turn = (agent, over = {}) => { const tr = { origin: { kind: 'user' }, personKey: 'u_sam', ...over }; turnRegistry.set(agent, tr); return tr; };
   const hubTurn = (agent) => turn(agent, { origin: { kind: 'schedule' }, personKey: null });
   const call = (agent, args) => ctx.run(agent, liveRes, args);
-  return { ctx, prefs, store, asked, started, pushes, turn, hubTurn, call, settings: live, setAnswer: (v) => { askAnswer = v; }, nextDay: () => { clock += 24 * 3600 * 1000; } };
+  return { ctx, prefs, store, file: path.join(dir, 'research-runs.json'), asked, started, pushes, turn, hubTurn, call, settings: live, setAnswer: (v) => { askAnswer = v; }, nextDay: () => { clock += 24 * 3600 * 1000; } };
 }
 const ownWork = (L, over = {}) => L.call('sam-agent', { action: 'offer', question: 'Which judge is best?', for: 'own_work', reason: 'My report needs a current comparison.', ...over });
 const startQ = (L, over = {}) => L.call('sam-agent', { action: 'start', question: 'Which judge is best?', sub_questions: SUBS, ...over });
@@ -205,7 +213,7 @@ test('a thorough start after an auto grant is refused (own work, no answer and a
   A.turn('sam-agent');
   await ownWork(A);
   assert.equal(await startQ(A, { level: 'thorough' }), REFUSED);
-  const N = load({ askAnswer: 'NO_ANSWER' });
+  const N = load({ askAnswer: 'TIMEOUT' });
   N.turn('sam-agent');
   await N.call('sam-agent', { action: 'offer', question: 'Which judge is best?' });
   assert.equal(await startQ(N, { level: 'thorough' }), REFUSED);
@@ -213,7 +221,7 @@ test('a thorough start after an auto grant is refused (own work, no answer and a
 
 // ── a person's offer: the wait, then a quick run ──
 test('person offer, no answer within the wait: the no-answer text, then a quick start (startedBy no-answer, counted); the card asks within the setting', async () => {
-  const L = load({ askAnswer: 'NO_ANSWER' });
+  const L = load({ askAnswer: 'TIMEOUT' });
   L.turn('sam-agent');
   const out = await L.call('sam-agent', { action: 'offer', question: 'Which judge is best?' });
   assert.equal(out, 'No answer came within 2 minutes: start a quick run. Plan 2 to 8 sub-questions that together answer it, then call deep_research with action "start", the same question, sub_questions and level "quick". Tell the person in one line that a quick run has started because nobody answered, then carry on.');
@@ -258,7 +266,7 @@ test('wait 0: no card at all, the quick run at once', async () => {
   // with the change off: still no card, and the old no-answer text
   const O = load({ ons: ['deep-research'], settings: { researchOfferWaitSeconds: 0 } });
   O.turn('sam-agent');
-  assert.equal(await O.call('sam-agent', { action: 'offer', question: 'Q?' }), 'No answer came. Answer normally, and offer a deep research run in one line at the end.');
+  assert.equal(await O.call('sam-agent', { action: 'offer', question: 'Q?' }), research.WAIT_ZERO_OFF);
   assert.equal(O.asked.length, 0);
 });
 
@@ -319,7 +327,7 @@ test('caps: per agent and for the install, 0 = unlimited, the over-cap text (at 
   assert.equal(await L.call('bob-agent', { action: 'offer', question: 'B', for: 'own_work', reason: 'r' }), CAP_TEXT, 'the install is at 3');
   assert.deepEqual(JSON.parse(JSON.stringify(L.ctx.capsToday())), { caps: { perAgent: 2, install: 3 }, today: { install: 3, agents: { 'sam-agent': 2, 'ann-agent': 1 } } });
   // a person's no-answer run is counted and capped the same way
-  const N = load({ askAnswer: 'NO_ANSWER', settings: { researchAgentCaps: { perAgent: 1, install: 5 } } });
+  const N = load({ askAnswer: 'TIMEOUT', settings: { researchAgentCaps: { perAgent: 1, install: 5 } } });
   N.turn('sam-agent');
   await N.call('sam-agent', { action: 'offer', question: 'Q?' });
   await N.call('sam-agent', { action: 'start', question: 'Q?', sub_questions: SUBS });
@@ -375,7 +383,7 @@ test('the run store: the count keeps today and yesterday only, beside the runs, 
 
 // ── the change is off ──
 test('research-own-work off: own_work gets the off text; a person offer with no answer gets the old text; a hub turn the old no-one-to-ask text; the wait still applies', async () => {
-  const L = load({ ons: ['deep-research'], askAnswer: 'NO_ANSWER', settings: { researchOfferWaitSeconds: 45 } });
+  const L = load({ ons: ['deep-research'], askAnswer: 'TIMEOUT', settings: { researchOfferWaitSeconds: 45 } });
   L.turn('sam-agent');
   assert.equal(await ownWork(L), research.OWN_WORK_OFF);
   assert.equal(L.asked.length, 0);
@@ -390,7 +398,7 @@ test('research-own-work off: own_work gets the off text; a person offer with no 
 
 test('the card\'s wait is the setting (default 120 s, 30 s, 1 minute, 10 minutes); every other card keeps 10 minutes', async () => {
   for (const [secs, ms, phrase] of [[undefined, 120000, '2 minutes'], [30, 30000, '30 seconds'], [60, 60000, '1 minute'], [600, 600000, '10 minutes'], ['junk', 120000, '2 minutes'], [601, 120000, '2 minutes']]) {
-    const L = load({ askAnswer: 'NO_ANSWER', settings: secs === undefined ? {} : { researchOfferWaitSeconds: secs } });
+    const L = load({ askAnswer: 'TIMEOUT', settings: secs === undefined ? {} : { researchOfferWaitSeconds: secs } });
     L.turn('sam-agent');
     const out = await L.call('sam-agent', { action: 'offer', question: 'Q?' });
     assert.equal(L.asked[0].opts.timeoutMs, ms, String(secs));
@@ -500,11 +508,11 @@ test('upgrade: refused for a run the person approved (and for a run that is not 
   assert.equal(runner.get(p.id).state, 'running');
   assert.equal(runner.stop(p.id).ok, true, 'a person-approved run can still be stopped');
   // a thorough run that cannot start: the stamp of the agent cannot be confirmed the second time
-  let broken = false;
-  const M = makeRunner({ stampOf: () => { if (broken) throw new Error('lookup failed'); return 'stamp-1'; } });
+  let broken = false; let looks = 0;
+  const M = makeRunner({ stampOf: () => { if (broken) looks += 1; if (broken && looks >= 2) throw new Error('lookup failed'); return 'stamp-1'; } });
   const r = startAuto(M.runner);
   await tick();
-  broken = true;   // from now on the agent's identity cannot be confirmed (the upgrade is synchronous: the quick run is untouched)
+  broken = true;   // the upgrade's own check of the agent passes (its 1st lookup), the thorough run's stamp lookup fails (its 2nd): the quick run is untouched
   const bad = M.runner.upgrade(r.id);
   assert.equal(bad.ok, false);
   assert.match(bad.error, /^A thorough run could not start: Could not confirm which agent/);
@@ -621,7 +629,7 @@ function routeHarness({ user, agentOf = { 'dr-aaaaaaaa': 'sam-agent' }, stopOut,
   };
 }
 
-test('routes: stop and upgrade answer ok / run / newId; the person must be allowed to use the run\'s agent (403), the run must exist (404), the id must look like one (400)', async () => {
+test('routes: stop and upgrade answer ok / run / newId; the person must be allowed to use the run\'s agent (404, the same as an unknown run), the run must exist (404), the id must look like one (400)', async () => {
   const member = { id: 'u_ann', role: 'member' };
   const call = routeHarness({ user: member });
   const s = await call('/api/research/stop', 'POST', { id: 'dr-aaaaaaaa' });
@@ -639,9 +647,11 @@ test('routes: stop and upgrade answer ok / run / newId; the person must be allow
   // a member who may not use the agent
   const denied = routeHarness({ user: { id: 'u_other', role: 'member' }, canAccess: (u, name) => u.id === 'u_ann' });
   const d = await denied('/api/research/stop', 'POST', { id: 'dr-aaaaaaaa' });
-  assert.equal(d.out.code, 403);
+  assert.equal(d.out.code, 404);
+  assert.deepEqual(JSON.parse(JSON.stringify(d.out.obj)), { error: 'No such research run.' });
+  assert.deepEqual(JSON.parse(JSON.stringify((await call('/api/research/stop', 'POST', { id: 'dr-cccccccc' })).out.obj)), { error: 'No such research run.' }, 'the same answer as for a run that does not exist');
   assert.equal(d.calls.length, 0, 'nothing was stopped');
-  assert.equal((await denied('/api/research/upgrade', 'POST', { id: 'dr-aaaaaaaa' })).out.code, 403);
+  assert.equal((await denied('/api/research/upgrade', 'POST', { id: 'dr-aaaaaaaa' })).out.code, 404);
   // an admin passes without the member check
   const admin = routeHarness({ user: { id: 'u_root', role: 'admin' }, canAccess: false });
   assert.equal((await admin('/api/research/stop', 'POST', { id: 'dr-aaaaaaaa' })).out.code, 200);
@@ -747,6 +757,267 @@ test('the wording of the grant, the off texts and the cap are exactly the plan\'
   const entry = JSON.parse(require('fs').readFileSync(path.join(__dirname, '..', 'templates', 'behaviour-changes.json'), 'utf8')).changes.find((c) => c.id === 'research-own-work');
   assert.ok(research.OWN_WORK_OFF.includes(`"${entry.title.split(',')[0]}`), 'the off text names the entry the owner sees on the Changes page');
   assert.equal(research.AGENT_CAP_REACHED, CAP_TEXT);
+  assert.ok(!/words more in agents/.test(entry.costs), 'the guidance is sent whether the entry is on or off: the costs do not name it');
   assert.equal(research.OWN_WORK_NEEDS_REASON, 'Give a one-sentence reason: why your work needs this research.');
   assert.match(research.autoQuickText('agent'), GRANT);
+});
+
+
+// ══ review round 1 ══
+const realAskUser = () => require(path.join(ISO.inst, 'lib', 'sdk-chat.js')).__askUser.runAskUser;
+const writableRes = () => ({ on() {}, write() { return true; }, writableEnded: false });
+
+// S1: only the wait's own timer counts as "nobody answered"
+test('S1: a typed answer NO_ANSWER is a typed answer: no quick run, the "no answer came" text, nothing counted', async () => {
+  const L = load({ askAnswer: 'NO_ANSWER' });
+  L.turn('sam-agent');
+  const out = await L.call('sam-agent', { action: 'offer', question: 'Which judge is best?' });
+  assert.equal(out, 'No answer came. Answer normally, and offer a deep research run in one line at the end.');
+  assert.match(await startQ(L), /^Ask first/);
+  assert.equal(L.started.length, 0);
+  assert.equal(L.ctx.capsToday().today.install, 0);
+});
+
+test('S1: a real short timeout through the REAL runAskUser starts the quick run; a stopped turn and typed text do not', async () => {
+  const ask = realAskUser();
+  const L = load({ settings: { researchOfferWaitSeconds: 1 }, realAsk: (agent, res, card, opts) => ask(agent, writableRes(), card, opts) });
+  L.turn('sam-agent');
+  const out = await L.call('sam-agent', { action: 'offer', question: 'Which judge is best?' });
+  assert.match(out, /^No answer came within 1 second: start a quick run\./);
+  assert.match(await startQ(L), /^Started/);
+  assert.equal(L.started[0].startedBy, 'no-answer');
+  // the real function: onTimeout runs for the timer only
+  let n = 0;
+  const q = { question: 'Q?', options: ['A'] };
+  assert.equal(await ask('sam-agent', writableRes(), q, { timeoutMs: 5, onTimeout: () => { n += 1; } }), 'NO_ANSWER');
+  assert.equal(n, 1, 'the timer');
+  const ac = new AbortController();
+  const p = ask('sam-agent', writableRes(), q, { timeoutMs: 60000, signal: ac.signal, onTimeout: () => { n += 1; } });
+  ac.abort();
+  assert.equal(await p, 'NO_ANSWER');
+  assert.equal(n, 1, 'a stopped turn is not a timeout');
+});
+
+// S2: check, count and start in one synchronous step
+test('S2: install cap 1, two agents start together while the model lookup is slow: one run starts and the count is 1', async () => {
+  let later = 0;
+  const L = load({ settings: { researchAgentCaps: { perAgent: 5, install: 1 } }, modelFn: async () => { await tick(); later += 1; return 'claude-sdk/claude-test-big'; } });
+  for (const ag of ['sam-agent', 'ann-agent']) { L.hubTurn(ag); assert.match(await L.call(ag, { action: 'offer', question: 'Q ' + ag, for: 'own_work', reason: 'r' }), GRANT); }
+  const outs = await Promise.all(['sam-agent', 'ann-agent'].map((ag) => L.call(ag, { action: 'start', question: 'Q ' + ag, sub_questions: SUBS })));
+  assert.ok(later >= 2, 'the model lookups really were awaited');
+  assert.equal(L.started.length, 1);
+  assert.equal(outs.filter((o) => o === CAP_TEXT).length, 1);
+  assert.equal(L.ctx.capsToday().today.install, 1);
+});
+
+test('S2: a count that cannot be recorded refuses the start (plain text, nothing started); a start that fails gives the count back', async () => {
+  const COUNT_TEXT = 'Could not record today\'s count of research started by agents, so this run was not started; go on without it and say so in your report.';
+  const B = load({ runnerExtra: { countAgentStart: () => { throw new Error('disk full'); } } });
+  B.hubTurn('sam-agent'); await ownWork(B);
+  assert.equal(await startQ(B), COUNT_TEXT);
+  assert.equal(B.started.length, 0);
+  const undone = [];
+  const F = load({ startOk: false, runnerExtra: { uncountAgentStart: (g, d) => { undone.push([g, d]); return F.store.uncountAgentStart(g, d); } } });
+  F.hubTurn('sam-agent'); await ownWork(F);
+  assert.equal(await startQ(F), 'engine said no');
+  assert.deepEqual(undone, [['sam-agent', '2026-11-25']]);
+  assert.equal(F.ctx.capsToday().today.install, 0);
+});
+
+test('S2: uncountAgentStart takes back that day\'s counts and never goes below 0', () => {
+  const s = research.createRunStore({ file: path.join(tmpDir(), 'r.json'), now: () => new Date(2026, 10, 25, 12).getTime() });
+  s.countAgentStart('a'); s.countAgentStart('b');
+  s.uncountAgentStart('a', '2026-11-25');
+  assert.deepEqual(s.agentStartsToday(), { date: '2026-11-25', install: 1, agents: { b: 1 } });
+  s.uncountAgentStart('a', '2026-11-25'); s.uncountAgentStart('b', '2026-11-25'); s.uncountAgentStart('b', '2026-11-25');
+  assert.deepEqual(s.agentStartsToday(), { date: '2026-11-25', install: 0, agents: {} });
+});
+
+// S3: an unreadable runs file is not an empty count
+test('S3: a malformed runs file: counting and reading the count throw, an auto start is refused, save keeps the earlier count', async () => {
+  const dir = tmpDir();
+  const file = path.join(dir, 'r.json');
+  const now = () => new Date(2026, 10, 25, 12).getTime();
+  const s = research.createRunStore({ file, now });
+  assert.deepEqual(s.load(), [], 'a missing file is empty');
+  assert.equal(s.agentStartsToday().install, 0);
+  s.countAgentStart('a'); s.countAgentStart('a');
+  fs.writeFileSync(file, '{ not json');
+  assert.throws(() => s.countAgentStart('a'));
+  assert.throws(() => s.agentStartsToday());
+  assert.throws(() => s.uncountAgentStart('a', '2026-11-25'));
+  s.save([{ id: 'dr-1', agent: 'a', subQuestions: ['x', 'y'] }]);   // the next save after the failed read
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).agentStarts, { '2026-11-25': { install: 2, agents: { a: 2 } } }, 'the earlier count is kept, not reset');
+  assert.equal(s.agentStartsToday().install, 2);
+  // an unreadable path that is not "missing" is no empty file either
+  const d2 = path.join(tmpDir(), 'dir.json'); fs.mkdirSync(d2);
+  assert.throws(() => research.createRunStore({ file: d2, now }).agentStartsToday());
+  // the handler: an agent's start is refused and nothing starts
+  const L = load();
+  L.hubTurn('sam-agent'); await ownWork(L);
+  fs.writeFileSync(L.file, '[1,2');
+  assert.match(await startQ(L), /^Could not record today's count of research started by agents/);
+  assert.equal(L.started.length, 0);
+  L.hubTurn('sam-agent');
+  assert.match(await ownWork(L), /^Could not record today's count/, 'and no grant is given');
+});
+
+test('S3: a runs file already unreadable at start-up is kept beside it before the first save replaces it', () => {
+  const dir = tmpDir();
+  const file = path.join(dir, 'r.json');
+  const now = () => new Date(2026, 10, 25, 12).getTime();
+  fs.writeFileSync(file, '{ "runs": [ damaged');
+  const s = research.createRunStore({ file, now });
+  assert.deepEqual(s.load(), [], 'the damaged file loads as no runs');
+  s.save([{ id: 'dr-1', agent: 'a', subQuestions: ['x', 'y'] }]);
+  assert.equal(fs.readFileSync(`${file}.unreadable`, 'utf8'), '{ "runs": [ damaged', 'the damaged file is kept as it was');
+  s.save([]);
+  assert.equal(fs.readFileSync(`${file}.unreadable`, 'utf8'), '{ "runs": [ damaged', 'kept once, never overwritten');
+});
+
+// S4: Always yes in a turn the person did not type
+test('S4: Always (thorough) in a scheduled turn starts a thorough run, uncounted, startedBy always, with the notice and push', async () => {
+  const L = load();
+  L.prefs.setChoice('u_owner', 'always'); L.prefs.setAlwaysLevel('u_owner', 'thorough');
+  L.hubTurn('sam-agent');
+  assert.match(await L.call('sam-agent', { action: 'offer', question: 'Which judge is best?' }), /thorough deep research run/);
+  assert.match(await startQ(L, { level: 'thorough' }), /^Started/);
+  assert.equal(L.started[0].level, 'thorough');
+  assert.equal(L.started[0].startedBy, 'always');
+  assert.deepEqual(JSON.parse(JSON.stringify(L.ctx.capsToday().today)), { install: 0, agents: {} }, 'not counted');
+  assert.equal(L.pushes.length, 1);
+  assert.equal(L.pushes[0].p.title, 'Sam-agent started thorough research under your Always yes');
+  // quick Always: the same, and without an offer first
+  const Q = load();
+  Q.prefs.setChoice('u_owner', 'always');
+  Q.hubTurn('sam-agent');
+  assert.match(await startQ(Q), /^Started/);
+  assert.equal(Q.started[0].startedBy, 'always');
+  assert.equal(Q.pushes.length, 1);
+  // in a turn the person typed it stays the person's own run
+  const T = load();
+  T.prefs.setChoice('u_sam', 'always');
+  T.turn('sam-agent');
+  assert.match(await startQ(T), /^Started/);
+  assert.equal(T.started[0].startedBy, 'person');
+  assert.equal(T.pushes.length, 0);
+});
+
+test('S4: a run started under Always can be stopped (state stopped, the agent told) and made thorough while quick', async () => {
+  const { runner, wakes } = makeRunner();
+  const r = startAuto(runner, { startedBy: 'always', reason: '' });
+  assert.equal(r.ok, true);
+  await tick();
+  assert.equal(runner.get(r.id).startedBy, 'always');
+  const st = runner.stop(r.id, { by: 'u_owner' });
+  assert.equal(st.ok, true);
+  assert.equal(runner.get(r.id).state, 'stopped');
+  await until(() => wakes.length >= 1);
+  assert.match(wakes[0].message, /^\[Deep research stopped\]/);
+  const M = makeRunner();
+  const q = startAuto(M.runner, { startedBy: 'always', reason: '' });
+  await tick();
+  const up = M.runner.upgrade(q.id);
+  assert.equal(up.ok, true, 'an Always quick run can be made thorough');
+  assert.equal(M.runner.get(up.newId).level, 'thorough');
+});
+
+test('S4: "ask" in a scheduled turn still follows the own work path (quick, counted, startedBy agent)', async () => {
+  const L = load();
+  L.prefs.setChoice('u_owner', 'ask');
+  L.hubTurn('sam-agent');
+  assert.match(await L.call('sam-agent', { action: 'offer', question: 'Which judge is best?' }), GRANT);
+  assert.match(await startQ(L), /^Started/);
+  assert.equal(L.started[0].startedBy, 'agent');
+  assert.equal(L.started[0].level, 'quick');
+  assert.equal(L.ctx.capsToday().today.install, 1);
+});
+
+// S5: upgrade only for the agent the run was for
+test('S5: upgrade is refused (409) when the agent was replaced; nothing changes', async () => {
+  let stamp = 'stamp-1';
+  const { runner, wakes } = makeRunner({ stampOf: () => stamp });
+  const r = startAuto(runner);
+  await tick();
+  stamp = 'stamp-2';   // the agent was deleted and a new one took the name
+  const up = runner.upgrade(r.id);
+  assert.equal(up.ok, false);
+  assert.equal(up.status, 409);
+  assert.equal(up.error, 'The agent this run was for is no longer here, so it can\'t be made thorough.');
+  assert.equal(runner.get(r.id).state, 'running');
+  assert.equal(runner.list().length, 1, 'no thorough run was started');
+  await tick();
+  assert.equal(wakes.length, 0);
+});
+
+// S6: routes
+test('S6: stop and upgrade need a signed-in person: a service call is refused with 403, and the by is the person\'s id', async () => {
+  const svc = routeHarness({ user: null, hubService: true });
+  for (const p of ['/api/research/stop', '/api/research/upgrade']) {
+    const o = await svc(p, 'POST', { id: 'dr-aaaaaaaa' });
+    assert.equal(o.out.code, 403);
+    assert.deepEqual(JSON.parse(JSON.stringify(o.out.obj)), { error: 'Sign in first.' });
+    assert.equal(o.calls.length, 0);
+  }
+  const nobody = await routeHarness({ user: null })('/api/research/stop', 'POST', { id: 'dr-aaaaaaaa' });
+  assert.equal(nobody.out.code, 403);
+});
+
+test('S6: the caps route says so when the count cannot be read (no zeros)', async () => {
+  const a = SERVER.indexOf("if (pathname === '/api/research/caps' && req.method === 'GET') {");
+  const b = SERVER.indexOf('// ── Session/History Routes');
+  let out = null;
+  const sdk = { researchCapsToday: () => { throw new Error('unreadable'); }, researchAgentCaps: () => ({ perAgent: 2, install: 7 }) };
+  const ctx = vm.createContext({ pathname: '/api/research/caps', req: { method: 'GET' }, res: {}, jsonResponse: (r, c, o) => { out = { c, o }; }, require: () => sdk });
+  vm.runInContext('(() => {' + SERVER.slice(a, b) + '})()', ctx);
+  assert.equal(out.c, 200);
+  assert.deepEqual(JSON.parse(JSON.stringify(out.o)), { caps: { perAgent: 2, install: 7 }, today: null, error: 'Could not read today\'s count.' });
+  // and the real function throws on a malformed file instead of returning zeros
+  const L = load();
+  L.hubTurn('sam-agent'); await ownWork(L); await startQ(L);
+  fs.writeFileSync(L.file, 'garbage');
+  assert.throws(() => L.ctx.capsToday());
+});
+
+// S7: wait 0 while the switch is off
+test('S7: wait 0 with the switch off shows no card and returns the new text; with the switch on it still starts a quick run at once', async () => {
+  assert.equal(research.WAIT_ZERO_OFF, 'The question card is set not to wait here (0 seconds), and research started without a yes is not switched on, so nobody was asked: answer normally, and end with a one-line offer of deep research.');
+  const O = load({ ons: ['deep-research'], settings: { researchOfferWaitSeconds: 0 } });
+  O.turn('sam-agent');
+  assert.equal(await O.call('sam-agent', { action: 'offer', question: 'Q?' }), research.WAIT_ZERO_OFF);
+  assert.equal(O.asked.length, 0);
+  assert.match(await startQ(O, { question: 'Q?' }), /^Ask first/);
+  const N = load({ settings: { researchOfferWaitSeconds: 0 } });
+  N.turn('sam-agent');
+  assert.match(await N.call('sam-agent', { action: 'offer', question: 'Q?' }), /^Research questions start at the quick level without asking here/);
+  assert.match(await startQ(N, { question: 'Q?' }), /^Started/);
+  assert.equal(N.started[0].startedBy, 'no-answer');
+  // with the switch off and a real wait, a timeout still gets the old text
+  const W = load({ ons: ['deep-research'], askAnswer: 'TIMEOUT', settings: { researchOfferWaitSeconds: 45 } });
+  W.turn('sam-agent');
+  assert.equal(await W.call('sam-agent', { action: 'offer', question: 'Q?' }), 'No answer came. Answer normally, and offer a deep research run in one line at the end.');
+});
+
+// S9: stopped runs and upgradable
+test('S9: a stopped run is sent once with state stopped and active false; upgradable follows the interface (always included)', async () => {
+  const published = [];
+  const L = load();
+  L.ctx.hubEvents = { events: { publish: (t, p) => published.push({ t, p: JSON.parse(JSON.stringify(p)) }) } };
+  const { runner } = makeRunner({ onProgress: (run) => L.ctx.onProgress(run) });
+  L.ctx.setRunner(runner);
+  const r = startAuto(runner, { startedBy: 'always', reason: '' });
+  await tick();
+  assert.equal(published.find((e) => e.p.id === r.id).p.upgradable, true, 'a quick Always run is upgradable');
+  assert.equal(published.find((e) => e.p.id === r.id).p.startedBy, 'always');
+  assert.equal(runner.stop(r.id).ok, true);
+  const stopped = published.filter((e) => e.p.id === r.id && e.p.state === 'stopped');
+  assert.equal(stopped.length, 1, 'sent once');
+  assert.equal(stopped[0].p.active, false);
+  assert.equal(stopped[0].p.upgradable, false);
+  assert.deepEqual(L.ctx.statusFor('sam-agent').map((x) => x.id), [], 'a stopped run is not in the status list');
+  const T = makeRunner({ onProgress: (run) => L.ctx.onProgress(run) });
+  L.ctx.setRunner(T.runner);
+  const th = startAuto(T.runner, { level: 'thorough', startedBy: 'always', reason: '' });
+  await tick();
+  assert.equal(published.filter((e) => e.p.id === th.id)[0].p.upgradable, false, 'a thorough run is not');
 });
