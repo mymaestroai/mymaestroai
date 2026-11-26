@@ -14034,7 +14034,15 @@ function confirmRestart() {
 async function restartHub() {
   $('restart-confirm').close();
   try {
-    const r = await api('/api/restart', { method: 'POST' });
+    let r = await api('/api/restart', { method: 'POST' });
+    if (r.status === 409) {
+      // Running jobs would stop with the restart (no systemd scope): the answer names them; restart only if the person says so.
+      const d = await r.json().catch(() => null);
+      if (d && d.needsConfirm) {
+        if (!confirm(d.message)) return;
+        r = await api('/api/restart', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirm: true }) });
+      }
+    }
     if (!r.ok) { toast(`Restart refused: HTTP ${r.status}`); return; }
   } catch {
     // The connection dropping here is the server going down, which is expected.

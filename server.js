@@ -3373,6 +3373,10 @@ async function handleHttpRequest(req, res) {
 
     // ── Manual restart via UI button ──
     if (pathname === '/api/restart' && req.method === 'POST') {
+      // Jobs that would stop with the restart (no systemd scope): without { confirm: true } answer with the list, restart nothing.
+      let restartBody = {}; try { restartBody = JSON.parse((await readBody(req)) || '{}') || {}; } catch {}
+      const gate = require('./lib/jobs').restartGate(getJobRunner(), restartBody);
+      if (gate) return jsonResponse(res, 409, gate);
       console.log('[Server] Manual restart triggered via UI button');
       // Flush all active agent responses to disk before restarting
       try {

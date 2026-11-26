@@ -1482,6 +1482,18 @@
       layoutBanners();
     }
 
+    // POST /api/restart. When running jobs would stop with the restart, the server answers 409 { needsConfirm, message } and
+    // restarts nothing: ask the person (the message names the jobs) and send the confirm.
+    async function postRestart() {
+      let r = await fetch('/api/restart', { method: 'POST', credentials: 'include' });
+      let d = await r.json().catch(() => null);
+      if (r.status === 409 && d && d.needsConfirm) {
+        if (!confirm(d.message)) return { r, d, cancelled: true };
+        r = await fetch('/api/restart', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirm: true }) });
+        d = await r.json().catch(() => null);
+      }
+      return { r, d };
+    }
     // ── Restart Hub Button ──
     async function restartHub() {
       if (!confirm('Restart My Maestro AI?\n\n• Conversation history is auto-saved (safe)\n• Memory & session notes are saved instantly (safe)\n• Active streaming responses will be flushed to disk\n• Agents mid-response will lose their last ~3 seconds of output')) return;
@@ -1493,8 +1505,9 @@
       try { const h = await (await fetch('/api/health', { credentials: 'include' })).json(); before = h.bootId || null; } catch {}
       let started = null;
       try {
-        const r = await fetch('/api/restart', { method: 'POST', credentials: 'include' });
-        started = await r.json().catch(() => null);
+        const pr = await postRestart(); const r = pr.r;
+        started = pr.d;
+        if (pr.cancelled) { btn.classList.remove('restarting'); btn.title = 'Restart My Maestro AI'; return; }
         if (!r.ok) { restartFailed(btn, `The hub refused to restart: ${(started && started.error) || r.status}`); return; }
         if (started && started.bootId) before = started.bootId;
       } catch (e) { /* the server may already be going down */ }
@@ -2449,7 +2462,7 @@
       const rows = shown.length ? shown.map(j => `<tr style="border-top:1px solid var(--border)">
           <td><b>${esc(j.name)}</b><br><code style="font-size:11px">${esc(j.id)}</code></td>
           <td>${esc(j.owner)}${j.reportTo ? ` <span title="master agent">→ ${esc(j.reportTo)}</span>` : ''}</td>
-          <td>${badge(j)}<br><small>${handoff(j)}</small></td>
+          <td>${badge(j)}${j.restartWarning ? `<br><small style="color:var(--warning)">${esc(j.restartWarning)}</small>` : ''}<br><small>${handoff(j)}</small></td>
           <td><small>${esc(when(j.startedAt))}${j.endedAt ? `<br>ended ${esc(when(j.endedAt))}` : ''}</small></td>
           <td style="white-space:nowrap"><button class="gs-btn secondary" onclick="jobsAct('log', '${esc(j.id)}')">Log</button>
             ${j.status === 'running' ? `<button class="gs-btn secondary" onclick="jobsAct('cancel', '${esc(j.id)}')">Cancel</button>` : ''}</td>
@@ -2466,7 +2479,7 @@
         } catch (e) { logBox = `<p>${esc(e.message)}</p>`; jobsPanelLog = null; }
       }
       return `<div class="gs-box"><h4>Background jobs <small>(run_job)</small></h4>
-        <p><small>Commands agents run with <code>run_job</code>. They survive the agent's turn${data.mode === 'systemd' ? ' and hub restarts' : ''}; when one ends the hub wakes its owner with the result, and if the owner ran it for another agent, forwards the owner's report to that agent. Launcher: ${esc(data.mode)}.</small></p>
+        <p><small>Commands agents run with <code>run_job</code>. They survive the agent's turn${data.mode === 'systemd' ? ' and restarts of your Maestro' : ', but a running job stops if your Maestro restarts'}; when one ends the hub wakes its owner with the result, and if the owner ran it for another agent, forwards the owner's report to that agent. Launcher: ${esc(data.mode)}.</small></p>
         <table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr><th style="text-align:left">Job</th><th style="text-align:left">Owner → master</th><th style="text-align:left">Status</th><th style="text-align:left">Started</th><th></th></tr></thead><tbody>${rows}</tbody></table>${schedHiddenNote(data.jobs, shown)}${logBox}</div>`;
     }
     async function refreshJobsSection() {
@@ -3164,7 +3177,8 @@
       // Reuse the restart button's flush + poll path.
       const rbtn = document.getElementById('restart-hub-btn');
       try {
-        await fetch('/api/restart', { method: 'POST', credentials: 'include' });
+        const pr = await postRestart();
+        if (pr.cancelled || !pr.r.ok) { gsModal(`<h3>⬇ Update from GitHub</h3><div class="gs-ok">✓ Updated to ${esc(r.head)}</div><p class="gs-sub">Not restarted yet. Restart it from the ⋯ menu to finish.</p>`); return; }
       } catch (e) { /* expected — server dies */ }
       setTimeout(() => pollForRestart(rbtn), 8000);
     }
@@ -4805,8 +4819,8 @@
       // The Update dialog's own restart: flush the active replies, restart, wait for the new boot.
       const rbtn = document.getElementById('restart-hub-btn');
       let refused = null;
-      try { const rr = await fetch('/api/restart', { method: 'POST', credentials: 'include' }); if (!rr.ok) refused = rr.status; } catch { /* expected: the server goes away */ }
-      if (refused) { if (msg) msg.innerHTML = `<div class="uc-err">Updated, but the hub refused to restart (HTTP ${refused}). Restart it from the ⋯ menu to finish.</div>`; return; }
+      try { const pr = await postRestart(); if (pr.cancelled) refused = 'cancelled'; else if (!pr.r.ok) refused = pr.r.status; } catch { /* expected: the server goes away */ }
+      if (refused) { if (msg) msg.innerHTML = `<div class="uc-err">Updated, but your Maestro was not restarted (${refused === 'cancelled' ? 'you chose to wait' : 'HTTP ' + refused}). Restart it from the ⋯ menu to finish.</div>`; return; }
       setTimeout(() => pollForRestart(rbtn), 8000);
     }
     // Settings → Status → Updates.

@@ -626,3 +626,61 @@ test('21. retire: no box when it was checked, then another copy makes one under 
   const b = r.boxes.get(NAME);
   assert.ok(b && b.id === 'feedbeef03' && b.state === 'running', 'the other copy\'s box is still there and running');
 });
+
+// ── a box made before `docker create --init`: PID 1 is the keep-alive `sleep infinity`, no init, nothing else ──
+// (made the old way: its args label is another hash, and Docker says HostConfig.Init is false)
+const OLD_TOP = 'PID ARGS\n2885978 sleep infinity\n';
+async function oldBox(r, init = false) {
+  await r.ours('running');
+  const b = r.boxes.get(NAME);
+  b.labels = { ...b.labels, 'agent-hub.args': 'f'.repeat(64) };   // made with the flags of before --init
+  b.init = init;
+  return b;
+}
+test('18b. an old box (no init, only the keep-alive running) is idle and stale: stopped, removed with rm -f, made again with --init', async () => {
+  const r = rig();
+  await oldBox(r);
+  r.top = OLD_TOP;
+  const m = r.mark();
+  assert.strictEqual(await recheck(r), NAME);
+  const made = r.since(m);
+  assert.strictEqual(made.filter(a => a[0] === 'stop').length, 1);
+  assert.strictEqual(made.filter(a => a[0] === 'rm' && a.includes('-f')).length, 1);
+  const c = made.filter(a => a[0] === 'create');
+  assert.strictEqual(c.length, 1);
+  assert.ok(c[0].includes('--init'), 'the new box has an init');
+  assert.ok(r.logs.some(l => /alpha/.test(l) && /needs to be rebuilt/.test(l)), r.logs.join('\n'));
+  assert.strictEqual(r.sb.readinessItems().length, 0, 'not held');
+});
+test('18c. the old box\'s home volume is kept: no volume rm, and the new box mounts the same home', async () => {
+  const r = rig();
+  const b = await oldBox(r);
+  const home = b.home;
+  r.top = OLD_TOP;
+  const m = r.mark();
+  assert.strictEqual(await recheck(r), NAME);
+  const made = r.since(m);
+  assert.deepStrictEqual(made.filter(a => a[0] === 'volume' && (a[1] === 'rm' || a[1] === 'remove' || a[1] === 'prune')), [], 'no volume removed');
+  assert.ok(!made.some(a => a[0] === 'rm' && a.some(x => String(x) === home)), 'the volume is not an rm target');
+  const c = made.find(a => a[0] === 'create');
+  assert.ok(c.includes(`${home}:/home/agent`), `the new box mounts ${home}`);
+});
+test('18d. only the lone keep-alive is let through: extra processes, two keep-alives, an init without a keep-alive, an init-made box with a lone keep-alive stay not idle', async () => {
+  const cases = [
+    ['PID ARGS\n7 sleep infinity\n9 node server.js\n', false, 'node server.js'],
+    ['PID ARGS\n7 sleep infinity\n8 sleep infinity\n', false, 'sleep infinity'],
+    ['PID ARGS\n1 /sbin/docker-init -- docker-entrypoint.sh sleep infinity\n', false, 'unexpected process list'],
+    ['PID ARGS\n1 /sbin/docker-init -- sleep infinity\n7 sleep infinity\n9 node server.js\n', false, 'node server.js'],
+    ['PID ARGS\n7 sleep infinity\n', true, 'unexpected process list'],   // made with an init, yet no init running: not the box as it was made
+    ['PID ARGS\n', false, 'Docker listed nothing'],
+  ];
+  for (const [top, init, holder] of cases) {
+    const r = rig();
+    await oldBox(r, init);
+    r.top = top;
+    const m = r.mark();
+    await assert.rejects(() => recheck(r), code('EBOXHELD'), top);
+    assert.deepStrictEqual(r.since(m).filter(a => ['stop', 'rm', 'create'].includes(a[0])), [], `${holder}: nothing stopped, removed or made`);
+    assert.ok(r.sb.readinessItems()[0].detail.includes(holder), `${holder}: named`);
+  }
+});
