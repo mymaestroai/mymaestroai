@@ -161,24 +161,34 @@ test('hint: a callout above the composer row, never over the message box or Send
   const css = html.match(/\.voice-hint \{[^}]*\}/)[0];
   assert.match(css, /position: absolute/); assert.match(css, /right: 8px/); assert.match(css, /width: min\(250px, calc\(100vw - 16px\)\)/);
   const place = fnSrc(mob, 'voiceHintPlace');
-  assert.match(place, /h\.style\.bottom = \(c\.clientHeight - topY \+ 10\) \+ 'px'/, 'its bottom edge sits above the row of the box, mic and Send (and the slots above it)');
+  assert.match(place, /const y = Math\.min\(topY - 10, -14\)/, 'its bottom edge sits above the composer top (and the slots above the row)');
+  assert.match(place, /h\.style\.top = y \+ 'px'/, 'anchored to the composer top, not its bottom (the composer height changes after placement)');
+  assert.doesNotMatch(place, /clientHeight/, 'no dependence on the composer height');
 });
 
-test('hint (phone): the tip sits above the visible Undo/offer slot and the Working on bar, not on them', () => {
+test('hint (phone): the tip sits above the visible Undo/offer slot and the Working on bar, and clear of the composer top whatever its height', () => {
   const place = fnSrc(mob, 'voiceHintPlace');
   assert.match(place, /team-offer-slot, \.handoff-cards/);
-  const run = (slots) => {
+  // geometry: composer top = 0 in its own coordinates; the tip box ends at (top + translateY(-100%)); the arrow hangs 7px below the box
+  const run = (slots, rowTop = 100, clientHeight = 160) => {
     const style = { props: {}, setProperty(k, v) { this.props[k] = v; } };
-    const row = { offsetTop: 100 };
-    const composer = { clientHeight: 160, querySelector: () => row, querySelectorAll: () => slots };
+    const row = { offsetTop: rowTop };
+    const composer = { clientHeight, querySelector: () => row, querySelectorAll: () => slots };
     const h = { style, getBoundingClientRect: () => ({ left: 0, width: 250 }) };
     new Function('voiceHintEl', '$', 'voiceHintTarget', place + '\nvoiceHintPlace();')(h, () => composer, () => ({ getBoundingClientRect: () => ({ left: 300, width: 40 }) }));
-    return style.bottom;
+    assert.strictEqual(style.transform, 'translateY(-100%)');
+    return parseFloat(style.top);   // the box bottom, in composer coordinates
   };
-  assert.strictEqual(run([]), '70px', 'nothing above the row: 10px over it as before (160 - 100 + 10)');
-  assert.strictEqual(run([{ hidden: false, offsetHeight: 32, offsetTop: 62 }]), '108px', 'above the Undo line (160 - 62 + 10)');
-  assert.strictEqual(run([{ hidden: false, offsetHeight: 20, offsetTop: 80 }, { hidden: false, offsetHeight: 32, offsetTop: 40 }]), '130px', 'above the topmost of both slots');
-  assert.strictEqual(run([{ hidden: true, offsetHeight: 32, offsetTop: 62 }, { hidden: false, offsetHeight: 0, offsetTop: 30 }]), '70px', 'hidden or empty slots do not count');
+  const arrowBottom = (y) => y + 7;
+  // Simple: the row starts 8px under the composer top (and in a wrapped/inset layout deeper): the arrow stays 6px+ above the composer top
+  for (const rowTop of [7, 8, 9, 14, 40, 100]) {
+    for (const clientHeight of [60, 90, 160, 400]) assert.ok(arrowBottom(run([], rowTop, clientHeight)) <= -6, `row ${rowTop}, composer ${clientHeight}: arrow at least 6px above the composer top`);
+  }
+  assert.strictEqual(run([], 100, 160), run([], 100, 400), 'the composer growing or shrinking after placement (inset, keyboard) does not move the tip');
+  // above the Undo line / offer slot / Working on bar: the topmost visible slot
+  assert.ok(run([{ hidden: false, offsetHeight: 32, offsetTop: 62 }]) <= 52 && run([{ hidden: false, offsetHeight: 32, offsetTop: 62 }]) <= -14, 'above the Undo line');
+  assert.strictEqual(run([{ hidden: false, offsetHeight: 20, offsetTop: 80 }, { hidden: false, offsetHeight: 32, offsetTop: -40 }], 100), -50, 'above the topmost of both slots');
+  assert.strictEqual(run([{ hidden: true, offsetHeight: 32, offsetTop: -62 }, { hidden: false, offsetHeight: 0, offsetTop: -30 }], 100), -14, 'hidden or empty slots do not count');
 });
 
 // ── the Voice sheet tells the truth until ready ──

@@ -10422,7 +10422,11 @@ function voiceHintPlace() {
   for (const s of (typeof c.querySelectorAll === 'function' ? c.querySelectorAll('.team-offer-slot, .handoff-cards') : [])) {
     if (!s.hidden && s.offsetHeight > 0 && s.offsetTop < topY) topY = s.offsetTop;
   }
-  h.style.bottom = (c.clientHeight - topY + 10) + 'px';
+  // Anchored to the composer's TOP edge (not its bottom): the composer's height changes after the tip is placed (safe-area inset, Simple's padding, a wrapping
+  // box, the keyboard), and a bottom offset then slides the tip down over the message box. The tip's box, with its arrow (about 7px below the box), ends at
+  // least 6px above the composer's top edge (1px more for the border), and never lower than 10px above the topmost slot.
+  const y = Math.min(topY - 10, -14);
+  h.style.top = y + 'px'; h.style.bottom = 'auto'; h.style.transform = 'translateY(-100%)';
   const hr = h.getBoundingClientRect(), tr = t.getBoundingClientRect();
   h.style.setProperty('--arrow-x', Math.max(10, Math.min(hr.width - 22, tr.left + tr.width / 2 - hr.left - 6)) + 'px');
 }

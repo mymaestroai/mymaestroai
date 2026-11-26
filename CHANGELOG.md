@@ -6,6 +6,8 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
+- **Simple mode on a narrow phone: the top bar no longer overlaps, and the message box sits lower.** On a phone your Maestro's Simple top bar now puts "Talking to:" and the agent's name on their own full-width row, so the name always shows and no words are dropped; below 350 px the theme choice lives in Settings. The message box keeps only the home-bar space under it (none while the keyboard is open), the send button stays on the same line at 320 px, and the voice tip always sits above the message box.
+
 - **Approve a model upgrade for several agents at once.** When your Maestro discovers a newer version on the same provider and billing route, it lists each eligible agent and its proposed change. You can approve the group or dismiss the offer, and see which agents switched or were busy.
 
 - **Clearer guidance when a helper cannot use a tool.** Your Maestro now tells read-only helpers to use file tools instead of a shell, explains when owner notifications and hand-offs do not apply, and gives clearer guidance for file paths and background commands.
