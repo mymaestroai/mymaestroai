@@ -781,6 +781,36 @@ test('scroll is restored only for an unchanged query; a changed query scrolls ba
   assert.strictEqual(list.scrollTop, 50, 'same query again: kept');
 });
 
+test('the selected agent removed from the roster while scrolled down: back to the first row, scrolled to the top', () => {
+  const agents = Array.from({ length: 40 }, (_, i) => A('ag' + String(i).padStart(2, '0'), 'Ag' + String(i).padStart(2, '0')));
+  const p = page({ agents });
+  p.cmdK();
+  const list = p.doc.getElementById('qs-list');
+  for (let i = 0; i < 30; i++) p.key(p.q(), 'ArrowDown');
+  const gone = p.doc.querySelector('.qs-row.sel').dataset.agent;
+  assert.ok(Number(p.doc.querySelector('.qs-row.sel').dataset.i) >= 30, 'selection far down');
+  list.scrollTop = 500;
+  const at = p.c.AGENTS.findIndex(a => a.name === gone);
+  p.c.AGENTS.splice(at, 1);
+  p.c.api.roster();
+  assert.strictEqual(p.doc.querySelector('.qs-row.sel').dataset.i, '0');
+  assert.strictEqual(p.q().getAttribute('aria-activedescendant'), 'qs-opt-0');
+  assert.strictEqual(list.scrollTop, 0);
+});
+
+test('a status-only update never re-sorts the open rows (an agent that becomes unread keeps its place until the next full render)', () => {
+  const agents = Array.from({ length: 6 }, (_, i) => A('ag' + i, 'Ag' + i));
+  const p = page({ agents });
+  p.cmdK();
+  const order = () => p.doc.querySelectorAll('.qs-row').map(r => r.dataset.agent);
+  const before = order();
+  assert.strictEqual(before.length, 6);
+  markUnread(p, 'c1', 'ag4');
+  p.c.api.statusChanged(); p.c.flush();
+  assert.strictEqual(rowState(p, 'ag4'), 'New replies');
+  assert.deepStrictEqual(order(), before, 'same row order');
+});
+
 test('without requestAnimationFrame the repaint falls back to a timer', async () => {
   const p = page({ agents: [A('scout', 'Scout')] });
   p.c.requestAnimationFrame = undefined;

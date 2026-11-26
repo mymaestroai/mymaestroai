@@ -25132,7 +25132,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       qsSel = at >= 0 ? at : 0;
       qsLastQ = q.value;
       const typed = q.value.trim().toLowerCase();
-      const scrollTop = same ? list.scrollTop : 0;   // an unchanged query keeps the list where it was; a new one starts at the top
+      const scrollTop = at >= 0 ? list.scrollTop : 0;   // the list keeps its place only when the selection was kept by name; a new query or a vanished agent starts at the top
       list.textContent = '';
       qsList.forEach((a, i) => {
         const row = document.createElement('div');
