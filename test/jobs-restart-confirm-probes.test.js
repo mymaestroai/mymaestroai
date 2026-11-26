@@ -72,11 +72,58 @@ describe('J1: a restart confirmation covers exactly the jobs it named', () => {
     const a = block.indexOf('restartGate'), b = block.indexOf('refuseNewJobs'), c = block.indexOf('requestRestart');
     assert.ok(a > 0 && a < b && b < c, 'gate, refuse, restart in that order');
     assert.match(block, /allowNewJobs/, 'a restart that fails lets jobs start again');
-    assert.match(block, /const t = setTimeout\(\(\) => getJobRunner\(\)\.allowNewJobs\(\), 120000\); t\.unref\(\);/, 'a restart that never exits does not refuse jobs for good');
+    assert.match(block, /armRestartFallback\(getJobRunner\(\), attempt\)/, 'a restart that never exits does not refuse jobs for good (that attempt only, after 10 minutes)');
+    assert.doesNotMatch(block, /120000/, 'no 2-minute timer');
+    assert.match(block, /refuseNewJobs\(attempt\)/, 'admission is tied to this attempt');
+    assert.match(block, /allowNewJobs\(attempt\)/, 'a failed attempt re-opens only itself');
     for (const f of ['app.js', 'mobile.js']) {
       const src = read(f);
       assert.match(src, /confirm: true, jobs: \(d\.jobs \|\| \[\]\)\.map\(/, `${f} sends the ids it showed`);
     }
+  });
+});
+
+describe('R1: job admission is tied to the restart attempt', () => {
+  const jobsStart = async (runner) => { try { const j = await runner.run({ owner: 'owner', name: 'x', command: 'true' }); return !!j.id; } catch (e) { return false; } };
+  it('an earlier attempt never re-opens a later one', async () => {
+    const { runner } = mk();
+    runner.refuseNewJobs('first');
+    runner.refuseNewJobs('second');   // a later accepted restart
+    assert.equal(runner.allowNewJobs('first'), false);
+    assert.equal(await jobsStart(runner), false, 'still refused for the later attempt');
+    assert.equal(runner.allowNewJobs('second'), true);
+    assert.equal(await jobsStart(runner), true);
+    runner.stop();
+  });
+  it('a failed attempt re-opens its own admission', async () => {
+    const { runner } = mk();
+    runner.refuseNewJobs('only');
+    assert.equal(await jobsStart(runner), false);
+    assert.equal(runner.allowNewJobs('only'), true);
+    assert.equal(await jobsStart(runner), true);
+    runner.stop();
+  });
+  it('the 10-minute fallback re-opens only its own attempt (unref\'d)', async () => {
+    assert.equal(J.RESTART_FALLBACK_MS, 10 * 60 * 1000);
+    const { runner } = mk();
+    runner.refuseNewJobs('a1');
+    const t1 = J.armRestartFallback(runner, 'a1', 20);
+    assert.equal(typeof t1.hasRef, 'function'); assert.equal(t1.hasRef(), false, 'does not keep the process alive');
+    runner.refuseNewJobs('a2');   // another restart is accepted before a1's timer fires
+    await later(60);
+    assert.equal(await jobsStart(runner), false, 'a1\'s timer did not re-open a2');
+    runner.refuseNewJobs('a3');
+    const t3 = J.armRestartFallback(runner, 'a3', 20);
+    await later(60);
+    assert.equal(await jobsStart(runner), true, 'a3\'s own timer re-opened a3');
+    clearTimeout(t3);
+    runner.stop();
+  });
+  it('the error path of server.js passes the attempt', () => {
+    const s = read('server.js');
+    const i = s.indexOf("pathname === '/api/restart' && req.method === 'POST'");
+    const block = s.slice(i, s.indexOf("'/api/restart/log'", i));
+    assert.match(block, /if \(r\.error\) \{ getJobRunner\(\)\.allowNewJobs\(attempt\);/);
   });
 });
 

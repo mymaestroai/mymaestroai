@@ -3378,7 +3378,8 @@ async function handleHttpRequest(req, res) {
       const gate = require('./lib/jobs').restartGate(getJobRunner(), restartBody);
       if (gate) return jsonResponse(res, 409, gate);
       // The confirmation covered the jobs running now: no new job may start until this process exits.
-      getJobRunner().refuseNewJobs();
+      const attempt = require('crypto').randomUUID();   // admission belongs to this attempt: an earlier one never re-opens a later one
+      getJobRunner().refuseNewJobs(attempt);
       console.log('[Server] Manual restart triggered via UI button');
       // Flush all active agent responses to disk before restarting
       try {
@@ -3389,9 +3390,9 @@ async function handleHttpRequest(req, res) {
       }
       // systemd installs: the process exits with code 75 and systemd restarts it; others: safe-restart.sh with a visible log.
       const r = require('./lib/restart').requestRestart({ projectDir: __dirname, port: PORT, reason: 'UI button', by: 'owner' });
-      if (r.error) { getJobRunner().allowNewJobs(); return jsonResponse(res, 500, { error: r.error }); }
-      // A restart that never exits must not refuse jobs for good.
-      const t = setTimeout(() => getJobRunner().allowNewJobs(), 120000); t.unref();
+      if (r.error) { getJobRunner().allowNewJobs(attempt); return jsonResponse(res, 500, { error: r.error }); }
+      // A restart helper that has not restarted your Maestro within 10 minutes has failed: this attempt only re-opens jobs then.
+      require('./lib/jobs').armRestartFallback(getJobRunner(), attempt);
       return jsonResponse(res, 200, { status: 'restarting', bootId: require('./lib/hub-events').BOOT_ID, pid: process.pid, ...r });
     }
     // The page shows this when a restart left the same process running (boot id unchanged): what the relauncher

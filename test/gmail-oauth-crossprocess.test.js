@@ -21,8 +21,22 @@ function fresh() {
 }
 const stateOf = (url) => new URL(url).searchParams.get('state');
 const okExchange = (tag) => async () => ({ status: 200, json: { access_token: `AT-${tag}`, refresh_token: `RT-${tag}`, expires_in: 3600 } });
-const pendingFile = (G) => path.join(path.dirname(G.TOKEN_PATH), 'gmail-signin-pending.json');
-const readFile = (G) => JSON.parse(fs.readFileSync(pendingFile(G), 'utf8'));
+// The pending sign-in lives in one row of gmail-signin.db next to the token. These helpers use their own short-lived connections.
+const Database = require('better-sqlite3');
+const dbFile = (G) => path.join(path.dirname(G.TOKEN_PATH), 'gmail-signin.db');
+function withDb(G, fn) { const d = new Database(dbFile(G)); try { return fn(d); } finally { d.close(); } }
+/** The row as { id, state, verifier, expiresAt, used }, or null when there is none. */
+const rowOf = (G) => withDb(G, (d) => {
+  const r = d.prepare('SELECT id, state, verifier, expires_at, used FROM pending').get();
+  return r ? { id: r.id, state: r.state, verifier: r.verifier, expiresAt: r.expires_at, used: r.used === 1 } : null;
+});
+const readFile = (G) => rowOf(G);
+/** Replace the one row (another process's doing). */
+const setRow = (G, f) => withDb(G, (d) => {
+  d.prepare('DELETE FROM pending').run();
+  d.prepare('INSERT INTO pending(id, state, verifier, expires_at, used) VALUES (?, ?, ?, ?, ?)').run(f.id, f.state, f.verifier, f.expiresAt, f.used ? 1 : 0);
+});
+const emptyRow = (G) => withDb(G, (d) => d.prepare('DELETE FROM pending').run());
 const cb = (state, code = 'C') => `http://localhost:19877/callback?state=${state}&code=${code}`;
 
 test('G1: begin in one module instance, finish in a fresh one', async () => {
@@ -45,16 +59,16 @@ test('G1: begin in one module instance, finish in a fresh one', async () => {
   assert.equal(JSON.parse(fs.readFileSync(B.TOKEN_PATH, 'utf8')).refresh_token, 'RT-one');
 });
 
-test('G1: the file never holds the code or a token, and its mode is 0600', async () => {
+test('G1: the database never holds the code or a token, and its mode is 0600', async () => {
   const A = fresh();
   A._test.setOpener(async () => false);
   await A.beginSignIn({ listener: false });
-  const mode = fs.statSync(pendingFile(A)).mode & 0o777;
-  assert.equal(mode, 0o600);
-  const text = fs.readFileSync(pendingFile(A), 'utf8');
-  assert.deepEqual(Object.keys(JSON.parse(text)).filter((k) => !['id', 'state', 'verifier', 'expiresAt', 'used'].includes(k)), []);
-  const entries = fs.readdirSync(path.dirname(pendingFile(A)));
-  assert.ok(!entries.some((n) => /\.tmp/.test(n)), 'no temp file left behind');
+  assert.equal(fs.statSync(dbFile(A)).mode & 0o777, 0o600);
+  const cols = withDb(A, (d) => d.prepare('PRAGMA table_info(pending)').all().map((c) => c.name));
+  assert.deepEqual(cols, ['id', 'state', 'verifier', 'expires_at', 'used']);
+  assert.equal(withDb(A, (d) => d.prepare('SELECT COUNT(*) AS n FROM pending').get().n), 1, 'at most one row');
+  const entries = fs.readdirSync(path.dirname(dbFile(A)));
+  assert.ok(!entries.some((n) => /\.tmp|\.lock|signin-pending/.test(n)), 'no temp, lock or pending file left behind');
 });
 
 test('G1: a second fresh instance cannot use a sign-in a first one already used', async () => {
@@ -74,7 +88,7 @@ test('G1: used in the file is refused (the file is left alone, see G3)', async (
   A._test.setOpener(async () => false);
   const r = await A.beginSignIn({ listener: false });
   const f = readFile(A); f.used = true;
-  fs.writeFileSync(pendingFile(A), JSON.stringify(f), { mode: 0o600 });
+  setRow(A, f);
   const B = fresh(); let n = 0; B._test.setPostForm(async () => { n++; return okExchange('x')(); });
   const out = await B.finishWithPastedAddress(cb(stateOf(r.url)));
   assert.equal(out.ok, false);
@@ -83,23 +97,25 @@ test('G1: used in the file is refused (the file is left alone, see G3)', async (
   assert.equal(readFile(B).id, f.id);
 });
 
-test('G1: expired in the file is refused and the file is emptied', async () => {
+test('G1: expired in the database is refused and the row is removed', async () => {
   const A = fresh();
   A._test.setOpener(async () => false);
   const r = await A.beginSignIn({ listener: false });
   const f = readFile(A); f.expiresAt = Date.now() - 1000;
-  fs.writeFileSync(pendingFile(A), JSON.stringify(f), { mode: 0o600 });
+  setRow(A, f);
   const B = fresh(); let n = 0; B._test.setPostForm(async () => { n++; return okExchange('x')(); });
   const out = await B.finishWithPastedAddress(cb(stateOf(r.url)));
   assert.equal(out.ok, false);
   assert.equal(out.reason, 'expired');
   assert.equal(n, 0);
-  assert.deepEqual(readFile(B), {});
+  assert.equal(readFile(B), null);
 });
 
-test('G1: nothing in the file at all: refused as nothing waiting', async () => {
+test('G1: nothing in the database at all: refused as nothing waiting', async () => {
   const A = fresh();
-  fs.writeFileSync(pendingFile(A), '{}', { mode: 0o600 });
+  A._test.setOpener(async () => false);
+  await A.beginSignIn({ listener: false });   // creates the database
+  emptyRow(A);
   const out = await A.finishWithPastedAddress(cb('0123456789abcdef0123456789abcdef'));
   assert.equal(out.ok, false);
   assert.equal(out.reason, 'nopending');
@@ -186,7 +202,6 @@ test('beginSignIn with a browser that opened returns the paste-back steps at onc
 });
 
 // ── Round 2 ──────────────────────────────────────────────────────────────
-const lockFile = (G) => path.join(path.dirname(G.TOKEN_PATH), 'gmail-signin.lock');
 const tokenText = (G) => (fs.existsSync(G.TOKEN_PATH) ? fs.readFileSync(G.TOKEN_PATH, 'utf8') : null);
 const tick = (ms = 20) => new Promise((r) => setTimeout(r, ms));
 
@@ -215,7 +230,7 @@ test('G3: a used sign-in read from the file by finishWithCode is refused without
   A._test.setOpener(async () => false);
   const r = await A.beginSignIn({ listener: false });
   const f = readFile(A); f.used = true;
-  fs.writeFileSync(pendingFile(A), JSON.stringify(f), { mode: 0o600 });
+  setRow(A, f);
   const B = fresh(); let n = 0; B._test.setPostForm(async () => { n++; return okExchange('x')(); });
   const out = await B.finishWithPastedAddress(cb(stateOf(r.url)));
   assert.equal(out.reason, 'used');
@@ -238,32 +253,111 @@ test('G4: two module instances claim the same sign-in at once: exactly one wins'
   assert.equal(n, 1, 'one exchange only');
   assert.equal(outs.filter((o) => o.ok).length, 1);
   assert.equal(outs.filter((o) => !o.ok)[0].reason, 'used');
-  assert.ok(!fs.existsSync(lockFile(A)), 'the lock is released');
+  assert.equal(readFile(A).used, true);
 });
 
-test('G4: a lock older than 30 seconds is taken over', async () => {
-  const A = fresh();
-  A._test.setOpener(async () => false);
-  fs.writeFileSync(lockFile(A), JSON.stringify({ pid: 1, at: Date.now() - 60000 }), { mode: 0o600 });
-  const old = new Date(Date.now() - 60000);
-  fs.utimesSync(lockFile(A), old, old);
-  const r = await A.beginSignIn({ listener: false });
-  assert.equal(r.mode, 'paste');
-  assert.ok(readFile(A).state === stateOf(r.url));
-  assert.ok(!fs.existsSync(lockFile(A)), 'the lock is released after the start');
-});
-
-test('G4: a fresh lock held by someone else gives a plain retryable sentence', async () => {
+test('L1: a database lock held by someone else (and never aged out) gives a plain retryable sentence', async () => {
   const A = fresh();
   A._test.setOpener(async () => false);
   const a = await A.beginSignIn({ listener: false });
-  fs.writeFileSync(lockFile(A), JSON.stringify({ pid: 2, at: Date.now() }), { mode: 0o600 });
+  const holder = new Database(dbFile(A));
+  holder.exec('BEGIN IMMEDIATE');   // another process in the middle of a decision
   try {
+    const t0 = Date.now();
     const out = await A.finishWithPastedAddress(cb(stateOf(a.url)));
     assert.equal(out.ok, false);
     assert.equal(out.message, 'Your Maestro is busy finishing another Gmail sign-in; try again in a moment.');
-    assert.equal(readFile(A).used, false, 'nothing was claimed');
-  } finally { fs.unlinkSync(lockFile(A)); }
+    assert.ok(Date.now() - t0 < 3000, 'the wait is short');
+    await assert.rejects(() => A.beginSignIn({ listener: false }), (e) => e.userMessage === A.WORDS.busy);
+  } finally { holder.exec('ROLLBACK'); holder.close(); }
+  assert.equal(readFile(A).used, false, 'nothing was claimed');
+});
+
+test('L1: a decision that throws releases the lock and changes nothing (rolled back)', async () => {
+  const A = fresh();
+  A._test.setOpener(async () => false);
+  const a = await A.beginSignIn({ listener: false });
+  A._test.setPostForm(okExchange('boom'));
+  const real = fs.writeFileSync;
+  fs.writeFileSync = function (p, ...rest) {
+    if (String(p) === A.TOKEN_PATH) { const e = new Error('EIO: disk gone'); e.code = 'EIO'; throw e; }
+    return real.call(this, p, ...rest);
+  };
+  let out;
+  try { out = await A.finishWithPastedAddress(cb(stateOf(a.url))); } finally { fs.writeFileSync = real; }
+  assert.equal(out.ok, false);
+  assert.equal(out.reason, 'exchange');
+  // The lock is free again: another instance can start, and the token file was not written.
+  const B = fresh(); B._test.setOpener(async () => false);
+  const b = await B.beginSignIn({ listener: false });
+  assert.equal(readFile(B).state, stateOf(b.url));
+  assert.ok(tokenText(A) === null || !/AT-boom/.test(tokenText(A)));
+});
+
+test('L1: the lock is the database: a holder that exits releases it (no age to wait out)', async () => {
+  const A = fresh();
+  A._test.setOpener(async () => false);
+  await A.beginSignIn({ listener: false });
+  const holder = new Database(dbFile(A));
+  holder.exec('BEGIN IMMEDIATE');
+  holder.close();   // the process ends: the operating system lets go
+  const B = fresh(); B._test.setOpener(async () => false);
+  const t0 = Date.now();
+  const b = await B.beginSignIn({ listener: false });
+  assert.equal(readFile(B).state, stateOf(b.url));
+  assert.ok(Date.now() - t0 < 400, 'no wait for a stale age');
+});
+
+test('L2: another process claimed the sign-in just before the deadline: the first process\'s timer does not cancel it', async () => {
+  const A = fresh();
+  A._test.setOpener(async () => false);
+  const a = await A.startSignIn({ listener: false, open: false });
+  let aSettled = null;
+  a.promise.then(() => { aSettled = 'resolved'; }, (e) => { aSettled = e.message; });
+  const B = fresh();
+  let release;
+  B._test.setPostForm(() => new Promise((res) => { release = () => res({ status: 200, json: { access_token: 'AT-L2', refresh_token: 'RT-L2', expires_in: 3600 } }); }));
+  const pasting = B.finishWithPastedAddress(cb(stateOf(a.url), 'K'));
+  await tick(60);
+  assert.equal(readFile(A).used, true, 'B claimed it');
+  const f = readFile(A); f.expiresAt = Date.now() - 1; setRow(A, f);   // the deadline passes while B's exchange runs
+  await A._test.fireExpiry();
+  await tick();
+  assert.equal(aSettled, null, 'A did not reject its promise');
+  assert.equal(A.lastResult(), null, 'A did not announce a timeout');
+  assert.equal(readFile(A).id, f.id, 'the row is still there');
+  release();
+  const out = await pasting;
+  assert.equal(out.ok, true, 'B still saves');
+  assert.equal(JSON.parse(tokenText(B)).refresh_token, 'RT-L2');
+});
+
+test('L2: nobody claimed it and the deadline passed: the timer removes the row and ends the attempt', async () => {
+  const A = fresh();
+  A._test.setOpener(async () => false);
+  const a = await A.startSignIn({ listener: false, open: false });
+  let settled = null;
+  a.promise.then(() => { settled = 'resolved'; }, (e) => { settled = e.message; });
+  const f = readFile(A); f.expiresAt = Date.now() - 1; setRow(A, f);
+  await A._test.fireExpiry();
+  await tick();
+  assert.equal(settled, 'auth timed out');
+  assert.equal(A.lastResult().message, A.WORDS.expired);
+  assert.equal(readFile(A), null);
+});
+
+test('L2: a timer that fires before the row deadline removes nothing', async () => {
+  const A = fresh();
+  A._test.setOpener(async () => false);
+  const a = await A.startSignIn({ listener: false, open: false });
+  let settled = null;
+  a.promise.then(() => { settled = 'resolved'; }, (e) => { settled = e.message; });
+  await A._test.fireExpiry();
+  await tick();
+  assert.equal(settled, null);
+  assert.ok(readFile(A) && readFile(A).used === false);
+  assert.ok(A.pendingView(), 'still waiting');
+  A.cancelSignIn();
 });
 
 test('G4: saving under the lock refuses an attempt that was replaced during the exchange', async () => {
@@ -272,28 +366,29 @@ test('G4: saving under the lock refuses an attempt that was replaced during the 
   const a = await A.beginSignIn({ listener: false });
   const before = tokenText(A);
   A._test.setPostForm(async () => {
-    fs.writeFileSync(pendingFile(A), JSON.stringify({ id: 'other', state: 'ss', verifier: 'vv', expiresAt: Date.now() + 60000, used: false }), { mode: 0o600 });
+    setRow(A, { id: 'other', state: 'ss', verifier: 'vv', expiresAt: Date.now() + 60000, used: false });
     return { status: 200, json: { access_token: 'AT-R', refresh_token: 'RT-R', expires_in: 3600 } };
   });
   const out = await A.finishWithPastedAddress(cb(stateOf(a.url)));
   assert.equal(out.ok, false);
   assert.equal(out.reason, 'replaced');
   assert.equal(tokenText(A), before);
-  assert.ok(!fs.existsSync(lockFile(A)));
 });
 
 test('G5: no link and no browser when the sign-in cannot be saved', async () => {
   const A = fresh();
   let opened = 0;
   A._test.setOpener(async () => { opened++; return true; });
-  const real = fs.writeFileSync;
-  fs.writeFileSync = function (p, ...rest) {
-    if (/gmail-signin-pending/.test(String(p))) { const e = new Error('EACCES: permission denied'); e.code = 'EACCES'; throw e; }
-    return real.call(this, p, ...rest);
-  };
+  // The database cannot be opened (a folder sits where it should be): the sign-in cannot be saved.
+  const bak = `${dbFile(A)}.aside`;
+  if (fs.existsSync(dbFile(A))) fs.renameSync(dbFile(A), bak);
+  fs.mkdirSync(dbFile(A));
   try {
     await assert.rejects(() => A.beginSignIn({ listener: false }), (e) => e.message === 'Could not save the Gmail sign-in. Check the data folder and try again.');
-  } finally { fs.writeFileSync = real; }
+  } finally {
+    fs.rmdirSync(dbFile(A));
+    if (fs.existsSync(bak)) fs.renameSync(bak, dbFile(A));
+  }
   assert.equal(opened, 0);
   assert.equal(A.pendingView(), null);
   assert.equal(A.getAuthUrl(), null);
