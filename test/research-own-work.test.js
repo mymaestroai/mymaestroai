@@ -1319,8 +1319,8 @@ test('T3: an Always offer, the choice and level unchanged: the run starts; a tho
 });
 
 // ── E (design fixes): the card says what happens if nobody answers; the push title; the done event carries the wait ──
-const NOBODY = / No answer in ([^:]+): Sam-agent starts a quick run\.$/;
-test('E7: with the change on and a wait above 0 the card ends with "No answer in {N}: {Agent} starts a quick run."', async () => {
+const NOBODY = / No answer in ([^:]+): Sam-agent starts a quick run if today's limit allows\.$/;
+test('E7: with the change on and a wait above 0 the card ends with "No answer in {N}: {Agent} starts a quick run if today\'s limit allows."', async () => {
   for (const [secs, words] of [[undefined, '2 minutes'], [30, '30 seconds'], [60, '1 minute'], [600, '10 minutes']]) {
     const L = load({ askAnswer: 'No', settings: secs === undefined ? {} : { researchOfferWaitSeconds: secs } });
     L.turn('sam-agent');
@@ -1341,7 +1341,7 @@ test('E7: not added when the change is off; no card at all when the wait is 0', 
   await zero.call('sam-agent', { action: 'offer', question: 'Which judge is best?' });
   assert.equal(zero.asked.length, 0);
   // cardFor itself: the sentence only for a wait above 0
-  assert.match(research.cardFor('claude-sdk/claude-test-big', { asker: 'Sam-agent', topic: 'Q?', noAnswerWait: 90 }).question, / No answer in 90 seconds: Sam-agent starts a quick run\.$/);
+  assert.match(research.cardFor('claude-sdk/claude-test-big', { asker: 'Sam-agent', topic: 'Q?', noAnswerWait: 90 }).question, / No answer in 90 seconds: Sam-agent starts a quick run if today's limit allows\.$/);
   assert.doesNotMatch(research.cardFor('claude-sdk/claude-test-big', { asker: 'Sam-agent', topic: 'Q?' }).question, /No answer in/);
   assert.doesNotMatch(research.cardFor('claude-sdk/claude-test-big', { asker: 'Sam-agent', topic: 'Q?', noAnswerWait: 0 }).question, /No answer in/);
 });
@@ -1363,6 +1363,8 @@ test('E4: the ask_user_done event carries waitedSeconds only when the wait\'s ow
     assert.equal(seen.length, 2);
     assert.equal(seen[1].result, 'no_answer');
     assert.equal('waitedSeconds' in seen[1], false, 'a stopped turn is not a wait that ran out');
+    assert.equal(seen[1].stopped, true, 'the event says the stop ended it');
+    assert.equal('stopped' in seen[0], false, 'the timer ending it is not a stop');
   } finally { off(); }
 });
 test('E8: the push title for Always yes reads "started {quick|thorough} research because you chose Always yes"', async () => {

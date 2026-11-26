@@ -14464,7 +14464,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const o = questionOverlays[requestId];
       if (o) { o.remove(); delete questionOverlays[requestId]; }
       // nobody answered: the "❓" lines stop reading as open questions (no ❓, the muted style, what happened)
-      if (ev && ev.result === 'no_answer') for (const n of questionNotices.get(requestId) || []) {
+      // only when the wait's own timer ended it (waitedSeconds); a stopped turn just retires the line as before
+      if (ev && ev.result === 'no_answer' && Number(ev.waitedSeconds) > 0) for (const n of questionNotices.get(requestId) || []) {
         n.textContent = questionNoAnswerLine(n.dataset && n.dataset.question, ev.waitedSeconds);
         n.className = 'system-notice notice-past';
       }

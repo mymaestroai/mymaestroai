@@ -386,7 +386,7 @@ test('Stop is red on both pages (the danger colour variable), in normal and Simp
 });
 
 // ── E4: the question line after nobody answered (both pages) ──
-const RESEARCH_Q = 'Sam asks: research this? “Which judge is best?” This looks like a research question. Research it? Quick takes a few minutes; Thorough usually takes one to two hours (at most 6 hours). Both use your Claude plan allowance. No answer in 2 minutes: Sam starts a quick run.';
+const RESEARCH_Q = 'Sam asks: research this? “Which judge is best?” This looks like a research question. Research it? Quick takes a few minutes; Thorough usually takes one to two hours (at most 6 hours). Both use your Claude plan allowance. No answer in 2 minutes: Sam starts a quick run if today\'s limit allows.';
 function waitWordsSrc(src) {
   const a = src.indexOf('function researchWaitWords');
   return src.slice(a, src.indexOf('\n', src.indexOf("return s === 1 ? '1 second'", a)) + 1) + '\n}';
@@ -428,7 +428,7 @@ test('desktop: nobody answered, any other card: the first sentence and "Nobody a
   const n = P.line('Which database should I use? Postgres is the safer choice.');
   const m = P.line('Pick one');
   P.notices.set('r2', [n, m]);
-  P.ctx.close('r2', { result: 'no_answer' });
+  P.ctx.close('r2', { result: 'no_answer', waitedSeconds: 30 });
   assert.equal(n.textContent, 'Which database should I use? Nobody answered in time.');
   assert.equal(m.textContent, 'Pick one. Nobody answered in time.');
   assert.deepEqual(P.retired, [n, m]);
@@ -439,6 +439,23 @@ test('desktop: nobody answered, any other card: the first sentence and "Nobody a
     assert.equal(k.textContent, '❓ Go on?', 'only no_answer changes the line');
     assert.equal(k.className, 'system-notice');
   }
+});
+test('desktop: a stopped turn (no_answer without waitedSeconds) leaves the line as it was; with waitedSeconds 30 it says how long', () => {
+  const P = desktopQuestions();
+  for (const ev of [{ result: 'no_answer' }, { result: 'no_answer', stopped: true }, { result: 'no_answer', waitedSeconds: 0 }]) {
+    const n = P.line(RESEARCH_Q);
+    P.notices.set('s1', [n]);
+    const before = n.textContent;
+    P.ctx.close('s1', ev);
+    assert.equal(n.textContent, before);
+    assert.doesNotMatch(n.textContent, /Nobody answered/);
+    assert.equal(n.className, 'system-notice');
+    assert.ok(P.retired.includes(n), 'it still retires');
+  }
+  const t = P.line(RESEARCH_Q);
+  P.notices.set('s2', [t]);
+  P.ctx.close('s2', { result: 'no_answer', waitedSeconds: 30 });
+  assert.equal(t.textContent, 'Sam asked whether to research “Which judge is best?”. Nobody answered within 30 seconds.');
 });
 test('desktop: every line of the request is changed; the page keeps each question text with its line and passes the whole event on', () => {
   const P = desktopQuestions();
@@ -463,7 +480,11 @@ test('phone: nobody answered: each question line says what happened, in the box\
   // without waitedSeconds
   const b2 = P.box(); P.boxes.set('p2', b2); P.ctx.texts.set('p2', [RESEARCH_Q]);
   P.ctx.close('p2', 'no_answer');
-  assert.equal(b2.children[0]._t, 'Sam asked whether to research “Which judge is best?”. Nobody answered in time.');
+  assert.equal(b2.children.length, 0, 'a stopped turn: the old wording, not "Nobody answered"');
+  assert.equal(b2.innerHTML, '<div class="done">No answer in time; the agent carried on</div>');
+  const b4 = P.box(); P.boxes.set('p4', b4); P.ctx.texts.set('p4', [RESEARCH_Q]);
+  P.ctx.close('p4', 'no_answer', 30);
+  assert.equal(b4.children[0]._t, 'Sam asked whether to research “Which judge is best?”. Nobody answered within 30 seconds.');
   // an answered-elsewhere box keeps its old words
   const b3 = P.box(); P.boxes.set('p3', b3); P.ctx.texts.set('p3', ['Go on?']);
   P.ctx.close('p3', 'answered');

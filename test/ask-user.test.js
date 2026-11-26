@@ -289,3 +289,33 @@ test('the data connector access question is asked adminOnly', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'sdk-chat.js'), 'utf8');
   assert.match(src, /header: 'Data connector access', adminOnly: true \}/);
 });
+
+test('ask_user_done: a stopped turn says stopped and no waitedSeconds; an admin-only question\'s completion is admin-only and a member never gets it', async () => {
+  const bus = L('hub-events').events;
+  const access = L('access');
+  const seen = [];
+  const off = bus.onPublish((ev) => { if (ev && ev.type === 'ask_user_done') seen.push(ev); });
+  try {
+    const ac = new AbortController();
+    const p = runAskUser(AGENT, fakeRes(), { question: 'Stopped?', options: ['A'] }, { signal: ac.signal });
+    await tick();
+    ac.abort();
+    assert.strictEqual(await p, 'NO_ANSWER');
+    assert.strictEqual(seen.length, 1);
+    assert.strictEqual(seen[0].result, 'no_answer');
+    assert.strictEqual(seen[0].stopped, true);
+    assert.ok(!('waitedSeconds' in seen[0]));
+    assert.ok(!('adminOnly' in seen[0]), 'an ordinary question stays visible');
+
+    const res = fakeRes();
+    const p2 = runAskUser(AGENT, res, { question: 'Admin only?', options: ['A'], adminOnly: true });
+    await tick();
+    sdkChat.handleAskResponse({ request_id: questionEvents(res)[0].request_id, answers: { 0: 'A' } }, { isAdmin: true });
+    assert.strictEqual(await p2, 'A');
+    assert.strictEqual(seen.length, 2);
+    assert.strictEqual(seen[1].adminOnly, true);
+    assert.ok(!('stopped' in seen[1]));
+    assert.strictEqual(access.redactTeamTurn(seen[1]), null, 'a member never gets the completion');
+    assert.notStrictEqual(access.redactTeamTurn(seen[0]), null, 'an ordinary completion still reaches members');
+  } finally { off(); }
+});

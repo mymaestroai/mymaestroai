@@ -13331,7 +13331,7 @@ function closeQuestion(requestId, how, waitedSeconds) {
   const texts = questionTexts.get(requestId);
   questionTexts.delete(requestId);
   if (!box) return;
-  if (how === 'no_answer' && texts && texts.length) {
+  if (how === 'no_answer' && Number(waitedSeconds) > 0 && texts && texts.length) {
     // nobody answered: each question line says what happened (one muted line per question)
     box.textContent = '';
     for (const t of texts) { const d = document.createElement('div'); d.className = 'done'; d.textContent = questionNoAnswerLine(t, waitedSeconds); box.appendChild(d); }
