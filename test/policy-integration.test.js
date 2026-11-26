@@ -104,7 +104,7 @@ test('sdk-chat: hook in SDK query options, gate in the gateway pre-step, Codex b
   assert.ok(sdk.includes("getSetting('approvalTimeoutMinutes', 60)"), 'approval window configurable, default an hour');
   assert.ok(sdk.includes("const verdict = await gate.check({ agentName, tool: toolName, input: parsedArgs, cwd: (handlers && handlers.__cwd) || process.cwd(), boxed: !!(handlers && handlers.__boxed), origin: options.origin || null"), 'gateway pre-step, same working directory as the hands (review F23), and the turn\'s boxed flag (security R2)');
   assert.ok(!sdk.includes("const confirmEnabled = global.__confirmToolsEnabled ?? confirmTools;"), 'old confirm_tools prompt removed');
-  assert.ok(sdk.includes("beforeCall: (name, args) => readOnlyHelper && name === 'Bash' ? { allowed: true } : gate.check({ agentName, tool: name, input: args"), 'Codex bridge gated');
+  assert.ok(sdk.includes("beforeCall: (name, args) => { noteToolForSettings(agentName, name); return readOnlyHelper && name === 'Bash' ? { allowed: true } : gate.check({ agentName, tool: name, input: args"), 'Codex bridge gated');
   assert.ok(sdk.includes("onServerRequest: (method, params) => gate.codexServerRequest("), 'Codex approvals handled');
   assert.ok(sdk.includes("approvalPolicy: codexCli.approvalPolicyFor()"));
   assert.strictEqual((sdk.match(/ledger\.record\(\{/g) || []).length, 3, 'SDK, Codex and gateway turns are recorded');

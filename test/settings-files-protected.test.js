@@ -115,6 +115,40 @@ test('reads are as they were: the lead may read agents.json, copy it out; settin
   assert.notStrictEqual(g.cls, 'settings_file');
 });
 
+test('a cd that cannot be followed: a relative write to a protected name is refused, an absolute one elsewhere is not', () => {
+  const cmds = [
+    'cd ~ && echo x > settings.json',
+    'cd $(echo /tmp) && cp /tmp/x agents.json',
+    'cd ~; echo x >> users.json',
+    'cd -P -- /tmp && echo x > connectors.json',
+    'pushd /tmp && echo x > ../data/modules.json',
+    'cd $HOME/x && echo x > prefs.json'.replace('prefs.json', 'push/prefs.json'),
+    'cd ~ && mv /tmp/x auth.db',
+    'cd ~ && rm -f settings-journal.jsonl',
+  ];
+  for (const [label, agent, extra] of ROLES) {
+    for (const command of cmds) {
+      assertRefused(dec(agent, 'Bash', { command }, extra), `${label}: Bash ${command}`);
+      assertRefused(dec(agent, 'run_job', { name: 'j', command }, extra), `${label}: run_job ${command}`);
+    }
+    // not blind (no cd, or one it follows), or an absolute path elsewhere: not this refusal
+    for (const command of ['echo x > settings.json', 'cd /tmp && echo x > settings.json', 'cd ~ && echo x > /tmp/settings.json', 'cd ~ && echo x > notes.txt']) {
+      assert.notStrictEqual(dec(agent, 'Bash', { command }, extra).cls, 'settings_file', `${label}: ${command}`);
+    }
+  }
+});
+
+test('mv and ln are the command only at command position: grep mv data/agents.json is a read', () => {
+  const reads = [`grep mv ${DATA}/agents.json`, `echo ln ${DATA}/agents.json`, `grep -n mv ${DATA}/settings.json | head`, `cat ${DATA}/agents.json | grep ln`];
+  for (const [label, agent, extra] of ROLES) {
+    for (const command of reads) assert.notStrictEqual(dec(agent, 'Bash', { command }, extra).cls, 'settings_file', `${label}: ${command}`);
+    for (const command of [`sudo mv /tmp/x ${DATA}/agents.json`, `env A=1 mv /tmp/x ${DATA}/agents.json`, `cd /tmp && mv x ${DATA}/agents.json`, `true && ln -s /tmp/x ${DATA}/agents.json`,
+      `find /tmp -name x -exec mv {} ${DATA}/agents.json \\;`, `if true; then mv /tmp/x ${DATA}/agents.json; fi`]) {
+      assertRefused(dec(agent, 'Bash', { command }, extra), `${label}: ${command}`);
+    }
+  }
+});
+
 test('scheduled-tasks.json is not covered by this rule', () => {
   for (const [label, agent, extra] of ROLES) {
     assert.notStrictEqual(dec(agent, 'Write', { file_path: path.join(DATA, 'scheduled-tasks.json'), content: '[]' }, extra).cls, 'settings_file', label);

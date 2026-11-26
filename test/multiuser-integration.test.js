@@ -107,7 +107,9 @@ test('teams: a member-owned head introduces itself once; USER.md names the membe
   assert.strictEqual(again, null, 'no greeting when the chat already has history');
   const uf = teams.userFile(user, { team: 'medical', head: true });
   assert.match(uf, /Name:\*\* Sam/); assert.match(uf, /This team is theirs/); assert.match(uf, /## First run/);
-  assert.ok(server.includes("require('./lib/teams').greetIfFresh(name, u)"), 'owner switch to a member greets');
+  // the route's after-change steps are one shared function (lib/settings-apply afterAgentChange), which the route calls
+  assert.ok(server.includes('settingsApply.afterAgentChange(name, body'), 'the route runs the after-change steps');
+  assert.ok(fs.readFileSync(path.join(__dirname, '..', 'lib', 'settings-apply.js'), 'utf8').includes("require('./teams').greetIfFresh(name, u)"), 'owner switch to a member greets');
 });
 
 test('server: 2026-10-16 review fixes are wired (static allow-list, hub-only body fields, member model guard, /v1 needs finished 2FA, token-scoped turn, request wrapper, walletOwner strip)', () => {

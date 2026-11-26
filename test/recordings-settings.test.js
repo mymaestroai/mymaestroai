@@ -140,15 +140,19 @@ test('server.js: recordings is not member-editable, and a member or the hub\'s o
   assert.ok(server.indexOf('settingsApply.agentFieldAllowed(') > 0 && server.indexOf('settingsApply.agentFieldAllowed(') < server.indexOf('const { updateAgentField } = require'), 'the guard runs before the update');
 });
 
-test('server.js: a change of the allowed list sends "Recording access changed" to everyone on the old and the new list', () => {
-  const i = server.indexOf("title: 'Recording access changed'");
+test('a change of the allowed list sends "Recording access changed" to everyone on the old and the new list', () => {
+  // The after-change steps moved from the PATCH route into lib/settings-apply afterAgentChange (shared with the lead's tool and Restore).
+  const applySrc = fs.readFileSync(path.join(REAL, 'lib', 'settings-apply.js'), 'utf8');
+  const i = applySrc.indexOf("title: 'Recording access changed'");
   assert.ok(i > 0, 'the notice is sent');
-  const around = server.slice(i - 900, i + 500);
+  const around = applySrc.slice(i - 900, i + 500);
   assert.ok(/notifyUsers\(/.test(around));
   assert.ok(/\$\{\(rec && rec\.display\) \|\| name\}: the list of people who can download its recordings was changed\./.test(around), 'the body names the agent by its display name');
   assert.ok(/new Set\(\[\.\.\.allowedBefore, \.\.\.allowedAfter\]\)/.test(around), 'old and new list, one notice each');
   assert.ok(/allowedBefore\.some\(id => !allowedAfter\.includes\(id\)\)/.test(around), 'only when the list changed');
-  assert.ok(i > server.indexOf('const result = await updateAgentField(name, body'), 'sent after a successful change');
+  const call = server.indexOf('settingsApply.afterAgentChange(name, body');
+  assert.ok(call > server.indexOf('const result = await updateAgentField(name, body'), 'the route runs the notice after a successful change');
+  assert.ok(/allowedBefore: recordingsChange \? allowedBefore : null/.test(server.slice(call, call + 200)), 'the route hands over the list from before');
 });
 
 // ── agents with recordings can't be renamed or deleted; a clone has none ──

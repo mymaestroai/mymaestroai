@@ -213,6 +213,67 @@ test('apply(): a refused check writes nothing and journals nothing', async () =>
   assert.equal(auth.getUser(sam.id).theme, 'dark');
 });
 
+test('G8: apply() returns the ids its own operation recorded, never a concurrent write\'s entry', async () => {
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const p = apply.apply({ record: rec('OPT-0065'), value: 61, agent: 'tester', user: sam, isAdmin: false, actor: { kind: 'lead', agent: 'maestro', user: sam.id }, auth,
+    onAgentChanged: async () => { await gate; } });   // the write is done; the follow-up is still waiting
+  await new Promise((r) => setTimeout(r, 5));
+  settings.updateSettings({ hubBrief: 'someone else wrote this meanwhile' });   // another request, its own flow
+  await journal.withActor({ kind: 'person', user: ravi.id }, () => { settings.updateSettings({ hubBrief: 'and another one' }); });
+  release();
+  const r = await p;
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.equal(r.journalIds.length, 1, JSON.stringify(r.journalIds));
+  const e = journal.get(r.journalIds[0]);
+  assert.equal(e.key, 'agents.tester.maxContextMessages'); assert.equal(e.who.kind, 'lead');
+  assert.ok(entries().some((x) => x.key === 'hubBrief' && x.after === 'and another one'), 'the other writes are in the journal, just not in this operation\'s ids');
+  // a setting and a preference: only their own entries
+  const r2 = await apply.apply({ record: rec('OPT-0381'), value: 62, user: admin, isAdmin: true, actor: { kind: 'lead' }, auth });
+  assert.deepEqual(r2.journalIds.map((id) => journal.get(id).key), ['maxContextMessages']);
+  settings.updateSettings({ hubBrief: undefined });
+});
+
+test('S5: apply() on an agent field runs the shared after-change steps (open pages told, container rebuilt for sandbox / policy / tools)', async () => {
+  const removed = [];
+  apply._setSandboxRemover((a) => removed.push(a.name));
+  const events = require(path.join(inst.lib, 'hub-events')).events;
+  const seen = [];
+  const realPublish = events.publish;
+  events.publish = function (name, payload) { if (name === 'agent_updated') seen.push(payload); return realPublish.apply(this, arguments); };
+  try {
+    const r = await apply.apply({ record: rec('OPT-0053'), value: 'container', agent: 'tester', user: admin, isAdmin: true, actor: { kind: 'lead' }, auth });   // agents[].sandbox
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.deepEqual(removed, ['tester']);
+    assert.ok(seen.some((p) => p.agent === 'tester' && p.changed.includes('sandbox')), 'agent_updated is published');
+    // the caller's own publish replaces the default event; the container step still runs
+    removed.length = 0; seen.length = 0;
+    const own = [];
+    const r2 = await apply.apply({ record: rec('OPT-0053'), value: 'off', agent: 'tester', user: admin, isAdmin: true, actor: { kind: 'lead' }, auth, onAgentChanged: async (n, f) => { own.push([n, f]); } });
+    assert.equal(r2.ok, true);
+    assert.deepEqual(own, [['tester', ['sandbox']]]);
+    assert.deepEqual(removed, ['tester']);
+    assert.equal(seen.length, 0, 'no second event');
+    // a plain conversation field does not touch the container
+    removed.length = 0;
+    await apply.apply({ record: rec('OPT-0065'), value: 66, agent: 'tester', user: admin, isAdmin: true, actor: { kind: 'lead' }, auth });
+    assert.deepEqual(removed, []);
+  } finally { events.publish = realPublish; apply._setSandboxRemover(null); }
+  const src = fs.readFileSync(path.join(REAL, 'server.js'), 'utf8');
+  assert.match(src, /settingsApply\.afterAgentChange\(name, body,/, 'the route uses the same function');
+});
+
+test('G3 support: apply() hands expectStamp to updateAgentField, so a card for one agent never changes a later agent of the same name', async () => {
+  const agentsLib = require(path.join(inst.lib, 'agents'));
+  const stamp = agentsLib.agentStamp('tester');
+  const nBefore = entries().length;
+  const bad = await apply.apply({ record: rec('OPT-0065'), value: 71, agent: 'tester', user: admin, isAdmin: true, actor: { kind: 'lead' }, auth, expectStamp: 'box:some-other-agent' });
+  assert.equal(bad.ok, false); assert.match(bad.error, /agent changed/);
+  assert.equal(entries().length, nBefore, 'nothing journaled');
+  const good = await apply.apply({ record: rec('OPT-0065'), value: 72, agent: 'tester', user: admin, isAdmin: true, actor: { kind: 'lead' }, auth, expectStamp: stamp });
+  assert.equal(good.ok, true, JSON.stringify(good));
+});
+
 // ── the routes keep their behaviour ───────────────────────────────────────
 test('POST /api/settings: a mixed patch gives the saved result the old route gave', () => {
   // What the old route (server.js, before the extraction) did to this patch, written out by hand from reading it:

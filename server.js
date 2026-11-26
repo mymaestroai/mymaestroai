@@ -1721,28 +1721,12 @@ async function handleHttpRequest(req, res) {
       // The audit line (recordings) and the lockbox and team notices are built in lib/settings-apply agentWriteContext.
       const result = await updateAgentField(name, body, settingsApply.agentWriteContext({ isOwner: !req.hubService && !!req.hubUser && hubAuth.isOwner(req.hubUser), user: req.hubUser, ip: hubAuth.clientIp(req) }));
       if (!result.success && result.status) return jsonResponse(res, result.status, { error: result.error });
-      // Handing a head agent to a member: it introduces itself in its (still empty) chat.
-      if (result.success && body && body.owner) { const u = hubAuth.getUser(String(body.owner)); if (u && u.role === 'member') require('./lib/teams').greetIfFresh(name, u).catch(() => {}); }
-      // A change of who may download this agent's recordings is told to everybody on the old and the new list.
-      if (result.success && recordingsChange) {
-        try {
-          const rec = (await getAgents()).find(a => a.name === name);
-          const allowedAfter = recSettings.recordingsOf(rec).allowed;
-          if (allowedBefore.length !== allowedAfter.length || allowedBefore.some(id => !allowedAfter.includes(id))) {
-            await require('./lib/push').getPush().notifyUsers({
-              title: 'Recording access changed',
-              body: `${(rec && rec.display) || name}: the list of people who can download its recordings was changed.`,
-              tag: `rec-access-${name}`,
-            }, [...new Set([...allowedBefore, ...allowedAfter])], { kind: 'security' });
-          }
-        } catch {}
-      }
+      // The steps after a saved change are one shared function (lib/settings-apply afterAgentChange), also run by the lead's tool and by Restore:
+      // a head agent handed to a member introduces itself; a change of who may download the recordings is told to the old and the new list;
+      // folders, sandbox mode or hands changed: the container is rebuilt on the agent's next turn (removed when the sandbox was switched off).
+      // Open pages are told here (publishAgentUpdate, just below).
+      if (result.success) await settingsApply.afterAgentChange(name, body, { allowedBefore: recordingsChange ? allowedBefore : null, publish: false });
       if (result.success) await publishAgentUpdate(name, Object.keys(body || {}));
-      // Folders, sandbox mode or hands changed: the container is rebuilt with the new mounts on the agent's next turn
-      // (and removed when the sandbox was switched off). The session volume stays.
-      if (result.success && body && ['policy', 'sandbox', 'tools'].some(k => k in body)) {
-        try { const rec = (await getAgents()).find(a => a.name === name); if (rec) require('./lib/sandbox').getSandbox().remove(rec).catch(() => {}); } catch {}
-      }
       return jsonResponse(res, result.success ? 200 : 400, result);
     }
 
@@ -4089,6 +4073,10 @@ server.listen(PORT, HOST, () => {
   // Only now: this process holds the port, so no older hub on it is still writing; and first, before any turn can
   // write (lib/transcript splitCombined; the old file is kept as transcript.db.pre-split).
   try { require('./lib/transcript').getTranscript().migrate(); } catch (e) { console.error('[transcript] split not run:', e.message); }
+  // Once a minute: a stamp watch of the protected files that have no per-key change journal (accounts, connectors, modules, local models,
+  // research / voice / push preferences, behaviour reviews, wallet files). A change the hub did not make is journaled as an outside edit
+  // (file level, no values) and told to the admins in the batched notice (lib/settings-journal startWatch). The hub's own writes stay quiet.
+  try { require('./lib/settings-journal').startWatch({ dataDir: path.join(__dirname, 'data') }); } catch (e) { console.error('[settings-journal] file watch not started:', e.message); }
   // A hub restart during the voice download leaves the setting on and nothing installing: pick the install up again.
   setTimeout(() => { try { if (process.env.NODE_TEST_CONTEXT || process.env.MM_TEST_NO_REAL_CLAUDE === '1' || process.env.MM_VOICE_NO_AUTO_INSTALL === '1') return; require('./lib/voice/routes').resumeIfNeeded({ getSetting: hubSettings.getSetting, log: (m) => console.log(m) }); } catch (e) { console.error('[voice] resume:', e.message); } }, 10000).unref();
   // Voice is on by default: about 20 s after the start, fetch the speech engines when they are missing (never under tests; never when voice was turned off).
