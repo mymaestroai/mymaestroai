@@ -6493,13 +6493,13 @@
       if (!all && !fam) return null;
       if (!all || !fam) { const w = all || fam; return { lead: w, second: null, cls: planState(w, levels).cls }; }
       const a = planState(all, levels), f = planState(fam, levels);
-      const bad = (s) => (s.cls === 'refused' ? 2 : s.extra ? 1 : 0);
-      const second = f.pct > a.pct || bad(f) > bad(a) ? fam : null;
+      const bad = (w) => (planUsedUp(w) ? 2 : planState(w, levels).extra ? 1 : 0);
+      const second = f.pct > a.pct || bad(fam) > bad(all) ? fam : null;
       return { lead: all, second, cls: rank(f.cls) > rank(a.cls) ? f.cls : a.cls };
     }
+    function planUsedUp(w) { return !!w.rejected || (Number(w.utilization) >= 100 && !w.extraUsage); }
     // ── plan state helpers (end) ──
     // What a badge says for one window: "used up" when the plan refuses it, else its percent (with the extra-usage words).
-    function planUsedUp(w) { return !!w.rejected || (Number(w.utilization) >= 100 && !w.extraUsage); }
     function badgeAmount(w, levels) {
       return planUsedUp(w) ? 'used up' : planPctText(w, levels);
     }

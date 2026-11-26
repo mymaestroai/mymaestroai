@@ -194,13 +194,40 @@ test('phone header: 5h suffix last; title reads plan, family, 5-hour', () => {
 });
 // ── a refused window says "used up" in words, in the text and the hover, on both pages ──
 const PHONE_WHEN = (iso) => new Date(iso).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' });
-test('badgeAmount and planUsedUp are the same small helpers on both pages, outside the shared block', () => {
+test('badgeAmount is the same small helper on both pages, outside the shared block; planUsedUp lives inside it', () => {
   const grab = (src) => { const m = src.match(/function badgeAmount\([\s\S]*?\n\s*\}\n/); assert.ok(m, 'badgeAmount present'); return m[0].split('\n').map(l => l.trim()).join('\n'); };
   assert.strictEqual(grab(read('app.js')), grab(read('mobile.js')));
-  const grabUsed = (src) => { const m = src.match(/function planUsedUp\([^\n]*\n/); assert.ok(m, 'planUsedUp present'); return m[0].trim(); };
-  assert.strictEqual(grabUsed(read('app.js')), grabUsed(read('mobile.js')));
-  const block = helperBlock(read('app.js'), '    ');
-  assert.ok(!block.includes('badgeAmount') && !block.includes('planUsedUp'), 'not inside the shared block');
+  for (const [f, indent] of [['lib/ui-plan-state.js', ''], ['app.js', '    '], ['mobile.js', '']]) {
+    const block = helperBlock(read(f), indent);
+    assert.ok(block.includes('function planUsedUp('), f + ': planUsedUp inside the shared block');
+    assert.ok(!block.includes('badgeAmount'), f + ': badgeAmount stays outside the shared block');
+    assert.strictEqual((read(f).match(/function planUsedUp\(/g) || []).length, 1, f + ': one planUsedUp only');
+  }
+  assert.strictEqual(typeof L.planUsedUp, 'function');
+});
+test('planBadgeWindows: plan at 99.6 (rounds to 100, not rejected, no extra) does not hide a really-rejected / used-up / extra-usage family', () => {
+  const rej = L.planBadgeWindows([W(null, 99.6), W('fable', 60, { rejected: true })], 'fable', [75]);
+  assert.strictEqual(rej.second.family, 'fable');
+  assert.strictEqual(rej.cls, 'refused');
+  const exact = L.planBadgeWindows([W(null, 99.6), W('fable', 100)], 'fable', []);
+  assert.strictEqual(exact.second.family, 'fable');
+  const extra = L.planBadgeWindows([W(null, 99.6), W('fable', 100, { extraUsage: true })], 'fable', []);
+  assert.strictEqual(extra.second.family, 'fable');
+  const planGone = L.planBadgeWindows([W(null, 70, { rejected: true }), W('fable', 40)], 'fable', [75]);
+  assert.strictEqual(planGone.second, null);
+});
+test('badges: plan 99.6 + Fable rejected / exactly 100 / 100 on extra usage -> Fable still shown (desktop and phone)', () => {
+  const d1 = desktopBadge(data([W(null, 99.6), W('fable', 60, { rejected: true })]), FABLE);
+  assert.strictEqual(d1.textContent, 'Plan 100% this week · Fable used up');
+  const p1 = phoneBadge(data([W(null, 99.6), W('fable', 60, { rejected: true })]), FABLE);
+  assert.strictEqual(p1.textContent, 'Plan 100% · Fable used up');
+  assert.strictEqual(desktopBadge(data([W(null, 99.6), W('fable', 100)]), FABLE).textContent, 'Plan 100% this week · Fable used up');
+  assert.strictEqual(phoneBadge(data([W(null, 99.6), W('fable', 100)]), FABLE).textContent, 'Plan 100% · Fable used up');
+  assert.strictEqual(desktopBadge(data([W(null, 99.6), W('fable', 100, { extraUsage: true })]), FABLE).textContent, 'Plan 100% this week · Fable 100% · extra usage');
+  assert.strictEqual(phoneBadge(data([W(null, 99.6), W('fable', 100, { extraUsage: true })]), FABLE).textContent, 'Plan 100% · Fable 100% · extra usage');
+  // reverse sanity: the plan really is used up, Fable at 40 -> plan alone
+  assert.strictEqual(desktopBadge(data([W(null, 99.6, { rejected: true }), W('fable', 40)]), FABLE).textContent, 'Plan used up this week');
+  assert.strictEqual(phoneBadge(data([W(null, 99.6, { rejected: true }), W('fable', 40)]), FABLE).textContent, 'Plan used up');
 });
 test('desktop badge: Fable 99.6 (rounds to 100, not rejected, no extra usage) is not "used up"', () => {
   const el = desktopBadge(data([W(null, 18), W('fable', 99.6)]), FABLE);
