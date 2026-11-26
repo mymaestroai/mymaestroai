@@ -13326,7 +13326,7 @@ function questionNoAnswerLine(text, waitedSeconds) {
   const first = (/^[\s\S]*?[.!?](?=\s|$)/.exec(t) || [t + '.'])[0];
   return first + ' Nobody answered in time.';
 }
-function closeQuestion(requestId, how, waitedSeconds) {
+function closeQuestion(requestId, how, waitedSeconds, stopped) {
   const box = questionBoxes.get(requestId);
   const texts = questionTexts.get(requestId);
   questionTexts.delete(requestId);
@@ -13337,7 +13337,8 @@ function closeQuestion(requestId, how, waitedSeconds) {
     for (const t of texts) { const d = document.createElement('div'); d.className = 'done'; d.textContent = questionNoAnswerLine(t, waitedSeconds); box.appendChild(d); }
   } else
   // The hub's outcome, unless it confirms the answer this box already shows ("Answered: …", sent from here)
-  if (how !== 'answered' || !box.querySelector('.done')) box.innerHTML = `<div class="done">${how === 'no_answer' ? 'No answer in time; the agent carried on' : how === 'skipped' ? 'Skipped' : 'Answered elsewhere'}</div>`;
+  // a question the stopped turn closed was not left unanswered by anyone: say what happened
+  if (how !== 'answered' || !box.querySelector('.done')) box.innerHTML = `<div class="done">${how === 'no_answer' ? (stopped === true ? 'Question closed when the turn stopped' : 'No answer in time; the agent carried on') : how === 'skipped' ? 'Skipped' : 'Answered elsewhere'}</div>`;
   questionBoxes.delete(requestId);
   retireSoon(box);
 }
@@ -14159,7 +14160,7 @@ function connectEvents() {
       }
     }
   });
-  on('ask_user_done', (ev) => { if (!ev) return; pendingQuestionsByAgent.delete(ev.agent); if (ev.request_id) closeQuestion(ev.request_id, ev.result, ev.waitedSeconds); });
+  on('ask_user_done', (ev) => { if (!ev) return; pendingQuestionsByAgent.delete(ev.agent); if (ev.request_id) closeQuestion(ev.request_id, ev.result, ev.waitedSeconds, ev.stopped); });
   on('ask_user_done', (ev) => { setLive(ev.agent, { pendingQuestion: false }); paintStatus(); });
   // A Do it on a set-up card wrote reporting lines: the lead's chat shows "Undo this team" at once; the lists follow.
   on('team_setup_recorded', (ev) => { if (!ev) return; if (ev.id) teamSetupRecent.add(String(ev.id)); loadAgents(); teamSetupLoadSoon(); });

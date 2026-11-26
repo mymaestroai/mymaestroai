@@ -482,6 +482,13 @@ test('phone: nobody answered: each question line says what happened, in the box\
   P.ctx.close('p2', 'no_answer');
   assert.equal(b2.children.length, 0, 'a stopped turn: the old wording, not "Nobody answered"');
   assert.equal(b2.innerHTML, '<div class="done">No answer in time; the agent carried on</div>');
+  // the turn was stopped while the question was open (ask_user_done stopped: true): it says so, never "no answer in time" (review r6)
+  const b5 = P.box(); P.boxes.set('p5', b5); P.ctx.texts.set('p5', [RESEARCH_Q]);
+  P.ctx.close('p5', 'no_answer', undefined, true);
+  assert.equal(b5.children.length, 0);
+  assert.equal(b5.innerHTML, '<div class="done">Question closed when the turn stopped</div>');
+  // the phone's event handler passes ev.stopped on
+  assert.ok(mob.includes('closeQuestion(ev.request_id, ev.result, ev.waitedSeconds, ev.stopped)'), 'ask_user_done passes stopped');
   const b4 = P.box(); P.boxes.set('p4', b4); P.ctx.texts.set('p4', [RESEARCH_Q]);
   P.ctx.close('p4', 'no_answer', 30);
   assert.equal(b4.children[0]._t, 'Sam asked whether to research “Which judge is best?”. Nobody answered within 30 seconds.');
@@ -490,7 +497,7 @@ test('phone: nobody answered: each question line says what happened, in the box\
   P.ctx.close('p3', 'answered');
   assert.equal(b3.innerHTML, '<div class="done">Answered elsewhere</div>');
   assert.ok(mob.includes('questionTexts.set(request_id, questions.map('));
-  assert.ok(mob.includes('closeQuestion(ev.request_id, ev.result, ev.waitedSeconds);'));
+  assert.ok(mob.includes('closeQuestion(ev.request_id, ev.result, ev.waitedSeconds, ev.stopped);'));
 });
 test('desktop and phone say the same words for a question nobody answered (the same function text)', () => {
   const fn = (src) => { const a = src.indexOf('function questionNoAnswerLine'); const rest = src.slice(a); return rest.slice(0, rest.search(/\n\s*\}\n/)).split('\n').map((l) => l.trim()).join('\n'); };

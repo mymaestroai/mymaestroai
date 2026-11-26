@@ -92,7 +92,7 @@ test('desktop: a finished worker\'s line leaves; a failed or stopped one stays',
 test('phone: an answered or closed question box leaves', () => {
   const m = read('mobile.js');
   // the phone's own closeQuestion, run against a stand-in box: what it says, and that it leaves
-  const close = block(m, 'function closeQuestion(requestId, how, waitedSeconds) {', '\n}') + '\n}';
+  const close = block(m, 'function closeQuestion(requestId, how, waitedSeconds, stopped) {', '\n}') + '\n}';   // changed: a stopped turn is passed on (review r6)
   const run = (html, how) => {
     const box = { innerHTML: html, querySelector: (sel) => (sel === '.done' && box.innerHTML.includes('class="done"') ? {} : null) };
     const boxes = new Map([['q', box]]); const retired = [];
