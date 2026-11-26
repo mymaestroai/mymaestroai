@@ -513,6 +513,13 @@ async function handleHttpRequest(req, res) {
   req.hubUser = ident && (ident.kind === 'user' || ident.kind === 'legacy') ? ident.user : null;
   req.hubPendingTotp = !!(ident && ident.kind === 'user' && ident.pendingTotp);
   req.hubIdentKind = ident ? ident.kind : null;
+  // The settings journal (lib/settings-journal) names who made a change: the signed-in person, or the hub's own service. The body
+  // listeners are bound too (an http request's 'data' and 'end' callbacks otherwise run outside this request's context).
+  {
+    const sj = require('./lib/settings-journal');
+    sj.enterActor(req.hubUser && !req.hubPendingTotp ? { kind: 'person', user: req.hubUser.id } : req.hubToken ? { kind: 'person', user: `token:${req.hubToken.id || req.hubToken.name || ''}` } : { kind: 'hub' });
+    sj.bindRequest(req);
+  }
   if (ident && ident.kind === 'bad-token' && route.kind !== 'public') return jsonResponse(res, 401, { error: 'unauthorized', detail: ident.reason });
   if (route.kind === 'api') {
     // OpenAI-compatible endpoints (/v1/*): an API token with the openai-api scope, a signed-in admin, or the hub itself.
@@ -3006,6 +3013,30 @@ async function handleHttpRequest(req, res) {
       catch (e) { console.warn('[settings-records]', e.message); return jsonResponse(res, 500, { error: 'settings records unavailable' }); }
     }
 
+    // The settings journal (lib/settings-journal): every change to settings, agents and preferences, newest first. Admins see all of it;
+    // a member sees only their own preferences and the agents they own. Secrets are never in it (a key shows as set / replaced / removed).
+    if (pathname === '/api/settings-journal' && req.method === 'GET') {
+      const sj = require('./lib/settings-journal');
+      const isAdmin = access.isAdmin(req.hubUser) || !hubAuth.hasUsers();
+      const me = req.hubUser && req.hubUser.id;
+      if (!isAdmin && !me) return jsonResponse(res, 403, { error: 'admin_only' });
+      const q = new URL(req.url, 'http://x').searchParams;
+      const entries = sj.listFor({ user: me || null, isAdmin, agents: isAdmin ? [] : require('./lib/agents').getAgentsSync(), limit: q.get('limit') || 50, before: q.get('before') || null });
+      return jsonResponse(res, 200, { ok: true, entries, next: entries.length ? entries[entries.length - 1].id : null });
+    }
+    // Put one value back: an admin (any entry that still holds its new value; a change that touches a protection only from the admin's
+    // own browser session), or a member for their own preferences and for everyday settings of agents they own.
+    {
+      const rm = pathname.match(/^\/api\/settings-journal\/(sj-[0-9a-f]{10})\/restore$/);
+      if (rm && req.method === 'POST') {
+        const sj = require('./lib/settings-journal');
+        const isAdmin = access.isAdmin(req.hubUser) || (!hubAuth.hasUsers() && !req.hubToken);
+        const me = req.hubUser && req.hubUser.id;
+        const r = sj.restoreFor(rm[1], { user: me || null, isAdmin, isAdminSession: access.isAdminSession(req), agents: isAdmin ? [] : require('./lib/agents').getAgentsSync() });
+        return jsonResponse(res, r.ok ? 200 : (r.status || 400), r);
+      }
+    }
+
     // "Require two-factor sign-in for admins": a signed-in admin's own browser session only (no token, no service, no half-signed-in session).
     if (pathname === '/api/security/admin-2fa' && req.method === 'POST') {
       if (!(req.hubIdentKind === 'user' && !req.hubPendingTotp && !req.hubToken && !req.hubService && access.isAdmin(req.hubUser))) return jsonResponse(res, 403, { error: 'admin_only' });
@@ -3250,7 +3281,7 @@ async function handleHttpRequest(req, res) {
       try {
         // { channel: 'stable' | 'experimental' } switches branches first (the Update dialog asks every time).
         let body = {}; try { body = JSON.parse((await readBody(req)) || '{}') || {}; } catch {}
-        return jsonResponse(res, 200, await runUpdate({ channel: body && body.channel ? String(body.channel) : null }));
+        return jsonResponse(res, 200, await require('./lib/settings-journal').withActor({ kind: 'update', user: req.hubUser && req.hubUser.id, why: 'hub update' }, () => runUpdate({ channel: body && body.channel ? String(body.channel) : null })));   // anything the update writes to settings is journaled as "update"
       } catch (e) {
         return jsonResponse(res, 500, { success: false, error: e.message });
       }
@@ -3261,7 +3292,7 @@ async function handleHttpRequest(req, res) {
       const { runPutAsideUpdate } = require('./lib/git-sync');
       try {
         let body = {}; try { body = JSON.parse((await readBody(req)) || '{}') || {}; } catch {}
-        return jsonResponse(res, 200, await runPutAsideUpdate({ channel: body && body.channel ? String(body.channel) : null }));
+        return jsonResponse(res, 200, await require('./lib/settings-journal').withActor({ kind: 'update', user: req.hubUser && req.hubUser.id, why: 'hub update' }, () => runPutAsideUpdate({ channel: body && body.channel ? String(body.channel) : null })));
       } catch (e) {
         return jsonResponse(res, 500, { success: false, error: e.message });
       }
@@ -4225,16 +4256,17 @@ server.listen(PORT, HOST, () => {
   // here, once this process owns the port, so a second copy started on the same data never gets this far; it is
   // synchronous, so no request is handled before it finishes.
   try {
-    if (require('./lib/agents').ensureMaestroLead().changed) console.log('[agents] marked maestro as the lead agent (no agent was marked)');
+    const bootActor = (fn) => require('./lib/settings-journal').withActor({ kind: 'hub', why: 'start-up' }, fn);   // the settings journal names these writes "hub, start-up"
+    if (bootActor(() => require('./lib/agents').ensureMaestroLead()).changed) console.log('[agents] marked maestro as the lead agent (no agent was marked)');
   } catch (e) { console.warn('[agents] could not mark the lead agent:', e.message); }
   // Team guidance (lib/team-guidance): agents that existed before this update keep their old prompt (switched off once); lead agents get it.
   try {
-    const tg = require('./lib/agents').migrateTeamGuidance();
+    const tg = require('./lib/settings-journal').withActor({ kind: 'hub', why: 'start-up' }, () => require('./lib/agents').migrateTeamGuidance());
     if (tg.changed > 0) console.log(`[agents] team guidance switched off for ${tg.changed} agents that existed before this update (lead agents keep it)`);
   } catch (e) { console.warn('[agents] could not migrate team guidance:', e.message); }
   // Behaviour changes (lib/behaviour-changes): on an install that already has agents each one waits, off, for the owner's decision.
   try {
-    const bm = require('./lib/behaviour-changes').migrate({ agentsFile: path.join(__dirname, 'data', 'agents.json') });
+    const bm = require('./lib/settings-journal').withActor({ kind: 'hub', why: 'start-up' }, () => require('./lib/behaviour-changes').migrate({ agentsFile: path.join(__dirname, 'data', 'agents.json') }));
     if (bm.added && bm.added.length) console.log(`[behaviour] ${bm.added.length} change(s) waiting for the owner's decision: ${bm.added.join(', ')}`);
   } catch (e) { console.warn('[behaviour] could not check the behaviour changes:', e.message); }
   console.log(`\n  My Maestro AI v${require('./package.json').version} (multi-provider)`);

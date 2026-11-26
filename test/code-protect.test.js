@@ -294,6 +294,10 @@ test('review r1: a detection error inside the command reading refuses (no intern
   assert.strictEqual(cp.isProtectedPath(P('data', 'behaviour-reviews.json')), true);
   assert.strictEqual(cp.isProtectedPath(P('data', 'put-aside.json')), true);
   assert.strictEqual(cp.isProtectedPath(P('data', 'other.json')), false);
-  assert.ok(refused(dec(lead, 'Write', { file_path: P('data', 'behaviour-reviews.json') })));
-  assert.ok(refused(dec(lead, 'Bash', { command: `echo '{}' > ${P('data', 'behaviour-reviews.json')}` })));
+  // behaviour-reviews.json is also one of the always-protected settings files (lib/tool-policy touchesSettingsFile), judged
+  // first: refused for every role whether or not code protection is on. put-aside.json is refused by code protection alone.
+  const settingsRefused = (d) => d.decision === 'deny' && d.cls === 'settings_file';
+  assert.ok(refused(dec(lead, 'Write', { file_path: P('data', 'put-aside.json') })));
+  assert.ok(settingsRefused(dec(lead, 'Write', { file_path: P('data', 'behaviour-reviews.json') })));
+  assert.ok(settingsRefused(dec(lead, 'Bash', { command: `echo '{}' > ${P('data', 'behaviour-reviews.json')}` })));
 });

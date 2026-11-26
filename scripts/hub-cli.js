@@ -36,6 +36,10 @@ const DIR = path.join(__dirname, '..');
 const PRODUCT = 'My Maestro AI';
 const argv = process.argv.slice(2);
 const cmd = argv[0] || 'help';
+// Everything this command writes to settings, agents or preferences is journaled as "cli" (lib/settings-journal, the same journal
+// file as the running hub's). After each write the store leaves a marker with the file's new stamp, so the running hub, which sees
+// the file change, does not journal the same change again as an outside edit.
+try { require(path.join(__dirname, '..', 'lib', 'settings-journal')).enterActor({ kind: 'cli', why: `command line: ${String(cmd).replace(/[^\w-]/g, '').slice(0, 30)}` }); } catch { /* an older install without the journal */ }
 const arg = (name, dflt = null) => { const i = argv.indexOf(`--${name}`); return i > 0 && i + 1 < argv.length ? argv[i + 1] : dflt; };
 const flag = (...names) => names.some(n => argv.includes(n));
 const svc = () => require(path.join(DIR, 'lib', 'service-manager')).createServiceManager({ dir: DIR });
