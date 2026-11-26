@@ -5,7 +5,7 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
-const root = process.env.QD_ROOT || path.join(__dirname, '..');   // QD_ROOT: run the same tests against another copy of the sources
+const root = path.join(__dirname, '..');
 const S = require(path.join(root, 'lib/ui-simple'));
 const L = require(path.join(root, 'lib/ui-looks'));
 const read = (f) => fs.readFileSync(path.join(root, f), 'utf8');

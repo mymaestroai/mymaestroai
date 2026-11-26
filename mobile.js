@@ -16957,12 +16957,13 @@ async function init() {
 // these through a typeof guard. Seen is kept per account in localStorage (mm-theme-notice:<id>), like the voice hint.
 function simpleThemeCtl(onChosen) {
   if (!window.hubSimple || typeof window.hubSimple.themeControl !== 'function' || !hubMe) return null;
-  return window.hubSimple.themeControl(document, { me: () => hubMe, save: (v) => simplePrefsPost({ theme: v }), onError: () => toast('Could not save that'), onChosen });
+  return window.hubSimple.themeControl(document, { me: () => hubMe, save: (v) => simplePrefsPost({ theme: v }), onError: () => toast('Could not save that'), onPress: () => !!document.getElementById('theme-notice'), onChosen });
 }
 function themeNoticeGone() { const n = document.getElementById('theme-notice'); if (n) n.remove(); }
 // Choosing a theme in the Settings Appearance control settles the notice for good (as its own buttons do), so a reload does not bring it back.
-function themeNoticeChosen() {
-  try { window.hubSimple.markNoticeSeen(hubMe, window.localStorage); } catch { /* blocked storage */ }
+// Only when the line was up at the press: a notice that was never shown is not dismissed (a later switch to Quiet still shows it once).
+function themeNoticeChosen(v, wasVisible) {
+  if (wasVisible) { try { window.hubSimple.markNoticeSeen(hubMe, window.localStorage); } catch { /* blocked storage */ } }
   themeNoticeGone();
 }
 // The line follows the page while it is open: a look change or a change of the resolved colours (Match device flipping) shows or hides it.

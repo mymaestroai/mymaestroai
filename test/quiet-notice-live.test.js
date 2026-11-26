@@ -8,7 +8,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-const ROOT = process.env.QD_ROOT || path.join(__dirname, '..');   // QD_ROOT: run the same tests against another copy of the sources
+const ROOT = path.join(__dirname, '..');
 const app = fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8');
 const mob = fs.readFileSync(path.join(ROOT, 'mobile.js'), 'utf8');
 const S = require(path.join(ROOT, 'lib/ui-simple.js'));
@@ -126,7 +126,9 @@ test('desktop notice: once seen it never shows again, whatever the page does', (
     // seen while it is up (its own close): the next flip does not bring it back
     const d2 = desktop({ look: 'quiet', theme: 'dark', classes: ['mm-dark'] });
     d2.h.themeNoticeShow(); assert.ok(d2.notice());
-    S.markNoticeSeen(d2.me, d2.st); d2.doc.dispatchEvent({ type: 'mm-look-change' });
+    assert.strictEqual(d2.st.m.get('mm-theme-notice:u1'), undefined, 'not marked yet');
+    S.markNoticeSeen(d2.me, d2.st); assert.strictEqual(d2.st.m.get('mm-theme-notice:u1'), '1', 'now marked');
+    d2.doc.dispatchEvent({ type: 'mm-look-change' });
     assert.strictEqual(d2.notice(), null, 'seen: an open notice goes at the next check');
     setDark(d2.doc, false); d2.doc.dispatchEvent({ type: 'mm-theme-resolved' }); setDark(d2.doc, true); d2.doc.dispatchEvent({ type: 'mm-theme-resolved' });
     assert.strictEqual(d2.notice(), null);
@@ -198,7 +200,7 @@ test('desktop: choosing a theme in Settings marks the notice seen and removes it
     const el = doc.createElement('div'); el.id = 'hub-theme-notice'; doc.body.appendChild(el);
     ctx.__paint({});
     assert.ok(opts && typeof opts.onChosen === 'function', 'the Appearance control was built');
-    opts.onChosen('light');
+    opts.onChosen('light', true);   // the notice was up when the button was pressed
     assert.strictEqual(st.m.get('mm-theme-notice:u1'), '1', 'marked seen');
     assert.strictEqual(doc.getElementById('hub-theme-notice'), null, 'removed');
   } finally { delete global.window; }
@@ -211,8 +213,78 @@ test('phone: choosing a theme in Settings marks the notice seen (the handler giv
   try {
     p.h.themeNoticeShow(); assert.ok(p.notice());
     vm.runInContext(fnSrc(mob, m[1]) + '\nthis.__chosen = ' + m[1] + ';', p.ctx);
-    p.ctx.__chosen('light');
+    p.ctx.__chosen('light', true);   // the notice was up when the button was pressed
     assert.strictEqual(p.st.m.get('mm-theme-notice:u1'), '1', 'marked seen');
     assert.strictEqual(p.notice(), null, 'removed');
   } finally { delete global.window; }
 });
+
+// ── the control driven for real: the notice is dismissed for good only when it was up at the press ──
+// The real themeControl (lib/ui-simple.js) is built by the real page code; its buttons are pressed on the fake DOM.
+const pressTheme = async (ctl, value) => { const b = ctl.el.children.find((c) => c.attrs && c.attrs.role === 'group').children.find((x) => x.dataset.theme === value); await b.click(); };
+
+function desktopLive({ look, theme, classes, saveOk }) {
+  const base = makeDoc(classes);
+  const st = fakeStorage();
+  const state = { look };
+  const me = { user: { id: 'u1' }, theme, uiMode: 'advanced' };
+  const host = { firstChild: null, appendChild() {}, insertBefore() {} };
+  let ctl = null;
+  const hubSimple = Object.assign({}, S, { themeControl: (d, o) => (ctl = S.themeControl(d, o)) });
+  const win = { hubSimple, hubMe: me, localStorage: st, HubLooks: { applied: () => state.look, singleSetLine: () => null, byId: () => null } };
+  global.window = win;
+  const doc = Object.assign(Object.create(base), { getElementById: (id) => (id === 'st-looks-body' ? host : base.getElementById(id)) });
+  const makeEl = base.createElement;
+  doc.createElement = (t) => { const e = makeEl(t); e.firstChild = null; return e; };
+  const ctx = { window: win, document: doc, lookPickerBuild() {}, isHubAdmin: () => false, hubToast() {}, simplePrefs: async () => { if (!saveOk()) throw new Error('nope'); return {}; } };
+  vm.createContext(ctx);
+  const names = ['themeNoticeShow', 'themeNoticeSync', 'defaultNoticeStorage', 'layoutBanners', 'lookSectionPaint'].map((n) => fnSrc(app, n)).join('\n');
+  vm.runInContext(names + '\n' + lineSrc(app, /^.*for \(const ev of \['mm-look-change'.*$/m) + '\nthis.__h = { themeNoticeShow, lookSectionPaint };', ctx);
+  const d = { doc: base, st, state, me, h: ctx.__h, notice: () => base.getElementById('hub-theme-notice'), ctl: () => ctl };
+  return d;
+}
+
+function phoneLive({ look, theme, classes, saveOk }) {
+  const p = phone({ look, theme, classes });
+  p.hubMe.uiMode = 'advanced';
+  p.ctx.simplePrefsPost = async () => saveOk();
+  vm.runInContext(fnSrc(mob, 'simpleThemeCtl') + '\nthis.__ctl = () => simpleThemeCtl(themeNoticeChosen);', p.ctx);
+  return p;
+}
+
+for (const kind of ['desktop', 'phone']) {
+  const build = (o) => (kind === 'desktop' ? desktopLive(o) : phoneLive(o));
+  const open = (x) => { if (kind === 'desktop') { x.h.lookSectionPaint({}); return x.ctl(); } return x.ctx.__ctl(); };
+  const marked = (x) => x.st.m.get('mm-theme-notice:u1');
+
+  test(kind + ': Engineering + Dark chosen in Settings does not mark the never-shown notice seen; switching to Quiet then shows it', async () => {
+    let ok = true;
+    const x = build({ look: 'engineering', theme: 'light', classes: ['mm-light'], saveOk: () => ok });
+    try {
+      x.h.themeNoticeShow();
+      assert.strictEqual(x.notice(), null, 'Engineering: no notice');
+      const ctl = open(x);
+      await pressTheme(ctl, 'dark');
+      assert.ok(x.doc.set.has('mm-dark'), 'dark is in force');
+      assert.strictEqual(marked(x), undefined, 'never shown, so not marked seen');
+      x.state.look = 'quiet'; x.doc.dispatchEvent({ type: 'mm-look-change' });
+      assert.ok(x.notice(), 'Quiet, dark, normal mode: the notice shows');
+    } finally { delete global.window; }
+  });
+
+  test(kind + ': Quiet dark with the notice up + Light chosen in Settings: marked seen after a good save, nothing marked when the save fails', async () => {
+    let ok = false;
+    const x = build({ look: 'quiet', theme: 'dark', classes: ['mm-dark'], saveOk: () => ok });
+    try {
+      x.h.themeNoticeShow(); assert.ok(x.notice(), 'notice is up');
+      const ctl = open(x);
+      await pressTheme(ctl, 'light');
+      assert.strictEqual(marked(x), undefined, 'failed save marks nothing');
+      assert.ok(x.notice(), 'and the notice is still up after the rollback');
+      ok = true;
+      await pressTheme(ctl, 'light');
+      assert.strictEqual(marked(x), '1', 'a good save marks it seen though Light hid it at once');
+      assert.strictEqual(x.notice(), null);
+    } finally { delete global.window; }
+  });
+}

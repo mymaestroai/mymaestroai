@@ -9,7 +9,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const cheerio = require('cheerio');
 
-const ROOT = process.env.QD_ROOT || path.join(__dirname, '..');   // QD_ROOT: run the same tests against another copy of the sources
+const ROOT = path.join(__dirname, '..');
 const app = fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8');
 const mob = fs.readFileSync(path.join(ROOT, 'mobile.js'), 'utf8');
 const L = require(path.join(ROOT, 'lib/ui-looks'));
