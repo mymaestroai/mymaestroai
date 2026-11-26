@@ -120,7 +120,7 @@ function isSetupNeeded() {
 
 // ── Persistent Settings ──────────────────────────────────────────────────
 const hubSettings = require('./lib/settings');
-const hubAuth = require('./lib/auth').getAuth();          // accounts, sessions, TOTP, invites (lib/auth)
+const hubAuth = require('./lib/auth').startAuthOrExit();   // accounts, sessions, TOTP, invites (lib/auth); an unreadable .env prints one line and exits
 const admin2fa = require('./lib/admin-2fa').createAdmin2fa({   // "Require two-factor sign-in for admins" (lib/admin-2fa)
   getSetting: hubSettings.getSetting, updateSettings: hubSettings.updateSettings, auth: hubAuth,
   notify: (p) => require('./lib/push').getPush().notify(p, { adminsOnly: true, kind: 'security' }), log: (m) => console.log(m),   // a security notice (the person's Security and access setting)

@@ -288,6 +288,69 @@ test('R7-2: an .env that cannot be read (not ENOENT) makes the resolver throw na
   } finally { fs.chmodSync(ENV_FILE, 0o600); fs.rmSync(ENV_FILE, { force: true }); }
 });
 
+const NOT_ROOT = typeof process.getuid === 'function' && process.getuid() === 0 ? 'running as root: chmod 000 does not stop root reading' : false;
+
+test('R8-3: with an unreadable .env only the commands that open the account store stop; logs, status, version and help run', { skip: NOT_ROOT }, () => {
+  const cwd = here(path.join(inst.root, 'cwd-r83'));
+  const env = { PATH: process.env.PATH, HOME: os.tmpdir() };
+  fs.writeFileSync(ENV_FILE, 'HUB_AUTH_DIR=/tmp/never-used\n', { mode: 0o600 });
+  fs.chmodSync(ENV_FILE, 0o000);
+  const before = fs.readdirSync(inst.data).sort();
+  const cli = (...a) => spawnSync(process.execPath, [path.join(inst.inst, 'scripts', 'hub-cli.js'), ...a], { env, cwd, encoding: 'utf8', timeout: 60000 });
+  try {
+    for (const c of ['reset-2fa', 'reset-password', 'setup-link', 'open', 'restore']) {
+      const r = cli(c, 'x@example.com');
+      assert.notEqual(r.status, 0, c);
+      assert.ok(r.stderr.includes(ENV_FILE), `${c}: ${r.stderr}`);
+    }
+    for (const c of [['logs'], ['status'], ['version'], ['help']]) {
+      const r = cli(...c);
+      assert.ok(!(r.stderr + r.stdout).includes(ENV_FILE), `${c[0]} did not stop for the .env: ${r.stderr}${r.stdout}`);
+      assert.ok(r.stdout.length > 0 || /No server.log/.test(r.stderr), `${c[0]} ran: ${r.stderr}`);
+    }
+    assert.equal(cli('help').status, 0);
+    assert.equal(cli('version').status, 0);
+    assert.ok(!fs.existsSync(path.join(inst.data, 'auth.db')), 'no store was opened');
+    assert.deepEqual(fs.readdirSync(inst.data).sort(), before);
+  } finally { fs.chmodSync(ENV_FILE, 0o600); fs.rmSync(ENV_FILE, { force: true }); }
+});
+
+test('R8-4: server start-up: an unreadable .env prints one [auth] line and exits non-zero (no stack); other errors still propagate', { skip: NOT_ROOT }, () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  assert.match(src, /const hubAuth = require\('\.\/lib\/auth'\)\.startAuthOrExit\(\)/, 'server.js starts the store through the helper');
+  assert.ok(!/require\('\.\/lib\/auth'\)\.getAuth\(\)/.test(src), 'no bare getAuth() at start-up');
+  const cwd = here(path.join(inst.root, 'cwd-r84'));
+  const env = { PATH: process.env.PATH, HOME: os.tmpdir() };
+  fs.writeFileSync(ENV_FILE, 'HUB_AUTH_DIR=/tmp/never-used\n', { mode: 0o600 });
+  fs.chmodSync(ENV_FILE, 0o000);
+  try {
+    const r = spawnSync(process.execPath, ['-e', `require(${JSON.stringify(path.join(inst.lib, 'auth'))}).startAuthOrExit(); console.log('went on')`], { env, cwd, encoding: 'utf8' });
+    assert.notEqual(r.status, 0);
+    assert.ok(!r.stdout.includes('went on'));
+    const errLines = r.stderr.split('\n').filter(Boolean);
+    assert.equal(errLines.length, 1, r.stderr);
+    assert.ok(errLines[0].startsWith(`[auth] cannot read ${ENV_FILE}: `) && errLines[0].endsWith('Fix its permissions and start again.'), errLines[0]);
+  } finally { fs.chmodSync(ENV_FILE, 0o600); fs.rmSync(ENV_FILE, { force: true }); }
+});
+
+test('R8-4: server.js starts the account store through startAuthOrExit (source check, also as root)', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  assert.match(src, /const hubAuth = require\('\.\/lib\/auth'\)\.startAuthOrExit\(\)/);
+  assert.equal(typeof authMod.startAuthOrExit, 'function');
+});
+
+test('R8-5: the journal never falls back to another folder when the .env cannot be read', { skip: NOT_ROOT }, () => {
+  const src = fs.readFileSync(path.join(inst.lib, 'settings-journal.js'), 'utf8');
+  const body = src.slice(src.indexOf('function configuredAuthDir'), src.indexOf('function journalDirFor'));
+  assert.ok(!/catch/.test(body), 'configuredAuthDir has no fallback');
+  fs.writeFileSync(ENV_FILE, 'HUB_AUTH_DIR=/tmp/never-used\n', { mode: 0o600 });
+  fs.chmodSync(ENV_FILE, 0o000);
+  try {
+    const r = spawnSync(process.execPath, ['-e', `const j=require(${JSON.stringify(path.join(inst.lib, 'settings-journal'))});try{j.recordPrefs(${JSON.stringify(path.join(inst.root, 'elsewhere', 'x.json'))},[{key:'prefs.u.s.f',before:1,after:2}]);console.log('no throw')}catch(e){console.log('threw',e.message)}`], { env: { PATH: process.env.PATH, HOME: os.tmpdir() }, cwd: inst.root, encoding: 'utf8' });
+    assert.ok(/^threw /.test(r.stdout), r.stdout + r.stderr);
+  } finally { fs.chmodSync(ENV_FILE, 0o600); fs.rmSync(ENV_FILE, { force: true }); }
+});
+
 test('R5-2: a store made with an explicit other folder keeps its journal beside it', () => {
   const other = fs.mkdtempSync(path.join(real(os.tmpdir()), 'sj-own-'));
   try {

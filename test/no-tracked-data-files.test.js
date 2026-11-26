@@ -17,14 +17,14 @@ function forbidden(files) {
     const p = f.split(path.sep).join('/');
     if (p.startsWith('templates/') || SHIPPED_EXAMPLES.has(p)) return false;
     const base = p.split('/').pop();
-    if (base === 'auth.db' || base.startsWith('auth.db-') || base === 'users.json' || base === 'settings-journal.jsonl') return true;
+    if (base === 'auth.db' || base.startsWith('auth.db-') || base === 'users.json' || base === 'settings.json' || base === 'settings-journal.jsonl') return true;
     return p.split('/').slice(0, -1).some((d) => d === 'data' || d === 'acct');   // any file under a data/ or acct/ folder
   });
 }
 
 test('the rule: account files and anything under data/ or acct/ are caught; templates/ and ordinary files are not', () => {
-  assert.deepEqual(forbidden(['acct/auth.db', 'data/users.json', 'x/data/a.txt', 'a/acct/b.txt', 'auth.db-wal', 'sub/auth.db-shm', 'settings-journal.jsonl', 'data/agents.json']).length, 8);
-  assert.deepEqual(forbidden(['data/agents.example.json', 'templates/data/users.json', 'templates/auth.db', 'lib/auth.js', 'test/data-guard.txt', 'docs/database.md', 'scripts/hub-token.js']), []);
+  assert.deepEqual(forbidden(['acct/auth.db', 'data/users.json', 'x/data/a.txt', 'a/acct/b.txt', 'auth.db-wal', 'sub/auth.db-shm', 'settings-journal.jsonl', 'data/agents.json', 'backup/settings.json', 'settings.json']).length, 10);
+  assert.deepEqual(forbidden(['data/agents.example.json', 'templates/settings.json', 'templates/data/users.json', 'templates/auth.db', 'lib/auth.js', 'test/data-guard.txt', 'docs/database.md', 'scripts/hub-token.js']), []);
 });
 
 test('no auth.db, users.json, settings-journal.jsonl or file under a data/ or acct/ folder is tracked outside templates/', (t) => {

@@ -11,6 +11,8 @@ node_modules/
 # ignore all of it and allow only the shipped example. The list below stays for older checkouts and as documentation.
 /data/*
 !/data/agents.example.json
+# An account folder a relative HUB_AUTH_DIR=acct makes inside the install.
+/acct/
 /agent-groups.json
 /agent-voices.json
 /agents_new.json
