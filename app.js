@@ -7871,7 +7871,7 @@
         const p = card.open(agentName, row ? { row } : {});
         // The old popup page is for admins; a member whose card will not open is told so, as on the phone.
         const fallback = () => { if (isHubAdmin()) openAgentSettingsPopup(agentName); else hubToast('This agent\'s settings are not open to you.'); };
-        if (p && typeof p.then === 'function') p.then(ok => { if (ok === false) fallback(); }, fallback);
+        if (p && typeof p.then === 'function') p.then(ok => { if (ok === 'superseded') return; /* a later open or a close took over: nothing to do */ if (ok === false) fallback(); }, fallback);
         return true;
       } catch { return false; }
     }

@@ -38,13 +38,58 @@ test('voiceDefaults: a number changed away from the stored preset makes it custo
   assert.strictEqual(onDisk('biographer').voiceDefaults.voiceSpeed, 0.9);
 });
 
-test('voiceDefaults: null (and nothing valid) removes the whole object', async () => {
+test('voiceDefaults: null and {} remove the whole object', async () => {
   await upd({ voiceDefaults: { endPause: 2000, voiceSpeed: 1.2 } });
   assert.deepStrictEqual(await upd({ voiceDefaults: null }), { success: true });
   assert.ok(!('voiceDefaults' in onDisk('biographer')));
   await upd({ voiceDefaults: { endPause: 2000, voiceSpeed: 1.2 } });
-  await upd({ voiceDefaults: { endPause: 1 } });
+  assert.deepStrictEqual(await upd({ voiceDefaults: {} }), { success: true });
   assert.ok(!('voiceDefaults' in onDisk('biographer')));
+});
+
+test('R3-1 voiceDefaults: a patch with keys of which none is valid is refused, names the allowed values, and nothing changes', async () => {
+  await upd({ voiceDefaults: { endPause: 2000, voiceSpeed: 1.2 } });
+  for (const bad of [{ endPause: 1300 }, { endPause: 1 }, { continueWait: 'x' }, { preset: 'nope' }, { foo: 1 }, { voiceSpeed: 'fast' }]) {
+    const r = await upd({ voiceDefaults: bad });
+    assert.strictEqual(r.success, false, JSON.stringify(bad));
+    assert.match(r.error, /800, 1200, 2000, 4000/);
+    assert.match(r.error, /1500, 3000, 5000, 8000/);
+    assert.match(r.error, /patient/);
+    assert.deepStrictEqual(onDisk('biographer').voiceDefaults, { endPause: 2000, voiceSpeed: 1.2 }, JSON.stringify(bad));
+  }
+  // with nothing stored, a refused patch stores nothing
+  seed([base()]);
+  assert.strictEqual((await upd({ voiceDefaults: { endPause: 1300 } })).success, false);
+  assert.ok(!('voiceDefaults' in onDisk('biographer')));
+  // a valid key beside an invalid one still applies the valid one
+  assert.deepStrictEqual(await upd({ voiceDefaults: { endPause: 1300, voiceSpeed: 1.1 } }), { success: true });
+  assert.deepStrictEqual(onDisk('biographer').voiceDefaults, { voiceSpeed: 1.1 });
+});
+
+test('R3-2 voiceDefaults: a key sent as null or \'\' removes only that key', async () => {
+  await upd({ voiceDefaults: { endPause: 2000, continueWait: 5000, voiceSpeed: 1.2 } });
+  assert.deepStrictEqual(await upd({ voiceDefaults: { voiceSpeed: null } }), { success: true });
+  assert.deepStrictEqual(onDisk('biographer').voiceDefaults, { endPause: 2000, continueWait: 5000 });
+  assert.deepStrictEqual(await upd({ voiceDefaults: { continueWait: '' } }), { success: true });
+  assert.deepStrictEqual(onDisk('biographer').voiceDefaults, { endPause: 2000 });
+  // the last key gone: nothing is left, the object goes
+  assert.deepStrictEqual(await upd({ voiceDefaults: { endPause: null } }), { success: true });
+  assert.ok(!('voiceDefaults' in onDisk('biographer')));
+});
+
+test('R3-3 voiceDefaults: preset:null deletes the stored preset and keeps the four numbers', async () => {
+  await upd({ voiceDefaults: { preset: 'patient' } });
+  assert.strictEqual(onDisk('biographer').voiceDefaults.preset, 'patient');
+  assert.deepStrictEqual(await upd({ voiceDefaults: { preset: null } }), { success: true });
+  assert.deepStrictEqual(onDisk('biographer').voiceDefaults, { endPause: 4000, continueWait: 8000, interruptSensitivity: 30, voiceSpeed: 0.9 });
+  await upd({ voiceDefaults: { preset: 'patient' } });
+  assert.deepStrictEqual(await upd({ voiceDefaults: { preset: '' } }), { success: true });
+  assert.ok(!('preset' in onDisk('biographer').voiceDefaults));
+  assert.strictEqual(onDisk('biographer').voiceDefaults.endPause, 4000);
+  // taking a number out of a preset also drops the preset name, and the preset does not refill the number
+  await upd({ voiceDefaults: { preset: 'patient' } });
+  assert.deepStrictEqual(await upd({ voiceDefaults: { voiceSpeed: null } }), { success: true });
+  assert.deepStrictEqual(onDisk('biographer').voiceDefaults, { endPause: 4000, continueWait: 8000, interruptSensitivity: 30 });
 });
 
 test('compaction: a partial { at } keeps the mode, and a partial { mode } keeps at', async () => {
@@ -55,13 +100,39 @@ test('compaction: a partial { at } keeps the mode, and a partial { mode } keeps 
   assert.deepStrictEqual(onDisk('biographer').compaction, { mode: 'dry', at: 0.8 });
 });
 
-test('compaction: null removes it; an invalid patch is not stored (as before)', async () => {
-  seed([base({ compaction: { mode: 'on', at: 0.6 } })]);
-  assert.deepStrictEqual(await upd({ compaction: { at: 5, mode: 'bogus' } }), { success: true });
-  assert.ok(!('compaction' in onDisk('biographer')));
+test('compaction: null and {} remove it', async () => {
   seed([base({ compaction: { mode: 'on', at: 0.6 } })]);
   await upd({ compaction: null });
   assert.ok(!('compaction' in onDisk('biographer')));
+  seed([base({ compaction: { mode: 'on', at: 0.6 } })]);
+  assert.deepStrictEqual(await upd({ compaction: {} }), { success: true });
+  assert.ok(!('compaction' in onDisk('biographer')));
+});
+
+test('R3-1 compaction: a patch with keys of which none is valid is refused, names the allowed values, nothing changes', async () => {
+  seed([base({ compaction: { mode: 'on', at: 0.6 } })]);
+  for (const bad of [{ at: 5, mode: 'bogus' }, { at: 5 }, { mode: 'x' }, { foo: 1 }]) {
+    const r = await upd({ compaction: bad });
+    assert.strictEqual(r.success, false, JSON.stringify(bad));
+    assert.match(r.error, /off, dry, on, assisted/);
+    assert.match(r.error, /0\.3 to 0\.95/);
+    assert.deepStrictEqual(onDisk('biographer').compaction, { mode: 'on', at: 0.6 });
+  }
+});
+
+test('R3-2 compaction: a key sent as null or \'\' removes that key only', async () => {
+  seed([base({ compaction: { mode: 'on', at: 0.6 } })]);
+  assert.deepStrictEqual(await upd({ compaction: { at: null } }), { success: true });
+  assert.deepStrictEqual(onDisk('biographer').compaction, { mode: 'on' });
+  seed([base({ compaction: { mode: 'on', at: 0.6 } })]);
+  assert.deepStrictEqual(await upd({ compaction: { mode: null } }), { success: true });
+  assert.deepStrictEqual(onDisk('biographer').compaction, { at: 0.6 });
+  assert.deepStrictEqual(await upd({ compaction: { at: '' } }), { success: true });
+  assert.ok(!('compaction' in onDisk('biographer')), 'nothing left: the object goes');
+  // a null beside a valid key: the valid one applies, the null one is removed
+  seed([base({ compaction: { mode: 'on', at: 0.6 } })]);
+  assert.deepStrictEqual(await upd({ compaction: { mode: 'dry', at: null } }), { success: true });
+  assert.deepStrictEqual(onDisk('biographer').compaction, { mode: 'dry' });
 });
 
 test('voice: a partial { stt } keeps the tts engine, the cloud voice and the voice', async () => {
@@ -100,15 +171,48 @@ test('voice: a partial change cannot carry a stored cloud confirmation to a new 
   assert.ok(!v.cloudConfirmedBy || v.cloudConfirmedBy === 'u1');
 });
 
-test('the journal records the per-key change of a partial update', async () => {
-  await upd({ voiceDefaults: { endPause: 2000 } });
-  await upd({ voiceDefaults: { voiceSpeed: 1.2 } });
-  const dir = path.join(ISO.inst, 'data');
-  const files = [];
-  const walk = (d) => { for (const f of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, f.name); if (f.isDirectory()) walk(p); else files.push(p); } };
-  walk(dir);
-  const text = files.filter(f => /journal/i.test(f)).map(f => fs.readFileSync(f, 'utf8')).join('\n');
-  assert.match(text, /voiceDefaults/);
+test('R3-2 voice: cloudVoice sent as null or \'\' removes only the cloud voice; engines and voice stay', async () => {
+  seed([base({ voice: { voice: 'af_heart', stt: 'local', tts: 'openai', cloudVoice: 'nova' } })]);
+  assert.deepStrictEqual(await upd({ voice: { cloudVoice: null } }), { success: true });
+  const v = onDisk('biographer').voice;
+  assert.strictEqual(v.voice, 'af_heart');
+  assert.strictEqual(v.stt, 'local');
+  assert.strictEqual(v.tts, 'openai');
+  assert.notStrictEqual(v.cloudVoice, 'nova', 'the old cloud voice is gone (the engine default applies)');
+  seed([base({ voice: { voice: 'af_heart', stt: 'local', tts: 'openai', cloudVoice: 'nova' } })]);
+  assert.deepStrictEqual(await upd({ voice: { cloudVoice: '' } }), { success: true });
+  assert.strictEqual(onDisk('biographer').voice.voice, 'af_heart');
+  assert.notStrictEqual(onDisk('biographer').voice.cloudVoice, 'nova');
+});
+
+// The journal entries a partial change adds: one per changed key, nothing else of the agent.
+const journal = require(path.join(ISO.inst, 'lib', 'settings-journal'));
+async function changedKeys(fn) {
+  await agentsLib.loadAgentsFromDisk();   // a seed() is an outside edit: let the journal note it first, so only this change is counted
+  const seen = new Set(journal.list({ limit: 500 }).map(e => e.id));
+  await fn();
+  return journal.list({ limit: 500 }).filter(e => !seen.has(e.id)).map(e => e.key).sort();
+}
+
+test('the journal records exactly the changed keys of a partial update', async () => {
+  await upd({ voiceDefaults: { endPause: 2000, voiceSpeed: 1.2, continueWait: 5000 } });
+  assert.deepStrictEqual(await changedKeys(() => upd({ voiceDefaults: { endPause: 4000 } })), ['agents.biographer.voiceDefaults.endPause']);
+  // removing one key journals that key only
+  assert.deepStrictEqual(await changedKeys(() => upd({ voiceDefaults: { voiceSpeed: null } })), ['agents.biographer.voiceDefaults.voiceSpeed']);
+  // a refused patch journals nothing
+  assert.deepStrictEqual(await changedKeys(() => upd({ voiceDefaults: { endPause: 1300 } })), []);
+  // compaction: one half changes, one entry
+  seed([base({ compaction: { mode: 'on', at: 0.6 } })]);
+  assert.deepStrictEqual(await changedKeys(() => upd({ compaction: { at: 0.8 } })), ['agents.biographer.compaction.at']);
+  assert.deepStrictEqual(await changedKeys(() => upd({ compaction: { mode: null } })), ['agents.biographer.compaction.mode']);
+  assert.deepStrictEqual(await changedKeys(() => upd({ compaction: { at: 9 } })), []);
+  // voice: the cloud voice alone
+  seed([base({ voice: { voice: 'af_heart', stt: 'local', tts: 'openai', cloudVoice: 'nova' } })]);
+  assert.deepStrictEqual(await changedKeys(() => upd({ voice: { cloudVoice: 'echo' } })), ['agents.biographer.voice.cloudVoice']);
+  // preset:null: the preset name only
+  seed([base()]);
+  await upd({ voiceDefaults: { preset: 'patient' } });
+  assert.deepStrictEqual(await changedKeys(() => upd({ voiceDefaults: { preset: null } })), ['agents.biographer.voiceDefaults.preset']);
 });
 
 test('mobile.js passes the page\'s dialogGuard to hubAgentCard.configure', () => {

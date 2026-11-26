@@ -426,9 +426,29 @@ test('Call timing: Patient saves the preset, Custom the four numbers (and drops 
   await pick(all(rowOf(t.card.el(), 'OPT-0028'), 'select')[0], 'custom');
   assert.deepStrictEqual(writes(t).map((c) => c.body), [{ voiceDefaults: { preset: null, endPause: 1200, continueWait: 3000, interruptSensitivity: 50, voiceSpeed: 1 } }]);
   t.calls.length = 0;
-  const pause = all(rowOf(t.card.el(), 'OPT-0029'), 'input')[0]; pause.value = '2500'; pause.dispatch('change'); await flush();
-  assert.deepStrictEqual(writes(t).map((c) => c.body), [{ voiceDefaults: { endPause: 2500 } }]);
-  assert.deepStrictEqual(t.state.agents[1].voiceDefaults, { endPause: 2500, continueWait: 3000, interruptSensitivity: 50, voiceSpeed: 1 });
+  await pick(all(rowOf(t.card.el(), 'OPT-0029'), 'select')[0], '2000');
+  assert.deepStrictEqual(writes(t).map((c) => c.body), [{ voiceDefaults: { endPause: 2000 } }]);
+  assert.deepStrictEqual(t.state.agents[1].voiceDefaults, { endPause: 2000, continueWait: 3000, interruptSensitivity: 50, voiceSpeed: 1 });
+});
+
+test('R3-4: the pause and wait rows are selects offering only the values the server accepts (lib/ui-voice lists)', async () => {
+  const voice = require('../lib/ui-voice');
+  const t = await opened();
+  all(t.card.el(), '.ac-more-head')[0].click();
+  await pick(all(rowOf(t.card.el(), 'OPT-0028'), 'select')[0], 'custom');
+  const optionsOf = (id) => {
+    const s = all(rowOf(t.card.el(), id), 'select');
+    assert.strictEqual(s.length, 1, id + ' is a select');
+    assert.strictEqual(all(rowOf(t.card.el(), id), 'input').length, 0, id + ' has no number input');
+    return all(s[0], 'option').map((o) => Number(o.value));
+  };
+  assert.deepStrictEqual(optionsOf('OPT-0029'), voice.VOICE_END_PAUSES);
+  assert.deepStrictEqual(optionsOf('OPT-0030'), voice.VOICE_CONTINUE_WAITS);
+  assert.deepStrictEqual(optionsOf('OPT-0029'), [800, 1200, 2000, 4000]);
+  assert.deepStrictEqual(optionsOf('OPT-0030'), [1500, 3000, 5000, 8000]);
+  t.calls.length = 0;
+  await pick(all(rowOf(t.card.el(), 'OPT-0030'), 'select')[0], '8000');
+  assert.deepStrictEqual(writes(t).map((c) => c.body), [{ voiceDefaults: { continueWait: 8000 } }]);
 });
 
 test('Recordings: only the owner of the Maestro may change them (the route\'s rule); the body carries only the changed key (the server merges)', async () => {

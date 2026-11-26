@@ -113,10 +113,15 @@ function setup(over = {}) {
     const method = init.method || 'GET';
     const body = init.body ? JSON.parse(init.body) : null;
     calls.push({ url, method, body });
-    if (url === '/api/agents' && method === 'GET') return resp(200, JSON.parse(JSON.stringify(state.agents)));
+    if (url === '/api/agents' && method === 'GET') {
+      if (state.hangGet) return new Promise(() => {});   // a re-read the hub never answers
+      if (state.hangGetBody) return { ok: true, status: 200, json: () => new Promise(() => {}) };   // headers arrive, the body never does
+      return resp(200, JSON.parse(JSON.stringify(state.agents)));
+    }
     const m = /^\/api\/agents\/([^/]+)$/.exec(url);
     if (m && method === 'PATCH') {
       if (state.hang) return new Promise(() => {});   // a request the hub never answers (and that ignores the abort signal)
+      if (state.hangBody) return { ok: false, status: 500, json: () => new Promise(() => {}) };   // headers arrive, the body never does
       if (state.gate) await state.gate;   // a test holds a save in flight
       if (state.fail) return resp(400, { error: state.fail });
       const a = state.agents.find((x) => x.name === decodeURIComponent(m[1]));
@@ -754,7 +759,7 @@ test('a rename started on one card does not reopen it once the person moved to a
   input.value = 'New'; input.dispatch('change'); await flush();
   assert.strictEqual(await t.card.open('tally', { section: 'role' }), true);   // the person goes to B before the rename answers
   release(); await flush();
-  assert.deepStrictEqual(reopened, [false], 'the late reopen was refused');
+  assert.deepStrictEqual(reopened, ['superseded'], 'the late reopen was refused as superseded (not a denial)');
   assert.strictEqual(t.card.state().name, 'tally', 'B stays');
 });
 
@@ -782,15 +787,17 @@ test('a slower earlier open() does not replace a later one', async () => {
   const first = card.open('harbor');   // waits on the slow read
   assert.strictEqual(await card.open('tally'), true);
   release();
-  assert.strictEqual(await first, false, 'the older open gave way');
+  assert.strictEqual(await first, 'superseded', 'the older open gave way');
   assert.strictEqual(card.state().name, 'tally');
   assert.strictEqual(doc.body.children.length, 1, 'one panel only');
   // and a close() while an open() is still loading wins too
   n = 0; card.close();
   let release2; const gate2 = new Promise((r) => { release2 = r; }); n = 0; help.load = async () => { await gate2; };
   const slow = card.open('harbor'); card.close(); release2();
-  assert.strictEqual(await slow, false);
+  assert.strictEqual(await slow, 'superseded');
   assert.strictEqual(card.isOpen(), false);
+  // a real denial is still false
+  assert.strictEqual(await card.open('nobody'), false);
 });
 
 test('desktop Escape: a hidden aria-modal box in the page (the closed Reasoning view) does not stop it, a visible one does', async () => {
@@ -860,8 +867,9 @@ test('desktop Escape with typed, unsaved text commits it first, then closes', as
   const input = all(rowOf(t.card.el(), 'OPT-0005'), 'input')[0];
   input.focus(); input.value = 'typed then escape';
   t.card.el().dispatch('keydown', { key: 'Escape' });
-  assert.strictEqual(t.card.isOpen(), false, 'closed');
-  await flush();
+  assert.strictEqual(t.card.isOpen(), true, 'still open while the save runs');
+  await new Promise((r) => setTimeout(r, 30)); await flush();
+  assert.strictEqual(t.card.isOpen(), false, 'closed after the save');
   assert.deepStrictEqual(saved, ['typed then escape'], 'the row save ran with the typed text');
   assert.strictEqual(t.state.agents[1].blurb, 'typed then escape', 'and the request went to the agent');
   // untouched text: Escape just closes, nothing is saved
@@ -870,6 +878,95 @@ test('desktop Escape with typed, unsaved text commits it first, then closes', as
   saved.length = 0;
   t2.card.el().dispatch('keydown', { key: 'Escape' });
   assert.deepStrictEqual(saved, []);
+});
+
+const wait = async (ms) => { await new Promise((r) => setTimeout(r, ms)); await flush(); };
+
+test('R3-7: Escape with a failing save keeps the card open with the typed draft and the error; the next Escape (nothing failing) closes', async () => {
+  const saved = [];
+  const t = setup({ rows: TEXT_ROW(saved), firstRows: { role: ['OPT-0005'] } });
+  await t.card.open('harbor', { section: 'role' });
+  t.state.fail = 'That is too long.';
+  const input = all(rowOf(t.card.el(), 'OPT-0005'), 'input')[0];
+  input.focus(); input.value = 'my long draft';
+  t.card.el().dispatch('keydown', { key: 'Escape' });
+  await wait(30);
+  assert.strictEqual(t.card.isOpen(), true, 'the card stays open');
+  const row = rowOf(t.card.el(), 'OPT-0005');
+  assert.strictEqual(all(row, '.ac-err')[0].textContent, 'That is too long.', 'the error shows');
+  assert.strictEqual(all(row, 'input')[0].value, 'my long draft', 'the draft is still there');
+  assert.strictEqual(t.state.agents[1].blurb, 'Keeps notes', 'nothing was saved');
+  t.state.fail = null;
+  t.card.el().dispatch('keydown', { key: 'Escape' });   // the draft is still unsaved: it saves now and the card closes
+  await wait(30);
+  assert.strictEqual(t.state.agents[1].blurb, 'my long draft');
+  assert.strictEqual(t.card.isOpen(), false);
+});
+
+test('R3-7: Escape with two typed rows saves them one at a time in order, and stops at the first failure', async () => {
+  const order = []; let failSecond = true;
+  const mkRow = (id, field) => [id, { get: (a) => ({ value: a[field] || '', display: a[field] || '' }), control: { type: 'text' },
+    save: async (a, v, ctx) => { order.push(id); if (id === 'OPT-0041' && failSecond) return { ok: false, error: 'No.' }; return ctx.patch({ [field]: v }); } }];
+  const t = setup({ rows: new Map([mkRow('OPT-0040', 'blurb'), mkRow('OPT-0041', 'tagline')]), firstRows: { memory: ['OPT-0040', 'OPT-0041'] } });
+  await t.card.open('harbor', { section: 'memory' });
+  const a = all(rowOf(t.card.el(), 'OPT-0040'), 'input')[0]; a.value = 'one';
+  const b = all(rowOf(t.card.el(), 'OPT-0041'), 'input')[0]; b.value = 'two';
+  t.card.el().dispatch('keydown', { key: 'Escape' });
+  await wait(40);
+  assert.deepStrictEqual(order, ['OPT-0040', 'OPT-0041'], 'in order, one at a time');
+  assert.strictEqual(t.card.isOpen(), true, 'the second failed: the card stays');
+  assert.strictEqual(t.state.agents[1].blurb, 'one');
+  assert.strictEqual(all(rowOf(t.card.el(), 'OPT-0041'), 'input')[0].value, 'two', 'its draft stays');
+  failSecond = false;
+  t.card.el().dispatch('keydown', { key: 'Escape' });
+  await wait(40);
+  assert.strictEqual(t.card.isOpen(), false);
+  assert.strictEqual(t.state.agents[1].tagline, 'two');
+});
+
+test('R3-6: a PATCH whose body never arrives is given up after the time limit: unlocks with a message and re-reads the row', async () => {
+  const saved = [];
+  const t = setup({ requestMs: 40, rows: TEXT_ROW(saved), firstRows: { role: ['OPT-0005'] } });
+  await t.card.open('harbor', { section: 'role' });
+  t.state.hangBody = true;
+  const before = t.fetchCount();
+  const input = all(rowOf(t.card.el(), 'OPT-0005'), 'input')[0];
+  input.value = 'x'; input.dispatch('change'); await flush();
+  assert.ok(all(t.card.el(), 'input').every((e) => e.disabled === true), 'locked while waiting');
+  await wait(120);
+  assert.strictEqual(t.card.state().saving.size, 0, 'unlocked');
+  assert.ok(all(t.card.el(), 'input').every((e) => !e.disabled));
+  assert.match(rowOf(t.card.el(), 'OPT-0005').textContent, /did not answer in time/);
+  assert.ok(t.fetchCount() > before, 'the row was read again');
+});
+
+test('R3-6: a post-save refresh that never answers (headers or body) unlocks after the limit with a message', async () => {
+  for (const mode of ['hangGet', 'hangGetBody']) {
+    const saved = [];
+    const t = setup({ requestMs: 40, rows: TEXT_ROW(saved), firstRows: { role: ['OPT-0005'] } });
+    await t.card.open('harbor', { section: 'role' });
+    t.state[mode] = true;
+    const input = all(rowOf(t.card.el(), 'OPT-0005'), 'input')[0];
+    input.value = 'x'; input.dispatch('change'); await flush();
+    assert.ok(all(t.card.el(), 'input').every((e) => e.disabled === true), mode + ': locked while waiting');
+    await wait(120);
+    assert.strictEqual(t.card.state().saving.size, 0, mode + ': unlocked');
+    assert.ok(all(t.card.el(), 'input').every((e) => !e.disabled), mode);
+    assert.match(rowOf(t.card.el(), 'OPT-0005').textContent, /did not answer in time/, mode);
+  }
+});
+
+test('R3-5: a superseded open() resolves "superseded", a denial false; app.js and mobile.js do nothing on it', async () => {
+  const fs = require('node:fs'); const path = require('node:path');
+  for (const f of ['app.js', 'mobile.js']) {
+    const src = fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
+    assert.match(src, /p\.then\(ok => \{ if \(ok === 'superseded'\) return;/, f + ' returns on superseded');
+  }
+  // the behaviour of those handlers, run on the three results
+  const run = (ok) => { const log = []; const h = (ok2) => { if (ok2 === 'superseded') return; if (ok2 === false) log.push('fallback'); }; h(ok); return log; };
+  assert.deepStrictEqual(run('superseded'), []);
+  assert.deepStrictEqual(run(false), ['fallback']);
+  assert.deepStrictEqual(run(true), []);
 });
 
 test('after a keyboard save the focus is back on the row\'s control (disabling it had dropped the focus)', async () => {

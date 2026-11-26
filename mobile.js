@@ -1212,7 +1212,7 @@ function openAgentCard(name, row) {
   if (!name || !card || typeof card.open !== 'function') return false;
   try {
     const p = card.open(name, row ? { row } : {});
-    if (p && typeof p.then === 'function') p.then(ok => { if (ok === false) toast('This agent\'s settings are not open to you.'); }, () => {});
+    if (p && typeof p.then === 'function') p.then(ok => { if (ok === 'superseded') return; /* a later open or a close took over: nothing to do */ if (ok === false) toast('This agent\'s settings are not open to you.'); }, () => {});
     return true;
   } catch { return false; }
 }

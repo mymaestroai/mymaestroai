@@ -50,12 +50,18 @@ test('junk is cleaned: invalid values dropped, numbers clamped, unknown keys and
   assert.deepStrictEqual(onDisk('biographer').voiceDefaults, { continueWait: 8000, interruptSensitivity: 100 });
 });
 
-test('nothing valid removes the field, and so do an empty object and null', async () => {
-  for (const empty of [{}, null, [], 'patient', 7, { endPause: 1 }]) {
+test('an empty object and null remove the field; a value with nothing valid in it is refused and nothing changes', async () => {
+  for (const empty of [{}, null]) {
     seed([base({ voiceDefaults: { preset: 'patient', ...PATIENT } })]);
     assert.deepStrictEqual(await agentsLib.updateAgentField('biographer', { voiceDefaults: empty }), { success: true }, JSON.stringify(empty));
     assert.ok(!('voiceDefaults' in onDisk('biographer')), 'removed by ' + JSON.stringify(empty));
     assert.strictEqual((await listed('biographer')).voiceDefaults, undefined);
+  }
+  for (const bad of [[], 'patient', 7, { endPause: 1 }]) {
+    seed([base({ voiceDefaults: { preset: 'patient', ...PATIENT } })]);
+    const r = await agentsLib.updateAgentField('biographer', { voiceDefaults: bad });
+    assert.strictEqual(r.success, false, JSON.stringify(bad));
+    assert.deepStrictEqual(onDisk('biographer').voiceDefaults, { preset: 'patient', ...PATIENT }, 'unchanged by ' + JSON.stringify(bad));
   }
 });
 
