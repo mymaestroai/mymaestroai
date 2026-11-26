@@ -308,7 +308,7 @@ test('L1: the lock is the database: a holder that exits releases it (no age to w
   assert.ok(Date.now() - t0 < 400, 'no wait for a stale age');
 });
 
-test('L2: another process claimed the sign-in just before the deadline: the first process\'s timer does not cancel it', async () => {
+test('L2: another process claimed the sign-in just before the deadline: the waiting caller is told, and the claim is not cancelled', async () => {
   const A = fresh();
   A._test.setOpener(async () => false);
   const a = await A.startSignIn({ listener: false, open: false });
@@ -323,13 +323,48 @@ test('L2: another process claimed the sign-in just before the deadline: the firs
   const f = readFile(A); f.expiresAt = Date.now() - 1; setRow(A, f);   // the deadline passes while B's exchange runs
   await A._test.fireExpiry();
   await tick();
-  assert.equal(aSettled, null, 'A did not reject its promise');
+  assert.equal(aSettled, 'Another process is handling this Gmail sign-in. Check its result there.', 'A\'s caller gets an answer');
   assert.equal(A.lastResult(), null, 'A did not announce a timeout');
+  assert.equal(A.pendingView(), null, 'A no longer waits');
   assert.equal(readFile(A).id, f.id, 'the row is still there');
   release();
   const out = await pasting;
   assert.equal(out.ok, true, 'B still saves');
   assert.equal(JSON.parse(tokenText(B)).refresh_token, 'RT-L2');
+});
+
+test('L3: a refused paste in one process never deletes a row another process claimed', async () => {
+  const A = fresh();
+  A._test.setOpener(async () => false);
+  const a = await A.startSignIn({ listener: false, open: false });
+  a.promise.catch(() => {});
+  const B = fresh();
+  let release;
+  B._test.setPostForm(() => new Promise((res) => { release = () => res({ status: 200, json: { access_token: 'AT-L3', refresh_token: 'RT-L3', expires_in: 3600 } }); }));
+  const pasting = B.finishWithPastedAddress(cb(stateOf(a.url), 'K'));
+  await tick(60);
+  assert.equal(readFile(A).used, true, 'B claimed it');
+  const refused = await A.finishWithPastedAddress(`http://localhost:19877/callback?state=${stateOf(a.url)}&error=access_denied`);
+  assert.equal(refused.ok, false);
+  assert.equal(refused.reason, 'refused');
+  assert.ok(readFile(A) && readFile(A).used === true, 'the claimed row is still there');
+  release();
+  const out = await pasting;
+  assert.equal(out.ok, true, 'B still saves');
+  assert.equal(JSON.parse(tokenText(B)).refresh_token, 'RT-L3');
+});
+
+test('L2: a newer sign-in replaced the row before the deadline: the waiting caller is told, the newer row is left alone', async () => {
+  const A = fresh();
+  A._test.setOpener(async () => false);
+  const a = await A.startSignIn({ listener: false, open: false });
+  let aSettled = null;
+  a.promise.then(() => { aSettled = 'resolved'; }, (e) => { aSettled = e.message; });
+  setRow(A, { id: 'newer', state: 'ns', verifier: 'nv', expiresAt: Date.now() + 60000, used: false });
+  await A._test.fireExpiry();
+  await tick();
+  assert.equal(aSettled, A.WORDS.replaced);
+  assert.equal(readFile(A).id, 'newer', 'the other process\'s row is untouched');
 });
 
 test('L2: nobody claimed it and the deadline passed: the timer removes the row and ends the attempt', async () => {

@@ -72,7 +72,7 @@ describe('J1: a restart confirmation covers exactly the jobs it named', () => {
     const a = block.indexOf('restartGate'), b = block.indexOf('refuseNewJobs'), c = block.indexOf('requestRestart');
     assert.ok(a > 0 && a < b && b < c, 'gate, refuse, restart in that order');
     assert.match(block, /allowNewJobs/, 'a restart that fails lets jobs start again');
-    assert.match(block, /armRestartFallback\(getJobRunner\(\), attempt\)/, 'a restart that never exits does not refuse jobs for good (that attempt only, after 10 minutes)');
+    assert.doesNotMatch(block, /armRestartFallback|setTimeout/, 'no timer re-opens job admission');
     assert.doesNotMatch(block, /120000/, 'no 2-minute timer');
     assert.match(block, /refuseNewJobs\(attempt\)/, 'admission is tied to this attempt');
     assert.match(block, /allowNewJobs\(attempt\)/, 'a failed attempt re-opens only itself');
@@ -103,20 +103,20 @@ describe('R1: job admission is tied to the restart attempt', () => {
     assert.equal(await jobsStart(runner), true);
     runner.stop();
   });
-  it('the 10-minute fallback re-opens only its own attempt (unref\'d)', async () => {
-    assert.equal(J.RESTART_FALLBACK_MS, 10 * 60 * 1000);
+  it('no timer re-opens admission: the fallback is gone', async () => {
+    assert.equal(J.armRestartFallback, undefined);
+    assert.equal(J.RESTART_FALLBACK_MS, undefined);
+    assert.doesNotMatch(read('lib/jobs.js'), /armRestartFallback/);
+    assert.doesNotMatch(read('server.js'), /armRestartFallback/);
+  });
+  it('a failed later attempt does not re-open while an earlier accepted attempt is still pending', async () => {
     const { runner } = mk();
     runner.refuseNewJobs('a1');
-    const t1 = J.armRestartFallback(runner, 'a1', 20);
-    assert.equal(typeof t1.hasRef, 'function'); assert.equal(t1.hasRef(), false, 'does not keep the process alive');
-    runner.refuseNewJobs('a2');   // another restart is accepted before a1's timer fires
-    await later(60);
-    assert.equal(await jobsStart(runner), false, 'a1\'s timer did not re-open a2');
-    runner.refuseNewJobs('a3');
-    const t3 = J.armRestartFallback(runner, 'a3', 20);
-    await later(60);
-    assert.equal(await jobsStart(runner), true, 'a3\'s own timer re-opened a3');
-    clearTimeout(t3);
+    runner.refuseNewJobs('a2');
+    assert.equal(runner.allowNewJobs('a2'), false, 'a1 is still accepted');
+    assert.equal(await jobsStart(runner), false, 'still refused for a1');
+    assert.equal(runner.allowNewJobs('a1'), true, 'the last pending attempt failed');
+    assert.equal(await jobsStart(runner), true);
     runner.stop();
   });
   it('the error path of server.js passes the attempt', () => {

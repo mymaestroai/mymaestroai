@@ -3391,8 +3391,7 @@ async function handleHttpRequest(req, res) {
       // systemd installs: the process exits with code 75 and systemd restarts it; others: safe-restart.sh with a visible log.
       const r = require('./lib/restart').requestRestart({ projectDir: __dirname, port: PORT, reason: 'UI button', by: 'owner' });
       if (r.error) { getJobRunner().allowNewJobs(attempt); return jsonResponse(res, 500, { error: r.error }); }
-      // A restart helper that has not restarted your Maestro within 10 minutes has failed: this attempt only re-opens jobs then.
-      require('./lib/jobs').armRestartFallback(getJobRunner(), attempt);
+      // Admission stays closed until this process exits; no timer re-opens it.
       return jsonResponse(res, 200, { status: 'restarting', bootId: require('./lib/hub-events').BOOT_ID, pid: process.pid, ...r });
     }
     // The page shows this when a restart left the same process running (boot id unchanged): what the relauncher
