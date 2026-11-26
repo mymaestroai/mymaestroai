@@ -15,16 +15,14 @@
  */
 const fs = require('fs');
 const path = require('path');
-const { createAuth, TOKEN_SCOPES } = require(path.join(__dirname, '..', 'lib', 'auth'));
+const { createAuth, TOKEN_SCOPES, resolveAuthDir } = require(path.join(__dirname, '..', 'lib', 'auth'));
 
 function arg(name, dflt = null) { const i = process.argv.indexOf(`--${name}`); return i > 0 && i + 1 < process.argv.length ? process.argv[i + 1] : dflt; }
 const flag = (name) => process.argv.includes(`--${name}`);
 
-// Default folder: the moved account folder (an absolute HUB_AUTH_DIR, as lib/auth reads it) first, else the install's data folder.
-function defaultDataDir(env = process.env) {
-  const a = env.HUB_AUTH_DIR;
-  return a && path.isAbsolute(a) ? path.resolve(a) : path.join(__dirname, '..', 'data');
-}
+// Default folder: the hub's account folder from the one resolver (lib/auth resolveAuthDir: HUB_AUTH_DIR, a relative value taken against the
+// current folder, else the install's data folder).
+function defaultDataDir(env = process.env) { return resolveAuthDir(env); }
 const dataDir = arg('data-dir') ? path.resolve(arg('data-dir')) : defaultDataDir();
 // This command is a second process on the account file (users.json) and the other protected files: every write it makes there leaves a
 // marker line (lib/settings-journal startCliMarking), so the running hub's stamp watch does not report it as an outside edit.

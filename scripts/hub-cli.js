@@ -44,7 +44,13 @@ try {
   sj.enterActor({ kind: 'cli', why: `command line: ${String(cmd).replace(/[^\w-]/g, '').slice(0, 30)}` });
   // The files the hub's stamp watch covers (users.json, connectors.json, modules.json, ...) get a marker line after each write of this
   // command too, so the running hub does not report the command's own write as an outside edit.
-  if (typeof sj.startCliMarking === 'function') sj.startCliMarking({ dataDir: path.join(__dirname, '..', 'data') });
+  // The account folder (lib/auth resolveAuthDir) is marked too, in the install's one journal; the same folder by two paths once.
+  if (typeof sj.startCliMarking === 'function') {
+    const dataC = path.join(__dirname, '..', 'data');
+    const acctC = require(path.join(__dirname, '..', 'lib', 'auth')).resolveAuthDir();
+    sj.startCliMarking({ dataDir: dataC });
+    if (!sj.sameFolder(dataC, acctC)) sj.startCliMarking({ dataDir: acctC });
+  }
 } catch { /* an older install without the journal */ }
 const arg = (name, dflt = null) => { const i = argv.indexOf(`--${name}`); return i > 0 && i + 1 < argv.length ? argv[i + 1] : dflt; };
 const flag = (...names) => names.some(n => argv.includes(n));
@@ -371,7 +377,7 @@ function version() {
   const channel = branch === 'main' ? 'stable' : branch === 'dev' ? 'experimental' : branch || 'unknown';
   return { v, commit, branch, channel };
 }
-function auth() { return require(path.join(DIR, 'lib', 'auth')).createAuth({ log: () => {}, dataDir: path.join(DIR, 'data') }); }
+function auth() { const a = require(path.join(DIR, 'lib', 'auth')); return a.createAuth({ log: () => {}, dataDir: a.resolveAuthDir() }); }
 // Folders where a `codex` link may sit: the one the installer put the mymaestro command in, and ~/.local/bin.
 function binDirsForCodex() {
   const dirs = [path.join(os.homedir(), '.local', 'bin')];

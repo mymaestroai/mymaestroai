@@ -210,6 +210,55 @@ test('nested shell code is judged in the folder a preceding cd moved to, with va
   assert.strictEqual(had, process.env.HUB_AUTH_DIR);
 });
 
+test('round 5 follow-ups: bash -s reads stdin, only a real pipe feeds a shell, only an attached heredoc, a followed cd, a visit budget, a relative HUB_AUTH_DIR', () => {
+  const refused = [
+    `echo 'echo x > ${DATA}/users.json' | bash -s -- a`,
+    `echo 'echo x > ${DATA}/users.json' | bash -xs`,
+    `echo 'echo x > ${DATA}/users.json' | sh -s`,
+  ];
+  const allowed = [
+    `echo 'echo x > ${DATA}/users.json' > /dev/null; bash`,
+    `touch x; bash`,
+    `echo hi && bash`,
+    `echo 'echo x > ${DATA}/users.json' > /dev/null; bash -s`,
+    // (lib/shell-scan reads any heredoc body as commands once a shell is present, so these bodies stay free of protected names)
+    `cat <<EOF > notes.txt\necho hi > out.txt\nEOF\nbash`,
+    `cat <<EOF > notes.txt\necho hi > out.txt\nEOF\nbash -s`,
+    `cd /tmp/p && bash -c 'echo > settings.json'`,
+  ];
+  const stillRefused = [
+    `echo 'echo x > ${DATA}/users.json' |\n bash`,
+    `bash -s <<EOF\necho x > ${DATA}/users.json\nEOF`,
+    `cat <<EOF > notes.txt\nhi\nEOF\nbash <<EOF\necho x > ${DATA}/users.json\nEOF`,
+  ];
+  for (const [label, agent, extra] of ROLES) {
+    for (const command of [...refused, ...stillRefused]) assertRefused(dec(agent, 'Bash', { command }, extra), `${label}: ${command}`);
+    for (const command of allowed) assert.notStrictEqual(dec(agent, 'Bash', { command }, extra).cls, 'settings_file', `${label}: ${command}`);
+  }
+  // a pathological nesting is judged (not left to run away): fast, refused when it names a protected file, allowed when it does not
+  const nest = (inner, levels, width) => Array.from({ length: levels }).reduce((code) => Array.from({ length: width }, () => `bash -c '${code.replace(/'/g, `'\\''`)}'`).join('; '), inner);
+  for (const [inner, want] of [['echo > users.json', 'users.json'], ['echo hi', null]]) {
+    // the settings-file check alone (the whole decision also runs the general classifier, which is not what is timed here)
+    const big = nest(inner, 5, 5);
+    const t0 = process.hrtime.bigint();
+    const hit = tp.touchesSettingsFile({ tool: 'Bash', input: { command: big }, cwd: cwdOf(lead) });
+    const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+    assert.ok(ms < 1000, `pathological nesting took ${ms} ms`);
+    assert.strictEqual(hit, want, 'pathological nesting is judged');
+    const d = dec(lead, 'Bash', { command: nest(inner, 3, 6) });
+    if (want) assertRefused(d, 'pathological, names a protected file'); else assert.notStrictEqual(d.cls, 'settings_file', 'pathological, no protected name');
+  }
+  // a relative HUB_AUTH_DIR is the folder the process's cwd gives
+  const had = process.env.HUB_AUTH_DIR;
+  try {
+    process.env.HUB_AUTH_DIR = 'accounts';
+    const acct = path.join(process.cwd(), 'accounts');
+    assert.strictEqual(tp.touchesSettingsFile({ tool: 'Write', input: { file_path: path.join(acct, 'users.json') } }), 'users.json');
+    assertRefused(dec(lead, 'Bash', { command: `echo x > ${acct}/users.json` }), 'bash write into the relative account folder');
+    assert.strictEqual(tp.touchesSettingsFile({ tool: 'Write', input: { file_path: path.join(acct, 'notes.txt') } }), null);
+  } finally { if (had === undefined) delete process.env.HUB_AUTH_DIR; else process.env.HUB_AUTH_DIR = had; }
+});
+
 test('blind-cd counts the moved account folder name; an install name counts only at 4+ characters and as a whole path part', () => {
   const had = process.env.HUB_AUTH_DIR;
   try {

@@ -734,9 +734,8 @@ test('G7: a once-a-minute stamp watch journals a protected file changed by somet
 test('G7: the server starts the watch once a minute', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
   assert.match(src, /require\('\.\/lib\/settings-journal'\)/);
-  assert.match(src, /\.startWatch\(\{ dataDir: dataW \}\)/);
-  // a moved account folder (HUB_AUTH_DIR, absolute) is watched too
-  assert.match(src, /process\.env\.HUB_AUTH_DIR[\s\S]{0,200}path\.isAbsolute\(authW\)[\s\S]{0,200}\.startWatch\(\{ dataDir: authW \}\)/);
+  // the install's data/ and the moved account folder (the one resolver, relative values too) are watched, each folder once
+  assert.match(src, /\.startWatches\(\[dataW, require\('\.\/lib\/auth'\)\.resolveAuthDir\(\)\]\)/);
 });
 
 // ── Round 2 ───────────────────────────────────────────────────────────────
@@ -1043,13 +1042,32 @@ test('R4 follow-up: query parameter names are split on _ - . ; and camelCase: cr
       assert.ok(!t.includes('VALUE123'), `${name} after ${sep}: ${t}`);
     }
   }
-  const keep = ['author', 'keyword', 'design', 'signal', 'bypass', 'monkey', 'page', 'q', 'passenger', 'codec'];
+  const keep = ['author', 'keyword', 'design', 'signal', 'bypass', 'monkey', 'page', 'q', 'passenger'];   // (codec contains "code": over-redacted since R5-1)
   for (const name of keep) {
     const u = `https://h.example/p?a=1&${name}=VISIBLE&b=2;${name}=VISIBLE`;
     assert.equal(journal.redactUrlText(u), u, name);
   }
   assert.equal(journal.redactUrlText('https://h.example/p?a=1;token=ZZZ;b=2'), 'https://h.example/p?a=1;token=***;b=2');
   assert.deepEqual(journal.redactUrls({ u: 'a=1;sid=ZZZ' }), { u: 'a=1;sid=***' });
+});
+
+test('R5-1: compact credential names are redacted (a name that CONTAINS a credential part), the safe list is kept, percent-encoded names are decoded', () => {
+  const hide = ['accesstoken', 'refreshtoken', 'authtoken', 'idtoken', 'clientsecret', 'secretkey', 'sessionid', 'sessid', 'PHPSESSID', 'userpass', 'bearertoken', 'xapikey',
+    'auth%5Ftoken', 'access%5Ftoken', 'api%2Dkey', 'client%255Fsecret', 'AccessToken', 'JSESSIONID', 'pwd', 'otp', 'jwt', 'credentials', 'verifycode'];
+  for (const name of hide) {
+    for (const sep of ['?', '&', '#', ';']) {
+      const t = journal.redactUrlText(`https://h.example/p${sep === '?' ? '' : '?z=1'}${sep}${name}=VALUE123`);
+      assert.ok(!t.includes('VALUE123'), `${name} after ${sep}: ${t}`);
+      assert.ok(t.includes(`${sep}${name}=***`), `${name}: the original spelling stays in the shown URL: ${t}`);
+    }
+  }
+  const keep = ['author', 'authors', 'keyword', 'keywords', 'design', 'signal', 'bypass', 'monkey', 'passenger', 'passage', 'compass', 'sort_key', 'country_code', 'zip_code',
+    'postcode', 'postal_code', 'keyboard', 'monkeys', 'Author', 'SORT_KEY', 'page', 'q'];
+  for (const name of keep) {
+    const u = `https://h.example/p?a=1&${name}=VISIBLE&b=2;${name}=VISIBLE`;
+    assert.equal(journal.redactUrlText(u), u, name);
+  }
+  assert.deepEqual(journal.redactUrls({ u: 'https://x.example/cb?accesstoken=ZZZ&author=me&auth%5Ftoken=YYY' }), { u: 'https://x.example/cb?accesstoken=***&author=me&auth%5Ftoken=***' });
 });
 
 test('R3-4: voice.enabled entries are never restorable (the Voice screen is the way) and Restore names that screen; the value stays', () => {

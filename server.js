@@ -4079,10 +4079,9 @@ server.listen(PORT, HOST, () => {
   try {
     const sjw = require('./lib/settings-journal');
     const dataW = path.join(__dirname, 'data');
-    sjw.startWatch({ dataDir: dataW });
-    // An account folder moved with HUB_AUTH_DIR (absolute) holds users.json and the wallet files: the watch covers it too.
-    const authW = process.env.HUB_AUTH_DIR;
-    if (authW && path.isAbsolute(authW) && path.resolve(authW) !== path.resolve(dataW)) sjw.startWatch({ dataDir: authW });
+    // An account folder moved with HUB_AUTH_DIR (a relative value as lib/auth reads it) holds users.json and the wallet files: the watch
+    // covers it too, once: the same folder by two paths (a link) is watched one time. Its entries go to the install's journal.
+    sjw.startWatches([dataW, require('./lib/auth').resolveAuthDir()]);
   } catch (e) { console.error('[settings-journal] file watch not started:', e.message); }
   // A change whose file was written but whose commit line was not (a crash, a full disk) is still pending in the journal: it gets its commit
   // line when the live value is the entry's "after", else a failed line (lib/settings-journal reconcile).

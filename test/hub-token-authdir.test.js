@@ -27,8 +27,17 @@ test('tokens created without --data-dir go to the absolute HUB_AUTH_DIR', () => 
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('a relative HUB_AUTH_DIR is ignored (the install data folder is the default)', () => {
+test('a relative HUB_AUTH_DIR is resolved against the current folder, as lib/auth does (the one resolver)', () => {
   const src = fs.readFileSync(SCRIPT, 'utf8');
-  assert.match(src, /path\.isAbsolute\(a\)/);
-  assert.match(src, /defaultDataDir\(\)/);
+  assert.doesNotMatch(src, /path\.isAbsolute\(a\)/);
+  assert.match(src, /resolveAuthDir/);
+  const base = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'hub-token-rel-'));
+  try {
+    const env = { PATH: process.env.PATH, HOME: os.tmpdir(), HUB_AUTH_DIR: 'acct' };
+    const r = spawnSync(process.execPath, [SCRIPT, 'create', '--name', 'rel-test', '--scopes', 'status'], { cwd: base, env, encoding: 'utf8' });
+    assert.strictEqual(r.status, 0, r.stderr + r.stdout);
+    assert.ok(fs.existsSync(path.join(base, 'acct', 'auth.db')), 'the tokens went to <current folder>/acct');
+    const l = spawnSync(process.execPath, [SCRIPT, 'list'], { cwd: base, env, encoding: 'utf8' });
+    assert.match(l.stdout, /rel-test/);
+  } finally { fs.rmSync(base, { recursive: true, force: true }); }
 });
