@@ -107,7 +107,8 @@ test('a stale tab can no longer leave recents another account\'s tab could read'
 
 test('recents are tidied when /api/me answers and cleared on sign-out (page wiring)', () => {
   assert.match(fn('loadMe'), /window\.hubMe = await r\.json\(\);[^\n]*\n[^\n]*hubSimple\.apply[^\n]*\n\s*try \{ qsForgetRecents\(qsRecentStore\(\)\.key\); \}/);
-  assert.match(fn('signOut'), /^\s*async function signOut\(\) \{\s*\n\s*try \{ qsForgetRecents\(null\); \}[^\n]*\n\s*try \{ await fetch\('\/api\/auth\/logout'/m);
+  // The recents are forgotten before the logout request; other sign-out clean-ups (the cached theme, from dev) may sit between them.
+  assert.match(fn('signOut'), /^\s*async function signOut\(\) \{\s*\n\s*try \{ qsForgetRecents\(null\); \}[^\n]*\n(?:\s*try \{[^\n]*\n)*?\s*try \{ await fetch\('\/api\/auth\/logout'/m);
   assert.match(fn('switchToChat'), /if \(opened && !opened\.isGroup && !opened\.isWorker && !opened\.isHistory && opened\.agent\) qsNoteOpened\(opened\.agent\);/);
   assert.ok(loadCleanup());
   assert.doesNotMatch(app, /localStorage\.setItem\([^)]*qs-recent/, 'no recents write to localStorage anywhere');
@@ -284,9 +285,11 @@ function page({ agents = [A('aide', 'Aide'), A('researcher', 'Researcher'), A('r
     startSoloChat: (name) => { opened.push(name); return 'chat-2'; }, setTimeout, console: { log() {}, error() {} },
     reasonState: new Map([['msg-1', { text: 'thinking', live: false, v: 1 }]]), rsnWords: () => 1, rsnShown: (st) => st.text,
     simpleStyleLabel: () => null, toggleWorkersMenu: (on) => { workersClosed.push(on); workers.hidden = true; },
+    live: {}, bg: {}, AgentDot: require('../lib/ui-agent-dot'),   // stand-ins for the sidebar's state (agentLiveState's answer, bgCountOf); AgentDot is the real helper
+    agentLiveState: (n) => ({ busy: false, question: false, activity: 'working', ...(c.live[n] || {}) }), bgCountOf: (n) => c.bg[n] || 0,
     ownerView: () => 'mine', agentOwnerCache: new Map(), CYBER_MODELS: new Set(['x']), applyStatusSnapshot() {}, renderAgents() {},
   };
-  vm.runInNewContext('let qsList = [], qsSel = 0; const QS_MAC = true; let simpleLookOff = null, simpleThemeSaving = false; let rsnFullFor = null, rsnFullReturn = null, toolsFullFor = null, toolsFullReturn = null;\n'
+  vm.runInNewContext('let qsList = [], qsSel = 0, qsLastQ = null; const QS_MAC = true; let simpleLookOff = null, simpleThemeSaving = false; let rsnFullFor = null, rsnFullReturn = null, toolsFullFor = null, toolsFullReturn = null;\n'
     + ['qsRecentStore', 'qsRecent', 'qsNoteOpened', 'qsRecentKeys', 'qsForgetRecents', 'qsScore', 'qsRank', 'qsUnread', 'qsBlocked', 'closeQuickSwitcher',
       'openQuickSwitcher', 'renderQuickSwitcher', 'qsPaintSel', 'qsKey', 'qsOpen', 'qsShortcut',
       'simpleCloseSettings', 'openSimpleSettings', 'openReasoningFull', 'paintReasoningFull', 'closeReasoningFull', 'openToolsFull', 'closeToolsFull', 'loadAgents'].map(fn).join('')
@@ -364,9 +367,10 @@ test('it never opens over another view: Simple Settings, expanded Reasoning, exp
     await tick();
     const e = p.cmdK();
     assert.strictEqual(p.c.api.isOpen(), false, `nothing over ${label}`);
-    assert.ok(e.defaultPrevented, 'the key is still swallowed');
-    p.c.api.open();   // the Mac app's menu item goes through openQuickSwitcher() too
-    assert.strictEqual(p.c.api.isOpen(), false, `menu item over ${label}`);
+    assert.strictEqual(e.defaultPrevented, false, 'the key is not consumed when the switcher will not open: it stays the page\'s and the browser\'s');
+    assert.strictEqual(e.stopped, false, 'and it still travels on');
+    p.c.api.open();   // openQuickSwitcher() itself refuses too
+    assert.strictEqual(p.c.api.isOpen(), false, `openQuickSwitcher() over ${label}`);
     close(p);
     await tick();
     p.cmdK();
@@ -481,22 +485,31 @@ test('accessibility: a named combobox that is expanded, an active option, and a 
 
 test('the shortcut: ⌘K on a Mac and Ctrl+K elsewhere; other combinations are left alone', () => {
   const run = (mac, ev) => {
-    let opened = 0, prevented = false;
-    const c = { QS_MAC: mac, openQuickSwitcher: () => { opened++; } };
+    let opened = 0, prevented = false, stopped = false;
+    const c = { QS_MAC: mac, openQuickSwitcher: () => { opened++; }, qsIsOpen: () => !!ev.isOpen, qsBlocked: () => !!ev.blocked };
     vm.runInNewContext(fn('qsShortcut') + '\nthis.go = qsShortcut;', c);
-    c.go({ key: 'k', metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, repeat: false, isComposing: false, ...ev, preventDefault: () => { prevented = true; }, stopPropagation: () => {} });
-    return { opened, prevented };
+    c.go({ key: 'k', metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, repeat: false, isComposing: false, ...ev, preventDefault: () => { prevented = true; }, stopPropagation: () => { stopped = true; } });
+    return { opened, prevented, stopped };
   };
-  assert.deepStrictEqual(run(true, { metaKey: true }), { opened: 1, prevented: true });
-  assert.deepStrictEqual(run(true, { metaKey: true, key: 'K' }), { opened: 1, prevented: true }, 'Caps Lock on');
+  assert.deepStrictEqual(run(true, { metaKey: true }), { opened: 1, prevented: true, stopped: true });
+  assert.deepStrictEqual(run(true, { metaKey: true, key: 'K' }), { opened: 1, prevented: true, stopped: true }, 'Caps Lock on');
   assert.strictEqual(run(true, { ctrlKey: true }).opened, 0, 'Ctrl+K on a Mac deletes to the end of the line: left alone');
   assert.strictEqual(run(true, { metaKey: true, shiftKey: true }).opened, 0);
   assert.strictEqual(run(true, { metaKey: true, altKey: true }).opened, 0);
   assert.strictEqual(run(true, { metaKey: true, isComposing: true }).opened, 0);
   assert.strictEqual(run(true, { metaKey: true, key: 'j' }).opened, 0);
-  assert.deepStrictEqual(run(false, { ctrlKey: true }), { opened: 1, prevented: true });
+  assert.deepStrictEqual(run(false, { ctrlKey: true }), { opened: 1, prevented: true, stopped: true });
   assert.strictEqual(run(false, { metaKey: true }).opened, 0);
   assert.strictEqual(run(false, {}).opened, 0, 'a plain k is typing');
+  // a non-Latin layout: key is another letter, code is still KeyK; the modifier rules are the same
+  assert.deepStrictEqual(run(false, { ctrlKey: true, key: 'л', code: 'KeyK' }), { opened: 1, prevented: true, stopped: true });
+  assert.deepStrictEqual(run(true, { metaKey: true, key: 'л', code: 'KeyK' }), { opened: 1, prevented: true, stopped: true });
+  assert.strictEqual(run(true, { ctrlKey: true, key: 'л', code: 'KeyK' }).opened, 0);
+  assert.strictEqual(run(false, { ctrlKey: true, shiftKey: true, key: 'л', code: 'KeyK' }).opened, 0);
+  assert.strictEqual(run(false, { ctrlKey: true, key: 'о', code: 'KeyJ' }).opened, 0);
+  // blocked and closed: not consumed, nothing opened; blocked but open (its own toggle) and not blocked: consumed
+  assert.deepStrictEqual(run(false, { ctrlKey: true, blocked: true }), { opened: 0, prevented: false, stopped: false });
+  assert.deepStrictEqual(run(false, { ctrlKey: true, blocked: true, isOpen: true }), { opened: 1, prevented: true, stopped: true });
 });
 
 test('keys in the search box: ↓/↑ and Ctrl+N/P wrap, an input method composing is left alone', () => {
@@ -547,7 +560,7 @@ test('a voice call: the full-screen display (Orb) blocks ⌘K and keeps the focu
   assert.strictEqual(p.c.api.isOpen(), false, 'nothing opens over the call');
   assert.strictEqual(p.doc.activeElement, before, 'the focus stays where the call put it');
   p.c.api.open();
-  assert.strictEqual(p.c.api.isOpen(), false, 'nor from the Mac app\'s menu item');
+  assert.strictEqual(p.c.api.isOpen(), false, 'nor when openQuickSwitcher() is called directly');
   full.release();
 
   p = page();
@@ -582,4 +595,73 @@ test('anything shown with aria-modal="true" blocks; the same thing hidden, under
   assert.ok(p.doc.querySelector('.rsn-full-box[aria-modal="true"]'), 'the closed view keeps its aria-modal box');
   p.cmdK();
   assert.ok(p.c.api.isOpen(), 'a closed expanded view never blocks the switcher');
+});
+
+// ── Review fixes: the selection follows the agent, the state is in words with the sidebar's marker ──
+test('the selection follows the agent by name across a repaint; a new query starts at the first row; a vanished agent falls back to the first row', () => {
+  const p = page({ agents: [A('beta', 'Beta'), A('delta', 'Delta'), A('gamma', 'Gamma')] });
+  p.cmdK();
+  assert.deepStrictEqual(p.rows(), ['beta', 'delta', 'gamma']);
+  p.key(p.q(), 'ArrowDown'); p.key(p.q(), 'ArrowDown');   // gamma
+  p.c.AGENTS.push(A('alpha', 'Alpha'));   // sorts above everything: the roster reloaded
+  p.c.api.roster();
+  assert.deepStrictEqual(p.rows(), ['alpha', 'beta', 'delta', 'gamma']);
+  const sel = p.doc.querySelector('.qs-row.sel');
+  assert.strictEqual(sel.dataset.agent, 'gamma', 'still gamma');
+  assert.strictEqual(p.q().getAttribute('aria-activedescendant'), 'qs-opt-3');
+  p.key(p.q(), 'Enter');
+  assert.deepStrictEqual(p.opened, ['gamma']);
+  // a new query: first row
+  const q = page({ agents: [A('beta', 'Beta'), A('delta', 'Delta'), A('gamma', 'Gamma')] });
+  q.cmdK(); q.key(q.q(), 'ArrowDown');
+  q.type('a');
+  assert.strictEqual(q.doc.querySelector('.qs-row.sel').dataset.agent, q.rows()[0]);
+  // the selected agent is gone: first row
+  const g = page({ agents: [A('beta', 'Beta'), A('delta', 'Delta'), A('gamma', 'Gamma')] });
+  g.cmdK(); g.key(g.q(), 'ArrowDown');   // delta
+  g.c.AGENTS.splice(1, 1);
+  g.c.api.roster();
+  assert.strictEqual(g.doc.querySelector('.qs-row.sel').dataset.agent, 'beta');
+  // closed and opened again: starts at the first row, not at the earlier agent
+  const r = page({ agents: [A('beta', 'Beta'), A('delta', 'Delta')] });
+  r.cmdK(); r.key(r.q(), 'ArrowDown'); r.cmdK(); r.cmdK();
+  assert.strictEqual(r.doc.querySelector('.qs-row.sel').dataset.agent, 'beta');
+});
+
+test('each row says its state in words (the sidebar\'s), with the sidebar\'s marker; waiting for an answer is not "Working"; the words are part of the option', () => {
+  const p = page({ agents: [A('aide', 'Aide'), A('scout', 'Scout'), A('forge', 'Forge'), A('hazel', 'Hazel'), A('news', 'News'), A('calm', 'Calm')] });
+  p.c.live = { scout: { busy: true, activity: 'replying to you' }, forge: { question: true, busy: true }, hazel: { busy: false } };
+  p.c.bg = { hazel: 2 };
+  const tabEl = p.doc.createElement('div'); tabEl.id = 'tab-c9'; tabEl.className = 'chat-tab unread'; p.doc.body.appendChild(tabEl);
+  p.c.chats.c9 = { agent: 'news' };
+  p.cmdK();
+  const row = (n) => p.doc.querySelector(`.qs-row[data-agent="${n}"]`);
+  const state = (n) => { const s = row(n).children.find(x => x.cls.has('qs-state')); return s ? s.textContent : null; };
+  const dot = (n) => row(n).children.find(x => x.cls.has('qs-dot'));
+  assert.strictEqual(state('news'), 'New replies'); assert.ok(dot('news').cls.has('unread'));
+  assert.strictEqual(state('forge'), 'Waiting for your answer', 'the question state, the sidebar\'s words');
+  assert.ok(dot('forge').cls.has('live-question') && !dot('forge').cls.has('busy'), 'the sidebar\'s marker, not the amber one');
+  assert.strictEqual(dot('forge').textContent, '?');
+  assert.strictEqual(state('scout'), 'Replying to you'); assert.ok(dot('scout').cls.has('busy'));
+  assert.strictEqual(state('hazel'), 'Free · 2 in background'); assert.ok(dot('hazel').cls.has('bg-work'));
+  assert.strictEqual(state('calm'), null); assert.strictEqual(dot('calm'), undefined);
+  for (const n of ['news', 'forge', 'scout', 'hazel']) {
+    assert.ok(row(n).textContent.includes(state(n)), 'the words are in the option\'s text, so in its accessible name');
+    assert.strictEqual(dot(n).getAttribute('aria-hidden'), 'true');
+    assert.strictEqual(dot(n).getAttribute('title'), null, 'no hover-only meaning');
+  }
+  // the icon is decoration, in a fixed box
+  assert.strictEqual(row('aide').children[0].getAttribute('aria-hidden'), 'true');
+  assert.match(index, /\.qs-ic \{[^}]*width: 22px; height: 22px;[^}]*flex: none;/);
+});
+
+test('the grey short name shows only when the typed text matched it', () => {
+  const p = page({ agents: [A('rsch', 'Researcher'), A('aide', 'Aide')] });
+  p.cmdK();
+  const ids = () => p.doc.querySelectorAll('.qs-id').map(x => x.textContent);
+  assert.deepStrictEqual(ids(), [], 'nothing typed');
+  p.type('rs');
+  assert.deepStrictEqual(ids(), ['rsch']);
+  p.type('resea');
+  assert.deepStrictEqual(ids(), [], 'matched the display name only');
 });

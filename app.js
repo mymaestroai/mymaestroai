@@ -24930,7 +24930,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     // opens the chat with the message box ready, Esc, a click outside or ⌘K again closes. It is a layer of the dialog
     // layer (createDialogGuard): registered before the search box takes the focus, so on the way out the focus and the
     // caret go back to the field that had them (a message draft). It never opens over another dialog or over the
-    // "Discard changes?" question. The Mac app's Go ▸ Jump to Agent… menu item calls openQuickSwitcher() too.
+    // "Discard changes?" question.
+    // (No menu item calls openQuickSwitcher() yet: the keyboard shortcut is the one way in.)
     //
     // Recents live in this tab only (sessionStorage 'hub-qs-recent:<user id>': agent names, most recently opened first, at
     // most 30), never in storage other tabs or accounts share: a tab left open by one person cannot leave a list another
@@ -24943,7 +24944,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const me = window.hubMe, id = me && me.user && me.user.id;
       return { key: id ? `hub-qs-recent:${id}` : null, prefix: 'hub-qs-recent', max: 30 };
     }
-    let qsList = [], qsSel = 0;
+    let qsList = [], qsSel = 0, qsLastQ = null;   // qsLastQ: the search text of the last paint (null: none yet), so a repaint can tell a new query from a refresh
     function qsRecentBox() { try { return window.sessionStorage || null; } catch { return null; } }
     function qsRecent() {
       const { key, max } = qsRecentStore();
@@ -25067,7 +25068,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       list.addEventListener('mousedown', (e) => e.preventDefault());   // a click keeps the focus in the search box
       list.addEventListener('click', (e) => { const r = e.target.closest && e.target.closest('.qs-row'); if (r) qsOpen(r.dataset.agent); });
       list.addEventListener('mousemove', (e) => { const r = e.target.closest && e.target.closest('.qs-row'); if (r && Number(r.dataset.i) !== qsSel) { qsSel = Number(r.dataset.i); qsPaintSel(false); } });
-      qsSel = 0;
+      qsSel = 0; qsList = []; qsLastQ = null;   // a fresh start: nothing to carry over from an earlier opening
       renderQuickSwitcher();
       q.focus();
     }
@@ -25078,8 +25079,15 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (!q || !list) return;
       const roster = (AGENTS || []).filter(a => a && a.name);
       const unread = qsUnread();
+      // The selected agent is remembered by NAME across a repaint (the roster reloads when an agent is created, renamed or
+      // updated): it is looked up in the new list, so a row inserted above it does not move the selection onto another agent.
+      // A changed query, or an agent that is gone, starts at the first row.
+      const keepName = qsList[qsSel] && qsList[qsSel].name;
       qsList = qsRank(roster, q.value, { recent: qsRecent(), unread });
-      if (qsSel >= qsList.length) qsSel = Math.max(0, qsList.length - 1);
+      const at = q.value === qsLastQ && keepName ? qsList.findIndex(a => a.name === keepName) : -1;
+      qsSel = at >= 0 ? at : 0;
+      qsLastQ = q.value;
+      const typed = q.value.trim().toLowerCase();
       list.textContent = '';
       qsList.forEach((a, i) => {
         const row = document.createElement('div');
@@ -25088,12 +25096,28 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         row.dataset.i = String(i); row.dataset.agent = a.name;
         const shown = a.display || capName(a.name);
         const span = (cls, text) => { const s = document.createElement('span'); s.className = cls; if (text) s.textContent = text; return s; };
-        row.appendChild(span('qs-ic', a.icon || '🤖'));
+        const ic = span('qs-ic', a.icon || '🤖'); ic.setAttribute('aria-hidden', 'true');
+        row.appendChild(ic);
         row.appendChild(span('qs-name', shown));
-        if (String(shown).toLowerCase() !== String(a.name).toLowerCase()) row.appendChild(span('qs-id', a.name));
-        const busyBtn = document.getElementById('agent-btn-' + a.name);
-        if (unread.has(a.name)) { const d = span('qs-dot unread'); d.title = 'New replies'; row.appendChild(d); }
-        else if (busyBtn && busyBtn.classList.contains('is-busy')) { const d = span('qs-dot busy'); d.title = 'Working'; row.appendChild(d); }
+        // the internal name next to a different display name: only when what was typed matched it
+        if (typed && String(shown).toLowerCase() !== String(a.name).toLowerCase() && qsScore({ name: a.name }, typed) !== Infinity) row.appendChild(span('qs-id', a.name));
+        // The state, in words on the row (part of the option's name) and with the sidebar's own marker, so colour never
+        // carries it alone. Words and states come from the sidebar's helpers: agentLiveState + AgentDot (lib/ui-agent-dot.js).
+        let mark = null, words = '';
+        if (unread.has(a.name)) { mark = 'unread'; words = 'New replies'; }
+        else {
+          const live = agentLiveState(a.name), bg = bgCountOf(a.name);
+          const ds = AgentDot.dotState({ busy: live.busy, question: live.question, background: bg });
+          if (ds === 'question') { mark = 'live-question'; words = AgentDot.dotLabel(ds); }
+          else if (ds === 'busy') { mark = 'busy'; words = String(live.activity || AgentDot.dotLabel(ds)); words = words.charAt(0).toUpperCase() + words.slice(1); }
+          else if (ds === 'background') { mark = 'bg-work'; words = AgentDot.bgLine(bg); }
+        }
+        if (mark) {
+          row.appendChild(span('qs-state', words));
+          const d = span('qs-dot ' + mark, mark === 'live-question' ? '?' : '');
+          d.setAttribute('aria-hidden', 'true');
+          row.appendChild(d);
+        }
         list.appendChild(row);
       });
       const state = window.__qsRoster || 'loading';   // set by loadAgents: 'ready' or 'failed'
@@ -25140,9 +25164,10 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     // page, also while typing a message. Capture phase, so a text box's own handler never sees it. A held key repeats
     // nothing: one open, and a second deliberate press closes.
     function qsShortcut(e) {
-      if (e.key !== 'k' && e.key !== 'K') return;
+      if (e.key !== 'k' && e.key !== 'K' && e.code !== 'KeyK') return;   // e.code: the same physical key on a non-Latin layout
       if (e.altKey || e.shiftKey || (QS_MAC ? !e.metaKey || e.ctrlKey : !e.ctrlKey || e.metaKey)) return;
       if (e.isComposing) return;
+      if (!qsIsOpen() && qsBlocked()) return;   // it won't open here: the key stays the page's (and the browser's) own
       e.preventDefault();
       e.stopPropagation();
       if (e.repeat) return;

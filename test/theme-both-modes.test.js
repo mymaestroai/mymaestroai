@@ -103,7 +103,8 @@ test('another account or sign-out: the cached theme never carries over', () => {
   assert.doesNotThrow(() => L.forgetTheme({ removeItem() { throw new Error('blocked'); } }));
   assert.doesNotThrow(() => L.forgetTheme(null));
   const app = read('app.js'), mob = read('mobile.js');
-  assert.match(app, /async function signOut\(\) \{\n\s+try \{ if \(window\.HubLooks\) window\.HubLooks\.forgetTheme/);
+  // signOut's clean-ups come first, before the logout request; other ones (the quick switcher's recents) may sit before it.
+  assert.match(app, /async function signOut\(\) \{\n(?:\s+try \{[^\n]*\n)*?\s+try \{ if \(window\.HubLooks\) window\.HubLooks\.forgetTheme/);
   assert.match(mob, /async function signOut\(\) \{\n\s+try \{ if \(window\.HubLooks\) window\.HubLooks\.forgetTheme/);
   assert.match(app, /r\.status === 401\) \{\n\s+try \{ if \(window\.HubLooks\) window\.HubLooks\.forgetTheme/);
   assert.match(mob, /redirectingToLogin = true;\n\s+try \{ if \(window\.HubLooks\) window\.HubLooks\.forgetTheme/);
