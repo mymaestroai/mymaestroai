@@ -337,7 +337,8 @@ test('L3: a refused paste in one process never deletes a row another process cla
   const A = fresh();
   A._test.setOpener(async () => false);
   const a = await A.startSignIn({ listener: false, open: false });
-  a.promise.catch(() => {});
+  let aSettled = null;
+  a.promise.then(() => { aSettled = 'resolved'; }, (e) => { aSettled = e.message; });
   const B = fresh();
   let release;
   B._test.setPostForm(() => new Promise((res) => { release = () => res({ status: 200, json: { access_token: 'AT-L3', refresh_token: 'RT-L3', expires_in: 3600 } }); }));
@@ -345,13 +346,69 @@ test('L3: a refused paste in one process never deletes a row another process cla
   await tick(60);
   assert.equal(readFile(A).used, true, 'B claimed it');
   const refused = await A.finishWithPastedAddress(`http://localhost:19877/callback?state=${stateOf(a.url)}&error=access_denied`);
+  await tick();
   assert.equal(refused.ok, false);
-  assert.equal(refused.reason, 'refused');
+  assert.equal(refused.message, CLAIMED_MSG, 'the submitter is told another process has it');
+  assert.equal(aSettled, CLAIMED_MSG, 'the waiter is told the same');
+  assert.notEqual(A.lastResult() && A.lastResult().message, A.WORDS.refused, 'no refusal is announced');
   assert.ok(readFile(A) && readFile(A).used === true, 'the claimed row is still there');
   release();
   const out = await pasting;
   assert.equal(out.ok, true, 'B still saves');
   assert.equal(JSON.parse(tokenText(B)).refresh_token, 'RT-L3');
+});
+
+const CLAIMED_MSG = 'Another process is handling this Gmail sign-in. Check its result there.';
+/** Drive A's browser callback handler without a socket; resolves with the page text. */
+function callbackPage(A, query) {
+  return new Promise((resolve) => {
+    let body = '';
+    const res = { writeHead() {}, end(s) { body = String(s || ''); resolve(body); } };
+    A._test.callback({ url: `/callback?${query}` }, res);
+  });
+}
+
+test('L3: a refused browser callback in one process never deletes a row another process claimed, and says so on the page', async () => {
+  const A = fresh();
+  A._test.setOpener(async () => false);
+  const a = await A.startSignIn({ listener: false, open: false });
+  let aSettled = null;
+  a.promise.then(() => { aSettled = 'resolved'; }, (e) => { aSettled = e.message; });
+  const B = fresh();
+  let release;
+  B._test.setPostForm(() => new Promise((res) => { release = () => res({ status: 200, json: { access_token: 'AT-L3c', refresh_token: 'RT-L3c', expires_in: 3600 } }); }));
+  const pasting = B.finishWithPastedAddress(cb(stateOf(a.url), 'K'));
+  await tick(60);
+  assert.equal(readFile(A).used, true, 'B claimed it');
+  const page = await callbackPage(A, `state=${stateOf(a.url)}&error=access_denied`);
+  await tick();
+  assert.ok(page.includes(CLAIMED_MSG), 'the page says another process has it');
+  assert.equal(aSettled, CLAIMED_MSG, 'the waiter is told the same');
+  assert.notEqual(A.lastResult() && A.lastResult().message, A.WORDS.refused, 'no refusal is announced');
+  assert.ok(readFile(A) && readFile(A).used === true, 'the claimed row is still there');
+  release();
+  const out = await pasting;
+  assert.equal(out.ok, true, 'B still saves');
+  assert.equal(JSON.parse(tokenText(B)).refresh_token, 'RT-L3c');
+});
+
+test('L3: a refused paste or callback of an unused row removes it and reports the refusal to everyone', async () => {
+  for (const via of ['paste', 'callback']) {
+    const A = fresh();
+    A._test.setOpener(async () => false);
+    const a = await A.startSignIn({ listener: false, open: false });
+    let aSettled = null;
+    a.promise.then(() => { aSettled = 'resolved'; }, (e) => { aSettled = e.message; });
+    const q = `state=${stateOf(a.url)}&error=access_denied`;
+    let text;
+    if (via === 'paste') text = (await A.finishWithPastedAddress(`http://localhost:19877/callback?${q}`)).message;
+    else text = await callbackPage(A, q);
+    await tick();
+    assert.ok(text.includes(A.WORDS.refused), `${via}: refusal wording`);
+    assert.equal(aSettled, via === 'paste' ? 'auth refused' : 'refused', `${via}: waiter rejected`);
+    assert.equal(A.lastResult().message, A.WORDS.refused);
+    assert.equal(readFile(A), null, `${via}: row removed`);
+  }
 });
 
 test('L2: a newer sign-in replaced the row before the deadline: the waiting caller is told, the newer row is left alone', async () => {
