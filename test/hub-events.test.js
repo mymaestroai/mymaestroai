@@ -76,6 +76,8 @@ test('eventFilter: applied to every delivered event, live and from the replay bu
   const r3 = fakeClient();
   r3.req.url = '/api/events?since=0.5';
   hub.subscribe(r3.req, r3.res, { isAdmin: false, filter: () => true, eventFilter });
+  // the replay that does reach the dropped event (seq 1): only eventFilter keeps it out (review r4)
+  assert.deepEqual(parseFrames(r3.out).map(f => f.id), ['cur-run', 3], 'replay drops the event eventFilter refuses');
   // live
   const c = fakeClient();
   hub.subscribe(c.req, c.res, { isAdmin: false, filter: () => true, eventFilter });
