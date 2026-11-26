@@ -233,7 +233,7 @@ test('fillDisplaySelect lists a downloadable character after the installed ones,
   assert.deepStrictEqual(sel.children.map(o => [o.value, o.textContent]), [['follow', 'Follow agent default'], ['none', 'None'], ['orb', 'Orb'], ['pack:owl', 'Owl'], ['pack:fox', 'Fox · downloads 37 MB']]);
   assert.strictEqual(sel.value, 'pack:fox');
   CD.fillDisplaySelect(dom.doc, sel, { choice: 'pack:ghost', packs: [], available: [{ id: 'fox', name: 'Fox', size: 5 * MB }] });
-  assert.ok(sel.children.some(o => o.textContent === 'ghost (not installed)'), 'an unknown saved choice is still shown as not installed');
+  assert.ok(sel.children.some(o => o.textContent === 'Ghost · not on this Maestro'), 'an unknown saved choice (ready list) is still shown, as not on this Maestro');
   CD.fillDisplaySelect(dom.doc, sel, { choice: 'orb', packs: [] });
   assert.strictEqual(sel.children.length, 3, 'no available list (old hub): as before');
 });
@@ -307,7 +307,7 @@ test('call view: a failed download shows the message and a Retry button; the cal
   assert.strictEqual(w.orbs.length, 1, 'the Orb still shows');
   const line = w.dom.find('cd-download')[0];
   assert.strictEqual(line.all().find(n => n.className === 'cd-download-text').textContent, 'Could not download the owl: no space left');
-  const retry = w.dom.find('cd-download-retry')[0]; assert.ok(retry && !retry.hidden);
+  const retry = w.dom.find('cd-download-retry').filter(b => b.textContent === 'Retry')[0]; assert.ok(retry && !retry.hidden);   // (the list's own "Try again" button shares the class)
   hub.script = [dl('downloading', 4, 40)];
   retry.click(); await tick();
   assert.strictEqual(hub.calls.filter(c => c.method === 'POST').length, 2, 'Retry POSTs again');
@@ -330,7 +330,7 @@ test('desktop voice panel: fetchFaces, available into the select and resolveDisp
   assert.ok(i > 0 && j > i);
   const body = src.slice(i, j);
   assert.ok(/CallDisplay\.fetchFaces\(/.test(body) && !/fetchPacks/.test(body));
-  assert.ok(/fillDisplaySelect\(document, sel, \{ choice: prefs\.choice, packs, available \}\)/.test(body));
+  assert.ok(/const args = \{ choice: prefs\.choice, packs, available, state, names \};[\s\S]*fillDisplaySelect\(document, sel, args\)/.test(body), 'the list state and the remembered names go to the picker');
   assert.ok(/resolveDisplay\(\{[^}]*available[^}]*\}\)/.test(body));
   assert.ok(/resolved\.downloadable === true/.test(body) && /voiceDisp\.downloads/.test(body) && /sharedFaceDownload\(/.test(body));
   assert.ok(/paintDownloadNote\(document, note,/.test(body), 'the note area shows the live text, a progress bar and Retry');
@@ -343,7 +343,7 @@ test('phone voice sheet: the same, and the call screen gets it through createCal
   assert.ok(i > 0 && j > i);
   const body = src.slice(i, j);
   assert.ok(/CallDisplay\.fetchFaces\(/.test(body) && !/fetchPacks/.test(body));
-  assert.ok(/fillDisplaySelect\(document, sel, \{ choice: prefs\.choice, packs, available \}\)/.test(body));
+  assert.ok(/const args = \{ choice: prefs\.choice, packs, available, state, names \};[\s\S]*fillDisplaySelect\(document, sel, args\)/.test(body), 'the list state and the remembered names go to the picker');
   assert.ok(/resolved\.downloadable === true/.test(body) && /voiceDisp\.downloads/.test(body) && /sharedFaceDownload\(/.test(body) && /paintDownloadNote\(document, note,/.test(body));
   assert.ok(/CallDisplay\.createCallDisplay\(\{[^]*?fetch: \(\.\.\.a\) => fetch\(\.\.\.a\)/.test(src), 'the call screen display has a fetch for the download');
   assert.ok(/\.cd-download-retry/.test(read('lib/ui-call-display.css')) && /\.cd-download \{/.test(read('lib/ui-call-display.css')));

@@ -115,7 +115,7 @@ test('a device choice wins over the agent default, an explicit None included; un
 test('a character that is missing, failed or still being looked up falls back to None, never to the Orb', () => {
   const miss = CD.resolveDisplay({ choice: 'pack:ghost', agentDefault: 'orb', packs: PACKS });
   assert.deepStrictEqual([miss.kind, miss.missing, miss.wanted], ['none', true, 'ghost']);
-  assert.ok(/not installed/.test(CD.displayNote(miss)));
+  assert.ok(/isn't on this Maestro/.test(CD.displayNote(miss)) && !/not installed/.test(CD.displayNote(miss)));
   const agentMiss = CD.resolveDisplay({ choice: 'follow', agentDefault: 'pack:ghost', packs: [] });
   assert.deepStrictEqual([agentMiss.kind, agentMiss.missing], ['none', true]);
   const pend = CD.resolveDisplay({ choice: 'pack:owl', packs: null });
@@ -487,7 +487,7 @@ test('a live choice change updates the view without ending the call; a missing c
   assert.strictEqual(w.display.setChoice('none'), true); assert.strictEqual(w.dom.overlay(), null); assert.ok(w.orbs[0].destroyed);
   assert.strictEqual(w.display.setChoice('pack:ghost'), true); await flushP();
   assert.strictEqual(w.dom.overlay(), null); assert.strictEqual(w.display.info().kind, 'none');
-  assert.ok(/not installed/.test(w.display.info().note));
+  assert.ok(/isn't on this Maestro/.test(w.display.info().note));
   assert.strictEqual(CD.loadDisplayPrefs(w.storage).choice, 'pack:ghost', 'the preference stays saved');
   assert.strictEqual(w.display.setChoice('bogus'), false);
   assert.strictEqual(w.display.setChoice('follow'), true); assert.strictEqual(w.display.info().kind, 'none', 'follow with no agent default: None');
@@ -500,7 +500,7 @@ test('a pack whose manifest is CONFIRMED gone (404/410) falls back to None (not 
     assert.strictEqual(w.display.info().offReason, 'removed', 'a confirmed removal is machine-readable');
     assert.ok(/was removed/.test(w.display.info().note), 'the note says it was removed (offReason), not "could not load"'); assert.strictEqual(CD.loadDisplayPrefs(w.storage).choice, 'pack:owl'); assert.strictEqual(w.players[0].destroyed, true);
     assert.ok(CD.displayNote(CD.resolveDisplay({ choice: 'pack:owl', packs: PACKS, unusable: new Set(['owl']) })).includes('could not load'), 'a failure without the verdict still could not load');
-    assert.ok(CD.displayNote(CD.resolveDisplay({ choice: 'pack:ghost', packs: PACKS })).includes('not installed'), 'a pack the list lacks is not installed');
+    assert.ok(CD.displayNote(CD.resolveDisplay({ choice: 'pack:ghost', packs: PACKS })).includes("isn't on this Maestro"), 'a pack the ready list lacks is not on this Maestro');
   }
   for (const status of [true, 500, 503, 429, { status: 404 }, { status: 410 }]) {   // a plain failure, a 5xx, a 429, or a 404/410 of an UNRELATED asset (no packGone tag): no verdict, the view is kept (not unusable, not None)
     const w = world({ prefs: { choice: 'pack:owl' }, pack: { rejectReady: status } }); w.display.start(); await flushP();
@@ -965,7 +965,7 @@ test('the unobtrusive note appears in the view and the selector lists Follow / N
   const dom = fakeDom(); const sel = dom.doc.createElement('select'); sel.appendChild(dom.doc.createElement('option'));
   CD.fillDisplaySelect(dom.doc, sel, { choice: 'pack:ghost', packs: PACKS });
   assert.deepStrictEqual(sel.children.map(o => o.value), ['follow', 'none', 'orb', 'pack:owl', 'pack:plain', 'pack:ghost']);
-  assert.strictEqual(sel.children[3].textContent, 'Owl <b>x</b>', 'names are text'); assert.strictEqual(sel.children[5].textContent, 'ghost (not installed)'); assert.strictEqual(sel.value, 'pack:ghost');
+  assert.strictEqual(sel.children[3].textContent, 'Owl <b>x</b>', 'names are text'); assert.strictEqual(sel.children[5].textContent, 'Ghost · not on this Maestro'); assert.strictEqual(sel.value, 'pack:ghost');
   CD.fillDisplaySelect(dom.doc, sel, { choice: 'orb', packs: [] });
   assert.deepStrictEqual(sel.children.map(o => o.value), ['follow', 'none', 'orb']); assert.strictEqual(sel.value, 'orb');
 });
@@ -973,7 +973,9 @@ test('the unobtrusive note appears in the view and the selector lists Follow / N
 test('fetchPacks: only the packs route, same-origin credentials, entries validated, a failure rejects', async () => {
   const calls = [];
   const list = await CD.fetchPacks(async (u, o) => { calls.push([u, o]); return { ok: true, json: async () => ({ packs: [{ id: 'owl', name: 'Owl', background: '#fff', hasReactions: true }, { id: '../x', name: 'bad' }, { id: 'ok', name: 5, background: 'url(javascript:1)' }, null] }) }; });
-  assert.deepStrictEqual(calls, [['/api/faces', { credentials: 'same-origin' }]]);
+  assert.strictEqual(calls.length, 1); assert.strictEqual(calls[0][0], '/api/faces'); assert.strictEqual(calls[0][1].credentials, 'same-origin');
+  assert.ok(!calls[0][1].signal || typeof calls[0][1].signal.aborted === 'boolean', 'the deadline\'s abort signal (when AbortController exists) is the only other option');
+  assert.deepStrictEqual(Object.keys(calls[0][1]).filter(k => k !== 'signal'), ['credentials']);
   assert.deepStrictEqual(list, [{ id: 'owl', name: 'Owl', background: '#fff', hasReactions: true }, { id: 'ok', name: 'ok', background: '', hasReactions: false }]);
   await assert.rejects(CD.fetchPacks(async () => ({ ok: false, status: 401 })));
   await assert.rejects(CD.fetchPacks(null));
@@ -1291,18 +1293,20 @@ test('packs list failure: choosing again retries, one automatic retry after a sh
   await w.clk.advance(200); await flushP();
   assert.strictEqual(calls, 2); assert.strictEqual(w.display.info().packsState, 'ready'); assert.strictEqual(w.players.length, 1);
   w.display.release();
-  // failing again: no second automatic retry
+  // failing again: the retries go on with back-off (3, 6, 12, 24 s, then 30 s) while the call lasts, and stop at release
   calls = 0; okFrom = 99;
   w = world({ prefs: { choice: 'pack:owl' }, fetch: f }); w.display.start(); await flushP();
-  await w.clk.advance(3100); await flushP(); await w.clk.advance(60000); await flushP();
-  assert.strictEqual(calls, 2, 'one automatic retry, no more'); w.display.release();
+  await w.clk.advance(3100); await flushP(); assert.strictEqual(calls, 2); await w.clk.advance(6000); await flushP(); assert.strictEqual(calls, 3, 'the second wait is 6 s');
+  await w.clk.advance(60000); await flushP();
+  assert.ok(calls >= 5 && calls <= 7, 'retries keep coming with back-off, not a flood: ' + calls); w.display.release(); assert.strictEqual(w.clk.timers.length, 0);
   // release before the retry: no timer, no request
   calls = 0; w = world({ prefs: { choice: 'pack:owl' }, fetch: f }); w.display.start(); await flushP();
   w.display.release(); assert.strictEqual(w.clk.timers.length, 0); await w.clk.advance(10000); assert.strictEqual(calls, 1);
   // a newer request makes the waiting retry stale
   calls = 0; okFrom = 99; w = world({ prefs: { choice: 'pack:owl' }, fetch: f }); w.display.start(); await flushP();
   w.display.setChoice('pack:owl'); await flushP(); const after = calls;
-  await w.clk.advance(3100); await flushP(); assert.strictEqual(calls, after, 'the old timer does nothing');
+  assert.strictEqual(w.clk.timers.length, 1, 'the newer request replaced the waiting retry (no pile-up)');
+  await w.clk.advance(3100); await flushP(); assert.strictEqual(calls, after + 1, 'only the newer request\'s timer fires (the old one did nothing)');
   w.display.release();
 });
 
@@ -1754,7 +1758,8 @@ test('docked CSS: the page\'s bar hidden, Back to chat and Captions hidden, the 
   assert.match(css, /\[data-ucd-replaced\] \{ display: none !important; \}/);
   assert.match(css, /\.ucd-overlay\.ucd-docked \{ position: relative; inset: auto; z-index: auto;/);
   assert.match(css, /\.ucd-docked \.ucd-bar \.ucd-back, \.ucd-docked \.ucd-bar \.ucd-caps \{ display: none !important; \}/);
-  assert.match(css, /\.ucd-docked \.ucd-host, \.ucd-docked \.ucd-note, \.ucd-docked \.ucd-caption/);
+  assert.match(css, /\.ucd-docked \.ucd-host, \.ucd-docked \.ucd-caption/);
+  assert.match(css, /\.ucd-docked \.ucd-notebox:not\(\.ucd-listfail\) \{ display: none !important; \}/, 'docked, the note is hidden unless the character list failed');
   assert.match(read('mobile.js'), /dock: \(\) => \$\('composer'\),/, 'the phone docks in place of its composer');
   assert.match(read('app.js'), /dock: \(\) => \{ const i = voiceById\(`input-\$\{chatId\}`\); return i \? i\.closest\('\.input-area'\) : null; \},/, 'the desktop in place of that chat\'s message box');
 });

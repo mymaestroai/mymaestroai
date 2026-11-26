@@ -11060,21 +11060,45 @@ function voiceCallSseReadFull(rec, turnId) {
   vc.readFull = g.state;
   if (g.action === 'set') vc.call.onReadFull();   // a late chunk of an earlier turn is ignored
 }
+// A picker skipped because it had focus keeps the latest result and gets ONE 'blur' listener that refills it then, only if it is still
+// connected and no newer paint happened since (isLatest()). A newer skipped result replaces the pending one; never two listeners on one select.
+const voiceDispPendingBlur = new WeakMap();
+function voiceDispRefillOnBlur(sel, args, isLatest) {
+  const have = voiceDispPendingBlur.get(sel);
+  if (have) { have.args = args; have.isLatest = isLatest; return; }
+  const ent = { args, isLatest };
+  voiceDispPendingBlur.set(sel, ent);
+  sel.addEventListener('blur', () => {
+    voiceDispPendingBlur.delete(sel);
+    if (sel.isConnected === false || !ent.isLatest()) return;
+    CallDisplay.fillDisplaySelect(document, sel, ent.args);
+  }, { once: true });
+}
 async function voiceDispPaintPanel() {
   const sels = [$('vp-display'), $('cp-display')].filter(Boolean);   // the voice sheet's select and the call panel's
   if (!sels.length || typeof CallDisplay === 'undefined') return;
   const paintBoxes = (p) => { const cap = $('vp-captions'); if (cap) cap.checked = !!p.captions; const intr = $('vp-interrupt'); if (intr) intr.checked = p.interrupt === true; };   // set at once, and again after the wait
   paintBoxes(CallDisplay.loadDisplayPrefs(localStorage));
   const my = voiceDisp.paintGen = (voiceDisp.paintGen || 0) + 1;
-  let packs = [], available = [], state = 'ready';
-  try { const got = await CallDisplay.fetchFaces((...a) => fetch(...a)); packs = got.packs; available = got.available; } catch { state = 'failed'; }
+  let packs = [], available = [], state = 'loading', failKind = null;
+  const fillAll = (prefs) => {
+    const names = CallDisplay.loadPackNames(localStorage);
+    for (const sel of sels) {
+      if (sel.isConnected === false) continue;
+      const args = { choice: prefs.choice, packs, available, state, names };
+      if (document.activeElement === sel) { voiceDispRefillOnBlur(sel, args, () => voiceDisp.paintGen === my); continue; }   // an open picker is not refilled now; on blur with the latest result
+      CallDisplay.fillDisplaySelect(document, sel, args);
+    }
+  };
+  fillAll(CallDisplay.loadDisplayPrefs(localStorage));   // paint once as "loading" so the panel never shows a stale picker while the list is awaited
+  try { const got = await CallDisplay.fetchFaces((...a) => fetch(...a)); packs = got.packs; available = got.available; state = 'ready'; CallDisplay.rememberPackNames(localStorage, got); } catch (e) { state = 'failed'; failKind = e && e.kind; }
   if (voiceDisp.paintGen !== my) return;   // a newer paint started meanwhile: an older answer never puts back an older choice
   const prefs = CallDisplay.loadDisplayPrefs(localStorage);   // read after the wait: a choice made meanwhile counts
   paintBoxes(prefs);
-  for (const sel of sels) if (sel.isConnected !== false && document.activeElement !== sel) CallDisplay.fillDisplaySelect(document, sel, { choice: prefs.choice, packs, available });
+  fillAll(prefs);
   const note = $('vp-display-note');
-  const resolved = CallDisplay.resolveDisplay({ choice: prefs.choice, agentDefault: voiceDispAgentDefault(current), packs, available, packsState: state });
-  if (note) note.textContent = CallDisplay.displayNote(resolved);
+  const resolved = CallDisplay.resolveDisplay({ choice: prefs.choice, agentDefault: voiceDispAgentDefault(current), packs, available, packsState: state, packsFailKind: failKind });
+  if (note) note.textContent = CallDisplay.displayNote(resolved, { retrying: false });   // nothing retries here: the panel says to reopen it
   // a character on the hub's list but not installed is downloaded now (one download per id for the page); its progress shows under the note
   if (resolved.downloadable === true && resolved.wanted) {
     const a = available.find((x) => x.id === resolved.wanted);

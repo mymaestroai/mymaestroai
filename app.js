@@ -19971,6 +19971,20 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     // The mood word of a turn: once per turn however it arrives (the chat stream's voice_mood chunk or the hub's turn_mood event).
     function voiceDispMood(seq, mood) { voiceDisplayHook('mood', 'seq:' + seq, mood); }
     // The voice panel's display selector, captions switch and the line about an unavailable character.
+    // A picker skipped because it had focus keeps the latest result and gets ONE 'blur' listener that refills it then, only if it is still
+    // connected and no newer paint happened since (isLatest()). A newer skipped result replaces the pending one; never two listeners on one select.
+    const voiceDispPendingBlur = new WeakMap();
+    function voiceDispRefillOnBlur(sel, args, isLatest) {
+      const have = voiceDispPendingBlur.get(sel);
+      if (have) { have.args = args; have.isLatest = isLatest; return; }
+      const ent = { args, isLatest };
+      voiceDispPendingBlur.set(sel, ent);
+      sel.addEventListener('blur', () => {
+        voiceDispPendingBlur.delete(sel);
+        if (sel.isConnected === false || !ent.isLatest()) return;
+        CallDisplay.fillDisplaySelect(document, sel, ent.args);
+      }, { once: true });
+    }
     async function voiceDispPaintPanel(chatId) {
       if (typeof CallDisplay === 'undefined') return;
       const ids = [`vp-display-${chatId}`, `vcb-display-${chatId}`];   // the voice panel's select and the call bar's
@@ -19984,19 +19998,25 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       paintBoxes(CallDisplay.loadDisplayPrefs(localStorage));
       if (!voiceDisp.paintGen) voiceDisp.paintGen = new Map();
       const my = (voiceDisp.paintGen.get(chatId) || 0) + 1; voiceDisp.paintGen.set(chatId, my);
-      let packs = [], available = [], state = 'ready';
-      try { const got = await CallDisplay.fetchFaces((...a) => fetch(...a)); packs = got.packs; available = got.available; } catch { state = 'failed'; }
+      let packs = [], available = [], state = 'loading', failKind = null;
+      const fillAll = (prefs) => {
+        const names = CallDisplay.loadPackNames(localStorage);
+        for (const sel of sels) {
+          if (voiceById(sel.id) !== sel) continue;   // rebuilt meanwhile
+          const args = { choice: prefs.choice, packs, available, state, names };
+          if (sel === document.activeElement) { voiceDispRefillOnBlur(sel, args, () => voiceById(sel.id) === sel && voiceDisp.paintGen.get(chatId) === my); continue; }   // an open picker is not refilled now; on blur with the latest result
+          CallDisplay.fillDisplaySelect(document, sel, args);
+        }
+      };
+      fillAll(CallDisplay.loadDisplayPrefs(localStorage));   // paint once as "loading" so the panel never shows a stale picker while the list is awaited
+      try { const got = await CallDisplay.fetchFaces((...a) => fetch(...a)); packs = got.packs; available = got.available; state = 'ready'; CallDisplay.rememberPackNames(localStorage, got); } catch (e) { state = 'failed'; failKind = e && e.kind; }
       if (voiceDisp.paintGen.get(chatId) !== my) return;   // a newer paint started meanwhile: an older answer never puts back an older choice
       const prefs = CallDisplay.loadDisplayPrefs(localStorage);   // read after the wait: a choice made meanwhile counts
       paintBoxes(prefs);
-      for (const sel of sels) {
-        if (voiceById(sel.id) !== sel) continue;   // rebuilt meanwhile
-        if (sel === document.activeElement) continue;   // an open picker is not refilled
-        CallDisplay.fillDisplaySelect(document, sel, { choice: prefs.choice, packs, available });
-      }
+      fillAll(prefs);
       const note = voiceById(`vp-display-note-${chatId}`);
-      const resolved = CallDisplay.resolveDisplay({ choice: prefs.choice, agentDefault: voiceDispAgentDefault(agent), packs, available, packsState: state });
-      if (note) note.textContent = CallDisplay.displayNote(resolved);
+      const resolved = CallDisplay.resolveDisplay({ choice: prefs.choice, agentDefault: voiceDispAgentDefault(agent), packs, available, packsState: state, packsFailKind: failKind });
+      if (note) note.textContent = CallDisplay.displayNote(resolved, { retrying: false });   // nothing retries here: the panel says to reopen it
       // a character that is on the hub's list but not installed here is downloaded now (the one download per id is shared by the whole page); its progress shows under the note
       if (resolved.downloadable === true && resolved.wanted) {
         const a = available.find((x) => x.id === resolved.wanted);
