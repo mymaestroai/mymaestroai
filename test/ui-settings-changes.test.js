@@ -253,8 +253,8 @@ test('#settings-for=OPT-xxxx opens the group, scrolls to the row, lights it for 
   assert.strictEqual(p.group.open, true);
   assert.ok(p.row.scrolled >= 1, 'scrolled to');
   assert.ok(p.row.classList.contains('st-door-hit'), 'lit');
-  assert.strictEqual(timers[0].ms, 2000);
-  timers[0].fn();
+  const lightOff = timers.find((t) => t.ms === 2000); assert.ok(lightOff, 'the 2 s highlight timer'); assert.ok(timers.some((t) => t.ms === 150) && timers.some((t) => t.ms === 450), 'scrolls again after the group is laid out');
+  lightOff.fn();
   assert.ok(!p.row.classList.contains('st-door-hit'), 'the light goes after 2 s');
   const info = p.doc.activeElement;
   assert.ok(info && info.tagName === 'BUTTON' && info.getAttribute('class') === 'st-info' && info.getAttribute('data-rec') === 'OPT-0341', 'the ⓘ has the focus');
