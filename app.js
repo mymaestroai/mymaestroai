@@ -53,6 +53,7 @@
         if (r.ok) {
           window.hubMe = await r.json();
           try { if (window.hubSimple) { window.hubSimple.apply(window.hubMe); simpleBoot(); } } catch { /* Simple mode is optional: the page runs as before without it */ }
+          try { qsForgetRecents(qsRecentStore().key); } catch { /* ⌘K recents: only this person's list stays on this device */ }
           try { if (typeof simpleTopSync === 'function') simpleTopSync(); } catch { /* the view switch is optional */ }
           try { if (window.HubLooks && window.hubMe) window.HubLooks.rememberDefault(window.hubMe.look, window.HubLooks.storageOf(window)); } catch { /* looks are optional: the page keeps the look it has */ }   // every load: no default clears the last person's
           try { themeNoticeShow(); } catch { /* the one-time line is optional */ }
@@ -718,6 +719,7 @@
       menu.classList.toggle('open', open);
     }
     async function signOut() {
+      try { qsForgetRecents(null); } catch { /* the ⌘K switcher's recents leave with the person */ }
       try { if (window.HubLooks) window.HubLooks.forgetTheme(window.HubLooks.storageOf(window)); } catch { /* blocked storage */ }
       try { await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' }); } catch (e) { /* go to login anyway */ }
       location.href = '/login';
@@ -7766,6 +7768,7 @@
         const response = await fetch('/api/agents' + ownerQuery, { credentials: 'include' });
         const data = await response.json();
         AGENTS = data.agents || [];
+        window.__qsRoster = response.ok && data && Array.isArray(data.agents) ? 'ready' : 'failed';   // ⌘K switcher: "No agents yet." only for a real empty list
         if (typeof voiceWakeRecheck === 'function') voiceWakeRecheck();   // an agent's recognizer can have changed
         { const ri = document.getElementById('recordings-item'); if (ri) ri.style.display = AGENTS.some(a => a && a.recordings && a.recordings.canDownload === true) ? '' : 'none'; }   // ⋯ menu: Recordings only for a person on at least one agent's download list
         for (const a of AGENTS) { if (a.owner) agentOwnerCache.set(a.name, a.owner); else agentOwnerCache.delete(a.name); }
@@ -7781,12 +7784,15 @@
           if (a.soul) console.log(`  ${a.name}: ${a.soul.length} chars of SOUL`);
         });
         renderAgents();
+        if (typeof qsRosterChanged === 'function') qsRosterChanged();   // an open ⌘K switcher shows the list now
       } catch (err) {
         console.error('Failed to load agents:', err);
         // Fallback to empty - user will need to reload
         AGENTS = [];
+        window.__qsRoster = 'failed';
         if (typeof voiceWakeRecheck === 'function') voiceWakeRecheck();
         renderAgents();
+        if (typeof qsRosterChanged === 'function') qsRosterChanged();
       }
     }
     
@@ -10938,6 +10944,7 @@
       return { busy, question, offer, dotCls, tip, text, line, lineTitle, activity, needsOrigin };
     }
     function paintAgentStatus(name) {
+      if (typeof qsStatusChanged === 'function') qsStatusChanged();   // an open quick switcher repaints its rows (before the early return: the sidebar row may not exist)
       const dot = document.getElementById(`agent-status-${name}`);
       const btn = document.getElementById(`agent-btn-${name}`);
       if (!dot || !btn) return;
@@ -10977,6 +10984,7 @@
     function paintAllAgentStatus() {
       for (const a of AGENTS) paintAgentStatus(a.name);
       paintAgentsWorking();
+      if (typeof qsStatusChanged === 'function') qsStatusChanged();
     }
 
     function busyAgentNames() {
@@ -12669,6 +12677,7 @@
       window.__activeChatId = chatId;
       try { if (window.HandOffCard && typeof HandOffCard.follow === 'function') HandOffCard.follow(); } catch { /* the panel follows at once; a failure leaves the timer tick */ }
       if (document.getElementById('files-panel')) filesRefresh(); // the Files panel follows the active chat's agent
+      if (opened && !opened.isGroup && !opened.isWorker && !opened.isHistory && opened.agent) qsNoteOpened(opened.agent);   // the quick switcher's recents (⌘K)
       if (opened && !opened.isGroup && !opened.isWorker && opened.agent) { researchLinePaint(); researchLineLoad(opened.agent); }   // the deep research progress line
       if (document.getElementById('recall-panel') && chats[chatId] && !chats[chatId].isGroup && chats[chatId].agent && String(chats[chatId].agent) !== recallState.agent) openRecallPanel(chatId); // so does Recall
       document.getElementById(`input-${chatId}`)?.focus();
@@ -24915,6 +24924,295 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
 
     const dialogGuard = createDialogGuard({ auto: '.question-overlay, .gs-overlay, .st-overlay, .dream-overlay, #restart-notify-overlay, #resume-popup-overlay' });
     function dialogRequestClose(el, how) { return dialogGuard.requestClose(el, how || 'close'); }
+
+    // ── Quick switcher: ⌘K on a Mac (Ctrl+K elsewhere) jumps to any agent's chat, like Slack's "Jump to…". ──
+    // An empty search lists agents with unread replies first, then the ones this person opened last on this device, then
+    // the rest by name. Typing filters on the name and the display name: names that start with it first, then a word
+    // that starts with it, then anywhere in the name, then the letters in order. ↑/↓ (or Ctrl+N / Ctrl+P) move, Enter
+    // opens the chat with the message box ready, Esc, a click outside or ⌘K again closes. It is a layer of the dialog
+    // layer (createDialogGuard): registered before the search box takes the focus, so on the way out the focus and the
+    // caret go back to the field that had them (a message draft). It never opens over another dialog or over the
+    // "Discard changes?" question.
+    // (No menu item calls openQuickSwitcher() yet: the keyboard shortcut is the one way in.)
+    //
+    // Recents live in this tab only (sessionStorage 'hub-qs-recent:<user id>': agent names, most recently opened first, at
+    // most 30), never in storage other tabs or accounts share: a tab left open by one person cannot leave a list another
+    // person's tab could read. They survive a reload; a new tab starts in name order. None before /api/me answers; when
+    // the page learns who is signed in it drops this tab's lists for anyone else, and signing out drops them all. Any
+    // 'hub-qs-recent*' key an earlier build left in localStorage is removed on load. Only agents in the person's own list
+    // (AGENTS, filtered by the hub) are ever shown. Plain functions, not consts: switchToChat records an open while the
+    // page script is still loading.
+    function qsRecentStore() {
+      const me = window.hubMe, id = me && me.user && me.user.id;
+      return { key: id ? `hub-qs-recent:${id}` : null, prefix: 'hub-qs-recent', max: 30 };
+    }
+    let qsList = [], qsSel = 0, qsLastQ = null;   // qsLastQ: the search text of the last paint (null: none yet), so a repaint can tell a new query from a refresh
+    function qsRecentBox() { try { return window.sessionStorage || null; } catch { return null; } }
+    function qsRecent() {
+      const { key, max } = qsRecentStore();
+      const box = qsRecentBox();
+      if (!key || !box) return [];
+      try { const v = JSON.parse(box.getItem(key) || '[]'); return Array.isArray(v) ? v.filter(x => typeof x === 'string' && x).slice(0, max) : []; } catch { return []; }
+    }
+    function qsNoteOpened(name) {
+      const { key, max } = qsRecentStore();
+      const box = qsRecentBox();
+      if (!name || !key || !box) return;
+      try { box.setItem(key, JSON.stringify([name, ...qsRecent().filter(x => x !== name)].slice(0, max))); } catch { /* storage off: no recents */ }
+    }
+    // Recents keys in a store: 'hub-qs-recent' (earlier builds) and 'hub-qs-recent:<user id>'.
+    function qsRecentKeys(store) {
+      const { prefix } = qsRecentStore(), out = [];
+      try { for (let i = 0; i < store.length; i++) { const k = store.key(i); if (k && (k === prefix || k.startsWith(prefix + ':'))) out.push(k); } } catch { /* no storage */ }
+      return out;
+    }
+    // Every recents list in this tab but `keep` (null: all of them), and every one an earlier build left in localStorage.
+    function qsForgetRecents(keep) {
+      try { for (const k of qsRecentKeys(localStorage)) localStorage.removeItem(k); } catch { /* no storage */ }
+      const box = qsRecentBox();
+      if (box) try { for (const k of qsRecentKeys(box)) if (k !== keep) box.removeItem(k); } catch { /* no storage */ }
+    }
+    try { for (const k of qsRecentKeys(localStorage)) localStorage.removeItem(k); } catch { /* no storage */ }   // on load: nothing of this feature stays in localStorage
+    // 0 = the name starts with the query, 1 = a word in it does, 2 = it contains it, 3 = its letters appear in order,
+    // Infinity = no match. An empty query matches everything (0).
+    function qsScore(agent, q) {
+      if (!q) return 0;
+      let best = Infinity;
+      for (const raw of [agent.display, agent.name]) {
+        const h = String(raw || '').toLowerCase();
+        if (!h) continue;
+        if (h.startsWith(q)) return 0;
+        if (h.split(/[\s._\-/]+/).some(w => w && w.startsWith(q))) best = Math.min(best, 1);
+        else if (h.includes(q)) best = Math.min(best, 2);
+        else { let i = 0; for (const c of h) { if (c === q[i]) i++; if (i === q.length) break; } if (i === q.length) best = Math.min(best, 3); }
+      }
+      return best;
+    }
+    function qsRank(agents, query, { recent = [], unread = new Set() } = {}) {
+      const q = String(query || '').trim().toLowerCase();
+      const rec = new Map(recent.map((n, i) => [n, i]));
+      const label = (a) => String(a.display || a.name || '').toLowerCase();
+      return agents.map(a => ({ a, s: qsScore(a, q) })).filter(x => x.s !== Infinity).sort((x, y) => {
+        if (x.s !== y.s) return x.s - y.s;
+        if (!q) { const ux = unread.has(x.a.name) ? 0 : 1, uy = unread.has(y.a.name) ? 0 : 1; if (ux !== uy) return ux - uy; }
+        const rx = rec.has(x.a.name) ? rec.get(x.a.name) : Infinity, ry = rec.has(y.a.name) ? rec.get(y.a.name) : Infinity;
+        if (rx !== ry) return rx - ry;
+        return label(x.a).localeCompare(label(y.a));
+      }).map(x => x.a);
+    }
+    // Agents whose chat tab holds replies not seen yet.
+    function qsUnread() {
+      const s = new Set();
+      document.querySelectorAll('.chat-tab.unread').forEach(t => { const c = chats[String(t.id || '').replace(/^tab-/, '')]; if (c && !c.isGroup && !c.isWorker && c.agent) s.add(c.agent); });
+      return s;
+    }
+    function qsIsOpen() { return !!document.getElementById('qs-overlay'); }
+    // Another dialog has the screen: the "Discard changes?" question, a native modal <dialog>, Simple's Settings sheet, the
+    // expanded Reasoning or Tool calls view, anything shown with aria-modal="true" (the voice call's full-screen display),
+    // or any other open layer of the dialog layer that covers the page (settings, an agent's question...). Docked side
+    // panels and the docked call bar leave the page usable, so they don't count.
+    function qsBlocked() {
+      try { if (dialogGuard._confirm()) return true; } catch { /* no guard */ }
+      try { if (document.querySelector(':modal')) return true; } catch { /* :modal unsupported */ }
+      // Views that cover the page without the dialog layer: Simple's Settings sheet (openSimpleSettings, present only while
+      // open) and the expanded Reasoning and Tool calls views (openReasoningFull / openToolsFull: shown while .open).
+      if (document.querySelector('#simple-settings, .rsn-full-overlay.open')) return true;
+      // Anything else on screen that declares itself modal (aria-modal="true"): the voice call's full-screen display
+      // (lib/ui-call-display.js; its docked bar in the chat drops aria-modal, so it doesn't count), About, the backup and
+      // share-link dialogs, and whatever comes later. Only what is shown counts: the expanded Reasoning and Tool calls
+      // views keep their aria-modal box in the page while closed (display: none), and a hidden call display stays put too.
+      try {
+        for (const m of document.querySelectorAll('[aria-modal="true"]')) {
+          if (!m.isConnected || (m.closest && (m.closest('#qs-overlay') || m.closest('[hidden]')))) continue;
+          if (typeof m.checkVisibility === 'function' ? m.checkVisibility() : m.getClientRects().length > 0) return true;
+        }
+      } catch { /* no query: the named cases above still hold */ }
+      try {
+        return dialogGuard.layers().some(l => l.el && l.el.id !== 'qs-overlay' && l.el.isConnected !== false && (l.isDialog ? !!l.el.open && dialogIsModal(l.el) : l.modal));
+      } catch { return false; }
+    }
+    function closeQuickSwitcher() {
+      const ov = document.getElementById('qs-overlay');
+      if (!ov) return;
+      dialogRequestClose(ov, 'close');   // the layer closes it and puts the focus back where it was
+      if (ov.isConnected) { ov.remove(); try { dialogGuard.closed(ov); } catch { /* not registered */ } }
+    }
+    function openQuickSwitcher() {
+      if (qsIsOpen()) { closeQuickSwitcher(); return; }
+      if (qsBlocked()) return;
+      const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text) n.textContent = text; return n; };
+      const ov = el('div', 'gs-overlay qs-overlay');
+      ov.id = 'qs-overlay'; ov.dataset.noDirty = '1';   // a search box: closing never asks "Discard changes?"
+      ov.__dialogClose = () => ov.remove();
+      const box = el('div', 'gs-modal qs-modal');
+      box.setAttribute('role', 'dialog'); box.setAttribute('aria-modal', 'true'); box.setAttribute('aria-label', 'Jump to an agent');
+      const q = el('input', 'qs-q');
+      q.type = 'text'; q.id = 'qs-q'; q.placeholder = 'Jump to an agent…'; q.autocomplete = 'off'; q.spellcheck = false;
+      // A combobox whose list is always shown. With aria-expanded the dialog layer leaves Escape to qsKey.
+      for (const [k, v] of [['role', 'combobox'], ['aria-expanded', 'true'], ['aria-controls', 'qs-list'], ['aria-autocomplete', 'list'], ['aria-label', 'Jump to an agent: type part of its name']]) q.setAttribute(k, v);
+      const list = el('div', 'qs-list');
+      list.id = 'qs-list'; list.setAttribute('role', 'listbox'); list.setAttribute('aria-label', 'Agents');
+      const status = el('div', 'qs-status');   // "Loading agents…", "No agent matches …": shown, and read out by screen readers
+      status.id = 'qs-status'; status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');
+      const hint = el('div', 'qs-hint');
+      for (const [keys, what] of [[['↑', '↓'], 'to move'], [['Enter'], 'to open'], [['Esc'], 'to close']]) {
+        const s = el('span');
+        for (const k of keys) { s.appendChild(el('kbd', '', k)); s.appendChild(document.createTextNode(' ')); }
+        s.appendChild(document.createTextNode(what));
+        hint.appendChild(s);
+      }
+      box.appendChild(q); box.appendChild(list); box.appendChild(status); box.appendChild(hint);
+      ov.appendChild(box);
+      document.body.appendChild(ov);
+      dialogGuard.open(ov);   // before q.focus(): the layer records the field that has the focus now as the one to return to
+      q.addEventListener('input', () => { qsSel = 0; renderQuickSwitcher(); });
+      q.addEventListener('keydown', qsKey);
+      list.addEventListener('mousedown', (e) => e.preventDefault());   // a click keeps the focus in the search box
+      list.addEventListener('click', (e) => { const r = e.target.closest && e.target.closest('.qs-row'); if (r) qsOpen(r.dataset.agent); });
+      list.addEventListener('mousemove', (e) => { const r = e.target.closest && e.target.closest('.qs-row'); if (r && Number(r.dataset.i) !== qsSel) { qsSel = Number(r.dataset.i); qsPaintSel(false); } });
+      qsSel = 0; qsList = []; qsLastQ = null;   // a fresh start: nothing to carry over from an earlier opening
+      renderQuickSwitcher();
+      q.focus();
+    }
+    // The agent list arrived (or failed) while the switcher is open: show it, keeping what was typed.
+    function qsRosterChanged() { if (qsIsOpen()) renderQuickSwitcher(); }
+    // A row's state, in words (part of the option's name) and with the sidebar's own marker, so colour never carries it
+    // alone. Words and states come from the sidebar's helpers: agentLiveState + AgentDot (lib/ui-agent-dot.js).
+    // One state per row: question > busy > unread > background. mark is null when there is none.
+    function qsRowState(name, unread) {
+      let mark = null, words = '';
+      const live = agentLiveState(name), bg = bgCountOf(name);
+      const ds = AgentDot.dotState({ busy: live.busy, question: live.question, background: bg });
+      if (ds === 'question') { mark = 'live-question'; words = AgentDot.dotLabel(ds); }
+      else if (ds === 'busy') {
+        mark = 'busy';
+        // the sidebar's words for a named (non-worker) agent, as agentLiveState builds its line; else the activity words
+        const s = agentStatus[name];
+        const d = !(s && s.worker) ? agentDoingNow(name) : null;
+        words = String((d && d.words) || live.activity || AgentDot.dotLabel(ds));
+        words = words.charAt(0).toUpperCase() + words.slice(1);
+      }
+      else if (unread) { mark = 'unread'; words = 'New replies'; }
+      else if (ds === 'background') { mark = 'bg-work'; words = AgentDot.bgLine(bg); }
+      return { mark, words };
+    }
+    // Writes a state into a row: creates, updates or removes its .qs-state words and aria-hidden .qs-dot marker (last in the row).
+    function qsWriteState(row, st) {
+      const find = (cls) => Array.from(row.children).find(x => x.classList.contains(cls));
+      let words = find('qs-state'), dot = find('qs-dot');
+      if (!st.mark) { if (words) words.remove(); if (dot) dot.remove(); return; }
+      if (!words) { words = document.createElement('span'); words.className = 'qs-state'; }
+      if (!dot) { dot = document.createElement('span'); dot.setAttribute('aria-hidden', 'true'); }
+      if (words.textContent !== st.words) words.textContent = st.words;
+      dot.className = 'qs-dot ' + st.mark;
+      const q = st.mark === 'live-question' ? '?' : '';
+      if (dot.textContent !== q) dot.textContent = q;
+      if (!words.parentNode) row.appendChild(words);
+      if (!dot.parentNode) row.appendChild(dot);
+    }
+    // Updates the states of the rows on screen in place: no row is created, removed or moved.
+    function qsRefreshStates() {
+      const list = document.getElementById('qs-list');
+      if (!list) return;
+      const unread = qsUnread();
+      for (const row of Array.from(list.children)) if (row.dataset.agent) qsWriteState(row, qsRowState(row.dataset.agent, unread.has(row.dataset.agent)));
+    }
+    function renderQuickSwitcher() {
+      const q = document.getElementById('qs-q'), list = document.getElementById('qs-list'), status = document.getElementById('qs-status');
+      if (!q || !list) return;
+      const roster = (AGENTS || []).filter(a => a && a.name);
+      const unread = qsUnread();
+      // The selected agent is remembered by NAME across a repaint (the roster reloads when an agent is created, renamed or
+      // updated): it is looked up in the new list, so a row inserted above it does not move the selection onto another agent.
+      // A changed query, or an agent that is gone, starts at the first row.
+      const keepName = qsList[qsSel] && qsList[qsSel].name;
+      qsList = qsRank(roster, q.value, { recent: qsRecent(), unread });
+      const same = q.value === qsLastQ;
+      const at = same && keepName ? qsList.findIndex(a => a.name === keepName) : -1;
+      qsSel = at >= 0 ? at : 0;
+      qsLastQ = q.value;
+      const typed = q.value.trim().toLowerCase();
+      const scrollTop = at >= 0 ? list.scrollTop : 0;   // the list keeps its place only when the selection was kept by name; a new query or a vanished agent starts at the top
+      list.textContent = '';
+      qsList.forEach((a, i) => {
+        const row = document.createElement('div');
+        row.className = 'qs-row' + (i === qsSel ? ' sel' : '');
+        row.id = `qs-opt-${i}`; row.setAttribute('role', 'option'); row.setAttribute('aria-selected', String(i === qsSel));
+        row.dataset.i = String(i); row.dataset.agent = a.name;
+        const shown = a.display || capName(a.name);
+        const span = (cls, text) => { const s = document.createElement('span'); s.className = cls; if (text) s.textContent = text; return s; };
+        const ic = span('qs-ic', a.icon || '🤖'); ic.setAttribute('aria-hidden', 'true');
+        row.appendChild(ic);
+        row.appendChild(span('qs-name', shown));
+        // the internal name next to a different display name: only when what was typed matched it
+        if (typed && String(shown).toLowerCase() !== String(a.name).toLowerCase() && qsScore({ name: a.name }, typed) !== Infinity) row.appendChild(span('qs-id', a.name));
+        qsWriteState(row, qsRowState(a.name, unread.has(a.name)));
+        list.appendChild(row);
+      });
+      const state = window.__qsRoster || 'loading';   // set by loadAgents: 'ready' or 'failed'
+      const msg = qsList.length ? ''
+        : roster.length ? `No agent matches “${q.value.trim()}”.`
+        : state === 'failed' ? 'Could not load your agents. Reload the page to try again.'
+        : state === 'ready' ? 'No agents yet.'
+        : 'Loading agents…';
+      if (status && status.textContent !== msg) status.textContent = msg;
+      if (qsList.length) q.setAttribute('aria-activedescendant', `qs-opt-${qsSel}`); else q.removeAttribute('aria-activedescendant');
+      list.scrollTop = scrollTop;
+    }
+    // The sidebar repainted agent status: an open switcher updates its row states once on the next frame, in place
+    // (rows are never replaced, so a click in flight still lands; focus, selection and scroll stay put).
+    let qsStatusRaf = 0;
+    function qsStatusChanged() {
+      if (!qsIsOpen() || qsStatusRaf) return;
+      const run = () => { qsStatusRaf = 0; if (qsIsOpen()) qsRefreshStates(); };
+      qsStatusRaf = typeof requestAnimationFrame === 'function' ? requestAnimationFrame(run) : setTimeout(run, 0);
+    }
+    function qsPaintSel(scroll = true) {
+      const list = document.getElementById('qs-list');
+      if (!list) return;
+      for (const r of Array.from(list.children)) {
+        const on = Number(r.dataset.i) === qsSel;
+        r.classList.toggle('sel', on); r.setAttribute('aria-selected', String(on));
+        if (on && scroll && r.scrollIntoView) r.scrollIntoView({ block: 'nearest' });
+      }
+      const q = document.getElementById('qs-q');
+      if (q && qsList.length) q.setAttribute('aria-activedescendant', `qs-opt-${qsSel}`);
+    }
+    function qsKey(e) {
+      if (e.isComposing || e.keyCode === 229) return;   // an input method is still composing the text
+      if (e.key === 'Escape' || e.key === 'Esc') { e.preventDefault(); e.stopPropagation(); closeQuickSwitcher(); return; }   // this Esc is the switcher's only (not the Workers menu's too)
+      const n = qsList.length;
+      const down = e.key === 'ArrowDown' || (e.ctrlKey && !e.metaKey && (e.key === 'n' || e.key === 'N'));
+      const up = e.key === 'ArrowUp' || (e.ctrlKey && !e.metaKey && (e.key === 'p' || e.key === 'P'));
+      if (down || up) { e.preventDefault(); if (n) { qsSel = (qsSel + (down ? 1 : n - 1)) % n; qsPaintSel(); } return; }
+      if (e.key === 'Enter') { e.preventDefault(); const a = qsList[qsSel]; if (a) qsOpen(a.name); }
+    }
+    function qsOpen(name) {
+      const a = (AGENTS || []).find(x => x.name === name);
+      if (!a) return;
+      closeQuickSwitcher();
+      const id = startSoloChat(a.name, a.model);
+      const box = id && document.getElementById(`input-${id}`);
+      if (box) setTimeout(() => { try { box.focus(); } catch { /* the chat closed meanwhile */ } }, 0);
+    }
+    // Chrome's userAgentData says "macOS", navigator.platform says "MacIntel": compare without case.
+    function qsIsMac(nav) { return /mac|iphone|ipad/i.test(String((nav && nav.userAgentData && nav.userAgentData.platform) || (nav && nav.platform) || (nav && nav.userAgent) || '')); }
+    const QS_MAC = qsIsMac(navigator);
+    // ⌘K on a Mac (Ctrl+K there deletes to the end of the line in a text box), Ctrl+K elsewhere; from anywhere on the
+    // page, also while typing a message. Capture phase, so a text box's own handler never sees it. A held key repeats
+    // nothing: one open, and a second deliberate press closes.
+    function qsShortcut(e) {
+      if (e.isComposing || e.keyCode === 229) return;   // an input method is composing (same guard as qsKey)
+      // e.code: the same physical key on a non-Latin layout; not when that key types another Latin letter (Dvorak t, Colemak e)
+      if (e.key !== 'k' && e.key !== 'K' && !(e.code === 'KeyK' && !/^[a-z]$/i.test(e.key || ''))) return;
+      if (e.altKey || e.shiftKey || (QS_MAC ? !e.metaKey || e.ctrlKey : !e.ctrlKey || e.metaKey)) return;
+      if (!qsIsOpen() && qsBlocked()) return;   // it won't open here: the key stays the page's (and the browser's) own
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.repeat) return;
+      openQuickSwitcher();   // toggles: a second ⌘K closes it
+    }
+    document.addEventListener('keydown', qsShortcut, true);
 
     // ── Version label and About box (GET /api/version, lib/hub-map versionInfo). The dim line under the title shows the
     // version and channel (experimental and other branches in their own colour, plus a dot while a restart is pending);
