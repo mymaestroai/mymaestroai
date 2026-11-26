@@ -6499,8 +6499,9 @@
     }
     // ── plan state helpers (end) ──
     // What a badge says for one window: "used up" when the plan refuses it, else its percent (with the extra-usage words).
+    function planUsedUp(w) { return !!w.rejected || (Number(w.utilization) >= 100 && !w.extraUsage); }
     function badgeAmount(w, levels) {
-      return planState(w, levels).cls === 'refused' ? 'used up' : planPctText(w, levels);
+      return planUsedUp(w) ? 'used up' : planPctText(w, levels);
     }
     function planFamilyOf(model) {
       const id = String(model || '').replace(/^claude-sdk\//, '').replace(/\[1m\]$/i, '').replace(/^claude-/, '').toLowerCase();
@@ -6553,7 +6554,7 @@
         // Each sentence describes only its own window: refused -> used up; extra usage paying -> the extra-usage sentence.
         const part = (w, who, short) => {
           const s = planState(w, levels);
-          if (s.cls === 'refused') return `${who} is used up for this week until ${planWhen(w.resetsAt)}`;
+          if (planUsedUp(w)) return `${who} is used up for this week until ${planWhen(w.resetsAt)}`;
           return s.extra
             ? `${who} is used up for this week until ${planWhen(w.resetsAt)}; extra usage is paying for Claude replies until then`
             : `${who} has used ${s.pct}%${short ? "" : " of this week's allowance"} (resets ${planWhen(w.resetsAt)})`;

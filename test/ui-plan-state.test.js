@@ -194,10 +194,37 @@ test('phone header: 5h suffix last; title reads plan, family, 5-hour', () => {
 });
 // ── a refused window says "used up" in words, in the text and the hover, on both pages ──
 const PHONE_WHEN = (iso) => new Date(iso).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' });
-test('badgeAmount is the same small helper on both pages, outside the shared block', () => {
+test('badgeAmount and planUsedUp are the same small helpers on both pages, outside the shared block', () => {
   const grab = (src) => { const m = src.match(/function badgeAmount\([\s\S]*?\n\s*\}\n/); assert.ok(m, 'badgeAmount present'); return m[0].split('\n').map(l => l.trim()).join('\n'); };
   assert.strictEqual(grab(read('app.js')), grab(read('mobile.js')));
-  assert.ok(!helperBlock(read('app.js'), '    ').includes('badgeAmount'), 'not inside the shared block');
+  const grabUsed = (src) => { const m = src.match(/function planUsedUp\([^\n]*\n/); assert.ok(m, 'planUsedUp present'); return m[0].trim(); };
+  assert.strictEqual(grabUsed(read('app.js')), grabUsed(read('mobile.js')));
+  const block = helperBlock(read('app.js'), '    ');
+  assert.ok(!block.includes('badgeAmount') && !block.includes('planUsedUp'), 'not inside the shared block');
+});
+test('desktop badge: Fable 99.6 (rounds to 100, not rejected, no extra usage) is not "used up"', () => {
+  const el = desktopBadge(data([W(null, 18), W('fable', 99.6)]), FABLE);
+  assert.strictEqual(el.textContent, 'Plan 18% this week · Fable 100%');
+  assert.ok(el.title.includes('Fable has used 100%'), el.title);
+  assert.ok(!el.title.includes('used up'), el.title);
+});
+test('desktop badge: Fable at exactly 100 (not rejected, no extra usage), or rejected at 60 -> "Fable used up"', () => {
+  const a = desktopBadge(data([W(null, 18), W('fable', 100)]), FABLE);
+  assert.strictEqual(a.textContent, 'Plan 18% this week · Fable used up');
+  assert.ok(a.title.includes('Fable is used up for this week until WHEN-11-30'), a.title);
+  const b = desktopBadge(data([W(null, 18), W('fable', 60, { rejected: true })]), FABLE);
+  assert.strictEqual(b.textContent, 'Plan 18% this week · Fable used up');
+  assert.ok(b.title.includes('Fable is used up for this week until WHEN-11-30'), b.title);
+});
+test('phone header: Fable 99.6 is not "used up"; exactly 100 or rejected is', () => {
+  const a = phoneBadge(data([W(null, 18), W('fable', 99.6)]), FABLE);
+  assert.strictEqual(a.textContent, 'Plan 18% · Fable 100%');
+  assert.ok(!a.title.includes('used up'), a.title);
+  const b = phoneBadge(data([W(null, 18), W('fable', 100)]), FABLE);
+  assert.strictEqual(b.textContent, 'Plan 18% · Fable used up');
+  assert.ok(b.title.includes('Fable: used up until'), b.title);
+  const c = phoneBadge(data([W(null, 18), W('fable', 60, { rejected: true })]), FABLE);
+  assert.strictEqual(c.textContent, 'Plan 18% · Fable used up');
 });
 test('desktop badge: plan on extra usage + Fable refused -> extra-usage words, then "Fable used up"', () => {
   const el = desktopBadge(data([W(null, 100, { extraUsage: true }), W('fable', 60, { rejected: true })]), FABLE);
