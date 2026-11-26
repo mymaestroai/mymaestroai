@@ -20,6 +20,9 @@ let restoredAtBoot = { state: 'none' };
 try { restoredAtBoot = require('./lib/backup/apply').applyAtBoot({ root: __dirname, log: (m) => console.log(m) }); }
 catch (e) { console.error(`[restore] the restore could not be finished or rolled back, so My Maestro AI stops here to keep your data safe: ${e.message}`); process.exit(1); }
 
+// The hub is the one process that may run the real Claude client, its installer and its supervised worker (lib/claude-signin-guard).
+require('./lib/claude-signin-guard').allowRealEffects();
+
 // Load .env BEFORE any other requires — skill-manager reads env at import time
 // Secret values (keys, tokens, passwords) go to a private in-memory store (lib/hub-secrets), not process.env, so no
 // child process the hub starts carries them in its start environment.
@@ -41,7 +44,7 @@ if (restoredAtBoot.state === 'applied') {
 }
 
 const {
-  getAgents, getAgentFiles, saveAgentFile, createAgent, cloneAgent,
+  getAgents, getAgentFiles, saveAgentFile, createAgent, cloneAgent, agentBusy,
   deleteAgent, renameAgent, getAvailableModels, setAgentModel, setAgentDisplay, setAgentIcon, EDITABLE_FILES,
 } = require('./lib/agents');
 const {
@@ -49,7 +52,7 @@ const {
   cancelWorker, loadConversationLog, clearConversationLog,
   clearConversation, flushActiveResponses, runTigerTeam, runRoundtable,
   continueTigerTeam, resumeTigerTeam, getTigerTeamState, reconstituteTigerTeam, stopTigerTeam, listTigerTeams,
-  activeTigerTeams, isAgentActive, wakeAgent,
+  activeTigerTeams, isAgentActive, wakeAgent, startBuildTeam, teamModelFacts, buildTeamRuns, startTeamSetup, teamSetupRuns,
 } = require('./lib/sdk-chat');
 const { serveImage } = require('./lib/images');
 // Tell open pages that an agent's settings changed (model, name, icon, category...) so their open chats follow
@@ -61,6 +64,13 @@ async function publishAgentUpdate(name, changed = []) {
     if (!a) return;
     require('./lib/hub-events').events.publish('agent_updated', { agent: name, model: a.model || null, display: a.display || null, icon: a.icon || null, category: a.category || null, autoModel: !!a.autoModel, effort: a.effort || 'default', changed: Array.isArray(changed) ? changed : [] });
   } catch { /* events are best effort */ }
+}
+
+let modelOfferGroups;
+function groupedModelOffers() {
+  return modelOfferGroups ||= require('./lib/model-offer-groups').createModelOfferGroups({
+    setModel: (name, model, guard, token) => setAgentModel(name, model, guard, token, publishAgentUpdate),
+  });
 }
 const { chatCompletion } = require('./lib/gateway-client');
 const { isMythosModel, mythosCompletion } = require('./lib/mythos-client');
@@ -1256,10 +1266,17 @@ async function handleHttpRequest(req, res) {
       // Who confirmed a cloud engine, and when, is for admins only.
       const isAdm = !!req.hubService || access.isAdmin(req.hubUser);
       const stripVoice = (a) => require('./lib/voice/cloud').publicAgentVoice(a, isAdm);
+      // reportsTo / buildPartner naming an agent this viewer cannot see are left out (a signed-in admin and the hub's own service see all).
+      const seeAll = !!req.hubService || (access.isAdmin(req.hubUser) && !req.hubPendingTotp);
+      const visibleNames = new Set(agents.map(x => x && x.name));
+      const hideUnseen = (a) => seeAll ? {} : {
+        ...(a.reportsTo && !visibleNames.has(a.reportsTo) ? { reportsTo: undefined } : {}),
+        ...(a.buildPartner && !visibleNames.has(a.buildPartner) ? { buildPartner: undefined } : {}),
+      };
       // Call recordings: a signed-in admin sees the whole setting; everybody else (members, the hub's own service calls that agents' tools use) gets it without the allowed list. canDownload: is this caller on the list.
       const recView = { admin: access.isAdmin(req.hubUser) && !req.hubPendingTotp, userId: req.hubUser && !req.hubPendingTotp ? String(req.hubUser.id) : '' };
       const recordingsFor = require('./lib/recordings/settings').recordingsForViewer;
-      return jsonResponse(res, 200, { agents: agents.map(a => ({ ...stripVoice(a), ...(recView.admin ? {} : { envKeep: undefined }), recordings: recordingsFor(a, recView), keptOnBox: kept(a, hubSettings.getSetting), effortUltra: require('./lib/effort').ultraFor(a.model), tierOptions: require('./lib/tier').tiersFor(a.model), tierLabels: require('./lib/tier').labelsFor(a.model), ...(status[a.name] || idle) })) });
+      return jsonResponse(res, 200, { agents: agents.map(a => ({ ...stripVoice(a), ...hideUnseen(a), ...(recView.admin ? {} : { envKeep: undefined }), recordings: recordingsFor(a, recView), keptOnBox: kept(a, hubSettings.getSetting), effortUltra: require('./lib/effort').ultraFor(a.model), tierOptions: require('./lib/tier').tiersFor(a.model), tierLabels: require('./lib/tier').labelsFor(a.model), ...(status[a.name] || idle) })) });
     }
 
     if (pathname === '/api/agents/status' && req.method === 'GET') {
@@ -1507,13 +1524,16 @@ async function handleHttpRequest(req, res) {
     // Return the current discovery cache (no network calls)
     if (pathname === '/api/models/discovered' && req.method === 'GET') {
       const cache = loadDiscoveryCache();
-      return jsonResponse(res, 200, cache || { status: 'no_cache' });
+      if (!cache) return jsonResponse(res, 200, { status: 'no_cache' });
+      const { offerSources, ...models } = cache;
+      return jsonResponse(res, 200, models);
     }
 
     if (pathname === '/api/agents/create' && req.method === 'POST') {
       const body = JSON.parse(await readBody(req));
       const result = await createAgent(body.name, body.model, body.personality, body.skills, body.category, body.owner || null);
-      return jsonResponse(res, result.success ? 200 : 400, result);
+      const { identity: _identity, ...shown } = result;   // the box id stays on the server (lib/team-plan uses it)
+      return jsonResponse(res, result.success ? 200 : 400, shown);
     }
 
     if (pathname === '/api/agents/clone' && req.method === 'POST') {
@@ -1545,6 +1565,15 @@ async function handleHttpRequest(req, res) {
       const result = await setAgentModel(name, body.model);
       if (result.success) await publishAgentUpdate(name, ['model']);
       return jsonResponse(res, result.success ? 200 : 400, result);
+    }
+
+    if (pathname === '/api/model-offer-groups' || pathname === '/api/model-offer-groups/answer') {
+      const out = await require('./lib/model-offer-group-routes').routeModelOfferGroups({
+        req, pathname, readBody, identify: (request) => hubAuth.identify(request), isBusy: name => agentBusy(name, true),
+        getService: groupedModelOffers,
+      });
+      res.setHeader('Cache-Control', 'no-store');
+      return jsonResponse(res, out.status, out.body);
     }
 
     // /api/agents/:name/model-offer: the newer (or stronger) model on offer for this agent, or null (lib/model-offers-service)
@@ -1587,6 +1616,94 @@ async function handleHttpRequest(req, res) {
       return jsonResponse(res, result.success ? 200 : 400, result);
     }
 
+    // POST /api/agents/:name/build-team: start the lead's Build Team turn for a main agent (lib/team-plan, lib/sdk-chat startBuildTeam).
+    // Only an admin's own signed-in browser session (the same test as owner_turn in /api/chat); the cross-origin refusal applies to every /api route.
+    if (/^\/api\/agents\/([^/]+)\/build-team$/.test(pathname) && req.method === 'POST') {
+      let name; try { name = decodeURIComponent(pathname.split('/')[3]); } catch { return jsonResponse(res, 400, { error: 'bad agent name' }); }
+      const teamPlanLib = require('./lib/team-plan'), agentsLib = require('./lib/agents');
+      const out = await teamPlanLib.routeBuildTeam({
+        adminSession: req.hubIdentKind === 'user' && !req.hubPendingTotp && !req.hubToken && !req.hubService && access.isAdmin(req.hubUser),
+        name, agents: await getAgents(), ownerLeadNames: agentsLib.ownerLeadNames, defaultLeadAgent: agentsLib.defaultLeadAgent,
+        runs: buildTeamRuns, halted: () => require('./lib/hub-halt').getHubHalt().isHalted(), isBusy: isAgentActive,
+        makeMessage: async (primary, all) => teamPlanLib.buildMessage({ primary, agentsList: all, adminIds: new Set(hubAuth.admins().map(u => String(u.id))),
+          counts: teamPlanLib.transcriptCounts(30), models: await teamModelFacts(), tierOf: require('./lib/model-tiers').tierOf, ...teamPlanLib.historySources() }),
+        start: startBuildTeam, userId: req.hubUser && req.hubUser.id != null ? String(req.hubUser.id) : null,
+      });
+      return jsonResponse(res, out.status, out.body);
+    }
+
+    // Set up teams (lib/team-setup): GET /api/team-setup, POST /api/team-setup/offer | start | undo. Only an admin's own signed-in browser
+    // session (the build-team gate); the cross-origin refusal applies to every /api route.
+    if (/^\/api\/team-setup(\/(offer|start|undo))?$/.test(pathname) && (req.method === 'POST' || (req.method === 'GET' && pathname === '/api/team-setup'))) {
+      const teamSetupLib = require('./lib/team-setup'), teamPlanLib = require('./lib/team-plan'), agentsLib = require('./lib/agents');
+      const action = req.method === 'GET' ? 'get' : pathname.split('/')[3];
+      let body = {}; if (req.method === 'POST') { try { body = JSON.parse((await readBody(req)) || '{}'); } catch { return jsonResponse(res, 400, { error: 'bad JSON' }); } }
+      const out = await teamSetupLib.routeTeamSetup(action, {
+        adminSession: req.hubIdentKind === 'user' && !req.hubPendingTotp && !req.hubToken && !req.hubService && access.isAdmin(req.hubUser),
+        svc: teamSetupLib.getTeamSetup(), agents: await getAgents(), body,
+        ownerLeadNames: agentsLib.ownerLeadNames, defaultLeadAgent: agentsLib.defaultLeadAgent,
+        running: () => teamSetupRuns.size > 0, halted: () => require('./lib/hub-halt').getHubHalt().isHalted(), isBusy: isAgentActive,
+        makeMessage: async (all) => teamSetupLib.setupMessage({ agentsList: all, adminIds: new Set(hubAuth.admins().map(u => String(u.id))),
+          tierOf: require('./lib/model-tiers').tierOf, ...teamPlanLib.historySources() }),
+        start: startTeamSetup, userId: req.hubUser && req.hubUser.id != null ? String(req.hubUser.id) : null,
+      });
+      return jsonResponse(res, out.status, out.body);
+    }
+
+    // Works alone (lib/team-setup): GET /api/team-alone -> { alone: { name: { at, reason } } }, POST /api/team-alone { agent, reason }, DELETE /api/team-alone/:agent.
+    // The Set up teams gate: only an admin's own signed-in browser session; any other caller (a member, a token, a service) gets 403 and never an entry.
+    if (/^\/api\/team-alone(\/[^/]+)?$/.test(pathname) && ((req.method === 'GET' || req.method === 'POST') ? pathname === '/api/team-alone' : req.method === 'DELETE' && pathname !== '/api/team-alone')) {
+      const teamSetupLib = require('./lib/team-setup');
+      const action = req.method === 'GET' ? 'get' : req.method === 'POST' ? 'set' : 'clear';
+      let body = {}; if (req.method === 'POST') { try { body = JSON.parse((await readBody(req)) || '{}'); } catch { return jsonResponse(res, 400, { error: 'bad JSON' }); } }
+      let agent = ''; if (req.method === 'DELETE') { try { agent = decodeURIComponent(pathname.split('/')[3]); } catch { return jsonResponse(res, 400, { error: 'bad agent name' }); } }
+      const out = await teamSetupLib.routeTeamAlone(action, {
+        adminSession: req.hubIdentKind === 'user' && !req.hubPendingTotp && !req.hubToken && !req.hubService && access.isAdmin(req.hubUser),
+        svc: teamSetupLib.getTeamSetup(), agents: await getAgents(), adminIds: new Set(hubAuth.admins().map(u => String(u.id))), body, agent,
+        userId: req.hubUser && req.hubUser.id != null ? String(req.hubUser.id) : null,
+      });
+      return jsonResponse(res, out.status, out.body);
+    }
+
+    // POST /api/agents/:name/optimize-team: start the review of a main agent's team (lib/team-review, lib/sdk-chat startOptimizeTeam).
+    // The same gate as build-team: only an admin's own signed-in browser session. The lead runs it, or the boss itself when its content stays on its own service.
+    // GET /api/agents/:name/optimize-team/estimate: the counts the menu entry shows ({ days, turns, handOffs }), same gate.
+    if (/^\/api\/agents\/([^/]+)\/optimize-team(\/estimate)?$/.test(pathname) && (req.method === 'POST' || req.method === 'GET')) {
+      const isEstimate = pathname.endsWith('/estimate');
+      if (isEstimate !== (req.method === 'GET')) return jsonResponse(res, 405, { error: 'method not allowed' });
+      let name; try { name = decodeURIComponent(pathname.split('/')[3]); } catch { return jsonResponse(res, 400, { error: 'bad agent name' }); }
+      const reviewLib = require('./lib/team-review'), agentsLib = require('./lib/agents'), sdkChatLib = require('./lib/sdk-chat');
+      const adminSession = req.hubIdentKind === 'user' && !req.hubPendingTotp && !req.hubToken && !req.hubService && access.isAdmin(req.hubUser);
+      const adminIdSet = () => new Set(hubAuth.admins().map(u => String(u.id)));
+      // When the team was built: the same for the review and its menu estimate.
+      const teamBuiltAtFor = (boss, all) => {
+        let setups = [], audit = [];
+        try { setups = require('./lib/team-setup').getTeamSetup().list(); } catch { /* no setups */ }
+        try { audit = reviewLib.readReportsToAudit(); } catch { /* no audit */ }
+        return reviewLib.teamBuiltAt({ boss, agentsList: all, setups, audit });
+      };
+      if (isEstimate) {
+        const out = reviewLib.routeOptimizeEstimate({
+          adminSession, name, agents: await getAgents(),
+          makeEstimate: (boss, all) => reviewLib.estimate({ builtAt: teamBuiltAtFor(boss, all), boss, agentsList: all, transcript: require('./lib/transcript').getTranscript(), handOffs: sdkChatLib.handOffRecordsNow }),
+        });
+        return jsonResponse(res, out.status, out.body);
+      }
+      const out = await reviewLib.routeOptimizeTeam({
+        adminSession, name, agents: await getAgents(), ownerLeadNames: agentsLib.ownerLeadNames, defaultLeadAgent: agentsLib.defaultLeadAgent,
+        runs: sdkChatLib.optimizeTeamRuns, halted: () => require('./lib/hub-halt').getHubHalt().isHalted(), isBusy: isAgentActive,
+        keepOnBox: (rec) => sdkChatLib.researchKeptOnBox(rec),
+        makeMessage: async (boss, all, own) => reviewLib.reviewMessage(reviewLib.reviewFacts({
+          builtAt: teamBuiltAtFor(boss, all),
+          boss, agentsList: all, adminIds: adminIdSet(), transcript: require('./lib/transcript').getTranscript(), handOffs: sdkChatLib.handOffRecordsNow,
+          telemetryRows: require('./lib/team-usage').readRows(reviewLib.REVIEW_DAYS * 24), models: await teamModelFacts(), tierOf: require('./lib/model-tiers').tierOf,
+          now: Date.now(), keepOnBox: own === true,
+        })),
+        start: sdkChatLib.startOptimizeTeam, userId: req.hubUser && req.hubUser.id != null ? String(req.hubUser.id) : null,
+      });
+      return jsonResponse(res, out.status, out.body);
+    }
+
     // PATCH /api/agents/:name — update agent fields (category, etc.)
     if (/^\/api\/agents\/([^/]+)$/.test(pathname) && req.method === 'PATCH') {
       const name = decodeURIComponent(pathname.split('/')[3]);
@@ -1599,6 +1716,8 @@ async function handleHttpRequest(req, res) {
       if (recordingsChange && (req.hubService || req.hubToken || !req.hubUser || !hubAuth.isOwner(req.hubUser) || req.hubPendingTotp)) return jsonResponse(res, 403, { error: 'only the owner can change: recordings' });
       // Which environment variables an agent's commands keep is a signed-in admin's call: never a member, and never the hub's own service calls (an agent could widen itself).
       if (body && typeof body === 'object' && 'envKeep' in body && (req.hubService || req.hubToken || !req.hubUser || !access.isAdmin(req.hubUser) || req.hubPendingTotp)) return jsonResponse(res, 403, { error: 'only an admin can change: envKeep' });
+      // Who an agent reports to is an admin's call (or the lead's team tool): never the hub's own service calls (an agent's tools).
+      if (body && typeof body === 'object' && 'reportsTo' in body && (req.hubService || req.hubToken || !req.hubUser || !access.isAdmin(req.hubUser) || req.hubPendingTotp)) return jsonResponse(res, 403, { error: 'reportsTo is set by an admin or through the team tool' });
       // The command lockbox changes what an agent's commands may touch: a signed-in admin's own browser session only (never a member, a token, the hub's own service or an agent).
       if (!!body && typeof body === 'object' && ('lockbox' in body || 'lockboxEnv' in body) && !require('./lib/lockbox/settings').isAdminSession(req)) return jsonResponse(res, 403, { error: 'Sign in with an admin account in your browser to change the command lockbox.' });
       const recSettings = require('./lib/recordings/settings');
@@ -1615,7 +1734,9 @@ async function handleHttpRequest(req, res) {
         audit: (action, detail) => hubAuth.audit(req.hubUser ? String(req.hubUser.id) : null, action, detail, hubAuth.clientIp(req)),
         // A lockbox change is told to the admins in plain words (a security notice), like the admin 2-factor rule.
         userName: req.hubUser ? String(req.hubUser.name || req.hubUser.login || req.hubUser.id || '') : '',
-        notifyAdmins: (text) => require('./lib/push').getPush().notify({ title: 'Command lockbox changed', body: text, tag: 'lockbox-change' }, { adminsOnly: true, kind: 'security' }) });
+        notifyAdmins: (text) => require('./lib/push').getPush().notify({ title: 'Command lockbox changed', body: text, tag: 'lockbox-change' }, { adminsOnly: true, kind: 'security' }),
+        // Reporting lines cleared because the team no longer fits are a team notice, not a security one (own title and tag).
+        notifyTeam: (text) => require('./lib/push').getPush().notify({ title: 'Team changed', body: text, tag: 'team-change' }, { adminsOnly: true, kind: 'other' }) });
       if (!result.success && result.status) return jsonResponse(res, result.status, { error: result.error });
       // Handing a head agent to a member: it introduces itself in its (still empty) chat.
       if (result.success && body && body.owner) { const u = hubAuth.getUser(String(body.owner)); if (u && u.role === 'member') require('./lib/teams').greetIfFresh(name, u).catch(() => {}); }
@@ -1786,7 +1907,7 @@ async function handleHttpRequest(req, res) {
     // ── Call recordings (lib/recordings): uploads from the person on the call, and list/play/download/delete for the allowed users only ──
     if (pathname === '/api/recordings' || pathname.startsWith('/api/recordings/')) return require('./lib/recordings/routes').handle(pathname, req, res, { readBody, jsonResponse, getAgents });
     // ── Voice: local speech-to-text and text-to-speech (lib/voice) ─────────────────────────
-    if (pathname.startsWith('/api/voice/')) return require('./lib/voice/routes').handle(pathname, req, res, { readBody, jsonResponse, getAgents, getSetting: hubSettings.getSetting, updateSettings: hubSettings.updateSettings });
+    if (pathname.startsWith('/api/voice/')) return require('./lib/voice/routes').handle(pathname, req, res, { readBody, jsonResponse, getAgents, getSetting: hubSettings.getSetting, updateSettings: hubSettings.updateSettings, adminName: () => require('./lib/claude-signin-routes').adminDisplayName(hubAuth) });
     // ── Character packs for the call face view (lib/faces; packs live in <hub home>/faces) ──
     if (pathname === '/api/faces' || pathname.startsWith('/api/faces/')) return require('./lib/faces/routes').handle(pathname, req, res, { readBody, jsonResponse });
 
@@ -2212,6 +2333,24 @@ async function handleHttpRequest(req, res) {
       const r = await securityCheck().latest({ maxAgeMs: 60 * 60 * 1000 });
       return jsonResponse(res, 200, { ok: true, ...r });
     }
+    // ── Claude sign-in (lib/claude-signin-routes): GET is for any signed-in person (members only learn who to ask); the three
+    // POSTs are admin routes and refuse anything but an admin's own browser session first (no token, service identity, half-signed-in 2FA). ──
+    if (pathname === '/api/claude-signin' || pathname.startsWith('/api/claude-signin/')) {
+      const csi = require('./lib/claude-signin');
+      const r = await require('./lib/claude-signin-routes').handle({
+        method: req.method, pathname, req, res,
+        isAdminSession: (q) => require('./lib/access').isAdminSession(q),
+        readBody, auth: hubAuth, signIn: () => csi.getSignIn(), words: csi.WORDS,
+        hasSignIn: () => require('./lib/claude-auth').hasSignIn(),
+        // after a sign-in, the hub's own health view catches up now (claude-auth's token cache is cleared by the engine)
+        onDone: () => {
+          const sh = require('./lib/system-health/wire').getSystemHealth();
+          if (!sh.isRunning() && sh.settings().enabled) Promise.resolve().then(() => sh.run({ trigger: 'manual' })).catch(() => {});
+        },
+      });
+      if (res.destroyed) return;
+      if (r) return jsonResponse(res, r.status, r.body);
+    }
     // ── Health check (lib/system-health): admin-only (the route class above, checked again in the handler). GET the last
     // result, POST /run checks now in the background, PUT /settings saves the systemHealth settings. ──
     if (pathname === '/api/system-health' || pathname.startsWith('/api/system-health/')) {
@@ -2523,7 +2662,7 @@ async function handleHttpRequest(req, res) {
       const allAgents = await getAgents();
       const isAdmin = access.isAdmin(req.hubUser);
       const visible = (name) => isAdmin || access.canAccessAgent(req.hubUser, name, { agents: allAgents, resolveVirtual: (n) => temporalWorkersLib.getVirtual(n) });
-      return require('./lib/hub-events').events.subscribe(req, res, { isAdmin, visibleAgent: visible, statusView: (m) => isAdmin ? m : access.statusForViewer(req.hubUser, m, { agents: allAgents, resolveVirtual: (n) => temporalWorkersLib.getVirtual(n) }), filter: (ev) => visible(ev.agent) });
+      return require('./lib/hub-events').events.subscribe(req, res, { isAdmin, visibleAgent: visible, redact: isAdmin ? null : (ev) => access.redactTeamTurn(ev), statusView: (m) => isAdmin ? m : access.statusForViewer(req.hubUser, m, { agents: allAgents, resolveVirtual: (n) => temporalWorkersLib.getVirtual(n) }), filter: (ev) => ev.type === 'background' ? require('./lib/background-work').backgroundEventVisible(req.hubUser, ev, { agents: require('./lib/agents').getAgentsSync(), resolveVirtual: (n) => temporalWorkersLib.getVirtual(n), access }) : visible(ev.agent) });
     }
 
     // ── Worker Routes ───────────────────────────────────────────────
@@ -2546,6 +2685,21 @@ async function handleHttpRequest(req, res) {
       return jsonResponse(res, 200, { ok: true, handOffs });   // no folderLink: the Files panel has no link that opens a folder
     }
 
+    // Background work of one agent (lib/background-work): hand-offs it gave, its jobs (named for admins only), its temporary
+    // workers, and the next check. Access is the route's (lib/access AGENT_PATH): an admin any agent, a member their own or shared.
+    {
+      const wm = pathname.match(/^\/api\/agents\/([^/]+)\/working-on$/);
+      if (wm && req.method === 'GET') {
+        let name = ''; try { name = decodeURIComponent(wm[1]); } catch {}
+        // isAdmin from the trusted session (as /api/cancel-worker has it), never from the request
+        const woAgents = await getAgents();
+        const woAdmin = !!req.hubService || access.isAdmin(req.hubUser);
+        // canSee: the hub's own rule for this person (a member reads only the words of agents they may see)
+        const r = await require('./lib/background-work').workingOnResponse(name, { agentNames: woAgents.map(a => a.name), viewer: { isAdmin: woAdmin, canSee: (n) => woAdmin || access.canAccessAgent(req.hubUser, n, { agents: woAgents, resolveVirtual: (v) => temporalWorkersLib.getVirtual(v) }) } });
+        return jsonResponse(res, r.status, r.body);
+      }
+    }
+
     // Deep research progress (lib/sdk-chat researchStatusFor): the active runs of ONE agent, for the line above its chat.
     // Signed-in only (the gate above); a person who may not see that agent gets the same 404 as an unknown one.
     if (pathname === '/api/research/status' && req.method === 'GET') {
@@ -2564,6 +2718,24 @@ async function handleHttpRequest(req, res) {
       const hq = new URL(req.url, 'http://x').searchParams;
       if (hq.has('view') || hq.has('limit') || hq.has('before')) {
         // Paged, filtered history (lib/chat-history): the whole chat log, then the transcript archive behind it.
+        if (hq.get('view') === 'run') {
+          // One run of hub-started turns (the summary line's body): the same entries the all view shows for that time.
+          const hubEvR = require('./lib/hub-events');
+          const trR = require('./lib/transcript').getTranscript();
+          try {
+            const run = require('./lib/chat-history').runPage({
+              logEntries: loadConversationLog(name, 0),
+              archive: { rowsBefore: (o) => trR.rowsBefore(name, o), forOwnerTurns: (ids) => trR.forOwnerTurns(name, ids), lastMarkTs: (tool) => trR.lastMarkTs(name, tool) },
+              from: hq.get('from'), to: hq.get('to'), rank: hq.get('rank'), turn: hq.has('turn') ? hq.get('turn') : null,
+              inProgressMark: (entries) => hubEvR.markInProgress(entries, hubEvR.events.turnFor(name)),
+            });
+            return jsonResponse(res, 200, run.incomplete ? { history: [], more: false, incomplete: true } : { history: run.history, more: run.more, ...(run.partial ? { partial: true } : {}) });
+          } catch (e) {
+            if (e && e.message === 'bad_range') return jsonResponse(res, 400, { error: 'bad_range' });
+            if (e && e.message === 'bad_turn') return jsonResponse(res, 400, { error: 'bad_turn' });
+            throw e;
+          }
+        }
         const view = hq.get('view') === 'all' ? 'all' : 'main';
         const before = hq.get('before') || null;
         if (before !== null && !require('./lib/chat-history').parseCursor(before)) return jsonResponse(res, 400, { error: 'bad_cursor' });
@@ -2887,12 +3059,16 @@ async function handleHttpRequest(req, res) {
           // Long waits on workers (lib/long-waits): minutes 0..240 (0 = off, junk = the default 10); the lead notice is on unless false.
           if (patch && patch.handOffWaitMinutes !== undefined) patch.handOffWaitMinutes = require('./lib/long-waits').cleanMinutes(patch.handOffWaitMinutes);
           if (patch && patch.buildPartnerNotice !== undefined) patch.buildPartnerNotice = patch.buildPartnerNotice !== false;
+          // Sidebar sections that are off until switched on: true only for a real true.
+          if (patch && patch.sidebarTigerTeam !== undefined) patch.sidebarTigerTeam = patch.sidebarTigerTeam === true;
+          if (patch && patch.sidebarGuide !== undefined) patch.sidebarGuide = patch.sidebarGuide === true;
+          if (patch && patch.sidebarTeams !== undefined) patch.sidebarTeams = patch.sidebarTeams !== false;   // the Teams tab is on unless switched off
           // Voice: known keys only, merged onto the stored value (lib/voice/manifest cleanVoiceSettings). "enabled" changes
           // only through /api/voice/enable and /disable, which also install the engines and stop or resume the worker.
           if (patch && patch.voice !== undefined) {
             const storedVoice = hubSettings.getSetting('voice');
-            patch.voice = require('./lib/voice/manifest').cleanVoiceSettings(patch.voice, storedVoice);
-            patch.voice.enabled = !!(storedVoice && storedVoice.enabled === true);
+            // updateSettings replaces the whole voice object, so an unset switch must stay absent from it (cleanVoicePatch).
+            patch.voice = require('./lib/voice/manifest').cleanVoicePatch(patch.voice, storedVoice);
           }
           const providersChanged = !!(patch && patch.providers);
           hubSettings.updateSettings(patch);
@@ -3197,6 +3373,13 @@ async function handleHttpRequest(req, res) {
 
     // ── Manual restart via UI button ──
     if (pathname === '/api/restart' && req.method === 'POST') {
+      // Jobs that would stop with the restart (no systemd scope): without { confirm: true } answer with the list, restart nothing.
+      let restartBody = {}; try { restartBody = JSON.parse((await readBody(req)) || '{}') || {}; } catch {}
+      const gate = require('./lib/jobs').restartGate(getJobRunner(), restartBody);
+      if (gate) return jsonResponse(res, 409, gate);
+      // The confirmation covered the jobs running now: no new job may start until this process exits.
+      const attempt = require('crypto').randomUUID();   // admission belongs to this attempt: an earlier one never re-opens a later one
+      getJobRunner().refuseNewJobs(attempt);
       console.log('[Server] Manual restart triggered via UI button');
       // Flush all active agent responses to disk before restarting
       try {
@@ -3207,7 +3390,8 @@ async function handleHttpRequest(req, res) {
       }
       // systemd installs: the process exits with code 75 and systemd restarts it; others: safe-restart.sh with a visible log.
       const r = require('./lib/restart').requestRestart({ projectDir: __dirname, port: PORT, reason: 'UI button', by: 'owner' });
-      if (r.error) return jsonResponse(res, 500, { error: r.error });
+      if (r.error) { getJobRunner().allowNewJobs(attempt); return jsonResponse(res, 500, { error: r.error }); }
+      // Admission stays closed until this process exits; no timer re-opens it.
       return jsonResponse(res, 200, { status: 'restarting', bootId: require('./lib/hub-events').BOOT_ID, pid: process.pid, ...r });
     }
     // The page shows this when a restart left the same process running (boot id unchanged): what the relauncher
@@ -3947,7 +4131,15 @@ server.listen(PORT, HOST, () => {
   // write (lib/transcript splitCombined; the old file is kept as transcript.db.pre-split).
   try { require('./lib/transcript').getTranscript().migrate(); } catch (e) { console.error('[transcript] split not run:', e.message); }
   // A hub restart during the voice download leaves the setting on and nothing installing: pick the install up again.
-  setTimeout(() => { try { require('./lib/voice/routes').resumeIfNeeded({ getSetting: hubSettings.getSetting, log: (m) => console.log(m) }); } catch (e) { console.error('[voice] resume:', e.message); } }, 10000).unref();
+  setTimeout(() => { try { if (process.env.NODE_TEST_CONTEXT || process.env.MM_TEST_NO_REAL_CLAUDE === '1' || process.env.MM_VOICE_NO_AUTO_INSTALL === '1') return; require('./lib/voice/routes').resumeIfNeeded({ getSetting: hubSettings.getSetting, log: (m) => console.log(m) }); } catch (e) { console.error('[voice] resume:', e.message); } }, 10000).unref();
+  // Voice is on by default: about 20 s after the start, fetch the speech engines when they are missing (never under tests; never when voice was turned off).
+  setTimeout(() => {
+    try {
+      if (process.env.NODE_TEST_CONTEXT || process.env.MM_TEST_NO_REAL_CLAUDE === '1' || process.env.MM_VOICE_NO_AUTO_INSTALL === '1') return;
+      const vr = require('./lib/voice/routes');
+      vr.ensureEngines({ engine: vr.getVoice().engine, getSetting: hubSettings.getSetting, now: Date.now, log: (m) => console.log(m) });
+    } catch (e) { console.error('[voice] auto install:', e.message); }
+  }, 20000).unref();
   // After a restart the Remote computers module may still hold desktop sessions this hub no longer knows; they block agent input until ended.
   // Once, 30 s after the start (the module is up by then), only while the module is on; never throws.
   setTimeout(() => {
@@ -4108,6 +4300,10 @@ server.listen(PORT, HOST, () => {
       console.error('[task-queue] Failed to start:', e.message);
     }
     try {
+      require('./lib/model-offer-group-discovery').startGroupDiscovery({
+        file: path.join(__dirname, 'data', 'discovered-models.json'),
+        scan: () => groupedModelOffers().list(),
+      });
       startDiscovery();
       // Subscription usage windows (5-hour, 7-day, per-model weekly) polled through the Claude client; drives the plan-limit fallback.
       try { require('./lib/plan-usage').getPlanUsage().start(); } catch (e) { console.error('[plan-usage] not started:', e.message); }

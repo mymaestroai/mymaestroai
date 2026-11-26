@@ -84,7 +84,7 @@ test('research_progress reaches only the viewers who may see that agent', () => 
   assert.match(sam.chunks.join(''), /"id":"dr-1"/);
 });
 test('the /api/events route filters every agent event by what the viewer may see', () => {
-  assert.match(server, /filter: \(ev\) => visible\(ev\.agent\)/);
+  assert.match(server, /: visible\(ev\.agent\) \}\);/);
 });
 
 // ── page logic ──

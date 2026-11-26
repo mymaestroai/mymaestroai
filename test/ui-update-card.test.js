@@ -25,8 +25,10 @@ test('desktop: Update now is the Update dialog\'s own update, then its restart; 
   const body = app.slice(app.indexOf('async function updateNow()'), app.indexOf('// Settings → Status → Updates.'));
   assert.ok(body.length > 100);
   assert.match(body, /fetch\('\/api\/git-sync\/update'/);
-  assert.match(body, /fetch\('\/api\/restart'/);
-  assert.ok(body.indexOf('/api/git-sync/update') < body.indexOf('/api/restart'), 'restart only after the update');
+  // the restart goes through postRestart(), which asks first when running jobs would stop
+  assert.match(body, /fetch\('\/api\/restart'|await postRestart\(\)/);
+  const restartAt = body.search(/fetch\('\/api\/restart'|await postRestart\(\)/);
+  assert.ok(restartAt > 0 && body.indexOf('/api/git-sync/update') < restartAt, 'restart only after the update');
   assert.match(body, /if \(!r \|\| !r\.success\) \{[\s\S]*?return;\s*\}/, 'a failed update does not restart');
   assert.match(app, /fetch\('\/api\/update-check\/later', \{ method: 'POST'/);
 });

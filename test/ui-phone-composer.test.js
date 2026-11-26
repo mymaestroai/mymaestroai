@@ -276,3 +276,45 @@ test('(e) Escape closes the layer on top: the + sheet first, else an open voice 
   esc();
   assert.equal(sheet.hidden, true, 'the sheet closes first'); assert.equal(panelOpen, true, 'one layer per Escape');
 });
+
+// Owner, 2026-11-24: tight mode class on #composer, toggled on focus and on a short visual viewport; --vvh follows the visual viewport.
+function tightHarness(vvHeight) {
+  const win = { visualViewport: { height: vvHeight, scale: 1 }, innerHeight: 900 };
+  const props = {};
+  const doc = { activeElement: null, documentElement: { style: { setProperty: (k, v) => { props[k] = v; }, removeProperty: (k) => { delete props[k]; } } } };
+  const els = { composer: el('composer'), 'msg-input': el('msg-input') };
+  els['msg-input'].style = {}; els['msg-input'].scrollHeight = 500;
+  const tights = [];
+  const src = fnSource(mob, 'composerTightPaint') + '\n' + fnSource(mob, 'composerInputFit');
+  const api = new Function('$', 'document', 'window', 'teamSetupTight', src + '\nreturn { composerTightPaint, composerInputFit };')((id) => els[id] || null, doc, win, (on) => tights.push(on));
+  return { api, els, doc, win, props, tights };
+}
+test('tight mode: composer-tight is on while the box has focus or the visible height is under 560, off otherwise; --vvh and the offer follow', () => {
+  const h = tightHarness(800);
+  h.api.composerTightPaint();
+  assert.equal(h.els.composer.classList.contains('composer-tight'), false);
+  assert.equal(h.props['--vvh'], '800px');
+  h.doc.activeElement = h.els['msg-input']; h.api.composerTightPaint();
+  assert.equal(h.els.composer.classList.contains('composer-tight'), true, 'focus');
+  assert.equal(h.tights.at(-1), true);
+  h.doc.activeElement = null; h.api.composerTightPaint();
+  assert.equal(h.els.composer.classList.contains('composer-tight'), false, 'blur');
+  h.win.visualViewport.height = 420; h.api.composerTightPaint();
+  assert.equal(h.els.composer.classList.contains('composer-tight'), true, 'short visual viewport');
+  assert.equal(h.props['--vvh'], '420px');
+  h.win.visualViewport.scale = 2; h.api.composerTightPaint();
+  assert.equal('--vvh' in h.props, false, 'a pinch-zoomed page keeps the CSS fallback');
+});
+test('tight mode: the box grows to at most 140 px or 40% of the visible height, then scrolls inside itself', () => {
+  const h = tightHarness(300);
+  h.api.composerInputFit(h.els['msg-input']);
+  assert.equal(h.els['msg-input'].style.height, '120px');
+  h.win.visualViewport.height = 800; h.api.composerInputFit(h.els['msg-input']);
+  assert.equal(h.els['msg-input'].style.height, '140px');
+});
+test('tight mode is wired: focus, blur, visual viewport resize, the first paint; the input autosize uses composerInputFit', () => {
+  assert.ok(/input\.addEventListener\('focus', composerTightPaint\)/.test(mob));
+  assert.ok(/vvPaint\.addEventListener\('resize', composerTightPaint\)/.test(mob));
+  assert.ok(/composerTightPaint\(\);\n/.test(mob));
+  assert.ok(/input\.addEventListener\('input', \(\) => \{ composerInputFit\(input\);/.test(mob));
+});

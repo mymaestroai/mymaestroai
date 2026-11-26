@@ -85,7 +85,7 @@ function makeEnv(opts = {}) {
     voiceContinueWaitNow: () => 3000, voiceThinkingVolNow: () => 0.5, voiceThinkingOnNow: () => true, voiceModeLabel: () => 'Hands-free', VOICE_CONTINUE_WAITS: [1500, 3000, 5000],
     VOICE_LOUDNESS: { normal: 0, louder: 9, loudest: 14 }, voiceLoudnessNow: () => 'louder', voiceLoudnessFor: (p, kind) => (kind === 'bluetooth' ? 'normal' : 'louder'), voiceLoudnessSelectHtml: (id, attrs) => `<select id="${id}" ${attrs}></select>`, voiceLoudApply() {}, VOICE_ECHO_HOLDS: HOLDS, voiceEchoHoldLabel: (ms) => (ms === 0 ? 'off' : (ms / 1000) + ' s'),
     voiceSavePrefs: (s, p) => { prefs = { ...p }; log.saved.push({ ...p }); return { ...p }; },
-    voiceById: get, voiceReady: () => true, voiceOutputKind: require('../lib/ui-voice').voiceOutputKind,
+    voiceById: get, voiceReady: () => true, voiceAgentName: () => 'your agent', voiceOffText: () => 'Voice is off. Turn it on in Settings, Voice', voiceHintDismiss() {}, voiceHintHide() {}, voiceOutputKind: require('../lib/ui-voice').voiceOutputKind,
     voiceRec: { guard: { cancel() {}, pending: false }, chatId: null, busy: false },
     voiceMicGuard: () => ({ cancel() {}, pending: false, begin: () => 1, settle: () => true, fail() {}, gen: 1 }),
     dialogGuard: { savePoint: () => () => {}, markLoaded() {} }, isHubAdmin: () => true, voiceMicStop() {}, voiceStopPlayback() {}, voicePlay,

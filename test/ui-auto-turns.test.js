@@ -191,7 +191,7 @@ test('3 consecutive cards stack with summary; 2 stay cards', () => {
   assert.equal(items.length, 1);
   assert.equal(items[0].type, 'stack');
   assert.equal(items[0].cards.length, 4);
-  assert.equal(items[0].summary, '4 automatic turns: 2 consultations, 1 scheduled task, 1 hub notice');
+  assert.equal(items[0].summary, '4 automatic turns: 2 consultations, 1 scheduled task, 1 job finished');
   const two = autoGroupHistory(h.slice(0, 4));
   assert.deepEqual(two.map((x) => x.type), ['card', 'card']);
   const three = autoGroupHistory([consult(), a('1'), consult(), a('2'), consult(), a('3')]);
@@ -208,8 +208,20 @@ test('an entry between cards breaks a run', () => {
 
 test('autoSummaryOf singular and plural', () => {
   const k = (kind) => ({ kind });
-  assert.equal(autoSummaryOf([k('notice'), k('notice'), k('schedule')]), '3 automatic turns: 1 scheduled task, 2 hub notices');
+  assert.equal(autoSummaryOf([k('notice'), k('notice'), k('schedule')]), '3 automatic turns: 1 scheduled task, 2 updates');
   assert.equal(autoSummaryOf([k('consultation')]), '1 automatic turn: 1 consultation');
+});
+
+test('r4 E4: the summary uses the run line\'s words, from each card\'s origin kind', () => {
+  const o = (kind, from) => u('x', { origin: { kind, ...(from ? { from } : {}) } });
+  const h = [o('consultation', 'scout'), a('1'), o('hand_off', 'maestro'), a('2'), o('hand_off_report'), a('3'), o('schedule', 'Daily'), a('4'),
+    o('job_notice'), a('5'), o('job_report'), a('6'), o('alert'), a('7')];
+  const items = autoGroupHistory(h);
+  assert.equal(items.length, 1);
+  assert.equal(items[0].summary, '7 automatic turns: 1 consultation, 2 tasks, 1 scheduled task, 2 jobs finished, 1 update');
+  const two = autoSummaryOf([{ kind: 'notice', work: 'job' }, { kind: 'notice', work: 'job' }, { kind: 'consultation', work: 'consultation' }]);
+  assert.equal(two, '3 automatic turns: 1 consultation, 2 jobs finished');
+  assert.ok(!/hub notice/.test(autoSummaryOf([{ kind: 'notice' }])), 'no "hub" in what a person reads');
 });
 
 test('an ask entry inside an automatic turn ends the card and shows as entries', () => {

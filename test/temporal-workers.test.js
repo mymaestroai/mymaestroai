@@ -29,6 +29,9 @@ describe('temporal workers: virtual agents', () => {
     assert.match(ro, /READ-ONLY/); assert.match(ro, /cannot delegate/); assert.match(ro, /"maestro"/); assert.match(ro, /scan logs/);
     assert.match(tw.workerContext({ parent: 'x', toolScope: 'full' }), /may read, write and run commands/);
     assert.match(tw.workerContext({ parent: 'x', toolScope: 'none' }), /no tools/);
+    for (const toolScope of ['none', 'read', 'full']) {
+      assert.ok(tw.workerContext({ parent: 'x', toolScope }).includes('Use absolute paths, or `cd /abs/dir && command` (not `cd dir; command`).'));
+    }
   });
 });
 
@@ -102,7 +105,9 @@ describe('temporal workers: tool scope', () => {
     }
   });
   it('read scope blocks writing; full scope does not', () => {
-    for (const t of ['Bash', 'Write', 'Edit']) { assert.ok(tw.gatewayExcludesFor('read').includes(t)); assert.ok(tw.sdkDisallowedFor('read').includes(t)); assert.ok(!tw.gatewayExcludesFor('full').includes(t)); assert.ok(!tw.sdkDisallowedFor('full').includes(t)); }
+    assert.ok(!tw.gatewayExcludesFor('read').includes('Bash'), 'gateway offers the helper stub');
+    assert.ok(tw.sdkDisallowedFor('read').includes('Bash'), 'client Bash remains blocked');
+    for (const t of ['Write', 'Edit']) { assert.ok(tw.gatewayExcludesFor('read').includes(t)); assert.ok(tw.sdkDisallowedFor('read').includes(t)); assert.ok(!tw.gatewayExcludesFor('full').includes(t)); assert.ok(!tw.sdkDisallowedFor('full').includes(t)); }
     assert.ok(!tw.sdkDisallowedFor('read').includes('Read')); assert.ok(tw.sdkDisallowedFor('none').includes('Read'));
   });
 });

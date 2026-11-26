@@ -29,12 +29,14 @@ function voiceBlock() {
 }
 
 test('settings: Voices section in the tools group, admin controls and per-device prefs', () => {
-  assert.match(app, /\{ id: 'tools', title: '[^']+', sections: \[[^\]]*'st-voice-section'[^\]]*\] \}/);
+  // voice entry: Voice is a group of its own (after Appearance), no longer part of Tools and data
+  assert.match(app, /\{ id: 'voice', title: '🎙 Voice', sections: \['st-voice-section'\] \}/);
+  assert.doesNotMatch(app, /\{ id: 'tools', title: '[^']+', sections: \[[^\]]*'st-voice-section'[^\]]*\] \}/);
   assert.ok(app.includes('html += voiceSettingsHtml(data);'));
   const b = voiceBlock();
-  assert.match(b, /id="st-voice-section"><h4>Voices<\/h4>/);
+  assert.match(b, /id="st-voice-section"><h4>Voice<\/h4>/);
   assert.match(b, /const admin = isHubAdmin\(\);/);
-  assert.match(b, /Enable voice/);
+  assert.match(b, /On for everyone on this Maestro/);   // was "Enable voice" (voice entry)
   assert.match(b, /`\/api\/voice\/\$\{on \? 'enable' : 'disable'\}`/);
   assert.match(b, /method: 'POST'/);
   assert.match(b, /setTimeout\(voiceSettingsRefresh, 2000\)/, 'polls every 2 s while installing');
@@ -61,7 +63,7 @@ test('settings: Voices section in the tools group, admin controls and per-device
 });
 
 test('composer: mic button next to attach, shown only when voice is enabled and ready', () => {
-  assert.match(app, /id="mic-\$\{chatId\}" class="mic-btn" style="display:none"[^>]*title="\$\{voiceMicIdleTitle\(\)\}"/);   // the title follows the saved mode (Talk hands-free / Tap to talk / Dictation)
+  assert.match(app, /id="mic-\$\{chatId\}" class="mic-btn" style="display:none"[^>]*title="\$\{hubEsc\(voiceMicIdleTitle\(chatId\)\)\}"/);   // the title follows the saved mode and names the chat's agent (voice entry)
   assert.match(app, /onclick="voiceMicToggle\('\$\{chatId\}'\)"/);
   const at = app.indexOf('id="mic-${chatId}"');
   assert.ok(app.indexOf('document.getElementById(\'file-input-${chatId}\').click()') < at, 'after the attach button');
@@ -171,7 +173,7 @@ function makeEnv(opts = {}) {
     fetch: fetchFn,
     hubToast: (t) => calls.toasts.push(t),
     chats, activeChat: 'c1', rawMessageText: new WeakMap(),
-    isHubAdmin: () => true, hubEsc: String, dialogGuard: { savePoint: () => () => {}, markLoaded() {} },
+    isHubAdmin: () => !opts.member, openVoiceSettings: () => { calls.openedSettings = (calls.openedSettings || 0) + 1; }, stSum() {}, capName: (s) => s, questionOverlays: {}, hubEsc: String, dialogGuard: { savePoint: () => () => {}, markLoaded() {} },
     autoGrowTextarea() {},
     SpeechSynthesisUtterance: class { constructor(t) { this.text = t; } },
     voiceLoadPrefs: () => ({ micLevel: 80, mode: 'tap', readAloud: true, deviceVoiceFallback: !!opts.fallback, echoHold: 0, loudness: 'louder', loudnessBt: 'normal' }),   // the two device defaults are already the stored values, so a save that keeps them marks nothing as chosen (the page marks `set` only for a changed device default)   // 'tap': these tests are the phase-1 dictation path (hands-free is the default since phase 2)
@@ -238,7 +240,12 @@ test('mic: off voice is refused with a message; a 409 voice_off from the hub sho
   await off.api.voiceRefreshStatus();
   await off.api.voiceMicToggle('c1');
   assert.strictEqual(off.calls.gum.length, 0, 'no microphone when voice is off');
-  assert.match(off.calls.toasts[0], /Voice is off/);
+  assert.match(off.calls.toasts[0], /Voice is off/);   // the microphone is hidden until ready, so this is only a guard; its words are the voice-entry words
+  const member = makeEnv({ status: { enabled: false, ready: false, adminName: 'Sam' }, member: true });
+  await member.api.voiceRefreshStatus();
+  await member.api.voiceMicToggle('c1');
+  assert.strictEqual(member.calls.gum.length, 0);
+  assert.strictEqual(member.calls.toasts[0], 'Voice is off on this Maestro. Ask Sam to turn it on.');
   const e = makeEnv({ stt: async () => ({ ok: false, status: 409, json: async () => ({ error: 'voice_off' }) }) });
   await e.api.voiceRefreshStatus();
   await e.api.voiceMicToggle('c1');

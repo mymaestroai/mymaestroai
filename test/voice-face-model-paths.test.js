@@ -724,7 +724,7 @@ const cxTool = () => ({ kind: 'tool_start', id: 'x1', tool: 'shell', input: 'ls'
 const execMsg = text => ({ type: 'item.completed', item: { id: 'i' + Math.random(), type: 'agent_message', text } });
 const execTool = () => ({ type: 'item.started', item: { id: 'x1', type: 'command_execution', command: 'ls' } });
 
-function codexRun({ transport, items, options, throwAfter, abortAt, status }) {
+function codexRun({ transport, items, options, throwAfter, abortAt, status, launcher }) {
   const run = newRun();
   const prompts = [];
   const abort = new AbortController();
@@ -747,7 +747,7 @@ function codexRun({ transport, items, options, throwAfter, abortAt, status }) {
   };
   const codexCli = {
     ...L('codex-cli'),
-    modelId: (m) => String(m).replace(/^codex-cli\//, ''), resolveBinary: () => '/fake/codex', getSession: () => null, setSession() {}, clearSession() {},
+    modelId: (m) => String(m).replace(/^codex-cli\//, ''), resolveBinary: () => launcher?.bin || '/fake/codex', getSession: () => null, setSession() {}, clearSession() {},
     sandboxFor: () => 'read-only', buildArgs: () => [], approvalPolicyFor: () => 'never', MAX_INSTRUCTIONS_ARG: 1e9,
   };
   const explicit = baseExplicit(run, {
@@ -757,12 +757,16 @@ function codexRun({ transport, items, options, throwAfter, abortAt, status }) {
     codexCli,
     appServer: {
       transportFor: () => (transport === 'app-server' ? 'app-server' : 'exec'),
-      CodexAppSession: { open: async () => fakeSession },
+      CodexAppSession: { open: async opts => {
+        launcher?.run(opts);
+        return fakeSession;
+      } },
       SteerPump: class { start() {} async finish() { return []; } onUserMessage() {} undelivered() { return []; } },
       turnInput: (p) => p,
     },
     codexBridge: { register: () => ({ file: '/none', release() {} }), collectingSdk: {} },
-    runCodexProcess: async ({ input, onEvent }) => {
+    runCodexProcess: async ({ bin, env, input, onEvent }) => {
+      launcher?.run({ bin, env });
       prompts.push(String(input));
       feed(onEvent);
       return { code: 0, stderrTail: '' };
@@ -790,6 +794,27 @@ const TRANSPORTS = ['app-server', 'exec'];
 // A reply as the transport sends it: app-server = text_begin + the pieces as deltas; exec = whole messages.
 const codexReply = (transport, pieces) => (transport === 'app-server' ? [cxBegin(), ...pieces.map(cxDelta)] : [execMsg(pieces.join(''))]);
 const codexTool = transport => (transport === 'app-server' ? cxTool() : execTool());
+
+test('codex: both transport entrypoints launch a shebang client with the verified Node PATH', { skip: process.platform === 'win32' }, async t => {
+  const fakePath = path.join(ISO.home, 'other-bin');
+  fs.mkdirSync(fakePath);
+  fs.writeFileSync(path.join(fakePath, 'node'), '#!/bin/sh\nexit 78\n', { mode: 0o700 });
+  const bin = path.join(ISO.home, 'explicit-codex');
+  fs.writeFileSync(bin, '#!/usr/bin/env node\nconsole.log(JSON.stringify([process.execPath, process.env.PATH]))\n', { mode: 0o700 });
+  const previous = process.env.PATH;
+  process.env.PATH = fakePath;
+  t.after(() => { process.env.PATH = previous; });
+  const expected = L('codex-cli').withNode({ PATH: fakePath }).PATH;
+  for (const transport of TRANSPORTS) {
+    const launches = [];
+    const launcher = { bin, run(opts) {
+      const output = require('node:child_process').execFileSync(opts.bin, [transport], { env: opts.env, encoding: 'utf8' });
+      launches.push(JSON.parse(output));
+    } };
+    await codexRun({ transport, launcher, items: codexReply(transport, ['ok']) }).exec();
+    assert.deepEqual(launches, [[process.execPath, expected]], transport);
+  }
+});
 
 test('codex: smoke: a plain reply reaches the reply on both transports', async () => {
   for (const transport of TRANSPORTS) {

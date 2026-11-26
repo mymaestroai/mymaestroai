@@ -27,9 +27,17 @@ test('every Claude client start passes env from claudeClientEnv; the chat client
     const src = read(f);
     const n = (src.match(/sdk(?:Module)?\.query\(/g) || []).length;
     assert.ok(n > 0, f);
-    assert.strictEqual((src.match(/env: require\('\.\/billing'\)\.claudeClientEnv\(\)/g) || []).length, n, `${f}: ${n} query sites`);
+    // Catalog discovery shares the verified client's environment with the account check.
+    const shared = f === 'lib/model-discovery.js' ? 1 : 0;
+    if (shared) {
+      assert.match(src, /const ctx = accounts\.context\('claude-sdk'\);[\s\S]*?await fetchSdkSupportedModels\(ctx\)/);
+      assert.match(src, /clientIsolation\.mergeInto\(\{[^}]*env: ctx\.env \},/);
+      assert.match(read('lib/model-offer-accounts.js'), /const cli = require\('\.\/claude-signin'\);\s*const env = cli\.clientEnv\(\);/);
+      assert.match(read('lib/claude-signin.js'), /function clientEnv\([^)]*\) \{ return require\('\.\/billing'\)\.claudeClientEnv\(base\);/);
+    }
+    assert.strictEqual((src.match(/env: require\('\.\/billing'\)\.claudeClientEnv\(\)/g) || []).length, n - shared, `${f}: direct query sites`);
     // The env sits inside the options handed to the client isolation merge, which keeps it and adds its own switches.
-    assert.strictEqual((src.match(/clientIsolation\.mergeInto\(\{[^]*?env: require\('\.\/billing'\)\.claudeClientEnv\(\)[^]*?\}, /g) || []).length, n, `${f}: env inside mergeInto`);
+    assert.strictEqual((src.match(/clientIsolation\.mergeInto\(\{[^]*?env: require\('\.\/billing'\)\.claudeClientEnv\(\)[^]*?\}, /g) || []).length, n - shared, `${f}: direct env inside mergeInto`);
   }
   assert.match(read('lib/welcome.js'), /require\('\.\/billing'\)\.claudeClientEnv\)\(childEnv\)/);
   // Security R2: the Claude client never runs in a box, so there is no in-box branch with its own environment; every

@@ -13,8 +13,10 @@ test('the streamed question names the asking agent', () => {
 });
 
 test('the desktop and the phone send the agent back with the answer, falling back to the open chat\'s agent', () => {
-  assert.match(read('app.js'), /fetch\('\/api\/ask_response', \{[\s\S]{0,600}body: JSON\.stringify\(\{ request_id, answers, \.\.\.\(\(\(data && data\.agent\) \|\| \(chatId && chats\[chatId\] && !chats\[chatId\]\.isGroup && chats\[chatId\]\.agent\)\)/);
-  assert.match(read('mobile.js'), /api\('\/api\/ask_response', \{[\s\S]{0,500}body: JSON\.stringify\(\{ request_id, answers, \.\.\.\(\(data\.agent \|\| \(typeof current === 'string' && current\)\) \? \{ agent: data\.agent \|\| current \}/);
+  // changed (Build Team): the desktop body is built by askResponseBody (agent kept, `checked` only for a plan card)
+  assert.match(read('app.js'), /fetch\('\/api\/ask_response', \{[\s\S]{0,700}body: askResponseBody\(request_id, answers, \(\(data && data\.agent\) \|\| \(chatId && chats\[chatId\] && !chats\[chatId\]\.isGroup && chats\[chatId\]\.agent\)\) \? String\(\(data && data\.agent\) \|\| chats\[chatId\]\.agent\) : ''/);
+  // changed (Build Team): the phone's plan card adds an optional `checked` list before the agent field
+  assert.match(read('mobile.js'), /api\('\/api\/ask_response', \{[\s\S]{0,500}body: JSON\.stringify\(\{ request_id, answers, \.\.\.\(checked \? \{ checked \} : \{\}\), \.\.\.\(\(data\.agent \|\| \(typeof current === 'string' && current\)\) \? \{ agent: data\.agent \|\| current \}/);
 });
 
 test('a question that arrives as a hub event (no chat stream attached) keeps its agent on both pages', () => {

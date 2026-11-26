@@ -53,16 +53,22 @@ test('non-admin (and a page that does not know yet): admin wording, no button', 
   for (const me of [{ user: { id: 'm' }, isAdmin: false }, null]) {
     const t = make({ status: { enabled: false, ready: false, platformSupported: true }, me });
     t.paintVoiceSheet();
-    assert.strictEqual(t.els['.vs-note'].textContent, 'Voice is off. An admin of your Maestro can turn it on, from the Voice menu on their phone or in Settings, Voices on the computer.');
+    // changed (voice entry): "Settings, Voices" is now "Settings, Voice"
+    assert.strictEqual(t.els['.vs-note'].textContent, 'Voice is off. An admin of your Maestro can turn it on, from the Voice menu on their phone or in Settings, Voice on the computer.');
     assert.strictEqual(t.els['.vs-enable'].hidden, true);
     assert.strictEqual(t.els['.vs-enable-btn'].hidden, true);
   }
+  // new: when the status names the admin, the sentence names them
+  const n = make({ status: { enabled: false, ready: false, platformSupported: true, adminName: 'Pat' }, me: { user: { id: 'm' }, isAdmin: false } });
+  n.paintVoiceSheet();
+  assert.strictEqual(n.els['.vs-note'].textContent, 'Voice is off. Pat can turn it on, from the Voice menu on their phone or in Settings, Voice on the computer.');
 });
 
 test('platform not supported: the wording, no button, for an admin too', () => {
   const t = make({ status: { enabled: false, ready: false, platformSupported: false } });
   t.paintVoiceSheet();
-  assert.strictEqual(t.els['.vs-note'].textContent, "Voice can't run on the computer your Maestro is on yet. It works on Linux (x64) and Mac computers.");
+  // changed (voice entry): the status line for an unsupported computer
+  assert.strictEqual(t.els['.vs-note'].textContent, 'Voice is not supported on this computer.');
   assert.strictEqual(t.els['.vs-enable-btn'].hidden, true);
   assert.strictEqual(t.els['.vs-enable'].hidden, true);
 });
@@ -96,43 +102,58 @@ test('the refresh timer runs only while installing / enabled but not ready; it s
   assert.match(sheetSrc, /const close = \(\) => \{[^\n]*voiceSheetPollStop\(\);/, 'closing the sheet stops it');
 });
 
-test('on but not installed (an install that stopped): the admin gets "Try again", a member no button', () => {
-  let t = make({ status: { enabled: true, ready: false, installing: false, platformSupported: true } });
+// changed (voice entry): an install that has not started is no longer a "Try again" box for the admin: it starts by itself,
+// so the sheet says so (with the size) and shows no button.
+test('on but not installed (not installing, no error): "Getting voice ready ... It starts by itself.", no button for anyone', () => {
+  let t = make({ status: { enabled: true, ready: false, installing: false, platformSupported: true, downloadBytes: 1234500000 } });
   t.paintVoiceSheet();
-  assert.strictEqual(t.els['.vs-note'].textContent, 'Voice is on, but not ready on your Maestro yet.');
-  assert.strictEqual(t.els['.vs-enable'].hidden, false);
-  assert.strictEqual(t.els['.vs-enable-btn'].textContent, 'Try again');
-  assert.strictEqual(t.els['.vs-enable-btn'].hidden, false);
+  assert.strictEqual(t.els['.vs-note'].textContent, 'Getting voice ready: about 1235 MB to download. It starts by itself.');
+  assert.strictEqual(t.els['.vs-enable'].hidden, true);
+  assert.strictEqual(t.els['.vs-enable-btn'].hidden, false, 'the button element is only shown inside the (hidden) block');
   t = make({ status: { enabled: true, ready: false, installing: false, platformSupported: true }, me: { user: {}, isAdmin: false } });
   t.paintVoiceSheet();
+  assert.strictEqual(t.els['.vs-note'].textContent, 'Getting voice ready: the speech engines are to be downloaded. It starts by itself.', 'size unknown: left out');
   assert.strictEqual(t.els['.vs-enable'].hidden, true);
   assert.strictEqual(t.els['.vs-enable-btn'].hidden, true);
 });
 
-test('failed: the admin sees the error and "Try again"; a member the pointer to Settings, no button', () => {
-  let t = make({ status: { enabled: true, ready: false, failed: true, error: 'no disk space' } });
+// changed (voice entry): the failed lines name the reason and promise a retry; the raw error is the admin's, in small text, with "Retry now" (POST /api/voice/retry).
+test('failed: the reason line for everyone; the admin also gets the raw error and "Retry now"; a member no error and no button', async () => {
+  const lines = { network: "Voice isn't ready: this computer couldn't reach the internet to download the speech engines. It tries again by itself.",
+    damaged: "Voice isn't ready: a download was damaged. It tries again by itself.", other: "Voice isn't ready: the speech engines didn't install. It tries again by itself." };
+  for (const [reason, line] of Object.entries(lines)) {
+    const t = make({ status: { enabled: true, ready: false, failed: true, failReason: reason, error: 'raw boom' } });
+    t.paintVoiceSheet();
+    assert.strictEqual(t.els['.vs-note'].textContent, line, reason);
+  }
+  let t = make({ status: { enabled: true, ready: false, failed: true, failReason: 'disk', downloadBytes: 2500000000, error: 'ENOSPC: no space' }, apiFn: async () => ({ status: 200, ok: true, json: async () => ({ ok: true }) }) });
   t.paintVoiceSheet();
-  assert.strictEqual(t.els['.vs-note'].textContent, 'Voice setup failed: no disk space');
-  assert.strictEqual(t.els['.vs-enable-btn'].textContent, 'Try again');
+  assert.strictEqual(t.els['.vs-note'].textContent, "Voice isn't ready: not enough free disk space for the speech engines (about 2500 MB). It tries again by itself.");
+  assert.strictEqual(t.els['.vs-enable'].hidden, false);
+  assert.strictEqual(t.els['.vs-enable-text'].textContent, 'ENOSPC: no space', 'the raw error, for the admin');
+  assert.strictEqual(t.els['.vs-enable-btn'].textContent, 'Retry now');
   assert.strictEqual(t.els['.vs-enable-btn'].hidden, false);
-  t = make({ status: { enabled: true, ready: false, failed: true } });
+  await t.voiceSheetEnable();
+  assert.strictEqual(t.log.posts[0][0], '/api/voice/retry', 'Retry now posts the retry route');
+  t = make({ status: { enabled: true, ready: false, failed: true, failReason: 'other', error: null }, me: { user: {}, isAdmin: false } });
   t.paintVoiceSheet();
-  assert.strictEqual(t.els['.vs-note'].textContent, 'Voice setup failed: unknown error');
+  assert.strictEqual(t.els['.vs-note'].textContent, lines.other);
+  assert.strictEqual(t.els['.vs-enable'].hidden, true);
+  assert.strictEqual(t.els['.vs-enable-btn'].hidden, true);
   t = make({ status: { enabled: true, ready: false, failed: true, error: 'secret' }, me: { user: {}, isAdmin: false } });
   t.paintVoiceSheet();
-  assert.strictEqual(t.els['.vs-note'].textContent, 'Voice setup failed. An admin of your Maestro can see the details in Settings, Voices on the computer.');
   assert.ok(!t.els['.vs-note'].textContent.includes('secret'));
-  assert.strictEqual(t.els['.vs-enable-btn'].hidden, true);
 });
 
-test('voice on and enabled-but-not-ready keep their wording ("your Maestro" instead of "the hub")', () => {
+// changed (voice entry): "Voice is on (whisper)." is now the ready status line "Voice is on and ready."; the not-ready line is the getting-ready one
+test('voice ready and enabled-but-not-ready: their status lines ("your Maestro" instead of "the hub")', () => {
   let t = make({ status: { enabled: true, ready: true, stt: { engine: 'whisper' } } });
   t.paintVoiceSheet();
-  assert.match(t.els['.vs-note'].textContent, /^Voice is on \(whisper\)\. Tap the mic beside the message box to dictate\.$/);
+  assert.match(t.els['.vs-note'].textContent, /^Voice is on and ready\. Tap the mic beside the message box to dictate\.$/);
   assert.strictEqual(t.els['.vs-enable'].hidden, true);
   t = make({ status: { enabled: true, ready: false } });
   t.paintVoiceSheet();
-  assert.strictEqual(t.els['.vs-note'].textContent, 'Voice is on, but not ready on your Maestro yet.');
+  assert.strictEqual(t.els['.vs-note'].textContent, 'Getting voice ready: the speech engines are to be downloaded. It starts by itself.');
 });
 
 test('the click posts /api/voice/enable with the page api(), disables the button meanwhile, then refreshes the status', async () => {
@@ -160,7 +181,7 @@ test('403: "Only an admin can turn voice on."; 400 platform_unsupported paints t
   assert.strictEqual(t.log.refreshes, 1);
   t = make({ status: { enabled: false, platformSupported: true }, apiFn: async () => ({ status: 400, ok: false, json: async () => ({ error: 'platform_unsupported' }) }) });
   t.paintVoiceSheet(); await t.voiceSheetEnable();
-  assert.match(t.els['.vs-note'].textContent, /^Voice can't run on the computer your Maestro is on yet/);
+  assert.match(t.els['.vs-note'].textContent, /^Voice is not supported on this computer\./);
   assert.strictEqual(t.els['.vs-enable-btn'].hidden, true);
   t = make({ status: { enabled: false, platformSupported: true }, apiFn: async () => ({ status: 500, ok: false, json: async () => ({ error: 'disk full' }) }) });
   t.paintVoiceSheet(); await t.voiceSheetEnable();

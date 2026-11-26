@@ -1,8 +1,9 @@
 {
   "_about": "Hub-provided files in agent workspaces that improve over time. A workspace copy byte-identical to one of the 'previous' versions (sha256) was never edited, so the hub replaces it with the current template at startup; any other copy is the owner's and stays. When a listed template changes, move its old 'current' into 'previous' and set the new 'current' (test/setup-interview-resume.test.js checks this).",
   "maestro/SETUP-INTERVIEW.md": {
-    "current": "a919c10147bc43c4b5b029c1a800b924f6680835c43b92d338a9f2cc28aed269",
+    "current": "24fb93014fbdfa163a3c4ada701ea372901476e9f3814fbdc0cf87b54893468e",
     "previous": [
+      "a919c10147bc43c4b5b029c1a800b924f6680835c43b92d338a9f2cc28aed269",
       "4b293e42a26d2c5e834b83c676904f06cb7f3e6584194e99f71d7c3fac0e4738",
       "e1cfbbd4dc5b717973ba5ba4eea35069b88755783f8251565336ceb6f35aa173",
       "c7f4dc3bfe83d7ef1ee24a2788bfba1142bc1e863e773ea6680ea1ffd1f39d28"
@@ -24,5 +25,9 @@
       "7c9133f8f8073c37f55b76f4dcf78ec598da38288e22c32fe5b6168ca65e1e7a",
       "c1152e327a6569ece8dce75970325cb99fc21ab34e130a9192401f35fe3d1229"
     ]
+  },
+  "maestro/TEAM-PLAYBOOK.md": {
+    "current": "1ab34a80c49bf546f552a36f9bf4a1c4e1dbe5d625d9a4eabe35b3f040b12dec",
+    "previous": ["758602a0772948e76162f5c4ed102e5f13dd3918200cb9ac27707be69534fed3", "59ec7edc513a3435897aa8a8e63cbfc45b732680c99fa6a0be74205b56550f45", "69d03c6b4614fd13985f0cf67872d9c097b14f5ae8eb3067adb46ad5951d1f22", "150e38b4c8c1480f75c8b3bef484e8e324b5fa72a198e10b93a2e5bd4c81629a", "9129e4765d0d6f2d156c5c550a022bc0b63b44454bbe0625cc5e0f7603581067"]
   }
 }

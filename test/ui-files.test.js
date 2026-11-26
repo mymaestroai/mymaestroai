@@ -49,8 +49,8 @@ test('desktop: talks to every /api/files route with the owner and agent query th
 test('desktop: the panel is per agent: it follows the active chat tab and titles itself with root.label', () => {
   assert.ok(app.includes("return c && !c.isGroup && c.agent ? String(c.agent) : '';"), 'agent = the active chat tab\'s agent (solo chats)');
   assert.ok(app.includes("if (agent !== filesState.agent) { filesState.agent = agent; filesState.path = ''; }"), 'a new agent starts at the top of its own root');
-  assert.match(app, /window\.__activeChatId = chatId;\s*\n\s*if \(document\.getElementById\('files-panel'\)\) filesRefresh\(\);/, 'switching chat tabs re-fetches the open panel');
-  assert.match(app, /window\.__activeChatId = null;[\s\S]{0,200}if \(document\.getElementById\('files-panel'\)\) filesRefresh\(\);/, 'closing the last chat drops back to the general folder');
+  assert.match(app, /window\.__activeChatId = chatId;\s*\n(?:\s*try \{ if \(window\.HandOffCard[^\n]*\n)?\s*if \(document\.getElementById\('files-panel'\)\) filesRefresh\(\);/, 'switching chat tabs re-fetches the open panel');
+  assert.match(app, /window\.__activeChatId = null;[\s\S]{0,400}if \(document\.getElementById\('files-panel'\)\) filesRefresh\(\);/, 'closing the last chat drops back to the general folder');
   assert.ok(app.includes("h3.textContent = `📁 ${root.label || 'Files'}${filesState.agent ? '' : ' (no chat open)'}`"), 'title is root.label, marked when no chat is open');
   assert.ok(app.includes("const agent = chats[chatId] && !chats[chatId].isGroup && chats[chatId].agent ? String(chats[chatId].agent) : '';"), 'paperclip uploads go to that chat\'s agent');
   assert.ok(app.includes("uploadFileToHub(file, '', { agent, onProgress"), 'paperclip passes agent=');
@@ -111,5 +111,5 @@ test('mobile: paperclip accepts any file; non-images upload to the open agent\'s
   assert.ok(mhtml.includes('id="camera-input" accept="image/*"'), 'camera unchanged');
   assert.ok(mjs.includes("if (f.type.startsWith('image/')) addImageFile(f); else uploadFileForChat(f);"));
   assert.ok(mjs.includes("uploadFileToHub(file, '', false, agent)") && mjs.includes("const agent = current || ''; // this chat's agent folder"), 'chat uploads land in the open agent\'s folder');
-  assert.ok(sw.includes("const VERSION = 'hub-mobile-v76';"), 'service worker cache bumped');
+  assert.ok(sw.includes("const VERSION = 'hub-mobile-v94';"), 'service worker cache bumped');
 });

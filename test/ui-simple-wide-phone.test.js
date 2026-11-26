@@ -58,7 +58,7 @@ test('JS: the sidebar is built from the sheet model and shares the row builder',
   assert.match(f, /Chats/);
   assert.match(f, /addEventListener\('click', simpleSettingsOpen\)/);
   const fill = fnSource('simpleAgentListFill');
-  assert.match(fill, /simpleAgentSheetModel\(agents, current, simpleMoreGet\(\), isBusy\)/);
+  assert.match(fill, /simpleAgentSheetModel\(agents, current, simpleMoreGet\(\), isBusy, bgCountOf\)/);
   assert.match(fill, /No agents yet\./);
   assert.match(fnSource('simpleSidePaint'), /simpleAgentListFill\(/);
   assert.match(fnSource('simpleAgentsFill'), /simpleAgentListFill\(/);
@@ -82,7 +82,7 @@ test('JS: the matchMedia listener is guarded; the new hooks are guarded', () => 
 function el(tag) {
   const e = {
     tag, children: [], className: '', dataset: {}, attrs: {}, text: '', listeners: {}, _q: {},
-    classList: { add(c) { e.className += ' ' + c; }, contains(c) { return e.className.split(/\s+/).includes(c); } },
+    classList: { add(c) { e.className += ' ' + c; }, remove(c) { e.className = e.className.split(/\s+/).filter((x) => x !== c).join(' '); }, contains(c) { return e.className.split(/\s+/).includes(c); } },
     setAttribute(k, v) { e.attrs[k] = v; }, appendChild(c) { e.children.push(c); return c; },
     addEventListener(t, f) { e.listeners[t] = f; },
     querySelector(sel) { return e._q[sel] || (e._q[sel] = el('span')); },
@@ -94,12 +94,12 @@ function el(tag) {
 function run(list, cur, open, busy) {
   const navs = [];
   const ctx = {
-    window: { hubSimple },
+    window: { hubSimple }, AgentDot: require('../lib/ui-agent-dot.js'), bgCountOf: () => 0,
     document: { createElement: el }, agents: list, current: cur, screen: 'chat', isBusy: (n) => busy.includes(n), live: {},
     navigate: (s, n) => navs.push([s, n]), simpleMoreGet: () => open, simpleMoreSet: () => {}, simpleAgentListsRepaint: () => {},
   };
   vm.createContext(ctx);
-  const names = ['simpleAgentSheetModel', 'simpleDotClass', 'simpleAgentRow', 'simpleAgentListFill'];
+  const names = ['simpleAgentSheetModel', 'simpleDotClass', 'simpleDotPaint', 'simpleMoreDotPaint', 'simpleAgentRow', 'simpleAgentListFill'];
   vm.runInContext(names.map(fnSource).join('\n') + '\nthis.__f = { simpleAgentListFill };', ctx);
   const box = el('div');
   ctx.__f.simpleAgentListFill(box, {});

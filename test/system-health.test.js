@@ -968,13 +968,14 @@ test('readinessItems / briefItems / bannerItems', async () => {
   h.cfg.signIns = [{ id: 'claude', name: 'Claude', agents: 2, signedIn: false }];
   await manual(h);
   const r = h.sh.readinessItems();
-  assert.deepStrictEqual(r.map(i => i.id).sort(), [DISK, 'health-clock'].sort(), 'no sign-in items');
-  assert.deepStrictEqual(Object.keys(r[0]).sort(), ['detail', 'fix', 'id', 'level', 'title']);
+  assert.deepStrictEqual(r.map(i => i.id).sort(), [DISK, 'health-clock', 'health-claude-signedout'].sort(), 'no health-signin-* items; the Claude signed-out item passes');
+  assert.deepStrictEqual(Object.keys(r[0]).sort(), ['action', 'detail', 'fix', 'id', 'level', 'title']);
   const b = h.sh.briefItems();
-  assert.deepStrictEqual(b.map(i => i.id).sort(), [DISK, 'health-clock', 'health-signin-claude'].sort());
+  assert.deepStrictEqual(b.map(i => i.id).sort(), [DISK, 'health-clock', 'health-signin-claude', 'health-claude-signedout'].sort());
   assert.deepStrictEqual(Object.keys(b[0]).sort(), ['detail', 'fix', 'id', 'level', 'since', 'title']);
   assert.ok(b.every(i => i.since));
-  assert.deepStrictEqual(h.sh.bannerItems().map(i => i.id), [DISK], 'critical only, no sign-ins');
+  assert.deepStrictEqual(h.sh.bannerItems().map(i => i.id).sort(), [DISK, 'health-claude-signedout'].sort(), 'critical only, no health-signin-* (the Claude signed-out item carries the Sign in again action)');
+  assert.strictEqual(h.sh.bannerItems().find(i => i.id === 'health-claude-signedout').action, 'claude-signin');
   assert.ok(![...r, ...b].some(i => i.level === 'ok' || i.level === 'info' || i.level === 'unknown'));
 });
 

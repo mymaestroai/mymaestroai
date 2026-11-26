@@ -163,7 +163,8 @@ test('the sheet remembers open/closed per device and repaints its dots when stat
   assert.match(block, /localStorage\.setItem\(window\.hubSimple\.MORE_KEY, open \? '1' : '0'\)/);
   assert.match(block, /function simpleAgentsDots\(\) \{\n  if \(!simpleOn\(\)\) return;/);
   assert.match(js, /paintChatStatus\(\);\n  if \(typeof simpleAgentsDots === 'function'\) simpleAgentsDots\(\);/);
-  assert.match(fnSource('simpleAgentRow'), /simpleDotClass\(a\.name\)/);   // the row builder is shared with the wide sidebar
+  assert.match(fnSource('simpleAgentRow'), /simpleDotPaint\(b\.querySelector\('\.sa-dot'\), a\.name\)/);
+  assert.match(fnSource('simpleDotPaint'), /simpleDotClass\(name\)/);   // the row builder is shared with the wide sidebar
   assert.match(fnSource('simpleDotClass'), /pendingQuestion \? 'question' : isBusy\(name\) \? 'busy'/);
 });
 
@@ -174,7 +175,10 @@ test('CSS: person bubble colours, links and code, the dots, the narrow top bar',
   assert.match(css, /html\.mm-simple \.msg\.user a \{[^}]*color: inherit/);
   assert.match(css, /html\.mm-simple \.msg\.assistant \{/);
   for (const sel of ['.simple-theme-btn', '.sa-dot.busy', '.sa-dot.question', '.sa-head', '.sa-more']) assert.ok(css.includes('html.mm-simple ' + sel), sel);
-  assert.match(css, /@media \(max-width: 420px\) \{[^}]*\.st-to[^}]*\.stb-lab \{ display: none; \}/);
+  // iPhone fix: the old pin demanded that below 420px the 'Talking to:' words and the theme label are hidden. That broke 'same words on every screen',
+  // so it now pins the opposite: no rule hides them (see ui-simple-top-bar-narrow.test.js for the two-row layout).
+  assert.doesNotMatch(css, /\.st-to[^{]*\{[^}]*display: none/);
+  assert.doesNotMatch(css, /\.stb-lab[^{]*\{[^}]*display: none/);
   assert.match(css, /html\.mm-simple #simple-top \{ display: flex;/);
 });
 

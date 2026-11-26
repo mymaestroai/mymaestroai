@@ -779,7 +779,7 @@ test('desktop page: voiceCallSpeakLine is true only when the line played to the 
     const ctx = {
       voicePlay: { token: 0, btn: null }, voiceCallS: { linkLost: false }, voiceOfflineHint: 'no offline voice',
       voiceStopPlayback() { ctx.voicePlay.token++; }, voiceSentences: (s) => [s], voiceSpeechText: (s) => String(s || ''),
-      voiceReady: () => ready, voiceDeviceFallback: () => device, hubToast: (m) => toasts.push(m), voicePlayState() {}, voiceSpeedFor: () => 1,
+      voiceReady: () => ready, voiceOffText: () => 'Voice is off. Turn it on in Settings, Voice', voiceDeviceFallback: () => device, hubToast: (m) => toasts.push(m), voicePlayState() {}, voiceSpeedFor: () => 1,
       async voicePlayHub() { if (hub === 'fail') { const e = new Error('tts down'); throw e; } if (hub === 'cut') ctx.voicePlay.token++; },
       async voiceWaitLocalVoice() { return dev === 'novoice' ? null : { lang: 'en-US' }; },
       SpeechSynthesisUtterance: class { constructor(t) { this.text = t; } },

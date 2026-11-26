@@ -71,7 +71,7 @@ test('mobile composer interjects into a running turn; Stop moves to the header; 
   assert.match(js, /stopBtn\.hidden = !working && !own/, 'header Stop also covers a stream this phone started');
   assert.ok(js.includes('function stopOwnTurn') && js.includes('function sendInterjection'));
   assert.ok(html.includes('#send-btn.interject') && html.includes('.note.interject'));
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v76'/);
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v94'/);
   assert.ok(js.includes("addEventListener('controllerchange'"), 'a new build reloads the installed app once it takes control');
 });
 
@@ -104,7 +104,7 @@ test('mobile push: the phone re-registers when the hub no longer knows its subsc
 test('service worker: a forced (test) push shows its banner even when the app is open in front', () => {
   const sw = read('sw.js');
   assert.ok(sw.includes("if (!data.force && list.some(c => c.focused && c.visibilityState === 'visible')) return;"));
-  assert.match(sw, /const VERSION = 'hub-mobile-v76'/);
+  assert.match(sw, /const VERSION = 'hub-mobile-v94'/);
 });
 
 test('ask_user dialogs: a click only highlights the choice and a Submit button sends it (desktop and phone)', () => {
@@ -114,13 +114,14 @@ test('ask_user dialogs: a click only highlights the choice and a Submit button s
   assert.ok(m.includes("else { b.classList.add('selected'); selected[i] = opt.label; }") && m.includes('<button class="qsubmit" disabled>Submit</button>'), 'phone selects then submits');
   assert.ok(app.includes('if (was) delete selected[qi];') && m.includes('if (was) delete selected[i];'), 'a second click on the highlighted option clears it');
   assert.ok(ih.includes('.question-option.selected {') && mh.includes('.question button.opt.selected {'), 'selected styles on both pages');
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v76'/);
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v94'/);
 });
 
 test('a pending ask_user question is re-shown from the hub event stream and on turn catch-up, on both pages (dedup by request id)', () => {
   const app = read('app.js'), m = read('mobile.js');
   const sdk = fs.readFileSync(path.join(root, 'lib', 'sdk-chat.js'), 'utf8');
-  assert.ok(sdk.includes("hubEvents.events.setQuestion(agentName, { request_id: requestId, questions: event.questions })"), 'server remembers the question');
+  // changed: the remembered question now also carries adminOnly (spread after questions) so the turn/catch-up view can hide an admin-only question from members.
+  assert.ok(sdk.includes("hubEvents.events.setQuestion(agentName, { request_id: requestId, questions: event.questions, ...(args.adminOnly === true ? { adminOnly: true } : {}) })"), 'server remembers the question');
   assert.ok(sdk.includes("questions: event.questions });") && sdk.includes("hubEvents.events.setQuestion(agentName, null)"), 'full question on the event stream; cleared when done');
   assert.ok(app.includes("source.addEventListener('ask_user_done'") && app.includes("showQuestionModal({ request_id: ev.request_id, questions: ev.questions, agent: ev.agent }"), 'desktop shows it from the event stream');
   assert.ok(app.includes("if (turn.question && turn.question.request_id && !turn.ended) showQuestionModal(turn.question, chatId)"), 'desktop shows it on catch-up');
@@ -137,7 +138,7 @@ test('a pending ask_user question is re-shown from the hub event stream and on t
   assert.ok(m.includes("const pq = pendingQuestionsByAgent.get(rec.agent);") && !m.includes("const pq = pendingQuestionsByAgent.get(name);"), 'own-stream path looks up its own agent');
   assert.ok(m.includes("on('ask_user_done'") && m.includes("if (shownQuestions.has(request_id)) {"), 'phone closes and dedups');
   assert.ok(m.includes("if (old && !old.isConnected) { chatEl().appendChild(old); scrollChat(); }"), 'an unanswered question survives the chat being closed and reopened');
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v76'/);
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v94'/);
 });
 
 test('after a hub restart both pages reload themselves: hello carries the boot id, a changed id triggers a reload once nothing streams', () => {
@@ -151,7 +152,7 @@ test('after a hub restart both pages reload themselves: hello carries the boot i
   const app = read('app.js'), m = read('mobile.js');
   assert.ok(app.includes("ev.boot !== window.__hubBoot") && app.includes("Object.values(chats).some(c => c && c.controller)") && app.includes('location.reload()'), 'desktop reloads when idle');
   assert.ok(m.includes("ev.boot !== window.__hubBoot") && m.includes("const busy = () => streams.size || (typingNow() && Date.now() - since < 600000) || dialogGuard.hasChanges();") && m.includes("const go = () => { if (busy()) { setTimeout(go, 2000); return; } setTimeout(() => { if (busy()) go(); else location.reload(); }, 800); };"), 'phone reloads when idle and not typing');
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v76'/);
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v94'/);
 });
 
 test('a pasted image with no words is a valid chat message (no HTTP 400)', () => {
@@ -206,8 +207,9 @@ test('the message box keeps a draft per agent: saved as you type, restored when 
   assert.ok(js.includes("const DRAFTS_KEY = 'hub-mobile-drafts';") && js.includes('function saveDraft(agent, text)') && js.includes('function restoreDraft(agent)'));
   assert.ok(js.includes('saveDraft(current, input.value); });'), 'every keystroke is kept');
   assert.ok(js.includes('if (!same) restoreDraft(name);'), 'opening a chat brings its draft back (also after a reload)');
-  // 2000: sendMessage grew (a call's onSendResult report, hub-started-turns change); the draft clear is still in its first part
-  const send = js.slice(js.indexOf('async function sendMessage('), js.indexOf('async function sendMessage(') + 2000);
+  // The whole of sendMessage (to its closing brace at the start of a line), so the check does not break as the function grows.
+  const sendStart = js.indexOf('async function sendMessage(');
+  const send = js.slice(sendStart, js.indexOf('\n}\n', sendStart) + 2);
   assert.ok(send.includes("input.style.height = 'auto';\n    saveDraft(agent, '');"), 'a send clears the draft');
   assert.ok(js.includes("input.value = text;\n        saveDraft(agent, text);"), 'a refused send (409) puts the text back and keeps it');
   const inter = js.slice(js.indexOf('async function sendInterjection('), js.indexOf('async function sendInterjection(') + 3200);
@@ -219,7 +221,7 @@ test('the app does not reload itself while the message box is in use (focused or
   assert.ok(js.includes("function typingNow() { const i = $('msg-input'); return !!i && (document.activeElement === i || !!i.value.trim()); }"));
   const reloads = js.split('location.reload()').length - 1;
   assert.strictEqual(reloads, 4, 'four reload sites: hub back after Restart, hub restarted, new app version, and ⋮ → Reload app (only when the person presses it; the draft is saved first)');
-  assert.ok(js.includes("go: () => { if (current && $('msg-input')) saveDraft(current, $('msg-input').value); location.reload(); },"), 'Reload app saves the draft right before reloading');
+  assert.ok(js.includes("go: () => { if (current && $('msg-input')) saveDraft(current, $('msg-input').value); if (reloadKeepChat) reloadStash(); reloadKeepChat = false; location.reload(); },"), 'Reload app saves the draft right before reloading (and, from the ↻ arrows, the open chat)');
   assert.ok(js.includes("const busy = () => streams.size || (typingNow() && Date.now() - since < 600000) || dialogGuard.hasChanges();\n        const go = () => { if (busy()) { setTimeout(go, 2000); return; } setTimeout(() => { if (busy()) go(); else location.reload(); }, 800); };"), 'after a hub restart');
   assert.ok(js.includes("const busy = () => streams.size || reattaches.size || (typingNow() && Date.now() - since < 600000) || dialogGuard.hasChanges();\n      const go = () => { if (busy()) { setTimeout(go, 2000); return; } toast('Updating to the new version…'); setTimeout(() => { if (busy()) go(); else location.reload(); }, 800); };"), 'after a new app version');
 });

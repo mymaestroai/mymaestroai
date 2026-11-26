@@ -174,7 +174,7 @@ test('wiring in lib/sdk-chat.js: handsForTurn takes the turn signal at its three
   assert.strictEqual(src.split('await handsForTurn(agentName, { consultationDepth: options.consultationDepth || 0, signal: abortController.signal })').length - 1, 2, 'Claude client and Codex');
   assert.ok(src.includes('hands.tools.call(name, args || {}, { signal })'), 'gateway hands wrapper');
   assert.strictEqual(src.split('signal: abortController.signal });').length - 1 >= 2, true);
-  assert.ok(src.includes('hands.tools, { blocked: blockedTools, signal: abortController.signal }'), 'Claude client MCP server');
-  assert.ok(src.includes('sdkDisallowedFor(twVirtual.toolScope) : [], signal: abortController.signal }'), 'Codex MCP server');
+  assert.ok(src.includes('hands.tools, { blocked: blockedTools, signal: abortController.signal, readOnlyHelper }'), 'Claude client MCP server');
+  assert.ok(src.includes('sdkDisallowedFor(twVirtual.toolScope) : [], signal: abortController.signal, readOnlyHelper }'), 'Codex MCP server');
   assert.ok(src.includes('await raceStop(invoke(), signal)'), 'the gateway tool executor races every tool against Stop');
 });

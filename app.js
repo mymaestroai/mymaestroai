@@ -56,10 +56,12 @@
           try { qsForgetRecents(qsRecentStore().key); } catch { /* ⌘K recents: only this person's list stays on this device */ }
           try { if (typeof simpleTopSync === 'function') simpleTopSync(); } catch { /* the view switch is optional */ }
           try { if (window.HubLooks && window.hubMe) window.HubLooks.rememberDefault(window.hubMe.look, window.HubLooks.storageOf(window)); } catch { /* looks are optional: the page keeps the look it has */ }   // every load: no default clears the last person's
+          try { themeNoticeShow(); } catch { /* the one-time line is optional */ }
           // Signed in: recorded-call pieces the hub never acknowledged (a closed tab, a reload, a dead network) are sent now, one at a time (lib/ui-voice-call.js).
           if (window.hubMe && window.hubMe.user) setTimeout(() => { try { voiceRecResendPending((u, i) => fetch(u, i), { userId: window.hubMe.user.id }); } catch { /* the call page's code is not up yet */ } }, 0);
         }
         else if (r.status === 401) {
+          try { if (window.HubLooks) window.HubLooks.forgetTheme(window.HubLooks.storageOf(window)); } catch { /* blocked storage */ }   // no session: the last person's theme must not stay on this browser
           // No session. On a hub with no accounts at all (updated from before multi-user) /api/me is refused too, so
           // ask the public auth status; hubMe stays undefined so the rest of the page behaves as before.
           try { const a = await (await fetch('/api/auth/status', { credentials: 'include' })).json(); window.hubNoAccounts = a && a.setupNeeded === true && !a.signedIn; } catch {}
@@ -315,7 +317,7 @@
       simpleMoreMem = !simpleMoreOpen();
       try { localStorage.setItem(window.hubSimple.MORE_KEY, simpleMoreMem ? '1' : '0'); } catch { /* kept for this page only */ }
     }
-    function simpleAgentsSync() {
+    function simpleAgentsSync() {   // All Agents only (#agent-list); the Teams view (#teams-list) is drawn by renderTeams and left alone here
       if (!simpleOn() || typeof window.hubSimple.agentGroups !== 'function') return;
       const list = document.getElementById('agent-list');
       if (!list || typeof AGENTS === 'undefined' || !Array.isArray(AGENTS)) return;
@@ -343,6 +345,9 @@
       } else if (btn.previousElementSibling !== prim) prim.after(btn);
       if (btn.classList.contains('open') !== st.open) btn.classList.toggle('open', st.open);
       if (btn.classList.contains('has-busy') !== st.dot) btn.classList.toggle('has-busy', st.dot);
+      // a hidden agent with background work and none busy: the ring (busy wins; shown by CSS only without has-busy)
+      const bgDot = typeof AgentDot !== 'undefined' && st.hidden.some(n => AgentDot.dotState({ busy: busy.has(n), background: bgCountOf(n) }) === 'background');
+      if (btn.classList.contains('has-bg') !== bgDot) btn.classList.toggle('has-bg', bgDot);
       if (btn.getAttribute('aria-expanded') !== String(st.open)) btn.setAttribute('aria-expanded', String(st.open));
       const hidden = new Set(st.hidden);
       for (const g of st.groups) {
@@ -436,13 +441,14 @@
       try { await simplePrefs({ uiMode: mode }); location.reload(); }
       catch (e) { simpleSwitching = false; hubToast(`Could not switch: ${e.message}`); }
     }
-    // Under Broadsheet House or Quiet Page the style's own palette decides Simple's colours: the label of that style, else null (Engineering).
+    // Under a single-set style (Broadsheet House) the style's own palette decides Simple's colours: the label of that style, else null (Engineering, or a look with both sets).
     function simpleStyleLabel() {
       const L = window.HubLooks;
       if (!L || typeof L.applied !== 'function') return null;
       const id = L.applied(document);
       if (id === 'engineering') return null;
       const look = typeof L.byId === 'function' ? L.byId(id) : null;
+      if (look && look.sets === 'both') return null;   // a look with a light and a dark set (Quiet Page) takes the theme choices like Engineering
       return look ? look.label : id;
     }
     // Simple's top-bar theme button has nothing to switch under a light style; it is back in Engineering. (An inline display
@@ -481,6 +487,8 @@
       overlay.querySelector('.sm-name').textContent = name;
       const paintSeg = () => { const cur = me.theme === 'light' || me.theme === 'dark' ? me.theme : 'auto'; overlay.querySelectorAll('.sm-seg button').forEach(b => b.classList.toggle('on', b.dataset.theme === cur)); };
       paintSeg();
+      const onTheme = () => { if (!overlay.isConnected) { document.removeEventListener('mm-theme-change', onTheme); return; } paintSeg(); };
+      document.addEventListener('mm-theme-change', onTheme);
       // Under a light style its own palette decides the colours: the buttons give way to one line (the stored theme is untouched).
       const paintFollow = () => {
         const label = simpleStyleLabel();
@@ -656,13 +664,11 @@
         row.style.display = 'none';
       }
       // Tiger Team is admin-only and the Guide describes admin features (gear, New/Clone, Tiger Team modes);
-      // with only Agents left the tab strip itself is noise.
+      // members keep the strip for All Agents and Teams (their own agents' teams).
       for (const t of ['group-chat', 'guide']) {
         const tab = document.querySelector(`.tab[data-tab="${t}"]`);
         if (tab) tab.style.display = 'none';
       }
-      const tabs = document.querySelector('.sidebar .tabs');
-      if (tabs) tabs.style.display = 'none';
       const menu = document.getElementById('more-menu');
       if (menu) menu.classList.remove('advanced');
     }
@@ -714,6 +720,7 @@
     }
     async function signOut() {
       try { qsForgetRecents(null); } catch { /* the ⌘K switcher's recents leave with the person */ }
+      try { if (window.HubLooks) window.HubLooks.forgetTheme(window.HubLooks.storageOf(window)); } catch { /* blocked storage */ }
       try { await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' }); } catch (e) { /* go to login anyway */ }
       location.href = '/login';
     }
@@ -1483,6 +1490,19 @@
       layoutBanners();
     }
 
+    // POST /api/restart. When running jobs would stop with the restart, the server answers 409 { needsConfirm, message } and
+    // restarts nothing: ask the person (the message names the jobs) and send the confirm.
+    async function postRestart() {
+      let r = await fetch('/api/restart', { method: 'POST', credentials: 'include' });
+      let d = await r.json().catch(() => null);
+      // The confirmation names the jobs this question showed: a job that started since gets a fresh question (a few rounds at most).
+      for (let round = 0; round < 3 && r.status === 409 && d && d.needsConfirm; round++) {
+        if (!confirm(d.message)) return { r, d, cancelled: true };
+        r = await fetch('/api/restart', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirm: true, jobs: (d.jobs || []).map((j) => j.id) }) });
+        d = await r.json().catch(() => null);
+      }
+      return { r, d };
+    }
     // ── Restart Hub Button ──
     async function restartHub() {
       if (!confirm('Restart My Maestro AI?\n\n• Conversation history is auto-saved (safe)\n• Memory & session notes are saved instantly (safe)\n• Active streaming responses will be flushed to disk\n• Agents mid-response will lose their last ~3 seconds of output')) return;
@@ -1494,8 +1514,9 @@
       try { const h = await (await fetch('/api/health', { credentials: 'include' })).json(); before = h.bootId || null; } catch {}
       let started = null;
       try {
-        const r = await fetch('/api/restart', { method: 'POST', credentials: 'include' });
-        started = await r.json().catch(() => null);
+        const pr = await postRestart(); const r = pr.r;
+        started = pr.d;
+        if (pr.cancelled) { btn.classList.remove('restarting'); btn.title = 'Restart My Maestro AI'; return; }
         if (!r.ok) { restartFailed(btn, `The hub refused to restart: ${(started && started.error) || r.status}`); return; }
         if (started && started.bootId) before = started.bootId;
       } catch (e) { /* the server may already be going down */ }
@@ -1578,7 +1599,27 @@
       return c && !c.isGroup && c.agent ? String(c.agent) : '';
     }
     // Hand-off cards above the message box (lib/ui-hand-off-card.js): follows the open one-agent chat.
-    if (window.HandOffCard && globalThis.mmSettingsOnly !== true) HandOffCard.track({ getAgent: filesActiveAgent, getContainer: () => document.getElementById('handoff-cards-' + window.__activeChatId), renderMarkdown: (t) => window.formatContentForSheets(t) });
+    if (window.HandOffCard && globalThis.mmSettingsOnly !== true) HandOffCard.track({ getAgent: filesActiveAgent, getContainer: () => document.getElementById('handoff-cards-' + window.__activeChatId), renderMarkdown: (t) => window.formatContentForSheets(t),
+      isAdmin: () => isHubAdmin(),   // the page's own rule (an install with no accounts is its admin's)
+      stopJob: (id) => workingOnPost('/api/jobs/cancel', { id }, window.__activeChatId),   // the chat id is read at the click
+      stopWorker: (id, agent) => workingOnPost('/api/cancel-worker', { worker_id: id, agent }, window.__activeChatId) });
+    // The "Working on" panel's Stop buttons (same fetch shape as the Workers menu's cancelWorker and jobsApi).
+    // chatId: the chat the Stop was pressed in; every failure (refused or no answer) is reported there, not in whichever chat is open later.
+    function workingOnPost(url, body, chatId = window.__activeChatId) {
+      const say = (text) => { try { if (typeof chatFileStatus === 'function' && chatId) chatFileStatus(chatId, text, 'error'); } catch {} };
+      return fetch(url, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+        .then(async (res) => {
+          const data = await res.json().catch(() => null);
+          // a refused Stop (403, ok/success false, an error) says so in the chat's status line instead of failing silently
+          const refused = res.ok === false || (data && (data.ok === false || data.success === false || data.error));
+          if (refused) {
+            const why = data && (data.error || data.message || data.reason);
+            const text = "Couldn't stop it" + (why ? ': ' + String(why).replace(/_/g, ' ') : (res.status ? ' (' + res.status + ')' : '') + '.');
+            say(text);
+          }
+          return data;
+        }).catch(() => { say("Couldn't stop it: the hub did not answer"); return null; });
+    }
     function filesOwnerParam() {
       const me = window.hubMe;
       if (!me || !me.isAdmin) return '';
@@ -2430,7 +2471,7 @@
       const rows = shown.length ? shown.map(j => `<tr style="border-top:1px solid var(--border)">
           <td><b>${esc(j.name)}</b><br><code style="font-size:11px">${esc(j.id)}</code></td>
           <td>${esc(j.owner)}${j.reportTo ? ` <span title="master agent">→ ${esc(j.reportTo)}</span>` : ''}</td>
-          <td>${badge(j)}<br><small>${handoff(j)}</small></td>
+          <td>${badge(j)}${j.restartWarning ? `<br><small style="color:var(--warning)">${esc(j.restartWarning)}</small>` : ''}<br><small>${handoff(j)}</small></td>
           <td><small>${esc(when(j.startedAt))}${j.endedAt ? `<br>ended ${esc(when(j.endedAt))}` : ''}</small></td>
           <td style="white-space:nowrap"><button class="gs-btn secondary" onclick="jobsAct('log', '${esc(j.id)}')">Log</button>
             ${j.status === 'running' ? `<button class="gs-btn secondary" onclick="jobsAct('cancel', '${esc(j.id)}')">Cancel</button>` : ''}</td>
@@ -2447,7 +2488,7 @@
         } catch (e) { logBox = `<p>${esc(e.message)}</p>`; jobsPanelLog = null; }
       }
       return `<div class="gs-box"><h4>Background jobs <small>(run_job)</small></h4>
-        <p><small>Commands agents run with <code>run_job</code>. They survive the agent's turn${data.mode === 'systemd' ? ' and hub restarts' : ''}; when one ends the hub wakes its owner with the result, and if the owner ran it for another agent, forwards the owner's report to that agent. Launcher: ${esc(data.mode)}.</small></p>
+        <p><small>Commands agents run with <code>run_job</code>. They survive the agent's turn${data.mode === 'systemd' ? ' and restarts of your Maestro' : ', but a running job stops if your Maestro restarts'}; when one ends the hub wakes its owner with the result, and if the owner ran it for another agent, forwards the owner's report to that agent. Launcher: ${esc(data.mode)}.</small></p>
         <table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr><th style="text-align:left">Job</th><th style="text-align:left">Owner → master</th><th style="text-align:left">Status</th><th style="text-align:left">Started</th><th></th></tr></thead><tbody>${rows}</tbody></table>${schedHiddenNote(data.jobs, shown)}${logBox}</div>`;
     }
     async function refreshJobsSection() {
@@ -3145,7 +3186,8 @@
       // Reuse the restart button's flush + poll path.
       const rbtn = document.getElementById('restart-hub-btn');
       try {
-        await fetch('/api/restart', { method: 'POST', credentials: 'include' });
+        const pr = await postRestart();
+        if (pr.cancelled || !pr.r.ok) { gsModal(`<h3>⬇ Update from GitHub</h3><div class="gs-ok">✓ Updated to ${esc(r.head)}</div><p class="gs-sub">Not restarted yet. Restart it from the ⋯ menu to finish.</p>`); return; }
       } catch (e) { /* expected — server dies */ }
       setTimeout(() => pollForRestart(rbtn), 8000);
     }
@@ -3313,6 +3355,12 @@
       const picker = document.createElement('div');
       host.appendChild(picker);
       lookPickerBuild(picker);
+      if (window.hubSimple && typeof window.hubSimple.themeControl === 'function' && window.hubMe && !document.documentElement.classList.contains('mm-simple')) {
+        // Appearance: Light / Dark / Match device, one theme for the account in both modes; right before Interface style.
+        const ap = window.hubSimple.themeControl(document, { me: () => window.hubMe, save: (v) => simplePrefs({ theme: v }), onError: (err) => hubToast(`Could not save: ${err.message}`), onPress: () => !!document.getElementById('hub-theme-notice'), onChosen: (v, wasVisible) => { if (!wasVisible) return; try { window.hubSimple.markNoticeSeen(window.hubMe, defaultNoticeStorage()); } catch { /* blocked storage */ } const n = document.getElementById('hub-theme-notice'); if (n) { n.remove(); layoutBanners(); } } });   // a notice that was not up at the press stays as the theme change left it (newly shown when Quiet just turned dark)
+        ap.el.style.marginBottom = '12px';
+        host.insertBefore(ap.el, picker);   // right before Interface style
+      }
       if (!isHubAdmin()) return;
       const row = document.createElement('div');
       row.className = 'st-row';
@@ -3339,12 +3387,13 @@
     const ST_GROUPS = [
       { id: 'status', title: '🩺 Status', sections: ['st-ready-section', 'st-health-section', 'st-sec-section', 'st-memory-section', 'st-selfcheck-section', 'st-components-section', 'st-updates-section'] },
       { id: 'looks', title: '🎨 Appearance', sections: ['st-looks-section'] },
+      { id: 'voice', title: '🎙 Voice', sections: ['st-voice-section'] },
       { id: 'security', title: '🔐 Security', sections: ['st-security-section'] },
       { id: 'backups', title: '💾 Backups', sections: ['st-backups-section'] },
       { id: 'models', title: '🧠 AI models', sections: ['st-prov-section', 'st-or-section', 'st-subs-section', 'st-plan-section', 'st-local-models-section', 'st-classifier-section'] },
       { id: 'agents', title: '🤖 Agents', sections: ['st-defaults-section', 'st-workers-section', 'st-sb-section', 'st-lb-section', 'st-mp-section', 'st-approvals-section', 'st-chat-section', 'st-tuning-section'] },
       { id: 'notify', title: '🔔 Notifications', sections: ['st-notify-section'] },
-      { id: 'tools', title: '🧰 Tools and data', sections: ['st-ws-section', 'st-voice-section', 'st-comms-section', 'st-cx-section', 'st-modules-section'] },
+      { id: 'tools', title: '🧰 Tools and data', sections: ['st-ws-section', 'st-comms-section', 'st-cx-section', 'st-modules-section'] },
       { id: 'money', title: '💰 Money and safety', sections: ['st-spend-section', 'st-emergency-section'] },
     ];
     const stSumParts = {};   // group -> { key: { text, crit } }: the one-line summary on each group's header
@@ -3575,6 +3624,17 @@
       setTimeout(() => s.scrollIntoView({ behavior: 'smooth', block: 'start' }), 150);
     }
 
+    // The ⋯ menu's Voice item, the Voice panel's "All voice settings" and a tap on the microphone while voice is off or unfinished (admin):
+    // Settings, at the Voice group; an admin lands on the On switch, anyone else on the section heading.
+    async function openVoiceSettings() {
+      await openSettingsAt('st-voice-section');
+      const en = document.getElementById('st-voice-enabled');
+      const target = isHubAdmin() && en ? en : document.querySelector('#st-voice-section h4');
+      if (!target) return;
+      if (target.tagName === 'H4') target.tabIndex = -1;
+      try { target.focus(); } catch { /* not focusable here */ }
+    }
+
     async function openSettings() {
       stModal(`<h3>Loading settings...</h3>`);
       let data;
@@ -3590,7 +3650,7 @@
       let html = `<h3>⚙️ Settings</h3><p class="st-sub">Open a group, or search for a setting. Provider keys and agent defaults are kept with Save at the bottom; every other box saves on its own.</p>`;
 
       // Appearance: the look of this device (lib/ui-looks); admins also choose the look new members start with.
-      html += `<div class="st-section" id="st-looks-section"><h4>Appearance</h4><div id="st-looks-body"></div></div>`;
+      html += `<div class="st-section" id="st-looks-section"><h4>Appearance</h4><div id="st-looks-body"></div>${isHubAdmin() ? sidebarTabsToggleHtml(data) : ''}</div>`;
       setTimeout(() => lookSectionPaint(data), 0);
       // Setup checklist (lib/readiness): what this machine is missing and what to do about it, in its own words.
       html += `<div class="st-section" id="st-ready-section"><h4>Setup checklist</h4>
@@ -4179,15 +4239,45 @@
       if (!crit.length) { if (bar) bar.remove(); layoutBanners(); return; }
       if (!bar) { bar = document.createElement('div'); bar.id = 'hub-health-notice'; bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9995;background:var(--banner-critical-bg);color:var(--on-color-text);padding:6px 14px;font-weight:700;box-sizing:border-box'; document.body.prepend(bar); }
       bar.innerHTML = `Health: ${crit.map(i => esc(i.title)).join('; ')}. <a href="#" onclick="openSettingsAt('st-health-section'); return false" style="color:var(--on-color-text);text-decoration:underline">Open Settings → Status</a>`;
+      for (const i of crit) { const b = typeof ClaudeSignin !== 'undefined' && ClaudeSignin.healthButton(i); if (b) bar.appendChild(b); }
       layoutBanners();
     }
     // The notices fixed at the top stack in this order, whichever painted first: the phone-layout bar
     // (showMobileBanner), no AI provider yet, the setup checklist, health, security. Each one sits below the ones above it, so
     // none covers another (or its X), and the page moves down by their height (--banner-h), so they never cover the
     // header and its Settings button.
+    // The one-time Quiet Page line (lib/ui-simple.js themeNotice): normal mode, Quiet Page, a dark theme, not yet seen by this account.
+    // Seen is kept per account in localStorage (mm-theme-notice:<id>), like the voice hint. It sits in the banner stack, never near the composer.
+    function themeNoticeShow() {
+      const hs = window.hubSimple;
+      const old = document.getElementById('hub-theme-notice'); if (old) old.remove();
+      if (!hs || typeof hs.themeNotice !== 'function' || !window.hubMe) return;
+      const el = hs.themeNotice(document, { me: () => window.hubMe, save: (v) => simplePrefs({ theme: v }), onError: (err) => hubToast(`Could not save: ${err.message}`), onGone: () => layoutBanners() });
+      if (!el) return;
+      el.id = 'hub-theme-notice';
+      el.style.position = 'fixed'; el.style.left = '0'; el.style.right = '0'; el.style.top = '0'; el.style.zIndex = '9994';
+      document.body.prepend(el);
+      layoutBanners();
+    }
+    // The line follows the page while it is open: a look change or a change of the resolved colours (Match device flipping) shows or hides it.
+    // themeNotice itself decides (normal mode, Quiet Page, dark, unseen); this only asks again, and keeps the one that is already up.
+    function themeNoticeSync() {
+      const had = document.getElementById('hub-theme-notice');
+      const hs = window.hubSimple;
+      if (had) {
+        const cl = document.documentElement.classList;
+        const L = window.HubLooks;
+        const still = hs && typeof hs.noticeShows === 'function' && hs.noticeShows({ simple: cl.contains('mm-simple'), look: L && L.applied ? L.applied(document) : null, resolved: cl.contains('mm-dark') ? 'dark' : cl.contains('mm-light') ? 'light' : null, seen: window.hubMe ? hs.noticeSeen(window.hubMe, defaultNoticeStorage()) : true });
+        if (still) return;
+        had.remove(); layoutBanners(); return;
+      }
+      themeNoticeShow();
+    }
+    function defaultNoticeStorage() { try { return window.localStorage; } catch { return null; } }
+    for (const ev of ['mm-look-change', 'mm-theme-change', 'mm-theme-resolved']) document.addEventListener(ev, () => { try { themeNoticeSync(); } catch { /* the one-time line is optional */ } });
     function layoutBanners() {
       let top = 0;
-      for (const id of ['hub-phone-layout-notice', 'hub-no-accounts-notice', 'hub-recovery-notice', 'hub-setup-notice', 'hub-readiness-notice', 'hub-health-notice', 'hub-security-notice']) {
+      for (const id of ['hub-phone-layout-notice', 'hub-no-accounts-notice', 'hub-recovery-notice', 'hub-setup-notice', 'hub-theme-notice', 'hub-readiness-notice', 'hub-health-notice', 'hub-security-notice']) {
         const n = document.getElementById(id);
         if (!n) continue;
         n.style.top = `${top}px`;
@@ -4539,6 +4629,12 @@
       }
       if (run && !items.length) html += '<div class="sc-note">Nothing to report.</div>';
       el.innerHTML = html;
+      if (items.some(i => i && i.action === 'claude-signin')) {   // a "Sign in again" button in the row of a signed-out Claude
+        Array.from(el.querySelectorAll(':scope > .sc-row')).forEach((row, idx) => {
+          const b = typeof ClaudeSignin !== 'undefined' && ClaudeSignin.healthButton(items[idx]);
+          if (b) row.appendChild(b);
+        });
+      }
       const unknown = items.filter(i => i.level === 'unknown').length;   // a check that couldn't run is never "all fine"
       stSum('status', 'health', !run ? 'Health: not checked yet' : v.critical ? 'Health: problem found' : v.warnings ? 'Health: warnings' : unknown ? "Health: some checks couldn't run" : 'Health: all fine', !!v.critical);
     }
@@ -4767,8 +4863,8 @@
       // The Update dialog's own restart: flush the active replies, restart, wait for the new boot.
       const rbtn = document.getElementById('restart-hub-btn');
       let refused = null;
-      try { const rr = await fetch('/api/restart', { method: 'POST', credentials: 'include' }); if (!rr.ok) refused = rr.status; } catch { /* expected: the server goes away */ }
-      if (refused) { if (msg) msg.innerHTML = `<div class="uc-err">Updated, but the hub refused to restart (HTTP ${refused}). Restart it from the ⋯ menu to finish.</div>`; return; }
+      try { const pr = await postRestart(); if (pr.cancelled) refused = 'cancelled'; else if (!pr.r.ok) refused = pr.r.status; } catch { /* expected: the server goes away */ }
+      if (refused) { if (msg) msg.innerHTML = `<div class="uc-err">Updated, but your Maestro was not restarted (${refused === 'cancelled' ? 'you chose to wait' : 'HTTP ' + refused}). Restart it from the ⋯ menu to finish.</div>`; return; }
       setTimeout(() => pollForRestart(rbtn), 8000);
     }
     // Settings → Status → Updates.
@@ -7680,7 +7776,7 @@
         // Newer hubs report busy/busySince/activity/pendingQuestion per agent; older ones do not (then no dots are drawn).
         if (AGENTS.some(a => 'busy' in a)) {
           const map = {};
-          for (const a of AGENTS) map[a.name] = { busy: a.busy, busySince: a.busySince, activity: a.activity, pendingQuestion: a.pendingQuestion };
+          for (const a of AGENTS) map[a.name] = { busy: a.busy, busySince: a.busySince, activity: a.activity, pendingQuestion: a.pendingQuestion, buildingTeamFor: a.buildingTeamFor || null, reviewingTeamFor: a.reviewingTeamFor || null, ...('offerPending' in a ? { offerPending: a.offerPending === true } : {}), ...('settingUpTeams' in a ? { settingUpTeams: a.settingUpTeams === true } : {}) };
           applyStatusSnapshot(map, { namedOnly: true });
         }
         console.log(`Loaded ${AGENTS.length} agents with SOUL data`);
@@ -8293,6 +8389,7 @@
       paintAllAgentStatus();
       paintActiveSection(true);
       if (typeof simpleAgentsSoon === 'function') simpleAgentsSoon();   // Simple: Primary agents and "More agents"
+      if (typeof teamsRepaintSoon === 'function') teamsRepaintSoon();
       renderAgentPicker();
     }
 
@@ -8338,6 +8435,212 @@
       } catch (e) { console.warn('loadCyberModels failed', e.message); }
     }
 
+    // ── Row menu (⋯) and Build team (All Agents and Teams rows) ──
+    // One always-visible ⋯ per row opens ONE shared menu: Settings, and Build team for a main agent with no team (admins).
+    // No entries (a member, Simple mode) means no button. In All Agents the row is itself a <button>, so the ⋯ and the
+    // Build team link there are <span role="button"> (a button cannot sit inside a button); Teams rows use real buttons.
+    const buildTeamPending = new Set();   // main agents whose Build team request is in flight from this page
+    function teamBuilding(name) {
+      if (buildTeamPending.has(name)) return true;
+      for (const s of Object.values(agentStatus)) if (s && s.buildingTeamFor === name) return true;   // the lead's status carries it while the turn runs
+      return false;
+    }
+    // inSimple: the Teams rows of Simple mode also carry the small Build team link (Simple has no ⋯ menu to find it in); the menu and the All Agents line stay out of Simple.
+    function agentCanBuildTeam(a, inSimple) {
+      return !!a && isHubAdmin() && (!!inSimple || !simpleOn()) && hubTeams.isMain(a) && !hubTeams.hasTeam(a.name, AGENTS);
+    }
+    // Optimize team (admins): a main agent WITH a team shows this instead of Build team. Its sublabel is the size of what the review reads,
+    // fetched once per menu opening from GET /api/agents/:name/optimize-team/estimate.
+    const optimizeTeamPending = new Set();   // main agents whose Optimize team request is in flight from this page
+    const optimizeEstimates = {};            // name -> { days, turns, handOffs } once fetched (kept until the next menu opening refreshes it)
+    function teamReviewing(name) {
+      if (optimizeTeamPending.has(name)) return true;
+      for (const s of Object.values(agentStatus)) if (s && s.reviewingTeamFor === name) return true;   // the reviewer's status carries it while the turn runs
+      return false;
+    }
+    function agentCanOptimizeTeam(a) {
+      return !!a && isHubAdmin() && !simpleOn() && hubTeams.isMain(a) && hubTeams.hasTeam(a.name, AGENTS);
+    }
+    function optimizeSubText(name) {
+      const e = optimizeEstimates[name];
+      if (!e) return 'reads the last 30 days';
+      return `reads ${Number(e.days) || 30} days: ${Number(e.turns) || 0} turns, ${Number(e.handOffs) || 0} hand-offs`;
+    }
+    function agentMenuEntries(a) {
+      if (!a || !isHubAdmin() || simpleOn()) return [];
+      const out = [{ key: 'settings', label: 'Settings' }];
+      if (agentCanBuildTeam(a)) out.push(teamBuilding(a.name) ? { key: 'build', label: 'Building…', disabled: true } : { key: 'build', label: 'Build team' });
+      if (agentCanOptimizeTeam(a)) out.push(teamReviewing(a.name) ? { key: 'optimize', label: 'Reviewing…', disabled: true } : { key: 'optimize', label: 'Optimize team', sub: optimizeSubText(a.name) });
+      return out;
+    }
+    function agentMenuBtnHtml(a, tag) {
+      if (!agentMenuEntries(a).length) return '';
+      const label = hubEsc(a.display || capName(a.name));
+      const attrs = `class="agent-menu-btn" data-menu-agent="${hubEsc(a.name)}" aria-haspopup="menu" aria-expanded="false" aria-label="More for ${label}" title="More for ${label}" onclick="agentMenuToggle(this, event)"`;
+      return tag === 'span'
+        ? `<span role="button" tabindex="0" ${attrs} onkeydown="if (event.key === 'Enter' || event.key === ' ') agentMenuToggle(this, event)">⋯</span>`
+        : `<button type="button" ${attrs}>⋯</button>`;
+    }
+    // The Build team control: kind 'link' (All Agents line) or 'btn' (Teams tab). data-build-team lets paintBuildControls retitle it.
+    function buildTeamCtlHtml(a, kind, tag) {
+      const on = teamBuilding(a.name);
+      const idle = kind === 'btn' ? 'Build Team' : 'Build team';
+      const cls = kind === 'btn' ? 'build-team-btn' : 'build-team-link';
+      const attrs = `class="${cls}${on ? ' is-building' : ''}" data-build-team="${hubEsc(a.name)}" data-idle="${idle}" aria-disabled="${on ? 'true' : 'false'}" onclick="buildTeamStart('${hubEsc(a.name)}', event)"`;
+      return tag === 'span'
+        ? `<span role="button" tabindex="0" ${attrs} onkeydown="if (event.key === 'Enter' || event.key === ' ') buildTeamStart('${hubEsc(a.name)}', event)">${on ? 'Building…' : idle}</span>`
+        : `<button type="button" ${attrs}${on ? ' disabled' : ''}>${on ? 'Building…' : idle}</button>`;
+    }
+    // Every solo main agent (admins, no team) reads 'Solo' on its All Agents second line: 'Solo · Build team' while undecided, just 'Solo' once the lead recorded that it works alone.
+    function buildLineHtml(a) {
+      if (!agentCanBuildTeam(a)) return '';
+      return agentWorksAlone(a.name) ? '<span class="agent-build-line agent-solo-line">Solo</span>' : `<span class="agent-build-line"><span class="tbs-prefix">Solo · </span>${buildTeamCtlHtml(a, 'link', 'span')}</span>`;
+    }
+    function paintBuildControls() {
+      if (typeof document === 'undefined' || !document.querySelectorAll) return;
+      document.querySelectorAll('[data-build-team]').forEach(el => {
+        const on = teamBuilding(el.dataset.buildTeam);
+        el.classList.toggle('is-building', on);
+        el.setAttribute('aria-disabled', on ? 'true' : 'false');
+        if (el.tagName === 'BUTTON') el.disabled = on;
+        el.textContent = on ? 'Building…' : el.dataset.idle;
+      });
+    }
+    async function buildTeamStart(name, event) {
+      if (event) { event.stopPropagation(); if (event.preventDefault) event.preventDefault(); }
+      if (!name || teamBuilding(name)) return;
+      buildTeamPending.add(name); paintBuildControls();
+      if (typeof teamsRepaintSoon === 'function') teamsRepaintSoon();
+      try {
+        const r = await fetch(`/api/agents/${encodeURIComponent(name)}/build-team`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+        let d = {};
+        try { d = await r.json(); } catch { d = {}; }
+        if (r.status === 202 || (r.ok && d && d.ok)) {
+          const lead = d && d.lead;
+          if (lead) { const la = AGENTS.find(a => a.name === lead); startSoloChat(lead, (la && la.model) || ''); }   // the lead's chat, so the proposal is in view
+        } else alert((d && d.error) || `Could not start building a team (${r.status}).`);
+      } catch (e) {
+        alert('Could not start building a team: ' + (e && e.message ? e.message : 'no connection'));
+      } finally {
+        buildTeamPending.delete(name); paintBuildControls();
+        if (typeof teamsRepaintSoon === 'function') teamsRepaintSoon();
+      }
+    }
+    async function optimizeTeamStart(name, event) {
+      if (event) { event.stopPropagation(); if (event.preventDefault) event.preventDefault(); }
+      if (!name || teamReviewing(name)) return;
+      optimizeTeamPending.add(name);
+      if (typeof teamsRepaintSoon === 'function') teamsRepaintSoon();
+      try {
+        const r = await fetch(`/api/agents/${encodeURIComponent(name)}/optimize-team`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+        let d = {};
+        try { d = await r.json(); } catch { d = {}; }
+        if (r.status === 202 || (r.ok && d && d.ok)) {
+          const rv = d && d.reviewer;
+          if (rv) { const ra = AGENTS.find(a => a.name === rv); startSoloChat(rv, (ra && ra.model) || ''); }   // the reviewer's chat, so the summary and plan are in view
+        } else alert((d && d.error) || `Could not start the review (${r.status}).`);
+      } catch (e) {
+        alert('Could not start the review: ' + (e && e.message ? e.message : 'no connection'));
+      } finally {
+        optimizeTeamPending.delete(name);
+        if (typeof teamsRepaintSoon === 'function') teamsRepaintSoon();
+      }
+    }
+    // Reads the size of the review once per menu opening and writes it into the open menu's sublabel.
+    function optimizeEstimateLoad(name, menuEl) {
+      if (typeof fetch !== 'function') return;
+      fetch(`/api/agents/${encodeURIComponent(name)}/optimize-team/estimate`, { credentials: 'include' })
+        .then(r => (r && r.ok ? r.json() : null))
+        .then(d => {
+          if (!d || typeof d !== 'object') return;
+          optimizeEstimates[name] = { days: d.days, turns: d.turns, handOffs: d.handOffs };
+          const sub = menuEl && menuEl.querySelector ? menuEl.querySelector('[data-act="optimize"] .agent-menu-sub') : null;
+          if (sub) sub.textContent = optimizeSubText(name);
+        })
+        .catch(() => { /* the sublabel stays "reads the last 30 days" */ });
+    }
+    let agentMenuEl = null, agentMenuOpener = null, agentMenuOff = null;
+    function agentMenuClose(refocus) {
+      if (agentMenuOff) { agentMenuOff(); agentMenuOff = null; }
+      if (agentMenuEl && agentMenuEl.remove) agentMenuEl.remove();
+      const op = agentMenuOpener;
+      agentMenuEl = null; agentMenuOpener = null;
+      if (op && op.setAttribute) { op.setAttribute('aria-expanded', 'false'); if (refocus && op.focus && op.isConnected !== false) op.focus({ preventScroll: true }); }
+    }
+    // Opens the shared menu for agent `name` at (x, y). Returns false (nothing opened) when the agent has no entries.
+    function agentMenuOpenAt(name, x, y, opener) {
+      const a = AGENTS.find(z => z.name === name);
+      const entries = agentMenuEntries(a);
+      agentMenuClose(false);
+      if (!entries.length) return false;
+      const el = document.createElement('div');
+      el.id = 'agent-row-menu'; el.className = 'agent-row-menu';
+      el.setAttribute('role', 'menu');
+      el.setAttribute('aria-label', `More for ${a.display || capName(a.name)}`);
+      el.innerHTML = entries.map(e => `<button type="button" role="menuitem" class="agent-menu-item" data-act="${e.key}"${e.disabled ? ' disabled' : ''}>${hubEsc(e.label)}${e.sub ? `<small class="agent-menu-sub">${hubEsc(e.sub)}</small>` : ''}</button>`).join('');
+      delete optimizeEstimates[name];   // read afresh at each opening
+      if (entries.some(e => e.key === 'optimize' && !e.disabled)) optimizeEstimateLoad(name, el);
+      el.addEventListener('click', ev => {
+        const b = ev.target && ev.target.closest ? ev.target.closest('.agent-menu-item') : null;
+        if (!b || b.disabled) return;
+        const act = b.dataset.act;
+        agentMenuClose(act === 'settings' ? false : true);
+        if (act === 'settings') openAgentSettings(name, ev);
+        else if (act === 'build') buildTeamStart(name);
+        else if (act === 'optimize') optimizeTeamStart(name);
+      });
+      el.addEventListener('keydown', ev => {
+        const items = Array.from(el.querySelectorAll('.agent-menu-item:not([disabled])'));
+        const i = items.indexOf(document.activeElement);
+        if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); agentMenuClose(true); }
+        else if (ev.key === 'Tab') { ev.preventDefault(); agentMenuClose(true); }   // leaving the menu closes it; focus goes back to the ⋯
+        else if (ev.key === 'ArrowDown' && items.length) { ev.preventDefault(); items[(i + 1) % items.length].focus(); }
+        else if (ev.key === 'ArrowUp' && items.length) { ev.preventDefault(); items[(i <= 0 ? items.length : i) - 1].focus(); }
+      });
+      document.body.appendChild(el);
+      // Placed at the pointer or under the ⋯, kept inside the window.
+      const vw = window.innerWidth || 0, vh = window.innerHeight || 0;
+      const w = el.offsetWidth || 160, h = el.offsetHeight || 60;
+      el.style.left = Math.max(4, Math.min(x, (vw || x + w + 4) - w - 4)) + 'px';
+      el.style.top = Math.max(4, Math.min(y, (vh || y + h + 4) - h - 4)) + 'px';
+      agentMenuEl = el; agentMenuOpener = opener || null;
+      if (opener && opener.setAttribute) opener.setAttribute('aria-expanded', 'true');
+      const away = ev => {
+        if (el.contains(ev.target)) return;
+        if (opener && opener.contains && opener.contains(ev.target)) return;   // the ⋯ itself toggles
+        agentMenuClose(false);
+      };
+      const gone = () => agentMenuClose(false);
+      const escKey = ev => { if (ev.key === 'Escape') { agentMenuClose(true); } };
+      document.addEventListener('mousedown', away, true);
+      document.addEventListener('keydown', escKey, true);
+      window.addEventListener('resize', gone);
+      window.addEventListener('blur', gone);
+      document.addEventListener('scroll', gone, true);
+      agentMenuOff = () => {
+        document.removeEventListener('mousedown', away, true); document.removeEventListener('keydown', escKey, true);
+        window.removeEventListener('resize', gone); window.removeEventListener('blur', gone); document.removeEventListener('scroll', gone, true);
+      };
+      const first = el.querySelector('.agent-menu-item:not([disabled])');
+      if (first && first.focus) first.focus({ preventScroll: true });
+      return true;
+    }
+    function agentMenuToggle(btn, event) {
+      if (event) { event.stopPropagation(); event.preventDefault(); }
+      if (!btn) return;
+      if (agentMenuEl && agentMenuOpener === btn) { agentMenuClose(true); return; }
+      const r = btn.getBoundingClientRect();
+      agentMenuOpenAt(btn.dataset.menuAgent, r.left, r.bottom + 2, btn);
+    }
+    // Right-click on a row opens the same menu at the pointer (nothing happens, and the browser's own menu stays, when the row has no entries).
+    if (typeof document !== 'undefined' && document.addEventListener) {
+      document.addEventListener('contextmenu', e => {
+        const row = e.target && e.target.closest ? e.target.closest('#agent-list .agent-btn[data-agent], #teams-list .teams-row[data-agent]') : null;
+        if (!row) return;
+        if (agentMenuOpenAt(row.dataset.agent, e.clientX, e.clientY, row.querySelector('.agent-menu-btn'))) e.preventDefault();
+      });
+    }
+
     function agentButton(agent) {
       const shortModel = agent.autoModel ? 'Auto' : agent.model.split('/').pop().substring(0, 24);
       const inGroup = selectedGroupAgents.some(a => a.name === agent.name);
@@ -8368,15 +8671,16 @@
           : '');
 
       const tip = hubEsc(agent.blurb || `${capName(agent.category || 'specialist')} agent · ${shortModel}`);
+      const buildLine = buildLineHtml(agent);   // a main with no team: 'Solo · Build team' takes the model line's place, so every row has one height
       return `<button class="agent-btn ${hubEsc(agent.type || '')} ${inGroup ? 'in-group' : ''} ${isSummarizer ? 'is-summarizer' : ''}"
                       data-agent="${safeName}" data-model="${safeModel}" id="agent-btn-${safeName}" title="${tip}">
         <span class="agent-status" id="agent-status-${safeName}"></span>
-        ${isHubAdmin() ? `<span class="action-btn gear-btn" onclick="openAgentSettings('${safeName}', event)" title="Agent settings">&#9881;</span>` : ''}
         <span class="agent-icon">${hubEsc(agent.icon || '🤖')}</span>
         <span class="agent-info">
-          <span class="name">${displayName}${agent.lead ? '<span class="lead-badge" title="Lead agent: may schedule tasks for other agents and see, edit or cancel their tasks. Change in this agent\'s settings.">👑</span>' : ''}</span>
-          <span class="model">${cyberBadge}${subtitle}${statusBadge || sizeLabel}</span>
+          <span class="name"><span class="name-text">${displayName}</span>${agent.lead ? '<span class="lead-badge" title="Lead agent: may schedule tasks for other agents and see, edit or cancel their tasks. Change in this agent\'s settings.">👑</span>' : ''}</span>
+          ${buildLine || `<span class="model">${cyberBadge}${subtitle}${statusBadge || sizeLabel}</span>`}
         </span>
+        ${agentMenuBtnHtml(agent, 'span')}
         <span class="actions">
           <span class="action-btn add-btn" onclick="toggleGroupAgent('${safeName}', '${safeModel}', event)">${inGroup ? '−' : '+'}</span>
           <span class="action-btn sum-btn" onclick="setSummarizer('${safeName}', '${safeModel}', event)">S</span>
@@ -8482,15 +8786,464 @@
       updateGroupBuilder();
     }
     
+    // Sidebar views: All Agents (agents), Teams (teams) and, when an admin turns them on in Settings, Tiger Team (group-chat) and Guide.
+    // The chosen view is kept per device in localStorage 'hub-sidebar-view'; a stored view that is hidden falls back to All Agents.
+    const SIDEBAR_VIEW_KEY = 'hub-sidebar-view';
+    let sidebarViewTouched = false;   // the person chose a view on this page: a late settings answer must not move them
+    function sidebarViewStored() { try { return localStorage.getItem(SIDEBAR_VIEW_KEY) || 'agents'; } catch { return 'agents'; } }
+    function sidebarViewOk(view) {
+      if (view === 'agents') return true;
+      if (simpleOn() && view !== 'teams') return false;   // Simple has only the two views
+      const tab = document.querySelector(`.tab[data-tab="${view}"]`);
+      if (!tab || tab.hidden || tab.style.display === 'none') return false;
+      return !(document.body.classList.contains('member-view') && view !== 'teams');   // members: All Agents and Teams only
+    }
+    function sidebarViewSet(view, remember) {
+      if (!sidebarViewOk(view)) view = 'agents';
+      document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === view));
+      document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === `${view}-panel`));
+      document.querySelectorAll('#simple-view-switch button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.view === view)));
+      if (remember) { try { localStorage.setItem(SIDEBAR_VIEW_KEY, view); } catch { /* kept for this page only */ } }
+      if (view === 'teams') renderTeams();
+    }
+    // Admins choose in Settings → Appearance whether the Tiger Team and Guide tabs show (sidebarTigerTeam, sidebarGuide); members never see them.
+    let sidebarTabsCfg = {};
+    function sidebarTabsApply(cfg) {
+      sidebarTabsCfg = Object.assign(sidebarTabsCfg, cfg || {});
+      const admin = isHubAdmin();
+      for (const [view, key] of [['group-chat', 'sidebarTigerTeam'], ['guide', 'sidebarGuide']]) {
+        const tab = document.querySelector(`.tab[data-tab="${view}"]`);
+        if (tab) tab.hidden = !(admin && sidebarTabsCfg[key] === true);
+      }
+      {   // "Show the Teams tab" (sidebarTeams, on unless an admin switches it off): off hides the tab and its Simple-mode button
+        const hideTeams = admin && sidebarTabsCfg.sidebarTeams === false;
+        const tab = document.querySelector('.tab[data-tab="teams"]');
+        if (tab) tab.hidden = hideTeams;
+        document.querySelectorAll('#simple-view-switch button').forEach(b => { if (b.dataset && b.dataset.view === 'teams') b.hidden = hideTeams; });
+      }
+      const active = document.querySelector('.tab.active');
+      if (active && active.hidden) sidebarViewSet('agents', false);
+      else if (!sidebarViewTouched && sidebarViewOk(sidebarViewStored())) sidebarViewSet(sidebarViewStored(), false);
+    }
+    async function sidebarTabsLoad() {
+      if (!isHubAdmin()) return;
+      try {
+        const r = await fetch('/api/settings', { credentials: 'include' });
+        if (!r.ok) return;
+        const d = await r.json();
+        sidebarTabsApply({ sidebarTigerTeam: d.sidebarTigerTeam === true, sidebarGuide: d.sidebarGuide === true, sidebarTeams: d.sidebarTeams !== false });
+      } catch { /* the tabs stay hidden */ }
+    }
+    async function saveSidebarTabToggle(key, on) {
+      const state = document.getElementById(key === 'sidebarGuide' ? 'st-sidebar-guide-state' : key === 'sidebarTeams' ? 'st-sidebar-teams-state' : 'st-sidebar-tiger-state');
+      try {
+        const r = await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ [key]: !!on }) });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        sidebarTabsApply({ [key]: !!on });
+        if (state) state.textContent = on ? 'Shown in the sidebar.' : 'Hidden.';
+      } catch (e) { alert('Could not save: ' + e.message); }
+    }
+    function sidebarTabsToggleHtml(data) {
+      const row = (id, key, label, on) => `<div class="st-row" data-no-dirty>
+          <label>${label}</label>
+          <label class="toggle-switch"><input type="checkbox" id="st-${id}" data-no-dirty ${on ? 'checked' : ''} onchange="saveSidebarTabToggle('${key}', this.checked)"><span class="toggle-slider"></span></label>
+          <span id="st-${id}-state" style="font-size:0.8rem;color:var(--text-dim)">${on ? 'Shown in the sidebar.' : 'Hidden.'}</span>
+        </div>`;
+      return row('sidebar-tiger', 'sidebarTigerTeam', 'Show the Tiger Team tab', data.sidebarTigerTeam === true)
+        + row('sidebar-guide', 'sidebarGuide', 'Show the Guide tab', data.sidebarGuide === true)
+        + row('sidebar-teams', 'sidebarTeams', 'Show the Teams tab', data.sidebarTeams !== false);   // on unless switched off
+    }
     function setupTabs() {
       document.querySelectorAll('.tab').forEach(tab => {
-        tab.addEventListener('click', () => {
-          document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-          document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
-          tab.classList.add('active');
-          document.getElementById(`${tab.dataset.tab}-panel`).classList.add('active');
-        });
+        tab.addEventListener('click', () => { sidebarViewTouched = true; sidebarViewSet(tab.dataset.tab, true); });
       });
+      document.querySelectorAll('#simple-view-switch button').forEach(b => {
+        b.addEventListener('click', () => { sidebarViewTouched = true; sidebarViewSet(b.dataset.view, true); });
+      });
+      const list = document.getElementById('teams-list');
+      if (list) {
+        list.addEventListener('click', teamsClick);
+        list.addEventListener('keydown', (e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target.classList && e.target.classList.contains('teams-row')) { if (e.key === ' ') e.preventDefault(); teamsClick(e); } });   // Enter / Space on the row itself opens the chat (not on the pill or the menu inside it); Space does not scroll the list
+      }
+      sidebarViewSet(sidebarViewStored(), false);
+      sidebarTabsLoad();
+      teamSetupLoad();   // admins: the one-time offer, the setups that can be undone
+    }
+
+    // Teams view (#teams-list): who reports to whom, from hubTeams.tree(AGENTS, agentStatus). Fold state is kept in localStorage
+    // 'hub-teams-open' (name -> true = a main agent's team is open, main agents start folded; '@fold:<leader>' -> true = that leader's workers folded by hand, they start open (an old <leader> -> true does nothing); '@other' is the Other section). The fold controls are the
+    // team-size pills and the section headers (data-fold; '@sec:<key>' = FOLDED, sections start open); the list is cut into counted sections by hubTeams.sections (Teams, Solo agents, Shared specialists, Other).
+    const TEAMS_OPEN_KEY = 'hub-teams-open';
+    let teamsOpenMem = null;   // the folds as this page knows them, loaded once; kept even when localStorage refuses
+    function teamsOpenGet() {
+      if (teamsOpenMem === null) {
+        try { const o = JSON.parse(localStorage.getItem(TEAMS_OPEN_KEY) || '{}'); teamsOpenMem = o && typeof o === 'object' && !Array.isArray(o) ? o : {}; } catch { teamsOpenMem = {}; }
+      }
+      return teamsOpenMem;
+    }
+    // The Solo agents section replaced 'No team yet' ('@sec:none') and 'Working alone' ('@sec:alone'): it is folded when any of the three keys is stored true;
+    // folding stores '@sec:solo'; unfolding deletes all three (so an old fold carries over and one tap still opens it).
+    const TEAMS_SOLO_KEYS = ['@sec:solo', '@sec:none', '@sec:alone'];
+    function teamsSecFolded(key) {
+      const o = teamsOpenGet();
+      return key === 'solo' ? TEAMS_SOLO_KEYS.some(k => o[k] === true) : o['@sec:' + key] === true;
+    }
+    function teamsOpenToggle(key) {
+      const o = teamsOpenGet();
+      if (key === '@sec:solo') { if (teamsSecFolded('solo')) for (const k of TEAMS_SOLO_KEYS) delete o[k]; else o[key] = true; }
+      else if (o[key] === true) delete o[key]; else o[key] = true;
+      try { localStorage.setItem(TEAMS_OPEN_KEY, JSON.stringify(o)); } catch { /* kept for this page only */ }
+    }
+    function teamsClick(e) {
+      const t = e.target && e.target.closest ? e.target : null;
+      if (!t) return;
+      const fold = t.closest('[data-fold]');
+      if (fold) {
+        e.stopPropagation();
+        const key = fold.dataset.fold;
+        teamsOpenToggle(key); renderTeams();   // renderTeams gives keyboard focus back to the same fold control
+        return;
+      }
+      if (t.closest('[data-team-setup]')) { e.stopPropagation(); teamSetupStart(); return; }   // empty state: Set up teams
+      if (t.closest('[data-team-undo]')) { e.stopPropagation(); teamSetupUndo({ all: true }); return; }   // bottom line: Undo
+      const row = t.closest('.teams-row');
+      if (row) startSoloChat(row.dataset.agent, row.dataset.model);
+    }
+    // One row of the Teams list (redesign): a main agent is a card with the name, its team-size pill right after it and, only when there is something, a second line
+    // (replying, else the blue background work line, else the Build team link in the "Solo agents" section); a leader or worker is ONE line (no 'Reports to'), what it is doing
+    // follows its name in orange. The pill (a button, data-fold) is the fold control for the team (main) or the workers (leader); the rest of the row opens the chat.
+    // The pill reads the same in EVERY layout and on every screen: '3 agents ▾' / '1 agent ▸' (the owner 2026-11-24 07:48: "On the mobile I see \"3 agents\". desktop website I see \"3\".
+    // Everything should alwasy be consistent."). Where room is short the NAME truncates (CSS), never the pill. Same words as the phone's teamsPillInner / teamsPillLabel.
+    function teamsPillText(count, isOpen) { return `${count} agent${count === 1 ? '' : 's'} ${isOpen ? '&#x25BE;' : '&#x25B8;'}`; }
+    function teamsPillLabel(count, isOpen, label) { return `${isOpen ? 'Fold' : 'Unfold'} ${label}: ${count} agent${count === 1 ? '' : 's'}`; }
+    function teamsPillHtml(key, count, isOpen, label) {   // a main agent's and a leader's pill read alike; key = the name (main) or '@fold:<leader>' (leader)
+      const tip = teamsPillLabel(count, isOpen, label);
+      return `<button type="button" class="teams-pill-btn${isOpen ? ' open' : ''}" data-fold="${key}" aria-expanded="${isOpen ? 'true' : 'false'}" aria-label="${tip}" title="${tip}"><span class="teams-pill">${teamsPillText(count, isOpen)}</span></button>`;
+    }
+    function teamsRowHtml(n, open, sec) {
+      const a = n.agent, name = hubEsc(a.name);
+      const st = agentLiveState(a.name);   // the same state All Agents paints from
+      const busy = st.busy, question = st.question;
+      // Free to talk with work running in the background (lib/ui-agent-dot.js, as in All Agents): the hollow ring and the blue line.
+      const bgN = typeof AgentDot !== 'undefined' && typeof bgCountOf === 'function' ? bgCountOf(a.name) : 0;
+      const bgState = typeof AgentDot !== 'undefined' ? AgentDot.dotState({ busy, question, background: bgN }) : 'free';
+      const dot = st.dotCls + (bgState === 'background' ? ` ${AgentDot.CLASS.background}` : '');
+      const dotTip = bgState === 'background' ? AgentDot.dotLabel(bgState, { background: bgN }) : st.tip;
+      const isMain = n.depth === 0 && hubTeams.isMain(a);
+      const spec = n.depth === 0 && !isMain;   // a shared specialist or an Other agent: a one-line card, no second line
+      // A direct report of a main agent leads a team only when somebody reports to it; otherwise it is drawn as a worker.
+      const leader = n.depth === 1 && n.children.length > 0, worker = n.depth >= 2 || (n.depth === 1 && n.children.length === 0);
+      const rank = worker ? 'worker' : leader ? 'leader' : 'main';
+      const deep = n.depth >= 2;
+      const label = hubEsc(a.display || capName(a.name));
+      const busyLine = (busy || question) ? String(st.line || '').replace(/^⏳\s*/, '') : '';
+      // The fold pill: a main agent with a team (open = its team shows) or a leader (open = its workers show; same store, key '@fold:<name>', open at start).
+      const foldable = (isMain || leader) && n.children.length > 0;
+      const pill = foldable ? teamsPillHtml(leader ? hubEsc('@fold:' + a.name) : name, n.size, open, label) : '';
+      // Second line, main rows only, in this order: replying (orange), the blue background work line, Build team (the Solo agents section, an undecided main, admins). Else none: the name is centred.
+      let l2 = '';
+      if (isMain) {
+        if (busyLine) l2 = `<span class="teams-sub busy">${hubEsc(busyLine)}</span>`;
+        else if (bgState === 'background') l2 = `<span class="teams-sub teams-bg-line" title="${hubEsc(dotTip)}">${hubEsc(AgentDot.bgLine(bgN))}</span>`;   // the same words as the phone and Simple (AgentDot.bgLine); the full sentence is the tooltip
+        else if (sec === 'solo' && !n.children.length && agentCanBuildTeam(a, true) && !agentWorksAlone(a.name)) l2 = `<span class="teams-sub teams-sub-build">${buildTeamCtlHtml(a, 'link', 'span')}</span>`;
+      }
+      const live = !isMain && busyLine ? `<span class="teams-live" title="${hubEsc(busyLine)}">· ${hubEsc(busyLine)}</span>` : '';
+      const kids = foldable && open;
+      // Never a stub of status: the narrow CSS hides the status words where under about six letters would fit, so the row's title AND aria-label carry them in full
+      // ('Harbor: checking tomorrow's berth list', 'Atlas: Free · 2 things in the background') whenever the agent is replying or has background work; idle keeps the blurb as the title.
+      const words = busyLine || (bgState === 'background' ? `Free · ${bgN === 1 ? '1 thing' : bgN + ' things'} in the background` : '');   // the blue line's full words
+      const rowTip = words ? ` title="${hubEsc(`${a.display || capName(a.name)}: ${words}`)}" aria-label="${hubEsc(`${a.display || capName(a.name)}: ${words}`)}"` : ` title="${hubEsc(a.blurb || a.specialty || '')}"`;
+      return `<div class="teams-line rank-${rank}${deep ? ' deep' : ''}${kids ? ' has-kids' : ''}${spec ? ' is-spec' : ''}"><div class="teams-row rank-${rank}${deep ? ' deep' : ''}${spec ? ' is-spec' : ''}${l2 ? ' has-l2' : ''}" role="button" tabindex="0" data-agent="${name}" data-model="${hubEsc(a.model || '')}" data-depth="${n.depth}"${rowTip}>
+        <span class="teams-dot ${dot}" title="${hubEsc(dotTip)}">${hubEsc(st.text)}</span>
+        <span class="agent-icon">${hubEsc(a.icon || '🤖')}</span>
+        <span class="teams-info"><span class="name"><span class="name-text">${label}</span>${a.lead ? '<span class="lead-badge" title="Lead agent">👑</span>' : ''}${pill}${live}</span>${l2}</span>
+        ${agentMenuBtnHtml(a, 'button')}
+      </div></div>`;
+    }
+    // One leader (or worker, or deeper node) = ONE block: its row, then only its own people in a wrapper with the connector line.
+    // Under a main agent the blocks sit in .teams-leaders; under a leader or worker they sit in .teams-kids. A leader's workers show unless its pill was folded.
+    function teamsBlockHtml(n) {
+      const rank = n.depth >= 2 || !n.children.length ? 'worker' : 'leader';
+      const open = rank === 'leader' && teamsOpenGet()['@fold:' + n.agent.name] !== true;   // open at start; folded only by hand
+      return `<div class="teams-block rank-${rank}">${teamsRowHtml(n, open)}${teamsSubtreeHtml(n, rank === 'leader' ? open : true)}</div>`;
+    }
+    function teamsSubtreeHtml(n, show) {
+      let h = '';
+      if (show === false) return h;
+      if (n.children.length) h += `<div class="${n.depth === 0 ? 'teams-leaders' : 'teams-kids'}">${n.children.map(c => teamsBlockHtml(c)).join('')}</div>`;
+      if (n.helpers > 0) h += `<div class="teams-helpers" style="--d:${n.depth + 1}">⚡ ${n.helpers} helper${n.helpers === 1 ? '' : 's'} under ${hubEsc(n.agent.display || capName(n.agent.name))}</div>`;
+      return h;
+    }
+    function renderTeams() {
+      const box = document.getElementById('teams-list');
+      if (!box || typeof AGENTS === 'undefined' || !Array.isArray(AGENTS) || !window.hubTeams) return;
+      const t = hubTeams.tree(AGENTS, agentStatus);
+      const open = teamsOpenGet();
+      let h = '';
+      if (!t.anyTeam) {
+        // Admins: the lead can propose teams from how the agents already work together (Set up teams); members keep the old text.
+        const settingUp = teamSetupBusy();
+        h += '<div class="teams-empty"><strong>Agents can work as teams.</strong>Your main agents plan, decide and review. Short or personal tasks they usually do themselves; long work they can hand to team leaders, who run workers. '
+          + (isHubAdmin()
+            ? hubEsc(`${teamSetupLeadDisplay()} can look at how your agents already work together and propose teams. Nothing changes until you approve a team.`)
+              + `<button type="button" class="teams-setup-btn${settingUp ? ' is-building' : ''}" data-team-setup${settingUp ? ' disabled aria-disabled="true"' : ''}>${settingUp ? 'Setting up…' : 'Set up teams'}</button>`
+            : 'An admin can set who reports to whom.') + '</div>';
+      }
+      // The sections, each with its count (hubTeams.sections; empty ones are left out): Teams, Solo agents, Shared specialists, Other.
+      for (const s of hubTeams.sections(t, (nm) => agentWorksAlone(nm))) {
+        const title = hubEsc(`${s.title} · ${s.count}`);
+        if (s.key === 'other') {
+          const o = open['@other'] === true;
+          h += `<div class="teams-section" data-section="other"><button type="button" class="teams-title teams-title-fold" data-fold="@other" aria-expanded="${o ? 'true' : 'false'}"><span>${title}</span><span class="teams-glyph" aria-hidden="true">${o ? '&#x25BE;' : '&#x25B8;'}</span></button>`;
+          if (o) for (const n of s.rows) h += teamsRowHtml(n, false, s.key) + teamsSubtreeHtml(n);
+          h += '</div>';
+          continue;
+        }
+        // Every section folds like the phone's: the header is a button (data-fold '@sec:<key>', stored = FOLDED, sections start open; 'Other' keeps '@other', stored = open).
+        const secOpen = !teamsSecFolded(s.key);
+        h += `<div class="teams-section" data-section="${s.key}"><button type="button" class="teams-title teams-title-fold" data-fold="@sec:${s.key}" aria-expanded="${secOpen ? 'true' : 'false'}"><span>${title}</span><span class="teams-glyph" aria-hidden="true">${secOpen ? '&#x25BE;' : '&#x25B8;'}</span></button>`;
+        if (secOpen) for (const n of s.rows) {
+          if (s.key === 'teams') { const o = open[n.agent.name] === true; h += teamsRowHtml(n, o, s.key); if (o) h += teamsSubtreeHtml(n); }
+          else h += teamsRowHtml(n, false, s.key) + teamsSubtreeHtml(n);
+        }
+        h += '</div>';
+      }
+      h += teamSetupLineHtml();   // admins, when setups are recorded: "Team setup: N teams recorded <date> · Undo"
+      if (teamsLastHtml !== h || !box.firstChild) {   // a status tick that changes nothing leaves the DOM alone
+        // Keyboard focus on a fold button or a row survives the redraw: note it first, give it back to the matching element after.
+        let keep = null;
+        try {
+          const f = document.activeElement;
+          if (f && f !== box && box.contains && box.contains(f) && f.dataset) {
+            if (f.dataset.fold !== undefined) keep = { sel: 'fold', key: f.dataset.fold };
+            else if (f.dataset.agent !== undefined) keep = { sel: 'agent', key: f.dataset.agent };
+          }
+        } catch { keep = null; }
+        teamsLastHtml = h; box.innerHTML = h;
+        if (keep) {
+          try {
+            const again = Array.from(box.querySelectorAll(keep.sel === 'fold' ? '[data-fold]' : '.teams-row')).find(el => (keep.sel === 'fold' ? el.dataset.fold : el.dataset.agent) === keep.key);
+            if (again && again.focus) again.focus({ preventScroll: true });
+          } catch { /* cosmetic */ }
+        }
+      }
+    }
+    let teamsLastHtml = null;
+
+    // ── Set up teams and Undo team setup (admins) ──
+    // GET /api/team-setup: { offer: 'pending'|'not_now'|'never'|'accepted'|null, lead: { name, display }, setups: [{ id, at, main, count }], anyTeam }.
+    // The one-time offer is a card in the lead's chat (#team-offer-slot-<chat>); it shows while offer is 'pending' and goes when any device answers:
+    // the lead's status entry carries offerPending, and a change of it (setAgentLive) reloads this state. Nothing here has a timeout.
+    let teamSetup = { offer: null, lead: null, setups: [], alone: {} };   // alone: { name: { at, reason } } main agents the lead found need no team (admins only)
+    // A main agent with no team that the lead recorded as working alone: its Solo agents row has no second line and no Build team link (the menu entry stays).
+    function agentWorksAlone(name) {
+      return isHubAdmin() && !!(teamSetup.alone && Object.prototype.hasOwnProperty.call(teamSetup.alone, name)) && !hubTeams.hasTeam(name, AGENTS);
+    }
+    let teamSetupStarting = false;           // the Set up teams request is in flight from this page
+    const teamSetupRecent = new Set();       // setup ids recorded while this page was open (team_setup_recorded): their chat Undo shows at once
+    let teamSetupLoadTimer = 0;
+    function teamSetupLeadDisplay() {
+      const l = teamSetup.lead;
+      if (l && (l.display || l.name)) return l.display || capName(l.name);
+      const a = Array.isArray(AGENTS) ? AGENTS.find(x => x && x.lead) : null;
+      return a ? (a.display || capName(a.name)) : 'Your lead';
+    }
+    function teamSetupBusy() {
+      if (teamSetupStarting) return true;
+      for (const s of Object.values(agentStatus)) if (s && s.settingUpTeams) return true;   // the lead's status carries it while the turn runs
+      return false;
+    }
+    function teamSetupLines(list) { return (list || []).reduce((n, s) => n + (Math.max(0, Math.floor(Number(s && s.count)) || 0)), 0); }
+    function teamSetupDate(at) {
+      const d = new Date(at);
+      return Number.isNaN(d.getTime()) ? '' : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    }
+    function teamSetupLineHtml() {
+      if (!isHubAdmin() || !teamSetup.setups.length) return '';
+      const n = teamSetup.setups.length;
+      const latest = teamSetup.setups.reduce((m, s) => (Date.parse(s.at) > Date.parse(m.at) ? s : m), teamSetup.setups[0]);
+      const date = teamSetupDate(latest.at);
+      return `<div class="teams-setup-line">Team setup: ${n} team${n === 1 ? '' : 's'} recorded${date ? ' ' + hubEsc(date) : ''} · <button type="button" class="teams-setup-undo" data-team-undo>Undo</button></div>`;
+    }
+    function teamSetupApply(d) {
+      if (!d || typeof d !== 'object') return;
+      const aloneWas = Object.keys(teamSetup.alone || {}).sort().join('\n');
+      teamSetup = { offer: d.offer || null, lead: d.lead && typeof d.lead === 'object' ? d.lead : null, setups: Array.isArray(d.setups) ? d.setups : [], alone: d.alone && typeof d.alone === 'object' && !Array.isArray(d.alone) ? d.alone : {} };
+      const ls = teamSetup.lead && agentStatus[teamSetup.lead.name];
+      if (teamSetup.offer !== 'pending' && ls && ls.offerPending) setAgentLive(teamSetup.lead.name, { offerPending: false });   // answered: the row's marker goes with the card
+      teamSetupPaint();
+      if (Object.keys(teamSetup.alone).sort().join('\n') !== aloneWas) { try { renderAgents(); } catch { /* cosmetic */ } }   // the All Agents line goes (or comes back)
+    }
+    async function teamSetupLoad() {
+      if (!isHubAdmin()) { teamSetup = { offer: null, lead: null, setups: [], alone: {} }; teamSetupPaint(); return; }
+      try {
+        const r = await fetch('/api/team-setup', { credentials: 'include' });
+        if (!r.ok) return;
+        teamSetupApply(await r.json());
+      } catch { /* the offer and the Undo line wait for the next refresh */ }
+    }
+    function teamSetupLoadSoon() {
+      if (teamSetupLoadTimer) return;
+      teamSetupLoadTimer = setTimeout(() => { teamSetupLoadTimer = 0; teamSetupLoad(); }, 300);
+    }
+    // The offer card and the per-team Undo rows, in every open chat of the lead; the Teams tab redraws too.
+    function teamSetupPaint() {
+      if (typeof teamsRepaintSoon === 'function') teamsRepaintSoon();
+      try { for (const c of Object.values(chats)) if (c && c.agent && !c.isGroup && !c.isWorker && !c.isHistory) teamSetupChatPaint(c); } catch { /* cosmetic */ }
+    }
+    function teamSetupOfferHtml() {
+      const lead = hubEsc(teamSetupLeadDisplay());
+      const btn = (choice, label) => `<button type="button" class="question-option" data-team-offer="${choice}"><strong>${label}</strong></button>`;
+      return `<div class="question-modal team-offer-card" role="group" aria-label="${lead} has a suggestion"><h3>${lead} has a suggestion</h3>`
+        + `<div class="question-header">Teams</div>`
+        + `<p class="question-text">${lead} can look at how your agents already work together and suggest teams for the Teams tab. Nothing changes in how your agents work unless you approve a team.</p>`
+        + `<div class="question-options">${btn('show', 'Show me the proposal')}${btn('not_now', 'Not now')}${btn('never', "Don't ask again")}</div></div>`;
+    }
+    // Setups recorded this session (the lead's confirmation just came), or within the last half hour on a fresh page: "Undo this team".
+    function teamSetupUndoRows() {
+      const now = Date.now();
+      return teamSetup.setups.filter(s => s && s.id && (teamSetupRecent.has(s.id) || now - Date.parse(s.at) < 30 * 60 * 1000))
+        .sort((a, b) => (Date.parse(b.at) || 0) - (Date.parse(a.at) || 0));   // newest first
+    }
+    // ONE compact line above the message box however many setups: "6 teams recorded · Undo ×" (one setup: "<Display> team recorded (3 reporting lines) · Undo ×").
+    // With several, Undo (or the line) opens a list below it: one row per team with its own Undo, and Undo all. × hides the line until a newer setup is recorded.
+    let teamSetupListOpen = false;
+    const TEAM_UNDO_DISMISS_KEY = 'hub-team-undo-dismissed';
+    function teamSetupDismissedId() { try { return localStorage.getItem(TEAM_UNDO_DISMISS_KEY) || ''; } catch { return ''; } }
+    function teamSetupDismiss() {
+      const rows = teamSetupUndoRows();
+      if (rows.length) { try { localStorage.setItem(TEAM_UNDO_DISMISS_KEY, String(rows[0].id)); } catch { /* storage refused: hidden until the page reloads */ } }
+      teamSetupListOpen = false;
+      teamSetupPaint();
+    }
+    function teamSetupToggleList() { teamSetupListOpen = !teamSetupListOpen; teamSetupPaint(); }
+    function teamSetupUndoAll() { return teamSetupUndo({ ids: teamSetupUndoRows().map(s => s.id) }); }
+    function teamSetupUndoHtml() {
+      const rows = teamSetupUndoRows();
+      if (!rows.length || teamSetupDismissedId() === String(rows[0].id)) return '';
+      const lines = (s) => Math.max(0, Math.floor(Number(s.count)) || 0);
+      const whoOf = (s) => { const main = AGENTS.find(a => a.name === s.main); return hubEsc((main && main.display) || (s.main ? capName(s.main) : 'This')); };
+      const x = '<button type="button" class="team-undo-x" data-team-undo-dismiss aria-label="Dismiss" title="Dismiss (the Teams tab keeps Undo)">×</button>';
+      if (rows.length === 1) {
+        const s = rows[0], n = lines(s);
+        return `<div class="team-undo-line"><span class="team-undo-text">${whoOf(s)} team recorded</span> <span class="team-undo-sep">·</span> <button type="button" class="team-undo-btn" data-team-undo-id="${hubEsc(String(s.id))}">Undo</button> ${x}</div>`;
+      }
+      let html = `<div class="team-undo-line" data-team-undo-toggle><span class="team-undo-text">${rows.length} teams recorded</span> <span class="team-undo-sep">·</span> <button type="button" class="team-undo-btn" data-team-undo-toggle aria-expanded="${teamSetupListOpen ? 'true' : 'false'}">Undo</button> ${x}</div>`;
+      if (teamSetupListOpen) {
+        html += '<div class="team-undo-list" role="group" aria-label="Teams recorded">';
+        for (const s of rows) { const n = lines(s); html += `<div class="team-undo-item"><span class="team-undo-text">${whoOf(s)} team (${n} line${n === 1 ? '' : 's'})</span> <button type="button" class="team-undo-btn" data-team-undo-id="${hubEsc(String(s.id))}">Undo</button></div>`; }
+        html += '<div class="team-undo-item"><span class="team-undo-text"></span> <button type="button" class="team-undo-btn" data-team-undo-all>Undo all</button></div></div>';
+      }
+      return html;
+    }
+    function teamSetupChatPaint(chat) {
+      const slot = chat && document.getElementById(`team-offer-slot-${chat.id}`);
+      if (!slot) return;
+      const lead = teamSetup.lead && teamSetup.lead.name;
+      let html = '';
+      if (isHubAdmin() && lead && chat.agent === lead) {
+        if (teamSetup.offer === 'pending') html += teamSetupOfferHtml();
+        html += teamSetupUndoHtml();
+      }
+      if (slot.dataset.shown === html) return;   // unchanged: no flicker, no lost focus
+      slot.dataset.shown = html;
+      slot.innerHTML = html;
+      slot.hidden = !html;
+    }
+    async function teamSetupAnswer(choice) {
+      try {
+        const r = await fetch('/api/team-setup/offer', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ choice }) });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error((d && d.error) || `HTTP ${r.status}`);
+        teamSetup = { ...teamSetup, offer: (d && d.offer) || (choice === 'show' ? 'accepted' : choice), lead: (d && d.lead && typeof d.lead === 'object') ? d.lead : teamSetup.lead };
+        teamSetupPaint();   // the card goes now; the other devices lose it on their next status refresh
+        if (choice === 'show') {
+          const lead = teamSetup.lead && teamSetup.lead.name;
+          if (lead) { const la = AGENTS.find(a => a.name === lead); startSoloChat(lead, (la && la.model) || ''); }
+        }
+      } catch (e) { alert('Could not send your answer: ' + (e && e.message ? e.message : 'no connection')); }
+      teamSetupLoadSoon();
+    }
+    async function teamSetupStart() {
+      if (teamSetupBusy()) return;
+      teamSetupStarting = true;
+      if (typeof teamsRepaintSoon === 'function') teamsRepaintSoon();
+      try {
+        const r = await fetch('/api/team-setup/start', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+        let d = {};
+        try { d = await r.json(); } catch { d = {}; }
+        if (r.status === 202 || (r.ok && d && d.lead)) {
+          const lead = d && d.lead && (d.lead.name || d.lead);
+          if (lead) { const la = AGENTS.find(a => a.name === lead); startSoloChat(String(lead), (la && la.model) || ''); }   // the lead's chat, so the proposal is in view
+        } else alert((d && d.error) || `Could not start setting up teams (${r.status}).`);
+      } catch (e) {
+        alert('Could not start setting up teams: ' + (e && e.message ? e.message : 'no connection'));
+      } finally {
+        teamSetupStarting = false;
+        if (typeof teamsRepaintSoon === 'function') teamsRepaintSoon();
+      }
+    }
+    // { all: true } (the line at the bottom of the Teams tab) or { id } (one team, from the lead's confirmation): ask first, then undo.
+    async function teamSetupUndo(which) {
+      const all = !!(which && which.all);
+      const ids = which && Array.isArray(which.ids) ? which.ids.map(String) : null;   // "Undo all" in the chat's list: these setups, newest first
+      const picked = ids ? teamSetup.setups.filter(s => ids.includes(String(s.id))) : null;
+      const n = all ? teamSetupLines(teamSetup.setups) : picked ? teamSetupLines(picked) : teamSetupLines(teamSetup.setups.filter(s => s.id === (which && which.id)));
+      if (picked && !picked.length) return;
+      if (!confirm(picked ? `Remove all ${n} reporting lines from these ${picked.length} teams?` : `Remove these ${n} reporting lines?`)) return;
+      try {
+        let kept = 0, problem = '';
+        // "Undo all" in the chat's list is ONE request { ids } (the server undoes them newest first, so a failure protects the older lines); a server that answers 400 (does not know ids) gets the one-by-one loop
+        const have = picked ? ids.filter(id => picked.some(s => String(s.id) === id)) : null;   // the listed setups still on this page, in the order given (newest first)
+    const one = have ? have.map(id => ({ id })) : null;
+        const queue = ids ? (have.length <= 50 ? [{ ids: have }] : one) : [all ? { all: true } : { id: which.id }];
+        while (queue.length) {
+          const body = queue.shift();
+          const r = await fetch('/api/team-setup/undo', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+          if (r.status === 400 && body.ids) { queue.push(...one); continue; }   // an old server: the current one-by-one way
+          const d = await r.json().catch(() => ({}));
+          kept += Array.isArray(d && d.keptChanged) ? d.keptChanged.length : Math.max(0, Math.floor(Number(d && d.keptChanged)) || 0);
+          if (r.status === 404) continue;   // already undone (another device): done, go on with the next team
+          const failed = Array.isArray(d && d.failed) ? d.failed : [];
+          if (failed.length || !r.ok) {   // stop at the first team that did not come undone and say what failed
+            const s = body.id !== undefined ? teamSetup.setups.find(x => String(x.id) === String(body.id)) : null;
+            const main = s && s.main ? AGENTS.find(a => a.name === s.main) : null;
+            const who = s && s.main ? ((main && main.display) || capName(s.main)) : body.all ? 'all teams' : body.ids ? 'these teams' : 'this team';
+            const parts = [];
+            if (!r.ok) parts.push((d && d.error) || `HTTP ${r.status}`);
+            if (failed.length) parts.push('could not restore ' + failed.map(f => (f && f.agent ? (f.error ? `${f.agent} (${f.error})` : f.agent) : String(f))).join(', '));
+            problem = `Could not undo ${who}: ${parts.join('; ')}`;
+            break;
+          }
+        }
+        if (kept > 0) alert(`${kept} reporting line${kept === 1 ? ' was' : 's were'} changed by hand since and stayed as set.`);
+        if (problem) alert(problem);
+      } catch (e) { alert('Could not undo: ' + (e && e.message ? e.message : 'no connection')); }
+      try { await loadAgents(); } catch { /* the list refreshes on its next tick */ }   // the reporting lines changed
+      await teamSetupLoad();   // the line leaves; with no lines left the tab shows the empty state again
+      if (typeof teamsRepaintSoon === 'function') teamsRepaintSoon();
+    }
+    // Clicks inside an offer slot (answers, per-team Undo): delegated from the document so every chat's slot works.
+    document.addEventListener('click', (e) => {
+      const t = e.target && e.target.closest ? e.target : null;
+      if (!t) return;
+      const ans = t.closest('[data-team-offer]');
+      if (ans) { e.preventDefault(); teamSetupAnswer(ans.dataset.teamOffer); return; }
+      if (t.closest('[data-team-undo-dismiss]')) { e.preventDefault(); teamSetupDismiss(); return; }
+      if (t.closest('[data-team-undo-all]')) { e.preventDefault(); teamSetupUndoAll(); return; }
+      const un = t.closest('[data-team-undo-id]');
+      if (un) { e.preventDefault(); teamSetupUndo({ id: un.dataset.teamUndoId }); return; }
+      if (t.closest('[data-team-undo-toggle]')) { e.preventDefault(); teamSetupToggleList(); }
+    });
+    // Repaint after the list or a status changed; only while the Teams view is the one showing.
+    let teamsTimer = 0;
+    function teamsRepaintSoon() {
+      if (teamsTimer) return;
+      teamsTimer = setTimeout(() => {
+        teamsTimer = 0;
+        const p = document.getElementById('teams-panel');
+        if (p && p.classList.contains('active')) { try { renderTeams(); } catch { /* cosmetic */ } }
+      }, 250);
     }
     
     // Deep research progress line (the hub's research_progress event, GET /api/research/status): one text line per active run
@@ -9042,6 +9795,7 @@
       compactionRefresh(chatId);   // context % and compression mode under the toolbar (cheap GET)
       paintPlanBadges();           // plan usage next to the model (Claude subscription agents)
       soloViewPaint();             // the "Agent work" toggle shows the device's choice
+      try { teamSetupChatPaint(chats[chatId]); } catch { /* cosmetic */ }   // the lead's chat: the Set up teams offer, the Undo for a team just set up
 
       // Load conversation history from server (the newest page of the chosen view; "Load earlier" fetches the rest)
       chats[chatId].historyLoaded = soloHistoryLoad(chatId);
@@ -9091,7 +9845,7 @@
       if (!fresh.length) return raw.slice();
       const firstTs = tsOf(fresh[0]);
       const kept = firstTs === null ? [] : raw.filter(e => tsOf(e) !== null && tsOf(e) < firstTs);
-      return chatViewMergeOlder(kept, fresh);
+      return chatViewMergeRuns(chatViewMergeOlder(kept, fresh));
     }
     // After a hub-started turn this page did not follow: bring the chat up to date (a reply marked for the owner shows),
     // redrawing only when something new came in, with the older pages and the scroll position kept.
@@ -9104,7 +9858,7 @@
       try { list = await soloHistoryCurrent(chat, view); } catch (e) { console.warn('[history] Failed to refresh:', e); return; }
       if (list === null) return;   // too much came in to join up: the display stays (it never shows a gap)
       if (!chats[chatId] || chat.histSeq !== seq || chat.controller || chat.reattach || Object.values(hubTurns).some(t => t.chatId === chatId)) return;
-      const key = (e) => `${e && e.ts}|${e && e.role}|${e && e.content}`;
+      const key = (e) => `${e && e.ts}|${e && e.role}|${e && e.content}|${e && e.last_ts}|${e && e.turns}`;   // a run line grows: its range and count are part of it
       const had = new Set((chat.rawHistory || []).map(key));
       if (!list.some(e => !had.has(key(e)))) return;   // nothing new: nothing visible changes
       const panel = document.getElementById(`messages-${chatId}`);
@@ -9137,7 +9891,9 @@
           const history = data || [];
           if (history.length > 0) {
             // Add a visual separator so user knows this is restored history
-            appendSystemNotice(chatId, `📜 Restored ${history.length} messages from previous session`);
+            // (a run line is not a message: only the lines of hub-started turns are there, so it is not counted)
+            const restored = history.filter(m => !(m && m.role === 'hidden_run')).length;
+            if (restored > 0) appendSystemNotice(chatId, `📜 Restored ${restored} messages from previous session`);
             const times = msgTimeLines(history);   // the date and time under each message
             for (const msg of history) {
               // The running turn's reply so far (saved as plain text every 5 s): the live turn is drawn in its place,
@@ -9152,8 +9908,11 @@
             // One saved entry as the chat draws it: appendMessage + saved tool calls + reasoning + the time line.
             // into: where the bubble goes (default the panel; a card's body); push: false when chat.messages already has it;
             // show: false only pushes it (a reply drawn open after its card).
-            const draw = (i, { into = null, notice = true, push = true, show = true } = {}) => {
+            // (also used for the turns a run line fetches: those are not pushed into chat.messages, see soloRunLine)
+            const makeDraw = (history, times, pushDefault) => {
+            const draw = (i, { into = null, notice = true, push = pushDefault, show = true } = {}) => {
               const msg = history[i];
+              if (msg.role === 'hidden_run') { soloRunLine(chatId, msg, into); return null; }   // one quiet line, not a message
               if (notice) { if (msg.role === 'user' && msg.origin?.kind) appendSystemNotice(chatId, `⚡ ${hubOriginLabel(msg.origin)} — ${hubTurnTime(msg.ts)}`); }
               if (push) chats[chatId].messages.push({ role: msg.role, content: msg.content });
               if (!show) return null;
@@ -9166,6 +9925,13 @@
               if (msg.role === 'assistant' && Array.isArray(msg.activity) && msg.activity.length) paintSavedActivity(hid, msg);
               if (msg.role === 'assistant' && typeof msg.reasoning === 'string' && msg.reasoning) setReasoning(hid, msg.reasoning, { total: Number(msg.reasoningChars) });
               setMessageTime(document.getElementById(hid), times[i]);
+              if (msg.role === 'assistant' && msg.claudeSignin === true) {   // "Claude is signed out": the same notice as the live one; "Send my message again" only on the chat's newest reply
+                let again = null;
+                if (history.findLastIndex(m => m && m.role === 'assistant' && !m.ask && !m.inProgress) === i) {
+                  for (let k = i - 1; k >= 0; k--) { const u = history[k]; if (u && u.role === 'user' && !u.ask && !u.interjection) { again = typeof u.content === 'string' ? u.content : null; break; } }
+                }
+                paintClaudeSigninNotice(chatId, document.getElementById(hid), msg.claudeSigninDetail, again);
+              }
               if (msg.role === 'assistant') attachFileCards(document.getElementById(hid));   // a saved reply's download cards
               // An archived entry is text only (the hub saved no tool calls or reasoning for it) and says where it comes from.
               if (msg.archived) {
@@ -9174,6 +9940,10 @@
               }
               return hid;
             };
+            return draw;
+            };
+            const draw = makeDraw(history, times, true);
+            chats[chatId].makeDraw = makeDraw;
             const panelEl = document.getElementById(`messages-${chatId}`);
             chats[chatId].lastAutoCard = null;
             if (foldAutoOn()) {
@@ -9204,6 +9974,124 @@
       soloEarlierPaint(chatId);
       busyCardRefresh(chat);
       if (reset) pollAgentStatus();   // a turn that was running before the redraw is followed again
+    }
+
+    // ── Run lines: a run of hub-started turns the main view leaves out is ONE quiet line in its place ──
+    // The page's own time formatter for the line ("8:09 AM"; with a date when the run spans two days).
+    function soloRunTime(ts, withDate) {
+      const d = new Date(ts);
+      return isNaN(d) ? '' : d.toLocaleString([], { ...(withDate ? { month: 'short', day: 'numeric' } : {}), hour: 'numeric', minute: '2-digit' });
+    }
+    // The line (a real button) and, under it, the body that holds the run's turns once opened. The open state and the
+    // fetched turns are kept per chat by the run's first time (chat.runs), so a redraw (Load earlier) draws it as it was.
+    function soloRunLine(chatId, run, parent) {
+      const chat = chats[chatId];
+      const host = parent || document.getElementById(`messages-${chatId}`);
+      if (!chat || !host) return null;
+      if (!chat.runs) chat.runs = {};
+      const key = chatViewRunKey(run);
+      let st = chat.runs[key], reopen = false;
+      if (!st) {
+        // Load earlier merged an older run into an open line: the merged line starts earlier, so it stays open (its turns are fetched again)
+        const was = chatViewRunOpenKey(chat.runs, run);
+        st = chat.runs[key] = { open: false, entries: null, more: false, loading: false, gen: 0, ts: run.ts };
+        if (was) { reopen = true; delete chat.runs[was]; }
+      }
+      const wrap = document.createElement('div');
+      wrap.className = 'run-wrap'; wrap._run = run;
+      const head = document.createElement('button');
+      head.type = 'button'; head.className = 'run-line'; head.setAttribute('aria-expanded', 'false');
+      const chev = foldPart('span', 'run-chev', '▸'), kindsEl = foldPart('span', 'run-kinds', ''), whenEl = foldPart('span', 'run-when', '');
+      head.append(chev, kindsEl, whenEl);   // the time range never shrinks; only the kinds part is cut with an ellipsis
+      const body = document.createElement('div');
+      body.className = 'run-body'; body.hidden = true;
+      wrap.append(head, body);
+      host.appendChild(wrap);
+      const words = () => { const p = chatViewRunParts(wrap._run, soloRunTime); kindsEl.textContent = p.kinds; whenEl.textContent = p.when ? ` \u00b7 ${p.when}` : ''; head.title = chatViewRunText(wrap._run, soloRunTime); };
+      const setOpen = (on) => { st.open = on; head.setAttribute('aria-expanded', on ? 'true' : 'false'); body.hidden = !on; chev.textContent = on ? '▾' : '▸'; };
+      // the fetched turns, each as its own folded card (never a stack: opening the line shows the cards at once); never pushed into chat.messages
+      const fill = () => {
+        body.textContent = '';
+        const list = (st.entries || []).filter(e => e && !e.inProgress);
+        const draw = chat.makeDraw ? chat.makeDraw(list, msgTimeLines(list), false) : null;
+        if (draw) {
+          if (typeof simpleOn === 'function' && simpleOn()) list.forEach((e, i) => draw(i, { into: body, notice: false }));
+          else for (const item of autoGroupHistory(list)) {
+            if (item.type === 'entry') draw(item.index, { into: body, notice: false });
+            else if (item.type === 'card') foldRenderHistoryCard(draw, item, body, null, soloRunTime);
+            else for (const c of item.cards) foldRenderHistoryCard(draw, c, body, null, soloRunTime);
+          }
+        }
+        if (st.more) {
+          const n = list.filter(e => e.role === 'user').length, all = Number(wrap._run.turns) || 0;
+          const more = document.createElement('div'); more.className = 'run-more';
+          // "Agent work" is a button that switches the Agent work view on (the same as the toolbar's button)
+          const sw = document.createElement('button'); sw.type = 'button'; sw.className = 'run-more-btn'; sw.textContent = 'Agent work';
+          sw.addEventListener('click', () => { if (typeof soloViewToggle === 'function') soloViewToggle(); });
+          more.append(foldPart('span', '', `${st.partial ? 'Showing part of 1 turn.' : `Showing ${n} of ${all > n ? all : n} turns.`} Switch on `), sw, foldPart('span', '', st.partial ? ' to see it all.' : ' to see them all.'));
+          body.appendChild(more);
+        }
+      };
+      st.ui = { words, setOpen, fill };
+      words();
+      // st.gen counts the changes of the run: an answer that arrives after the run grew is for the old run and is dropped
+      wrap._runReset = () => { st.gen = (st.gen || 0) + 1; st.entries = null; st.more = false; st.partial = false; setOpen(false); body.textContent = ''; words(); };
+      const fail = (msg) => {
+        wrap.querySelectorAll(':scope > .run-error').forEach(n => n.remove());
+        const err = foldPart('div', 'run-error', msg || "Couldn't load these turns. Try again.");
+        err.setAttribute('role', 'status');
+        wrap.appendChild(err);
+      };
+      head.addEventListener('click', async () => {
+        if (st.loading) return;
+        wrap.querySelectorAll(':scope > .run-error').forEach(n => n.remove());
+        if (st.open) { setOpen(false); return; }
+        if (!st.entries) {
+          st.loading = true; kindsEl.textContent = 'Loading…'; whenEl.textContent = ''; head.setAttribute('aria-busy', 'true');
+          const gen = st.gen || 0;
+          try {
+            // a live line is named by its first turn's id and sends the hub's times it counted (never this device's clock)
+            const res = await fetch(chatViewRunUrl(chat.agent, wrap._run), { credentials: 'include' });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const d = await res.json();
+            if ((st.gen || 0) !== gen) { st.loading = false; head.removeAttribute('aria-busy'); words(); return; }   // the run grew meanwhile: this answer is for the old one
+            if (d && d.incomplete) { st.loading = false; head.removeAttribute('aria-busy'); words(); fail("Couldn't load these turns. Switch on Agent work to see them."); return; }
+            st.entries = Array.isArray(d && d.history) ? d.history : [];
+            st.more = !!(d && d.more); st.partial = !!(d && d.partial);
+          } catch (e) {
+            st.loading = false; head.removeAttribute('aria-busy'); words(); if ((st.gen || 0) === gen) fail();
+            return;
+          }
+          st.loading = false; head.removeAttribute('aria-busy');
+        }
+        // the line may have been drawn again while the turns came in: the newest line of this run shows them
+        const ui = st.ui || { words, setOpen, fill };
+        ui.fill(); ui.setOpen(true); ui.words();
+      });
+      if (st.open && st.entries) { fill(); setOpen(true); }
+      else if (reopen) head.click();
+      return wrap;
+    }
+    // A hub-started turn begins while the chat is open in the main view: its card stays hidden as ever, and the run line
+    // at the end of the chat counts it (a new line, or the last line grown by one turn).
+    function soloRunLive(chat, origin, startedAt, turnId) {
+      const panel = document.getElementById(`messages-${chat.id}`);
+      if (!panel) return null;
+      const ts = Number.isFinite(Date.parse(startedAt)) ? new Date(startedAt).toISOString() : new Date().toISOString();
+      const k = chatViewRunKindOf(origin);
+      let last = panel.lastElementChild;
+      while (last && (last.classList.contains('chat-view-hidden') || last.classList.contains('chat-busy-card'))) last = last.previousElementSibling;
+      if (last && last.classList.contains('run-wrap') && last._run) {
+        const grown = { ...last._run, live: true, kinds: last._run.kinds.map(x => ({ ...x })) };   // the page's saved list keeps its own copy
+        chatViewRunAdd(grown, k.kind, k.from, ts, turnId);   // the line keeps its FIRST turn id
+        last._run = grown;
+        last._runReset();   // the turns fetched before no longer match: closed, fetched again when opened
+        return last;
+      }
+      const run = { role: 'hidden_run', ts, last_ts: ts, turns: 0, kinds: [], content: '', live: true };
+      chatViewRunAdd(run, k.kind, k.from, ts, turnId);
+      if (chat.runs) delete chat.runs[chatViewRunKey(run)];
+      return soloRunLine(chat.id, run, panel);
     }
 
     // "Load earlier": a button at the top of the chat while the view has older entries (histNext is the cursor).
@@ -9248,7 +10136,7 @@
         if (chat.controller || chat.reattach || Object.values(hubTurns).some(t => t.chatId === chatId)) { hubToast('Load earlier once the reply is done'); return; }
         const panel = document.getElementById(`messages-${chatId}`);
         const fromBottom = panel ? panel.scrollHeight - panel.scrollTop : 0;
-        soloHistoryDraw(chatId, chatViewMergeOlder(older, base), cursor, view, { reset: true, keepScroll: true });
+        soloHistoryDraw(chatId, chatViewMergeRuns(chatViewMergeOlder(older, base)), cursor, view, { reset: true, keepScroll: true });
         if (panel) { panel.scrollTop = Math.max(0, panel.scrollHeight - fromBottom); userScrolledUp.set(panel, true); }
       } catch (e) {
         hubToast(`Could not load earlier messages: ${e.message}`);
@@ -9396,6 +10284,7 @@
       if (!chat) return false;
       let header = false;
       try { header = headerBusyPaint(chat); } catch {}
+      try { bgPaintChat(chat); } catch {}   // the background ring on the tab and status-bar dots (never on a busy one)
       const keep = (v) => { if (v && !busyCardTimer) busyCardTimer = setInterval(busyCardRefreshAll, 5000); return v; };   // the elapsed time moves while shown
       keep(header);
       const panel = document.getElementById(`messages-${chat.id}`);
@@ -9459,11 +10348,15 @@
         return line;
       };
       const dd = copy.querySelector('.agent-status');
+      copy.querySelectorAll('.agent-bg-line').forEach(x => x.remove());   // an Active copy says done or working, never the blue background line
       // a row in Active is always busy-looking (yellow dot and status line) or done; the job line sits below it
       copy.classList.toggle('active-done', row.doneAt != null);
       if (row.doneAt != null) {
         copy.classList.remove('is-busy'); ensureLine().className = 'agent-busy-line'; line.textContent = '\u2713 done';
-        if (dd) { dd.className = 'agent-status live-idle'; dd.textContent = ''; dd.title = 'Done'; }
+        if (dd) {
+          dd.className = 'agent-status live-idle'; dd.textContent = ''; dd.title = 'Done';
+          if (typeof AgentDot !== 'undefined') { const q = bgCountOf(row.name); AgentDot.applyDot(dd, AgentDot.dotState({ busy: false, question: false, background: q }), { background: q, name: row.name }); }   // done and free, with background work: the ring
+        }
         return;
       }
       const src = orig && orig.querySelector('.agent-busy-line');
@@ -9656,13 +10549,17 @@
       if (!name) return;
       const cur = agentStatus[name] || { busy: false, busySince: null, activity: null, pendingQuestion: false };
       const next = { ...cur, ...patch };
-      if (!next.busy) { next.busySince = null; next.activity = null; next.pendingQuestion = false; next.consultedBy = null; }
+      if (!next.busy) { next.busySince = null; next.activity = null; next.pendingQuestion = false; next.consultedBy = null; next.buildingTeamFor = null; next.reviewingTeamFor = null; next.settingUpTeams = false; }   // offerPending is not a turn: it stays while the lead is idle
       else if (!next.busySince) next.busySince = cur.busySince || new Date().toISOString();
       agentStatus[name] = next;
+      if ((cur.reviewingTeamFor || null) !== (next.reviewingTeamFor || null) && typeof teamsRepaintSoon === 'function') teamsRepaintSoon();   // the menu's "Reviewing…" is read when it opens; rows repaint
+      if ((cur.buildingTeamFor || null) !== (next.buildingTeamFor || null)) paintBuildControls();   // "Building…" on that main agent's Build team controls
+      if (!!cur.offerPending !== !!next.offerPending) teamSetupLoadSoon();   // the offer was answered (here or on another device) or came up: the card follows
       if (!next.busy) { delete agentSteps[name]; delete busyRun[name]; }   // idle: no step or turn origin survives into the next turn (a turn_end may have been missed)
       if (!next.busy && typeof voiceCallHubIdle === 'function') { try { voiceCallHubIdle(name); } catch { /* the call carries on */ } }   // a call waiting for a hub-started turn learns it is over
       paintAgentStatus(name);
       paintAgentsWorking();
+      if (typeof teamsRepaintSoon === 'function') teamsRepaintSoon();
       { const c = findSoloChat(name); if (c) busyCardRefresh(c); }   // the busy card follows the status feed
       repaintWaiters(name, cur, next);   // a helper or a consulted agent changed: the agent waiting on it says so now
     }
@@ -9683,8 +10580,41 @@
     // is the whole truth: a key it lacks is cleared (an agent no longer consulted loses its consultedBy).
     function statusPatchOf(s, keepMissing) {
       const patch = { busy: !!s.busy, busySince: s.busySince || null, activity: s.activity || null, pendingQuestion: !!s.pendingQuestion };
-      for (const k of ['worker', 'parent', 'label', 'model', 'consultedBy']) if (k in s) patch[k] = s[k]; else if (!keepMissing) patch[k] = null;
+      for (const k of ['worker', 'parent', 'label', 'model', 'consultedBy', 'buildingTeamFor', 'reviewingTeamFor', 'offerPending', 'settingUpTeams']) if (k in s) patch[k] = s[k]; else if (!keepMissing) patch[k] = null;
+      if ('background' in s) patch.background = Math.max(0, Math.floor(Number(s.background)) || 0); else if (!keepMissing) patch.background = 0;   // work in the background; the full feed sends it only when above 0
       return patch;
+    }
+    // How many things an agent has running in the background (work handed to another agent, jobs, temporary workers); 0 when none or unknown.
+    function bgCountOf(name) {
+      const s = agentStatus[name];
+      const n = s ? Math.floor(Number(s.background)) : 0;
+      return n > 0 ? n : 0;
+    }
+    // The hub's `background` event { agent, count }: keep the count, repaint every dot/line/header of that agent, tell the panel.
+    function onHubBackground(ev) {
+      if (!ev || !ev.agent) return;
+      const n = Math.max(0, Math.floor(Number(ev.count)) || 0);
+      setAgentLive(ev.agent, { background: n });
+      try { bgPaintChat(findSoloChat(ev.agent)); } catch { /* cosmetic */ }
+      if (typeof HandOffCard !== 'undefined' && typeof HandOffCard.onBackground === 'function') HandOffCard.onBackground(ev.agent);
+    }
+    // Paint the ring on one chat's tab dot and status-bar dot (the CSS shows it only on an idle dot).
+    function bgPaintChat(chat) {
+      if (!chat || chat.isGroup || chat.isWorker || chat.isHistory || !chat.agent || typeof AgentDot === 'undefined') return;
+      const id = chat.chatId || chat.id;
+      const st = agentStatus[chat.agent];
+      const busy = chat.status === 'thinking' || !!(st && st.busy);
+      const question = !!(st && st.pendingQuestion);
+      const state = AgentDot.dotState({ busy, question, background: bgCountOf(chat.agent) });
+      const opts = { background: bgCountOf(chat.agent), name: chat.agent };
+      AgentDot.applyDot(document.querySelector(`#tab-${id} .status`), state, opts);
+      AgentDot.applyDot(document.getElementById(`status-dot-${id}`), state, opts);
+    }
+    // The ring on a ring or blue line was clicked: that agent's chat, with its "Working on" panel open.
+    function bgOpenChat(name) {
+      if (typeof HandOffCard !== 'undefined' && typeof HandOffCard.open === 'function') HandOffCard.open(name);
+      const btn = document.getElementById('agent-btn-' + name);
+      startSoloChat(name, btn && btn.dataset ? btn.dataset.model : undefined);
     }
 
     // Second argument (optional) { namedOnly }: leave workers missing from the map alone (the /api/agents list has none).
@@ -9701,6 +10631,7 @@
       paintAllAgentStatus();
       // A window opened mid-turn has no stream to it: attach and show the reply when it lands.
       for (const [name, s] of Object.entries(map)) if (s.busy) reattachIfIdle(name, s.busySince || null);
+      if (typeof teamsRepaintSoon === 'function') teamsRepaintSoon();   // the Teams view follows the snapshot
       // the hub says idle (or a gone worker): a turn whose end this page missed is not open any more
       for (const n of Object.keys(openTurns)) if (map[n] ? !map[n].busy : !(namedOnly && busyIsWorker(n, agentStatus[n]))) delete openTurns[n];
       // A full feed that no longer lists a running temporary worker: its end never reached this page.
@@ -9950,30 +10881,79 @@
     function agentRowTick() {
       const names = busyAgentNames();
       for (const n of names) { try { paintAgentStatus(n); } catch {} }
+      if (typeof teamsRepaintSoon === 'function') teamsRepaintSoon();   // the elapsed time in the Teams rows keeps moving
       if (!names.length && agentRowTicker) { clearInterval(agentRowTicker); agentRowTicker = null; }
+    }
+    // The ring (class bg-work, from AgentDot.applyDot) on a list row's dot, and the blue line "Free · 2 in background"
+    // under the name; both only in the background state (not replying, not asking). Existing classes stay as they are.
+    function bgPaintRow(name, dot, btn, busy, question) {
+      if (typeof AgentDot === 'undefined' || !dot || !btn) return;
+      const n = bgCountOf(name);
+      const state = AgentDot.dotState({ busy, question, background: n });
+      AgentDot.applyDot(dot, state, { background: n, name });
+      let bl = btn.querySelector('.agent-bg-line');
+      if (state === 'background') {
+        if (!bl) {
+          bl = document.createElement('span'); bl.className = 'agent-bg-line';
+          const info = btn.querySelector('.agent-info') || btn;
+          const job = info.querySelector('.agent-job-line');
+          if (job) info.insertBefore(bl, job); else info.appendChild(bl);
+        }
+        const t = AgentDot.bgLine(n);
+        if (bl.textContent !== t) bl.textContent = t;
+        bl.title = AgentDot.dotLabel(state, { background: n, name });
+      } else if (bl) bl.remove();
+    }
+    // A click on a ring or on the blue line opens that agent's chat with the panel open (before the row's own click).
+    document.addEventListener('click', (e) => {
+      // the same in the Teams view: its rows paint the ring and the line through lib/ui-agent-dot.js too
+      const t = e.target && e.target.closest ? e.target.closest('.agent-btn .agent-status.bg-work, .agent-btn .agent-bg-line, .teams-row .teams-dot.bg-work, .teams-row .teams-bg-line') : null;
+      if (!t) return;
+      const row = t.closest('.agent-btn, .teams-row');
+      const name = row && row.dataset ? row.dataset.agent : '';
+      if (!name) return;
+      e.stopPropagation(); e.preventDefault();
+      bgOpenChat(name);
+    }, true);
+    // One agent's live state for every row that shows it (All Agents, Teams): the dot's class, its tooltip and text, and the
+    // busy line. Rows paint from this, so a new state added here shows everywhere.
+    function agentLiveState(name) {
+      const s = agentStatus[name];
+      const mine = localBusy.get(name);
+      const busy = !!(s && s.busy) || !!mine;
+      const offer = !!(s && s.offerPending && isHubAdmin());   // the one-time Set up teams offer waits in the lead's chat: the same "waiting for your answer" marker
+      const question = !!(s && s.pendingQuestion) || offer;
+      const activity = chatViewActivityWord(s && s.activity) || (mine ? 'replying to you' : 'working');
+      const since = (s && s.busySince) || mine || null;
+      const elapsed = elapsedLabel(since, false);
+      const elapsedShort = elapsedLabel(since, true);
+      let dotCls = '', tip = '', text = '', line = '', lineTitle = '';
+      if (question) { dotCls = 'live-question'; tip = offer && !(s && s.pendingQuestion) ? 'Waiting for your answer' : `Waiting for your answer${activity ? ` · ${activity}` : ''}${elapsed ? ` · ${elapsed}` : ''}`; text = '?'; }
+      else if (busy) { dotCls = 'live-busy'; tip = `${activity}${elapsed ? ` · ${elapsed}` : ''}`; }
+      else if (statusKnown) { dotCls = 'live-idle'; tip = 'Idle'; }
+      const named = !question && !(s && s.worker);
+      if (question) line = `❓ waiting for your answer${elapsedShort ? ` · ${elapsedShort}` : ''}`;
+      else if (busy && named) {
+        const d = agentDoingNow(name);
+        const det = d.detail ? ` · ${d.detail}` : '';
+        line = `⏳ ${d.words}${elapsedShort ? ` · ${elapsedShort}` : ''}${det}`;
+        lineTitle = `${d.words}${elapsed ? ` · ${elapsed}` : ''}${det}`;
+        tip = lineTitle;
+      } else if (busy) line = `⏳ ${activity}${elapsedShort ? ` · ${elapsedShort}` : ''}`;
+      const needsOrigin = named && busy && !!(s && s.busy) && !busyRun[name] && !mine;
+      return { busy, question, offer, dotCls, tip, text, line, lineTitle, activity, needsOrigin };
     }
     function paintAgentStatus(name) {
       const dot = document.getElementById(`agent-status-${name}`);
       const btn = document.getElementById(`agent-btn-${name}`);
       if (!dot || !btn) return;
-      const s = agentStatus[name];
-      const mine = localBusy.get(name);
-      const busy = !!(s && s.busy) || !!mine;
-      const question = !!(s && s.pendingQuestion);
-      const activity = chatViewActivityWord(s && s.activity) || (mine ? 'replying to you' : 'working');
-      const since = (s && s.busySince) || mine || null;
-      const elapsed = elapsedLabel(since, false);
-      const elapsedShort = elapsedLabel(since, true);
-      let cls = 'agent-status';
-      let tip = '';
-      let text = '';
-      if (question) { cls += ' live-question'; tip = `Waiting for your answer${activity ? ` · ${activity}` : ''}${elapsed ? ` · ${elapsed}` : ''}`; text = '?'; }
-      else if (busy) { cls += ' live-busy'; tip = `${activity}${elapsed ? ` · ${elapsed}` : ''}`; }
-      else if (statusKnown) { cls += ' live-idle'; tip = 'Idle'; }
-      dot.className = cls;
-      dot.textContent = text;
-      dot.title = tip;
+      const st = agentLiveState(name);
+      const { busy, question, activity } = st;
+      dot.className = st.dotCls ? `agent-status ${st.dotCls}` : 'agent-status';
+      dot.textContent = st.text;
+      dot.title = st.tip;
       btn.classList.toggle('is-busy', busy || question);
+      bgPaintRow(name, dot, btn, busy, question);   // the hollow ring and the blue line, only when neither replying nor asking
       if (typeof simpleAgentsSoon === 'function') simpleAgentsSoon();   // Simple: the "More agents" dot follows
       // A turn started elsewhere (phone, scheduler, another window) can be stopped from here too:
       // surface the chat's Cancel button while the agent is busy and this window is not streaming it.
@@ -9983,22 +10963,17 @@
           const cancelBtn = document.getElementById(`cancel-${solo.chatId || solo.id}`);
           if (cancelBtn) { cancelBtn.style.display = (busy || question) ? '' : 'none'; cancelBtn.title = (busy || question) ? `Stop ${name}'s current turn (${activity})` : ''; }
           showNotifyBtn(solo.chatId || solo.id, busy || question);
+          if (st.offer && !busy) { if (cancelBtn) { cancelBtn.style.display = 'none'; cancelBtn.title = ''; } showNotifyBtn(solo.chatId || solo.id, false); }   // the Set up teams offer is not a turn: nothing to stop
         }
       } catch {}
       let line = btn.querySelector('.agent-busy-line');
       if (busy || question) {
         if (!line) { line = document.createElement('span'); line.className = 'agent-busy-line'; btn.querySelector('.agent-info')?.appendChild(line); }
         line.classList.toggle('question', question);
-        line.textContent = question ? `❓ waiting for your answer${elapsedShort ? ` · ${elapsedShort}` : ''}` : `⏳ ${activity}${elapsedShort ? ` · ${elapsedShort}` : ''}`;
         // A named agent (not a temporary worker) says what it does NOW: the turn, how long, what it waits on or its step.
-        if (!question && !(s && s.worker)) {
-          if (s && s.busy && !busyRun[name] && !mine) busyOriginFetch(name);   // once per turn: who started it (a page opened mid-turn)
-          const d = agentDoingNow(name);
-          const det = d.detail ? ` · ${d.detail}` : '';
-          line.textContent = `⏳ ${d.words}${elapsedShort ? ` · ${elapsedShort}` : ''}${det}`;
-          line.title = `${d.words}${elapsed ? ` · ${elapsed}` : ''}${det}`;
-          dot.title = line.title;
-        } else line.removeAttribute('title');
+        if (st.needsOrigin) busyOriginFetch(name);   // once per turn: who started it (a page opened mid-turn)
+        line.textContent = st.line;
+        if (st.lineTitle) line.title = st.lineTitle; else line.removeAttribute('title');
         if (!agentRowTicker) agentRowTicker = setInterval(agentRowTick, 15000);   // elapsed and detail keep moving
       } else if (line) {
         line.remove();
@@ -10016,6 +10991,15 @@
       return [...names];
     }
 
+    // How many named agents are free (not replying, not asking) with work running in the background: the header's "with background work".
+    function bgAgentCount() {
+      let n = 0;
+      for (const [name, s] of Object.entries(agentStatus)) {
+        if (!s || busyIsWorker(name, s) || localBusy.has(name) || s.busy || s.pendingQuestion) continue;
+        if (bgCountOf(name) > 0) n++;
+      }
+      return n;
+    }
     function paintAgentsWorking() {
       const el = document.getElementById('agents-working');
       const list = document.getElementById('agent-list');
@@ -10025,7 +11009,16 @@
       const any = split.agents.length > 0 || split.workers.length > 0;
       el.classList.toggle('on', any);
       el.classList.toggle('filtering', busyFilterOn);
-      el.textContent = busyChipLabel(split, busyFilterOn);
+      const busyPart = busyChipLabel(split, busyFilterOn);
+      const hc = typeof AgentDot !== 'undefined' ? AgentDot.headerCount({ working: busyPart, background: bgAgentCount() }) : { busyPart, bgPart: '' };
+      el.classList.toggle('bg-on', !any && !!hc.bgPart);   // only background work: the blue part alone, never the orange .on look
+      if (!hc.bgPart) el.textContent = busyPart;   // nobody in the background: exactly today's text
+      else {
+        el.textContent = '';
+        if (hc.busyPart) el.appendChild(document.createTextNode(hc.busyPart + ' · '));
+        const bg = document.createElement('span'); bg.className = 'aw-bg'; bg.textContent = hc.bgPart;
+        el.appendChild(bg);
+      }
       list?.classList.toggle('busy-filter', busyFilterOn);
       activePaintSoon();
     }
@@ -10258,9 +11251,115 @@
     }
     function chatViewMergeOlder(older, current) {
       const cur = Array.isArray(current) ? current : [];
-      const key = (e) => `${e && e.ts}|${e && e.role}|${e && typeof e.content === 'string' ? e.content : ''}`;
+      const key = (e) => (e && e.role === 'hidden_run' ? `run|${chatViewRunKey(e)}` : `${e && e.ts}|${e && e.role}|${e && typeof e.content === 'string' ? e.content : ''}`);
       const have = new Set(cur.slice(0, 50).map(key));
       return (Array.isArray(older) ? older : []).filter((e) => e && !have.has(key(e))).concat(cur);
+    }
+    // A run of hub-started turns the main view leaves out is ONE entry { role: 'hidden_run', ts, last_ts, turns, kinds: [{ kind, from, n }] }.
+    const CHAT_VIEW_RUN_WORDS = {
+      consultation: ['consultation', 'consultations', true],
+      hand_off: ['task', 'tasks', true],   // the words of the cards: "Consultation from X", "Task from X", "Scheduled task", "Job finished", update
+      schedule: ['scheduled task', 'scheduled tasks', false],
+      job_notice: ['job finished', 'jobs finished', false],
+      other: ['update', 'updates', false],
+    };
+    // The kind and sender of a turn the hub started, as a run counts it (origin from turn_start or a saved entry).
+    function chatViewRunKindOf(origin) {
+      const raw = origin && typeof origin === 'object' ? origin.kind : '';
+      const k = raw === 'hand_off_report' ? 'hand_off' : raw === 'job_report' ? 'job_notice' : raw;   // counted as the server counts them
+      const kind = CHAT_VIEW_RUN_WORDS[k] && k !== 'other' ? k : 'other';
+      const from = kind === 'consultation' || kind === 'hand_off' ? (origin.from && typeof origin.from === 'string' ? origin.from : null) : null;
+      return { kind, from };
+    }
+    // Count one more turn (kind, from) into a run, widening its time range; returns the run.
+    function chatViewRunAdd(run, kind, from, ts, turn) {
+      const k = CHAT_VIEW_RUN_WORDS[kind] ? kind : 'other';
+      const f = from || null;
+      if (!Array.isArray(run.kinds)) run.kinds = [];
+      if (turn && !(Number(run.turns) > 0) && !run.turn) run.turn = String(turn);   // the run is named by its FIRST turn
+      const hit = run.kinds.find((x) => x.kind === k && (x.from || null) === f);
+      if (hit) hit.n += 1; else run.kinds.push({ kind: k, from: f, n: 1 });
+      run.turns = (Number(run.turns) || 0) + 1;
+      if (ts && (!run.ts || Date.parse(ts) < Date.parse(run.ts))) run.ts = ts;
+      if (ts && (!run.last_ts || Date.parse(ts) > Date.parse(run.last_ts))) run.last_ts = ts;
+      return run;
+    }
+    // The line's two parts: { kinds: "4 consultations from Beacon", when: "8:09–8:17 AM" } (when is '' for a run with no time).
+    // timeFmt(ts) is the page's own local time formatter ("8:09 AM"; asked with a second argument true it gives the date too).
+    function chatViewRunParts(run, timeFmt) {
+      const r = run || {};
+      const parts = (Array.isArray(r.kinds) ? r.kinds : []).filter((x) => x && x.n > 0).map((x) => {
+        const w = CHAT_VIEW_RUN_WORDS[x.kind] || CHAT_VIEW_RUN_WORDS.other;
+        const who = w[2] && x.from ? ` from ${x.from}` : '';
+        return `${x.n} ${x.n === 1 ? w[0] : w[1]}${who}`;
+      });
+      const total = Number(r.turns) || 0;
+      const what = parts.length ? parts.join(', ') : `${total} ${total === 1 ? 'update' : 'updates'}`;
+      const fmt = typeof timeFmt === 'function' ? timeFmt : (t) => String(t);
+      const a = r.ts, b = r.last_ts || r.ts;
+      if (!a) return { kinds: what, when: '' };
+      const da = new Date(a), db = new Date(b);
+      const sameDay = da.getFullYear() === db.getFullYear() && da.getMonth() === db.getMonth() && da.getDate() === db.getDate();
+      let when;
+      if (sameDay) {
+        const x = String(fmt(a)), y = String(fmt(b));
+        if (x === y) when = x;
+        else {
+          const ux = /^(.*\S)\s+([A-Za-z.]+)$/.exec(x), uy = /^(.*\S)\s+([A-Za-z.]+)$/.exec(y);
+          when = ux && uy && ux[2] === uy[2] ? `${ux[1]}\u2013${y}` : `${x}\u2013${y}`;
+        }
+      } else when = `${fmt(a, true)} \u2013 ${fmt(b, true)}`;
+      return { kinds: what, when };
+    }
+    // "4 consultations from Beacon · 8:09–8:17 AM" (the title and the tests; the line draws the two parts apart)
+    function chatViewRunText(run, timeFmt) {
+      const p = chatViewRunParts(run, timeFmt);
+      return p.when ? `${p.kinds} \u00b7 ${p.when}` : p.kinds;
+    }
+    // The list with adjacent hidden_run entries merged into one (turns and kinds added, widest time range).
+    function chatViewMergeRuns(history) {
+      const out = [];
+      for (const e of Array.isArray(history) ? history : []) {
+        const last = out[out.length - 1];
+        if (e && e.role === 'hidden_run' && last && last.role === 'hidden_run') {
+          const m = { ...last, kinds: last.kinds.map((x) => ({ ...x })), turns: (Number(last.turns) || 0) + (Number(e.turns) || 0) };
+          for (const x of e.kinds || []) {
+            const hit = m.kinds.find((y) => y.kind === x.kind && (y.from || null) === (x.from || null));
+            if (hit) hit.n += x.n; else m.kinds.push({ kind: x.kind, from: x.from || null, n: x.n });
+          }
+          if (Date.parse(e.ts) < Date.parse(m.ts)) { m.ts = e.ts; m.rank = e.rank || 0; if (e.turn) m.turn = e.turn; else delete m.turn; }
+          if (Date.parse(e.last_ts) > Date.parse(m.last_ts)) m.last_ts = e.last_ts;
+          m.mergedRunKeys = [...new Set([
+            chatViewRunKey(last),
+            ...(last.mergedRunKeys || []),
+            chatViewRunKey(e),
+            ...(e.mergedRunKeys || []),
+          ])];
+          out[out.length - 1] = m;
+        } else out.push(e);
+      }
+      return out;
+    }
+    // Fetch one run's turns: GET /api/history/<agent>?view=run&from=<ts>&to=<last_ts>&turn=<id> (the run is named by the turn id of
+    // its first prompt); a run without one (an old entry) sends rank: how many hub-started prompts saved at exactly ts come before it.
+    const CHAT_VIEW_TURN_RE = /^[A-Za-z0-9_-]{1,100}$/;
+    function chatViewRunUrl(agent, run) {
+      const turn = run && typeof run.turn === 'string' && CHAT_VIEW_TURN_RE.test(run.turn) ? run.turn : '';
+      const rank = !turn && run ? Math.floor(Number(run.rank)) || 0 : 0;
+      return `/api/history/${encodeURIComponent(agent)}?view=run&from=${encodeURIComponent(String(run && run.ts))}&to=${encodeURIComponent(String((run && run.last_ts) || (run && run.ts)))}${turn ? `&turn=${turn}` : rank > 0 ? `&rank=${rank}` : ''}`;
+    }
+    // A run's key for the page's open state and fetched turns: its turn id, else its first time and rank (two runs can start in the same ms).
+    function chatViewRunKey(run) {
+      if (run && typeof run.turn === 'string' && CHAT_VIEW_TURN_RE.test(run.turn)) return `turn|${run.turn}`;
+      return `${run && run.ts}|${Math.floor(Number(run && run.rank)) || 0}`;
+    }
+    // After Load earlier merged runs into one (the merged run starts earlier, so its key is new): the key of an open line
+    // of the page's states (key -> { open }) that is one of the pieces merged into this run (mergedRunKeys), or null.
+    function chatViewRunOpenKey(states, run) {
+      const own = chatViewRunKey(run);
+      return (run.mergedRunKeys || []).find(
+        key => key !== own && states?.[key]?.open
+      ) || null;
     }
     // ── chat view helpers (end) ──
     // ── auto-turn helpers (begin) ──
@@ -10272,6 +11371,11 @@
       if (k === 'schedule') return 'schedule';
       if (k === 'user' || k === 'comms') return null;
       return 'notice';
+    }
+    // Build Team, Set up teams and Optimize team: the person pressed it, so the turn's replies show open under its card (never folded away).
+    function autoOwnOrigin(origin) {
+      const k = origin && typeof origin === 'object' ? origin.kind : '';
+      return k === 'build_team' || k === 'team_setup' || k === 'optimize_team';
     }
     function autoQuoted(s) {
       const m = /"([^"\n]*)"/.exec(s || '');
@@ -10331,20 +11435,34 @@
     function autoCardKind(kind) {
       return kind === 'consultation' ? 'consult' : kind === 'schedule' ? 'schedule' : 'notice';
     }
+    // The run line's word for a hub-started prompt: consultation | task | schedule | job | update (from its origin kind, else its marker text).
+    function autoWorkOf(entry) {
+      const info = autoInfoOf(entry);
+      if (!info) return 'update';
+      if (info.kind === 'consultation') return 'consultation';
+      if (info.kind === 'schedule') return 'schedule';
+      const ok = entry.origin && typeof entry.origin === 'object' ? entry.origin.kind : '';
+      const text = typeof entry.content === 'string' ? entry.content.trimStart() : '';
+      if (ok === 'hand_off' || ok === 'hand_off_report') return 'task';
+      if (ok === 'job_notice' || ok === 'job_report' || (!ok && (text.startsWith('[Job finished]') || text.startsWith('[Job ended]')))) return 'job';
+      return 'update';
+    }
     function autoSummaryOf(cards) {
       const n = (cards || []).length;
-      const count = (k) => cards.filter((c) => c.kind === k).length;
+      const workOf = (c) => c.work || (c.kind === 'consultation' ? 'consultation' : c.kind === 'schedule' ? 'schedule' : 'update');
+      const words = [['consultation', 'consultation', 'consultations'], ['task', 'task', 'tasks'], ['schedule', 'scheduled task', 'scheduled tasks'], ['job', 'job finished', 'jobs finished'], ['update', 'update', 'updates']];
       const parts = [];
-      const c = count('consultation'), s = count('schedule'), h = n - c - s;
-      if (c) parts.push(`${c} ${c === 1 ? 'consultation' : 'consultations'}`);
-      if (s) parts.push(`${s} ${s === 1 ? 'scheduled task' : 'scheduled tasks'}`);
-      if (h) parts.push(`${h} ${h === 1 ? 'hub notice' : 'hub notices'}`);
+      for (const [w, one, many] of words) {
+        const c = cards.filter((x) => workOf(x) === w).length;
+        if (c) parts.push(`${c} ${c === 1 ? one : many}`);
+      }
       return `${n} automatic ${n === 1 ? 'turn' : 'turns'}: ${parts.join(', ')}`;
     }
     function autoCardLine(history, indexes, kindsInfoLabel) {
       const isAsst = (i) => history[i].role === 'assistant';
       const asst = indexes.filter(isAsst);
-      const pick = [...asst].reverse().find((i) => !history[i].for_owner);   // a reply shown open below the card is not repeated in it
+      const own = indexes.some((i) => autoOwnOrigin(history[i].origin));
+      const pick = own ? undefined : [...asst].reverse().find((i) => !history[i].for_owner);   // a reply shown open below the card is not repeated in it
       if (pick !== undefined) return autoFirstLine(history[pick].content);
       for (const i of [...indexes].reverse()) {
         if (isAsst(i)) continue;
@@ -10365,7 +11483,7 @@
         if (!e || e.inProgress) { i++; continue; }
         const info = autoInfoOf(e);
         if (!info) { items.push({ type: 'entry', index: i }); i++; continue; }
-        let last = info, firstTs = e.ts, hasAsst = false;
+        let last = info, lastWork = autoWorkOf(e), firstTs = e.ts, hasAsst = false;
         const indexes = [i];
         let j = i + 1;
         for (; j < n; j++) {
@@ -10376,11 +11494,12 @@
           if (x.role === 'assistant') { hasAsst = true; indexes.push(j); continue; }
           if (x.role !== 'user' || hasAsst) break;
           const xi = autoInfoOf(x);
-          if (!xi) break;
-          last = xi; indexes.push(j);
+          if (!xi || autoOwnOrigin(e.origin) || autoOwnOrigin(x.origin)) break;
+          last = xi; lastWork = autoWorkOf(x); indexes.push(j);
         }
-        const open = indexes.filter((k) => history[k].role === 'assistant' && history[k].for_owner === true);
-        items.push({ type: 'card', kind: last.kind, from: last.from, label: last.label, ts: firstTs, indexes, open, firstLine: autoCardLine(history, indexes, last.label) });
+        const own = indexes.some((k) => autoOwnOrigin(history[k].origin));
+        const open = indexes.filter((k) => history[k].role === 'assistant' && (history[k].for_owner === true || own));
+        items.push({ type: 'card', kind: last.kind, from: last.from, label: last.label, work: lastWork, ts: firstTs, indexes, open, firstLine: autoCardLine(history, indexes, last.label) });
         i = j;
       }
       const out = [];
@@ -10433,12 +11552,13 @@
       wrap.appendChild(head); wrap.appendChild(body);
       return { head, body };
     }
-    function foldBuildCard(parent, c) {
+    // timeFn: a card inside a run line shows only the time (the line above gives the date range); elsewhere the date and time
+    function foldBuildCard(parent, c, timeFn = null) {
       const wrap = document.createElement('div');
       wrap.className = `auto-card auto-card-${autoCardKind(c.kind)}`;
       const { head, body } = foldHead('auto-card-head', 'auto-card-body', wrap);
       const line = foldPart('span', 'auto-card-line', c.firstLine || c.label);
-      head.append(foldPart('span', 'auto-card-label', c.label), foldPart('span', 'auto-card-time', foldCardTime(c.ts)), line, foldPart('span', 'auto-card-chev', '▸'));
+      head.append(foldPart('span', 'auto-card-label', c.label), foldPart('span', 'auto-card-time', timeFn ? timeFn(c.ts) : foldCardTime(c.ts)), line, foldPart('span', 'auto-card-chev', '▸'));
       parent.appendChild(wrap);
       return { wrap, head, body, setLine: (text) => { line.textContent = text || c.label; } };
     }
@@ -10449,8 +11569,8 @@
     // A history card (draw: the history loader's entry painter, see startSoloChat): its entries that are not marked
     // for the owner go into the closed body; the marked replies follow the card as ordinary messages, each under a
     // small "from <label>" line. Every entry reaches chat.messages in order.
-    function foldRenderHistoryCard(draw, c, parent, remember = null) {
-      const built = foldBuildCard(parent, c);
+    function foldRenderHistoryCard(draw, c, parent, remember = null, timeFn = null) {
+      const built = foldBuildCard(parent, c, timeFn);
       if (remember) remember(built, c);
       for (const k of c.indexes) {
         if (c.open.includes(k)) draw(k, { notice: false, show: false });
@@ -10545,7 +11665,10 @@
       if (ev && ev.agent) activeTurnStart(openTurns, ev.agent, ev.turnId);
       if (ev && ev.agent) busyRun[ev.agent] = { turnId: ev.turnId, origin: ev.origin, since: Date.parse(ev.startedAt) || Date.now(), own: !chatViewIsHubOrigin(ev.origin) };
       if (ev.turnId && hubTurns[ev.turnId]) return;   // replayed after a reconnect (?since=): the turn is already followed
-      setAgentLive(ev.agent, { busy: true, busySince: ev.startedAt || null, activity: ev.activity || hubOriginLabel(ev.origin) });
+      setAgentLive(ev.agent, { busy: true, busySince: ev.startedAt || null, activity: ev.activity || hubOriginLabel(ev.origin),
+        ...(ev.buildingTeamFor || (ev.origin && ev.origin.kind === 'build_team' && ev.origin.for) ? { buildingTeamFor: ev.buildingTeamFor || ev.origin.for } : {}),
+        ...(ev.reviewingTeamFor || (ev.origin && ev.origin.kind === 'optimize_team' && ev.origin.for) ? { reviewingTeamFor: ev.reviewingTeamFor || ev.origin.for } : {}),
+        ...(ev.settingUpTeams || (ev.origin && ev.origin.kind === 'team_setup') ? { settingUpTeams: true } : {}) });
       let chat = findSoloChat(ev.agent);
       if (ev.origin?.kind === 'user') {
         // Our own send is already streaming in this window (or re-attaching to it).
@@ -10567,7 +11690,8 @@
       let card = null;
       let retiredReattach = false;   // a re-attach of this turn was followed before turn_start came; its bubble gave way to the card
       // Main view: a hub-started turn is still followed (its card), but hidden unless its reply is marked for the owner.
-      const hubMain = chatViewGet(localStorage) === 'main' && chatViewIsHubOrigin(ev.origin);
+      // (Build Team, Set up teams and Optimize team are the exception: the person pressed them, so their card and reply stay in view.)
+      const hubMain = chatViewGet(localStorage) === 'main' && chatViewIsHubOrigin(ev.origin) && ev.origin.kind !== 'build_team' && ev.origin.kind !== 'team_setup' && ev.origin.kind !== 'optimize_team';
       const autoKind = foldAutoOn() || hubMain ? autoKindOfOrigin(ev.origin) : null;
       if (autoKind) {
         const info = autoInfoOf({ role: 'user', origin: ev.origin, content: ev.message || '' });
@@ -10587,6 +11711,7 @@
             if (hubMain) { card.wrap.classList.add('chat-view-hidden'); card.hiddenMsgs = []; }
           }
           chat.lastAutoCard = null;
+          if (hubMain && !dup) soloRunLive(chat, ev.origin, ev.startedAt, ev.turnId);   // the quiet line at the end of the chat counts it
           // The card now shows this turn live: the waiting bubble of a re-attach would be a second copy of the reply.
           if (raSame) {
             const ra = chat.reattach;
@@ -10604,7 +11729,13 @@
         const um = { role: 'user', content: ev.message };
         if (card && card.hiddenMsgs) { um.hidden = true; card.hiddenMsgs.push(um); }   // not shown: not saved either (saveChat)
         chat.messages.push(um);
-        setMessageTime(document.getElementById(appendMessage(chat.id, 'user', ev.message, card && card.body)), msgTimeLabel(Date.parse(ev.startedAt) || Date.now()));
+        const umId = appendMessage(chat.id, 'user', ev.message, card && card.body);
+        setMessageTime(document.getElementById(umId), msgTimeLabel(Date.parse(ev.startedAt) || Date.now()));
+        // The pictures the line was sent with (another device): drawn under it as the history redraw does.
+        if (Array.isArray(ev.images) && ev.images.length) {
+          const umEl = document.getElementById(umId);
+          if (umEl) umEl.insertAdjacentHTML('beforeend', imageGalleryHtml(savedImageUrls(ev.images), 'max-height:200px;'));
+        }
       }
       if (!card) appendSystemNotice(chat.id, `⚡ ${hubOriginLabel(ev.origin)} — ${hubTurnTime()}`);
       const msgId = appendMessage(chat.id, 'assistant', '…', card && card.body);
@@ -10615,6 +11746,8 @@
         const ids = Object.keys(hubTurnCards);
         for (const id of ids.slice(0, Math.max(0, ids.length - 50))) delete hubTurnCards[id];
         // A for_owner that arrived while the history loaded: apply it now that the card exists.
+        // Build Team and Set up teams are the person's own: the reply leaves the card at once, as if marked for the owner.
+        if (ev.origin && (ev.origin.kind === 'build_team' || ev.origin.kind === 'team_setup' || ev.origin.kind === 'optimize_team')) hubForOwnerPending[ev.turnId] = { reason: '', at: Date.now() };
         if (hubForOwnerPending[ev.turnId]) { delete hubForOwnerPending[ev.turnId]; hubMoveReplyOut(card); }
       }
       busyCardKeepLast(document.getElementById(`messages-${chat.id}`));
@@ -11139,6 +12272,7 @@
       source.addEventListener('provider_paced', e => { const ev = parse(e); if (ev) upsertPacing(ev, 'paced'); });
       source.addEventListener('provider_ramp', e => { const ev = parse(e); if (ev) upsertPacing(ev, 'ramping'); });
       source.addEventListener('provider_recovered', e => { const ev = parse(e); if (ev && ev.provider) clearPacing(ev.provider); });
+      source.addEventListener('background', e => { const ev = parse(e); if (ev) onHubBackground(ev); });
       source.addEventListener('turn_start', e => { const ev = parse(e); if (ev) onHubTurnStart(ev).catch(err => console.error('[hub-events]', err)); });
       source.addEventListener('turn_delta', e => { const ev = parse(e); if (ev) onHubTurnDelta(ev); });
       source.addEventListener('turn_activity', e => { const ev = parse(e); if (ev) { try { if (ev.agent && chatViewStepsOn(agentSteps[ev.agent] ||= chatViewStepsNew(), ev.turnId, ev.item)) turnStepRepaint(ev.agent); } catch {} onHubTurnActivity(ev); if (ev.item && ev.item.kind === 'worker') scheduleWorkerStatusPoll(); } });
@@ -11163,6 +12297,13 @@
           const chatId = chat ? Object.keys(chats).find(k => chats[k] === chat) : null;
           showQuestionModal({ request_id: ev.request_id, questions: ev.questions, agent: ev.agent }, chatId || null).catch(() => {});
         }
+      });
+      // A Do it on a set-up card wrote reporting lines: the lead's chat shows "Undo this team" at once; the Teams tab and list follow.
+      source.addEventListener('team_setup_recorded', e => {
+        const ev = parse(e); if (!ev) return;
+        if (ev.id) teamSetupRecent.add(String(ev.id));
+        loadAgents().catch(() => {});
+        teamSetupLoadSoon();
       });
       source.addEventListener('ask_user_done', e => { const ev = parse(e); if (ev && ev.request_id) closeQuestion(ev.request_id); });
       source.addEventListener('ask_user_done', e => { const ev = parse(e); if (ev) setAgentLive(ev.agent, { pendingQuestion: false }); });
@@ -11401,6 +12542,7 @@
         </div>
         <div class="compaction-line" id="compaction-line-${chatId}" style="display:none" title="Context compression: the agent writes its own working brief (see the agent's settings page)"></div>
         <div class="messages" id="messages-${chatId}"></div>
+        <div class="team-offer-slot" id="team-offer-slot-${chatId}" hidden></div>
         <div class="handoff-cards" id="handoff-cards-${chatId}" hidden></div>
         <div class="handoff-cards research-lines" id="research-lines-${chatId}" hidden></div>
         <div class="input-area">
@@ -11410,7 +12552,7 @@
           </div>
           <input type="file" id="file-input-${chatId}" multiple style="display:none" onchange="handleFileSelect(event, '${chatId}')">
           <button class="attach-btn" onclick="document.getElementById('file-input-${chatId}').click()" title="Attach a file: images are sent with the message, other files are uploaded to your files and their path is added to the message" style="background:var(--bg-input); border:1px solid var(--border); padding:8px 10px; font-size:1rem; cursor:pointer;">📎</button>
-          <button type="button" onpointerdown="voiceMicPointer(false)" onpointerup="voiceMicPointer(true)" onclick="voiceMicToggle('${chatId}')" id="mic-${chatId}" class="mic-btn" style="display:none" aria-pressed="false" aria-label="${voiceMicIdleLabel()}" title="${voiceMicIdleTitle()}">${VOICE_MIC_SVG}</button><span class="mic-meter" id="mic-meter-${chatId}" style="display:none" aria-hidden="true"><i></i></span><span class="voice-extra" style="display:none"><button type="button" class="voice-mode-chip" id="vmode-${chatId}" onclick="voiceModeToggle()" title="Talk mode: tap to switch" style="display:none">${voiceModeLabel()}</button><button type="button" class="voice-set-btn" id="vset-${chatId}" onclick="voicePopToggle('${chatId}')" aria-label="Voice settings" aria-expanded="false" title="Voice settings">${VOICE_LEVELS_SVG}</button><div class="voice-pop" id="voice-pop-${chatId}" role="dialog" aria-label="Voice settings" hidden></div></span>
+          <button type="button" onpointerdown="voiceMicPointer(false)" onpointerup="voiceMicPointer(true)" onclick="voiceMicToggle('${chatId}')" id="mic-${chatId}" class="mic-btn" style="display:none" aria-pressed="false" aria-label="${voiceMicIdleLabel()}" title="${hubEsc(voiceMicIdleTitle(chatId))}">${VOICE_MIC_SVG}</button><span class="mic-meter" id="mic-meter-${chatId}" style="display:none" aria-hidden="true"><i></i></span><span class="voice-extra" style="display:none"><button type="button" class="voice-mode-chip" id="vmode-${chatId}" onclick="voiceModeToggle()" title="Talk mode: tap to switch" style="display:none">${voiceModeLabel()}</button><button type="button" class="voice-set-btn" id="vset-${chatId}" onclick="voicePopToggle('${chatId}')" aria-label="Voice settings" aria-expanded="false" title="Voice settings">${VOICE_LEVELS_SVG}</button><div class="voice-pop" id="voice-pop-${chatId}" role="dialog" aria-label="Voice settings" hidden></div></span>
           <button onclick="toggleNotifyDone('${chatId}')" id="notify-${chatId}" class="notify-done-btn" style="display:none" aria-pressed="false" title="Get a notification on your phone when this reply is done">🔔 Notify me</button>
           <button onclick="sendSoloMessage('${chatId}')" id="send-${chatId}">Send</button>
         </div>
@@ -11531,6 +12673,7 @@
       if (opened && !opened.isGroup && !opened.isWorker && !opened.isHistory && opened.agent) { try { busyCardRefresh(opened); } catch {} }   // the status line and card follow the hub's feed on arrival
       activeChat = chatId;
       window.__activeChatId = chatId;
+      try { if (window.HandOffCard && typeof HandOffCard.follow === 'function') HandOffCard.follow(); } catch { /* the panel follows at once; a failure leaves the timer tick */ }
       if (document.getElementById('files-panel')) filesRefresh(); // the Files panel follows the active chat's agent
       if (opened && !opened.isGroup && !opened.isWorker && !opened.isHistory && opened.agent) qsNoteOpened(opened.agent);   // the quick switcher's recents (⌘K)
       if (opened && !opened.isGroup && !opened.isWorker && opened.agent) { researchLinePaint(); researchLineLoad(opened.agent); }   // the deep research progress line
@@ -11572,6 +12715,7 @@
         document.querySelectorAll('.chat-container.active, .chat-tab.active').forEach(el => el.classList.remove('active'));
         activeChat = null;
         window.__activeChatId = null;
+        try { if (window.HandOffCard && typeof HandOffCard.follow === 'function') HandOffCard.follow(); } catch { /* the timer tick follows */ }
         document.getElementById('empty-state').style.display = 'flex';
         if (document.getElementById('files-panel')) filesRefresh();
       }
@@ -11765,6 +12909,7 @@
       const statusDot = document.getElementById(`status-dot-${chatId}`);
       const statusTextEl = document.getElementById(`status-text-${chatId}`);
       if (statusDot) statusDot.className = `status-dot ${status}`;
+      try { bgPaintChat(chats[chatId]); } catch { /* cosmetic */ }   // the className above dropped the ring: put it back when it applies
       if (statusTextEl) {
         statusTextEl.textContent = statusText || (status === 'thinking' ? 'Processing...' : status === 'paused' ? 'Paused' : status === 'error' ? 'Error' : 'Idle');
         delete statusTextEl.dataset.hubBusy; delete statusTextEl.dataset.hubPrev;   // this text is the chat's own; headerBusyPaint (below) saves it again before a hub turn covers it
@@ -11971,13 +13116,35 @@
     
     function addImageToChat(chatId, file) {
       const chat = chats[chatId];
+      // A message is waiting for its pictures: a picture added now would go with it or with the next one depending on how fast it
+      // decodes, so it is refused with a word instead.
+      if (chat.sendWaiting) { chatFileStatus(chatId, 'A message is waiting for its pictures. Add this picture after it sends.', 'error'); return; }
       if (!chat.pendingImages) chat.pendingImages = [];
+      // Track the decoding: a send waits for pictures still being prepared (waitForPreparingImages).
+      if (!chat.imagesPreparing) chat.imagesPreparing = new Set();
+      // Each picture being prepared is a job: one that took too long is marked abandoned (waitForPreparingImages) and adds nothing when it ends.
+      let settle;
+      const job = { promise: null, abandoned: false, url: null };
+      job.promise = new Promise(res => { settle = res; });
+      chat.imagesPreparing.add(job);
+      job.promise.then(() => chat.imagesPreparing.delete(job));
+      const objectUrl = URL.createObjectURL(file);
+      job.url = objectUrl;   // revoked when the job is abandoned, so a picture that never finishes does not hold its memory
       
       // Resize large images to max 1600px on longest side, compress as JPEG
       const img = new Image();
+      img.onerror = () => {
+        URL.revokeObjectURL(objectUrl);
+        if (!job.abandoned) chatFileStatus(chatId, `Could not read that picture (${(file && file.name) || 'picture'}). Try a PNG or JPEG, or a screenshot of it.`, 'error');
+        settle();
+      };
       img.onload = () => {
+        if (job.abandoned) { URL.revokeObjectURL(objectUrl); settle(); return; }
+        try {
         const MAX_DIM = 1600;
+        let base64;
         let { width, height } = img;
+        try {
         if (width > MAX_DIM || height > MAX_DIM) {
           const scale = MAX_DIM / Math.max(width, height);
           width = Math.round(width * scale);
@@ -11989,12 +13156,52 @@
         const ctx = canvas.getContext('2d');
         ctx.drawImage(img, 0, 0, width, height);
         // Use JPEG at 85% quality for screenshots (much smaller than PNG)
-        const base64 = canvas.toDataURL('image/jpeg', 0.85);
+        base64 = canvas.toDataURL('image/jpeg', 0.85);
+        if (typeof base64 !== 'string' || !base64.startsWith('data:image/')) throw new Error('not an image');
+        } catch (e) {
+          chatFileStatus(chatId, `Could not read that picture (${(file && file.name) || 'picture'}). Try a PNG or JPEG, or a screenshot of it.`, 'error');
+          return;
+        }
         console.log(`[image] Resized ${img.naturalWidth}x${img.naturalHeight} → ${width}x${height}, size=${(base64.length / 1024).toFixed(0)}KB`);
         chat.pendingImages.push(base64);
         renderImagePreviews(chatId);
+        } finally { URL.revokeObjectURL(objectUrl); settle(); }
       };
-      img.src = URL.createObjectURL(file);
+      img.src = objectUrl;
+    }
+    // A send right after attaching or pasting: the picture may still be decoding. Wait for it (at most IMAGE_WAIT_MS).
+    const IMAGE_WAIT_MS = 15000;
+    async function waitForPreparingImages(chatId) {
+      const chat = chats[chatId];
+      if (!chat || !chat.imagesPreparing || !chat.imagesPreparing.size) return true;
+      const waitingFor = [...chat.imagesPreparing];   // the pictures this send waits for (one attached later is not this send's)
+      // The composer is locked while waiting: words typed now must not go with the earlier message or be cleared.
+      const box = document.getElementById(`input-${chatId}`);
+      const btn = document.getElementById(`send-${chatId}`);
+      const boxWas = box ? box.readOnly : false;
+      const btnWas = btn ? btn.disabled : false;
+      let timer;
+      let done = false;
+      try {
+        chat.sendWaiting = true;   // one waiting send per composer: a second send returns at once (sendSoloMessage / sendInterjection check this)
+        chatFileStatus(chatId, 'Adding the picture…');
+        if (box) box.readOnly = true;
+        if (btn) btn.disabled = true;
+        const cap = new Promise(res => { timer = setTimeout(res, IMAGE_WAIT_MS); });
+        done = await Promise.race([Promise.allSettled(waitingFor.map(j => j.promise)).then(() => true), cap.then(() => false)]);
+        if (!done) {   // the pictures of this send still pending are left out (a finished one has already left the set)
+          for (const j of waitingFor) if (chat.imagesPreparing.has(j)) { j.abandoned = true; chat.imagesPreparing.delete(j); if (j.url) URL.revokeObjectURL(j.url); }
+        }
+      } finally {
+        clearTimeout(timer);
+        chat.sendWaiting = false;
+        if (box) box.readOnly = boxWas;
+        if (btn) btn.disabled = btnWas;
+      }
+      const st = document.getElementById(`image-preview-${chatId}`)?.querySelector('.chat-file-status');
+      if (st && st.textContent === 'Adding the picture…') chatFileStatus(chatId, '');   // a decode error shown meanwhile stays
+      if (!done) { chatFileStatus(chatId, 'A picture took too long to prepare and was left out. Attach it again, or press Send to send without it.', 'error'); return false; }
+      return true;
     }
     
     function removeImageFromChat(chatId, index) {
@@ -12321,16 +13528,21 @@
     // A chat whose interjection found the turn already over sends the text as a normal message
     // once, even if the busy status has not caught up yet.
     const skipInterjectOnce = new Set();
-    async function sendInterjection(chatId) {
+    async function sendInterjection(chatId, sendOpts = null) {
       const chat = chats[chatId];
       const input = document.getElementById(`input-${chatId}`);
+      const isVoice = !!(sendOpts && sendOpts.voice);   // a voice send never waits: the box is read at once (the caller puts the draft back right after)
+      if (!isVoice && chat.sendWaiting) return;   // one waiting send per composer
+      if (!isVoice && chat.imagesPreparing && chat.imagesPreparing.size) { if (!(await waitForPreparingImages(chatId))) return; }   // (a no-op when sendSoloMessage already waited)
       const content = input.value.trim();
-      const imagesToSend = [...(chat.pendingImages || [])];   // the pictures waiting in the input go with the interjection
+      // A voice interjection while a typed message waits for its pictures takes only the spoken words; the pictures stay with that message.
+      const textOnly = isVoice && !!chat.sendWaiting;
+      const imagesToSend = textOnly ? [] : [...(chat.pendingImages || [])];   // the pictures waiting in the input go with the interjection
       if (!content && imagesToSend.length === 0) return;
 
       input.value = '';
       input.style.height = 'auto';
-      clearPendingImages(chatId);
+      if (!textOnly) clearPendingImages(chatId);
 
       // Show the interjection in the chat as a user message with a distinct style (with its pictures)
       setMessageTime(document.getElementById(appendMessageWithImages(chatId, 'user', `⚡ [Interjection] ${content}`.trim(), imagesToSend)), msgTimeLabel(Date.now()));
@@ -12376,14 +13588,23 @@
     async function sendSoloMessage(chatId, retryCount = 0, sendOpts = null) {
       if (!retryCount) tzSentAt = Date.now();   // the person's own send: its request carries this device's zone (zoneHeader)
       const chat = chats[chatId];
-      if (!retryCount) chat.voiceSend = !!(sendOpts && sendOpts.voice);   // a message that came from a hands-free call goes with voice: true (retries keep it)
+      // A message that came from a hands-free call goes with voice: true (retries keep it). Read from this send's own copy: a voice send
+      // made while a typed message waits for its pictures must not turn that message into a voice send.
+      const voiceSend = retryCount ? !!chat.voiceSend : !!(sendOpts && sendOpts.voice);
+      if (!retryCount) chat.voiceSend = voiceSend;
       // A hands-free call asks to hear whether the hub took the message: notify(null) once it did, notify(error) when it did not.
       let notified = false;
       const notify = (err) => { if (notified || !sendOpts || !sendOpts.onSendResult) return; notified = true; try { sendOpts.onSendResult(err); } catch { /* the caller's problem */ } };
       const input = document.getElementById(`input-${chatId}`);
+      // A voice send while a typed message waits for its pictures: only the spoken words go (as a fallback send, which
+      // neither reads nor changes the composer's pictures); the waiting message keeps its pictures.
+      if (sendOpts && sendOpts.voice && !sendOpts.fallback && chat.sendWaiting) sendOpts = { ...sendOpts, fallback: { text: input.value, images: [] } };
       // sendOpts.fallback { text, images }: a message that was meant as an interjection but found the turn over. It goes
       // with its own text and pictures; the composer (what is typed or attached now) is neither read nor changed.
       const fallback = sendOpts && sendOpts.fallback ? sendOpts.fallback : null;
+      const isVoice = !!(sendOpts && sendOpts.voice);   // a voice send never waits: voiceCallSend puts the draft back right after this call, so the box is read before any await
+      if (!fallback && !retryCount && !isVoice && chat.sendWaiting) return;   // one waiting send per composer: a second send returns at once
+      if (!fallback && !retryCount && !isVoice && chat.imagesPreparing && chat.imagesPreparing.size) { if (!(await waitForPreparingImages(chatId))) { notify(new Error('picture still being prepared')); return; } }   // a picture attached a moment ago is part of this send; on a timeout nothing is sent
       const content = fallback ? String(fallback.text || '').trim() : input.value.trim();
       const pendingImages = fallback ? [...(fallback.images || [])] : (chat.pendingImages || []);
 
@@ -12395,7 +13616,7 @@
       const agentWorking = chat.status === 'thinking' || !!(liveNow && liveNow.busy);
       if ((content || pendingImages.length > 0) && agentWorking && !skipInterjectOnce.delete(chatId)) {
         notify(null);   // a voice message into a working agent goes as an interjection
-        return sendInterjection(chatId);
+        return sendInterjection(chatId, sendOpts);
       }
       skipInterjectOnce.delete(chatId);   // a fallback send has used its pass (the check above stepped aside for it, or the agent was not busy)
       if (!retryCount) { chat.voiceTurn = !!chat.voiceDictated; chat.voiceDictated = false; }   // this reply follows a mic dictation: read it aloud when it ends (if the device asks for that)
@@ -12471,8 +13692,8 @@
             agent: chat.agent,
             message: content,
             images: imagesToSend,
-            ...(chat.voiceSend ? { voice: true } : {}),
-            ...(chat.voiceSend && typeof voiceFacePackBody === 'function' ? voiceFacePackBody() : {})   // only while a character with reactions is on screen
+            ...(voiceSend ? { voice: true } : {}),
+            ...(voiceSend && typeof voiceFacePackBody === 'function' ? voiceFacePackBody() : {})   // only while a character with reactions is on screen
           })
         });
 
@@ -12488,7 +13709,7 @@
           delete chat.lastMsgId;
           chat.controller = null;
           if (fallback) chat.bounced409 = true;   // a fallback send is not bounced into an interjection again: it goes back to the composer below
-          if (chat.voiceSend) {   // a call's own message is never bounced into an interjection: it is refused at once, and the controller keeps the words for the next idle (as on the phone)
+          if (voiceSend) {   // a call's own message is never bounced into an interjection: it is refused at once, and the controller keeps the words for the next idle (as on the phone)
             chat.bounced409 = false;
             notify(Object.assign(new Error('busy'), { refused: true }));
             return;
@@ -12511,7 +13732,7 @@
           return;
         }
         chat.bounced409 = false;
-        if (chat.voiceSend && typeof voiceLinkOwner === 'function' && typeof voiceLinkAlive === 'function') {   // a call's own message: its answer proves the link, and so does every piece of data after it
+        if (voiceSend && typeof voiceLinkOwner === 'function' && typeof voiceLinkAlive === 'function') {   // a call's own message: its answer proves the link, and so does every piece of data after it
           const owner = voiceLinkOwner();
           if (response.status < 500) voiceLinkAlive(owner);
           chat.onStreamData = () => voiceLinkAlive(owner);
@@ -13044,6 +14265,24 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (o) { o.remove(); delete questionOverlays[requestId]; }
       retireQuestionNotices(requestId);
     }
+    // Plan card helpers (pure). The checklist is on questions[0]; an empty or malformed one is no checklist (a plain card).
+    function questionChecklistOf(questions) {
+      const c = questions && questions[0] && questions[0].checklist;
+      const list = Array.isArray(c) ? c.filter(x => x && typeof x.id === 'string' && x.id) : [];
+      return list.length ? list : null;
+    }
+    function questionChecklistHtml(list, esc) {
+      return '<div class="question-checklist" role="group" aria-label="Plan items">' + list.map(it =>
+        `<label class="question-check"><input type="checkbox" checked data-id="${esc(it.id).replace(/"/g, '&quot;')}">`
+        + `<span class="question-check-text"><strong>${esc(it.label || it.id)}</strong>${it.detail ? `<small>${esc(it.detail)}</small>` : ''}</span></label>`).join('') + '</div>';
+    }
+    function questionCheckedIds(root) {
+      return Array.from(root.querySelectorAll('.question-check input')).filter(i => i.checked).map(i => i.dataset.id);
+    }
+    // The body of POST /api/ask_response; checked (array of ids still ticked) only for a plan card.
+    function askResponseBody(request_id, answers, agent, checked) {
+      return JSON.stringify({ request_id, answers, ...(agent ? { agent } : {}), ...(Array.isArray(checked) ? { checked } : {}) });
+    }
     function showQuestionModal(data, chatId) {
       return new Promise((resolve) => {
         const { request_id, questions } = data;
@@ -13062,7 +14301,10 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         // beside Submit that answers at once, not as one more choice to pick and then submit. With several questions in
         // one card, each keeps its own Skip choice (to skip one of them) and the button skips them all.
         const isSkip = (o) => o && String(o.label || '').trim().toLowerCase() === 'skip';
-        const canSkip = questions.every(q => (q.options || []).some(isSkip));
+        // Plan card (Build team): questions[0].checklist = [{id, label, detail}], all ticked at first. The answer carries
+        // the ids still ticked (checked) with the chosen button; the card has no Skip and no typed answer.
+        const checklist = questionChecklistOf(questions);
+        const canSkip = !checklist && questions.every(q => (q.options || []).some(isSkip));
         const shownOptions = (q) => (q.options || []).filter(o => !(isSkip(o) && questions.length === 1));
         // Nothing to pick (no choices but Skip, no model list): the question is answered in words, the text box leads.
         const textOnly = questions.every(q => !shownOptions(q).length && !(Array.isArray(q.models) && q.models.length));
@@ -13076,6 +14318,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
             html += `<div class="question-header">${esc(q.header)}</div>`;
           }
           html += `<p class="question-text">${esc(q.question)}</p>`;
+          if (i === 0 && checklist) html += questionChecklistHtml(checklist, esc);
           html += `<div class="question-options">`;
           for (const opt of shownOptions(q)) {
             const safeLabel = esc(opt.label).replace(/"/g, '&quot;');
@@ -13089,12 +14332,12 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           if (Array.isArray(q.models) && q.models.length) html += `<label class="question-model-pick" data-qi="${i}"><span>Or pick any model this hub can use</span></label>`;
         }
 
-        if (!textOnly) html += '<div class="question-divider">or type a custom answer</div>';
-        html += '<div class="question-custom">';
+        if (!textOnly && !checklist) html += '<div class="question-divider">or type a custom answer</div>';
+        if (!checklist) html += '<div class="question-custom">';
         // A text box, not a one-line field: answers can run to a paragraph. It grows with the text (up to about ten
         // lines, then scrolls) and its corner drags to any size. Return makes a new line; ⌘Return / Ctrl+Enter sends.
-        html += `<textarea rows="3" placeholder="${textOnly ? 'Type your answer…' : 'Type your own answer…'}" id="question-custom-input"></textarea>`;
-        html += '</div>';
+        if (!checklist) html += `<textarea rows="3" placeholder="${textOnly ? 'Type your answer…' : 'Type your own answer…'}" id="question-custom-input"></textarea>`;
+        if (!checklist) html += '</div>';
         html += '<div class="question-actions"><span class="question-hint" id="question-hint">Pick an answer, then press Submit.</span>'
           + '<span class="question-buttons">' + (canSkip ? '<button id="question-skip" type="button">Skip</button>' : '') + '<button id="question-submit" disabled>Submit</button></span></div>';
         html += '</div>';
@@ -13108,7 +14351,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
             // The asking agent goes with the answer: the route's access check needs it to let a member answer a question
             // from an agent they own or that is shared with them (without it every member's answer was refused).
             // A question rebuilt without its agent (a reconnect) falls back to the chat's agent; the hub refuses one that did not ask.
-            body: JSON.stringify({ request_id, answers, ...(((data && data.agent) || (chatId && chats[chatId] && !chats[chatId].isGroup && chats[chatId].agent)) ? { agent: String((data && data.agent) || chats[chatId].agent) } : {}) })
+            body: askResponseBody(request_id, answers, ((data && data.agent) || (chatId && chats[chatId] && !chats[chatId].isGroup && chats[chatId].agent)) ? String((data && data.agent) || chats[chatId].agent) : '', checklist ? questionCheckedIds(overlay) : null)
           }).then(r => { if (r.ok) retireQuestionNotices(request_id); })   // the hub has the answer: its line can go
             .catch(err => console.error('Failed to submit question answer:', err));
           overlay.remove();
@@ -13140,7 +14383,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           modelPicks[qi] = sel;
           holder.appendChild(sel);
         });
-        const customInput = overlay.querySelector('#question-custom-input');
+        // A checklist card has no typed answer: the field stays out of the page (a detached one keeps the code below simple).
+        const customInput = overlay.querySelector('#question-custom-input') || document.createElement('textarea');
         const submitBtn = overlay.querySelector('#question-submit');
         const hint = overlay.querySelector('#question-hint');
         const sendKeys = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || '') ? '⌘Return' : 'Ctrl+Enter';
@@ -13189,7 +14433,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         refresh();
 
         document.body.appendChild(overlay);
-        setTimeout(() => customInput.focus(), 100);
+        setTimeout(() => { const f = checklist ? overlay.querySelector('.question-option') : customInput; if (f && f.focus) f.focus(); }, 100);
       });
     }
 
@@ -13266,6 +14510,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
               if (oc.type === 'context_health') { updateContextHealth(chatId, oc); continue; }
               if (oc.type === 'context_exhausted') { showContextExhausted(chatId, oc); continue; }
               if (oc.type === 'session_interrupted') { showSessionInterrupted(chatId, oc); continue; }
+              if (oc.type === 'claude_signin') { showClaudeSignin(chatId, oc, false); continue; }
               // Tiger Team launch — open war room in new tab
               if (oc.type === 'open_tiger_team') {
                 const params = new URLSearchParams({
@@ -13514,6 +14759,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
               }
               // Context exhausted — session died
               if (oc2.type === 'session_interrupted') { showSessionInterrupted(chatId, oc2); continue; }
+              if (oc2.type === 'claude_signin') { showClaudeSignin(chatId, oc2, true); continue; }
               if (oc2.type === 'context_exhausted') {
                 showContextExhausted(chatId, oc2);
                 continue;
@@ -13786,6 +15032,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
               if (oc3.type === 'context_health') { updateContextHealth(chatId, oc3); continue; }
               if (oc3.type === 'context_exhausted') { showContextExhausted(chatId, oc3); continue; }
               if (oc3.type === 'session_interrupted') { showSessionInterrupted(chatId, oc3); continue; }
+              if (oc3.type === 'claude_signin') { showClaudeSignin(chatId, oc3, false); continue; }
               // Tiger Team launch — open war room in new tab
               if (oc3.type === 'open_tiger_team') {
                 const params = new URLSearchParams({
@@ -17719,6 +18966,73 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     }
     const VOICE_LEVELS_SVG = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 6h10"></path><path d="M18 6h2"></path><circle cx="16" cy="6" r="2"></circle><path d="M4 12h2"></path><path d="M10 12h10"></path><circle cx="8" cy="12" r="2"></circle><path d="M4 18h10"></path><path d="M18 18h2"></path><circle cx="16" cy="18" r="2"></circle></svg>';
     const voiceReady = () => !!(voiceStatus && voiceStatus.enabled && voiceStatus.ready);
+    // The microphone is shown ONLY when voice is ready (everything downloaded and the working check passed): 'ready' or 'hidden'.
+    function voiceMicState() { return voiceReady() ? 'ready' : 'hidden'; }
+    // What voice is doing, for Settings: 'unsupported', 'off', 'ready', 'installing', 'failed' (an error, tries again by itself),
+    // 'waiting' (on, not ready, nothing running yet: it starts by itself) or '' (the status was never read).
+    function voiceKind(st) {
+      st = st === undefined ? voiceStatus : st;
+      if (!st) return '';
+      if (st.platformSupported === false) return 'unsupported';
+      if (st.enabled === false) return 'off';
+      if (st.enabled && st.ready) return 'ready';
+      if (st.installing) return 'installing';
+      if (st.failed || st.error) return 'failed';
+      return st.enabled ? 'waiting' : '';
+    }
+    const voiceAdminName = () => (voiceStatus && voiceStatus.adminName) || 'an admin';
+    // About N MB still to download (downloadBytes, else bytesTotal); '' when unknown.
+    function voiceMbText(st) {
+      const n = Math.round((Number(st && (st.downloadBytes || st.bytesTotal)) || 0) / 1e6);
+      return n > 0 ? n : 0;
+    }
+    function voicePctText(st) { return st && st.installing && st.progress !== null && st.progress !== undefined && Number.isFinite(Number(st.progress)) ? Math.round(Number(st.progress) * 100) : null; }
+    // The one status line of Settings, Voice (both pages use these words).
+    function voiceSettingsLine(st, admin) {
+      const k = voiceKind(st), mb = voiceMbText(st);
+      if (k === 'unsupported') return 'Voice is not supported on this computer.';
+      if (k === 'ready') return 'Voice is on and ready.';
+      if (k === 'off') return admin ? 'Voice is off.' : `Voice is off. ${(st && st.adminName) || 'An admin'} can turn it on.`;
+      if (k === 'installing') { const p = voicePctText(st); return `Getting voice ready: downloading the speech engines${mb ? `, about ${mb} MB` : ''}${p === null ? '' : ` (${p}%)`}.`; }
+      if (k === 'failed') {
+        const r = st.failReason, again = ' It tries again by itself.';
+        if (r === 'network') return `Voice isn't ready: this computer couldn't reach the internet to download the speech engines.${again}`;
+        if (r === 'disk') return `Voice isn't ready: not enough free disk space for the speech engines${mb ? ` (about ${mb} MB)` : ''}.${again}`;
+        if (r === 'damaged') return `Voice isn't ready: a download was damaged.${again}`;
+        return `Voice isn't ready: the speech engines didn't install.${again}`;
+      }
+      if (k === 'waiting') return `Getting voice ready:${mb ? ` about ${mb} MB to download.` : ' the speech engines are not downloaded yet.'} It starts by itself.`;
+      return '';
+    }
+    // The open chat's agent, the way the person reads it (or the chat the button is in).
+    function voiceAgentName(chatId) {
+      const c = chats[chatId || activeChat] || null;
+      return (c && (c.display || (c.agent && capName(c.agent)))) || 'your agent';
+    }
+    // The guard texts of a voice start that finds voice not ready (the microphone is hidden then, so these are rarely seen).
+    function voiceOffText() { return isHubAdmin() ? 'Voice is off. Turn it on in Settings, Voice' : `Voice is off on this Maestro. Ask ${voiceAdminName()} to turn it on.`; }
+    // While voice is on, supported and not ready (and the page is showing) the status is read again every 20 s, so the microphone
+    // appears by itself; it stops when ready or off.
+    const VOICE_POLL_MS = 20000;
+    let voiceWaitTimer = null;
+    function voicePollWanted() { const st = voiceStatus; return !!(st && st.enabled && st.platformSupported !== false && !st.ready && !document.hidden); }
+    function voiceWaitSchedule() {
+      if (!voicePollWanted()) { clearTimeout(voiceWaitTimer); voiceWaitTimer = null; return; }
+      if (voiceWaitTimer) return;
+      voiceWaitTimer = setTimeout(() => { voiceWaitTimer = null; if (voicePollWanted()) voiceRefreshStatus(); }, VOICE_POLL_MS);
+    }
+    // The summary line of Settings, Voice.
+    function voiceSummaryPaint() {
+      const st = voiceStatus, k = voiceKind(st);
+      let text = '';
+      if (k === 'unsupported') text = 'Not supported';
+      else if (k === 'ready') text = 'On, ready';
+      else if (k === 'installing') { const p = voicePctText(st); text = `Getting ready${p === null ? '' : ` ${p}%`}`; }
+      else if (k === 'waiting') text = 'Getting ready';
+      else if (k === 'failed') text = 'Not ready: will retry';
+      else if (k === 'off') text = 'Off';
+      stSum('voice', 'state', text);
+    }
     const voiceDeviceFallback = () => !!(voicePrefsNow().deviceVoiceFallback && window.speechSynthesis && typeof SpeechSynthesisUtterance !== 'undefined');
     // Mic buttons show only while the hub voice is on and ready; speaker buttons while a voice is available.
     function voicePaint() {
@@ -17727,6 +19041,65 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (typeof voiceModeChipPaint === 'function') voiceModeChipPaint();   // a chat bar drawn during a call gets its pill
       try { if (voiceCallS.call && voiceCallS.press && voiceCallS.chatId) voiceCallPaintBtn(voiceCallS.chatId, true); } catch { /* the press button is put on a redrawn mic button */ }
       document.body.classList.toggle('voice-on', voiceReady() || voiceDeviceFallback());
+      try { voiceSummaryPaint(); voiceWaitSchedule(); voiceHintTick(); if (voiceStatus && voiceById('st-voice-status')) voicePaintSettings(voiceStatus); } catch { /* the summary, the poll, the hint and the Settings line are comforts */ }
+    }
+    // The one-time hint: "New: talk to your agents. Tap the microphone." as a small callout above the microphone (the Simple call button in Simple mode,
+    // which is the same button). Shown at most once per person per device (localStorage mm-voice-hint:<user id>, set the moment it is shown), about 1.5 s
+    // after a chat is open, the microphone is shown and ready, no call is starting or running and no question is up. Gone on close, a tap on the
+    // microphone, a chat switch, a call start or a question. voiceHintTick runs every 0.4 s (and after each status paint) and does all of it.
+    const VOICE_HINT_TEXT = 'New: talk to your agents. Tap the microphone.';
+    const VOICE_HINT_DELAY_MS = 1500;
+    const voiceHint = { el: null, chatId: null, due: 0 };
+    function voiceHintKey() { const me = window.hubMe; return 'mm-voice-hint:' + ((me && me.user && me.user.id) || 'anon'); }
+    function voiceHintSeen() { try { return localStorage.getItem(voiceHintKey()) === '1'; } catch { return true; } }   // no storage: never nag
+    function voiceHintMark() { try { localStorage.setItem(voiceHintKey(), '1'); } catch { /* no storage */ } }
+    function voiceHintTarget() { const b = activeChat ? voiceById(`mic-${activeChat}`) : null; return b && b.style.display !== 'none' && b.offsetParent !== null ? b : null; }
+    function voiceHintBlocked() {
+      if (voiceCallS.active || voiceCallS.starting || voiceCallS.call) return true;
+      if (Object.keys(questionOverlays).length > 0 || document.querySelector('.question-overlay, .question-card')) return true;
+      return !!document.querySelector('#st-overlay, #gs-overlay:not(.gs-dock), #dream-overlay, #profile-overlay, #security-overlay, #or-pick-overlay, #restart-notify-overlay, #resume-popup-overlay, dialog[open]');   // Settings, the side panels and the other dialogs: no hint over them
+    }
+    function voiceHintOk() { return !document.hidden && !voiceHintSeen() && !!activeChat && chats[activeChat] && !voiceHintBlocked() && voiceMicState() === 'ready' && !!voiceHintTarget(); }   // seen first: once done, each tick costs one storage read
+    function voiceHintHide() { if (voiceHint.el) { voiceHint.el.remove(); voiceHint.el = null; } voiceHint.chatId = null; voiceHint.due = 0; }
+    // Closed, or the microphone used: gone, and the key is set so it never comes back.
+    function voiceHintDismiss() { voiceHintMark(); voiceHintHide(); }
+    function voiceHintPlace() {
+      const el = voiceHint.el, t = voiceHintTarget();
+      if (!el || !t) return;
+      const r = t.getBoundingClientRect(), vw = document.documentElement.clientWidth || window.innerWidth || 0, vh = window.innerHeight || 0;
+      const w = el.offsetWidth || 0;
+      let right = Math.max(8, vw - r.right - 4);
+      if (vw && w) right = Math.min(right, Math.max(8, vw - 8 - w));
+      el.style.right = `${right}px`;
+      const row = (t.closest && t.closest('.input-area')) || t;   // the whole composer row: the message box is taller than the button
+      let top = row.getBoundingClientRect().top;
+      // The slots stacked directly above the composer (the Undo line / offer card, the Working on and research lines) are part of what the tip must clear: it sits above the topmost one that shows.
+      for (let sib = row.previousElementSibling; sib && sib.classList && (sib.classList.contains('team-offer-slot') || sib.classList.contains('handoff-cards')); sib = sib.previousElementSibling) {
+        if (!sib.hidden && sib.offsetHeight > 0) top = Math.min(top, sib.getBoundingClientRect().top);
+      }
+      el.style.bottom = `${Math.max(8, vh - top + 10)}px`;
+      el.style.setProperty('--voice-hint-arrow', `${Math.max(8, Math.round((vw - right) - (r.left + r.width / 2) - 6))}px`);
+    }
+    function voiceHintShow() {
+      voiceHintMark();   // the moment it is shown
+      const el = document.createElement('div');
+      el.className = 'voice-hint'; el.id = 'voice-hint'; el.setAttribute('role', 'status');
+      el.innerHTML = `<span class="voice-hint-text">${VOICE_HINT_TEXT}</span><button type="button" class="voice-hint-close" aria-label="Close">×</button>`;
+      el.querySelector('.voice-hint-close').addEventListener('click', () => voiceHintDismiss());
+      document.body.appendChild(el);
+      voiceHint.el = el; voiceHint.chatId = activeChat; voiceHint.due = 0;
+      voiceHintPlace();
+    }
+    function voiceHintTick(now) {
+      now = now === undefined ? Date.now() : now;
+      if (voiceHint.el) {   // showing: it stays only in the chat it was shown in, while nothing blocks it
+        if (voiceHint.chatId !== activeChat || voiceHintBlocked() || voiceMicState() !== 'ready' || !voiceHintTarget()) voiceHintHide();
+        else voiceHintPlace();
+        return;
+      }
+      if (!voiceHintOk()) { voiceHint.due = 0; return; }
+      if (!voiceHint.due) { voiceHint.due = now + VOICE_HINT_DELAY_MS; return; }
+      if (now >= voiceHint.due) voiceHintShow();
     }
     async function voiceRefreshStatus() {
       try {
@@ -17781,7 +19154,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       b.setAttribute('aria-pressed', state === 'rec' ? 'true' : 'false');
       b.disabled = state === 'wait';
       b.setAttribute('aria-label', state === 'rec' ? 'Stop dictation' : voiceMicIdleLabel());
-      if (state !== 'rec') b.title = voiceMicIdleTitle();
+      if (state !== 'rec') b.title = voiceMicIdleTitle(chatId);
       if (state === 'rec') b.textContent = `■ ${label || '0:00'}`;
       else if (state === 'wait') b.textContent = '…';
       else if (!b.querySelector('svg')) b.innerHTML = VOICE_MIC_SVG;
@@ -17808,6 +19181,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       return held;
     }
     async function voiceMicToggle(chatId) {
+      voiceHintDismiss();   // the microphone is being used: the one-time hint is done
       if (voiceCallS.active || voiceCallS.starting) {
         if (voiceCallS.press) return;   // a Tap to talk call: the button is the press button (voicePressButton); Hang up is the call bar's and the display's
         voiceCallHangUp(); return;   // the red hang-up button
@@ -17815,7 +19189,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (voicePressEndedAt && Date.now() - voicePressEndedAt < 1000) return;   // the trailing click of a press that outlived a Tap to talk call
       if (voiceRec.busy || voiceRec.guard.pending) return;   // a second tap while the microphone is still being asked for is ignored
       if (voiceRec.chatId) { await voiceMicStop(true); return; }   // a second tap, or a tap in another chat: end this recording
-      if (!voiceReady()) { hubToast('Voice is off. An admin can turn it on in Settings, Voices.'); voiceRefreshStatus(); return; }
+      if (!voiceReady()) { hubToast(voiceOffText()); voiceRefreshStatus(); return; }   // the microphone is hidden until voice is ready, so this is a guard; never records
       // Tap to talk: a tap starts the call and listens; a pointer held for VOICE_PRESS_HOLD_MS or more starts it idle (the person has already let go: nothing is heard until the next press).
       // (the call object exists at once, before voiceCallStart's first await; its first talk(true) comes after call.start() resolves)
       const held = voiceMicHeldMs() >= VOICE_PRESS_HOLD_MS;
@@ -18032,7 +19406,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
             from = e.at || 0; useDevice = true;
           }
         } else if (voiceDeviceFallback()) useDevice = true;
-        else { hubToast('Voice is off. An admin can turn it on in Settings, Voices.'); return; }
+        else { hubToast(voiceOffText()); return; }
         if (useDevice) { const rep = {}; await voicePlayDevice(sentences, from, my, agent, rep); if (opts.out) opts.out.played = rep.spoke === true && voicePlay.token === my; }
       } finally {
         voicePlay.busy = Math.max(0, voicePlay.busy - 1);
@@ -18065,11 +19439,13 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       // A checkbox row the way the OpenRouter privacy row is laid out: a short label column, the box and its text in the
       // value column (a long text wraps there, inside the dialog).
       const CHK = 'flex:1;min-width:0;display:flex;gap:6px;align-items:flex-start;text-align:left;cursor:pointer';
-      let h = `<div class="st-section" id="st-voice-section"><h4>Voices</h4>
+      let h = `<div class="st-section" id="st-voice-section"><h4>Voice</h4><span class="st-search-words" hidden>voice microphone mic talk speak speech call dictation</span>
         <div class="st-hint">Free local voices run on this computer: what you say and what is read aloud never leaves it, and nothing is sent to the internet. Tap the microphone in a chat to start a hands-free call: talk, interrupt the agent any time by speaking, and say "stop" to stop it; tap the speaker on a reply to hear it.</div>`;
-      h += row('Voice', admin
-        ? `<label style="flex:0 0 auto;display:flex;gap:6px;align-items:center;text-align:left;cursor:pointer;white-space:nowrap"><input type="checkbox" id="st-voice-enabled" onchange="voiceSettingEnable(this)"> Enable voice</label> <progress id="st-voice-progress" max="1" value="0" style="display:none;margin-left:8px"></progress> <span id="st-voice-status" class="st-hint" style="margin:0 0 0 8px">Checking…</span>`
-        : `<span id="st-voice-status" class="st-hint" style="margin:0">Checking…</span>`);
+      // The switch is its own row; the Status row under it holds the sentence at full width, then the bar, Retry now and the raw error.
+      if (admin) h += row('Voice conversations', `<label style="flex:0 0 auto;display:flex;gap:6px;align-items:center;text-align:left;cursor:pointer;white-space:nowrap"><input type="checkbox" id="st-voice-enabled" onchange="voiceSettingEnable(this)"> On for everyone on this Maestro</label>`);
+      h += row('Status', admin
+        ? `<div id="st-voice-statusbox" style="flex:1;min-width:0;display:flex;flex-direction:column;align-items:flex-start;gap:6px"><span id="st-voice-status" class="st-hint" style="margin:0;width:100%;white-space:normal;overflow-wrap:anywhere">Checking…</span><progress id="st-voice-progress" max="1" value="0" style="display:none"></progress><button type="button" id="st-voice-retry" class="btn-small" style="display:none" onclick="voiceRetryNow(this)">Retry now</button><span id="st-voice-raw" class="st-hint" style="display:none;margin:0;font-size:0.75rem;white-space:normal;overflow-wrap:anywhere"></span></div>`
+        : `<span id="st-voice-status" class="st-hint" style="margin:0;flex:1;min-width:0;white-space:normal">Checking…</span>`);
       h += row('Engines', `<span id="st-voice-engines" class="st-hint" style="margin:0">…</span>`);
       if (admin) {
         h += row('Default voice', `<select id="st-voice-default" onchange="voiceSettingDefaultVoice()" style="padding:4px"></select> <button class="st-test-btn" id="st-voice-sample" type="button" onclick="voicePlaySample()">Play sample</button><span id="st-voice-state" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px"></span>`);
@@ -18100,18 +19476,17 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     function voicePaintSettings(st) {
       const status = voiceById('st-voice-status');
       if (!status) return;
-      let text;
-      if (!st) text = 'Could not read the voice status.';
-      else if (st.platformSupported === false) text = 'Voice is not supported on this computer.';
-      else if (st.installing) text = `Installing voice: ${st.step || 'working'} ${Math.round((Number(st.progress) || 0) * 100)}%`;
-      else if (st.error) text = `Voice error: ${st.error}`;
-      else if (st.failed) text = 'Voice setup failed. An admin can see the details in Settings, Voices.';
-      else if (st.enabled && st.ready) text = 'Voice is on and ready.';
-      else if (st.enabled) text = 'Voice is on, getting ready…';
-      else text = 'Voice is off.';
-      status.textContent = text;
+      const admin = isHubAdmin();
+      status.textContent = st ? voiceSettingsLine(st, admin) : 'Could not read the voice status.';
+      const failed = voiceKind(st) === 'failed';
+      const raw = voiceById('st-voice-raw');   // the raw error, small, admins only (the status carries it for admins only)
+      if (raw) { raw.textContent = failed && admin && st.error ? st.error : ''; raw.style.display = raw.textContent ? '' : 'none'; }
+      const retry = voiceById('st-voice-retry');
+      if (retry) retry.style.display = failed && admin ? '' : 'none';
       const en = voiceById('st-voice-enabled');
-      if (en) en.checked = !!(st && (st.enabled || st.installing));
+      // The page sets the switch from the status (after Settings opened): content the page put in, not a change by the person, so
+      // Close does not ask "Discard changes?" (the switch saves on its own through /api/voice/enable and /disable).
+      if (en) { en.checked = !!(st && st.enabled); try { dialogGuard.markLoaded(en); } catch { /* no guard on this page */ } }
       const pr = voiceById('st-voice-progress');
       if (pr) { pr.style.display = st && st.installing ? '' : 'none'; pr.value = Number(st && st.progress) || 0; }
       const eng = voiceById('st-voice-engines');
@@ -18139,6 +19514,18 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (st && st.installing) voiceSettingsTimer = setTimeout(voiceSettingsRefresh, 2000);   // poll while it installs
     }
     function voiceSettingsInit() { voiceSettingsRefresh(); }
+    // "Retry now" (admin, after a failed setup): starts the download again at once, then reads the status.
+    async function voiceRetryNow(btn) {
+      if (btn) btn.disabled = true;
+      try {
+        const r = await fetch('/api/voice/retry', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+        let j = {};
+        try { j = await r.json(); } catch {}
+        if (!r.ok || j.error) throw new Error(j.error || `HTTP ${r.status}`);
+      } catch (e) { hubToast(`Could not retry: ${e.message}`); }
+      finally { if (btn) btn.disabled = false; }
+      voiceSettingsRefresh();
+    }
     async function voiceSettingEnable(cb) {
       const on = cb.checked;
       cb.disabled = true;
@@ -19071,7 +20458,11 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     }
     // The idle mic button (no call, no recording): what a tap does in the saved mode.
     function voiceMicIdleLabel() { const m = voicePrefsNow().mode; return m === 'press' ? 'Tap to talk' : m === 'tap' ? 'Dictate' : 'Talk hands-free'; }
-    function voiceMicIdleTitle() { const m = voicePrefsNow().mode; return m === 'press' ? 'Tap to talk: a voice call you press to speak in' : m === 'tap' ? 'Dictation: tap to speak, tap again to stop' : 'Hands-free: tap to start a call'; }
+    // The title of the idle mic: it names the agent of the chat (chatId, else the open chat).
+    function voiceMicIdleTitle(chatId) {
+      const m = voicePrefsNow().mode, a = voiceAgentName(chatId);
+      return m === 'press' ? `Talk to ${a}: tap to talk` : m === 'tap' ? `Dictate a message to ${a}` : `Talk to ${a}: hands-free call`;
+    }
     // The mic button is the call's hang-up button while a call is up (in a Tap to talk call it is the press button).
     function voiceCallPaintBtn(chatId, on) {
       const b = voiceById(`mic-${chatId}`);
@@ -19094,7 +20485,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       b.classList.toggle('call', on);
       b.setAttribute('aria-pressed', on ? 'true' : 'false');
       b.setAttribute('aria-label', on ? 'Hang up' : voiceMicIdleLabel());
-      b.title = on ? 'Hang up' : voiceMicIdleTitle();
+      b.title = on ? 'Hang up' : voiceMicIdleTitle(chatId);
       b.innerHTML = on ? VOICE_HANGUP_SVG : VOICE_MIC_SVG;
       if (typeof simpleCallLook === 'function') simpleCallLook(b, on);   // Simple: a voice-call button, not a dictation mic
     }
@@ -19256,7 +20647,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const S = voiceCallS, chat = chats[chatId];
       if (S.call) return;
       if (!chat || chat.isGroup || chat.isWorker || !chat.agent) { hubToast('A call works in a chat with one agent.'); return; }
-      if (!voiceReady()) { hubToast('Voice is off. An admin can turn it on in Settings, Voices.'); return; }
+      if (!voiceReady()) { hubToast(voiceOffText()); return; }
       if (voiceTest.mic || voiceTest.guard.pending || voiceRoom.active) { hubToast('The microphone is in use in Settings.'); return; }
       voiceRec.guard.cancel(); if (voiceRec.chatId) voiceMicStop(false);   // dictation ends, nothing uploaded
       voiceStopPlayback();
@@ -19432,11 +20823,18 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     // ── In-chat voice controls (next to the mic): a Talk mode chip and a small "Voice settings" panel for every signed-in user ──
     // They write the same per-device prefs as Settings, Voices, and act on a running call at once.
     const VOICE_POP_KEYS = { mic: 'micLevel', sens: 'interruptSensitivity', speed: 'voiceSpeed', pause: 'endPause', wait: 'continueWait', think: 'thinkingSound', thinkvol: 'thinkingVolume', mode: 'mode', echo: 'echoHold', keep: 'keepAlive', loudness: 'loudness', loudnessBt: 'loudnessBt' };
+    // The panel's one role-dependent part, kept outside voicePopHtml (every option in the panel is for everyone): an admin gets
+    // "All voice settings" at the top, anyone else a line at the bottom saying who looks after voice for everyone.
+    function voicePopLinks() {
+      if (isHubAdmin()) return { top: `<div class="vp-row"><button type="button" class="vp-all-link" data-vp="all-settings" style="background:none;border:0;padding:0;color:var(--accent);text-decoration:underline;cursor:pointer;font:inherit">All voice settings</button></div>`, bottom: '' };
+      return { top: '', bottom: `<div class="vp-display-note vp-admin-note">Voice for everyone on this Maestro is looked after by ${hubEsc(voiceAdminName())}.</div>` };
+    }
     function voicePopHtml(chatId) {
       const id = (n) => `vp-${n}-${chatId}`, curMode = voicePrefsNow().mode;
       const waits = VOICE_CONTINUE_WAITS.map((ms) => `<option value="${ms}"${ms === voiceContinueWaitNow() ? ' selected' : ''}>${ms === 8000 ? 'Very long (8 s)' : ms / 1000 + ' s'}</option>`).join('');
       const agent = (chats[chatId] && chats[chatId].agent) || '';
-      return `<div class="vp-row"><span class="vp-label">Talk mode</span><span class="vp-seg" role="group" aria-label="Talk mode">
+      const links = voicePopLinks();
+      return links.top + `<div class="vp-row"><span class="vp-label">Talk mode</span><span class="vp-seg" role="group" aria-label="Talk mode">
           <button type="button" data-vp="mode" data-val="handsfree" aria-pressed="${curMode !== 'tap' && curMode !== 'press' ? 'true' : 'false'}">Hands-free</button><button type="button" data-vp="mode" data-val="press" aria-pressed="${curMode === 'press' ? 'true' : 'false'}">Tap to talk</button><button type="button" data-vp="mode" data-val="tap" aria-pressed="${curMode === 'tap' ? 'true' : 'false'}">Dictation</button></span></div>
         <div class="vp-display-note">Hands-free: tap the mic to start a call; it hears you whenever you speak. Tap to talk: a voice call where the agent answers aloud; tap the mic, speak, tap again to send (or hold it while you speak and let go). Dictation: tap the mic to turn what you say into text in the message box.</div>
         <label class="vp-row"><span class="vp-label">Voice speed</span><input type="range" min="0.75" max="1.5" step="0.05" id="${id('speed')}" data-vp="speed" value="${voiceSpeedNow()}"> <span id="${id('speed-val')}">${voiceSpeedLabel(voiceSpeedNow())}</span></label>${voiceFollowLine(agent, 'voiceSpeed')}
@@ -19461,7 +20859,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         <div class="vp-display-note">${VOICE_KEEP_HINT}</div>
         <div class="vp-row"><button type="button" class="st-test-btn" data-vp="car" id="${id('car')}">Car or Bluetooth check</button> <span class="st-hint vp-car-out" id="${id('car-out')}" aria-live="polite" style="margin:0"></span></div>
         <div class="vp-row" style="display:block"><div class="vp-label">Sound route</div>${voiceRouteBlockHtml()}</div>
-        ${voiceWakeRowsHtml(chatId)}`;
+        ${voiceWakeRowsHtml(chatId)}${links.bottom}`;
     }
     function voicePopClose() {
       for (const p of document.querySelectorAll('.voice-pop:not([hidden])')) p.hidden = true;
@@ -19482,7 +20880,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         pop.addEventListener('click', (e) => {
           const t = e.target.closest && e.target.closest('[data-vp]');
           if (!t) return;
-          if (t.dataset.vp === 'mode') voiceCtlSet('mode', t.dataset.val, true);
+          if (t.dataset.vp === 'all-settings') { voicePopClose(); openVoiceSettings(); }
+          else if (t.dataset.vp === 'mode') voiceCtlSet('mode', t.dataset.val, true);
           else if (t.dataset.vp === 'room') voiceRoomCheckRun();
           else if (t.dataset.vp === 'car') voiceCarCheckRun();
         });
@@ -19510,7 +20909,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const cur = voicePrefsNow().mode;
       for (const c of document.querySelectorAll('.voice-mode-chip')) c.textContent = voiceModeLabel();
       for (const b of document.querySelectorAll('.voice-pop [data-vp="mode"]')) b.setAttribute('aria-pressed', b.dataset.val === cur ? 'true' : 'false');
-      if (!voiceCallS.call && !voiceRec.chatId) for (const b of document.querySelectorAll('.input-area .mic-btn:not(.call):not(.rec):not(.wait)')) { b.setAttribute('aria-label', voiceMicIdleLabel()); b.title = voiceMicIdleTitle(); }   // what a tap on the idle mic does in the saved mode
+      if (!voiceCallS.call && !voiceRec.chatId) for (const b of document.querySelectorAll('.input-area .mic-btn:not(.call):not(.rec):not(.wait)')) { b.setAttribute('aria-label', voiceMicIdleLabel()); b.title = voiceMicIdleTitle(b.id.replace(/^mic-/, '')); }   // what a tap on the idle mic does in the saved mode
     }
     // One setting changed in the panel: shown everywhere it is shown, live on a running call, saved when `save` (on release / pick).
     function voiceCtlSet(which, v, save) {
@@ -19760,6 +21159,10 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     });
 
     // Message rendering
+    // The voice block's two page-level hooks (kept outside the block so its tests can run the block alone): the one-time hint is looked at every 0.4 s,
+    // and coming back to the page reads the voice status again while it is getting ready.
+    setInterval(() => { try { voiceHintTick(); } catch { /* a hint is a comfort */ } }, 400);
+    document.addEventListener('visibilitychange', () => { try { if (!document.hidden && voicePollWanted()) voiceRefreshStatus(); else voiceWaitSchedule(); } catch { /* the poll is a comfort */ } });
     // Copy button on every message bubble: copies the original text/markdown, not the rendered HTML.
     const rawMessageText = new WeakMap();
     const messageTime = new WeakMap();   // the line under a message (setMessageTime)
@@ -19928,6 +21331,32 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     function _clearContextFooter() {
       const footer = document.getElementById('context-footer');
       if (footer) footer.remove();
+    }
+
+    // "Claude is signed out" (lib/ui-claude-signin.js): the notice goes right under the reply bubble, once per bubble.
+    // again: the text of the message this reply answered; "Send my message again" sends it as a new message in the same chat.
+    function paintClaudeSigninNotice(chatId, bubble, detail, again) {
+      if (!window.ClaudeSignin || !bubble || !bubble.parentNode || bubble.dataset.claudeSignin) return;
+      bubble.dataset.claudeSignin = '1';
+      const wrap = document.createElement('div');
+      bubble.after(wrap);
+      const onResend = again ? () => { sendSoloMessage(chatId, 0, { fallback: { text: again } }); } : null;
+      ClaudeSignin.notice(wrap, { detail, onResend });
+      const container = document.getElementById(`messages-${chatId}`);
+      if (container) autoScroll(container);
+    }
+    // The live event { type: 'claude_signin', detail }: the notice under this chat's newest reply. canResend: a one-to-one chat.
+    function showClaudeSignin(chatId, data, canResend) {
+      const container = document.getElementById(`messages-${chatId}`);
+      if (!container) return;
+      const bubbles = container.querySelectorAll(':scope > .message.assistant');
+      const bubble = bubbles[bubbles.length - 1];
+      let again = null;
+      if (canResend) {
+        const msgs = (chats[chatId] && chats[chatId].messages) || [];
+        for (let k = msgs.length - 1; k >= 0; k--) if (msgs[k] && msgs[k].role === 'user') { again = typeof msgs[k].content === 'string' ? msgs[k].content : null; break; }
+      }
+      paintClaudeSigninNotice(chatId, bubble, data && data.detail, again);
     }
 
     // A crash, not a full window: the session resumes on the next message, so say so, calmly.
@@ -23304,7 +24733,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         s.textContent = '.dlg-discard{margin:auto;max-width:min(92vw,380px);padding:20px;border:1px solid var(--border-strong,#333846);border-radius:12px;background:var(--bg-card,#14171F);color:var(--text,#F3F4F6);font:inherit}'
           + '.dlg-discard::backdrop{background:rgba(0,0,0,.55)}.dlg-discard h3{margin:0 0 8px;font-size:1.05rem}.dlg-discard p{margin:0 0 16px;color:var(--text-dim,#9CA3AF);line-height:1.4}'
           + '.dlg-discard-btns{display:flex;gap:8px;justify-content:flex-end}.dlg-discard-btns button{min-height:36px;padding:0 16px;border-radius:8px;border:1px solid var(--border-strong,#333846);background:var(--bg-input,#040507);color:var(--text,#F3F4F6);font:inherit;cursor:pointer}'
-          + '.dlg-discard-btns .dlg-discard-go{color:var(--error,#FF4C4C)}.dlg-discard-btns .dlg-discard-keep{background:var(--accent,#3D7BFF);border-color:var(--accent,#3D7BFF);color:#fff}'
+          + '.dlg-discard-btns .dlg-discard-go{color:var(--error,#FF4C4C)}.dlg-discard-btns .dlg-discard-keep{background:var(--accent,#3D7BFF);border-color:var(--accent,#3D7BFF);color:var(--on-accent,#fff)}'
           + '.dlg-discard-btns button:focus-visible{outline:2px solid var(--accent-hover,#5A93FF);outline-offset:2px}'
           + '.dlg-saving{margin-top:10px;font-size:.8rem;color:var(--warning,#F5A623)}';
         doc.head.appendChild(s);

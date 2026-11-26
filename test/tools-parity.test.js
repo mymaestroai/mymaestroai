@@ -61,7 +61,7 @@ test('Claude client path: tools=hub disallows the client built-ins, allows only 
   assert.match(sdk, /allowedTools: hubHands \? \['mcp__agent-hub__\*', 'mcp__hub__\*'\] : sandboxWithheld \? \['mcp__agent-hub__\*'\] : \[/);
   assert.match(sdk, /\.\.\.\(hubHands \|\| sandboxWithheld \? \{ disallowedTools: \[\.\.\.hubToolsLib\.CLIENT_BUILTINS\] \} : \{\}\),/);
   assert.match(sdk, /queryOptions\.disallowedTools = \[\.\.\.new Set\(\[\.\.\.\(queryOptions\.disallowedTools \|\| \[\]\), \.\.\.blockedTools\]\)\];/, 'scope blocks merge instead of overwriting');
-  assert.match(sdk, /if \(hubHands && !sandboxWithheld\) \{\s*\n\s*queryOptions\.mcpServers\.hub = buildHandsMcpServer\(sdk, hands\.tools, \{ blocked: blockedTools, signal: abortController\.signal \}\);/);
+  assert.match(sdk, /if \(hubHands && !sandboxWithheld\) \{\s*\n\s*queryOptions\.mcpServers\.hub = buildHandsMcpServer\(sdk, hands\.tools, \{ blocked: blockedTools, signal: abortController\.signal, readOnlyHelper \}\);/);
   assert.match(sdk, /append: agentContext \+ workerPolicyText \+ jobsPolicyText \+ visualsText \+ handsNote \+ `/);
   assert.match(sdk, /## YOUR HANDS\nYour shell, file and web tools are the hub's/);
   // Security R2: the client never runs in a box, so there is no in-box client branch any more (it used sb.prepare and copied the
@@ -71,7 +71,7 @@ test('Claude client path: tools=hub disallows the client built-ins, allows only 
 });
 
 test('Codex path: tools=hub appends the hands to the bridge list, confines its own shell to read-only, and says so', () => {
-  assert.match(sdk, /const hubHands = hands\.mode === 'hub' && !hands\.withheld;\s*\n\s*if \(hubHands\) \{\s*\n\s*const h = buildHandsMcpServer\(codexBridge\.collectingSdk, hands\.tools, \{ blocked: twVirtual \? temporalWorkers\.sdkDisallowedFor\(twVirtual\.toolScope\) : \[\], signal: abortController\.signal \}\);\s*\n\s*for \(const t of h\.tools\) hubTools\.push\(t\);/);
+  assert.match(sdk, /const hubHands = hands\.mode === 'hub' && !hands\.withheld;\s*const readOnlyHelper = twVirtual\?\.toolScope === 'read';\s*if \(hubHands\) \{\s*\n\s*const h = buildHandsMcpServer\(codexBridge\.collectingSdk, hands\.tools, \{ blocked: twVirtual \? temporalWorkers\.sdkDisallowedFor\(twVirtual\.toolScope\) : \[\], signal: abortController\.signal, readOnlyHelper \}\);\s*\n\s*for \(const t of h\.tools\) hubTools\.push\(t\);/);
   assert.match(sdk, /const sandbox = hubHands \? 'read-only' : codexCli\.sandboxFor\(/);
   assert.match(sdk, /your own shell is read-only here/);
 });

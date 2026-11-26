@@ -33,7 +33,7 @@ test('index.html: ONE Simple style block, after the existing styles, every rule 
   const sels = [];
   let depth = 0, cur = '';
   for (const ch of body) {
-    if (ch === '{') { if (!/^\s*@(media|keyframes)/.test(cur) && depth <= 1) sels.push(cur); depth++; cur = ''; }
+    if (ch === '{') { if (!/^\s*@(media|keyframes|container)/.test(cur) && depth <= 1) sels.push(cur); depth++; cur = ''; }
     else if (ch === '}') { depth--; cur = ''; }
     else cur += ch;
   }
@@ -86,7 +86,7 @@ test('app.js: the existing lines next to the hooks are unchanged and no helper b
     "const r = await fetch('/api/me', { credentials: 'include' });",
     "if (window.hubMe && window.hubMe.user) setTimeout(() => { try { voiceRecResendPending(",
     "const response = await fetch('/api/chat/stream', {",
-    "...(chat.voiceSend ? { voice: true } : {}),",
+    "...(voiceSend ? { voice: true } : {}),",   // the send's own copy of the voice flag (attach-sync review round 4)
     "const delta = parsed.choices?.[0]?.delta?.content;",
     "if (rsnFullFor === msgId) paintReasoningFull();",
     "function finishReasoning(msgId) {",

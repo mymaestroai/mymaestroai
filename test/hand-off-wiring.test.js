@@ -62,11 +62,10 @@ test('hand_off_list, hand_off_note, hand_off_cancel: plain text from the runner,
   assert.deepEqual(tools.jsonSchema(tools.TOOL_SPECS[1]).required, []);
 });
 
-test('who gets the tools: a primary agent or a lead on its own turn (depth 0), never a temporary worker; both tool paths; a refusal re-checks it', () => {
+test('hand-off authorization is checked when any of the registered tool handlers is called', () => {
   const fn = SDK.match(/function handOffOffered\(agentName, consultationDepth\) \{[\s\S]*?\n\}/)[0];
   assert.match(fn, /if \(consultationDepth !== 0 \|\| temporalWorkers\.isVirtual\(agentName\)\) return false;/);
   assert.match(fn, /return rec\.category === 'primary' \|\| require\('\.\/agents'\)\.isLeadAgent\(agentName, /);
-  assert.equal((SDK.match(/\.\.\.\(handOffOffered\(agentName, consultationDepth\)/g) || []).length, 2, 'gateway list and SDK/Codex MCP list');
   assert.match(SDK, /function runHandOffTool\(name, args, agentName, consultationDepth\) \{\n  if \(!handOffOffered\(agentName, consultationDepth\)\) return Promise\.resolve\('Hand-offs can only be started from your own turn\.'\);/);
   assert.match(SDK, /mayTarget: \(caller, target\) => consultAllowed\(caller, target\),/, 'the consult_agent rule, unchanged');
   assert.match(SDK, /member: isMemberTurn\(agentName\),\n  \}\);/);
@@ -195,7 +194,7 @@ test('review r1: the runner checks identities, access and earlier deliveries; a 
   assert.match(factory, /stampOf: \(name\) => require\('\.\/agents'\)\.agentIdentity\(name\),/);
   assert.match(factory, /mayTarget: \(caller, target\) => consultAllowed\(caller, target\),/);
   assert.match(factory, /alreadyDelivered: \(caller, id\) => \{\n\s+for \(const l of tailLines\(path\.join\(CONV_DIR, `\$\{caller\}\.jsonl`\), 400\)\) \{\n\s+try \{ const e = JSON\.parse\(l\.text\); if \(e && e\.origin && e\.origin\.handOffReport === id\) return true; \} catch \{\}/);
-  assert.match(SDK, /for \(const k of \['kind', 'from', 'by', 'label', 'jobName', 'taskId', 'handOff', 'handOffReport'\]\)/, 'the conversation log keeps the ids');
+  assert.match(SDK, /for \(const k of \['kind', 'from', 'by', 'label', 'for', 'jobName', 'taskId', 'handOff', 'handOffReport'\]\)/, 'the conversation log keeps the ids (and, since Build Team, the main agent a build_team turn is for)');
   assert.match(SDK, /if \(handOffOfTurn\(coordinatorName\)\) return resolve\(HAND_OFF_NO_QUEUE\(agentName, 'busy'\)\);/);
   assert.match(SDK, /if \(handOffOfTurn\(coordinatorName\)\) return HAND_OFF_NO_QUEUE\(agentName, 'on a voice call'\);/);
   assert.match(SDK, /handOffs = bc\.isOn\('hand-off-guidance'\) && !handOffOfTurn\(agentName\), ownCode = bc\.isOn\('own-code-guidance'\);/);

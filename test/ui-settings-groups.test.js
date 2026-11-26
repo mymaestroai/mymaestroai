@@ -25,10 +25,10 @@ function groupsFromSource(app) {
   return groups;
 }
 
-test('nine groups, and every section openSettings draws belongs to exactly one of them', () => {
+test('ten groups, and every section openSettings draws belongs to exactly one of them', () => {
   const app = read('app.js');
   const groups = groupsFromSource(app);
-  assert.deepStrictEqual(groups.map(g => g.title), ['🩺 Status', '🎨 Appearance', '🔐 Security', '💾 Backups', '🧠 AI models', '🤖 Agents', '🔔 Notifications', '🧰 Tools and data', '💰 Money and safety']);
+  assert.deepStrictEqual(groups.map(g => g.title), ['🩺 Status', '🎨 Appearance', '🎙 Voice', '🔐 Security', '💾 Backups', '🧠 AI models', '🤖 Agents', '🔔 Notifications', '🧰 Tools and data', '💰 Money and safety']);
   // The Voices section is drawn by voiceSettingsHtml(data), called from openSettings.
   const vAt = app.indexOf('function voiceSettingsHtml(data) {');
   assert.ok(vAt > 0 && settingsSource(app).includes('html += voiceSettingsHtml(data);'), 'Voices is drawn by openSettings');
@@ -50,7 +50,11 @@ test('nine groups, and every section openSettings draws belongs to exactly one o
   assert.ok(byId.agents.includes('st-sb-section') && byId.agents.includes('st-approvals-section'));
   assert.ok(byId.tools.includes('st-ws-section') && byId.tools.includes('st-cx-section'));
   assert.deepStrictEqual(byId.agents.slice(-2), ['st-chat-section', 'st-tuning-section'], 'Tuning follows Chat in Agents');
-  assert.deepStrictEqual(byId.tools.slice(1, 3), ['st-voice-section', 'st-comms-section'], 'Messaging channels follows Voice in Tools and data');
+  // voice entry: Voice moved out of Tools and data into a group of its own right after Appearance
+  assert.deepStrictEqual(byId.voice, ['st-voice-section']);
+  assert.ok(!byId.tools.includes('st-voice-section'));
+  assert.deepStrictEqual(groups.map(g => g.id).slice(0, 3), ['status', 'looks', 'voice']);
+  assert.deepStrictEqual(byId.tools.slice(1, 2), ['st-comms-section'], 'Messaging channels follows the workspace section in Tools and data');
 });
 
 test('the panel is grouped right after it is drawn; groups start closed unless this browser left them open', () => {

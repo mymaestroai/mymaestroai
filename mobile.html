@@ -126,6 +126,7 @@
       --wk-stop-border: rgba(212,88,139,.6);
       --wk-tool-text: #9ec5ff;
       --worker-busy: #3987e5;
+      --bg-work-ring: #3987e5;   /* the hollow ring and blue line: free, with work running in the background */
       --worker-busy-glow: rgba(57,135,229,.25);
       --worker-done: #199e70;
       --working-chip-bg: rgba(245, 166, 35, 0.14);
@@ -141,7 +142,7 @@
       font-size: 15px;
       background: var(--bg-dark);
       color: var(--text);
-      height: 100vh; height: 100dvh;
+      height: 100vh; height: 100dvh; height: var(--vvh, 100dvh);   /* --vvh: the visual viewport's height, set by the page: the layout fits the visible area above the keyboard */
       display: flex; flex-direction: column;
       overflow: hidden;
       padding: var(--sat) var(--sar) 0 var(--sal);
@@ -209,7 +210,106 @@
     .agent-model.working.question { color: var(--accent-hover); }
     #working-chip { display: none; margin: 8px 14px 0; padding: 6px 12px; border-radius: 16px; font-size: 13px; color: var(--warning); background: var(--working-chip-bg); width: fit-content; max-width: calc(100% - 28px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     #working-chip.on { display: block; }
+    /* the second chip: free agents with work in the background (blue, never pulsing); sits beside the working chip */
+    #chip-row { display: flex; flex-wrap: wrap; align-items: flex-start; }
+    #bg-chip { display: none; margin: 8px 14px 0; padding: 6px 12px; border: 0; border-radius: 16px; font: inherit; font-size: 13px; color: var(--blue); background: color-mix(in srgb, var(--blue) 14%, transparent); width: fit-content; max-width: calc(100% - 28px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #bg-chip.on { display: block; }
+    /* the ring: free with work in the background. Hollow, var(--bg-work-ring), 7px + 2px line = 11px, no fill, no pulse; busy and question win */
+    .dot.bg-work:not(.busy):not(.question) { width: 7px; height: 7px; border: 2px solid var(--bg-work-ring); border-radius: 50%; background: transparent; animation: none; box-sizing: content-box; }
+    .agent-bg-line { font-size: 11px; color: var(--bg-work-ring); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
     #working-chip.filtering { background: var(--warning); color: var(--on-warning); }
+    /* All Agents / Teams switch (agent list; the Simple sheet reuses it as .sa-switch) */
+    .view-switch, .sa-switch { display: flex; gap: 4px; margin: 8px 14px 0; padding: 3px; border-radius: 12px; background: var(--bg-card); border: 1px solid var(--border); }
+    .view-switch button, .sa-switch button { flex: 1; min-height: 40px; padding: 0 12px; border-radius: 9px; font-size: 14px; font-weight: 600; color: var(--text-dim); }
+    .view-switch button.on, .sa-switch button.on { background: var(--accent); color: var(--on-accent); }
+    .sa-switch { flex: none; margin: 0 0 8px; }
+    /* Teams view: indent by depth, fold button, small labels, notes */
+    /* Teams list (phone), as designed in teams-list-design.md. Rows are flat: a boss (main 60px / 16px name; a shared or Other agent 48px / 14px), its
+       people one step in (leader 48px / 14px, worker 36px / 13px grey), a leader's workers one more step. Page x at 390px: main icon 14-50, name 62, dot centre 366;
+       member icon 64-86 name 94; leader icon 64-92 name 102; leader's workers icon 104-126 name 134; joining lines at 32 and 78. The dot stays at the right. */
+    html { --vvh: 100vh; }
+    @supports (height: 100dvh) { html { --vvh: 100dvh; } }   /* JS sets --vvh inline; without dvh the fallback is vh, never an invalid height */
+    .sa-row { --d: 0; }   /* Simple's rows read their depth from --d (set per row inline) */
+    .tm-line { position: relative; --tm-h: 60px; --tm-from: 48px; --tm-x1: 32px; --tm-x2: 78px; }
+    .tm-line.tm-r-leader, .tm-line.tm-r-spec { --tm-h: 48px; --tm-from: 38px; }
+    .tm-line.tm-r-worker { --tm-h: 36px; }
+    .tm-line > .agent-row { width: 100%; text-align: left; cursor: pointer; color: inherit; }   /* a div (role=button) when the row holds the pill button */
+    .tm-line > .agent-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+    .tm-line.tm-r-main > .agent-row { height: 60px; min-height: 60px; padding: 0 19px 0 14px; gap: 12px; }
+    .tm-line.tm-r-main .agent-name { font-size: 16px; line-height: 20px; }
+    .tm-line.tm-r-spec > .agent-row { height: 48px; min-height: 48px; padding: 0 19.5px 0 14px; gap: 12px; }
+    .tm-line.tm-r-spec .agent-icon, .tm-line.tm-r-leader .agent-icon { font-size: 19px; width: 28px; }
+    .tm-line.tm-r-spec .agent-name, .tm-line.tm-r-leader .agent-name { font-size: 14px; }
+    .tm-line.tm-r-leader > .agent-row { height: 48px; min-height: 48px; padding: 0 19.5px 0 64px; gap: 10px; border-bottom: 0; }
+    .tm-line.tm-r-worker > .agent-row { height: 36px; min-height: 36px; padding: 0 20px 0 64px; gap: 8px; border-bottom: 0; }
+    .tm-line.tm-r-worker.tm-lv2 > .agent-row { padding-left: 104px; }
+    .tm-line.tm-r-worker .agent-icon { font-size: 16px; width: 22px; }
+    .tm-line.tm-r-worker .agent-name { font-size: 13px; font-weight: 400; color: var(--text-dim); }
+    .tm-line.tm-r-main .dot { width: 10px; height: 10px; }
+    .tm-line.tm-r-leader .dot, .tm-line.tm-r-spec .dot { width: 9px; height: 9px; }
+    .tm-line.tm-r-worker .dot { width: 8px; height: 8px; }
+    .tm-line .agent-meta { display: flex; flex-direction: column; justify-content: center; }
+    .tm-l1 { display: flex; align-items: center; min-width: 0; white-space: nowrap; }
+    .tm-l1 .agent-name { flex: 0 1 auto; min-width: 0; }   /* the name truncates first; the pill never shrinks */
+    .tm-l1 .lead-badge { flex: none; margin-left: 4px; font-size: 12px; }
+    .tm-live { flex: 0 1000 auto; min-width: 0; margin-left: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; color: var(--warning); }
+    .tm-line.tm-r-main .agent-model, .tm-line.tm-r-main .agent-bg-line { font-size: 12px; line-height: 16px; }
+    .tm-line.tm-r-main .agent-model.working { display: block; white-space: nowrap; }   /* one line: the row keeps its 60px */
+    /* The size pill: 20px tall to look at, a 36px-tall button (at least 36px wide) to hit. The negative margin takes the extra height back, so no row grows. */
+    .tm-pill-btn { flex: none; display: flex; align-items: center; justify-content: flex-start; height: 36px; min-width: 36px; margin: -8px 0 -8px 6px; padding: 0 8px 0 0; background: transparent; color: var(--text-dim); font: inherit; cursor: pointer; }
+    .tm-pill { display: block; height: 20px; padding: 0 7px; border: 1px solid var(--border-strong); border-radius: 10px; font-size: 11.5px; line-height: 18px; white-space: nowrap; }   /* a block, not a flex box: the spaces inside ('12 agents ▾') stay */
+    .tm-pill-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 10px; }
+    /* Joining lines: a line down at --tm-x1 / --tm-x2 and a short tick into each row; they run the full row and stop at the middle of the last one */
+    .tm-v { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--border-strong); pointer-events: none; z-index: 1; }
+    .tm-v.tm-from { top: var(--tm-from); }
+    .tm-v.tm-end { bottom: auto; height: calc(var(--tm-h) / 2); }
+    .tm-tk { position: absolute; top: calc(var(--tm-h) / 2); width: 8px; height: 1px; background: var(--border-strong); pointer-events: none; z-index: 1; }
+    .tm-x1 { left: var(--tm-x1); }
+    .tm-x2 { left: var(--tm-x2); }
+    .tm-note { padding: 2px 14px 8px 62px; font-size: 12px; color: var(--warning); }
+    .tm-nl.tm-lv1 .tm-note { padding-left: 94px; }
+    .tm-nl.tm-lv2 .tm-note { padding-left: 134px; }
+    /* Section headers (Teams · 5, Solo agents · 6, ...): 44px, pinned to the top of the list while it scrolls; a tap folds the section. */
+    .tm-sec-h { position: sticky; top: 0; z-index: 5; height: 44px; min-height: 44px; padding: 0 14px; background: var(--bg-dark); border-bottom: 1px solid var(--border); }
+    .tm-sec-h:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+    .tm-empty { margin: 12px 14px 0; padding: 12px 14px; border-radius: 12px; background: var(--bg-card); border: 1px solid var(--border); font-size: 14px; line-height: 1.4; color: var(--text-dim); }
+    .tm-empty b { color: var(--text); }
+    /* Set up teams: the empty state's button, the line under the Teams list, and the offer / Undo slot above the message box. Text and a real border: visible without a hover. */
+    .tm-setup-btn { display: block; margin-top: 10px; min-height: 44px; padding: 0 16px; border-radius: 10px; border: 1px solid var(--accent); font-size: 14px; font-weight: 600; background: transparent; color: var(--accent-hover); }
+    .tm-setup-btn:disabled { opacity: 0.6; }
+    .tm-setup-line { margin: 12px 14px 0; padding: 10px 14px; border-radius: 12px; border: 1px solid var(--border); font-size: 13px; color: var(--text-dim); }
+    .tm-setup-undo, .team-undo-btn { min-height: 44px; padding: 0 6px; font: inherit; font-weight: 600; color: var(--accent-hover); text-decoration: underline; background: transparent; }
+    .team-offer-slot { padding: 8px 10px 0; max-height: 25vh; max-height: calc(var(--vvh, 100dvh) * 0.25); overflow-y: auto; }   /* never more than a quarter of the visible height */
+    .team-offer-collapsed { padding: 0; }
+    .team-offer-expand { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; min-height: 36px; padding: 0 10px; font-size: 13px; line-height: 1.4; text-align: left; white-space: nowrap; overflow: hidden; }
+    .team-offer-expand b { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+    .team-offer-more { flex: none; color: var(--accent-hover); text-decoration: underline; }
+    /* Tight (the box has focus or the visible height is short): the "Working on" bar may not push the box */
+    #composer.composer-tight .handoff-cards { max-height: calc(var(--vvh, 100dvh) * 0.2); overflow-y: auto; }
+    .team-offer-slot .question { margin-bottom: 8px; }
+    /* The Undo line: one text line above the "Working on" cards (own row in the same flow), ellipsis when narrow; the list opens below it */
+    .team-undo-line { display: flex; align-items: center; gap: 6px; min-width: 0; margin-bottom: 4px; font-size: 13px; line-height: 1.4; color: var(--text-dim); white-space: nowrap; }
+    .team-undo-line[data-team-undo-toggle] { cursor: pointer; }
+    .team-undo-text { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .team-undo-line .team-undo-btn { flex: none; min-height: 32px; }
+    .team-undo-sep { flex: none; }
+    .team-undo-x { flex: none; margin-left: auto; min-width: 32px; min-height: 32px; padding: 0; font: inherit; font-size: 18px; line-height: 1; color: var(--text-dim); background: transparent; }
+    .team-undo-list { margin-bottom: 4px; padding: 2px 12px; border: 1px solid var(--border); border-radius: 12px; font-size: 13px; color: var(--text-dim); }
+    .team-undo-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    /* Build Team (admins): the "Solo · Build team" line under a row, the Teams button, the menu entry; 44px touch targets */
+    .build-team-link { min-height: 44px; padding: 0 8px; margin-left: -8px; font-size: 13px; font-weight: 600; color: var(--accent-hover); text-decoration: underline; background: transparent; }
+    .build-team-link:disabled, .build-team-btn:disabled { color: var(--text-tertiary); text-decoration: none; opacity: .7; }
+    /* a main agent with no team: "Solo · Build team" is the row's own second line (same height as 'team of 3'); the link's tap area grows to 37px by padding that the negative margin takes back */
+    .agent-build-sub { overflow: visible; white-space: nowrap; text-overflow: clip; line-height: 1.25; }   /* one line, as tall as every other row (All Agents and Teams); Build team stays whole */
+    .agent-build-sub .build-team-link { display: inline-block; min-height: 0; padding: 10px 8px; margin: -10px -8px -10px -2px; font-size: inherit; line-height: inherit; cursor: pointer; }
+    .agent-build-sub .build-team-link[aria-disabled="true"] { color: var(--text-tertiary); text-decoration: none; opacity: .7; }
+    .agent-build-only .build-team-link { margin-left: -8px; }   /* the link alone on a main row's second line: its visible text starts at the name's x (the 8px padding is the tap area, taken back by the margin) */
+    .build-team-btn { min-height: 44px; padding: 0 16px; border-radius: 10px; font-size: 14px; font-weight: 600; background: var(--accent); color: var(--on-accent); }
+    .question .qchecks { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
+    .question .qcheck { display: flex; align-items: flex-start; gap: 12px; min-height: 48px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-card); }
+    .question .qcheck input { flex: none; width: 24px; height: 24px; margin: 0; accent-color: var(--accent); }
+    .question .qcheck strong { display: block; font-size: 15px; color: var(--text); }
+    .question .qcheck small { display: block; margin-top: 2px; font-size: 12px; color: var(--text-dim); }
     .reattach { font-size: 12px; color: var(--warning); margin-top: 6px; }
     /* Provider pacing: slim amber bar under the header of every screen (tap to resume full parallel) */
     #health-notice { flex-shrink: 0; box-sizing: border-box; width: 100%; padding: 6px 12px; background: var(--health-notice-bg); color: var(--on-health-notice); font-size: 13px; font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }
@@ -510,6 +610,21 @@
     .tsn-grip::after { content: ''; width: 44px; height: 4px; border-radius: 2px; background: var(--tsn-grip-bg); }
     .tsn.closed .tsn-body, .tsn.closed .tsn-grip { display: none; }
     .tsn-sheet .rsn-sheet-title { color: var(--tool-text); }
+    /* A run of hub-started turns the main view leaves out: ONE quiet line (a button, 36 px or more) in its place; opens to cards */
+    .run-wrap { align-self: stretch; min-width: 0; }
+    .run-line { display: flex; flex-wrap: wrap; align-items: center; gap: 0; width: 100%; min-height: 36px; box-sizing: border-box; padding: 4px 8px; border: 0; background: transparent; color: var(--text-tertiary); font: inherit; font-size: 12px; text-align: left; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+    .run-chev { flex: 0 0 auto; width: 1em; margin-right: 8px; text-align: center; color: var(--text-dim); }
+    /* the kinds may take two lines (then an ellipsis); the time span is never cut: it sits whole after them or on the second line */
+    .run-kinds { flex: 0 1 auto; min-width: 0; max-width: calc(100% - 1em - 8px); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; text-overflow: ellipsis; }
+    .run-when { flex: 0 0 auto; white-space: pre; }
+    /* a card inside a run: the title shrinks (ellipsis) before the reply's first line does, which keeps about 15 characters */
+    .run-body .auto-label { flex: 0 1 auto; min-width: 0; }
+    .run-body .auto-line { flex: 1 1 0; min-width: 15ch; }
+    .run-more-btn { font: inherit; color: var(--text-dim); background: none; border: 0; padding: 0; text-decoration: underline; cursor: pointer; }
+    .run-body { display: flex; flex-direction: column; gap: 8px; margin: 4px 0 2px 10px; padding-left: 8px; border-left: 1px solid var(--auto-divider); }
+    .run-body[hidden] { display: none; }
+    .run-more, .run-error { padding: 2px 8px; font-size: 12px; color: var(--text-tertiary); }
+    .run-error { color: var(--error); }
     .chat-view-hidden { display: none !important; }
     .chat-busy-card { align-self: stretch; max-width: 100%; box-sizing: border-box; font-size: 12px; color: var(--text-tertiary); text-align: center; padding: 4px 10px; overflow-wrap: anywhere; }   /* wraps: the whole line (what it waits on) stays readable */
     .msg-time .archive-mark { font-size: 10px; opacity: .8; }
@@ -562,7 +677,7 @@
       font-size: 16px; font-family: inherit; color: var(--text); background: var(--bg-input);
       border: 1px solid var(--border-strong); border-radius: 12px; padding: 10px 12px; min-height: 44px; outline: none;
     }
-    #msg-input { flex: 1; min-width: 0; max-height: 140px; resize: none; line-height: 1.3; }
+    #msg-input { flex: 1; min-width: 0; max-height: 140px; max-height: min(140px, calc(var(--vvh, 100dvh) * 0.4)); overflow-y: auto; resize: none; line-height: 1.3; }
     #msg-input:focus { border-color: var(--accent); }
     #send-btn { min-width: 44px; min-height: 44px; border-radius: 22px; background: var(--accent); color: var(--on-accent); font-size: 18px; }
     #send-btn.stop { background: var(--error); }
@@ -601,6 +716,8 @@
     #menu.open { display: block; }
     #menu a, #menu button { display: flex; align-items: center; width: 100%; min-height: 48px; padding: 0 16px; text-align: left; color: var(--text); text-decoration: none; font-size: 15px; }
     #menu a:active, #menu button:active { background: var(--border); }
+    #menu #menu-optimize-team { flex-direction: column; align-items: flex-start; justify-content: center; }
+    #menu .menu-sub { font-size: 12px; color: var(--text-tertiary); }
     #menu .danger { color: var(--error); }
     #toast { position: fixed; left: 50%; bottom: calc(80px + var(--sab)); transform: translateX(-50%); background: var(--border-strong); color: var(--text); padding: 10px 16px; border-radius: 20px; font-size: 14px; z-index: 30; display: none; max-width: 90%; text-align: center; }
     #toast.on { display: block; }
@@ -748,6 +865,12 @@
   #mic-btn.listening { background: var(--voice-listening); color: var(--on-voice-listening); border-color: var(--voice-listening); }   /* a Tap to talk call while listening: green, not the red of recording or Hang up */
   #mic-btn[data-press]:not(.listening) { background: var(--voice-ready); color: var(--on-voice-ready); border-color: var(--voice-ready); }   /* a Tap to talk call, idle: the ready ink (hands-free never sets data-press, so .call stays red) */
   #mic-btn.busy { opacity: .55; pointer-events: none; }
+  /* The one-time hint: a callout above the composer's row, an arrow down at the mic; inside a 390 px screen, never over the box or Send. */
+  .voice-hint { --arrow-x: 60%; position: absolute; right: 8px; z-index: 32; box-sizing: border-box; width: min(250px, calc(100vw - 16px)); display: flex; align-items: flex-start; gap: 6px; padding: 9px 6px 9px 12px; border-radius: 12px;
+    background: var(--bg-card); color: var(--text); border: 1px solid var(--border-strong, var(--border)); box-shadow: 0 -4px 18px var(--shadow-color); font-size: 14px; line-height: 1.35; }
+  .voice-hint > span { flex: 1; }
+  .voice-hint::after { content: ''; position: absolute; top: 100%; left: var(--arrow-x, 60%); width: 10px; height: 10px; margin-top: -6px; background: var(--bg-card); border-right: 1px solid var(--border-strong, var(--border)); border-bottom: 1px solid var(--border-strong, var(--border)); transform: rotate(45deg); }
+  .voice-hint-x { flex: none; min-width: 32px; min-height: 32px; margin: -6px -2px -6px 0; border: 0; background: none; color: var(--text-dim); font-size: 20px; line-height: 1; cursor: pointer; }
   #voice-level { height: 4px; margin: 0 2px 6px; border-radius: 2px; background: var(--border); overflow: hidden; }
   #voice-level[hidden] { display: none; }
   #voice-level i { display: block; height: 100%; width: 0; background: var(--error); transition: width .08s linear; }
@@ -856,6 +979,7 @@
   .vs-enable[hidden], .vs-enable [hidden] { display: none; }
   .vs-enable-text, .vs-progress-line { margin: 0; padding: 10px 12px; border-radius: 10px; background: var(--bg-card); border: 1px solid var(--border); font-size: 14px; }
   .vs-progress { width: 100%; }
+  .vs-enable-text.vs-raw { font-size: 12px; color: var(--text-dim); word-break: break-word; }   /* the raw error for an admin: small text */
   .vs-row { display: flex; justify-content: space-between; align-items: center; }
   .vs-level { width: 100%; min-height: 32px; accent-color: var(--accent); }
   .vs-meter { height: 10px; border-radius: 5px; background: var(--border); overflow: hidden; }
@@ -928,6 +1052,16 @@
   .handoff-cards .ho-list .ho-card:not(.ho-ended) { padding: 6px 10px; }
   .handoff-cards .ho-strip.ho-flash { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 15%, var(--bg-input)); }
   @media (prefers-reduced-motion: reduce) { .handoff-cards .ho-strip, .handoff-cards .ho-chev { transition: none; } }
+  /* The "Working on" panel (lib/ui-hand-off-card.js renderPanel): the strip header keeps its look, plus the ring and one row per item */
+  .handoff-cards .ho-strip .wo-ring { flex: none; width: 7px; height: 7px; border: 2px solid var(--bg-work-ring); border-radius: 50%; background: transparent; box-sizing: content-box; }
+  .handoff-cards .wo-row { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; align-items: start; min-width: 0; padding: 6px 10px; font-size: 13px; color: var(--text); background: var(--bg-input); border: 1px solid var(--border); border-radius: 10px; box-sizing: border-box; }
+  .handoff-cards .wo-kind { grid-column: 1 / -1; font-size: 11px; color: var(--text-dim); }
+  .handoff-cards .wo-title { grid-column: 1; min-width: 0; font-weight: 600; overflow-wrap: anywhere; }
+  .handoff-cards .wo-sub { grid-column: 1; min-width: 0; font-size: 12px; color: var(--text-dim); overflow-wrap: anywhere; }
+  .handoff-cards .wo-row .ho-status, .handoff-cards .wo-row .wo-stop { grid-column: 2; grid-row: 2 / span 2; align-self: center; min-height: 32px; padding: 0 12px; font: inherit; font-size: 13px; border-radius: 8px; cursor: pointer; background: transparent; }
+  .handoff-cards .wo-row .ho-status { color: var(--text); border: 1px solid var(--border-strong, var(--border)); text-decoration: none; }
+  .handoff-cards .wo-row .wo-stop { color: var(--pill-failed); border: 1px solid var(--pill-failed); }
+  .handoff-cards .wo-quiet { padding: 6px 10px; font-size: 13px; color: var(--text-dim); border: 1px dashed var(--border); border-radius: 10px; }
   .research-lines .research-line { cursor: default; white-space: normal; overflow-wrap: anywhere; overflow: visible; min-height: 0; }
   /* The hand-off Status sheet (lib/ui-hand-off-card.js openStatus): a bottom sheet at normal reading size */
   .ho-sheet { position: fixed; inset: auto 0 0 0; margin: 0; padding: 0; border: 0; border-top: 1px solid var(--border); border-radius: 14px 14px 0 0; background: var(--bg-secondary, var(--bg-input)); color: var(--text); width: 100%; max-width: 100%; max-height: 85vh; overflow: hidden; box-sizing: border-box; }
@@ -1075,7 +1209,7 @@ html.mm-simple [hidden] { display: none !important; }
 
 /* Hidden in Simple: the page's own bars and menus, tool rows, worker cards, reasoning panels, badges, chips */
 html.mm-simple .topbar, html.mm-simple #chat-meta, html.mm-simple #tabbar, html.mm-simple #tab-activity, html.mm-simple #menu,
-html.mm-simple .pacing-bar, html.mm-simple #working-chip, html.mm-simple #update-card, html.mm-simple #screen-activity,
+html.mm-simple .pacing-bar, html.mm-simple #working-chip, html.mm-simple #bg-chip, html.mm-simple #update-card, html.mm-simple #screen-activity,
 html.mm-simple .tsn, html.mm-simple .feed, html.mm-simple .frow, html.mm-simple .rsn, html.mm-simple .rsn-sheet, html.mm-simple .tsn-sheet,
 html.mm-simple #chat-workers-btn, html.mm-simple .wk-chip, html.mm-simple #chat-model, html.mm-simple #chat-model-pick, html.mm-simple #chat-effort-wrap,
 html.mm-simple #chat-plan, html.mm-simple #chat-ctx, html.mm-simple #menu-credit, html.mm-simple #menu-version, html.mm-simple #agents-approvals,
@@ -1086,7 +1220,7 @@ html.mm-simple #cp-levels, html.mm-simple .cp-dnd, html.mm-simple .cp-disp, html
 html.mm-simple .simple-wait, html.mm-simple .simple-auto-hide { display: none !important; }
 
 /* Top bar: brand mark, centred pill, avatar */
-html.mm-simple #simple-top { display: flex; align-items: center; gap: 6px; min-height: 64px; padding: 6px 12px; flex: none; }
+html.mm-simple #simple-top { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-height: 64px; padding: 6px 12px; flex: none; }
 html.mm-simple .st-mark { width: 34px; height: 34px; border-radius: 50%; background: var(--accent); color: var(--on-accent); display: grid; place-items: center; font-weight: 700; font-size: 17px; flex: none; }
 html.mm-simple .st-pill { flex: 1 1 auto; justify-content: center; min-width: 0; max-width: 100%; min-height: 48px; display: flex; align-items: center; gap: 8px; padding: 0 16px; border-radius: 24px; border: 1px solid var(--border); background: var(--bg-card); box-shadow: var(--sp-shadow); color: var(--text); font-size: 17px; }
 html.mm-simple .st-pill .st-pic { font-size: 22px; line-height: 1; flex: none; }
@@ -1098,11 +1232,34 @@ html.mm-simple .simple-theme-btn[hidden], .mode-toggle[hidden] { display: none !
 html.mm-simple .simple-theme-btn { flex: none; min-height: 44px; display: inline-flex; align-items: center; gap: 6px; padding: 0 10px; border-radius: 22px; border: 1px solid var(--border); background: var(--bg-card); color: var(--text-dim); font-size: 14px; white-space: nowrap; }
 html.mm-simple .simple-theme-btn .stb-ic { font-size: 18px; line-height: 1; }
 html.mm-simple .mode-toggle { font-size: 14px; color: var(--text-dim); }
-@media (max-width: 420px) { html.mm-simple .st-pill .st-to, html.mm-simple .simple-theme-btn .stb-lab { display: none; } html.mm-simple .st-pill { padding: 0 10px; gap: 6px; } html.mm-simple .simple-theme-btn { min-width: 44px; justify-content: center; padding: 0 6px; } }
-html.mm-simple #simple-top .st-mark { margin-right: 2px; }
-@media (max-width: 420px) { html.mm-simple #simple-top .st-mark { display: none; } }   /* a narrow phone: the agent's name gets the room */
+html.mm-simple #simple-top .st-mark { margin-inline-end: 2px; }
+/* A phone (under 700px): two rows, whatever the width. Row 1: brand mark, then Simple switch, theme button (icon and words), avatar. Row 2: the 'Talking to: icon name' pill, full width; the name truncates with an ellipsis and never disappears. No word is cut to a bare dot or icon on one screen only. */
+@media (max-width: 699px) {
+  html.mm-simple #simple-top .st-mark { order: 1; margin-inline-end: auto; }
+  html.mm-simple #simple-top .mode-toggle { order: 2; }
+  html.mm-simple #simple-top .simple-theme-btn { order: 3; }
+  html.mm-simple #simple-top .st-avatar { order: 4; }
+  html.mm-simple #simple-top .st-pill { order: 5; flex: 1 1 100%; width: 100%; }
+}
+/* A very narrow phone (under 350px; measured: mark 34 + switch 89 + theme button 121 + avatar 44 + gaps and padding 42 = 330px): row 1 cannot hold the theme button's words, so the button is not in the bar; the same three choices stay in the settings sheet (Appearance). */
+@media (max-width: 349px) { html.mm-simple #simple-top .simple-theme-btn { display: none; } }
 
 /* Agent list screen (only reached when there is no chat to open) */
+html.mm-simple #screen-agents .view-switch { display: none; }
+/* Simple Teams: a direct report starts right of its boss's name. Main row: padding 12 + icon 34 + gap 14 -> name at 60; --sa-step 50 puts a depth-1 icon at 62. The line hangs under the boss's icon centre (29). The wide side list sets its own (40 / 25): padding 12 + icon 26 + gap 10 -> name at 48; depth-1 icon at 52. */
+html.mm-simple { --sa-step: 50px; --sa-bar: 29px; }
+html.mm-simple .sa-row.sa-kid { position: relative; }
+html.mm-simple .sa-row.sa-kid2::after { content: ""; position: absolute; left: var(--sa-bar2); top: 0; bottom: 0; width: 1px; background: var(--border-strong); }   /* a leader's worker: a second line, under the leader's icon centre (sheet: icon 62 + 15 = 77; side list below: 52 + 12 = 64) */
+html.mm-simple .sa-row.sa-kid::before { content: ""; position: absolute; left: var(--sa-bar); top: 0; bottom: 0; width: 1px; background: var(--border-strong); }
+html.mm-simple .sa-row .sa-txt small.sa-sub { display: block; }
+/* Simple: 'Solo · Build team' on a main agent's own second line (no ⋯ menu here). The link's tap area is 37px tall by padding that the negative margin takes back; the small words may not clip it. */
+html.mm-simple .sa-txt small.sa-sub.sa-build-sub { overflow: visible; }
+html.mm-simple .sa-sub .build-team-link { display: inline-block; min-height: 0; padding: 10px 8px; margin: -10px -8px -10px -2px; font-size: inherit; font-weight: 600; line-height: inherit; color: var(--accent-hover); text-decoration: underline; background: transparent; cursor: pointer; }
+html.mm-simple .sa-sub .build-team-link[aria-disabled="true"] { color: var(--text-tertiary); text-decoration: none; opacity: .7; }
+html.mm-simple .sa-build-sub .build-team-link { margin-left: -8px; }   /* alone on the line: the text starts at the name's x */
+html.mm-simple #simple-side .sa-txt small.sa-sub { display: block; font-size: 12px; }
+html.mm-simple .sa-fold b { font-weight: 600; font-size: 17px; color: var(--text-dim); }
+html.mm-simple #simple-side .sa-fold b { font-size: 15px; }
 html.mm-simple .agent-row { min-height: 64px; padding: 10px 16px; font-size: 18px; }
 html.mm-simple .agent-row .agent-model { font-size: 14px; color: var(--text-tertiary); }
 
@@ -1120,6 +1277,8 @@ html.mm-simple .msg.assistant pre code { background: none; }
 html.mm-simple .msg.simple-auto { align-self: center; max-width: 100%; padding: 0; background: none; color: var(--text-tertiary); font-size: 14px; }
 html.mm-simple .note { color: var(--text-tertiary); font-size: 14px; }
 html.mm-simple .note.simple-auto-line { margin: -10px 0; }
+html.mm-simple .run-line { color: var(--text-tertiary); font-size: 12.5px; }
+html.mm-simple .run-body { border-left-color: var(--border); }
 /* The running-turn status line ("Agent: running ...") and the orange interjection look are Advanced only: an interjection is an ordinary user bubble */
 html.mm-simple .reattach, html.mm-simple .ij-seg .note.interject { display: none !important; }
 html.mm-simple .ij-seg { margin: 14px 0 14px auto; padding: 12px 18px; width: fit-content; max-width: 86%; border: 0; border-radius: 22px 22px 6px 22px; background: var(--sp-bubble); color: var(--text); font-size: 18px; line-height: 1.55; }
@@ -1150,7 +1309,8 @@ html.mm-simple .st-consult { color: var(--text-dim); font-size: 14px; padding-le
 @media (prefers-reduced-motion: reduce) { html.mm-simple .st-dot { animation: none; } }
 
 /* Composer: text on top; + / reasoning level on the left, mic / voice call / send on the right */
-html.mm-simple #composer { position: relative; background: var(--bg-dark); border-top: 0; padding: 8px 12px calc(12px + var(--sab)); }
+html.mm-simple #composer { position: relative; background: var(--bg-dark); border-top: 0; padding: 8px 12px calc(6px + var(--sab)); }   /* under the box: the safe-area inset plus 6px, nothing more (it was 12px: the box rode ~25pt too high in a home-screen app) */
+html.mm-simple body.kbd-up #composer { padding-bottom: 6px; }   /* the ON-SCREEN keyboard is up (box focused and the visible height keyboard-sized shorter): the home indicator is under it, so the inset buys nothing. A hardware keyboard focuses the box with no soft keyboard and keeps the inset (body.kbd alone follows focus) */
 html.mm-simple #composer .row { flex-wrap: wrap; align-items: center; gap: 4px 6px; border: 1px solid var(--border); background: var(--bg-card); border-radius: 28px; padding: 8px 10px 10px; box-shadow: var(--sp-shadow); margin: 0 auto; }
 html.mm-simple #composer .row::after { content: ''; flex: 1 1 0; order: 3; }
 html.mm-simple #msg-input { order: -1; flex: 0 0 100%; min-height: 48px; padding: 10px; font-size: 18px; line-height: 1.4; background: transparent; border: 0; color: var(--text); }
@@ -1164,6 +1324,16 @@ html.mm-simple #simple-call-btn.in-call { background: var(--error); box-shadow: 
 html.mm-simple #mic-btn.call { display: none; }   /* during a call the red hang-up is #simple-call-btn: one call button */
 html.mm-simple #mic-btn { display: none !important; }   /* no dictation in Simple (the phone keyboard has its own): the call button is the only voice control; its [hidden] still says whether voice is on */
 html.mm-simple #send-btn { order: 6; min-width: 52px; min-height: 52px; border-radius: 50%; background: var(--accent); color: var(--on-accent); font-size: 20px; }
+/* 320 px: + / chip / call / send must share one line: tighter side padding and gaps, 44px taps, and the chip may shrink (its word stays; it ellipsizes only if it must). After the base rules above, so it wins. */
+@media (max-width: 340px) { /* Simple composer */
+  html.mm-simple #composer { padding-left: 8px; padding-right: 8px; }
+  html.mm-simple #composer .row { gap: 4px 4px; padding: 8px 6px 10px; }
+  html.mm-simple #plus-btn { width: 44px; height: 44px; }
+  html.mm-simple #simple-effort-btn { min-width: 0; flex: 0 1 auto; gap: 4px; padding: 0 10px; }
+  html.mm-simple #simple-effort-btn .lvl-label { overflow: hidden; text-overflow: ellipsis; }
+  html.mm-simple #simple-call-btn { width: 48px; height: 48px; }
+  html.mm-simple #send-btn { min-width: 48px; min-height: 48px; }
+}
 html.mm-simple #send-btn.stop { background: var(--error); }
 html.mm-simple #send-btn.interject { background: var(--simple-interject-bg); color: var(--on-accent); }
 html.mm-simple #plus-sheet { background: var(--bg-card); border-color: var(--border); }
@@ -1207,15 +1377,28 @@ html.mm-simple dialog .btns button { min-height: 48px; border-radius: 24px; }
 html.mm-simple #simple-agents-sheet, html.mm-simple #simple-settings-sheet { margin: auto auto 0; margin-bottom: max(12px, var(--sab)); max-height: 80dvh; overflow-y: auto; }
 html.mm-simple .sa-row { display: flex; align-items: center; gap: 14px; width: 100%; min-height: 60px; padding: 8px 12px; border-radius: 16px; text-align: left; color: var(--text); }
 html.mm-simple .sa-row.sel { background: var(--sp-soft); }
+/* AFTER the base .sa-row padding shorthand above (it used to come before and was overridden: members were drawn left of their boss). A member's icon starts no further left than its boss's NAME (sheet: 12 + 50 = 62 vs name at 12 + 34 + 14 = 60). */
+html.mm-simple .sa-row { padding-left: calc(12px + var(--d, 0) * var(--sa-step)); }
 html.mm-simple .sa-ic { font-size: 26px; width: 34px; text-align: center; flex: none; }
 html.mm-simple .sa-txt { min-width: 0; flex: 1; }
 html.mm-simple .sa-txt b { display: block; font-weight: 600; font-size: 17px; }
 html.mm-simple .sa-txt small { display: block; color: var(--text-tertiary); font-size: 14px; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 html.mm-simple .sa-tick { color: var(--accent); font-weight: 700; flex: none; }
+html.mm-simple .sa-rank-main .sa-txt small { font-size: 0.85rem; }   /* Teams in Simple: three ranks as in the regular Teams view; main is the base row above */
+html.mm-simple .sa-rank-leader { min-height: 54px; }   /* a team leader, one step smaller than a main agent (0.92) */
+html.mm-simple .sa-rank-leader .sa-ic { font-size: 23px; width: 30px; }
+html.mm-simple .sa-rank-leader .sa-txt b { font-size: 15.5px; }
+html.mm-simple .sa-rank-leader .sa-txt small { font-size: 0.8rem; }
+html.mm-simple .sa-rank-worker { min-height: 44px; padding-top: 4px; padding-bottom: 4px; }   /* a worker or a direct report with nobody under it: clearly smaller and quieter */
+html.mm-simple .sa-rank-worker .sa-ic { font-size: 18px; width: 26px; }
+html.mm-simple .sa-rank-worker .sa-txt b { font-size: 14px; font-weight: 500; color: var(--text-dim); }
+html.mm-simple .sa-rank-worker .sa-txt small { font-size: 0.72rem; }
 html.mm-simple .sa-dot { width: 12px; height: 12px; border-radius: 50%; flex: none; background: transparent; }
 html.mm-simple .sa-dot.busy { background: var(--warning); animation: simple-pulse 1.2s ease-in-out infinite; }
+html.mm-simple .sa-dot.bg-work:not(.busy):not(.question) { width: 7px; height: 7px; border: 2px solid var(--bg-work-ring); background: transparent; animation: none; box-sizing: content-box; }
 html.mm-simple .sa-dot.question { background: var(--blue); animation: simple-pulse 1.6s ease-in-out infinite; }
 html.mm-simple .sa-head { margin: 12px 12px 2px; color: var(--text-tertiary); font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+html.mm-simple .sa-fold-arrow { flex: none; display: flex; align-items: center; justify-content: center; min-width: 36px; min-height: 36px; margin: -8px -4px -8px 0; color: var(--text-tertiary); font-size: 16px; cursor: pointer; }   /* a leader's fold arrow (▸ / ▾), a 36px tap target that does not add height to the row */
 html.mm-simple .sa-more .sa-chev { color: var(--text-tertiary); flex: none; font-size: 15px; }
 html.mm-simple .sa-more b { font-weight: 600; font-size: 17px; color: var(--text-dim); }
 @media (prefers-reduced-motion: reduce) { html.mm-simple .sa-dot { animation: none !important; } }
@@ -1250,9 +1433,18 @@ html.mm-simple #simple-side { display: none; }
   html.mm-simple #simple-side .sa-txt { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   html.mm-simple #simple-side .sa-txt b { font-weight: 500; font-size: 16px; }
   html.mm-simple #simple-side .sa-txt small, html.mm-simple #simple-side .sa-tick { display: none; }
+  html.mm-simple #simple-side .sa-row.sa-rank-leader { min-height: 40px; }
+  html.mm-simple #simple-side .sa-rank-leader .sa-ic { font-size: 18px; width: 24px; }
+  html.mm-simple #simple-side .sa-rank-leader .sa-txt b { font-size: 14.5px; }
+  html.mm-simple #simple-side .sa-row.sa-rank-worker { min-height: 36px; padding-top: 3px; padding-bottom: 3px; }
+  html.mm-simple #simple-side .sa-rank-worker .sa-ic { font-size: 16px; width: 22px; }
+  html.mm-simple #simple-side .sa-rank-worker .sa-txt b { font-size: 13px; }
   html.mm-simple #simple-side .sa-dot { width: 10px; height: 10px; }
   html.mm-simple #simple-side .sa-more b { font-size: 15px; }
   html.mm-simple #simple-side .sa-head { margin: 10px 12px 2px; }
+  html.mm-simple #simple-side { --sa-step: 40px; --sa-bar: 25px; }
+  html.mm-simple #simple-side .sa-row { padding-left: calc(12px + var(--d, 0) * var(--sa-step)); }
+  html.mm-simple #simple-side { --sa-bar2: 64px; }
   html.mm-simple .ssd-me { flex: none; display: flex; align-items: center; gap: 10px; width: 100%; min-height: 52px; padding: 4px 8px; margin-top: 6px; border-top: 1px solid var(--border); border-radius: 12px; text-align: left; color: var(--text); }
   html.mm-simple .ssd-me .st-avatar { width: 36px; height: 36px; font-size: 15px; }
   html.mm-simple .ssd-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 16px; }
@@ -1262,16 +1454,56 @@ html.mm-simple #simple-side { display: none; }
   html.mm-simple #approval-sheet { left: 268px; }
   html.mm-simple #toast { left: calc(50% + 130px); }
 }
+/* Simple Teams (phone sheet and wide sidebar), as designed in teams-list-design.md: flat rows, the size pill after the boss's name, one-line members,
+   joining lines. Sheet (page x at 390px, list starts at 36): main icon 54-86 name 101, leader icon 103 name 137, leader's workers icon 139 name 169,
+   member icon 103 name 133, dot centre 346; lines at 70 and 116. The sidebar keeps its own, smaller steps. */
+html.mm-simple { --sa-pl0: 18px; --sa-pl1: 67px; --sa-pl2: 103px; --sa-x1: 34px; --sa-x2: 80px; --sa-hm: 60px; --sa-hl: 50px; --sa-hw: 40px; --sa-fm: 46px; --sa-fl: 38px; --sa-pr: 3px; }
+html.mm-simple #simple-side { --sa-pl0: 12px; --sa-pl1: 52px; --sa-pl2: 92px; --sa-x1: 25px; --sa-x2: 64px; --sa-hm: 48px; --sa-hl: 40px; --sa-hw: 34px; --sa-fm: 37px; --sa-fl: 32px; --sa-pr: 12px; }
+html.mm-simple :is(#simple-agents-sheet, #simple-side) .sa-row.sa-tm { position: relative; --tm-x1: var(--sa-x1); --tm-x2: var(--sa-x2); --tm-h: var(--sa-hm); --tm-from: var(--sa-fm); padding: 0 var(--sa-pr) 0 var(--sa-pl0); height: var(--sa-hm); min-height: var(--sa-hm); cursor: pointer; text-align: left; color: var(--text); }
+html.mm-simple :is(#simple-agents-sheet, #simple-side) .sa-row.sa-tm.sa-kid { padding-left: var(--sa-pl1); }
+html.mm-simple :is(#simple-agents-sheet, #simple-side) .sa-row.sa-tm.sa-kid2 { padding-left: var(--sa-pl2); }
+html.mm-simple :is(#simple-agents-sheet, #simple-side) .sa-row.sa-tm.sa-kid::before, html.mm-simple :is(#simple-agents-sheet, #simple-side) .sa-row.sa-tm.sa-kid2::after { content: none; }   /* the old pseudo lines: the .tm-v spans draw them now */
+html.mm-simple :is(#simple-agents-sheet, #simple-side) .sa-row.sa-tm.sa-rank-leader, html.mm-simple :is(#simple-agents-sheet, #simple-side) .sa-row.sa-tm.sa-rank-spec { --tm-h: var(--sa-hl); --tm-from: var(--sa-fl); height: var(--sa-hl); min-height: var(--sa-hl); }
+html.mm-simple :is(#simple-agents-sheet, #simple-side) .sa-row.sa-tm.sa-rank-worker { --tm-h: var(--sa-hw); height: var(--sa-hw); min-height: var(--sa-hw); padding-top: 0; padding-bottom: 0; }
+html.mm-simple #simple-agents-sheet .sa-row.sa-tm { gap: 15px; }
+html.mm-simple #simple-agents-sheet .sa-row.sa-tm:is(.sa-rank-leader, .sa-rank-worker) { gap: 8px; }
+html.mm-simple #simple-agents-sheet .sa-row.sa-tm.sa-rank-spec { gap: 12px; }
+html.mm-simple #simple-agents-sheet .sa-rank-main .sa-ic { width: 32px; font-size: 26px; }
+html.mm-simple #simple-agents-sheet .sa-rank-spec .sa-ic, html.mm-simple #simple-agents-sheet .sa-rank-leader .sa-ic { width: 26px; font-size: 20px; }
+html.mm-simple #simple-agents-sheet .sa-rank-worker .sa-ic { width: 22px; font-size: 16px; }
+html.mm-simple #simple-agents-sheet .sa-rank-spec .sa-txt b { font-size: 15.5px; font-weight: 500; }
+html.mm-simple .sa-tm .sa-dot { width: 10px; height: 10px; }
+html.mm-simple .sa-tm.sa-rank-leader .sa-dot, html.mm-simple .sa-tm.sa-rank-spec .sa-dot { width: 9px; height: 9px; }
+html.mm-simple .sa-tm.sa-rank-worker .sa-dot { width: 8px; height: 8px; }
+html.mm-simple .sa-tm .sa-txt { display: flex; flex-direction: column; justify-content: center; }
+html.mm-simple .sa-l1 { display: flex; align-items: center; min-width: 0; white-space: nowrap; }
+html.mm-simple .sa-l1 b { display: block; flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }   /* the name truncates first; the pill never shrinks */
+html.mm-simple .sa-l1 .lead-badge { display: inline-block !important; flex: none; margin-left: 5px; font-size: 13px; }   /* the lead's crown shows on the Maestro row in the Simple sheet too (the general Simple rule hides it elsewhere) */
+html.mm-simple .sa-live { flex: 0 1000 auto; min-width: 0; margin-left: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--warning); }
+html.mm-simple .sa-live:empty { display: none; }
+html.mm-simple .sa-tm .sa-tick:empty { display: none; }
+html.mm-simple .sa-tm .sa-txt small.sa-sub { font-size: 14px; line-height: 18px; }
+html.mm-simple .sa-tm .sa-txt small.sa-sub:empty { display: none; }
+html.mm-simple .sa-sub-busy { color: var(--warning); }
+html.mm-simple .sa-sub-bg { color: var(--bg-work-ring); cursor: pointer; }
+html.mm-simple .sa-tm .tm-pill-btn { margin-left: 3px; color: var(--text-dim); }
+html.mm-simple .sa-tm .tm-pill { font-size: 12px; border-color: var(--border-strong); }
+/* The size pill keeps its words ('12 agents ▾') in the wide sidebar too (the owner 2026-11-24 07:48: "Everything should alwasy be consistent."): the NAME is what gives way (.sa-l1 b: ellipsis). */
+html.mm-simple .sa-sec-h { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; justify-content: space-between; width: 100%; height: 44px; padding: 0 14px 0 18px; background: var(--bg-card); color: var(--text-tertiary); font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; text-align: left; }
+html.mm-simple #simple-side .sa-sec-h { padding-left: 12px; background: var(--bg-dark); }
+html.mm-simple .sa-sec-g { letter-spacing: 0; }
+html.mm-simple .sa-tm:focus-visible, html.mm-simple .sa-sec-h:focus-visible, html.mm-simple .tm-pill-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 /* (above: toasts centred on the chat column, not under the sidebar) */
 </style>
 </head>
 <body>
   <section id="screen-agents" class="screen active">
     <div id="health-notice" role="status" hidden></div>
-    <div class="topbar" id="agents-head"><h1>My Maestro AI</h1><select id="owner-view" hidden aria-label="Whose agents to show"></select><a class="iconbtn" href="/?desktop=once" title="Full UI" style="text-decoration:none">&#x1F5A5;</a><button type="button" class="mode-toggle" role="switch" aria-checked="false" title="Simple view on/off" hidden><span class="mt-lab">Simple</span><span class="mt-track"><span class="mt-knob"></span></span></button><button class="iconbtn" id="agents-refresh" aria-label="Refresh">&#x21BB;</button><button class="iconbtn" id="agents-menu-btn" aria-label="Menu">&#x22EE;</button></div>
+    <div class="topbar" id="agents-head"><h1>My Maestro AI</h1><select id="owner-view" hidden aria-label="Whose agents to show"></select><a class="iconbtn" href="/?desktop=once" title="Full UI" style="text-decoration:none">&#x1F5A5;</a><button type="button" class="mode-toggle" role="switch" aria-checked="false" title="Simple view on/off" hidden><span class="mt-lab">Simple</span><span class="mt-track"><span class="mt-knob"></span></span></button><button class="iconbtn" id="agents-refresh" aria-label="Reload" title="Reload">&#x21BB;</button><button class="iconbtn" id="agents-menu-btn" aria-label="Menu">&#x22EE;</button></div>
     <div id="update-card" hidden></div>
     <button class="pacing-bar" title="Tap to resume full parallel"></button>
-    <button id="working-chip" title="Tap to show only the agents that are working"></button>
+    <div id="chip-row"><button id="working-chip" title="Tap to show only the agents that are working"></button><button id="bg-chip" title="Tap to open the first of these agents with its background work"></button></div>
+    <div class="view-switch" role="tablist" aria-label="Agent list view"><button type="button" data-view="all" role="tab" aria-selected="true">All Agents</button><button type="button" data-view="teams" role="tab" aria-selected="false">Teams</button></div>
     <div class="scroll" id="agents-list"></div>
   </section>
 
@@ -1280,7 +1512,7 @@ html.mm-simple #simple-side { display: none; }
       <button class="iconbtn" id="chat-back" aria-label="Back">&#x2190;</button>
       <span class="agent-icon" id="chat-icon"></span>
       <div id="chat-title"><b id="chat-name">Chat</b><span class="sub-row"><button type="button" class="sub" id="chat-busy" hidden></button></span></div>
-      <button class="iconbtn" id="chat-resync" aria-label="Re-sync" title="Re-sync with the hub">&#x21BB;</button>
+      <button class="iconbtn" id="chat-resync" aria-label="Reload" title="Reload">&#x21BB;</button>
       <button class="iconbtn notify-chip" id="chat-notify-btn" type="button" aria-haspopup="dialog" aria-label="Notifications for this agent" title="Notifications for this agent"><span class="bicon">&#x1F514;</span><span class="nlabel"> Notify</span></button>
       <button class="iconbtn stop-remote" id="chat-stop-btn" aria-label="Stop this agent" title="Stop this agent's current turn" hidden>&#x25A0;<span class="stop-label"> Stop</span></button>
       <button type="button" class="mode-toggle" role="switch" aria-checked="false" title="Simple view on/off" hidden><span class="mt-lab">Simple</span><span class="mt-track"><span class="mt-knob"></span></span></button>
@@ -1310,6 +1542,7 @@ html.mm-simple #simple-side { display: none; }
       <p id="cp-help">Hands-free works with the app open and the screen on, also through a car's Bluetooth hands-free or a Bluetooth speaker. Locked-screen use and car apps (CarPlay, Android Auto) are not supported. Tap to talk: tap the mic, speak, tap again to send (or hold it while you speak and let go).</p>
     </div>
     <div id="composer">
+      <div id="team-offer-slot" class="team-offer-slot" hidden></div>
       <div id="handoff-cards" class="handoff-cards" hidden></div>
       <div id="research-lines" class="handoff-cards research-lines" hidden></div>
       <div id="previews"></div>
@@ -1416,6 +1649,9 @@ html.mm-simple #simple-side { display: none; }
     <button id="menu-reload">&#x21BB; Reload app</button>
     <button id="menu-profile">&#x1F464; Profile</button>
     <button id="menu-settings">&#x2699; Settings</button>
+    <a id="menu-agent-settings" class="chat-only" href="/agent-settings.html" hidden>&#x2699; Agent settings</a>
+    <button id="menu-build-team" class="chat-only" hidden>&#x1F3D7; Build team</button>
+    <button id="menu-optimize-team" class="chat-only" hidden><span id="menu-optimize-label">&#x1F50D; Optimize team</span><small id="menu-optimize-sub" class="menu-sub">reads the last 30 days</small></button>
     <!-- This device: how this phone shows things and what it does; what you set for the hub is in Settings (admins) -->
     <div class="menu-group" data-group="device" role="group" aria-labelledby="menu-gt-device">
       <div class="menu-group-title" id="menu-gt-device">This device</div>
@@ -1499,10 +1735,14 @@ html.mm-simple #simple-side { display: none; }
   <script src="/ui-face-player.js"></script>
   <script src="/ui-call-display.js"></script>
   <script src="/ui-file-card.js"></script>
+  <script src="/ui-agent-dot.js"></script>
   <script src="/ui-hand-off-card.js"></script>
+  <script src="/ui-claude-signin.js"></script>
   <script src="/ui-code-copy.js"></script>
   <script src="/ui-team-card.js"></script>
   <script src="/ui-simple.js"></script>
+  <script defer src="/ui-model-offer-groups.js"></script>
+  <script src="/ui-teams.js"></script>
   <script src="/password-eye.js"></script>
   <script>document.addEventListener('DOMContentLoaded', function () { PasswordEye.watch(); });</script>
   <script src="mobile.js"></script>

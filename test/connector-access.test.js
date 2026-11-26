@@ -134,7 +134,9 @@ test('owner turns: only a signed-in admin\'s own message marks a turn, and the m
   const sdk = fs2.readFileSync(p.join(__dirname, '..', 'lib', 'sdk-chat.js'), 'utf8');
   assert.match(server, /const HUB_ONLY_CHAT_FIELDS = \[[^\]]*'owner_turn'/, 'programs cannot send owner_turn themselves');
   assert.match(server, /body\.owner_turn = req\.hubIdentKind === 'user' && !req\.hubPendingTotp && !req\.hubToken && !req\.hubService && access\.isAdmin\(req\.hubUser\)/);
-  assert.match(sdk, /const ownerTurn = owner_turn === true && !ephemeral && !tiger_team && !consulted_by && !\(origin && typeof origin === 'object' && origin\.kind\)/);
+  // Build Team: the one hub-started origin that is still an owner turn, and only when the route marked a trusted admin session (ctx.buildTeam).
+  // changed: Set up teams (origin team_setup) is a second hub-started owner turn, with the same guard: only when the route marked a trusted admin session (ctx.teamSetup -> trustedTeamSetup). Every other condition is unchanged.
+  assert.match(sdk, /const ownerTurn = owner_turn === true && !ephemeral && !tiger_team && !consulted_by && \(!\(origin && typeof origin === 'object' && origin\.kind\) \|\| \(origin\.kind === 'build_team' && trustedBuildTeam\) \|\| \(origin\.kind === 'team_setup' && trustedTeamSetup\)\)/);
   assert.match(sdk, /if \(ownerTurn\) ownerTurnAgents\.add\(agent\);/);
   assert.match(sdk, /finally \{[\s\S]{0,400}if \(ownerTurn\) ownerTurnAgents\.delete\(agent\);/);
 });

@@ -37,7 +37,7 @@ test('openChat fetches the history of the stored view with chatViewHistoryUrl an
   assert.match(oc, /openSeq !== chatOpenSeq\) return;/, 'a late answer of an older load is dropped');
   const rr = cut('async function rereadHistory(', 'function reasoningEnd(');
   assert.match(rr, /chatViewHistoryUrl\(agent, \{ view: viewNow\(\), limit: 50 \}\)/);
-  assert.match(rr, /chatHistory = older\.length \? chatViewMergeOlder\(older, hist\) : hist;[\s\S]*histGen\+\+;\s*return true;/);
+  assert.match(rr, /chatHistory = older\.length \? chatViewMergeRuns\(chatViewMergeOlder\(older, hist\)\) : hist;[\s\S]*histGen\+\+;\s*return true;/);
   // the re-attach read-back keeps the bare form
   assert.match(cut('async function reattachCheck(', 'const ui = ra.text'), /api\(`\/api\/history\/\$\{encodeURIComponent\(ra\.agent\)\}`/);
   const vn = new Function('chatViewGet', 'localStorage', `${cut('function viewNow()', 'function paintViewMenu()')}; return viewNow;`)(V.chatViewGet, store('all'));
@@ -64,10 +64,10 @@ function loadEarlierHarness({ pages, current = 'forge', chatNext = 'log:100', ch
     const p = pages.shift();
     return { ok: true, json: async () => p };
   };
-  const mod = new Function('api', 'viewNow', 'chatEl', '$', 'chatViewHistoryUrl', 'chatViewMergeOlder', 'renderHistory', 'toast', 'streams', 'reattaches', 'followedHubTurn',
+  const mod = new Function('api', 'viewNow', 'chatEl', '$', 'chatViewHistoryUrl', 'chatViewMergeOlder', 'chatViewMergeRuns', 'renderHistory', 'toast', 'streams', 'reattaches', 'followedHubTurn',
     `let current = ${JSON.stringify(current)}, chatNext = ${JSON.stringify(chatNext)}, chatHistory = ${JSON.stringify(chatHistory)}, chatLoadingOlder = false, chatOpenSeq = 1, histGen = 0, stick = true;
      ${src}; return { loadEarlier, get: () => ({ chatNext, chatHistory, chatLoadingOlder, stick, histGen }) };`)(
-    api, () => 'main', () => ({ querySelector: () => btn }), () => scroller, V.chatViewHistoryUrl, V.chatViewMergeOlder,
+    api, () => 'main', () => ({ querySelector: () => btn }), () => scroller, V.chatViewHistoryUrl, V.chatViewMergeOlder, V.chatViewMergeRuns,
     () => { calls.render++; scroller.scrollHeight = 1600; }, (m) => calls.toasts.push(m), streams, new Map(), () => followed);
   return { mod, calls, btn, scroller };
 }
@@ -125,10 +125,10 @@ test('Load earlier: a reply that began while the page was fetched (stream, re-at
       if (kind === 'stream') streams.set('forge', {}); else if (kind === 'reattach') reattaches.set('forge', {}); else followed = true;
       return { ok: true, json: async () => ({ history: [{ ts: '1', role: 'user', content: 'a' }], next: 'log:60' }) };
     };
-    const mod = new Function('api', 'viewNow', 'chatEl', '$', 'chatViewHistoryUrl', 'chatViewMergeOlder', 'renderHistory', 'toast', 'streams', 'reattaches', 'followedHubTurn',
+    const mod = new Function('api', 'viewNow', 'chatEl', '$', 'chatViewHistoryUrl', 'chatViewMergeOlder', 'chatViewMergeRuns', 'renderHistory', 'toast', 'streams', 'reattaches', 'followedHubTurn',
       `let current = 'forge', chatNext = 'log:100', chatHistory = [{ ts: '3', role: 'user', content: 'c' }], chatLoadingOlder = false, chatOpenSeq = 1, histGen = 0, stick = true;
        ${src}; return { loadEarlier, get: () => ({ chatNext, chatHistory, histGen, chatLoadingOlder }) };`)(
-      api, () => 'main', () => ({ querySelector: () => btn }), () => scroller, V.chatViewHistoryUrl, V.chatViewMergeOlder, () => { calls.render++; }, (m) => calls.toasts.push(m), streams, reattaches, () => followed);
+      api, () => 'main', () => ({ querySelector: () => btn }), () => scroller, V.chatViewHistoryUrl, V.chatViewMergeOlder, V.chatViewMergeRuns, () => { calls.render++; }, (m) => calls.toasts.push(m), streams, reattaches, () => followed);
     await mod.loadEarlier();
     const st = mod.get();
     assert.deepStrictEqual(calls.toasts, ['Load earlier once the reply is done'], kind);
@@ -192,20 +192,20 @@ function turnHarness({ view = 'main', fold = true, forOwnerPending = {} } = {}) 
   const src = cut('function onTurnStart(ev) {', 'function onTurnDelta(ev) {');
   const unhide = cut('function unhideHubTurn(', 'function onTurnStart(ev) {');
   const box = mkBox();
-  const hubTurns = {}, moved = [];
+  const hubTurns = {}, moved = [], runLives = [];
   const mkCard = () => ({ wrap: mkEl(box), body: mkEl(), line: { textContent: '' } });
   const f = new Function('activeTurnStart', 'openTurns', 'hubTurns', 'setLive', 'noteTurnOrigin', 'ownTurnFor', 'chatOpenFor', 'streams', 'chatHistory', 'samePrompt', 'foldAutoOn',
     'autoKindOfOrigin', 'autoInfoOf', 'reattaches', 'promptRecent', 'cardIsLast', 'makeFoldHeader', 'chatEl', 'timeLabel', 'addNote', 'addUserBubble', 'setBubbleTime', 'msgTimeLabel',
     'addAssistantBubble', 'withRenderTarget', 'originLabel', 'forOwnerPending', 'moveReplyOut', 'catchUpOpenAgent', 'scrollChat', 'paintStatus', 'viewNow', 'chatViewIsHubOrigin',
-    'autoCardKind', 'reasoningEnd', 'paintChatStatus', 'busyCardEl',
+    'autoCardKind', 'reasoningEnd', 'paintChatStatus', 'busyCardEl', 'savedImageUrls', 'runLive',
     `let lastHistoryCard = null; ${unhide}; ${src}; return { onTurnStart, unhideHubTurn };`)(
     () => {}, {}, hubTurns, () => {}, () => {}, () => false, () => true, new Map(), [], () => false, () => fold,
     () => 'consultation', () => ({ kind: 'consultation', label: 'Consultation from Forge', firstLine: 'hi' }), new Map(), () => true, () => false,
     () => mkCard(), () => box, () => 't', () => mkEl(box), () => mkEl(box), () => {}, () => 't', () => { const el = mkEl(box); return { el, body: mkEl() }; },
     (el, fn) => fn(), () => 'x', forOwnerPending, (t) => { moved.push(t); f2.unhideHubTurn(t); }, () => {}, () => {}, () => {}, () => view, V.chatViewIsHubOrigin,
-    () => 'consultation', () => {}, () => {}, null);
+    () => 'consultation', () => {}, () => {}, null, () => [], (ev) => { runLives.push(ev.turnId); });
   const f2 = f;
-  return { f, box, hubTurns, moved };
+  return { f, box, hubTurns, moved, runLives };
 }
 const consult = { turnId: 'T1', agent: 'forge', origin: { kind: 'consultation', from: 'anvil' }, message: 'Question?', startedAt: '2026-11-14T10:00:00Z' };
 

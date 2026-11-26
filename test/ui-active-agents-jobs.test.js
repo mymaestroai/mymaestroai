@@ -585,7 +585,7 @@ test('phone activeJobsRelabel rewrites the drawn labels in place and stops its t
 // agentRowHtml with the page's own esc
 function phoneRow(over) {
   const env = Object.assign({
-    unread: {}, live: {}, isBusy: () => false, statusKnown: true, busyText: () => 'busy', shortModel: (m) => 'm:' + m,
+    AgentDot: require('../lib/ui-agent-dot.js'), bgCountOf: () => 0, bgStateOf: () => 'free', unread: {}, live: {}, isBusy: () => false, statusKnown: true, busyText: () => 'busy', shortModel: (m) => 'm:' + m,
     activeJobLead: L.activeJobLead, activeJobLabel: L.activeJobLabel, activeJobTail: L.activeJobTail, activeJobTitle: L.activeJobTitle,
   }, over || {});
   const names = Object.keys(env);
@@ -685,7 +685,7 @@ test('phone renderAgents: the step gets busy only, the job goes to the Active ro
   assert.ok(r.includes('activeJobs = activeJobsNow();'));
   assert.ok(/activeStep\(activeState, \{ busy: activeBusyNow\(\), now: Date\.now\(\)/.test(r) && !/jobs: activeJobs/.test(r), 'the step gets no jobs');
   assert.ok(r.includes('active: true, job: activeJobs[a.name]'));
-  assert.ok(r.includes('html += agentRowHtml(a, { job: activeJobs[a.name] });'), 'normal group rows carry the job line');
+  assert.ok(r.includes('html += agentRowHtml(a, { job: activeJobs[a.name], build: noTeam.has(a.name) });'), 'normal group rows carry the job line');
   assert.ok(cut(mob, 'function toggleActiveTop() {', 'function activeBusyNow()').includes('activeJobsSync();'), 'the switch starts or stops the poll');
   assert.ok(/await loadAgents\(\);\s*activeJobsSync\(\);/.test(mob), 'started in init after loadAgents');
 });
@@ -795,9 +795,10 @@ function phoneFilter(o) {
     agents: [{ name: 'sam', category: 'worker' }, { name: 'robin', category: 'worker' }, { name: 'kim', category: 'lead' }],
     GROUPS: [{ key: 'lead', title: 'Leads' }, { key: 'worker', title: 'Workers' }], collapsed: {},
     live: o.live || {}, streams: new Map(), unread: {}, statusKnown: true, isBusy: (n) => !!(o.live && o.live[n] && o.live[n].busy),
-    busyText: () => 'busy', shortModel: (m) => m, displayName: (n) => n,
+    busyText: () => 'busy', shortModel: (m) => m, displayName: (n) => n, AgentDot: require('../lib/ui-agent-dot.js'),
     localStorage: { getItem: () => null }, matchMedia: () => ({ matches: true }), screen: 'agents',
-    document: { visibilityState: 'visible', addEventListener() {} }, isAdmin: () => true, api: async () => ({}), setInterval: () => 0, clearInterval() {},
+    loadJson: (k, d) => d, saveJson() {},   // changed: the Teams view helpers sit in this slice and read these (All Agents is chosen: storage is empty)
+    document: { visibilityState: 'visible', addEventListener() {}, querySelectorAll: () => [] }, isAdmin: () => true, window: {}, /* changed: renderAgents reads window.hubTeams for the Build line; none here, so no line */ api: async () => ({}), setInterval: () => 0, clearInterval() {},
     activeBusyFrom: L.activeBusyFrom, activeJobsFrom: L.activeJobsFrom, activeJobLead: L.activeJobLead, activeJobLabel: L.activeJobLabel, activeJobTail: L.activeJobTail, activeJobTitle: L.activeJobTitle,
     activeInitial: L.activeInitial, activeStep: L.activeStep, activeMembersChanged: L.activeMembersChanged, activeTitle: L.activeTitle,
   };

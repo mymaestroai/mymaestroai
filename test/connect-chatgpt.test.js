@@ -35,10 +35,11 @@ function run(home, args, extra = {}) {
 }
 const calls = (home) => { try { return fs.readFileSync(path.join(home, 'calls'), 'utf8').trim(); } catch { return ''; } };
 
-test('only `connect chatgpt` is a command', () => {
-  const r = run(install(), ['claude']);
+test('only `connect chatgpt` and `connect claude` are commands', () => {
+  const r = run(install(), ['other']);
   assert.strictEqual(r.status, 1);
   assert.match(r.stderr, /Usage: mymaestro connect chatgpt/);
+  assert.match(r.stderr, /mymaestro connect claude/);
 });
 
 test('already signed in: nothing to install or sign in, and it says where to go next', () => {

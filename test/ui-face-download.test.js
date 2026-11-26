@@ -360,5 +360,5 @@ test('agent settings: the default call display lists downloadable characters wit
   assert.strictEqual(fn('none', [], undefined).length, 2, 'an old hub without the list: as before');
 });
 test('the phone service worker cache is bumped for the new mobile.js', () => {
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v76'/);
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v94'/);
 });
