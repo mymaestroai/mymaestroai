@@ -179,7 +179,7 @@ test('an apply record changes at once: journaled as the lead with the reason, on
 });
 
 test('a per-agent record needs the agent; the display name works; the line names the agent', async () => {
-  startTurn('maestro', { typed: 'Set short description to newblurb.' });
+  startTurn('maestro', { typed: 'Set short description to newblurb for Harbor.' });
   assert.match(await call(fakeRes(), { action: 'set', setting: BLURB, value: 'x', reason: 'r' }), /Which agent/);
   assert.match(await call(fakeRes(), { action: 'set', setting: BLURB, agent: 'nobody', value: 'x', reason: 'r' }), /No agent is called/);
   const out = await call(fakeRes(), { action: 'set', setting: BLURB, agent: 'Harbor', value: 'newblurb', reason: 'rename the note' });
@@ -358,7 +358,7 @@ test('a member: their own preference yes, an admin record no, their own agent ye
   const adminRec = await call(fakeRes(), { action: 'set', setting: TIGER, value: true, reason: 'r' });
   assert.match(adminRec, /Only an admin/);
   assert.equal(onDisk().sidebarTigerTeam, false);
-  startTurn('maestro', { personKey: sam.id, typed: 'Set short description to samnote.' });
+  startTurn('maestro', { personKey: sam.id, typed: 'Set short description to samnote for Tester.' });
   const mine = await call(fakeRes(), { action: 'set', setting: BLURB, agent: 'tester', value: 'samnote', reason: 'r' });
   assert.match(mine, /^Changed Short description for Tester/, mine);
   const theirs = await call(fakeRes(), { action: 'set', setting: BLURB, agent: 'other', value: 'hacked', reason: 'r' });
@@ -463,7 +463,7 @@ test('the journal: by=lead and since filter, and the display fields the chat str
   await new Promise((r) => setTimeout(r, 5));
   startTurn('maestro', { typed: `Turn ${records.byId(TIGER).name} on.` });
   await call(fakeRes(), { action: 'set', setting: TIGER, value: true, reason: 'strip test' });
-  startTurn('maestro', { typed: 'Set short description to stripblurb.' });
+  startTurn('maestro', { typed: 'Set short description to stripblurb for Harbor.' });
   await call(fakeRes(), { action: 'set', setting: BLURB, agent: 'harbor', value: 'stripblurb', reason: 'strip test' });
   settings.updateSettings({ sidebarGuide: true });   // a hub change: not by the lead
   const lead = journal.listFor({ isAdmin: true, limit: 50, filter: (e) => e.who && e.who.kind === 'lead' && e.at >= t0 });
@@ -685,4 +685,52 @@ test('follow-up: fixed and change are at the top level of the ask_user hub event
   assert.equal(card.fixed, true);
   answer(card, 'Cancel'); await p;
   off();
+});
+
+// ── R3-1: a per-agent record goes at once only when the person's typed command names that one agent ──────────────
+async function expectCard(typed, args, why) {
+  startTurn('maestro', { typed });
+  const res = fakeRes();
+  const p = call(res, { action: 'set', reason: 'r', ...args });
+  const card = await until(() => cardsOf(res)[0]).catch(() => null);
+  assert.ok(card, `${why}: the card was shown`);
+  assert.equal(answer(card, 'Cancel').success, true);
+  assert.match(await p, /^Not changed/, why);
+}
+test('R3-1: a named agent (name or display name, any case, whole word) goes at once; an unnamed, another, partial or ambiguous agent gets the card', async () => {
+  settings.updateSettings({});
+  for (const typed of ['Set short description to nb1 for harbor.', 'set short description to nb2 for HARBOR', 'Set short description to nb3 for the Harbor.']) {
+    const value = typed.match(/to (nb\d)/)[1];
+    startTurn('maestro', { typed });
+    assert.match(await call(fakeRes(), { action: 'set', setting: BLURB, agent: 'harbor', value, reason: 'r' }), /^Changed Short description for Harbor/, typed);
+  }
+  const before = onDisk();
+  await expectCard('Set short description to nb4.', { setting: BLURB, agent: 'harbor', value: 'nb4' }, 'no agent named');
+  await expectCard('Set short description to nb5 for Tester.', { setting: BLURB, agent: 'harbor', value: 'nb5' }, 'the person named another agent');
+  await expectCard('Set short description to nb6 for Harborage.', { setting: BLURB, agent: 'harbor', value: 'nb6' }, 'not a whole word');
+  await expectCard('Set short description to nb7 for Harbor and Tester.', { setting: BLURB, agent: 'harbor', value: 'nb7' }, 'two agents named');
+  assert.deepEqual(onDisk(), before);
+});
+test('R3-1: "x" and "the x" are one name: two agents so named make the card; the leading "the " or "my " is stripped on both sides', async () => {
+  const original = fs.readFileSync(AGENTS_FILE, 'utf8');
+  try {
+    fs.writeFileSync(AGENTS_FILE, JSON.stringify([...JSON.parse(original),
+      { name: 'zed', model: 'openai/gpt-5.6', display: 'Zed', category: 'specialist', blurb: 'z1' },
+      { name: 'zedtwo', model: 'openai/gpt-5.6', display: 'the zed', category: 'specialist', blurb: 'z2' },
+      { name: 'quill', model: 'openai/gpt-5.6', display: 'my Quill', category: 'specialist', blurb: 'q1' }]));
+    L('agents').getAgentsSync(true);   // the list is cached: read the file again
+    await expectCard('Set short description to zz1 for Zed.', { setting: BLURB, agent: 'zed', value: 'zz1' }, 'Zed vs the zed');
+    await expectCard('Set short description to zz2 for the zed.', { setting: BLURB, agent: 'zedtwo', value: 'zz2' }, 'the zed vs Zed');
+    startTurn('maestro', { typed: 'Set short description to qq1 for quill.' });
+    assert.match(await call(fakeRes(), { action: 'set', setting: BLURB, agent: 'quill', value: 'qq1', reason: 'r' }), /^Changed Short description for my Quill/, 'my Quill matches "quill"');
+  } finally { fs.writeFileSync(AGENTS_FILE, original); L('agents').getAgentsSync(true); }
+});
+test('R3-1 follow-up: a set that echoes free text (the old or the new text) taints the turn; a fixed value does not', async () => {
+  const t1 = startTurn('maestro', { typed: 'Set short description to tt1 for Harbor.' });
+  assert.match(await call(fakeRes(), { action: 'set', setting: BLURB, agent: 'harbor', value: 'tt1', reason: 'r' }), /^Changed /);
+  assert.equal(t1.tainted, true, 'the result holds the old and new free text');
+  settings.updateSettings({ sidebarTigerTeam: false });
+  const t2 = startTurn('maestro', { typed: `Turn ${records.byId(TIGER).name} on.` });
+  assert.match(await call(fakeRes(), { action: 'set', setting: TIGER, value: true, reason: 'r' }), /^Turned on /);
+  assert.equal(t2.tainted, false, 'a boolean echoes no free text');
 });

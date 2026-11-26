@@ -427,3 +427,43 @@ test('R2-6: Restore of a settings key goes through lib/settings-apply: the runni
     if (had) require.cache[sdk] = had; else delete require.cache[sdk];
   }
 });
+
+// ── Round 3 ───────────────────────────────────────────────────────────────
+test('R3-2: apply() answers ok with history:false and no journalIds when the commit line cannot be written; no Undo promise', async () => {
+  const JF = path.join(inst.data, 'settings-journal.jsonl');
+  const real = fs.appendFileSync;
+  fs.appendFileSync = function (f, text) { if (String(f) === JF && String(text).includes('"commitOf"')) { const e = new Error('disk full (test)'); e.code = 'ENOSPC'; throw e; } return real.apply(this, arguments); };
+  const warn = console.warn; console.warn = () => {};
+  let r;
+  try { r = await apply.apply({ record: rec('OPT-0381'), value: '61', user: admin, isAdmin: true, ownSession: false, actor: { kind: 'lead', agent: 'maestro', user: admin.id, turn: 't3' }, auth }); }
+  finally { fs.appendFileSync = real; console.warn = warn; }
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.equal(r.history, false);
+  assert.deepEqual(r.journalIds, []);
+  assert.match(r.note, /history line could not be written/);
+  assert.equal(r.after, 61);
+  assert.equal(onDisk().maxContextMessages, 61, 'the value is saved');
+  // a normal apply has no history:false
+  const ok = await apply.apply({ record: rec('OPT-0381'), value: '62', user: admin, isAdmin: true, ownSession: false, actor: { kind: 'person', user: admin.id }, auth });
+  assert.equal(ok.ok, true); assert.notEqual(ok.history, false); assert.equal(ok.journalIds.length, 1);
+  journal.reconcile();
+});
+
+test('R3-4: restoreSetting reads the value back: a cleaner that reshapes it is an error naming the screen; voice.enabled is not restored here', () => {
+  const sdk = require.resolve(path.join(inst.lib, 'sdk-chat'));
+  const had = require.cache[sdk];
+  require.cache[sdk] = { id: sdk, filename: sdk, loaded: true, exports: { getPacing: () => ({ setCaps: () => {} }) } };
+  try {
+    const r = apply.restoreSetting('workersAtOnce.claude-sdk', 99, { isAdminSession: true });   // the cleaner clamps to 32
+    assert.equal(r.ok, false); assert.match(r.error, /not put back/); assert.match(r.error, /workersAtOnce\.claude-sdk/);
+    const ok = apply.restoreSetting('workersAtOnce.claude-sdk', 4, { isAdminSession: true });
+    assert.equal(ok.ok, true, JSON.stringify(ok));
+    const v = apply.restoreSetting('voice.enabled', true, { isAdminSession: true });
+    assert.equal(v.ok, false); assert.match(v.error, /Voice and calls/);
+    // a removal reads back too: the key is gone afterwards
+    settings.updateSettings({ workersAtOnce: { 'claude-sdk': 4, codex: 3 } });
+    const rm = apply.restoreSetting('workersAtOnce.codex', undefined, { isAdminSession: true });
+    assert.equal(rm.ok, true, JSON.stringify(rm));
+    assert.equal(settings.getSetting('workersAtOnce').codex, undefined);
+  } finally { if (had) require.cache[sdk] = had; else delete require.cache[sdk]; }
+});

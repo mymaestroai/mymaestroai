@@ -156,6 +156,55 @@ test('a cd that cannot be followed: a relative write to a protected name is refu
   }
 });
 
+test('blind is decided from command words: a cd inside eval / bash -c / sh -c code counts, a quoted cd does not', () => {
+  const refused = [
+    'eval "cd ~/x/data && echo y > users.json"',
+    'for i in 1; do bash -c "cd ~/h/data && echo {} > settings.json"; done',
+    `sh -c 'cd $HUB/data; echo x > agents.json'`,
+    `zsh -c 'cd ~/x/data && echo x > connectors.json'`,
+    `dash -c "cd ~/x/data; echo x > modules.json"`,
+    `source <(echo "cd ~/x/data; echo x > users.json")`,
+    `bash -c 'echo x > ${DATA}/users.json'`,
+  ];
+  const allowed = [
+    'echo "cd ~/x/data" && echo x > notes.txt',
+    'echo "cd ~/x/data" && echo x > settings.json',
+    `bash -c 'cd ~/proj && echo x > users.json'`,
+    `eval "echo cd ~/x/data" > /dev/null`,
+  ];
+  for (const [label, agent, extra] of ROLES) {
+    for (const command of refused) assertRefused(dec(agent, 'Bash', { command }, extra), `${label}: ${command}`);
+    for (const command of allowed) assert.notStrictEqual(dec(agent, 'Bash', { command }, extra).cls, 'settings_file', `${label}: ${command}`);
+  }
+});
+
+test('blind-cd counts the moved account folder name; an install name counts only at 4+ characters and as a whole path part', () => {
+  const had = process.env.HUB_AUTH_DIR;
+  try {
+    // HUB_AUTH_DIR set (the isolated install sets it): cd "$HUB_AUTH_DIR" is a cd to a data folder
+    assert.ok(process.env.HUB_AUTH_DIR);
+    assertRefused(dec(lead, 'Bash', { command: 'cd "$HUB_AUTH_DIR" && echo x > users.json' }), 'cd $HUB_AUTH_DIR');
+    const acct = path.join(ISO.root, 'accounts-moved');
+    process.env.HUB_AUTH_DIR = acct;
+    assertRefused(dec(lead, 'Bash', { command: `cd ~/accounts-moved && echo x > users.json` }), 'cd to the moved folder name');
+    assert.notStrictEqual(dec(lead, 'Bash', { command: `cd ~/accounts-moved-old && echo x > users.json` }).cls, 'settings_file', 'a longer name is not the part');
+    process.env.HUB_AUTH_DIR = had;
+    // an install folder named hub: too short to match, and cd ~/github/x does not hold it as a part anyway
+    const fs = require('node:fs');
+    const hubRoot = path.join(ISO.root, 'hubcopy', 'hub');
+    fs.mkdirSync(hubRoot, { recursive: true });
+    fs.cpSync(ISO.lib, path.join(hubRoot, 'lib'), { recursive: true });
+    fs.symlinkSync(path.join(ISO.inst, 'node_modules'), path.join(hubRoot, 'node_modules'));
+    const tpHub = require(path.join(hubRoot, 'lib', 'tool-policy'));
+    assert.strictEqual(path.basename(tpHub.HUB_ROOT), 'hub');
+    const cwd = path.join(hubRoot, 'workspaces', 'helper');
+    const hit = (command) => tpHub.touchesSettingsFile({ tool: 'Bash', input: { command }, cwd });
+    assert.strictEqual(hit('cd ~/github/x && echo x > settings.json'), null);
+    assert.strictEqual(hit('cd ~/hub && echo x > settings.json'), null, 'a 3-character install name is not enough');
+    assert.strictEqual(hit('cd ~/x/data && echo x > settings.json'), 'settings.json');
+  } finally { process.env.HUB_AUTH_DIR = had; }
+});
+
 test('mv and ln are the command only at command position: grep mv data/agents.json is a read', () => {
   const reads = [`grep mv ${DATA}/agents.json`, `echo ln ${DATA}/agents.json`, `grep -n mv ${DATA}/settings.json | head`, `cat ${DATA}/agents.json | grep ln`];
   for (const [label, agent, extra] of ROLES) {

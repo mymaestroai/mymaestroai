@@ -4077,6 +4077,9 @@ server.listen(PORT, HOST, () => {
   // research / voice / push preferences, behaviour reviews, wallet files). A change the hub did not make is journaled as an outside edit
   // (file level, no values) and told to the admins in the batched notice (lib/settings-journal startWatch). The hub's own writes stay quiet.
   try { require('./lib/settings-journal').startWatch({ dataDir: path.join(__dirname, 'data') }); } catch (e) { console.error('[settings-journal] file watch not started:', e.message); }
+  // A change whose file was written but whose commit line was not (a crash, a full disk) is still pending in the journal: it gets its commit
+  // line when the live value is the entry's "after", else a failed line (lib/settings-journal reconcile).
+  try { require('./lib/settings-journal').reconcile(); } catch (e) { console.error('[settings-journal] pending entries not reconciled:', e.message); }
   // A hub restart during the voice download leaves the setting on and nothing installing: pick the install up again.
   setTimeout(() => { try { if (process.env.NODE_TEST_CONTEXT || process.env.MM_TEST_NO_REAL_CLAUDE === '1' || process.env.MM_VOICE_NO_AUTO_INSTALL === '1') return; require('./lib/voice/routes').resumeIfNeeded({ getSetting: hubSettings.getSetting, log: (m) => console.log(m) }); } catch (e) { console.error('[voice] resume:', e.message); } }, 10000).unref();
   // Voice is on by default: about 20 s after the start, fetch the speech engines when they are missing (never under tests; never when voice was turned off).

@@ -19,7 +19,15 @@ const { createAuth, TOKEN_SCOPES } = require(path.join(__dirname, '..', 'lib', '
 function arg(name, dflt = null) { const i = process.argv.indexOf(`--${name}`); return i > 0 && i + 1 < process.argv.length ? process.argv[i + 1] : dflt; }
 const flag = (name) => process.argv.includes(`--${name}`);
 
-const auth = createAuth({ log: () => {}, ...(arg('data-dir') ? { dataDir: path.resolve(arg('data-dir')) } : {}) });
+const dataDir = arg('data-dir') ? path.resolve(arg('data-dir')) : path.join(__dirname, '..', 'data');
+// This command is a second process on the account file (users.json) and the other protected files: every write it makes there leaves a
+// marker line (lib/settings-journal startCliMarking), so the running hub's stamp watch does not report it as an outside edit.
+try {
+  const sj = require(path.join(__dirname, '..', 'lib', 'settings-journal'));
+  sj.enterActor({ kind: 'cli', why: 'command line: token' });
+  if (typeof sj.startCliMarking === 'function') sj.startCliMarking({ dataDir });
+} catch { /* an older install without the journal */ }
+const auth = createAuth({ log: () => {}, dataDir });
 const cmd = process.argv[2];
 try {
   if (cmd === 'create') {

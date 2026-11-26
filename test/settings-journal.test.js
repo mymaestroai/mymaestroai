@@ -42,7 +42,7 @@ test('a settings change writes one entry per changed key, with before and after 
   assert.equal(v.before, undefined); assert.equal(v.after, true);
   assert.equal(v.record, 'OPT-0227');
   assert.equal(v.store, 'settings'); assert.equal(v.who.kind, 'hub');
-  assert.match(v.id, /^sj-[0-9a-f]{10}$/); assert.equal(typeof v.at, 'number'); assert.equal(v.restorable, true);
+  assert.match(v.id, /^sj-[0-9a-f]{10}$/); assert.equal(typeof v.at, 'number'); assert.equal(v.restorable, false, 'voice.enabled goes through the Voice screen (R3-4)'); assert.equal(m.restorable, true);
   assert.equal(m.record, 'OPT-0381');
   settings.updateSettings({ maxContextMessages: 40 });
   const e2 = journal.list({ limit: 1 })[0];
@@ -980,4 +980,162 @@ test('R2 follow-up: restoring an agent entry recorded without a stamp says it is
   const stamped = { ...e, id: 'sj-0f0e0d0c0b', stamp: 'box:not-this-one' };
   fs.appendFileSync(JOURNAL_FILE, JSON.stringify(stamped) + '\n');
   assert.match(journal.restore(stamped.id, { isAdmin: true, isAdminSession: true }).error, /no longer the one/, 'a stamped entry of another agent keeps the other wording');
+});
+
+// ── Round 3 ───────────────────────────────────────────────────────────────
+// Runs fn with every append of a commit line failing (a full disk at the second phase only).
+function failingCommit(fn) {
+  const real = fs.appendFileSync;
+  fs.appendFileSync = function (f, text) { if (String(f) === JOURNAL_FILE && String(text).includes('"commitOf"')) { const e = new Error('disk full (test)'); e.code = 'ENOSPC'; throw e; } return real.apply(this, arguments); };
+  const log = console.warn; console.warn = () => {};
+  try { return fn(); } finally { fs.appendFileSync = real; console.warn = log; }
+}
+
+test('R3-2: a commit line that cannot be written leaves the change saved, history:false, no ids; the start-up reconcile commits it when the live value is the entry\'s after, else fails it', async () => {
+  const person = { kind: 'person', user: 'u_owner' };
+  let r;
+  await failingCommit(async () => { r = await journal.withActorCollect(person, async () => { settings.updateSettings({ maxContextMessages: 75 }); }); });
+  assert.equal(r.history, false, 'the operation is told the history line is missing');
+  assert.deepEqual(r.ids, [], 'no entry id, so no Undo and no change line');
+  assert.equal(JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8')).maxContextMessages, 75, 'the change itself was saved');
+  const pendingLine = rawLines().filter((l) => l.pending && l.key === 'maxContextMessages').pop();
+  assert.ok(pendingLine && !rawLines().some((l) => l.commitOf === pendingLine.id), 'a pending line without a commit line');
+  assert.equal(journal.get(pendingLine.id), null, 'invisible until reconciled');
+  // a second pending entry whose "after" is not what the file holds (the write never happened)
+  const wrong = journal.recordChange('settings', [{ key: 'maxContextMessages', before: 75, after: 99 }], { pending: true });
+  const res = journal.reconcile();
+  assert.ok(res.committed >= 1 && res.failed >= 1, JSON.stringify(res));
+  assert.ok(journal.get(pendingLine.id), 'committed: the live value is the entry\'s after');
+  assert.equal(journal.get(wrong[0].id), null);
+  assert.ok(rawLines().some((l) => l.failedOf === wrong[0].id), 'failed line for the entry the file does not show');
+  // the pass is repeatable: nothing is pending now
+  assert.deepEqual(journal.reconcile(), { committed: 0, failed: 0 });
+  // a clean operation still says history:true
+  const ok = await journal.withActorCollect(person, async () => { settings.updateSettings({ maxContextMessages: 76 }); });
+  assert.equal(ok.history, true); assert.equal(ok.ids.length, 1);
+});
+
+test('R3-2: the server runs the reconcile pass at start-up next to the watch', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  assert.match(src, /require\('\.\/lib\/settings-journal'\)\.reconcile\(\)/);
+});
+
+test('R3-3: a query parameter whose name contains key, token, secret, pass, sig, auth or credential is redacted', () => {
+  const cases = ['client_secret', 'refresh_token', 'auth_token', 'x-api-key', 'access_key', 'secret_key', 'authorization', 'Authorization', 'X-API-KEY', 'id_token', 'passwd', 'credential', 'signature', 'api_key', 'password'];
+  for (const name of cases) {
+    const t = journal.redactUrlText(`https://h.example/p?a=1&${name}=VALUE123&b=2`);
+    assert.ok(!t.includes('VALUE123'), `${name}: ${t}`);
+    assert.ok(t.includes('a=1') && t.includes('b=2'), 'the other parameters stay');
+    assert.ok(!journal.redactUrlText(`#${name}=VALUE123`).includes('VALUE123'), `${name} in a fragment`);
+  }
+  assert.equal(journal.redactUrlText('https://h.example/p?page=2&q=cats'), 'https://h.example/p?page=2&q=cats');
+  assert.deepEqual(journal.redactUrls({ url: 'https://x.example/cb?client_secret=ZZZ&code=1' }), { url: 'https://x.example/cb?client_secret=***&code=1' });
+});
+
+test('R3-4: voice.enabled entries are never restorable (the Voice screen is the way) and Restore names that screen; the value stays', () => {
+  settings.updateSettings({ voice: { enabled: false } });
+  journal.withActor({ kind: 'person', user: 'u_owner' }, () => { settings.updateSettings({ voice: { enabled: true } }); });
+  const e = journal.list({ limit: 20 }).find((x) => x.key === 'voice.enabled');
+  assert.ok(e, 'journaled'); assert.equal(e.restorable, false);
+  const r = journal.restore(e.id, { isAdmin: true, isAdminSession: true });
+  assert.equal(r.ok, false); assert.match(r.error, /Voice and calls/);
+  assert.match(r.link, /settings-for=OPT-0227/);
+  assert.equal(settings.getPath('voice.enabled'), true, 'nothing changed');
+  assert.equal(journal.viewEntry(e).screen, 'Settings > Voice and calls');
+});
+
+test('R3-5: the hub\'s own wallet temp files and renames give no outside entry; a vanished never-looked-at file is dropped; a rename\'s source is the hub\'s', () => {
+  const { timers } = fakeTimers();
+  journal.configure({ timers, notify: () => {} });
+  journal._pending.clear();
+  const d = (n) => path.join(inst.data, n);
+  rawWrite(d('wallet-a.json'), '{"a":1}');
+  const w = journal.startWatch({ dataDir: inst.data, intervalMs: 0 });
+  const filesN = () => journal.list({ limit: 500 }).filter((e) => e.store === 'files').length;
+  try {
+    w.tick();
+    const n0 = filesN();
+    // temp write + rename onto a wallet file, a pid temp, a backup copy
+    fs.writeFileSync(d('wallet-state.json.4242.tmp'), '{"s":1}');
+    fs.renameSync(d('wallet-state.json.4242.tmp'), d('wallet-state.json'));
+    fs.writeFileSync(d('wallet-state.json.tmp'), '{"s":2}');
+    fs.copyFileSync(d('wallet-state.json'), d('wallet-state.json.bak'));
+    w.tick();
+    assert.equal(filesN(), n0, 'temp, pid temp and bak variants are never tracked');
+    fs.unlinkSync(d('wallet-state.json.tmp'));
+    rawWrite(d('wallet-stray.json.tmp'), 'x');   // even a program's temp copy of that name is not a protected file
+    w.tick();
+    assert.equal(filesN(), n0);
+    // a file the hub wrote that no tick saw, then removed by another process: nothing to report
+    fs.writeFileSync(d('wallet-m.json'), '{"m":1}');
+    require('node:child_process').execFileSync(process.execPath, ['-e', `require('fs').unlinkSync(${JSON.stringify(d('wallet-m.json'))})`], { env: { PATH: process.env.PATH, HOME: process.env.HOME } });
+    w.tick();
+    assert.equal(filesN(), n0, 'a vanished file never baselined by a tick is dropped');
+    // the hub renames a file the watch knew: its source is gone by the hub's hand
+    fs.renameSync(d('wallet-a.json'), d('wallet-b.json'));
+    w.tick();
+    assert.equal(filesN(), n0, 'the rename\'s source is recorded as the hub\'s');
+    // an outside edit of a wallet file is still reported
+    rawWrite(d('wallet-b.json'), '{"b":"by hand"}');
+    w.tick();
+    assert.equal(filesN(), n0 + 1);
+  } finally {
+    w.stop();
+    journal.configure({ clock: Date.now, timers: { setTimeout, clearTimeout }, notify: null });
+    for (const f of fs.readdirSync(inst.data)) if (/^wallet-/.test(f)) fs.rmSync(d(f), { force: true });
+  }
+});
+
+test('R3 follow-up: a command-line deletion leaves a "gone" marker, so the running hub does not report it; a later unmarked deletion still is', async () => {
+  const { execFileSync } = require('node:child_process');
+  const { timers } = fakeTimers();
+  journal.configure({ timers, notify: () => {} });
+  journal._pending.clear();
+  const f = path.join(inst.data, 'modules.json');
+  rawWrite(f, '{"modules":{}}');
+  const w = journal.startWatch({ dataDir: inst.data, intervalMs: 0 });
+  const filesN = () => journal.list({ limit: 500 }).filter((e) => e.store === 'files' && e.key === 'files/modules.json').length;
+  const env = { PATH: process.env.PATH, HOME: process.env.HOME };
+  const lib = JSON.stringify(path.join(inst.lib, 'settings-journal'));
+  try {
+    w.tick();
+    const n0 = filesN();
+    execFileSync(process.execPath, ['-e', `require(${lib}).startCliMarking({dataDir:${JSON.stringify(inst.data)}});require('fs').unlinkSync(${JSON.stringify(f)})`], { env });
+    assert.ok(rawLines().some((l) => l.marker && l.store === 'files/modules.json' && l.stamp === 'gone'), 'a deletion marker');
+    w.tick();
+    assert.equal(filesN(), n0, 'the command\'s own deletion is not an outside edit');
+    // the file comes back, the hub sees it, then a program deletes it without a marker: reported (the old marker is older than the last sighting)
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    rawWrite(f, '{"modules":{"again":1}}'); w.tick();
+    assert.equal(filesN(), n0 + 1, 'the recreation by a program is reported');
+    execFileSync(process.execPath, ['-e', `require('fs').unlinkSync(${JSON.stringify(f)})`], { env });
+    w.tick();
+    assert.equal(filesN(), n0 + 2, 'an unmarked deletion is still reported');
+  } finally {
+    w.stop();
+    journal.configure({ clock: Date.now, timers: { setTimeout, clearTimeout }, notify: null });
+    try { fs.rmSync(f, { force: true }); } catch { /* gone */ }
+  }
+});
+
+test('R3 follow-up: scripts/hub-token.js marks its writes to the protected files (users.json), so the running hub does not report them', () => {
+  const { execFileSync } = require('node:child_process');
+  const { timers } = fakeTimers();
+  journal.configure({ timers, notify: () => {} });
+  journal._pending.clear();
+  const users = path.join(inst.data, 'users.json');
+  rawWrite(users, JSON.stringify({ users: [] }));
+  const w = journal.startWatch({ dataDir: inst.data, intervalMs: 0 });
+  try {
+    w.tick();
+    const filesN = () => journal.list({ limit: 500 }).filter((e) => e.store === 'files').length;
+    const n0 = filesN();
+    // the script runs for real (list), then the same process writes users.json as a token command would
+    const script = path.join(__dirname, '..', 'scripts', 'hub-token.js');
+    const wrapper = `process.argv=[process.argv[0],${JSON.stringify(script)},'list','--data-dir',${JSON.stringify(inst.data)}];require(${JSON.stringify(script)});require('fs').writeFileSync(${JSON.stringify(users)},JSON.stringify({users:[],note:'token command'}));`;
+    execFileSync(process.execPath, ['-e', wrapper], { env: { PATH: process.env.PATH, HOME: process.env.HOME } });
+    assert.ok(rawLines().some((l) => l.marker && l.store === 'files/users.json'), 'a marker line for users.json');
+    w.tick();
+    assert.equal(filesN(), n0, 'not an outside edit');
+  } finally { w.stop(); journal.configure({ clock: Date.now, timers: { setTimeout, clearTimeout }, notify: null }); }
 });
