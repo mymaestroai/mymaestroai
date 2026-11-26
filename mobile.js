@@ -1493,6 +1493,18 @@ function planPctText(w, levels) {
   const s = planState(w, levels);
   return s.extra ? `${s.pct}% · extra usage` : `${s.pct}%`;
 }
+function planBadgeWindows(weekly, family, levels) {
+  const rank = (c) => (c === 'refused' ? 3 : c === 'hot' ? 2 : c === 'warn' ? 1 : 0);
+  const read = (weekly || []).filter(w => w && w.utilization != null);
+  const all = read.find(w => w.family == null) || null;
+  const fam = family ? read.find(w => w.family === family) || null : null;
+  if (!all && !fam) return null;
+  if (!all || !fam) { const w = all || fam; return { lead: w, second: null, cls: planState(w, levels).cls }; }
+  const a = planState(all, levels), f = planState(fam, levels);
+  const bad = (s) => (s.cls === 'refused' ? 2 : s.extra ? 1 : 0);
+  const second = f.pct > a.pct || bad(f) > bad(a) ? fam : null;
+  return { lead: all, second, cls: rank(f.cls) > rank(a.cls) ? f.cls : a.cls };
+}
 // ── plan state helpers (end) ──
 function planFamilyOf(model) {
   const id = String(model || '').replace(/^claude-sdk\//, '').replace(/\[1m\]$/i, '').replace(/^claude-/, '').toLowerCase();
@@ -1523,18 +1535,22 @@ function paintPlan() {
     return;
   }
   const fam = planFamilyOf(model);
-  const wins = d && /^claude-sdk\//.test(model) ? (d.weekly || []).filter(w => w.utilization != null && (w.family == null || (fam && w.family === fam))) : [];
-  if (!wins.length) { el.hidden = true; el.textContent = ''; return; }
-  const w = wins.reduce((x, y) => (Number(y.utilization) > Number(x.utilization) ? y : x));
-  const levels = (d.warn && Array.isArray(d.warn.at)) ? d.warn.at : [];
-  const { pct, extra, cls } = planState(w, levels);
-  el.textContent = `${w.family ? w.label : 'Plan'} ${planPctText(w, levels)}`;
-  const five = d.windows && d.windows.five_hour;
-  if (subsEnabled() && five && five.utilization != null && Number(five.utilization) > 50) el.textContent += ` · 5h ${Math.round(Number(five.utilization))}%`;
+  const levels = d && d.warn && Array.isArray(d.warn.at) ? d.warn.at : [];
+  const bw = d && /^claude-sdk\//.test(model) ? planBadgeWindows(d.weekly, fam, levels) : null;
+  if (!bw) { el.hidden = true; el.textContent = ''; return; }
+  const { lead, second, cls } = bw;
+  el.textContent = `${lead.family ? lead.label : 'Plan'} ${planPctText(lead, levels)}` + (second ? ` · ${second.label} ${planPctText(second, levels)}` : '');
+  const f5 = d.windows && d.windows.five_hour;
+  const five = subsEnabled() && f5 && f5.utilization != null && Number(f5.utilization) > 50 ? Math.round(Number(f5.utilization)) : null;
+  if (five != null) el.textContent += ` · 5h ${five}%`;
   el.className = 'sub' + (cls ? ' ' + cls : '');
-  el.title = extra
-    ? `${w.family ? w.label : 'All models'}: the weekly Claude plan is used up until ${Number.isFinite(Date.parse(w.resetsAt || '')) ? new Date(w.resetsAt).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : 'the reset'}; extra usage is paying`
-    : `${w.family ? w.label : 'All models'}: ${pct}% of this week's Claude plan allowance`;
+  const part = (w, who) => {
+    const s = planState(w, levels);
+    return s.extra
+      ? `${who}: the weekly Claude plan is used up until ${Number.isFinite(Date.parse(w.resetsAt || '')) ? new Date(w.resetsAt).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : 'the reset'}; extra usage is paying`
+      : `${who}: ${s.pct}%${w === lead ? " of this week's Claude plan allowance" : ''}`;
+  };
+  el.title = part(lead, lead.family ? lead.label : 'All models') + (second ? '; ' + part(second, second.label) : '') + (five != null ? `; 5-hour window ${five}%` : '');
   el.hidden = false;
 }
 

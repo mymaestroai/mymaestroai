@@ -6485,6 +6485,18 @@
       const s = planState(w, levels);
       return s.extra ? `${s.pct}% · extra usage` : `${s.pct}%`;
     }
+    function planBadgeWindows(weekly, family, levels) {
+      const rank = (c) => (c === 'refused' ? 3 : c === 'hot' ? 2 : c === 'warn' ? 1 : 0);
+      const read = (weekly || []).filter(w => w && w.utilization != null);
+      const all = read.find(w => w.family == null) || null;
+      const fam = family ? read.find(w => w.family === family) || null : null;
+      if (!all && !fam) return null;
+      if (!all || !fam) { const w = all || fam; return { lead: w, second: null, cls: planState(w, levels).cls }; }
+      const a = planState(all, levels), f = planState(fam, levels);
+      const bad = (s) => (s.cls === 'refused' ? 2 : s.extra ? 1 : 0);
+      const second = f.pct > a.pct || bad(f) > bad(a) ? fam : null;
+      return { lead: all, second, cls: rank(f.cls) > rank(a.cls) ? f.cls : a.cls };
+    }
     // ── plan state helpers (end) ──
     function planFamilyOf(model) {
       const id = String(model || '').replace(/^claude-sdk\//, '').replace(/\[1m\]$/i, '').replace(/^claude-/, '').toLowerCase();
@@ -6499,8 +6511,8 @@
     function planWindowFor(model, d = planLast) {
       if (!d || !/^claude-sdk\//.test(String(model || ''))) return null;
       const fam = planFamilyOf(model);
-      const wins = (d.weekly || []).filter(w => w.utilization != null && (w.family == null || (fam && w.family === fam)));
-      return wins.length ? wins.reduce((a, b) => (Number(b.utilization) > Number(a.utilization) ? b : a)) : null;
+      const levels = d.warn && Array.isArray(d.warn.at) ? d.warn.at : [];
+      return planBadgeWindows(d.weekly, fam, levels);
     }
     function paintPlanBadges() {
       const levels = (planLast && planLast.warn && Array.isArray(planLast.warn.at)) ? planLast.warn.at : [];
@@ -6524,19 +6536,21 @@
           el.hidden = false;
           continue;
         }
-        const w = chat && !chat.isGroup && chat.agent ? planWindowFor(chatModelOf(chat)) : null;
-        if (!w) { el.hidden = true; el.textContent = ''; continue; }
-        const { pct, extra, cls } = planState(w, levels);
-        el.textContent = `${w.family ? w.label : 'Plan'} ${planPctText(w, levels)} this week`;
+        const bw = chat && !chat.isGroup && chat.agent ? planWindowFor(chatModelOf(chat)) : null;
+        if (!bw) { el.hidden = true; el.textContent = ''; continue; }
+        const { lead, second, cls } = bw;
+        el.textContent = `${lead.family ? lead.label : 'Plan'} ${planPctText(lead, levels)} this week` + (second ? ` · ${second.label} ${planPctText(second, levels)}` : '');
         const fiveW = planLast.windows && planLast.windows.five_hour;
         const five5 = subsEnabled() && fiveW && fiveW.utilization != null && Number(fiveW.utilization) > 50 ? Math.round(Number(fiveW.utilization)) : null;
         if (five5 != null) el.textContent += ` · 5h ${five5}%`;
         el.className = 'plan-badge' + (cls ? ' ' + cls : '');
-        const all = (planLast.weekly || []).find(x => x.family == null);
         const five = planLast.windows && planLast.windows.five_hour;
-        if (extra) { el.title = `${w.family ? w.label : 'Your Claude plan'} is used up for this week until ${planWhen(w.resetsAt)}; extra usage is paying for Claude replies until then. Click to choose models (Settings → Claude plan).`; el.hidden = false; continue; }
-        el.title = `${w.family ? `${w.label} has` : 'Your Claude plan has'} used ${pct}% of this week's allowance (resets ${planWhen(w.resetsAt)})` +
-          (all && w.family ? `; all models ${Math.round(Number(all.utilization))}%` : '') + (five && five.utilization != null ? `; 5-hour window ${Math.round(Number(five.utilization))}%` : '') + '. Click to choose models (Settings → Claude plan).';
+        // Hover text: the plan, then the family window (when it is shown), then the 5-hour window.
+        const part = (w, who, short) => planState(w, levels).extra
+          ? `${who} is used up for this week until ${planWhen(w.resetsAt)}; extra usage is paying for Claude replies until then`
+          : `${who} has used ${planState(w, levels).pct}%${short ? "" : " of this week's allowance"} (resets ${planWhen(w.resetsAt)})`;
+        el.title = part(lead, lead.family ? lead.label : 'Your Claude plan') + (second ? '; ' + part(second, second.label, true) : '') +
+          (five && five.utilization != null ? `; 5-hour window ${Math.round(Number(five.utilization))}%` : '') + '. Click to choose models (Settings → Claude plan).';
         el.hidden = false;
       }
     }
