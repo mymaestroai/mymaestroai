@@ -59,14 +59,16 @@ describe('linger (read-only)', () => {
 });
 
 describe('the probe is retried after a failure, with a back-off', () => {
-  it('a failed probe is asked again at the next job start once the back-off passed; success is cached for good', () => {
+  it('a failed probe is asked again (in the background) at the next job start once the back-off passed; success is cached for good', async () => {
     let t = 1000; const answers = ['setsid', 'systemd']; let asked = 0;
     const { runner } = mk({ spawnMode: 'auto', now: () => t, probeBackoffMs: 30000, probe: () => { asked++; return answers.shift() || 'systemd'; } });
     assert.equal(runner.mode(), 'setsid'); assert.equal(asked, 1);
     assert.equal(runner.mode(), 'setsid'); assert.equal(asked, 1, 'plain mode() just reports what is known');
     assert.equal(runner.mode({ retry: true }), 'setsid'); assert.equal(asked, 1, 'inside the back-off: no new probe');
     t += 30001;
-    assert.equal(runner.mode({ retry: true }), 'systemd'); assert.equal(asked, 2);
+    assert.equal(runner.mode({ retry: true }), 'setsid', 'the retry does not block: this caller sees what is known');
+    await runner.retryProbe(); assert.equal(asked, 2);
+    assert.equal(runner.mode({ retry: true }), 'systemd', 'the next caller sees the retry answer');
     t += 999999;
     assert.equal(runner.mode({ retry: true }), 'systemd'); assert.equal(asked, 2, 'a success is never probed again');
   });
@@ -127,8 +129,8 @@ describe('the restart route lists the jobs and waits for a confirm', () => {
     assert.equal(g.status, 'confirm'); assert.equal(g.needsConfirm, true);
     assert.deepEqual(g.jobs.map(j => j.id), ['bbbb2222']);
     assert.match(g.message, /nightly backup/); assert.match(g.message, /stop/i);
-    assert.equal(restartGate(runner, { confirm: true }), null);
-    assert.ok(restartGate(runner, { confirm: 'true' }), 'only a real true confirms');
+    assert.equal(restartGate(runner, { confirm: true, jobs: ['bbbb2222'] }), null);
+    assert.ok(restartGate(runner, { confirm: 'true', jobs: ['bbbb2222'] }), 'only a real true confirms');
   });
   it('server.js applies the gate before restarting, and the pages ask the person', () => {
     const s = read('server.js');

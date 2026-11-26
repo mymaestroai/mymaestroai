@@ -14035,13 +14035,13 @@ async function restartHub() {
   $('restart-confirm').close();
   try {
     let r = await api('/api/restart', { method: 'POST' });
-    if (r.status === 409) {
-      // Running jobs would stop with the restart (no systemd scope): the answer names them; restart only if the person says so.
+    // Running jobs would stop with the restart (no systemd scope): the answer names them; restart only if the person says so.
+    // The confirmation names the jobs that question showed: a job that started since gets a fresh question (a few rounds at most).
+    for (let round = 0; round < 3 && r.status === 409; round++) {
       const d = await r.json().catch(() => null);
-      if (d && d.needsConfirm) {
-        if (!confirm(d.message)) return;
-        r = await api('/api/restart', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirm: true }) });
-      }
+      if (!(d && d.needsConfirm)) break;
+      if (!confirm(d.message)) return;
+      r = await api('/api/restart', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirm: true, jobs: (d.jobs || []).map((j) => j.id) }) });
     }
     if (!r.ok) { toast(`Restart refused: HTTP ${r.status}`); return; }
   } catch {

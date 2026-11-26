@@ -1487,9 +1487,10 @@
     async function postRestart() {
       let r = await fetch('/api/restart', { method: 'POST', credentials: 'include' });
       let d = await r.json().catch(() => null);
-      if (r.status === 409 && d && d.needsConfirm) {
+      // The confirmation names the jobs this question showed: a job that started since gets a fresh question (a few rounds at most).
+      for (let round = 0; round < 3 && r.status === 409 && d && d.needsConfirm; round++) {
         if (!confirm(d.message)) return { r, d, cancelled: true };
-        r = await fetch('/api/restart', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirm: true }) });
+        r = await fetch('/api/restart', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirm: true, jobs: (d.jobs || []).map((j) => j.id) }) });
         d = await r.json().catch(() => null);
       }
       return { r, d };
