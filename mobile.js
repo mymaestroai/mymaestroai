@@ -13490,9 +13490,13 @@ function showQuestion(data, onAnswered) {
   refresh();
   chatEl().appendChild(box);
   scrollChat();
-  // A box taller than the chat would have scrolled past its question: it opens with its top at the top of the chat instead
-  const host = chatEl();
-  if (box.offsetHeight > host.clientHeight && box.getBoundingClientRect && host.getBoundingClientRect) host.scrollTop += box.getBoundingClientRect().top - host.getBoundingClientRect().top;
+  // A box taller than the chat's visible area would have scrolled past its question: it opens with its top at the top of that area instead,
+  // and the chat stops following new text (stick), so a later delta does not scroll past it again (review r8: the viewport is #chat-scroll)
+  const view = typeof $ === 'function' ? $('chat-scroll') : null;
+  if (view && box.offsetHeight > view.clientHeight && box.getBoundingClientRect && view.getBoundingClientRect) {
+    view.scrollTop += box.getBoundingClientRect().top - view.getBoundingClientRect().top;
+    stick = false;
+  }
 }
 
 // ── Action approvals: tool calls the agent's policy marks "ask" ─────────────
@@ -14382,7 +14386,7 @@ function researchLineFill(box, agent) {
   if (all) {   // a closed notice ("Stopped. ...") goes after a short while
     for (const [id, r] of [...all]) if (r.outcome && now - (r.outcomeAt || 0) > RESEARCH_NOTICE_SHOW_MS) all.delete(id);
     // the new thorough run is on the page: its notice says "Thorough research started", so the old quick run's confirmation goes (said once)
-    if ([...all.values()].some(r => r.startedBy === 'upgrade' && !r.outcome)) for (const [id, r] of [...all]) if (r.outcome === RESEARCH_UPGRADE_TEXT) { all.delete(id); researchEndedAdd(id); }
+    if ([...all.values()].some(r => r.startedBy === 'upgrade' && !r.outcome && !researchDismissed.has(String(r.id)))) for (const [id, r] of [...all]) if (r.outcome === RESEARCH_UPGRADE_TEXT) { all.delete(id); researchEndedAdd(id); }
     if (!all.size) researchRuns.delete(agent);
   }
   const runs = all && all.size ? [...all.values()].filter(r => !researchDismissed.has(String(r.id))).sort((a, b) => (Number(a.startedAt) || 0) - (Number(b.startedAt) || 0)).slice(0, 3) : [];

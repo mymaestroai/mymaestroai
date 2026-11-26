@@ -874,16 +874,20 @@ test('G4 phone: a question box taller than the chat opens with its top at the to
   assert.ok(a > 0 && b > a);
   const stub = () => ({ value: '', disabled: false, textContent: '', style: {}, children: [], dataset: {}, classList: { add() {}, remove() {} }, addEventListener() {}, appendChild(c) { this.children.push(c); return c; } });
   const mkBox = () => { const q = {}; const e = stub(); e.className = ''; e.querySelector = (s) => (q[s] ||= stub()); e.querySelectorAll = () => []; return e; };
-  const host = { children: [], clientHeight: 400, scrollTop: 0, appendChild(c) { this.children.push(c); return c; }, getBoundingClientRect: () => ({ top: 0 }) };
+  // review r8: #messages (chatEl) is the content wrapper, taller than the box; the visible, scrolling area is #chat-scroll
+  const host = { children: [], clientHeight: 3000, scrollTop: 0, appendChild(c) { this.children.push(c); return c; }, getBoundingClientRect: () => ({ top: -2600 }) };
+  const view = { clientHeight: 400, scrollTop: 0, getBoundingClientRect: () => ({ top: 0 }) };
   let box = null;
   const ctx = vm.createContext({ document: { createElement: () => mkBox() }, shownQuestions: new Set(), questionBoxes: new Map(), questionTexts: new Map(), voiceHintSync() {}, api: async () => ({ ok: true }), toast() {}, esc: String,
-    chatEl: () => host, scrollChat: () => { host.scrollTop = 1000; }, retireSoon() {}, Option: function Option() {}, current: 'a', Map, String, Array, JSON, Promise, console });
+    $: (id) => (id === 'chat-scroll' ? view : null), stick: true,
+    chatEl: () => host, scrollChat: () => { view.scrollTop = 1000; }, retireSoon() {}, Option: function Option() {}, current: 'a', Map, String, Array, JSON, Promise, console });
   const origAppend = host.appendChild.bind(host);
-  host.appendChild = (c) => { origAppend(c); if (c.className === 'question') { box = c; c.offsetHeight = 900; c.getBoundingClientRect = () => ({ top: 700 - host.scrollTop }); } return c; };
+  host.appendChild = (c) => { origAppend(c); if (c.className === 'question') { box = c; c.offsetHeight = 900; c.getBoundingClientRect = () => ({ top: 1700 - view.scrollTop }); } return c; };
   vm.runInContext(mob.slice(a, b) + '\nthis.show = showQuestion;', ctx);
   ctx.show({ request_id: 'r1', questions: [{ question: 'Research this?', options: [{ label: 'Quick' }, { label: 'Thorough' }] }] });
   assert.ok(box, 'the box is in the chat');
-  assert.equal(box.getBoundingClientRect().top, 0, 'the box top is at the chat top');
+  assert.equal(box.getBoundingClientRect().top, 0, 'the box top is at the top of the visible chat area');
+  assert.equal(ctx.stick, false, 'the chat stops following new text, so a later delta does not scroll past the question');
 });
 
 test('the turns that tell the agent a run was stopped or made thorough say so in their row, not "Research finished" (origin what)', () => {
@@ -897,4 +901,19 @@ test('the turns that tell the agent a run was stopped or made thorough say so in
   assert.ok(research.includes("carry on without it.`, 'stopped');") && research.includes("its report will come here.`, 'thorough');"), 'stop and upgrade pass what');
   const sdk = read('lib/sdk-chat.js');
   assert.ok(sdk.includes("...(meta?.kind === 'research_report' && (meta?.what === 'stopped' || meta?.what === 'thorough') ? { what: meta.what } : {})"), 'wakeAgent keeps what for research turns only');
+});
+
+test('review r8: the conversation log keeps what (stopped / thorough) for research turns only, so the row still says so after a reload', () => {
+  const src = read('lib/sdk-chat.js');
+  const a = src.indexOf('function logOriginOf'); const b = src.indexOf('function loadConversationLog');
+  assert.ok(a > 0 && b > a);
+  const logOriginOf = new Function(src.slice(a, b) + '\nreturn logOriginOf;')();
+  assert.deepEqual(logOriginOf({ kind: 'research_report', from: 'hub', label: 'Q?', what: 'stopped' }), { kind: 'research_report', from: 'hub', label: 'Q?', what: 'stopped' });
+  assert.equal(logOriginOf({ kind: 'research_report', from: 'hub', what: 'thorough' }).what, 'thorough');
+  assert.equal(logOriginOf({ kind: 'research_report', from: 'hub', what: 'other' }).what, undefined, 'only the two values');
+  assert.equal(logOriginOf({ kind: 'job_notice', from: 'hub', what: 'stopped' }).what, undefined, 'only research turns');
+  // the saved origin, read back by the pages' helper, gives the right row label
+  const lib = require('../lib/ui-auto-turns.js');
+  const saved = logOriginOf({ kind: 'research_report', from: 'hub', label: 'Q?', what: 'stopped' });
+  assert.equal(lib.autoInfoOf({ role: 'user', content: 'x', origin: saved }).label, 'Research stopped');
 });

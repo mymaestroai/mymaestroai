@@ -9441,7 +9441,7 @@
       if (all) {   // a closed notice ("Stopped. ...") goes after a short while
         for (const [id, r] of [...all]) if (r.outcome && now - (r.outcomeAt || 0) > RESEARCH_NOTICE_SHOW_MS) all.delete(id);
         // the new thorough run is on the page: its notice says "Thorough research started", so the old quick run's confirmation goes (said once)
-        if ([...all.values()].some(r => r.startedBy === 'upgrade' && !r.outcome)) for (const [id, r] of [...all]) if (r.outcome === RESEARCH_UPGRADE_TEXT) { all.delete(id); researchEndedAdd(id); }
+        if ([...all.values()].some(r => r.startedBy === 'upgrade' && !r.outcome && !researchDismissed.has(String(r.id)))) for (const [id, r] of [...all]) if (r.outcome === RESEARCH_UPGRADE_TEXT) { all.delete(id); researchEndedAdd(id); }
         if (!all.size) researchRuns.delete(agent);
       }
       const runs = all && all.size ? [...all.values()].filter(r => !researchDismissed.has(String(r.id))).sort((a, b) => (Number(a.startedAt) || 0) - (Number(b.startedAt) || 0)).slice(0, 3) : [];
