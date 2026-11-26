@@ -65,7 +65,8 @@ test('planBadgeView choice "five": the 5-hour window leads; weekly windows follo
   assert.deepStrictEqual(kinds(L.planBadgeView(D([W(null, 40), W('fable', 22)], 70), 'fable', 'five', true, LV)), ['five']);
   assert.deepStrictEqual(kinds(L.planBadgeView(D([W(null, 40), W('fable', 80)], 70), 'fable', 'five', true, LV)), ['five', 'family']);
   assert.deepStrictEqual(kinds(L.planBadgeView(D([W(null, 95), W('fable', 60, { rejected: true })], 70), 'fable', 'five', true, LV)), ['five', 'plan', 'family']);
-  assert.deepStrictEqual(kinds(L.planBadgeView(D([W(null, 40)], 30), 'fable', 'five', false, LV)), ['five'], 'a low 5h reading can still be chosen');
+  assert.deepStrictEqual(kinds(L.planBadgeView(D([W(null, 20)], 10), 'fable', 'five', false, LV)), ['five', 'plan'], 'a low 5h reading can still be chosen; a higher weekly window joins');
+  assert.deepStrictEqual(kinds(L.planBadgeView(D([W(null, 10)], 30), 'fable', 'five', false, LV)), ['five'], 'a low 5h reading can still be chosen');
 });
 test('planBadgeView: a choice whose window is missing falls back to the plan (or the family when there is no plan window)', () => {
   assert.strictEqual(L.planBadgeView(D([W(null, 40), W('fable', 22)]), 'fable', 'five', true, LV).main.kind, 'plan');
@@ -129,7 +130,7 @@ function makePage(kind, o) {
   const store = storage(o.local);
   const posts = []; const opened = { subs: 0, settings: 0 };
   const win = { hubMe: o.me === undefined ? {} : o.me, innerWidth: 1000, innerHeight: 800, addEventListener() {}, removeEventListener() {} };
-  const fetchStub = async (url, init) => { posts.push({ url, init, body: init && init.body ? JSON.parse(init.body) : null }); const st = o.status || 200; return { ok: st === 200, status: st, json: async () => ({}) }; };
+  const fetchStub = async (url, init) => { const post = { url, init, body: init && init.body ? JSON.parse(init.body) : null }; posts.push(post); if (o.hold) return o.hold(post); const st = o.status || 200; return { ok: st === 200, status: st, json: async () => ({}) }; };
   const base = { Math, Number, String, Array, Object, Date, JSON, Promise, setTimeout, clearTimeout, document: doc, localStorage: store, console, window: win };
   let ctx;
   if (kind === 'desktop') {
@@ -400,3 +401,80 @@ test('CSS: the chooser uses the pages\' variables only (no raw colours) and has 
   assert.ok(/#chat-plan\s*\{[^}]*background:\s*none/.test(read('mobile.html')) || /#chat-plan[^{]*\{[^}]*background:\s*none/.test(read('mobile.html')), 'phone button reset');
   assert.ok(/\.chat-actions \.plan-badge \{[^}]*background:\s*(none|transparent)/.test(read('index.html')), 'desktop button reset');
 });
+
+// ── review round 4: saves out of order, the safety rule for the 5h choice, a chooser that follows the badge ──
+test('planBadgeView choice "five": a weekly window higher than the 5-hour one is added (rounded), the 5h rule for weekly main is unchanged', () => {
+  assert.deepStrictEqual(kinds(L.planBadgeView(D([W(null, 40)], 5), 'fable', 'five', true, LV)), ['five', 'plan'], 'plan 40 over 5h 5, below the warning levels');
+  assert.deepStrictEqual(kinds(L.planBadgeView(D([W(null, 40)], 5.4), 'fable', 'five', true, LV)), ['five', 'plan']);
+  assert.deepStrictEqual(kinds(L.planBadgeView(D([W(null, 5.4)], 5.2), 'fable', 'five', true, LV)), ['five'], 'equal after rounding: not added');
+  assert.deepStrictEqual(kinds(L.planBadgeView(D([W(null, 5), W('fable', 40)], 5), 'fable', 'five', true, LV)), ['five', 'family']);
+  assert.deepStrictEqual(kinds(L.planBadgeView(D([W(null, 5)], 40), 'fable', 'plan', false, LV)), ['plan'], 'the 5h window is not added just for being higher');
+  assert.deepStrictEqual(kinds(L.planBadgeView(D([W(null, 5)], 40), 'fable', 'plan', true, LV)), ['plan'], '40 is not over 50, so subscriptions on do not add it');
+  assert.deepStrictEqual(kinds(L.planBadgeView(D([W(null, 5)], 60), 'fable', 'plan', true, LV)), ['plan', 'five'], 'over 50 with subscriptions on: the existing rule');
+});
+for (const kind of KINDS) {
+  test(`${kind}: choice five at 5% with the plan at 40% shows both; choice plan 5% with five 40% and subscriptions off shows the plan alone`, () => {
+    const p = makePage(kind, { data: D([W(null, 40)], 5), local: { 'mm-plan-badge': 'five' } });
+    p.paint();
+    assert.strictEqual(p.badge.textContent, '5h 5% · Plan 40%');
+    const q = makePage(kind, { data: D([W(null, 5)], 40), local: { 'mm-plan-badge': 'plan' }, subs: false });
+    q.paint();
+    assert.strictEqual(q.badge.textContent, 'Plan 5% this week');
+  });
+  const held = (o) => {
+    const resolvers = [];
+    const p = makePage(kind, Object.assign({ data: D([W(null, 18), W('fable', 19)], 30), me: { planBadge: 'plan' }, hold: (post) => new Promise(res => resolvers.push({ post, res })) }, o));
+    p.paint();
+    return { p, resolvers };
+  };
+  test(`${kind}: two picks, the answers arrive in reverse order: the newest pick is the person's value and the shown choice`, async () => {
+    const { p, resolvers } = held();
+    const a = vm.runInContext("planBadgePick('family')", p.ctx);
+    const b = vm.runInContext("planBadgePick('five')", p.ctx);
+    assert.strictEqual(resolvers.length, 2);
+    resolvers[1].res({ ok: true, status: 200, json: async () => ({}) }); await b; await tick();
+    assert.strictEqual(p.win.hubMe.planBadge, 'five');
+    resolvers[0].res({ ok: true, status: 200, json: async () => ({}) }); await a; await tick();
+    assert.strictEqual(p.win.hubMe.planBadge, 'five', 'the older answer is ignored');
+    assert.strictEqual(p.choice(), 'five');
+    p.paint();
+    assert.ok(p.badge.textContent.startsWith('5h '), p.badge.textContent);
+  });
+  test(`${kind}: the newest pick's save failing keeps the device copy of the newest pick, even when an older save succeeds later`, async () => {
+    const { p, resolvers } = held();
+    const a = vm.runInContext("planBadgePick('family')", p.ctx);
+    const b = vm.runInContext("planBadgePick('five')", p.ctx);
+    resolvers[1].res({ ok: false, status: 400, json: async () => ({}) }); await b; await tick();
+    resolvers[0].res({ ok: true, status: 200, json: async () => ({}) }); await a; await tick();
+    assert.strictEqual(p.win.hubMe.planBadge, 'plan', 'the older answer did not touch the person value');
+    assert.strictEqual(p.store.m['mm-plan-badge'], 'five');
+    assert.strictEqual(p.choice(), 'five');
+    p.paint();
+    assert.ok(p.badge.textContent.startsWith('5h '), p.badge.textContent);
+  });
+  test(`${kind}: an open chooser follows a repaint: rows rebuilt, focus on the same kind, still open; no view closes it`, () => {
+    const p = makePage(kind, { data: D([W(null, 40), W('fable', 22)], 70) });
+    p.paint(); p.badge.dispatch('click');
+    const before = p.rows();
+    assert.ok(stripCheck(before[0].textContent).includes('40% this week'));
+    p.data = D([W(null, 40, { rejected: true }), W('fable', 22)], 70);
+    p.paint();
+    const rows = p.rows();
+    assert.ok(p.chooser(), 'still open');
+    assert.strictEqual(p.chooser().find(e => e.tag === 'button').length, 1, 'one All subscriptions… button');
+    assert.ok(stripCheck(rows[0].textContent).includes('used up'), rows[0].textContent);
+    assert.strictEqual(p.doc.activeElement, rows[0], 'focus on the Plan row');
+    assert.strictEqual(p.badge.getAttribute('aria-expanded'), 'true');
+    rows[1].focus();
+    p.data = D([W(null, 41), W('fable', 23)], 70); p.paint();
+    assert.strictEqual(p.doc.activeElement, p.rows()[1], 'focus stays on the family row');
+    p.doc.activeElement.dispatch('keydown', { key: 'ArrowDown' });
+    assert.strictEqual(p.doc.activeElement, p.rows()[2], 'the rebuilt rows take keys');
+    p.data = D([W(null, 41), W('fable', 23)], null); p.paint();
+    assert.strictEqual(p.rows().length, 2, 'the 5h row is gone');
+    assert.ok(p.doc.activeElement && p.rows().some(r => r === p.doc.activeElement), 'focus moved to a row that exists');
+    p.data = D([W('opus', 30)]); p.paint();
+    assert.strictEqual(p.chooser(), null, 'no view: closed');
+    assert.notStrictEqual(p.doc.activeElement, p.badge, 'focus not moved to a hidden badge');
+  });
+}

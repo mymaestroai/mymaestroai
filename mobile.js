@@ -1511,7 +1511,7 @@ function planBadgeView(d, family, choice, subsOn, levels) {
   const extras = avail.filter(k => k !== mainKind).filter((k) => {
     const w = wins[k], s = planState(w, levels);
     if (k === 'five') return planUsedUp(w) || s.cls !== '' || (!!subsOn && Number(w.utilization) > 50);
-    return planUsedUp(w) || s.extra || s.cls !== '' || (mainKind !== 'five' && s.pct > mainPct);
+    return planUsedUp(w) || s.extra || s.cls !== '' || s.pct > mainPct;
   }).map(mk);
   const cls = avail.reduce((c, k) => { const x = planState(wins[k], levels).cls; return rank(x) > rank(c) ? x : c; }, '');
   return { main, extras, cls, avail, wins };
@@ -1549,14 +1549,16 @@ function planBadgeChoice() {
   }
   return planBadgeOk(dev) ? dev : null;
 }
+let planBadgeSeq = 0;      // each pick takes the next number; only the newest pick's answer is applied
 async function planBadgePick(v) {
   if (!planBadgeOk(v)) return;
+  const seq = ++planBadgeSeq;
   planBadgeMem = v;
   try { localStorage.setItem(PLAN_BADGE_KEY, v); } catch { /* storage blocked */ }
   paintPlan();
   try {
     const r = await api('/api/me/prefs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ planBadge: v }) });
-    if (r && r.ok) { if (hubMe) hubMe.planBadge = v; if (planBadgeMem === v) planBadgeMem = null; }
+    if (r && r.ok && seq === planBadgeSeq) { if (hubMe) hubMe.planBadge = v; if (planBadgeMem === v) planBadgeMem = null; }
   } catch { /* an older hub answers 400 until it restarts: the device copy stays */ }
 }
 const planLevels = (d) => (d && d.warn && Array.isArray(d.warn.at) ? d.warn.at : []);
@@ -1594,19 +1596,12 @@ function planViewNow() {
   const d = planUsageLast; const a = agentByName(current); const model = String((a && a.model) || '');
   return d && /^claude-sdk\//.test(model) ? planBadgeView(d, planFamilyOf(model), planBadgeChoice(), subsEnabled(), planLevels(d)) : null;
 }
-function planChooserOpen(badge) {
-  if (planChooser) { const same = planChooser.badge === badge; planChooserClose(true); if (same) return; }
-  const view = planViewNow();
-  if (!view) return;
-  const levels = planLevels(planUsageLast);
-  const box = document.createElement('div');
-  box.id = 'plan-badge-chooser';
-  box.className = 'plan-chooser';
-  const list = document.createElement('div');
-  list.className = 'pc-list';
-  list.setAttribute('role', 'listbox');
-  list.setAttribute('aria-label', 'What the Claude usage badge shows');
-  const rows = [];
+// The rows of the chooser, built from a badge view: used when it opens and again when the badge repaints under it.
+function planChooserFill(c, view, levels) {
+  c.list.textContent = '';
+  c.rows = [];
+  c.view = view;
+  const rows = c.rows, list = c.list;
   for (const k of view.avail) {
     const w = view.wins[k];
     const row = document.createElement('div');
@@ -1629,13 +1624,40 @@ function planChooserOpen(badge) {
     list.appendChild(row);
     rows.push({ el: row, kind: k });
   }
+}
+// The badge repainted while the chooser is open (new readings, another model or choice): rebuild its rows from the new
+// view, keep focus on the row of the same window (the current row when that window is gone), leave it where it is.
+function planChooserRefresh(view, levels) {
+  const c = planChooser;
+  if (!c) return;
+  // nothing the rows show has changed: leave them (a pointer pressed on a row keeps its row)
+  const sig = (v) => v.avail.map(k => `${k}:${badgeAmount(v.wins[k], levels)}:${v.wins[k].resetsAt || ''}`).join('|') + '#' + v.main.kind;
+  if (c.view && sig(c.view) === sig(view)) { c.view = view; return; }
+  const was = c.rows.find(r => r.el === document.activeElement);
+  planChooserFill(c, view, levels);
+  if (was) (c.rows.find(r => r.kind === was.kind) || c.rows.find(r => r.kind === view.main.kind) || c.rows[0]).el.focus();
+}
+function planChooserOpen(badge) {
+  if (planChooser) { const same = planChooser.badge === badge; planChooserClose(true); if (same) return; }
+  const view = planViewNow();
+  if (!view) return;
+  const box = document.createElement('div');
+  box.id = 'plan-badge-chooser';
+  box.className = 'plan-chooser';
+  const list = document.createElement('div');
+  list.className = 'pc-list';
+  list.setAttribute('role', 'listbox');
+  list.setAttribute('aria-label', 'What the Claude usage badge shows');
   const subs = document.createElement('button');
   subs.type = 'button';
   subs.className = 'pc-subs';
   subs.textContent = 'All subscriptions…';
   subs.addEventListener('click', () => { planChooserClose(false); openSubsSheet(); });
+  const c = { box, badge, list, rows: [], view, onDoc: null, onResize: null };
+  planChooserFill(c, view, planLevels(planUsageLast));
   box.append(list, subs);
   box.addEventListener('keydown', (e) => {
+    const rows = c.rows;
     const at = document.activeElement, i = rows.findIndex(r => r.el === at), n = rows.length;
     if (e.key === 'Escape') { e.preventDefault(); planChooserClose(true); }
     else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
@@ -1645,7 +1667,7 @@ function planChooserOpen(badge) {
     } else if ((e.key === 'Enter' || e.key === ' ') && i >= 0) { e.preventDefault(); planChooserClose(true); planBadgePick(rows[i].kind); }
     else if (e.key === 'Tab') {
       if (at === subs && !e.shiftKey) planChooserClose(true);
-      else if (at === subs) { e.preventDefault(); (rows.find(r => r.kind === view.main.kind) || rows[0]).el.focus(); }
+      else if (at === subs) { e.preventDefault(); (rows.find(r => r.kind === c.view.main.kind) || rows[0]).el.focus(); }
       else if (e.shiftKey) planChooserClose(true);
       else { e.preventDefault(); subs.focus(); }
     }
@@ -1657,11 +1679,12 @@ function planChooserOpen(badge) {
   box.style.top = `${Math.round(Math.max(host.getBoundingClientRect().bottom, badge.getBoundingClientRect().bottom) + 4)}px`;
   const onDoc = (e) => { if (!box.contains(e.target) && !badge.contains(e.target)) planChooserClose(false); };
   const onResize = () => planChooserClose(false);
-  planChooser = { box, badge, onDoc, onResize };
+  c.onDoc = onDoc; c.onResize = onResize;
+  planChooser = c;
   document.addEventListener('pointerdown', onDoc, true);
   window.addEventListener('resize', onResize);
   badge.setAttribute('aria-expanded', 'true');
-  (rows.find(x => x.kind === view.main.kind) || rows[0]).el.focus();
+  (c.rows.find(x => x.kind === view.main.kind) || c.rows[0]).el.focus();
 }
 function paintPlan() {
   const el = $('chat-plan'); if (!el) return;
@@ -1689,6 +1712,7 @@ function paintPlan() {
   el.textContent = planBadgeText(view, levels);
   el.className = 'sub' + (view.cls ? ' ' + view.cls : '');
   el.title = planBadgeHover(view, levels);
+  if (planChooser && planChooser.badge === el) planChooserRefresh(view, levels);
   el.setAttribute('aria-haspopup', 'listbox');
   el.setAttribute('aria-expanded', planChooser && planChooser.badge === el ? 'true' : 'false');
   el.setAttribute('aria-label', `Claude usage: ${el.textContent}. Press to choose what this shows.`);

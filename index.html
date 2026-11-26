@@ -3173,13 +3173,15 @@
       .active-chats::-webkit-scrollbar-track { background: transparent; }
       .active-chats::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
       .chat-tab { flex: 0 0 auto; padding: 6px 10px; font-size: 0.8rem; white-space: nowrap; }
+      /* Narrow windows: the bar wraps instead of scrolling sideways, so nothing sits out of sight past the right edge;
+         the agent's name, model, effort and usage take their own line and wrap inside it when that line is full. */
       .chat-actions {
         padding: 4px 8px; gap: 4px; font-size: 0.7rem;
-        overflow-x: auto; flex-wrap: nowrap; -webkit-overflow-scrolling: touch;
+        overflow-x: visible; flex-wrap: wrap;
         flex-shrink: 0;
       }
       .chat-actions button { padding: 3px 6px; font-size: 0.7rem; flex-shrink: 0; }
-      .chat-actions .agent-name { font-size: 0.7rem; flex-shrink: 0; }
+      .chat-actions .agent-name { font-size: 0.7rem; flex: 1 1 100%; min-width: 0; margin-left: 0; justify-content: flex-start; }
 
       .status-bar { padding: 4px 10px; font-size: 0.75rem; }
       .thinking-panel { max-height: 80px; }
