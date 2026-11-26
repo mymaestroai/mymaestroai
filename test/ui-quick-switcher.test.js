@@ -287,16 +287,18 @@ function page({ agents = [A('aide', 'Aide'), A('researcher', 'Researcher'), A('r
     simpleStyleLabel: () => null, toggleWorkersMenu: (on) => { workersClosed.push(on); workers.hidden = true; },
     live: {}, bg: {}, AgentDot: require('../lib/ui-agent-dot'),   // stand-ins for the sidebar's state (agentLiveState's answer, bgCountOf); AgentDot is the real helper
     agentLiveState: (n) => ({ busy: false, question: false, activity: 'working', ...(c.live[n] || {}) }), bgCountOf: (n) => c.bg[n] || 0,
+    agentStatus: {}, doing: {}, frames: [], agentDoingNow: (n) => c.doing[n] || { words: '', detail: '' },   // the sidebar's busy words
+    requestAnimationFrame: (f) => { c.frames.push(f); return c.frames.length; }, flush: () => { const f = c.frames.splice(0); f.forEach(x => x()); },
     ownerView: () => 'mine', agentOwnerCache: new Map(), CYBER_MODELS: new Set(['x']), applyStatusSnapshot() {}, renderAgents() {},
   };
   vm.runInNewContext('let qsList = [], qsSel = 0, qsLastQ = null; const QS_MAC = true; let simpleLookOff = null, simpleThemeSaving = false; let rsnFullFor = null, rsnFullReturn = null, toolsFullFor = null, toolsFullReturn = null;\n'
     + ['qsRecentStore', 'qsRecent', 'qsNoteOpened', 'qsRecentKeys', 'qsForgetRecents', 'qsScore', 'qsRank', 'qsUnread', 'qsBlocked', 'closeQuickSwitcher',
       'openQuickSwitcher', 'renderQuickSwitcher', 'qsPaintSel', 'qsKey', 'qsOpen', 'qsShortcut',
       'simpleCloseSettings', 'openSimpleSettings', 'openReasoningFull', 'paintReasoningFull', 'closeReasoningFull', 'openToolsFull', 'closeToolsFull', 'loadAgents'].map(fn).join('')
-    + one('qsIsOpen') + one('qsRosterChanged') + one('qsRecentBox')
+    + one('qsIsOpen') + one('qsRosterChanged') + one('qsRecentBox') + fn('qsStatusChanged') + 'let qsStatusRaf = 0;\n'
     + 'function paintToolsFull() {}\n'   // its painting reads the reply's tool model; opening and closing are real
     + WORKERS_ESC
-    + '\nthis.api = { open: openQuickSwitcher, close: closeQuickSwitcher, isOpen: qsIsOpen, roster: qsRosterChanged, shortcut: qsShortcut, openSimpleSettings, simpleCloseSettings, openReasoningFull, closeReasoningFull, openToolsFull, closeToolsFull, loadAgents };', c);
+    + '\nthis.api = { open: openQuickSwitcher, close: closeQuickSwitcher, isOpen: qsIsOpen, roster: qsRosterChanged, statusChanged: qsStatusChanged, shortcut: qsShortcut, openSimpleSettings, simpleCloseSettings, openReasoningFull, closeReasoningFull, openToolsFull, closeToolsFull, loadAgents };', c);
   doc.addEventListener('keydown', c.api.shortcut, true);   // as app.js wires it
   const key = (target, key, props = {}) => dispatch(target, 'keydown', { key, ...props });
   const cmdK = (props = {}) => key(doc.activeElement, 'k', { metaKey: true, ...props });
@@ -664,4 +666,105 @@ test('the grey short name shows only when the typed text matched it', () => {
   assert.deepStrictEqual(ids(), ['rsch']);
   p.type('resea');
   assert.deepStrictEqual(ids(), [], 'matched the display name only');
+});
+
+// ── Round 1 review fixes ──
+const rowState = (p, n) => { const r = p.doc.querySelector(`.qs-row[data-agent="${n}"]`); const s = r && r.children.find(x => x.cls.has('qs-state')); return s ? s.textContent : null; };
+const rowDot = (p, n) => { const r = p.doc.querySelector(`.qs-row[data-agent="${n}"]`); return r && r.children.find(x => x.cls.has('qs-dot')); };
+const markUnread = (p, id, agent) => { const t = p.doc.createElement('div'); t.id = `tab-${id}`; t.className = 'chat-tab unread'; p.doc.body.appendChild(t); p.c.chats[id] = { agent }; };
+
+test('one state per row: question > busy > unread > background', () => {
+  const p = page({ agents: [A('qa', 'Qa'), A('ba', 'Ba'), A('ua', 'Ua'), A('ga', 'Ga')] });
+  p.c.live = { qa: { question: true, busy: true }, ba: { busy: true, activity: 'working' } };
+  p.c.bg = { ga: 3 };
+  for (const [i, n] of ['qa', 'ba', 'ua', 'ga'].entries()) markUnread(p, `c${i}`, n);
+  p.cmdK();
+  assert.strictEqual(rowState(p, 'qa'), 'Waiting for your answer');
+  assert.ok(rowDot(p, 'qa').cls.has('live-question') && rowDot(p, 'qa').textContent === '?');
+  assert.strictEqual(rowState(p, 'ba'), 'Working', 'busy and unread: the busy words');
+  assert.ok(rowDot(p, 'ba').cls.has('busy'));
+  assert.strictEqual(rowState(p, 'ua'), 'New replies'); assert.ok(rowDot(p, 'ua').cls.has('unread'));
+  assert.strictEqual(rowState(p, 'ga'), 'New replies', 'background work and unread: unread');
+  assert.ok(rowDot(p, 'ga').cls.has('unread'));
+});
+
+test('a busy named agent reads the sidebar\'s words (agentDoingNow), a worker the activity words', () => {
+  const p = page({ agents: [A('scout', 'Scout'), A('wk', 'Wk')] });
+  p.c.live = { scout: { busy: true, activity: 'replying to you' }, wk: { busy: true, activity: 'working' } };
+  p.c.doing = { scout: { words: 'Replying to your message', detail: 'step 2' }, wk: { words: 'Never shown' } };
+  p.c.agentStatus = { wk: { worker: true } };
+  p.cmdK();
+  assert.strictEqual(rowState(p, 'scout'), 'Replying to your message');
+  assert.strictEqual(rowState(p, 'wk'), 'Working');
+  p.c.doing.scout = { words: 'checking the mail' };
+  p.c.api.roster();
+  assert.strictEqual(rowState(p, 'scout'), 'Checking the mail', 'first letter capitalised');
+});
+
+test('an open switcher repaints its rows when the sidebar status changes: once per frame, selection, focus and scroll kept', () => {
+  const p = page({ agents: [A('aide', 'Aide'), A('scout', 'Scout'), A('forge', 'Forge')] });
+  p.c.live = { scout: { busy: true, activity: 'working' } };
+  p.c.api.statusChanged();
+  assert.strictEqual(p.c.frames.length, 0, 'closed: nothing scheduled');
+  p.cmdK();
+  p.key(p.q(), 'ArrowDown'); p.key(p.q(), 'ArrowDown');
+  const selBefore = p.doc.querySelector('.qs-row.sel').dataset.agent;
+  p.doc.getElementById('qs-list').scrollTop = 40;
+  assert.strictEqual(rowState(p, 'scout'), 'Working');
+  p.c.live = { scout: { question: true, busy: true } };
+  p.c.api.statusChanged(); p.c.api.statusChanged(); p.c.api.statusChanged();
+  assert.strictEqual(p.c.frames.length, 1, 'many calls, one frame');
+  assert.strictEqual(rowState(p, 'scout'), 'Working', 'not before the frame');
+  p.c.flush();
+  assert.strictEqual(rowState(p, 'scout'), 'Waiting for your answer');
+  assert.strictEqual(p.doc.querySelector('.qs-row.sel').dataset.agent, selBefore);
+  assert.strictEqual(p.doc.activeElement, p.q(), 'the focus did not move');
+  assert.strictEqual(p.doc.getElementById('qs-list').scrollTop, 40);
+  p.c.api.statusChanged(); p.cmdK();   // closed before the frame runs
+  assert.doesNotThrow(() => p.c.flush());
+  p.c.api.statusChanged();
+  assert.strictEqual(p.c.frames.length, 0);
+});
+
+test('without requestAnimationFrame the repaint falls back to a timer', async () => {
+  const p = page({ agents: [A('scout', 'Scout')] });
+  p.c.requestAnimationFrame = undefined;
+  p.cmdK();
+  p.c.live = { scout: { question: true } };
+  p.c.api.statusChanged();
+  await tick();
+  assert.strictEqual(rowState(p, 'scout'), 'Waiting for your answer');
+});
+
+test('the sidebar status paint tells the open switcher', () => {
+  assert.match(fn('paintAgentStatus'), /qsStatusChanged\(\)/);
+  assert.match(fn('paintAllAgentStatus'), /qsStatusChanged\(\)/);
+});
+
+test('the shortcut leaves an input method composition alone (isComposing, keyCode 229)', () => {
+  const run = (ev) => {
+    let opened = 0, prevented = false, stopped = false;
+    const c = { QS_MAC: false, openQuickSwitcher: () => { opened++; }, qsIsOpen: () => false, qsBlocked: () => false };
+    vm.runInNewContext(fn('qsShortcut') + '\nthis.go = qsShortcut;', c);
+    c.go({ key: 'k', ctrlKey: true, metaKey: false, altKey: false, shiftKey: false, repeat: false, isComposing: false, ...ev, preventDefault: () => { prevented = true; }, stopPropagation: () => { stopped = true; } });
+    return { opened, prevented, stopped };
+  };
+  assert.deepStrictEqual(run({ isComposing: true }), { opened: 0, prevented: false, stopped: false });
+  assert.deepStrictEqual(run({ keyCode: 229 }), { opened: 0, prevented: false, stopped: false });
+  assert.deepStrictEqual(run({ keyCode: 75 }), { opened: 1, prevented: true, stopped: true });
+});
+
+test('the physical K key counts only when the key typed is not a Latin letter (Dvorak, Colemak, Cyrillic)', () => {
+  const run = (ev) => {
+    let opened = 0, prevented = false;
+    const c = { QS_MAC: false, openQuickSwitcher: () => { opened++; }, qsIsOpen: () => false, qsBlocked: () => false };
+    vm.runInNewContext(fn('qsShortcut') + '\nthis.go = qsShortcut;', c);
+    c.go({ ctrlKey: true, metaKey: false, altKey: false, shiftKey: false, repeat: false, isComposing: false, ...ev, preventDefault: () => { prevented = true; }, stopPropagation() {} });
+    return { opened, prevented };
+  };
+  assert.deepStrictEqual(run({ key: 'л', code: 'KeyK' }), { opened: 1, prevented: true });
+  assert.deepStrictEqual(run({ key: 't', code: 'KeyK' }), { opened: 0, prevented: false }, 'Dvorak: Ctrl+T stays the browser\'s');
+  assert.deepStrictEqual(run({ key: 'e', code: 'KeyK' }), { opened: 0, prevented: false }, 'Colemak: Ctrl+E');
+  assert.deepStrictEqual(run({ key: 'k', code: 'KeyT' }), { opened: 1, prevented: true }, 'Dvorak K is on another physical key');
+  assert.deepStrictEqual(run({ key: 'K', code: 'KeyT' }), { opened: 1, prevented: true });
 });

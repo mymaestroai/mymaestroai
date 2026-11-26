@@ -10944,6 +10944,7 @@
       return { busy, question, offer, dotCls, tip, text, line, lineTitle, activity, needsOrigin };
     }
     function paintAgentStatus(name) {
+      if (typeof qsStatusChanged === 'function') qsStatusChanged();   // an open quick switcher repaints its rows (before the early return: the sidebar row may not exist)
       const dot = document.getElementById(`agent-status-${name}`);
       const btn = document.getElementById(`agent-btn-${name}`);
       if (!dot || !btn) return;
@@ -10983,6 +10984,7 @@
     function paintAllAgentStatus() {
       for (const a of AGENTS) paintAgentStatus(a.name);
       paintAgentsWorking();
+      if (typeof qsStatusChanged === 'function') qsStatusChanged();
     }
 
     function busyAgentNames() {
@@ -25088,6 +25090,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       qsSel = at >= 0 ? at : 0;
       qsLastQ = q.value;
       const typed = q.value.trim().toLowerCase();
+      const scrollTop = list.scrollTop;   // a repaint in place keeps the list where it was
       list.textContent = '';
       qsList.forEach((a, i) => {
         const row = document.createElement('div');
@@ -25103,15 +25106,21 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         if (typed && String(shown).toLowerCase() !== String(a.name).toLowerCase() && qsScore({ name: a.name }, typed) !== Infinity) row.appendChild(span('qs-id', a.name));
         // The state, in words on the row (part of the option's name) and with the sidebar's own marker, so colour never
         // carries it alone. Words and states come from the sidebar's helpers: agentLiveState + AgentDot (lib/ui-agent-dot.js).
+        // One state per row: question > busy > unread > background.
         let mark = null, words = '';
-        if (unread.has(a.name)) { mark = 'unread'; words = 'New replies'; }
-        else {
-          const live = agentLiveState(a.name), bg = bgCountOf(a.name);
-          const ds = AgentDot.dotState({ busy: live.busy, question: live.question, background: bg });
-          if (ds === 'question') { mark = 'live-question'; words = AgentDot.dotLabel(ds); }
-          else if (ds === 'busy') { mark = 'busy'; words = String(live.activity || AgentDot.dotLabel(ds)); words = words.charAt(0).toUpperCase() + words.slice(1); }
-          else if (ds === 'background') { mark = 'bg-work'; words = AgentDot.bgLine(bg); }
+        const live = agentLiveState(a.name), bg = bgCountOf(a.name);
+        const ds = AgentDot.dotState({ busy: live.busy, question: live.question, background: bg });
+        if (ds === 'question') { mark = 'live-question'; words = AgentDot.dotLabel(ds); }
+        else if (ds === 'busy') {
+          mark = 'busy';
+          // the sidebar's words for a named (non-worker) agent, as agentLiveState builds its line; else the activity words
+          const s = agentStatus[a.name];
+          const d = !(s && s.worker) ? agentDoingNow(a.name) : null;
+          words = String((d && d.words) || live.activity || AgentDot.dotLabel(ds));
+          words = words.charAt(0).toUpperCase() + words.slice(1);
         }
+        else if (unread.has(a.name)) { mark = 'unread'; words = 'New replies'; }
+        else if (ds === 'background') { mark = 'bg-work'; words = AgentDot.bgLine(bg); }
         if (mark) {
           row.appendChild(span('qs-state', words));
           const d = span('qs-dot ' + mark, mark === 'live-question' ? '?' : '');
@@ -25128,6 +25137,14 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         : 'Loading agents…';
       if (status && status.textContent !== msg) status.textContent = msg;
       if (qsList.length) q.setAttribute('aria-activedescendant', `qs-opt-${qsSel}`); else q.removeAttribute('aria-activedescendant');
+      list.scrollTop = scrollTop;
+    }
+    // The sidebar repainted agent status: an open switcher repaints its rows once on the next frame (focus stays put).
+    let qsStatusRaf = 0;
+    function qsStatusChanged() {
+      if (!qsIsOpen() || qsStatusRaf) return;
+      const run = () => { qsStatusRaf = 0; if (qsIsOpen()) renderQuickSwitcher(); };
+      qsStatusRaf = typeof requestAnimationFrame === 'function' ? requestAnimationFrame(run) : setTimeout(run, 0);
     }
     function qsPaintSel(scroll = true) {
       const list = document.getElementById('qs-list');
@@ -25164,9 +25181,10 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     // page, also while typing a message. Capture phase, so a text box's own handler never sees it. A held key repeats
     // nothing: one open, and a second deliberate press closes.
     function qsShortcut(e) {
-      if (e.key !== 'k' && e.key !== 'K' && e.code !== 'KeyK') return;   // e.code: the same physical key on a non-Latin layout
+      if (e.isComposing || e.keyCode === 229) return;   // an input method is composing (same guard as qsKey)
+      // e.code: the same physical key on a non-Latin layout; not when that key types another Latin letter (Dvorak t, Colemak e)
+      if (e.key !== 'k' && e.key !== 'K' && !(e.code === 'KeyK' && !/^[a-z]$/i.test(e.key || ''))) return;
       if (e.altKey || e.shiftKey || (QS_MAC ? !e.metaKey || e.ctrlKey : !e.ctrlKey || e.metaKey)) return;
-      if (e.isComposing) return;
       if (!qsIsOpen() && qsBlocked()) return;   // it won't open here: the key stays the page's (and the browser's) own
       e.preventDefault();
       e.stopPropagation();
