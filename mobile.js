@@ -15853,7 +15853,7 @@ function openProfileSheet() {
     <div class="sec-actions" style="margin-top:10px"><button id="prof-close">Close</button></div>`;
   // Appearance (Light / Dark / Match device) right before Interface style; normal mode only (Simple has its own, in its settings sheet).
   if (typeof simpleThemeCtl === 'function' && !(typeof simpleOn === 'function' && simpleOn())) {
-    const ap = simpleThemeCtl(themeNoticeGone);
+    const ap = simpleThemeCtl(themeNoticeChosen);
     const tsec = $('prof-theme-sec'), thost = $('prof-theme');
     if (ap && thost && tsec) { ap.el.querySelector('.mm-theme-title').className = 'sec-title'; thost.appendChild(ap.el); tsec.hidden = false; }
   }
@@ -16960,6 +16960,23 @@ function simpleThemeCtl(onChosen) {
   return window.hubSimple.themeControl(document, { me: () => hubMe, save: (v) => simplePrefsPost({ theme: v }), onError: () => toast('Could not save that'), onChosen });
 }
 function themeNoticeGone() { const n = document.getElementById('theme-notice'); if (n) n.remove(); }
+// Choosing a theme in the Settings Appearance control settles the notice for good (as its own buttons do), so a reload does not bring it back.
+function themeNoticeChosen() {
+  try { window.hubSimple.markNoticeSeen(hubMe, window.localStorage); } catch { /* blocked storage */ }
+  themeNoticeGone();
+}
+// The line follows the page while it is open: a look change or a change of the resolved colours (Match device flipping) shows or hides it.
+function themeNoticeSync() {
+  const hs = window.hubSimple;
+  if (!document.getElementById('theme-notice')) { themeNoticeShow(); return; }
+  const cl = document.documentElement.classList, L = window.HubLooks;
+  let seen = true; try { seen = hubMe && hs ? hs.noticeSeen(hubMe, window.localStorage) : true; } catch { seen = true; }
+  const still = hs && typeof hs.noticeShows === 'function' && hs.noticeShows({ simple: cl.contains('mm-simple'), look: L && L.applied ? L.applied(document) : null, resolved: cl.contains('mm-dark') ? 'dark' : cl.contains('mm-light') ? 'light' : null, seen });
+  if (!still) themeNoticeGone();
+}
+if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+  for (const ev of ['mm-look-change', 'mm-theme-change', 'mm-theme-resolved']) document.addEventListener(ev, () => { try { themeNoticeSync(); } catch { /* the one-time line is optional */ } });
+}
 function themeNoticeShow() {
   themeNoticeGone();
   if (!window.hubSimple || typeof window.hubSimple.themeNotice !== 'function' || !hubMe) return;
@@ -17427,13 +17444,14 @@ if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
   if (typeof wide.addEventListener === 'function') wide.addEventListener('change', wideChange);
   else if (typeof wide.addListener === 'function') wide.addListener(wideChange);
 }
-// Under Broadsheet House or Quiet Page the style's own palette decides Simple's colours: that style's label, else null (Engineering).
+// Under a single-set style (Broadsheet House) the style's own palette decides Simple's colours: that style's label, else null (Engineering, or a look with both sets).
 function simpleStyleLabel() {
   const L = typeof window !== 'undefined' ? window.HubLooks : null;
   if (!L || typeof L.applied !== 'function') return null;
   const id = L.applied(document);
   if (id === 'engineering') return null;
   const look = typeof L.byId === 'function' ? L.byId(id) : null;
+  if (look && look.sets === 'both') return null;   // a look with a light and a dark set (Quiet Page) takes the theme choices like Engineering
   return look ? look.label : id;
 }
 let simpleLookSheetOff = null;   // removes the open settings sheet's mm-look-change listener

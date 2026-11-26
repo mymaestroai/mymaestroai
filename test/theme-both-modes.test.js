@@ -5,9 +5,9 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
-const S = require('../lib/ui-simple');
-const L = require('../lib/ui-looks');
-const root = path.join(__dirname, '..');
+const root = process.env.QD_ROOT || path.join(__dirname, '..');   // QD_ROOT: run the same tests against another copy of the sources
+const S = require(path.join(root, 'lib/ui-simple'));
+const L = require(path.join(root, 'lib/ui-looks'));
 const read = (f) => fs.readFileSync(path.join(root, f), 'utf8');
 
 function fakeDoc() {
@@ -74,8 +74,8 @@ test('apply: no account yet -> no theme class; the cache is written for a known 
   assert.strictEqual(st.m.get('mmTheme'), 'light');
   S.apply({ uiMode: 'advanced', theme: 'auto' }, { doc, win: fakeWin(false), storage: st });
   assert.strictEqual(st.m.get('mmTheme'), 'auto');
-  S.apply({ uiMode: 'advanced' }, { doc, win: fakeWin(false), storage: st });   // an account with no setting
-  assert.strictEqual(st.m.has('mmTheme'), false);
+  S.apply({ uiMode: 'advanced' }, { doc, win: fakeWin(false), storage: st });   // an account with no setting resolves as auto: cached as auto
+  assert.strictEqual(st.m.get('mmTheme'), 'auto');
   assert.doesNotThrow(() => S.apply({ uiMode: 'advanced', theme: 'dark' }, { doc, win: fakeWin(false), storage: { getItem() { throw new Error('blocked'); }, setItem() { throw new Error('blocked'); } } }));
 });
 
@@ -184,7 +184,7 @@ test('pages: Appearance before Interface style on desktop and phone, notice plac
   assert.match(app, /try \{ themeNoticeShow\(\); \}/);
   const p = mob.slice(mob.indexOf('<div class="sec-section" id="prof-theme-sec" hidden>'));
   assert.ok(p.indexOf('prof-theme-sec') < p.indexOf('Interface style</div>'));
-  assert.ok(mob.indexOf("simpleThemeCtl(themeNoticeGone)") < mob.indexOf("lookPickerPaint($('prof-looks'))"));
+  assert.ok(mob.indexOf("simpleThemeCtl(themeNoticeChosen)") < mob.indexOf("lookPickerPaint($('prof-looks'))"));
   assert.match(mob, /themeNoticeShow\(\); \} catch/);
   // phone: inside #screen-agents next to the health notice, not in the chat screen's composer
   assert.match(mob, /\$\('screen-agents'\), first = \$\('health-notice'\)/);
@@ -202,4 +202,51 @@ test('inline styles take var(--on-accent, #fff); every .mm-light rule is Simple-
     const css = read(f).replace(/\/\*[\s\S]*?\*\//g, '');
     for (const m of css.matchAll(/([^{}]*\.mm-light[^{}]*)\{/g)) for (const sel of m[1].split(',')) if (sel.includes('.mm-light')) assert.ok(/\.mm-simple\.mm-light/.test(sel), f + ': ' + sel.trim());
   }
+});
+
+test('rememberTheme: a known account with no theme stores auto; no account (null) and sign-out still do not keep a theme', () => {
+  const st = fakeStorage({ mmTheme: 'dark' });
+  S.rememberTheme({ uiMode: 'simple' }, st);             // known account, theme unset: apply() resolves it as auto
+  assert.strictEqual(st.m.get('mmTheme'), 'auto');
+  S.rememberTheme({ uiMode: 'simple', theme: 'bogus' }, st);
+  assert.strictEqual(st.m.get('mmTheme'), 'auto');
+  S.rememberTheme(null, st);                              // no account: cleared, as before (apply(null) never gets here)
+  assert.strictEqual(st.m.has('mmTheme'), false);
+  S.rememberTheme({ theme: 'dark' }, st); L.forgetTheme(st);   // sign-out and 401 clear through forgetTheme
+  assert.strictEqual(st.m.has('mmTheme'), false);
+  // the early loader then reads that auto the way apply() will
+  S.rememberTheme({ uiMode: 'advanced' }, st);
+  const doc = fakeDoc(); L.applyCachedTheme(doc, fakeWin(true), st);
+  assert.deepStrictEqual(cls(doc), ['mm-dark']);
+});
+
+test('early loader: a page without ui-simple follows the device while open (auto); a fixed theme has no listener', () => {
+  const doc = fakeDoc(), win = fakeWin(false);
+  assert.strictEqual(L.applyCachedTheme(doc, win, fakeStorage({ mmTheme: 'auto' })), 'light');
+  assert.deepStrictEqual(cls(doc), ['mm-light']);
+  win.flip(true); assert.deepStrictEqual(cls(doc), ['mm-dark']);
+  win.flip(false); assert.deepStrictEqual(cls(doc), ['mm-light']);
+  // a later call replaces the listener, never stacks one
+  L.applyCachedTheme(doc, win, fakeStorage({ mmTheme: 'auto' })); assert.strictEqual(win.mq.listeners.size, 1);
+  L.applyCachedTheme(doc, win, fakeStorage({ mmTheme: 'dark' })); assert.strictEqual(win.mq.listeners.size, 0);
+  assert.deepStrictEqual(cls(doc), ['mm-dark']);
+  L.stopThemeListener();
+});
+
+test('early loader: hubSimple.apply() takes over, the loader listener is gone (one handler, no double handling)', () => {
+  const doc = fakeDoc(), win = fakeWin(false);
+  L.applyCachedTheme(doc, win, fakeStorage({ mmTheme: 'auto' }));
+  assert.strictEqual(win.mq.listeners.size, 1);
+  const seen = []; doc.addEventListener('mm-theme-resolved', (e) => seen.push(e.detail.resolved));
+  S.apply({ uiMode: 'advanced', theme: 'auto' }, { doc, win, storage: fakeStorage() });
+  assert.strictEqual(win.mq.listeners.size, 1, 'only the account listener remains');
+  win.flip(true);
+  assert.deepStrictEqual(cls(doc), ['mm-dark']);
+  assert.deepStrictEqual(seen, ['dark'], 'one resolved-theme event per change');
+  // a fixed theme from the account leaves no listener at all, the loader's included
+  const doc2 = fakeDoc(), win2 = fakeWin(false);
+  L.applyCachedTheme(doc2, win2, fakeStorage({ mmTheme: 'auto' }));
+  S.apply({ uiMode: 'advanced', theme: 'light' }, { doc: doc2, win: win2, storage: fakeStorage() });
+  assert.strictEqual(win2.mq.listeners.size, 0);
+  win2.flip(true); assert.deepStrictEqual(cls(doc2), ['mm-light']);
 });

@@ -9,11 +9,11 @@ const path = require('node:path');
 const vm = require('node:vm');
 const cheerio = require('cheerio');
 
-const ROOT = path.join(__dirname, '..');
+const ROOT = process.env.QD_ROOT || path.join(__dirname, '..');   // QD_ROOT: run the same tests against another copy of the sources
 const app = fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8');
 const mob = fs.readFileSync(path.join(ROOT, 'mobile.js'), 'utf8');
-const L = require('../lib/ui-looks');
-const hubSimple = require('../lib/ui-simple.js');
+const L = require(path.join(ROOT, 'lib/ui-looks'));
+const hubSimple = require(path.join(ROOT, 'lib/ui-simple.js'));
 
 // ── source extraction ──
 function fnSrc(src, name) {
@@ -164,8 +164,9 @@ test('desktop sheet: Engineering shows the buttons and no line; Broadsheet House
   assert.strictEqual(seg.style.display, 'none');
   assert.strictEqual(line.hidden, false);
   assert.strictEqual(line.textContent, 'Colours follow your interface style (Broadsheet House).');
-  setLook(d.doc, 'quiet');
-  assert.strictEqual(line.textContent, 'Colours follow your interface style (Quiet Page).');
+  setLook(d.doc, 'quiet');   // Quiet Page has a light and a dark set: the choices are back (see the Quiet tests below)
+  assert.strictEqual(seg.style.display, '');
+  assert.strictEqual(line.hidden, true);
   setLook(d.doc, 'engineering');
   assert.strictEqual(seg.style.display, '');
   assert.strictEqual(line.hidden, true);
@@ -218,7 +219,7 @@ test('desktop: the top-bar theme button hides under a light style and returns in
   assert.strictEqual(btn.hidden, false); assert.strictEqual(btn.style.display, '');
   d.h.simpleTopSync(); d.h.simpleTopSync();
   assert.strictEqual(d.doc._count('mm-look-change'), 1, 'one document listener, added once');
-  setLook(d.doc, 'quiet');
+  setLook(d.doc, 'broadsheet');
   d.h.simpleTopSync();                      // a re-sync under a light style keeps it hidden
   assert.strictEqual(d.doc.querySelector('.simple-theme-btn').hidden, true);
 });
@@ -301,9 +302,82 @@ test('phone: the top-bar theme button hides under a light style and returns in E
   p.h.simpleToggleSync();
   const btn = p.doc.querySelector('#simple-top .simple-theme-btn');
   assert.strictEqual(btn.hidden, false);
-  setLook(p.doc, 'quiet');
+  setLook(p.doc, 'broadsheet');
   assert.strictEqual(btn.hidden, true);
   setLook(p.doc, 'engineering');
   assert.strictEqual(btn.hidden, false);
   assert.strictEqual(p.hubMe.theme, 'light');
+});
+
+// ── Quiet Page (sets: 'both') in Simple: the same Light / Dark / Match device choices and top-bar button as Engineering ──
+test('Simple + Quiet Page, desktop: the Appearance choices and the top-bar theme button show; no "colours follow" line', () => {
+  const d = desktop('dark');
+  setLook(d.doc, 'quiet');
+  d.h.simpleTopSync();
+  const btn = d.doc.querySelector('.simple-theme-btn');
+  assert.strictEqual(btn.hidden, false); assert.strictEqual(btn.style.display, '');
+  d.h.openSimpleSettings();
+  const sheet = sheetOf(d.doc);
+  assert.strictEqual(sheet.querySelector('.sm-seg').style.display, '', 'the Light / Dark / Match device choices');
+  assert.strictEqual(sheet.querySelector('.sm-follow').hidden, true);
+  assert.deepStrictEqual(sheet.querySelectorAll('.sm-seg button').map((b) => b.textContent), ['Light', 'Dark', 'Match device']);
+  // a single-set look keeps today's behaviour, and Quiet brings it all back
+  setLook(d.doc, 'broadsheet');
+  assert.strictEqual(sheet.querySelector('.sm-seg').style.display, 'none'); assert.strictEqual(btn.hidden, true);
+  setLook(d.doc, 'quiet');
+  assert.strictEqual(sheet.querySelector('.sm-seg').style.display, ''); assert.strictEqual(btn.hidden, false);
+});
+
+test('Simple + Quiet Page, desktop: Light from dark Quiet switches the theme and stays in Simple', async () => {
+  const d = desktop('dark');
+  setLook(d.doc, 'quiet');
+  d.h.openSimpleSettings();
+  const sheet = sheetOf(d.doc);
+  const light = sheet.querySelectorAll('.sm-seg button').find((b) => b.dataset.theme === 'light');
+  await light.click();
+  assert.strictEqual(d.me.theme, 'light');
+  assert.deepStrictEqual(d.calls.applies, ['light'], 'hubSimple.apply ran with Light');
+  assert.strictEqual(JSON.parse(d.calls.fetch[0][1]).theme, 'light', 'saved');
+  assert.strictEqual(JSON.stringify(Object.keys(JSON.parse(d.calls.fetch[0][1]))), '["theme"]', 'no uiMode change: Simple stays');
+  assert.strictEqual(L.applied(d.doc), 'quiet');
+});
+
+test('Simple + Quiet Page, phone: the Appearance choices and the top-bar theme button show', () => {
+  const p = phone('dark');
+  setLook(p.doc, 'quiet');
+  p.h.simpleToggleSync();
+  assert.strictEqual(p.doc.querySelector('#simple-top .simple-theme-btn').hidden, false);
+  p.h.simpleSettingsOpen();
+  const sheet = p.doc.getElementById('simple-settings-sheet');
+  assert.strictEqual(sheet.querySelector('.ss-seg').style.display, '');
+  assert.strictEqual(sheet.querySelector('.ss-follow').hidden, true);
+  setLook(p.doc, 'broadsheet');
+  assert.strictEqual(sheet.querySelector('.ss-seg').style.display, 'none');
+  assert.strictEqual(p.doc.querySelector('#simple-top .simple-theme-btn').hidden, true);
+  setLook(p.doc, 'quiet');
+  assert.strictEqual(sheet.querySelector('.ss-seg').style.display, '');
+  assert.strictEqual(p.doc.querySelector('#simple-top .simple-theme-btn').hidden, false);
+});
+
+test('Simple + Quiet Page, phone: Light from dark Quiet switches the theme and stays in Simple', async () => {
+  const p = phone('dark');
+  setLook(p.doc, 'quiet');
+  p.h.simpleSettingsOpen();
+  const sheet = p.doc.getElementById('simple-settings-sheet');
+  await sheet.querySelectorAll('.ss-seg button').find((b) => b.dataset.theme === 'light').click();
+  assert.strictEqual(p.hubMe.theme, 'light');
+  assert.strictEqual(JSON.stringify(p.calls.posts), '[{"theme":"light"}]', 'saved the theme only, no mode change');
+  assert.deepStrictEqual(p.calls.applies, ['light']);
+});
+
+test('Simple + Quiet Page, phone: the theme button taps through the themes (simpleThemeTap)', async () => {
+  const p = phone('dark');
+  setLook(p.doc, 'quiet');
+  p.ctx.simpleOn = () => true;
+  vm.runInContext(fnSrc(mob, 'simpleThemeTap') + '\nthis.__tap = simpleThemeTap;', p.ctx);
+  p.h.simpleToggleSync();
+  assert.strictEqual(p.doc.querySelector('#simple-top .simple-theme-btn').hidden, false, 'the button a person taps is there');
+  await p.ctx.__tap();
+  assert.strictEqual(p.hubMe.theme, 'auto');
+  assert.strictEqual(JSON.stringify(p.calls.posts), '[{"theme":"auto"}]');
 });

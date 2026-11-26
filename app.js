@@ -440,13 +440,14 @@
       try { await simplePrefs({ uiMode: mode }); location.reload(); }
       catch (e) { simpleSwitching = false; hubToast(`Could not switch: ${e.message}`); }
     }
-    // Under Broadsheet House or Quiet Page the style's own palette decides Simple's colours: the label of that style, else null (Engineering).
+    // Under a single-set style (Broadsheet House) the style's own palette decides Simple's colours: the label of that style, else null (Engineering, or a look with both sets).
     function simpleStyleLabel() {
       const L = window.HubLooks;
       if (!L || typeof L.applied !== 'function') return null;
       const id = L.applied(document);
       if (id === 'engineering') return null;
       const look = typeof L.byId === 'function' ? L.byId(id) : null;
+      if (look && look.sets === 'both') return null;   // a look with a light and a dark set (Quiet Page) takes the theme choices like Engineering
       return look ? look.label : id;
     }
     // Simple's top-bar theme button has nothing to switch under a light style; it is back in Engineering. (An inline display
@@ -3354,7 +3355,7 @@
       lookPickerBuild(picker);
       if (window.hubSimple && typeof window.hubSimple.themeControl === 'function' && window.hubMe && !document.documentElement.classList.contains('mm-simple')) {
         // Appearance: Light / Dark / Match device, one theme for the account in both modes; right before Interface style.
-        const ap = window.hubSimple.themeControl(document, { me: () => window.hubMe, save: (v) => simplePrefs({ theme: v }), onError: (err) => hubToast(`Could not save: ${err.message}`), onChosen: () => { const n = document.getElementById('hub-theme-notice'); if (n) { n.remove(); layoutBanners(); } } });
+        const ap = window.hubSimple.themeControl(document, { me: () => window.hubMe, save: (v) => simplePrefs({ theme: v }), onError: (err) => hubToast(`Could not save: ${err.message}`), onChosen: () => { try { window.hubSimple.markNoticeSeen(window.hubMe, defaultNoticeStorage()); } catch { /* blocked storage */ } const n = document.getElementById('hub-theme-notice'); if (n) { n.remove(); layoutBanners(); } } });
         ap.el.style.marginBottom = '12px';
         host.insertBefore(ap.el, picker);   // right before Interface style
       }
@@ -4256,6 +4257,22 @@
       document.body.prepend(el);
       layoutBanners();
     }
+    // The line follows the page while it is open: a look change or a change of the resolved colours (Match device flipping) shows or hides it.
+    // themeNotice itself decides (normal mode, Quiet Page, dark, unseen); this only asks again, and keeps the one that is already up.
+    function themeNoticeSync() {
+      const had = document.getElementById('hub-theme-notice');
+      const hs = window.hubSimple;
+      if (had) {
+        const cl = document.documentElement.classList;
+        const L = window.HubLooks;
+        const still = hs && typeof hs.noticeShows === 'function' && hs.noticeShows({ simple: cl.contains('mm-simple'), look: L && L.applied ? L.applied(document) : null, resolved: cl.contains('mm-dark') ? 'dark' : cl.contains('mm-light') ? 'light' : null, seen: window.hubMe ? hs.noticeSeen(window.hubMe, defaultNoticeStorage()) : true });
+        if (still) return;
+        had.remove(); layoutBanners(); return;
+      }
+      themeNoticeShow();
+    }
+    function defaultNoticeStorage() { try { return window.localStorage; } catch { return null; } }
+    for (const ev of ['mm-look-change', 'mm-theme-change', 'mm-theme-resolved']) document.addEventListener(ev, () => { try { themeNoticeSync(); } catch { /* the one-time line is optional */ } });
     function layoutBanners() {
       let top = 0;
       for (const id of ['hub-phone-layout-notice', 'hub-no-accounts-notice', 'hub-recovery-notice', 'hub-setup-notice', 'hub-theme-notice', 'hub-readiness-notice', 'hub-health-notice', 'hub-security-notice']) {
