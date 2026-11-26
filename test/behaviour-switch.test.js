@@ -57,7 +57,8 @@ test('manifest: member-worker-models is page-only, every other entry may be swit
   for (const e of m) assert.equal(typeof e.leadMay, 'boolean', `${e.id} has leadMay`);
   assert.equal(m.find((e) => e.id === 'member-worker-models').leadMay, false);
   // protect-own-code is a security setting: only the owner decides it, on the page (lib/code-protect).
-  assert.deepEqual(m.filter((e) => !e.leadMay).map((e) => e.id), ['member-worker-models', 'protect-own-code']);
+  // research-own-work starts runs that spend the plan allowance or budget without a yes, so (like a spending limit) only the owner switches it, on the page.
+  assert.deepEqual(m.filter((e) => !e.leadMay).map((e) => e.id), ['member-worker-models', 'protect-own-code', 'research-own-work']);
 });
 
 test('a page-only entry is refused before any question, and nothing is written', async (t) => {

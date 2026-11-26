@@ -53,10 +53,10 @@ test('suggestions: one per topic, a no is remembered, nothing without a yes; bui
   assert.doesNotMatch(member, /maestro/, 'a member\'s agent is never pointed at the admin\'s agents');
 });
 
-test('both are manifest entries (eleven in all) and the prompt builders add the text only while they are on', () => {
+test('both are manifest entries (twelve in all) and the prompt builders add the text only while they are on', () => {
   const m = JSON.parse(fs.readFileSync(path.join(ROOT, 'templates', 'behaviour-changes.json'), 'utf8'));
   const ids = m.changes.map((c) => c.id);
-  assert.deepStrictEqual(ids, ['team-guidance', 'starter-team', 'member-worker-models', 'worker-proposals', 'ask-lead-for-workers', 'work-check-ins', 'work-suggestions', 'hand-off-guidance', 'protect-own-code', 'own-code-guidance', 'deep-research']);   // deep-research (lib/research) joined the ten   // ten entries now (code protection, lib/code-protect);   // hand-offs (lib/hand-offs): the rule to hand long work to a build partner
+  assert.deepStrictEqual(ids, ['team-guidance', 'starter-team', 'member-worker-models', 'worker-proposals', 'ask-lead-for-workers', 'work-check-ins', 'work-suggestions', 'hand-off-guidance', 'protect-own-code', 'own-code-guidance', 'deep-research', 'research-own-work']);   // research for an agent's own work (lib/research, research-own-work) joined after deep-research   // deep-research (lib/research) joined the ten   // ten entries now (code protection, lib/code-protect);   // hand-offs (lib/hand-offs): the rule to hand long work to a build partner
   for (const c of m.changes) for (const k of ['title', 'changes', 'benefits', 'costs', 'check', 'on', 'off']) assert.ok(typeof c[k] === 'string' && c[k].length > 5, `${c.id}.${k}`);
   const sdk = fs.readFileSync(path.join(ROOT, 'lib', 'sdk-chat.js'), 'utf8');
   assert.strictEqual((sdk.match(/\(await askLeadTextFor\(agentName\)\) \+ \(await workPracticesTextFor\(agentName\)\)/g) || []).length, 3, 'gateway, SDK and Codex');

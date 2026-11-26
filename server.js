@@ -2711,6 +2711,30 @@ async function handleHttpRequest(req, res) {
       try { const fn = require('./lib/sdk-chat').researchStatusFor; if (typeof fn === 'function') runs = fn(name); } catch { runs = []; }
       return jsonResponse(res, 200, { runs: Array.isArray(runs) ? runs : [] });
     }
+    // Stop a deep research run, or make an agent-started quick run thorough (lib/sdk-chat researchStop / researchUpgrade). Signed-in
+    // only; the person must be allowed to use the run's agent (the status route's check) or they get 403. { ok, run } / { ok, run, newId }.
+    if ((pathname === '/api/research/stop' || pathname === '/api/research/upgrade') && req.method === 'POST') {
+      if (req.hubPendingTotp) return jsonResponse(res, 401, { error: 'Sign in first' });
+      let body = {};
+      try { body = JSON.parse(await readBody(req) || '{}') || {}; } catch { return jsonResponse(res, 400, { error: 'Bad request' }); }
+      const id = typeof body.id === 'string' ? body.id.trim() : '';
+      if (!/^dr-[0-9a-f]{8}$/.test(id)) return jsonResponse(res, 400, { error: 'id must be the id of a research run' });
+      const sdkChat = require('./lib/sdk-chat');
+      const runAgent = sdkChat.researchRunAgent(id);
+      if (!runAgent) return jsonResponse(res, 404, { error: 'No such research run.' });
+      const allAgents = await getAgents();
+      if (!req.hubService && !access.isAdmin(req.hubUser) && !access.canAccessAgent(req.hubUser, runAgent, { agents: allAgents, resolveVirtual: (n) => temporalWorkersLib.getVirtual(n) })) return jsonResponse(res, 403, { error: 'You may not use this agent.' });
+      const by = req.hubUser && req.hubUser.id != null ? String(req.hubUser.id).slice(0, 64) : 'person';
+      const out = pathname === '/api/research/stop' ? sdkChat.researchStop(id, by) : sdkChat.researchUpgrade(id, by);
+      if (!out.ok) return jsonResponse(res, out.status === 404 ? 404 : out.status === 409 ? 409 : 500, { error: out.error });
+      return jsonResponse(res, 200, pathname === '/api/research/stop' ? { ok: true, run: out.run } : { ok: true, run: out.run, newId: out.newId });
+    }
+    // The daily limits on runs agents start without a person's yes, and today's count (admin only: the default class of this path).
+    if (pathname === '/api/research/caps' && req.method === 'GET') {
+      let out = { caps: { perAgent: 3, install: 10 }, today: { install: 0, agents: {} } };
+      try { out = require('./lib/sdk-chat').researchCapsToday(); } catch { /* the defaults */ }
+      return jsonResponse(res, 200, out);
+    }
 
     // ── Session/History Routes ──────────────────────────────────────
     if (/^\/api\/history\/([^/]+)$/.test(pathname) && req.method === 'GET') {
@@ -3015,6 +3039,28 @@ async function handleHttpRequest(req, res) {
             const d = Number(patch.researchReminderDays);
             if (!Number.isInteger(d) || d < 0 || d > 365) return jsonResponse(res, 400, { error: 'researchReminderDays must be a whole number of days from 0 to 365' });
             patch.researchReminderDays = d;
+          }
+          // Deep research, how long a question waits for the person before a quick run starts by itself, in seconds 0..600 (0 = no card, start at once).
+          if (patch && patch.researchOfferWaitSeconds !== undefined) {
+            const v = patch.researchOfferWaitSeconds;
+            const n = typeof v === 'string' && /^\s*\d+\s*$/.test(v) ? Number(v) : v;
+            if (typeof n !== 'number' || !Number.isInteger(n) || n < 0 || n > 600) return jsonResponse(res, 400, { error: 'researchOfferWaitSeconds must be a whole number of seconds from 0 to 600' });
+            patch.researchOfferWaitSeconds = n;
+          }
+          // Deep research started by agents without a yes: the daily limits per agent (0..100) and for the install (0..1000), 0 = no limit; merged onto the stored value.
+          if (patch && patch.researchAgentCaps !== undefined) {
+            const v = patch.researchAgentCaps;
+            if (!v || typeof v !== 'object' || Array.isArray(v)) return jsonResponse(res, 400, { error: 'researchAgentCaps must be an object' });
+            const ranges = { perAgent: [0, 100], install: [0, 1000] };
+            const merged = { ...(hubSettings.getSetting('researchAgentCaps') || {}) };
+            for (const [k, val] of Object.entries(v)) {
+              if (!ranges[k]) return jsonResponse(res, 400, { error: `researchAgentCaps.${k} is not a setting` });
+              const [lo, hi] = ranges[k];
+              const n = typeof val === 'string' && /^\s*\d+\s*$/.test(val) ? Number(val) : val;
+              if (typeof n !== 'number' || !Number.isInteger(n) || n < lo || n > hi) return jsonResponse(res, 400, { error: `researchAgentCaps.${k} must be a whole number from ${lo} to ${hi}` });
+              merged[k] = n;
+            }
+            patch.researchAgentCaps = merged;
           }
           // Thorough deep research caps (admin): known fields only, each in its range (lib/research-thorough); merged onto the stored value.
           if (patch && patch.researchThorough !== undefined) {

@@ -3835,6 +3835,7 @@
         </div>
         <div class="st-hint">How often someone who chose Never for deep research is reminded, at the end of a reply, that it is off.</div>`;
         })() : ''}
+        ${isHubAdmin() ? researchOwnWorkBlockHtml(data) : ''}
         ${isHubAdmin() ? researchThoroughBlockHtml(data) : ''}
       </div>`;
 
@@ -4084,6 +4085,7 @@
       paintPacingSettings();
       paintSpendSettings();
       loadRootGrants();
+      researchCapsLoad();   // the "Today: n started by agents" line (admin only; hidden when the route fails)
     }
 
     // Auto model classifier (lib/classifier): settings, tallies, and the side-by-side try-it box.
@@ -5692,6 +5694,68 @@
         </div>
         <div class="st-hint">A test: helpers and readers get the hub's own web search as well as the one they have. Leave it on the usual search unless you are comparing results.</div>
       </div>`;
+    }
+    // Research an agent needs for its own work (admin): how long a research question waits for an answer, and how many runs agents may start
+    // without asking (settings.researchOfferWaitSeconds, settings.researchAgentCaps { perAgent, install }). Each control saves at once.
+    // The phone's Settings frame is this same Settings page, so the phone needs nothing more.
+    function researchOwnWorkBlockHtml(data) {
+      const w = Number(data && data.researchOfferWaitSeconds);
+      const wait = Number.isInteger(w) && w >= 0 && w <= 600 ? w : 120;
+      const waits = [[0, "Don't wait: start a quick run"], [30, '30 seconds'], [60, '1 minute'], [120, '2 minutes'], [300, '5 minutes'], [600, '10 minutes']];
+      if (!waits.some(o => o[0] === wait)) waits.push([wait, `${wait} seconds`]);
+      const c = (data && data.researchAgentCaps && typeof data.researchAgentCaps === 'object') ? data.researchAgentCaps : {};
+      const cap = (k, hi, d) => { const n = Number(c[k]); return Number.isInteger(n) && n >= 0 && n <= hi ? n : d; };
+      const perAgent = cap('perAgent', 100, 3), install = cap('install', 1000, 10);
+      return `<div id="st-research-ownwork">
+        <div class="st-row"><label><b>Research started by agents</b></label></div>
+        <div class="st-row">
+          <label for="st-ro-wait">Wait for an answer to a research question</label>
+          <select id="st-ro-wait" data-saved="${wait}" onchange="saveResearchOwnWork('researchOfferWaitSeconds', this)">${waits.map(([v, l]) => `<option value="${v}"${v === wait ? ' selected' : ''}>${l}</option>`).join('')}</select>
+        </div>
+        <div class="st-row">
+          <label for="st-ro-per-agent">Research agents may start without asking, per agent per day</label>
+          <input type="number" id="st-ro-per-agent" min="0" max="100" step="1" value="${perAgent}" data-saved="${perAgent}" style="max-width:90px" onchange="saveResearchOwnWork('perAgent', this)">
+        </div>
+        <div class="st-row">
+          <label for="st-ro-install">Research agents may start without asking, for all agents per day</label>
+          <input type="number" id="st-ro-install" min="0" max="1000" step="1" value="${install}" data-saved="${install}" style="max-width:90px" onchange="saveResearchOwnWork('install', this)">
+        </div>
+        <div class="st-hint" id="st-ro-today" hidden></div>
+        <div class="st-hint">Research an agent needs for its own work starts at the quick level without asking, up to these limits (0 means no limit), and you can stop it or make it thorough from the chat.</div>
+      </div>`;
+    }
+    async function researchCapsLoad() {
+      const el = document.getElementById('st-ro-today');
+      if (!el) return;
+      try {
+        const r = await fetch('/api/research/caps', { credentials: 'include' });
+        const d = r.ok ? await r.json() : null;
+        const n = d && d.today && Number(d.today.install);
+        if (!Number.isFinite(n)) { el.hidden = true; return; }
+        el.textContent = `Today: ${n} started by agents`;
+        el.hidden = false;
+      } catch { el.hidden = true; }
+    }
+    let researchOwnWorkSaving = false;
+    async function saveResearchOwnWork(key, el) {
+      const saved = el.dataset.saved;
+      if (researchOwnWorkSaving) { el.value = saved; hubToast('Another setting is saving. Try again in a moment.'); return; }
+      const value = Number(el.value);
+      const hi = key === 'researchOfferWaitSeconds' ? 600 : key === 'perAgent' ? 100 : 1000;
+      if (el.value === '' || !Number.isInteger(value) || value < 0 || value > hi) { el.value = saved; hubToast(`Enter a whole number from 0 to ${hi}.`); return; }
+      const other = (id, d) => { const o = document.getElementById(id); const n = o ? Number(o.dataset.saved) : NaN; return Number.isInteger(n) ? n : d; };
+      const patch = key === 'researchOfferWaitSeconds' ? { researchOfferWaitSeconds: value }
+        : { researchAgentCaps: { perAgent: key === 'perAgent' ? value : other('st-ro-per-agent', 3), install: key === 'install' ? value : other('st-ro-install', 10) } };   // both keys, as the server stores the pair
+      researchOwnWorkSaving = true;
+      try {
+        const r = await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify(patch) });
+        if (!r.ok) { let m = 'HTTP ' + r.status; try { const j = await r.json(); if (j && j.error) m = j.error; } catch {} throw new Error(m); }
+        el.dataset.saved = String(value);
+        hubToast('Saved.');
+      } catch (e) {
+        el.value = saved;
+        hubToast('Could not save: ' + e.message);
+      } finally { researchOwnWorkSaving = false; }
     }
     let researchThoroughSaving = false;
     async function saveResearchSetting(key, el) {
@@ -9258,12 +9322,92 @@
       if (t0 > 0) { const mins = Math.floor(Math.max(0, (now === undefined ? Date.now() : now) - t0) / 60000); text += ' · ' + (mins < 1 ? 'just started' : `${mins} min`); }
       return text;
     }
+    // The notice for a run an agent started without asking (startedBy 'agent' or 'no-answer'): a small card with who, the question, why, the cost,
+    // the progress text and, while it runs, the buttons Stop and Make it thorough. The same words on the desktop page, the phone and Simple.
+    // Names, questions and reasons are set with textContent only. A run the person started (or made thorough) keeps the plain line.
+    const RESEARCH_NOTICE_SHOW_MS = 20000;   // how long "Stopped. ..." / "Thorough research started. ..." stays after the click
+    function researchAgentName(agent) { return typeof agentDisplayName === 'function' ? (agentDisplayName(agent) || String(agent)) : String(agent); }
+    function researchToast(text) { hubToast(text); }
+    function researchNoticePost(path, id) { return fetch(path, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) }); }
+    function researchWaitWords(sec) {
+      const s = Math.max(0, Math.round(Number(sec) || 0));
+      if (s >= 60 && s % 60 === 0) { const m = s / 60; return m === 1 ? '1 minute' : `${m} minutes`; }
+      return s === 1 ? '1 second' : `${s} seconds`;
+    }
+    function researchNoticeOn(run) { return !!run && (run.startedBy === 'agent' || run.startedBy === 'no-answer'); }
+    function researchNoticeTitle(run, agent) {
+      const who = researchAgentName(agent);
+      if (run.startedBy === 'no-answer' && !(Number(run.waitSeconds) > 0)) return `${who} started a quick research run without asking (the wait for an answer is set to 0).`;   // a wait of 0 asks nobody
+      return run.startedBy === 'no-answer' ? `Nobody answered within ${researchWaitWords(run.waitSeconds)}, so ${who} started a quick research run.` : `${who} started a quick research run for its work.`;
+    }
+    function researchNoticeEl(run, now, agent) {
+      const d = document.createElement('div');
+      d.className = 'ho-card research-notice';
+      d.setAttribute('role', 'status');
+      const add = (cls, text) => { const p = document.createElement('div'); p.className = cls; p.textContent = text; d.appendChild(p); return p; };
+      add('ho-title', researchNoticeTitle(run, agent));
+      const q = String(run.question || '').replace(/\s+/g, ' ').trim();
+      if (q) add('research-q', '“' + (q.length > 300 ? q.slice(0, 299) + '…' : q) + '”');
+      const why = String(run.reason || '').replace(/\s+/g, ' ').trim();
+      if (run.startedBy === 'agent' && why) add('research-why', 'Why: ' + why);
+      if (run.costLine) add('research-cost', String(run.costLine));
+      if (run.outcome) { add('ho-time research-after', run.outcome); return d; }
+      add('ho-time', researchLineText(run, now));
+      if (run.active !== false) {
+        const row = document.createElement('div');
+        row.className = 'research-actions';
+        const btns = [];
+        const mk = (label, cls, what) => { const b = document.createElement('button'); b.type = 'button'; b.className = cls; b.textContent = label; b.disabled = !!run.busy; b.onclick = () => researchNoticeAct(run, agent, what, btns); btns.push(b); row.appendChild(b); };
+        mk('Stop', 'wo-stop', 'stop');
+        if (run.upgradable === true) mk('Make it thorough', 'ho-status', 'upgrade');
+        d.appendChild(row);
+      }
+      return d;
+    }
+    async function researchNoticeAct(run, agent, what, btns) {
+      const id = String(run.id);
+      const live = () => (researchRuns.get(agent) && researchRuns.get(agent).get(id)) || run;   // an event may have replaced the record meanwhile
+      if (live().busy) return;
+      live().busy = true;
+      btns.forEach(b => { b.disabled = true; });
+      try {
+        const r = await researchNoticePost('/api/research/' + what, id);
+        const j = await r.json().catch(() => null);
+        if (!r.ok || !j || j.error) throw new Error((j && j.error) || ('HTTP ' + r.status));
+        // the record may have been dropped by an event that came while the request ran: put it back, closed, with the answer
+        if (!researchRuns.has(agent)) researchRuns.set(agent, new Map());
+        const m = researchRuns.get(agent);
+        const cur = m.get(id) || run;
+        cur.outcome = what === 'stop' ? `Stopped. ${researchAgentName(agent)} was told.` : 'Thorough research started. Its report will come here.';
+        cur.outcomeAt = Date.now(); cur.active = false; cur.upgradable = false; cur.busy = false;
+        m.set(id, cur);
+        researchLinePaint();
+        if (typeof setTimeout === 'function') setTimeout(researchLinePaint, RESEARCH_NOTICE_SHOW_MS + 100);
+      } catch (e) {
+        live().busy = false;
+        btns.forEach(b => { b.disabled = false; });
+        researchToast((e && e.message) || 'Could not reach the hub');
+        researchLinePaint();
+      }
+    }
+    // What a status entry or a research_progress event tells about a run.
+    function researchFields(x) {
+      return { id: String(x.id), level: x.level, stage: x.stage, label: x.label, done: x.done, total: x.total, startedAt: x.startedAt, question: x.question, startedBy: x.startedBy, reason: x.reason, waitSeconds: x.waitSeconds, costLine: x.costLine, active: x.active, upgradable: x.upgradable };
+    }
     function researchLineFill(box, agent) {
       if (!box) return;
-      const runs = agent && researchRuns.has(agent) ? [...researchRuns.get(agent).values()].sort((a, b) => (Number(a.startedAt) || 0) - (Number(b.startedAt) || 0)).slice(0, 3) : [];
-      box.textContent = '';
       const now = Date.now();
-      for (const r of runs) { const d = document.createElement('div'); d.className = 'ho-strip research-line'; d.setAttribute('role', 'status'); d.textContent = researchLineText(r, now); box.appendChild(d); }
+      const all = agent && researchRuns.has(agent) ? researchRuns.get(agent) : null;
+      if (all) {   // a closed notice ("Stopped. ...") goes after a short while
+        for (const [id, r] of [...all]) if (r.outcome && now - (r.outcomeAt || 0) > RESEARCH_NOTICE_SHOW_MS) all.delete(id);
+        if (!all.size) researchRuns.delete(agent);
+      }
+      const runs = all && all.size ? [...all.values()].sort((a, b) => (Number(a.startedAt) || 0) - (Number(b.startedAt) || 0)).slice(0, 3) : [];
+      box.textContent = '';
+      for (const r of runs) {
+        if (researchNoticeOn(r)) { box.appendChild(researchNoticeEl(r, now, agent)); continue; }
+        const d = document.createElement('div'); d.className = 'ho-strip research-line'; d.setAttribute('role', 'status'); d.textContent = researchLineText(r, now); box.appendChild(d);
+      }
       box.hidden = runs.length === 0;
     }
     const researchEnded = new Set();   // ids of runs that already got a terminal event (delivered or failed); kept small
@@ -9274,13 +9418,14 @@
       if (ev.state === 'delivered' || ev.state === 'failed') {
         researchEndedAdd(id);   // a status answer still on its way must not bring this run back
         const m = researchRuns.get(ev.agent);
-        if (m) { m.delete(id); if (!m.size) researchRuns.delete(ev.agent); }
+        if (m) { if (!(m.get(id) && m.get(id).outcome)) m.delete(id); if (!m.size) researchRuns.delete(ev.agent); }   // a closed notice keeps its "Stopped. ..." line a while
       } else {
         if (researchEnded.has(id)) return;
         const old = researchRuns.has(ev.agent) ? researchRuns.get(ev.agent).get(id) : null;
+        if (old && old.outcome) return;   // closed by Stop or Make it thorough
         if (old && Number.isFinite(old.seq) && Number.isFinite(ev.seq) && ev.seq < old.seq) return;   // an older event never overwrites a newer one
         if (!researchRuns.has(ev.agent)) researchRuns.set(ev.agent, new Map());
-        researchRuns.get(ev.agent).set(id, { id, level: ev.level, stage: ev.stage, label: ev.label, done: ev.done, total: ev.total, startedAt: ev.startedAt, seq: ev.seq, seenAt: Date.now() });
+        researchRuns.get(ev.agent).set(id, { ...researchFields(ev), busy: old ? old.busy : false, seq: ev.seq, seenAt: Date.now() });
       }
       researchLinePaint();
     }
@@ -9305,11 +9450,12 @@
           if (researchEnded.has(id)) continue;
           const cur = m.get(id);
           const x_seq = Number(x.seq);
+          if (cur && cur.outcome) continue;
           if (cur && (Number.isFinite(cur.seq) && Number.isFinite(x_seq) ? cur.seq >= x_seq : (cur.seenAt || 0) >= t0)) continue;
-          m.set(id, { id, level: x.level, stage: x.stage, label: x.label, done: x.done, total: x.total, startedAt: x.startedAt, seq: Number.isFinite(x_seq) ? x_seq : undefined, seenAt: t0 });
+          m.set(id, { ...researchFields(x), busy: cur ? cur.busy : false, seq: Number.isFinite(x_seq) ? x_seq : undefined, seenAt: t0 });
         }
         // a run the answer does not list and no event touched since the fetch began has ended
-        for (const [id, e] of [...m]) if (!inAnswer.has(id) && (e.seenAt || 0) < t0) m.delete(id);
+        for (const [id, e] of [...m]) if (!inAnswer.has(id) && (e.seenAt || 0) < t0 && !e.outcome) m.delete(id);
         if (m.size) researchRuns.set(agent, m); else researchRuns.delete(agent);
         researchLinePaint();
       } catch { /* the line stays as it was */ }

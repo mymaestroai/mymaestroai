@@ -1063,6 +1063,15 @@
   .handoff-cards .wo-row .wo-stop { color: var(--pill-failed); border: 1px solid var(--pill-failed); }
   .handoff-cards .wo-quiet { padding: 6px 10px; font-size: 13px; color: var(--text-dim); border: 1px dashed var(--border); border-radius: 10px; }
   .research-lines .research-line { cursor: default; white-space: normal; overflow-wrap: anywhere; overflow: visible; min-height: 0; }
+  /* The notice for research an agent started on its own: a card with the words and two real buttons (Stop, Make it thorough) */
+  .research-lines .research-notice { display: flex; flex-direction: column; gap: 2px; }
+  .research-lines .research-q { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+  .research-lines .research-why, .research-lines .research-cost { color: var(--text-dim); font-size: 13px; overflow-wrap: anywhere; }
+  .research-lines .research-after { color: var(--text); font-size: 13px; }
+  .research-lines .research-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+  .research-lines .research-actions button { min-height: 36px; padding: 0 14px; font: inherit; font-size: 13px; border-radius: 8px; background: transparent; cursor: pointer; text-decoration: none; color: var(--text); border: 1px solid var(--border-strong, var(--border)); }
+  .research-lines .research-actions button.wo-stop { color: var(--pill-failed); border-color: var(--pill-failed); }
+  .research-lines .research-actions button:disabled { opacity: .5; cursor: default; }
   /* The hand-off Status sheet (lib/ui-hand-off-card.js openStatus): a bottom sheet at normal reading size */
   .ho-sheet { position: fixed; inset: auto 0 0 0; margin: 0; padding: 0; border: 0; border-top: 1px solid var(--border); border-radius: 14px 14px 0 0; background: var(--bg-secondary, var(--bg-input)); color: var(--text); width: 100%; max-width: 100%; max-height: 85vh; overflow: hidden; box-sizing: border-box; }
   .ho-sheet[open] { display: flex; flex-direction: column; }

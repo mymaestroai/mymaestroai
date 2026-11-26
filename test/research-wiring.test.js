@@ -152,7 +152,8 @@ test('start: only after a yes in this turn (or a stored always); the approval is
   assert.equal(L.started.length, 0);
   await L.ctx.run('sam-agent', L.live, { action: 'offer', question: 'Q?' });
   assert.match(await L.ctx.run('sam-agent', L.live, { action: 'start', question: 'Q?', sub_questions: subs }), /^Started \(id dr-00000001\)/);
-  assert.deepEqual(JSON.parse(JSON.stringify(L.started)), [{ agent: 'sam-agent', question: 'Q?', subQuestions: subs, level: 'quick' }]);
+  // changed: a start now also carries who decided it (startedBy 'person' for a yes), the reason and wait (none), the person, the cost line and the agent's display name (plan: research-own-work)
+  assert.deepEqual(JSON.parse(JSON.stringify(L.started)), [{ agent: 'sam-agent', question: 'Q?', subQuestions: subs, level: 'quick', startedBy: 'person', reason: '', waitSeconds: null, personKey: 'u_sam', costLine: 'Uses your Claude sign-in plan allowance: several times a normal answer.', agentLabel: 'Sam-agent' }]);
   assert.match(await L.ctx.run('sam-agent', L.live, { action: 'start', question: 'Q?', sub_questions: subs }), /^Ask first/, 'once');
   // No: no start
   const N = load({ askAnswer: 'No' });
@@ -479,7 +480,8 @@ test('the runner is wired for Thorough runs: page fetch (no private addresses), 
   assert.match(SRC, /sameVendor: researchKeptOnBox\(agent\)/);
   assert.match(SRC, /teamFolderOf\(rec\)/);
   assert.match(SRC, /keptOnBox: researchKeptOnBox,/);
-  assert.match(SRC, /hubEvents\.events\.publish\('research_progress', \{ agent: run\.agent, id: run\.id, level: run\.level, stage: run\.stage \|\| '', label: run\.stageLabel \|\| '', done: run\.stageDone \|\| 0, total: run\.stageTotal \|\| 0, state: run\.state, startedAt: run\.startedAt, seq: run\.seq \|\| 0 \}\)/);
+  // changed: the event also carries startedBy, reason, waitSeconds, costLine, active and upgradable (...researchWhoFields(run))
+  assert.match(SRC, /hubEvents\.events\.publish\('research_progress', \{ agent: run\.agent, id: run\.id, level: run\.level, stage: run\.stage \|\| '', label: run\.stageLabel \|\| '', done: run\.stageDone \|\| 0, total: run\.stageTotal \|\| 0, state: run\.state, startedAt: run\.startedAt, seq: run\.seq \|\| 0, \.\.\.researchWhoFields\(run\) \}\)/);
   assert.match(SRC, /module\.exports = \{\n  researchStatusFor,/);
 });
 
@@ -491,10 +493,11 @@ test('researchStatusFor: only the agent\'s active runs, in the contract shape; r
   L.ctx.setRunner({ list: () => runs, start() {}, recover() {} });
   const st = JSON.parse(JSON.stringify(L.ctx.statusFor('sam-agent')));
   assert.deepEqual(st.map((x) => x.id), ['dr-1', 'dr-2']);
-  assert.deepEqual(st[0], { id: 'dr-1', level: 'thorough', stage: 'read', label: 'reading sources in full (1 of 3)', done: 1, total: 3, startedAt: 111, seq: 0 });
+  // changed: each run also says who decided it and what the notice may offer (a run with no startedBy is the person's)
+  assert.deepEqual(st[0], { id: 'dr-1', level: 'thorough', stage: 'read', label: 'reading sources in full (1 of 3)', done: 1, total: 3, startedAt: 111, seq: 0, question: '', startedBy: 'person', reason: '', waitSeconds: null, costLine: '', active: true, upgradable: false });
   assert.equal(L.ctx.statusFor('nobody').length, 0);
   L.ctx.onProgress(runs[0]);
-  assert.deepEqual(JSON.parse(JSON.stringify(published)), [{ t: 'research_progress', p: { agent: 'sam-agent', id: 'dr-1', level: 'thorough', stage: 'read', label: 'reading sources in full (1 of 3)', done: 1, total: 3, state: 'running', startedAt: 111, seq: 0 } }]);
+  assert.deepEqual(JSON.parse(JSON.stringify(published)), [{ t: 'research_progress', p: { agent: 'sam-agent', id: 'dr-1', level: 'thorough', stage: 'read', label: 'reading sources in full (1 of 3)', done: 1, total: 3, state: 'running', startedAt: 111, seq: 0, question: '', startedBy: 'person', reason: '', waitSeconds: null, costLine: '', active: true, upgradable: false } }]);
   const broken = load({ globals: { hubEvents: { events: { publish: () => { throw new Error('bus down'); } } } } });
   broken.ctx.onProgress(runs[0]);
   const noBus = load();
