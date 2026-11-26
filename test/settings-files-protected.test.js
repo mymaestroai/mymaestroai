@@ -117,14 +117,32 @@ test('reads are as they were: the lead may read agents.json, copy it out; settin
 
 test('a cd that cannot be followed: a relative write to a protected name is refused, an absolute one elsewhere is not', () => {
   const cmds = [
-    'cd ~ && echo x > settings.json',
-    'cd $(echo /tmp) && cp /tmp/x agents.json',
-    'cd ~; echo x >> users.json',
-    'cd -P -- /tmp && echo x > connectors.json',
+    'cd ~/install/data && echo x > settings.json',
+    'cd $(echo /tmp)/data && cp /tmp/x agents.json',
+    'cd ~/x/data; echo x >> users.json',
+    'cd -P -- /tmp/data && echo x > connectors.json',
     'pushd /tmp && echo x > ../data/modules.json',
-    'cd $HOME/x && echo x > prefs.json'.replace('prefs.json', 'push/prefs.json'),
-    'cd ~ && mv /tmp/x auth.db',
-    'cd ~ && rm -f settings-journal.jsonl',
+    'cd $HOME/x/data && echo x > push/prefs.json',
+    'cd ~/data && mv /tmp/x auth.db',
+    'cd ~/data && rm -f settings-journal.jsonl',
+    'cd "$(git rev-parse --show-toplevel)/data" && sed -i s/a/b/ agents.json',
+    'cd $X && echo x > data/settings.json',
+    'cd ~ && cp a ../data/users.json',
+    'cd ~ && echo x > ./data/wallet-state.json',
+    'cd $HUB/data && echo x > wallet-keystore.json',
+    `cd ~/${path.basename(INST)} && echo x > settings.json`,
+  ];
+  // the reviewer's false refusals: after a cd it cannot follow, a protected name that is not written as data/ and is not under a data-ish cd is allowed
+  const allowed = [
+    'cd ~/proj && echo x > users.json',
+    'cd ~/proj && echo x > .vscode/settings.json',
+    'cd ~/proj && echo x > fixtures/modules.json',
+    'cd ~/proj && echo x > wallet-notes.txt',
+    'cd ~/proj && echo x > wallet-state.json',
+    'cd ~/proj && echo x > push/prefs.json',
+    'cd $(pwd)/proj && sed -i s/a/b/ settings.json',
+    'echo "cd ~ and more" && echo x > settings.json',
+    `echo 'cd ~' > /dev/null; echo x > users.json`,
   ];
   for (const [label, agent, extra] of ROLES) {
     for (const command of cmds) {
@@ -132,7 +150,7 @@ test('a cd that cannot be followed: a relative write to a protected name is refu
       assertRefused(dec(agent, 'run_job', { name: 'j', command }, extra), `${label}: run_job ${command}`);
     }
     // not blind (no cd, or one it follows), or an absolute path elsewhere: not this refusal
-    for (const command of ['echo x > settings.json', 'cd /tmp && echo x > settings.json', 'cd ~ && echo x > /tmp/settings.json', 'cd ~ && echo x > notes.txt']) {
+    for (const command of [...allowed, 'echo x > settings.json', 'cd /tmp && echo x > settings.json', 'cd ~ && echo x > /tmp/settings.json', 'cd ~ && echo x > notes.txt']) {
       assert.notStrictEqual(dec(agent, 'Bash', { command }, extra).cls, 'settings_file', `${label}: ${command}`);
     }
   }

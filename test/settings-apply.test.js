@@ -375,3 +375,55 @@ test('agentFieldAllowed(): the guards of PATCH /api/agents/:name, in the route\'
   assert.equal(f({ tier: 'fast' }, { service: true, user: null }).ok, true, 'the hub itself passes the member rule');
   assert.equal(f(null, person()).ok, true);
 });
+
+test('R2-6: Restore of a settings key goes through lib/settings-apply: the running worker caps follow, a global follows, an invalid old value is refused', () => {
+  const sdk = require.resolve(path.join(inst.lib, 'sdk-chat'));
+  const had = require.cache[sdk];
+  const caps = [];
+  require.cache[sdk] = { id: sdk, filename: sdk, loaded: true, exports: { getPacing: () => ({ setCaps: (c) => caps.push(JSON.parse(JSON.stringify(c))) }) } };   // the running limiter, stubbed
+  const person = { kind: 'person', user: admin.id };
+  const as = { isAdmin: true, isAdminSession: true, user: admin.id };
+  const keyEntry = (key) => entries().find((e) => e.key === key);
+  try {
+    // a worker limit: change it, restore it: the caps of the running hub follow
+    journal.withActor(person, () => settings.updateSettings({ workersAtOnce: { 'claude-sdk': 2 } }));
+    journal.withActor(person, () => settings.updateSettings({ workersAtOnce: { 'claude-sdk': 5 } }));
+    const e = keyEntry('workersAtOnce.claude-sdk');
+    assert.deepEqual([e.before, e.after, e.restorable], [2, 5, true]);
+    caps.length = 0;
+    const r = journal.restore(e.id, as);
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(settings.getSetting('workersAtOnce')['claude-sdk'], 2);
+    assert.ok(caps.length >= 1, 'setCaps was called');
+    assert.equal(caps[caps.length - 1]['claude-sdk'], 2, 'the running caps follow the restored limit');
+    assert.equal(keyEntry('workersAtOnce.claude-sdk').who.kind, 'restore', 'journaled as a restore');
+    // a key that was not there before is removed, and the caps follow that too
+    journal.withActor(person, () => settings.updateSettings({ workersAtOnce: { 'claude-sdk': 2, codex: 3 } }));
+    const added = keyEntry('workersAtOnce.codex');
+    assert.equal(added.before, undefined);
+    caps.length = 0;
+    assert.equal(journal.restore(added.id, as).ok, true);
+    assert.equal(settings.getSetting('workersAtOnce').codex, undefined);
+    assert.ok(caps.length >= 1 && caps[caps.length - 1].codex === undefined, 'the caps follow a removed key');
+    // a one-value global goes through setGlobalSetting (the running global follows)
+    apply.setGlobalSetting('maxContextMessages', 33);
+    apply.setGlobalSetting('maxContextMessages', 44);
+    const g = keyEntry('maxContextMessages');
+    assert.deepEqual([g.before, g.after], [33, 44]);
+    assert.equal(journal.restore(g.id, as).ok, true);
+    assert.equal(global.__maxContextMessages, 33);
+    assert.equal(onDisk().maxContextMessages, 33);
+    // the same validation as the original setter: an old value that is out of range is not put back
+    settings.updateSettings({ maxContextMessages: 3 });   // a raw write (no cleaner): below the 5 the setter allows
+    apply.setGlobalSetting('maxContextMessages', 50);
+    const bad = keyEntry('maxContextMessages');
+    assert.deepEqual([bad.before, bad.after], [3, 50]);
+    const refused = journal.restore(bad.id, as);
+    assert.equal(refused.ok, false); assert.match(refused.error, /between 5 and 200/);
+    assert.equal(settings.getSetting('maxContextMessages'), 50, 'left as it was');
+    assert.equal(global.__maxContextMessages, 50);
+    settings.updateSettings({ maxContextMessages: 40 });
+  } finally {
+    if (had) require.cache[sdk] = had; else delete require.cache[sdk];
+  }
+});

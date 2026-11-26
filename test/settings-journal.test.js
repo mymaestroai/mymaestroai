@@ -735,3 +735,249 @@ test('G7: the server starts the watch once a minute', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
   assert.match(src, /require\('\.\/lib\/settings-journal'\)\.startWatch\(/);
 });
+
+// ── Round 2 ───────────────────────────────────────────────────────────────
+const rawLines = () => fs.readFileSync(JOURNAL_FILE, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+// Runs fn with fs.renameSync failing (disk full) for one destination file.
+function failingRename(dest, fn) {
+  const real = fs.renameSync;
+  fs.renameSync = function (a, b) { if (String(b) === dest) { const e = new Error('disk full (test)'); e.code = 'ENOSPC'; throw e; } return real.apply(this, arguments); };
+  const log = console.error; console.error = () => {};
+  try { return fn(); } finally { fs.renameSync = real; console.error = log; }
+}
+// Runs fn and tells how many journal entries a reader could see at the moment the file for `dest` was renamed into place.
+// A write the hook of the hub cannot see (file descriptors): stands for a program outside the hub.
+function rawWrite(file, text) { const fd = fs.openSync(file, 'w'); try { fs.writeSync(fd, text); } finally { fs.closeSync(fd); } }
+// An account store of its own on the test data folder (an earlier test removes users.json) with one member.
+function freshAuth() {
+  const au = L('auth').createAuth({ dataDir: inst.data, log: () => {} });
+  const m = au.createUser({ login: `r2-${Date.now()}@example.com`, name: 'R2', role: 'member', password: 'r2-long-password-1' }).user;
+  return { au, m };
+}
+function visibleDuringRename(dest, fn) {
+  const real = fs.renameSync; let seen = null;
+  fs.renameSync = function (a, b) { if (String(b) === dest) seen = journal.list({ limit: 500 }).length; return real.apply(this, arguments); };
+  try { fn(); } finally { fs.renameSync = real; }
+  return seen;
+}
+
+test('R2-3: a failed file write of a research, notify, voice or users preference is not kept: the entry is marked failed, the error propagates', () => {
+  const { au, m: member } = freshAuth();
+  const f = (n) => path.join(inst.data, n);
+  const rp = L('research-prefs').createResearchPrefs({ file: f('research-prefs.json') });
+  const np = L('notify-prefs').createNotifyPrefs({ file: f('notify-prefs.json') });
+  const vp = L('voice-person-prefs').createVoicePersonPrefs({ file: f('voice-person-prefs.json') });
+  const cases = [
+    ['research', f('research-prefs.json'), () => rp.setChoice('u-r23', 'always'), () => rp.choiceOf('u-r23') === 'ask', 'prefs.u-r23.research.choice'],
+    ['research level', f('research-prefs.json'), () => rp.setAlwaysLevel('u-r23', 'thorough'), () => rp.alwaysLevelOf('u-r23') === 'quick', 'prefs.u-r23.research.alwaysLevel'],
+    ['notify', f('notify-prefs.json'), () => np.setDefault('u-r23', { questions: 'off' }), () => np.get('u-r23').default.questions === 'on', 'prefs.u-r23.notify.default.questions'],
+    ['voice', f('voice-person-prefs.json'), () => vp.setInterruptReminder('u-r23', false), () => vp.interruptReminder('u-r23') === true, 'prefs.u-r23.voice.interruptReminder'],
+    ['users', f('users.json'), () => au.setPrefs(member.id, { planBadge: 'five' }), () => au.getUser(member.id).planBadge !== 'five', `prefs.${member.id}.planBadge`],
+  ];
+  for (const [name, dest, change, unchanged, key] of cases) {
+    const n0 = journal.list({ limit: 500 }).length;
+    assert.throws(() => failingRename(dest, change), /disk full|could not be written/, `${name}: the error propagates`);
+    assert.ok(unchanged(), `${name}: the change is not kept`);
+    assert.equal(journal.list({ limit: 500 }).length, n0, `${name}: the change strip shows nothing`);
+    const lines = rawLines();
+    const written = lines.filter((l) => l.key === key && l.after !== undefined).pop();
+    assert.ok(written, `${name}: the entry was written first (pending)`);
+    assert.equal(written.pending, true, `${name}: as a pending entry`);
+    assert.ok(lines.some((l) => l.failedOf === written.id), `${name}: and marked failed`);
+    assert.equal(journal.get(written.id), null, `${name}: get() does not see it`);
+    // the same change on a working disk: invisible while the file is written, visible after
+    let seen;
+    const n1 = journal.list({ limit: 500 }).length;
+    seen = visibleDuringRename(dest, change);
+    assert.equal(seen, n1, `${name}: nobody sees the entry before the file is written`);
+    const now = journal.list({ limit: 500 });
+    assert.equal(now.length, n1 + 1, `${name}: visible once the file is written`);
+    assert.equal(now[0].key, key);
+    assert.ok(rawLines().some((l) => l.commitOf === now[0].id), `${name}: through a commit line`);
+  }
+});
+
+test('R2-3: the settings and agents stores are two-phase too, and a crash between the phases leaves a pending entry nobody sees', async () => {
+  const n0 = journal.list({ limit: 500 }).length;
+  const seenS = visibleDuringRename(SETTINGS_FILE, () => settings.updateSettings({ maxContextMessages: 71 }));
+  assert.equal(seenS, n0, 'settings: invisible until the file is written');
+  assert.equal(newest().key, 'maxContextMessages');
+  const n1 = journal.list({ limit: 500 }).length;
+  let seenA = null;
+  const real = fs.renameSync;
+  fs.renameSync = function (a, b) { if (String(b) === AGENTS_FILE) seenA = journal.list({ limit: 500 }).length; return real.apply(this, arguments); };
+  try { await agents.updateAgentField('hazel', { blurb: 'two-phase blurb' }); } finally { fs.renameSync = real; }
+  assert.equal(seenA, n1, 'agents: invisible until the file is written');
+  assert.equal(newest().key, 'agents.hazel.blurb');
+  // a crash after the pending line and before the commit line: the entry is in the file but never shows or restores
+  const pend = journal.recordChange('settings', [{ key: 'maxContextMessages', before: 71, after: 72 }], { pending: true });
+  assert.equal(pend[0].pending, true);
+  assert.ok(fs.readFileSync(JOURNAL_FILE, 'utf8').includes(pend[0].id));
+  assert.equal(journal.get(pend[0].id), null);
+  assert.ok(!journal.list({ limit: 500 }).some((e) => e.id === pend[0].id));
+  assert.equal(journal.restore(pend[0].id, { isAdmin: true, isAdminSession: true }).status, 404);
+  assert.ok(!journal.restoredIds(0).has(pend[0].id));
+  journal.commit(pend);
+  assert.ok(journal.get(pend[0].id), 'visible after its commit line');
+});
+
+test('R2-4: an outside edit followed by a hub write to the same file before the tick is recorded first; the hub\'s deletion is the hub\'s', () => {
+  const { q, timers } = fakeTimers();
+  journal.configure({ timers, notify: () => {} });
+  journal._pending.clear();
+  const f = path.join(inst.data, 'connectors.json');
+  rawWrite(f, '{"connectors":[]}');
+  const w = journal.startWatch({ dataDir: inst.data, intervalMs: 0 });
+  try {
+    w.tick();
+    const filesN = () => journal.list({ limit: 500 }).filter((e) => e.store === 'files' && e.key === 'files/connectors.json').length;
+    const n0 = filesN();
+    rawWrite(f, '{"connectors":[{"id":"edited by a script"}]}');   // outside
+    fs.writeFileSync(f, '{"connectors":[{"id":"the hub wrote this later"}]}');   // the hub, before any tick
+    assert.equal(filesN(), n0 + 1, 'the outside edit was recorded at the hub\'s own write');
+    assert.equal(q.length, 1, 'with its notice');
+    w.tick();
+    assert.equal(filesN(), n0 + 1, 'the tick adds nothing more');
+    // a hub write with nothing outside before it stays quiet
+    fs.writeFileSync(f, '{"connectors":[{"id":"again"}]}'); w.tick();
+    assert.equal(filesN(), n0 + 1);
+    // an outside edit and then the hub's rename onto the file
+    rawWrite(f, '{"connectors":["outside 2"]}');
+    fs.writeFileSync(`${f}.tmp`, '{"connectors":["hub 2"]}'); fs.renameSync(`${f}.tmp`, f);
+    assert.equal(filesN(), n0 + 2, 'also at a rename');
+    // the hub deletes the file: its own change, not an outside one (unlink and rm)
+    fs.unlinkSync(f); w.tick();
+    assert.equal(filesN(), n0 + 2, 'unlink by the hub is not reported');
+    fs.writeFileSync(f, '{"connectors":[]}'); w.tick();
+    fs.rmSync(f); w.tick();
+    assert.equal(filesN(), n0 + 2, 'rm by the hub is not reported');
+    // a deletion by something else still is reported
+    fs.writeFileSync(f, '{"connectors":[]}'); w.tick();
+    require('node:child_process').execFileSync(process.execPath, ['-e', `require('fs').unlinkSync(${JSON.stringify(f)})`], { env: { PATH: process.env.PATH, HOME: process.env.HOME } });
+    w.tick();
+    assert.equal(filesN(), n0 + 3, 'an outside deletion is still reported by the tick');
+    fs.writeFileSync(f, '{"connectors":[]}'); w.tick();
+    rawWrite(f, '{"connectors":["x"]}'); w.tick();
+    assert.equal(filesN(), n0 + 4, 'and so is an outside edit');
+  } finally {
+    w.stop();
+    journal.configure({ clock: Date.now, timers: { setTimeout, clearTimeout }, notify: null });
+    try { fs.rmSync(f, { force: true }); } catch { /* gone */ }
+  }
+});
+
+test('R2-4: the command line marks its writes to users.json and other watched files, so they are not reported as outside', () => {
+  const { execFileSync } = require('node:child_process');
+  const { q, timers } = fakeTimers();
+  journal.configure({ timers, notify: () => {} });
+  journal._pending.clear();
+  const { au, m } = freshAuth();   // users.json exists
+  const users = path.join(inst.data, 'users.json'), mods = path.join(inst.data, 'modules.json');
+  const w = journal.startWatch({ dataDir: inst.data, intervalMs: 0 });
+  try {
+    w.tick();
+    const filesN = () => journal.list({ limit: 500 }).filter((e) => e.store === 'files').length;
+    const n0 = filesN(), q0 = q.length;
+    // another process (what scripts/hub-cli.js does: startCliMarking, then the writes of the command)
+    const code = `const sj=require(${JSON.stringify(path.join(inst.lib, 'settings-journal'))});const fs=require('fs');const p=require('path');const d=${JSON.stringify(inst.data)};
+      sj.startCliMarking({dataDir:d});
+      const u=JSON.parse(fs.readFileSync(p.join(d,'users.json'),'utf8'));u.note='cli wrote this';fs.writeFileSync(p.join(d,'users.json.tmp'),JSON.stringify(u));fs.renameSync(p.join(d,'users.json.tmp'),p.join(d,'users.json'));
+      fs.writeFileSync(p.join(d,'modules.json'),'{"modules":{"cli":1}}');`;
+    execFileSync(process.execPath, ['-e', code], { env: { PATH: process.env.PATH, HOME: process.env.HOME, MM_TEST_NO_REAL_CLAUDE: '1' } });
+    assert.ok(rawLines().some((l) => l.marker && l.store === 'files/users.json'), 'a marker line for users.json');
+    w.tick();
+    assert.equal(filesN(), n0, 'the command\'s own writes are not outside edits');
+    assert.equal(q.length, q0);
+    // the hub writes users.json right after a command did, before its tick: still quiet
+    execFileSync(process.execPath, ['-e', `const sj=require(${JSON.stringify(path.join(inst.lib, 'settings-journal'))});sj.startCliMarking({dataDir:${JSON.stringify(inst.data)}});require('fs').writeFileSync(${JSON.stringify(users)},require('fs').readFileSync(${JSON.stringify(users)},'utf8')+' ');`], { env: { PATH: process.env.PATH, HOME: process.env.HOME } });
+    au.setPrefs(m.id, { theme: 'auto' });
+    w.tick();
+    assert.equal(filesN(), n0, 'a hub write after a command write is quiet too');
+    // an unmarked outside write is still reported
+    execFileSync(process.execPath, ['-e', `require('fs').writeFileSync(${JSON.stringify(mods)},'{"modules":{"by":"script"}}')`], { env: { PATH: process.env.PATH, HOME: process.env.HOME } });
+    w.tick();
+    assert.equal(filesN(), n0 + 1);
+  } finally {
+    w.stop();
+    journal.configure({ clock: Date.now, timers: { setTimeout, clearTimeout }, notify: null });
+    try { fs.rmSync(mods, { force: true }); } catch { /* gone */ }
+  }
+});
+
+test('R2-5: credentials in URL query parameters are redacted in journal values and in notices, and such entries cannot be restored', () => {
+  const names = ['api_key', 'apikey', 'key', 'token', 'access_token', 'secret', 'password', 'pass', 'sig', 'signature', 'auth', 'API_KEY', 'Token', 'ACCESS_TOKEN'];
+  const rows = names.map((n, i) => ({ key: `endpoint${i}`, before: undefined, after: `https://api.example.test/v1/items?page=2&${n}=SECRET${i}VALUE&x=1` }));
+  rows.push({ key: 'fragment', before: undefined, after: 'https://app.example.test/cb#access_token=FRAGSECRET&state=ok' });
+  rows.push({ key: 'first', before: undefined, after: 'https://api.example.test/v1?api_key=FIRSTSECRET' });
+  rows.push({ key: 'nested', before: undefined, after: { feed: { url: 'wss://h.example.test/s?token=NESTEDSECRET' } } });
+  const es = journal.recordChange('settings', rows);
+  for (const e of es) assert.equal(e.restorable, false, `${e.key} is not restorable`);
+  const text = fs.readFileSync(JOURNAL_FILE, 'utf8');
+  for (const s of [...names.map((_, i) => `SECRET${i}VALUE`), 'FRAGSECRET', 'FIRSTSECRET', 'NESTEDSECRET']) assert.ok(!text.includes(s), s);
+  assert.equal(es[0].after, 'https://api.example.test/v1/items?page=2&api_key=***&x=1', 'the rest of the URL is kept');
+  assert.equal(es[names.length].after, 'https://app.example.test/cb#access_token=***&state=ok');
+  const plain = journal.recordChange('settings', [{ key: 'plainPaging', before: undefined, after: 'https://example.test/list?page=2&sort=name' }])[0];
+  assert.equal(plain.restorable, true); assert.equal(plain.after, 'https://example.test/list?page=2&sort=name');
+  assert.equal(journal.redactUrlText('see https://h.test/a?Signature=ABC123&b=2 now'), 'see https://h.test/a?Signature=***&b=2 now');
+  // an outside edit that puts such a URL in the settings file: neither the entry nor the notice carries it
+  const { q, timers } = fakeTimers();
+  const notices = [];
+  let now = 3_100_000_000_000;
+  journal.configure({ clock: () => now, timers, notify: (p) => notices.push(p) });
+  journal._pending.clear();
+  settings.get();
+  const cur = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8'));
+  cur['https://h.example.test/p?token=KEYNAMESECRET'] = 1; cur.mirror2 = 'https://m.example.test/z?password=OUTSIDESECRET'; cur.__pad2 = 'z'.repeat(9);
+  fs.writeFileSync(SETTINGS_FILE, JSON.stringify(cur, null, 2));
+  settings.get();
+  const outside = journal.list({ limit: 20 }).filter((e) => e.who.kind === 'outside');
+  assert.ok(outside.length >= 2);
+  assert.ok(!JSON.stringify(outside).includes('SECRET'), JSON.stringify(outside));
+  assert.ok(outside.every((e) => e.restorable === false || !/mirror2|token=/.test(e.key)));
+  now += 60_000; q[0].fn();
+  assert.ok(notices.length >= 1 && !notices[0].body.includes('SECRET'), notices[0] && notices[0].body);
+  journal.configure({ clock: Date.now, timers: { setTimeout, clearTimeout }, notify: null });
+  const fixed = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8')); delete fixed['https://h.example.test/p?token=KEYNAMESECRET']; delete fixed.mirror2; delete fixed.__pad2;
+  fs.writeFileSync(SETTINGS_FILE, JSON.stringify(fixed, null, 2) + '\n'); settings.get();
+});
+
+test('R2 follow-up: the keys never restored come from the bulk route\'s dropped keys (plus requireAdmin2fa)', () => {
+  const sa = L('settings-apply');
+  for (const k of [...Object.keys(sa.DROPPED_KEYS), 'requireAdmin2fa']) assert.equal(journal.neverRestorable('settings', k), true, k);
+  assert.equal(journal.neverRestorable('settings', 'maxContextMessages'), false);
+  assert.equal(journal.neverRestorable('agents', 'backup'), false, 'only the settings store');
+  // a key added to the dropped list later is covered without touching the journal
+  sa.DROPPED_KEYS.zzNewProtectedKey = 'test line';
+  try { assert.equal(journal.neverRestorable('settings', 'zzNewProtectedKey.inner'), true); } finally { delete sa.DROPPED_KEYS.zzNewProtectedKey; }
+});
+
+test('R2 follow-up: the operation\'s own id collector never keeps an outside entry found on the way', async () => {
+  settings.get();
+  const cur = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8'));
+  cur.outsideOnlyKey = 'added by a script'; cur.__pad3 = 'q'.repeat(11);
+  fs.writeFileSync(SETTINGS_FILE, JSON.stringify(cur, null, 2));   // another stamp: the next get() journals it as outside, inside the operation
+  const { ids } = await journal.withActorCollect({ kind: 'lead', agent: 'maestro', turn: 't-collect' }, async () => { settings.updateSettings({ maxContextMessages: 73 }); });
+  assert.ok(ids.length >= 1);
+  const outside = journal.list({ limit: 50 }).filter((e) => e.who.kind === 'outside' && e.key === 'outsideOnlyKey');
+  assert.equal(outside.length, 1, 'the outside edit was journaled');
+  for (const id of ids) { const e = journal.get(id); assert.ok(e && e.who.kind === 'lead', `${id} is the operation's own`); assert.notEqual(id, outside[0].id); }
+  assert.ok(ids.some((id) => journal.get(id).key === 'maxContextMessages'));
+  // a failed write is not in the ids either
+  const r = await journal.withActorCollect({ kind: 'lead', agent: 'maestro' }, async () => {
+    try { failingRename(SETTINGS_FILE, () => settings.updateSettings({ maxContextMessages: 74 })); } catch { /* expected */ }
+  });
+  assert.deepEqual(r.ids, [], 'an entry of a write that failed is dropped');
+  const fixed = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8')); delete fixed.outsideOnlyKey; delete fixed.__pad3;
+  fs.writeFileSync(SETTINGS_FILE, JSON.stringify(fixed, null, 2) + '\n'); settings.get();
+});
+
+test('R2 follow-up: restoring an agent entry recorded without a stamp says it is an older entry from before agents were tracked', () => {
+  const e = { id: 'sj-0a0b0c0d0e', at: Date.now(), who: { kind: 'person' }, store: 'agents', key: 'agents.hazel.blurb', record: null, before: 'old', after: 'older text', why: null, restorable: true };
+  fs.appendFileSync(JOURNAL_FILE, JSON.stringify(e) + '\n');
+  const r = journal.restore(e.id, { isAdmin: true, isAdminSession: true });
+  assert.equal(r.ok, false); assert.equal(r.status, 409);
+  assert.match(r.error, /older entry from before agents were tracked/);
+  const stamped = { ...e, id: 'sj-0f0e0d0c0b', stamp: 'box:not-this-one' };
+  fs.appendFileSync(JOURNAL_FILE, JSON.stringify(stamped) + '\n');
+  assert.match(journal.restore(stamped.id, { isAdmin: true, isAdminSession: true }).error, /no longer the one/, 'a stamped entry of another agent keeps the other wording');
+});
