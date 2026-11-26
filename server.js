@@ -2998,6 +2998,14 @@ async function handleHttpRequest(req, res) {
       return jsonResponse(res, 200, s);
     }
 
+    // The settings records (templates/settings-records.json): every option's help and who may change it. Signed-in people;
+    // members get only the records a member may see, and never the facts note or storage key (lib/settings-records).
+    if (pathname === '/api/settings-records' && req.method === 'GET') {
+      const isAdmin = access.isAdmin(req.hubUser) || !hubAuth.hasUsers();   // a hub without accounts has one person: the owner
+      try { return jsonResponse(res, 200, require('./lib/settings-records').routeBody(req.hubUser || null, { isAdmin })); }
+      catch (e) { console.warn('[settings-records]', e.message); return jsonResponse(res, 500, { error: 'settings records unavailable' }); }
+    }
+
     // "Require two-factor sign-in for admins": a signed-in admin's own browser session only (no token, no service, no half-signed-in session).
     if (pathname === '/api/security/admin-2fa' && req.method === 'POST') {
       if (!(req.hubIdentKind === 'user' && !req.hubPendingTotp && !req.hubToken && !req.hubService && access.isAdmin(req.hubUser))) return jsonResponse(res, 403, { error: 'admin_only' });

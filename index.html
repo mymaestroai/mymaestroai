@@ -2351,6 +2351,25 @@
     .plan-chooser .pc-row:focus-visible, .plan-chooser .pc-subs:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
     .plan-chooser .pc-check { flex: none; width: 1em; color: var(--accent); }
     .plan-chooser .pc-subs { display: block; width: 100%; margin-top: 4px; padding: 7px 8px; background: transparent; color: var(--accent); border: 0; border-top: 1px solid var(--border); border-radius: 0 0 5px 5px; font: inherit; text-align: left; cursor: pointer; }
+    /* The ⓘ help beside a setting (lib/ui-settings-help.js): a small round button after the label, a panel beside it (a bottom sheet in the phone frame and on narrow screens), and the light highlight of a row found by another word */
+    .st-info { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 18px; height: 18px; margin-left: 6px; padding: 0; border: 1px solid var(--border-strong); border-radius: 50%; background: transparent; color: var(--text-dim); font: inherit; font-size: 0.78rem; line-height: 1; cursor: pointer; vertical-align: middle; }
+    .st-info:hover { color: var(--text); border-color: var(--text-dim); }
+    .st-info:focus-visible, .st-help-x:focus-visible, .st-help-ask:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+    html.mm-settings-only .st-info { width: 32px; height: 32px; margin-left: 2px; font-size: 1.05rem; }
+    html.mm-settings-only .st-row > label:has(+ .st-info) { flex: 1 1 calc(100% - 44px) !important; }
+    .st-help-panel { position: fixed; z-index: 10050; width: 360px; max-width: calc(100vw - 16px); max-height: calc(100vh - 16px); overflow-y: auto; box-sizing: border-box; padding: 14px 16px; background: var(--bg-card); color: var(--text); border: 1px solid var(--border-strong); border-radius: 10px; box-shadow: 0 8px 28px var(--shadow-color-pop); font-size: 0.82rem; line-height: 1.45; }
+    .st-help-panel:focus { outline: none; }
+    .st-help-head { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 4px; }
+    .st-help-title { flex: 1; font-size: 1rem; font-weight: 600; color: var(--text); }
+    .st-help-today { color: var(--text-dim); font-size: 0.72rem; font-weight: 400; }
+    .st-help-x { flex: none; width: 32px; height: 32px; border: 1px solid var(--border); border-radius: 50%; background: transparent; color: var(--text); font-size: 1.15rem; line-height: 1; cursor: pointer; }
+    .st-help-h { margin-top: 10px; font-size: 0.68rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--accent); }
+    .st-help-p { margin: 2px 0 0; color: var(--text); }
+    .st-help-ask { margin-top: 14px; padding: 8px 14px; border: 0; border-radius: 6px; background: var(--accent); color: var(--on-accent); font: inherit; font-weight: 600; cursor: pointer; }
+    .st-help-scrim { position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 10049; background: var(--overlay-bg); }
+    .st-help-sheet { left: 0; right: 0; bottom: 0; top: auto; width: auto; max-width: none; max-height: 70vh; border-radius: 14px 14px 0 0; padding: 16px 16px calc(16px + env(safe-area-inset-bottom, 0px)); font-size: 0.95rem; }
+    .st-help-sheet .st-help-ask { display: block; width: 100%; padding: 12px 14px; }
+    .st-word-hit { background: var(--hover-tint-strong); border-radius: 6px; }
     /* Settings -> Subscriptions: one bar per usage window */
     #st-subs-body .subs-block { margin: 10px 0 4px; }
     #st-subs-body .subs-head { font-weight: 600; margin-bottom: 4px; }
@@ -3877,6 +3896,7 @@
   <script src="/ui-code-copy.js"></script>
   <script src="/ui-team-card.js"></script>
   <script src="/ui-simple.js"></script>
+  <script src="/ui-settings-help.js"></script>
   <script defer src="/ui-model-offer-groups.js"></script>
   <script src="/ui-teams.js"></script>
   <script src="/password-eye.js"></script>

@@ -3465,6 +3465,40 @@ function applyRoute(state) {
   else show(state.screen === 'activity' ? 'activity' : 'agents');
 }
 
+// "Ask Maestro about this" (the ⓘ sheet, lib/ui-settings-help.js): open the lead agent's chat and put the question in its message
+// box, WITHOUT sending. The sheet calls window.mmAskLead; the Settings frame (a separate page) opens /mobile#ask-lead=<text>,
+// which askLeadStart handles on load and on hashchange, then drops the hash.
+function askLeadEnv() {
+  return {
+    tries: 60,   // the chat may fetch its history before the box is there
+    findLead: () => agents.find((a) => a && a.lead) || null,
+    beforeOpen: () => {   // the Settings frame and any open sheet go through their own guards (unsaved changes are asked about)
+      if (settingsSheet) settingsSheetRequestClose();
+      for (const d of document.querySelectorAll('dialog[open]')) { try { dialogGuard.requestClose(d, 'close'); } catch { /* stays open */ } }
+    },
+    openChat: (name) => { navigate('chat', name); },
+    getBox: (name) => (current === name ? $('msg-input') : null),
+    clearHash: () => window.history.replaceState(window.history.state, '', location.pathname + location.search),
+  };
+}
+function askLeadStart() {
+  const H = window.hubSettingsHelp;
+  if (!H) return;
+  window.mmAskLead = (text) => H.askFill(text, askLeadEnv());
+  const run = () => { H.handleAskHash(location.hash, askLeadEnv()).catch(() => {}); };
+  window.addEventListener('hashchange', run);
+  run();
+}
+// The ⓘ help in the phone-native sheets: each is one element that is painted again when it opens, so the buttons are put in as rows arrive.
+function helpMountPhone() {
+  const H = window.hubSettingsHelp;
+  if (!H) return;
+  for (const id of ['notify-prefs-sheet', 'notify-agent-sheet', 'research-sheet', 'profile-sheet', 'security-sheet', 'voice-panel', 'rsn-sheet']) {
+    const el = $(id);
+    if (el) H.mount(el, 'phone').catch(() => {});
+  }
+}
+
 function routeFromHash() {
   const h = location.hash || '';
   const m = h.match(/^#chat=(.+)$/);
@@ -17338,6 +17372,8 @@ async function init() {
   window.history.replaceState({ screen: route.screen, agent: route.agent }, '');
   const opened = applyRoute(route);
   if (resumed.fromArrow) Promise.resolve(opened).then(() => { if (route.screen === 'chat' && route.agent === current) reloadResumeFinish(route.agent, resumed.draft); });
+  helpMountPhone();   // the ⓘ help in the phone-native sheets
+  askLeadStart();     // "Ask Maestro about this" from the Settings frame: /mobile#ask-lead=<text> fills the lead's box
   updateDots();
   connectEvents();
   paintPush();
@@ -17965,6 +18001,7 @@ function simpleSettingsOpen() {
   $('ss-all')?.addEventListener('click', () => { d.close(); settingsSheetOpen(); });
   d.querySelector('.ss-close').addEventListener('click', () => d.close());
   if (!d.open) d.showModal();
+  if (window.hubSettingsHelp) window.hubSettingsHelp.mount(d, 'simple-phone').catch(() => {});   // the ⓘ help, if the records anchor any here
   typeof researchSimplePaint === 'function' && researchSimplePaint(d);   // Deep research, when the hub has it on
   typeof researchPrefLoad === 'function' && researchPrefLoad();   // repaints the open sheet with the hub's answer
 }

@@ -521,6 +521,7 @@
       });
       overlay.addEventListener('keydown', (e) => { if (e.key === 'Escape') simpleCloseSettings(); });
       document.body.appendChild(overlay);
+      if (window.hubSettingsHelp) window.hubSettingsHelp.mount(overlay, 'simple-desktop').catch(() => {});   // the ⓘ help, if the records anchor any here
       const first = overlay.querySelector('.sm-x'); if (first) first.focus();
     }
 
@@ -3579,12 +3580,26 @@
       }).catch(() => {});
     }
 
+    // The ⓘ help (lib/ui-settings-help.js): the records are fetched again each time Settings opens; the ⓘ buttons go in after the
+    // dialog is drawn (and again for rows added later), and the search learns each section's other words from the same records.
+    let stWordsIdx = null;   // Map(section element -> [{ row, text }]), built once records and dialog are both ready
+    function stHelpMount() {
+      const H = window.hubSettingsHelp, overlay = document.getElementById('st-overlay');
+      stWordsIdx = null;
+      if (!H || !overlay) return;
+      H.mount(overlay, 'desktop', { refetch: true }).then(() => {
+        if (document.getElementById('st-overlay') === overlay) stWordsIdx = H.sectionWords(overlay, 'desktop', 'st-section');
+      }).catch(() => {});
+    }
     // Search: show the sections whose words match (a group's title matching shows all of it), open their groups,
-    // hide the rest. Clearing the box puts every group back the way it was.
+    // hide the rest. A section also matches when a setting inside it is known by that word (its record's name, labels, words
+    // or what it does); those rows get a light highlight. Clearing the box puts every group back the way it was.
     function stSearch(q) {
       q = String(q || '').trim().toLowerCase();
       const groups = [...document.querySelectorAll('#st-groups details.st-group')];
       const none = document.getElementById('st-search-none');
+      const wordHits = (s) => ((stWordsIdx && stWordsIdx.get(s)) || []).filter((e) => e.text.includes(q));
+      for (const r of document.querySelectorAll('#st-groups .st-word-hit')) r.classList.remove('st-word-hit');
       if (!q) {
         for (const g of groups) {
           g.style.display = '';
@@ -3602,7 +3617,9 @@
         const titleHit = g.querySelector('.st-group-title').textContent.toLowerCase().includes(q) || !!g.querySelector('.st-group-sum.st-sum-crit');
         let n = 0;
         for (const s of g.querySelectorAll('.st-section')) {
-          const hit = titleHit || s.textContent.toLowerCase().includes(q);
+          const words = wordHits(s);
+          const hit = titleHit || s.textContent.toLowerCase().includes(q) || words.length > 0;
+          if (hit) for (const e of words) if (e.row && e.row.classList) e.row.classList.add('st-word-hit');
           s.style.display = hit ? '' : 'none';
           s.classList.toggle('st-match', hit && !titleHit);
           if (hit) n++;
@@ -4081,6 +4098,7 @@
       stModal(html);
       stTuningMount(); stNotifyAgentFill();   // the moved tuning controls and the per-agent notification choices
       groupSettings(data);
+      stHelpMount();   // the ⓘ help beside each setting, and the words the search also matches (lib/ui-settings-help.js); after the rows are drawn, never inside their markup
       paintDesktopPush();
       paintPacingSettings();
       paintSpendSettings();
@@ -8216,11 +8234,33 @@
       refreshSpendToday();
       refreshPlanChip();
       showMobileBanner();
+      askLeadStart();   // "Ask Maestro about this" from another page: /#ask-lead=<text> fills the lead's box
       // Check for pending restart action on page load (user may have refreshed)
       setTimeout(() => checkPendingRestartAction(), 1500);
       // Check if this page load is after a manual restart
       setTimeout(() => checkManualRestartComplete(), 2000);
     });
+
+    // "Ask Maestro about this" (the ⓘ panel, lib/ui-settings-help.js): open the lead agent's chat and put the question in its message
+    // box, WITHOUT sending. From this page the panel calls window.mmAskLead; from agent-settings.html or users.html (another page)
+    // it opens /#ask-lead=<text>, which askLeadStart handles on load and on hashchange, then drops the hash.
+    function askLeadEnv() {
+      return {
+        findLead: () => (Array.isArray(AGENTS) ? AGENTS.find((a) => a && a.lead) : null) || null,
+        beforeOpen: () => { const o = document.getElementById('st-overlay'); if (o) dialogRequestClose(o); simpleCloseSettings(); },   // Settings goes through its own guard (unsaved changes are asked about)
+        openChat: (name) => { const a = AGENTS.find((x) => x.name === name); return startSoloChat(name, (a && a.model) || ''); },
+        getBox: (name) => { const c = findSoloChat(name); return c ? document.getElementById('input-' + c.id) : null; },
+        clearHash: () => history.replaceState(history.state, '', location.pathname + location.search),
+      };
+    }
+    function askLeadStart() {
+      const H = window.hubSettingsHelp;
+      if (!H || SETTINGS_ONLY) return;
+      window.mmAskLead = (text) => H.askFill(text, askLeadEnv());   // set only on the full page: the phone's Settings frame sends its parent instead
+      const run = () => { H.handleAskHash(location.hash, askLeadEnv()).catch(() => {}); };
+      window.addEventListener('hashchange', run);
+      run();
+    }
 
     // Shown on a phone by the screen test in lib/ui-phone-layout.js (works when the browser requests the desktop site),
     // and on narrow windows as before; a phone moves to /mobile by itself, so it sees the bar only after "Use the full site" or "?desktop=once".
