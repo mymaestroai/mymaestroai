@@ -1543,6 +1543,10 @@ async function handleHttpRequest(req, res) {
     if (pathname === '/api/agents/rename' && req.method === 'POST') {
       const body = JSON.parse(await readBody(req));
       const result = await renameAgent(body.oldName, body.newName);
+      if (result.success) {
+        // The agent card (open on the old name) listens for this and closes; the pages reload their lists.
+        try { require('./lib/hub-events').events.publish('agent_updated', { agent: String(body.oldName), oldName: String(body.oldName), renamedTo: String(body.newName), changed: ['name'] }); } catch { /* events are best effort */ }
+      }
       return jsonResponse(res, result.success ? 200 : 400, result);
     }
 

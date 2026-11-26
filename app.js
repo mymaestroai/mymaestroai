@@ -6718,6 +6718,16 @@
       const c = { box, badge, list, rows: [], view, onDoc: null, onResize: null };
       planChooserFill(c, view, planLevels(planLast));
       box.append(list, subs);
+      // The last line opens the agent card at its Model row (P3-8); the chooser itself is unchanged.
+      let lastBtn = subs;
+      if (window.hubAgentCard && chat && chat.agent) {
+        lastBtn = document.createElement('button');
+        lastBtn.type = 'button';
+        lastBtn.className = 'pc-subs pc-card';
+        lastBtn.textContent = agentCardLastLine(chat.agent);
+        lastBtn.addEventListener('click', () => { planChooserClose(false); openAgentCard(chat.agent, 'OPT-0047'); });
+        box.append(lastBtn);
+      }
       box.addEventListener('keydown', (e) => {
         const rows = c.rows;
         const at = document.activeElement, i = rows.findIndex(r => r.el === at), n = rows.length;
@@ -6728,7 +6738,9 @@
           rows[i >= 0 ? (i + step + n) % n : (step > 0 ? 0 : n - 1)].el.focus();
         } else if ((e.key === 'Enter' || e.key === ' ') && i >= 0) { e.preventDefault(); planChooserClose(true); planBadgePick(rows[i].kind); }
         else if (e.key === 'Tab') {
-          if (at === subs && !e.shiftKey) planChooserClose(true);
+          if (at === lastBtn && !e.shiftKey) planChooserClose(true);
+          else if (at === lastBtn) { e.preventDefault(); (lastBtn !== subs ? subs : (rows.find(r => r.kind === c.view.main.kind) || rows[0]).el).focus(); }
+          else if (at === subs && !e.shiftKey) { e.preventDefault(); lastBtn.focus(); }
           else if (at === subs) { e.preventDefault(); (rows.find(r => r.kind === c.view.main.kind) || rows[0]).el.focus(); }
           else if (e.shiftKey) planChooserClose(true);
           else { e.preventDefault(); subs.focus(); }
@@ -7832,8 +7844,86 @@
 
     const settingsWindows = {};  // agentName -> popup Window reference
 
-    function openAgentSettings(agentName, event) {
-      event.stopPropagation();
+    // ── The agent card (lib/ui-agent-card.js): the card is the way in to an agent's settings; the popup page below is the fallback ──
+    // The card gets this page's own event handling (it opens no stream of its own) and this page's agent list.
+    const agentCardSubs = {};   // event type -> Set of listeners the card registered
+    function agentCardSubscribe(type, fn) {
+      const set = agentCardSubs[type] || (agentCardSubs[type] = new Set());
+      set.add(fn);
+      return () => set.delete(fn);
+    }
+    function agentCardEmit(type, ev) {
+      const set = agentCardSubs[type];
+      if (set) for (const fn of [...set]) { try { fn(ev); } catch { /* one listener must not stop the others */ } }
+    }
+    try { if (window.hubAgentCard && typeof window.hubAgentCard.configure === 'function') window.hubAgentCard.configure({ subscribe: agentCardSubscribe, agentsList: () => (typeof AGENTS !== 'undefined' ? AGENTS : []) }); } catch { /* the card is optional */ }
+    // The last line of a chip's control: "All settings for <agent>…" (the text one place, so the chips say the same).
+    function agentCardLastLine(agentName) {
+      const a = (typeof AGENTS !== 'undefined' ? AGENTS : []).find(x => x && x.name === agentName);
+      return `All settings for ${(a && a.display) || capName(agentName)}…`;
+    }
+    const CARD_PICK = '__card__';   // the value of the last line in a picker; never sent anywhere
+    // Opens the card on an agent, at a row (a record id such as OPT-0047) or at its top; true when the card is there to open.
+    function openAgentCard(agentName, row) {
+      const card = window.hubAgentCard;
+      if (!agentName || !card || typeof card.open !== 'function') return false;
+      try {
+        const p = card.open(agentName, row ? { row } : {});
+        if (p && typeof p.then === 'function') p.then(ok => { if (ok === false) openAgentSettingsPopup(agentName); }, () => openAgentSettingsPopup(agentName));
+        return true;
+      } catch { return false; }
+    }
+    // The agent's name in the chat header opens the card. The chat is found from the picker beside the name (id model-pick-<chatId>).
+    document.addEventListener('click', (e) => {
+      const t = e.target && e.target.closest ? e.target.closest('.agent-name-text') : null;
+      if (!t) return;
+      const wrap = t.closest('.agent-name'), pick = wrap && wrap.querySelector ? wrap.querySelector('.model-pick') : null;
+      const chat = pick && /^model-pick-/.test(pick.id || '') ? chats[pick.id.slice('model-pick-'.length)] : null;
+      if (chat && chat.agent && !chat.isGroup) openAgentCard(chat.agent);
+    });
+    // The desktop voice chip (shown only while voice is on for the install and the person is an admin): press switches this agent
+    // between its own voice and the same voice as all agents, the field the card's Voice row uses (agents[].voice, PATCH {voice}).
+    // The dots beside it are the last line, "All settings for <agent>…", opening the card at its Voice row.
+    const VOICE_CHIP_OWN = { voice: '', stt: 'local', tts: 'local' };
+    function voiceAgentOwn(agentName) { const a = (typeof AGENTS !== 'undefined' ? AGENTS : []).find(x => x && x.name === agentName); return !!(a && a.voice && typeof a.voice === 'object'); }
+    function voiceAgentChipPaint() {
+      let ready = false;
+      try { ready = typeof voiceReady === 'function' && !!voiceReady(); } catch { ready = false; }
+      for (const [chatId, chat] of Object.entries(chats)) {
+        if (!chat || !chat.agent) continue;
+        const wrap = document.getElementById(`vagent-wrap-${chatId}`), btn = document.getElementById(`vagent-${chatId}`), dots = document.getElementById(`vagent-card-${chatId}`);
+        if (!wrap || !btn) continue;
+        const show = ready && isHubAdmin() && !!window.hubAgentCard;
+        wrap.hidden = !show;
+        const own = voiceAgentOwn(chat.agent);
+        btn.textContent = own ? 'Its own voice' : 'Same voice as all';
+        btn.setAttribute('aria-pressed', own ? 'true' : 'false');
+        btn.title = own ? 'This agent uses its own voice. Press to use the same voice as all agents.' : 'This agent uses the same voice as all agents. Press to give it its own voice.';
+        if (dots) { dots.setAttribute('aria-label', agentCardLastLine(chat.agent)); dots.title = agentCardLastLine(chat.agent); }
+      }
+    }
+    async function voiceAgentChipToggle(chatId) {
+      const chat = chats[chatId];
+      if (!chat || !chat.agent) return;
+      const own = voiceAgentOwn(chat.agent);
+      try {
+        const r = await fetch(`/api/agents/${encodeURIComponent(chat.agent)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ voice: own ? null : { ...VOICE_CHIP_OWN } }) });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok || d.success === false) { hubToast(`Could not change the voice: ${d.error || d.detail || r.status}`); return; }
+        const a = (AGENTS || []).find(x => x && x.name === chat.agent);
+        if (a) { if (own) delete a.voice; else a.voice = { ...VOICE_CHIP_OWN }; }
+        voiceAgentChipPaint();
+      } catch (e) { hubToast(`Could not change the voice: ${e.message}`); }
+    }
+    function voiceAgentCardOpen(chatId) { const chat = chats[chatId]; if (chat && chat.agent) openAgentCard(chat.agent, 'OPT-0022'); }
+    agentCardSubscribe('agent_updated', () => { setTimeout(voiceAgentChipPaint, 600); });
+    // The agent row's "Settings", a new agent and a clone open the card; the old popup page only when the card is not there.
+    function openAgentSettings(agentName, event, row) {
+      if (event && event.stopPropagation) event.stopPropagation();
+      if (openAgentCard(agentName, row)) return;
+      openAgentSettingsPopup(agentName);
+    }
+    function openAgentSettingsPopup(agentName) {
       if (settingsWindows[agentName] && !settingsWindows[agentName].closed) {
         settingsWindows[agentName].focus();
         return;
@@ -9949,6 +10039,8 @@
           html += `<optgroup label="${esc(label)}">` + rows.map(m => `<option value="${esc(m)}"${m === cur ? ' selected' : ''}>${esc(((billing[m] && billing[m].short) || billingDisplay(m, true)) + healthNote(health && health[m]))}</option>`).join('')
             + (label.startsWith('OpenRouter') ? `<option value="${OR_MORE}">🔎 More OpenRouter models…</option>` : '') + '</optgroup>';
         }
+        // The last line of the picker opens the agent card at its Model row (P3-8); the picker itself is unchanged.
+        if (typeof window !== 'undefined' && window.hubAgentCard) html += `<optgroup label="Settings"><option value="__card__">${esc(agentCardLastLine(chat.agent))}</option></optgroup>`;   // "__card__" is CARD_PICK
         sel.innerHTML = html; sel.value = cur;
         paintAutoPick(chatId);   // an Auto agent stays on "Auto", never shown as the model it happens to be set to
         sel.dataset.filled = 'done';
@@ -10035,6 +10127,7 @@
     }
     async function changeChatModel(chatId, model, opts = {}) {
       const chat = chats[chatId];
+      if (chat && model === '__card__') { paintAutoPick(chatId); openAgentCard(chat.agent, 'OPT-0047'); return false; }   // the picker's last line (CARD_PICK)
       if (chat && model === OR_MORE) { paintAutoPick(chatId); openOrPicker(chatId); return false; }
       return queueModelChange(chatId, model, opts);
     }
@@ -10223,7 +10316,8 @@
     function effortLevelShown(chat) { const l = chat.effort || agentEffortOf(chat.agent); return l === 'ultra' && !effortUltraOf(chat) ? 'max' : l; }   // the server sends Max when the model has no Ultra
     function effortOptionsHtml(chat) {
       const level = effortLevelShown(chat);
-      return (effortUltraOf(chat) ? [...EFFORT_LEVELS, EFFORT_ULTRA] : EFFORT_LEVELS).map(([v, l]) => `<option value="${v}"${v === level ? ' selected' : ''}>${l}</option>`).join('');
+      const last = window.hubAgentCard && isHubAdmin() ? `<option value="${CARD_PICK}">${esc(agentCardLastLine(chat.agent))}</option>` : '';   // the last line opens the card at its Thinking effort row (P3-8)
+      return (effortUltraOf(chat) ? [...EFFORT_LEVELS, EFFORT_ULTRA] : EFFORT_LEVELS).map(([v, l]) => `<option value="${v}"${v === level ? ' selected' : ''}>${l}</option>`).join('') + last;
     }
     function effortPickHtml(chat, chatId) {
       const show = effortSupported(chatModelOf(chat)) && !chat.autoModel;
@@ -10239,6 +10333,7 @@
     async function changeChatEffort(chatId, level) {
       const chat = chats[chatId]; const sel = document.getElementById(`effort-pick-${chatId}`);
       if (!chat) return;
+      if (level === CARD_PICK) { refreshEffortPick(chat); openAgentCard(chat.agent, 'OPT-0057'); return; }
       const before = chat.effort || agentEffortOf(chat.agent);
       try {
         const r = await fetch(`/api/agents/${encodeURIComponent(chat.agent)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ effort: level }) });
@@ -12832,6 +12927,10 @@
       source.addEventListener('compaction_progress', e => { const ev = parse(e); if (ev) onCompactionProgress(ev); });
       source.addEventListener('compaction_end', e => { const ev = parse(e); if (ev) onCompactionEnd(ev); });
       source.addEventListener('agent_updated', e => { const ev = parse(e); if (ev) onAgentUpdated(ev); });
+      // The agent card (lib/ui-agent-card.js) follows the same events through this page's stream, not one of its own.
+      source.addEventListener('agent_updated', e => { const ev = parse(e); if (ev) agentCardEmit('agent_updated', ev); });
+      source.addEventListener('agent_renamed', e => { const ev = parse(e); if (ev) agentCardEmit('agent_renamed', ev); });
+      source.addEventListener('settings_changed', e => { const ev = parse(e); if (ev) agentCardEmit('settings_changed', ev); });
       // Plan limits: a family at its weekly limit runs on the substitute model; the plan refused a model outright.
       source.addEventListener('model_fallback', e => { const ev = parse(e); if (ev) hubToast(`${ev.agent}: ${String(ev.from || '').split('/').pop()} is at ${ev.utilization != null ? Math.round(ev.utilization) + '% of its weekly limit' : 'its limit'}; running on ${String(ev.to || '').split('/').pop()} until ${ev.resetsAt ? new Date(ev.resetsAt).toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : 'the window resets'}`); });
       // Plan warnings and refusals (lib/plan-usage) are shown near the top, never as a pop-up over the input: the usage
@@ -13068,7 +13167,7 @@
           </div>
           <input type="file" id="file-input-${chatId}" multiple style="display:none" onchange="handleFileSelect(event, '${chatId}')">
           <button class="attach-btn" onclick="document.getElementById('file-input-${chatId}').click()" title="Attach a file: images are sent with the message, other files are uploaded to your files and their path is added to the message" style="background:var(--bg-input); border:1px solid var(--border); padding:8px 10px; font-size:1rem; cursor:pointer;">📎</button>
-          <button type="button" onpointerdown="voiceMicPointer(false)" onpointerup="voiceMicPointer(true)" onclick="voiceMicToggle('${chatId}')" id="mic-${chatId}" class="mic-btn" style="display:none" aria-pressed="false" aria-label="${voiceMicIdleLabel()}" title="${hubEsc(voiceMicIdleTitle(chatId))}">${VOICE_MIC_SVG}</button><span class="mic-meter" id="mic-meter-${chatId}" style="display:none" aria-hidden="true"><i></i></span><span class="voice-extra" style="display:none"><button type="button" class="voice-mode-chip" id="vmode-${chatId}" onclick="voiceModeToggle()" title="Talk mode: tap to switch" style="display:none">${voiceModeLabel()}</button><button type="button" class="voice-set-btn" id="vset-${chatId}" onclick="voicePopToggle('${chatId}')" aria-label="Voice settings" aria-expanded="false" title="Voice settings">${VOICE_LEVELS_SVG}</button><div class="voice-pop" id="voice-pop-${chatId}" role="dialog" aria-label="Voice settings" hidden></div></span>
+          <button type="button" onpointerdown="voiceMicPointer(false)" onpointerup="voiceMicPointer(true)" onclick="voiceMicToggle('${chatId}')" id="mic-${chatId}" class="mic-btn" style="display:none" aria-pressed="false" aria-label="${voiceMicIdleLabel()}" title="${hubEsc(voiceMicIdleTitle(chatId))}">${VOICE_MIC_SVG}</button><span class="mic-meter" id="mic-meter-${chatId}" style="display:none" aria-hidden="true"><i></i></span><span class="voice-extra" style="display:none"><span class="voice-agent-chip-wrap" id="vagent-wrap-${chatId}" hidden><button type="button" class="voice-agent-chip" id="vagent-${chatId}" onclick="voiceAgentChipToggle('${chatId}')" aria-pressed="false"></button><button type="button" class="voice-agent-card" id="vagent-card-${chatId}" onclick="voiceAgentCardOpen('${chatId}')">…</button></span><button type="button" class="voice-mode-chip" id="vmode-${chatId}" onclick="voiceModeToggle()" title="Talk mode: tap to switch" style="display:none">${voiceModeLabel()}</button><button type="button" class="voice-set-btn" id="vset-${chatId}" onclick="voicePopToggle('${chatId}')" aria-label="Voice settings" aria-expanded="false" title="Voice settings">${VOICE_LEVELS_SVG}</button><div class="voice-pop" id="voice-pop-${chatId}" role="dialog" aria-label="Voice settings" hidden></div></span>
           <button onclick="toggleNotifyDone('${chatId}')" id="notify-${chatId}" class="notify-done-btn" style="display:none" aria-pressed="false" title="Get a notification on your phone when this reply is done">🔔 Notify me</button>
           <button onclick="sendSoloMessage('${chatId}')" id="send-${chatId}">Send</button>
         </div>
@@ -19592,6 +19691,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       for (const b of document.querySelectorAll('.input-area .mic-btn')) b.style.display = voiceReady() ? '' : 'none';
       for (const b of document.querySelectorAll('.input-area .voice-extra')) b.style.display = voiceReady() ? '' : 'none';
       if (typeof voiceModeChipPaint === 'function') voiceModeChipPaint();   // a chat bar drawn during a call gets its pill
+      if (typeof voiceAgentChipPaint === 'function') voiceAgentChipPaint();   // this agent's voice chip (own voice / same as all)
       try { if (voiceCallS.call && voiceCallS.press && voiceCallS.chatId) voiceCallPaintBtn(voiceCallS.chatId, true); } catch { /* the press button is put on a redrawn mic button */ }
       document.body.classList.toggle('voice-on', voiceReady() || voiceDeviceFallback());
       try { voiceSummaryPaint(); voiceWaitSchedule(); voiceHintTick(); if (voiceStatus && voiceById('st-voice-status')) voicePaintSettings(voiceStatus); } catch { /* the summary, the poll, the hint and the Settings line are comforts */ }

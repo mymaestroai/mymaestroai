@@ -177,7 +177,7 @@ test('FIRST_ROWS are shown first, every other record sits under a closed More th
   access.click();
   const heads = all(t.card.el(), '.ac-more-head').map((e) => e.textContent);
   assert.ok(heads.includes('More: A, B, C, D and more'), heads.join(' | '));
-  assert.deepStrictEqual(C.FIRST_ROWS.basics, ['OPT-0047', 'OPT-0057', 'OPT-0168', 'OPT-0022', 'OPT-0063']);
+  assert.deepStrictEqual(C.FIRST_ROWS.basics, ['OPT-0047', 'OPT-0057', 'OPT-0168', 'OPT-0023', 'OPT-0063']);   // Model, Thinking effort, Notifications, Voice, Call display
   assert.deepStrictEqual(Object.keys(C.FIRST_ROWS), ['basics', 'role', 'memory', 'access', 'schedule']);
 });
 

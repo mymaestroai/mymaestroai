@@ -1,5 +1,5 @@
 {
-  "version": "44d039ea94b3cd448710ce45ea7280997b58a2df",
+  "version": "f8bcc7b651ef448a77b9e83e4778ab803cadfac5",
   "records": [
     {
       "id": "OPT-0001",
@@ -169,7 +169,7 @@
       "def": "Default: empty. We recommend a few words about the agent's job.",
       "restart": false,
       "danger": "everyday",
-      "who": "admin",
+      "who": "both",
       "lead": "apply",
       "words": [
         "description",
@@ -1411,7 +1411,7 @@
       "def": "Default: practice run (the brief is written, nothing is reset); agents on this computer's own models default to Assisted. We recommend On once you trust the briefs.",
       "restart": false,
       "danger": "care",
-      "who": "admin",
+      "who": "both",
       "lead": "confirm",
       "words": [
         "compress",
@@ -1448,7 +1448,7 @@
       "def": "Default: 75% (60% for agents on this computer's own models). We recommend leaving it.",
       "restart": false,
       "danger": "care",
-      "who": "admin",
+      "who": "both",
       "lead": "confirm",
       "words": [
         "threshold",
@@ -2311,7 +2311,7 @@
       "def": "Default: the all-agents setting, which is 40. We recommend leaving it.",
       "restart": false,
       "danger": "care",
-      "who": "admin",
+      "who": "both",
       "lead": "confirm",
       "words": [
         "context messages",
@@ -2346,7 +2346,7 @@
       "def": "Default: the all-agents setting, which is 32000 tokens (roughly 24000 words). We recommend leaving it.",
       "restart": false,
       "danger": "care",
-      "who": "admin",
+      "who": "both",
       "lead": "confirm",
       "words": [
         "max tokens",
@@ -2381,7 +2381,7 @@
       "def": "Default: empty, which uses the model's full memory. We recommend leaving it empty.",
       "restart": false,
       "danger": "care",
-      "who": "admin",
+      "who": "both",
       "lead": "confirm",
       "words": [
         "context",
@@ -2729,7 +2729,7 @@
       "def": "Default: off. We recommend leaving it off.",
       "restart": false,
       "danger": "everyday",
-      "who": "admin",
+      "who": "both",
       "lead": "apply",
       "words": [
         "minimal context",

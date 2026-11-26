@@ -1191,6 +1191,31 @@ async function testBeforeSwitch(model) {
 }
 // An agent on Auto (the hub picks the model and effort for each turn) reads "Auto", not the model it happens to be set to.
 const AUTO_PICK = '__auto__';
+// ── The agent card (lib/ui-agent-card.js): the way in to an agent's settings on the phone ──
+// The card gets this page's own event handling (it opens no stream of its own) and this page's agent list.
+const agentCardSubs = {};   // event type -> Set of listeners the card registered
+function agentCardSubscribe(type, fn) {
+  const set = agentCardSubs[type] || (agentCardSubs[type] = new Set());
+  set.add(fn);
+  return () => set.delete(fn);
+}
+function agentCardEmit(type, ev) {
+  const set = agentCardSubs[type];
+  if (set) for (const fn of [...set]) { try { fn(ev); } catch { /* one listener must not stop the others */ } }
+}
+try { if (window.hubAgentCard && typeof window.hubAgentCard.configure === 'function') window.hubAgentCard.configure({ subscribe: agentCardSubscribe, agentsList: () => agents, simple: () => (typeof simpleOn === 'function' && simpleOn()) }); } catch { /* the card is optional */ }
+const CARD_PICK = '__card__';   // the value of the last line in a picker; never sent anywhere
+function agentCardLastLine(name) { const a = agentByName(name); return `All settings for ${(a && a.display) || name}…`; }
+// Opens the card on an agent at a row (a record id such as OPT-0047) or at its top; true when the card is there to open.
+function openAgentCard(name, row) {
+  const card = window.hubAgentCard;
+  if (!name || !card || typeof card.open !== 'function') return false;
+  try {
+    const p = card.open(name, row ? { row } : {});
+    if (p && typeof p.then === 'function') p.then(ok => { if (ok === false) toast('This agent\'s settings are not open to you.'); }, () => {});
+    return true;
+  } catch { return false; }
+}
 function modelText(a) { return a && a.autoModel ? 'Auto' : shortModel(a?.model); }
 async function fillModelPick() {
   const sel = $('chat-model-pick'); const wrap = sel && sel.parentElement;
@@ -1206,6 +1231,7 @@ async function fillModelPick() {
     if (cur && !a.autoModel && !models.includes(cur)) html += `<option value="${esc(cur)}">${esc(mpLabel(cur))} (current)</option>`;
     // The OpenRouter group ends with a search over OpenRouter's whole catalogue (the picker lists only the ticked models).
     for (const [label, rows] of mpGroups(models)) html += `<optgroup label="${esc(label)}">` + rows.map(m => `<option value="${esc(m)}">${esc(mpLabel(m) + healthNote(_modelHealth[m]))}</option>`).join('') + (label.startsWith('OpenRouter') ? `<option value="${OR_MORE}">🔎 More OpenRouter models…</option>` : '') + '</optgroup>';
+    if (html && typeof window !== 'undefined' && window.hubAgentCard) html += `<optgroup label="Settings"><option value="${CARD_PICK}">${esc(agentCardLastLine(a.name))}</option></optgroup>`;   // the last line opens the card at its Model row (P3-8)
     sel.innerHTML = html; sel.value = a.autoModel ? AUTO_PICK : cur; sel.dataset.agent = a.name;
     sel.hidden = !html; wrap && wrap.classList.toggle('pickable', !!html);
   } catch (e) { sel.hidden = true; wrap && wrap.classList.remove('pickable'); }
@@ -1251,8 +1277,9 @@ function fillEffortPick() {
   // a stored Ultra the model no longer has shows as Max, which is what the server sends then.
   const ultraOk = a.effortUltra === true;
   const level = a.effort === 'ultra' && !ultraOk ? 'max' : (a.effort || 'default');
-  const wantOptions = ultraOk ? 7 : 6;
-  if (sel.options.length !== wantOptions) sel.innerHTML = Object.entries(EFFORT_LABEL).map(([v, l]) => `<option value="${v}">${esc(l)}</option>`).join('') + (ultraOk ? `<option value="ultra">${esc(EFFORT_ULTRA_OPTION)}</option>` : '');
+  const cardLine = window.hubAgentCard && isAdmin();   // the last line opens the card at its Thinking effort row (P3-8)
+  const wantOptions = (ultraOk ? 7 : 6) + (cardLine ? 1 : 0);
+  if (sel.options.length !== wantOptions) sel.innerHTML = Object.entries(EFFORT_LABEL).map(([v, l]) => `<option value="${v}">${esc(l)}</option>`).join('') + (ultraOk ? `<option value="ultra">${esc(EFFORT_ULTRA_OPTION)}</option>` : '') + (cardLine ? `<option value="${CARD_PICK}">${esc(agentCardLastLine(a.name))}</option>` : '');
   sel.value = level; sel.dataset.agent = a.name; sel.disabled = !isAdmin();
   txt.textContent = level === 'ultra' ? 'Ultra effort' : (EFFORT_LABEL[level] || level);
   wrap.classList.toggle('pickable', isAdmin());
@@ -1260,6 +1287,7 @@ function fillEffortPick() {
 }
 async function changeEffortFromPick() {
   const sel = $('chat-effort-pick'); const name = sel.dataset.agent; const a = agentByName(name); const level = sel.value;
+  if (level === '__card__') { if (a) { sel.value = a.effort === 'ultra' && a.effortUltra !== true ? 'max' : (a.effort || 'default'); openAgentCard(name, 'OPT-0057'); } return; }
   if (!a || level === (a.effort || 'default')) return;
   try {
     const r = await api(`/api/agents/${encodeURIComponent(name)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ effort: level }) });
@@ -1665,6 +1693,17 @@ function planChooserOpen(badge) {
   const c = { box, badge, list, rows: [], view, onDoc: null, onResize: null };
   planChooserFill(c, view, planLevels(planUsageLast));
   box.append(list, subs);
+  // The last line opens the agent card at its Model row (P3-8); the chooser itself is unchanged.
+  let lastBtn = subs;
+  if (window.hubAgentCard && current) {
+    const agentName = current;
+    lastBtn = document.createElement('button');
+    lastBtn.type = 'button';
+    lastBtn.className = 'pc-subs pc-card';
+    lastBtn.textContent = agentCardLastLine(agentName);
+    lastBtn.addEventListener('click', () => { planChooserClose(false); openAgentCard(agentName, 'OPT-0047'); });
+    box.append(lastBtn);
+  }
   box.addEventListener('keydown', (e) => {
     const rows = c.rows;
     const at = document.activeElement, i = rows.findIndex(r => r.el === at), n = rows.length;
@@ -1675,7 +1714,9 @@ function planChooserOpen(badge) {
       rows[i >= 0 ? (i + step + n) % n : (step > 0 ? 0 : n - 1)].el.focus();
     } else if ((e.key === 'Enter' || e.key === ' ') && i >= 0) { e.preventDefault(); planChooserClose(true); planBadgePick(rows[i].kind); }
     else if (e.key === 'Tab') {
-      if (at === subs && !e.shiftKey) planChooserClose(true);
+      if (at === lastBtn && !e.shiftKey) planChooserClose(true);
+      else if (at === lastBtn) { e.preventDefault(); (lastBtn !== subs ? subs : (rows.find(r => r.kind === c.view.main.kind) || rows[0]).el).focus(); }
+      else if (at === subs && !e.shiftKey) { e.preventDefault(); lastBtn.focus(); }
       else if (at === subs) { e.preventDefault(); (rows.find(r => r.kind === c.view.main.kind) || rows[0]).el.focus(); }
       else if (e.shiftKey) planChooserClose(true);
       else { e.preventDefault(); subs.focus(); }
@@ -1798,6 +1839,16 @@ async function applyModelChange(name, choice, opts, stale) {
       paintChatStatus(); fillEffortPick();
     }
   }
+}
+// The model picker's last line ("All settings for <agent>…"): puts the picker back and opens the card at the Model row. It is registered
+// before changeModelFromPick and stops the event, so the line is never read as a model.
+function modelPickCardLine(e) {
+  const sel = $('chat-model-pick');
+  if (!sel || sel.value !== '__card__') return;
+  if (e && e.stopImmediatePropagation) e.stopImmediatePropagation();
+  const name = sel.dataset.agent; const a = agentByName(name);
+  sel.value = a && a.autoModel ? AUTO_PICK : (a ? a.model : '');
+  if (a) openAgentCard(name, 'OPT-0047');
 }
 async function changeModelFromPick() {
   const sel = $('chat-model-pick');
@@ -2315,7 +2366,8 @@ function paintNotifyAgentSheet() {
     ${replying ? `<div class="sec-section"><button type="button" data-nk="done" class="${armed ? 'on' : ''}">${armed ? '🔔 You will be told when this reply is done' + armedNote + ' (tap to cancel)' : '🔔 Notify me when this reply is done'}</button></div>` : ''}
     ${kinds}
     <div class="sec-hint" style="margin-top:8px">Applies to all your devices. Change what you get for every agent in the ⋮ menu → Notification settings.</div>
-    <div class="sec-actions" style="margin-top:10px"><button type="button" data-nk="close">Close</button></div>`;
+    ${typeof window !== 'undefined' && window.hubAgentCard ? `<div class="sec-section"><button type="button" data-nk="card">${esc(agentCardLastLine(agent))}</button></div>` : ''}
+    <div class="sec-actions" style="margin-top:10px"><button type="button" data-nk="close">Close</button></div>`;   // the last line opens the card at its Notifications row (P3-8)
 }
 function openNotifyAgentSheet(agent = current) {
   if (!agent || !current) return;
@@ -2331,6 +2383,7 @@ async function onNotifyAgentSheetClick(e) {
   if (!b) return;
   if (b.dataset.nk === 'close') { d.close(); return; }
   if (d._agent !== current) { d.close(); return; }   // the open chat changed while the sheet was open: do not act on another agent
+  if (b.dataset.nk === 'card') { const agent = d._agent; d.close(); openAgentCard(agent, 'OPT-0168'); return; }
   if (b.dataset.nk === 'done') { d.close(); toggleNotifyDone(); }
 }
 async function onNotifyAgentSheetChange(e) {
@@ -14528,6 +14581,11 @@ function connectEvents() {
   on('compaction_progress', onCompactionProgress);
   on('compaction_end', onCompactionEnd);
   on('agent_updated', onAgentUpdated);
+  // The agent card (lib/ui-agent-card.js) follows the same events through this page's stream, not one of its own.
+  on('agent_updated', (ev) => { agentCardEmit('agent_updated', ev); });
+  on('agent_renamed', (ev) => { agentCardEmit('agent_renamed', ev); });
+  on('settings_changed', (ev) => { agentCardEmit('settings_changed', ev); });
+  $('chat-model-pick')?.addEventListener('change', modelPickCardLine);
   $('chat-model-pick')?.addEventListener('change', changeModelFromPick);
   $('chat-title')?.addEventListener('click', showChatStatus);   // the name or the status under it: what the agent is doing, in full
   $('chat-effort-pick')?.addEventListener('change', changeEffortFromPick);
@@ -15488,6 +15546,8 @@ function wire() {
   $('approval-sheet').__dialogClose = () => { approvalsHidden = true; paintApprovals(); };
   $('menu-profile')?.addEventListener('click', openProfileSheet);   // ?.: a page cached before Profile existed has no such item
   $('menu-settings')?.addEventListener('click', settingsSheetOpen);
+  // ⋮ > Agent settings opens the agent's card (the link to the old page stays for a page without the card).
+  $('menu-agent-settings')?.addEventListener('click', (e) => { if (!current || !window.hubAgentCard) return; if (e && e.preventDefault) e.preventDefault(); $('menu').classList.remove('open'); openAgentCard(current); });
   $('menu-build-team')?.addEventListener('click', (e) => { e.stopPropagation(); $('menu').classList.remove('open'); if (current && !$('menu-build-team').disabled) buildTeamStart(current); });   // ?.: a page cached before Settings existed has no such item
   $('menu-optimize-team')?.addEventListener('click', (e) => { e.stopPropagation(); $('menu').classList.remove('open'); if (current && !$('menu-optimize-team').disabled) optimizeTeamStart(current); });
   $('menu-security').addEventListener('click', openSecuritySheet);
@@ -15909,7 +15969,7 @@ function menuTeamSync() {
   const admin = isAdmin() && !(typeof simpleOn === 'function' && simpleOn());
   const a = current ? agentByName(current) : null;
   if (st) {
-    st.hidden = !(admin && a);
+    st.hidden = !(a && (admin || (window.hubAgentCard && !(typeof simpleOn === 'function' && simpleOn()))));   // the card is open to the people who own or share the agent (it checks); the old page to admins only
     if (a) st.href = '/agent-settings.html?agent=' + encodeURIComponent(a.name);
   }
   if (bt) {
@@ -17709,7 +17769,12 @@ function simpleTopEnsure() {
     '<button type="button" class="simple-theme-btn" hidden><span class="stb-ic" aria-hidden="true"></span><span class="stb-lab"></span></button>' +
     '<button type="button" id="simple-avatar" class="st-avatar" aria-label="Settings" aria-haspopup="dialog"></button>';
   document.body.insertBefore(top, document.body.firstChild);
-  $('simple-pill').addEventListener('click', simpleAgentsOpen);
+  // Pressing the agent's name opens that agent's card (Basics and Memory only in Simple, P3-10); the rest of the pill still opens the list.
+  $('simple-pill').addEventListener('click', (e) => {
+    const onName = e && e.target && e.target.closest ? e.target.closest('.st-pname') : null;
+    if (onName && current && agentByName(current) && openAgentCard(current)) return;
+    simpleAgentsOpen();
+  });
   top.querySelector('.simple-theme-btn').addEventListener('click', simpleThemeTap);
   $('simple-avatar').addEventListener('click', simpleSettingsOpen);
   return top;

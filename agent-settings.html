@@ -148,6 +148,31 @@
 </head>
 <body>
 
+<div id="card-door" class="section" style="display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;">
+  <span id="card-door-line">These settings now live on the agent card.</span>
+  <a id="card-door-btn" class="btn btn-primary" href="/" style="text-decoration:none;white-space:nowrap;">Open the agent card</a>
+</div>
+<script>
+// The door to the agent card (P3-9): with the main page open behind this window the card opens there; otherwise this window goes to it. The page below keeps working.
+(function () {
+  var name = new URLSearchParams(window.location.search).get('agent') || '';
+  var hash = name ? '#agent-card=' + encodeURIComponent(name) : '';
+  var btn = document.getElementById('card-door-btn');
+  if (!btn) return;
+  btn.setAttribute('href', '/' + hash);
+  btn.addEventListener('click', function (e) {
+    var op = null;
+    try { op = window.opener && !window.opener.closed && window.opener.location && window.opener.location.origin === window.location.origin ? window.opener : null; } catch (err) { op = null; }
+    if (!op) return;   // no main page behind this one: the link opens it
+    e.preventDefault();
+    try {
+      if (hash) op.location.hash = hash;
+      op.focus();
+    } catch (err) { window.location.href = '/' + hash; }
+  });
+})();
+</script>
+
 <h2 id="agent-title">Agent Settings</h2>
 
 <div class="section">
