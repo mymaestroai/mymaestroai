@@ -2353,9 +2353,11 @@
     .plan-chooser .pc-subs { display: block; width: 100%; margin-top: 4px; padding: 7px 8px; background: transparent; color: var(--accent); border: 0; border-top: 1px solid var(--border); border-radius: 0 0 5px 5px; font: inherit; text-align: left; cursor: pointer; }
     /* The ⓘ help beside a setting (lib/ui-settings-help.js): a small round button after the label, a panel beside it (a bottom sheet in the phone frame and on narrow screens), and the light highlight of a row found by another word */
     .st-info { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 18px; height: 18px; margin-left: 6px; padding: 0; border: 1px solid var(--border-strong); border-radius: 50%; background: transparent; color: var(--text-dim); font: inherit; font-size: 0.78rem; line-height: 1; cursor: pointer; vertical-align: middle; }
+    [hidden] + .st-info, [style*="display:none"] + .st-info, [style*="display: none"] + .st-info { display: none; }   /* an ⓘ after a control that is not shown is not shown either */
     .st-info:hover { color: var(--text); border-color: var(--text-dim); }
     .st-info:focus-visible, .st-help-x:focus-visible, .st-help-ask:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
     html.mm-settings-only .st-info { width: 32px; height: 32px; box-sizing: border-box; margin: -9px 0 -9px 4px; font-size: 1.05rem; }
+    html.mm-settings-only .st-modal button.st-info, html.mm-simple .simple-modal button.st-info { min-height: 0; padding: 0; border: 1px solid var(--border-strong); border-radius: 50%; background: transparent; }   /* outranks the dialogs' own "button" rules (a 40 px minimum, no border), so the ⓘ stays a round outline */
     :not(.st-row) > label.st-has-info { display: inline-block; }   /* a label followed by its ⓘ shares its line (the script adds the class only then) */
     html.mm-settings-only .st-row > label:has(+ .st-info) { flex: 1 1 calc(100% - 44px) !important; }
     .st-help-panel { position: fixed; z-index: 10050; width: 360px; max-width: calc(100vw - 16px); max-height: calc(100vh - 16px); overflow-y: auto; box-sizing: border-box; padding: 14px 16px; background: var(--bg-card); color: var(--text); border: 1px solid var(--border-strong); border-radius: 10px; box-shadow: 0 8px 28px var(--shadow-color-pop); font-size: 0.82rem; line-height: 1.45; }

@@ -1199,3 +1199,73 @@ test('U2.2: the users of mm-settings-kept / mm-settings-asking: the frame posts 
   assert.match(mob, /!asking && Date\.now\(\) - t0 > 9000/);
   assert.ok(!/mm-settings-kept/.test(read('lib/ui-settings-help.js')));
 });
+
+// ---- three ⓘ placement and look fixes (spec W) ------------------------------------------------------------------------
+function specificity(sel) {   // [ids, classes+attributes+pseudo-classes, elements]; :is() takes its most specific argument
+  let s = sel.trim(), a = 0, b = 0, c = 0;
+  s = s.replace(/:is\(([^)]*)\)/g, (_, args) => {
+    const best = args.split(',').map((x) => specificity(x)).sort((x, y) => (x[0] - y[0]) || (x[1] - y[1]) || (x[2] - y[2])).pop();
+    a += best[0]; b += best[1]; c += best[2]; return '';
+  });
+  a += (s.match(/#[\w-]+/g) || []).length;
+  b += (s.match(/\.[\w-]+|\[[^\]]*\]|:(?!:)[\w-]+/g) || []).length;
+  c += (s.replace(/#[\w-]+|\.[\w-]+|\[[^\]]*\]|:+[\w-]+/g, ' ').match(/(^|[\s>+~])[a-zA-Z][\w-]*/g) || []).length;
+  return [a, b, c];
+}
+const outranks = (x, y) => (x[0] - y[0]) || (x[1] - y[1]) || (x[2] - y[2]);
+
+test('W1: on the phone the .st-info rule for the sheets outranks the sheet button rule and is a transparent round outline', () => {
+  const mob = read('mobile.html');
+  const rule = mob.split('\n').find((l) => /button\.st-info \{/.test(l) && /#notify-prefs-sheet/.test(l));
+  assert.ok(rule, 'a sheet-level button.st-info rule');
+  const sel = rule.slice(0, rule.indexOf('{')).trim();
+  const body = rule.slice(rule.indexOf('{'), rule.indexOf('}'));
+  assert.match(body, /background: transparent/);
+  assert.match(body, /min-height: 0/);
+  assert.match(body, /padding: 0/);
+  assert.match(body, /border-radius: 50%/);
+  const sheetBtn = mob.split('\n').find((l) => /^\s*#notify-agent-sheet button, #notify-prefs-sheet button \{/.test(l));
+  assert.ok(sheetBtn, 'the sheet button rule');
+  const theirs = specificity('#notify-prefs-sheet button'), theirs2 = specificity('#notify-prefs-sheet .np-row button');
+  assert.ok(outranks(specificity(sel), theirs) > 0, 'outranks "#notify-prefs-sheet button"');
+  assert.ok(outranks(specificity(sel), theirs2) >= 0, 'at least ties "#notify-prefs-sheet .np-row button" (and comes after it)');
+  assert.ok(mob.indexOf(rule) > mob.indexOf('#notify-prefs-sheet .np-row button'), 'after the np-row rule');
+  assert.match(sheetBtn, /background: var\(--border\)/, 'the tile background it overrides');
+  // the phone frame and Simple dialogs
+  const idx = read('index.html');
+  const fr = idx.split('\n').find((l) => /html\.mm-settings-only \.st-modal button\.st-info/.test(l));
+  assert.ok(fr, 'the frame rule');
+  assert.match(fr, /background: transparent/);
+  assert.ok(outranks(specificity('html.mm-settings-only .st-modal button.st-info'), specificity('html.mm-settings-only .st-modal button')) > 0);
+  assert.ok(outranks(specificity('html.mm-simple .simple-modal button.st-info'), specificity('html.mm-simple .simple-modal button')) > 0);
+});
+
+test('W2: an ⓘ after a hidden control is hidden by CSS, in all four pages', () => {
+  for (const f of ['index.html', 'mobile.html', 'agent-settings.html', 'users.html']) {
+    const t = read(f);
+    assert.ok(t.includes('[hidden] + .st-info, [style*="display:none"] + .st-info, [style*="display: none"] + .st-info { display: none; }'), f);
+  }
+});
+
+test('W3: a previous plain text sibling is the label of an anchored container; one holding a control is not taken', () => {
+  const run = (build) => {
+    const doc = makeDoc(); const win = makeWin(doc);
+    const ov = el(doc, 'div', { id: 'ov' }); doc.body.appendChild(ov);
+    const sec = el(doc, 'div', { class: 'section' }); ov.appendChild(sec);
+    const wrap = el(doc, 'div', {}); sec.appendChild(wrap);
+    build(doc, wrap);
+    H.setRecords({ version: 1, leadTool: false, records: [r1rec('OPT-W3', '#agent-shared', { anchors: [{ surface: 'agent', selector: '#agent-shared' }] })] });
+    const n = H.attach(ov, 'agent', { document: doc, win });
+    return { doc, wrap, n };
+  };
+  const a = run((doc, wrap) => { el(doc, 'span', {}, 'Shared with'); wrap.appendChild(el(doc, 'span', {}, 'Shared with')); wrap.appendChild(el(doc, 'div', { id: 'agent-shared' }, 'users')); });
+  assert.strictEqual(a.n, 1);
+  const span = a.wrap.children[0];
+  assert.strictEqual(a.wrap.children.length, 2, 'no ⓘ after the list');
+  assert.strictEqual(span.children[span.children.length - 1].getAttribute('class'), 'st-info', 'the ⓘ ends the span');
+  const b = run((doc, wrap) => { const p = el(doc, 'div', {}); p.appendChild(el(doc, 'span', {}, 'Pick')); p.appendChild(el(doc, 'select', {})); wrap.appendChild(p); wrap.appendChild(el(doc, 'div', { id: 'agent-shared' }, 'users')); });
+  assert.strictEqual(b.wrap.children[0].children.length, 2, 'nothing put into the sibling that holds a control');
+  assert.strictEqual(b.wrap.children[b.wrap.children.length - 1].getAttribute('class'), 'st-info', 'the ⓘ goes after the control as before');
+  const c = run((doc, wrap) => { wrap.appendChild(el(doc, 'span', { id: 'sp' }, 'Other')); wrap.appendChild(el(doc, 'div', { id: 'agent-shared' }, 'users')); const l = el(doc, 'label', { for: 'sp' }, 'x'); wrap.parentNode.appendChild(l); });
+  assert.strictEqual(c.wrap.children[0].children.length, 0, 'a span that is another control\'s label is not taken');
+});

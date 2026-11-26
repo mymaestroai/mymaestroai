@@ -128,6 +128,7 @@
   /* The ⓘ help beside a setting (lib/ui-settings-help.js): after the label, a panel beside it (a bottom sheet in a narrow window) */
   label.st-has-info { display: inline-block; }   /* the script adds the class only to a label that is display:block */
   .st-info { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 20px; height: 20px; margin: 0 0 4px 6px; padding: 0; border: 1px solid var(--as-border-2); border-radius: 50%; background: transparent; color: var(--as-dim-999); font: inherit; font-size: 13px; line-height: 1; cursor: pointer; vertical-align: middle; }
+  [hidden] + .st-info, [style*="display:none"] + .st-info, [style*="display: none"] + .st-info { display: none; }   /* an ⓘ after a control that is not shown is not shown either */
   .st-info:hover { color: var(--as-text); border-color: var(--as-dim-999); }
   .st-info:focus-visible, .st-help-x:focus-visible, .st-help-ask:focus-visible { outline: 2px solid var(--as-accent); outline-offset: 2px; }
   .st-help-panel { position: fixed; z-index: 1000; width: 360px; max-width: calc(100vw - 16px); max-height: calc(100vh - 16px); overflow-y: auto; box-sizing: border-box; padding: 14px 16px; background: var(--as-tab); color: var(--as-text); border: 1px solid var(--as-border-1); border-radius: 10px; font-size: 13px; line-height: 1.45; }
