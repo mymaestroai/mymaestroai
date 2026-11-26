@@ -55,10 +55,12 @@
           try { if (window.hubSimple) { window.hubSimple.apply(window.hubMe); simpleBoot(); } } catch { /* Simple mode is optional: the page runs as before without it */ }
           try { if (typeof simpleTopSync === 'function') simpleTopSync(); } catch { /* the view switch is optional */ }
           try { if (window.HubLooks && window.hubMe) window.HubLooks.rememberDefault(window.hubMe.look, window.HubLooks.storageOf(window)); } catch { /* looks are optional: the page keeps the look it has */ }   // every load: no default clears the last person's
+          try { themeNoticeShow(); } catch { /* the one-time line is optional */ }
           // Signed in: recorded-call pieces the hub never acknowledged (a closed tab, a reload, a dead network) are sent now, one at a time (lib/ui-voice-call.js).
           if (window.hubMe && window.hubMe.user) setTimeout(() => { try { voiceRecResendPending((u, i) => fetch(u, i), { userId: window.hubMe.user.id }); } catch { /* the call page's code is not up yet */ } }, 0);
         }
         else if (r.status === 401) {
+          try { if (window.HubLooks) window.HubLooks.forgetTheme(window.HubLooks.storageOf(window)); } catch { /* blocked storage */ }   // no session: the last person's theme must not stay on this browser
           // No session. On a hub with no accounts at all (updated from before multi-user) /api/me is refused too, so
           // ask the public auth status; hubMe stays undefined so the rest of the page behaves as before.
           try { const a = await (await fetch('/api/auth/status', { credentials: 'include' })).json(); window.hubNoAccounts = a && a.setupNeeded === true && !a.signedIn; } catch {}
@@ -438,13 +440,14 @@
       try { await simplePrefs({ uiMode: mode }); location.reload(); }
       catch (e) { simpleSwitching = false; hubToast(`Could not switch: ${e.message}`); }
     }
-    // Under Broadsheet House or Quiet Page the style's own palette decides Simple's colours: the label of that style, else null (Engineering).
+    // Under a single-set style (Broadsheet House) the style's own palette decides Simple's colours: the label of that style, else null (Engineering, or a look with both sets).
     function simpleStyleLabel() {
       const L = window.HubLooks;
       if (!L || typeof L.applied !== 'function') return null;
       const id = L.applied(document);
       if (id === 'engineering') return null;
       const look = typeof L.byId === 'function' ? L.byId(id) : null;
+      if (look && look.sets === 'both') return null;   // a look with a light and a dark set (Quiet Page) takes the theme choices like Engineering
       return look ? look.label : id;
     }
     // Simple's top-bar theme button has nothing to switch under a light style; it is back in Engineering. (An inline display
@@ -483,6 +486,8 @@
       overlay.querySelector('.sm-name').textContent = name;
       const paintSeg = () => { const cur = me.theme === 'light' || me.theme === 'dark' ? me.theme : 'auto'; overlay.querySelectorAll('.sm-seg button').forEach(b => b.classList.toggle('on', b.dataset.theme === cur)); };
       paintSeg();
+      const onTheme = () => { if (!overlay.isConnected) { document.removeEventListener('mm-theme-change', onTheme); return; } paintSeg(); };
+      document.addEventListener('mm-theme-change', onTheme);
       // Under a light style its own palette decides the colours: the buttons give way to one line (the stored theme is untouched).
       const paintFollow = () => {
         const label = simpleStyleLabel();
@@ -713,6 +718,7 @@
       menu.classList.toggle('open', open);
     }
     async function signOut() {
+      try { if (window.HubLooks) window.HubLooks.forgetTheme(window.HubLooks.storageOf(window)); } catch { /* blocked storage */ }
       try { await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' }); } catch (e) { /* go to login anyway */ }
       location.href = '/login';
     }
@@ -1482,6 +1488,19 @@
       layoutBanners();
     }
 
+    // POST /api/restart. When running jobs would stop with the restart, the server answers 409 { needsConfirm, message } and
+    // restarts nothing: ask the person (the message names the jobs) and send the confirm.
+    async function postRestart() {
+      let r = await fetch('/api/restart', { method: 'POST', credentials: 'include' });
+      let d = await r.json().catch(() => null);
+      // The confirmation names the jobs this question showed: a job that started since gets a fresh question (a few rounds at most).
+      for (let round = 0; round < 3 && r.status === 409 && d && d.needsConfirm; round++) {
+        if (!confirm(d.message)) return { r, d, cancelled: true };
+        r = await fetch('/api/restart', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirm: true, jobs: (d.jobs || []).map((j) => j.id) }) });
+        d = await r.json().catch(() => null);
+      }
+      return { r, d };
+    }
     // ── Restart Hub Button ──
     async function restartHub() {
       if (!confirm('Restart My Maestro AI?\n\n• Conversation history is auto-saved (safe)\n• Memory & session notes are saved instantly (safe)\n• Active streaming responses will be flushed to disk\n• Agents mid-response will lose their last ~3 seconds of output')) return;
@@ -1493,8 +1512,9 @@
       try { const h = await (await fetch('/api/health', { credentials: 'include' })).json(); before = h.bootId || null; } catch {}
       let started = null;
       try {
-        const r = await fetch('/api/restart', { method: 'POST', credentials: 'include' });
-        started = await r.json().catch(() => null);
+        const pr = await postRestart(); const r = pr.r;
+        started = pr.d;
+        if (pr.cancelled) { btn.classList.remove('restarting'); btn.title = 'Restart My Maestro AI'; return; }
         if (!r.ok) { restartFailed(btn, `The hub refused to restart: ${(started && started.error) || r.status}`); return; }
         if (started && started.bootId) before = started.bootId;
       } catch (e) { /* the server may already be going down */ }
@@ -2449,7 +2469,7 @@
       const rows = shown.length ? shown.map(j => `<tr style="border-top:1px solid var(--border)">
           <td><b>${esc(j.name)}</b><br><code style="font-size:11px">${esc(j.id)}</code></td>
           <td>${esc(j.owner)}${j.reportTo ? ` <span title="master agent">→ ${esc(j.reportTo)}</span>` : ''}</td>
-          <td>${badge(j)}<br><small>${handoff(j)}</small></td>
+          <td>${badge(j)}${j.restartWarning ? `<br><small style="color:var(--warning)">${esc(j.restartWarning)}</small>` : ''}<br><small>${handoff(j)}</small></td>
           <td><small>${esc(when(j.startedAt))}${j.endedAt ? `<br>ended ${esc(when(j.endedAt))}` : ''}</small></td>
           <td style="white-space:nowrap"><button class="gs-btn secondary" onclick="jobsAct('log', '${esc(j.id)}')">Log</button>
             ${j.status === 'running' ? `<button class="gs-btn secondary" onclick="jobsAct('cancel', '${esc(j.id)}')">Cancel</button>` : ''}</td>
@@ -2466,7 +2486,7 @@
         } catch (e) { logBox = `<p>${esc(e.message)}</p>`; jobsPanelLog = null; }
       }
       return `<div class="gs-box"><h4>Background jobs <small>(run_job)</small></h4>
-        <p><small>Commands agents run with <code>run_job</code>. They survive the agent's turn${data.mode === 'systemd' ? ' and hub restarts' : ''}; when one ends the hub wakes its owner with the result, and if the owner ran it for another agent, forwards the owner's report to that agent. Launcher: ${esc(data.mode)}.</small></p>
+        <p><small>Commands agents run with <code>run_job</code>. They survive the agent's turn${data.mode === 'systemd' ? ' and restarts of your Maestro' : ', but a running job stops if your Maestro restarts'}; when one ends the hub wakes its owner with the result, and if the owner ran it for another agent, forwards the owner's report to that agent. Launcher: ${esc(data.mode)}.</small></p>
         <table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr><th style="text-align:left">Job</th><th style="text-align:left">Owner → master</th><th style="text-align:left">Status</th><th style="text-align:left">Started</th><th></th></tr></thead><tbody>${rows}</tbody></table>${schedHiddenNote(data.jobs, shown)}${logBox}</div>`;
     }
     async function refreshJobsSection() {
@@ -3164,7 +3184,8 @@
       // Reuse the restart button's flush + poll path.
       const rbtn = document.getElementById('restart-hub-btn');
       try {
-        await fetch('/api/restart', { method: 'POST', credentials: 'include' });
+        const pr = await postRestart();
+        if (pr.cancelled || !pr.r.ok) { gsModal(`<h3>⬇ Update from GitHub</h3><div class="gs-ok">✓ Updated to ${esc(r.head)}</div><p class="gs-sub">Not restarted yet. Restart it from the ⋯ menu to finish.</p>`); return; }
       } catch (e) { /* expected — server dies */ }
       setTimeout(() => pollForRestart(rbtn), 8000);
     }
@@ -3332,6 +3353,12 @@
       const picker = document.createElement('div');
       host.appendChild(picker);
       lookPickerBuild(picker);
+      if (window.hubSimple && typeof window.hubSimple.themeControl === 'function' && window.hubMe && !document.documentElement.classList.contains('mm-simple')) {
+        // Appearance: Light / Dark / Match device, one theme for the account in both modes; right before Interface style.
+        const ap = window.hubSimple.themeControl(document, { me: () => window.hubMe, save: (v) => simplePrefs({ theme: v }), onError: (err) => hubToast(`Could not save: ${err.message}`), onPress: () => !!document.getElementById('hub-theme-notice'), onChosen: (v, wasVisible) => { if (!wasVisible) return; try { window.hubSimple.markNoticeSeen(window.hubMe, defaultNoticeStorage()); } catch { /* blocked storage */ } const n = document.getElementById('hub-theme-notice'); if (n) { n.remove(); layoutBanners(); } } });   // a notice that was not up at the press stays as the theme change left it (newly shown when Quiet just turned dark)
+        ap.el.style.marginBottom = '12px';
+        host.insertBefore(ap.el, picker);   // right before Interface style
+      }
       if (!isHubAdmin()) return;
       const row = document.createElement('div');
       row.className = 'st-row';
@@ -4217,9 +4244,38 @@
     // (showMobileBanner), no AI provider yet, the setup checklist, health, security. Each one sits below the ones above it, so
     // none covers another (or its X), and the page moves down by their height (--banner-h), so they never cover the
     // header and its Settings button.
+    // The one-time Quiet Page line (lib/ui-simple.js themeNotice): normal mode, Quiet Page, a dark theme, not yet seen by this account.
+    // Seen is kept per account in localStorage (mm-theme-notice:<id>), like the voice hint. It sits in the banner stack, never near the composer.
+    function themeNoticeShow() {
+      const hs = window.hubSimple;
+      const old = document.getElementById('hub-theme-notice'); if (old) old.remove();
+      if (!hs || typeof hs.themeNotice !== 'function' || !window.hubMe) return;
+      const el = hs.themeNotice(document, { me: () => window.hubMe, save: (v) => simplePrefs({ theme: v }), onError: (err) => hubToast(`Could not save: ${err.message}`), onGone: () => layoutBanners() });
+      if (!el) return;
+      el.id = 'hub-theme-notice';
+      el.style.position = 'fixed'; el.style.left = '0'; el.style.right = '0'; el.style.top = '0'; el.style.zIndex = '9994';
+      document.body.prepend(el);
+      layoutBanners();
+    }
+    // The line follows the page while it is open: a look change or a change of the resolved colours (Match device flipping) shows or hides it.
+    // themeNotice itself decides (normal mode, Quiet Page, dark, unseen); this only asks again, and keeps the one that is already up.
+    function themeNoticeSync() {
+      const had = document.getElementById('hub-theme-notice');
+      const hs = window.hubSimple;
+      if (had) {
+        const cl = document.documentElement.classList;
+        const L = window.HubLooks;
+        const still = hs && typeof hs.noticeShows === 'function' && hs.noticeShows({ simple: cl.contains('mm-simple'), look: L && L.applied ? L.applied(document) : null, resolved: cl.contains('mm-dark') ? 'dark' : cl.contains('mm-light') ? 'light' : null, seen: window.hubMe ? hs.noticeSeen(window.hubMe, defaultNoticeStorage()) : true });
+        if (still) return;
+        had.remove(); layoutBanners(); return;
+      }
+      themeNoticeShow();
+    }
+    function defaultNoticeStorage() { try { return window.localStorage; } catch { return null; } }
+    for (const ev of ['mm-look-change', 'mm-theme-change', 'mm-theme-resolved']) document.addEventListener(ev, () => { try { themeNoticeSync(); } catch { /* the one-time line is optional */ } });
     function layoutBanners() {
       let top = 0;
-      for (const id of ['hub-phone-layout-notice', 'hub-no-accounts-notice', 'hub-recovery-notice', 'hub-setup-notice', 'hub-readiness-notice', 'hub-health-notice', 'hub-security-notice']) {
+      for (const id of ['hub-phone-layout-notice', 'hub-no-accounts-notice', 'hub-recovery-notice', 'hub-setup-notice', 'hub-theme-notice', 'hub-readiness-notice', 'hub-health-notice', 'hub-security-notice']) {
         const n = document.getElementById(id);
         if (!n) continue;
         n.style.top = `${top}px`;
@@ -4805,8 +4861,8 @@
       // The Update dialog's own restart: flush the active replies, restart, wait for the new boot.
       const rbtn = document.getElementById('restart-hub-btn');
       let refused = null;
-      try { const rr = await fetch('/api/restart', { method: 'POST', credentials: 'include' }); if (!rr.ok) refused = rr.status; } catch { /* expected: the server goes away */ }
-      if (refused) { if (msg) msg.innerHTML = `<div class="uc-err">Updated, but the hub refused to restart (HTTP ${refused}). Restart it from the ⋯ menu to finish.</div>`; return; }
+      try { const pr = await postRestart(); if (pr.cancelled) refused = 'cancelled'; else if (!pr.r.ok) refused = pr.r.status; } catch { /* expected: the server goes away */ }
+      if (refused) { if (msg) msg.innerHTML = `<div class="uc-err">Updated, but your Maestro was not restarted (${refused === 'cancelled' ? 'you chose to wait' : 'HTTP ' + refused}). Restart it from the ⋯ menu to finish.</div>`; return; }
       setTimeout(() => pollForRestart(rbtn), 8000);
     }
     // Settings → Status → Updates.
@@ -24670,7 +24726,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         s.textContent = '.dlg-discard{margin:auto;max-width:min(92vw,380px);padding:20px;border:1px solid var(--border-strong,#333846);border-radius:12px;background:var(--bg-card,#14171F);color:var(--text,#F3F4F6);font:inherit}'
           + '.dlg-discard::backdrop{background:rgba(0,0,0,.55)}.dlg-discard h3{margin:0 0 8px;font-size:1.05rem}.dlg-discard p{margin:0 0 16px;color:var(--text-dim,#9CA3AF);line-height:1.4}'
           + '.dlg-discard-btns{display:flex;gap:8px;justify-content:flex-end}.dlg-discard-btns button{min-height:36px;padding:0 16px;border-radius:8px;border:1px solid var(--border-strong,#333846);background:var(--bg-input,#040507);color:var(--text,#F3F4F6);font:inherit;cursor:pointer}'
-          + '.dlg-discard-btns .dlg-discard-go{color:var(--error,#FF4C4C)}.dlg-discard-btns .dlg-discard-keep{background:var(--accent,#3D7BFF);border-color:var(--accent,#3D7BFF);color:#fff}'
+          + '.dlg-discard-btns .dlg-discard-go{color:var(--error,#FF4C4C)}.dlg-discard-btns .dlg-discard-keep{background:var(--accent,#3D7BFF);border-color:var(--accent,#3D7BFF);color:var(--on-accent,#fff)}'
           + '.dlg-discard-btns button:focus-visible{outline:2px solid var(--accent-hover,#5A93FF);outline-offset:2px}'
           + '.dlg-saving{margin-top:10px;font-size:.8rem;color:var(--warning,#F5A623)}';
         doc.head.appendChild(s);

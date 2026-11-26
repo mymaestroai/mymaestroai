@@ -42,26 +42,28 @@ test('themeOf: light and dark are fixed, auto follows the device', () => {
   assert.strictEqual(S.themeOf(null, true), 'dark');
 });
 
-test('apply: simple sets mm-simple, advanced clears both classes', () => {
+// Changed on purpose (one theme per account in both modes): the theme classes are set in Advanced too; only mm-simple is mode-specific.
+test('apply: simple sets mm-simple, advanced clears it; the theme class is set in both', () => {
   const doc = fakeDoc(), win = fakeWin(false);
   S.apply({ uiMode: 'simple', theme: 'light' }, { doc, win });
   assert.deepStrictEqual([...doc.set].sort(), ['mm-light', 'mm-simple']);
   S.apply({ uiMode: 'advanced', theme: 'light' }, { doc, win });
-  assert.deepStrictEqual([...doc.set], []);
+  assert.deepStrictEqual([...doc.set], ['mm-light']);
   S.apply({ uiMode: 'simple', theme: 'dark' }, { doc, win });
-  assert.deepStrictEqual([...doc.set], ['mm-simple']);
+  assert.deepStrictEqual([...doc.set].sort(), ['mm-dark', 'mm-simple']);
 });
 
-test('apply: advanced never gets mm-light, whatever the theme', () => {
-  for (const theme of ['light', 'dark', 'auto']) {
+// Changed on purpose: Advanced now carries mm-light / mm-dark (exactly one); every mm-light rule is still prefixed html.mm-simple.
+test('apply: advanced gets exactly one of mm-light / mm-dark and never mm-simple', () => {
+  for (const [theme, dark, want] of [['light', false, 'mm-light'], ['dark', false, 'mm-dark'], ['auto', true, 'mm-dark'], ['auto', false, 'mm-light']]) {
     const doc = fakeDoc();
-    S.apply({ uiMode: 'advanced', theme }, { doc, win: fakeWin(false) });
-    assert.strictEqual(doc.set.has('mm-light'), false);
-    assert.strictEqual(doc.set.has('mm-simple'), false);
+    S.apply({ uiMode: 'advanced', theme }, { doc, win: fakeWin(dark) });
+    assert.deepStrictEqual([...doc.set], [want]);
   }
 });
 
-test('apply: auto follows a matchMedia change, and stops after switching to advanced', () => {
+// Changed on purpose: the 'auto' listener keeps following the device in Advanced too (the theme is per account, not per mode).
+test('apply: auto follows a matchMedia change in both modes', () => {
   const doc = fakeDoc(), win = fakeWin(true);
   S.apply({ uiMode: 'simple', theme: 'auto' }, { doc, win });
   assert.strictEqual(win.mq.query, '(prefers-color-scheme: dark)');
@@ -71,10 +73,13 @@ test('apply: auto follows a matchMedia change, and stops after switching to adva
   win.flip(true);
   assert.strictEqual(doc.set.has('mm-light'), false);
   S.apply({ uiMode: 'advanced', theme: 'auto' }, { doc, win });
-  assert.strictEqual(win.mq.listeners.size, 0);
-  win.flip(false);
-  assert.strictEqual(doc.set.has('mm-light'), false);
+  assert.strictEqual(win.mq.listeners.size, 1);
   assert.strictEqual(doc.set.has('mm-simple'), false);
+  assert.strictEqual(doc.set.has('mm-dark'), true);
+  win.flip(false);
+  assert.deepStrictEqual([...doc.set], ['mm-light']);
+  S.apply({ uiMode: 'advanced', theme: 'dark' }, { doc, win });
+  assert.strictEqual(win.mq.listeners.size, 0);   // a fixed theme keeps no listener
 });
 
 test('apply: calling again replaces the previous listener; fixed themes keep none', () => {

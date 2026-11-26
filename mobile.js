@@ -61,6 +61,7 @@ async function api(path, opts = {}) {
   const res = await fetch(path, { credentials: 'include', ...opts });
   if (res.status === 401 && !redirectingToLogin && !OWN_401.includes(String(path).split('?')[0])) {
     redirectingToLogin = true;
+    try { if (window.HubLooks) window.HubLooks.forgetTheme(window.HubLooks.storageOf(window)); } catch { /* blocked storage */ }   // no session: the last person's theme must not stay here
     location.href = '/login?next=' + encodeURIComponent(location.pathname + location.search);
   }
   return res;
@@ -656,7 +657,7 @@ function createDialogGuard({ doc = document, win = window, auto = '', useHistory
     s.textContent = '.dlg-discard{margin:auto;max-width:min(92vw,380px);padding:20px;border:1px solid var(--border-strong,#333846);border-radius:12px;background:var(--bg-card,#14171F);color:var(--text,#F3F4F6);font:inherit}'
       + '.dlg-discard::backdrop{background:rgba(0,0,0,.55)}.dlg-discard h3{margin:0 0 8px;font-size:1.05rem}.dlg-discard p{margin:0 0 16px;color:var(--text-dim,#9CA3AF);line-height:1.4}'
       + '.dlg-discard-btns{display:flex;gap:8px;justify-content:flex-end}.dlg-discard-btns button{min-height:36px;padding:0 16px;border-radius:8px;border:1px solid var(--border-strong,#333846);background:var(--bg-input,#040507);color:var(--text,#F3F4F6);font:inherit;cursor:pointer}'
-      + '.dlg-discard-btns .dlg-discard-go{color:var(--error,#FF4C4C)}.dlg-discard-btns .dlg-discard-keep{background:var(--accent,#3D7BFF);border-color:var(--accent,#3D7BFF);color:#fff}'
+      + '.dlg-discard-btns .dlg-discard-go{color:var(--error,#FF4C4C)}.dlg-discard-btns .dlg-discard-keep{background:var(--accent,#3D7BFF);border-color:var(--accent,#3D7BFF);color:var(--on-accent,#fff)}'
       + '.dlg-discard-btns button:focus-visible{outline:2px solid var(--accent-hover,#5A93FF);outline-offset:2px}'
       + '.dlg-saving{margin-top:10px;font-size:.8rem;color:var(--warning,#F5A623)}';
     doc.head.appendChild(s);
@@ -14034,7 +14035,15 @@ function confirmRestart() {
 async function restartHub() {
   $('restart-confirm').close();
   try {
-    const r = await api('/api/restart', { method: 'POST' });
+    let r = await api('/api/restart', { method: 'POST' });
+    // Running jobs would stop with the restart (no systemd scope): the answer names them; restart only if the person says so.
+    // The confirmation names the jobs that question showed: a job that started since gets a fresh question (a few rounds at most).
+    for (let round = 0; round < 3 && r.status === 409; round++) {
+      const d = await r.json().catch(() => null);
+      if (!(d && d.needsConfirm)) break;
+      if (!confirm(d.message)) return;
+      r = await api('/api/restart', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirm: true, jobs: (d.jobs || []).map((j) => j.id) }) });
+    }
     if (!r.ok) { toast(`Restart refused: HTTP ${r.status}`); return; }
   } catch {
     // The connection dropping here is the server going down, which is expected.
@@ -15162,6 +15171,7 @@ async function loadMe() {
       if (window.hubSimple) { try { window.hubSimple.apply(hubMe); } catch { /* the page stays as it is */ } }   // Simple mode and theme classes on <html>
       try { if (window.HubLooks && hubMe) window.HubLooks.rememberDefault(hubMe.look, window.HubLooks.storageOf(window)); } catch { /* looks are optional: the page keeps the look it has */ }   // every load: no default clears the last person's
       { const ti = $('menu-tiger'); if (ti) ti.hidden = !(hubMe && hubMe.isAdmin === true); }
+      try { if (typeof themeNoticeShow === 'function') themeNoticeShow(); } catch { /* the one-time line is optional */ }
       // (the Tiger Teams link above: admins only, the page and its API are admin-only; likewise the Subscriptions entry)
       { const su = $('menu-subs'); if (su) su.hidden = !(hubMe && hubMe.isAdmin === true); }
       if (isAdmin()) { teamsTabLoad(); teamSetupLoad(); }   // "Show the Teams tab", the Set up teams offer and the setups that can be undone (admins only)
@@ -15611,6 +15621,7 @@ async function paintMenuCredit() {
 }
 
 async function signOut() {
+  try { if (window.HubLooks) window.HubLooks.forgetTheme(window.HubLooks.storageOf(window)); } catch { /* blocked storage */ }
   try { await api('/api/auth/logout', { method: 'POST' }); } catch {}
   location.href = '/login';
 }
@@ -15832,11 +15843,20 @@ function openProfileSheet() {
       <select id="prof-tz" aria-label="Time zone your agents use"></select>
       <div class="sec-msg" id="prof-tz-msg"></div>
     </div>
+    <div class="sec-section" id="prof-theme-sec" hidden>
+      <div id="prof-theme"></div>
+    </div>
     <div class="sec-section">
       <div class="sec-title">Interface style</div>
       <div id="prof-looks"></div>
     </div>
     <div class="sec-actions" style="margin-top:10px"><button id="prof-close">Close</button></div>`;
+  // Appearance (Light / Dark / Match device) right before Interface style; normal mode only (Simple has its own, in its settings sheet).
+  if (typeof simpleThemeCtl === 'function' && !(typeof simpleOn === 'function' && simpleOn())) {
+    const ap = simpleThemeCtl(themeNoticeChosen);
+    const tsec = $('prof-theme-sec'), thost = $('prof-theme');
+    if (ap && thost && tsec) { ap.el.querySelector('.mm-theme-title').className = 'sec-title'; thost.appendChild(ap.el); tsec.hidden = false; }
+  }
   lookPickerPaint($('prof-looks'));
   $('prof-name').textContent = hubMe.user.name || hubMe.user.login;
   $('prof-login').textContent = `Signed in as ${hubMe.user.login} · ${hubMe.user.role === 'admin' ? 'admin' : 'member'}`;
@@ -16933,6 +16953,41 @@ async function init() {
 }
 
 // ── Simple mode: phone ── (everything below runs only when hubSimple.apply put class mm-simple on <html>; Advanced never calls it)
+// Appearance control and the one-time Quiet Page line (lib/ui-simple.js themeControl / themeNotice) for normal mode; the pages above call
+// these through a typeof guard. Seen is kept per account in localStorage (mm-theme-notice:<id>), like the voice hint.
+function simpleThemeCtl(onChosen) {
+  if (!window.hubSimple || typeof window.hubSimple.themeControl !== 'function' || !hubMe) return null;
+  return window.hubSimple.themeControl(document, { me: () => hubMe, save: (v) => simplePrefsPost({ theme: v }), onError: () => toast('Could not save that'), onPress: () => !!document.getElementById('theme-notice'), onChosen });
+}
+function themeNoticeGone() { const n = document.getElementById('theme-notice'); if (n) n.remove(); }
+// Choosing a theme in the Settings Appearance control settles the notice for good (as its own buttons do), so a reload does not bring it back.
+// Only when the line was up at the press: a notice that was never shown is not dismissed (a later switch to Quiet still shows it once).
+function themeNoticeChosen(v, wasVisible) {
+  if (!wasVisible) return;   // not up at the press: leave it as the theme change left it (newly shown when Quiet just turned dark)
+  try { window.hubSimple.markNoticeSeen(hubMe, window.localStorage); } catch { /* blocked storage */ }
+  themeNoticeGone();
+}
+// The line follows the page while it is open: a look change or a change of the resolved colours (Match device flipping) shows or hides it.
+function themeNoticeSync() {
+  const hs = window.hubSimple;
+  if (!document.getElementById('theme-notice')) { themeNoticeShow(); return; }
+  const cl = document.documentElement.classList, L = window.HubLooks;
+  let seen = true; try { seen = hubMe && hs ? hs.noticeSeen(hubMe, window.localStorage) : true; } catch { seen = true; }
+  const still = hs && typeof hs.noticeShows === 'function' && hs.noticeShows({ simple: cl.contains('mm-simple'), look: L && L.applied ? L.applied(document) : null, resolved: cl.contains('mm-dark') ? 'dark' : cl.contains('mm-light') ? 'light' : null, seen });
+  if (!still) themeNoticeGone();
+}
+if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+  for (const ev of ['mm-look-change', 'mm-theme-change', 'mm-theme-resolved']) document.addEventListener(ev, () => { try { themeNoticeSync(); } catch { /* the one-time line is optional */ } });
+}
+function themeNoticeShow() {
+  themeNoticeGone();
+  if (!window.hubSimple || typeof window.hubSimple.themeNotice !== 'function' || !hubMe) return;
+  const el = window.hubSimple.themeNotice(document, { me: () => hubMe, save: (v) => simplePrefsPost({ theme: v }), onError: () => toast('Could not save that') });
+  if (!el) return;
+  el.id = 'theme-notice';   // top of the Agents screen with the other notices, never in the composer
+  const host = $('screen-agents'), first = $('health-notice');
+  if (host && first) host.insertBefore(el, first.nextSibling); else if (host) host.prepend(el);
+}
 function simpleOn() { return !!(window.hubSimple && document.documentElement.classList.contains('mm-simple')); }
 // While a reply runs: the normal send arrow and a plain placeholder (the message still joins the running turn).
 function simpleSendLook(b, input, interject) {
@@ -17391,13 +17446,14 @@ if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
   if (typeof wide.addEventListener === 'function') wide.addEventListener('change', wideChange);
   else if (typeof wide.addListener === 'function') wide.addListener(wideChange);
 }
-// Under Broadsheet House or Quiet Page the style's own palette decides Simple's colours: that style's label, else null (Engineering).
+// Under a single-set style (Broadsheet House) the style's own palette decides Simple's colours: that style's label, else null (Engineering, or a look with both sets).
 function simpleStyleLabel() {
   const L = typeof window !== 'undefined' ? window.HubLooks : null;
   if (!L || typeof L.applied !== 'function') return null;
   const id = L.applied(document);
   if (id === 'engineering') return null;
   const look = typeof L.byId === 'function' ? L.byId(id) : null;
+  if (look && look.sets === 'both') return null;   // a look with a light and a dark set (Quiet Page) takes the theme choices like Engineering
   return look ? look.label : id;
 }
 let simpleLookSheetOff = null;   // removes the open settings sheet's mm-look-change listener
@@ -17471,6 +17527,8 @@ function simpleSettingsOpen() {
   lookPickerPaint(d.querySelector('#ss-style'));   // Interface style sits right after Appearance
   const paint = () => { const cur = (hubMe && hubMe.theme) || 'auto'; d.querySelectorAll('.ss-seg button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.theme === cur))); };
   paint();
+  const onTheme = () => { if (!d.isConnected) { document.removeEventListener('mm-theme-change', onTheme); return; } paint(); };
+  document.addEventListener('mm-theme-change', onTheme);
   // Under a light style its own palette decides the colours: the buttons give way to one line (the stored theme is untouched).
   const paintFollow = () => {
     const label = simpleStyleLabel();
