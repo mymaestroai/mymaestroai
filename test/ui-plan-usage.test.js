@@ -27,7 +27,7 @@ test('desktop: no pop-up for plan events; a usage badge next to each Claude agen
   assert.ok(!/addEventListener\('plan_(warning|limit)'[^\n]*hubToast/.test(app), 'no toast for plan events');
   assert.ok(app.includes('<span class="plan-badge" id="plan-badge-${chatId}" hidden onclick="openPlanSettings()"></span>'), 'badge in the chat header after the effort picker');
   // the plan leads ("Plan 18% this week"); the family window follows only when worse ("· Fable 19%") — see ui-plan-state.test.js
-  assert.ok(app.includes("el.textContent = `${lead.family ? lead.label : 'Plan'} ${planPctText(lead, levels)} this week` + (second ?"), 'label "Plan 18% this week"');
+  assert.ok(app.includes("el.textContent = `${lead.family ? lead.label : 'Plan'} ${badgeAmount(lead, levels)} this week` + (second ?"), 'label "Plan 18% this week"');
   assert.match(app, /compactionRefresh\(chatId\);[^\n]*\n\s*paintPlanBadges\(\);/, 'painted when a chat opens');
   assert.match(app, /refreshEffortPick\(chat\);\s*\n\s*paintPlanBadges\(\);/, 'and when the agent\'s model changes');
   assert.ok(app.includes('paintPlanChip(); paintPlanBadges();'), 'and with every new reading');
@@ -47,7 +47,7 @@ test('phone: plan usage in the chat header for Claude agents; no plan pop-ups', 
   const mhtml = read('mobile.html');
   assert.ok(mhtml.includes('<span class="sub" id="chat-plan" hidden></span>') && mhtml.includes('#chat-plan.warn'), 'header element + style');
   assert.ok(mjs.includes("on('plan_limit', () => refreshPlanUsage());") && mjs.includes("on('plan_warning', () => refreshPlanUsage());"), 'events refresh, no toast');
-  assert.ok(mjs.includes("el.textContent = `${lead.family ? lead.label : 'Plan'} ${planPctText(lead, levels)}` + (second ?"), 'label "Plan 18%"');
+  assert.ok(mjs.includes("el.textContent = `${lead.family ? lead.label : 'Plan'} ${badgeAmount(lead, levels)}` + (second ?"), 'label "Plan 18%"');
   assert.match(mjs, /await loadMe\(\);\s*\n\s*applyMultiUser\(\);\s*\n\s*refreshPlanUsage\(\);/, 'read at start');
   assert.ok(mjs.includes('paintCtx(); refreshCtx(name); paintPlan();'), 'painted on open');
   assert.ok(mjs.includes('if (refreshPlanUsage.tries <= 8) next = Math.min(next, 15000);'), 'asks again soon while the hub has no reading yet');
@@ -71,7 +71,7 @@ test('extra usage paying: warning (not refused) on the chip, the badge, the Sett
 
 test('the five-hour row and the phone title follow the extra-usage state too', () => {
   assert.ok(app.includes("rows.push({ label: '5-hour window', utilization: five.utilization, resetsAt: five.resets_at, extraUsage: !!five.extraUsage && !five.rejected });"), 'Settings five-hour row carries extraUsage');
-  assert.ok(mjs.includes("Number.isFinite(Date.parse(w.resetsAt || '')) ?") && mjs.includes(": 'the reset'}; extra usage is paying`"), 'phone title says "the reset" when the time is missing');
+  assert.ok(mjs.includes("Number.isFinite(Date.parse(w.resetsAt || '')) ?") && mjs.includes(": 'the reset';") && mjs.includes("the weekly Claude plan is used up until ${when(w)}; extra usage is paying`"), 'phone title says "the reset" when the time is missing');
 });
 
 test('both chat renderers show a whole line in underscores (the hub\'s notices) in italics', () => {

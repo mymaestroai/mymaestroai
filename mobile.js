@@ -1506,6 +1506,10 @@ function planBadgeWindows(weekly, family, levels) {
   return { lead: all, second, cls: rank(f.cls) > rank(a.cls) ? f.cls : a.cls };
 }
 // ── plan state helpers (end) ──
+// What a badge says for one window: "used up" when the plan refuses it, else its percent (with the extra-usage words).
+function badgeAmount(w, levels) {
+  return planState(w, levels).cls === 'refused' ? 'used up' : planPctText(w, levels);
+}
 function planFamilyOf(model) {
   const id = String(model || '').replace(/^claude-sdk\//, '').replace(/\[1m\]$/i, '').replace(/^claude-/, '').toLowerCase();
   if (!id) return null;
@@ -1539,18 +1543,23 @@ function paintPlan() {
   const bw = d && /^claude-sdk\//.test(model) ? planBadgeWindows(d.weekly, fam, levels) : null;
   if (!bw) { el.hidden = true; el.textContent = ''; return; }
   const { lead, second, cls } = bw;
-  el.textContent = `${lead.family ? lead.label : 'Plan'} ${planPctText(lead, levels)}` + (second ? ` · ${second.label} ${planPctText(second, levels)}` : '');
+  el.textContent = `${lead.family ? lead.label : 'Plan'} ${badgeAmount(lead, levels)}` + (second ? ` · ${second.label} ${badgeAmount(second, levels)}` : '');
   const f5 = d.windows && d.windows.five_hour;
   const five = subsEnabled() && f5 && f5.utilization != null && Number(f5.utilization) > 50 ? Math.round(Number(f5.utilization)) : null;
   if (five != null) el.textContent += ` · 5h ${five}%`;
   el.className = 'sub' + (cls ? ' ' + cls : '');
+  const when = (w) => Number.isFinite(Date.parse(w.resetsAt || '')) ? new Date(w.resetsAt).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : 'the reset';
+  // Each sentence describes only its own window: refused -> used up; extra usage paying -> the extra-usage sentence.
   const part = (w, who) => {
     const s = planState(w, levels);
+    if (s.cls === 'refused') return `${who}: used up until ${when(w)}`;
     return s.extra
-      ? `${who}: the weekly Claude plan is used up until ${Number.isFinite(Date.parse(w.resetsAt || '')) ? new Date(w.resetsAt).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : 'the reset'}; extra usage is paying`
+      ? `${who}: the weekly Claude plan is used up until ${when(w)}; extra usage is paying`
       : `${who}: ${s.pct}%${w === lead ? " of this week's Claude plan allowance" : ''}`;
   };
-  el.title = part(lead, lead.family ? lead.label : 'All models') + (second ? '; ' + part(second, second.label) : '') + (five != null ? `; 5-hour window ${five}%` : '');
+  // The hover shows the raw 5-hour reading whenever there is one; only the visible suffix needs subscriptions on and over 50.
+  const fiveRaw = f5 && f5.utilization != null ? Math.round(Number(f5.utilization)) : null;
+  el.title = part(lead, lead.family ? lead.label : 'All models') + (second ? '; ' + part(second, second.label) : '') + (fiveRaw != null ? `; 5-hour window ${fiveRaw}%` : '');
   el.hidden = false;
 }
 

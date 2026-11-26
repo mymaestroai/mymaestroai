@@ -6498,6 +6498,10 @@
       return { lead: all, second, cls: rank(f.cls) > rank(a.cls) ? f.cls : a.cls };
     }
     // ── plan state helpers (end) ──
+    // What a badge says for one window: "used up" when the plan refuses it, else its percent (with the extra-usage words).
+    function badgeAmount(w, levels) {
+      return planState(w, levels).cls === 'refused' ? 'used up' : planPctText(w, levels);
+    }
     function planFamilyOf(model) {
       const id = String(model || '').replace(/^claude-sdk\//, '').replace(/\[1m\]$/i, '').replace(/^claude-/, '').toLowerCase();
       if (!id) return null;
@@ -6539,16 +6543,21 @@
         const bw = chat && !chat.isGroup && chat.agent ? planWindowFor(chatModelOf(chat)) : null;
         if (!bw) { el.hidden = true; el.textContent = ''; continue; }
         const { lead, second, cls } = bw;
-        el.textContent = `${lead.family ? lead.label : 'Plan'} ${planPctText(lead, levels)} this week` + (second ? ` · ${second.label} ${planPctText(second, levels)}` : '');
+        el.textContent = `${lead.family ? lead.label : 'Plan'} ${badgeAmount(lead, levels)} this week` + (second ? ` · ${second.label} ${badgeAmount(second, levels)}` : '');
         const fiveW = planLast.windows && planLast.windows.five_hour;
         const five5 = subsEnabled() && fiveW && fiveW.utilization != null && Number(fiveW.utilization) > 50 ? Math.round(Number(fiveW.utilization)) : null;
         if (five5 != null) el.textContent += ` · 5h ${five5}%`;
         el.className = 'plan-badge' + (cls ? ' ' + cls : '');
         const five = planLast.windows && planLast.windows.five_hour;
         // Hover text: the plan, then the family window (when it is shown), then the 5-hour window.
-        const part = (w, who, short) => planState(w, levels).extra
-          ? `${who} is used up for this week until ${planWhen(w.resetsAt)}; extra usage is paying for Claude replies until then`
-          : `${who} has used ${planState(w, levels).pct}%${short ? "" : " of this week's allowance"} (resets ${planWhen(w.resetsAt)})`;
+        // Each sentence describes only its own window: refused -> used up; extra usage paying -> the extra-usage sentence.
+        const part = (w, who, short) => {
+          const s = planState(w, levels);
+          if (s.cls === 'refused') return `${who} is used up for this week until ${planWhen(w.resetsAt)}`;
+          return s.extra
+            ? `${who} is used up for this week until ${planWhen(w.resetsAt)}; extra usage is paying for Claude replies until then`
+            : `${who} has used ${s.pct}%${short ? "" : " of this week's allowance"} (resets ${planWhen(w.resetsAt)})`;
+        };
         el.title = part(lead, lead.family ? lead.label : 'Your Claude plan') + (second ? '; ' + part(second, second.label, true) : '') +
           (five && five.utilization != null ? `; 5-hour window ${Math.round(Number(five.utilization))}%` : '') + '. Click to choose models (Settings → Claude plan).';
         el.hidden = false;
