@@ -687,8 +687,8 @@ function helperCtx(src, extra = {}) {
   vm.runInContext(src.slice(a, b) + '\nthis.info = autoInfoOf; this.group = autoGroupHistory; this.kindOf = autoCardKind;', ctx);
   return ctx;
 }
-const reportHistory = (origin) => [
-  { role: 'user', content: '[Deep research finished] "q" (id dr-1).\n\nThe research run finished.', origin, ts: '2026-11-25T23:31:00Z' },
+const reportHistory = (origin, content = `[Deep research finished] "${Q_REPORT}" (id dr-0a1b2c3d).\n\nThe research run finished.`) => [
+  { role: 'user', content, origin, ts: '2026-11-25T23:31:00Z' },
   { role: 'assistant', content: 'Research finished. Here is the report.', for_owner: true },
 ];
 function fakeNode(tag) {
@@ -703,25 +703,51 @@ function fakeNode(tag) {
 const cardTexts = (wrap) => wrap.children[0].children.map((c) => c.textContent);
 const fromLines = (panel) => panel.children.filter((c) => c.className === 'auto-from');
 
-test('G3 lib/ui-auto-turns.js and both pages: a research_report origin gives label "Research finished" and the question in quotes as the row note; the card has no from line; other kinds are unchanged', () => {
+test('G3 lib/ui-auto-turns.js and both pages: a research_report turn gives its label and the question in quotes (both from its own message) as the row note; the card has no from line; other kinds are unchanged', () => {
   for (const [nm, src] of [['lib', read('lib/ui-auto-turns.js')], ['desktop', app], ['phone', mob]]) {
     const ctx = helperCtx(src);
-    const u = (origin) => ({ role: 'user', content: 'x', origin });
-    const i = ctx.info(u({ kind: 'research_report', from: 'hub', label: Q_REPORT }));
+    const o = { kind: 'research_report', from: 'hub' };
+    const u = (origin, content = 'x') => ({ role: 'user', content, origin });
+    const i = ctx.info(u(o, `[Deep research finished] "${Q_REPORT}" (id dr-0a1b2c3d).\n\nDone.`));
     assert.equal(i.label, 'Research finished', nm);
     assert.equal(i.note, '“' + Q_REPORT + '”', nm);
     assert.equal(i.noFrom, true, nm);
-    const none = ctx.info(u({ kind: 'research_report', from: 'hub' }));
-    assert.equal(none.label, 'Research finished', nm);
-    assert.equal(none.note, '', nm);
+    // the four message forms (the stop / thorough ones have no "id ")
+    const forms = [
+      [`[Deep research finished] "Q1?" (id dr-0a1b2c3d): report`, 'Research finished'],
+      [`[Deep research failed] "Q1?" (id dr-0a1b2c3d): it failed`, 'Research failed'],
+      [`[Deep research stopped] "Q1?" (dr-0a1b2c3d): the person stopped this run.`, 'Research stopped'],
+      [`[Deep research made thorough] "Q1?" (dr-0a1b2c3d): the person chose a thorough run`, 'Research made thorough'],
+    ];
+    for (const [msg, label] of forms) {
+      const r = ctx.info(u(o, msg));
+      assert.equal(r.label, label, nm + ': ' + msg);
+      assert.equal(r.note, '“Q1?”', nm);
+      assert.equal(r.noFrom, true, nm);
+    }
+    // an origin label or what is never read
+    assert.equal(ctx.info(u({ ...o, label: 'Secret', what: 'stopped' }, `[Deep research finished] "Q1?" (id dr-0a1b2c3d)`)).label, 'Research finished', nm);
+    assert.equal(ctx.info(u({ ...o, label: 'Secret' }, 'x')).note, '', nm);
+    // a question with quotes, newlines and a long one
+    assert.equal(ctx.info(u(o, `[Deep research finished] "Is "X" better\nthan  Y?" (id dr-0a1b2c3d)`)).note, '“Is "X" better than Y?”', nm);
+    const long = ctx.info(u(o, `[Deep research stopped] "${'q'.repeat(300)}" (dr-0a1b2c3d)`));
+    assert.equal(long.note, '“' + 'q'.repeat(119) + '…”', nm);
+    assert.equal(ctx.info(u(o, `[Deep research finished] "${'q'.repeat(120)}" (id dr-0a1b2c3d)`)).note, '“' + 'q'.repeat(120) + '”', nm);
+    // no match: "Research finished" and no note
+    for (const bad of ['x', '', undefined, '[Deep research finished] "Q" (id dr-1)', '[Deep research paused] "Q" (dr-0a1b2c3d)']) {
+      const none = ctx.info(u(o, bad));
+      assert.equal(none.label, 'Research finished', nm);
+      assert.equal(none.note, '', nm);
+      assert.equal(none.noFrom, true, nm);
+    }
     // the grouped card: its one line is the question (never the label again), no from line is wanted
-    const [card] = ctx.group(reportHistory({ kind: 'research_report', from: 'hub', label: Q_REPORT }));
+    const [card] = ctx.group(reportHistory(o));
     assert.equal(card.type, 'card', nm);
     assert.equal(card.label, 'Research finished', nm);
     assert.equal(card.firstLine, '“' + Q_REPORT + '”', nm);
     assert.equal(card.noFrom, true, nm);
     assert.deepEqual([...card.open], [1], nm);
-    const [bare] = ctx.group(reportHistory({ kind: 'research_report', from: 'hub' }));
+    const [bare] = ctx.group(reportHistory(o, 'x'));
     assert.equal(bare.firstLine, '', nm + ': no question, no second "Research finished"');
     // other kinds keep what they had
     assert.deepEqual({ ...ctx.info(u({ kind: 'alert', from: 'm' })) }, { kind: 'notice', from: 'm', label: 'Monitor alert' }, nm);
@@ -738,7 +764,7 @@ test('G3 desktop: the history card row reads "Research finished", the time, the 
   vm.runInContext(app.slice(a, b) + '\nthis.render = foldRenderHistoryCard;', ctx);
   const draw = (panel) => (k, o) => { if (o.push === false) panel.appendChild({ className: 'entry', children: [] }); };
   const panel = fakeNode('div');
-  const [card] = ctx.group(reportHistory({ kind: 'research_report', from: 'hub', label: Q_REPORT }));
+  const [card] = ctx.group(reportHistory({ kind: 'research_report', from: 'hub' }));
   ctx.render(draw(panel), card, panel, null, () => '11:31 PM');
   assert.deepEqual(cardTexts(panel.children[0]), ['Research finished', '11:31 PM', '“' + Q_REPORT + '”', '▸']);
   assert.equal(fromLines(panel).length, 0, 'no "from Research finished" line');
@@ -753,7 +779,7 @@ test('G3 desktop live: the report card keeps the question as its line when the t
   const ctx = helperCtx(app, { document: { createElement: fakeNode }, foldCardTime: () => 'T' });
   vm.runInContext(app.slice(a, b) + '\nthis.build = foldBuildCard;', ctx);
   const panel = fakeNode('div');
-  const info = ctx.info({ role: 'user', content: 'x', origin: { kind: 'research_report', from: 'hub', label: Q_REPORT } });
+  const info = ctx.info({ role: 'user', content: `[Deep research finished] "${Q_REPORT}" (id dr-0a1b2c3d)`, origin: { kind: 'research_report', from: 'hub' } });
   const built = ctx.build(panel, { kind: info.kind, label: info.label, ts: 1, firstLine: 'working…', ...(info.noFrom ? { noFrom: true, note: info.note } : {}) }, () => 'T');
   assert.deepEqual(cardTexts(built.wrap), ['Research finished', 'T', '“' + Q_REPORT + '”', '▸']);
   built.setLine('Research finished. Here is the report.');   // turn end: the reply's first line
@@ -796,7 +822,7 @@ test('G3 phone: the history card row reads label, time, question; no from line u
     ctx.render(it, history.map(() => 'T'), chat, history, () => '11:31 PM');
     return chat;
   };
-  const chat = run(reportHistory({ kind: 'research_report', from: 'hub', label: Q_REPORT }));
+  const chat = run(reportHistory({ kind: 'research_report', from: 'hub' }));
   assert.deepEqual(chat.children[0].children[0].children.map((x) => x.textContent), ['Research finished', '11:31 PM', '“' + Q_REPORT + '”', '▸']);
   assert.equal(fromLines(chat).length, 0, 'no "from Research finished" line');
   assert.equal(chat.children.filter((x) => x.className === 'entry').length, 1);
@@ -826,22 +852,32 @@ test('G3 phone live: the report card keeps the question at turn end and the repl
   assert.ok(mob.includes("if (info.noFrom) card.line.textContent = info.note || '';"));
   assert.ok(mob.includes("if (t.card && info.noFrom) { t.card.noFrom = true; t.card.note = info.note || ''; }"));
 });
-test('G3 server: the research report wake puts the question (cut to 120 characters) in the origin label; delivery passes the question to wake', () => {
+test('R10 server: the research turn origin is exactly { kind: research_report, from: hub }; no question or what travels in it', () => {
   const sdk = read('lib/sdk-chat.js');
-  const a = sdk.indexOf('function researchReportLabel('), b = sdk.indexOf('let _researchRunner = null;');
-  assert.ok(a > 0 && b > a);
-  const ctx = vm.createContext({ String });
-  vm.runInContext(sdk.slice(a, b) + '\nthis.f = researchReportLabel;', ctx);
-  assert.equal(ctx.f('  Which\n judge   is best?  '), 'Which judge is best?');
-  assert.equal(ctx.f('q'.repeat(300)).length, 120);
-  assert.equal(ctx.f('q'.repeat(300)).slice(-1), '…');
-  assert.equal(ctx.f('q'.repeat(120)), 'q'.repeat(120));
-  assert.equal(ctx.f(undefined), '');
-  assert.match(sdk, /wake: \(agent, message, info\) => new Promise/);
-  assert.match(sdk, /\{ kind: 'research_report', from: 'hub', \.\.\.\(question \? \{ label: question \} : \{\}\), \.\.\.\(what \? \{ what \} : \{\}\) \}/);
+  assert.ok(!sdk.includes('researchReportLabel'), 'the label helper is gone');
+  assert.match(sdk, /wake: \(agent, message\) => new Promise/);
+  assert.ok(sdk.includes("(text) => (String(text || '').trim() ? resolve() : reject(new Error('the report turn ended without a reply'))), { kind: 'research_report', from: 'hub' })"));
+  assert.ok(!/research_report'[^\n]*(label|what)/.test(sdk.slice(sdk.indexOf('function getResearchRunner('), sdk.indexOf('slowTries: 138'))), 'no label / what next to the origin');
+  assert.ok(!sdk.includes("meta?.what"), 'wakeAgent has no what');
   const rs = read('lib/research.js');
-  assert.equal((rs.match(/await wake\(run\.agent, message, \{ question: run\.question \}\)/g) || []).length, 1, 'the report delivery passes the question');
-  assert.equal((rs.match(/await wake\(run\.agent, message, \{ question: run\.question, \.\.\.\(what \? \{ what \} : \{\}\) \}\)/g) || []).length, 1, 'tellAgent passes the question and what');
+  assert.equal((rs.match(/await wake\(run\.agent, message\)/g) || []).length, 2, 'the report delivery and tellAgent pass only the message');
+  assert.ok(!/wake\(run\.agent, message,/.test(rs));
+  assert.ok(rs.includes('function tellAgent(run, message) {'));
+  assert.ok(rs.includes("carry on without it.`);") && rs.includes("its report will come here.`);"));
+  // the log keeps no what, and still the other fields
+  const a = sdk.indexOf('function logOriginOf'), b = sdk.indexOf('function loadConversationLog');
+  assert.ok(a > 0 && b > a);
+  assert.ok(!/\.what\b|'what'/.test(sdk.slice(a, b)), 'logOriginOf has no what');
+  const logOriginOf = new Function(sdk.slice(a, b) + '\nreturn logOriginOf;')();
+  assert.deepEqual(logOriginOf({ kind: 'research_report', from: 'hub', what: 'stopped' }), { kind: 'research_report', from: 'hub' });
+});
+test('R10 live: the desktop and phone cards read the turn_start message, not the origin', () => {
+  assert.ok(app.includes("autoInfoOf({ role: 'user', origin: ev.origin, content: ev.message || '' })"), 'desktop onHubTurnStart passes the message');
+  assert.ok(mob.includes("autoInfoOf({ role: 'user', origin: ev.origin, content: ev.message || '' })"), 'phone onTurnStart passes the message');
+  for (const src of [app, mob]) {
+    assert.ok(!/o\.what\b/.test(src.slice(src.indexOf('function autoInfoOf('), src.indexOf('function autoFirstLine('))), 'autoInfoOf does not read origin.what');
+    assert.ok(!/o\.label[^\n]*replace\(\/\\s\+\/g/.test(src), 'no origin.label question read');
+  }
 });
 
 // ── G4: a question card opens at its top ──
@@ -890,30 +926,17 @@ test('G4 phone: a question box taller than the chat opens with its top at the to
   assert.equal(ctx.stick, false, 'the chat stops following new text, so a later delta does not scroll past the question');
 });
 
-test('the turns that tell the agent a run was stopped or made thorough say so in their row, not "Research finished" (origin what)', () => {
-  const lib = require('../lib/ui-auto-turns.js');
-  const info = (o) => lib.autoInfoOf({ role: 'user', content: 'x', origin: { kind: 'research_report', from: 'hub', label: 'Which heat pump brands are most reliable?', ...o } });
-  assert.equal(info({}).label, 'Research finished');
-  assert.equal(info({ what: 'stopped' }).label, 'Research stopped');
-  assert.equal(info({ what: 'thorough' }).label, 'Research made thorough');
-  for (const src of [app, mob]) assert.ok(src.includes("else if (o.kind === 'research_report') label = o.what === 'stopped' ? 'Research stopped' : o.what === 'thorough' ? 'Research made thorough' : 'Research finished';"));
-  const research = read('lib/research.js');
-  assert.ok(research.includes("carry on without it.`, 'stopped');") && research.includes("its report will come here.`, 'thorough');"), 'stop and upgrade pass what');
-  const sdk = read('lib/sdk-chat.js');
-  assert.ok(sdk.includes("...(meta?.kind === 'research_report' && (meta?.what === 'stopped' || meta?.what === 'thorough') ? { what: meta.what } : {})"), 'wakeAgent keeps what for research turns only');
-});
-
-test('review r8: the conversation log keeps what (stopped / thorough) for research turns only, so the row still says so after a reload', () => {
+test('R10: the real research messages (built by lib/research.js) give the row its label and question after a reload, through the saved origin', () => {
   const src = read('lib/sdk-chat.js');
   const a = src.indexOf('function logOriginOf'); const b = src.indexOf('function loadConversationLog');
-  assert.ok(a > 0 && b > a);
   const logOriginOf = new Function(src.slice(a, b) + '\nreturn logOriginOf;')();
-  assert.deepEqual(logOriginOf({ kind: 'research_report', from: 'hub', label: 'Q?', what: 'stopped' }), { kind: 'research_report', from: 'hub', label: 'Q?', what: 'stopped' });
-  assert.equal(logOriginOf({ kind: 'research_report', from: 'hub', what: 'thorough' }).what, 'thorough');
-  assert.equal(logOriginOf({ kind: 'research_report', from: 'hub', what: 'other' }).what, undefined, 'only the two values');
-  assert.equal(logOriginOf({ kind: 'job_notice', from: 'hub', what: 'stopped' }).what, undefined, 'only research turns');
-  // the saved origin, read back by the pages' helper, gives the right row label
   const lib = require('../lib/ui-auto-turns.js');
-  const saved = logOriginOf({ kind: 'research_report', from: 'hub', label: 'Q?', what: 'stopped' });
-  assert.equal(lib.autoInfoOf({ role: 'user', content: 'x', origin: saved }).label, 'Research stopped');
+  const rs = read('lib/research.js');
+  assert.ok(rs.includes('[Deep research stopped] "${String(run.question).slice(0, 200)}" (${run.id})') && rs.includes('[Deep research made thorough] "${String(run.question).slice(0, 200)}" (${run.id})'), 'the messages have the shape the pages read');
+  const saved = logOriginOf({ kind: 'research_report', from: 'hub' });
+  for (const [kind, label] of [['finished', 'Research finished'], ['failed', 'Research failed'], ['stopped', 'Research stopped'], ['made thorough', 'Research made thorough']]) {
+    const i = lib.autoInfoOf({ role: 'user', content: `[Deep research ${kind}] "Which heat pump brands are most reliable?" (dr-0a1b2c3d): x`, origin: saved });
+    assert.equal(i.label, label);
+    assert.equal(i.note, '“Which heat pump brands are most reliable?”');
+  }
 });
