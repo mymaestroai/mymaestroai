@@ -416,6 +416,7 @@ html[data-look="quiet"]:not(.mm-simple) {
   --wk-hitem-open-bg: rgba(47,110,168,0.07);
   --wk-stop-border: rgba(168,50,101,0.60);
   --worker-busy: #2F6EA8;
+  --bg-work-ring: #2F6EA8;   /* the hollow ring and blue line: free, with work running in the background */
   --worker-busy-glow: rgba(47,110,168,0.25);
   --worker-done: #2A724A;
   --health-notice-bg: #8E1F1A;
@@ -591,6 +592,8 @@ html[data-look="quiet"].mm-simple #toast { background: var(--text); color: var(-
 @keyframes quiet-simple-dot-shrink { 50% { opacity: .8; transform: scale(.7); } }
 html[data-look="quiet"].mm-simple #agent-list .agent-btn .agent-status.live-busy,
 html[data-look="quiet"].mm-simple #agent-list .agent-btn .agent-status.live-question,
+html[data-look="quiet"].mm-simple #teams-list .teams-dot.live-busy,
+html[data-look="quiet"].mm-simple #teams-list .teams-dot.live-question,
 html[data-look="quiet"].mm-simple #agent-list .simple-more .sm-dot { animation-name: quiet-simple-dot; }
 html[data-look="quiet"].mm-simple .sa-dot.busy,
 html[data-look="quiet"].mm-simple .sa-dot.question { animation-name: quiet-simple-dot-shrink; }

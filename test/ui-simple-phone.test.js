@@ -59,7 +59,8 @@ test('hook points: each existing function got its one added line, which tolerate
   assert.match(js, /addNote\('No messages yet'\);\n  if \(typeof simpleEmptyPaint === 'function'\) simpleEmptyPaint\(/);
   assert.match(js, /if \(typeof simpleHubEntry === 'function' && simpleHubEntry\(m, time\)\) return;/);
   assert.match(js, /if \(typeof simpleUserBubbleHook === 'function'\) simpleUserBubbleHook\(d, text\);[^\n]*\n  return d;/);
-  assert.match(js, /const route = routeFromHash\(\);\n  if \(typeof simpleRoute === 'function'\) simpleRoute\(route\);/);
+  // changed (tonight): the start route comes through reloadResume (the ↻ arrows); the Simple hook is still its one line right after it
+  assert.match(js, /const route = resumed\.route;\n  if \(typeof simpleRoute === 'function'\) simpleRoute\(route\);/);
   assert.match(js, /function foldAutoOn\(\) \{\n  if \(typeof simpleOn === 'function' && simpleOn\(\)\) return false;/);
 });
 

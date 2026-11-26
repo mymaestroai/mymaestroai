@@ -383,7 +383,7 @@ test('a card\'s Download button opens the sheet; sw.js needs no change (its SHEL
   assert.match(js, /closest\('button\.fc-download'\)[\s\S]{0,200}openDownloadSheet\(\{ url: b\.dataset\.download, name: b\.dataset\.name,/);
   assert.match(read('sw.js'), /const SHELL = \['\/mobile\.html', '\/mobile\.js'\];/);
   assert.doesNotMatch(read('sw.js'), /'\/ui-[a-z-]+\.js'/, 'no /ui-*.js asset is precached');
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v76';/, 'VERSION moved with the password eye (mobile.html and mobile.js changed); the shell list did not');
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v92';/, 'VERSION moved with the password eye (mobile.html and mobile.js changed); the shell list did not');
 });
 
 test('nothing added here carries an emoji variation selector (U+FE0F)', () => {

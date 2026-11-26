@@ -206,6 +206,8 @@ function popHtml() {
     voiceWakeRowsHtml: () => '',   // the wake rows have their own tests (ui-voice-wake-pages)
     voiceRouteBlockHtml: () => '',   // the Sound route block has its own tests (ui-voice-bt-route-desktop)
     chats: { c1: { agent: 'alice' } }, voiceFollowLine: () => '',   // agent voice defaults (part 6)
+    isHubAdmin: () => true, voiceAdminName: () => 'an admin', hubEsc: String,   // voice entry: the panel's admin link / member line
+    voicePopLinks: () => ({ top: '', bottom: '' }),   // the role-dependent links have their own test (ui-voice-entry-desktop)
   };
   const names = Object.keys(stubs);
   const src = between(app, '    function voicePopHtml(', '    function voicePopClose(');

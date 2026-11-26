@@ -161,7 +161,7 @@ test('the Sound route block is in Settings and in the chat voice panel, below th
   const car = app.indexOf("h += row('Car or Bluetooth check'"), route = app.indexOf("h += row('Sound route', voiceRouteBlockHtml());");
   assert.ok(car > 0 && route > car && route < app.indexOf("h += row('Replies'"));
   const pop = app.indexOf('data-vp="car" id="${id(\'car\')}"'), popRoute = app.indexOf('Sound route</div>${voiceRouteBlockHtml()}');
-  assert.ok(pop > 0 && popRoute > pop && popRoute < app.indexOf('${voiceWakeRowsHtml(chatId)}`;'));
+  assert.ok(pop > 0 && popRoute > pop && popRoute < app.indexOf('${voiceWakeRowsHtml(chatId)}${links.bottom}'))   // the member line follows the wake rows (voice entry);
   const html = soundBlock();
   assert.match(html, /data-route="list">Sound devices</);
   assert.match(html, /data-route="test">Test sound</);

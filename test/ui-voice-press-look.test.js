@@ -274,7 +274,8 @@ test('ready 7 phone: #mic-btn is marked data-press while a Tap to talk call is u
     voiceCallPressAttach() {}, voiceRec: { state: 'idle', t0: 0 }, voicePrefsNow: () => ({ mode: 'press' }), voiceBarPaint() {}, Date,
   };
   vm.createContext(ctx);
-  vm.runInContext(fnSrc(mob, 'voiceMicPaint') + '\nthis.paint = voiceMicPaint;', ctx);
+  // changed (voice entry): the idle mic's tooltip comes from voiceReadyTitle (it names the agent), so the sandbox needs it too
+  vm.runInContext(fnSrc(mob, 'voiceAgentLabel') + fnSrc(mob, 'voiceReadyTitle') + fnSrc(mob, 'voiceMicPaint') + '\nthis.paint = voiceMicPaint;', ctx);
   ctx.paint();
   assert.ok(b.hasAttribute('data-press'), 'a Tap to talk call: marked');
   ctx.voiceCall = { press: false }; ctx.paint();

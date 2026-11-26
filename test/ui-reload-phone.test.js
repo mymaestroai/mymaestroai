@@ -146,7 +146,7 @@ test('a call already answered at the press is not asked again after the wait', a
 });
 
 test('the page asks only the call question: no offline or group question on the phone', () => {
-  assert.match(pageSrc, /questions: \(\) => \(voiceCall \? \[APP_RELOAD_CALL_QUESTION\] : \[\]\)/);
+  assert.match(pageSrc, /questions: \(\) => \[\.\.\.\(voiceCall \? \[APP_RELOAD_CALL_QUESTION\] : \[\]\), \.\.\.reloadPhotoQuestions\(\)\]/);
   assert.doesNotMatch(pageSrc, /APP_RELOAD_OFFLINE_QUESTION|APP_RELOAD_GROUP_QUESTION|inCall|before:/);
 });
 
@@ -186,5 +186,6 @@ test('it never unregisters the service worker and never touches push or localSto
   assert.strictEqual(log.unregister, 0);
   assert.strictEqual(log.sub, 0);
   assert.deepStrictEqual(log.storageWrites, []);
-  assert.doesNotMatch(pageSrc, /unregister|getSubscription|unsubscribe|localStorage|removeItem|\.clear\(/);
+  // changed (tonight): reloadResume consumes its own sessionStorage stash with sessionStorage.removeItem; that is allowed, any other removeItem is not
+  assert.doesNotMatch(pageSrc.replace(/sessionStorage\.removeItem\(/g, ''), /unregister|getSubscription|unsubscribe|localStorage|removeItem|\.clear\(/);
 });

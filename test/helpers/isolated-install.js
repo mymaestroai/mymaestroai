@@ -25,9 +25,15 @@ function makeIsolatedInstall(prefix = 'isolated-install-', { copy = [] } = {}) {
   fs.cpSync(path.join(REAL, 'lib'), path.join(inst, 'lib'), { recursive: true, dereference: true });
   fs.symlinkSync(path.join(REAL, 'node_modules'), path.join(inst, 'node_modules'));
   // Files at the top of the install that lib/ modules read (never write): copied so their paths stay inside the throwaway install.
+  fs.writeFileSync(path.join(inst, '.mm-test-install'), '1\n', { flag: 'wx', mode: 0o600 });
   for (const f of ['package.json']) { try { fs.copyFileSync(path.join(REAL, f), path.join(inst, f)); } catch { /* not there */ } }
   // The example agents list is shipped in git (not install data); lib/ falls back to it when data/agents.json is missing.
   try { fs.copyFileSync(path.join(REAL, 'data', 'agents.example.json'), path.join(data, 'agents.example.json')); } catch { /* not there */ }
+  // The stand-in Claude client: lib/claude-signin-guard compares programs byte for byte with <install>/test/fixtures/fake-claude-client.js.
+  try {
+    fs.mkdirSync(path.join(inst, 'test', 'fixtures'), { recursive: true });
+    fs.copyFileSync(path.join(REAL, 'test', 'fixtures', 'fake-claude-client.js'), path.join(inst, 'test', 'fixtures', 'fake-claude-client.js'));
+  } catch { /* not there */ }
   for (const raw of copy) {
     const rel = path.posix.normalize(String(raw).split(path.sep).join('/'));
     if (path.isAbsolute(rel) || rel === '.' || /^data(\/|$)/.test(rel) || rel.split('/').includes('..')) throw new Error(`isolated-install: ${raw} is not a path to copy`);

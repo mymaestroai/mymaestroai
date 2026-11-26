@@ -357,14 +357,16 @@ test('SDK options: setting off, hub mode, a withheld box, no tools and no flag a
 
 test('SDK options: the turn calls the builder with the worker, the hands mode and the withheld box; the hub-mode server code is unchanged', () => {
   const sdk = read('lib/sdk-chat.js');
-  assert.match(sdk, /withSearchBoth\(queryOptions, searchBothApplies\(twVirtual, \{ hubHands, sandboxWithheld \}\),\n\s+\(\) => buildHandsMcpServer\(sdk, hands\.tools, \{ only: SEARCH_BOTH_TOOLS, signal: abortController\.signal \}\)\);/);
-  assert.match(sdk, /queryOptions\.mcpServers\.hub = buildHandsMcpServer\(sdk, hands\.tools, \{ blocked: blockedTools, signal: abortController\.signal \}\);/);
+  assert.match(sdk, /const extraHands = searchBothApplies\(twVirtual, \{ hubHands, sandboxWithheld \}\) \? \[\.\.\.SEARCH_BOTH_TOOLS\] : \[\];/);
+  assert.match(sdk, /withSearchBoth\(queryOptions, extraHands\.length > 0,\n\s+\(\) => buildHandsMcpServer\(sdk, hands\.tools, \{ only: extraHands, signal: abortController\.signal, readOnlyHelper \}\), extraHands\);/);
+  assert.match(sdk, /queryOptions\.mcpServers\.hub = buildHandsMcpServer\(sdk, hands\.tools, \{ blocked: blockedTools, signal: abortController\.signal, readOnlyHelper \}\);/);
 });
 
 test('Codex turn: a marked worker gets the hub\'s WebSearch and WebFetch through the bridge (only those), nothing else changes', () => {
   const sdk = read('lib/sdk-chat.js');
   const codex = sdk.slice(sdk.indexOf('async function streamViaCodex('));
-  assert.match(codex, /const searchBoth = searchBothApplies\(twVirtual, \{ hubHands: hands\.mode === 'hub', sandboxWithheld: hands\.withheld \}\);\n\s+if \(searchBoth\) \{\n\s+const h = buildHandsMcpServer\(codexBridge\.collectingSdk, hands\.tools, \{ only: SEARCH_BOTH_TOOLS, signal: abortController\.signal \}\);\n\s+for \(const t of h\.tools\) hubTools\.push\(t\);/);
+  assert.match(codex, /const searchBoth = searchBothApplies\(twVirtual, \{ hubHands: hands\.mode === 'hub', sandboxWithheld: hands\.withheld \}\);\n\s+const extraHands = searchBoth \? \[\.\.\.SEARCH_BOTH_TOOLS\] : \[\];/);
+  assert.match(codex, /buildHandsMcpServer\(codexBridge\.collectingSdk, hands\.tools, \{ only: extraHands, signal: abortController\.signal, readOnlyHelper \}\);/);
   // the bridge list for a marked worker is exactly the two, built the same way as the Claude client's
   const bridge = lib('codex-cli/bridge');
   const tools = hubTools.createHubTools({ cwd: process.cwd() });

@@ -1,4 +1,5 @@
 'use strict';
+delete process.env.CLAUDE_CONFIG_DIR;   // these tests build their own home; the runner's sealed Claude folder (scripts/run-tests.js) must not replace <home>/.claude
 // Restoring, step one (lib/backup/restore.js prepare): open and check into a staging folder, then make it ready for
 // this computer. Over an existing install: today's sign-ins, revocations and port are kept, accounts only in the
 // backup come back disabled, kept two-factor secrets are re-locked with the restored key file, and what would be lost

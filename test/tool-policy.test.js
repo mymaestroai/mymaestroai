@@ -12,6 +12,20 @@ const os = require('os');
 const tp = require('../lib/tool-policy');
 tp.setMemberProviders({ memberDefaults: () => ({}), ownerGrants: () => ({}) });
 
+test('path hint appears only on outside path policy refusals', () => {
+  const hint = 'Use absolute paths, or `cd /abs/dir && command` (not `cd dir; command`).';
+  for (const cls of tp.CLASSES) {
+    const dec = { cls, reason: 'test policy', summary: 'test action' };
+    if (cls === 'read_outside' || cls === 'write_outside') {
+      assert.ok(tp.denialText(dec).endsWith('\n' + hint), cls);
+      assert.ok(!tp.denialText({ ...dec, protectedCode: true }).includes(hint));
+      for (const by of ['owner', 'timeout']) assert.ok(!tp.denialText(dec, { by }).includes(hint));
+    } else {
+      assert.ok(!tp.denialText(dec).includes(hint), cls);
+    }
+  }
+});
+
 const HUB = tp.HUB_ROOT;
 const worker = { name: 'haiku', category: 'worker' };
 // Team membership is data: an agent is on the medical team when its own folder grants include medical/.

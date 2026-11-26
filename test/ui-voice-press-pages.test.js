@@ -43,7 +43,7 @@ function desktopMic(mode, over) {
     voicePressEndedAt: 0, voiceMicHeldMs: () => 0, VOICE_PRESS_HOLD_MS: 400,   // the idle mic's pointer record, and when a Tap to talk call last ended (round 1, items 4 and 6)
     voiceCallS: { active: false, starting: false }, voiceCallHangUp: () => log.push('hangup'),
     voiceRec: { busy: false, chatId: null, guard: { pending: false, begin: () => 1, fail() {}, settle: () => true, gen: 1 }, chunks: [], samples: 0, level: -100 }, voiceMicStop: async () => {},
-    voiceReady: () => true, hubToast: () => {}, voiceRefreshStatus() {}, simpleOn: () => false, voicePrefsNow: () => ({ mode }), voiceCallStart: (id) => log.push('call:' + id),
+    voiceReady: () => true, voiceHintDismiss() {}, hubToast: () => {}, voiceRefreshStatus() {}, simpleOn: () => false, voicePrefsNow: () => ({ mode }), voiceCallStart: (id) => log.push('call:' + id),
     voiceTest: { mic: null, guard: { pending: false } }, voiceStopPlayback() {}, voiceOpenMic: async () => { log.push('openMic'); return { close() {} }; }, voiceMicLevelNow: () => 50,
     voiceLevelDb: () => -50, voiceMicError: () => 'x', voiceMicTick() {}, setInterval: () => 0, Date,
   };
@@ -432,7 +432,7 @@ test('the help texts of both pages name all three modes: Hands-free, Tap to talk
   // the idle mic of the desktop: label and title by mode
   const idle = between(app, 'function voiceMicIdleLabel()', 'function voiceCallPaintBtn(');
   inOrder(idle, ["'Tap to talk'", "'Dictate'", "'Talk hands-free'"]);
-  assert.match(app, /aria-label="\$\{voiceMicIdleLabel\(\)\}" title="\$\{voiceMicIdleTitle\(\)\}"/);
+  assert.match(app, /aria-label="\$\{voiceMicIdleLabel\(\)\}" title="\$\{hubEsc\(voiceMicIdleTitle\(chatId\)\)\}"/);   // voice entry (escaped: review r1 item 1): the title names the chat's agent
 });
 // ═══ review round 1 ═══
 // ── item 3: a cancelled or lost pointer always ends the press it opened ──
@@ -655,8 +655,8 @@ test('R1.6 attaching a press button lets go of handles whose button is no longer
   assert.deepStrictEqual(p1.listeners.pointerdown, []);
 });
 
-test('the phone service worker is bumped for the new mobile.html and mobile.js (hub-mobile-v76)', () => {
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v76'/);
+test('the phone service worker is bumped for the new mobile.html and mobile.js (hub-mobile-v92)', () => {
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v92'/);
 });
 
 // ═══ review round 3 ═══

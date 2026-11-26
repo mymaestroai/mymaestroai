@@ -117,8 +117,8 @@ test('install: downloads, verifies, extracts, copies the browser files; status g
   const done = await e.install({});
   assert.strictEqual(done.ready, true);
   const s = e.status();
-  assert.deepStrictEqual(Object.keys(s).filter(k => !['bytesDone', 'bytesTotal'].includes(k)).sort(), ['enabled', 'error', 'installing', 'platformSupported', 'progress', 'ready', 'step', 'stt', 'tts', 'voices']);
-  assert.deepStrictEqual({ ...s, voices: undefined, bytesDone: undefined, bytesTotal: undefined }, { enabled: false, ready: true, installing: false, step: 'ready', progress: 1, error: '', platformSupported: true, stt: { engine: 'local', model: 'small.en' }, tts: { engine: 'local', defaultVoice: 'af_heart' }, voices: undefined, bytesDone: undefined, bytesTotal: undefined });
+  assert.deepStrictEqual(Object.keys(s).filter(k => !['bytesDone', 'bytesTotal'].includes(k)).sort(), ['downloadBytes', 'enabled', 'error', 'failReason', 'installing', 'optionalRetry', 'platformSupported', 'progress', 'ready', 'step', 'stt', 'tts', 'voices']);
+  assert.deepStrictEqual({ ...s, voices: undefined, bytesDone: undefined, bytesTotal: undefined }, { enabled: false, ready: true, installing: false, optionalRetry: false, step: 'ready', progress: 1, error: '', downloadBytes: 0, failReason: null, platformSupported: true, stt: { engine: 'local', model: 'small.en' }, tts: { engine: 'local', defaultVoice: 'af_heart' }, voices: undefined, bytesDone: undefined, bytesTotal: undefined });
   assert.deepStrictEqual(s.voices.map(v => [v.id, v.engine, v.accent]), [['af_heart', 'kokoro', 'US'], ['am_michael', 'kokoro', 'US'], ['bf_emma', 'kokoro', 'British'], ['bm_george', 'kokoro', 'British'], ['alba', 'piper', 'Scottish'], ['lessac', 'piper', 'US']]);
   assert.ok(s.voices.every(v => typeof v.label === 'string' && v.label));
   assert.ok(fs.existsSync(path.join(dir, 'node_modules', 'sherpa-onnx-node', 'package.json')));

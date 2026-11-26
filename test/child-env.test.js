@@ -167,14 +167,25 @@ test('skill manager builds a filtered env for stdio skills', () => {
   assert.ok(c.env.SKILL_X === '1' && !('GITHUB_TOKEN' in c.env));
 });
 
+test('Codex runtime strips subscription overrides even for a lead or an exact environment grant', t => {
+  const original = process.env;
+  process.env = { ...FAKE, OPENAI_API_KEY: 'fixture', CODEX_API_KEY: 'fixture', OPENAI_BASE_URL: 'fixture' };
+  t.after(() => { process.env = original; });
+  const { agentRuntimeEnv } = require('../lib/codex-cli');
+  const rec = { name: 'fixture', envKeep: ce.CLIENT_EXCLUDE.codex };
+  for (const lead of [true, false]) {
+    const env = agentRuntimeEnv(rec, () => lead);
+    for (const key of ce.CLIENT_EXCLUDE.codex) assert.ok(!(key in env));
+    assert.strictEqual(env.GITHUB_TOKEN, lead ? FAKE.GITHUB_TOKEN : undefined);
+  }
+});
+
 test('sdk-chat: hands, the Claude client, the Codex client and jobs use childEnv.envForAgent', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'sdk-chat.js'), 'utf8');
   assert.match(src, /const childEnv = require\('\.\/child-env'\)/);
   assert.match(src, /createHubTools\(\{[^\n]*env: childEnv\.envForAgent\(agent, \{ isLead: leadFor\(agentName\) \}\)/);
   assert.match(src, /childEnv\.envForAgent\(hands\.agent, \{ base: require\('\.\/billing'\)\.clientEnvWithoutApiKey\(process\.env\), client: 'claude', isLead: leadFor\(agentName\), set: \{ CLAUDE_CODE_AUTO_COMPACT_WINDOW: String\(autoCompactWindow\),/);
-  assert.match(src, /const env = childEnv\.envForAgent\(hands\.agent, \{ base: codexBase, client: 'codex', isLead: leadFor\(agentName\) \}\)/);
-  assert.ok(!/const env = \{ \.\.\.process\.env \};/.test(src), 'the old full copy at the Codex site is gone');
-  assert.ok(/delete codexBase\.OPENAI_API_KEY; delete codexBase\.CODEX_API_KEY; delete codexBase\.OPENAI_BASE_URL;/.test(src));
+  assert.match(src, /const env = codexCli\.agentRuntimeEnv\(hands\.agent, leadFor\(agentName\)\)/);
   assert.match(src, /envFor: \(owner\) =>[\s\S]{0,700}childEnv\.buildChildEnv\(process\.env\)/);
 });
 

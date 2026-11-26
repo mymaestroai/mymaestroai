@@ -34,6 +34,20 @@ function tools(d, o = {}) {
 }
 const has = (bin) => { try { execFileSync('which', [bin], { stdio: 'ignore' }); return true; } catch { return false; } };
 
+test('temporary helpers get a foreground-only Bash message before any shell or job callback', async () => {
+  const unexpected = () => { throw new Error('must not start a job or shell'); };
+  const sandbox = { exec: unexpected, mounts: [] };
+  const runJob = unexpected;
+  const helper = createHubTools({ temporaryWorker: true, sandbox, runJob });
+  const args = { command: 'printf ok', run_in_background: true };
+  assert.deepStrictEqual(await helper.call('Bash', args), {
+    text: 'Background runs are not available to helpers. Run the command in the foreground, or tell your lead it needs a background job.',
+  });
+  assert.deepStrictEqual(await createHubTools().call('Bash', args), {
+    text: 'Error: background runs are not available here; run the command in the foreground with a timeout, or use run_job.',
+  });
+});
+
 test('schemas: the eight hands, Claude Code parameter names, client built-ins list', () => {
   assert.deepStrictEqual(TOOL_NAMES, ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep', 'WebSearch', 'WebFetch']);
   assert.deepStrictEqual(Object.keys(SPECS.Read.parameters.properties), ['file_path', 'offset', 'limit', 'pages']);

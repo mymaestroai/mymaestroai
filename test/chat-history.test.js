@@ -12,6 +12,8 @@ const path = require('path');
 const { filterMainView, historyPage, parseCursor } = require('../lib/chat-history');
 const { createTranscript } = require('../lib/transcript');
 
+// the main view now shows each run of hub-started turns as one summary entry; the older tests look at the other entries
+const plain = (h) => h.filter(e => e.role !== 'hidden_run');
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'chat-history-'));
 after(() => fs.rmSync(tmp, { recursive: true, force: true }));
 
@@ -59,7 +61,8 @@ test('historyPage: the main view reaches the earlier owner message in two reques
   assert.deepStrictEqual(p1.history.map(e => e.content), ['owner two', 'reply two']);
   assert.ok(p1.next && p1.next.startsWith('log:'));
   const p2 = historyPage({ logEntries: log, archive: none, view: 'main', limit: 2, before: p1.next });
-  assert.deepStrictEqual(p2.history.map(e => e.content), ['owner one', 'reply one']);
+  assert.deepStrictEqual(plain(p2.history).map(e => e.content), ['owner one', 'reply one']);
+  assert.strictEqual(p2.history.length, 3, 'and the 250 hidden consultations after them are one summary entry');
   assert.strictEqual(p2.next, null);
 
   const seen = [];
@@ -164,7 +167,7 @@ test('historyPage: a hub turn cut by the log trim (prompt only in the archive) s
   const log = [{ ts: t(4), role: 'assistant', content: 'scheduled answer, not for the owner' }, { ts: t(9), role: 'user', content: 'owner now' }, { ts: t(10), role: 'assistant', content: 'reply now' }];
   const p = historyPage({ logEntries: log, archive: fakeArchive(rows), view: 'main', limit: 50 });
   assert.ok(!p.history.some(e => /scheduled answer/.test(e.content)), 'the orphaned scheduled reply stays hidden');
-  assert.deepStrictEqual(p.history.map(e => e.content), ['owner earlier', 'earlier answer', 'owner now', 'reply now']);
+  assert.deepStrictEqual(plain(p.history).map(e => e.content), ['owner earlier', 'earlier answer', 'owner now', 'reply now']);
   // the same turn marked for the owner: its reply stays
   const q = historyPage({ logEntries: log, archive: fakeArchive(rows, ['s1']), view: 'main', limit: 50 });
   assert.ok(q.history.some(e => /scheduled answer/.test(e.content)));
@@ -219,7 +222,9 @@ test('historyPage: the archive continues behind the chat log, rows saved after t
     { ts: t(21), role: 'assistant', content: 'reply now' },
   ];
   const archive = fakeArchive(rows, ['t3']);
-  const main = historyPage({ logEntries: log, archive, view: 'main', limit: 10 });
+  const main0 = historyPage({ logEntries: log, archive, view: 'main', limit: 10 });
+  const main = { ...main0, history: plain(main0.history) };
+  assert.strictEqual(main0.history.filter(e => e.role === 'hidden_run').length, 1);
   assert.deepStrictEqual(main.history.map(e => e.content), [
     'early owner question', 'early answer', '[Scheduled task — started by the hub scheduler] "nightly"', 'please decide', 'robin follows up',
     'owner message at the seam', 'reply at the seam', 'owner now', 'reply now']);
@@ -246,7 +251,7 @@ test('historyPage: the archive continues behind the chat log, rows saved after t
     pages.push(p);
     cursor = p.next;
   } while (cursor);
-  assert.deepStrictEqual(pages.map(p => p.history.map(e => e.content)), [
+  assert.deepStrictEqual(pages.map(p => plain(p.history).map(e => e.content)), [
     ['owner now', 'reply now'],
     ['owner message at the seam', 'reply at the seam'],
     ['please decide', 'robin follows up'],
@@ -262,7 +267,7 @@ test('historyPage: the archive scan is bounded: a short page comes back with nex
   for (let i = 1; i <= 30000; i++) rows.push({ id: i, ts: new Date(Date.parse('2026-01-01T00:00:00Z') + i * 1000).toISOString(), kind: i % 2 ? 'user' : 'assistant', text: `t${i}`, origin: i % 2 ? 'consultation' : 'user', turn_id: `x${Math.ceil(i / 2)}`, meta: {} });
   const archive = fakeArchive(rows);
   const p = historyPage({ logEntries: [], archive, view: 'main', limit: 5 });
-  assert.deepStrictEqual(p.history, []);
+  assert.deepStrictEqual(p.history.map(e => [e.role, e.turns]), [['hidden_run', 2000]], 'the scanned rows show as one summary line');
   assert.match(p.next, /^arc:\d+$/);
   assert.ok(Number(p.next.slice(4)) > 9000, 'the cursor moved back past the scanned rows');
   const reads = archive.calls.reduce((n, c) => n + c.limit, 0);

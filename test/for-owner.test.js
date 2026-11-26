@@ -1,6 +1,6 @@
 'use strict';
 // for_owner: an agent marks its reply in a turn the hub started as one the owner must see. The tool exists on both
-// tool lists on the agent's own turns only; the handler stores a mark for the running turn; the turn's saved assistant
+// tool lists across turn kinds. When permitted, the handler stores a mark for the running turn and the saved assistant
 // entry then carries for_owner; the phone gets one notice per turn; the agent is told about it in its notes and prompts.
 const { test, after } = require('node:test');
 const assert = require('node:assert');
@@ -35,7 +35,7 @@ function startTurn(origin, turnId) {
   return tap;
 }
 
-test('for_owner is on the gateway tool list at depth 0 and absent when consulted', () => {
+test('for_owner is on the gateway tool list with its original schema', () => {
   const own = getWorkspaceTools(AGENT, fakeRes(), 0);
   const t = own.find(x => x.name === 'for_owner');
   assert.ok(t, 'offered on its own turn');
@@ -45,10 +45,9 @@ test('for_owner is on the gateway tool list at depth 0 and absent when consulted
   assert.strictEqual(t.parameters.properties.requested.type, 'boolean', 'requested is an optional boolean');
   assert.ok(!t.parameters.required.includes('requested'));
   assert.match(t.parameters.properties.requested.description, /"Requests you made" setting/);
-  assert.ok(!getWorkspaceTools(AGENT, fakeRes(), 1).some(x => x.name === 'for_owner'), 'withheld when another agent consults it');
 });
 
-test('for_owner is in the hub MCP server (Claude and Codex clients) at depth 0 and absent at depth 1', async () => {
+test('for_owner is in the hub MCP server (Claude and Codex clients) with its original schema', async () => {
   const own = await buildHubMcpServer(AGENT, fakeRes(), fakeSdk, { consultationDepth: 0 });
   const t = own.tools.find(x => x.name === 'for_owner');
   assert.ok(t, 'registered');
@@ -58,18 +57,87 @@ test('for_owner is in the hub MCP server (Claude and Codex clients) at depth 0 a
   assert.ok(t.shape.asks.isOptional(), 'asks is optional');
   assert.ok(t.shape.requested.isOptional(), 'requested is optional');
   assert.match(FOR_OWNER_DESC, /requested: true when they asked you to tell them \("let me know when\.\.\."\); requested also works in a turn they started/);
-  const consulted = await buildHubMcpServer(AGENT, fakeRes(), fakeSdk, { consultationDepth: 1 });
-  assert.ok(!consulted.tools.some(x => x.name === 'for_owner'));
 });
 
-test('for_owner is not offered on tiger-team or ephemeral turns', async () => {
-  assert.ok(!getWorkspaceTools(AGENT, fakeRes(), 0, true).some(x => x.name === 'for_owner'), 'gateway list, tiger team');
-  const tt = await buildHubMcpServer(AGENT, fakeRes(), fakeSdk, { consultationDepth: 0, tigerTeam: true });
-  assert.ok(!tt.tools.some(x => x.name === 'for_owner'), 'MCP server, tiger team');
-  const eph = await buildHubMcpServer(AGENT, fakeRes(), fakeSdk, { consultationDepth: 0, ephemeral: true });
-  assert.ok(!eph.tools.some(x => x.name === 'for_owner'), 'MCP server, ephemeral');
-  const own = await buildHubMcpServer(AGENT, fakeRes(), fakeSdk, { consultationDepth: 0 });
-  assert.ok(own.tools.some(x => x.name === 'for_owner'), 'still on an ordinary turn');
+test('owner marks and every hand-off tool stay registered and keep their original permissions', async (t) => {
+  const tw = L('temporal-workers');
+  const worker = tw.createVirtual({ parent: AGENT, toolScope: 'read' });
+  const names = ['hand_off', 'hand_off_list', 'hand_off_note', 'hand_off_cancel'];
+  const agents = L('agents');
+  const handOffs = L('hand-off-tools');
+  t.mock.method(agents, 'getAgentsSync', () => [{ name: AGENT, category: 'primary' }]);
+  const run = t.mock.method(handOffs, 'runTool', async (name) => `Ran ${name}`);
+  const published = [];
+  const off = hubEvents.events.onPublish(ev => { if (ev.type === 'for_owner') published.push(ev); });
+  try {
+    for (const [kind, options, marks, handsOff] of [
+      ['user', {}, [false, false], true],
+      ['requested', {}, [true, true], true],
+      ['schedule', {}, [true, true], true],
+      ['consultation', { consultationDepth: 1 }, [false, false], false],
+      ['hand_off', { consultationDepth: 1 }, [false, false], false],
+      ['ephemeral', { ephemeral: true }, [true, false], true],
+      ['tiger', { tigerTeam: true }, [false, false], true],
+      ['virtual', { ephemeral: true }, [false, false], false],
+    ]) {
+      const agent = kind === 'virtual' ? worker.id : AGENT;
+      const origin = kind === 'requested' ? 'user' : ['ephemeral', 'tiger', 'virtual'].includes(kind) ? 'schedule' : kind;
+      const tap = hubEvents.events.tapTurn(fakeRes(), { agent, origin: { kind: origin }, message: 'x', turnId: `availability-${kind}` });
+      try {
+        const gateway = getWorkspaceTools(agent, fakeRes(), options.consultationDepth, options.tigerTeam);
+        const mcp = (await buildHubMcpServer(agent, fakeRes(), fakeSdk, options)).tools;
+        for (const [index, list] of [gateway, mcp].entries()) {
+          const call = async (name, args) => {
+            const tool = list.find(tool => tool.name === name);
+            assert.ok(tool, `${kind}: ${name} is registered on path ${index}`);
+            const result = await tool.handler(args);
+            if (index) assert.strictEqual(result.isError, undefined);
+            return index ? result.content[0].text : result;
+          };
+          const count = published.length;
+          forOwnerMarks.delete(agent);
+          const marked = await call('for_owner', { reason: kind, requested: !['user', 'schedule'].includes(kind) });
+          assert.match(marked, marks[index] ? /^Marked:/ : kind === 'user' ? /^Not needed here/ : /^This turn cannot be marked/);
+          assert.strictEqual(forOwnerMarks.has(agent), marks[index], kind);
+          assert.strictEqual(published.length - count, Number(marks[index]), kind);
+          const handOffCount = run.mock.callCount();
+          for (const name of names) {
+            assert.strictEqual(await call(name, {}), handsOff ? `Ran ${name}` : 'Hand-offs can only be started from your own turn.');
+          }
+          assert.strictEqual(run.mock.callCount() - handOffCount, handsOff ? names.length : 0, kind);
+        }
+      } finally {
+        tap.finish(true, null);
+        forOwnerMarks.delete(agent);
+      }
+    }
+  } finally {
+    off();
+    tw.releaseVirtual(worker.id);
+  }
+});
+
+test('the read-only SDK and Codex Bash stub never calls the real tool callback', async () => {
+  const text = 'This helper is read-only: it has no shell. Use Read, Grep or Glob. If the job needs a command run, say so in your report so your lead can start a helper with full tools.';
+  const tw = L('temporal-workers');
+  const hands = L('hub-tools').createHubTools();
+  let calls = 0;
+  hands.call = () => { calls++; throw new Error('real tools must not be called by the stub'); };
+  for (const sdk of [fakeSdk, L('codex-cli/bridge').collectingSdk]) {
+    const opts = { blocked: tw.sdkDisallowedFor('read'), readOnlyHelper: true };
+    for (const only of [null, ['Bash'], ['Bash', ...sdkChat.SEARCH_BOTH_TOOLS]]) {
+      const { tools } = sdkChat.buildHandsMcpServer(sdk, hands, { ...opts, only });
+      assert.ok(!tools.some(tool => ['Write', 'Edit'].includes(tool.name)));
+      const bash = tools.find(tool => tool.name === 'Bash');
+      assert.strictEqual(bash.description, text);
+      for (const run_in_background of [true, false]) {
+        assert.deepStrictEqual(await bash.handler({ command: 'anything', run_in_background }), { content: [{ type: 'text', text }] });
+      }
+    }
+    const none = sdkChat.buildHandsMcpServer(sdk, hands, { blocked: tw.sdkDisallowedFor('none') });
+    assert.deepStrictEqual(none.tools, []);
+  }
+  assert.strictEqual(calls, 0);
 });
 
 test('the tool policy classes for_owner as a harmless write inside the hub', () => {
@@ -114,7 +182,7 @@ test('asks: true is published only for a strict boolean true', () => {
 test('a turn the owner started: nothing is stored, and no turn running stores nothing either', () => {
   forOwnerMarks.clear();
   const tap = startTurn({ kind: 'user' }, 'fo-turn-user');
-  assert.match(handleForOwner(AGENT, { reason: 'r' }), /started by them, so your reply already shows; no mark needed/);
+  assert.match(handleForOwner(AGENT, { reason: 'r' }), /^Not needed here: the person started this turn/);
   assert.strictEqual(forOwnerMarks.has(AGENT), false);
   tap.finish(true, null);
   assert.match(handleForOwner('zz_for_owner_idle', { reason: 'r' }), /./);
@@ -146,7 +214,7 @@ test('requested: true in a turn the person started marks and publishes (the repl
     const seen = [];
     const off = hubEvents.events.onPublish(ev => { if (ev.type === 'for_owner') seen.push(ev); });
     const tap = startTurn({ kind }, 'fo-req-user-' + kind);
-    assert.match(handleForOwner(AGENT, { reason: 'plain' }), /no mark needed/);
+    assert.match(handleForOwner(AGENT, { reason: 'plain' }), /^Not needed here: the person started this turn/);
     assert.strictEqual(seen.length, 0, 'a plain call is still refused');
     assert.match(handleForOwner(AGENT, { reason: 'Done: all work finished', requested: true }), /^Marked/);
     assert.strictEqual(forOwnerMarks.get(AGENT).turnId, 'fo-req-user-' + kind);

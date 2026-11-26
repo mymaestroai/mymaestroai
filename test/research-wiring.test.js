@@ -175,7 +175,8 @@ test('the tool is on both tool lists, the guidance on every route, the person on
   assert.match(SRC, /\.\.\.\(deepResearchOffered\(agentName, consultationDepth, tigerTeam\) \? \[\{\n\s+name: researchLib\.TOOL\.name/);
   assert.match(SRC, /\.\.\.\(deepResearchOffered\(agentName, consultationDepth, tigerTeam\) \? \[sdk\.tool\(researchLib\.TOOL\.name/);
   assert.equal((SRC.match(/\+ researchGuidanceFor\(agentName, /g) || []).length, 3, 'gateway, Claude and Codex instructions');
-  assert.match(SRC, /const personKey = turnOrigin\.kind === 'user' \? \(trustedAccounts === false \? 'owner' : \(trustedUserId \? String\(trustedUserId\)\.slice\(0, 64\) : null\)\) : null;/);   // review r2: no accounts (also the older single password) -> 'owner'
+  // changed: the condition now also admits a trusted Set up teams turn (team_setup && trustedTeamSetup), the same trust as Build Team; the rest of the line is unchanged.
+  assert.match(SRC, /const personKey = \(turnOrigin\.kind === 'user' \|\| \(turnOrigin\.kind === 'build_team' && trustedBuildTeam\) \|\| \(turnOrigin\.kind === 'team_setup' && trustedTeamSetup\)\) \? \(trustedAccounts === false \? 'owner' : \(trustedUserId \? String\(trustedUserId\)\.slice\(0, 64\) : null\)\) : null;/);   // review r2: no accounts (also the older single password) -> 'owner'. Build Team (the route's trusted admin context) names the admin who pressed it, so its plan card is theirs.
   assert.match(SRC, /\{ kind: 'research_report', from: 'hub' \}\)/);   // the report turn's origin (delivery itself: the review r2 test)
   const server = fs.readFileSync(path.join(REAL, 'server.js'), 'utf8');
   assert.match(server, /require\('\.\/lib\/sdk-chat'\)\.startResearch\(\)/);

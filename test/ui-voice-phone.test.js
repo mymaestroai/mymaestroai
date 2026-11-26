@@ -102,7 +102,7 @@ test('Voice menu item and sheet: dialogGuard, level slider, meter, test toggle, 
   assert.match(js, /dialogGuard\.open\(sh, \{ close: sh\.closeSheet \}\); \}\n\s*paintVoiceSheet/);
   assert.match(sheet, /dialogGuard\.closed\(sh\)/);
   assert.match(sheet, /voiceTestStop\(\); voiceStopPlayback\(\);/, 'closing releases the mic and stops the sample');
-  assert.match(js, /Voice is off\. An admin of your Maestro can turn it on, from the Voice menu on their phone or in Settings, Voices on the computer\./);   // was "Voice is not enabled on the hub..." (see ui-voice-ios-pages.test.js)
+  assert.match(js, /Voice is off\. \$\{adminWho\} can turn it on, from the Voice menu on their phone or in Settings, Voice on the computer\./);   // voice entry: "Settings, Voices" is now "Settings, Voice", and the admin's name replaces "An admin of your Maestro" when known (adminWho; the text itself is pinned in ui-voice-ios-pages.test.js); was "Voice is not enabled on the hub..." (see ui-voice-ios-pages.test.js)
   assert.match(js, /handle = await voiceMicOpen\(voicePrefsNow\(\)\.micLevel, \(f\) => \{ m\.style\.width/, 'meter opens the mic only through the test toggle');
 });
 
@@ -265,5 +265,5 @@ test('no U+FE0F in the voice code or markup', () => {
 });
 
 test('service worker cache is v65', () => {
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v76'/);
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v92'/);
 });

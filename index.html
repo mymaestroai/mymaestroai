@@ -36,6 +36,7 @@
       --border-strong: #333846;
       --purple: #a855f7;
       --blue: #3b82f6;
+      --bg-work-ring: #3987e5;   /* the hollow ring and blue line: free, with work running in the background */
       --radius: 4px;
       /* The chat column fills the window. To cap it later (a "limit to 1200px" setting), set this one variable: the
          messages and the composer both follow it, so they always line up. */
@@ -461,6 +462,179 @@
     .tab-content { flex: 1; overflow-y: auto; padding: 10px; }
     .tab-panel { display: none; }
     .tab-panel.active { display: block; }
+    /* Teams view (renderTeams in app.js): who reports to whom. Rows match .agent-btn spacing; depth 1 indents 18px, depth 2 36px, deeper +18px each. */
+    .simple-view-switch { display: none; }
+    .teams-empty { margin: 0 0 10px; padding: 10px 12px; border: 1px dashed var(--border-strong); border-radius: 8px; font-size: 0.75rem; line-height: 1.4; color: var(--text-dim); }
+    .teams-empty strong { display: block; margin-bottom: 4px; color: var(--text); font-size: 0.8rem; }
+    /* Set up teams: the empty state's button, the line under the Teams tab, and the offer / Undo slot in the lead's chat. Text and a real border: visible without hover. */
+    .teams-setup-btn { display: block; margin-top: 8px; padding: 5px 10px; border: 1px solid var(--accent); border-radius: 6px; background: transparent; color: var(--accent); font: inherit; font-size: 0.75rem; font-weight: 600; cursor: pointer; }
+    .teams-setup-btn:disabled { opacity: 0.6; cursor: default; }
+    .teams-setup-line { margin: 8px 0 0; padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; font-size: 0.7rem; color: var(--text-dim); }
+    .teams-setup-undo, .team-undo-btn { background: none; border: 0; padding: 0; font: inherit; color: var(--accent); text-decoration: underline; cursor: pointer; }
+    .team-offer-slot { padding: 8px 12px 0; }
+    .team-offer-slot .question-modal { max-width: none; width: auto; max-height: none; padding: 16px; margin-bottom: 8px; }
+    /* The Undo line: one text line above the "Working on" cards (same row flow, own row), ellipsis when narrow; the list opens below it */
+    .team-undo-line { display: flex; align-items: center; gap: 6px; min-width: 0; margin: 0 0 4px; font-size: 0.8rem; line-height: 1.4; color: var(--text-dim); white-space: nowrap; }
+    .team-undo-line[data-team-undo-toggle] { cursor: pointer; }
+    .team-undo-text { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .team-undo-line .team-undo-btn, .team-undo-sep { flex: none; }
+    .team-undo-x { flex: none; margin-left: auto; background: none; border: 0; padding: 0 6px; font: inherit; line-height: 1.4; color: var(--text-dim); cursor: pointer; }
+    .team-undo-list { margin: 0 0 4px; padding: 2px 12px; border: 1px solid var(--border); border-radius: 8px; font-size: 0.8rem; color: var(--text-dim); }
+    .team-undo-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 2px 0; }
+    /* Teams list (redesign). Offsets are px from the left edge of #teams-list's content box (the mock-ups' x minus 12), sidebar 240 / narrow container (sidebar 160) / Simple:
+       main card 46 high: dot 10, icon 26, name 54 (narrow: dot 10, name 26); member 26: dot 44, icon 54, name 76 (narrow 26 / - / 38); leader card 34 from 40: dot 49, icon 60, name 84 (narrow card 26, dot 30, name 40);
+       a leader's workers 26: dot 74, icon 84, name 106 (narrow 40 / - / 50). Joining lines at 36 and 69 (narrow 14 and 33). Simple: main 48: dot 12, icon 30, name 64; member 30: dot 52, icon 64, name 90; leader 40: dot 52, icon 64, name 94;
+       a leader's workers 30: dot 82, icon 94, name 120; lines at 42 and 75. Every member's icon starts at or right of its boss's name x. */
+    html { --tms-fold: 36px; }   /* the tap area of every fold control (the pill): at least 36 x 36 while the pill looks small */
+    #teams-list { padding: 0 2px; }
+    .teams-section { margin-bottom: 6px; }
+    .teams-title { display: flex; align-items: center; gap: 6px; height: 30px; padding: 0 4px; font-size: 0.7rem; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.04em; white-space: nowrap; user-select: none; }
+    button.teams-title-fold { width: 100%; border: 0; background: none; font-family: inherit; text-align: left; cursor: pointer; }
+    .teams-title-fold { justify-content: space-between; }   /* label left, the fold arrow (▾ open / ▸ folded) at the RIGHT: the phone's header (the owner 2026-11-24 07:48: "Everything should alwasy be consistent.") */
+    .teams-glyph { flex: none; margin-left: auto; text-align: right; font-size: inherit; letter-spacing: 0; color: var(--text-dim); }
+    .teams-title:focus-visible, .teams-pill-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 4px; }
+    /* One leader = one block (.teams-block): its row, then its own workers in .teams-kids. The joining line runs down the left of every group (.teams-block::before) with a short tick to each row (.teams-line::before). */
+    html { --tm-line: var(--border-strong); }
+    .teams-leaders { margin-left: 36px; padding-left: 1px; }
+    .teams-kids { margin-left: 32px; padding-left: 1px; }
+    .teams-block .teams-block > .teams-kids { margin-left: 20px; }
+    .teams-block { position: relative; }
+    .teams-block::before { content: ''; position: absolute; left: -1px; top: 0; bottom: 0; width: 1px; background: var(--tm-line); }
+    .teams-block:last-child::before { bottom: auto; height: 13px; }   /* the last row of a group ends the line at its own middle */
+    .teams-block.rank-leader:last-child::before { height: 17px; }
+    .teams-block.rank-leader { padding-bottom: 2px; }
+    .teams-block > .teams-line::before { content: ''; position: absolute; left: -1px; top: 50%; width: 6px; height: 1px; background: var(--tm-line); }
+    .teams-leaders > .teams-block.rank-leader > .teams-line::before { width: 2px; }
+    .teams-kids > .teams-block > .teams-line::before { width: 3px; }
+    .teams-line { position: relative; display: flex; align-items: center; }
+    .teams-line.rank-main { margin-bottom: 4px; }
+    .teams-line.has-kids::after { content: ''; position: absolute; left: 36px; top: 34px; bottom: -4px; width: 1px; background: var(--tm-line); }   /* from under the main's icon down to the first row of its team */
+    .teams-line.rank-leader.has-kids::after { left: 32px; top: 26px; bottom: 0; }
+    .teams-row {
+      flex: 1 1 auto; min-width: 0; position: relative; display: flex; flex-direction: row; align-items: center; gap: 0; height: 46px; margin: 0; padding: 0 7px 0 9px;
+      background: var(--bg-card); border: 1px solid var(--border); color: var(--text-dim); cursor: pointer;
+      text-align: left; transition: all 0.15s; border-radius: 8px; font: inherit; --dot: 8px;
+    }
+    .teams-row:hover { color: var(--text); border-color: var(--accent); background: var(--agent-btn-hover-bg); }
+    .teams-row, .teams-helpers { --d: 0; }
+    .teams-dot { flex: none; width: var(--dot); height: var(--dot); margin-right: 8px; border-radius: 50%; background: transparent; }
+    .teams-dot.live-idle { background: var(--border-strong); }
+    .teams-dot.live-busy { background: var(--warning); animation: pulse 1s infinite; }
+    .teams-dot.live-question { background: var(--blue); animation: pulse 1.6s infinite; }
+    #teams-list .teams-dot.bg-work:not(.live-busy):not(.live-question) { box-sizing: border-box; width: var(--dot); height: var(--dot); border-width: 2px; }   /* the ring keeps the dot's own footprint: no row shifts when the state changes */
+    .teams-row .agent-icon { flex: none; width: 20px; margin-right: 8px; text-align: center; font-size: 18px; line-height: 1; }
+    .teams-info { display: flex; flex-direction: column; justify-content: center; gap: 1px; flex: 1 1 auto; min-width: 0; }
+    .teams-row .name { display: flex; align-items: center; min-width: 0; height: 18px; font-size: 13.5px; font-weight: 600; line-height: 18px; color: var(--text); white-space: nowrap; }
+    .teams-row .name-text { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }   /* the name truncates first; the pill never shrinks */
+    .teams-row .name .lead-badge { flex: none; margin-left: 3px; font-size: 10px; filter: drop-shadow(0 0 2px var(--agent-btn-lead-badge-filter)); }
+    /* The team-size pill: a small button ("12 ▾") that folds the team (or a leader's workers). The tap area is --tms-fold (36 px) tall and wide, the pill itself looks 18 px. */
+    .teams-pill-btn { position: relative; z-index: 1; flex: none; display: flex; align-items: center; margin: 0 0 0 6px; padding: 0; border: 0; background: none; font: inherit; color: inherit; cursor: pointer; }
+    .teams-pill-btn::before { content: ''; position: absolute; left: 50%; top: 50%; width: max(calc(100% + 6px), var(--tms-fold)); height: var(--tms-fold); transform: translate(-50%, -50%); }   /* the invisible tap area: --tms-fold tall and wide, centred on the small pill, without pushing the name */
+    .teams-info:has(.teams-pill-btn) { padding-right: var(--tms-pill-gap); }   /* the name truncates first: always --tms-pill-gap between the pill's right edge and the row's menu button (or the row's right padding), so the pill's tap area never reaches the ⋯ */
+    html { --tms-pill-gap: 10px; }
+    .teams-pill { display: block; height: 18px; padding: 0 6px; border: 1px solid var(--border-strong); border-radius: 9px; font-size: 10.5px; line-height: 16px; font-weight: 400; color: var(--text-dim); white-space: nowrap; }   /* a block, not a flex box: the space inside ('12 agents ▾') stays; the words are never hidden at any width */
+    .teams-pill-btn:hover .teams-pill, .teams-pill-btn:focus-visible .teams-pill { border-color: var(--accent); color: var(--text); }
+    .teams-live { flex: 1 1 0; min-width: 0; margin-left: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; font-weight: 400; color: var(--warning); }   /* what a replying member is doing, after its name */
+    .teams-sub { font-size: 0.65rem; line-height: 14px; height: 14px; color: var(--text-tertiary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .teams-sub.busy { color: var(--warning); }
+    .teams-sub.teams-sub-build { overflow: visible; text-overflow: clip; }   /* the Build team link is never cut or wrapped (the row keeps its height) */
+    .teams-sub.teams-sub-build .build-team-link { white-space: nowrap; }
+    .teams-helpers { margin: 0 0 4px 0; padding: 2px 10px; font-size: 0.65rem; color: var(--warning); }
+    /* A shared specialist (or Other agent): a one-line card */
+    .teams-row.is-spec { height: 34px; --dot: 7px; }
+    .teams-row.is-spec .teams-dot { margin-right: 6px; }
+    .teams-row.is-spec .agent-icon { width: 18px; margin-right: 6px; font-size: 16px; }
+    .teams-row.is-spec .name { height: 16px; font-size: 12.5px; line-height: 16px; }
+    /* Three ranks: main (above), leader (a card one step smaller), worker / member (a quiet line, no card) */
+    .teams-row.rank-leader { height: 34px; margin-left: 3px; padding: 0 3px 0 8px; --dot: 7px; --tms-pill-gap: 5px; }   /* a leader's name needs the room ('Studio Lead' at 12.5px is about 72px): 5px from the pill to the ⋯ instead of 10, and a 3px right padding */
+    .teams-row.rank-leader .teams-dot { margin-right: 4px; }
+    .teams-row.rank-leader .agent-icon { width: 18px; margin-right: 6px; font-size: 16px; }
+    .teams-row.rank-leader .name { height: 16px; font-size: 12.5px; line-height: 16px; }
+    .teams-row.rank-worker { height: 26px; padding: 0 7px 0 6px; background: none; border-color: transparent; --dot: 6px; }
+    .teams-row.rank-worker:hover { background: var(--agent-btn-hover-bg); border-color: var(--border); }
+    .teams-row.rank-worker .teams-dot { margin-right: 4px; border-width: 1.5px; }
+    .teams-row.rank-worker .agent-icon { width: 16px; margin-right: 6px; font-size: 13.5px; }
+    .teams-row.rank-worker .name { height: 14px; font-size: 11px; line-height: 14px; font-weight: 500; color: var(--text-dim); }
+    .teams-kids .teams-row.rank-worker { padding-left: 3px; }   /* a leader's workers: icon 84, name 106 */
+    #teams-list .teams-row.rank-worker .teams-dot.bg-work:not(.live-busy):not(.live-question) { border-width: 1.5px; }
+    .teams-row .agent-menu-btn { width: 16px; margin-left: auto; margin-right: 0; }
+    /* A narrow sidebar (dragged down towards its 160px minimum): names get the room, icons go, the nesting stays readable. The container is the list's content box (sidebar - 25px). */
+    #teams-list { container-type: inline-size; }
+    @container (max-width: 186px) {   /* the default 240px sidebar gives the list about 215px: full rows; only a sidebar dragged narrower gets this */
+      .teams-row .agent-icon, .teams-row.rank-leader .agent-icon, .teams-row.rank-worker .agent-icon, .teams-row.is-spec .agent-icon { display: none !important; }   /* ONE rule for every rank: no row keeps its icon at this width */
+      .teams-leaders { margin-left: 14px; }
+      .teams-kids { margin-left: 18px; }
+      .teams-line.has-kids::after { left: 14px; }
+      .teams-line.rank-leader.has-kids::after { left: 18px; }
+      .teams-leaders > .teams-block > .teams-line::before { width: 10px; }
+      .teams-leaders > .teams-block.rank-leader > .teams-line::before { width: 10px; }
+      .teams-kids > .teams-block > .teams-line::before { width: 5px; }
+      .teams-row.rank-leader { margin-left: 11px; padding-left: 3px; --dot: 6px; }
+      .teams-row.rank-worker { padding-left: 10px; }
+      .teams-row.rank-worker .teams-dot { margin-right: 6px; }
+      .teams-row.rank-worker .name { font-size: 10.5px; }
+      .teams-kids .teams-row.rank-worker { padding-left: 5px; }
+      .teams-kids .teams-row.rank-worker .teams-dot { margin-right: 4px; }
+      .teams-row.is-spec .teams-dot { margin-right: 7px; }
+      /* 160px sidebar: the name gets the room. The pill sits 4px after the name and 4px before the ⋯; the tap box stays 36 tall and as wide as fits: it grows towards the name, never over the ⋯ */
+      .teams-row, .teams-row.rank-leader { --tms-pill-gap: 4px; }
+      .teams-pill-btn { margin-left: 4px; }
+      .teams-pill { padding: 0 4px; }   /* the pill keeps its words ('12 agents ▸') at every width (the owner 2026-11-24 07:48: "Everything should alwasy be consistent."): the NAME gives way (.name-text: ellipsis) */
+      .teams-pill-btn::before { left: auto; right: calc(var(--tms-pill-gap) * -1); transform: translateY(-50%); width: max(calc(100% + var(--tms-pill-gap) + 4px), var(--tms-fold)); }
+    }
+    /* The pill drops to the row's SECOND line when the name would get fewer than about 6 characters (~40px) beside it (the owner 2026-11-24). Measured: the name gets
+       list - 122px on a main row (list <= 186px: icon hidden) and list - 183px on a leader row next to '24 agents ▸' (the widest pill), so: leader: 183 + 40 = 223 -> 225px.
+       A main row shows its icon from 187px up and its name gets list - 163px there; its bold 13px name needs about 60px for six characters next to '24 agents ▸' (measured on the copy: 'Dock…' at list 219px), so main: 163 + 60 = 223 -> 225px, the same as leaders.
+       #teams-list is the container (list = sidebar - 25px): main rows drop it at a 190px sidebar or narrower, leader rows at 250px or narrower (the default 240px sidebar included).
+       One element, moved by CSS only (no second control): the pill comes FIRST on line 2, then the busy / background words. A main row keeps its 46px; a leader WITH a pill becomes 42px
+       (name 16 + 1 + pill 18 = 35 inside 40; the main's rhythm: 18 + 1 + 18 = 37 inside 44), a leader without a pill stays 34px. */
+    html { --tms-below: 3px; }   /* how far the pill's tap area reaches below the pill: the row's inner padding under line 2 (rounded down), so it never leaves the row */
+    @container (max-width: 225px) {
+      .teams-row.rank-main:has(.teams-pill-btn) .teams-info { flex-direction: row; flex-wrap: wrap; justify-content: flex-start; align-content: center; align-items: center; gap: 0; }
+      .teams-row.rank-main:has(.teams-pill-btn) .teams-info::before { content: ''; order: 1; flex: 0 0 100%; height: 1px; }   /* the line break (and the 1px between the lines) */
+      .teams-row.rank-main:has(.teams-pill-btn) .name { display: contents; }   /* name, crown, pill and the busy words become the info's own items: name and crown stay on line 1, the pill and what follows go to line 2 */
+      .teams-row.rank-main:has(.teams-pill-btn) .name-text { max-width: 100%; }
+      .teams-row.rank-main:has(.teams-pill-btn) .name-text:has(+ .lead-badge) { max-width: calc(100% - 17px); }   /* room for the crown on the same line */
+      .teams-row.rank-main:has(.teams-pill-btn) .teams-pill-btn { order: 2; margin-left: 0; }
+      .teams-row.rank-main:has(.teams-pill-btn) .teams-live { order: 2; margin-left: 6px; }
+      .teams-row.rank-main:has(.teams-pill-btn) .teams-sub { order: 2; flex: 1 1 0; min-width: 0; margin-left: 6px; }   /* busy / background words after the pill; they truncate with an ellipsis, the pill never does */
+      .teams-row.rank-main:has(.teams-pill-btn) .teams-pill-btn::before { left: -3px; right: -3px; top: -1px; bottom: calc(var(--tms-below) * -1); width: auto; height: auto; transform: none; }   /* the tap area stays inside the row: from the bottom of line 1 to the row's inner bottom, a few px wider than the pill */
+    }
+    @container (max-width: 225px) {
+      .teams-row.rank-leader:has(.teams-pill-btn) { height: 42px; --tms-below: 2px; }
+      .teams-line.rank-leader.has-kids::after { top: 30px; }
+      .teams-block.rank-leader:last-child:has(> .teams-line [data-fold])::before { height: 21px; }
+      .teams-row.rank-leader:has(.teams-pill-btn) .teams-info { flex-direction: row; flex-wrap: wrap; justify-content: flex-start; align-content: center; align-items: center; gap: 0; }
+      .teams-row.rank-leader:has(.teams-pill-btn) .teams-info::before { content: ''; order: 1; flex: 0 0 100%; height: 1px; }   /* the line break (and the 1px between the lines) */
+      .teams-row.rank-leader:has(.teams-pill-btn) .name { display: contents; }   /* name, crown, pill and the busy words become the info's own items: name and crown stay on line 1, the pill and what follows go to line 2 */
+      .teams-row.rank-leader:has(.teams-pill-btn) .name-text { max-width: 100%; }
+      .teams-row.rank-leader:has(.teams-pill-btn) .name-text:has(+ .lead-badge) { max-width: calc(100% - 17px); }   /* room for the crown on the same line */
+      .teams-row.rank-leader:has(.teams-pill-btn) .teams-pill-btn { order: 2; margin-left: 0; }
+      .teams-row.rank-leader:has(.teams-pill-btn) .teams-live { order: 2; margin-left: 6px; }
+      .teams-row.rank-leader:has(.teams-pill-btn) .teams-sub { order: 2; flex: 1 1 0; min-width: 0; margin-left: 6px; }   /* busy / background words after the pill; they truncate with an ellipsis, the pill never does */
+      .teams-row.rank-leader:has(.teams-pill-btn) .teams-pill-btn::before { left: -3px; right: -3px; top: -1px; bottom: calc(var(--tms-below) * -1); width: auto; height: auto; transform: none; }   /* the tap area stays inside the row: from the bottom of line 1 to the row's inner bottom, a few px wider than the pill */
+    }
+    /* 'Solo · Build team' is shorter than the old 'No team yet · Build team' (which needed about 218px of list on its one line: 216 overflows by 1px, 218 fits); the thresholds are kept. Below that the words before the link go and the link stays whole: the default 240px sidebar (list about 216px) shows just 'Build team'. */
+    @container (max-width: 219px) { .tbs-prefix { display: none; } }
+    .teams-bg-line { color: var(--bg-work-ring); }
+    /* NEVER A STUB OF STATUS (design lead + Maestro): when fewer than about six letters (45px at the 10-10.4px status font) of the status words would show, they show NOT AT ALL: the dot or ring speaks alone,
+       the row's title / aria-label carry the full words. Measured in headless Chrome on the real CSS and row markup (Harbor: "checking tomorrow's berth list", a member: "comparing fuel prices"),
+       visible width of the words in px, list (container) widths 135 / 160 / 186 / 200 / 210 / 219 / 225 / 231 / 260:
+         main row, pill '12 agents' or '24 agents' on line 2 (the pill sets the width: both pills measure the same):  10 / 35 / 61 / 37 / 47 / 56 / 62 / 136 / 136   -> list - 125 up to 186px (icon hidden), list - 163 from 187px
+         leader row (pill on line 2 up to 225px, then inline after name and pill):                                    5.8 / 30.8 / 56.8 / 21.8 / 31.8 / 40.8 / 46.8 / 0 / 7.3 -> list - 129 up to 186, list - 178 from 187 to 225, list - 253 from 226
+         worker under a main ('Lonely Worker', the longest name measured; 'Hb Member 0' shows 4px more):                2.5 / 27.5 / 53.5 / 26.3 / 36.3 / 45.3 / 51.3 / 57.3 / 86.3 -> list - 133 up to 186, list - 174 from 187
+         a leader's worker (.deep, indented one step more):                                                            0 / 7.9 / 33.9 / 0 / 0 / 7.3 / 13.3 / 19.3 / 48.3 -> list - 152 up to 186, list - 212 from 187
+       The words go where the width is under 45px; the thresholds are the first width that gives 45px or more: main: 170 (up to 186) and 208 (from 187); leader: 175 and, from 187, 298 (the 224-225px sliver of 46px is hidden with it, one rule);
+       worker: 178 and 219; leader's worker: 197 (so every width up to 186) and 257. Hence the rules below. Names longer than these measure shorter: the row's title / aria-label still say everything.
+       Simple (list about 231px, its own bigger font; measured at 160 / 231 / 260: main 36 / 67 / 96, leader 8.6 / 48.6 / 77.6, worker 6.6 / 51.6 / 80.6, leader's worker 0 / 12.6 / 41.6) has its own block with Simple's thresholds. */
+    @container (max-width: 169px) { html:not(.mm-simple) #teams-list .teams-row.rank-main:has(.teams-pill-btn) .teams-sub { display: none; } }
+    @container (min-width: 187px) and (max-width: 207px) { html:not(.mm-simple) #teams-list .teams-row.rank-main:has(.teams-pill-btn) .teams-sub { display: none; } }
+    @container (max-width: 174px) { html:not(.mm-simple) #teams-list .teams-row.rank-leader .teams-live { display: none; } }
+    @container (min-width: 187px) and (max-width: 297px) { html:not(.mm-simple) #teams-list .teams-row.rank-leader .teams-live { display: none; } }
+    @container (max-width: 177px) { html:not(.mm-simple) #teams-list .teams-row.rank-worker:not(.deep) .teams-live { display: none; } }
+    @container (min-width: 187px) and (max-width: 218px) { html:not(.mm-simple) #teams-list .teams-row.rank-worker:not(.deep) .teams-live { display: none; } }
+    @container (max-width: 256px) { html:not(.mm-simple) #teams-list .teams-row.rank-worker.deep .teams-live { display: none; } }
+    @container (max-width: 171px) { html:not(.mm-simple) #teams-list .teams-row.is-spec .teams-live { display: none; } }   /* a shared specialist (one line, no pill): 8.3 / 33.3 / 59.3 / 50.3 / 60.3 / 69.3 / 75.3 at 135 / 160 / 186 / 200 / 210 / 219 / 225 = list - 127 (icon hidden up to 186), 45px from 172; from 187 the icon shows and 200 still gives 50 */
 
     /* Multi-user: owner switcher, signed-in chip, account menu, security dialog */
     #owner-view { width: 100%; margin-bottom: 8px; padding: 5px 8px; background: var(--bg-input); color: var(--text); border: 1px solid var(--border); border-radius: 5px; font-size: 0.75rem; }
@@ -492,7 +666,7 @@
     .security-modal .sec-secret { word-break: break-all; padding: 6px 8px; background: var(--bg-input); border-radius: 5px; font-size: 0.78rem; user-select: all; }
     .security-modal .sec-codes { margin: 0; padding: 8px 10px; background: var(--bg-input); border-radius: 5px; font-size: 0.85rem; columns: 2; user-select: all; }
     /* Members never see admin surfaces (the server refuses them too) */
-    body.member-view .more-menu .more-advanced, body.member-view #more-badge, body.member-view .agent-btn .actions, body.member-view .gear-btn { display: none !important; }
+    body.member-view .more-menu .more-advanced, body.member-view #more-badge, body.member-view .agent-btn .actions, body.member-view .agent-menu-btn, body.member-view .agent-build-line, body.member-view .build-team-btn { display: none !important; }
 
     /* (Hardware toggle CSS removed) */
 
@@ -619,9 +793,41 @@
       opacity: 0; transition: opacity 0.15s;
     }
     .agent-btn:hover .action-btn { opacity: 1; }
-    .agent-btn .gear-btn { background: var(--border-strong); font-size: 0.6rem; position: absolute; top: 6px; left: 6px; opacity: 0; }
-    .agent-btn:hover .gear-btn { opacity: 1; }
-    .agent-btn .gear-btn:hover { background: var(--accent); }
+    /* The always-visible row menu button (⋯) replaces the hover gear; "Solo · Build team" is the line under the model name.
+       Long names truncate (the crown stays); the ⋯ sits bottom right so the hover + and S (top right) never cover it. */
+    .agent-btn .name { display: flex; align-items: center; min-width: 0; }
+    .agent-btn .name-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+    .agent-btn .name .lead-badge { flex: none; }
+    .agent-btn:has(.agent-menu-btn) .agent-info { padding-right: 18px; }
+    .agent-menu-btn {
+      flex: none; display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box;
+      width: 24px; height: 24px; padding: 0; border: 1px solid transparent; border-radius: 6px; background: none;
+      color: var(--text-dim); font: inherit; font-size: 1rem; line-height: 1; cursor: pointer;
+    }
+    .agent-menu-btn:hover, .agent-menu-btn[aria-expanded="true"] { color: var(--text); background: var(--border-strong); }
+    .agent-menu-btn:focus-visible, .build-team-link:focus-visible, .build-team-btn:focus-visible, .agent-menu-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+    .agent-btn .agent-menu-btn { position: absolute; bottom: 6px; right: 6px; }
+    .agent-build-line { display: block; font-size: 0.65rem; line-height: 1.3; color: var(--text-tertiary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .agent-btn .model { line-height: 1.3; }   /* the build line takes the model line's place on a no-team main: the same line height keeps every All Agents row one height */
+    .agent-btn .agent-build-line .build-team-link { white-space: nowrap; }
+    /* All Agents: 'Solo · Build team' fits when the list is about 200px or wider; below that only the whole link stays (the rule above for the Teams list hides the words at 219px: this shows them again from 200px, here, where the row has more room than its list) */
+    #agent-list { container-type: inline-size; }
+    @container (min-width: 200px) { #agent-list .agent-build-line .tbs-prefix { display: inline; } }
+    .build-team-link { display: inline; padding: 0; border: 0; background: none; font: inherit; color: var(--accent); text-decoration: underline; cursor: pointer; }
+    .build-team-link.is-building, .build-team-btn.is-building { color: var(--text-dim); text-decoration: none; cursor: default; }
+    .build-team-btn { align-self: flex-start; margin-top: 4px; padding: 3px 10px; border: 1px solid var(--accent); border-radius: 6px; background: transparent; color: var(--accent); font: inherit; font-size: 0.7rem; font-weight: 600; cursor: pointer; }
+    .build-team-btn:hover:not(:disabled) { background: var(--accent); color: var(--on-color-text); }
+    .build-team-btn:disabled { border-color: var(--border-strong); opacity: 0.7; cursor: default; }
+    .agent-row-menu {
+      position: fixed; z-index: 10000; min-width: 150px; max-width: calc(100vw - 8px); display: flex; flex-direction: column; gap: 2px; padding: 4px;
+      background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 10px 30px var(--shadow-color-pop); color: var(--text);
+    }
+    .agent-menu-item { padding: 7px 12px; border: 0; border-radius: 6px; background: none; color: var(--text); font: inherit; font-size: 0.8rem; text-align: left; cursor: pointer; white-space: nowrap; }
+    .agent-menu-item:hover:not(:disabled), .agent-menu-item:focus-visible { background: var(--agent-btn-hover-bg); }
+    .agent-menu-item:disabled { color: var(--text-dim); cursor: default; }
+    .agent-menu-sub { display: block; font-size: 0.68rem; color: var(--text-dim); }
+    #agent-active-group .agent-build-line { display: none; }
+    html.mm-simple .agent-menu-btn, html.mm-simple .agent-build-line, html.mm-simple .build-team-btn { display: none !important; }   /* Simple shows no controls */
     .agent-btn .add-btn { background: var(--purple); }
     .agent-btn .sum-btn { background: var(--blue); }
     .agent-btn .agent-status {
@@ -1154,6 +1360,22 @@
     .auto-card-body, .auto-stack-body { margin: 8px 0 4px 14px; padding-left: 10px; border-left: 1px solid var(--border); }
     .auto-card-body[hidden], .auto-stack-body[hidden] { display: none; }
     .auto-from { margin: 4px 0 4px; font-size: 0.75rem; color: var(--auto-time-text); }
+    /* A run of hub-started turns the main view leaves out: ONE quiet line (a button) in its place; opens to cards */
+    .run-wrap { margin: 4px 0; max-width: 100%; }
+    .run-line { display: flex; align-items: center; gap: 0; width: 100%; min-height: 26px; box-sizing: border-box; padding: 2px 6px; text-align: left; cursor: pointer; font: inherit; font-size: 0.75rem; line-height: 1.3; color: var(--auto-time-text); background: transparent; border: 0; border-radius: 4px; }
+    .run-line:hover { background: var(--tint-faintest); }
+    .run-line:focus-visible { outline: 2px solid var(--auto-notice-text); outline-offset: 1px; }
+    .run-chev { flex: 0 0 auto; width: 1em; margin-right: 8px; text-align: center; color: var(--auto-head-text); }
+    .run-kinds { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .run-when { flex: 0 0 auto; white-space: pre; }
+    .run-body { margin: 4px 0 4px 14px; padding-left: 10px; border-left: 1px solid var(--border); }
+    .run-body[hidden] { display: none; }
+    /* a card inside a run: the title shrinks (ellipsis) before the reply's first line does, which keeps about 15 characters */
+    .run-body .auto-card-label { flex: 0 1 auto; min-width: 0; }
+    .run-body .auto-card-line { flex: 1 1 0; min-width: 15ch; }
+    .run-more-btn { font: inherit; color: var(--auto-head-text); background: none; border: 0; padding: 0; text-decoration: underline; cursor: pointer; }
+    .run-more, .run-error { margin: 2px 6px 4px; font-size: 0.75rem; color: var(--auto-time-text); }
+    .run-error { color: var(--error); }
     .chat-view-hidden { display: none !important; }
     .chat-busy-card { margin: 8px 0; padding: 4px 10px; font-size: 0.75rem; color: var(--auto-time-text); overflow-wrap: anywhere; }   /* wraps: the whole line (what it waits on) stays readable */
     .chat-earlier-btn { display: block; margin: 6px auto 10px; padding: 4px 14px; font-size: 0.78rem; color: var(--auto-time-text); background: transparent; border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer; }
@@ -1397,6 +1619,11 @@
     .input-area .mic-btn.rec:hover { background: var(--mic-btn-rec-hover-bg); }
     .input-area .mic-btn.listening, .input-area .mic-btn.listening:hover { background: var(--voice-listening); border-color: var(--voice-listening); color: var(--on-voice-listening); }   /* a Tap to talk call while listening */
     .input-area .mic-btn.wait { opacity: 0.7; cursor: progress; }
+    /* The one-time "talk to your agents" callout, above the microphone (placed by voiceHintPlace, inside the window) */
+    .voice-hint { position: fixed; z-index: 60; max-width: min(260px, calc(100vw - 16px)); box-sizing: border-box; padding: 8px 28px 8px 12px; border-radius: 10px; background: var(--accent); color: var(--on-color-text); font-size: 0.85rem; line-height: 1.3; box-shadow: 0 4px 14px var(--shadow-color); --voice-hint-arrow: 20px; }
+    .voice-hint::after { content: ''; position: absolute; bottom: -6px; right: var(--voice-hint-arrow); width: 12px; height: 12px; background: inherit; transform: rotate(45deg); }
+    .voice-hint .voice-hint-close { position: absolute; top: 2px; right: 2px; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: inherit; font-size: 1.1rem; line-height: 1; cursor: pointer; }
+    .voice-hint .voice-hint-close:hover { background: var(--hover-tint); }
     @keyframes mic-pulse { 50% { box-shadow: 0 0 0 3px var(--keyframes-mic-pulse-shadow); } }
     .mic-meter, .voice-meter { display: inline-block; width: 56px; height: 8px; align-self: center; border-radius: 4px; background: var(--bg-input); border: 1px solid var(--border); overflow: hidden; vertical-align: middle; }
     .mic-meter > i, .voice-meter > i { display: block; height: 100%; width: 0%; background: linear-gradient(90deg, var(--meter-ok), var(--meter-warn) 75%, var(--mic-rec)); transition: width 0.08s linear; }
@@ -2293,6 +2520,13 @@
     .question-hint { font-size: 0.8rem; color: var(--text-dim); }
     #question-submit { padding: 9px 18px; border-radius: 8px; border: none; background: var(--accent); color: var(--on-color-text); font-weight: 600; cursor: pointer; }
     #question-submit:disabled { opacity: 0.45; cursor: not-allowed; }
+    /* Build team plan card: one tick row per plan item (label bold, detail small), above the buttons */
+    .question-checklist { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; max-height: 40vh; overflow-y: auto; }
+    .question-check { display: flex; align-items: flex-start; gap: 10px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-input); cursor: pointer; }
+    .question-check input { flex: none; margin-top: 3px; accent-color: var(--accent); }
+    .question-check-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+    .question-check-text strong { font-size: 0.85rem; color: var(--text); }
+    .question-check-text small { font-size: 0.75rem; color: var(--text-dim); }
     .question-option strong { font-size: 0.9rem; }
     .question-option span { font-size: 0.8rem; color: var(--text-dim); }
     /* ask_user with choose_model: every model the hub can use, one drop-down under the buttons */
@@ -2744,6 +2978,37 @@
     .handoff-cards .ho-list .ho-card:not(.ho-ended) { padding: 6px 10px; }
     .handoff-cards .ho-strip.ho-flash { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 15%, var(--bg-input)); }
     @media (prefers-reduced-motion: reduce) { .handoff-cards .ho-strip, .handoff-cards .ho-chev { transition: none; } }
+    /* The "Working on" panel (lib/ui-hand-off-card.js renderPanel): the strip header kept, a ring in front, rows below, a quiet line when nothing runs */
+    .handoff-cards .wo-ring { flex: none; box-sizing: content-box; width: 7px; height: 7px; border: 2px solid var(--bg-work-ring); border-radius: 50%; background: transparent; }
+    .handoff-cards .ho-list:has(.wo-row) { gap: 0; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-input); overflow: hidden; }
+    .handoff-cards .wo-row { display: grid; grid-template-columns: 104px minmax(0, 1fr) auto; grid-template-areas: "kind title btn" "kind sub btn"; align-items: center; column-gap: 12px; row-gap: 2px; padding: 8px 12px; font-size: 13px; color: var(--text); min-width: 0; }
+    .handoff-cards .wo-row + .wo-row { border-top: 1px solid var(--border); }
+    .handoff-cards .wo-kind { grid-area: kind; align-self: start; font-size: 12px; color: var(--text-dim); }
+    .handoff-cards .wo-title { grid-area: title; font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
+    .handoff-cards .wo-sub { grid-area: sub; min-width: 0; color: var(--text-dim); overflow-wrap: anywhere; }
+    .handoff-cards .wo-row .ho-status, .handoff-cards .wo-row .wo-stop { grid-area: btn; align-self: center; font: inherit; font-size: 13px; line-height: 1.2; padding: 4px 12px; border-radius: 6px; background: transparent; cursor: pointer; text-decoration: none; }
+    .handoff-cards .wo-row .ho-status { color: var(--text); border: 1px solid var(--border-strong, var(--border)); }
+    .handoff-cards .wo-row .wo-stop { color: var(--danger, var(--accent)); border: 1px solid var(--danger, var(--accent)); }
+    .handoff-cards .wo-row .ho-status:hover, .handoff-cards .wo-row .wo-stop:hover { background: color-mix(in srgb, currentColor 12%, transparent); }
+    .handoff-cards .wo-quiet { padding: 6px 10px; font-size: 13px; color: var(--text-dim); border: 1px dashed var(--border-strong, var(--border)); border-radius: 8px; box-sizing: border-box; }
+    @media (max-width: 480px) {
+      .handoff-cards .wo-row { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "kind btn" "title title" "sub sub"; }
+    }
+    /* The ring: free, with work in the background. Hollow, blue, 11 px outside (7 + 2 + 2), still. Only on a dot that is not replying, asking or thinking. */
+    .agent-btn .agent-status.bg-work:not(.live-busy):not(.live-question):not(.thinking),
+    .teams-dot.bg-work:not(.live-busy):not(.live-question),
+    .chat-tab .status.idle.bg-work,
+    .status-bar .status-dot.idle.bg-work {
+      box-sizing: content-box; width: 7px; height: 7px; border: 2px solid var(--bg-work-ring); border-radius: 50%;
+      background: transparent; animation: none; box-shadow: none;
+    }
+    .agent-btn .agent-status.bg-work:not(.live-busy):not(.live-question):not(.thinking) { top: 6px; left: 6px; cursor: pointer; }
+    .agent-btn .agent-bg-line { display: block; font-size: 0.65rem; color: var(--bg-work-ring); cursor: pointer; white-space: normal; overflow-wrap: anywhere; }   /* wraps: it is the line that explains the ring, never cut */
+    .agent-btn .agent-bg-line:hover { text-decoration: underline; }
+    /* header count: the background part is its own blue span; with only background work the chip is shown without the orange .on look */
+    #agents-working .aw-bg { color: var(--bg-work-ring); }
+    #agents-working.bg-on { display: inline-block; background: color-mix(in srgb, var(--bg-work-ring) 14%, transparent); color: var(--bg-work-ring); }
+    #agents-working.filtering .aw-bg { color: inherit; }
     .research-lines .research-line { cursor: default; white-space: normal; overflow-wrap: anywhere; overflow: visible; min-height: 0; }
     /* The hand-off Status sheet (lib/ui-hand-off-card.js openStatus): a centred panel; its body reads like a chat message */
     .ho-sheet { padding: 0; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-secondary, var(--bg-input)); color: var(--text); width: min(720px, calc(100vw - 32px)); max-width: 720px; max-height: 80vh; overflow: hidden; box-sizing: border-box; }
@@ -2990,7 +3255,7 @@
     html.mm-simple #agent-list .agent-group-title, html.mm-simple #agent-list .group-action-btn, html.mm-simple #agent-list > div:not([class]),
     html.mm-simple #agent-active-group,
     html.mm-simple .agent-btn .agent-status, html.mm-simple .agent-btn .model, html.mm-simple .agent-btn .actions, html.mm-simple .agent-btn .action-btn,
-    html.mm-simple .agent-btn .lead-badge, html.mm-simple .agent-btn .agent-busy-line, html.mm-simple .agent-btn .agent-job-line,
+    html.mm-simple .agent-btn .lead-badge, html.mm-simple .agent-btn .agent-busy-line, html.mm-simple .agent-btn .agent-job-line, html.mm-simple .agent-btn .agent-bg-line,
     html.mm-simple .chat-container .status-bar, html.mm-simple .chat-container .thinking-panel,
     html.mm-simple .chat-container .compaction-line,
     html.mm-simple .chat-actions > :not([id^="cancel-"]):not(.agent-name),
@@ -3015,6 +3280,7 @@
     html.mm-simple #agents-panel { padding: 18px 0 8px; }
     html.mm-simple #agents-panel::before { content: "Chats"; display: block; font-size: 12.5px; font-weight: 500; color: var(--sm-muted); padding: 8px 12px; }
     html.mm-simple #agent-list .agent-group { margin: 0; }
+    html.mm-simple #agent-list .agent-group:not(:has(.agent-btn)), html.mm-simple #teams-list .teams-setup-line:empty, html.mm-simple #teams-list:empty { display: none; }   /* nothing empty is drawn at the foot of the list (a bordered box with nothing in it) */
     html.mm-simple #agent-list .agent-group-items { display: flex !important; flex-direction: column; gap: 2px; padding: 0; }
     html.mm-simple .agent-btn { height: 42px; margin: 0; padding: 0 12px; border: 0; border-radius: 12px; background: none; color: var(--sm-text); font-size: 15px; gap: 12px; }
     html.mm-simple .agent-btn:hover { background: var(--sm-hover); border: 0; color: var(--sm-text); }
@@ -3073,6 +3339,11 @@
     html.mm-simple .auto-card, html.mm-simple .auto-stack { --auto-color: var(--sm-muted); }
     html.mm-simple .auto-card-head, html.mm-simple .auto-stack-head { background: none; color: var(--sm-muted); }
     html.mm-simple .auto-card-line { color: var(--sm-sec); }
+    html.mm-simple .run-line { color: var(--sm-muted); font-size: 12.5px; background: none; }
+    html.mm-simple .run-line:hover { color: var(--sm-sec); }
+    html.mm-simple .run-chev, html.mm-simple .run-more-btn { color: var(--sm-sec); }
+    html.mm-simple .run-body { border-left-color: var(--sm-border); }
+    html.mm-simple .run-more, html.mm-simple .run-error { color: var(--sm-muted); }
 
     /* Empty chat: greeting and starters */
     html.mm-simple .simple-empty { margin: 14vh auto 0; max-width: 720px; text-align: center; }
@@ -3198,7 +3469,89 @@
     html.mm-simple #agent-list .simple-more.open .sm-chev { transform: rotate(90deg); }
     html.mm-simple #agent-list .simple-more .sm-dot { display: none; position: absolute; top: 50%; right: 14px; width: 9px; height: 9px; margin-top: -4px; border-radius: 50%; background: var(--warning, var(--warning)); animation: pulse 1s infinite; }
     html.mm-simple #agent-list .simple-more.has-busy .sm-dot { display: block; }
+    /* Simple: the ring (free, work in the background) on a row, and on the "More agents" fold when a hidden agent has it and none is busy */
+    html.mm-simple #agent-list .agent-btn .agent-status.bg-work:not(.live-busy):not(.live-question) { display: block !important; position: absolute; top: 50%; right: 14px; left: auto; box-sizing: content-box; width: 7px; height: 7px; margin: -6px 0 0; padding: 0; border: 2px solid var(--bg-work-ring); border-radius: 50%; background: transparent; font-size: 0; line-height: 0; box-shadow: none; animation: none; }
+    html.mm-simple #agent-list .simple-more.has-bg:not(.has-busy) .sm-dot { display: block; box-sizing: content-box; width: 7px; height: 7px; margin-top: -6px; border: 2px solid var(--bg-work-ring); background: transparent; animation: none; }
     html.mm-simple #agent-list .simple-more-h { padding: 12px 12px 4px; font-size: 12px; font-weight: 500; color: var(--sm-muted); }
+    /* Simple: the All Agents | Teams switch (the tab strip is hidden), and the Teams view as a flat, larger list: leaders only, no labels or helper lines */
+    html.mm-simple .simple-view-switch { display: flex; gap: 2px; margin: 14px 4px 0; padding: 3px; border-radius: 12px; background: var(--sm-raised); border: 1px solid var(--sm-border); }
+    html.mm-simple .simple-view-switch button { flex: 1; height: 30px; border: 0; border-radius: 9px; background: none; color: var(--sm-sec); font: inherit; font-size: 13px; cursor: pointer; }
+    html.mm-simple .simple-view-switch button[aria-pressed="true"] { background: var(--sm-sel); color: var(--sm-text); }
+    html.mm-simple #teams-panel { padding: 10px 0 8px; }
+    html.mm-simple #teams-list { padding: 0; }
+    html.mm-simple #teams-list .teams-helpers { display: none !important; }   /* Simple draws no helper lines (it shows every member of a team, a leader's workers behind the leader's pill) */
+    /* Simple, Teams: the same list as the sidebar, one size up (main 48 / leader 40 / member 30 high; names 15 / 14 / 12.5 px). Every number is the mock-up's x minus 12 (see the Teams CSS above). */
+    html.mm-simple #teams-list .teams-leaders { margin-left: 42px; }
+    html.mm-simple #teams-list .teams-kids { margin-left: 32px; }
+    html.mm-simple #teams-list .teams-block .teams-block > .teams-kids { margin-left: 20px; }
+    html.mm-simple #teams-list .teams-block:last-child::before { height: 15px; }
+    html.mm-simple #teams-list .teams-block.rank-leader:last-child::before { height: 20px; }
+    html.mm-simple #teams-list .teams-block.rank-leader { padding-bottom: 0; }
+    html.mm-simple #teams-list .teams-line.rank-main { margin-bottom: 0; }
+    html.mm-simple #teams-list .teams-block > .teams-line::before { width: 8px; }
+    html.mm-simple #teams-list .teams-leaders > .teams-block.rank-leader > .teams-line::before { width: 8px; }
+    html.mm-simple #teams-list .teams-kids > .teams-block > .teams-line::before { width: 5px; }
+    html.mm-simple #teams-list .teams-line.has-kids::after { left: 42px; top: 36px; bottom: 0; }
+    html.mm-simple #teams-list .teams-line.rank-leader.has-kids::after { left: 32px; top: 31px; bottom: 0; }
+    html.mm-simple #teams-list .teams-row { height: 48px; margin: 0; padding: 0 6px 0 12px; border: 0; border-radius: 12px; background: none; color: var(--sm-text); font-size: 15px; --dot: 8px; }
+    html.mm-simple #teams-list .teams-row:hover { background: var(--sm-hover); }
+    html.mm-simple #teams-list .teams-dot { margin-right: 10px; }
+    html.mm-simple #teams-list .teams-row .agent-icon { width: 24px; margin-right: 10px; font-size: 17px; }
+    html.mm-simple #teams-list .teams-row .name { height: 20px; font-size: 15px; font-weight: 400; line-height: 20px; color: var(--sm-text); }
+    html.mm-simple #teams-list .teams-row .lead-badge { margin-left: 5px; font-size: 12px; }
+    html.mm-simple #teams-list .teams-sub { height: 16px; font-size: 12.5px; line-height: 16px; color: var(--sm-muted); }
+    html.mm-simple #teams-list .teams-sub.busy { color: var(--warning); }
+    html.mm-simple #teams-list .teams-sub.teams-bg-line { color: var(--bg-work-ring); }
+    html.mm-simple #teams-list .teams-row.is-spec { height: 40px; --dot: 7px; }
+    html.mm-simple #teams-list .teams-row.is-spec .teams-dot { margin-right: 11px; }
+    html.mm-simple #teams-list .teams-row.is-spec .agent-icon { width: 22px; margin-right: 8px; font-size: 15px; }
+    html.mm-simple #teams-list .teams-row.is-spec .name { height: 18px; font-size: 14px; font-weight: 500; line-height: 18px; }
+    html.mm-simple #teams-list .teams-row.rank-leader { height: 40px; margin-left: 0; padding: 0 6px 0 9px; --dot: 7px; }
+    html.mm-simple #teams-list .teams-row.rank-leader .teams-dot { margin-right: 5px; }
+    html.mm-simple #teams-list .teams-row.rank-leader .agent-icon { width: 22px; margin-right: 8px; font-size: 15px; }
+    html.mm-simple #teams-list .teams-row.rank-leader .name { height: 18px; font-size: 14px; font-weight: 500; line-height: 18px; }
+    html.mm-simple #teams-list .teams-row.rank-worker { height: 30px; padding: 0 6px 0 9px; background: none; --dot: 6px; }
+    html.mm-simple #teams-list .teams-row.rank-worker:hover { background: var(--sm-hover); }
+    html.mm-simple #teams-list .teams-row.rank-worker .teams-dot { margin-right: 6px; }
+    html.mm-simple #teams-list .teams-row.rank-worker .agent-icon { width: 20px; margin-right: 6px; font-size: 13px; }
+    html.mm-simple #teams-list .teams-row.rank-worker .name { height: 16px; font-size: 12.5px; font-weight: 400; line-height: 16px; color: var(--text-dim); }
+    html.mm-simple #teams-list .teams-kids .teams-row.rank-worker { padding-left: 6px; }
+    html.mm-simple #teams-list .teams-live { font-size: 11px; }
+    html.mm-simple #teams-list .teams-pill { height: 20px; line-height: 18px; border-color: var(--sm-border); border-radius: 10px; padding: 0 7px; font-size: 12px; color: var(--sm-sec); }
+    html.mm-simple #teams-list .teams-pill-btn:hover .teams-pill, html.mm-simple #teams-list .teams-pill-btn:focus-visible .teams-pill { border-color: var(--sm-sec); color: var(--sm-text); }
+    /* Simple: the pill is ALWAYS on the row's second line (no container condition: Simple's sidebar is 260px, list about 231px, which left 'Studi...' beside '4 agents'), the same mechanism as the narrow sidebar blocks:
+       one element moved by CSS. Pill first on line 2, then the busy / background words (ellipsis). A main row keeps its 48px (name 20 + 1 + pill 20 = 41); a leader WITH a pill is 48px too (name 18 + 1 + pill 20 = 39). */
+    html.mm-simple #teams-list .teams-row.rank-leader:has(.teams-pill-btn) { height: 48px; --tms-below: 3px; }
+    html.mm-simple #teams-list .teams-line.rank-leader.has-kids::after { top: 35px; }
+    html.mm-simple #teams-list .teams-block.rank-leader:last-child:has(> .teams-line [data-fold])::before { height: 24px; }
+    html.mm-simple #teams-list .teams-row.rank-main:has(.teams-pill-btn) .teams-info,
+    html.mm-simple #teams-list .teams-row.rank-leader:has(.teams-pill-btn) .teams-info { flex-direction: row; flex-wrap: wrap; justify-content: flex-start; align-content: center; align-items: center; gap: 0; }
+    html.mm-simple #teams-list .teams-row.rank-main:has(.teams-pill-btn) .teams-info::before,
+    html.mm-simple #teams-list .teams-row.rank-leader:has(.teams-pill-btn) .teams-info::before { content: ''; order: 1; flex: 0 0 100%; height: 1px; }   /* the line break (and the 1px between the lines) */
+    html.mm-simple #teams-list .teams-row.rank-main:has(.teams-pill-btn) .name,
+    html.mm-simple #teams-list .teams-row.rank-leader:has(.teams-pill-btn) .name { display: contents; }
+    html.mm-simple #teams-list .teams-row.rank-main:has(.teams-pill-btn) .name-text,
+    html.mm-simple #teams-list .teams-row.rank-leader:has(.teams-pill-btn) .name-text { max-width: 100%; }
+    html.mm-simple #teams-list .teams-row.rank-main:has(.teams-pill-btn) .name-text:has(+ .lead-badge),
+    html.mm-simple #teams-list .teams-row.rank-leader:has(.teams-pill-btn) .name-text:has(+ .lead-badge) { max-width: calc(100% - 17px); }
+    html.mm-simple #teams-list .teams-row.rank-main:has(.teams-pill-btn) .teams-pill-btn,
+    html.mm-simple #teams-list .teams-row.rank-leader:has(.teams-pill-btn) .teams-pill-btn { order: 2; margin-left: 0; }
+    html.mm-simple #teams-list .teams-row.rank-main:has(.teams-pill-btn) .teams-live,
+    html.mm-simple #teams-list .teams-row.rank-leader:has(.teams-pill-btn) .teams-live { order: 2; margin-left: 6px; }
+    html.mm-simple #teams-list .teams-row.rank-main:has(.teams-pill-btn) .teams-sub,
+    html.mm-simple #teams-list .teams-row.rank-leader:has(.teams-pill-btn) .teams-sub { order: 2; flex: 1 1 0; min-width: 0; margin-left: 6px; }
+    html.mm-simple #teams-list .teams-row.rank-main:has(.teams-pill-btn) .teams-pill-btn::before,
+    html.mm-simple #teams-list .teams-row.rank-leader:has(.teams-pill-btn) .teams-pill-btn::before { left: -3px; right: -3px; top: -1px; bottom: calc(var(--tms-below) * -1); width: auto; height: auto; transform: none; }   /* the tap area stays inside the row, off the dots and the ⋯ */
+    html.mm-simple #teams-list .teams-title, html.mm-simple #teams-list .teams-empty { color: var(--sm-muted); border-color: var(--sm-border); }
+    html.mm-simple #teams-list .teams-title { height: 32px; font-size: 11px; letter-spacing: 0.06em; padding: 0 2px; }
+    html.mm-simple #teams-list .teams-empty strong { color: var(--sm-text); }
+    /* Simple: NEVER A STUB OF STATUS too (see the block after .teams-bg-line above). Measured at list 160 / 231 / 260 (Simple's sidebar is 260px: list about 231): main 36 / 67 / 96 (list - 164), leader 8.6 / 48.6 / 77.6 (list - 182),
+       worker 6.6 / 51.6 / 80.6 (list - 179), a leader's worker 0 / 12.6 / 41.6 (list - 218). First width with 45px: main 209, leader 228, worker 225, leader's worker 264; below that the words are hidden (the dot / ring and the row's title speak). */
+    @container (max-width: 208px) { html.mm-simple #teams-list .teams-row.rank-main:has(.teams-pill-btn) .teams-sub { display: none; } }
+    @container (max-width: 227px) { html.mm-simple #teams-list .teams-row.rank-leader .teams-live { display: none; } }
+    @container (max-width: 224px) { html.mm-simple #teams-list .teams-row.rank-worker:not(.deep) .teams-live { display: none; } }
+    @container (max-width: 263px) { html.mm-simple #teams-list .teams-row.rank-worker.deep .teams-live { display: none; } }
+    @container (max-width: 164px) { html.mm-simple #teams-list .teams-row.is-spec .teams-live { display: none; } }   /* a shared specialist: 40px at 160 (list - 120), so 45px from 165 */
 
     /* Top right of the chat area: appearance button and the Simple view switch */
     html.mm-simple .main { position: relative; }
@@ -3230,9 +3583,14 @@
     <div class="sidebar-resize-handle" id="sidebar-resize-handle"></div>
     
     <div class="tabs">
-      <button class="tab active" data-tab="agents">Agents</button>
-      <button class="tab" data-tab="group-chat">Tiger Team</button>
-      <button class="tab" data-tab="guide">Guide</button>
+      <button class="tab active" data-tab="agents">All Agents</button>
+      <button class="tab" data-tab="teams">Teams</button>
+      <button class="tab" data-tab="group-chat" hidden>Tiger Team</button>
+      <button class="tab" data-tab="guide" hidden>Guide</button>
+    </div>
+    <div class="simple-view-switch" id="simple-view-switch" role="group" aria-label="Sidebar view">
+      <button type="button" data-view="agents" aria-pressed="true">All Agents</button>
+      <button type="button" data-view="teams" aria-pressed="false">Teams</button>
     </div>
     
     <div class="tab-content">
@@ -3240,6 +3598,8 @@
         <select id="owner-view" style="display:none" aria-label="Whose agents to show" title="Whose agents to show"></select>
         <div id="agent-list"></div>
       </div>
+
+      <div class="tab-panel" id="teams-panel"><div id="teams-list"></div></div>
       
       <div class="tab-panel" id="group-chat-panel">
         <div class="group-builder">
@@ -3343,6 +3703,10 @@
           <p><strong>+ New / Clone</strong> to create or duplicate agents.</p>
         </div>
         <div class="guide-item">
+          <h3>🎙 Voice</h3>
+          <p>Talk to any agent: tap the microphone by the message box for a hands-free call, or pick Tap to talk or Dictation in its settings. Voice runs on this computer; an admin can switch it off in Settings, Voice.</p>
+        </div>
+        <div class="guide-item">
           <h3>💬 Discussion Types</h3>
           <p><strong>Free-flowing:</strong> You participate alongside agents. Send messages anytime.</p>
           <p><strong>Autonomous:</strong> Agents discuss on their own. You set the topic and watch.</p>
@@ -3404,6 +3768,7 @@
             <button id="more-modules-item" class="more-item" role="menuitem" title="Data connectors" onclick="closeMoreMenu(); location.href = '/modules'">🔌 Data connectors</button>
             <button id="more-remote-item" class="more-item" role="menuitem" title="Open a computer's desktop" style="display:none" onclick="closeMoreMenu(); location.href = '/modules#remote-computers'">💻 Remote computers</button>
             <button id="recordings-item" class="more-item" role="menuitem" title="Call recordings you may open" style="display:none" onclick="closeMoreMenu(); location.href = '/recordings'">🎙 Recordings</button>
+            <button class="more-item" role="menuitem" id="more-voice-item" title="Voice conversations: on or off, voices and microphone" onclick="closeMoreMenu(); openVoiceSettings()">🎙 Voice</button>
             <button id="wallet-btn" class="more-item" role="menuitem" title="Trading wallets (on-chain)" onclick="closeMoreMenu(); openWalletPanel()">👛 Wallets</button>
             <button id="dream-btn" class="more-item" role="menuitem" title="Agent Dreaming — consolidate learnings" onclick="closeMoreMenu(); startDream()">💤 Dream (consolidate learnings)</button>
             <button id="git-sync-btn" class="more-item" role="menuitem" title="Update from GitHub" onclick="closeMoreMenu(); openGitSync()">⬇️ Update from GitHub</button>
@@ -3447,10 +3812,14 @@
   <script src="/ui-face-player.js"></script>
   <script src="/ui-call-display.js"></script>
   <script src="/ui-file-card.js"></script>
+  <script src="/ui-agent-dot.js"></script>
   <script src="/ui-hand-off-card.js"></script>
+  <script src="/ui-claude-signin.js"></script>
   <script src="/ui-code-copy.js"></script>
   <script src="/ui-team-card.js"></script>
   <script src="/ui-simple.js"></script>
+  <script defer src="/ui-model-offer-groups.js"></script>
+  <script src="/ui-teams.js"></script>
   <script src="/password-eye.js"></script>
   <script>document.addEventListener('DOMContentLoaded', function () { PasswordEye.watch(); });</script>
   <script src="app.js"></script>

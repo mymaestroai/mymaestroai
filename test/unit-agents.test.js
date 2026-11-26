@@ -141,7 +141,8 @@ test('createAgent: validation, duplicates, default files, owner recorded, no mod
   // an underscore is allowed: a member's agents are named <login>_<name> (lib/agent-requests)
   assert.strictEqual((await a.ag.createAgent('owner_helper', 'claude-sdk/x', '', null, 'specialist')).success, true);
   assert.deepStrictEqual(await a.ag.createAgent('maestro'), { success: false, error: 'Agent already exists' });
-  assert.deepStrictEqual(await a.ag.createAgent('kid1', undefined, '', '', 'worker', 'u_7'), { success: true, name: 'kid1' });
+  // createAgent now also returns who the saved agent is (its box id), for Build Team's plan (lib/team-plan noteCreated).
+  { const r = await a.ag.createAgent('kid1', undefined, '', '', 'worker', 'u_7'); assert.match(r.identity, /^box:[0-9a-f]+$/); delete r.identity; assert.deepStrictEqual(r, { success: true, name: 'kid1' }); }
   const rec = a.readJson().find(x => x.name === 'kid1');
   assert.deepStrictEqual([rec.owner, rec.category, rec.model, rec.display, rec.type], ['u_7', 'worker', 'claude-sonnet-4-6', 'Kid1', 'normal']);
   assert.match(fs.readFileSync(path.join(a.ws('kid1'), 'IDENTITY.md'), 'utf8'), /## Name\nKid1\n\n## Role\nA helpful AI assistant\./);
@@ -472,6 +473,8 @@ test('createAgent with the files the lead wrote (AGENT-PLAYBOOK.md): saved as gi
     files: { 'SOUL.md': soul, 'IDENTITY.md': '# IDENTITY.md\n\n## Name\nGarden Coach', 'USER.md': '# USER.md — Sam\n', 'TOOLS.md': '' },
     records: [{ name: 'garden.md', content: '# Garden\n\n## Beds\n(ask)' }, { name: 'frost-dates.md', content: 'Last frost: (ask)\n' }],
   });
+  assert.match(res.identity, /^box:[0-9a-f]+$/);   // who the saved agent is (lib/team-plan noteCreated)
+  delete res.identity;
   assert.deepStrictEqual(res, { success: true, name: 'sage' });
   assert.deepStrictEqual(a.calls, [], 'no model drafted anything');
   const rd = (f) => fs.readFileSync(path.join(a.ws('sage'), f), 'utf8');

@@ -1,4 +1,5 @@
 'use strict';
+delete process.env.CLAUDE_CONFIG_DIR;   // these tests build their own home; the runner's sealed Claude folder (scripts/run-tests.js) must not replace <home>/.claude
 // Making a backup (lib/backup/collect.js, create.js, places.js, keys.js) from a throwaway install in the older layout
 // (home folders beside the program folder): what goes in, what stays out, links, databases with unsaved WAL pages,
 // the AI sign-ins and current conversations, files that change while copied, places, the index and the list.

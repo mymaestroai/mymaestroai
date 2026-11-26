@@ -92,7 +92,7 @@ test('GET status: engine status with enabled taken from the voice setting', asyn
   assert.strictEqual(r.statusCode, 200);
   const j = r.json();
   assert.strictEqual(j.enabled, true); assert.strictEqual(j.ready, true); assert.strictEqual(j.voices.length, 6);
-  assert.deepStrictEqual(Object.keys(j).sort(), ['cloud', 'enabled', 'error', 'failed', 'installing', 'platformSupported', 'progress', 'ready', 'step', 'stt', 'tts', 'voices']);
+  assert.deepStrictEqual(Object.keys(j).sort(), ['adminName', 'cloud', 'enabled', 'error', 'failReason', 'failed', 'installing', 'nextRetryAt', 'platformSupported', 'progress', 'ready', 'step', 'stt', 'tts', 'voices']);   // + adminName, failReason, nextRetryAt (voice entry: Settings tells the truth until ready)
   const off = setup({ enabled: false });
   assert.strictEqual((await off.call(fakeReq('GET', '/api/voice/status'))).json().enabled, false);
   t.cleanup(); off.cleanup();
@@ -503,7 +503,9 @@ test('resumeIfNeeded: installs when enabled and not ready; does nothing when dis
   let x = mk({ enabled: true, sttModel: 'small.en' }, { ready: false, installing: false });
   assert.strictEqual(routes.resumeIfNeeded(x.deps), true); assert.deepStrictEqual(x.calls, [{ sttModel: 'small.en' }]);
   x = mk({ enabled: true }, { ready: false, installing: false }); routes.resumeIfNeeded(x.deps); assert.deepStrictEqual(x.calls, [{ sttModel: undefined }]);
-  for (const [sv, st] of [[{ enabled: false }, { ready: false, installing: false }], [undefined, { ready: false, installing: false }], [{ enabled: true }, { ready: true, installing: false }], [{ enabled: true }, { ready: false, installing: true }]]) {
+  // voice is on by default: nothing stored counts as on
+  x = mk(undefined, { ready: false, installing: false }); assert.strictEqual(routes.resumeIfNeeded(x.deps), true); assert.strictEqual(x.calls.length, 1);
+  for (const [sv, st] of [[{ enabled: false }, { ready: false, installing: false }], [{ enabled: true }, { ready: true, installing: false }], [{ enabled: true }, { ready: false, installing: true }]]) {
     x = mk(sv, st); assert.strictEqual(routes.resumeIfNeeded(x.deps), false); assert.strictEqual(x.calls.length, 0);
   }
   // a failing install is logged on one line, not thrown (sync or async)

@@ -649,7 +649,7 @@ test('render: clicking Status opens the sheet in the page (a dialog appears, sho
 
 test('track keeps renderMarkdown for the sheet; both pages pass their formatContent', () => {
   const src = read('lib/ui-hand-off-card.js');
-  assert.match(src, /function track\(\{ getAgent, getContainer, fetchFn, renderMarkdown \} = \{\}\)/);
+  assert.match(src, /function track\(\{ getAgent, getContainer, fetchFn, renderMarkdown, isAdmin, stopJob, stopWorker, storage \} = \{\}\)/);
   assert.match(src, /st\.renderMarkdown = /);
   assert.ok(typeof H.statusSheetModel === 'function' && typeof H.openStatus === 'function');
   assert.match(read('mobile.js'), /HandOffCard\.track\(\{[^\n]*renderMarkdown: \(t\) => formatContent\(t\)/);
