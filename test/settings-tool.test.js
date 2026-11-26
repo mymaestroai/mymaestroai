@@ -725,6 +725,43 @@ test('R3-1: "x" and "the x" are one name: two agents so named make the card; the
     assert.match(await call(fakeRes(), { action: 'set', setting: BLURB, agent: 'quill', value: 'qq1', reason: 'r' }), /^Changed Short description for my Quill/, 'my Quill matches "quill"');
   } finally { fs.writeFileSync(AGENTS_FILE, original); L('agents').getAgentsSync(true); }
 });
+// ── R4-1: the typed command must end in an explicit target phrase (for / of / on / in <agent>) that names exactly the proposed agent ──
+async function withRoster(extra, fn) {
+  const original = fs.readFileSync(AGENTS_FILE, 'utf8');
+  try {
+    fs.writeFileSync(AGENTS_FILE, JSON.stringify([...JSON.parse(original), ...extra.map((a) => ({ model: 'openai/gpt-5.6', category: 'specialist', blurb: 'start', ...a }))]));
+    L('agents').getAgentsSync(true);
+    await fn();
+  } finally { fs.writeFileSync(AGENTS_FILE, original); L('agents').getAgentsSync(true); }
+}
+test('R4-1: an agent named like the value ("editor") consumes no target phrase: the card', async () => {
+  await withRoster([{ name: 'editor', display: 'Editor' }], async () => {
+    await expectCard('Set short description to editor', { setting: BLURB, agent: 'editor', value: 'editor' }, 'name equals the value, no target phrase');
+  });
+});
+test('R4-1: "for my Copy Desk" goes at once for that agent with the value the person typed; another value gets the card', async () => {
+  await withRoster([{ name: 'editor', display: 'Copy Desk' }], async () => {
+    startTurn('maestro', { typed: 'Set short description to editor for my Copy Desk.' });
+    assert.match(await call(fakeRes(), { action: 'set', setting: BLURB, agent: 'editor', value: 'editor', reason: 'r' }), /^Changed Short description for Copy Desk/);
+    await expectCard('Set short description to editor for my Copy Desk.', { setting: BLURB, agent: 'editor', value: 'writer' }, 'a value the person did not type');
+  });
+});
+test('R4-1: two agents with the display name "Copy Desk": the card for either', async () => {
+  await withRoster([{ name: 'editor', display: 'Copy Desk' }, { name: 'proof', display: 'Copy Desk' }], async () => {
+    for (const agent of ['editor', 'proof']) {
+      await expectCard('Set short description to editor for my Copy Desk.', { setting: BLURB, agent, value: 'editor' }, `ambiguous name, ${agent}`);
+    }
+  });
+});
+test('R4-1: a 2-letter name ("Ed") is no target; "for Night Editor" goes at once for that agent only', async () => {
+  await withRoster([{ name: 'ed', display: 'Night Editor' }], async () => {
+    await expectCard('Set short description to writer for Ed', { setting: BLURB, agent: 'ed', value: 'writer' }, 'too short to name an agent');
+    startTurn('maestro', { typed: 'Set short description to writer for Night Editor' });
+    assert.match(await call(fakeRes(), { action: 'set', setting: BLURB, agent: 'ed', value: 'writer', reason: 'r' }), /^Changed Short description for Night Editor/);
+    await expectCard('Set short description to writer for Night Editor', { setting: BLURB, agent: 'harbor', value: 'writer' }, 'another proposed agent');
+  });
+});
+
 test('R3-1 follow-up: a set that echoes free text (the old or the new text) taints the turn; a fixed value does not', async () => {
   const t1 = startTurn('maestro', { typed: 'Set short description to tt1 for Harbor.' });
   assert.match(await call(fakeRes(), { action: 'set', setting: BLURB, agent: 'harbor', value: 'tt1', reason: 'r' }), /^Changed /);

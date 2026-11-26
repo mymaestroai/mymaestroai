@@ -10,7 +10,8 @@
  *   node scripts/hub-token.js revoke <id>
  *
  * The token is printed once, or with --out written to that file (mode 600) and not printed. The program sends it as the
- * header "Authorization: Bearer hub_…". --data-dir <dir> uses another data folder (tests).
+ * header "Authorization: Bearer hub_…". --data-dir <dir> uses another data folder (tests); without it the absolute HUB_AUTH_DIR is
+ * used when set, else the install's data/.
  */
 const fs = require('fs');
 const path = require('path');
@@ -19,7 +20,12 @@ const { createAuth, TOKEN_SCOPES } = require(path.join(__dirname, '..', 'lib', '
 function arg(name, dflt = null) { const i = process.argv.indexOf(`--${name}`); return i > 0 && i + 1 < process.argv.length ? process.argv[i + 1] : dflt; }
 const flag = (name) => process.argv.includes(`--${name}`);
 
-const dataDir = arg('data-dir') ? path.resolve(arg('data-dir')) : path.join(__dirname, '..', 'data');
+// Default folder: the moved account folder (an absolute HUB_AUTH_DIR, as lib/auth reads it) first, else the install's data folder.
+function defaultDataDir(env = process.env) {
+  const a = env.HUB_AUTH_DIR;
+  return a && path.isAbsolute(a) ? path.resolve(a) : path.join(__dirname, '..', 'data');
+}
+const dataDir = arg('data-dir') ? path.resolve(arg('data-dir')) : defaultDataDir();
 // This command is a second process on the account file (users.json) and the other protected files: every write it makes there leaves a
 // marker line (lib/settings-journal startCliMarking), so the running hub's stamp watch does not report it as an outside edit.
 try {

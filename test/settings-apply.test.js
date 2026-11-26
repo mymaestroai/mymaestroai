@@ -456,6 +456,14 @@ test('R3-4: restoreSetting reads the value back: a cleaner that reshapes it is a
   try {
     const r = apply.restoreSetting('workersAtOnce.claude-sdk', 99, { isAdminSession: true });   // the cleaner clamps to 32
     assert.equal(r.ok, false); assert.match(r.error, /not put back/); assert.match(r.error, /workersAtOnce\.claude-sdk/);
+    assert.match(r.error, /and it is (?:now \S+|not set now)\. Change/, 'the message states the current value');
+    // a value that is there but different is named (the read is stood in for, since the cleaner above drops the key)
+    const realGet = settings.getPath;
+    settings.getPath = (k) => (k === 'workersAtOnce.claude-sdk' ? 32 : realGet.call(settings, k));
+    try {
+      const r32 = apply.restoreSetting('workersAtOnce.claude-sdk', 99, { isAdminSession: true });
+      assert.match(r32.error, /and it is now 32\. Change/, 'a set value is named');
+    } finally { settings.getPath = realGet; }
     const ok = apply.restoreSetting('workersAtOnce.claude-sdk', 4, { isAdminSession: true });
     assert.equal(ok.ok, true, JSON.stringify(ok));
     const v = apply.restoreSetting('voice.enabled', true, { isAdminSession: true });

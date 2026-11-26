@@ -4076,7 +4076,14 @@ server.listen(PORT, HOST, () => {
   // Once a minute: a stamp watch of the protected files that have no per-key change journal (accounts, connectors, modules, local models,
   // research / voice / push preferences, behaviour reviews, wallet files). A change the hub did not make is journaled as an outside edit
   // (file level, no values) and told to the admins in the batched notice (lib/settings-journal startWatch). The hub's own writes stay quiet.
-  try { require('./lib/settings-journal').startWatch({ dataDir: path.join(__dirname, 'data') }); } catch (e) { console.error('[settings-journal] file watch not started:', e.message); }
+  try {
+    const sjw = require('./lib/settings-journal');
+    const dataW = path.join(__dirname, 'data');
+    sjw.startWatch({ dataDir: dataW });
+    // An account folder moved with HUB_AUTH_DIR (absolute) holds users.json and the wallet files: the watch covers it too.
+    const authW = process.env.HUB_AUTH_DIR;
+    if (authW && path.isAbsolute(authW) && path.resolve(authW) !== path.resolve(dataW)) sjw.startWatch({ dataDir: authW });
+  } catch (e) { console.error('[settings-journal] file watch not started:', e.message); }
   // A change whose file was written but whose commit line was not (a crash, a full disk) is still pending in the journal: it gets its commit
   // line when the live value is the entry's "after", else a failed line (lib/settings-journal reconcile).
   try { require('./lib/settings-journal').reconcile(); } catch (e) { console.error('[settings-journal] pending entries not reconciled:', e.message); }

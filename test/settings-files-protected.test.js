@@ -178,6 +178,38 @@ test('blind is decided from command words: a cd inside eval / bash -c / sh -c co
   }
 });
 
+test('nested shell code is judged in the folder a preceding cd moved to, with variables substituted; stdin-fed shells; the depth limit', () => {
+  const refused = [
+    `cd ${DATA} && bash -c 'echo x > users.json'`,
+    `D=${DATA}; cd $D; bash -c 'echo x > users.json'`,
+    `cd ${DATA} && zsh -c "cd . && echo x > agents.json"`,
+    `echo 'echo x > ${DATA}/users.json' | bash`,
+    `echo 'cd ${DATA}; echo x > users.json' | sh`,
+    `bash <<EOF\necho x > ${DATA}/users.json\nEOF`,
+    `cd ${DATA}\nbash <<'EOF'\necho x > settings.json\nEOF`,
+    `bash <<< 'echo x > ${DATA}/connectors.json'`,
+    // deeper than the limit: a nested runner remains and the code names a protected file
+    Array.from({ length: 7 }).reduce((code) => `bash -c '${code.replace(/'/g, `'\\''`)}'`, 'echo > users.json'),
+  ];
+  const allowed = [
+    `cd ${DATA} && echo hi`,
+    `cd ${DATA}/../workspaces && bash -c 'echo x > users.json'`,
+    `echo 'echo hi' | bash`,
+    `bash <<EOF\necho hi > notes.txt\nEOF`,
+    `bash script.sh`,
+  ];
+  const had = process.env.HUB_AUTH_DIR;
+  for (const [label, agent, extra] of ROLES) {
+    for (const command of refused) assertRefused(dec(agent, 'Bash', { command }, extra), `${label}: ${command}`);
+    for (const command of allowed) assert.notStrictEqual(dec(agent, 'Bash', { command }, extra).cls, 'settings_file', `${label}: ${command}`);
+    // from the install root, a relative cd into data/
+    for (const command of [`cd data; sh -c 'echo > settings.json'`, `cd data && bash -c 'echo x > users.json'`]) {
+      assertRefused(dec(agent, 'Bash', { command }, { ...extra, cwd: INST }), `${label} (install root): ${command}`);
+    }
+  }
+  assert.strictEqual(had, process.env.HUB_AUTH_DIR);
+});
+
 test('blind-cd counts the moved account folder name; an install name counts only at 4+ characters and as a whole path part', () => {
   const had = process.env.HUB_AUTH_DIR;
   try {

@@ -733,7 +733,10 @@ test('G7: a once-a-minute stamp watch journals a protected file changed by somet
 
 test('G7: the server starts the watch once a minute', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
-  assert.match(src, /require\('\.\/lib\/settings-journal'\)\.startWatch\(/);
+  assert.match(src, /require\('\.\/lib\/settings-journal'\)/);
+  assert.match(src, /\.startWatch\(\{ dataDir: dataW \}\)/);
+  // a moved account folder (HUB_AUTH_DIR, absolute) is watched too
+  assert.match(src, /process\.env\.HUB_AUTH_DIR[\s\S]{0,200}path\.isAbsolute\(authW\)[\s\S]{0,200}\.startWatch\(\{ dataDir: authW \}\)/);
 });
 
 // ── Round 2 ───────────────────────────────────────────────────────────────
@@ -1029,7 +1032,24 @@ test('R3-3: a query parameter whose name contains key, token, secret, pass, sig,
     assert.ok(!journal.redactUrlText(`#${name}=VALUE123`).includes('VALUE123'), `${name} in a fragment`);
   }
   assert.equal(journal.redactUrlText('https://h.example/p?page=2&q=cats'), 'https://h.example/p?page=2&q=cats');
-  assert.deepEqual(journal.redactUrls({ url: 'https://x.example/cb?client_secret=ZZZ&code=1' }), { url: 'https://x.example/cb?client_secret=***&code=1' });
+  assert.deepEqual(journal.redactUrls({ url: 'https://x.example/cb?client_secret=ZZZ&code=1' }), { url: 'https://x.example/cb?client_secret=***&code=***' });
+});
+
+test('R4 follow-up: query parameter names are split on _ - . ; and camelCase: credential words are redacted, look-alike words are not', () => {
+  const hide = ['code', 'pwd', 'pw', 'jwt', 'sid', 'session', 'bearer', 'otp', 'sig', 'accessToken', 'apiKey', 'APIKey', 'clientSecret', 'user.password', 'session-id', 'oauth_code', 'userPw', 'id_token'];
+  for (const name of hide) {
+    for (const sep of ['?', '&', '#', ';']) {
+      const t = journal.redactUrlText(`https://h.example/p${sep === '?' ? '' : '?z=1'}${sep}${name}=VALUE123`);
+      assert.ok(!t.includes('VALUE123'), `${name} after ${sep}: ${t}`);
+    }
+  }
+  const keep = ['author', 'keyword', 'design', 'signal', 'bypass', 'monkey', 'page', 'q', 'passenger', 'codec'];
+  for (const name of keep) {
+    const u = `https://h.example/p?a=1&${name}=VISIBLE&b=2;${name}=VISIBLE`;
+    assert.equal(journal.redactUrlText(u), u, name);
+  }
+  assert.equal(journal.redactUrlText('https://h.example/p?a=1;token=ZZZ;b=2'), 'https://h.example/p?a=1;token=***;b=2');
+  assert.deepEqual(journal.redactUrls({ u: 'a=1;sid=ZZZ' }), { u: 'a=1;sid=***' });
 });
 
 test('R3-4: voice.enabled entries are never restorable (the Voice screen is the way) and Restore names that screen; the value stays', () => {
@@ -1066,19 +1086,19 @@ test('R3-5: the hub\'s own wallet temp files and renames give no outside entry; 
     rawWrite(d('wallet-stray.json.tmp'), 'x');   // even a program's temp copy of that name is not a protected file
     w.tick();
     assert.equal(filesN(), n0);
-    // a file the hub wrote that no tick saw, then removed by another process: nothing to report
+    // a file the hub wrote (the write itself counts as a sighting, R4-4) and another process removed before a tick: one outside deletion
     fs.writeFileSync(d('wallet-m.json'), '{"m":1}');
     require('node:child_process').execFileSync(process.execPath, ['-e', `require('fs').unlinkSync(${JSON.stringify(d('wallet-m.json'))})`], { env: { PATH: process.env.PATH, HOME: process.env.HOME } });
     w.tick();
-    assert.equal(filesN(), n0, 'a vanished file never baselined by a tick is dropped');
+    assert.equal(filesN(), n0 + 1, 'a file the hub wrote and an outside process removed is reported');
     // the hub renames a file the watch knew: its source is gone by the hub's hand
     fs.renameSync(d('wallet-a.json'), d('wallet-b.json'));
     w.tick();
-    assert.equal(filesN(), n0, 'the rename\'s source is recorded as the hub\'s');
+    assert.equal(filesN(), n0 + 1, 'the rename\'s source is recorded as the hub\'s');
     // an outside edit of a wallet file is still reported
     rawWrite(d('wallet-b.json'), '{"b":"by hand"}');
     w.tick();
-    assert.equal(filesN(), n0 + 1);
+    assert.equal(filesN(), n0 + 2);
   } finally {
     w.stop();
     journal.configure({ clock: Date.now, timers: { setTimeout, clearTimeout }, notify: null });
@@ -1139,3 +1159,158 @@ test('R3 follow-up: scripts/hub-token.js marks its writes to the protected files
     assert.equal(filesN(), n0, 'not an outside edit');
   } finally { w.stop(); journal.configure({ clock: Date.now, timers: { setTimeout, clearTimeout }, notify: null }); }
 });
+
+// ── Round 4: reconcile needs exact evidence (R4-2, R4-3); the watch sees what the hub wrote (R4-4) ──────────────
+function tmpJournal() {
+  const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'sj-r4-'));
+  const file = path.join(dir, 'settings-journal.jsonl');
+  const j = journal.createJournal({ file, clock: () => 4_100_000_000_000, notify: () => {}, timers: fakeTimers().timers });
+  const lines = () => (fs.existsSync(file) ? fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
+  const terminal = (id) => lines().filter((l) => l.commitOf === id || l.failedOf === id);
+  return { dir, file, j, lines, terminal };
+}
+
+test('R4-2: a secret change (created, replaced, removed; live secret there or not) is never committed or failed by reconcile', () => {
+  const t = tmpJournal();
+  const key = 'providers.openai.apiKey';
+  const made = [
+    t.j.recordChange('settings', [{ key, before: undefined, after: 'sk-TEST-ONE-0001' }], { pending: true })[0],
+    t.j.recordChange('settings', [{ key, before: 'sk-TEST-ONE-0001', after: 'sk-TEST-TWO-0002' }], { pending: true })[0],
+    t.j.recordChange('settings', [{ key, before: 'sk-TEST-TWO-0002', after: undefined }], { pending: true })[0],
+  ];
+  for (const e of made) assert.equal(e.exactEvidence, false, 'a secret entry carries no exact evidence');
+  for (const live of ['sk-TEST-TWO-0002', undefined, 'set', '']) {
+    assert.deepEqual(t.j.reconcile({ read: () => live }), { committed: 0, failed: 0 });
+  }
+  for (const e of made) assert.deepEqual(t.terminal(e.id), [], 'still pending');
+});
+
+test('R4-2: a long value (equal byte length) and a value with a nested secret stripped stay pending', () => {
+  const t = tmpJournal();
+  const big1 = 'a'.repeat(MAX_BYTES + 10), big2 = 'b'.repeat(MAX_BYTES + 10);
+  const e1 = t.j.recordChange('settings', [{ key: 'maxContextMessages', before: big1, after: big2 }], { pending: true })[0];
+  assert.equal(e1.exactEvidence, false);
+  assert.deepEqual(t.j.reconcile({ read: () => big2 }), { committed: 0, failed: 0 });
+  const e2 = t.j.recordChange('settings', [{ key: 'webSearch', before: { keys: { brave: 'brave-TEST-KEY-1' }, on: true }, after: { on: true } }], { pending: true })[0];
+  assert.equal(e2.exactEvidence, false, 'stripSecrets changed the value');
+  assert.deepEqual(t.j.reconcile({ read: () => ({ on: true }) }), { committed: 0, failed: 0 });
+  assert.deepEqual(t.terminal(e1.id), []); assert.deepEqual(t.terminal(e2.id), []);
+});
+const MAX_BYTES = journal.MAX_VALUE_BYTES;
+
+test('R4-2: before equals after stays pending; a legacy pending entry without exactEvidence stays pending', () => {
+  const t = tmpJournal();
+  const same40 = t.j.recordChange('settings', [{ key: 'maxContextMessages', before: 40, after: 40 }], { pending: true })[0];
+  t.j.append([{ id: 'sj-0123456789', at: 1, who: { kind: 'hub' }, store: 'settings', key: 'maxContextMessages', before: 40, after: 75, restorable: true, pending: true }]);
+  assert.deepEqual(t.j.reconcile({ read: () => 40 }), { committed: 0, failed: 0 });
+  assert.deepEqual(t.j.reconcile({ read: () => 75 }), { committed: 0, failed: 0 });
+  assert.deepEqual(t.terminal(same40.id), []); assert.deepEqual(t.terminal('sj-0123456789'), []);
+});
+
+test('R4-2: three exact entries: live after commits, live before fails, anything else stays pending; a repeated pass adds nothing', () => {
+  const t = tmpJournal();
+  const mk = (key) => t.j.recordChange('settings', [{ key, before: 40, after: 75 }], { pending: true })[0];
+  const [a, b, c] = ['maxContextMessages', 'maxToolRounds', 'otherSetting'].map(mk);
+  assert.equal(a.exactEvidence, true);
+  const live = { [a.key]: 75, [b.key]: 40, [c.key]: 60 };
+  assert.deepEqual(t.j.reconcile({ read: (e) => live[e.key] }), { committed: 1, failed: 1 });
+  assert.deepEqual(t.terminal(a.id).map((l) => Object.keys(l).find((k) => /Of$/.test(k))), ['commitOf']);
+  assert.deepEqual(t.terminal(b.id).map((l) => Object.keys(l).find((k) => /Of$/.test(k))), ['failedOf']);
+  assert.deepEqual(t.terminal(c.id), []);
+  const n = t.lines().length;
+  assert.deepEqual(t.j.reconcile({ read: (e) => live[e.key] }), { committed: 0, failed: 0 });
+  assert.equal(t.lines().length, n, 'no duplicate terminal lines');
+});
+
+test('R4-3: a reading that throws leaves the entry pending; the next pass settles it', () => {
+  const t = tmpJournal();
+  const e = t.j.recordChange('settings', [{ key: 'maxContextMessages', before: 40, after: 75 }], { pending: true })[0];
+  let calls = 0;
+  const read = () => { if (calls++ === 0) throw new Error('unavailable'); return 75; };
+  assert.deepEqual(t.j.reconcile({ read }), { committed: 0, failed: 0 });
+  assert.deepEqual(t.terminal(e.id), []);
+  assert.deepEqual(t.j.reconcile({ read }), { committed: 1, failed: 0 });
+});
+
+test('R4-3: a malformed settings.json never counts as an observed deletion; valid JSON without the field does', () => {
+  const t = tmpJournal();
+  const e = t.j.recordChange('settings', [{ key: 'maxContextMessages', before: 40, after: undefined }], { pending: true })[0];
+  assert.equal(e.exactEvidence, true);
+  fs.writeFileSync(path.join(t.dir, 'settings.json'), '{ not json');
+  assert.deepEqual(t.j.reconcile(), { committed: 0, failed: 0 });
+  assert.deepEqual(t.terminal(e.id), []);
+  fs.writeFileSync(path.join(t.dir, 'settings.json'), '{}');
+  assert.deepEqual(t.j.reconcile(), { committed: 1, failed: 0 });
+});
+
+test('R4-3: an unknown store and an unsupported prefs key stay pending, even with a reader that returns the proposed value', () => {
+  const t = tmpJournal();
+  const e1 = t.j.recordChange('widgets', [{ key: 'x.y', before: 1, after: 2 }], { pending: true })[0];
+  const e2 = t.j.recordChange('prefs', [{ key: 'prefs.u_owner.someUnknown.thing', before: 'a', after: 'b' }], { pending: true })[0];
+  assert.equal(e1.exactEvidence, true); assert.equal(e2.exactEvidence, true);
+  assert.deepEqual(t.j.reconcile({ read: (e) => e.after }), { committed: 0, failed: 0 });
+  assert.deepEqual(t.terminal(e1.id), []); assert.deepEqual(t.terminal(e2.id), []);
+});
+
+test('R4-3: a research choice stays pending while research-prefs.json is missing or malformed, and commits once the file shows it', () => {
+  const t = tmpJournal();
+  const e = t.j.recordChange('prefs', [{ key: 'prefs.u_owner.research.choice', before: 'ask', after: 'always' }], { pending: true })[0];
+  assert.equal(e.exactEvidence, true);
+  assert.deepEqual(t.j.reconcile(), { committed: 0, failed: 0 }, 'file missing');
+  fs.writeFileSync(path.join(t.dir, 'research-prefs.json'), '{ broken');
+  assert.deepEqual(t.j.reconcile(), { committed: 0, failed: 0 }, 'file malformed');
+  fs.writeFileSync(path.join(t.dir, 'research-prefs.json'), JSON.stringify({ u_owner: { choice: 'always' } }));
+  assert.deepEqual(t.j.reconcile(), { committed: 1, failed: 0 });
+});
+
+function watchSetup() {
+  const { execFileSync } = require('node:child_process');
+  const { timers } = fakeTimers();
+  journal.configure({ timers, notify: () => {} });
+  journal._pending.clear();
+  const f = path.join(inst.data, 'research-prefs.json');
+  fs.rmSync(f, { force: true });
+  const w = journal.startWatch({ dataDir: inst.data, intervalMs: 0 });
+  const filesN = () => journal.list({ limit: 500 }).filter((e) => e.store === 'files' && e.key === 'files/research-prefs.json').length;
+  const outsideUnlink = () => execFileSync(process.execPath, ['-e', `require('fs').unlinkSync(${JSON.stringify(f)})`], { env: { PATH: process.env.PATH, HOME: process.env.HOME } });
+  const done = () => { w.stop(); journal.configure({ clock: Date.now, timers: { setTimeout, clearTimeout }, notify: null }); fs.rmSync(f, { force: true }); };
+  return { f, w, filesN, outsideUnlink, done };
+}
+
+test('R4-4: a file created by the hub and deleted outside before the first tick gives exactly one outside-deletion entry', () => {
+  const s = watchSetup();
+  try {
+    const n0 = s.filesN();
+    fs.writeFileSync(s.f, '{}');
+    s.outsideUnlink();
+    s.w.tick(); s.w.tick();
+    assert.equal(s.filesN(), n0 + 1);
+  } finally { s.done(); }
+});
+
+test('R4-4: a file the hub created gives no outside-edit entry on later ticks, and the hub\'s own deletion stays quiet', () => {
+  const s = watchSetup();
+  try {
+    const n0 = s.filesN();
+    fs.writeFileSync(s.f, '{}');
+    s.w.tick(); s.w.tick();
+    assert.equal(s.filesN(), n0);
+    fs.unlinkSync(s.f);
+    s.w.tick();
+    assert.equal(s.filesN(), n0);
+  } finally { s.done(); }
+});
+
+test('R4-4: an old command-line deletion marker does not hide a newer outside deletion of a file the hub re-created', async () => {
+  const s = watchSetup();
+  try {
+    const n0 = s.filesN();
+    journal.append([{ marker: true, store: 'files/research-prefs.json', stamp: 'gone', at: Date.now() - 60_000 }]);
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    fs.writeFileSync(s.f, '{"u":1}');
+    s.outsideUnlink();
+    s.w.tick();
+    assert.equal(s.filesN(), n0 + 1, 'the old marker does not suppress the new deletion');
+  } finally { s.done(); }
+});
+
