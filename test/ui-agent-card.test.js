@@ -178,6 +178,21 @@ test('sections come from the records homed on "Agent card > ", in order, each wi
   assert.ok(all(p, '.ac-shield').length === 1 && p.textContent.includes('Access'), 'only Access carries the shield mark');
 });
 
+test('the More line uses clean group names: no emoji, no ">" path parts, at most four then "and more"', () => {
+  const recs = [
+    { id: 'a', home: 'Agent card > Basics', name: '\u{1F514} > Questions' },
+    { id: 'b', home: 'Agent card > Basics > More > \u{1F50A} Voice speed', name: 'x' },
+    { id: 'c', home: 'Agent card > Basics', name: 'Alerts > Phone > ' + String.fromCodePoint(0x2699, 0xFE0F) + ' Requests' },
+    { id: 'd', home: 'Agent card > Basics', name: 'Plain name' },
+    { id: 'e', home: 'Agent card > Basics', name: 'Fifth' },
+  ];
+  const line = C.moreLine(recs);
+  assert.strictEqual(line, 'More: Questions, Voice speed, Requests, Plain name and more');
+  assert.ok(!/>/.test(line) && !/[^\x20-\x7E]/.test(line), line);
+  assert.strictEqual(C.groupName({ id: 'z', name: '\u{1F514}' }), '', 'a name of only a symbol is empty, and is left out of the line');
+  assert.strictEqual(C.moreLine([{ id: 'z', name: '\u{1F514}' }, { id: 'y', name: 'Kept' }]), 'More: Kept');
+});
+
 test('FIRST_ROWS are shown first, every other record sits under a closed More that lists the group names (at most four, then "and more")', async () => {
   const t = setup();
   await t.card.open('harbor');

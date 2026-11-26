@@ -145,7 +145,7 @@ function setup(over = {}) {
   };
   const stale = JSON.parse(JSON.stringify(state.agents));
   const card = C.createCard({
-    doc, win, fetch, records: () => RECORDS, me: () => ('me' in over ? over.me : ADMIN), agentsList: () => stale, subscribe: () => () => {},
+    doc, win, fetch, records: () => over.records || RECORDS, me: () => ('me' in over ? over.me : ADMIN), agentsList: () => stale, subscribe: () => () => {},
     help: null, setTimeout: () => {}, phone: false, simple: !!over.simple, requestMs: over.requestMs,
   });
   return { card, doc, win, state, calls, confirms };
@@ -404,6 +404,48 @@ test('Voice, a member: read-only with who can change it', async () => {
   const row = rowOf(t.card.el(), 'OPT-0023');
   assert.strictEqual(all(row, 'select').length, 0);
   assert.match(row.textContent, /Only an admin can change this\./);
+});
+
+// ---- P3-1: a member always sees the first four Basics rows, read-only, whatever the hub sent or the reads return ------------
+const MEMBER_RECORDS = RECORDS.filter((r) => r.who === 'member' || r.who === 'both');   // what GET /api/settings-records sends a member: no admin-only record
+const memberCard = async (me, tweak) => {
+  B.reset();
+  const t = setup({ me, records: MEMBER_RECORDS, tweak });
+  for (const u of ['/api/models', '/api/faces', '/api/voice/status']) t.state.fail['GET ' + u] = { status: 500, error: 'no' };
+  await t.card.open('harbor'); await flush();
+  return t;
+};
+test('a member\'s card draws Model, Thinking effort, Voice and Call display read-only with the admin-only note, even with no admin-only records and failing reads', async () => {
+  assert.ok(!MEMBER_RECORDS.some((r) => r.id === 'OPT-0047'), 'the member\'s record list has no Model record (the cause)');
+  for (const me of [MEMBER_NO_LIST, MEMBER]) {
+    const t = await memberCard(me, (l) => { l[1].model = 'ninfer/qwen3'; l[1].effort = 'high'; l[1].callDisplay = 'pack:fox'; });
+    const p = t.card.el();
+    const ids = rowIds(p);
+    for (const id of ['OPT-0047', 'OPT-0057', 'OPT-0023', 'OPT-0063']) assert.ok(ids.includes(id), id + ' is drawn: ' + ids.join(','));
+    assert.deepStrictEqual(ids.filter((id) => ['OPT-0047', 'OPT-0057', 'OPT-0168', 'OPT-0023', 'OPT-0063'].includes(id)), ['OPT-0047', 'OPT-0057', 'OPT-0168', 'OPT-0023', 'OPT-0063'], 'in the first-rows order');
+    for (const id of ['OPT-0057', 'OPT-0023', 'OPT-0063']) {
+      const row = rowOf(p, id);
+      assert.strictEqual(all(row, 'select').length + all(row, '.ac-seg-b').length + all(row, 'input').length, 0, id + ' has no control');
+      assert.match(row.textContent, /Only an admin can change this\./, id);
+    }
+    assert.match(rowOf(p, 'OPT-0057').textContent, /High effort/);
+    assert.match(rowOf(p, 'OPT-0023').textContent, /Same as all agents/);
+    assert.match(rowOf(p, 'OPT-0063').textContent, /fox/i);
+    assert.match(rowOf(p, 'OPT-0047').textContent, /qwen3/);
+    if (me === MEMBER_NO_LIST) assert.match(rowOf(p, 'OPT-0047').textContent, /Only an admin can change this\./);
+    assert.deepStrictEqual(writes(t), []);
+  }
+});
+test('a member\'s Thinking effort shows "Default" when none is stored, and Call display None', async () => {
+  const t = await memberCard(MEMBER_NO_LIST, (l) => { delete l[1].effort; delete l[1].callDisplay; });
+  assert.match(rowOf(t.card.el(), 'OPT-0057').textContent, /Default/);
+  assert.match(rowOf(t.card.el(), 'OPT-0063').textContent, /None/);
+});
+test('an admin is unchanged: the effort row is still left out for a model with no levels, and the rows stay live', async () => {
+  const local = await opened({ tweak: (l) => { l[1].model = 'ninfer/qwen3'; } });
+  assert.strictEqual(rowOf(local.card.el(), 'OPT-0057'), undefined);
+  const t = await opened();
+  for (const id of ['OPT-0047', 'OPT-0057', 'OPT-0023', 'OPT-0063']) assert.ok(all(rowOf(t.card.el(), id), 'select').length + all(rowOf(t.card.el(), id), '.ac-seg-b').length > 0, id + ' is live for an admin');
 });
 
 // ---- 6. call display, call timing, recordings, model extras ----------------------------------------------------------------
