@@ -21,22 +21,23 @@ const rawWrite = (file, text) => { const fd = fs.openSync(file, 'w'); try { fs.w
 const real = (p) => fs.realpathSync(p);
 const fakeTimers = () => ({ setTimeout: (fn, ms) => ({ fn, ms, unref() {} }), clearTimeout() {} });
 
-// A fresh account folder outside the install; HUB_AUTH_DIR names it as `spell(dir)` says (absolute, or relative to the current folder).
+// A fresh account folder outside the install; HUB_AUTH_DIR names it as `spell(dir)` says (absolute, or relative to the install folder).
 function withAuthDir(spell, fn) {
   const dir = fs.mkdtempSync(path.join(real(os.tmpdir()), 'sj-acct-'));
   const was = process.env.HUB_AUTH_DIR;
   process.env.HUB_AUTH_DIR = spell(dir);
   try { return fn(dir); } finally { process.env.HUB_AUTH_DIR = was; fs.rmSync(dir, { recursive: true, force: true }); }
 }
-const SPELLINGS = { absolute: (d) => d, relative: (d) => path.relative(process.cwd(), d) };
+const SPELLINGS = { absolute: (d) => d, relative: (d) => path.relative(inst.inst, d) };   // a relative value is taken against the install folder
 
-test('resolveAuthDir: HUB_AUTH_DIR resolved against the current folder, else the install data/; no file is read when lib/auth loads', () => {
+test('resolveAuthDir: HUB_AUTH_DIR resolved against the install folder (never the current one), else the install data/; no file is read when lib/auth loads', () => {
   assert.equal(typeof authMod.resolveAuthDir, 'function');
   assert.equal(authMod.resolveAuthDir({ HUB_AUTH_DIR: '/x/y' }), path.resolve('/x/y'));
-  assert.equal(authMod.resolveAuthDir({ HUB_AUTH_DIR: 'rel/acct' }), path.resolve('rel/acct'));
+  assert.equal(authMod.resolveAuthDir({ HUB_AUTH_DIR: 'rel/acct' }), path.join(inst.inst, 'rel', 'acct'));
+  assert.notEqual(authMod.resolveAuthDir({ HUB_AUTH_DIR: 'rel/acct' }), path.resolve('rel/acct'));
   assert.equal(authMod.resolveAuthDir({}), path.join(inst.inst, 'data'));
   const src = fs.readFileSync(path.join(inst.lib, 'auth.js'), 'utf8');
-  const head = src.slice(0, src.indexOf('function resolveAuthDir'));
+  const head = src.slice(0, src.indexOf('function authDirFromEnvFile'));
   assert.ok(!/readFileSync|existsSync|statSync|readdirSync|realpathSync/.test(head), 'nothing is read before the resolver');
   // loading lib/auth in a clean process under a spy: no file read at load
   const code = `const fs=require('fs');const seen=[];for(const n of ['readFileSync','existsSync','statSync','readdirSync','openSync','mkdirSync']){const o=fs[n];fs[n]=function(p){if(String(p).includes('settings-authdir-probe'))seen.push(n);return o.apply(this,arguments)}}
@@ -74,7 +75,7 @@ for (const [kind, spell] of Object.entries(SPELLINGS)) {
         w.tick();
         const files = journal.list({ limit: 500 }).filter((x) => x.store === 'files');
         assert.equal(files.length, n0 + 1, 'one outside entry, seen by history');
-        assert.equal(files[0].key, 'files/connectors.json');
+        assert.equal(files[0].key, 'files/account/connectors.json', 'the moved folder\'s entry carries account/ like its markers');
         assert.ok(lines().some((l) => l.id === files[0].id), 'written to the install journal');
         assert.ok(!fs.existsSync(path.join(dir, 'settings-journal.jsonl')), 'no second journal');
         // the command line's marker for the same folder goes to the install journal too and keeps its own write quiet
@@ -154,7 +155,137 @@ test('FU-6: the same folder by two paths (a link) is watched once; two folders a
     } finally { fs.rmSync(dl, { force: true }); }
   } finally { fs.rmSync(link, { force: true }); fs.rmSync(a, { recursive: true, force: true }); fs.rmSync(b, { recursive: true, force: true }); }
   const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
-  assert.match(src, /startWatches\(\[dataW, require\('\.\/lib\/auth'\)\.resolveAuthDir\(\)\]\)/);
+  assert.match(src, /authW = require\('\.\/lib\/auth'\)\.resolveAuthDir\(\)/); assert.match(src, /startWatches\(authW \? \[dataW, authW\] : \[dataW\]\)/);
+});
+
+// ── R6-1 / R6-2: HUB_AUTH_DIR only in the install's .env, and a relative value, give every caller the same folder ──────────────────
+const ENV_FILE = path.join(inst.inst, '.env');
+const cleanEnv = () => ({ PATH: process.env.PATH, HOME: os.tmpdir() });   // no HUB_AUTH_DIR in the process environment
+const here = (d) => { fs.mkdirSync(d, { recursive: true }); return d; };
+const resolverIn = (cwd, env) => spawnSync(process.execPath, ['-e', `process.stdout.write(require(${JSON.stringify(path.join(inst.lib, 'auth'))}).resolveAuthDir())`], { env, cwd, encoding: 'utf8' }).stdout;
+const tokenCli = (cwd, args) => spawnSync(process.execPath, [path.join(inst.inst, 'scripts', 'hub-token.js'), ...args], { env: cleanEnv(), cwd, encoding: 'utf8' });
+const hubCli = (cwd, args) => spawnSync(process.execPath, [path.join(inst.inst, 'scripts', 'hub-cli.js'), ...args], { env: cleanEnv(), cwd, encoding: 'utf8' });
+
+test('R6-1: HUB_AUTH_DIR only in the install\'s .env: the server-side resolver, hub-token and hub-cli all use that folder (a launch-time value is only the fallback)', () => {
+  const acct = fs.mkdtempSync(path.join(real(os.tmpdir()), 'sj-envacct-'));
+  const other = fs.mkdtempSync(path.join(real(os.tmpdir()), 'sj-envother-'));
+  const cwd = here(path.join(inst.root, 'cwd-env'));
+  fs.writeFileSync(ENV_FILE, `PORT=1\nHUB_AUTH_DIR=${acct}\nOTHER_KEY=secret-value\n`, { mode: 0o600 });
+  try {
+    assert.equal(resolverIn(cwd, cleanEnv()), acct, 'the resolver reads the one key from .env');
+    assert.equal(resolverIn(cwd, { ...cleanEnv(), HUB_AUTH_DIR: other }), acct, 'the .env value comes first, as the server loads it over the environment');
+    const t = tokenCli(cwd, ['create', '--name', 'env-only', '--scopes', 'status']);
+    assert.equal(t.status, 0, t.stderr + t.stdout);
+    assert.ok(fs.existsSync(path.join(acct, 'auth.db')), 'hub-token worked in the .env folder');
+    assert.ok(!fs.existsSync(path.join(inst.data, 'auth.db')), 'not in data/');
+    const c = hubCli(cwd, ['reset-2fa', 'nobody@example.com']);
+    assert.match(c.stderr + c.stdout, /No account|root/i, 'hub-cli ran');
+    assert.ok(!fs.existsSync(path.join(inst.data, 'auth.db')), 'hub-cli did not use data/ either');
+    assert.match(tokenCli(cwd, ['list']).stdout, /env-only/, 'the same store on the next call');
+    // the key is read lazily and nothing else is kept: the module exports no .env values
+    assert.ok(!JSON.stringify(Object.keys(authMod)).includes('secret-value'));
+  } finally { fs.rmSync(ENV_FILE, { force: true }); fs.rmSync(acct, { recursive: true, force: true }); fs.rmSync(other, { recursive: true, force: true }); }
+});
+
+test('R6-2: a relative HUB_AUTH_DIR (environment or .env) is the same store whatever folder hub-token and hub-cli start from', () => {
+  const a = here(path.join(inst.root, 'cwd-a')), b = here(path.join(inst.root, 'cwd-b'));
+  const store = path.join(inst.inst, 'acct-rel');
+  try {
+    // from the environment
+    const env = { ...cleanEnv(), HUB_AUTH_DIR: 'acct-rel' };
+    assert.equal(resolverIn(a, env), store);
+    assert.equal(resolverIn(b, env), store);
+    // from .env, tools launched from two different folders
+    fs.writeFileSync(ENV_FILE, 'HUB_AUTH_DIR=acct-rel\n', { mode: 0o600 });
+    const t = tokenCli(a, ['create', '--name', 'rel-a', '--scopes', 'status']);
+    assert.equal(t.status, 0, t.stderr + t.stdout);
+    assert.ok(fs.existsSync(path.join(store, 'auth.db')), 'created in <install>/acct-rel');
+    assert.ok(!fs.existsSync(path.join(a, 'acct-rel')) && !fs.existsSync(path.join(b, 'acct-rel')), 'nothing under either working folder');
+    assert.match(tokenCli(b, ['list']).stdout, /rel-a/, 'a command started from the other folder sees the same store');
+    const c = hubCli(b, ['reset-2fa', 'nobody@example.com']);
+    assert.match(c.stderr + c.stdout, /No account|root/i);
+    assert.ok(!fs.existsSync(path.join(b, 'acct-rel')) && !fs.existsSync(path.join(b, 'data')), 'hub-cli left nothing under its working folder');
+  } finally { fs.rmSync(ENV_FILE, { force: true }); fs.rmSync(store, { recursive: true, force: true }); }
+});
+
+test('R6 FU: an outside edit in the moved account folder is journaled as account/users.json (the data/ one stays users.json)', () => {
+  withAuthDir((d) => d, (dir) => {
+    journal.configure({ timers: fakeTimers(), notify: () => {} });
+    rawWrite(path.join(dir, 'users.json'), '{"users":[]}');
+    const w = journal.startWatch({ dataDir: authMod.resolveAuthDir(), intervalMs: 0 });
+    try {
+      w.tick();
+      const n0 = journal.list({ limit: 500 }).filter((x) => x.store === 'files').length;
+      rawWrite(path.join(dir, 'users.json'), '{"users":[{"id":"by-hand"}]}');
+      w.tick();
+      const files = journal.list({ limit: 500 }).filter((x) => x.store === 'files');
+      assert.equal(files.length, n0 + 1);
+      assert.equal(files[0].key, 'files/account/users.json');
+    } finally { w.stop(); journal.configure({ clock: Date.now, timers: { setTimeout, clearTimeout }, notify: null }); }
+  });
+});
+
+// ── R7-1: the .env value beats the environment (as the server loads it); R7-2: an unreadable .env stops everything ─────────────────
+test('R7-1: conflicting .env and environment values: the server\'s own loading sequence, the resolver, hub-token and hub-cli pick the same folder', () => {
+  const A = fs.mkdtempSync(path.join(real(os.tmpdir()), 'sj-r71-env-'));   // named by .env
+  const B = fs.mkdtempSync(path.join(real(os.tmpdir()), 'sj-r71-proc-'));  // named by the launch environment
+  const cwd = here(path.join(inst.root, 'cwd-r71'));
+  const env = { PATH: process.env.PATH, HOME: os.tmpdir(), HUB_AUTH_DIR: B };
+  const nodeE = (code) => spawnSync(process.execPath, ['-e', code], { env, cwd, encoding: 'utf8' });
+  fs.writeFileSync(ENV_FILE, `PORT=1\nHUB_AUTH_DIR=${A}\n`, { mode: 0o600 });
+  try {
+    // seed a member in A so hub-cli finding the account proves it works on A
+    const seed = nodeE(`require(${JSON.stringify(path.join(inst.lib, 'auth'))}).createAuth({dataDir:${JSON.stringify(A)},log:()=>{}}).createUser({login:'r71@example.com',name:'R71',role:'member',password:'r71-long-password-1'})`);
+    assert.equal(seed.status, 0, seed.stderr);
+    // the server's actual sequence (server.js: hubSecrets.loadEnvFile(<install>/.env) at start): the environment HUB_AUTH_DIR after it, and the resolver
+    const seq = nodeE(`const hs=require(${JSON.stringify(path.join(inst.lib, 'hub-secrets'))});hs.loadEnvFile(${JSON.stringify(ENV_FILE)});
+      const path=require('path');const a=require(${JSON.stringify(path.join(inst.lib, 'auth'))});
+      process.stdout.write(JSON.stringify({ server: path.resolve(${JSON.stringify(inst.inst)}, process.env.HUB_AUTH_DIR || 'data'), resolver: a.resolveAuthDir() }))`);
+    assert.equal(seq.status, 0, seq.stderr);
+    const got = JSON.parse(seq.stdout);
+    assert.equal(got.server, A, 'the server ends up on the .env folder');
+    assert.equal(got.resolver, A, 'the resolver names the same one');
+    assert.equal(resolverIn(cwd, env), A, 'the resolver by itself, before any loading');
+    // hub-token
+    const t = spawnSync(process.execPath, [path.join(inst.inst, 'scripts', 'hub-token.js'), 'create', '--name', 'r71', '--scopes', 'status'], { env, cwd, encoding: 'utf8' });
+    assert.equal(t.status, 0, t.stderr + t.stdout);
+    assert.ok(fs.existsSync(path.join(A, 'auth.db')), 'hub-token: the .env folder');
+    assert.ok(!fs.existsSync(path.join(B, 'auth.db')), 'hub-token: not the environment folder');
+    // hub-cli: it finds the account that lives in A only
+    const c = spawnSync(process.execPath, [path.join(inst.inst, 'scripts', 'hub-cli.js'), 'reset-2fa', 'r71@example.com'], { env, cwd, encoding: 'utf8' });
+    assert.ok(!/No account/.test(c.stderr + c.stdout), `hub-cli worked on the .env folder: ${c.stderr}${c.stdout}`);
+    assert.ok(fs.readdirSync(B).length === 0, 'hub-cli left nothing in the environment folder');
+    // an empty .env value is what the server reads too: data/, whatever the environment says
+    fs.writeFileSync(ENV_FILE, 'HUB_AUTH_DIR=\n', { mode: 0o600 });
+    assert.equal(resolverIn(cwd, env), path.join(inst.inst, 'data'));
+    // no .env at all: the environment
+    fs.rmSync(ENV_FILE, { force: true });
+    assert.equal(resolverIn(cwd, env), B);
+    assert.equal(resolverIn(cwd, { PATH: process.env.PATH, HOME: os.tmpdir() }), path.join(inst.inst, 'data'));
+  } finally { fs.rmSync(ENV_FILE, { force: true }); fs.rmSync(A, { recursive: true, force: true }); fs.rmSync(B, { recursive: true, force: true }); }
+});
+
+test('R7-2: an .env that cannot be read (not ENOENT) makes the resolver throw naming it; hub-token and hub-cli print it, exit non-zero and open no store', { skip: typeof process.getuid === 'function' && process.getuid() === 0 ? 'running as root: chmod 000 does not stop root reading' : false }, () => {
+  const cwd = here(path.join(inst.root, 'cwd-r72'));
+  const env = { PATH: process.env.PATH, HOME: os.tmpdir() };
+  fs.writeFileSync(ENV_FILE, 'HUB_AUTH_DIR=/tmp/never-used\n', { mode: 0o600 });
+  fs.chmodSync(ENV_FILE, 0o000);
+  const before = fs.readdirSync(inst.data).sort();
+  try {
+    const r = spawnSync(process.execPath, ['-e', `try{require(${JSON.stringify(path.join(inst.lib, 'auth'))}).resolveAuthDir();console.log('no throw')}catch(e){console.log(e instanceof Error, e.message)}`], { env, cwd, encoding: 'utf8' });
+    assert.ok(r.stdout.startsWith('true '), r.stdout + r.stderr);
+    assert.ok(r.stdout.includes(ENV_FILE), `the message names the unreadable path: ${r.stdout}`);
+    const t = spawnSync(process.execPath, [path.join(inst.inst, 'scripts', 'hub-token.js'), 'list'], { env, cwd, encoding: 'utf8' });
+    assert.notEqual(t.status, 0);
+    assert.ok(t.stderr.includes(ENV_FILE), t.stderr);
+    const c = spawnSync(process.execPath, [path.join(inst.inst, 'scripts', 'hub-cli.js'), 'reset-2fa', 'x@example.com'], { env, cwd, encoding: 'utf8' });
+    assert.notEqual(c.status, 0);
+    assert.ok(c.stderr.includes(ENV_FILE), c.stderr);
+    assert.deepEqual(fs.readdirSync(inst.data).sort(), before, 'no store was opened in data/');
+    assert.ok(!fs.existsSync(path.join('/tmp/never-used', 'auth.db')));
+    // help still works without it
+    assert.equal(spawnSync(process.execPath, [path.join(inst.inst, 'scripts', 'hub-cli.js'), 'help'], { env, cwd, encoding: 'utf8' }).status, 0);
+  } finally { fs.chmodSync(ENV_FILE, 0o600); fs.rmSync(ENV_FILE, { force: true }); }
 });
 
 test('R5-2: a store made with an explicit other folder keeps its journal beside it', () => {

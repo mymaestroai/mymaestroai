@@ -735,7 +735,7 @@ test('G7: the server starts the watch once a minute', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
   assert.match(src, /require\('\.\/lib\/settings-journal'\)/);
   // the install's data/ and the moved account folder (the one resolver, relative values too) are watched, each folder once
-  assert.match(src, /\.startWatches\(\[dataW, require\('\.\/lib\/auth'\)\.resolveAuthDir\(\)\]\)/);
+  assert.match(src, /authW = require\('\.\/lib\/auth'\)\.resolveAuthDir\(\)/); assert.match(src, /\.startWatches\(authW \? \[dataW, authW\] : \[dataW\]\)/);
 });
 
 // ── Round 2 ───────────────────────────────────────────────────────────────

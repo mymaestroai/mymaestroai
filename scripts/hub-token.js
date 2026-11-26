@@ -10,8 +10,9 @@
  *   node scripts/hub-token.js revoke <id>
  *
  * The token is printed once, or with --out written to that file (mode 600) and not printed. The program sends it as the
- * header "Authorization: Bearer hub_…". --data-dir <dir> uses another data folder (tests); without it the absolute HUB_AUTH_DIR is
- * used when set, else the install's data/.
+ * header "Authorization: Bearer hub_…". --data-dir <dir> uses another data folder (tests); without it the account folder is
+ * HUB_AUTH_DIR as the server reads it (the install's .env first, else the environment; relative to the install folder), else the
+ * install's data/. An unreadable .env stops the command with a message naming it.
  */
 const fs = require('fs');
 const path = require('path');
@@ -20,16 +21,23 @@ const { createAuth, TOKEN_SCOPES, resolveAuthDir } = require(path.join(__dirname
 function arg(name, dflt = null) { const i = process.argv.indexOf(`--${name}`); return i > 0 && i + 1 < process.argv.length ? process.argv[i + 1] : dflt; }
 const flag = (name) => process.argv.includes(`--${name}`);
 
-// Default folder: the hub's account folder from the one resolver (lib/auth resolveAuthDir: HUB_AUTH_DIR, a relative value taken against the
-// current folder, else the install's data folder).
+// Default folder: the hub's account folder from the one resolver (lib/auth resolveAuthDir: HUB_AUTH_DIR from the install's .env, else the
+// environment, a relative value taken against the install folder, else the install's data folder).
 function defaultDataDir(env = process.env) { return resolveAuthDir(env); }
-const dataDir = arg('data-dir') ? path.resolve(arg('data-dir')) : defaultDataDir();
+// A .env that exists but cannot be read stops the command here, before any store is opened: guessing the default folder could work on the wrong accounts.
+let dataDir;
+try { dataDir = arg('data-dir') ? path.resolve(arg('data-dir')) : defaultDataDir(); } catch (e) { console.error(e.message); process.exit(1); }
 // This command is a second process on the account file (users.json) and the other protected files: every write it makes there leaves a
 // marker line (lib/settings-journal startCliMarking), so the running hub's stamp watch does not report it as an outside edit.
 try {
   const sj = require(path.join(__dirname, '..', 'lib', 'settings-journal'));
   sj.enterActor({ kind: 'cli', why: 'command line: token' });
-  if (typeof sj.startCliMarking === 'function') sj.startCliMarking({ dataDir });
+  if (typeof sj.startCliMarking === 'function') {
+    // The folder this command works on is marked once. Whether it is the install's data/ or the moved account folder is decided by the
+    // journal by full real path (as hub-cli's sameFolder does), so a link or a second spelling of data/ gets no account/ label and
+    // the same folder is never marked under two names.
+    sj.startCliMarking({ dataDir });
+  }
 } catch { /* an older install without the journal */ }
 const auth = createAuth({ log: () => {}, dataDir });
 const cmd = process.argv[2];

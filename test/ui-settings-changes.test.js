@@ -45,6 +45,7 @@ class El {
   }
   removeChild(c) { const i = this.children.indexOf(c); if (i >= 0) this.children.splice(i, 1); c.parentNode = null; return c; }
   addEventListener(t, fn) { (this.listeners[t] = this.listeners[t] || []).push(fn); }
+  removeEventListener(t, fn) { this.listeners[t] = (this.listeners[t] || []).filter((f) => f !== fn); }
   async click() { for (const fn of [...(this.listeners.click || [])]) await fn({ type: 'click', target: this, preventDefault() {}, stopPropagation() {} }); }
   focus() { this.ownerDocument.activeElement = this; }
   scrollIntoView() { this.scrolled++; }
@@ -259,6 +260,50 @@ test('#settings-for=OPT-xxxx opens the group, scrolls to the row, lights it for 
   const info = p.doc.activeElement;
   assert.ok(info && info.tagName === 'BUTTON' && info.getAttribute('class') === 'st-info' && info.getAttribute('data-rec') === 'OPT-0341', 'the ⓘ has the focus');
   assert.deepStrictEqual(toasts, []);
+});
+
+test('the door scrolls again after the group opens, but not once the person has scrolled meanwhile (wheel, touch or key)', async () => {
+  for (const ev of ['wheel', 'touchstart', 'keydown']) {
+    H.setRecords(JSON.parse(JSON.stringify(REC)));
+    const p = settingsPage();
+    const timers = [];
+    await H.doorFollow('#settings-for=OPT-0341', p.overlay, 'desktop', { opts: { doc: p.doc }, open: () => { p.group.open = true; }, setTimeout: (fn, ms) => timers.push({ fn, ms }) }, 'settings-for');
+    assert.strictEqual(p.row.scrolled, 1, 'the first scroll');
+    for (const fn of p.doc.listeners[ev] || []) fn({});
+    assert.ok((p.doc.listeners[ev] || []).length > 0, `listens for ${ev}`);
+    timers.find((t) => t.ms === 150).fn(); timers.find((t) => t.ms === 450).fn();
+    assert.strictEqual(p.row.scrolled, 1, `no re-scroll after ${ev}`);
+  }
+  // without any scrolling by the person both later scrolls happen
+  H.setRecords(JSON.parse(JSON.stringify(REC)));
+  const p = settingsPage(); const timers = [];
+  await H.doorFollow('#settings-for=OPT-0341', p.overlay, 'desktop', { opts: { doc: p.doc }, setTimeout: (fn, ms) => timers.push({ fn, ms }) }, 'settings-for');
+  timers.find((t) => t.ms === 150).fn(); timers.find((t) => t.ms === 450).fn();
+  assert.strictEqual(p.row.scrolled, 3);
+});
+
+test('R7 FU: the door takes its listeners off at once when the row is gone, and also at the last timer when it is not', async () => {
+  const count = (doc) => Object.values(doc.listeners || {}).reduce((n, a) => n + a.length, 0);
+  // the row goes (the group was re-drawn) before the first later scroll: no scroll, the listeners are off at that timer
+  H.setRecords(JSON.parse(JSON.stringify(REC)));
+  const p = settingsPage(); const timers = [];
+  await H.doorFollow('#settings-for=OPT-0341', p.overlay, 'desktop', { opts: { doc: p.doc }, setTimeout: (fn, ms) => timers.push({ fn, ms }) }, 'settings-for');
+  assert.ok(count(p.doc) > 0, 'listening while the door works');
+  p.row.parentNode.removeChild(p.row);
+  p.row.isConnected = false;   // this file's fake element has none; a real one reports it itself once detached
+  timers.find((t) => t.ms === 150).fn();
+  assert.strictEqual(count(p.doc), 0, 'off as soon as the row is seen gone');
+  assert.strictEqual(p.row.scrolled, 1, 'no scroll to a row that is gone');
+  timers.find((t) => t.ms === 450).fn();   // the last timer after that is harmless
+  assert.strictEqual(count(p.doc), 0);
+  // the row stays: the listeners stay until the last timer
+  H.setRecords(JSON.parse(JSON.stringify(REC)));
+  const q = settingsPage(); const t2 = [];
+  await H.doorFollow('#settings-for=OPT-0341', q.overlay, 'desktop', { opts: { doc: q.doc }, setTimeout: (fn, ms) => t2.push({ fn, ms }) }, 'settings-for');
+  t2.find((t) => t.ms === 150).fn();
+  assert.ok(count(q.doc) > 0, 'still listening after the first timer');
+  t2.find((t) => t.ms === 450).fn();
+  assert.strictEqual(count(q.doc), 0, 'off at the last timer');
 });
 
 test('a record with no row on this surface: Settings stays at the top and the toast says where the setting is', async () => {

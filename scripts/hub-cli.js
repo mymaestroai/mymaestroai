@@ -39,7 +39,12 @@ const cmd = argv[0] || 'help';
 // Everything this command writes to settings, agents or preferences is journaled as "cli" (lib/settings-journal, the same journal
 // file as the running hub's). After each write the store leaves a marker with the file's new stamp, so the running hub, which sees
 // the file change, does not journal the same change again as an outside edit.
+// An install's .env that exists but cannot be read: the account folder is not known. Nothing below opens or marks a store then, and the
+// command stops with the message (see the bottom of this file); help and version still work.
+let authDirError = null;
+try { require(path.join(__dirname, '..', 'lib', 'auth')).resolveAuthDir(); } catch (e) { if (e && e.path) authDirError = e; }
 try {
+  if (authDirError) throw authDirError;
   const sj = require(path.join(__dirname, '..', 'lib', 'settings-journal'));
   sj.enterActor({ kind: 'cli', why: `command line: ${String(cmd).replace(/[^\w-]/g, '').slice(0, 30)}` });
   // The files the hub's stamp watch covers (users.json, connectors.json, modules.json, ...) get a marker line after each write of this
@@ -811,5 +816,6 @@ module.exports = { resetPassword, connectClaude, defaultCheck, readHidden, endHi
 if (require.main === module) (async () => {
   const fn = commands[cmd] || (cmd === '--help' || cmd === '-h' ? commands.help : null);
   if (!fn) { out(`Unknown command "${cmd}".\n`); commands.help(); process.exit(2); }
+  if (authDirError && fn !== commands.help && fn !== commands.version) fail(authDirError.message, 1);   // before any store is opened
   await fn();
 })().catch(e => fail(`Error: ${e.message}`));

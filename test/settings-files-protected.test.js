@@ -248,15 +248,55 @@ test('round 5 follow-ups: bash -s reads stdin, only a real pipe feeds a shell, o
     const d = dec(lead, 'Bash', { command: nest(inner, 3, 6) });
     if (want) assertRefused(d, 'pathological, names a protected file'); else assert.notStrictEqual(d.cls, 'settings_file', 'pathological, no protected name');
   }
-  // a relative HUB_AUTH_DIR is the folder the process's cwd gives
+  // a relative HUB_AUTH_DIR is resolved against the install folder (round 6), never the process's cwd
   const had = process.env.HUB_AUTH_DIR;
   try {
     process.env.HUB_AUTH_DIR = 'accounts';
-    const acct = path.join(process.cwd(), 'accounts');
+    const acct = path.join(INST, 'accounts');
     assert.strictEqual(tp.touchesSettingsFile({ tool: 'Write', input: { file_path: path.join(acct, 'users.json') } }), 'users.json');
     assertRefused(dec(lead, 'Bash', { command: `echo x > ${acct}/users.json` }), 'bash write into the relative account folder');
     assert.strictEqual(tp.touchesSettingsFile({ tool: 'Write', input: { file_path: path.join(acct, 'notes.txt') } }), null);
   } finally { if (had === undefined) delete process.env.HUB_AUTH_DIR; else process.env.HUB_AUTH_DIR = had; }
+});
+
+test('round 6: harmless sibling segments cannot use up the nested-code budget; once it is used up, risky nested code is refused', () => {
+  const sib = (one, n = 70) => Array.from({ length: n }, () => one).join('; ');
+  const evalWrite = `eval 'f=settings; echo x > data/$f.json'`;
+  // run from the install folder, where a relative data/ is the real data folder
+  for (const [label, agent, extra0] of ROLES) {
+    const extra = { ...extra0, cwd: INST };
+    assertRefused(dec(agent, 'Bash', { command: evalWrite }, extra), `${label}: the eval alone`);
+    assertRefused(dec(agent, 'Bash', { command: `${sib(`bash -c ':'`)}; ${evalWrite}` }, extra), `${label}: 70 harmless siblings then eval`);
+    assertRefused(dec(agent, 'Bash', { command: `${sib(`bash -c 'echo $HOME'`)}; ${evalWrite}` }, extra), `${label}: 70 $HOME siblings then eval`);
+    assertRefused(dec(agent, 'Bash', { command: `${sib(`bash -c 'echo $HOME'`)}; eval 'echo x > ${DATA}/users.json'` }, extra), `${label}: 70 $HOME siblings then literal write`);
+  }
+  const ok = `${sib(`bash -c 'make'`)}; bash -c 'echo hi'`;
+  const t0 = process.hrtime.bigint();
+  const hit = tp.touchesSettingsFile({ tool: 'Bash', input: { command: ok }, cwd: cwdOf(lead) });
+  const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+  assert.ok(ms < 1000, `harmless siblings took ${ms} ms`);
+  assert.strictEqual(hit, null, '70 harmless siblings then bash -c echo hi is allowed');
+  for (const [label, agent, extra] of ROLES) assert.notStrictEqual(dec(agent, 'Bash', { command: ok }, extra).cls, 'settings_file', `${label}: allowed`);
+});
+
+test('round 7: budget exhausted on entry refuses risky nested code (a computed path), at every boundary, also in a two-world segment and a variable-built runner', () => {
+  const sib = (n) => Array.from({ length: n }, () => `bash -c 'echo $HOME'`).join('; ');
+  const evalWrite = `eval 'f=settings; echo x > data/$f.json'`;
+  const twoWorlds = `cd /nonexistent-a || cd data; ${evalWrite}`;
+  const varRunner = `r=eval; $r 'f=settings; echo x > data/$f.json'`;
+  const varWorlds = `cd /nonexistent-a || cd data; r=eval; $r 'f=settings; echo x > data/$f.json'`;
+  const extra = { cwd: INST };
+  // each sibling costs one visit and the top-level call one: 62 siblings leaves exactly one visit on entry to the next segment
+  for (const n of [60, 61, 62, 63, 64, 65, 70]) {
+    for (const tail of [evalWrite, twoWorlds, varRunner, varWorlds]) {
+      const command = `${sib(n)}; ${tail}`;
+      for (const [label, agent, extra0] of ROLES) assertRefused(dec(agent, 'Bash', { command }, { ...extra0, ...extra }), `${label}: ${n} siblings then ${tail}`);
+      assert.ok(tp.touchesSettingsFile({ tool: 'Bash', input: { command }, cwd: INST }), `${n} siblings then ${tail}`);
+    }
+  }
+  // harmless code after a used-up budget is still allowed
+  const ok = `${Array.from({ length: 70 }, () => `bash -c 'make'`).join('; ')}; bash -c 'echo hi'`;
+  assert.strictEqual(tp.touchesSettingsFile({ tool: 'Bash', input: { command: ok }, cwd: cwdOf(lead) }), null);
 });
 
 test('blind-cd counts the moved account folder name; an install name counts only at 4+ characters and as a whole path part', () => {
