@@ -1,6 +1,6 @@
 'use strict';
 // The call's Display picker never says "not installed" for a list that is loading or failed (lib/ui-call-display.js):
-// option text per list state, remembered names, back-off retry of a failed list, the Try again button, timers cleared at hang-up.
+// option text per list state, remembered names, back-off retry of a failed list, the Try now button, timers cleared at hang-up.
 // Fake DOM, fake clock, fake players: these tests cannot prove how it looks in a browser.
 const { test } = require('node:test');
 const assert = require('node:assert');
@@ -72,22 +72,22 @@ function world(o) {
 const okFetch = (body) => async () => ({ ok: true, status: 200, json: async () => body });
 const pickerTexts = (w) => w.dom.find('ucd-display')[0].children.map(c => c.textContent);
 const pickerLast = (w) => pickerTexts(w).slice(-1)[0];
-const tryAgain = (w) => w.dom.find('cd-download-retry').filter(b => b.textContent === 'Try again')[0];
+const tryAgain = (w) => w.dom.find('cd-download-retry').filter(b => b.textContent === 'Try now')[0];
 function selectFor(opts) {
   const dom = fakeDom(); const sel = dom.doc.createElement('select');
   CD.fillDisplaySelect(dom.doc, sel, opts);
   return sel.children.map(c => c.textContent);
 }
 
-test('fillDisplaySelect: a stored pack the list lacks reads by list state, never "(not installed)"', () => {
+test('fillDisplaySelect: a stored pack the list lacks reads by list state, never "(not installed)"', () => {   // suffixes: loading / can't check / not here
   const base = { choice: 'pack:owl', packs: [], available: [] };
   assert.strictEqual(selectFor({ ...base, state: 'loading' }).slice(-1)[0], 'Owl · loading');
-  assert.strictEqual(selectFor({ ...base, state: 'failed' }).slice(-1)[0], "Owl · couldn't check");
-  assert.strictEqual(selectFor({ ...base, state: 'ready' }).slice(-1)[0], 'Owl · not on this Maestro');
-  assert.strictEqual(selectFor(base).slice(-1)[0], 'Owl · not on this Maestro', 'an array of packs without a state is ready');
+  assert.strictEqual(selectFor({ ...base, state: 'failed' }).slice(-1)[0], "Owl · can't check");
+  assert.strictEqual(selectFor({ ...base, state: 'ready' }).slice(-1)[0], 'Owl · not here');
+  assert.strictEqual(selectFor(base).slice(-1)[0], 'Owl · not here', 'an array of packs without a state is ready');
   assert.strictEqual(selectFor({ choice: 'pack:owl', packs: [{ id: 'owl', name: 'Barn Owl' }], state: 'ready' }).slice(-1)[0], 'Barn Owl', 'installed: its name, no suffix');
   assert.strictEqual(selectFor({ ...base, available: [{ id: 'owl', name: 'Owl', size: 37000000 }], state: 'ready' }).slice(-1)[0], 'Owl · downloads 37 MB');
-  assert.strictEqual(selectFor({ ...base, state: 'failed', names: { owl: 'Night Owl' } }).slice(-1)[0], "Night Owl · couldn't check", 'a remembered name beats the capitalised id');
+  assert.strictEqual(selectFor({ ...base, state: 'failed', names: { owl: 'Night Owl' } }).slice(-1)[0], "Night Owl · can't check", 'a remembered name beats the capitalised id');
   for (const state of ['loading', 'failed', 'ready']) for (const names of [undefined, { owl: 'Night Owl' }]) {
     for (const t of selectFor({ ...base, state, names })) assert.ok(!/not installed/.test(t), 'no option says not installed: ' + t);
   }
@@ -115,10 +115,10 @@ test('a list that fails twice then answers: the picker says couldn\'t check, the
   const w = world({ prefs: { choice: 'pack:owl' }, fetch });
   w.display.start(); await tick();
   assert.strictEqual(calls, 1); assert.strictEqual(w.display.info().packsState, 'failed');
-  assert.strictEqual(pickerLast(w), "Owl · couldn't check");
+  assert.strictEqual(pickerLast(w), "Owl · can't check");
   assert.ok(/Couldn't reach your Maestro for the character list\. Trying again…/.test(w.display.info().note) && !/not installed/.test(w.display.info().note));
   await w.clk.advance(2900); assert.strictEqual(calls, 1, 'not before 3 s');
-  await w.clk.advance(200); assert.strictEqual(calls, 2); assert.strictEqual(pickerLast(w), "Owl · couldn't check");
+  await w.clk.advance(200); assert.strictEqual(calls, 2); assert.strictEqual(pickerLast(w), "Owl · can't check");
   await w.clk.advance(5000); assert.strictEqual(calls, 2, 'the next wait is 6 s');
   await w.clk.advance(1100); assert.strictEqual(calls, 3);
   assert.strictEqual(w.display.info().packsState, 'ready'); assert.strictEqual(w.display.info().kind, 'pack'); assert.strictEqual(pickerLast(w), 'Owl');
@@ -148,7 +148,7 @@ test('a remembered name is shown while the list loads and after it fails', async
   w.display.release();
 });
 
-test('Try again shows only while the list failed, asks at once and starts the back-off over', async () => {
+test('Try now shows only while the list failed, asks at once and starts the back-off over', async () => {
   let calls = 0, fail = true;
   const fetch = async () => { calls++; if (fail) throw new Error('offline'); return { ok: true, status: 200, json: async () => ({ packs: [OWL] }) }; };
   let hold; const slow = () => new Promise((r) => { hold = r; });
@@ -217,7 +217,7 @@ test('a body that never arrives hits the 10 s deadline: loading, then couldn\'t 
   w.display.start(); await tick();
   assert.strictEqual(pickerLast(w), 'Owl · loading');
   await w.clk.advance(9900); assert.strictEqual(pickerLast(w), 'Owl · loading', 'still waiting before 10 s');
-  await w.clk.advance(200); assert.strictEqual(w.display.info().packsState, 'failed'); assert.strictEqual(pickerLast(w), "Owl · couldn't check");
+  await w.clk.advance(200); assert.strictEqual(w.display.info().packsState, 'failed'); assert.strictEqual(pickerLast(w), "Owl · can't check");
   assert.strictEqual(w.display.info().packsFailKind, 'network');
   await w.clk.advance(3100); assert.strictEqual(calls, 2);
   assert.strictEqual(pickerLast(w), 'Owl'); assert.strictEqual(w.display.info().kind, 'pack');
@@ -239,7 +239,7 @@ test('a 200 without a packs array is a failure, never "not on this Maestro"', as
   let calls = 0;
   const w = world({ prefs: { choice: 'pack:owl' }, fetch: async () => { calls++; return { ok: true, status: 200, json: async () => ({}) }; } });
   w.display.start(); await tick();
-  assert.strictEqual(w.display.info().packsState, 'failed'); assert.strictEqual(pickerLast(w), "Owl · couldn't check");
+  assert.strictEqual(w.display.info().packsState, 'failed'); assert.strictEqual(pickerLast(w), "Owl · can't check");
   assert.strictEqual(w.display.info().packsFailKind, 'server');
   assert.ok(/Your Maestro had a problem sending the character list\. Trying again…/.test(w.display.info().note));
   assert.strictEqual(w.clk.timers.length, 1, 'a retry is scheduled'); assert.ok(!/not on this Maestro/.test(w.display.info().note + pickerLast(w)));
@@ -248,10 +248,10 @@ test('a 200 without a packs array is a failure, never "not on this Maestro"', as
   const ok = await CD.fetchFaces(okFetch({ packs: [] })); assert.deepStrictEqual(ok.available, [], 'a missing available is [] (older hubs)');
 });
 
-test('fetchFaces kinds: 401/403 signin, other non-2xx and unreadable JSON server, a throw network', async () => {
+test('fetchFaces kinds: 401 signin, 403 refused, other non-2xx and unreadable JSON server, a throw network', async () => {
   const kind = (f) => CD.fetchFaces(f).then(() => 'ok', (e) => e.kind);
   assert.strictEqual(await kind(async () => ({ ok: false, status: 401 })), 'signin');
-  assert.strictEqual(await kind(async () => ({ ok: false, status: 403 })), 'signin');
+  assert.strictEqual(await kind(async () => ({ ok: false, status: 403 })), 'refused', '403 is refused, NOT signin');
   assert.strictEqual(await kind(async () => ({ ok: false, status: 500 })), 'server');
   assert.strictEqual(await kind(async () => ({ ok: true, status: 200, json: async () => { throw new Error('bad json'); } })), 'server');
   assert.strictEqual(await kind(async () => { throw new TypeError('Failed to fetch'); }), 'network');
@@ -259,15 +259,115 @@ test('fetchFaces kinds: 401/403 signin, other non-2xx and unreadable JSON server
 
 test('the note says why, by kind, and the picker stays "couldn\'t check"', async () => {
   const cases = [
-    [async () => ({ ok: false, status: 401 }), "Couldn't get the character list: you're signed out here. Reload this page and sign in, then press Try again."],
-    [async () => { throw new Error('x'); }, "Couldn't reach your Maestro for the character list. Trying again…"],
-    [async () => ({ ok: false, status: 502 }), 'Your Maestro had a problem sending the character list. Trying again…'],
+    [async () => ({ ok: false, status: 401 }), "You're signed out here, so the character list couldn't load. Hang up, reload this page and sign in.", false],
+    [async () => { throw new Error('x'); }, "Couldn't reach your Maestro for the character list. Trying again…", true],
+    [async () => ({ ok: false, status: 502 }), 'Your Maestro had a problem sending the character list. Trying again…', true],
+    [async () => ({ ok: false, status: 403 }), 'Your Maestro refused the request for the character list. Trying again…', true],
   ];
-  for (const [fetch, text] of cases) {
+  for (const [fetch, text, button] of cases) {
     const w = world({ prefs: { choice: 'pack:owl' }, fetch }); w.display.start(); await tick();
-    assert.strictEqual(noteText(w), text); assert.strictEqual(pickerLast(w), "Owl · couldn't check"); w.display.release();
+    assert.strictEqual(noteText(w), text); assert.strictEqual(pickerLast(w), "Owl · can't check");
+    assert.strictEqual(!!tryAgain(w) && tryAgain(w).hidden === false, button, 'Try now shows for every kind but signin: ' + text);
+    w.display.release();
   }
 });
+
+test('a 403 is refused: it retries on the back-off timer like network/server (a sign-in refusal does not)', async () => {
+  let calls = 0;
+  const w = world({ prefs: { choice: 'pack:owl' }, fetch: async () => { calls++; return { ok: false, status: 403 }; } }); w.display.start(); await tick();
+  assert.strictEqual(w.display.info().packsFailKind, 'refused'); assert.strictEqual(w.clk.timers.length, 1);
+  await w.clk.advance(3100); assert.strictEqual(calls, 2); assert.strictEqual(w.clk.timers.length, 1);
+  w.display.release();
+});
+
+test('absent (the list answered without the character): the note shows on the call view and docked, with no button', async () => {
+  const w = world({ prefs: { choice: 'pack:owl' }, fetch: okFetch({ packs: [{ id: 'fox', name: 'Fox' }] }) }); w.display.start(); await tick();
+  const text = "The chosen character isn't on this Maestro, so no display is shown. Pick another one; your choice is kept.";
+  assert.strictEqual(noteText(w), text);
+  const box = w.dom.find('ucd-notebox')[0];
+  assert.strictEqual(box.hidden, false); assert.ok(/ucd-absent/.test(box.className), 'docked CSS shows an absent note');
+  assert.strictEqual(tryAgain(w).hidden, true);
+  w.display.release();
+  const css = fs.readFileSync(path.join(__dirname, '..', 'lib', 'ui-call-display.css'), 'utf8');
+  assert.ok(css.includes('.ucd-docked .ucd-notebox:not(.ucd-listfail):not(.ucd-absent) { display: none !important; }'), 'docked hides the wrapper only when neither failed nor absent');
+});
+
+test('loading note and panel words: the single … character everywhere', () => {
+  assert.strictEqual(CD.displayNote(CD.resolveDisplay({ choice: 'pack:owl', packsState: 'loading' })), 'Looking for the chosen character…');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'ui-call-display.js'), 'utf8');
+  assert.ok(!/Looking for the chosen character\.\.\./.test(src) && !/couldn't check'|"Try again'|'Try again'/.test(src), 'old words are gone from the library');
+});
+
+test('docked CSS: a note grows the bar upward and never past the bottom (the bar row is last, the root never shrinks, siblings may shrink)', () => {
+  const css = fs.readFileSync(path.join(__dirname, '..', 'lib', 'ui-call-display.css'), 'utf8');
+  assert.ok(css.includes('.ucd-overlay.ucd-docked { flex-shrink: 0; margin-top: auto; }'), 'the docked root keeps its size and sits at the bottom');
+  assert.ok(css.includes('.ucd-docked .ucd-bar { flex-shrink: 0; }'), 'the bar row never shrinks');
+  assert.ok(css.includes(':where(:has(> .ucd-overlay.ucd-docked) > :not(.ucd-overlay)) { min-height: 0; }'), 'the stage above (the chat) shrinks instead of pushing the bar off screen');
+  assert.ok(/\.ucd-docked \.ucd-notebox \{ position: static; flex: 1 1 100%; \}/.test(css), 'the docked note wrapper is in the flow of the stage (above the bar row), not over it');
+  assert.ok(!/\.ucd-docked \.ucd-notebox[^{]*\{[^}]*position: (absolute|fixed)/.test(css), 'never positioned over the bar');
+});
+
+// ── round 4: the settings panels (run on the page code) ──
+function panelHarness(file, o) {
+  const src = fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
+  const i = src.indexOf('async function voiceDispPaintPanel'), j = src.indexOf('// One download per character id', i);
+  const code = src.slice(i, j);
+  const dom = fakeDom(), clk = clock();
+  const sel = dom.doc.createElement('select'); sel.id = file === 'app.js' ? 'vp-display-c1' : 'vp-display';
+  const wrap = dom.doc.createElement('div'), note = dom.doc.createElement('div'); note.id = file === 'app.js' ? 'vp-display-note-c1' : 'vp-display-note';
+  wrap.appendChild(sel); wrap.appendChild(note); dom.doc.body.appendChild(wrap);
+  const byId = (id) => (id === sel.id ? sel : id === note.id ? note : null);
+  const storage = memStorage({ [CD.DISPLAY_STORE_KEY]: JSON.stringify({ choice: o.choice || 'pack:owl' }) });
+  const voiceDisp = {};
+  const env = { CallDisplay: CD, localStorage: storage, document: dom.doc, fetch: o.fetch, voiceDisp, voiceById: byId, $: byId, chats: { c1: { agent: 'a' } }, current: 'a',
+    voiceDispAgentDefault: () => 'none', voiceDispRefillOnBlur() {}, voiceDispDownloadFor() {}, voiceDispPaintDownload() {} };
+  const names = Object.keys(env);
+  const fn = new Function(...names, code + '; return voiceDispPaintPanel;')(...names.map((k) => env[k]));
+  const paint = (asked) => (file === 'app.js' ? fn('c1', asked) : fn(asked));
+  return { paint, sel, note, voiceDisp, texts: () => sel.children.map((c) => c.textContent) };
+}
+for (const file of ['app.js', 'mobile.js']) {
+  const panelBtn = (h) => h.note.cdListRetry;
+  test(file + ' panel: each failure kind gives its first sentence and a Try now button (not for signin); Try now repaints at once with "Checking…"', async () => {
+    const cases = [
+      [{ ok: false, status: 401 }, "You're signed out here, so the character list couldn't load. Reload this page and sign in.", false],
+      [new Error('down'), "Couldn't reach your Maestro for the character list.", true],
+      [{ ok: false, status: 500 }, 'Your Maestro had a problem sending the character list.', true],
+      [{ ok: false, status: 403 }, 'Your Maestro refused the request for the character list.', true],
+    ];
+    for (const [reply, text, button] of cases) {
+      let calls = 0, hold = null;
+      const h = panelHarness(file, { fetch: async () => { calls++; if (calls === 1) { if (reply instanceof Error) throw reply; return reply; } return new Promise((r) => { hold = r; }); } });
+      await h.paint(); await tick();
+      assert.strictEqual(h.note.textContent, text); assert.strictEqual(h.texts().slice(-1)[0], "Owl · can't check");
+      const b = panelBtn(h);
+      assert.strictEqual(!!b && b.parentNode === h.note.parentNode, button, 'button present for ' + text);
+      if (!button) continue;
+      assert.strictEqual(b.textContent, 'Try now'); assert.strictEqual(b.attrs['aria-label'], 'Try loading the character list now'); assert.strictEqual(b.disabled, false);
+      b.click(); await tick();
+      assert.strictEqual(calls, 2, 'the repaint asked at once');
+      assert.strictEqual(h.note.textContent, 'Checking…'); assert.strictEqual(panelBtn(h).disabled, true, 'disabled while it runs');
+      hold({ ok: true, status: 200, json: async () => ({ packs: [OWL] }) }); await tick();
+      assert.strictEqual(h.note.textContent, ''); assert.strictEqual(panelBtn(h) || null, null, 'the button is gone once the list is in'); assert.strictEqual(h.texts().slice(-1)[0], 'Owl');
+    }
+  });
+  test(file + ' panel: the interim paint reuses the last good list and clears a stale note; "loading" only for a chosen pack that list lacks', async () => {
+    let step = 0, hold = null;
+    const h = panelHarness(file, { choice: 'pack:owl', fetch: async () => { step++; if (step === 1) return { ok: true, status: 200, json: async () => ({ packs: [OWL, { id: 'fox', name: 'Fox' }] }) }; if (step === 2) throw new Error('down'); return new Promise((r) => { hold = r; }); } });
+    await h.paint(); await tick(); assert.deepStrictEqual(h.texts().slice(-2), ['Owl', 'Fox']);
+    await h.paint(); await tick(); assert.ok(/Couldn't reach/.test(h.note.textContent));
+    h.paint(); await tick();   // third paint: the request hangs, the panel is on its interim paint
+    assert.ok(h.texts().includes('Fox'), 'other installed characters stay during the repaint'); assert.ok(h.texts().includes('Owl'), 'the chosen one is in the last good list: not "loading"');
+    assert.ok(!h.texts().some((t) => /loading/.test(t)), 'no loading suffix'); assert.strictEqual(h.note.textContent, '', 'the stale failure note is cleared');
+    hold({ ok: true, status: 200, json: async () => ({ packs: [OWL, { id: 'fox', name: 'Fox' }] }) }); await tick();
+    // a chosen pack the good list lacks: loading
+    let hold2 = null;
+    const g = panelHarness(file, { choice: 'pack:bat', fetch: (() => { let n = 0; return async () => { n++; if (n === 1) return { ok: true, status: 200, json: async () => ({ packs: [OWL] }) }; return new Promise((r) => { hold2 = r; }); }; })() });
+    await g.paint(); await tick(); g.paint(); await tick();
+    assert.ok(g.texts().includes('Owl') && g.texts().slice(-1)[0] === 'Bat · loading', g.texts().join('|'));
+    hold2({ ok: true, status: 200, json: async () => ({ packs: [OWL] }) }); await tick();   // lets the request (and its deadline timer) finish
+  });
+}
 
 test('a sign-in refusal schedules no timer; a focus retries; hang-up leaves no listener', async () => {
   let calls = 0, ok = false;
@@ -279,27 +379,30 @@ test('a sign-in refusal schedules no timer; a focus retries; hang-up leaves no l
   assert.strictEqual(w.win.live(), 2, 'one set only: focus + online on the window (the fake document has no listener methods)');
   ok = true; w.win.fire('online'); await tick(); assert.strictEqual(w.display.info().packsState, 'ready'); assert.strictEqual(w.win.live(), 0, 'removed on success');
   w.display.release();
-  const h = worldWin({ fetch: async () => ({ ok: false, status: 403 }) }); h.display.start(); await tick();
+  const h = worldWin({ fetch: async () => ({ ok: false, status: 401 }) }); h.display.start(); await tick();
   assert.ok(h.win.live() > 0); await h.display.hangUp(); assert.strictEqual(h.win.live(), 0, 'hang-up leaves no listener');
   assert.strictEqual(h.win.counts.add, h.win.counts.remove);
 });
 
-test('a sign-in refusal keeps one set of listeners however often it fails; Try again asks at once', async () => {
+test('a sign-in refusal has no Try now button and keeps one set of listeners however often a focus fires', async () => {
   let calls = 0;
   const w = worldWin({ fetch: async () => { calls++; return { ok: false, status: 401 }; } }); w.display.start(); await tick();
   const first = w.win.live();
-  const b = tryAgain(w); assert.strictEqual(b.hidden, false); b.click(); await tick(); b.click(); await tick();
-  assert.strictEqual(calls, 3); assert.strictEqual(w.win.live(), first, 'never two sets');
+  assert.strictEqual(tryAgain(w).hidden, true, 'no Try now while signed out');
+  w.win.fire('focus'); await tick(); w.win.fire('focus'); await tick();
+  assert.strictEqual(calls, 3); assert.strictEqual(w.win.live(), first, 'never two sets'); assert.strictEqual(w.clk.timers.length, 0);
   w.display.release(); assert.strictEqual(w.win.live(), 0);
 });
 
-test('displayNote: "Trying again…" only where something retries; panels say to reopen', () => {
+test('displayNote: "Trying again…" only where something retries; panels give the first sentence alone', () => {
   const r = (failKind) => CD.resolveDisplay({ choice: 'pack:owl', packs: [], packsState: 'failed', packsFailKind: failKind });
   assert.strictEqual(CD.displayNote(r('network'), { retrying: true }), "Couldn't reach your Maestro for the character list. Trying again…");
-  assert.strictEqual(CD.displayNote(r('network'), { retrying: false }), "Couldn't reach your Maestro for the character list. Reopen this panel to try again.");
-  assert.strictEqual(CD.displayNote(r('server')), 'Your Maestro had a problem sending the character list. Reopen this panel to try again.');
-  assert.strictEqual(CD.displayNote(r('signin'), { retrying: false }), "Couldn't get the character list: you're signed out here. Reload this page and sign in, then reopen this panel.");
-  assert.strictEqual(CD.displayNote(r('signin'), { retrying: true }), "Couldn't get the character list: you're signed out here. Reload this page and sign in, then press Try again.");
+  assert.strictEqual(CD.displayNote(r('network'), { retrying: false }), "Couldn't reach your Maestro for the character list.");
+  assert.strictEqual(CD.displayNote(r('server')), 'Your Maestro had a problem sending the character list.');
+  assert.strictEqual(CD.displayNote(r('refused'), { retrying: true }), 'Your Maestro refused the request for the character list. Trying again…');
+  assert.strictEqual(CD.displayNote(r('refused')), 'Your Maestro refused the request for the character list.');
+  assert.strictEqual(CD.displayNote(r('signin'), { retrying: false }), "You're signed out here, so the character list couldn't load. Reload this page and sign in.");
+  assert.strictEqual(CD.displayNote(r('signin'), { retrying: true }), "You're signed out here, so the character list couldn't load. Hang up, reload this page and sign in.");
   assert.strictEqual(CD.displayNote(r('signin')), CD.displayNote(r('signin'), { retrying: false }), 'default: nothing retries');
 });
 
@@ -324,7 +427,7 @@ test('a focus after a sign-in refusal shows "Checking…" until the answer; an a
   const w = worldWin({ fetch }); w.display.start(); await tick();
   assert.ok(/signed out here/.test(noteText(w)));
   w.win.fire('focus'); await tick();
-  assert.strictEqual(noteText(w), 'Checking…'); assert.strictEqual(tryAgain(w).disabled, true);
+  assert.strictEqual(noteText(w), 'Checking…'); assert.strictEqual(tryAgain(w).hidden, true, 'still no button for a sign-in refusal');
   hold({ ok: true, status: 200, json: async () => ({ packs: [OWL] }) }); await tick();
   assert.strictEqual(w.display.info().packsState, 'ready'); assert.strictEqual(tryAgain(w).hidden, true);
   w.display.release();
@@ -383,4 +486,21 @@ test('Try again sits in the note\'s wrapper right after the note; docked, a fail
   w.display.release();
   const ok = world({ prefs: { choice: 'pack:owl' }, fetch: okFetch({ packs: [OWL] }) }); ok.display.start(); await tick();
   const b2 = ok.dom.find('ucd-notebox')[0]; assert.ok(!/ucd-listfail/.test(b2.className)); assert.strictEqual(b2.hidden, true); ok.display.release();
+});
+
+test('settings panels: a failed list after a good one shows the choice as can\'t check, and only the newest answer updates the cache (both pages)', () => {
+  const fs = require('fs');
+  for (const f of ['app.js', 'mobile.js']) {
+    const src = fs.readFileSync(require('path').join(__dirname, '..', f), 'utf8');
+    const i = src.indexOf('function voiceDispPaintPanel');
+    assert.ok(i > 0, f + ': panel paint found');
+    const body = src.slice(i, src.indexOf('\n}', i) > 0 ? i + 6000 : undefined);
+    const tryLine = body.slice(body.indexOf('await CallDisplay.fetchFaces'));
+    const catchPart = tryLine.slice(tryLine.indexOf('catch (e)'), tryLine.indexOf('\n'));
+    assert.match(catchPart, /packs = \[\]; available = \[\];/, f + ': the failure path drops the cached list');
+    assert.ok(!/lastGood/.test(tryLine.slice(0, tryLine.indexOf('catch (e)'))), f + ': the cache is not written before the freshness check');
+    const gen = body.indexOf('a newer paint started meanwhile');
+    const cache = body.indexOf("if (state === 'ready') voiceDisp.lastGood");
+    assert.ok(gen > 0 && cache > gen, f + ': the cache is written after the freshness check');
+  }
 });

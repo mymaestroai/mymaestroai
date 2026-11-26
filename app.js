@@ -19985,7 +19985,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         CallDisplay.fillDisplaySelect(document, sel, ent.args);
       }, { once: true });
     }
-    async function voiceDispPaintPanel(chatId) {
+    async function voiceDispPaintPanel(chatId, asked) {   // asked: the person pressed Try now (the note says "Checking…" while it runs)
       if (typeof CallDisplay === 'undefined') return;
       const ids = [`vp-display-${chatId}`, `vcb-display-${chatId}`];   // the voice panel's select and the call bar's
       const sels = ids.map((i) => voiceById(i)).filter(Boolean);
@@ -19998,25 +19998,37 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       paintBoxes(CallDisplay.loadDisplayPrefs(localStorage));
       if (!voiceDisp.paintGen) voiceDisp.paintGen = new Map();
       const my = (voiceDisp.paintGen.get(chatId) || 0) + 1; voiceDisp.paintGen.set(chatId, my);
-      let packs = [], available = [], state = 'loading', failKind = null;
+      // the last good list on this page (kept when a list arrives): an interim paint reuses it, so other installed characters never vanish during a repaint
+      const good = voiceDisp.lastGood;
+      let packs = good ? good.packs : [], available = good ? good.available : [], state = 'loading', failKind = null;
       const fillAll = (prefs) => {
         const names = CallDisplay.loadPackNames(localStorage);
+        const shown = state === 'loading' && good && (!prefs.choice.startsWith('pack:') || packs.some((p) => 'pack:' + p.id === prefs.choice) || available.some((a) => 'pack:' + a.id === prefs.choice)) ? 'ready' : state;   // "loading" only for a chosen pack the last good list lacks
         for (const sel of sels) {
           if (voiceById(sel.id) !== sel) continue;   // rebuilt meanwhile
-          const args = { choice: prefs.choice, packs, available, state, names };
+          const args = { choice: prefs.choice, packs, available, state: shown, names };
           if (sel === document.activeElement) { voiceDispRefillOnBlur(sel, args, () => voiceById(sel.id) === sel && voiceDisp.paintGen.get(chatId) === my); continue; }   // an open picker is not refilled now; on blur with the latest result
           CallDisplay.fillDisplaySelect(document, sel, args);
         }
       };
       fillAll(CallDisplay.loadDisplayPrefs(localStorage));   // paint once as "loading" so the panel never shows a stale picker while the list is awaited
-      try { const got = await CallDisplay.fetchFaces((...a) => fetch(...a)); packs = got.packs; available = got.available; state = 'ready'; CallDisplay.rememberPackNames(localStorage, got); } catch (e) { state = 'failed'; failKind = e && e.kind; }
+      const note0 = voiceById(`vp-display-note-${chatId}`);
+      if (note0) {   // a stale note never stays through the loading paint; after Try now it says "Checking…" with the button disabled
+        note0.textContent = asked === true ? 'Checking…' : '';
+        CallDisplay.paintListRetry(document, note0, asked === true, { checking: true });
+      }
+      try { const got = await CallDisplay.fetchFaces((...a) => fetch(...a)); packs = got.packs; available = got.available; state = 'ready'; CallDisplay.rememberPackNames(localStorage, got); } catch (e) { state = 'failed'; failKind = e && e.kind; packs = []; available = []; }   // a failed list shows the chosen character as "can't check", never the cached entry
       if (voiceDisp.paintGen.get(chatId) !== my) return;   // a newer paint started meanwhile: an older answer never puts back an older choice
+      if (state === 'ready') voiceDisp.lastGood = { packs, available };   // only the newest answer updates the cache the interim paint reuses
       const prefs = CallDisplay.loadDisplayPrefs(localStorage);   // read after the wait: a choice made meanwhile counts
       paintBoxes(prefs);
       fillAll(prefs);
       const note = voiceById(`vp-display-note-${chatId}`);
       const resolved = CallDisplay.resolveDisplay({ choice: prefs.choice, agentDefault: voiceDispAgentDefault(agent), packs, available, packsState: state, packsFailKind: failKind });
-      if (note) note.textContent = CallDisplay.displayNote(resolved, { retrying: false });   // nothing retries here: the panel says to reopen it
+      if (note) {   // nothing retries by itself here: a failed list (not a sign-in one) gets a Try now button that repaints at once
+        note.textContent = CallDisplay.displayNote(resolved, { retrying: false });
+        CallDisplay.paintListRetry(document, note, resolved.listFailed === true && failKind !== 'signin', { checking: false, onClick: () => voiceDispPaintPanel(chatId, true) });
+      }
       // a character that is on the hub's list but not installed here is downloaded now (the one download per id is shared by the whole page); its progress shows under the note
       if (resolved.downloadable === true && resolved.wanted) {
         const a = available.find((x) => x.id === resolved.wanted);

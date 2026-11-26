@@ -965,7 +965,7 @@ test('the unobtrusive note appears in the view and the selector lists Follow / N
   const dom = fakeDom(); const sel = dom.doc.createElement('select'); sel.appendChild(dom.doc.createElement('option'));
   CD.fillDisplaySelect(dom.doc, sel, { choice: 'pack:ghost', packs: PACKS });
   assert.deepStrictEqual(sel.children.map(o => o.value), ['follow', 'none', 'orb', 'pack:owl', 'pack:plain', 'pack:ghost']);
-  assert.strictEqual(sel.children[3].textContent, 'Owl <b>x</b>', 'names are text'); assert.strictEqual(sel.children[5].textContent, 'Ghost · not on this Maestro'); assert.strictEqual(sel.value, 'pack:ghost');
+  assert.strictEqual(sel.children[3].textContent, 'Owl <b>x</b>', 'names are text'); assert.strictEqual(sel.children[5].textContent, 'Ghost · not here'); assert.strictEqual(sel.value, 'pack:ghost');
   CD.fillDisplaySelect(dom.doc, sel, { choice: 'orb', packs: [] });
   assert.deepStrictEqual(sel.children.map(o => o.value), ['follow', 'none', 'orb']); assert.strictEqual(sel.value, 'orb');
 });
@@ -1759,7 +1759,7 @@ test('docked CSS: the page\'s bar hidden, Back to chat and Captions hidden, the 
   assert.match(css, /\.ucd-overlay\.ucd-docked \{ position: relative; inset: auto; z-index: auto;/);
   assert.match(css, /\.ucd-docked \.ucd-bar \.ucd-back, \.ucd-docked \.ucd-bar \.ucd-caps \{ display: none !important; \}/);
   assert.match(css, /\.ucd-docked \.ucd-host, \.ucd-docked \.ucd-caption/);
-  assert.match(css, /\.ucd-docked \.ucd-notebox:not\(\.ucd-listfail\) \{ display: none !important; \}/, 'docked, the note is hidden unless the character list failed');
+  assert.match(css, /\.ucd-docked \.ucd-notebox:not\(\.ucd-listfail\):not\(\.ucd-absent\) \{ display: none !important; \}/, 'docked, the note is hidden unless the character list failed or the character is absent');
   assert.match(read('mobile.js'), /dock: \(\) => \$\('composer'\),/, 'the phone docks in place of its composer');
   assert.match(read('app.js'), /dock: \(\) => \{ const i = voiceById\(`input-\$\{chatId\}`\); return i \? i\.closest\('\.input-area'\) : null; \},/, 'the desktop in place of that chat\'s message box');
 });

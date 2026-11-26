@@ -115,7 +115,12 @@ body:has(> .ucd-overlay) .voice-sheet.open { z-index: 10005; }
    Docked, the note is hidden unless the list failed; then its text and the button show on their own line. */
 .ucd-pack-retry[hidden] { display: none; }
 .ucd-docked .ucd-notebox { position: static; flex: 1 1 100%; }
-.ucd-docked .ucd-notebox:not(.ucd-listfail) { display: none !important; }
+.ucd-docked .ucd-notebox:not(.ucd-listfail):not(.ucd-absent) { display: none !important; }
+/* a note in the docked bar grows the bar upward (the chat above shrinks), never past the window's bottom: the bar row stays the last thing in the root,
+   the root never shrinks, and the chat column's other children may shrink below their content */
+.ucd-overlay.ucd-docked { flex-shrink: 0; margin-top: auto; }
+.ucd-docked .ucd-bar { flex-shrink: 0; }
+:where(:has(> .ucd-overlay.ucd-docked) > :not(.ucd-overlay)) { min-height: 0; }
 .ucd-docked .ucd-note { color: var(--text, #e8ecf1); opacity: 1; text-shadow: none; }
 .ucd-docked .ucd-pack-retry { color: var(--text, #e8ecf1); border-color: currentColor; background: transparent; }
 .cd-download-panel { display: block; width: 100%; max-width: 320px; height: 6px; margin-top: 4px; }   /* the same bar in the voice panel / sheet */
