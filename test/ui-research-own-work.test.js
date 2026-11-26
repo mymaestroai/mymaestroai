@@ -940,3 +940,21 @@ test('R10: the real research messages (built by lib/research.js) give the row it
     assert.equal(i.note, '“Which heat pump brands are most reliable?”');
   }
 });
+
+test('review r11: every message form lib/research.js builds gives its own row label and keeps the question (finished, failed, interrupted)', () => {
+  const research = require('../lib/research.js');
+  const lib = require('../lib/ui-auto-turns.js');
+  const q = 'Which supplier? The "cheap" one';
+  const row = (content) => lib.autoInfoOf({ role: 'user', content, origin: { kind: 'research_report', from: 'hub' } });
+  const forms = [
+    [research.reportMessage({ id: 'dr-0a1b2c3d', question: q, report: 'All done.' }), 'Research finished'],
+    [research.reportMessage({ id: 'dr-0a1b2c3d', question: q, failed: 'no sources' }), 'Research failed'],
+    [research.reportMessage({ id: 'dr-0a1b2c3d', question: q, interrupted: true, report: 'Not done: the last steps.' }), 'Research interrupted'],
+  ];
+  for (const [msg, label] of forms) {
+    const i = row(msg);
+    assert.equal(i.label, label, msg.slice(0, 60));
+    assert.equal(i.note, '“' + q + '”', msg.slice(0, 60));
+  }
+  for (const src of [app, mob, read('lib/ui-auto-turns.js')]) assert.ok(src.includes('(finished|failed|interrupted|stopped|made thorough)'), 'all three copies know the interrupted form');
+});

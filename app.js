@@ -11601,7 +11601,7 @@
         // A research turn says what it is once: the row reads "Research finished" (or failed / stopped / made thorough), the time, then the question in
         // quotes (never the label again), and no "from …" line follows the reply. Both come from the turn's own message, never from the origin.
         if (o.kind === 'research_report') {
-          const rm = /^\[Deep research (finished|failed|stopped|made thorough)\] "([\s\S]*?)" \((?:id )?dr-[0-9a-f]{8}/.exec(typeof entry.content === 'string' ? entry.content.trimStart() : '');
+          const rm = /^\[Deep research (finished|failed|interrupted|stopped|made thorough)\] "([\s\S]*?)" \((?:id )?dr-[0-9a-f]{8}/.exec(typeof entry.content === 'string' ? entry.content.trimStart() : '');
           let note = '';
           if (rm) {
             label = 'Research ' + rm[1];
