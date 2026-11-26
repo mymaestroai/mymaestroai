@@ -150,6 +150,10 @@ test('a refusal from Google ends that sign-in', async () => {
 test('an expired sign-in is refused and gone', async () => {
   const s = await G.startSignIn({ listener: false, open: false });
   G._test.expireNow();
+  // the deadline passed on file too (a deadline still ahead on file is a retry, not an expiry)
+  const Database = require('better-sqlite3');
+  const db = new Database(require('node:path').join(require('node:path').dirname(G.TOKEN_PATH), 'gmail-signin.db'));
+  try { db.prepare('UPDATE pending SET expires_at = ?').run(Date.now() - 1); } finally { db.close(); }
   const r = await G.submitPastedAddress(`http://localhost:19877/callback?state=${stateOf(s.url)}&code=C`);
   assert.equal(r.reason, 'expired');
   assert.equal(G.pendingView(), null);

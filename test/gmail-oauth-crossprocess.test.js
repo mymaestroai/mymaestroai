@@ -499,3 +499,69 @@ test('follow-up: a newer sign-in found in the file ends the old in-memory attemp
   await tick();
   assert.equal(settled, 'replaced', 'the old attempt was rejected');
 });
+
+const heading = (page) => (/<h2>([^<]*)<\/h2>/.exec(page) || [])[1];
+
+test('r6: the browser page heading is neutral when the outcome is claimed elsewhere or replaced, and a failure only when confirmed', async () => {
+  // claimed by another process
+  {
+    const A = fresh(); A._test.setOpener(async () => false);
+    const a = await A.startSignIn({ listener: false, open: false });
+    a.promise.catch(() => {});
+    const B = fresh();
+    let release;
+    B._test.setPostForm(() => new Promise((res) => { release = () => res({ status: 200, json: { access_token: 'AT-r6', refresh_token: 'RT-r6', expires_in: 3600 } }); }));
+    const pasting = B.finishWithPastedAddress(cb(stateOf(a.url), 'K'));
+    await tick(60);
+    const page = await callbackPage(A, `state=${stateOf(a.url)}&error=access_denied`);
+    assert.equal(heading(page), 'Gmail sign-in', 'claimed: neutral heading');
+    assert.ok(page.includes(CLAIMED_MSG));
+    release(); await pasting;
+  }
+  // replaced by a newer row
+  {
+    const A = fresh(); A._test.setOpener(async () => false);
+    const a = await A.startSignIn({ listener: false, open: false });
+    a.promise.catch(() => {});
+    setRow(A, { id: 'newer6', state: 'ns', verifier: 'nv', expiresAt: Date.now() + 60000, used: false });
+    const page = await callbackPage(A, `state=${stateOf(a.url)}&error=access_denied`);
+    assert.equal(heading(page), 'Gmail sign-in', 'replaced: neutral heading');
+  }
+  // confirmed refusal
+  {
+    const A = fresh(); A._test.setOpener(async () => false);
+    const a = await A.startSignIn({ listener: false, open: false });
+    a.promise.catch(() => {});
+    const page = await callbackPage(A, `state=${stateOf(a.url)}&error=access_denied`);
+    assert.match(heading(page), /not connected/);
+  }
+});
+
+test('r6: decideEnd returns the distinct reason for removed, claimed, replaced', async () => {
+  const A = fresh(); A._test.setOpener(async () => false);
+  const a = await A.startSignIn({ listener: false, open: false });
+  a.promise.catch(() => {});
+  const p = A._test.current();
+  setRow(A, { id: 'other6', state: 'ns', verifier: 'nv', expiresAt: Date.now() + 60000, used: false });
+  assert.equal((await A._test.decideEnd(p, false)).reason, 'replaced');
+  setRow(A, { id: p.id, state: p.state, verifier: p.verifier, expiresAt: Date.now() + 60000, used: true });
+  assert.equal((await A._test.decideEnd(p, false)).reason, 'claimed');
+  setRow(A, { id: p.id, state: p.state, verifier: p.verifier, expiresAt: Date.now() + 60000, used: false });
+  assert.equal((await A._test.decideEnd(p, false)).reason, 'removed');
+});
+
+test('r6: the guarded delete touches no row while the row is still unused (clock moved back): retry, waiter stays alive', async () => {
+  const A = fresh(); A._test.setOpener(async () => false);
+  const a = await A.startSignIn({ listener: false, open: false });
+  let aSettled = null;
+  a.promise.then(() => { aSettled = 'resolved'; }, (e) => { aSettled = e.message; });
+  A._test.expireNow();   // this process thinks the deadline passed; the file row's deadline is still ahead
+  const out = await A.finishWithPastedAddress(cb(stateOf(a.url), 'K'));
+  await tick();
+  assert.equal(out.ok, false);
+  assert.equal(out.reason, 'retry');
+  assert.equal(out.message, 'Please try again in a moment.');
+  assert.equal(aSettled, null, 'the waiter is still waiting');
+  assert.ok(readFile(A) && readFile(A).used === false, 'the row is still there');
+  assert.notEqual(A.lastResult() && A.lastResult().state, 'failed');
+});
