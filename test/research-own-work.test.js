@@ -58,7 +58,8 @@ function load({ ons = ['deep-research', 'research-own-work'], settings = {}, age
   };
   const ctx = vm.createContext({
     require: (m) => { if (!(m in mods)) throw new Error('unexpected require ' + m); return mods[m]; },
-    temporalWorkers: { isVirtual: () => false, noteFor: () => '' },
+    temporalWorkers: { isVirtual: () => false, noteFor: () => '', getVirtual: () => null },
+    access: require(path.join(ISO.inst, 'lib', 'access.js')),
     handOffOfTurn: () => null,
     hubAuthMod: { getAuth: () => ({ hasUsers: () => true, admins: () => [{ id: 'u_owner', createdAt: '2026-01-01' }] }) },
     adminIdSet: () => new Set(['u_owner']),
@@ -78,7 +79,7 @@ function load({ ons = ['deep-research', 'research-own-work'], settings = {}, age
   });
   vm.runInContext(SRC.slice(a, b) + `
 this.run = runDeepResearch; this.guidance = researchGuidanceFor; this.setRunner = (r) => { _researchRunner = r; }; this.statusFor = researchStatusFor; this.capsToday = researchCapsToday;
-this.waitSeconds = researchOfferWaitSeconds; this.agentCaps = researchAgentCaps; this.onProgress = researchOnProgress; this.view = researchRunView; this.stopRun = researchStop; this.upgradeRun = researchUpgrade; this.runAgent = researchRunAgent;`, ctx);
+this.waitSeconds = researchOfferWaitSeconds; this.agentCaps = researchAgentCaps; this.onProgress = researchOnProgress; this.view = researchRunView; this.stopRun = researchStop; this.upgradeRun = researchUpgrade; this.runAgent = researchRunAgent; this.eventVisible = researchEventVisible;`, ctx);
   let n = 0;
   ctx.setRunner({
     start: (x) => { if (!startOk) return { ok: false, error: 'engine said no' }; started.push(x); n += 1; return { ok: true, id: 'dr-0000000' + n }; },
@@ -1182,4 +1183,137 @@ test('S9: a stopped run is sent once with state stopped and active false; upgrad
   const th = startAuto(T.runner, { level: 'thorough', startedBy: 'always', reason: '' });
   await tick();
   assert.equal(published.filter((e) => e.p.id === th.id)[0].p.upgradable, false, 'a thorough run is not');
+});
+
+// ── review round 3 ──
+// T1: a research_progress event reaches a person only while the run is current for the agent in the event and they may see that agent now
+test('T1: researchEventVisible drops an event of a replaced agent\'s run and keeps one of a current run; a member needs access now; other types pass', async () => {
+  let stamp = 'stamp-1';
+  const { runner } = makeRunner({ stampOf: () => stamp });
+  const r = startAuto(runner, { question: 'A private question?' });
+  await tick();
+  const agents = [{ name: 'sam-agent', owner: 'u_sam' }];
+  const L = load({ agents });
+  L.ctx.setRunner(runner);
+  const ev = { type: 'research_progress', agent: 'sam-agent', id: r.id, state: 'running' };
+  const sam = { id: 'u_sam', role: 'member' };
+  const other = { id: 'u_other', role: 'member' };
+  assert.equal(L.ctx.eventVisible(ev, sam, false), true, 'the owner of a current run');
+  assert.equal(L.ctx.eventVisible(ev, other, false), false, 'a member with no access to the agent');
+  assert.equal(L.ctx.eventVisible(ev, other, true), true, 'an admin');
+  assert.equal(L.ctx.eventVisible({ ...ev, agent: 'someone-else' }, sam, true), false, 'the run belongs to another agent name');
+  assert.equal(L.ctx.eventVisible({ ...ev, id: 'dr-ffffffff' }, sam, true), false, 'no such run any more');
+  assert.equal(L.ctx.eventVisible({ type: 'agent_updated', agent: 'sam-agent' }, other, false), true, 'other types are not this filter\'s');
+  stamp = 'stamp-2';   // the name now belongs to a new agent
+  assert.equal(L.ctx.eventVisible(ev, sam, false), false, 'a replaced agent: the old run\'s event is dropped');
+  assert.equal(L.ctx.eventVisible(ev, sam, true), false, 'also for an admin');
+});
+
+test('T1: server.js passes researchEventVisible as the /api/events eventFilter for people only', () => {
+  const m = SERVER.match(/events\.subscribe\(req, res, \{[^\n]*\}\);/);
+  assert.ok(m, 'the people subscribe call');
+  assert.match(m[0], /eventFilter: \(ev\) => ev\.type !== 'research_progress' \|\| require\('\.\/lib\/sdk-chat'\)\.researchEventVisible\(ev, req\.hubUser, isAdmin\)/);
+  assert.match(SERVER, /if \(req\.hubService\) return require\('\.\/lib\/hub-events'\)\.events\.subscribe\(req, res\);/);
+});
+
+// T2: a run is saved before anything happens
+const FULL_DISK = 'Could not save the research run, so it was not started; try again in a few minutes.';
+function failingStore(state) {
+  const saved = [];
+  return { saved, load: () => [], save: (runs) => { if (state.fail) throw new Error('ENOSPC'); saved.push(runs.map((r) => ({ id: r.id, state: r.state }))); } };
+}
+
+test('T2: a store whose save throws: start answers ok false, nothing is added or emitted, nothing executes', async () => {
+  const state = { fail: true };
+  const store = failingStore(state);
+  const emitted = [];
+  const logs = [];
+  const { runner, spawns } = makeRunner({ store, onProgress: (r) => emitted.push(r.id), log: (l) => logs.push(l) });
+  const r = startAuto(runner);
+  assert.deepEqual(r, { ok: false, error: FULL_DISK });
+  await tick(); await tick();
+  assert.deepEqual(runner.list(), []);
+  assert.equal(emitted.length, 0);
+  assert.equal(spawns.length, 0);
+  assert.ok(logs.some((l) => /could not save a new run: ENOSPC/.test(l)));
+  state.fail = false;
+  assert.equal(startAuto(runner).ok, true, 'once the disk has room, the same start works');
+  await tick();
+  assert.equal(runner.list().length, 1);
+});
+
+test('T2: upgrade with a store that cannot save: the quick run keeps running (not aborted), no thorough run exists, 409 with the reason', async () => {
+  const state = { fail: false };
+  const store = failingStore(state);
+  const emitted = [];
+  const { runner, spawns } = makeRunner({ store, onProgress: (r) => emitted.push(`${r.id}:${r.state}`) });
+  const q = startAuto(runner);
+  assert.equal(q.ok, true);
+  await tick();
+  const before = emitted.length;
+  const spawnsBefore = spawns.length;
+  state.fail = true;
+  const out = runner.upgrade(q.id, { by: 'u_sam' });
+  assert.equal(out.ok, false);
+  assert.equal(out.status, 409);
+  assert.equal(out.error, `A thorough run could not start: ${FULL_DISK}`);
+  await tick(); await tick();
+  assert.equal(runner.get(q.id).state, 'running');
+  assert.equal(runner.get(q.id).upgradedTo, undefined);
+  assert.equal(runner.list().length, 1, 'no thorough run');
+  assert.equal(emitted.length, before, 'nothing emitted');
+  assert.equal(spawns.length, spawnsBefore, 'nothing dispatched, the quick run was not aborted');
+  // with room again the upgrade saves the retirement and the new run in one write
+  state.fail = false;
+  const ok = runner.upgrade(q.id, { by: 'u_sam' });
+  assert.equal(ok.ok, true);
+  const last = store.saved[store.saved.length - 1];
+  assert.deepEqual(last.map((x) => x.state).sort(), ['running', 'stopped']);
+  assert.equal(last.find((x) => x.id === q.id).state, 'stopped');
+});
+
+test('T2: a snapshot whose save failed is never written later by a count', () => {
+  const dir = tmpDir();
+  const file = path.join(dir, 'research-runs.json');
+  const store = research.createRunStore({ file });
+  const run = (id) => ({ id, agent: 'sam-agent', subQuestions: ['a', 'b'], state: 'running' });
+  store.save([run('dr-good0001')]);
+  // a directory where the temporary file goes makes the write fail
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.mkdirSync(tmp);
+  assert.throws(() => store.save([run('dr-good0001'), run('dr-lost0002')]));
+  fs.rmdirSync(tmp);
+  store.countAgentStart('sam-agent');
+  const d = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.deepEqual(d.runs.map((r) => r.id), ['dr-good0001'], 'the failed snapshot is not in the file');
+  assert.equal(Object.values(d.agentStarts)[0].install, 1);
+});
+
+// T3: a start that relies on the stored Always re-checks it, also when it came from an Always offer
+test('T3: an Always offer approves, then the choice becomes never or ask before the start: no run, the changed text', async () => {
+  for (const later of ['never', 'ask']) {
+    const L = load();
+    L.prefs.setChoice('u_owner', 'always');
+    L.hubTurn('sam-agent');
+    await L.call('sam-agent', { action: 'offer', question: 'Which judge is best?' });
+    L.prefs.setChoice('u_owner', later);
+    assert.equal(await startQ(L), CHANGED_TEXT, later);
+    assert.equal(L.started.length, 0, later);
+  }
+});
+
+test('T3: an Always offer, the choice and level unchanged: the run starts; a thorough Always offer whose level changed does not', async () => {
+  const L = load();
+  L.prefs.setChoice('u_owner', 'always');
+  L.hubTurn('sam-agent');
+  await L.call('sam-agent', { action: 'offer', question: 'Which judge is best?' });
+  assert.match(await startQ(L), /^Started/);
+  assert.equal(L.started.length, 1);
+  const T = load();
+  T.prefs.setChoice('u_owner', 'always'); T.prefs.setAlwaysLevel('u_owner', 'thorough');
+  T.hubTurn('sam-agent');
+  await T.call('sam-agent', { action: 'offer', question: 'Which judge is best?' });
+  T.prefs.setAlwaysLevel('u_owner', 'quick');
+  assert.equal(await startQ(T, { level: 'thorough' }), CHANGED_TEXT);
+  assert.equal(T.started.length, 0);
 });
