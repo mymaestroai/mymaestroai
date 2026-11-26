@@ -131,6 +131,7 @@
   [hidden] + .st-info, [style*="display:none"] + .st-info, [style*="display: none"] + .st-info { display: none; }   /* an ⓘ after a control that is not shown is not shown either */
   .st-info:hover { color: var(--as-text); border-color: var(--as-dim-999); }
   .st-info:focus-visible, .st-help-x:focus-visible, .st-help-ask:focus-visible { outline: 2px solid var(--as-accent); outline-offset: 2px; }
+  .st-door-hit { background: var(--as-overlay-8); border-radius: 6px; }   /* the row a link took you to (#rec=), lit for 2 seconds */
   .st-help-panel { position: fixed; z-index: 1000; width: 360px; max-width: calc(100vw - 16px); max-height: calc(100vh - 16px); overflow-y: auto; box-sizing: border-box; padding: 14px 16px; background: var(--as-tab); color: var(--as-text); border: 1px solid var(--as-border-1); border-radius: 10px; font-size: 13px; line-height: 1.45; }
   .st-help-panel:focus { outline: none; }
   .st-help-head { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 4px; }
@@ -2553,6 +2554,23 @@
   loadContextWindow();
   // The ⓘ help beside each setting (records from /api/settings-records), put in after the page has loaded and kept up as rows are added
   window.addEventListener('load', () => { try { hubSettingsHelp.mount(document, 'agent-settings'); } catch { /* the page works without help */ } });
+  // A door into this page: /agent-settings.html?agent=<name>#rec=OPT-xxxx scrolls to that record's row, lights it for 2 s and focuses its ⓘ.
+  // The rows are drawn as the agent's data arrives, so the page looks again for a few seconds before it gives up.
+  (function doorRec() {
+    const H = window.hubSettingsHelp;
+    if (!H || !H.parseDoorHash(location.hash, 'rec')) return;
+    let tries = 0;
+    const go = async () => {
+      let found = false;
+      try {
+        found = await H.doorFollow(location.hash, document, 'agent-settings', {
+          open: (f) => { for (let n = f.row; n; n = n.parentNode) if (n.tagName === 'DETAILS') n.open = true; },
+        }, 'rec');
+      } catch { found = false; }
+      if (!found && ++tries < 16) setTimeout(go, 400);
+    };
+    window.addEventListener('load', () => setTimeout(go, 200));
+  })();
 </script>
 </body>
 </html>

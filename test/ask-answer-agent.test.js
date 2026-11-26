@@ -20,8 +20,8 @@ test('the desktop and the phone send the agent back with the answer, falling bac
 });
 
 test('a question that arrives as a hub event (no chat stream attached) keeps its agent on both pages', () => {
-  assert.match(read('app.js'), /showQuestionModal\(\{ request_id: ev\.request_id, questions: ev\.questions, agent: ev\.agent \}/);
-  assert.match(read('mobile.js'), /const q = \{ request_id: ev\.request_id, questions: ev\.questions, agent: ev\.agent \};/);
+  assert.match(read('app.js'), /showQuestionModal\(\{ request_id: ev\.request_id, questions: ev\.questions, agent: ev\.agent(, \.\.\.\(ev\.fixed === true \? \{ fixed: true, change: ev\.change \} : \{\}\))? \}/);
+  assert.match(read('mobile.js'), /const q = \{ request_id: ev\.request_id, questions: ev\.questions, agent: ev\.agent(, \.\.\.\(ev\.fixed === true \? \{ fixed: true, change: ev\.change \} : \{\}\))? \};/);
 });
 
 test('the route classifies /api/ask_response by the body agent (so the agent field is what lets a member answer)', () => {

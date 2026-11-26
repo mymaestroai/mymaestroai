@@ -2565,6 +2565,35 @@
     .question-hint { font-size: 0.8rem; color: var(--text-dim); }
     #question-submit { padding: 9px 18px; border-radius: 8px; border: none; background: var(--accent); color: var(--on-color-text); font-weight: 600; cursor: pointer; }
     #question-submit:disabled { opacity: 0.45; cursor: not-allowed; }
+    /* The confirm card for a change the lead wants to make (fixed: the change as rows, Confirm and Cancel, no typed answer) */
+    .question-fixed .question-rows { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 0 0 6px; }
+    .question-fixed dt { color: var(--text-dim); font-size: 0.85rem; }
+    .question-fixed dd { margin: 0; color: var(--text); overflow-wrap: anywhere; }
+    .question-fixed dd.question-row-note { grid-column: 1 / -1; color: var(--text-dim); font-size: 0.85rem; }
+    #question-cancel { padding: 9px 18px; border-radius: 8px; border: 1px solid var(--border); background: transparent; color: var(--text); font-weight: 500; cursor: pointer; }
+    #question-cancel:hover { border-color: var(--text-dim); background: var(--bg-input); }
+    /* The strip in the lead's chat: what the lead changed in the last 24 h, each with Undo */
+    .change-strip { display: flex; flex-direction: column; gap: 4px; position: relative; max-width: var(--chat-max-width); width: 100%; margin: 0 auto; padding: 6px calc(var(--chat-pad-x) + 28px) 0 var(--chat-pad-x); box-sizing: border-box; font-size: 13px; color: var(--text-dim); }
+    .change-strip[hidden] { display: none; }
+    .change-strip .change-line { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+    .change-strip .change-text { color: var(--text); overflow-wrap: anywhere; }
+    .change-strip .change-undo { padding: 2px 10px; border-radius: 6px; border: 1px solid var(--border); background: transparent; color: var(--text); font: inherit; cursor: pointer; }
+    .change-strip .change-undo:hover { border-color: var(--text-dim); background: var(--bg-input); }
+    .change-strip .change-msg:empty { display: none; }
+    .change-strip .change-x { position: absolute; top: 4px; right: var(--chat-pad-x); width: 24px; height: 24px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--text-dim); font-size: 16px; line-height: 1; cursor: pointer; }
+    .change-strip .change-x:hover { background: var(--hover-tint-strong); color: var(--text); }
+    html.mm-simple .change-strip .change-text { color: var(--sm-text); }
+    html.mm-simple .change-strip, html.mm-simple .change-strip .change-x { color: var(--sm-sec); }
+    html.mm-simple .question-fixed dt { color: var(--sm-sec); }
+    html.mm-simple .question-fixed dd { color: var(--sm-text); }
+    html.mm-simple #question-cancel { background: transparent; color: var(--sm-text); border: 1px solid var(--sm-border); border-radius: 18px; }
+    /* Door into a setting (#settings-for=): the row is lit for 2 seconds; Recent changes in Settings */
+    .st-door-hit { background: var(--hover-tint-strong); border-radius: 6px; }
+    .st-recent-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 0.85rem; }
+    .st-recent-what { font-weight: 600; color: var(--text); flex: 1 1 100%; overflow-wrap: anywhere; }
+    .st-recent-change { color: var(--text); overflow-wrap: anywhere; flex: 1 1 auto; min-width: 0; }
+    .st-recent-meta, .st-recent-msg { color: var(--text-dim); }
+    .st-recent-more { margin-top: 8px; }
     /* Build team plan card: one tick row per plan item (label bold, detail small), above the buttons */
     .question-checklist { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; max-height: 40vh; overflow-y: auto; }
     .question-check { display: flex; align-items: flex-start; gap: 10px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-input); cursor: pointer; }

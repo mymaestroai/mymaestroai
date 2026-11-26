@@ -8761,6 +8761,7 @@ async function openChat(name) {
   localStorage.setItem('hub-mobile-last', name);
   voiceStatusRefresh();   // the mic button shows only while the hub voice is on and ready
   researchLinePaint(); researchLineLoad(name);   // the deep research progress line
+  changeStripLoad();   // what the lead changed in the last 24 h (only in the lead's chat)
   if (!same && $('files-sheet')?.open) filesRefresh(); // the Files sheet follows the open agent
   $('chat-icon').textContent = a?.icon || '🤖';
   $('chat-name').textContent = a?.display || name;
@@ -13670,6 +13671,43 @@ function showQuestion(data, onAnswered) {
       .catch(err => toast(`Could not send answer: ${err.message}`));
     box.innerHTML = `<div class="done">Answered: ${esc(label)}</div>`;   // kept in questionBoxes until the hub confirms or closes it
   };
+  // A card the hub built for a change (fixed: true, lib/settings-tool): the change as rows, Confirm and Cancel; no text box.
+  // The answer is exactly one of the two choices.
+  const FH = typeof window !== 'undefined' ? window.hubSettingsHelp : null;
+  if (FH && FH.isFixedCard(data) && questions[0]) {
+    const pick = (label) => ((questions[0].options || []).find((o) => o && String(o.label) === label) || { label }).label;
+    box.classList.add('question-fixed');
+    const t = document.createElement('div');
+    t.className = 'qt';
+    t.textContent = questions[0].question || '';
+    box.appendChild(t);
+    const rows = document.createElement('dl');
+    rows.className = 'qrows';
+    for (const [k, v] of FH.fixedRows(data.change)) {
+      if (k) { const dt = document.createElement('dt'); dt.textContent = k; rows.appendChild(dt); }
+      const dd = document.createElement('dd');
+      if (!k) dd.className = 'qrow-note';
+      dd.textContent = v;
+      rows.appendChild(dd);
+    }
+    box.appendChild(rows);
+    const acts = document.createElement('div');
+    acts.className = 'qactions';
+    const grp = document.createElement('span');
+    grp.className = 'qbuttons';
+    const cancel = document.createElement('button');
+    cancel.type = 'button'; cancel.className = 'qcancel'; cancel.textContent = 'Cancel';
+    cancel.addEventListener('click', () => submit({ '0': pick('Cancel') }, 'Cancel'));
+    const confirm = document.createElement('button');
+    confirm.type = 'button'; confirm.className = 'qsubmit'; confirm.textContent = 'Confirm';
+    confirm.addEventListener('click', () => submit({ '0': pick('Confirm') }, 'Confirm'));
+    grp.appendChild(cancel); grp.appendChild(confirm);
+    acts.appendChild(grp);
+    box.appendChild(acts);
+    chatEl().appendChild(box);
+    scrollChat();
+    return;
+  }
   // The hub's "Skip" choice (ask_user allow_skip) is a Skip button beside Submit that answers at once; with several
   // questions each keeps its own Skip choice and the button skips them all (as on the desktop page).
   const isSkip = (o) => o && String(o.label || '').trim().toLowerCase() === 'skip';
@@ -14455,12 +14493,13 @@ function connectEvents() {
   on('for_owner', onForOwner);
   on('turn_notify', onTurnNotify);
   on('research_progress', researchLineApply);
-  on('hello', () => { if (screen === 'chat' && current) researchLineLoad(current); });   // after a reconnect: the runs as they are now
+  on('settings_changed', () => { changeStripLoad(); });   // the lead changed a setting: the strip in its chat follows
+  on('hello', () => { if (screen === 'chat' && current) { researchLineLoad(current); changeStripLoad(); } });   // after a reconnect: the runs as they are now
   on('ask_user', (ev) => {
     setLive(ev.agent, { busy: true, pendingQuestion: true }); paintStatus();
     // The question itself: shown now if that chat is open, else kept until it is (dedup by request id in showQuestion).
     if (ev.request_id && Array.isArray(ev.questions)) {
-      const q = { request_id: ev.request_id, questions: ev.questions, agent: ev.agent };
+      const q = { request_id: ev.request_id, questions: ev.questions, agent: ev.agent, ...(ev.fixed === true ? { fixed: true, change: ev.change } : {}) };
       if (chatOpenFor(ev.agent)) showQuestion(q);
       else {
         pendingQuestionsByAgent.set(ev.agent, q);
@@ -14718,6 +14757,16 @@ function researchLineApply(ev) {
   researchLinePaint();
 }
 function researchLinePaint() { researchLineFill(document.getElementById('research-lines'), screen === 'chat' ? current : null); }
+// The change strip (lib/ui-settings-help.js stripLoad): one line per change the lead made in the last 24 h, with Undo, above the composer
+// of the lead's chat. State from GET /api/settings-journal?by=lead&since=; loaded when the chat opens and on settings_changed.
+function changeStripLoad() {
+  const H = window.hubSettingsHelp, host = document.getElementById('change-strip');
+  if (!host) return;
+  const lead = agents.find((x) => x && x.lead);
+  if (!H || !lead || current !== lead.name) { host.textContent = ''; host.hidden = true; return; }
+  let store = null; try { store = localStorage; } catch { store = null; }
+  H.stripLoad(host, { doc: document, fetch: (u, o) => fetch(u, o), storage: store }).catch(() => {});
+}
 async function researchLineLoad(agent) {
   if (!agent) return;
   const t0 = Date.now();   // events that arrive from here on are newer than the answer being fetched
@@ -16190,9 +16239,9 @@ function lookPickerPaint(host, onChosen) {
 const SETTINGS_SHEET_URL = '/?settings-only=1&desktop=once';
 const SETTINGS_SHEET_WAIT_MS = 20000;
 let settingsSheet = null;   // { el, frame, ready, timer }
-function settingsSheetOpen() {
+function settingsSheetOpen(doorId) {
   try { $('menu').classList.remove('open'); } catch { /* no menu */ }
-  if (settingsSheet) return;
+  if (settingsSheet) { if (doorId) { settingsSheet.door = doorId; settingsSheetLoad(); } return; }
   const el = document.createElement('div');
   el.id = 'settings-sheet';
   el.setAttribute('role', 'dialog'); el.setAttribute('aria-label', 'Settings');
@@ -16201,7 +16250,7 @@ function settingsSheetOpen() {
     '<div class="ssh-btns" hidden><button type="button" class="ssh-retry">Try again</button><button type="button" class="ssh-close">Close</button></div>' +
     '<div class="ssh-btns ssh-stuck" hidden><button type="button" class="ssh-wait-more">Keep waiting</button><button type="button" class="ssh-force">Close anyway</button></div></div>';
   document.body.appendChild(el);
-  settingsSheet = { el, frame: el.querySelector('iframe'), ready: false, timer: null };
+  settingsSheet = { el, frame: el.querySelector('iframe'), ready: false, timer: null, door: doorId || '' };
   el.__dialogClose = settingsSheetRequestClose;   // Back: the dialog in the frame decides (unsaved changes, a save running)
   el.querySelector('.ssh-retry').addEventListener('click', settingsSheetLoad);
   el.querySelector('.ssh-close').addEventListener('click', settingsSheetClosed);
@@ -16225,7 +16274,20 @@ function settingsSheetLoad() {
   clearTimeout(s.timer);
   s.timer = setTimeout(settingsSheetFailed, SETTINGS_SHEET_WAIT_MS);
   // the chat this phone has open: Settings → Notifications → "For an agent" starts on it
-  s.frame.src = SETTINGS_SHEET_URL + (typeof current === 'string' && current ? '&agent=' + encodeURIComponent(current) : '');
+  // a door (/mobile#settings-for=OPT-xxxx) goes on to the frame as its hash: Settings opens at that record
+  s.frame.src = SETTINGS_SHEET_URL + (typeof current === 'string' && current ? '&agent=' + encodeURIComponent(current) : '') + (s.door ? '#settings-for=' + s.door : '');
+}
+// /mobile#settings-for=OPT-xxxx: the Settings sheet opens at that record (the frame does the finding); the address goes back to what it was.
+function settingsDoorPhone() {
+  const H = window.hubSettingsHelp;
+  const run = () => {
+    const d = H && H.parseDoorHash(location.hash, 'settings-for');
+    if (!d) return;
+    try { window.history.replaceState(window.history.state, '', location.pathname + location.search); } catch { /* the hash stays */ }
+    settingsSheetOpen(d.id);
+  };
+  window.addEventListener('hashchange', run);
+  run();
 }
 // Nothing came back in time (offline, the hub down): a plain message with a retry, never a blank screen.
 function settingsSheetFailed() {
@@ -17401,6 +17463,7 @@ async function init() {
   if (resumed.fromArrow) Promise.resolve(opened).then(() => { if (route.screen === 'chat' && route.agent === current) reloadResumeFinish(route.agent, resumed.draft); });
   helpMountPhone();   // the ⓘ help in the phone-native sheets
   askLeadStart();     // "Ask Maestro about this" from the Settings frame: /mobile#ask-lead=<text> fills the lead's box
+  settingsDoorPhone();   // a link to a setting: /mobile#settings-for=OPT-xxxx opens the Settings sheet at it
   updateDots();
   connectEvents();
   paintPush();

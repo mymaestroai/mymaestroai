@@ -70,7 +70,7 @@ test('Settings → For an agent: the chat on screen first, then the phone\'s ope
   env.activeChat = 'c1'; env.chats = { c1: { agent: 'beta' } };
   assert.strictEqual(run('gamma'), 'beta', 'the chat on screen wins');
   assert.match(app, /stNotifyAgentWanted = new URLSearchParams\(location\.search\)\.get\('agent'\) \|\| ''/);
-  assert.match(mob, /s\.frame\.src = SETTINGS_SHEET_URL \+ \(typeof current === 'string' && current \? '&agent=' \+ encodeURIComponent\(current\) : ''\);/);
+  assert.match(mob, /s\.frame\.src = SETTINGS_SHEET_URL \+ \(typeof current === 'string' && current \? '&agent=' \+ encodeURIComponent\(current\) : ''\) \+ \(s\.door \? '#settings-for=' \+ s\.door : ''\);/);
   // the same rows and the same save as the chat's bell
   const paint = fnSrc(app, 'function stNotifyAgentPaint(fetchFirst = true) {');
   assert.match(paint, /notifyBellMenuHtml\(agent, display\)/);

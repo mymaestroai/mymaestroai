@@ -34,15 +34,15 @@ test('ten groups, and every section openSettings draws belongs to exactly one of
   assert.ok(vAt > 0 && settingsSource(app).includes('html += voiceSettingsHtml(data);'), 'Voices is drawn by openSettings');
   const src = settingsSource(app) + app.slice(vAt, app.indexOf('function voicePaintSettings(', vAt));
   const drawn = [...src.matchAll(/class="st-section" id="(st-[a-z0-9-]+-section)"/g)].map(m => m[1]);
-  // menu split (gear = what you set, ⋯ = what you do): 30 + st-tuning-section and st-comms-section
-  assert.strictEqual(drawn.length, 32, 'all 32 sections carry an id');
+  // menu split (gear = what you set, ⋯ = what you do): 30 + st-tuning-section and st-comms-section, + st-recent-section (Recent changes)
+  assert.strictEqual(drawn.length, 33, 'all 33 sections carry an id');
   assert.ok(drawn.includes('st-tuning-section') && drawn.includes('st-comms-section'));
   assert.doesNotMatch(src, /class="st-section">/, 'no section without an id');
   const grouped = groups.flatMap(g => g.sections);
   assert.strictEqual(new Set(grouped).size, grouped.length, 'no section in two groups');
   assert.deepStrictEqual([...grouped].sort(), [...drawn].sort(), 'the groups name exactly the sections drawn');
   const byId = Object.fromEntries(groups.map(g => [g.id, g.sections]));
-  assert.deepStrictEqual(byId.status, ['st-ready-section', 'st-health-section', 'st-sec-section', 'st-memory-section', 'st-selfcheck-section', 'st-components-section', 'st-updates-section']);
+  assert.deepStrictEqual(byId.status, ['st-ready-section', 'st-health-section', 'st-sec-section', 'st-recent-section', 'st-memory-section', 'st-selfcheck-section', 'st-components-section', 'st-updates-section']);
   assert.deepStrictEqual(byId.money, ['st-spend-section', 'st-emergency-section']);
   assert.deepStrictEqual(byId.backups, ['st-backups-section']);
   assert.deepStrictEqual(byId.security, ['st-security-section']);

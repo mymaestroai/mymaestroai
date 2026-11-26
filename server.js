@@ -1858,6 +1858,7 @@ async function handleHttpRequest(req, res) {
     // Operator interjection - inject a message into a running agent turn
     if (pathname === '/api/chat/interject' && req.method === 'POST') {
       const body = JSON.parse(await readBody(req));
+      if (req.hubToken) require('./lib/sdk-chat').__settingsTool.noteTokenInterjection(body && body.agent);   // a program's token is text from outside: the running turn can no longer change settings at once
       const result = handleInterjection(body);
       return jsonResponse(res, result.success ? 200 : 400, result);
     }
@@ -2989,8 +2990,17 @@ async function handleHttpRequest(req, res) {
       const me = req.hubUser && req.hubUser.id;
       if (!isAdmin && !me) return jsonResponse(res, 403, { error: 'admin_only' });
       const q = new URL(req.url, 'http://x').searchParams;
-      const entries = sj.listFor({ user: me || null, isAdmin, agents: isAdmin ? [] : require('./lib/agents').getAgentsSync(), limit: q.get('limit') || 50, before: q.get('before') || null });
-      return jsonResponse(res, 200, { ok: true, entries, next: entries.length ? entries[entries.length - 1].id : null });
+      // ?by=lead&since=<ms>: only what the lead's settings tool changed (who.kind "lead"), at or after since: the chat's change strip.
+      const byLead = q.get('by') === 'lead';
+      const since = /^\d{1,16}$/.test(q.get('since') || '') ? Number(q.get('since')) : 0;
+      const filter = byLead || since ? ((e) => (!byLead || (e.who && e.who.kind === 'lead')) && e.at >= since) : null;
+      const allAgents = require('./lib/agents').getAgentsSync();
+      const raw = sj.listFor({ user: me || null, isAdmin, agents: isAdmin ? [] : allAgents, limit: q.get('limit') || 50, before: q.get('before') || null, filter });
+      // Each entry as the pages show it: name (the record's name or the key), agentName (display name), before and after as display text
+      // (secrets masked), undoUntil (at + 24 h), putBack (a later restore undid it).
+      const put = sj.restoredIds(raw.length ? raw[raw.length - 1].at : 0);
+      const entries = raw.map((e) => ({ ...sj.viewEntry(e, allAgents), putBack: put.has(e.id) }));
+      return jsonResponse(res, 200, { ok: true, entries, next: raw.length ? raw[raw.length - 1].id : null });
     }
     // Put one value back: an admin (any entry that still holds its new value; a change that touches a protection only from the admin's
     // own browser session), or a member for their own preferences and for everyday settings of agents they own.

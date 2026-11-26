@@ -668,6 +668,21 @@
     .question .qsubmit { min-height: 44px; padding: 8px 18px; border: none; border-radius: 8px; background: var(--accent); color: var(--on-accent); font-weight: 600; }
     .question .qsubmit:disabled { opacity: 0.45; }
     .question .qbuttons { display: flex; gap: 8px; flex-shrink: 0; }
+    /* The confirm card for a change the lead wants to make: rows, then Cancel and Confirm (no text box) */
+    .question-fixed .qrows { display: grid; grid-template-columns: max-content 1fr; gap: 6px 12px; margin: 8px 0 0; font-size: 14px; }
+    .question-fixed .qrows dt { color: var(--text-dim); }
+    .question-fixed .qrows dd { margin: 0; color: var(--text); overflow-wrap: anywhere; }
+    .question-fixed .qrows dd.qrow-note { grid-column: 1 / -1; color: var(--text-dim); font-size: 13px; }
+    .question .qcancel { min-height: 44px; padding: 8px 16px; border: 1px solid var(--border-strong); border-radius: 8px; background: transparent; color: var(--text); }
+    /* The strip above the lead's composer: what it changed in the last 24 h, each with Undo; the × dismisses */
+    .change-strip { position: relative; display: flex; flex-direction: column; gap: 6px; padding: 6px 44px 6px 12px; font-size: 13px; color: var(--text-dim); }
+    .change-strip[hidden] { display: none; }
+    .change-strip .change-line { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+    .change-strip .change-text { color: var(--text); overflow-wrap: anywhere; }
+    .change-strip .change-undo { min-height: 36px; padding: 0 14px; border: 1px solid var(--border-strong); border-radius: 8px; background: transparent; color: var(--text); font: inherit; }
+    .change-strip .change-msg:empty { display: none; }
+    .change-strip .change-x { position: absolute; top: 2px; right: 4px; min-width: 40px; min-height: 40px; padding: 0; border: 0; border-radius: 8px; background: transparent; color: var(--text-dim); font-size: 20px; line-height: 1; }
+    html.mm-simple .change-strip .change-text { color: var(--text); }
     .question .qskip { min-height: 44px; padding: 8px 16px; border: 1px solid var(--border-strong); border-radius: 8px; background: transparent; color: var(--text); }
     .question .qcustom textarea { flex: 1; min-height: 76px; max-height: 50vh; resize: vertical; font: inherit; font-size: 16px; line-height: 1.4; color: var(--text); background: var(--bg-input); border: 1px solid var(--border-strong); border-radius: 8px; padding: 8px 10px; }
     .question .qcustom textarea:focus { outline: none; border-color: var(--accent); }
@@ -1588,6 +1603,7 @@ html.mm-simple .sa-tm:focus-visible, html.mm-simple .sa-sec-h:focus-visible, htm
       <div id="team-offer-slot" class="team-offer-slot" hidden></div>
       <div id="handoff-cards" class="handoff-cards" hidden></div>
       <div id="research-lines" class="handoff-cards research-lines" hidden></div>
+      <div id="change-strip" class="change-strip" hidden></div>
       <div id="previews"></div>
       <div id="voice-strip" hidden><button type="button" id="voice-mode-chip" class="voice-chip" aria-label="Talk mode: tap to switch">Tap to talk</button></div>
       <div id="voice-panel" role="dialog" aria-label="Voice settings" hidden>

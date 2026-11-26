@@ -3386,7 +3386,7 @@
       host.appendChild(row);
     }
     const ST_GROUPS = [
-      { id: 'status', title: '🩺 Status', sections: ['st-ready-section', 'st-health-section', 'st-sec-section', 'st-memory-section', 'st-selfcheck-section', 'st-components-section', 'st-updates-section'] },
+      { id: 'status', title: '🩺 Status', sections: ['st-ready-section', 'st-health-section', 'st-sec-section', 'st-recent-section', 'st-memory-section', 'st-selfcheck-section', 'st-components-section', 'st-updates-section'] },
       { id: 'looks', title: '🎨 Appearance', sections: ['st-looks-section'] },
       { id: 'voice', title: '🎙 Voice', sections: ['st-voice-section'] },
       { id: 'security', title: '🔐 Security', sections: ['st-security-section'] },
@@ -3631,6 +3631,41 @@
       if (none) none.hidden = any;
     }
 
+    // Settings → Status → Recent changes (lib/ui-settings-help.js recentLoad): the newest 30 journal entries, Load more, Restore.
+    function stRecentLoad() {
+      const H = window.hubSettingsHelp, host = document.getElementById('st-recent-list');
+      if (!H || !host) return;
+      const me = window.hubMe && window.hubMe.user;
+      H.recentLoad(host, {
+        doc: document, fetch: (u, o) => fetch(u, o),
+        userName: (id) => (me && me.id === id ? (me.name || me.login) : '') || '',
+        agentName: (n) => { const a = Array.isArray(AGENTS) ? AGENTS.find((x) => x && x.name === n) : null; return (a && a.display) || n; },
+        recordName: (id) => { const r = H.resolve(id); return (r && r.name) || ''; },
+      }).catch(() => {});
+    }
+    // A door into Settings: /#settings-for=OPT-xxxx opens Settings at that record (its group open, scrolled to, lit for 2 s, its ⓘ focused);
+    // a record with no row here opens Settings at the top and says where the setting is. Also in the phone's Settings frame (/mobile passes it on).
+    let stDoorBusy = false;
+    async function settingsDoorRun() {
+      const H = window.hubSettingsHelp, h = location.hash;
+      if (!H || stDoorBusy || !H.parseDoorHash(h, 'settings-for') || !isHubAdmin()) return;
+      stDoorBusy = true;
+      try {
+        try { history.replaceState(history.state, '', location.pathname + location.search); } catch { /* the hash stays */ }
+        if (!document.getElementById('st-overlay')) await openSettings();
+        const overlay = document.getElementById('st-overlay');
+        if (!overlay) return;
+        await H.doorFollow(h, overlay, 'desktop', {
+          open: (f) => { const s = f.row.closest ? f.row.closest('details.st-group') : null; if (s) stSetOpen(s, true); },
+          notHere: (rec) => hubToast(H.hereIs(rec), 6000),
+        }, 'settings-for');
+      } catch { /* Settings stays as it is */ } finally { stDoorBusy = false; }
+    }
+    function settingsDoorStart() {
+      window.addEventListener('hashchange', () => { settingsDoorRun(); });
+      settingsDoorRun();
+    }
+
     // Links into Settings (the plan badge, the setup and security banners, today's spend) open the group that
     // holds the section, then scroll to it.
     async function openSettingsAt(sectionId) {
@@ -3698,6 +3733,14 @@
         <div class="st-row"><label style="flex-basis:150px"></label><button class="st-test-btn" onclick="loadSecurityCheck(true)">Run now</button><span id="st-sec-state" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px"></span></div>
       </div>`;
       setTimeout(loadSecurityCheck, 0);
+      // Recent changes (lib/settings-journal): the newest 30 changes to settings, agents and preferences, who made them, and Restore where a value can be put back.
+      if (isHubAdmin()) {
+        html += `<div class="st-section" id="st-recent-section"><h4>Recent changes</h4>
+        <div class="st-hint">The newest changes: when, who, what, and the value before and after. Restore puts a value back while it is still the one that was set.</div>
+        <div id="st-recent-list" class="st-recent-list" style="margin-left:0">Loading…</div>
+      </div>`;
+        setTimeout(stRecentLoad, 0);
+      }
       // Memory (lib/memory-health): how each agent's memory is doing, nightly and on demand.
       html += `<div class="st-section" id="st-memory-section"><h4>Memory</h4>
         <div class="st-hint">Each agent's memory: its Records against their cap, how full its context gets, compression, its conversation archive and its chat. The check runs every night and on demand, and says what would help. It changes nothing by itself.</div>
@@ -8235,6 +8278,7 @@
       refreshPlanChip();
       showMobileBanner();
       askLeadStart();   // "Ask Maestro about this" from another page: /#ask-lead=<text> fills the lead's box
+      settingsDoorStart();   // /#settings-for=OPT-xxxx: Settings opens at that record
       // Check for pending restart action on page load (user may have refreshed)
       setTimeout(() => checkPendingRestartAction(), 1500);
       // Check if this page load is after a manual restart
@@ -9712,6 +9756,23 @@
     }
     function researchLinePaint() {
       for (const k of Object.keys(chats)) { const c = chats[k]; if (c && !c.isGroup && !c.isWorker && c.agent) researchLineFill(document.getElementById('research-lines-' + k), c.agent); }
+    }
+    // The change strip (lib/ui-settings-help.js stripLoad): one line per change the lead made in the last 24 h, with Undo, in the lead's chat.
+    // State from GET /api/settings-journal?by=lead&since=; refreshed when the chat opens and on settings_changed.
+    function changeStripEnv() {
+      let store = null; try { store = localStorage; } catch { store = null; }
+      return { doc: document, fetch: (u, o) => fetch(u, o), storage: store };
+    }
+    function changeStripRefresh() {
+      const H = window.hubSettingsHelp;
+      const lead = Array.isArray(AGENTS) ? AGENTS.find((a) => a && a.lead) : null;
+      if (!H || !lead) return;
+      for (const k of Object.keys(chats)) {
+        const c = chats[k];
+        if (!c || c.isGroup || c.isWorker || c.agent !== lead.name) continue;
+        const h = document.getElementById('change-strip-' + k);
+        if (h) H.stripLoad(h, changeStripEnv()).catch(() => {});
+      }
     }
     async function researchLineLoad(agent) {
       if (!agent) return;
@@ -12741,6 +12802,7 @@
         paintNotifyBtns(ev.agent);
       });
       source.addEventListener('research_progress', e => { const ev = parse(e); if (ev) researchLineApply(ev); });
+      source.addEventListener('settings_changed', e => { const ev = parse(e); if (ev) changeStripRefresh(); });   // the lead changed a setting: its chat's strip follows
       source.addEventListener('ask_user', e => {
         const ev = parse(e); if (!ev) return;
         setAgentLive(ev.agent, { busy: true, pendingQuestion: true });
@@ -12748,7 +12810,7 @@
         if (ev.request_id && Array.isArray(ev.questions)) {
           const chat = findSoloChat(ev.agent);
           const chatId = chat ? Object.keys(chats).find(k => chats[k] === chat) : null;
-          showQuestionModal({ request_id: ev.request_id, questions: ev.questions, agent: ev.agent }, chatId || null).catch(() => {});
+          showQuestionModal({ request_id: ev.request_id, questions: ev.questions, agent: ev.agent, ...(ev.fixed === true ? { fixed: true, change: ev.change } : {}) }, chatId || null).catch(() => {});
         }
       });
       // A Do it on a set-up card wrote reporting lines: the lead's chat shows "Undo this team" at once; the Teams tab and list follow.
@@ -12998,6 +13060,7 @@
         <div class="team-offer-slot" id="team-offer-slot-${chatId}" hidden></div>
         <div class="handoff-cards" id="handoff-cards-${chatId}" hidden></div>
         <div class="handoff-cards research-lines" id="research-lines-${chatId}" hidden></div>
+        <div class="change-strip" id="change-strip-${chatId}" hidden></div>
         <div class="input-area">
           <div class="input-wrapper">
             <div class="image-preview-area" id="image-preview-${chatId}"></div>
@@ -13130,6 +13193,7 @@
       if (document.getElementById('files-panel')) filesRefresh(); // the Files panel follows the active chat's agent
       if (opened && !opened.isGroup && !opened.isWorker && !opened.isHistory && opened.agent) qsNoteOpened(opened.agent);   // the quick switcher's recents (⌘K)
       if (opened && !opened.isGroup && !opened.isWorker && opened.agent) { researchLinePaint(); researchLineLoad(opened.agent); }   // the deep research progress line
+      if (opened && !opened.isGroup && !opened.isWorker && opened.agent) changeStripRefresh();   // what the lead changed in the last 24 h (the lead's chat only)
       if (document.getElementById('recall-panel') && chats[chatId] && !chats[chatId].isGroup && chats[chatId].agent && String(chats[chatId].agent) !== recallState.agent) openRecallPanel(chatId); // so does Recall
       document.getElementById(`input-${chatId}`)?.focus();
       if (typeof scheduleWorkerListRefresh === 'function') scheduleWorkerListRefresh();
@@ -14809,6 +14873,23 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         html += '<div class="question-actions"><span class="question-hint" id="question-hint">Pick an answer, then press Submit.</span>'
           + '<span class="question-buttons">' + (canSkip ? '<button id="question-skip" type="button">Skip</button>' : '') + '<button id="question-submit" disabled>Submit</button></span></div>';
         html += '</div>';
+        // A card the hub built for a change (fixed: true, lib/settings-tool): the change as rows and two buttons, Confirm and Cancel.
+        // No text box, no "type an answer"; the answer is exactly one of the two choices.
+        const fixedHelp = typeof window !== 'undefined' ? window.hubSettingsHelp : null;
+        const fixed = !!(fixedHelp && fixedHelp.isFixedCard(data));
+        if (fixed) {
+          const fixedBtn = (label) => ((questions[0].options || []).find(o => o && String(o.label) === label) || { label }).label;
+          html = '<div class="question-modal question-fixed"><h3>Confirm a change</h3>'
+            + `<p class="question-text">${esc(questions[0].question)}</p>`
+            + '<dl class="question-rows">' + fixedHelp.fixedRows(data.change).map(([k, v]) => (k ? `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>` : `<dd class="question-row-note">${esc(v)}</dd>`)).join('') + '</dl>'
+            + '<div class="question-actions"><span class="question-hint"></span><span class="question-buttons"><button id="question-cancel" type="button">Cancel</button><button id="question-submit" type="button">Confirm</button></span></div></div>';
+          overlay.innerHTML = html;
+          overlay.querySelector('#question-submit').addEventListener('click', () => submitAnswers({ '0': fixedBtn('Confirm') }));
+          overlay.querySelector('#question-cancel').addEventListener('click', () => submitAnswers({ '0': fixedBtn('Cancel') }));
+          document.body.appendChild(overlay);
+          setTimeout(() => { const b = overlay.querySelector('#question-submit'); if (b && b.focus) b.focus({ preventScroll: true }); }, 100);
+          return;
+        }
         overlay.innerHTML = html;
 
         function submitAnswers(answers) {
@@ -25342,6 +25423,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         // as the full page has them (sandbox, subscriptions); a hub slow to answer never holds the dialog back more than 5 s
         try { await Promise.race([loadAgents(), new Promise((r) => setTimeout(r, 5000))]); } catch { /* the sections that list agents say so */ }
         await openSettings();
+        if (typeof settingsDoorStart === 'function') settingsDoorStart();   // the phone's /mobile#settings-for=OPT-xxxx arrives here as this frame's hash
       }
       document.addEventListener('click', settingsOnlyLeaveGuard, true);
       settingsOnlyWatch();

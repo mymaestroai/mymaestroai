@@ -129,7 +129,8 @@ test('route body: a member gets only member/both records without facts or stored
   const all = records.all();
   const member = records.routeBody({ id: 'u2', role: 'member' }, { isAdmin: false });
   const admin = records.routeBody({ id: 'u1', role: 'admin' }, { isAdmin: true });
-  assert.equal(member.leadTool, false);
+  assert.equal(member.leadTool, true, 'the lead\'s settings tool exists (phase 2)');
+  assert.equal(admin.leadTool, true);
   assert.equal(member.version, records.version());
   assert.equal(admin.records.length, all.length);
   assert.ok(member.records.length > 0 && member.records.length < all.length);
