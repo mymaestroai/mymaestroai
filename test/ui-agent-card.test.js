@@ -116,6 +116,8 @@ function setup(over = {}) {
     if (url === '/api/agents' && method === 'GET') {
       if (state.hangGet) return new Promise(() => {});   // a re-read the hub never answers
       if (state.hangGetBody) return { ok: true, status: 200, json: () => new Promise(() => {}) };   // headers arrive, the body never does
+      if (state.get503) return resp(503, { error: 'unavailable' });   // the hub answers, but not with the list
+      if (state.gateGet) await state.gateGet;   // a test holds a re-read
       return resp(200, JSON.parse(JSON.stringify(state.agents)));
     }
     const m = /^\/api\/agents\/([^/]+)$/.exec(url);
@@ -987,6 +989,36 @@ test('R4-3: a PATCH that timed out whose recovery read also times out says the c
   const text = all(rowOf(t.card.el(), 'OPT-0005'), '.ac-err')[0].textContent;
   assert.strictEqual(text, 'The change could not be confirmed; reopen the card to see what the hub has.');
   assert.ok(!/shows what the hub has now/.test(text));
+});
+
+test('R5-1: a save that timed out whose recovery read gets a 503 (the cached roster is used) does not say the row shows what the hub has', async () => {
+  const saved = [];
+  const t = setup({ requestMs: 40, rows: TEXT_ROW(saved), firstRows: { role: ['OPT-0005'] } });
+  await t.card.open('harbor', { section: 'role' });
+  t.state.hang = true; t.state.get503 = true;
+  const input = all(rowOf(t.card.el(), 'OPT-0005'), 'input')[0];
+  input.value = 'x'; input.dispatch('change'); await flush();
+  await wait(200);
+  assert.strictEqual(t.card.state().saving.size, 0, 'unlocked');
+  const text = all(rowOf(t.card.el(), 'OPT-0005'), '.ac-err')[0].textContent;
+  assert.strictEqual(text, 'The change could not be confirmed; reopen the card to see what the hub has.');
+  assert.ok(!/shows what the hub has now/.test(text));
+});
+
+test('R5-1: a recovery read that a newer refresh superseded does not claim the shown value is current', async () => {
+  const saved = [];
+  const t = setup({ requestMs: 40, rows: TEXT_ROW(saved), firstRows: { role: ['OPT-0005'] } });
+  await t.card.open('harbor', { section: 'role' });
+  t.state.hang = true;
+  let release; t.state.gateGet = new Promise((r) => { release = r; });
+  const input = all(rowOf(t.card.el(), 'OPT-0005'), 'input')[0];
+  input.value = 'x'; input.dispatch('change'); await flush();
+  await wait(55);   // the save timed out (40 ms); the recovery read is waiting on the gate, still inside its own limit
+  t.emit('agent_updated', { agent: 'harbor', changed: ['blurb'] });   // a newer refresh
+  await flush();
+  release(); await wait(60);
+  const text = all(rowOf(t.card.el(), 'OPT-0005'), '.ac-err')[0].textContent;
+  assert.strictEqual(text, 'The change could not be confirmed; reopen the card to see what the hub has.');
 });
 
 test('R3-5: a superseded open() resolves "superseded", a denial false; app.js and mobile.js do nothing on it', async () => {

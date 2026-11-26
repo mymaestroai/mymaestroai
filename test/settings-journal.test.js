@@ -695,6 +695,28 @@ test('R4-5: restoring a key that was absent before (compaction.at, voiceDefaults
   } finally { apply._setSandboxRemover(null); }
 });
 
+test('R5-2: restoring voice.stt / voice.tts / voice.voice that were absent before sends an explicit reset and reads back the effective default', async () => {
+  const apply = L('settings-apply');
+  const who = { isAdmin: true, user: 'u_owner', isAdminSession: true };
+  const cur = (dotted) => agents.readAgentValue('hazel', dotted);
+  apply._setSandboxRemover(() => {});
+  try {
+    const v = await agents.updateAgentField('hazel', { voice: { voice: 'af_heart', stt: 'openai', tts: 'openai', cloudVoice: 'nova', cloudConfirm: true } }, { isOwner: true, userId: 'u_owner' });
+    assert.equal(v.success, true, JSON.stringify(v));
+    const s = apply.restoreAgentField('hazel', 'voice.stt', undefined, who);
+    assert.equal(s.ok, true, JSON.stringify(s));
+    assert.equal(cur('voice.stt'), 'local', 'the effective speech recognition is the default again');
+    assert.equal(cur('voice.tts'), 'openai', 'the other engine stays');
+    const t = apply.restoreAgentField('hazel', 'voice.tts', undefined, who);
+    assert.equal(t.ok, true, JSON.stringify(t));
+    assert.equal(cur('voice.tts'), 'local');
+    assert.equal(cur('voice.cloudVoice'), undefined, 'a cloud voice does not outlive its engine');
+    const h = apply.restoreAgentField('hazel', 'voice.voice', undefined, who);
+    assert.equal(h.ok, true, JSON.stringify(h));
+    assert.ok(!cur('voice.voice'), 'the hub voice is back to the default');
+  } finally { apply._setSandboxRemover(null); }
+});
+
 test('S5: the PATCH route, the lead\'s tool path and Restore all call the one shared after-change function', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
   assert.match(src, /settingsApply\.afterAgentChange\(name, body,/);

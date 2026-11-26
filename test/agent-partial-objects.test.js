@@ -38,6 +38,19 @@ test('voiceDefaults: a number changed away from the stored preset makes it custo
   assert.strictEqual(onDisk('biographer').voiceDefaults.voiceSpeed, 0.9);
 });
 
+test('R5-2 voice: a key sent as null resets that key alone to its default (stt/tts local, voice empty); the others stay', async () => {
+  seed([base({ voice: { voice: 'af_heart', stt: 'openai', tts: 'openai', cloudVoice: 'nova', cloudConfirmedBy: 'u_owner' } })]);
+  assert.deepStrictEqual(await upd({ voice: { stt: null } }), { success: true });
+  let v = onDisk('biographer').voice;
+  assert.strictEqual(v.stt, 'local'); assert.strictEqual(v.tts, 'openai'); assert.strictEqual(v.voice, 'af_heart'); assert.strictEqual(v.cloudVoice, 'nova');
+  assert.deepStrictEqual(await upd({ voice: { voice: null } }), { success: true });
+  v = onDisk('biographer').voice;
+  assert.strictEqual(v.voice, ''); assert.strictEqual(v.tts, 'openai');
+  assert.deepStrictEqual(await upd({ voice: { tts: null } }), { success: true });
+  v = onDisk('biographer').voice;
+  assert.strictEqual(v.tts, 'local'); assert.ok(!('cloudVoice' in v), 'the cloud voice goes with its engine');
+});
+
 test('voiceDefaults: null and {} remove the whole object', async () => {
   await upd({ voiceDefaults: { endPause: 2000, voiceSpeed: 1.2 } });
   assert.deepStrictEqual(await upd({ voiceDefaults: null }), { success: true });

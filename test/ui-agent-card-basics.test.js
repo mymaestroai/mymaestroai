@@ -737,6 +737,29 @@ test('R4-4: the voice speed row is 0.75 to 1.5 in steps of 0.05, and 2.0 is refu
   assert.deepStrictEqual(writes(t).map((c) => c.body), [{ voiceDefaults: { voiceSpeed: 1.25 } }]);
 });
 
+test('R5-3: a voice speed that is not a multiple of 0.05, and a sensitivity that is not a whole number, are refused before saving', async () => {
+  const t = await opened({ tweak: (a) => { a[1].voiceDefaults = { endPause: 1200, continueWait: 3000, interruptSensitivity: 50, voiceSpeed: 1 }; } });
+  all(t.card.el(), '.ac-more-head')[0].click();
+  t.calls.length = 0;
+  for (const bad of ['1.07', '0.8333', '1.001']) {
+    const input = all(rowOf(t.card.el(), 'OPT-0032'), 'input')[0];
+    input.value = bad; input.dispatch('change'); await flush();
+    assert.strictEqual(writes(t).length, 0, bad + ' not saved');
+    assert.match(rowOf(t.card.el(), 'OPT-0032').textContent, /steps of 0\.05/, bad);
+  }
+  for (const bad of ['50.5', '']) {
+    const sens = all(rowOf(t.card.el(), 'OPT-0031'), 'input')[0];
+    sens.value = bad; sens.dispatch('change'); await flush();
+    assert.strictEqual(writes(t).length, 0, JSON.stringify(bad) + ' not saved');
+    assert.match(rowOf(t.card.el(), 'OPT-0031').textContent, bad === '' ? /Enter a number/ : /whole number from 0 to 100/);
+  }
+  const ok = all(rowOf(t.card.el(), 'OPT-0032'), 'input')[0];
+  ok.value = '1.15'; ok.dispatch('change'); await flush();
+  const sens2 = all(rowOf(t.card.el(), 'OPT-0031'), 'input')[0];
+  sens2.value = '70'; sens2.dispatch('change'); await flush();
+  assert.deepStrictEqual(writes(t).map((c) => c.body), [{ voiceDefaults: { voiceSpeed: 1.15 } }, { voiceDefaults: { interruptSensitivity: 70 } }]);
+});
+
 // ---- 9. source checks ------------------------------------------------------------------------------------------------------
 test('the module uses no innerHTML, no invisible characters, and no real names', () => {
   const src = fs.readFileSync(path.join(root, 'lib', 'ui-agent-card-basics.js'), 'utf8');
