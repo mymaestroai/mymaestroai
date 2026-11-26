@@ -25076,6 +25076,47 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     }
     // The agent list arrived (or failed) while the switcher is open: show it, keeping what was typed.
     function qsRosterChanged() { if (qsIsOpen()) renderQuickSwitcher(); }
+    // A row's state, in words (part of the option's name) and with the sidebar's own marker, so colour never carries it
+    // alone. Words and states come from the sidebar's helpers: agentLiveState + AgentDot (lib/ui-agent-dot.js).
+    // One state per row: question > busy > unread > background. mark is null when there is none.
+    function qsRowState(name, unread) {
+      let mark = null, words = '';
+      const live = agentLiveState(name), bg = bgCountOf(name);
+      const ds = AgentDot.dotState({ busy: live.busy, question: live.question, background: bg });
+      if (ds === 'question') { mark = 'live-question'; words = AgentDot.dotLabel(ds); }
+      else if (ds === 'busy') {
+        mark = 'busy';
+        // the sidebar's words for a named (non-worker) agent, as agentLiveState builds its line; else the activity words
+        const s = agentStatus[name];
+        const d = !(s && s.worker) ? agentDoingNow(name) : null;
+        words = String((d && d.words) || live.activity || AgentDot.dotLabel(ds));
+        words = words.charAt(0).toUpperCase() + words.slice(1);
+      }
+      else if (unread) { mark = 'unread'; words = 'New replies'; }
+      else if (ds === 'background') { mark = 'bg-work'; words = AgentDot.bgLine(bg); }
+      return { mark, words };
+    }
+    // Writes a state into a row: creates, updates or removes its .qs-state words and aria-hidden .qs-dot marker (last in the row).
+    function qsWriteState(row, st) {
+      const find = (cls) => Array.from(row.children).find(x => x.classList.contains(cls));
+      let words = find('qs-state'), dot = find('qs-dot');
+      if (!st.mark) { if (words) words.remove(); if (dot) dot.remove(); return; }
+      if (!words) { words = document.createElement('span'); words.className = 'qs-state'; }
+      if (!dot) { dot = document.createElement('span'); dot.setAttribute('aria-hidden', 'true'); }
+      if (words.textContent !== st.words) words.textContent = st.words;
+      dot.className = 'qs-dot ' + st.mark;
+      const q = st.mark === 'live-question' ? '?' : '';
+      if (dot.textContent !== q) dot.textContent = q;
+      if (!words.parentNode) row.appendChild(words);
+      if (!dot.parentNode) row.appendChild(dot);
+    }
+    // Updates the states of the rows on screen in place: no row is created, removed or moved.
+    function qsRefreshStates() {
+      const list = document.getElementById('qs-list');
+      if (!list) return;
+      const unread = qsUnread();
+      for (const row of Array.from(list.children)) if (row.dataset.agent) qsWriteState(row, qsRowState(row.dataset.agent, unread.has(row.dataset.agent)));
+    }
     function renderQuickSwitcher() {
       const q = document.getElementById('qs-q'), list = document.getElementById('qs-list'), status = document.getElementById('qs-status');
       if (!q || !list) return;
@@ -25086,11 +25127,12 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       // A changed query, or an agent that is gone, starts at the first row.
       const keepName = qsList[qsSel] && qsList[qsSel].name;
       qsList = qsRank(roster, q.value, { recent: qsRecent(), unread });
-      const at = q.value === qsLastQ && keepName ? qsList.findIndex(a => a.name === keepName) : -1;
+      const same = q.value === qsLastQ;
+      const at = same && keepName ? qsList.findIndex(a => a.name === keepName) : -1;
       qsSel = at >= 0 ? at : 0;
       qsLastQ = q.value;
       const typed = q.value.trim().toLowerCase();
-      const scrollTop = list.scrollTop;   // a repaint in place keeps the list where it was
+      const scrollTop = same ? list.scrollTop : 0;   // an unchanged query keeps the list where it was; a new one starts at the top
       list.textContent = '';
       qsList.forEach((a, i) => {
         const row = document.createElement('div');
@@ -25104,29 +25146,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         row.appendChild(span('qs-name', shown));
         // the internal name next to a different display name: only when what was typed matched it
         if (typed && String(shown).toLowerCase() !== String(a.name).toLowerCase() && qsScore({ name: a.name }, typed) !== Infinity) row.appendChild(span('qs-id', a.name));
-        // The state, in words on the row (part of the option's name) and with the sidebar's own marker, so colour never
-        // carries it alone. Words and states come from the sidebar's helpers: agentLiveState + AgentDot (lib/ui-agent-dot.js).
-        // One state per row: question > busy > unread > background.
-        let mark = null, words = '';
-        const live = agentLiveState(a.name), bg = bgCountOf(a.name);
-        const ds = AgentDot.dotState({ busy: live.busy, question: live.question, background: bg });
-        if (ds === 'question') { mark = 'live-question'; words = AgentDot.dotLabel(ds); }
-        else if (ds === 'busy') {
-          mark = 'busy';
-          // the sidebar's words for a named (non-worker) agent, as agentLiveState builds its line; else the activity words
-          const s = agentStatus[a.name];
-          const d = !(s && s.worker) ? agentDoingNow(a.name) : null;
-          words = String((d && d.words) || live.activity || AgentDot.dotLabel(ds));
-          words = words.charAt(0).toUpperCase() + words.slice(1);
-        }
-        else if (unread.has(a.name)) { mark = 'unread'; words = 'New replies'; }
-        else if (ds === 'background') { mark = 'bg-work'; words = AgentDot.bgLine(bg); }
-        if (mark) {
-          row.appendChild(span('qs-state', words));
-          const d = span('qs-dot ' + mark, mark === 'live-question' ? '?' : '');
-          d.setAttribute('aria-hidden', 'true');
-          row.appendChild(d);
-        }
+        qsWriteState(row, qsRowState(a.name, unread.has(a.name)));
         list.appendChild(row);
       });
       const state = window.__qsRoster || 'loading';   // set by loadAgents: 'ready' or 'failed'
@@ -25139,11 +25159,12 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (qsList.length) q.setAttribute('aria-activedescendant', `qs-opt-${qsSel}`); else q.removeAttribute('aria-activedescendant');
       list.scrollTop = scrollTop;
     }
-    // The sidebar repainted agent status: an open switcher repaints its rows once on the next frame (focus stays put).
+    // The sidebar repainted agent status: an open switcher updates its row states once on the next frame, in place
+    // (rows are never replaced, so a click in flight still lands; focus, selection and scroll stay put).
     let qsStatusRaf = 0;
     function qsStatusChanged() {
       if (!qsIsOpen() || qsStatusRaf) return;
-      const run = () => { qsStatusRaf = 0; if (qsIsOpen()) renderQuickSwitcher(); };
+      const run = () => { qsStatusRaf = 0; if (qsIsOpen()) qsRefreshStates(); };
       qsStatusRaf = typeof requestAnimationFrame === 'function' ? requestAnimationFrame(run) : setTimeout(run, 0);
     }
     function qsPaintSel(scroll = true) {

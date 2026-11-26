@@ -295,6 +295,7 @@ function page({ agents = [A('aide', 'Aide'), A('researcher', 'Researcher'), A('r
     + ['qsRecentStore', 'qsRecent', 'qsNoteOpened', 'qsRecentKeys', 'qsForgetRecents', 'qsScore', 'qsRank', 'qsUnread', 'qsBlocked', 'closeQuickSwitcher',
       'openQuickSwitcher', 'renderQuickSwitcher', 'qsPaintSel', 'qsKey', 'qsOpen', 'qsShortcut',
       'simpleCloseSettings', 'openSimpleSettings', 'openReasoningFull', 'paintReasoningFull', 'closeReasoningFull', 'openToolsFull', 'closeToolsFull', 'loadAgents'].map(fn).join('')
+    + ['qsRowState', 'qsWriteState', 'qsRefreshStates'].map(fn).join('')
     + one('qsIsOpen') + one('qsRosterChanged') + one('qsRecentBox') + fn('qsStatusChanged') + 'let qsStatusRaf = 0;\n'
     + 'function paintToolsFull() {}\n'   // its painting reads the reply's tool model; opening and closing are real
     + WORKERS_ESC
@@ -724,6 +725,60 @@ test('an open switcher repaints its rows when the sidebar status changes: once p
   assert.doesNotThrow(() => p.c.flush());
   p.c.api.statusChanged();
   assert.strictEqual(p.c.frames.length, 0);
+});
+
+test('a status repaint updates the rows in place: the same row nodes, no row replaced (a click in flight still lands)', () => {
+  const p = page({ agents: [A('aide', 'Aide'), A('scout', 'Scout'), A('forge', 'Forge')] });
+  p.c.live = { scout: { busy: true, activity: 'working' } };
+  p.cmdK();
+  p.key(p.q(), 'ArrowDown');
+  const list = p.doc.getElementById('qs-list');
+  const rowEl = (n) => p.doc.querySelector(`.qs-row[data-agent="${n}"]`);
+  const before = list.children.slice(), scoutRow = rowEl('scout'), forgeRow = rowEl('forge');
+  list.scrollTop = 40;
+  const selBefore = p.doc.querySelector('.qs-row.sel').dataset.agent, active = p.q().getAttribute('aria-activedescendant');
+  // (a) busy -> question: the same node, new words and marker
+  p.c.live = { scout: { question: true, busy: true } };
+  p.c.api.statusChanged(); p.c.flush();
+  assert.strictEqual(rowEl('scout'), scoutRow, 'the same row node');
+  assert.strictEqual(rowState(p, 'scout'), 'Waiting for your answer');
+  assert.ok(rowDot(p, 'scout').cls.has('live-question') && !rowDot(p, 'scout').cls.has('busy') && rowDot(p, 'scout').textContent === '?');
+  assert.deepStrictEqual(list.children, before, 'every row node kept, in order');
+  assert.deepStrictEqual(scoutRow.children.map(x => [...x.cls][0]), ['qs-ic', 'qs-name', 'qs-state', 'qs-dot'], 'same element order as a full paint');
+  // a new state on a row that had none: created in place
+  p.c.bg = { forge: 2 };
+  p.c.api.statusChanged(); p.c.flush();
+  assert.strictEqual(rowEl('forge'), forgeRow);
+  assert.strictEqual(rowState(p, 'forge'), 'Free · 2 in background'); assert.ok(rowDot(p, 'forge').cls.has('bg-work'));
+  assert.strictEqual(rowDot(p, 'forge').getAttribute('aria-hidden'), 'true');
+  // (b) a state cleared: the state words and the dot are removed from that row
+  p.c.live = {}; p.c.bg = {};
+  p.c.api.statusChanged(); p.c.flush();
+  assert.strictEqual(rowEl('scout'), scoutRow);
+  assert.strictEqual(rowState(p, 'scout'), null); assert.strictEqual(rowDot(p, 'scout'), undefined);
+  assert.strictEqual(rowState(p, 'forge'), null); assert.strictEqual(rowDot(p, 'forge'), undefined);
+  assert.strictEqual(scoutRow.children.length, 2);
+  // untouched: selection, aria-activedescendant, scroll, focus
+  assert.strictEqual(p.doc.querySelector('.qs-row.sel').dataset.agent, selBefore);
+  assert.strictEqual(p.q().getAttribute('aria-activedescendant'), active);
+  assert.strictEqual(list.scrollTop, 40); assert.strictEqual(p.doc.activeElement, p.q());
+  assert.deepStrictEqual(list.children, before);
+});
+
+test('scroll is restored only for an unchanged query; a changed query scrolls back to the selected first row', () => {
+  const agents = Array.from({ length: 40 }, (_, i) => A('ag' + String(i).padStart(2, '0'), 'Ag' + String(i).padStart(2, '0')));
+  const p = page({ agents });
+  p.cmdK();
+  const list = p.doc.getElementById('qs-list');
+  list.scrollTop = 300;
+  p.c.AGENTS.push(A('zed', 'Zed'));   // roster refresh, same query: scroll kept
+  p.c.api.roster();
+  assert.strictEqual(list.scrollTop, 300, 'unchanged query: scroll kept');
+  p.type('ag1');   // a changed query: first row selected and in view
+  assert.strictEqual(list.scrollTop, 0);
+  assert.strictEqual(p.doc.querySelector('.qs-row.sel').dataset.i, '0');
+  list.scrollTop = 50; p.c.api.roster();
+  assert.strictEqual(list.scrollTop, 50, 'same query again: kept');
 });
 
 test('without requestAnimationFrame the repaint falls back to a timer', async () => {
