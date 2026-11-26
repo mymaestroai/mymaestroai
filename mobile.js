@@ -16963,7 +16963,8 @@ function themeNoticeGone() { const n = document.getElementById('theme-notice'); 
 // Choosing a theme in the Settings Appearance control settles the notice for good (as its own buttons do), so a reload does not bring it back.
 // Only when the line was up at the press: a notice that was never shown is not dismissed (a later switch to Quiet still shows it once).
 function themeNoticeChosen(v, wasVisible) {
-  if (wasVisible) { try { window.hubSimple.markNoticeSeen(hubMe, window.localStorage); } catch { /* blocked storage */ } }
+  if (!wasVisible) return;   // not up at the press: leave it as the theme change left it (newly shown when Quiet just turned dark)
+  try { window.hubSimple.markNoticeSeen(hubMe, window.localStorage); } catch { /* blocked storage */ }
   themeNoticeGone();
 }
 // The line follows the page while it is open: a look change or a change of the resolved colours (Match device flipping) shows or hides it.

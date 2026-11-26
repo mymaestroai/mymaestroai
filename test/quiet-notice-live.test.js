@@ -287,4 +287,17 @@ for (const kind of ['desktop', 'phone']) {
       assert.strictEqual(x.notice(), null);
     } finally { delete global.window; }
   });
+
+  test(kind + ': Quiet + Light with the notice unseen and not showing: choosing Dark in Settings shows it and, after the save, leaves it up and unmarked', async () => {
+    const x = build({ look: 'quiet', theme: 'light', classes: ['mm-light'], saveOk: () => true });
+    try {
+      x.h.themeNoticeShow();
+      assert.strictEqual(x.notice(), null, 'Quiet + Light: no notice at the press');
+      const ctl = open(x);
+      await pressTheme(ctl, 'dark');
+      assert.ok(x.doc.set.has('mm-dark'), 'dark is in force');
+      assert.ok(x.notice(), 'newly eligible: the notice is present after the successful save');
+      assert.strictEqual(marked(x), undefined, 'and it is not marked seen (a reload shows it again)');
+    } finally { delete global.window; }
+  });
 }

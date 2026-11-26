@@ -3355,7 +3355,7 @@
       lookPickerBuild(picker);
       if (window.hubSimple && typeof window.hubSimple.themeControl === 'function' && window.hubMe && !document.documentElement.classList.contains('mm-simple')) {
         // Appearance: Light / Dark / Match device, one theme for the account in both modes; right before Interface style.
-        const ap = window.hubSimple.themeControl(document, { me: () => window.hubMe, save: (v) => simplePrefs({ theme: v }), onError: (err) => hubToast(`Could not save: ${err.message}`), onPress: () => !!document.getElementById('hub-theme-notice'), onChosen: (v, wasVisible) => { if (wasVisible) { try { window.hubSimple.markNoticeSeen(window.hubMe, defaultNoticeStorage()); } catch { /* blocked storage */ } } const n = document.getElementById('hub-theme-notice'); if (n) { n.remove(); layoutBanners(); } } });
+        const ap = window.hubSimple.themeControl(document, { me: () => window.hubMe, save: (v) => simplePrefs({ theme: v }), onError: (err) => hubToast(`Could not save: ${err.message}`), onPress: () => !!document.getElementById('hub-theme-notice'), onChosen: (v, wasVisible) => { if (!wasVisible) return; try { window.hubSimple.markNoticeSeen(window.hubMe, defaultNoticeStorage()); } catch { /* blocked storage */ } const n = document.getElementById('hub-theme-notice'); if (n) { n.remove(); layoutBanners(); } } });   // a notice that was not up at the press stays as the theme change left it (newly shown when Quiet just turned dark)
         ap.el.style.marginBottom = '12px';
         host.insertBefore(ap.el, picker);   // right before Interface style
       }
