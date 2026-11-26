@@ -3041,6 +3041,8 @@
     .research-lines .research-notice { display: flex; flex-direction: column; gap: 2px; }
     .research-lines .research-head { display: flex; align-items: flex-start; gap: 8px; }
     .research-lines .research-head .ho-title { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+    /* collapsed: the title is at most two lines; opened it has no research-title-clamp class and shows whole */
+    .research-lines .research-head .ho-title.research-title-clamp { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
     .research-lines .research-q { white-space: normal; overflow-wrap: anywhere; color: var(--text); }
     .research-lines .research-why, .research-lines .research-cost { color: var(--text-dim); font-size: 13px; overflow-wrap: anywhere; }
     .research-lines .research-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }

@@ -178,7 +178,7 @@ test('the tool is on both tool lists, the guidance on every route, the person on
   assert.equal((SRC.match(/\+ researchGuidanceFor\(agentName, /g) || []).length, 3, 'gateway, Claude and Codex instructions');
   // changed: the condition now also admits a trusted Set up teams turn (team_setup && trustedTeamSetup), the same trust as Build Team; the rest of the line is unchanged.
   assert.match(SRC, /const personKey = \(turnOrigin\.kind === 'user' \|\| \(turnOrigin\.kind === 'build_team' && trustedBuildTeam\) \|\| \(turnOrigin\.kind === 'team_setup' && trustedTeamSetup\)\) \? \(trustedAccounts === false \? 'owner' : \(trustedUserId \? String\(trustedUserId\)\.slice\(0, 64\) : null\)\) : null;/);   // review r2: no accounts (also the older single password) -> 'owner'. Build Team (the route's trusted admin context) names the admin who pressed it, so its plan card is theirs.
-  assert.match(SRC, /\{ kind: 'research_report', from: 'hub' \}\)/);   // the report turn's origin (delivery itself: the review r2 test)
+  assert.match(SRC, /\{ kind: 'research_report', from: 'hub', \.\.\.\(question \? \{ label: question \} : \{\}\), \.\.\.\(what \? \{ what \} : \{\}\) \}\)/);   // the report turn's origin (changed: what says a stop or upgrade turn) (delivery itself: the review r2 test)
   const server = fs.readFileSync(path.join(REAL, 'server.js'), 'utf8');
   assert.match(server, /require\('\.\/lib\/sdk-chat'\)\.startResearch\(\)/);
   assert.match(server, /pathname === '\/api\/research-pref'/);
@@ -287,7 +287,7 @@ test('review r2: a start that the runner refuses keeps the approval so the agent
 });
 
 test('review r2: delivery counts only when the report turn ended with a reply; the deadline stops started workers', () => {
-  assert.match(SRC, /wakeAgent\(agent, message, \(text\) => \(String\(text \|\| ''\)\.trim\(\) \? resolve\(\) : reject\(new Error\('the report turn ended without a reply'\)\)\), \{ kind: 'research_report', from: 'hub' \}\)/);
+  assert.match(SRC, /wakeAgent\(agent, message, \(text\) => \(String\(text \|\| ''\)\.trim\(\) \? resolve\(\) : reject\(new Error\('the report turn ended without a reply'\)\)\), \{ kind: 'research_report', from: 'hub', \.\.\.\(question \? \{ label: question \} : \{\}\), \.\.\.\(what \? \{ what \} : \{\}\) \}\)/);
   assert.match(SRC, /if \(detached && signal\) signal\.addEventListener\('abort', stopStarted, \{ once: true \}\);/);
   assert.match(SRC, /const stopStarted = \(\) => \{ for \(const id of startedIds\) \{ try \{ cancelWorker\(id, \{ admin: true \}\); \}/);
   assert.match(SRC, /if \(detached\) \{ startedIds\.add\(v\.id\); if \(signal && signal\.aborted\) stopStarted\(\); \}/);

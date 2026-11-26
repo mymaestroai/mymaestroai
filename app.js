@@ -9336,14 +9336,19 @@
       if (s >= 60 && s % 60 === 0) { const m = s / 60; return m === 1 ? '1 minute' : `${m} minutes`; }
       return s === 1 ? '1 second' : `${s} seconds`;
     }
-    function researchNoticeOn(run) { return !!run && (run.startedBy === 'agent' || run.startedBy === 'no-answer' || run.startedBy === 'always'); }
+    // 'upgrade' (a run Make it thorough started) is a notice too, so after the click the box holds one bar for it, not a line beside the old run's outcome
+    function researchNoticeOn(run) { return !!run && (run.startedBy === 'agent' || run.startedBy === 'no-answer' || run.startedBy === 'always' || run.startedBy === 'upgrade'); }
+    const RESEARCH_UPGRADE_TEXT = 'Thorough research started. Its report will come here.';
+    // In the collapsed title a long agent name is cut to 20 characters (the words after it are never cut); opened, the full name shows.
+    function researchShortName(who) { const s = String(who); return s.length > 20 ? s.slice(0, 20) + '…' : s; }
     // A notice is one line until it is opened (▾): the title, Stop, ▾ and ×. Opened, it adds the question in full, why, the cost, the progress and
     // Make it thorough. Which notices are open, and which were dismissed with ×, is kept by run id (so a redraw never closes or brings back one).
     const researchOpen = new Set();        // run ids whose notice is opened
     const researchGroupOpen = new Set();   // agents whose "N research runs started by agents" line is opened
     const researchDismissed = new Set();   // run ids hidden with × on this page (kept for the page's life; a reload may show them again)
-    function researchNoticeTitle(run, agent) {
-      const who = researchAgentName(agent);
+    function researchNoticeTitle(run, agent, cut) {
+      const who = cut ? researchShortName(researchAgentName(agent)) : researchAgentName(agent);
+      if (run.startedBy === 'upgrade') return RESEARCH_UPGRADE_TEXT;
       if (run.startedBy === 'always') return `${who} started a ${run.level === 'thorough' ? 'thorough' : 'quick'} research run because you chose Always yes.`;
       if (run.startedBy === 'no-answer' && !(Number(run.waitSeconds) > 0)) return `${who} started a quick research run without asking, as your settings allow.`;   // a wait of 0 asks nobody
       return run.startedBy === 'no-answer' ? `Nobody answered within ${researchWaitWords(run.waitSeconds)}, so ${who} started a quick research run.` : `${who} started a quick research run for its work.`;
@@ -9379,7 +9384,8 @@
       const add = (cls, text) => { const p = document.createElement('div'); p.className = cls; p.textContent = text; d.appendChild(p); return p; };
       const btns = [];
       const act = (to, label, cls, what) => { const b = document.createElement('button'); b.type = 'button'; b.className = cls; b.textContent = label; b.disabled = !!run.busy; b.onclick = () => researchNoticeAct(run, agent, what, btns); btns.push(b); to.appendChild(b); };
-      const title = document.createElement('div'); title.className = 'ho-title'; title.textContent = closed ? run.outcome : researchNoticeTitle(run, agent); head.appendChild(title);
+      // collapsed: at most two lines (CSS clamp) and a long agent name cut to 20 characters; opened: the full title, not clamped
+      const title = document.createElement('div'); title.className = open ? 'ho-title' : 'ho-title research-title-clamp'; title.textContent = closed ? run.outcome : researchNoticeTitle(run, agent, !open); head.appendChild(title);
       if (!closed && run.active !== false) act(head, 'Stop', 'wo-stop', 'stop');
       if (!closed) head.appendChild(researchToggleButton(open, () => researchToggleSet(researchOpen, id)));
       head.appendChild(researchSmallButton('research-x', '×', 'Dismiss', () => { researchDismissed.add(id); researchOpen.delete(id); researchLinePaint(); }));
@@ -9388,7 +9394,7 @@
       if (q) add('research-q', '“' + q + '”');
       const why = String(run.reason || '').replace(/\s+/g, ' ').trim();
       if (run.startedBy === 'agent' && why) add('research-why', 'Why: ' + why);
-      if (run.costLine) add('research-cost', String(run.costLine));
+      if (run.costLine && run.startedBy !== 'upgrade') add('research-cost', String(run.costLine));
       add('ho-time', researchLineText(run, now));
       if (run.active !== false && run.upgradable === true) {
         const row = document.createElement('div');
@@ -9412,7 +9418,7 @@
         if (!researchRuns.has(agent)) researchRuns.set(agent, new Map());
         const m = researchRuns.get(agent);
         const cur = m.get(id) || run;
-        cur.outcome = what === 'stop' ? `Research stopped. ${researchAgentName(agent)} was told.` : 'Thorough research started. Its report will come here.';
+        cur.outcome = what === 'stop' ? `Research stopped. ${researchAgentName(agent)} was told.` : RESEARCH_UPGRADE_TEXT;
         cur.outcomeAt = Date.now(); cur.active = false; cur.upgradable = false; cur.busy = false;
         m.set(id, cur);
         researchLinePaint();
@@ -9434,6 +9440,8 @@
       const all = agent && researchRuns.has(agent) ? researchRuns.get(agent) : null;
       if (all) {   // a closed notice ("Stopped. ...") goes after a short while
         for (const [id, r] of [...all]) if (r.outcome && now - (r.outcomeAt || 0) > RESEARCH_NOTICE_SHOW_MS) all.delete(id);
+        // the new thorough run is on the page: its notice says "Thorough research started", so the old quick run's confirmation goes (said once)
+        if ([...all.values()].some(r => r.startedBy === 'upgrade' && !r.outcome)) for (const [id, r] of [...all]) if (r.outcome === RESEARCH_UPGRADE_TEXT) { all.delete(id); researchEndedAdd(id); }
         if (!all.size) researchRuns.delete(agent);
       }
       const runs = all && all.size ? [...all.values()].filter(r => !researchDismissed.has(String(r.id))).sort((a, b) => (Number(a.startedAt) || 0) - (Number(b.startedAt) || 0)).slice(0, 3) : [];
@@ -11588,8 +11596,14 @@
         else if (o.kind === 'hand_off') label = o.label ? o.label.replace(/^Hand-off\b/, 'Task') : `Task from ${from || 'another agent'}`;
         else if (o.kind === 'hand_off_report') label = o.label ? o.label.replace(/^Hand-off\b/, 'Task') : 'Task finished';
         else if (o.kind === 'alert') label = 'Monitor alert';
-        else if (o.kind === 'research_report') label = 'Research finished';
+        else if (o.kind === 'research_report') label = o.what === 'stopped' ? 'Research stopped' : o.what === 'thorough' ? 'Research made thorough' : 'Research finished';
         else label = 'Hub turn';
+        // A research report says what it is once: the row reads "Research finished", the time, then the question in quotes (never the label again),
+        // and no "from …" line follows the reply.
+        if (o.kind === 'research_report') {
+          const q = typeof o.label === 'string' ? o.label.replace(/\s+/g, ' ').trim() : '';
+          return { kind, from, label, noFrom: true, note: q ? '“' + q + '”' : '' };
+        }
         return { kind, from, label };
       }
       const text = typeof entry.content === 'string' ? entry.content.trimStart() : '';
@@ -11689,7 +11703,7 @@
         }
         const own = indexes.some((k) => autoOwnOrigin(history[k].origin));
         const open = indexes.filter((k) => history[k].role === 'assistant' && (history[k].for_owner === true || own));
-        items.push({ type: 'card', kind: last.kind, from: last.from, label: last.label, work: lastWork, ts: firstTs, indexes, open, firstLine: autoCardLine(history, indexes, last.label) });
+        items.push({ type: 'card', kind: last.kind, from: last.from, label: last.label, work: lastWork, ts: firstTs, indexes, open, firstLine: last.noFrom ? last.note || '' : autoCardLine(history, indexes, last.label), ...(last.noFrom ? { noFrom: true, note: last.note || '' } : {}) });
         i = j;
       }
       const out = [];
@@ -11747,10 +11761,12 @@
       const wrap = document.createElement('div');
       wrap.className = `auto-card auto-card-${autoCardKind(c.kind)}`;
       const { head, body } = foldHead('auto-card-head', 'auto-card-body', wrap);
-      const line = foldPart('span', 'auto-card-line', c.firstLine || c.label);
+      // A research report's row: the question in quotes (c.note) is its one line, never the label a second time
+      const fixed = c.noFrom ? String(c.note || '') : null;
+      const line = foldPart('span', 'auto-card-line', fixed !== null ? fixed : (c.firstLine || c.label));
       head.append(foldPart('span', 'auto-card-label', c.label), foldPart('span', 'auto-card-time', timeFn ? timeFn(c.ts) : foldCardTime(c.ts)), line, foldPart('span', 'auto-card-chev', '▸'));
       parent.appendChild(wrap);
-      return { wrap, head, body, setLine: (text) => { line.textContent = text || c.label; } };
+      return { wrap, head, body, noFrom: !!c.noFrom, setLine: (text) => { line.textContent = fixed !== null ? fixed : (text || c.label); } };
     }
     function foldFromLine(label) {
       return foldPart('div', 'auto-from', `from ${label}`);
@@ -11767,7 +11783,7 @@
         else draw(k, { into: built.body, notice: false });
       }
       for (const k of c.open) {
-        parent.appendChild(foldFromLine(c.label));
+        if (!c.noFrom) parent.appendChild(foldFromLine(c.label));
         draw(k, { notice: false, push: false });
       }
       return built;
@@ -11898,7 +11914,8 @@
             card = mem.card;
             card.setLine('working…');
           } else {
-            card = foldBuildCard(panel, { kind: info.kind, label: info.label, ts: Date.now(), firstLine: 'working…' });
+            const reportBits = info.noFrom ? { noFrom: true, note: info.note || '' } : null;   // a research report: its row says it once, no "from" line
+            card = foldBuildCard(panel, { kind: info.kind, label: info.label, ts: Date.now(), firstLine: 'working…', ...reportBits });
             if (hubMain) { card.wrap.classList.add('chat-view-hidden'); card.hiddenMsgs = []; }
           }
           chat.lastAutoCard = null;
@@ -12303,10 +12320,15 @@
       if (!panel || anchor.parentNode !== panel) return;
       // replies already moved out after the same block keep their order: this one goes after them
       while (anchor.nextElementSibling && anchor.nextElementSibling.dataset && anchor.nextElementSibling.dataset.autoMoved === '1') anchor = anchor.nextElementSibling;
-      const line = foldFromLine(card.label);
-      line.dataset.autoMoved = '1'; el.dataset.autoMoved = '1';
-      anchor.after(line);
-      line.after(el);
+      el.dataset.autoMoved = '1';
+      if (card.noFrom) {   // a research report says what it is in its row: no "from …" line
+        anchor.after(el);
+      } else {
+        const line = foldFromLine(card.label);
+        line.dataset.autoMoved = '1';
+        anchor.after(line);
+        line.after(el);
+      }
       card.moved = true;
     }
     function onHubForOwner(ev) {
@@ -14639,7 +14661,11 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         refresh();
 
         document.body.appendChild(overlay);
-        setTimeout(() => { const f = checklist ? overlay.querySelector('.question-option') : customInput; if (f && f.focus) f.focus(); }, 100);
+        // The card opens at its top (the question visible): focus never scrolls, and the card's scroll container is set to its top after it is shown
+        const modalBox = overlay.querySelector('.question-modal');
+        const toTop = () => { if (modalBox) modalBox.scrollTop = 0; overlay.scrollTop = 0; };
+        toTop();
+        setTimeout(() => { const f = checklist ? overlay.querySelector('.question-option') : customInput; if (f && f.focus) f.focus({ preventScroll: true }); toTop(); }, 100);
       });
     }
 

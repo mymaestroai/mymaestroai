@@ -250,8 +250,8 @@ for (const name of ['desktop', 'phone']) {
     await bs[0].onclick();
     assert.equal(p.toasts[1], 'offline');
   });
-  test(`${name}: a run the person started (or made thorough) keeps today's plain line, no buttons`, () => {
-    for (const startedBy of ['person', 'upgrade', undefined]) {
+  test(`${name}: a run the person started keeps today's plain line, no buttons (a run Make it thorough started is a notice since G2)`, () => {
+    for (const startedBy of ['person', undefined]) {
       const p = load(name);
       p.c.apply(ev({ startedBy, level: 'thorough', label: 'reading sources in full (3 of 12)', startedAt: Date.now() - 14 * 60000 }));
       assert.equal(cards(p.box).length, 0);
@@ -297,14 +297,14 @@ for (const name of ['desktop', 'phone']) {
     await q.c.loadRuns('sam-bot');
     assert.equal(cards(q.box).length, 0);
   });
-  test(`${name}: an upgrade seen from another device: old quick run stopped, the new thorough run (startedBy upgrade) is a plain line`, () => {
+  test(`${name}: an upgrade seen from another device: old quick run stopped, the new thorough run (startedBy upgrade) is one collapsed notice`, () => {
     const p = load(name);
     p.c.apply(ev({}));
     p.c.apply(ev({ seq: 2, state: 'stopped', active: false, upgradable: false }));
     p.c.apply(ev({ id: 'dr-2', startedBy: 'upgrade', level: 'thorough', upgradable: false, label: 'planning' }));
-    assert.equal(cards(p.box).length, 0);
+    assert.equal(cards(p.box).length, 1);
     assert.equal(p.box.children.length, 1);
-    assert.match(p.box.children[0].className, /research-line/);
+    assert.deepEqual(textsOf(cards(p.box)[0]), ['Thorough research started. Its report will come here.', 'Stop', '▾', '×']);
   });
   test(`${name}: a 'stopped' event after pressing Stop here keeps "Research stopped. Sam was told."`, async () => {
     const p = load(name);
@@ -610,4 +610,291 @@ test('settings: the "Today: n started by agents" line, shown from /api/research/
 });
 test('settings: the phone adds nothing of its own (its Settings frame is the desktop Settings page)', () => {
   assert.doesNotMatch(mob, /researchOfferWaitSeconds|researchAgentCaps/);
+});
+
+// ── Easel's second review (G1 to G4) ──
+const LONG_NAME = 'abcdefghij'.repeat(4);   // 40 characters
+for (const name of ['desktop', 'phone']) {
+  // G1
+  test(`G1 ${name}: collapsed, a long agent name is cut to 20 characters + "…" and the rest of the sentence is whole; opened, the full name, not clamped`, () => {
+    const p = load(name, name === 'desktop' ? { agentDisplayName: () => LONG_NAME } : { displayName: () => LONG_NAME });
+    p.c.apply(ev({}));
+    const title = cards(p.box)[0].children[0].children[0];
+    assert.equal(title._t, 'abcdefghijabcdefghij…' + ' started a quick research run for its work.');
+    assert.match(title.className, /research-title-clamp/);
+    const opened = openFirst(p).children[0].children[0];
+    assert.equal(opened._t, LONG_NAME + ' started a quick research run for its work.');
+    assert.doesNotMatch(opened.className, /research-title-clamp/);
+    assert.match(opened.className, /ho-title/);
+    // the other titles cut the name the same way; a name of 20 or fewer is left alone
+    const q = load(name, name === 'desktop' ? { agentDisplayName: () => LONG_NAME } : { displayName: () => LONG_NAME });
+    q.c.apply(ev({ startedBy: 'always', level: 'thorough' }));
+    assert.equal(textsOf(cards(q.box)[0])[0], 'abcdefghijabcdefghij… started a thorough research run because you chose Always yes.');
+    const s = load(name, name === 'desktop' ? { agentDisplayName: () => 'x'.repeat(20) } : { displayName: () => 'x'.repeat(20) });
+    s.c.apply(ev({}));
+    assert.equal(textsOf(cards(s.box)[0])[0], 'x'.repeat(20) + ' started a quick research run for its work.');
+  });
+  test(`G1 ${name}: the CSS clamps the collapsed title to two lines (display -webkit-box, -webkit-line-clamp: 2, line-clamp: 2, overflow hidden) and only the collapsed class carries it`, () => {
+    const css = read(name === 'desktop' ? 'index.html' : 'mobile.html');
+    const rule = /\.research-lines \.research-head \.ho-title\.research-title-clamp \{([^}]*)\}/.exec(css);
+    assert.ok(rule, 'a clamp rule');
+    assert.match(rule[1], /display: -webkit-box/);
+    assert.match(rule[1], /-webkit-box-orient: vertical/);
+    assert.match(rule[1], /-webkit-line-clamp: 2/);
+    assert.match(rule[1], /(^|[^-])line-clamp: 2/);
+    assert.match(rule[1], /overflow: hidden/);
+    const base = /\.research-lines \.research-head \.ho-title \{([^}]*)\}/.exec(css)[1];
+    assert.doesNotMatch(base, /line-clamp|overflow: hidden/, 'the plain title (opened) is not clamped');
+  });
+  // G2
+  test(`G2 ${name}: after Make it thorough the box holds one bar: the new run's collapsed notice; the old run's confirmation is gone; opened: question and progress only`, async () => {
+    const p = load(name);
+    p.c.apply(ev({}));
+    openFirst(p);
+    await buttonsOf(cards(p.box)[0]).find((b) => b.textContent === 'Make it thorough').onclick();
+    assert.equal(p.box.children.length, 1, 'before the new run shows: the confirmation');
+    assert.equal(textsOf(cards(p.box)[0])[0], 'Thorough research started. Its report will come here.');
+    p.c.apply(ev({ id: 'dr-2', seq: 1, startedBy: 'upgrade', level: 'thorough', label: 'quick pass', upgradable: false, startedAt: Date.now(), costLine: 'About $9 on this model.' }));
+    assert.equal(p.box.children.length, 1, 'exactly one research element for the agent');
+    const [card] = cards(p.box);
+    assert.deepEqual(textsOf(card), ['Thorough research started. Its report will come here.', 'Stop', '▾', '×']);
+    assert.match(card.children[0].children[0].className, /research-title-clamp/);
+    assert.equal(p.c.runs.get('sam-bot').has('dr-1'), false, 'the old record is gone');
+    const t = textsOf(openFirst(p));
+    assert.equal(t[4], '“How big is the market for sleep trackers?”');
+    assert.match(t[5], /^Deep research \(Thorough\): quick pass · just started$/);
+    assert.equal(t.length, 6, 'no Why, no cost line, no Make it thorough');
+    assert.deepEqual(labels(cards(p.box)[0]), ['Stop', '▴', '×']);
+    // a late event of the old run does not bring its line back
+    p.c.apply(ev({ seq: 9, state: 'running' }));
+    assert.equal(p.box.children.length, 1);
+  });
+  test(`G2 ${name}: a run Make it thorough started is a notice (researchNoticeOn) and shows with an outcome-less record only once`, () => {
+    const p = load(name);
+    p.c.apply(ev({ id: 'dr-2', startedBy: 'upgrade', level: 'thorough', upgradable: false, label: 'planning' }));
+    assert.equal(p.box.children.length, 1);
+    assert.match(cards(p.box)[0].className, /research-notice/);
+    assert.equal(cards(p.box)[0].children[0].children[0]._t, 'Thorough research started. Its report will come here.');
+  });
+}
+
+// ── G3: the research report's row says what it is once ──
+const Q_REPORT = 'How big is the market for sleep trackers?';
+function helperCtx(src, extra = {}) {
+  const a = src.indexOf('// ── auto-turn helpers (begin) ──'), b = src.indexOf('// ── auto-turn helpers (end) ──');
+  assert.ok(a > 0 && b > a);
+  const ctx = vm.createContext({ String, Array, Math, Number, ...extra });
+  vm.runInContext(src.slice(a, b) + '\nthis.info = autoInfoOf; this.group = autoGroupHistory; this.kindOf = autoCardKind;', ctx);
+  return ctx;
+}
+const reportHistory = (origin) => [
+  { role: 'user', content: '[Deep research finished] "q" (id dr-1).\n\nThe research run finished.', origin, ts: '2026-11-25T23:31:00Z' },
+  { role: 'assistant', content: 'Research finished. Here is the report.', for_owner: true },
+];
+function fakeNode(tag) {
+  return { tag, className: '', textContent: '', children: [], attrs: {}, dataset: {}, hidden: false, parentNode: null,
+    setAttribute(k, v) { this.attrs[k] = v; }, getAttribute(k) { return this.attrs[k]; }, addEventListener() {},
+    append(...c) { for (const x of c) this.appendChild(x); }, appendChild(c) { c.parentNode = this; this.children.push(c); return c; },
+    after(x) {   // like the DOM: x leaves its old place first
+      if (x.parentNode && x.parentNode.children) { const o = x.parentNode.children.indexOf(x); if (o >= 0) x.parentNode.children.splice(o, 1); }
+      const s = this.parentNode.children; s.splice(s.indexOf(this) + 1, 0, x); x.parentNode = this.parentNode;
+    } };
+}
+const cardTexts = (wrap) => wrap.children[0].children.map((c) => c.textContent);
+const fromLines = (panel) => panel.children.filter((c) => c.className === 'auto-from');
+
+test('G3 lib/ui-auto-turns.js and both pages: a research_report origin gives label "Research finished" and the question in quotes as the row note; the card has no from line; other kinds are unchanged', () => {
+  for (const [nm, src] of [['lib', read('lib/ui-auto-turns.js')], ['desktop', app], ['phone', mob]]) {
+    const ctx = helperCtx(src);
+    const u = (origin) => ({ role: 'user', content: 'x', origin });
+    const i = ctx.info(u({ kind: 'research_report', from: 'hub', label: Q_REPORT }));
+    assert.equal(i.label, 'Research finished', nm);
+    assert.equal(i.note, '“' + Q_REPORT + '”', nm);
+    assert.equal(i.noFrom, true, nm);
+    const none = ctx.info(u({ kind: 'research_report', from: 'hub' }));
+    assert.equal(none.label, 'Research finished', nm);
+    assert.equal(none.note, '', nm);
+    // the grouped card: its one line is the question (never the label again), no from line is wanted
+    const [card] = ctx.group(reportHistory({ kind: 'research_report', from: 'hub', label: Q_REPORT }));
+    assert.equal(card.type, 'card', nm);
+    assert.equal(card.label, 'Research finished', nm);
+    assert.equal(card.firstLine, '“' + Q_REPORT + '”', nm);
+    assert.equal(card.noFrom, true, nm);
+    assert.deepEqual([...card.open], [1], nm);
+    const [bare] = ctx.group(reportHistory({ kind: 'research_report', from: 'hub' }));
+    assert.equal(bare.firstLine, '', nm + ': no question, no second "Research finished"');
+    // other kinds keep what they had
+    assert.deepEqual({ ...ctx.info(u({ kind: 'alert', from: 'm' })) }, { kind: 'notice', from: 'm', label: 'Monitor alert' }, nm);
+    assert.deepEqual({ ...ctx.info(u({ kind: 'consultation', from: 'bob' })) }, { kind: 'consultation', from: 'bob', label: 'Consultation from bob' }, nm);
+    const [other] = ctx.group([{ role: 'user', content: 'x', origin: { kind: 'consultation', from: 'bob' } }, { role: 'assistant', content: 'Reply here', for_owner: true }]);
+    assert.equal(other.noFrom, undefined, nm);
+    assert.equal(other.firstLine, 'x', nm + ': the prompt line, as before');
+  }
+});
+test('G3 desktop: the history card row reads "Research finished", the time, the question; no from line under the reply; a consultation still has its from line', () => {
+  const a = app.indexOf('function foldToggle('), b = app.indexOf('function foldPromptLine(');
+  assert.ok(a > 0 && b > a);
+  const ctx = helperCtx(app, { document: { createElement: fakeNode }, foldCardTime: () => 'T' });
+  vm.runInContext(app.slice(a, b) + '\nthis.render = foldRenderHistoryCard;', ctx);
+  const draw = (panel) => (k, o) => { if (o.push === false) panel.appendChild({ className: 'entry', children: [] }); };
+  const panel = fakeNode('div');
+  const [card] = ctx.group(reportHistory({ kind: 'research_report', from: 'hub', label: Q_REPORT }));
+  ctx.render(draw(panel), card, panel, null, () => '11:31 PM');
+  assert.deepEqual(cardTexts(panel.children[0]), ['Research finished', '11:31 PM', '“' + Q_REPORT + '”', '▸']);
+  assert.equal(fromLines(panel).length, 0, 'no "from Research finished" line');
+  assert.equal(panel.children.filter((c) => c.className === 'entry').length, 1, 'the reply is still shown');
+  const p2 = fakeNode('div');
+  const [cons] = ctx.group([{ role: 'user', content: 'x', origin: { kind: 'consultation', from: 'bob' } }, { role: 'assistant', content: 'Reply here', for_owner: true }]);
+  ctx.render(draw(p2), cons, p2, null, () => 'T');
+  assert.deepEqual(fromLines(p2).map((l) => l.textContent), ['from Consultation from bob']);
+});
+test('G3 desktop live: the report card keeps the question as its line when the turn ends, and the reply moves out with no from line', () => {
+  const a = app.indexOf('function foldToggle('), b = app.indexOf('function foldPromptLine(');
+  const ctx = helperCtx(app, { document: { createElement: fakeNode }, foldCardTime: () => 'T' });
+  vm.runInContext(app.slice(a, b) + '\nthis.build = foldBuildCard;', ctx);
+  const panel = fakeNode('div');
+  const info = ctx.info({ role: 'user', content: 'x', origin: { kind: 'research_report', from: 'hub', label: Q_REPORT } });
+  const built = ctx.build(panel, { kind: info.kind, label: info.label, ts: 1, firstLine: 'working…', ...(info.noFrom ? { noFrom: true, note: info.note } : {}) }, () => 'T');
+  assert.deepEqual(cardTexts(built.wrap), ['Research finished', 'T', '“' + Q_REPORT + '”', '▸']);
+  built.setLine('Research finished. Here is the report.');   // turn end: the reply's first line
+  built.setLine('');
+  assert.equal(built.wrap.children[0].children[2].textContent, '“' + Q_REPORT + '”');
+  assert.equal(built.noFrom, true);
+  // an ordinary card still falls back to its label
+  const o = ctx.build(panel, { kind: 'notice', label: 'Monitor alert', ts: 1, firstLine: 'working…' }, () => 'T');
+  o.setLine('');
+  assert.equal(o.wrap.children[0].children[2].textContent, 'Monitor alert');
+  // hubMoveReplyOut: no from line for the report
+  const src = app.slice(app.indexOf('function hubMoveReplyOut('), app.indexOf('function onHubForOwner('));
+  const mk = (parentNode) => Object.assign(fakeNode('div'), { parentNode, isConnected: true });
+  const pn = mk(null); const wrap = mk(pn); pn.children.push(wrap); wrap.classList = { remove() {} };
+  const reply = mk(pn); reply.id = 'm1'; pn.children.push(reply);
+  let fromCalls = 0;
+  const fn = new Function('chats', 'document', 'foldFromLine', `${src}; return hubMoveReplyOut;`)({ c1: {} }, { getElementById: (id) => (id === 'messages-c1' ? pn : id === 'm1' ? reply : null) }, () => { fromCalls++; return mk(null); });
+  const card = { chatId: 'c1', msgId: 'm1', label: 'Research finished', wrap, noFrom: true };
+  fn(card);
+  assert.equal(card.moved, true);
+  assert.equal(fromCalls, 0);
+  assert.deepEqual(pn.children.map((c) => c === wrap ? 'card' : c === reply ? 'reply' : '?'), ['card', 'reply']);
+});
+test('G3 phone: the history card row reads label, time, question; no from line under the reply; a consultation keeps it', () => {
+  const a = mob.indexOf('function makeFoldHeader('), b = mob.indexOf('function promptCardLine(');
+  const c = mob.indexOf('function renderAutoCard('), d = mob.indexOf('// Three or more cards in a row');
+  assert.ok(a > 0 && b > a && c > b && d > c);
+  const run = (history) => {
+    const chat = fakeNode('div');
+    let target = chat;
+    const stubs = {
+      document: { createElement: fakeNode }, chatEl: () => chat, bubbleHost: () => chat,
+      withRenderTarget: (t, f) => { const prev = target; target = t || chat; f(); target = prev; },
+      renderEntry: (e) => target.appendChild({ className: 'entry', children: [], textContent: e.content }),
+      timeLabel: () => 'T', chatHistory: [], current: 'a', lastHistoryCard: null,
+    };
+    const ctx = helperCtx(mob, stubs);
+    vm.runInContext(mob.slice(a, b) + mob.slice(c, d) + '\nthis.render = renderAutoCard;', ctx);
+    const [it] = ctx.group(history);
+    ctx.render(it, history.map(() => 'T'), chat, history, () => '11:31 PM');
+    return chat;
+  };
+  const chat = run(reportHistory({ kind: 'research_report', from: 'hub', label: Q_REPORT }));
+  assert.deepEqual(chat.children[0].children[0].children.map((x) => x.textContent), ['Research finished', '11:31 PM', '“' + Q_REPORT + '”', '▸']);
+  assert.equal(fromLines(chat).length, 0, 'no "from Research finished" line');
+  assert.equal(chat.children.filter((x) => x.className === 'entry').length, 1);
+  const other = run([{ role: 'user', content: 'x', origin: { kind: 'consultation', from: 'bob' } }, { role: 'assistant', content: 'Reply here', for_owner: true }]);
+  assert.deepEqual(fromLines(other).map((l) => l.textContent), ['from Consultation from bob']);
+});
+test('G3 phone live: the report card keeps the question at turn end and the reply moves out with no from line', () => {
+  const src = mob.slice(mob.indexOf('function moveReplyOut('), mob.indexOf('function onForOwner('));
+  const mk = (parentNode) => Object.assign(fakeNode('div'), { parentNode, isConnected: true });
+  const run = (card) => {
+    const panel = mk(null); const wrap = mk(panel); panel.children.push(wrap);
+    const el = mk(panel); panel.children.push(el);
+    let created = 0;
+    const fn = new Function('chatOpenFor', 'chatEl', 'document', 'scrollChat', 'unhideHubTurn', `${src}; return moveReplyOut;`)(() => true, () => panel, { createElement: () => { created++; return mk(null); } }, () => {}, () => {});
+    const t = { agent: 'a', el, card: { ...card, wrap } };
+    fn(t);
+    return { t, created, panel, wrap, el };
+  };
+  const r = run({ label: 'Research finished', noFrom: true, note: '“q”' });
+  assert.equal(r.t.card.moved, true);
+  assert.equal(r.created, 0, 'no from line');
+  assert.deepEqual(r.panel.children.map((c) => c === r.wrap ? 'card' : c === r.el ? 'el' : '?'), ['card', 'el']);
+  const o = run({ label: 'Consultation from bob' });
+  assert.equal(o.created, 1, 'other kinds keep the from line');
+  // the live card and its turn-end line (the question stays; the label is not repeated)
+  assert.ok(mob.includes("if (t.card && t.card.noFrom) t.card.line.textContent = t.card.note || '';"));
+  assert.ok(mob.includes("if (info.noFrom) card.line.textContent = info.note || '';"));
+  assert.ok(mob.includes("if (t.card && info.noFrom) { t.card.noFrom = true; t.card.note = info.note || ''; }"));
+});
+test('G3 server: the research report wake puts the question (cut to 120 characters) in the origin label; delivery passes the question to wake', () => {
+  const sdk = read('lib/sdk-chat.js');
+  const a = sdk.indexOf('function researchReportLabel('), b = sdk.indexOf('let _researchRunner = null;');
+  assert.ok(a > 0 && b > a);
+  const ctx = vm.createContext({ String });
+  vm.runInContext(sdk.slice(a, b) + '\nthis.f = researchReportLabel;', ctx);
+  assert.equal(ctx.f('  Which\n judge   is best?  '), 'Which judge is best?');
+  assert.equal(ctx.f('q'.repeat(300)).length, 120);
+  assert.equal(ctx.f('q'.repeat(300)).slice(-1), '…');
+  assert.equal(ctx.f('q'.repeat(120)), 'q'.repeat(120));
+  assert.equal(ctx.f(undefined), '');
+  assert.match(sdk, /wake: \(agent, message, info\) => new Promise/);
+  assert.match(sdk, /\{ kind: 'research_report', from: 'hub', \.\.\.\(question \? \{ label: question \} : \{\}\), \.\.\.\(what \? \{ what \} : \{\}\) \}/);
+  const rs = read('lib/research.js');
+  assert.equal((rs.match(/await wake\(run\.agent, message, \{ question: run\.question \}\)/g) || []).length, 1, 'the report delivery passes the question');
+  assert.equal((rs.match(/await wake\(run\.agent, message, \{ question: run\.question, \.\.\.\(what \? \{ what \} : \{\}\) \}\)/g) || []).length, 1, 'tellAgent passes the question and what');
+});
+
+// ── G4: a question card opens at its top ──
+test('G4 desktop: showQuestionModal focuses without scrolling and leaves the tall card scrolled to its top', () => {
+  const a = app.indexOf('function showQuestionModal('), b = app.indexOf('// A question asked during a reply');
+  assert.ok(a > 0 && b > a);
+  const modal = { scrollTop: 0 };
+  const focusCalls = [];
+  const area = { value: '', scrollHeight: 0, clientHeight: 0, style: {}, addEventListener() {}, focus(o) { focusCalls.push(o); if (!o || o.preventScroll !== true) modal.scrollTop = 400; } };
+  const submit = { disabled: true, addEventListener() {} }, hint = { textContent: '' };
+  const overlay = { className: '', dataset: {}, scrollTop: 0, innerHTML: '', remove() {},
+    querySelector(s) { return { '#question-custom-input': area, '#question-submit': submit, '#question-hint': hint, '.question-modal': modal }[s] || null; },
+    querySelectorAll() { return []; } };
+  const queue = [];
+  const ctx = vm.createContext({ document: { createElement: () => overlay, body: { appendChild() { modal.scrollTop = 300; overlay.scrollTop = 200; } } }, shownQuestions: new Set(), escapeHtmlSafe: String,
+    questionNotices: new Map(), questionOverlays: {}, questionChecklistOf: () => null, questionChecklistHtml: () => '', retireQuestionNotices() {}, askResponseBody() { return '{}'; },
+    chats: {}, fetch: async () => ({ ok: true }), navigator: { platform: 'Linux' }, Option: function Option() {}, setTimeout: (f) => queue.push(f), console, Promise, String, Array, Map, Set, JSON });
+  vm.runInContext(app.slice(a, b) + '\nthis.show = showQuestionModal;', ctx);
+  ctx.show({ request_id: 'r1', questions: [{ question: 'Research this? ' + 'x'.repeat(2000), options: [{ label: 'Quick' }, { label: 'Thorough' }] }] }, null);
+  assert.equal(modal.scrollTop, 0, 'at the top as soon as it is shown');
+  assert.equal(queue.length, 1);
+  queue.forEach((f) => f());
+  assert.equal(focusCalls.length, 1);
+  assert.deepEqual({ ...focusCalls[0] }, { preventScroll: true });
+  assert.equal(modal.scrollTop, 0, 'still at the top after the focus');
+  assert.equal(overlay.scrollTop, 0);
+});
+test('G4 phone: a question box taller than the chat opens with its top at the top of the chat, not scrolled past the question', () => {
+  const a = mob.indexOf('function showQuestion(data, onAnswered) {'), b = mob.indexOf('// ── Action approvals');
+  assert.ok(a > 0 && b > a);
+  const stub = () => ({ value: '', disabled: false, textContent: '', style: {}, children: [], dataset: {}, classList: { add() {}, remove() {} }, addEventListener() {}, appendChild(c) { this.children.push(c); return c; } });
+  const mkBox = () => { const q = {}; const e = stub(); e.className = ''; e.querySelector = (s) => (q[s] ||= stub()); e.querySelectorAll = () => []; return e; };
+  const host = { children: [], clientHeight: 400, scrollTop: 0, appendChild(c) { this.children.push(c); return c; }, getBoundingClientRect: () => ({ top: 0 }) };
+  let box = null;
+  const ctx = vm.createContext({ document: { createElement: () => mkBox() }, shownQuestions: new Set(), questionBoxes: new Map(), questionTexts: new Map(), voiceHintSync() {}, api: async () => ({ ok: true }), toast() {}, esc: String,
+    chatEl: () => host, scrollChat: () => { host.scrollTop = 1000; }, retireSoon() {}, Option: function Option() {}, current: 'a', Map, String, Array, JSON, Promise, console });
+  const origAppend = host.appendChild.bind(host);
+  host.appendChild = (c) => { origAppend(c); if (c.className === 'question') { box = c; c.offsetHeight = 900; c.getBoundingClientRect = () => ({ top: 700 - host.scrollTop }); } return c; };
+  vm.runInContext(mob.slice(a, b) + '\nthis.show = showQuestion;', ctx);
+  ctx.show({ request_id: 'r1', questions: [{ question: 'Research this?', options: [{ label: 'Quick' }, { label: 'Thorough' }] }] });
+  assert.ok(box, 'the box is in the chat');
+  assert.equal(box.getBoundingClientRect().top, 0, 'the box top is at the chat top');
+});
+
+test('the turns that tell the agent a run was stopped or made thorough say so in their row, not "Research finished" (origin what)', () => {
+  const lib = require('../lib/ui-auto-turns.js');
+  const info = (o) => lib.autoInfoOf({ role: 'user', content: 'x', origin: { kind: 'research_report', from: 'hub', label: 'Which heat pump brands are most reliable?', ...o } });
+  assert.equal(info({}).label, 'Research finished');
+  assert.equal(info({ what: 'stopped' }).label, 'Research stopped');
+  assert.equal(info({ what: 'thorough' }).label, 'Research made thorough');
+  for (const src of [app, mob]) assert.ok(src.includes("else if (o.kind === 'research_report') label = o.what === 'stopped' ? 'Research stopped' : o.what === 'thorough' ? 'Research made thorough' : 'Research finished';"));
+  const research = read('lib/research.js');
+  assert.ok(research.includes("carry on without it.`, 'stopped');") && research.includes("its report will come here.`, 'thorough');"), 'stop and upgrade pass what');
+  const sdk = read('lib/sdk-chat.js');
+  assert.ok(sdk.includes("...(meta?.kind === 'research_report' && (meta?.what === 'stopped' || meta?.what === 'thorough') ? { what: meta.what } : {})"), 'wakeAgent keeps what for research turns only');
 });
