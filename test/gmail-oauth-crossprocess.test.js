@@ -518,6 +518,22 @@ test('r6: the browser page heading is neutral when the outcome is claimed elsewh
     assert.ok(page.includes(CLAIMED_MSG));
     release(); await pasting;
   }
+  // r7: a VALID code reaching A's callback after B claimed the sign-in: neutral heading, and B still saves
+  {
+    const A = fresh(); A._test.setOpener(async () => false);
+    const a = await A.startSignIn({ listener: false, open: false });
+    a.promise.catch(() => {});
+    const B = fresh();
+    let release;
+    B._test.setPostForm(() => new Promise((res) => { release = () => res({ status: 200, json: { access_token: 'AT-r7', refresh_token: 'RT-r7', expires_in: 3600 } }); }));
+    const pasting = B.finishWithPastedAddress(cb(stateOf(a.url), 'K'));
+    await tick(60);
+    const page = await callbackPage(A, `state=${stateOf(a.url)}&code=K`);
+    assert.equal(heading(page), 'Gmail sign-in', 'valid code after a claim elsewhere: neutral heading');
+    release();
+    const r = await pasting;
+    assert.equal(r.ok, true, 'B still saves its token');
+  }
   // replaced by a newer row
   {
     const A = fresh(); A._test.setOpener(async () => false);
