@@ -161,24 +161,35 @@ test('hint: a callout above the composer row, never over the message box or Send
   const css = html.match(/\.voice-hint \{[^}]*\}/)[0];
   assert.match(css, /position: absolute/); assert.match(css, /right: 8px/); assert.match(css, /width: min\(250px, calc\(100vw - 16px\)\)/);
   const place = fnSrc(mob, 'voiceHintPlace');
-  assert.match(place, /h\.style\.bottom = \(c\.clientHeight - topY \+ 10\) \+ 'px'/, 'its bottom edge sits above the row of the box, mic and Send (and the slots above it)');
+  assert.match(place, /const y = -14;/, 'its bottom edge sits above the composer top (the slots are inside the composer, below that top)');
+  assert.doesNotMatch(place, /team-offer-slot|handoff-cards|querySelectorAll/, 'no loop over slots: they are inside the composer');
+  assert.match(place, /h\.style\.top = y \+ 'px'/, 'anchored to the composer top, not its bottom (the composer height changes after placement)');
+  assert.doesNotMatch(place, /clientHeight/, 'no dependence on the composer height');
 });
 
-test('hint (phone): the tip sits above the visible Undo/offer slot and the Working on bar, not on them', () => {
+test('hint (phone): the offer / Undo slot and the Working on bar are inside #composer, so the one anchor above the composer top clears them', () => {
+  const comp = html.slice(html.indexOf('<div id="composer">'), html.indexOf('<nav id="tabbar">'));
+  assert.ok(comp.includes('id="team-offer-slot"') && comp.includes('id="handoff-cards"'), 'both slots are inside #composer');
   const place = fnSrc(mob, 'voiceHintPlace');
-  assert.match(place, /team-offer-slot, \.handoff-cards/);
-  const run = (slots) => {
+  // geometry: composer top = 0 in its own coordinates; the tip box ends at (top + translateY(-100%)); the arrow hangs 7px below the box
+  const run = (slots, rowTop = 100, clientHeight = 160) => {
     const style = { props: {}, setProperty(k, v) { this.props[k] = v; } };
-    const row = { offsetTop: 100 };
-    const composer = { clientHeight: 160, querySelector: () => row, querySelectorAll: () => slots };
+    const row = { offsetTop: rowTop };
+    const composer = { clientHeight, querySelector: () => row, querySelectorAll: () => slots };
     const h = { style, getBoundingClientRect: () => ({ left: 0, width: 250 }) };
     new Function('voiceHintEl', '$', 'voiceHintTarget', place + '\nvoiceHintPlace();')(h, () => composer, () => ({ getBoundingClientRect: () => ({ left: 300, width: 40 }) }));
-    return style.bottom;
+    assert.strictEqual(style.transform, 'translateY(-100%)');
+    return parseFloat(style.top);   // the box bottom, in composer coordinates
   };
-  assert.strictEqual(run([]), '70px', 'nothing above the row: 10px over it as before (160 - 100 + 10)');
-  assert.strictEqual(run([{ hidden: false, offsetHeight: 32, offsetTop: 62 }]), '108px', 'above the Undo line (160 - 62 + 10)');
-  assert.strictEqual(run([{ hidden: false, offsetHeight: 20, offsetTop: 80 }, { hidden: false, offsetHeight: 32, offsetTop: 40 }]), '130px', 'above the topmost of both slots');
-  assert.strictEqual(run([{ hidden: true, offsetHeight: 32, offsetTop: 62 }, { hidden: false, offsetHeight: 0, offsetTop: 30 }]), '70px', 'hidden or empty slots do not count');
+  const arrowBottom = (y) => y + 7;
+  // the slots live inside the composer: offsetTop >= 0 whatever they are, so the tip's bottom stays above the composer top (arrow 6px+ clear)
+  const slotSets = [[], [{ hidden: false, offsetHeight: 32, offsetTop: 0 }], [{ hidden: false, offsetHeight: 20, offsetTop: 8 }, { hidden: false, offsetHeight: 90, offsetTop: 40 }], [{ hidden: true, offsetHeight: 0, offsetTop: 0 }]];
+  for (const slots of slotSets) for (const rowTop of [7, 8, 40, 100]) for (const clientHeight of [60, 160, 400]) {
+    const y = run(slots, rowTop, clientHeight);
+    assert.ok(y <= -14, 'box bottom above the composer top');
+    assert.ok(arrowBottom(y) <= -6, `slots ${slots.length}, row ${rowTop}, composer ${clientHeight}: arrow at least 6px above the composer top`);
+  }
+  assert.strictEqual(run([], 100, 160), run([], 100, 400), 'the composer growing or shrinking after placement (inset, keyboard) does not move the tip');
 });
 
 // ── the Voice sheet tells the truth until ready ──

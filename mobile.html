@@ -1220,7 +1220,7 @@ html.mm-simple #cp-levels, html.mm-simple .cp-dnd, html.mm-simple .cp-disp, html
 html.mm-simple .simple-wait, html.mm-simple .simple-auto-hide { display: none !important; }
 
 /* Top bar: brand mark, centred pill, avatar */
-html.mm-simple #simple-top { display: flex; align-items: center; gap: 6px; min-height: 64px; padding: 6px 12px; flex: none; }
+html.mm-simple #simple-top { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-height: 64px; padding: 6px 12px; flex: none; }
 html.mm-simple .st-mark { width: 34px; height: 34px; border-radius: 50%; background: var(--accent); color: var(--on-accent); display: grid; place-items: center; font-weight: 700; font-size: 17px; flex: none; }
 html.mm-simple .st-pill { flex: 1 1 auto; justify-content: center; min-width: 0; max-width: 100%; min-height: 48px; display: flex; align-items: center; gap: 8px; padding: 0 16px; border-radius: 24px; border: 1px solid var(--border); background: var(--bg-card); box-shadow: var(--sp-shadow); color: var(--text); font-size: 17px; }
 html.mm-simple .st-pill .st-pic { font-size: 22px; line-height: 1; flex: none; }
@@ -1232,9 +1232,17 @@ html.mm-simple .simple-theme-btn[hidden], .mode-toggle[hidden] { display: none !
 html.mm-simple .simple-theme-btn { flex: none; min-height: 44px; display: inline-flex; align-items: center; gap: 6px; padding: 0 10px; border-radius: 22px; border: 1px solid var(--border); background: var(--bg-card); color: var(--text-dim); font-size: 14px; white-space: nowrap; }
 html.mm-simple .simple-theme-btn .stb-ic { font-size: 18px; line-height: 1; }
 html.mm-simple .mode-toggle { font-size: 14px; color: var(--text-dim); }
-@media (max-width: 420px) { html.mm-simple .st-pill .st-to, html.mm-simple .simple-theme-btn .stb-lab { display: none; } html.mm-simple .st-pill { padding: 0 10px; gap: 6px; } html.mm-simple .simple-theme-btn { min-width: 44px; justify-content: center; padding: 0 6px; } }
-html.mm-simple #simple-top .st-mark { margin-right: 2px; }
-@media (max-width: 420px) { html.mm-simple #simple-top .st-mark { display: none; } }   /* a narrow phone: the agent's name gets the room */
+html.mm-simple #simple-top .st-mark { margin-inline-end: 2px; }
+/* A phone (under 700px): two rows, whatever the width. Row 1: brand mark, then Simple switch, theme button (icon and words), avatar. Row 2: the 'Talking to: icon name' pill, full width; the name truncates with an ellipsis and never disappears. No word is cut to a bare dot or icon on one screen only. */
+@media (max-width: 699px) {
+  html.mm-simple #simple-top .st-mark { order: 1; margin-inline-end: auto; }
+  html.mm-simple #simple-top .mode-toggle { order: 2; }
+  html.mm-simple #simple-top .simple-theme-btn { order: 3; }
+  html.mm-simple #simple-top .st-avatar { order: 4; }
+  html.mm-simple #simple-top .st-pill { order: 5; flex: 1 1 100%; width: 100%; }
+}
+/* A very narrow phone (under 350px; measured: mark 34 + switch 89 + theme button 121 + avatar 44 + gaps and padding 42 = 330px): row 1 cannot hold the theme button's words, so the button is not in the bar; the same three choices stay in the settings sheet (Appearance). */
+@media (max-width: 349px) { html.mm-simple #simple-top .simple-theme-btn { display: none; } }
 
 /* Agent list screen (only reached when there is no chat to open) */
 html.mm-simple #screen-agents .view-switch { display: none; }
@@ -1301,7 +1309,8 @@ html.mm-simple .st-consult { color: var(--text-dim); font-size: 14px; padding-le
 @media (prefers-reduced-motion: reduce) { html.mm-simple .st-dot { animation: none; } }
 
 /* Composer: text on top; + / reasoning level on the left, mic / voice call / send on the right */
-html.mm-simple #composer { position: relative; background: var(--bg-dark); border-top: 0; padding: 8px 12px calc(12px + var(--sab)); }
+html.mm-simple #composer { position: relative; background: var(--bg-dark); border-top: 0; padding: 8px 12px calc(6px + var(--sab)); }   /* under the box: the safe-area inset plus 6px, nothing more (it was 12px: the box rode ~25pt too high in a home-screen app) */
+html.mm-simple body.kbd-up #composer { padding-bottom: 6px; }   /* the ON-SCREEN keyboard is up (box focused and the visible height keyboard-sized shorter): the home indicator is under it, so the inset buys nothing. A hardware keyboard focuses the box with no soft keyboard and keeps the inset (body.kbd alone follows focus) */
 html.mm-simple #composer .row { flex-wrap: wrap; align-items: center; gap: 4px 6px; border: 1px solid var(--border); background: var(--bg-card); border-radius: 28px; padding: 8px 10px 10px; box-shadow: var(--sp-shadow); margin: 0 auto; }
 html.mm-simple #composer .row::after { content: ''; flex: 1 1 0; order: 3; }
 html.mm-simple #msg-input { order: -1; flex: 0 0 100%; min-height: 48px; padding: 10px; font-size: 18px; line-height: 1.4; background: transparent; border: 0; color: var(--text); }
@@ -1315,6 +1324,16 @@ html.mm-simple #simple-call-btn.in-call { background: var(--error); box-shadow: 
 html.mm-simple #mic-btn.call { display: none; }   /* during a call the red hang-up is #simple-call-btn: one call button */
 html.mm-simple #mic-btn { display: none !important; }   /* no dictation in Simple (the phone keyboard has its own): the call button is the only voice control; its [hidden] still says whether voice is on */
 html.mm-simple #send-btn { order: 6; min-width: 52px; min-height: 52px; border-radius: 50%; background: var(--accent); color: var(--on-accent); font-size: 20px; }
+/* 320 px: + / chip / call / send must share one line: tighter side padding and gaps, 44px taps, and the chip may shrink (its word stays; it ellipsizes only if it must). After the base rules above, so it wins. */
+@media (max-width: 340px) { /* Simple composer */
+  html.mm-simple #composer { padding-left: 8px; padding-right: 8px; }
+  html.mm-simple #composer .row { gap: 4px 4px; padding: 8px 6px 10px; }
+  html.mm-simple #plus-btn { width: 44px; height: 44px; }
+  html.mm-simple #simple-effort-btn { min-width: 0; flex: 0 1 auto; gap: 4px; padding: 0 10px; }
+  html.mm-simple #simple-effort-btn .lvl-label { overflow: hidden; text-overflow: ellipsis; }
+  html.mm-simple #simple-call-btn { width: 48px; height: 48px; }
+  html.mm-simple #send-btn { min-width: 48px; min-height: 48px; }
+}
 html.mm-simple #send-btn.stop { background: var(--error); }
 html.mm-simple #send-btn.interject { background: var(--simple-interject-bg); color: var(--on-accent); }
 html.mm-simple #plus-sheet { background: var(--bg-card); border-color: var(--border); }
