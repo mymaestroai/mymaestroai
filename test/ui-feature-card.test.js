@@ -576,3 +576,46 @@ test('r2 fix6: a closed chat (its list no longer connected) is forgotten', async
   assert.ok(!p.FC.state.lists.has('quill'));
   assert.ok(p.FC.state.lists.has('harbor'), 'a list without isConnected info stays');
 });
+
+// ── p5b round 3 ──
+function heldGets(p, live) {
+  const held = []; const real = p.ctx.fetch; const cur = { live };
+  p.ctx.fetch = (url, init = {}) => ((init.method || 'GET') === 'GET' ? new Promise((resolve) => { const b = cur.live; held.push((status, bb) => resolve({ status: status === undefined ? 200 : status, json: async () => (bb !== undefined ? bb : b) })); }) : real(url, init));
+  return { held, cur };
+}
+test('r3 fix1: a 403 from a press hides the card, ignores a GET that began before the revoke, then draws from a fresh GET (denied: gone)', async () => {
+  const p = page(); const list = p.mkList(); const box = node('div');
+  p.FC.chatShown('harbor', list); await p.settle();
+  await p.FC.renderInto(box);
+  const { held } = heldGets(p, body());
+  const f = p.FC.refresh();                                   // began while still admin; its 200 is held
+  p.btns(rowsOf(p, list)[0], 'Turn on')[0].click(); await p.settle();
+  await p.answer('/api/behaviour-changes/quick-research', 403, { ok: false, error: 'No.' });
+  assert.strictEqual(p.cards(list).length, 0, 'hidden at once');
+  assert.strictEqual(box.find((n) => /\bfc-row\b/.test(n.className)).length, 0);
+  assert.strictEqual(held.length, 1, 'no new GET before the old one settles');
+  held.shift()(200); await f; await p.settle();               // the old rows answer
+  assert.strictEqual(p.cards(list).length, 0, 'nothing drawn from the old answer');
+  assert.strictEqual(box.find((n) => /\bfc-row\b/.test(n.className)).length, 0);
+  assert.strictEqual(held.length, 1, 'one fresh GET');
+  held.shift()(403, { ok: false }); await p.settle();
+  assert.strictEqual(p.cards(list).length, 0);
+  assert.strictEqual(box.find((n) => /\bfeature-card\b/.test(n.className)).length, 0);
+  assert.strictEqual(p.FC.state.rows.length, 0);
+});
+test('r3 fix1: the allowed variant: the fresh GET\'s 200 draws the card from fresh data with the error on the pressed row', async () => {
+  const p = page(); const list = p.mkList();
+  p.FC.chatShown('harbor', list); await p.settle();
+  const { held } = heldGets(p, body());
+  const f = p.FC.refresh();
+  p.btns(rowsOf(p, list)[0], 'Turn on')[0].click(); await p.settle();
+  await p.answer('/api/behaviour-changes/quick-research', 403, { ok: false, error: 'Admins only.' });
+  assert.strictEqual(p.cards(list).length, 0);
+  held.shift()(200, body({ entries: [{ ...E1, title: 'OLD' }, E2] })); await f; await p.settle();
+  assert.strictEqual(p.cards(list).length, 0, 'the older answer draws nothing');
+  held.shift()(200, body({ entries: [{ ...E1, title: 'Fresh title' }, E2] })); await p.settle();
+  const r = rowsOf(p, list)[0];
+  assert.ok(r.text.includes('Fresh title') && !r.text.includes('OLD'));
+  assert.ok(r.text.includes('Admins only.'));
+  assert.strictEqual(p.btns(r).length, 3);
+});
