@@ -138,8 +138,8 @@ test('mightWrite: reads are not, redirections and writing programs are', () => {
 
 test('onlyReads: only commands made of programs known to only read, with no redirection or substitution', () => {
   const { onlyReads } = require('../lib/code-protect');
-  for (const c of ['ls -la /tmp | head', 'cat a 2>&1', 'grep -rn x . | wc -l', 'cd /tmp && ls', 'A=1 stat f']) assert.strictEqual(onlyReads(c), true, c);
-  for (const c of ['echo x > f', 'mytool --sync lib', 'ls; mytool', 'echo $(mytool)', 'echo `mytool`', 'cat <(mytool)', 'sort -o f a', '']) {
+  for (const c of ['ls -la /tmp | head', 'cat a 2>&1', 'grep -rn x . | wc -l', 'cd /tmp && ls']) assert.strictEqual(onlyReads(c), true, c);
+  for (const c of ['echo x > f', 'mytool --sync lib', 'ls; mytool', 'echo $(mytool)', 'echo `mytool`', 'cat <(mytool)', 'sort -o f a', 'A=1 stat f', '']) {
     assert.strictEqual(onlyReads(c), false, c);
   }
 });
@@ -202,4 +202,41 @@ test('>&FILE, >& FILE, {fd}>FILE and <>FILE write; >&2, 2>&1 and >&- do not', ()
 test('onlyReads: a program named by a path, and programs that can write a file, are not read-only', () => {
   const { onlyReads } = require('../lib/code-protect');
   for (const c of ['./ls', '/tmp/x/cat a', 'uniq in out', 'xxd in out', 'file -C', 'rg --pre ./x pattern']) assert.strictEqual(onlyReads(c), false, c);
+});
+
+test('a redirection glued to a word (x>FILE, x>>FILE, x>&FILE, cat<in>out) and {fd}<>FILE write; a quoted one does not', () => {
+  const L = path.join(app, 'lib/a.js');
+  for (const c of [`echo x>${L}`, `printf a>>${L}`, `echo x>&${L}`, `cat<in>${L}`, `exec {fd}<>${L}`, `echo a=>${L}`]) assert.strictEqual(wp(c), true, c);
+  for (const c of [`echo 'x>${L}'`, `echo "x>${L}"`, `echo x\\>${L}`, 'ls x 2>&1', 'cat<in']) assert.strictEqual(wp(c), false, c);
+  assert.deepStrictEqual(shellWriteTargets(`echo x>${L}`, files), [L]);
+});
+
+test('a path whose real form cannot be worked out (lstat fails with EMFILE) is refused, never judged as written', () => {
+  const b = tmp();
+  mk(b, 'lib', 'workspaces/sam', 'hub-home/share/sam');
+  const ws = path.join(b, 'workspaces', 'sam');
+  fs.symlinkSync(path.join(b, 'lib'), path.join(ws, 'l'));
+  const cp = make(b, path.join(b, 'hub-home'));
+  const orig = fs.lstatSync;
+  fs.lstatSync = (p, ...r) => { if (String(p) === path.join(ws, 'l')) { const e = new Error('too many open files'); e.code = 'EMFILE'; throw e; } return orig(p, ...r); };
+  try {
+    assert.strictEqual(cp.isProtectedPath(path.join(ws, 'l', 'x.js')), true);
+  } finally { fs.lstatSync = orig; }
+  assert.strictEqual(cp.isProtectedPath(path.join(ws, 'missing', 'x.js')), false, 'a component that is not there (ENOENT) is still free');
+});
+
+test('onlyReads: an assignment in front (PATH=…), a function defined in the command, and less are not read-only; >/dev/null is', () => {
+  const { onlyReads } = require('../lib/code-protect');
+  for (const c of ['PATH=. ls', 'PATH=/tmp/x:$PATH cat f', 'ls () { :; }; ls', 'less -o log f', 'more f']) assert.strictEqual(onlyReads(c), false, c);
+  for (const c of ['ls x 2>/dev/null', 'grep -r a . >/dev/null 2>&1', 'cat f &>/dev/null']) assert.strictEqual(onlyReads(c), true, c);
+  assert.strictEqual(onlyReads('ls 2>/dev/nullx'), false);
+});
+
+test('a backslash in a file name on Linux is a character, not a separator', { skip: path.sep === '\\' }, () => {
+  const b = tmp();
+  mk(b, 'lib', 'workspaces/sam', 'hub-home/share/sam');
+  const cp = make(b, path.join(b, 'hub-home'));
+  // one file named `a\..\..\notes.md` inside the workspace
+  assert.strictEqual(cp.isProtectedPath(path.join(b, 'workspaces', 'sam', 'a\\..\\..\\notes.md')), false);
+  assert.strictEqual(cp.isProtectedPath(path.join(b, 'lib', 'a\\..\\..\\workspaces\\x')), true);
 });
