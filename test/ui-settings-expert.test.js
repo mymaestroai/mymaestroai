@@ -262,3 +262,38 @@ test('saving one startup value locks its row, replaces only that row and leaves 
   assert.strictEqual(rowsEl.HUB_TZ.field.value, 'Europe/Rome');
   assert.match(toasts.pop(), /Restart your Maestro/);
 });
+
+test('a save or read-back with no answer never leaves the row locked; the words say what is not known (review r8)', async () => {
+  const rows = [{ key: 'HUB_TZ', value: 'UTC', set: true, writable: true, readonly: false, danger: false, running: 'UTC', pending: false }];
+  const never = new Promise(() => {});
+  const run = async (hangPost) => {
+    const field = { value: '', disabled: false, getAttribute: (a) => (a === 'data-envin' ? 'HUB_TZ' : null) };
+    const btn = { disabled: false, getAttribute: () => null };
+    const row = { attrs: {}, parentNode: {}, querySelectorAll: () => [field, btn], setAttribute(k, v) { this.attrs[k] = v; }, removeAttribute(k) { delete this.attrs[k]; }, contains: () => false };
+    row.insertAdjacentHTML = () => { row.nextElementSibling = { querySelectorAll: () => [], querySelector: () => null }; };
+    row.remove = () => { row.removed = true; };
+    const host = { handlers: {}, innerHTML: '' };
+    host.addEventListener = (t, f) => { host.handlers[t] = f; };
+    host.querySelectorAll = () => [];
+    host.querySelector = (sel) => (/data-expert/.test(sel) ? row : field);
+    let gets = 0;
+    const fetchJson = async (url, opts) => {
+      if (opts && opts.method === 'POST') { if (hangPost) return never; return { ok: true }; }
+      if (url === '/api/settings/env') { gets++; if (gets > 1) return never; return { rows }; }
+      return {};
+    };
+    const toasts = [];
+    await X.render(host, { records, fetchJson, toast: (t) => toasts.push(t), settings: {}, saveMs: 30, readBackMs: 30 });
+    field.value = 'Europe/Rome';
+    await host.handlers.click({ target: { getAttribute: (a) => (a === 'data-act' ? 'save' : a === 'data-key' ? 'HUB_TZ' : null) } });
+    return { toasts, field, btn, row };
+  };
+  const a = await run(false);
+  assert.match(a.toasts.pop(), /Saved, but your Maestro could not be asked whether it waits for a restart/);
+  assert.ok(a.row.removed, 'the saved row is replaced (unlocked) after the read-back gave up');
+  const b = await run(true);
+  assert.match(b.toasts.pop(), /did not answer in time, so this may or may not be saved/);
+  assert.strictEqual(b.field.disabled, false, 'a save with no answer unlocks the row');
+  assert.strictEqual(b.btn.disabled, false);
+  assert.ok(!('aria-busy' in b.row.attrs));
+});
