@@ -227,7 +227,7 @@ test("the /changes page says the lead can switch a change at the owner's word, m
   const page = fs.readFileSync(path.join(ROOT, 'changes.html'), 'utf8');
   assert.match(page, /or by telling your lead agent in chat \(it asks you to confirm\)\. Changes about security or spending limits can only be switched here\./);
   assert.doesNotMatch(page, /Nothing else can switch them on/);
-  assert.match(page, /if \(c\.leadMay !== true\) el\.appendChild\(para\('Who can switch it', 'Only you, on this page\.'\)\);/);
+  assert.match(page, /if \(c\.leadMay !== true\) el\.appendChild\(para\('Who can switch it', 'Only you: here or on the card in your lead\\'s chat\.'\)\);/);
   assert.match(page, /c\.by === 'lead' && c\.agent \? ' \(by ' \+ c\.agent \+ ' at your request\)'/);
 });
 
