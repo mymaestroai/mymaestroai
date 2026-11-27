@@ -112,7 +112,11 @@ test('parallel-work: sdk-chat reads the flag on its own (not tied to hand-off tu
 
 test('parallel-work: content kept on its own service never points at another company\'s model', () => {
   const kept = wp.textFor({ agent: primary, isLead: true, handOffs: true, parallel: true, kept: true });
-  assert.match(kept, /Your work stays on your own service: every worker and reviewer runs on your own model, never on another company's\./);
+  assert.match(kept, /Your work stays on your own service: every worker and reviewer runs on your own model, never on another company's, and you consult or hand work only to agents on your own service\./);
+  assert.match(kept, /rather than lend a specialist from another field\. Give it a model on your own service\./);
+  assert.doesNotMatch(wp.parallelText({ isLead: true }), /Give it a model on your own service/);
+  const words = (t) => t.split(/\s+/).filter(Boolean).length;
+  assert.ok(words(wp.parallelText({ isLead: true, handOffs: true, kept: true })) <= 260 * 1.15, 'the kept text stays within the stated length');
   assert.match(kept, /several reviewers side by side\./);
   assert.doesNotMatch(kept, /different companies' models|Pick the model for each part/);
   const open = wp.textFor({ agent: primary, parallel: true });
