@@ -67,11 +67,15 @@ test('Simple desktop: the review line says what the review build says, warning c
   assert.equal(text(null), 'Checking…');
   const none = RV.build({ now: 1000 });
   assert.equal(none.count, 0);
-  assert.equal(text(none), 'Nothing needs your review.');
-  const some = { problems: [{ id: 'a' }, { id: 'b' }], features: [{ id: 'f', snoozed: false }], count: 3 };
-  assert.equal(text(some), '2 problems · 1 new feature');
+  assert.equal(text(none), 'Nothing to fix');
+  const some = { problems: [{ id: 'a' }, { id: 'b' }], features: [{ id: 'f', snoozed: false }], suggestions: [], count: 3 };
+  assert.equal(text(some), '3 to fix · 1 new feature');
+  // only suggestions and new features (no red item): "Nothing to fix" first, never "Nothing needs your review"
+  const calm = { problems: [{ id: 's' }], features: [{ id: 'f', snoozed: false }], suggestions: [{ id: 's' }], count: 0 };
+  assert.equal(text(calm), 'Nothing to fix · 1 suggestion · 1 new feature');
   const src = fnSrc(app, 'function openSimpleSettings() {');
-  assert.match(src, /classList\.toggle\('sm-warn', !!\(r && r\.problems && r\.problems\.length\)\)/);
+  assert.match(src, /classList\.toggle\('sm-warn', !!\(r && r\.count > 0\)\)/, 'warning colour follows the red count only');
+  assert.ok(!fnSrc(app, 'function simpleReviewText(r) {').includes('Nothing needs your review'));
   assert.match(idx, /\.sm-lab\.sm-warn \{ color: var\(--status-warn\); \}/);
 });
 
@@ -84,8 +88,9 @@ test('Simple phone: the same groups, a review line, Review and Open buttons that
   assert.ok(src.indexOf('id="ss-notes-sec"') > src.indexOf('ss-val') && src.indexOf('id="ss-notes-sec"') < src.indexOf('id="ss-adv"') && src.indexOf('id="ss-out"') < src.indexOf('ss-g-voice'), 'notifications line, Switch to Advanced, Sign out in the You group');
   assert.match(src, /\$\('ss-review'\)\?\.addEventListener\('click', \(\) => \{ d\.close\(\); settingsSheetOpen\('', 'review'\); \}\)/);
   assert.match(src, /\$\('ss-money'\)\?\.addEventListener\('click', \(\) => \{ d\.close\(\); settingsSheetOpen\('', 'money'\); \}\)/);
-  assert.match(src, /'Nothing needs your review\.'/);
+  assert.ok(!/Nothing needs your review/.test(src), 'the line is the review build summary, not a second wording');
   assert.match(src, /summaryText\(r\)/);
+  assert.match(src, /classList\.toggle\('ss-warn', !!\(r && r\.count > 0\)\)/, 'red only');
   assert.match(mhtml, /html\.mm-simple \.ss-rhint\.ss-warn \{ color: var\(--warning\); \}/);
 });
 

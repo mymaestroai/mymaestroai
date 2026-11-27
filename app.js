@@ -68,14 +68,8 @@
         }
       } catch (e) { /* offline: behave as before */ }
       try { activeJobsSync(); } catch { /* the Active state is declared further down; its own first sync covers an early call */ }
-      paintSetupNotice();
-      paintNoAccountsNotice();
-      paintReadinessBanner().catch(() => {});
-      paintHealthBanner().catch(() => {});
-      paintSecurityBanner().catch(() => {});
       reviewRefresh().catch(() => {});   // the count on the gear
       if (!window.__rvTimer) window.__rvTimer = setInterval(() => reviewRefresh().catch(() => {}), 5 * 60 * 1000);
-      paintRecoveryBanner().catch(() => {});
       paintUpdateCard().catch(() => {});
       paintVersionLabel().catch(() => {});
       if (!window.__hvTimer) window.__hvTimer = setInterval(() => paintVersionLabel().catch(() => {}), 5 * 60 * 1000);
@@ -466,10 +460,10 @@
       simpleLookOnce = true;
       document.addEventListener('mm-look-change', () => { try { simpleThemeBtnVisible(); } catch { /* cosmetic */ } });
     }
-    // Simple's For your review line: "Nothing needs your review." or the summary ("2 problems · 1 new feature"); "Checking…" until the first read
+    // Simple's For your review line: the review build's summary ("3 to fix · 10 suggestions · 1 new feature", "Nothing to fix" when no red item); "Checking…" until the first read
     function simpleReviewText(r) {
       if (!r || !window.hubReview) return 'Checking…';
-      return r.count > 0 ? window.hubReview.summaryText(r) : 'Nothing needs your review.';
+      return window.hubReview.summaryText(r);
     }
     // Settings with one group in front (review, money); Simple's two buttons and the phone's /#settings-group=review use it
     async function openSettingsGroup(groupId) {
@@ -528,7 +522,7 @@
         if (!line) return;
         const r = typeof reviewLast !== 'undefined' ? reviewLast : null;
         line.textContent = simpleReviewText(r);
-        line.classList.toggle('sm-warn', !!(r && r.problems && r.problems.length));
+        line.classList.toggle('sm-warn', !!(r && r.count > 0));   // red only: worth-doing items and suggestions do not colour it
       };
       if (me.isAdmin === true) {
         paintReview();
@@ -638,38 +632,8 @@
       return { 'X-Hub-Time-Zone': tz };
     }
     for (const ev of ['pointerdown', 'keydown']) document.addEventListener(ev, reportTimeZone, { capture: true, passive: true });
-    // An install updated from before multi-user has provider keys but no admin account, so the setup wizard never
-    // asked for one: the hub runs with no login and every multi-user feature off. Say so, once per page, with the link.
-    function paintNoAccountsNotice() {
-      const me = window.hubMe;
-      let bar = document.getElementById('hub-no-accounts-notice');
-      const none = (me && me.accounts === false) || (!me && window.hubNoAccounts === true);
-      if (!none) { if (bar) { bar.remove(); layoutBanners(); } return; }
-      if (bar) return;
-      bar = document.createElement('div');
-      bar.id = 'hub-no-accounts-notice';
-      bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9997;background:var(--banner-setup-bg);color:var(--on-color-text);padding:6px 14px;font-weight:600;box-sizing:border-box';
-      bar.innerHTML = 'This hub has no login yet: anyone who can reach it has full control, and multi-user features (members, sharing, the account menu, member sandboxes) stay off until an admin account exists. <a href="/welcome" style="color:var(--on-color-text);text-decoration:underline">Create the admin account</a> (you will need the setup link: run mymaestro setup-link).';
-      document.body.prepend(bar);
-      layoutBanners();
-    }
-    // No AI provider configured yet (fresh install after the first admin signed up): a one-line notice with the link
-    // to the setup wizard. The wizard no longer takes over "/" once accounts exist, so the 2FA enrolment can finish.
-    async function paintSetupNotice() {
-      const me = window.hubMe;
-      if (!me || !me.isAdmin) return;
-      let needed = false;
-      try { const r = await fetch('/api/setup/status', { credentials: 'include' }); if (r.ok) needed = !!(await r.json()).setupNeeded; } catch { return; }
-      let bar = document.getElementById('hub-setup-notice');
-      if (!needed) { if (bar) { bar.remove(); layoutBanners(); } return; }
-      if (bar) return;
-      bar = document.createElement('div');
-      bar.id = 'hub-setup-notice';
-      bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9998;background:var(--banner-info-bg);color:var(--on-color-text);padding:6px 14px;font-weight:600;box-sizing:border-box';
-      bar.innerHTML = 'No AI provider is configured yet, so agents cannot answer. <a href="/welcome" style="color:var(--on-color-text);text-decoration:underline">Open the Welcome page</a> to connect a Claude or ChatGPT subscription, an API key or a local model.';
-      document.body.prepend(bar);
-      layoutBanners();
-    }
+    // An install updated from before multi-user has provider keys but no admin account (no login at all), and a fresh install may have no AI provider:
+    // both are "Fix now" items in For your review (ids accounts and provider, lib/ui-review.js) and the one banner (reviewPaintBanner) says so.
     function renderOwnerSwitcher() {
       const sel = document.getElementById('owner-view');
       if (!sel) return;
@@ -1068,7 +1032,7 @@
       try { bkState = await bkApi('/api/backups', undefined, 'GET'); }
       catch (e) { el.textContent = 'Could not read the backups: ' + e.message; stSum('backups', 'last', 'Backups: unreadable', true); return; }
       paintBackups();
-      paintRecoveryBanner(bkState).catch(() => {});
+      reviewRefresh().catch(() => {});   // the paused-after-restore item follows what the backups page just read
     }
     function paintBackups() {
       const el = document.getElementById('bk-body'); const s = bkState; if (!el || !s) return;
@@ -1336,7 +1300,7 @@
     async function bkResume(btn) {
       if (btn) btn.disabled = true;
       try { await bkApi('/api/backups/recovery/resume', {}); } catch (e) { alert(e.message); }
-      if (document.getElementById('bk-body')) loadBackups(); else paintRecoveryBanner().catch(() => {});
+      if (document.getElementById('bk-body')) loadBackups(); else reviewRefresh().catch(() => {});
     }
     async function bkDecide(i, action, btn) {
       const h = bkState.recovery.held[i];
@@ -1507,19 +1471,7 @@
       };
       setTimeout(tick, 3000);
     }
-    // While a restored setup waits for Resume, every admin page says so at the top.
-    async function paintRecoveryBanner(state) {
-      const me = window.hubMe;
-      let bar = document.getElementById('hub-recovery-notice');
-      if (!me || !me.isAdmin || !me.user) { if (bar) bar.remove(); return; }
-      let rec = state ? state.recovery : undefined;
-      if (rec === undefined) { try { rec = (await bkApi('/api/backups/recovery', undefined, 'GET')).recovery; } catch { return; } }
-      if (!rec || rec.resumedAt) { if (bar) { bar.remove(); layoutBanners(); } return; }
-      if (!bar) { bar = document.createElement('div'); bar.id = 'hub-recovery-notice'; bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9997;background:var(--banner-backup-bg);color:var(--on-color-text);padding:6px 14px;font-weight:600;box-sizing:border-box'; document.body.prepend(bar); }
-      const held = (rec.held || []).length;
-      bar.innerHTML = `Restored from the backup of ${esc(bkWhen(rec.restoredFrom))}. Agents are paused until you press Resume${held ? `; ${held} item${held === 1 ? '' : 's'} wait${held === 1 ? 's' : ''} for Run or Skip` : ''}. <a href="#" onclick="openSettingsAt('st-backups-section'); return false" style="color:var(--on-color-text);text-decoration:underline">Open Backups</a> <button onclick="bkResume(this)" style="margin-left:8px;padding:2px 10px;border-radius:4px;border:1px solid var(--on-color-text);background:transparent;color:var(--on-color-text);cursor:pointer">Resume</button>`;
-      layoutBanners();
-    }
+    // While a restored setup waits for Resume, For your review lists "Agents are paused after a restore" under Fix now (the one banner shows it, with Resume).
 
     // POST /api/restart. When running jobs would stop with the restart, the server answers 409 { needsConfirm, message } and
     // restarts nothing: ask the person (the message names the jobs) and send the confirm.
@@ -3455,6 +3407,15 @@
       const wrap = document.getElementById('st-groups');
       if (!wrap) return;
       if (stPhoneOn() && !stSingle) wrap.dataset.page = 'list'; else delete wrap.dataset.page;
+      stPhoneSaveMark();
+    }
+    // The shared Save is shown on the phone only on a page whose group has a box it writes (lib/ui-settings-groups usesSharedSave); a search
+    // result may show any group, so it keeps Save. index.html hides it with [data-save-here="no"].
+    function stPhoneSaveMark() {
+      const wrap = document.getElementById('st-groups'), m = wrap && wrap.closest('.st-modal');
+      if (!m) return;
+      const here = !stPhoneOn() || stSingle || stSearching || (stPhonePage ? STG.usesSharedSave(stPhonePage) : false);
+      m.dataset.saveHere = here ? 'yes' : 'no';
     }
     function stPhoneGo(groupId) {   // one group as a page
       if (!stPhoneOn() || stSingle) return;
@@ -3465,6 +3426,7 @@
       const t = wrap.querySelector('.st-phone-title');
       const def = STG.GROUPS.find((x) => x.id === groupId);
       if (t) t.textContent = def ? def.title : '';
+      stPhoneSaveMark();
       const m = wrap.closest('.st-modal'); if (m) m.scrollTop = 0;
     }
     // Back: from a group page to the list. false when it was already on the list (the caller then closes Settings).
@@ -3625,7 +3587,7 @@
       if (stSingle) wrap.className = 'st-single';
       wrap.innerHTML = `<div class="st-phone-head"><button type="button" class="st-phone-back" id="st-phone-back">‹ Settings</button><span class="st-phone-title"></span></div><div class="st-search"${stSingle ? ' hidden' : ''}><input type="search" id="st-search" placeholder="Search settings: privacy, sandbox, push, spend…" autocomplete="off" aria-label="Search settings"><span id="st-search-none" hidden>Nothing matches.</span></div>`
         + `<div class="st-panes"><nav class="st-glist" aria-label="Settings groups"${stSingle ? ' hidden' : ''}>`
-        + defs.map(g => `<button type="button" class="st-gbtn" id="st-gbtn-${g.id}" data-group="${g.id}"><span class="st-gicon" aria-hidden="true">${esc(g.icon)}</span><span class="st-gtext"><span class="st-group-title">${esc(g.title)}</span><span class="st-gsub">${esc(g.sub)}</span><span class="st-group-sum" id="st-sum-${g.id}"></span></span></button>`).join('')
+        + defs.map(g => `<button type="button" class="st-gbtn" id="st-gbtn-${g.id}" data-group="${g.id}"><span class="st-gicon" aria-hidden="true">${esc(g.icon)}</span><span class="st-gtext"><span class="st-group-title">${esc(g.title)}</span><span class="st-group-sum" id="st-sum-${g.id}"></span></span></button>`).join('')
         + `</nav><div class="st-gpane">`
         + defs.map(g => `<section class="st-group" id="st-group-${g.id}" data-group="${g.id}" aria-label="${esc(g.title)}" hidden><h5 class="st-ghead">${esc(g.title)}</h5><div class="st-group-body"></div><div class="st-more" hidden><button type="button" class="st-more-btn" aria-expanded="false">▸ More</button><div class="st-more-body" hidden></div></div></section>`).join('')
         + `</div></div>`;
@@ -3684,7 +3646,7 @@
       for (const k of ['search', 'cx']) stSum('tools', k, '');
       for (const k of ['spend', 'caps', 'month']) stSum('money', k, '');
       reviewMount(wrap);
-      // Empty slots that later modules fill: "Stop all agents" at the very top of For your review, a monthly cap first in Models and money.
+      // Empty slots that later modules fill: "Stop all agents" at the very top of For your review, a monthly cap just above Spend in Models and money.
       // A slot draws nothing until a module puts a row in it; modules wait for 'hub-settings-drawn' (fired once per drawing).
       if (!stSingle) {
         for (const [gid, id, slot] of [['review', 'st-review-top', 'stop-all'], ['money', 'st-money-cap', 'monthly-cap']]) {
@@ -3692,7 +3654,8 @@
           if (!b || document.getElementById(id)) continue;
           const d = document.createElement('div');
           d.id = id; d.setAttribute('data-slot', slot);
-          b.insertBefore(d, b.firstChild);
+          const spend = gid === 'money' ? b.querySelector('#st-spend-section') : null;   // the monthly cap rows sit with Spend: subscriptions and plan usage, then spend and caps, then the keys
+          b.insertBefore(d, spend || b.firstChild);
         }
       }
       document.dispatchEvent(new CustomEvent('hub-settings-drawn'));
@@ -3704,22 +3667,64 @@
     const RV = window.hubReview;
     let reviewLast = null, reviewSeq = 0;
     let reviewDecided = {};   // feature id -> { title, line }: what the owner chose in this Settings window, kept on its row
-    function reviewDismissedKey() { try { return localStorage.getItem(SEC_DISMISS_KEY) || ''; } catch { return ''; } }
+    let reviewFoldOpen = false;   // the "Suggestions" block is folded until the owner opens it
     async function reviewRefresh() {
       const me = window.hubMe;
       const seq = ++reviewSeq;
-      if (!RV || !me || !me.isAdmin || !me.user) { reviewLast = null; reviewPaintGear(); return; }
+      if (RV && !me && window.hubNoAccounts === true) {   // a hub with no login at all: /api/me is refused, so the one thing to say is that
+        reviewLast = RV.build({ accounts: { none: true }, now: Date.now() });
+        reviewPaintGear(); reviewPaintBanner();
+        return;
+      }
+      if (!RV || !me || !me.isAdmin || !me.user) { reviewLast = null; reviewPaintGear(); reviewPaintBanner(); return; }
       let input;
       try { input = await RV.load((u, o) => fetch(u, o), { accounts: { none: me.accounts === false } }); } catch { return; }
       if (seq !== reviewSeq) return;   // a newer read is on its way
-      input.securityDismissed = reviewDismissedKey();
       input.now = Date.now();
+      try { input.snooze = RV.readSnooze(localStorage, input.now); } catch { input.snooze = {}; }   // the suggestions asked again later (this browser)
       let extra = [];
       try { extra = await RV.loadSources((u, o) => fetch(u, o)); } catch { extra = []; }   // modules that registered a source
       if (seq !== reviewSeq) return;
       reviewLast = RV.merge(RV.build(input), extra);
       reviewPaintGear();
       reviewPaintGroup();
+      reviewPaintBanner();
+    }
+    // The ONE banner (P4-15): only while something is in "Fix now". "<first item> (and N more to fix). Open For your review" and that item's fix button.
+    // It replaces the no-login, no-provider, setup, health, security and restore banners; pressing the link opens Settings at Fix now.
+    function reviewPaintBanner() {
+      let bar = document.getElementById('hub-review-banner');
+      const b = reviewLast && RV ? RV.bannerOf(reviewLast) : null;
+      if (!b) { if (bar) { bar.remove(); layoutBanners(); } return; }
+      if (!bar) {
+        bar = document.createElement('div');
+        bar.id = 'hub-review-banner';
+        bar.setAttribute('role', 'status');
+        bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9995;background:var(--banner-critical-bg);color:var(--on-color-text);padding:6px 14px;font-weight:700;box-sizing:border-box';
+        bar.addEventListener('click', (e) => {
+          const t = e.target && e.target.closest ? e.target.closest('[data-rv="open-fix"]') : null;
+          if (!t) return;
+          if (e.preventDefault) e.preventDefault();
+          openReviewAt('fix');
+        });
+        document.body.prepend(bar);
+      }
+      const first = reviewLast.fix[0];
+      bar.innerHTML = `<span class="rv-banner-text">${esc(b.title)}${b.more > 0 ? ` (and ${b.more} more to fix)` : ''}.</span> <a href="#" data-rv="open-fix" style="color:var(--on-color-text);text-decoration:underline">Open For your review</a> <span class="rv-banner-fix">${reviewFixHtml(first)}</span>`;
+      for (const s of bar.querySelectorAll('.rv-signin')) {
+        const btn = typeof ClaudeSignin !== 'undefined' ? ClaudeSignin.healthButton({ action: 'claude-signin' }) : null;
+        if (btn) s.appendChild(btn);
+      }
+      layoutBanners();
+    }
+    // "Ask me in a week" on a suggestion: kept in this browser (localStorage 'hub-review-snooze'), so a calm install can clear its suggestions. No request is made.
+    function reviewSnooze(id) {
+      if (!RV || !reviewLast) return;
+      try { RV.snoozeSuggestion(localStorage, id, Date.now()); } catch { /* blocked storage: it stays listed */ }
+      let sn = {};
+      try { sn = RV.readSnooze(localStorage, Date.now()); } catch { /* none */ }
+      reviewLast = RV.merge({ ...reviewLast, snooze: sn }, []);
+      reviewPaintGear(); reviewPaintGroup(); reviewPaintBanner();
     }
     function reviewPaintGear() {
       const btn = document.getElementById('settings-btn');
@@ -3729,6 +3734,7 @@
       const label = r && RV ? RV.gearLabel(r) : 'Settings';
       btn.setAttribute('aria-label', label);
       btn.title = label;
+      btn.setAttribute('onclick', kind ? "openReviewAt('fix')" : 'openSettings()');   // with something to fix the gear lands on Fix now
       if (!kind) { if (b) b.remove(); return; }
       if (!b) { b = document.createElement('span'); b.id = 'settings-count'; btn.appendChild(b); }
       b.className = `rv-badge rv-${kind}`;
@@ -3746,7 +3752,10 @@
         if (!t) return;
         if (t.dataset.rv === 'details') reviewDetails(t.dataset.sec);
         else if (t.dataset.rv === 'decide') reviewDecide(t.dataset.id, t.dataset.decision, t);
+        else if (t.dataset.rv === 'snooze') reviewSnooze(t.dataset.id);
+        else if (t.dataset.rv === 'fold') { reviewFoldOpen = !reviewFoldOpen; reviewPaintGroup(); }
       });
+      reviewFoldOpen = false;
       body.insertBefore(top, body.firstChild);
       stSum('review', 'list', reviewLast && RV ? RV.summaryText(reviewLast) : 'Checking…');
       reviewPaintGroup();
@@ -3768,16 +3777,29 @@
     function reviewPaintGroup() {
       const top = document.getElementById('st-review-list');
       const r = reviewLast;
-      stSum('review', 'list', r && RV ? RV.summaryText(r) : 'Checking…', !!r && r.worst === 'critical');
+      const sumText = r && RV ? RV.summaryText(r) : 'Checking…';
+      stSum('review', 'list', sumText, !!r && r.count > 0);
       const sum = document.getElementById('st-sum-review');
-      if (sum) sum.classList.toggle('st-sum-warn', !!r && r.worst === 'warn');
+      if (sum) {
+        sum.classList.remove('st-sum-warn');   // amber never colours the line: only "N to fix" does, and only that first part
+        if (r && r.count > 0) {
+          sum.classList.remove('st-sum-crit');
+          const at = sumText.indexOf(' · ');
+          sum.innerHTML = `<span class="st-sum-first">${esc(at < 0 ? sumText : sumText.slice(0, at))}</span>${at < 0 ? '' : esc(sumText.slice(at))}`;
+        }
+      }
       if (!top || !r) return;
       let h = '';
       for (const n of r.notes) h += `<div class="rv-note">${esc(n)}</div>`;
-      if (r.problems.length) {
-        h += `<h4>Problems</h4>` + r.problems.map((p) => `<div class="rv-row rv-${p.level}" data-pid="${esc(p.id)}">
-          <div class="rv-main"><div class="rv-title">${esc(p.title)}</div>${p.text ? `<div class="rv-text">${esc(p.text)}</div>` : ''}</div>
-          <div class="rv-acts">${reviewFixHtml(p)}${p.detailsSection ? ` <button type="button" class="st-test-btn" data-rv="details" data-sec="${esc(p.detailsSection)}">Details</button>` : ''}</div></div>`).join('');
+      // Fix now (red, never folded), Worth doing (amber marker on each row), Suggestions (grey, folded behind a button; each can be asked again in a week)
+      const rowOf = (p, tier) => `<div class="rv-row rv-${tier}" data-pid="${esc(p.id)}" data-tier="${tier}">
+          <div class="rv-main"><div class="rv-title">${esc(p.title)}</div>${p.text ? `<div class="rv-text">${esc(p.text)}</div>` : ''}${p.snoozedUntil ? `<div class="rv-text">${esc(RV.askedAgainLine(p.snoozedUntil))}</div>` : ''}</div>
+          <div class="rv-acts">${reviewFixHtml(p)}${tier === 'suggest' && !p.snoozedUntil ? ` <button type="button" class="st-test-btn" data-rv="snooze" data-id="${esc(p.id)}">Ask me in a week</button>` : ''}${p.detailsSection ? ` <button type="button" class="st-test-btn" data-rv="details" data-sec="${esc(p.detailsSection)}">Details</button>` : ''}</div></div>`;
+      if (r.fix.length) h += `<div class="rv-block rv-block-fix" data-tier="fix"><h4 class="rv-h">Fix now</h4>${r.fix.map((p) => rowOf(p, 'fix')).join('')}</div>`;
+      if (r.worth.length) h += `<div class="rv-block rv-block-worth" data-tier="worth"><h4 class="rv-h">Worth doing</h4>${r.worth.map((p) => rowOf(p, 'worth')).join('')}</div>`;
+      if (r.suggestions.length || r.snoozedSuggestions.length) {
+        h += `<div class="rv-block rv-block-suggest" data-tier="suggest"><button type="button" class="rv-fold" data-rv="fold" aria-expanded="${reviewFoldOpen ? 'true' : 'false'}">${reviewFoldOpen ? '▾' : '▸'} Suggestions (${r.suggestions.length})</button>`
+          + `<div class="rv-fold-body"${reviewFoldOpen ? '' : ' hidden'}>${r.suggestions.map((p) => rowOf(p, 'suggest')).join('')}${r.snoozedSuggestions.map((p) => rowOf(p, 'suggest')).join('')}</div></div>`;
       }
       const shown = r.features.map((f) => ({ id: f.id, title: f.title, text: f.text, snoozedUntil: f.snoozedUntil }));
       for (const id of Object.keys(reviewDecided)) if (!shown.some((f) => f.id === id)) shown.push({ id, title: reviewDecided[id].title, text: '' });
@@ -3787,7 +3809,7 @@
           return `<div class="rv-row rv-feature" data-fid="${esc(f.id)}">
             <div class="rv-main"><div class="rv-title">${esc(f.title)}</div>${f.text ? `<div class="rv-text">${esc(f.text)}</div>` : ''}${f.snoozedUntil && !d ? `<div class="rv-text">${esc(RV.askedAgainLine(f.snoozedUntil))}</div>` : ''}
             <div class="rv-result" role="status" aria-live="polite">${d ? esc(d.line) : ''}</div></div>
-            ${d ? '' : `<div class="rv-acts">${[['on', 'Turn on'], ['off', 'Leave off'], ['later', 'Ask me in a week']].map(([k, l]) => `<button type="button" class="st-test-btn" data-rv="decide" data-id="${esc(f.id)}" data-decision="${k}">${l}</button>`).join('')}</div>`}</div>`;
+            ${d && d.decision !== 'later' ? '' : `<div class="rv-acts">${[['on', 'Turn on'], ['off', 'Leave off'], ...(d || f.snoozedUntil ? [] : [['later', 'Ask me in a week']])].map(([k, l]) => `<button type="button" class="st-test-btn" data-rv="decide" data-id="${esc(f.id)}" data-decision="${k}">${l}</button>`).join('')}</div>`}</div>`;
         }).join('');
       }
       if (!r.problems.length && !shown.length && !r.notes.length) h += `<div class="rv-calm">Nothing needs your review.</div>`;
@@ -3813,7 +3835,7 @@
           return;
         }
         const f = reviewLast && reviewLast.features.find((x) => x.id === id);
-        reviewDecided[id] = { title: (f && f.title) || id, line: RV.decisionLine(decision, j.change && j.change.snoozedUntil) };
+        reviewDecided[id] = { title: (f && f.title) || id, decision, line: RV.decisionLine(decision, j.change && j.change.snoozedUntil) };
         reviewPaintGroup();
         reviewRefresh().catch(() => {});   // the count follows
       } catch (e) {
@@ -3843,11 +3865,14 @@
       const wrap = document.getElementById('st-groups');
       const none = document.getElementById('st-search-none');
       for (const r of document.querySelectorAll('#st-groups .st-word-hit')) r.classList.remove('st-word-hit');
+      for (const r of document.querySelectorAll('#st-groups .st-row-off')) r.classList.remove('st-row-off');   // rows a search hid come back
+      for (const g of groups) g.style.order = '';
       if (!q) {   // cleared: every section is back, the open group is shown alone again
         stSearching = false;
         if (wrap) wrap.classList.remove('st-searching');
         for (const g of groups) for (const s of g.querySelectorAll('.st-section')) { s.style.display = ''; s.classList.remove('st-match'); }
         if (none) none.hidden = true;
+        stPhoneSaveMark();
         const picked = stPicked;
         stShowGroup(stCurGroup || STG.DEFAULT_GROUP, false, true);
         stPicked = picked;
@@ -3861,18 +3886,33 @@
       for (const g of groups) for (const s of g.querySelectorAll('.st-section')) entries.push({ id: s.id, group: g.dataset.group, el: s, text: `${s.textContent} ${wordHits(s).map((e) => e.text).join(' ')}` });
       const found = STG.search(q, entries);
       const hitEls = new Set(found.flatMap((f) => f.els)), wholeGroups = new Set(found.filter((f) => f.whole).map((f) => f.group));
+      found.forEach((f, i) => { const ge = groups.find((x) => x.dataset.group === f.group); if (ge) ge.style.order = String(i); });   // a group whose title matches comes first
       for (const g of groups) {
         let n = 0;
         for (const s of g.querySelectorAll('.st-section')) {
           const hit = hitEls.has(s), whole = wholeGroups.has(g.dataset.group);
           s.style.display = hit ? '' : 'none';
           s.classList.toggle('st-match', hit && !whole);
-          if (hit && !whole) for (const e of wordHits(s)) if (e.row && e.row.classList) e.row.classList.add('st-word-hit');
+          if (hit && !whole) {
+            for (const e of wordHits(s)) if (e.row && e.row.classList) e.row.classList.add('st-word-hit');
+            // another group shows only the matching rows (the heading stays); a heading that matches shows its whole section
+            const h = [...s.children].find((c) => c.tagName === 'H4');
+            if (!(h && h.textContent.toLowerCase().includes(q))) {
+              const units = [...s.children].filter((c) => c.tagName !== 'H4');
+              const words = wordHits(s);
+              const keep = STG.searchRows(q, units.map((u) => ({
+                text: `${u.textContent} ${words.filter((e) => { for (let n = e.row; n; n = n.parentNode) if (n === u) return true; return false; }).map((e) => e.text).join(' ')}`,
+                follows: u.classList.contains('st-hint') || u.tagName === 'BUTTON',   // a hint or an ⓘ button belongs to the row above it
+              })));
+              units.forEach((u, i) => { if (!keep[i]) u.classList.add('st-row-off'); });
+            }
+          }
           if (hit) n++;
         }
         g.hidden = !n;
       }
       if (none) none.hidden = found.length > 0;
+      stPhoneSaveMark();
     }
     // Rows that move between groups (lib/ui-settings-groups ROWS: Agent Defaults dissolves). Each row, with the hints under it, goes into a
     // small section "st-moved-<part>" in its target group (under its More when marked so); ids, names and loaders are untouched.
@@ -3951,18 +3991,17 @@
     function stDoorHtml(name, title, text, action, o) {
       return `<div class="st-door" id="st-door-${name}"${o && o.hidden ? ' style="display:none"' : ''}><div class="st-door-text"><span class="st-door-title">${esc(title)}</span><span class="st-door-sub">${esc(text)}</span></div><button type="button" class="st-test-btn" id="st-door-${name}-open" aria-label="Open ${esc(title)}" onclick="${esc(action)}">Open</button></div>`;
     }
-    // The setup, health and security banners' links: Settings at For your review, the matching problem scrolled into view
-    // (its Details button opens the full section). kind: 'setup' | 'health' | 'sec'. The list is read a moment after the dialog opens, so wait for it.
-    const REVIEW_KIND = { setup: /^(ready:|provider$|accounts$)/, health: /^health:/, sec: /^sec:/ };
-    async function openReviewAt(kind) {
+    // The one banner's link (and the gear): Settings at For your review, the "Fix now" block (tier 'fix', the default) at the top of the view.
+    // The list is read a moment after the dialog opens, so wait for it.
+    async function openReviewAt(tier) {
       await openSettings();
       const list = document.getElementById('st-review-list');
       if (!list) return;
       stReveal(list);   // the For your review group
-      const re = REVIEW_KIND[kind];
-      for (let i = 0; re && i < 20; i++) {
-        const row = [...list.querySelectorAll('[data-pid]')].find((r) => re.test(r.dataset.pid));
-        if (row) { if (row.scrollIntoView) row.scrollIntoView({ behavior: 'smooth', block: 'center' }); return; }
+      const want = ['fix', 'worth', 'suggest'].includes(tier) ? tier : 'fix';
+      for (let i = 0; i < 20; i++) {
+        const block = list.querySelector(`.rv-block[data-tier="${want}"]`);
+        if (block) { if (block.scrollIntoView) block.scrollIntoView({ behavior: 'smooth', block: 'start' }); return; }
         await new Promise((r) => setTimeout(r, 150));
       }
     }
@@ -4124,7 +4163,7 @@
       </div>`;
       // Updates (lib/update-check): the daily look at GitHub behind the "Update available" card.
       html += `<div class="st-section" id="st-updates-section"><h4>Updates</h4>
-        <div class="st-hint">Once a day the hub checks GitHub for a new version on its channel and tells admins: a card here with Update now or Later, a card on the phone, and a notification. It never installs anything by itself.</div>
+        <div class="st-hint">Once a day your Maestro checks GitHub for a new version on its channel and tells admins: a card here with Update now or Later, a card on the phone, and a notification. It never installs anything by itself.</div>
         <div class="st-row"><label style="flex-basis:150px">Check every day</label><input type="checkbox" id="st-uc-on" onchange="saveUpdateCheck(this.checked)"><span id="st-uc-state" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px">Checking…</span></div>
         <div class="st-row"><label style="flex-basis:150px"></label><button class="st-test-btn" onclick="checkUpdatesNow(this)">Check now</button></div>
       </div>`;
@@ -4174,7 +4213,7 @@
       setTimeout(async () => { try { const r = await fetch('/api/local-models', { credentials: 'include' }); const j = await r.json(); const el = document.getElementById('st-local-models-status'); if (el && j && j.ok !== false) el.textContent = `· ${j.running ? 'proxy running on ' + j.port : (j.enabled ? 'proxy stopped' : 'off')}, ${(j.models || []).length} model(s)${(j.loaded || []).length ? ', loaded: ' + j.loaded.map(x => x.model || x.id || x).join(', ') : ''}`; if (j && j.ok !== false && j.enabled) stSum('models', 'local', `local models ${j.running ? 'running' : 'stopped'}`); } catch {} }, 0);
 
       html += `<div class="st-section" id="st-prov-section"><h4>LLM Providers</h4>
-        <div class="st-hint">Keys are kept in one place: <code>data/settings.json</code>, readable only by this computer's account. A key typed into <code>.env</code> moves here when the hub starts.</div>`;
+        <div class="st-hint">Keys are kept in one place: <code>data/settings.json</code>, readable only by this computer's account. A key typed into <code>.env</code> moves here when your Maestro starts.</div>`;
       for (const p of PROVIDERS) {
         const pdata = data.providers?.[p.id] || {};
         if (p.hasKey) {
@@ -4498,7 +4537,7 @@
       html += `<div class="st-actions">
         <span class="st-saved" id="st-saved">Saved</span>
         <button class="st-btn secondary" onclick="dialogRequestClose(this)">Close</button>
-        <button class="st-btn" onclick="saveSettings()">Save</button>
+        <button class="st-btn st-save-main" onclick="saveSettings()">Save</button>
       </div>`;
 
       stModal(html);
@@ -4638,40 +4677,9 @@
         setTimeout(() => (typeof reviewRefresh === "function" ? reviewRefresh() : Promise.resolve()).catch(() => {}), 4000);
       } catch (e) { if (btn) btn.textContent = 'Failed: ' + e.message; }
     }
-    // Banner for admins while anything is critical (no accounts, no provider, members without Docker...).
-    async function paintReadinessBanner() {
-      const me = window.hubMe;
-      let bar = document.getElementById('hub-readiness-notice');
-      if (!me || !me.isAdmin || !me.user) { if (bar) bar.remove(); return; }
-      let d = null;
-      try { d = await (await fetch('/api/readiness', { credentials: 'include' })).json(); } catch { return; }
-      const crit = (d && d.items || []).filter(i => i.level === 'critical' && i.id !== 'accounts' && i.id !== 'provider' && !String(i.id || '').startsWith('health-'));   // those two have their own banners; the health banner shows the health- items
-      if (!crit.length) { if (bar) bar.remove(); layoutBanners(); return; }
-      if (!bar) { bar = document.createElement('div'); bar.id = 'hub-readiness-notice'; bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9996;background:var(--banner-setup-bg);color:var(--on-color-text);padding:6px 14px;font-weight:600;box-sizing:border-box'; document.body.prepend(bar); }
-      bar.innerHTML = `Setup needs attention: ${crit.map(i => esc(i.title)).join('; ')}. <a href="#" onclick="openReviewAt('setup'); return false" style="color:var(--on-color-text);text-decoration:underline">Open the setup checklist</a>.`;
-      layoutBanners();
-    }
-    // Banner for admins while the nightly health check has a critical problem (a full disk...). The sign-in items are
-    // left out: the setup checklist's own banner covers them. An error or a non-200 answer leaves the bar as it is.
-    function healthBannerItems(view) {
-      return ((view && view.items) || []).filter(i => i && i.level === 'critical' && !String(i.id || '').startsWith('health-signin-'));
-    }
-    async function paintHealthBanner() {
-      const me = window.hubMe;
-      let bar = document.getElementById('hub-health-notice');
-      if (!me || !me.isAdmin || !me.user) { if (bar) { bar.remove(); layoutBanners(); } return; }
-      let d = null;
-      try { const r = await fetch('/api/system-health', { credentials: 'include' }); if (!r.ok) return; d = await r.json(); } catch { return; }
-      bar = document.getElementById('hub-health-notice');
-      const crit = healthBannerItems(d);
-      if (!crit.length) { if (bar) bar.remove(); layoutBanners(); return; }
-      if (!bar) { bar = document.createElement('div'); bar.id = 'hub-health-notice'; bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9995;background:var(--banner-critical-bg);color:var(--on-color-text);padding:6px 14px;font-weight:700;box-sizing:border-box'; document.body.prepend(bar); }
-      bar.innerHTML = `Health: ${crit.map(i => esc(i.title)).join('; ')}. <a href="#" onclick="openReviewAt('health'); return false" style="color:var(--on-color-text);text-decoration:underline">Open Settings → For your review</a>`;
-      for (const i of crit) { const b = typeof ClaudeSignin !== 'undefined' && ClaudeSignin.healthButton(i); if (b) bar.appendChild(b); }
-      layoutBanners();
-    }
+    // The setup and health banners are gone (P4-15): their conditions are "Fix now" items in For your review and the ONE banner (reviewPaintBanner) shows them.
     // The notices fixed at the top stack in this order, whichever painted first: the phone-layout bar
-    // (showMobileBanner), no AI provider yet, the setup checklist, health, security. Each one sits below the ones above it, so
+    // (showMobileBanner), the Quiet Page line, then the one review banner. Each one sits below the ones above it, so
     // none covers another (or its X), and the page moves down by their height (--banner-h), so they never cover the
     // header and its Settings button.
     // The one-time Quiet Page line (lib/ui-simple.js themeNotice): normal mode, Quiet Page, a dark theme, not yet seen by this account.
@@ -4705,7 +4713,7 @@
     for (const ev of ['mm-look-change', 'mm-theme-change', 'mm-theme-resolved']) document.addEventListener(ev, () => { try { themeNoticeSync(); } catch { /* the one-time line is optional */ } });
     function layoutBanners() {
       let top = 0;
-      for (const id of ['hub-phone-layout-notice', 'hub-no-accounts-notice', 'hub-recovery-notice', 'hub-setup-notice', 'hub-theme-notice', 'hub-readiness-notice', 'hub-health-notice', 'hub-security-notice']) {
+      for (const id of ['hub-phone-layout-notice', 'hub-theme-notice', 'hub-review-banner']) {
         const n = document.getElementById(id);
         if (!n) continue;
         n.style.top = `${top}px`;
@@ -4736,7 +4744,7 @@
         if (state) state.textContent = `${d.critical ? `${d.critical} critical` : 'nothing critical'}${d.warnings ? `, ${d.warnings} warning(s)` : ''}${d.infos ? `, ${d.infos} note(s)` : ''}; ${d.cached ? 'last run' : 'checked'} ${new Date(d.checkedAt).toLocaleString()}.${skipped}`;
         stSum('status', 'security', d.critical ? `Security: ${d.critical} critical` : d.warnings ? `Security: ${d.warnings} warning${d.warnings === 1 ? '' : 's'}` : 'Security: all good', !!d.critical);
         if (d.critical) stOpenGroup('status');
-        paintSecurityBanner().catch(() => {});   // a Run now that resolves or finds something updates the banner at once
+        reviewRefresh().catch(() => {});   // a Run now that resolves or finds something updates the list, the count and the banner at once
       } catch (e) { el.textContent = 'Could not run the security check: ' + e.message; if (state) state.textContent = ''; stSum('status', 'security', 'Security: could not check'); }
     }
     // Memory (lib/memory-health): agents needing attention first, each with what was found; the fine ones folded away.
@@ -5170,60 +5178,8 @@
         setTimeout(() => (typeof reviewRefresh === "function" ? reviewRefresh() : Promise.resolve()).catch(() => {}), 2500);
       } catch (e) { if (btn) btn.textContent = 'Failed: ' + e.message; }
     }
-    // Banner for admins from the last security check (below the setup banner when both show).
-    // Critical: red, cannot be dismissed; it goes away once the check no longer finds it (Run now, or the next run).
-    // Warnings only: dark yellow with an X. Dismissing hides it in this browser until the set of warnings changes:
-    // a different set (a new warning, or one fixed and back) shows it again, and a critical finding always does.
-    const SEC_DISMISS_KEY = 'hub-security-warn-dismissed';
-    let secPaintSeq = 0, secShownSeq = 0;   // paints overlap (page load, the check in Settings): an answer older than the one shown is dropped
-    function securityWarnKey(items) { return items.map(i => i.id).sort().join(','); }
-    function dismissSecurityBanner() {
-      const bar = document.getElementById('hub-security-notice');
-      if (!bar || bar.dataset.level !== 'warn') return;   // a critical banner cannot be dismissed
-      try { localStorage.setItem(SEC_DISMISS_KEY, bar.dataset.key || ''); } catch {}
-      bar.remove();
-      layoutBanners();
-      (typeof reviewRefresh === "function" ? reviewRefresh() : Promise.resolve()).catch(() => {});   // a dismissed warning stops counting
-    }
-    async function paintSecurityBanner() {
-      const seq = ++secPaintSeq;
-      const me = window.hubMe;
-      if (!me || !me.isAdmin || !me.user) {
-        secShownSeq = seq;   // and no earlier answer still on its way may draw
-        const old = document.getElementById('hub-security-notice'); if (old) { old.remove(); layoutBanners(); }
-        return;
-      }
-      let d = null;
-      try {
-        const r = await fetch('/api/security-check', { credentials: 'include' });
-        if (!r.ok) return;   // an error is not "all clear": whatever shows stays
-        d = await r.json();
-      } catch { return; }
-      if (!d || !Array.isArray(d.items)) return;
-      if (seq < secShownSeq || window.hubMe !== me) return;   // a newer answer already shows, or the signed-in user changed
-      secShownSeq = seq;
-      let bar = document.getElementById('hub-security-notice');   // after the wait: it may have gone, or been made
-      const items = d.items.filter(i => i.id !== 'accounts');   // no-accounts has its own banner
-      const crit = items.filter(i => i.level === 'critical');
-      const warn = items.filter(i => i.level === 'warn');
-      const key = securityWarnKey(warn);
-      let dismissed = ''; try { dismissed = localStorage.getItem(SEC_DISMISS_KEY) || ''; } catch {}
-      if (dismissed && dismissed !== key) { dismissed = ''; try { localStorage.removeItem(SEC_DISMISS_KEY); } catch {} }   // the set changed
-      if (!crit.length && (!warn.length || dismissed === key)) { if (bar) bar.remove(); layoutBanners(); return; }
-      if (!bar) { bar = document.createElement('div'); bar.id = 'hub-security-notice'; document.body.prepend(bar); }
-      const level = crit.length ? 'critical' : 'warn';
-      bar.dataset.level = level;
-      bar.dataset.key = level === 'warn' ? key : '';
-      bar.style.cssText = `position:fixed;top:0;left:0;right:0;z-index:9995;background:${level === 'critical' ? 'var(--banner-critical-bg)' : 'var(--banner-warn-bg)'};color:var(--on-color-text);padding:6px 44px 6px 14px;font-weight:600;box-sizing:border-box`;
-      const link = `<a href="#" onclick="openReviewAt('sec'); return false" style="color:var(--on-color-text);text-decoration:underline">Open the security check</a>`;
-      bar.innerHTML = level === 'critical'
-        ? `Security needs attention: ${crit.map(i => esc(i.title)).join('; ')}. ${link}.`
-        : `Security: ${warn.length} warning${warn.length === 1 ? '' : 's'} to review. ${link}.`
-          + `<button type="button" class="sec-dismiss" aria-label="Dismiss security warnings" title="Hide until the warnings change" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:0;color:var(--on-color-text);font-size:20px;line-height:1;cursor:pointer;padding:2px 6px">&times;</button>`;
-      const x = bar.querySelector('.sec-dismiss');
-      if (x) x.addEventListener('click', () => dismissSecurityBanner());
-      layoutBanners();
-    }
+    // The security banner is gone (P4-15): a critical finding is a "Fix now" item in For your review (the one banner shows it) and a warning is
+    // "Worth doing" there (never a banner, never counted), so the old X that hid the warnings has nothing left to hide.
     // ── Update available (lib/update-check): the server looks at GitHub once a day. While an update waits, admins see
     // a card at the bottom right (Update now / Later) and a chip in the sidebar; the chip stays after Later and brings
     // the card back. "Update now" is the Update dialog's own update and restart, for the current channel. ──

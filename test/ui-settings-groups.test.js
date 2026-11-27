@@ -55,7 +55,7 @@ test('where the sections go (P4-3 mapping)', () => {
   assert.deepStrictEqual(by.review.more, ['st-ready-section', 'st-health-section', 'st-sec-section'], 'the full Setup, Health and Security checks sit under More (P4-4B)');
   assert.deepStrictEqual(by.you.sections, ['st-looks-section', 'st-notify-section', 'st-chat-section']);
   assert.deepStrictEqual(by.agents.sections, ['st-workers-section']);
-  assert.deepStrictEqual(by.money.sections, ['st-prov-section', 'st-or-section', 'st-subs-section', 'st-plan-section', 'st-local-models-section', 'st-spend-section']);
+  assert.deepStrictEqual(by.money.sections, ['st-subs-section', 'st-plan-section', 'st-spend-section', 'st-local-models-section', 'st-prov-section', 'st-or-section'], 'P4-14: subscriptions and plan usage, spend and caps, then the keys');
   assert.deepStrictEqual(by.money.more, ['st-classifier-section', 'st-tuning-section']);
   assert.deepStrictEqual(by.voice.sections, ['st-voice-section']);
   assert.deepStrictEqual(by.tools.sections, ['st-ws-section', 'st-comms-section', 'st-cx-section', 'st-modules-section']);
@@ -219,9 +219,8 @@ test('the panel is grouped right after it is drawn: a list of eight group button
 test('links into Settings open the group that holds their section', () => {
   const app = read('app.js');
   assert.match(app, /async function openPlanSettings\(\) \{\s*await openSettingsAt\('st-plan-section'\);/);
-  assert.ok(app.includes(`onclick="openReviewAt('setup'); return false"`), 'setup banner opens For your review');
-  assert.ok(app.includes(`onclick="openReviewAt('health'); return false"`), 'health banner opens For your review');
-  assert.ok(app.includes(`onclick="openReviewAt('sec'); return false"`), 'security banner opens For your review');
+  assert.ok(app.includes(`openReviewAt('fix');`) && app.includes('data-rv="open-fix"'), 'the one banner opens For your review at Fix now');
+  assert.ok(app.includes(`"openReviewAt('fix')" : 'openSettings()'`), 'the gear with something to fix opens For your review at Fix now');
   assert.ok(app.includes(`onclick="openSettingsAt('st-updates-section'); return false">Update settings`), 'the update card opens Upkeep');
   assert.deepStrictEqual(G.groupOfSection('st-updates-section'), { group: 'upkeep', more: false });
   assert.ok(read('index.html').includes(`id="spend-today" onclick="openSettingsAt('st-spend-section')"`), "today's spend chip");

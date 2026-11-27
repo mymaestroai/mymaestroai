@@ -116,10 +116,10 @@ test('groupSettings for an admin is unchanged: eight groups', () => {
 });
 
 test('the phone: a one-group Settings never shows the list page, and Back leaves (closes) at once', () => {
-  const src = ['function stPhoneOn() {', 'function stPhoneList() {', 'function stPhoneGo(groupId) {', 'function stPhoneBack() {'].map((h) => fnSrc(app, h)).join('\n');
+  const src = ['function stPhoneOn() {', 'function stPhoneList() {', 'function stPhoneSaveMark() {', 'function stPhoneGo(groupId) {', 'function stPhoneBack() {'].map((h) => fnSrc(app, h)).join('\n');
   const wrap = { dataset: {}, closest: () => null, querySelector: () => null };
   const run = (single) => {
-    const f = new Function('document', 'window', 'STG', 'stSingleInit', `let stPhonePage = null; let stSingle = stSingleInit; ${src}; return { stPhoneList, stPhoneGo, stPhoneBack, page: () => stPhonePage };`);
+    const f = new Function('document', 'window', 'STG', 'stSingleInit', `let stPhonePage = null; let stSearching = false; let stSingle = stSingleInit; ${src}; return { stPhoneList, stPhoneGo, stPhoneBack, page: () => stPhonePage };`);
     const doc = { documentElement: { classList: { contains: () => true } }, getElementById: (id) => (id === 'st-groups' ? wrap : null) };
     return f(doc, { matchMedia: () => ({ matches: true }) }, G, single);
   };
@@ -156,7 +156,7 @@ test('the phone: Settings is in a member\'s menu and the frame draws their group
   assert.match(so, /await openSettings\(\);/);
   assert.match(so, /if \(isHubAdmin\(\) && typeof settingsDoorStart === 'function'\) settingsDoorStart\(\);/, 'the settings-for door stays an admin\'s');
   // the review count: reviewRefresh reads nothing and paints no badge for a member (both pages)
-  assert.match(fnSrc(app, 'async function reviewRefresh() {'), /!me\.isAdmin \|\| !me\.user\) \{ reviewLast = null; reviewPaintGear\(\); return; \}/);
+  assert.match(fnSrc(app, 'async function reviewRefresh() {'), /!me\.isAdmin \|\| !me\.user\) \{ reviewLast = null; reviewPaintGear\(\); reviewPaintBanner\(\); return; \}/);   // P4-7: the one banner is cleared with the gear
   assert.match(fnSrc(mob, 'async function reviewRefresh() {'), /hubMe\.isAdmin === true && hubMe\.user/);
 });
 
@@ -211,7 +211,7 @@ test('a member\'s dialog loaders request only member routes (stubbed fetch recor
   const src = [fnSrc(app, 'async function researchPrefLoad() {'), fnSrc(app, 'async function voiceRefreshStatus() {'), fnSrc(app, 'async function notifyPrefsFetch(method, body) {'), fnSrc(app, 'async function reviewRefresh() {')].join('\n');
   const els = { 'st-research-pref': { hidden: false } };
   const document = { getElementById: (id) => els[id] || null };
-  const f = new Function('fetch', 'document', 'window', 'RV', 'reviewSeqInit', `let voiceStatus = null, researchPrefChoice, researchPrefLevel, reviewLast = null, reviewSeq = 0; const voicePaint = () => {}, voiceWakeRecheck = () => {}, reviewPaintGear = () => {}, reviewPaintGroup = () => {}, reviewDismissedKey = () => '', researchPrefPaint = () => {}; ${src}; return { researchPrefLoad, voiceRefreshStatus, notifyPrefsFetch, reviewRefresh };`);
+  const f = new Function('fetch', 'document', 'window', 'RV', 'reviewSeqInit', `let voiceStatus = null, researchPrefChoice, researchPrefLevel, reviewLast = null, reviewSeq = 0; const voicePaint = () => {}, voiceWakeRecheck = () => {}, reviewPaintGear = () => {}, reviewPaintGroup = () => {}, reviewPaintBanner = () => {}, reviewDismissedKey = () => '', researchPrefPaint = () => {}; ${src}; return { researchPrefLoad, voiceRefreshStatus, notifyPrefsFetch, reviewRefresh };`);
   const api = f(fetch, document, { hubMe: { isAdmin: false, user: { name: 'Sam' } } }, { load: async (fx) => { await fx('/api/security-check'); return {}; }, build: () => ({}) }, 0);
   await api.researchPrefLoad();
   await api.voiceRefreshStatus();

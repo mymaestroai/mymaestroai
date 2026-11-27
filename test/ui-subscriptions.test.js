@@ -198,7 +198,7 @@ test('the helper blocks of app.js and mobile.js are the same code', () => {
 });
 
 test('desktop source: the Subscriptions section is listed before st-plan-section and built before the Claude plan', () => {
-  assert.ok(require('../lib/ui-settings-groups.js').GROUPS.find((g) => g.id === 'money').sections.join(',').includes('st-or-section,st-subs-section,st-plan-section'));
+  assert.ok(require('../lib/ui-settings-groups.js').GROUPS.find((g) => g.id === 'money').sections.join(',').includes('st-subs-section,st-plan-section,st-spend-section'), 'P4-7 order: subscriptions and plan usage, then spend, then keys');
   const a = app.indexOf('id="st-subs-section"'), b = app.indexOf('id="st-plan-section"');
   assert.ok(a > 0 && b > a, 'section built before the Claude plan section');
   assert.ok(app.includes('<h4>Subscriptions</h4>') && app.includes('id="st-subs-on"'));

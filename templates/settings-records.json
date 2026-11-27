@@ -1,5 +1,5 @@
 {
-  "version": "cad730ae418303991f00a9c7bdae4fc13d7fe047",
+  "version": "7bbb3f6afb02fa6b87970a81ee7edab7132fccd4",
   "records": [
     {
       "id": "OPT-0001",
@@ -3251,10 +3251,10 @@
         "Security needs attention / Security: N warning(s) to review. Open the security check",
         "Security warning ×"
       ],
-      "what": "A banner that says the security check found something to look at. Pressing it opens the security check. A warning (not a critical one) can be hidden with the × until the list of warnings changes.",
-      "when": "Open it and read the lines. Fix what matters, or press the fix button on a line. Hide only warnings you have decided to accept.",
-      "risk": "None to hide it, but a hidden warning stays unfixed. Critical findings cannot be hidden.",
-      "def": "Nothing to set; it appears when the check finds something. We recommend reading it.",
+      "what": "The one-line For your review banner no longer carries a separate security banner. A security warning is now a Worth doing row in For your review (amber, never colours the gear or the banner); a critical finding (for example secret files readable by others) is a Fix now row and appears in the one red banner. The old × that hid a warning is gone: nothing about the security check can be hidden any more.",
+      "when": "Open Settings > For your review and read the Worth doing rows. Fix what matters, or press the fix button on a row.",
+      "risk": "None. Nothing is hidden, so a warning stays listed until it is fixed.",
+      "def": "Nothing to set; a row appears when the security check finds something. We recommend reading it.",
       "restart": false,
       "danger": "everyday",
       "who": "admin",
@@ -3269,16 +3269,11 @@
         "needs attention",
         "security check"
       ],
-      "scope": "per-device",
+      "scope": "install",
       "home": "Settings > For your review",
-      "storedAs": "localStorage:hub-security-warn-dismissed",
-      "anchors": [
-        {
-          "surface": "desktop",
-          "label": "Security warning ×"
-        }
-      ],
-      "facts": "app.js:4750-4793; dismissal kept on this device in localStorage 'hub-security-warn-dismissed' (app.js:4750), returns when the set of warnings changes (audit text). Default 'unknown' in audit: nothing hidden to start. No restart."
+      "storedAs": "none",
+      "anchors": [],
+      "facts": "P4-7: the security banner (hub-security-notice) and its dismissal (localStorage 'hub-security-warn-dismissed') were removed; lib/ui-review.js gives security items the tier worth (critical: fix) and the one banner #hub-review-banner (phone #review-banner) shows only fix items. No restart."
     },
     {
       "id": "OPT-0113",
@@ -17435,37 +17430,6 @@
       "facts": "behaviour id own-code-guidance templates/behaviour-changes.json:104-115; read per lead turn lib/sdk-chat.js:277; fresh install on, install with agents 'pending' off lib/behaviour-changes.js:3, 101; the separate 'Protect your Maestro's own code' change can still refuse edits (same file)."
     },
     {
-      "id": "OPT-1083",
-      "kind": "setting",
-      "name": "Agents split complex work",
-      "labels": [
-        "Primary agents split complex work across parallel workers, never at the cost of quality"
-      ],
-      "what": "Main agents split a complex job into independent parts and run them at the same time without being asked, with a fitting model for each part, and check every part before using it. Work that is better done in one thread, such as one piece of writing or a chain of decisions, stays in one thread.",
-      "when": "Turn it on if you find yourself asking your agents to work in parallel. Leave it off to keep things as they are: agents still work in parallel when they choose to or when you ask.",
-      "risk": "Complex jobs start several runs at once, so they use more of a plan's allowance or pay-per-use budget at the same time. The agents' instructions get about 220 words longer.",
-      "def": "Default: on for a new Maestro; off and waiting for your decision on one that already has agents. We recommend turning it on.",
-      "restart": false,
-      "danger": "care",
-      "who": "admin",
-      "lead": "confirm",
-      "words": [
-        "parallel",
-        "split work",
-        "workers",
-        "at the same time",
-        "faster",
-        "complex task",
-        "quality",
-        "fan out"
-      ],
-      "scope": "install",
-      "home": "Settings > For your review while undecided (then Settings > Agents and teams > More)",
-      "storedAs": "behaviour:parallel-work",
-      "anchors": [],
-      "facts": "Behaviour change id parallel-work templates/behaviour-changes.json (after hand-off-guidance); on a new install it starts on, on an install with agents it starts pending lib/behaviour-changes.js:3, 101-114; read per turn lib/sdk-chat.js workPracticesTextFor, text lib/work-practices.js parallelText (primary agents; the lead also may create another lead). Costs text from the manifest (about 220 words, 260 for the lead); content kept on its own service (sdk-chat researchKeptOnBox) gets the own-model line. No restart."
-    },
-    {
       "id": "OPT-0554",
       "kind": "setting",
       "name": "Agents offer deep research",
@@ -24935,7 +24899,7 @@
       "anchors": [
         {
           "surface": "phone",
-          "selector": "#health-notice"
+          "selector": "#review-banner"
         }
       ],
       "mergedInto": "OPT-0111"
@@ -31905,6 +31869,37 @@
           "selector": "#p-prefix"
         }
       ]
+    },
+    {
+      "id": "OPT-1083",
+      "kind": "setting",
+      "name": "Agents split complex work",
+      "labels": [
+        "Primary agents split complex work across parallel workers, never at the cost of quality"
+      ],
+      "what": "Main agents split a complex job into independent parts and run them at the same time without being asked, with a fitting model for each part, and check every part before using it. Work that is better done in one thread, such as one piece of writing or a chain of decisions, stays in one thread.",
+      "when": "Turn it on if you find yourself asking your agents to work in parallel. Leave it off to keep things as they are: agents still work in parallel when they choose to or when you ask.",
+      "risk": "Complex jobs start several runs at once, so they use more of a plan's allowance or pay-per-use budget at the same time. The agents' instructions get about 220 words longer.",
+      "def": "Default: on for a new Maestro; off and waiting for your decision on one that already has agents. We recommend turning it on.",
+      "restart": false,
+      "danger": "care",
+      "who": "admin",
+      "lead": "confirm",
+      "words": [
+        "parallel",
+        "split work",
+        "workers",
+        "at the same time",
+        "faster",
+        "complex task",
+        "quality",
+        "fan out"
+      ],
+      "scope": "install",
+      "home": "Settings > For your review while undecided (then Settings > Agents and teams > More)",
+      "storedAs": "behaviour:parallel-work",
+      "anchors": [],
+      "facts": "Behaviour change id parallel-work templates/behaviour-changes.json (after hand-off-guidance); on a new install it starts on, on an install with agents it starts pending lib/behaviour-changes.js:3, 101-114; read per turn lib/sdk-chat.js workPracticesTextFor, text lib/work-practices.js parallelText (primary agents; the lead also may create another lead). Costs text from the manifest (about 220 words, 260 for the lead); content kept on its own service (sdk-chat researchKeptOnBox) gets the own-model line. No restart."
     },
     {
       "id": "OPT-1085",

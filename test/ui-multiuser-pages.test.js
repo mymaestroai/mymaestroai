@@ -86,7 +86,9 @@ test('server: the Welcome page takes over "/" only while the hub has no accounts
   assert.ok(server.includes("} else if (pathname === '/setup' || pathname === '/setup-admin') {") && server.includes("res.writeHead(302, { Location: '/welcome' + qs }); return res.end();"));
   assert.ok(!fs.existsSync(path.join(__dirname, '..', 'setup.html')), 'the old provider wizard is gone');
   const app = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
-  assert.ok(app.includes("id = 'hub-setup-notice'") && app.includes('href="/welcome"'), 'the hub page tells an admin when no provider is configured');
+  assert.ok(!app.includes('hub-setup-notice'), 'the old no-provider banner is gone (P4-15)');
+  const review = require('../lib/ui-review.js').build({ setup: { setupNeeded: true } });
+  assert.deepStrictEqual(review.fix.map((p) => [p.id, p.title, p.fix.href]), [['provider', 'No AI provider is connected', '/welcome']], 'the hub page tells an admin when no provider is configured: a Fix now item with the Welcome link');
 });
 
 // destination() cut out of login.html and run with a stubbed location: only a same-site path is followed.

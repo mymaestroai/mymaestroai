@@ -14,16 +14,20 @@ test('/api/me reports whether any account exists', () => {
   assert.match(server, /const out = \{ user: u, isAdmin, accounts: hubAuth\.hasUsers\(\) \};/);
 });
 
-test('the page paints the no-accounts banner after loading /api/me, only when accounts is false', () => {
-  assert.match(app, /paintSetupNotice\(\);\s*\n\s*paintNoAccountsNotice\(\);/);
-  const at = app.indexOf('function paintNoAccountsNotice()');
-  const body = app.slice(at, at + 1200);
-  assert.match(body, /const none = \(me && me\.accounts === false\) \|\| \(!me && window\.hubNoAccounts === true\);/);
+test('no login at all is a Fix now item (id accounts) in the one banner, read after /api/me; a hub with no /api/me answer asks the public auth status', () => {
+  // the old banner is gone (P4-15); the condition lives in lib/ui-review.js and the page feeds it
+  assert.doesNotMatch(app, /paintNoAccountsNotice|hub-no-accounts-notice/);
+  const review = require('../lib/ui-review.js');
+  const r = review.build({ accounts: { none: true } });
+  assert.deepStrictEqual(r.fix.map((p) => [p.id, p.title, p.fix.label, p.fix.href]), [['accounts', 'This hub has no login yet', 'Create the admin account', '/welcome']]);
+  const at = app.indexOf('async function reviewRefresh()');
+  const body = app.slice(at, at + 900);
+  assert.match(body, /if \(RV && !me && window\.hubNoAccounts === true\)/);   // no session and no accounts: the banner still says so
+  assert.match(body, /RV\.build\(\{ accounts: \{ none: true \}/);
+  assert.match(app, /accounts: \{ none: me\.accounts === false \}/, 'a signed-in admin: /api/me says accounts is false');
   // /api/me answers 401 on a hub with no accounts, so the page asks the public auth status instead
   assert.match(app, /else if \(r\.status === 401\) \{[\s\S]*?fetch\('\/api\/auth\/status', \{ credentials: 'include' \}\)[\s\S]*?window\.hubNoAccounts = a && a\.setupNeeded === true && !a\.signedIn;/);
-  assert.match(body, /id = 'hub-no-accounts-notice'/);
-  assert.match(body, /multi-user features \(members, sharing, the account menu, member sandboxes\) stay off until an admin account exists/);
-  assert.match(body, /<a href="\/welcome"[^>]*>Create the admin account<\/a> \(you will need the setup link: run mymaestro setup-link\)/);
+  assert.match(app, /reviewRefresh\(\)\.catch\(\(\) => \{\}\);   \/\/ the count on the gear/);
 });
 
 test('the account chip hides when there is no user', () => {

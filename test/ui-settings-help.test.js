@@ -584,7 +584,7 @@ function searchRig() {
   const a = src.indexOf('function stSearch(q) {'), b = src.indexOf('// Links into Settings (the plan badge', a);
   assert.ok(a > 0 && b > a, 'stSearch found');
   const body = src.slice(a, b);
-  const make = new Function('document', 'stShowGroup', 'STG', `let stCurGroup = null; let stPicked = false; let stSearching = false; let stWordsIdx = null; ${body}; return { stSearch, setIdx: (v) => { stWordsIdx = v; }, searching: () => stSearching };`);
+  const make = new Function('document', 'stShowGroup', 'STG', `let stCurGroup = null; let stPicked = false; let stSearching = false; let stWordsIdx = null; function stPhoneSaveMark() {} ${body}; return { stSearch, setIdx: (v) => { stWordsIdx = v; }, searching: () => stSearching };`);
   const p = page();
   const wrap = el(p.doc, 'div', { id: 'st-groups' }); p.doc.body.appendChild(wrap);
   // the eight-group page: each group is a .st-group (one shown at a time) holding its sections
@@ -853,7 +853,7 @@ test('search: a record anchored by label text is found by its search words and i
   // the real stSearch from app.js
   const src = read('app.js');
   const a = src.indexOf('function stSearch(q) {'), b = src.indexOf('// Links into Settings (the plan badge', a);
-  const make = new Function('document', 'stShowGroup', 'STG', `let stCurGroup = null; let stPicked = false; let stSearching = false; let stWordsIdx = null; ${src.slice(a, b)}; return { stSearch, setIdx: (v) => { stWordsIdx = v; } };`);
+  const make = new Function('document', 'stShowGroup', 'STG', `let stCurGroup = null; let stPicked = false; let stSearching = false; let stWordsIdx = null; function stPhoneSaveMark() {} ${src.slice(a, b)}; return { stSearch, setIdx: (v) => { stWordsIdx = v; } };`);
   const grp = el(s.doc, 'section', { class: 'st-group' }); grp.dataset.group = 'money';
   s.ov.removeChild(sec); grp.appendChild(sec); s.ov.appendChild(grp);
   const none = el(s.doc, 'span', { id: 'st-search-none' });

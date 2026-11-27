@@ -15697,34 +15697,8 @@ function wire() {
   }, 5000);
 }
 
-// ── system health notice (begin) ──
-// Admins only: a red bar at the top of the agent list while the nightly health check has a critical problem. The
-// sign-in items are left out (the setup checklist has its own notice). The phone has no Status page, so the link opens
-// the computer page at Settings → Status. An error or a non-200 answer leaves the bar as it is.
-function healthNoticeItems(view) {
-  return ((view && view.items) || []).filter(i => i && i.level === 'critical' && !String(i.id || '').startsWith('health-signin-'));
-}
-let healthNoticeSeq = 0;
-async function paintHealthNotice() {
-  const bar = $('health-notice');
-  if (!bar) return;
-  const seq = ++healthNoticeSeq;
-  if (!hubMe || hubMe.isAdmin !== true || !hubMe.user) { bar.hidden = true; bar.textContent = ''; return; }
-  let view = null;
-  try {
-    const r = await api('/api/system-health');
-    if (!r.ok) return;
-    view = await r.json();
-  } catch { return; }
-  if (seq !== healthNoticeSeq) return;   // a newer paint is on its way
-  const crit = healthNoticeItems(view);
-  if (!crit.length) { bar.hidden = true; bar.textContent = ''; return; }
-  bar.innerHTML = `Health: ${crit.map(i => esc(i.title)).join('; ')}. <a href="/?health=1">Open Settings → For your review</a>`;
-  for (const i of crit) { const b = typeof ClaudeSignin !== 'undefined' && ClaudeSignin.healthButton(i); if (b) bar.appendChild(b); }
-  bar.hidden = false;
-}
-document.addEventListener('visibilitychange', () => { if (!document.hidden) paintHealthNotice().catch(() => {}); });
-// ── system health notice (end) ──
+// The phone's health notice is gone (P4-15): a critical health item is a "Fix now" item in For your review and the ONE notice at the top
+// of the agent list (#review-banner, painted by reviewPaint below) shows it, with the first item's fix button.
 
 // ── The count of things for the owner's review (lib/ui-review.js): a number on Settings in the ⋮ menu, a dot on the ⋮ buttons ──
 // Admins only. Read when the page loads, every 5 minutes, after a settings_changed event and when the page comes back to the front.
@@ -15737,9 +15711,8 @@ async function reviewRefresh() {
     let input;
     try { input = await RV.load((u, o) => fetch(u, o), { accounts: { none: hubMe.accounts === false } }); } catch { return; }
     if (seq !== reviewSeq) return;   // a newer read is on its way
-    let dismissed = ''; try { dismissed = localStorage.getItem('hub-security-warn-dismissed') || ''; } catch { /* blocked storage */ }
-    input.securityDismissed = dismissed;
     input.now = Date.now();
+    try { input.snooze = RV.readSnooze(localStorage, input.now); } catch { input.snooze = {}; }   // the suggestions asked again later (this browser)
     let extra = [];
     try { extra = await RV.loadSources((u, o) => fetch(u, o)); } catch { extra = []; }   // modules that registered a source (same list as the desktop)
     if (seq !== reviewSeq) return;
@@ -15768,8 +15741,31 @@ function reviewPaint(r) {
     for (const k of ['critical', 'warn', 'info']) b.classList.remove(`rv-${k}`);
     b.classList.toggle('rv-has', !!kind);
     if (kind) b.classList.add(`rv-${kind}`);
-    b.setAttribute('aria-label', kind ? `Menu, ${r.count} ${r.count === 1 ? 'thing' : 'things'} for your review` : 'Menu');
+    b.setAttribute('aria-label', kind ? `Menu, ${r.count} ${r.count === 1 ? 'thing' : 'things'} to fix` : 'Menu');
   }
+  reviewPaintBanner(r);
+}
+// The ONE notice at the top of the agent list: only while something is in "Fix now" (red). "<first item> (and N more to fix). Open For your review"
+// and the first item's fix button; the link opens Settings at the review group (its page starts with Fix now).
+function reviewPaintBanner(r) {
+  const bar = $('review-banner');
+  if (!bar) return;
+  const RV = window.hubReview, b = r && RV ? RV.bannerOf(r) : null;
+  if (!b) { bar.hidden = true; bar.textContent = ''; return; }
+  const f = b.fix;
+  bar.innerHTML = `<span class="rvb-text">${esc(b.title)}${b.more > 0 ? ` (and ${b.more} more to fix)` : ''}.</span> <a href="#" class="rvb-open">Open For your review</a>`
+    + (f && f.href ? ` <a href="${esc(f.href)}" class="rvb-fix">${esc(f.label)}</a>` : f && f.api ? ` <button type="button" class="rvb-fix" data-api="${esc(f.api)}" data-method="${esc(f.method || 'POST')}">${esc(f.label)}</button>` : f && f.kind === 'claude-signin' ? ' <span class="rvb-signin"></span>' : '');
+  const open = bar.querySelector('.rvb-open');
+  if (open) open.addEventListener('click', (e) => { if (e.preventDefault) e.preventDefault(); settingsSheetOpen('', 'review'); });
+  const act = bar.querySelector('button.rvb-fix');
+  if (act) act.addEventListener('click', async () => {
+    act.disabled = true;
+    try { const res = await api(act.dataset.api, { method: act.dataset.method || 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }); act.textContent = res && res.ok ? 'Done' : 'Failed'; } catch { act.textContent = 'Failed'; }
+    setTimeout(() => reviewRefresh().catch(() => {}), 1500);
+  });
+  const slot = bar.querySelector('.rvb-signin');
+  if (slot) { const s = typeof ClaudeSignin !== 'undefined' ? ClaudeSignin.healthButton({ action: 'claude-signin' }) : null; if (s) slot.appendChild(s); }
+  bar.hidden = false;
 }
 document.addEventListener('visibilitychange', () => { if (!document.hidden) reviewRefresh().catch(() => {}); });
 setInterval(() => reviewRefresh().catch(() => {}), 5 * 60 * 1000);
@@ -17524,7 +17520,6 @@ async function init() {
   applyMultiUser();
   refreshPlanUsage();
   if (hubMe) { presenceStart(); loadNotifyPrefs(); }   // signed in: tell the hub this page is open; the bell shows 🔕 for an agent set to Off
-  paintHealthNotice().catch(() => {});
   reviewRefresh().catch(() => {});
   if (new URLSearchParams(location.search).get('security') === '1') openSecuritySheet();
   await loadAgents();
@@ -17590,7 +17585,7 @@ function themeNoticeShow() {
   const el = window.hubSimple.themeNotice(document, { me: () => hubMe, save: (v) => simplePrefsPost({ theme: v }), onError: () => toast('Could not save that') });
   if (!el) return;
   el.id = 'theme-notice';   // top of the Agents screen with the other notices, never in the composer
-  const host = $('screen-agents'), first = $('health-notice');
+  const host = $('screen-agents'), first = $('review-banner');
   if (host && first) host.insertBefore(el, first.nextSibling); else if (host) host.prepend(el);
 }
 function simpleOn() { return !!(window.hubSimple && document.documentElement.classList.contains('mm-simple')); }
@@ -18183,8 +18178,8 @@ function simpleSettingsOpen() {
     const line = $('ss-review-line');
     if (!line) return;
     const r = reviewLastResult;
-    line.textContent = !r || !window.hubReview ? 'Checking…' : r.count > 0 ? window.hubReview.summaryText(r) : 'Nothing needs your review.';
-    line.classList.toggle('ss-warn', !!(r && r.problems && r.problems.length));
+    line.textContent = !r || !window.hubReview ? 'Checking…' : window.hubReview.summaryText(r);
+    line.classList.toggle('ss-warn', !!(r && r.count > 0));   // red only
   };
   if ($('ss-review-line')) {
     paintReviewLine();

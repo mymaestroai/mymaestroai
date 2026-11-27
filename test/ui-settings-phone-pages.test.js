@@ -25,9 +25,9 @@ function pageHarness(settingsOnly) {
   wrap.querySelector = (sel) => (sel === '.st-phone-title' ? title : null);
   mk('st-gbtn-money'); mk('st-gbtn-voice');
   const doc = { documentElement: { classList: { contains: (c) => settingsOnly && c === 'mm-settings-only' } }, getElementById: (id) => els[id] || null };
-  const STG = { GROUPS: [{ id: 'money', title: 'Models and money' }, { id: 'voice', title: 'Voice and calls' }] };
-  const src = ['function stPhoneOn()', 'function stPhoneList()', 'function stPhoneGo(groupId)', 'function stPhoneBack()'].map((h) => fnSrc(app, h)).join('\n');
-  const api = new Function('document', 'window', 'STG', `let stPhonePage = null; let stSingle = false;\n${src}\nreturn { stPhoneOn, stPhoneList, stPhoneGo, stPhoneBack, page: () => stPhonePage };`)(doc, { matchMedia: () => ({ matches: false }) }, STG);
+  const STG = { GROUPS: [{ id: 'money', title: 'Models and money' }, { id: 'voice', title: 'Voice and calls' }], usesSharedSave: (g) => ['money', 'agents'].includes(g) };
+  const src = ['function stPhoneOn()', 'function stPhoneList()', 'function stPhoneSaveMark()', 'function stPhoneGo(groupId)', 'function stPhoneBack()'].map((h) => fnSrc(app, h)).join('\n');
+  const api = new Function('document', 'window', 'STG', `let stPhonePage = null; let stSingle = false; let stSearching = false;\n${src}\nreturn { stPhoneOn, stPhoneList, stPhoneGo, stPhoneBack, page: () => stPhonePage };`)(doc, { matchMedia: () => ({ matches: false }) }, STG);
   return { api, els, wrap, modal, title };
 }
 

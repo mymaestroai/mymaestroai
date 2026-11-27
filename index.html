@@ -2863,9 +2863,9 @@
     /* Settings in eight groups (lib/ui-settings-groups.js): a list of groups on the left, the open group on the right. The phone frame keeps one column. */
     .st-modal:has(.st-panes) { max-width: 1040px; width: min(96vw, 1040px); }
     .st-panes { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 16px; align-items: start; }
-    .st-glist { display: flex; flex-direction: column; gap: 4px; position: sticky; top: 0; }
+    .st-glist { display: flex; flex-direction: column; gap: 2px; position: sticky; top: 0; }   /* eight rows of a title and a short summary fit 1024 x 768 without scrolling the list */
     .st-gbtn {
-      display: flex; align-items: flex-start; gap: 10px; width: 100%; padding: 8px 10px; text-align: left; cursor: pointer;
+      display: flex; align-items: flex-start; gap: 10px; width: 100%; padding: 6px 10px; text-align: left; cursor: pointer;
       background: transparent; color: var(--text); border: 1px solid transparent; border-radius: 8px; font: inherit;
     }
     .st-gbtn:hover { background: var(--hover-tint); }
@@ -2875,10 +2875,9 @@
     .st-gtext { display: flex; flex-direction: column; min-width: 0; flex: 1; }
     .st-group-title { font-weight: 600; font-size: 0.88rem; color: var(--text); }
     .st-gbtn:hover .st-group-title { color: var(--accent); }
-    .st-gsub { font-size: 0.72rem; color: var(--text-dim); line-height: 1.3; }
     .st-group-sum {
-      min-width: 0; font-size: 0.72rem; color: var(--text-dim);
-      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      min-width: 0; font-size: 0.72rem; line-height: 1.3; color: var(--text-dim);
+      white-space: normal; overflow-wrap: anywhere;   /* the live summary wraps: no cut "pus…" */
     }
     .st-group-sum:empty { display: none; }
     .st-group-sum.st-sum-crit { color: var(--error); font-weight: 600; }
@@ -2886,8 +2885,15 @@
     /* For your review (lib/ui-review.js): the list at the top of the first group and the count on the gear. Only problems take a warning colour. */
     #st-review-list h4 { margin: 10px 0 6px; font-size: 0.85rem; color: var(--text-dim); }
     .rv-row { display: flex; gap: 10px; align-items: flex-start; flex-wrap: wrap; padding: 8px 10px; margin-bottom: 6px; border: 1px solid var(--border); border-left: 4px solid var(--border-strong); border-radius: 6px; }
-    .rv-row.rv-critical { border-left-color: var(--error); }
-    .rv-row.rv-warn { border-left-color: var(--warning); }
+    .rv-row.rv-critical, .rv-row.rv-fix { border-left-color: var(--error); }
+    .rv-row.rv-warn, .rv-row.rv-worth { border-left-color: var(--warning); }
+    .rv-row.rv-suggest { border-left-color: var(--border-strong); }
+    #st-review-list h4.rv-h { color: var(--text); font-size: 0.92rem; margin: 12px 0 6px; }
+    .rv-block-fix h4.rv-h { color: var(--error); }
+    .rv-fold { background: none; border: 0; padding: 6px 0; margin: 8px 0 4px; color: var(--text-dim); font: inherit; font-weight: 600; font-size: 0.88rem; cursor: pointer; }
+    .rv-fold-body[hidden] { display: none; }
+    .rv-banner-fix { margin-left: 6px; }
+    .st-group-sum .st-sum-first { color: var(--error); font-weight: 600; }
     .rv-main { flex: 1 1 220px; min-width: 0; }
     .rv-title { color: var(--text); font-weight: 600; font-size: 0.88rem; }
     .rv-text, .rv-result, .rv-note { color: var(--text-dim); font-size: 0.8rem; line-height: 1.35; margin-top: 2px; }
@@ -2903,6 +2909,8 @@
     .st-group[hidden] { display: none; }
     .st-ghead { display: none; margin: 8px 0 4px; font-size: 0.95rem; color: var(--text); }
     #st-groups.st-searching .st-ghead { display: block; }
+    #st-groups.st-searching .st-gpane { display: flex; flex-direction: column; }   /* a search lists a group whose title matches first (app.js stSearch sets each group's order) */
+    #st-groups .st-row-off { display: none !important; }   /* in another group, a search shows only the matching rows of a section */
     .st-more { margin-top: 8px; border-top: 1px solid var(--border); padding-top: 8px; }
     .st-more[hidden], .st-more-body[hidden] { display: none; }
     .st-more-btn { background: transparent; border: 0; padding: 4px 0; color: var(--accent); cursor: pointer; font: inherit; font-size: 0.85rem; text-align: left; }
@@ -2911,6 +2919,14 @@
     #st-groups.st-searching .st-more-body[hidden] { display: block; }
     .st-moved > h4 { font-size: 0.85rem; }
     @media (max-width: 720px) { .st-panes { display: block; } .st-glist { position: static; margin-bottom: 12px; } }
+    /* The label column of a row in the two-pane dialog is about 200 px (the rows drew 100 px labels that broke to four lines), and the ⓘ stays on its label's line. The phone frame and a narrow window keep their one column. */
+    @media (min-width: 721px) {
+      html:not(.mm-settings-only) .st-modal:has(.st-panes) .st-row:not(.cx-form .st-row) > label:not(:has(input)):not([style*="flex-basis:auto"]):not([style*="flex:"]) { flex: 0 0 200px !important; min-width: 0; overflow-wrap: break-word; }
+      html:not(.mm-settings-only) .st-modal:has(.st-panes) .st-section > .st-hint, html:not(.mm-settings-only) .st-modal:has(.st-panes) .st-moved > .st-hint { margin-left: 208px; }
+      .st-modal:has(.st-panes) .st-row > .st-info { align-self: center; margin-left: 0; }
+      .st-modal:has(.st-panes) .st-row > label + .st-info { margin-left: -4px; }
+      .st-modal:has(.st-panes) .st-section > .st-info { margin: 0 0 0 6px; }
+    }
     /* The phone (the Settings frame, or a window under 721 px; app.js sets data-page there only): the list of groups as full-width rows, or one group as a page under a "‹ Settings" header. */
     /* A member's Settings has one group: the group alone, no list of groups and no search (app.js groupSettings sets st-single). */
     #st-groups.st-single .st-glist, #st-groups.st-single .st-search { display: none; }
@@ -2921,9 +2937,13 @@
     .st-phone-back { min-height: 44px; padding: 0 12px 0 0; background: transparent; border: 0; color: var(--accent); cursor: pointer; font: inherit; font-size: 1rem; }
     .st-phone-back:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
     .st-phone-title { font-weight: 600; font-size: 1.05rem; color: var(--text); }
+    .st-phone-title::before { content: "\00b7\00a0"; color: var(--text-dim); font-weight: 400; }   /* "‹ Settings · Models and money" */
+    /* A group page is only its header: the dialog's own "Settings" title and sentence are hidden there, and Save shows only on a page that has something it writes (app.js stPhoneSaveMark). */
+    .st-modal:has(#st-groups[data-page="group"]) > h3, .st-modal:has(#st-groups[data-page="group"]) > .st-sub { display: none; }
+    .st-modal[data-save-here="no"] .st-actions .st-save-main { display: none; }
     #st-groups[data-page="group"] .st-search, #st-groups[data-page="group"] #st-quick-links, #st-groups[data-page="group"] .st-glist { display: none; }
     #st-groups[data-page="list"] .st-gpane, #st-groups[data-page="list"].st-searching .st-glist { display: none; }
-    #st-groups[data-page="list"].st-searching .st-gpane { display: block; }
+    #st-groups[data-page="list"].st-searching .st-gpane { display: flex; }
     #st-groups[data-page] .st-gbtn { min-height: 56px; align-items: center; width: 100%; }
     #st-groups[data-page].st-searching .st-ghead { cursor: pointer; color: var(--accent); }
     #st-groups[data-page].st-searching .st-ghead::after { content: " ›"; }

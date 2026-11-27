@@ -491,14 +491,16 @@ test('app.js and mobile.js handle the live event, the saved rows and the health 
   assert.match(app, /oc2\.type === 'claude_signin'/);
   assert.match(app, /msg\.claudeSignin === true/);
   assert.match(app, /msg\.claudeSigninDetail/);
-  assert.match(app, /ClaudeSignin\.healthButton\(i\)/);
+  // P4-7: the one review banner and the review group put the button in a .rv-signin slot (the old health banner looped over items)
+  assert.match(app, /ClaudeSignin\.healthButton\(\{ action: 'claude-signin' \}\)/);
+  assert.ok((app.match(/ClaudeSignin\.healthButton\(\{ action: 'claude-signin' \}\)/g) || []).length >= 2, 'the banner and the review group');
   assert.match(app, /ClaudeSignin\.healthButton\(items\[idx\]\)/, 'the Settings health list');
   assert.match(app, /ClaudeSignin\.notice\(wrap, \{ detail, onResend \}\)/);
   assert.match(app, /bubble\.dataset\.claudeSignin/, 'one notice per reply');
   assert.match(mob, /case 'claude_signin':/);
   assert.match(mob, /m\.claudeSignin === true/);
   assert.match(mob, /m\.claudeSigninDetail/);
-  assert.match(mob, /ClaudeSignin\.healthButton\(i\)/);
+  assert.match(mob, /ClaudeSignin\.healthButton\(\{ action: 'claude-signin' \}\)/, 'the one review line');
   assert.match(mob, /bubbleEl\.dataset\.claudeSignin/, 'one notice per reply');
 });
 

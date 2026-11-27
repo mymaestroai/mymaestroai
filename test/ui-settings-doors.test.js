@@ -22,10 +22,11 @@ function fnSrc(src, head) {
 const openSettingsSrc = fnSrc(app, 'async function openSettings() {');
 const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 
-test('the two slots: st-review-top (stop-all) first in For your review, st-money-cap (monthly-cap) first in Models and money; empty, admin only', () => {
+test('the two slots: st-review-top (stop-all) first in For your review, st-money-cap (monthly-cap) just above Spend in Models and money; empty, admin only', () => {
   const src = fnSrc(app, 'function groupSettings(data) {');
   assert.match(src, /\[\['review', 'st-review-top', 'stop-all'\], \['money', 'st-money-cap', 'monthly-cap'\]\]/);
-  assert.match(src, /b\.insertBefore\(d, b\.firstChild\)/, 'first child of the group body');
+  assert.match(src, /b\.insertBefore\(d, spend \|\| b\.firstChild\)/, 'first child of the group body, but the cap rows sit with Spend in Models and money');
+  assert.match(src, /gid === 'money' \? b\.querySelector\('#st-spend-section'\) : null/);
   assert.match(src, /if \(!stSingle\) \{\s*for \(const \[gid, id, slot\]/, 'a member has no such groups');
   // the list of problems is a separate element, so a module filling the slot is never wiped by a repaint
   assert.match(src, /reviewMount\(wrap\);[\s\S]*?st-review-top/, 'the slots are put in after the list, above it');
@@ -137,36 +138,34 @@ test('chips, badges and banners open their own group', () => {
   assert.strictEqual(G.groupOfSection('st-updates-section').group, 'upkeep');
   assert.strictEqual(G.groupOfSection('st-backups-section').group, 'upkeep');
   // the setup, health and security banners -> For your review
-  assert.match(app, /onclick="openReviewAt\('setup'\); return false"[^>]*>Open the setup checklist/);
-  assert.match(app, /onclick="openReviewAt\('health'\); return false"[^>]*>Open Settings → For your review/);
-  assert.match(app, /onclick="openReviewAt\('sec'\); return false"[^>]*>Open the security check/);
+  assert.match(app, /<a href="#" data-rv="open-fix"[^>]*>Open For your review<\/a>/, 'the one banner (P4-15) replaces the setup, health and security banners');
+  assert.doesNotMatch(app, /openReviewAt\('(setup|health|sec)'\)/);
   assert.doesNotMatch(app, /onclick="openSettingsAt\('st-(ready|health|sec)-section'\)/, 'no banner opens the full section directly any more');
   // and the full sections stay one Details press away, under More of For your review
   assert.deepStrictEqual(G.groupOfSection('st-ready-section'), { group: 'review', more: true });
   assert.match(app, /data-rv="details" data-sec="\$\{esc\(p\.detailsSection\)\}">Details</);
 });
 
-test('openReviewAt: opens Settings at For your review and scrolls to the matching problem once the list has been read', async () => {
-  const src = `${app.match(/const REVIEW_KIND = [^\n]+/)[0]}\n${fnSrc(app, 'async function openReviewAt(kind) {')}`;
-  const run = async (kind, rows, lateRows) => {
-    const log = { opened: 0, revealed: [], scrolled: [] };
-    const mk = (pid) => ({ dataset: { pid }, scrollIntoView: (o) => log.scrolled.push([pid, o.block]) });
-    let current = rows.map(mk);
-    const list = { querySelectorAll: (q) => { assert.strictEqual(q, '[data-pid]'); return current; } };
+test('openReviewAt: opens Settings at For your review and scrolls the Fix now block to the top once the list has been read', async () => {
+  const src = fnSrc(app, 'async function openReviewAt(tier) {');
+  const run = async (tier, blocks, lateBlocks) => {
+    const log = { opened: 0, revealed: [], scrolled: [], asked: [] };
+    const mk = (t) => ({ dataset: { tier: t }, scrollIntoView: (o) => log.scrolled.push([t, o.block]) });
+    let current = blocks.map(mk);
+    const list = { querySelector: (q) => { log.asked.push(q); const m = /data-tier="(\w+)"/.exec(q); return current.find((b) => b.dataset.tier === m[1]) || null; } };
     const document = { getElementById: (id) => (id === 'st-review-list' ? list : null) };
-    const timers = [];
     const f = new Function('openSettings', 'document', 'stReveal', 'setTimeout', `${src}; return openReviewAt;`)(
-      async () => { log.opened++; }, document, (el) => log.revealed.push(el === list), (fn) => { if (lateRows) current = lateRows.map(mk); timers.push(1); fn(); });
-    await f(kind);
+      async () => { log.opened++; }, document, (el) => log.revealed.push(el === list), (fn) => { if (lateBlocks) current = lateBlocks.map(mk); fn(); });
+    await f(tier);
     return log;
   };
-  const a = await run('sec', ['ready:docker', 'sec:modes', 'health:disk']);
-  assert.deepStrictEqual([a.opened, a.revealed, a.scrolled], [1, [true], [['sec:modes', 'center']]]);
-  assert.deepStrictEqual((await run('health', ['ready:x', 'health:disk'])).scrolled, [['health:disk', 'center']]);
-  for (const pid of ['ready:docker', 'provider', 'accounts']) assert.deepStrictEqual((await run('setup', [pid])).scrolled, [[pid, 'center']], pid);
-  assert.deepStrictEqual((await run('setup', ['health:disk', 'sec:x'])).scrolled.length, 0, 'a problem of another kind is not the one');
-  const late = await run('health', [], ['health:disk']);
-  assert.deepStrictEqual(late.scrolled, [['health:disk', 'center']], 'the list arrives a moment after the dialog opens');
-  const none = await run('sec', []);
-  assert.deepStrictEqual([none.opened, none.revealed, none.scrolled], [1, [true], []], 'nothing matching: the group is still shown');
+  const a = await run('fix', ['worth', 'fix', 'suggest']);
+  assert.deepStrictEqual([a.opened, a.revealed, a.scrolled], [1, [true], [['fix', 'start']]]);
+  assert.deepStrictEqual((await run(undefined, ['fix'])).scrolled, [['fix', 'start']], 'no argument: Fix now');
+  assert.deepStrictEqual((await run('nonsense', ['fix'])).scrolled, [['fix', 'start']], 'anything else: Fix now');
+  assert.deepStrictEqual((await run('worth', ['fix', 'worth'])).scrolled, [['worth', 'start']]);
+  const late = await run('fix', [], ['fix']);
+  assert.deepStrictEqual(late.scrolled, [['fix', 'start']], 'the list arrives a moment after the dialog opens');
+  const none = await run('fix', ['worth']);
+  assert.deepStrictEqual([none.opened, none.revealed, none.scrolled], [1, [true], []], 'no Fix now block: the group is still shown');
 });

@@ -19,65 +19,65 @@ test('nothing to review: no problems, no features, count 0, worst none', () => {
   const r = R.build({ readiness: { items: [item('a', 'ok'), item('b', 'info')] }, health: { items: [] }, security: { items: [item('s', 'info')] }, setup: { setupNeeded: false }, backups: null, changes: { changes: [{ id: 'x', state: 'on' }] }, now: NOW });
   assert.deepStrictEqual([r.problems, r.features, r.count, r.worst, r.notes], [[], [], 0, 'none', []]);
   assert.deepStrictEqual(R.build({}).count, 0);
-  assert.strictEqual(R.summaryText(r), 'Nothing waiting');
+  assert.strictEqual(R.summaryText(r), 'Nothing to fix');
   assert.strictEqual(R.badgeKind(r), '');
   assert.strictEqual(R.gearLabel(r), 'Settings');
 });
 
-test('readiness: critical and warn are problems (critical first), ok and info are not; items other rules cover are not counted twice', () => {
+test('readiness: critical is Fix now, warn is Worth doing (critical first), ok and info are not listed; items other rules cover are not listed twice', () => {
   const r = R.build({ readiness: { items: [item('w', 'warn', { action: { label: 'Fix it', api: '/api/x', method: 'POST' } }), item('c', 'critical', { action: { label: 'Open', href: '/somewhere' } }), item('i', 'info'), item('ok', 'ok'), item('accounts', 'critical'), item('provider', 'critical'), item('health-disk', 'critical')] }, now: NOW });
-  assert.deepStrictEqual(r.problems.map((p) => [p.id, p.level]), [['ready:c', 'critical'], ['ready:w', 'warn']]);
+  assert.deepStrictEqual(r.problems.map((p) => [p.id, p.level, p.tier]), [['ready:c', 'critical', 'fix'], ['ready:w', 'warn', 'worth']]);
   assert.deepStrictEqual(r.problems[0].fix, { label: 'Open', href: '/somewhere' });
   assert.deepStrictEqual(r.problems[1].fix, { label: 'Fix it', api: '/api/x', method: 'POST' });
   assert.strictEqual(r.problems[0].text, 'Detail of c.', 'one plain sentence');
   assert.strictEqual(r.problems[0].detailsSection, 'st-ready-section');
-  assert.deepStrictEqual([r.count, r.worst], [2, 'critical']);
+  assert.deepStrictEqual([r.count, r.worst], [1, 'critical'], 'only the red item counts');
 });
 
-test('health: warn and critical count; the Claude sign-in item gets the sign-in fix', () => {
+test('health: critical is Fix now (the Claude sign-in item gets the sign-in fix), warn is Worth doing', () => {
   const r = R.build({ health: { items: [item('disk', 'warn'), item('health-signin-claude', 'critical', { action: 'claude-signin' }), item('fine', 'ok')] }, now: NOW });
-  assert.deepStrictEqual(r.problems.map((p) => p.id), ['health:health-signin-claude', 'health:disk']);
+  assert.deepStrictEqual(r.problems.map((p) => [p.id, p.tier]), [['health:health-signin-claude', 'fix'], ['health:disk', 'worth']]);
   assert.deepStrictEqual(r.problems[0].fix, { label: 'Sign in again', kind: 'claude-signin' });
   assert.strictEqual(r.problems[1].detailsSection, 'st-health-section');
   assert.strictEqual(r.worst, 'critical');
 });
 
-test('security: warn and critical count, the one-click fix is kept, no-accounts has its own line', () => {
+test('security: critical is Fix now, warn is Worth doing and never counts (amber does not colour the gear), no-accounts has its own line', () => {
   const sec = { items: [item('modes', 'warn', { action: { label: 'Tighten', api: '/api/security-check/fix-modes', method: 'POST' } }), item('accounts', 'critical'), item('note', 'info')] };
   const r = R.build({ security: sec, now: NOW });
-  assert.deepStrictEqual(r.problems.map((p) => p.id), ['sec:modes']);
+  assert.deepStrictEqual(r.problems.map((p) => [p.id, p.tier]), [['sec:modes', 'worth']]);
   assert.deepStrictEqual(r.problems[0].fix, { label: 'Tighten', api: '/api/security-check/fix-modes', method: 'POST' });
   assert.strictEqual(r.problems[0].detailsSection, 'st-sec-section');
-  assert.strictEqual(r.worst, 'warn');
+  assert.deepStrictEqual([r.count, r.worst], [0, 'none']);
 });
 
-test('security warnings dismissed in this browser stop counting; a changed set and a critical finding always count', () => {
+test('security warnings no longer hide behind a dismissal: they are listed as Worth doing whatever this browser stored, a critical one is Fix now', () => {
   const warns = { items: [item('b', 'warn'), item('a', 'warn')] };
   assert.strictEqual(R.securityWarnKey(warns.items), 'a,b');
-  assert.strictEqual(R.build({ security: warns, securityDismissed: 'a,b', now: NOW }).count, 0, 'dismissed');
-  assert.strictEqual(R.build({ security: warns, securityDismissed: 'a', now: NOW }).count, 2, 'the set changed: they count again');
-  assert.strictEqual(R.build({ security: warns, securityDismissed: '', now: NOW }).count, 2);
+  for (const dismissed of ['a,b', 'a', '']) assert.deepStrictEqual(R.build({ security: warns, securityDismissed: dismissed, now: NOW }).worth.map((p) => p.id), ['sec:b', 'sec:a'], `dismissed: ${dismissed}`);
   const withCrit = { items: [item('b', 'warn'), item('a', 'warn'), item('z', 'critical')] };
   const r = R.build({ security: withCrit, securityDismissed: 'a,b', now: NOW });
-  assert.deepStrictEqual(r.problems.map((p) => p.id), ['sec:z'], 'the critical one is never hidden; the dismissed warnings stay hidden');
+  assert.deepStrictEqual(r.fix.map((p) => p.id), ['sec:z']);
+  assert.deepStrictEqual([r.count, r.worth.length], [1, 2]);
 });
 
-test('no AI provider and no accounts are critical problems with a link to the Welcome page', () => {
+test('no AI provider and no accounts are Fix now items with a link to the Welcome page', () => {
   const r = R.build({ setup: { setupNeeded: true }, accounts: { none: true }, now: NOW });
-  assert.deepStrictEqual(r.problems.map((p) => [p.id, p.level, p.fix.href]), [['accounts', 'critical', '/welcome'], ['provider', 'critical', '/welcome']]);
+  assert.deepStrictEqual(r.problems.map((p) => [p.id, p.level, p.tier, p.fix.href]), [['accounts', 'critical', 'fix', '/welcome'], ['provider', 'critical', 'fix', '/welcome']]);
   assert.strictEqual(R.build({ setup: { setupNeeded: false }, accounts: { none: false }, now: NOW }).count, 0);
 });
 
-test('backups: a paused restore, a failed backup and a failed nightly backup are problems; backups off is not', () => {
+test('backups: a paused restore is Fix now, a failed backup and a failed nightly backup are Worth doing, backups off is a suggestion', () => {
   const ok = { key: { configured: true }, nightly: {} };
-  assert.strictEqual(R.build({ backups: ok, now: NOW }).count, 0);
-  assert.strictEqual(R.build({ backups: { key: { configured: false }, lastError: { message: 'x' } }, now: NOW }).count, 0, 'off is a choice');
+  assert.strictEqual(R.build({ backups: ok, now: NOW }).problems.length, 0);
+  const off = R.build({ backups: { key: { configured: false }, lastError: { message: 'x' } }, now: NOW });
+  assert.deepStrictEqual([off.count, off.problems.map((p) => [p.id, p.tier])], [0, [['backup:off', 'suggest']]], 'off is a choice: advice only');
   const paused = R.build({ backups: { ...ok, recovery: { restoredFrom: 1 } }, now: NOW });
-  assert.deepStrictEqual(paused.problems.map((p) => [p.id, p.fix && p.fix.api]), [['backup:paused', '/api/backups/recovery/resume']]);
-  assert.strictEqual(R.build({ backups: { ...ok, recovery: { resumedAt: 5 } }, now: NOW }).count, 0, 'resumed');
+  assert.deepStrictEqual(paused.problems.map((p) => [p.id, p.tier, p.fix && p.fix.api]), [['backup:paused', 'fix', '/api/backups/recovery/resume']]);
+  assert.strictEqual(R.build({ backups: { ...ok, recovery: { resumedAt: 5 } }, now: NOW }).problems.length, 0, 'resumed');
   const failed = R.build({ backups: { ...ok, lastError: { message: 'Disk full. Free some space.' } }, now: NOW });
-  assert.deepStrictEqual([failed.problems[0].id, failed.problems[0].text, failed.problems[0].detailsSection], ['backup:failed', 'Disk full.', 'st-backups-section']);
-  assert.strictEqual(R.build({ backups: { ...ok, lastError: { message: 'x' }, running: { step: 'a' } }, now: NOW }).count, 0, 'not while one is running');
+  assert.deepStrictEqual([failed.problems[0].id, failed.problems[0].tier, failed.problems[0].text, failed.problems[0].detailsSection], ['backup:failed', 'worth', 'Disk full.', 'st-backups-section']);
+  assert.strictEqual(R.build({ backups: { ...ok, lastError: { message: 'x' }, running: { step: 'a' } }, now: NOW }).problems.length, 0, 'not while one is running');
   assert.strictEqual(R.build({ backups: { ...ok, nightly: { lastError: { message: 'x' } } }, now: NOW }).problems[0].id, 'backup:nightly');
 });
 
@@ -88,25 +88,30 @@ test('features: pending behaviour changes only; a snoozed one is listed but not 
   assert.strictEqual(r.features[1].snoozedUntil, NOW + 3 * DAY);
   assert.strictEqual(r.features[0].text, 'What one changes.', 'one line from the entry');
   assert.strictEqual(r.features[0].title, 'Feature one');
-  assert.strictEqual(r.count, 2);
+  assert.strictEqual(r.count, 0, 'new features never count');
   assert.strictEqual(r.worst, 'none', 'features never raise the worst level');
-  assert.strictEqual(R.badgeKind(r), 'info');
-  assert.strictEqual(R.summaryText(r), '2 new features');
+  assert.strictEqual(R.badgeKind(r), '', 'features alone give no count on the gear');
+  assert.strictEqual(R.summaryText(r), 'Nothing to fix · 2 new features');
   assert.strictEqual(R.build({ changes: { changes: [pending('a', { snoozedUntil: NOW + DAY })] }, now: NOW }).count, 0);
-  assert.strictEqual(R.summaryText(R.build({ changes: { changes: [pending('a', { snoozedUntil: NOW + DAY })] }, now: NOW })), 'Nothing waiting');
+  assert.strictEqual(R.summaryText(R.build({ changes: { changes: [pending('a', { snoozedUntil: NOW + DAY })] }, now: NOW })), 'Nothing to fix');
 });
 
-test('count = problems + features that are not snoozed; worst follows the problems; the words and the colour kind', () => {
-  const r = R.build({ readiness: { items: [item('w', 'warn')] }, health: { items: [item('h', 'critical')] }, changes: { changes: [pending('a'), pending('b', { snoozedUntil: NOW + DAY })] }, now: NOW });
-  assert.deepStrictEqual([r.count, r.worst, R.badgeKind(r)], [3, 'critical', 'critical']);
-  assert.strictEqual(R.summaryText(r), '2 problems · 1 new feature');
-  assert.strictEqual(R.gearLabel(r), 'Settings, 3 things for your review');
-  const w = R.build({ readiness: { items: [item('w', 'warn')] }, now: NOW });
-  assert.deepStrictEqual([w.count, w.worst, R.badgeKind(w), R.summaryText(w), R.gearLabel(w)], [1, 'warn', 'warn', '1 problem', 'Settings, 1 thing for your review']);
+test('count = the Fix now items only; worst is critical only for them; suggestions and features never count; the line, the gear label and the colour', () => {
+  const r = R.build({ readiness: { items: [item('w', 'warn'), item('search', 'warn')] }, health: { items: [item('h', 'critical')] }, changes: { changes: [pending('a'), pending('b', { snoozedUntil: NOW + DAY })] }, now: NOW });
+  assert.deepStrictEqual([r.count, r.worst, R.badgeKind(r)], [1, 'critical', 'critical']);
+  assert.strictEqual(R.summaryText(r), '1 to fix · 1 suggestion · 1 new feature');
+  assert.strictEqual(R.gearLabel(r), 'Settings, 1 thing to fix');
+  const w = R.build({ readiness: { items: [item('w', 'warn')] }, security: { items: [item('s', 'warn')] }, now: NOW });
+  assert.deepStrictEqual([w.count, w.worst, R.badgeKind(w), R.summaryText(w), R.gearLabel(w)], [0, 'none', '', 'Nothing to fix', 'Settings'], 'amber never colours the gear');
+  const base = R.build({ health: { items: ['a', 'b', 'c'].map((i) => item(i, 'critical')) }, changes: { changes: Array.from({ length: 12 }, (_, i) => pending(`f${i}`)) }, now: NOW });
+  const sugg = Array.from({ length: 10 }, (_, i) => ({ id: `s${i}`, tier: 'suggest', title: `Advice ${i}` }));
+  const many = R.merge(base, [{ id: 'src', problems: sugg }]);
+  assert.strictEqual(R.summaryText(many), '3 to fix · 10 suggestions · 12 new features');
+  assert.strictEqual(many.count, 3);
 });
 
 test('a failed read says "Could not check <what>." and counts nothing for it', () => {
-  const r = R.build({ readiness: null, security: { items: [item('s', 'warn')] }, failed: ['readiness', 'backups', 'changes'], now: NOW });
+  const r = R.build({ readiness: null, security: { items: [item('s', 'critical')] }, failed: ['readiness', 'backups', 'changes'], now: NOW });
   assert.deepStrictEqual(r.notes, ['Could not check the setup checklist.', 'Could not check the backups.', 'Could not check the new features waiting.']);
   assert.strictEqual(r.count, 1);
 });
@@ -133,12 +138,12 @@ test('load(): every read fails on its own and the rest still arrive; the answers
   assert.deepStrictEqual(r.notes, ['Could not check the backups.', 'Could not check the health check.', 'Could not check the security check.']);
 });
 
-test('the words after a choice: Turned on. / Left off. / We\'ll ask again on <date>.', () => {
+test('the words after a choice: Turned on. / Left off. / I\'ll ask again on <date>.', () => {
   assert.strictEqual(R.decisionLine('on'), 'Turned on.');
   assert.strictEqual(R.decisionLine('off'), 'Left off.');
   const at = Date.UTC(2026, 11, 3, 12, 0, 0);
-  assert.strictEqual(R.decisionLine('later', at, 'en-US'), "We'll ask again on December 3.");
-  assert.strictEqual(R.askedAgainLine(at, 'en-US'), 'Asked again on December 3');
+  assert.strictEqual(R.decisionLine('later', at, 'en-US'), "I'll ask again on December 3.");
+  assert.strictEqual(R.askedAgainLine(at, 'en-US'), "I'll ask again on December 3.");
   assert.strictEqual(R.SNOOZE_MS, 7 * DAY);
 });
 
@@ -166,7 +171,7 @@ function classListOf(el) {
   return { add: (c) => el._cls.add(c), remove: (c) => el._cls.delete(c), contains: (c) => el._cls.has(c), toggle: (c, on) => { if (on) el._cls.add(c); else el._cls.delete(c); } };
 }
 function makeEl(doc, id) {
-  const el = { id, _cls: new Set(), attrs: {}, children: [], textContent: '', innerHTML: '', title: '', hidden: false, listeners: {} };
+  const el = { id, _cls: new Set(), attrs: {}, children: [], textContent: '', innerHTML: '', title: '', hidden: false, listeners: {}, style: {} };
   el.classList = classListOf(el);
   Object.defineProperty(el, 'className', { get: () => [...el._cls].join(' '), set: (v) => { el._cls = new Set(String(v).split(/\s+/).filter(Boolean)); el.classList = classListOf(el); } });
   el.setAttribute = (k, v) => { el.attrs[k] = String(v); };
@@ -203,12 +208,16 @@ function desktop(over) {
     if (body === undefined) return { ok: false, status: 500, json: async () => ({}) };
     return { ok: true, status: 200, json: async () => body };
   };
-  const factory = new Function('window', 'document', 'fetch', 'localStorage', 'esc', 'stSum', 'stOpenGroup', 'stReveal', 'securityActionHtml', 'readinessActionHtml', 'ClaudeSignin', 'SEC_DISMISS_KEY',
-    `${src}\nreturn { reviewRefresh, reviewPaintGear, reviewPaintGroup, reviewDecide, reviewMount, reviewDetails, get last() { return reviewLast; }, set last(v) { reviewLast = v; } };`);
-  const win = { hubReview: R, get hubMe() { return st.me; } };
-  const api = factory(win, doc, fetchStub, { getItem: () => st.dismissed || '' }, escHtml,
+  doc.body = { prepend: (el) => { if (el.id) doc.byId[el.id] = el; } };
+  st.store = {};
+  calls.layout = 0; calls.openReview = [];
+  const factory = new Function('window', 'document', 'fetch', 'localStorage', 'esc', 'stSum', 'stOpenGroup', 'stReveal', 'securityActionHtml', 'readinessActionHtml', 'ClaudeSignin', 'layoutBanners', 'openReviewAt',
+    `${src}\nreturn { reviewRefresh, reviewPaintGear, reviewPaintGroup, reviewPaintBanner, reviewSnooze, reviewDecide, reviewMount, reviewDetails, get last() { return reviewLast; }, set last(v) { reviewLast = v; } };`);
+  const win = { hubReview: R, get hubMe() { return st.me; }, get hubNoAccounts() { return st.noAccounts; } };
+  const storage = { getItem: (k) => (k in st.store ? st.store[k] : null), setItem: (k, v) => { st.store[k] = String(v); } };
+  const api = factory(win, doc, fetchStub, storage, escHtml,
     (g, k, text, crit) => calls.sum.push([g, k, text, !!crit]), (g) => calls.open.push(g), (el) => calls.reveal.push(el),
-    (a) => `<sec-fix>${escHtml(a.label)}</sec-fix>`, (a) => `<ready-fix>${escHtml(a.label)}${a.href ? ` href=${a.href}` : ''}${a.api ? ` api=${a.api}` : ''}</ready-fix>`, undefined, 'hub-security-warn-dismissed');
+    (a) => `<sec-fix>${escHtml(a.label)}</sec-fix>`, (a) => `<ready-fix>${escHtml(a.label)}${a.href ? ` href=${a.href}` : ''}${a.api ? ` api=${a.api}` : ''}</ready-fix>`, undefined, () => { calls.layout++; }, (t) => calls.openReview.push(t));
   return { api, doc, calls, st, win };
 }
 const answers = (o) => ({
@@ -216,18 +225,23 @@ const answers = (o) => ({
   '/api/backups': { key: { configured: true }, nightly: {} }, '/api/behaviour-changes': { changes: [] }, ...(o || {}),
 });
 
-test('page: the review group shows Problems with their fix and Details, and New features with the three buttons', async () => {
+test('page: the review group shows Fix now, then Worth doing, then folded Suggestions, then New features with the three buttons', async () => {
   const d = desktop();
   d.st.responses = answers({
-    '/api/readiness': { items: [item('docker', 'critical', { title: 'Docker is not running', action: { label: 'Start Docker', api: '/api/docker/start', method: 'POST' } })] },
+    '/api/readiness': { items: [item('docker', 'critical', { title: 'Docker is not running', action: { label: 'Start Docker', api: '/api/docker/start', method: 'POST' } }), item('search', 'warn', { title: 'Web search uses the free fallback' })] },
     '/api/security-check': { ok: true, items: [item('modes', 'warn', { title: 'Open modes', action: { label: 'Tighten', api: '/api/security-check/fix-modes' } })] },
     '/api/behaviour-changes': { changes: [pending('team-guidance', { title: 'Team advice' })] },
   });
   await d.api.reviewRefresh();
   const h = d.doc.getElementById('st-review-list').innerHTML;
-  assert.match(h, /<h4>Problems<\/h4>/);
-  assert.match(h, /rv-row rv-critical/);
-  assert.match(h, /rv-row rv-warn/);
+  assert.doesNotMatch(h, /<h4>Problems<\/h4>/, 'the old single block is gone');
+  const at = (re) => h.search(re);
+  assert.ok(at(/Fix now/) >= 0 && at(/Fix now/) < at(/Worth doing/) && at(/Worth doing/) < at(/Suggestions \(1\)/) && at(/Suggestions \(1\)/) < at(/New features/), 'order: Fix now, Worth doing, Suggestions, New features');
+  assert.match(h, /rv-row rv-fix/);
+  assert.match(h, /rv-row rv-worth/);
+  assert.match(h, /rv-row rv-suggest/);
+  assert.match(h, /<button type="button" class="rv-fold" data-rv="fold" aria-expanded="false">▸ Suggestions \(1\)<\/button><div class="rv-fold-body" hidden>/, 'Suggestions are folded behind a button');
+  assert.doesNotMatch(h.slice(0, at(/Suggestions \(1\)/)), /hidden/, 'Fix now and Worth doing are never folded');
   assert.match(h, /Docker is not running/);
   assert.match(h, /<ready-fix>Start Docker api=\/api\/docker\/start<\/ready-fix>/, 'readiness fixes use readinessActionHtml');
   assert.match(h, /<sec-fix>Tighten<\/sec-fix>/, 'security fixes use the security one-click');
@@ -238,22 +252,25 @@ test('page: the review group shows Problems with their fix and Details, and New 
   assert.match(h, /What team-guidance changes\./);
   for (const [k, l] of [['on', 'Turn on'], ['off', 'Leave off'], ['later', 'Ask me in a week']]) assert.match(h, new RegExp(`data-decision="${k}">${l}<`));
   assert.doesNotMatch(h, /Nothing needs your review/);
-  assert.deepStrictEqual(d.calls.sum.at(-1), ['review', 'list', '2 problems · 1 new feature', true], 'the group row: red because a problem is critical');
-  assert.ok(d.calls.open.includes('review'), 'a critical problem brings the group forward');
-  assert.ok(d.doc.getElementById('st-sum-review').classList.contains('st-sum-warn') === false);
+  assert.deepStrictEqual(d.calls.sum.at(-1), ['review', 'list', '1 to fix · 1 suggestion · 1 new feature', true], 'the group row: red because something is to fix');
+  const sum = d.doc.getElementById('st-sum-review');
+  assert.match(sum.innerHTML, /^<span class="st-sum-first">1 to fix<\/span> · 1 suggestion · 1 new feature$/, 'only the first part carries the warning colour');
+  assert.ok(!sum.classList.contains('st-sum-crit') && !sum.classList.contains('st-sum-warn'));
+  assert.ok(d.calls.open.includes('review'), 'a Fix now item brings the group forward');
 });
 
-test('page: warn-only problems make the summary amber, features alone neutral', async () => {
+test('page: warn-only items are Worth doing: the line says "Nothing to fix", the group does not move, no count', async () => {
   const d = desktop();
   d.st.responses = answers({ '/api/readiness': { items: [item('w', 'warn')] } });
   await d.api.reviewRefresh();
-  assert.ok(d.doc.getElementById('st-sum-review').classList.contains('st-sum-warn'));
-  assert.deepStrictEqual(d.calls.sum.at(-1), ['review', 'list', '1 problem', false]);
+  assert.ok(!d.doc.getElementById('st-sum-review').classList.contains('st-sum-warn'));
+  assert.deepStrictEqual(d.calls.sum.at(-1), ['review', 'list', 'Nothing to fix', false]);
   assert.deepStrictEqual(d.calls.open, [], 'amber does not move the open group');
+  assert.strictEqual(d.doc.getElementById('settings-count'), null);
+  assert.match(d.doc.getElementById('st-review-list').innerHTML, /Worth doing/);
   d.st.responses = answers({ '/api/behaviour-changes': { changes: [pending('a')] } });
   await d.api.reviewRefresh();
-  assert.ok(!d.doc.getElementById('st-sum-review').classList.contains('st-sum-warn'));
-  assert.deepStrictEqual(d.calls.sum.at(-1), ['review', 'list', '1 new feature', false]);
+  assert.deepStrictEqual(d.calls.sum.at(-1), ['review', 'list', 'Nothing to fix · 1 new feature', false]);
 });
 
 test('page: nothing to review shows one calm line and no heading', async () => {
@@ -262,7 +279,7 @@ test('page: nothing to review shows one calm line and no heading', async () => {
   await d.api.reviewRefresh();
   const h = d.doc.getElementById('st-review-list').innerHTML;
   assert.strictEqual(h, '<div class="rv-calm">Nothing needs your review.</div>');
-  assert.deepStrictEqual(d.calls.sum.at(-1), ['review', 'list', 'Nothing waiting', false]);
+  assert.deepStrictEqual(d.calls.sum.at(-1), ['review', 'list', 'Nothing to fix', false]);
 });
 
 test('page: a read that failed shows "Could not check ..." and not the calm line', async () => {
@@ -275,12 +292,15 @@ test('page: a read that failed shows "Could not check ..." and not the calm line
   assert.doesNotMatch(h, /Nothing needs your review/);
 });
 
-test('page: a snoozed feature stays listed with "Asked again on <date>" and is not counted', async () => {
+test('page: a snoozed feature stays listed with "I\'ll ask again on <date>." (Turn on / Leave off kept) and is not counted', async () => {
   const d = desktop();
   const until = Date.now() + 3 * DAY;
   d.st.responses = answers({ '/api/behaviour-changes': { changes: [pending('a', { snoozedUntil: until })] } });
   await d.api.reviewRefresh();
-  assert.match(d.doc.getElementById('st-review-list').innerHTML, /Asked again on /);
+  const sh = d.doc.getElementById('st-review-list').innerHTML;
+  assert.match(sh, /I&#39;ll ask again on |I'll ask again on /);
+  assert.ok(sh.includes('data-decision="on"') && sh.includes('data-decision="off"'), 'Turn on and Leave off stay on a snoozed row');
+  assert.ok(!sh.includes('data-decision="later"'), 'it was already put off');
   assert.strictEqual(d.doc.getElementById('settings-count'), null, 'no badge: nothing counts');
   assert.strictEqual(d.doc.getElementById('settings-btn').attrs['aria-label'], 'Settings');
 });
@@ -290,7 +310,7 @@ test('page: each button posts its own decision; the row then says what happened 
     const d = desktop();
     d.st.responses = answers({ '/api/behaviour-changes': { changes: [pending('team-guidance', { title: 'Team advice' })] } });
     await d.api.reviewRefresh();
-    assert.strictEqual(d.doc.getElementById('settings-count').textContent, '1');
+    assert.strictEqual(d.doc.getElementById('settings-count'), null, 'a new feature never counts');
     d.st.responses = answers();   // the server now says it is decided
     await d.api.reviewDecide('team-guidance', decision, null);
     const post = d.calls.fetch.find((c) => c[1] === 'POST');
@@ -300,7 +320,7 @@ test('page: each button posts its own decision; the row then says what happened 
     assert.ok(h.includes(`>${line}<`), line);
     assert.doesNotMatch(h, /data-decision=/, 'its buttons are gone');
     await new Promise((r) => setImmediate(r));
-    assert.strictEqual(d.doc.getElementById('settings-count'), null, 'the count went down');
+    assert.strictEqual(d.doc.getElementById('settings-count'), null);
   }
 });
 
@@ -314,8 +334,8 @@ test('page: "Ask me in a week" posts later, says when it will ask again, and the
   await d.api.reviewDecide('a', 'later', null);
   assert.strictEqual(d.calls.fetch.find((c) => c[1] === 'POST')[2], JSON.stringify({ decision: 'later' }));
   const h = d.doc.getElementById('st-review-list').innerHTML;
-  assert.ok(h.includes(escHtml(R.decisionLine('later', until))), "We'll ask again on <date>.");
-  assert.doesNotMatch(h, /data-decision=/);
+  assert.ok(h.includes(escHtml(R.decisionLine('later', until))), "I'll ask again on <date>.");
+  assert.ok(h.includes('data-decision="on"') && h.includes('data-decision="off"') && !h.includes('data-decision="later"'), 'the row keeps Turn on and Leave off');
   await new Promise((r) => setImmediate(r));
   assert.strictEqual(d.doc.getElementById('settings-count'), null);
 });
@@ -348,19 +368,21 @@ test('page: Details reveals the full section through stReveal', () => {
   assert.strictEqual(d.calls.reveal.length, 1);
 });
 
-test('page: the gear gets the count, the aria-label and the colour class; members and signed-out pages get nothing', async () => {
-  const cases = [
-    [{ '/api/system-health': { items: [item('h', 'critical')] }, '/api/behaviour-changes': { changes: [pending('a'), pending('b')] } }, '3', 'rv-badge rv-critical', 'Settings, 3 things for your review'],
-    [{ '/api/readiness': { items: [item('w', 'warn')] } }, '1', 'rv-badge rv-warn', 'Settings, 1 thing for your review'],
-    [{ '/api/behaviour-changes': { changes: [pending('a')] } }, '1', 'rv-badge rv-info', 'Settings, 1 thing for your review'],
-  ];
-  for (const [over, text, cls, label] of cases) {
+test('page: the gear counts the Fix now items only (red); amber, suggestions and new features give no badge; members and signed-out pages get nothing', async () => {
+  const d0 = desktop();
+  d0.st.responses = answers({ '/api/system-health': { items: [item('h', 'critical'), item('h2', 'critical')] }, '/api/behaviour-changes': { changes: [pending('a'), pending('b')] }, '/api/readiness': { items: [item('w', 'warn'), item('search', 'warn')] } });
+  await d0.api.reviewRefresh();
+  const b = d0.doc.getElementById('settings-count');
+  assert.deepStrictEqual([b.textContent, b.className, d0.doc.getElementById('settings-btn').attrs['aria-label']], ['2', 'rv-badge rv-critical', 'Settings, 2 things to fix']);
+  assert.strictEqual(d0.doc.getElementById('settings-btn').children.includes(b), true, 'the badge sits inside the gear button');
+  assert.strictEqual(d0.doc.getElementById('settings-btn').attrs.onclick, "openReviewAt('fix')", 'with something to fix the gear opens For your review at Fix now');
+  for (const over of [{ '/api/readiness': { items: [item('w', 'warn'), item('search', 'warn')] } }, { '/api/behaviour-changes': { changes: [pending('a')] } }, { '/api/security-check': { ok: true, items: [item('s', 'warn')] } }]) {
     const d = desktop();
     d.st.responses = answers(over);
     await d.api.reviewRefresh();
-    const b = d.doc.getElementById('settings-count');
-    assert.deepStrictEqual([b.textContent, b.className, d.doc.getElementById('settings-btn').attrs['aria-label']], [text, cls, label]);
-    assert.strictEqual(d.doc.getElementById('settings-btn').children.includes(b), true, 'the badge sits inside the gear button');
+    assert.strictEqual(d.doc.getElementById('settings-count'), null, JSON.stringify(Object.keys(over)));
+    assert.strictEqual(d.doc.getElementById('settings-btn').attrs.onclick, 'openSettings()');
+    assert.strictEqual(d.doc.getElementById('settings-btn').attrs['aria-label'], 'Settings');
   }
   const m = desktop();
   m.st.me = { isAdmin: false, user: { id: 'u2' } };
@@ -374,20 +396,21 @@ test('page: the gear gets the count, the aria-label and the colour class; member
   assert.strictEqual(s.calls.fetch.length, 0);
 });
 
-test('page: a dismissed security warning in this browser does not count on the gear', async () => {
+test('page: security warnings are listed under Worth doing whatever an old dismissal stored, and never count on the gear', async () => {
   const d = desktop();
   d.st.responses = answers({ '/api/security-check': { ok: true, items: [item('a', 'warn'), item('b', 'warn')] } });
-  d.st.dismissed = 'a,b';
+  d.st.store['hub-security-warn-dismissed'] = 'a,b';
   await d.api.reviewRefresh();
   assert.strictEqual(d.doc.getElementById('settings-count'), null);
+  assert.deepStrictEqual(d.api.last.worth.map((p) => p.id), ['sec:a', 'sec:b']);
 });
 
-test('page: wiring in app.js and index.html (refresh on load, every 5 minutes, on settings_changed and after a dismiss; badge CSS uses page variables)', () => {
+test('page: wiring in app.js and index.html (refresh on load, every 5 minutes, on settings_changed and after a Run now; badge CSS uses page variables)', () => {
   const app = read('app.js');
   assert.match(app, /reviewRefresh\(\)\.catch\(\(\) => \{\}\);   \/\/ the count on the gear/);
   assert.match(app, /window\.__rvTimer = setInterval\(\(\) => reviewRefresh\(\)\.catch\(\(\) => \{\}\), 5 \* 60 \* 1000\)/);
   assert.match(app, /addEventListener\('settings_changed', e => \{ const ev = parse\(e\); if \(ev\) \{ changeStripRefresh\(\); reviewRefresh\(\)/);
-  assert.match(app, /bar\.remove\(\);\s*layoutBanners\(\);\s*\(typeof reviewRefresh === "function" \? reviewRefresh\(\)/, 'dismissing the security banner updates the count');
+  assert.match(app, /reviewRefresh\(\)\.catch\(\(\) => \{\}\);   \/\/ a Run now that resolves or finds something updates the list, the count and the banner at once/);
   assert.match(app, /reviewMount\(wrap\);/);
   assert.match(app, /Object\.assign|ST_SUM_HOME = \{ status: \{ setup: 'review-checks'/);
   const html = read('index.html');
@@ -412,26 +435,28 @@ test('page: the first group is the list on top, then Recent changes; the full ch
 function phone(me) {
   const mob = read('mobile.js');
   const src = cut(mob, "// ── The count of things for the owner's review (lib/ui-review.js)", '// ── review count (end) ──');
-  const doc = makeDoc(['menu-settings', 'agents-menu-btn', 'chat-menu-btn']);
-  const st = { me, responses: answers(), dismissed: '', fetched: 0 };
+  const doc = makeDoc(['menu-settings', 'agents-menu-btn', 'chat-menu-btn', 'review-banner']);
+  const st = { me, responses: answers(), store: {}, fetched: 0, opened: [], api: [] };
   const fetchStub = async (url) => { st.fetched++; const b = st.responses[url]; return b === undefined ? { ok: false, status: 500, json: async () => ({}) } : { ok: true, status: 200, json: async () => b }; };
-  const factory = new Function('window', 'document', 'fetch', 'localStorage', '$', 'hubMe', 'setInterval',
-    `${src}\nreturn { reviewRefresh, reviewPaint };`);
-  const api = factory({ hubReview: R }, doc, fetchStub, { getItem: () => st.dismissed }, (id) => doc.getElementById(id), me, () => 0);
+  const factory = new Function('window', 'document', 'fetch', 'localStorage', '$', 'hubMe', 'setInterval', 'esc', 'api', 'settingsSheetOpen', 'ClaudeSignin',
+    `${src}\nreturn { reviewRefresh, reviewPaint, reviewPaintBanner };`);
+  const storage = { getItem: (k) => (k in st.store ? st.store[k] : null), setItem: (k, v) => { st.store[k] = String(v); } };
+  const api = factory({ hubReview: R }, doc, fetchStub, storage, (id) => doc.getElementById(id), me, () => 0, escHtml,
+    async (u, o) => { st.api.push([u, o && o.method]); return { ok: true }; }, (...a) => st.opened.push(a), undefined);
   return { api, doc, st };
 }
 
-test('phone: the menu\'s Settings item shows the count, the ⋮ buttons a dot in the same colour class, with labels', async () => {
+test('phone: the menu\'s Settings item shows the count of Fix now items, the ⋮ buttons a red dot, with labels', async () => {
   const p = phone({ isAdmin: true, user: { id: 'u1' } });
   p.st.responses = answers({ '/api/system-health': { items: [item('h', 'critical')] }, '/api/behaviour-changes': { changes: [pending('a')] } });
   await p.api.reviewRefresh();
   const c = p.doc.getElementById('menu-settings-count');
-  assert.deepStrictEqual([c.textContent, c.className], ['2', 'rv-count rv-critical']);
-  assert.strictEqual(p.doc.getElementById('menu-settings').attrs['aria-label'], 'Settings, 2 things for your review');
+  assert.deepStrictEqual([c.textContent, c.className], ['1', 'rv-count rv-critical'], 'the new feature does not count');
+  assert.strictEqual(p.doc.getElementById('menu-settings').attrs['aria-label'], 'Settings, 1 thing to fix');
   for (const id of ['agents-menu-btn', 'chat-menu-btn']) {
     const b = p.doc.getElementById(id);
     assert.ok(b.classList.contains('rv-has') && b.classList.contains('rv-critical'), id);
-    assert.strictEqual(b.attrs['aria-label'], 'Menu, 2 things for your review');
+    assert.strictEqual(b.attrs['aria-label'], 'Menu, 1 thing to fix');
   }
   p.st.responses = answers();   // everything fixed: the count and the dots go
   await p.api.reviewRefresh();
@@ -440,14 +465,16 @@ test('phone: the menu\'s Settings item shows the count, the ⋮ buttons a dot in
   for (const id of ['agents-menu-btn', 'chat-menu-btn']) { assert.ok(!p.doc.getElementById(id).classList.contains('rv-has')); assert.strictEqual(p.doc.getElementById(id).attrs['aria-label'], 'Menu'); }
 });
 
-test('phone: features alone are neutral, warn problems amber; members read nothing and see nothing', async () => {
+test('phone: features, worth-doing items and suggestions give no count and no dot; members read nothing and see nothing', async () => {
   const f = phone({ isAdmin: true, user: { id: 'u1' } });
   f.st.responses = answers({ '/api/behaviour-changes': { changes: [pending('a')] } });
   await f.api.reviewRefresh();
-  assert.strictEqual(f.doc.getElementById('menu-settings-count').className, 'rv-count rv-info');
-  f.st.responses = answers({ '/api/readiness': { items: [item('w', 'warn')] } });
+  assert.strictEqual(f.doc.getElementById('menu-settings-count'), null);
+  f.st.responses = answers({ '/api/readiness': { items: [item('w', 'warn'), item('search', 'warn')] } });
   await f.api.reviewRefresh();
-  assert.strictEqual(f.doc.getElementById('menu-settings-count').className, 'rv-count rv-warn');
+  assert.strictEqual(f.doc.getElementById('menu-settings-count'), null);
+  assert.ok(!f.doc.getElementById('agents-menu-btn').classList.contains('rv-has'));
+  assert.strictEqual(f.doc.getElementById('review-banner').hidden, true, 'no banner without a Fix now item');
   const m = phone({ isAdmin: false, user: { id: 'u2' } });
   await m.api.reviewRefresh();
   assert.strictEqual(m.st.fetched, 0);
@@ -456,7 +483,8 @@ test('phone: features alone are neutral, warn problems amber; members read nothi
 
 test('phone: wiring (load, settings_changed, 5 minutes) and the CSS only uses variables the phone page defines', () => {
   const mob = read('mobile.js');
-  assert.match(mob, /paintHealthNotice\(\)\.catch\(\(\) => \{\}\);\n  reviewRefresh\(\)\.catch\(\(\) => \{\}\);/);
+  assert.match(mob, /\n  reviewRefresh\(\)\.catch\(\(\) => \{\}\);\n  if \(new URLSearchParams\(location\.search\)\.get\('security'\)/);
+  assert.doesNotMatch(mob, /paintHealthNotice|healthNoticeItems/, 'the phone health notice is gone');
   assert.match(mob, /on\('settings_changed', \(\) => \{ changeStripLoad\(\); reviewRefresh\(\)\.catch\(\(\) => \{\}\); \}\);/);
   assert.match(mob, /setInterval\(\(\) => reviewRefresh\(\)\.catch\(\(\) => \{\}\), 5 \* 60 \* 1000\);/);
   const html = read('mobile.html');
@@ -471,7 +499,7 @@ test('phone: wiring (load, settings_changed, 5 minutes) and the CSS only uses va
 test('register(source): merged into build()\'s result; a failing source adds a "Could not check" note; unregister puts it back', async () => {
   assert.strictEqual(typeof R.register, 'function');
   const base = R.build({ readiness: { items: [item('w', 'warn')] }, now: NOW });
-  assert.strictEqual(R.register({ id: 'cap-source', load: async () => ({ problems: [{ id: 'cap:1', level: 'critical', title: 'Cap reached', text: 'Spending stopped.' }], features: [{ id: 'cap-new', title: 'Monthly cap', text: 'A cap you can set.' }] }) }), true);
+  assert.strictEqual(R.register({ id: 'cap-source', load: async () => ({ problems: [{ id: 'cap:1', level: 'critical', tier: 'fix', title: 'Cap reached', text: 'Spending stopped.' }, { id: 'cap:2', level: 'critical', title: 'No tier given', text: '' }], features: [{ id: 'cap-new', title: 'Monthly cap', text: 'A cap you can set.' }] }) }), true);
   assert.strictEqual(R.register({ id: 'bad-source', load: async () => { throw new Error('down'); } }), true);
   assert.strictEqual(R.register({ id: '', load: async () => ({}) }), false, 'a source needs an id');
   assert.strictEqual(R.register({ id: 'no-load' }), false, 'and a load function');
@@ -479,12 +507,12 @@ test('register(source): merged into build()\'s result; a failing source adds a "
     const answers = await R.loadSources(async () => ({ ok: true }));
     assert.deepStrictEqual(answers.map((a) => [a.id, !!a.failed]), [['cap-source', false], ['bad-source', true]]);
     const r = R.merge(base, answers);
-    assert.deepStrictEqual(r.problems.map((p) => p.id), ['cap:1', 'ready:w'], 'critical first');
+    assert.deepStrictEqual(r.problems.map((p) => [p.id, p.tier]), [['cap:1', 'fix'], ['cap:2', 'worth'], ['ready:w', 'worth']], 'by tier; a source problem without a tier is Worth doing');
     assert.deepStrictEqual(r.features.map((f) => [f.id, f.snoozed]), [['cap-new', false]]);
-    assert.deepStrictEqual([r.count, r.worst], [3, 'critical']);
+    assert.deepStrictEqual([r.count, r.worst], [1, 'critical']);
     assert.deepStrictEqual(r.notes, ['Could not check bad-source.']);
-    assert.deepStrictEqual([base.count, base.notes], [1, []], 'build()\'s own result is not changed');
-    assert.strictEqual(R.merge(base, []).count, 1, 'no sources: build() as it is');
+    assert.deepStrictEqual([base.count, base.notes], [0, []], 'build()\'s own result is not changed');
+    assert.strictEqual(R.merge(base, []).problems.length, 1, 'no sources: build() as it is');
   } finally { R.unregister('cap-source'); R.unregister('bad-source'); }
   assert.deepStrictEqual(await R.loadSources(async () => ({})), []);
 });
@@ -496,8 +524,8 @@ test('page: reviewRefresh asks the registered sources and shows what they say; i
   R.register({ id: 'stop-source', load: async (f) => { assert.strictEqual(typeof f, 'function'); return { problems: [{ id: 'stop:1', level: 'warn', title: 'Agents are stopped', text: 'Press Resume.' }] }; } });
   try {
     await d.api.reviewRefresh();
-    assert.deepStrictEqual(d.api.last.problems.map((p) => p.id), ['stop:1']);
-    assert.strictEqual(d.api.last.count, 1);
+    assert.deepStrictEqual(d.api.last.problems.map((p) => [p.id, p.tier]), [['stop:1', 'worth']]);
+    assert.strictEqual(d.api.last.count, 0, 'a source problem without a tier is Worth doing: not counted');
     d.api.reviewPaintGroup();
     const h = d.doc.getElementById('st-review-list').innerHTML;
     assert.match(h, /Agents are stopped/);
