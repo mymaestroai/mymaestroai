@@ -297,3 +297,29 @@ test('a save or read-back with no answer never leaves the row locked; the words 
   assert.strictEqual(b.btn.disabled, false);
   assert.ok(!('aria-busy' in b.row.attrs));
 });
+
+test('expect is the value each row last showed, not a newer read-back for another row (review r10)', async () => {
+  let rowsNow = [
+    { key: 'HUB_TZ', value: 'UTC', set: true, writable: true, readonly: false, danger: false, running: 'UTC', pending: false },
+    { key: 'HUB_SECURITY_CHECK_HOURS', value: '12', set: true, writable: true, readonly: false, danger: false, running: '12', pending: false },
+  ];
+  const posts = [];
+  const fetchJson = async (url, opts) => {
+    if (opts && opts.method === 'POST') {
+      const b = JSON.parse(opts.body); posts.push(b);
+      // meanwhile another admin changed the hours to 24: the read-back after A's save shows it
+      rowsNow = rowsNow.map((r) => (r.key === b.key ? Object.assign({}, r, { value: b.value }) : r.key === 'HUB_SECURITY_CHECK_HOURS' ? Object.assign({}, r, { value: '24' }) : r));
+      return { ok: true };
+    }
+    if (url === '/api/settings/env') return { rows: rowsNow };
+    return {};
+  };
+  const host = fakeHost();
+  await X.render(host, { records, fetchJson, toast: () => {}, settings: {} });
+  host.inputs['data-envin=HUB_TZ'] = { value: 'Europe/Rome' };
+  await host.click('save', 'HUB_TZ');
+  assert.strictEqual(posts[0].expect, 'UTC');
+  host.inputs['data-envin=HUB_SECURITY_CHECK_HOURS'] = { value: '6' };   // the row still shows 12 (only A was redrawn)
+  await host.click('save', 'HUB_SECURITY_CHECK_HOURS');
+  assert.strictEqual(posts[1].expect, '12', 'B sends what B showed, so the hub refuses to overwrite the 24 nobody here saw');
+});
