@@ -23,6 +23,8 @@ test('phone: the fix as a link is drawn as a button (border, padding, no underli
   // the general link rule (underlined) comes first, so the fix-link rules win by order as well as weight
   assert.ok(mob.indexOf('#review-banner a {') < /\n\s*#review-banner a\.rvb-fix \{/.exec(mob).index);
   assert.ok(rule(mob, '#review-banner a.rvb-open').includes('white-space: nowrap'), 'Open For your review never splits');
+  const tapArea = rule(mob, '#review-banner a.rvb-open::after, #review-banner .rvb-fix::after');
+  assert.ok(/height: (3[6-9]|[4-9]\d)px/.test(tapArea) && tapArea.includes('position: absolute'), 'a tap area of 36 px or more around both controls');
 });
 
 test('the same words on the phone and the desktop: Open For your review, then the fix label', () => {
