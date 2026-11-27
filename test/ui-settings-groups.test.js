@@ -41,7 +41,7 @@ test('eight groups in the designed order, titles, icons and sub-lines as in word
 test('every section openSettings draws is in exactly one group (or its More); nothing is lost', () => {
   const app = read('app.js');
   const drawn = drawnSections(app);
-  assert.strictEqual(drawn.length, 36, 'all 36 sections carry an id (33 + This Maestro in Upkeep + the Users door in People + Expert values)');
+  assert.strictEqual(drawn.length, 37, 'all 37 sections carry an id (33 + This Maestro in Upkeep + the Users door in People + Expert values + New agent in Agents and teams)');
   const listed = G.allSectionIds();
   assert.strictEqual(new Set(listed).size, listed.length, 'no section in two groups');
   assert.deepStrictEqual([...listed].sort(), [...drawn].sort(), 'the groups name exactly the sections drawn');
@@ -52,14 +52,15 @@ test('every section openSettings draws is in exactly one group (or its More); no
 test('where the sections go (P4-3 mapping)', () => {
   const by = Object.fromEntries(G.GROUPS.map((g) => [g.id, g]));
   assert.deepStrictEqual(by.review.sections, ['st-emergency-section', 'st-recent-section']);
-  assert.deepStrictEqual(by.review.more, ['st-ready-section', 'st-health-section', 'st-sec-section'], 'the full Setup, Health and Security checks sit under More (P4-4B)');
+  assert.deepStrictEqual(by.review.more, ['st-ready-section', 'st-health-section'], 'the full Setup and Health checks sit under More (P4-4B)');
+  assert.strictEqual(by.safety.sections[by.safety.sections.length - 1], 'st-sec-section', 'the security check is in People and safety, last (phase 6 walkthrough: its subtitle names it)');
   assert.deepStrictEqual(by.you.sections, ['st-looks-section', 'st-notify-section', 'st-chat-section']);
-  assert.deepStrictEqual(by.agents.sections, ['st-workers-section']);
+  assert.deepStrictEqual(by.agents.sections, ['st-newagent-section', 'st-workers-section']);
   assert.deepStrictEqual(by.money.sections, ['st-subs-section', 'st-plan-section', 'st-spend-section', 'st-local-models-section', 'st-prov-section', 'st-or-section'], 'P4-14: subscriptions and plan usage, spend and caps, then the keys');
   assert.deepStrictEqual(by.money.more, ['st-classifier-section', 'st-tuning-section']);
   assert.deepStrictEqual(by.voice.sections, ['st-voice-section']);
   assert.deepStrictEqual(by.tools.sections, ['st-ws-section', 'st-comms-section', 'st-cx-section', 'st-modules-section']);
-  assert.deepStrictEqual(by.safety.sections, ['st-users-section', 'st-sb-section', 'st-lb-section', 'st-mp-section', 'st-approvals-section', 'st-security-section']);
+  assert.deepStrictEqual(by.safety.sections, ['st-users-section', 'st-sb-section', 'st-lb-section', 'st-mp-section', 'st-approvals-section', 'st-security-section', 'st-sec-section']);
   assert.deepStrictEqual(by.upkeep.sections, ['st-maestro-section', 'st-backups-section', 'st-memory-section', 'st-selfcheck-section', 'st-components-section', 'st-updates-section']);
   assert.deepStrictEqual(G.groupOfSection('st-emergency-section'), { group: 'review', more: false }, 'Stop all agents is at the top of For your review');
   assert.strictEqual(by.review.sections[0], 'st-emergency-section');

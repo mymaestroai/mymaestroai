@@ -4184,6 +4184,13 @@
       </div>`;
         setTimeout(loadComponents, 0);
       }
+      // New agent (first in Agents and teams): the one way to make an agent on the phone; admins only. The same dialog as the sidebar's "+ New Agent".
+      if (isHubAdmin()) {
+        html += `<div class="st-section" id="st-newagent-section"><h4>New agent</h4>
+        <div class="st-row"><label style="flex-basis:150px">New agent</label><button type="button" class="st-test-btn" id="st-new-agent-btn" onclick="openCreateAgent(null)">Make a new agent…</button></div>
+        <div class="st-hint">Give it a name and describe its role; your Maestro sets it up. You can also ask your lead to make one for you.</div>
+      </div>`;
+      }
       // This Maestro (moved from the top-bar ⋯ menu): the things you do to the hub itself; the buttons call the same functions as before.
       html += `<div class="st-section" id="st-maestro-section"><h4>This Maestro</h4>
         <div class="st-hint">Things you do to the hub itself, right now.</div>
@@ -8483,7 +8490,7 @@
     }
 
     function openCreateAgent(event) {
-      event.stopPropagation();
+      if (event && event.stopPropagation) event.stopPropagation();   // Settings' "Make a new agent…" button passes none
       const overlay = document.createElement('div');
       overlay.className = 'question-overlay';
       overlay.innerHTML = `
@@ -8606,7 +8613,9 @@
         if (result.success) {
           input.closest('.question-overlay').remove();
           await loadAgents();
-          openAgentSettings(name, new Event('click'));
+          // in the phone's Settings frame the card would navigate the frame away from Settings: stay, and tell the page behind it
+          if (document.documentElement.classList.contains('mm-settings-only')) settingsOnlyPost('mm-agents-changed');
+          else openAgentSettings(name, new Event('click'));
         } else {
           errEl.textContent = result.error || 'Create failed';
           errEl.style.display = 'block';

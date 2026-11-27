@@ -441,7 +441,7 @@ test('page: the first group is the list on top, then Recent changes; the full ch
   const G = require('../lib/ui-settings-groups.js');
   const review = G.GROUPS.find((g) => g.id === 'review');
   assert.deepStrictEqual(review.sections, ['st-emergency-section', 'st-recent-section']);
-  assert.deepStrictEqual(review.more, ['st-ready-section', 'st-health-section', 'st-sec-section']);
+  assert.deepStrictEqual(review.more, ['st-ready-section', 'st-health-section']);   // the security check moved to People and safety (phase 6); Details still opens it
   const app = read('app.js');
   assert.match(app, /body\.insertBefore\(top, body\.firstChild\);/, 'the list goes above the group\'s sections');
   assert.match(app, /Nothing needs your review\./);

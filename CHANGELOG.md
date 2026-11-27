@@ -6,6 +6,9 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
+- **Make a new agent from Settings, also on the phone.** Agents and teams starts with New agent: give it a name and describe its role, and your Maestro sets it up.
+- **The security check is in People and safety.** Run it where the group says it is; For your review still opens it from a problem's Details.
+- **Help buttons stay beside their setting on the phone.** The ⓘ no longer drops onto a line of its own next to switches, share-link times and the worker counts, and the group page header reads "‹ Settings" and the group name without a stray dot.
 - **Every setting that used to need a file edit now has a place in Settings.** Upload and zip limits, box sizes, how long an approval waits, provider addresses, the long-chat default, the models members may use, picture models and the plan's lighter model all have their own row with help. The memory limit for background work sits in Upkeep.
 - **Startup values your Maestro reads when it starts are shown in Settings.** Under Upkeep, More, Expert values lets an admin change a short list of them, such as the time zone or how often the security check runs. Each change is listed in Recent changes with Restore, and For your review reminds you to restart. Values that decide where your conversations go, which code an update installs, or who may reach your Maestro are shown there too, but only for reading; passwords only say whether one is set.
 - **Cancelling an agent's background job always finishes.** When an agent works in its own box and Docker can't answer (it is down, stuck or unreachable), cancelling one of its background jobs used to wait forever and the job stayed "cancelling". Now it tries for a minute, then ends the job and says plainly that the command may still be running inside the box.

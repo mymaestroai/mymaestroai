@@ -2320,7 +2320,24 @@
     html.mm-settings-only .st-info { width: 32px; height: 32px; box-sizing: border-box; margin: -9px 0 -9px 4px; font-size: 1.05rem; }
     html.mm-settings-only .st-modal button.st-info, html.mm-simple .simple-modal button.st-info { min-height: 0; padding: 0; border: 1px solid var(--border-strong); border-radius: 50%; background: transparent; }   /* outranks the dialogs' own "button" rules (a 40 px minimum, no border), so the ⓘ stays a round outline */
     :not(.st-row) > label.st-has-info { display: inline-block; }   /* a label followed by its ⓘ shares its line (the script adds the class only then) */
-    html.mm-settings-only .st-row > label:has(+ .st-info) { flex: 1 1 calc(100% - 44px) !important; }
+    html.mm-settings-only .st-row > label:has(+ .st-info) { flex: 1 1 calc(100% - 44px) !important; max-width: calc(100% - 44px) !important; }   /* the max-width also holds a checkbox label (flex 0 1 auto) whose long text would fill the whole line and push its ⓘ to the next one */
+    /* ⓘ on the label's line in the shapes the rule above does not reach (phone frame, and a desktop window under 721 px):
+       - Share links (#st-share-block, a column of bare labels and selects): the block becomes a wrapping row, every child a full line except a label followed by its ⓘ, which shares its line with it
+       - Workers at once: its ⓘ follows the rows box and precedes the hint; it floats left so the hint's words start right beside it on the same line */
+    html.mm-settings-only #st-share-block { flex-direction: row !important; flex-wrap: wrap; align-items: center; }
+    html.mm-settings-only #st-share-block > * { flex: 1 0 100%; min-width: 0; }
+    html.mm-settings-only #st-share-block > label:has(+ .st-info) { flex: 0 1 auto; max-width: calc(100% - 44px); }
+    html.mm-settings-only #st-share-block > .st-info { flex: none; }
+    html.mm-settings-only #st-wao-rows + .st-info { float: left; margin: -7px 6px -7px 0; }
+    html.mm-settings-only .question-modal { min-width: 0 !important; width: calc(100vw - 24px); max-height: 92vh; overflow-y: auto; }   /* "Create New Agent" over the phone's Settings frame: its inline 480 px minimum would be wider than the screen */
+    @media (max-width: 720px) {
+      .st-modal #st-share-block { flex-direction: row !important; flex-wrap: wrap; align-items: center; }
+      .st-modal #st-share-block > * { flex: 1 0 100%; min-width: 0; }
+      .st-modal #st-share-block > label:has(+ .st-info) { flex: 0 1 auto; max-width: calc(100% - 44px); }
+      .st-modal #st-share-block > .st-info { flex: none; }
+      .st-modal .st-row > label:has(+ .st-info) { max-width: calc(100% - 44px); }
+      .st-modal #st-wao-rows + .st-info { float: left; margin: 0 6px 0 0; }
+    }
     .st-help-panel { position: fixed; z-index: 10050; width: 360px; max-width: calc(100vw - 16px); max-height: calc(100vh - 16px); overflow-y: auto; box-sizing: border-box; padding: 14px 16px; background: var(--bg-card); color: var(--text); border: 1px solid var(--border-strong); border-radius: 10px; box-shadow: 0 8px 28px var(--shadow-color-pop); font-size: 0.82rem; line-height: 1.45; }
     .st-help-panel:focus { outline: none; }
     .st-help-head { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 4px; }
@@ -2939,7 +2956,7 @@
     .st-phone-back { min-height: 44px; padding: 0 12px 0 0; background: transparent; border: 0; color: var(--accent); cursor: pointer; font: inherit; font-size: 1rem; }
     .st-phone-back:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
     .st-phone-title { font-weight: 600; font-size: 1.05rem; color: var(--text); }
-    .st-phone-title::before { content: "\00b7\00a0"; color: var(--text-dim); font-weight: 400; }   /* "‹ Settings · Models and money" */
+    /* the header reads "‹ Settings" then the group's title; the gap and the back button's right padding are the spacing (no separator character) */
     /* A group page is only its header: the dialog's own "Settings" title and sentence are hidden there, and Save shows only on a page that has something it writes (app.js stPhoneSaveMark). */
     .st-modal:has(#st-groups[data-page="group"]) > h3, .st-modal:has(#st-groups[data-page="group"]) > .st-sub { display: none; }
     .st-modal[data-save-here="no"] .st-actions .st-save-main { display: none; }
