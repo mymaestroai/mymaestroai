@@ -1357,7 +1357,7 @@ async function handleHttpRequest(req, res) {
       const num = (v) => { if (v === null || v === undefined || v === '') return null; const n = Number(v); return Number.isFinite(n) && n > 0 ? n : null; };
       // The monthly cap (settings.ledger.monthlyUsd / monthlyResetDay): sent together with the daily caps or on its own.
       const hasMonthly = body.monthlyUsd !== undefined || body.monthlyResetDay !== undefined;
-      const hasDaily = body.perAgentDailyUsd !== undefined || body.hubDailyUsd !== undefined || !hasMonthly;
+      // A key that is not in the request leaves that stored cap as it is; only an explicit blank or 0 clears one.
       const before = hubSettings.getSetting('ledger', {}) || {};
       let monthly = { monthlyUsd: before.monthlyUsd ?? null, monthlyResetDay: before.monthlyResetDay ?? 1 };
       if (hasMonthly) {
@@ -1365,8 +1365,8 @@ async function handleHttpRequest(req, res) {
         catch (e) { return jsonResponse(res, 400, { error: e.message }); }
       }
       hubSettings.updateSettings({ ledger: {
-        perAgentDailyUsd: hasDaily ? num(body.perAgentDailyUsd) : num(before.perAgentDailyUsd),
-        hubDailyUsd: hasDaily ? num(body.hubDailyUsd) : num(before.hubDailyUsd),
+        perAgentDailyUsd: body.perAgentDailyUsd !== undefined ? num(body.perAgentDailyUsd) : num(before.perAgentDailyUsd),
+        hubDailyUsd: body.hubDailyUsd !== undefined ? num(body.hubDailyUsd) : num(before.hubDailyUsd),
         monthlyUsd: monthly.monthlyUsd, monthlyResetDay: monthly.monthlyResetDay } });
       return jsonResponse(res, 200, { caps: getLedger().caps(), monthly: monthlyView(getLedger()) });
     }

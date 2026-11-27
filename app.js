@@ -3969,7 +3969,7 @@
           <label>Stop all agents</label>
           <button id="st-stop-all" class="st-test-btn" style="color:var(--on-color-text);background:var(--halt-banner-bg)" onclick="haltHub()">⛔ Stop all agents</button>
         </div>
-        <div class="st-hint">Stops every running turn, worker, job and research run and blocks new ones until you press Resume. Scheduled tasks that come due meanwhile wait and run after Resume.</div>
+        <div class="st-hint">Stops every running turn, worker and research run, and every job except those marked Keep running, and blocks new ones until you press Resume. Scheduled tasks that come due meanwhile wait and run after Resume.</div>
         <div id="st-stop-panel" class="st-hint" style="display:none;margin-left:0"></div>
         <div class="st-row">
           <label>Provider pacing</label>
@@ -4113,19 +4113,19 @@
         </div>
         <div class="st-row">
           <label style="flex-basis:150px">Daily pay-per-use cap per agent ($)</label>
-          <input type="text" id="st-cap-agent" placeholder="unlimited" inputmode="decimal" style="max-width:120px">
+          <input type="text" id="st-cap-agent" placeholder="unlimited" inputmode="decimal" style="max-width:120px" disabled>
         </div>
         <div class="st-row">
           <label style="flex-basis:150px">Daily pay-per-use cap, whole hub ($)</label>
-          <input type="text" id="st-cap-hub" placeholder="unlimited" inputmode="decimal" style="max-width:120px">
+          <input type="text" id="st-cap-hub" placeholder="unlimited" inputmode="decimal" style="max-width:120px" disabled>
           <button class="st-test-btn" id="st-caps-save" onclick="saveSpendCaps()">Save</button>
         </div>
         <div class="st-hint" style="margin-left:158px">Caps count pay-per-use spend only (API keys and paid cloud voices), never plan use. Over a cap, an agent's decided actions (sending, writing outside its folders, admin, destructive) switch to ask for the rest of the day; nothing is silently stopped. Blank = unlimited.</div>
         <div class="st-row">
           <label style="flex-basis:150px" title="A hard stop on pay-per-use spend for the month. Once it is used up, agents on pay-per-use models answer with a short notice until the month starts again or you raise the cap. Plan and local agents keep working.">Monthly cap ($)</label>
-          <input type="text" id="st-cap-month" placeholder="no cap" inputmode="decimal" style="max-width:120px">
+          <input type="text" id="st-cap-month" placeholder="no cap" inputmode="decimal" style="max-width:120px" disabled>
           <span style="font-size:0.78rem;color:var(--text-dim)">month starts on day</span>
-          <input type="text" id="st-cap-month-day" placeholder="1" inputmode="numeric" style="max-width:44px" title="1 to 28; 1 is the calendar month">
+          <input type="text" id="st-cap-month-day" placeholder="1" inputmode="numeric" style="max-width:44px" title="1 to 28; 1 is the calendar month" disabled>
         </div>
         <div class="st-row">
           <label style="flex-basis:150px"></label>
@@ -7088,22 +7088,33 @@
       const agentInp = document.getElementById('st-cap-agent');
       const hubInp = document.getElementById('st-cap-hub');
       // A cap typed but not saved (or refused) keeps what was typed: the repaint fills only unchanged fields.
-      if (agentInp && document.activeElement !== agentInp && !dialogGuard.changed(agentInp)) agentInp.value = caps.perAgentDailyUsd ? String(caps.perAgentDailyUsd) : '';
-      if (hubInp && document.activeElement !== hubInp && !dialogGuard.changed(hubInp)) hubInp.value = caps.hubDailyUsd ? String(caps.hubDailyUsd) : '';
+      // Each box remembers what the server holds (data-loaded): Save sends only a cap the person changed since, and a box stays
+      // disabled until its stored value has loaded, so a Save can never clear a cap it has not read.
+      capLoaded(agentInp, caps.perAgentDailyUsd ? String(caps.perAgentDailyUsd) : '');
+      capLoaded(hubInp, caps.hubDailyUsd ? String(caps.hubDailyUsd) : '');
       paintMonthlyCap(t.monthly);
     }
     // Monthly spending cap: the row, the "Spent this month" line and the Money group summary.
     function monthDateText(iso, zone) {
       try { return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: zone || undefined }); } catch { return String(iso).slice(0, 10); }
     }
-    function paintMonthlyCap(m) {
+    function capLoaded(inp, text) {
+      if (!inp) return;
+      if (!inp.dataset.editWired) { inp.dataset.editWired = '1'; inp.addEventListener('input', () => { inp.dataset.inputs = String((Number(inp.dataset.inputs) || 0) + 1); const value = inp.value.trim().replace(/^\$/, ''); if (value === inp.dataset.loaded) delete inp.dataset.edited; else inp.dataset.edited = '1'; }); }
+      inp.dataset.loaded = text; inp.disabled = false;
+      // Not edited by the person: the server's value shows, focused or not. Edited: their value stays, only the baseline moves.
+      if (inp.dataset.edited !== '1') inp.value = text;
+    }
+    // The value to send for a cap box: only one the person edited and that differs from what the server held.
+    function capChanged(inp) { return !!inp && inp.dataset.edited === '1' && inp.dataset.loaded !== undefined && !inp.disabled && inp.value.trim().replace(/^\$/, '') !== inp.dataset.loaded; }
+    function paintMonthlyCap(m, only) {   // only: { cap, day } limits which boxes take the value (a Save acknowledgment); omitted = both
       const line = document.getElementById('st-month-spend');
       const capInp = document.getElementById('st-cap-month');
       const dayInp = document.getElementById('st-cap-month-day');
       if (!line) return;
       if (!m) { line.textContent = ''; stSum('money', 'month', ''); return; }   // an older hub: no monthly figures
-      if (capInp && document.activeElement !== capInp && !dialogGuard.changed(capInp)) capInp.value = m.cap ? String(m.cap) : '';
-      if (dayInp && document.activeElement !== dayInp && !dialogGuard.changed(dayInp)) dayInp.value = m.resetDay && m.resetDay !== 1 ? String(m.resetDay) : '';
+      if (!only || only.cap) capLoaded(capInp, m.cap ? String(m.cap) : '');
+      if (!only || only.day) capLoaded(dayInp, m.resetDay && m.resetDay !== 1 ? String(m.resetDay) : '');
       const resets = monthDateText(m.until, m.zone);
       const unpriced = (m.unpriced || 0) > 0 ? ` (plus ${m.unpriced} call${m.unpriced === 1 ? '' : 's'} with no known price)` : '';
       line.textContent = m.cap
@@ -7117,23 +7128,49 @@
       const saved = dialogGuard.savePoint(['st-cap-agent', 'st-cap-hub', 'st-cap-month', 'st-cap-month-day'].map(id => document.getElementById(id)));
       const btn = document.getElementById('st-caps-save');
       const val = (id) => { const v = (document.getElementById(id)?.value || '').trim().replace(/^\$/, ''); return v === '' ? null : Number(v); };
-      const perAgentDailyUsd = val('st-cap-agent');
-      const hubDailyUsd = val('st-cap-hub');
-      const monthlyUsd = (document.getElementById('st-cap-month')?.value || '').trim().replace(/^\$/, '');   // blank = no monthly cap; the hub checks the amount and the day
-      const monthlyResetDay = (document.getElementById('st-cap-month-day')?.value || '').trim();
-      for (const v of [perAgentDailyUsd, hubDailyUsd]) if (v !== null && !(Number.isFinite(v) && v >= 0)) {
+      // Only what the person changed since it loaded goes to the hub; a blank that was never changed is not "clear this cap".
+      const send = {};
+      for (const [key, id] of [['perAgentDailyUsd', 'st-cap-agent'], ['hubDailyUsd', 'st-cap-hub']]) if (capChanged(document.getElementById(id))) send[key] = val(id);
+      if (capChanged(document.getElementById('st-cap-month'))) send.monthlyUsd = (document.getElementById('st-cap-month').value || '').trim().replace(/^\$/, '');   // blank = no monthly cap; the hub checks the amount and the day
+      if (capChanged(document.getElementById('st-cap-month-day'))) send.monthlyResetDay = (document.getElementById('st-cap-month-day').value || '').trim();
+      for (const v of [send.perAgentDailyUsd, send.hubDailyUsd]) if (v !== undefined && v !== null && !(Number.isFinite(v) && v >= 0)) {
         const m = 'Caps must be a dollar amount, or blank for unlimited.';
         if (!opts.quiet) alert(m);
         return m;
       }
       if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
       try {
-        const r = await stSaveFetch('/api/ledger/caps', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ perAgentDailyUsd, hubDailyUsd, monthlyUsd, monthlyResetDay }) });
+        // Only the boxes in this POST are tracked; a counter that only the person's own input events move tells a typed change from a background repaint.
+        const capSnapshot = [['perAgentDailyUsd', 'st-cap-agent'], ['hubDailyUsd', 'st-cap-hub'], ['monthlyUsd', 'st-cap-month'], ['monthlyResetDay', 'st-cap-month-day']]
+          .filter(([key]) => key in send).map(([, id]) => document.getElementById(id)).filter(Boolean).map(el => ({ el, inputs: el.dataset.inputs || '0' }));
+        const r = await stSaveFetch('/api/ledger/caps', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(send) });
         const d = await r.json().catch(() => null);
         if (!r.ok) throw new Error((d && d.error) || `HTTP ${r.status}`);
         saved();
-        if (d && d.caps && spendToday) spendToday.caps = d.caps;
-        if (d && d.monthly) { if (spendToday) spendToday.monthly = d.monthly; paintMonthlyCap(d.monthly); }
+        // Only boxes still holding what was sent are no longer edited; a change typed while the request was in flight stays edited.
+        // A box changed meanwhile is marked against the value the hub acknowledged (normalised as capChanged does), so capLoaded below keeps the draft.
+        const acked = {};
+        if (d && d.caps) { acked['st-cap-agent'] = d.caps.perAgentDailyUsd ? String(d.caps.perAgentDailyUsd) : ''; acked['st-cap-hub'] = d.caps.hubDailyUsd ? String(d.caps.hubDailyUsd) : ''; }
+        if (d && d.monthly) { acked['st-cap-month'] = d.monthly.cap ? String(d.monthly.cap) : ''; acked['st-cap-month-day'] = d.monthly.resetDay && d.monthly.resetDay !== 1 ? String(d.monthly.resetDay) : ''; }
+        for (const { el, inputs } of capSnapshot) {
+          if ((el.dataset.inputs || '0') === inputs) delete el.dataset.edited;
+          else if (acked[el.id] !== undefined) { if (el.value.trim().replace(/^\$/, '') === acked[el.id]) delete el.dataset.edited; else el.dataset.edited = '1'; }
+        }
+        // The acknowledgment merges only the fields that were submitted (form and page cache); a box not in the POST is left to the regular refresh, so a stale response cannot move its baseline.
+        if (d && d.caps) {
+          for (const [key, id] of [['perAgentDailyUsd', 'st-cap-agent'], ['hubDailyUsd', 'st-cap-hub']]) {
+            if (!(key in send)) continue;
+            if (spendToday) spendToday.caps = { ...(spendToday.caps || {}), [key]: d.caps[key] };
+            capLoaded(document.getElementById(id), d.caps[key] ? String(d.caps[key]) : '');
+          }
+        }
+        // The monthly inputs follow the same only-submitted rule. The "Spent this month" summary is not painted from the acknowledgment (it can be stale):
+        // when a monthly field was submitted, one fresh read of the ledger repaints cap, spend, percentage and reset date from a single snapshot; otherwise it is left alone.
+        if (d && d.monthly && ('monthlyUsd' in send || 'monthlyResetDay' in send)) {
+          if ('monthlyUsd' in send) capLoaded(document.getElementById('st-cap-month'), d.monthly.cap ? String(d.monthly.cap) : '');
+          if ('monthlyResetDay' in send) capLoaded(document.getElementById('st-cap-month-day'), d.monthly.resetDay && d.monthly.resetDay !== 1 ? String(d.monthly.resetDay) : '');
+          await refreshSpendToday();
+        }
         if (btn) { btn.className = 'st-test-btn ok'; btn.textContent = 'Saved'; }
         if (!opts.quiet) {
           document.getElementById('st-saved')?.classList.add('show');
@@ -11366,7 +11403,12 @@
       bar.querySelector('#hub-halt-text').textContent = '⛔ Hub halted: all agents stopped, nothing new will start' + (reason ? ` (${reason})` : '');
     }
     async function haltHub() {
-      if (!confirm('Stop ALL agents?\n\nEvery running turn, worker, job and research run is stopped and nothing new starts until you press Resume. Scheduled tasks that come due wait and run, one at a time, after Resume.')) return;
+      // Jobs an admin marked Keep running are not stopped: the dialog says which (same words as the lead's card).
+      // Nothing is waited for before the question: the names come only from a jobs list already read (the Active list, or the last stop-status).
+      const known = Array.isArray(activeJobList) && activeJobList.length ? activeJobList : (Array.isArray(stLastKeptJobs) ? stLastKeptJobs : []);
+      const keptJobs = known.filter((j) => j && j.status === 'running' && j.keep === true);
+      const keptLine = '\n\nJobs marked Keep running' + (keptJobs.length ? ` (${keptJobs.length}: ${keptJobs.map((j) => j.name || j.id).join(', ')})` : '') + ' stay running; everything else stops.';
+      if (!confirm('Stop ALL agents?\n\nEvery running turn, worker and research run is stopped and nothing new starts until you press Resume. Scheduled tasks that come due wait and run, one at a time, after Resume.' + keptLine)) return;
       try {
         const r = await fetch('/api/hub/halt', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reason: 'stopped from the Settings page' }) });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -11405,7 +11447,9 @@
         stStopPanelPaint(await r.json());
       } catch { /* keep what is shown */ }
     }
+    let stLastKeptJobs = null;   // the kept jobs of the last stop-status (a jobs list already in memory for the Stop question)
     function stStopPanelPaint(s) {
+      if (s && s.kept && Array.isArray(s.kept.jobs)) stLastKeptJobs = s.kept.jobs.map((j) => ({ ...j, status: 'running', keep: true }));
       const el = document.getElementById('st-stop-panel');
       if (!el) return;
       if (!s || !s.halted) { el.style.display = 'none'; el.innerHTML = ''; return; }
@@ -11418,7 +11462,7 @@
       el.style.display = '';
       el.innerHTML = `<div><b>Stopped at ${esc(when)}${s.by ? ` by ${esc(s.by)}` : ''}</b>${s.reason ? ` (${esc(s.reason)})` : ''}</div>
         <div>Stopped: agents ${esc(names(st.agents))}; workers ${esc(names(st.workers))}; jobs ${esc(names(st.jobs, jobName))}; research runs ${esc(names(st.research, (x) => x.agent || x.id))}.${esc(counts)}</div>
-        <div>Still finishing: jobs ${esc(names(fin.jobs, jobName))}; turns ${esc(names(fin.turns))}.</div>
+        <div>Still finishing: jobs ${esc(names(fin.jobs, jobName))}; turns ${esc(names(fin.turns))}; research reports being delivered ${esc(names(fin.research, (x) => x.agent || x.id))}.</div>
         <div>Waiting: ${nSched} scheduled task${nSched === 1 ? '' : 's'} held (${esc(names(wait.scheduled, (t) => t.label))}); ${wait.tasksMd || 0} TASKS.md task${wait.tasksMd === 1 ? '' : 's'} paused.</div>
         <div>Kept running: ${esc(names(kept.jobs, jobName))}.</div>
         <div style="margin-top:6px"><button class="st-test-btn" onclick="stStopPanelResume()">Resume</button></div>`;

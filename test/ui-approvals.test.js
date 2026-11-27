@@ -91,7 +91,8 @@ test('agent settings: tool policy section reads /api/policy/<agent> and PATCHes 
 test('desktop: spend readout and caps come from /api/ledger', () => {
   assert.ok(app.includes("fetch('/api/ledger/today'"));
   assert.match(app, /stSaveFetch\('\/api\/ledger\/caps', \{ method: 'POST'/);
-  assert.ok(app.includes('JSON.stringify({ perAgentDailyUsd, hubDailyUsd, monthlyUsd, monthlyResetDay })'));   // the monthly cap shares the one Save of the spend section
+  // Save now sends only the caps the person changed (the `send` object), still in the one POST shared with the monthly cap.
+  assert.ok(app.includes('body: JSON.stringify(send)') && app.includes('send.monthlyUsd =') && app.includes('send.monthlyResetDay ='));
   assert.ok(html.includes('id="spend-today"'), 'sidebar readout');
   assert.ok(app.includes('`spent today ${usd(t.total)}`'));
   assert.match(app, /const show = !!t && typeof t\.paidTurns === 'number' && \(t\.total \|\| 0\) >= 0\.005/, 'hidden below half a cent of pay-per-use spend, and on an older hub answer');

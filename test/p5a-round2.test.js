@@ -137,17 +137,17 @@ test('resume pacer: one at a time, 30 s from the last actual dispatch, saved on 
   const file = path.join(tmp, 'pacer.json'); const c = { t: T0 };
   const p = createResumePacer({ file, now: () => c.t });
   assert.equal(p.take('x'), 0); assert.ok(!fs.existsSync(file), 'no window: nothing is written');
-  p.add(3);
-  assert.equal(p.take('task'), 0, 'the first goes at once');
+  p.add(['a', 'b', 'c']);
+  assert.equal(p.take('a'), 0, 'the first goes at once');
   c.t += 10000;
-  assert.equal(p.take('job_notice'), 20000, 'the second waits for what is left of 30 s');
-  assert.equal(p.take('consult'), 20000, 'asking again does not move the clock');
+  assert.equal(p.take('b'), 20000, 'the second waits for what is left of 30 s');
+  assert.equal(p.take('c'), 20000, 'asking again does not move the clock');
   const restarted = createResumePacer({ file, now: () => c.t });   // a restart (or a suspend) in between
-  assert.equal(restarted.take('task'), 20000, 'the last dispatch time was saved');
-  c.t += 20000; assert.equal(restarted.take('task'), 0);
-  c.t += 30000; assert.equal(restarted.take('task'), 0);
+  assert.equal(restarted.take('b'), 20000, 'the last dispatch time was saved');
+  c.t += 20000; assert.equal(restarted.take('b'), 0);
+  c.t += 30000; assert.equal(restarted.take('c'), 0);
   assert.equal(restarted.isOpen(), false, 'every released item has gone: the window closes');
-  assert.equal(restarted.take('task'), 0);
+  assert.equal(restarted.take('c'), 0);
 });
 
 test('job notices and the consult queue wait for the same pacer', async () => {
@@ -157,16 +157,16 @@ test('job notices and the consult queue wait for the same pacer', async () => {
   const runner = new JobRunner({ dataDir, spawnMode: 'setsid', pollMs: 600000, now: () => c.t, log: () => {}, isAgentActive: () => false, agentExists: async () => true, pacer,
     notify: async (agent, message) => { woke.push({ agent, at: c.t }); } });
   runner.pending.push({ kind: 'result', jobId: 'j1', agent: 'a', message: 'one', attempts: 0, notBefore: 0 }, { kind: 'result', jobId: 'j2', agent: 'b', message: 'two', attempts: 0, notBefore: 0 });
-  pacer.add(2);
+  pacer.add(['job:j1:result', 'job:j2:result']);
   await runner._deliver();
   assert.equal(woke.length, 1, 'only one notice goes out');
   c.t += 31000; await runner._deliver();
   assert.equal(woke.length, 2); assert.ok(woke[1].at - woke[0].at >= 30000);
   assert.equal(runner.pendingCount(), 0);
   const s = read('sdk-chat.js');
-  assert.match(s, /const w = resumePacer\(\)\.take\('consult'\);/);
+  assert.match(s, /resumePacer\(\)\.take\(pacedId\)/);
   assert.match(s, /if \(pacedWaitMs > 0\) drainConsultQueue\(pacedWaitMs \+ 200\)/);
-  assert.match(s, /pacer\.add\(n\)/, 'Resume opens the window with the job notices and queued consults it released');
+  assert.match(s, /pacer\.add\(ids\)/, 'Resume opens the window with the job notices and queued consults it released');
 });
 
 test('scheduled tasks: a halt that ends without resumeHub still releases the held tasks, and the pace survives a restart', async () => {
