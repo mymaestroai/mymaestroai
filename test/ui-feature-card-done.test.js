@@ -38,6 +38,7 @@ function dom() {
       getAttribute(k) { return this.attrs[k]; },
       hasAttribute(k) { return Object.prototype.hasOwnProperty.call(this.attrs, k); },
       addEventListener(t, f) { (this.listeners[t] = this.listeners[t] || []).push(f); },
+      removeEventListener(t, f) { if (this.listeners[t]) this.listeners[t] = this.listeners[t].filter((g) => g !== f); },
       focus() {},
       click() { if (this.disabled) return; (this.listeners.click || []).forEach((f) => f({ preventDefault() {} })); },
       get lastChild() { return this.children[this.children.length - 1] || null; },
@@ -216,7 +217,44 @@ test('(4b) the line words: on / off / asked again next week; a notice answered O
   btn(rows()[3], 'Turn off').click(); await settle();
   btn(rows()[4], 'OK').click(); await settle();
   const line = cardIn(list).children[0].children[0].textContent;
-  assert.strictEqual(line, 'Done: Agents may start quick research on · Protect the program files off · Third: asked again next week · Faster history search off');
+  assert.strictEqual(line, 'Done: 1 on · 2 off · 1 asks again next week.', 'more than two answered: counts (a notice turned off counts as off, one answered OK is dropped)');
+});
+
+test('(22) two answered rows keep their titles and words; more than two that agree read as one count', async () => {
+  { const { FC, D } = load({ entries: [E1], notices: [N1] });
+    const list = D.node('div'); list.appendChild(msg(D));
+    FC.chatShown('harbor', list); await settle();
+    const rows = () => cardIn(list).find((n) => /\bfc-row\b/.test(n.className));
+    btn(rows()[0], 'Ask me in a week').click(); await settle();
+    btn(rows()[1], 'Turn off').click(); await settle();
+    assert.strictEqual(cardIn(list).children[0].children[0].textContent, 'Done: Agents may start quick research: asked again next week · Faster history search off'); }
+  for (const [press, words] of [['Leave off', 'Done: 3 features left off.'], ['Turn on', 'Done: 3 features turned on.'], ['Ask me in a week', 'Done: 3 features ask again next week.']]) {
+    const { FC, D } = load({ entries: [E1, E2, { ...E1, id: 'third', title: 'Third' }] });
+    const list = D.node('div'); list.appendChild(msg(D));
+    FC.chatShown('harbor', list); await settle();
+    for (let i = 0; i < 3; i++) { btn(cardIn(list).find((n) => /\bfc-row\b/.test(n.className))[i], press).click(); await settle(); }
+    assert.strictEqual(cardIn(list).children[0].children[0].textContent, words, press);
+  }
+});
+
+test('(23) a tall card: the page scroll to the bottom is undone in its own scroll event, before the next frame', async () => {
+  const { FC, D, d } = load(); FC.FIRST_WAIT_MS = 5000;
+  const mk = d.createElement;
+  d.createElement = (t) => { const n = mk(t); n.getBoundingClientRect = () => { const p = n.parentNode; const i = p ? p.children.indexOf(n) : 0; return { top: i * 100 - (p ? p.scrollTop : 0), height: String(n.className).includes('feature-card') ? 600 : 100 }; }; return n; };
+  const list = scrollList(D); list.clientHeight = 300;
+  list.getBoundingClientRect = () => ({ top: 0, height: 300 });
+  for (let i = 0; i < 10; i++) list.appendChild(msg(D));
+  list.scrollTop = list.scrollHeight - 300;
+  FC.chatShown('harbor', list); await settle();
+  assert.strictEqual(list.scrollTop, 992, 'landed on the header');
+  await sleep(70);   // between the timer checks (60 and 150 ms)
+  list.scrollTop = list.scrollHeight - list.clientHeight;   // the page's own scroll (the desktop's 100 ms timer)
+  for (const f of ((list.listeners || {}).scroll || [])) f({});
+  assert.strictEqual(list.scrollTop, 992, 'back on the header inside the scroll event, with no timer in between');
+  await sleep(600);   // the hold has ended: its scroll listener is gone
+  list.scrollTop = list.scrollHeight - list.clientHeight;
+  for (const f of ((list.listeners || {}).scroll || [])) f({});
+  assert.strictEqual(list.scrollTop, list.scrollHeight - list.clientHeight, 'after the hold a scroll to the bottom stays');
 });
 
 test('(5) the done line goes away by itself after DONE_MS', async () => {
