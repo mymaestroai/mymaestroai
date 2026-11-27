@@ -123,7 +123,7 @@ test('render: saves through POST /api/settings/env, "Use default" sends empty, e
   assert.deepStrictEqual(lastPost(), ['/api/settings/env', 'POST', JSON.stringify({ key: 'HUB_TZ', value: 'America/Chicago' })]);
   assert.deepStrictEqual(calls[calls.length - 1], ['/api/settings/env', undefined, undefined], 'the rows are read back after a save');
   assert.deepStrictEqual(toasts.pop(), 'Saved. Restart your Maestro to use it.');
-  assert.strictEqual(loads, 2, 'and the redrawn values are saved for the guard again');
+  assert.strictEqual(loads, 1, 'only the saved row is replaced (none in this fake host), never a redraw of every row');
   await host.click('default', 'HUB_TZ');
   assert.strictEqual(JSON.parse(lastPost()[2]).value, '');
   fail = 'That is not a time zone.';
@@ -208,43 +208,57 @@ test('the module is served to the browser', () => {
   assert.ok(require('fs').readFileSync(require('path').join(__dirname, '../lib/static-files.js'), 'utf8').includes("['ui-settings-expert.js', 'lib/ui-settings-expert.js']"));
 });
 
-test('saving one startup value keeps a draft typed in another row: it is put back after the redraw and is not handed to the guard as saved (review r7)', async () => {
-  // a host whose fields are re-made from the HTML on every draw, like a browser's
-  const host = { handlers: {}, fields: [] };
-  let html = '';
-  Object.defineProperty(host, 'innerHTML', {
-    get: () => html,
-    set: (v) => {
-      html = v;
-      host.fields = [];
-      const re = /<(input|select)\b[^>]*\bdata-envin="([A-Z_]+)"[^>]*?(?:\bvalue="([^"]*)")?[^>]*>/g;
-      let m;
-      while ((m = re.exec(v))) { const key = m[2]; host.fields.push({ kind: m[1], value: m[3] || '', getAttribute: (a) => (a === 'data-envin' ? key : null), key }); }
-    },
-  });
+test('saving one startup value locks its row, replaces only that row and leaves every other field untouched (review r7)', async () => {
+  // a small DOM: rows with their own field objects; replacing a row makes new field objects for it only
+  const mkField = (key) => ({ key, value: '', disabled: false, getAttribute: (a) => (a === 'data-envin' ? key : null) });
+  const mkButton = (act, key) => ({ disabled: false, hidden: false, act, getAttribute: (a) => (a === 'data-act' ? act : a === 'data-key' ? key : null) });
+  const rowsEl = {};
+  const mkRow = (key, valueFromHtml) => {
+    const f = mkField(key); f.value = valueFromHtml || '';
+    const row = { key, field: f, buttons: [mkButton('save', key), mkButton('default', key)], attrs: {}, parentNode: host, removed: false };
+    row.querySelectorAll = (sel) => (sel === 'input, select, button' ? [row.field, ...row.buttons] : sel === 'input, select, textarea' ? [row.field] : []);
+    row.querySelector = (sel) => (/data-envin/.test(sel) ? row.field : row.buttons.find((b) => sel.includes(b.act)) || null);
+    row.setAttribute = (k, v) => { row.attrs[k] = v; }; row.removeAttribute = (k) => { delete row.attrs[k]; };
+    row.contains = () => false;
+    row.insertAdjacentHTML = (pos, html) => { const v = (html.match(/data-envin="[A-Z_]+"[^>]*\bvalue="([^"]*)"/) || [])[1]; row.nextElementSibling = mkRow(key, v); };
+    row.remove = () => { row.removed = true; rowsEl[key] = row.nextElementSibling; };
+    rowsEl[key] = row;
+    return row;
+  };
+  const host = { handlers: {} };
+  Object.defineProperty(host, 'innerHTML', { get: () => '', set: (v) => { for (const k of ['HUB_TZ', 'HUB_SECURITY_CHECK_HOURS']) if (v.includes(`data-envin="${k}"`)) mkRow(k, (v.match(new RegExp(`data-envin="${k}"[^>]*\\bvalue="([^"]*)"`)) || [])[1]); } });
   host.addEventListener = (t, f) => { host.handlers[t] = f; };
-  host.querySelectorAll = (sel) => (sel === '[data-envin]' || sel === 'input, select, textarea' ? host.fields.slice() : []);
-  host.querySelector = (sel) => { const k = (sel.match(/data-envin="([A-Z_]+)"/) || [])[1]; return host.fields.find((f) => f.key === k) || null; };
+  host.querySelectorAll = (sel) => Object.values(rowsEl).flatMap((r) => r.querySelectorAll(sel));
+  host.querySelector = (sel) => { const k = (sel.match(/"([A-Z_]+)"/) || [])[1]; const r = rowsEl[k]; return !r ? null : /data-expert/.test(sel) ? r : r.field; };
   const rows = [
     { key: 'HUB_TZ', value: 'UTC', set: true, writable: true, readonly: false, danger: false, running: 'UTC', pending: false },
     { key: 'HUB_SECURITY_CHECK_HOURS', value: null, set: false, writable: true, readonly: false, danger: false, running: null, pending: false },
   ];
-  let after = rows;
+  let after = rows, lockedDuringPost = null, release;
+  const gate = new Promise((r) => { release = r; });
   const fetchJson = async (url, opts) => {
-    if (opts && opts.method === 'POST') { const b = JSON.parse(opts.body); after = rows.map((r) => (r.key === b.key ? Object.assign({}, r, { value: b.value || null, pending: true }) : r)); return { ok: true }; }
+    if (opts && opts.method === 'POST') { lockedDuringPost = rowsEl.HUB_TZ.field.disabled && rowsEl.HUB_TZ.buttons.every((b) => b.disabled); await gate; const b = JSON.parse(opts.body); after = rows.map((r) => (r.key === b.key ? Object.assign({}, r, { value: b.value || null, pending: true }) : r)); return { ok: true }; }
     if (url === '/api/settings/env') return { rows: after };
     return {};
   };
-  const handed = [];
-  await X.render(host, { records, fetchJson, toast: () => {}, settings: {}, loaded: (h, fields) => handed.push(fields.map((f) => f.key)) });
-  const tz = host.fields.find((f) => f.key === 'HUB_TZ'), hours = host.fields.find((f) => f.key === 'HUB_SECURITY_CHECK_HOURS');
-  assert.ok(tz && hours, 'both rows drawn');
-  hours.value = '12';   // a draft in B
-  tz.value = 'Europe/Rome';   // A, saved now
-  await host.handlers.click({ target: { getAttribute: (a) => (a === 'data-act' ? 'save' : a === 'data-key' ? 'HUB_TZ' : null) } });
-  const hours2 = host.fields.find((f) => f.key === 'HUB_SECURITY_CHECK_HOURS');
-  assert.strictEqual(hours2.value, '12', 'the draft in B is put back after the redraw');
+  const handed = [], toasts = [];
+  await X.render(host, { records, fetchJson, toast: (t) => toasts.push(t), settings: {}, loaded: (h, fields) => handed.push(fields) });
+  const tzRow = rowsEl.HUB_TZ, hoursField = rowsEl.HUB_SECURITY_CHECK_HOURS.field;
+  hoursField.value = '12';   // a draft in B
+  tzRow.field.value = 'Europe/Rome';   // A
+  const click = (act, key) => host.handlers.click({ target: { getAttribute: (a) => (a === 'data-act' ? act : a === 'data-key' ? key : null) } });
+  const saving = click('save', 'HUB_TZ');
+  await new Promise((r) => setImmediate(r));
+  assert.strictEqual(lockedDuringPost, true, 'A is locked while it saves (an edit to it cannot be lost under the answer)');
+  assert.strictEqual(tzRow.attrs['aria-busy'], 'true');
+  await click('save', 'HUB_TZ');
+  assert.match(toasts.pop(), /still saving/);
+  release(); await saving;
+  assert.ok(tzRow.removed && rowsEl.HUB_TZ !== tzRow, 'only A was replaced');
+  assert.strictEqual(rowsEl.HUB_SECURITY_CHECK_HOURS.field, hoursField, 'B keeps its own field (the guard tracks it by identity)');
+  assert.strictEqual(hoursField.value, '12', 'and its draft');
   const last = handed[handed.length - 1];
-  assert.ok(last.includes('HUB_TZ'), 'A (just saved) is handed to the guard as saved');
-  assert.ok(!last.includes('HUB_SECURITY_CHECK_HOURS'), 'B (a draft) is not');
+  assert.deepStrictEqual(last, [rowsEl.HUB_TZ.field], 'only the new A field is handed to the guard as saved');
+  assert.strictEqual(rowsEl.HUB_TZ.field.value, 'Europe/Rome');
+  assert.match(toasts.pop(), /Restart your Maestro/);
 });
