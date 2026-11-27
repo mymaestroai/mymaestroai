@@ -400,7 +400,7 @@ test('page: wiring in app.js and index.html (refresh on load, every 5 minutes, o
 test('page: the first group is the list on top, then Recent changes; the full checks sit under More', () => {
   const G = require('../lib/ui-settings-groups.js');
   const review = G.GROUPS.find((g) => g.id === 'review');
-  assert.deepStrictEqual(review.sections, ['st-recent-section']);
+  assert.deepStrictEqual(review.sections, ['st-emergency-section', 'st-recent-section']);
   assert.deepStrictEqual(review.more, ['st-ready-section', 'st-health-section', 'st-sec-section']);
   const app = read('app.js');
   assert.match(app, /body\.insertBefore\(top, body\.firstChild\);/, 'the list goes above the group\'s sections');
