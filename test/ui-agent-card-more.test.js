@@ -317,17 +317,73 @@ test('Memory: a failed compression says why; a postponed one says so and stops r
 
 test('Memory r1: an older result is never shown as this run\'s Done; the reads go on until a result from this run arrives', async () => {
   const clk = clock();
-  const t = setup({ setTimeout: clk.setTimeout, clearTimeout: clk.clearTimeout });
+  const old = Date.now() - 3600000;
+  const t = setup({ setTimeout: clk.setTimeout, clearTimeout: clk.clearTimeout, state: { compaction: { pct: 42, tokens: 1, limit: 2, running: false, lastOk: true, lastRunAt: old } } });   // yesterday's run is the server's marker before the press
   await openAt(t, 'OPT-0833');
   await pressCompress(t);
-  t.state.compaction = { ...t.state.compaction, running: false, requested: false, lastOk: true, lastReset: true, lastRunAt: Date.now() - 3600000 };   // yesterday's run
+  t.state.compaction = { ...t.state.compaction, running: false, requested: false, lastOk: true, lastReset: true };
   await clk.tick();
   assert.ok(!/Done/.test(rowOf(t.card.el(), 'OPT-0833').textContent), 'not this run\'s Done');
   assert.strictEqual(clk.live().length, 1, 'still reading');
-  t.state.compaction = { ...t.state.compaction, lastRunAt: Date.now() + 1000 };
+  t.state.compaction = { ...t.state.compaction, lastRunAt: old + 1000 };
   await clk.tick();
   assert.match(rowOf(t.card.el(), 'OPT-0833').textContent, /✅ Done/);
   assert.strictEqual(clk.live().length, 0);
+});
+
+test('Memory r2: Done compares the server\'s result marker with the one read before the run, not the browser clock (60 s ahead or behind)', async () => {
+  const realNow = Date.now;
+  const S = 1800000000000;   // the server's "now"
+  try {
+    for (const skew of [60000, -60000]) {
+      Date.now = () => S + skew;
+      const clk = clock();
+      const t = setup({ setTimeout: clk.setTimeout, clearTimeout: clk.clearTimeout, state: { compaction: { pct: 42, tokens: 1, limit: 2, running: false, lastOk: true, lastRunAt: S - 3600000 } } });
+      await openAt(t, 'OPT-0833');
+      await pressCompress(t);
+      assert.strictEqual(clk.live().length, 1, 'reading');
+      t.state.compaction = { ...t.state.compaction, running: false, requested: false, lastOk: true, lastReset: true };
+      await clk.tick();
+      assert.ok(!/Done/.test(rowOf(t.card.el(), 'OPT-0833').textContent), 'the old result is not Done (skew ' + skew + ')');
+      t.state.compaction = { ...t.state.compaction, lastRunAt: S + 2000 };   // the server made a new result 2 s after the press
+      await clk.tick();
+      assert.match(rowOf(t.card.el(), 'OPT-0833').textContent, /✅ Done/, 'finished run is Done with the browser clock off by ' + skew);
+      assert.strictEqual(clk.live().length, 0);
+    }
+    // a different run id counts as a new result too
+    Date.now = () => S + 60000;
+    const clk = clock();
+    const t = setup({ setTimeout: clk.setTimeout, clearTimeout: clk.clearTimeout, state: { compaction: { pct: 42, tokens: 1, limit: 2, running: false, lastOk: true, runs: [{ id: 'r1', at: new Date(S - 1000).toISOString() }] } } });
+    await openAt(t, 'OPT-0833');
+    await pressCompress(t);
+    t.state.compaction = { ...t.state.compaction, runs: [{ id: 'r2', at: new Date(S - 1000).toISOString() }], lastReset: false };
+    await clk.tick();
+    assert.match(rowOf(t.card.el(), 'OPT-0833').textContent, /✅ Done/);
+  } finally { Date.now = realNow; }
+});
+
+test('Memory r2: a failed progress check stands over a kept "running"; the row redrawn keeps the error and starts no read until a good read or another press', async () => {
+  const clk = clock();
+  const t = setup({ setTimeout: clk.setTimeout, clearTimeout: clk.clearTimeout, state: { compaction: { pct: 80, tokens: 1, limit: 2, running: true } } });
+  await openAt(t, 'OPT-0833');
+  assert.strictEqual(clk.live().length, 1, 'running (kept answer): reading');
+  t.state.compactionGetStatus = [403];
+  await clk.tick();
+  const shown = () => rowOf(t.card.el(), 'OPT-0833').textContent;
+  assert.match(shown(), /Could not check the progress\./);
+  assert.ok(!/Compression running/.test(shown()), 'the error is not covered by "running"');
+  assert.strictEqual(clk.live().length, 0, 'no timer');
+  // redraw the row from the kept running:true answer
+  const head = () => all(t.card.el(), '.ac-sec-head').find((h) => h.parentNode.getAttribute('data-sec') === 'memory');
+  head().click(); await flush(); head().click(); await flush();
+  assert.match(shown(), /Could not check the progress\./);
+  assert.ok(!/Compression running/.test(shown()));
+  assert.strictEqual(clk.live().length, 0, 'a redraw starts no new poll');
+  // pressing again clears it
+  t.state.compaction = { ...t.state.compaction, running: false };
+  await pressCompress(t);
+  assert.ok(!/Could not check the progress/.test(shown()), 'cleared by the new press');
+  assert.strictEqual(clk.live().length, 1, 'reading again');
 });
 
 test('Memory r1: a refused status read stops the reads at once and says so; three failures in a row do the same', async () => {

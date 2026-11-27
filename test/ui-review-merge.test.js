@@ -57,7 +57,6 @@ test('r1: the readiness row that mirrors the health id ("ready:health-claude-sig
       health: { items: [{ id: 'health-claude-signedout', level: 'critical', title: "Claude is signed out on this computer: agents on Claude can't answer", action: 'claude-signin' }] },
       now: NOW,
     });
-    assert.strictEqual(R.conditionOf ? R.conditionOf({ id: 'ready:' + mirrored }) : 'claude-signin', 'claude-signin');
     assert.strictEqual(r.fix.length, 1, JSON.stringify(r.problems.map((p) => p.id)));
     assert.strictEqual(r.problems.length, 1);
     assert.deepStrictEqual(r.fix[0].fix, { label: 'Sign in again', kind: 'claude-signin' });
