@@ -8,6 +8,7 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 - **Cancelling an agent's background job always finishes.** When an agent works in its own box and Docker can't answer (it is down, stuck or unreachable), cancelling one of its background jobs used to wait forever and the job stayed "cancelling". Now it tries for a minute, then ends the job and says plainly that the command may still be running inside the box.
 
+- **A watched job ends when its command ends.** With the command watch on, a job no longer stays open until its time limit because its command left a process running: it ends at most 10 seconds after the command, with the command's own result, and the leftover processes are still watched until they end. A job whose watching cannot start now runs unwatched instead of failing. If the watching stops in the middle of a job, the job stops with it.
 - **The quick switcher speaks the sidebar's words.** Ctrl+K (⌘K on a Mac) shows each agent's state in exactly the words the sidebar uses, lists agents waiting for your answer first, shows an agent's short name only when that is what you typed, and its waiting marker pulses like the sidebar's.
 - **The Working on summary is never cut off.** On a narrow screen it wraps to a second line instead of ending in "…", and the time of the next check always shows in full.
 - **The call display picker is readable everywhere.** Its closed list keeps readable colours in light and dark on every browser, and it is called Call display wherever you choose it.
