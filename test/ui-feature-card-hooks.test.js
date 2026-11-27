@@ -46,6 +46,14 @@ test('app.js: at least two live hooks; soloHistoryDraw (saved history) and appen
 test('every hook is wrapped so a failure stays cosmetic', () => {
   for (const f of ['app.js', 'mobile.js']) {
     const lines = read(f).split('\n').filter((l) => l.includes(CALL));
-    for (const l of lines) assert.ok(/try \{ window\.FeatureCard && FeatureCard\.messageArrived\(.*\); \} catch \{/.test(l), f + ': ' + l.trim());
+    for (const l of lines) assert.ok(/try \{ (window\.FeatureCard && |if \(.*window\.FeatureCard\) )FeatureCard\.messageArrived\(.*\); \} catch \{/.test(l), f + ': ' + l.trim());
+  }
+});
+
+test('a hub-started turn folds the card only when it started in the last 30 s (a replayed old turn start never does)', () => {
+  for (const f of ['app.js', 'mobile.js']) {
+    const lines = read(f).split('\n').filter((l) => l.includes(CALL) && l.includes('ev.startedAt'));
+    assert.strictEqual(lines.length, 1, f + ': one guarded hub-turn hook');
+    assert.ok(/Date\.now\(\) - t < 30000/.test(lines[0]), f + ': 30 s guard');
   }
 });

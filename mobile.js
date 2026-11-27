@@ -15113,7 +15113,7 @@ function onTurnStart(ev) {
         if (!card) addNote(`⚡ ${ev.origin?.kind === 'user' ? 'sent from another device' : originLabel(ev.origin)} — ${timeLabel()}`);
         setBubbleTime(addUserBubble(ev.message, savedImageUrls(ev.images)), msgTimeLabel(Date.parse(ev.startedAt) || Date.now()));   // the pictures the line was sent with
       }
-      try { window.FeatureCard && FeatureCard.messageArrived($('messages')); } catch { /* cosmetic */ }   // a live hub-started turn: its reply bubble is about to land
+      try { if ((() => { const t = typeof ev.startedAt === 'number' ? ev.startedAt : Date.parse(ev.startedAt || ''); return !Number.isFinite(t) || Date.now() - t < 30000; })() && window.FeatureCard) FeatureCard.messageArrived($('messages')); } catch { /* cosmetic */ }   // a live hub-started turn: its reply bubble is about to land
       return addAssistantBubble('…');
     };
     const lastBefore = chatEl().lastElementChild;
