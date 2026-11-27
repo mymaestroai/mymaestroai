@@ -14,12 +14,12 @@ function rule(css, selector) {
   return css.slice(m.index, css.indexOf('}', m.index) + 1);
 }
 
-test('phone: the fix as a link is drawn as a button (border, padding, no underline, kept on one line)', () => {
+test('phone: the fix as a link is drawn as a button (border, padding, no underline, never wider than the banner)', () => {
   const mob = read('mobile.html');
   const shared = rule(mob, '#review-banner button.rvb-fix, #review-banner a.rvb-fix');
   for (const want of ['border: 1px solid var(--on-health-notice)', 'padding: 2px 10px', 'border-radius: 4px', 'margin-left: 4px']) assert.ok(shared.includes(want), want);
   const own = rule(mob, '#review-banner a.rvb-fix');
-  for (const want of ['display: inline-block', 'text-decoration: none', 'white-space: nowrap']) assert.ok(own.includes(want), want);
+  for (const want of ['display: inline-block', 'text-decoration: none', 'max-width: 100%', 'box-sizing: border-box', 'white-space: normal']) assert.ok(own.includes(want), want);
   // the general link rule (underlined) comes first, so the fix-link rules win by order as well as weight
   assert.ok(mob.indexOf('#review-banner a {') < /\n\s*#review-banner a\.rvb-fix \{/.exec(mob).index);
 });
