@@ -331,3 +331,34 @@ test('cd walk: redirections are not operands, a folder without search permission
   fs.accessSync = (p, ...r) => { if (String(p) === path.join(ws, 'a')) { const e = new Error('permission denied'); e.code = 'EACCES'; throw e; } return orig(p, ...r); };
   try { assert.strictEqual(W(`cd ../../lib; cd ${ws}/a; echo x > a.js`, ws), true); } finally { fs.accessSync = orig; }
 });
+
+test('a separate repo in the hub home: clone into it, cd after a clone, a subshell, and a literal variable are free; the install stays protected', () => {
+  const home = tmp();
+  const inst = path.join(home, 'agent-hub-5.1.0');
+  mk(home, 'agent-hub-5.1.0/.git', 'agent-hub-5.1.0/lib', 'share/maestro/site/.git', 'share/review/assets');
+  const cp = make(inst, home);
+  const S = path.join(home, 'share/maestro/site');
+  const R = path.join(home, 'share/review');
+  const W = (c) => cp.commandWritesProtected(c, inst);   // the agents' shells start in the install folder
+  for (const c of [
+    `git clone ${S} ${R}/film`,
+    `git clone ${S} ${R}/film && cd ${R}/film && git checkout -b v10d`,
+    `cd ${S} && git checkout -q -b film master && python3 ${R}/assets/apply.py ${S}`,
+    `(cd ${S} && git checkout -q -b film master)`,
+    `D=${R}/window && mkdir -p $D && cp a.png b.png $D/`,
+    `D=${R}/w; mkdir -p "$D"; cp a b "\${D}/"`,
+    `mkdir -p ${R}/new && cd ${R}/new && echo x > notes.md`,
+  ]) assert.strictEqual(W(c), false, c);
+  for (const c of [
+    `echo x > ${inst}/lib/x.js`,
+    `cd ${inst} && git checkout -- .`,
+    `git clone ${S} ${inst}/lib/site`,
+    `cd ${inst}/lib && git clone ${S}`,
+    `git clone --depth 1 -b main ${S} lib/site`,
+    `D=${inst}/lib && cp a.js $D/`,
+    'cp a.js $UNKNOWN/',
+    `(cd ${S}) && git checkout -- .`,
+    `D=${R}/w && read D && cp a.js $D/`,
+    `git clone ${S} ${R}/film; cd ${R}/film; git checkout -- .`,
+  ]) assert.strictEqual(W(c), true, c);
+});
