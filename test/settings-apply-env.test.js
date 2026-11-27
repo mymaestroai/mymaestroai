@@ -476,11 +476,29 @@ test('GET and POST /api/settings/env: admin only (the route and the member / tok
   assert.ok(block.indexOf("error: 'admin_only'") < block.indexOf('readBody(req)'), 'the admin check comes before the body is read');
   assert.match(block, /require\('\.\/lib\/env-file'\)\.read\(\)/);
   assert.match(block, /require\('\.\/lib\/settings-apply'\)\.setEnv\(b\.key,/);
-  assert.match(block, /jsonResponse\(res, 400, \{ error: w\.error \}\)/);
+  assert.match(block, /jsonResponse\(res, w\.conflict \? 409 : 400, \{ error: w\.error \}\)/);   // 409 when the value changed since the page showed it (review r9)
   assert.match(block, /\{ ok: true, key: w\.key, value: w\.after, restartNeeded: true \}/);
   const access = require(path.join(REAL, 'lib', 'access'));
   assert.deepEqual(access.classifyRoute('/api/settings/env', 'GET'), { kind: 'admin' });
   assert.deepEqual(access.classifyRoute('/api/settings/env', 'POST'), { kind: 'admin' });
   // the hub notes what it started with right after it reads .env
   assert.match(server, /loadEnvFile\(path\.join\(__dirname, '\.env'\)\); \} catch \{\}\ntry \{ require\('\.\/lib\/env-file'\); \} catch \{\}/);
+});
+
+test('setEnv(): a save that arrives after the value changed is refused (expect, review r9); a matching or absent expect writes', () => {
+  const f = tmpEnv('HUB_TZ=UTC\n');
+  // a late save from a page that showed UTC, after another save made it Europe/Paris
+  assert.strictEqual(apply.setEnv('HUB_TZ', 'Europe/Paris', { file: f, expect: 'UTC' }).ok, true);
+  const late = apply.setEnv('HUB_TZ', 'Europe/Rome', { file: f, expect: 'UTC' });
+  assert.strictEqual(late.ok, false);
+  assert.strictEqual(late.conflict, true);
+  assert.match(late.error, /changed since this page showed it/);
+  assert.strictEqual(txt(f), 'HUB_TZ=Europe/Paris\n', 'the newer value stays');
+  // expect null: the page showed no line
+  assert.strictEqual(apply.setEnv('HUB_SECURITY_CHECK_HOURS', '12', { file: f, expect: null }).ok, true);
+  assert.strictEqual(apply.setEnv('HUB_SECURITY_CHECK_HOURS', '24', { file: f, expect: null }).conflict, true);
+  // no expect (the lead's tool, Restore): writes as before
+  assert.strictEqual(apply.setEnv('HUB_SECURITY_CHECK_HOURS', '24', { file: f }).ok, true);
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  assert.ok(/setEnv\(b\.key, b\.value, \{ expect \}\)/.test(src) && /w\.conflict \? 409 : 400/.test(src), 'the route passes expect and answers 409');
 });

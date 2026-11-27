@@ -120,7 +120,7 @@ test('render: saves through POST /api/settings/env, "Use default" sends empty, e
   host.inputs['data-envin=HUB_TZ'] = { value: 'America/Chicago' };
   await host.click('save', 'HUB_TZ');
   const lastPost = () => [...calls].reverse().find((c) => c[1] === 'POST');
-  assert.deepStrictEqual(lastPost(), ['/api/settings/env', 'POST', JSON.stringify({ key: 'HUB_TZ', value: 'America/Chicago' })]);
+  assert.deepStrictEqual(lastPost(), ['/api/settings/env', 'POST', JSON.stringify({ key: 'HUB_TZ', value: 'America/Chicago', expect: 'Europe/Berlin' })]);
   assert.deepStrictEqual(calls[calls.length - 1], ['/api/settings/env', undefined, undefined], 'the rows are read back after a save');
   assert.deepStrictEqual(toasts.pop(), 'Saved. Restart your Maestro to use it.');
   assert.strictEqual(loads, 1, 'only the saved row is replaced (none in this fake host), never a redraw of every row');
