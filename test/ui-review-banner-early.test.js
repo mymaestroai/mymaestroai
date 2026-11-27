@@ -68,11 +68,11 @@ test('the banner text is never stored nor shown (an old stored text is ignored)'
   assert.equal(JSON.stringify(d.props).includes('Old title'), false);
 });
 
-test('rememberBanner keeps the other kind, rounds the height, removes the key when empty', () => {
+test('rememberBanner keeps the other kind, keeps the height to a tenth of a pixel, removes the key when empty', () => {
   const s = fakeStore();
-  L.rememberBanner(s, 'desk', { h: 10.6 });
+  L.rememberBanner(s, 'desk', { h: 47.13333 });
   L.rememberBanner(s, 'phone', { h: 20 });
-  assert.deepEqual(JSON.parse(s.m.get('mmReviewBanner')), { desk: { h: 11 }, phone: { h: 20 } });
+  assert.deepEqual(JSON.parse(s.m.get('mmReviewBanner')), { desk: { h: 47.1 }, phone: { h: 20 } });
   L.rememberBanner(s, 'desk', null);
   assert.deepEqual(JSON.parse(s.m.get('mmReviewBanner')), { phone: { h: 20 } });
   L.rememberBanner(s, 'phone', null);
@@ -127,6 +127,7 @@ test('page sources: the reserved place is empty, the calls, the unsettled early 
   for (const src of [app, mjs]) { assert.match(src, /rememberBanner\(/); assert.match(src, /forgetBanner\(/); assert.equal(/textContent[^\n]*rememberBanner|rememberBanner[^\n]*textContent/.test(src), false, 'no text is remembered'); }
   assert.ok(app.includes('if (!(window.hubMe || window.hubNoAccounts === true)) return;   // not settled'));
   assert.ok(mjs.includes('if (!(hubMe || window.hubNoAccounts === true)) return;   // not settled'));
+  assert.ok(mjs.includes("rememberBanner(store(), 'phone', { h: bar.getBoundingClientRect().height })"), 'the phone keeps the fractional height (its list sits at 47.1 px)');
   assert.match(read('lib/ui-looks.js'), /api\.applyCachedBanner\(root\.document, store, api\.pageKind\(root\)\)/);
 });
 

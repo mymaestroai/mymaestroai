@@ -15791,7 +15791,7 @@ function reviewPaintBanner(r) {
   if (!hadCached && wasHidden) { bar.classList.add('mm-rvb-enter'); setTimeout(() => bar.classList.remove('mm-rvb-enter'), 300); }   // newly appearing: slides in once
   bar.hidden = false;
   html.classList.remove('mm-rvb-cached');
-  try { if (window.HubLooks && bar.offsetHeight > 0) window.HubLooks.rememberBanner(store(), 'phone', { h: bar.offsetHeight }); } catch { /* blocked storage */ }
+  try { if (window.HubLooks && bar.offsetHeight > 0) window.HubLooks.rememberBanner(store(), 'phone', { h: bar.getBoundingClientRect().height }); } catch { /* blocked storage */ }   // fractional height: the list sits at 47.1 px, not 47
 }
 document.addEventListener('visibilitychange', () => { if (!document.hidden) reviewRefresh().catch(() => {}); });
 setInterval(() => reviewRefresh().catch(() => {}), 5 * 60 * 1000);
