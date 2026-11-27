@@ -72,7 +72,7 @@ function load() {
     entries: [{ id: 'quick-research', title: 'Quick research', summary: 'A run for its own work.', cost: 'plan allowance', leadMay: true, recommendation: null, rev: 'pending #0' }] };
   const fetch = () => Promise.resolve({ status: 200, json: async () => card });
   const mod = { exports: {} };
-  const ctx = { module: mod, document: d, fetch, location: { search: '', assign(u) { ctx.assigned.push(u); } }, assigned: [], encodeURIComponent, JSON, Promise, console, MutationObserver: D.MO, Date: { now: () => 1000000 }, setTimeout, clearTimeout, queueMicrotask };
+  const ctx = { module: mod, document: d, fetch, location: { search: '', assign(u) { ctx.assigned.push(u); } }, assigned: [], encodeURIComponent, JSON, Promise, console, MutationObserver: D.MO, Date: { now: () => CLOCK.t }, setTimeout, clearTimeout, queueMicrotask };
   vm.runInNewContext(SRC, ctx, { filename: FILE });
   return { FC: mod.exports, D, d, ctx, card };
 }
@@ -84,7 +84,8 @@ function busyCard(D, list) {
   o.observe(list, { childList: true });
   return el;
 }
-const settle = async () => { for (let k = 0; k < 40; k++) await new Promise((r) => setImmediate(r)); };
+const CLOCK = { t: 1000000 };   // moves on 3 s after each settle, so the card's quiet window for folding has passed
+const settle = async () => { for (let k = 0; k < 40; k++) await new Promise((r) => setImmediate(r)); CLOCK.t += 3000; };
 
 test('the card and the phone busy card in one list settle: the card sits just above the busy card, no endless moving', async () => {
   const { FC, D } = load();
@@ -328,4 +329,44 @@ test('(f) second admin: every open entry locked (canSwitch false) says "until th
   assert.strictEqual(await mk((c) => { c.entries.push({ ...c.entries[0], id: 'b' }); c.entries[0].canSwitch = false; }), 'Two new features are off until you say yes.', 'one row can be switched');
   assert.strictEqual(await mk((c) => { c.entries[0].canSwitch = false; c.notices.push({ id: 'n', title: 'T', line: 'x' }); }), 'One new feature is off until you say yes.', 'a notice row is open too');
   assert.strictEqual(await mk(() => {}), 'One new feature is off until you say yes.');
+});
+
+test('the chat drawing its saved messages right after the card is placed does not fold it (quiet window)', async () => {
+  const { FC, D } = load();
+  const list = D.node('div');
+  FC.chatShown('harbor', list);
+  await settle();
+  CLOCK.t -= 2900;   // back to just after the card arrived: the history draw happens now
+  for (let i = 0; i < 3; i++) { const b = D.node('div'); b.className = 'msg'; list.appendChild(b); }
+  await settle();
+  const card = list.children.find((k) => String(k.className).includes('feature-card'));
+  assert.ok(card, 'card present');
+  assert.ok(!card.children.some((k) => String(k.className).includes('fc-toggle')), 'not folded');
+});
+
+test('an older message loaded above the card does not fold it', async () => {
+  const { FC, D } = load();
+  const list = D.node('div'); list.appendChild(D.node('div'));
+  FC.chatShown('harbor', list);
+  await settle();
+  const old = D.node('div'); old.className = 'msg';
+  list.insertBefore(old, list.children[0]);
+  await settle();
+  const card = list.children.find((k) => String(k.className).includes('feature-card'));
+  assert.ok(!card.children.some((k) => String(k.className).includes('fc-toggle')), 'not folded');
+});
+
+test('a late history draw (many messages at once, after the quiet window) does not fold it; one new reply then does', async () => {
+  const { FC, D } = load();
+  const list = D.node('div');
+  FC.chatShown('harbor', list);
+  await settle();
+  for (let i = 0; i < 5; i++) { const b = D.node('div'); b.className = 'msg'; list.appendChild(b); }   // one task, one batch of records
+  await settle();
+  let card = list.children.find((k) => String(k.className).includes('feature-card'));
+  assert.ok(!card.children.some((k) => String(k.className).includes('fc-toggle')), 'not folded by the history');
+  const reply = D.node('div'); reply.className = 'msg'; list.appendChild(reply);
+  await settle();
+  card = list.children.find((k) => String(k.className).includes('feature-card'));
+  assert.ok(card.children.some((k) => String(k.className).includes('fc-toggle')), 'folded by the reply');
 });
