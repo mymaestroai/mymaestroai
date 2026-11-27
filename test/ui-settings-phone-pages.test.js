@@ -27,7 +27,7 @@ function pageHarness(settingsOnly) {
   const doc = { documentElement: { classList: { contains: (c) => settingsOnly && c === 'mm-settings-only' } }, getElementById: (id) => els[id] || null };
   const STG = { GROUPS: [{ id: 'money', title: 'Models and money' }, { id: 'voice', title: 'Voice and calls' }] };
   const src = ['function stPhoneOn()', 'function stPhoneList()', 'function stPhoneGo(groupId)', 'function stPhoneBack()'].map((h) => fnSrc(app, h)).join('\n');
-  const api = new Function('document', 'window', 'STG', `let stPhonePage = null;\n${src}\nreturn { stPhoneOn, stPhoneList, stPhoneGo, stPhoneBack, page: () => stPhonePage };`)(doc, { matchMedia: () => ({ matches: false }) }, STG);
+  const api = new Function('document', 'window', 'STG', `let stPhonePage = null; let stSingle = false;\n${src}\nreturn { stPhoneOn, stPhoneList, stPhoneGo, stPhoneBack, page: () => stPhonePage };`)(doc, { matchMedia: () => ({ matches: false }) }, STG);
   return { api, els, wrap, modal, title };
 }
 
@@ -66,7 +66,7 @@ test('phone pages: stShowGroup opens the page (doors, links, taps); the pane\'s 
   assert.match(fnSrc(app, 'function stReveal(el)'), /stShowGroup\(g\.dataset\.group, false\);/, 'doors and openSettingsAt open the group page');
   assert.match(fnSrc(app, 'function stSearch(q)'), /stShowGroup\(stCurGroup \|\| STG\.DEFAULT_GROUP, false, true\)/, 'clearing a search goes back to the list');
   const group = fnSrc(app, 'function groupSettings(data)');
-  assert.match(group, /stShowGroup\(STG\.defaultGroup\(\{ crit: \{\}, last \}\), false, true\);\n\s+stPhoneList\(\);/, 'the phone starts on the list');
+  assert.match(group, /stShowGroup\(stSingle \? 'you' : STG\.defaultGroup\(\{ crit: \{\}, last \}\), false, true\);\n\s+stPhoneList\(\);/, 'the phone starts on the list (a member\'s one group has no list: stPhoneList leaves it as the page)');
   assert.match(group, /<button type="button" class="st-phone-back" id="st-phone-back">‹ Settings<\/button><span class="st-phone-title">/);
   assert.match(group, /stShowGroup\(b\.dataset\.group, true\)/, 'tapping a row opens its page');
   assert.match(group, /if \(!stSearching \|\| !stPhoneOn\(\)\) return;[\s\S]*stShowGroup\(id, false\);/, 'tapping a search match opens its group page');
@@ -98,19 +98,19 @@ test('phone pages: CSS shows full-width rows of at least 56 px on the list and a
 });
 
 // Simple: four headings, More settings last, every control still there
-test('Simple (desktop): four headings, every old control kept, More settings is the last control and only for admins', () => {
+test('Simple (desktop): four headings, every old control kept, More settings is the last control (for members too: their one group)', () => {
   const src = fnSrc(app, 'function openSimpleSettings() {');
   const heads = [...src.matchAll(/<h3 class="sm-gh"[^>]*>([^<]+)<\/h3>/g)].map((m) => m[1]);
   assert.deepStrictEqual(heads, ['You and this device', 'Voice and calls', 'Notifications', 'Account']);
   for (const k of ['sm-seg', 'data-theme="light"', 'data-theme="auto"', 'sm-style', 'sm-name', 'data-act="advanced"', 'Switch to Advanced', 'data-act="signout"', 'Sign out', 'data-act="settings"']) assert.ok(src.includes(k), k);
   assert.ok(src.indexOf('You and this device') < src.indexOf('sm-seg') && src.indexOf('sm-name') < src.indexOf('Voice and calls'), 'appearance, style and name sit under the first heading');
   assert.ok(src.indexOf('data-act="signout"') < src.indexOf('data-act="settings"'), 'More settings is last');
-  assert.match(src, /\(me\.isAdmin === false \? '' : '<div class="sm-set"><button type="button" class="sm-plain" data-act="settings"><div><b>More settings<\/b>/);
+  assert.match(src, /'<div class="sm-set"><button type="button" class="sm-plain" data-act="settings"><div><b>More settings<\/b><span>' \+ \(me\.isAdmin === false \? /);
   assert.ok(!src.includes('All settings'));
   assert.match(src, /dataset\.act === 'voice'\) \{ simpleCloseSettings\(\); openVoiceSettings\(\); \}/);
 });
 
-test('Simple (phone): four headings, every old control kept, deep research under Notifications, More settings last and admin-only', () => {
+test('Simple (phone): four headings, every old control kept, deep research under Notifications, More settings last (members too)', () => {
   const src = fnSrc(mob, 'function simpleSettingsOpen() {');
   const heads = [...src.matchAll(/<h4 class="ss-gh" id="[^"]+">([^<]+)<\/h4>/g)].map((m) => m[1]);
   assert.deepStrictEqual(heads, ['You and this device', 'Voice and calls', 'Notifications', 'Account']);

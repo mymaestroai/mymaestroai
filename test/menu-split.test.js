@@ -1,7 +1,8 @@
 'use strict';
 // One home for every setting: the gear (Settings) holds what you set, the ⋯ menu what you do or open now. Each item that
 // left the ⋯ menu is listed here with its new home; the ones that stay are listed too. The phone menu: a "This device"
-// group for everyone; what an admin sets is in Settings, a member keeps it in the menu (members have no Settings).
+// group for everyone; what an admin sets is in Settings, a member keeps it in the menu AND has it in Settings, in the one group
+// "You and this device" (P4-5b: a member has the gear, the one-group dialog and the phone's Settings item).
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('fs');
@@ -86,7 +87,7 @@ test('Settings → For an agent: the chat on screen first, then the phone\'s ope
   assert.ok(!idx.includes('max-context-select') && !app.includes('/api/max_context_messages'));
 });
 
-test('phone: a "This device" group for everyone; Notification settings, Notifications for this agent and Deep research stay for members only', () => {
+test('phone: a "This device" group for everyone; Notification settings, Notifications for this agent and Deep research stay in the menu for members (and are also in their Settings group)', () => {
   const g = mhtml.slice(mhtml.indexOf('<div class="menu-group" data-group="device"'), mhtml.indexOf('<button id="menu-adv-toggle"'));
   assert.match(g, /<div class="menu-group-title" id="menu-gt-device">This device<\/div>/);
   const order = ['menu-look', 'menu-look-pick', 'menu-notify', 'menu-notify-test', 'menu-fold', 'menu-active-top'].map((id) => g.indexOf(`id="${id}"`));

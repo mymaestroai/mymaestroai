@@ -230,9 +230,11 @@ test('settings rows come from the four kinds; overrides and the bell menu list o
 });
 
 test('the household reminder row is "Question reminders"; no second "Questions" label in the section', () => {
-  const a = app.indexOf('id="st-notify-section"');
-  const b = app.indexOf('id="st-chat-section"');
+  const from = app.indexOf('async function openSettings() {');   // the admin dialog (a member's one-group dialog is drawn before it and has no household row)
+  const a = app.indexOf('id="st-notify-section"', from);
+  const b = app.indexOf('id="st-chat-section"', a);
   const sec = app.slice(a, b);
+  assert.ok(from > 0 && a > from && b > a);
   assert.match(sec, /<label>Question reminders<\/label>\s*<select id="st-question-after" onchange="saveQuestionAfter\(this\.value\)"/);
   assert.doesNotMatch(sec, /<label[^>]*>Questions<\/label>/);
   // the per-person rows are labelled from NOTIFY_KINDS, so "Questions" appears there once

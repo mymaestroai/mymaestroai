@@ -15846,7 +15846,7 @@ function applyMultiUser() {
     }
     if ($('menu-wallet')) $('menu-wallet').hidden = !hubMe.isAdmin;   // admins only
     if ($('menu-profile')) $('menu-profile').hidden = !hubMe.user;
-    if ($('menu-settings')) $('menu-settings').hidden = !hubMe.isAdmin;   // admins only, as the desktop's Settings (the hub refuses its routes to members)
+    if ($('menu-settings')) $('menu-settings').hidden = false;   // everyone: an admin opens all the groups, a member the one "You and this device" (the count on it stays admins only)
     // what an admin sets is in Settings (Notifications: yours, for an agent, deep research); a member keeps them here, their only home
     for (const id of ['menu-notify-prefs', 'menu-notify-agent']) if ($(id)) $(id).hidden = !!hubMe.isAdmin;
     researchPrefPaintAll();
@@ -18129,7 +18129,7 @@ function simpleSettingsOpen() {
     '<h4 class="ss-gh" id="ss-g-account">Account</h4>' +
     '<button type="button" class="ss-row" id="ss-adv"><b>Switch to Advanced</b><small>All tools, agents’ work and settings</small></button>' +
     '<button type="button" class="ss-row" id="ss-out"><b>Sign out</b></button>' +
-    (hubMe && hubMe.isAdmin === false ? '' : '<button type="button" class="ss-row" id="ss-all"><b>More settings</b><small>Provider keys, web search, backups and the rest</small></button>') +   // admins only, as on the desktop; the last button
+    '<button type="button" class="ss-row" id="ss-all"><b>More settings</b><small>' + (hubMe && hubMe.isAdmin === false ? 'Notifications, voice, chat and your account' : 'Provider keys, web search, backups and the rest') + '</small></button>' +   // everyone, as on the desktop (a member gets the one group); the last button
     '<button type="button" class="ss-close">Close</button>';
   d.querySelector('.ss-val').textContent = name;
   lookPickerPaint(d.querySelector('#ss-style'));   // Interface style sits right after Appearance

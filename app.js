@@ -490,7 +490,7 @@
           '<h3 class="sm-gh" id="sm-g-account">Account</h3>' +
           '<div class="sm-set"><button type="button" class="sm-plain" data-act="advanced"><div><b>Switch to Advanced</b><span>All tools, agents\' work and settings</span></div><span aria-hidden="true">›</span></button></div>' +
           '<div class="sm-set"><button type="button" class="sm-plain sm-out" data-act="signout">Sign out</button></div>' +
-          (me.isAdmin === false ? '' : '<div class="sm-set"><button type="button" class="sm-plain" data-act="settings"><div><b>More settings</b><span>Provider keys, web search, backups and the rest</span></div><span aria-hidden="true">›</span></button></div>') +   // admins only (as the gear in Advanced); the last button
+          '<div class="sm-set"><button type="button" class="sm-plain" data-act="settings"><div><b>More settings</b><span>' + (me.isAdmin === false ? 'Notifications, voice, chat and your account' : 'Provider keys, web search, backups and the rest') + '</span></div><span aria-hidden="true">›</span></button></div>' +   // everyone (as the gear in Advanced: an admin gets all the groups, a member the one); the last button
         '</div>';
       overlay.querySelector('.sm-name').textContent = name;
       const paintSeg = () => { const cur = me.theme === 'light' || me.theme === 'dark' ? me.theme : 'auto'; overlay.querySelectorAll('.sm-seg button').forEach(b => b.classList.toggle('on', b.dataset.theme === cur)); };
@@ -667,7 +667,7 @@
       document.body.classList.add('member-view');
       // Every item of the ⋯ menu is an admin control, so the whole menu goes (more-wrap), not just its rows.
       for (const id of ['more-modules-item', 'more-remote-item', 'wallet-btn', 'dream-btn', 'git-sync-btn', 'restart-hub-btn',
-                        'settings-btn', 'schedule-btn', 'credit-meter', 'spend-today', 'plan-warn', 'hub-halt-bar', 'halt-btn', 'more-wrap', 'update-chip']) {
+                        'schedule-btn', 'credit-meter', 'spend-today', 'plan-warn', 'hub-halt-bar', 'halt-btn', 'more-wrap', 'update-chip']) {
         const el = document.getElementById(id);
         if (!el) continue;
         const row = el.closest('.more-item, .more-row') || el;
@@ -3425,6 +3425,7 @@
     // The phone (the Settings frame, or a window under 721 px) shows the list of groups first and one group at a time as a page:
     // stPhonePage is null on the list, else the open group's id. #st-groups[data-page] is "list" or "group" only there.
     let stPhonePage = null;
+    let stSingle = false;      // a member's Settings: one group, so no list page on the phone and no moved rows
     function stPhoneOn() {
       try { return document.documentElement.classList.contains('mm-settings-only') || (typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 720px)').matches); } catch { return false; }
     }
@@ -3432,10 +3433,10 @@
       stPhonePage = null;
       const wrap = document.getElementById('st-groups');
       if (!wrap) return;
-      if (stPhoneOn()) wrap.dataset.page = 'list'; else delete wrap.dataset.page;
+      if (stPhoneOn() && !stSingle) wrap.dataset.page = 'list'; else delete wrap.dataset.page;
     }
     function stPhoneGo(groupId) {   // one group as a page
-      if (!stPhoneOn()) return;
+      if (!stPhoneOn() || stSingle) return;
       const wrap = document.getElementById('st-groups');
       if (!wrap) return;
       stPhonePage = groupId;
@@ -3595,19 +3596,23 @@
       try { last = localStorage.getItem(STG.STORE_KEY); } catch {}
       for (const k of Object.keys(stSumParts)) delete stSumParts[k];
       stSearching = false; stPicked = false; stCurGroup = null; stPhonePage = null;
+      // A member has ONE group (You and this device): no list of groups, no search, no phone list page, just the group.
+      stSingle = !isHubAdmin();
+      const defs = stSingle ? STG.GROUPS.filter(g => g.id === 'you') : STG.GROUPS;
       const wrap = document.createElement('div');
       wrap.id = 'st-groups';
-      wrap.innerHTML = `<div class="st-phone-head"><button type="button" class="st-phone-back" id="st-phone-back">‹ Settings</button><span class="st-phone-title"></span></div><div class="st-search"><input type="search" id="st-search" placeholder="Search settings: privacy, sandbox, push, spend…" autocomplete="off" aria-label="Search settings"><span id="st-search-none" hidden>Nothing matches.</span></div>`
+      if (stSingle) wrap.className = 'st-single';
+      wrap.innerHTML = `<div class="st-phone-head"><button type="button" class="st-phone-back" id="st-phone-back">‹ Settings</button><span class="st-phone-title"></span></div><div class="st-search"${stSingle ? ' hidden' : ''}><input type="search" id="st-search" placeholder="Search settings: privacy, sandbox, push, spend…" autocomplete="off" aria-label="Search settings"><span id="st-search-none" hidden>Nothing matches.</span></div>`
         + (window.hubMe && window.hubMe.isAdmin ? `<div id="st-quick-links" style="margin:6px 0 10px;font-size:0.85rem">Go to: <a href="/modules" id="st-connectors-link" style="color:var(--accent)">🔌 Data connectors</a><a href="/modules#remote-computers" id="st-remote-link" style="color:var(--accent);margin-left:14px;display:${remoteComputersOk === true ? '' : 'none'}">💻 Remote computers</a><a href="/changes" id="st-changes-link" style="color:var(--accent);margin-left:14px">Changes to how agents behave</a></div>` : '')
-        + `<div class="st-panes"><nav class="st-glist" aria-label="Settings groups">`
-        + STG.GROUPS.map(g => `<button type="button" class="st-gbtn" id="st-gbtn-${g.id}" data-group="${g.id}"><span class="st-gicon" aria-hidden="true">${esc(g.icon)}</span><span class="st-gtext"><span class="st-group-title">${esc(g.title)}</span><span class="st-gsub">${esc(g.sub)}</span><span class="st-group-sum" id="st-sum-${g.id}"></span></span></button>`).join('')
+        + `<div class="st-panes"><nav class="st-glist" aria-label="Settings groups"${stSingle ? ' hidden' : ''}>`
+        + defs.map(g => `<button type="button" class="st-gbtn" id="st-gbtn-${g.id}" data-group="${g.id}"><span class="st-gicon" aria-hidden="true">${esc(g.icon)}</span><span class="st-gtext"><span class="st-group-title">${esc(g.title)}</span><span class="st-gsub">${esc(g.sub)}</span><span class="st-group-sum" id="st-sum-${g.id}"></span></span></button>`).join('')
         + `</nav><div class="st-gpane">`
-        + STG.GROUPS.map(g => `<section class="st-group" id="st-group-${g.id}" data-group="${g.id}" aria-label="${esc(g.title)}" hidden><h5 class="st-ghead">${esc(g.title)}</h5><div class="st-group-body"></div><div class="st-more" hidden><button type="button" class="st-more-btn" aria-expanded="false">▸ More</button><div class="st-more-body" hidden></div></div></section>`).join('')
+        + defs.map(g => `<section class="st-group" id="st-group-${g.id}" data-group="${g.id}" aria-label="${esc(g.title)}" hidden><h5 class="st-ghead">${esc(g.title)}</h5><div class="st-group-body"></div><div class="st-more" hidden><button type="button" class="st-more-btn" aria-expanded="false">▸ More</button><div class="st-more-body" hidden></div></div></section>`).join('')
         + `</div></div>`;
       modal.insertBefore(wrap, sections[0]);
       const body = (id) => wrap.querySelector(`#st-group-${id} .st-group-body`);
       for (const s of sections) {   // each section goes where lib/ui-settings-groups says; one it does not know lands in Upkeep > More
-        const at = STG.groupOfSection(s.id);
+        const at = stSingle ? { group: 'you', more: false } : STG.groupOfSection(s.id);
         (at.more ? wrap.querySelector(`#st-group-${at.group} .st-more-body`) : body(at.group)).appendChild(s);
       }
       stPlaceRows();
@@ -3624,7 +3629,7 @@
         });
       }
       for (const m of wrap.querySelectorAll('.st-more-btn')) m.addEventListener('click', () => stSetMore(m.closest('.st-group'), m.getAttribute('aria-expanded') !== 'true'));
-      stShowGroup(STG.defaultGroup({ crit: {}, last }), false, true);
+      stShowGroup(stSingle ? 'you' : STG.defaultGroup({ crit: {}, last }), false, true);
       stPhoneList();   // the phone starts on the list of groups; the desktop shows the group at once
       wrap.querySelector('#st-phone-back').addEventListener('click', () => { stPhoneBack(); });
       for (const h of wrap.querySelectorAll('.st-ghead')) h.addEventListener('click', () => {   // a match in a phone search: its group opens as a page
@@ -3842,7 +3847,7 @@
     function stPlaceRows() {
       const wrap = document.getElementById('st-groups');
       if (!wrap) return;
-      for (const r of STG.ROWS) {
+      for (const r of (stSingle ? [] : STG.ROWS)) {   // a member's one group keeps every row where it was drawn
         const el = wrap.querySelector(r.selector);
         if (!el || el.closest('.st-moved')) continue;
         const unit = el.closest('.st-row') || el;
@@ -3927,7 +3932,46 @@
       try { target.focus(); } catch { /* not focusable here */ }
     }
 
+    // A member's Settings: ONE group, "You and this device" (the same sections and loaders as an admin's, only the member-safe ones).
+    // Nothing here reads /api/settings or any admin route; every route it uses already answers a member for their own choices.
+    async function openMemberSettings() {
+      stModal(`<h3>&#x2699; Settings</h3><p class="st-sub">Your own choices for this device and your account. Each box saves on its own.</p>
+        <div class="st-section" id="st-looks-section"><h4>Appearance</h4><div id="st-looks-body"></div></div>
+        <div class="st-section" id="st-notify-section"><h4>Notifications</h4>
+          <div class="st-row"><label>🔔 Push</label><button class="st-test-btn" id="st-push-btn" onclick="toggleDesktopPush()">…</button></div>
+          <div class="st-hint" id="st-push-hint">Notifications on this computer as well as the phone, even with this tab closed.</div>
+          <div id="st-research-pref" role="group" aria-label="Deep research" hidden></div>
+          <div id="st-notify-mine" role="group" aria-label="Your notifications"><div class="st-hint" style="margin-left:0">Loading…</div></div>
+          <div class="st-row" id="st-notify-agent" data-no-dirty><label for="st-nb-agent">For an agent</label><select id="st-nb-agent" onchange="stNotifyAgentPaint()"></select></div>
+          <div class="st-hint">Which notifications one of your agents may send you; the 🔔 next to its chat does the same. Each choice is saved as you make it.</div>
+          <div id="st-nb-agent-box" class="st-nb-box" data-no-dirty></div>
+        </div>
+        <div class="st-section" id="st-chat-section"><h4>Chat</h4>
+          <div class="st-row"><label style="flex-basis:auto"><input type="checkbox" id="st-fold-auto" ${foldAutoOn() ? 'checked' : ''} onchange="saveFoldAuto(this.checked)"> Fold consultations, scheduled tasks and hub notices into cards</label></div>
+          <div class="st-hint">This browser only. Turn it off to show every automatic turn in full.</div>
+          <div class="st-row"><label style="flex-basis:auto"><input type="checkbox" id="st-active-top" ${activeTopOn() ? 'checked' : ''} onchange="saveActiveTop(this.checked)"> Show active agents at the top of the agent list</label></div>
+          <div class="st-hint">This browser only. Agents that are working right now also appear in an Active section at the top of the list; off shows the list exactly as before.</div>
+          ${simpleAccountOk(window.hubMe) ? `<div class="st-row"><button type="button" id="st-switch-simple" onclick="simpleSwitchMode('simple')">Switch to Simple</button></div>
+          <div class="st-hint">The calm view: just the conversation, with the tools and settings out of sight. You can switch back here.</div>` : ''}
+        </div>
+        ${voiceSettingsHtml({})}
+        <div class="st-section" id="st-account-section" data-no-dirty><h4>Your account</h4>
+          <div class="st-hint">Your name and time zone are in Profile; your password, two-factor sign-in and signed-in devices are in Security.</div>
+          <div class="st-row"><button type="button" class="st-test-btn" id="st-open-profile" onclick="openProfileDialog()">Open Profile</button> <button type="button" class="st-test-btn" id="st-open-security" onclick="openSecurityDialog()">Open Security</button></div>
+        </div>
+        <div class="st-actions"><button class="st-btn secondary" onclick="dialogRequestClose(this)">Close</button></div>`);
+      setTimeout(() => lookSectionPaint({}), 0);
+      setTimeout(voiceSettingsInit, 0);
+      setTimeout(loadNotifySettings, 0);
+      setTimeout(() => { typeof researchPrefLoad === 'function' && researchPrefLoad(); }, 0);
+      stNotifyAgentFill();   // only this member's agents: AGENTS holds the agents the hub lists for them
+      groupSettings({});
+      stHelpMount();
+      paintDesktopPush();
+    }
+
     async function openSettings() {
+      if (!isHubAdmin()) return openMemberSettings();
       stModal(`<h3>Loading settings...</h3>`);
       let data;
       try {
@@ -6305,7 +6349,8 @@
         const ag = (typeof AGENTS !== 'undefined' && AGENTS.find(x => x.name === a)) || null;
         const shown = (ag && (ag.display || ag.displayName)) || capName(a);
         return `<div class="st-row"><label>${esc(shown)}</label><span class="st-hint" style="margin:0;flex:1">${NOTIFY_AGENT_KINDS.map(([k, label]) => `${label}: ${p.agents[a][k] ? notifyModeLabel(p.agents[a][k]) : 'my default'}`).join(' · ')}</span>
-          <button class="st-test-btn" onclick="notifyAgentReset(${esc(JSON.stringify(a)).replace(/'/g, '&#39;')})" aria-label="Reset ${esc(shown)} to my default">Reset</button></div>`;
+          <button class="st-test-btn" onclick="notifyAgentReset(${esc(JSON.stringify(a)).replace(/'/g, '&#39;')})" aria-label="Reset ${esc(shown)} to my default">Reset</button>
+          ${ag ? `<button class="st-test-btn" data-open-agent="${esc(a)}" onclick="openAgentSettings(${esc(JSON.stringify(a)).replace(/'/g, '&#39;')}, event)" aria-label="Open ${esc(shown)}'s card">Open card</button>` : ''}</div>`;
       }).join('') : '<div class="st-hint" style="margin-left:0">None. Use the 🔔 in an agent\'s chat header to give one its own setting.</div>';
       box.innerHTML = `<h5 style="margin:10px 0 6px">Your notifications</h5>
         <div class="st-hint" style="margin-left:0">For you, on all your devices.</div>${rows}
@@ -25816,14 +25861,11 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       } catch { /* offline: the dialog says it could not load */ }
       try { stNotifyAgentWanted = new URLSearchParams(location.search).get('agent') || ''; } catch { /* none */ }   // the phone's open chat
       window.addEventListener('message', settingsOnlyMessage);
-      // a member has no Settings dialog on the desktop either (the gear is an admin control and the hub refuses its routes)
-      if (!isHubAdmin()) stModal(`<h3>&#x2699;&#xFE0F; Settings</h3><p class="st-sub">Settings are kept by the admins of this Maestro.</p><div class="st-actions"><button class="st-btn secondary" onclick="dialogRequestClose(this)">Close</button></div>`);
-      else {
-        // as the full page has them (sandbox, subscriptions); a hub slow to answer never holds the dialog back more than 5 s
-        try { await Promise.race([loadAgents(), new Promise((r) => setTimeout(r, 5000))]); } catch { /* the sections that list agents say so */ }
-        await openSettings();
-        if (typeof settingsDoorStart === 'function') settingsDoorStart();   // the phone's /mobile#settings-for=OPT-xxxx arrives here as this frame's hash
-      }
+      // a member gets the one group "You and this device" (openSettings draws it); an admin all eight
+      // as the full page has them (sandbox, subscriptions); a hub slow to answer never holds the dialog back more than 5 s
+      try { await Promise.race([loadAgents(), new Promise((r) => setTimeout(r, 5000))]); } catch { /* the sections that list agents say so */ }
+      await openSettings();
+      if (isHubAdmin() && typeof settingsDoorStart === 'function') settingsDoorStart();   // the phone's /mobile#settings-for=OPT-xxxx arrives here as this frame's hash (admins)
       document.addEventListener('click', settingsOnlyLeaveGuard, true);
       settingsOnlyWatch();
       settingsOnlyPost('mm-settings-ready');

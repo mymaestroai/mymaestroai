@@ -2946,6 +2946,10 @@
     .st-moved > h4 { font-size: 0.85rem; }
     @media (max-width: 720px) { .st-panes { display: block; } .st-glist { position: static; margin-bottom: 12px; } }
     /* The phone (the Settings frame, or a window under 721 px; app.js sets data-page there only): the list of groups as full-width rows, or one group as a page under a "‹ Settings" header. */
+    /* A member's Settings has one group: the group alone, no list of groups and no search (app.js groupSettings sets st-single). */
+    #st-groups.st-single .st-glist, #st-groups.st-single .st-search { display: none; }
+    #st-groups.st-single .st-panes { display: block; }
+    .st-modal:has(#st-groups.st-single) { max-width: 640px; width: min(96vw, 640px); }
     .st-phone-head { display: none; }
     #st-groups[data-page="group"] .st-phone-head { display: flex; align-items: center; gap: 10px; min-height: 56px; margin-bottom: 8px; border-bottom: 1px solid var(--border); }
     .st-phone-back { min-height: 44px; padding: 0 12px 0 0; background: transparent; border: 0; color: var(--accent); cursor: pointer; font: inherit; font-size: 1rem; }

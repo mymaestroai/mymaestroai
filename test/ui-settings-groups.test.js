@@ -195,7 +195,7 @@ test('openSettingsAt and the #settings-for door reveal the group that holds the 
 test('the panel is grouped right after it is drawn: a list of eight group buttons, one open group with its More', () => {
   const app = read('app.js');
   assert.match(settingsSource(app), /stModal\(html\);\s*stTuningMount\(\); stNotifyAgentFill\(\);[^\n]*\n\s*groupSettings\(data\);/);
-  assert.match(app, /<nav class="st-glist" aria-label="Settings groups">/);
+  assert.match(app, /<nav class="st-glist" aria-label="Settings groups"\$\{stSingle \? ' hidden' : ''\}>/, 'a member has one group and no list');
   assert.match(app, /<button type="button" class="st-gbtn" id="st-gbtn-\$\{g\.id\}" data-group="\$\{g\.id\}">/);
   assert.match(app, /class="st-group-sum" id="st-sum-\$\{g\.id\}"/, 'each group row keeps its summary slot');
   assert.match(app, /aria-current/);

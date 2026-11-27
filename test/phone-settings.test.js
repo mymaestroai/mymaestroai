@@ -81,7 +81,7 @@ function soHarness({ admin = true, parentIsSelf = false } = {}) {
   return { api, env, posted, calls, listeners, parent, win, layers, docListeners, setOverlay: (o) => { overlay = o; }, setQuestion: (q) => { question = q; }, tick: () => { for (const i of intervals.slice()) if (i.on) i.f(); }, live: () => intervals.filter((i) => i.on).length };
 }
 
-test('settingsOnlyStart: an admin gets the dialog and the parent hears "ready"; a member gets a plain line, never the dialog', async () => {
+test('settingsOnlyStart: an admin gets the dialog and the parent hears "ready"; a member gets the same frame with the one group (openSettings draws it), never "kept by the admins"', async () => {
   const h = soHarness();
   await h.api.settingsOnlyStart();
   assert.deepStrictEqual(h.env.document.documentElement.classList.added, ['mm-settings-only']);
@@ -92,9 +92,10 @@ test('settingsOnlyStart: an admin gets the dialog and the parent hears "ready"; 
   assert.strictEqual(typeof h.listeners.message, 'function');
   const m = soHarness({ admin: false });
   await m.api.settingsOnlyStart();
-  assert.ok(!m.calls.includes('openSettings'));
-  assert.ok(!m.calls.includes('loadAgents'));
-  assert.match(m.calls.find(c => Array.isArray(c) && c[0] === 'stModal')[1], /Settings are kept by the admins of this Maestro\./);
+  assert.ok(m.calls.includes('openSettings'), 'a member gets Settings (their one group) in the frame');
+  assert.ok(m.calls.indexOf('loadAgents') >= 0 && m.calls.indexOf('loadAgents') < m.calls.indexOf('openSettings'), 'their agents first (the notification rows list them)');
+  assert.ok(!m.calls.some(c => Array.isArray(c) && c[0] === 'stModal'), 'no plain "kept by the admins" line');
+  assert.deepStrictEqual(m.posted, [[{ type: 'mm-settings-ready' }, 'https://hub.example']]);
 });
 
 test('settingsOnlyMessage: only a close request from the parent at the same origin acts, and always through dialogGuard', async () => {
@@ -287,15 +288,15 @@ test('the phone sheet: a frame that never answers shows a plain message with Try
   assert.ok(s.el.removed);
 });
 
-test('entry points: the phone menu and Simple\'s sheets offer Settings to admins only, as the desktop gear', () => {
+test('entry points: the phone menu and Simple\'s sheets offer Settings to everyone (a member gets the one group), as the desktop gear', () => {
   assert.match(mhtml, /<button id="menu-profile">&#x1F464; Profile<\/button>\n\s+<button id="menu-settings">&#x2699; Settings<\/button>/);
   assert.match(mob, /\$\('menu-settings'\)\?\.addEventListener\('click', settingsSheetOpen\);/);
-  assert.match(mob, /if \(\$\('menu-settings'\)\) \$\('menu-settings'\)\.hidden = !hubMe\.isAdmin;/);
+  assert.match(mob, /if \(\$\('menu-settings'\)\) \$\('menu-settings'\)\.hidden = false;/);
   const simplePhone = fnSrc(mob, 'function simpleSettingsOpen() {');
-  assert.match(simplePhone, /\(hubMe && hubMe\.isAdmin === false \? '' : '<button type="button" class="ss-row" id="ss-all"><b>More settings<\/b>/);
+  assert.match(simplePhone, /'<button type="button" class="ss-row" id="ss-all"><b>More settings<\/b><small>' \+ \(hubMe && hubMe\.isAdmin === false \? 'Notifications, voice, chat and your account' : /);
   assert.match(simplePhone, /\$\('ss-all'\)\?\.addEventListener\('click', \(\) => \{ d\.close\(\); settingsSheetOpen\(\); \}\);/);
   const simpleDesk = fnSrc(app, 'function openSimpleSettings() {');
-  assert.match(simpleDesk, /\(me\.isAdmin === false \? '' : '<div class="sm-set"><button type="button" class="sm-plain" data-act="settings"><div><b>More settings<\/b>/);
+  assert.match(simpleDesk, /'<div class="sm-set"><button type="button" class="sm-plain" data-act="settings"><div><b>More settings<\/b><span>' \+ \(me\.isAdmin === false \? 'Notifications, voice, chat and your account' : /);
   assert.match(simpleDesk, /if \(a\.dataset\.act === 'settings'\) \{ simpleCloseSettings\(\); openSettings\(\); \}/);
 });
 
