@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const cp = require('node:child_process');
-const { findByMarker, findInCgroup, stopAll } = require('../scripts/stray-processes');
+const { findByMarker, findInCgroup, stopAll, stopMarked } = require('../scripts/stray-processes');
 
 const LINUX = process.platform === 'linux';
 
@@ -85,9 +85,35 @@ describe('run-tests stray processes', () => {
     const src = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'run-tests.js'), 'utf8');
     assert.match(src, /crypto\.randomBytes\(8\)\.toString\('hex'\)/);
     assert.match(src, /HUB_TEST_RUN:\s*RUN_ID/);
-    assert.match(src, /strayMod\.findByMarker\(RUN_ID\)/);
+    assert.match(src, /strayMod\.stopMarked\(RUN_ID\)/);
     assert.match(src, /run-tests: a test left process \$\{p\.pid\} \(\$\{p\.name\}\) running/);
-    assert.match(src, /try \{ stopStrays\(\); \} catch/);
+    assert.match(src, /try \{ survivors = stopStrays\(\); \} catch/);
+    // the strays are stopped before the guard's report is read, and the private folders are kept while any survives
+    assert.ok(src.indexOf('survivors = stopStrays()') < src.indexOf('fs.readFileSync(env.MM_DATA_GUARD_REPORT'), 'strays stopped first');
+    assert.match(src, /if \(survivors > 0\) \{[\s\S]*?kept \$\{sealRoot\}[\s\S]*?\} else \{[\s\S]*?fs\.rmSync\(sealRoot/);
     assert.match(src, /\nprocess\.exit\(refused\.length \? 1 : r\.status === null \? 1 : r\.status\);\s*$/);
+  });
+
+  it('f. a stray whose TERM handler starts another marked process is stopped too (rescan after each pass)', { skip: LINUX ? false : 'needs /proc' }, async () => {
+    const id = 'test' + Math.random().toString(16).slice(2, 10);
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stray-term-'));
+    const late = path.join(dir, 'late.pid');
+    // on TERM: start a new marked child (it inherits the environment), record its pid, then exit
+    const child = cp.spawn('/bin/bash', ['-c', `trap '/bin/sleep 31 & echo $! > "${late}"; exit 0' TERM; while :; do /bin/sleep 0.1; done`],
+      { detached: true, stdio: 'ignore', env: { ...process.env, HUB_TEST_RUN: id } });
+    try {
+      for (let i = 0; i < 50 && !findByMarker(id).some((p) => p.pid === child.pid); i++) await new Promise((r) => setTimeout(r, 50));
+      const res = stopMarked(id, { waitMs: 1500, deadlineMs: 6000 });
+      const latePid = Number(fs.readFileSync(late, 'utf8').trim());
+      assert.ok(latePid > 1, 'the TERM handler started its process');
+      assert.deepStrictEqual(res.survivors, [], 'nothing marked is left');
+      assert.ok(res.found.some((p) => p.pid === child.pid), 'the first stray is named');
+      assert.ok(res.found.some((p) => p.pid === latePid), 'the exact process its TERM handler started is named too: ' + JSON.stringify(res.found));
+      assert.ok(!findByMarker(id).some((p) => p.pid === latePid), 'and it is gone');
+    } finally {
+      // whatever failed: nothing with this test's marker may outlive it
+      try { stopMarked(id, { waitMs: 500, deadlineMs: 2000 }); } catch { /* best effort */ }
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

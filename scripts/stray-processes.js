@@ -16,7 +16,8 @@ function statFields(procRoot, pid) {
 // Field 22 (start time, clock ticks since boot) as a string, or null.
 function startTime(procRoot, pid) { const f = statFields(procRoot, pid); return (f && f[19]) || null; }
 function isZombie(procRoot, pid) { const f = statFields(procRoot, pid); return !f || f[0] === 'Z'; }
-function comm(procRoot, pid) { try { return read(procRoot, pid, 'comm').trim().slice(0, 32); } catch { return '?'; } }
+// A process sets its own name: printable ASCII only, so a name cannot carry terminal escapes into the log.
+function comm(procRoot, pid) { try { return read(procRoot, pid, 'comm').trim().replace(/[^\x20-\x7e]/g, '?').slice(0, 32); } catch { return '?'; } }
 
 // [{ pid, name, start }] for every process of this user whose environment holds HUB_TEST_RUN=<id>; never this process.
 // The start time is read before and after the environment: a process that exited and whose pid was reused in between has a
@@ -65,6 +66,25 @@ function stopAll(list, { procRoot = '/proc', waitMs = 2000, kill = process.kill.
   return n;
 }
 
+// Stops every process carrying the marker, scanning again after each pass: a stray's TERM handler may start a new marked
+// process before it exits. At most `passes` passes within `deadlineMs`. Returns { found: every process seen (first sighting),
+// stopped: SIGTERMs sent, survivors: marked processes still running at the end }.
+function stopMarked(id, { procRoot = '/proc', self = process.pid, passes = 4, deadlineMs = 8000, waitMs = 2000,
+  kill = process.kill.bind(process) } = {}) {
+  const seen = new Map();
+  let stopped = 0;
+  const end = Date.now() + deadlineMs;
+  let list = findByMarker(id, { procRoot, self });
+  for (let i = 0; i < passes && list.length && Date.now() < end; i++) {
+    for (const p of list) if (!seen.has(`${p.pid}:${p.start}`)) seen.set(`${p.pid}:${p.start}`, p);
+    stopped += stopAll(list, { procRoot, waitMs: Math.max(0, Math.min(waitMs, end - Date.now())), kill });
+    pause(100);   // a moment for a killed process's children to appear in /proc
+    list = findByMarker(id, { procRoot, self });
+  }
+  for (const p of list) if (!seen.has(`${p.pid}:${p.start}`)) seen.set(`${p.pid}:${p.start}`, p);
+  return { found: [...seen.values()], stopped, survivors: list };
+}
+
 // The cgroup path of a process ('' when unreadable): the unified (v2) line "0::<path>".
 function cgroupOf(procRoot, pid) {
   try { const l = read(procRoot, pid, 'cgroup').split('\n').find((x) => x.startsWith('0::')); return l ? l.slice(3) : ''; } catch { return ''; }
@@ -97,4 +117,4 @@ function findInCgroup(sinceTicks, { procRoot = '/proc', self = process.pid, excl
   return found;
 }
 
-module.exports = { findByMarker, findInCgroup, stopAll, startTime };
+module.exports = { findByMarker, findInCgroup, stopAll, stopMarked, startTime };
