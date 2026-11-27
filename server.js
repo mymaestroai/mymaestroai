@@ -739,23 +739,25 @@ async function handleHttpRequest(req, res) {
         if (refused) return jsonResponse(res, 403, { ok: false, error: refused });
         // expect: the state the page drew this row from; checked inside the write lock, a stale second device gets 409 'already decided'.
         const expect = b.expect === 'pending' || b.expect === 'on' || b.expect === 'off' ? b.expect : undefined;
-        // rev: the row's journal phrase (viewOf) the page drew it from; compared inside the lock, so a stale device never undoes a fresh snooze.
+        // rev: the row's revision (bc.revOf: phrase plus write counter) the page drew it from; compared inside the lock, so a stale device never undoes a fresh snooze.
         const expectRev = typeof b.rev === 'string' && b.rev.length <= 80 ? b.rev : undefined;
         if (b.decision === 'reopen' && expectRev === undefined) return jsonResponse(res, 400, { ok: false, error: 'rev is needed to undo' });
         const who = req.hubUser && req.hubUser.id;
         try {
           // Run as the person who pressed: the change journal (Recent changes, Restore) names them.
-          await require('./lib/settings-journal').withActor({ kind: 'person', user: who }, async () => {
-            if (b.decision === 'snooze') await bc.snooze(m[1], { user: who, expect, expectRev });
-            else if (b.decision === 'reopen') await bc.reopen(m[1], { user: who, expectRev });
-            else if (b.decision === 'seen') await bc.markSeen(m[1], { user: who, expect, expectRev });
-            else await bc.decide(m[1], b.decision, { user: who, expect, expectRev });
+          // done: the entry as written inside the lock, so the rev answered is this press's own, never a later device's
+          const done = await require('./lib/settings-journal').withActor({ kind: 'person', user: who }, async () => {
+            if (b.decision === 'snooze') return bc.snooze(m[1], { user: who, expect, expectRev });
+            if (b.decision === 'reopen') return bc.reopen(m[1], { user: who, expectRev });
+            if (b.decision === 'seen') return bc.markSeen(m[1], { user: who, expect, expectRev });
+            return bc.decide(m[1], b.decision, { user: who, expect, expectRev });
           });
+          const doneRev = done && typeof done.rev === 'string' ? done.rev : bc.revOf(done);
           console.log(`[behaviour] ${m[1]} ${b.decision === 'on' || b.decision === 'off' ? `turned ${b.decision}` : b.decision === 'snooze' ? 'snoozed for a week' : b.decision === 'reopen' ? 'put back to waiting' : 'notice seen'} by ${who || 'unknown'}`);
           if (m[1] === 'worker-proposals') {
             try { await require('./lib/behaviour-review').syncProposalsTask(); } catch (e) { console.warn('[behaviour] could not update the weekly team review:', e.message); }
           }
-          return jsonResponse(res, 200, { ok: true, change: bc.list().find((c) => c.id === m[1]), rev: bc.viewOf(bc.readState().entries[m[1]]) });
+          return jsonResponse(res, 200, { ok: true, change: bc.list().find((c) => c.id === m[1]), rev: doneRev });
         } catch (e) {
           const msg = e && e.message ? e.message : String(e);
           if (msg === 'already decided') return jsonResponse(res, 409, { ok: false, error: 'already decided' });

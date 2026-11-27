@@ -161,7 +161,7 @@ test('migrate: quiet + leadMay true is seeded on by quiet-update; quiet + leadMa
 test('quiet notice: one line until acknowledged; seen records noticeSeenAt; off keeps it; quiet + leadMay false is on the card as an entry, not a notice', async () => {
   const s = setup(); existing(s);
   let c = card.cardState({ ...s.o, deps, now: T0 });
-  assert.deepStrictEqual(c.notices, [{ id: 'quiet-one', title: 'Quiet one', line: 'Quiet one tidies up.', rev: 'on' }]);
+  assert.deepStrictEqual(c.notices, [{ id: 'quiet-one', title: 'Quiet one', line: 'Quiet one tidies up.', rev: bc.revOf(st(s)['quiet-one']) }]);
   assert.ok(c.entries.some((e) => e.id === 'quiet-risky'));
   assert.ok(!c.entries.some((e) => e.id === 'quiet-one'));
   await bc.markSeen('quiet-one', { user: 'u1', now: T0, ...s.o });
@@ -448,18 +448,18 @@ test('r1 fix2: a stale second device gets already decided and the state stays th
 test('r2 fix1: a stale Turn on (old rev) after a hub-wide snooze is refused and the snooze stays; a fresh rev works', async () => {
   const s = setup(); existing(s);
   const rev0 = card.cardState({ ...s.o, deps, now: T0 }).entries.find((e) => e.id === 'alpha').rev;
-  assert.strictEqual(rev0, 'pending');
+  assert.strictEqual(rev0, bc.revOf(st(s).alpha)); assert.match(rev0, /^pending #\d+$/);
   await bc.snooze('alpha', { user: 'a', now: T0, expectRev: rev0, ...s.o });   // device A
   const until = st(s).alpha.snoozedUntil;
   await assert.rejects(() => bc.decide('alpha', 'on', { user: 'b', expectRev: rev0, ...s.o }), /already decided/);   // device B, old rev
   assert.strictEqual(st(s).alpha.state, 'pending'); assert.strictEqual(st(s).alpha.snoozedUntil, until);
   await assert.rejects(() => bc.snooze('alpha', { user: 'b', expectRev: rev0, ...s.o }), /already decided/);
-  const rev1 = bc.viewOf(st(s).alpha);
-  assert.strictEqual(rev1, 'snoozed until ' + until);
+  const rev1 = bc.revOf(st(s).alpha);
+  assert.ok(rev1.startsWith('snoozed until ' + until + ' #'), rev1);
   await bc.decide('alpha', 'on', { user: 'b', expectRev: rev1, ...s.o });
   assert.strictEqual(st(s).alpha.state, 'on');
   const n0 = card.cardState({ ...s.o, deps, now: T0 }).notices.find((n) => n.id === 'quiet-one').rev;
-  assert.strictEqual(n0, 'on');
+  assert.strictEqual(n0, bc.revOf(st(s)['quiet-one'])); assert.match(n0, /^on #\d+$/);
   await bc.markSeen('quiet-one', { user: 'a', now: T0, expectRev: n0, ...s.o });
   await assert.rejects(() => bc.markSeen('quiet-one', { user: 'b', expectRev: n0, ...s.o }), /already decided/);
   await assert.rejects(() => bc.decide('quiet-one', 'off', { user: 'b', expectRev: n0, ...s.o }), /already decided/);
@@ -510,7 +510,7 @@ test('reopen: after on, off and snooze the entry is pending again and back on th
     const s = setup(); existing(s);
     fs.writeFileSync(s.stateFile, JSON.stringify({ entries: { ...st(s), alpha: { ...st(s).alpha, recommend: 'on', recommendWhy: 'cheap', reviewTask: 'task-1' } } }));
     if (how === 'snooze') await bc.snooze('alpha', { user: 'u1', now: T0, ...s.o }); else await bc.decide('alpha', how, { user: 'u1', ...s.o });
-    const rev = bc.viewOf(st(s).alpha);
+    const rev = bc.revOf(st(s).alpha);
     const r = await bc.reopen('alpha', { user: 'u2', expectRev: rev, ...s.o });
     const e = st(s).alpha;
     assert.deepStrictEqual([e.state, e.by, e.snoozedUntil, e.snoozedBy, e.recommend, e.recommendWhy, e.reviewTask], ['pending', 'owner', undefined, undefined, 'on', 'cheap', 'task-1'], how);
@@ -521,14 +521,14 @@ test('reopen: after on, off and snooze the entry is pending again and back on th
 test('reopen: a stale rev is refused (already decided) and nothing changes', async () => {
   const s = setup(); existing(s);
   await bc.decide('alpha', 'on', { user: 'u1', ...s.o });
-  const stale = bc.viewOf(st(s).alpha);
+  const stale = bc.revOf(st(s).alpha);
   await bc.decide('alpha', 'off', { user: 'u3', ...s.o });
   await assert.rejects(bc.reopen('alpha', { user: 'u2', expectRev: stale, ...s.o }), /already decided/);
   assert.strictEqual(st(s).alpha.state, 'off');
 });
 test('reopen: an untouched pending entry is refused (already decided); an unknown id is refused; an unreadable file is not overwritten', async () => {
   const s = setup(); existing(s);
-  await assert.rejects(bc.reopen('alpha', { user: 'u2', expectRev: 'pending', ...s.o }), /already decided/);
+  await assert.rejects(bc.reopen('alpha', { user: 'u2', expectRev: bc.revOf(st(s).alpha), ...s.o }), /already decided/);
   await assert.rejects(bc.reopen('nope', { user: 'u2', expectRev: 'pending', ...s.o }), /no such change/);
   fs.writeFileSync(s.stateFile, '{not json');
   await assert.rejects(bc.reopen('alpha', { user: 'u2', expectRev: 'pending', ...s.o }));
@@ -537,7 +537,7 @@ test('reopen: an untouched pending entry is refused (already decided); an unknow
 test('reopen: the journal gets an entry whose value becomes pending, with the person who pressed', async () => {
   const s = setup(); existing(s);
   await asPerson('sam', () => bc.decide('alpha', 'on', { user: 'sam', ...s.o }));
-  await asPerson('sam', () => bc.reopen('alpha', { user: 'sam', expectRev: 'on', ...s.o }));
+  await asPerson('sam', () => bc.reopen('alpha', { user: 'sam', expectRev: bc.revOf(st(s).alpha), ...s.o }));
   const list = entriesOf(s);
   assert.strictEqual(list.length, 2);
   assert.ok(list.some((e) => e.after === 'pending' && e.before === 'on' && e.who.user === 'sam'), JSON.stringify(list));
@@ -549,10 +549,61 @@ test('reopen route: same owner rule and own-session guard as the other decisions
   assert.match(post, /decision !== 'reopen'/);
   assert.match(post, /bc\.reopen\(/);
   assert.match(post, /ownerRefusal\(/);
-  assert.match(post, /rev: bc\.viewOf\(/);
+  assert.match(post, /bc\.revOf\(/);
   assert.match(post, /reopen[\s\S]{0,200}rev/);
   assert.ok(post.indexOf('ownerRefusal(') < post.indexOf('bc.reopen('));
-  assert.ok(post.indexOf('bc.viewOf(') > post.indexOf('bc.reopen('), 'rev read after the write');
+  assert.ok(post.indexOf('bc.revOf(') > post.indexOf('bc.reopen('), 'rev taken from the write\'s own result');
+  assert.ok(!/viewOf\(/.test(post), 'the file is not re-read for the rev after the write');
+});
+test('r5: an Undo carrying the rev of an older identical state is refused', async () => {
+  const s = setup(); existing(s);
+  const r1 = (await bc.decide('alpha', 'on', { user: 'u1', ...s.o })).rev;
+  assert.strictEqual(r1, bc.revOf(st(s).alpha));
+  await bc.decide('alpha', 'off', { user: 'u1', ...s.o });
+  const r3 = (await bc.decide('alpha', 'on', { user: 'u1', ...s.o })).rev;
+  assert.notStrictEqual(r1, r3);
+  assert.ok(r1.startsWith('on #') && r3.startsWith('on #'));
+  await assert.rejects(bc.reopen('alpha', { user: 'u2', expectRev: r1, ...s.o }), /already decided/);
+  assert.strictEqual(st(s).alpha.state, 'on');
+  await bc.reopen('alpha', { user: 'u2', expectRev: r3, ...s.o });
+  assert.strictEqual(st(s).alpha.state, 'pending');
+});
+test('r5: v rises on every changing write and an unrelated entry keeps its v', async () => {
+  const s = setup(); existing(s);
+  const v = (id) => st(s)[id].v || 0;
+  const q0 = v('quiet-one'), b0 = v('beta-two');
+  const a0 = v('alpha');
+  await bc.decide('alpha', 'on', { user: 'u1', ...s.o });
+  const a1 = v('alpha'); assert.ok(a1 > a0, 'decide');
+  await bc.decide('alpha', 'on', { user: 'u1', ...s.o });
+  assert.ok(v('alpha') >= a1);
+  await bc.reopen('alpha', { user: 'u1', expectRev: bc.revOf(st(s).alpha), ...s.o });
+  const a2 = v('alpha'); assert.ok(a2 > a1, 'reopen');
+  await bc.snooze('alpha', { user: 'u1', now: T0, ...s.o });
+  const a3 = v('alpha'); assert.ok(a3 > a2, 'snooze');
+  await bc.markSeen('quiet-one', { user: 'u1', now: T0, ...s.o });
+  assert.ok(v('quiet-one') > q0, 'markSeen');
+  assert.strictEqual(v('beta-two'), b0, 'an unrelated entry keeps its v');
+  assert.strictEqual(bc.revOf(st(s)['beta-two']), `pending #${b0}`);
+  assert.strictEqual(bc.revOf(undefined), 'pending #0');
+});
+test('r5: the route answers the rev of its own write, not a later one', async () => {
+  const s = setup(); existing(s);
+  // the rev decide hands back is the one written by this press ...
+  const done = await bc.decide('alpha', 'on', { user: 'u1', ...s.o });
+  assert.strictEqual(done.rev, bc.revOf(st(s).alpha));
+  // ... a later write by another device moves the file on, and the first reply's rev no longer matches it
+  await bc.decide('alpha', 'off', { user: 'u2', ...s.o });
+  assert.notStrictEqual(done.rev, bc.revOf(st(s).alpha));
+  await assert.rejects(bc.reopen('alpha', { user: 'u1', expectRev: done.rev, ...s.o }), /already decided/);
+  // the route takes its rev from the locked mutation's result, never from a re-read after the follow-up work
+  const server = read('server.js');
+  const dec = server.indexOf("const m = pathname.match(/^\\/api\\/behaviour-changes\\/([a-z][a-z0-9-]{1,40})$/);");
+  const post = server.slice(dec, dec + 6500);
+  assert.match(post, /const doneRev = done && typeof done\.rev === 'string' \? done\.rev : bc\.revOf\(done\);/);
+  assert.ok(post.indexOf('doneRev =') < post.indexOf('syncProposalsTask'), 'rev fixed before the follow-up work');
+  assert.match(post, /rev: doneRev/);
+  assert.ok(!/rev: bc\.(viewOf|revOf)\(bc\.readState/.test(post));
 });
 test('reopen: leadMay false entries are the owner\'s alone (ownerRefusal applies to the entry, whatever the decision)', () => {
   const s = setup();
